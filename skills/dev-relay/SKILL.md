@@ -1,7 +1,10 @@
 ---
 name: dev-relay
 description: Relay development tasks between Claude Code (planner/reviewer) and Codex (executor). Claude plans and writes a contract prompt, Codex implements with self-review and creates a PR, then Claude does an independent review before merging. Use for delegating implementation, sprint batch execution, or plan-dispatch-evaluate workflows.
-version: 0.6.0
+version: 0.6.1
+metadata:
+  related-skills: dev-backlog
+  integration-points: sprint-file, github-issues
 triggers:
   - "run in codex"
   - "dispatch to codex"
