@@ -256,6 +256,8 @@ Bash(run_in_background=true):
 
 ## Integration with dev-backlog
 
+dev-relay is stateless — all progress tracking lives in the **dev-backlog sprint file**.
+
 ```
 dev-backlog                         dev-relay
   Sprint file                         dispatch.js
@@ -268,6 +270,46 @@ dev-backlog                         dev-relay
   ├── Batch 2: #42          →        dispatch → PR → review → merge
   └── Sprint complete                 update sprint file
 ```
+
+### Sprint File Updates During Relay
+
+After each dispatch-review-merge cycle, Claude updates the sprint file:
+
+**Plan section** — check off completed items:
+```markdown
+#### Batch 1 — Core auth (~2hr)
+- [x] #38 OAuth2 flow
+- [x] #39 Rate limiting
+- [ ] #42 Input validation
+```
+
+**Progress section** — log what happened with timestamps and PR links:
+```markdown
+### Progress
+- 2026-03-25 10:00: #38 dispatched → PR #45 created
+- 2026-03-25 10:35: #38 PR reviewed, 1 issue found → re-dispatched
+- 2026-03-25 10:50: #38 PR LGTM → merged. Follow-up #51 created (token refresh edge case)
+- 2026-03-25 11:00: #39 dispatched → PR #46 created
+- 2026-03-25 11:40: #39 PR LGTM → merged
+```
+
+**Running Context section** — capture learnings for remaining tasks:
+```markdown
+### Running Context
+- OAuth2: PKCE flow using jose library. Tokens in httpOnly cookies.
+- Rate limiting: in-memory approach for now (no Redis). May need to revisit for #42.
+- The auth middleware in src/middleware/auth.ts was refactored — downstream tasks should reference the new pattern.
+```
+
+### Why Sprint File, Not a Separate Relay Log
+
+| Option | Verdict | Reason |
+|---|---|---|
+| Sprint file (dev-backlog) | **Use this** | Already has Plan/Progress/Running Context structure; one source of truth |
+| agents.log (codex-orchestrator style) | Not needed yet | Useful for multi-Claude parallel sessions; overkill for single session |
+| Separate relay state file | Avoid | Creates two sources of truth; sprint file already tracks everything |
+
+The sprint file serves as both the **planning document** and the **execution journal**. dev-relay reads it (to know what to dispatch) and Claude updates it (after each merge). No additional state files needed.
 
 ## Prompt Template
 
