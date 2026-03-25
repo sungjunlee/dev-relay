@@ -271,13 +271,51 @@ dev-backlog                         dev-relay
   └── Sprint complete                 update sprint file
 ```
 
+### Pre-Dispatch: Sprint File → Dispatch Prompt
+
+Before dispatching, Claude reads the sprint file and task files to construct the prompt:
+
+```
+1. Read sprint file → find next unchecked batch
+2. For each issue in the batch:
+   a. Read task file (backlog/tasks/<issue-number>.md)
+   b. Extract Acceptance Criteria (AC) → becomes Done Criteria in prompt
+   c. Read codebase for Context (relevant files, patterns, deps)
+   d. Construct dispatch prompt using the Prompt Template
+3. Dispatch: ./scripts/dispatch.js . -b issue-<number> -p "..." --copy-env
+```
+
+**AC → Done Criteria mapping:**
+The task file's `## Acceptance Criteria` checkboxes become the dispatch prompt's `## Done Criteria` section verbatim. If AC says `- [ ] Rate limiter returns 429 after 100 req/min`, the Done Criteria says `- Rate limiter returns 429 after 100 req/min`.
+
+**Branch naming convention:**
+Use `issue-<number>` for sprint tasks (e.g., `issue-38`, `issue-39`). This keeps branches traceable to GitHub issues and avoids conflicts between parallel dispatches.
+
+### Post-Merge: Close the Loop
+
+After merging a PR, Claude also updates local task state (dev-backlog convention):
+
+```bash
+# 1. Merge PR + close GitHub issue (dev-relay)
+gh pr merge $PR_NUM --squash
+gh issue close <number> -c "Resolved in PR #$PR_NUM"
+
+# 2. Update task file status (dev-backlog)
+# In backlog/tasks/<number>.md: set status: Done in frontmatter
+
+# 3. Update sprint file (see below)
+
+# 4. Create follow-up issues if needed
+gh issue create --title "Follow-up: ..." --body "..."
+```
+
 ### Sprint File Updates During Relay
 
 After each dispatch-review-merge cycle, Claude updates the sprint file:
 
 **Plan section** — check off completed items:
 ```markdown
-#### Batch 1 — Core auth (~2hr)
+### Batch 1 — Core auth (~2hr)
 - [x] #38 OAuth2 flow
 - [x] #39 Rate limiting
 - [ ] #42 Input validation
@@ -285,7 +323,7 @@ After each dispatch-review-merge cycle, Claude updates the sprint file:
 
 **Progress section** — log what happened with timestamps and PR links:
 ```markdown
-### Progress
+## Progress
 - 2026-03-25 10:00: #38 dispatched → PR #45 created
 - 2026-03-25 10:35: #38 PR reviewed, 1 issue found → re-dispatched
 - 2026-03-25 10:50: #38 PR LGTM → merged. Follow-up #51 created (token refresh edge case)
@@ -295,7 +333,7 @@ After each dispatch-review-merge cycle, Claude updates the sprint file:
 
 **Running Context section** — capture learnings for remaining tasks:
 ```markdown
-### Running Context
+## Running Context
 - OAuth2: PKCE flow using jose library. Tokens in httpOnly cookies.
 - Rate limiting: in-memory approach for now (no Redis). May need to revisit for #42.
 - The auth middleware in src/middleware/auth.ts was refactored — downstream tasks should reference the new pattern.
