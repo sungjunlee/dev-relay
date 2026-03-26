@@ -126,30 +126,7 @@ PR_NUM=$(gh pr list --head <branch> --json number -q '.[0].number')
 gh pr diff $PR_NUM > /tmp/pr-diff.txt
 ```
 
-```
-Agent(description="Independent PR review", prompt="
-  You are reviewing code you did NOT write. Be objective.
-
-  ## Contract (Done Criteria)
-  - /auth/login returns redirect URL with code_challenge
-  - /auth/callback exchanges code for tokens
-  - Tokens stored in httpOnly cookies, NOT localStorage
-  - Existing /api/* endpoints unchanged
-  - Tests pass
-
-  ## PR Diff
-  [contents of /tmp/pr-diff.txt]
-
-  Review for:
-  1. Faithfulness — verify each Done Criteria item is met
-  2. Stubs/placeholders — check for return null, empty bodies, TODO, mock data
-  3. Simplification — unnecessary complexity, over-abstraction
-  4. Quality — bugs, security, performance
-  5. Integration — does it break callers/consumers of changed code?
-
-  Reply: LGTM or specific issues with file:line references.
-")
-```
+Use `references/reviewer-prompt.md` as the Agent prompt template — paste in the Done Criteria and PR diff. Launch as a fresh Agent (not inline in the planning session).
 
 Why fresh context:
 - No planning bias ("there was probably a reason for this")
