@@ -81,7 +81,18 @@ function getArg(flags, fallback) {
 }
 const hasFlag = (f) => args.includes(f);
 
-const repoPathRaw = args.find((a) => !a.startsWith("-"));
+// Positional arg: first arg that isn't a flag and isn't consumed as a flag's value
+const consumedIndices = new Set();
+for (let i = 0; i < args.length; i++) {
+  if (KNOWN_FLAGS.includes(args[i]) && !["--copy-env", "--dry-run", "--json", "--help", "-h"].includes(args[i])) {
+    consumedIndices.add(i);
+    consumedIndices.add(i + 1);
+    i++; // skip the value
+  } else if (["--copy-env", "--dry-run", "--json", "--help", "-h"].includes(args[i])) {
+    consumedIndices.add(i);
+  }
+}
+const repoPathRaw = args.find((a, i) => !consumedIndices.has(i) && !a.startsWith("-"));
 const REPO_PATH = path.resolve(repoPathRaw || ".");
 const PROJECT_NAME = path.basename(REPO_PATH);
 const BRANCH = getArg(["--branch", "-b"], undefined);
@@ -114,6 +125,14 @@ if (!fs.existsSync(path.join(REPO_PATH, ".git"))) {
     ? `repo path does not exist: ${REPO_PATH}`
     : `not a git repository: ${REPO_PATH}`;
   console.error(`Error: ${msg}`);
+  process.exit(1);
+}
+
+// Check codex CLI is available
+try {
+  execFileSync("codex", ["--version"], { encoding: "utf-8", stdio: "pipe" });
+} catch {
+  console.error("Error: codex CLI not found. Install Codex first: https://github.com/openai/codex");
   process.exit(1);
 }
 
@@ -185,6 +204,14 @@ function main() {
     return;
   }
 
+  // --- Cleanup on unexpected exit ---
+  function cleanup() {
+    try { git(REPO_PATH, "worktree", "remove", "--force", wtPath); } catch {}
+    process.exit(1);
+  }
+  process.on("SIGINT", cleanup);
+  process.on("SIGTERM", cleanup);
+
   // --- Step 1: Create worktree ---
   fs.mkdirSync(path.dirname(wtPath), { recursive: true });
   try {
@@ -192,8 +219,9 @@ function main() {
   } catch {
     try {
       git(REPO_PATH, "worktree", "add", wtPath, BRANCH);
-    } catch {
-      git(REPO_PATH, "worktree", "add", "--detach", wtPath);
+    } catch (e) {
+      console.error(`Error: failed to create worktree for branch '${BRANCH}': ${e.message}`);
+      process.exit(1);
     }
   }
 

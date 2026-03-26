@@ -16,7 +16,7 @@ For each Done Criteria item in the contract:
 
 Method: Walk through `gh pr diff` and check each contract item 1:1.
 
-## Phase B: What Codex Tends to Miss
+## Background: Why Fresh Review Matters
 
 Codex has full implementation context, which paradoxically makes it blind to certain issues:
 
