@@ -2,7 +2,7 @@
 name: relay-dispatch
 description: Dispatch implementation tasks to Codex via worktree isolation. Creates a git worktree, runs codex exec with a contract prompt, and collects results. Use when delegating work to Codex, running background dispatches, or parallelizing independent tasks. See relay skill for prompt template and planning.
 metadata:
-  related-skills: relay, relay-review
+  related-skills: "relay, relay-plan, relay-review, relay-merge"
 ---
 
 # Relay Dispatch
