@@ -57,39 +57,12 @@ Claude Code                         Codex
 
 ## 1. Plan + Contract
 
-Write a prompt with Done Criteria, codebase context, self-review instructions, and PR creation:
+Write a prompt using the **Prompt Template** (see below). Example applied to a real task:
 
-```markdown
-Implement OAuth2 PKCE flow for the /auth endpoint.
-
-## Context
-- Entry point: src/routes/auth.ts
-- Follow the pattern in src/routes/github-oauth.ts
-- Dependencies available: passport-oauth2, jose (already installed)
-- Related issue: #42
-
-## Done Criteria
-- /auth/login returns redirect URL with code_challenge
-- /auth/callback exchanges code for tokens
-- Tokens stored in httpOnly cookies, NOT localStorage
-- Existing /api/* endpoints unchanged
-- Tests pass
-
-## After Implementation
-Review your own work against the Done Criteria above.
-Check for:
-- Missing requirements or edge cases
-- Unnecessary complexity (can anything be simpler?)
-- Stubs, TODOs, placeholder returns, or mock data left behind
-- Bugs, security issues (especially auth/token handling)
-- Code style consistency with the existing codebase
-
-Run the test suite. Fix failures. Repeat review-fix until solid.
-
-## When Satisfied
-Create a PR referencing #42 (e.g., "Refs #42") with a clear description.
-Do NOT merge — leave open for review.
-```
+- **Context**: `src/routes/auth.ts` entry point, follow `src/routes/github-oauth.ts` pattern, passport-oauth2 + jose available
+- **Done Criteria**: `/auth/login` returns redirect with code_challenge, `/auth/callback` exchanges for tokens, httpOnly cookies not localStorage, existing `/api/*` unchanged, tests pass
+- **After Implementation**: self-review against Done Criteria, run tests, fix, repeat
+- **When Satisfied**: Create PR referencing #42, do NOT merge
 
 ### Why each section matters
 
@@ -141,6 +114,7 @@ gh pr list --head <branch> --json number,url,title
 | No commits made | Prompt was unclear or task was impossible; revise and re-dispatch |
 | No PR created | Codex may have committed but not pushed PR; check `git log` in worktree |
 | Branch conflicts | Resolve in worktree or create fresh worktree from updated main |
+| Network/transient error | Wait 30s, retry once. If it fails again, escalate to user |
 
 ## 4. PR Review (Claude Code)
 
@@ -196,6 +170,9 @@ Then re-review the PR. Max 2 rounds.
 ```bash
 gh pr merge $PR_NUM --squash
 gh issue close <number> -c "Resolved in PR #$PR_NUM"
+# Cleanup worktree (prevents stale branch locks)
+git worktree remove <worktree-path>
+git branch -d <branch>
 # Create follow-up issues if discovered during review:
 gh issue create --title "Follow-up: ..." --body "..."
 ```
@@ -281,7 +258,7 @@ Before dispatching, Claude reads the sprint file and task files to construct the
 ```
 1. Read sprint file → find next unchecked batch
 2. For each issue in the batch:
-   a. Read task file (backlog/tasks/<issue-number>.md)
+   a. Read task file (backlog/tasks/{PREFIX}-{N} - {Title}.md, e.g. BACK-42 - OAuth.md)
    b. Extract Acceptance Criteria (AC) → becomes Done Criteria in prompt
    c. Read codebase for Context (relevant files, patterns, deps)
    d. Construct dispatch prompt using the Prompt Template
@@ -304,7 +281,7 @@ gh pr merge $PR_NUM --squash
 gh issue close <number> -c "Resolved in PR #$PR_NUM"
 
 # 2. Update task file status (dev-backlog)
-# In backlog/tasks/<number>.md: set status: Done in frontmatter
+# In backlog/tasks/{PREFIX}-{N} - {Title}.md: set status: Done in frontmatter
 
 # 3. Update sprint file (see below)
 

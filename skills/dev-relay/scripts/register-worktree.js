@@ -106,6 +106,14 @@ if (!fs.existsSync(path.join(REPO_PATH, ".git"))) {
   process.exit(1);
 }
 
+// Check codex CLI is available
+try {
+  execFileSync("codex", ["--version"], { encoding: "utf-8", stdio: "pipe" });
+} catch {
+  console.error("Error: codex CLI not found. Install Codex first: https://github.com/openai/codex");
+  process.exit(1);
+}
+
 if (REGISTER && !fs.existsSync(STATE_DB)) {
   console.error(`Error: Codex state DB not found: ${STATE_DB}`);
   console.error("Is Codex Desktop App installed? Use without --register.");
@@ -211,8 +219,9 @@ function main() {
   } catch {
     try {
       git(REPO_PATH, "worktree", "add", wtPath, branch);
-    } catch {
-      git(REPO_PATH, "worktree", "add", "--detach", wtPath);
+    } catch (e) {
+      console.error(`Error: failed to create worktree for branch '${branch}': ${e.message}`);
+      process.exit(1);
     }
   }
 
