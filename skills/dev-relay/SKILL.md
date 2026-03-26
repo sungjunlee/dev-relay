@@ -166,18 +166,7 @@ Why fresh context:
 ```
 Then re-review the PR. Max 2 rounds.
 
-**LGTM** — Claude handles post-merge:
-```bash
-gh pr merge $PR_NUM --squash
-gh issue close <number> -c "Resolved in PR #$PR_NUM"
-# Cleanup worktree (prevents stale branch locks)
-git worktree remove <worktree-path>
-git branch -d <branch>
-# Create follow-up issues if discovered during review:
-gh issue create --title "Follow-up: ..." --body "..."
-```
-
-Claude handles merge and issue management because it has sprint-level context for accurate follow-up decisions.
+**LGTM** → proceed to **Post-Merge: Close the Loop** (see Integration with dev-backlog).
 
 ## Scripts
 
@@ -273,21 +262,24 @@ Use `issue-<number>` for sprint tasks (e.g., `issue-38`, `issue-39`). This keeps
 
 ### Post-Merge: Close the Loop
 
-After merging a PR, Claude also updates local task state (dev-backlog convention):
+After merging, three things happen:
 
 ```bash
-# 1. Merge PR + close GitHub issue (dev-relay)
+# 1. GitHub cleanup
 gh pr merge $PR_NUM --squash
 gh issue close <number> -c "Resolved in PR #$PR_NUM"
+git worktree remove <worktree-path> && git branch -d <branch>
 
-# 2. Update task file status (dev-backlog)
-# In backlog/tasks/{PREFIX}-{N} - {Title}.md: set status: Done in frontmatter
+# 2. Sprint file update (the essential part)
+# - Plan: check off [x] #N
+# - Progress: add timestamped log entry
+# - Running Context: add learnings if any
 
-# 3. Update sprint file (see below)
-
-# 4. Create follow-up issues if needed
+# 3. Follow-up (if needed)
 gh issue create --title "Follow-up: ..." --body "..."
 ```
+
+Task file cleanup (move to `backlog/completed/`) happens at sprint end, not per-issue.
 
 ### Sprint File Updates During Relay
 
@@ -379,6 +371,7 @@ Summary:
 - **Targeted re-dispatch**: "Fix this specific issue" not "redo everything"
 - **Max iterations**: Cap at 2 re-dispatches after Claude review to prevent loops
 - **Exit codes**: dispatch.js exits non-zero on failure — check before proceeding to review
+- **Parallel merges**: If parallel PRs touch the same files, merge one at a time and rebase the other before merging
 
 ## Mandatory Checklist
 
