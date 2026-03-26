@@ -60,11 +60,23 @@ Targeted fix via relay-dispatch:
 
 Then re-review. **Max 2 rounds** — after that, escalate to manual review.
 
+## Rubric-Based Review
+
+When the PR includes a Score Log (from relay-plan):
+
+1. Read Codex's self-reported scores from PR description
+2. **Re-run automated checks** independently — verify Codex's numbers
+3. **Re-evaluate scored factors** with fresh eyes — score each 1-10
+4. Run `/simplify` and `/review` skills for additional quality checks
+5. If Claude's scores differ significantly from Codex's → flag specific factors in re-dispatch
+
+This catches the gap between "Codex thinks it scored 8/10 on security" and reality.
+
 ## Why Fresh Context
 
 - No planning bias ("there was probably a reason for this")
-- Judges only against the contract
-- Codex already self-reviewed, so this catches only what Codex missed
+- Judges only against the contract + rubric
+- Codex already self-scored, so this catches blind spots in self-assessment
 
 ## Evaluate Criteria
 

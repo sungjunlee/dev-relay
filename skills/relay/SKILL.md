@@ -2,7 +2,7 @@
 name: relay
 description: Relay development work between Claude Code (planner/reviewer) and Codex (executor). Overview of the full dispatch→review→merge cycle. Use when planning to delegate work to Codex, or when you need the prompt template and integration guide. For individual phases, see relay-dispatch, relay-review, relay-merge.
 metadata:
-  related-skills: dev-backlog, relay-dispatch, relay-review, relay-merge
+  related-skills: dev-backlog, relay-plan, relay-dispatch, relay-review, relay-merge
 ---
 
 # Dev Relay
@@ -21,18 +21,20 @@ Relay development work between Claude Code (brain) and Codex (hands).
 ```
 Claude Code                         Codex
   │                                    │
-  ├─ 1. Plan + Contract               │
+  ├─ 1. Plan + Rubric                  │
+  │    (AC → scored factors)           │
   │                                    │
   └─ 2. Dispatch ──────────────────→   │
                                        ├─ Implement
-                                       ├─ Self-review + fix (iterate until solid)
-                                       ├─ Run tests
-                                       └─ Create PR (do NOT merge)
+                                       ├─ Score rubric (automated + self-eval)
+                                       ├─ LOOP: fix lowest factor → re-score
+                                       ├─ All factors converged
+                                       └─ Create PR with Score Log
   ├─ 3. Verify dispatch success        │
   │    (check status, confirm PR)      │
   │                                    │
   ├─ 4. PR Review  ←──────────────────┘
-  │    (fresh context, independent)
+  │    (re-score rubric + simplify/review skills)
   │
   ├─ 5a. Issues → Codex fixes PR → re-review
   │
@@ -44,7 +46,7 @@ Claude Code                         Codex
   └─ 6. Next task
 ```
 
-**Phase skills:** `relay-dispatch` (steps 1-3), `relay-review` (step 4-5a), `relay-merge` (step 5b-6)
+**Phase skills:** `relay-plan` (step 1), `relay-dispatch` (steps 2-3), `relay-review` (step 4-5a), `relay-merge` (step 5b-6)
 
 ## Prompt Template
 
