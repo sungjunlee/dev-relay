@@ -6,7 +6,10 @@ Relay development work between Claude Code (planner/reviewer) and Codex (executo
 
 ```
 skills/
-  relay/                   ← Overview, prompt template, integration guide
+  relay/                   ← Overview + reference (disable-model-invocation)
+    references/prompt-template.md
+  relay-plan/              ← AC → scoring rubric → dispatch prompt
+    references/rubric-examples.md
   relay-dispatch/          ← Dispatch to Codex (scripts live here)
     scripts/dispatch.js
     scripts/register-worktree.js
@@ -16,7 +19,7 @@ skills/
   relay-merge/             ← Merge + cleanup + sprint file update
 ```
 
-Multi-skill design: each phase is a separate skill for independent invocation on both Claude Code and Codex. `npx skills add sungjunlee/dev-relay` installs all 4.
+Multi-skill design: each phase is a separate skill for independent invocation on both Claude Code and Codex. `npx skills add sungjunlee/dev-relay` installs all 5.
 
 ## Key Design Decisions
 

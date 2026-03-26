@@ -2,7 +2,7 @@
 name: relay-merge
 description: Merge a reviewed PR, clean up worktree/branch, close GitHub issues, and update the sprint file. Use after relay-review returns LGTM. Handles the full post-merge loop including follow-up issue creation.
 metadata:
-  related-skills: relay, relay-review, dev-backlog
+  related-skills: "relay, relay-plan, relay-dispatch, relay-review, dev-backlog"
 ---
 
 # Relay Merge
