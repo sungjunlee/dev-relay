@@ -175,6 +175,7 @@ function main() {
   const wtId = crypto.randomBytes(4).toString("hex");
   const wtPath = path.join(CODEX_HOME, "worktrees", wtId, PROJECT_NAME);
   const resultFile = path.join(os.tmpdir(), `codex-dispatch-${wtId}.txt`);
+  const stdoutLog = path.join(os.tmpdir(), `codex-stdout-${wtId}.log`);
 
   if (fs.existsSync(wtPath)) {
     console.error(`Error: worktree path already exists: ${wtPath}`);
@@ -185,7 +186,7 @@ function main() {
   if (DRY_RUN) {
     const plan = {
       worktree: wtPath, branch: BRANCH, prompt: taskPrompt.slice(0, 200),
-      model: MODEL, sandbox: SANDBOX, resultFile, timeout: TIMEOUT,
+      model: MODEL, sandbox: SANDBOX, resultFile, stdoutLog, timeout: TIMEOUT,
       copyEnv: COPY_ENV,
     };
     if (JSON_OUT) {
@@ -258,11 +259,14 @@ function main() {
   let error = null;
   const startTime = Date.now();
 
+  // Redirect stdout to file (not buffer) to avoid ENOBUFS on verbose Codex output.
+  // Result data comes from -o resultFile; stdout log is for debugging.
+  const stdoutFd = fs.openSync(stdoutLog, "w");
   try {
     execFileSync("codex", codexArgs, {
       timeout: TIMEOUT * 1000,
-      maxBuffer: 10 * 1024 * 1024, // 10MB for stderr only (stdout is ignored → /dev/null)
-      stdio: ["pipe", "ignore", "pipe"], // stdout ignored (output goes to -o resultFile)
+      maxBuffer: 10 * 1024 * 1024, // 10MB for stderr (piped for error capture)
+      stdio: ["pipe", stdoutFd, "pipe"], // stdout → log file (no buffer limit)
     });
   } catch (e) {
     exitCode = e.status || 1;
@@ -276,6 +280,7 @@ function main() {
     }
   }
 
+  fs.closeSync(stdoutFd);
   const elapsed = Math.round((Date.now() - startTime) / 1000);
 
   // --- Step 4: Collect results ---
@@ -316,6 +321,7 @@ function main() {
     worktree: wtPath,
     branch: BRANCH,
     resultFile,
+    stdoutLog,
     elapsed: `${elapsed}s`,
     exitCode,
     error,
@@ -343,6 +349,7 @@ function main() {
       console.log(`    ${resultText.slice(0, 300).replace(/\n/g, "\n    ")}`);
     }
     console.log(`\n  Full result: cat ${resultFile}`);
+    console.log(`  Codex log:   cat ${stdoutLog}`);
     console.log(`  Review:      git -C ${shellQuote(wtPath)} log --oneline`);
     console.log(`  Diff:        git -C ${shellQuote(wtPath)} diff HEAD~1`);
     console.log(`  Merge:       git merge ${BRANCH}`);
