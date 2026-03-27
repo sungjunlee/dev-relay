@@ -1,6 +1,7 @@
 ---
 name: relay-plan
-description: Convert task acceptance criteria into a scored rubric for autonomous iteration. Defines automated checks and agent-evaluated factors with target thresholds. Codex loops until all factors converge. Use before relay-dispatch for tasks with 3+ AC items.
+description: Convert task acceptance criteria into a scored rubric for autonomous iteration. Defines automated checks and agent-evaluated factors with target thresholds. Codex loops until all factors converge. Use before relay-dispatch for tasks with 3+ acceptance criteria.
+compatibility: Requires gh CLI for issue reading.
 metadata:
   related-skills: "relay, relay-dispatch, relay-review, dev-backlog"
 ---

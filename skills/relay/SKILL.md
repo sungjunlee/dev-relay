@@ -1,6 +1,7 @@
 ---
 name: relay
-description: Route relay workflow between Claude Code and Codex. Determines whether to use relay-plan or dispatch directly, then guides through the plan-dispatch-review-merge cycle. Use when delegating work to Codex or asking "codex에서 구현해줘".
+description: Route relay workflow between Claude Code and Codex. Determines whether to use relay-plan or dispatch directly, then guides through the plan-dispatch-review-merge cycle. Use when delegating work to Codex, codex에서 실행, 워크트리, relay.
+compatibility: Requires Claude Code or Codex, gh CLI, git, and Node.js 18+.
 metadata:
   related-skills: "relay-plan, relay-dispatch, relay-review, relay-merge, dev-backlog"
 ---
