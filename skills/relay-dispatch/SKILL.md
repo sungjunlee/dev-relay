@@ -68,6 +68,7 @@ gh pr list --head <branch> --json number,url,title
 | No PR created | Codex may have committed but not pushed PR; check `git log` in worktree |
 | Branch conflicts | Resolve in worktree or create fresh worktree from updated main |
 | Network/transient error | Wait 30s, retry once. If it fails again, escalate to user |
+| ENOBUFS (buffer overflow) | Codex output exceeded buffer. Work is likely complete — dispatch reports `completed-with-warning`. Check worktree for uncommitted changes, commit manually if needed, then proceed to review |
 
 ## Background & Parallel
 
