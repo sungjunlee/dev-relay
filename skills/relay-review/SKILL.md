@@ -19,7 +19,7 @@ PR_NUM=$(gh pr list --head <branch> --json number -q '.[0].number')
 gh pr diff $PR_NUM > /tmp/pr-diff.txt
 ```
 
-2. Review using `references/reviewer-prompt.md` — paste in the Done Criteria and PR diff. Launch as a fresh Agent.
+2. Review using `references/reviewer-prompt.md` — paste in the Done Criteria and PR diff.
 
 3. Reply with **LGTM** or **specific issues** with `file:line` references.
 
@@ -35,22 +35,19 @@ When the PR includes a Score Log (from relay-plan):
 
 ## Re-dispatch (if issues found)
 
-Targeted fix via relay-dispatch:
-```bash
-./scripts/dispatch.js . -b <same-branch> \
-  -p "Fix these issues in the PR: [specific issues with file:line].
-      Do not change anything else. Push to the same branch."
+Targeted fix via relay-dispatch. **Include automated checks so Codex re-verifies after fixing:**
+
+```
+Fix these issues in the PR: [specific issues with file:line].
+Do not change anything else. Push to the same branch.
+
+After fixing, re-run these checks and confirm they pass:
+[paste automated check commands from the original rubric]
 ```
 
-Then re-review. **Max 2 rounds** — after that, escalate to manual review.
-
-## Why Fresh Context
-
-- No planning bias ("there was probably a reason for this")
-- Judges only against the contract + rubric
-- Codex already self-scored, so this catches blind spots
+**Max 2 re-dispatch rounds.** After that, escalate: show the user the PR URL, list unresolved issues, and let them decide (merge with caveats, fix manually, or discard).
 
 ## Review Criteria
 
-See `references/reviewer-prompt.md` for the complete review prompt template.
-See `references/evaluate-criteria.md` for the rationale behind Phase A (faithfulness) and Phase B (quality).
+See `references/reviewer-prompt.md` for the complete review prompt.
+See `references/evaluate-criteria.md` for escalation policy (auto-fix vs ask-user).

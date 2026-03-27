@@ -1,6 +1,6 @@
 ---
 name: relay-plan
-description: Convert task acceptance criteria into a scored rubric for autonomous iteration. Defines automated checks and agent-evaluated factors with target thresholds. Codex loops until all factors converge. Use before relay-dispatch to build a quality contract.
+description: Convert task acceptance criteria into a scored rubric for autonomous iteration. Defines automated checks and agent-evaluated factors with target thresholds. Codex loops until all factors converge. Use before relay-dispatch for tasks with 3+ AC items.
 metadata:
   related-skills: "relay, relay-dispatch, relay-review, dev-backlog"
 ---
@@ -13,11 +13,11 @@ Build a scoring rubric from task Acceptance Criteria (AC), then generate a dispa
 
 ### 1. Read the task
 
-Read the issue AC (from dev-backlog task file or GitHub issue).
+Read the issue AC (from dev-backlog task file or `gh issue view <N>`).
 
 ### 2. Build the rubric
 
-Convert each AC item into a scored factor. Classify as **automated** or **evaluated**:
+Convert each AC item into a scored factor:
 
 ```yaml
 rubric:
@@ -42,80 +42,39 @@ rubric:
       weight: best-effort
 ```
 
-| Type | How scored | Examples |
-|------|-----------|----------|
-| **automated** | Run command, check output/exit code | tests, coverage, linting, curl, benchmarks |
-| **evaluated** | Agent reads code and scores 1-10 | simplicity, security, design, readability |
+| Type | How scored |
+|------|-----------|
+| **automated** | Run command, check output/exit code (tests, coverage, curl, linting) |
+| **evaluated** | Agent reads code and scores 1-10 (simplicity, security, design) |
 
-| Weight | Convergence rule |
-|--------|-----------------|
+| Weight | Rule |
+|--------|------|
 | **required** | Must meet target before PR creation |
 | **best-effort** | Note in PR if below target |
 
-**`setup` field**: Commands to run before automated checks (e.g., start server, seed DB). Skipped if empty.
+**`setup`**: Commands to run before automated checks (start server, seed DB). Omit if not needed.
 
 ### 3. Generate dispatch prompt
 
-Embed the rubric into a dispatch prompt. Use the base template from `relay/references/prompt-template.md` and add:
+Take the base template (`relay/references/prompt-template.md`) and add these sections:
 
-```markdown
-## Setup (run once before checks)
-[setup command from rubric]
-
-## Scoring Rubric
-
-After implementation, score yourself on these factors.
-Iterate until ALL required factors meet their target.
-
-### Automated Checks (run these commands)
-| Factor | Command | Target |
-|--------|---------|--------|
-| [from rubric automated factors] |
-
-### Evaluated Factors (self-assess 1-10)
-| Factor | Criteria | Target |
-|--------|----------|--------|
-| [from rubric evaluated factors] |
-
-## Iteration Protocol
-
-LOOP (max 5 iterations):
-1. Run setup command if needed.
-2. Run ALL automated checks. Fix failures first.
-3. Self-evaluate all evaluated factors. Score each 1-10.
-4. If any required factor is below target:
-   - Fix the lowest-scoring factor specifically
-   - Re-run checks and re-evaluate
-   - Repeat
-5. If stuck on the same factor for 3 consecutive attempts, note it and move on.
-6. When ALL required factors meet target:
-   - Log final scores in PR description
-   - Create PR. Do NOT merge.
-
-## Score Log
-
-Include in PR description:
-| Factor | Target | Score | Status |
-|--------|--------|-------|--------|
-| Tests  | exit 0 | PASS  | ✓      |
-| Security | >= 8 | 8/10  | ✓      |
-| Style  | >= 7   | 6/10  | best-effort, noted |
-```
+- **Setup**: setup commands from rubric
+- **Scoring Rubric**: automated checks table + evaluated factors table
+- **Iteration Protocol**: "LOOP (max 5 iterations): run checks → self-evaluate → fix lowest required factor → repeat. Stuck on same factor 3x → note and move on. All required met → log scores in PR, create PR."
+- **Score Log**: table in PR description showing each factor's target, score, and status
 
 ### 4. Dispatch
 
-Pass the generated prompt to relay-dispatch:
 ```bash
-./scripts/dispatch.js . -b issue-42 --prompt-file /tmp/dispatch-42.md --timeout 3600 --copy-env
+${CLAUDE_SKILL_DIR}/../relay-dispatch/scripts/dispatch.js . \
+  -b issue-42 --prompt-file /tmp/dispatch-42.md --timeout 3600 --copy-env
 ```
 
-## When to use relay-plan
+## When to use
 
-- **Use it**: Tasks with 3+ AC items, quality-sensitive work, delegation to Codex
-- **Skip it**: Simple bug fixes, typos, one-liner changes — dispatch directly with the base template
+- **Use it**: 3+ AC items, quality-sensitive work, Codex delegation
+- **Skip it**: Bug fixes, typos, one-liners — dispatch directly with base template
 
-## Examples and guidelines
+## Aim for 3-5 factors. Always include at least 1 automated check.
 
-See `references/rubric-examples.md` for concrete rubric examples and design guidelines.
-
-## Aim for 3-5 factors per task. Always include at least 1 automated check.
+See `references/rubric-examples.md` for examples and design guidelines.

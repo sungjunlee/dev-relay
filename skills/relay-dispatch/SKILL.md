@@ -13,12 +13,10 @@ Create a worktree and dispatch a task to Codex.
 
 ```bash
 # Foreground (blocking — simple tasks)
-./scripts/dispatch.js . -b feature-auth -p "..." --copy-env
-
-# Background (non-blocking — Claude continues working)
-Bash(run_in_background=true):
-  ./scripts/dispatch.js . -b feature-auth --prompt-file TASK.md --copy-env --json --timeout 3600
+${CLAUDE_SKILL_DIR}/scripts/dispatch.js . -b feature-auth -p "..." --copy-env
 ```
+
+For background and parallel dispatch, see "Background & Parallel" section below.
 
 ## Options
 
@@ -76,7 +74,7 @@ gh pr list --head <branch> --json number,url,title
 
 ```
 Bash(run_in_background=true):
-  ./scripts/dispatch.js . -b task-42 --prompt-file tasks/42.md --json --timeout 3600
+  ${CLAUDE_SKILL_DIR}/scripts/dispatch.js . -b task-42 --prompt-file tasks/42.md --json --timeout 3600
 # Claude plans next task, reviews docs, talks to user...
 # TaskOutput fires when Codex finishes → proceed to relay-review
 ```
@@ -86,9 +84,9 @@ Bash(run_in_background=true):
 ```
 # Single message, multiple background calls:
 Bash(run_in_background=true):
-  ./scripts/dispatch.js . -b task-42 --prompt-file tasks/42.md --json
+  ${CLAUDE_SKILL_DIR}/scripts/dispatch.js . -b task-42 --prompt-file tasks/42.md --json
 Bash(run_in_background=true):
-  ./scripts/dispatch.js . -b task-43 --prompt-file tasks/43.md --json
+  ${CLAUDE_SKILL_DIR}/scripts/dispatch.js . -b task-43 --prompt-file tasks/43.md --json
 # Each completes independently → review each PR via relay-review
 ```
 
@@ -97,7 +95,7 @@ Bash(run_in_background=true):
 For manual Codex App usage without dispatching:
 
 ```bash
-./scripts/register-worktree.js <repo> -b <branch> [--register] [--pin]
+${CLAUDE_SKILL_DIR}/scripts/register-worktree.js <repo> -b <branch> [--register] [--pin]
 ```
 
 ## Caveats

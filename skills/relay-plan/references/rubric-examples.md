@@ -4,52 +4,55 @@
 
 ```yaml
 rubric:
-  - name: Tests pass
-    type: automated
-    command: "npm test -- --grep auth"
-    target: "exit 0"
-    weight: critical
-  - name: Endpoint works
-    type: automated
-    command: "curl -sf localhost:3000/auth/login"
-    target: "200 OK"
-    weight: critical
-  - name: Security
-    type: evaluated
-    criteria: "httpOnly cookies, PKCE flow, no token in URL params"
-    target: ">= 8/10"
-    weight: high
-  - name: Simplicity
-    type: evaluated
-    criteria: "Single middleware chain, no over-abstraction"
-    target: ">= 7/10"
-    weight: medium
+  setup: "npm install && npm start &"
+  factors:
+    - name: Tests pass
+      type: automated
+      command: "npm test -- --grep auth"
+      target: "exit 0"
+      weight: required
+    - name: Endpoint works
+      type: automated
+      command: "curl -sf localhost:3000/auth/login"
+      target: "200 OK"
+      weight: required
+    - name: Security
+      type: evaluated
+      criteria: "httpOnly cookies, PKCE flow, no token in URL params"
+      target: ">= 8/10"
+      weight: required
+    - name: Simplicity
+      type: evaluated
+      criteria: "Single middleware chain, no over-abstraction"
+      target: ">= 7/10"
+      weight: best-effort
 ```
 
 ## Refactoring task
 
 ```yaml
 rubric:
-  - name: Tests pass
-    type: automated
-    command: "npm test"
-    target: "exit 0"
-    weight: critical
-  - name: No behavior change
-    type: automated
-    command: "npm run test:integration"
-    target: "same results as before"
-    weight: critical
-  - name: Complexity reduction
-    type: evaluated
-    criteria: "Fewer files, shorter functions, removed dead code"
-    target: ">= 8/10"
-    weight: high
-  - name: Readability
-    type: evaluated
-    criteria: "Clear naming, obvious flow, no clever tricks"
-    target: ">= 7/10"
-    weight: medium
+  factors:
+    - name: Tests pass
+      type: automated
+      command: "npm test"
+      target: "exit 0"
+      weight: required
+    - name: No behavior change
+      type: automated
+      command: "npm run test:integration"
+      target: "same results as before"
+      weight: required
+    - name: Complexity reduction
+      type: evaluated
+      criteria: "Fewer files, shorter functions, removed dead code"
+      target: ">= 8/10"
+      weight: required
+    - name: Readability
+      type: evaluated
+      criteria: "Clear naming, obvious flow, no clever tricks"
+      target: ">= 7/10"
+      weight: best-effort
 ```
 
 ## Design guidelines
@@ -68,5 +71,5 @@ rubric:
 
 ### How many factors?
 - **3-5 for a typical task**. More makes iteration slow.
-- Always include at least 1 automated check (tests or linting).
-- Critical weight factors should be automated where possible.
+- Always include at least 1 automated check.
+- Required weight for factors that actually matter.
