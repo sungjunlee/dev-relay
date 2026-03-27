@@ -41,11 +41,10 @@ Claude Code                         Codex
 
 ## Script Path
 
-All scripts live in the relay-dispatch skill directory. When dispatching:
+All scripts live in the **relay-dispatch** skill directory. When invoking from another skill, use a relative path from the calling skill's directory:
 ```bash
-# ${CLAUDE_SKILL_DIR} refers to the skill's own directory
-# For relay-dispatch, scripts are at: ${CLAUDE_SKILL_DIR}/scripts/
-${CLAUDE_SKILL_DIR}/scripts/dispatch.js . -b issue-42 --prompt-file /tmp/dispatch-42.md --timeout 3600
+# From relay-plan or other sibling skills:
+${CLAUDE_SKILL_DIR}/../relay-dispatch/scripts/dispatch.js . -b issue-42 --prompt-file /tmp/dispatch-42.md --timeout 3600
 ```
 
 ## Integration with dev-backlog
