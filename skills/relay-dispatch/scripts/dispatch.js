@@ -260,13 +260,20 @@ function main() {
 
   try {
     execFileSync("codex", codexArgs, {
-      encoding: "utf-8",
       timeout: TIMEOUT * 1000,
-      stdio: ["pipe", "pipe", "pipe"],
+      maxBuffer: 100 * 1024 * 1024, // 100MB safety net
+      stdio: ["pipe", "ignore", "pipe"], // stdout ignored (output goes to -o resultFile)
     });
   } catch (e) {
     exitCode = e.status || 1;
-    error = e.message.split("\n")[0];
+    const msg = e.message.split("\n")[0];
+    // ENOBUFS: Codex output exceeded buffer. Work may be done — check worktree.
+    if (e.code === "ENOBUFS" || msg.includes("ENOBUFS")) {
+      error = "ENOBUFS (stdout buffer overflow — work may be complete, check worktree)";
+      exitCode = 0; // treat as potential success, let result collection decide
+    } else {
+      error = msg;
+    }
   }
 
   const elapsed = Math.round((Date.now() - startTime) / 1000);
@@ -287,8 +294,25 @@ function main() {
     diffStat = git(wtPath, "diff", "--stat", "HEAD~1");
   } catch {}
 
+  // Check for uncommitted work (ENOBUFS recovery: Codex may have worked but not committed)
+  let uncommitted = "";
+  try {
+    uncommitted = git(wtPath, "status", "--porcelain");
+  } catch {}
+
+  // Determine actual status: if there are commits or uncommitted changes, work happened
+  const hasWork = gitLog || uncommitted;
+  let status;
+  if (exitCode === 0) {
+    status = "completed";
+  } else if (hasWork && error && error.includes("ENOBUFS")) {
+    status = "completed-with-warning";
+  } else {
+    status = "failed";
+  }
+
   const result = {
-    status: exitCode === 0 ? "completed" : "failed",
+    status,
     worktree: wtPath,
     branch: BRANCH,
     resultFile,
@@ -296,6 +320,7 @@ function main() {
     exitCode,
     error,
     commits: gitLog,
+    uncommitted: uncommitted || null,
     diffStat,
     resultPreview: resultText.slice(0, 500),
   };
@@ -323,7 +348,7 @@ function main() {
     console.log(`  Merge:       git merge ${BRANCH}`);
   }
 
-  if (exitCode !== 0) process.exit(exitCode);
+  if (status === "failed") process.exit(exitCode || 1);
 }
 
 main();
