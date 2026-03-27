@@ -261,7 +261,7 @@ function main() {
   try {
     execFileSync("codex", codexArgs, {
       timeout: TIMEOUT * 1000,
-      maxBuffer: 100 * 1024 * 1024, // 100MB safety net
+      maxBuffer: 10 * 1024 * 1024, // 10MB for stderr only (stdout is ignored → /dev/null)
       stdio: ["pipe", "ignore", "pipe"], // stdout ignored (output goes to -o resultFile)
     });
   } catch (e) {
