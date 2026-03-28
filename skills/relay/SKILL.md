@@ -1,5 +1,6 @@
 ---
 name: relay
+argument-hint: "[issue-number or task description]"
 description: Route relay workflow between Claude Code and Codex. Determines whether to use relay-plan or dispatch directly, then guides through the plan-dispatch-review-merge cycle. Use when delegating work to Codex, codex에서 실행, 워크트리, relay.
 compatibility: Requires Claude Code or Codex, gh CLI, git, and Node.js 18+.
 metadata:
