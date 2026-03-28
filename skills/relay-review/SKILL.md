@@ -20,7 +20,14 @@ PR_NUM=$(gh pr list --head <branch> --json number -q '.[0].number')
 gh pr diff $PR_NUM > /tmp/pr-diff.txt
 ```
 
-2. Review using `references/reviewer-prompt.md` — paste in the Done Criteria and PR diff.
+2. Review the diff against these core checks:
+   - **Faithfulness**: Each Done Criteria item implemented? Scope respected?
+   - **Stubs/placeholders**: Any `return null`, empty bodies, TODO in production paths?
+   - **Integration**: Does it break callers/consumers of changed code?
+   - **Security**: Auth/token handling, input validation, injection risks?
+   - **Complexity**: Can anything be simpler without losing functionality?
+
+   For the full injectable prompt template, see `references/reviewer-prompt.md`.
 
 3. Reply with **LGTM** or **specific issues** with `file:line` references.
 
