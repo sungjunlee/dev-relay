@@ -44,18 +44,9 @@ Wait for completion. Check result:
 
 Verify PR exists: `gh pr list --head issue-<N>`
 
-Then invoke **relay-review** as a sub-skill (it runs with `context: fork` for bias-free review):
-1. Get diff: `gh pr diff <PR-NUM> > /tmp/pr-diff.txt`
-2. Review against these checks:
-   - Faithfulness: each Done Criteria item implemented? Scope respected?
-   - Stubs/placeholders: any `return null`, empty bodies, TODO?
-   - Integration: breaks callers/consumers?
-   - Security: auth, input validation, injection risks?
-   - Complexity: simpler without losing functionality?
-3. If rubric was used: re-score automated checks + evaluated factors
-4. Run `/simplify` and `/review` for additional quality checks
+Invoke **relay-review** (runs with `context: fork` for bias-free review). It will: check faithfulness against Done Criteria, detect stubs/placeholders, review security and integration, re-score rubric factors, and return LGTM or issues with file:line references.
 
-Verdict: **LGTM** or **issues with file:line references**.
+Do NOT review inline — relay-review's forked context prevents planning bias.
 
 ## Step 5: Iterate (if issues found)
 
