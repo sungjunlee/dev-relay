@@ -12,7 +12,7 @@ skills/
     references/rubric-examples.md
   relay-dispatch/          ← Dispatch to Codex (scripts live here)
     scripts/dispatch.js
-    scripts/register-worktree.js
+    scripts/register-codex.js
   relay-review/            ← PR review (context: fork for fresh eyes)
     references/evaluate-criteria.md
     references/reviewer-prompt.md

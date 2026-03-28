@@ -1,8 +1,11 @@
 #!/usr/bin/env node
 /**
- * Create a worktree and dispatch a task to Codex in one command.
+ * Create a worktree and dispatch a task to an executor.
  *
- * Combines register-worktree.js + codex exec into a single step.
+ * Executor-agnostic orchestrator: worktree -> execute -> collect -> cleanup.
+ * To add a new executor, add a branch in the "Execute task" section
+ * and optionally create a register-{executor}.js for app integration.
+ *
  * Designed for Claude Code's Bash(run_in_background=true) pattern.
  *
  * Usage:
@@ -11,31 +14,37 @@
  *
  * Options:
  *   --branch, -b <name>    Branch name (required)
- *   --prompt, -p <text>    Task prompt for Codex
+ *   --prompt, -p <text>    Task prompt
  *   --prompt-file <path>   Read prompt from file (for large prompts)
- *   --model, -m <name>     Codex model (default: from config)
+ *   --executor, -e <name>  Executor to use (default: codex)
+ *   --model, -m <name>     Model override (default: from executor config)
  *   --sandbox <mode>       workspace-write | read-only (default: workspace-write)
  *   --copy-env             Copy .env to worktree
  *   --copy <file,...>      Additional files to copy
- *   --timeout <seconds>    Codex exec timeout (default: 1800)
+ *   --timeout <seconds>    Exec timeout (default: 1800)
+ *   --register             Register session in executor's app (keeps worktree)
+ *   --no-cleanup           Keep worktree after successful dispatch
  *   --dry-run              Show plan without executing
  *   --json                 Output as JSON
  *
  * Examples:
- *   # Basic dispatch
+ *   # Basic dispatch (default executor: codex)
  *   ./dispatch.js . -b feature-auth -p "Implement OAuth2 flow"
  *
  *   # With prompt file and env
  *   ./dispatch.js . -b fix-login --prompt-file TASK.md --copy-env
  *
- *   # Read-only research task
- *   ./dispatch.js . -b research-api -p "Analyze API patterns" --sandbox read-only
+ *   # Explicit executor
+ *   ./dispatch.js . -b feature-auth -e codex -p "Implement OAuth2 flow"
+ *
+ *   # Register session in executor app (keeps worktree for resumption)
+ *   ./dispatch.js . -b feature-auth -p "..." --register
  *
  *   # Dry run
  *   ./dispatch.js . -b test --prompt "test" --dry-run --json
  */
 
-const { execFileSync, execFile } = require("child_process");
+const { execFileSync } = require("child_process");
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
@@ -48,26 +57,28 @@ const os = require("os");
 const args = process.argv.slice(2);
 
 const KNOWN_FLAGS = [
-  "--branch", "-b", "--prompt", "-p", "--prompt-file", "--model", "-m",
-  "--sandbox", "--copy", "--copy-env", "--timeout", "--no-cleanup",
-  "--dry-run", "--json", "--help", "-h",
+  "--branch", "-b", "--prompt", "-p", "--prompt-file", "--executor", "-e",
+  "--model", "-m", "--sandbox", "--copy", "--copy-env", "--timeout",
+  "--register", "--no-cleanup", "--dry-run", "--json", "--help", "-h",
 ];
 
 if (!args.length || args.includes("--help") || args.includes("-h")) {
   console.log("Usage: dispatch.js <repo-path> --branch <name> --prompt <task> [options]");
   console.log("       dispatch.js <repo-path> --branch <name> --prompt-file <path> [options]");
   console.log("\nOptions:");
-  console.log("  --branch, -b     Branch name (required)");
-  console.log("  --prompt, -p     Task prompt");
-  console.log("  --prompt-file    Read prompt from file");
-  console.log("  --model, -m      Codex model");
-  console.log("  --sandbox        workspace-write | read-only (default: workspace-write)");
-  console.log("  --copy-env       Copy .env to worktree");
-  console.log("  --copy <files>   Additional files to copy (comma-separated)");
-  console.log("  --timeout        Codex exec timeout in seconds (default: 1800)");
-  console.log("  --no-cleanup     Keep worktree after successful dispatch");
-  console.log("  --dry-run        Show plan without executing");
-  console.log("  --json           Output as JSON");
+  console.log("  --branch, -b       Branch name (required)");
+  console.log("  --prompt, -p       Task prompt");
+  console.log("  --prompt-file      Read prompt from file");
+  console.log("  --executor, -e     Executor: codex (default)");
+  console.log("  --model, -m        Model override");
+  console.log("  --sandbox          workspace-write | read-only (default: workspace-write)");
+  console.log("  --copy-env         Copy .env to worktree");
+  console.log("  --copy <files>     Additional files to copy (comma-separated)");
+  console.log("  --timeout          Exec timeout in seconds (default: 1800)");
+  console.log("  --register         Register session in executor's app (keeps worktree)");
+  console.log("  --no-cleanup       Keep worktree after successful dispatch");
+  console.log("  --dry-run          Show plan without executing");
+  console.log("  --json             Output as JSON");
   process.exit(args.includes("--help") || args.includes("-h") ? 0 : 1);
 }
 
@@ -85,11 +96,11 @@ const hasFlag = (f) => args.includes(f);
 // Positional arg: first arg that isn't a flag and isn't consumed as a flag's value
 const consumedIndices = new Set();
 for (let i = 0; i < args.length; i++) {
-  if (KNOWN_FLAGS.includes(args[i]) && !["--copy-env", "--dry-run", "--json", "--help", "-h"].includes(args[i])) {
+  if (KNOWN_FLAGS.includes(args[i]) && !["--copy-env", "--register", "--no-cleanup", "--dry-run", "--json", "--help", "-h"].includes(args[i])) {
     consumedIndices.add(i);
     consumedIndices.add(i + 1);
     i++; // skip the value
-  } else if (["--copy-env", "--no-cleanup", "--dry-run", "--json", "--help", "-h"].includes(args[i])) {
+  } else if (["--copy-env", "--register", "--no-cleanup", "--dry-run", "--json", "--help", "-h"].includes(args[i])) {
     consumedIndices.add(i);
   }
 }
@@ -99,11 +110,13 @@ const PROJECT_NAME = path.basename(REPO_PATH);
 const BRANCH = getArg(["--branch", "-b"], undefined);
 const PROMPT = getArg(["--prompt", "-p"], undefined);
 const PROMPT_FILE = getArg("--prompt-file", undefined);
+const EXECUTOR = getArg(["--executor", "-e"], "codex");
 const MODEL = getArg(["--model", "-m"], undefined);
 const SANDBOX = getArg("--sandbox", "workspace-write");
 const COPY_ENV = hasFlag("--copy-env");
 const COPY_FILES = getArg("--copy", "").split(",").filter(Boolean);
 const TIMEOUT = parseInt(getArg("--timeout", "1800"), 10);
+const REGISTER = hasFlag("--register");
 const NO_CLEANUP = hasFlag("--no-cleanup");
 const DRY_RUN = hasFlag("--dry-run");
 const JSON_OUT = hasFlag("--json");
@@ -130,11 +143,18 @@ if (!fs.existsSync(path.join(REPO_PATH, ".git"))) {
   process.exit(1);
 }
 
-// Check codex CLI is available
+// Executor CLI validation
+// To add a new executor: add entry here + execution branch in Step 3.
+const EXECUTOR_CLI = { codex: "codex" };
+const cli = EXECUTOR_CLI[EXECUTOR];
+if (!cli) {
+  console.error(`Error: unknown executor '${EXECUTOR}'. Supported: ${Object.keys(EXECUTOR_CLI).join(", ")}`);
+  process.exit(1);
+}
 try {
-  execFileSync("codex", ["--version"], { encoding: "utf-8", stdio: "pipe" });
+  execFileSync(cli, ["--version"], { encoding: "utf-8", stdio: "pipe" });
 } catch {
-  console.error("Error: codex CLI not found. Install Codex first: https://github.com/openai/codex");
+  console.error(`Error: ${cli} CLI not found.`);
   process.exit(1);
 }
 
@@ -173,11 +193,17 @@ function shellQuote(s) {
 // ---------------------------------------------------------------------------
 
 function main() {
-  const CODEX_HOME = process.env.CODEX_HOME || path.join(os.homedir(), ".codex");
+  // Worktree location: executor-specific for app integration.
+  // Codex App discovers sessions in ~/.codex/worktrees/.
+  // To add a new executor: add an entry here (or fall back to tmpdir).
+  const WORKTREE_BASES = {
+    codex: path.join(process.env.CODEX_HOME || path.join(os.homedir(), ".codex"), "worktrees"),
+  };
+  const wtBase = WORKTREE_BASES[EXECUTOR] || path.join(os.tmpdir(), "dispatch-worktrees");
   const wtId = crypto.randomBytes(4).toString("hex");
-  const wtPath = path.join(CODEX_HOME, "worktrees", wtId, PROJECT_NAME);
-  const resultFile = path.join(os.tmpdir(), `codex-dispatch-${wtId}.txt`);
-  const stdoutLog = path.join(os.tmpdir(), `codex-stdout-${wtId}.log`);
+  const wtPath = path.join(wtBase, wtId, PROJECT_NAME);
+  const resultFile = path.join(os.tmpdir(), `dispatch-${EXECUTOR}-${wtId}.txt`);
+  const stdoutLog = path.join(os.tmpdir(), `dispatch-${EXECUTOR}-${wtId}.log`);
 
   if (fs.existsSync(wtPath)) {
     console.error(`Error: worktree path already exists: ${wtPath}`);
@@ -187,20 +213,23 @@ function main() {
   // --- Dry run ---
   if (DRY_RUN) {
     const plan = {
-      worktree: wtPath, branch: BRANCH, prompt: taskPrompt.slice(0, 200),
-      model: MODEL, sandbox: SANDBOX, resultFile, stdoutLog, timeout: TIMEOUT,
-      copyEnv: COPY_ENV,
+      executor: EXECUTOR, worktree: wtPath, branch: BRANCH,
+      prompt: taskPrompt.slice(0, 200),
+      model: MODEL, sandbox: SANDBOX, register: REGISTER,
+      resultFile, stdoutLog, timeout: TIMEOUT, copyEnv: COPY_ENV,
     };
     if (JSON_OUT) {
       console.log(JSON.stringify(plan, null, 2));
     } else {
       console.log("Dry run:");
+      console.log(`  Executor: ${EXECUTOR}`);
       console.log(`  Repo:     ${REPO_PATH}`);
       console.log(`  Worktree: ${wtPath}`);
       console.log(`  Branch:   ${BRANCH}`);
       console.log(`  Prompt:   ${taskPrompt.slice(0, 80)}...`);
       console.log(`  Model:    ${MODEL || "(default)"}`);
       console.log(`  Sandbox:  ${SANDBOX}`);
+      console.log(`  Register: ${REGISTER}`);
       console.log(`  Result:   ${resultFile}`);
       console.log(`  Timeout:  ${TIMEOUT}s`);
     }
@@ -244,14 +273,30 @@ function main() {
     }
   }
 
-  // --- Step 3: Run codex exec ---
-  const codexArgs = ["exec", "-C", wtPath, "--full-auto", "--color", "never", "-o", resultFile];
-  if (MODEL) codexArgs.push("-m", MODEL);
-  codexArgs.push("--sandbox", SANDBOX);
-  codexArgs.push(taskPrompt);
+  // --- Step 3: Execute task ---
+  // Executor-specific: build command + args + handle quirks.
+  // To add a new executor: add a branch here + optional register-{name}.js.
+
+  let cmd, execArgs, execOpts;
+
+  if (EXECUTOR === "codex") {
+    cmd = "codex";
+    execArgs = ["exec", "-C", wtPath, "--full-auto", "--color", "never", "-o", resultFile];
+    if (MODEL) execArgs.push("-m", MODEL);
+    execArgs.push("--sandbox", SANDBOX);
+    execArgs.push(taskPrompt);
+    execOpts = {
+      timeout: TIMEOUT * 1000,
+      maxBuffer: 10 * 1024 * 1024,
+      stdio: ["pipe", null, "pipe"], // stdout fd set below
+    };
+  } else {
+    console.error(`Error: executor '${EXECUTOR}' has no execution handler`);
+    process.exit(1);
+  }
 
   if (!JSON_OUT) {
-    console.log(`Dispatching to Codex...`);
+    console.log(`Dispatching to ${EXECUTOR}...`);
     console.log(`  Worktree: ${wtPath}`);
     console.log(`  Branch:   ${BRANCH}`);
     console.log(`  Result:   ${resultFile}`);
@@ -261,22 +306,18 @@ function main() {
   let error = null;
   const startTime = Date.now();
 
-  // Redirect stdout to file (not buffer) to avoid ENOBUFS on verbose Codex output.
-  // Result data comes from -o resultFile; stdout log is for debugging.
+  // Redirect stdout to file to avoid buffer overflow on verbose output.
   const stdoutFd = fs.openSync(stdoutLog, "w");
+  execOpts.stdio[1] = stdoutFd;
+
   try {
-    execFileSync("codex", codexArgs, {
-      timeout: TIMEOUT * 1000,
-      maxBuffer: 10 * 1024 * 1024, // 10MB for stderr (piped for error capture)
-      stdio: ["pipe", stdoutFd, "pipe"], // stdout → log file (no buffer limit)
-    });
+    execFileSync(cmd, execArgs, execOpts);
   } catch (e) {
     exitCode = e.status || 1;
     const msg = e.message.split("\n")[0];
-    // ENOBUFS: Codex output exceeded buffer. Work may be done — check worktree.
-    if (e.code === "ENOBUFS" || msg.includes("ENOBUFS")) {
+    // Codex-specific: ENOBUFS means output exceeded buffer but work may be done.
+    if (EXECUTOR === "codex" && (e.code === "ENOBUFS" || msg.includes("ENOBUFS"))) {
       error = "ENOBUFS (stdout buffer overflow — work may be complete, check worktree)";
-      // Keep exitCode as-is; status logic below checks for ENOBUFS + actual work
     } else {
       error = msg;
     }
@@ -301,7 +342,7 @@ function main() {
     diffStat = git(wtPath, "diff", "--stat", "HEAD~1");
   } catch {}
 
-  // Check for uncommitted work (ENOBUFS recovery: Codex may have worked but not committed)
+  // Check for uncommitted work (ENOBUFS recovery: executor may have worked but not committed)
   let uncommitted = "";
   try {
     uncommitted = git(wtPath, "status", "--porcelain");
@@ -311,15 +352,40 @@ function main() {
   const hasWork = gitLog || uncommitted;
   let status;
   if (error && error.includes("ENOBUFS") && hasWork) {
-    status = "completed-with-warning"; // ENOBUFS but work exists in worktree
+    status = "completed-with-warning";
   } else if (exitCode === 0) {
     status = "completed";
   } else {
     status = "failed";
   }
 
+  // --- Step 4.5: Optional app registration ---
+  let threadId = null;
+  if (REGISTER && status !== "failed") {
+    const registerScript = path.join(__dirname, `register-${EXECUTOR}.js`);
+    if (fs.existsSync(registerScript)) {
+      try {
+        const regOutput = execFileSync("node", [
+          registerScript, REPO_PATH,
+          "--worktree-path", wtPath,
+          "-b", BRANCH,
+          "-t", `Dispatch: ${BRANCH}`,
+          "--json",
+        ], { encoding: "utf-8", stdio: "pipe" });
+        try {
+          const regData = JSON.parse(regOutput);
+          threadId = regData.threadId;
+        } catch {}
+        if (!JSON_OUT) console.log(`\n  Registered in ${EXECUTOR} app.`);
+      } catch (e) {
+        if (!JSON_OUT) console.log(`\n  Warning: app registration failed: ${e.message.split("\n")[0]}`);
+      }
+    }
+  }
+
   const result = {
     status,
+    executor: EXECUTOR,
     worktree: wtPath,
     branch: BRANCH,
     resultFile,
@@ -327,6 +393,8 @@ function main() {
     elapsed: `${elapsed}s`,
     exitCode,
     error,
+    registered: !!threadId,
+    threadId,
     commits: gitLog,
     uncommitted: uncommitted || null,
     diffStat,
@@ -351,14 +419,15 @@ function main() {
       console.log(`    ${resultText.slice(0, 300).replace(/\n/g, "\n    ")}`);
     }
     console.log(`\n  Full result: cat ${resultFile}`);
-    console.log(`  Codex log:   cat ${stdoutLog}`);
+    console.log(`  Stdout log:  cat ${stdoutLog}`);
     console.log(`  Review:      git -C ${shellQuote(wtPath)} log --oneline`);
     console.log(`  Diff:        git -C ${shellQuote(wtPath)} diff HEAD~1`);
     console.log(`  Merge:       git merge ${BRANCH}`);
   }
 
   // --- Step 5: Cleanup worktree on success ---
-  if (status !== "failed" && !NO_CLEANUP) {
+  // --register keeps the worktree for app session resumption.
+  if (status !== "failed" && !NO_CLEANUP && !REGISTER) {
     try {
       git(REPO_PATH, "worktree", "remove", "--force", wtPath);
       if (!JSON_OUT) console.log(`\n  Worktree cleaned up.`);
