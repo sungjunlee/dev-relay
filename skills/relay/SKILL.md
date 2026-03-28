@@ -18,13 +18,13 @@ Read the dev-backlog sprint file and task file for this issue:
 - Read the task file (`backlog/tasks/{PREFIX}-{N} - {Title}.md`) for Acceptance Criteria
 - If no local task file, read from GitHub: `gh issue view <N>`
 
-## Step 2: Plan (relay-plan)
+## Step 2: Plan
 
 Build a scoring rubric from the Acceptance Criteria:
-- **3+ AC items or quality-sensitive**: Use relay-plan to build a rubric with automated checks + evaluated factors
+- **3+ AC items or quality-sensitive**: Follow relay-plan's process (Steps 1-3 only: read task → build rubric → generate prompt). Do NOT dispatch from relay-plan — Step 3 below handles dispatch.
 - **Simple task (1-2 AC, bug fix, typo)**: Use the base template from `references/prompt-template.md`
 
-Write the dispatch prompt to a temp file.
+Write the dispatch prompt to a temp file (e.g., `/tmp/dispatch-<N>.md`).
 
 ## Step 3: Dispatch (relay-dispatch)
 
@@ -44,7 +44,7 @@ Wait for completion. Check result:
 
 Verify PR exists: `gh pr list --head issue-<N>`
 
-Then launch an independent review (fresh context):
+Then invoke **relay-review** as a sub-skill (it runs with `context: fork` for bias-free review):
 1. Get diff: `gh pr diff <PR-NUM> > /tmp/pr-diff.txt`
 2. Review against these checks:
    - Faithfulness: each Done Criteria item implemented? Scope respected?
@@ -75,7 +75,8 @@ After LGTM:
 ```bash
 gh pr merge <PR-NUM> --squash
 gh issue close <N> -c "Resolved in PR #<PR-NUM>"
-# Worktree auto-cleaned by dispatch.js
+# Worktree is auto-cleaned by dispatch.js on success.
+# If dispatch used --no-cleanup, run: git worktree remove <path> && git branch -d issue-<N>
 ```
 
 Update dev-backlog sprint file:

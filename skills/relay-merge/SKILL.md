@@ -18,8 +18,8 @@ Merge PR and close the loop after LGTM.
 ```bash
 gh pr merge $PR_NUM --squash
 gh issue close <number> -c "Resolved in PR #$PR_NUM"
-git worktree remove <worktree-path>
-git branch -d <branch>
+# Worktree is auto-cleaned by dispatch.js on success.
+# If dispatch used --no-cleanup: git worktree remove <worktree-path> && git branch -d <branch>
 ```
 
 ### 2. Sprint file update
