@@ -41,9 +41,9 @@ const results = { removed: [], skipped: [], errors: [] };
 
 for (const entry of fs.readdirSync(WORKTREES_DIR)) {
   const wtDir = path.join(WORKTREES_DIR, entry);
-  if (!fs.statSync(wtDir).isDirectory()) continue;
-
   const stat = fs.statSync(wtDir);
+  if (!stat.isDirectory()) continue;
+
   const age = Math.round((now - stat.mtimeMs) / (60 * 60 * 1000));
 
   if (stat.mtimeMs > cutoff) {

@@ -276,7 +276,7 @@ function main() {
     // ENOBUFS: Codex output exceeded buffer. Work may be done — check worktree.
     if (e.code === "ENOBUFS" || msg.includes("ENOBUFS")) {
       error = "ENOBUFS (stdout buffer overflow — work may be complete, check worktree)";
-      exitCode = 0; // treat as potential success, let result collection decide
+      // Keep exitCode as-is; status logic below checks for ENOBUFS + actual work
     } else {
       error = msg;
     }
@@ -307,13 +307,13 @@ function main() {
     uncommitted = git(wtPath, "status", "--porcelain");
   } catch {}
 
-  // Determine actual status: if there are commits or uncommitted changes, work happened
+  // Determine actual status
   const hasWork = gitLog || uncommitted;
   let status;
-  if (exitCode === 0) {
+  if (error && error.includes("ENOBUFS") && hasWork) {
+    status = "completed-with-warning"; // ENOBUFS but work exists in worktree
+  } else if (exitCode === 0) {
     status = "completed";
-  } else if (hasWork && error && error.includes("ENOBUFS")) {
-    status = "completed-with-warning";
   } else {
     status = "failed";
   }

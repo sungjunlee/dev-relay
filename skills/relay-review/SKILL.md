@@ -1,5 +1,6 @@
 ---
 name: relay-review
+argument-hint: "[branch-name or PR-number]"
 description: Independent PR review after Codex dispatch. Re-scores the rubric and reviews against Done Criteria in a fresh context, free from planning bias. Returns LGTM or specific issues with file:line references.
 context: fork
 compatibility: context:fork requires Claude Code. Other agents should start a new session before reviewing. Requires gh CLI.
