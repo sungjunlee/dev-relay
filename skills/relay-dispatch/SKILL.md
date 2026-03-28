@@ -100,6 +100,17 @@ For manual Codex App usage without dispatching:
 ${CLAUDE_SKILL_DIR}/scripts/register-worktree.js <repo> -b <branch> [--register] [--pin]
 ```
 
+## Worktree Cleanup
+
+Worktrees are auto-removed on successful dispatch. Use `--no-cleanup` to keep them.
+
+To prune stale worktrees from failed/interrupted dispatches:
+```bash
+${CLAUDE_SKILL_DIR}/scripts/cleanup-worktrees.js              # remove worktrees > 24h old
+${CLAUDE_SKILL_DIR}/scripts/cleanup-worktrees.js --all         # remove all
+${CLAUDE_SKILL_DIR}/scripts/cleanup-worktrees.js --dry-run     # show what would be removed
+```
+
 ## Caveats
 
 - **Timeout**: Use `--timeout 3600`+ when self-review is included

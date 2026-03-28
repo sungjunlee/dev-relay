@@ -49,8 +49,8 @@ const args = process.argv.slice(2);
 
 const KNOWN_FLAGS = [
   "--branch", "-b", "--prompt", "-p", "--prompt-file", "--model", "-m",
-  "--sandbox", "--copy", "--copy-env", "--timeout", "--dry-run", "--json",
-  "--help", "-h",
+  "--sandbox", "--copy", "--copy-env", "--timeout", "--no-cleanup",
+  "--dry-run", "--json", "--help", "-h",
 ];
 
 if (!args.length || args.includes("--help") || args.includes("-h")) {
@@ -65,6 +65,7 @@ if (!args.length || args.includes("--help") || args.includes("-h")) {
   console.log("  --copy-env       Copy .env to worktree");
   console.log("  --copy <files>   Additional files to copy (comma-separated)");
   console.log("  --timeout        Codex exec timeout in seconds (default: 1800)");
+  console.log("  --no-cleanup     Keep worktree after successful dispatch");
   console.log("  --dry-run        Show plan without executing");
   console.log("  --json           Output as JSON");
   process.exit(args.includes("--help") || args.includes("-h") ? 0 : 1);
@@ -88,7 +89,7 @@ for (let i = 0; i < args.length; i++) {
     consumedIndices.add(i);
     consumedIndices.add(i + 1);
     i++; // skip the value
-  } else if (["--copy-env", "--dry-run", "--json", "--help", "-h"].includes(args[i])) {
+  } else if (["--copy-env", "--no-cleanup", "--dry-run", "--json", "--help", "-h"].includes(args[i])) {
     consumedIndices.add(i);
   }
 }
@@ -103,6 +104,7 @@ const SANDBOX = getArg("--sandbox", "workspace-write");
 const COPY_ENV = hasFlag("--copy-env");
 const COPY_FILES = getArg("--copy", "").split(",").filter(Boolean);
 const TIMEOUT = parseInt(getArg("--timeout", "1800"), 10);
+const NO_CLEANUP = hasFlag("--no-cleanup");
 const DRY_RUN = hasFlag("--dry-run");
 const JSON_OUT = hasFlag("--json");
 
@@ -353,6 +355,16 @@ function main() {
     console.log(`  Review:      git -C ${shellQuote(wtPath)} log --oneline`);
     console.log(`  Diff:        git -C ${shellQuote(wtPath)} diff HEAD~1`);
     console.log(`  Merge:       git merge ${BRANCH}`);
+  }
+
+  // --- Step 5: Cleanup worktree on success ---
+  if (status !== "failed" && !NO_CLEANUP) {
+    try {
+      git(REPO_PATH, "worktree", "remove", "--force", wtPath);
+      if (!JSON_OUT) console.log(`\n  Worktree cleaned up.`);
+    } catch (e) {
+      if (!JSON_OUT) console.log(`\n  Warning: worktree cleanup failed: ${e.message.split("\n")[0]}`);
+    }
   }
 
   if (status === "failed") process.exit(exitCode || 1);
