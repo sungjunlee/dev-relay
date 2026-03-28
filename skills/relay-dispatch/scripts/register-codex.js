@@ -5,25 +5,28 @@
  * Creates a worktree in ~/.codex/worktrees/ (Codex's managed location).
  * When codex exec runs there, the session auto-registers on next App restart.
  * Use --register to pre-register in SQLite for title/pin support.
+ * Use --worktree-path to register an existing worktree (e.g., from dispatch.js).
  *
  * Usage:
- *   ./register-worktree.js <repo-path> [options]
+ *   ./register-codex.js <repo-path> [options]
  *
  * Options:
- *   --branch, -b <name>    Branch name (default: auto from topic)
- *   --title, -t <text>     Thread title in Codex App
- *   --topic <name>         Topic slug → branch becomes codex/<topic>
- *   --copy-env             Copy .env from main repo to worktree
- *   --copy <file,...>      Additional files to copy (comma-separated)
- *   --pin                  Pin thread to prevent auto-cleanup (4 days)
- *   --register             Pre-register in SQLite + global state
- *   --dry-run              Show plan without executing
- *   --json                 Output as JSON
+ *   --branch, -b <name>      Branch name (default: auto from topic)
+ *   --title, -t <text>       Thread title in Codex App
+ *   --topic <name>           Topic slug -> branch becomes codex/<topic>
+ *   --worktree-path <path>   Register an existing worktree (implies --register)
+ *   --copy-env               Copy .env from main repo to worktree
+ *   --copy <file,...>        Additional files to copy (comma-separated)
+ *   --pin                    Pin thread to prevent auto-cleanup (4 days)
+ *   --register               Pre-register in SQLite + global state
+ *   --dry-run                Show plan without executing
+ *   --json                   Output as JSON
  *
  * Examples:
- *   ./register-worktree.js . --branch feature-auth
- *   ./register-worktree.js . -b feature-auth -t "Implement OAuth2" --register --pin
- *   ./register-worktree.js . --topic auth --copy-env
+ *   ./register-codex.js . --branch feature-auth
+ *   ./register-codex.js . -b feature-auth -t "Implement OAuth2" --register --pin
+ *   ./register-codex.js . --topic auth --copy-env
+ *   ./register-codex.js . --worktree-path /path/to/wt -b feature -t "Task title"
  */
 
 const { execFileSync } = require("child_process");
@@ -39,16 +42,16 @@ const os = require("os");
 const args = process.argv.slice(2);
 if (!args.length || args.includes("--help") || args.includes("-h")) {
   console.log(
-    "Usage: register-worktree.js <repo-path> [--branch <name>] [--title <text>]"
+    "Usage: register-codex.js <repo-path> [--branch <name>] [--title <text>]"
   );
   console.log(
-    "       [--topic <name>] [--copy-env] [--copy <files>] [--pin] [--register]"
+    "       [--topic <name>] [--worktree-path <path>] [--copy-env] [--copy <files>]"
   );
-  console.log("       [--dry-run] [--json]");
+  console.log("       [--pin] [--register] [--dry-run] [--json]");
   process.exit(args.includes("--help") || args.includes("-h") ? 0 : 1);
 }
 
-const KNOWN_FLAGS = ["--branch", "-b", "--title", "-t", "--topic", "--copy", "--copy-env", "--pin", "--register", "--dry-run", "--json", "--help", "-h"];
+const KNOWN_FLAGS = ["--branch", "-b", "--title", "-t", "--topic", "--worktree-path", "--copy", "--copy-env", "--pin", "--register", "--dry-run", "--json", "--help", "-h"];
 function getArg(flags, fallback) {
   for (const flag of Array.isArray(flags) ? flags : [flags]) {
     const idx = args.indexOf(flag);
@@ -69,12 +72,14 @@ const TITLE = getArg(
   ["--title", "-t"],
   BRANCH ? `Worktree: ${BRANCH}` : `Worktree: ${PROJECT_NAME}`
 );
+const WORKTREE_PATH = getArg("--worktree-path", undefined);
 const COPY_ENV = hasFlag("--copy-env");
 const COPY_FILES = getArg("--copy", "")
   .split(",")
   .filter(Boolean);
 const PIN = hasFlag("--pin");
-const REGISTER = hasFlag("--register");
+// --worktree-path implies --register (the only reason to use it)
+const REGISTER = hasFlag("--register") || !!WORKTREE_PATH;
 const DRY_RUN = hasFlag("--dry-run");
 const JSON_OUT = hasFlag("--json");
 
@@ -106,12 +111,14 @@ if (!fs.existsSync(path.join(REPO_PATH, ".git"))) {
   process.exit(1);
 }
 
-// Check codex CLI is available
-try {
-  execFileSync("codex", ["--version"], { encoding: "utf-8", stdio: "pipe" });
-} catch {
-  console.error("Error: codex CLI not found. Install Codex first: https://github.com/openai/codex");
-  process.exit(1);
+// Codex CLI check (not needed in --worktree-path mode)
+if (!WORKTREE_PATH) {
+  try {
+    execFileSync("codex", ["--version"], { encoding: "utf-8", stdio: "pipe" });
+  } catch {
+    console.error("Error: codex CLI not found. Install Codex first: https://github.com/openai/codex");
+    process.exit(1);
+  }
 }
 
 if (REGISTER && !fs.existsSync(STATE_DB)) {
@@ -181,68 +188,90 @@ function ensureInArray(obj, key, value) {
 // ---------------------------------------------------------------------------
 
 function main() {
-  const wtId = crypto.randomBytes(4).toString("hex");
-  const wtPath = path.join(WORKTREES_DIR, wtId, PROJECT_NAME);
-  const threadId = generateUUIDv7();
-  const now = nowISO();
-  const epoch = Math.floor(Date.now() / 1000);
+  let wtPath, branch;
 
-  let branch = BRANCH || `codex/wt-${wtId}-${PROJECT_NAME}`;
-
-  // Check for collision
-  if (fs.existsSync(wtPath)) {
-    console.error(`Error: worktree path already exists: ${wtPath}`);
-    process.exit(1);
-  }
-
-  // --- Dry run ---
-  if (DRY_RUN) {
-    const plan = { worktree: wtPath, branch, title: TITLE, register: REGISTER, pin: PIN, copyEnv: COPY_ENV };
-    if (JSON_OUT) {
-      console.log(JSON.stringify(plan, null, 2));
-    } else {
-      console.log("Dry run:");
-      console.log(`  Worktree: ${wtPath}`);
-      console.log(`  Branch:   ${branch}`);
-      console.log(`  Title:    ${TITLE}`);
-      console.log(`  Register: ${REGISTER}`);
-      if (PIN) console.log("  Pinned:   yes");
-      if (COPY_ENV) console.log("  Copy:     .env");
-    }
-    return;
-  }
-
-  // --- Step 1: Create git worktree ---
-  fs.mkdirSync(path.dirname(wtPath), { recursive: true });
-  try {
-    git(REPO_PATH, "worktree", "add", wtPath, "-b", branch);
-  } catch {
-    try {
-      git(REPO_PATH, "worktree", "add", wtPath, branch);
-    } catch (e) {
-      console.error(`Error: failed to create worktree for branch '${branch}': ${e.message}`);
+  if (WORKTREE_PATH) {
+    // ---- External worktree mode ----
+    // Register an existing worktree created by dispatch.js or manually.
+    wtPath = path.resolve(WORKTREE_PATH);
+    if (!fs.existsSync(wtPath)) {
+      console.error(`Error: worktree path does not exist: ${wtPath}`);
       process.exit(1);
     }
-  }
+    branch = BRANCH;
+    if (!branch) {
+      try {
+        branch = git(wtPath, "rev-parse", "--abbrev-ref", "HEAD");
+      } catch {
+        console.error("Error: --branch required (could not detect from worktree)");
+        process.exit(1);
+      }
+    }
+  } else {
+    // ---- Standard mode: create new worktree ----
+    const wtId = crypto.randomBytes(4).toString("hex");
+    wtPath = path.join(WORKTREES_DIR, wtId, PROJECT_NAME);
+    branch = BRANCH || `codex/wt-${wtId}-${PROJECT_NAME}`;
 
-  // --- Step 2: Copy files ---
-  if (COPY_ENV) {
-    const src = path.join(REPO_PATH, ".env");
-    if (fs.existsSync(src)) fs.copyFileSync(src, path.join(wtPath, ".env"));
-  }
-  for (const file of COPY_FILES) {
-    const src = path.resolve(REPO_PATH, file);
-    const dst = path.resolve(wtPath, file);
-    assertWithin(REPO_PATH, src, "--copy source");
-    assertWithin(wtPath, dst, "--copy destination");
-    if (fs.existsSync(src)) {
-      fs.mkdirSync(path.dirname(dst), { recursive: true });
-      fs.copyFileSync(src, dst);
+    if (fs.existsSync(wtPath)) {
+      console.error(`Error: worktree path already exists: ${wtPath}`);
+      process.exit(1);
+    }
+
+    // --- Dry run ---
+    if (DRY_RUN) {
+      const plan = { worktree: wtPath, branch, title: TITLE, register: REGISTER, pin: PIN, copyEnv: COPY_ENV };
+      if (JSON_OUT) {
+        console.log(JSON.stringify(plan, null, 2));
+      } else {
+        console.log("Dry run:");
+        console.log(`  Worktree: ${wtPath}`);
+        console.log(`  Branch:   ${branch}`);
+        console.log(`  Title:    ${TITLE}`);
+        console.log(`  Register: ${REGISTER}`);
+        if (PIN) console.log("  Pinned:   yes");
+        if (COPY_ENV) console.log("  Copy:     .env");
+      }
+      return;
+    }
+
+    // --- Step 1: Create git worktree ---
+    fs.mkdirSync(path.dirname(wtPath), { recursive: true });
+    try {
+      git(REPO_PATH, "worktree", "add", wtPath, "-b", branch);
+    } catch {
+      try {
+        git(REPO_PATH, "worktree", "add", wtPath, branch);
+      } catch (e) {
+        console.error(`Error: failed to create worktree for branch '${branch}': ${e.message}`);
+        process.exit(1);
+      }
+    }
+
+    // --- Step 2: Copy files ---
+    if (COPY_ENV) {
+      const src = path.join(REPO_PATH, ".env");
+      if (fs.existsSync(src)) fs.copyFileSync(src, path.join(wtPath, ".env"));
+    }
+    for (const file of COPY_FILES) {
+      const src = path.resolve(REPO_PATH, file);
+      const dst = path.resolve(wtPath, file);
+      assertWithin(REPO_PATH, src, "--copy source");
+      assertWithin(wtPath, dst, "--copy destination");
+      if (fs.existsSync(src)) {
+        fs.mkdirSync(path.dirname(dst), { recursive: true });
+        fs.copyFileSync(src, dst);
+      }
     }
   }
 
   // --- Step 3 (optional): Register in Codex state ---
+  let threadId = null;
   if (REGISTER) {
+    threadId = generateUUIDv7();
+    const now = nowISO();
+    const epoch = Math.floor(Date.now() / 1000);
+
     let gitSha = "", gitOrigin = "";
     try { gitSha = git(wtPath, "rev-parse", "HEAD"); } catch {}
     try { gitOrigin = git(REPO_PATH, "remote", "get-url", "origin"); } catch {}
@@ -299,17 +328,17 @@ function main() {
   const result = {
     worktree: wtPath,
     branch,
-    threadId: REGISTER ? threadId : null,
+    threadId,
     title: TITLE,
     registered: REGISTER,
-    exec: `codex exec -C ${shellQuote(wtPath)} --full-auto "your task here"`,
+    exec: WORKTREE_PATH ? null : `codex exec -C ${shellQuote(wtPath)} --full-auto "your task here"`,
     resume: REGISTER ? `codex resume ${threadId}` : null,
   };
 
   if (JSON_OUT) {
     console.log(JSON.stringify(result, null, 2));
   } else {
-    console.log(`\nWorktree created:\n`);
+    console.log(`\nWorktree ${WORKTREE_PATH ? "registered" : "created"}:\n`);
     console.log(`  Path:   ${wtPath}`);
     console.log(`  Branch: ${branch}`);
     if (REGISTER) {

@@ -1,21 +1,24 @@
 ---
 name: relay-dispatch
 argument-hint: "<repo-path> -b <branch> -p <prompt> [options]"
-description: Dispatch implementation tasks to Codex via worktree isolation. Creates a git worktree, runs codex exec with a contract prompt, and collects results. Use when delegating work to Codex, running background dispatches, or parallelizing independent tasks.
-compatibility: Requires codex CLI, git, and Node.js 18+.
+description: Dispatch implementation tasks via worktree isolation. Creates a git worktree, runs an executor (Codex by default) with a contract prompt, and collects results. Use when delegating work, running background dispatches, or parallelizing independent tasks.
+compatibility: Requires executor CLI (e.g., codex), git, and Node.js 18+.
 metadata:
   related-skills: "relay, relay-plan, relay-review, relay-merge"
 ---
 
 # Relay Dispatch
 
-Create a worktree and dispatch a task to Codex.
+Create a worktree and dispatch a task to an executor.
 
 ## Usage
 
 ```bash
-# Foreground (blocking — simple tasks)
+# Foreground (blocking — simple tasks, default executor: codex)
 ${CLAUDE_SKILL_DIR}/scripts/dispatch.js . -b feature-auth -p "..." --copy-env
+
+# With explicit executor
+${CLAUDE_SKILL_DIR}/scripts/dispatch.js . -e codex -b feature-auth -p "..."
 ```
 
 For background and parallel dispatch, see "Background & Parallel" section below.
@@ -27,15 +30,17 @@ For background and parallel dispatch, see "Background & Parallel" section below.
 | `--branch, -b` | Branch name (required) |
 | `--prompt, -p` | Task prompt (include Context + Done Criteria + self-review) |
 | `--prompt-file` | Read prompt from file (for large prompts) |
-| `--model, -m` | Codex model override |
+| `--executor, -e` | Executor: `codex` (default) |
+| `--model, -m` | Model override |
 | `--sandbox` | `workspace-write` (default) or `read-only` |
 | `--copy-env` | Copy `.env` to worktree |
 | `--copy <files>` | Additional files to copy |
 | `--timeout` | Timeout in seconds (default: 1800) |
+| `--register` | Register session in executor's app (keeps worktree) |
 | `--dry-run` | Show plan without executing |
 | `--json` | Structured JSON output (for background dispatch) |
 
-Creates worktree in `~/.codex/worktrees/` → runs `codex exec` → collects result.
+Creates worktree → runs executor → collects result.
 Exits with non-zero code on failure.
 
 ### Timeout guidance
@@ -93,12 +98,16 @@ Bash(run_in_background=true):
 # Each completes independently → review each PR via relay-review
 ```
 
-## `register-worktree.js` — Worktree only (no exec)
+## `register-codex.js` — Codex App integration
 
-For manual Codex App usage without dispatching:
+For manual Codex App usage without dispatching, or to register an existing worktree:
 
 ```bash
-${CLAUDE_SKILL_DIR}/scripts/register-worktree.js <repo> -b <branch> [--register] [--pin]
+# Create worktree + register in Codex App
+${CLAUDE_SKILL_DIR}/scripts/register-codex.js <repo> -b <branch> --register [--pin]
+
+# Register an existing worktree (e.g., from a previous dispatch)
+${CLAUDE_SKILL_DIR}/scripts/register-codex.js <repo> --worktree-path <path> -b <branch> -t "Title"
 ```
 
 ## Worktree Cleanup
