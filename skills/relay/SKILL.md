@@ -1,7 +1,7 @@
 ---
 name: relay
 argument-hint: "[issue-number or task description]"
-description: Route relay workflow between Claude Code and Codex. Determines whether to use relay-plan or dispatch directly, then guides through the plan-dispatch-review-merge cycle. Use when delegating work to Codex, codex에서 실행, 워크트리, relay.
+description: Execute the full relay cycle — plan, dispatch to Codex, review PR, merge. Reads from dev-backlog sprint files. Use when delegating work to Codex, codex에서 실행, 워크트리, relay.
 compatibility: Requires Claude Code or Codex, gh CLI, git, and Node.js 18+.
 metadata:
   related-skills: "relay-plan, relay-dispatch, relay-review, relay-merge, dev-backlog"
@@ -9,55 +9,87 @@ metadata:
 
 # Dev Relay
 
-Relay development work between Claude Code (brain) and Codex (hands).
+Execute the full plan → dispatch → review → merge cycle. Follow ALL steps below in order. Do NOT skip any step.
 
-## Quick Start
+## Step 1: Read Context
 
-When asked to relay a task to Codex:
+Read the dev-backlog sprint file and task file for this issue:
+- If a sprint file exists (`backlog/sprints/` with `status: active`), read it for Running Context and batch info
+- Read the task file (`backlog/tasks/{PREFIX}-{N} - {Title}.md`) for Acceptance Criteria
+- If no local task file, read from GitHub: `gh issue view <N>`
 
-1. **Simple task** (bug fix, typo, 1-2 AC items) → use base template from `references/prompt-template.md` → **relay-dispatch** directly
-2. **Substantial task** (3+ AC items, quality-sensitive) → **relay-plan** (build rubric) → **relay-dispatch**
-3. After dispatch completes → **relay-review** (fresh context PR review)
-4. LGTM → **relay-merge** (merge + cleanup + sprint file update)
+## Step 2: Plan (relay-plan)
 
-## Process
+Build a scoring rubric from the Acceptance Criteria:
+- **3+ AC items or quality-sensitive**: Use relay-plan to build a rubric with automated checks + evaluated factors
+- **Simple task (1-2 AC, bug fix, typo)**: Use the base template from `references/prompt-template.md`
 
-```
-Claude Code                         Codex
-  │                                    │
-  ├─ 1. Plan + Rubric (relay-plan)     │
-  │    or base template (simple tasks) │
-  │                                    │
-  └─ 2. Dispatch (relay-dispatch) ──→  │
-                                       ├─ Implement + score rubric
-                                       ├─ LOOP: fix lowest → re-score
-                                       └─ Create PR with Score Log
-  ├─ 3. Review (relay-review) ←───────┘
-  │    (re-score + /simplify + /review)
-  │
-  ├─ 4a. Issues → re-dispatch → re-review (max 2)
-  ├─ 4b. LGTM → Merge (relay-merge)
-  │
-  └─ 5. Next task
-```
+Write the dispatch prompt to a temp file.
 
-## Script Path
+## Step 3: Dispatch (relay-dispatch)
 
-All scripts live in the **relay-dispatch** skill directory. When invoking from another skill, use a relative path from the calling skill's directory:
 ```bash
-# From relay-plan or other sibling skills:
-${CLAUDE_SKILL_DIR}/../relay-dispatch/scripts/dispatch.js . -b issue-42 --prompt-file /tmp/dispatch-42.md --timeout 3600
+${CLAUDE_SKILL_DIR}/../relay-dispatch/scripts/dispatch.js . \
+  -b issue-<N> --prompt-file /tmp/dispatch-<N>.md --timeout 3600 --copy-env
 ```
 
-## Integration with dev-backlog
+Wait for completion. Check result:
+- `status: "completed"` → proceed to Step 4
+- `status: "completed-with-warning"` → check worktree for uncommitted work, proceed to Step 4
+- `status: "failed"` → check failure table in relay-dispatch, fix and re-dispatch
 
-dev-relay is stateless — all progress tracking lives in the dev-backlog sprint file.
+## Step 4: Review (relay-review)
 
-**Pre-Dispatch flow:**
-1. Read sprint file → find next unchecked batch
-2. For each issue: read task file → relay-plan (or base template) → relay-dispatch
-3. After merge: relay-merge updates sprint file
+**MANDATORY. Do NOT skip this step.**
 
-**AC → Done Criteria:** Task file's `## Acceptance Criteria` checkboxes become Done Criteria verbatim.
+Verify PR exists: `gh pr list --head issue-<N>`
 
-**Branch naming:** `issue-<number>` for sprint tasks.
+Then launch an independent review (fresh context):
+1. Get diff: `gh pr diff <PR-NUM> > /tmp/pr-diff.txt`
+2. Review against these checks:
+   - Faithfulness: each Done Criteria item implemented? Scope respected?
+   - Stubs/placeholders: any `return null`, empty bodies, TODO?
+   - Integration: breaks callers/consumers?
+   - Security: auth, input validation, injection risks?
+   - Complexity: simpler without losing functionality?
+3. If rubric was used: re-score automated checks + evaluated factors
+4. Run `/simplify` and `/review` for additional quality checks
+
+Verdict: **LGTM** or **issues with file:line references**.
+
+## Step 5: Iterate (if issues found)
+
+Re-dispatch with targeted fix prompt. **Include automated checks so Codex re-verifies:**
+
+```
+Fix these issues: [specific issues with file:line].
+Do not change anything else. Push to the same branch.
+After fixing, re-run: [automated check commands from rubric]
+```
+
+Re-review. **Max 2 rounds.** After that: show user PR URL + unresolved issues, let them decide.
+
+## Step 6: Merge (relay-merge)
+
+After LGTM:
+```bash
+gh pr merge <PR-NUM> --squash
+gh issue close <N> -c "Resolved in PR #<PR-NUM>"
+# Worktree auto-cleaned by dispatch.js
+```
+
+Update dev-backlog sprint file:
+- **Plan**: check off `[x] #<N>`
+- **Progress**: add timestamped log entry (e.g., "2026-03-28: #540 dispatched → PR #89 → LGTM → merged")
+- **Running Context**: add learnings that affect later tasks
+
+Create follow-up issues if discovered during review.
+
+## Summary Checklist
+
+After completing the relay cycle, verify:
+- [ ] Issue AC fully implemented (relay-review confirmed)
+- [ ] PR merged and issue closed
+- [ ] Sprint file updated (Plan checkbox, Progress entry)
+- [ ] Running Context updated (if applicable)
+- [ ] Follow-up issues created (if applicable)
