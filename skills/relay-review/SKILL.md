@@ -23,8 +23,8 @@ gh pr diff $PR_NUM > /tmp/pr-diff.txt
 ISSUE_NUM=$(gh pr view $PR_NUM --json closingIssuesReferences -q '.[0].number')
 # Fallback 1: grep PR body for issue keywords
 [ -z "$ISSUE_NUM" ] && ISSUE_NUM=$(gh pr view $PR_NUM --json body -q '.body' | grep -oiE '(closes|fixes|resolves|refs|related to) #[0-9]+' | grep -oE '[0-9]+' | head -1)
-# Fallback 2: extract from branch name (issue-<N>)
-[ -z "$ISSUE_NUM" ] && ISSUE_NUM=$(gh pr view $PR_NUM --json headRefName -q '.headRefName' | grep -oE '[0-9]+')
+# Fallback 2: extract from branch name (issue-<N> convention)
+[ -z "$ISSUE_NUM" ] && ISSUE_NUM=$(gh pr view $PR_NUM --json headRefName -q '.headRefName' | grep -oE 'issue-[0-9]+' | grep -oE '[0-9]+')
 # If all fail: escalate — cannot review without Done Criteria
 [ -z "$ISSUE_NUM" ] && echo "ERROR: Cannot determine issue number. Provide it manually." && exit 1
 gh issue view $ISSUE_NUM  # Done Criteria / Acceptance Criteria source
