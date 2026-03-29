@@ -44,6 +44,27 @@ npx skills add . -g -y
   Step 6:   Merge, close issue, update sprint file
 ```
 
+## `.worktreeinclude`
+
+When dispatch creates a worktree, gitignored files (`.env`, config files, etc.) don't exist there. Add a `.worktreeinclude` file to your project root to auto-copy them:
+
+```
+# .worktreeinclude
+.env
+.env.local
+dart-defines.json
+config/*.key
+```
+
+**Rules:**
+- Only files matching BOTH `.worktreeinclude` AND `.gitignore` are copied (safety)
+- Glob patterns supported (`*.key`, `.env*`)
+- Directories are copied recursively
+- Missing files are silently skipped
+- `--copy-env` and `--copy` flags still work as explicit overrides
+
+This follows the same convention as Claude Code Desktop, Cline, and Roo Code.
+
 ## Requirements
 
 - Claude Code or Codex
