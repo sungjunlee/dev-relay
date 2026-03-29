@@ -32,8 +32,6 @@ PR_NUM=$(gh pr list --head issue-<N> --json number -q '.[0].number')
 - PR exists and merged → update sprint file to `[x]` (if exists), done
 - PR not found → continue to Step 2
 
-Also check sprint file if present: `[~]` status confirms dispatch happened.
-
 ## Step 2: Plan
 
 Build a scoring rubric from the Acceptance Criteria:
