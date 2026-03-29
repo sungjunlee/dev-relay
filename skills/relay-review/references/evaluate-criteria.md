@@ -37,6 +37,8 @@ Note: Claude does NOT fix code directly — all fixes go through Codex via targe
 
 **Re-dispatch when:** Missing/misunderstood requirement, security issue, stubs in production paths.
 
-**Re-dispatch rules:** file:line references, what to fix (not how), "do not change anything else", max 2 rounds.
+**Re-dispatch rules:** file:line references, what to fix (not how), "do not change anything else".
 
-**After 2 rounds:** Escalate — show user the PR URL, list unresolved issues, let them decide.
+**Convergence model:** Loop until all rubric factors meet target AND qualitative checks pass. The rubric anchors each round to the original scope — prevents drift. Safety cap: 20 rounds.
+
+**After safety cap:** Escalate — show user the PR URL, list unresolved issues, let them decide. Hitting the cap means something is structurally wrong, not that more rounds would help.
