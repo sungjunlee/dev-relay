@@ -117,6 +117,10 @@ const SANDBOX = getArg("--sandbox", "workspace-write");
 const COPY_ENV = hasFlag("--copy-env");
 const COPY_FILES = getArg("--copy", "").split(",").filter(Boolean);
 const TIMEOUT = parseInt(getArg("--timeout", "1800"), 10);
+if (isNaN(TIMEOUT) || TIMEOUT <= 0) {
+  console.error("Error: --timeout must be a positive integer");
+  process.exit(1);
+}
 const REGISTER = hasFlag("--register");
 const NO_CLEANUP = hasFlag("--no-cleanup");
 const DRY_RUN = hasFlag("--dry-run");

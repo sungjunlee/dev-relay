@@ -290,8 +290,8 @@ function main() {
     };
     fs.writeFileSync(rolloutPath, JSON.stringify(meta) + "\n");
 
-    // SQLite via stdin (no shell). esc() sanitizes string values; numeric values must not come from user input.
-    const esc = (s) => s.replace(/'/g, "''");
+    // SQLite via stdin (no shell). esc() sanitizes string values for single-quoted SQL literals.
+    const esc = (s) => String(s).replace(/'/g, "''").replace(/[\x00\n\r\\]/g, "");
     sql(STATE_DB, `INSERT OR REPLACE INTO threads (
       id, rollout_path, created_at, updated_at, source, model_provider, cwd,
       title, sandbox_policy, approval_mode, tokens_used, has_user_event,
