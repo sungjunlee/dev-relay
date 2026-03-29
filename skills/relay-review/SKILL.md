@@ -10,52 +10,112 @@ metadata:
 
 # Relay Review
 
-Independent PR review against the Done Criteria contract and scoring rubric.
+Independent PR review against the Done Criteria contract and scoring rubric. Loops until convergence — the rubric anchors each iteration to prevent drift.
 
-## Process
+## Setup: Establish the anchor
 
-1. Get the PR diff:
+1. Get the PR diff and Done Criteria (this runs in a fresh context — fetch everything needed):
 ```bash
 PR_NUM=$(gh pr list --head <branch> --json number -q '.[0].number')
 gh pr diff $PR_NUM > /tmp/pr-diff.txt
+
+# Issue number extraction — try each method until one succeeds:
+ISSUE_NUM=$(gh pr view $PR_NUM --json closingIssuesReferences -q '.[0].number')
+# Fallback 1: grep PR body for issue keywords
+[ -z "$ISSUE_NUM" ] && ISSUE_NUM=$(gh pr view $PR_NUM --json body -q '.body' | grep -oiE '(closes|fixes|resolves|refs|related to) #[0-9]+' | grep -oE '[0-9]+' | head -1)
+# Fallback 2: extract from branch name (try issue-<N> first, then any number)
+if [ -z "$ISSUE_NUM" ]; then
+  BRANCH=$(gh pr view $PR_NUM --json headRefName -q '.headRefName')
+  ISSUE_NUM=$(echo "$BRANCH" | grep -oE 'issue-[0-9]+' | grep -oE '[0-9]+')
+  [ -z "$ISSUE_NUM" ] && ISSUE_NUM=$(echo "$BRANCH" | grep -oE '[0-9]+' | tail -1)
+fi
+# If all fail: escalate — cannot review without Done Criteria
+[ -z "$ISSUE_NUM" ] && echo "ERROR: Cannot determine issue number. Provide it manually." && exit 1
+gh issue view $ISSUE_NUM  # Done Criteria / Acceptance Criteria source
 ```
 
-2. Review the diff against these core checks:
+2. **Fix the anchor** — these do NOT change across rounds:
+   - Done Criteria from the issue (the contract)
+   - Rubric factors + targets from the Score Log (if relay-plan was used)
+   - Original scope boundary ("do not change" areas)
+
+## Review Loop
+
+Repeat until all checks pass. Each round re-measures against the **original anchor**, not the previous round's state.
+
+### Contract checks
+3. Review the diff against Done Criteria (see `references/reviewer-prompt.md`):
    - **Faithfulness**: Each Done Criteria item implemented? Scope respected?
    - **Stubs/placeholders**: Any `return null`, empty bodies, TODO in production paths?
    - **Integration**: Does it break callers/consumers of changed code?
    - **Security**: Auth/token handling, input validation, injection risks?
-   - **Complexity**: Can anything be simpler without losing functionality?
 
-   For the full injectable prompt template, see `references/reviewer-prompt.md`.
+4. **Rubric verification** (when Score Log present):
+   - Re-run ALL automated checks independently — do not trust Codex's reported results
+   - Re-score ALL evaluated factors with fresh eyes (1-10)
+   - Any required factor below target → issue
+   - Score divergence ≥2 points from Codex → flag for review
 
-3. Reply with **LGTM** or **specific issues** with `file:line` references.
+### Quality checks
+5. Run `/review` — code quality, patterns, conventions, structural issues
+6. Run `/simplify` on changed files — unnecessary complexity, dead code
 
-## Rubric-Based Review
+### Drift and stuck detection
+7. Before re-dispatching, check for drift, regressions, and stuck loops:
+   - **Scope:** Does the fix address an issue from steps 3-6, or is it scope creep?
+   - **Regression:** Are previously passing rubric factors still passing?
+   - **Churn:** Is the total diff growing without convergence?
+   - **Stuck:** Is the same issue appearing 3+ consecutive rounds? If yes → this issue is likely not fixable by Codex. Escalate immediately (don't wait for safety cap).
 
-When the PR includes a Score Log (from relay-plan):
+### Iterate or converge
+8. All checks pass → exit loop, proceed to Verdict
+9. Issues found → re-dispatch (see Re-dispatch below), re-fetch diff, **repeat from step 3**
 
-1. Read Codex's self-reported scores from PR description
-2. **Re-run automated checks** that don't require a running server (tests, linting)
-3. **Re-evaluate scored factors** with fresh eyes — score each 1-10
-4. Run `/simplify` and `/review` skills for additional quality checks
-5. If Claude's scores differ significantly from Codex's → flag specific factors in re-dispatch
+**Safety cap: 20 rounds total.** This is a ceiling, not a target — most PRs should converge in 1-3 rounds. If hitting the cap, something is structurally wrong; escalate.
 
-## Re-dispatch (if issues found)
+## Verdict + Audit Trail
 
-Targeted fix via relay-dispatch. **Include automated checks so Codex re-verifies after fixing:**
+10. All checks pass → write **LGTM PR comment**:
+```bash
+gh pr comment $PR_NUM --body "$(cat <<'EOF'
+<!-- relay-review -->
+## Relay Review
+Verdict: LGTM
+Contract: PASS — all Done Criteria verified
+Quality: PASS — /review and /simplify clean
+Rounds: <N>
+Rubric scores (if applicable):
+| Factor | Target | Codex | Claude | Status |
+|--------|--------|-------|--------|--------|
+| ...    | ...    | ...   | ...    | PASS   |
+EOF
+)"
+```
+<!-- NOTE: Verdict line format is parsed by relay and relay-merge gate checks via grep -oE 'Verdict: (LGTM|ESCALATED)'. Do not add markdown formatting. -->
 
+11. Hit safety cap or stuck → escalate to user. Still write audit trail:
+```bash
+gh pr comment $PR_NUM --body "$(cat <<'EOF'
+<!-- relay-review -->
+## Relay Review
+Verdict: ESCALATED — unresolved after <N> rounds
+Issues: [list with file:line]
+EOF
+)"
+```
+
+## Re-dispatch (when issues found)
+
+Targeted fix via relay-dispatch. Always include the anchor context:
 ```
 Fix these issues in the PR: [specific issues with file:line].
 Do not change anything else. Push to the same branch.
+
+Original Done Criteria (for scope reference):
+[paste Done Criteria from issue]
 
 After fixing, re-run these checks and confirm they pass:
 [paste automated check commands from the original rubric]
 ```
 
-**Max 2 re-dispatch rounds.** After that, escalate: show the user the PR URL, list unresolved issues, and let them decide (merge with caveats, fix manually, or discard).
-
-## Review Criteria
-
-See `references/reviewer-prompt.md` for the complete review prompt.
-See `references/evaluate-criteria.md` for escalation policy (auto-fix vs ask-user).
+See `references/evaluate-criteria.md` for escalation policy (auto re-dispatch vs ask user).
