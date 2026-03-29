@@ -49,6 +49,7 @@ const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
 const os = require("os");
+const { copyWorktreeFiles, getWorktreeIncludeFiles } = require("./worktreeinclude");
 
 // ---------------------------------------------------------------------------
 // Args
@@ -212,11 +213,13 @@ function main() {
 
   // --- Dry run ---
   if (DRY_RUN) {
+    const includeFiles = getWorktreeIncludeFiles(REPO_PATH);
     const plan = {
       executor: EXECUTOR, worktree: wtPath, branch: BRANCH,
       prompt: taskPrompt.slice(0, 200),
       model: MODEL, sandbox: SANDBOX, register: REGISTER,
       resultFile, stdoutLog, timeout: TIMEOUT, copyEnv: COPY_ENV,
+      worktreeinclude: includeFiles,
     };
     if (JSON_OUT) {
       console.log(JSON.stringify(plan, null, 2));
@@ -232,6 +235,9 @@ function main() {
       console.log(`  Register: ${REGISTER}`);
       console.log(`  Result:   ${resultFile}`);
       console.log(`  Timeout:  ${TIMEOUT}s`);
+      if (includeFiles.length) {
+        console.log(`  .worktreeinclude: ${includeFiles.join(", ")}`);
+      }
     }
     return;
   }
@@ -257,21 +263,12 @@ function main() {
     }
   }
 
-  // --- Step 2: Copy files ---
-  if (COPY_ENV) {
-    const src = path.join(REPO_PATH, ".env");
-    if (fs.existsSync(src)) fs.copyFileSync(src, path.join(wtPath, ".env"));
-  }
-  for (const file of COPY_FILES) {
-    const src = path.resolve(REPO_PATH, file);
-    const dst = path.resolve(wtPath, file);
-    assertWithin(REPO_PATH, src, "--copy source");
-    assertWithin(wtPath, dst, "--copy destination");
-    if (fs.existsSync(src)) {
-      fs.mkdirSync(path.dirname(dst), { recursive: true });
-      fs.copyFileSync(src, dst);
-    }
-  }
+  // --- Step 2: Copy files (.worktreeinclude + explicit flags) ---
+  const { copied: copiedFiles } = copyWorktreeFiles(REPO_PATH, wtPath, {
+    copyEnv: COPY_ENV,
+    copyFiles: COPY_FILES,
+    assertWithin,
+  });
 
   // --- Step 3: Execute task ---
   // Executor-specific: build command + args + handle quirks.
@@ -299,6 +296,7 @@ function main() {
     console.log(`Dispatching to ${EXECUTOR}...`);
     console.log(`  Worktree: ${wtPath}`);
     console.log(`  Branch:   ${BRANCH}`);
+    if (copiedFiles.length) console.log(`  Copied:   ${copiedFiles.join(", ")}`);
     console.log(`  Result:   ${resultFile}`);
   }
 
