@@ -1,8 +1,8 @@
 ---
 name: relay
 argument-hint: "[issue-number or task description]"
-description: Execute the full relay cycle — plan, dispatch to Codex, review PR, merge. Reads from dev-backlog sprint files. Use when delegating work to Codex, codex에서 실행, 워크트리, relay.
-compatibility: Requires Claude Code or Codex, gh CLI, git, and Node.js 18+.
+description: Execute the full relay cycle — plan, dispatch to Codex, review PR, merge. Integrates with dev-backlog sprint files when available. Use when delegating work to Codex, codex에서 실행, 워크트리, relay.
+compatibility: Requires Claude Code or Codex, gh CLI, git, and Node.js 18+. Task AC reading falls back to local files or user input.
 metadata:
   related-skills: "relay-plan, relay-dispatch, relay-review, relay-merge, dev-backlog"
 ---
@@ -13,20 +13,24 @@ Execute the full plan → dispatch → review → merge cycle. Follow ALL steps 
 
 ## Step 1: Read Context
 
-Read the dev-backlog sprint file and task file for this issue:
-- If a sprint file exists (`backlog/sprints/` with `status: active`), read it for Running Context and batch info
-- Read the task file (`backlog/tasks/{PREFIX}-{N} - {Title}.md`) for Acceptance Criteria
-- If no local task file, read from GitHub: `gh issue view <N>`
+Gather task details and sprint context:
+1. **Task AC** (try in order, use first that succeeds):
+   - Local task file: `backlog/tasks/{PREFIX}-{N} - {Title}.md`
+   - GitHub: `gh issue view <N>`
+   - User-provided description (from argument or conversation)
+2. **Sprint context** (optional): If `backlog/sprints/` has an active sprint file, read Running Context and batch info. If no sprint file, proceed without — sprint tracking is skipped.
+
+If no issue number, use a descriptive branch name (e.g., `feat/<slug>`) and skip issue-close in Step 6.
 
 ## Step 1.5: Check for in-flight work
 
-If the sprint file shows `[~]` for this issue (dispatch already completed, review pending):
+Check if this issue already has a PR in progress:
 ```bash
 PR_NUM=$(gh pr list --head issue-<N> --json number -q '.[0].number')
 ```
 - PR exists and open → **skip Steps 2-3**, go directly to Step 4 (review)
-- PR exists and merged → update sprint file to `[x]`, done
-- PR not found → reset sprint file to `[ ]`, continue to Step 2
+- PR exists and merged → update sprint file to `[x]` (if exists), done
+- PR not found → continue to Step 2
 
 ## Step 2: Plan
 
@@ -44,17 +48,16 @@ ${CLAUDE_SKILL_DIR}/../relay-dispatch/scripts/dispatch.js . \
 ```
 
 Wait for completion. Check result:
-- `status: "completed"` → update sprint file Plan to `[~]`, proceed to Step 4
-- `status: "completed-with-warning"` → check worktree for uncommitted work, update to `[~]`, proceed to Step 4
+- `status: "completed"` → proceed to Step 4
+- `status: "completed-with-warning"` → check worktree for uncommitted work, proceed to Step 4
 - `status: "failed"` → check failure table in relay-dispatch, fix and re-dispatch
 
-Get PR number and mark the sprint file Plan item as in-flight:
+Get PR number:
 ```bash
 PR_NUM=$(gh pr list --head issue-<N> --json number -q '.[0].number')
 ```
-```markdown
-- [~] #42 OAuth2 flow → PR #89 (reviewing)
-```
+
+If sprint file exists, mark Plan item as in-flight: `[~] #42 OAuth2 flow → PR #89 (reviewing)`
 
 ## Step 4: Review (relay-review)
 
@@ -93,7 +96,7 @@ gh issue close <N> -c "Resolved in PR #<PR-NUM>"
 # If dispatch used --no-cleanup, run: git worktree remove <path> && git branch -d issue-<N>
 ```
 
-Update dev-backlog sprint file:
+If sprint file exists, update it:
 - **Plan**: check off `[x] #<N>` (was `[~]` during dispatch)
 - **Progress**: add structured log entry (e.g., "2026-03-28: #540 dispatched → PR #89 → reviewed (LGTM, round 2) → merged")
 - **Running Context**: add learnings that affect later tasks
@@ -106,6 +109,5 @@ After completing the relay cycle, verify:
 - [ ] Issue AC fully implemented (relay-review confirmed)
 - [ ] PR has `<!-- relay-review -->` LGTM comment
 - [ ] PR merged and issue closed
-- [ ] Sprint file updated (Plan `[x]`, Progress entry with review round count)
-- [ ] Running Context updated (if applicable)
+- [ ] Sprint file updated — if exists (Plan `[x]`, Progress entry with review round count)
 - [ ] Follow-up issues created (if applicable)

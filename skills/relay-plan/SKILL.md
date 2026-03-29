@@ -2,7 +2,7 @@
 name: relay-plan
 argument-hint: "[issue-number]"
 description: Convert task acceptance criteria into a scored rubric for autonomous iteration. Defines automated checks and agent-evaluated factors with target thresholds. Codex loops until all factors converge. Use before relay-dispatch for tasks with 3+ acceptance criteria.
-compatibility: Requires gh CLI for issue reading.
+compatibility: Requires gh CLI. Task AC reading falls back to local files or user input.
 metadata:
   related-skills: "relay, relay-dispatch, relay-review, dev-backlog"
 ---
@@ -15,7 +15,10 @@ Build a scoring rubric from task Acceptance Criteria (AC), then generate a dispa
 
 ### 1. Read the task
 
-Read the issue AC (from dev-backlog task file or `gh issue view <N>`).
+Read the issue AC (try in order, use first that succeeds):
+- Local task file: `backlog/tasks/{PREFIX}-{N} - {Title}.md`
+- GitHub: `gh issue view <N>`
+- User-provided description
 
 ### 2. Build the rubric
 

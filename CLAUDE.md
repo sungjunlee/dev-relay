@@ -27,7 +27,7 @@ Multi-skill design: each phase is a separate skill for independent invocation on
 - **Codex does the heavy lifting** — implement + self-review + fix + PR, all in one session
 - **Claude reviews with fresh eyes** — independent Agent context, no planning bias
 - **Quota-aware** — maximize Codex work, minimize Claude review turns
-- **Stateless** — all progress tracking lives in dev-backlog's sprint file
+- **Stateless** — progress tracking lives in dev-backlog's sprint file when available; works without it
 - **Multi-skill** — relay-dispatch, relay-review, relay-merge are independently invocable
 - **Cross-platform** — works on Claude Code (skills) and Codex (agent skills)
 
