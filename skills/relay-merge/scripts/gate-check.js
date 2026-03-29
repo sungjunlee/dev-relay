@@ -116,7 +116,7 @@ function main() {
   let commentBodies;
   if (DRY_RUN) {
     // Dry-run: read JSON array from stdin, or plain text as single comment
-    const stdin = require("fs").readFileSync("/dev/stdin", "utf-8").trim();
+    const stdin = require("fs").readFileSync(0, "utf-8").trim();
     try {
       const parsed = JSON.parse(stdin);
       // Accept {comments: [{body:...}]} or [{body:...}] or [string]
