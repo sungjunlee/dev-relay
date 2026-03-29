@@ -1,0 +1,13 @@
+# Claude Code local settings
+.claude/settings.local.json
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Node
+node_modules/
+
+# Environment
+.env
+.env.*
