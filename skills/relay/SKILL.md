@@ -2,7 +2,7 @@
 name: relay
 argument-hint: "[issue-number or task description]"
 description: Execute the full relay cycle — plan, dispatch to Codex, review PR, merge. Integrates with dev-backlog sprint files when available. Use when delegating work to Codex, codex에서 실행, 워크트리, relay.
-compatibility: Requires Claude Code or Codex, git, and Node.js 18+. gh CLI recommended (fallback: user-provided issue details).
+compatibility: Requires Claude Code or Codex, gh CLI, git, and Node.js 18+. Task AC reading falls back to local files or user input.
 metadata:
   related-skills: "relay-plan, relay-dispatch, relay-review, relay-merge, dev-backlog"
 ---
@@ -19,6 +19,8 @@ Gather task details and sprint context:
    - GitHub: `gh issue view <N>`
    - User-provided description (from argument or conversation)
 2. **Sprint context** (optional): If `backlog/sprints/` has an active sprint file, read Running Context and batch info. If no sprint file, proceed without — sprint tracking is skipped.
+
+If no issue number, use a descriptive branch name (e.g., `feat/<slug>`) and skip issue-close in Step 6.
 
 ## Step 1.5: Check for in-flight work
 
