@@ -26,38 +26,69 @@ Convert each AC item into a scored factor:
 
 ```yaml
 rubric:
-  setup: "npm install && npm start &"  # run before automated checks (if needed)
+  setup: "npm install && npm start &"    # run before checks (if needed)
+  baseline: "npm run metrics > baseline.json"  # capture before-state (if delta metrics used)
   factors:
-    - name: Test suite
+    - name: Response time
       type: automated
-      command: "npm test 2>&1 | tail -5"
-      target: "exit 0"
+      command: "curl -w '%{time_total}' -so /dev/null localhost:3000/api/users"
+      target: "< 0.2s (and ≤ baseline)"
       weight: required
 
-    - name: Code simplicity
+    - name: Failure mode design
       type: evaluated
-      criteria: "No unnecessary abstractions. Functions < 20 lines."
-      target: ">= 7/10"
+      criteria: |
+        - Graceful degradation: slow downstream → timeout + partial response, not cascade
+        - Retry strategy: backoff + jitter on idempotent ops only, never on mutations
+        - Circuit breaking: fail fast after N failures, don't wait for timeout every time
+        - Error messages: tell the caller what they can do, not just "500 Internal Server Error"
+      score_low_if: "no timeouts on external calls, retry-on-everything, errors swallowed silently"
+      target: ">= 8/10"
       weight: required
 
-    - name: Style consistency
+    - name: API contract clarity
       type: evaluated
-      criteria: "Naming, patterns match existing codebase."
+      criteria: |
+        - Consistent field naming across endpoints (created_at everywhere, not mixed with createdAt)
+        - Structured error responses: same JSON shape for 4xx and 5xx, not HTML on 500
+        - Paginated by default: any list endpoint without pagination is an incident waiting for data
+        - No breaking changes to existing callers without explicit versioning
+      score_low_if: "inconsistent naming, plaintext errors, unbounded list responses"
       target: ">= 7/10"
       weight: best-effort
 ```
 
 | Type | How scored |
 |------|-----------|
-| **automated** | Run command, check output/exit code (tests, coverage, curl, linting) |
-| **evaluated** | Agent reads code and scores 1-10 (simplicity, security, design) |
+| **automated** | Run command, check output/exit code. Measure the actual outcome, not a proxy. |
+| **evaluated** | Agent reads code and scores 1-10. `criteria` lists what to check (multi-line, detailed). `score_low_if` defines what failure looks like. Think like a domain expert, not a checklist. |
 
 | Weight | Rule |
 |--------|------|
-| **required** | Must meet target before PR creation |
+| **required** | Must meet target before PR creation. Each required factor is evaluated independently — a high score on one cannot compensate for a low score on another. |
 | **best-effort** | Note in PR if below target |
 
 **`setup`**: Commands to run before automated checks (start server, seed DB). Omit if not needed.
+
+**`baseline`**: Capture before-state for delta metrics. Run automated checks BEFORE any changes to establish a baseline. The rubric should improve (or hold) metrics relative to baseline, not just hit an arbitrary number. This is the autoresearch-style keep/discard signal: if the metric regressed, discard the approach.
+
+**`criteria`**: Multi-line, specific. Each bullet is a concrete thing to check, written as a domain expert would explain it to a capable junior. Not "good error handling" but "timeouts on external calls, retry with backoff on idempotent ops only."
+
+**`score_low_if`**: One-line summary of what low scores look like. This anchors the bottom of the scale and prevents generous self-scoring.
+
+### Choosing the right domain rubric
+
+Match the task to a domain reference for expert-level factors:
+
+| Task type | Reference | Key signal |
+|-----------|-----------|-----------|
+| UI components, pages, interactions | `references/rubric-frontend.md` | Lighthouse, CLS, a11y, interaction fidelity |
+| API endpoints, data layer, infrastructure | `references/rubric-backend.md` | Query count, response time, failure mode design |
+| Code restructuring, migration, cleanup | `references/rubric-refactoring.md` | Dead code delta, concept count, dependency direction |
+| README, guides, API docs, specs | `references/rubric-documentation.md` | Reader testing score, zero-context completeness |
+| Design-driven features, UX flows | `references/rubric-design.md` | Value → Usability → Delight hierarchy |
+
+Load the relevant reference and pick 3-5 factors that actually matter for this specific task. Don't use generic factors when a domain-specific one exists.
 
 ### 3. Generate dispatch prompt
 
@@ -67,8 +98,10 @@ Take the base template (`relay/references/prompt-template.md`) and add these sec
 - **Scoring Rubric**: automated checks table + evaluated factors table
 - **Iteration Protocol** (autoloop-style measure-fix-keep):
   ```
+  BEFORE LOOP: If baseline is defined, run it now. Save output for delta comparison.
+
   LOOP (max 5 iterations):
-    1. Run ALL automated checks, record each score
+    1. Run ALL automated checks, record each score (compare to baseline if delta target)
     2. Self-evaluate ALL evaluated factors, record each score (1-10)
     3. Append scores to the Score Log (keep ALL iterations, not just final)
     4. All required factors meet target → create PR with full Score Log
@@ -77,10 +110,11 @@ Take the base template (`relay/references/prompt-template.md`) and add these sec
   ```
 - **Score Log**: table in PR description showing each iteration's scores. This is the shared metric between Codex self-review and Claude's relay-review — Claude will re-run automated checks and re-score evaluated factors independently.
   ```
-  | Factor | Target | Iter 1 | Iter 2 | Iter 3 | Final |
-  |--------|--------|--------|--------|--------|-------|
-  | Tests  | exit 0 | FAIL   | PASS   | PASS   | PASS  |
-  | Security | ≥8  | 6      | 8      | 8      | 8     |
+  | Factor | Target | Baseline | Iter 1 | Iter 2 | Final |
+  |--------|--------|----------|--------|--------|-------|
+  | Response time | < 0.2s | 0.18s | 0.35s | 0.15s | 0.15s |
+  | Failure mode design | ≥ 8 | — | 5 | 8 | 8 |
+  | API contract clarity | ≥ 7 | — | 6 | 7 | 7 |
   ```
 
 ### 4. Dispatch
@@ -95,6 +129,13 @@ ${CLAUDE_SKILL_DIR}/../relay-dispatch/scripts/dispatch.js . \
 - **Use it**: 3+ AC items, quality-sensitive work, Codex delegation
 - **Skip it**: Bug fixes, typos, one-liners — dispatch directly with base template
 
-## Aim for 3-5 factors. Always include at least 1 automated check.
+## Rubric design guidelines
 
-See `references/rubric-examples.md` for examples and design guidelines.
+- **3-5 factors per task.** More slows iteration without adding signal.
+- **Always include at least 1 automated check.** A rubric with only evaluated factors has no ground truth.
+- **Measure outcomes, not proxies.** "Tests pass" is a proxy. "API responds in < 200ms under load" is an outcome.
+- **Think like a specialist.** What would a senior frontend/backend/design/docs person check that a junior would miss? That's your evaluated factor.
+- **Baseline before changes.** For delta metrics (bundle size, query count, complexity), capture the before-state. Improvement is keep, regression is discard.
+- **Read-only evaluation.** The metric measurement command should not be something the agent can game. Separate the evaluation from the implementation — just like autoresearch's read-only `prepare.py`.
+
+See `references/rubric-*.md` for domain-specific factors and expert perspectives.
