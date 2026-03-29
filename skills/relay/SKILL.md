@@ -76,19 +76,9 @@ The rubric from relay-plan anchors each iteration — prevents context drift acr
 
 Do NOT review inline — relay-review's forked context prevents planning bias.
 
-## Step 5: Verify review completed
+## Step 5: Merge (relay-merge)
 
-Confirm relay-review left a PR comment and check verdict:
-```bash
-VERDICT=$(gh pr view <PR-NUM> --json comments -q '[.comments[].body | select(contains("relay-review"))] | last' | grep -oE 'Verdict: (LGTM|ESCALATED)' | awk '{print $2}')
-```
-- `LGTM` → proceed to Step 6
-- `ESCALATED` → review the listed issues, decide with user
-- Empty (no comment) → relay-review did not complete; re-invoke it
-
-## Step 6: Merge (relay-merge)
-
-After LGTM:
+relay-merge runs `gate-check.js` as its first step — this verifies the relay-review PR comment exists. If missing, it blocks merge and tells you to run `/relay-review` first (or `--skip <reason>` for intentional bypass).
 ```bash
 gh pr merge <PR-NUM> --squash
 gh issue close <N> -c "Resolved in PR #<PR-NUM>"
@@ -107,7 +97,7 @@ Create follow-up issues if discovered during review.
 
 After completing the relay cycle, verify:
 - [ ] Issue AC fully implemented (relay-review confirmed)
-- [ ] PR has `<!-- relay-review -->` LGTM comment
+- [ ] PR has `<!-- relay-review -->` LGTM comment (or `<!-- relay-review-skip -->` with reason)
 - [ ] PR merged and issue closed
 - [ ] Sprint file updated — if exists (Plan `[x]`, Progress entry with review round count)
 - [ ] Follow-up issues created (if applicable)

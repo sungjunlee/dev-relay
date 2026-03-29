@@ -1,0 +1,175 @@
+#!/usr/bin/env node
+/**
+ * Verify relay-review audit trail before merge.
+ *
+ * Checks that a PR has a <!-- relay-review --> comment with a verdict.
+ * Hard gate by default; --skip <reason> provides a documented escape hatch.
+ *
+ * Usage:
+ *   ./gate-check.js <PR-number> [options]
+ *
+ * Options:
+ *   --skip <reason>   Skip review gate with documented reason (writes PR comment)
+ *   --dry-run         Parse from stdin instead of calling gh CLI
+ *   --json            Output result as JSON
+ *   --help, -h        Show usage
+ *
+ * Exit codes:
+ *   0  LGTM or skip (with audit trail)
+ *   1  No review comment, ESCALATED, or error
+ *
+ * Examples:
+ *   ./gate-check.js 42                        # Check PR #42 for review
+ *   ./gate-check.js 42 --skip "hotfix"        # Skip with documented reason
+ *   echo '<json>' | ./gate-check.js 42 --dry-run  # Test with mock data
+ */
+
+const { execFileSync } = require("child_process");
+
+// ---------------------------------------------------------------------------
+// Args
+// ---------------------------------------------------------------------------
+
+const args = process.argv.slice(2);
+
+if (!args.length || args.includes("--help") || args.includes("-h")) {
+  console.log("Usage: gate-check.js <PR-number> [--skip <reason>] [--dry-run] [--json]");
+  console.log("\nVerify relay-review audit trail before merge.");
+  console.log("\nOptions:");
+  console.log("  --skip <reason>   Skip review with documented reason (writes PR comment)");
+  console.log("  --dry-run         Read comment JSON from stdin instead of gh CLI");
+  console.log("  --json            Output as JSON");
+  process.exit(args.includes("--help") || args.includes("-h") ? 0 : 1);
+}
+
+const KNOWN_FLAGS = ["--skip", "--dry-run", "--json", "--help", "-h"];
+
+const PR_NUM = args.find((a) => !a.startsWith("-") && !KNOWN_FLAGS.includes(a));
+if (!PR_NUM || !/^\d+$/.test(PR_NUM)) {
+  console.error("Error: PR number is required (positive integer)");
+  process.exit(1);
+}
+
+const DRY_RUN = args.includes("--dry-run");
+const JSON_OUT = args.includes("--json");
+
+// --skip <reason>: flag is at index i, reason is at index i+1
+const skipIdx = args.indexOf("--skip");
+const SKIP = skipIdx !== -1;
+const SKIP_REASON = SKIP && skipIdx + 1 < args.length && !args[skipIdx + 1].startsWith("-")
+  ? args[skipIdx + 1]
+  : null;
+
+if (SKIP && !SKIP_REASON) {
+  console.error("Error: --skip requires a reason. Example: --skip \"hotfix for production outage\"");
+  process.exit(1);
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function output(result) {
+  if (JSON_OUT) {
+    console.log(JSON.stringify(result, null, 2));
+  } else {
+    if (result.status === "lgtm") {
+      console.log(`✓ PR #${PR_NUM}: relay-review LGTM (round ${result.round || "?"})`);
+    } else if (result.status === "skipped") {
+      console.log(`⊘ PR #${PR_NUM}: review skipped — ${result.reason}`);
+    } else if (result.status === "escalated") {
+      console.log(`✗ PR #${PR_NUM}: relay-review ESCALATED — resolve issues before merge`);
+      if (result.issues) console.log(`  ${result.issues}`);
+    } else {
+      console.log(`✗ PR #${PR_NUM}: no relay-review comment found`);
+      console.log("  Run /relay-review first, or use --skip <reason> to bypass with audit trail.");
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Main
+// ---------------------------------------------------------------------------
+
+function main() {
+  // --- Skip path: write audit comment and exit ---
+  if (SKIP) {
+    const skipComment = [
+      "<!-- relay-review-skip -->",
+      "## Relay Review — Skipped",
+      `Reason: ${SKIP_REASON}`,
+    ].join("\n");
+
+    if (DRY_RUN) {
+      output({ status: "skipped", pr: PR_NUM, reason: SKIP_REASON, comment: skipComment });
+    } else {
+      execFileSync("gh", ["pr", "comment", PR_NUM, "--body", skipComment], {
+        encoding: "utf-8",
+        stdio: "pipe",
+      });
+      output({ status: "skipped", pr: PR_NUM, reason: SKIP_REASON });
+    }
+    return;
+  }
+
+  // --- Check path: look for relay-review comment ---
+  let commentBodies;
+  if (DRY_RUN) {
+    // Dry-run: read JSON array from stdin, or plain text as single comment
+    const stdin = require("fs").readFileSync("/dev/stdin", "utf-8").trim();
+    try {
+      const parsed = JSON.parse(stdin);
+      // Accept {comments: [{body:...}]} or [{body:...}] or [string]
+      const arr = parsed.comments || parsed;
+      commentBodies = arr.map((c) => typeof c === "string" ? c : c.body);
+    } catch {
+      // Plain text: treat entire stdin as one comment body
+      commentBodies = [stdin];
+    }
+  } else {
+    const raw = execFileSync("gh", [
+      "pr", "view", PR_NUM, "--json", "comments",
+    ], { encoding: "utf-8", stdio: "pipe" });
+    const parsed = JSON.parse(raw);
+    commentBodies = (parsed.comments || []).map((c) => c.body);
+  }
+
+  // Find the last relay-review comment
+  let lastReviewComment = null;
+  for (const body of commentBodies) {
+    if (body.includes("<!-- relay-review -->")) {
+      lastReviewComment = body;
+    }
+  }
+
+  if (!lastReviewComment) {
+    output({ status: "missing", pr: PR_NUM });
+    process.exit(1);
+  }
+
+  // Parse verdict
+  const verdictMatch = lastReviewComment.match(/Verdict:\s*(LGTM|ESCALATED)/);
+  if (!verdictMatch) {
+    output({ status: "missing", pr: PR_NUM });
+    process.exit(1);
+  }
+
+  const verdict = verdictMatch[1];
+
+  if (verdict === "LGTM") {
+    const roundMatch = lastReviewComment.match(/Rounds?:\s*(\d+)/);
+    output({ status: "lgtm", pr: PR_NUM, round: roundMatch ? roundMatch[1] : null });
+    return;
+  }
+
+  // ESCALATED
+  const issuesMatch = lastReviewComment.match(/Issues?:\s*(.+?)(?:\n|$)/);
+  output({
+    status: "escalated",
+    pr: PR_NUM,
+    issues: issuesMatch ? issuesMatch[1] : null,
+  });
+  process.exit(1);
+}
+
+main();
