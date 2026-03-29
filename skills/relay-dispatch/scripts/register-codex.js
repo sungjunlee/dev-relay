@@ -34,6 +34,7 @@ const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
 const os = require("os");
+const { copyWorktreeFiles, getWorktreeIncludeFiles } = require("./worktreeinclude");
 
 // ---------------------------------------------------------------------------
 // Args
@@ -220,7 +221,8 @@ function main() {
 
     // --- Dry run ---
     if (DRY_RUN) {
-      const plan = { worktree: wtPath, branch, title: TITLE, register: REGISTER, pin: PIN, copyEnv: COPY_ENV };
+      const includeFiles = getWorktreeIncludeFiles(REPO_PATH);
+      const plan = { worktree: wtPath, branch, title: TITLE, register: REGISTER, pin: PIN, copyEnv: COPY_ENV, worktreeinclude: includeFiles };
       if (JSON_OUT) {
         console.log(JSON.stringify(plan, null, 2));
       } else {
@@ -231,6 +233,7 @@ function main() {
         console.log(`  Register: ${REGISTER}`);
         if (PIN) console.log("  Pinned:   yes");
         if (COPY_ENV) console.log("  Copy:     .env");
+        if (includeFiles.length) console.log(`  .worktreeinclude: ${includeFiles.join(", ")}`);
       }
       return;
     }
@@ -248,21 +251,12 @@ function main() {
       }
     }
 
-    // --- Step 2: Copy files ---
-    if (COPY_ENV) {
-      const src = path.join(REPO_PATH, ".env");
-      if (fs.existsSync(src)) fs.copyFileSync(src, path.join(wtPath, ".env"));
-    }
-    for (const file of COPY_FILES) {
-      const src = path.resolve(REPO_PATH, file);
-      const dst = path.resolve(wtPath, file);
-      assertWithin(REPO_PATH, src, "--copy source");
-      assertWithin(wtPath, dst, "--copy destination");
-      if (fs.existsSync(src)) {
-        fs.mkdirSync(path.dirname(dst), { recursive: true });
-        fs.copyFileSync(src, dst);
-      }
-    }
+    // --- Step 2: Copy files (.worktreeinclude + explicit flags) ---
+    copyWorktreeFiles(REPO_PATH, wtPath, {
+      copyEnv: COPY_ENV,
+      copyFiles: COPY_FILES,
+      assertWithin,
+    });
   }
 
   // --- Step 3 (optional): Register in Codex state ---
