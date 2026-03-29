@@ -16,7 +16,7 @@ Merge PR and close the loop after LGTM. **Requires relay-review PR comment.**
 ### 0. Gate check — verify relay-review completed
 
 ```bash
-VERDICT=$(gh pr view $PR_NUM --json comments -q '.comments[].body' | grep 'relay-review' | grep -oE 'Verdict: (LGTM|ESCALATED)' | tail -1 | awk '{print $2}')
+VERDICT=$(gh pr view $PR_NUM --json comments -q '[.comments[].body | select(contains("relay-review"))] | last' | grep -oE 'Verdict: (LGTM|ESCALATED)' | awk '{print $2}')
 ```
 
 - `VERDICT=LGTM` → proceed

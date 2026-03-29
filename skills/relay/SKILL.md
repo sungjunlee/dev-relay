@@ -77,7 +77,7 @@ Do NOT review inline — relay-review's forked context prevents planning bias.
 
 Confirm relay-review left a PR comment and check verdict:
 ```bash
-VERDICT=$(gh pr view <PR-NUM> --json comments -q '.comments[].body' | grep 'relay-review' | grep -oE 'Verdict: (LGTM|ESCALATED)' | tail -1 | awk '{print $2}')
+VERDICT=$(gh pr view <PR-NUM> --json comments -q '[.comments[].body | select(contains("relay-review"))] | last' | grep -oE 'Verdict: (LGTM|ESCALATED)' | awk '{print $2}')
 ```
 - `LGTM` → proceed to Step 6
 - `ESCALATED` → review the listed issues, decide with user
