@@ -18,6 +18,16 @@ Read the dev-backlog sprint file and task file for this issue:
 - Read the task file (`backlog/tasks/{PREFIX}-{N} - {Title}.md`) for Acceptance Criteria
 - If no local task file, read from GitHub: `gh issue view <N>`
 
+## Step 1.5: Check for in-flight work
+
+If the sprint file shows `[~]` for this issue (dispatch already completed, review pending):
+```bash
+PR_NUM=$(gh pr list --head issue-<N> --json number -q '.[0].number')
+```
+- PR exists and open → **skip Steps 2-3**, go directly to Step 4 (review)
+- PR exists and merged → update sprint file to `[x]`, done
+- PR not found → reset sprint file to `[ ]`, continue to Step 2
+
 ## Step 2: Plan
 
 Build a scoring rubric from the Acceptance Criteria:

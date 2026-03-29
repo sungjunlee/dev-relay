@@ -18,9 +18,15 @@ Independent PR review against the Done Criteria contract and scoring rubric. Loo
 ```bash
 PR_NUM=$(gh pr list --head <branch> --json number -q '.[0].number')
 gh pr diff $PR_NUM > /tmp/pr-diff.txt
+
+# Issue number extraction — try each method until one succeeds:
 ISSUE_NUM=$(gh pr view $PR_NUM --json closingIssuesReferences -q '.[0].number')
-# Fallback if closingIssuesReferences is empty:
-# ISSUE_NUM=$(gh pr view $PR_NUM --json body -q '.body' | grep -oiE '(closes|fixes|resolves) #[0-9]+' | grep -oE '[0-9]+' | head -1)
+# Fallback 1: grep PR body for issue keywords
+[ -z "$ISSUE_NUM" ] && ISSUE_NUM=$(gh pr view $PR_NUM --json body -q '.body' | grep -oiE '(closes|fixes|resolves|refs|related to) #[0-9]+' | grep -oE '[0-9]+' | head -1)
+# Fallback 2: extract from branch name (issue-<N>)
+[ -z "$ISSUE_NUM" ] && ISSUE_NUM=$(gh pr view $PR_NUM --json headRefName -q '.headRefName' | grep -oE '[0-9]+')
+# If all fail: escalate — cannot review without Done Criteria
+[ -z "$ISSUE_NUM" ] && echo "ERROR: Cannot determine issue number. Provide it manually." && exit 1
 gh issue view $ISSUE_NUM  # Done Criteria / Acceptance Criteria source
 ```
 
@@ -50,11 +56,12 @@ Repeat until all checks pass. Each round re-measures against the **original anch
 5. Run `/review` — code quality, patterns, conventions, structural issues
 6. Run `/simplify` on changed files — unnecessary complexity, dead code
 
-### Drift check
-7. Before re-dispatching, verify the fix request stays within the original scope:
-   - Does the fix address an issue from steps 3-6, or is it scope creep?
-   - Are previously passing rubric factors still passing? (no regressions)
-   - Is the total diff growing without convergence? (sign of churn)
+### Drift and stuck detection
+7. Before re-dispatching, check for drift, regressions, and stuck loops:
+   - **Scope:** Does the fix address an issue from steps 3-6, or is it scope creep?
+   - **Regression:** Are previously passing rubric factors still passing?
+   - **Churn:** Is the total diff growing without convergence?
+   - **Stuck:** Is the same issue appearing 3+ consecutive rounds? If yes → this issue is likely not fixable by Codex. Escalate immediately (don't wait for safety cap).
 
 ### Iterate or converge
 8. All checks pass → exit loop, proceed to Verdict
