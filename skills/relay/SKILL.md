@@ -52,12 +52,16 @@ PR_NUM=$(gh pr list --head issue-<N> --json number -q '.[0].number')
 
 Verify PR exists: `gh pr list --head issue-<N>`
 
-Invoke **relay-review** (runs with `context: fork` for bias-free review). It runs three phases:
-- **Phase 1 (Contract):** Done Criteria faithfulness, stubs, security, integration (max 3 re-dispatch rounds)
-- **Phase 2 (Quality):** `/review` + `/simplify` on changed files (max 2 re-dispatch rounds)
-- **Phase 3 (Verdict):** Writes LGTM or ESCALATED as a PR comment (`<!-- relay-review -->` marker)
+Invoke **relay-review** (runs with `context: fork` for bias-free review). It loops until convergence:
+- **Contract checks:** Done Criteria faithfulness, stubs, security, integration
+- **Rubric verification:** Re-runs automated checks, re-scores evaluated factors independently
+- **Quality checks:** `/review` + `/simplify` on changed files
+- **Drift check:** Ensures fixes stay within original scope, no regressions
+- **Verdict:** Writes LGTM or ESCALATED as a PR comment (`<!-- relay-review -->` marker)
 
-Do NOT review inline — relay-review's forked context prevents planning bias. Wait for relay-review to complete all three phases.
+The rubric from relay-plan anchors each iteration — prevents context drift across rounds. Safety cap: 20 rounds (most PRs converge in 1-3).
+
+Do NOT review inline — relay-review's forked context prevents planning bias.
 
 ## Step 5: Verify review completed
 

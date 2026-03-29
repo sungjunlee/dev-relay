@@ -10,9 +10,9 @@ metadata:
 
 # Relay Review
 
-Independent PR review against the Done Criteria contract and scoring rubric. Three mandatory phases — all must pass for LGTM.
+Independent PR review against the Done Criteria contract and scoring rubric. Loops until convergence — the rubric anchors each iteration to prevent drift.
 
-## Phase 1: Contract Review
+## Setup: Establish the anchor
 
 1. Get the PR diff and Done Criteria (this runs in a fresh context — fetch everything needed):
 ```bash
@@ -23,46 +23,56 @@ ISSUE_NUM=$(gh pr view $PR_NUM --json closingIssuesReferences -q '.[0].number')
 # ISSUE_NUM=$(gh pr view $PR_NUM --json body -q '.body' | grep -oiE '(closes|fixes|resolves) #[0-9]+' | grep -oE '[0-9]+' | head -1)
 gh issue view $ISSUE_NUM  # Done Criteria / Acceptance Criteria source
 ```
-   If a Score Log exists in the PR description, extract the rubric from it.
 
-2. Review the diff against Done Criteria (see `references/reviewer-prompt.md`):
+2. **Fix the anchor** — these do NOT change across rounds:
+   - Done Criteria from the issue (the contract)
+   - Rubric factors + targets from the Score Log (if relay-plan was used)
+   - Original scope boundary ("do not change" areas)
+
+## Review Loop
+
+Repeat until all checks pass. Each round re-measures against the **original anchor**, not the previous round's state.
+
+### Contract checks
+3. Review the diff against Done Criteria (see `references/reviewer-prompt.md`):
    - **Faithfulness**: Each Done Criteria item implemented? Scope respected?
    - **Stubs/placeholders**: Any `return null`, empty bodies, TODO in production paths?
    - **Integration**: Does it break callers/consumers of changed code?
    - **Security**: Auth/token handling, input validation, injection risks?
 
-3. **Rubric verification** (when PR includes a Score Log from relay-plan):
-   - **Re-run ALL automated checks** independently — do not trust Codex's reported results
-   - **Re-score ALL evaluated factors** with fresh eyes (1-10)
-   - Compare Claude's scores against Codex's final iteration scores
-   - Any required factor below target or significant score divergence (≥2 points) → treat as issue
+4. **Rubric verification** (when Score Log present):
+   - Re-run ALL automated checks independently — do not trust Codex's reported results
+   - Re-score ALL evaluated factors with fresh eyes (1-10)
+   - Any required factor below target → issue
+   - Score divergence ≥2 points from Codex → flag for review
 
-   This is the quantitative gate. Combined with step 2 (qualitative), both must pass.
-
-4. Issues found → re-dispatch (see Re-dispatch below), then **repeat from step 1**. Max 3 rounds for Phase 1.
-
-## Phase 2: Quality Review
-
-After Phase 1 passes, run Claude's own quality checks on the PR branch:
-
+### Quality checks
 5. Run `/review` — code quality, patterns, conventions, structural issues
 6. Run `/simplify` on changed files — unnecessary complexity, dead code
 
-These are **mandatory, not optional**. Both must complete before Phase 3.
+### Drift check
+7. Before re-dispatching, verify the fix request stays within the original scope:
+   - Does the fix address an issue from steps 3-6, or is it scope creep?
+   - Are previously passing rubric factors still passing? (no regressions)
+   - Is the total diff growing without convergence? (sign of churn)
 
-7. Issues found → re-dispatch with `/review` or `/simplify` findings, then **repeat from step 5**. Max 2 rounds for Phase 2.
+### Iterate or converge
+8. All checks pass → exit loop, proceed to Verdict
+9. Issues found → re-dispatch (see Re-dispatch below), re-fetch diff, **repeat from step 3**
 
-## Phase 3: Verdict + Audit Trail
+**Safety cap: 20 rounds total.** This is a ceiling, not a target — most PRs should converge in 1-3 rounds. If hitting the cap, something is structurally wrong; escalate.
 
-8. Both phases pass → write **LGTM PR comment** for audit trail:
+## Verdict + Audit Trail
+
+10. All checks pass → write **LGTM PR comment**:
 ```bash
 gh pr comment $PR_NUM --body "$(cat <<'EOF'
 <!-- relay-review -->
 ## Relay Review
 Verdict: LGTM
-Phase 1 (Contract): PASS — all Done Criteria verified
-Phase 2 (Quality): PASS — /review and /simplify clean
-Rounds: <N> (Phase 1: <n1>, Phase 2: <n2>)
+Contract: PASS — all Done Criteria verified
+Quality: PASS — /review and /simplify clean
+Rounds: <N>
 Rubric scores (if applicable):
 | Factor | Target | Codex | Claude | Status |
 |--------|--------|-------|--------|--------|
@@ -72,12 +82,12 @@ EOF
 ```
 <!-- NOTE: Verdict line format is parsed by relay and relay-merge gate checks via grep -oE 'Verdict: (LGTM|ESCALATED)'. Do not add markdown formatting. -->
 
-9. Issues remain after rounds exhausted → escalate to user with PR URL + unresolved issues. Still write a PR comment recording the incomplete review:
+11. Hit safety cap or stuck → escalate to user. Still write audit trail:
 ```bash
 gh pr comment $PR_NUM --body "$(cat <<'EOF'
 <!-- relay-review -->
 ## Relay Review
-Verdict: ESCALATED — unresolved issues after max rounds
+Verdict: ESCALATED — unresolved after <N> rounds
 Issues: [list with file:line]
 EOF
 )"
@@ -85,10 +95,14 @@ EOF
 
 ## Re-dispatch (when issues found)
 
-Targeted fix via relay-dispatch:
+Targeted fix via relay-dispatch. Always include the anchor context:
 ```
 Fix these issues in the PR: [specific issues with file:line].
 Do not change anything else. Push to the same branch.
+
+Original Done Criteria (for scope reference):
+[paste Done Criteria from issue]
+
 After fixing, re-run these checks and confirm they pass:
 [paste automated check commands from the original rubric]
 ```

@@ -39,6 +39,6 @@ Note: Claude does NOT fix code directly — all fixes go through Codex via targe
 
 **Re-dispatch rules:** file:line references, what to fix (not how), "do not change anything else".
 
-**Round limits:** Phase 1 (Contract): max 3 rounds. Phase 2 (Quality): max 2 rounds. Total max 5 rounds.
+**Convergence model:** Loop until all rubric factors meet target AND qualitative checks pass. The rubric anchors each round to the original scope — prevents drift. Safety cap: 20 rounds.
 
-**After rounds exhausted:** Escalate — show user the PR URL, list unresolved issues, let them decide.
+**After safety cap:** Escalate — show user the PR URL, list unresolved issues, let them decide. Hitting the cap means something is structurally wrong, not that more rounds would help.
