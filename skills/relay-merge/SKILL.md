@@ -16,14 +16,20 @@ Merge PR and close the loop after LGTM. **Requires relay-review PR comment.**
 ### 0. Gate check — verify relay-review completed
 
 ```bash
-VERDICT=$(gh pr view $PR_NUM --json comments -q '[.comments[].body | select(contains("relay-review"))] | last' | grep -oE 'Verdict: (LGTM|ESCALATED)' | awk '{print $2}')
+${CLAUDE_SKILL_DIR}/scripts/gate-check.js $PR_NUM
 ```
 
-- `VERDICT=LGTM` → proceed
-- `VERDICT=ESCALATED` → **STOP.** Show unresolved issues to user
-- `VERDICT` empty (no comment) → **STOP.** Run `/relay-review` first
+- Exit 0 (LGTM) → proceed to merge
+- Exit 1 (no comment) → **STOP.** Run `/relay-review` first
+- Exit 1 (ESCALATED) → **STOP.** Show unresolved issues to user
 
-**Do NOT skip this check.** This is the audit trail that review actually happened.
+**Intentional skip** (hotfix, manual PR, trivial change):
+```bash
+${CLAUDE_SKILL_DIR}/scripts/gate-check.js $PR_NUM --skip "reason here"
+```
+This writes a `<!-- relay-review-skip -->` comment to the PR — maintaining audit trail even when review is bypassed. The skip reason is recorded on the PR for future reference.
+
+**Do NOT merge without running gate-check.** This is the audit trail that review actually happened (or was intentionally skipped with documented reason).
 
 ### 1. GitHub cleanup
 
