@@ -98,8 +98,10 @@ Take the base template (`relay/references/prompt-template.md`) and add these sec
 - **Scoring Rubric**: automated checks table + evaluated factors table
 - **Iteration Protocol** (autoloop-style measure-fix-keep):
   ```
+  BEFORE LOOP: If baseline is defined, run it now. Save output for delta comparison.
+
   LOOP (max 5 iterations):
-    1. Run ALL automated checks, record each score
+    1. Run ALL automated checks, record each score (compare to baseline if delta target)
     2. Self-evaluate ALL evaluated factors, record each score (1-10)
     3. Append scores to the Score Log (keep ALL iterations, not just final)
     4. All required factors meet target → create PR with full Score Log
@@ -108,10 +110,11 @@ Take the base template (`relay/references/prompt-template.md`) and add these sec
   ```
 - **Score Log**: table in PR description showing each iteration's scores. This is the shared metric between Codex self-review and Claude's relay-review — Claude will re-run automated checks and re-score evaluated factors independently.
   ```
-  | Factor | Target | Iter 1 | Iter 2 | Iter 3 | Final |
-  |--------|--------|--------|--------|--------|-------|
-  | Tests  | exit 0 | FAIL   | PASS   | PASS   | PASS  |
-  | Security | ≥8  | 6      | 8      | 8      | 8     |
+  | Factor | Target | Baseline | Iter 1 | Iter 2 | Final |
+  |--------|--------|----------|--------|--------|-------|
+  | Response time | < 0.2s | 0.18s | 0.35s | 0.15s | 0.15s |
+  | Failure mode design | ≥ 8 | — | 5 | 8 | 8 |
+  | API contract clarity | ≥ 7 | — | 6 | 7 | 7 |
   ```
 
 ### 4. Dispatch
