@@ -1,7 +1,7 @@
 ---
 name: relay-merge
 argument-hint: "[PR-number]"
-description: Merge a reviewed PR, clean up worktree/branch, close GitHub issues, and update the sprint file. Use after relay-review returns LGTM. Handles the full post-merge loop including follow-up issue creation.
+description: Merge a reviewed PR, clean up worktree/branch, close GitHub issues, and update sprint file if available. Use after relay-review returns LGTM.
 compatibility: Requires gh CLI and git.
 metadata:
   related-skills: "relay, relay-plan, relay-dispatch, relay-review, dev-backlog"
@@ -34,9 +34,9 @@ gh issue close <number> -c "Resolved in PR #$PR_NUM"
 # If dispatch used --no-cleanup: git worktree remove <worktree-path> && git branch -d <branch>
 ```
 
-### 2. Sprint file update
+### 2. Sprint file update (if available)
 
-Update the dev-backlog sprint file:
+If `backlog/sprints/` has an active sprint file, update it. If no sprint file exists, skip this step.
 
 **Plan section** — mark completed (was `[~]` during review):
 ```markdown
