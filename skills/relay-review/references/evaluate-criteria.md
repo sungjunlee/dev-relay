@@ -39,6 +39,6 @@ Note: Claude does NOT fix code directly — all fixes go through Codex via targe
 
 **Re-dispatch rules:** file:line references, what to fix (not how), "do not change anything else".
 
-**Round limits:** Phase 1 (Contract): max 2 rounds. Phase 2 (Quality): max 1 round. Total max 3 rounds.
+**Round limits:** Phase 1 (Contract): max 3 rounds. Phase 2 (Quality): max 2 rounds. Total max 5 rounds.
 
 **After rounds exhausted:** Escalate — show user the PR URL, list unresolved issues, let them decide.

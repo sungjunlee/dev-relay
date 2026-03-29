@@ -18,7 +18,9 @@ Independent PR review against the Done Criteria contract and scoring rubric. Thr
 ```bash
 PR_NUM=$(gh pr list --head <branch> --json number -q '.[0].number')
 gh pr diff $PR_NUM > /tmp/pr-diff.txt
-ISSUE_NUM=$(gh pr view $PR_NUM --json body -q '.body' | grep -oE '#[0-9]+' | head -1 | tr -d '#')
+ISSUE_NUM=$(gh pr view $PR_NUM --json closingIssuesReferences -q '.[0].number')
+# Fallback if closingIssuesReferences is empty:
+# ISSUE_NUM=$(gh pr view $PR_NUM --json body -q '.body' | grep -oiE '(closes|fixes|resolves) #[0-9]+' | grep -oE '[0-9]+' | head -1)
 gh issue view $ISSUE_NUM  # Done Criteria / Acceptance Criteria source
 ```
    If a Score Log exists in the PR description, extract the rubric from it.
@@ -37,7 +39,7 @@ gh issue view $ISSUE_NUM  # Done Criteria / Acceptance Criteria source
 
    This is the quantitative gate. Combined with step 2 (qualitative), both must pass.
 
-4. Issues found → re-dispatch (see Re-dispatch below). **Max 2 rounds for Phase 1.**
+4. Issues found → re-dispatch (see Re-dispatch below), then **repeat from step 1**. Max 3 rounds for Phase 1.
 
 ## Phase 2: Quality Review
 
@@ -48,7 +50,7 @@ After Phase 1 passes, run Claude's own quality checks on the PR branch:
 
 These are **mandatory, not optional**. Both must complete before Phase 3.
 
-7. Issues found → re-dispatch with `/review` or `/simplify` findings. **Max 1 round for Phase 2.**
+7. Issues found → re-dispatch with `/review` or `/simplify` findings, then **repeat from step 5**. Max 2 rounds for Phase 2.
 
 ## Phase 3: Verdict + Audit Trail
 

@@ -53,8 +53,8 @@ PR_NUM=$(gh pr list --head issue-<N> --json number -q '.[0].number')
 Verify PR exists: `gh pr list --head issue-<N>`
 
 Invoke **relay-review** (runs with `context: fork` for bias-free review). It runs three phases:
-- **Phase 1 (Contract):** Done Criteria faithfulness, stubs, security, integration (max 2 re-dispatch rounds)
-- **Phase 2 (Quality):** `/review` + `/simplify` on changed files (max 1 re-dispatch round)
+- **Phase 1 (Contract):** Done Criteria faithfulness, stubs, security, integration (max 3 re-dispatch rounds)
+- **Phase 2 (Quality):** `/review` + `/simplify` on changed files (max 2 re-dispatch rounds)
 - **Phase 3 (Verdict):** Writes LGTM or ESCALATED as a PR comment (`<!-- relay-review -->` marker)
 
 Do NOT review inline — relay-review's forked context prevents planning bias. Wait for relay-review to complete all three phases.
