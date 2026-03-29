@@ -62,8 +62,23 @@ Take the base template (`relay/references/prompt-template.md`) and add these sec
 
 - **Setup**: setup commands from rubric
 - **Scoring Rubric**: automated checks table + evaluated factors table
-- **Iteration Protocol**: "LOOP (max 5 iterations): run checks → self-evaluate → fix lowest required factor → repeat. Stuck on same factor 3x → note and move on. All required met → log scores in PR, create PR."
-- **Score Log**: table in PR description showing each factor's target, score, and status
+- **Iteration Protocol** (autoloop-style measure-fix-keep):
+  ```
+  LOOP (max 5 iterations):
+    1. Run ALL automated checks, record each score
+    2. Self-evaluate ALL evaluated factors, record each score (1-10)
+    3. Append scores to the Score Log (keep ALL iterations, not just final)
+    4. All required factors meet target → create PR with full Score Log
+    5. Else → identify lowest required factor → make ONE focused fix → commit → repeat
+    6. Stuck on same factor 3 consecutive iterations → note and move on
+  ```
+- **Score Log**: table in PR description showing each iteration's scores. This is the shared metric between Codex self-review and Claude's relay-review — Claude will re-run automated checks and re-score evaluated factors independently.
+  ```
+  | Factor | Target | Iter 1 | Iter 2 | Iter 3 | Final |
+  |--------|--------|--------|--------|--------|-------|
+  | Tests  | exit 0 | FAIL   | PASS   | PASS   | PASS  |
+  | Security | ≥8  | 6      | 8      | 8      | 8     |
+  ```
 
 ### 4. Dispatch
 

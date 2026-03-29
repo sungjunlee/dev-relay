@@ -34,9 +34,17 @@ ${CLAUDE_SKILL_DIR}/../relay-dispatch/scripts/dispatch.js . \
 ```
 
 Wait for completion. Check result:
-- `status: "completed"` → proceed to Step 4
-- `status: "completed-with-warning"` → check worktree for uncommitted work, proceed to Step 4
+- `status: "completed"` → update sprint file Plan to `[~]`, proceed to Step 4
+- `status: "completed-with-warning"` → check worktree for uncommitted work, update to `[~]`, proceed to Step 4
 - `status: "failed"` → check failure table in relay-dispatch, fix and re-dispatch
+
+Get PR number and mark the sprint file Plan item as in-flight:
+```bash
+PR_NUM=$(gh pr list --head issue-<N> --json number -q '.[0].number')
+```
+```markdown
+- [~] #42 OAuth2 flow → PR #89 (reviewing)
+```
 
 ## Step 4: Review (relay-review)
 
@@ -44,21 +52,22 @@ Wait for completion. Check result:
 
 Verify PR exists: `gh pr list --head issue-<N>`
 
-Invoke **relay-review** (runs with `context: fork` for bias-free review). It will: check faithfulness against Done Criteria, detect stubs/placeholders, review security and integration, re-score rubric factors, and return LGTM or issues with file:line references.
+Invoke **relay-review** (runs with `context: fork` for bias-free review). It runs three phases:
+- **Phase 1 (Contract):** Done Criteria faithfulness, stubs, security, integration (max 2 re-dispatch rounds)
+- **Phase 2 (Quality):** `/review` + `/simplify` on changed files (max 1 re-dispatch round)
+- **Phase 3 (Verdict):** Writes LGTM or ESCALATED as a PR comment (`<!-- relay-review -->` marker)
 
-Do NOT review inline — relay-review's forked context prevents planning bias.
+Do NOT review inline — relay-review's forked context prevents planning bias. Wait for relay-review to complete all three phases.
 
-## Step 5: Iterate (if issues found)
+## Step 5: Verify review completed
 
-Re-dispatch with targeted fix prompt. **Include automated checks so Codex re-verifies:**
-
+Confirm relay-review left a PR comment and check verdict:
+```bash
+VERDICT=$(gh pr view <PR-NUM> --json comments -q '.comments[].body' | grep 'relay-review' | grep -oE 'Verdict: (LGTM|ESCALATED)' | tail -1 | awk '{print $2}')
 ```
-Fix these issues: [specific issues with file:line].
-Do not change anything else. Push to the same branch.
-After fixing, re-run: [automated check commands from rubric]
-```
-
-Re-review. **Max 2 rounds.** After that: show user PR URL + unresolved issues, let them decide.
+- `LGTM` → proceed to Step 6
+- `ESCALATED` → review the listed issues, decide with user
+- Empty (no comment) → relay-review did not complete; re-invoke it
 
 ## Step 6: Merge (relay-merge)
 
@@ -71,8 +80,8 @@ gh issue close <N> -c "Resolved in PR #<PR-NUM>"
 ```
 
 Update dev-backlog sprint file:
-- **Plan**: check off `[x] #<N>`
-- **Progress**: add timestamped log entry (e.g., "2026-03-28: #540 dispatched → PR #89 → LGTM → merged")
+- **Plan**: check off `[x] #<N>` (was `[~]` during dispatch)
+- **Progress**: add structured log entry (e.g., "2026-03-28: #540 dispatched → PR #89 → reviewed (LGTM, round 2) → merged")
 - **Running Context**: add learnings that affect later tasks
 
 Create follow-up issues if discovered during review.
@@ -81,7 +90,8 @@ Create follow-up issues if discovered during review.
 
 After completing the relay cycle, verify:
 - [ ] Issue AC fully implemented (relay-review confirmed)
+- [ ] PR has `<!-- relay-review -->` LGTM comment
 - [ ] PR merged and issue closed
-- [ ] Sprint file updated (Plan checkbox, Progress entry)
+- [ ] Sprint file updated (Plan `[x]`, Progress entry with review round count)
 - [ ] Running Context updated (if applicable)
 - [ ] Follow-up issues created (if applicable)
