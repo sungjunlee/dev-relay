@@ -24,9 +24,11 @@ ISSUE_NUM=$(gh pr view $PR_NUM --json closingIssuesReferences -q '.[0].number')
 # Fallback 1: grep PR body for issue keywords
 [ -z "$ISSUE_NUM" ] && ISSUE_NUM=$(gh pr view $PR_NUM --json body -q '.body' | grep -oiE '(closes|fixes|resolves|refs|related to) #[0-9]+' | grep -oE '[0-9]+' | head -1)
 # Fallback 2: extract from branch name (try issue-<N> first, then any number)
-[ -z "$ISSUE_NUM" ] && BRANCH=$(gh pr view $PR_NUM --json headRefName -q '.headRefName') \
-  && ISSUE_NUM=$(echo "$BRANCH" | grep -oE 'issue-[0-9]+' | grep -oE '[0-9]+') \
-  || ISSUE_NUM=$(echo "$BRANCH" | grep -oE '[0-9]+' | tail -1)
+if [ -z "$ISSUE_NUM" ]; then
+  BRANCH=$(gh pr view $PR_NUM --json headRefName -q '.headRefName')
+  ISSUE_NUM=$(echo "$BRANCH" | grep -oE 'issue-[0-9]+' | grep -oE '[0-9]+')
+  [ -z "$ISSUE_NUM" ] && ISSUE_NUM=$(echo "$BRANCH" | grep -oE '[0-9]+' | tail -1)
+fi
 # If all fail: escalate — cannot review without Done Criteria
 [ -z "$ISSUE_NUM" ] && echo "ERROR: Cannot determine issue number. Provide it manually." && exit 1
 gh issue view $ISSUE_NUM  # Done Criteria / Acceptance Criteria source
