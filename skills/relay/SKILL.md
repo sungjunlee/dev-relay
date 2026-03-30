@@ -11,6 +11,16 @@ metadata:
 
 Execute the full plan → dispatch → review → merge cycle. Follow ALL steps below in order. Do NOT skip any step.
 
+## Step 0: Re-Anchor
+
+Always run before every task — standalone or batch. Ensures current state, not stale context.
+
+1. `git fetch origin` — check for divergence from remote
+2. If sprint file exists: re-read it. Check Running Context for new entries from previous tasks. Note completed/in-flight task status changes.
+3. If previous task added Running Context that affects this task, adjust your approach before proceeding.
+
+No sprint file? Just do the `git fetch`. Takes <5 seconds; never skip this step.
+
 ## Step 1: Read Context
 
 Gather task details and sprint context:
