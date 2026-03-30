@@ -61,8 +61,8 @@ Two phases, run in order. Each round re-measures against the **original anchor**
 
 ### Phase 2: Code Quality (only after Phase 1 PASS)
 
-6. Run a code review skill on changed files — check code quality, patterns, conventions, structural issues (use the platform's best-matching skill, e.g., Claude Code: `/review`)
-7. Run a code simplification skill on changed files — unnecessary complexity, dead code, verbose patterns (use the platform's best-matching skill, e.g., Claude Code: `/simplify`)
+6. Run a code review skill on changed files — check code quality, patterns, conventions, structural issues (use the platform's best-matching skill, e.g., Claude Code: `/review`; if no skill available, perform the review inline)
+7. Run a code simplification skill on changed files — unnecessary complexity, dead code, verbose patterns (use the platform's best-matching skill, e.g., Claude Code: `/simplify`; if no skill available, review for simplification inline)
 8. Issues found → re-dispatch, **repeat from step 3** (Phase 1 — quality fixes can regress spec compliance)
 
 ### Drift and stuck detection (both phases)
