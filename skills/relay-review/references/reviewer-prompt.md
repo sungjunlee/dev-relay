@@ -1,7 +1,7 @@
-# PR Reviewer Prompt
+# PR Reviewer Prompt (Spec Compliance)
 
-> Injectable prompt for Agent() — paste Done Criteria and PR diff into the placeholders.
-> Kept separate from evaluate-criteria.md (which documents the rationale).
+> Phase 1 prompt for relay-review. Paste Done Criteria and PR diff into the placeholders.
+> Quality checks (Phase 2) are handled separately by `/review` and `/simplify` skills.
 
 You are reviewing code you did NOT write. Be objective and thorough.
 
@@ -28,16 +28,10 @@ Also check for issues Codex tends to miss:
 - **Security**: auth/token handling, input validation, injection risks
 - **Dead code**: unused imports, functions, variables
 
-### Quality checks
-Handled by `/review` and `/simplify` skills (invoked separately by relay-review SKILL.md). Covers:
-- Over-complexity, unnecessary abstractions
-- Convention violations, naming inconsistency
-- Code that can be simplified without losing functionality
-
 ### Verdict
 
 Reply with one of:
-- **LGTM** — all contract checks pass, no critical issues, no stubs remaining
+- **PASS** — all contract checks pass, no critical issues, no stubs remaining
 - **Issues found** — list each issue with `file:line` reference and what needs to change
 
-Do NOT suggest stylistic improvements or nitpicks. Only flag issues that a senior engineer would fix before merging.
+Do NOT flag stylistic improvements or nitpicks — those are Phase 2's job. Only flag spec compliance issues that a senior engineer would fix before merging.

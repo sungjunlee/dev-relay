@@ -11,6 +11,16 @@ metadata:
 
 Execute the full plan → dispatch → review → merge cycle. Follow ALL steps below in order. Do NOT skip any step.
 
+## Step 0: Re-Anchor
+
+Always run before every task — standalone or batch. Ensures current state, not stale context.
+
+1. `git fetch origin` — check for divergence from remote
+2. If sprint file exists: re-read it. Check Running Context for new entries from previous tasks. Note completed/in-flight task status changes.
+3. If previous task added Running Context that affects this task, adjust your approach before proceeding.
+
+No sprint file? Just do the `git fetch`. Takes <5 seconds; never skip this step.
+
 ## Step 1: Read Context
 
 Gather task details and sprint context:
@@ -65,11 +75,9 @@ If sprint file exists, mark Plan item as in-flight: `[~] #42 OAuth2 flow → PR 
 
 Verify PR exists: `gh pr list --head issue-<N>`
 
-Invoke **relay-review** (runs with `context: fork` for bias-free review). It loops until convergence:
-- **Contract checks:** Done Criteria faithfulness, stubs, security, integration
-- **Rubric verification:** Re-runs automated checks, re-scores evaluated factors independently
-- **Quality checks:** `/review` + `/simplify` on changed files
-- **Drift check:** Ensures fixes stay within original scope, no regressions
+Invoke **relay-review** (runs with `context: fork` for bias-free review). Two-phase loop until convergence:
+- **Phase 1 — Spec Compliance:** Done Criteria faithfulness, stubs, security, integration, rubric re-verification. Must pass before Phase 2.
+- **Phase 2 — Code Quality:** `/review` + `/simplify` on changed files. Issues re-dispatch back to Phase 1.
 - **Verdict:** Writes LGTM or ESCALATED as a PR comment (`<!-- relay-review -->` marker)
 
 The rubric from relay-plan anchors each iteration — prevents context drift across rounds. Safety cap: 20 rounds (most PRs converge in 1-3).
@@ -92,6 +100,31 @@ If sprint file exists, update it:
 - **Running Context**: add learnings that affect later tasks
 
 Create follow-up issues if discovered during review.
+
+## Batch Mode
+
+When multiple independent tasks are ready, dispatch them in parallel instead of sequential relay cycles.
+
+### Flow: Plan all → Dispatch all → Review as completed → Merge one-by-one
+
+1. **Plan all tasks** — follow Steps 0 through 2 (including 1.5) for each task. Write each dispatch prompt to its own temp file.
+2. **Dispatch all** — run dispatch.js for each task with `Bash(run_in_background=true)`. Mark all as `[~]` in sprint file.
+3. **Review as completed** — as each dispatch finishes, run Step 4 (relay-review). No need to wait for all.
+4. **Merge one-by-one** — merge each reviewed PR sequentially (Step 5). After each merge, check remaining PRs for conflicts.
+5. **Re-anchor** — after the batch completes, run Step 0 before starting the next batch.
+
+### Merge conflict recovery
+
+If a PR has conflicts after an earlier merge:
+1. In the worktree: `git fetch origin && git rebase origin/main`
+2. Re-review the rebased PR (run relay-review again — Phase 1 from scratch)
+3. Merge
+
+### Principles
+
+- **When in doubt, run sequentially.** Batch mode is an optimization, not the default.
+- Merge order doesn't matter until it does — if conflict arises, rebase the rest.
+- No DAG analysis needed for 3-5 task batches. If tasks touch the same files, run them sequentially.
 
 ## Summary Checklist
 
