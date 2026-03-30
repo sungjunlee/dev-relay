@@ -88,7 +88,7 @@ gh pr comment $PR_NUM --body "$(cat <<'EOF'
 ## Relay Review
 Verdict: LGTM
 Contract: PASS — all Done Criteria verified
-Quality: PASS — /review and /simplify clean
+Quality: PASS — code review and simplification clean
 Rounds: <N>
 Rubric scores (if applicable):
 | Factor | Target | Codex | Claude | Status |
