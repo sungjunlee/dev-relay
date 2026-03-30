@@ -79,6 +79,7 @@ Invoke **relay-review** in an isolated context (no planning bias). Two-phase loo
 
 > **Platform examples — context isolation:**
 > Claude Code: `context: fork` frontmatter (auto-handled) | Codex: start a new session | Other: any mechanism that discards the planning context
+
 - **Phase 1 — Spec Compliance:** Done Criteria faithfulness, stubs, security, integration, rubric re-verification. Must pass before Phase 2.
 - **Phase 2 — Code Quality:** Code review + simplification on changed files. Issues re-dispatch back to Phase 1.
 - **Verdict:** Writes LGTM or ESCALATED as a PR comment (`<!-- relay-review -->` marker)
@@ -89,7 +90,7 @@ Do NOT review inline — relay-review must run in an isolated context to prevent
 
 ## Step 5: Merge (relay-merge)
 
-relay-merge runs `gate-check.js` as its first step — this verifies the relay-review PR comment exists. If missing, it blocks merge and tells you to run `/relay-review` first (or `--skip <reason>` for intentional bypass).
+relay-merge runs `gate-check.js` as its first step — this verifies the relay-review PR comment exists. If missing, it blocks merge and tells you to run relay-review first (or `--skip <reason>` for intentional bypass).
 ```bash
 gh pr merge <PR-NUM> --squash
 gh issue close <N> -c "Resolved in PR #<PR-NUM>"
