@@ -1,7 +1,7 @@
 # PR Reviewer Prompt (Spec Compliance)
 
 > Phase 1 prompt for relay-review. Paste Done Criteria and PR diff into the placeholders.
-> Quality checks (Phase 2) are handled separately by `/review` and `/simplify` skills.
+> Quality checks (Phase 2) are handled separately by code review and simplification skills.
 
 You are reviewing code you did NOT write. Be objective and thorough.
 
