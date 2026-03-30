@@ -76,9 +76,9 @@ rubric:
 
 **`score_low_if`**: One-line summary of what low scores look like. This anchors the bottom of the scale and prevents generous self-scoring.
 
-### Choosing the right domain rubric
+### Domain references (for expert perspective)
 
-Match the task to a domain reference for expert-level factors:
+After designing factors from the AC, consult the matching reference for specialist thinking you may have missed:
 
 | Task type | Reference | Key signal |
 |-----------|-----------|-----------|
@@ -88,7 +88,7 @@ Match the task to a domain reference for expert-level factors:
 | README, guides, API docs, specs | `references/rubric-documentation.md` | Reader testing score, zero-context completeness |
 | Design-driven features, UX flows | `references/rubric-design.md` | Value → Usability → Delight hierarchy |
 
-Load the relevant reference and pick 3-5 factors that actually matter for this specific task. Don't use generic factors when a domain-specific one exists.
+Use the matching reference for expert perspective — it shows what a specialist would check. Design your factors from the task's AC, informed by (not copied from) the reference.
 
 ### 3. Validate the rubric
 

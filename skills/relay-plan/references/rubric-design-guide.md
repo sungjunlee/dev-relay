@@ -4,21 +4,13 @@ How to derive high-quality rubrics from task acceptance criteria. Covers the gui
 
 ## Guided Interview
 
-Walk through these questions to derive rubric factors from AC. Each question maps to a rubric element.
+Walk through these questions to design a task-specific rubric from AC. Each question derives a rubric element. The goal is a rubric tailored to *this* task, not a generic template applied to it.
 
-### Q1: What domain is this?
+### Q1: What actually matters for this task?
 
-Match the task to a domain rubric reference:
+Read the AC and ask: "If this ships but one thing is wrong, what would hurt most?" That's your first required factor.
 
-| Signal | Domain | Reference |
-|--------|--------|-----------|
-| UI, pages, interactions, components | Frontend | `rubric-frontend.md` |
-| API, data layer, services, infrastructure | Backend | `rubric-backend.md` |
-| User flows, visual design, UX decisions | Design | `rubric-design.md` |
-| README, guides, API docs, specs | Documentation | `rubric-documentation.md` |
-| Restructuring, migration, cleanup, tech debt | Refactoring | `rubric-refactoring.md` |
-
-If the task spans domains, pick the primary one and add 1-2 factors from the secondary.
+Then: "What's the second most important?" Keep going until you have 3-5 concerns ranked by impact. These become your factor candidates — derived from the task, not from a menu.
 
 ### Q2: What can you measure with a command?
 
@@ -41,7 +33,9 @@ Examples of the split:
 
 ### Q3: What does a specialist check that a junior misses?
 
-For evaluated factors, load the domain reference and pick criteria that match the AC intent. Don't invent — the domain references contain expert-level criteria already.
+For each evaluated factor from Q1, write criteria specific to *this task*. Ask: "What would a senior engineer check here that a junior would overlook?"
+
+Write the criteria yourself first, from the AC. Then consult the domain reference (`rubric-*.md`) for expert perspective you may have missed — they show how specialists think about quality in that domain. Borrow the *thinking*, not the bullet points. If a reference factor happens to match your task exactly, use it. But most tasks need custom criteria.
 
 For each evaluated factor, write:
 - **criteria**: 3-5 specific bullets, each a concrete thing to check. Written as a domain expert would explain to a capable junior.
@@ -97,7 +91,7 @@ The difference: a proxy can be gamed without improving the thing you actually ca
 
 ### 4. Think like a specialist
 
-What would a senior frontend/backend/design/docs person check that a junior would miss? That's your evaluated factor. The domain rubric references (`rubric-*.md`) encode this expertise — use them instead of inventing generic criteria.
+What would a senior frontend/backend/design/docs person check that a junior would miss? That's your evaluated factor. Design criteria from the task's AC first, then consult `rubric-*.md` for expert perspective you may have missed. The references show how specialists think — borrow the mindset, not the checklist.
 
 ### 5. Baseline before changes
 
