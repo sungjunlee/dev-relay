@@ -131,7 +131,7 @@ A factor that scores 4 one run and 8 the next will cause the iteration loop to m
 ### When to Skip
 
 - All factors are automated (no LLM scoring to calibrate)
-- Using well-tested criteria from domain references without modification
+- Low-complexity tasks where factors are straightforward and unlikely to be ambiguous
 - Low-stakes tasks where a noisy signal is acceptable (bugs, typos)
 
 ## Fix Patterns
