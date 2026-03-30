@@ -101,7 +101,7 @@ Before dispatch, verify:
 - [ ] Targets are concrete ("≥ 8/10", "< 200ms") not relative ("good", "fast")
 - [ ] Automated checks measure outcomes ("API < 200ms") not proxies ("tests pass")
 
-Any check fails → revise before proceeding. See `references/rubric-design-guide.md § Fix Patterns` for examples.
+Any check fails → revise before proceeding. See `references/rubric-design-guide.md § Fix Patterns` for examples. For high-stakes tasks, run the optional calibration protocol (`references/rubric-design-guide.md § Calibration`) to test scoring consistency.
 
 ### 4. Generate dispatch prompt
 
