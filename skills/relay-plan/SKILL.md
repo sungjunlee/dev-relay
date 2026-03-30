@@ -22,7 +22,7 @@ Read the issue AC (try in order, use first that succeeds):
 
 ### 2. Build the rubric
 
-Convert each AC item into a scored factor:
+Use the guided interview (`references/rubric-design-guide.md`) to derive factors from AC, or convert directly:
 
 ```yaml
 rubric:
@@ -90,7 +90,20 @@ Match the task to a domain reference for expert-level factors:
 
 Load the relevant reference and pick 3-5 factors that actually matter for this specific task. Don't use generic factors when a domain-specific one exists.
 
-### 3. Generate dispatch prompt
+### 3. Validate the rubric
+
+Before dispatch, verify:
+
+- [ ] ≥ 1 automated check exists (ground truth — evaluated-only rubrics have no anchor)
+- [ ] Every evaluated factor has `score_low_if` (prevents generous self-scoring)
+- [ ] Criteria are specific ("timeouts on external calls") not vague ("good error handling")
+- [ ] 3-5 factors total (more slows iteration without adding signal)
+- [ ] Targets are concrete ("≥ 8/10", "< 200ms") not relative ("good", "fast")
+- [ ] Automated checks measure outcomes ("API < 200ms") not proxies ("tests pass")
+
+Any check fails → revise before proceeding. See `references/rubric-design-guide.md § Fix Patterns` for examples.
+
+### 4. Generate dispatch prompt
 
 Take the base template (`relay/references/prompt-template.md`) and add these sections:
 
@@ -117,7 +130,7 @@ Take the base template (`relay/references/prompt-template.md`) and add these sec
   | API contract clarity | ≥ 7 | — | 6 | 7 | 7 |
   ```
 
-### 4. Dispatch
+### 5. Dispatch
 
 ```bash
 ${CLAUDE_SKILL_DIR}/../relay-dispatch/scripts/dispatch.js . \
@@ -131,11 +144,4 @@ ${CLAUDE_SKILL_DIR}/../relay-dispatch/scripts/dispatch.js . \
 
 ## Rubric design guidelines
 
-- **3-5 factors per task.** More slows iteration without adding signal.
-- **Always include at least 1 automated check.** A rubric with only evaluated factors has no ground truth.
-- **Measure outcomes, not proxies.** "Tests pass" is a proxy. "API responds in < 200ms under load" is an outcome.
-- **Think like a specialist.** What would a senior frontend/backend/design/docs person check that a junior would miss? That's your evaluated factor.
-- **Baseline before changes.** For delta metrics (bundle size, query count, complexity), capture the before-state. Improvement is keep, regression is discard.
-- **Read-only evaluation.** The metric measurement command should not be something the agent can game. Separate the evaluation from the implementation — just like autoresearch's read-only `prepare.py`.
-
-See `references/rubric-*.md` for domain-specific factors and expert perspectives.
+See `references/rubric-design-guide.md` for the full guided interview protocol, design principles, and fix patterns for common rubric failures. Domain-specific factors: `references/rubric-*.md`.
