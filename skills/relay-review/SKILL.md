@@ -41,9 +41,10 @@ gh issue view $ISSUE_NUM  # Done Criteria / Acceptance Criteria source
 
 ## Review Loop
 
-Repeat until all checks pass. Each round re-measures against the **original anchor**, not the previous round's state.
+Two phases, run in order. Each round re-measures against the **original anchor**, not the previous round's state.
 
-### Contract checks
+### Phase 1: Spec Compliance
+
 3. Review the diff against Done Criteria (see `references/reviewer-prompt.md`):
    - **Faithfulness**: Each Done Criteria item implemented? Scope respected?
    - **Stubs/placeholders**: Any `return null`, empty bodies, TODO in production paths?
@@ -56,22 +57,27 @@ Repeat until all checks pass. Each round re-measures against the **original anch
    - Any required factor below target → issue
    - Score divergence ≥2 points from Codex → flag for review
 
-### Quality checks
-5. Run `/review` — code quality, patterns, conventions, structural issues
-6. Run `/simplify` on changed files — unnecessary complexity, dead code
+5. **Phase 1 gate**: Issues found → re-dispatch (see Re-dispatch below), re-fetch diff, **repeat from step 3**. Do NOT proceed to Phase 2 until Phase 1 passes.
 
-### Drift and stuck detection
-7. Before re-dispatching, check for drift, regressions, and stuck loops:
-   - **Scope:** Does the fix address an issue from steps 3-6, or is it scope creep?
-   - **Regression:** Are previously passing rubric factors still passing?
-   - **Churn:** Is the total diff growing without convergence?
-   - **Stuck:** Is the same issue appearing 3+ consecutive rounds? If yes → this issue is likely not fixable by Codex. Escalate immediately (don't wait for safety cap).
+### Phase 2: Code Quality (only after Phase 1 PASS)
 
-### Iterate or converge
-8. All checks pass → exit loop, proceed to Verdict
-9. Issues found → re-dispatch (see Re-dispatch below), re-fetch diff, **repeat from step 3**
+6. Run `/review` — code quality, patterns, conventions, structural issues
+7. Run `/simplify` on changed files — unnecessary complexity, dead code
+8. Issues found → re-dispatch, **repeat from step 3** (Phase 1 — quality fixes can regress spec compliance)
 
-**Safety cap: 20 rounds total.** This is a ceiling, not a target — most PRs should converge in 1-3 rounds. If hitting the cap, something is structurally wrong; escalate.
+### Drift and stuck detection (both phases)
+
+Before any re-dispatch, check:
+- **Scope:** Does the fix address a review issue, or is it scope creep?
+- **Regression:** Are previously passing rubric factors still passing?
+- **Churn:** Is the total diff growing without convergence?
+- **Stuck:** Same issue 3+ consecutive rounds → escalate immediately (not fixable by Codex).
+
+### Converge
+
+9. Both phases pass → proceed to Verdict
+
+**Safety cap: 20 rounds total.** Ceiling, not target — most PRs converge in 1-3 rounds. Hitting the cap means something is structurally wrong; escalate.
 
 ## Verdict + Audit Trail
 
