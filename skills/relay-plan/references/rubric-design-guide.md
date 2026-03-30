@@ -101,6 +101,39 @@ For delta metrics (bundle size, query count, complexity), capture the before-sta
 
 The metric measurement command should not be something the agent can game. Separate the evaluation from the implementation — just like autoresearch's read-only `prepare.py`. If the agent can modify both the code and the test that checks it, the signal is compromised.
 
+## Calibration (Optional)
+
+Test whether your rubric produces consistent scores before dispatching. Recommended for high-stakes tasks or rubrics with novel/custom criteria.
+
+### Protocol
+
+1. **Score 3 times**: Evaluate each evaluated factor against the current codebase state 3 times independently. Each run should be a fresh evaluation — don't reference previous scores.
+2. **Record the spread**: For each factor, note the min and max score across the 3 runs.
+3. **Flag high-variance factors**: Any factor with a spread > 2 points (e.g., scores of 5, 7, 8) has inconsistent criteria.
+4. **Fix or accept**:
+   - Spread ≤ 2: consistent enough — proceed.
+   - Spread > 2: the criteria are ambiguous. Tighten them using the fix patterns below, then re-calibrate.
+   - If a factor stays high-variance after one rewrite, consider converting it to an automated check (Q2) or splitting it into narrower factors.
+
+### Why Variance Matters
+
+A factor that scores 4 one run and 8 the next will cause the iteration loop to make random keep/discard decisions. The agent keeps a change because it "improved" from 5→7 on one run, but would have scored 7→6 on another. High variance = noise, not signal.
+
+### Common Causes of High Variance
+
+| Cause | Example | Fix |
+|-------|---------|-----|
+| Vague criteria | "good error handling" | Specific bullets (see Fix Patterns § Vague criteria) |
+| Missing `score_low_if` | No anchor for the bottom of scale | Add one (see Q4 in Guided Interview) |
+| Criteria too broad | Factor covers 4+ distinct concerns | Split into 2 narrower factors |
+| Subjective threshold | "readable" means different things each run | Replace with measurable proxy ("functions < 20 lines") |
+
+### When to Skip
+
+- All factors are automated (no LLM scoring to calibrate)
+- Using well-tested criteria from domain references without modification
+- Low-stakes tasks where a noisy signal is acceptable (bugs, typos)
+
 ## Fix Patterns
 
 When validation fails (SKILL.md § Validate the rubric), use these patterns to fix.
