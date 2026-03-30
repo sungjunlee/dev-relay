@@ -93,12 +93,12 @@ ${CLAUDE_SKILL_DIR}/scripts/dispatch.js . -b task-42 --prompt-file tasks/42.md -
 
 ### Parallel dispatch (independent tasks)
 
-Launch multiple independent dispatches concurrently using the same async mechanism:
+Launch multiple independent dispatches concurrently:
 
 ```bash
 # Each dispatch runs independently in the background
-${CLAUDE_SKILL_DIR}/scripts/dispatch.js . -b task-42 --prompt-file tasks/42.md --json
-${CLAUDE_SKILL_DIR}/scripts/dispatch.js . -b task-43 --prompt-file tasks/43.md --json
+${CLAUDE_SKILL_DIR}/scripts/dispatch.js . -b task-42 --prompt-file tasks/42.md --json &
+${CLAUDE_SKILL_DIR}/scripts/dispatch.js . -b task-43 --prompt-file tasks/43.md --json &
 # Each completes independently → review each PR via relay-review
 ```
 
