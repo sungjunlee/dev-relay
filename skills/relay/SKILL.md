@@ -75,14 +75,14 @@ If sprint file exists, mark Plan item as in-flight: `[~] #42 OAuth2 flow → PR 
 
 Verify PR exists: `gh pr list --head issue-<N>`
 
-Invoke **relay-review** (runs with `context: fork` for bias-free review). Two-phase loop until convergence:
+Invoke **relay-review** in an isolated context (no planning bias — start a fresh session or use context isolation). Two-phase loop until convergence:
 - **Phase 1 — Spec Compliance:** Done Criteria faithfulness, stubs, security, integration, rubric re-verification. Must pass before Phase 2.
-- **Phase 2 — Code Quality:** `/review` + `/simplify` on changed files. Issues re-dispatch back to Phase 1.
+- **Phase 2 — Code Quality:** Code review + simplification on changed files. Issues re-dispatch back to Phase 1.
 - **Verdict:** Writes LGTM or ESCALATED as a PR comment (`<!-- relay-review -->` marker)
 
 The rubric from relay-plan anchors each iteration — prevents context drift across rounds. Safety cap: 20 rounds (most PRs converge in 1-3).
 
-Do NOT review inline — relay-review's forked context prevents planning bias.
+Do NOT review inline — relay-review must run in an isolated context to prevent planning bias.
 
 ## Step 5: Merge (relay-merge)
 
@@ -108,7 +108,7 @@ When multiple independent tasks are ready, dispatch them in parallel instead of 
 ### Flow: Plan all → Dispatch all → Review as completed → Merge one-by-one
 
 1. **Plan all tasks** — follow Steps 0 through 2 (including 1.5) for each task. Write each dispatch prompt to its own temp file.
-2. **Dispatch all** — run dispatch.js for each task with `Bash(run_in_background=true)`. Mark all as `[~]` in sprint file.
+2. **Dispatch all** — run dispatch.js for each task asynchronously (in the background). Mark all as `[~]` in sprint file.
 3. **Review as completed** — as each dispatch finishes, run Step 4 (relay-review). No need to wait for all.
 4. **Merge one-by-one** — merge each reviewed PR sequentially (Step 5). After each merge, check remaining PRs for conflicts.
 5. **Re-anchor** — after the batch completes, run Step 0 before starting the next batch.

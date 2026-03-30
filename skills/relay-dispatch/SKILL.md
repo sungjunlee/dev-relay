@@ -80,21 +80,22 @@ gh pr list --head <branch> --json number,url,title
 
 ### Background dispatch
 
-```
-Bash(run_in_background=true):
-  ${CLAUDE_SKILL_DIR}/scripts/dispatch.js . -b task-42 --prompt-file tasks/42.md --json --timeout 3600
-# Claude plans next task, reviews docs, talks to user...
-# TaskOutput fires when Codex finishes → proceed to relay-review
+Run dispatch asynchronously so the orchestrator can continue other work (planning, reviewing, user interaction) while the executor runs:
+
+```bash
+# Run in background — orchestrator proceeds with other work while executor runs
+${CLAUDE_SKILL_DIR}/scripts/dispatch.js . -b task-42 --prompt-file tasks/42.md --json --timeout 3600 &
+# When executor finishes → proceed to relay-review
 ```
 
 ### Parallel dispatch (independent tasks)
 
-```
-# Single message, multiple background calls:
-Bash(run_in_background=true):
-  ${CLAUDE_SKILL_DIR}/scripts/dispatch.js . -b task-42 --prompt-file tasks/42.md --json
-Bash(run_in_background=true):
-  ${CLAUDE_SKILL_DIR}/scripts/dispatch.js . -b task-43 --prompt-file tasks/43.md --json
+Launch multiple independent dispatches concurrently:
+
+```bash
+# Each dispatch runs independently in the background
+${CLAUDE_SKILL_DIR}/scripts/dispatch.js . -b task-42 --prompt-file tasks/42.md --json &
+${CLAUDE_SKILL_DIR}/scripts/dispatch.js . -b task-43 --prompt-file tasks/43.md --json &
 # Each completes independently → review each PR via relay-review
 ```
 
