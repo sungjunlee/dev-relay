@@ -107,7 +107,7 @@ When multiple independent tasks are ready, dispatch them in parallel instead of 
 
 ### Flow: Plan all → Dispatch all → Review as completed → Merge one-by-one
 
-1. **Plan all tasks** — run Steps 0-2 for each task. Write each dispatch prompt to its own temp file.
+1. **Plan all tasks** — follow Steps 0 through 2 (including 1.5) for each task. Write each dispatch prompt to its own temp file.
 2. **Dispatch all** — run dispatch.js for each task with `Bash(run_in_background=true)`. Mark all as `[~]` in sprint file.
 3. **Review as completed** — as each dispatch finishes, run Step 4 (relay-review). No need to wait for all.
 4. **Merge one-by-one** — merge each reviewed PR sequentially (Step 5). After each merge, check remaining PRs for conflicts.
