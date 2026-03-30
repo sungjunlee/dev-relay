@@ -80,11 +80,14 @@ gh pr list --head <branch> --json number,url,title
 
 ### Background dispatch
 
-Run dispatch asynchronously so the orchestrator can continue other work (planning, reviewing, user interaction) while the executor runs:
+Run dispatch asynchronously so the orchestrator can continue other work (planning, reviewing, user interaction) while the executor runs.
+
+> **Platform examples — async dispatch:**
+> Claude Code: `Bash(run_in_background=true)` | Codex: shell `&` or platform async | Other: any non-blocking execution
 
 ```bash
-# Run in background — orchestrator proceeds with other work while executor runs
-${CLAUDE_SKILL_DIR}/scripts/dispatch.js . -b task-42 --prompt-file tasks/42.md --json --timeout 3600 &
+${CLAUDE_SKILL_DIR}/scripts/dispatch.js . -b task-42 --prompt-file tasks/42.md --json --timeout 3600
+# Run this command in the background using your platform's async mechanism
 # When executor finishes → proceed to relay-review
 ```
 

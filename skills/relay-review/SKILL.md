@@ -3,7 +3,7 @@ name: relay-review
 argument-hint: "[branch-name or PR-number]"
 description: Independent PR review after Codex dispatch. Re-scores the rubric and reviews against Done Criteria in a fresh context, free from planning bias. Returns LGTM or specific issues with file:line references.
 context: fork
-compatibility: Must run in an isolated context (fresh session or context isolation) to prevent planning bias. Requires gh CLI.
+compatibility: Must run in an isolated context to prevent planning bias (Claude Code: context:fork auto-handled; Codex/other: start a new session). Requires gh CLI.
 metadata:
   related-skills: "relay, relay-plan, relay-dispatch, relay-merge"
 ---
@@ -61,8 +61,8 @@ Two phases, run in order. Each round re-measures against the **original anchor**
 
 ### Phase 2: Code Quality (only after Phase 1 PASS)
 
-6. Run a code review on changed files — check code quality, patterns, conventions, structural issues
-7. Review changed files for simplification opportunities — unnecessary complexity, dead code, verbose patterns
+6. Run a code review on changed files — check code quality, patterns, conventions, structural issues (e.g., Claude Code: `/review`; Codex: include review instructions in prompt)
+7. Review changed files for simplification opportunities — unnecessary complexity, dead code, verbose patterns (e.g., Claude Code: `/simplify`; Codex: include simplification pass in prompt)
 8. Issues found → re-dispatch, **repeat from step 3** (Phase 1 — quality fixes can regress spec compliance)
 
 ### Drift and stuck detection (both phases)

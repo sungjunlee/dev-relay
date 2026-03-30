@@ -75,7 +75,10 @@ If sprint file exists, mark Plan item as in-flight: `[~] #42 OAuth2 flow → PR 
 
 Verify PR exists: `gh pr list --head issue-<N>`
 
-Invoke **relay-review** in an isolated context (no planning bias — start a fresh session or use context isolation). Two-phase loop until convergence:
+Invoke **relay-review** in an isolated context (no planning bias). Two-phase loop until convergence:
+
+> **Platform examples — context isolation:**
+> Claude Code: `context: fork` frontmatter (auto-handled) | Codex: start a new session | Other: any mechanism that discards the planning context
 - **Phase 1 — Spec Compliance:** Done Criteria faithfulness, stubs, security, integration, rubric re-verification. Must pass before Phase 2.
 - **Phase 2 — Code Quality:** Code review + simplification on changed files. Issues re-dispatch back to Phase 1.
 - **Verdict:** Writes LGTM or ESCALATED as a PR comment (`<!-- relay-review -->` marker)
