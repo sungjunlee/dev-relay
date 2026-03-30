@@ -75,11 +75,9 @@ If sprint file exists, mark Plan item as in-flight: `[~] #42 OAuth2 flow → PR 
 
 Verify PR exists: `gh pr list --head issue-<N>`
 
-Invoke **relay-review** (runs with `context: fork` for bias-free review). It loops until convergence:
-- **Contract checks:** Done Criteria faithfulness, stubs, security, integration
-- **Rubric verification:** Re-runs automated checks, re-scores evaluated factors independently
-- **Quality checks:** `/review` + `/simplify` on changed files
-- **Drift check:** Ensures fixes stay within original scope, no regressions
+Invoke **relay-review** (runs with `context: fork` for bias-free review). Two-phase loop until convergence:
+- **Phase 1 — Spec Compliance:** Done Criteria faithfulness, stubs, security, integration, rubric re-verification. Must pass before Phase 2.
+- **Phase 2 — Code Quality:** `/review` + `/simplify` on changed files. Issues re-dispatch back to Phase 1.
 - **Verdict:** Writes LGTM or ESCALATED as a PR comment (`<!-- relay-review -->` marker)
 
 The rubric from relay-plan anchors each iteration — prevents context drift across rounds. Safety cap: 20 rounds (most PRs converge in 1-3).
