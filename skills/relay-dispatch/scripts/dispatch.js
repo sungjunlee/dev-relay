@@ -285,7 +285,14 @@ function main() {
     execArgs = ["exec", "-C", wtPath, "--full-auto", "--color", "never", "-o", resultFile];
     if (MODEL) execArgs.push("-m", MODEL);
     execArgs.push("--sandbox", SANDBOX);
-    execArgs.push(taskPrompt);
+    // Prepend non-interactive directive so the model doesn't wait for approval
+    // (e.g. brainstorming HARD-GATE or design-confirmation patterns).
+    const execPrompt =
+      "[NON-INTERACTIVE DISPATCH] This is an automated, non-interactive execution. " +
+      "Do not present plans for approval or wait for user confirmation. " +
+      "Execute the task fully and autonomously.\n\n" +
+      taskPrompt;
+    execArgs.push(execPrompt);
     execOpts = {
       timeout: TIMEOUT * 1000,
       maxBuffer: 10 * 1024 * 1024,
