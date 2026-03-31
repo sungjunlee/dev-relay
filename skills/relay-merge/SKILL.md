@@ -20,7 +20,7 @@ ${CLAUDE_SKILL_DIR}/scripts/gate-check.js $PR_NUM
 ```
 
 - Exit 0 (LGTM) → proceed to merge
-- Exit 1 (no comment) → **STOP.** Run `/relay-review` first
+- Exit 1 (no comment) → **STOP.** Run relay-review first
 - Exit 1 (ESCALATED) → **STOP.** Show unresolved issues to user
 
 **Intentional skip** (hotfix, manual PR, trivial change):
