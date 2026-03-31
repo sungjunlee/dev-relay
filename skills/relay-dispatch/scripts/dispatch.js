@@ -315,6 +315,12 @@ function main() {
   let error = null;
   const startTime = Date.now();
 
+  // Record HEAD before execution so we can measure only new work.
+  let startHead = "";
+  try {
+    startHead = git(wtPath, "rev-parse", "HEAD");
+  } catch {}
+
   // Redirect stdout to file to avoid buffer overflow on verbose output.
   const stdoutFd = fs.openSync(stdoutLog, "w");
   execOpts.stdio[1] = stdoutFd;
@@ -345,14 +351,20 @@ function main() {
     resultText = fs.readFileSync(resultFile, "utf-8").trim();
   }
 
+  // Only show commits created by this run (startHead..HEAD).
   let gitLog = "";
   try {
-    gitLog = git(wtPath, "log", "--oneline", "-10");
+    const currentHead = git(wtPath, "rev-parse", "HEAD");
+    if (startHead && currentHead !== startHead) {
+      gitLog = git(wtPath, "log", "--oneline", `${startHead}..HEAD`);
+    }
   } catch {}
 
   let diffStat = "";
   try {
-    diffStat = git(wtPath, "diff", "--stat", "HEAD~1");
+    if (startHead && gitLog) {
+      diffStat = git(wtPath, "diff", "--stat", `${startHead}..HEAD`);
+    }
   } catch {}
 
   // Check for uncommitted work (ENOBUFS recovery: executor may have worked but not committed)
@@ -365,12 +377,23 @@ function main() {
   const stdoutSize = fs.statSync(stdoutLog).size;
   const noOutput = stdoutSize === 0 && !resultText;
 
-  // Determine actual status
+  // Detect approval-wait: executor stopped to ask for confirmation instead of working.
+  const BLOCKED_PATTERNS = [
+    /waiting (?:on|for) (?:your )?approval/i,
+    /before (?:proceeding|editing|making changes)/i,
+    /please confirm/i,
+  ];
+  const looksBlocked = resultText && BLOCKED_PATTERNS.some((p) => p.test(resultText));
+
+  // Determine actual status — hasWork must be based on NEW commits/changes only.
   const hasWork = gitLog || uncommitted;
   let status;
-  if (error && error.includes("ENOBUFS") && hasWork) {
+  if (looksBlocked) {
+    status = "failed";
+    error = error || `executor blocked on approval: ${resultText.split("\n")[0].slice(0, 120)}`;
+  } else if (error && error.includes("ENOBUFS") && hasWork) {
     status = "completed-with-warning";
-  } else if (exitCode === 0 && noOutput && !hasWork) {
+  } else if (exitCode === 0 && (noOutput || !hasWork)) {
     status = "failed";
     error = error || "executor produced no output and no changes (silent failure)";
   } else if (exitCode === 0) {
