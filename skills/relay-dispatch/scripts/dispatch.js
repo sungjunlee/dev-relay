@@ -317,9 +317,13 @@ function main() {
   } catch (e) {
     exitCode = e.status || 1;
     const msg = e.message.split("\n")[0];
+    // Capture stderr — this is where auth errors, missing config, etc. end up.
+    const stderr = e.stderr ? e.stderr.toString().trim() : "";
     // Codex-specific: ENOBUFS means output exceeded buffer but work may be done.
     if (EXECUTOR === "codex" && (e.code === "ENOBUFS" || msg.includes("ENOBUFS"))) {
       error = "ENOBUFS (stdout buffer overflow — work may be complete, check worktree)";
+    } else if (stderr) {
+      error = stderr.split("\n").slice(0, 10).join("\n");
     } else {
       error = msg;
     }
@@ -350,11 +354,18 @@ function main() {
     uncommitted = git(wtPath, "status", "--porcelain");
   } catch {}
 
+  // Warn if executor produced no output (likely silent failure)
+  const stdoutSize = fs.statSync(stdoutLog).size;
+  const noOutput = stdoutSize === 0 && !resultText;
+
   // Determine actual status
   const hasWork = gitLog || uncommitted;
   let status;
   if (error && error.includes("ENOBUFS") && hasWork) {
     status = "completed-with-warning";
+  } else if (exitCode === 0 && noOutput && !hasWork) {
+    status = "failed";
+    error = error || "executor produced no output and no changes (silent failure)";
   } else if (exitCode === 0) {
     status = "completed";
   } else {
