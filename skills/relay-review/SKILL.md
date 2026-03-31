@@ -3,7 +3,7 @@ name: relay-review
 argument-hint: "[branch-name or PR-number]"
 description: Independent PR review after Codex dispatch. Re-scores the rubric and reviews against Done Criteria in a fresh context, free from planning bias. Returns LGTM or specific issues with file:line references.
 context: fork
-compatibility: context:fork requires Claude Code. Other agents should start a new session before reviewing. Requires gh CLI.
+compatibility: Must run in an isolated context to prevent planning bias (Claude Code: context: fork auto-handled; Codex/other: start a new session). Requires gh CLI.
 metadata:
   related-skills: "relay, relay-plan, relay-dispatch, relay-merge"
 ---
@@ -61,8 +61,8 @@ Two phases, run in order. Each round re-measures against the **original anchor**
 
 ### Phase 2: Code Quality (only after Phase 1 PASS)
 
-6. Run `/review` — code quality, patterns, conventions, structural issues
-7. Run `/simplify` on changed files — unnecessary complexity, dead code
+6. Run a code review skill on changed files — check code quality, patterns, conventions, structural issues (use the platform's best-matching skill, e.g., Claude Code: `/review`; if no skill available, perform the review inline)
+7. Run a code simplification skill on changed files — unnecessary complexity, dead code, verbose patterns (use the platform's best-matching skill, e.g., Claude Code: `/simplify`; if no skill available, review for simplification inline)
 8. Issues found → re-dispatch, **repeat from step 3** (Phase 1 — quality fixes can regress spec compliance)
 
 ### Drift and stuck detection (both phases)
@@ -88,7 +88,7 @@ gh pr comment $PR_NUM --body "$(cat <<'EOF'
 ## Relay Review
 Verdict: LGTM
 Contract: PASS — all Done Criteria verified
-Quality: PASS — /review and /simplify clean
+Quality: PASS — code review and simplification clean
 Rounds: <N>
 Rubric scores (if applicable):
 | Factor | Target | Codex | Claude | Status |
@@ -97,7 +97,7 @@ Rubric scores (if applicable):
 EOF
 )"
 ```
-<!-- NOTE: Verdict line format is parsed by relay and relay-merge gate checks via grep -oE 'Verdict: (LGTM|ESCALATED)'. Do not add markdown formatting. -->
+<!-- NOTE: Verdict line format is parsed by gate-check.js via regex /Verdict:\s*(LGTM|ESCALATED)/. Do not add markdown formatting to the Verdict line. -->
 
 11. Hit safety cap or stuck → escalate to user. Still write audit trail:
 ```bash
