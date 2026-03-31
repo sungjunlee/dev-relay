@@ -367,6 +367,14 @@ function main() {
     }
   } catch {}
 
+  // Also capture uncommitted diff for partial runs (ENOBUFS, interrupted).
+  let uncommittedDiff = "";
+  try {
+    const wd = git(wtPath, "diff", "--stat");
+    const staged = git(wtPath, "diff", "--stat", "--cached");
+    uncommittedDiff = [wd, staged].filter(Boolean).join("\n");
+  } catch {}
+
   // Check for uncommitted work (ENOBUFS recovery: executor may have worked but not committed)
   let uncommitted = "";
   try {
@@ -440,6 +448,7 @@ function main() {
     threadId,
     commits: gitLog,
     uncommitted: uncommitted || null,
+    uncommittedDiff: uncommittedDiff || null,
     diffStat,
     resultPreview: resultText.slice(0, 500),
   };
@@ -463,8 +472,12 @@ function main() {
     }
     console.log(`\n  Full result: cat ${resultFile}`);
     console.log(`  Stdout log:  cat ${stdoutLog}`);
-    console.log(`  Review:      git -C ${shellQuote(wtPath)} log --oneline`);
-    console.log(`  Diff:        git -C ${shellQuote(wtPath)} diff HEAD~1`);
+    if (uncommittedDiff) {
+      console.log(`  Uncommitted changes:`);
+      uncommittedDiff.split("\n").forEach((l) => console.log(`    ${l}`));
+    }
+    console.log(`\n  Review:      git -C ${shellQuote(wtPath)} log --oneline ${startHead ? startHead + "..HEAD" : ""}`);
+    console.log(`  Diff:        git -C ${shellQuote(wtPath)} diff ${startHead ? startHead + "..HEAD" : "HEAD~1"}`);
     console.log(`  Merge:       git merge ${BRANCH}`);
   }
 
