@@ -50,6 +50,16 @@ const path = require("path");
 const crypto = require("crypto");
 const os = require("os");
 const { copyWorktreeFiles, getWorktreeIncludeFiles } = require("./worktreeinclude");
+const {
+  STATES,
+  createManifestSkeleton,
+  createRunId,
+  ensureRunLayout,
+  getManifestPath,
+  inferIssueNumber,
+  updateManifestState,
+  writeManifest,
+} = require("./relay-manifest");
 
 // ---------------------------------------------------------------------------
 // Args
@@ -209,6 +219,14 @@ function main() {
   const wtPath = path.join(wtBase, wtId, PROJECT_NAME);
   const resultFile = path.join(os.tmpdir(), `dispatch-${EXECUTOR}-${wtId}.txt`);
   const stdoutLog = path.join(os.tmpdir(), `dispatch-${EXECUTOR}-${wtId}.log`);
+  const issueNumber = inferIssueNumber(BRANCH);
+  const runId = createRunId({ issueNumber, branch: BRANCH });
+  const manifestPath = getManifestPath(REPO_PATH, runId);
+  const cleanupPolicy = (NO_CLEANUP || REGISTER) ? "on_close" : "on_success";
+  let baseBranch = "main";
+  try {
+    baseBranch = git(REPO_PATH, "rev-parse", "--abbrev-ref", "HEAD") || "main";
+  } catch {}
 
   if (fs.existsSync(wtPath)) {
     console.error(`Error: worktree path already exists: ${wtPath}`);
@@ -219,25 +237,31 @@ function main() {
   if (DRY_RUN) {
     const includeFiles = getWorktreeIncludeFiles(REPO_PATH);
     const plan = {
+      runId,
+      manifestPath,
       executor: EXECUTOR, worktree: wtPath, branch: BRANCH,
       prompt: taskPrompt.slice(0, 200),
       model: MODEL, sandbox: SANDBOX, register: REGISTER,
       resultFile, stdoutLog, timeout: TIMEOUT, copyEnv: COPY_ENV,
+      cleanupPolicy,
       worktreeinclude: includeFiles,
     };
     if (JSON_OUT) {
       console.log(JSON.stringify(plan, null, 2));
     } else {
+      console.log(`  Run:      ${runId}`);
       console.log("Dry run:");
       console.log(`  Executor: ${EXECUTOR}`);
       console.log(`  Repo:     ${REPO_PATH}`);
       console.log(`  Worktree: ${wtPath}`);
       console.log(`  Branch:   ${BRANCH}`);
+      console.log(`  Manifest: ${manifestPath}`);
       console.log(`  Prompt:   ${taskPrompt.slice(0, 80)}...`);
       console.log(`  Model:    ${MODEL || "(default)"}`);
       console.log(`  Sandbox:  ${SANDBOX}`);
       console.log(`  Register: ${REGISTER}`);
       console.log(`  Result:   ${resultFile}`);
+      console.log(`  Cleanup:  ${cleanupPolicy}`);
       console.log(`  Timeout:  ${TIMEOUT}s`);
       if (includeFiles.length) {
         console.log(`  .worktreeinclude: ${includeFiles.join(", ")}`);
@@ -274,6 +298,23 @@ function main() {
     assertWithin,
   });
 
+  let manifest = createManifestSkeleton({
+    repoRoot: REPO_PATH,
+    runId,
+    branch: BRANCH,
+    baseBranch,
+    issueNumber,
+    worktreePath: wtPath,
+    orchestrator: process.env.RELAY_ORCHESTRATOR || "unknown",
+    worker: EXECUTOR,
+    reviewer: process.env.RELAY_REVIEWER || "unknown",
+    cleanupPolicy,
+  });
+  ensureRunLayout(REPO_PATH, runId);
+  writeManifest(manifestPath, manifest);
+  manifest = updateManifestState(manifest, STATES.DISPATCHED, "await_dispatch_result");
+  writeManifest(manifestPath, manifest);
+
   // --- Step 3: Execute task ---
   // Executor-specific: build command + args + handle quirks.
   // To add a new executor: add a branch here + optional register-{name}.js.
@@ -305,8 +346,10 @@ function main() {
 
   if (!JSON_OUT) {
     console.log(`Dispatching to ${EXECUTOR}...`);
+    console.log(`  Run:      ${runId}`);
     console.log(`  Worktree: ${wtPath}`);
     console.log(`  Branch:   ${BRANCH}`);
+    console.log(`  Manifest: ${manifestPath}`);
     if (copiedFiles.length) console.log(`  Copied:   ${copiedFiles.join(", ")}`);
     console.log(`  Result:   ${resultFile}`);
   }
@@ -410,6 +453,13 @@ function main() {
     status = "failed";
   }
 
+  manifest = updateManifestState(
+    manifest,
+    status === "failed" ? STATES.ESCALATED : STATES.REVIEW_PENDING,
+    status === "failed" ? "inspect_dispatch_failure" : "run_review"
+  );
+  writeManifest(manifestPath, manifest);
+
   // --- Step 4.5: Optional app registration ---
   let threadId = null;
   if (REGISTER && status !== "failed") {
@@ -435,6 +485,9 @@ function main() {
   }
 
   const result = {
+    runId,
+    manifestPath,
+    runState: manifest.state,
     status,
     executor: EXECUTOR,
     worktree: wtPath,
@@ -458,6 +511,7 @@ function main() {
   } else {
     console.log(`\n--- Dispatch ${result.status} (${elapsed}s) ---`);
     if (error) console.log(`  Error: ${error}`);
+    console.log(`  Run state: ${result.runState}`);
     if (gitLog) {
       console.log(`  Commits:`);
       gitLog.split("\n").forEach((l) => console.log(`    ${l}`));
@@ -470,6 +524,7 @@ function main() {
       console.log(`  Result preview:`);
       console.log(`    ${resultText.slice(0, 300).replace(/\n/g, "\n    ")}`);
     }
+    console.log(`  Manifest: ${manifestPath}`);
     console.log(`\n  Full result: cat ${resultFile}`);
     console.log(`  Stdout log:  cat ${stdoutLog}`);
     if (uncommittedDiff) {
