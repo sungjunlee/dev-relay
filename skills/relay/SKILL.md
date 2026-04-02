@@ -58,14 +58,21 @@ ${CLAUDE_SKILL_DIR}/../relay-dispatch/scripts/dispatch.js . \
 ```
 
 Wait for completion. Check result:
-- `status: "completed"` → proceed to Step 4
-- `status: "completed-with-warning"` → check worktree for uncommitted work, proceed to Step 4
-- `status: "failed"` → check failure table in relay-dispatch, fix and re-dispatch
+- `status: "completed"` and `runState: "review_pending"` → proceed to Step 4
+- `status: "completed-with-warning"` and `runState: "review_pending"` → check worktree for uncommitted work, proceed to Step 4
+- `status: "failed"` and `runState: "escalated"` → inspect the dispatch error / manifest, fix and re-dispatch
+
+Capture the run metadata from dispatch output:
+- `runId`
+- `manifestPath`
+- `runState`
 
 Get PR number:
 ```bash
 PR_NUM=$(gh pr list --head issue-<N> --json number -q '.[0].number')
 ```
+
+The manifest is written under `.relay/runs/` in the target repo. This is the new shared state surface for later review/merge lifecycle work.
 
 If sprint file exists, mark Plan item as in-flight: `[~] #42 OAuth2 flow → PR #89 (reviewing)`
 

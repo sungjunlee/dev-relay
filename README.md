@@ -107,7 +107,7 @@ The rubric travels with the task — Codex uses it to self-evaluate, and the rev
 
 ### Dispatch — `/relay-dispatch`
 
-Creates an isolated git worktree, runs the executor with the task prompt, and collects results.
+Creates an isolated git worktree, writes a relay run manifest, runs the executor with the task prompt, and collects results.
 
 ```bash
 # Minimal
@@ -140,6 +140,8 @@ Creates an isolated git worktree, runs the executor with the task prompt, and co
 | `--json` | Structured JSON output | `false` |
 
 **Timeout guidance:** 1800s for simple tasks, 3600s with self-review, 5400s for complex multi-file work.
+
+Dispatch now writes a run manifest to `.relay/runs/<run-id>.md` in the target repo. JSON output includes `runId`, `manifestPath`, and `runState`. A successful first-pass dispatch should usually end in `runState: review_pending`.
 </details>
 
 ### Review — `/relay-review`

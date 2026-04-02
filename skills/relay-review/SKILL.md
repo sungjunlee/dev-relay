@@ -3,7 +3,7 @@ name: relay-review
 argument-hint: "[branch-name or PR-number]"
 description: Independent PR review after Codex dispatch. Re-scores the rubric and reviews against Done Criteria in a fresh context, free from planning bias. Returns LGTM or specific issues with file:line references.
 context: fork
-compatibility: Must run in an isolated context to prevent planning bias (Claude Code: context: fork auto-handled; Codex/other: start a new session). Requires gh CLI.
+compatibility: "Must run in an isolated context to prevent planning bias (Claude Code: context: fork auto-handled; Codex/other: start a new session). Requires gh CLI."
 metadata:
   related-skills: "relay, relay-plan, relay-dispatch, relay-merge"
 ---

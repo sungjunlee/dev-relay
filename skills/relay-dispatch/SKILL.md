@@ -40,8 +40,10 @@ For background and parallel dispatch, see "Background & Parallel" section below.
 | `--dry-run` | Show plan without executing |
 | `--json` | Structured JSON output (for background dispatch) |
 
-Creates worktree → runs executor → collects result.
+Creates worktree → writes a relay run manifest → runs executor → collects result.
 Exits with non-zero code on failure.
+
+Each dispatch writes a manifest to `.relay/runs/<run-id>.md` in the target repo. The manifest is the new shared state surface for later lifecycle work.
 
 ### Timeout guidance
 
@@ -56,13 +58,21 @@ Exits with non-zero code on failure.
 After dispatch completes, confirm before proceeding to review:
 
 ```bash
-# Check dispatch result (JSON output includes status field)
-# status: "completed" → proceed to relay-review
-# status: "failed" → check error, re-dispatch or fix manually
+# Check dispatch result (JSON output includes status + run metadata)
+# status: "completed" + runState: "review_pending" → proceed to relay-review
+# status: "completed-with-warning" + runState: "review_pending" → inspect uncommitted work, then review
+# status: "failed" + runState: "escalated" → inspect error / manifest, then fix or re-dispatch
+
+# The JSON output also includes:
+# - runId
+# - manifestPath
+# - runState
 
 # Verify PR exists
 gh pr list --head <branch> --json number,url,title
 ```
+
+If you need to inspect or reuse the worktree after a successful run, use `--no-cleanup` or `--register`. The manifest is always kept in the target repo even when the worktree is removed.
 
 ### Handling Failures
 
@@ -116,7 +126,9 @@ ${CLAUDE_SKILL_DIR}/scripts/register-codex.js <repo> --worktree-path <path> -b <
 
 ## Worktree Cleanup
 
-Worktrees are auto-removed on successful dispatch. Use `--no-cleanup` to keep them.
+Worktrees are auto-removed on successful dispatch unless you pass `--no-cleanup` or `--register`.
+
+This is a temporary behavior. The run manifest persists either way, and a later lifecycle refactor is expected to move default cleanup later in the flow.
 
 To prune stale worktrees from failed/interrupted dispatches:
 ```bash
