@@ -1,6 +1,6 @@
 ---
 name: relay-merge
-argument-hint: "[PR-number]"
+argument-hint: "[run-id or PR-number]"
 description: Explicitly merge a ready-to-merge PR, clean up worktree/branch, close GitHub issues, and update sprint file if available.
 compatibility: Requires gh CLI and git.
 metadata:
@@ -36,10 +36,12 @@ This writes a `<!-- relay-review-skip -->` comment to the PR — maintaining aud
 ### 1. Merge + finalize cleanup
 
 ```bash
-node ${CLAUDE_SKILL_DIR}/scripts/finalize-run.js --repo . --pr "$PR_NUM" --merge-method squash --json
+RUN_ID=<run-id-from-dispatch>
+node ${CLAUDE_SKILL_DIR}/scripts/finalize-run.js --repo . --run-id "$RUN_ID" --merge-method squash --json
 ```
 
 This script:
+- re-checks the latest PR audit trail and blocks merge if `review.last_reviewed_sha` is stale for the current HEAD
 - merges the PR with `--delete-branch`
 - marks the manifest `merged`
 - best-effort closes the linked issue
@@ -47,6 +49,12 @@ This script:
 - records `cleanup.status` in the manifest
 
 If the retained worktree is dirty, merge still succeeds but cleanup is recorded as `failed` and the manifest moves to `next_action=manual_cleanup_required`.
+
+Emergency escape hatch:
+
+```bash
+node ${CLAUDE_SKILL_DIR}/scripts/finalize-run.js --repo . --run-id "$RUN_ID" --skip-review "hotfix" --json
+```
 
 ### 2. Sprint file update (if available)
 

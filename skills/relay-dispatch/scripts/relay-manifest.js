@@ -24,10 +24,10 @@ const CLEANUP_STATUSES = Object.freeze({
 });
 
 const ALLOWED_TRANSITIONS = Object.freeze({
-  [STATES.DRAFT]: new Set([STATES.DISPATCHED]),
-  [STATES.DISPATCHED]: new Set([STATES.REVIEW_PENDING, STATES.ESCALATED]),
-  [STATES.REVIEW_PENDING]: new Set([STATES.CHANGES_REQUESTED, STATES.READY_TO_MERGE, STATES.ESCALATED]),
-  [STATES.CHANGES_REQUESTED]: new Set([STATES.DISPATCHED]),
+  [STATES.DRAFT]: new Set([STATES.DISPATCHED, STATES.CLOSED]),
+  [STATES.DISPATCHED]: new Set([STATES.REVIEW_PENDING, STATES.ESCALATED, STATES.CLOSED]),
+  [STATES.REVIEW_PENDING]: new Set([STATES.CHANGES_REQUESTED, STATES.READY_TO_MERGE, STATES.ESCALATED, STATES.CLOSED]),
+  [STATES.CHANGES_REQUESTED]: new Set([STATES.DISPATCHED, STATES.CLOSED]),
   [STATES.READY_TO_MERGE]: new Set([STATES.MERGED, STATES.CLOSED]),
   [STATES.ESCALATED]: new Set([STATES.CLOSED]),
   [STATES.MERGED]: new Set(),
@@ -79,6 +79,10 @@ function getRunDir(repoRoot, runId) {
 
 function getManifestPath(repoRoot, runId) {
   return path.join(getRunsDir(repoRoot), `${runId}.md`);
+}
+
+function getEventsPath(repoRoot, runId) {
+  return path.join(getRunDir(repoRoot, runId), "events.jsonl");
 }
 
 function listManifestPaths(repoRoot) {
@@ -208,13 +212,10 @@ function sortKeyForManifest({ data, manifestPath }) {
   return data?.timestamps?.updated_at || data?.timestamps?.created_at || path.basename(manifestPath);
 }
 
-function findLatestManifestForBranch(repoRoot, branch) {
-  const candidates = listManifestPaths(repoRoot)
+function listManifestRecords(repoRoot) {
+  return listManifestPaths(repoRoot)
     .map((manifestPath) => ({ manifestPath, ...readManifest(manifestPath) }))
-    .filter(({ data }) => data?.git?.working_branch === branch)
     .sort((left, right) => sortKeyForManifest(right).localeCompare(sortKeyForManifest(left)));
-
-  return candidates[0] || null;
 }
 
 function validateTransition(fromState, toState) {
@@ -296,6 +297,7 @@ function createManifestSkeleton({
       base_branch: baseBranch,
       working_branch: branch,
       pr_number: null,
+      head_sha: null,
     },
     roles: {
       orchestrator,
@@ -320,6 +322,7 @@ function createManifestSkeleton({
       max_rounds: 20,
       latest_verdict: "pending",
       repeated_issue_count: 0,
+      last_reviewed_sha: null,
     },
     cleanup: createCleanupSkeleton(),
     timestamps: {
@@ -340,11 +343,12 @@ module.exports = {
   createManifestSkeleton,
   createRunId,
   ensureRunLayout,
-  findLatestManifestForBranch,
+  getEventsPath,
   getManifestPath,
   getRunDir,
   getRunsDir,
   inferIssueNumber,
+  listManifestRecords,
   listManifestPaths,
   parseFrontmatter,
   readManifest,

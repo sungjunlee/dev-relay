@@ -21,7 +21,20 @@ function setupRepo() {
   execFileSync("git", ["init", "-b", "main"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
   execFileSync("git", ["config", "user.name", "Relay Review Test"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
   execFileSync("git", ["config", "user.email", "relay-review@example.com"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
+  fs.writeFileSync(path.join(repoRoot, "README.md"), "base\n", "utf-8");
+  execFileSync("git", ["add", "README.md"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
+  execFileSync("git", ["commit", "-m", "init"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
+
   const runId = "issue-42-20260403010000000";
+  const worktreePath = path.join(repoRoot, "wt", "issue-42");
+  fs.mkdirSync(path.dirname(worktreePath), { recursive: true });
+  execFileSync("git", ["worktree", "add", worktreePath, "-b", "issue-42"], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+  });
+  fs.writeFileSync(path.join(worktreePath, "marker.txt"), "worktree\n", "utf-8");
+
   const manifestPath = ensureRunLayout(repoRoot, runId).manifestPath;
   let manifest = createManifestSkeleton({
     repoRoot,
@@ -29,12 +42,19 @@ function setupRepo() {
     branch: "issue-42",
     baseBranch: "main",
     issueNumber: 42,
-    worktreePath: path.join(repoRoot, "wt", "issue-42"),
+    worktreePath,
     orchestrator: "codex",
     worker: "codex",
     reviewer: "claude",
   });
   manifest = updateManifestState(manifest, STATES.DISPATCHED, "await_dispatch_result");
+  manifest = {
+    ...manifest,
+    git: {
+      ...(manifest.git || {}),
+      head_sha: execFileSync("git", ["-C", worktreePath, "rev-parse", "HEAD"], { encoding: "utf-8", stdio: "pipe" }).trim(),
+    },
+  };
   manifest = updateManifestState(manifest, STATES.REVIEW_PENDING, "run_review");
   writeManifest(manifestPath, manifest);
 
@@ -43,7 +63,17 @@ function setupRepo() {
   fs.writeFileSync(doneCriteriaPath, "# Done Criteria\n\n- Add smoke.txt\n- Do not touch auth\n", "utf-8");
   fs.writeFileSync(diffPath, "diff --git a/smoke.txt b/smoke.txt\n+ok\n", "utf-8");
 
-  return { repoRoot, manifestPath, runId, doneCriteriaPath, diffPath };
+  return { repoRoot, worktreePath, manifestPath, runId, doneCriteriaPath, diffPath };
+}
+
+function setReviewPending(manifestPath) {
+  const { data, body } = readManifest(manifestPath);
+  let updated = data;
+  if (updated.state === STATES.CHANGES_REQUESTED) {
+    updated = updateManifestState(updated, STATES.DISPATCHED, "await_dispatch_result");
+    updated = updateManifestState(updated, STATES.REVIEW_PENDING, "run_review");
+  }
+  writeManifest(manifestPath, updated, body);
 }
 
 function writeVerdict(repoRoot, name, verdict) {
@@ -140,6 +170,7 @@ test("pass verdict moves review_pending to ready_to_merge", () => {
   assert.equal(manifest.git.pr_number, 123);
   assert.equal(manifest.review.rounds, 1);
   assert.equal(manifest.review.latest_verdict, "lgtm");
+  assert.ok(manifest.review.last_reviewed_sha);
 });
 
 test("changes_requested verdict creates a re-dispatch artifact", () => {
@@ -188,6 +219,7 @@ test("changes_requested verdict creates a re-dispatch artifact", () => {
   assert.equal(manifest.next_action, "re_dispatch_requested_changes");
   assert.equal(manifest.review.rounds, 1);
   assert.equal(manifest.review.latest_verdict, "changes_requested");
+  assert.equal(manifest.review.repeated_issue_count, 1);
 });
 
 test("reviewer-script invocation can drive a round without --review-file", () => {
@@ -223,6 +255,7 @@ test("reviewer-script invocation can drive a round without --review-file", () =>
   const manifest = readManifest(manifestPath).data;
   assert.equal(manifest.state, STATES.READY_TO_MERGE);
   assert.equal(manifest.review.latest_verdict, "lgtm");
+  assert.ok(manifest.review.last_reviewed_sha);
 });
 
 test("invalid pass verdict is rejected", () => {
@@ -320,4 +353,129 @@ test("reviewer write policy violation escalates the manifest", () => {
   assert.equal(manifest.next_action, "inspect_review_failure");
   assert.equal(manifest.review.rounds, 1);
   assert.equal(manifest.review.latest_verdict, "policy_violation");
+  assert.ok(manifest.review.last_reviewed_sha);
+});
+
+test("reviewer runs against the retained worktree, not repo root", () => {
+  const { repoRoot, worktreePath, manifestPath, doneCriteriaPath, diffPath, runId } = setupRepo();
+  fs.writeFileSync(path.join(repoRoot, "marker.txt"), "repo-root\n", "utf-8");
+  fs.writeFileSync(path.join(worktreePath, "marker.txt"), "retained-worktree\n", "utf-8");
+
+  const reviewerScript = path.join(repoRoot, "reviewer-reads-marker.js");
+  fs.writeFileSync(reviewerScript, `#!/usr/bin/env node
+const fs = require("fs");
+const path = require("path");
+const args = process.argv.slice(2);
+const repoIndex = args.indexOf("--repo");
+const repo = repoIndex !== -1 ? args[repoIndex + 1] : process.cwd();
+const marker = fs.readFileSync(path.join(repo, "marker.txt"), "utf-8").trim();
+process.stdout.write(JSON.stringify({
+  verdict: marker === "retained-worktree" ? "pass" : "changes_requested",
+  summary: marker === "retained-worktree" ? "Read retained checkout" : "Wrong checkout",
+  contract_status: marker === "retained-worktree" ? "pass" : "fail",
+  quality_status: "pass",
+  next_action: marker === "retained-worktree" ? "ready_to_merge" : "changes_requested",
+  issues: marker === "retained-worktree" ? [] : [{
+    title: "Wrong checkout",
+    body: marker,
+    file: "marker.txt",
+    line: 1,
+    category: "contract",
+    severity: "high"
+  }],
+  rubric_scores: []
+}));
+`, "utf-8");
+  fs.chmodSync(reviewerScript, 0o755);
+
+  const stdout = execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--run-id", runId,
+    "--pr", "123",
+    "--done-criteria-file", doneCriteriaPath,
+    "--diff-file", diffPath,
+    "--reviewer-script", reviewerScript,
+    "--no-comment",
+    "--json",
+  ], { encoding: "utf-8" });
+
+  const result = JSON.parse(stdout);
+  assert.equal(result.state, STATES.READY_TO_MERGE);
+  assert.equal(result.reviewRepoPath, worktreePath);
+
+  const manifest = readManifest(manifestPath).data;
+  assert.equal(manifest.review.latest_verdict, "lgtm");
+});
+
+test("review runner enforces max_rounds before starting a new round", () => {
+  const { repoRoot, manifestPath, doneCriteriaPath, diffPath, runId } = setupRepo();
+  const { data, body } = readManifest(manifestPath);
+  data.review.rounds = 1;
+  data.review.max_rounds = 1;
+  writeManifest(manifestPath, data, body);
+
+  assert.throws(() => execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--run-id", runId,
+    "--pr", "123",
+    "--done-criteria-file", doneCriteriaPath,
+    "--diff-file", diffPath,
+    "--prepare-only",
+    "--json",
+  ], { encoding: "utf-8", stdio: "pipe" }), /Review round cap exceeded/);
+
+  const manifest = readManifest(manifestPath).data;
+  assert.equal(manifest.state, STATES.ESCALATED);
+  assert.equal(manifest.review.latest_verdict, "max_rounds_exceeded");
+});
+
+test("repeated identical issues escalate on the third consecutive round", () => {
+  const { repoRoot, manifestPath, doneCriteriaPath, diffPath, runId } = setupRepo();
+  const reviewFile = writeVerdict(repoRoot, "same-issue.json", {
+    verdict: "changes_requested",
+    summary: "Same issue persists.",
+    contract_status: "fail",
+    quality_status: "pass",
+    next_action: "changes_requested",
+    issues: [
+      {
+        title: "Still missing smoke file",
+        body: "The PR still does not add smoke.txt.",
+        file: "src/index.js",
+        line: 12,
+        category: "contract",
+        severity: "high",
+      },
+    ],
+    rubric_scores: [],
+  });
+
+  for (let round = 1; round <= 3; round += 1) {
+    const stdout = execFileSync("node", [
+      SCRIPT,
+      "--repo", repoRoot,
+      "--run-id", runId,
+      "--pr", "123",
+      "--done-criteria-file", doneCriteriaPath,
+      "--diff-file", diffPath,
+      "--review-file", reviewFile,
+      "--no-comment",
+      "--json",
+    ], { encoding: "utf-8" });
+    const result = JSON.parse(stdout);
+    if (round < 3) {
+      assert.equal(result.state, STATES.CHANGES_REQUESTED);
+      setReviewPending(manifestPath);
+    } else {
+      assert.equal(result.state, STATES.ESCALATED);
+      assert.equal(result.repeatedIssueCount, 3);
+    }
+  }
+
+  const manifest = readManifest(manifestPath).data;
+  assert.equal(manifest.state, STATES.ESCALATED);
+  assert.equal(manifest.review.latest_verdict, "escalated");
+  assert.equal(manifest.review.repeated_issue_count, 0);
 });

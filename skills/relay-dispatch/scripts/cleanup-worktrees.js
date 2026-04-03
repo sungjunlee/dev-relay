@@ -19,6 +19,7 @@ const {
   readManifest,
   writeManifest,
 } = require("./relay-manifest");
+const { appendRunEvent } = require("./relay-events");
 const { isTerminalState, runCleanup } = require("./relay-cleanup");
 
 const args = process.argv.slice(2);
@@ -89,6 +90,7 @@ function run() {
       worktree: data.paths?.worktree || null,
       ageHours,
       cleanupStatus,
+      closeCommand: `node skills/relay-dispatch/scripts/close-run.js --repo ${JSON.stringify(repoRoot)} --run-id ${JSON.stringify(data.run_id || path.basename(manifestPath, ".md"))} --reason ${JSON.stringify("stale_non_terminal_run")}`,
     };
 
     if (!all && updatedAt && updatedAt > cutoff) {
@@ -126,6 +128,16 @@ function run() {
 
     if (!dryRun) {
       writeManifest(manifestPath, cleanupResult.updatedData, body);
+      appendRunEvent(repoRoot, cleanupResult.updatedData.run_id, {
+        event: "cleanup_result",
+        state_from: cleanupResult.updatedData.state,
+        state_to: cleanupResult.updatedData.state,
+        head_sha: cleanupResult.updatedData.git?.head_sha || null,
+        round: cleanupResult.updatedData.review?.rounds || null,
+        reason: cleanupResult.summary.cleanupStatus === CLEANUP_STATUSES.SUCCEEDED
+          ? "cleanup_succeeded"
+          : cleanupResult.summary.error,
+      });
     }
 
     if (cleanupResult.summary.cleanupStatus === CLEANUP_STATUSES.SUCCEEDED) {
@@ -149,7 +161,7 @@ function run() {
     }
     if (result.staleOpen.length) {
       console.log("  stale open runs:");
-      result.staleOpen.forEach((entry) => console.log(`    ${entry.runId} (${entry.state}, ${entry.ageHours ?? "?"}h old)`));
+      result.staleOpen.forEach((entry) => console.log(`    ${entry.runId} (${entry.state}, ${entry.ageHours ?? "?"}h old) -> ${entry.closeCommand}`));
     }
     if (dryRun) {
       console.log("  dry-run: no changes written");

@@ -11,9 +11,13 @@
  * Usage:
  *   ./dispatch.js <repo-path> --branch <name> --prompt <task>  [options]
  *   ./dispatch.js <repo-path> --branch <name> --prompt-file <path> [options]
+ *   ./dispatch.js <repo-path> --run-id <id> --prompt <task> [options]
+ *   ./dispatch.js --manifest <path> --prompt-file <path> [options]
  *
  * Options:
  *   --branch, -b <name>    Branch name (required)
+ *   --run-id <id>          Resume an existing relay run
+ *   --manifest <path>      Resume an existing relay run from its manifest
  *   --prompt, -p <text>    Task prompt
  *   --prompt-file <path>   Read prompt from file (for large prompts)
  *   --executor, -e <name>  Executor to use (default: codex)
@@ -60,6 +64,8 @@ const {
   updateManifestState,
   writeManifest,
 } = require("./relay-manifest");
+const { resolveManifestRecord } = require("./relay-resolver");
+const { appendRunEvent } = require("./relay-events");
 
 // ---------------------------------------------------------------------------
 // Args
@@ -68,7 +74,7 @@ const {
 const args = process.argv.slice(2);
 
 const KNOWN_FLAGS = [
-  "--branch", "-b", "--prompt", "-p", "--prompt-file", "--executor", "-e",
+  "--branch", "-b", "--run-id", "--manifest", "--prompt", "-p", "--prompt-file", "--executor", "-e",
   "--model", "-m", "--sandbox", "--copy", "--copy-env", "--timeout",
   "--register", "--no-cleanup", "--dry-run", "--json", "--help", "-h",
 ];
@@ -76,8 +82,12 @@ const KNOWN_FLAGS = [
 if (!args.length || args.includes("--help") || args.includes("-h")) {
   console.log("Usage: dispatch.js <repo-path> --branch <name> --prompt <task> [options]");
   console.log("       dispatch.js <repo-path> --branch <name> --prompt-file <path> [options]");
+  console.log("       dispatch.js <repo-path> --run-id <id> --prompt <task> [options]");
+  console.log("       dispatch.js --manifest <path> --prompt-file <path> [options]");
   console.log("\nOptions:");
   console.log("  --branch, -b       Branch name (required)");
+  console.log("  --run-id           Resume an existing relay run");
+  console.log("  --manifest         Resume an existing relay run from its manifest");
   console.log("  --prompt, -p       Task prompt");
   console.log("  --prompt-file      Read prompt from file");
   console.log("  --executor, -e     Executor: codex (default)");
@@ -119,6 +129,8 @@ const repoPathRaw = args.find((a, i) => !consumedIndices.has(i) && !a.startsWith
 const REPO_PATH = path.resolve(repoPathRaw || ".");
 const PROJECT_NAME = path.basename(REPO_PATH);
 const BRANCH = getArg(["--branch", "-b"], undefined);
+const RUN_ID = getArg("--run-id", undefined);
+const MANIFEST_INPUT = getArg("--manifest", undefined);
 const PROMPT = getArg(["--prompt", "-p"], undefined);
 const PROMPT_FILE = getArg("--prompt-file", undefined);
 const EXECUTOR = getArg(["--executor", "-e"], "codex");
@@ -135,13 +147,19 @@ const REGISTER = hasFlag("--register");
 const NO_CLEANUP = hasFlag("--no-cleanup");
 const DRY_RUN = hasFlag("--dry-run");
 const JSON_OUT = hasFlag("--json");
+const RESUME_MODE = !!RUN_ID || !!MANIFEST_INPUT;
 
 // ---------------------------------------------------------------------------
 // Validation
 // ---------------------------------------------------------------------------
 
-if (!BRANCH) {
-  console.error("Error: --branch is required");
+if (RUN_ID && MANIFEST_INPUT) {
+  console.error("Error: use either --run-id or --manifest, not both");
+  process.exit(1);
+}
+
+if (!RESUME_MODE && !BRANCH) {
+  console.error("Error: --branch is required for new dispatches");
   process.exit(1);
 }
 
@@ -150,7 +168,7 @@ if (!PROMPT && !PROMPT_FILE) {
   process.exit(1);
 }
 
-if (!fs.existsSync(path.join(REPO_PATH, ".git"))) {
+if (!MANIFEST_INPUT && !fs.existsSync(path.join(REPO_PATH, ".git"))) {
   const msg = !fs.existsSync(REPO_PATH)
     ? `repo path does not exist: ${REPO_PATH}`
     : `not a git repository: ${REPO_PATH}`;
@@ -216,30 +234,84 @@ function main() {
   };
   const wtBase = WORKTREE_BASES[EXECUTOR] || path.join(os.tmpdir(), "dispatch-worktrees");
   const wtId = crypto.randomBytes(4).toString("hex");
-  const wtPath = path.join(wtBase, wtId, PROJECT_NAME);
+  let repoRoot = REPO_PATH;
+  let projectName = PROJECT_NAME;
+  let wtPath = path.join(wtBase, wtId, PROJECT_NAME);
   const resultFile = path.join(os.tmpdir(), `dispatch-${EXECUTOR}-${wtId}.txt`);
   const stdoutLog = path.join(os.tmpdir(), `dispatch-${EXECUTOR}-${wtId}.log`);
-  const issueNumber = inferIssueNumber(BRANCH);
-  const runId = createRunId({ issueNumber, branch: BRANCH });
-  const manifestPath = getManifestPath(REPO_PATH, runId);
-  const cleanupPolicy = "on_close";
+  let branch = BRANCH;
+  let runId = RUN_ID;
+  let manifestPath = MANIFEST_INPUT ? path.resolve(MANIFEST_INPUT) : null;
+  let cleanupPolicy = "on_close";
   let baseBranch = "main";
-  try {
-    baseBranch = git(REPO_PATH, "rev-parse", "--abbrev-ref", "HEAD") || "main";
-  } catch {}
+  let issueNumber = inferIssueNumber(branch);
+  let manifest;
+  let copiedFiles = [];
+  let createdWorktree = false;
 
-  if (fs.existsSync(wtPath)) {
-    console.error(`Error: worktree path already exists: ${wtPath}`);
-    process.exit(1);
+  if (RESUME_MODE) {
+    const manifestRecord = resolveManifestRecord({
+      repoRoot,
+      manifestPath: MANIFEST_INPUT,
+      runId: RUN_ID,
+    });
+    manifestPath = manifestRecord.manifestPath;
+    manifest = manifestRecord.data;
+    repoRoot = path.resolve(manifest.paths?.repo_root || repoRoot);
+    projectName = path.basename(repoRoot);
+    branch = manifest.git?.working_branch || branch;
+    runId = manifest.run_id || runId;
+    wtPath = manifest.paths?.worktree || null;
+    cleanupPolicy = manifest.policy?.cleanup || cleanupPolicy;
+    baseBranch = manifest.git?.base_branch || baseBranch;
+    issueNumber = manifest.issue?.number || inferIssueNumber(branch);
+
+    if (!fs.existsSync(path.join(repoRoot, ".git"))) {
+      console.error(`Error: manifest repo root is not a git repository: ${repoRoot}`);
+      process.exit(1);
+    }
+    if (manifest.state !== STATES.CHANGES_REQUESTED) {
+      console.error(`Error: same-run resume requires state='${STATES.CHANGES_REQUESTED}', got '${manifest.state}'`);
+      process.exit(1);
+    }
+    if (!branch) {
+      console.error(`Error: manifest ${manifestPath} is missing git.working_branch`);
+      process.exit(1);
+    }
+    if (!wtPath || !fs.existsSync(wtPath)) {
+      console.error(`Error: retained worktree is missing for run '${runId}': ${wtPath || "(unset)"}`);
+      process.exit(1);
+    }
+    try {
+      const currentBranch = git(wtPath, "rev-parse", "--abbrev-ref", "HEAD");
+      if (currentBranch !== branch) {
+        console.error(`Error: retained worktree HEAD is '${currentBranch}', expected '${branch}'`);
+        process.exit(1);
+      }
+    } catch (error) {
+      console.error(`Error: retained worktree is unusable: ${error.message}`);
+      process.exit(1);
+    }
+  } else {
+    runId = createRunId({ issueNumber, branch });
+    manifestPath = getManifestPath(repoRoot, runId);
+    try {
+      baseBranch = git(repoRoot, "rev-parse", "--abbrev-ref", "HEAD") || "main";
+    } catch {}
+    if (fs.existsSync(wtPath)) {
+      console.error(`Error: worktree path already exists: ${wtPath}`);
+      process.exit(1);
+    }
   }
 
   // --- Dry run ---
   if (DRY_RUN) {
-    const includeFiles = getWorktreeIncludeFiles(REPO_PATH);
+    const includeFiles = getWorktreeIncludeFiles(repoRoot);
     const plan = {
+      mode: RESUME_MODE ? "resume" : "new",
       runId,
       manifestPath,
-      executor: EXECUTOR, worktree: wtPath, branch: BRANCH,
+      executor: EXECUTOR, worktree: wtPath, branch,
       prompt: taskPrompt.slice(0, 200),
       model: MODEL, sandbox: SANDBOX, register: REGISTER,
       resultFile, stdoutLog, timeout: TIMEOUT, copyEnv: COPY_ENV,
@@ -251,10 +323,11 @@ function main() {
     } else {
       console.log(`  Run:      ${runId}`);
       console.log("Dry run:");
+      console.log(`  Mode:     ${RESUME_MODE ? "resume" : "new"}`);
       console.log(`  Executor: ${EXECUTOR}`);
-      console.log(`  Repo:     ${REPO_PATH}`);
+      console.log(`  Repo:     ${repoRoot}`);
       console.log(`  Worktree: ${wtPath}`);
-      console.log(`  Branch:   ${BRANCH}`);
+      console.log(`  Branch:   ${branch}`);
       console.log(`  Manifest: ${manifestPath}`);
       console.log(`  Prompt:   ${taskPrompt.slice(0, 80)}...`);
       console.log(`  Model:    ${MODEL || "(default)"}`);
@@ -272,48 +345,50 @@ function main() {
 
   // --- Cleanup on unexpected exit ---
   function cleanup() {
-    try { git(REPO_PATH, "worktree", "remove", "--force", wtPath); } catch {}
+    if (createdWorktree) {
+      try { git(repoRoot, "worktree", "remove", "--force", wtPath); } catch {}
+    }
     process.exit(1);
   }
   process.on("SIGINT", cleanup);
   process.on("SIGTERM", cleanup);
 
-  // --- Step 1: Create worktree ---
-  fs.mkdirSync(path.dirname(wtPath), { recursive: true });
-  try {
-    git(REPO_PATH, "worktree", "add", wtPath, "-b", BRANCH);
-  } catch {
+  if (!RESUME_MODE) {
+    fs.mkdirSync(path.dirname(wtPath), { recursive: true });
     try {
-      git(REPO_PATH, "worktree", "add", wtPath, BRANCH);
-    } catch (e) {
-      console.error(`Error: failed to create worktree for branch '${BRANCH}': ${e.message}`);
-      process.exit(1);
+      git(repoRoot, "worktree", "add", wtPath, "-b", branch);
+    } catch {
+      try {
+        git(repoRoot, "worktree", "add", wtPath, branch);
+      } catch (e) {
+        console.error(`Error: failed to create worktree for branch '${branch}': ${e.message}`);
+        process.exit(1);
+      }
     }
+    createdWorktree = true;
+
+    const copied = copyWorktreeFiles(repoRoot, wtPath, {
+      copyEnv: COPY_ENV,
+      copyFiles: COPY_FILES,
+      assertWithin,
+    });
+    copiedFiles = copied.copied;
+
+    manifest = createManifestSkeleton({
+      repoRoot,
+      runId,
+      branch,
+      baseBranch,
+      issueNumber,
+      worktreePath: wtPath,
+      orchestrator: process.env.RELAY_ORCHESTRATOR || "unknown",
+      worker: EXECUTOR,
+      reviewer: process.env.RELAY_REVIEWER || "unknown",
+      cleanupPolicy,
+    });
+    ensureRunLayout(repoRoot, runId);
+    writeManifest(manifestPath, manifest);
   }
-
-  // --- Step 2: Copy files (.worktreeinclude + explicit flags) ---
-  const { copied: copiedFiles } = copyWorktreeFiles(REPO_PATH, wtPath, {
-    copyEnv: COPY_ENV,
-    copyFiles: COPY_FILES,
-    assertWithin,
-  });
-
-  let manifest = createManifestSkeleton({
-    repoRoot: REPO_PATH,
-    runId,
-    branch: BRANCH,
-    baseBranch,
-    issueNumber,
-    worktreePath: wtPath,
-    orchestrator: process.env.RELAY_ORCHESTRATOR || "unknown",
-    worker: EXECUTOR,
-    reviewer: process.env.RELAY_REVIEWER || "unknown",
-    cleanupPolicy,
-  });
-  ensureRunLayout(REPO_PATH, runId);
-  writeManifest(manifestPath, manifest);
-  manifest = updateManifestState(manifest, STATES.DISPATCHED, "await_dispatch_result");
-  writeManifest(manifestPath, manifest);
 
   // --- Step 3: Execute task ---
   // Executor-specific: build command + args + handle quirks.
@@ -348,7 +423,7 @@ function main() {
     console.log(`Dispatching to ${EXECUTOR}...`);
     console.log(`  Run:      ${runId}`);
     console.log(`  Worktree: ${wtPath}`);
-    console.log(`  Branch:   ${BRANCH}`);
+    console.log(`  Branch:   ${branch}`);
     console.log(`  Manifest: ${manifestPath}`);
     if (copiedFiles.length) console.log(`  Copied:   ${copiedFiles.join(", ")}`);
     console.log(`  Result:   ${resultFile}`);
@@ -363,6 +438,24 @@ function main() {
   try {
     startHead = git(wtPath, "rev-parse", "HEAD");
   } catch {}
+
+  const dispatchFromState = manifest.state;
+  manifest = updateManifestState(manifest, STATES.DISPATCHED, "await_dispatch_result");
+  manifest = {
+    ...manifest,
+    git: {
+      ...(manifest.git || {}),
+      head_sha: startHead || null,
+    },
+  };
+  writeManifest(manifestPath, manifest);
+  appendRunEvent(repoRoot, runId, {
+    event: "dispatch_start",
+    state_from: dispatchFromState,
+    state_to: STATES.DISPATCHED,
+    head_sha: startHead || null,
+    reason: RESUME_MODE ? "same_run_resume" : "new_dispatch",
+  });
 
   // Redirect stdout to file to avoid buffer overflow on verbose output.
   const stdoutFd = fs.openSync(stdoutLog, "w");
@@ -396,8 +489,9 @@ function main() {
 
   // Only show commits created by this run (startHead..HEAD).
   let gitLog = "";
+  let currentHead = startHead;
   try {
-    const currentHead = git(wtPath, "rev-parse", "HEAD");
+    currentHead = git(wtPath, "rev-parse", "HEAD");
     if (startHead && currentHead !== startHead) {
       gitLog = git(wtPath, "log", "--oneline", `${startHead}..HEAD`);
     }
@@ -458,7 +552,23 @@ function main() {
     status === "failed" ? STATES.ESCALATED : STATES.REVIEW_PENDING,
     status === "failed" ? "inspect_dispatch_failure" : "run_review"
   );
+  manifest = {
+    ...manifest,
+    git: {
+      ...(manifest.git || {}),
+      head_sha: currentHead || startHead || null,
+    },
+  };
   writeManifest(manifestPath, manifest);
+  appendRunEvent(repoRoot, runId, {
+    event: "dispatch_result",
+    state_from: STATES.DISPATCHED,
+    state_to: manifest.state,
+    head_sha: currentHead || startHead || null,
+    reason: status === "failed"
+      ? `${RESUME_MODE ? "same_run_resume" : "new_dispatch"}:${error || "dispatch_failed"}`
+      : `${RESUME_MODE ? "same_run_resume" : "new_dispatch"}:${status}`,
+  });
 
   // --- Step 4.5: Optional app registration ---
   let threadId = null;
@@ -467,10 +577,10 @@ function main() {
     if (fs.existsSync(registerScript)) {
       try {
         const regOutput = execFileSync("node", [
-          registerScript, REPO_PATH,
+          registerScript, repoRoot,
           "--worktree-path", wtPath,
-          "-b", BRANCH,
-          "-t", `Dispatch: ${BRANCH}`,
+          "-b", branch,
+          "-t", `Dispatch: ${branch}`,
           "--json",
         ], { encoding: "utf-8", stdio: "pipe" });
         try {
@@ -492,7 +602,9 @@ function main() {
     status,
     executor: EXECUTOR,
     worktree: wtPath,
-    branch: BRANCH,
+    branch,
+    mode: RESUME_MODE ? "resume" : "new",
+    headSha: currentHead || startHead || null,
     resultFile,
     stdoutLog,
     elapsed: `${elapsed}s`,
@@ -534,7 +646,7 @@ function main() {
     }
     console.log(`\n  Review:      git -C ${shellQuote(wtPath)} log --oneline ${startHead ? startHead + "..HEAD" : ""}`);
     console.log(`  Diff:        git -C ${shellQuote(wtPath)} diff ${startHead ? startHead + "..HEAD" : "HEAD~1"}`);
-    console.log(`  Merge:       git merge ${BRANCH}`);
+    console.log(`  Merge:       git merge ${branch}`);
     console.log(`  Cleanup:     deferred (${cleanupPolicy})`);
     if (NO_CLEANUP) {
       console.log("  Note:        --no-cleanup is now a compatibility alias; worktrees are retained by default.");

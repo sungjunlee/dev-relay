@@ -1,10 +1,10 @@
 # Relay Scenario Tests
 
-Initial scenario matrix for the manifest foundation wave.
+Scenario matrix for the same-run lifecycle and reliability scorecard wave.
 
 ## Goal
 
-Exercise the parts that are already implemented, and separate them from behavior that is still planned.
+Exercise the implemented same-run lifecycle, fresh merge gate, append-only events, explicit close path, and derived reporting.
 
 ## Current Coverage
 
@@ -88,7 +88,7 @@ Expect:
 
 - all skill files parse as YAML
 
-### 5. Manifest state helper can promote a reviewed run to `ready_to_merge`
+### 5. Manifest resolver and state helper update the intended run
 
 Command:
 
@@ -98,11 +98,26 @@ node --test skills/relay-dispatch/scripts/update-manifest-state.test.js
 
 Expect:
 
-- branch lookup resolves the latest manifest for that branch
+- `run_id` resolves the intended manifest directly
+- ambiguous branch-only lookup fails instead of silently picking the newest run
 - helper updates `review_pending -> ready_to_merge`
-- helper persists `git.pr_number`, `review.rounds`, and `review.latest_verdict`
+- helper persists `git.pr_number`, `git.head_sha`, `review.rounds`, `review.latest_verdict`, and `review.last_reviewed_sha`
 
-### 6. Review runner validates structured verdicts and updates manifest state
+### 6. Same-run dispatch resume reuses the retained worktree
+
+Command:
+
+```bash
+node --test skills/relay-dispatch/scripts/dispatch.test.js
+```
+
+Expect:
+
+- a run in `changes_requested` resumes on the same worktree and manifest
+- re-dispatch keeps the same `run_id`
+- missing retained worktrees fail loudly without creating a replacement run
+
+### 7. Review runner validates structured verdicts and updates manifest state
 
 Command:
 
@@ -118,9 +133,12 @@ Expect:
 - changes-requested verdicts write a targeted `review-round-N-redispatch.md`
 - `--reviewer-script <path>` can drive the round without a separate `--review-file`
 - reviewer-written diffs are rejected and escalate the manifest with `latest_verdict=policy_violation`
+- retained-worktree-vs-repo-root divergence is covered
+- max-rounds enforcement is covered
+- repeated identical issues escalate on the third consecutive round
 - malformed verdicts are rejected instead of guessed
 
-### 7. Codex skill strict validation is still a known mismatch
+### 8. Codex skill strict validation is still a known mismatch
 
 Command:
 
@@ -138,7 +156,7 @@ Interpretation:
 - it is not a regression from the manifest foundation work
 - the actual YAML syntax issue in `relay-review/SKILL.md` is fixed
 
-### 8. Optional live adapter verification
+### 9. Optional live adapter verification
 
 Commands:
 
@@ -154,7 +172,7 @@ Current result:
 - live `review-runner --reviewer codex` can promote `review_pending -> ready_to_merge`
 - live `claude` adapter wiring is fixed, but the local machine still needs an authenticated `claude` CLI session
 
-### 9. Merge finalizer records cleanup success or failure
+### 10. Merge finalizer records cleanup success or failure
 
 Command:
 
@@ -166,10 +184,39 @@ Expect:
 
 - a clean retained worktree is removed after merge finalization
 - the merged local branch is deleted
+- stale or missing review blocks merge even when the manifest says `ready_to_merge`
+- explicit skip-review with a reason is allowed and audited
 - manifest state stays `merged` while `cleanup.status` becomes `succeeded`
 - dirty retained worktrees are preserved and become `manual_cleanup_required`
 
-### 10. Repo-local janitor cleans stale terminal runs only
+### 11. Close-run explicitly terminates stale non-terminal runs
+
+Command:
+
+```bash
+node --test skills/relay-dispatch/scripts/close-run.test.js
+```
+
+Expect:
+
+- non-terminal runs can transition to `closed` with a required reason
+- close appends lifecycle evidence and runs cleanup policy
+- dirty worktrees stay explicit follow-up
+
+### 12. Reliability report derives the initial scorecard from raw history
+
+Command:
+
+```bash
+node --test skills/relay-dispatch/scripts/reliability-report.test.js
+```
+
+Expect:
+
+- the report derives the initial 5 metrics from manifests + events only
+- no aggregate counters are stored in the manifest
+
+### 13. Repo-local janitor cleans stale terminal runs only
 
 Command:
 
@@ -180,11 +227,5 @@ node --test skills/relay-dispatch/scripts/cleanup-worktrees.test.js
 Expect:
 
 - stale `merged` runs are cleaned via their manifest metadata
-- stale non-terminal runs are reported but not deleted
+- stale non-terminal runs are reported with an explicit `close-run.js` command
 - cleanup results are written back to the manifest
-
-## Still Out of Scope
-
-- explicit close workflow for abandoned non-terminal runs
-
-Those belong to later issues in the lifecycle refactor.
