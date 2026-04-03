@@ -11,3 +11,6 @@ node_modules/
 # Environment
 .env
 .env.*
+
+# Relay runtime metadata
+.relay/

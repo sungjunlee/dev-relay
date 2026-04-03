@@ -37,11 +37,16 @@ For background and parallel dispatch, see "Background & Parallel" section below.
 | `--copy <files>` | Additional files to copy |
 | `--timeout` | Timeout in seconds (default: 1800) |
 | `--register` | Register session in executor's app (keeps worktree) |
+| `--no-cleanup` | Compatibility alias; worktree is retained by default |
 | `--dry-run` | Show plan without executing |
 | `--json` | Structured JSON output (for background dispatch) |
 
-Creates worktree → runs executor → collects result.
+Creates worktree → writes a relay run manifest → runs executor → collects result.
 Exits with non-zero code on failure.
+
+Each dispatch writes a manifest to `.relay/runs/<run-id>.md` in the target repo. The manifest is the new shared state surface for later lifecycle work.
+
+Current scope: dispatch, review, merge finalization, and stale janitor cleanup all read the same relay manifest contract.
 
 ### Timeout guidance
 
@@ -56,13 +61,22 @@ Exits with non-zero code on failure.
 After dispatch completes, confirm before proceeding to review:
 
 ```bash
-# Check dispatch result (JSON output includes status field)
-# status: "completed" → proceed to relay-review
-# status: "failed" → check error, re-dispatch or fix manually
+# Check dispatch result (JSON output includes status + run metadata)
+# status: "completed" + runState: "review_pending" → proceed to relay-review
+# status: "completed-with-warning" + runState: "review_pending" → inspect uncommitted work, then review
+# status: "failed" + runState: "escalated" → inspect error / manifest, then fix or re-dispatch
+
+# The JSON output also includes:
+# - runId
+# - manifestPath
+# - runState
+# - cleanupPolicy
 
 # Verify PR exists
 gh pr list --head <branch> --json number,url,title
 ```
+
+Successful dispatches retain the worktree by default. Use the returned `worktree` path, manifest, and branch to continue review or follow-up fixes without reconstructing state.
 
 ### Handling Failures
 
@@ -116,13 +130,15 @@ ${CLAUDE_SKILL_DIR}/scripts/register-codex.js <repo> --worktree-path <path> -b <
 
 ## Worktree Cleanup
 
-Worktrees are auto-removed on successful dispatch. Use `--no-cleanup` to keep them.
+Successful dispatches keep their worktree by default. Cleanup moves later in the lifecycle, typically after review or merge.
 
-To prune stale worktrees from failed/interrupted dispatches:
+`--no-cleanup` remains accepted as a compatibility alias. `--register` still matters because it also opens the retained worktree in the executor app.
+
+To prune stale retained worktrees safely from this repo:
 ```bash
-${CLAUDE_SKILL_DIR}/scripts/cleanup-worktrees.js              # remove worktrees > 24h old
-${CLAUDE_SKILL_DIR}/scripts/cleanup-worktrees.js --all         # remove all
-${CLAUDE_SKILL_DIR}/scripts/cleanup-worktrees.js --dry-run     # show what would be removed
+${CLAUDE_SKILL_DIR}/scripts/cleanup-worktrees.js --repo .              # clean terminal runs > 24h old
+${CLAUDE_SKILL_DIR}/scripts/cleanup-worktrees.js --repo . --all         # ignore age threshold
+${CLAUDE_SKILL_DIR}/scripts/cleanup-worktrees.js --repo . --dry-run     # show what would be removed
 ```
 
 ## Caveats
