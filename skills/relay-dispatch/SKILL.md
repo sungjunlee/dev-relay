@@ -45,6 +45,8 @@ Exits with non-zero code on failure.
 
 Each dispatch writes a manifest to `.relay/runs/<run-id>.md` in the target repo. The manifest is the new shared state surface for later lifecycle work.
 
+Current scope: dispatch writes and updates the manifest. Review and merge are not yet manifest-driven.
+
 ### Timeout guidance
 
 | Task type | Timeout | Rationale |

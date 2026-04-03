@@ -142,6 +142,8 @@ Creates an isolated git worktree, writes a relay run manifest, runs the executor
 **Timeout guidance:** 1800s for simple tasks, 3600s with self-review, 5400s for complex multi-file work.
 
 Dispatch now writes a run manifest to `.relay/runs/<run-id>.md` in the target repo. JSON output includes `runId`, `manifestPath`, and `runState`. A successful first-pass dispatch should usually end in `runState: review_pending`.
+
+At the moment, manifest state is written by dispatch only. Review and merge are not yet driven by the manifest; that lifecycle refactor is tracked separately.
 </details>
 
 ### Review — `/relay-review`

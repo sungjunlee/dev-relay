@@ -74,6 +74,8 @@ PR_NUM=$(gh pr list --head issue-<N> --json number -q '.[0].number')
 
 The manifest is written under `.relay/runs/` in the target repo. This is the new shared state surface for later review/merge lifecycle work.
 
+Current scope: dispatch writes the manifest. Review and merge still follow their existing PR-comment and gate-check flow.
+
 If sprint file exists, mark Plan item as in-flight: `[~] #42 OAuth2 flow → PR #89 (reviewing)`
 
 ## Step 4: Review (relay-review)
