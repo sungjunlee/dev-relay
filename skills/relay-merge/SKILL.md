@@ -21,6 +21,7 @@ ${CLAUDE_SKILL_DIR}/scripts/gate-check.js $PR_NUM
 
 - Exit 0 (LGTM) → PR is ready to merge; proceed only if the user wants to land it now
 - Exit 1 (no comment) → **STOP.** Run relay-review first
+- Exit 1 (stale LGTM) → **STOP.** Run relay-review again for the latest commit
 - Exit 1 (CHANGES_REQUESTED) → **STOP.** Re-dispatch or fix the branch first
 - Exit 1 (ESCALATED) → **STOP.** Show unresolved issues to user
 

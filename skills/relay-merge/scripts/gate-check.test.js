@@ -5,8 +5,12 @@ const path = require("path");
 
 const SCRIPT = path.join(__dirname, "gate-check.js");
 
-function runGateCheckDryRun(commentBodies) {
-  const input = JSON.stringify(commentBodies.map((body) => ({ body })));
+function runGateCheckDryRun(payload) {
+  const input = JSON.stringify(
+    Array.isArray(payload)
+      ? payload.map((body) => ({ body }))
+      : payload
+  );
   const result = spawnSync("node", [
     SCRIPT,
     "40",
@@ -45,6 +49,28 @@ test("gate-check blocks merge when a later review round requests changes", () =>
   assert.equal(result.json.status, "changes_requested");
   assert.equal(result.json.readyToMerge, false);
   assert.match(result.json.issues, /foo\.js:1/);
+});
+
+test("gate-check blocks stale LGTM comments when a newer commit exists", () => {
+  const result = runGateCheckDryRun({
+    comments: [
+      {
+        body: "<!-- relay-review -->\n## Relay Review\nVerdict: LGTM\nRounds: 1",
+        createdAt: "2026-04-03T08:00:00Z",
+      },
+    ],
+    commits: [
+      {
+        oid: "abc123",
+        committedDate: "2026-04-03T09:00:00Z",
+      },
+    ],
+  });
+
+  assert.equal(result.status, 1);
+  assert.equal(result.json.status, "stale");
+  assert.equal(result.json.readyToMerge, false);
+  assert.equal(result.json.latestCommit, "abc123");
 });
 
 test("gate-check still blocks escalated review comments", () => {
