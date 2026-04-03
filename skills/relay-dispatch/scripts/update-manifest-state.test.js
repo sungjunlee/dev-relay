@@ -74,6 +74,31 @@ test("resolveManifestRecord rejects ambiguous branch lookup", () => {
   );
 });
 
+test("resolveManifestRecord rejects conflicting branch and PR selectors", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-find-conflict-"));
+  const branchOnlyPath = writeReviewPendingManifest(repoRoot, createRunId({
+    branch: "issue-42",
+    timestamp: new Date("2026-04-03T00:00:00.000Z"),
+  }), "issue-42", "2026-04-03T00:00:00.000Z");
+  const prOnlyPath = writeReviewPendingManifest(repoRoot, createRunId({
+    branch: "issue-84",
+    timestamp: new Date("2026-04-03T00:10:00.000Z"),
+  }), "issue-84", "2026-04-03T00:10:00.000Z");
+
+  let branchOnlyManifest = readManifest(branchOnlyPath).data;
+  branchOnlyManifest.git.pr_number = 123;
+  writeManifest(branchOnlyPath, branchOnlyManifest);
+
+  let prOnlyManifest = readManifest(prOnlyPath).data;
+  prOnlyManifest.git.pr_number = 456;
+  writeManifest(prOnlyPath, prOnlyManifest);
+
+  assert.throws(
+    () => resolveManifestRecord({ repoRoot, branch: "issue-42", prNumber: 456 }),
+    /No relay manifest found/
+  );
+});
+
 test("update-manifest-state updates a manifest by run_id", () => {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-update-run-"));
   writeReviewPendingManifest(repoRoot, createRunId({

@@ -18,6 +18,10 @@ function filterByPr(records, prNumber) {
   return records.filter(({ data }) => Number(data?.git?.pr_number || 0) === Number(prNumber));
 }
 
+function hasStoredPrNumber(record) {
+  return record?.data?.git?.pr_number !== undefined && record?.data?.git?.pr_number !== null;
+}
+
 function findManifestByRunId(repoRoot, runId) {
   const matches = listManifestRecords(repoRoot)
     .filter(({ data, manifestPath }) => data?.run_id === runId || path.basename(manifestPath, ".md") === runId);
@@ -71,13 +75,8 @@ function resolveManifestRecord({
     matches = filterByPr(filterByBranch(allRecords, branch), prNumber);
     if (matches.length === 0) {
       const branchMatches = filterByBranch(allRecords, branch);
-      if (branchMatches.length === 1) {
+      if (branchMatches.length === 1 && !hasStoredPrNumber(branchMatches[0])) {
         matches = branchMatches;
-      } else {
-        const prMatches = filterByPr(allRecords, prNumber);
-        if (prMatches.length === 1) {
-          matches = prMatches;
-        }
       }
     }
   } else if (branch) {
@@ -93,5 +92,6 @@ module.exports = {
   filterByBranch,
   filterByPr,
   findManifestByRunId,
+  hasStoredPrNumber,
   resolveManifestRecord,
 };
