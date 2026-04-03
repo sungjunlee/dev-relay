@@ -32,12 +32,24 @@ def init_repo(name: str) -> pathlib.Path:
     return repo
 
 
-def read_manifest_from_stdout(stdout: str) -> tuple[str | None, str | None]:
+def read_dispatch_metadata(stdout: str) -> tuple[str | None, str | None, str | None]:
     manifest_match = re.search(r"Manifest: (.+)", stdout)
     state_match = re.search(r"Run state: ([a-z_]+)", stdout)
+    worktree_match = re.search(r"Worktree: (.+)", stdout)
     manifest_path = manifest_match.group(1).strip() if manifest_match else None
     run_state = state_match.group(1).strip() if state_match else None
-    return manifest_path, run_state
+    worktree_path = worktree_match.group(1).strip() if worktree_match else None
+    return manifest_path, run_state, worktree_path
+
+
+def cleanup_worktree(repo: pathlib.Path, worktree_path: str | None) -> bool:
+    if not worktree_path:
+        return False
+    worktree = pathlib.Path(worktree_path)
+    if not worktree.exists():
+        return False
+    run(["git", "worktree", "remove", "--force", str(worktree)], repo)
+    return not worktree.exists()
 
 
 def scenario_success() -> dict:
@@ -50,15 +62,18 @@ def scenario_success() -> dict:
         ["node", str(DISPATCH), str(repo), "-b", "issue-7", "--prompt", prompt, "--timeout", "300"],
         ROOT,
     )
-    manifest_path, run_state = read_manifest_from_stdout(result.stdout)
+    manifest_path, run_state, worktree_path = read_dispatch_metadata(result.stdout)
     manifest_text = pathlib.Path(manifest_path).read_text(encoding="utf-8") if manifest_path else ""
     smoke_exists = (repo / ".relay").exists()
     branch_tip = run(["git", "rev-parse", "--verify", "issue-7"], repo).stdout.strip()
+    worktree_exists = pathlib.Path(worktree_path).exists() if worktree_path else False
     passed = (
         result.returncode == 0
         and run_state == "review_pending"
         and "state: 'review_pending'" in manifest_text
         and bool(branch_tip)
+        and "cleanup: 'on_close'" in manifest_text
+        and worktree_exists
     )
     output = {
         "name": "success_with_commit",
@@ -66,11 +81,15 @@ def scenario_success() -> dict:
         "returncode": result.returncode,
         "run_state": run_state,
         "manifest_path": manifest_path,
+        "worktree_path": worktree_path,
         "manifest_contains_review_pending": "state: 'review_pending'" in manifest_text,
+        "manifest_contains_on_close_cleanup": "cleanup: 'on_close'" in manifest_text,
         "repo_has_manifest_dir": smoke_exists,
+        "worktree_exists_after_dispatch": worktree_exists,
         "branch_tip": branch_tip,
         "stdout_tail": result.stdout[-1200:],
     }
+    output["cleanup_succeeded"] = cleanup_worktree(repo, worktree_path)
     shutil.rmtree(repo.parent, ignore_errors=True)
     return output
 
@@ -85,12 +104,15 @@ def scenario_noop_failure() -> dict:
         ["node", str(DISPATCH), str(repo), "-b", "issue-8", "--prompt", prompt, "--timeout", "180"],
         ROOT,
     )
-    manifest_path, run_state = read_manifest_from_stdout(result.stdout)
+    manifest_path, run_state, worktree_path = read_dispatch_metadata(result.stdout)
     manifest_text = pathlib.Path(manifest_path).read_text(encoding="utf-8") if manifest_path else ""
+    worktree_exists = pathlib.Path(worktree_path).exists() if worktree_path else False
     passed = (
         result.returncode != 0
         and run_state == "escalated"
         and "state: 'escalated'" in manifest_text
+        and "cleanup: 'on_close'" in manifest_text
+        and worktree_exists
     )
     output = {
         "name": "noop_escalates",
@@ -98,9 +120,13 @@ def scenario_noop_failure() -> dict:
         "returncode": result.returncode,
         "run_state": run_state,
         "manifest_path": manifest_path,
+        "worktree_path": worktree_path,
         "manifest_contains_escalated": "state: 'escalated'" in manifest_text,
+        "manifest_contains_on_close_cleanup": "cleanup: 'on_close'" in manifest_text,
+        "worktree_exists_after_dispatch": worktree_exists,
         "stdout_tail": result.stdout[-1200:],
     }
+    output["cleanup_succeeded"] = cleanup_worktree(repo, worktree_path)
     shutil.rmtree(repo.parent, ignore_errors=True)
     return output
 

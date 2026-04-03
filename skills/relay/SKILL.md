@@ -103,8 +103,8 @@ relay-merge runs `gate-check.js` as its first step — this verifies the relay-r
 ```bash
 gh pr merge <PR-NUM> --squash
 gh issue close <N> -c "Resolved in PR #<PR-NUM>"
-# Worktree is auto-cleaned by dispatch.js on success.
-# If dispatch used --no-cleanup, run: git worktree remove <path> && git branch -d issue-<N>
+# Dispatch retains the worktree by default for review/follow-up work.
+# Cleanup later: git worktree remove <path> && git branch -d issue-<N>
 ```
 
 If sprint file exists, update it:

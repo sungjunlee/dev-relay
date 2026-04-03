@@ -2,7 +2,7 @@
 /**
  * Create a worktree and dispatch a task to an executor.
  *
- * Executor-agnostic orchestrator: worktree -> execute -> collect -> cleanup.
+ * Executor-agnostic orchestrator: worktree -> execute -> collect -> retain.
  * To add a new executor, add a branch in the "Execute task" section
  * and optionally create a register-{executor}.js for app integration.
  *
@@ -23,7 +23,7 @@
  *   --copy <file,...>      Additional files to copy
  *   --timeout <seconds>    Exec timeout (default: 1800)
  *   --register             Register session in executor's app (keeps worktree)
- *   --no-cleanup           Keep worktree after successful dispatch
+ *   --no-cleanup           Compatibility alias; worktree is retained by default
  *   --dry-run              Show plan without executing
  *   --json                 Output as JSON
  *
@@ -87,7 +87,7 @@ if (!args.length || args.includes("--help") || args.includes("-h")) {
   console.log("  --copy <files>     Additional files to copy (comma-separated)");
   console.log("  --timeout          Exec timeout in seconds (default: 1800)");
   console.log("  --register         Register session in executor's app (keeps worktree)");
-  console.log("  --no-cleanup       Keep worktree after successful dispatch");
+  console.log("  --no-cleanup       Compatibility alias; worktree is retained by default");
   console.log("  --dry-run          Show plan without executing");
   console.log("  --json             Output as JSON");
   process.exit(args.includes("--help") || args.includes("-h") ? 0 : 1);
@@ -222,7 +222,7 @@ function main() {
   const issueNumber = inferIssueNumber(BRANCH);
   const runId = createRunId({ issueNumber, branch: BRANCH });
   const manifestPath = getManifestPath(REPO_PATH, runId);
-  const cleanupPolicy = (NO_CLEANUP || REGISTER) ? "on_close" : "on_success";
+  const cleanupPolicy = "on_close";
   let baseBranch = "main";
   try {
     baseBranch = git(REPO_PATH, "rev-parse", "--abbrev-ref", "HEAD") || "main";
@@ -488,6 +488,7 @@ function main() {
     runId,
     manifestPath,
     runState: manifest.state,
+    cleanupPolicy,
     status,
     executor: EXECUTOR,
     worktree: wtPath,
@@ -534,16 +535,9 @@ function main() {
     console.log(`\n  Review:      git -C ${shellQuote(wtPath)} log --oneline ${startHead ? startHead + "..HEAD" : ""}`);
     console.log(`  Diff:        git -C ${shellQuote(wtPath)} diff ${startHead ? startHead + "..HEAD" : "HEAD~1"}`);
     console.log(`  Merge:       git merge ${BRANCH}`);
-  }
-
-  // --- Step 5: Cleanup worktree on success ---
-  // --register keeps the worktree for app session resumption.
-  if (status !== "failed" && !NO_CLEANUP && !REGISTER) {
-    try {
-      git(REPO_PATH, "worktree", "remove", "--force", wtPath);
-      if (!JSON_OUT) console.log(`\n  Worktree cleaned up.`);
-    } catch (e) {
-      if (!JSON_OUT) console.log(`\n  Warning: worktree cleanup failed: ${e.message.split("\n")[0]}`);
+    console.log(`  Cleanup:     deferred (${cleanupPolicy})`);
+    if (NO_CLEANUP) {
+      console.log("  Note:        --no-cleanup is now a compatibility alias; worktrees are retained by default.");
     }
   }
 

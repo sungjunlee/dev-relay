@@ -37,6 +37,7 @@ For background and parallel dispatch, see "Background & Parallel" section below.
 | `--copy <files>` | Additional files to copy |
 | `--timeout` | Timeout in seconds (default: 1800) |
 | `--register` | Register session in executor's app (keeps worktree) |
+| `--no-cleanup` | Compatibility alias; worktree is retained by default |
 | `--dry-run` | Show plan without executing |
 | `--json` | Structured JSON output (for background dispatch) |
 
@@ -69,12 +70,13 @@ After dispatch completes, confirm before proceeding to review:
 # - runId
 # - manifestPath
 # - runState
+# - cleanupPolicy
 
 # Verify PR exists
 gh pr list --head <branch> --json number,url,title
 ```
 
-If you need to inspect or reuse the worktree after a successful run, use `--no-cleanup` or `--register`. The manifest is always kept in the target repo even when the worktree is removed.
+Successful dispatches retain the worktree by default. Use the returned `worktree` path, manifest, and branch to continue review or follow-up fixes without reconstructing state.
 
 ### Handling Failures
 
@@ -128,9 +130,9 @@ ${CLAUDE_SKILL_DIR}/scripts/register-codex.js <repo> --worktree-path <path> -b <
 
 ## Worktree Cleanup
 
-Worktrees are auto-removed on successful dispatch unless you pass `--no-cleanup` or `--register`.
+Successful dispatches keep their worktree by default. Cleanup moves later in the lifecycle, typically after review or merge.
 
-This is a temporary behavior. The run manifest persists either way, and a later lifecycle refactor is expected to move default cleanup later in the flow.
+`--no-cleanup` remains accepted as a compatibility alias. `--register` still matters because it also opens the retained worktree in the executor app.
 
 To prune stale worktrees from failed/interrupted dispatches:
 ```bash

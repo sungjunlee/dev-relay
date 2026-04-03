@@ -36,8 +36,8 @@ This writes a `<!-- relay-review-skip -->` comment to the PR — maintaining aud
 ```bash
 gh pr merge $PR_NUM --squash
 gh issue close <number> -c "Resolved in PR #$PR_NUM"
-# Worktree is auto-cleaned by dispatch.js on success.
-# If dispatch used --no-cleanup: git worktree remove <worktree-path> && git branch -d <branch>
+# Dispatch retains the worktree by default.
+# Cleanup here: git worktree remove <worktree-path> && git branch -d <branch>
 ```
 
 ### 2. Sprint file update (if available)

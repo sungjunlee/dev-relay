@@ -135,13 +135,15 @@ Creates an isolated git worktree, writes a relay run manifest, runs the executor
 | `--copy` | Additional files to copy (comma-separated) | — |
 | `--timeout` | Timeout in seconds | `1800` |
 | `--register` | Register in executor app, keep worktree | `false` |
-| `--no-cleanup` | Keep worktree after completion | `false` |
+| `--no-cleanup` | Compatibility alias; worktree is already retained by default | `false` |
 | `--dry-run` | Print plan, don't execute | `false` |
 | `--json` | Structured JSON output | `false` |
 
 **Timeout guidance:** 1800s for simple tasks, 3600s with self-review, 5400s for complex multi-file work.
 
-Dispatch now writes a run manifest to `.relay/runs/<run-id>.md` in the target repo. JSON output includes `runId`, `manifestPath`, and `runState`. A successful first-pass dispatch should usually end in `runState: review_pending`.
+Dispatch now writes a run manifest to `.relay/runs/<run-id>.md` in the target repo. JSON output includes `runId`, `manifestPath`, `runState`, and `cleanupPolicy`. A successful first-pass dispatch should usually end in `runState: review_pending`.
+
+Successful dispatches retain their worktree by default so review, follow-up fixes, and manual inspection can continue in the same branch context.
 
 At the moment, manifest state is written by dispatch only. Review and merge are not yet driven by the manifest; that lifecycle refactor is tracked separately.
 </details>
@@ -175,7 +177,7 @@ After gate check passes:
 2. Close linked issue
 3. Update sprint file state (if using [dev-backlog](https://github.com/sungjunlee/dev-backlog))
 4. Create follow-up issues for deferred work
-5. Auto-cleanup worktree and remote branch
+5. Cleanup retained worktree and remote branch
 
 <details>
 <summary>Sprint file state transitions</summary>

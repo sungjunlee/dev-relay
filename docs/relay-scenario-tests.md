@@ -40,7 +40,10 @@ Expect:
 - command exit code `0`
 - `runState: review_pending`
 - manifest contains `state: 'review_pending'`
+- manifest contains `cleanup: 'on_close'`
 - target repo contains `.relay/runs/`
+- dispatched worktree still exists after the command returns
+- harness explicitly removes the retained worktree during teardown
 
 ### 3. Dispatch no-op failure writes manifest and ends in `escalated`
 
@@ -60,6 +63,9 @@ Expect:
 - command exit code non-zero
 - `runState: escalated`
 - manifest contains `state: 'escalated'`
+- manifest contains `cleanup: 'on_close'`
+- dispatched worktree still exists after the command returns
+- harness explicitly removes the retained worktree during teardown
 
 ### 4. Skill frontmatter is valid YAML
 
