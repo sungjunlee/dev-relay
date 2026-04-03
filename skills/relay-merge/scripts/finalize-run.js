@@ -116,6 +116,15 @@ function fetchGateContext(ghBin, repoPath, prNumber) {
   };
 }
 
+function fetchPrMergeState(ghBin, repoPath, prNumber) {
+  const raw = gh(ghBin, repoPath, "pr", "view", String(prNumber), "--json", "state,mergeCommit");
+  const parsed = JSON.parse(raw);
+  return {
+    state: parsed.state || null,
+    mergeCommitSha: parsed.mergeCommit?.oid || null,
+  };
+}
+
 function main() {
   const repoArg = getArg("--repo");
   let repoPath = path.resolve(repoArg || ".");
@@ -167,6 +176,7 @@ function main() {
 
   let updated = data;
   let mergePerformed = false;
+  let mergeRecovered = false;
   let issueClosed = false;
   let issueCloseWarning = null;
   let reviewGate = null;
@@ -205,8 +215,23 @@ function main() {
   }
 
   if (!skipMerge && data.state === STATES.READY_TO_MERGE) {
-    if (!dryRun) {
-      gh(ghBin, repoPath, "pr", "merge", String(prNumber), mergeFlag(mergeMethod), "--delete-branch");
+    let prMergeState = dryRun ? { state: "OPEN", mergeCommitSha: null } : fetchPrMergeState(ghBin, repoPath, prNumber);
+    if (!dryRun && prMergeState.state !== "MERGED") {
+      try {
+        gh(ghBin, repoPath, "pr", "merge", String(prNumber), mergeFlag(mergeMethod));
+        mergePerformed = true;
+        prMergeState = fetchPrMergeState(ghBin, repoPath, prNumber);
+      } catch (error) {
+        prMergeState = fetchPrMergeState(ghBin, repoPath, prNumber);
+        if (prMergeState.state !== "MERGED") {
+          throw error;
+        }
+        mergeRecovered = true;
+      }
+    } else if (!dryRun && prMergeState.state === "MERGED") {
+      mergeRecovered = true;
+    } else if (dryRun) {
+      mergePerformed = true;
     }
     updated = updateManifestState(updated, STATES.MERGED, "manual_cleanup_required");
     updated = {
@@ -216,7 +241,6 @@ function main() {
         head_sha: reviewGate?.latestCommit || updated.review?.last_reviewed_sha || updated.git?.head_sha || null,
       },
     };
-    mergePerformed = true;
     if (!dryRun) {
       appendRunEvent(repoPath, data.run_id, {
         event: "merge_finalize",
@@ -224,7 +248,9 @@ function main() {
         state_to: STATES.MERGED,
         head_sha: updated.git?.head_sha || null,
         round: updated.review?.rounds || null,
-        reason: skipReviewReason ? `skip_review:${skipReviewReason}` : mergeMethod,
+        reason: skipReviewReason
+          ? `skip_review:${skipReviewReason}`
+          : (mergeRecovered ? "already_merged" : mergeMethod),
       });
     }
   }
@@ -275,6 +301,7 @@ function main() {
     prNumber,
     issueNumber,
     mergePerformed,
+    mergeRecovered,
     mergeMethod,
     reviewGate,
     issueClosed,

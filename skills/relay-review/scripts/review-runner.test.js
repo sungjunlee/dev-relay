@@ -173,6 +173,38 @@ test("pass verdict moves review_pending to ready_to_merge", () => {
   assert.ok(manifest.review.last_reviewed_sha);
 });
 
+test("phase-1 pass verdict with quality_status=not_run is normalized", () => {
+  const { repoRoot, manifestPath, doneCriteriaPath, diffPath } = setupRepo();
+  const reviewFile = writeVerdict(repoRoot, "phase1-pass.json", {
+    verdict: "pass",
+    summary: "No blocking review issues found.",
+    contract_status: "pass",
+    quality_status: "not_run",
+    next_action: "ready_to_merge",
+    issues: [],
+    rubric_scores: [],
+  });
+
+  const stdout = execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--branch", "issue-42",
+    "--pr", "123",
+    "--done-criteria-file", doneCriteriaPath,
+    "--diff-file", diffPath,
+    "--review-file", reviewFile,
+    "--no-comment",
+    "--json",
+  ], { encoding: "utf-8" });
+
+  const result = JSON.parse(stdout);
+  assert.equal(result.state, STATES.READY_TO_MERGE);
+
+  const manifest = readManifest(manifestPath).data;
+  assert.equal(manifest.state, STATES.READY_TO_MERGE);
+  assert.equal(manifest.review.latest_verdict, "lgtm");
+});
+
 test("changes_requested verdict creates a re-dispatch artifact", () => {
   const { repoRoot, manifestPath, doneCriteriaPath, diffPath } = setupRepo();
   const reviewFile = writeVerdict(repoRoot, "changes.json", {

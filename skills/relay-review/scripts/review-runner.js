@@ -196,6 +196,7 @@ function buildPrompt({ round, prNumber, branch, issueNumber, doneCriteria, diffT
     "",
     "Validation rules:",
     '- If `verdict` is `pass`, then `issues` must be `[]` and `next_action` must be `ready_to_merge`.',
+    '- If `verdict` is `pass`, set both `contract_status` and `quality_status` to `pass`.',
     '- If `verdict` is `changes_requested`, include actionable issues with `file` and `line`, and set `next_action` to `changes_requested`.',
     '- If `verdict` is `escalated`, include the blocking issues or reason that automation should stop, and set `next_action` to `escalated`.',
     '- If no Score Log is available, set `rubric_scores` to `[]`.',
@@ -246,6 +247,19 @@ function validateRubricScore(score, index) {
 function validateReviewVerdict(data) {
   if (!data || typeof data !== "object" || Array.isArray(data)) {
     throw new Error("Review verdict must be a JSON object");
+  }
+
+  // Codex reviewers can return a phase-1 clean PASS with quality_status=not_run.
+  // Normalize that adapter mismatch so the review round can still close.
+  if (
+    data.verdict === "pass" &&
+    data.contract_status === "pass" &&
+    data.quality_status === "not_run" &&
+    Array.isArray(data.issues) &&
+    data.issues.length === 0 &&
+    data.next_action === "ready_to_merge"
+  ) {
+    data.quality_status = "pass";
   }
 
   if (!ALLOWED_VERDICTS.has(data.verdict)) {

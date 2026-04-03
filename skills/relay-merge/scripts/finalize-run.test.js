@@ -79,7 +79,13 @@ function branchExists(repoRoot, branch) {
   }
 }
 
-function writeFakeGh(logPath, { headRefName = "issue-42", comments = [], commits = [] } = {}) {
+function writeFakeGh(logPath, {
+  headRefName = "issue-42",
+  comments = [],
+  commits = [],
+  state = "OPEN",
+  mergeCommit = null,
+} = {}) {
   const ghPath = path.join(path.dirname(logPath), "fake-gh.js");
   fs.writeFileSync(ghPath, `#!/usr/bin/env node
 const fs = require("fs");
@@ -88,6 +94,8 @@ fs.appendFileSync(${JSON.stringify(logPath)}, args.join(" ") + "\\n", "utf-8");
 if (args[0] === "pr" && args[1] === "view") {
   process.stdout.write(JSON.stringify({
     headRefName: ${JSON.stringify(headRefName)},
+    state: ${JSON.stringify(state)},
+    mergeCommit: ${JSON.stringify(mergeCommit)},
     comments: ${JSON.stringify(comments)},
     commits: ${JSON.stringify(commits)}
   }));
@@ -147,8 +155,56 @@ test("finalize-run merges and cleans a ready run", () => {
 
   const ghLog = fs.readFileSync(logPath, "utf-8");
   assert.match(ghLog, /pr view 123 --json comments,commits/);
-  assert.match(ghLog, /pr merge 123 --squash --delete-branch/);
+  assert.match(ghLog, /pr merge 123 --squash/);
   assert.match(ghLog, /issue close 42 --comment Resolved in PR #123/);
+});
+
+test("finalize-run resumes cleanup when the PR is already merged", () => {
+  const { repoRoot, manifestPath, branch, worktreePath, headSha } = setupRepo();
+  const logPath = path.join(repoRoot, "gh.log");
+  const fakeGh = writeFakeGh(logPath, {
+    comments: [
+      {
+        body: "<!-- relay-review -->\n## Relay Review\nVerdict: LGTM\nRounds: 1",
+        createdAt: "2026-04-03T08:00:00Z",
+      },
+    ],
+    commits: [
+      {
+        oid: headSha,
+        committedDate: "2026-04-03T08:00:00Z",
+      },
+    ],
+    state: "MERGED",
+    mergeCommit: { oid: "merged-sha" },
+  });
+
+  const stdout = execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--branch", branch,
+    "--pr", "123",
+    "--json",
+  ], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+    env: { ...process.env, RELAY_GH_BIN: fakeGh },
+  });
+
+  const result = JSON.parse(stdout);
+  assert.equal(result.mergePerformed, false);
+  assert.equal(result.mergeRecovered, true);
+  assert.equal(result.state, STATES.MERGED);
+  assert.equal(result.nextAction, "done");
+  assert.equal(fs.existsSync(worktreePath), false);
+
+  const manifest = readManifest(manifestPath).data;
+  assert.equal(manifest.state, STATES.MERGED);
+  assert.equal(manifest.cleanup.status, "succeeded");
+
+  const ghLog = fs.readFileSync(logPath, "utf-8");
+  assert.doesNotMatch(ghLog, /pr merge 123 --squash/);
 });
 
 test("finalize-run preserves dirty worktrees and records manual cleanup follow-up", () => {
