@@ -51,6 +51,18 @@ const REVIEW_VERDICT_JSON_SCHEMA = {
       type: "array",
       items: {
         type: "object",
+        additionalProperties: false,
+        required: ["factor", "target", "observed", "status", "notes"],
+        properties: {
+          factor: { type: "string", minLength: 1 },
+          target: { type: "string", minLength: 1 },
+          observed: { type: "string", minLength: 1 },
+          status: {
+            type: "string",
+            enum: ["pass", "fail", "not_run"],
+          },
+          notes: { type: "string", minLength: 1 },
+        },
       },
     },
   },

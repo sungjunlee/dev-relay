@@ -48,6 +48,10 @@ Supported built-in adapters:
 - `--reviewer codex`
 - `--reviewer claude`
 
+Notes:
+- `codex` uses a read-only structured-output adapter.
+- `claude` requires an authenticated local Claude CLI session.
+
 4. Fallback path for unsupported environments or debugging:
 ```bash
 node ${CLAUDE_SKILL_DIR}/scripts/review-runner.js --repo . --branch "$BRANCH" --pr "$PR_NUM" --prepare-only --json
@@ -111,10 +115,12 @@ node ${CLAUDE_SKILL_DIR}/scripts/review-runner.js --repo . --branch "$BRANCH" --
 The runner:
 - validates the JSON verdict
 - optionally invokes the reviewer adapter itself when `--reviewer <name>` is used
+- rejects the round if the reviewer mutates the repo and escalates the manifest
 - writes the PR audit comment
 - updates the relay manifest to `ready_to_merge`, `changes_requested`, or `escalated`
 - writes `review-round-N-verdict.json`
 - writes `review-round-N-raw-response.txt` when it invoked the reviewer itself
+- writes `review-round-N-policy-violation.txt` if the reviewer changed files
 - writes `review-round-N-redispatch.md` when changes are requested
 
 <!-- NOTE: Final verdict comment format is still parsed by gate-check.js via /Verdict:\s*(LGTM|ESCALATED)/. -->

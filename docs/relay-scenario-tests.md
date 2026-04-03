@@ -117,6 +117,7 @@ Expect:
 - a changes-requested verdict updates `review_pending -> changes_requested`
 - changes-requested verdicts write a targeted `review-round-N-redispatch.md`
 - `--reviewer-script <path>` can drive the round without a separate `--review-file`
+- reviewer-written diffs are rejected and escalate the manifest with `latest_verdict=policy_violation`
 - malformed verdicts are rejected instead of guessed
 
 ### 7. Codex skill strict validation is still a known mismatch
@@ -137,10 +138,24 @@ Interpretation:
 - it is not a regression from the manifest foundation work
 - the actual YAML syntax issue in `relay-review/SKILL.md` is fixed
 
-## Out of Scope For These Tests
+### 8. Optional live adapter verification
 
-- live adapter verification against real `codex` / `claude` reviewer runs
-- reviewer no-write enforcement
+Commands:
+
+```bash
+node skills/relay-review/scripts/invoke-reviewer-codex.js --repo /tmp/review-fixture --prompt-file /tmp/review-prompt.md --json
+node skills/relay-review/scripts/review-runner.js --repo /tmp/review-fixture --branch issue-42 --pr 123 --done-criteria-file /tmp/done.md --diff-file /tmp/diff.patch --reviewer codex --no-comment --json
+node skills/relay-review/scripts/invoke-reviewer-claude.js --repo /tmp/review-fixture --prompt-file /tmp/review-prompt.md --json
+```
+
+Current result:
+
+- live `codex` adapter invocation returns schema-valid JSON
+- live `review-runner --reviewer codex` can promote `review_pending -> ready_to_merge`
+- live `claude` adapter wiring is fixed, but the local machine still needs an authenticated `claude` CLI session
+
+## Still Out of Scope
+
 - manifest-driven merge behavior
 
 Those belong to later issues in the lifecycle refactor.

@@ -94,6 +94,14 @@ function gh(repoPath, ...ghArgs) {
   });
 }
 
+function git(repoPath, ...gitArgs) {
+  return execFileSync("git", gitArgs, {
+    cwd: repoPath,
+    encoding: "utf-8",
+    stdio: "pipe",
+  });
+}
+
 function parsePositiveInt(value, label) {
   if (value === undefined) return undefined;
   const parsed = Number(value);
@@ -203,6 +211,8 @@ function buildPrompt({ round, prNumber, branch, issueNumber, doneCriteria, diffT
     '- If `verdict` is `pass`, then `issues` must be `[]` and `next_action` must be `ready_to_merge`.',
     '- If `verdict` is `changes_requested`, include actionable issues with `file` and `line`, and set `next_action` to `changes_requested`.',
     '- If `verdict` is `escalated`, include the blocking issues or reason that automation should stop, and set `next_action` to `escalated`.',
+    '- If no Score Log is available, set `rubric_scores` to `[]`.',
+    '- When `rubric_scores` is not empty, each entry must include `factor`, `target`, `observed`, `status`, and `notes`.',
   ].join("\n");
 }
 
@@ -228,6 +238,21 @@ function validateIssue(issue, index) {
   }
   if (!Number.isInteger(issue.line) || issue.line <= 0) {
     throw new Error(`${location}.line must be a positive integer`);
+  }
+}
+
+function validateRubricScore(score, index) {
+  const location = `rubric_scores[${index}]`;
+  if (!score || typeof score !== "object" || Array.isArray(score)) {
+    throw new Error(`${location} must be an object`);
+  }
+  for (const key of ["factor", "target", "observed", "notes"]) {
+    if (!String(score[key] || "").trim()) {
+      throw new Error(`${location}.${key} is required`);
+    }
+  }
+  if (!ALLOWED_STATUSES.has(score.status)) {
+    throw new Error(`${location}.status must be one of: ${Array.from(ALLOWED_STATUSES).join(", ")}`);
   }
 }
 
@@ -258,6 +283,7 @@ function validateReviewVerdict(data) {
     throw new Error("Review verdict rubric_scores must be an array");
   }
   data.issues.forEach(validateIssue);
+  data.rubric_scores.forEach(validateRubricScore);
 
   if (data.verdict === "pass") {
     if (data.next_action !== "ready_to_merge") {
@@ -406,6 +432,27 @@ function postComment(repoPath, prNumber, commentBody) {
   gh(repoPath, "pr", "comment", String(prNumber), "--body", commentBody);
 }
 
+function captureGitStatus(repoPath) {
+  return git(repoPath, "status", "--short", "--untracked-files=all").trim();
+}
+
+function applyPolicyViolationToManifest(data, round, prNumber) {
+  const updated = updateManifestState(data, STATES.ESCALATED, "inspect_review_failure");
+  return {
+    ...updated,
+    git: {
+      ...(updated.git || {}),
+      ...(prNumber ? { pr_number: prNumber } : {}),
+    },
+    review: {
+      ...(updated.review || {}),
+      rounds: round,
+      latest_verdict: "policy_violation",
+      repeated_issue_count: 0,
+    },
+  };
+}
+
 function resolveReviewerName(data, reviewerArg) {
   return reviewerArg || data.roles?.reviewer || process.env.RELAY_REVIEWER || "codex";
 }
@@ -532,6 +579,7 @@ function run() {
   if (reviewFile) {
     reviewText = readText(reviewFile);
   } else {
+    const statusBeforeReviewer = captureGitStatus(repoPath);
     const invoked = invokeReviewer({
       repoPath,
       promptPath,
@@ -539,6 +587,27 @@ function run() {
       reviewerScript,
       reviewerModel,
     });
+    const statusAfterReviewer = captureGitStatus(repoPath);
+    if (statusBeforeReviewer !== statusAfterReviewer) {
+      const violationPath = path.join(runDir, `review-round-${round}-policy-violation.txt`);
+      const violationText = [
+        "Reviewer write policy violation detected.",
+        "",
+        `Reviewer: ${reviewerName}`,
+        `Script: ${reviewerScript}`,
+        "",
+        "Status before reviewer:",
+        statusBeforeReviewer || "(clean)",
+        "",
+        "Status after reviewer:",
+        statusAfterReviewer || "(clean)",
+      ].join("\n");
+      writeText(violationPath, `${violationText}\n`);
+
+      const escalatedManifest = applyPolicyViolationToManifest(data, round, prNumber);
+      writeManifest(manifestPath, escalatedManifest, body);
+      throw new Error(`Reviewer write policy violation detected; manifest escalated and details saved to ${violationPath}`);
+    }
     const rawResponsePath = path.join(runDir, `review-round-${round}-raw-response.txt`);
     writeText(rawResponsePath, `${invoked.rawText}\n`);
     result.rawResponsePath = rawResponsePath;

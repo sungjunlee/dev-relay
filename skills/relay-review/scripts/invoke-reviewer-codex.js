@@ -28,10 +28,31 @@ function hasFlag(flag) {
   return args.includes(flag);
 }
 
+function readNonEmptyFile(filePath) {
+  if (!fs.existsSync(filePath)) return null;
+  const text = fs.readFileSync(filePath, "utf-8").trim();
+  return text || null;
+}
+
+function summarizeFailure(error) {
+  const stderr = String(error.stderr || "").trim();
+  const stdout = String(error.stdout || "").trim();
+  return stderr || stdout || error.message;
+}
+
+function ensureJsonText(text, label) {
+  try {
+    JSON.parse(text);
+  } catch (error) {
+    throw new Error(`${label} did not return valid JSON: ${error.message}`);
+  }
+}
+
 function main() {
   const repoPath = path.resolve(getArg("--repo") || ".");
   const promptFile = getArg("--prompt-file");
   const model = getArg("--model");
+  const codexBin = process.env.RELAY_CODEX_BIN || "codex";
 
   if (!promptFile) {
     throw new Error("--prompt-file is required");
@@ -56,6 +77,7 @@ function main() {
     const execArgs = [
       "exec",
       "-C", repoPath,
+      "--ephemeral",
       "--sandbox", "read-only",
       "--color", "never",
       "--output-schema", schemaPath,
@@ -64,14 +86,25 @@ function main() {
     if (model) execArgs.push("-m", model);
     execArgs.push(fullPrompt);
 
-    execFileSync("codex", execArgs, {
-      cwd: repoPath,
-      encoding: "utf-8",
-      stdio: "pipe",
-      maxBuffer: 10 * 1024 * 1024,
-    });
+    try {
+      execFileSync(codexBin, execArgs, {
+        cwd: repoPath,
+        encoding: "utf-8",
+        stdio: "pipe",
+        maxBuffer: 10 * 1024 * 1024,
+      });
+    } catch (error) {
+      const recovered = readNonEmptyFile(resultPath);
+      if (!recovered) {
+        throw new Error(`Codex reviewer failed: ${summarizeFailure(error)}`);
+      }
+    }
 
-    const result = fs.readFileSync(resultPath, "utf-8").trim();
+    const result = readNonEmptyFile(resultPath);
+    if (!result) {
+      throw new Error("Codex reviewer did not produce a structured result");
+    }
+    ensureJsonText(result, "Codex reviewer");
     if (hasFlag("--json")) {
       console.log(result);
     } else {

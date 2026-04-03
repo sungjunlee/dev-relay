@@ -18,6 +18,9 @@ const SCRIPT = path.join(__dirname, "review-runner.js");
 
 function setupRepo() {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-runner-"));
+  execFileSync("git", ["init", "-b", "main"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
+  execFileSync("git", ["config", "user.name", "Relay Review Test"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
+  execFileSync("git", ["config", "user.email", "relay-review@example.com"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
   const runId = "issue-42-20260403010000000";
   const manifestPath = ensureRunLayout(repoRoot, runId).manifestPath;
   let manifest = createManifestSkeleton({
@@ -52,6 +55,22 @@ function writeVerdict(repoRoot, name, verdict) {
 function writeReviewerScript(repoRoot, name, verdict) {
   const filePath = path.join(repoRoot, name);
   const body = `#!/usr/bin/env node
+process.stdout.write(${JSON.stringify(JSON.stringify(verdict))});
+`;
+  fs.writeFileSync(filePath, body, "utf-8");
+  fs.chmodSync(filePath, 0o755);
+  return filePath;
+}
+
+function writeMutatingReviewerScript(repoRoot, name, verdict) {
+  const filePath = path.join(repoRoot, name);
+  const body = `#!/usr/bin/env node
+const fs = require("fs");
+const path = require("path");
+const args = process.argv.slice(2);
+const repoIndex = args.indexOf("--repo");
+const repo = repoIndex !== -1 ? args[repoIndex + 1] : process.cwd();
+fs.writeFileSync(path.join(repo, "reviewer-mutated.txt"), "bad\\n", "utf-8");
 process.stdout.write(${JSON.stringify(JSON.stringify(verdict))});
 `;
   fs.writeFileSync(filePath, body, "utf-8");
@@ -238,4 +257,67 @@ test("invalid pass verdict is rejected", () => {
     "--no-comment",
     "--json",
   ], { encoding: "utf-8", stdio: "pipe" }), /PASS verdict must not include issues/);
+});
+
+test("invalid rubric score entry is rejected", () => {
+  const { repoRoot, doneCriteriaPath, diffPath } = setupRepo();
+  const reviewFile = writeVerdict(repoRoot, "invalid-rubric.json", {
+    verdict: "pass",
+    summary: "Looks good.",
+    contract_status: "pass",
+    quality_status: "pass",
+    next_action: "ready_to_merge",
+    issues: [],
+    rubric_scores: [
+      {
+        factor: "Contract coverage",
+        target: ">= 8",
+        observed: "9",
+        status: "pass",
+      },
+    ],
+  });
+
+  assert.throws(() => execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--branch", "issue-42",
+    "--pr", "123",
+    "--done-criteria-file", doneCriteriaPath,
+    "--diff-file", diffPath,
+    "--review-file", reviewFile,
+    "--no-comment",
+    "--json",
+  ], { encoding: "utf-8", stdio: "pipe" }), /rubric_scores\[0\]\.notes is required/);
+});
+
+test("reviewer write policy violation escalates the manifest", () => {
+  const { repoRoot, manifestPath, doneCriteriaPath, diffPath } = setupRepo();
+  const reviewerScript = writeMutatingReviewerScript(repoRoot, "reviewer-mutates.js", {
+    verdict: "pass",
+    summary: "This should not be trusted.",
+    contract_status: "pass",
+    quality_status: "pass",
+    next_action: "ready_to_merge",
+    issues: [],
+    rubric_scores: [],
+  });
+
+  assert.throws(() => execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--branch", "issue-42",
+    "--pr", "123",
+    "--done-criteria-file", doneCriteriaPath,
+    "--diff-file", diffPath,
+    "--reviewer-script", reviewerScript,
+    "--no-comment",
+    "--json",
+  ], { encoding: "utf-8", stdio: "pipe" }), /Reviewer write policy violation detected/);
+
+  const manifest = readManifest(manifestPath).data;
+  assert.equal(manifest.state, STATES.ESCALATED);
+  assert.equal(manifest.next_action, "inspect_review_failure");
+  assert.equal(manifest.review.rounds, 1);
+  assert.equal(manifest.review.latest_verdict, "policy_violation");
 });

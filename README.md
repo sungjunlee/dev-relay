@@ -146,7 +146,7 @@ Dispatch now writes a run manifest to `.relay/runs/<run-id>.md` in the target re
 
 Successful dispatches retain their worktree by default so review, follow-up fixes, and manual inspection can continue in the same branch context.
 
-Dispatch, review, and merge helpers now all have manifest-aware entry points. The remaining lifecycle gap is the reviewer invocation itself, which is still pluggable rather than fully automated inside the review runner.
+Dispatch, review, and merge helpers now all have manifest-aware entry points. `review-runner.js` can invoke built-in `codex` and `claude` reviewer adapters directly, while still allowing `--reviewer-script` overrides for unsupported environments or debugging.
 </details>
 
 ### Review — `/relay-review`
@@ -168,7 +168,7 @@ Verdict: LGTM           # or
 Verdict: ESCALATED      # with specific issues and file:line references
 ```
 
-If changes are requested, the runner also writes a targeted `review-round-N-redispatch.md` artifact for the next worker pass. When the runner invoked the reviewer itself, it also saves `review-round-N-raw-response.txt` for debugging.
+If changes are requested, the runner also writes a targeted `review-round-N-redispatch.md` artifact for the next worker pass. When the runner invoked the reviewer itself, it saves `review-round-N-raw-response.txt` for debugging and escalates the run if the reviewer mutated the repo.
 
 ### Merge — `/relay-merge`
 

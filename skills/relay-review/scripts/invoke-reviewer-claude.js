@@ -27,10 +27,25 @@ function hasFlag(flag) {
   return args.includes(flag);
 }
 
+function summarizeFailure(error) {
+  const stderr = String(error.stderr || "").trim();
+  const stdout = String(error.stdout || "").trim();
+  return stderr || stdout || error.message;
+}
+
+function ensureJsonText(text, label) {
+  try {
+    JSON.parse(text);
+  } catch (error) {
+    throw new Error(`${label} did not return valid JSON: ${error.message}`);
+  }
+}
+
 function main() {
   const repoPath = path.resolve(getArg("--repo") || ".");
   const promptFile = getArg("--prompt-file");
   const model = getArg("--model");
+  const claudeBin = process.env.RELAY_CLAUDE_BIN || "claude";
 
   if (!promptFile) {
     throw new Error("--prompt-file is required");
@@ -47,19 +62,35 @@ function main() {
 
   const execArgs = [
     "-p",
+    "--bare",
+    "--no-session-persistence",
     "--output-format", "text",
     "--json-schema", JSON.stringify(REVIEW_VERDICT_JSON_SCHEMA),
-    "--tools", "",
+    "--allowedTools=Read",
   ];
   if (model) execArgs.push("--model", model);
   execArgs.push(fullPrompt);
 
-  const result = execFileSync("claude", execArgs, {
-    cwd: repoPath,
-    encoding: "utf-8",
-    stdio: "pipe",
-    maxBuffer: 10 * 1024 * 1024,
-  }).trim();
+  let result;
+  try {
+    result = execFileSync(claudeBin, execArgs, {
+      cwd: repoPath,
+      encoding: "utf-8",
+      stdio: "pipe",
+      maxBuffer: 10 * 1024 * 1024,
+    }).trim();
+  } catch (error) {
+    const recovered = String(error.stdout || "").trim();
+    if (!recovered) {
+      throw new Error(`Claude reviewer failed: ${summarizeFailure(error)}`);
+    }
+    result = recovered;
+  }
+
+  if (!result) {
+    throw new Error("Claude reviewer did not produce a structured result");
+  }
+  ensureJsonText(result, "Claude reviewer");
 
   if (hasFlag("--json")) {
     console.log(result);

@@ -91,7 +91,7 @@ Invoke **relay-review** in an isolated context (no planning bias). The review ru
 
 - **Phase 1 — Spec Compliance:** Done Criteria faithfulness, stubs, security, integration, rubric re-verification. Must pass before Phase 2.
 - **Phase 2 — Code Quality:** Code review + simplification on changed files. Issues re-dispatch back to Phase 1.
-- **Runner:** `scripts/review-runner.js` can invoke `codex` or `claude` as an isolated reviewer, validates structured verdicts, posts the PR comment, and updates manifest state
+- **Runner:** `scripts/review-runner.js` can invoke `codex` or `claude` as an isolated reviewer, rejects reviewer-written diffs, posts the PR comment, and updates manifest state
 
 The rubric from relay-plan anchors each iteration — prevents context drift across rounds. Safety cap: 20 rounds (most PRs converge in 1-3).
 
