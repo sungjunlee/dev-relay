@@ -16,6 +16,13 @@ const STATES = Object.freeze({
   CLOSED: "closed",
 });
 
+const CLEANUP_STATUSES = Object.freeze({
+  PENDING: "pending",
+  SUCCEEDED: "succeeded",
+  FAILED: "failed",
+  SKIPPED: "skipped",
+});
+
 const ALLOWED_TRANSITIONS = Object.freeze({
   [STATES.DRAFT]: new Set([STATES.DISPATCHED]),
   [STATES.DISPATCHED]: new Set([STATES.REVIEW_PENDING, STATES.ESCALATED]),
@@ -29,6 +36,18 @@ const ALLOWED_TRANSITIONS = Object.freeze({
 
 function nowIso() {
   return new Date().toISOString();
+}
+
+function createCleanupSkeleton() {
+  return {
+    status: CLEANUP_STATUSES.PENDING,
+    last_attempted_at: null,
+    cleaned_at: null,
+    worktree_removed: false,
+    branch_deleted: false,
+    prune_ran: false,
+    error: null,
+  };
 }
 
 function slugify(value) {
@@ -223,6 +242,31 @@ function updateManifestState(data, toState, nextAction) {
   };
 }
 
+function validateCleanupStatus(status) {
+  if (!Object.values(CLEANUP_STATUSES).includes(status)) {
+    throw new Error(`Unknown relay cleanup status: ${status}`);
+  }
+}
+
+function updateManifestCleanup(data, cleanupPatch = {}, nextAction = data.next_action) {
+  const nextCleanup = {
+    ...createCleanupSkeleton(),
+    ...(data.cleanup || {}),
+    ...cleanupPatch,
+  };
+  validateCleanupStatus(nextCleanup.status);
+
+  return {
+    ...data,
+    next_action: nextAction,
+    cleanup: nextCleanup,
+    timestamps: {
+      ...(data.timestamps || {}),
+      updated_at: nowIso(),
+    },
+  };
+}
+
 function createManifestSkeleton({
   repoRoot,
   runId,
@@ -277,6 +321,7 @@ function createManifestSkeleton({
       latest_verdict: "pending",
       repeated_issue_count: 0,
     },
+    cleanup: createCleanupSkeleton(),
     timestamps: {
       created_at: createdAt,
       updated_at: createdAt,
@@ -286,10 +331,12 @@ function createManifestSkeleton({
 
 module.exports = {
   ALLOWED_TRANSITIONS,
+  CLEANUP_STATUSES,
   NOTES_TEMPLATE,
   RELAY_VERSION,
   RUNS_DIR,
   STATES,
+  createCleanupSkeleton,
   createManifestSkeleton,
   createRunId,
   ensureRunLayout,
@@ -301,6 +348,7 @@ module.exports = {
   listManifestPaths,
   parseFrontmatter,
   readManifest,
+  updateManifestCleanup,
   updateManifestState,
   validateTransition,
   writeManifest,

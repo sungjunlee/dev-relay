@@ -102,6 +102,15 @@ review:
   latest_verdict: changes_requested
   repeated_issue_count: 0
 
+cleanup:
+  status: pending
+  last_attempted_at: null
+  cleaned_at: null
+  worktree_removed: false
+  branch_deleted: false
+  prune_ran: false
+  error: null
+
 timestamps:
   created_at: 2026-04-02T10:30:00Z
   updated_at: 2026-04-02T11:05:00Z
@@ -136,6 +145,7 @@ The initial schema should stay minimal.
 | `anchor.*` | Immutable review anchor metadata | planner/init |
 | `review.rounds` | Round counter | review runner |
 | `review.latest_verdict` | Latest structured outcome | review runner |
+| `cleanup.*` | Cleanup outcome and residue | merge/janitor |
 
 ## Source of Truth vs Derived Data
 
@@ -249,6 +259,7 @@ Responsible for:
 - performing the explicit merge
 - transitioning to `merged`
 - triggering cleanup according to policy
+- recording cleanup success or failure without overloading lifecycle state
 
 ## Review Contract
 
@@ -327,6 +338,7 @@ Implication:
 
 - worktrees survive dispatch success
 - cleanup happens after merge or explicit close
+- cleanup result lives in `cleanup.*`, not by forcing `merged -> closed`
 
 Future extensions may allow:
 

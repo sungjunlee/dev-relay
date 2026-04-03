@@ -93,3 +93,31 @@ test("update-manifest-state updates the latest manifest for a branch", () => {
   assert.equal(updated.review.rounds, 2);
   assert.equal(updated.review.latest_verdict, "lgtm");
 });
+
+test("update-manifest-state uses manual cleanup follow-up for merged runs", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-update-merged-"));
+  const latestPath = writeReviewPendingManifest(repoRoot, createRunId({
+    branch: "issue-42",
+    timestamp: new Date("2026-04-03T01:00:00.000Z"),
+  }), "issue-42", "2026-04-03T01:00:00.000Z");
+
+  let manifest = readManifest(latestPath).data;
+  manifest = updateManifestState(manifest, STATES.READY_TO_MERGE, "await_explicit_merge");
+  writeManifest(latestPath, manifest);
+
+  const stdout = execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--branch", "issue-42",
+    "--state", STATES.MERGED,
+    "--json",
+  ], { encoding: "utf-8" });
+
+  const result = JSON.parse(stdout);
+  assert.equal(result.state, STATES.MERGED);
+  assert.equal(result.nextAction, "manual_cleanup_required");
+
+  const updated = readManifest(latestPath).data;
+  assert.equal(updated.state, STATES.MERGED);
+  assert.equal(updated.next_action, "manual_cleanup_required");
+});

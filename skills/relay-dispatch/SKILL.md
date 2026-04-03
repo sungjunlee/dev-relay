@@ -46,7 +46,7 @@ Exits with non-zero code on failure.
 
 Each dispatch writes a manifest to `.relay/runs/<run-id>.md` in the target repo. The manifest is the new shared state surface for later lifecycle work.
 
-Current scope: dispatch writes and updates the manifest. Review and merge are not yet manifest-driven.
+Current scope: dispatch, review, merge finalization, and stale janitor cleanup all read the same relay manifest contract.
 
 ### Timeout guidance
 
@@ -134,11 +134,11 @@ Successful dispatches keep their worktree by default. Cleanup moves later in the
 
 `--no-cleanup` remains accepted as a compatibility alias. `--register` still matters because it also opens the retained worktree in the executor app.
 
-To prune stale worktrees from failed/interrupted dispatches:
+To prune stale retained worktrees safely from this repo:
 ```bash
-${CLAUDE_SKILL_DIR}/scripts/cleanup-worktrees.js              # remove worktrees > 24h old
-${CLAUDE_SKILL_DIR}/scripts/cleanup-worktrees.js --all         # remove all
-${CLAUDE_SKILL_DIR}/scripts/cleanup-worktrees.js --dry-run     # show what would be removed
+${CLAUDE_SKILL_DIR}/scripts/cleanup-worktrees.js --repo .              # clean terminal runs > 24h old
+${CLAUDE_SKILL_DIR}/scripts/cleanup-worktrees.js --repo . --all         # ignore age threshold
+${CLAUDE_SKILL_DIR}/scripts/cleanup-worktrees.js --repo . --dry-run     # show what would be removed
 ```
 
 ## Caveats

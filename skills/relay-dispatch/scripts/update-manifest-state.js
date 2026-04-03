@@ -79,7 +79,7 @@ function defaultNextAction(state) {
     case STATES.READY_TO_MERGE:
       return "await_explicit_merge";
     case STATES.MERGED:
-      return "cleanup_and_close";
+      return "manual_cleanup_required";
     case STATES.ESCALATED:
       return "inspect_review_failure";
     case STATES.CLOSED:

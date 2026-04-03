@@ -31,16 +31,20 @@ This writes a `<!-- relay-review-skip -->` comment to the PR — maintaining aud
 
 **Do NOT merge without running gate-check.** This is the audit trail that review actually happened (or was intentionally skipped with documented reason).
 
-### 1. Merge + manifest update
+### 1. Merge + finalize cleanup
 
 ```bash
-BRANCH=$(gh pr view $PR_NUM --json headRefName -q '.headRefName')
-gh pr merge $PR_NUM --squash
-node ${CLAUDE_SKILL_DIR}/../relay-dispatch/scripts/update-manifest-state.js --repo . --branch "$BRANCH" --state merged --pr-number "$PR_NUM" --verdict lgtm
-gh issue close <number> -c "Resolved in PR #$PR_NUM"
-# Dispatch retains the worktree by default.
-# Cleanup here: git worktree remove <worktree-path> && git branch -d <branch>
+node ${CLAUDE_SKILL_DIR}/scripts/finalize-run.js --repo . --pr "$PR_NUM" --merge-method squash --json
 ```
+
+This script:
+- merges the PR with `--delete-branch`
+- marks the manifest `merged`
+- best-effort closes the linked issue
+- removes the retained worktree, deletes the local merged branch, and runs `git worktree prune`
+- records `cleanup.status` in the manifest
+
+If the retained worktree is dirty, merge still succeeds but cleanup is recorded as `failed` and the manifest moves to `next_action=manual_cleanup_required`.
 
 ### 2. Sprint file update (if available)
 

@@ -154,8 +154,37 @@ Current result:
 - live `review-runner --reviewer codex` can promote `review_pending -> ready_to_merge`
 - live `claude` adapter wiring is fixed, but the local machine still needs an authenticated `claude` CLI session
 
+### 9. Merge finalizer records cleanup success or failure
+
+Command:
+
+```bash
+node --test skills/relay-merge/scripts/finalize-run.test.js
+```
+
+Expect:
+
+- a clean retained worktree is removed after merge finalization
+- the merged local branch is deleted
+- manifest state stays `merged` while `cleanup.status` becomes `succeeded`
+- dirty retained worktrees are preserved and become `manual_cleanup_required`
+
+### 10. Repo-local janitor cleans stale terminal runs only
+
+Command:
+
+```bash
+node --test skills/relay-dispatch/scripts/cleanup-worktrees.test.js
+```
+
+Expect:
+
+- stale `merged` runs are cleaned via their manifest metadata
+- stale non-terminal runs are reported but not deleted
+- cleanup results are written back to the manifest
+
 ## Still Out of Scope
 
-- manifest-driven merge behavior
+- explicit close workflow for abandoned non-terminal runs
 
 Those belong to later issues in the lifecycle refactor.

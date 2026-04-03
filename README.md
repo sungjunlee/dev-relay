@@ -146,7 +146,7 @@ Dispatch now writes a run manifest to `.relay/runs/<run-id>.md` in the target re
 
 Successful dispatches retain their worktree by default so review, follow-up fixes, and manual inspection can continue in the same branch context.
 
-Dispatch, review, and merge helpers now all have manifest-aware entry points. `review-runner.js` can invoke built-in `codex` and `claude` reviewer adapters directly, while still allowing `--reviewer-script` overrides for unsupported environments or debugging.
+Dispatch, review, and merge helpers now all have manifest-aware entry points. `review-runner.js` can invoke built-in `codex` and `claude` reviewer adapters directly, `finalize-run.js` closes merged runs with cleanup metadata, and `cleanup-worktrees.js` acts as a repo-local stale-run janitor.
 </details>
 
 ### Review — `/relay-review`
@@ -175,11 +175,13 @@ If changes are requested, the runner also writes a targeted `review-round-N-redi
 Before merging, a **gate check** verifies the relay-review audit trail exists on the PR. No review comment → merge blocked.
 
 After gate check passes:
-1. Merge PR via GitHub API
-2. Close linked issue
-3. Update sprint file state (if using [dev-backlog](https://github.com/sungjunlee/dev-backlog))
-4. Create follow-up issues for deferred work
-5. Cleanup retained worktree and remote branch
+1. `finalize-run.js` merges the PR and marks the manifest `merged`
+2. It best-effort closes the linked issue
+3. It removes the retained worktree, deletes the merged local branch, and prunes git worktree metadata
+4. It records `cleanup.status` in the manifest so failures become explicit follow-up
+5. Then update sprint state and create any follow-up issues
+
+If cleanup fails because the retained worktree is dirty, the merge still stands, but the manifest stays on `next_action=manual_cleanup_required` instead of silently pretending everything is done.
 
 <details>
 <summary>Sprint file state transitions</summary>
@@ -218,6 +220,19 @@ config/*.key
 **Safety:** Only files matching BOTH `.worktreeinclude` AND `.gitignore` are copied. This prevents accidentally including tracked files. Glob patterns are supported. Missing files are silently skipped.
 
 The `--copy-env` and `--copy` dispatch flags work as explicit overrides for one-off cases.
+
+## Stale Cleanup
+
+Merged and explicitly closed runs should normally be cleaned by `/relay-merge`, not by dispatch.
+
+For safety, a repo-local janitor is also available:
+
+```bash
+node skills/relay-dispatch/scripts/cleanup-worktrees.js --repo . --dry-run
+node skills/relay-dispatch/scripts/cleanup-worktrees.js --repo . --older-than 72 --json
+```
+
+The janitor reads `.relay/runs/*.md`, cleans only terminal runs by default, and reports stale non-terminal runs without deleting them.
 
 ## Works With dev-backlog
 
