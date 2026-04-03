@@ -6,11 +6,13 @@
  * structured verdict back into the relay manifest and PR audit trail.
  *
  * Usage:
+ *   ./review-runner.js --repo <path> --run-id <id> [options]
  *   ./review-runner.js --repo <path> --branch <name> [options]
  *   ./review-runner.js --repo <path> --pr <number> [options]
  *
  * Options:
  *   --repo <path>                Repository root (default: .)
+ *   --run-id <id>                Relay run identifier
  *   --branch <name>              Working branch
  *   --pr <number>                PR number
  *   --manifest <path>            Explicit manifest path
@@ -33,12 +35,13 @@ const { REVIEW_VERDICT_JSON_SCHEMA } = require("./review-schema");
 const {
   STATES,
   ensureRunLayout,
-  findLatestManifestForBranch,
   getRunDir,
   readManifest,
   updateManifestState,
   writeManifest,
 } = require("../../relay-dispatch/scripts/relay-manifest");
+const { resolveManifestRecord } = require("../../relay-dispatch/scripts/relay-resolver");
+const { appendRunEvent } = require("../../relay-dispatch/scripts/relay-events");
 
 const REVIEWER_PROMPT_PATH = path.join(__dirname, "..", "references", "reviewer-prompt.md");
 const REVIEW_MARKER = "<!-- relay-review -->";
@@ -49,17 +52,18 @@ const ALLOWED_STATUSES = new Set(["pass", "fail", "not_run"]);
 
 const args = process.argv.slice(2);
 const KNOWN_FLAGS = [
-  "--repo", "--branch", "--pr", "--manifest", "--done-criteria-file",
+  "--repo", "--run-id", "--branch", "--pr", "--manifest", "--done-criteria-file",
   "--diff-file", "--review-file", "--reviewer", "--reviewer-script",
   "--reviewer-model", "--prepare-only", "--no-comment",
   "--json", "--help", "-h",
 ];
 
 if (!args.length || args.includes("--help") || args.includes("-h")) {
-  console.log("Usage: review-runner.js --repo <path> (--branch <name> | --pr <number>) [options]");
+  console.log("Usage: review-runner.js --repo <path> (--run-id <id> | --branch <name> | --pr <number>) [options]");
   console.log("\nPrepare or apply a structured relay review round.");
   console.log("\nOptions:");
   console.log("  --repo <path>                Repository root (default: .)");
+  console.log("  --run-id <id>                Relay run identifier");
   console.log("  --branch <name>              Working branch");
   console.log("  --pr <number>                PR number");
   console.log("  --manifest <path>            Explicit manifest path");
@@ -130,23 +134,6 @@ function resolvePrForBranch(repoPath, branch) {
 function resolveBranchForPr(repoPath, prNumber) {
   const raw = gh(repoPath, "pr", "view", String(prNumber), "--json", "headRefName");
   return JSON.parse(raw).headRefName;
-}
-
-function resolveManifest(repoPath, manifestPath, branch) {
-  if (manifestPath) {
-    const resolved = path.resolve(manifestPath);
-    return { manifestPath: resolved, ...readManifest(resolved) };
-  }
-
-  if (!branch) {
-    throw new Error("Branch is required when --manifest is not provided");
-  }
-
-  const match = findLatestManifestForBranch(repoPath, branch);
-  if (!match) {
-    throw new Error(`No relay manifest found for branch '${branch}'`);
-  }
-  return match;
 }
 
 function resolveIssueNumber(repoPath, prNumber, branch, manifestData) {
@@ -365,7 +352,59 @@ function buildRedispatchPrompt(verdict, doneCriteria) {
   ].join("\n");
 }
 
-function applyVerdictToManifest(data, verdict, round, prNumber) {
+function normalizeFingerprintPart(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ");
+}
+
+function fingerprintIssue(issue) {
+  return [
+    normalizeFingerprintPart(issue.file),
+    String(issue.line),
+    normalizeFingerprintPart(issue.category),
+    normalizeFingerprintPart(issue.title),
+  ].join("|");
+}
+
+function readPriorVerdicts(runDir, currentRound) {
+  const verdicts = [];
+  for (let round = currentRound - 1; round >= 1; round -= 1) {
+    const verdictPath = path.join(runDir, `review-round-${round}-verdict.json`);
+    if (!fs.existsSync(verdictPath)) continue;
+    verdicts.push(JSON.parse(fs.readFileSync(verdictPath, "utf-8")));
+  }
+  return verdicts;
+}
+
+function computeRepeatedIssueCount(runDir, round, issues) {
+  if (!issues.length) return 0;
+
+  let repeating = new Set(issues.map(fingerprintIssue));
+  let count = 1;
+  for (const verdict of readPriorVerdicts(runDir, round)) {
+    if (verdict.verdict !== "changes_requested" || !Array.isArray(verdict.issues) || verdict.issues.length === 0) {
+      break;
+    }
+    const prior = new Set(verdict.issues.map(fingerprintIssue));
+    repeating = new Set([...repeating].filter((entry) => prior.has(entry)));
+    if (repeating.size === 0) break;
+    count += 1;
+  }
+  return count;
+}
+
+function toEscalatedVerdict(baseVerdict, summary) {
+  return {
+    ...baseVerdict,
+    verdict: "escalated",
+    next_action: "escalated",
+    summary,
+  };
+}
+
+function applyVerdictToManifest(data, verdict, round, prNumber, reviewedHeadSha, repeatedIssueCount) {
   let nextState;
   let nextAction;
   let latestVerdict;
@@ -390,39 +429,46 @@ function applyVerdictToManifest(data, verdict, round, prNumber) {
     git: {
       ...(updated.git || {}),
       ...(prNumber ? { pr_number: prNumber } : {}),
+      head_sha: reviewedHeadSha || updated.git?.head_sha || null,
     },
     review: {
       ...(updated.review || {}),
       rounds: round,
       latest_verdict: latestVerdict,
-      repeated_issue_count: verdict.verdict === "changes_requested"
-        ? Number(updated.review?.repeated_issue_count || 0)
-        : 0,
+      repeated_issue_count: verdict.verdict === "changes_requested" ? repeatedIssueCount : 0,
+      last_reviewed_sha: reviewedHeadSha || null,
     },
   };
 }
 
-function resolveContext(repoPath, manifestPathArg, branchArg, prArg) {
+function resolveContext(repoPath, manifestPathArg, runIdArg, branchArg, prArg) {
   let branch = branchArg;
   let prNumber = parsePositiveInt(prArg, "--pr");
 
-  if (!branch && !prNumber && !manifestPathArg) {
-    throw new Error("Provide --branch, --pr, or --manifest");
+  if (!branch && !prNumber && !manifestPathArg && !runIdArg) {
+    throw new Error("Provide --run-id, --branch, --pr, or --manifest");
   }
 
-  if (!branch && prNumber) {
+  if (!branch && prNumber && !manifestPathArg && !runIdArg) {
     branch = resolveBranchForPr(repoPath, prNumber);
   }
+
+  const manifest = resolveManifestRecord({
+    repoRoot: repoPath,
+    manifestPath: manifestPathArg,
+    runId: runIdArg,
+    branch,
+    prNumber,
+  });
+  branch = branch || manifest.data?.git?.working_branch || null;
+  prNumber = prNumber || manifest.data?.git?.pr_number || null;
   if (!prNumber && branch) {
     prNumber = resolvePrForBranch(repoPath, branch);
   }
-
-  const manifest = resolveManifest(repoPath, manifestPathArg, branch);
-  branch = branch || manifest.data?.git?.working_branch || null;
-  prNumber = prNumber || manifest.data?.git?.pr_number || null;
   const issueNumber = resolveIssueNumber(repoPath, prNumber, branch, manifest.data);
+  const reviewRepoPath = path.resolve(manifest.data?.paths?.worktree || repoPath);
 
-  return { branch, prNumber, issueNumber, manifest };
+  return { branch, prNumber, issueNumber, manifest, reviewRepoPath };
 }
 
 function postComment(repoPath, prNumber, commentBody) {
@@ -436,19 +482,21 @@ function captureGitStatus(repoPath) {
   return git(repoPath, "status", "--short", "--untracked-files=all").trim();
 }
 
-function applyPolicyViolationToManifest(data, round, prNumber) {
+function applyPolicyViolationToManifest(data, round, prNumber, reviewedHeadSha, reason) {
   const updated = updateManifestState(data, STATES.ESCALATED, "inspect_review_failure");
   return {
     ...updated,
     git: {
       ...(updated.git || {}),
       ...(prNumber ? { pr_number: prNumber } : {}),
+      head_sha: reviewedHeadSha || updated.git?.head_sha || null,
     },
     review: {
       ...(updated.review || {}),
       rounds: round,
-      latest_verdict: "policy_violation",
+      latest_verdict: reason || "policy_violation",
       repeated_issue_count: 0,
+      last_reviewed_sha: reviewedHeadSha || null,
     },
   };
 }
@@ -503,6 +551,7 @@ function invokeReviewer({
 function run() {
   const repoPath = path.resolve(getArg("--repo") || ".");
   const manifestPathArg = getArg("--manifest");
+  const runIdArg = getArg("--run-id");
   const branchArg = getArg("--branch");
   const prArg = getArg("--pr");
   const doneCriteriaFile = getArg("--done-criteria-file");
@@ -515,16 +564,50 @@ function run() {
   const noComment = hasFlag("--no-comment");
   const jsonOut = hasFlag("--json");
 
-  const { branch, prNumber, issueNumber, manifest } = resolveContext(repoPath, manifestPathArg, branchArg, prArg);
+  const { branch, prNumber, issueNumber, manifest, reviewRepoPath } = resolveContext(
+    repoPath,
+    manifestPathArg,
+    runIdArg,
+    branchArg,
+    prArg
+  );
   const { data, body, manifestPath } = manifest;
 
   if (data.state !== STATES.REVIEW_PENDING) {
     throw new Error(`Review runner requires state=review_pending, got '${data.state}'`);
   }
+  if (!fs.existsSync(reviewRepoPath)) {
+    throw new Error(`Retained review checkout does not exist: ${reviewRepoPath}`);
+  }
 
   const round = Number(data.review?.rounds || 0) + 1;
+  const maxRounds = Number(data.review?.max_rounds || 20);
   const runDir = getRunDir(repoPath, data.run_id);
   ensureRunLayout(repoPath, data.run_id);
+  let reviewedHeadSha = null;
+  try {
+    reviewedHeadSha = git(reviewRepoPath, "rev-parse", "HEAD").trim();
+  } catch {}
+
+  if (round > maxRounds) {
+    const escalatedManifest = applyPolicyViolationToManifest(
+      data,
+      Number(data.review?.rounds || 0),
+      prNumber,
+      reviewedHeadSha,
+      "max_rounds_exceeded"
+    );
+    writeManifest(manifestPath, escalatedManifest, body);
+    appendRunEvent(repoPath, data.run_id, {
+      event: "review_apply",
+      state_from: data.state,
+      state_to: STATES.ESCALATED,
+      head_sha: reviewedHeadSha,
+      round: Number(data.review?.rounds || 0),
+      reason: "max_rounds_exceeded",
+    });
+    throw new Error(`Review round cap exceeded: next round ${round} would exceed max_rounds=${maxRounds}`);
+  }
 
   const doneCriteria = loadDoneCriteria(repoPath, issueNumber, doneCriteriaFile);
   const diffText = loadDiff(repoPath, prNumber, diffFile);
@@ -547,6 +630,8 @@ function run() {
     branch,
     prNumber,
     issueNumber,
+    reviewRepoPath,
+    reviewHeadSha: reviewedHeadSha,
     promptPath,
     doneCriteriaPath,
     diffPath,
@@ -579,15 +664,15 @@ function run() {
   if (reviewFile) {
     reviewText = readText(reviewFile);
   } else {
-    const statusBeforeReviewer = captureGitStatus(repoPath);
+    const statusBeforeReviewer = captureGitStatus(reviewRepoPath);
     const invoked = invokeReviewer({
-      repoPath,
+      repoPath: reviewRepoPath,
       promptPath,
       reviewerName,
       reviewerScript,
       reviewerModel,
     });
-    const statusAfterReviewer = captureGitStatus(repoPath);
+    const statusAfterReviewer = captureGitStatus(reviewRepoPath);
     if (statusBeforeReviewer !== statusAfterReviewer) {
       const violationPath = path.join(runDir, `review-round-${round}-policy-violation.txt`);
       const violationText = [
@@ -604,8 +689,22 @@ function run() {
       ].join("\n");
       writeText(violationPath, `${violationText}\n`);
 
-      const escalatedManifest = applyPolicyViolationToManifest(data, round, prNumber);
+      const escalatedManifest = applyPolicyViolationToManifest(
+        data,
+        round,
+        prNumber,
+        reviewedHeadSha,
+        "policy_violation"
+      );
       writeManifest(manifestPath, escalatedManifest, body);
+      appendRunEvent(repoPath, data.run_id, {
+        event: "review_apply",
+        state_from: data.state,
+        state_to: STATES.ESCALATED,
+        head_sha: reviewedHeadSha,
+        round,
+        reason: "policy_violation",
+      });
       throw new Error(`Reviewer write policy violation detected; manifest escalated and details saved to ${violationPath}`);
     }
     const rawResponsePath = path.join(runDir, `review-round-${round}-raw-response.txt`);
@@ -614,7 +713,16 @@ function run() {
     reviewText = invoked.rawText;
   }
 
-  const verdict = parseReviewVerdict(reviewText);
+  let verdict = parseReviewVerdict(reviewText);
+  const repeatedIssueCount = verdict.verdict === "changes_requested"
+    ? computeRepeatedIssueCount(runDir, round, verdict.issues)
+    : 0;
+  if (verdict.verdict === "changes_requested" && repeatedIssueCount >= 3) {
+    verdict = toEscalatedVerdict(
+      verdict,
+      `Repeated identical review issues hit ${repeatedIssueCount} consecutive rounds.`
+    );
+  }
   const verdictPath = path.join(runDir, `review-round-${round}-verdict.json`);
   writeText(verdictPath, `${JSON.stringify(verdict, null, 2)}\n`);
 
@@ -630,13 +738,29 @@ function run() {
     result.commentPosted = true;
   }
 
-  const updatedManifest = applyVerdictToManifest(data, verdict, round, prNumber);
+  const updatedManifest = applyVerdictToManifest(
+    data,
+    verdict,
+    round,
+    prNumber,
+    reviewedHeadSha,
+    repeatedIssueCount
+  );
   writeManifest(manifestPath, updatedManifest, body);
+  appendRunEvent(repoPath, data.run_id, {
+    event: "review_apply",
+    state_from: data.state,
+    state_to: updatedManifest.state,
+    head_sha: reviewedHeadSha,
+    round,
+    reason: verdict.verdict,
+  });
 
   result.nextState = updatedManifest.state;
   result.state = updatedManifest.state;
   result.verdictPath = verdictPath;
   result.redispatchPath = redispatchPath;
+  result.repeatedIssueCount = repeatedIssueCount;
 
   if (jsonOut) {
     console.log(JSON.stringify(result, null, 2));
