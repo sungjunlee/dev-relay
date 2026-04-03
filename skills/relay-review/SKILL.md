@@ -10,7 +10,7 @@ metadata:
 
 # Relay Review
 
-Independent PR review against the Done Criteria contract and scoring rubric. Use `scripts/review-runner.js` so round count, PR comments, and manifest transitions stay script-managed.
+Independent PR review against the Done Criteria contract and scoring rubric. Use `scripts/review-runner.js` so round count, reviewer invocation, PR comments, and manifest transitions stay script-managed.
 
 ## Setup: Establish the anchor
 
@@ -39,7 +39,16 @@ gh issue view $ISSUE_NUM  # Done Criteria / Acceptance Criteria source
    - Rubric factors + targets from the Score Log (if relay-plan was used)
    - Original scope boundary ("do not change" areas)
 
-3. Prepare the review bundle for the current round:
+3. Preferred path: let the review runner invoke an isolated reviewer directly:
+```bash
+node ${CLAUDE_SKILL_DIR}/scripts/review-runner.js --repo . --branch "$BRANCH" --pr "$PR_NUM" --reviewer codex --json
+```
+
+Supported built-in adapters:
+- `--reviewer codex`
+- `--reviewer claude`
+
+4. Fallback path for unsupported environments or debugging:
 ```bash
 node ${CLAUDE_SKILL_DIR}/scripts/review-runner.js --repo . --branch "$BRANCH" --pr "$PR_NUM" --prepare-only --json
 ```
@@ -55,25 +64,25 @@ Two phases, run in order. Each round re-measures against the **original anchor**
 
 ### Phase 1: Spec Compliance
 
-4. Review the diff against Done Criteria (see `references/reviewer-prompt.md` or the generated `review-round-N-prompt.md`):
+5. Review the diff against Done Criteria (see `references/reviewer-prompt.md` or the generated `review-round-N-prompt.md`):
    - **Faithfulness**: Each Done Criteria item implemented? Scope respected?
    - **Stubs/placeholders**: Any `return null`, empty bodies, TODO in production paths?
    - **Integration**: Does it break callers/consumers of changed code?
    - **Security**: Auth/token handling, input validation, injection risks?
 
-5. **Rubric verification** (when Score Log present):
+6. **Rubric verification** (when Score Log present):
    - Re-run ALL automated checks independently — do not trust Codex's reported results
    - Re-score ALL evaluated factors with fresh eyes (1-10)
    - Any required factor below target → issue
    - Score divergence ≥2 points from Codex → flag for review
 
-6. **Phase 1 gate**: Issues found → return a structured verdict with `verdict=changes_requested`, then re-dispatch (see Re-dispatch below). Do NOT proceed to Phase 2 until Phase 1 passes.
+7. **Phase 1 gate**: Issues found → return a structured verdict with `verdict=changes_requested`, then re-dispatch (see Re-dispatch below). Do NOT proceed to Phase 2 until Phase 1 passes.
 
 ### Phase 2: Code Quality (only after Phase 1 PASS)
 
-7. Run a code review skill on changed files — check code quality, patterns, conventions, structural issues (use the platform's best-matching skill, e.g., Claude Code: `/review`; if no skill available, perform the review inline)
-8. Run a code simplification skill on changed files — unnecessary complexity, dead code, verbose patterns (use the platform's best-matching skill, e.g., Claude Code: `/simplify`; if no skill available, review for simplification inline)
-9. Issues found → return `verdict=changes_requested`, then re-dispatch and **repeat from step 4** (Phase 1 — quality fixes can regress spec compliance)
+8. Run a code review skill on changed files — check code quality, patterns, conventions, structural issues (use the platform's best-matching skill, e.g., Claude Code: `/review`; if no skill available, perform the review inline)
+9. Run a code simplification skill on changed files — unnecessary complexity, dead code, verbose patterns (use the platform's best-matching skill, e.g., Claude Code: `/simplify`; if no skill available, review for simplification inline)
+10. Issues found → return `verdict=changes_requested`, then re-dispatch and **repeat from step 5** (Phase 1 — quality fixes can regress spec compliance)
 
 ### Drift and stuck detection (both phases)
 
@@ -85,7 +94,7 @@ Before any re-dispatch, check:
 
 ### Converge
 
-10. Both phases pass → produce a structured verdict with:
+11. Both phases pass → produce a structured verdict with:
     - `verdict=pass`
     - `next_action=ready_to_merge`
     - `issues=[]`
@@ -94,16 +103,18 @@ Before any re-dispatch, check:
 
 ## Verdict + Audit Trail
 
-11. Apply the structured verdict with the review runner:
+12. If you used the fallback path, apply the structured verdict with the review runner:
 ```bash
 node ${CLAUDE_SKILL_DIR}/scripts/review-runner.js --repo . --branch "$BRANCH" --pr "$PR_NUM" --review-file /tmp/review-verdict.json
 ```
 
 The runner:
 - validates the JSON verdict
+- optionally invokes the reviewer adapter itself when `--reviewer <name>` is used
 - writes the PR audit comment
 - updates the relay manifest to `ready_to_merge`, `changes_requested`, or `escalated`
 - writes `review-round-N-verdict.json`
+- writes `review-round-N-raw-response.txt` when it invoked the reviewer itself
 - writes `review-round-N-redispatch.md` when changes are requested
 
 <!-- NOTE: Final verdict comment format is still parsed by gate-check.js via /Verdict:\s*(LGTM|ESCALATED)/. -->

@@ -155,7 +155,7 @@ Runs in a **forked Agent context** — the reviewer has no memory of the plannin
 
 The review loops until convergence (most PRs: 1–3 rounds, safety cap: 20):
 
-1. **Prompt bundle** — `review-runner.js --prepare-only` writes the diff, done criteria, and round prompt into `.relay/runs/<run-id>/`
+1. **Prompt bundle / invocation** — `review-runner.js --reviewer codex|claude` can invoke an isolated reviewer directly, or `--prepare-only` writes the diff, done criteria, and round prompt into `.relay/runs/<run-id>/`
 2. **Contract checks** — Is the implementation faithful to the AC? Any stubs or placeholders? Security issues?
 3. **Rubric verification** — Re-run automated checks, re-score evaluated factors independently
 4. **Quality sweep** — Structural review + code simplification pass
@@ -168,7 +168,7 @@ Verdict: LGTM           # or
 Verdict: ESCALATED      # with specific issues and file:line references
 ```
 
-If changes are requested, the runner also writes a targeted `review-round-N-redispatch.md` artifact for the next worker pass.
+If changes are requested, the runner also writes a targeted `review-round-N-redispatch.md` artifact for the next worker pass. When the runner invoked the reviewer itself, it also saves `review-round-N-raw-response.txt` for debugging.
 
 ### Merge — `/relay-merge`
 

@@ -17,6 +17,9 @@
  *   --done-criteria-file <path>  Use fixture file instead of gh issue fetch
  *   --diff-file <path>           Use fixture file instead of gh pr diff
  *   --review-file <path>         Structured reviewer JSON verdict to apply
+ *   --reviewer <name>            Reviewer adapter to invoke (codex|claude|...)
+ *   --reviewer-script <path>     Override adapter script path
+ *   --reviewer-model <name>      Reviewer model override
  *   --prepare-only               Emit prompt bundle only; do not apply verdict
  *   --no-comment                 Do not post a PR comment
  *   --json                       Output JSON
@@ -26,6 +29,7 @@
 const { execFileSync } = require("child_process");
 const fs = require("fs");
 const path = require("path");
+const { REVIEW_VERDICT_JSON_SCHEMA } = require("./review-schema");
 const {
   STATES,
   ensureRunLayout,
@@ -46,7 +50,8 @@ const ALLOWED_STATUSES = new Set(["pass", "fail", "not_run"]);
 const args = process.argv.slice(2);
 const KNOWN_FLAGS = [
   "--repo", "--branch", "--pr", "--manifest", "--done-criteria-file",
-  "--diff-file", "--review-file", "--prepare-only", "--no-comment",
+  "--diff-file", "--review-file", "--reviewer", "--reviewer-script",
+  "--reviewer-model", "--prepare-only", "--no-comment",
   "--json", "--help", "-h",
 ];
 
@@ -61,6 +66,9 @@ if (!args.length || args.includes("--help") || args.includes("-h")) {
   console.log("  --done-criteria-file <path>  Use fixture file instead of gh issue fetch");
   console.log("  --diff-file <path>           Use fixture file instead of gh pr diff");
   console.log("  --review-file <path>         Structured reviewer JSON verdict to apply");
+  console.log("  --reviewer <name>            Reviewer adapter to invoke (codex|claude|...)");
+  console.log("  --reviewer-script <path>     Override adapter script path");
+  console.log("  --reviewer-model <name>      Reviewer model override");
   console.log("  --prepare-only               Emit prompt bundle only; do not apply verdict");
   console.log("  --no-comment                 Do not post a PR comment");
   console.log("  --json                       Output JSON");
@@ -177,27 +185,6 @@ function buildPrompt({ round, prNumber, branch, issueNumber, doneCriteria, diffT
     .replace("[PASTE DONE CRITERIA HERE]", doneCriteria)
     .replace("[PASTE PR DIFF OR FILE PATH HERE]", diffText);
 
-  const schema = [
-    "{",
-    '  "verdict": "pass | changes_requested | escalated",',
-    '  "summary": "short summary",',
-    '  "contract_status": "pass | fail",',
-    '  "quality_status": "pass | fail | not_run",',
-    '  "next_action": "ready_to_merge | changes_requested | escalated",',
-    '  "issues": [',
-    '    {',
-    '      "title": "short title",',
-    '      "body": "actionable explanation",',
-    '      "file": "path/to/file",',
-    '      "line": 123,',
-    '      "category": "contract | quality | security | integration | scope",',
-    '      "severity": "high | medium | low"',
-    "    }",
-    "  ],",
-    '  "rubric_scores": []',
-    "}",
-  ].join("\n");
-
   return [
     `# Relay Review Round ${round}`,
     "",
@@ -210,7 +197,7 @@ function buildPrompt({ round, prNumber, branch, issueNumber, doneCriteria, diffT
     "## Structured Output",
     "Return ONLY valid JSON. Do not wrap it in markdown fences.",
     "",
-    schema,
+    JSON.stringify(REVIEW_VERDICT_JSON_SCHEMA, null, 2),
     "",
     "Validation rules:",
     '- If `verdict` is `pass`, then `issues` must be `[]` and `next_action` must be `ready_to_merge`.',
@@ -419,6 +406,53 @@ function postComment(repoPath, prNumber, commentBody) {
   gh(repoPath, "pr", "comment", String(prNumber), "--body", commentBody);
 }
 
+function resolveReviewerName(data, reviewerArg) {
+  return reviewerArg || data.roles?.reviewer || process.env.RELAY_REVIEWER || "codex";
+}
+
+function resolveReviewerScript(reviewerName, reviewerScriptArg) {
+  if (reviewerScriptArg) {
+    return path.resolve(reviewerScriptArg);
+  }
+
+  const candidate = path.join(__dirname, `invoke-reviewer-${reviewerName}.js`);
+  if (!fs.existsSync(candidate)) {
+    throw new Error(`No reviewer adapter found for '${reviewerName}'. Provide --reviewer-script or --review-file.`);
+  }
+  return candidate;
+}
+
+function invokeReviewer({
+  repoPath,
+  promptPath,
+  reviewerName,
+  reviewerScript,
+  reviewerModel,
+}) {
+  const execArgs = [
+    reviewerScript,
+    "--repo", repoPath,
+    "--prompt-file", promptPath,
+    "--json",
+  ];
+  if (reviewerModel) {
+    execArgs.push("--model", reviewerModel);
+  }
+
+  const rawText = execFileSync("node", execArgs, {
+    cwd: repoPath,
+    encoding: "utf-8",
+    stdio: "pipe",
+    maxBuffer: 10 * 1024 * 1024,
+  }).trim();
+
+  return {
+    reviewerName,
+    reviewerScript,
+    rawText,
+  };
+}
+
 function run() {
   const repoPath = path.resolve(getArg("--repo") || ".");
   const manifestPathArg = getArg("--manifest");
@@ -427,6 +461,9 @@ function run() {
   const doneCriteriaFile = getArg("--done-criteria-file");
   const diffFile = getArg("--diff-file");
   const reviewFile = getArg("--review-file");
+  const reviewerArg = getArg("--reviewer");
+  const reviewerScriptArg = getArg("--reviewer-script");
+  const reviewerModel = getArg("--reviewer-model");
   const prepareOnly = hasFlag("--prepare-only");
   const noComment = hasFlag("--no-comment");
   const jsonOut = hasFlag("--json");
@@ -453,6 +490,9 @@ function run() {
   writeText(diffPath, `${diffText}\n`);
   writeText(promptPath, `${promptText}\n`);
 
+  const reviewerName = resolveReviewerName(data, reviewerArg);
+  const reviewerScript = reviewFile ? null : resolveReviewerScript(reviewerName, reviewerScriptArg);
+
   const result = {
     manifestPath,
     runId: data.run_id,
@@ -466,7 +506,10 @@ function run() {
     state: data.state,
     nextState: null,
     commentPosted: false,
+    reviewer: reviewerName,
+    reviewerScript,
     reviewFile: reviewFile || null,
+    rawResponsePath: null,
     verdictPath: null,
     redispatchPath: null,
     prepareOnly,
@@ -485,11 +528,24 @@ function run() {
     return;
   }
 
-  if (!reviewFile) {
-    throw new Error("--review-file is required unless --prepare-only is used");
+  let reviewText;
+  if (reviewFile) {
+    reviewText = readText(reviewFile);
+  } else {
+    const invoked = invokeReviewer({
+      repoPath,
+      promptPath,
+      reviewerName,
+      reviewerScript,
+      reviewerModel,
+    });
+    const rawResponsePath = path.join(runDir, `review-round-${round}-raw-response.txt`);
+    writeText(rawResponsePath, `${invoked.rawText}\n`);
+    result.rawResponsePath = rawResponsePath;
+    reviewText = invoked.rawText;
   }
 
-  const verdict = parseReviewVerdict(readText(reviewFile));
+  const verdict = parseReviewVerdict(reviewText);
   const verdictPath = path.join(runDir, `review-round-${round}-verdict.json`);
   writeText(verdictPath, `${JSON.stringify(verdict, null, 2)}\n`);
 

@@ -116,6 +116,7 @@ Expect:
 - a pass verdict updates `review_pending -> ready_to_merge`
 - a changes-requested verdict updates `review_pending -> changes_requested`
 - changes-requested verdicts write a targeted `review-round-N-redispatch.md`
+- `--reviewer-script <path>` can drive the round without a separate `--review-file`
 - malformed verdicts are rejected instead of guessed
 
 ### 7. Codex skill strict validation is still a known mismatch
@@ -138,7 +139,7 @@ Interpretation:
 
 ## Out of Scope For These Tests
 
-- automatic isolated reviewer invocation from the review runner
+- live adapter verification against real `codex` / `claude` reviewer runs
 - reviewer no-write enforcement
 - manifest-driven merge behavior
 

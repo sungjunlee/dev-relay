@@ -49,6 +49,16 @@ function writeVerdict(repoRoot, name, verdict) {
   return filePath;
 }
 
+function writeReviewerScript(repoRoot, name, verdict) {
+  const filePath = path.join(repoRoot, name);
+  const body = `#!/usr/bin/env node
+process.stdout.write(${JSON.stringify(JSON.stringify(verdict))});
+`;
+  fs.writeFileSync(filePath, body, "utf-8");
+  fs.chmodSync(filePath, 0o755);
+  return filePath;
+}
+
 test("prepare-only writes a prompt bundle without changing manifest state", () => {
   const { repoRoot, manifestPath, runId, doneCriteriaPath, diffPath } = setupRepo();
 
@@ -159,6 +169,41 @@ test("changes_requested verdict creates a re-dispatch artifact", () => {
   assert.equal(manifest.next_action, "re_dispatch_requested_changes");
   assert.equal(manifest.review.rounds, 1);
   assert.equal(manifest.review.latest_verdict, "changes_requested");
+});
+
+test("reviewer-script invocation can drive a round without --review-file", () => {
+  const { repoRoot, manifestPath, doneCriteriaPath, diffPath } = setupRepo();
+  const reviewerScript = writeReviewerScript(repoRoot, "reviewer-pass.js", {
+    verdict: "pass",
+    summary: "Automated reviewer passed the change.",
+    contract_status: "pass",
+    quality_status: "pass",
+    next_action: "ready_to_merge",
+    issues: [],
+    rubric_scores: [],
+  });
+
+  const stdout = execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--branch", "issue-42",
+    "--pr", "123",
+    "--done-criteria-file", doneCriteriaPath,
+    "--diff-file", diffPath,
+    "--reviewer-script", reviewerScript,
+    "--no-comment",
+    "--json",
+  ], { encoding: "utf-8" });
+
+  const result = JSON.parse(stdout);
+  assert.equal(result.state, STATES.READY_TO_MERGE);
+  assert.equal(result.reviewerScript, reviewerScript);
+  assert.ok(result.rawResponsePath);
+  assert.ok(fs.existsSync(result.rawResponsePath));
+
+  const manifest = readManifest(manifestPath).data;
+  assert.equal(manifest.state, STATES.READY_TO_MERGE);
+  assert.equal(manifest.review.latest_verdict, "lgtm");
 });
 
 test("invalid pass verdict is rejected", () => {
