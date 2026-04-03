@@ -1,7 +1,7 @@
 ---
 name: relay-merge
 argument-hint: "[PR-number]"
-description: Merge a reviewed PR, clean up worktree/branch, close GitHub issues, and update sprint file if available. Use after relay-review returns LGTM.
+description: Explicitly merge a ready-to-merge PR, clean up worktree/branch, close GitHub issues, and update sprint file if available.
 compatibility: Requires gh CLI and git.
 metadata:
   related-skills: "relay, relay-plan, relay-dispatch, relay-review, dev-backlog"
@@ -9,7 +9,7 @@ metadata:
 
 # Relay Merge
 
-Merge PR and close the loop after LGTM. **Requires relay-review PR comment.**
+Explicitly merge a ready-to-merge PR and close the loop. **Requires relay-review PR comment.**
 
 ## Process
 
@@ -19,8 +19,10 @@ Merge PR and close the loop after LGTM. **Requires relay-review PR comment.**
 ${CLAUDE_SKILL_DIR}/scripts/gate-check.js $PR_NUM
 ```
 
-- Exit 0 (LGTM) → proceed to merge
+- Exit 0 (LGTM) → PR is ready to merge; proceed only if the user wants to land it now
 - Exit 1 (no comment) → **STOP.** Run relay-review first
+- Exit 1 (stale LGTM) → **STOP.** Run relay-review again for the latest commit
+- Exit 1 (CHANGES_REQUESTED) → **STOP.** Re-dispatch or fix the branch first
 - Exit 1 (ESCALATED) → **STOP.** Show unresolved issues to user
 
 **Intentional skip** (hotfix, manual PR, trivial change):
@@ -31,14 +33,20 @@ This writes a `<!-- relay-review-skip -->` comment to the PR — maintaining aud
 
 **Do NOT merge without running gate-check.** This is the audit trail that review actually happened (or was intentionally skipped with documented reason).
 
-### 1. GitHub cleanup
+### 1. Merge + finalize cleanup
 
 ```bash
-gh pr merge $PR_NUM --squash
-gh issue close <number> -c "Resolved in PR #$PR_NUM"
-# Worktree is auto-cleaned by dispatch.js on success.
-# If dispatch used --no-cleanup: git worktree remove <worktree-path> && git branch -d <branch>
+node ${CLAUDE_SKILL_DIR}/scripts/finalize-run.js --repo . --pr "$PR_NUM" --merge-method squash --json
 ```
+
+This script:
+- merges the PR with `--delete-branch`
+- marks the manifest `merged`
+- best-effort closes the linked issue
+- removes the retained worktree, deletes the local merged branch, and runs `git worktree prune`
+- records `cleanup.status` in the manifest
+
+If the retained worktree is dirty, merge still succeeds but cleanup is recorded as `failed` and the manifest moves to `next_action=manual_cleanup_required`.
 
 ### 2. Sprint file update (if available)
 

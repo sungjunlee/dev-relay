@@ -1,106 +1,165 @@
 #!/usr/bin/env node
 /**
- * Prune stale dispatch worktrees from ~/.codex/worktrees/.
+ * Manifest-aware relay janitor for stale worktrees.
  *
  * Usage: ./cleanup-worktrees.js [options]
  *
  * Options:
- *   --older-than <hours>  Only remove worktrees older than N hours (default: 24)
- *   --dry-run             Show what would be removed without removing
- *   --all                 Remove all dispatch worktrees regardless of age
- *   --json                Output as JSON
+ *   --repo <path>          Repository root (default: .)
+ *   --older-than <hours>   Only consider runs older than N hours (default: 24)
+ *   --all                  Ignore age threshold
+ *   --dry-run              Show what would be cleaned without writing
+ *   --json                 Output as JSON
  */
 
-const { execFileSync } = require("child_process");
-const fs = require("fs");
 const path = require("path");
-const os = require("os");
+const {
+  CLEANUP_STATUSES,
+  listManifestPaths,
+  readManifest,
+  writeManifest,
+} = require("./relay-manifest");
+const { isTerminalState, runCleanup } = require("./relay-cleanup");
 
 const args = process.argv.slice(2);
-const hasFlag = (f) => args.includes(f);
-function getArg(flag, fallback) {
-  const idx = args.indexOf(flag);
-  return idx !== -1 && args[idx + 1] ? args[idx + 1] : fallback;
+
+function hasFlag(flag) {
+  return args.includes(flag);
 }
 
-const OLDER_THAN = hasFlag("--all") ? 0 : parseInt(getArg("--older-than", "24"), 10);
-const DRY_RUN = hasFlag("--dry-run");
-const JSON_OUT = hasFlag("--json");
-const CODEX_HOME = process.env.CODEX_HOME || path.join(os.homedir(), ".codex");
-const WORKTREES_DIR = path.join(CODEX_HOME, "worktrees");
+function getArg(flag, fallback) {
+  const index = args.indexOf(flag);
+  if (index === -1 || index + 1 >= args.length) return fallback;
+  const value = args[index + 1];
+  return value.startsWith("--") ? fallback : value;
+}
 
-if (!fs.existsSync(WORKTREES_DIR)) {
-  if (JSON_OUT) console.log(JSON.stringify({ removed: 0, skipped: 0, errors: 0 }));
-  else console.log("No worktrees directory found.");
+function parseHours(value, label) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    throw new Error(`${label} must be a non-negative number`);
+  }
+  return parsed;
+}
+
+if (hasFlag("--help") || hasFlag("-h")) {
+  console.log("Usage: cleanup-worktrees.js [options]");
+  console.log("\nManifest-aware relay janitor for stale worktrees.");
+  console.log("\nOptions:");
+  console.log("  --repo <path>          Repository root (default: .)");
+  console.log("  --older-than <hours>   Only consider runs older than N hours (default: 24)");
+  console.log("  --all                  Ignore age threshold");
+  console.log("  --dry-run              Show what would be cleaned without writing");
+  console.log("  --json                 Output as JSON");
   process.exit(0);
 }
 
-const now = Date.now();
-const cutoff = now - OLDER_THAN * 60 * 60 * 1000;
-const results = { removed: [], skipped: [], errors: [] };
+function run() {
+  const repoRoot = path.resolve(getArg("--repo", "."));
+  const dryRun = hasFlag("--dry-run");
+  const all = hasFlag("--all");
+  const jsonOut = hasFlag("--json");
+  const gitBin = process.env.RELAY_GIT_BIN || "git";
+  const olderThanHours = all ? 0 : parseHours(getArg("--older-than", "24"), "--older-than");
+  const now = Date.now();
+  const cutoff = now - olderThanHours * 60 * 60 * 1000;
 
-for (const entry of fs.readdirSync(WORKTREES_DIR)) {
-  const wtDir = path.join(WORKTREES_DIR, entry);
-  const stat = fs.statSync(wtDir);
-  if (!stat.isDirectory()) continue;
+  const result = {
+    repoRoot,
+    olderThanHours,
+    dryRun,
+    all,
+    cleaned: [],
+    failed: [],
+    staleOpen: [],
+    skipped: [],
+  };
 
-  const age = Math.round((now - stat.mtimeMs) / (60 * 60 * 1000));
+  const manifestPaths = listManifestPaths(repoRoot);
+  for (const manifestPath of manifestPaths) {
+    const { data, body } = readManifest(manifestPath);
+    const updatedAt = Date.parse(data.timestamps?.updated_at || data.timestamps?.created_at || 0);
+    const ageHours = updatedAt ? Math.round((now - updatedAt) / (60 * 60 * 1000)) : null;
+    const cleanupStatus = data.cleanup?.status || CLEANUP_STATUSES.PENDING;
+    const baseInfo = {
+      manifestPath,
+      runId: data.run_id || path.basename(manifestPath, ".md"),
+      state: data.state,
+      branch: data.git?.working_branch || null,
+      worktree: data.paths?.worktree || null,
+      ageHours,
+      cleanupStatus,
+    };
 
-  if (stat.mtimeMs > cutoff) {
-    results.skipped.push({ dir: entry, age: `${age}h` });
-    continue;
-  }
+    if (!all && updatedAt && updatedAt > cutoff) {
+      result.skipped.push({ ...baseInfo, reason: "recent" });
+      continue;
+    }
 
-  // Find the actual worktree path (wtDir/<project-name>/)
-  const subDirs = fs.readdirSync(wtDir).filter(
-    (d) => fs.statSync(path.join(wtDir, d)).isDirectory()
-  );
-  const projectDir = subDirs.length === 1 ? path.join(wtDir, subDirs[0]) : wtDir;
+    if (!isTerminalState(data.state)) {
+      result.staleOpen.push({ ...baseInfo, reason: "non-terminal" });
+      continue;
+    }
 
-  if (DRY_RUN) {
-    results.removed.push({ dir: entry, age: `${age}h`, action: "would remove" });
-    continue;
-  }
+    if (cleanupStatus === CLEANUP_STATUSES.SUCCEEDED) {
+      result.skipped.push({ ...baseInfo, reason: "already_cleaned" });
+      continue;
+    }
 
-  try {
-    // Try git worktree remove first (proper cleanup)
-    execFileSync("git", ["worktree", "remove", "--force", projectDir], {
-      encoding: "utf-8",
-      stdio: "pipe",
+    const cleanupResult = runCleanup({
+      repoRoot,
+      data,
+      gitBin,
+      dryRun,
+      deleteMergedBranch: data.state === "merged",
     });
-    results.removed.push({ dir: entry, age: `${age}h` });
-  } catch {
-    // Fallback: remove directory directly
-    try {
-      fs.rmSync(wtDir, { recursive: true, force: true });
-      results.removed.push({ dir: entry, age: `${age}h`, method: "rm" });
-    } catch (e) {
-      results.errors.push({ dir: entry, error: e.message.split("\n")[0] });
+
+    const item = {
+      ...baseInfo,
+      cleanupStatus: cleanupResult.summary.cleanupStatus,
+      nextAction: cleanupResult.summary.nextAction,
+      worktreeRemoved: cleanupResult.summary.worktreeRemoved,
+      branchDeleted: cleanupResult.summary.branchDeleted,
+      pruneRan: cleanupResult.summary.pruneRan,
+      error: cleanupResult.summary.error,
+    };
+
+    if (!dryRun) {
+      writeManifest(manifestPath, cleanupResult.updatedData, body);
+    }
+
+    if (cleanupResult.summary.cleanupStatus === CLEANUP_STATUSES.SUCCEEDED) {
+      result.cleaned.push(item);
+    } else {
+      result.failed.push(item);
+    }
+  }
+
+  if (jsonOut) {
+    console.log(JSON.stringify(result, null, 2));
+  } else {
+    console.log(`Relay janitor: ${repoRoot}`);
+    console.log(`  cleaned:    ${result.cleaned.length}`);
+    console.log(`  failed:     ${result.failed.length}`);
+    console.log(`  stale open: ${result.staleOpen.length}`);
+    console.log(`  skipped:    ${result.skipped.length}`);
+    if (result.failed.length) {
+      console.log("  failures:");
+      result.failed.forEach((entry) => console.log(`    ${entry.runId}: ${entry.error}`));
+    }
+    if (result.staleOpen.length) {
+      console.log("  stale open runs:");
+      result.staleOpen.forEach((entry) => console.log(`    ${entry.runId} (${entry.state}, ${entry.ageHours ?? "?"}h old)`));
+    }
+    if (dryRun) {
+      console.log("  dry-run: no changes written");
     }
   }
 }
 
-if (JSON_OUT) {
-  console.log(JSON.stringify({
-    removed: results.removed.length,
-    skipped: results.skipped.length,
-    errors: results.errors.length,
-    details: results,
-  }, null, 2));
-} else {
-  const action = DRY_RUN ? "Would remove" : "Removed";
-  if (results.removed.length) {
-    console.log(`${action} ${results.removed.length} worktree(s):`);
-    results.removed.forEach((r) => console.log(`  ${r.dir} (${r.age} old)`));
-  }
-  if (results.skipped.length) {
-    console.log(`Skipped ${results.skipped.length} worktree(s) (< ${OLDER_THAN}h old)`);
-  }
-  if (results.errors.length) {
-    console.log(`Errors: ${results.errors.length}`);
-    results.errors.forEach((e) => console.log(`  ${e.dir}: ${e.error}`));
-  }
-  if (!results.removed.length && !results.errors.length) {
-    console.log("No stale worktrees found.");
-  }
+try {
+  run();
+} catch (error) {
+  console.error(`Error: ${error.message}`);
+  process.exit(1);
 }

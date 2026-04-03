@@ -1,0 +1,190 @@
+# Relay Scenario Tests
+
+Initial scenario matrix for the manifest foundation wave.
+
+## Goal
+
+Exercise the parts that are already implemented, and separate them from behavior that is still planned.
+
+## Current Coverage
+
+### 1. Dispatch dry-run emits run metadata
+
+Command:
+
+```bash
+node skills/relay-dispatch/scripts/dispatch.js . -b issue-42 --prompt "test prompt" --dry-run --json
+```
+
+Expect:
+
+- `runId`
+- `manifestPath`
+- `cleanupPolicy`
+
+### 2. Dispatch success writes manifest and ends in `review_pending`
+
+Command:
+
+```bash
+python3 skills/relay-dispatch/scripts/smoke_dispatch_scenarios.py
+```
+
+Scenario:
+
+- create a temp git repo
+- dispatch a worker that creates `smoke.txt` and commits it
+
+Expect:
+
+- command exit code `0`
+- `runState: review_pending`
+- manifest contains `state: 'review_pending'`
+- manifest contains `cleanup: 'on_close'`
+- target repo contains `.relay/runs/`
+- dispatched worktree still exists after the command returns
+- harness explicitly removes the retained worktree during teardown
+
+### 3. Dispatch no-op failure writes manifest and ends in `escalated`
+
+Command:
+
+```bash
+python3 skills/relay-dispatch/scripts/smoke_dispatch_scenarios.py
+```
+
+Scenario:
+
+- create a temp git repo
+- dispatch a worker that inspects only and makes no changes
+
+Expect:
+
+- command exit code non-zero
+- `runState: escalated`
+- manifest contains `state: 'escalated'`
+- manifest contains `cleanup: 'on_close'`
+- dispatched worktree still exists after the command returns
+- harness explicitly removes the retained worktree during teardown
+
+### 4. Skill frontmatter is valid YAML
+
+Command:
+
+```bash
+for f in skills/*/SKILL.md; do
+  python3 - <<'PY' "$f"
+import sys, pathlib, yaml
+p = pathlib.Path(sys.argv[1])
+text = p.read_text()
+end = text.find('\n---\n', 4)
+yaml.safe_load(text[4:end])
+print(p)
+PY
+done
+```
+
+Expect:
+
+- all skill files parse as YAML
+
+### 5. Manifest state helper can promote a reviewed run to `ready_to_merge`
+
+Command:
+
+```bash
+node --test skills/relay-dispatch/scripts/update-manifest-state.test.js
+```
+
+Expect:
+
+- branch lookup resolves the latest manifest for that branch
+- helper updates `review_pending -> ready_to_merge`
+- helper persists `git.pr_number`, `review.rounds`, and `review.latest_verdict`
+
+### 6. Review runner validates structured verdicts and updates manifest state
+
+Command:
+
+```bash
+node --test skills/relay-review/scripts/review-runner.test.js
+```
+
+Expect:
+
+- `--prepare-only` writes the round prompt bundle without changing manifest state
+- a pass verdict updates `review_pending -> ready_to_merge`
+- a changes-requested verdict updates `review_pending -> changes_requested`
+- changes-requested verdicts write a targeted `review-round-N-redispatch.md`
+- `--reviewer-script <path>` can drive the round without a separate `--review-file`
+- reviewer-written diffs are rejected and escalate the manifest with `latest_verdict=policy_violation`
+- malformed verdicts are rejected instead of guessed
+
+### 7. Codex skill strict validation is still a known mismatch
+
+Command:
+
+```bash
+python3 /Users/sjlee/.codex/skills/.system/skill-creator/scripts/quick_validate.py skills/relay-review
+```
+
+Current result:
+
+- fails on extended frontmatter keys such as `argument-hint`, `compatibility`, `context`
+
+Interpretation:
+
+- this is a repo-wide skill-format mismatch with the strict Codex validator
+- it is not a regression from the manifest foundation work
+- the actual YAML syntax issue in `relay-review/SKILL.md` is fixed
+
+### 8. Optional live adapter verification
+
+Commands:
+
+```bash
+node skills/relay-review/scripts/invoke-reviewer-codex.js --repo /tmp/review-fixture --prompt-file /tmp/review-prompt.md --json
+node skills/relay-review/scripts/review-runner.js --repo /tmp/review-fixture --branch issue-42 --pr 123 --done-criteria-file /tmp/done.md --diff-file /tmp/diff.patch --reviewer codex --no-comment --json
+node skills/relay-review/scripts/invoke-reviewer-claude.js --repo /tmp/review-fixture --prompt-file /tmp/review-prompt.md --json
+```
+
+Current result:
+
+- live `codex` adapter invocation returns schema-valid JSON
+- live `review-runner --reviewer codex` can promote `review_pending -> ready_to_merge`
+- live `claude` adapter wiring is fixed, but the local machine still needs an authenticated `claude` CLI session
+
+### 9. Merge finalizer records cleanup success or failure
+
+Command:
+
+```bash
+node --test skills/relay-merge/scripts/finalize-run.test.js
+```
+
+Expect:
+
+- a clean retained worktree is removed after merge finalization
+- the merged local branch is deleted
+- manifest state stays `merged` while `cleanup.status` becomes `succeeded`
+- dirty retained worktrees are preserved and become `manual_cleanup_required`
+
+### 10. Repo-local janitor cleans stale terminal runs only
+
+Command:
+
+```bash
+node --test skills/relay-dispatch/scripts/cleanup-worktrees.test.js
+```
+
+Expect:
+
+- stale `merged` runs are cleaned via their manifest metadata
+- stale non-terminal runs are reported but not deleted
+- cleanup results are written back to the manifest
+
+## Still Out of Scope
+
+- explicit close workflow for abandoned non-terminal runs
+
+Those belong to later issues in the lifecycle refactor.

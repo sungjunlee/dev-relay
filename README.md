@@ -2,7 +2,7 @@
 
 **Delegate implementation to AI agents. Keep planning and review in your hands.**
 
-dev-relay orchestrates the handoff between [Claude Code](https://claude.ai/code) (planner/reviewer) and [Codex](https://chatgpt.com/codex) (executor). You define what to build. Codex builds it in an isolated worktree. Claude reviews the PR with fresh eyes — no planning bias. The result is merged only after an auditable review trail exists.
+dev-relay orchestrates the handoff between [Claude Code](https://claude.ai/code) (planner/reviewer) and [Codex](https://chatgpt.com/codex) (executor). You define what to build. Codex builds it in an isolated worktree. Claude reviews the PR with fresh eyes — no planning bias. The result becomes ready to merge after an auditable review trail exists, and merge stays explicit.
 
 ```
 Claude Code                  Codex                       GitHub
@@ -16,7 +16,8 @@ Claude Code                  Codex                       GitHub
  │   ├── quality sweep        │                            │
  │   └── issues found? ──────►├── re-dispatch ───────────►│  PR updated
  │                            │                            │
- ├── LGTM ────────────────────────────────────────────────►│  merged
+ ├── LGTM ────────────────────────────────────────────────►│  ready_to_merge
+ ├── explicit merge ──────────────────────────────────────►│  merged
  └── cleanup + sprint update                               │
 ```
 
@@ -66,7 +67,7 @@ npx skills add . -g -y
 /relay 42
 ```
 
-Reads issue #42, builds a scoring rubric if the task is complex, dispatches to Codex in a worktree, reviews the resulting PR, and merges on LGTM.
+Reads issue #42, builds a scoring rubric if the task is complex, dispatches to Codex in a worktree, reviews the resulting PR, and stops at `ready_to_merge`. Use `/relay-merge` to land it explicitly.
 
 ### Step by step
 
@@ -76,18 +77,18 @@ Use individual skills when you want control over each phase:
 /relay-plan 42          # Convert issue AC into a scoring rubric
 /relay-dispatch         # Dispatch to Codex (worktree → implement → PR)
 /relay-review fix/42    # Review PR in a fresh context
-/relay-merge 123        # Gate-check → merge → cleanup
+/relay-merge 123        # Gate-check → explicit merge → cleanup
 ```
 
 ## Skills
 
 | Command | Phase | Description |
 |---------|-------|-------------|
-| `/relay [issue]` | All | Full cycle — plan, dispatch, review, merge |
+| `/relay [issue]` | All | Full cycle through `ready_to_merge` |
 | `/relay-plan [issue]` | Plan | Build scoring rubric from acceptance criteria |
 | `/relay-dispatch` | Execute | Dispatch to Codex via git worktree isolation |
 | `/relay-review [branch]` | Review | Independent PR review with convergence loop |
-| `/relay-merge [PR]` | Ship | Merge after LGTM, cleanup worktree, update sprint |
+| `/relay-merge [PR]` | Ship | Explicit merge after LGTM, cleanup worktree, update sprint |
 
 ## How It Works
 
@@ -107,7 +108,7 @@ The rubric travels with the task — Codex uses it to self-evaluate, and the rev
 
 ### Dispatch — `/relay-dispatch`
 
-Creates an isolated git worktree, runs the executor with the task prompt, and collects results.
+Creates an isolated git worktree, writes a relay run manifest, runs the executor with the task prompt, and collects results.
 
 ```bash
 # Minimal
@@ -135,11 +136,17 @@ Creates an isolated git worktree, runs the executor with the task prompt, and co
 | `--copy` | Additional files to copy (comma-separated) | — |
 | `--timeout` | Timeout in seconds | `1800` |
 | `--register` | Register in executor app, keep worktree | `false` |
-| `--no-cleanup` | Keep worktree after completion | `false` |
+| `--no-cleanup` | Compatibility alias; worktree is already retained by default | `false` |
 | `--dry-run` | Print plan, don't execute | `false` |
 | `--json` | Structured JSON output | `false` |
 
 **Timeout guidance:** 1800s for simple tasks, 3600s with self-review, 5400s for complex multi-file work.
+
+Dispatch now writes a run manifest to `.relay/runs/<run-id>.md` in the target repo. JSON output includes `runId`, `manifestPath`, `runState`, and `cleanupPolicy`. A successful first-pass dispatch should usually end in `runState: review_pending`.
+
+Successful dispatches retain their worktree by default so review, follow-up fixes, and manual inspection can continue in the same branch context.
+
+Dispatch, review, and merge helpers now all have manifest-aware entry points. `review-runner.js` can invoke built-in `codex` and `claude` reviewer adapters directly, `finalize-run.js` closes merged runs with cleanup metadata, and `cleanup-worktrees.js` acts as a repo-local stale-run janitor.
 </details>
 
 ### Review — `/relay-review`
@@ -148,30 +155,33 @@ Runs in a **forked Agent context** — the reviewer has no memory of the plannin
 
 The review loops until convergence (most PRs: 1–3 rounds, safety cap: 20):
 
-1. **Contract checks** — Is the implementation faithful to the AC? Any stubs or placeholders? Security issues?
-2. **Rubric verification** — Re-run automated checks, re-score evaluated factors independently
-3. **Quality sweep** — Structural review + code simplification pass
-4. **Drift detection** — Catches scope creep or stuck iteration loops
+1. **Prompt bundle / invocation** — `review-runner.js --reviewer codex|claude` can invoke an isolated reviewer directly, or `--prepare-only` writes the diff, done criteria, and round prompt into `.relay/runs/<run-id>/`
+2. **Contract checks** — Is the implementation faithful to the AC? Any stubs or placeholders? Security issues?
+3. **Rubric verification** — Re-run automated checks, re-score evaluated factors independently
+4. **Quality sweep** — Structural review + code simplification pass
+5. **Runner apply** — structured verdict JSON is validated, posted to the PR, and written back to the manifest
 
-The verdict is posted as a PR comment with a machine-readable marker:
+The final verdict is posted as a PR comment with a machine-readable marker:
 
 ```
 Verdict: LGTM           # or
 Verdict: ESCALATED      # with specific issues and file:line references
 ```
 
-If issues are found, the reviewer can re-dispatch Codex with targeted fix instructions — no manual intervention needed.
+If changes are requested, the runner also writes a targeted `review-round-N-redispatch.md` artifact for the next worker pass. When the runner invoked the reviewer itself, it saves `review-round-N-raw-response.txt` for debugging and escalates the run if the reviewer mutated the repo.
 
 ### Merge — `/relay-merge`
 
 Before merging, a **gate check** verifies the relay-review audit trail exists on the PR. No review comment → merge blocked.
 
 After gate check passes:
-1. Merge PR via GitHub API
-2. Close linked issue
-3. Update sprint file state (if using [dev-backlog](https://github.com/sungjunlee/dev-backlog))
-4. Create follow-up issues for deferred work
-5. Auto-cleanup worktree and remote branch
+1. `finalize-run.js` merges the PR and marks the manifest `merged`
+2. It best-effort closes the linked issue
+3. It removes the retained worktree, deletes the merged local branch, and prunes git worktree metadata
+4. It records `cleanup.status` in the manifest so failures become explicit follow-up
+5. Then update sprint state and create any follow-up issues
+
+If cleanup fails because the retained worktree is dirty, the merge still stands, but the manifest stays on `next_action=manual_cleanup_required` instead of silently pretending everything is done.
 
 <details>
 <summary>Sprint file state transitions</summary>
@@ -210,6 +220,19 @@ config/*.key
 **Safety:** Only files matching BOTH `.worktreeinclude` AND `.gitignore` are copied. This prevents accidentally including tracked files. Glob patterns are supported. Missing files are silently skipped.
 
 The `--copy-env` and `--copy` dispatch flags work as explicit overrides for one-off cases.
+
+## Stale Cleanup
+
+Merged and explicitly closed runs should normally be cleaned by `/relay-merge`, not by dispatch.
+
+For safety, a repo-local janitor is also available:
+
+```bash
+node skills/relay-dispatch/scripts/cleanup-worktrees.js --repo . --dry-run
+node skills/relay-dispatch/scripts/cleanup-worktrees.js --repo . --older-than 72 --json
+```
+
+The janitor reads `.relay/runs/*.md`, cleans only terminal runs by default, and reports stale non-terminal runs without deleting them.
 
 ## Works With dev-backlog
 
