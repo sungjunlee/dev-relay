@@ -229,3 +229,15 @@ Expect:
 - stale `merged` runs are cleaned via their manifest metadata
 - stale non-terminal runs are reported with an explicit `close-run.js` command
 - cleanup results are written back to the manifest
+
+### 14. Live Codex-as-orchestrator validation report
+
+Report:
+
+- [codex-orchestrator-e2e-validation-2026-04-03.md](./codex-orchestrator-e2e-validation-2026-04-03.md)
+
+Covers:
+
+- a no-sprint live run in `dev-relay`
+- a sprint-enabled live run in the disposable GitHub fixture repo
+- exact operator prompts, run IDs, manifest paths, PR/review URLs, merge SHAs, and known gaps

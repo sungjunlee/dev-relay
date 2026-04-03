@@ -239,6 +239,7 @@ function main() {
   let wtPath = path.join(wtBase, wtId, PROJECT_NAME);
   const resultFile = path.join(os.tmpdir(), `dispatch-${EXECUTOR}-${wtId}.txt`);
   const stdoutLog = path.join(os.tmpdir(), `dispatch-${EXECUTOR}-${wtId}.log`);
+  const stderrLog = path.join(os.tmpdir(), `dispatch-${EXECUTOR}-${wtId}.err`);
   let branch = BRANCH;
   let runId = RUN_ID;
   let manifestPath = MANIFEST_INPUT ? path.resolve(MANIFEST_INPUT) : null;
@@ -314,7 +315,7 @@ function main() {
       executor: EXECUTOR, worktree: wtPath, branch,
       prompt: taskPrompt.slice(0, 200),
       model: MODEL, sandbox: SANDBOX, register: REGISTER,
-      resultFile, stdoutLog, timeout: TIMEOUT, copyEnv: COPY_ENV,
+      resultFile, stdoutLog, stderrLog, timeout: TIMEOUT, copyEnv: COPY_ENV,
       cleanupPolicy,
       worktreeinclude: includeFiles,
     };
@@ -412,7 +413,7 @@ function main() {
     execOpts = {
       timeout: TIMEOUT * 1000,
       maxBuffer: 10 * 1024 * 1024,
-      stdio: ["pipe", null, "pipe"], // stdout fd set below
+      stdio: ["pipe", null, null], // stdout/stderr fds set below
     };
   } else {
     console.error(`Error: executor '${EXECUTOR}' has no execution handler`);
@@ -432,6 +433,7 @@ function main() {
   let exitCode = 0;
   let error = null;
   const startTime = Date.now();
+  let stderrText = "";
 
   // Record HEAD before execution so we can measure only new work.
   let startHead = "";
@@ -459,26 +461,31 @@ function main() {
 
   // Redirect stdout to file to avoid buffer overflow on verbose output.
   const stdoutFd = fs.openSync(stdoutLog, "w");
+  const stderrFd = fs.openSync(stderrLog, "w");
   execOpts.stdio[1] = stdoutFd;
+  execOpts.stdio[2] = stderrFd;
 
   try {
     execFileSync(cmd, execArgs, execOpts);
   } catch (e) {
     exitCode = e.status || 1;
     const msg = e.message.split("\n")[0];
-    // Capture stderr — this is where auth errors, missing config, etc. end up.
-    const stderr = e.stderr ? e.stderr.toString().trim() : "";
     // Codex-specific: ENOBUFS means output exceeded buffer but work may be done.
     if (EXECUTOR === "codex" && (e.code === "ENOBUFS" || msg.includes("ENOBUFS"))) {
       error = "ENOBUFS (stdout buffer overflow — work may be complete, check worktree)";
-    } else if (stderr) {
-      error = stderr.split("\n").slice(0, 10).join("\n");
     } else {
       error = msg;
     }
   }
 
   fs.closeSync(stdoutFd);
+  fs.closeSync(stderrFd);
+  if (fs.existsSync(stderrLog)) {
+    stderrText = fs.readFileSync(stderrLog, "utf-8").trim();
+    if (!error && stderrText) {
+      error = stderrText.split("\n").slice(0, 10).join("\n");
+    }
+  }
   const elapsed = Math.round((Date.now() - startTime) / 1000);
 
   // --- Step 4: Collect results ---
@@ -607,6 +614,7 @@ function main() {
     headSha: currentHead || startHead || null,
     resultFile,
     stdoutLog,
+    stderrLog,
     elapsed: `${elapsed}s`,
     exitCode,
     error,
@@ -640,6 +648,7 @@ function main() {
     console.log(`  Manifest: ${manifestPath}`);
     console.log(`\n  Full result: cat ${resultFile}`);
     console.log(`  Stdout log:  cat ${stdoutLog}`);
+    console.log(`  Stderr log:  cat ${stderrLog}`);
     if (uncommittedDiff) {
       console.log(`  Uncommitted changes:`);
       uncommittedDiff.split("\n").forEach((l) => console.log(`    ${l}`));

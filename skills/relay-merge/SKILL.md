@@ -42,7 +42,8 @@ node ${CLAUDE_SKILL_DIR}/scripts/finalize-run.js --repo . --run-id "$RUN_ID" --m
 
 This script:
 - re-checks the latest PR audit trail and blocks merge if `review.last_reviewed_sha` is stale for the current HEAD
-- merges the PR with `--delete-branch`
+- merges the PR and only advances the manifest after GitHub reports the PR as `MERGED`
+- best-effort deletes the remote branch after the merge is confirmed
 - marks the manifest `merged`
 - best-effort closes the linked issue
 - removes the retained worktree, deletes the local merged branch, and runs `git worktree prune`

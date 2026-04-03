@@ -173,6 +173,38 @@ test("pass verdict moves review_pending to ready_to_merge", () => {
   assert.ok(manifest.review.last_reviewed_sha);
 });
 
+test("pass verdict rejects quality_status=not_run", () => {
+  const { repoRoot, manifestPath, doneCriteriaPath, diffPath } = setupRepo();
+  const reviewFile = writeVerdict(repoRoot, "phase1-pass.json", {
+    verdict: "pass",
+    summary: "No blocking review issues found.",
+    contract_status: "pass",
+    quality_status: "not_run",
+    next_action: "ready_to_merge",
+    issues: [],
+    rubric_scores: [],
+  });
+
+  assert.throws(() => execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--branch", "issue-42",
+    "--pr", "123",
+    "--done-criteria-file", doneCriteriaPath,
+    "--diff-file", diffPath,
+    "--review-file", reviewFile,
+    "--no-comment",
+    "--json",
+  ], { encoding: "utf-8", stdio: "pipe" }), (error) => {
+    assert.match(String(error.stderr), /PASS verdict requires contract_status=pass and quality_status=pass/);
+    return true;
+  });
+
+  const manifest = readManifest(manifestPath).data;
+  assert.equal(manifest.state, STATES.REVIEW_PENDING);
+  assert.equal(manifest.review.latest_verdict, "pending");
+});
+
 test("changes_requested verdict creates a re-dispatch artifact", () => {
   const { repoRoot, manifestPath, doneCriteriaPath, diffPath } = setupRepo();
   const reviewFile = writeVerdict(repoRoot, "changes.json", {
