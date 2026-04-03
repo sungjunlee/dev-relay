@@ -1,7 +1,7 @@
 ---
 name: relay-review
 argument-hint: "[branch-name or PR-number]"
-description: Independent PR review after Codex dispatch. Re-scores the rubric and reviews against Done Criteria in a fresh context, free from planning bias. Returns LGTM or specific issues with file:line references.
+description: Independent PR review after Codex dispatch. Re-scores the rubric and reviews against Done Criteria in a fresh context, free from planning bias. On success, mark the run ready_to_merge.
 context: fork
 compatibility: "Must run in an isolated context to prevent planning bias (Claude Code: context: fork auto-handled; Codex/other: start a new session). Requires gh CLI."
 metadata:
@@ -17,6 +17,7 @@ Independent PR review against the Done Criteria contract and scoring rubric. Loo
 1. Get the PR diff and Done Criteria (this runs in a fresh context — fetch everything needed):
 ```bash
 PR_NUM=$(gh pr list --head <branch> --json number -q '.[0].number')
+BRANCH=$(gh pr view $PR_NUM --json headRefName -q '.headRefName')
 gh pr diff $PR_NUM > /tmp/pr-diff.txt
 
 # Issue number extraction — try each method until one succeeds:
@@ -25,7 +26,6 @@ ISSUE_NUM=$(gh pr view $PR_NUM --json closingIssuesReferences -q '.[0].number')
 [ -z "$ISSUE_NUM" ] && ISSUE_NUM=$(gh pr view $PR_NUM --json body -q '.body' | grep -oiE '(closes|fixes|resolves|refs|related to) #[0-9]+' | grep -oE '[0-9]+' | head -1)
 # Fallback 2: extract from branch name (try issue-<N> first, then any number)
 if [ -z "$ISSUE_NUM" ]; then
-  BRANCH=$(gh pr view $PR_NUM --json headRefName -q '.headRefName')
   ISSUE_NUM=$(echo "$BRANCH" | grep -oE 'issue-[0-9]+' | grep -oE '[0-9]+')
   [ -z "$ISSUE_NUM" ] && ISSUE_NUM=$(echo "$BRANCH" | grep -oE '[0-9]+' | tail -1)
 fi
@@ -99,6 +99,11 @@ EOF
 ```
 <!-- NOTE: Verdict line format is parsed by gate-check.js via regex /Verdict:\s*(LGTM|ESCALATED)/. Do not add markdown formatting to the Verdict line. -->
 
+Then mark the relay run `ready_to_merge`:
+```bash
+node ${CLAUDE_SKILL_DIR}/../relay-dispatch/scripts/update-manifest-state.js --repo . --branch "$BRANCH" --state ready_to_merge --pr-number "$PR_NUM" --rounds <N> --verdict lgtm
+```
+
 11. Hit safety cap or stuck → escalate to user. Still write audit trail:
 ```bash
 gh pr comment $PR_NUM --body "$(cat <<'EOF'
@@ -108,6 +113,11 @@ Verdict: ESCALATED — unresolved after <N> rounds
 Issues: [list with file:line]
 EOF
 )"
+```
+
+Then mark the relay run `escalated`:
+```bash
+node ${CLAUDE_SKILL_DIR}/../relay-dispatch/scripts/update-manifest-state.js --repo . --branch "$BRANCH" --state escalated --pr-number "$PR_NUM" --rounds <N> --verdict escalated
 ```
 
 ## Re-dispatch (when issues found)

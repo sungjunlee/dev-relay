@@ -74,9 +74,9 @@ function output(result) {
     console.log(JSON.stringify(result, null, 2));
   } else {
     if (result.status === "lgtm") {
-      console.log(`✓ PR #${PR_NUM}: relay-review LGTM (round ${result.round || "?"})`);
+      console.log(`✓ PR #${PR_NUM}: relay-review LGTM (round ${result.round || "?"}) — ready to merge`);
     } else if (result.status === "skipped") {
-      console.log(`⊘ PR #${PR_NUM}: review skipped — ${result.reason}`);
+      console.log(`⊘ PR #${PR_NUM}: review skipped — ${result.reason} — merge explicitly if appropriate`);
     } else if (result.status === "escalated") {
       console.log(`✗ PR #${PR_NUM}: relay-review ESCALATED — resolve issues before merge`);
       if (result.issues) console.log(`  ${result.issues}`);
@@ -101,13 +101,13 @@ function main() {
     ].join("\n");
 
     if (DRY_RUN) {
-      output({ status: "skipped", pr: PR_NUM, reason: SKIP_REASON, comment: skipComment });
+      output({ status: "skipped", pr: PR_NUM, reason: SKIP_REASON, comment: skipComment, readyToMerge: true });
     } else {
       execFileSync("gh", ["pr", "comment", PR_NUM, "--body", skipComment], {
         encoding: "utf-8",
         stdio: "pipe",
       });
-      output({ status: "skipped", pr: PR_NUM, reason: SKIP_REASON });
+      output({ status: "skipped", pr: PR_NUM, reason: SKIP_REASON, readyToMerge: true });
     }
     return;
   }
@@ -158,7 +158,7 @@ function main() {
 
   if (verdict === "LGTM") {
     const roundMatch = lastReviewComment.match(/Rounds?:\s*(\d+)/);
-    output({ status: "lgtm", pr: PR_NUM, round: roundMatch ? roundMatch[1] : null });
+    output({ status: "lgtm", pr: PR_NUM, round: roundMatch ? roundMatch[1] : null, readyToMerge: true });
     return;
   }
 

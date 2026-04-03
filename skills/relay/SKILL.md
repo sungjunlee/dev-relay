@@ -1,7 +1,7 @@
 ---
 name: relay
 argument-hint: "[issue-number or task description]"
-description: Execute the full relay cycle — plan, dispatch to Codex, review PR, merge. Integrates with dev-backlog sprint files when available. Use when delegating work to Codex via worktree isolation.
+description: Execute the relay cycle through ready_to_merge — plan, dispatch to Codex, review PR, then stop for explicit merge approval. Integrates with dev-backlog sprint files when available.
 compatibility: Requires Claude Code or Codex, gh CLI, git, and Node.js 18+. Task AC reading falls back to local files or user input.
 metadata:
   related-skills: "relay-plan, relay-dispatch, relay-review, relay-merge, dev-backlog"
@@ -9,7 +9,7 @@ metadata:
 
 # Dev Relay
 
-Execute the full plan → dispatch → review → merge cycle. Follow ALL steps below in order. Do NOT skip any step.
+Execute the plan → dispatch → review cycle. Stop at `ready_to_merge` unless the user explicitly asks to merge. Follow ALL steps below in order.
 
 ## Step 0: Re-Anchor
 
@@ -97,20 +97,14 @@ The rubric from relay-plan anchors each iteration — prevents context drift acr
 
 Do NOT review inline — relay-review must run in an isolated context to prevent planning bias.
 
-## Step 5: Merge (relay-merge)
+## Step 5: Ready to Merge
 
-relay-merge runs `gate-check.js` as its first step — this verifies the relay-review PR comment exists. If missing, it blocks merge and tells you to run relay-review first (or `--skip <reason>` for intentional bypass).
+If relay-review returns LGTM, stop the relay here and record the run as `ready_to_merge`:
 ```bash
-gh pr merge <PR-NUM> --squash
-gh issue close <N> -c "Resolved in PR #<PR-NUM>"
-# Dispatch retains the worktree by default for review/follow-up work.
-# Cleanup later: git worktree remove <path> && git branch -d issue-<N>
+node ${CLAUDE_SKILL_DIR}/../relay-dispatch/scripts/update-manifest-state.js --repo . --branch issue-<N> --state ready_to_merge --pr-number $PR_NUM --verdict lgtm
 ```
 
-If sprint file exists, update it:
-- **Plan**: check off `[x] #<N>` (was `[~]` during dispatch)
-- **Progress**: add structured log entry (e.g., "2026-03-28: #540 dispatched → PR #89 → reviewed (LGTM, round 2) → merged")
-- **Running Context**: add learnings that affect later tasks
+Do not mark the sprint task complete yet. Only run relay-merge when the user explicitly wants to land the PR.
 
 Create follow-up issues if discovered during review.
 
@@ -123,12 +117,12 @@ When multiple independent tasks are ready, dispatch them in parallel instead of 
 1. **Plan all tasks** — follow Steps 0 through 2 (including 1.5) for each task. Write each dispatch prompt to its own temp file.
 2. **Dispatch all** — run dispatch.js for each task asynchronously (in the background). Mark all as `[~]` in sprint file.
 3. **Review as completed** — as each dispatch finishes, run Step 4 (relay-review). No need to wait for all.
-4. **Merge one-by-one** — merge each reviewed PR sequentially (Step 5). After each merge, check remaining PRs for conflicts.
+4. **Merge one-by-one** — merge each ready PR sequentially only after explicit approval. After each merge, check remaining PRs for conflicts.
 5. **Re-anchor** — after the batch completes, run Step 0 before starting the next batch.
 
 ### Merge conflict recovery
 
-If a PR has conflicts after an earlier merge:
+If a ready-to-merge PR has conflicts after an earlier merge:
 1. In the worktree: `git fetch origin && git rebase origin/main`
 2. Re-review the rebased PR (run relay-review again — Phase 1 from scratch)
 3. Merge
@@ -144,6 +138,6 @@ If a PR has conflicts after an earlier merge:
 After completing the relay cycle, verify:
 - [ ] Issue AC fully implemented (relay-review confirmed)
 - [ ] PR has `<!-- relay-review -->` LGTM comment (or `<!-- relay-review-skip -->` with reason)
-- [ ] PR merged and issue closed
+- [ ] PR marked `ready_to_merge`, or merged and closed if relay-merge was explicitly requested
 - [ ] Sprint file updated — if exists (Plan `[x]`, Progress entry with review round count)
 - [ ] Follow-up issues created (if applicable)

@@ -88,7 +88,21 @@ Expect:
 
 - all skill files parse as YAML
 
-### 5. Codex skill strict validation is still a known mismatch
+### 5. Manifest state helper can promote a reviewed run to `ready_to_merge`
+
+Command:
+
+```bash
+node --test skills/relay-dispatch/scripts/update-manifest-state.test.js
+```
+
+Expect:
+
+- branch lookup resolves the latest manifest for that branch
+- helper updates `review_pending -> ready_to_merge`
+- helper persists `git.pr_number`, `review.rounds`, and `review.latest_verdict`
+
+### 6. Codex skill strict validation is still a known mismatch
 
 Command:
 
@@ -109,7 +123,7 @@ Interpretation:
 ## Out of Scope For These Tests
 
 - script-driven review loop
-- ready-to-merge default flow
+- automatic review-runner integration for ready-to-merge
 - reviewer no-write enforcement
 - manifest-driven merge behavior
 

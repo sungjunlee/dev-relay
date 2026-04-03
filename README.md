@@ -2,7 +2,7 @@
 
 **Delegate implementation to AI agents. Keep planning and review in your hands.**
 
-dev-relay orchestrates the handoff between [Claude Code](https://claude.ai/code) (planner/reviewer) and [Codex](https://chatgpt.com/codex) (executor). You define what to build. Codex builds it in an isolated worktree. Claude reviews the PR with fresh eyes — no planning bias. The result is merged only after an auditable review trail exists.
+dev-relay orchestrates the handoff between [Claude Code](https://claude.ai/code) (planner/reviewer) and [Codex](https://chatgpt.com/codex) (executor). You define what to build. Codex builds it in an isolated worktree. Claude reviews the PR with fresh eyes — no planning bias. The result becomes ready to merge after an auditable review trail exists, and merge stays explicit.
 
 ```
 Claude Code                  Codex                       GitHub
@@ -16,7 +16,8 @@ Claude Code                  Codex                       GitHub
  │   ├── quality sweep        │                            │
  │   └── issues found? ──────►├── re-dispatch ───────────►│  PR updated
  │                            │                            │
- ├── LGTM ────────────────────────────────────────────────►│  merged
+ ├── LGTM ────────────────────────────────────────────────►│  ready_to_merge
+ ├── explicit merge ──────────────────────────────────────►│  merged
  └── cleanup + sprint update                               │
 ```
 
@@ -66,7 +67,7 @@ npx skills add . -g -y
 /relay 42
 ```
 
-Reads issue #42, builds a scoring rubric if the task is complex, dispatches to Codex in a worktree, reviews the resulting PR, and merges on LGTM.
+Reads issue #42, builds a scoring rubric if the task is complex, dispatches to Codex in a worktree, reviews the resulting PR, and stops at `ready_to_merge`. Use `/relay-merge` to land it explicitly.
 
 ### Step by step
 
@@ -76,18 +77,18 @@ Use individual skills when you want control over each phase:
 /relay-plan 42          # Convert issue AC into a scoring rubric
 /relay-dispatch         # Dispatch to Codex (worktree → implement → PR)
 /relay-review fix/42    # Review PR in a fresh context
-/relay-merge 123        # Gate-check → merge → cleanup
+/relay-merge 123        # Gate-check → explicit merge → cleanup
 ```
 
 ## Skills
 
 | Command | Phase | Description |
 |---------|-------|-------------|
-| `/relay [issue]` | All | Full cycle — plan, dispatch, review, merge |
+| `/relay [issue]` | All | Full cycle through `ready_to_merge` |
 | `/relay-plan [issue]` | Plan | Build scoring rubric from acceptance criteria |
 | `/relay-dispatch` | Execute | Dispatch to Codex via git worktree isolation |
 | `/relay-review [branch]` | Review | Independent PR review with convergence loop |
-| `/relay-merge [PR]` | Ship | Merge after LGTM, cleanup worktree, update sprint |
+| `/relay-merge [PR]` | Ship | Explicit merge after LGTM, cleanup worktree, update sprint |
 
 ## How It Works
 

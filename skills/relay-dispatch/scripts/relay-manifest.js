@@ -62,6 +62,14 @@ function getManifestPath(repoRoot, runId) {
   return path.join(getRunsDir(repoRoot), `${runId}.md`);
 }
 
+function listManifestPaths(repoRoot) {
+  const runsDir = getRunsDir(repoRoot);
+  if (!fs.existsSync(runsDir)) return [];
+  return fs.readdirSync(runsDir)
+    .filter((name) => name.endsWith(".md"))
+    .map((name) => path.join(runsDir, name));
+}
+
 function ensureRunLayout(repoRoot, runId) {
   const runsDir = getRunsDir(repoRoot);
   const runDir = getRunDir(repoRoot, runId);
@@ -177,6 +185,19 @@ function readManifest(manifestPath) {
   return parseFrontmatter(text);
 }
 
+function sortKeyForManifest({ data, manifestPath }) {
+  return data?.timestamps?.updated_at || data?.timestamps?.created_at || path.basename(manifestPath);
+}
+
+function findLatestManifestForBranch(repoRoot, branch) {
+  const candidates = listManifestPaths(repoRoot)
+    .map((manifestPath) => ({ manifestPath, ...readManifest(manifestPath) }))
+    .filter(({ data }) => data?.git?.working_branch === branch)
+    .sort((left, right) => sortKeyForManifest(right).localeCompare(sortKeyForManifest(left)));
+
+  return candidates[0] || null;
+}
+
 function validateTransition(fromState, toState) {
   if (!Object.values(STATES).includes(fromState)) {
     throw new Error(`Unknown relay state: ${fromState}`);
@@ -272,10 +293,12 @@ module.exports = {
   createManifestSkeleton,
   createRunId,
   ensureRunLayout,
+  findLatestManifestForBranch,
   getManifestPath,
   getRunDir,
   getRunsDir,
   inferIssueNumber,
+  listManifestPaths,
   parseFrontmatter,
   readManifest,
   updateManifestState,

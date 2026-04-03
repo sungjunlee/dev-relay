@@ -1,7 +1,7 @@
 ---
 name: relay-merge
 argument-hint: "[PR-number]"
-description: Merge a reviewed PR, clean up worktree/branch, close GitHub issues, and update sprint file if available. Use after relay-review returns LGTM.
+description: Explicitly merge a ready-to-merge PR, clean up worktree/branch, close GitHub issues, and update sprint file if available.
 compatibility: Requires gh CLI and git.
 metadata:
   related-skills: "relay, relay-plan, relay-dispatch, relay-review, dev-backlog"
@@ -9,7 +9,7 @@ metadata:
 
 # Relay Merge
 
-Merge PR and close the loop after LGTM. **Requires relay-review PR comment.**
+Explicitly merge a ready-to-merge PR and close the loop. **Requires relay-review PR comment.**
 
 ## Process
 
@@ -19,7 +19,7 @@ Merge PR and close the loop after LGTM. **Requires relay-review PR comment.**
 ${CLAUDE_SKILL_DIR}/scripts/gate-check.js $PR_NUM
 ```
 
-- Exit 0 (LGTM) → proceed to merge
+- Exit 0 (LGTM) → PR is ready to merge; proceed only if the user wants to land it now
 - Exit 1 (no comment) → **STOP.** Run relay-review first
 - Exit 1 (ESCALATED) → **STOP.** Show unresolved issues to user
 
@@ -31,10 +31,12 @@ This writes a `<!-- relay-review-skip -->` comment to the PR — maintaining aud
 
 **Do NOT merge without running gate-check.** This is the audit trail that review actually happened (or was intentionally skipped with documented reason).
 
-### 1. GitHub cleanup
+### 1. Merge + manifest update
 
 ```bash
+BRANCH=$(gh pr view $PR_NUM --json headRefName -q '.headRefName')
 gh pr merge $PR_NUM --squash
+node ${CLAUDE_SKILL_DIR}/../relay-dispatch/scripts/update-manifest-state.js --repo . --branch "$BRANCH" --state merged --pr-number "$PR_NUM" --verdict lgtm
 gh issue close <number> -c "Resolved in PR #$PR_NUM"
 # Dispatch retains the worktree by default.
 # Cleanup here: git worktree remove <worktree-path> && git branch -d <branch>
