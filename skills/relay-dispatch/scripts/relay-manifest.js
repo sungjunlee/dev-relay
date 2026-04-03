@@ -179,6 +179,9 @@ function parseFrontmatter(text) {
 function formatScalar(value) {
   if (value === null) return "null";
   if (typeof value === "boolean" || typeof value === "number") return String(value);
+  if (typeof value === "string" && value.includes("\n")) {
+    return JSON.stringify(value);
+  }
   return `'${String(value).replace(/'/g, "''")}'`;
 }
 

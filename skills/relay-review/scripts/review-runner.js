@@ -196,6 +196,7 @@ function buildPrompt({ round, prNumber, branch, issueNumber, doneCriteria, diffT
     "",
     "Validation rules:",
     '- If `verdict` is `pass`, then `issues` must be `[]` and `next_action` must be `ready_to_merge`.',
+    '- If `verdict` is `pass`, set both `contract_status` and `quality_status` to `pass`.',
     '- If `verdict` is `changes_requested`, include actionable issues with `file` and `line`, and set `next_action` to `changes_requested`.',
     '- If `verdict` is `escalated`, include the blocking issues or reason that automation should stop, and set `next_action` to `escalated`.',
     '- If no Score Log is available, set `rubric_scores` to `[]`.',

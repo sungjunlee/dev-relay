@@ -61,6 +61,33 @@ test("manifest round-trips through frontmatter helpers", () => {
   assert.match(parsed.body, /# Notes/);
 });
 
+test("manifest round-trips multiline scalar values", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-manifest-multiline-"));
+  const runId = "issue-42-20260402103001";
+  const worktreePath = path.join(repoRoot, "wt");
+  const { manifestPath } = ensureRunLayout(repoRoot, runId);
+  const manifest = createManifestSkeleton({
+    repoRoot,
+    runId,
+    branch: "issue-42",
+    baseBranch: "main",
+    issueNumber: 42,
+    worktreePath,
+    orchestrator: "codex",
+    worker: "codex",
+    reviewer: "claude",
+  });
+  manifest.cleanup.error = "dirty worktree: M README.md\n?? docs/direct-read-relay-operator-note.md";
+
+  writeManifest(manifestPath, manifest);
+  const parsed = readManifest(manifestPath);
+
+  assert.equal(
+    parsed.data.cleanup.error,
+    "dirty worktree: M README.md\n?? docs/direct-read-relay-operator-note.md"
+  );
+});
+
 test("updateManifestState allows valid transitions and rejects invalid ones", () => {
   const manifest = {
     state: STATES.DRAFT,
