@@ -55,6 +55,8 @@ test("manifest round-trips through frontmatter helpers", () => {
   assert.equal(parsed.data.state, STATES.DRAFT);
   assert.equal(parsed.data.issue.number, 42);
   assert.equal(parsed.data.roles.reviewer, "claude");
+  assert.equal(parsed.data.git.head_sha, null);
+  assert.equal(parsed.data.review.last_reviewed_sha, null);
   assert.equal(parsed.data.cleanup.status, CLEANUP_STATUSES.PENDING);
   assert.match(parsed.body, /# Notes/);
 });
@@ -69,6 +71,9 @@ test("updateManifestState allows valid transitions and rejects invalid ones", ()
   const dispatched = updateManifestState(manifest, STATES.DISPATCHED, "await_dispatch_result");
   assert.equal(dispatched.state, STATES.DISPATCHED);
   assert.equal(dispatched.next_action, "await_dispatch_result");
+
+  const closed = updateManifestState(manifest, STATES.CLOSED, "done");
+  assert.equal(closed.state, STATES.CLOSED);
 
   assert.throws(
     () => updateManifestState(dispatched, STATES.MERGED, "done"),

@@ -73,6 +73,33 @@ test("gate-check blocks stale LGTM comments when a newer commit exists", () => {
   assert.equal(result.json.latestCommit, "abc123");
 });
 
+test("gate-check uses manifest review SHA when provided", () => {
+  const result = runGateCheckDryRun({
+    comments: [
+      {
+        body: "<!-- relay-review -->\n## Relay Review\nVerdict: LGTM\nRounds: 1",
+        createdAt: "2026-04-03T08:00:00Z",
+      },
+    ],
+    commits: [
+      {
+        oid: "new456",
+        committedDate: "2026-04-03T08:00:30Z",
+      },
+    ],
+    manifest: {
+      review: {
+        last_reviewed_sha: "old123",
+      },
+    },
+  });
+
+  assert.equal(result.status, 1);
+  assert.equal(result.json.status, "stale");
+  assert.equal(result.json.reviewedSha, "old123");
+  assert.equal(result.json.latestCommit, "new456");
+});
+
 test("gate-check ignores prose comments that only mention review markers", () => {
   const result = runGateCheckDryRun([
     [

@@ -25,6 +25,7 @@
  */
 
 const { execFileSync } = require("child_process");
+const { buildSkipComment, evaluateReviewGate } = require("./review-gate");
 
 // ---------------------------------------------------------------------------
 // Args
@@ -94,16 +95,6 @@ function output(result) {
   }
 }
 
-function toIsoOrNull(value) {
-  if (!value) return null;
-  const millis = Date.parse(value);
-  return Number.isNaN(millis) ? null : new Date(millis).toISOString();
-}
-
-function hasRelayReviewMarker(body) {
-  return /^\s*<!-- relay-review(?:-round)? -->\s*$/m.test(String(body || ""));
-}
-
 // ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
@@ -111,11 +102,7 @@ function hasRelayReviewMarker(body) {
 function main() {
   // --- Skip path: write audit comment and exit ---
   if (SKIP) {
-    const skipComment = [
-      "<!-- relay-review-skip -->",
-      "## Relay Review — Skipped",
-      `Reason: ${SKIP_REASON}`,
-    ].join("\n");
+    const skipComment = buildSkipComment(SKIP_REASON);
 
     if (DRY_RUN) {
       output({ status: "skipped", pr: PR_NUM, reason: SKIP_REASON, comment: skipComment, readyToMerge: true });
@@ -130,126 +117,42 @@ function main() {
   }
 
   // --- Check path: look for relay-review comment ---
-  let commentRecords;
-  let latestCommit = null;
-  let latestCommitAt = null;
+  let comments;
+  let commits;
+  let manifestData = null;
   if (DRY_RUN) {
     // Dry-run: read JSON object/array from stdin, or plain text as single comment
     const stdin = require("fs").readFileSync(0, "utf-8").trim();
     try {
       const parsed = JSON.parse(stdin);
       // Accept {comments:[...], commits:[...]} or [{body:...}] or [string]
-      const arr = parsed.comments || parsed;
-      commentRecords = arr.map((entry, index) => (
-        typeof entry === "string"
-          ? { body: entry, createdAt: null, index }
-          : { body: entry.body, createdAt: toIsoOrNull(entry.createdAt), index }
-      ));
-      const commits = Array.isArray(parsed.commits) ? parsed.commits : [];
-      for (const commit of commits) {
-        const committedAt = toIsoOrNull(commit.committedDate || commit.authoredDate);
-        if (committedAt && (!latestCommitAt || committedAt > latestCommitAt)) {
-          latestCommitAt = committedAt;
-          latestCommit = commit.oid || null;
-        }
-      }
+      comments = parsed.comments || parsed;
+      commits = Array.isArray(parsed.commits) ? parsed.commits : [];
+      manifestData = parsed.manifest || null;
     } catch {
       // Plain text: treat entire stdin as one comment body
-      commentRecords = [{ body: stdin, createdAt: null, index: 0 }];
+      comments = [{ body: stdin, createdAt: null }];
+      commits = [];
     }
   } else {
     const raw = execFileSync("gh", [
       "pr", "view", PR_NUM, "--json", "comments,commits",
     ], { encoding: "utf-8", stdio: "pipe" });
     const parsed = JSON.parse(raw);
-    commentRecords = (parsed.comments || []).map((comment, index) => ({
-      body: comment.body,
-      createdAt: toIsoOrNull(comment.createdAt),
-      index,
-    }));
-    for (const commit of (parsed.commits || [])) {
-      const committedAt = toIsoOrNull(commit.committedDate || commit.authoredDate);
-      if (committedAt && (!latestCommitAt || committedAt > latestCommitAt)) {
-        latestCommitAt = committedAt;
-        latestCommit = commit.oid || null;
-      }
-    }
+    comments = parsed.comments || [];
+    commits = parsed.commits || [];
   }
 
-  // Find the last relay-review or relay-review-round comment.
-  let lastReviewComment = null;
-  for (const comment of commentRecords) {
-    const body = comment.body || "";
-    if (hasRelayReviewMarker(body)) {
-      lastReviewComment = comment;
-    }
-  }
-
-  if (!lastReviewComment) {
-    output({ status: "missing", pr: PR_NUM });
-    process.exit(1);
-  }
-
-  // Parse verdict
-  const verdictMatch = lastReviewComment.body.match(/Verdict:\s*(LGTM|CHANGES_REQUESTED|ESCALATED)/);
-  if (!verdictMatch) {
-    output({ status: "missing", pr: PR_NUM });
-    process.exit(1);
-  }
-
-  const verdict = verdictMatch[1];
-
-  if (
-    verdict === "LGTM" &&
-    latestCommitAt &&
-    lastReviewComment.createdAt &&
-    lastReviewComment.createdAt < latestCommitAt
-  ) {
-    output({
-      status: "stale",
-      pr: PR_NUM,
-      latestCommit,
-      latestCommitAt,
-      reviewedAt: lastReviewComment.createdAt,
-      readyToMerge: false,
-    });
-    process.exit(1);
-  }
-
-  if (verdict === "LGTM") {
-    const roundMatch = lastReviewComment.body.match(/Rounds?:\s*(\d+)/);
-    output({
-      status: "lgtm",
-      pr: PR_NUM,
-      round: roundMatch ? roundMatch[1] : null,
-      readyToMerge: true,
-      reviewedAt: lastReviewComment.createdAt,
-      latestCommit,
-      latestCommitAt,
-    });
-    return;
-  }
-
-  if (verdict === "CHANGES_REQUESTED") {
-    const issuesMatch = lastReviewComment.body.match(/Issues:\s*([\s\S]+)/);
-    output({
-      status: "changes_requested",
-      pr: PR_NUM,
-      issues: issuesMatch ? issuesMatch[1].trim() : null,
-      readyToMerge: false,
-    });
-    process.exit(1);
-  }
-
-  // ESCALATED
-  const issuesMatch = lastReviewComment.body.match(/Issues?:\s*(.+?)(?:\n|$)/);
-  output({
-    status: "escalated",
-    pr: PR_NUM,
-    issues: issuesMatch ? issuesMatch[1] : null,
-    readyToMerge: false,
+  const result = evaluateReviewGate({
+    prNumber: PR_NUM,
+    comments,
+    commits,
+    manifestData,
   });
-  process.exit(1);
+  output(result);
+  if (!result.readyToMerge) {
+    process.exit(1);
+  }
 }
 
 main();

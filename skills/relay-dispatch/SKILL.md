@@ -1,6 +1,6 @@
 ---
 name: relay-dispatch
-argument-hint: "<repo-path> -b <branch> -p <prompt> [options]"
+argument-hint: "<repo-path> (-b <branch> | --run-id <id>) -p <prompt> [options]"
 description: Dispatch implementation tasks via worktree isolation. Creates a git worktree, runs an executor (Codex by default) with a contract prompt, and collects results. Use when delegating work, running background dispatches, or parallelizing independent tasks.
 compatibility: Requires executor CLI (e.g., codex), git, and Node.js 18+.
 metadata:
@@ -17,6 +17,9 @@ Create a worktree and dispatch a task to an executor.
 # Foreground (blocking — simple tasks, default executor: codex)
 ${CLAUDE_SKILL_DIR}/scripts/dispatch.js . -b feature-auth -p "..." --copy-env
 
+# Same-run resume after a changes-requested review
+${CLAUDE_SKILL_DIR}/scripts/dispatch.js . --run-id issue-42-20260403120000000 --prompt-file review-round-2-redispatch.md
+
 # With explicit executor
 ${CLAUDE_SKILL_DIR}/scripts/dispatch.js . -e codex -b feature-auth -p "..."
 ```
@@ -28,6 +31,8 @@ For background and parallel dispatch, see "Background & Parallel" section below.
 | Flag | Description |
 |---|---|
 | `--branch, -b` | Branch name (required) |
+| `--run-id` | Resume an existing retained relay run |
+| `--manifest` | Resume an existing retained relay run by manifest path |
 | `--prompt, -p` | Task prompt (include Context + Done Criteria + self-review) |
 | `--prompt-file` | Read prompt from file (for large prompts) |
 | `--executor, -e` | Executor: `codex` (default) |
@@ -44,7 +49,7 @@ For background and parallel dispatch, see "Background & Parallel" section below.
 Creates worktree → writes a relay run manifest → runs executor → collects result.
 Exits with non-zero code on failure.
 
-Each dispatch writes a manifest to `.relay/runs/<run-id>.md` in the target repo. The manifest is the new shared state surface for later lifecycle work.
+Each dispatch writes a manifest to `.relay/runs/<run-id>.md` and appends lifecycle evidence to `.relay/runs/<run-id>/events.jsonl`. `run_id` is the canonical identity for re-dispatch, review, merge, close, and reporting.
 
 Current scope: dispatch, review, merge finalization, and stale janitor cleanup all read the same relay manifest contract.
 
@@ -76,7 +81,7 @@ After dispatch completes, confirm before proceeding to review:
 gh pr list --head <branch> --json number,url,title
 ```
 
-Successful dispatches retain the worktree by default. Use the returned `worktree` path, manifest, and branch to continue review or follow-up fixes without reconstructing state.
+Successful dispatches retain the worktree by default. Use the returned `runId`, manifest, and retained worktree to continue review or follow-up fixes without reconstructing state. Resume only from `changes_requested`; dispatch reuses the same run and worktree instead of creating a fresh manifest.
 
 ### Handling Failures
 
@@ -139,6 +144,8 @@ To prune stale retained worktrees safely from this repo:
 ${CLAUDE_SKILL_DIR}/scripts/cleanup-worktrees.js --repo .              # clean terminal runs > 24h old
 ${CLAUDE_SKILL_DIR}/scripts/cleanup-worktrees.js --repo . --all         # ignore age threshold
 ${CLAUDE_SKILL_DIR}/scripts/cleanup-worktrees.js --repo . --dry-run     # show what would be removed
+${CLAUDE_SKILL_DIR}/scripts/close-run.js --repo . --run-id <run-id> --reason "stale_non_terminal_run"
+${CLAUDE_SKILL_DIR}/scripts/reliability-report.js --repo . --json
 ```
 
 ## Caveats

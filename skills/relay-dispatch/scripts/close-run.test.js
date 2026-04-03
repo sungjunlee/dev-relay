@@ -1,0 +1,106 @@
+const test = require("node:test");
+const assert = require("node:assert/strict");
+const { execFileSync } = require("child_process");
+const fs = require("fs");
+const os = require("os");
+const path = require("path");
+
+const {
+  STATES,
+  createManifestSkeleton,
+  createRunId,
+  ensureRunLayout,
+  readManifest,
+  updateManifestState,
+  writeManifest,
+} = require("./relay-manifest");
+
+const SCRIPT = path.join(__dirname, "close-run.js");
+
+function setupRepo({ dirtyWorktree = false } = {}) {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-close-run-"));
+  execFileSync("git", ["init", "-b", "main"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
+  execFileSync("git", ["config", "user.name", "Relay Close Test"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
+  execFileSync("git", ["config", "user.email", "relay-close@example.com"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
+  fs.writeFileSync(path.join(repoRoot, "README.md"), "base\n", "utf-8");
+  execFileSync("git", ["add", "README.md"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
+  execFileSync("git", ["commit", "-m", "init"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
+
+  const branch = "issue-42";
+  const worktreePath = path.join(repoRoot, "wt", branch);
+  fs.mkdirSync(path.dirname(worktreePath), { recursive: true });
+  execFileSync("git", ["worktree", "add", worktreePath, "-b", branch], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
+  if (dirtyWorktree) {
+    fs.writeFileSync(path.join(worktreePath, "dirty.txt"), "leftover\n", "utf-8");
+  }
+
+  const runId = createRunId({
+    branch,
+    timestamp: new Date("2026-04-03T07:00:00.000Z"),
+  });
+  const manifestPath = ensureRunLayout(repoRoot, runId).manifestPath;
+  let manifest = createManifestSkeleton({
+    repoRoot,
+    runId,
+    branch,
+    baseBranch: "main",
+    issueNumber: 42,
+    worktreePath,
+    orchestrator: "codex",
+    worker: "codex",
+    reviewer: "codex",
+  });
+  manifest = updateManifestState(manifest, STATES.DISPATCHED, "await_dispatch_result");
+  manifest = updateManifestState(manifest, STATES.REVIEW_PENDING, "run_review");
+  writeManifest(manifestPath, manifest);
+
+  return { repoRoot, manifestPath, runId, worktreePath };
+}
+
+test("close-run closes an active run and cleans a clean worktree", () => {
+  const { repoRoot, manifestPath, runId, worktreePath } = setupRepo();
+
+  const stdout = execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--run-id", runId,
+    "--reason", "stale_non_terminal_run",
+    "--json",
+  ], { encoding: "utf-8" });
+
+  const result = JSON.parse(stdout);
+  assert.equal(result.state, STATES.CLOSED);
+  assert.equal(result.nextAction, "done");
+  assert.equal(result.cleanup.cleanupStatus, "succeeded");
+  assert.equal(fs.existsSync(worktreePath), false);
+
+  const manifest = readManifest(manifestPath).data;
+  assert.equal(manifest.state, STATES.CLOSED);
+  assert.equal(manifest.cleanup.status, "succeeded");
+
+  const events = fs.readFileSync(path.join(repoRoot, ".relay", "runs", runId, "events.jsonl"), "utf-8");
+  assert.match(events, /"event":"close"/);
+  assert.match(events, /"event":"cleanup_result"/);
+});
+
+test("close-run keeps dirty worktrees and records manual cleanup follow-up", () => {
+  const { repoRoot, manifestPath, runId, worktreePath } = setupRepo({ dirtyWorktree: true });
+
+  const stdout = execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--run-id", runId,
+    "--reason", "stale_non_terminal_run",
+    "--json",
+  ], { encoding: "utf-8" });
+
+  const result = JSON.parse(stdout);
+  assert.equal(result.state, STATES.CLOSED);
+  assert.equal(result.nextAction, "manual_cleanup_required");
+  assert.equal(result.cleanup.cleanupStatus, "failed");
+  assert.equal(fs.existsSync(worktreePath), true);
+
+  const manifest = readManifest(manifestPath).data;
+  assert.equal(manifest.state, STATES.CLOSED);
+  assert.equal(manifest.cleanup.status, "failed");
+});

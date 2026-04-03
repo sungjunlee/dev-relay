@@ -33,6 +33,7 @@ function setupRepo({ dirtyWorktree = false } = {}) {
   fs.writeFileSync(path.join(worktreePath, "smoke.txt"), "ok\n", "utf-8");
   execFileSync("git", ["-C", worktreePath, "add", "smoke.txt"], { encoding: "utf-8", stdio: "pipe" });
   execFileSync("git", ["-C", worktreePath, "commit", "-m", "Add smoke"], { encoding: "utf-8", stdio: "pipe" });
+  const headSha = execFileSync("git", ["-C", worktreePath, "rev-parse", "HEAD"], { encoding: "utf-8", stdio: "pipe" }).trim();
 
   if (dirtyWorktree) {
     fs.writeFileSync(path.join(worktreePath, "dirty.txt"), "leftover\n", "utf-8");
@@ -57,9 +58,13 @@ function setupRepo({ dirtyWorktree = false } = {}) {
   manifest = updateManifestState(manifest, STATES.DISPATCHED, "await_dispatch_result");
   manifest = updateManifestState(manifest, STATES.REVIEW_PENDING, "run_review");
   manifest = updateManifestState(manifest, STATES.READY_TO_MERGE, "await_explicit_merge");
+  manifest.git.head_sha = headSha;
+  manifest.review.last_reviewed_sha = headSha;
+  manifest.review.latest_verdict = "lgtm";
+  manifest.review.rounds = 1;
   writeManifest(manifestPath, manifest);
 
-  return { repoRoot, manifestPath, branch, worktreePath };
+  return { repoRoot, manifestPath, branch, worktreePath, headSha };
 }
 
 function branchExists(repoRoot, branch) {
@@ -74,14 +79,18 @@ function branchExists(repoRoot, branch) {
   }
 }
 
-function writeFakeGh(logPath) {
+function writeFakeGh(logPath, { headRefName = "issue-42", comments = [], commits = [] } = {}) {
   const ghPath = path.join(path.dirname(logPath), "fake-gh.js");
   fs.writeFileSync(ghPath, `#!/usr/bin/env node
 const fs = require("fs");
 const args = process.argv.slice(2);
 fs.appendFileSync(${JSON.stringify(logPath)}, args.join(" ") + "\\n", "utf-8");
 if (args[0] === "pr" && args[1] === "view") {
-  process.stdout.write(JSON.stringify({ headRefName: "issue-42" }));
+  process.stdout.write(JSON.stringify({
+    headRefName: ${JSON.stringify(headRefName)},
+    comments: ${JSON.stringify(comments)},
+    commits: ${JSON.stringify(commits)}
+  }));
 }
 `, "utf-8");
   fs.chmodSync(ghPath, 0o755);
@@ -89,9 +98,22 @@ if (args[0] === "pr" && args[1] === "view") {
 }
 
 test("finalize-run merges and cleans a ready run", () => {
-  const { repoRoot, manifestPath, branch, worktreePath } = setupRepo();
+  const { repoRoot, manifestPath, branch, worktreePath, headSha } = setupRepo();
   const logPath = path.join(repoRoot, "gh.log");
-  const fakeGh = writeFakeGh(logPath);
+  const fakeGh = writeFakeGh(logPath, {
+    comments: [
+      {
+        body: "<!-- relay-review -->\n## Relay Review\nVerdict: LGTM\nRounds: 1",
+        createdAt: "2026-04-03T08:00:00Z",
+      },
+    ],
+    commits: [
+      {
+        oid: headSha,
+        committedDate: "2026-04-03T08:00:00Z",
+      },
+    ],
+  });
 
   const stdout = execFileSync("node", [
     SCRIPT,
@@ -124,14 +146,28 @@ test("finalize-run merges and cleans a ready run", () => {
   assert.equal(manifest.cleanup.branch_deleted, true);
 
   const ghLog = fs.readFileSync(logPath, "utf-8");
+  assert.match(ghLog, /pr view 123 --json comments,commits/);
   assert.match(ghLog, /pr merge 123 --squash --delete-branch/);
   assert.match(ghLog, /issue close 42 --comment Resolved in PR #123/);
 });
 
 test("finalize-run preserves dirty worktrees and records manual cleanup follow-up", () => {
-  const { repoRoot, manifestPath, branch, worktreePath } = setupRepo({ dirtyWorktree: true });
+  const { repoRoot, manifestPath, branch, worktreePath, headSha } = setupRepo({ dirtyWorktree: true });
   const logPath = path.join(repoRoot, "gh.log");
-  const fakeGh = writeFakeGh(logPath);
+  const fakeGh = writeFakeGh(logPath, {
+    comments: [
+      {
+        body: "<!-- relay-review -->\n## Relay Review\nVerdict: LGTM\nRounds: 1",
+        createdAt: "2026-04-03T08:00:00Z",
+      },
+    ],
+    commits: [
+      {
+        oid: headSha,
+        committedDate: "2026-04-03T08:00:00Z",
+      },
+    ],
+  });
 
   const stdout = execFileSync("node", [
     SCRIPT,
@@ -163,9 +199,22 @@ test("finalize-run preserves dirty worktrees and records manual cleanup follow-u
 });
 
 test("finalize-run can derive the repo root from --manifest alone", () => {
-  const { repoRoot, manifestPath, branch, worktreePath } = setupRepo();
+  const { repoRoot, manifestPath, branch, worktreePath, headSha } = setupRepo();
   const logPath = path.join(repoRoot, "gh.log");
-  const fakeGh = writeFakeGh(logPath);
+  const fakeGh = writeFakeGh(logPath, {
+    comments: [
+      {
+        body: "<!-- relay-review -->\n## Relay Review\nVerdict: LGTM\nRounds: 1",
+        createdAt: "2026-04-03T08:00:00Z",
+      },
+    ],
+    commits: [
+      {
+        oid: headSha,
+        committedDate: "2026-04-03T08:00:00Z",
+      },
+    ],
+  });
 
   const stdout = execFileSync("node", [
     SCRIPT,
@@ -187,4 +236,106 @@ test("finalize-run can derive the repo root from --manifest alone", () => {
 
   const manifest = readManifest(manifestPath).data;
   assert.equal(manifest.cleanup.status, "succeeded");
+});
+
+test("finalize-run blocks merge when review is stale for current HEAD", () => {
+  const { repoRoot, manifestPath, branch, worktreePath } = setupRepo();
+  fs.writeFileSync(path.join(worktreePath, "followup.txt"), "new\n", "utf-8");
+  execFileSync("git", ["-C", worktreePath, "add", "followup.txt"], { encoding: "utf-8", stdio: "pipe" });
+  execFileSync("git", ["-C", worktreePath, "commit", "-m", "Follow-up"], { encoding: "utf-8", stdio: "pipe" });
+  const newHeadSha = execFileSync("git", ["-C", worktreePath, "rev-parse", "HEAD"], { encoding: "utf-8", stdio: "pipe" }).trim();
+
+  const logPath = path.join(repoRoot, "gh.log");
+  const fakeGh = writeFakeGh(logPath, {
+    comments: [
+      {
+        body: "<!-- relay-review -->\n## Relay Review\nVerdict: LGTM\nRounds: 1",
+        createdAt: "2026-04-03T08:00:00Z",
+      },
+    ],
+    commits: [
+      {
+        oid: newHeadSha,
+        committedDate: "2026-04-03T09:00:00Z",
+      },
+    ],
+  });
+
+  assert.throws(() => execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--branch", branch,
+    "--pr", "123",
+    "--json",
+  ], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+    env: { ...process.env, RELAY_GH_BIN: fakeGh },
+  }), /Fresh review gate failed: stale/);
+
+  const manifest = readManifest(manifestPath).data;
+  assert.equal(manifest.state, STATES.READY_TO_MERGE);
+});
+
+test("finalize-run blocks merge when no relay review audit trail exists", () => {
+  const { repoRoot, branch, headSha } = setupRepo();
+  const logPath = path.join(repoRoot, "gh.log");
+  const fakeGh = writeFakeGh(logPath, {
+    comments: [],
+    commits: [
+      {
+        oid: headSha,
+        committedDate: "2026-04-03T08:00:00Z",
+      },
+    ],
+  });
+
+  assert.throws(() => execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--branch", branch,
+    "--pr", "123",
+    "--json",
+  ], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+    env: { ...process.env, RELAY_GH_BIN: fakeGh },
+  }), /Fresh review gate failed: missing/);
+});
+
+test("finalize-run accepts an explicit skip-review reason", () => {
+  const { repoRoot, branch, headSha } = setupRepo();
+  const logPath = path.join(repoRoot, "gh.log");
+  const fakeGh = writeFakeGh(logPath, {
+    comments: [],
+    commits: [
+      {
+        oid: headSha,
+        committedDate: "2026-04-03T08:00:00Z",
+      },
+    ],
+  });
+
+  const stdout = execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--branch", branch,
+    "--pr", "123",
+    "--skip-review", "hotfix",
+    "--json",
+  ], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+    env: { ...process.env, RELAY_GH_BIN: fakeGh },
+  });
+
+  const result = JSON.parse(stdout);
+  assert.equal(result.state, STATES.MERGED);
+  assert.equal(result.reviewGate.status, "skipped");
+
+  const ghLog = fs.readFileSync(logPath, "utf-8");
+  assert.match(ghLog, /pr comment 123 --body/);
 });

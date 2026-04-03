@@ -1,6 +1,6 @@
 ---
 name: relay-review
-argument-hint: "[branch-name or PR-number]"
+argument-hint: "[run-id or branch-name or PR-number]"
 description: Independent PR review after Codex dispatch. Re-scores the rubric and reviews against Done Criteria in a fresh context, free from planning bias. On success, mark the run ready_to_merge.
 context: fork
 compatibility: "Must run in an isolated context to prevent planning bias (Claude Code: context: fork auto-handled; Codex/other: start a new session). Requires gh CLI."
@@ -41,7 +41,8 @@ gh issue view $ISSUE_NUM  # Done Criteria / Acceptance Criteria source
 
 3. Preferred path: let the review runner invoke an isolated reviewer directly:
 ```bash
-node ${CLAUDE_SKILL_DIR}/scripts/review-runner.js --repo . --branch "$BRANCH" --pr "$PR_NUM" --reviewer codex --json
+RUN_ID=<run-id-from-dispatch>
+node ${CLAUDE_SKILL_DIR}/scripts/review-runner.js --repo . --run-id "$RUN_ID" --pr "$PR_NUM" --reviewer codex --json
 ```
 
 Supported built-in adapters:
@@ -61,6 +62,8 @@ This writes round artifacts under `.relay/runs/<run-id>/`, including:
 - `review-round-N-prompt.md`
 - `review-round-N-done-criteria.md`
 - `review-round-N-diff.patch`
+
+The runner reviews the retained checkout recorded in `paths.worktree`, not the repo root. It also records `review.last_reviewed_sha`, enforces `review.max_rounds`, and escalates when the same issue fingerprint repeats 3 consecutive rounds.
 
 ## Review Loop
 
@@ -109,7 +112,7 @@ Before any re-dispatch, check:
 
 12. If you used the fallback path, apply the structured verdict with the review runner:
 ```bash
-node ${CLAUDE_SKILL_DIR}/scripts/review-runner.js --repo . --branch "$BRANCH" --pr "$PR_NUM" --review-file /tmp/review-verdict.json
+node ${CLAUDE_SKILL_DIR}/scripts/review-runner.js --repo . --run-id "$RUN_ID" --pr "$PR_NUM" --review-file /tmp/review-verdict.json
 ```
 
 The runner:

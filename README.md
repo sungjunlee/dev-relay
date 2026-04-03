@@ -117,6 +117,9 @@ Creates an isolated git worktree, writes a relay run manifest, runs the executor
 # With rubric and extended timeout
 /relay-dispatch --branch feat/search --prompt-file rubric.md --timeout 3600
 
+# Resume the same retained run after review requested changes
+/relay-dispatch --run-id issue-42-20260403120000000 --prompt-file review-round-2-redispatch.md
+
 # Dry run — see the plan without executing
 /relay-dispatch --branch feat/search --prompt "Add search" --dry-run
 ```
@@ -127,6 +130,8 @@ Creates an isolated git worktree, writes a relay run manifest, runs the executor
 | Flag | Description | Default |
 |------|-------------|---------|
 | `--branch, -b` | Branch name | *required* |
+| `--run-id` | Resume an existing retained relay run | — |
+| `--manifest` | Resume an existing retained relay run by manifest path | — |
 | `--prompt, -p` | Task prompt | *required (or --prompt-file)* |
 | `--prompt-file` | Read prompt from file | — |
 | `--executor, -e` | Executor type | `codex` |
@@ -142,11 +147,11 @@ Creates an isolated git worktree, writes a relay run manifest, runs the executor
 
 **Timeout guidance:** 1800s for simple tasks, 3600s with self-review, 5400s for complex multi-file work.
 
-Dispatch now writes a run manifest to `.relay/runs/<run-id>.md` in the target repo. JSON output includes `runId`, `manifestPath`, `runState`, and `cleanupPolicy`. A successful first-pass dispatch should usually end in `runState: review_pending`.
+Dispatch now writes one manifest to `.relay/runs/<run-id>.md` and one append-only history log to `.relay/runs/<run-id>/events.jsonl`. `run_id` is the canonical identity for follow-up review, merge, close, and reporting. JSON output includes `runId`, `manifestPath`, `runState`, and `cleanupPolicy`. A successful first-pass dispatch should usually end in `runState: review_pending`.
 
-Successful dispatches retain their worktree by default so review, follow-up fixes, and manual inspection can continue in the same branch context.
+Successful dispatches retain their worktree by default so review, follow-up fixes, and manual inspection can continue in the same run context. When a run is resumed from `changes_requested`, dispatch reuses the retained worktree instead of creating a fresh run.
 
-Dispatch, review, and merge helpers now all have manifest-aware entry points. `review-runner.js` can invoke built-in `codex` and `claude` reviewer adapters directly, `finalize-run.js` closes merged runs with cleanup metadata, and `cleanup-worktrees.js` acts as a repo-local stale-run janitor.
+Dispatch, review, and merge helpers now all have run-id-aware entry points. `review-runner.js` reviews the retained checkout for the run, `finalize-run.js` enforces a fresh review at the current HEAD before merge, `close-run.js` explicitly closes abandoned non-terminal runs, `reliability-report.js` derives repo-local reliability metrics from manifests + events, and `cleanup-worktrees.js` acts as a repo-local stale-run janitor.
 </details>
 
 ### Review — `/relay-review`
@@ -155,7 +160,7 @@ Runs in a **forked Agent context** — the reviewer has no memory of the plannin
 
 The review loops until convergence (most PRs: 1–3 rounds, safety cap: 20):
 
-1. **Prompt bundle / invocation** — `review-runner.js --reviewer codex|claude` can invoke an isolated reviewer directly, or `--prepare-only` writes the diff, done criteria, and round prompt into `.relay/runs/<run-id>/`
+1. **Prompt bundle / invocation** — `review-runner.js --run-id <id> --reviewer codex|claude` can invoke an isolated reviewer directly, or `--prepare-only` writes the diff, done criteria, and round prompt into `.relay/runs/<run-id>/`
 2. **Contract checks** — Is the implementation faithful to the AC? Any stubs or placeholders? Security issues?
 3. **Rubric verification** — Re-run automated checks, re-score evaluated factors independently
 4. **Quality sweep** — Structural review + code simplification pass
@@ -168,11 +173,11 @@ Verdict: LGTM           # or
 Verdict: ESCALATED      # with specific issues and file:line references
 ```
 
-If changes are requested, the runner also writes a targeted `review-round-N-redispatch.md` artifact for the next worker pass. When the runner invoked the reviewer itself, it saves `review-round-N-raw-response.txt` for debugging and escalates the run if the reviewer mutated the repo.
+If changes are requested, the runner also writes a targeted `review-round-N-redispatch.md` artifact for the next worker pass. The runner records `review.last_reviewed_sha`, enforces `review.max_rounds`, fingerprints repeated issues across rounds, and escalates if the same issue repeats three consecutive rounds. When the runner invoked the reviewer itself, it saves `review-round-N-raw-response.txt` for debugging and escalates the run if the reviewer mutated the retained checkout.
 
 ### Merge — `/relay-merge`
 
-Before merging, a **gate check** verifies the relay-review audit trail exists on the PR. No review comment → merge blocked.
+Before merging, a **gate check** verifies the relay-review audit trail exists on the PR and that `review.last_reviewed_sha` still matches the current PR head. Missing or stale review → merge blocked.
 
 After gate check passes:
 1. `finalize-run.js` merges the PR and marks the manifest `merged`
@@ -182,6 +187,8 @@ After gate check passes:
 5. Then update sprint state and create any follow-up issues
 
 If cleanup fails because the retained worktree is dirty, the merge still stands, but the manifest stays on `next_action=manual_cleanup_required` instead of silently pretending everything is done.
+
+For hotfixes, `finalize-run.js --skip-review "reason"` keeps one explicit audit path while still recording the merge in the run history.
 
 <details>
 <summary>Sprint file state transitions</summary>
@@ -233,6 +240,19 @@ node skills/relay-dispatch/scripts/cleanup-worktrees.js --repo . --older-than 72
 ```
 
 The janitor reads `.relay/runs/*.md`, cleans only terminal runs by default, and reports stale non-terminal runs without deleting them.
+
+Explicit close path for stale non-terminal runs:
+
+```bash
+node skills/relay-dispatch/scripts/close-run.js --repo . --run-id <run-id> --reason "stale_non_terminal_run"
+```
+
+Reliability scorecard from raw run history:
+
+```bash
+node skills/relay-dispatch/scripts/reliability-report.js --repo .
+node skills/relay-dispatch/scripts/reliability-report.js --repo . --json
+```
 
 ## Works With dev-backlog
 
