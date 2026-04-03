@@ -10,7 +10,7 @@ metadata:
 
 # Relay Review
 
-Independent PR review against the Done Criteria contract and scoring rubric. Loops until convergence — the rubric anchors each iteration to prevent drift.
+Independent PR review against the Done Criteria contract and scoring rubric. Use `scripts/review-runner.js` so round count, PR comments, and manifest transitions stay script-managed.
 
 ## Setup: Establish the anchor
 
@@ -39,31 +39,41 @@ gh issue view $ISSUE_NUM  # Done Criteria / Acceptance Criteria source
    - Rubric factors + targets from the Score Log (if relay-plan was used)
    - Original scope boundary ("do not change" areas)
 
+3. Prepare the review bundle for the current round:
+```bash
+node ${CLAUDE_SKILL_DIR}/scripts/review-runner.js --repo . --branch "$BRANCH" --pr "$PR_NUM" --prepare-only --json
+```
+
+This writes round artifacts under `.relay/runs/<run-id>/`, including:
+- `review-round-N-prompt.md`
+- `review-round-N-done-criteria.md`
+- `review-round-N-diff.patch`
+
 ## Review Loop
 
 Two phases, run in order. Each round re-measures against the **original anchor**, not the previous round's state.
 
 ### Phase 1: Spec Compliance
 
-3. Review the diff against Done Criteria (see `references/reviewer-prompt.md`):
+4. Review the diff against Done Criteria (see `references/reviewer-prompt.md` or the generated `review-round-N-prompt.md`):
    - **Faithfulness**: Each Done Criteria item implemented? Scope respected?
    - **Stubs/placeholders**: Any `return null`, empty bodies, TODO in production paths?
    - **Integration**: Does it break callers/consumers of changed code?
    - **Security**: Auth/token handling, input validation, injection risks?
 
-4. **Rubric verification** (when Score Log present):
+5. **Rubric verification** (when Score Log present):
    - Re-run ALL automated checks independently — do not trust Codex's reported results
    - Re-score ALL evaluated factors with fresh eyes (1-10)
    - Any required factor below target → issue
    - Score divergence ≥2 points from Codex → flag for review
 
-5. **Phase 1 gate**: Issues found → re-dispatch (see Re-dispatch below), re-fetch diff, **repeat from step 3**. Do NOT proceed to Phase 2 until Phase 1 passes.
+6. **Phase 1 gate**: Issues found → return a structured verdict with `verdict=changes_requested`, then re-dispatch (see Re-dispatch below). Do NOT proceed to Phase 2 until Phase 1 passes.
 
 ### Phase 2: Code Quality (only after Phase 1 PASS)
 
-6. Run a code review skill on changed files — check code quality, patterns, conventions, structural issues (use the platform's best-matching skill, e.g., Claude Code: `/review`; if no skill available, perform the review inline)
-7. Run a code simplification skill on changed files — unnecessary complexity, dead code, verbose patterns (use the platform's best-matching skill, e.g., Claude Code: `/simplify`; if no skill available, review for simplification inline)
-8. Issues found → re-dispatch, **repeat from step 3** (Phase 1 — quality fixes can regress spec compliance)
+7. Run a code review skill on changed files — check code quality, patterns, conventions, structural issues (use the platform's best-matching skill, e.g., Claude Code: `/review`; if no skill available, perform the review inline)
+8. Run a code simplification skill on changed files — unnecessary complexity, dead code, verbose patterns (use the platform's best-matching skill, e.g., Claude Code: `/simplify`; if no skill available, review for simplification inline)
+9. Issues found → return `verdict=changes_requested`, then re-dispatch and **repeat from step 4** (Phase 1 — quality fixes can regress spec compliance)
 
 ### Drift and stuck detection (both phases)
 
@@ -75,63 +85,31 @@ Before any re-dispatch, check:
 
 ### Converge
 
-9. Both phases pass → proceed to Verdict
+10. Both phases pass → produce a structured verdict with:
+    - `verdict=pass`
+    - `next_action=ready_to_merge`
+    - `issues=[]`
 
 **Safety cap: 20 rounds total.** Ceiling, not target — most PRs converge in 1-3 rounds. Hitting the cap means something is structurally wrong; escalate.
 
 ## Verdict + Audit Trail
 
-10. All checks pass → write **LGTM PR comment**:
+11. Apply the structured verdict with the review runner:
 ```bash
-gh pr comment $PR_NUM --body "$(cat <<'EOF'
-<!-- relay-review -->
-## Relay Review
-Verdict: LGTM
-Contract: PASS — all Done Criteria verified
-Quality: PASS — code review and simplification clean
-Rounds: <N>
-Rubric scores (if applicable):
-| Factor | Target | Codex | Claude | Status |
-|--------|--------|-------|--------|--------|
-| ...    | ...    | ...   | ...    | PASS   |
-EOF
-)"
-```
-<!-- NOTE: Verdict line format is parsed by gate-check.js via regex /Verdict:\s*(LGTM|ESCALATED)/. Do not add markdown formatting to the Verdict line. -->
-
-Then mark the relay run `ready_to_merge`:
-```bash
-node ${CLAUDE_SKILL_DIR}/../relay-dispatch/scripts/update-manifest-state.js --repo . --branch "$BRANCH" --state ready_to_merge --pr-number "$PR_NUM" --rounds <N> --verdict lgtm
+node ${CLAUDE_SKILL_DIR}/scripts/review-runner.js --repo . --branch "$BRANCH" --pr "$PR_NUM" --review-file /tmp/review-verdict.json
 ```
 
-11. Hit safety cap or stuck → escalate to user. Still write audit trail:
-```bash
-gh pr comment $PR_NUM --body "$(cat <<'EOF'
-<!-- relay-review -->
-## Relay Review
-Verdict: ESCALATED — unresolved after <N> rounds
-Issues: [list with file:line]
-EOF
-)"
-```
+The runner:
+- validates the JSON verdict
+- writes the PR audit comment
+- updates the relay manifest to `ready_to_merge`, `changes_requested`, or `escalated`
+- writes `review-round-N-verdict.json`
+- writes `review-round-N-redispatch.md` when changes are requested
 
-Then mark the relay run `escalated`:
-```bash
-node ${CLAUDE_SKILL_DIR}/../relay-dispatch/scripts/update-manifest-state.js --repo . --branch "$BRANCH" --state escalated --pr-number "$PR_NUM" --rounds <N> --verdict escalated
-```
+<!-- NOTE: Final verdict comment format is still parsed by gate-check.js via /Verdict:\s*(LGTM|ESCALATED)/. -->
 
 ## Re-dispatch (when issues found)
 
-Targeted fix via relay-dispatch. Always include the anchor context:
-```
-Fix these issues in the PR: [specific issues with file:line].
-Do not change anything else. Push to the same branch.
-
-Original Done Criteria (for scope reference):
-[paste Done Criteria from issue]
-
-After fixing, re-run these checks and confirm they pass:
-[paste automated check commands from the original rubric]
-```
+Use the generated `review-round-N-redispatch.md` artifact as the targeted fix prompt. It already includes the issue list, scope guardrail, and original Done Criteria.
 
 See `references/evaluate-criteria.md` for escalation policy (auto re-dispatch vs ask user).

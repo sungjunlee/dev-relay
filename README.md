@@ -146,7 +146,7 @@ Dispatch now writes a run manifest to `.relay/runs/<run-id>.md` in the target re
 
 Successful dispatches retain their worktree by default so review, follow-up fixes, and manual inspection can continue in the same branch context.
 
-At the moment, manifest state is written by dispatch only. Review and merge are not yet driven by the manifest; that lifecycle refactor is tracked separately.
+Dispatch, review, and merge helpers now all have manifest-aware entry points. The remaining lifecycle gap is the reviewer invocation itself, which is still pluggable rather than fully automated inside the review runner.
 </details>
 
 ### Review — `/relay-review`
@@ -155,19 +155,20 @@ Runs in a **forked Agent context** — the reviewer has no memory of the plannin
 
 The review loops until convergence (most PRs: 1–3 rounds, safety cap: 20):
 
-1. **Contract checks** — Is the implementation faithful to the AC? Any stubs or placeholders? Security issues?
-2. **Rubric verification** — Re-run automated checks, re-score evaluated factors independently
-3. **Quality sweep** — Structural review + code simplification pass
-4. **Drift detection** — Catches scope creep or stuck iteration loops
+1. **Prompt bundle** — `review-runner.js --prepare-only` writes the diff, done criteria, and round prompt into `.relay/runs/<run-id>/`
+2. **Contract checks** — Is the implementation faithful to the AC? Any stubs or placeholders? Security issues?
+3. **Rubric verification** — Re-run automated checks, re-score evaluated factors independently
+4. **Quality sweep** — Structural review + code simplification pass
+5. **Runner apply** — structured verdict JSON is validated, posted to the PR, and written back to the manifest
 
-The verdict is posted as a PR comment with a machine-readable marker:
+The final verdict is posted as a PR comment with a machine-readable marker:
 
 ```
 Verdict: LGTM           # or
 Verdict: ESCALATED      # with specific issues and file:line references
 ```
 
-If issues are found, the reviewer can re-dispatch Codex with targeted fix instructions — no manual intervention needed.
+If changes are requested, the runner also writes a targeted `review-round-N-redispatch.md` artifact for the next worker pass.
 
 ### Merge — `/relay-merge`
 

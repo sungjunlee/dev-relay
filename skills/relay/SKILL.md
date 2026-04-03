@@ -84,14 +84,14 @@ If sprint file exists, mark Plan item as in-flight: `[~] #42 OAuth2 flow → PR 
 
 Verify PR exists: `gh pr list --head issue-<N>`
 
-Invoke **relay-review** in an isolated context (no planning bias). Two-phase loop until convergence:
+Invoke **relay-review** in an isolated context (no planning bias). The review runner should manage rounds, PR comments, and manifest updates:
 
 > **Platform examples — context isolation:**
 > Claude Code: `context: fork` frontmatter (auto-handled) | Codex: start a new session | Other: any mechanism that discards the planning context
 
 - **Phase 1 — Spec Compliance:** Done Criteria faithfulness, stubs, security, integration, rubric re-verification. Must pass before Phase 2.
 - **Phase 2 — Code Quality:** Code review + simplification on changed files. Issues re-dispatch back to Phase 1.
-- **Verdict:** Writes LGTM or ESCALATED as a PR comment (`<!-- relay-review -->` marker)
+- **Runner:** `scripts/review-runner.js` writes prompt bundles, validates structured verdicts, posts the PR comment, and updates manifest state
 
 The rubric from relay-plan anchors each iteration — prevents context drift across rounds. Safety cap: 20 rounds (most PRs converge in 1-3).
 
@@ -99,12 +99,7 @@ Do NOT review inline — relay-review must run in an isolated context to prevent
 
 ## Step 5: Ready to Merge
 
-If relay-review returns LGTM, stop the relay here and record the run as `ready_to_merge`:
-```bash
-node ${CLAUDE_SKILL_DIR}/../relay-dispatch/scripts/update-manifest-state.js --repo . --branch issue-<N> --state ready_to_merge --pr-number $PR_NUM --verdict lgtm
-```
-
-Do not mark the sprint task complete yet. Only run relay-merge when the user explicitly wants to land the PR.
+If relay-review returns LGTM, the review runner should already have recorded the run as `ready_to_merge`. Do not mark the sprint task complete yet. Only run relay-merge when the user explicitly wants to land the PR.
 
 Create follow-up issues if discovered during review.
 

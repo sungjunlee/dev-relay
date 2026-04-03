@@ -102,7 +102,23 @@ Expect:
 - helper updates `review_pending -> ready_to_merge`
 - helper persists `git.pr_number`, `review.rounds`, and `review.latest_verdict`
 
-### 6. Codex skill strict validation is still a known mismatch
+### 6. Review runner validates structured verdicts and updates manifest state
+
+Command:
+
+```bash
+node --test skills/relay-review/scripts/review-runner.test.js
+```
+
+Expect:
+
+- `--prepare-only` writes the round prompt bundle without changing manifest state
+- a pass verdict updates `review_pending -> ready_to_merge`
+- a changes-requested verdict updates `review_pending -> changes_requested`
+- changes-requested verdicts write a targeted `review-round-N-redispatch.md`
+- malformed verdicts are rejected instead of guessed
+
+### 7. Codex skill strict validation is still a known mismatch
 
 Command:
 
@@ -122,8 +138,7 @@ Interpretation:
 
 ## Out of Scope For These Tests
 
-- script-driven review loop
-- automatic review-runner integration for ready-to-merge
+- automatic isolated reviewer invocation from the review runner
 - reviewer no-write enforcement
 - manifest-driven merge behavior
 
