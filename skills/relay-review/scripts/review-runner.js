@@ -249,19 +249,6 @@ function validateReviewVerdict(data) {
     throw new Error("Review verdict must be a JSON object");
   }
 
-  // Codex reviewers can return a phase-1 clean PASS with quality_status=not_run.
-  // Normalize that adapter mismatch so the review round can still close.
-  if (
-    data.verdict === "pass" &&
-    data.contract_status === "pass" &&
-    data.quality_status === "not_run" &&
-    Array.isArray(data.issues) &&
-    data.issues.length === 0 &&
-    data.next_action === "ready_to_merge"
-  ) {
-    data.quality_status = "pass";
-  }
-
   if (!ALLOWED_VERDICTS.has(data.verdict)) {
     throw new Error(`Invalid review verdict: ${data.verdict}`);
   }

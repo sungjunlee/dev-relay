@@ -11,7 +11,7 @@
  *   --repo <path>          Repository root (default: .)
  *   --run-id <id>          Relay run identifier
  *   --manifest <path>      Explicit manifest path
-  *   --branch <name>        Override branch name
+ *   --branch <name>        Override branch name
  *   --pr <number>          Pull request number (optional when stored in manifest)
  *   --merge-method <name>  squash | merge | rebase (default: squash)
  *   --skip-review <reason> Bypass the fresh-review gate with an audit reason
@@ -86,6 +86,14 @@ function gh(ghBin, repoPath, ...ghArgs) {
   }).trim();
 }
 
+function git(gitBin, repoPath, ...gitArgs) {
+  return execFileSync(gitBin, ["-C", repoPath, ...gitArgs], {
+    cwd: repoPath,
+    encoding: "utf-8",
+    stdio: "pipe",
+  }).trim();
+}
+
 function resolveBranch(ghBin, repoPath, prNumber, branchArg, manifestData) {
   if (branchArg) return branchArg;
   if (manifestData?.git?.working_branch) return manifestData.git.working_branch;
@@ -123,6 +131,71 @@ function fetchPrMergeState(ghBin, repoPath, prNumber) {
     state: parsed.state || null,
     mergeCommitSha: parsed.mergeCommit?.oid || null,
   };
+}
+
+function resolveRemoteName(gitBin, repoPath, branch) {
+  if (!branch) return null;
+  try {
+    return git(gitBin, repoPath, "config", `branch.${branch}.remote`) || "origin";
+  } catch {
+    return "origin";
+  }
+}
+
+function hasRemote(gitBin, repoPath, remoteName) {
+  if (!remoteName) return false;
+  try {
+    git(gitBin, repoPath, "remote", "get-url", remoteName);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function remoteBranchExists(gitBin, repoPath, remoteName, branch) {
+  if (!remoteName || !branch) return false;
+  try {
+    git(gitBin, repoPath, "ls-remote", "--exit-code", "--heads", remoteName, branch);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function deleteRemoteBranch(gitBin, repoPath, branch) {
+  const remoteName = resolveRemoteName(gitBin, repoPath, branch);
+  if (!remoteName || !hasRemote(gitBin, repoPath, remoteName)) {
+    return {
+      remoteName,
+      attempted: false,
+      deleted: false,
+      warning: null,
+    };
+  }
+  if (!remoteBranchExists(gitBin, repoPath, remoteName, branch)) {
+    return {
+      remoteName,
+      attempted: false,
+      deleted: true,
+      warning: null,
+    };
+  }
+  try {
+    git(gitBin, repoPath, "push", remoteName, "--delete", branch);
+    return {
+      remoteName,
+      attempted: true,
+      deleted: true,
+      warning: null,
+    };
+  } catch (error) {
+    return {
+      remoteName,
+      attempted: true,
+      deleted: false,
+      warning: summarizeError(error),
+    };
+  }
 }
 
 function main() {
@@ -177,6 +250,11 @@ function main() {
   let updated = data;
   let mergePerformed = false;
   let mergeRecovered = false;
+  let prMergeState = dryRun ? { state: "MERGED", mergeCommitSha: null } : null;
+  let remoteBranchDeleted = false;
+  let remoteBranchDeleteWarning = null;
+  let remoteBranchDeleteAttempted = false;
+  let remoteName = null;
   let issueClosed = false;
   let issueCloseWarning = null;
   let reviewGate = null;
@@ -215,7 +293,7 @@ function main() {
   }
 
   if (!skipMerge && data.state === STATES.READY_TO_MERGE) {
-    let prMergeState = dryRun ? { state: "OPEN", mergeCommitSha: null } : fetchPrMergeState(ghBin, repoPath, prNumber);
+    prMergeState = dryRun ? prMergeState : fetchPrMergeState(ghBin, repoPath, prNumber);
     if (!dryRun && prMergeState.state !== "MERGED") {
       try {
         gh(ghBin, repoPath, "pr", "merge", String(prNumber), mergeFlag(mergeMethod));
@@ -232,6 +310,28 @@ function main() {
       mergeRecovered = true;
     } else if (dryRun) {
       mergePerformed = true;
+    }
+    if (!dryRun && prMergeState.state !== "MERGED") {
+      appendRunEvent(repoPath, data.run_id, {
+        event: "merge_blocked",
+        state_from: data.state,
+        state_to: data.state,
+        head_sha: reviewGate?.latestCommit || data.git?.head_sha || null,
+        round: data.review?.rounds || null,
+        reason: `merge_pending:${prMergeState.state || "unknown"}`,
+      });
+      throw new Error(
+        `PR #${prNumber} did not reach MERGED after gh pr merge (state=${prMergeState.state || "unknown"}). Re-run finalize-run after GitHub completes the merge.`
+      );
+    }
+    if (!dryRun) {
+      const remoteDelete = deleteRemoteBranch(gitBin, repoPath, branch);
+      remoteName = remoteDelete.remoteName;
+      remoteBranchDeleteAttempted = remoteDelete.attempted;
+      remoteBranchDeleted = remoteDelete.deleted;
+      remoteBranchDeleteWarning = remoteDelete.warning;
+    } else {
+      remoteBranchDeleted = true;
     }
     updated = updateManifestState(updated, STATES.MERGED, "manual_cleanup_required");
     updated = {
@@ -302,7 +402,12 @@ function main() {
     issueNumber,
     mergePerformed,
     mergeRecovered,
+    prMergeState: prMergeState?.state || null,
     mergeMethod,
+    remoteName,
+    remoteBranchDeleteAttempted,
+    remoteBranchDeleted,
+    remoteBranchDeleteWarning,
     reviewGate,
     issueClosed,
     issueCloseWarning,
@@ -317,6 +422,10 @@ function main() {
     console.log(`  State:        ${data.state} -> ${updated.state}`);
     console.log(`  Next action:  ${updated.next_action}`);
     console.log(`  Merge:        ${mergePerformed ? `performed (${mergeMethod})` : (skipMerge ? "skipped" : "already merged")}`);
+    if (!skipMerge) {
+      console.log(`  Remote branch:${remoteBranchDeleted ? " deleted" : (remoteBranchDeleteAttempted ? " warning" : " skipped")}`);
+      if (remoteBranchDeleteWarning) console.log(`  Remote note:  ${remoteBranchDeleteWarning}`);
+    }
     console.log(`  Issue close:  ${issueNumber ? (issueClosed ? "closed" : (issueCloseWarning ? `warning: ${issueCloseWarning}` : "skipped")) : "none"}`);
     console.log(`  Cleanup:      ${cleanupResult.summary.cleanupStatus}`);
     if (cleanupResult.summary.error) console.log(`  Cleanup note: ${cleanupResult.summary.error}`);
