@@ -100,6 +100,10 @@ function toIsoOrNull(value) {
   return Number.isNaN(millis) ? null : new Date(millis).toISOString();
 }
 
+function hasRelayReviewMarker(body) {
+  return /^\s*<!-- relay-review(?:-round)? -->\s*$/m.test(String(body || ""));
+}
+
 // ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
@@ -176,10 +180,7 @@ function main() {
   let lastReviewComment = null;
   for (const comment of commentRecords) {
     const body = comment.body || "";
-    if (
-      body.includes("<!-- relay-review -->") ||
-      body.includes("<!-- relay-review-round -->")
-    ) {
+    if (hasRelayReviewMarker(body)) {
       lastReviewComment = comment;
     }
   }

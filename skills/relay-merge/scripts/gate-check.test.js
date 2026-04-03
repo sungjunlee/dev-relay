@@ -73,6 +73,19 @@ test("gate-check blocks stale LGTM comments when a newer commit exists", () => {
   assert.equal(result.json.latestCommit, "abc123");
 });
 
+test("gate-check ignores prose comments that only mention review markers", () => {
+  const result = runGateCheckDryRun([
+    [
+      "Validation note:",
+      "- `<!-- relay-review -->` appears in this example",
+      "- `Verdict: LGTM` is just sample output",
+    ].join("\n"),
+  ]);
+
+  assert.equal(result.status, 1);
+  assert.equal(result.json.status, "missing");
+});
+
 test("gate-check still blocks escalated review comments", () => {
   const result = runGateCheckDryRun([
     "<!-- relay-review -->\n## Relay Review\nVerdict: ESCALATED\nIssues:\n- foo.js:1 — blocked",
