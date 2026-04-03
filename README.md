@@ -52,6 +52,8 @@ npx skills add . -g -y
 ```
 </details>
 
+Working from a repo checkout without installing skills? See [docs/direct-read-relay-operator-note.md](docs/direct-read-relay-operator-note.md).
+
 ### Prerequisites
 
 - [Claude Code](https://claude.ai/code) or [Codex](https://chatgpt.com/codex)
