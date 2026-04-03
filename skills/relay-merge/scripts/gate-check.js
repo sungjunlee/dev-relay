@@ -16,7 +16,7 @@
  *
  * Exit codes:
  *   0  LGTM or skip (with audit trail)
- *   1  No review comment, ESCALATED, or error
+ *   1  No review comment, CHANGES_REQUESTED, ESCALATED, or error
  *
  * Examples:
  *   ./gate-check.js 42                        # Check PR #42 for review
@@ -80,6 +80,9 @@ function output(result) {
     } else if (result.status === "escalated") {
       console.log(`✗ PR #${PR_NUM}: relay-review ESCALATED — resolve issues before merge`);
       if (result.issues) console.log(`  ${result.issues}`);
+    } else if (result.status === "changes_requested") {
+      console.log(`✗ PR #${PR_NUM}: relay-review requested changes — re-dispatch or fix the branch before merge`);
+      if (result.issues) console.log(`  ${result.issues}`);
     } else {
       console.log(`✗ PR #${PR_NUM}: no relay-review comment found`);
       console.log("  Run /relay-review first, or use --skip <reason> to bypass with audit trail.");
@@ -134,10 +137,13 @@ function main() {
     commentBodies = (parsed.comments || []).map((c) => c.body);
   }
 
-  // Find the last relay-review comment
+  // Find the last relay-review or relay-review-round comment.
   let lastReviewComment = null;
   for (const body of commentBodies) {
-    if (body.includes("<!-- relay-review -->")) {
+    if (
+      body.includes("<!-- relay-review -->") ||
+      body.includes("<!-- relay-review-round -->")
+    ) {
       lastReviewComment = body;
     }
   }
@@ -148,7 +154,7 @@ function main() {
   }
 
   // Parse verdict
-  const verdictMatch = lastReviewComment.match(/Verdict:\s*(LGTM|ESCALATED)/);
+  const verdictMatch = lastReviewComment.match(/Verdict:\s*(LGTM|CHANGES_REQUESTED|ESCALATED)/);
   if (!verdictMatch) {
     output({ status: "missing", pr: PR_NUM });
     process.exit(1);
@@ -162,12 +168,24 @@ function main() {
     return;
   }
 
+  if (verdict === "CHANGES_REQUESTED") {
+    const issuesMatch = lastReviewComment.match(/Issues:\s*([\s\S]+)/);
+    output({
+      status: "changes_requested",
+      pr: PR_NUM,
+      issues: issuesMatch ? issuesMatch[1].trim() : null,
+      readyToMerge: false,
+    });
+    process.exit(1);
+  }
+
   // ESCALATED
   const issuesMatch = lastReviewComment.match(/Issues?:\s*(.+?)(?:\n|$)/);
   output({
     status: "escalated",
     pr: PR_NUM,
     issues: issuesMatch ? issuesMatch[1] : null,
+    readyToMerge: false,
   });
   process.exit(1);
 }

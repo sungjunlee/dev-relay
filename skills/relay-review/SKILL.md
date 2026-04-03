@@ -123,7 +123,7 @@ The runner:
 - writes `review-round-N-policy-violation.txt` if the reviewer changed files
 - writes `review-round-N-redispatch.md` when changes are requested
 
-<!-- NOTE: Final verdict comment format is still parsed by gate-check.js via /Verdict:\s*(LGTM|ESCALATED)/. -->
+<!-- NOTE: gate-check.js now treats the latest relay-review or relay-review-round comment as authoritative and blocks merge on CHANGES_REQUESTED or ESCALATED. -->
 
 ## Re-dispatch (when issues found)
 
