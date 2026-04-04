@@ -1,7 +1,7 @@
 ---
 name: relay-plan
 argument-hint: "[issue-number]"
-description: Convert task acceptance criteria into a scored rubric for autonomous iteration. Defines automated checks and agent-evaluated factors with target thresholds. Codex loops until all factors converge. Use before relay-dispatch for tasks with 3+ acceptance criteria.
+description: Convert task acceptance criteria into a scored rubric for autonomous iteration. Use before relay-dispatch for tasks with 3+ acceptance criteria or quality-sensitive work.
 compatibility: Requires gh CLI. Task AC reading falls back to local files or user input.
 metadata:
   related-skills: "relay, relay-dispatch, relay-review, dev-backlog"
@@ -121,7 +121,7 @@ Take the base template (`relay/references/prompt-template.md`) and add these sec
     5. Else → identify lowest required factor → make ONE focused fix → commit → repeat
     6. Stuck on same factor 3 consecutive iterations → note and move on
   ```
-- **Score Log**: table in PR description showing each iteration's scores. This is the shared metric between Codex self-review and Claude's relay-review — Claude will re-run automated checks and re-score evaluated factors independently.
+- **Score Log**: table in PR description showing each iteration's scores. This is the shared metric between the executor's self-review and the reviewer's relay-review — the reviewer will re-run automated checks and re-score evaluated factors independently.
   ```
   | Factor | Target | Baseline | Iter 1 | Iter 2 | Final |
   |--------|--------|----------|--------|--------|-------|
@@ -139,7 +139,7 @@ ${CLAUDE_SKILL_DIR}/../relay-dispatch/scripts/dispatch.js . \
 
 ## When to use
 
-- **Use it**: 3+ AC items, quality-sensitive work, Codex delegation
+- **Use it**: 3+ AC items, quality-sensitive work, executor delegation
 - **Skip it**: Bug fixes, typos, one-liners — dispatch directly with base template
 
 ## Rubric design guidelines
