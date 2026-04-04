@@ -1,7 +1,7 @@
 ---
 name: relay-dispatch
 argument-hint: "<repo-path> (-b <branch> | --run-id <id>) -p <prompt> [options]"
-description: Dispatch implementation tasks via worktree isolation. Creates a git worktree, runs an executor (Codex by default) with a contract prompt, and collects results. Use when delegating work, running background dispatches, or parallelizing independent tasks.
+description: Dispatch implementation tasks via worktree isolation. Use when delegating work to an executor, running background dispatches, or parallelizing independent tasks.
 compatibility: Requires executor CLI (e.g., codex), git, and Node.js 18+.
 metadata:
   related-skills: "relay, relay-plan, relay-review, relay-merge"
