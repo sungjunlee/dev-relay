@@ -1,7 +1,7 @@
 ---
 name: relay-merge
 argument-hint: "[run-id or PR-number]"
-description: Explicitly merge a ready-to-merge PR, clean up worktree/branch, close GitHub issues, and update sprint file if available.
+description: Merge a reviewed PR, clean up worktree/branch, and close GitHub issues. Use after relay-review returns LGTM.
 compatibility: Requires gh CLI and git.
 metadata:
   related-skills: "relay, relay-plan, relay-dispatch, relay-review, dev-backlog"

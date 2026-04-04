@@ -1,7 +1,7 @@
 ---
 name: relay-review
 argument-hint: "[run-id or branch-name or PR-number]"
-description: Independent PR review after Codex dispatch. Re-scores the rubric and reviews against Done Criteria in a fresh context, free from planning bias. On success, mark the run ready_to_merge.
+description: Independent PR review against Done Criteria in a fresh context, free from planning bias. Use after dispatch completes and a PR exists.
 context: fork
 compatibility: "Must run in an isolated context to prevent planning bias (Claude Code: context: fork auto-handled; Codex/other: start a new session). Requires gh CLI."
 metadata:
@@ -78,10 +78,10 @@ Two phases, run in order. Each round re-measures against the **original anchor**
    - **Security**: Auth/token handling, input validation, injection risks?
 
 6. **Rubric verification** (when Score Log present):
-   - Re-run ALL automated checks independently — do not trust Codex's reported results
+   - Re-run ALL automated checks independently — do not trust the executor's reported results
    - Re-score ALL evaluated factors with fresh eyes (1-10)
    - Any required factor below target → issue
-   - Score divergence ≥2 points from Codex → flag for review
+   - Score divergence ≥2 points from the executor → flag for review
 
 7. **Phase 1 gate**: Issues found → return a structured verdict with `verdict=changes_requested`, then re-dispatch (see Re-dispatch below). Do NOT proceed to Phase 2 until Phase 1 passes.
 
@@ -97,7 +97,7 @@ Before any re-dispatch, check:
 - **Scope:** Does the fix address a review issue, or is it scope creep?
 - **Regression:** Are previously passing rubric factors still passing?
 - **Churn:** Is the total diff growing without convergence?
-- **Stuck:** Same issue 3+ consecutive rounds → escalate immediately (not fixable by Codex).
+- **Stuck:** Same issue 3+ consecutive rounds → escalate immediately (not fixable by the executor).
 
 ### Converge
 

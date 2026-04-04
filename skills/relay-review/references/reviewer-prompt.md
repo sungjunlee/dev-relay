@@ -22,7 +22,7 @@ For each Done Criteria item, verify it is implemented in the diff:
 - Misinterpretation? (interpreted differently than intended)
 - Boundary violation? (areas marked "do not change" were modified)
 
-Also check for issues Codex tends to miss:
+Also check for common executor blind spots:
 - **Stubs/placeholders**: `return null`, empty bodies, TODO, mock data in production paths
 - **Integration issues**: does it break callers/consumers of changed code?
 - **Security**: auth/token handling, input validation, injection risks

@@ -1,7 +1,7 @@
 ---
 name: relay
 argument-hint: "[issue-number or task description]"
-description: Execute the relay cycle through ready_to_merge — plan, dispatch to Codex, review PR, then stop for explicit merge approval. Integrates with dev-backlog sprint files when available.
+description: Execute the full relay cycle — plan, dispatch, review, merge. Use when implementing a GitHub issue or task through autonomous executor dispatch. Integrates with dev-backlog sprint files.
 compatibility: Requires Claude Code or Codex, gh CLI, git, and Node.js 18+. Task AC reading falls back to local files or user input.
 metadata:
   related-skills: "relay-plan, relay-dispatch, relay-review, relay-merge, dev-backlog"
@@ -10,6 +10,16 @@ metadata:
 # Dev Relay
 
 Execute the plan → dispatch → review cycle. Stop at `ready_to_merge` unless the user explicitly asks to merge. Follow ALL steps below in order.
+
+## Role Defaults
+
+| Role | Default | Override |
+|------|---------|----------|
+| Orchestrator | Claude Code | `RELAY_ORCHESTRATOR` env |
+| Executor | Codex | `--executor` flag |
+| Reviewer | Codex (read-only) | `--reviewer` flag, `RELAY_REVIEWER` env |
+
+These defaults work well for most workflows. Override per-role when using different agents or self-hosted models.
 
 ## Step 0: Re-Anchor
 
@@ -91,7 +101,7 @@ Invoke **relay-review** in an isolated context (no planning bias). The review ru
 
 - **Phase 1 — Spec Compliance:** Done Criteria faithfulness, stubs, security, integration, rubric re-verification. Must pass before Phase 2.
 - **Phase 2 — Code Quality:** Code review + simplification on changed files. Issues re-dispatch back to Phase 1.
-- **Runner:** `scripts/review-runner.js` can invoke `codex` or `claude` as an isolated reviewer, rejects reviewer-written diffs, posts the PR comment, and updates manifest state
+- **Runner:** `scripts/review-runner.js` invokes an isolated reviewer via adapter (built-in: `codex`, `claude`), rejects reviewer-written diffs, posts the PR comment, and updates manifest state
 
 The rubric from relay-plan anchors each iteration — prevents context drift across rounds. Safety cap: 20 rounds (most PRs converge in 1-3).
 

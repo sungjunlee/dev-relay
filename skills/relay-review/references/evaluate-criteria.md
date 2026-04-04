@@ -5,9 +5,9 @@
 
 ## Why Fresh Review Matters
 
-Codex has full implementation context, which paradoxically makes it blind to certain issues:
+The executor has full implementation context, which paradoxically makes it blind to certain issues:
 
-| Issue | Why Codex misses it |
+| Issue | Why the executor misses it |
 |---|---|
 | Over-complexity | Accumulated incrementally; feels "necessary" to the author |
 | Stubs/placeholders | Author planned to fill but forgot |
@@ -29,7 +29,7 @@ Security decisions, design decisions, large refactors (20+ lines), user-visible 
 
 **Rule:** If reasonable engineers could disagree → ask user first.
 
-Note: Claude does NOT fix code directly — all fixes go through Codex via targeted re-dispatch.
+Note: The reviewer does NOT fix code directly — all fixes go through the executor via targeted re-dispatch.
 
 ## Decision: LGTM vs Re-dispatch
 
