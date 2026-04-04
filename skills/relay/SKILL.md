@@ -11,6 +11,16 @@ metadata:
 
 Execute the plan → dispatch → review cycle. Stop at `ready_to_merge` unless the user explicitly asks to merge. Follow ALL steps below in order.
 
+## Role Defaults
+
+| Role | Default | Override |
+|------|---------|----------|
+| Orchestrator | Claude Code | `RELAY_ORCHESTRATOR` env |
+| Executor | Codex | `--executor` flag |
+| Reviewer | Codex (read-only) | `--reviewer` flag, `RELAY_REVIEWER` env |
+
+These defaults work well for most workflows. Override per-role when using different agents or self-hosted models.
+
 ## Step 0: Re-Anchor
 
 Always run before every task — standalone or batch. Ensures current state, not stale context.
