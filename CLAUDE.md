@@ -1,36 +1,80 @@
 # dev-relay
 
-Relay development work across agent boundaries — plan, dispatch, review, merge.
-Default combination: Claude Code orchestrates, Codex executes, Claude reviews.
+Orchestrator-agnostic relay system for plan → dispatch → review → merge workflows. Any supported agent can serve as orchestrator, worker, or reviewer — roles are bound per-run via the relay manifest, not hardcoded.
+
+## Architecture
+
+Relay runs are stateful, manifest-backed lifecycle contracts stored in `.relay/runs/<run-id>.md`. Each manifest records immutable role bindings (`roles.orchestrator`, `roles.worker`, `roles.reviewer`), policy fields, and review anchors. The state machine governs all transitions:
+
+```
+draft → dispatched → review_pending → ready_to_merge → merged
+                   ↘ escalated → closed     ↗
+                     changes_requested ──→ dispatched (re-dispatch)
+```
+
+See [references/architecture.md](references/architecture.md) for the full manifest schema, state transitions, event journal format, and adapter extension points.
 
 ## Project Structure
 
 ```
 skills/
-  relay/                   ← Overview + reference (disable-model-invocation)
+  relay/                   ← Full-cycle orchestration (plan → dispatch → review → stop)
     references/prompt-template.md
   relay-plan/              ← AC → scoring rubric → dispatch prompt
-    references/rubric-examples.md
-  relay-dispatch/          ← Dispatch to executor (scripts live here)
-    scripts/dispatch.js
-    scripts/register-codex.js
-  relay-review/            ← PR review (context: fork for fresh eyes)
-    references/evaluate-criteria.md
-    references/reviewer-prompt.md
+    references/rubric-*.md
+  relay-dispatch/          ← Worktree isolation + executor dispatch
+    scripts/
+      dispatch.js          ← Core dispatch (executor-agnostic entry point)
+      relay-manifest.js    ← Manifest CRUD, state machine, transitions
+      relay-events.js      ← Event journal (.relay/runs/<id>/events.jsonl)
+      relay-resolver.js    ← Run-ID / manifest / branch resolution
+      register-codex.js    ← Codex App integration helper
+      cleanup-worktrees.js ← Stale worktree pruning
+      close-run.js         ← Force-close non-terminal runs
+      reliability-report.js ← Aggregate run metrics
+  relay-review/            ← Independent review (context: fork for fresh eyes)
+    scripts/
+      review-runner.js       ← Round management, PR comments, manifest updates
+      invoke-reviewer-codex.js  ← Codex reviewer adapter
+      invoke-reviewer-claude.js ← Claude reviewer adapter
+    references/
+      evaluate-criteria.md
+      reviewer-prompt.md
   relay-merge/             ← Merge + cleanup + sprint file update
+    scripts/
+      gate-check.js        ← Pre-merge audit trail enforcement
+      finalize-run.js      ← Merge PR, cleanup worktree, close manifest
+      review-gate.js       ← Review state validation
 ```
 
-Multi-skill design: each phase is a separate skill for independent invocation on both Claude Code and Codex. `npx skills add sungjunlee/dev-relay` installs all 5.
+Multi-skill design: each phase is independently invocable. `npx skills add sungjunlee/dev-relay` installs all 5.
+
+## Common Commands
+
+```bash
+# Run tests (Node.js built-in test runner, no install needed)
+node --test skills/relay-dispatch/scripts/*.test.js
+node --test skills/relay-review/scripts/*.test.js
+node --test skills/relay-merge/scripts/*.test.js
+
+# Dispatch dry-run (validate without executing)
+node skills/relay-dispatch/scripts/dispatch.js . -b test-branch -p "task" --dry-run
+
+# Worktree cleanup
+node skills/relay-dispatch/scripts/cleanup-worktrees.js --repo . --dry-run
+
+# Reliability report
+node skills/relay-dispatch/scripts/reliability-report.js --repo . --json
+```
 
 ## Key Design Decisions
 
-- **PR is the handoff boundary** — the executor delivers a PR; the reviewer merges and handles follow-up
-- **Executor does the heavy lifting** — implement + self-review + fix + PR, all in one session
-- **Reviewer operates in isolated context** — fresh eyes, no planning bias
-- **Quota-aware** — maximize executor work, minimize reviewer turns
-- **Stateless** — progress tracking lives in dev-backlog's sprint file when available; works without it
-- **Multi-skill** — relay-dispatch, relay-review, relay-merge are independently invocable
-- **Cross-platform** — works on Claude Code (skills) and Codex (agent skills)
+- **PR is the handoff boundary** — worker delivers a PR; reviewer evaluates, orchestrator merges
+- **Manifest is the contract** — roles, state, policy, and review anchors live in `.relay/runs/`, not in transient prompts
+- **Reviewer isolation** — reviews run in a fresh context (no planning bias), anchored to immutable Done Criteria
+- **Quota-aware** — maximize worker turns, minimize orchestrator review turns
+- **Stateless orchestration** — progress tracking integrates with dev-backlog sprint files when available; works without them
+- **Extensible adapters** — new executors and reviewers are added by convention, not framework (see [references/architecture.md § Extending](references/architecture.md#extending))
 
 ## Working on This Project
 
@@ -38,4 +82,7 @@ Multi-skill design: each phase is a separate skill for independent invocation on
 - Scripts use `execFileSync` (no shell injection) — never use `execSync` with string interpolation
 - Test script changes with `--dry-run` flag before real dispatch
 - Executor-specific internal paths (e.g., Codex SQLite, global state) are fragile — document which version they target
-- Keep each SKILL.md under 150 lines; use references/ for details
+- Keep each SKILL.md under 150 lines; use `references/` for details
+- Manifest state transitions must go through `validateTransition()` — direct state assignment is a bug
+- New executors: add entry to `EXECUTOR_CLI` + execution branch in `dispatch.js`
+- New reviewers: create `invoke-reviewer-<name>.js` in `relay-review/scripts/`
