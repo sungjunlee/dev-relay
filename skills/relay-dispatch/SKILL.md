@@ -35,7 +35,7 @@ For background and parallel dispatch, see "Background & Parallel" section below.
 | `--manifest` | Resume an existing retained relay run by manifest path |
 | `--prompt, -p` | Task prompt (include Context + Done Criteria + self-review) |
 | `--prompt-file` | Read prompt from file (for large prompts) |
-| `--executor, -e` | Executor: `codex` (default) |
+| `--executor, -e` | Executor: `codex` (default; only supported executor currently) |
 | `--model, -m` | Model override |
 | `--sandbox` | `workspace-write` (default) or `read-only` |
 | `--copy-env` | Copy `.env` to worktree |
