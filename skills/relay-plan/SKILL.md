@@ -119,7 +119,9 @@ Take the base template (`relay/references/prompt-template.md`) and add these sec
     3. Append scores to the Score Log (keep ALL iterations, not just final)
     4. All required factors meet target → create PR with full Score Log
     5. Else → identify lowest required factor → make ONE focused fix → commit → repeat
-    6. Stuck on same factor 3 consecutive iterations → note and move on
+    6. Stuck on same factor 3 consecutive iterations →
+       - best-effort: note in PR, continue to next factor
+       - required: stop iteration, create PR with Score Log showing failure, flag for human review
   ```
 - **Score Log**: table in PR description showing each iteration's scores. This is the shared metric between the executor's self-review and the reviewer's relay-review — the reviewer will re-run automated checks and re-score evaluated factors independently.
   ```
