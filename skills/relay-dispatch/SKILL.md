@@ -58,7 +58,7 @@ Current scope: dispatch, review, merge finalization, and stale janitor cleanup a
 | Task type | Timeout | Rationale |
 |---|---|---|
 | Simple implementation | `1800` (default) | No self-review needed |
-| With self-review loop | `3600` | Codex iterates 2-3 times |
+| With self-review loop | `3600` | Executor iterates 2-3 times |
 | Complex / multi-file | `5400` | Deep implementation + thorough self-review |
 
 ## Verify Success
@@ -88,12 +88,12 @@ Successful dispatches retain the worktree by default. Use the returned `runId`, 
 | Failure | Action |
 |---|---|
 | Timeout | Increase `--timeout` or split task into smaller pieces |
-| Codex error (non-zero exit) | Read result file for error details; fix prompt and re-dispatch |
+| Executor error (non-zero exit) | Read result file for error details; fix prompt and re-dispatch |
 | No commits made | Prompt was unclear or task was impossible; revise and re-dispatch |
-| No PR created | Codex may have committed but not pushed PR; check `git log` in worktree |
+| No PR created | Executor may have committed but not pushed PR; check `git log` in worktree |
 | Branch conflicts | Resolve in worktree or create fresh worktree from updated main |
 | Network/transient error | Wait 30s, retry once. If it fails again, escalate to user |
-| ENOBUFS (buffer overflow) | Codex output exceeded buffer. Work is likely complete — dispatch reports `completed-with-warning`. Check worktree for uncommitted changes, commit manually if needed, then proceed to review |
+| ENOBUFS (buffer overflow) | Executor output exceeded buffer. Work is likely complete — dispatch reports `completed-with-warning`. Check worktree for uncommitted changes, commit manually if needed, then proceed to review |
 
 ## Background & Parallel
 
@@ -151,6 +151,6 @@ ${CLAUDE_SKILL_DIR}/scripts/reliability-report.js --repo . --json
 ## Caveats
 
 - **Timeout**: Use `--timeout 3600`+ when self-review is included
-- **App restart**: Codex App needs restart to show new worktree threads
+- **App restart** (Codex-specific): Codex App needs restart to show new worktree threads
 - **Exit codes**: dispatch.js exits non-zero on failure — check before proceeding to review
 - **Parallel merges**: If parallel PRs touch the same files, merge one at a time and rebase the other
