@@ -1,7 +1,7 @@
 ---
 name: relay-review
 argument-hint: "[run-id or branch-name or PR-number]"
-description: Independent PR review after Codex dispatch. Re-scores the rubric and reviews against Done Criteria in a fresh context, free from planning bias. On success, mark the run ready_to_merge.
+description: Independent PR review after dispatch. Re-scores the rubric and reviews against Done Criteria in a fresh context, free from planning bias. On success, mark the run ready_to_merge.
 context: fork
 compatibility: "Must run in an isolated context to prevent planning bias (Claude Code: context: fork auto-handled; Codex/other: start a new session). Requires gh CLI."
 metadata:
