@@ -460,7 +460,24 @@ function formatScopeDrift(scopeDrift) {
   return parts.join("\n");
 }
 
-function buildRedispatchPrompt(verdict, doneCriteria, runDir, round) {
+function detectChurnGrowth(runDir, round) {
+  if (!runDir || round < 3) return null;
+  const countLines = (p) => { let n = 0; const b = fs.readFileSync(p); for (let i = 0; i < b.length; i++) if (b[i] === 0x0a) n++; return n; };
+  // Current round's diff was just written by the caller — must exist; let errors propagate.
+  const curLines = countLines(path.join(runDir, `review-round-${round}-diff.patch`));
+  try {
+    const prevLines = countLines(path.join(runDir, `review-round-${round - 1}-diff.patch`));
+    const prevPrevLines = countLines(path.join(runDir, `review-round-${round - 2}-diff.patch`));
+    if (curLines > prevLines && prevLines > prevPrevLines && prevPrevLines > 0) {
+      return { prevPrevLines, prevLines, curLines };
+    }
+  } catch (e) {
+    if (e.code !== "ENOENT") throw e;
+  }
+  return null;
+}
+
+function buildRedispatchPrompt(verdict, doneCriteria, runDir, round, churnGrowth) {
   const sections = [
     `This is round ${round + 1}. Fix these review issues in the PR. Do not change anything else. Push to the same branch.`,
     "",
@@ -479,6 +496,14 @@ function buildRedispatchPrompt(verdict, doneCriteria, runDir, round) {
     if (priorSummary) {
       sections.push("", priorSummary);
     }
+  }
+
+  if (churnGrowth) {
+    sections.push(
+      "",
+      `WARNING: Diff has grown for 3+ consecutive rounds (${churnGrowth.prevPrevLines} → ${churnGrowth.prevLines} → ${churnGrowth.curLines} lines).`,
+      "Apply minimal, targeted fixes only. Do not refactor, reorganize, or add code beyond what the issues require.",
+    );
   }
 
   sections.push(
@@ -759,22 +784,10 @@ function run() {
   writeText(promptPath, `${promptText}\n`);
 
   // Churn detection: compare diff sizes across rounds (after writing current diff).
-  // Uses countLines on saved files consistently to avoid off-by-one from trailing newline.
-  if (round >= 3) {
-    const countLines = (p) => { let n = 0; const b = fs.readFileSync(p); for (let i = 0; i < b.length; i++) if (b[i] === 0x0a) n++; return n; };
-    try {
-      const curLines = countLines(diffPath);
-      const prevLines = countLines(path.join(runDir, `review-round-${round - 1}-diff.patch`));
-      const prevPrevLines = countLines(path.join(runDir, `review-round-${round - 2}-diff.patch`));
-      if (curLines > prevLines && prevLines > prevPrevLines && prevPrevLines > 0) {
-        const growth = Math.round(((curLines - prevPrevLines) / prevPrevLines) * 100);
-        if (!jsonOut) {
-          console.log(`  Warning: diff growing without convergence (${prevPrevLines} → ${prevLines} → ${curLines} lines, +${growth}%)`);
-        }
-      }
-    } catch (e) {
-      if (e.code !== "ENOENT") throw e;
-    }
+  const churnGrowth = detectChurnGrowth(runDir, round);
+  if (churnGrowth && !jsonOut) {
+    const growth = Math.round(((churnGrowth.curLines - churnGrowth.prevPrevLines) / churnGrowth.prevPrevLines) * 100);
+    console.log(`  Warning: diff growing without convergence (${churnGrowth.prevPrevLines} → ${churnGrowth.prevLines} → ${churnGrowth.curLines} lines, +${growth}%)`);
   }
 
   const reviewerName = resolveReviewerName(data, reviewerArg);
@@ -886,7 +899,7 @@ function run() {
   let redispatchPath = null;
   if (verdict.verdict === "changes_requested") {
     redispatchPath = path.join(runDir, `review-round-${round}-redispatch.md`);
-    writeText(redispatchPath, `${buildRedispatchPrompt(verdict, doneCriteria, runDir, round)}\n`);
+    writeText(redispatchPath, `${buildRedispatchPrompt(verdict, doneCriteria, runDir, round, churnGrowth)}\n`);
   }
 
   const commentBody = buildCommentBody(verdict, round);
@@ -946,6 +959,7 @@ module.exports = {
   buildCommentBody,
   buildPrompt,
   buildRedispatchPrompt,
+  detectChurnGrowth,
   formatIssueList,
   formatPriorVerdictSummary,
   formatScopeDrift,

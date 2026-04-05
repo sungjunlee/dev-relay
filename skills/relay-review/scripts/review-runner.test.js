@@ -824,3 +824,120 @@ test("round 2 redispatch artifact contains prior round summary", () => {
   assert.match(redispatchText, /Prior review rounds:/);
   assert.match(redispatchText, /Round 1: changes_requested — Missing smoke file\./);
 });
+
+// --- detectChurnGrowth unit tests ---
+
+test("detectChurnGrowth returns null for round < 3", () => {
+  const helperPath = path.join(os.tmpdir(), `churn-lt3-${Date.now()}.js`);
+  fs.writeFileSync(helperPath, [
+    `process.argv = ["node", "helper.js", "--repo", "/dev/null", "--branch", "x", "--pr", "1"];`,
+    `const { detectChurnGrowth } = require(${JSON.stringify(SCRIPT)});`,
+    `const r1 = detectChurnGrowth("/tmp/fake", 1);`,
+    `const r2 = detectChurnGrowth("/tmp/fake", 2);`,
+    `const rNull = detectChurnGrowth(null, 5);`,
+    `process.stdout.write(JSON.stringify({ r1, r2, rNull }));`,
+  ].join("\n"), "utf-8");
+  const out = JSON.parse(execFileSync("node", [helperPath], { encoding: "utf-8" }));
+  assert.equal(out.r1, null);
+  assert.equal(out.r2, null);
+  assert.equal(out.rNull, null);
+});
+
+test("detectChurnGrowth returns growth object when diffs grow monotonically", () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "churn-grow-"));
+  // 3 rounds with growing line counts: 2, 5, 10
+  fs.writeFileSync(path.join(tmpDir, "review-round-1-diff.patch"), "a\nb\n");
+  fs.writeFileSync(path.join(tmpDir, "review-round-2-diff.patch"), "a\nb\nc\nd\ne\n");
+  fs.writeFileSync(path.join(tmpDir, "review-round-3-diff.patch"), "a\nb\nc\nd\ne\nf\ng\nh\ni\nj\n");
+
+  const helperPath = path.join(os.tmpdir(), `churn-grow-${Date.now()}.js`);
+  fs.writeFileSync(helperPath, [
+    `process.argv = ["node", "helper.js", "--repo", "/dev/null", "--branch", "x", "--pr", "1"];`,
+    `const { detectChurnGrowth } = require(${JSON.stringify(SCRIPT)});`,
+    `const result = detectChurnGrowth(${JSON.stringify(tmpDir)}, 3);`,
+    `process.stdout.write(JSON.stringify(result));`,
+  ].join("\n"), "utf-8");
+  const out = JSON.parse(execFileSync("node", [helperPath], { encoding: "utf-8" }));
+  assert.deepEqual(out, { prevPrevLines: 2, prevLines: 5, curLines: 10 });
+});
+
+test("detectChurnGrowth returns null when diffs are not monotonically increasing", () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "churn-nogrow-"));
+  // Round 2 is bigger than round 3 (shrinking)
+  fs.writeFileSync(path.join(tmpDir, "review-round-1-diff.patch"), "a\nb\n");
+  fs.writeFileSync(path.join(tmpDir, "review-round-2-diff.patch"), "a\nb\nc\nd\ne\nf\ng\nh\ni\nj\n");
+  fs.writeFileSync(path.join(tmpDir, "review-round-3-diff.patch"), "a\nb\nc\n");
+
+  const helperPath = path.join(os.tmpdir(), `churn-nogrow-${Date.now()}.js`);
+  fs.writeFileSync(helperPath, [
+    `process.argv = ["node", "helper.js", "--repo", "/dev/null", "--branch", "x", "--pr", "1"];`,
+    `const { detectChurnGrowth } = require(${JSON.stringify(SCRIPT)});`,
+    `const result = detectChurnGrowth(${JSON.stringify(tmpDir)}, 3);`,
+    `process.stdout.write(JSON.stringify({ result }));`,
+  ].join("\n"), "utf-8");
+  const out = JSON.parse(execFileSync("node", [helperPath], { encoding: "utf-8" }));
+  assert.equal(out.result, null);
+});
+
+test("detectChurnGrowth returns null when prior diff files are missing", () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "churn-missing-"));
+  // Only current round exists, prior rounds missing
+  fs.writeFileSync(path.join(tmpDir, "review-round-3-diff.patch"), "a\nb\nc\n");
+
+  const helperPath = path.join(os.tmpdir(), `churn-missing-${Date.now()}.js`);
+  fs.writeFileSync(helperPath, [
+    `process.argv = ["node", "helper.js", "--repo", "/dev/null", "--branch", "x", "--pr", "1"];`,
+    `const { detectChurnGrowth } = require(${JSON.stringify(SCRIPT)});`,
+    `const result = detectChurnGrowth(${JSON.stringify(tmpDir)}, 3);`,
+    `process.stdout.write(JSON.stringify({ result }));`,
+  ].join("\n"), "utf-8");
+  const out = JSON.parse(execFileSync("node", [helperPath], { encoding: "utf-8" }));
+  assert.equal(out.result, null);
+});
+
+test("detectChurnGrowth propagates non-ENOENT errors", () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "churn-err-"));
+  // Current round file is a directory → EISDIR on read
+  fs.mkdirSync(path.join(tmpDir, "review-round-3-diff.patch"));
+
+  const helperPath = path.join(os.tmpdir(), `churn-err-${Date.now()}.js`);
+  fs.writeFileSync(helperPath, [
+    `process.argv = ["node", "helper.js", "--repo", "/dev/null", "--branch", "x", "--pr", "1"];`,
+    `const { detectChurnGrowth } = require(${JSON.stringify(SCRIPT)});`,
+    `try { detectChurnGrowth(${JSON.stringify(tmpDir)}, 3); process.stdout.write("no-error"); }`,
+    `catch (e) { process.stdout.write(e.code || "unknown"); }`,
+  ].join("\n"), "utf-8");
+  const out = execFileSync("node", [helperPath], { encoding: "utf-8" });
+  assert.equal(out, "EISDIR");
+});
+
+// --- buildRedispatchPrompt churnGrowth tests ---
+
+test("buildRedispatchPrompt includes churn WARNING when churnGrowth is provided", () => {
+  const helperPath = path.join(os.tmpdir(), `redispatch-churn-${Date.now()}.js`);
+  fs.writeFileSync(helperPath, [
+    `process.argv = ["node", "helper.js", "--repo", "/dev/null", "--branch", "x", "--pr", "1"];`,
+    `const { buildRedispatchPrompt } = require(${JSON.stringify(SCRIPT)});`,
+    `const verdict = { verdict: "changes_requested", summary: "test", issues: [{ title: "t", body: "b", file: "x.js", line: 1, category: "contract", severity: "high" }], scope_drift: { creep: [], missing: [] } };`,
+    `const churn = { prevPrevLines: 50, prevLines: 80, curLines: 120 };`,
+    `const result = buildRedispatchPrompt(verdict, "AC: do X", null, 3, churn);`,
+    `process.stdout.write(result);`,
+  ].join("\n"), "utf-8");
+  const out = execFileSync("node", [helperPath], { encoding: "utf-8" });
+  assert.match(out, /WARNING: Diff has grown for 3\+ consecutive rounds \(50 → 80 → 120 lines\)/);
+  assert.match(out, /Apply minimal, targeted fixes only/);
+});
+
+test("buildRedispatchPrompt omits churn WARNING when churnGrowth is null", () => {
+  const helperPath = path.join(os.tmpdir(), `redispatch-nochurn-${Date.now()}.js`);
+  fs.writeFileSync(helperPath, [
+    `process.argv = ["node", "helper.js", "--repo", "/dev/null", "--branch", "x", "--pr", "1"];`,
+    `const { buildRedispatchPrompt } = require(${JSON.stringify(SCRIPT)});`,
+    `const verdict = { verdict: "changes_requested", summary: "test", issues: [{ title: "t", body: "b", file: "x.js", line: 1, category: "contract", severity: "high" }], scope_drift: { creep: [], missing: [] } };`,
+    `const result = buildRedispatchPrompt(verdict, "AC: do X", null, 3, null);`,
+    `process.stdout.write(result);`,
+  ].join("\n"), "utf-8");
+  const out = execFileSync("node", [helperPath], { encoding: "utf-8" });
+  assert.ok(!out.includes("WARNING"));
+  assert.ok(!out.includes("Apply minimal"));
+});
