@@ -7,6 +7,7 @@ const path = require("path");
 
 const {
   STATES,
+  captureAttempt,
   getEventsPath,
   getRunDir,
   listManifestPaths,
@@ -305,4 +306,53 @@ setTimeout(() => {}, 60000);
   assert.equal(result.status, "failed");
   assert.equal(result.runState, STATES.ESCALATED);
   assert.match(result.error, /timed out/);
+});
+
+test("re-dispatch prompt includes previous iteration history", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  writeFakeCodex(binDir);
+  const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}` };
+
+  const first = JSON.parse(runDispatch(repoRoot, [
+    "-b", "issue-77",
+    "--prompt", "first pass",
+    "--json",
+  ], env));
+  assert.equal(first.runState, STATES.REVIEW_PENDING);
+
+  const runId = first.runId;
+  const manifestPath = first.manifestPath;
+
+  // Simulate: reviewer captures attempt data, then transitions to changes_requested
+  captureAttempt(repoRoot, runId, {
+    score_log: "| Factor | Target | Final |\n| Perf | < 0.2s | 0.35s |",
+    reviewer_feedback: "Timeout middleware missing on /api/orders endpoint",
+    failed_approaches: ["Fixed-delay retry"],
+  });
+
+  const record = readManifest(manifestPath);
+  let updated = updateManifestState(record.data, STATES.CHANGES_REQUESTED, "re_dispatch_requested_changes");
+  writeManifest(manifestPath, updated, record.body);
+
+  // Re-dispatch — should include history in prompt
+  const second = JSON.parse(runDispatch(repoRoot, [
+    "--run-id", runId,
+    "--prompt", "fix the issues",
+    "--json",
+  ], env));
+
+  assert.equal(second.mode, "resume");
+  assert.equal(second.runState, STATES.REVIEW_PENDING);
+
+  // Verify the persisted dispatch prompt includes the history section
+  const dispatchPrompt = fs.readFileSync(path.join(second.runDir, "dispatch-prompt.md"), "utf-8");
+  assert.match(dispatchPrompt, /Previous Attempt \(dispatch #1\)/);
+  assert.match(dispatchPrompt, /Score Log/);
+  assert.match(dispatchPrompt, /0\.35s/);
+  assert.match(dispatchPrompt, /Timeout middleware missing/);
+  assert.match(dispatchPrompt, /Do NOT Repeat/);
+  assert.match(dispatchPrompt, /Fixed-delay retry/);
+  assert.match(dispatchPrompt, /fix the issues/);
 });

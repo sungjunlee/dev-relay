@@ -7,12 +7,15 @@ const path = require("path");
 const {
   CLEANUP_STATUSES,
   STATES,
+  captureAttempt,
   createManifestSkeleton,
   createRunId,
   ensureRunLayout,
+  formatAttemptsForPrompt,
   getRepoSlug,
   inferIssueNumber,
   readManifest,
+  readPreviousAttempts,
   updateManifestCleanup,
   updateManifestState,
   writeManifest,
@@ -183,4 +186,90 @@ test("updateManifestCleanup records cleanup metadata without changing state", ()
   assert.equal(updated.cleanup.status, CLEANUP_STATUSES.SUCCEEDED);
   assert.equal(updated.cleanup.worktree_removed, true);
   assert.equal(updated.cleanup.branch_deleted, true);
+});
+
+test("readPreviousAttempts returns [] on corrupted JSON", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-corrupt-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  const runId = "issue-corrupt-20260403120000000";
+
+  // Write a valid attempt to create the file at the correct path
+  captureAttempt(repoRoot, runId, { score_log: "test" });
+  assert.equal(readPreviousAttempts(repoRoot, runId).length, 1);
+
+  // Find and corrupt the previous-attempts.json file
+  const findFile = (dir, name) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) { const r = findFile(full, name); if (r) return r; }
+      if (entry.name === name) return full;
+    }
+    return null;
+  };
+  const attemptsFile = findFile(process.env.RELAY_HOME, "previous-attempts.json");
+  fs.writeFileSync(attemptsFile, "{broken json[", "utf-8");
+
+  const result = readPreviousAttempts(repoRoot, runId);
+  assert.deepEqual(result, []);
+});
+
+test("captureAttempt writes and readPreviousAttempts reads correctly", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-attempts-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  const runId = "issue-42-20260403120000000";
+  ensureRunLayout(repoRoot, runId);
+
+  assert.deepEqual(readPreviousAttempts(repoRoot, runId), []);
+
+  const first = captureAttempt(repoRoot, runId, {
+    score_log: "| Factor | Target | Final |\n| Perf | < 0.2s | 0.35s |",
+    reviewer_feedback: "Timeout middleware missing on /api/orders",
+    failed_approaches: ["Fixed-delay retry", "Skipping /api/orders timeout"],
+  });
+  assert.equal(first.dispatch_number, 1);
+  assert.ok(first.timestamp);
+
+  const second = captureAttempt(repoRoot, runId, {
+    score_log: "| Factor | Target | Final |\n| Perf | < 0.2s | 0.18s |",
+    reviewer_feedback: "Retry still uses fixed delay",
+    failed_approaches: ["Fixed-delay retry"],
+  });
+  assert.equal(second.dispatch_number, 2);
+
+  const attempts = readPreviousAttempts(repoRoot, runId);
+  assert.equal(attempts.length, 2);
+  assert.equal(attempts[0].dispatch_number, 1);
+  assert.equal(attempts[1].dispatch_number, 2);
+  assert.match(attempts[0].score_log, /0\.35s/);
+});
+
+test("captureAttempt validates inputs", () => {
+  assert.throws(() => captureAttempt("/tmp", null, {}), /run_id is required/);
+  assert.throws(() => captureAttempt("/tmp", "run-1", null), /attemptData must be an object/);
+  assert.throws(() => captureAttempt("/tmp", "run-1", "string"), /attemptData must be an object/);
+});
+
+test("formatAttemptsForPrompt returns empty string for no attempts", () => {
+  assert.equal(formatAttemptsForPrompt([]), "");
+  assert.equal(formatAttemptsForPrompt(null), "");
+});
+
+test("formatAttemptsForPrompt formats attempts correctly", () => {
+  const attempts = [
+    {
+      dispatch_number: 1,
+      score_log: "| Factor | Target | Final |\n| Perf | < 0.2s | 0.35s |",
+      reviewer_feedback: "Timeout middleware missing",
+      failed_approaches: ["Fixed-delay retry", "Skipping timeout"],
+    },
+  ];
+  const result = formatAttemptsForPrompt(attempts);
+  assert.match(result, /## Previous Attempt \(dispatch #1\)/);
+  assert.match(result, /### Score Log/);
+  assert.match(result, /0\.35s/);
+  assert.match(result, /### Reviewer Feedback/);
+  assert.match(result, /Timeout middleware missing/);
+  assert.match(result, /### Do NOT Repeat/);
+  assert.match(result, /- Fixed-delay retry/);
+  assert.match(result, /- Skipping timeout/);
 });
