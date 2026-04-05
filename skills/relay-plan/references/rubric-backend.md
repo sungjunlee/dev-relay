@@ -25,7 +25,10 @@ Everything fails. The question is how.
 - **Circuit breaking**: After N failures, does the code stop trying and fail fast? Or does every request wait for a timeout on a service that's clearly down?
 - **Error messages**: Does the error tell the *caller* what they can do? "Internal server error" helps nobody. "Service X is temporarily unavailable, retry after 30s" is actionable.
 
-Score low if: no timeouts on external calls, retry-on-everything, errors swallowed silently, cascading failures possible.
+Scoring guide:
+- **low**: No timeouts on external calls, retry-on-everything, errors swallowed silently, cascading failures possible.
+- **mid**: Timeouts on external calls, basic retry exists but without backoff/jitter or idempotency awareness.
+- **high**: All four criteria met — graceful degradation, idempotency-aware retry with backoff, circuit breaking, actionable error messages.
 
 ### Data integrity (target: ≥ 8/10)
 
@@ -36,7 +39,10 @@ The database outlives every other part of your system. Treat it accordingly.
 - **Constraint enforcement**: Business rules in application code alone are a suggestion. Unique constraints, foreign keys, NOT NULL — the database should be the last line of defense, not the only line.
 - **Query plan stability**: Does your query perform the same at 100 rows and 10M rows? An index scan that degrades to a full table scan under growth is a time bomb. Check `EXPLAIN` on new queries.
 
-Score low if: no database constraints backing application validations, no idempotency keys on mutations, transactions missing on multi-step operations.
+Scoring guide:
+- **low**: No database constraints backing application validations, no idempotency keys on mutations, transactions missing on multi-step operations.
+- **mid**: DB constraints on critical fields, transactions on obvious multi-step ops, but idempotency not considered for mutation endpoints.
+- **high**: Constraints + transactions + idempotency keys on all mutations, query plans checked for new queries at scale.
 
 ### Resource discipline (target: ≥ 7/10)
 
@@ -47,7 +53,10 @@ Your code runs on shared infrastructure. Be a good neighbor.
 - **Work proportionality**: Are you doing work the caller didn't ask for? Fetching 50 columns when the endpoint needs 3. Computing aggregates that get cached but never invalidated. Every wasted cycle is latency and cost.
 - **Background offloading**: Is the HTTP response waiting for email delivery, webhook dispatch, or log shipping? If the caller doesn't need the result, don't make them wait for it.
 
-Score low if: unbounded queries (no LIMIT), full-table loads into memory, synchronous side effects in request path, no connection pooling.
+Scoring guide:
+- **low**: Unbounded queries (no LIMIT), full-table loads into memory, synchronous side effects in request path, no connection pooling.
+- **mid**: Connection pooling in place, queries bounded, but background offloading not considered; memory grows linearly with input.
+- **high**: Pooled + bounded + streamed where appropriate, side effects offloaded, work proportional to what the caller asked for.
 
 ### API contract clarity (target: ≥ 7/10)
 
@@ -58,4 +67,7 @@ Your API is a promise. Breaking it is expensive.
 - **Pagination by default**: Any list endpoint without pagination is a production incident waiting for enough data.
 - **Versioning awareness**: If this change breaks existing callers, is that intentional and communicated? If not, it shouldn't ship.
 
-Score low if: inconsistent field naming, errors as plaintext, unbounded list responses, breaking changes without versioning.
+Scoring guide:
+- **low**: Inconsistent field naming, errors as plaintext, unbounded list responses, breaking changes without versioning.
+- **mid**: Consistent naming and structured error schema, but no pagination or versioning awareness.
+- **high**: All four criteria met — consistent, structured, paginated, versioning-aware. Contract is predictable and safe.

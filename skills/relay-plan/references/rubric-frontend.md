@@ -25,7 +25,10 @@ Does the UI respond like the user expects, or like the developer found convenien
 - **Error recovery**: When something fails, can the user retry from where they were? Or do they lose their work and start over?
 - **Transitions**: Do state changes communicate what happened? A list item disappearing without animation feels like a bug. With a fade-out, it feels intentional.
 
-Score low if: spinners everywhere, errors as alert() dialogs, state changes that feel like page refreshes.
+Scoring guide:
+- **low**: Spinners everywhere, errors as alert() dialogs, state changes that feel like page refreshes.
+- **mid**: Skeleton loaders on main content, error boundaries exist but no retry path, basic transitions.
+- **high**: Optimistic updates on instant-feel actions, meaningful loading states, graceful error recovery with retry.
 
 ### Information hierarchy (target: ≥ 7/10)
 
@@ -35,7 +38,10 @@ If a user glances at the screen for 3 seconds, do they see what matters most?
 - **Progressive disclosure**: Show the essential, reveal the rest on demand. A settings page with 40 visible fields is a failure of hierarchy, not a feature of completeness.
 - **Empty states**: First-time or zero-data states should guide, not just say "No data." This is the moment you earn or lose the user.
 
-Score low if: every element screams for attention equally, empty states are afterthoughts, CTAs are ambiguous.
+Scoring guide:
+- **low**: Every element screams for attention equally, empty states are afterthoughts, CTAs are ambiguous.
+- **mid**: Primary action is identifiable, but secondary elements compete for attention; empty states exist but don't guide.
+- **high**: Clear visual weight hierarchy, progressive disclosure of complexity, empty states guide the user toward first action.
 
 ### Component boundaries (target: ≥ 7/10)
 
@@ -45,7 +51,10 @@ Are the component splits serving the user's mental model, or the developer's fil
 - **Data flow clarity**: Can you trace where state lives and how it flows without reading 6 files? If a prop drills through 4 levels, the boundary is wrong.
 - **Render efficiency**: Does changing one input re-render the whole page? React.memo and useMemo are band-aids — the real fix is better component boundaries.
 
-Score low if: prop drilling > 3 levels, components that only make sense in one context but are "reusable," unnecessary re-renders visible in profiler.
+Scoring guide:
+- **low**: Prop drilling > 3 levels, components that only make sense in one context but are "reusable," unnecessary re-renders visible in profiler.
+- **mid**: Data flow is traceable but some over-abstraction; re-renders bounded but not optimal.
+- **high**: Abstractions earn their cost, state lives at the right level, component boundaries match the user's mental model.
 
 ### Responsive integrity (target: ≥ 7/10)
 
@@ -55,4 +64,7 @@ Not "does it fit on mobile" but "does it *work* on mobile."
 - **Content priority shift**: Mobile isn't a smaller desktop. What's most important changes. A sidebar navigation that becomes a hamburger is the minimum; rethinking what's primary is the goal.
 - **Input adaptation**: Correct keyboard types (email, number, tel). Autocomplete attributes. No hover-dependent interactions on touch devices.
 
-Score low if: text is readable but buttons are untappable, horizontal scrolling appears, hover tooltips are the only way to see critical info.
+Scoring guide:
+- **low**: Text is readable but buttons are untappable, horizontal scrolling appears, hover tooltips are the only way to see critical info.
+- **mid**: Touch targets adequate, no overflow, but content priority doesn't shift for mobile — it's a shrunken desktop.
+- **high**: Content priority rethought for mobile, correct input types, touch-first interactions with no hover dependencies.
