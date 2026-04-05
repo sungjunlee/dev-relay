@@ -88,6 +88,32 @@ test("manifest round-trips multiline scalar values", () => {
   );
 });
 
+test("readManifest migrates v1 roles.worker to roles.executor", () => {
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-migrate-"));
+  const runId = "migrate-v1-20260402103000";
+  const wtPath = path.join(tmpRoot, "wt");
+  const { manifestPath } = ensureRunLayout(tmpRoot, runId);
+  const manifest = createManifestSkeleton({
+    repoRoot: tmpRoot,
+    runId,
+    branch: "migrate-v1",
+    baseBranch: "main",
+    issueNumber: 99,
+    worktreePath: wtPath,
+    orchestrator: "codex",
+    executor: "codex",
+    reviewer: "claude",
+  });
+  // Simulate a v1 manifest: rename executor back to worker
+  manifest.roles.worker = manifest.roles.executor;
+  delete manifest.roles.executor;
+  writeManifest(manifestPath, manifest);
+
+  const parsed = readManifest(manifestPath);
+  assert.equal(parsed.data.roles.executor, "codex");
+  assert.equal(parsed.data.roles.worker, undefined);
+});
+
 test("updateManifestState allows valid transitions and rejects invalid ones", () => {
   const manifest = {
     state: STATES.DRAFT,

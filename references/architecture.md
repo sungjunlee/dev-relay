@@ -38,7 +38,7 @@ Each run produces `.relay/runs/<run-id>.md` — a Markdown file with YAML frontm
 
 ```yaml
 ---
-relay_version: 1
+relay_version: 2
 run_id: issue-42-20260403120000000
 state: review_pending
 next_action: start_review
