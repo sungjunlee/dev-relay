@@ -149,7 +149,7 @@ Creates an isolated git worktree, writes a relay run manifest, runs the executor
 
 **Timeout guidance:** 1800s for simple tasks, 3600s with self-review, 5400s for complex multi-file work.
 
-Dispatch now writes one manifest to `.relay/runs/<run-id>.md` and one append-only history log to `.relay/runs/<run-id>/events.jsonl`. `run_id` is the canonical identity for follow-up review, merge, close, and reporting. JSON output includes `runId`, `manifestPath`, `runState`, and `cleanupPolicy`. A successful first-pass dispatch should usually end in `runState: review_pending`.
+Dispatch now writes one manifest to `~/.relay/runs/<repo-slug>/<run-id>.md` and one append-only history log to `~/.relay/runs/<repo-slug>/<run-id>/events.jsonl`. `run_id` is the canonical identity for follow-up review, merge, close, and reporting. JSON output includes `runId`, `runDir`, `manifestPath`, `runState`, and `cleanupPolicy`. A successful first-pass dispatch should usually end in `runState: review_pending`.
 
 Successful dispatches retain their worktree by default so review, follow-up fixes, and manual inspection can continue in the same run context. When a run is resumed from `changes_requested`, dispatch reuses the retained worktree instead of creating a fresh run.
 
@@ -162,7 +162,7 @@ Runs in a **forked Agent context** — the reviewer has no memory of the plannin
 
 The review loops until convergence (most PRs: 1–3 rounds, safety cap: 20):
 
-1. **Prompt bundle / invocation** — `review-runner.js --run-id <id> --reviewer codex|claude` can invoke an isolated reviewer directly, or `--prepare-only` writes the diff, done criteria, and round prompt into `.relay/runs/<run-id>/`
+1. **Prompt bundle / invocation** — `review-runner.js --run-id <id> --reviewer codex|claude` can invoke an isolated reviewer directly, or `--prepare-only` writes the diff, done criteria, and round prompt into `~/.relay/runs/<repo-slug>/<run-id>/`
 2. **Contract checks** — Is the implementation faithful to the AC? Any stubs or placeholders? Security issues?
 3. **Rubric verification** — Re-run automated checks, re-score evaluated factors independently
 4. **Quality sweep** — Structural review + code simplification pass
@@ -241,7 +241,7 @@ node skills/relay-dispatch/scripts/cleanup-worktrees.js --repo . --dry-run
 node skills/relay-dispatch/scripts/cleanup-worktrees.js --repo . --older-than 72 --json
 ```
 
-The janitor reads `.relay/runs/*.md`, cleans only terminal runs by default, and reports stale non-terminal runs without deleting them.
+The janitor reads `~/.relay/runs/<repo-slug>/*.md`, cleans only terminal runs by default, and reports stale non-terminal runs without deleting them.
 
 Explicit close path for stale non-terminal runs:
 

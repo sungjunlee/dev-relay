@@ -41,7 +41,7 @@ Expect:
 - `runState: review_pending`
 - manifest contains `state: 'review_pending'`
 - manifest contains `cleanup: 'on_close'`
-- target repo contains `.relay/runs/`
+- `~/.relay/runs/<repo-slug>/` contains the run manifest
 - dispatched worktree still exists after the command returns
 - harness explicitly removes the retained worktree during teardown
 

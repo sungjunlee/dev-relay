@@ -19,6 +19,7 @@ const SCRIPT = path.join(__dirname, "finalize-run.js");
 
 function setupRepo({ dirtyWorktree = false } = {}) {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-finalize-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
   const originRoot = path.join(repoRoot, "origin.git");
   execFileSync("git", ["init", "--bare", originRoot], { encoding: "utf-8", stdio: "pipe" });
   execFileSync("git", ["init", "-b", "main"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });

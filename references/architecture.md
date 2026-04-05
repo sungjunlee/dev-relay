@@ -34,7 +34,7 @@ Terminal states: `merged`, `closed`. Once entered, no further transitions.
 
 ## Manifest Schema
 
-Each run produces `.relay/runs/<run-id>.md` — a Markdown file with YAML frontmatter:
+Each run produces `~/.relay/runs/<repo-slug>/<run-id>.md` — a Markdown file with YAML frontmatter:
 
 ```yaml
 ---
@@ -111,7 +111,7 @@ timestamps:
 
 ## Event Journal
 
-Each run keeps an append-only event log at `.relay/runs/<run-id>/events.jsonl`:
+Each run keeps an append-only event log at `~/.relay/runs/<repo-slug>/<run-id>/events.jsonl`:
 
 ```jsonl
 {"event":"dispatch_started","timestamp":"...","executor":"codex","branch":"issue-42"}
@@ -123,7 +123,7 @@ Each run keeps an append-only event log at `.relay/runs/<run-id>/events.jsonl`:
 
 ## Review Round Artifacts
 
-Each round produces files under `.relay/runs/<run-id>/`:
+Each round produces files under `~/.relay/runs/<repo-slug>/<run-id>/`:
 
 | File | Content |
 |------|---------|

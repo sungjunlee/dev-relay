@@ -656,6 +656,7 @@ async function main() {
 
   const result = {
     runId,
+    runDir,
     manifestPath,
     runState: manifest.state,
     cleanupPolicy,

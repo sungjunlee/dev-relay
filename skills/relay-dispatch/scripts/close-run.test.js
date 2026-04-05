@@ -10,6 +10,7 @@ const {
   createManifestSkeleton,
   createRunId,
   ensureRunLayout,
+  getEventsPath,
   readManifest,
   updateManifestState,
   writeManifest,
@@ -19,6 +20,8 @@ const SCRIPT = path.join(__dirname, "close-run.js");
 
 function setupRepo({ dirtyWorktree = false } = {}) {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-close-run-"));
+  const relayHome = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  process.env.RELAY_HOME = relayHome;
   execFileSync("git", ["init", "-b", "main"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
   execFileSync("git", ["config", "user.name", "Relay Close Test"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
   execFileSync("git", ["config", "user.email", "relay-close@example.com"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
@@ -78,7 +81,7 @@ test("close-run closes an active run and cleans a clean worktree", () => {
   assert.equal(manifest.state, STATES.CLOSED);
   assert.equal(manifest.cleanup.status, "succeeded");
 
-  const events = fs.readFileSync(path.join(repoRoot, ".relay", "runs", runId, "events.jsonl"), "utf-8");
+  const events = fs.readFileSync(getEventsPath(repoRoot, runId), "utf-8");
   assert.match(events, /"event":"close"/);
   assert.match(events, /"event":"cleanup_result"/);
 });
