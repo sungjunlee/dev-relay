@@ -25,7 +25,10 @@ Does this solve the right problem? (If this fails, nothing else matters.)
 - **The 3-second test**: If a new user sees this screen for 3 seconds and looks away, what do they understand? What's the primary action? If they can't answer, the value proposition isn't communicated.
 - **Unnecessary complexity**: Does this feature exist because users need it, or because the spec said so? A settings page with 20 toggles is a confession that you couldn't make decisions. Every option is a question the user didn't want to answer.
 
-Score low if: the feature solves an assumed problem without evidence, the primary action isn't obvious, user has to make decisions the product should make.
+Scoring guide:
+- **low**: Feature solves an assumed problem without evidence, primary action isn't obvious, user has to make decisions the product should make.
+- **mid**: Problem-solution fit is plausible, primary action identifiable, but unnecessary complexity remains (too many options, too many steps).
+- **high**: Clear problem evidence, 3-second test passes, product makes sensible defaults — user decides only what they care about.
 
 ### Layer 2: Usability (target: ≥ 8/10)
 
@@ -36,7 +39,10 @@ Can the user succeed without instructions? (Only evaluate after Layer 1 passes.)
 - **Cognitive load**: How many things must the user hold in their head simultaneously? A form that requires remembering a value from a previous screen is a working memory violation. Show it or link back to it.
 - **Familiar patterns**: Does the interaction match what the user already knows from other apps? Innovation in navigation or input patterns is almost always friction disguised as creativity.
 
-Score low if: task requires more steps than necessary, errors are caught not prevented, user must remember context from previous screens.
+Scoring guide:
+- **low**: Task requires more steps than necessary, errors are caught not prevented, user must remember context from previous screens.
+- **mid**: Reasonable step count, some error prevention, but cognitive load still high — user juggles context across views.
+- **high**: Minimum viable steps, errors prevented not caught, all needed context visible on screen — no working memory violations.
 
 ### Layer 3: Delight (target: ≥ 7/10)
 
@@ -46,7 +52,10 @@ Does using it feel good? (Only evaluate after Layers 1 and 2 pass.)
 - **Consistency and polish**: Do similar elements look and behave similarly? Is spacing consistent? Do animations serve communication (showing where an element went) or are they just movement for movement's sake?
 - **Personality without interference**: Does the product have a voice that makes it memorable without getting in the way of the task? A playful empty state illustration is delight. A playful error message when the user lost their data is tone-deaf.
 
-Score low if: no feedback on user actions, inconsistent visual treatment of similar elements, personality that interferes with task completion.
+Scoring guide:
+- **low**: No feedback on user actions, inconsistent visual treatment of similar elements, personality that interferes with task completion.
+- **mid**: Immediate feedback on actions, mostly consistent visuals, but transitions feel mechanical rather than intentional.
+- **high**: Every action has confident feedback, spacing and animation serve communication, personality enhances without interfering.
 
 ### Design-specific meta-check: Hierarchy coherence (target: ≥ 7/10)
 
@@ -56,4 +65,7 @@ Step back and blur your eyes (Jessica Hische's "blurred vision" technique). Does
 - **Whitespace as structure**: Is the spacing doing work — grouping related items, separating sections — or is it just "padding: 16px everywhere"?
 - **One primary action per screen**: If you can't point to THE thing this screen wants the user to do, the hierarchy has failed. Two equally prominent CTAs is zero clear CTAs.
 
-Score low if: competing visual elements of equal weight, no clear focal point, spacing that doesn't reflect content relationships.
+Scoring guide:
+- **low**: Competing visual elements of equal weight, no clear focal point, spacing that doesn't reflect content relationships.
+- **mid**: One clear focal point, but whitespace is uniform ("padding: 16px everywhere") rather than structural.
+- **high**: Visual weight matches importance, whitespace groups related items and separates sections, one primary action per screen.

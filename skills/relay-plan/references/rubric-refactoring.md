@@ -24,7 +24,10 @@ The measure of simplicity is not lines of code — it's the number of concepts a
 - **Abstractions earning their keep**: Every abstraction is a tax on readability. A `BaseService` with one subclass, a `Strategy` pattern with one strategy, a `Factory` that creates one type — these are complexity theater. Kill them.
 - **Naming as documentation**: After refactoring, can you read the code top-to-bottom and understand the flow without jumping to definitions? If variable names went from `data` to `unvalidatedUserInput`, that's a win. If they went from `handler` to `AbstractRequestProcessorDelegate`, that's a loss.
 
-Score low if: more abstractions after than before, indirection layers added without removing others, concepts scattered across more files.
+Scoring guide:
+- **low**: More abstractions after than before, indirection layers added without removing others, concepts scattered across more files.
+- **mid**: Abstractions reduced but naming still unclear, or file count lower but concepts per file increased.
+- **high**: Fewer moving parts, abstractions earn their keep, code reads top-to-bottom without jumping to definitions.
 
 ### Dependency hygiene (target: ≥ 8/10)
 
@@ -34,7 +37,10 @@ The direction and depth of dependencies reveal the real architecture.
 - **Import depth**: If modifying one module requires understanding a chain of 6 imports to reach the actual logic, the module boundaries are wrong. Good refactoring shortens these chains.
 - **Explicit over implicit**: After refactoring, are dependencies injected or imported clearly? Or are they hidden in global state, service locators, or magic that requires institutional knowledge to understand?
 
-Score low if: business logic imports framework internals, dependency chains deeper than before, hidden coupling via shared mutable state.
+Scoring guide:
+- **low**: Business logic imports framework internals, dependency chains deeper than before, hidden coupling via shared mutable state.
+- **mid**: Dependency arrows point toward stability, but some imports still cross boundary layers; explicit > implicit partially achieved.
+- **high**: Stable core has zero framework imports, dependency chains shorter, all dependencies explicit and injected.
 
 ### Seam quality (target: ≥ 7/10)
 
@@ -44,7 +50,10 @@ A seam is where you can change behavior without modifying existing code. Good re
 - **Change locality**: For the most likely future changes in this area, how many files would need to be modified? If the answer went up, the refactor optimized for today's structure, not tomorrow's changes.
 - **Rollback safety**: Can the old behavior be restored quickly? Refactoring that burns the bridge (deletes old code, removes compatibility) before the new path is proven is a gamble.
 
-Score low if: testing requires more mocks than before, likely changes would touch more files, no way to partially roll back.
+Scoring guide:
+- **low**: Testing requires more mocks than before, likely changes would touch more files, no way to partially roll back.
+- **mid**: Testable without mocks in most cases, change locality improved, but rollback path not considered.
+- **high**: Fewer mocks needed, likely future changes localized to 1-2 files, rollback path exists and is documented.
 
 ### Deletion courage (target: ≥ 7/10)
 
@@ -54,4 +63,7 @@ The best code is deleted code. Refactoring is the rare moment when deletion is e
 - **No compatibility shims without sunset**: If you kept the old interface "for compatibility," when does it die? A shim without a removal date is permanent complexity.
 - **Config and feature flags cleaned up**: Dead feature flags, unused environment variables, config keys that nothing reads — these are invisible clutter. Refactoring should clean the edges, not just the center.
 
-Score low if: old code commented out instead of deleted, unused exports/types retained "just in case," dead config entries left behind.
+Scoring guide:
+- **low**: Old code commented out instead of deleted, unused exports/types retained "just in case," dead config entries left behind.
+- **mid**: Old code deleted, but compatibility shims or deprecated markers remain without sunset dates.
+- **high**: Dead code fully removed, no shims without sunset dates, config and feature flags cleaned up.

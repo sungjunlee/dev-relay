@@ -23,7 +23,10 @@ The ultimate test: give this document to someone who knows nothing about the pro
 - **Environment stated explicitly**: What OS, what versions, what must already be installed? "Requires Node.js" is insufficient. "Requires Node.js 18+ (check with `node --version`)" is complete.
 - **Happy path AND failure path**: What does success look like? What does failure look like? If the reader follows the steps and something goes wrong, do they know what "wrong" looks like and what to try?
 
-Score low if: steps assume tools/context not mentioned, no version requirements, reader can't tell if they succeeded.
+Scoring guide:
+- **low**: Steps assume tools/context not mentioned, no version requirements, reader can't tell if they succeeded.
+- **mid**: Steps complete and tools specified, but no failure path — reader only knows what success looks like, not what to do when it breaks.
+- **high**: Zero-context reader can complete the task end-to-end, with explicit success/failure indicators and recovery steps.
 
 ### Reader testing (target: ≥ 8/10)
 
@@ -35,7 +38,10 @@ Simulate a fresh reader. Generate 5-10 questions that a real user would ask afte
 
 This is the documentation equivalent of autoresearch's `val_bpb` — a hard, repeatable metric that directly measures the thing that matters (reader success).
 
-Score low if: fewer than 6/10 questions answerable from doc alone, multiple ambiguous answers, obvious gaps in coverage.
+Scoring guide:
+- **low**: Fewer than 6/10 questions answerable from doc alone, multiple ambiguous answers, obvious gaps in coverage.
+- **mid**: 7-8/10 questions answerable, answers mostly unambiguous, but one or two reader journeys have dead ends.
+- **high**: ≥ 9/10 questions answerable, unambiguous, gaps are edge cases not core paths.
 
 ### Information architecture (target: ≥ 7/10)
 
@@ -45,7 +51,10 @@ Structure is an argument. The order in which you present information shapes how 
 - **Progressive depth**: A skimmer should get value from headings alone. A reader should get value from the first paragraph of each section. A deep-diver should find the details they need without wading through basics. One document, three useful depths.
 - **Scannable structure**: Headers, code blocks, tables, and lists are not decoration — they're navigation. A wall of prose in technical docs means the writer thought about writing, not about finding.
 
-Score low if: instructions without rationale, flat structure (no headings for sections), important info buried in paragraphs instead of highlighted.
+Scoring guide:
+- **low**: Instructions without rationale, flat structure (no headings for sections), important info buried in paragraphs instead of highlighted.
+- **mid**: Headings and code blocks present, but "why" is missing — reader follows steps mechanically without understanding.
+- **high**: Why before how, progressive depth (skimmer → reader → deep-diver), scannable structure throughout.
 
 ### Maintenance resilience (target: ≥ 7/10)
 
@@ -55,4 +64,7 @@ Good docs stay accurate. Great docs are hard to make inaccurate.
 - **Version-stable language**: "Currently" and "recently" rot immediately. "As of v3.2" is stable. "See `--help` for current options" delegates to the source of truth.
 - **Examples that test themselves**: Can the code examples be extracted and run as part of CI? If not, they'll drift. The best documentation is code that also reads well.
 
-Score low if: duplicated information across docs, "currently" language without dates/versions, examples that can't be validated.
+Scoring guide:
+- **low**: Duplicated information across docs, "currently" language without dates/versions, examples that can't be validated.
+- **mid**: Single source of truth for most info, version-stable language, but code examples not testable in CI.
+- **high**: No duplication, all temporal language anchored to versions, examples extractable and CI-testable.

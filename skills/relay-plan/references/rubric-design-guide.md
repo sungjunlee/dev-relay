@@ -42,24 +42,26 @@ For each evaluated factor, write:
 - **target**: score threshold (typically ≥ 7/10 for best-effort, ≥ 8/10 for required)
 - **weight**: required (must meet target) or best-effort (note in PR if below)
 
-### Q4: What does failure look like?
+### Q4: What does each scoring level look like?
 
-For each evaluated factor, write the `score_low_if` line. This is one sentence describing what a low score looks like.
+For each evaluated factor, write a `scoring_guide` with three anchors: `low`, `mid`, `high`. Each is one sentence describing what that level looks like.
 
-**This is the most important question.** Without `score_low_if`, the agent lacks an anchor for the bottom of the scale and drifts toward generous self-scoring.
+**This is the most important question.** Without a scoring guide, the agent lacks calibration and drifts toward generous self-scoring. Three anchors give sufficient calibration without the authoring burden of a full 4-level gradient.
 
 Process:
-1. Imagine the worst plausible implementation that "technically works"
-2. What's wrong with it? That's your `score_low_if`
-3. Test: would a junior reading `score_low_if` know the difference between 3/10 and 8/10?
+1. **low**: Imagine the worst plausible implementation that "technically works." What's wrong with it?
+2. **mid**: What does "partially addressed" look like? Some criteria met, obvious gaps remain.
+3. **high**: What does the target zone look like? All criteria satisfied, edge cases handled.
+
+Test: would a junior reading the three levels know the difference between 3/10, 6/10, and 9/10? Each level implicitly tells the executor what to fix next — at low, aim for mid; at mid, aim for high.
 
 Examples:
 
-| Factor | Bad `score_low_if` | Good `score_low_if` |
-|--------|-------------------|---------------------|
-| Error handling | "errors not handled well" | "no timeouts on external calls, retry-on-everything, errors swallowed silently" |
-| Component design | "bad component structure" | "prop drilling > 3 levels, components that only exist in one context but are 'reusable'" |
-| Documentation | "incomplete docs" | "steps assume tools not mentioned, no version requirements, reader can't tell if they succeeded" |
+| Factor | low | mid | high |
+|--------|-----|-----|------|
+| Error handling | "No timeouts on external calls, retry-on-everything, errors swallowed" | "Timeouts on external calls, basic retry without backoff" | "Backoff + jitter, circuit breaking, actionable error messages" |
+| Component design | "Prop drilling > 3 levels, components only used in one context but are 'reusable'" | "Clean data flow, but some over-abstraction or unnecessary indirection" | "Abstractions earn their cost, data flow traceable without jumping files" |
+| Documentation | "Steps assume tools not mentioned, no version requirements, reader can't tell if they succeeded" | "Steps complete but terse, missing failure paths or edge cases" | "Zero-context reader can complete the task, happy + failure paths covered" |
 
 ### Q5: What's the baseline?
 
@@ -101,6 +103,8 @@ For delta metrics (bundle size, query count, complexity), capture the before-sta
 
 The metric measurement command should not be something the agent can game. Separate the evaluation from the implementation — just like autoresearch's read-only `prepare.py`. If the agent can modify both the code and the test that checks it, the signal is compromised.
 
+**Automated check commands are immutable.** The dispatch prompt explicitly forbids the executor from modifying them. If a check fails, the fix is in the code — not the command. This closes the Goodhart vulnerability where the executor "improves" the scoring command itself to inflate scores.
+
 ## Calibration (Optional)
 
 Test whether your rubric produces consistent scores before dispatching. Recommended for high-stakes tasks or rubrics with novel/custom criteria.
@@ -124,7 +128,7 @@ A factor that scores 4 one run and 8 the next will cause the iteration loop to m
 | Cause | Example | Fix |
 |-------|---------|-----|
 | Vague criteria | "good error handling" | Specific bullets (see Fix Patterns § Vague criteria) |
-| Missing `score_low_if` | No anchor for the bottom of scale | Add one (see Q4 in Guided Interview) |
+| Missing `scoring_guide` | No calibration anchors for the scale | Add low/mid/high (see Q4 in Guided Interview) |
 | Criteria too broad | Factor covers 4+ distinct concerns | Split into 2 narrower factors |
 | Subjective threshold | "readable" means different things each run | Replace with measurable proxy ("functions < 20 lines") |
 
@@ -151,11 +155,16 @@ When validation fails (SKILL.md § Validate the rubric), use these patterns to f
 
 If nothing is directly measurable, add a test suite pass as the minimum automated check.
 
-### "Missing score_low_if"
+### "Missing scoring_guide"
 
-**Symptom**: Evaluated factor has `criteria` but no `score_low_if`.
+**Symptom**: Evaluated factor has `criteria` but no `scoring_guide` (or only a single `score_low_if` anchor).
 
-**Fix**: Ask Q4 from the interview: "Imagine the worst plausible implementation that technically works. What's wrong with it?" Write that as one sentence.
+**Fix**: Ask Q4 from the interview. Write three levels:
+1. **low**: Worst plausible implementation that "technically works" — what's wrong with it?
+2. **mid**: Partially addressed — some criteria met, obvious gaps remain.
+3. **high**: Target zone — all criteria satisfied, edge cases handled.
+
+One sentence per level is enough. If you can't distinguish mid from high, the criteria are too vague — tighten them first.
 
 ### "Vague criteria"
 
