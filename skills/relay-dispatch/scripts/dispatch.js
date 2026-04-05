@@ -395,6 +395,23 @@ async function main() {
     });
     copiedFiles = copied.copied;
 
+    // Merge base branch into worktree so the executor works on merged state.
+    // Prevents wasted rounds from stale-base conflicts or CI failures.
+    // Skip silently if no remote is configured (e.g., local-only repos).
+    try {
+      git(wtPath, "fetch", "origin", baseBranch);
+      try {
+        git(wtPath, "merge", `origin/${baseBranch}`, "--no-edit");
+      } catch {
+        try { git(wtPath, "merge", "--abort"); } catch {}
+        try { git(repoRoot, "worktree", "remove", "--force", wtPath); } catch {}
+        console.error(`Error: worktree has merge conflicts with origin/${baseBranch}. Resolve before dispatch.`);
+        process.exit(1);
+      }
+    } catch {
+      // fetch failed — no remote or network issue; proceed without merge
+    }
+
     manifest = createManifestSkeleton({
       repoRoot,
       runId,
