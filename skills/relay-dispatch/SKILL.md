@@ -22,6 +22,9 @@ ${CLAUDE_SKILL_DIR}/scripts/dispatch.js . --run-id issue-42-20260403120000000 --
 
 # With explicit executor
 ${CLAUDE_SKILL_DIR}/scripts/dispatch.js . -e codex -b feature-auth -p "..."
+
+# Claude Code as executor (no Codex required)
+${CLAUDE_SKILL_DIR}/scripts/dispatch.js . -e claude -b feature-auth -p "..."
 ```
 
 For background and parallel dispatch, see "Background & Parallel" section below.
@@ -35,7 +38,7 @@ For background and parallel dispatch, see "Background & Parallel" section below.
 | `--manifest` | Resume an existing retained relay run by manifest path |
 | `--prompt, -p` | Task prompt (include Context + Done Criteria + self-review) |
 | `--prompt-file` | Read prompt from file (for large prompts) |
-| `--executor, -e` | Executor: `codex` (default; only supported executor currently) |
+| `--executor, -e` | Executor: `codex` (default), `claude` |
 | `--model, -m` | Model override |
 | `--sandbox` | `workspace-write` (default) or `read-only` |
 | `--copy-env` | Copy `.env` to worktree |
