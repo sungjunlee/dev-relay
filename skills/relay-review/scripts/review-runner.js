@@ -252,7 +252,7 @@ function buildPrompt({ round, prNumber, branch, issueNumber, doneCriteria, diffT
     '- If no Score Log is available, set `rubric_scores` to `[]`.',
     '- When `rubric_scores` is not empty, each entry must include `factor`, `target`, `observed`, `status`, and `notes`.',
     '- `scope_drift` is always required. Set `scope_drift.creep` to `[]` if no out-of-scope changes. Set `scope_drift.missing` to list each Done Criteria item with status `verified`, `partial`, `not_done`, or `changed`.',
-    '- If `scope_drift.missing` contains any `not_done` or `changed` entries, verdict cannot be `pass`.',
+    '- If `scope_drift.missing` contains any `not_done`, `changed`, or `partial` entries, verdict cannot be `pass`.',
   );
 
   return sections.join("\n");
@@ -365,11 +365,11 @@ function validateReviewVerdict(data) {
       throw new Error("PASS verdict must not include issues");
     }
     const blockingDrift = (data.scope_drift?.missing || []).filter(
-      (m) => m.status === "not_done" || m.status === "changed"
+      (m) => m.status === "not_done" || m.status === "changed" || m.status === "partial"
     );
     if (blockingDrift.length > 0) {
       throw new Error(
-        `PASS verdict cannot have scope_drift.missing entries with status not_done or changed: ${blockingDrift.map((m) => m.criteria).join(", ")}`
+        `PASS verdict cannot have scope_drift.missing entries with status not_done, changed, or partial: ${blockingDrift.map((m) => m.criteria).join(", ")}`
       );
     }
   } else if (data.verdict === "changes_requested") {

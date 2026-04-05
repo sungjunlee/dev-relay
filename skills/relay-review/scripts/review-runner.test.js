@@ -389,7 +389,36 @@ test("pass verdict with not_done scope_drift entry is rejected", () => {
     "--review-file", reviewFile,
     "--no-comment",
     "--json",
-  ], { encoding: "utf-8", stdio: "pipe" }), /PASS verdict cannot have scope_drift\.missing entries with status not_done or changed/);
+  ], { encoding: "utf-8", stdio: "pipe" }), /PASS verdict cannot have scope_drift\.missing entries with status not_done, changed, or partial/);
+});
+
+test("pass verdict with partial scope_drift entry is rejected", () => {
+  const { repoRoot, doneCriteriaPath, diffPath } = setupRepo();
+  const reviewFile = writeVerdict(repoRoot, "pass-with-partial.json", {
+    verdict: "pass",
+    summary: "Mostly done.",
+    contract_status: "pass",
+    quality_status: "pass",
+    next_action: "ready_to_merge",
+    issues: [],
+    rubric_scores: [],
+    scope_drift: {
+      creep: [],
+      missing: [{ criteria: "Add smoke.txt", status: "partial" }],
+    },
+  });
+
+  assert.throws(() => execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--branch", "issue-42",
+    "--pr", "123",
+    "--done-criteria-file", doneCriteriaPath,
+    "--diff-file", diffPath,
+    "--review-file", reviewFile,
+    "--no-comment",
+    "--json",
+  ], { encoding: "utf-8", stdio: "pipe" }), /PASS verdict cannot have scope_drift\.missing entries with status not_done, changed, or partial/);
 });
 
 test("invalid scope_drift missing status is rejected", () => {
