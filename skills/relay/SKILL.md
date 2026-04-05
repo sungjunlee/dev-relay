@@ -100,10 +100,7 @@ If sprint file exists, mark Plan item as in-flight: `[~] #42 OAuth2 flow → PR 
 
 Verify PR exists: `gh pr list --head issue-<N>`
 
-Invoke **relay-review** in an isolated context (no planning bias). The review runner should manage rounds, PR comments, and manifest updates:
-
-> **Platform examples — context isolation:**
-> Claude Code: `context: fork` frontmatter (auto-handled) | Codex: start a new session | Other: any mechanism that discards the planning context
+Invoke **relay-review** in an isolated context (no planning bias). The review runner manages rounds, PR comments, and manifest updates. See relay-review's **Context Isolation** section for per-platform mechanisms — adapter scripts handle this automatically when using `--reviewer`.
 
 - **Phase 1 — Spec Compliance:** Done Criteria faithfulness, stubs, security, integration, rubric re-verification. Must pass before Phase 2.
 - **Phase 2 — Code Quality:** Code review + simplification on changed files. Issues re-dispatch back to Phase 1.
