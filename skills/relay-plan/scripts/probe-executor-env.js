@@ -164,9 +164,8 @@ function scanProjectTools(repoPath) {
 
 const PROBE_PROMPT =
   "List ALL your available tools, MCP servers, and installed skills. " +
-  "Output ONLY a JSON array of objects with {name, type, description} fields. " +
-  "type is one of: skill, mcp_tool, built_in. " +
-  "No explanation, no markdown, just the JSON array.";
+  "Output a JSON array of objects with {name, type, description} fields. " +
+  "type is one of: skill, mcp_tool, built_in.";
 
 function probeAgent(executor, timeout) {
   let cmd, cmdArgs;
@@ -178,14 +177,14 @@ function probeAgent(executor, timeout) {
     cmd = "claude";
     cmdArgs = ["-p", "--output-format", "text", PROBE_PROMPT];
   } else {
-    return { error: `unknown executor: ${executor}`, tools: [] };
+    return { error: `unknown executor: ${executor}`, raw: null };
   }
 
   // Check executor is available
   try {
     execFileSync(cmd, ["--version"], { encoding: "utf-8", stdio: "pipe" });
   } catch {
-    return { error: `${cmd} CLI not found`, tools: [] };
+    return { error: `${cmd} CLI not found`, raw: null };
   }
 
   const result = spawnSync(cmd, cmdArgs, {
@@ -198,52 +197,15 @@ function probeAgent(executor, timeout) {
     const msg = result.error.code === "ETIMEDOUT"
       ? `probe timed out after ${timeout}s`
       : result.error.message;
-    return { error: msg, tools: [] };
+    return { error: msg, raw: null };
   }
 
   if (result.status !== 0) {
-    return { error: `executor exited with code ${result.status}`, tools: [] };
+    return { error: `executor exited with code ${result.status}`, raw: null };
   }
 
   const stdout = (result.stdout || "").trim();
-  return parseProbeOutput(stdout);
-}
-
-function extractJsonArray(text) {
-  // Try each '[' as a potential start, then each subsequent ']' as end.
-  // Relies on JSON.parse for correctness (handles brackets inside strings).
-  let searchFrom = 0;
-  while (searchFrom < text.length) {
-    const start = text.indexOf("[", searchFrom);
-    if (start === -1) return null;
-
-    for (let i = start + 1; i < text.length; i++) {
-      if (text[i] === "]") {
-        try {
-          const parsed = JSON.parse(text.slice(start, i + 1));
-          if (Array.isArray(parsed)) return parsed;
-        } catch {}
-      }
-    }
-    searchFrom = start + 1;
-  }
-  return null;
-}
-
-function parseProbeOutput(stdout) {
-  const tools = extractJsonArray(stdout);
-  if (tools === null) {
-    return { error: "no JSON array found in probe output", raw: stdout.slice(0, 500), tools: [] };
-  }
-
-  return {
-    error: null,
-    tools: tools.map((t) => ({
-      name: String(t.name || ""),
-      type: String(t.type || "unknown"),
-      description: String(t.description || ""),
-    })).filter((t) => t.name),
-  };
+  return { error: null, raw: stdout || null };
 }
 
 // ---------------------------------------------------------------------------
@@ -253,7 +215,7 @@ function parseProbeOutput(stdout) {
 function run({ repoPath, executor, timeout, projectOnly, jsonOut }) {
   const projectTools = scanProjectTools(repoPath);
 
-  let agentProbe = { error: null, tools: [] };
+  let agentProbe = { error: null, raw: null };
   if (!projectOnly) {
     agentProbe = probeAgent(executor, timeout);
   }
@@ -261,7 +223,7 @@ function run({ repoPath, executor, timeout, projectOnly, jsonOut }) {
   const result = {
     executor: executor || null,
     repo: repoPath,
-    agent_tools: agentProbe.tools,
+    agent_tools_raw: agentProbe.raw,
     agent_probe_error: agentProbe.error || null,
     project_tools: projectTools,
   };
@@ -274,9 +236,8 @@ function run({ repoPath, executor, timeout, projectOnly, jsonOut }) {
 
     if (agentProbe.error) {
       console.log(`Agent probe: ${agentProbe.error}`);
-    } else if (agentProbe.tools.length > 0) {
-      console.log(`Agent tools (${agentProbe.tools.length}):`);
-      agentProbe.tools.forEach((t) => console.log(`  ${t.name} (${t.type}) — ${t.description}`));
+    } else if (agentProbe.raw) {
+      console.log(`Agent tools:\n${agentProbe.raw}`);
     } else if (!projectOnly) {
       console.log("Agent tools: none discovered");
     }
@@ -302,4 +263,4 @@ if (require.main === module) {
   run(opts);
 }
 
-module.exports = { scanProjectTools, parseProbeOutput, probeAgent, run };
+module.exports = { scanProjectTools, probeAgent, run };

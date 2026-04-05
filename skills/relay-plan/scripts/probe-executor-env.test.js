@@ -5,7 +5,7 @@ const os = require("os");
 const path = require("path");
 const { spawnSync } = require("child_process");
 
-const { scanProjectTools, parseProbeOutput, probeAgent } = require("./probe-executor-env");
+const { scanProjectTools, probeAgent } = require("./probe-executor-env");
 
 const SCRIPT = path.join(__dirname, "probe-executor-env.js");
 
@@ -99,92 +99,16 @@ test("scanProjectTools merges results from package.json + Makefile + pyproject.t
 });
 
 // ---------------------------------------------------------------------------
-// parseProbeOutput
+// probeAgent (raw text pass-through, no parsing)
 // ---------------------------------------------------------------------------
 
-test("parseProbeOutput extracts valid JSON array", () => {
-  const output = JSON.stringify([
-    { name: "/browse", type: "skill", description: "Browser automation" },
-    { name: "mcp:playwright", type: "mcp_tool", description: "Playwright testing" },
-  ]);
-  const result = parseProbeOutput(output);
-  assert.equal(result.error, null);
-  assert.equal(result.tools.length, 2);
-  assert.equal(result.tools[0].name, "/browse");
-  assert.equal(result.tools[1].type, "mcp_tool");
-});
-
-test("parseProbeOutput handles noisy output with embedded JSON", () => {
-  const output = 'Here are the tools:\n[{"name":"tool1","type":"skill","description":"desc"}]\nDone.';
-  const result = parseProbeOutput(output);
-  assert.equal(result.error, null);
-  assert.equal(result.tools.length, 1);
-  assert.equal(result.tools[0].name, "tool1");
-});
-
-test("parseProbeOutput filters entries with empty names", () => {
-  const output = JSON.stringify([
-    { name: "valid", type: "skill", description: "ok" },
-    { name: "", type: "skill", description: "empty" },
-    { type: "skill", description: "missing name" },
-  ]);
-  const result = parseProbeOutput(output);
-  assert.equal(result.tools.length, 1);
-  assert.equal(result.tools[0].name, "valid");
-});
-
-test("parseProbeOutput returns error for non-JSON output", () => {
-  const result = parseProbeOutput("I don't have any tools to list.");
-  assert.ok(result.error);
-  assert.equal(result.tools.length, 0);
-});
-
-test("parseProbeOutput handles object-wrapped JSON by extracting inner array", () => {
-  // '{"tools": []}' contains '[]' which is a valid array — returns empty tools, no error
-  const result = parseProbeOutput('{"tools": []}');
-  assert.equal(result.error, null);
-  assert.equal(result.tools.length, 0);
-});
-
-test("parseProbeOutput returns error for plain object with no array", () => {
-  const result = parseProbeOutput('{"name": "tool"}');
-  assert.ok(result.error);
-  assert.equal(result.tools.length, 0);
-});
-
-test("parseProbeOutput handles noise before the JSON array", () => {
-  const output = 'Here are the available tools:\n[{"name":"a","type":"skill","description":"d"}]\nEnd.';
-  const result = parseProbeOutput(output);
-  assert.equal(result.error, null);
-  assert.equal(result.tools.length, 1);
-  assert.equal(result.tools[0].name, "a");
-});
-
-test("parseProbeOutput handles brackets inside JSON string values", () => {
-  const output = JSON.stringify([
-    { name: "tool[1]", type: "skill", description: "has ] bracket" },
-  ]);
-  const result = parseProbeOutput(output);
-  assert.equal(result.error, null);
-  assert.equal(result.tools.length, 1);
-  assert.equal(result.tools[0].name, "tool[1]");
-});
-
-// ---------------------------------------------------------------------------
-// probeAgent
-// ---------------------------------------------------------------------------
-
-test("probeAgent returns tools from a fake codex executor", () => {
+test("probeAgent returns raw text from a fake codex executor", () => {
   const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "probe-fakecodex-"));
   const codexPath = path.join(binDir, "codex");
-  const toolsJson = JSON.stringify([
-    { name: "/browse", type: "skill", description: "Headless browser" },
-    { name: "mcp:sequential-thinking", type: "mcp_tool", description: "Step-by-step reasoning" },
-  ]);
   fs.writeFileSync(codexPath, `#!/usr/bin/env node
 const args = process.argv.slice(2);
 if (args[0] === "--version") { process.stdout.write("codex-fake\\n"); process.exit(0); }
-process.stdout.write(${JSON.stringify(toolsJson)} + "\\n");
+process.stdout.write('[{"name":"/browse","type":"skill","description":"Headless browser"}]\\n');
 `, "utf-8");
   fs.chmodSync(codexPath, 0o755);
 
@@ -193,9 +117,9 @@ process.stdout.write(${JSON.stringify(toolsJson)} + "\\n");
   try {
     const result = probeAgent("codex", 10);
     assert.equal(result.error, null);
-    assert.equal(result.tools.length, 2);
-    assert.equal(result.tools[0].name, "/browse");
-    assert.equal(result.tools[1].type, "mcp_tool");
+    assert.ok(result.raw);
+    assert.match(result.raw, /\/browse/);
+    assert.match(result.raw, /skill/);
   } finally {
     process.env.PATH = origPath;
   }
@@ -205,6 +129,7 @@ test("probeAgent returns error for unknown executor", () => {
   const result = probeAgent("unknown-executor", 5);
   assert.ok(result.error);
   assert.match(result.error, /unknown executor/);
+  assert.equal(result.raw, null);
 });
 
 // ---------------------------------------------------------------------------
@@ -240,7 +165,6 @@ test("CLI requires --executor when not --project-only", () => {
 
 test("CLI handles missing executor gracefully", () => {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "probe-noexec-"));
-  // Minimal PATH so node works but codex doesn't exist
   const nodeBin = path.dirname(process.execPath);
   const result = spawnSync("node", [SCRIPT, repoRoot, "-e", "codex", "--json"], {
     encoding: "utf-8",
@@ -250,5 +174,5 @@ test("CLI handles missing executor gracefully", () => {
   assert.equal(result.status, 0, `stderr: ${result.stderr}`);
   const output = JSON.parse(result.stdout);
   assert.ok(output.agent_probe_error);
-  assert.equal(output.agent_tools.length, 0);
+  assert.equal(output.agent_tools_raw, null);
 });
