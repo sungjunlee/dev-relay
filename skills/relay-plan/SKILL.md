@@ -96,6 +96,7 @@ Before dispatch, verify:
 - [ ] ≥ 1 automated check exists (ground truth) + commands are immutable
 - [ ] Every evaluated factor has `scoring_guide` with low/mid/high anchors
 - [ ] Criteria are specific ("timeouts on external calls") not vague ("good error handling")
+- [ ] Each AC item has a verifiable check: test command, grep pattern, or observable behavior
 - [ ] 3-5 factors total; targets are concrete ("≥ 8/10", "< 200ms") not relative
 - [ ] Automated checks measure outcomes ("API < 200ms") not proxies ("tests pass")
 
