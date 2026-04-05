@@ -41,6 +41,7 @@ function writeReviewPendingManifest(repoRoot, runId, branch, updatedAt) {
 
 test("resolveManifestRecord resolves a manifest by run_id", () => {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-find-run-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
   const firstRunId = createRunId({
     branch: "issue-42",
     timestamp: new Date("2026-04-03T00:00:00.000Z"),
@@ -59,6 +60,7 @@ test("resolveManifestRecord resolves a manifest by run_id", () => {
 
 test("resolveManifestRecord rejects ambiguous branch lookup", () => {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-find-ambiguous-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
   writeReviewPendingManifest(repoRoot, createRunId({
     branch: "issue-42",
     timestamp: new Date("2026-04-03T00:00:00.000Z"),
@@ -76,6 +78,7 @@ test("resolveManifestRecord rejects ambiguous branch lookup", () => {
 
 test("resolveManifestRecord rejects conflicting branch and PR selectors", () => {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-find-conflict-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
   const branchOnlyPath = writeReviewPendingManifest(repoRoot, createRunId({
     branch: "issue-42",
     timestamp: new Date("2026-04-03T00:00:00.000Z"),
@@ -101,6 +104,7 @@ test("resolveManifestRecord rejects conflicting branch and PR selectors", () => 
 
 test("update-manifest-state updates a manifest by run_id", () => {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-update-run-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
   writeReviewPendingManifest(repoRoot, createRunId({
     branch: "issue-42",
     timestamp: new Date("2026-04-03T00:00:00.000Z"),
@@ -147,6 +151,7 @@ test("update-manifest-state updates a manifest by run_id", () => {
 
 test("update-manifest-state uses manual cleanup follow-up for merged runs", () => {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-update-merged-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
   const latestPath = writeReviewPendingManifest(repoRoot, createRunId({
     branch: "issue-42",
     timestamp: new Date("2026-04-03T01:00:00.000Z"),
