@@ -24,16 +24,16 @@ Do not rely on globally installed skills for this path. The repo-local `SKILL.md
 ## Fresh-Session Example
 
 ```bash
-codex exec -C /Users/sjlee/workspace/active/harness-stack/dev-relay --full-auto "
+codex exec -C /path/to/dev-relay --full-auto "
 Operate directly from the repo checkout. Do not rely on installed skills.
 
-Repo root: /Users/sjlee/workspace/active/harness-stack/dev-relay
+Repo root: /path/to/dev-relay
 
 Read these files first:
-- /Users/sjlee/workspace/active/harness-stack/dev-relay/skills/relay/SKILL.md
-- /Users/sjlee/workspace/active/harness-stack/dev-relay/skills/relay-dispatch/SKILL.md
-- /Users/sjlee/workspace/active/harness-stack/dev-relay/skills/relay-review/SKILL.md
-- /Users/sjlee/workspace/active/harness-stack/dev-relay/skills/relay-merge/SKILL.md
+- /path/to/dev-relay/skills/relay/SKILL.md
+- /path/to/dev-relay/skills/relay-dispatch/SKILL.md
+- /path/to/dev-relay/skills/relay-review/SKILL.md
+- /path/to/dev-relay/skills/relay-merge/SKILL.md
 
 Use the repo-local skill files as the source of truth and run the relay operator flow against this repo.
 "

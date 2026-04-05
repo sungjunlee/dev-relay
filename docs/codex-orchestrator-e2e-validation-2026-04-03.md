@@ -20,7 +20,7 @@ The bar for success was a real relay cycle with manifest evidence, PR review evi
 Strict-validator spot check:
 
 ```bash
-python3 /Users/sjlee/.codex/skills/.system/skill-creator/scripts/quick_validate.py skills/relay-review
+python3 ~/.codex/skills/.system/skill-creator/scripts/quick_validate.py skills/relay-review
 ```
 
 Result:
@@ -60,12 +60,12 @@ Issue and branch:
 Exact operator prompt used for the successful run:
 
 ```text
-You are a fresh Codex session performing a direct-read relay validation for issue #48 in /Users/sjlee/workspace/active/harness-stack/dev-relay.
+You are a fresh Codex session performing a direct-read relay validation for issue #48 in /path/to/dev-relay.
 
 Requirements:
 - Start by opening these files and nothing broader unless needed:
-  - /Users/sjlee/workspace/active/harness-stack/dev-relay/skills/relay/SKILL.md
-  - /Users/sjlee/workspace/active/harness-stack/dev-relay/skills/relay-merge/SKILL.md
+  - /path/to/dev-relay/skills/relay/SKILL.md
+  - /path/to/dev-relay/skills/relay-merge/SKILL.md
 - Do not assume installed skills. This is validating direct file-read behavior.
 - Execute the relay cycle with the exact repo-local scripts and prompt file that already exist.
 - Keep the run narrow and command-driven; do not do broad repo exploration.
@@ -126,8 +126,8 @@ You are a fresh Codex session performing a direct-read relay validation for issu
 
 Requirements:
 - Start by opening only these files unless you are blocked:
-  - /Users/sjlee/workspace/active/harness-stack/dev-relay/skills/relay/SKILL.md
-  - /Users/sjlee/workspace/active/harness-stack/dev-relay/skills/relay-merge/SKILL.md
+  - /path/to/dev-relay/skills/relay/SKILL.md
+  - /path/to/dev-relay/skills/relay-merge/SKILL.md
 - Do not assume installed skills. This validates direct file-read behavior.
 - Keep the run narrow and command-driven. Do not do broad repo exploration.
 - This must be a live GitHub-backed run, not an offline fixture simulation.
@@ -142,13 +142,13 @@ Sequence:
 1. Run `git fetch origin`.
 2. Confirm issue #1 exists and there is no open PR on branch `issue-1`.
 3. Write a dispatch prompt to `/tmp/dispatch-fixture-1.md` based on the local task file with a rubric-backed documentation task.
-4. Run `node /Users/sjlee/workspace/active/harness-stack/dev-relay/skills/relay-dispatch/scripts/dispatch.js . -b issue-1 --prompt-file /tmp/dispatch-fixture-1.md --timeout 3600 --copy-env --json`.
+4. Run `node /path/to/dev-relay/skills/relay-dispatch/scripts/dispatch.js . -b issue-1 --prompt-file /tmp/dispatch-fixture-1.md --timeout 3600 --copy-env --json`.
 5. Parse the JSON for `runId`, `manifestPath`, `runState`, `stderrLog`, and `stdoutLog`.
 6. If dispatch fails, inspect `stderrLog` and `stdoutLog`, summarize the blocker, and stop with JSON.
 7. If dispatch succeeds, get the PR number and URL from `gh pr list --head issue-1 --json number,url`.
-8. Run `node /Users/sjlee/workspace/active/harness-stack/dev-relay/skills/relay-review/scripts/review-runner.js --repo . --run-id <runId> --pr <pr> --reviewer codex --json`.
+8. Run `node /path/to/dev-relay/skills/relay-review/scripts/review-runner.js --repo . --run-id <runId> --pr <pr> --reviewer codex --json`.
 9. If review returns `changes_requested`, use the generated redispatch prompt from `.relay/runs/<runId>/review-round-<n>-redispatch.md` with `dispatch.js --run-id <runId> --prompt-file ... --json`, then review again. Repeat until `ready_to_merge` or `escalated`.
-10. If the run reaches `ready_to_merge`, run `node /Users/sjlee/workspace/active/harness-stack/dev-relay/skills/relay-merge/scripts/finalize-run.js --repo . --run-id <runId> --merge-method squash --json`.
+10. If the run reaches `ready_to_merge`, run `node /path/to/dev-relay/skills/relay-merge/scripts/finalize-run.js --repo . --run-id <runId> --merge-method squash --json`.
 11. Inspect the merged sprint file on `main` and capture the actual Plan/Progress/Running Context mutations.
 12. Return JSON only with this exact shape:
 {
