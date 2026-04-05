@@ -4,13 +4,13 @@ const path = require("path");
 const {
   CLEANUP_STATUSES,
   STATES,
+  runCleanup,
   updateManifestCleanup,
   updateManifestState,
   writeManifest,
 } = require("./relay-manifest");
 const { resolveManifestRecord } = require("./relay-resolver");
 const { appendRunEvent } = require("./relay-events");
-const { runCleanup } = require("./relay-cleanup");
 
 const args = process.argv.slice(2);
 const KNOWN_FLAGS = ["--repo", "--run-id", "--reason", "--dry-run", "--json", "--help", "-h"];
