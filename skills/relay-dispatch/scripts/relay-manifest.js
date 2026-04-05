@@ -367,7 +367,6 @@ function createManifestSkeleton({
       repeated_issue_count: 0,
       last_reviewed_sha: null,
     },
-    previous_attempts_count: 0,
     cleanup: createCleanupSkeleton(),
     timestamps: {
       created_at: createdAt,
@@ -525,7 +524,12 @@ function getAttemptsPath(repoRoot, runId) {
 function readPreviousAttempts(repoRoot, runId) {
   const attemptsPath = getAttemptsPath(repoRoot, runId);
   if (!fs.existsSync(attemptsPath)) return [];
-  return JSON.parse(fs.readFileSync(attemptsPath, "utf-8"));
+  try {
+    return JSON.parse(fs.readFileSync(attemptsPath, "utf-8"));
+  } catch {
+    console.error(`Warning: corrupted previous-attempts.json at ${attemptsPath}, ignoring`);
+    return [];
+  }
 }
 
 function captureAttempt(repoRoot, runId, attemptData) {
