@@ -10,6 +10,7 @@ const {
   createManifestSkeleton,
   createRunId,
   ensureRunLayout,
+  getRepoSlug,
   inferIssueNumber,
   readManifest,
   updateManifestCleanup,
@@ -115,6 +116,21 @@ test("readManifest migrates v1 roles.worker to roles.executor", () => {
   const parsed = readManifest(manifestPath);
   assert.equal(parsed.data.roles.executor, "codex");
   assert.equal(parsed.data.roles.worker, undefined);
+});
+
+test("getRepoSlug is deterministic and collision-resistant", () => {
+  const slug1 = getRepoSlug("/Users/dev/my-project");
+  const slug2 = getRepoSlug("/Users/dev/my-project");
+  assert.equal(slug1, slug2);
+
+  const slug3 = getRepoSlug("/Users/other/my-project");
+  assert.notEqual(slug1, slug3);
+  assert.match(slug1, /^my-project-[a-f0-9]{8}$/);
+  assert.match(slug3, /^my-project-[a-f0-9]{8}$/);
+
+  assert.throws(() => getRepoSlug(null), /non-empty repoRoot/);
+  assert.throws(() => getRepoSlug(""), /non-empty repoRoot/);
+  assert.throws(() => getRepoSlug(undefined), /non-empty repoRoot/);
 });
 
 test("updateManifestState allows valid transitions and rejects invalid ones", () => {

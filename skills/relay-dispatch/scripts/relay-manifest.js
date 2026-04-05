@@ -8,7 +8,14 @@ const RELAY_VERSION = 2;
 const NOTES_TEMPLATE = "# Notes\n\n## Context\n\n## Review History\n";
 
 function getRelayHome() {
-  return process.env.RELAY_HOME || path.join(os.homedir(), ".relay");
+  const home = process.env.RELAY_HOME || path.join(os.homedir(), ".relay");
+  if (!path.isAbsolute(home)) {
+    throw new Error(
+      `RELAY_HOME must be an absolute path, got: ${JSON.stringify(home)}. ` +
+      `Either set RELAY_HOME explicitly or ensure $HOME is set.`
+    );
+  }
+  return home;
 }
 
 function getRunsBase() {
@@ -16,6 +23,9 @@ function getRunsBase() {
 }
 
 function getRepoSlug(repoRoot) {
+  if (!repoRoot || typeof repoRoot !== "string") {
+    throw new Error(`getRepoSlug requires a non-empty repoRoot path, got: ${JSON.stringify(repoRoot)}`);
+  }
   const resolved = path.resolve(repoRoot);
   const base = path.basename(resolved).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "repo";
   const hash = crypto.createHash("sha256").update(resolved).digest("hex").slice(0, 8);
@@ -113,8 +123,15 @@ function listManifestPaths(repoRoot) {
 function ensureRunLayout(repoRoot, runId) {
   const runsDir = getRunsDir(repoRoot);
   const runDir = getRunDir(repoRoot, runId);
-  fs.mkdirSync(runsDir, { recursive: true });
-  fs.mkdirSync(runDir, { recursive: true });
+  try {
+    fs.mkdirSync(runsDir, { recursive: true });
+    fs.mkdirSync(runDir, { recursive: true });
+  } catch (err) {
+    throw new Error(
+      `Failed to create relay run directory at ${runDir}: ${err.message}. ` +
+      `Set RELAY_HOME to a writable directory to override the default location (~/.relay).`
+    );
+  }
   return { runsDir, runDir, manifestPath: getManifestPath(repoRoot, runId) };
 }
 
