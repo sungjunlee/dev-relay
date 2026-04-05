@@ -36,6 +36,8 @@ Review the changed code for issues that still matter before merge:
 - **Structural quality**: confusing control flow, hidden side effects, misleading state transitions
 - **Simplification**: dead code, redundant branches, unnecessary complexity
 
+If the rubric includes `scoring_guide` anchors (low/mid/high), use them to calibrate your scoring — they define the shared scale between executor and reviewer. Score independently; do not defer to the executor's self-scores.
+
 Do not invent nitpicks. Only flag issues a senior engineer should fix before merge.
 
 ### Verification evidence
