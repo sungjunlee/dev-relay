@@ -577,7 +577,9 @@ function main() {
   let threadId = null;
   if (REGISTER && status !== "failed") {
     const registerScript = path.join(__dirname, "create-worktree.js");
-    if (fs.existsSync(registerScript)) {
+    if (!fs.existsSync(registerScript)) {
+      if (!JSON_OUT) console.log(`\n  Warning: create-worktree.js not found — --register skipped`);
+    } else {
       try {
         const regOutput = execFileSync("node", [
           registerScript, repoRoot,

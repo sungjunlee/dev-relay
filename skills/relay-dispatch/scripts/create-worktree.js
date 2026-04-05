@@ -112,12 +112,12 @@ if (!fs.existsSync(path.join(REPO_PATH, ".git"))) {
   process.exit(1);
 }
 
-// Codex CLI check (not needed in --worktree-path mode)
-if (!WORKTREE_PATH) {
+// Codex CLI check (only needed for --register)
+if (REGISTER && !WORKTREE_PATH) {
   try {
     execFileSync("codex", ["--version"], { encoding: "utf-8", stdio: "pipe" });
   } catch {
-    console.error("Error: codex CLI not found. Install Codex first: https://github.com/openai/codex");
+    console.error("Error: codex CLI not found. Needed for --register. Install: https://github.com/openai/codex");
     process.exit(1);
   }
 }

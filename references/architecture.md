@@ -153,7 +153,7 @@ Each round produces files under `.relay/runs/<run-id>/`:
    }
    ```
 
-3. **Optional**: Create `register-<name>.js` for app integration
+3. **Optional**: App registration uses `create-worktree.js --register` (executor-agnostic)
 
 ### Adding a new reviewer adapter
 
