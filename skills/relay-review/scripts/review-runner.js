@@ -200,12 +200,29 @@ function loadDiff(repoPath, prNumber, diffFile) {
   return gh(repoPath, "pr", "diff", String(prNumber)).trim();
 }
 
-function buildPrompt({ round, prNumber, branch, issueNumber, doneCriteria, diffText }) {
+function formatPriorRoundContext(runDir, round) {
+  if (!runDir || round <= 1) return "";
+  const verdicts = readPriorVerdicts(runDir, round);
+  if (!verdicts.length) return "";
+
+  const lines = verdicts.map((v, i) => {
+    const roundNum = verdicts.length - i;
+    const parts = [`### Round ${roundNum}: ${v.verdict}`, v.summary];
+    if (Array.isArray(v.issues) && v.issues.length) {
+      parts.push("Issues flagged:", formatIssueList(v.issues));
+    }
+    return parts.join("\n");
+  });
+
+  return ["## Prior Round Context", "", "Verify whether prior issues were resolved.", "", ...lines].join("\n");
+}
+
+function buildPrompt({ round, prNumber, branch, issueNumber, doneCriteria, diffText, runDir }) {
   const template = readText(REVIEWER_PROMPT_PATH)
     .replace("[PASTE DONE CRITERIA HERE]", doneCriteria)
     .replace("[PASTE PR DIFF OR FILE PATH HERE]", diffText);
 
-  return [
+  const sections = [
     `# Relay Review Round ${round}`,
     "",
     `PR: #${prNumber || "unknown"}`,
@@ -213,6 +230,14 @@ function buildPrompt({ round, prNumber, branch, issueNumber, doneCriteria, diffT
     `Issue: ${issueNumber || "unknown"}`,
     "",
     template,
+  ];
+
+  const priorContext = formatPriorRoundContext(runDir, round);
+  if (priorContext) {
+    sections.push("", priorContext);
+  }
+
+  sections.push(
     "",
     "## Structured Output",
     "Return ONLY valid JSON. Do not wrap it in markdown fences.",
@@ -226,7 +251,9 @@ function buildPrompt({ round, prNumber, branch, issueNumber, doneCriteria, diffT
     '- If `verdict` is `escalated`, include the blocking issues or reason that automation should stop, and set `next_action` to `escalated`.',
     '- If no Score Log is available, set `rubric_scores` to `[]`.',
     '- When `rubric_scores` is not empty, each entry must include `factor`, `target`, `observed`, `status`, and `notes`.',
-  ].join("\n");
+  );
+
+  return sections.join("\n");
 }
 
 function parseReviewVerdict(text) {
@@ -366,16 +393,42 @@ function buildCommentBody(verdict, round) {
   ].join("\n");
 }
 
-function buildRedispatchPrompt(verdict, doneCriteria) {
-  return [
-    "Fix these review issues in the PR. Do not change anything else. Push to the same branch.",
+function formatPriorVerdictSummary(verdicts) {
+  if (!verdicts.length) return "";
+  const lines = verdicts.map((v, i) => {
+    const roundNum = verdicts.length - i;
+    const issueCount = Array.isArray(v.issues) ? v.issues.length : 0;
+    const rubricSummary = Array.isArray(v.rubric_scores) && v.rubric_scores.length
+      ? v.rubric_scores.map((s) => `${s.factor}: ${s.observed} (target ${s.target}, ${s.status})`).join("; ")
+      : "no rubric scores";
+    return `- Round ${roundNum}: ${v.verdict} — ${v.summary} [${issueCount} issue(s), ${rubricSummary}]`;
+  });
+  return ["Prior review rounds:", ...lines].join("\n");
+}
+
+function buildRedispatchPrompt(verdict, doneCriteria, runDir, round) {
+  const sections = [
+    `This is round ${round + 1}. Fix these review issues in the PR. Do not change anything else. Push to the same branch.`,
     "",
     "Issues to fix:",
     formatIssueList(verdict.issues),
+  ];
+
+  if (runDir && round > 1) {
+    const priorVerdicts = readPriorVerdicts(runDir, round);
+    const priorSummary = formatPriorVerdictSummary(priorVerdicts);
+    if (priorSummary) {
+      sections.push("", priorSummary);
+    }
+  }
+
+  sections.push(
     "",
     "Original Done Criteria (scope anchor):",
     doneCriteria,
-  ].join("\n");
+  );
+
+  return sections.join("\n");
 }
 
 function normalizeFingerprintPart(value) {
@@ -637,7 +690,7 @@ function run() {
 
   const doneCriteria = loadDoneCriteria(repoPath, issueNumber, prNumber, doneCriteriaFile);
   const diffText = loadDiff(repoPath, prNumber, diffFile);
-  const promptText = buildPrompt({ round, prNumber, branch, issueNumber, doneCriteria, diffText });
+  const promptText = buildPrompt({ round, prNumber, branch, issueNumber, doneCriteria, diffText, runDir });
 
   const doneCriteriaPath = path.join(runDir, `review-round-${round}-done-criteria.md`);
   const diffPath = path.join(runDir, `review-round-${round}-diff.patch`);
@@ -755,7 +808,7 @@ function run() {
   let redispatchPath = null;
   if (verdict.verdict === "changes_requested") {
     redispatchPath = path.join(runDir, `review-round-${round}-redispatch.md`);
-    writeText(redispatchPath, `${buildRedispatchPrompt(verdict, doneCriteria)}\n`);
+    writeText(redispatchPath, `${buildRedispatchPrompt(verdict, doneCriteria, runDir, round)}\n`);
   }
 
   const commentBody = buildCommentBody(verdict, round);
@@ -816,6 +869,7 @@ module.exports = {
   buildPrompt,
   buildRedispatchPrompt,
   formatIssueList,
+  formatPriorVerdictSummary,
   parseReviewVerdict,
   resolveIssueNumber,
   validateReviewVerdict,

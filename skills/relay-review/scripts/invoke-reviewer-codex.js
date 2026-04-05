@@ -69,7 +69,8 @@ function main() {
       "[NON-INTERACTIVE REVIEW]",
       "Review the provided bundle and return only JSON matching the supplied schema.",
       "Do not wrap the response in markdown fences.",
-      "Prefer the provided diff and done criteria. Use read-only tools only if absolutely necessary.",
+      "Start with the diff for overview. Then read callers/imports of changed functions to verify integration.",
+      "You have read-only access to the full codebase.",
       "",
       promptText,
     ].join("\n");

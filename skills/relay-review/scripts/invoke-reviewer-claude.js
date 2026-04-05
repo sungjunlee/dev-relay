@@ -55,7 +55,8 @@ function main() {
   const fullPrompt = [
     "Review the provided bundle and return only JSON matching the supplied schema.",
     "Do not wrap the response in markdown fences.",
-    "Do not use tools unless absolutely necessary. Prefer the provided diff and done criteria.",
+    "Start with the diff for overview. Then read callers/imports of changed functions to verify integration.",
+    "You have read-only access to the full codebase.",
     "",
     promptText,
   ].join("\n");
