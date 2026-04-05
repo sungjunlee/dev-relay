@@ -251,6 +251,8 @@ function buildPrompt({ round, prNumber, branch, issueNumber, doneCriteria, diffT
     '- If `verdict` is `escalated`, include the blocking issues or reason that automation should stop, and set `next_action` to `escalated`.',
     '- If no Score Log is available, set `rubric_scores` to `[]`.',
     '- When `rubric_scores` is not empty, each entry must include `factor`, `target`, `observed`, `status`, and `notes`.',
+    '- `scope_drift` is always required. Set `scope_drift.creep` to `[]` if no out-of-scope changes. Set `scope_drift.missing` to list each Done Criteria item with status `verified`, `partial`, `not_done`, or `changed`.',
+    '- If `scope_drift.missing` contains any `not_done`, `changed`, or `partial` entries, verdict cannot be `pass`.',
   );
 
   return sections.join("\n");
@@ -296,6 +298,32 @@ function validateRubricScore(score, index) {
   }
 }
 
+const ALLOWED_DRIFT_STATUSES = new Set(
+  REVIEW_VERDICT_JSON_SCHEMA.properties.scope_drift.properties.missing.items.properties.status.enum
+);
+
+function validateScopeDrift(scopeDrift) {
+  if (!scopeDrift || typeof scopeDrift !== "object" || Array.isArray(scopeDrift)) {
+    throw new Error("scope_drift must be an object with creep and missing arrays");
+  }
+  if (!Array.isArray(scopeDrift.creep)) {
+    throw new Error("scope_drift.creep must be an array");
+  }
+  if (!Array.isArray(scopeDrift.missing)) {
+    throw new Error("scope_drift.missing must be an array");
+  }
+  scopeDrift.creep.forEach((entry, i) => {
+    if (!String(entry.file || "").trim()) throw new Error(`scope_drift.creep[${i}].file is required`);
+    if (!String(entry.reason || "").trim()) throw new Error(`scope_drift.creep[${i}].reason is required`);
+  });
+  scopeDrift.missing.forEach((entry, i) => {
+    if (!String(entry.criteria || "").trim()) throw new Error(`scope_drift.missing[${i}].criteria is required`);
+    if (!ALLOWED_DRIFT_STATUSES.has(entry.status)) {
+      throw new Error(`scope_drift.missing[${i}].status must be one of: ${Array.from(ALLOWED_DRIFT_STATUSES).join(", ")}`);
+    }
+  });
+}
+
 function validateReviewVerdict(data) {
   if (!data || typeof data !== "object" || Array.isArray(data)) {
     throw new Error("Review verdict must be a JSON object");
@@ -324,6 +352,7 @@ function validateReviewVerdict(data) {
   }
   data.issues.forEach(validateIssue);
   data.rubric_scores.forEach(validateRubricScore);
+  validateScopeDrift(data.scope_drift);
 
   if (data.verdict === "pass") {
     if (data.next_action !== "ready_to_merge") {
@@ -334,6 +363,14 @@ function validateReviewVerdict(data) {
     }
     if (data.issues.length !== 0) {
       throw new Error("PASS verdict must not include issues");
+    }
+    const blockingDrift = (data.scope_drift?.missing || []).filter(
+      (m) => m.status === "not_done" || m.status === "changed" || m.status === "partial"
+    );
+    if (blockingDrift.length > 0) {
+      throw new Error(
+        `PASS verdict cannot have scope_drift.missing entries with status not_done, changed, or partial: ${blockingDrift.map((m) => m.criteria).join(", ")}`
+      );
     }
   } else if (data.verdict === "changes_requested") {
     if (data.next_action !== "changes_requested") {
@@ -406,6 +443,23 @@ function formatPriorVerdictSummary(verdicts) {
   return ["Prior review rounds:", ...lines].join("\n");
 }
 
+function formatScopeDrift(scopeDrift) {
+  if (!scopeDrift) return "";
+  const parts = [];
+  if (scopeDrift.creep && scopeDrift.creep.length) {
+    parts.push("Scope creep (revert these out-of-scope changes):");
+    parts.push(...scopeDrift.creep.map((c) => `- ${c.file}: ${c.reason}`));
+  }
+  if (scopeDrift.missing && scopeDrift.missing.length) {
+    const actionable = scopeDrift.missing.filter((m) => m.status !== "verified");
+    if (actionable.length) {
+      parts.push("Missing/incomplete requirements:");
+      parts.push(...actionable.map((m) => `- [${m.status.toUpperCase()}] ${m.criteria}`));
+    }
+  }
+  return parts.join("\n");
+}
+
 function buildRedispatchPrompt(verdict, doneCriteria, runDir, round) {
   const sections = [
     `This is round ${round + 1}. Fix these review issues in the PR. Do not change anything else. Push to the same branch.`,
@@ -413,6 +467,11 @@ function buildRedispatchPrompt(verdict, doneCriteria, runDir, round) {
     "Issues to fix:",
     formatIssueList(verdict.issues),
   ];
+
+  const driftText = formatScopeDrift(verdict.scope_drift);
+  if (driftText) {
+    sections.push("", driftText);
+  }
 
   if (runDir && round > 1) {
     const priorVerdicts = readPriorVerdicts(runDir, round);
@@ -699,6 +758,25 @@ function run() {
   writeText(diffPath, `${diffText}\n`);
   writeText(promptPath, `${promptText}\n`);
 
+  // Churn detection: compare diff sizes across rounds (after writing current diff).
+  // Uses countLines on saved files consistently to avoid off-by-one from trailing newline.
+  if (round >= 3) {
+    const countLines = (p) => { let n = 0; const b = fs.readFileSync(p); for (let i = 0; i < b.length; i++) if (b[i] === 0x0a) n++; return n; };
+    try {
+      const curLines = countLines(diffPath);
+      const prevLines = countLines(path.join(runDir, `review-round-${round - 1}-diff.patch`));
+      const prevPrevLines = countLines(path.join(runDir, `review-round-${round - 2}-diff.patch`));
+      if (curLines > prevLines && prevLines > prevPrevLines && prevPrevLines > 0) {
+        const growth = Math.round(((curLines - prevPrevLines) / prevPrevLines) * 100);
+        if (!jsonOut) {
+          console.log(`  Warning: diff growing without convergence (${prevPrevLines} → ${prevLines} → ${curLines} lines, +${growth}%)`);
+        }
+      }
+    } catch (e) {
+      if (e.code !== "ENOENT") throw e;
+    }
+  }
+
   const reviewerName = resolveReviewerName(data, reviewerArg);
   const reviewerScript = reviewFile ? null : resolveReviewerScript(reviewerName, reviewerScriptArg);
 
@@ -870,7 +948,9 @@ module.exports = {
   buildRedispatchPrompt,
   formatIssueList,
   formatPriorVerdictSummary,
+  formatScopeDrift,
   parseReviewVerdict,
   resolveIssueNumber,
   validateReviewVerdict,
+  validateScopeDrift,
 };

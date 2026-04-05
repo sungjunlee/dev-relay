@@ -9,6 +9,7 @@ const REVIEW_VERDICT_JSON_SCHEMA = {
     "next_action",
     "issues",
     "rubric_scores",
+    "scope_drift",
   ],
   properties: {
     verdict: {
@@ -62,6 +63,40 @@ const REVIEW_VERDICT_JSON_SCHEMA = {
             enum: ["pass", "fail", "not_run"],
           },
           notes: { type: "string", minLength: 1 },
+        },
+      },
+    },
+    scope_drift: {
+      type: "object",
+      additionalProperties: false,
+      required: ["creep", "missing"],
+      properties: {
+        creep: {
+          type: "array",
+          items: {
+            type: "object",
+            additionalProperties: false,
+            required: ["file", "reason"],
+            properties: {
+              file: { type: "string", minLength: 1 },
+              reason: { type: "string", minLength: 1 },
+            },
+          },
+        },
+        missing: {
+          type: "array",
+          items: {
+            type: "object",
+            additionalProperties: false,
+            required: ["criteria", "status"],
+            properties: {
+              criteria: { type: "string", minLength: 1 },
+              status: {
+                type: "string",
+                enum: ["verified", "partial", "not_done", "changed"],
+              },
+            },
+          },
         },
       },
     },
