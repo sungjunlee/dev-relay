@@ -143,7 +143,7 @@ Expect:
 Command:
 
 ```bash
-python3 /Users/sjlee/.codex/skills/.system/skill-creator/scripts/quick_validate.py skills/relay-review
+python3 ~/.codex/skills/.system/skill-creator/scripts/quick_validate.py skills/relay-review
 ```
 
 Current result:
