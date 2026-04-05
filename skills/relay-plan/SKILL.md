@@ -73,14 +73,13 @@ rubric:
 |--------|------|
 | **required** | Must meet target before PR. No cross-factor compensation — each evaluated independently. |
 | **best-effort** | Note in PR if below target |
-**`setup`**: Commands to run before automated checks (start server, seed DB). Omit if not needed.
-**`baseline`**: Capture before-state for delta metrics. Run checks BEFORE changes; improvement is keep, regression is discard.
-**`criteria`**: Multi-line, specific. Each bullet is a concrete thing to check, not "good error handling" but "timeouts on external calls, retry with backoff on idempotent ops only."
-**`scoring_guide`**: Three calibration anchors — `low` (failure), `mid` (partially met), `high` (target zone). Each level tells the executor what to fix next. Shared scale between executor and reviewer.
+**`setup`** / **`baseline`**: Run setup commands before checks; capture baseline for delta metrics (run BEFORE changes).
+**`criteria`**: Multi-line, specific bullets — not "good error handling" but "timeouts on external calls, retry with backoff."
+**`scoring_guide`**: Three anchors (low/mid/high) — each tells the executor what to fix next. Shared scale between executor and reviewer.
 
 ### Domain references (for expert perspective)
 
-After designing factors, consult the matching `references/rubric-*.md` for specialist thinking you may have missed. Design factors from the task's AC, informed by (not copied from) the reference.
+Consult `references/rubric-*.md` for specialist thinking. Design factors from AC, informed by (not copied from) references.
 
 | Task type | Reference | Key signal |
 |-----------|-----------|-----------|
@@ -94,15 +93,25 @@ After designing factors, consult the matching `references/rubric-*.md` for speci
 
 Before dispatch, verify:
 
-- [ ] ≥ 1 automated check exists (ground truth — evaluated-only rubrics have no anchor)
-- [ ] Automated check commands are immutable — executor must not modify them
-- [ ] Every evaluated factor has `scoring_guide` with low/mid/high anchors (prevents generous self-scoring)
+- [ ] ≥ 1 automated check exists (ground truth) + commands are immutable
+- [ ] Every evaluated factor has `scoring_guide` with low/mid/high anchors
 - [ ] Criteria are specific ("timeouts on external calls") not vague ("good error handling")
-- [ ] 3-5 factors total (more slows iteration without adding signal)
-- [ ] Targets are concrete ("≥ 8/10", "< 200ms") not relative ("good", "fast")
+- [ ] 3-5 factors total; targets are concrete ("≥ 8/10", "< 200ms") not relative
 - [ ] Automated checks measure outcomes ("API < 200ms") not proxies ("tests pass")
 
-Any check fails → revise before proceeding. See `references/rubric-design-guide.md` for fix patterns and optional calibration protocol.
+Any check fails → revise. See `references/rubric-design-guide.md` for fix patterns.
+
+### 3.5 Review the rubric (L/XL tasks)
+
+For 5+ AC items, stress-test the rubric before dispatch. **Max 1 round**, then proceed.
+
+| Size | AC count | Review |
+|------|----------|--------|
+| S/M | 1-4 | Skip |
+| L | 5-6 | Stress-test: subagent games rubric (gaming vectors, coverage gaps, disappear test) |
+| XL | 7+ or cross-domain | Stress-test + calibration simulation (parallel) |
+
+Skip: S/M tasks, re-dispatches with iteration history, all-automated rubrics. Full protocol + prompt templates: `references/rubric-stress-test.md`
 
 ### 4. Generate dispatch prompt
 
@@ -112,27 +121,18 @@ Take the base template (`relay/references/prompt-template.md`) and add these sec
 - **Scoring Rubric**: automated checks table + evaluated factors table
 - **Iteration Protocol** (autoloop-style measure-fix-keep):
   ```
-  BEFORE LOOP: If baseline is defined, run it now. Save output for delta comparison.
-  RULE: Do NOT modify automated check commands. They are immutable ground truth. Fix the code, not the check.
-
+  BEFORE LOOP: Run baseline if defined. RULE: Do NOT modify automated check commands.
   LOOP (max 5 iterations):
-    1. Run ALL automated checks, record each score (compare to baseline if delta target)
-    2. Self-evaluate ALL evaluated factors, record each score (1-10)
-    3. Append scores to the Score Log (keep ALL iterations, not just final)
-    4. All required factors meet target →
-       Final self-review: verify Done Criteria item-by-item, scan for stubs/TODOs, confirm tests pass; issues? fix → step 1 →
-       create PR with full Score Log
-    5. Else → identify lowest required factor → make ONE focused fix → commit → repeat
-    6. Stuck on same factor 3 consecutive iterations →
-       - best-effort: note in PR, continue to next factor
-       - required: stop iteration, create PR with Score Log showing failure, flag for human review
+    1. Run ALL automated checks + self-evaluate ALL evaluated factors, record scores
+    2. Append to Score Log (keep ALL iterations, not just final)
+    3. All required meet target → final self-review (Done Criteria, stubs/TODOs, tests) → PR
+    4. Else → lowest required factor → ONE focused fix → commit → repeat
+    5. Stuck 3 iterations → best-effort: note in PR | required: stop, flag for human
   ```
-- **Score Log**: table in PR description showing each iteration's scores (reviewer will re-score independently):
+- **Score Log**: iteration scores table in PR description (reviewer re-scores independently):
   ```
   | Factor | Target | Baseline | Iter 1 | Iter 2 | Final |
   |--------|--------|----------|--------|--------|-------|
-  | Response time | < 0.2s | 0.18s | 0.35s | 0.15s | 0.15s |
-  | Failure mode design | ≥ 8 | — | 5 | 8 | 8 |
   ```
 
 ### 5. Dispatch
