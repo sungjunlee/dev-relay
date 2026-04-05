@@ -117,7 +117,9 @@ Take the base template (`relay/references/prompt-template.md`) and add these sec
     1. Run ALL automated checks, record each score (compare to baseline if delta target)
     2. Self-evaluate ALL evaluated factors, record each score (1-10)
     3. Append scores to the Score Log (keep ALL iterations, not just final)
-    4. All required factors meet target → create PR with full Score Log
+    4. All required factors meet target →
+       Final self-review: verify Done Criteria item-by-item, scan for stubs/TODOs, confirm tests pass; issues? fix → step 1 →
+       create PR with full Score Log
     5. Else → identify lowest required factor → make ONE focused fix → commit → repeat
     6. Stuck on same factor 3 consecutive iterations →
        - best-effort: note in PR, continue to next factor
@@ -145,5 +147,4 @@ ${CLAUDE_SKILL_DIR}/../relay-dispatch/scripts/dispatch.js . \
 - **Skip it**: Bug fixes, typos, one-liners — dispatch directly with base template
 
 ## Rubric design guidelines
-
 See `references/rubric-design-guide.md` for the full guided interview protocol, design principles, and fix patterns for common rubric failures. Domain-specific factors: `references/rubric-*.md`.

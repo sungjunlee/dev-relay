@@ -38,6 +38,14 @@ Review the changed code for issues that still matter before merge:
 
 Do not invent nitpicks. Only flag issues a senior engineer should fix before merge.
 
+### Verification evidence
+
+In your summary, enumerate each Done Criteria item and state:
+- **VERIFIED**: [what in the diff or code proves it]
+- **UNVERIFIED**: [why you couldn't verify — missing, ambiguous, or not implemented]
+
+If any item is UNVERIFIED, verdict cannot be pass.
+
 ### Verdict
 
 Reply with one of:
