@@ -5,6 +5,8 @@
 
 You are reviewing code you did NOT write. Be objective and thorough.
 
+**Independent verification rule**: Do NOT trust the executor's PR description, commit messages, or self-reported status as evidence. Verify every claim by reading the actual diff. "Executor says AC #3 is done" is not evidence — finding the implementation in the diff is.
+
 ## Contract (Done Criteria)
 
 [PASTE DONE CRITERIA HERE]
@@ -37,7 +39,7 @@ Classify every changed file:
 Populate the `scope_drift` field in your verdict with any creep or missing items found.
 
 ### Contract checks (faithfulness)
-For each Done Criteria item, verify it is implemented in the diff. Also check for common executor blind spots:
+For each Done Criteria item, verify it is implemented in the diff by locating the relevant code changes. Also check for common executor blind spots:
 - **Stubs/placeholders**: `return null`, empty bodies, TODO, mock data in production paths
 - **Integration issues**: does it break callers/consumers of changed code?
 - **Security**: auth/token handling, input validation, injection risks
@@ -56,13 +58,22 @@ If the rubric includes `scoring_guide` anchors (low/mid/high), use them to calib
 
 Do not invent nitpicks. Only flag issues a senior engineer should fix before merge.
 
+### Common executor rationalizations (do not accept these)
+
+| Executor claim | Why it's wrong |
+|----------------|---------------|
+| "Tests pass, so AC is met" | Passing tests ≠ AC met. Verify each AC independently in the diff. |
+| "Refactored for clarity" | OUT-OF-SCOPE unless AC explicitly requires refactoring. Flag as scope creep. |
+| "Added for robustness" | Scope creep unless AC includes error handling or resilience requirements. |
+| "Minor cleanup while I was here" | Out-of-scope change that expands blast radius. Flag in `scope_drift.creep`. |
+
 ### Verification evidence
 
-In your summary, enumerate each Done Criteria item with one of four statuses:
-- **VERIFIED**: implemented and confirmed in the diff
-- **PARTIAL**: started but incomplete (specify what remains)
-- **NOT_DONE**: no evidence in the diff
-- **CHANGED**: implemented but differently than the AC intended (explain divergence)
+In your summary, enumerate each Done Criteria item with one of four statuses. Base each status on diff evidence, not on executor claims.
+- **VERIFIED**: implementation confirmed by locating the relevant code in the diff
+- **PARTIAL**: started but incomplete — cite what is present and what remains
+- **NOT_DONE**: no supporting evidence found in the diff
+- **CHANGED**: implemented differently than the AC intended — cite the divergence with file:line
 
 If any item is NOT_DONE or CHANGED, verdict cannot be pass. PARTIAL items require `changes_requested`.
 
