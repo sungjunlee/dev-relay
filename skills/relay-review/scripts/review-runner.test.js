@@ -363,6 +363,105 @@ test("invalid rubric score entry is rejected", () => {
   ], { encoding: "utf-8", stdio: "pipe" }), /rubric_scores\[0\]\.notes is required/);
 });
 
+test("pass verdict with not_done scope_drift entry is rejected", () => {
+  const { repoRoot, doneCriteriaPath, diffPath } = setupRepo();
+  const reviewFile = writeVerdict(repoRoot, "pass-with-not-done.json", {
+    verdict: "pass",
+    summary: "All good.",
+    contract_status: "pass",
+    quality_status: "pass",
+    next_action: "ready_to_merge",
+    issues: [],
+    rubric_scores: [],
+    scope_drift: {
+      creep: [],
+      missing: [{ criteria: "Add smoke.txt", status: "not_done" }],
+    },
+  });
+
+  assert.throws(() => execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--branch", "issue-42",
+    "--pr", "123",
+    "--done-criteria-file", doneCriteriaPath,
+    "--diff-file", diffPath,
+    "--review-file", reviewFile,
+    "--no-comment",
+    "--json",
+  ], { encoding: "utf-8", stdio: "pipe" }), /PASS verdict cannot have scope_drift\.missing entries with status not_done or changed/);
+});
+
+test("invalid scope_drift missing status is rejected", () => {
+  const { repoRoot, doneCriteriaPath, diffPath } = setupRepo();
+  const reviewFile = writeVerdict(repoRoot, "bad-drift-status.json", {
+    verdict: "changes_requested",
+    summary: "Missing requirement.",
+    contract_status: "fail",
+    quality_status: "not_run",
+    next_action: "changes_requested",
+    issues: [{ title: "Missing", body: "Not implemented", file: "x.js", line: 1, category: "contract", severity: "high" }],
+    rubric_scores: [],
+    scope_drift: {
+      creep: [],
+      missing: [{ criteria: "Add smoke.txt", status: "unknown" }],
+    },
+  });
+
+  assert.throws(() => execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--branch", "issue-42",
+    "--pr", "123",
+    "--done-criteria-file", doneCriteriaPath,
+    "--diff-file", diffPath,
+    "--review-file", reviewFile,
+    "--no-comment",
+    "--json",
+  ], { encoding: "utf-8", stdio: "pipe" }), /scope_drift\.missing\[0\]\.status must be one of/);
+});
+
+test("changes_requested verdict with scope_drift includes drift in redispatch", () => {
+  const { repoRoot, manifestPath, doneCriteriaPath, diffPath } = setupRepo();
+  const reviewFile = writeVerdict(repoRoot, "drift-changes.json", {
+    verdict: "changes_requested",
+    summary: "Scope creep and missing requirement.",
+    contract_status: "fail",
+    quality_status: "not_run",
+    next_action: "changes_requested",
+    issues: [{ title: "Creep", body: "Unrelated change", file: "extra.js", line: 1, category: "scope", severity: "medium" }],
+    rubric_scores: [],
+    scope_drift: {
+      creep: [{ file: "extra.js", reason: "Not in Done Criteria" }],
+      missing: [
+        { criteria: "Add smoke.txt", status: "not_done" },
+        { criteria: "Update README", status: "verified" },
+      ],
+    },
+  });
+
+  const stdout = execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--branch", "issue-42",
+    "--pr", "123",
+    "--done-criteria-file", doneCriteriaPath,
+    "--diff-file", diffPath,
+    "--review-file", reviewFile,
+    "--no-comment",
+    "--json",
+  ], { encoding: "utf-8" });
+
+  const result = JSON.parse(stdout);
+  assert.equal(result.state, STATES.CHANGES_REQUESTED);
+  assert.ok(result.redispatchPath);
+  const redispatchText = fs.readFileSync(result.redispatchPath, "utf-8");
+  assert.match(redispatchText, /Scope creep/);
+  assert.match(redispatchText, /extra\.js: Not in Done Criteria/);
+  assert.match(redispatchText, /\[NOT_DONE\] Add smoke\.txt/);
+  assert.doesNotMatch(redispatchText, /Update README/);
+});
+
 test("reviewer write policy violation escalates the manifest", () => {
   const { repoRoot, manifestPath, doneCriteriaPath, diffPath } = setupRepo();
   const reviewerScript = writeMutatingReviewerScript(repoRoot, "reviewer-mutates.js", {

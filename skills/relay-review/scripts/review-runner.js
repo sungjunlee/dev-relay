@@ -364,6 +364,14 @@ function validateReviewVerdict(data) {
     if (data.issues.length !== 0) {
       throw new Error("PASS verdict must not include issues");
     }
+    const blockingDrift = (data.scope_drift?.missing || []).filter(
+      (m) => m.status === "not_done" || m.status === "changed"
+    );
+    if (blockingDrift.length > 0) {
+      throw new Error(
+        `PASS verdict cannot have scope_drift.missing entries with status not_done or changed: ${blockingDrift.map((m) => m.criteria).join(", ")}`
+      );
+    }
   } else if (data.verdict === "changes_requested") {
     if (data.next_action !== "changes_requested") {
       throw new Error("changes_requested verdict must set next_action=changes_requested");
@@ -741,26 +749,6 @@ function run() {
 
   const doneCriteria = loadDoneCriteria(repoPath, issueNumber, prNumber, doneCriteriaFile);
   const diffText = loadDiff(repoPath, prNumber, diffFile);
-
-  // Track diff size for churn detection across rounds
-  const currentDiffLines = diffText.split("\n").length;
-  if (round >= 3) {
-    const prevDiffPath = path.join(runDir, `review-round-${round - 1}-diff.patch`);
-    const prevPrevDiffPath = path.join(runDir, `review-round-${round - 2}-diff.patch`);
-    if (fs.existsSync(prevDiffPath) && fs.existsSync(prevPrevDiffPath)) {
-      // Count newlines via Buffer to avoid allocating large split arrays
-      const countLines = (p) => { let n = 0; const b = fs.readFileSync(p); for (let i = 0; i < b.length; i++) if (b[i] === 0x0a) n++; return n + 1; };
-      const prevLines = countLines(prevDiffPath);
-      const prevPrevLines = countLines(prevPrevDiffPath);
-      if (currentDiffLines > prevLines && prevLines > prevPrevLines) {
-        const growth = Math.round(((currentDiffLines - prevPrevLines) / prevPrevLines) * 100);
-        if (!jsonOut) {
-          console.log(`  Warning: diff growing without convergence (${prevPrevLines} → ${prevLines} → ${currentDiffLines} lines, +${growth}%)`);
-        }
-      }
-    }
-  }
-
   const promptText = buildPrompt({ round, prNumber, branch, issueNumber, doneCriteria, diffText, runDir });
 
   const doneCriteriaPath = path.join(runDir, `review-round-${round}-done-criteria.md`);
@@ -769,6 +757,25 @@ function run() {
   writeText(doneCriteriaPath, `${doneCriteria}\n`);
   writeText(diffPath, `${diffText}\n`);
   writeText(promptPath, `${promptText}\n`);
+
+  // Churn detection: compare diff sizes across rounds (after writing current diff).
+  // Uses countLines on saved files consistently to avoid off-by-one from trailing newline.
+  if (round >= 3) {
+    const countLines = (p) => { let n = 0; const b = fs.readFileSync(p); for (let i = 0; i < b.length; i++) if (b[i] === 0x0a) n++; return n; };
+    try {
+      const curLines = countLines(diffPath);
+      const prevLines = countLines(path.join(runDir, `review-round-${round - 1}-diff.patch`));
+      const prevPrevLines = countLines(path.join(runDir, `review-round-${round - 2}-diff.patch`));
+      if (curLines > prevLines && prevLines > prevPrevLines && prevPrevLines > 0) {
+        const growth = Math.round(((curLines - prevPrevLines) / prevPrevLines) * 100);
+        if (!jsonOut) {
+          console.log(`  Warning: diff growing without convergence (${prevPrevLines} → ${prevLines} → ${curLines} lines, +${growth}%)`);
+        }
+      }
+    } catch (e) {
+      if (e.code !== "ENOENT") throw e;
+    }
+  }
 
   const reviewerName = resolveReviewerName(data, reviewerArg);
   const reviewerScript = reviewFile ? null : resolveReviewerScript(reviewerName, reviewerScriptArg);

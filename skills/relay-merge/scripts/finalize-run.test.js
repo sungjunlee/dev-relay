@@ -103,6 +103,8 @@ function writeFakeGh(logPath, {
   commits = [],
   state = "OPEN",
   mergeCommit = null,
+  mergeable = "MERGEABLE",
+  statusCheckRollup = [],
   stateAfterMerge = "MERGED",
   mergeCommitAfterMerge = { oid: "merged-sha" },
   prMergeExitCode = 0,
@@ -116,6 +118,8 @@ function writeFakeGh(logPath, {
     commits,
     state,
     mergeCommit,
+    mergeable,
+    statusCheckRollup,
     stateAfterMerge,
     mergeCommitAfterMerge,
     prMergeExitCode,
@@ -150,7 +154,9 @@ if (args[0] === "pr" && args[1] === "view") {
     state: state.state,
     mergeCommit: state.mergeCommit,
     comments: state.comments,
-    commits: state.commits
+    commits: state.commits,
+    mergeable: state.mergeable,
+    statusCheckRollup: state.statusCheckRollup
   }));
 }
 `, "utf-8");
@@ -264,6 +270,81 @@ test("finalize-run resumes cleanup when the PR is already merged", () => {
   assert.doesNotMatch(ghLog, /pr merge 123 --squash/);
 });
 
+test("finalize-run blocks merge when PR has merge conflicts", () => {
+  const { repoRoot, manifestPath, branch } = setupRepo();
+  const logPath = path.join(repoRoot, "gh.log");
+  const fakeGh = writeFakeGh(logPath, {
+    comments: [
+      {
+        body: "<!-- relay-review -->\n## Relay Review\nVerdict: LGTM\nRounds: 1",
+        createdAt: "2026-04-03T08:00:00Z",
+      },
+    ],
+    commits: [
+      {
+        oid: execFileSync("git", ["-C", repoRoot, "rev-parse", branch], { encoding: "utf-8", stdio: "pipe" }).trim(),
+        committedDate: "2026-04-03T08:00:00Z",
+      },
+    ],
+    mergeable: "CONFLICTING",
+  });
+
+  assert.throws(() => execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--branch", branch,
+    "--pr", "123",
+    "--json",
+  ], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+    env: { ...process.env, RELAY_GH_BIN: fakeGh },
+  }), /merge conflicts with the base branch/);
+
+  const manifest = readManifest(manifestPath).data;
+  assert.equal(manifest.state, STATES.READY_TO_MERGE);
+});
+
+test("finalize-run blocks merge when CI checks are failing", () => {
+  const { repoRoot, manifestPath, branch } = setupRepo();
+  const logPath = path.join(repoRoot, "gh.log");
+  const fakeGh = writeFakeGh(logPath, {
+    comments: [
+      {
+        body: "<!-- relay-review -->\n## Relay Review\nVerdict: LGTM\nRounds: 1",
+        createdAt: "2026-04-03T08:00:00Z",
+      },
+    ],
+    commits: [
+      {
+        oid: execFileSync("git", ["-C", repoRoot, "rev-parse", branch], { encoding: "utf-8", stdio: "pipe" }).trim(),
+        committedDate: "2026-04-03T08:00:00Z",
+      },
+    ],
+    statusCheckRollup: [
+      { name: "lint", conclusion: "SUCCESS" },
+      { name: "test-unit", conclusion: "FAILURE" },
+    ],
+  });
+
+  assert.throws(() => execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--branch", branch,
+    "--pr", "123",
+    "--json",
+  ], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+    env: { ...process.env, RELAY_GH_BIN: fakeGh },
+  }), /failing CI checks: test-unit/);
+
+  const manifest = readManifest(manifestPath).data;
+  assert.equal(manifest.state, STATES.READY_TO_MERGE);
+});
+
 test("finalize-run preserves terminal state when gh merge does not complete immediately", () => {
   const { repoRoot, manifestPath, branch } = setupRepo();
   const logPath = path.join(repoRoot, "gh.log");
@@ -294,7 +375,7 @@ test("finalize-run preserves terminal state when gh merge does not complete imme
     cwd: repoRoot,
     encoding: "utf-8",
     stdio: "pipe",
-    env: { ...process.env, RELAY_GH_BIN: fakeGh, RELAY_MERGE_QUEUE_POLL_MS: "10", RELAY_MERGE_QUEUE_MAX_POLLS: "1" },
+    env: { ...process.env, RELAY_GH_BIN: fakeGh, RELAY_MERGE_QUEUE_POLL_MS: "100", RELAY_MERGE_QUEUE_MAX_POLLS: "1" },
   }), /removed from the merge queue|did not merge after/);
 
   const manifest = readManifest(manifestPath).data;

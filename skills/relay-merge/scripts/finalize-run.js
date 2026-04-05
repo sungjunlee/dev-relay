@@ -336,6 +336,12 @@ function main() {
     if (!dryRun && prMergeState.state !== "MERGED") {
       const MERGE_QUEUE_POLL_INTERVAL_MS = parseInt(process.env.RELAY_MERGE_QUEUE_POLL_MS || "30000", 10);
       const MERGE_QUEUE_MAX_POLLS = parseInt(process.env.RELAY_MERGE_QUEUE_MAX_POLLS || "60", 10);
+      if (!Number.isFinite(MERGE_QUEUE_POLL_INTERVAL_MS) || MERGE_QUEUE_POLL_INTERVAL_MS < 100) {
+        throw new Error(`Invalid RELAY_MERGE_QUEUE_POLL_MS: must be >= 100 (got ${process.env.RELAY_MERGE_QUEUE_POLL_MS})`);
+      }
+      if (!Number.isFinite(MERGE_QUEUE_MAX_POLLS) || MERGE_QUEUE_MAX_POLLS < 1) {
+        throw new Error(`Invalid RELAY_MERGE_QUEUE_MAX_POLLS: must be >= 1 (got ${process.env.RELAY_MERGE_QUEUE_MAX_POLLS})`);
+      }
       const sleepBuf = new Int32Array(new SharedArrayBuffer(4));
       if (!jsonOut) {
         console.log(`  PR #${prNumber} is in a merge queue. Polling every ${MERGE_QUEUE_POLL_INTERVAL_MS / 1000}s...`);
@@ -367,8 +373,9 @@ function main() {
           round: data.review?.rounds || null,
           reason: `merge_queue_timeout:${prMergeState.state || "unknown"}`,
         });
+        const totalWaitMin = Math.round((MERGE_QUEUE_POLL_INTERVAL_MS * MERGE_QUEUE_MAX_POLLS) / 60000);
         throw new Error(
-          `PR #${prNumber} did not merge after 30 minutes in the merge queue (state=${prMergeState.state || "unknown"}). Check the GitHub merge queue page.`
+          `PR #${prNumber} did not merge after ~${totalWaitMin} minutes in the merge queue (state=${prMergeState.state || "unknown"}). Check the GitHub merge queue page.`
         );
       }
     }

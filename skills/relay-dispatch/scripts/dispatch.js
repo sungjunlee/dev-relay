@@ -397,19 +397,27 @@ async function main() {
 
     // Merge base branch into worktree so the executor works on merged state.
     // Prevents wasted rounds from stale-base conflicts or CI failures.
-    // Skip silently if no remote is configured (e.g., local-only repos).
+    // On merge conflict, the worktree is cleaned up and dispatch aborts.
+    let fetchSucceeded = false;
     try {
       git(wtPath, "fetch", "origin", baseBranch);
+      fetchSucceeded = true;
+    } catch (fetchErr) {
+      const msg = (fetchErr.stderr || fetchErr.message || String(fetchErr)).split("\n")[0];
+      if (!msg.includes("does not appear to be a git repository")) {
+        if (!JSON_OUT) console.log(`  Note: skipping base-branch merge (${msg})`);
+      }
+    }
+    if (fetchSucceeded) {
       try {
         git(wtPath, "merge", `origin/${baseBranch}`, "--no-edit");
-      } catch {
+      } catch (mergeErr) {
         try { git(wtPath, "merge", "--abort"); } catch {}
         try { git(repoRoot, "worktree", "remove", "--force", wtPath); } catch {}
-        console.error(`Error: worktree has merge conflicts with origin/${baseBranch}. Resolve before dispatch.`);
+        const reason = (mergeErr.stderr || mergeErr.message || String(mergeErr)).split("\n")[0];
+        console.error(`Error: failed to merge origin/${baseBranch} into worktree: ${reason}`);
         process.exit(1);
       }
-    } catch {
-      // fetch failed — no remote or network issue; proceed without merge
     }
 
     manifest = createManifestSkeleton({
