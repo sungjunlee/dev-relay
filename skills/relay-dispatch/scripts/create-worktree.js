@@ -1,14 +1,13 @@
 #!/usr/bin/env node
 /**
- * Create a git worktree for Codex and optionally register it in Codex App state.
+ * Create a git worktree and optionally register it in an executor's app.
  *
- * Creates a worktree in ~/.codex/worktrees/ (Codex's managed location).
- * When codex exec runs there, the session auto-registers on next App restart.
- * Use --register to pre-register in SQLite for title/pin support.
+ * Creates a worktree in ~/.relay/worktrees/ (relay-owned location).
+ * Use --register to pre-register in Codex App SQLite for title/pin support.
  * Use --worktree-path to register an existing worktree (e.g., from dispatch.js).
  *
  * Usage:
- *   ./register-codex.js <repo-path> [options]
+ *   ./create-worktree.js <repo-path> [options]
  *
  * Options:
  *   --branch, -b <name>      Branch name (default: auto from topic)
@@ -23,10 +22,10 @@
  *   --json                   Output as JSON
  *
  * Examples:
- *   ./register-codex.js . --branch feature-auth
- *   ./register-codex.js . -b feature-auth -t "Implement OAuth2" --register --pin
- *   ./register-codex.js . --topic auth --copy-env
- *   ./register-codex.js . --worktree-path /path/to/wt -b feature -t "Task title"
+ *   ./create-worktree.js . --branch feature-auth
+ *   ./create-worktree.js . -b feature-auth -t "Implement OAuth2" --register --pin
+ *   ./create-worktree.js . --topic auth --copy-env
+ *   ./create-worktree.js . --worktree-path /path/to/wt -b feature -t "Task title"
  */
 
 const { execFileSync } = require("child_process");
@@ -43,7 +42,7 @@ const { copyWorktreeFiles, getWorktreeIncludeFiles } = require("./worktreeinclud
 const args = process.argv.slice(2);
 if (!args.length || args.includes("--help") || args.includes("-h")) {
   console.log(
-    "Usage: register-codex.js <repo-path> [--branch <name>] [--title <text>]"
+    "Usage: create-worktree.js <repo-path> [--branch <name>] [--title <text>]"
   );
   console.log(
     "       [--topic <name>] [--worktree-path <path>] [--copy-env] [--copy <files>]"
@@ -94,8 +93,9 @@ const SANDBOX_POLICY = "workspaceWrite";
 const APPROVAL_MODE = "onFailure";
 const MEMORY_MODE = "enabled";
 
+const RELAY_HOME = process.env.RELAY_HOME || path.join(os.homedir(), ".relay");
+const WORKTREES_DIR = process.env.RELAY_WORKTREE_BASE || path.join(RELAY_HOME, "worktrees");
 const CODEX_HOME = process.env.CODEX_HOME || path.join(os.homedir(), ".codex");
-const WORKTREES_DIR = path.join(CODEX_HOME, "worktrees");
 const STATE_DB = path.join(CODEX_HOME, "state_5.sqlite");
 const GLOBAL_STATE = path.join(CODEX_HOME, ".codex-global-state.json");
 const SESSION_INDEX = path.join(CODEX_HOME, "session_index.jsonl");
@@ -112,12 +112,12 @@ if (!fs.existsSync(path.join(REPO_PATH, ".git"))) {
   process.exit(1);
 }
 
-// Codex CLI check (not needed in --worktree-path mode)
-if (!WORKTREE_PATH) {
+// Codex CLI check (only needed for --register)
+if (REGISTER && !WORKTREE_PATH) {
   try {
     execFileSync("codex", ["--version"], { encoding: "utf-8", stdio: "pipe" });
   } catch {
-    console.error("Error: codex CLI not found. Install Codex first: https://github.com/openai/codex");
+    console.error("Error: codex CLI not found. Needed for --register. Install: https://github.com/openai/codex");
     process.exit(1);
   }
 }

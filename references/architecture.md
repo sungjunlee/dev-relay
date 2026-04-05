@@ -38,7 +38,7 @@ Each run produces `.relay/runs/<run-id>.md` — a Markdown file with YAML frontm
 
 ```yaml
 ---
-relay_version: 1
+relay_version: 2
 run_id: issue-42-20260403120000000
 state: review_pending
 next_action: start_review
@@ -55,7 +55,7 @@ git:
 
 roles:
   orchestrator: codex           # who drives the lifecycle
-  worker: codex                 # who implements
+  executor: codex               # who implements
   reviewer: claude              # who reviews (isolated)
 
 paths:
@@ -153,7 +153,7 @@ Each round produces files under `.relay/runs/<run-id>/`:
    }
    ```
 
-3. **Optional**: Create `register-<name>.js` for app integration
+3. **Optional**: App registration uses `create-worktree.js --register` (executor-agnostic)
 
 ### Adding a new reviewer adapter
 
@@ -168,7 +168,7 @@ Roles are set at manifest creation time in `createManifestSkeleton()`:
 ```js
 roles: {
   orchestrator: "codex",   // or "claude", future: any agent
-  worker: "codex",
+  executor: "codex",
   reviewer: "claude",
 }
 ```

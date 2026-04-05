@@ -1,7 +1,7 @@
 const fs = require("fs");
 const path = require("path");
 
-const RELAY_VERSION = 1;
+const RELAY_VERSION = 2;
 const RUNS_DIR = path.join(".relay", "runs");
 const NOTES_TEMPLATE = "# Notes\n\n## Context\n\n## Review History\n";
 
@@ -208,7 +208,13 @@ function writeManifest(manifestPath, data, body = NOTES_TEMPLATE) {
 
 function readManifest(manifestPath) {
   const text = fs.readFileSync(manifestPath, "utf-8");
-  return parseFrontmatter(text);
+  const result = parseFrontmatter(text);
+  // v1 → v2 migration: roles.worker → roles.executor
+  if (result.data?.roles && "worker" in result.data.roles && !("executor" in result.data.roles)) {
+    result.data.roles.executor = result.data.roles.worker;
+    delete result.data.roles.worker;
+  }
+  return result;
 }
 
 function sortKeyForManifest({ data, manifestPath }) {
@@ -279,7 +285,7 @@ function createManifestSkeleton({
   issueNumber,
   worktreePath,
   orchestrator = "unknown",
-  worker = "unknown",
+  executor = "unknown",
   reviewer = "unknown",
   mergePolicy = "manual_after_lgtm",
   cleanupPolicy = "on_close",
@@ -304,7 +310,7 @@ function createManifestSkeleton({
     },
     roles: {
       orchestrator,
-      worker,
+      executor,
       reviewer,
     },
     paths: {

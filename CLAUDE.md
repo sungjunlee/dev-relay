@@ -4,7 +4,7 @@ Orchestrator-agnostic relay system for plan → dispatch → review → merge wo
 
 ## Architecture
 
-Relay runs are stateful, manifest-backed lifecycle contracts stored in `.relay/runs/<run-id>.md`. Each manifest records immutable role bindings (`roles.orchestrator`, `roles.worker`, `roles.reviewer`), policy fields, and review anchors. The state machine governs all transitions:
+Relay runs are stateful, manifest-backed lifecycle contracts stored in `.relay/runs/<run-id>.md`. Each manifest records immutable role bindings (`roles.orchestrator`, `roles.executor`, `roles.reviewer`), policy fields, and review anchors. The state machine governs all transitions:
 
 ```
 draft → dispatched → review_pending → ready_to_merge → merged
@@ -28,7 +28,7 @@ skills/
       relay-manifest.js    ← Manifest CRUD, state machine, transitions
       relay-events.js      ← Event journal (.relay/runs/<id>/events.jsonl)
       relay-resolver.js    ← Run-ID / manifest / branch resolution
-      register-codex.js    ← Codex App integration helper
+      create-worktree.js   ← Standalone worktree creation + optional app registration
       cleanup-worktrees.js ← Stale worktree pruning
       close-run.js         ← Force-close non-terminal runs
       reliability-report.js ← Aggregate run metrics
@@ -84,5 +84,5 @@ node skills/relay-dispatch/scripts/reliability-report.js --repo . --json
 - Executor-specific internal paths (e.g., Codex SQLite, global state) are fragile — document which version they target
 - Keep each SKILL.md under 150 lines; use `references/` for details
 - Manifest state transitions must go through `validateTransition()` — direct state assignment is a bug
-- New executors: add entry to `EXECUTOR_CLI` + execution branch in `dispatch.js`
+- New executors: add entry to `EXECUTOR_CLI` + execution branch in `dispatch.js`; app registration uses `create-worktree.js --register`
 - New reviewers: create `invoke-reviewer-<name>.js` in `relay-review/scripts/`
