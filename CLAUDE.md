@@ -4,7 +4,7 @@ Orchestrator-agnostic relay system for plan → dispatch → review → merge wo
 
 ## Architecture
 
-Relay runs are stateful, manifest-backed lifecycle contracts stored in `.relay/runs/<run-id>.md`. Each manifest records immutable role bindings (`roles.orchestrator`, `roles.executor`, `roles.reviewer`), policy fields, and review anchors. The state machine governs all transitions:
+Relay runs are stateful, manifest-backed lifecycle contracts stored in `~/.relay/runs/<repo-slug>/<run-id>.md`. Each manifest records immutable role bindings (`roles.orchestrator`, `roles.executor`, `roles.reviewer`), policy fields, and review anchors. The state machine governs all transitions:
 
 ```
 draft → dispatched → review_pending → ready_to_merge → merged
@@ -26,7 +26,7 @@ skills/
     scripts/
       dispatch.js          ← Core dispatch (executor-agnostic entry point)
       relay-manifest.js    ← Manifest CRUD, state machine, transitions, cleanup ops
-      relay-events.js      ← Event journal (.relay/runs/<id>/events.jsonl)
+      relay-events.js      ← Event journal (~/.relay/runs/<slug>/<id>/events.jsonl)
       relay-resolver.js    ← Run-ID / manifest / branch resolution
       codex-app-register.js ← Codex App thread registration (shared module)
       create-worktree.js   ← Standalone worktree creation + optional app registration
@@ -71,7 +71,7 @@ node skills/relay-dispatch/scripts/reliability-report.js --repo . --json
 ## Key Design Decisions
 
 - **PR is the handoff boundary** — worker delivers a PR; reviewer evaluates, orchestrator merges
-- **Manifest is the contract** — roles, state, policy, and review anchors live in `.relay/runs/`, not in transient prompts
+- **Manifest is the contract** — roles, state, policy, and review anchors live in `~/.relay/runs/`, not in transient prompts
 - **Reviewer isolation** — reviews run in a fresh context (no planning bias), anchored to immutable Done Criteria
 - **Quota-aware** — maximize worker turns, minimize orchestrator review turns
 - **Stateless orchestration** — progress tracking integrates with dev-backlog sprint files when available; works without them
