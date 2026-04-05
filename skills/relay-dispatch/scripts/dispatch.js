@@ -57,9 +57,11 @@ const {
   createManifestSkeleton,
   createRunId,
   ensureRunLayout,
+  formatAttemptsForPrompt,
   getManifestPath,
   getRunDir,
   inferIssueNumber,
+  readPreviousAttempts,
   updateManifestState,
   writeManifest,
 } = require("./relay-manifest");
@@ -309,6 +311,15 @@ async function main() {
     if (fs.existsSync(wtPath)) {
       console.error(`Error: worktree path already exists: ${wtPath}`);
       process.exit(1);
+    }
+  }
+
+  // --- Prepend iteration history on re-dispatch ---
+  if (RESUME_MODE) {
+    const previousAttempts = readPreviousAttempts(repoRoot, runId);
+    const historySection = formatAttemptsForPrompt(previousAttempts);
+    if (historySection) {
+      taskPrompt = historySection + taskPrompt;
     }
   }
 

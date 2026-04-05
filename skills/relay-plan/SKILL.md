@@ -146,5 +146,5 @@ ${CLAUDE_SKILL_DIR}/../relay-dispatch/scripts/dispatch.js . \
 
 - **Use it**: 3+ AC items, quality-sensitive work, executor delegation
 - **Skip it**: Bug fixes, typos, one-liners — dispatch directly with base template
-
-Full guided interview, design principles, and fix patterns: `references/rubric-design-guide.md`
+- **Re-dispatch**: Previous Score Log + reviewer feedback are automatically prepended to the prompt (see `relay-dispatch` docs)
+- **Full rubric guide**: `references/rubric-design-guide.md`
