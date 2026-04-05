@@ -156,15 +156,33 @@ function resolveIssueNumber(repoPath, prNumber, branch, manifestData) {
   return issueMatch ? Number(issueMatch[1]) : null;
 }
 
-function loadDoneCriteria(repoPath, issueNumber, doneCriteriaFile) {
+function loadDoneCriteria(repoPath, issueNumber, prNumber, doneCriteriaFile) {
   if (doneCriteriaFile) return readText(doneCriteriaFile).trim();
-  if (!issueNumber) {
-    throw new Error("Issue number is required to fetch done criteria. Provide --done-criteria-file if the issue cannot be resolved.");
+
+  // Fallback 1: GitHub issue body
+  if (issueNumber) {
+    try {
+      const raw = gh(repoPath, "issue", "view", String(issueNumber), "--json", "title,body,number");
+      const parsed = JSON.parse(raw);
+      const text = `# Issue #${parsed.number}: ${parsed.title}\n\n${String(parsed.body || "").trim()}`.trim();
+      if (text) return text;
+    } catch {}
   }
 
-  const raw = gh(repoPath, "issue", "view", String(issueNumber), "--json", "title,body,number");
-  const parsed = JSON.parse(raw);
-  return `# Issue #${parsed.number}: ${parsed.title}\n\n${String(parsed.body || "").trim()}`.trim();
+  // Fallback 2: PR description (executors often paste AC into the PR body)
+  if (prNumber) {
+    try {
+      const raw = gh(repoPath, "pr", "view", String(prNumber), "--json", "title,body,number");
+      const parsed = JSON.parse(raw);
+      const body = String(parsed.body || "").trim();
+      if (body) return `# PR #${parsed.number}: ${parsed.title}\n\n${body}`.trim();
+    } catch {}
+  }
+
+  throw new Error(
+    "Cannot resolve Done Criteria: no issue, no PR description. " +
+    "Provide --done-criteria-file for tasks without a GitHub issue."
+  );
 }
 
 function loadDiff(repoPath, prNumber, diffFile) {
@@ -610,7 +628,7 @@ function run() {
     throw new Error(`Review round cap exceeded: next round ${round} would exceed max_rounds=${maxRounds}`);
   }
 
-  const doneCriteria = loadDoneCriteria(repoPath, issueNumber, doneCriteriaFile);
+  const doneCriteria = loadDoneCriteria(repoPath, issueNumber, prNumber, doneCriteriaFile);
   const diffText = loadDiff(repoPath, prNumber, diffFile);
   const promptText = buildPrompt({ round, prNumber, branch, issueNumber, doneCriteria, diffText });
 

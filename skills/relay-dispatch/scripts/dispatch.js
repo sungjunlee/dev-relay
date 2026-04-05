@@ -47,7 +47,7 @@
  *   ./dispatch.js . -b test --prompt "test" --dry-run --json
  */
 
-const { execFileSync } = require("child_process");
+const { execFileSync, spawn: nodeSpawn } = require("child_process");
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
@@ -90,7 +90,7 @@ if (!args.length || args.includes("--help") || args.includes("-h")) {
   console.log("  --manifest         Resume an existing relay run from its manifest");
   console.log("  --prompt, -p       Task prompt");
   console.log("  --prompt-file      Read prompt from file");
-  console.log("  --executor, -e     Executor: codex (default)");
+  console.log("  --executor, -e     Executor: codex (default), claude");
   console.log("  --model, -m        Model override");
   console.log("  --sandbox          workspace-write | read-only (default: workspace-write)");
   console.log("  --copy-env         Copy .env to worktree");
@@ -178,7 +178,7 @@ if (!MANIFEST_INPUT && !fs.existsSync(path.join(REPO_PATH, ".git"))) {
 
 // Executor CLI validation
 // To add a new executor: add entry here + execution branch in Step 3.
-const EXECUTOR_CLI = { codex: "codex" };
+const EXECUTOR_CLI = { codex: "codex", claude: "claude" };
 const cli = EXECUTOR_CLI[EXECUTOR];
 if (!cli) {
   console.error(`Error: unknown executor '${EXECUTOR}'. Supported: ${Object.keys(EXECUTOR_CLI).join(", ")}`);
@@ -221,11 +221,22 @@ function shellQuote(s) {
   return "'" + s.replace(/'/g, "'\\''") + "'";
 }
 
+function terminateProcessTree(pid) {
+  if (!pid) return;
+  try {
+    if (process.platform === "win32") {
+      execFileSync("taskkill", ["/PID", String(pid), "/T", "/F"], { stdio: "pipe" });
+    } else {
+      process.kill(-pid, "SIGTERM"); // negative PID = entire process group
+    }
+  } catch {}
+}
+
 // ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 
-function main() {
+async function main() {
   // Worktree location: relay-owned, executor-agnostic.
   // All executors share the same base — manifest tracks the exact path.
   const RELAY_HOME = process.env.RELAY_HOME || path.join(os.homedir(), ".relay");
@@ -342,7 +353,9 @@ function main() {
   }
 
   // --- Cleanup on unexpected exit ---
+  let executorPid = null;
   function cleanup() {
+    terminateProcessTree(executorPid);
     if (createdWorktree) {
       try { git(repoRoot, "worktree", "remove", "--force", wtPath); } catch {}
     }
@@ -412,6 +425,26 @@ function main() {
       maxBuffer: 10 * 1024 * 1024,
       stdio: ["pipe", null, null], // stdout/stderr fds set below
     };
+  } else if (EXECUTOR === "claude") {
+    cmd = "claude";
+    execArgs = [
+      "-p",                            // print (non-interactive) mode
+      "--dangerously-skip-permissions", // full autonomy in isolated worktree
+      "--cwd", wtPath,
+      "--output-format", "text",
+    ];
+    if (MODEL) execArgs.push("--model", MODEL);
+    const execPrompt =
+      "[NON-INTERACTIVE DISPATCH] This is an automated, non-interactive execution. " +
+      "Do not present plans for approval or wait for user confirmation. " +
+      "Execute the task fully and autonomously.\n\n" +
+      taskPrompt;
+    execArgs.push(execPrompt);
+    execOpts = {
+      timeout: TIMEOUT * 1000,
+      maxBuffer: 10 * 1024 * 1024,
+      stdio: ["pipe", null, null],
+    };
   } else {
     console.error(`Error: executor '${EXECUTOR}' has no execution handler`);
     process.exit(1);
@@ -456,23 +489,44 @@ function main() {
     reason: RESUME_MODE ? "same_run_resume" : "new_dispatch",
   });
 
-  // Redirect stdout to file to avoid buffer overflow on verbose output.
+  // Redirect stdout/stderr to files. Using spawn with detached: true gives us
+  // a killable process group (terminateProcessTree sends SIGTERM to -pid).
   const stdoutFd = fs.openSync(stdoutLog, "w");
   const stderrFd = fs.openSync(stderrLog, "w");
-  execOpts.stdio[1] = stdoutFd;
-  execOpts.stdio[2] = stderrFd;
 
-  try {
-    execFileSync(cmd, execArgs, execOpts);
-  } catch (e) {
-    exitCode = e.status || 1;
-    const msg = e.message.split("\n")[0];
-    // Codex-specific: ENOBUFS means output exceeded buffer but work may be done.
-    if (EXECUTOR === "codex" && (e.code === "ENOBUFS" || msg.includes("ENOBUFS"))) {
-      error = "ENOBUFS (stdout buffer overflow — work may be complete, check worktree)";
-    } else {
-      error = msg;
-    }
+  const child = nodeSpawn(cmd, execArgs, {
+    stdio: ["ignore", stdoutFd, stderrFd],
+    detached: true,
+  });
+  executorPid = child.pid;
+
+  const execResult = await new Promise((resolve) => {
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      terminateProcessTree(child.pid);
+    }, TIMEOUT * 1000);
+
+    child.on("close", (code, signal) => {
+      clearTimeout(timer);
+      resolve({ code: code ?? 1, signal, timedOut });
+    });
+
+    child.on("error", (e) => {
+      clearTimeout(timer);
+      resolve({ code: 1, signal: null, timedOut, spawnError: e });
+    });
+  });
+  executorPid = null;
+
+  if (execResult.timedOut) {
+    exitCode = 1;
+    error = `executor timed out after ${TIMEOUT}s`;
+  } else if (execResult.spawnError) {
+    exitCode = 1;
+    error = execResult.spawnError.message.split("\n")[0];
+  } else if (execResult.code !== 0) {
+    exitCode = execResult.code;
   }
 
   fs.closeSync(stdoutFd);
@@ -484,6 +538,12 @@ function main() {
     }
   }
   const elapsed = Math.round((Date.now() - startTime) / 1000);
+
+  // For Claude executor, stdout IS the result — copy to resultFile so
+  // downstream collection logic works the same as Codex's -o flag.
+  if (EXECUTOR === "claude" && fs.existsSync(stdoutLog)) {
+    try { fs.copyFileSync(stdoutLog, resultFile); } catch {}
+  }
 
   // --- Step 4: Collect results ---
   let resultText = "";
@@ -574,9 +634,9 @@ function main() {
       : `${RESUME_MODE ? "same_run_resume" : "new_dispatch"}:${status}`,
   });
 
-  // --- Step 4.5: Optional app registration ---
+  // --- Step 4.5: Optional app registration (Codex-only) ---
   let threadId = null;
-  if (REGISTER && status !== "failed") {
+  if (REGISTER && status !== "failed" && EXECUTOR === "codex") {
     try {
       const reg = registerCodexApp({
         wtPath,
@@ -655,4 +715,7 @@ function main() {
   if (status === "failed") process.exit(exitCode || 1);
 }
 
-main();
+main().catch((e) => {
+  console.error(`Error: ${e.message}`);
+  process.exit(1);
+});
