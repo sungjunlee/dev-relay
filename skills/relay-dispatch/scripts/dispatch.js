@@ -60,6 +60,7 @@ const {
   createRunId,
   ensureRunLayout,
   getManifestPath,
+  getRunDir,
   inferIssueNumber,
   updateManifestState,
   writeManifest,
@@ -558,7 +559,7 @@ async function main() {
     }
   } catch {}
 
-  // Also capture uncommitted diff for partial runs (ENOBUFS, interrupted).
+  // Also capture uncommitted diff for partial runs (timeout, interrupted).
   let uncommittedDiff = "";
   try {
     const wd = git(wtPath, "diff", "--stat");
@@ -566,7 +567,7 @@ async function main() {
     uncommittedDiff = [wd, staged].filter(Boolean).join("\n");
   } catch {}
 
-  // Check for uncommitted work (ENOBUFS recovery: executor may have worked but not committed)
+  // Check for uncommitted work (executor may have worked but not committed)
   let uncommitted = "";
   try {
     uncommitted = git(wtPath, "status", "--porcelain");
@@ -590,7 +591,7 @@ async function main() {
   if (looksBlocked) {
     status = "failed";
     error = error || `executor blocked on approval: ${resultText.split("\n")[0].slice(0, 120)}`;
-  } else if (error && error.includes("ENOBUFS") && hasWork) {
+  } else if (execResult.timedOut && hasWork) {
     status = "completed-with-warning";
   } else if (exitCode === 0 && (noOutput || !hasWork)) {
     status = "failed";
@@ -600,6 +601,15 @@ async function main() {
   } else {
     status = "failed";
   }
+
+  // Persist dispatch artifacts in the run directory for post-mortem analysis.
+  const runDir = getRunDir(repoRoot, runId);
+  try {
+    fs.writeFileSync(path.join(runDir, "dispatch-prompt.md"), taskPrompt, "utf-8");
+  } catch {}
+  try {
+    if (resultText) fs.writeFileSync(path.join(runDir, "dispatch-result.txt"), resultText, "utf-8");
+  } catch {}
 
   manifest = updateManifestState(
     manifest,
