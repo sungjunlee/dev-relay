@@ -26,6 +26,32 @@ function setupRepo() {
   return repoRoot;
 }
 
+function writeFakeClaude(binDir) {
+  const claudePath = path.join(binDir, "claude");
+  fs.writeFileSync(claudePath, `#!/usr/bin/env node
+const fs = require("fs");
+const { execFileSync } = require("child_process");
+const args = process.argv.slice(2);
+if (args[0] === "--version") {
+  process.stdout.write("claude-fake\\n");
+  process.exit(0);
+}
+if (args[0] !== "-p") {
+  process.stderr.write("unsupported fake claude invocation");
+  process.exit(1);
+}
+const cwdIdx = args.indexOf("--cwd");
+const cwd = cwdIdx !== -1 ? args[cwdIdx + 1] : ".";
+const fileName = fs.existsSync(cwd + "/first.txt") ? "resume.txt" : "first.txt";
+fs.writeFileSync(cwd + "/" + fileName, fileName + "\\n", "utf-8");
+execFileSync("git", ["-C", cwd, "add", fileName], { stdio: "pipe" });
+execFileSync("git", ["-C", cwd, "commit", "-m", "fake " + fileName], { stdio: "pipe" });
+process.stdout.write("ok\\n");
+`, "utf-8");
+  fs.chmodSync(claudePath, 0o755);
+  return claudePath;
+}
+
 function writeFakeCodex(binDir) {
   const codexPath = path.join(binDir, "codex");
   fs.writeFileSync(codexPath, `#!/usr/bin/env node
@@ -132,4 +158,58 @@ test("dispatch resume fails loudly when the retained worktree is missing", () =>
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /retained worktree is missing/);
   assert.equal(listManifestPaths(repoRoot).length, 1);
+});
+
+test("dispatch with --executor claude creates worktree and collects result", () => {
+  const repoRoot = setupRepo();
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-claude-bin-"));
+  writeFakeClaude(binDir);
+  const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}` };
+
+  const result = JSON.parse(runDispatch(repoRoot, [
+    "-b", "claude-test",
+    "-e", "claude",
+    "--prompt", "test task",
+    "--json",
+  ], env));
+
+  assert.equal(result.status, "completed");
+  assert.equal(result.executor, "claude");
+  assert.equal(result.runState, STATES.REVIEW_PENDING);
+  assert.ok(result.commits);
+  assert.ok(fs.existsSync(result.resultFile));
+  const resultText = fs.readFileSync(result.resultFile, "utf-8");
+  assert.match(resultText, /ok/);
+});
+
+test("dispatch with --executor claude supports resume", () => {
+  const repoRoot = setupRepo();
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-claude-bin-"));
+  writeFakeClaude(binDir);
+  const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}` };
+
+  const first = JSON.parse(runDispatch(repoRoot, [
+    "-b", "issue-99",
+    "-e", "claude",
+    "--prompt", "first pass",
+    "--json",
+  ], env));
+  assert.equal(first.runState, STATES.REVIEW_PENDING);
+
+  const record = readManifest(first.manifestPath);
+  let updated = updateManifestState(record.data, STATES.CHANGES_REQUESTED, "re_dispatch_requested_changes");
+  writeManifest(first.manifestPath, updated, record.body);
+
+  const second = JSON.parse(runDispatch(repoRoot, [
+    "--run-id", first.runId,
+    "-e", "claude",
+    "--prompt", "resume pass",
+    "--json",
+  ], env));
+
+  assert.equal(second.mode, "resume");
+  assert.equal(second.runId, first.runId);
+  assert.equal(second.worktree, first.worktree);
+  assert.equal(second.executor, "claude");
+  assert.equal(second.runState, STATES.REVIEW_PENDING);
 });
