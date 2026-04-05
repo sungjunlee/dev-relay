@@ -163,6 +163,15 @@ test("CLI requires --executor when not --project-only", () => {
   assert.match(result.stderr, /--executor is required/);
 });
 
+test("CLI rejects invalid timeout", () => {
+  const result = spawnSync("node", [SCRIPT, ".", "-e", "codex", "--timeout", "abc"], {
+    encoding: "utf-8",
+    stdio: "pipe",
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /--timeout must be a positive integer/);
+});
+
 test("CLI handles missing executor gracefully", () => {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "probe-noexec-"));
   const nodeBin = path.dirname(process.execPath);

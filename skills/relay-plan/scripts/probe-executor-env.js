@@ -260,6 +260,10 @@ if (require.main === module) {
     console.error("Error: --executor is required (or use --project-only)");
     process.exit(1);
   }
+  if (isNaN(opts.timeout) || opts.timeout <= 0) {
+    console.error("Error: --timeout must be a positive integer");
+    process.exit(1);
+  }
   run(opts);
 }
 
