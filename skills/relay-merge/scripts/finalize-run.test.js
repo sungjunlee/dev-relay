@@ -294,8 +294,8 @@ test("finalize-run preserves terminal state when gh merge does not complete imme
     cwd: repoRoot,
     encoding: "utf-8",
     stdio: "pipe",
-    env: { ...process.env, RELAY_GH_BIN: fakeGh },
-  }), /did not reach MERGED after gh pr merge/);
+    env: { ...process.env, RELAY_GH_BIN: fakeGh, RELAY_MERGE_QUEUE_POLL_MS: "10", RELAY_MERGE_QUEUE_MAX_POLLS: "1" },
+  }), /removed from the merge queue|did not merge after/);
 
   const manifest = readManifest(manifestPath).data;
   assert.equal(manifest.state, STATES.READY_TO_MERGE);

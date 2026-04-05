@@ -115,12 +115,17 @@ function mergeFlag(method) {
   }
 }
 
-function fetchGateContext(ghBin, repoPath, prNumber) {
-  const raw = gh(ghBin, repoPath, "pr", "view", String(prNumber), "--json", "comments,commits");
+function fetchPreMergeContext(ghBin, repoPath, prNumber) {
+  const raw = gh(ghBin, repoPath, "pr", "view", String(prNumber),
+    "--json", "comments,commits,mergeable,statusCheckRollup");
   const parsed = JSON.parse(raw);
+  const checks = parsed.statusCheckRollup || [];
   return {
     comments: parsed.comments || [],
     commits: parsed.commits || [],
+    mergeable: parsed.mergeable || null,
+    checks,
+    failing: checks.filter((c) => c.conclusion === "FAILURE"),
   };
 }
 
@@ -271,9 +276,11 @@ function main() {
         gh(ghBin, repoPath, "pr", "comment", String(prNumber), "--body", buildSkipComment(skipReviewReason));
       }
     } else {
+      const preMerge = fetchPreMergeContext(ghBin, repoPath, prNumber);
       reviewGate = evaluateReviewGate({
         prNumber,
-        ...fetchGateContext(ghBin, repoPath, prNumber),
+        comments: preMerge.comments,
+        commits: preMerge.commits,
         manifestData: data,
       });
       if (!reviewGate.readyToMerge) {
@@ -289,10 +296,23 @@ function main() {
         }
         throw new Error(`Fresh review gate failed: ${reviewGate.status}`);
       }
+      // CI status and merge conflict check (from the same API call)
+      if (preMerge.mergeable === "CONFLICTING") {
+        throw new Error(
+          `PR #${prNumber} has merge conflicts with the base branch. Resolve conflicts and push, then retry.`
+        );
+      }
+      if (preMerge.failing.length > 0) {
+        const names = preMerge.failing.map((c) => c.name || c.context || "unknown").join(", ");
+        throw new Error(
+          `PR #${prNumber} has failing CI checks: ${names}. Fix these before merging.`
+        );
+      }
     }
   }
 
   if (!skipMerge && data.state === STATES.READY_TO_MERGE) {
+
     prMergeState = dryRun ? prMergeState : fetchPrMergeState(ghBin, repoPath, prNumber);
     if (!dryRun && prMergeState.state !== "MERGED") {
       try {
@@ -311,18 +331,46 @@ function main() {
     } else if (dryRun) {
       mergePerformed = true;
     }
+    // Merge queue support: if PR isn't immediately MERGED, poll for completion.
+    // Repos with merge queues transition through an intermediate state before merging.
     if (!dryRun && prMergeState.state !== "MERGED") {
-      appendRunEvent(repoPath, data.run_id, {
-        event: "merge_blocked",
-        state_from: data.state,
-        state_to: data.state,
-        head_sha: reviewGate?.latestCommit || data.git?.head_sha || null,
-        round: data.review?.rounds || null,
-        reason: `merge_pending:${prMergeState.state || "unknown"}`,
-      });
-      throw new Error(
-        `PR #${prNumber} did not reach MERGED after gh pr merge (state=${prMergeState.state || "unknown"}). Re-run finalize-run after GitHub completes the merge.`
-      );
+      const MERGE_QUEUE_POLL_INTERVAL_MS = parseInt(process.env.RELAY_MERGE_QUEUE_POLL_MS || "30000", 10);
+      const MERGE_QUEUE_MAX_POLLS = parseInt(process.env.RELAY_MERGE_QUEUE_MAX_POLLS || "60", 10);
+      const sleepBuf = new Int32Array(new SharedArrayBuffer(4));
+      if (!jsonOut) {
+        console.log(`  PR #${prNumber} is in a merge queue. Polling every ${MERGE_QUEUE_POLL_INTERVAL_MS / 1000}s...`);
+      }
+      for (let i = 0; i < MERGE_QUEUE_MAX_POLLS; i++) {
+        Atomics.wait(sleepBuf, 0, 0, MERGE_QUEUE_POLL_INTERVAL_MS);
+        prMergeState = fetchPrMergeState(ghBin, repoPath, prNumber);
+        if (prMergeState.state === "MERGED") break;
+        if (prMergeState.state === "OPEN") {
+          appendRunEvent(repoPath, data.run_id, {
+            event: "merge_blocked",
+            state_from: data.state,
+            state_to: data.state,
+            head_sha: reviewGate?.latestCommit || data.git?.head_sha || null,
+            round: data.review?.rounds || null,
+            reason: "removed_from_merge_queue",
+          });
+          throw new Error(
+            `PR #${prNumber} was removed from the merge queue (state reverted to OPEN). Check the GitHub merge queue page.`
+          );
+        }
+      }
+      if (prMergeState.state !== "MERGED") {
+        appendRunEvent(repoPath, data.run_id, {
+          event: "merge_blocked",
+          state_from: data.state,
+          state_to: data.state,
+          head_sha: reviewGate?.latestCommit || data.git?.head_sha || null,
+          round: data.review?.rounds || null,
+          reason: `merge_queue_timeout:${prMergeState.state || "unknown"}`,
+        });
+        throw new Error(
+          `PR #${prNumber} did not merge after 30 minutes in the merge queue (state=${prMergeState.state || "unknown"}). Check the GitHub merge queue page.`
+        );
+      }
     }
     if (!dryRun) {
       const remoteDelete = deleteRemoteBranch(gitBin, repoPath, branch);
