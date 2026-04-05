@@ -5,7 +5,7 @@ const os = require("os");
 const path = require("path");
 const { spawnSync } = require("child_process");
 
-const { scanProjectTools, parseProbeOutput } = require("./probe-executor-env");
+const { scanProjectTools, parseProbeOutput, probeAgent } = require("./probe-executor-env");
 
 const SCRIPT = path.join(__dirname, "probe-executor-env.js");
 
@@ -82,6 +82,22 @@ test("scanProjectTools handles malformed package.json gracefully", () => {
   assert.deepEqual(result.frameworks, []);
 });
 
+test("scanProjectTools merges results from package.json + Makefile + pyproject.toml", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "probe-multi-"));
+  fs.writeFileSync(path.join(repoRoot, "package.json"), JSON.stringify({
+    scripts: { test: "jest" },
+    devDependencies: { jest: "^29.0.0" },
+  }), "utf-8");
+  fs.writeFileSync(path.join(repoRoot, "Makefile"), "lint:\n\truff check .\n", "utf-8");
+  fs.writeFileSync(path.join(repoRoot, "pyproject.toml"), "[tool.pytest.ini_options]\n", "utf-8");
+
+  const result = scanProjectTools(repoRoot);
+  assert.ok(result.scripts.some((s) => s.name === "npm run test" && s.source === "package.json"));
+  assert.ok(result.scripts.some((s) => s.name === "make lint" && s.source === "Makefile"));
+  assert.ok(result.frameworks.some((f) => f.name === "jest" && f.source === "package.json"));
+  assert.ok(result.frameworks.some((f) => f.name === "pytest" && f.source === "pyproject.toml"));
+});
+
 // ---------------------------------------------------------------------------
 // parseProbeOutput
 // ---------------------------------------------------------------------------
@@ -134,6 +150,52 @@ test("parseProbeOutput returns error for plain object with no array", () => {
   const result = parseProbeOutput('{"name": "tool"}');
   assert.ok(result.error);
   assert.equal(result.tools.length, 0);
+});
+
+test("parseProbeOutput handles noise between multiple bracket pairs", () => {
+  // With balanced bracket extraction, should get the first valid array
+  const output = 'Some text [{"name":"a","type":"skill","description":"d"}] more text [invalid]';
+  const result = parseProbeOutput(output);
+  assert.equal(result.error, null);
+  assert.equal(result.tools.length, 1);
+  assert.equal(result.tools[0].name, "a");
+});
+
+// ---------------------------------------------------------------------------
+// probeAgent
+// ---------------------------------------------------------------------------
+
+test("probeAgent returns tools from a fake codex executor", () => {
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "probe-fakecodex-"));
+  const codexPath = path.join(binDir, "codex");
+  const toolsJson = JSON.stringify([
+    { name: "/browse", type: "skill", description: "Headless browser" },
+    { name: "mcp:sequential-thinking", type: "mcp_tool", description: "Step-by-step reasoning" },
+  ]);
+  fs.writeFileSync(codexPath, `#!/usr/bin/env node
+const args = process.argv.slice(2);
+if (args[0] === "--version") { process.stdout.write("codex-fake\\n"); process.exit(0); }
+process.stdout.write(${JSON.stringify(toolsJson)} + "\\n");
+`, "utf-8");
+  fs.chmodSync(codexPath, 0o755);
+
+  const origPath = process.env.PATH;
+  process.env.PATH = `${binDir}:${origPath}`;
+  try {
+    const result = probeAgent("codex", 10);
+    assert.equal(result.error, null);
+    assert.equal(result.tools.length, 2);
+    assert.equal(result.tools[0].name, "/browse");
+    assert.equal(result.tools[1].type, "mcp_tool");
+  } finally {
+    process.env.PATH = origPath;
+  }
+});
+
+test("probeAgent returns error for unknown executor", () => {
+  const result = probeAgent("unknown-executor", 5);
+  assert.ok(result.error);
+  assert.match(result.error, /unknown executor/);
 });
 
 // ---------------------------------------------------------------------------

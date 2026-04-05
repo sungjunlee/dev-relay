@@ -92,15 +92,15 @@ function scanPackageJson(repoPath) {
 
     const TOOL_PACKAGES = [
       "jest", "vitest", "mocha", "playwright", "@playwright/test",
-      "cypress", "eslint", "prettier", "typescript", "tsc",
+      "cypress", "eslint", "prettier", "typescript",
       "webpack", "vite", "esbuild", "rollup",
       "lighthouse", "axe-core", "@axe-core/cli", "pa11y",
       "bundlesize", "size-limit",
       "gitleaks",
     ];
     const devDeps = TOOL_PACKAGES
-      .filter((pkg) => pkg in allDeps)
-      .map((pkg) => ({ name: pkg, version: allDeps[pkg], source: "package.json" }));
+      .filter((name) => name in allDeps)
+      .map((name) => ({ name, version: allDeps[name], source: "package.json" }));
 
     return { scripts, devDeps };
   } catch {
@@ -173,7 +173,7 @@ function probeAgent(executor, timeout) {
 
   if (executor === "codex") {
     cmd = "codex";
-    cmdArgs = ["exec", "--full-auto", "--color", "never", PROBE_PROMPT];
+    cmdArgs = ["exec", "--full-auto", "--sandbox", "read-only", "--color", "never", PROBE_PROMPT];
   } else if (executor === "claude") {
     cmd = "claude";
     cmdArgs = ["-p", "--output-format", "text", PROBE_PROMPT];
@@ -209,29 +209,42 @@ function probeAgent(executor, timeout) {
   return parseProbeOutput(stdout);
 }
 
+function extractJsonArray(text) {
+  // Find the first '[' and try to parse balanced brackets from there.
+  const start = text.indexOf("[");
+  if (start === -1) return null;
+
+  let depth = 0;
+  for (let i = start; i < text.length; i++) {
+    if (text[i] === "[") depth++;
+    else if (text[i] === "]") depth--;
+    if (depth === 0) {
+      const candidate = text.slice(start, i + 1);
+      try {
+        const parsed = JSON.parse(candidate);
+        if (Array.isArray(parsed)) return parsed;
+      } catch {}
+      // Not valid JSON at this bracket boundary — keep scanning
+      return null;
+    }
+  }
+  return null;
+}
+
 function parseProbeOutput(stdout) {
-  // Try to extract JSON array from potentially noisy output
-  const jsonMatch = stdout.match(/\[[\s\S]*\]/);
-  if (!jsonMatch) {
+  const tools = extractJsonArray(stdout);
+  if (tools === null) {
     return { error: "no JSON array found in probe output", raw: stdout.slice(0, 500), tools: [] };
   }
 
-  try {
-    const tools = JSON.parse(jsonMatch[0]);
-    if (!Array.isArray(tools)) {
-      return { error: "probe output is not an array", tools: [] };
-    }
-    return {
-      error: null,
-      tools: tools.map((t) => ({
-        name: String(t.name || ""),
-        type: String(t.type || "unknown"),
-        description: String(t.description || ""),
-      })).filter((t) => t.name),
-    };
-  } catch (e) {
-    return { error: `JSON parse failed: ${e.message}`, raw: stdout.slice(0, 500), tools: [] };
-  }
+  return {
+    error: null,
+    tools: tools.map((t) => ({
+      name: String(t.name || ""),
+      type: String(t.type || "unknown"),
+      description: String(t.description || ""),
+    })).filter((t) => t.name),
+  };
 }
 
 // ---------------------------------------------------------------------------
