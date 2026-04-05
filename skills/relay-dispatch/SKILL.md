@@ -121,16 +121,16 @@ ${CLAUDE_SKILL_DIR}/scripts/dispatch.js . -b task-43 --prompt-file tasks/43.md -
 # Each completes independently → review each PR via relay-review
 ```
 
-## `register-codex.js` — Codex App integration
+## `create-worktree.js` — Standalone worktree creation
 
-For manual Codex App usage without dispatching, or to register an existing worktree:
+Create a worktree without dispatching, or register an existing worktree in Codex App:
 
 ```bash
-# Create worktree + register in Codex App
-${CLAUDE_SKILL_DIR}/scripts/register-codex.js <repo> -b <branch> --register [--pin]
+# Create worktree in ~/.relay/worktrees/
+${CLAUDE_SKILL_DIR}/scripts/create-worktree.js <repo> -b <branch>
 
-# Register an existing worktree (e.g., from a previous dispatch)
-${CLAUDE_SKILL_DIR}/scripts/register-codex.js <repo> --worktree-path <path> -b <branch> -t "Title"
+# Register an existing worktree in Codex App (optional)
+${CLAUDE_SKILL_DIR}/scripts/create-worktree.js <repo> --worktree-path <path> -b <branch> -t "Title" --register
 ```
 
 ## Worktree Cleanup

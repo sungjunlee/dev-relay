@@ -5,7 +5,7 @@
  * Follows the same convention as Claude Code Desktop, Cline, and Roo Code:
  * only files matching BOTH .worktreeinclude AND .gitignore are copied.
  *
- * Used by dispatch.js and register-codex.js.
+ * Used by dispatch.js and create-worktree.js.
  */
 
 const { execFileSync } = require("child_process");

@@ -3,8 +3,7 @@
  * Create a worktree and dispatch a task to an executor.
  *
  * Executor-agnostic orchestrator: worktree -> execute -> collect -> retain.
- * To add a new executor, add a branch in the "Execute task" section
- * and optionally create a register-{executor}.js for app integration.
+ * To add a new executor, add a branch in the "Execute task" section.
  *
  * Designed for Claude Code's Bash(run_in_background=true) pattern.
  *
@@ -390,7 +389,7 @@ function main() {
 
   // --- Step 3: Execute task ---
   // Executor-specific: build command + args + handle quirks.
-  // To add a new executor: add a branch here + optional register-{name}.js.
+  // To add a new executor: add a branch here.
 
   let cmd, execArgs, execOpts;
 
@@ -577,7 +576,7 @@ function main() {
   // --- Step 4.5: Optional app registration ---
   let threadId = null;
   if (REGISTER && status !== "failed") {
-    const registerScript = path.join(__dirname, `register-${EXECUTOR}.js`);
+    const registerScript = path.join(__dirname, "create-worktree.js");
     if (fs.existsSync(registerScript)) {
       try {
         const regOutput = execFileSync("node", [

@@ -1,13 +1,13 @@
 #!/usr/bin/env node
 /**
- * Create a git worktree for Codex and optionally register it in Codex App state.
+ * Create a git worktree and optionally register it in an executor's app.
  *
  * Creates a worktree in ~/.relay/worktrees/ (relay-owned location).
  * Use --register to pre-register in Codex App SQLite for title/pin support.
  * Use --worktree-path to register an existing worktree (e.g., from dispatch.js).
  *
  * Usage:
- *   ./register-codex.js <repo-path> [options]
+ *   ./create-worktree.js <repo-path> [options]
  *
  * Options:
  *   --branch, -b <name>      Branch name (default: auto from topic)
@@ -22,10 +22,10 @@
  *   --json                   Output as JSON
  *
  * Examples:
- *   ./register-codex.js . --branch feature-auth
- *   ./register-codex.js . -b feature-auth -t "Implement OAuth2" --register --pin
- *   ./register-codex.js . --topic auth --copy-env
- *   ./register-codex.js . --worktree-path /path/to/wt -b feature -t "Task title"
+ *   ./create-worktree.js . --branch feature-auth
+ *   ./create-worktree.js . -b feature-auth -t "Implement OAuth2" --register --pin
+ *   ./create-worktree.js . --topic auth --copy-env
+ *   ./create-worktree.js . --worktree-path /path/to/wt -b feature -t "Task title"
  */
 
 const { execFileSync } = require("child_process");
@@ -42,7 +42,7 @@ const { copyWorktreeFiles, getWorktreeIncludeFiles } = require("./worktreeinclud
 const args = process.argv.slice(2);
 if (!args.length || args.includes("--help") || args.includes("-h")) {
   console.log(
-    "Usage: register-codex.js <repo-path> [--branch <name>] [--title <text>]"
+    "Usage: create-worktree.js <repo-path> [--branch <name>] [--title <text>]"
   );
   console.log(
     "       [--topic <name>] [--worktree-path <path>] [--copy-env] [--copy <files>]"

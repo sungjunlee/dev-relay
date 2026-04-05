@@ -28,7 +28,7 @@ skills/
       relay-manifest.js    ← Manifest CRUD, state machine, transitions
       relay-events.js      ← Event journal (.relay/runs/<id>/events.jsonl)
       relay-resolver.js    ← Run-ID / manifest / branch resolution
-      register-codex.js    ← Codex App integration helper
+      create-worktree.js   ← Standalone worktree creation + optional app registration
       cleanup-worktrees.js ← Stale worktree pruning
       close-run.js         ← Force-close non-terminal runs
       reliability-report.js ← Aggregate run metrics
