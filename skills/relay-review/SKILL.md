@@ -3,7 +3,7 @@ name: relay-review
 argument-hint: "[run-id or branch-name or PR-number]"
 description: Independent PR review against Done Criteria in a fresh context, free from planning bias. Use after dispatch completes and a PR exists.
 context: fork
-compatibility: "Must run in an isolated context to prevent planning bias (Claude Code: context: fork auto-handled; Codex/other: start a new session). Requires gh CLI."
+compatibility: "Requires gh CLI. Context isolation is enforced per-platform (see Context Isolation section)."
 metadata:
   related-skills: "relay, relay-plan, relay-dispatch, relay-merge"
 ---
@@ -11,6 +11,20 @@ metadata:
 # Relay Review
 
 Independent PR review against the Done Criteria contract and scoring rubric. Use `scripts/review-runner.js` so round count, reviewer invocation, PR comments, and manifest transitions stay script-managed.
+
+## Context Isolation
+
+Reviews MUST run in a fresh context — no prior planning, dispatch, or conversation history. This prevents planning bias from influencing the verdict.
+
+| Platform | Mechanism | How |
+|----------|-----------|-----|
+| Claude Code | `context: fork` frontmatter | Automatic — this SKILL.md's frontmatter triggers it |
+| Codex (reviewer adapter) | `--ephemeral --sandbox read-only` | Automatic — `invoke-reviewer-codex.js` passes these flags |
+| Claude (reviewer adapter) | `--bare --no-session-persistence` | Automatic — `invoke-reviewer-claude.js` passes these flags |
+| Codex (as orchestrator) | Start a new session | Manual — do not continue from the dispatch session |
+| Other / Fallback | Prefix prompt | Prepend: "You are reviewing code you did NOT write. You have no context about why it was written this way." |
+
+When using `--reviewer codex` or `--reviewer claude`, isolation is handled by the adapter scripts. When orchestrating manually or from an unsupported platform, you must ensure isolation yourself.
 
 ## Setup: Establish the anchor
 
