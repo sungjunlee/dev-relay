@@ -7,9 +7,9 @@
 
 ## The Problem
 
-You paste a task into an AI coding agent. It writes the code. You review the PR, but you wrote the prompt, so you're checking your own assumptions. Confirmation bias is unavoidable when the planner and the reviewer share the same context.
+You paste a task into an AI coding agent. It writes the code. You review the PR... but you wrote the prompt, so you're checking your own assumptions.
 
-dev-relay fixes this by running the review in a **forked context**. The reviewer has zero memory of the plan. It evaluates the diff against the acceptance criteria, not the prompt. If the code doesn't meet the rubric, it gets sent back. If the same issue shows up three rounds in a row, the run escalates instead of looping forever.
+dev-relay runs the review in a **forked context**. The reviewer has no memory of the plan. It scores the diff against acceptance criteria, not the prompt. If the code doesn't pass the rubric, it gets sent back. Same issue three rounds in a row, the run escalates.
 
 ## Who Is This For
 
@@ -91,36 +91,18 @@ Use individual skills when you want control over each phase:
 /relay-merge 123        # Gate-check -> explicit merge -> cleanup
 ```
 
-## What You Get vs. Manual AI Coding
+## What Changes
 
-| | Manual (copy-paste to AI) | dev-relay |
+| | Without relay | With relay |
 |---|---|---|
-| **Review independence** | Same context, confirmation bias | Fresh context, no planning memory |
-| **Audit trail** | Hope you saved the chat | Every round recorded in manifest + PR comments |
-| **Scope drift** | Invisible | Detected per-round, flagged in verdict |
-| **Convergence** | "Looks good enough" | Loop until rubric passes or escalate |
+| **Review independence** | Same context as the prompt | Reviewer has no memory of the plan |
+| **Audit trail** | Chat history, maybe | Every round in manifest + PR comments |
+| **Scope drift** | Not tracked | Detected per-round, flagged in verdict |
+| **Convergence** | Manual back-and-forth | Loop until rubric passes or escalate |
 | **Worktree isolation** | AI edits your working directory | Isolated worktree, your files untouched |
 | **Re-dispatch context** | Start over or copy-paste feedback | Prior scores + feedback auto-prepended |
-| **Merge safety** | Trust and merge | Gate check: stale review = blocked, CI must pass |
-| **Cleanup** | Forget to delete the branch | Worktree + branch + metadata cleaned automatically |
-
-## Before and After
-
-**Without dev-relay** (manual AI coding):
-1. Write a prompt describing the task
-2. Paste it into an AI agent
-3. Wait for the code
-4. Review the PR yourself (same context as the prompt)
-5. Notice something off, paste feedback, wait again
-6. Looks good enough... merge
-7. Forget to delete the branch and worktree
-
-**With dev-relay** (3 commands):
-1. `/relay-plan 42` ... builds a scoring rubric from the issue's acceptance criteria
-2. `/relay-dispatch` ... executor works in an isolated worktree, delivers a PR
-3. `/relay-review` ... independent reviewer scores against the rubric, re-dispatches if needed, posts a structured verdict. `/relay-merge` lands it after the gate check passes.
-
-The difference: step 4 above is where bias lives. dev-relay replaces it with a reviewer that has never seen your prompt.
+| **Merge safety** | Trust and merge | Gate check: stale review blocks merge |
+| **Cleanup** | Manual | Worktree + branch + metadata cleaned automatically |
 
 ## How It Works
 
@@ -279,13 +261,13 @@ Worktree isolation makes parallel dispatch safe. Each executor works in its own 
 
 ## Design Philosophy
 
-**Why context isolation?** The biggest risk in AI-assisted coding isn't wrong code. It's code that looks right because you already believe it should be right. When the same person writes the prompt and reviews the output, confirmation bias is structural, not a character flaw. dev-relay forces the reviewer into a clean context: it sees the diff, the acceptance criteria, and nothing else. No planning memory, no sunk cost, no "I already explained what I wanted."
+**Context isolation.** The reviewer runs in a forked context with no access to the planning prompt. It sees the diff and the acceptance criteria. This is the core design choice. Everything else follows from it.
 
-**Why rubric-based scoring?** "Looks good to me" is not a review methodology. A rubric defines what "good" means before the code is written. The executor self-evaluates against it during implementation. The reviewer re-scores independently. When scores diverge, that's signal. When they converge, that's confidence. Three-anchor scoring (low/mid/high examples per factor) prevents grade inflation.
+**Rubric-based scoring.** A rubric defines what "good" means before the code is written. The executor self-evaluates during implementation. The reviewer re-scores independently. Three-anchor scoring (low/mid/high examples per factor) keeps grading consistent across rounds.
 
-**Why manifests?** Every relay run produces a manifest at `~/.relay/runs/<repo-slug>/<run-id>.md`. It records who planned, who executed, who reviewed, what the policy was, and what happened. If a bug ships six months from now, you can trace back to the exact review verdict, the rubric scores, and the scope drift analysis. No database, no daemon. Just Markdown files with YAML frontmatter and an append-only event journal.
+**Manifests over prompts.** Every run produces a manifest at `~/.relay/runs/<repo-slug>/<run-id>.md`. It records who planned, who executed, who reviewed, what the policy was, and what happened. No database, no daemon. Markdown files with YAML frontmatter and an append-only event journal.
 
-**Why the state machine?** Eight states with enforced transitions prevent impossible operations. You can't merge without a review. You can't review without a dispatch. You can't re-dispatch without a changes_requested verdict. Direct state assignment is a bug. The machine makes illegal states unrepresentable.
+**State machine.** Eight states with enforced transitions. You can't merge without a review. You can't re-dispatch without a changes_requested verdict. Direct state assignment is a bug.
 
 ## State Machine
 
