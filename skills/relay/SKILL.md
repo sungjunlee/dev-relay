@@ -67,9 +67,15 @@ ${CLAUDE_SKILL_DIR}/../relay-dispatch/scripts/dispatch.js . \
   -b issue-<N> --prompt-file /tmp/dispatch-<N>.md --timeout 3600 --copy-env
 ```
 
+While dispatch runs in the background, optionally monitor progress:
+```bash
+git -C <worktree> log --oneline        # new commits
+wc -l <stdoutLog>                       # output growth
+```
+
 Wait for completion. Check result:
 - `status: "completed"` and `runState: "review_pending"` → proceed to Step 4
-- `status: "completed-with-warning"` and `runState: "review_pending"` → check worktree for uncommitted work, proceed to Step 4
+- `status: "completed-with-warning"` and `runState: "review_pending"` → executor timed out but made progress; check worktree, proceed to Step 4
 - `status: "failed"` and `runState: "escalated"` → inspect the dispatch error / manifest, fix and re-dispatch
 
 Capture the run metadata from dispatch output:
