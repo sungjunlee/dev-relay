@@ -5,9 +5,19 @@
 
 **Delegate implementation to AI agents. Keep planning and review in your hands.**
 
-dev-relay orchestrates the handoff between a planner, an executor, and a reviewer. You define what to build. The executor builds it in an isolated worktree. The reviewer evaluates the PR with fresh eyes, no planning bias. The result becomes ready to merge only after an auditable review trail exists.
+## The Problem
 
-Roles are bound per-run, not hardcoded. Any supported agent can plan, execute, or review.
+You paste a task into an AI coding agent. It writes the code. You review the PR, but you wrote the prompt, so you're checking your own assumptions. Confirmation bias is unavoidable when the planner and the reviewer share the same context.
+
+dev-relay fixes this by running the review in a **forked context**. The reviewer has zero memory of the plan. It evaluates the diff against the acceptance criteria, not the prompt. If the code doesn't meet the rubric, it gets sent back. If the same issue shows up three rounds in a row, the run escalates instead of looping forever.
+
+## Who Is This For
+
+- **Solo developers using AI** ... you need a second pair of eyes that isn't you
+- **Team leads delegating to AI agents** ... you need an audit trail proving the output was reviewed before merge
+- **Open-source maintainers** ... you need to evaluate AI-generated PRs against concrete criteria, not vibes
+
+## How It Flows
 
 ```
 Orchestrator             Executor                    GitHub
@@ -27,46 +37,7 @@ Orchestrator             Executor                    GitHub
  +-- cleanup + sprint update                           |
 ```
 
-## Why
-
-AI coding agents produce better results when given clear scope and independent review. dev-relay codifies this into a repeatable workflow:
-
-- **Separation of concerns** ... planning and review stay with you; implementation is delegated
-- **Agent-agnostic** ... Codex and Claude Code are supported as both executor and reviewer. Roles bind at run time.
-- **Bias-free review** ... the reviewer runs in a forked context with no memory of the plan
-- **Audit trail** ... every merge requires a documented review verdict on the PR
-- **Convergence loop** ... the reviewer can re-dispatch fixes until the PR meets the rubric, with scope drift detection across rounds
-- **Manifest-backed lifecycle** ... each run is a stateful contract with immutable role bindings, policy fields, and review anchors
-
-## State Machine
-
-Each relay run follows a manifest-backed state machine stored at `~/.relay/runs/<repo-slug>/<run-id>.md`:
-
-```
-  +----------+
-  |  draft   |-----------------------------------------+
-  +----+-----+                                         |
-       v                                               v
-  +-----------+                                  +---------+
-  | dispatched|------------------------+         | closed  |
-  +-----+-----+                        |         +---------+
-        v                              v              ^
-  +-----------------+            +-----------+        |
-  | review_pending  |----------->| escalated |--------+
-  +--+-----------+--+            +-----------+
-     |           |
-     v           v
-+-------------------+     +----------------+
-| changes_requested |     | ready_to_merge |
-+---------+---------+     +-------+--------+
-          |                       |
-          v (re-dispatch)         v
-     dispatched              +--------+
-                             | merged |
-                             +--------+
-```
-
-Terminal states: `merged`, `closed`. Transitions are enforced in code. Direct state assignment is a bug. An append-only event journal at `~/.relay/runs/<repo-slug>/<run-id>/events.jsonl` records every transition.
+Roles are bound at manifest creation time and serve as defaults. Any supported agent can plan, execute, or review. The reviewer can be overridden at review time with `--reviewer` or the `RELAY_REVIEWER` environment variable.
 
 ## Install
 
@@ -120,15 +91,36 @@ Use individual skills when you want control over each phase:
 /relay-merge 123        # Gate-check -> explicit merge -> cleanup
 ```
 
-## Skills
+## What You Get vs. Manual AI Coding
 
-| Command | Phase | Description |
-|---------|-------|-------------|
-| `/relay [issue]` | All | Full cycle through `ready_to_merge` |
-| `/relay-plan [issue]` | Plan | Build scoring rubric from acceptance criteria |
-| `/relay-dispatch` | Execute | Dispatch to executor via git worktree isolation |
-| `/relay-review [branch]` | Review | Independent PR review with convergence loop |
-| `/relay-merge [PR]` | Ship | Explicit merge after LGTM, cleanup worktree, update sprint |
+| | Manual (copy-paste to AI) | dev-relay |
+|---|---|---|
+| **Review independence** | Same context, confirmation bias | Fresh context, no planning memory |
+| **Audit trail** | Hope you saved the chat | Every round recorded in manifest + PR comments |
+| **Scope drift** | Invisible | Detected per-round, flagged in verdict |
+| **Convergence** | "Looks good enough" | Loop until rubric passes or escalate |
+| **Worktree isolation** | AI edits your working directory | Isolated worktree, your files untouched |
+| **Re-dispatch context** | Start over or copy-paste feedback | Prior scores + feedback auto-prepended |
+| **Merge safety** | Trust and merge | Gate check: stale review = blocked, CI must pass |
+| **Cleanup** | Forget to delete the branch | Worktree + branch + metadata cleaned automatically |
+
+## Before and After
+
+**Without dev-relay** (manual AI coding):
+1. Write a prompt describing the task
+2. Paste it into an AI agent
+3. Wait for the code
+4. Review the PR yourself (same context as the prompt)
+5. Notice something off, paste feedback, wait again
+6. Looks good enough... merge
+7. Forget to delete the branch and worktree
+
+**With dev-relay** (3 commands):
+1. `/relay-plan 42` ... builds a scoring rubric from the issue's acceptance criteria
+2. `/relay-dispatch` ... executor works in an isolated worktree, delivers a PR
+3. `/relay-review` ... independent reviewer scores against the rubric, re-dispatches if needed, posts a structured verdict. `/relay-merge` lands it after the gate check passes.
+
+The difference: step 4 above is where bias lives. dev-relay replaces it with a reviewer that has never seen your prompt.
 
 ## How It Works
 
@@ -235,18 +227,15 @@ After gate check passes:
 
 For hotfixes, `finalize-run.js --skip-review "reason"` bypasses the review gate while recording the skip reason in both the manifest and the PR. There's always a paper trail.
 
-## What You Get vs. Manual AI Coding
+## Skills
 
-| | Manual (copy-paste to AI) | dev-relay |
-|---|---|---|
-| **Review independence** | Same context, confirmation bias | Fresh context, no planning memory |
-| **Audit trail** | Hope you saved the chat | Every round recorded in manifest + PR comments |
-| **Scope drift** | Invisible | Detected per-round, flagged in verdict |
-| **Convergence** | "Looks good enough" | Loop until rubric passes or escalate |
-| **Worktree isolation** | AI edits your working directory | Isolated worktree, your files untouched |
-| **Re-dispatch context** | Start over or copy-paste feedback | Prior scores + feedback auto-prepended |
-| **Merge safety** | Trust and merge | Gate check: stale review = blocked, CI must pass |
-| **Cleanup** | Forget to delete the branch | Worktree + branch + metadata cleaned automatically |
+| Command | Phase | Description |
+|---------|-------|-------------|
+| `/relay [issue]` | All | Full cycle through `ready_to_merge` |
+| `/relay-plan [issue]` | Plan | Build scoring rubric from acceptance criteria |
+| `/relay-dispatch` | Execute | Dispatch to executor via git worktree isolation |
+| `/relay-review [branch]` | Review | Independent PR review with convergence loop |
+| `/relay-merge [PR]` | Ship | Explicit merge after LGTM, cleanup worktree, update sprint |
 
 ## Real-World Scenarios
 
@@ -288,6 +277,71 @@ Skip review is recorded in the audit trail. You'll see it later.
 
 Worktree isolation makes parallel dispatch safe. Each executor works in its own directory.
 
+## Design Philosophy
+
+**Why context isolation?** The biggest risk in AI-assisted coding isn't wrong code. It's code that looks right because you already believe it should be right. When the same person writes the prompt and reviews the output, confirmation bias is structural, not a character flaw. dev-relay forces the reviewer into a clean context: it sees the diff, the acceptance criteria, and nothing else. No planning memory, no sunk cost, no "I already explained what I wanted."
+
+**Why rubric-based scoring?** "Looks good to me" is not a review methodology. A rubric defines what "good" means before the code is written. The executor self-evaluates against it during implementation. The reviewer re-scores independently. When scores diverge, that's signal. When they converge, that's confidence. Three-anchor scoring (low/mid/high examples per factor) prevents grade inflation.
+
+**Why manifests?** Every relay run produces a manifest at `~/.relay/runs/<repo-slug>/<run-id>.md`. It records who planned, who executed, who reviewed, what the policy was, and what happened. If a bug ships six months from now, you can trace back to the exact review verdict, the rubric scores, and the scope drift analysis. No database, no daemon. Just Markdown files with YAML frontmatter and an append-only event journal.
+
+**Why the state machine?** Eight states with enforced transitions prevent impossible operations. You can't merge without a review. You can't review without a dispatch. You can't re-dispatch without a changes_requested verdict. Direct state assignment is a bug. The machine makes illegal states unrepresentable.
+
+## State Machine
+
+Each relay run follows a manifest-backed state machine stored at `~/.relay/runs/<repo-slug>/<run-id>.md`:
+
+```mermaid
+stateDiagram-v2
+    [*] --> draft
+    draft --> dispatched
+    draft --> closed
+    dispatched --> review_pending
+    dispatched --> escalated
+    dispatched --> closed
+    review_pending --> changes_requested
+    review_pending --> ready_to_merge
+    review_pending --> escalated
+    review_pending --> closed
+    changes_requested --> dispatched : re-dispatch
+    changes_requested --> closed
+    ready_to_merge --> merged
+    ready_to_merge --> closed
+    escalated --> closed
+    merged --> [*]
+    closed --> [*]
+```
+
+<details>
+<summary>ASCII fallback (for non-GitHub viewers)</summary>
+
+```
+  +----------+
+  |  draft   |-----------------------------------------+
+  +----+-----+                                         |
+       v                                               v
+  +-----------+                                  +---------+
+  | dispatched|------------------------+         | closed  |
+  +-----+-----+                        |         +---------+
+        v                              v              ^
+  +-----------------+            +-----------+        |
+  | review_pending  |----------->| escalated |--------+
+  +--+-----------+--+            +-----------+
+     |           |
+     v           v
++-------------------+     +----------------+
+| changes_requested |     | ready_to_merge |
++---------+---------+     +-------+--------+
+          |                       |
+          v (re-dispatch)         v
+     dispatched              +--------+
+                             | merged |
+                             +--------+
+```
+</details>
+
+Terminal states: `merged`, `closed`. Transitions are enforced in code. Direct state assignment is a bug. An append-only event journal at `~/.relay/runs/<repo-slug>/<run-id>/events.jsonl` records every transition.
+
 ## Extending
 
 dev-relay is designed to support new agents. No framework changes needed.
@@ -301,7 +355,7 @@ dev-relay is designed to support new agents. No framework changes needed.
 
 2. Add an execution branch in the same file to wire up CLI arguments for the new executor
 
-3. Optional: app registration uses `create-worktree.js --register` (executor-agnostic)
+3. Optional: app registration uses `create-worktree.js --register` (currently Codex-only, [#87](https://github.com/sungjunlee/dev-relay/issues/87) tracks broader support)
 
 ### Adding a new reviewer
 
@@ -312,7 +366,7 @@ dev-relay is designed to support new agents. No framework changes needed.
 
 ### Role binding
 
-Roles are set at manifest creation time and are immutable for the run:
+Roles are set at manifest creation time and serve as defaults for the run:
 
 ```yaml
 roles:
@@ -376,25 +430,50 @@ For sprint-level orchestration, pair it with [dev-backlog](https://github.com/su
 - **Sprint files** organize execution (batching, ordering, context, progress)
 - **relay** reads from both, updates sprint files at each phase
 
-## Design Decisions
+## Known Limitations
 
-| Decision | Rationale |
-|----------|-----------|
-| PR as handoff boundary | Clean separation between execution and review; standard GitHub workflow |
-| Manifest-backed lifecycle | Roles, state, policy, and review anchors in `~/.relay/runs/`, not transient prompts |
-| Fresh-context review | Prevents confirmation bias. The reviewer evaluates the diff, not the plan |
-| Rubric-based scoring | Executor self-evaluates during implementation; reviewer re-scores independently |
-| Gate check before merge | Every merge has an audit trail; stale reviews block merge |
-| Worktree isolation | Executor can't affect your working directory; parallel dispatches are safe |
-| Agent-agnostic roles | Executors and reviewers are adapters, not hardcoded. New agents added by convention |
-| Scope drift detection | Creep and missing criteria tracked across review rounds, not just eyeballed |
-| Stateless by default | No database, no daemon. State lives in manifests, GitHub, and optional sprint files |
+- **Nested Codex GitHub API calls**: When Codex runs as executor inside a nested session, `gh pr create` and some `gh` API calls can fail with `error connecting to api.github.com`, even when `git push` succeeds. Workaround: create the PR manually against the already-pushed branch, or rerun the orchestrator without sandboxing.
+- **Sandbox sensitivity**: `codex exec --full-auto` and stricter sandbox modes behave differently for GitHub reachability. If the executor can push but can't create a PR, try a less restrictive sandbox setting.
+- **Sprint-file automation is partial**: The relay loop works end-to-end, but plan status transitions (`[ ] -> [~] -> [x]`) and merge-time Running Context updates in sprint files still require manual intervention.
+
+See [docs/codex-orchestrator-e2e-validation-2026-04-03.md](docs/codex-orchestrator-e2e-validation-2026-04-03.md) for the full validation report.
+
+## FAQ
+
+**Does this replace human code review?**
+No. It adds an independent AI review layer. The reviewer catches rubric failures, scope drift, and structural issues. Human review still makes sense for product decisions, UX judgment, and domain-specific concerns.
+
+**Can I use Claude Code without Codex, or vice versa?**
+Yes. Either works as both executor and reviewer. Set the executor with `--executor codex` or `--executor claude`. Set the reviewer with `--reviewer codex` or `--reviewer claude`. Mix and match.
+
+**What if the AI hallucinates or writes broken code?**
+The rubric scoring and convergence loop catch it. Automated checks (tests, type checks) must pass. Evaluated factors are scored against defined anchors. If the code doesn't converge after the configured maximum rounds (default 20), the run escalates instead of merging broken code.
+
+**Does this work with other LLMs beyond Claude and Codex?**
+The executor and reviewer are adapters. Adding a new one means creating one file (`invoke-reviewer-<name>.js` or a dispatch branch) that wires up the CLI. See [Extending](#extending).
+
+**Do I need GitHub?**
+Yes. GitHub PRs are the handoff boundary between executor and reviewer. The gate check, audit trail, and merge flow all use GitHub's API. GitLab and other forges are not currently supported.
 
 ## Contributing
 
 Issues and PRs welcome. Please open an issue first for non-trivial changes.
 
-See [Extending](#extending) for how to add new executors and reviewers.
+### Where to start
+
+- **Good first issues**: Look for the [`good first issue`](https://github.com/sungjunlee/dev-relay/labels/good%20first%20issue) label
+- **Add a new executor or reviewer**: See [Extending](#extending) for the adapter pattern
+- **Architecture overview**: See [CLAUDE.md](CLAUDE.md) for the project structure and design decisions
+- **Reference docs**: See [references/architecture.md](references/architecture.md) for the manifest schema, state transitions, and extension points
+
+### Running tests
+
+```bash
+node --test skills/relay-plan/scripts/*.test.js
+node --test skills/relay-dispatch/scripts/*.test.js
+node --test skills/relay-review/scripts/*.test.js
+node --test skills/relay-merge/scripts/*.test.js
+```
 
 ## License
 
