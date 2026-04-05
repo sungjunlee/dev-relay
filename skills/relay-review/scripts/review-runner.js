@@ -159,6 +159,8 @@ function resolveIssueNumber(repoPath, prNumber, branch, manifestData) {
 function loadDoneCriteria(repoPath, issueNumber, prNumber, doneCriteriaFile) {
   if (doneCriteriaFile) return readText(doneCriteriaFile).trim();
 
+  const errors = [];
+
   // Fallback 1: GitHub issue body
   if (issueNumber) {
     try {
@@ -166,7 +168,9 @@ function loadDoneCriteria(repoPath, issueNumber, prNumber, doneCriteriaFile) {
       const parsed = JSON.parse(raw);
       const text = `# Issue #${parsed.number}: ${parsed.title}\n\n${String(parsed.body || "").trim()}`.trim();
       if (text) return text;
-    } catch {}
+    } catch (e) {
+      errors.push(`issue #${issueNumber}: ${e.message.split("\n")[0]}`);
+    }
   }
 
   // Fallback 2: PR description (executors often paste AC into the PR body)
@@ -176,11 +180,14 @@ function loadDoneCriteria(repoPath, issueNumber, prNumber, doneCriteriaFile) {
       const parsed = JSON.parse(raw);
       const body = String(parsed.body || "").trim();
       if (body) return `# PR #${parsed.number}: ${parsed.title}\n\n${body}`.trim();
-    } catch {}
+    } catch (e) {
+      errors.push(`PR #${prNumber}: ${e.message.split("\n")[0]}`);
+    }
   }
 
+  const detail = errors.length ? ` Attempted: ${errors.join("; ")}` : "";
   throw new Error(
-    "Cannot resolve Done Criteria: no issue, no PR description. " +
+    `Cannot resolve Done Criteria: no issue, no PR description.${detail} ` +
     "Provide --done-criteria-file for tasks without a GitHub issue."
   );
 }
