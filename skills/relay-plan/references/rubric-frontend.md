@@ -68,3 +68,17 @@ Scoring guide:
 - **low**: Text is readable but buttons are untappable, horizontal scrolling appears, hover tooltips are the only way to see critical info.
 - **mid**: Touch targets adequate, no overflow, but content priority doesn't shift for mobile — it's a shrunken desktop.
 - **high**: Content priority rethought for mobile, correct input types, touch-first interactions with no hover dependencies.
+
+## Tool → Automated Check Mapping
+
+If the executor environment has these tools, consider converting evaluated factors to automated:
+
+| Tool | Automated check | Replaces evaluated |
+|------|----------------|-------------------|
+| Playwright / `@playwright/test` | `npx playwright test` → exit 0 | Interaction fidelity (partial) |
+| Lighthouse CI | `lhci autorun` → score ≥ threshold | Perceived performance |
+| axe-core / `@axe-core/cli` | `npx axe --exit <url>` → 0 violations | Accessibility |
+| pa11y | `npx pa11y <url> --threshold 0` → exit 0 | Accessibility |
+| Storybook + chromatic | `npx chromatic --exit-zero-on-changes=false` | Visual regression |
+| bundlesize / size-limit | `npx bundlesize` or `npx size-limit` → exit 0 | Bundle budget |
+| `/browse` skill | Headless screenshot + visual diff | Responsive integrity (partial) |

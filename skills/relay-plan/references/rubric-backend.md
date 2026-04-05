@@ -71,3 +71,16 @@ Scoring guide:
 - **low**: Inconsistent field naming, errors as plaintext, unbounded list responses, breaking changes without versioning.
 - **mid**: Consistent naming and structured error schema, but no pagination or versioning awareness.
 - **high**: All four criteria met — consistent, structured, paginated, versioning-aware. Contract is predictable and safe.
+
+## Tool → Automated Check Mapping
+
+If the executor environment has these tools, consider converting evaluated factors to automated:
+
+| Tool | Automated check | Replaces evaluated |
+|------|----------------|-------------------|
+| Jest / Vitest / pytest | `npm test` or `pytest` → exit 0 | Correctness (partial) |
+| Playwright / Cypress | `npx playwright test` → exit 0 | E2E integration flows |
+| gitleaks | `npx gitleaks detect --no-git` → 0 findings | Secrets in code |
+| eslint + security plugins | `npx eslint --max-warnings 0` → exit 0 | Code quality baseline |
+| k6 / autocannon | `k6 run load-test.js` → p95 < threshold | Response time under load |
+| `/browse` skill | Hit endpoints, verify response structure | API contract clarity (partial) |
