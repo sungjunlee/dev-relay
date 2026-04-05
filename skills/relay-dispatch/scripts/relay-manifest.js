@@ -367,6 +367,7 @@ function createManifestSkeleton({
       repeated_issue_count: 0,
       last_reviewed_sha: null,
     },
+    previous_attempts_count: 0,
     cleanup: createCleanupSkeleton(),
     timestamps: {
       created_at: createdAt,
@@ -513,16 +514,76 @@ function runCleanup({ repoRoot, data, gitBin = "git", dryRun = false, deleteMerg
   };
 }
 
+// ---------------------------------------------------------------------------
+// Previous attempts (stored as JSON in the run directory)
+// ---------------------------------------------------------------------------
+
+function getAttemptsPath(repoRoot, runId) {
+  return path.join(getRunDir(repoRoot, runId), "previous-attempts.json");
+}
+
+function readPreviousAttempts(repoRoot, runId) {
+  const attemptsPath = getAttemptsPath(repoRoot, runId);
+  if (!fs.existsSync(attemptsPath)) return [];
+  return JSON.parse(fs.readFileSync(attemptsPath, "utf-8"));
+}
+
+function captureAttempt(repoRoot, runId, attemptData) {
+  if (!runId) {
+    throw new Error("run_id is required to capture an attempt");
+  }
+  if (!attemptData || typeof attemptData !== "object") {
+    throw new Error("attemptData must be an object");
+  }
+
+  ensureRunLayout(repoRoot, runId);
+  const attempts = readPreviousAttempts(repoRoot, runId);
+  const record = {
+    dispatch_number: attempts.length + 1,
+    timestamp: attemptData.timestamp || nowIso(),
+    score_log: attemptData.score_log || null,
+    reviewer_feedback: attemptData.reviewer_feedback || null,
+    failed_approaches: attemptData.failed_approaches || [],
+  };
+  attempts.push(record);
+  fs.writeFileSync(getAttemptsPath(repoRoot, runId), JSON.stringify(attempts, null, 2), "utf-8");
+  return record;
+}
+
+function formatAttemptsForPrompt(attempts) {
+  if (!attempts || attempts.length === 0) return "";
+
+  const sections = attempts.map((attempt) => {
+    const lines = [`## Previous Attempt (dispatch #${attempt.dispatch_number})`];
+    if (attempt.score_log) {
+      lines.push("", "### Score Log", attempt.score_log);
+    }
+    if (attempt.reviewer_feedback) {
+      lines.push("", "### Reviewer Feedback", attempt.reviewer_feedback);
+    }
+    if (attempt.failed_approaches && attempt.failed_approaches.length > 0) {
+      lines.push("", "### Do NOT Repeat");
+      attempt.failed_approaches.forEach((a) => lines.push(`- ${a}`));
+    }
+    return lines.join("\n");
+  });
+
+  return sections.join("\n\n") + "\n\n";
+}
+
 module.exports = {
   ALLOWED_TRANSITIONS,
   CLEANUP_STATUSES,
   NOTES_TEMPLATE,
   RELAY_VERSION,
   STATES,
+  captureAttempt,
   createCleanupSkeleton,
   createManifestSkeleton,
   createRunId,
   ensureRunLayout,
+  formatAttemptsForPrompt,
+  getAttemptsPath,
   getEventsPath,
   getManifestPath,
   getRelayHome,
@@ -536,6 +597,7 @@ module.exports = {
   listManifestPaths,
   parseFrontmatter,
   readManifest,
+  readPreviousAttempts,
   runCleanup,
   summarizeError,
   updateManifestCleanup,
