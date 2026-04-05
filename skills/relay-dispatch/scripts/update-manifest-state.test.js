@@ -28,7 +28,7 @@ function writeReviewPendingManifest(repoRoot, runId, branch, updatedAt) {
     issueNumber: 42,
     worktreePath: path.join(repoRoot, "wt", runId),
     orchestrator: "codex",
-    worker: "codex",
+    executor: "codex",
     reviewer: "claude",
   });
   manifest = updateManifestState(manifest, STATES.DISPATCHED, "await_dispatch_result");

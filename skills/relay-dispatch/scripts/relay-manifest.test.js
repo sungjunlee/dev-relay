@@ -44,7 +44,7 @@ test("manifest round-trips through frontmatter helpers", () => {
     issueNumber: 42,
     worktreePath,
     orchestrator: "codex",
-    worker: "codex",
+    executor: "codex",
     reviewer: "claude",
   });
 
@@ -74,7 +74,7 @@ test("manifest round-trips multiline scalar values", () => {
     issueNumber: 42,
     worktreePath,
     orchestrator: "codex",
-    worker: "codex",
+    executor: "codex",
     reviewer: "claude",
   });
   manifest.cleanup.error = "dirty worktree: M README.md\n?? docs/direct-read-relay-operator-note.md";
@@ -86,6 +86,32 @@ test("manifest round-trips multiline scalar values", () => {
     parsed.data.cleanup.error,
     "dirty worktree: M README.md\n?? docs/direct-read-relay-operator-note.md"
   );
+});
+
+test("readManifest migrates v1 roles.worker to roles.executor", () => {
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-migrate-"));
+  const runId = "migrate-v1-20260402103000";
+  const wtPath = path.join(tmpRoot, "wt");
+  const { manifestPath } = ensureRunLayout(tmpRoot, runId);
+  const manifest = createManifestSkeleton({
+    repoRoot: tmpRoot,
+    runId,
+    branch: "migrate-v1",
+    baseBranch: "main",
+    issueNumber: 99,
+    worktreePath: wtPath,
+    orchestrator: "codex",
+    executor: "codex",
+    reviewer: "claude",
+  });
+  // Simulate a v1 manifest: rename executor back to worker
+  manifest.roles.worker = manifest.roles.executor;
+  delete manifest.roles.executor;
+  writeManifest(manifestPath, manifest);
+
+  const parsed = readManifest(manifestPath);
+  assert.equal(parsed.data.roles.executor, "codex");
+  assert.equal(parsed.data.roles.worker, undefined);
 });
 
 test("updateManifestState allows valid transitions and rejects invalid ones", () => {

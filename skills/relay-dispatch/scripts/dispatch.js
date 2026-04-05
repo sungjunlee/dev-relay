@@ -3,8 +3,7 @@
  * Create a worktree and dispatch a task to an executor.
  *
  * Executor-agnostic orchestrator: worktree -> execute -> collect -> retain.
- * To add a new executor, add a branch in the "Execute task" section
- * and optionally create a register-{executor}.js for app integration.
+ * To add a new executor, add a branch in the "Execute task" section.
  *
  * Designed for Claude Code's Bash(run_in_background=true) pattern.
  *
@@ -226,13 +225,10 @@ function shellQuote(s) {
 // ---------------------------------------------------------------------------
 
 function main() {
-  // Worktree location: executor-specific for app integration.
-  // Codex App discovers sessions in ~/.codex/worktrees/.
-  // To add a new executor: add an entry here (or fall back to tmpdir).
-  const WORKTREE_BASES = {
-    codex: path.join(process.env.CODEX_HOME || path.join(os.homedir(), ".codex"), "worktrees"),
-  };
-  const wtBase = WORKTREE_BASES[EXECUTOR] || path.join(os.tmpdir(), "dispatch-worktrees");
+  // Worktree location: relay-owned, executor-agnostic.
+  // All executors share the same base — manifest tracks the exact path.
+  const RELAY_HOME = process.env.RELAY_HOME || path.join(os.homedir(), ".relay");
+  const wtBase = process.env.RELAY_WORKTREE_BASE || path.join(RELAY_HOME, "worktrees");
   const wtId = crypto.randomBytes(4).toString("hex");
   let repoRoot = REPO_PATH;
   let projectName = PROJECT_NAME;
@@ -383,7 +379,7 @@ function main() {
       issueNumber,
       worktreePath: wtPath,
       orchestrator: process.env.RELAY_ORCHESTRATOR || "unknown",
-      worker: EXECUTOR,
+      executor: EXECUTOR,
       reviewer: process.env.RELAY_REVIEWER || "unknown",
       cleanupPolicy,
     });
@@ -393,7 +389,7 @@ function main() {
 
   // --- Step 3: Execute task ---
   // Executor-specific: build command + args + handle quirks.
-  // To add a new executor: add a branch here + optional register-{name}.js.
+  // To add a new executor: add a branch here.
 
   let cmd, execArgs, execOpts;
 
@@ -580,8 +576,10 @@ function main() {
   // --- Step 4.5: Optional app registration ---
   let threadId = null;
   if (REGISTER && status !== "failed") {
-    const registerScript = path.join(__dirname, `register-${EXECUTOR}.js`);
-    if (fs.existsSync(registerScript)) {
+    const registerScript = path.join(__dirname, "create-worktree.js");
+    if (!fs.existsSync(registerScript)) {
+      if (!JSON_OUT) console.log(`\n  Warning: create-worktree.js not found — --register skipped`);
+    } else {
       try {
         const regOutput = execFileSync("node", [
           registerScript, repoRoot,

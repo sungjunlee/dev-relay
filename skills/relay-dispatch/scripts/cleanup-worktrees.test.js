@@ -49,7 +49,7 @@ function writeRun(repoRoot, { branch, state, updatedAt }) {
     issueNumber: 42,
     worktreePath,
     orchestrator: "codex",
-    worker: "codex",
+    executor: "codex",
     reviewer: "codex",
   });
   manifest = updateManifestState(manifest, STATES.DISPATCHED, "await_dispatch_result");
