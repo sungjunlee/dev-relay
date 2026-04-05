@@ -226,13 +226,10 @@ function shellQuote(s) {
 // ---------------------------------------------------------------------------
 
 function main() {
-  // Worktree location: executor-specific for app integration.
-  // Codex App discovers sessions in ~/.codex/worktrees/.
-  // To add a new executor: add an entry here (or fall back to tmpdir).
-  const WORKTREE_BASES = {
-    codex: path.join(process.env.CODEX_HOME || path.join(os.homedir(), ".codex"), "worktrees"),
-  };
-  const wtBase = WORKTREE_BASES[EXECUTOR] || path.join(os.tmpdir(), "dispatch-worktrees");
+  // Worktree location: relay-owned, executor-agnostic.
+  // All executors share the same base — manifest tracks the exact path.
+  const RELAY_HOME = process.env.RELAY_HOME || path.join(os.homedir(), ".relay");
+  const wtBase = process.env.RELAY_WORKTREE_BASE || path.join(RELAY_HOME, "worktrees");
   const wtId = crypto.randomBytes(4).toString("hex");
   let repoRoot = REPO_PATH;
   let projectName = PROJECT_NAME;

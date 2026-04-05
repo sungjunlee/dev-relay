@@ -2,9 +2,8 @@
 /**
  * Create a git worktree for Codex and optionally register it in Codex App state.
  *
- * Creates a worktree in ~/.codex/worktrees/ (Codex's managed location).
- * When codex exec runs there, the session auto-registers on next App restart.
- * Use --register to pre-register in SQLite for title/pin support.
+ * Creates a worktree in ~/.relay/worktrees/ (relay-owned location).
+ * Use --register to pre-register in Codex App SQLite for title/pin support.
  * Use --worktree-path to register an existing worktree (e.g., from dispatch.js).
  *
  * Usage:
@@ -94,8 +93,9 @@ const SANDBOX_POLICY = "workspaceWrite";
 const APPROVAL_MODE = "onFailure";
 const MEMORY_MODE = "enabled";
 
+const RELAY_HOME = process.env.RELAY_HOME || path.join(os.homedir(), ".relay");
+const WORKTREES_DIR = process.env.RELAY_WORKTREE_BASE || path.join(RELAY_HOME, "worktrees");
 const CODEX_HOME = process.env.CODEX_HOME || path.join(os.homedir(), ".codex");
-const WORKTREES_DIR = path.join(CODEX_HOME, "worktrees");
 const STATE_DB = path.join(CODEX_HOME, "state_5.sqlite");
 const GLOBAL_STATE = path.join(CODEX_HOME, ".codex-global-state.json");
 const SESSION_INDEX = path.join(CODEX_HOME, "session_index.jsonl");
