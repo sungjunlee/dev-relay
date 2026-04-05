@@ -31,7 +31,7 @@ const {
 } = require("../../relay-dispatch/scripts/relay-manifest");
 const { resolveManifestRecord } = require("../../relay-dispatch/scripts/relay-resolver");
 const { appendRunEvent } = require("../../relay-dispatch/scripts/relay-events");
-const { runCleanup, summarizeError } = require("../../relay-dispatch/scripts/relay-cleanup");
+const { runCleanup, summarizeError } = require("../../relay-dispatch/scripts/relay-manifest");
 const { buildSkipComment, evaluateReviewGate } = require("./review-gate");
 
 const args = process.argv.slice(2);

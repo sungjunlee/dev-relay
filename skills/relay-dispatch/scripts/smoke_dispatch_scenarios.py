@@ -11,7 +11,7 @@ import subprocess
 import tempfile
 
 
-ROOT = pathlib.Path("/Users/sjlee/workspace/active/harness-stack/dev-relay")
+ROOT = pathlib.Path(__file__).resolve().parents[3]
 DISPATCH = ROOT / "skills/relay-dispatch/scripts/dispatch.js"
 
 
