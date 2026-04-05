@@ -11,6 +11,13 @@
 - Dependencies available: [e.g., "passport-oauth2 already installed"]
 - Related issue: #N
 
+## Available Tools
+[Output from probe-executor-env.js — include if probe was run]
+- Agent skills: [e.g., /browse, /playwright-cli]
+- MCP tools: [e.g., sequential-thinking]
+- Project: [e.g., npm test, npm run lint, make build]
+Use these tools during implementation and self-review iteration.
+
 ## Done Criteria
 - [Specific, verifiable items]
 - [What should change]
