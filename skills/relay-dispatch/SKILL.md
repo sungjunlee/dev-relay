@@ -90,13 +90,13 @@ Successful dispatches retain the worktree by default. Use the returned `runId`, 
 
 | Failure | Action |
 |---|---|
-| Timeout | Increase `--timeout` or split task into smaller pieces |
+| Timeout (with commits) | Executor exceeded `--timeout` but made progress — dispatch reports `completed-with-warning`. Check worktree for uncommitted changes, proceed to review |
+| Timeout (no commits) | Increase `--timeout` or split task into smaller pieces |
 | Executor error (non-zero exit) | Read result file for error details; fix prompt and re-dispatch |
 | No commits made | Prompt was unclear or task was impossible; revise and re-dispatch |
 | No PR created | Executor may have committed but not pushed PR; check `git log` in worktree |
 | Branch conflicts | Resolve in worktree or create fresh worktree from updated main |
 | Network/transient error | Wait 30s, retry once. If it fails again, escalate to user |
-| ENOBUFS (buffer overflow) | Executor output exceeded buffer. Work is likely complete — dispatch reports `completed-with-warning`. Check worktree for uncommitted changes, commit manually if needed, then proceed to review |
 
 ## Background & Parallel
 
