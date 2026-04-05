@@ -55,7 +55,7 @@ git:
 
 roles:
   orchestrator: codex           # who drives the lifecycle
-  worker: codex                 # who implements
+  executor: codex               # who implements
   reviewer: claude              # who reviews (isolated)
 
 paths:
@@ -168,7 +168,7 @@ Roles are set at manifest creation time in `createManifestSkeleton()`:
 ```js
 roles: {
   orchestrator: "codex",   // or "claude", future: any agent
-  worker: "codex",
+  executor: "codex",
   reviewer: "claude",
 }
 ```

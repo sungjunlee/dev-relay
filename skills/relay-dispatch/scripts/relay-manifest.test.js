@@ -44,7 +44,7 @@ test("manifest round-trips through frontmatter helpers", () => {
     issueNumber: 42,
     worktreePath,
     orchestrator: "codex",
-    worker: "codex",
+    executor: "codex",
     reviewer: "claude",
   });
 
@@ -74,7 +74,7 @@ test("manifest round-trips multiline scalar values", () => {
     issueNumber: 42,
     worktreePath,
     orchestrator: "codex",
-    worker: "codex",
+    executor: "codex",
     reviewer: "claude",
   });
   manifest.cleanup.error = "dirty worktree: M README.md\n?? docs/direct-read-relay-operator-note.md";

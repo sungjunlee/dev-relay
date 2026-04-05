@@ -26,7 +26,7 @@ function writeRun(repoRoot, { runId, state, rounds, updatedAt }) {
     issueNumber: 42,
     worktreePath: path.join(repoRoot, "wt", runId),
     orchestrator: "codex",
-    worker: "codex",
+    executor: "codex",
     reviewer: "codex",
   });
   manifest = updateManifestState(manifest, STATES.DISPATCHED, "await_dispatch_result");

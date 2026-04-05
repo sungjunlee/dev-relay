@@ -82,7 +82,7 @@ git:
 
 roles:
   orchestrator: codex
-  worker: claude
+  executor: claude
   reviewer: codex
 
 paths:

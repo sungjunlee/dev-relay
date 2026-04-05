@@ -379,7 +379,7 @@ function main() {
       issueNumber,
       worktreePath: wtPath,
       orchestrator: process.env.RELAY_ORCHESTRATOR || "unknown",
-      worker: EXECUTOR,
+      executor: EXECUTOR,
       reviewer: process.env.RELAY_REVIEWER || "unknown",
       cleanupPolicy,
     });
