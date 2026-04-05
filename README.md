@@ -13,9 +13,9 @@ dev-relay fixes this by running the review in a **forked context**. The reviewer
 
 ## Who Is This For
 
-- **Solo developers using AI** ... you need a second pair of eyes that isn't you
-- **Team leads delegating to AI agents** ... you need an audit trail proving the output was reviewed before merge
-- **Open-source maintainers** ... you need to evaluate AI-generated PRs against concrete criteria, not vibes
+Built for **solo developers using AI agents** who need a second pair of eyes that isn't themselves. That's where it's battle-tested today.
+
+The design should also fit team leads delegating work to AI agents (audit trail per merge) and open-source maintainers evaluating AI-generated PRs (rubric-based scoring instead of vibes). Those are plausible next steps, not proven yet.
 
 ## How It Flows
 
