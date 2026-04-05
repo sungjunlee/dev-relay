@@ -210,23 +210,22 @@ function probeAgent(executor, timeout) {
 }
 
 function extractJsonArray(text) {
-  // Find the first '[' and try to parse balanced brackets from there.
-  const start = text.indexOf("[");
-  if (start === -1) return null;
+  // Try each '[' as a potential start, then each subsequent ']' as end.
+  // Relies on JSON.parse for correctness (handles brackets inside strings).
+  let searchFrom = 0;
+  while (searchFrom < text.length) {
+    const start = text.indexOf("[", searchFrom);
+    if (start === -1) return null;
 
-  let depth = 0;
-  for (let i = start; i < text.length; i++) {
-    if (text[i] === "[") depth++;
-    else if (text[i] === "]") depth--;
-    if (depth === 0) {
-      const candidate = text.slice(start, i + 1);
-      try {
-        const parsed = JSON.parse(candidate);
-        if (Array.isArray(parsed)) return parsed;
-      } catch {}
-      // Not valid JSON at this bracket boundary — keep scanning
-      return null;
+    for (let i = start + 1; i < text.length; i++) {
+      if (text[i] === "]") {
+        try {
+          const parsed = JSON.parse(text.slice(start, i + 1));
+          if (Array.isArray(parsed)) return parsed;
+        } catch {}
+      }
     }
+    searchFrom = start + 1;
   }
   return null;
 }

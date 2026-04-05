@@ -152,13 +152,22 @@ test("parseProbeOutput returns error for plain object with no array", () => {
   assert.equal(result.tools.length, 0);
 });
 
-test("parseProbeOutput handles noise between multiple bracket pairs", () => {
-  // With balanced bracket extraction, should get the first valid array
-  const output = 'Some text [{"name":"a","type":"skill","description":"d"}] more text [invalid]';
+test("parseProbeOutput handles noise before the JSON array", () => {
+  const output = 'Here are the available tools:\n[{"name":"a","type":"skill","description":"d"}]\nEnd.';
   const result = parseProbeOutput(output);
   assert.equal(result.error, null);
   assert.equal(result.tools.length, 1);
   assert.equal(result.tools[0].name, "a");
+});
+
+test("parseProbeOutput handles brackets inside JSON string values", () => {
+  const output = JSON.stringify([
+    { name: "tool[1]", type: "skill", description: "has ] bracket" },
+  ]);
+  const result = parseProbeOutput(output);
+  assert.equal(result.error, null);
+  assert.equal(result.tools.length, 1);
+  assert.equal(result.tools[0].name, "tool[1]");
 });
 
 // ---------------------------------------------------------------------------
