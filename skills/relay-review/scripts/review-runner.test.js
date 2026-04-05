@@ -145,6 +145,7 @@ test("pass verdict moves review_pending to ready_to_merge", () => {
     next_action: "ready_to_merge",
     issues: [],
     rubric_scores: [],
+    scope_drift: { creep: [], missing: [] },
   });
 
   const stdout = execFileSync("node", [
@@ -184,6 +185,7 @@ test("pass verdict rejects quality_status=not_run", () => {
     next_action: "ready_to_merge",
     issues: [],
     rubric_scores: [],
+    scope_drift: { creep: [], missing: [] },
   });
 
   assert.throws(() => execFileSync("node", [
@@ -225,6 +227,7 @@ test("changes_requested verdict creates a re-dispatch artifact", () => {
       },
     ],
     rubric_scores: [],
+    scope_drift: { creep: [], missing: [] },
   });
 
   const stdout = execFileSync("node", [
@@ -265,6 +268,7 @@ test("reviewer-script invocation can drive a round without --review-file", () =>
     next_action: "ready_to_merge",
     issues: [],
     rubric_scores: [],
+    scope_drift: { creep: [], missing: [] },
   });
 
   const stdout = execFileSync("node", [
@@ -310,6 +314,7 @@ test("invalid pass verdict is rejected", () => {
       },
     ],
     rubric_scores: [],
+    scope_drift: { creep: [], missing: [] },
   });
 
   assert.throws(() => execFileSync("node", [
@@ -342,6 +347,7 @@ test("invalid rubric score entry is rejected", () => {
         status: "pass",
       },
     ],
+    scope_drift: { creep: [], missing: [] },
   });
 
   assert.throws(() => execFileSync("node", [
@@ -367,6 +373,7 @@ test("reviewer write policy violation escalates the manifest", () => {
     next_action: "ready_to_merge",
     issues: [],
     rubric_scores: [],
+    scope_drift: { creep: [], missing: [] },
   });
 
   assert.throws(() => execFileSync("node", [
@@ -416,7 +423,8 @@ process.stdout.write(JSON.stringify({
     category: "contract",
     severity: "high"
   }],
-  rubric_scores: []
+  rubric_scores: [],
+  scope_drift: { creep: [], missing: [] }
 }));
 `, "utf-8");
   fs.chmodSync(reviewerScript, 0o755);
@@ -483,6 +491,7 @@ test("repeated identical issues escalate on the third consecutive round", () => 
       },
     ],
     rubric_scores: [],
+    scope_drift: { creep: [], missing: [] },
   });
 
   for (let round = 1; round <= 3; round += 1) {
@@ -573,6 +582,7 @@ test("round 2 review prompt contains Prior Round Context section", () => {
       severity: "high",
     }],
     rubric_scores: [],
+    scope_drift: { creep: [], missing: [] },
   });
 
   execFileSync("node", [
@@ -630,6 +640,7 @@ test("round 2 redispatch artifact contains prior round summary", () => {
       severity: "high",
     }],
     rubric_scores: [],
+    scope_drift: { creep: [], missing: [] },
   });
 
   execFileSync("node", [
@@ -662,6 +673,7 @@ test("round 2 redispatch artifact contains prior round summary", () => {
       severity: "high",
     }],
     rubric_scores: [],
+    scope_drift: { creep: [], missing: [] },
   });
 
   const stdout = execFileSync("node", [
