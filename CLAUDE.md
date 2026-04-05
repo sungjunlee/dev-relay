@@ -21,6 +21,8 @@ skills/
   relay/                   ← Full-cycle orchestration (plan → dispatch → review → stop)
     references/prompt-template.md
   relay-plan/              ← AC → scoring rubric → dispatch prompt
+    scripts/
+      probe-executor-env.js  ← Executor environment probe (agent + project tools)
     references/rubric-*.md
   relay-dispatch/          ← Worktree isolation + executor dispatch
     scripts/
@@ -54,9 +56,14 @@ Multi-skill design: each phase is independently invocable. `npx skills add sungj
 
 ```bash
 # Run tests (Node.js built-in test runner, no install needed)
+node --test skills/relay-plan/scripts/*.test.js
 node --test skills/relay-dispatch/scripts/*.test.js
 node --test skills/relay-review/scripts/*.test.js
 node --test skills/relay-merge/scripts/*.test.js
+
+# Probe executor environment (before rubric design)
+node skills/relay-plan/scripts/probe-executor-env.js . --executor codex --json
+node skills/relay-plan/scripts/probe-executor-env.js . --project-only --json
 
 # Dispatch dry-run (validate without executing)
 node skills/relay-dispatch/scripts/dispatch.js . -b test-branch -p "task" --dry-run

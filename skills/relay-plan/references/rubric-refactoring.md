@@ -67,3 +67,13 @@ Scoring guide:
 - **low**: Old code commented out instead of deleted, unused exports/types retained "just in case," dead config entries left behind.
 - **mid**: Old code deleted, but compatibility shims or deprecated markers remain without sunset dates.
 - **high**: Dead code fully removed, no shims without sunset dates, config and feature flags cleaned up.
+
+## Tool → Automated Check Mapping
+
+| Tool | Automated check | Replaces evaluated |
+|------|----------------|-------------------|
+| TypeScript / `tsc` | `tsc --noEmit` → exit 0 | Type safety after refactor |
+| eslint | `npx eslint --max-warnings 0` → exit 0 | Code quality baseline |
+| knip / ts-prune | `npx knip` → 0 unused exports | Dead code removal (partial) |
+| madge | `npx madge --circular src/` → 0 circular | Dependency direction |
+| Jest / Vitest | `npm test` → exit 0 | Behavioral equivalence |

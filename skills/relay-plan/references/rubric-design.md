@@ -69,3 +69,13 @@ Scoring guide:
 - **low**: Competing visual elements of equal weight, no clear focal point, spacing that doesn't reflect content relationships.
 - **mid**: One clear focal point, but whitespace is uniform ("padding: 16px everywhere") rather than structural.
 - **high**: Visual weight matches importance, whitespace groups related items and separates sections, one primary action per screen.
+
+## Tool → Automated Check Mapping
+
+| Tool | Automated check | Replaces evaluated |
+|------|----------------|-------------------|
+| Playwright | `npx playwright test` → screenshot comparison | Visual consistency (partial) |
+| `/browse` skill | Navigate flows, screenshot each state | User flow completion |
+| Lighthouse | `npx lighthouse --only-categories=accessibility` → score ≥ 90 | Inclusive design basics |
+| axe-core | `npx axe --exit <url>` → 0 violations | Color contrast, ARIA |
+| `/design-review` skill | Visual audit with before/after diffs | Design polish (partial) |

@@ -14,7 +14,19 @@ Then: "What's the second most important?" Keep going until you have 3-5 concerns
 
 ### Q2: What can you measure with a command?
 
-For each AC item, ask: "Can I write a shell command that checks this?"
+**First, inventory available tools.** Before deciding what's measurable, know what the executor has:
+
+```bash
+# Probe the executor environment (agent tools + project tools)
+${CLAUDE_SKILL_DIR}/scripts/probe-executor-env.js <repo-path> --executor <codex|claude> --json
+
+# Or project tools only (no agent invocation)
+${CLAUDE_SKILL_DIR}/scripts/probe-executor-env.js <repo-path> --project-only --json
+```
+
+The probe returns agent skills/MCP tools and project tools (npm scripts, Makefile targets, test frameworks). Each available tool is a chance to convert an evaluated factor into an automated one — the single biggest lever for rubric quality.
+
+For each AC item, ask: "Can I write a shell command that checks this — given the tools available?"
 
 - **Yes → automated factor.** Write the command. Define the target (exit code, threshold, comparison to baseline).
 - **No → evaluated factor.** Move to Q3.
@@ -28,8 +40,10 @@ Examples of the split:
 | "No N+1 queries" | `grep -c SELECT` in test logs | automated |
 | "Clean component boundaries" | Requires judgment | evaluated |
 | "All links in docs work" | `npx markdown-link-check` | automated |
+| "UI flows work end-to-end" | `npx playwright test` (if available) | automated |
+| "No accessibility violations" | `npx axe --exit` (if axe-core available) | automated |
 
-**Bias toward automated.** Every factor you can automate is one less thing the agent can self-score generously.
+**Bias toward automated.** Every factor you can automate is one less thing the agent can self-score generously. Check `rubric-*.md` for tool → automated check mapping tables.
 
 ### Q3: What does a specialist check that a junior misses?
 

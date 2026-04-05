@@ -68,3 +68,13 @@ Scoring guide:
 - **low**: Duplicated information across docs, "currently" language without dates/versions, examples that can't be validated.
 - **mid**: Single source of truth for most info, version-stable language, but code examples not testable in CI.
 - **high**: No duplication, all temporal language anchored to versions, examples extractable and CI-testable.
+
+## Tool → Automated Check Mapping
+
+| Tool | Automated check | Replaces evaluated |
+|------|----------------|-------------------|
+| markdown-link-check | `npx markdown-link-check *.md` → exit 0 | Link integrity |
+| markdownlint | `npx markdownlint-cli2 *.md` → exit 0 | Structural consistency |
+| `code-block-runner` / `mdsh` | Extract and run code examples → exit 0 | Example correctness |
+| vale | `vale docs/` → 0 errors | Style guide compliance |
+| `/browse` skill | Open rendered docs, verify navigation | Reader path walkthrough (partial) |
