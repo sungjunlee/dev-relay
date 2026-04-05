@@ -404,47 +404,38 @@ async function main() {
   // --- Step 3: Execute task ---
   // Executor-specific: build command + args + handle quirks.
   // To add a new executor: add a branch here.
+  // execCwd: spawn cwd option — set when the executor has no CLI flag for CWD.
 
-  let cmd, execArgs, execOpts;
+  let cmd, execArgs;
+  let execCwd;
+
+  // Prepend non-interactive directive so the model doesn't wait for approval
+  // (e.g. brainstorming HARD-GATE or design-confirmation patterns).
+  const execPrompt =
+    "[NON-INTERACTIVE DISPATCH] This is an automated, non-interactive execution. " +
+    "Do not present plans for approval or wait for user confirmation. " +
+    "Execute the task fully and autonomously.\n\n" +
+    taskPrompt;
 
   if (EXECUTOR === "codex") {
     cmd = "codex";
     execArgs = ["exec", "-C", wtPath, "--full-auto", "--color", "never", "-o", resultFile];
     if (MODEL) execArgs.push("-m", MODEL);
     execArgs.push("--sandbox", SANDBOX);
-    // Prepend non-interactive directive so the model doesn't wait for approval
-    // (e.g. brainstorming HARD-GATE or design-confirmation patterns).
-    const execPrompt =
-      "[NON-INTERACTIVE DISPATCH] This is an automated, non-interactive execution. " +
-      "Do not present plans for approval or wait for user confirmation. " +
-      "Execute the task fully and autonomously.\n\n" +
-      taskPrompt;
     execArgs.push(execPrompt);
-    execOpts = {
-      timeout: TIMEOUT * 1000,
-      maxBuffer: 10 * 1024 * 1024,
-      stdio: ["pipe", null, null], // stdout/stderr fds set below
-    };
   } else if (EXECUTOR === "claude") {
     cmd = "claude";
+    execCwd = wtPath; // Claude Code has no --cwd flag; use spawn cwd instead
     execArgs = [
       "-p",                            // print (non-interactive) mode
       "--dangerously-skip-permissions", // full autonomy in isolated worktree
-      "--cwd", wtPath,
       "--output-format", "text",
     ];
     if (MODEL) execArgs.push("--model", MODEL);
-    const execPrompt =
-      "[NON-INTERACTIVE DISPATCH] This is an automated, non-interactive execution. " +
-      "Do not present plans for approval or wait for user confirmation. " +
-      "Execute the task fully and autonomously.\n\n" +
-      taskPrompt;
     execArgs.push(execPrompt);
-    execOpts = {
-      timeout: TIMEOUT * 1000,
-      maxBuffer: 10 * 1024 * 1024,
-      stdio: ["pipe", null, null],
-    };
+    if (SANDBOX !== "workspace-write") {
+      console.error(`Warning: --sandbox '${SANDBOX}' is not supported for Claude executor; using --dangerously-skip-permissions`);
+    }
   } else {
     console.error(`Error: executor '${EXECUTOR}' has no execution handler`);
     process.exit(1);
@@ -494,10 +485,9 @@ async function main() {
   const stdoutFd = fs.openSync(stdoutLog, "w");
   const stderrFd = fs.openSync(stderrLog, "w");
 
-  const child = nodeSpawn(cmd, execArgs, {
-    stdio: ["ignore", stdoutFd, stderrFd],
-    detached: true,
-  });
+  const spawnOpts = { stdio: ["ignore", stdoutFd, stderrFd], detached: true };
+  if (execCwd) spawnOpts.cwd = execCwd;
+  const child = nodeSpawn(cmd, execArgs, spawnOpts);
   executorPid = child.pid;
 
   const execResult = await new Promise((resolve) => {
@@ -636,6 +626,9 @@ async function main() {
 
   // --- Step 4.5: Optional app registration (Codex-only) ---
   let threadId = null;
+  if (REGISTER && EXECUTOR !== "codex" && !JSON_OUT) {
+    console.log(`\n  Warning: --register is only supported for codex executor`);
+  }
   if (REGISTER && status !== "failed" && EXECUTOR === "codex") {
     try {
       const reg = registerCodexApp({

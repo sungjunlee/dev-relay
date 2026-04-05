@@ -40,8 +40,8 @@ if (args[0] !== "-p") {
   process.stderr.write("unsupported fake claude invocation");
   process.exit(1);
 }
-const cwdIdx = args.indexOf("--cwd");
-const cwd = cwdIdx !== -1 ? args[cwdIdx + 1] : ".";
+// CWD is set via spawn options, not --cwd flag
+const cwd = process.cwd();
 const fileName = fs.existsSync(cwd + "/first.txt") ? "resume.txt" : "first.txt";
 fs.writeFileSync(cwd + "/" + fileName, fileName + "\\n", "utf-8");
 execFileSync("git", ["-C", cwd, "add", fileName], { stdio: "pipe" });
