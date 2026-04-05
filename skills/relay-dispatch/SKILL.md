@@ -86,6 +86,10 @@ gh pr list --head <branch> --json number,url,title
 
 Successful dispatches retain the worktree by default. Use the returned `runId`, manifest, and retained worktree to continue review or follow-up fixes without reconstructing state. Resume only from `changes_requested`; dispatch reuses the same run and worktree instead of creating a fresh manifest.
 
+### Iteration History on Re-dispatch
+
+On re-dispatch, previous Score Log + reviewer feedback are automatically prepended to the prompt (prevents repeating failed approaches). Record attempt data via `captureAttempt()` from `relay-manifest.js` before transitioning to `changes_requested`. Storage: `~/.relay/runs/<slug>/<run-id>/previous-attempts.json`.
+
 ### Handling Failures
 
 | Failure | Action |
