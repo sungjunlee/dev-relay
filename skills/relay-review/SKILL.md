@@ -58,7 +58,7 @@ Notes:
 node ${CLAUDE_SKILL_DIR}/scripts/review-runner.js --repo . --branch "$BRANCH" --pr "$PR_NUM" --prepare-only --json
 ```
 
-This writes round artifacts under `.relay/runs/<run-id>/`, including:
+This writes round artifacts under `~/.relay/runs/<repo-slug>/<run-id>/`, including:
 - `review-round-N-prompt.md`
 - `review-round-N-done-criteria.md`
 - `review-round-N-diff.patch`
