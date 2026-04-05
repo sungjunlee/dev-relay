@@ -19,6 +19,7 @@ const SCRIPT = path.join(__dirname, "cleanup-worktrees.js");
 
 function setupRepo() {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-janitor-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
   execFileSync("git", ["init", "-b", "main"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
   execFileSync("git", ["config", "user.name", "Relay Janitor Test"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
   execFileSync("git", ["config", "user.email", "relay-janitor@example.com"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
