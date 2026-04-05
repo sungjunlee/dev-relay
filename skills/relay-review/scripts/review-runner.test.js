@@ -511,3 +511,175 @@ test("repeated identical issues escalate on the third consecutive round", () => 
   assert.equal(manifest.review.latest_verdict, "escalated");
   assert.equal(manifest.review.repeated_issue_count, 0);
 });
+
+test("formatPriorVerdictSummary produces correct round numbers and rubric summaries", () => {
+  // Module-level argv parsing prevents direct require(), so use a helper script
+  // that sets process.argv before requiring the module.
+  const verdicts = [
+    {
+      verdict: "changes_requested",
+      summary: "Missing tests",
+      issues: [{ title: "a", body: "b", file: "x.js", line: 1, category: "contract", severity: "high" }],
+      rubric_scores: [
+        { factor: "Coverage", target: ">= 8", observed: "5", status: "fail", notes: "low" },
+      ],
+    },
+    {
+      verdict: "changes_requested",
+      summary: "No auth guard",
+      issues: [
+        { title: "c", body: "d", file: "y.js", line: 2, category: "quality", severity: "medium" },
+        { title: "e", body: "f", file: "z.js", line: 3, category: "contract", severity: "high" },
+      ],
+      rubric_scores: [],
+    },
+  ];
+
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-unit-"));
+  const helperPath = path.join(tmpDir, "helper.js");
+  fs.writeFileSync(helperPath, [
+    `process.argv = ["node", "helper.js", "--repo", "/dev/null", "--branch", "x", "--pr", "1"];`,
+    `const { formatPriorVerdictSummary } = require(${JSON.stringify(SCRIPT)});`,
+    `const verdicts = ${JSON.stringify(verdicts)};`,
+    `const result = formatPriorVerdictSummary(verdicts);`,
+    `const empty = formatPriorVerdictSummary([]);`,
+    `process.stdout.write(JSON.stringify({ result, empty }));`,
+  ].join("\n"), "utf-8");
+  const out = JSON.parse(execFileSync("node", [helperPath], { encoding: "utf-8" }));
+
+  assert.match(out.result, /^Prior review rounds:/);
+  assert.match(out.result, /- Round 2: changes_requested — Missing tests \[1 issue\(s\), Coverage: 5 \(target >= 8, fail\)\]/);
+  assert.match(out.result, /- Round 1: changes_requested — No auth guard \[2 issue\(s\), no rubric scores\]/);
+  assert.equal(out.empty, "");
+});
+
+test("round 2 review prompt contains Prior Round Context section", () => {
+  const { repoRoot, manifestPath, runId, doneCriteriaPath, diffPath } = setupRepo();
+
+  // Run round 1: changes_requested
+  const reviewFile = writeVerdict(repoRoot, "r1-changes.json", {
+    verdict: "changes_requested",
+    summary: "Smoke file not created.",
+    contract_status: "fail",
+    quality_status: "pass",
+    next_action: "changes_requested",
+    issues: [{
+      title: "Missing smoke file",
+      body: "smoke.txt not found",
+      file: "src/index.js",
+      line: 10,
+      category: "contract",
+      severity: "high",
+    }],
+    rubric_scores: [],
+  });
+
+  execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--run-id", runId,
+    "--pr", "123",
+    "--done-criteria-file", doneCriteriaPath,
+    "--diff-file", diffPath,
+    "--review-file", reviewFile,
+    "--no-comment",
+    "--json",
+  ], { encoding: "utf-8" });
+
+  // Transition back to review_pending for round 2
+  setReviewPending(manifestPath);
+
+  // Round 2: prepare-only to inspect the prompt
+  const stdout = execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--run-id", runId,
+    "--pr", "123",
+    "--done-criteria-file", doneCriteriaPath,
+    "--diff-file", diffPath,
+    "--prepare-only",
+    "--json",
+  ], { encoding: "utf-8" });
+
+  const result = JSON.parse(stdout);
+  assert.equal(result.round, 2);
+  const promptText = fs.readFileSync(result.promptPath, "utf-8");
+  assert.match(promptText, /## Prior Round Context/);
+  assert.match(promptText, /### Round 1: changes_requested/);
+  assert.match(promptText, /Smoke file not created\./);
+  assert.match(promptText, /Verify whether prior issues were resolved/);
+});
+
+test("round 2 redispatch artifact contains prior round summary", () => {
+  const { repoRoot, manifestPath, runId, doneCriteriaPath, diffPath } = setupRepo();
+
+  // Round 1: changes_requested
+  const r1File = writeVerdict(repoRoot, "r1.json", {
+    verdict: "changes_requested",
+    summary: "Missing smoke file.",
+    contract_status: "fail",
+    quality_status: "pass",
+    next_action: "changes_requested",
+    issues: [{
+      title: "No smoke.txt",
+      body: "Add it.",
+      file: "src/index.js",
+      line: 5,
+      category: "contract",
+      severity: "high",
+    }],
+    rubric_scores: [],
+  });
+
+  execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--run-id", runId,
+    "--pr", "123",
+    "--done-criteria-file", doneCriteriaPath,
+    "--diff-file", diffPath,
+    "--review-file", r1File,
+    "--no-comment",
+    "--json",
+  ], { encoding: "utf-8" });
+
+  setReviewPending(manifestPath);
+
+  // Round 2: changes_requested again → triggers redispatch with prior summary
+  const r2File = writeVerdict(repoRoot, "r2.json", {
+    verdict: "changes_requested",
+    summary: "Still missing.",
+    contract_status: "fail",
+    quality_status: "pass",
+    next_action: "changes_requested",
+    issues: [{
+      title: "No smoke.txt",
+      body: "Still not there.",
+      file: "src/index.js",
+      line: 5,
+      category: "contract",
+      severity: "high",
+    }],
+    rubric_scores: [],
+  });
+
+  const stdout = execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--run-id", runId,
+    "--pr", "123",
+    "--done-criteria-file", doneCriteriaPath,
+    "--diff-file", diffPath,
+    "--review-file", r2File,
+    "--no-comment",
+    "--json",
+  ], { encoding: "utf-8" });
+
+  const result = JSON.parse(stdout);
+  assert.equal(result.state, STATES.CHANGES_REQUESTED);
+  assert.ok(result.redispatchPath);
+  const redispatchText = fs.readFileSync(result.redispatchPath, "utf-8");
+  assert.match(redispatchText, /This is round 3/);
+  assert.match(redispatchText, /Prior review rounds:/);
+  assert.match(redispatchText, /Round 1: changes_requested — Missing smoke file\./);
+});

@@ -182,6 +182,29 @@ test("dispatch with --executor claude creates worktree and collects result", () 
   assert.match(resultText, /ok/);
 });
 
+test("dispatch artifacts are persisted in the run directory", () => {
+  const repoRoot = setupRepo();
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  writeFakeCodex(binDir);
+  const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}` };
+
+  const result = JSON.parse(runDispatch(repoRoot, [
+    "-b", "issue-artifact",
+    "--prompt", "artifact test task",
+    "--json",
+  ], env));
+  assert.equal(result.status, "completed");
+
+  const runDir = path.join(repoRoot, ".relay", "runs", result.runId);
+  assert.ok(fs.existsSync(path.join(runDir, "dispatch-prompt.md")));
+  const promptText = fs.readFileSync(path.join(runDir, "dispatch-prompt.md"), "utf-8");
+  assert.match(promptText, /artifact test task/);
+
+  assert.ok(fs.existsSync(path.join(runDir, "dispatch-result.txt")));
+  const resultText = fs.readFileSync(path.join(runDir, "dispatch-result.txt"), "utf-8");
+  assert.match(resultText, /ok/);
+});
+
 test("dispatch with --executor claude supports resume", () => {
   const repoRoot = setupRepo();
   const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-claude-bin-"));
@@ -212,4 +235,65 @@ test("dispatch with --executor claude supports resume", () => {
   assert.equal(second.worktree, first.worktree);
   assert.equal(second.executor, "claude");
   assert.equal(second.runState, STATES.REVIEW_PENDING);
+});
+
+test("timeout with commits produces completed-with-warning", () => {
+  const repoRoot = setupRepo();
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  // Fake codex that commits a file then sleeps forever (killed by timeout)
+  const codexPath = path.join(binDir, "codex");
+  fs.writeFileSync(codexPath, `#!/usr/bin/env node
+const fs = require("fs");
+const { execFileSync } = require("child_process");
+const args = process.argv.slice(2);
+if (args[0] === "--version") { process.stdout.write("codex-fake\\n"); process.exit(0); }
+const cwd = args[args.indexOf("-C") + 1];
+const output = args[args.indexOf("-o") + 1];
+fs.writeFileSync(cwd + "/timeout-work.txt", "partial\\n", "utf-8");
+execFileSync("git", ["-C", cwd, "add", "timeout-work.txt"], { stdio: "pipe" });
+execFileSync("git", ["-C", cwd, "commit", "-m", "partial work"], { stdio: "pipe" });
+fs.writeFileSync(output, "partial result\\n", "utf-8");
+setTimeout(() => {}, 60000);
+`, "utf-8");
+  fs.chmodSync(codexPath, 0o755);
+  const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}` };
+
+  const result = JSON.parse(runDispatch(repoRoot, [
+    "-b", "issue-timeout-work",
+    "--prompt", "slow task",
+    "--timeout", "1",
+    "--json",
+  ], env));
+
+  assert.equal(result.status, "completed-with-warning");
+  assert.equal(result.runState, STATES.REVIEW_PENDING);
+  assert.match(result.error, /timed out/);
+});
+
+test("timeout without commits produces failed", () => {
+  const repoRoot = setupRepo();
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  // Fake codex that does nothing but sleep
+  const codexPath = path.join(binDir, "codex");
+  fs.writeFileSync(codexPath, `#!/usr/bin/env node
+const args = process.argv.slice(2);
+if (args[0] === "--version") { process.stdout.write("codex-fake\\n"); process.exit(0); }
+setTimeout(() => {}, 60000);
+`, "utf-8");
+  fs.chmodSync(codexPath, 0o755);
+  const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}` };
+
+  // dispatch exits non-zero on failure but still writes JSON to stdout
+  const proc = spawnSync("node", [SCRIPT, repoRoot,
+    "-b", "issue-timeout-empty",
+    "--prompt", "idle task",
+    "--timeout", "1",
+    "--json",
+  ], { cwd: repoRoot, encoding: "utf-8", env });
+
+  assert.notEqual(proc.status, 0);
+  const result = JSON.parse(proc.stdout);
+  assert.equal(result.status, "failed");
+  assert.equal(result.runState, STATES.ESCALATED);
+  assert.match(result.error, /timed out/);
 });
