@@ -52,7 +52,7 @@ For background and parallel dispatch, see "Background & Parallel" section below.
 Creates worktree → writes a relay run manifest → runs executor → collects result.
 Exits with non-zero code on failure.
 
-Each dispatch writes a manifest to `.relay/runs/<run-id>.md` and appends lifecycle evidence to `.relay/runs/<run-id>/events.jsonl`. `run_id` is the canonical identity for re-dispatch, review, merge, close, and reporting.
+Each dispatch writes a manifest to `~/.relay/runs/<repo-slug>/<run-id>.md` and appends lifecycle evidence to `~/.relay/runs/<repo-slug>/<run-id>/events.jsonl`. `run_id` is the canonical identity for re-dispatch, review, merge, close, and reporting.
 
 Current scope: dispatch, review, merge finalization, and stale janitor cleanup all read the same relay manifest contract.
 

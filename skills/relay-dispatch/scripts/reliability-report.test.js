@@ -47,6 +47,7 @@ function writeRun(repoRoot, { runId, state, rounds, updatedAt }) {
 
 test("reliability-report derives the core scorecard from manifests and events", () => {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-report-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
   writeRun(repoRoot, {
     runId: "run-ready",
     state: STATES.READY_TO_MERGE,

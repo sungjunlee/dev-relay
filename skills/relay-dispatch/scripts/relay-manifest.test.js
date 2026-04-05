@@ -10,6 +10,7 @@ const {
   createManifestSkeleton,
   createRunId,
   ensureRunLayout,
+  getRepoSlug,
   inferIssueNumber,
   readManifest,
   updateManifestCleanup,
@@ -33,6 +34,7 @@ test("createRunId is branch-stable and filesystem-safe", () => {
 
 test("manifest round-trips through frontmatter helpers", () => {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-manifest-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
   const runId = "issue-42-20260402103000";
   const worktreePath = path.join(repoRoot, "wt");
   const { manifestPath } = ensureRunLayout(repoRoot, runId);
@@ -63,6 +65,7 @@ test("manifest round-trips through frontmatter helpers", () => {
 
 test("manifest round-trips multiline scalar values", () => {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-manifest-multiline-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
   const runId = "issue-42-20260402103001";
   const worktreePath = path.join(repoRoot, "wt");
   const { manifestPath } = ensureRunLayout(repoRoot, runId);
@@ -90,6 +93,7 @@ test("manifest round-trips multiline scalar values", () => {
 
 test("readManifest migrates v1 roles.worker to roles.executor", () => {
   const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-migrate-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
   const runId = "migrate-v1-20260402103000";
   const wtPath = path.join(tmpRoot, "wt");
   const { manifestPath } = ensureRunLayout(tmpRoot, runId);
@@ -112,6 +116,21 @@ test("readManifest migrates v1 roles.worker to roles.executor", () => {
   const parsed = readManifest(manifestPath);
   assert.equal(parsed.data.roles.executor, "codex");
   assert.equal(parsed.data.roles.worker, undefined);
+});
+
+test("getRepoSlug is deterministic and collision-resistant", () => {
+  const slug1 = getRepoSlug("/Users/dev/my-project");
+  const slug2 = getRepoSlug("/Users/dev/my-project");
+  assert.equal(slug1, slug2);
+
+  const slug3 = getRepoSlug("/Users/other/my-project");
+  assert.notEqual(slug1, slug3);
+  assert.match(slug1, /^my-project-[a-f0-9]{8}$/);
+  assert.match(slug3, /^my-project-[a-f0-9]{8}$/);
+
+  assert.throws(() => getRepoSlug(null), /non-empty repoRoot/);
+  assert.throws(() => getRepoSlug(""), /non-empty repoRoot/);
+  assert.throws(() => getRepoSlug(undefined), /non-empty repoRoot/);
 });
 
 test("updateManifestState allows valid transitions and rejects invalid ones", () => {

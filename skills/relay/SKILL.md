@@ -88,7 +88,7 @@ Get PR number:
 PR_NUM=$(gh pr list --head issue-<N> --json number -q '.[0].number')
 ```
 
-The manifest is written under `.relay/runs/` in the target repo. This is the new shared state surface for later review/merge lifecycle work.
+The manifest is written under `~/.relay/runs/<repo-slug>/`. This is the shared state surface for later review/merge lifecycle work.
 
 Current scope: dispatch writes the manifest. Review and merge still follow their existing PR-comment and gate-check flow.
 

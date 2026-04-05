@@ -1,10 +1,36 @@
 const { execFileSync } = require("child_process");
+const crypto = require("crypto");
 const fs = require("fs");
+const os = require("os");
 const path = require("path");
 
 const RELAY_VERSION = 2;
-const RUNS_DIR = path.join(".relay", "runs");
 const NOTES_TEMPLATE = "# Notes\n\n## Context\n\n## Review History\n";
+
+function getRelayHome() {
+  const home = process.env.RELAY_HOME || path.join(os.homedir(), ".relay");
+  if (!path.isAbsolute(home)) {
+    throw new Error(
+      `RELAY_HOME must be an absolute path, got: ${JSON.stringify(home)}. ` +
+      `Either set RELAY_HOME explicitly or ensure $HOME is set.`
+    );
+  }
+  return home;
+}
+
+function getRunsBase() {
+  return process.env.RELAY_RUNS_BASE || path.join(getRelayHome(), "runs");
+}
+
+function getRepoSlug(repoRoot) {
+  if (!repoRoot || typeof repoRoot !== "string") {
+    throw new Error(`getRepoSlug requires a non-empty repoRoot path, got: ${JSON.stringify(repoRoot)}`);
+  }
+  const resolved = path.resolve(repoRoot);
+  const base = path.basename(resolved).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "repo";
+  const hash = crypto.createHash("sha256").update(resolved).digest("hex").slice(0, 8);
+  return `${base}-${hash}`;
+}
 
 const STATES = Object.freeze({
   DRAFT: "draft",
@@ -71,7 +97,7 @@ function createRunId({ issueNumber, branch, timestamp = new Date() } = {}) {
 }
 
 function getRunsDir(repoRoot) {
-  return path.join(repoRoot, RUNS_DIR);
+  return path.join(getRunsBase(), getRepoSlug(repoRoot));
 }
 
 function getRunDir(repoRoot, runId) {
@@ -97,8 +123,15 @@ function listManifestPaths(repoRoot) {
 function ensureRunLayout(repoRoot, runId) {
   const runsDir = getRunsDir(repoRoot);
   const runDir = getRunDir(repoRoot, runId);
-  fs.mkdirSync(runsDir, { recursive: true });
-  fs.mkdirSync(runDir, { recursive: true });
+  try {
+    fs.mkdirSync(runsDir, { recursive: true });
+    fs.mkdirSync(runDir, { recursive: true });
+  } catch (err) {
+    throw new Error(
+      `Failed to create relay run directory at ${runDir}: ${err.message}. ` +
+      `Set RELAY_HOME to a writable directory to override the default location (~/.relay).`
+    );
+  }
   return { runsDir, runDir, manifestPath: getManifestPath(repoRoot, runId) };
 }
 
@@ -485,7 +518,6 @@ module.exports = {
   CLEANUP_STATUSES,
   NOTES_TEMPLATE,
   RELAY_VERSION,
-  RUNS_DIR,
   STATES,
   createCleanupSkeleton,
   createManifestSkeleton,
@@ -493,7 +525,10 @@ module.exports = {
   ensureRunLayout,
   getEventsPath,
   getManifestPath,
+  getRelayHome,
+  getRepoSlug,
   getRunDir,
+  getRunsBase,
   getRunsDir,
   inferIssueNumber,
   isTerminalState,

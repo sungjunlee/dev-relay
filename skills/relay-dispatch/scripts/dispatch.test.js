@@ -7,6 +7,8 @@ const path = require("path");
 
 const {
   STATES,
+  getEventsPath,
+  getRunDir,
   listManifestPaths,
   readManifest,
   updateManifestState,
@@ -17,13 +19,14 @@ const SCRIPT = path.join(__dirname, "dispatch.js");
 
 function setupRepo() {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-dispatch-"));
+  const relayHome = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
   execFileSync("git", ["init", "-b", "main"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
   execFileSync("git", ["config", "user.name", "Relay Dispatch Test"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
   execFileSync("git", ["config", "user.email", "relay-dispatch@example.com"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
   fs.writeFileSync(path.join(repoRoot, "README.md"), "base\n", "utf-8");
   execFileSync("git", ["add", "README.md"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
   execFileSync("git", ["commit", "-m", "init"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
-  return repoRoot;
+  return { repoRoot, relayHome };
 }
 
 function writeFakeClaude(binDir) {
@@ -88,7 +91,8 @@ function runDispatch(repoRoot, args, env) {
 }
 
 test("dispatch reuses the same run and worktree on resume", () => {
-  const repoRoot = setupRepo();
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
   const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
   writeFakeCodex(binDir);
   const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}` };
@@ -124,14 +128,15 @@ test("dispatch reuses the same run and worktree on resume", () => {
   assert.equal(manifest.state, STATES.REVIEW_PENDING);
   assert.ok(manifest.git.head_sha);
 
-  const events = fs.readFileSync(path.join(repoRoot, ".relay", "runs", runId, "events.jsonl"), "utf-8");
+  const events = fs.readFileSync(getEventsPath(repoRoot, runId), "utf-8");
   assert.match(events, /"event":"dispatch_start"/);
   assert.match(events, /"reason":"same_run_resume"/);
   assert.match(events, /"reason":"same_run_resume:completed"/);
 });
 
 test("dispatch resume fails loudly when the retained worktree is missing", () => {
-  const repoRoot = setupRepo();
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
   const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
   writeFakeCodex(binDir);
   const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}` };
@@ -161,7 +166,8 @@ test("dispatch resume fails loudly when the retained worktree is missing", () =>
 });
 
 test("dispatch with --executor claude creates worktree and collects result", () => {
-  const repoRoot = setupRepo();
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
   const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-claude-bin-"));
   writeFakeClaude(binDir);
   const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}` };
@@ -183,7 +189,8 @@ test("dispatch with --executor claude creates worktree and collects result", () 
 });
 
 test("dispatch artifacts are persisted in the run directory", () => {
-  const repoRoot = setupRepo();
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
   const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
   writeFakeCodex(binDir);
   const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}` };
@@ -195,18 +202,18 @@ test("dispatch artifacts are persisted in the run directory", () => {
   ], env));
   assert.equal(result.status, "completed");
 
-  const runDir = path.join(repoRoot, ".relay", "runs", result.runId);
-  assert.ok(fs.existsSync(path.join(runDir, "dispatch-prompt.md")));
-  const promptText = fs.readFileSync(path.join(runDir, "dispatch-prompt.md"), "utf-8");
+  assert.ok(fs.existsSync(path.join(result.runDir, "dispatch-prompt.md")));
+  const promptText = fs.readFileSync(path.join(result.runDir, "dispatch-prompt.md"), "utf-8");
   assert.match(promptText, /artifact test task/);
 
-  assert.ok(fs.existsSync(path.join(runDir, "dispatch-result.txt")));
-  const resultText = fs.readFileSync(path.join(runDir, "dispatch-result.txt"), "utf-8");
+  assert.ok(fs.existsSync(path.join(result.runDir, "dispatch-result.txt")));
+  const resultText = fs.readFileSync(path.join(result.runDir, "dispatch-result.txt"), "utf-8");
   assert.match(resultText, /ok/);
 });
 
 test("dispatch with --executor claude supports resume", () => {
-  const repoRoot = setupRepo();
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
   const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-claude-bin-"));
   writeFakeClaude(binDir);
   const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}` };
@@ -238,7 +245,8 @@ test("dispatch with --executor claude supports resume", () => {
 });
 
 test("timeout with commits produces completed-with-warning", () => {
-  const repoRoot = setupRepo();
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
   const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
   // Fake codex that commits a file then sleeps forever (killed by timeout)
   const codexPath = path.join(binDir, "codex");
@@ -271,7 +279,8 @@ setTimeout(() => {}, 60000);
 });
 
 test("timeout without commits produces failed", () => {
-  const repoRoot = setupRepo();
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
   const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
   // Fake codex that does nothing but sleep
   const codexPath = path.join(binDir, "codex");
