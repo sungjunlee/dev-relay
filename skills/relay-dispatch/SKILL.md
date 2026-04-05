@@ -54,8 +54,6 @@ Exits with non-zero code on failure.
 
 Each dispatch writes a manifest to `~/.relay/runs/<repo-slug>/<run-id>.md` and appends lifecycle evidence to `~/.relay/runs/<repo-slug>/<run-id>/events.jsonl`. `run_id` is the canonical identity for re-dispatch, review, merge, close, and reporting.
 
-Current scope: dispatch, review, merge finalization, and stale janitor cleanup all read the same relay manifest contract.
-
 ### Timeout guidance
 
 | Task type | Timeout | Rationale |
@@ -69,36 +67,25 @@ Current scope: dispatch, review, merge finalization, and stale janitor cleanup a
 After dispatch completes, confirm before proceeding to review:
 
 ```bash
-# Check dispatch result (JSON output includes status + run metadata)
-# status: "completed" + runState: "review_pending" → proceed to relay-review
-# status: "completed-with-warning" + runState: "review_pending" → inspect uncommitted work, then review
-# status: "failed" + runState: "escalated" → inspect error / manifest, then fix or re-dispatch
-
-# The JSON output also includes:
-# - runId
-# - manifestPath
-# - runState
-# - cleanupPolicy
-
-# Verify PR exists
+# JSON output: status, runId, manifestPath, runState, cleanupPolicy
+# "completed" + "review_pending" → proceed to relay-review
+# "completed-with-warning" + "review_pending" → inspect uncommitted work, then review
+# "failed" + "escalated" → inspect error, fix or re-dispatch
 gh pr list --head <branch> --json number,url,title
 ```
 
-Successful dispatches retain the worktree by default. Use the returned `runId`, manifest, and retained worktree to continue review or follow-up fixes without reconstructing state. Resume only from `changes_requested`; dispatch reuses the same run and worktree instead of creating a fresh manifest.
+Successful dispatches retain the worktree by default. Use the returned `runId`, manifest, and worktree to continue review. Resume only from `changes_requested`; dispatch reuses the same run and worktree.
 
-### Iteration History on Re-dispatch
-
-On re-dispatch, previous Score Log + reviewer feedback are automatically prepended to the prompt (prevents repeating failed approaches). Record attempt data via `captureAttempt()` from `relay-manifest.js` before transitioning to `changes_requested`. Storage: `~/.relay/runs/<slug>/<run-id>/previous-attempts.json`.
+On re-dispatch, previous Score Log + reviewer feedback are auto-prepended to the prompt. Record attempt data via `captureAttempt()` before transitioning to `changes_requested`. Storage: `~/.relay/runs/<slug>/<run-id>/previous-attempts.json`.
 
 ### Handling Failures
 
 | Failure | Action |
 |---|---|
-| Timeout (with commits) | Executor exceeded `--timeout` but made progress — dispatch reports `completed-with-warning`. Check worktree for uncommitted changes, proceed to review |
+| Timeout (with commits) | `completed-with-warning` — check worktree for uncommitted changes, proceed to review |
 | Timeout (no commits) | Increase `--timeout` or split task into smaller pieces |
-| Executor error (non-zero exit) | Read result file for error details; fix prompt and re-dispatch |
-| No commits made | Prompt was unclear or task was impossible; revise and re-dispatch |
-| No PR created | Executor may have committed but not pushed PR; check `git log` in worktree |
+| Executor error / no commits | Read result file; revise prompt and re-dispatch |
+| No PR created | Check `git log` in worktree; push manually or re-dispatch |
 | Branch conflicts | Resolve in worktree or create fresh worktree from updated main |
 | Network/transient error | Wait 30s, retry once. If it fails again, escalate to user |
 

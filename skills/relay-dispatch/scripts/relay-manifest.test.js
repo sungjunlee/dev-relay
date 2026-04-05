@@ -188,16 +188,29 @@ test("updateManifestCleanup records cleanup metadata without changing state", ()
   assert.equal(updated.cleanup.branch_deleted, true);
 });
 
-test("createManifestSkeleton includes previous_attempts_count", () => {
-  const manifest = createManifestSkeleton({
-    repoRoot: "/tmp/test",
-    runId: "test-run",
-    branch: "test",
-    baseBranch: "main",
-    issueNumber: null,
-    worktreePath: "/tmp/wt",
-  });
-  assert.equal(manifest.previous_attempts_count, 0);
+test("readPreviousAttempts returns [] on corrupted JSON", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-corrupt-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  const runId = "issue-corrupt-20260403120000000";
+
+  // Write a valid attempt to create the file at the correct path
+  captureAttempt(repoRoot, runId, { score_log: "test" });
+  assert.equal(readPreviousAttempts(repoRoot, runId).length, 1);
+
+  // Find and corrupt the previous-attempts.json file
+  const findFile = (dir, name) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) { const r = findFile(full, name); if (r) return r; }
+      if (entry.name === name) return full;
+    }
+    return null;
+  };
+  const attemptsFile = findFile(process.env.RELAY_HOME, "previous-attempts.json");
+  fs.writeFileSync(attemptsFile, "{broken json[", "utf-8");
+
+  const result = readPreviousAttempts(repoRoot, runId);
+  assert.deepEqual(result, []);
 });
 
 test("captureAttempt writes and readPreviousAttempts reads correctly", () => {
