@@ -15,12 +15,13 @@
 const path = require("path");
 const {
   CLEANUP_STATUSES,
+  isTerminalState,
   listManifestPaths,
   readManifest,
+  runCleanup,
   writeManifest,
 } = require("./relay-manifest");
 const { appendRunEvent } = require("./relay-events");
-const { isTerminalState, runCleanup } = require("./relay-cleanup");
 
 const args = process.argv.slice(2);
 

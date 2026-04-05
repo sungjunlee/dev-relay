@@ -53,6 +53,7 @@ const path = require("path");
 const crypto = require("crypto");
 const os = require("os");
 const { copyWorktreeFiles, getWorktreeIncludeFiles } = require("./worktreeinclude");
+const { registerCodexApp } = require("./codex-app-register");
 const {
   STATES,
   createManifestSkeleton,
@@ -576,26 +577,17 @@ function main() {
   // --- Step 4.5: Optional app registration ---
   let threadId = null;
   if (REGISTER && status !== "failed") {
-    const registerScript = path.join(__dirname, "create-worktree.js");
-    if (!fs.existsSync(registerScript)) {
-      if (!JSON_OUT) console.log(`\n  Warning: create-worktree.js not found — --register skipped`);
-    } else {
-      try {
-        const regOutput = execFileSync("node", [
-          registerScript, repoRoot,
-          "--worktree-path", wtPath,
-          "-b", branch,
-          "-t", `Dispatch: ${branch}`,
-          "--json",
-        ], { encoding: "utf-8", stdio: "pipe" });
-        try {
-          const regData = JSON.parse(regOutput);
-          threadId = regData.threadId;
-        } catch {}
-        if (!JSON_OUT) console.log(`\n  Registered in ${EXECUTOR} app.`);
-      } catch (e) {
-        if (!JSON_OUT) console.log(`\n  Warning: app registration failed: ${e.message.split("\n")[0]}`);
-      }
+    try {
+      const reg = registerCodexApp({
+        wtPath,
+        repoPath: repoRoot,
+        branch,
+        title: `Dispatch: ${branch}`,
+      });
+      threadId = reg.threadId;
+      if (!JSON_OUT) console.log(`\n  Registered in ${EXECUTOR} app.`);
+    } catch (e) {
+      if (!JSON_OUT) console.log(`\n  Warning: app registration failed: ${e.message.split("\n")[0]}`);
     }
   }
 
