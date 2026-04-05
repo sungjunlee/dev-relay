@@ -463,8 +463,9 @@ function formatScopeDrift(scopeDrift) {
 function detectChurnGrowth(runDir, round) {
   if (!runDir || round < 3) return null;
   const countLines = (p) => { let n = 0; const b = fs.readFileSync(p); for (let i = 0; i < b.length; i++) if (b[i] === 0x0a) n++; return n; };
+  // Current round's diff was just written by the caller — must exist; let errors propagate.
+  const curLines = countLines(path.join(runDir, `review-round-${round}-diff.patch`));
   try {
-    const curLines = countLines(path.join(runDir, `review-round-${round}-diff.patch`));
     const prevLines = countLines(path.join(runDir, `review-round-${round - 1}-diff.patch`));
     const prevPrevLines = countLines(path.join(runDir, `review-round-${round - 2}-diff.patch`));
     if (curLines > prevLines && prevLines > prevPrevLines && prevPrevLines > 0) {
