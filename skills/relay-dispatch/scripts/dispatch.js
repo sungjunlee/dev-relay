@@ -5,8 +5,6 @@
  * Executor-agnostic orchestrator: worktree -> execute -> collect -> retain.
  * To add a new executor, add a branch in the "Execute task" section.
  *
- * Designed for Claude Code's Bash(run_in_background=true) pattern.
- *
  * Usage:
  *   ./dispatch.js <repo-path> --branch <name> --prompt <task>  [options]
  *   ./dispatch.js <repo-path> --branch <name> --prompt-file <path> [options]

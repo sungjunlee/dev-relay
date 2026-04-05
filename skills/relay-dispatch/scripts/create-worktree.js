@@ -232,7 +232,7 @@ function main() {
     threadId,
     title: TITLE,
     registered: REGISTER,
-    exec: WORKTREE_PATH ? null : `codex exec -C ${shellQuote(wtPath)} --full-auto "your task here"`,
+    exec: WORKTREE_PATH ? null : `<executor> exec -C ${shellQuote(wtPath)} "your task here"`,
     resume: REGISTER ? `codex resume ${threadId}` : null,
   };
 
@@ -247,8 +247,8 @@ function main() {
       console.log(`\n  Restart Codex App to see the thread.`);
       console.log(`  Resume: codex resume ${threadId}`);
     } else {
-      console.log(`\n  Run:    codex exec -C ${shellQuote(wtPath)} --full-auto "your task"`);
-      console.log(`  Thread will appear in App after exec + App restart.`);
+      console.log(`\n  Run:    dispatch.js ${shellQuote(REPO_PATH)} -b ${branch} --prompt "your task"`);
+      console.log(`  Or manually: codex exec -C ${shellQuote(wtPath)} --full-auto "your task"`);
     }
     if (PIN) console.log("  Pinned: yes (won't be auto-cleaned).");
   }
