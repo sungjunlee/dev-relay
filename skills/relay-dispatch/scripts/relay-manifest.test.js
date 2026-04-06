@@ -352,3 +352,35 @@ test("compareEnvironmentSnapshot skips fields that are null in both", () => {
   const current = { node_version: "v22.12.0", main_sha: null, lockfile_hash: null, dispatch_ts: "t2" };
   assert.deepEqual(compareEnvironmentSnapshot(baseline, current), []);
 });
+
+test("manifest round-trips with environment block", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-env-rt-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  const runId = "issue-96-20260406040000000";
+  const { manifestPath } = ensureRunLayout(repoRoot, runId);
+  const manifest = createManifestSkeleton({
+    repoRoot,
+    runId,
+    branch: "issue-96",
+    baseBranch: "main",
+    issueNumber: 96,
+    worktreePath: path.join(repoRoot, "wt"),
+    orchestrator: "claude",
+    executor: "codex",
+    reviewer: "claude",
+    environment: {
+      node_version: "v22.12.0",
+      main_sha: "abc1234def5678",
+      lockfile_hash: "sha256:aabbccdd",
+      dispatch_ts: "2026-04-06T04:00:00.000Z",
+    },
+  });
+
+  writeManifest(manifestPath, manifest);
+  const parsed = readManifest(manifestPath);
+
+  assert.equal(parsed.data.environment.node_version, "v22.12.0");
+  assert.equal(parsed.data.environment.main_sha, "abc1234def5678");
+  assert.equal(parsed.data.environment.lockfile_hash, "sha256:aabbccdd");
+  assert.equal(parsed.data.environment.dispatch_ts, "2026-04-06T04:00:00.000Z");
+});

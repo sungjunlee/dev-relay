@@ -324,6 +324,7 @@ function createManifestSkeleton({
   mergePolicy = "manual_after_lgtm",
   cleanupPolicy = "on_close",
   reviewerWritePolicy = "forbid",
+  environment = null,
 }) {
   const createdAt = nowIso();
 
@@ -368,6 +369,12 @@ function createManifestSkeleton({
       last_reviewed_sha: null,
     },
     cleanup: createCleanupSkeleton(),
+    environment: environment || {
+      node_version: null,
+      main_sha: null,
+      lockfile_hash: null,
+      dispatch_ts: null,
+    },
     timestamps: {
       created_at: createdAt,
       updated_at: createdAt,
