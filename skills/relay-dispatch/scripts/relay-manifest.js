@@ -602,7 +602,7 @@ function collectEnvironmentSnapshot(repoRoot, baseBranch) {
     node_version: process.version,
     main_sha: mainSha,
     lockfile_hash: lockfileHash,
-    dispatch_ts: new Date().toISOString(),
+    dispatch_ts: nowIso(),
   };
 }
 
