@@ -48,23 +48,25 @@ function writeRun(repoRoot, { runId, state, rounds, updatedAt }) {
 test("reliability-report derives the core scorecard from manifests and events", () => {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-report-"));
   process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  const recentTs = new Date(Date.now() - 1 * 60 * 60 * 1000).toISOString(); // 1 hour ago
+  const staleTs = new Date(Date.now() - 10 * 24 * 60 * 60 * 1000).toISOString(); // 10 days ago
   writeRun(repoRoot, {
     runId: "run-ready",
     state: STATES.READY_TO_MERGE,
     rounds: 2,
-    updatedAt: "2026-04-03T00:00:00.000Z",
+    updatedAt: recentTs,
   });
   writeRun(repoRoot, {
     runId: "run-merged",
     state: STATES.MERGED,
     rounds: 4,
-    updatedAt: "2026-04-03T00:00:00.000Z",
+    updatedAt: recentTs,
   });
   writeRun(repoRoot, {
     runId: "run-stale-open",
     state: STATES.REVIEW_PENDING,
     rounds: 1,
-    updatedAt: "2026-03-25T00:00:00.000Z",
+    updatedAt: staleTs,
   });
 
   appendRunEvent(repoRoot, "run-ready", {
