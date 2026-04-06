@@ -356,3 +356,25 @@ test("re-dispatch prompt includes previous iteration history", () => {
   assert.match(dispatchPrompt, /Fixed-delay retry/);
   assert.match(dispatchPrompt, /fix the issues/);
 });
+
+test("new dispatch manifest includes environment snapshot", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  writeFakeCodex(binDir);
+  const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}` };
+
+  const result = JSON.parse(runDispatch(repoRoot, [
+    "-b", "issue-96-env",
+    "--prompt", "test env snapshot",
+    "--json",
+  ], env));
+
+  assert.equal(result.status, "completed");
+  const manifest = readManifest(result.manifestPath).data;
+  assert.ok(manifest.environment);
+  assert.equal(manifest.environment.node_version, process.version);
+  assert.equal(typeof manifest.environment.dispatch_ts, "string");
+  // No remote in test repo, so main_sha is null
+  assert.equal(manifest.environment.main_sha, null);
+});
