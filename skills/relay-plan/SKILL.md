@@ -46,6 +46,9 @@ rubric:
         low: "No timeouts on external calls, retry-on-everything, errors swallowed silently"
         mid: "Timeouts on external calls, basic retry without backoff or jitter"
         high: "All four criteria met, edge cases handled (partial degradation, idempotency-aware retry)"
+        fix_hint:                          # optional — prescriptive "what to do next"
+          low_to_mid: "Add timeouts to all external HTTP/DB calls (default 5s); wrap retries in idempotency check"
+          mid_to_high: "Add exponential backoff with jitter; add circuit breaker after N=3 consecutive failures"
       target: ">= 8/10"
       weight: required
 
@@ -75,7 +78,7 @@ rubric:
 | **best-effort** | Note in PR if below target |
 **`setup`** / **`baseline`**: Run setup commands before checks; capture baseline for delta metrics (run BEFORE changes).
 **`criteria`**: Multi-line, specific bullets — not "good error handling" but "timeouts on external calls, retry with backoff."
-**`scoring_guide`**: Three anchors (low/mid/high) — each tells the executor what to fix next. Shared scale between executor and reviewer.
+**`scoring_guide`**: Three anchors (low/mid/high) — each tells the executor what to fix next. Shared scale between executor and reviewer. Optional `fix_hint` adds prescriptive transition guidance (low→mid, mid→high) for when descriptive anchors alone leave the executor stuck.
 
 ### Domain references (for expert perspective)
 
@@ -137,7 +140,7 @@ Take the base template (`relay/references/prompt-template.md`) and add these sec
        - Check: stubs, TODOs, hardcoded values, test manipulation, placeholder returns
        → All clear → PR
        → Issues found → fix → re-score → PR
-    5. Else → lowest required factor → ONE focused fix → commit → repeat
+    5. Else → lowest required factor → if fix_hint exists, apply it as the starting fix → ONE focused change → commit → repeat
     6. Stuck 3 iterations on same factor:
        → best-effort: note gap in PR description, continue
        → required: stop loop, create PR with partial progress + stuck note, flag for orchestrator

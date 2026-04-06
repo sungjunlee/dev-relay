@@ -29,6 +29,9 @@ Scoring guide:
 - **low**: No timeouts on external calls, retry-on-everything, errors swallowed silently, cascading failures possible.
 - **mid**: Timeouts on external calls, basic retry exists but without backoff/jitter or idempotency awareness.
 - **high**: All four criteria met — graceful degradation, idempotency-aware retry with backoff, circuit breaking, actionable error messages.
+- **fix_hint**:
+  - low→mid: Add timeout (default 5s) to every external HTTP/DB call; gate retries behind an idempotency check
+  - mid→high: Add exponential backoff with jitter to retries; wrap downstream calls in a circuit breaker (open after 3 consecutive failures); return structured error with caller-actionable message
 
 ### Data integrity (target: ≥ 8/10)
 
@@ -43,6 +46,9 @@ Scoring guide:
 - **low**: No database constraints backing application validations, no idempotency keys on mutations, transactions missing on multi-step operations.
 - **mid**: DB constraints on critical fields, transactions on obvious multi-step ops, but idempotency not considered for mutation endpoints.
 - **high**: Constraints + transactions + idempotency keys on all mutations, query plans checked for new queries at scale.
+- **fix_hint**:
+  - low→mid: Add UNIQUE/NOT NULL/FK constraints to critical fields; wrap multi-step mutations in a transaction
+  - mid→high: Add idempotency key header to all mutation endpoints; run EXPLAIN on new queries with expected production row counts
 
 ### Resource discipline (target: ≥ 7/10)
 
