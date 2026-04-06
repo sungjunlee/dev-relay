@@ -99,6 +99,7 @@ Before dispatch, verify:
 - [ ] ≥ 1 automated check exists (ground truth) + commands are immutable
 - [ ] Every evaluated factor has `scoring_guide` with low/mid/high anchors
 - [ ] Criteria are specific ("timeouts on external calls") not vague ("good error handling")
+- [ ] Criteria reference discoverable artifacts (file paths, function names, code patterns) not abstract qualities ("follows conventions", "consistent style")
 - [ ] 3-5 factors total; targets are concrete ("≥ 8/10", "< 200ms") not relative
 - [ ] Automated checks measure verifiable outcomes ("API < 200ms", `grep -q`, test command) not proxies ("tests pass")
 
