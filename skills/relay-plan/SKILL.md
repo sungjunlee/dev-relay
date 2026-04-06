@@ -124,16 +124,28 @@ Take the base template (`relay/references/prompt-template.md`) and add these sec
   BEFORE LOOP: Run baseline if defined. RULE: Do NOT modify automated check commands.
   LOOP (max 5 iterations):
     1. Run ALL automated checks + self-evaluate ALL evaluated factors, record scores
-    2. Append to Score Log (keep ALL iterations, not just final)
-    3. All required meet target → final self-review (Done Criteria, stubs/TODOs, tests) → PR
-    4. Else → lowest required factor → ONE focused fix → commit → repeat
-    5. Stuck 3 iterations → best-effort: note in PR | required: stop, flag for human
+    2. REGRESSION CHECK: Any factor previously marked locked now below target?
+       → Revert this iteration's changes (git reset to previous commit)
+       → Re-attempt with constraint: "Maintain [factor] at [score] while improving [target factor]"
+       → Regression persists after 1 re-attempt → flag both factors, escalate
+    3. Append to Score Log — mark factors that meet target as locked
+    4. All required meet target → adversarial self-review:
+       - Review as if you did NOT write this code and are seeing it for the first time
+       - For each automated check: could the target be met by a shortcut that misses the intent?
+         (e.g., stubbed endpoint returns fast but does nothing; test modified to always pass)
+       - For each evaluated factor: re-read scoring_guide "high" — does it genuinely apply?
+       - Check: stubs, TODOs, hardcoded values, test manipulation, placeholder returns
+       → All clear → PR
+       → Issues found → fix → re-score → PR
+    5. Else → lowest required factor → ONE focused fix → commit → repeat
+    6. Stuck 3 iterations → best-effort: note in PR | required: stop, flag for human
   ```
 - **Score Log**: iteration scores table in PR description (reviewer re-scores independently):
   ```
-  | Factor | Target | Baseline | Iter 1 | Iter 2 | Final |
-  |--------|--------|----------|--------|--------|-------|
+  | Factor | Target | Baseline | Iter 1 | Iter 2 | Final | Status |
+  |--------|--------|----------|--------|--------|-------|--------|
   ```
+  Status: `—` (not met), `locked` (met target — must not regress in subsequent iterations)
 
 ### 5. Dispatch
 
