@@ -253,3 +253,18 @@ One sentence per level is enough. If you can't distinguish mid from high, the cr
 - "Tests exist" → "Tests pass" → "Tests cover the changed code paths"
 - "Docs written" → "Code examples run" → "Reader testing score ≥ 8/10"
 - "No lint errors" → "Complexity ≤ baseline" → "Functions < 20 lines"
+
+### "Ungrounded criteria"
+
+**Symptom**: Criteria reference abstract qualities the executor cannot discover from the rubric alone. The executor would need to read 5+ files to understand what the criterion means.
+
+**Rule of thumb**: if the executor would need to explore the codebase to understand a criterion, it's ungrounded. Either ground it with specific references or convert it to an automated check.
+
+**Fix**: Replace abstract references with discoverable artifacts — file paths, function names, code patterns with examples.
+
+| Ungrounded | Grounded |
+|---|---|
+| "follow the project's error handling conventions" | "use `AppError` class from `src/errors.ts`, wrap async handlers in try-catch, log via `logger.error()`" |
+| "consistent API style" | "match the response shape in `src/routes/users.ts`: `{ data, meta, errors }`" |
+| "production-ready logging" | "use structured JSON logging via pino; include `requestId`, `userId`, `duration` fields" |
+| "matches existing component patterns" | "follow the pattern in `src/components/UserCard.tsx`: props interface, named export, co-located test file" |
