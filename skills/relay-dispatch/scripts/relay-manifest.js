@@ -599,6 +599,20 @@ function collectEnvironmentSnapshot(repoRoot, baseBranch) {
   };
 }
 
+const ENVIRONMENT_COMPARE_FIELDS = ["node_version", "main_sha", "lockfile_hash"];
+
+function compareEnvironmentSnapshot(baseline, current) {
+  if (!baseline || !current) return [];
+  const drift = [];
+  for (const field of ENVIRONMENT_COMPARE_FIELDS) {
+    const from = baseline[field] ?? null;
+    const to = current[field] ?? null;
+    if (from === null && to === null) continue;
+    if (from !== to) drift.push({ field, from, to });
+  }
+  return drift;
+}
+
 module.exports = {
   ALLOWED_TRANSITIONS,
   CLEANUP_STATUSES,
@@ -607,6 +621,7 @@ module.exports = {
   STATES,
   captureAttempt,
   collectEnvironmentSnapshot,
+  compareEnvironmentSnapshot,
   createCleanupSkeleton,
   createManifestSkeleton,
   createRunId,

@@ -10,6 +10,7 @@ const {
   STATES,
   captureAttempt,
   collectEnvironmentSnapshot,
+  compareEnvironmentSnapshot,
   createManifestSkeleton,
   createRunId,
   ensureRunLayout,
@@ -303,4 +304,51 @@ test("collectEnvironmentSnapshot hashes lockfile when present", () => {
 
   assert.ok(snapshot.lockfile_hash);
   assert.match(snapshot.lockfile_hash, /^sha256:[a-f0-9]{64}$/);
+});
+
+test("compareEnvironmentSnapshot returns empty array for identical snapshots", () => {
+  const snapshot = {
+    node_version: "v22.12.0",
+    main_sha: "abc1234",
+    lockfile_hash: "sha256:aaa",
+    dispatch_ts: "2026-04-06T04:00:00.000Z",
+  };
+  const drift = compareEnvironmentSnapshot(snapshot, { ...snapshot });
+  assert.deepEqual(drift, []);
+});
+
+test("compareEnvironmentSnapshot detects field changes", () => {
+  const baseline = {
+    node_version: "v22.12.0",
+    main_sha: "abc1234",
+    lockfile_hash: "sha256:aaa",
+    dispatch_ts: "2026-04-06T04:00:00.000Z",
+  };
+  const current = {
+    node_version: "v22.12.0",
+    main_sha: "def5678",
+    lockfile_hash: "sha256:bbb",
+    dispatch_ts: "2026-04-06T05:00:00.000Z",
+  };
+  const drift = compareEnvironmentSnapshot(baseline, current);
+  assert.equal(drift.length, 2);
+  assert.ok(drift.some(d => d.field === "main_sha" && d.from === "abc1234" && d.to === "def5678"));
+  assert.ok(drift.some(d => d.field === "lockfile_hash" && d.from === "sha256:aaa" && d.to === "sha256:bbb"));
+});
+
+test("compareEnvironmentSnapshot returns empty array when baseline is null", () => {
+  const current = {
+    node_version: "v22.12.0",
+    main_sha: "abc1234",
+    lockfile_hash: null,
+    dispatch_ts: "2026-04-06T04:00:00.000Z",
+  };
+  assert.deepEqual(compareEnvironmentSnapshot(null, current), []);
+  assert.deepEqual(compareEnvironmentSnapshot(undefined, current), []);
+});
+
+test("compareEnvironmentSnapshot skips fields that are null in both", () => {
+  const baseline = { node_version: "v22.12.0", main_sha: null, lockfile_hash: null, dispatch_ts: "t1" };
+  const current = { node_version: "v22.12.0", main_sha: null, lockfile_hash: null, dispatch_ts: "t2" };
+  assert.deepEqual(compareEnvironmentSnapshot(baseline, current), []);
 });
