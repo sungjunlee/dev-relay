@@ -54,6 +54,7 @@ const { copyWorktreeFiles, getWorktreeIncludeFiles } = require("./worktreeinclud
 const { registerCodexApp } = require("./codex-app-register");
 const {
   STATES,
+  collectEnvironmentSnapshot,
   createManifestSkeleton,
   createRunId,
   ensureRunLayout,
@@ -336,6 +337,7 @@ async function main() {
       resultFile, stdoutLog, stderrLog, timeout: TIMEOUT, copyEnv: COPY_ENV,
       cleanupPolicy,
       worktreeinclude: includeFiles,
+      environment: RESUME_MODE ? (manifest?.environment || null) : "collected-at-dispatch",
     };
     if (JSON_OUT) {
       console.log(JSON.stringify(plan, null, 2));
@@ -420,6 +422,7 @@ async function main() {
       }
     }
 
+    const environment = collectEnvironmentSnapshot(repoRoot, baseBranch);
     manifest = createManifestSkeleton({
       repoRoot,
       runId,
@@ -431,6 +434,7 @@ async function main() {
       executor: EXECUTOR,
       reviewer: process.env.RELAY_REVIEWER || "unknown",
       cleanupPolicy,
+      environment,
     });
     ensureRunLayout(repoRoot, runId);
     writeManifest(manifestPath, manifest);
