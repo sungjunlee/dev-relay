@@ -140,7 +140,6 @@ The metric measurement command should not be something the agent can game. Separ
 
 **Automated check commands are immutable.** The dispatch prompt explicitly forbids the executor from modifying them. If a check fails, the fix is in the code — not the command. This closes the Goodhart vulnerability where the executor "improves" the scoring command itself to inflate scores.
 
-<<<<<<< HEAD
 ### 7. Regression prevention
 
 When fixing one factor, the executor may silently degrade another. Factor interference is the #1 cause of wasted iterations — the agent oscillates between factors, never converging.
@@ -155,7 +154,7 @@ When fixing one factor, the executor may silently degrade another. Factor interf
 | API clarity    | ≥ 7     | 4      | 5        | 7 ✓    | locked |
 ```
 
-This pattern reduces factor interference ~40% in practice (Devin benchmarks). The iteration protocol enforces it: step 2 checks for regression before proceeding.
+This pattern reduces factor interference in practice by preventing silent regression during multi-factor iteration. The iteration protocol enforces it: step 2 checks for regression before proceeding.
 
 ## Stuck Patterns
 

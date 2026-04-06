@@ -30,8 +30,8 @@ Scoring guide:
 - **mid**: Skeleton loaders on main content, error boundaries exist but no retry path, basic transitions.
 - **high**: Optimistic updates on instant-feel actions, meaningful loading states, graceful error recovery with retry.
 - **fix_hint**:
-  - low→mid: Replace spinners with skeleton loaders matching content shape; add error boundary with fallback UI
-  - mid→high: Add optimistic updates for instant-feel actions (toggle, like, drag); add retry button in error boundaries; add CSS transitions for state changes (fade-out on remove, slide-in on add)
+  - low_to_mid: Replace spinners with skeleton loaders matching content shape; add error boundary with fallback UI
+  - mid_to_high: Add optimistic updates for instant-feel actions (toggle, like, drag); add retry button in error boundaries; add CSS transitions for state changes (fade-out on remove, slide-in on add)
 
 ### Information hierarchy (target: ≥ 7/10)
 
@@ -59,8 +59,8 @@ Scoring guide:
 - **mid**: Data flow is traceable but some over-abstraction; re-renders bounded but not optimal.
 - **high**: Abstractions earn their cost, state lives at the right level, component boundaries match the user's mental model.
 - **fix_hint**:
-  - low→mid: Lift state to nearest common ancestor; replace prop drilling with context or composition (children pattern)
-  - mid→high: Remove abstractions used in only one place; move state to the component that owns the behavior; split components at user-mental-model boundaries, not technical layer boundaries
+  - low_to_mid: Lift state to nearest common ancestor; replace prop drilling with context or composition (children pattern)
+  - mid_to_high: Remove abstractions used in only one place; move state to the component that owns the behavior; split components at user-mental-model boundaries, not technical layer boundaries
 
 ### Responsive integrity (target: ≥ 7/10)
 
