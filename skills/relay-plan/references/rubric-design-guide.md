@@ -96,7 +96,7 @@ scoring_guide:
 - Transition from mid→high requires a non-obvious technique (circuit breaking, backoff with jitter)
 - Skip for factors where the anchors already make the next step obvious
 
-**How to write them:** Prescriptive ("add X", "replace Y with Z"), not descriptive ("has X"). Concrete enough to be actionable, not so specific that they prescribe implementation details.
+**How to write them:** Imperative voice ("add X", "replace Y with Z"), not descriptive ("has X", "includes Y"). Concrete enough to be actionable, not so specific that they prescribe implementation details. Existing rubrics without `fix_hint` are valid — the executor falls back to its own judgment when the field is absent.
 
 ### Q5: What's the baseline?
 
