@@ -77,6 +77,27 @@ Examples:
 | Component design | "Prop drilling > 3 levels, components only used in one context but are 'reusable'" | "Clean data flow, but some over-abstraction or unnecessary indirection" | "Abstractions earn their cost, data flow traceable without jumping files" |
 | Documentation | "Steps assume tools not mentioned, no version requirements, reader can't tell if they succeeded" | "Steps complete but terse, missing failure paths or edge cases" | "Zero-context reader can complete the task, happy + failure paths covered" |
 
+#### Optional: fix_hint for directed iteration
+
+When anchors alone aren't enough, add `fix_hint` with prescriptive transitions. This breaks the "mid trap" — where the executor reaches 5-6/10 and cannot determine which concrete action would move it higher.
+
+```yaml
+scoring_guide:
+  low: "No timeouts on external calls, retry-on-everything"
+  mid: "Timeouts exist but no backoff/jitter or idempotency awareness"
+  high: "All four criteria met, edge cases handled"
+  fix_hint:
+    low_to_mid: "Add timeouts to all external HTTP/DB calls (default 5s); wrap retries in idempotency check"
+    mid_to_high: "Add exponential backoff with jitter; add circuit breaker after N=3 consecutive failures"
+```
+
+**When to write fix_hints:**
+- Factor has a history of plateau at mid (executor gets stuck at 5-6/10)
+- Transition from mid→high requires a non-obvious technique (circuit breaking, backoff with jitter)
+- Skip for factors where the anchors already make the next step obvious
+
+**How to write them:** Prescriptive ("add X", "replace Y with Z"), not descriptive ("has X"). Concrete enough to be actionable, not so specific that they prescribe implementation details.
+
 ### Q5: What's the baseline?
 
 For delta metrics (performance, bundle size, complexity, dead code), the target should be relative to the current state, not an arbitrary number.
