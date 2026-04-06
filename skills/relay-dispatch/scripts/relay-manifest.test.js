@@ -334,6 +334,7 @@ test("compareEnvironmentSnapshot detects field changes", () => {
   assert.equal(drift.length, 2);
   assert.ok(drift.some(d => d.field === "main_sha" && d.from === "abc1234" && d.to === "def5678"));
   assert.ok(drift.some(d => d.field === "lockfile_hash" && d.from === "sha256:aaa" && d.to === "sha256:bbb"));
+  assert.ok(!drift.some(d => d.field === "dispatch_ts"), "dispatch_ts must be excluded from drift");
 });
 
 test("compareEnvironmentSnapshot returns empty array when baseline is null", () => {
