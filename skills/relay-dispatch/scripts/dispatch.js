@@ -55,6 +55,7 @@ const { registerCodexApp } = require("./codex-app-register");
 const {
   STATES,
   collectEnvironmentSnapshot,
+  compareEnvironmentSnapshot,
   createManifestSkeleton,
   createRunId,
   ensureRunLayout,
@@ -302,6 +303,22 @@ async function main() {
     } catch (error) {
       console.error(`Error: retained worktree is unusable: ${error.message}`);
       process.exit(1);
+    }
+
+    // --- Environment drift check ---
+    const currentEnv = collectEnvironmentSnapshot(repoRoot, baseBranch);
+    const drift = compareEnvironmentSnapshot(manifest.environment, currentEnv);
+    if (drift.length) {
+      const driftMsg = drift.map(d => `${d.field}: ${d.from} → ${d.to}`).join(", ");
+      if (!JSON_OUT) {
+        console.error(`[WARN] Environment drift detected since initial dispatch: ${driftMsg}`);
+      }
+      appendRunEvent(repoRoot, runId, {
+        event: "environment_drift",
+        state_from: manifest.state,
+        state_to: manifest.state,
+        reason: driftMsg,
+      });
     }
   } else {
     runId = createRunId({ issueNumber, branch });

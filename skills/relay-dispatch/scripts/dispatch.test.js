@@ -378,3 +378,41 @@ test("new dispatch manifest includes environment snapshot", () => {
   // No remote in test repo, so main_sha is null
   assert.equal(manifest.environment.main_sha, null);
 });
+
+test("re-dispatch detects environment drift and records event", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  writeFakeCodex(binDir);
+  const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}` };
+
+  const first = JSON.parse(runDispatch(repoRoot, [
+    "-b", "issue-drift",
+    "--prompt", "first pass",
+    "--json",
+  ], env));
+  assert.equal(first.runState, STATES.REVIEW_PENDING);
+
+  // Tamper with manifest environment to simulate drift
+  const record = readManifest(first.manifestPath);
+  let updated = updateManifestState(record.data, STATES.CHANGES_REQUESTED, "re_dispatch");
+  updated.environment.lockfile_hash = "sha256:old_hash_that_will_differ";
+  writeManifest(first.manifestPath, updated, record.body);
+
+  // Create a package-lock.json so current snapshot has a hash
+  fs.writeFileSync(path.join(repoRoot, "package-lock.json"), '{"lockfileVersion":3}\n');
+
+  const second = JSON.parse(runDispatch(repoRoot, [
+    "--run-id", first.runId,
+    "--prompt", "resume with drift",
+    "--json",
+  ], env));
+
+  assert.equal(second.mode, "resume");
+  assert.equal(second.runState, STATES.REVIEW_PENDING);
+
+  // Check that environment_drift event was recorded
+  const events = fs.readFileSync(getEventsPath(repoRoot, first.runId), "utf-8");
+  assert.match(events, /"event":"environment_drift"/);
+  assert.match(events, /lockfile_hash/);
+});
