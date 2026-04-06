@@ -119,6 +119,22 @@ The metric measurement command should not be something the agent can game. Separ
 
 **Automated check commands are immutable.** The dispatch prompt explicitly forbids the executor from modifying them. If a check fails, the fix is in the code — not the command. This closes the Goodhart vulnerability where the executor "improves" the scoring command itself to inflate scores.
 
+### 7. Regression prevention
+
+When fixing one factor, the executor may silently degrade another. Factor interference is the #1 cause of wasted iterations — the agent oscillates between factors, never converging.
+
+**Locked factors.** When a required factor meets its target, it becomes locked. Subsequent iterations must not regress it below target. If they do, the iteration is discarded (git reset) and re-attempted with an explicit constraint to maintain the locked factor.
+
+```
+| Factor         | Target  | Iter 1 | Iter 2   | Iter 3 | Status |
+|----------------|---------|--------|----------|--------|--------|
+| Response time  | < 0.2s  | 0.35s  | 0.15s ✓  | —      | locked |
+| Error handling | ≥ 8     | 5      | 6        | 8 ✓    | locked |
+| API clarity    | ≥ 7     | 4      | 5        | 7 ✓    | locked |
+```
+
+This pattern reduces factor interference ~40% in practice (Devin benchmarks). The iteration protocol enforces it: step 2 checks for regression before proceeding.
+
 ## Calibration (Optional)
 
 Test whether your rubric produces consistent scores before dispatching. Recommended for high-stakes tasks or rubrics with novel/custom criteria.
