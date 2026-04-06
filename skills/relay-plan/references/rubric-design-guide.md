@@ -140,6 +140,7 @@ The metric measurement command should not be something the agent can game. Separ
 
 **Automated check commands are immutable.** The dispatch prompt explicitly forbids the executor from modifying them. If a check fails, the fix is in the code — not the command. This closes the Goodhart vulnerability where the executor "improves" the scoring command itself to inflate scores.
 
+<<<<<<< HEAD
 ### 7. Regression prevention
 
 When fixing one factor, the executor may silently degrade another. Factor interference is the #1 cause of wasted iterations — the agent oscillates between factors, never converging.
@@ -155,6 +156,67 @@ When fixing one factor, the executor may silently degrade another. Factor interf
 ```
 
 This pattern reduces factor interference ~40% in practice (Devin benchmarks). The iteration protocol enforces it: step 2 checks for regression before proceeding.
+
+## Stuck Patterns
+
+Three pathological iteration patterns. The iteration protocol checks all three before proceeding (iteration loop step 6).
+
+### Single-factor stall
+
+Same factor stays below target for 3 consecutive iterations. The executor is trying the same approach repeatedly.
+
+```
+| Factor         | Target | Iter 1 | Iter 2 | Iter 3 |
+|----------------|--------|--------|--------|--------|
+| Error handling | ≥ 8    | 5      | 5      | 5      | ← stalled (3 iters below target, no progress)
+```
+
+### Oscillation
+
+Any two factors alternate regression across 4+ iterations. Each individually "improves" on alternate iterations, but net progress is zero. Check all factor pairs.
+
+```
+| Factor         | Target | Iter 1 | Iter 2 | Iter 3 | Iter 4 |
+|----------------|--------|--------|--------|--------|--------|
+| Response time  | < 0.2s | 0.35s  | 0.15s  | 0.40s  | 0.12s  | ← oscillating with error handling
+| Error handling | ≥ 8    | 5      | 3      | 7      | 4      | ← oscillating with response time
+```
+
+This is a multi-objective optimization failure — fixing one factor's code path degrades another's. Prevention: design factors with minimal overlap; check for shared code paths during rubric design.
+
+### Plateau
+
+No required factor has improved toward its target over 2 consecutive iterations. Individual factors may fluctuate, but none makes progress.
+
+```
+| Factor    | Target | Iter 1 | Iter 2 | Iter 3 |
+|-----------|--------|--------|--------|--------|
+| Factor A  | ≥ 8    | 5      | 6      | 5      | ← no net improvement from iter 1→3
+| Factor B  | ≥ 7    | 4      | 3      | 4      | ← no net improvement from iter 1→3
+```
+
+The executor checks each required factor individually: did it move closer to its target compared to 2 iterations ago? If none did, the system is plateaued. This avoids summing scores across incompatible units (seconds, scores, counts).
+
+## Complexity Budget (Recommended)
+
+Each iteration adds defensive code, null checks, and edge case handling. After 3-5 iterations, a 20-line function can become 80 lines of primarily defensive code with core logic buried.
+
+For tasks expecting 3+ iterations, consider adding a complexity baseline as a best-effort factor:
+
+```yaml
+- name: Complexity budget
+  type: automated
+  command: "<see ecosystem examples below>"
+  target: "≤ baseline"
+  weight: best-effort
+```
+
+Commands by ecosystem:
+- **Node.js/TS**: `npx eslint --no-eslintrc --rule '{complexity: [error, 15]}' 'src/**/*.{js,ts}' 2>&1 | grep -c 'error' || echo 0`
+- **Python**: `radon cc -s -a -nc src/ | tail -1`
+- **General**: `wc -l` on changed files (crude but directional)
+
+This is a recommendation, not a required validation step. Rubric designers decide whether to include it. Frame as `best-effort` — note in PR if exceeded, don't block. Simpler is better: removing something and getting equal or better results is a simplification win (autoresearch principle).
 
 ## Calibration (Optional)
 

@@ -142,9 +142,10 @@ Take the base template (`relay/references/prompt-template.md`) and add these sec
        → All clear → PR
        → Issues found → fix → re-score → PR
     5. Else → lowest required factor → if fix_hint exists, apply it as the starting fix → ONE focused change → commit → repeat
-    6. Stuck 3 iterations on same factor:
-       → best-effort: note gap in PR description, continue
-       → required: stop loop, create PR with partial progress + stuck note, flag for orchestrator
+    6. Stuck detection (any trigger → best-effort: note in PR, continue | required: stop, create PR with partial progress):
+       a) Single-factor stall: same factor below target for 3 consecutive iterations
+       b) Oscillation: any two factors alternate regression across 4+ iterations
+       c) Plateau: no required factor improved toward target over 2 consecutive iterations
   ```
 - **Score Log**: iteration scores table in PR description (reviewer re-scores independently):
   ```
