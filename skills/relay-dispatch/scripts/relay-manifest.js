@@ -575,6 +575,30 @@ function formatAttemptsForPrompt(attempts) {
   return sections.join("\n\n") + "\n\n";
 }
 
+function collectEnvironmentSnapshot(repoRoot, baseBranch) {
+  let mainSha = null;
+  try {
+    mainSha = execFileSync(
+      "git", ["-C", repoRoot, "rev-parse", `origin/${baseBranch}`],
+      { encoding: "utf-8", stdio: "pipe" }
+    ).trim();
+  } catch {}
+
+  let lockfileHash = null;
+  const lockfilePath = path.join(repoRoot, "package-lock.json");
+  try {
+    const content = fs.readFileSync(lockfilePath);
+    lockfileHash = "sha256:" + crypto.createHash("sha256").update(content).digest("hex");
+  } catch {}
+
+  return {
+    node_version: process.version,
+    main_sha: mainSha,
+    lockfile_hash: lockfileHash,
+    dispatch_ts: new Date().toISOString(),
+  };
+}
+
 module.exports = {
   ALLOWED_TRANSITIONS,
   CLEANUP_STATUSES,
@@ -582,6 +606,7 @@ module.exports = {
   RELAY_VERSION,
   STATES,
   captureAttempt,
+  collectEnvironmentSnapshot,
   createCleanupSkeleton,
   createManifestSkeleton,
   createRunId,

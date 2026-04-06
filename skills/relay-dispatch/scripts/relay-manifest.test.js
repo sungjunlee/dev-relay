@@ -1,5 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const { execFileSync } = require("child_process");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
@@ -8,6 +9,7 @@ const {
   CLEANUP_STATUSES,
   STATES,
   captureAttempt,
+  collectEnvironmentSnapshot,
   createManifestSkeleton,
   createRunId,
   ensureRunLayout,
@@ -272,4 +274,33 @@ test("formatAttemptsForPrompt formats attempts correctly", () => {
   assert.match(result, /### Do NOT Repeat/);
   assert.match(result, /- Fixed-delay retry/);
   assert.match(result, /- Skipping timeout/);
+});
+
+test("collectEnvironmentSnapshot returns expected shape", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-env-"));
+  execFileSync("git", ["init", "-b", "main"], { cwd: repoRoot, stdio: "pipe" });
+  execFileSync("git", ["config", "user.name", "Test"], { cwd: repoRoot, stdio: "pipe" });
+  execFileSync("git", ["config", "user.email", "t@t.com"], { cwd: repoRoot, stdio: "pipe" });
+  fs.writeFileSync(path.join(repoRoot, "README.md"), "x\n");
+  execFileSync("git", ["add", "."], { cwd: repoRoot, stdio: "pipe" });
+  execFileSync("git", ["commit", "-m", "init"], { cwd: repoRoot, stdio: "pipe" });
+
+  const snapshot = collectEnvironmentSnapshot(repoRoot, "main");
+
+  assert.equal(snapshot.node_version, process.version);
+  assert.equal(typeof snapshot.dispatch_ts, "string");
+  assert.ok(snapshot.dispatch_ts.endsWith("Z"));
+  assert.equal(snapshot.main_sha, null);
+  assert.equal(snapshot.lockfile_hash, null);
+});
+
+test("collectEnvironmentSnapshot hashes lockfile when present", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-env-lock-"));
+  execFileSync("git", ["init", "-b", "main"], { cwd: repoRoot, stdio: "pipe" });
+  fs.writeFileSync(path.join(repoRoot, "package-lock.json"), '{"lockfileVersion":3}\n');
+
+  const snapshot = collectEnvironmentSnapshot(repoRoot, "main");
+
+  assert.ok(snapshot.lockfile_hash);
+  assert.match(snapshot.lockfile_hash, /^sha256:[a-f0-9]{64}$/);
 });
