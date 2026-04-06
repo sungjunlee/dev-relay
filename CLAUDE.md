@@ -27,7 +27,7 @@ skills/
   relay-dispatch/          ← Worktree isolation + executor dispatch
     scripts/
       dispatch.js          ← Core dispatch (executor-agnostic entry point)
-      relay-manifest.js    ← Manifest CRUD, state machine, transitions, cleanup ops
+      relay-manifest.js    ← Manifest CRUD, state machine, transitions, cleanup ops, environment snapshot
       relay-events.js      ← Event journal (~/.relay/runs/<slug>/<id>/events.jsonl)
       relay-resolver.js    ← Run-ID / manifest / branch resolution
       codex-app-register.js ← Codex App thread registration (shared module)

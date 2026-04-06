@@ -1,8 +1,8 @@
 # Environment Snapshot Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+**Status: Implemented** — merged in PR #101, closes #96.
 
-**Goal:** Record environment metadata at dispatch time and warn on drift at re-dispatch, closing #96.
+**Goal:** Record environment metadata at dispatch time and warn on drift at re-dispatch.
 
 **Architecture:** Two pure-ish functions in relay-manifest.js (`collectEnvironmentSnapshot`, `compareEnvironmentSnapshot`), called from dispatch.js at new-dispatch and resume points. Drift events use existing `appendRunEvent`.
 

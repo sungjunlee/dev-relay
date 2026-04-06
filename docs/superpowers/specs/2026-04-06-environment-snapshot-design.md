@@ -1,6 +1,8 @@
 # Environment Snapshot in Manifest (#96)
 
-Closes #96. Record environment metadata at dispatch time; warn on drift at re-dispatch.
+**Status: Implemented** — merged in PR #101.
+
+Record environment metadata at dispatch time; warn on drift at re-dispatch.
 
 ## Manifest schema
 
@@ -21,7 +23,7 @@ All values are strings or null. No arrays (frontmatter parser rejects them).
 | `node_version` | `process.version` | No exec needed |
 | `main_sha` | `git rev-parse origin/<baseBranch>` | After fetch; null if no remote |
 | `lockfile_hash` | sha256 of `package-lock.json` | null if file absent |
-| `dispatch_ts` | `new Date().toISOString()` | Snapshot collection time |
+| `dispatch_ts` | `nowIso()` | Snapshot collection time |
 
 ## New functions (relay-manifest.js)
 
@@ -32,7 +34,7 @@ Returns `{ node_version, main_sha, lockfile_hash, dispatch_ts }`.
 - `node_version`: `process.version`
 - `main_sha`: `execFileSync("git", ["-C", repoRoot, "rev-parse", "origin/" + baseBranch])`, catch → null
 - `lockfile_hash`: read `package-lock.json` from repoRoot, sha256 hash, catch → null
-- `dispatch_ts`: `new Date().toISOString()`
+- `dispatch_ts`: `nowIso()`
 
 ### `compareEnvironmentSnapshot(baseline, current)`
 
