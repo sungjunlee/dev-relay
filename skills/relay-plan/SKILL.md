@@ -138,7 +138,9 @@ Take the base template (`relay/references/prompt-template.md`) and add these sec
        → All clear → PR
        → Issues found → fix → re-score → PR
     5. Else → lowest required factor → ONE focused fix → commit → repeat
-    6. Stuck 3 iterations → best-effort: note in PR | required: stop, flag for human
+    6. Stuck 3 iterations on same factor:
+       → best-effort: note gap in PR description, continue
+       → required: stop loop, create PR with partial progress + stuck note, flag for orchestrator
   ```
 - **Score Log**: iteration scores table in PR description (reviewer re-scores independently):
   ```
