@@ -46,6 +46,94 @@ function median(values) {
   return sorted[middle];
 }
 
+function average(values) {
+  if (!values.length) return null;
+  const total = values.reduce((sum, value) => sum + value, 0);
+  return Number((total / values.length).toFixed(4));
+}
+
+function buildFactorAnalysis(events) {
+  const factorsByRun = new Map();
+
+  for (const event of events) {
+    if (event.event !== "iteration_score" || !event.run_id) continue;
+    if (!Array.isArray(event.scores) || event.scores.length === 0) continue;
+
+    const round = Number(event.round);
+    const roundNumber = Number.isFinite(round) ? round : null;
+    if (!factorsByRun.has(event.run_id)) {
+      factorsByRun.set(event.run_id, new Map());
+    }
+
+    const runFactors = factorsByRun.get(event.run_id);
+    for (const score of event.scores) {
+      const factor = typeof score?.factor === "string" ? score.factor.trim() : "";
+      if (!factor) continue;
+
+      if (!runFactors.has(factor)) {
+        runFactors.set(factor, {
+          met: false,
+          firstMetRound: null,
+        });
+      }
+
+      if (score.met === true) {
+        const current = runFactors.get(factor);
+        current.met = true;
+        if (roundNumber !== null && (current.firstMetRound === null || roundNumber < current.firstMetRound)) {
+          current.firstMetRound = roundNumber;
+        }
+      }
+    }
+  }
+
+  const aggregatedFactors = new Map();
+  for (const runFactors of factorsByRun.values()) {
+    for (const [factor, state] of runFactors.entries()) {
+      if (!aggregatedFactors.has(factor)) {
+        aggregatedFactors.set(factor, {
+          appearances: 0,
+          metRuns: 0,
+          roundsToMet: [],
+        });
+      }
+
+      const summary = aggregatedFactors.get(factor);
+      summary.appearances += 1;
+      if (state.met) {
+        summary.metRuns += 1;
+        if (state.firstMetRound !== null) {
+          summary.roundsToMet.push(state.firstMetRound);
+        }
+      }
+    }
+  }
+
+  const factors = {};
+  let mostStuckFactor = null;
+  let lowestMetRate = null;
+
+  for (const factor of [...aggregatedFactors.keys()].sort((a, b) => a.localeCompare(b))) {
+    const summary = aggregatedFactors.get(factor);
+    const metRate = ratio(summary.metRuns, summary.appearances);
+    factors[factor] = {
+      appearances: summary.appearances,
+      met_rate: metRate,
+      avg_rounds_to_met: average(summary.roundsToMet),
+    };
+
+    if (mostStuckFactor === null || metRate < lowestMetRate) {
+      mostStuckFactor = factor;
+      lowestMetRate = metRate;
+    }
+  }
+
+  return {
+    factors,
+    most_stuck_factor: mostStuckFactor,
+  };
+}
+
 function main() {
   const repoRoot = path.resolve(getArg("--repo", "."));
   const staleHours = parseHours(getArg("--stale-hours", "72"));
@@ -109,6 +197,7 @@ function main() {
       median_rounds_to_ready: median(readyRounds),
       stale_open_runs_72h: staleOpenRuns.length,
     },
+    factor_analysis: buildFactorAnalysis(events),
   };
 
   if (hasFlag("--json")) {
@@ -122,6 +211,7 @@ function main() {
   console.log(`  max_rounds_enforcement_rate: ${report.metrics.max_rounds_enforcement_rate ?? "n/a"}`);
   console.log(`  median_rounds_to_ready: ${report.metrics.median_rounds_to_ready ?? "n/a"}`);
   console.log(`  stale_open_runs_72h: ${report.metrics.stale_open_runs_72h}`);
+  console.log(`  most_stuck_factor: ${report.factor_analysis.most_stuck_factor ?? "n/a"}`);
 }
 
 try {

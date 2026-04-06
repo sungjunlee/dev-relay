@@ -13,6 +13,7 @@ const {
   writeManifest,
   readManifest,
 } = require("../../relay-dispatch/scripts/relay-manifest");
+const { readRunEvents } = require("../../relay-dispatch/scripts/relay-events");
 
 const SCRIPT = path.join(__dirname, "review-runner.js");
 
@@ -256,6 +257,83 @@ test("changes_requested verdict creates a re-dispatch artifact", () => {
   assert.equal(manifest.review.rounds, 1);
   assert.equal(manifest.review.latest_verdict, "changes_requested");
   assert.equal(manifest.review.repeated_issue_count, 1);
+});
+
+test("review-runner records rubric_scores as iteration_score events", () => {
+  const { repoRoot, runId, doneCriteriaPath, diffPath } = setupRepo();
+  const reviewFile = writeVerdict(repoRoot, "changes-with-scores.json", {
+    verdict: "changes_requested",
+    summary: "Coverage and docs still need work.",
+    contract_status: "fail",
+    quality_status: "pass",
+    next_action: "changes_requested",
+    issues: [
+      {
+        title: "Missing smoke file",
+        body: "The PR does not add the required smoke.txt output.",
+        file: "src/index.js",
+        line: 12,
+        category: "contract",
+        severity: "high",
+      },
+    ],
+    rubric_scores: [
+      {
+        factor: "Coverage",
+        target: ">= 8",
+        observed: "6",
+        status: "fail",
+        notes: "Still below bar.",
+      },
+      {
+        factor: "Docs",
+        target: ">= 8",
+        observed: "8",
+        status: "pass",
+        notes: "Docs are complete.",
+      },
+    ],
+    scope_drift: { creep: [], missing: [] },
+  });
+
+  execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--run-id", runId,
+    "--pr", "123",
+    "--done-criteria-file", doneCriteriaPath,
+    "--diff-file", diffPath,
+    "--review-file", reviewFile,
+    "--no-comment",
+    "--json",
+  ], { encoding: "utf-8" });
+
+  const events = readRunEvents(repoRoot, runId);
+  assert.equal(events.at(-2).event, "review_apply");
+  assert.equal(events.at(-1).event, "iteration_score");
+  assert.deepEqual(events.at(-1), {
+    ts: events.at(-1).ts,
+    event: "iteration_score",
+    run_id: runId,
+    round: 1,
+    scores: [
+      {
+        factor: "Coverage",
+        target: ">= 8",
+        observed: "6",
+        met: false,
+        status: "fail",
+      },
+      {
+        factor: "Docs",
+        target: ">= 8",
+        observed: "8",
+        met: true,
+        status: "pass",
+      },
+    ],
+  });
+  assert.match(events.at(-1).ts, /\d{4}-\d{2}-\d{2}T/);
 });
 
 test("reviewer-script invocation can drive a round without --review-file", () => {

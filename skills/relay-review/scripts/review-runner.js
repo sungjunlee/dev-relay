@@ -41,7 +41,10 @@ const {
   writeManifest,
 } = require("../../relay-dispatch/scripts/relay-manifest");
 const { resolveManifestRecord } = require("../../relay-dispatch/scripts/relay-resolver");
-const { appendRunEvent } = require("../../relay-dispatch/scripts/relay-events");
+const {
+  appendIterationScore,
+  appendRunEvent,
+} = require("../../relay-dispatch/scripts/relay-events");
 
 const REVIEWER_PROMPT_PATH = path.join(__dirname, "..", "references", "reviewer-prompt.md");
 const REVIEW_MARKER = "<!-- relay-review -->";
@@ -925,6 +928,18 @@ function run() {
     round,
     reason: verdict.verdict,
   });
+  if (Array.isArray(verdict.rubric_scores) && verdict.rubric_scores.length > 0) {
+    appendIterationScore(repoPath, data.run_id, {
+      round,
+      scores: verdict.rubric_scores.map((score) => ({
+        factor: score.factor,
+        target: score.target,
+        observed: score.observed,
+        met: score.status === "pass",
+        status: score.status,
+      })),
+    });
+  }
 
   result.nextState = updatedManifest.state;
   result.state = updatedManifest.state;
