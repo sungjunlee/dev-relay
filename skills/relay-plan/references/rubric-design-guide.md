@@ -226,6 +226,8 @@ One sentence per level is enough. If you can't distinguish mid from high, the cr
 - "clean code" → "functions < 20 lines, no nested callbacks > 2 levels, names describe behavior not implementation"
 - "proper testing" → "unit tests for business logic, integration test for the API endpoint, edge cases for empty/null/boundary inputs"
 
+Note: if the criteria sound specific but reference implicit conventions ("follow the project's patterns", "match existing style"), the problem is grounding, not vagueness — see "Ungrounded criteria" below.
+
 ### "Too many factors"
 
 **Symptom**: 6+ factors, iteration is slow, some factors overlap.
@@ -256,11 +258,15 @@ One sentence per level is enough. If you can't distinguish mid from high, the cr
 
 ### "Ungrounded criteria"
 
-**Symptom**: Criteria reference abstract qualities the executor cannot discover from the rubric alone. The executor would need to read 5+ files to understand what the criterion means.
+**Symptom**: Criteria use specific-sounding language ("follow the project's conventions", "match existing patterns") but don't name a file, function, or code pattern. The executor cannot evaluate the criterion without exploring the codebase first. (Note: if the criteria use vague adjectives like "good" or "proper", see "Vague criteria" above instead.)
 
-**Rule of thumb**: if the executor would need to explore the codebase to understand a criterion, it's ungrounded. Either ground it with specific references or convert it to an automated check.
+**Test**: Can you name the specific file or function the executor should consult to evaluate this criterion? If not, it's ungrounded.
 
-**Fix**: Replace abstract references with discoverable artifacts — file paths, function names, code patterns with examples.
+**Fix**: For each ungrounded criterion, find the reference artifact in the codebase and embed it directly:
+
+1. Look at the criterion — what convention or pattern does it reference?
+2. Find the canonical example of that convention in the repo (a file, a function, an interface)
+3. Replace the abstract reference with the concrete path + what to look for
 
 | Ungrounded | Grounded |
 |---|---|
