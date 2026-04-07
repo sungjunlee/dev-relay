@@ -12,7 +12,7 @@ const {
   updateManifestState,
   writeManifest,
 } = require("./relay-manifest");
-const { appendRunEvent } = require("./relay-events");
+const { appendIterationScore, appendRunEvent } = require("./relay-events");
 
 const SCRIPT = path.join(__dirname, "reliability-report.js");
 
@@ -48,23 +48,25 @@ function writeRun(repoRoot, { runId, state, rounds, updatedAt }) {
 test("reliability-report derives the core scorecard from manifests and events", () => {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-report-"));
   process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  const recentTs = new Date(Date.now() - 1 * 60 * 60 * 1000).toISOString(); // 1 hour ago
+  const staleTs = new Date(Date.now() - 10 * 24 * 60 * 60 * 1000).toISOString(); // 10 days ago
   writeRun(repoRoot, {
     runId: "run-ready",
     state: STATES.READY_TO_MERGE,
     rounds: 2,
-    updatedAt: "2026-04-03T00:00:00.000Z",
+    updatedAt: recentTs,
   });
   writeRun(repoRoot, {
     runId: "run-merged",
     state: STATES.MERGED,
     rounds: 4,
-    updatedAt: "2026-04-03T00:00:00.000Z",
+    updatedAt: recentTs,
   });
   writeRun(repoRoot, {
     runId: "run-stale-open",
     state: STATES.REVIEW_PENDING,
     rounds: 1,
-    updatedAt: "2026-03-25T00:00:00.000Z",
+    updatedAt: staleTs,
   });
 
   appendRunEvent(repoRoot, "run-ready", {
@@ -116,4 +118,117 @@ test("reliability-report derives the core scorecard from manifests and events", 
   assert.equal(report.metrics.max_rounds_enforcement_rate, 1);
   assert.equal(report.metrics.median_rounds_to_ready, 3);
   assert.equal(report.metrics.stale_open_runs_72h, 1);
+});
+
+test("reliability-report aggregates factor analysis across runs and rounds", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-report-factors-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  const recentTs = new Date(Date.now() - 1 * 60 * 60 * 1000).toISOString();
+
+  writeRun(repoRoot, {
+    runId: "run-a",
+    state: STATES.CHANGES_REQUESTED,
+    rounds: 3,
+    updatedAt: recentTs,
+  });
+  writeRun(repoRoot, {
+    runId: "run-b",
+    state: STATES.CHANGES_REQUESTED,
+    rounds: 2,
+    updatedAt: recentTs,
+  });
+  writeRun(repoRoot, {
+    runId: "run-c",
+    state: STATES.READY_TO_MERGE,
+    rounds: 1,
+    updatedAt: recentTs,
+  });
+
+  appendIterationScore(repoRoot, "run-a", {
+    round: 1,
+    scores: [
+      { factor: "Coverage", target: ">= 8", observed: "6", met: false, status: "fail" },
+      { factor: "Docs", target: ">= 8", observed: "not started", met: false, status: "not_run" },
+    ],
+  });
+  appendIterationScore(repoRoot, "run-a", {
+    round: 2,
+    scores: [
+      { factor: "Coverage", target: ">= 8", observed: "8", met: true, status: "pass" },
+      { factor: "Docs", target: ">= 8", observed: "6", met: false, status: "fail" },
+    ],
+  });
+  appendIterationScore(repoRoot, "run-a", {
+    round: 3,
+    scores: [
+      { factor: "Docs", target: ">= 8", observed: "8", met: true, status: "pass" },
+    ],
+  });
+
+  appendIterationScore(repoRoot, "run-b", {
+    round: 1,
+    scores: [
+      { factor: "Coverage", target: ">= 8", observed: "5", met: false, status: "fail" },
+      { factor: "Docs", target: ">= 8", observed: "4", met: false, status: "fail" },
+      { factor: "Perf", target: ">= 8", observed: "8", met: true, status: "pass" },
+    ],
+  });
+  appendIterationScore(repoRoot, "run-b", {
+    round: 2,
+    scores: [
+      { factor: "Coverage", target: ">= 8", observed: "7", met: false, status: "fail" },
+    ],
+  });
+
+  appendIterationScore(repoRoot, "run-c", {
+    round: 1,
+    scores: [
+      { factor: "Coverage", target: ">= 8", observed: "9", met: true, status: "pass" },
+    ],
+  });
+
+  const stdout = execFileSync("node", [SCRIPT, "--repo", repoRoot, "--json"], { encoding: "utf-8" });
+  const report = JSON.parse(stdout);
+
+  assert.deepEqual(report.factor_analysis, {
+    factors: {
+      Coverage: {
+        appearances: 3,
+        met_rate: 0.6667,
+        avg_rounds_to_met: 1.5,
+      },
+      Docs: {
+        appearances: 2,
+        met_rate: 0.5,
+        avg_rounds_to_met: 3,
+      },
+      Perf: {
+        appearances: 1,
+        met_rate: 1,
+        avg_rounds_to_met: 1,
+      },
+    },
+    most_stuck_factor: "Docs",
+  });
+});
+
+test("reliability-report keeps factor analysis backwards compatible without iteration scores", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-report-empty-factors-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  const recentTs = new Date(Date.now() - 1 * 60 * 60 * 1000).toISOString();
+
+  writeRun(repoRoot, {
+    runId: "run-ready",
+    state: STATES.READY_TO_MERGE,
+    rounds: 2,
+    updatedAt: recentTs,
+  });
+
+  const stdout = execFileSync("node", [SCRIPT, "--repo", repoRoot, "--json"], { encoding: "utf-8" });
+  const report = JSON.parse(stdout);
+
+  assert.deepEqual(report.factor_analysis, {
+    factors: {},
+    most_stuck_factor: null,
+  });
 });

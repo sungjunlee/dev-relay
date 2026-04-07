@@ -5,6 +5,8 @@ const {
   getRunsDir,
 } = require("./relay-manifest");
 
+const ALLOWED_ITERATION_STATUSES = new Set(["pass", "fail", "not_run"]);
+
 function normalizeEventValue(value) {
   return value === undefined ? null : value;
 }
@@ -33,6 +35,52 @@ function appendRunEvent(repoRoot, runId, eventData) {
   return record;
 }
 
+function appendIterationScore(repoRoot, runId, { round, scores } = {}) {
+  if (!runId) {
+    throw new Error("run_id is required");
+  }
+  if (!Array.isArray(scores) || scores.length === 0) {
+    throw new Error("scores must be a non-empty array");
+  }
+
+  for (const [index, score] of scores.entries()) {
+    const location = `scores[${index}]`;
+    if (typeof score?.factor !== "string" || !score.factor.trim()) {
+      throw new Error(`${location}.factor is required`);
+    }
+    if (typeof score.target !== "string") {
+      throw new Error(`${location}.target is required`);
+    }
+    if (typeof score.observed !== "string") {
+      throw new Error(`${location}.observed is required`);
+    }
+    if (typeof score.met !== "boolean") {
+      throw new Error(`${location}.met must be boolean`);
+    }
+    if (!ALLOWED_ITERATION_STATUSES.has(score.status)) {
+      throw new Error(`${location}.status must be one of: pass, fail, not_run`);
+    }
+  }
+
+  ensureRunLayout(repoRoot, runId);
+  const record = {
+    ts: new Date().toISOString(),
+    event: "iteration_score",
+    run_id: runId,
+    round,
+    scores: scores.map((score) => ({
+      factor: score.factor,
+      target: score.target,
+      observed: score.observed,
+      met: score.met,
+      status: score.status,
+    })),
+  };
+
+  fs.appendFileSync(getEventsPath(repoRoot, runId), `${JSON.stringify(record)}\n`, "utf-8");
+  return record;
+}
+
 function readRunEvents(repoRoot, runId) {
   const eventsPath = getEventsPath(repoRoot, runId);
   if (!fs.existsSync(eventsPath)) return [];
@@ -53,6 +101,7 @@ function readAllRunEvents(repoRoot) {
 }
 
 module.exports = {
+  appendIterationScore,
   appendRunEvent,
   readAllRunEvents,
   readRunEvents,
