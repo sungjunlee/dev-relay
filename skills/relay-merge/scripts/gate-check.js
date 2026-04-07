@@ -84,6 +84,8 @@ function output(result) {
     } else if (result.status === "changes_requested") {
       console.log(`✗ PR #${PR_NUM}: relay-review requested changes — re-dispatch or fix the branch before merge`);
       if (result.issues) console.log(`  ${result.issues}`);
+    } else if (result.status === "unauthorized_reviewer") {
+      console.log(`✗ PR #${PR_NUM}: relay-review comment found but from unauthorized author (expected: ${result.expectedReviewerLogin})`);
     } else if (result.status === "stale") {
       console.log(`✗ PR #${PR_NUM}: relay-review is stale — run review again for the latest commit before merge`);
       if (result.latestCommit) console.log(`  Latest commit: ${result.latestCommit}`);
@@ -143,11 +145,16 @@ function main() {
     commits = parsed.commits || [];
   }
 
+  const expectedReviewerLogin = manifestData?.review?.reviewer_login || null;
+  if (!DRY_RUN && !expectedReviewerLogin) {
+    console.error("Note: reviewer author verification skipped — no manifest data. Use finalize-run.js for full verification.");
+  }
   const result = evaluateReviewGate({
     prNumber: PR_NUM,
     comments,
     commits,
     manifestData,
+    expectedReviewerLogin,
   });
   output(result);
   if (!result.readyToMerge) {

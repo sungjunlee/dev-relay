@@ -282,6 +282,7 @@ function main() {
         comments: preMerge.comments,
         commits: preMerge.commits,
         manifestData: data,
+        expectedReviewerLogin: data.review?.reviewer_login || null,
       });
       if (!reviewGate.readyToMerge) {
         if (!dryRun) {
