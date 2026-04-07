@@ -54,7 +54,7 @@ function evaluateReviewGate({ prNumber, comments, commits, manifestData }) {
     return { status: "missing", pr: prNumber, readyToMerge: false };
   }
 
-  const verdictMatch = lastReviewComment.body.match(/Verdict:\s*(LGTM|CHANGES_REQUESTED|ESCALATED)/);
+  const verdictMatch = lastReviewComment.body.match(/Verdict:\s*(LGTM|PASS|CHANGES_REQUESTED|ESCALATED)/);
   if (!verdictMatch) {
     return { status: "missing", pr: prNumber, readyToMerge: false };
   }

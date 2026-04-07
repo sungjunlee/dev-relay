@@ -113,6 +113,26 @@ test("gate-check ignores prose comments that only mention review markers", () =>
   assert.equal(result.json.status, "missing");
 });
 
+test("gate-check accepts manual 'Review Verdict: PASS' as LGTM", () => {
+  const result = runGateCheckDryRun([
+    "<!-- relay-review -->\n## Review Verdict: PASS\n\n### Phase 1: Spec Compliance\nAll AC items verified.",
+  ]);
+
+  assert.equal(result.status, 0);
+  assert.equal(result.json.status, "lgtm");
+  assert.equal(result.json.readyToMerge, true);
+});
+
+test("gate-check accepts 'Verdict: PASS' as LGTM", () => {
+  const result = runGateCheckDryRun([
+    "<!-- relay-review -->\n## Relay Review\nVerdict: PASS\nRounds: 1",
+  ]);
+
+  assert.equal(result.status, 0);
+  assert.equal(result.json.status, "lgtm");
+  assert.equal(result.json.readyToMerge, true);
+});
+
 test("gate-check still blocks escalated review comments", () => {
   const result = runGateCheckDryRun([
     "<!-- relay-review -->\n## Relay Review\nVerdict: ESCALATED\nIssues:\n- foo.js:1 — blocked",
