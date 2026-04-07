@@ -52,6 +52,235 @@ function average(values) {
   return Number((total / values.length).toFixed(4));
 }
 
+function buildEmptyRubricInsights() {
+  return {
+    quality_grade_distribution: null,
+    avg_quality_ratio: null,
+    tier_effectiveness: null,
+    divergence_hotspots: null,
+    auto_vs_eval_correlation: null,
+  };
+}
+
+function normalizeAutoCoverageRatio(event) {
+  const autoCoverage = Number(event?.auto_coverage);
+  if (!Number.isFinite(autoCoverage)) return null;
+  if (autoCoverage >= 0 && autoCoverage <= 1) {
+    return autoCoverage;
+  }
+
+  const totalChecks = Number(event?.prerequisites || 0)
+    + Number(event?.contract_factors || 0)
+    + Number(event?.quality_factors || 0);
+  if (!Number.isFinite(totalChecks) || totalChecks <= 0) {
+    return null;
+  }
+  return Number((autoCoverage / totalChecks).toFixed(4));
+}
+
+function buildTierEffectiveness(events) {
+  const runFactors = new Map();
+
+  for (const event of events) {
+    if (event.event !== "iteration_score" || !event.run_id || !Array.isArray(event.scores)) continue;
+    const round = Number(event.round);
+    const roundNumber = Number.isFinite(round) ? round : null;
+
+    if (!runFactors.has(event.run_id)) {
+      runFactors.set(event.run_id, new Map());
+    }
+
+    const factorsForRun = runFactors.get(event.run_id);
+    for (const score of event.scores) {
+      const tier = typeof score?.tier === "string" ? score.tier : null;
+      const factor = typeof score?.factor === "string" ? score.factor.trim() : "";
+      if (!factor || (tier !== "contract" && tier !== "quality")) continue;
+
+      const key = `${tier}\u0000${factor}`;
+      if (!factorsForRun.has(key)) {
+        factorsForRun.set(key, {
+          tier,
+          met: false,
+          firstMetRound: null,
+        });
+      }
+
+      if (score.met === true) {
+        const current = factorsForRun.get(key);
+        current.met = true;
+        if (roundNumber !== null && (current.firstMetRound === null || roundNumber < current.firstMetRound)) {
+          current.firstMetRound = roundNumber;
+        }
+      }
+    }
+  }
+
+  const aggregate = {
+    contract: { appearances: 0, metRuns: 0, roundsToMet: [] },
+    quality: { appearances: 0, metRuns: 0, roundsToMet: [] },
+  };
+
+  for (const factorsForRun of runFactors.values()) {
+    for (const state of factorsForRun.values()) {
+      aggregate[state.tier].appearances += 1;
+      if (state.met) {
+        aggregate[state.tier].metRuns += 1;
+        if (state.firstMetRound !== null) {
+          aggregate[state.tier].roundsToMet.push(state.firstMetRound);
+        }
+      }
+    }
+  }
+
+  if (aggregate.contract.appearances === 0 && aggregate.quality.appearances === 0) {
+    return null;
+  }
+
+  return {
+    contract: {
+      avg_met_rate: ratio(aggregate.contract.metRuns, aggregate.contract.appearances),
+      avg_rounds_to_met: average(aggregate.contract.roundsToMet),
+    },
+    quality: {
+      avg_met_rate: ratio(aggregate.quality.metRuns, aggregate.quality.appearances),
+      avg_rounds_to_met: average(aggregate.quality.roundsToMet),
+    },
+  };
+}
+
+function buildDivergenceHotspots(events) {
+  const divergenceEvents = events.filter((event) => event.event === "score_divergence" && Array.isArray(event.divergences));
+  if (divergenceEvents.length === 0) return null;
+
+  const grouped = new Map();
+  for (const event of divergenceEvents) {
+    for (const entry of event.divergences) {
+      const factor = typeof entry?.factor === "string" ? entry.factor.trim() : "";
+      const delta = Number(entry?.delta);
+      if (!factor || !Number.isFinite(delta)) continue;
+
+      if (!grouped.has(factor)) {
+        grouped.set(factor, {
+          occurrences: 0,
+          deltas: [],
+        });
+      }
+      const current = grouped.get(factor);
+      current.occurrences += 1;
+      current.deltas.push(delta);
+    }
+  }
+
+  if (grouped.size === 0) return null;
+
+  return [...grouped.entries()]
+    .map(([factorPattern, summary]) => {
+      const avgDelta = average(summary.deltas);
+      let recommendation = "Review scoring examples for this factor.";
+      if (avgDelta !== null && avgDelta >= 0.5) {
+        recommendation = "Executor scores trend higher than review; tighten examples or add automation.";
+      } else if (avgDelta !== null && avgDelta <= -0.5) {
+        recommendation = "Reviewer scores trend higher than executor; check whether the factor is underspecified.";
+      }
+
+      return {
+        factor_pattern: factorPattern,
+        occurrences: summary.occurrences,
+        avg_delta: avgDelta,
+        recommendation,
+      };
+    })
+    .sort((left, right) => (
+      right.occurrences - left.occurrences
+      || Math.abs(right.avg_delta || 0) - Math.abs(left.avg_delta || 0)
+      || left.factor_pattern.localeCompare(right.factor_pattern)
+    ));
+}
+
+function buildAutoVsEvalCorrelation(rubricQualityEvents, manifests) {
+  const manifestsByRun = new Map(
+    manifests
+      .filter((manifest) => manifest?.data?.run_id)
+      .map((manifest) => [manifest.data.run_id, manifest.data])
+  );
+
+  const latestQualityByRun = new Map();
+  for (const event of rubricQualityEvents) {
+    if (event?.run_id) {
+      latestQualityByRun.set(event.run_id, event);
+    }
+  }
+
+  const buckets = {
+    high_auto_runs: [],
+    low_auto_runs: [],
+  };
+
+  for (const [runId, event] of latestQualityByRun.entries()) {
+    const manifest = manifestsByRun.get(runId);
+    if (!manifest) continue;
+
+    const coverageRatio = normalizeAutoCoverageRatio(event);
+    if (coverageRatio === null) continue;
+
+    const bucketName = coverageRatio >= 0.5 ? "high_auto_runs" : "low_auto_runs";
+    buckets[bucketName].push({
+      rounds: Number(manifest.review?.rounds),
+      success: [STATES.READY_TO_MERGE, STATES.MERGED].includes(manifest.state),
+    });
+  }
+
+  if (buckets.high_auto_runs.length === 0 && buckets.low_auto_runs.length === 0) {
+    return null;
+  }
+
+  function summarizeBucket(entries) {
+    const rounds = entries
+      .map((entry) => entry.rounds)
+      .filter((value) => Number.isFinite(value) && value >= 0);
+    return {
+      avg_rounds: average(rounds),
+      success_rate: ratio(entries.filter((entry) => entry.success).length, entries.length),
+    };
+  }
+
+  return {
+    high_auto_runs: summarizeBucket(buckets.high_auto_runs),
+    low_auto_runs: summarizeBucket(buckets.low_auto_runs),
+  };
+}
+
+function buildRubricInsights(events, manifests) {
+  const insights = buildEmptyRubricInsights();
+  const rubricQualityEvents = events.filter((event) => event.event === "rubric_quality");
+
+  if (rubricQualityEvents.length > 0) {
+    insights.quality_grade_distribution = { A: 0, B: 0, C: 0, D: 0 };
+    const qualityRatios = [];
+
+    for (const event of rubricQualityEvents) {
+      if (Object.hasOwn(insights.quality_grade_distribution, event.grade)) {
+        insights.quality_grade_distribution[event.grade] += 1;
+      }
+      if (typeof event.quality_ratio === "number" && !Number.isNaN(event.quality_ratio)) {
+        qualityRatios.push(event.quality_ratio);
+      }
+    }
+
+    insights.avg_quality_ratio = average(qualityRatios);
+  }
+
+  insights.tier_effectiveness = buildTierEffectiveness(events);
+  insights.divergence_hotspots = buildDivergenceHotspots(events);
+  insights.auto_vs_eval_correlation = buildAutoVsEvalCorrelation(rubricQualityEvents, manifests);
+
+  return insights;
+}
+
+function hasRubricInsights(insights) {
+  return Object.values(insights || {}).some((value) => value !== null);
+}
+
 function buildFactorAnalysis(events) {
   const factorsByRun = new Map();
 
@@ -198,6 +427,7 @@ function main() {
       stale_open_runs_72h: staleOpenRuns.length,
     },
     factor_analysis: buildFactorAnalysis(events),
+    rubric_insights: buildRubricInsights(events, manifests),
   };
 
   if (hasFlag("--json")) {
@@ -212,6 +442,16 @@ function main() {
   console.log(`  median_rounds_to_ready: ${report.metrics.median_rounds_to_ready ?? "n/a"}`);
   console.log(`  stale_open_runs_72h: ${report.metrics.stale_open_runs_72h}`);
   console.log(`  most_stuck_factor: ${report.factor_analysis.most_stuck_factor ?? "n/a"}`);
+  if (hasRubricInsights(report.rubric_insights)) {
+    const gradeDistribution = report.rubric_insights.quality_grade_distribution;
+    const gradeText = gradeDistribution
+      ? `A:${gradeDistribution.A} B:${gradeDistribution.B} C:${gradeDistribution.C} D:${gradeDistribution.D}`
+      : "n/a";
+    const topHotspot = report.rubric_insights.divergence_hotspots?.[0];
+    console.log(`  rubric_grades: ${gradeText}`);
+    console.log(`  avg_quality_ratio: ${report.rubric_insights.avg_quality_ratio ?? "n/a"}`);
+    console.log(`  top_divergence_hotspot: ${topHotspot ? `${topHotspot.factor_pattern} (${topHotspot.avg_delta})` : "n/a"}`);
+  }
 }
 
 try {

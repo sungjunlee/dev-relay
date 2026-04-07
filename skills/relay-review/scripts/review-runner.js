@@ -44,6 +44,7 @@ const { resolveManifestRecord } = require("../../relay-dispatch/scripts/relay-re
 const {
   appendIterationScore,
   appendRunEvent,
+  appendScoreDivergence,
 } = require("../../relay-dispatch/scripts/relay-events");
 
 const REVIEWER_PROMPT_PATH = path.join(__dirname, "..", "references", "reviewer-prompt.md");
@@ -52,6 +53,7 @@ const REVIEW_ROUND_MARKER = "<!-- relay-review-round -->";
 const ALLOWED_VERDICTS = new Set(["pass", "changes_requested", "escalated"]);
 const ALLOWED_NEXT_ACTIONS = new Set(["ready_to_merge", "changes_requested", "escalated"]);
 const ALLOWED_STATUSES = new Set(["pass", "fail", "not_run"]);
+const ALLOWED_SCORE_TIERS = new Set(["contract", "quality"]);
 
 const args = process.argv.slice(2);
 const KNOWN_FLAGS = [
@@ -299,6 +301,9 @@ function validateRubricScore(score, index) {
   if (!ALLOWED_STATUSES.has(score.status)) {
     throw new Error(`${location}.status must be one of: ${Array.from(ALLOWED_STATUSES).join(", ")}`);
   }
+  if (score.tier !== undefined && !ALLOWED_SCORE_TIERS.has(score.tier)) {
+    throw new Error(`${location}.tier must be one of: ${Array.from(ALLOWED_SCORE_TIERS).join(", ")}`);
+  }
 }
 
 const ALLOWED_DRIFT_STATUSES = new Set(
@@ -398,9 +403,19 @@ function formatIssueList(issues) {
   return issues.map((issue) => `- ${issue.file}:${issue.line} — ${issue.title}: ${issue.body}`).join("\n");
 }
 
-function buildCommentBody(verdict, round) {
+function appendCommentWarnings(commentBody, warnings = []) {
+  if (!Array.isArray(warnings) || warnings.length === 0) return commentBody;
+  return [
+    commentBody,
+    "",
+    "Score divergence warnings:",
+    ...warnings.map((warning) => `- ${warning}`),
+  ].join("\n");
+}
+
+function buildCommentBody(verdict, round, { warnings = [] } = {}) {
   if (verdict.verdict === "pass") {
-    return [
+    return appendCommentWarnings([
       REVIEW_MARKER,
       "## Relay Review",
       "Verdict: LGTM",
@@ -408,21 +423,21 @@ function buildCommentBody(verdict, round) {
       `Contract: ${verdict.contract_status.toUpperCase()}`,
       `Quality: ${verdict.quality_status.toUpperCase()}`,
       `Rounds: ${round}`,
-    ].join("\n");
+    ].join("\n"), warnings);
   }
 
   if (verdict.verdict === "changes_requested") {
-    return [
+    return appendCommentWarnings([
       REVIEW_ROUND_MARKER,
       `## Relay Review Round ${round}`,
       "Verdict: CHANGES_REQUESTED",
       `Summary: ${verdict.summary}`,
       "Issues:",
       formatIssueList(verdict.issues),
-    ].join("\n");
+    ].join("\n"), warnings);
   }
 
-  return [
+  return appendCommentWarnings([
     REVIEW_MARKER,
     "## Relay Review",
     "Verdict: ESCALATED",
@@ -430,7 +445,145 @@ function buildCommentBody(verdict, round) {
     `Rounds: ${round}`,
     "Issues:",
     formatIssueList(verdict.issues),
-  ].join("\n");
+  ].join("\n"), warnings);
+}
+
+function splitMarkdownTableRow(line) {
+  const trimmed = String(line || "").trim();
+  if (!trimmed.startsWith("|")) return null;
+  const content = trimmed.endsWith("|") ? trimmed.slice(1, -1) : trimmed.slice(1);
+  return content.split("|").map((cell) => cell.trim());
+}
+
+function isMarkdownTableDivider(line) {
+  const cells = splitMarkdownTableRow(line);
+  return Array.isArray(cells) && cells.length > 0 && cells.every((cell) => /^:?-{3,}:?$/.test(cell.replace(/\s+/g, "")));
+}
+
+function isMissingScoreCell(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  return !normalized || normalized === "—" || normalized === "–" || normalized === "-" || normalized === "n/a" || normalized === "na";
+}
+
+function parseScoreLog(markdownText) {
+  if (typeof markdownText !== "string" || !markdownText.trim()) {
+    return [];
+  }
+
+  const lines = markdownText.replace(/\r\n/g, "\n").split("\n");
+  for (let index = 0; index < lines.length - 1; index += 1) {
+    const headerCells = splitMarkdownTableRow(lines[index]);
+    if (!headerCells || headerCells.length < 2 || !isMarkdownTableDivider(lines[index + 1])) {
+      continue;
+    }
+
+    const normalizedHeaders = headerCells.map((cell) => cell.toLowerCase());
+    const factorIndex = normalizedHeaders.indexOf("factor");
+    const statusIndex = normalizedHeaders.indexOf("status");
+    const finalIndex = normalizedHeaders.indexOf("final");
+    const iterIndexes = normalizedHeaders
+      .map((cell, cellIndex) => (/^iter\s+\d+$/i.test(cell) ? cellIndex : -1))
+      .filter((cellIndex) => cellIndex !== -1);
+    if (factorIndex === -1 || statusIndex === -1 || (finalIndex === -1 && iterIndexes.length === 0)) {
+      continue;
+    }
+
+    const parsedRows = [];
+    for (let rowIndex = index + 2; rowIndex < lines.length; rowIndex += 1) {
+      const rowCells = splitMarkdownTableRow(lines[rowIndex]);
+      if (!rowCells) break;
+
+      const factor = String(rowCells[factorIndex] || "").trim();
+      if (!factor) continue;
+
+      let score = finalIndex !== -1 ? String(rowCells[finalIndex] || "").trim() : "";
+      if (isMissingScoreCell(score)) {
+        const fallbackIndex = [...iterIndexes]
+          .reverse()
+          .find((candidateIndex) => !isMissingScoreCell(rowCells[candidateIndex]));
+        score = fallbackIndex === undefined ? "" : String(rowCells[fallbackIndex] || "").trim();
+      }
+      if (isMissingScoreCell(score)) {
+        continue;
+      }
+      parsedRows.push({ factor, score });
+    }
+
+    if (parsedRows.length > 0) {
+      return parsedRows;
+    }
+  }
+
+  return [];
+}
+
+function normalizeFactorKey(value) {
+  return String(value || "").trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+function parseNumericScore(value) {
+  const text = String(value || "").trim();
+  if (isMissingScoreCell(text)) return null;
+  const match = text.match(/^(-?\d+(?:\.\d+)?)(?:\s*\/\s*10(?:\.0+)?)?$/);
+  if (!match) return null;
+  return Number(match[1]);
+}
+
+function loadPrBody(repoPath, prNumber) {
+  if (!prNumber) return "";
+  try {
+    const raw = gh(repoPath, "pr", "view", String(prNumber), "--json", "body");
+    return String(JSON.parse(raw).body || "");
+  } catch {
+    return "";
+  }
+}
+
+function formatDelta(delta) {
+  return `${delta > 0 ? "+" : ""}${delta}`;
+}
+
+function buildScoreDivergenceAnalysis(markdownText, rubricScores) {
+  if (!Array.isArray(rubricScores) || rubricScores.length === 0) {
+    return { warnings: [], eventPayload: [] };
+  }
+
+  const scoreLog = parseScoreLog(markdownText);
+  if (scoreLog.length === 0) {
+    return { warnings: [], eventPayload: [] };
+  }
+
+  const executorScores = new Map(scoreLog.map((entry) => [normalizeFactorKey(entry.factor), entry.score]));
+  const numericMatches = [];
+  for (const score of rubricScores) {
+    const factorKey = normalizeFactorKey(score.factor);
+    const executor = executorScores.get(factorKey);
+    if (!executor) continue;
+
+    const executorNumeric = parseNumericScore(executor);
+    const reviewerNumeric = parseNumericScore(score.observed);
+    if (executorNumeric === null || reviewerNumeric === null) continue;
+
+    const delta = Number((executorNumeric - reviewerNumeric).toFixed(4));
+    numericMatches.push({
+      factor: score.factor,
+      executor,
+      reviewer: score.observed,
+      delta,
+      tier: ALLOWED_SCORE_TIERS.has(score.tier) ? score.tier : null,
+    });
+  }
+
+  if (numericMatches.length === 0) {
+    return { warnings: [], eventPayload: [] };
+  }
+
+  return {
+    warnings: numericMatches
+      .filter((entry) => Math.abs(entry.delta) >= 3)
+      .map((entry) => `${entry.factor}: executor ${entry.executor}, reviewer ${entry.reviewer} (${formatDelta(entry.delta)})`),
+    eventPayload: numericMatches.filter((entry) => entry.tier !== null),
+  };
 }
 
 function formatPriorVerdictSummary(verdicts) {
@@ -905,7 +1058,11 @@ function run() {
     writeText(redispatchPath, `${buildRedispatchPrompt(verdict, doneCriteria, runDir, round, churnGrowth)}\n`);
   }
 
-  const commentBody = buildCommentBody(verdict, round);
+  const { warnings: divergenceWarnings, eventPayload: divergencePayload } = buildScoreDivergenceAnalysis(
+    loadPrBody(repoPath, prNumber),
+    verdict.rubric_scores
+  );
+  const commentBody = buildCommentBody(verdict, round, { warnings: divergenceWarnings });
   if (!noComment) {
     postComment(repoPath, prNumber, commentBody);
     result.commentPosted = true;
@@ -937,7 +1094,14 @@ function run() {
         observed: score.observed,
         met: score.status === "pass",
         status: score.status,
+        ...(ALLOWED_SCORE_TIERS.has(score.tier) ? { tier: score.tier } : {}),
       })),
+    });
+  }
+  if (divergencePayload.length > 0) {
+    appendScoreDivergence(repoPath, data.run_id, {
+      round,
+      divergences: divergencePayload,
     });
   }
 
@@ -978,6 +1142,7 @@ module.exports = {
   formatIssueList,
   formatPriorVerdictSummary,
   formatScopeDrift,
+  parseScoreLog,
   parseReviewVerdict,
   resolveIssueNumber,
   validateReviewVerdict,

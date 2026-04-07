@@ -12,7 +12,12 @@ const {
   updateManifestState,
   writeManifest,
 } = require("./relay-manifest");
-const { appendIterationScore, appendRunEvent } = require("./relay-events");
+const {
+  appendIterationScore,
+  appendRubricQuality,
+  appendRunEvent,
+  appendScoreDivergence,
+} = require("./relay-events");
 
 const SCRIPT = path.join(__dirname, "reliability-report.js");
 
@@ -230,5 +235,234 @@ test("reliability-report keeps factor analysis backwards compatible without iter
   assert.deepEqual(report.factor_analysis, {
     factors: {},
     most_stuck_factor: null,
+  });
+});
+
+test("reliability-report keeps rubric_insights null-safe when new events are absent", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-report-empty-insights-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  const recentTs = new Date(Date.now() - 1 * 60 * 60 * 1000).toISOString();
+
+  writeRun(repoRoot, {
+    runId: "run-ready",
+    state: STATES.READY_TO_MERGE,
+    rounds: 1,
+    updatedAt: recentTs,
+  });
+
+  const stdout = execFileSync("node", [SCRIPT, "--repo", repoRoot, "--json"], { encoding: "utf-8" });
+  const report = JSON.parse(stdout);
+
+  assert.deepEqual(report.rubric_insights, {
+    quality_grade_distribution: null,
+    avg_quality_ratio: null,
+    tier_effectiveness: null,
+    divergence_hotspots: null,
+    auto_vs_eval_correlation: null,
+  });
+});
+
+test("reliability-report derives rubric grade distribution and average quality ratio", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-report-rubric-quality-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  const recentTs = new Date(Date.now() - 1 * 60 * 60 * 1000).toISOString();
+
+  writeRun(repoRoot, {
+    runId: "run-a",
+    state: STATES.READY_TO_MERGE,
+    rounds: 2,
+    updatedAt: recentTs,
+  });
+  writeRun(repoRoot, {
+    runId: "run-b",
+    state: STATES.CHANGES_REQUESTED,
+    rounds: 3,
+    updatedAt: recentTs,
+  });
+
+  appendRubricQuality(repoRoot, "run-a", {
+    grade: "A",
+    prerequisites: 2,
+    contract_factors: 2,
+    quality_factors: 2,
+    substantive_total: 4,
+    quality_ratio: 0.5,
+    auto_coverage: 0.75,
+    risk_signals: [],
+    task_size: "M",
+  });
+  appendRubricQuality(repoRoot, "run-b", {
+    grade: "C",
+    prerequisites: 2,
+    contract_factors: 2,
+    quality_factors: 1,
+    substantive_total: 3,
+    quality_ratio: 0.3333,
+    auto_coverage: 0.25,
+    risk_signals: ["low_quality_ratio"],
+    task_size: "M",
+  });
+
+  const stdout = execFileSync("node", [SCRIPT, "--repo", repoRoot, "--json"], { encoding: "utf-8" });
+  const report = JSON.parse(stdout);
+
+  assert.deepEqual(report.rubric_insights.quality_grade_distribution, {
+    A: 1,
+    B: 0,
+    C: 1,
+    D: 0,
+  });
+  assert.equal(report.rubric_insights.avg_quality_ratio, 0.4166);
+  assert.deepEqual(report.rubric_insights.auto_vs_eval_correlation, {
+    high_auto_runs: {
+      avg_rounds: 2,
+      success_rate: 1,
+    },
+    low_auto_runs: {
+      avg_rounds: 3,
+      success_rate: 0,
+    },
+  });
+});
+
+test("reliability-report derives tier effectiveness from tiered iteration scores", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-report-tier-effectiveness-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  const recentTs = new Date(Date.now() - 1 * 60 * 60 * 1000).toISOString();
+
+  writeRun(repoRoot, {
+    runId: "run-a",
+    state: STATES.CHANGES_REQUESTED,
+    rounds: 2,
+    updatedAt: recentTs,
+  });
+  writeRun(repoRoot, {
+    runId: "run-b",
+    state: STATES.READY_TO_MERGE,
+    rounds: 1,
+    updatedAt: recentTs,
+  });
+
+  appendIterationScore(repoRoot, "run-a", {
+    round: 1,
+    scores: [
+      { factor: "Coverage", target: ">= 8", observed: "5", met: false, status: "fail", tier: "contract" },
+      { factor: "Docs", target: ">= 8", observed: "8", met: true, status: "pass", tier: "quality" },
+    ],
+  });
+  appendIterationScore(repoRoot, "run-a", {
+    round: 2,
+    scores: [
+      { factor: "Coverage", target: ">= 8", observed: "8", met: true, status: "pass", tier: "contract" },
+    ],
+  });
+  appendIterationScore(repoRoot, "run-b", {
+    round: 1,
+    scores: [
+      { factor: "Latency", target: "< 200ms", observed: "180ms", met: true, status: "pass", tier: "contract" },
+      { factor: "Architecture", target: ">= 8", observed: "6", met: false, status: "fail", tier: "quality" },
+    ],
+  });
+
+  const stdout = execFileSync("node", [SCRIPT, "--repo", repoRoot, "--json"], { encoding: "utf-8" });
+  const report = JSON.parse(stdout);
+
+  assert.deepEqual(report.rubric_insights.tier_effectiveness, {
+    contract: {
+      avg_met_rate: 1,
+      avg_rounds_to_met: 1.5,
+    },
+    quality: {
+      avg_met_rate: 0.5,
+      avg_rounds_to_met: 1,
+    },
+  });
+});
+
+test("reliability-report derives divergence hotspots from score_divergence events", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-report-divergence-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  const recentTs = new Date(Date.now() - 1 * 60 * 60 * 1000).toISOString();
+
+  writeRun(repoRoot, {
+    runId: "run-a",
+    state: STATES.CHANGES_REQUESTED,
+    rounds: 2,
+    updatedAt: recentTs,
+  });
+
+  appendScoreDivergence(repoRoot, "run-a", {
+    round: 1,
+    divergences: [
+      { factor: "Coverage", executor: "9", reviewer: "6", delta: 3, tier: "contract" },
+      { factor: "Coverage", executor: "8", reviewer: "6", delta: 2, tier: "contract" },
+      { factor: "Docs", executor: "5", reviewer: "7", delta: -2, tier: "quality" },
+    ],
+  });
+
+  const stdout = execFileSync("node", [SCRIPT, "--repo", repoRoot, "--json"], { encoding: "utf-8" });
+  const report = JSON.parse(stdout);
+
+  assert.deepEqual(report.rubric_insights.divergence_hotspots, [
+    {
+      factor_pattern: "Coverage",
+      occurrences: 2,
+      avg_delta: 2.5,
+      recommendation: "Executor scores trend higher than review; tighten examples or add automation.",
+    },
+    {
+      factor_pattern: "Docs",
+      occurrences: 1,
+      avg_delta: -2,
+      recommendation: "Reviewer scores trend higher than executor; check whether the factor is underspecified.",
+    },
+  ]);
+});
+
+test("reliability-report populates only available rubric insight subfields", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-report-partial-insights-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  const recentTs = new Date(Date.now() - 1 * 60 * 60 * 1000).toISOString();
+
+  writeRun(repoRoot, {
+    runId: "run-a",
+    state: STATES.READY_TO_MERGE,
+    rounds: 1,
+    updatedAt: recentTs,
+  });
+
+  appendRubricQuality(repoRoot, "run-a", {
+    grade: "B",
+    prerequisites: 1,
+    contract_factors: 1,
+    quality_factors: 1,
+    substantive_total: 2,
+    quality_ratio: 0.5,
+    auto_coverage: 1,
+    risk_signals: [],
+    task_size: "S",
+  });
+
+  const stdout = execFileSync("node", [SCRIPT, "--repo", repoRoot, "--json"], { encoding: "utf-8" });
+  const report = JSON.parse(stdout);
+
+  assert.deepEqual(report.rubric_insights.quality_grade_distribution, {
+    A: 0,
+    B: 1,
+    C: 0,
+    D: 0,
+  });
+  assert.equal(report.rubric_insights.avg_quality_ratio, 0.5);
+  assert.equal(report.rubric_insights.tier_effectiveness, null);
+  assert.equal(report.rubric_insights.divergence_hotspots, null);
+  assert.deepEqual(report.rubric_insights.auto_vs_eval_correlation, {
+    high_auto_runs: {
+      avg_rounds: 1,
+      success_rate: 1,
+    },
+    low_auto_runs: {
+      avg_rounds: null,
+      success_rate: null,
+    },
   });
 });
