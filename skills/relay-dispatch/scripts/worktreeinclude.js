@@ -145,18 +145,16 @@ function getWorktreeIncludeFiles(repoPath) {
  * @param {string} repoPath - Source repo root
  * @param {string} wtPath - Worktree destination
  * @param {Object} opts
- * @param {boolean} opts.copyEnv - --copy-env flag
  * @param {string[]} opts.copyFiles - --copy flag entries
  * @param {Function} opts.assertWithin - Path traversal guard (repoPath, resolved, label)
  * @returns {{ copied: string[], skipped: string[] }}
  */
-function copyWorktreeFiles(repoPath, wtPath, { copyEnv = false, copyFiles = [], assertWithin } = {}) {
+function copyWorktreeFiles(repoPath, wtPath, { copyFiles = [], assertWithin } = {}) {
   // .worktreeinclude — only gitignored files (safety rule)
   const includeFiles = getWorktreeIncludeFiles(repoPath);
 
   // Explicit flags — no gitignore check (user explicitly requested)
   const explicit = new Set();
-  if (copyEnv) explicit.add(".env");
   for (const f of copyFiles) explicit.add(f);
 
   // Merge and deduplicate

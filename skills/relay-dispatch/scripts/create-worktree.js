@@ -14,7 +14,6 @@
  *   --title, -t <text>       Thread title in Codex App
  *   --topic <name>           Topic slug -> branch becomes codex/<topic>
  *   --worktree-path <path>   Register an existing worktree (implies --register)
- *   --copy-env               Copy .env from main repo to worktree
  *   --copy <file,...>        Additional files to copy (comma-separated)
  *   --pin                    Pin thread to prevent auto-cleanup (4 days)
  *   --register               Pre-register in SQLite + global state
@@ -24,7 +23,7 @@
  * Examples:
  *   ./create-worktree.js . --branch feature-auth
  *   ./create-worktree.js . -b feature-auth -t "Implement OAuth2" --register --pin
- *   ./create-worktree.js . --topic auth --copy-env
+ *   ./create-worktree.js . --topic auth
  *   ./create-worktree.js . --worktree-path /path/to/wt -b feature -t "Task title"
  */
 
@@ -46,13 +45,13 @@ if (!args.length || args.includes("--help") || args.includes("-h")) {
     "Usage: create-worktree.js <repo-path> [--branch <name>] [--title <text>]"
   );
   console.log(
-    "       [--topic <name>] [--worktree-path <path>] [--copy-env] [--copy <files>]"
+    "       [--topic <name>] [--worktree-path <path>] [--copy <files>]"
   );
   console.log("       [--pin] [--register] [--dry-run] [--json]");
   process.exit(args.includes("--help") || args.includes("-h") ? 0 : 1);
 }
 
-const KNOWN_FLAGS = ["--branch", "-b", "--title", "-t", "--topic", "--worktree-path", "--copy", "--copy-env", "--pin", "--register", "--dry-run", "--json", "--help", "-h"];
+const KNOWN_FLAGS = ["--branch", "-b", "--title", "-t", "--topic", "--worktree-path", "--copy", "--pin", "--register", "--dry-run", "--json", "--help", "-h"];
 function getArg(flags, fallback) {
   for (const flag of Array.isArray(flags) ? flags : [flags]) {
     const idx = args.indexOf(flag);
@@ -74,7 +73,6 @@ const TITLE = getArg(
   BRANCH ? `Worktree: ${BRANCH}` : `Worktree: ${PROJECT_NAME}`
 );
 const WORKTREE_PATH = getArg("--worktree-path", undefined);
-const COPY_ENV = hasFlag("--copy-env");
 const COPY_FILES = getArg("--copy", "")
   .split(",")
   .filter(Boolean);
@@ -181,7 +179,7 @@ function main() {
     // --- Dry run ---
     if (DRY_RUN) {
       const includeFiles = getWorktreeIncludeFiles(REPO_PATH);
-      const plan = { worktree: wtPath, branch, title: TITLE, register: REGISTER, pin: PIN, copyEnv: COPY_ENV, worktreeinclude: includeFiles };
+      const plan = { worktree: wtPath, branch, title: TITLE, register: REGISTER, pin: PIN, worktreeinclude: includeFiles };
       if (JSON_OUT) {
         console.log(JSON.stringify(plan, null, 2));
       } else {
@@ -191,7 +189,6 @@ function main() {
         console.log(`  Title:    ${TITLE}`);
         console.log(`  Register: ${REGISTER}`);
         if (PIN) console.log("  Pinned:   yes");
-        if (COPY_ENV) console.log("  Copy:     .env");
         if (includeFiles.length) console.log(`  .worktreeinclude: ${includeFiles.join(", ")}`);
       }
       return;
@@ -212,7 +209,6 @@ function main() {
 
     // --- Step 2: Copy files (.worktreeinclude + explicit flags) ---
     copyWorktreeFiles(REPO_PATH, wtPath, {
-      copyEnv: COPY_ENV,
       copyFiles: COPY_FILES,
       assertWithin,
     });

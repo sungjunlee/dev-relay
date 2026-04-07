@@ -234,7 +234,7 @@ Take the base template (`relay/references/prompt-template.md`) and add these sec
 
 ```bash
 ${CLAUDE_SKILL_DIR}/../relay-dispatch/scripts/dispatch.js . \
-  -b issue-42 --prompt-file /tmp/dispatch-42.md --timeout 3600 --copy-env
+  -b issue-42 --prompt-file /tmp/dispatch-42.md --timeout 3600
 ```
 
 ## When to use
