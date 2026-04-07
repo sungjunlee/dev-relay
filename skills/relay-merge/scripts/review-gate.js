@@ -21,8 +21,13 @@ function buildSkipComment(reason) {
 function normalizeCommentRecords(comments) {
   return (comments || []).map((comment, index) => (
     typeof comment === "string"
-      ? { body: comment, createdAt: null, index }
-      : { body: comment.body, createdAt: toIsoOrNull(comment.createdAt), index }
+      ? { body: comment, author: null, createdAt: null, index }
+      : {
+          body: comment.body,
+          author: comment.author?.login || comment.author || null,
+          createdAt: toIsoOrNull(comment.createdAt),
+          index,
+        }
   ));
 }
 
@@ -39,18 +44,31 @@ function extractLatestCommit(commits) {
   return { latestCommit, latestCommitAt };
 }
 
-function evaluateReviewGate({ prNumber, comments, commits, manifestData }) {
+function evaluateReviewGate({ prNumber, comments, commits, manifestData, expectedReviewerLogin }) {
   const commentRecords = normalizeCommentRecords(comments);
   const { latestCommit, latestCommitAt } = extractLatestCommit(commits);
 
   let lastReviewComment = null;
+  let hasUnauthorizedReview = false;
   for (const comment of commentRecords) {
     if (hasRelayReviewMarker(comment.body || "")) {
+      if (expectedReviewerLogin && comment.author && comment.author !== expectedReviewerLogin) {
+        hasUnauthorizedReview = true;
+        continue;
+      }
       lastReviewComment = comment;
     }
   }
 
   if (!lastReviewComment) {
+    if (hasUnauthorizedReview) {
+      return {
+        status: "unauthorized_reviewer",
+        pr: prNumber,
+        expectedReviewerLogin,
+        readyToMerge: false,
+      };
+    }
     return { status: "missing", pr: prNumber, readyToMerge: false };
   }
 

@@ -103,6 +103,17 @@ function gh(repoPath, ...ghArgs) {
   });
 }
 
+function getGhLogin() {
+  try {
+    return execFileSync("gh", ["api", "user", "--jq", ".login"], {
+      encoding: "utf-8",
+      stdio: "pipe",
+    }).trim();
+  } catch {
+    return null;
+  }
+}
+
 function git(repoPath, ...gitArgs) {
   return execFileSync("git", gitArgs, {
     cwd: repoPath,
@@ -1089,6 +1100,15 @@ function run() {
     reviewedHeadSha,
     repeatedIssueCount
   );
+  if (!noComment) {
+    const reviewerLogin = getGhLogin();
+    if (reviewerLogin) {
+      updatedManifest.review = {
+        ...(updatedManifest.review || {}),
+        reviewer_login: reviewerLogin,
+      };
+    }
+  }
   writeManifest(manifestPath, updatedManifest, body);
   appendRunEvent(repoPath, data.run_id, {
     event: "review_apply",

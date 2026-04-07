@@ -133,6 +133,100 @@ test("gate-check accepts 'Verdict: PASS' as LGTM", () => {
   assert.equal(result.json.readyToMerge, true);
 });
 
+test("gate-check blocks review from unauthorized author when reviewer_login is set", () => {
+  const result = runGateCheckDryRun({
+    comments: [
+      {
+        body: "<!-- relay-review -->\n## Relay Review\nVerdict: LGTM\nRounds: 1",
+        author: { login: "attacker" },
+        createdAt: "2026-04-03T08:00:00Z",
+      },
+    ],
+    commits: [],
+    manifest: {
+      review: {
+        reviewer_login: "trusted-reviewer",
+        last_reviewed_sha: null,
+      },
+    },
+  });
+
+  assert.equal(result.status, 1);
+  assert.equal(result.json.status, "unauthorized_reviewer");
+  assert.equal(result.json.readyToMerge, false);
+  assert.equal(result.json.expectedReviewerLogin, "trusted-reviewer");
+});
+
+test("gate-check passes review from authorized author when reviewer_login is set", () => {
+  const result = runGateCheckDryRun({
+    comments: [
+      {
+        body: "<!-- relay-review -->\n## Relay Review\nVerdict: LGTM\nRounds: 1",
+        author: { login: "trusted-reviewer" },
+        createdAt: "2026-04-03T08:00:00Z",
+      },
+    ],
+    commits: [
+      { oid: "abc123", committedDate: "2026-04-03T07:00:00Z" },
+    ],
+    manifest: {
+      review: {
+        reviewer_login: "trusted-reviewer",
+        last_reviewed_sha: "abc123",
+      },
+    },
+  });
+
+  assert.equal(result.status, 0);
+  assert.equal(result.json.status, "lgtm");
+  assert.equal(result.json.readyToMerge, true);
+});
+
+test("gate-check skips unauthorized and uses authorized review when both exist", () => {
+  const result = runGateCheckDryRun({
+    comments: [
+      {
+        body: "<!-- relay-review -->\n## Relay Review\nVerdict: LGTM\nRounds: 1",
+        author: { login: "attacker" },
+        createdAt: "2026-04-03T07:00:00Z",
+      },
+      {
+        body: "<!-- relay-review-round -->\n## Relay Review Round 2\nVerdict: CHANGES_REQUESTED\nIssues:\n- fix this",
+        author: { login: "trusted-reviewer" },
+        createdAt: "2026-04-03T08:00:00Z",
+      },
+    ],
+    commits: [],
+    manifest: {
+      review: {
+        reviewer_login: "trusted-reviewer",
+        last_reviewed_sha: null,
+      },
+    },
+  });
+
+  assert.equal(result.status, 1);
+  assert.equal(result.json.status, "changes_requested");
+  assert.equal(result.json.readyToMerge, false);
+});
+
+test("gate-check allows any author when reviewer_login is not set", () => {
+  const result = runGateCheckDryRun({
+    comments: [
+      {
+        body: "<!-- relay-review -->\n## Relay Review\nVerdict: LGTM\nRounds: 1",
+        author: { login: "anyone" },
+        createdAt: "2026-04-03T08:00:00Z",
+      },
+    ],
+    commits: [],
+  });
+
+  assert.equal(result.status, 0);
+  assert.equal(result.json.status, "lgtm");
+  assert.equal(result.json.readyToMerge, true);
+});
+
 test("gate-check still blocks escalated review comments", () => {
   const result = runGateCheckDryRun([
     "<!-- relay-review -->\n## Relay Review\nVerdict: ESCALATED\nIssues:\n- foo.js:1 — blocked",
