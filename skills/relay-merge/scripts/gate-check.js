@@ -146,6 +146,9 @@ function main() {
   }
 
   const expectedReviewerLogin = manifestData?.review?.reviewer_login || null;
+  if (!DRY_RUN && !expectedReviewerLogin) {
+    console.error("Note: reviewer author verification skipped — no manifest data. Use finalize-run.js for full verification.");
+  }
   const result = evaluateReviewGate({
     prNumber: PR_NUM,
     comments,
