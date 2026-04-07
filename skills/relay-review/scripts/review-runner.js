@@ -162,29 +162,36 @@ function resolveIssueNumber(repoPath, prNumber, branch, manifestData) {
 }
 
 function loadDoneCriteria(repoPath, issueNumber, prNumber, doneCriteriaFile) {
-  if (doneCriteriaFile) return readText(doneCriteriaFile).trim();
+  if (doneCriteriaFile) return { text: readText(doneCriteriaFile).trim(), source: "file" };
 
   const errors = [];
 
-  // Fallback 1: GitHub issue body
+  // Primary: GitHub issue body (authored by the task creator)
   if (issueNumber) {
     try {
       const raw = gh(repoPath, "issue", "view", String(issueNumber), "--json", "title,body,number");
       const parsed = JSON.parse(raw);
       const text = `# Issue #${parsed.number}: ${parsed.title}\n\n${String(parsed.body || "").trim()}`.trim();
-      if (text) return text;
+      if (text) return { text, source: "github-issue" };
     } catch (e) {
       errors.push(`issue #${issueNumber}: ${e.message.split("\n")[0]}`);
     }
   }
 
-  // Fallback 2: PR description (executors often paste AC into the PR body)
+  // Fallback: PR description — written by the executor, not the task creator.
+  // Lower trust: a compromised executor could manipulate the reviewer's anchor.
   if (prNumber) {
     try {
       const raw = gh(repoPath, "pr", "view", String(prNumber), "--json", "title,body,number");
       const parsed = JSON.parse(raw);
       const body = String(parsed.body || "").trim();
-      if (body) return `# PR #${parsed.number}: ${parsed.title}\n\n${body}`.trim();
+      if (body) {
+        process.stderr.write(
+          `  [WARN] Done Criteria sourced from PR body (executor-authored), not GitHub issue.\n` +
+          `  PR body has lower trust — the executor could have altered the acceptance criteria.\n`
+        );
+        return { text: `# PR #${parsed.number}: ${parsed.title}\n\n${body}`.trim(), source: "pr-body" };
+      }
     } catch (e) {
       errors.push(`PR #${prNumber}: ${e.message.split("\n")[0]}`);
     }
@@ -222,8 +229,9 @@ function formatPriorRoundContext(runDir, round) {
   return ["## Prior Round Context", "", "Verify whether prior issues were resolved.", "", ...lines].join("\n");
 }
 
-function buildPrompt({ round, prNumber, branch, issueNumber, doneCriteria, diffText, runDir }) {
+function buildPrompt({ round, prNumber, branch, issueNumber, doneCriteria, doneCriteriaSource, diffText, runDir }) {
   const template = readText(REVIEWER_PROMPT_PATH)
+    .replace("source=\"done-criteria\"", `source="${doneCriteriaSource || "done-criteria"}"`)
     .replace("[PASTE DONE CRITERIA HERE]", doneCriteria)
     .replace("[PASTE PR DIFF OR FILE PATH HERE]", diffText);
 
@@ -933,9 +941,9 @@ function run() {
     throw new Error(`Review round cap exceeded: next round ${round} would exceed max_rounds=${maxRounds}`);
   }
 
-  const doneCriteria = loadDoneCriteria(repoPath, issueNumber, prNumber, doneCriteriaFile);
+  const { text: doneCriteria, source: doneCriteriaSource } = loadDoneCriteria(repoPath, issueNumber, prNumber, doneCriteriaFile);
   const diffText = loadDiff(repoPath, prNumber, diffFile);
-  const promptText = buildPrompt({ round, prNumber, branch, issueNumber, doneCriteria, diffText, runDir });
+  const promptText = buildPrompt({ round, prNumber, branch, issueNumber, doneCriteria, doneCriteriaSource, diffText, runDir });
 
   const doneCriteriaPath = path.join(runDir, `review-round-${round}-done-criteria.md`);
   const diffPath = path.join(runDir, `review-round-${round}-diff.patch`);
