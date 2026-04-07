@@ -641,7 +641,7 @@ function detectChurnGrowth(runDir, round) {
   return null;
 }
 
-function buildRedispatchPrompt(verdict, doneCriteria, runDir, round, churnGrowth) {
+function buildRedispatchPrompt(verdict, doneCriteria, runDir, round, churnGrowth, doneCriteriaSource) {
   const sections = [
     `This is round ${round + 1}. Fix these review issues in the PR. Do not change anything else. Push to the same branch.`,
     "",
@@ -673,7 +673,7 @@ function buildRedispatchPrompt(verdict, doneCriteria, runDir, round, churnGrowth
   sections.push(
     "",
     "Original Done Criteria (scope anchor):",
-    "<task-content source=\"done-criteria\">",
+    `<task-content source="${doneCriteriaSource || "done-criteria"}">`,
     doneCriteria,
     "</task-content>",
   );
@@ -1068,7 +1068,7 @@ function run() {
   let redispatchPath = null;
   if (verdict.verdict === "changes_requested") {
     redispatchPath = path.join(runDir, `review-round-${round}-redispatch.md`);
-    writeText(redispatchPath, `${buildRedispatchPrompt(verdict, doneCriteria, runDir, round, churnGrowth)}\n`);
+    writeText(redispatchPath, `${buildRedispatchPrompt(verdict, doneCriteria, runDir, round, churnGrowth, doneCriteriaSource)}\n`);
   }
 
   const { warnings: divergenceWarnings, eventPayload: divergencePayload } = buildScoreDivergenceAnalysis(
