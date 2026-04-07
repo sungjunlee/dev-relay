@@ -110,6 +110,39 @@ process.stdout.write(${JSON.stringify(JSON.stringify(verdict))});
   return filePath;
 }
 
+function runReviewRunnerModule(lines) {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-module-"));
+  const helperPath = path.join(tmpDir, "helper.js");
+  fs.writeFileSync(helperPath, [
+    `process.argv = ["node", "helper.js", "--repo", "/dev/null", "--branch", "x", "--pr", "1"];`,
+    `const reviewRunner = require(${JSON.stringify(SCRIPT)});`,
+    ...lines,
+  ].join("\n"), "utf-8");
+  return execFileSync("node", [helperPath], { encoding: "utf-8" });
+}
+
+function writeFakeGhScript(repoRoot, { prBody, capturePath }) {
+  const filePath = path.join(repoRoot, "gh");
+  fs.writeFileSync(filePath, `#!/usr/bin/env node
+const fs = require("fs");
+const args = process.argv.slice(2);
+if (args[0] === "pr" && args[1] === "view") {
+  process.stdout.write(JSON.stringify({ body: ${JSON.stringify(prBody)} }));
+  process.exit(0);
+}
+if (args[0] === "pr" && args[1] === "comment") {
+  const bodyIndex = args.indexOf("--body");
+  const body = bodyIndex !== -1 ? args[bodyIndex + 1] : "";
+  fs.writeFileSync(${JSON.stringify(capturePath)}, body, "utf-8");
+  process.exit(0);
+}
+process.stderr.write("Unsupported gh invocation: " + args.join(" "));
+process.exit(1);
+`, "utf-8");
+  fs.chmodSync(filePath, 0o755);
+  return filePath;
+}
+
 test("prepare-only writes a prompt bundle without changing manifest state", () => {
   const { repoRoot, manifestPath, runId, doneCriteriaPath, diffPath } = setupRepo();
 
@@ -334,6 +367,101 @@ test("review-runner records rubric_scores as iteration_score events", () => {
     ],
   });
   assert.match(events.at(-1).ts, /\d{4}-\d{2}-\d{2}T/);
+});
+
+test("review-runner records score divergence and appends warning text to the PR comment", () => {
+  const { repoRoot, runId, doneCriteriaPath, diffPath } = setupRepo();
+  const commentCapturePath = path.join(repoRoot, "captured-comment.txt");
+  writeFakeGhScript(repoRoot, {
+    capturePath: commentCapturePath,
+    prBody: [
+      "## Score Log",
+      "",
+      "| Factor | Target | Baseline | Iter 1 | Final | Status |",
+      "|--------|--------|----------|--------|-------|--------|",
+      "| Coverage | >= 8 | — | 9 | 9 | locked |",
+      "| Docs & Notes? | >= 8 | — | 8 | — | locked |",
+      "| Placeholder | >= 8 | — | n/a | — | — |",
+    ].join("\n"),
+  });
+  const reviewFile = writeVerdict(repoRoot, "changes-with-divergence.json", {
+    verdict: "changes_requested",
+    summary: "Scores disagree on implementation quality.",
+    contract_status: "fail",
+    quality_status: "fail",
+    next_action: "changes_requested",
+    issues: [
+      {
+        title: "Missing smoke file",
+        body: "The PR does not add the required smoke.txt output.",
+        file: "src/index.js",
+        line: 12,
+        category: "contract",
+        severity: "high",
+      },
+    ],
+    rubric_scores: [
+      {
+        factor: "Coverage",
+        target: ">= 8",
+        observed: "6",
+        status: "fail",
+        notes: "Still below bar.",
+        tier: "contract",
+      },
+      {
+        factor: "Docs & Notes?",
+        target: ">= 8",
+        observed: "7",
+        status: "fail",
+        notes: "Clarity still needs work.",
+        tier: "quality",
+      },
+    ],
+    scope_drift: { creep: [], missing: [] },
+  });
+
+  execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--run-id", runId,
+    "--pr", "123",
+    "--done-criteria-file", doneCriteriaPath,
+    "--diff-file", diffPath,
+    "--review-file", reviewFile,
+    "--json",
+  ], {
+    encoding: "utf-8",
+    env: {
+      ...process.env,
+      PATH: `${repoRoot}:${process.env.PATH}`,
+    },
+  });
+
+  const events = readRunEvents(repoRoot, runId);
+  assert.equal(events.at(-2).event, "iteration_score");
+  assert.equal(events.at(-1).event, "score_divergence");
+  assert.deepEqual(events.at(-1).divergences, [
+    {
+      factor: "Coverage",
+      executor: "9",
+      reviewer: "6",
+      delta: 3,
+      tier: "contract",
+    },
+    {
+      factor: "Docs & Notes?",
+      executor: "8",
+      reviewer: "7",
+      delta: 1,
+      tier: "quality",
+    },
+  ]);
+
+  const commentBody = fs.readFileSync(commentCapturePath, "utf-8");
+  assert.match(commentBody, /Score divergence warnings:/);
+  assert.match(commentBody, /Coverage: executor 9, reviewer 6 \(\+3\)/);
+  assert.doesNotMatch(commentBody, /Docs & Notes\?: executor 8, reviewer 7/);
 });
 
 test("reviewer-script invocation can drive a round without --review-file", () => {
@@ -767,6 +895,43 @@ test("formatPriorVerdictSummary produces correct round numbers and rubric summar
   assert.match(out.result, /- Round 2: changes_requested — Missing tests \[1 issue\(s\), Coverage: 5 \(target >= 8, fail\)\]/);
   assert.match(out.result, /- Round 1: changes_requested — No auth guard \[2 issue\(s\), no rubric scores\]/);
   assert.equal(out.empty, "");
+});
+
+test("parseScoreLog extracts final scores and falls back to the last populated iteration", () => {
+  const markdown = [
+    "# PR",
+    "",
+    "## Score Log",
+    "",
+    "| Factor | Target | Baseline | Iter 1 | Iter 2 | Final | Status |",
+    "|--------|--------|----------|--------|--------|-------|--------|",
+    "| Coverage | >= 8 | — | 6 | 9 | 9 | locked |",
+    "| Docs & Notes? | >= 8 | — | 6 | 7 | — | locked |",
+    "| Placeholder | >= 8 | — | n/a | — | — | — |",
+  ].join("\n");
+
+  const out = JSON.parse(runReviewRunnerModule([
+    `const result = reviewRunner.parseScoreLog(${JSON.stringify(markdown)});`,
+    `process.stdout.write(JSON.stringify(result));`,
+  ]));
+
+  assert.deepEqual(out, [
+    { factor: "Coverage", score: "9" },
+    { factor: "Docs & Notes?", score: "7" },
+  ]);
+});
+
+test("parseScoreLog returns [] for missing or malformed tables", () => {
+  const out = JSON.parse(runReviewRunnerModule([
+    `const missing = reviewRunner.parseScoreLog("No score log here");`,
+    `const malformed = reviewRunner.parseScoreLog("| Factor | Final |\\n| bad | row |");`,
+    `process.stdout.write(JSON.stringify({ missing, malformed }));`,
+  ]));
+
+  assert.deepEqual(out, {
+    missing: [],
+    malformed: [],
+  });
 });
 
 test("round 2 review prompt contains Prior Round Context section", () => {
