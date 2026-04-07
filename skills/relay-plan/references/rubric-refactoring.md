@@ -2,21 +2,33 @@
 
 Metrics a senior engineer actually checks when refactoring. Not "does it still work" but "is the codebase genuinely simpler, or did you just move the mess around."
 
-## Automated Checks
+## Prerequisites (Hygiene)
 
-| Factor | Command | Target | Why it matters |
-|--------|---------|--------|---------------|
-| Behavior preservation | Project test suite (full) | exit 0, same pass count | Refactoring that breaks things isn't refactoring. It's rewriting with optimism. |
-| Dead code eliminated | `npx knip --no-exit-code \| wc -l` or `npx ts-prune \| wc -l` | ≤ baseline | If you refactored and dead code increased, you added new waste while reorganizing old waste. |
-| Type coverage | `npx type-coverage --at 80` or `tsc --noEmit` | ≥ baseline % | Refactoring is the best time to tighten types. If coverage dropped, you traded one risk for another. |
-| Complexity delta | `npx complexity-report --format json` or project linter | ≤ baseline | Cyclomatic complexity is crude but directional. If it went up, the code got harder to reason about. |
-| Dependency direction | `npx madge --circular src/` | 0 circular dependencies | Circular dependencies are the #1 sign of tangled architecture. Refactoring should break cycles, not create them. |
+Use this section only for checks that would apply to ANY PR in this repo. They gate the run and do not count toward factor totals.
+
+| Check | Command | Target | Why it matters |
+|-------|---------|--------|----------------|
+| Behavior preservation | Project test suite (full) | exit 0, same pass count | Repo-wide hygiene for safe edits. Keep it in `prerequisites`, not `factors`. |
+| Lint / type floor | `npx eslint --max-warnings 0` or `tsc --noEmit` | exit 0 | Generic safety baseline, not proof that the refactor simplified anything. |
+
+## Automated Checks (Contract-tier)
+
+These stay in `factors` because they verify a SPECIFIC AC item is implemented.
+
+| Factor | Tier | Command | Target | Why it matters |
+|--------|------|---------|--------|---------------|
+| Dead code eliminated | `contract` | `npx knip --no-exit-code \| wc -l` or `npx ts-prune \| wc -l` | ≤ baseline | If you refactored and dead code increased, you added new waste while reorganizing old waste. |
+| Type coverage | `contract` | `npx type-coverage --at 80` | ≥ baseline % | Refactoring is the best time to tighten types. If coverage dropped, you traded one risk for another. |
+| Complexity delta | `contract` | `npx complexity-report --format json` or project linter | ≤ baseline | Cyclomatic complexity is crude but directional. If it went up, the code got harder to reason about. |
+| Dependency direction | `contract` | `npx madge --circular src/` | 0 circular dependencies | Circular dependencies are the #1 sign of tangled architecture. Refactoring should break cycles, not create them. |
 
 ## Evaluated Factors
 
 These separate "reorganized" from "genuinely simplified."
 
 ### Concept reduction (target: ≥ 8/10)
+
+tier: quality
 
 The measure of simplicity is not lines of code — it's the number of concepts a reader must hold in their head simultaneously.
 
@@ -31,6 +43,8 @@ Scoring guide:
 
 ### Dependency hygiene (target: ≥ 8/10)
 
+tier: quality
+
 The direction and depth of dependencies reveal the real architecture.
 
 - **Stable things don't depend on unstable things**: Core business logic depending on a UI framework, a database adapter, or a specific HTTP library is a coupling bomb. After refactoring, do the dependency arrows point toward stability?
@@ -44,6 +58,8 @@ Scoring guide:
 
 ### Seam quality (target: ≥ 7/10)
 
+tier: quality
+
 A seam is where you can change behavior without modifying existing code. Good refactoring creates seams at the right boundaries.
 
 - **Testability as a side effect**: If the code is now easier to test without mocks, the seams are in the right place. If you need more mocks after refactoring, the boundaries are wrong.
@@ -56,6 +72,8 @@ Scoring guide:
 - **high**: Fewer mocks needed, likely future changes localized to 1-2 files, rollback path exists and is documented.
 
 ### Deletion courage (target: ≥ 7/10)
+
+tier: quality
 
 The best code is deleted code. Refactoring is the rare moment when deletion is expected and welcome.
 

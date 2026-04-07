@@ -28,44 +28,59 @@ Use the guided interview (`references/rubric-design-guide.md`) to derive factors
 rubric:
   setup: "npm install && npm start &"    # run before checks (if needed)
   baseline: "npm run metrics > baseline.json"  # capture before-state (if delta metrics used)
+
+  # Prerequisites: hygiene checks. Gate — must ALL pass before factor evaluation.
+  # As many as needed. Do NOT count toward factor totals.
+  prerequisites:
+    - command: "npm test"
+      target: "exit 0"
+    - command: "npx tsc --noEmit"
+      target: "exit 0"
+
+  # Factors: substantive checks only (contract + quality tiers).
   factors:
-    - name: Response time
+    - name: API returns cursor-paginated response
+      tier: contract
       type: automated
-      command: "curl -w '%{time_total}' -so /dev/null localhost:3000/api/users"
-      target: "< 0.2s (and ≤ baseline)"
+      command: "curl -s localhost:3000/api/items?limit=10 | jq '.next_cursor'"
+      target: "non-null cursor string"
       weight: required
 
-    - name: Failure mode design
+    - name: Rate limiting enforced
+      tier: contract
+      type: automated
+      command: "for i in $(seq 1 110); do curl -s -o /dev/null -w '%{http_code}' ...; done | tail -1"
+      target: "429"
+      weight: required
+
+    - name: Pagination robustness
+      tier: quality
       type: evaluated
       criteria: |
-        - Graceful degradation: slow downstream → timeout + partial response, not cascade
-        - Retry strategy: backoff + jitter on idempotent ops only, never on mutations
-        - Circuit breaking: fail fast after N failures, don't wait for timeout every time
-        - Error messages: tell the caller what they can do, not just "500 Internal Server Error"
+        - Last page: returns empty array + no next cursor (not null, not error)
+        - Concurrent writes: cursor stable when items inserted/deleted mid-pagination
+        - Large result set: query plan uses index scan (EXPLAIN ANALYZE)
+        - Cursor opacity: cursor is encoded, not raw DB id exposed to client
       scoring_guide:
-        low: "No timeouts on external calls, retry-on-everything, errors swallowed silently"
-        mid: "Timeouts on external calls, basic retry without backoff or jitter"
-        high: "All four criteria met, edge cases handled (partial degradation, idempotency-aware retry)"
-        fix_hint:                          # optional — prescriptive "what to do next"
-          low_to_mid: "Add timeouts to all external HTTP/DB calls (default 5s); wrap retries in idempotency check"
-          mid_to_high: "Add exponential backoff with jitter; add circuit breaker after N=3 consecutive failures"
+        low: "Happy path works, last page returns error or null cursor"
+        mid: "Last page handled, but cursor is raw ID, no query plan check"
+        high: "All four criteria met, cursor is opaque, query uses index"
       target: ">= 8/10"
       weight: required
-
-    - name: API contract clarity
-      type: evaluated
-      criteria: |
-        - Consistent field naming across endpoints (created_at everywhere, not mixed with createdAt)
-        - Structured error responses: same JSON shape for 4xx and 5xx, not HTML on 500
-        - Paginated by default: any list endpoint without pagination is an incident waiting for data
-        - No breaking changes to existing callers without explicit versioning
-      scoring_guide:
-        low: "Inconsistent naming, plaintext errors, unbounded list responses"
-        mid: "Consistent naming and error schema, but no pagination or versioning awareness"
-        high: "All four criteria met, contract is predictable and safe for existing callers"
-      target: ">= 7/10"
-      weight: best-effort
 ```
+
+### Tier definitions
+
+Use the same tier judgment questions everywhere:
+
+| Tier | Question | Placement | Examples |
+|------|----------|-----------|----------|
+| **Hygiene** | "Would this check apply to ANY PR in this repo?" | `prerequisites` | `npm test`, `tsc --noEmit`, `eslint` |
+| **Contract** | "Does this verify a SPECIFIC AC item is implemented?" | `factors` | endpoint returns paginated response, config includes new field |
+| **Quality** | "Does this probe HOW well it was designed/implemented?" | `factors` | error recovery strategy, abstraction boundaries, failure mode differentiation |
+
+**Contract = "is it there?"**  
+**Quality = "is it good?"**
 
 | Type | How scored |
 |------|-----------|
@@ -96,12 +111,72 @@ Consult `references/rubric-*.md` for specialist thinking. Design factors from AC
 
 Before dispatch, verify:
 
-- [ ] ≥ 1 automated check exists (ground truth) + commands are immutable
+- [ ] Prerequisites gate: automated checks for repo-wide hygiene (if any) are in `prerequisites`, not `factors`
+- [ ] No hygiene in factors: every factor passes the tier test ("would this fail for a different task in this repo?" — if no, it's hygiene)
+- [ ] Contract minimum met: ≥ {size-based min} contract-tier factors
+- [ ] Quality minimum met: ≥ {size-based min} quality-tier factors
+- [ ] ≥ 1 automated check exists across prerequisites + factors
+- [ ] All automated check commands are immutable (executor cannot modify)
 - [ ] Every evaluated factor has `scoring_guide` with low/mid/high anchors
 - [ ] Criteria are specific ("timeouts on external calls") not vague ("good error handling")
-- [ ] Criteria reference discoverable artifacts (file paths, function names, code patterns) not abstract qualities ("follows conventions", "consistent style")
-- [ ] 3-5 factors total; targets are concrete ("≥ 8/10", "< 200ms") not relative
-- [ ] Automated checks measure verifiable outcomes ("API < 200ms", `grep -q`, test command) not proxies ("tests pass")
+- [ ] Criteria reference discoverable artifacts (file paths, function names) not abstractions ("follows conventions")
+- [ ] Targets are concrete ("≥ 8/10", "< 200ms") not relative ("good", "fast")
+- [ ] Automated checks measure outcomes not proxies
+
+### Factor Count Rules
+
+Prerequisites (hygiene): as many as needed, uncounted. Factors (contract + quality): no hard cap, warning at 8+.
+
+| Size | Contract min | Quality min | Substantive total | Recommended |
+|------|--------------|-------------|-------------------|-------------|
+| S (1-2 AC) | ≥ 1 | ≥ 1 | 2+ | ~3 |
+| M (3-4 AC) | ≥ 2 | ≥ 1 | 3+ | ~5 |
+| L (5-6 AC) | ≥ 2 | ≥ 2 | 4+ | ~6 |
+| XL (7+ AC) | ≥ 3 | ≥ 2 | 5+ | ~8 |
+
+### Rubric Quality Card
+
+Summarize the rubric before dispatch so weak calibration is visible:
+
+```text
+Rubric Quality Card
+-------------------
+Prerequisites count: 2
+Contract factors: 2
+Quality factors: 2
+Substantive total: 4
+Quality ratio: 50%
+Auto coverage: 3 / 6 checks automated across prerequisites + factors
+Calibration status: skipped (S/M task)
+Risk signals: none
+Grade: A
+Action: dispatch allowed
+```
+
+#### Grading logic
+
+Apply downgrade checks first (`D`, then `C`), then assign `A` or `B`.
+
+| Grade | Criteria | Action |
+|-------|----------|--------|
+| **A** | Tier minimum met + quality ratio ≥ 40% + every evaluated factor has `scoring_guide` + criteria grounded to discoverable artifacts | Dispatch allowed |
+| **B** | Tier minimum met + quality ratio ≥ 25% + every evaluated factor has `scoring_guide` | Dispatch allowed, but note weaker quality coverage |
+| **C** | Tier minimum met, but quality is only at the exact size-based minimum OR exactly 1 evaluated factor is missing `scoring_guide` | Warning before dispatch |
+| **D** | Any tier minimum violated OR hygiene check left in `factors` | Dispatch blocked, revise first |
+
+Grade D means stop and revise the rubric first. Grade C means warn before dispatch and make the tradeoff explicit.
+
+#### Risk signals
+
+| Signal | Trigger condition |
+|--------|-------------------|
+| `low_quality_ratio` | Quality ratio < 25% |
+| `no_automated_factor` | Zero automated checks across prerequisites + factors |
+| `ungrounded_criteria` | Criteria refer to abstractions instead of discoverable artifacts |
+| `vague_criteria` | Criteria contain "good", "proper", "clean", or "appropriate" |
+| `proxy_metric` | Automated checks measure effort or process instead of outcome |
+| `high_factor_count` | 8+ substantive factors |
+| `all_contract` | Zero quality coverage beyond the size-based minimum |
 
 Any check fails → revise. See `references/rubric-design-guide.md` for fix patterns.
 
@@ -112,7 +187,7 @@ For 5+ AC items, stress-test the rubric before dispatch. **Max 1 round**, then p
 | Size | AC count | Review |
 |------|----------|--------|
 | S/M | 1-4 | Skip |
-| L | 5-6 | Stress-test: subagent games rubric (gaming vectors, coverage gaps, disappear test) |
+| L | 5-6 | Stress-test: subagent games rubric (gaming vectors, coverage gaps, disappear test, Padding Test) |
 | XL | 7+ or cross-domain | Stress-test + calibration simulation (parallel) |
 
 Skip: S/M tasks, re-dispatches with iteration history, all-automated rubrics. Full protocol + prompt templates: `references/rubric-stress-test.md`
@@ -127,6 +202,7 @@ Take the base template (`relay/references/prompt-template.md`) and add these sec
   ```
   BEFORE LOOP: Run baseline if defined. RULE: Do NOT modify automated check commands.
   LOOP (max 5 iterations):
+    0. PREREQUISITE GATE: Run all prerequisite checks. Any fails → fix before proceeding. Prerequisites are not scored, just pass/fail.
     1. Run ALL automated checks + self-evaluate ALL evaluated factors, record scores
     2. REGRESSION CHECK: Any factor previously marked locked now below target?
        → Revert this iteration's changes (git reset to previous commit)

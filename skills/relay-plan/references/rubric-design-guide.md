@@ -10,7 +10,23 @@ Walk through these questions to design a task-specific rubric from AC. Each ques
 
 Read the AC and ask: "If this ships but one thing is wrong, what would hurt most?" That's your first required factor.
 
-Then: "What's the second most important?" Keep going until you have 3-5 concerns ranked by impact. These become your factor candidates — derived from the task, not from a menu.
+Then: "What's the second most important?" Keep going until you have a ranked list of concerns derived from the task, not from a menu.
+
+Before you keep any candidate as a factor, apply the tier test. Use the same tier judgment questions everywhere:
+
+| Tier | Question | Placement | Examples |
+|------|----------|-----------|----------|
+| **Hygiene** | "Would this check apply to ANY PR in this repo?" | `prerequisites` | `npm test`, `tsc --noEmit`, `eslint` |
+| **Contract** | "Does this verify a SPECIFIC AC item is implemented?" | `factors` | endpoint returns paginated response, config includes new field |
+| **Quality** | "Does this probe HOW well it was designed/implemented?" | `factors` | error recovery strategy, abstraction boundaries, failure mode differentiation |
+
+**Contract = "is it there?"**  
+**Quality = "is it good?"**
+
+Classification pass:
+- If the answer is "yes, this would apply to ANY PR in this repo," it is hygiene. Move it to `prerequisites`.
+- Otherwise, if it verifies a specific AC item exists, keep it as a `contract` factor.
+- Otherwise, if it probes how well the implementation was designed, keep it as a `quality` factor.
 
 ### Q2: What can you measure with a command?
 
@@ -42,6 +58,15 @@ Examples of the split:
 | "All links in docs work" | `npx markdown-link-check` | automated |
 | "UI flows work end-to-end" | `npx playwright test` (if available) | automated |
 | "No accessibility violations" | `npx axe --exit` (if axe-core available) | automated |
+
+Now apply the tier test to the automated candidates. Automated does not automatically mean substantive:
+
+| Candidate check | Tier result | Placement |
+|-----------------|------------|-----------|
+| `npm test` | Hygiene, it would apply to ANY PR in this repo | `prerequisites` |
+| `npx tsc --noEmit` | Hygiene, generic repo-wide safety | `prerequisites` |
+| `curl -w '%{time_total}' /api/items` | Contract, verifies a SPECIFIC AC item and outcome | `factors` |
+| `npx playwright test tests/checkout.spec.ts` | Contract, if it directly verifies this task's checkout flow | `factors` |
 
 **Bias toward automated.** Every factor you can automate is one less thing the agent can self-score generously. Check `rubric-*.md` for tool → automated check mapping tables.
 
@@ -112,13 +137,28 @@ Skip this for absolute targets (exit 0, 0 violations) or new features with no be
 
 Six principles for rubric quality, derived from autoresearch patterns and evaluation research.
 
-### 1. 3-5 factors per task
+### 1. Factor counts by tier, not a flat 3-5 rule
 
-More slows iteration without adding signal. Fewer misses important dimensions. If you have 7 factors, two of them are probably measuring the same thing — merge them.
+Prerequisites (hygiene): as many as needed, uncounted.
+Factors (contract + quality): satisfy the per-tier minimums first, then stop when the rubric feels complete. No hard cap, warning at 8+ substantive factors.
 
-### 2. Always include at least 1 automated check
+```text
+┌─────────────┬──────────┬──────────┬───────────────────┐
+│   Size      │ Contract │ Quality  │ Substantive total │
+│             │   min    │   min    │                   │
+├─────────────┼──────────┼──────────┼───────────────────┤
+│ S (1-2 AC)  │   ≥ 1    │   ≥ 1    │  2+  (rec ~3)     │
+│ M (3-4 AC)  │   ≥ 2    │   ≥ 1    │  3+  (rec ~5)     │
+│ L (5-6 AC)  │   ≥ 2    │   ≥ 2    │  4+  (rec ~6)     │
+│ XL (7+ AC)  │   ≥ 3    │   ≥ 2    │  5+  (rec ~8)     │
+└─────────────┴──────────┴──────────┴───────────────────┘
+```
 
-A rubric with only evaluated factors has no ground truth. The agent can self-score generously on every dimension and declare success. At least one automated check provides an objective anchor.
+If you hit 8+ substantive factors, check for overlap. Usually two factors want to be merged, or a hygiene check is masquerading as a factor and should move to `prerequisites`.
+
+### 2. Always include at least 1 automated check across prerequisites + factors
+
+A rubric with only evaluated factors has no ground truth. The agent can self-score generously on every dimension and declare success. At least one automated check across `prerequisites` + `factors` provides an objective anchor.
 
 ### 3. Measure outcomes, not proxies
 
