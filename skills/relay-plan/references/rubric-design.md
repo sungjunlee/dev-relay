@@ -4,20 +4,32 @@ Metrics a design-minded product engineer checks. Not "does it look nice" but "do
 
 Follows the feedback hierarchy from product leaders: **Value → Usability → Delight.** Each layer is a gate — don't polish the animation on a feature that solves the wrong problem.
 
-## Automated Checks
+## Prerequisites (Hygiene)
 
-| Factor | Command | Target | Why it matters |
-|--------|---------|--------|---------------|
-| Accessibility baseline | `npx axe --exit` or `npx pa11y <url>` | 0 critical/serious violations | Design that excludes 15% of users isn't good design, it's incomplete design. |
-| Contrast ratios | `npx axe --rules color-contrast` | 0 violations (4.5:1 text, 3:1 large) | Readable in a sunny café, not just on your calibrated monitor in a dark room. |
-| Touch target sizes | Audit via Lighthouse or custom check | ≥ 44x44px interactive elements | Thumbs on a moving bus. Not fingertips on a stable desk. |
-| Responsive breakpoints | `npx playwright test` at 375px, 768px, 1440px | No horizontal overflow, no hidden CTAs | The design must work at every breakpoint, not just the one in the Figma file. |
+Use this section only for checks that would apply to ANY PR in this repo. They gate the run and do not count toward factor totals.
+
+| Check | Command | Target | Why it matters |
+|-------|---------|--------|----------------|
+| Preview smoke test | `npx playwright test <smoke-spec>` or repo preview smoke command | exit 0 | Repo-wide hygiene if every UI PR must clear it. Keep it in `prerequisites`, not `factors`. |
+| Accessibility smoke | `npx axe --exit <preview-url>` | 0 critical/serious violations | Generic floor for every preview, not proof that this specific UX task is well-designed. |
+
+## Automated Checks (Contract-tier)
+
+These stay in `factors` because they verify a SPECIFIC AC item is implemented.
+
+| Factor | Tier | Command | Target | Why it matters |
+|--------|------|---------|--------|---------------|
+| Contrast ratios | `contract` | `npx axe --rules color-contrast` | 0 violations (4.5:1 text, 3:1 large) | Readable in a sunny café, not just on your calibrated monitor in a dark room. |
+| Touch target sizes | `contract` | Audit via Lighthouse or custom check | ≥ 44x44px interactive elements | Thumbs on a moving bus. Not fingertips on a stable desk. |
+| Responsive breakpoints | `contract` | `npx playwright test` at 375px, 768px, 1440px | No horizontal overflow, no hidden CTAs | The design must work at every breakpoint, not just the one in the Figma file. |
 
 ## Evaluated Factors
 
 These follow the **Value → Usability → Delight** hierarchy. Score each layer independently — a high delight score cannot compensate for a low value score.
 
 ### Layer 1: Value (target: ≥ 8/10)
+
+tier: quality
 
 Does this solve the right problem? (If this fails, nothing else matters.)
 
@@ -31,6 +43,8 @@ Scoring guide:
 - **high**: Clear problem evidence, 3-second test passes, product makes sensible defaults — user decides only what they care about.
 
 ### Layer 2: Usability (target: ≥ 8/10)
+
+tier: quality
 
 Can the user succeed without instructions? (Only evaluate after Layer 1 passes.)
 
@@ -46,6 +60,8 @@ Scoring guide:
 
 ### Layer 3: Delight (target: ≥ 7/10)
 
+tier: quality
+
 Does using it feel good? (Only evaluate after Layers 1 and 2 pass.)
 
 - **Feedback and responsiveness**: Does every action produce immediate, visible feedback? A button that feels dead for 500ms after clicking is anxiety-inducing. A button that subtly depresses, shows a loading indicator, and transitions to a success state is confidence-building.
@@ -58,6 +74,8 @@ Scoring guide:
 - **high**: Every action has confident feedback, spacing and animation serve communication, personality enhances without interfering.
 
 ### Design-specific meta-check: Hierarchy coherence (target: ≥ 7/10)
+
+tier: quality
 
 Step back and blur your eyes (Jessica Hische's "blurred vision" technique). Does the overall page hold together?
 

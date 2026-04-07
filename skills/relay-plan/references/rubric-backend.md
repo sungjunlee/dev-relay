@@ -2,21 +2,32 @@
 
 Metrics a senior backend engineer actually checks. Not "does the API return 200" but "what happens at 3 AM when the database is slow and traffic spikes."
 
-## Automated Checks
+## Prerequisites (Hygiene)
 
-| Factor | Command | Target | Why it matters |
-|--------|---------|--------|---------------|
-| Correctness | `npm test` or project test command | exit 0 | Table stakes. But test *what* — happy path alone is a false sense of safety. |
-| Query count per request | `grep -c 'SELECT\|INSERT\|UPDATE' <test-log>` or ORM query logger | ≤ N (define per endpoint) | N+1 is the #1 performance killer in every ORM codebase. Measure it, don't guess. |
-| Response time | `curl -w '%{time_total}' -so /dev/null <endpoint>` | p95 < 200ms (or project SLA) | Measure the endpoint you changed, not just "tests pass." A 2s response that passes tests still ruins UX. |
-| Migration safety | `psql -c '\d <table>'` schema check or migration dry-run | No destructive changes without plan | A column rename in production is a deploy-order bomb. Check before it's live. |
-| No secrets in code | `npx gitleaks detect --no-git` or `grep -rn 'API_KEY\|SECRET' src/` | 0 findings | One leaked key in git history lives forever. Check on every commit, not every quarter. |
+Use this section only for checks that would apply to ANY PR in this repo. They gate the run and do not count toward factor totals.
+
+| Check | Command | Target | Why it matters |
+|-------|---------|--------|----------------|
+| Correctness | `npm test` or project test command | exit 0 | Repo-wide hygiene. Keep it in `prerequisites`, not `factors`. |
+| No secrets in code | `npx gitleaks detect --no-git` or `grep -rn 'API_KEY\\|SECRET' src/` | 0 findings | Repo-wide safety floor, not task-specific evidence. |
+
+## Automated Checks (Contract-tier)
+
+These stay in `factors` because they verify a SPECIFIC AC item is implemented.
+
+| Factor | Tier | Command | Target | Why it matters |
+|--------|------|---------|--------|---------------|
+| Query count per request | `contract` | `grep -c 'SELECT\|INSERT\|UPDATE' <test-log>` or ORM query logger | ≤ N (define per endpoint) | N+1 is the #1 performance killer in every ORM codebase. Measure it, don't guess. |
+| Response time | `contract` | `curl -w '%{time_total}' -so /dev/null <endpoint>` | p95 < 200ms (or project SLA) | Measure the endpoint you changed, not just "tests pass." A 2s response that passes tests still ruins UX. |
+| Migration safety | `contract` | `psql -c '\d <table>'` schema check or migration dry-run | No destructive changes without plan | A column rename in production is a deploy-order bomb. Check before it's live. |
 
 ## Evaluated Factors
 
 These separate "it works" from "it works in production at scale under failure."
 
 ### Failure mode design (target: ≥ 8/10)
+
+tier: quality
 
 Everything fails. The question is how.
 
@@ -35,6 +46,8 @@ Scoring guide:
 
 ### Data integrity (target: ≥ 8/10)
 
+tier: quality
+
 The database outlives every other part of your system. Treat it accordingly.
 
 - **Transactions at the right boundary**: Is the unit of work atomic? A user signup that creates an account but fails to create the profile leaves an orphan. The whole thing should succeed or fail together.
@@ -52,6 +65,8 @@ Scoring guide:
 
 ### Resource discipline (target: ≥ 7/10)
 
+tier: quality
+
 Your code runs on shared infrastructure. Be a good neighbor.
 
 - **Connection management**: Are database/Redis/HTTP connections pooled and bounded? A leak under load exhausts the pool and brings down everything, not just your service.
@@ -65,6 +80,8 @@ Scoring guide:
 - **high**: Pooled + bounded + streamed where appropriate, side effects offloaded, work proportional to what the caller asked for.
 
 ### API contract clarity (target: ≥ 7/10)
+
+tier: quality
 
 Your API is a promise. Breaking it is expensive.
 

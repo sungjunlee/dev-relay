@@ -54,6 +54,12 @@ Review the changed code for issues that still matter before merge:
 - **Structural quality**: confusing control flow, hidden side effects, misleading state transitions
 - **Simplification**: dead code, redundant branches, unnecessary complexity
 
+If the rubric includes tiered factors, review them differently:
+- **Contract-tier factors**: verify pass/fail. Did the specific AC item get implemented? Treat these as binary checks with minimal interpretation.
+- **Quality-tier factors**: use the `scoring_guide` anchors (low/mid/high) for strict re-scoring. Re-read the `high` anchor and verify it genuinely applies before you accept a high score.
+
+Quality-tier factors deserve extra scrutiny. The executor naturally scores its own design decisions generously. Re-evaluate against the scoring_guide anchors independently.
+
 If the rubric includes `scoring_guide` anchors (low/mid/high), use them to calibrate your scoring — they define the shared scale between executor and reviewer. Score independently; do not defer to the executor's self-scores.
 
 Do not invent nitpicks. Only flag issues a senior engineer should fix before merge.

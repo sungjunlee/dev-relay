@@ -24,6 +24,50 @@ Use these tools during implementation and self-review iteration.
 - [What should NOT change — scope boundary]
 - Tests pass
 
+## Tier Test
+Use the same tier judgment questions everywhere:
+
+| Tier | Question | Placement | Examples |
+|------|----------|-----------|----------|
+| **Hygiene** | "Would this check apply to ANY PR in this repo?" | `prerequisites` | `npm test`, `tsc --noEmit`, `eslint` |
+| **Contract** | "Does this verify a SPECIFIC AC item is implemented?" | `factors` | endpoint returns paginated response, config includes new field |
+| **Quality** | "Does this probe HOW well it was designed/implemented?" | `factors` | error recovery strategy, abstraction boundaries, failure mode differentiation |
+
+**Contract = "is it there?"**  
+**Quality = "is it good?"**
+
+## Scoring Rubric
+```yaml
+rubric:
+  prerequisites:
+    - command: "[repo-wide hygiene check]"
+      target: "exit 0"
+  factors:
+    - name: "[specific AC implemented]"
+      tier: contract
+      type: automated
+      command: "[task-specific check]"
+      target: "[expected output]"
+      weight: required
+    - name: "[implementation quality]"
+      tier: quality
+      type: evaluated
+      criteria: |
+        - [specific quality criterion]
+      scoring_guide:
+        low: "[what barely works looks like]"
+        mid: "[what partially succeeds looks like]"
+        high: "[what genuinely meets the bar looks like]"
+      target: ">= 8/10"
+      weight: required
+```
+
+## Iteration Protocol
+0. PREREQUISITE GATE: Run all prerequisite checks. Any fails → fix before proceeding.
+1. Run automated checks and self-review against the rubric.
+2. Fix the weakest required factor without regressing any locked factor.
+3. Re-run the rubric, update the Score Log, then stop only when all required factors meet target.
+
 ## After Implementation
 Review your own work against the Done Criteria.
 Check for:

@@ -2,20 +2,33 @@
 
 Metrics a documentation specialist actually checks. Not "is the grammar correct" but "can someone with zero context complete a real task using only this document."
 
-## Automated Checks
+## Prerequisites (Hygiene)
 
-| Factor | Command | Target | Why it matters |
-|--------|---------|--------|---------------|
-| Links valid | `npx markdown-link-check <file>` or `npx lychee <file>` | 0 broken links | A broken link in docs is a dead end. The reader came for an answer and got a 404. |
-| Code examples run | Extract and execute fenced code blocks | exit 0 | Docs with broken code examples are worse than no docs. They teach the wrong thing with authority. |
-| No orphan references | `grep -rn` for referenced files/functions that don't exist | 0 orphans | Renamed the function but forgot the docs? Now the reader is searching for something that doesn't exist. |
-| Spelling/grammar | `npx cspell <file>` or `aspell list < <file> \| wc -l` | ≤ baseline | Not vanity. Typos in technical docs erode trust. If you misspelled the flag name, does the command also work? |
+Use this section only for checks that would apply to ANY PR in this repo. They gate the run and do not count toward factor totals.
+
+| Check | Command | Target | Why it matters |
+|-------|---------|--------|----------------|
+| Docs lint baseline | `npx markdownlint-cli2 docs/**/*.md` or repo docs lint command | exit 0 | Repo-wide hygiene for documentation repos or docs-heavy projects. Keep it in `prerequisites`, not `factors`. |
+| Docs link smoke | `npx lychee docs/` or project docs smoke command | exit 0 | Generic docs floor when every docs PR should pass it, not task-specific proof of quality. |
+
+## Automated Checks (Contract-tier)
+
+Most documentation checks are task-specific. Keep them in `factors` when they verify this document or workflow.
+
+| Factor | Tier | Command | Target | Why it matters |
+|--------|------|---------|--------|---------------|
+| Links valid | `contract` | `npx markdown-link-check <file>` or `npx lychee <file>` | 0 broken links | A broken link in docs is a dead end. The reader came for an answer and got a 404. |
+| Code examples run | `contract` | Extract and execute fenced code blocks | exit 0 | Docs with broken code examples are worse than no docs. They teach the wrong thing with authority. |
+| No orphan references | `contract` | `grep -rn` for referenced files/functions that don't exist | 0 orphans | Renamed the function but forgot the docs? Now the reader is searching for something that doesn't exist. |
+| Spelling/grammar | `contract` | `npx cspell <file>` or `aspell list < <file> \| wc -l` | ≤ baseline | Not vanity. Typos in technical docs erode trust. If you misspelled the flag name, does the command also work? |
 
 ## Evaluated Factors
 
 These separate "wrote some docs" from "the reader actually succeeded."
 
 ### Zero-context completeness (target: ≥ 8/10)
+
+tier: quality
 
 The ultimate test: give this document to someone who knows nothing about the project. Can they complete the task?
 
@@ -29,6 +42,8 @@ Scoring guide:
 - **high**: Zero-context reader can complete the task end-to-end, with explicit success/failure indicators and recovery steps.
 
 ### Reader testing (target: ≥ 8/10)
+
+tier: quality
 
 Simulate a fresh reader. Generate 5-10 questions that a real user would ask after reading this doc. Then answer them using ONLY the document content.
 
@@ -45,6 +60,8 @@ Scoring guide:
 
 ### Information architecture (target: ≥ 7/10)
 
+tier: quality
+
 Structure is an argument. The order in which you present information shapes how the reader understands it.
 
 - **Why before how**: If the reader doesn't understand WHY they're doing something, the HOW won't stick. "Run `npm run migrate`" is an instruction. "The database schema changed in v3; run `npm run migrate` to update your local schema" is understanding.
@@ -57,6 +74,8 @@ Scoring guide:
 - **high**: Why before how, progressive depth (skimmer → reader → deep-diver), scannable structure throughout.
 
 ### Maintenance resilience (target: ≥ 7/10)
+
+tier: quality
 
 Good docs stay accurate. Great docs are hard to make inaccurate.
 
