@@ -103,6 +103,27 @@ function gh(repoPath, ...ghArgs) {
   });
 }
 
+function getGhLogin() {
+  try {
+    const login = execFileSync("gh", ["api", "user", "--jq", ".login"], {
+      encoding: "utf-8",
+      stdio: "pipe",
+    }).trim();
+    if (!login) {
+      console.error("Warning: gh api user returned empty login — reviewer_login will not be recorded, author verification will be skipped at merge time");
+      return null;
+    }
+    return login;
+  } catch (error) {
+    console.error(
+      `Warning: could not determine GitHub login for reviewer verification — ` +
+      `reviewer_login will not be recorded, author verification will be skipped at merge time. ` +
+      `Cause: ${error.message || error}`
+    );
+    return null;
+  }
+}
+
 function git(repoPath, ...gitArgs) {
   return execFileSync("git", gitArgs, {
     cwd: repoPath,
@@ -1089,6 +1110,15 @@ function run() {
     reviewedHeadSha,
     repeatedIssueCount
   );
+  if (!noComment) {
+    const reviewerLogin = getGhLogin();
+    if (reviewerLogin) {
+      updatedManifest.review = {
+        ...(updatedManifest.review || {}),
+        reviewer_login: reviewerLogin,
+      };
+    }
+  }
   writeManifest(manifestPath, updatedManifest, body);
   appendRunEvent(repoPath, data.run_id, {
     event: "review_apply",
