@@ -64,7 +64,7 @@ Write the dispatch prompt to a temp file (e.g., `/tmp/dispatch-<N>.md`).
 
 ```bash
 ${CLAUDE_SKILL_DIR}/../relay-dispatch/scripts/dispatch.js . \
-  -b issue-<N> --prompt-file /tmp/dispatch-<N>.md --timeout 3600 --copy-env
+  -b issue-<N> --prompt-file /tmp/dispatch-<N>.md --timeout 3600
 ```
 
 While dispatch runs in the background, optionally monitor progress:

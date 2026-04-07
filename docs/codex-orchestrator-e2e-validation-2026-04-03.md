@@ -73,7 +73,7 @@ Requirements:
 Sequence:
 1. In the repo root, run `git fetch origin`.
 2. Confirm issue #48 exists and there is no open PR on branch `issue-48`.
-3. Run `node skills/relay-dispatch/scripts/dispatch.js . -b issue-48 --prompt-file /tmp/dispatch-48.md --timeout 3600 --copy-env --json`.
+3. Run `node skills/relay-dispatch/scripts/dispatch.js . -b issue-48 --prompt-file /tmp/dispatch-48.md --timeout 3600 --json`.
 4. Parse the JSON output for `runId`, `manifestPath`, and `runState`.
 5. If dispatch fails, inspect `stderrLog` and `stdoutLog`, summarize the blocker, and stop with JSON.
 6. If dispatch succeeds, get the PR number from `gh pr list --head issue-48 --json number,url`.
@@ -142,7 +142,7 @@ Sequence:
 1. Run `git fetch origin`.
 2. Confirm issue #1 exists and there is no open PR on branch `issue-1`.
 3. Write a dispatch prompt to `/tmp/dispatch-fixture-1.md` based on the local task file with a rubric-backed documentation task.
-4. Run `node /path/to/dev-relay/skills/relay-dispatch/scripts/dispatch.js . -b issue-1 --prompt-file /tmp/dispatch-fixture-1.md --timeout 3600 --copy-env --json`.
+4. Run `node /path/to/dev-relay/skills/relay-dispatch/scripts/dispatch.js . -b issue-1 --prompt-file /tmp/dispatch-fixture-1.md --timeout 3600 --json`.
 5. Parse the JSON for `runId`, `manifestPath`, `runState`, `stderrLog`, and `stdoutLog`.
 6. If dispatch fails, inspect `stderrLog` and `stdoutLog`, summarize the blocker, and stop with JSON.
 7. If dispatch succeeds, get the PR number and URL from `gh pr list --head issue-1 --json number,url`.
