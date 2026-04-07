@@ -665,7 +665,9 @@ function buildRedispatchPrompt(verdict, doneCriteria, runDir, round, churnGrowth
   sections.push(
     "",
     "Original Done Criteria (scope anchor):",
+    "<task-content source=\"done-criteria\">",
     doneCriteria,
+    "</task-content>",
   );
 
   return sections.join("\n");
