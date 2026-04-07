@@ -20,7 +20,6 @@
  *   --executor, -e <name>  Executor to use (default: codex)
  *   --model, -m <name>     Model override (default: from executor config)
  *   --sandbox <mode>       workspace-write | read-only (default: workspace-write)
- *   --copy-env             Copy .env to worktree
  *   --copy <file,...>      Additional files to copy
  *   --timeout <seconds>    Exec timeout (default: 1800)
  *   --register             Register session in executor's app (keeps worktree)
@@ -32,8 +31,8 @@
  *   # Basic dispatch (default executor: codex)
  *   ./dispatch.js . -b feature-auth -p "Implement OAuth2 flow"
  *
- *   # With prompt file and env
- *   ./dispatch.js . -b fix-login --prompt-file TASK.md --copy-env
+ *   # With prompt file
+ *   ./dispatch.js . -b fix-login --prompt-file TASK.md
  *
  *   # Explicit executor
  *   ./dispatch.js . -b feature-auth -e codex -p "Implement OAuth2 flow"
@@ -78,7 +77,7 @@ const args = process.argv.slice(2);
 
 const KNOWN_FLAGS = [
   "--branch", "-b", "--run-id", "--manifest", "--prompt", "-p", "--prompt-file", "--executor", "-e",
-  "--model", "-m", "--sandbox", "--copy", "--copy-env", "--timeout",
+  "--model", "-m", "--sandbox", "--copy", "--timeout",
   "--register", "--no-cleanup", "--dry-run", "--json", "--help", "-h",
 ];
 
@@ -96,7 +95,6 @@ if (!args.length || args.includes("--help") || args.includes("-h")) {
   console.log("  --executor, -e     Executor: codex (default), claude");
   console.log("  --model, -m        Model override");
   console.log("  --sandbox          workspace-write | read-only (default: workspace-write)");
-  console.log("  --copy-env         Copy .env to worktree");
   console.log("  --copy <files>     Additional files to copy (comma-separated)");
   console.log("  --timeout          Exec timeout in seconds (default: 1800)");
   console.log("  --register         Register session in executor's app (keeps worktree)");
@@ -120,11 +118,11 @@ const hasFlag = (f) => args.includes(f);
 // Positional arg: first arg that isn't a flag and isn't consumed as a flag's value
 const consumedIndices = new Set();
 for (let i = 0; i < args.length; i++) {
-  if (KNOWN_FLAGS.includes(args[i]) && !["--copy-env", "--register", "--no-cleanup", "--dry-run", "--json", "--help", "-h"].includes(args[i])) {
+  if (KNOWN_FLAGS.includes(args[i]) && !["--register", "--no-cleanup", "--dry-run", "--json", "--help", "-h"].includes(args[i])) {
     consumedIndices.add(i);
     consumedIndices.add(i + 1);
     i++; // skip the value
-  } else if (["--copy-env", "--register", "--no-cleanup", "--dry-run", "--json", "--help", "-h"].includes(args[i])) {
+  } else if (["--register", "--no-cleanup", "--dry-run", "--json", "--help", "-h"].includes(args[i])) {
     consumedIndices.add(i);
   }
 }
@@ -139,7 +137,6 @@ const PROMPT_FILE = getArg("--prompt-file", undefined);
 const EXECUTOR = getArg(["--executor", "-e"], "codex");
 const MODEL = getArg(["--model", "-m"], undefined);
 const SANDBOX = getArg("--sandbox", "workspace-write");
-const COPY_ENV = hasFlag("--copy-env");
 const COPY_FILES = getArg("--copy", "").split(",").filter(Boolean);
 const TIMEOUT = parseInt(getArg("--timeout", "1800"), 10);
 if (isNaN(TIMEOUT) || TIMEOUT <= 0) {
@@ -351,7 +348,7 @@ async function main() {
       executor: EXECUTOR, worktree: wtPath, branch,
       prompt: taskPrompt.slice(0, 200),
       model: MODEL, sandbox: SANDBOX, register: REGISTER,
-      resultFile, stdoutLog, stderrLog, timeout: TIMEOUT, copyEnv: COPY_ENV,
+      resultFile, stdoutLog, stderrLog, timeout: TIMEOUT,
       cleanupPolicy,
       worktreeinclude: includeFiles,
       environment: RESUME_MODE ? (manifest?.environment || null) : "collected-at-dispatch",
@@ -408,7 +405,6 @@ async function main() {
     createdWorktree = true;
 
     const copied = copyWorktreeFiles(repoRoot, wtPath, {
-      copyEnv: COPY_ENV,
       copyFiles: COPY_FILES,
       assertWithin,
     });

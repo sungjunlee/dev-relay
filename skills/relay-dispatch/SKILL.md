@@ -15,7 +15,7 @@ Create a worktree and dispatch a task to an executor.
 
 ```bash
 # Foreground (blocking — simple tasks, default executor: codex)
-${CLAUDE_SKILL_DIR}/scripts/dispatch.js . -b feature-auth -p "..." --copy-env
+${CLAUDE_SKILL_DIR}/scripts/dispatch.js . -b feature-auth -p "..."
 
 # Same-run resume after a changes-requested review
 ${CLAUDE_SKILL_DIR}/scripts/dispatch.js . --run-id issue-42-20260403120000000 --prompt-file review-round-2-redispatch.md
@@ -41,7 +41,6 @@ For background and parallel dispatch, see "Background & Parallel" section below.
 | `--executor, -e` | Executor: `codex` (default), `claude` |
 | `--model, -m` | Model override |
 | `--sandbox` | `workspace-write` (default) or `read-only` |
-| `--copy-env` | Copy `.env` to worktree |
 | `--copy <files>` | Additional files to copy |
 | `--timeout` | Timeout in seconds (default: 1800) |
 | `--register` | Register session in executor's app (keeps worktree) |
