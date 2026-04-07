@@ -58,6 +58,10 @@ const REVIEW_VERDICT_JSON_SCHEMA = {
           factor: { type: "string", minLength: 1 },
           target: { type: "string", minLength: 1 },
           observed: { type: "string", minLength: 1 },
+          tier: {
+            type: "string",
+            enum: ["contract", "quality"],
+          },
           status: {
             type: "string",
             enum: ["pass", "fail", "not_run"],
