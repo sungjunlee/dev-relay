@@ -2,21 +2,33 @@
 
 Metrics a senior frontend engineer actually checks. Not "does it render" but "does it respect the user's time, device, and attention."
 
-## Automated Checks
+## Prerequisites (Hygiene)
 
-| Factor | Command | Target | Why it matters |
-|--------|---------|--------|---------------|
-| Perceived performance | `npx lighthouse --quiet --output=json --only-categories=performance \| jq '.categories.performance.score * 100'` | ≥ 90 | Users leave at 3s. Lab score catches regressions before users do. |
-| Layout stability | `npx lighthouse --quiet --output=json \| jq '.audits["cumulative-layout-shift"].numericValue'` | ≤ 0.1 | CLS breaks user's spatial memory. A button that jumps is worse than a slow button. |
-| Accessibility violations | `npx axe --exit` or `npx pa11y <url> --threshold 0` | 0 violations | Not a nice-to-have. 15% of users have a disability. axe catches what eyes don't. |
-| Bundle size budget | `npx bundlesize` or `du -b dist/main.*.js` | ≤ budget (define per project) | Every KB is a tax on mobile users. Set the budget once, defend it forever. |
-| Type safety | `npx tsc --noEmit` | exit 0 | Catches the bugs that "it works on my machine" misses. Runtime is too late. |
+Use this section only for checks that would apply to ANY PR in this repo. They gate the run and do not count toward factor totals.
+
+| Check | Command | Target | Why it matters |
+|-------|---------|--------|----------------|
+| Type safety | `npx tsc --noEmit` | exit 0 | Repo-wide hygiene. Keep it in `prerequisites`, not `factors`. |
+| Lint baseline | `npx eslint --max-warnings 0` or project lint command | exit 0 | Generic codebase floor, not evidence that this specific UI task is done well. |
+
+## Automated Checks (Contract-tier)
+
+These stay in `factors` because they verify a SPECIFIC AC item is implemented.
+
+| Factor | Tier | Command | Target | Why it matters |
+|--------|------|---------|--------|---------------|
+| Perceived performance | `contract` | `npx lighthouse --quiet --output=json --only-categories=performance \| jq '.categories.performance.score * 100'` | ≥ 90 | Users leave at 3s. Lab score catches regressions before users do. |
+| Layout stability | `contract` | `npx lighthouse --quiet --output=json \| jq '.audits["cumulative-layout-shift"].numericValue'` | ≤ 0.1 | CLS breaks user's spatial memory. A button that jumps is worse than a slow button. |
+| Accessibility violations | `contract` | `npx axe --exit` or `npx pa11y <url> --threshold 0` | 0 violations | Not a nice-to-have. 15% of users have a disability. axe catches what eyes don't. |
+| Bundle size budget | `contract` | `npx bundlesize` or `du -b dist/main.*.js` | ≤ budget (define per project) | Every KB is a tax on mobile users. Set the budget once, defend it forever. |
 
 ## Evaluated Factors
 
 These are the things that separate senior frontend work from "it works."
 
 ### Interaction fidelity (target: ≥ 8/10)
+
+tier: quality
 
 Does the UI respond like the user expects, or like the developer found convenient?
 
@@ -35,6 +47,8 @@ Scoring guide:
 
 ### Information hierarchy (target: ≥ 7/10)
 
+tier: quality
+
 If a user glances at the screen for 3 seconds, do they see what matters most?
 
 - **Visual weight matches importance**: The primary action is the most prominent element. Not buried in a toolbar. Not competing with 5 other buttons of equal weight.
@@ -47,6 +61,8 @@ Scoring guide:
 - **high**: Clear visual weight hierarchy, progressive disclosure of complexity, empty states guide the user toward first action.
 
 ### Component boundaries (target: ≥ 7/10)
+
+tier: quality
 
 Are the component splits serving the user's mental model, or the developer's file organization?
 
@@ -63,6 +79,8 @@ Scoring guide:
   - mid_to_high: Remove abstractions used in only one place; move state to the component that owns the behavior; split components at user-mental-model boundaries, not technical layer boundaries
 
 ### Responsive integrity (target: ≥ 7/10)
+
+tier: quality
 
 Not "does it fit on mobile" but "does it *work* on mobile."
 

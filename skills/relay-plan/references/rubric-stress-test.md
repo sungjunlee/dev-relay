@@ -38,7 +38,7 @@ You have NOT seen the planning conversation — only the rubric and the AC.
 
 ## Your Job
 
-For each rubric factor, answer these three questions:
+For each rubric factor, answer these four questions:
 
 ### 1. Gaming Vector
 Describe the MINIMAL implementation that PASSES this factor's target
@@ -55,11 +55,19 @@ If this specific AC item disappeared from the task, would this factor
 still be a worthwhile quality check? If yes → the factor may be generic
 filler rather than task-specific.
 
+### 4. Padding Test
+For each factor: would this check PASS for any implementation of
+any task in this tech stack? If yes, it's a hygiene check disguised
+as a factor — move it to prerequisites.
+
+The rubric should probe what's SPECIFIC and HARD about THIS task,
+not what's universally true of competent code.
+
 ## Output Format
 
-| Factor | Gaming Vector | Coverage Gap | Disappear Test |
-|--------|---------------|--------------|----------------|
-| {name} | {specific minimal implementation} | {what's missed} | {pass/fail + reason} |
+| Factor | Gaming Vector | Coverage Gap | Disappear Test | Padding Test |
+|--------|---------------|--------------|----------------|--------------|
+| {name} | {specific minimal implementation} | {what's missed} | {pass/fail + reason} | {move to prerequisites? why/why not} |
 
 ## Summary
 - Factors that need tightening: {list}
