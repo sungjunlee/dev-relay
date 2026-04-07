@@ -829,6 +829,9 @@ function resolveReviewerScript(reviewerName, reviewerScriptArg) {
     return path.resolve(reviewerScriptArg);
   }
 
+  if (!/^[a-z0-9-]+$/.test(reviewerName)) {
+    throw new Error(`Invalid reviewer name '${reviewerName}': must be lowercase alphanumeric/hyphens only. Use --reviewer-script for custom paths.`);
+  }
   const candidate = path.join(__dirname, `invoke-reviewer-${reviewerName}.js`);
   if (!fs.existsSync(candidate)) {
     throw new Error(`No reviewer adapter found for '${reviewerName}'. Provide --reviewer-script or --review-file.`);
