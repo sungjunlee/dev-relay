@@ -210,6 +210,53 @@ test("gate-check skips unauthorized and uses authorized review when both exist",
   assert.equal(result.json.readyToMerge, false);
 });
 
+test("gate-check blocks review with null author when reviewer_login is set (fail-closed)", () => {
+  const result = runGateCheckDryRun({
+    comments: [
+      {
+        body: "<!-- relay-review -->\n## Relay Review\nVerdict: LGTM\nRounds: 1",
+        createdAt: "2026-04-03T08:00:00Z",
+      },
+    ],
+    commits: [],
+    manifest: {
+      review: {
+        reviewer_login: "trusted-reviewer",
+        last_reviewed_sha: null,
+      },
+    },
+  });
+
+  assert.equal(result.status, 1);
+  assert.equal(result.json.status, "unauthorized_reviewer");
+  assert.equal(result.json.readyToMerge, false);
+});
+
+test("gate-check author comparison is case-insensitive", () => {
+  const result = runGateCheckDryRun({
+    comments: [
+      {
+        body: "<!-- relay-review -->\n## Relay Review\nVerdict: LGTM\nRounds: 1",
+        author: { login: "Trusted-Reviewer" },
+        createdAt: "2026-04-03T08:00:00Z",
+      },
+    ],
+    commits: [
+      { oid: "abc123", committedDate: "2026-04-03T07:00:00Z" },
+    ],
+    manifest: {
+      review: {
+        reviewer_login: "trusted-reviewer",
+        last_reviewed_sha: "abc123",
+      },
+    },
+  });
+
+  assert.equal(result.status, 0);
+  assert.equal(result.json.status, "lgtm");
+  assert.equal(result.json.readyToMerge, true);
+});
+
 test("gate-check allows any author when reviewer_login is not set", () => {
   const result = runGateCheckDryRun({
     comments: [

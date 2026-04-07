@@ -24,7 +24,9 @@ function normalizeCommentRecords(comments) {
       ? { body: comment, author: null, createdAt: null, index }
       : {
           body: comment.body,
-          author: comment.author?.login || comment.author || null,
+          author: typeof comment.author === "string"
+            ? comment.author
+            : (comment.author?.login || null),
           createdAt: toIsoOrNull(comment.createdAt),
           index,
         }
@@ -52,7 +54,7 @@ function evaluateReviewGate({ prNumber, comments, commits, manifestData, expecte
   let hasUnauthorizedReview = false;
   for (const comment of commentRecords) {
     if (hasRelayReviewMarker(comment.body || "")) {
-      if (expectedReviewerLogin && comment.author && comment.author !== expectedReviewerLogin) {
+      if (expectedReviewerLogin && comment.author?.toLowerCase() !== expectedReviewerLogin.toLowerCase()) {
         hasUnauthorizedReview = true;
         continue;
       }

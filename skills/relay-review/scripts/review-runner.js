@@ -105,11 +105,21 @@ function gh(repoPath, ...ghArgs) {
 
 function getGhLogin() {
   try {
-    return execFileSync("gh", ["api", "user", "--jq", ".login"], {
+    const login = execFileSync("gh", ["api", "user", "--jq", ".login"], {
       encoding: "utf-8",
       stdio: "pipe",
     }).trim();
-  } catch {
+    if (!login) {
+      console.error("Warning: gh api user returned empty login — reviewer_login will not be recorded, author verification will be skipped at merge time");
+      return null;
+    }
+    return login;
+  } catch (error) {
+    console.error(
+      `Warning: could not determine GitHub login for reviewer verification — ` +
+      `reviewer_login will not be recorded, author verification will be skipped at merge time. ` +
+      `Cause: ${error.message || error}`
+    );
     return null;
   }
 }
