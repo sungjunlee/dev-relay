@@ -158,7 +158,6 @@ On re-dispatch, iteration history (prior scores + reviewer feedback) is automati
 | `--executor, -e` | Executor type (`codex` or `claude`) | `codex` |
 | `--model, -m` | Model override | ... |
 | `--sandbox` | `workspace-write` or `read-only` | `workspace-write` |
-| `--copy-env` | Copy `.env` to worktree | `false` |
 | `--copy` | Additional files to copy (comma-separated) | ... |
 | `--timeout` | Timeout in seconds | `1800` |
 | `--register` | Additionally register in executor app (worktrees are retained by default) | `false` |
@@ -372,7 +371,7 @@ config/*.key
 
 **Safety:** Only files matching BOTH `.worktreeinclude` AND `.gitignore` are copied. This prevents accidentally including tracked files. Glob patterns are supported. Missing files are silently skipped.
 
-The `--copy-env` and `--copy` dispatch flags work as explicit overrides for one-off cases.
+The `--copy` dispatch flag works as an explicit override for one-off cases. To copy `.env` files, add them to `.worktreeinclude` instead — this ensures the gitignore safety check applies.
 
 ## Reliability and Cleanup
 
