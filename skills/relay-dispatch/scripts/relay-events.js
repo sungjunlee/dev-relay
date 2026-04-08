@@ -2,6 +2,7 @@ const fs = require("fs");
 const {
   ensureRunLayout,
   getEventsPath,
+  getActorName,
   getRunsDir,
 } = require("./relay-manifest");
 
@@ -26,6 +27,7 @@ function appendRunEvent(repoRoot, runId, eventData) {
   const record = {
     ts: eventData.ts || new Date().toISOString(),
     event: eventData.event,
+    actor: getActorName(repoRoot),
     run_id: runId,
     state_from: normalizeEventValue(eventData.state_from),
     state_to: normalizeEventValue(eventData.state_to),
@@ -69,6 +71,7 @@ function appendIterationScore(repoRoot, runId, { round, scores } = {}) {
   const record = {
     ts: new Date().toISOString(),
     event: "iteration_score",
+    actor: getActorName(repoRoot),
     run_id: runId,
     round,
     scores: scores.map((score) => ({
@@ -118,6 +121,7 @@ function appendRubricQuality(repoRoot, runId, data = {}) {
   const record = {
     ts: new Date().toISOString(),
     event: "rubric_quality",
+    actor: getActorName(repoRoot),
     run_id: runId,
     grade: data.grade,
     prerequisites: data.prerequisites,
@@ -165,6 +169,7 @@ function appendScoreDivergence(repoRoot, runId, { round, divergences } = {}) {
   const record = {
     ts: new Date().toISOString(),
     event: "score_divergence",
+    actor: getActorName(repoRoot),
     run_id: runId,
     round,
     divergences: divergences.map((entry) => ({

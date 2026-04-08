@@ -1,5 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const { execFileSync } = require("child_process");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
@@ -8,15 +9,58 @@ const { getEventsPath } = require("./relay-manifest");
 const {
   appendIterationScore,
   appendRubricQuality,
+  appendRunEvent,
   appendScoreDivergence,
   readRunEvents,
 } = require("./relay-events");
 
-function createContext() {
+function initGitRepo(repoRoot, actor = "Relay Events Test") {
+  execFileSync("git", ["init", "-b", "main"], { cwd: repoRoot, stdio: "pipe" });
+  execFileSync("git", ["config", "user.name", actor], { cwd: repoRoot, stdio: "pipe" });
+  execFileSync("git", ["config", "user.email", "relay@example.com"], { cwd: repoRoot, stdio: "pipe" });
+}
+
+function withGitIdentityDisabled(testFn) {
+  const previousEnv = {
+    HOME: process.env.HOME,
+    XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME,
+    GIT_CONFIG_NOSYSTEM: process.env.GIT_CONFIG_NOSYSTEM,
+  };
+  const isolatedHome = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-isolated-"));
+  const isolatedXdg = fs.mkdtempSync(path.join(os.tmpdir(), "relay-xdg-isolated-"));
+
+  process.env.HOME = isolatedHome;
+  process.env.XDG_CONFIG_HOME = isolatedXdg;
+  process.env.GIT_CONFIG_NOSYSTEM = "1";
+
+  try {
+    testFn();
+  } finally {
+    for (const [key, value] of Object.entries(previousEnv)) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
+}
+
+function createContext(actor = "Relay Events Test") {
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-events-"));
+  initGitRepo(repoRoot, actor);
+  return {
+    repoRoot,
+    runId: "issue-95-20260406000000000",
+  };
+}
+
+function createContextWithoutActor() {
   process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
   return {
-    repoRoot: fs.mkdtempSync(path.join(os.tmpdir(), "relay-events-")),
-    runId: "issue-95-20260406000000000",
+    repoRoot: fs.mkdtempSync(path.join(os.tmpdir(), "relay-events-missing-actor-")),
+    runId: "issue-95-20260406000000001",
   };
 }
 
@@ -77,8 +121,22 @@ test("appendIterationScore writes an iteration_score record to events.jsonl", ()
   assert.equal(lines.length, 1);
 
   const parsed = JSON.parse(lines[0]);
+  assert.equal(record.actor, "Relay Events Test");
   assert.deepEqual(parsed, record);
   assert.deepEqual(readRunEvents(repoRoot, runId), [record]);
+});
+
+test("appendRunEvent writes actor from git config user.name", () => {
+  const { repoRoot, runId } = createContext("Relay Operator");
+  const record = appendRunEvent(repoRoot, runId, {
+    event: "dispatch_start",
+    state_from: "draft",
+    state_to: "dispatched",
+  });
+
+  const [parsed] = readRunEvents(repoRoot, runId);
+  assert.equal(record.actor, "Relay Operator");
+  assert.equal(parsed.actor, "Relay Operator");
 });
 
 test("appendIterationScore requires run_id", () => {
@@ -179,6 +237,7 @@ test("appendRubricQuality writes a rubric_quality record to events.jsonl", () =>
   assert.equal(lines.length, 1);
 
   const parsed = JSON.parse(lines[0]);
+  assert.equal(record.actor, "Relay Events Test");
   assert.deepEqual(parsed, record);
   assert.deepEqual(readRunEvents(repoRoot, runId), [record]);
 });
@@ -213,8 +272,21 @@ test("appendScoreDivergence writes a score_divergence record to events.jsonl", (
   assert.equal(lines.length, 1);
 
   const parsed = JSON.parse(lines[0]);
+  assert.equal(record.actor, "Relay Events Test");
   assert.deepEqual(parsed, record);
   assert.deepEqual(readRunEvents(repoRoot, runId), [record]);
+});
+
+test("appendIterationScore falls back to unknown actor when git user.name is unavailable", () => {
+  withGitIdentityDisabled(() => {
+    const { repoRoot, runId } = createContextWithoutActor();
+    const record = appendIterationScore(repoRoot, runId, {
+      round: 1,
+      scores: [createScore()],
+    });
+
+    assert.equal(record.actor, "unknown");
+  });
 });
 
 test("appendScoreDivergence rejects an empty divergences array", () => {

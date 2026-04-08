@@ -24,6 +24,38 @@ const {
   writeManifest,
 } = require("./relay-manifest");
 
+function initGitRepo(repoRoot, actor = "Relay Test") {
+  execFileSync("git", ["init", "-b", "main"], { cwd: repoRoot, stdio: "pipe" });
+  execFileSync("git", ["config", "user.name", actor], { cwd: repoRoot, stdio: "pipe" });
+  execFileSync("git", ["config", "user.email", "relay@example.com"], { cwd: repoRoot, stdio: "pipe" });
+}
+
+function withGitIdentityDisabled(testFn) {
+  const previousEnv = {
+    HOME: process.env.HOME,
+    XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME,
+    GIT_CONFIG_NOSYSTEM: process.env.GIT_CONFIG_NOSYSTEM,
+  };
+  const isolatedHome = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-isolated-"));
+  const isolatedXdg = fs.mkdtempSync(path.join(os.tmpdir(), "relay-xdg-isolated-"));
+
+  process.env.HOME = isolatedHome;
+  process.env.XDG_CONFIG_HOME = isolatedXdg;
+  process.env.GIT_CONFIG_NOSYSTEM = "1";
+
+  try {
+    testFn();
+  } finally {
+    for (const [key, value] of Object.entries(previousEnv)) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
+}
+
 test("inferIssueNumber extracts issue numbers from issue branches", () => {
   assert.equal(inferIssueNumber("issue-42"), 42);
   assert.equal(inferIssueNumber("feature/issue-99-auth"), 99);
@@ -41,6 +73,7 @@ test("createRunId is branch-stable and filesystem-safe", () => {
 test("manifest round-trips through frontmatter helpers", () => {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-manifest-"));
   process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  initGitRepo(repoRoot, "Relay Maintainer");
   const runId = "issue-42-20260402103000";
   const worktreePath = path.join(repoRoot, "wt");
   const { manifestPath } = ensureRunLayout(repoRoot, runId);
@@ -61,6 +94,7 @@ test("manifest round-trips through frontmatter helpers", () => {
 
   assert.equal(parsed.data.run_id, runId);
   assert.equal(parsed.data.state, STATES.DRAFT);
+  assert.equal(parsed.data.actor.name, "Relay Maintainer");
   assert.equal(parsed.data.issue.number, 42);
   assert.equal(parsed.data.roles.reviewer, "claude");
   assert.equal(parsed.data.git.head_sha, null);
@@ -95,6 +129,25 @@ test("manifest round-trips multiline scalar values", () => {
     parsed.data.cleanup.error,
     "dirty worktree: M README.md\n?? docs/direct-read-relay-operator-note.md"
   );
+});
+
+test("createManifestSkeleton falls back to unknown actor when git user.name is unavailable", () => {
+  withGitIdentityDisabled(() => {
+    const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-manifest-actor-missing-"));
+    const manifest = createManifestSkeleton({
+      repoRoot,
+      runId: "issue-42-20260402103002",
+      branch: "issue-42",
+      baseBranch: "main",
+      issueNumber: 42,
+      worktreePath: path.join(repoRoot, "wt"),
+      orchestrator: "codex",
+      executor: "codex",
+      reviewer: "claude",
+    });
+
+    assert.deepEqual(manifest.actor, { name: "unknown" });
+  });
 });
 
 test("readManifest migrates v1 roles.worker to roles.executor", () => {
