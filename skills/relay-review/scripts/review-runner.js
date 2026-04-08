@@ -309,7 +309,7 @@ function buildPrompt({ round, prNumber, branch, issueNumber, doneCriteria, doneC
     rubricContent
       ? '- `rubric_scores` is REQUIRED — score every factor from the rubric. Each entry must include `factor`, `target`, `observed`, `status`, `tier`, and `notes`.'
       : '- If no Score Log is available, set `rubric_scores` to `[]`.',
-    '- When `rubric_scores` is not empty, each entry must include `factor`, `target`, `observed`, `status`, and `notes`.',
+    '- When `rubric_scores` is not empty, each entry must include `factor`, `target`, `observed`, `status`, `tier`, and `notes`.',
     '- `scope_drift` is always required. Set `scope_drift.creep` to `[]` if no out-of-scope changes. Set `scope_drift.missing` to list each Done Criteria item with status `verified`, `partial`, `not_done`, or `changed`.',
     '- If `scope_drift.missing` contains any `not_done`, `changed`, or `partial` entries, verdict cannot be `pass`.',
   );
@@ -352,10 +352,13 @@ function validateRubricScore(score, index) {
       throw new Error(`${location}.${key} is required`);
     }
   }
+  if (!String(score.tier || "").trim()) {
+    throw new Error(`${location}.tier is required`);
+  }
   if (!ALLOWED_STATUSES.has(score.status)) {
     throw new Error(`${location}.status must be one of: ${Array.from(ALLOWED_STATUSES).join(", ")}`);
   }
-  if (score.tier !== undefined && !ALLOWED_SCORE_TIERS.has(score.tier)) {
+  if (!ALLOWED_SCORE_TIERS.has(score.tier)) {
     throw new Error(`${location}.tier must be one of: ${Array.from(ALLOWED_SCORE_TIERS).join(", ")}`);
   }
 }

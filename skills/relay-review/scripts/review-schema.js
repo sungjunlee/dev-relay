@@ -53,7 +53,7 @@ const REVIEW_VERDICT_JSON_SCHEMA = {
       items: {
         type: "object",
         additionalProperties: false,
-        required: ["factor", "target", "observed", "status", "notes"],
+        required: ["factor", "target", "observed", "status", "tier", "notes"],
         properties: {
           factor: { type: "string", minLength: 1 },
           target: { type: "string", minLength: 1 },

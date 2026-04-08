@@ -32,10 +32,16 @@ test("codex adapter uses result file output and forwards isolation flags", () =>
   const { repoRoot, promptPath } = setupRepo();
   const fakeDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-fake-codex-"));
   const logPath = path.join(fakeDir, "codex-args.log");
+  const schemaCapturePath = path.join(fakeDir, "review-schema.json");
   const fakeCodex = writeExecutable(fakeDir, "fake-codex.js", `#!/usr/bin/env node
 const fs = require("fs");
 const args = process.argv.slice(2);
 fs.writeFileSync(${JSON.stringify(logPath)}, args.join("\\n") + "\\n", "utf-8");
+const schemaIndex = args.indexOf("--output-schema");
+const schemaPath = schemaIndex !== -1 ? args[schemaIndex + 1] : null;
+if (schemaPath) {
+  fs.copyFileSync(schemaPath, ${JSON.stringify(schemaCapturePath)});
+}
 const outIndex = args.indexOf("-o");
 const resultPath = outIndex !== -1 ? args[outIndex + 1] : null;
 if (!resultPath) process.exit(2);
@@ -64,10 +70,19 @@ fs.writeFileSync(resultPath, JSON.stringify({
 
   const result = JSON.parse(stdout);
   const loggedArgs = fs.readFileSync(logPath, "utf-8");
+  const schema = JSON.parse(fs.readFileSync(schemaCapturePath, "utf-8"));
   assert.equal(result.verdict, "pass");
   assert.match(loggedArgs, /--ephemeral/);
   assert.match(loggedArgs, /--sandbox\nread-only/);
   assert.match(loggedArgs, /--output-schema/);
+  assert.deepEqual(schema.properties.rubric_scores.items.required, [
+    "factor",
+    "target",
+    "observed",
+    "status",
+    "tier",
+    "notes",
+  ]);
 });
 
 test("codex adapter can recover from a non-zero exit when result file is present", () => {
