@@ -68,6 +68,9 @@ node skills/relay-plan/scripts/probe-executor-env.js . --project-only --json
 # Dispatch dry-run (validate without executing)
 node skills/relay-dispatch/scripts/dispatch.js . -b test-branch -p "task" --dry-run
 
+# Dispatch with rubric (persists rubric for reviewer)
+node skills/relay-dispatch/scripts/dispatch.js . -b issue-42 --prompt-file /tmp/dispatch-42.md --rubric-file /tmp/rubric-42.yaml
+
 # Worktree cleanup
 node skills/relay-dispatch/scripts/cleanup-worktrees.js --repo . --dry-run
 

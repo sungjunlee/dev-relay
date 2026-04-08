@@ -416,3 +416,92 @@ test("re-dispatch detects environment drift and records event", () => {
   assert.match(events, /"event":"environment_drift"/);
   assert.match(events, /lockfile_hash/);
 });
+
+test("dispatch copies rubric file to run dir and records path in manifest", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  writeFakeCodex(binDir);
+  const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}` };
+
+  const rubricFile = path.join(os.tmpdir(), `rubric-test-${Date.now()}.yaml`);
+  fs.writeFileSync(rubricFile, "rubric:\n  factors:\n    - name: test factor\n", "utf-8");
+
+  const result = JSON.parse(runDispatch(repoRoot, [
+    "-b", "issue-rubric",
+    "--prompt", "rubric test",
+    "--rubric-file", rubricFile,
+    "--json",
+  ], env));
+
+  assert.equal(result.status, "completed");
+  assert.ok(result.rubricPath);
+  assert.ok(fs.existsSync(result.rubricPath));
+  assert.match(fs.readFileSync(result.rubricPath, "utf-8"), /test factor/);
+
+  const manifest = readManifest(result.manifestPath).data;
+  assert.equal(manifest.anchor.rubric_path, "rubric.yaml");
+
+  fs.unlinkSync(rubricFile);
+});
+
+test("dispatch dry-run includes rubric file info", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  writeFakeCodex(binDir);
+  const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}` };
+
+  const rubricFile = path.join(os.tmpdir(), `rubric-dry-${Date.now()}.yaml`);
+  fs.writeFileSync(rubricFile, "rubric:\n  factors: []\n", "utf-8");
+
+  const result = JSON.parse(runDispatch(repoRoot, [
+    "-b", "issue-dry",
+    "--prompt", "dry run test",
+    "--rubric-file", rubricFile,
+    "--dry-run", "--json",
+  ], env));
+
+  assert.equal(result.rubricFile, rubricFile);
+
+  fs.unlinkSync(rubricFile);
+});
+
+test("dispatch fails when rubric file does not exist", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  writeFakeCodex(binDir);
+  const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}` };
+
+  const result = spawnSync("node", [SCRIPT, repoRoot,
+    "-b", "issue-norubric",
+    "--prompt", "test",
+    "--rubric-file", "/tmp/nonexistent-rubric-file.yaml",
+    "--json",
+  ], { cwd: repoRoot, encoding: "utf-8", env });
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /rubric file not found/);
+});
+
+test("dispatch without --rubric-file leaves rubric_path unset", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  writeFakeCodex(binDir);
+  const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}` };
+
+  const result = JSON.parse(runDispatch(repoRoot, [
+    "-b", "issue-norubric2",
+    "--prompt", "no rubric test",
+    "--json",
+  ], env));
+
+  assert.equal(result.status, "completed");
+  assert.equal(result.rubricPath, null);
+
+  const manifest = readManifest(result.manifestPath).data;
+  assert.equal(manifest.anchor.rubric_path, undefined);
+  assert.equal(manifest.anchor.rubric_source, "manifest");
+});
