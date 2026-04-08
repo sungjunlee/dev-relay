@@ -65,6 +65,22 @@ function nowIso() {
   return new Date().toISOString();
 }
 
+function getActorName(repoRoot) {
+  if (!repoRoot || typeof repoRoot !== "string") {
+    return "unknown";
+  }
+
+  try {
+    const actor = execFileSync("git", ["-C", repoRoot, "config", "user.name"], {
+      encoding: "utf-8",
+      stdio: "pipe",
+    }).trim();
+    return actor || "unknown";
+  } catch {
+    return "unknown";
+  }
+}
+
 function createCleanupSkeleton() {
   return {
     status: CLEANUP_STATUSES.PENDING,
@@ -333,6 +349,9 @@ function createManifestSkeleton({
     run_id: runId,
     state: STATES.DRAFT,
     next_action: "start_dispatch",
+    actor: {
+      name: getActorName(repoRoot),
+    },
     issue: {
       number: issueNumber,
       source: issueNumber ? "github" : "unknown",
@@ -634,6 +653,7 @@ module.exports = {
   createRunId,
   ensureRunLayout,
   formatAttemptsForPrompt,
+  getActorName,
   getAttemptsPath,
   getEventsPath,
   getManifestPath,

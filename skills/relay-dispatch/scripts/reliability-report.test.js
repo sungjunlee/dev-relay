@@ -21,6 +21,16 @@ const {
 
 const SCRIPT = path.join(__dirname, "reliability-report.js");
 
+function initGitRepo(repoRoot, actor = "Relay Test") {
+  execFileSync("git", ["init", "-b", "main"], { cwd: repoRoot, stdio: "pipe" });
+  execFileSync("git", ["config", "user.name", actor], { cwd: repoRoot, stdio: "pipe" });
+  execFileSync("git", ["config", "user.email", "relay@example.com"], { cwd: repoRoot, stdio: "pipe" });
+}
+
+function setGitActor(repoRoot, actor) {
+  execFileSync("git", ["config", "user.name", actor], { cwd: repoRoot, stdio: "pipe" });
+}
+
 function writeRun(repoRoot, { runId, state, rounds, updatedAt }) {
   const manifestPath = ensureRunLayout(repoRoot, runId).manifestPath;
   let manifest = createManifestSkeleton({
@@ -118,6 +128,7 @@ test("reliability-report derives the core scorecard from manifests and events", 
   const stdout = execFileSync("node", [SCRIPT, "--repo", repoRoot, "--json"], { encoding: "utf-8" });
   const report = JSON.parse(stdout);
 
+  assert.equal("by_actor" in report, false);
   assert.equal(report.metrics.same_run_resume_success_rate, 1);
   assert.equal(report.metrics.fresh_review_merge_block_rate, 0.5);
   assert.equal(report.metrics.max_rounds_enforcement_rate, 1);
@@ -465,4 +476,52 @@ test("reliability-report populates only available rubric insight subfields", () 
       success_rate: null,
     },
   });
+});
+
+test("reliability-report adds run-level grouping when --by-actor is set", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-report-by-actor-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  initGitRepo(repoRoot, "Alice");
+  const recentTs = new Date(Date.now() - 1 * 60 * 60 * 1000).toISOString();
+
+  setGitActor(repoRoot, "Alice");
+  writeRun(repoRoot, {
+    runId: "run-alice",
+    state: STATES.READY_TO_MERGE,
+    rounds: 2,
+    updatedAt: recentTs,
+  });
+  appendIterationScore(repoRoot, "run-alice", {
+    round: 1,
+    scores: [
+      { factor: "Coverage", target: ">= 8", observed: "8", met: true, status: "pass" },
+    ],
+  });
+
+  setGitActor(repoRoot, "Bob");
+  writeRun(repoRoot, {
+    runId: "run-bob",
+    state: STATES.CHANGES_REQUESTED,
+    rounds: 3,
+    updatedAt: recentTs,
+  });
+  appendIterationScore(repoRoot, "run-bob", {
+    round: 1,
+    scores: [
+      { factor: "Docs", target: ">= 8", observed: "5", met: false, status: "fail" },
+    ],
+  });
+
+  const stdout = execFileSync("node", [SCRIPT, "--repo", repoRoot, "--json", "--by-actor"], { encoding: "utf-8" });
+  const report = JSON.parse(stdout);
+
+  assert.deepEqual(Object.keys(report.by_actor), ["Alice", "Bob"]);
+  assert.equal(report.by_actor.Alice.totals.manifests, 1);
+  assert.equal(report.by_actor.Alice.totals.events, 1);
+  assert.equal(report.by_actor.Alice.metrics.median_rounds_to_ready, 2);
+  assert.equal(report.by_actor.Alice.factor_analysis.most_stuck_factor, "Coverage");
+  assert.equal(report.by_actor.Bob.totals.manifests, 1);
+  assert.equal(report.by_actor.Bob.totals.events, 1);
+  assert.equal(report.by_actor.Bob.metrics.median_rounds_to_ready, null);
+  assert.equal(report.by_actor.Bob.factor_analysis.most_stuck_factor, "Docs");
 });
