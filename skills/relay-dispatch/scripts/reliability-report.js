@@ -5,10 +5,10 @@ const { STATES, listManifestRecords } = require("./relay-manifest");
 const { readAllRunEvents } = require("./relay-events");
 
 const args = process.argv.slice(2);
-const KNOWN_FLAGS = ["--repo", "--stale-hours", "--json", "--help", "-h"];
+const KNOWN_FLAGS = ["--repo", "--stale-hours", "--json", "--by-actor", "--help", "-h"];
 
 if (args.includes("--help") || args.includes("-h")) {
-  console.log("Usage: reliability-report.js [--repo <path>] [--stale-hours <hours>] [--json]");
+  console.log("Usage: reliability-report.js [--repo <path>] [--stale-hours <hours>] [--json] [--by-actor]");
   process.exit(0);
 }
 
@@ -50,6 +50,10 @@ function average(values) {
   if (!values.length) return null;
   const total = values.reduce((sum, value) => sum + value, 0);
   return Number((total / values.length).toFixed(4));
+}
+
+function normalizeActorName(value) {
+  return typeof value === "string" && value.trim() ? value.trim() : "unknown";
 }
 
 function buildEmptyRubricInsights() {
@@ -363,13 +367,7 @@ function buildFactorAnalysis(events) {
   };
 }
 
-function main() {
-  const repoRoot = path.resolve(getArg("--repo", "."));
-  const staleHours = parseHours(getArg("--stale-hours", "72"));
-  const now = Date.now();
-  const manifests = listManifestRecords(repoRoot);
-  const events = readAllRunEvents(repoRoot);
-
+function buildReport({ repoRoot, staleHours, now, manifests, events }) {
   const resumeStarts = events.filter((event) => (
     event.event === "dispatch_start" && event.state_from === STATES.CHANGES_REQUESTED
   ));
@@ -409,7 +407,7 @@ function main() {
     return updatedAt <= now - staleHours * 60 * 60 * 1000;
   });
 
-  const report = {
+  return {
     repoRoot,
     staleHours,
     totals: {
@@ -429,6 +427,43 @@ function main() {
     factor_analysis: buildFactorAnalysis(events),
     rubric_insights: buildRubricInsights(events, manifests),
   };
+}
+
+function buildActorReports({ repoRoot, staleHours, now, manifests, events }) {
+  const actorNames = [...new Set(
+    manifests.map(({ data }) => normalizeActorName(data?.actor?.name))
+  )].sort((left, right) => left.localeCompare(right));
+
+  return Object.fromEntries(actorNames.map((actor) => {
+    const actorManifests = manifests.filter(({ data }) => normalizeActorName(data?.actor?.name) === actor);
+    const actorRunIds = new Set(
+      actorManifests
+        .map(({ data }) => data?.run_id)
+        .filter(Boolean)
+    );
+    // Group by manifest actor so run-level metrics stay coherent even when different people touch one run later.
+    const actorEvents = events.filter((event) => actorRunIds.has(event.run_id));
+    return [actor, buildReport({
+      repoRoot,
+      staleHours,
+      now,
+      manifests: actorManifests,
+      events: actorEvents,
+    })];
+  }));
+}
+
+function main() {
+  const repoRoot = path.resolve(getArg("--repo", "."));
+  const staleHours = parseHours(getArg("--stale-hours", "72"));
+  const now = Date.now();
+  const manifests = listManifestRecords(repoRoot);
+  const events = readAllRunEvents(repoRoot);
+  const report = buildReport({ repoRoot, staleHours, now, manifests, events });
+
+  if (hasFlag("--by-actor")) {
+    report.by_actor = buildActorReports({ repoRoot, staleHours, now, manifests, events });
+  }
 
   if (hasFlag("--json")) {
     console.log(JSON.stringify(report, null, 2));
@@ -451,6 +486,19 @@ function main() {
     console.log(`  rubric_grades: ${gradeText}`);
     console.log(`  avg_quality_ratio: ${report.rubric_insights.avg_quality_ratio ?? "n/a"}`);
     console.log(`  top_divergence_hotspot: ${topHotspot ? `${topHotspot.factor_pattern} (${topHotspot.avg_delta})` : "n/a"}`);
+  }
+  if (hasFlag("--by-actor")) {
+    const actorEntries = Object.entries(report.by_actor || {});
+    console.log("  by_actor:");
+    if (actorEntries.length === 0) {
+      console.log("    n/a");
+    }
+    for (const [actor, actorReport] of actorEntries) {
+      console.log(
+        `    ${actor}: manifests=${actorReport.totals.manifests} events=${actorReport.totals.events} ` +
+        `most_stuck_factor=${actorReport.factor_analysis.most_stuck_factor ?? "n/a"}`
+      );
+    }
   }
 }
 
