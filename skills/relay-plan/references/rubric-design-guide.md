@@ -196,6 +196,21 @@ When fixing one factor, the executor may silently degrade another. Factor interf
 
 This pattern reduces factor interference in practice by preventing silent regression during multi-factor iteration. The iteration protocol enforces it: step 2 checks for regression before proceeding.
 
+## Grounding
+
+Evaluated criteria must name what the executor should inspect. A criterion is grounded when the rubric points to a discoverable artifact or a concrete code pattern, not a repo-wide vibe.
+
+Rule of thumb: if the executor would need to read 5+ files to understand the criterion, it is ungrounded. Ground it with specific references or convert it to an automated check.
+
+| Ungrounded | Grounded |
+|---|---|
+| "follow the project's error handling conventions" | "use `AppError` class from `src/errors.ts`, wrap async handlers in try-catch, log via `logger.error()`" |
+| "consistent API style" | "match the response shape in `src/routes/users.ts`: `{ data, meta, errors }`" |
+| "production-ready logging" | "use structured JSON logging via pino; include `requestId`, `userId`, `duration` fields" |
+| "matches existing component patterns" | "follow the pattern in `src/components/UserCard.tsx`: props interface, named export, co-located test file" |
+
+Grounding is about knowledge availability. Vague wording and ungrounded wording are different failures: "good error handling" is vague; "follow the project's error handling conventions" is specific-sounding but ungrounded.
+
 ## Stuck Patterns
 
 Three pathological iteration patterns. The iteration protocol checks all three before proceeding (iteration loop step 6).
@@ -327,7 +342,7 @@ One sentence per level is enough. If you can't distinguish mid from high, the cr
 - "clean code" → "functions < 20 lines, no nested callbacks > 2 levels, names describe behavior not implementation"
 - "proper testing" → "unit tests for business logic, integration test for the API endpoint, edge cases for empty/null/boundary inputs"
 
-Note: if the criteria sound specific but reference implicit conventions ("follow the project's patterns", "match existing style"), the problem is grounding, not vagueness — see "Ungrounded criteria" below.
+Note: if the criteria sound specific but reference implicit conventions ("follow the project's patterns", "match existing style"), the problem is grounding, not vagueness — see "Grounding" above.
 
 ### "Too many factors"
 
@@ -363,15 +378,11 @@ Note: if the criteria sound specific but reference implicit conventions ("follow
 
 **Test**: Can you name the specific file or function the executor should consult to evaluate this criterion? If not, it's ungrounded.
 
-**Fix**: For each ungrounded criterion, find the reference artifact in the codebase and embed it directly:
+**Rule of thumb**: If the executor would need to read 5+ files to understand the criterion, it is ungrounded.
+
+**Fix**: Use the grounding pattern above:
 
 1. Look at the criterion — what convention or pattern does it reference?
 2. Find the canonical example of that convention in the repo (a file, a function, an interface)
 3. Replace the abstract reference with the concrete path + what to look for
-
-| Ungrounded | Grounded |
-|---|---|
-| "follow the project's error handling conventions" | "use `AppError` class from `src/errors.ts`, wrap async handlers in try-catch, log via `logger.error()`" |
-| "consistent API style" | "match the response shape in `src/routes/users.ts`: `{ data, meta, errors }`" |
-| "production-ready logging" | "use structured JSON logging via pino; include `requestId`, `userId`, `duration` fields" |
-| "matches existing component patterns" | "follow the pattern in `src/components/UserCard.tsx`: props interface, named export, co-located test file" |
+4. If you cannot name one canonical artifact, convert the criterion to an automated check or rewrite it narrower
