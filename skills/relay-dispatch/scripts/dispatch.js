@@ -22,6 +22,7 @@
  *   --sandbox <mode>       workspace-write | read-only (default: workspace-write)
  *   --copy <file,...>      Additional files to copy
  *   --timeout <seconds>    Exec timeout (default: 1800)
+ *   --rubric-file <path>   Copy rubric YAML to run dir (persists for review)
  *   --register             Register session in executor's app (keeps worktree)
  *   --no-cleanup           Compatibility alias; worktree is retained by default
  *   --dry-run              Show plan without executing
@@ -77,7 +78,7 @@ const args = process.argv.slice(2);
 
 const KNOWN_FLAGS = [
   "--branch", "-b", "--run-id", "--manifest", "--prompt", "-p", "--prompt-file", "--executor", "-e",
-  "--model", "-m", "--sandbox", "--copy", "--timeout",
+  "--model", "-m", "--sandbox", "--copy", "--timeout", "--rubric-file",
   "--register", "--no-cleanup", "--dry-run", "--json", "--help", "-h",
 ];
 
@@ -98,6 +99,7 @@ if (!args.length || args.includes("--help") || args.includes("-h")) {
   console.log("  --copy <files>     Additional files to copy (comma-separated)");
   console.log("  --timeout          Exec timeout in seconds (default: 1800)");
   console.log("  --register         Register session in executor's app (keeps worktree)");
+  console.log("  --rubric-file      Copy rubric YAML to run dir (persists for review)");
   console.log("  --no-cleanup       Compatibility alias; worktree is retained by default");
   console.log("  --dry-run          Show plan without executing");
   console.log("  --json             Output as JSON");
@@ -138,6 +140,7 @@ const EXECUTOR = getArg(["--executor", "-e"], "codex");
 const MODEL = getArg(["--model", "-m"], undefined);
 const SANDBOX = getArg("--sandbox", "workspace-write");
 const COPY_FILES = getArg("--copy", "").split(",").filter(Boolean);
+const RUBRIC_FILE = getArg("--rubric-file", undefined);
 const TIMEOUT = parseInt(getArg("--timeout", "1800"), 10);
 if (isNaN(TIMEOUT) || TIMEOUT <= 0) {
   console.error("Error: --timeout must be a positive integer");
@@ -166,6 +169,14 @@ if (!RESUME_MODE && !BRANCH) {
 if (!PROMPT && !PROMPT_FILE) {
   console.error("Error: --prompt or --prompt-file is required");
   process.exit(1);
+}
+
+if (RUBRIC_FILE) {
+  const rubricPath = path.resolve(RUBRIC_FILE);
+  if (!fs.existsSync(rubricPath)) {
+    console.error(`Error: rubric file not found: ${rubricPath}`);
+    process.exit(1);
+  }
 }
 
 if (!MANIFEST_INPUT && !fs.existsSync(path.join(REPO_PATH, ".git"))) {
@@ -351,6 +362,7 @@ async function main() {
       resultFile, stdoutLog, stderrLog, timeout: TIMEOUT,
       cleanupPolicy,
       worktreeinclude: includeFiles,
+      rubricFile: RUBRIC_FILE || null,
       environment: RESUME_MODE ? (manifest?.environment || null) : "collected-at-dispatch",
     };
     if (JSON_OUT) {
@@ -371,6 +383,9 @@ async function main() {
       console.log(`  Result:   ${resultFile}`);
       console.log(`  Cleanup:  ${cleanupPolicy}`);
       console.log(`  Timeout:  ${TIMEOUT}s`);
+      if (RUBRIC_FILE) {
+        console.log(`  Rubric:   ${RUBRIC_FILE}`);
+      }
       if (includeFiles.length) {
         console.log(`  .worktreeinclude: ${includeFiles.join(", ")}`);
       }
@@ -450,6 +465,22 @@ async function main() {
       environment,
     });
     ensureRunLayout(repoRoot, runId);
+    writeManifest(manifestPath, manifest);
+  }
+
+  // --- Copy rubric file to run dir ---
+  if (RUBRIC_FILE) {
+    const rubricSrc = path.resolve(RUBRIC_FILE);
+    const runDir = getRunDir(repoRoot, runId);
+    const rubricDest = path.join(runDir, "rubric.yaml");
+    fs.copyFileSync(rubricSrc, rubricDest);
+    manifest = {
+      ...manifest,
+      anchor: {
+        ...(manifest.anchor || {}),
+        rubric_path: "rubric.yaml",
+      },
+    };
     writeManifest(manifestPath, manifest);
   }
 
@@ -709,6 +740,7 @@ async function main() {
     runId,
     runDir,
     manifestPath,
+    rubricPath: manifest.anchor?.rubric_path ? path.join(runDir, manifest.anchor.rubric_path) : null,
     runState: manifest.state,
     cleanupPolicy,
     status,
