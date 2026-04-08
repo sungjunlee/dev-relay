@@ -120,7 +120,7 @@ Before dispatch, verify:
 - [ ] All automated check commands are immutable (executor cannot modify)
 - [ ] Every evaluated factor has `scoring_guide` with low/mid/high anchors
 - [ ] Criteria are specific ("timeouts on external calls") not vague ("good error handling")
-- [ ] Criteria reference discoverable artifacts (file paths, function names) not abstractions ("follows conventions")
+- [ ] Criteria reference discoverable artifacts (file paths, function names, code patterns with examples), not abstractions ("follows conventions"); if the executor would need to read 5+ files to understand the criterion, ground it or convert it to an automated check
 - [ ] Targets are concrete ("≥ 8/10", "< 200ms") not relative ("good", "fast")
 - [ ] Automated checks measure outcomes not proxies
 
