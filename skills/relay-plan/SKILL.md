@@ -1,7 +1,7 @@
 ---
 name: relay-plan
 argument-hint: "[issue-number]"
-description: Convert task acceptance criteria into a scored rubric for autonomous iteration. Use before relay-dispatch for tasks with 3+ acceptance criteria or quality-sensitive work.
+description: Convert task acceptance criteria into a scored rubric for autonomous iteration. Always used before relay-dispatch — rubric depth scales with task size.
 compatibility: Requires gh CLI. Task AC reading falls back to local files or user input.
 metadata:
   related-skills: "relay, relay-dispatch, relay-review, dev-backlog"
@@ -232,14 +232,17 @@ Take the base template (`relay/references/prompt-template.md`) and add these sec
 
 ### 5. Dispatch
 
+Write the rubric YAML to a temp file alongside the dispatch prompt.
+
 ```bash
 ${CLAUDE_SKILL_DIR}/../relay-dispatch/scripts/dispatch.js . \
-  -b issue-42 --prompt-file /tmp/dispatch-42.md --timeout 3600
+  -b issue-42 --prompt-file /tmp/dispatch-42.md --rubric-file /tmp/rubric-42.yaml --timeout 3600
 ```
 
 ## When to use
 
-- **Use it**: 3+ AC items, quality-sensitive work, executor delegation
-- **Skip it**: Bug fixes, typos, one-liners — dispatch directly with base template
+- **Use it**: All tasks dispatched via relay — rubric depth scales with task size
+- **S/M tasks**: Lightweight rubric (1-5 factors), skip stress-test
+- **L/XL tasks**: Detailed rubric with stress-test and calibration
 - **Re-dispatch**: Previous Score Log + reviewer feedback are automatically prepended to the prompt (see `relay-dispatch` docs)
 - **Full rubric guide**: `references/rubric-design-guide.md`

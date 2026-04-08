@@ -54,17 +54,22 @@ PR_NUM=$(gh pr list --head issue-<N> --json number -q '.[0].number')
 
 ## Step 2: Plan
 
-Build a scoring rubric from the Acceptance Criteria:
-- **3+ AC items or quality-sensitive**: Follow relay-plan's process (Steps 1-3 only: read task → build rubric → generate prompt). Do NOT dispatch from relay-plan — Step 3 below handles dispatch.
-- **Simple task (1-2 AC, bug fix, typo)**: Use the base template from `references/prompt-template.md`
+**Always build a rubric.** Follow relay-plan's process (Steps 1-3 only: read task → build rubric → generate prompt). Do NOT dispatch from relay-plan — Step 3 below handles dispatch.
+
+Rubric depth scales with task size (determined by orchestrator judgment on normalized AC + file scope, not raw issue AC count):
+- **S** (simple fix, typo, 1-liner): 1-2 factors, skip stress-test
+- **M** (standard feature): 3-5 factors, skip stress-test
+- **L** (cross-cutting, multi-file): 4-6 factors + stress-test
+- **XL** (architecture change): 5-8 factors + stress-test + calibration
 
 Write the dispatch prompt to a temp file (e.g., `/tmp/dispatch-<N>.md`).
+Write the rubric YAML to a temp file (e.g., `/tmp/rubric-<N>.yaml`).
 
 ## Step 3: Dispatch (relay-dispatch)
 
 ```bash
 ${CLAUDE_SKILL_DIR}/../relay-dispatch/scripts/dispatch.js . \
-  -b issue-<N> --prompt-file /tmp/dispatch-<N>.md --timeout 3600
+  -b issue-<N> --prompt-file /tmp/dispatch-<N>.md --rubric-file /tmp/rubric-<N>.yaml --timeout 3600
 ```
 
 While dispatch runs in the background, optionally monitor progress:
