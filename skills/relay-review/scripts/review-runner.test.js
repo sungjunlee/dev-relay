@@ -316,6 +316,7 @@ test("review-runner records rubric_scores as iteration_score events", () => {
         target: ">= 8",
         observed: "6",
         status: "fail",
+        tier: "contract",
         notes: "Still below bar.",
       },
       {
@@ -323,6 +324,7 @@ test("review-runner records rubric_scores as iteration_score events", () => {
         target: ">= 8",
         observed: "8",
         status: "pass",
+        tier: "quality",
         notes: "Docs are complete.",
       },
     ],
@@ -347,6 +349,7 @@ test("review-runner records rubric_scores as iteration_score events", () => {
   assert.deepEqual(events.at(-1), {
     ts: events.at(-1).ts,
     event: "iteration_score",
+    actor: "Relay Review Test",
     run_id: runId,
     round: 1,
     scores: [
@@ -356,6 +359,7 @@ test("review-runner records rubric_scores as iteration_score events", () => {
         observed: "6",
         met: false,
         status: "fail",
+        tier: "contract",
       },
       {
         factor: "Docs",
@@ -363,6 +367,7 @@ test("review-runner records rubric_scores as iteration_score events", () => {
         observed: "8",
         met: true,
         status: "pass",
+        tier: "quality",
       },
     ],
   });
@@ -551,6 +556,7 @@ test("invalid rubric score entry is rejected", () => {
         target: ">= 8",
         observed: "9",
         status: "pass",
+        tier: "contract",
       },
     ],
     scope_drift: { creep: [], missing: [] },
@@ -567,6 +573,40 @@ test("invalid rubric score entry is rejected", () => {
     "--no-comment",
     "--json",
   ], { encoding: "utf-8", stdio: "pipe" }), /rubric_scores\[0\]\.notes is required/);
+});
+
+test("review-runner rejects rubric score without tier", () => {
+  const { repoRoot, doneCriteriaPath, diffPath } = setupRepo();
+  const reviewFile = writeVerdict(repoRoot, "invalid-rubric-tier.json", {
+    verdict: "pass",
+    summary: "Looks good.",
+    contract_status: "pass",
+    quality_status: "pass",
+    next_action: "ready_to_merge",
+    issues: [],
+    rubric_scores: [
+      {
+        factor: "Contract coverage",
+        target: ">= 8",
+        observed: "9",
+        status: "pass",
+        notes: "Matches the contract.",
+      },
+    ],
+    scope_drift: { creep: [], missing: [] },
+  });
+
+  assert.throws(() => execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--branch", "issue-42",
+    "--pr", "123",
+    "--done-criteria-file", doneCriteriaPath,
+    "--diff-file", diffPath,
+    "--review-file", reviewFile,
+    "--no-comment",
+    "--json",
+  ], { encoding: "utf-8", stdio: "pipe" }), /rubric_scores\[0\]\.tier is required/);
 });
 
 test("pass verdict with not_done scope_drift entry is rejected", () => {
@@ -865,7 +905,7 @@ test("formatPriorVerdictSummary produces correct round numbers and rubric summar
       summary: "Missing tests",
       issues: [{ title: "a", body: "b", file: "x.js", line: 1, category: "contract", severity: "high" }],
       rubric_scores: [
-        { factor: "Coverage", target: ">= 8", observed: "5", status: "fail", notes: "low" },
+        { factor: "Coverage", target: ">= 8", observed: "5", status: "fail", tier: "contract", notes: "low" },
       ],
     },
     {
