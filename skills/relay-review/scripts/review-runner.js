@@ -250,7 +250,18 @@ function formatPriorRoundContext(runDir, round) {
   return ["## Prior Round Context", "", "Verify whether prior issues were resolved.", "", ...lines].join("\n");
 }
 
-function buildPrompt({ round, prNumber, branch, issueNumber, doneCriteria, doneCriteriaSource, diffText, runDir }) {
+function loadRubricFromRunDir(runDir, manifestData) {
+  const rubricPath = manifestData?.anchor?.rubric_path;
+  if (!rubricPath || !runDir) return null;
+  const fullPath = path.join(runDir, rubricPath);
+  try {
+    return fs.readFileSync(fullPath, "utf-8").trim();
+  } catch {
+    return null;
+  }
+}
+
+function buildPrompt({ round, prNumber, branch, issueNumber, doneCriteria, doneCriteriaSource, diffText, runDir, rubricContent }) {
   const template = readText(REVIEWER_PROMPT_PATH)
     .replace("source=\"done-criteria\"", `source="${doneCriteriaSource || "done-criteria"}"`)
     .replace("[PASTE DONE CRITERIA HERE]", doneCriteria)
@@ -265,6 +276,18 @@ function buildPrompt({ round, prNumber, branch, issueNumber, doneCriteria, doneC
     "",
     template,
   ];
+
+  if (rubricContent) {
+    sections.push(
+      "",
+      "## Scoring Rubric",
+      "A rubric was provided during planning. You MUST score EVERY factor below.",
+      "For each factor, populate a `rubric_scores` entry with `factor`, `target`, `observed`, `status`, `tier`, and `notes`.",
+      "Do NOT leave `rubric_scores` empty when a rubric is provided.",
+      "",
+      rubricContent,
+    );
+  }
 
   const priorContext = formatPriorRoundContext(runDir, round);
   if (priorContext) {
@@ -283,7 +306,9 @@ function buildPrompt({ round, prNumber, branch, issueNumber, doneCriteria, doneC
     '- If `verdict` is `pass`, set both `contract_status` and `quality_status` to `pass`.',
     '- If `verdict` is `changes_requested`, include actionable issues with `file` and `line`, and set `next_action` to `changes_requested`.',
     '- If `verdict` is `escalated`, include the blocking issues or reason that automation should stop, and set `next_action` to `escalated`.',
-    '- If no Score Log is available, set `rubric_scores` to `[]`.',
+    rubricContent
+      ? '- `rubric_scores` is REQUIRED — score every factor from the rubric. Each entry must include `factor`, `target`, `observed`, `status`, `tier`, and `notes`.'
+      : '- If no Score Log is available, set `rubric_scores` to `[]`.',
     '- When `rubric_scores` is not empty, each entry must include `factor`, `target`, `observed`, `status`, and `notes`.',
     '- `scope_drift` is always required. Set `scope_drift.creep` to `[]` if no out-of-scope changes. Set `scope_drift.missing` to list each Done Criteria item with status `verified`, `partial`, `not_done`, or `changed`.',
     '- If `scope_drift.missing` contains any `not_done`, `changed`, or `partial` entries, verdict cannot be `pass`.',
@@ -964,7 +989,8 @@ function run() {
 
   const { text: doneCriteria, source: doneCriteriaSource } = loadDoneCriteria(repoPath, issueNumber, prNumber, doneCriteriaFile);
   const diffText = loadDiff(repoPath, prNumber, diffFile);
-  const promptText = buildPrompt({ round, prNumber, branch, issueNumber, doneCriteria, doneCriteriaSource, diffText, runDir });
+  const rubricContent = loadRubricFromRunDir(runDir, data);
+  const promptText = buildPrompt({ round, prNumber, branch, issueNumber, doneCriteria, doneCriteriaSource, diffText, runDir, rubricContent });
 
   const doneCriteriaPath = path.join(runDir, `review-round-${round}-done-criteria.md`);
   const diffPath = path.join(runDir, `review-round-${round}-diff.patch`);
@@ -1001,6 +1027,7 @@ function run() {
     reviewer: reviewerName,
     reviewerScript,
     reviewFile: reviewFile || null,
+    rubricLoaded: !!rubricContent,
     rawResponsePath: null,
     verdictPath: null,
     redispatchPath: null,
@@ -1074,6 +1101,12 @@ function run() {
   }
 
   let verdict = parseReviewVerdict(reviewText);
+  if (rubricContent && (!Array.isArray(verdict.rubric_scores) || verdict.rubric_scores.length === 0)) {
+    throw new Error(
+      "Review verdict has empty rubric_scores but a rubric was provided. " +
+      "The reviewer must score every rubric factor."
+    );
+  }
   const repeatedIssueCount = verdict.verdict === "changes_requested"
     ? computeRepeatedIssueCount(runDir, round, verdict.issues)
     : 0;

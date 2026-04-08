@@ -1184,3 +1184,104 @@ test("buildRedispatchPrompt omits churn WARNING when churnGrowth is null", () =>
   assert.ok(!out.includes("WARNING"));
   assert.ok(!out.includes("Apply minimal"));
 });
+
+test("review-runner loads rubric from run dir and includes it in prompt", () => {
+  const { repoRoot, manifestPath, runId, doneCriteriaPath, diffPath } = setupRepo();
+
+  // Write a rubric file to the run dir
+  const { data, body } = readManifest(manifestPath);
+  const runDir = ensureRunLayout(repoRoot, runId).runDir;
+  fs.writeFileSync(path.join(runDir, "rubric.yaml"), "rubric:\n  factors:\n    - name: API pagination\n", "utf-8");
+  const updated = {
+    ...data,
+    anchor: { ...data.anchor, rubric_path: "rubric.yaml" },
+  };
+  writeManifest(manifestPath, updated, body);
+
+  const stdout = execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--branch", "issue-42",
+    "--pr", "123",
+    "--done-criteria-file", doneCriteriaPath,
+    "--diff-file", diffPath,
+    "--prepare-only",
+    "--json",
+  ], { encoding: "utf-8" });
+
+  const result = JSON.parse(stdout);
+  assert.equal(result.rubricLoaded, true);
+  const promptText = fs.readFileSync(result.promptPath, "utf-8");
+  assert.match(promptText, /## Scoring Rubric/);
+  assert.match(promptText, /API pagination/);
+  assert.match(promptText, /rubric_scores.*REQUIRED/i);
+});
+
+test("review-runner rejects empty rubric_scores when rubric is present", () => {
+  const { repoRoot, manifestPath, runId, doneCriteriaPath, diffPath } = setupRepo();
+
+  // Write a rubric file to the run dir
+  const { data, body } = readManifest(manifestPath);
+  const runDir = ensureRunLayout(repoRoot, runId).runDir;
+  fs.writeFileSync(path.join(runDir, "rubric.yaml"), "rubric:\n  factors:\n    - name: test\n", "utf-8");
+  const updated = {
+    ...data,
+    anchor: { ...data.anchor, rubric_path: "rubric.yaml" },
+  };
+  writeManifest(manifestPath, updated, body);
+
+  const reviewFile = writeVerdict(repoRoot, "empty-rubric.json", {
+    verdict: "pass",
+    summary: "Looks good.",
+    contract_status: "pass",
+    quality_status: "pass",
+    next_action: "ready_to_merge",
+    issues: [],
+    rubric_scores: [],
+    scope_drift: { creep: [], missing: [] },
+  });
+
+  assert.throws(() => execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--run-id", runId,
+    "--pr", "123",
+    "--done-criteria-file", doneCriteriaPath,
+    "--diff-file", diffPath,
+    "--review-file", reviewFile,
+    "--no-comment",
+    "--json",
+  ], { encoding: "utf-8", stdio: "pipe" }), /empty rubric_scores.*rubric was provided/i);
+});
+
+test("review-runner allows empty rubric_scores when no rubric file exists", () => {
+  const { repoRoot, manifestPath, runId, doneCriteriaPath, diffPath } = setupRepo();
+
+  // No rubric file, no rubric_path in manifest
+  const reviewFile = writeVerdict(repoRoot, "no-rubric-pass.json", {
+    verdict: "pass",
+    summary: "All done criteria are satisfied.",
+    contract_status: "pass",
+    quality_status: "pass",
+    next_action: "ready_to_merge",
+    issues: [],
+    rubric_scores: [],
+    scope_drift: { creep: [], missing: [] },
+  });
+
+  const stdout = execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--run-id", runId,
+    "--pr", "123",
+    "--done-criteria-file", doneCriteriaPath,
+    "--diff-file", diffPath,
+    "--review-file", reviewFile,
+    "--no-comment",
+    "--json",
+  ], { encoding: "utf-8" });
+
+  const result = JSON.parse(stdout);
+  assert.equal(result.state, STATES.READY_TO_MERGE);
+  assert.equal(result.rubricLoaded, false);
+});
