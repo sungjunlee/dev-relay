@@ -103,6 +103,7 @@ Consult `references/rubric-*.md` for specialist thinking. Design factors from AC
 |-----------|-----------|-----------|
 | UI components, pages, interactions | `rubric-frontend.md` | Lighthouse, CLS, a11y, interaction fidelity |
 | API endpoints, data layer, infra | `rubric-backend.md` | Query count, response time, failure modes |
+| User input, auth, file uploads, APIs with sensitive data | `rubric-security.md` | Trust boundaries, auth coverage, injection resistance, exposure control |
 | Code restructuring, migration | `rubric-refactoring.md` | Dead code delta, concept count, dependency direction |
 | README, guides, API docs, specs | `rubric-documentation.md` | Reader testing score, zero-context completeness |
 | Design-driven features, UX flows | `rubric-design.md` | Value → Usability → Delight hierarchy |
