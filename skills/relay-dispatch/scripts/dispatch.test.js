@@ -522,6 +522,132 @@ test("dispatch dry-run includes request linkage and frozen done criteria file in
   assert.equal(result.doneCriteriaFile, doneCriteriaFile);
 });
 
+test("dispatch resume rejects changes to immutable intake linkage", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  writeFakeCodex(binDir);
+  const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}` };
+
+  const doneCriteriaFile = path.join(repoRoot, "done-criteria.md");
+  const alternateDoneCriteriaFile = path.join(repoRoot, "done-criteria-v2.md");
+  fs.writeFileSync(doneCriteriaFile, "# Done Criteria\n\n- Original intake snapshot\n", "utf-8");
+  fs.writeFileSync(alternateDoneCriteriaFile, "# Done Criteria\n\n- Changed intake snapshot\n", "utf-8");
+
+  const first = JSON.parse(runDispatch(repoRoot, [
+    "-b", "issue-intake-resume-guard",
+    "--prompt", "first pass",
+    "--request-id", "req-20260409030303000",
+    "--leaf-id", "leaf-01",
+    "--done-criteria-file", doneCriteriaFile,
+    "--json",
+  ], env));
+  assert.equal(first.runState, STATES.REVIEW_PENDING);
+
+  const record = readManifest(first.manifestPath);
+  const updated = updateManifestState(record.data, STATES.CHANGES_REQUESTED, "re_dispatch_requested_changes");
+  writeManifest(first.manifestPath, updated, record.body);
+
+  const result = spawnSync("node", [SCRIPT, repoRoot,
+    "--run-id", first.runId,
+    "--prompt", "resume pass",
+    "--request-id", "req-20260409030303000",
+    "--leaf-id", "leaf-01",
+    "--done-criteria-file", alternateDoneCriteriaFile,
+    "--json",
+  ], { cwd: repoRoot, encoding: "utf-8", env });
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /cannot change immutable anchor\.done_criteria_path/);
+
+  const manifest = readManifest(first.manifestPath).data;
+  assert.equal(manifest.anchor.done_criteria_path, doneCriteriaFile);
+  assert.equal(manifest.source.request_id, "req-20260409030303000");
+});
+
+test("dispatch resume keeps the original intake linkage when the same immutable values are supplied", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  writeFakeCodex(binDir);
+  const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}` };
+
+  const doneCriteriaFile = path.join(repoRoot, "done-criteria.md");
+  fs.writeFileSync(doneCriteriaFile, "# Done Criteria\n\n- Preserve the intake snapshot\n", "utf-8");
+
+  const first = JSON.parse(runDispatch(repoRoot, [
+    "-b", "issue-intake-resume-stable",
+    "--prompt", "first pass",
+    "--request-id", "req-20260409050505000",
+    "--leaf-id", "leaf-01",
+    "--done-criteria-file", doneCriteriaFile,
+    "--json",
+  ], env));
+  assert.equal(first.runState, STATES.REVIEW_PENDING);
+
+  const record = readManifest(first.manifestPath);
+  const updated = updateManifestState(record.data, STATES.CHANGES_REQUESTED, "re_dispatch_requested_changes");
+  writeManifest(first.manifestPath, updated, record.body);
+
+  const second = JSON.parse(runDispatch(repoRoot, [
+    "--run-id", first.runId,
+    "--prompt", "resume pass",
+    "--request-id", "req-20260409050505000",
+    "--leaf-id", "leaf-01",
+    "--done-criteria-file", doneCriteriaFile,
+    "--json",
+  ], env));
+
+  assert.equal(second.mode, "resume");
+  assert.equal(second.runId, first.runId);
+  assert.equal(second.requestId, "req-20260409050505000");
+  assert.equal(second.leafId, "leaf-01");
+  assert.equal(second.doneCriteriaPath, doneCriteriaFile);
+
+  const manifest = readManifest(first.manifestPath).data;
+  assert.equal(manifest.source.request_id, "req-20260409050505000");
+  assert.equal(manifest.source.leaf_id, "leaf-01");
+  assert.equal(manifest.anchor.done_criteria_path, doneCriteriaFile);
+});
+
+test("dispatch resume rejects adding intake linkage to a run that started without it", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  writeFakeCodex(binDir);
+  const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}` };
+
+  const first = JSON.parse(runDispatch(repoRoot, [
+    "-b", "issue-intake-resume-addition",
+    "--prompt", "first pass",
+    "--json",
+  ], env));
+  assert.equal(first.runState, STATES.REVIEW_PENDING);
+
+  const record = readManifest(first.manifestPath);
+  const updated = updateManifestState(record.data, STATES.CHANGES_REQUESTED, "re_dispatch_requested_changes");
+  writeManifest(first.manifestPath, updated, record.body);
+
+  const doneCriteriaFile = path.join(repoRoot, "done-criteria-late.md");
+  fs.writeFileSync(doneCriteriaFile, "# Done Criteria\n\n- Late linkage must fail\n", "utf-8");
+
+  const result = spawnSync("node", [SCRIPT, repoRoot,
+    "--run-id", first.runId,
+    "--prompt", "resume pass",
+    "--request-id", "req-20260409060606000",
+    "--leaf-id", "leaf-01",
+    "--done-criteria-file", doneCriteriaFile,
+    "--json",
+  ], { cwd: repoRoot, encoding: "utf-8", env });
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /cannot add immutable source\.request_id/);
+
+  const manifest = readManifest(first.manifestPath).data;
+  assert.equal(manifest.source, undefined);
+  assert.equal(manifest.anchor.done_criteria_path, undefined);
+});
+
 test("dispatch fails when rubric file does not exist", () => {
   const { repoRoot, relayHome } = setupRepo();
   process.env.RELAY_HOME = relayHome;

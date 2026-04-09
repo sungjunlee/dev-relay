@@ -116,6 +116,8 @@ Expect:
 - a run in `changes_requested` resumes on the same worktree and manifest
 - re-dispatch keeps the same `run_id`
 - missing retained worktrees fail loudly without creating a replacement run
+- intake-linked runs can resume only with the exact same `request_id`, `leaf_id`, and `done_criteria_path`
+- issue-first runs cannot gain relay-intake linkage retroactively during resume
 
 ### 7. Review runner validates structured verdicts and updates manifest state
 
@@ -155,6 +157,20 @@ Interpretation:
 - this is a repo-wide skill-format mismatch with the strict Codex validator
 - it is not a regression from the manifest foundation work
 - the actual YAML syntax issue in `relay-review/SKILL.md` is fixed
+
+### 8a. Intake request persistence rejects frozen-snapshot collisions
+
+Command:
+
+```bash
+node --test skills/relay-intake/scripts/request-store.test.js
+```
+
+Expect:
+
+- reusing the same `request_id` fails before any request artifact is overwritten
+- the original frozen Done Criteria snapshot stays unchanged
+- the request event log remains append-only with the original two persistence events only
 
 ### 9. Optional live adapter verification
 

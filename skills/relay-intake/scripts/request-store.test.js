@@ -80,6 +80,8 @@ test("persistRequestContract writes request artifact, relay-ready handoff, done 
   assert.equal(requestArtifact.data.paths.handoff, result.handoffPath);
   assert.match(requestArtifact.body, /Relay Intake Request/);
   assert.match(requestArtifact.body, /leaf-01/);
+  assert.match(requestArtifact.body, new RegExp(`${result.requestId}/relay-ready/leaf-01\\.md`));
+  assert.match(requestArtifact.body, new RegExp(`${result.requestId}/done-criteria/leaf-01\\.md`));
 
   const handoffArtifact = readRequestArtifact(result.handoffPath);
   assert.equal(handoffArtifact.data.request_id, result.requestId);
@@ -132,6 +134,27 @@ test("persistRequestContract rejects multi-leaf handoff input with an explicit #
     () => persistRequestContract(repoRoot, contract),
     /TODO\(#129\): multi-leaf relay-intake handoff is not implemented yet/
   );
+});
+
+test("persistRequestContract rejects request_id collisions before overwriting frozen artifacts", () => {
+  const { repoRoot } = setupRepo();
+  const requestId = "req-20260409040404000";
+  const first = persistRequestContract(repoRoot, createContract(), { requestId });
+  const originalDoneCriteria = fs.readFileSync(first.doneCriteriaPath, "utf-8");
+
+  assert.throws(
+    () => persistRequestContract(repoRoot, createContract({
+      request_text: "A different raw request that must not replace the original.",
+      handoff: {
+        ...createContract().handoff,
+        done_criteria_markdown: "# Done Criteria\n\n- Replacement snapshot that must never land\n",
+      },
+    }), { requestId }),
+    /already exists; refusing to overwrite existing request artifact/
+  );
+
+  assert.equal(fs.readFileSync(first.doneCriteriaPath, "utf-8"), originalDoneCriteria);
+  assert.equal(readRequestEvents(repoRoot, requestId).length, 2);
 });
 
 test("raw request can flow through intake persistence, dispatch linkage, and review prepare-only", () => {

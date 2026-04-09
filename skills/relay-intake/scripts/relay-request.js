@@ -217,16 +217,35 @@ function readRequestArtifact(requestPath) {
   return parseFrontmatter(text);
 }
 
+function assertRequestArtifactsAbsent(requestId, artifactPaths) {
+  for (const [label, artifactPath] of artifactPaths) {
+    if (fs.existsSync(artifactPath)) {
+      throw new Error(
+        `request_id '${requestId}' already exists; refusing to overwrite existing ${label}: ${artifactPath}`
+      );
+    }
+  }
+}
+
 function persistRequestContract(repoRoot, contract, options = {}) {
   const normalized = normalizeSingleLeafContract(contract);
   const requestId = options.requestId || createRequestId();
   const createdAt = nowIso();
   const layout = ensureRequestLayout(repoRoot, requestId);
+  const requestArtifactDir = path.dirname(layout.requestPath);
   const handoffFileName = `${normalized.handoff.leafId}.md`;
   const handoffPath = path.join(layout.relayReadyDir, handoffFileName);
   const doneCriteriaPath = path.join(layout.doneCriteriaDir, handoffFileName);
-  const handoffRelativePath = path.relative(layout.requestDir, handoffPath);
-  const doneCriteriaRelativePath = path.relative(layout.requestDir, doneCriteriaPath);
+  const handoffRelativePath = path.relative(requestArtifactDir, handoffPath);
+  const doneCriteriaRelativePath = path.relative(requestArtifactDir, doneCriteriaPath);
+
+  assertRequestArtifactsAbsent(requestId, [
+    ["request artifact", layout.requestPath],
+    ["request event log", layout.eventsPath],
+    ["raw request artifact", layout.rawRequestPath],
+    ["relay-ready handoff", handoffPath],
+    ["done criteria snapshot", doneCriteriaPath],
+  ]);
 
   fs.writeFileSync(layout.rawRequestPath, `${normalized.requestText}\n`, "utf-8");
   fs.writeFileSync(doneCriteriaPath, `${normalized.handoff.doneCriteriaMarkdown}\n`, "utf-8");

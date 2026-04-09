@@ -261,32 +261,42 @@ function terminateProcessTree(pid) {
   } catch {}
 }
 
-function applyRequestLinkage(manifest, { requestId, leafId, doneCriteriaPath }) {
-  let next = manifest;
+function validateResumeRequestLinkage(manifest, { requestId, leafId, doneCriteriaPath }) {
+  const checks = [
+    {
+      field: "source.request_id",
+      existing: manifest?.source?.request_id || null,
+      incoming: requestId || null,
+    },
+    {
+      field: "source.leaf_id",
+      existing: manifest?.source?.leaf_id || null,
+      incoming: leafId || null,
+    },
+    {
+      field: "anchor.done_criteria_path",
+      existing: manifest?.anchor?.done_criteria_path || null,
+      incoming: doneCriteriaPath || null,
+      normalize: (value) => path.resolve(value),
+    },
+  ];
 
-  if (requestId || leafId) {
-    next = {
-      ...next,
-      source: {
-        ...(next.source || {}),
-        ...(requestId ? { request_id: requestId } : {}),
-        ...(leafId ? { leaf_id: leafId } : {}),
-      },
-    };
+  for (const check of checks) {
+    if (!check.incoming) continue;
+
+    if (!check.existing) {
+      throw new Error(
+        `same-run resume cannot add immutable ${check.field}; intake linkage must be bound when the run is created`
+      );
+    }
+
+    const normalize = check.normalize || ((value) => value);
+    if (normalize(check.existing) !== normalize(check.incoming)) {
+      throw new Error(
+        `same-run resume cannot change immutable ${check.field} (existing: ${check.existing}, incoming: ${check.incoming})`
+      );
+    }
   }
-
-  if (doneCriteriaPath) {
-    next = {
-      ...next,
-      anchor: {
-        ...(next.anchor || {}),
-        done_criteria_path: doneCriteriaPath,
-        done_criteria_source: "request_snapshot",
-      },
-    };
-  }
-
-  return next;
 }
 
 // ---------------------------------------------------------------------------
@@ -383,6 +393,19 @@ async function main() {
     } catch {}
     if (fs.existsSync(wtPath)) {
       console.error(`Error: worktree path already exists: ${wtPath}`);
+      process.exit(1);
+    }
+  }
+
+  if (RESUME_MODE) {
+    try {
+      validateResumeRequestLinkage(manifest, {
+        requestId: REQUEST_ID,
+        leafId: LEAF_ID,
+        doneCriteriaPath: resolvedDoneCriteriaPath,
+      });
+    } catch (error) {
+      console.error(`Error: ${error.message}`);
       process.exit(1);
     }
   }
@@ -530,13 +553,6 @@ async function main() {
     ensureRunLayout(repoRoot, runId);
     writeManifest(manifestPath, manifest);
   }
-
-  manifest = applyRequestLinkage(manifest, {
-    requestId: REQUEST_ID,
-    leafId: LEAF_ID,
-    doneCriteriaPath: resolvedDoneCriteriaPath,
-  });
-  writeManifest(manifestPath, manifest);
 
   // --- Copy rubric file to run dir ---
   if (RUBRIC_FILE) {
