@@ -75,7 +75,7 @@ After persistence succeeds:
 ```bash
 ${CLAUDE_SKILL_DIR}/../relay-dispatch/scripts/dispatch.js . \
   -b <branch> \
-  --prompt-file <handoff-path> \
+  --prompt-file <dispatch-prompt-path> \
   --request-id <request-id> \
   --leaf-id <leaf-id> \
   --done-criteria-file <done-criteria-path>

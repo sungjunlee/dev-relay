@@ -139,8 +139,8 @@ Creates an isolated git worktree, merges the base branch for freshness, writes a
 # With rubric and extended timeout
 /relay-dispatch --branch feat/search --prompt-file rubric.md --timeout 3600
 
-# Intake-linked dispatch
-/relay-dispatch --branch fix/login-loop --prompt-file ~/.relay/requests/<slug>/<request-id>/relay-ready/leaf-01.md --request-id <request-id> --leaf-id leaf-01 --done-criteria-file ~/.relay/requests/<slug>/<request-id>/done-criteria/leaf-01.md
+# Intake-linked dispatch after relay-plan produced the executor prompt
+/relay-dispatch --branch fix/login-loop --prompt-file /tmp/dispatch-login-loop.md --request-id <request-id> --leaf-id leaf-01 --done-criteria-file ~/.relay/requests/<slug>/<request-id>/done-criteria/leaf-01.md
 
 # Resume after review requested changes (reuses retained worktree)
 /relay-dispatch --run-id issue-42-20260403120000000 --prompt-file review-round-2-redispatch.md
