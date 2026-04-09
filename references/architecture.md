@@ -2,6 +2,8 @@
 
 Deep-dive into the manifest contract, state machine, and extension points. For overview, see [CLAUDE.md](../CLAUDE.md).
 
+This reference covers the manifest-backed run lifecycle only. For the preflight layer that may sit ahead of `relay-plan`, see [docs/relay-intake-routing-and-handoff-design.md](../docs/relay-intake-routing-and-handoff-design.md).
+
 ## State Machine
 
 Eight states with enforced transitions (`relay-manifest.js:ALLOWED_TRANSITIONS`):
