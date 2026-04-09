@@ -150,6 +150,34 @@ test("createManifestSkeleton falls back to unknown actor when git user.name is u
   });
 });
 
+test("createManifestSkeleton stores optional intake linkage without changing state semantics", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-manifest-intake-linkage-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  initGitRepo(repoRoot, "Relay Maintainer");
+
+  const manifest = createManifestSkeleton({
+    repoRoot,
+    runId: "issue-42-20260402103003",
+    branch: "issue-42",
+    baseBranch: "main",
+    issueNumber: 42,
+    worktreePath: path.join(repoRoot, "wt"),
+    orchestrator: "codex",
+    executor: "codex",
+    reviewer: "claude",
+    requestId: "req-20260409000000000",
+    leafId: "leaf-01",
+    doneCriteriaPath: "/tmp/frozen-done-criteria.md",
+    doneCriteriaSource: "request_snapshot",
+  });
+
+  assert.equal(manifest.state, STATES.DRAFT);
+  assert.equal(manifest.source.request_id, "req-20260409000000000");
+  assert.equal(manifest.source.leaf_id, "leaf-01");
+  assert.equal(manifest.anchor.done_criteria_path, "/tmp/frozen-done-criteria.md");
+  assert.equal(manifest.anchor.done_criteria_source, "request_snapshot");
+});
+
 test("readManifest migrates v1 roles.worker to roles.executor", () => {
   const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-migrate-"));
   process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));

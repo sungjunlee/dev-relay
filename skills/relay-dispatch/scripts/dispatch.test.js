@@ -467,6 +467,61 @@ test("dispatch dry-run includes rubric file info", () => {
   fs.unlinkSync(rubricFile);
 });
 
+test("dispatch stores request linkage and frozen done criteria anchor in manifest", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  writeFakeCodex(binDir);
+  const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}` };
+
+  const doneCriteriaFile = path.join(repoRoot, "done-criteria.md");
+  fs.writeFileSync(doneCriteriaFile, "# Done Criteria\n\n- Intake snapshot\n", "utf-8");
+
+  const result = JSON.parse(runDispatch(repoRoot, [
+    "-b", "issue-intake-linkage",
+    "--prompt", "linkage test",
+    "--request-id", "req-20260409010101000",
+    "--leaf-id", "leaf-01",
+    "--done-criteria-file", doneCriteriaFile,
+    "--json",
+  ], env));
+
+  assert.equal(result.status, "completed");
+  assert.equal(result.requestId, "req-20260409010101000");
+  assert.equal(result.leafId, "leaf-01");
+  assert.equal(result.doneCriteriaPath, doneCriteriaFile);
+
+  const manifest = readManifest(result.manifestPath).data;
+  assert.equal(manifest.source.request_id, "req-20260409010101000");
+  assert.equal(manifest.source.leaf_id, "leaf-01");
+  assert.equal(manifest.anchor.done_criteria_path, doneCriteriaFile);
+  assert.equal(manifest.anchor.done_criteria_source, "request_snapshot");
+});
+
+test("dispatch dry-run includes request linkage and frozen done criteria file info", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  writeFakeCodex(binDir);
+  const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}` };
+
+  const doneCriteriaFile = path.join(repoRoot, "done-criteria-dry.md");
+  fs.writeFileSync(doneCriteriaFile, "# Done Criteria\n\n- Dry run snapshot\n", "utf-8");
+
+  const result = JSON.parse(runDispatch(repoRoot, [
+    "-b", "issue-intake-dry",
+    "--prompt", "dry linkage test",
+    "--request-id", "req-20260409020202000",
+    "--leaf-id", "leaf-99",
+    "--done-criteria-file", doneCriteriaFile,
+    "--dry-run", "--json",
+  ], env));
+
+  assert.equal(result.requestId, "req-20260409020202000");
+  assert.equal(result.leafId, "leaf-99");
+  assert.equal(result.doneCriteriaFile, doneCriteriaFile);
+});
+
 test("dispatch fails when rubric file does not exist", () => {
   const { repoRoot, relayHome } = setupRepo();
   process.env.RELAY_HOME = relayHome;
@@ -483,6 +538,24 @@ test("dispatch fails when rubric file does not exist", () => {
 
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /rubric file not found/);
+});
+
+test("dispatch fails when done criteria file does not exist", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  writeFakeCodex(binDir);
+  const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}` };
+
+  const result = spawnSync("node", [SCRIPT, repoRoot,
+    "-b", "issue-nodonecriteria",
+    "--prompt", "test",
+    "--done-criteria-file", "/tmp/nonexistent-done-criteria-file.md",
+    "--json",
+  ], { cwd: repoRoot, encoding: "utf-8", env });
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /done criteria file not found/);
 });
 
 test("dispatch without --rubric-file leaves rubric_path unset", () => {

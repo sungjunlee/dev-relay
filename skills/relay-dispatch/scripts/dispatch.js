@@ -23,6 +23,9 @@
  *   --copy <file,...>      Additional files to copy
  *   --timeout <seconds>    Exec timeout (default: 1800)
  *   --rubric-file <path>   Copy rubric YAML to run dir (persists for review)
+ *   --request-id <id>      Link the run back to a relay-intake request
+ *   --leaf-id <id>         Link the run back to a relay-intake leaf handoff
+ *   --done-criteria-file   Persist a frozen Done Criteria anchor path
  *   --register             Register session in executor's app (keeps worktree)
  *   --no-cleanup           Compatibility alias; worktree is retained by default
  *   --dry-run              Show plan without executing
@@ -79,6 +82,7 @@ const args = process.argv.slice(2);
 const KNOWN_FLAGS = [
   "--branch", "-b", "--run-id", "--manifest", "--prompt", "-p", "--prompt-file", "--executor", "-e",
   "--model", "-m", "--sandbox", "--copy", "--timeout", "--rubric-file",
+  "--request-id", "--leaf-id", "--done-criteria-file",
   "--register", "--no-cleanup", "--dry-run", "--json", "--help", "-h",
 ];
 
@@ -98,6 +102,9 @@ if (!args.length || args.includes("--help") || args.includes("-h")) {
   console.log("  --sandbox          workspace-write | read-only (default: workspace-write)");
   console.log("  --copy <files>     Additional files to copy (comma-separated)");
   console.log("  --timeout          Exec timeout in seconds (default: 1800)");
+  console.log("  --request-id       Link the run back to a relay-intake request");
+  console.log("  --leaf-id          Link the run back to a relay-intake leaf handoff");
+  console.log("  --done-criteria-file  Persist a frozen Done Criteria anchor path");
   console.log("  --register         Register session in executor's app (keeps worktree)");
   console.log("  --rubric-file      Copy rubric YAML to run dir (persists for review)");
   console.log("  --no-cleanup       Compatibility alias; worktree is retained by default");
@@ -141,6 +148,9 @@ const MODEL = getArg(["--model", "-m"], undefined);
 const SANDBOX = getArg("--sandbox", "workspace-write");
 const COPY_FILES = getArg("--copy", "").split(",").filter(Boolean);
 const RUBRIC_FILE = getArg("--rubric-file", undefined);
+const REQUEST_ID = getArg("--request-id", undefined);
+const LEAF_ID = getArg("--leaf-id", undefined);
+const DONE_CRITERIA_FILE = getArg("--done-criteria-file", undefined);
 const TIMEOUT = parseInt(getArg("--timeout", "1800"), 10);
 if (isNaN(TIMEOUT) || TIMEOUT <= 0) {
   console.error("Error: --timeout must be a positive integer");
@@ -175,6 +185,14 @@ if (RUBRIC_FILE) {
   const rubricPath = path.resolve(RUBRIC_FILE);
   if (!fs.existsSync(rubricPath)) {
     console.error(`Error: rubric file not found: ${rubricPath}`);
+    process.exit(1);
+  }
+}
+
+if (DONE_CRITERIA_FILE) {
+  const doneCriteriaPath = path.resolve(DONE_CRITERIA_FILE);
+  if (!fs.existsSync(doneCriteriaPath)) {
+    console.error(`Error: done criteria file not found: ${doneCriteriaPath}`);
     process.exit(1);
   }
 }
@@ -243,6 +261,34 @@ function terminateProcessTree(pid) {
   } catch {}
 }
 
+function applyRequestLinkage(manifest, { requestId, leafId, doneCriteriaPath }) {
+  let next = manifest;
+
+  if (requestId || leafId) {
+    next = {
+      ...next,
+      source: {
+        ...(next.source || {}),
+        ...(requestId ? { request_id: requestId } : {}),
+        ...(leafId ? { leaf_id: leafId } : {}),
+      },
+    };
+  }
+
+  if (doneCriteriaPath) {
+    next = {
+      ...next,
+      anchor: {
+        ...(next.anchor || {}),
+        done_criteria_path: doneCriteriaPath,
+        done_criteria_source: "request_snapshot",
+      },
+    };
+  }
+
+  return next;
+}
+
 // ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
@@ -259,6 +305,7 @@ async function main() {
   const resultFile = path.join(os.tmpdir(), `dispatch-${EXECUTOR}-${wtId}.txt`);
   const stdoutLog = path.join(os.tmpdir(), `dispatch-${EXECUTOR}-${wtId}.log`);
   const stderrLog = path.join(os.tmpdir(), `dispatch-${EXECUTOR}-${wtId}.err`);
+  const resolvedDoneCriteriaPath = DONE_CRITERIA_FILE ? path.resolve(DONE_CRITERIA_FILE) : null;
   let branch = BRANCH;
   let runId = RUN_ID;
   let manifestPath = MANIFEST_INPUT ? path.resolve(MANIFEST_INPUT) : null;
@@ -363,6 +410,9 @@ async function main() {
       cleanupPolicy,
       worktreeinclude: includeFiles,
       rubricFile: RUBRIC_FILE || null,
+      requestId: REQUEST_ID || manifest?.source?.request_id || null,
+      leafId: LEAF_ID || manifest?.source?.leaf_id || null,
+      doneCriteriaFile: resolvedDoneCriteriaPath || manifest?.anchor?.done_criteria_path || null,
       environment: RESUME_MODE ? (manifest?.environment || null) : "collected-at-dispatch",
     };
     if (JSON_OUT) {
@@ -385,6 +435,15 @@ async function main() {
       console.log(`  Timeout:  ${TIMEOUT}s`);
       if (RUBRIC_FILE) {
         console.log(`  Rubric:   ${RUBRIC_FILE}`);
+      }
+      if (REQUEST_ID || manifest?.source?.request_id) {
+        console.log(`  Request:  ${REQUEST_ID || manifest.source.request_id}`);
+      }
+      if (LEAF_ID || manifest?.source?.leaf_id) {
+        console.log(`  Leaf:     ${LEAF_ID || manifest.source.leaf_id}`);
+      }
+      if (resolvedDoneCriteriaPath || manifest?.anchor?.done_criteria_path) {
+        console.log(`  Done AC:  ${resolvedDoneCriteriaPath || manifest.anchor.done_criteria_path}`);
       }
       if (includeFiles.length) {
         console.log(`  .worktreeinclude: ${includeFiles.join(", ")}`);
@@ -463,10 +522,21 @@ async function main() {
       reviewer: process.env.RELAY_REVIEWER || "unknown",
       cleanupPolicy,
       environment,
+      requestId: REQUEST_ID || null,
+      leafId: LEAF_ID || null,
+      doneCriteriaPath: resolvedDoneCriteriaPath,
+      doneCriteriaSource: resolvedDoneCriteriaPath ? "request_snapshot" : null,
     });
     ensureRunLayout(repoRoot, runId);
     writeManifest(manifestPath, manifest);
   }
+
+  manifest = applyRequestLinkage(manifest, {
+    requestId: REQUEST_ID,
+    leafId: LEAF_ID,
+    doneCriteriaPath: resolvedDoneCriteriaPath,
+  });
+  writeManifest(manifestPath, manifest);
 
   // --- Copy rubric file to run dir ---
   if (RUBRIC_FILE) {
@@ -741,6 +811,9 @@ async function main() {
     runDir,
     manifestPath,
     rubricPath: manifest.anchor?.rubric_path ? path.join(runDir, manifest.anchor.rubric_path) : null,
+    requestId: manifest.source?.request_id || null,
+    leafId: manifest.source?.leaf_id || null,
+    doneCriteriaPath: manifest.anchor?.done_criteria_path || null,
     runState: manifest.state,
     cleanupPolicy,
     status,
