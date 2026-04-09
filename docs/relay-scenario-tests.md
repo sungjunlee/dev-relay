@@ -4,7 +4,7 @@ Scenario matrix for the same-run lifecycle and reliability scorecard wave.
 
 ## Goal
 
-Exercise the implemented same-run lifecycle, fresh merge gate, append-only events, explicit close path, and derived reporting.
+Exercise the implemented same-run lifecycle, intake request persistence, fresh merge gate, append-only events, explicit close path, and derived reporting.
 
 ## Current Coverage
 
@@ -241,3 +241,20 @@ Covers:
 - a no-sprint live run in `dev-relay`
 - a sprint-enabled live run in the disposable GitHub fixture repo
 - exact operator prompts, run IDs, manifest paths, PR/review URLs, merge SHAs, and known gaps
+
+### 15. Raw request intake persists a relay-ready handoff and feeds downstream review anchors
+
+Command:
+
+```bash
+node --test skills/relay-intake/scripts/request-store.test.js
+```
+
+Expect:
+
+- `~/.relay/requests/<repo-slug>/<request-id>.md` is created
+- request events append `request_persisted` and `relay_ready_handoff_persisted`
+- `relay-ready/<leaf-id>.md` and `done-criteria/<leaf-id>.md` are created for the single leaf
+- multi-leaf input fails explicitly with `TODO(#129)`
+- dispatch can record `source.request_id`, `source.leaf_id`, and `anchor.done_criteria_path`
+- `review-runner --prepare-only` loads the frozen snapshot from the manifest anchor without re-fetching GitHub issue text

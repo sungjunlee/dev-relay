@@ -20,6 +20,10 @@ See [references/architecture.md](references/architecture.md) for the full manife
 skills/
   relay/                   ← Full-cycle orchestration (plan → dispatch → review → stop)
     references/prompt-template.md
+  relay-intake/            ← Raw request shaping + relay-ready handoff persistence
+    scripts/
+      relay-request.js       ← Request artifact CRUD + request events
+      persist-request.js     ← Single-leaf persistence entry point
   relay-plan/              ← AC → scoring rubric → dispatch prompt
     scripts/
       probe-executor-env.js  ← Executor environment probe (agent + project tools)
@@ -50,12 +54,13 @@ skills/
       review-gate.js       ← Review state validation
 ```
 
-Multi-skill design: each phase is independently invocable. `npx skills add sungjunlee/dev-relay` installs all 5.
+Multi-skill design: each phase is independently invocable. `npx skills add sungjunlee/dev-relay` installs all 6.
 
 ## Common Commands
 
 ```bash
 # Run tests (Node.js built-in test runner, no install needed)
+node --test skills/relay-intake/scripts/*.test.js
 node --test skills/relay-plan/scripts/*.test.js
 node --test skills/relay-dispatch/scripts/*.test.js
 node --test skills/relay-review/scripts/*.test.js

@@ -8,6 +8,7 @@ Start with `skills/relay/SKILL.md` in the checkout you are operating on. That fi
 
 When `skills/relay/SKILL.md` calls into a phase-specific workflow, keep reading the files from the same repo:
 
+- `skills/relay-intake/SKILL.md`
 - `skills/relay-dispatch/SKILL.md`
 - `skills/relay-review/SKILL.md`
 - `skills/relay-merge/SKILL.md`
@@ -31,6 +32,7 @@ Repo root: /path/to/dev-relay
 
 Read these files first:
 - /path/to/dev-relay/skills/relay/SKILL.md
+- /path/to/dev-relay/skills/relay-intake/SKILL.md
 - /path/to/dev-relay/skills/relay-dispatch/SKILL.md
 - /path/to/dev-relay/skills/relay-review/SKILL.md
 - /path/to/dev-relay/skills/relay-merge/SKILL.md

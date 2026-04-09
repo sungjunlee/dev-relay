@@ -45,7 +45,7 @@ Roles are bound at manifest creation time and serve as defaults. Any supported a
 npx skills add sungjunlee/dev-relay
 ```
 
-Installs all 5 skills as [Claude Code custom slash commands](https://docs.anthropic.com/en/docs/claude-code/skills). Add `-g -y` for global install without prompts:
+Installs all 6 skills as [Claude Code custom slash commands](https://docs.anthropic.com/en/docs/claude-code/skills). Add `-g -y` for global install without prompts:
 
 ```bash
 npx skills add sungjunlee/dev-relay -g -y
@@ -80,11 +80,14 @@ Working from a repo checkout without installing skills? See [docs/direct-read-re
 
 Reads issue #42, builds a scoring rubric if the task is complex, dispatches to the executor in a worktree, reviews the resulting PR, and stops at `ready_to_merge`. It runs all four phases (plan, dispatch, review, gate check) but does not auto-merge. Use `/relay-merge` to land it explicitly.
 
+For raw or ambiguous requests, `/relay` now routes through `/relay-intake` first, persists a request artifact under `~/.relay/requests/<repo-slug>/`, freezes Done Criteria for review, then resumes the normal `relay-plan -> relay-dispatch -> relay-review` chain.
+
 ### Step by step
 
 Use individual skills when you want control over each phase:
 
 ```bash
+/relay-intake "fix the auth redirect mess"   # Shape a raw request into one relay-ready leaf + frozen Done Criteria
 /relay-plan 42          # Convert issue AC into a scoring rubric
 /relay-dispatch         # Dispatch to executor (worktree -> implement -> PR)
 /relay-review fix/42    # Review PR in a fresh context
@@ -108,7 +111,7 @@ Use individual skills when you want control over each phase:
 
 ### Plan ... `/relay-plan`
 
-Converts acceptance criteria into a **scoring rubric** that guides both the executor and the reviewer:
+Converts acceptance criteria into a **scoring rubric** that guides both the executor and the reviewer. If `/relay-intake` already produced `relay-ready/<leaf-id>.md`, that handoff brief becomes the planning source of truth:
 
 | Rubric element | Example |
 |---------------|---------|
@@ -127,7 +130,7 @@ For L/XL tasks (5+ acceptance criteria), an optional stress-test catches gaming 
 
 ### Dispatch ... `/relay-dispatch`
 
-Creates an isolated git worktree, merges the base branch for freshness, writes a relay run manifest, runs the executor with the task prompt, and collects results.
+Creates an isolated git worktree, merges the base branch for freshness, writes a relay run manifest, runs the executor with the task prompt, and collects results. Intake-produced runs can also carry `source.request_id`, `source.leaf_id`, and `anchor.done_criteria_path` so review stays anchored to the frozen snapshot instead of drifting to PR prose.
 
 ```bash
 # Minimal
@@ -135,6 +138,9 @@ Creates an isolated git worktree, merges the base branch for freshness, writes a
 
 # With rubric and extended timeout
 /relay-dispatch --branch feat/search --prompt-file rubric.md --timeout 3600
+
+# Intake-linked dispatch
+/relay-dispatch --branch fix/login-loop --prompt-file ~/.relay/requests/<slug>/<request-id>/relay-ready/leaf-01.md --request-id <request-id> --leaf-id leaf-01 --done-criteria-file ~/.relay/requests/<slug>/<request-id>/done-criteria/leaf-01.md
 
 # Resume after review requested changes (reuses retained worktree)
 /relay-dispatch --run-id issue-42-20260403120000000 --prompt-file review-round-2-redispatch.md
@@ -213,6 +219,7 @@ For hotfixes, `finalize-run.js --skip-review "reason"` bypasses the review gate 
 | Command | Phase | Description |
 |---------|-------|-------------|
 | `/relay [issue]` | All | Full cycle through `ready_to_merge` |
+| `/relay-intake [request]` | Intake | Shape a raw request into a single relay-ready handoff + frozen Done Criteria |
 | `/relay-plan [issue]` | Plan | Build scoring rubric from acceptance criteria |
 | `/relay-dispatch` | Execute | Dispatch to executor via git worktree isolation |
 | `/relay-review [branch]` | Review | Independent PR review with convergence loop |
@@ -450,6 +457,7 @@ Issues and PRs welcome. Please open an issue first for non-trivial changes.
 ### Running tests
 
 ```bash
+node --test skills/relay-intake/scripts/*.test.js
 node --test skills/relay-plan/scripts/*.test.js
 node --test skills/relay-dispatch/scripts/*.test.js
 node --test skills/relay-review/scripts/*.test.js

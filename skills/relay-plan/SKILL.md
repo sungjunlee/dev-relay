@@ -4,7 +4,7 @@ argument-hint: "[issue-number]"
 description: Convert task acceptance criteria into a scored rubric for autonomous iteration. Always used before relay-dispatch — rubric depth scales with task size.
 compatibility: Requires gh CLI. Task AC reading falls back to local files or user input.
 metadata:
-  related-skills: "relay, relay-dispatch, relay-review, dev-backlog"
+  related-skills: "relay, relay-intake, relay-dispatch, relay-review, dev-backlog"
 ---
 
 # Relay Plan
@@ -15,10 +15,13 @@ Build a scoring rubric from task Acceptance Criteria (AC), then generate a dispa
 
 ### 1. Read the task
 
-Read the issue AC (try in order, use first that succeeds):
+Read the normalized task source (try in order, use first that succeeds):
+- Relay-ready handoff brief from relay-intake: `~/.relay/requests/<repo-slug>/<request-id>/relay-ready/<leaf-id>.md`
 - Local task file: `backlog/tasks/{PREFIX}-{N} - {Title}.md`
 - GitHub: `gh issue view <N>`
 - User-provided description
+
+If relay-intake already produced a handoff brief, treat that file as the source of truth instead of re-reading the raw request.
 
 ### 2. Build the rubric
 

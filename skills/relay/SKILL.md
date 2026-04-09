@@ -4,7 +4,7 @@ argument-hint: "[issue-number or task description]"
 description: Execute the full relay cycle — plan, dispatch, review, merge. Use when implementing a GitHub issue or task through autonomous executor dispatch. Integrates with dev-backlog sprint files.
 compatibility: Requires Claude Code or Codex, gh CLI, git, and Node.js 18+. Task AC reading falls back to local files or user input.
 metadata:
-  related-skills: "relay-plan, relay-dispatch, relay-review, relay-merge, dev-backlog"
+  related-skills: "relay-intake, relay-plan, relay-dispatch, relay-review, relay-merge, dev-backlog"
 ---
 
 # Dev Relay
@@ -31,7 +31,7 @@ Always run before every task — standalone or batch. Ensures current state, not
 
 No sprint file? Just do the `git fetch`. Takes <5 seconds; never skip this step.
 
-## Step 1: Read Context
+## Step 1: Route and Read Context
 
 Gather task details and sprint context:
 1. **Task AC** (try in order, use first that succeeds):
@@ -39,8 +39,24 @@ Gather task details and sprint context:
    - GitHub: `gh issue view <N>`
    - User-provided description (from argument or conversation)
 2. **Sprint context** (optional): If `backlog/sprints/` has an active sprint file, read Running Context and batch info. If no sprint file, proceed without — sprint tracking is skipped.
+3. **Fast path vs intake path**:
+   - Bypass intake only when the input is already one relay-ready task, has a stable review anchor, and needs no clarification or decomposition.
+   - Otherwise run `relay-intake` first, persist a request artifact, and use the generated `relay-ready/<leaf-id>.md` as the downstream source of truth.
 
 If no issue number, use a descriptive branch name (e.g., `feat/<slug>`) and skip issue-close in Step 6.
+
+### Intake path
+
+If intake is required, persist a single-leaf contract first:
+
+```bash
+${CLAUDE_SKILL_DIR}/../relay-intake/scripts/persist-request.js --repo . --contract-file /tmp/relay-intake-contract.json --json
+```
+
+Carry these artifacts forward:
+- handoff brief: `~/.relay/requests/<repo-slug>/<request-id>/relay-ready/<leaf-id>.md`
+- frozen Done Criteria: `~/.relay/requests/<repo-slug>/<request-id>/done-criteria/<leaf-id>.md`
+- linkage: `request_id`, `leaf_id`
 
 ## Step 1.5: Check for in-flight work
 
@@ -63,6 +79,7 @@ Rubric depth scales with task size (determined by orchestrator judgment on norma
 - **XL** (architecture change): 5-8 factors + stress-test + calibration
 
 Write the dispatch prompt to a temp file (e.g., `/tmp/dispatch-<N>.md`).
+If intake ran, the relay-ready handoff brief becomes the task source of truth for planning.
 Write the rubric YAML to a temp file (e.g., `/tmp/rubric-<N>.yaml`).
 
 ## Step 3: Dispatch (relay-dispatch)
@@ -70,6 +87,12 @@ Write the rubric YAML to a temp file (e.g., `/tmp/rubric-<N>.yaml`).
 ```bash
 ${CLAUDE_SKILL_DIR}/../relay-dispatch/scripts/dispatch.js . \
   -b issue-<N> --prompt-file /tmp/dispatch-<N>.md --rubric-file /tmp/rubric-<N>.yaml --timeout 3600
+```
+
+If intake ran, also pass:
+
+```bash
+  --request-id <request-id> --leaf-id <leaf-id> --done-criteria-file <done-criteria-path>
 ```
 
 While dispatch runs in the background, optionally monitor progress:
@@ -93,7 +116,7 @@ Get PR number:
 PR_NUM=$(gh pr list --head issue-<N> --json number -q '.[0].number')
 ```
 
-The manifest is written under `~/.relay/runs/<repo-slug>/`. This is the shared state surface for later review/merge lifecycle work.
+The manifest is written under `~/.relay/runs/<repo-slug>/`. This is the shared state surface for later review/merge lifecycle work. Intake linkage is recorded there, but the run lifecycle remains execution-only.
 
 Current scope: dispatch writes the manifest. Review and merge still follow their existing PR-comment and gate-check flow.
 
