@@ -435,10 +435,6 @@ function normalizeRequestBootstrapData(data = {}) {
     throw new Error("source_kind and request_text are required together to bootstrap a request artifact");
   }
 
-  if (!hasBootstrapIdentity && readiness !== undefined) {
-    throw new Error("readiness requires source_kind and request_text when bootstrapping a request artifact");
-  }
-
   return { sourceKind, requestText, readiness };
 }
 
@@ -466,6 +462,24 @@ function validateBootstrapData(repoRoot, requestId, requestRecord, bootstrapData
       throw new Error(`request_id '${requestId}' already exists with a different raw request`);
     }
   }
+}
+
+function applyBootstrapDataPatch(repoRoot, requestId, requestRecord, bootstrapData) {
+  if (bootstrapData.readiness === undefined) {
+    return requestRecord;
+  }
+
+  const existingReadiness = requestRecord.artifact.data?.readiness;
+  if (JSON.stringify(existingReadiness) === JSON.stringify(bootstrapData.readiness)) {
+    return requestRecord;
+  }
+
+  return {
+    requestPath: requestRecord.requestPath,
+    artifact: updateRequestArtifact(repoRoot, requestId, {
+      readiness: bootstrapData.readiness,
+    }, requestRecord),
+  };
 }
 
 function buildRequestArtifactData({
@@ -509,13 +523,13 @@ function bootstrapRequestArtifact(repoRoot, requestId, data = {}, nextAction) {
   }
 
   const layout = ensureRequestLayout(repoRoot, requestId);
+  const bootstrapData = normalizeRequestBootstrapData(data);
   if (fs.existsSync(layout.requestPath)) {
     const requestRecord = getRequestRecord(repoRoot, requestId);
-    validateBootstrapData(repoRoot, requestId, requestRecord, normalizeRequestBootstrapData(data));
-    return requestRecord;
+    validateBootstrapData(repoRoot, requestId, requestRecord, bootstrapData);
+    return applyBootstrapDataPatch(repoRoot, requestId, requestRecord, bootstrapData);
   }
 
-  const bootstrapData = normalizeRequestBootstrapData(data);
   if (!bootstrapData.sourceKind || !bootstrapData.requestText) {
     throw new Error(
       `request artifact not found: ${layout.requestPath}; source_kind and request_text are required to bootstrap it`

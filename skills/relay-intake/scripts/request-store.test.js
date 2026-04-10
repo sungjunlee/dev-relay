@@ -214,12 +214,19 @@ test("persistRequestContract rejects request_id collisions before overwriting fr
 test("preflight helpers bootstrap a non-ready request artifact before relay-ready persistence", () => {
   const { repoRoot } = setupRepo();
   const requestId = "req-20260409050505000";
-  const readiness = createReadiness({ dependency: "external" });
+  const initialReadiness = createReadiness({
+    clarity: "low",
+    granularity: "unclear",
+    dependency: "external",
+    verifiability: "low",
+    risk: "high",
+  });
+  const reassessedReadiness = createReadiness({ dependency: "internal" });
 
   const proposal = propose(repoRoot, requestId, {
     source_kind: "raw_text",
     request_text: createContract().request_text,
-    readiness,
+    readiness: initialReadiness,
     proposal_summary: "Keep the work as a single auth redirect leaf.",
     proposal_text: "A. Update the guard\nB. Add redirect tests\nC. Free text",
     response_options: ["A", "B", "C + free text"],
@@ -228,6 +235,7 @@ test("preflight helpers bootstrap a non-ready request artifact before relay-read
   assert.equal(proposal.leaf_id, null);
 
   const question = clarify(repoRoot, requestId, {
+    readiness: reassessedReadiness,
     question_text: "Should guest deep links still route to /login?",
     response_options: ["A. Yes", "B. No", "C. Other"],
   });
@@ -247,7 +255,7 @@ test("preflight helpers bootstrap a non-ready request artifact before relay-read
   assert.equal(requestArtifact.data.leaf_id, undefined);
   assert.equal(requestArtifact.data.next_action, "await_proposal_response");
   assert.equal(requestArtifact.data.paths.handoff, undefined);
-  assert.deepEqual(requestArtifact.data.readiness, readiness);
+  assert.deepEqual(requestArtifact.data.readiness, reassessedReadiness);
   assert.equal(
     fs.readFileSync(requestArtifact.data.paths.raw_request, "utf-8"),
     `${createContract().request_text}\n`
@@ -266,8 +274,8 @@ test("preflight helpers bootstrap a non-ready request artifact before relay-read
   assert.equal(promotedArtifact.data.leaf_id, "leaf-01");
   assert.equal(promotedArtifact.data.next_action, "relay_plan");
   assert.equal(promotedArtifact.data.paths.handoff, intake.handoffPath);
-  assert.deepEqual(promotedArtifact.data.readiness, readiness);
-  assert.deepEqual(intake.readiness, readiness);
+  assert.deepEqual(promotedArtifact.data.readiness, reassessedReadiness);
+  assert.deepEqual(intake.readiness, reassessedReadiness);
 
   const events = readRequestEvents(repoRoot, requestId);
   assert.deepEqual(
@@ -285,6 +293,7 @@ test("preflight helpers bootstrap a non-ready request artifact before relay-read
 test("preflight actions append typed events and update next_action without a second state machine", () => {
   const { repoRoot } = setupRepo();
   const intake = persistRequestContract(repoRoot, createContract());
+  const reassessedReadiness = createReadiness({ granularity: "multi_task" });
 
   const proposal = propose(repoRoot, intake.requestId, {
     proposal_summary: "Keep the work as a single auth redirect leaf.",
@@ -297,12 +306,14 @@ test("preflight actions append typed events and update next_action without a sec
   assert.equal(readRequestArtifact(intake.requestPath).data.next_action, "await_proposal_response");
 
   const question = clarify(repoRoot, intake.requestId, {
+    readiness: reassessedReadiness,
     question_text: "Should guest deep links still route to /login?",
     response_options: ["A. Yes", "B. No", "C. Other"],
   });
   assert.equal(question.event, "question_asked");
   assert.deepEqual(question.response_options, ["A. Yes", "B. No", "C. Other"]);
   assert.equal(readRequestArtifact(intake.requestPath).data.next_action, "await_answer");
+  assert.deepEqual(readRequestArtifact(intake.requestPath).data.readiness, reassessedReadiness);
 
   const structured = structure(repoRoot, intake.requestId, {
     proposal_summary: "Restructure the handoff around one guard change plus tests.",
