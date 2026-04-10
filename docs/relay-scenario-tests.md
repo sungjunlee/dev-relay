@@ -269,8 +269,88 @@ node --test skills/relay-intake/scripts/request-store.test.js
 Expect:
 
 - `~/.relay/requests/<repo-slug>/<request-id>.md` is created
-- request events append `request_persisted` and `relay_ready_handoff_persisted`
-- `relay-ready/<leaf-id>.md` and `done-criteria/<leaf-id>.md` are created for the single leaf
-- multi-leaf input fails explicitly with `TODO(#129)`
+- request events append the portable intake event types plus `relay_ready_handoff_persisted` when a handoff is frozen
+- `relay-ready/<leaf-id>.md` and `done-criteria/<leaf-id>.md` are created for relay-ready leaf tasks
+- multi-leaf input persists ordered child handoffs with per-leaf Done Criteria snapshots
 - dispatch can record `source.request_id`, `source.leaf_id`, and `anchor.done_criteria_path`
 - `review-runner --prepare-only` loads the frozen snapshot from the manifest anchor without re-fetching GitHub issue text
+
+### 15a. Directly relayable standalone request persists immediately
+
+Covered by the same command as Scenario 15.
+
+Expect:
+
+- a single clear `raw_text` request with stable Done Criteria can call `persistRequestContract(...)` immediately
+- no proposal or question events are required first
+- the request artifact lands directly in `state: relay_ready` with `next_action: relay_plan`
+
+### 15b. Ambiguous request shapes through proposal, question, answer, acceptance, then persistence
+
+Covered by the same command as Scenario 15.
+
+Expect:
+
+- intake records `proposal_presented -> question_asked -> question_answered -> proposal_accepted`
+- `next_action` moves through the conversational steps before final persistence
+- the same `request_id` can then be promoted into a frozen relay-ready handoff
+
+### 15c. Oversized request uses proposal-first decomposition before freezing a handoff
+
+Covered by the same command as Scenario 15.
+
+Expect:
+
+- an oversized request records an initial proposal and a decomposition proposal with `structure_kind: decompose`
+- the accepted proposal still leaves the artifact in intake until relay-ready handoff persistence happens
+- `next_action` stays lightweight; no second intake state machine is introduced
+
+### 15d. Decomposed request persists ordered child handoffs
+
+Covered by the same command as Scenario 15.
+
+Expect:
+
+- multi-leaf handoffs are persisted in execution order even if the input order differs
+- per-leaf `depends_on` metadata survives into the relay-ready artifacts
+- the parent request artifact records `decomposition.leaf_order` and dependency mapping
+
+### 15e. Non-issue request freezes generated Done Criteria from the handoff
+
+Covered by the same command as Scenario 15.
+
+Expect:
+
+- `source.kind: raw_text` persists without any GitHub dependency
+- the frozen Done Criteria snapshot comes from `handoff.done_criteria_markdown`
+- the relay-ready handoff points back to that generated snapshot path
+
+### 15f. Plain-text `A/B/C + free text` protocol works without host widgets
+
+Covered by the same command as Scenario 15.
+
+Expect:
+
+- `response_options` are persisted as plain string arrays
+- proposal and clarification flows remain usable without buttons, cards, or other host-specific UI
+- answers can still be recorded as plain text plus an optional `answer_choice`
+
+### 15g. Delegate fallback keeps portable intake events working
+
+Covered by the same command as Scenario 15.
+
+Expect:
+
+- `structure_kind: delegate` persists as a normal intake event
+- the delegate fallback can still be accepted with `proposal_accepted`
+- no host-specific routing or production-code special case is required
+
+### 15h. Issue-first fast path bypasses intake overhead when the request is already relay-ready
+
+Covered by the same command as Scenario 15.
+
+Expect:
+
+- `source.kind: github_issue` can persist directly to `relay_ready`
+- only `request_persisted` and `relay_ready_handoff_persisted` are needed in the fast path
+- the frozen Done Criteria snapshot still exists so downstream review has a stable anchor

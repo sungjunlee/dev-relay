@@ -2,7 +2,29 @@
 
 Deep-dive into the manifest contract, state machine, and extension points. For overview, see [CLAUDE.md](../CLAUDE.md).
 
-This reference covers the manifest-backed run lifecycle only. For the preflight layer that may sit ahead of `relay-plan`, see [docs/relay-intake-routing-and-handoff-design.md](../docs/relay-intake-routing-and-handoff-design.md).
+This reference centers on the manifest-backed run lifecycle, plus the intake boundary that may sit ahead of `relay-plan`. For the full intake control-flow contract, see [docs/relay-intake-routing-and-handoff-design.md](../docs/relay-intake-routing-and-handoff-design.md).
+
+## Intake Boundary
+
+Before a run manifest exists, raw work may live in relay-intake artifacts under `~/.relay/requests/<repo-slug>/`.
+
+```text
+raw request
+  -> relay-intake request artifact + events
+  -> relay-ready handoff brief(s) + frozen Done Criteria snapshot(s)
+  -> relay-plan
+  -> relay-dispatch run manifest
+  -> relay-review
+  -> relay-merge
+```
+
+Boundary rules:
+
+- `/relay` remains the public front door for full-cycle execution
+- `/relay` bypasses intake only for issue-first or task-first inputs that are already relay-sized and already have a trustworthy review anchor
+- `/relay` invokes intake for ambiguous, oversized, or anchorless requests, then continues the normal downstream chain once a relay-ready leaf exists
+- intake interactions are append-only request events: `proposal_presented`, `question_asked`, `question_answered`, `proposal_accepted`, `proposal_edited`
+- request-level `next_action` is lightweight routing metadata, not a manifest lifecycle state
 
 ## State Machine
 

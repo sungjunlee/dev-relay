@@ -6,9 +6,21 @@
 
 `/relay` remains the user-facing orchestrator.
 
-`/relay-intake` becomes the standalone shaping skill for raw, ambiguous, or oversized requests.
+`/relay-intake` is the standalone shaping front door for raw, ambiguous, or oversized requests, and it is also the internal preflight step that `/relay` may invoke before planning.
 
 `/relay` decides whether to bypass intake or invoke it, then always continues the normal downstream chain for relay-ready work.
+
+End-to-end flow:
+
+```text
+raw request
+  -> relay-intake
+  -> relay-ready leaf contract(s)
+  -> relay-plan
+  -> relay-dispatch
+  -> relay-review
+  -> relay-merge
+```
 
 ## Decision
 
@@ -46,6 +58,17 @@ input to /relay
                         +-- multiple leaves --> one normal relay cycle per leaf
 ```
 
+Standalone intake entry is also valid:
+
+```text
+raw request
+   -> relay-intake
+   -> request artifact + append-only intake events
+   -> relay-ready leaf contract(s)
+   -> relay-plan
+   -> relay-dispatch
+```
+
 ## Routing Rules
 
 `/relay` may bypass `relay-intake` only when all of the following are true:
@@ -55,6 +78,8 @@ input to /relay
 3. No clarification, proposal, or decomposition work is needed.
 
 If any of those conditions are false, `/relay` must invoke `relay-intake`.
+
+Issue-first fast path means an issue-like source already has trustworthy, reviewable acceptance criteria and does not need intake shaping. In practice that is the "single task + stable review anchor + no shaping needed" case, not "every GitHub issue".
 
 ### Source-type hints
 
@@ -69,6 +94,8 @@ These are hints, not overrides:
 | Any request without stable Done Criteria | Intake | Review anchor must be created first |
 
 An issue number is not an automatic bypass. If the issue is broad, mixed-scope, or missing a trustworthy review anchor, `/relay` should still route through intake.
+
+`/relay` may therefore internally invoke `relay-intake`, wait for a relay-ready contract, and then continue the standard downstream chain without exposing two separate workflows to the operator.
 
 ## Relay-Ready Contract
 
@@ -169,17 +196,29 @@ That does not create a second execution system. It creates multiple normal relay
 
 Batching and ordering remain orchestrator concerns in `/relay`, not intake concerns.
 
-## Interaction Protocol
+## Portable Interaction Protocol
 
-The core protocol must work in both Claude and Codex without relying on host-specific widgets.
+The intake protocol must work in plain text in both Claude and Codex without relying on host-specific widgets.
 
 Rules:
 
-- proposal-first by default
+- proposal-first shaping by default
 - one question at a time
-- max 1-3 turns before either handoff or close/escalate
 - `A/B/C + free text` must always be sufficient
-- buttons or cards are optional adapters, not correctness requirements
+- buttons, cards, or host UI affordances are optional adapters only
+- `response_options` stays portable as a string array that any host may render or ignore
+
+Portable intake events:
+
+| Event type | Purpose | Typical `next_action` |
+| --- | --- | --- |
+| `proposal_presented` | Present a proposed shape or decomposition before asking for edits | `await_proposal_response` |
+| `question_asked` | Ask one clarifying question when a stable review anchor is still missing | `await_answer` |
+| `question_answered` | Record the operator's answer in plain text | `review_answer` |
+| `proposal_accepted` | Record that the proposed shape is accepted | `relay_plan` |
+| `proposal_edited` | Record structured edits to the current proposal | `review_proposal_edits` or `await_proposal_response` |
+
+`next_action` is intentionally lightweight. It tracks the next conversational step on the request artifact, but it is not a second lifecycle state machine. The request remains in intake until relay-ready handoff persistence freezes one-or-more leaf contracts; only then does the artifact promote to `state: relay_ready`.
 
 ## Consequences
 
