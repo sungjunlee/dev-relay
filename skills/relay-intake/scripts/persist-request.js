@@ -11,7 +11,7 @@ const KNOWN_FLAGS = ["--repo", "--contract-file", "--json", "--help", "-h"];
 if (!args.length || args.includes("--help") || args.includes("-h")) {
   console.log("Usage: persist-request.js --repo <path> --contract-file <path> [--json]");
   console.log("");
-  console.log("Persist a single-leaf relay-intake request artifact and handoff bundle.");
+  console.log("Persist a relay-intake request artifact and one-or-more leaf handoff bundles.");
   process.exit(args.includes("--help") || args.includes("-h") ? 0 : 1);
 }
 
@@ -57,8 +57,18 @@ try {
     console.log(`Request:       ${result.requestId}`);
     console.log(`Artifact:      ${result.requestPath}`);
     console.log(`Raw request:   ${result.rawRequestPath}`);
-    console.log(`Relay-ready:   ${result.handoffPath}`);
-    console.log(`Done criteria: ${result.doneCriteriaPath}`);
+    if (result.leafCount === 1) {
+      console.log(`Relay-ready:   ${result.handoffPath}`);
+      console.log(`Done criteria: ${result.doneCriteriaPath}`);
+    } else {
+      console.log(`Leaf count:    ${result.leafCount}`);
+      for (const [index, leafId] of result.leafIds.entries()) {
+        console.log(`Relay-ready:   ${leafId} -> ${result.handoffPaths[index]}`);
+      }
+      for (const [index, leafId] of result.leafIds.entries()) {
+        console.log(`Done criteria: ${leafId} -> ${result.doneCriteriaPaths[index]}`);
+      }
+    }
   }
 } catch (error) {
   console.error(`Error: ${error.message}`);
