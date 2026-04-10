@@ -351,6 +351,6 @@ Covered by the same command as Scenario 15.
 
 Expect:
 
-- `source.kind: github_issue` can persist directly to `relay_ready`
-- only `request_persisted` and `relay_ready_handoff_persisted` are needed in the fast path
-- the frozen Done Criteria snapshot still exists so downstream review has a stable anchor
+- `source.kind: github_issue` stays on the `/relay` fast path only when the input is already a single relay-sized task with a trustworthy review anchor
+- no relay-intake request artifact, request event log, or `relay_ready_handoff_persisted` event is created on the bypass path
+- downstream planning and review continue from the existing issue/task anchor instead of a generated intake snapshot

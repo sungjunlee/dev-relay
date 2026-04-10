@@ -11,7 +11,9 @@ const {
   answerQuestion,
   clarify,
   editProposal,
+  getRequestsDir,
   getRequestPath,
+  normalizeSingleLeafContract,
   propose,
   readRequestEvents,
   persistRequestContract,
@@ -131,12 +133,26 @@ function invokeRelayFrontDoor(repoRoot, {
     requiresClarification,
     requiresDecomposition,
   });
+  const downstreamChain = route === "invoke_intake"
+    ? ["relay-intake", "relay-plan", "relay-dispatch"]
+    : ["relay-plan", "relay-dispatch"];
+
+  if (route === "bypass_intake") {
+    const normalized = normalizeSingleLeafContract(contract);
+    return {
+      route,
+      downstreamChain,
+      sourceKind: normalized.source.kind,
+      readiness: normalized.readiness || null,
+      leafId: normalized.handoff.leafId,
+      title: normalized.handoff.title,
+      reviewAnchorSource: normalized.source.kind,
+    };
+  }
 
   return {
     route,
-    downstreamChain: route === "invoke_intake"
-      ? ["relay-intake", "relay-plan", "relay-dispatch"]
-      : ["relay-plan", "relay-dispatch"],
+    downstreamChain,
     ...persistRequestContract(repoRoot, contract, requestId ? { requestId } : {}),
   };
 }
@@ -640,18 +656,17 @@ test("scenario: /relay keeps issue-first users on the fast path without intake o
       readiness,
     }),
   });
-  const requestArtifact = readRequestArtifact(result.requestPath);
 
   assert.equal(result.route, "bypass_intake");
   assert.deepEqual(result.downstreamChain, ["relay-plan", "relay-dispatch"]);
-  assert.equal(requestArtifact.data.state, "relay_ready");
-  assert.equal(requestArtifact.data.source.kind, "github_issue");
-  assert.equal(requestArtifact.data.next_action, "relay_plan");
-  assert.deepEqual(requestArtifact.data.readiness, readiness);
-  assert.deepEqual(
-    readEventNames(repoRoot, result.requestId),
-    ["request_persisted", "relay_ready_handoff_persisted"]
-  );
+  assert.equal(result.sourceKind, "github_issue");
+  assert.equal(result.reviewAnchorSource, "github_issue");
+  assert.equal(result.leafId, "leaf-01");
+  assert.deepEqual(result.readiness, readiness);
+  assert.equal(result.requestId, undefined);
+  assert.equal(result.requestPath, undefined);
+  assert.equal(result.doneCriteriaPath, undefined);
+  assert.equal(fs.existsSync(getRequestsDir(repoRoot)), false);
 });
 
 test("persistRequestContract rejects duplicate leaf IDs within a multi-leaf request", () => {
