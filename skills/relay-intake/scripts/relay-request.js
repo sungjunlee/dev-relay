@@ -9,6 +9,24 @@ const {
   writeManifest,
 } = require("../../relay-dispatch/scripts/relay-manifest");
 
+const READINESS_LEVELS = {
+  clarity: new Set(["high", "medium", "low"]),
+  granularity: new Set(["single_task", "multi_task", "unclear"]),
+  dependency: new Set(["none", "internal", "external"]),
+  verifiability: new Set(["high", "medium", "low"]),
+  risk: new Set(["low", "medium", "high"]),
+};
+
+const DEFAULT_NEXT_ACTIONS = {
+  acceptProposal: "relay_plan",
+  answerQuestion: "review_answer",
+  clarify: "await_answer",
+  editProposal: "review_proposal_edits",
+  persist: "relay_plan",
+  propose: "await_proposal_response",
+  structure: "await_proposal_response",
+};
+
 function nowIso() {
   return new Date().toISOString();
 }
@@ -76,6 +94,60 @@ function normalizeStringArray(value, fieldName) {
   });
 }
 
+function normalizeOptionalStringArray(value, fieldName) {
+  if (value === undefined) return undefined;
+  return normalizeStringArray(value, fieldName);
+}
+
+function normalizeRequiredString(value, fieldName) {
+  if (typeof value !== "string" || !value.trim()) {
+    throw new Error(`${fieldName} is required`);
+  }
+  return value.trim();
+}
+
+function normalizeOptionalString(value, fieldName) {
+  if (value === undefined || value === null) return undefined;
+  return normalizeRequiredString(value, fieldName);
+}
+
+function normalizeOptionalBoolean(value, fieldName) {
+  if (value === undefined) return undefined;
+  if (typeof value !== "boolean") {
+    throw new Error(`${fieldName} must be a boolean`);
+  }
+  return value;
+}
+
+function normalizeEnum(value, values, fieldName) {
+  const normalized = normalizeRequiredString(value, fieldName);
+  if (!values.has(normalized)) {
+    throw new Error(`${fieldName} must be one of: ${[...values].join(", ")}`);
+  }
+  return normalized;
+}
+
+function normalizeReadiness(readiness) {
+  if (readiness === undefined) return undefined;
+  if (!readiness || typeof readiness !== "object" || Array.isArray(readiness)) {
+    throw new Error("readiness must be an object");
+  }
+
+  return Object.fromEntries(
+    Object.entries(READINESS_LEVELS).map(([field, values]) => [
+      field,
+      normalizeEnum(readiness[field], values, `readiness.${field}`),
+    ])
+  );
+}
+
+function normalizeNextAction(value, fallback) {
+  if (value === undefined || value === null || value === "") {
+    return fallback;
+  }
+  return normalizeRequiredString(value, "next_action");
+}
+
 function normalizeSingleLeafContract(contract) {
   if (!contract || typeof contract !== "object") {
     throw new Error("contract must be an object");
@@ -103,6 +175,16 @@ function normalizeSingleLeafContract(contract) {
     throw new Error("handoff is required");
   }
 
+  const contractReadiness = normalizeReadiness(contract.readiness);
+  const handoffReadiness = normalizeReadiness(handoff.readiness);
+  if (
+    contractReadiness &&
+    handoffReadiness &&
+    JSON.stringify(contractReadiness) !== JSON.stringify(handoffReadiness)
+  ) {
+    throw new Error("readiness must not conflict between contract.readiness and handoff.readiness");
+  }
+
   const requiredStrings = ["leaf_id", "title", "goal", "done_criteria_markdown"];
   for (const field of requiredStrings) {
     if (typeof handoff[field] !== "string" || !handoff[field].trim()) {
@@ -115,6 +197,7 @@ function normalizeSingleLeafContract(contract) {
       kind: contract.source.kind.trim(),
     },
     requestText: contract.request_text.trim(),
+    readiness: contractReadiness || handoffReadiness,
     handoff: {
       leafId: handoff.leaf_id.trim(),
       title: handoff.title.trim(),
@@ -136,7 +219,12 @@ function formatBulletList(items) {
   return items.map((item) => `- ${item}`).join("\n");
 }
 
-function buildRequestBody({ sourceKind, requestText, leafId, handoffRelativePath, doneCriteriaRelativePath }) {
+function buildRequestBody({
+  sourceKind,
+  requestText,
+  relayReadyLeaves = [],
+  doneCriteriaSnapshots = [],
+}) {
   return [
     "# Relay Intake Request",
     "",
@@ -147,10 +235,10 @@ function buildRequestBody({ sourceKind, requestText, leafId, handoffRelativePath
     requestText,
     "",
     "## Relay-Ready Leaves",
-    `- ${leafId}: ${handoffRelativePath}`,
+    formatBulletList(relayReadyLeaves),
     "",
     "## Frozen Done Criteria",
-    `- ${leafId}: ${doneCriteriaRelativePath}`,
+    formatBulletList(doneCriteriaSnapshots),
     "",
   ].join("\n");
 }
@@ -177,6 +265,59 @@ function buildHandoffBody(handoff) {
   ].join("\n");
 }
 
+function pickDefinedEntries(object) {
+  return Object.fromEntries(Object.entries(object).filter(([, value]) => value !== undefined));
+}
+
+function getRequestRecord(repoRoot, requestId) {
+  const requestPath = getRequestPath(repoRoot, requestId);
+  if (!fs.existsSync(requestPath)) {
+    throw new Error(`request artifact not found: ${requestPath}`);
+  }
+  return { requestPath, artifact: readRequestArtifact(requestPath) };
+}
+
+function isRelayReadyRequestArtifact(artifact) {
+  return artifact.data?.state === "relay_ready" || Boolean(artifact.data?.paths?.handoff);
+}
+
+function assertPreflightMutable(requestId, requestRecord) {
+  if (!isRelayReadyRequestArtifact(requestRecord.artifact)) {
+    return;
+  }
+
+  throw new Error(
+    `request_id '${requestId}' is already relay_ready; preflight intake interactions cannot mutate a frozen handoff`
+  );
+}
+
+function resolveRequestLeafId(artifact, leafId) {
+  if (leafId) return leafId;
+  if (artifact.data?.leaf_id) return artifact.data.leaf_id;
+
+  const handoffPath = artifact.data?.paths?.handoff;
+  if (!handoffPath) {
+    return null;
+  }
+  if (!fs.existsSync(handoffPath)) {
+    throw new Error("leaf_id is required");
+  }
+
+  return normalizeRequiredString(readRequestArtifact(handoffPath).data?.leaf_id, "leaf_id");
+}
+
+function updateRequestArtifact(repoRoot, requestId, patch, requestRecord = getRequestRecord(repoRoot, requestId)) {
+  writeManifest(requestRecord.requestPath, {
+    ...requestRecord.artifact.data,
+    ...patch,
+    timestamps: {
+      ...(requestRecord.artifact.data.timestamps || {}),
+      updated_at: nowIso(),
+    },
+  }, requestRecord.artifact.body);
+  return readRequestArtifact(requestRecord.requestPath);
+}
+
 function appendRequestEvent(repoRoot, requestId, eventData) {
   if (!requestId) {
     throw new Error("request_id is required to append a relay-intake event");
@@ -187,6 +328,7 @@ function appendRequestEvent(repoRoot, requestId, eventData) {
 
   const { eventsPath } = ensureRequestLayout(repoRoot, requestId);
   const record = {
+    ...pickDefinedEntries(eventData),
     ts: eventData.ts || nowIso(),
     event: eventData.event,
     actor: getActorName(repoRoot),
@@ -227,27 +369,324 @@ function assertRequestArtifactsAbsent(requestId, artifactPaths) {
   }
 }
 
-function persistRequestContract(repoRoot, contract, options = {}) {
-  const normalized = normalizeSingleLeafContract(contract);
-  const requestId = options.requestId || createRequestId();
-  const createdAt = nowIso();
-  const layout = ensureRequestLayout(repoRoot, requestId);
-  const requestArtifactDir = path.dirname(layout.requestPath);
-  const handoffFileName = `${normalized.handoff.leafId}.md`;
-  const handoffPath = path.join(layout.relayReadyDir, handoffFileName);
-  const doneCriteriaPath = path.join(layout.doneCriteriaDir, handoffFileName);
-  const handoffRelativePath = path.relative(requestArtifactDir, handoffPath);
-  const doneCriteriaRelativePath = path.relative(requestArtifactDir, doneCriteriaPath);
+function appendInteractionEvent(repoRoot, requestId, eventData, nextAction, bootstrapData = {}) {
+  const requestRecord = ensurePreflightRequestArtifact(repoRoot, requestId, bootstrapData, nextAction);
+  const leafId = resolveRequestLeafId(requestRecord.artifact, eventData.leaf_id);
+  const record = appendRequestEvent(repoRoot, requestId, { ...eventData, leaf_id: leafId });
 
+  if (nextAction !== undefined) {
+    updateRequestArtifact(repoRoot, requestId, { next_action: nextAction }, requestRecord);
+  }
+
+  return record;
+}
+
+function normalizeProposalFields(data = {}, fieldName = "proposal_summary") {
+  return pickDefinedEntries({
+    leaf_id: normalizeOptionalString(data.leaf_id, "leaf_id"),
+    proposal_summary: normalizeRequiredString(data[fieldName], fieldName),
+    proposal_text: normalizeOptionalString(data.proposal_text, "proposal_text"),
+    proposal_kind: normalizeOptionalString(data.proposal_kind, "proposal_kind"),
+    response_options: normalizeOptionalStringArray(data.response_options, "response_options"),
+    reason: normalizeOptionalString(data.reason, "reason"),
+  });
+}
+
+function normalizeQuestionFields(data = {}) {
+  return pickDefinedEntries({
+    leaf_id: normalizeOptionalString(data.leaf_id, "leaf_id"),
+    question_text: normalizeRequiredString(data.question_text, "question_text"),
+    response_options: normalizeOptionalStringArray(data.response_options, "response_options"),
+    reason: normalizeOptionalString(data.reason, "reason"),
+  });
+}
+
+function normalizeQuestionAnswerFields(data = {}) {
+  return pickDefinedEntries({
+    leaf_id: normalizeOptionalString(data.leaf_id, "leaf_id"),
+    question_text: normalizeRequiredString(data.question_text, "question_text"),
+    answer_text: normalizeRequiredString(data.answer_text, "answer_text"),
+    answer_choice: normalizeOptionalString(data.answer_choice, "answer_choice"),
+    reason: normalizeOptionalString(data.reason, "reason"),
+  });
+}
+
+function normalizeProposalAcceptanceFields(data = {}) {
+  return pickDefinedEntries({
+    leaf_id: normalizeOptionalString(data.leaf_id, "leaf_id"),
+    proposal_summary: normalizeRequiredString(data.proposal_summary, "proposal_summary"),
+    acceptance_note: normalizeOptionalString(data.acceptance_note, "acceptance_note"),
+    accepted_with_edits: normalizeOptionalBoolean(data.accepted_with_edits, "accepted_with_edits"),
+    reason: normalizeOptionalString(data.reason, "reason"),
+  });
+}
+
+function normalizeProposalEditFields(data = {}) {
+  return pickDefinedEntries({
+    leaf_id: normalizeOptionalString(data.leaf_id, "leaf_id"),
+    proposal_summary: normalizeRequiredString(data.proposal_summary, "proposal_summary"),
+    edit_summary: normalizeRequiredString(data.edit_summary, "edit_summary"),
+    proposal_text: normalizeOptionalString(data.proposal_text, "proposal_text"),
+    reason: normalizeOptionalString(data.reason, "reason"),
+  });
+}
+
+function normalizeRequestBootstrapData(data = {}) {
+  const source = data.source;
+  if (source !== undefined && (!source || typeof source !== "object" || Array.isArray(source))) {
+    throw new Error("source must be an object");
+  }
+
+  const sourceKind = normalizeOptionalString(
+    data.source_kind ?? source?.kind,
+    "source_kind"
+  );
+  const requestText = normalizeOptionalString(data.request_text, "request_text");
+  const readiness = normalizeReadiness(data.readiness);
+  const hasBootstrapIdentity = sourceKind !== undefined || requestText !== undefined;
+
+  if (hasBootstrapIdentity && (sourceKind === undefined || requestText === undefined)) {
+    throw new Error("source_kind and request_text are required together to bootstrap a request artifact");
+  }
+
+  return { sourceKind, requestText, readiness };
+}
+
+function readRawRequestText(rawRequestPath) {
+  return fs.readFileSync(rawRequestPath, "utf-8").replace(/\r?\n$/, "");
+}
+
+function validateBootstrapData(repoRoot, requestId, requestRecord, bootstrapData) {
+  if (!bootstrapData.sourceKind && !bootstrapData.requestText && bootstrapData.readiness === undefined) {
+    return;
+  }
+
+  const existingSourceKind = requestRecord.artifact.data?.source?.kind;
+  if (bootstrapData.sourceKind && existingSourceKind && bootstrapData.sourceKind !== existingSourceKind) {
+    throw new Error(
+      `request_id '${requestId}' already exists with source.kind '${existingSourceKind}'`
+    );
+  }
+
+  const rawRequestPath = requestRecord.artifact.data?.paths?.raw_request
+    || path.join(getRequestDir(repoRoot, requestId), "raw-request.md");
+  if (bootstrapData.requestText && fs.existsSync(rawRequestPath)) {
+    const existingRequestText = readRawRequestText(rawRequestPath);
+    if (existingRequestText !== bootstrapData.requestText) {
+      throw new Error(`request_id '${requestId}' already exists with a different raw request`);
+    }
+  }
+}
+
+function applyBootstrapDataPatch(repoRoot, requestId, requestRecord, bootstrapData) {
+  if (bootstrapData.readiness === undefined) {
+    return requestRecord;
+  }
+
+  const existingReadiness = requestRecord.artifact.data?.readiness;
+  if (JSON.stringify(existingReadiness) === JSON.stringify(bootstrapData.readiness)) {
+    return requestRecord;
+  }
+
+  return {
+    requestPath: requestRecord.requestPath,
+    artifact: updateRequestArtifact(repoRoot, requestId, {
+      readiness: bootstrapData.readiness,
+    }, requestRecord),
+  };
+}
+
+function buildRequestArtifactData({
+  requestId,
+  state,
+  leafId,
+  nextAction,
+  sourceKind,
+  readiness,
+  rawRequestPath,
+  handoffPath,
+  doneCriteriaPath,
+  createdAt,
+  updatedAt,
+}) {
+  return pickDefinedEntries({
+    request_id: requestId,
+    state,
+    leaf_id: leafId,
+    next_action: nextAction,
+    source: {
+      kind: sourceKind,
+    },
+    ...(readiness ? { readiness } : {}),
+    leaf_count: handoffPath ? 1 : 0,
+    paths: pickDefinedEntries({
+      raw_request: rawRequestPath,
+      handoff: handoffPath,
+      done_criteria: doneCriteriaPath,
+    }),
+    timestamps: {
+      created_at: createdAt,
+      updated_at: updatedAt,
+    },
+  });
+}
+
+function bootstrapRequestArtifact(repoRoot, requestId, data = {}, nextAction) {
+  if (!requestId) {
+    throw new Error("request_id is required");
+  }
+
+  const layout = ensureRequestLayout(repoRoot, requestId);
+  const bootstrapData = normalizeRequestBootstrapData(data);
+  if (fs.existsSync(layout.requestPath)) {
+    const requestRecord = getRequestRecord(repoRoot, requestId);
+    validateBootstrapData(repoRoot, requestId, requestRecord, bootstrapData);
+    return applyBootstrapDataPatch(repoRoot, requestId, requestRecord, bootstrapData);
+  }
+
+  if (!bootstrapData.sourceKind || !bootstrapData.requestText) {
+    throw new Error(
+      `request artifact not found: ${layout.requestPath}; source_kind and request_text are required to bootstrap it`
+    );
+  }
+
+  const createdAt = nowIso();
   assertRequestArtifactsAbsent(requestId, [
     ["request artifact", layout.requestPath],
     ["request event log", layout.eventsPath],
     ["raw request artifact", layout.rawRequestPath],
+  ]);
+
+  fs.writeFileSync(layout.rawRequestPath, `${bootstrapData.requestText}\n`, "utf-8");
+  writeManifest(layout.requestPath, buildRequestArtifactData({
+    requestId,
+    state: "intake",
+    nextAction,
+    sourceKind: bootstrapData.sourceKind,
+    readiness: bootstrapData.readiness,
+    rawRequestPath: layout.rawRequestPath,
+    createdAt,
+    updatedAt: createdAt,
+  }), buildRequestBody({
+    sourceKind: bootstrapData.sourceKind,
+    requestText: bootstrapData.requestText,
+  }));
+
+  appendRequestEvent(repoRoot, requestId, {
+    event: "request_persisted",
+    source_kind: bootstrapData.sourceKind,
+  });
+
+  return getRequestRecord(repoRoot, requestId);
+}
+
+function ensureRequestArtifact(repoRoot, requestId, data = {}, nextAction) {
+  return bootstrapRequestArtifact(repoRoot, requestId, data, nextAction);
+}
+
+function ensurePreflightRequestArtifact(repoRoot, requestId, data = {}, nextAction) {
+  const requestPath = getRequestPath(repoRoot, requestId);
+  if (!fs.existsSync(requestPath)) {
+    return bootstrapRequestArtifact(repoRoot, requestId, data, nextAction);
+  }
+
+  const requestRecord = getRequestRecord(repoRoot, requestId);
+  assertPreflightMutable(requestId, requestRecord);
+  const bootstrapData = normalizeRequestBootstrapData(data);
+  validateBootstrapData(repoRoot, requestId, requestRecord, bootstrapData);
+  return applyBootstrapDataPatch(repoRoot, requestId, requestRecord, bootstrapData);
+}
+
+function propose(repoRoot, requestId, data = {}) {
+  const nextAction = normalizeNextAction(data.next_action, DEFAULT_NEXT_ACTIONS.propose);
+  return appendInteractionEvent(repoRoot, requestId, {
+    event: "proposal_presented",
+    ...normalizeProposalFields(data),
+  }, nextAction, data);
+}
+
+function clarify(repoRoot, requestId, data = {}) {
+  const nextAction = normalizeNextAction(data.next_action, DEFAULT_NEXT_ACTIONS.clarify);
+  return appendInteractionEvent(repoRoot, requestId, {
+    event: "question_asked",
+    ...normalizeQuestionFields(data),
+  }, nextAction, data);
+}
+
+function structure(repoRoot, requestId, data = {}) {
+  const nextAction = normalizeNextAction(data.next_action, DEFAULT_NEXT_ACTIONS.structure);
+  const event = data.edits_existing_proposal ? "proposal_edited" : "proposal_presented";
+  const details = data.edits_existing_proposal
+    ? normalizeProposalEditFields(data)
+    : normalizeProposalFields(data);
+
+  return appendInteractionEvent(repoRoot, requestId, {
+    event,
+    structure_kind: normalizeOptionalString(data.structure_kind, "structure_kind") || "restructure",
+    ...details,
+  }, nextAction, data);
+}
+
+function answerQuestion(repoRoot, requestId, data = {}) {
+  const nextAction = normalizeNextAction(data.next_action, DEFAULT_NEXT_ACTIONS.answerQuestion);
+  return appendInteractionEvent(repoRoot, requestId, {
+    event: "question_answered",
+    ...normalizeQuestionAnswerFields(data),
+  }, nextAction, data);
+}
+
+function acceptProposal(repoRoot, requestId, data = {}) {
+  const nextAction = normalizeNextAction(data.next_action, DEFAULT_NEXT_ACTIONS.acceptProposal);
+  return appendInteractionEvent(repoRoot, requestId, {
+    event: "proposal_accepted",
+    ...normalizeProposalAcceptanceFields(data),
+  }, nextAction, data);
+}
+
+function editProposal(repoRoot, requestId, data = {}) {
+  const nextAction = normalizeNextAction(data.next_action, DEFAULT_NEXT_ACTIONS.editProposal);
+  return appendInteractionEvent(repoRoot, requestId, {
+    event: "proposal_edited",
+    ...normalizeProposalEditFields(data),
+  }, nextAction, data);
+}
+
+function persistRequestContract(repoRoot, contract, options = {}) {
+  const normalized = normalizeSingleLeafContract(contract);
+  const requestId = options.requestId || createRequestId();
+  const existingRequestPath = getRequestPath(repoRoot, requestId);
+  if (fs.existsSync(existingRequestPath)) {
+    const existingRequest = getRequestRecord(repoRoot, requestId);
+    if (existingRequest.artifact.data?.state === "relay_ready" || existingRequest.artifact.data?.paths?.handoff) {
+      throw new Error(
+        `request_id '${requestId}' already exists; refusing to overwrite existing request artifact: ${existingRequest.requestPath}`
+      );
+    }
+  }
+  const requestRecord = bootstrapRequestArtifact(repoRoot, requestId, {
+    source_kind: normalized.source.kind,
+    request_text: normalized.requestText,
+    readiness: normalized.readiness,
+  }, DEFAULT_NEXT_ACTIONS.persist);
+  const requestArtifactPath = requestRecord.requestPath;
+  const requestArtifactDir = path.dirname(requestArtifactPath);
+  const handoffFileName = `${normalized.handoff.leafId}.md`;
+  const relayReadyDir = path.join(getRequestDir(repoRoot, requestId), "relay-ready");
+  const doneCriteriaDir = path.join(getRequestDir(repoRoot, requestId), "done-criteria");
+  const handoffPath = path.join(relayReadyDir, handoffFileName);
+  const doneCriteriaPath = path.join(doneCriteriaDir, handoffFileName);
+  const handoffRelativePath = path.relative(requestArtifactDir, handoffPath);
+  const doneCriteriaRelativePath = path.relative(requestArtifactDir, doneCriteriaPath);
+  const requestReadiness = normalized.readiness || requestRecord.artifact.data?.readiness;
+  const rawRequestPath = requestRecord.artifact.data?.paths?.raw_request;
+  const createdAt = requestRecord.artifact.data?.timestamps?.created_at || nowIso();
+  const updatedAt = nowIso();
+
+  assertRequestArtifactsAbsent(requestId, [
     ["relay-ready handoff", handoffPath],
     ["done criteria snapshot", doneCriteriaPath],
   ]);
 
-  fs.writeFileSync(layout.rawRequestPath, `${normalized.requestText}\n`, "utf-8");
   fs.writeFileSync(doneCriteriaPath, `${normalized.handoff.doneCriteriaMarkdown}\n`, "utf-8");
 
   writeManifest(handoffPath, {
@@ -258,37 +697,25 @@ function persistRequestContract(repoRoot, contract, options = {}) {
     done_criteria_path: doneCriteriaPath,
   }, buildHandoffBody(normalized.handoff));
 
-  writeManifest(layout.requestPath, {
-    request_id: requestId,
+  writeManifest(requestArtifactPath, buildRequestArtifactData({
+    requestId,
     state: "relay_ready",
-    source: {
-      kind: normalized.source.kind,
-    },
-    leaf_count: 1,
-    paths: {
-      raw_request: layout.rawRequestPath,
-      handoff: handoffPath,
-      done_criteria: doneCriteriaPath,
-    },
-    timestamps: {
-      created_at: createdAt,
-      updated_at: createdAt,
-    },
-  }, buildRequestBody({
+    leafId: normalized.handoff.leafId,
+    nextAction: DEFAULT_NEXT_ACTIONS.persist,
+    sourceKind: normalized.source.kind,
+    readiness: requestReadiness,
+    rawRequestPath,
+    handoffPath,
+    doneCriteriaPath,
+    createdAt,
+    updatedAt,
+  }), buildRequestBody({
     sourceKind: normalized.source.kind,
     requestText: normalized.requestText,
-    leafId: normalized.handoff.leafId,
-    handoffRelativePath,
-    doneCriteriaRelativePath,
+    relayReadyLeaves: [`${normalized.handoff.leafId}: ${handoffRelativePath}`],
+    doneCriteriaSnapshots: [`${normalized.handoff.leafId}: ${doneCriteriaRelativePath}`],
   }));
 
-  appendRequestEvent(repoRoot, requestId, {
-    event: "request_persisted",
-    source_kind: normalized.source.kind,
-    leaf_id: normalized.handoff.leafId,
-    handoff_path: handoffPath,
-    done_criteria_path: doneCriteriaPath,
-  });
   appendRequestEvent(repoRoot, requestId, {
     event: "relay_ready_handoff_persisted",
     source_kind: normalized.source.kind,
@@ -299,20 +726,26 @@ function persistRequestContract(repoRoot, contract, options = {}) {
 
   return {
     requestId,
-    requestPath: layout.requestPath,
-    requestDir: layout.requestDir,
-    rawRequestPath: layout.rawRequestPath,
+    requestPath: requestArtifactPath,
+    requestDir: getRequestDir(repoRoot, requestId),
+    rawRequestPath,
     handoffPath,
     doneCriteriaPath,
     leafId: normalized.handoff.leafId,
+    nextAction: DEFAULT_NEXT_ACTIONS.persist,
+    readiness: requestReadiness || null,
     title: normalized.handoff.title,
     sourceKind: normalized.source.kind,
   };
 }
 
 module.exports = {
+  acceptProposal,
+  answerQuestion,
   appendRequestEvent,
+  clarify,
   createRequestId,
+  editProposal,
   ensureRequestLayout,
   getRequestDir,
   getRequestEventsPath,
@@ -321,6 +754,8 @@ module.exports = {
   getRequestsDir,
   normalizeSingleLeafContract,
   persistRequestContract,
+  propose,
   readRequestArtifact,
   readRequestEvents,
+  structure,
 };
