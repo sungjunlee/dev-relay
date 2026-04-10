@@ -4,7 +4,7 @@ argument-hint: "<repo-path> (-b <branch> | --run-id <id>) -p <prompt> [options]"
 description: Dispatch implementation tasks via worktree isolation. Use when delegating work to an executor, running background dispatches, or parallelizing independent tasks.
 compatibility: Requires executor CLI (e.g., codex), git, and Node.js 18+.
 metadata:
-  related-skills: "relay, relay-plan, relay-review, relay-merge"
+  related-skills: "relay, relay-intake, relay-plan, relay-review, relay-merge"
 ---
 
 # Relay Dispatch
@@ -43,6 +43,9 @@ For background and parallel dispatch, see "Background & Parallel" section below.
 | `--sandbox` | `workspace-write` (default) or `read-only` |
 | `--copy <files>` | Additional files to copy |
 | `--timeout` | Timeout in seconds (default: 1800) |
+| `--request-id` | Link the run back to a relay-intake request artifact |
+| `--leaf-id` | Link the run back to a relay-intake relay-ready leaf |
+| `--done-criteria-file` | Persist a frozen Done Criteria anchor path into the run manifest |
 | `--register` | Register session in executor's app (keeps worktree) |
 | `--no-cleanup` | Compatibility alias; worktree is retained by default |
 | `--dry-run` | Show plan without executing |
@@ -52,6 +55,8 @@ Creates worktree → writes a relay run manifest → runs executor → collects 
 Exits with non-zero code on failure.
 
 Each dispatch writes a manifest to `~/.relay/runs/<repo-slug>/<run-id>.md` and appends lifecycle evidence to `~/.relay/runs/<repo-slug>/<run-id>/events.jsonl`. `run_id` is the canonical identity for re-dispatch, review, merge, close, and reporting.
+
+When dispatch resumes from relay-intake, it can also store `source.request_id`, `source.leaf_id`, and `anchor.done_criteria_path` so review stays pinned to the frozen snapshot.
 
 ### Timeout guidance
 

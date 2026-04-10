@@ -169,6 +169,68 @@ test("prepare-only writes a prompt bundle without changing manifest state", () =
   assert.equal(readManifest(manifestPath).data.run_id, runId);
 });
 
+test("prepare-only loads frozen Done Criteria from manifest anchor before GitHub fallbacks", () => {
+  const { repoRoot, manifestPath, runId, diffPath } = setupRepo();
+  const anchoredDoneCriteriaPath = path.join(repoRoot, "frozen-done-criteria.md");
+  fs.writeFileSync(anchoredDoneCriteriaPath, "# Frozen Done Criteria\n\n- Use the persisted intake snapshot\n", "utf-8");
+
+  const record = readManifest(manifestPath);
+  const updated = {
+    ...record.data,
+    anchor: {
+      ...(record.data.anchor || {}),
+      done_criteria_path: anchoredDoneCriteriaPath,
+      done_criteria_source: "request_snapshot",
+    },
+  };
+  writeManifest(manifestPath, updated, record.body);
+
+  const stdout = execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--run-id", runId,
+    "--pr", "123",
+    "--diff-file", diffPath,
+    "--prepare-only",
+    "--json",
+  ], { encoding: "utf-8" });
+
+  const result = JSON.parse(stdout);
+  const promptText = fs.readFileSync(result.promptPath, "utf-8");
+  const doneCriteriaText = fs.readFileSync(result.doneCriteriaPath, "utf-8");
+  assert.match(promptText, /source="request_snapshot"/);
+  assert.match(doneCriteriaText, /Use the persisted intake snapshot/);
+});
+
+test("missing manifest-anchored Done Criteria fails loudly without fallback", () => {
+  const { repoRoot, manifestPath, runId, diffPath } = setupRepo();
+  const missingDoneCriteriaPath = path.join(repoRoot, "missing-frozen-done-criteria.md");
+
+  const record = readManifest(manifestPath);
+  const updated = {
+    ...record.data,
+    anchor: {
+      ...(record.data.anchor || {}),
+      done_criteria_path: missingDoneCriteriaPath,
+      done_criteria_source: "request_snapshot",
+    },
+  };
+  writeManifest(manifestPath, updated, record.body);
+
+  assert.throws(() => execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--run-id", runId,
+    "--pr", "123",
+    "--diff-file", diffPath,
+    "--prepare-only",
+    "--json",
+  ], { encoding: "utf-8", stdio: "pipe" }), (error) => {
+    assert.match(String(error.stderr), /Manifest anchor\.done_criteria_path points to a missing file/);
+    return true;
+  });
+});
+
 test("pass verdict moves review_pending to ready_to_merge", () => {
   const { repoRoot, manifestPath, doneCriteriaPath, diffPath } = setupRepo();
   const reviewFile = writeVerdict(repoRoot, "pass.json", {

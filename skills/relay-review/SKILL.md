@@ -5,7 +5,7 @@ description: Independent PR review against Done Criteria in a fresh context, fre
 context: fork
 compatibility: "Requires gh CLI. Context isolation is enforced per-platform (see Context Isolation section)."
 metadata:
-  related-skills: "relay, relay-plan, relay-dispatch, relay-merge"
+  related-skills: "relay, relay-intake, relay-plan, relay-dispatch, relay-merge"
 ---
 
 # Relay Review
@@ -49,7 +49,7 @@ gh issue view $ISSUE_NUM  # Done Criteria / Acceptance Criteria source
 ```
 
 2. **Fix the anchor** — these do NOT change across rounds:
-   - Done Criteria from the issue (the contract)
+   - Done Criteria from `anchor.done_criteria_path` when present, otherwise from the issue (the contract)
    - Rubric factors + targets from the Score Log (if relay-plan was used)
    - Original scope boundary ("do not change" areas)
 
