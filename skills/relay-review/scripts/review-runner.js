@@ -182,8 +182,21 @@ function resolveIssueNumber(repoPath, prNumber, branch, manifestData) {
   return issueMatch ? Number(issueMatch[1]) : null;
 }
 
-function loadDoneCriteria(repoPath, issueNumber, prNumber, doneCriteriaFile) {
+function loadDoneCriteria(repoPath, issueNumber, prNumber, doneCriteriaFile, manifestData) {
   if (doneCriteriaFile) return { text: readText(doneCriteriaFile).trim(), source: "file" };
+
+  const manifestDoneCriteriaPath = manifestData?.anchor?.done_criteria_path;
+  if (manifestDoneCriteriaPath) {
+    if (!fs.existsSync(manifestDoneCriteriaPath)) {
+      throw new Error(
+        `Manifest anchor.done_criteria_path points to a missing file: ${manifestDoneCriteriaPath}`
+      );
+    }
+    return {
+      text: readText(manifestDoneCriteriaPath).trim(),
+      source: manifestData?.anchor?.done_criteria_source || "request_snapshot",
+    };
+  }
 
   const errors = [];
 
@@ -221,7 +234,7 @@ function loadDoneCriteria(repoPath, issueNumber, prNumber, doneCriteriaFile) {
   const detail = errors.length ? ` Attempted: ${errors.join("; ")}` : "";
   throw new Error(
     `Cannot resolve Done Criteria: no issue, no PR description.${detail} ` +
-    "Provide --done-criteria-file for tasks without a GitHub issue."
+    "Provide --done-criteria-file or persist anchor.done_criteria_path for tasks without a GitHub issue."
   );
 }
 
@@ -880,7 +893,10 @@ function applyPolicyViolationToManifest(data, round, prNumber, reviewedHeadSha, 
 }
 
 function resolveReviewerName(data, reviewerArg) {
-  return reviewerArg || data.roles?.reviewer || process.env.RELAY_REVIEWER || "codex";
+  const manifestReviewer = data.roles?.reviewer;
+  if (reviewerArg) return reviewerArg;
+  if (manifestReviewer && manifestReviewer !== "unknown") return manifestReviewer;
+  return process.env.RELAY_REVIEWER || "codex";
 }
 
 function resolveReviewerScript(reviewerName, reviewerScriptArg) {
@@ -990,7 +1006,13 @@ function run() {
     throw new Error(`Review round cap exceeded: next round ${round} would exceed max_rounds=${maxRounds}`);
   }
 
-  const { text: doneCriteria, source: doneCriteriaSource } = loadDoneCriteria(repoPath, issueNumber, prNumber, doneCriteriaFile);
+  const { text: doneCriteria, source: doneCriteriaSource } = loadDoneCriteria(
+    repoPath,
+    issueNumber,
+    prNumber,
+    doneCriteriaFile,
+    data
+  );
   const diffText = loadDiff(repoPath, prNumber, diffFile);
   const rubricContent = loadRubricFromRunDir(runDir, data);
   const promptText = buildPrompt({ round, prNumber, branch, issueNumber, doneCriteria, doneCriteriaSource, diffText, runDir, rubricContent });

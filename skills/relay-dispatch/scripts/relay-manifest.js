@@ -341,10 +341,14 @@ function createManifestSkeleton({
   cleanupPolicy = "on_close",
   reviewerWritePolicy = "forbid",
   environment = null,
+  requestId = null,
+  leafId = null,
+  doneCriteriaPath = null,
+  doneCriteriaSource = null,
 }) {
   const createdAt = nowIso();
 
-  return {
+  const manifest = {
     relay_version: RELAY_VERSION,
     run_id: runId,
     state: STATES.DRAFT,
@@ -377,8 +381,9 @@ function createManifestSkeleton({
       reviewer_write: reviewerWritePolicy,
     },
     anchor: {
-      done_criteria_source: issueNumber ? "issue" : "unknown",
+      done_criteria_source: doneCriteriaSource || (issueNumber ? "issue" : "unknown"),
       rubric_source: "manifest",
+      ...(doneCriteriaPath ? { done_criteria_path: doneCriteriaPath } : {}),
     },
     review: {
       rounds: 0,
@@ -399,6 +404,15 @@ function createManifestSkeleton({
       updated_at: createdAt,
     },
   };
+
+  if (requestId || leafId) {
+    manifest.source = {
+      ...(requestId ? { request_id: requestId } : {}),
+      ...(leafId ? { leaf_id: leafId } : {}),
+    };
+  }
+
+  return manifest;
 }
 
 // ---------------------------------------------------------------------------

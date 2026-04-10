@@ -4,7 +4,7 @@ Scenario matrix for the same-run lifecycle and reliability scorecard wave.
 
 ## Goal
 
-Exercise the implemented same-run lifecycle, fresh merge gate, append-only events, explicit close path, and derived reporting.
+Exercise the implemented same-run lifecycle, intake request persistence, fresh merge gate, append-only events, explicit close path, and derived reporting.
 
 ## Current Coverage
 
@@ -116,6 +116,8 @@ Expect:
 - a run in `changes_requested` resumes on the same worktree and manifest
 - re-dispatch keeps the same `run_id`
 - missing retained worktrees fail loudly without creating a replacement run
+- intake-linked runs can resume only with the exact same `request_id`, `leaf_id`, and `done_criteria_path`
+- issue-first runs cannot gain relay-intake linkage retroactively during resume
 
 ### 7. Review runner validates structured verdicts and updates manifest state
 
@@ -155,6 +157,20 @@ Interpretation:
 - this is a repo-wide skill-format mismatch with the strict Codex validator
 - it is not a regression from the manifest foundation work
 - the actual YAML syntax issue in `relay-review/SKILL.md` is fixed
+
+### 8a. Intake request persistence rejects frozen-snapshot collisions
+
+Command:
+
+```bash
+node --test skills/relay-intake/scripts/request-store.test.js
+```
+
+Expect:
+
+- reusing the same `request_id` fails before any request artifact is overwritten
+- the original frozen Done Criteria snapshot stays unchanged
+- the request event log remains append-only with the original two persistence events only
 
 ### 9. Optional live adapter verification
 
@@ -241,3 +257,20 @@ Covers:
 - a no-sprint live run in `dev-relay`
 - a sprint-enabled live run in the disposable GitHub fixture repo
 - exact operator prompts, run IDs, manifest paths, PR/review URLs, merge SHAs, and known gaps
+
+### 15. Raw request intake persists a relay-ready handoff and feeds downstream review anchors
+
+Command:
+
+```bash
+node --test skills/relay-intake/scripts/request-store.test.js
+```
+
+Expect:
+
+- `~/.relay/requests/<repo-slug>/<request-id>.md` is created
+- request events append `request_persisted` and `relay_ready_handoff_persisted`
+- `relay-ready/<leaf-id>.md` and `done-criteria/<leaf-id>.md` are created for the single leaf
+- multi-leaf input fails explicitly with `TODO(#129)`
+- dispatch can record `source.request_id`, `source.leaf_id`, and `anchor.done_criteria_path`
+- `review-runner --prepare-only` loads the frozen snapshot from the manifest anchor without re-fetching GitHub issue text
