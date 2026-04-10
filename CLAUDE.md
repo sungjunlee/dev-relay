@@ -14,13 +14,15 @@ draft → dispatched → review_pending → ready_to_merge → merged
 
 See [references/architecture.md](references/architecture.md) for the full manifest schema, state transitions, event journal format, and adapter extension points.
 
+Before a run exists, relay-intake may persist standalone request artifacts under `~/.relay/requests/<repo-slug>/`. `/relay` bypasses that preflight step only for already relay-ready issue/task inputs with a trustworthy review anchor; otherwise it invokes intake and then continues with `relay-plan -> relay-dispatch -> relay-review -> relay-merge`.
+
 ## Project Structure
 
 ```
 skills/
   relay/                   ← Full-cycle orchestration (plan → dispatch → review → stop)
     references/prompt-template.md
-  relay-intake/            ← Raw request shaping + relay-ready handoff persistence
+  relay-intake/            ← Standalone raw-request front door + relay-ready handoff persistence
     scripts/
       relay-request.js       ← Request artifact CRUD + request events
       persist-request.js     ← Single-leaf persistence entry point
@@ -54,7 +56,7 @@ skills/
       review-gate.js       ← Review state validation
 ```
 
-Multi-skill design: each phase is independently invocable. `npx skills add sungjunlee/dev-relay` installs all 6.
+Multi-skill design: each phase is independently invocable. `npx skills add sungjunlee/dev-relay` installs all 6 skills: `relay`, `relay-intake`, `relay-plan`, `relay-dispatch`, `relay-review`, `relay-merge`.
 
 ## Common Commands
 
