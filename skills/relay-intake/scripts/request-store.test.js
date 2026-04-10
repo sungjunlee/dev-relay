@@ -11,7 +11,9 @@ const {
   answerQuestion,
   clarify,
   editProposal,
+  getRequestsDir,
   getRequestPath,
+  normalizeSingleLeafContract,
   propose,
   readRequestEvents,
   persistRequestContract,
@@ -98,6 +100,86 @@ function createReadiness(overrides = {}) {
   };
 }
 
+function chooseRelayRoute({
+  sourceKind,
+  leafCount,
+  hasStableReviewAnchor,
+  requiresClarification = false,
+  requiresDecomposition = false,
+}) {
+  return sourceKind !== "raw_text"
+    && leafCount === 1
+    && hasStableReviewAnchor
+    && !requiresClarification
+    && !requiresDecomposition
+    ? "bypass_intake"
+    : "invoke_intake";
+}
+
+function invokeRelayFrontDoor(repoRoot, {
+  contract,
+  hasStableReviewAnchor,
+  requiresClarification = false,
+  requiresDecomposition = false,
+  requestId,
+}) {
+  const leafCount = Array.isArray(contract.handoffs)
+    ? contract.handoffs.length
+    : (contract.handoff ? 1 : 0);
+  const route = chooseRelayRoute({
+    sourceKind: contract.source?.kind || "raw_text",
+    leafCount,
+    hasStableReviewAnchor,
+    requiresClarification,
+    requiresDecomposition,
+  });
+  const downstreamChain = route === "invoke_intake"
+    ? ["relay-intake", "relay-plan", "relay-dispatch"]
+    : ["relay-plan", "relay-dispatch"];
+
+  if (route === "bypass_intake") {
+    const normalized = normalizeSingleLeafContract(contract);
+    return {
+      route,
+      downstreamChain,
+      sourceKind: normalized.source.kind,
+      readiness: normalized.readiness || null,
+      leafId: normalized.handoff.leafId,
+      title: normalized.handoff.title,
+      reviewAnchorSource: normalized.source.kind,
+    };
+  }
+
+  return {
+    route,
+    downstreamChain,
+    ...persistRequestContract(repoRoot, contract, requestId ? { requestId } : {}),
+  };
+}
+
+function proposeDelegateFallback(repoRoot, requestId, {
+  requestText,
+  hostCapabilities = {},
+}) {
+  if (hostCapabilities.gstack || hostCapabilities.superpowers) {
+    throw new Error("delegate fallback only applies when gstack/superpowers are unavailable");
+  }
+
+  return {
+    fallback: "portable_plain_text",
+    ...structure(repoRoot, requestId, {
+      source_kind: "raw_text",
+      request_text: requestText,
+      proposal_summary: "Delegate the shared middleware change and keep the local tests here.",
+      proposal_kind: "structure",
+      proposal_text: "A. Delegate middleware ownership\nB. Keep the work local\nC. Other + free text",
+      response_options: ["A. Delegate", "B. Keep local", "C. Other + free text"],
+      structure_kind: "delegate",
+      reason: "gstack/superpowers are unavailable, so fall back to the portable plain-text protocol.",
+    }),
+  };
+}
+
 function writeFakeCodex(binDir) {
   const codexPath = path.join(binDir, "codex");
   fs.writeFileSync(codexPath, `#!/usr/bin/env node
@@ -116,6 +198,14 @@ execFileSync("git", ["-C", cwd, "commit", "-m", "fake intake commit"], { stdio: 
 fs.writeFileSync(output, "ok\\n", "utf-8");
 `, "utf-8");
   fs.chmodSync(codexPath, 0o755);
+}
+
+function readRequest(repoRoot, requestId) {
+  return readRequestArtifact(getRequestPath(repoRoot, requestId));
+}
+
+function readEventNames(repoRoot, requestId) {
+  return readRequestEvents(repoRoot, requestId).map((event) => event.event);
 }
 
 test("persistRequestContract writes request artifact, relay-ready handoff, done criteria snapshot, and events", () => {
@@ -293,6 +383,290 @@ test("persistRequestContract persists multi-leaf handoffs with ordering, depende
     events.slice(1).map((event) => event.leaf_id),
     ["leaf-01", "leaf-02"]
   );
+});
+
+test("scenario: directly relayable raw request persists immediately without preflight interactions", () => {
+  const { repoRoot } = setupRepo();
+  const readiness = createReadiness({ risk: "low" });
+
+  const result = persistRequestContract(repoRoot, createContract({ readiness }));
+  const requestArtifact = readRequestArtifact(result.requestPath);
+
+  assert.equal(result.leafCount, 1);
+  assert.equal(requestArtifact.data.state, "relay_ready");
+  assert.equal(requestArtifact.data.next_action, "relay_plan");
+  assert.equal(requestArtifact.data.source.kind, "raw_text");
+  assert.deepEqual(requestArtifact.data.readiness, readiness);
+  assert.deepEqual(
+    readEventNames(repoRoot, result.requestId),
+    ["request_persisted", "relay_ready_handoff_persisted"]
+  );
+});
+
+test("scenario: ambiguous request flows through proposal, clarification, answer, acceptance, and final persistence", () => {
+  const { repoRoot } = setupRepo();
+  const requestId = "req-20260409101010000";
+  const requestText = "Fix the auth routing bug around login redirects.";
+
+  propose(repoRoot, requestId, {
+    source_kind: "raw_text",
+    request_text: requestText,
+    proposal_summary: "Shape this into one redirect-focused leaf after clarifying guest behavior.",
+    proposal_text: "A. Keep guest deep links on /login\nB. Redirect guests elsewhere\nC. Other + free text",
+    response_options: ["A. Keep /login", "B. Redirect elsewhere", "C. Other + free text"],
+    reason: "The request is ambiguous about guest deep-link behavior.",
+  });
+  clarify(repoRoot, requestId, {
+    question_text: "Should guest deep links still land on /login?",
+    response_options: ["A. Yes", "B. No", "C. Other + free text"],
+    reason: "Need one stable review anchor before freezing the handoff.",
+  });
+
+  const answered = answerQuestion(repoRoot, requestId, {
+    question_text: "Should guest deep links still land on /login?",
+    answer_text: "A. Yes, keep guest deep links on /login.",
+    answer_choice: "A",
+    reason: "Clarified by the requester.",
+  });
+  assert.equal(answered.event, "question_answered");
+  assert.equal(readRequest(repoRoot, requestId).data.next_action, "review_answer");
+
+  const accepted = acceptProposal(repoRoot, requestId, {
+    proposal_summary: "Single redirect leaf that keeps guest deep links on /login.",
+    acceptance_note: "Proceed with one relay-sized fix.",
+    reason: "Clarification resolved the scope.",
+  });
+  assert.equal(accepted.event, "proposal_accepted");
+  assert.equal(readRequest(repoRoot, requestId).data.next_action, "relay_plan");
+
+  const result = persistRequestContract(repoRoot, createContract({
+    request_text: requestText,
+  }), { requestId });
+  const requestArtifact = readRequestArtifact(result.requestPath);
+
+  assert.equal(requestArtifact.data.state, "relay_ready");
+  assert.equal(requestArtifact.data.next_action, "relay_plan");
+  assert.deepEqual(
+    readEventNames(repoRoot, requestId),
+    [
+      "request_persisted",
+      "proposal_presented",
+      "question_asked",
+      "question_answered",
+      "proposal_accepted",
+      "relay_ready_handoff_persisted",
+    ]
+  );
+});
+
+test("scenario: oversized request is proposed, decomposed, and accepted before relay-ready persistence", () => {
+  const { repoRoot } = setupRepo();
+  const requestId = "req-20260409111111000";
+  const requestText = "Fix auth redirects, add regression coverage, and document the routing rules.";
+
+  propose(repoRoot, requestId, {
+    source_kind: "raw_text",
+    request_text: requestText,
+    proposal_summary: "This is too broad for one relay run; start by proposing a smaller shape.",
+    proposal_text: "A. Keep one leaf\nB. Split into multiple leaves\nC. Other + free text",
+    response_options: ["A. One leaf", "B. Multiple leaves", "C. Other + free text"],
+  });
+
+  const structured = structure(repoRoot, requestId, {
+    proposal_summary: "Split the work into a guard fix leaf and a regression coverage leaf.",
+    proposal_kind: "structure",
+    proposal_text: "Leaf 1 fixes the redirect guard. Leaf 2 adds regression coverage.",
+    response_options: ["A. Accept split", "B. Keep one leaf", "C. Other + free text"],
+    structure_kind: "decompose",
+    reason: "The request is oversized for one relay-sized handoff.",
+  });
+  assert.equal(structured.event, "proposal_presented");
+  assert.equal(structured.structure_kind, "decompose");
+  assert.equal(readRequest(repoRoot, requestId).data.next_action, "await_proposal_response");
+
+  const accepted = acceptProposal(repoRoot, requestId, {
+    proposal_summary: "Split the oversized request into two ordered relay-ready leaves.",
+    acceptance_note: "Use the decomposed shape.",
+  });
+  assert.equal(accepted.event, "proposal_accepted");
+
+  const requestArtifact = readRequest(repoRoot, requestId);
+  assert.equal(requestArtifact.data.state, "intake");
+  assert.equal(requestArtifact.data.leaf_count, 0);
+  assert.equal(requestArtifact.data.next_action, "relay_plan");
+  assert.deepEqual(
+    readEventNames(repoRoot, requestId),
+    ["request_persisted", "proposal_presented", "proposal_presented", "proposal_accepted"]
+  );
+});
+
+test("scenario: larger request decomposes into ordered child handoffs", () => {
+  const { repoRoot } = setupRepo();
+  const requestId = "req-20260409121212000";
+  const requestText = createMultiLeafContract().request_text;
+
+  structure(repoRoot, requestId, {
+    source_kind: "raw_text",
+    request_text: requestText,
+    proposal_summary: "Split the request into an implementation leaf followed by a coverage leaf.",
+    proposal_kind: "structure",
+    structure_kind: "decompose",
+  });
+  acceptProposal(repoRoot, requestId, {
+    proposal_summary: "Persist two ordered relay-ready leaves.",
+    acceptance_note: "Guard fix first, then regression coverage.",
+  });
+
+  const result = persistRequestContract(repoRoot, createMultiLeafContract(), { requestId });
+  const requestArtifact = readRequestArtifact(result.requestPath);
+  const firstLeaf = readRequestArtifact(result.handoffPaths[0]);
+  const secondLeaf = readRequestArtifact(result.handoffPaths[1]);
+
+  assert.equal(result.leafCount, 2);
+  assert.deepEqual(result.leafIds, ["leaf-01", "leaf-02"]);
+  assert.deepEqual(requestArtifact.data.decomposition.leaf_order, ["leaf-01", "leaf-02"]);
+  assert.deepEqual(requestArtifact.data.decomposition.dependencies, { "leaf-02": ["leaf-01"] });
+  assert.equal(firstLeaf.data.order, 1);
+  assert.deepEqual(firstLeaf.data.depends_on, []);
+  assert.equal(secondLeaf.data.order, 2);
+  assert.deepEqual(secondLeaf.data.depends_on, ["leaf-01"]);
+  assert.deepEqual(
+    readEventNames(repoRoot, requestId),
+    [
+      "request_persisted",
+      "proposal_presented",
+      "proposal_accepted",
+      "relay_ready_handoff_persisted",
+      "relay_ready_handoff_persisted",
+    ]
+  );
+});
+
+test("scenario: non-issue request freezes done criteria from the handoff rather than GitHub", () => {
+  const { repoRoot } = setupRepo();
+  const doneCriteriaMarkdown = "# Done Criteria\n\n- Duplicate invite emails stop after resend\n- The resend actor is logged in the audit trail\n";
+  const result = persistRequestContract(repoRoot, createContract({
+    request_text: "Fix duplicate invite sends when admins resend an invite.",
+    handoff: {
+      ...createContract().handoff,
+      leaf_id: "leaf-invite-01",
+      title: "Fix duplicate invite resend notifications",
+      goal: "Stop duplicate invite emails when an admin resends an invite",
+      in_scope: ["Deduplicate resend notifications", "Log the acting admin"],
+      out_of_scope: ["Redesigning the invite email"],
+      assumptions: ["The audit log already has an invite resend event type"],
+      done_criteria_markdown: doneCriteriaMarkdown,
+      escalation_conditions: ["Invite resend ownership is split across services"],
+    },
+  }));
+  const requestArtifact = readRequestArtifact(result.requestPath);
+  const handoffArtifact = readRequestArtifact(result.handoffPath);
+
+  assert.equal(requestArtifact.data.source.kind, "raw_text");
+  assert.equal(handoffArtifact.data.done_criteria_path, result.doneCriteriaPath);
+  assert.equal(fs.readFileSync(result.doneCriteriaPath, "utf-8").trim(), doneCriteriaMarkdown.trim());
+  assert.deepEqual(
+    readEventNames(repoRoot, result.requestId),
+    ["request_persisted", "relay_ready_handoff_persisted"]
+  );
+});
+
+test("scenario: portable A/B/C plain-text interaction works without host-specific UI widgets", () => {
+  const { repoRoot } = setupRepo();
+  const requestId = "req-20260409131313000";
+  const requestText = "Triage the auth redirect work for the next relay run.";
+  const proposalChoices = [
+    "A. Keep one leaf",
+    "B. Split into two leaves",
+    "C. Other + free text",
+  ];
+  const questionChoices = [
+    "A. Fix the guard first",
+    "B. Add coverage first",
+    "C. Other + free text",
+  ];
+
+  propose(repoRoot, requestId, {
+    source_kind: "raw_text",
+    request_text: requestText,
+    proposal_summary: "Offer a plain-text proposal even when the host has no widget support.",
+    proposal_text: proposalChoices.join("\n"),
+    response_options: proposalChoices,
+  });
+  clarify(repoRoot, requestId, {
+    question_text: "Which leaf should land first?",
+    response_options: questionChoices,
+  });
+
+  const answered = answerQuestion(repoRoot, requestId, {
+    question_text: "Which leaf should land first?",
+    answer_text: "C. Other: fix the guard first, then add coverage.",
+    answer_choice: "C",
+  });
+  const events = readRequestEvents(repoRoot, requestId);
+
+  assert.deepEqual(events[1].response_options, proposalChoices);
+  assert.deepEqual(events[2].response_options, questionChoices);
+  assert.equal(answered.answer_choice, "C");
+  assert.equal(readRequest(repoRoot, requestId).data.next_action, "review_answer");
+});
+
+test("scenario: delegate fallback uses the portable plain-text path when gstack/superpowers are unavailable", () => {
+  const { repoRoot } = setupRepo();
+  const requestId = "req-20260409141414000";
+  const requestText = "Coordinate the shared auth middleware fix with the platform team.";
+  const hostCapabilities = {
+    gstack: false,
+    superpowers: false,
+  };
+
+  const delegated = proposeDelegateFallback(repoRoot, requestId, {
+    requestText,
+    hostCapabilities,
+  });
+  assert.equal(delegated.fallback, "portable_plain_text");
+  assert.equal(delegated.event, "proposal_presented");
+  assert.equal(delegated.structure_kind, "delegate");
+
+  const accepted = acceptProposal(repoRoot, requestId, {
+    proposal_summary: "Use the delegate fallback and continue with the portable handoff.",
+    acceptance_note: "Delegate the shared middleware work.",
+  });
+  assert.equal(accepted.event, "proposal_accepted");
+  assert.equal(readRequest(repoRoot, requestId).data.next_action, "relay_plan");
+
+  const events = readRequestEvents(repoRoot, requestId);
+  assert.equal(events[1].structure_kind, "delegate");
+  assert.deepEqual(events[1].response_options, ["A. Delegate", "B. Keep local", "C. Other + free text"]);
+  assert.match(events[1].reason, /gstack\/superpowers are unavailable/);
+  assert.deepEqual(
+    readEventNames(repoRoot, requestId),
+    ["request_persisted", "proposal_presented", "proposal_accepted"]
+  );
+});
+
+test("scenario: /relay keeps issue-first users on the fast path without intake overhead", () => {
+  const { repoRoot } = setupRepo();
+  const readiness = createReadiness({ risk: "low" });
+  const result = invokeRelayFrontDoor(repoRoot, {
+    hasStableReviewAnchor: true,
+    contract: createContract({
+      source: { kind: "github_issue" },
+      request_text: "Issue #132: Fix the login redirect loop for authenticated users.",
+      readiness,
+    }),
+  });
+
+  assert.equal(result.route, "bypass_intake");
+  assert.deepEqual(result.downstreamChain, ["relay-plan", "relay-dispatch"]);
+  assert.equal(result.sourceKind, "github_issue");
+  assert.equal(result.reviewAnchorSource, "github_issue");
+  assert.equal(result.leafId, "leaf-01");
+  assert.deepEqual(result.readiness, readiness);
+  assert.equal(result.requestId, undefined);
+  assert.equal(result.requestPath, undefined);
+  assert.equal(result.doneCriteriaPath, undefined);
+  assert.equal(fs.existsSync(getRequestsDir(repoRoot)), false);
 });
 
 test("persistRequestContract rejects duplicate leaf IDs within a multi-leaf request", () => {
@@ -542,9 +916,12 @@ test("preflight helpers reject mutations after relay-ready persistence", () => {
   assert.deepEqual(readRequestEvents(repoRoot, intake.requestId), initialEvents);
 });
 
-test("raw request can flow through intake persistence, dispatch linkage, and review prepare-only", () => {
+test("scenario: /relay auto-routes raw text through intake, then continues to dispatch and review linkage", () => {
   const { repoRoot, relayHome } = setupRepo();
-  const intake = persistRequestContract(repoRoot, createContract());
+  const intake = invokeRelayFrontDoor(repoRoot, {
+    contract: createContract(),
+    hasStableReviewAnchor: false,
+  });
   const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
   writeFakeCodex(binDir);
   const env = {
@@ -569,6 +946,12 @@ test("raw request can flow through intake persistence, dispatch linkage, and rev
   });
 
   const dispatchResult = JSON.parse(dispatchStdout);
+  assert.equal(intake.route, "invoke_intake");
+  assert.deepEqual(intake.downstreamChain, ["relay-intake", "relay-plan", "relay-dispatch"]);
+  assert.deepEqual(
+    readEventNames(repoRoot, intake.requestId),
+    ["request_persisted", "relay_ready_handoff_persisted"]
+  );
   assert.equal(dispatchResult.runState, "review_pending");
 
   const manifest = readManifest(dispatchResult.manifestPath).data;
