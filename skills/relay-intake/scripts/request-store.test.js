@@ -292,39 +292,41 @@ test("preflight helpers bootstrap a non-ready request artifact before relay-read
 
 test("preflight actions append typed events and update next_action without a second state machine", () => {
   const { repoRoot } = setupRepo();
-  const intake = persistRequestContract(repoRoot, createContract());
+  const requestId = "req-20260409060606000";
   const reassessedReadiness = createReadiness({ granularity: "multi_task" });
 
-  const proposal = propose(repoRoot, intake.requestId, {
+  const proposal = propose(repoRoot, requestId, {
+    source_kind: "raw_text",
+    request_text: createContract().request_text,
     proposal_summary: "Keep the work as a single auth redirect leaf.",
     proposal_text: "A. Update the guard\nB. Add redirect tests\nC. Free text",
     response_options: ["A", "B", "C + free text"],
   });
   assert.equal(proposal.event, "proposal_presented");
-  assert.equal(proposal.request_id, intake.requestId);
-  assert.equal(proposal.leaf_id, intake.leafId);
-  assert.equal(readRequestArtifact(intake.requestPath).data.next_action, "await_proposal_response");
+  assert.equal(proposal.request_id, requestId);
+  assert.equal(proposal.leaf_id, null);
+  assert.equal(readRequestArtifact(getRequestPath(repoRoot, requestId)).data.next_action, "await_proposal_response");
 
-  const question = clarify(repoRoot, intake.requestId, {
+  const question = clarify(repoRoot, requestId, {
     readiness: reassessedReadiness,
     question_text: "Should guest deep links still route to /login?",
     response_options: ["A. Yes", "B. No", "C. Other"],
   });
   assert.equal(question.event, "question_asked");
   assert.deepEqual(question.response_options, ["A. Yes", "B. No", "C. Other"]);
-  assert.equal(readRequestArtifact(intake.requestPath).data.next_action, "await_answer");
-  assert.deepEqual(readRequestArtifact(intake.requestPath).data.readiness, reassessedReadiness);
+  assert.equal(readRequestArtifact(getRequestPath(repoRoot, requestId)).data.next_action, "await_answer");
+  assert.deepEqual(readRequestArtifact(getRequestPath(repoRoot, requestId)).data.readiness, reassessedReadiness);
 
-  const structured = structure(repoRoot, intake.requestId, {
+  const structured = structure(repoRoot, requestId, {
     proposal_summary: "Restructure the handoff around one guard change plus tests.",
     proposal_kind: "structure",
     structure_kind: "decompose",
   });
   assert.equal(structured.event, "proposal_presented");
   assert.equal(structured.structure_kind, "decompose");
-  assert.equal(readRequestArtifact(intake.requestPath).data.next_action, "await_proposal_response");
+  assert.equal(readRequestArtifact(getRequestPath(repoRoot, requestId)).data.next_action, "await_proposal_response");
 
-  const structuredEdit = structure(repoRoot, intake.requestId, {
+  const structuredEdit = structure(repoRoot, requestId, {
     proposal_summary: "Keep one leaf but tighten the handoff wording.",
     edit_summary: "Fold the test wording into the main proposal summary.",
     edits_existing_proposal: true,
@@ -332,20 +334,25 @@ test("preflight actions append typed events and update next_action without a sec
   });
   assert.equal(structuredEdit.event, "proposal_edited");
   assert.equal(structuredEdit.edit_summary, "Fold the test wording into the main proposal summary.");
-  assert.equal(readRequestArtifact(intake.requestPath).data.next_action, "await_proposal_response");
+  assert.equal(readRequestArtifact(getRequestPath(repoRoot, requestId)).data.next_action, "await_proposal_response");
 
-  const events = readRequestEvents(repoRoot, intake.requestId);
+  const events = readRequestEvents(repoRoot, requestId);
   assert.deepEqual(
-    events.slice(-4).map((event) => event.event),
-    ["proposal_presented", "question_asked", "proposal_presented", "proposal_edited"]
+    events.map((event) => event.event),
+    ["request_persisted", "proposal_presented", "question_asked", "proposal_presented", "proposal_edited"]
   );
 });
 
 test("interaction event helpers persist portable fields for answers, edits, and acceptance", () => {
   const { repoRoot } = setupRepo();
-  const intake = persistRequestContract(repoRoot, createContract());
+  const requestId = "req-20260409070707000";
+  propose(repoRoot, requestId, {
+    source_kind: "raw_text",
+    request_text: createContract().request_text,
+    proposal_summary: "Keep one relay leaf for the redirect loop fix.",
+  });
 
-  const answered = answerQuestion(repoRoot, intake.requestId, {
+  const answered = answerQuestion(repoRoot, requestId, {
     question_text: "Should guest deep links still route to /login?",
     answer_text: "A. Yes, keep the guest login route as-is.",
     answer_choice: "A",
@@ -354,18 +361,18 @@ test("interaction event helpers persist portable fields for answers, edits, and 
   assert.equal(answered.question_text, "Should guest deep links still route to /login?");
   assert.equal(answered.answer_text, "A. Yes, keep the guest login route as-is.");
   assert.equal(answered.answer_choice, "A");
-  assert.equal(readRequestArtifact(intake.requestPath).data.next_action, "review_answer");
+  assert.equal(readRequestArtifact(getRequestPath(repoRoot, requestId)).data.next_action, "review_answer");
 
-  const edited = editProposal(repoRoot, intake.requestId, {
+  const edited = editProposal(repoRoot, requestId, {
     proposal_summary: "Keep one relay leaf for the redirect loop fix.",
     edit_summary: "Add the cookie-session assumption to the proposal text.",
     proposal_text: "Scope the work to the redirect guard and add tests.",
   });
   assert.equal(edited.event, "proposal_edited");
   assert.equal(edited.edit_summary, "Add the cookie-session assumption to the proposal text.");
-  assert.equal(readRequestArtifact(intake.requestPath).data.next_action, "review_proposal_edits");
+  assert.equal(readRequestArtifact(getRequestPath(repoRoot, requestId)).data.next_action, "review_proposal_edits");
 
-  const accepted = acceptProposal(repoRoot, intake.requestId, {
+  const accepted = acceptProposal(repoRoot, requestId, {
     proposal_summary: "Keep one relay leaf for the redirect loop fix.",
     acceptance_note: "Ship the single-leaf handoff.",
     accepted_with_edits: true,
@@ -373,13 +380,46 @@ test("interaction event helpers persist portable fields for answers, edits, and 
   assert.equal(accepted.event, "proposal_accepted");
   assert.equal(accepted.acceptance_note, "Ship the single-leaf handoff.");
   assert.equal(accepted.accepted_with_edits, true);
-  assert.equal(readRequestArtifact(intake.requestPath).data.next_action, "relay_plan");
+  assert.equal(readRequestArtifact(getRequestPath(repoRoot, requestId)).data.next_action, "relay_plan");
 
-  const events = readRequestEvents(repoRoot, intake.requestId);
+  const events = readRequestEvents(repoRoot, requestId);
   assert.deepEqual(
     events.slice(-3).map((event) => event.event),
     ["question_answered", "proposal_edited", "proposal_accepted"]
   );
+});
+
+test("preflight helpers reject mutations after relay-ready persistence", () => {
+  const { repoRoot } = setupRepo();
+  const readiness = createReadiness({ risk: "low" });
+  const intake = persistRequestContract(repoRoot, createContract({ readiness }));
+  const initialArtifact = readRequestArtifact(intake.requestPath);
+  const initialEvents = readRequestEvents(repoRoot, intake.requestId);
+
+  assert.throws(
+    () => propose(repoRoot, intake.requestId, {
+      proposal_summary: "Try to reshape the frozen handoff.",
+    }),
+    /already relay_ready; preflight intake interactions cannot mutate a frozen handoff/
+  );
+  assert.throws(
+    () => clarify(repoRoot, intake.requestId, {
+      readiness: createReadiness({ risk: "high" }),
+      question_text: "Should this still be editable after the handoff exists?",
+    }),
+    /already relay_ready; preflight intake interactions cannot mutate a frozen handoff/
+  );
+  assert.throws(
+    () => structure(repoRoot, intake.requestId, {
+      proposal_summary: "Restructure the frozen request.",
+    }),
+    /already relay_ready; preflight intake interactions cannot mutate a frozen handoff/
+  );
+
+  const currentArtifact = readRequestArtifact(intake.requestPath);
+  assert.equal(currentArtifact.data.next_action, initialArtifact.data.next_action);
+  assert.deepEqual(currentArtifact.data.readiness, initialArtifact.data.readiness);
+  assert.deepEqual(readRequestEvents(repoRoot, intake.requestId), initialEvents);
 });
 
 test("raw request can flow through intake persistence, dispatch linkage, and review prepare-only", () => {

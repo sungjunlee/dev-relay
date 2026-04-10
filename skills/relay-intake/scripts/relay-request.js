@@ -277,6 +277,20 @@ function getRequestRecord(repoRoot, requestId) {
   return { requestPath, artifact: readRequestArtifact(requestPath) };
 }
 
+function isRelayReadyRequestArtifact(artifact) {
+  return artifact.data?.state === "relay_ready" || Boolean(artifact.data?.paths?.handoff);
+}
+
+function assertPreflightMutable(requestId, requestRecord) {
+  if (!isRelayReadyRequestArtifact(requestRecord.artifact)) {
+    return;
+  }
+
+  throw new Error(
+    `request_id '${requestId}' is already relay_ready; preflight intake interactions cannot mutate a frozen handoff`
+  );
+}
+
 function resolveRequestLeafId(artifact, leafId) {
   if (leafId) return leafId;
   if (artifact.data?.leaf_id) return artifact.data.leaf_id;
@@ -356,7 +370,7 @@ function assertRequestArtifactsAbsent(requestId, artifactPaths) {
 }
 
 function appendInteractionEvent(repoRoot, requestId, eventData, nextAction, bootstrapData = {}) {
-  const requestRecord = ensureRequestArtifact(repoRoot, requestId, bootstrapData, nextAction);
+  const requestRecord = ensurePreflightRequestArtifact(repoRoot, requestId, bootstrapData, nextAction);
   const leafId = resolveRequestLeafId(requestRecord.artifact, eventData.leaf_id);
   const record = appendRequestEvent(repoRoot, requestId, { ...eventData, leaf_id: leafId });
 
@@ -568,6 +582,19 @@ function bootstrapRequestArtifact(repoRoot, requestId, data = {}, nextAction) {
 
 function ensureRequestArtifact(repoRoot, requestId, data = {}, nextAction) {
   return bootstrapRequestArtifact(repoRoot, requestId, data, nextAction);
+}
+
+function ensurePreflightRequestArtifact(repoRoot, requestId, data = {}, nextAction) {
+  const requestPath = getRequestPath(repoRoot, requestId);
+  if (!fs.existsSync(requestPath)) {
+    return bootstrapRequestArtifact(repoRoot, requestId, data, nextAction);
+  }
+
+  const requestRecord = getRequestRecord(repoRoot, requestId);
+  assertPreflightMutable(requestId, requestRecord);
+  const bootstrapData = normalizeRequestBootstrapData(data);
+  validateBootstrapData(repoRoot, requestId, requestRecord, bootstrapData);
+  return applyBootstrapDataPatch(repoRoot, requestId, requestRecord, bootstrapData);
 }
 
 function propose(repoRoot, requestId, data = {}) {
