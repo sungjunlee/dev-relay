@@ -98,6 +98,72 @@ function createReadiness(overrides = {}) {
   };
 }
 
+function chooseRelayRoute({
+  sourceKind,
+  leafCount,
+  hasStableReviewAnchor,
+  requiresClarification = false,
+  requiresDecomposition = false,
+}) {
+  return sourceKind !== "raw_text"
+    && leafCount === 1
+    && hasStableReviewAnchor
+    && !requiresClarification
+    && !requiresDecomposition
+    ? "bypass_intake"
+    : "invoke_intake";
+}
+
+function invokeRelayFrontDoor(repoRoot, {
+  contract,
+  hasStableReviewAnchor,
+  requiresClarification = false,
+  requiresDecomposition = false,
+  requestId,
+}) {
+  const leafCount = Array.isArray(contract.handoffs)
+    ? contract.handoffs.length
+    : (contract.handoff ? 1 : 0);
+  const route = chooseRelayRoute({
+    sourceKind: contract.source?.kind || "raw_text",
+    leafCount,
+    hasStableReviewAnchor,
+    requiresClarification,
+    requiresDecomposition,
+  });
+
+  return {
+    route,
+    downstreamChain: route === "invoke_intake"
+      ? ["relay-intake", "relay-plan", "relay-dispatch"]
+      : ["relay-plan", "relay-dispatch"],
+    ...persistRequestContract(repoRoot, contract, requestId ? { requestId } : {}),
+  };
+}
+
+function proposeDelegateFallback(repoRoot, requestId, {
+  requestText,
+  hostCapabilities = {},
+}) {
+  if (hostCapabilities.gstack || hostCapabilities.superpowers) {
+    throw new Error("delegate fallback only applies when gstack/superpowers are unavailable");
+  }
+
+  return {
+    fallback: "portable_plain_text",
+    ...structure(repoRoot, requestId, {
+      source_kind: "raw_text",
+      request_text: requestText,
+      proposal_summary: "Delegate the shared middleware change and keep the local tests here.",
+      proposal_kind: "structure",
+      proposal_text: "A. Delegate middleware ownership\nB. Keep the work local\nC. Other + free text",
+      response_options: ["A. Delegate", "B. Keep local", "C. Other + free text"],
+      structure_kind: "delegate",
+      reason: "gstack/superpowers are unavailable, so fall back to the portable plain-text protocol.",
+    }),
+  };
+}
+
 function writeFakeCodex(binDir) {
   const codexPath = path.join(binDir, "codex");
   fs.writeFileSync(codexPath, `#!/usr/bin/env node
@@ -529,21 +595,20 @@ test("scenario: portable A/B/C plain-text interaction works without host-specifi
   assert.equal(readRequest(repoRoot, requestId).data.next_action, "review_answer");
 });
 
-test("scenario: delegate fallback keeps structure events portable", () => {
+test("scenario: delegate fallback uses the portable plain-text path when gstack/superpowers are unavailable", () => {
   const { repoRoot } = setupRepo();
   const requestId = "req-20260409141414000";
   const requestText = "Coordinate the shared auth middleware fix with the platform team.";
+  const hostCapabilities = {
+    gstack: false,
+    superpowers: false,
+  };
 
-  const delegated = structure(repoRoot, requestId, {
-    source_kind: "raw_text",
-    request_text: requestText,
-    proposal_summary: "Delegate the shared middleware change and keep the local tests here.",
-    proposal_kind: "structure",
-    proposal_text: "A. Delegate middleware ownership\nB. Keep the work local\nC. Other + free text",
-    response_options: ["A. Delegate", "B. Keep local", "C. Other + free text"],
-    structure_kind: "delegate",
-    reason: "The shared middleware is owned by another team.",
+  const delegated = proposeDelegateFallback(repoRoot, requestId, {
+    requestText,
+    hostCapabilities,
   });
+  assert.equal(delegated.fallback, "portable_plain_text");
   assert.equal(delegated.event, "proposal_presented");
   assert.equal(delegated.structure_kind, "delegate");
 
@@ -556,22 +621,29 @@ test("scenario: delegate fallback keeps structure events portable", () => {
 
   const events = readRequestEvents(repoRoot, requestId);
   assert.equal(events[1].structure_kind, "delegate");
+  assert.deepEqual(events[1].response_options, ["A. Delegate", "B. Keep local", "C. Other + free text"]);
+  assert.match(events[1].reason, /gstack\/superpowers are unavailable/);
   assert.deepEqual(
     readEventNames(repoRoot, requestId),
     ["request_persisted", "proposal_presented", "proposal_accepted"]
   );
 });
 
-test("scenario: issue-first fast path persists a relay-ready issue contract without intake overhead", () => {
+test("scenario: /relay keeps issue-first users on the fast path without intake overhead", () => {
   const { repoRoot } = setupRepo();
   const readiness = createReadiness({ risk: "low" });
-  const result = persistRequestContract(repoRoot, createContract({
-    source: { kind: "github_issue" },
-    request_text: "Issue #132: Fix the login redirect loop for authenticated users.",
-    readiness,
-  }));
+  const result = invokeRelayFrontDoor(repoRoot, {
+    hasStableReviewAnchor: true,
+    contract: createContract({
+      source: { kind: "github_issue" },
+      request_text: "Issue #132: Fix the login redirect loop for authenticated users.",
+      readiness,
+    }),
+  });
   const requestArtifact = readRequestArtifact(result.requestPath);
 
+  assert.equal(result.route, "bypass_intake");
+  assert.deepEqual(result.downstreamChain, ["relay-plan", "relay-dispatch"]);
   assert.equal(requestArtifact.data.state, "relay_ready");
   assert.equal(requestArtifact.data.source.kind, "github_issue");
   assert.equal(requestArtifact.data.next_action, "relay_plan");
@@ -829,9 +901,12 @@ test("preflight helpers reject mutations after relay-ready persistence", () => {
   assert.deepEqual(readRequestEvents(repoRoot, intake.requestId), initialEvents);
 });
 
-test("raw request can flow through intake persistence, dispatch linkage, and review prepare-only", () => {
+test("scenario: /relay auto-routes raw text through intake, then continues to dispatch and review linkage", () => {
   const { repoRoot, relayHome } = setupRepo();
-  const intake = persistRequestContract(repoRoot, createContract());
+  const intake = invokeRelayFrontDoor(repoRoot, {
+    contract: createContract(),
+    hasStableReviewAnchor: false,
+  });
   const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
   writeFakeCodex(binDir);
   const env = {
@@ -856,6 +931,12 @@ test("raw request can flow through intake persistence, dispatch linkage, and rev
   });
 
   const dispatchResult = JSON.parse(dispatchStdout);
+  assert.equal(intake.route, "invoke_intake");
+  assert.deepEqual(intake.downstreamChain, ["relay-intake", "relay-plan", "relay-dispatch"]);
+  assert.deepEqual(
+    readEventNames(repoRoot, intake.requestId),
+    ["request_persisted", "relay_ready_handoff_persisted"]
+  );
   assert.equal(dispatchResult.runState, "review_pending");
 
   const manifest = readManifest(dispatchResult.manifestPath).data;
