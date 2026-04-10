@@ -1,7 +1,7 @@
 ---
 name: relay-intake
 argument-hint: "[raw request or ambiguous task description]"
-description: Shape a raw request into a single relay-ready leaf contract with a frozen Done Criteria snapshot. Use before relay-plan when the task is ambiguous, oversized, or missing a stable review anchor.
+description: Shape a raw request into one-or-more relay-ready leaf contracts with frozen Done Criteria snapshots. Use before relay-plan when the task is ambiguous, oversized, or missing a stable review anchor.
 compatibility: Requires git and Node.js 18+.
 metadata:
   related-skills: "relay, relay-plan, relay-dispatch, relay-review"
@@ -23,13 +23,11 @@ Bypass intake only for a single relay-ready task with a trustworthy review ancho
 
 ## Output Contract
 
-This slice supports **single-leaf only**.
-
 Persist all of the following under `~/.relay/requests/<repo-slug>/<request-id>/`:
 - request artifact: `../<request-id>.md`
 - raw request: `raw-request.md`
-- relay-ready handoff: `relay-ready/<leaf-id>.md`
-- frozen Done Criteria: `done-criteria/<leaf-id>.md`
+- relay-ready handoffs: `relay-ready/<leaf-id>.md`
+- frozen Done Criteria snapshots: `done-criteria/<leaf-id>.md`
 - append-only events: `events.jsonl`
 
 The request artifact frontmatter may also carry:
@@ -39,34 +37,35 @@ The request artifact frontmatter may also carry:
 - `readiness.verifiability`
 - `readiness.risk`
 - `next_action`
+- `leaf_count`
+- `paths.handoff` + `paths.done_criteria` for single-leaf requests
+- `paths.handoffs` + `paths.done_criteria` for multi-leaf requests
+- `decomposition.leaf_order`
+- `decomposition.dependencies`
 
-The normalized handoff must contain:
+Each normalized handoff must contain:
 - `request_id`
 - `leaf_id`
 - `title`
 - `goal`
+- `order`
+- `depends_on`
 - `in_scope`
 - `out_of_scope`
 - `assumptions`
 - `done_criteria_path`
 - `escalation_conditions`
 
-If the request decomposes into multiple leaves, stop with:
-- `TODO(#129): multi-leaf relay-intake handoff is not implemented yet`
-
 ## Persistence Step
 
 Write a JSON contract file with:
 - `source.kind`
 - `request_text`
-- `handoff.leaf_id`
-- `handoff.title`
-- `handoff.goal`
-- `handoff.in_scope`
-- `handoff.out_of_scope`
-- `handoff.assumptions`
-- `handoff.done_criteria_markdown`
-- `handoff.escalation_conditions`
+- either `handoff` for single-leaf or `handoffs[]` for multi-leaf
+- per leaf: `leaf_id`, `title`, `goal`, `order`
+- optional per leaf: `depends_on`
+- per leaf: `in_scope`, `out_of_scope`, `assumptions`
+- per leaf: `done_criteria_markdown`, `escalation_conditions`
 
 Persist it with:
 
@@ -105,6 +104,7 @@ ${CLAUDE_SKILL_DIR}/../relay-dispatch/scripts/dispatch.js . \
   --done-criteria-file <done-criteria-path>
 ```
 
-3. let `relay-review` read the frozen snapshot from the run manifest anchor
+3. for multi-leaf requests, dispatch leaves in `decomposition.leaf_order`, respecting `depends_on`
+4. let `relay-review` read the frozen snapshot from the run manifest anchor
 
 Do not create a second lifecycle. Intake stops once the relay-ready contract is persisted.

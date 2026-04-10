@@ -54,6 +54,39 @@ function createContract(overrides = {}) {
   };
 }
 
+function createMultiLeafContract(overrides = {}) {
+  const baseHandoff = createContract().handoff;
+  return {
+    source: { kind: "raw_text" },
+    request_text: "Fix the login redirect loop and backfill auth redirect coverage.",
+    handoffs: [
+      {
+        ...baseHandoff,
+        leaf_id: "leaf-02",
+        title: "Backfill auth redirect coverage",
+        goal: "Add regression coverage for authenticated and guest redirects",
+        order: 2,
+        depends_on: ["leaf-01"],
+        in_scope: ["Add redirect regression coverage", "Cover guest and authenticated states"],
+        out_of_scope: ["Changing auth providers"],
+        assumptions: ["The existing auth test harness can simulate both states"],
+        done_criteria_markdown: "# Done Criteria\n\n- Redirect regressions are covered for guests and authenticated users\n",
+        escalation_conditions: ["The auth test harness cannot simulate both states"],
+      },
+      {
+        ...baseHandoff,
+        leaf_id: "leaf-01",
+        title: "Fix login redirect loop",
+        goal: "Stop authenticated users from bouncing back to /login",
+        order: 1,
+        depends_on: [],
+        done_criteria_markdown: "# Done Criteria\n\n- Authenticated users stay off /login\n- Guests still reach /login\n",
+      },
+    ],
+    ...overrides,
+  };
+}
+
 function createReadiness(overrides = {}) {
   return {
     clarity: "high",
@@ -94,6 +127,10 @@ test("persistRequestContract writes request artifact, relay-ready handoff, done 
   assert.ok(fs.existsSync(result.rawRequestPath));
   assert.ok(fs.existsSync(result.handoffPath));
   assert.ok(fs.existsSync(result.doneCriteriaPath));
+  assert.equal(result.leafCount, 1);
+  assert.deepEqual(result.leafIds, ["leaf-01"]);
+  assert.deepEqual(result.handoffPaths, [result.handoffPath]);
+  assert.deepEqual(result.doneCriteriaPaths, [result.doneCriteriaPath]);
 
   const requestArtifact = readRequestArtifact(result.requestPath);
   assert.equal(requestArtifact.data.request_id, result.requestId);
@@ -111,6 +148,8 @@ test("persistRequestContract writes request artifact, relay-ready handoff, done 
   const handoffArtifact = readRequestArtifact(result.handoffPath);
   assert.equal(handoffArtifact.data.request_id, result.requestId);
   assert.equal(handoffArtifact.data.leaf_id, "leaf-01");
+  assert.equal(handoffArtifact.data.order, 1);
+  assert.deepEqual(handoffArtifact.data.depends_on, []);
   assert.equal(handoffArtifact.data.done_criteria_path, result.doneCriteriaPath);
   assert.match(handoffArtifact.body, /In Scope/);
   assert.match(handoffArtifact.body, /Update the redirect guard/);
@@ -147,6 +186,27 @@ test("persist-request CLI persists the single-leaf request bundle", () => {
   assert.ok(fs.existsSync(result.doneCriteriaPath));
 });
 
+test("persist-request CLI returns multi-leaf paths in execution order", () => {
+  const { repoRoot } = setupRepo();
+  const contractPath = path.join(repoRoot, "multi-contract.json");
+  fs.writeFileSync(contractPath, `${JSON.stringify(createMultiLeafContract(), null, 2)}\n`, "utf-8");
+
+  const stdout = execFileSync("node", [
+    PERSIST_SCRIPT,
+    "--repo", repoRoot,
+    "--contract-file", contractPath,
+    "--json",
+  ], { encoding: "utf-8" });
+
+  const result = JSON.parse(stdout);
+  assert.equal(result.leafCount, 2);
+  assert.deepEqual(result.leafIds, ["leaf-01", "leaf-02"]);
+  assert.equal(result.handoffPath, undefined);
+  assert.equal(result.doneCriteriaPath, undefined);
+  assert.equal(result.handoffPaths.length, 2);
+  assert.equal(result.doneCriteriaPaths.length, 2);
+});
+
 test("persistRequestContract stores readiness dimensions in request frontmatter when provided", () => {
   const { repoRoot } = setupRepo();
   const readiness = createReadiness({ risk: "low" });
@@ -174,19 +234,79 @@ test("persistRequestContract stores readiness dimensions from handoff.readiness"
   assert.deepEqual(result.readiness, readiness);
 });
 
-test("persistRequestContract rejects multi-leaf handoff input with an explicit #129 TODO", () => {
+test("persistRequestContract persists multi-leaf handoffs with ordering, dependencies, and per-leaf artifacts", () => {
   const { repoRoot } = setupRepo();
-  const contract = createContract({
-    handoff: undefined,
+  const result = persistRequestContract(repoRoot, createMultiLeafContract());
+
+  assert.equal(result.leafCount, 2);
+  assert.equal(result.leafId, undefined);
+  assert.equal(result.handoffPath, undefined);
+  assert.equal(result.doneCriteriaPath, undefined);
+  assert.deepEqual(result.leafIds, ["leaf-01", "leaf-02"]);
+  assert.equal(result.handoffPaths.length, 2);
+  assert.equal(result.doneCriteriaPaths.length, 2);
+  for (const artifactPath of [...result.handoffPaths, ...result.doneCriteriaPaths]) {
+    assert.ok(fs.existsSync(artifactPath));
+  }
+
+  const requestArtifact = readRequestArtifact(result.requestPath);
+  assert.equal(requestArtifact.data.request_id, result.requestId);
+  assert.equal(requestArtifact.data.state, "relay_ready");
+  assert.equal(requestArtifact.data.leaf_id, undefined);
+  assert.equal(requestArtifact.data.leaf_count, 2);
+  assert.deepEqual(requestArtifact.data.paths.handoffs, result.handoffPaths);
+  assert.deepEqual(requestArtifact.data.paths.done_criteria, result.doneCriteriaPaths);
+  assert.equal(requestArtifact.data.paths.handoff, undefined);
+  assert.deepEqual(requestArtifact.data.decomposition.leaf_order, ["leaf-01", "leaf-02"]);
+  assert.deepEqual(requestArtifact.data.decomposition.dependencies, {
+    "leaf-02": ["leaf-01"],
+  });
+  assert.match(requestArtifact.body, /leaf-01 \[order 1\] Fix login redirect loop/);
+  assert.match(requestArtifact.body, /leaf-02 \[order 2\] Backfill auth redirect coverage/);
+  assert.match(requestArtifact.body, /depends_on: leaf-01/);
+  assert.match(requestArtifact.body, new RegExp(`${result.requestId}/relay-ready/leaf-01\\.md`));
+  assert.match(requestArtifact.body, new RegExp(`${result.requestId}/relay-ready/leaf-02\\.md`));
+  assert.match(requestArtifact.body, new RegExp(`${result.requestId}/done-criteria/leaf-01\\.md`));
+  assert.match(requestArtifact.body, new RegExp(`${result.requestId}/done-criteria/leaf-02\\.md`));
+
+  const firstHandoff = readRequestArtifact(result.handoffPaths[0]);
+  assert.equal(firstHandoff.data.leaf_id, "leaf-01");
+  assert.equal(firstHandoff.data.order, 1);
+  assert.deepEqual(firstHandoff.data.depends_on, []);
+  assert.equal(firstHandoff.data.done_criteria_path, result.doneCriteriaPaths[0]);
+
+  const secondHandoff = readRequestArtifact(result.handoffPaths[1]);
+  assert.equal(secondHandoff.data.leaf_id, "leaf-02");
+  assert.equal(secondHandoff.data.order, 2);
+  assert.deepEqual(secondHandoff.data.depends_on, ["leaf-01"]);
+  assert.equal(secondHandoff.data.done_criteria_path, result.doneCriteriaPaths[1]);
+
+  const firstDoneCriteria = fs.readFileSync(result.doneCriteriaPaths[0], "utf-8");
+  const secondDoneCriteria = fs.readFileSync(result.doneCriteriaPaths[1], "utf-8");
+  assert.match(firstDoneCriteria, /Authenticated users stay off \/login/);
+  assert.match(secondDoneCriteria, /Redirect regressions are covered/);
+
+  const events = readRequestEvents(repoRoot, result.requestId);
+  assert.equal(events.length, 3);
+  assert.equal(events[0].event, "request_persisted");
+  assert.deepEqual(
+    events.slice(1).map((event) => event.leaf_id),
+    ["leaf-01", "leaf-02"]
+  );
+});
+
+test("persistRequestContract rejects duplicate leaf IDs within a multi-leaf request", () => {
+  const { repoRoot } = setupRepo();
+  const contract = createMultiLeafContract({
     handoffs: [
-      createContract().handoff,
-      { ...createContract().handoff, leaf_id: "leaf-02", title: "Second leaf" },
+      { ...createMultiLeafContract().handoffs[0], leaf_id: "leaf-01" },
+      createMultiLeafContract().handoffs[1],
     ],
   });
 
   assert.throws(
     () => persistRequestContract(repoRoot, contract),
-    /TODO\(#129\): multi-leaf relay-intake handoff is not implemented yet/
+    /leaf_id 'leaf-01' must be unique within a request/
   );
 });
 
