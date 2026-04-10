@@ -11,6 +11,7 @@ const {
   answerQuestion,
   clarify,
   editProposal,
+  getRequestPath,
   propose,
   readRequestEvents,
   persistRequestContract,
@@ -157,6 +158,22 @@ test("persistRequestContract stores readiness dimensions in request frontmatter 
   assert.deepEqual(result.readiness, readiness);
 });
 
+test("persistRequestContract stores readiness dimensions from handoff.readiness", () => {
+  const { repoRoot } = setupRepo();
+  const readiness = createReadiness({ clarity: "medium" });
+
+  const result = persistRequestContract(repoRoot, createContract({
+    handoff: {
+      ...createContract().handoff,
+      readiness,
+    },
+  }));
+  const requestArtifact = readRequestArtifact(result.requestPath);
+
+  assert.deepEqual(requestArtifact.data.readiness, readiness);
+  assert.deepEqual(result.readiness, readiness);
+});
+
 test("persistRequestContract rejects multi-leaf handoff input with an explicit #129 TODO", () => {
   const { repoRoot } = setupRepo();
   const contract = createContract({
@@ -192,6 +209,77 @@ test("persistRequestContract rejects request_id collisions before overwriting fr
 
   assert.equal(fs.readFileSync(first.doneCriteriaPath, "utf-8"), originalDoneCriteria);
   assert.equal(readRequestEvents(repoRoot, requestId).length, 2);
+});
+
+test("preflight helpers bootstrap a non-ready request artifact before relay-ready persistence", () => {
+  const { repoRoot } = setupRepo();
+  const requestId = "req-20260409050505000";
+  const readiness = createReadiness({ dependency: "external" });
+
+  const proposal = propose(repoRoot, requestId, {
+    source_kind: "raw_text",
+    request_text: createContract().request_text,
+    readiness,
+    proposal_summary: "Keep the work as a single auth redirect leaf.",
+    proposal_text: "A. Update the guard\nB. Add redirect tests\nC. Free text",
+    response_options: ["A", "B", "C + free text"],
+  });
+  assert.equal(proposal.event, "proposal_presented");
+  assert.equal(proposal.leaf_id, null);
+
+  const question = clarify(repoRoot, requestId, {
+    question_text: "Should guest deep links still route to /login?",
+    response_options: ["A. Yes", "B. No", "C. Other"],
+  });
+  assert.equal(question.event, "question_asked");
+  assert.equal(question.leaf_id, null);
+
+  const structured = structure(repoRoot, requestId, {
+    proposal_summary: "Restructure the intake around one guard change plus tests.",
+    proposal_kind: "structure",
+    structure_kind: "decompose",
+  });
+  assert.equal(structured.event, "proposal_presented");
+  assert.equal(structured.leaf_id, null);
+
+  const requestArtifact = readRequestArtifact(getRequestPath(repoRoot, requestId));
+  assert.equal(requestArtifact.data.state, "intake");
+  assert.equal(requestArtifact.data.leaf_id, undefined);
+  assert.equal(requestArtifact.data.next_action, "await_proposal_response");
+  assert.equal(requestArtifact.data.paths.handoff, undefined);
+  assert.deepEqual(requestArtifact.data.readiness, readiness);
+  assert.equal(
+    fs.readFileSync(requestArtifact.data.paths.raw_request, "utf-8"),
+    `${createContract().request_text}\n`
+  );
+
+  const preflightEvents = readRequestEvents(repoRoot, requestId);
+  assert.deepEqual(
+    preflightEvents.map((event) => event.event),
+    ["request_persisted", "proposal_presented", "question_asked", "proposal_presented"]
+  );
+
+  const intake = persistRequestContract(repoRoot, createContract(), { requestId });
+  const promotedArtifact = readRequestArtifact(intake.requestPath);
+
+  assert.equal(promotedArtifact.data.state, "relay_ready");
+  assert.equal(promotedArtifact.data.leaf_id, "leaf-01");
+  assert.equal(promotedArtifact.data.next_action, "relay_plan");
+  assert.equal(promotedArtifact.data.paths.handoff, intake.handoffPath);
+  assert.deepEqual(promotedArtifact.data.readiness, readiness);
+  assert.deepEqual(intake.readiness, readiness);
+
+  const events = readRequestEvents(repoRoot, requestId);
+  assert.deepEqual(
+    events.map((event) => event.event),
+    [
+      "request_persisted",
+      "proposal_presented",
+      "question_asked",
+      "proposal_presented",
+      "relay_ready_handoff_persisted",
+    ]
+  );
 });
 
 test("preflight actions append typed events and update next_action without a second state machine", () => {
