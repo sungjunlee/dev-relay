@@ -32,6 +32,14 @@ Persist all of the following under `~/.relay/requests/<repo-slug>/<request-id>/`
 - frozen Done Criteria: `done-criteria/<leaf-id>.md`
 - append-only events: `events.jsonl`
 
+The request artifact frontmatter may also carry:
+- `readiness.clarity`
+- `readiness.granularity`
+- `readiness.dependency`
+- `readiness.verifiability`
+- `readiness.risk`
+- `next_action`
+
 The normalized handoff must contain:
 - `request_id`
 - `leaf_id`
@@ -65,6 +73,22 @@ Persist it with:
 ```bash
 ${CLAUDE_SKILL_DIR}/scripts/persist-request.js --repo . --contract-file /tmp/relay-intake-contract.json --json
 ```
+
+Optional contract fields:
+- `readiness.clarity`: `high | medium | low`
+- `readiness.granularity`: `single_task | multi_task | unclear`
+- `readiness.dependency`: `none | internal | external`
+- `readiness.verifiability`: `high | medium | low`
+- `readiness.risk`: `low | medium | high`
+
+Preflight shaping stays append-only in `events.jsonl`. Use the portable intake event types:
+- `proposal_presented`
+- `question_asked`
+- `question_answered`
+- `proposal_accepted`
+- `proposal_edited`
+
+Track the immediate follow-up as `next_action` on the request artifact. Do not create a second state machine for intake.
 
 ## Downstream Handoff
 

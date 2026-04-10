@@ -9,6 +9,24 @@ const {
   writeManifest,
 } = require("../../relay-dispatch/scripts/relay-manifest");
 
+const READINESS_LEVELS = {
+  clarity: new Set(["high", "medium", "low"]),
+  granularity: new Set(["single_task", "multi_task", "unclear"]),
+  dependency: new Set(["none", "internal", "external"]),
+  verifiability: new Set(["high", "medium", "low"]),
+  risk: new Set(["low", "medium", "high"]),
+};
+
+const DEFAULT_NEXT_ACTIONS = {
+  acceptProposal: "relay_plan",
+  answerQuestion: "review_answer",
+  clarify: "await_answer",
+  editProposal: "review_proposal_edits",
+  persist: "relay_plan",
+  propose: "await_proposal_response",
+  structure: "await_proposal_response",
+};
+
 function nowIso() {
   return new Date().toISOString();
 }
@@ -76,6 +94,60 @@ function normalizeStringArray(value, fieldName) {
   });
 }
 
+function normalizeOptionalStringArray(value, fieldName) {
+  if (value === undefined) return undefined;
+  return normalizeStringArray(value, fieldName);
+}
+
+function normalizeRequiredString(value, fieldName) {
+  if (typeof value !== "string" || !value.trim()) {
+    throw new Error(`${fieldName} is required`);
+  }
+  return value.trim();
+}
+
+function normalizeOptionalString(value, fieldName) {
+  if (value === undefined || value === null) return undefined;
+  return normalizeRequiredString(value, fieldName);
+}
+
+function normalizeOptionalBoolean(value, fieldName) {
+  if (value === undefined) return undefined;
+  if (typeof value !== "boolean") {
+    throw new Error(`${fieldName} must be a boolean`);
+  }
+  return value;
+}
+
+function normalizeEnum(value, values, fieldName) {
+  const normalized = normalizeRequiredString(value, fieldName);
+  if (!values.has(normalized)) {
+    throw new Error(`${fieldName} must be one of: ${[...values].join(", ")}`);
+  }
+  return normalized;
+}
+
+function normalizeReadiness(readiness) {
+  if (readiness === undefined) return undefined;
+  if (!readiness || typeof readiness !== "object" || Array.isArray(readiness)) {
+    throw new Error("readiness must be an object");
+  }
+
+  return Object.fromEntries(
+    Object.entries(READINESS_LEVELS).map(([field, values]) => [
+      field,
+      normalizeEnum(readiness[field], values, `readiness.${field}`),
+    ])
+  );
+}
+
+function normalizeNextAction(value, fallback) {
+  if (value === undefined || value === null || value === "") {
+    return fallback;
+  }
+  return normalizeRequiredString(value, "next_action");
+}
+
 function normalizeSingleLeafContract(contract) {
   if (!contract || typeof contract !== "object") {
     throw new Error("contract must be an object");
@@ -115,6 +187,7 @@ function normalizeSingleLeafContract(contract) {
       kind: contract.source.kind.trim(),
     },
     requestText: contract.request_text.trim(),
+    readiness: normalizeReadiness(contract.readiness),
     handoff: {
       leafId: handoff.leaf_id.trim(),
       title: handoff.title.trim(),
@@ -177,6 +250,42 @@ function buildHandoffBody(handoff) {
   ].join("\n");
 }
 
+function pickDefinedEntries(object) {
+  return Object.fromEntries(Object.entries(object).filter(([, value]) => value !== undefined));
+}
+
+function getRequestRecord(repoRoot, requestId) {
+  const requestPath = getRequestPath(repoRoot, requestId);
+  if (!fs.existsSync(requestPath)) {
+    throw new Error(`request artifact not found: ${requestPath}`);
+  }
+  return { requestPath, artifact: readRequestArtifact(requestPath) };
+}
+
+function resolveRequestLeafId(artifact, leafId) {
+  if (leafId) return leafId;
+  if (artifact.data?.leaf_id) return artifact.data.leaf_id;
+
+  const handoffPath = artifact.data?.paths?.handoff;
+  if (!handoffPath || !fs.existsSync(handoffPath)) {
+    throw new Error("leaf_id is required");
+  }
+
+  return normalizeRequiredString(readRequestArtifact(handoffPath).data?.leaf_id, "leaf_id");
+}
+
+function updateRequestArtifact(repoRoot, requestId, patch, requestRecord = getRequestRecord(repoRoot, requestId)) {
+  writeManifest(requestRecord.requestPath, {
+    ...requestRecord.artifact.data,
+    ...patch,
+    timestamps: {
+      ...(requestRecord.artifact.data.timestamps || {}),
+      updated_at: nowIso(),
+    },
+  }, requestRecord.artifact.body);
+  return readRequestArtifact(requestRecord.requestPath);
+}
+
 function appendRequestEvent(repoRoot, requestId, eventData) {
   if (!requestId) {
     throw new Error("request_id is required to append a relay-intake event");
@@ -187,6 +296,7 @@ function appendRequestEvent(repoRoot, requestId, eventData) {
 
   const { eventsPath } = ensureRequestLayout(repoRoot, requestId);
   const record = {
+    ...pickDefinedEntries(eventData),
     ts: eventData.ts || nowIso(),
     event: eventData.event,
     actor: getActorName(repoRoot),
@@ -227,6 +337,122 @@ function assertRequestArtifactsAbsent(requestId, artifactPaths) {
   }
 }
 
+function appendInteractionEvent(repoRoot, requestId, eventData, nextAction) {
+  const requestRecord = getRequestRecord(repoRoot, requestId);
+  const leafId = resolveRequestLeafId(requestRecord.artifact, eventData.leaf_id);
+  const record = appendRequestEvent(repoRoot, requestId, { ...eventData, leaf_id: leafId });
+
+  if (nextAction !== undefined) {
+    updateRequestArtifact(repoRoot, requestId, { next_action: nextAction }, requestRecord);
+  }
+
+  return record;
+}
+
+function normalizeProposalFields(data = {}, fieldName = "proposal_summary") {
+  return pickDefinedEntries({
+    leaf_id: normalizeOptionalString(data.leaf_id, "leaf_id"),
+    proposal_summary: normalizeRequiredString(data[fieldName], fieldName),
+    proposal_text: normalizeOptionalString(data.proposal_text, "proposal_text"),
+    proposal_kind: normalizeOptionalString(data.proposal_kind, "proposal_kind"),
+    response_options: normalizeOptionalStringArray(data.response_options, "response_options"),
+    reason: normalizeOptionalString(data.reason, "reason"),
+  });
+}
+
+function normalizeQuestionFields(data = {}) {
+  return pickDefinedEntries({
+    leaf_id: normalizeOptionalString(data.leaf_id, "leaf_id"),
+    question_text: normalizeRequiredString(data.question_text, "question_text"),
+    response_options: normalizeOptionalStringArray(data.response_options, "response_options"),
+    reason: normalizeOptionalString(data.reason, "reason"),
+  });
+}
+
+function normalizeQuestionAnswerFields(data = {}) {
+  return pickDefinedEntries({
+    leaf_id: normalizeOptionalString(data.leaf_id, "leaf_id"),
+    question_text: normalizeRequiredString(data.question_text, "question_text"),
+    answer_text: normalizeRequiredString(data.answer_text, "answer_text"),
+    answer_choice: normalizeOptionalString(data.answer_choice, "answer_choice"),
+    reason: normalizeOptionalString(data.reason, "reason"),
+  });
+}
+
+function normalizeProposalAcceptanceFields(data = {}) {
+  return pickDefinedEntries({
+    leaf_id: normalizeOptionalString(data.leaf_id, "leaf_id"),
+    proposal_summary: normalizeRequiredString(data.proposal_summary, "proposal_summary"),
+    acceptance_note: normalizeOptionalString(data.acceptance_note, "acceptance_note"),
+    accepted_with_edits: normalizeOptionalBoolean(data.accepted_with_edits, "accepted_with_edits"),
+    reason: normalizeOptionalString(data.reason, "reason"),
+  });
+}
+
+function normalizeProposalEditFields(data = {}) {
+  return pickDefinedEntries({
+    leaf_id: normalizeOptionalString(data.leaf_id, "leaf_id"),
+    proposal_summary: normalizeRequiredString(data.proposal_summary, "proposal_summary"),
+    edit_summary: normalizeRequiredString(data.edit_summary, "edit_summary"),
+    proposal_text: normalizeOptionalString(data.proposal_text, "proposal_text"),
+    reason: normalizeOptionalString(data.reason, "reason"),
+  });
+}
+
+function propose(repoRoot, requestId, data = {}) {
+  const nextAction = normalizeNextAction(data.next_action, DEFAULT_NEXT_ACTIONS.propose);
+  return appendInteractionEvent(repoRoot, requestId, {
+    event: "proposal_presented",
+    ...normalizeProposalFields(data),
+  }, nextAction);
+}
+
+function clarify(repoRoot, requestId, data = {}) {
+  const nextAction = normalizeNextAction(data.next_action, DEFAULT_NEXT_ACTIONS.clarify);
+  return appendInteractionEvent(repoRoot, requestId, {
+    event: "question_asked",
+    ...normalizeQuestionFields(data),
+  }, nextAction);
+}
+
+function structure(repoRoot, requestId, data = {}) {
+  const nextAction = normalizeNextAction(data.next_action, DEFAULT_NEXT_ACTIONS.structure);
+  const event = data.edits_existing_proposal ? "proposal_edited" : "proposal_presented";
+  const details = data.edits_existing_proposal
+    ? normalizeProposalEditFields(data)
+    : normalizeProposalFields(data);
+
+  return appendInteractionEvent(repoRoot, requestId, {
+    event,
+    structure_kind: normalizeOptionalString(data.structure_kind, "structure_kind") || "restructure",
+    ...details,
+  }, nextAction);
+}
+
+function answerQuestion(repoRoot, requestId, data = {}) {
+  const nextAction = normalizeNextAction(data.next_action, DEFAULT_NEXT_ACTIONS.answerQuestion);
+  return appendInteractionEvent(repoRoot, requestId, {
+    event: "question_answered",
+    ...normalizeQuestionAnswerFields(data),
+  }, nextAction);
+}
+
+function acceptProposal(repoRoot, requestId, data = {}) {
+  const nextAction = normalizeNextAction(data.next_action, DEFAULT_NEXT_ACTIONS.acceptProposal);
+  return appendInteractionEvent(repoRoot, requestId, {
+    event: "proposal_accepted",
+    ...normalizeProposalAcceptanceFields(data),
+  }, nextAction);
+}
+
+function editProposal(repoRoot, requestId, data = {}) {
+  const nextAction = normalizeNextAction(data.next_action, DEFAULT_NEXT_ACTIONS.editProposal);
+  return appendInteractionEvent(repoRoot, requestId, {
+    event: "proposal_edited",
+    ...normalizeProposalEditFields(data),
+  }, nextAction);
+}
+
 function persistRequestContract(repoRoot, contract, options = {}) {
   const normalized = normalizeSingleLeafContract(contract);
   const requestId = options.requestId || createRequestId();
@@ -261,9 +487,12 @@ function persistRequestContract(repoRoot, contract, options = {}) {
   writeManifest(layout.requestPath, {
     request_id: requestId,
     state: "relay_ready",
+    leaf_id: normalized.handoff.leafId,
+    next_action: DEFAULT_NEXT_ACTIONS.persist,
     source: {
       kind: normalized.source.kind,
     },
+    ...(normalized.readiness ? { readiness: normalized.readiness } : {}),
     leaf_count: 1,
     paths: {
       raw_request: layout.rawRequestPath,
@@ -305,14 +534,20 @@ function persistRequestContract(repoRoot, contract, options = {}) {
     handoffPath,
     doneCriteriaPath,
     leafId: normalized.handoff.leafId,
+    nextAction: DEFAULT_NEXT_ACTIONS.persist,
+    readiness: normalized.readiness || null,
     title: normalized.handoff.title,
     sourceKind: normalized.source.kind,
   };
 }
 
 module.exports = {
+  acceptProposal,
+  answerQuestion,
   appendRequestEvent,
+  clarify,
   createRequestId,
+  editProposal,
   ensureRequestLayout,
   getRequestDir,
   getRequestEventsPath,
@@ -321,6 +556,8 @@ module.exports = {
   getRequestsDir,
   normalizeSingleLeafContract,
   persistRequestContract,
+  propose,
   readRequestArtifact,
   readRequestEvents,
+  structure,
 };

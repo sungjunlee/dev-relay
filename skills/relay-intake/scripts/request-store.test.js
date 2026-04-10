@@ -6,7 +6,17 @@ const os = require("os");
 const path = require("path");
 
 const { readManifest } = require("../../relay-dispatch/scripts/relay-manifest");
-const { readRequestEvents, persistRequestContract, readRequestArtifact } = require("./relay-request");
+const {
+  acceptProposal,
+  answerQuestion,
+  clarify,
+  editProposal,
+  propose,
+  readRequestEvents,
+  persistRequestContract,
+  readRequestArtifact,
+  structure,
+} = require("./relay-request");
 
 const PERSIST_SCRIPT = path.join(__dirname, "persist-request.js");
 const DISPATCH_SCRIPT = path.join(__dirname, "..", "..", "relay-dispatch", "scripts", "dispatch.js");
@@ -39,6 +49,17 @@ function createContract(overrides = {}) {
       done_criteria_markdown: "# Done Criteria\n\n- Authenticated users stay off /login\n- Guests still reach /login\n",
       escalation_conditions: ["Auth state source is unclear"],
     },
+    ...overrides,
+  };
+}
+
+function createReadiness(overrides = {}) {
+  return {
+    clarity: "high",
+    granularity: "single_task",
+    dependency: "internal",
+    verifiability: "high",
+    risk: "medium",
     ...overrides,
   };
 }
@@ -76,6 +97,9 @@ test("persistRequestContract writes request artifact, relay-ready handoff, done 
   const requestArtifact = readRequestArtifact(result.requestPath);
   assert.equal(requestArtifact.data.request_id, result.requestId);
   assert.equal(requestArtifact.data.state, "relay_ready");
+  assert.equal(requestArtifact.data.leaf_id, "leaf-01");
+  assert.equal(requestArtifact.data.next_action, "relay_plan");
+  assert.equal(requestArtifact.data.readiness, undefined);
   assert.equal(requestArtifact.data.source.kind, "raw_text");
   assert.equal(requestArtifact.data.paths.handoff, result.handoffPath);
   assert.match(requestArtifact.body, /Relay Intake Request/);
@@ -98,6 +122,8 @@ test("persistRequestContract writes request artifact, relay-ready handoff, done 
   assert.equal(events[0].event, "request_persisted");
   assert.equal(events[1].event, "relay_ready_handoff_persisted");
   assert.equal(events[1].leaf_id, "leaf-01");
+  assert.equal(result.nextAction, "relay_plan");
+  assert.equal(result.readiness, null);
 });
 
 test("persist-request CLI persists the single-leaf request bundle", () => {
@@ -118,6 +144,17 @@ test("persist-request CLI persists the single-leaf request bundle", () => {
   assert.ok(fs.existsSync(result.requestPath));
   assert.ok(fs.existsSync(result.handoffPath));
   assert.ok(fs.existsSync(result.doneCriteriaPath));
+});
+
+test("persistRequestContract stores readiness dimensions in request frontmatter when provided", () => {
+  const { repoRoot } = setupRepo();
+  const readiness = createReadiness({ risk: "low" });
+
+  const result = persistRequestContract(repoRoot, createContract({ readiness }));
+  const requestArtifact = readRequestArtifact(result.requestPath);
+
+  assert.deepEqual(requestArtifact.data.readiness, readiness);
+  assert.deepEqual(result.readiness, readiness);
 });
 
 test("persistRequestContract rejects multi-leaf handoff input with an explicit #129 TODO", () => {
@@ -155,6 +192,95 @@ test("persistRequestContract rejects request_id collisions before overwriting fr
 
   assert.equal(fs.readFileSync(first.doneCriteriaPath, "utf-8"), originalDoneCriteria);
   assert.equal(readRequestEvents(repoRoot, requestId).length, 2);
+});
+
+test("preflight actions append typed events and update next_action without a second state machine", () => {
+  const { repoRoot } = setupRepo();
+  const intake = persistRequestContract(repoRoot, createContract());
+
+  const proposal = propose(repoRoot, intake.requestId, {
+    proposal_summary: "Keep the work as a single auth redirect leaf.",
+    proposal_text: "A. Update the guard\nB. Add redirect tests\nC. Free text",
+    response_options: ["A", "B", "C + free text"],
+  });
+  assert.equal(proposal.event, "proposal_presented");
+  assert.equal(proposal.request_id, intake.requestId);
+  assert.equal(proposal.leaf_id, intake.leafId);
+  assert.equal(readRequestArtifact(intake.requestPath).data.next_action, "await_proposal_response");
+
+  const question = clarify(repoRoot, intake.requestId, {
+    question_text: "Should guest deep links still route to /login?",
+    response_options: ["A. Yes", "B. No", "C. Other"],
+  });
+  assert.equal(question.event, "question_asked");
+  assert.deepEqual(question.response_options, ["A. Yes", "B. No", "C. Other"]);
+  assert.equal(readRequestArtifact(intake.requestPath).data.next_action, "await_answer");
+
+  const structured = structure(repoRoot, intake.requestId, {
+    proposal_summary: "Restructure the handoff around one guard change plus tests.",
+    proposal_kind: "structure",
+    structure_kind: "decompose",
+  });
+  assert.equal(structured.event, "proposal_presented");
+  assert.equal(structured.structure_kind, "decompose");
+  assert.equal(readRequestArtifact(intake.requestPath).data.next_action, "await_proposal_response");
+
+  const structuredEdit = structure(repoRoot, intake.requestId, {
+    proposal_summary: "Keep one leaf but tighten the handoff wording.",
+    edit_summary: "Fold the test wording into the main proposal summary.",
+    edits_existing_proposal: true,
+    structure_kind: "restructure",
+  });
+  assert.equal(structuredEdit.event, "proposal_edited");
+  assert.equal(structuredEdit.edit_summary, "Fold the test wording into the main proposal summary.");
+  assert.equal(readRequestArtifact(intake.requestPath).data.next_action, "await_proposal_response");
+
+  const events = readRequestEvents(repoRoot, intake.requestId);
+  assert.deepEqual(
+    events.slice(-4).map((event) => event.event),
+    ["proposal_presented", "question_asked", "proposal_presented", "proposal_edited"]
+  );
+});
+
+test("interaction event helpers persist portable fields for answers, edits, and acceptance", () => {
+  const { repoRoot } = setupRepo();
+  const intake = persistRequestContract(repoRoot, createContract());
+
+  const answered = answerQuestion(repoRoot, intake.requestId, {
+    question_text: "Should guest deep links still route to /login?",
+    answer_text: "A. Yes, keep the guest login route as-is.",
+    answer_choice: "A",
+  });
+  assert.equal(answered.event, "question_answered");
+  assert.equal(answered.question_text, "Should guest deep links still route to /login?");
+  assert.equal(answered.answer_text, "A. Yes, keep the guest login route as-is.");
+  assert.equal(answered.answer_choice, "A");
+  assert.equal(readRequestArtifact(intake.requestPath).data.next_action, "review_answer");
+
+  const edited = editProposal(repoRoot, intake.requestId, {
+    proposal_summary: "Keep one relay leaf for the redirect loop fix.",
+    edit_summary: "Add the cookie-session assumption to the proposal text.",
+    proposal_text: "Scope the work to the redirect guard and add tests.",
+  });
+  assert.equal(edited.event, "proposal_edited");
+  assert.equal(edited.edit_summary, "Add the cookie-session assumption to the proposal text.");
+  assert.equal(readRequestArtifact(intake.requestPath).data.next_action, "review_proposal_edits");
+
+  const accepted = acceptProposal(repoRoot, intake.requestId, {
+    proposal_summary: "Keep one relay leaf for the redirect loop fix.",
+    acceptance_note: "Ship the single-leaf handoff.",
+    accepted_with_edits: true,
+  });
+  assert.equal(accepted.event, "proposal_accepted");
+  assert.equal(accepted.acceptance_note, "Ship the single-leaf handoff.");
+  assert.equal(accepted.accepted_with_edits, true);
+  assert.equal(readRequestArtifact(intake.requestPath).data.next_action, "relay_plan");
+
+  const events = readRequestEvents(repoRoot, intake.requestId);
+  assert.deepEqual(
+    events.slice(-3).map((event) => event.event),
+    ["question_answered", "proposal_edited", "proposal_accepted"]
+  );
 });
 
 test("raw request can flow through intake persistence, dispatch linkage, and review prepare-only", () => {
