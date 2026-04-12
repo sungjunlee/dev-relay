@@ -62,6 +62,7 @@ function setupRepo() {
     ...manifest,
     git: {
       ...(manifest.git || {}),
+      pr_number: 123,
       head_sha: execFileSync("git", ["-C", worktreePath, "rev-parse", "HEAD"], { encoding: "utf-8", stdio: "pipe" }).trim(),
     },
   };
