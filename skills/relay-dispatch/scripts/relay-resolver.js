@@ -49,9 +49,9 @@ function filterByPr(records, prNumber) {
 function filterByBranchPrFallback(records, branch) {
   return filterByBranch(records, branch, { excludeTerminal: true })
     .filter((record) => {
-      // #165: `escalated + pr_number:null` stays recoverable via explicit selectors, but branch+PR fallback
-      // only exists for stale-inheritance scenarios on reused branches, so this path must treat that case as terminal.
-      return !(record?.data?.state === STATES.ESCALATED && !hasStoredPrNumber(record));
+      // #168: treat the state-machine axis as a whitelist, not a blacklist. Fixing only the state named
+      // in the latest bug is compliance theater; the only legitimate null-pr fallback is DISPATCHED.
+      return record?.data?.state === STATES.DISPATCHED && !hasStoredPrNumber(record);
     });
 }
 
@@ -116,7 +116,7 @@ function buildNoManifestError(selector, { candidates = [], terminalOnly = false,
 function buildAmbiguousResolutionError(selector, matches) {
   return new Error(
     `Ambiguous relay manifest for ${formatSelector(selector)} (${matches.length} candidates): ` +
-    `${formatCandidateRunIds(matches)}. Pass --manifest <path> or --run-id <id> explicitly. ` +
+    `${formatCandidateDetails(matches)}. Pass --manifest <path> or --run-id <id> explicitly. ` +
     "Close stale runs via close-run.js --run-id <id> before retrying if needed."
   );
 }
@@ -173,13 +173,15 @@ function resolveManifestRecord({
   let matches = allRecords;
   if (branch && prNumber !== undefined && prNumber !== null) {
     const branchMatches = filterByBranch(allRecords, branch);
+    const nonTerminalBranchMatches = filterByBranch(allRecords, branch, { excludeTerminal: true });
     const branchFallbackMatches = filterByBranchPrFallback(allRecords, branch);
     matches = filterByPr(branchMatches, prNumber);
     if (matches.length === 0) {
-      if (branchFallbackMatches.length === 1 && !hasStoredPrNumber(branchFallbackMatches[0])) {
+      if (nonTerminalBranchMatches.length > 1) {
+        throw buildAmbiguousResolutionError({ branch, prNumber }, nonTerminalBranchMatches);
+      }
+      if (branchFallbackMatches.length === 1) {
         matches = branchFallbackMatches;
-      } else if (branchFallbackMatches.length > 1) {
-        throw buildAmbiguousResolutionError({ branch, prNumber }, branchFallbackMatches);
       }
     }
   } else if (branch) {

@@ -591,7 +591,7 @@ test("gate-check resolves the manifest in PR mode and rejects missing anchor.rub
 test("gate-check stamps git.pr_number on first successful PR-mode resolution and does not re-stamp", () => {
   const fixture = createLiveGateFixture({
     manifest: {
-      state: STATES.REVIEW_PENDING,
+      state: STATES.DISPATCHED,
       anchor: {
         rubric_path: "rubric.yaml",
         rubric_grandfathered: false,
@@ -641,7 +641,7 @@ test("gate-check stamps git.pr_number on first successful PR-mode resolution and
   assert.equal(events.length, 1);
 });
 
-test("gate-check resolves and stamps a historical legacy manifest sample with pr_number=null", () => {
+test("gate-check fails closed on a historical review_pending legacy manifest sample with pr_number=null", () => {
   const fixture = createHistoricalLegacyFixture();
   const result = spawnSync("node", [
     SCRIPT,
@@ -658,22 +658,18 @@ test("gate-check resolves and stamps a historical legacy manifest sample with pr
     },
   });
 
-  assert.equal(result.status, 0);
+  assert.equal(result.status, 1);
   const json = JSON.parse(result.stdout);
-  assert.equal(json.status, "lgtm");
-  assert.equal(json.readyToMerge, true);
+  assert.equal(json.status, "manifest_resolution_failed");
+  assert.equal(json.readyToMerge, false);
+  assert.match(json.reason, /state=review_pending, pr=unset/);
+  assert.match(json.reason, /Pass --run-id <id> or --manifest <path> explicitly/);
 
   const stored = readManifest(fixture.manifestPath).data;
-  assert.equal(stored.git.pr_number, 401);
+  assert.equal(stored.git.pr_number, null);
 
-  const events = fs.readFileSync(path.join(fixture.runDir, "events.jsonl"), "utf-8")
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map((line) => JSON.parse(line))
-    .filter((entry) => entry.event === "pr_number_stamped");
-  assert.equal(events.length, 1);
-  assert.match(events[0].reason, /git\.pr_number=401/);
+  const eventsPath = path.join(fixture.runDir, "events.jsonl");
+  assert.equal(fs.existsSync(eventsPath), false);
 });
 
 test("gate-check PR mode fails closed when only a stale merged manifest exists on the reused branch", () => {

@@ -65,6 +65,7 @@ function setupRepo({ dirtyWorktree = false } = {}) {
   manifest.anchor.rubric_grandfathered = true;
   manifest = updateManifestState(manifest, STATES.REVIEW_PENDING, "run_review");
   manifest = updateManifestState(manifest, STATES.READY_TO_MERGE, "await_explicit_merge");
+  manifest.git.pr_number = 123;
   manifest.git.head_sha = headSha;
   manifest.review.last_reviewed_sha = headSha;
   manifest.review.latest_verdict = "lgtm";
