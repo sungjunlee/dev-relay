@@ -336,6 +336,8 @@ test("resolveManifestRecord keeps escalated stored-pr mismatches recoverable via
     updatedAt: "2026-04-03T00:00:00.000Z",
   });
 
+  // Anti-theater: this still enters the branch+PR miss path, but the manifest has a stored PR.
+  // The #165 fix must stay scoped to stale `escalated + pr_number: unset` fallback only.
   assert.throws(
     () => resolveManifestRecord({ repoRoot, branch: "feature-auth", prNumber: 120 }),
     (error) => {
@@ -387,6 +389,8 @@ test("resolveManifestRecord rejects stale escalated branch fallback and names cl
     updatedAt: "2026-04-03T00:00:00.000Z",
   });
 
+  // Anti-theater: before #165, `filterByPr(branchMatches, 120)` returned no match and the old
+  // single-record branch fallback rebound this stale `escalated + pr_number: unset` manifest to PR 120.
   assert.throws(
     () => resolveManifestRecord({ repoRoot, branch: "feature-auth", prNumber: 120 }),
     (error) => {
@@ -415,6 +419,8 @@ test("resolveManifestRecord keeps escalated manifests addressable by matching pr
     updatedAt: "2026-04-03T00:00:00.000Z",
   });
 
+  // Anti-theater: this is the preserved branch+PR selector. Even after #165 blocks stale branch-only
+  // fallback, a true `filterByPr(branchMatches, 120)` match must still return the escalated manifest.
   const match = resolveManifestRecord({ repoRoot, branch: "feature-auth", prNumber: 120 });
   assert.equal(match.manifestPath, manifestPath);
   assert.equal(match.data.state, STATES.ESCALATED);
@@ -435,6 +441,8 @@ test("resolveManifestRecord keeps escalated manifests addressable by explicit se
     updatedAt: "2026-04-03T00:00:00.000Z",
   });
 
+  // Anti-theater: legitimate escalated recovery is explicit. `--run-id` and `--manifest` never relied
+  // on the stale branch+PR fallback, so the #165 exclusion must not strand an operator resuming the run.
   const runIdMatch = resolveManifestRecord({ repoRoot, runId });
   assert.equal(runIdMatch.manifestPath, manifestPath);
   assert.equal(runIdMatch.data.state, STATES.ESCALATED);
@@ -459,6 +467,8 @@ test("resolveManifestRecord recovers from stale escalated fallback after close-r
     updatedAt: "2026-04-03T00:00:00.000Z",
   });
 
+  // Anti-theater: before #165, this first branch+PR lookup would have silently selected `staleRunId`,
+  // so the operator never reached the close-run / re-dispatch recovery flow exercised below.
   assert.throws(
     () => resolveManifestRecord({ repoRoot, branch: "feature-auth", prNumber: 120 }),
     new RegExp(escapeRegExp(`--run-id ${JSON.stringify(staleRunId)}`))
