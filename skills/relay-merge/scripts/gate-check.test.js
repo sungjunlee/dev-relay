@@ -663,7 +663,11 @@ test("gate-check fails closed on a historical review_pending legacy manifest sam
   assert.equal(json.status, "manifest_resolution_failed");
   assert.equal(json.readyToMerge, false);
   assert.match(json.reason, /state=review_pending, pr=unset/);
-  assert.match(json.reason, /Pass --run-id <id> or --manifest <path> explicitly/);
+  // Round 2 (#168 reviewer feedback): stale non-dispatched null-pr candidates must surface close-run
+  // recovery text rather than the generic "pass --run-id explicitly" hint, so gate-check's historical
+  // fail-closed path now inherits the state-specific stale-run recovery command.
+  assert.match(json.reason, /Close the stale review_pending run/);
+  assert.match(json.reason, /--reason "stale_review_pending_run"/);
 
   const stored = readManifest(fixture.manifestPath).data;
   assert.equal(stored.git.pr_number, null);

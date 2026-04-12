@@ -429,12 +429,18 @@ test("resolveManifestRecord enumerates the non-terminal state x pr_number branch
 
           // Anti-theater: pre-#168, relay-resolver.js:179-180 silently rebound stale non-dispatched null-pr
           // manifests on reused branches because the fallback was blacklist-shaped instead of whitelist-shaped.
+          // Round 2 (#168 reviewer feedback): every stale non-dispatched null-pr state must name close-run.js
+          // + --run-id recovery in the error message, not just escalated.
+          const expectedCloseReason = `stale_${state}_run`;
           assert.throws(
             () => resolveManifestRecord({ repoRoot, branch: "matrix-branch", prNumber: 120 }),
             (error) => {
               assert.match(error.message, /No relay manifest found for branch 'matrix-branch' \+ pr '120'/);
               assert.match(error.message, new RegExp(runId));
               assert.match(error.message, new RegExp(`state=${escapeRegExp(state)}, pr=unset`));
+              assert.match(error.message, new RegExp(`Close the stale ${escapeRegExp(state)} run`));
+              assert.match(error.message, new RegExp(escapeRegExp(`--reason ${JSON.stringify(expectedCloseReason)}`)));
+              assert.match(error.message, new RegExp(escapeRegExp(`--run-id ${JSON.stringify(runId)}`)));
               return true;
             }
           );
@@ -599,11 +605,16 @@ test("resolveManifestRecord recovers from stale review_pending fallback after cl
 
   // Anti-theater: pre-#168, relay-resolver.js:179-180 rebound this stale review_pending + pr_number:null
   // manifest to PR 120, so the operator never reached the close-run recovery path exercised below.
+  // Round 2 (#168 reviewer feedback): the stale-candidate recovery message must name close-run.js
+  // for every stale non-dispatched non-terminal state, not just escalated.
+  const expectedCloseCommand = `node skills/relay-dispatch/scripts/close-run.js --repo ${JSON.stringify(repoRoot)} --run-id ${JSON.stringify(staleRunId)} --reason ${JSON.stringify("stale_review_pending_run")}`;
   assert.throws(
     () => resolveManifestRecord({ repoRoot, branch: "feature-auth", prNumber: 120 }),
     (error) => {
       assert.match(error.message, new RegExp(staleRunId));
-      assert.match(error.message, /Pass --run-id <id> or --manifest <path> explicitly/);
+      assert.match(error.message, /Close the stale review_pending run/);
+      assert.match(error.message, new RegExp(escapeRegExp(expectedCloseCommand)));
+      assert.match(error.message, new RegExp(escapeRegExp(`--run-id ${JSON.stringify(staleRunId)}`)));
       return true;
     }
   );
