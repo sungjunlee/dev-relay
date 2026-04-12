@@ -724,22 +724,65 @@ test("dispatch without --rubric-file fails loudly even in dry-run mode", () => {
   assert.match(result.stderr, /relay-plan/);
 });
 
-test("dispatch allows missing --rubric-file only when --rubric-grandfathered is explicit", () => {
+test("dispatch rejects --rubric-grandfathered on new dispatches", () => {
   const { repoRoot, relayHome } = setupRepo();
   process.env.RELAY_HOME = relayHome;
   const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
   writeFakeCodex(binDir);
   const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}` };
 
-  const result = JSON.parse(execFileSync("node", [SCRIPT, repoRoot,
+  const result = spawnSync("node", [SCRIPT, repoRoot,
     "-b", "issue-grandfathered",
     "--prompt", "migration dry run",
     "--rubric-grandfathered",
     "--dry-run",
     "--json",
+  ], { cwd: repoRoot, encoding: "utf-8", env });
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /--run-id or --manifest/);
+});
+
+test("dispatch allows --rubric-grandfathered for legacy same-run resumes", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  writeFakeCodex(binDir);
+  const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}` };
+
+  const first = JSON.parse(runDispatch(repoRoot, [
+    "-b", "issue-legacy-grandfathered",
+    "--prompt", "first pass",
+    "--json",
+  ], env));
+
+  const manifestPath = first.manifestPath;
+  const runId = first.runId;
+  const record = readManifest(manifestPath);
+  let updated = updateManifestState(record.data, STATES.CHANGES_REQUESTED, "re_dispatch_requested_changes");
+  updated = {
+    ...updated,
+    anchor: {
+      ...updated.anchor,
+    },
+    timestamps: {
+      ...updated.timestamps,
+      created_at: "2026-04-11T23:59:59.000Z",
+    },
+  };
+  delete updated.anchor.rubric_path;
+  delete updated.anchor.rubric_grandfathered;
+  writeManifest(manifestPath, updated, record.body);
+
+  const result = JSON.parse(execFileSync("node", [SCRIPT, repoRoot,
+    "--run-id", runId,
+    "--prompt", "resume legacy migration",
+    "--rubric-grandfathered",
+    "--dry-run",
+    "--json",
   ], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe", env }));
 
-  assert.equal(result.mode, "new");
+  assert.equal(result.mode, "resume");
   assert.equal(result.rubricFile, null);
   assert.equal(result.rubricGrandfathered, true);
 });

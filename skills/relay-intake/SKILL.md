@@ -99,6 +99,7 @@ After persistence succeeds:
 ${CLAUDE_SKILL_DIR}/../relay-dispatch/scripts/dispatch.js . \
   -b <branch> \
   --prompt-file <dispatch-prompt-path> \
+  --rubric-file <rubric-path-from-relay-plan> \
   --request-id <request-id> \
   --leaf-id <leaf-id> \
   --done-criteria-file <done-criteria-path>

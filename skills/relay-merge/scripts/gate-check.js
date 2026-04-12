@@ -26,6 +26,7 @@
 
 const { execFileSync } = require("child_process");
 const { buildSkipComment, evaluateReviewGate } = require("./review-gate");
+const { resolveManifestRecord } = require("../../relay-dispatch/scripts/relay-resolver");
 
 // ---------------------------------------------------------------------------
 // Args
@@ -69,6 +70,26 @@ if (SKIP && !SKIP_REASON) {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+function gh(...ghArgs) {
+  const ghBin = process.env.RELAY_GH_BIN || "gh";
+  return execFileSync(ghBin, ghArgs, {
+    encoding: "utf-8",
+    stdio: "pipe",
+  });
+}
+
+function tryResolveManifestForPr(prNumber, headRefName) {
+  try {
+    return resolveManifestRecord({
+      repoRoot: process.cwd(),
+      prNumber,
+      branch: headRefName || undefined,
+    });
+  } catch (error) {
+    return { error };
+  }
+}
 
 function output(result) {
   if (JSON_OUT) {
@@ -125,6 +146,7 @@ function main() {
   let comments;
   let commits;
   let manifestData = null;
+  let manifestResolutionNote = null;
   if (DRY_RUN) {
     // Dry-run: read JSON object/array from stdin, or plain text as single comment
     const stdin = require("fs").readFileSync(0, "utf-8").trim();
@@ -140,16 +162,24 @@ function main() {
       commits = [];
     }
   } else {
-    const raw = execFileSync("gh", [
-      "pr", "view", PR_NUM, "--json", "comments,commits",
-    ], { encoding: "utf-8", stdio: "pipe" });
+    const raw = gh("pr", "view", PR_NUM, "--json", "comments,commits,headRefName");
     const parsed = JSON.parse(raw);
     comments = parsed.comments || [];
     commits = parsed.commits || [];
+    const manifestRecord = tryResolveManifestForPr(PR_NUM, parsed.headRefName || null);
+    manifestData = manifestRecord.data || null;
+    if (manifestRecord.error) {
+      manifestResolutionNote = (
+        `reviewer author verification skipped — unable to resolve relay manifest for PR #${PR_NUM}: ` +
+        manifestRecord.error.message
+      );
+    }
   }
 
   const expectedReviewerLogin = manifestData?.review?.reviewer_login || null;
-  if (!DRY_RUN && !expectedReviewerLogin) {
+  if (!DRY_RUN && manifestResolutionNote) {
+    console.error(`Note: ${manifestResolutionNote}`);
+  } else if (!DRY_RUN && !expectedReviewerLogin && !manifestData) {
     console.error("Note: reviewer author verification skipped — no manifest data. Use finalize-run.js for full verification.");
   }
   const result = evaluateReviewGate({

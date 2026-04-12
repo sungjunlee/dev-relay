@@ -23,7 +23,7 @@
  *   --copy <file,...>      Additional files to copy
  *   --timeout <seconds>    Exec timeout (default: 1800)
  *   --rubric-file <path>   REQUIRED: copy rubric YAML to run dir (persists for review)
- *   --rubric-grandfathered Migration-only escape hatch for pre-change runs without a rubric
+ *   --rubric-grandfathered Migration-only escape hatch for legacy same-run resumes without a rubric
  *   --request-id <id>      Link the run back to a relay-intake request
  *   --leaf-id <id>         Link the run back to a relay-intake leaf handoff
  *   --done-criteria-file   Persist a frozen Done Criteria anchor path
@@ -104,7 +104,7 @@ if (!args.length || args.includes("--help") || args.includes("-h")) {
   console.log("  --copy <files>     Additional files to copy (comma-separated)");
   console.log("  --timeout          Exec timeout in seconds (default: 1800)");
   console.log("  --rubric-file      REQUIRED: copy rubric YAML to run dir (persists for review)");
-  console.log("  --rubric-grandfathered  Migration-only escape hatch for pre-change runs without a rubric");
+  console.log("  --rubric-grandfathered  Migration-only escape hatch for legacy same-run resumes without a rubric");
   console.log("  --request-id       Link the run back to a relay-intake request");
   console.log("  --leaf-id          Link the run back to a relay-intake leaf handoff");
   console.log("  --done-criteria-file  Persist a frozen Done Criteria anchor path");
@@ -164,6 +164,7 @@ const NO_CLEANUP = hasFlag("--no-cleanup");
 const DRY_RUN = hasFlag("--dry-run");
 const JSON_OUT = hasFlag("--json");
 const RESUME_MODE = !!RUN_ID || !!MANIFEST_INPUT;
+const RUBRIC_GRANDFATHER_CUTOFF_ISO = "2026-04-12T00:00:00.000Z";
 
 // ---------------------------------------------------------------------------
 // Validation
@@ -194,6 +195,11 @@ if (RUBRIC_FILE) {
 
 if (RUBRIC_FILE && RUBRIC_GRANDFATHERED) {
   console.error("Error: use either --rubric-file or --rubric-grandfathered, not both");
+  process.exit(1);
+}
+
+if (RUBRIC_GRANDFATHERED && !RESUME_MODE) {
+  console.error("Error: --rubric-grandfathered is only valid with --run-id or --manifest for legacy pre-change runs");
   process.exit(1);
 }
 
@@ -331,9 +337,21 @@ function clearRubricGrandfathering(anchor = {}) {
   return nextAnchor;
 }
 
+function isLegacyRubricRun(manifest) {
+  const createdAt = Date.parse(manifest?.timestamps?.created_at || "");
+  return Number.isFinite(createdAt) && createdAt < Date.parse(RUBRIC_GRANDFATHER_CUTOFF_ISO);
+}
+
 function enforceRubricPersistence(manifest) {
   if (RUBRIC_GRANDFATHERED && hasAnchoredRubricPath(manifest)) {
     console.error("Error: --rubric-grandfathered is only valid when the run does not already have anchor.rubric_path");
+    process.exit(1);
+  }
+
+  if (RUBRIC_GRANDFATHERED && !isLegacyRubricRun(manifest)) {
+    console.error(
+      `Error: --rubric-grandfathered is only valid for legacy runs created before ${RUBRIC_GRANDFATHER_CUTOFF_ISO}`
+    );
     process.exit(1);
   }
 
@@ -610,9 +628,6 @@ async function main() {
       doneCriteriaPath: resolvedDoneCriteriaPath,
       doneCriteriaSource: resolvedDoneCriteriaPath ? "request_snapshot" : null,
     });
-    if (RUBRIC_GRANDFATHERED) {
-      manifest = markRubricGrandfathered(manifest);
-    }
     ensureRunLayout(repoRoot, runId);
     writeManifest(manifestPath, manifest);
   }
