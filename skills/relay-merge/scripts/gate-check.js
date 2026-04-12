@@ -26,6 +26,7 @@
 
 const { execFileSync } = require("child_process");
 const { buildSkipComment, evaluateReviewGate } = require("./review-gate");
+const { getRunDir } = require("../../relay-dispatch/scripts/relay-manifest");
 const { resolveManifestRecord } = require("../../relay-dispatch/scripts/relay-resolver");
 
 // ---------------------------------------------------------------------------
@@ -108,6 +109,18 @@ function output(result) {
     } else if (result.status === "missing_rubric_path") {
       console.log(`✗ PR #${PR_NUM}: run is missing anchor.rubric_path — merge blocked`);
       console.log("  Re-dispatch from relay-plan with --rubric-file, or explicitly grandfather a pre-change run.");
+    } else if (result.status === "missing_rubric_file") {
+      console.log(`✗ PR #${PR_NUM}: anchored rubric file is missing from the run directory — merge blocked`);
+      if (result.reason) console.log(`  ${result.reason}`);
+    } else if (result.status === "empty_rubric_file") {
+      console.log(`✗ PR #${PR_NUM}: anchored rubric file is empty — merge blocked`);
+      if (result.reason) console.log(`  ${result.reason}`);
+    } else if (result.status === "invalid_rubric_path") {
+      console.log(`✗ PR #${PR_NUM}: anchor.rubric_path escapes the run directory — merge blocked`);
+      if (result.reason) console.log(`  ${result.reason}`);
+    } else if (result.status === "invalid_rubric_file") {
+      console.log(`✗ PR #${PR_NUM}: anchor.rubric_path does not point to a readable rubric file — merge blocked`);
+      if (result.reason) console.log(`  ${result.reason}`);
     } else if (result.status === "manifest_resolution_failed") {
       console.log(`✗ PR #${PR_NUM}: unable to resolve relay manifest — merge blocked`);
       if (result.reason) console.log(`  ${result.reason}`);
@@ -149,6 +162,7 @@ function main() {
   let comments;
   let commits;
   let manifestData = null;
+  let runDir = null;
   if (DRY_RUN) {
     // Dry-run: read JSON object/array from stdin, or plain text as single comment
     const stdin = require("fs").readFileSync(0, "utf-8").trim();
@@ -158,6 +172,7 @@ function main() {
       comments = parsed.comments || parsed;
       commits = Array.isArray(parsed.commits) ? parsed.commits : [];
       manifestData = parsed.manifest || null;
+      runDir = typeof parsed.runDir === "string" ? parsed.runDir : null;
     } catch {
       // Plain text: treat entire stdin as one comment body
       comments = [{ body: stdin, createdAt: null }];
@@ -181,6 +196,7 @@ function main() {
       process.exit(1);
     }
     manifestData = manifestRecord.data;
+    runDir = getRunDir(manifestData.paths?.repo_root || process.cwd(), manifestData.run_id);
   }
 
   const expectedReviewerLogin = manifestData?.review?.reviewer_login || null;
@@ -193,6 +209,7 @@ function main() {
     commits,
     manifestData,
     expectedReviewerLogin,
+    runDir,
   });
   if (result.note) {
     console.error(`Note: ${result.note}`);

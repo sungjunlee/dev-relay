@@ -112,6 +112,25 @@ function runDispatch(repoRoot, args, env) {
   });
 }
 
+function tamperResumableRunRubricPath(repoRoot, env, rubricPath) {
+  const first = JSON.parse(runDispatch(repoRoot, [
+    "-b", "issue-rubric-anchor",
+    "--prompt", "first pass",
+    "--json",
+  ], env));
+
+  const record = readManifest(first.manifestPath);
+  const updated = {
+    ...updateManifestState(record.data, STATES.CHANGES_REQUESTED, "re_dispatch_requested_changes"),
+    anchor: {
+      ...(record.data.anchor || {}),
+      rubric_path: rubricPath,
+    },
+  };
+  writeManifest(first.manifestPath, updated, record.body);
+  return first;
+}
+
 test("dispatch reuses the same run and worktree on resume", () => {
   const { repoRoot, relayHome } = setupRepo();
   process.env.RELAY_HOME = relayHome;
@@ -685,6 +704,44 @@ test("dispatch fails when rubric file does not exist", () => {
 
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /rubric file not found/);
+});
+
+test("dispatch resume rejects anchor.rubric_path values with parent traversal", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  writeFakeCodex(binDir);
+  const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}` };
+
+  const first = tamperResumableRunRubricPath(repoRoot, env, "../escape.yaml");
+  const result = spawnSync("node", [SCRIPT, repoRoot,
+    "--run-id", first.runId,
+    "--prompt", "resume with invalid rubric anchor",
+    "--json",
+  ], { cwd: repoRoot, encoding: "utf-8", env });
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /\.\./);
+  assert.match(result.stderr, /inside the run directory/i);
+});
+
+test("dispatch resume rejects absolute anchor.rubric_path values", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  writeFakeCodex(binDir);
+  const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}` };
+
+  const first = tamperResumableRunRubricPath(repoRoot, env, "/tmp/escape.yaml");
+  const result = spawnSync("node", [SCRIPT, repoRoot,
+    "--run-id", first.runId,
+    "--prompt", "resume with invalid rubric anchor",
+    "--json",
+  ], { cwd: repoRoot, encoding: "utf-8", env });
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /absolute paths are not allowed/i);
+  assert.match(result.stderr, /\/tmp\/escape\.yaml/);
 });
 
 test("dispatch fails when done criteria file does not exist", () => {
