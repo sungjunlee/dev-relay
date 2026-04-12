@@ -1,0 +1,27 @@
+task: "feat: Core conditions engine (contains, not_contains, is, regex + AND/OR)"
+issue: 401
+size: M
+
+factors:
+  - name: backward_compatibility
+    weight: 30
+    pass: |
+      - Existing match/fields rules load and produce identical results
+      - No changes to existing TagRule fields (match, fields still work)
+      - _check_pattern_match() still called for legacy rules
+      - `finjuice tag --dry-run` produces zero changes on existing data
+    fail: |
+      - Any existing test breaks
+      - Legacy rules silently ignored or produce different tags
+
+  - name: conditions_engine
+    weight: 25
+    pass: |
+      - Condition dataclass with field, op, value
+      - 6 operators: contains, not_contains, is, is_not, starts_with, regex
+      - _check_conditions() evaluates list with AND (default) and OR (logic: any)
+      - Each operator has dedicated unit test
+    fail: |
+      - Missing operator implementation
+      - AND/OR logic incorrect
+      - Regex errors not caught gracefully

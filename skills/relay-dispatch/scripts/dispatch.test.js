@@ -8,6 +8,7 @@ const path = require("path");
 const {
   STATES,
   captureAttempt,
+  createRunId,
   getEventsPath,
   getRunDir,
   listManifestPaths,
@@ -204,6 +205,30 @@ test("dispatch resume fails loudly when the retained worktree is missing", () =>
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /retained worktree is missing/);
   assert.equal(listManifestPaths(repoRoot).length, 1);
+});
+
+test("dispatch resume fails when --run-id does not resolve", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  const missingRunId = createRunId({
+    branch: "issue-42",
+    timestamp: new Date("2026-04-03T00:00:00.000Z"),
+  });
+
+  const result = spawnSync("node", [
+    SCRIPT,
+    repoRoot,
+    "--run-id", missingRunId,
+    "--prompt", "resume",
+    "--json",
+  ], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    env: { ...process.env, RELAY_HOME: relayHome },
+  });
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, new RegExp(`No relay manifest found for run_id '${missingRunId}'`));
 });
 
 test("dispatch with --executor claude creates worktree and collects result", () => {

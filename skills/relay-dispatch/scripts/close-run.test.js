@@ -1,6 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { execFileSync } = require("child_process");
+const { execFileSync, spawnSync } = require("child_process");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
@@ -85,6 +85,27 @@ test("close-run closes an active run and cleans a clean worktree", () => {
   const events = fs.readFileSync(getEventsPath(repoRoot, runId), "utf-8");
   assert.match(events, /"event":"close"/);
   assert.match(events, /"event":"cleanup_result"/);
+});
+
+test("close-run fails when --run-id does not resolve", () => {
+  const { repoRoot } = setupRepo();
+  const missingRunId = createRunId({
+    branch: "issue-42",
+    timestamp: new Date("2026-04-03T08:30:00.000Z"),
+  });
+
+  const result = spawnSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--run-id", missingRunId,
+    "--reason", "stale_non_terminal_run",
+    "--json",
+  ], {
+    encoding: "utf-8",
+  });
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, new RegExp(`No relay manifest found for run_id '${missingRunId}'`));
 });
 
 test("close-run keeps dirty worktrees and records manual cleanup follow-up", () => {

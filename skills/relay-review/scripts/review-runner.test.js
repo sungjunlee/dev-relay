@@ -436,6 +436,38 @@ test("review-runner rejects invalid manifest run_id before creating a sibling ru
   assert.equal(fs.existsSync(victimRunDir), false);
 });
 
+test("review-runner fails closed when branch+PR resolution only finds a stale terminal manifest", () => {
+  const { repoRoot, manifestPath, doneCriteriaPath, diffPath } = setupRepo();
+  const record = readManifest(manifestPath);
+  const staleManifest = {
+    ...updateManifestState(
+      updateManifestState(record.data, STATES.READY_TO_MERGE, "await_explicit_merge"),
+      STATES.MERGED,
+      "manual_cleanup_required"
+    ),
+    git: {
+      ...(record.data.git || {}),
+      pr_number: null,
+    },
+  };
+  writeManifest(manifestPath, staleManifest, record.body);
+
+  assert.throws(() => execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--branch", "issue-42",
+    "--pr", "123",
+    "--done-criteria-file", doneCriteriaPath,
+    "--diff-file", diffPath,
+    "--prepare-only",
+    "--json",
+  ], { encoding: "utf-8", stdio: "pipe" }), (error) => {
+    assert.match(String(error.stderr), /Only terminal branch matches exist/);
+    assert.match(String(error.stderr), /Create a fresh dispatch for this branch before retrying/);
+    return true;
+  });
+});
+
 test("changes_requested verdict creates a re-dispatch artifact", () => {
   const { repoRoot, manifestPath, doneCriteriaPath, diffPath } = setupRepo();
   const reviewFile = writeVerdict(repoRoot, "changes.json", {
