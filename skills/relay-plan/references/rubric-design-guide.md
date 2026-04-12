@@ -2,6 +2,8 @@
 
 How to derive high-quality rubrics from task acceptance criteria. Covers the guided interview, design principles, and fix patterns for validation failures.
 
+Before dispatch, persist the finished rubric to a file and pass it through `relay-dispatch --rubric-file <path>`. This is required so the run records `anchor.rubric_path` for review and merge gating.
+
 ## Guided Interview
 
 Walk through these questions to design a task-specific rubric from AC. Each question derives a rubric element. The goal is a rubric tailored to *this* task, not a generic template applied to it.

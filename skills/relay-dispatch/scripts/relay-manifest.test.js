@@ -240,6 +240,44 @@ test("updateManifestState allows valid transitions and rejects invalid ones", ()
   );
 });
 
+test("updateManifestState rejects dispatched -> review_pending when anchor.rubric_path is missing", () => {
+  const manifest = {
+    state: STATES.DISPATCHED,
+    next_action: "await_dispatch_result",
+    anchor: {},
+    timestamps: { created_at: "2026-04-12T00:00:00Z", updated_at: "2026-04-12T00:00:00Z" },
+  };
+
+  assert.throws(
+    () => updateManifestState(manifest, STATES.REVIEW_PENDING, "run_review"),
+    /anchor\.rubric_path/
+  );
+});
+
+test("updateManifestState allows dispatched -> review_pending when anchor.rubric_path is present", () => {
+  const manifest = {
+    state: STATES.DISPATCHED,
+    next_action: "await_dispatch_result",
+    anchor: { rubric_path: "rubric.yaml" },
+    timestamps: { created_at: "2026-04-12T00:00:00Z", updated_at: "2026-04-12T00:00:00Z" },
+  };
+
+  const updated = updateManifestState(manifest, STATES.REVIEW_PENDING, "run_review");
+  assert.equal(updated.state, STATES.REVIEW_PENDING);
+});
+
+test("updateManifestState allows dispatched -> review_pending when rubric is grandfathered", () => {
+  const manifest = {
+    state: STATES.DISPATCHED,
+    next_action: "await_dispatch_result",
+    anchor: { rubric_grandfathered: true },
+    timestamps: { created_at: "2026-04-12T00:00:00Z", updated_at: "2026-04-12T00:00:00Z" },
+  };
+
+  const updated = updateManifestState(manifest, STATES.REVIEW_PENDING, "run_review");
+  assert.equal(updated.state, STATES.REVIEW_PENDING);
+});
+
 test("updateManifestCleanup records cleanup metadata without changing state", () => {
   const manifest = {
     state: STATES.MERGED,
