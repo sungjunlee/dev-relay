@@ -164,7 +164,6 @@ const NO_CLEANUP = hasFlag("--no-cleanup");
 const DRY_RUN = hasFlag("--dry-run");
 const JSON_OUT = hasFlag("--json");
 const RESUME_MODE = !!RUN_ID || !!MANIFEST_INPUT;
-const RUBRIC_GRANDFATHER_CUTOFF_ISO = "2026-04-12T00:00:00.000Z";
 const GRANDFATHER_ONLY_STATES = new Set([STATES.REVIEW_PENDING, STATES.READY_TO_MERGE]);
 
 // ---------------------------------------------------------------------------
@@ -338,28 +337,17 @@ function clearRubricGrandfathering(anchor = {}) {
   return nextAnchor;
 }
 
-function isLegacyRubricRun(manifest) {
-  const createdAt = Date.parse(manifest?.timestamps?.created_at || "");
-  return Number.isFinite(createdAt) && createdAt < Date.parse(RUBRIC_GRANDFATHER_CUTOFF_ISO);
-}
-
 function enforceRubricPersistence(manifest) {
+  // Grandfathering is an explicit per-run migration marker, not a timestamp-derived cutoff.
   if (RUBRIC_GRANDFATHERED && hasAnchoredRubricPath(manifest)) {
     console.error("Error: --rubric-grandfathered is only valid when the run does not already have anchor.rubric_path");
-    process.exit(1);
-  }
-
-  if (RUBRIC_GRANDFATHERED && !isLegacyRubricRun(manifest)) {
-    console.error(
-      `Error: --rubric-grandfathered is only valid for legacy runs created before ${RUBRIC_GRANDFATHER_CUTOFF_ISO}`
-    );
     process.exit(1);
   }
 
   if (!RUBRIC_FILE && !hasAnchoredRubricPath(manifest) && !isRubricGrandfathered(manifest) && !RUBRIC_GRANDFATHERED) {
     console.error(
       "Error: --rubric-file is required. Generate the rubric with relay-plan and pass --rubric-file <path> to dispatch.js. " +
-      "Only migration tooling for pre-change runs may bypass this with --rubric-grandfathered."
+      "Only explicit legacy-run migration may bypass this with --rubric-grandfathered."
     );
     process.exit(1);
   }

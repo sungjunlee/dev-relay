@@ -743,7 +743,7 @@ test("dispatch rejects --rubric-grandfathered on new dispatches", () => {
   assert.match(result.stderr, /--run-id or --manifest/);
 });
 
-test("dispatch allows --rubric-grandfathered for legacy same-run resumes", () => {
+test("dispatch allows --rubric-grandfathered for explicit same-run grandfathering without timestamp checks", () => {
   const { repoRoot, relayHome } = setupRepo();
   process.env.RELAY_HOME = relayHome;
   const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
@@ -767,7 +767,7 @@ test("dispatch allows --rubric-grandfathered for legacy same-run resumes", () =>
     },
     timestamps: {
       ...updated.timestamps,
-      created_at: "2026-04-11T23:59:59.000Z",
+      created_at: "2026-04-12T01:00:00.000Z",
     },
   };
   delete updated.anchor.rubric_path;
@@ -787,7 +787,7 @@ test("dispatch allows --rubric-grandfathered for legacy same-run resumes", () =>
   assert.equal(result.rubricGrandfathered, true);
 });
 
-test("dispatch allows --rubric-grandfathered for legacy review_pending runs without re-dispatching", () => {
+test("dispatch allows --rubric-grandfathered for review_pending runs without re-dispatching after the old cutoff", () => {
   const { repoRoot, relayHome } = setupRepo();
   process.env.RELAY_HOME = relayHome;
   const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
@@ -810,7 +810,7 @@ test("dispatch allows --rubric-grandfathered for legacy review_pending runs with
     },
     timestamps: {
       ...record.data.timestamps,
-      created_at: "2026-04-11T23:59:59.000Z",
+      created_at: "2026-04-12T01:00:00.000Z",
     },
   };
   delete updated.anchor.rubric_path;
@@ -838,7 +838,7 @@ test("dispatch allows --rubric-grandfathered for legacy review_pending runs with
   assert.match(events, /"event":"rubric_grandfathered"/);
 });
 
-test("dispatch allows --rubric-grandfathered for legacy ready_to_merge runs", () => {
+test("dispatch allows --rubric-grandfathered for ready_to_merge runs after the old cutoff", () => {
   const { repoRoot, relayHome } = setupRepo();
   process.env.RELAY_HOME = relayHome;
   const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
@@ -862,7 +862,7 @@ test("dispatch allows --rubric-grandfathered for legacy ready_to_merge runs", ()
     },
     timestamps: {
       ...updated.timestamps,
-      created_at: "2026-04-11T23:59:59.000Z",
+      created_at: "2026-04-12T01:00:00.000Z",
     },
   };
   delete updated.anchor.rubric_path;
