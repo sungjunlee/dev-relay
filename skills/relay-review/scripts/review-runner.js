@@ -55,6 +55,7 @@ const ALLOWED_VERDICTS = new Set(["pass", "changes_requested", "escalated"]);
 const ALLOWED_NEXT_ACTIONS = new Set(["ready_to_merge", "changes_requested", "escalated"]);
 const ALLOWED_STATUSES = new Set(["pass", "fail", "not_run"]);
 const ALLOWED_SCORE_TIERS = new Set(["contract", "quality"]);
+const RUBRIC_PASS_THROUGH_STATES = new Set(["loaded", "grandfathered"]);
 
 const args = process.argv.slice(2);
 const KNOWN_FLAGS = [
@@ -275,76 +276,98 @@ function formatRubricWarning(label, rubricAnchor) {
   return [
     `WARNING: [${label}] ${rubricAnchor.error}`,
     details.length ? `Context: ${details.join(", ")}` : null,
-    "Flag this invariant failure in the review output instead of silently evaluating without the rubric.",
+    "Do NOT return PASS or ready_to_merge while this warning is present. Flag the invariant failure in the review output.",
   ].filter(Boolean).join("\n");
+}
+
+function createRubricLoad({ state, status, content, warning, rubricPath, resolvedPath, error }) {
+  if (!RUBRIC_PASS_THROUGH_STATES.has(state) && warning === null) {
+    throw new Error(`Rubric load state '${state}' must include a visible warning`);
+  }
+  return {
+    state,
+    status,
+    content,
+    warning,
+    rubricPath,
+    resolvedPath,
+    error,
+  };
 }
 
 function loadRubricFromRunDir(runDir, manifestData) {
   const rubricAnchor = getRubricAnchorStatus(manifestData, { runDir, includeContent: true });
   switch (rubricAnchor.status) {
     case "satisfied":
-      return {
+      return createRubricLoad({
         state: "loaded",
         status: rubricAnchor.status,
         content: rubricAnchor.content,
         warning: null,
         rubricPath: rubricAnchor.rubricPath,
         resolvedPath: rubricAnchor.resolvedPath,
-      };
+        error: rubricAnchor.error,
+      });
     case "grandfathered":
-      return {
+      return createRubricLoad({
         state: "grandfathered",
         status: rubricAnchor.status,
         content: null,
         warning: null,
         rubricPath: rubricAnchor.rubricPath,
         resolvedPath: rubricAnchor.resolvedPath,
-      };
+        error: rubricAnchor.error,
+      });
     case "missing_path":
-      return {
+      return createRubricLoad({
         state: "not_set",
         status: rubricAnchor.status,
         content: null,
-        warning: null,
+        warning: formatRubricWarning("rubric path not set", rubricAnchor),
         rubricPath: rubricAnchor.rubricPath,
         resolvedPath: rubricAnchor.resolvedPath,
-      };
+        error: rubricAnchor.error,
+      });
     case "missing":
-      return {
+      return createRubricLoad({
         state: "missing",
         status: rubricAnchor.status,
         content: null,
         warning: formatRubricWarning("rubric missing", rubricAnchor),
         rubricPath: rubricAnchor.rubricPath,
         resolvedPath: rubricAnchor.resolvedPath,
-      };
+        error: rubricAnchor.error,
+      });
     case "outside_run_dir":
-      return {
+      return createRubricLoad({
         state: "outside_run_dir",
         status: rubricAnchor.status,
         content: null,
         warning: formatRubricWarning("rubric path outside run dir", rubricAnchor),
         rubricPath: rubricAnchor.rubricPath,
         resolvedPath: rubricAnchor.resolvedPath,
-      };
+        error: rubricAnchor.error,
+      });
     case "empty":
-      return {
+      return createRubricLoad({
         state: "empty",
         status: rubricAnchor.status,
         content: null,
         warning: formatRubricWarning("rubric empty", rubricAnchor),
         rubricPath: rubricAnchor.rubricPath,
         resolvedPath: rubricAnchor.resolvedPath,
-      };
+        error: rubricAnchor.error,
+      });
     default:
-      return {
+      return createRubricLoad({
         state: "invalid",
         status: rubricAnchor.status,
         content: null,
         warning: formatRubricWarning("rubric invalid", rubricAnchor),
         rubricPath: rubricAnchor.rubricPath,
         resolvedPath: rubricAnchor.resolvedPath,
-      };
+        error: rubricAnchor.error,
+      });
   }
 }
 
@@ -563,7 +586,21 @@ function appendCommentWarnings(commentBody, warnings = []) {
   ].join("\n");
 }
 
-function buildCommentBody(verdict, round, { warnings = [] } = {}) {
+function buildCommentBody(verdict, round, { warnings = [], gateFailure = null } = {}) {
+  if (gateFailure) {
+    return appendCommentWarnings([
+      REVIEW_MARKER,
+      "## Relay Review",
+      "Verdict: ESCALATED",
+      `Summary: ${gateFailure.summary}`,
+      `Rounds: ${round}`,
+      `Reviewer verdict: ${String(verdict.verdict || "unknown").toUpperCase()} (next_action=${verdict.next_action || "unknown"})`,
+      `Layer: ${gateFailure.layer}`,
+      `Rubric state: ${gateFailure.rubricState} (anchor status: ${gateFailure.rubricStatus})`,
+      `Recovery: ${gateFailure.recovery}`,
+    ].join("\n"), warnings);
+  }
+
   if (verdict.verdict === "pass") {
     return appendCommentWarnings([
       REVIEW_MARKER,
@@ -875,15 +912,78 @@ function toEscalatedVerdict(baseVerdict, summary) {
   };
 }
 
-function applyVerdictToManifest(data, verdict, round, prNumber, reviewedHeadSha, repeatedIssueCount) {
+/**
+ * Rubric fail-closed keeps `data.state` unchanged downstream instead of forcing
+ * `escalated` so operators can repair the rubric and resume with
+ * `dispatch --run-id`, matching the dispatcher's recoverable
+ * `review_pending` / `changes_requested` re-dispatch flow.
+ * `next_action=repair_rubric_and_rerun_review` tells the operator to fix the
+ * anchored rubric state before rerunning relay-review, and
+ * `review.latest_verdict="rubric_state_failed_closed"` records that the raw
+ * reviewer PASS was blocked by review-runner rubric enforcement.
+ */
+function buildReviewRunnerRubricGateFailure(rubricLoad) {
+  if (!rubricLoad || RUBRIC_PASS_THROUGH_STATES.has(rubricLoad.state)) {
+    return null;
+  }
+
+  let recovery;
+  switch (rubricLoad.state) {
+    case "not_set":
+      recovery = "Re-dispatch from relay-plan with a persisted rubric, or explicitly grandfather a pre-rubric run before rerunning relay-review.";
+      break;
+    case "missing":
+      recovery = "Restore the anchored rubric file in the run directory, or re-dispatch with a persisted rubric before rerunning relay-review.";
+      break;
+    case "outside_run_dir":
+      recovery = "Fix anchor.rubric_path to resolve inside the run directory, then re-dispatch before rerunning relay-review.";
+      break;
+    case "empty":
+      recovery = "Regenerate the rubric with relay-plan and re-dispatch before rerunning relay-review.";
+      break;
+    default:
+      recovery = "Fix or restore the anchored rubric file, then re-dispatch before rerunning relay-review.";
+      break;
+  }
+
+  return {
+    status: "rubric_state_failed_closed",
+    layer: "review-runner",
+    rubricState: rubricLoad.state,
+    rubricStatus: rubricLoad.status,
+    reason: rubricLoad.error || "Rubric is not loaded.",
+    recovery,
+    summary: `review-runner fail-closed: rubricLoad.state='${rubricLoad.state}' blocked ready_to_merge despite reviewer PASS. ${recovery}`,
+  };
+}
+
+function refreshManifestWithoutStateChange(data, nextAction) {
+  return {
+    ...data,
+    next_action: nextAction,
+    timestamps: {
+      ...(data.timestamps || {}),
+      updated_at: new Date().toISOString(),
+    },
+  };
+}
+
+function applyVerdictToManifest(data, verdict, round, prNumber, reviewedHeadSha, repeatedIssueCount, options = {}) {
+  const rubricGateFailure = options.rubricGateFailure || null;
   let nextState;
   let nextAction;
   let latestVerdict;
 
   if (verdict.verdict === "pass") {
-    nextState = STATES.READY_TO_MERGE;
-    nextAction = "await_explicit_merge";
-    latestVerdict = "lgtm";
+    if (rubricGateFailure) {
+      nextState = data.state;
+      nextAction = "repair_rubric_and_rerun_review";
+      latestVerdict = rubricGateFailure.status;
+    } else {
+      nextState = STATES.READY_TO_MERGE;
+      nextAction = "await_explicit_merge";
+      latestVerdict = "lgtm";
+    }
   } else if (verdict.verdict === "changes_requested") {
     nextState = STATES.CHANGES_REQUESTED;
     nextAction = "re_dispatch_requested_changes";
@@ -894,7 +994,9 @@ function applyVerdictToManifest(data, verdict, round, prNumber, reviewedHeadSha,
     latestVerdict = "escalated";
   }
 
-  const updated = updateManifestState(data, nextState, nextAction);
+  const updated = nextState === data.state
+    ? refreshManifestWithoutStateChange(data, nextAction)
+    : updateManifestState(data, nextState, nextAction);
   return {
     ...updated,
     git: {
@@ -908,6 +1010,14 @@ function applyVerdictToManifest(data, verdict, round, prNumber, reviewedHeadSha,
       latest_verdict: latestVerdict,
       repeated_issue_count: verdict.verdict === "changes_requested" ? repeatedIssueCount : 0,
       last_reviewed_sha: reviewedHeadSha || null,
+      last_gate: rubricGateFailure ? {
+        status: rubricGateFailure.status,
+        layer: rubricGateFailure.layer,
+        rubric_state: rubricGateFailure.rubricState,
+        rubric_status: rubricGateFailure.rubricStatus,
+        recovery: rubricGateFailure.recovery,
+        reason: rubricGateFailure.reason,
+      } : null,
     },
   };
 }
@@ -1224,8 +1334,24 @@ function run() {
       `Repeated identical review issues hit ${repeatedIssueCount} consecutive rounds.`
     );
   }
+  const rubricGateFailure = verdict.verdict === "pass"
+    ? buildReviewRunnerRubricGateFailure(rubricLoad)
+    : null;
   const verdictPath = path.join(runDir, `review-round-${round}-verdict.json`);
-  writeText(verdictPath, `${JSON.stringify(verdict, null, 2)}\n`);
+  const verdictRecord = rubricGateFailure
+    ? {
+      ...verdict,
+      relay_gate: {
+        status: rubricGateFailure.status,
+        layer: rubricGateFailure.layer,
+        rubric_state: rubricGateFailure.rubricState,
+        rubric_status: rubricGateFailure.rubricStatus,
+        reason: rubricGateFailure.reason,
+        recovery: rubricGateFailure.recovery,
+      },
+    }
+    : verdict;
+  writeText(verdictPath, `${JSON.stringify(verdictRecord, null, 2)}\n`);
 
   let redispatchPath = null;
   if (verdict.verdict === "changes_requested") {
@@ -1237,7 +1363,10 @@ function run() {
     loadPrBody(repoPath, prNumber),
     verdict.rubric_scores
   );
-  const commentBody = buildCommentBody(verdict, round, { warnings: divergenceWarnings });
+  const commentBody = buildCommentBody(verdict, round, {
+    warnings: divergenceWarnings,
+    gateFailure: rubricGateFailure,
+  });
   if (!noComment) {
     postComment(repoPath, prNumber, commentBody);
     result.commentPosted = true;
@@ -1249,7 +1378,8 @@ function run() {
     round,
     prNumber,
     reviewedHeadSha,
-    repeatedIssueCount
+    repeatedIssueCount,
+    { rubricGateFailure }
   );
   if (!noComment) {
     const reviewerLogin = getGhLogin();
@@ -1267,7 +1397,7 @@ function run() {
     state_to: updatedManifest.state,
     head_sha: reviewedHeadSha,
     round,
-    reason: verdict.verdict,
+    reason: rubricGateFailure ? rubricGateFailure.status : verdict.verdict,
   });
   if (Array.isArray(verdict.rubric_scores) && verdict.rubric_scores.length > 0) {
     appendIterationScore(runRepoPath, data.run_id, {
@@ -1294,6 +1424,15 @@ function run() {
   result.verdictPath = verdictPath;
   result.redispatchPath = redispatchPath;
   result.repeatedIssueCount = repeatedIssueCount;
+  result.appliedVerdict = rubricGateFailure ? "escalated" : verdict.verdict;
+  result.reviewGate = rubricGateFailure ? {
+    status: rubricGateFailure.status,
+    layer: rubricGateFailure.layer,
+    rubricState: rubricGateFailure.rubricState,
+    rubricStatus: rubricGateFailure.rubricStatus,
+    reason: rubricGateFailure.reason,
+    recovery: rubricGateFailure.recovery,
+  } : null;
 
   if (jsonOut) {
     console.log(JSON.stringify(result, null, 2));
@@ -1320,6 +1459,7 @@ if (require.main === module) {
 module.exports = {
   applyVerdictToManifest,
   buildCommentBody,
+  buildReviewRunnerRubricGateFailure,
   buildPrompt,
   buildRedispatchPrompt,
   detectChurnGrowth,
