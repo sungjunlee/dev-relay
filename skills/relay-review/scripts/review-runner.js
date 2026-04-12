@@ -912,6 +912,16 @@ function toEscalatedVerdict(baseVerdict, summary) {
   };
 }
 
+/**
+ * Rubric fail-closed keeps `data.state` unchanged downstream instead of forcing
+ * `escalated` so operators can repair the rubric and resume with
+ * `dispatch --run-id`, matching the dispatcher's recoverable
+ * `review_pending` / `changes_requested` re-dispatch flow.
+ * `next_action=repair_rubric_and_rerun_review` tells the operator to fix the
+ * anchored rubric state before rerunning relay-review, and
+ * `review.latest_verdict="rubric_state_failed_closed"` records that the raw
+ * reviewer PASS was blocked by review-runner rubric enforcement.
+ */
 function buildReviewRunnerRubricGateFailure(rubricLoad) {
   if (!rubricLoad || RUBRIC_PASS_THROUGH_STATES.has(rubricLoad.state)) {
     return null;
