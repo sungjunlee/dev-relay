@@ -1536,6 +1536,64 @@ test("review-runner loads rubric from run dir and includes rubric factor names a
   assert.match(promptText, /rubric_scores.*REQUIRED/i);
 });
 
+test("review-runner advances loaded-rubric PASS reviews to ready_to_merge", () => {
+  const { repoRoot, manifestPath, runId, doneCriteriaPath, diffPath } = setupRepo();
+
+  const { data, body } = readManifest(manifestPath);
+  const runDir = ensureRunLayout(repoRoot, runId).runDir;
+  fs.writeFileSync(path.join(runDir, "rubric.yaml"), [
+    "rubric:",
+    "  factors:",
+    "    - name: API pagination",
+    "      target: \">= 8/10\"",
+  ].join("\n"), "utf-8");
+  const nextAnchor = { ...(data.anchor || {}), rubric_path: "rubric.yaml" };
+  delete nextAnchor.rubric_grandfathered;
+  writeManifest(manifestPath, {
+    ...data,
+    anchor: nextAnchor,
+  }, body);
+
+  const reviewFile = writeVerdict(repoRoot, "loaded-rubric-pass.json", {
+    verdict: "pass",
+    summary: "All done criteria are satisfied.",
+    contract_status: "pass",
+    quality_status: "pass",
+    next_action: "ready_to_merge",
+    issues: [],
+    rubric_scores: [
+      {
+        factor: "API pagination",
+        target: ">= 8/10",
+        observed: "9/10",
+        status: "pass",
+        tier: "contract",
+        notes: "Pagination behavior meets the rubric target.",
+      },
+    ],
+    scope_drift: { creep: [], missing: [] },
+  });
+
+  const result = runPassReview({
+    repoRoot,
+    runId,
+    doneCriteriaPath,
+    diffPath,
+    reviewFile,
+  });
+
+  const manifest = readManifest(manifestPath).data;
+  assert.equal(result.rubricLoaded, "loaded");
+  assert.equal(result.state, STATES.READY_TO_MERGE);
+  assert.equal(result.nextState, STATES.READY_TO_MERGE);
+  assert.equal(result.reviewGate, null);
+  assert.equal(manifest.state, STATES.READY_TO_MERGE);
+  assert.equal(manifest.next_action, "await_explicit_merge");
+  assert.equal(manifest.review.latest_verdict, "lgtm");
+  assert.equal(manifest.anchor.rubric_path, "rubric.yaml");
+  assert.ok(!("rubric_grandfathered" in manifest.anchor));
+});
+
 test("review-runner warns visibly when anchor.rubric_path is set but the rubric file is missing", () => {
   const { repoRoot, manifestPath, runId, doneCriteriaPath, diffPath } = setupRepo();
 
