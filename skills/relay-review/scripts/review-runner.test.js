@@ -1536,6 +1536,7 @@ test("review-runner loads rubric from run dir and includes rubric factor names a
   assert.match(promptText, /rubric_scores.*REQUIRED/i);
 });
 
+// Covers #157 AC(f): a loaded rubric + PASS verdict MUST still advance to ready_to_merge; paired with the fail-closed regressions below at :1598-1660 (missing/outside/empty/invalid/not_set).
 test("review-runner advances loaded-rubric PASS reviews to ready_to_merge", () => {
   const { repoRoot, manifestPath, runId, doneCriteriaPath, diffPath } = setupRepo();
 
