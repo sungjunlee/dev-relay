@@ -84,6 +84,9 @@ function output(result) {
     } else if (result.status === "changes_requested") {
       console.log(`✗ PR #${PR_NUM}: relay-review requested changes — re-dispatch or fix the branch before merge`);
       if (result.issues) console.log(`  ${result.issues}`);
+    } else if (result.status === "missing_rubric_path") {
+      console.log(`✗ PR #${PR_NUM}: run is missing anchor.rubric_path — merge blocked`);
+      console.log("  Re-dispatch from relay-plan with --rubric-file, or explicitly grandfather a pre-change run.");
     } else if (result.status === "unauthorized_reviewer") {
       console.log(`✗ PR #${PR_NUM}: relay-review comment found but from unauthorized author (expected: ${result.expectedReviewerLogin})`);
     } else if (result.status === "stale") {
@@ -156,6 +159,9 @@ function main() {
     manifestData,
     expectedReviewerLogin,
   });
+  if (result.note) {
+    console.error(`Note: ${result.note}`);
+  }
   output(result);
   if (!result.readyToMerge) {
     process.exit(1);

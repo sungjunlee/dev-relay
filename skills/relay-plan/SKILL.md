@@ -236,7 +236,7 @@ Take the base template (`relay/references/prompt-template.md`) and add these sec
 
 ### 5. Dispatch
 
-Write the rubric YAML to a temp file alongside the dispatch prompt.
+Write the rubric YAML to a temp file alongside the dispatch prompt. This is REQUIRED: every relay dispatch must pass `--rubric-file` so the rubric is persisted at `anchor.rubric_path` for review and merge gates.
 
 ```bash
 ${CLAUDE_SKILL_DIR}/../relay-dispatch/scripts/dispatch.js . \

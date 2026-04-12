@@ -22,7 +22,8 @@
  *   --sandbox <mode>       workspace-write | read-only (default: workspace-write)
  *   --copy <file,...>      Additional files to copy
  *   --timeout <seconds>    Exec timeout (default: 1800)
- *   --rubric-file <path>   Copy rubric YAML to run dir (persists for review)
+ *   --rubric-file <path>   REQUIRED: copy rubric YAML to run dir (persists for review)
+ *   --rubric-grandfathered Migration-only escape hatch for pre-change runs without a rubric
  *   --request-id <id>      Link the run back to a relay-intake request
  *   --leaf-id <id>         Link the run back to a relay-intake leaf handoff
  *   --done-criteria-file   Persist a frozen Done Criteria anchor path
@@ -81,7 +82,7 @@ const args = process.argv.slice(2);
 
 const KNOWN_FLAGS = [
   "--branch", "-b", "--run-id", "--manifest", "--prompt", "-p", "--prompt-file", "--executor", "-e",
-  "--model", "-m", "--sandbox", "--copy", "--timeout", "--rubric-file",
+  "--model", "-m", "--sandbox", "--copy", "--timeout", "--rubric-file", "--rubric-grandfathered",
   "--request-id", "--leaf-id", "--done-criteria-file",
   "--register", "--no-cleanup", "--dry-run", "--json", "--help", "-h",
 ];
@@ -102,11 +103,12 @@ if (!args.length || args.includes("--help") || args.includes("-h")) {
   console.log("  --sandbox          workspace-write | read-only (default: workspace-write)");
   console.log("  --copy <files>     Additional files to copy (comma-separated)");
   console.log("  --timeout          Exec timeout in seconds (default: 1800)");
+  console.log("  --rubric-file      REQUIRED: copy rubric YAML to run dir (persists for review)");
+  console.log("  --rubric-grandfathered  Migration-only escape hatch for pre-change runs without a rubric");
   console.log("  --request-id       Link the run back to a relay-intake request");
   console.log("  --leaf-id          Link the run back to a relay-intake leaf handoff");
   console.log("  --done-criteria-file  Persist a frozen Done Criteria anchor path");
   console.log("  --register         Register session in executor's app (keeps worktree)");
-  console.log("  --rubric-file      Copy rubric YAML to run dir (persists for review)");
   console.log("  --no-cleanup       Compatibility alias; worktree is retained by default");
   console.log("  --dry-run          Show plan without executing");
   console.log("  --json             Output as JSON");
@@ -127,11 +129,11 @@ const hasFlag = (f) => args.includes(f);
 // Positional arg: first arg that isn't a flag and isn't consumed as a flag's value
 const consumedIndices = new Set();
 for (let i = 0; i < args.length; i++) {
-  if (KNOWN_FLAGS.includes(args[i]) && !["--register", "--no-cleanup", "--dry-run", "--json", "--help", "-h"].includes(args[i])) {
+  if (KNOWN_FLAGS.includes(args[i]) && !["--register", "--no-cleanup", "--dry-run", "--json", "--help", "-h", "--rubric-grandfathered"].includes(args[i])) {
     consumedIndices.add(i);
     consumedIndices.add(i + 1);
     i++; // skip the value
-  } else if (["--register", "--no-cleanup", "--dry-run", "--json", "--help", "-h"].includes(args[i])) {
+  } else if (["--register", "--no-cleanup", "--dry-run", "--json", "--help", "-h", "--rubric-grandfathered"].includes(args[i])) {
     consumedIndices.add(i);
   }
 }
@@ -148,6 +150,7 @@ const MODEL = getArg(["--model", "-m"], undefined);
 const SANDBOX = getArg("--sandbox", "workspace-write");
 const COPY_FILES = getArg("--copy", "").split(",").filter(Boolean);
 const RUBRIC_FILE = getArg("--rubric-file", undefined);
+const RUBRIC_GRANDFATHERED = hasFlag("--rubric-grandfathered");
 const REQUEST_ID = getArg("--request-id", undefined);
 const LEAF_ID = getArg("--leaf-id", undefined);
 const DONE_CRITERIA_FILE = getArg("--done-criteria-file", undefined);
@@ -187,6 +190,11 @@ if (RUBRIC_FILE) {
     console.error(`Error: rubric file not found: ${rubricPath}`);
     process.exit(1);
   }
+}
+
+if (RUBRIC_FILE && RUBRIC_GRANDFATHERED) {
+  console.error("Error: use either --rubric-file or --rubric-grandfathered, not both");
+  process.exit(1);
 }
 
 if (DONE_CRITERIA_FILE) {
@@ -296,6 +304,45 @@ function validateResumeRequestLinkage(manifest, { requestId, leafId, doneCriteri
         `same-run resume cannot change immutable ${check.field} (existing: ${check.existing}, incoming: ${check.incoming})`
       );
     }
+  }
+}
+
+function hasAnchoredRubricPath(manifest) {
+  return typeof manifest?.anchor?.rubric_path === "string" && manifest.anchor.rubric_path.trim() !== "";
+}
+
+function isRubricGrandfathered(manifest) {
+  return manifest?.anchor?.rubric_grandfathered === true;
+}
+
+function markRubricGrandfathered(manifest) {
+  return {
+    ...manifest,
+    anchor: {
+      ...(manifest.anchor || {}),
+      rubric_grandfathered: true,
+    },
+  };
+}
+
+function clearRubricGrandfathering(anchor = {}) {
+  const nextAnchor = { ...anchor };
+  delete nextAnchor.rubric_grandfathered;
+  return nextAnchor;
+}
+
+function enforceRubricPersistence(manifest) {
+  if (RUBRIC_GRANDFATHERED && hasAnchoredRubricPath(manifest)) {
+    console.error("Error: --rubric-grandfathered is only valid when the run does not already have anchor.rubric_path");
+    process.exit(1);
+  }
+
+  if (!RUBRIC_FILE && !hasAnchoredRubricPath(manifest) && !isRubricGrandfathered(manifest) && !RUBRIC_GRANDFATHERED) {
+    console.error(
+      "Error: --rubric-file is required. Generate the rubric with relay-plan and pass --rubric-file <path> to dispatch.js. " +
+      "Only migration tooling for pre-change runs may bypass this with --rubric-grandfathered."
+    );
+    process.exit(1);
   }
 }
 
@@ -410,6 +457,15 @@ async function main() {
     }
   }
 
+  enforceRubricPersistence(manifest);
+
+  if (RESUME_MODE && RUBRIC_GRANDFATHERED) {
+    manifest = markRubricGrandfathered(manifest);
+    if (!DRY_RUN) {
+      writeManifest(manifestPath, manifest);
+    }
+  }
+
   // --- Prepend iteration history on re-dispatch ---
   if (RESUME_MODE) {
     const previousAttempts = readPreviousAttempts(repoRoot, runId);
@@ -433,6 +489,7 @@ async function main() {
       cleanupPolicy,
       worktreeinclude: includeFiles,
       rubricFile: RUBRIC_FILE || null,
+      rubricGrandfathered: RUBRIC_GRANDFATHERED || isRubricGrandfathered(manifest),
       requestId: REQUEST_ID || manifest?.source?.request_id || null,
       leafId: LEAF_ID || manifest?.source?.leaf_id || null,
       doneCriteriaFile: resolvedDoneCriteriaPath || manifest?.anchor?.done_criteria_path || null,
@@ -458,6 +515,9 @@ async function main() {
       console.log(`  Timeout:  ${TIMEOUT}s`);
       if (RUBRIC_FILE) {
         console.log(`  Rubric:   ${RUBRIC_FILE}`);
+      }
+      if (RUBRIC_GRANDFATHERED || isRubricGrandfathered(manifest)) {
+        console.log("  Rubric:   grandfathered pre-change run");
       }
       if (REQUEST_ID || manifest?.source?.request_id) {
         console.log(`  Request:  ${REQUEST_ID || manifest.source.request_id}`);
@@ -550,6 +610,9 @@ async function main() {
       doneCriteriaPath: resolvedDoneCriteriaPath,
       doneCriteriaSource: resolvedDoneCriteriaPath ? "request_snapshot" : null,
     });
+    if (RUBRIC_GRANDFATHERED) {
+      manifest = markRubricGrandfathered(manifest);
+    }
     ensureRunLayout(repoRoot, runId);
     writeManifest(manifestPath, manifest);
   }
@@ -563,7 +626,7 @@ async function main() {
     manifest = {
       ...manifest,
       anchor: {
-        ...(manifest.anchor || {}),
+        ...clearRubricGrandfathering(manifest.anchor || {}),
         rubric_path: "rubric.yaml",
       },
     };
@@ -827,6 +890,7 @@ async function main() {
     runDir,
     manifestPath,
     rubricPath: manifest.anchor?.rubric_path ? path.join(runDir, manifest.anchor.rubric_path) : null,
+    rubricGrandfathered: manifest.anchor?.rubric_grandfathered === true,
     requestId: manifest.source?.request_id || null,
     leafId: manifest.source?.leaf_id || null,
     doneCriteriaPath: manifest.anchor?.done_criteria_path || null,

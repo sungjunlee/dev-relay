@@ -32,6 +32,7 @@ function writeReviewPendingManifest(repoRoot, runId, branch, updatedAt) {
     reviewer: "claude",
   });
   manifest = updateManifestState(manifest, STATES.DISPATCHED, "await_dispatch_result");
+  manifest.anchor.rubric_grandfathered = true;
   manifest = updateManifestState(manifest, STATES.REVIEW_PENDING, "run_review");
   manifest.timestamps.updated_at = updatedAt;
   manifest.timestamps.created_at = updatedAt;

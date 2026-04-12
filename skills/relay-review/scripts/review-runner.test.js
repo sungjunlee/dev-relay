@@ -52,6 +52,13 @@ function setupRepo() {
   manifest = updateManifestState(manifest, STATES.DISPATCHED, "await_dispatch_result");
   manifest = {
     ...manifest,
+    anchor: {
+      ...(manifest.anchor || {}),
+      rubric_grandfathered: true,
+    },
+  };
+  manifest = {
+    ...manifest,
     git: {
       ...(manifest.git || {}),
       head_sha: execFileSync("git", ["-C", worktreePath, "rev-parse", "HEAD"], { encoding: "utf-8", stdio: "pipe" }).trim(),
@@ -1287,13 +1294,18 @@ test("buildRedispatchPrompt omits churn WARNING when churnGrowth is null", () =>
   assert.ok(!out.includes("Apply minimal"));
 });
 
-test("review-runner loads rubric from run dir and includes it in prompt", () => {
+test("review-runner loads rubric from run dir and includes rubric factor names and targets in the prompt", () => {
   const { repoRoot, manifestPath, runId, doneCriteriaPath, diffPath } = setupRepo();
 
   // Write a rubric file to the run dir
   const { data, body } = readManifest(manifestPath);
   const runDir = ensureRunLayout(repoRoot, runId).runDir;
-  fs.writeFileSync(path.join(runDir, "rubric.yaml"), "rubric:\n  factors:\n    - name: API pagination\n", "utf-8");
+  fs.writeFileSync(path.join(runDir, "rubric.yaml"), [
+    "rubric:",
+    "  factors:",
+    "    - name: API pagination",
+    "      target: \">= 8/10\"",
+  ].join("\n"), "utf-8");
   const updated = {
     ...data,
     anchor: { ...data.anchor, rubric_path: "rubric.yaml" },
@@ -1316,6 +1328,7 @@ test("review-runner loads rubric from run dir and includes it in prompt", () => 
   const promptText = fs.readFileSync(result.promptPath, "utf-8");
   assert.match(promptText, /## Scoring Rubric/);
   assert.match(promptText, /API pagination/);
+  assert.match(promptText, />= 8\/10/);
   assert.match(promptText, /rubric_scores.*REQUIRED/i);
 });
 
@@ -1359,7 +1372,7 @@ test("review-runner rejects empty rubric_scores when rubric is present", () => {
 test("review-runner allows empty rubric_scores when no rubric file exists", () => {
   const { repoRoot, manifestPath, runId, doneCriteriaPath, diffPath } = setupRepo();
 
-  // No rubric file, no rubric_path in manifest
+  // No rubric file, no rubric_path in manifest; setupRepo marks the run grandfathered.
   const reviewFile = writeVerdict(repoRoot, "no-rubric-pass.json", {
     verdict: "pass",
     summary: "All done criteria are satisfied.",

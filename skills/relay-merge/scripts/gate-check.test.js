@@ -88,6 +88,9 @@ test("gate-check uses manifest review SHA when provided", () => {
       },
     ],
     manifest: {
+      anchor: {
+        rubric_path: "rubric.yaml",
+      },
       review: {
         last_reviewed_sha: "old123",
       },
@@ -144,6 +147,9 @@ test("gate-check blocks review from unauthorized author when reviewer_login is s
     ],
     commits: [],
     manifest: {
+      anchor: {
+        rubric_path: "rubric.yaml",
+      },
       review: {
         reviewer_login: "trusted-reviewer",
         last_reviewed_sha: null,
@@ -170,6 +176,9 @@ test("gate-check passes review from authorized author when reviewer_login is set
       { oid: "abc123", committedDate: "2026-04-03T07:00:00Z" },
     ],
     manifest: {
+      anchor: {
+        rubric_path: "rubric.yaml",
+      },
       review: {
         reviewer_login: "trusted-reviewer",
         last_reviewed_sha: "abc123",
@@ -198,6 +207,9 @@ test("gate-check skips unauthorized and uses authorized review when both exist",
     ],
     commits: [],
     manifest: {
+      anchor: {
+        rubric_path: "rubric.yaml",
+      },
       review: {
         reviewer_login: "trusted-reviewer",
         last_reviewed_sha: null,
@@ -220,6 +232,9 @@ test("gate-check blocks review with null author when reviewer_login is set (fail
     ],
     commits: [],
     manifest: {
+      anchor: {
+        rubric_path: "rubric.yaml",
+      },
       review: {
         reviewer_login: "trusted-reviewer",
         last_reviewed_sha: null,
@@ -245,6 +260,9 @@ test("gate-check author comparison is case-insensitive", () => {
       { oid: "abc123", committedDate: "2026-04-03T07:00:00Z" },
     ],
     manifest: {
+      anchor: {
+        rubric_path: "rubric.yaml",
+      },
       review: {
         reviewer_login: "trusted-reviewer",
         last_reviewed_sha: "abc123",
@@ -255,6 +273,59 @@ test("gate-check author comparison is case-insensitive", () => {
   assert.equal(result.status, 0);
   assert.equal(result.json.status, "lgtm");
   assert.equal(result.json.readyToMerge, true);
+});
+
+test("gate-check rejects merge when manifest is missing anchor.rubric_path", () => {
+  const result = runGateCheckDryRun({
+    comments: [
+      {
+        body: "<!-- relay-review -->\n## Relay Review\nVerdict: LGTM\nRounds: 1",
+        createdAt: "2026-04-03T08:00:00Z",
+      },
+    ],
+    commits: [
+      { oid: "abc123", committedDate: "2026-04-03T07:00:00Z" },
+    ],
+    manifest: {
+      anchor: {},
+      review: {
+        last_reviewed_sha: "abc123",
+      },
+    },
+  });
+
+  assert.equal(result.status, 1);
+  assert.equal(result.json.status, "missing_rubric_path");
+  assert.equal(result.json.readyToMerge, false);
+});
+
+test("gate-check allows grandfathered runs and surfaces the note", () => {
+  const result = runGateCheckDryRun({
+    comments: [
+      {
+        body: "<!-- relay-review -->\n## Relay Review\nVerdict: LGTM\nRounds: 1",
+        createdAt: "2026-04-03T08:00:00Z",
+      },
+    ],
+    commits: [
+      { oid: "abc123", committedDate: "2026-04-03T07:00:00Z" },
+    ],
+    manifest: {
+      anchor: {
+        rubric_grandfathered: true,
+      },
+      review: {
+        last_reviewed_sha: "abc123",
+      },
+    },
+  });
+
+  assert.equal(result.status, 0);
+  assert.equal(result.json.status, "lgtm");
+  assert.equal(result.json.readyToMerge, true);
+  assert.equal(result.json.rubricGrandfathered, true);
+  assert.match(result.json.note, /Grandfathered pre-rubric run/);
+  assert.match(result.stderr, /Grandfathered pre-rubric run/);
 });
 
 test("gate-check allows any author when reviewer_login is not set", () => {
