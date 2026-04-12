@@ -817,12 +817,16 @@ test("dispatch allows --rubric-grandfathered for review_pending runs without re-
   delete updated.anchor.rubric_grandfathered;
   writeManifest(manifestPath, updated, record.body);
 
-  const result = JSON.parse(execFileSync("node", [SCRIPT, repoRoot,
+  const result = JSON.parse(execFileSync(process.execPath, [SCRIPT, repoRoot,
     "--run-id", runId,
-    "--prompt", "grandfather legacy review pending run",
     "--rubric-grandfathered",
     "--json",
-  ], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe", env }));
+  ], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+    env: { ...env, PATH: "" },
+  }));
 
   assert.equal(result.mode, "resume");
   assert.equal(result.status, "grandfathered");
@@ -869,13 +873,17 @@ test("dispatch allows --rubric-grandfathered for ready_to_merge runs after the o
   delete updated.anchor.rubric_grandfathered;
   writeManifest(manifestPath, updated, record.body);
 
-  const result = JSON.parse(execFileSync("node", [SCRIPT, repoRoot,
+  const result = JSON.parse(execFileSync(process.execPath, [SCRIPT, repoRoot,
     "--run-id", runId,
-    "--prompt", "grandfather legacy ready-to-merge run",
     "--rubric-grandfathered",
     "--dry-run",
     "--json",
-  ], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe", env }));
+  ], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+    env: { ...env, PATH: "" },
+  }));
 
   assert.equal(result.mode, "resume");
   assert.equal(result.status, "would-grandfather");

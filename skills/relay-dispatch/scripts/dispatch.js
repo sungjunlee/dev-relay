@@ -180,11 +180,6 @@ if (!RESUME_MODE && !BRANCH) {
   process.exit(1);
 }
 
-if (!PROMPT && !PROMPT_FILE) {
-  console.error("Error: --prompt or --prompt-file is required");
-  process.exit(1);
-}
-
 if (RUBRIC_FILE) {
   const rubricPath = path.resolve(RUBRIC_FILE);
   if (!fs.existsSync(rubricPath)) {
@@ -219,30 +214,8 @@ if (!MANIFEST_INPUT && !fs.existsSync(path.join(REPO_PATH, ".git"))) {
   process.exit(1);
 }
 
-// Executor CLI validation
 // To add a new executor: add entry here + execution branch in Step 3.
 const EXECUTOR_CLI = { codex: "codex", claude: "claude" };
-const cli = EXECUTOR_CLI[EXECUTOR];
-if (!cli) {
-  console.error(`Error: unknown executor '${EXECUTOR}'. Supported: ${Object.keys(EXECUTOR_CLI).join(", ")}`);
-  process.exit(1);
-}
-try {
-  execFileSync(cli, ["--version"], { encoding: "utf-8", stdio: "pipe" });
-} catch {
-  console.error(`Error: ${cli} CLI not found.`);
-  process.exit(1);
-}
-
-let taskPrompt = PROMPT;
-if (PROMPT_FILE) {
-  const promptPath = path.resolve(PROMPT_FILE);
-  if (!fs.existsSync(promptPath)) {
-    console.error(`Error: prompt file not found: ${promptPath}`);
-    process.exit(1);
-  }
-  taskPrompt = fs.readFileSync(promptPath, "utf-8").trim();
-}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -351,6 +324,38 @@ function enforceRubricPersistence(manifest) {
     );
     process.exit(1);
   }
+}
+
+function validateExecutorCli() {
+  const cli = EXECUTOR_CLI[EXECUTOR];
+  if (!cli) {
+    console.error(`Error: unknown executor '${EXECUTOR}'. Supported: ${Object.keys(EXECUTOR_CLI).join(", ")}`);
+    process.exit(1);
+  }
+  try {
+    execFileSync(cli, ["--version"], { encoding: "utf-8", stdio: "pipe" });
+  } catch {
+    console.error(`Error: ${cli} CLI not found.`);
+    process.exit(1);
+  }
+}
+
+function readTaskPrompt() {
+  if (!PROMPT && !PROMPT_FILE) {
+    console.error("Error: --prompt or --prompt-file is required");
+    process.exit(1);
+  }
+
+  if (!PROMPT_FILE) {
+    return PROMPT;
+  }
+
+  const promptPath = path.resolve(PROMPT_FILE);
+  if (!fs.existsSync(promptPath)) {
+    console.error(`Error: prompt file not found: ${promptPath}`);
+    process.exit(1);
+  }
+  return fs.readFileSync(promptPath, "utf-8").trim();
 }
 
 function buildGrandfatherOnlyResult({
@@ -540,6 +545,9 @@ async function main() {
     }
     return;
   }
+
+  validateExecutorCli();
+  let taskPrompt = readTaskPrompt();
 
   // --- Prepend iteration history on re-dispatch ---
   if (RESUME_MODE) {
