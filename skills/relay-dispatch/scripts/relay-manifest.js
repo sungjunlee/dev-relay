@@ -391,11 +391,17 @@ function resolveRubricRunDir(data, options = {}) {
   }
 
   const repoRoot = options.repoRoot || data?.paths?.repo_root || null;
-  const runId = options.runId || data?.run_id || null;
-  if (!repoRoot || !runId) {
+  const runId = Object.prototype.hasOwnProperty.call(options, "runId")
+    ? options.runId
+    : data?.run_id;
+  const validation = validateRunId(runId);
+  if (!validation.valid) {
+    throw new Error(validation.reason);
+  }
+  if (!repoRoot) {
     return null;
   }
-  return path.resolve(getRunDir(repoRoot, runId));
+  return path.resolve(getRunDir(repoRoot, validation.runId));
 }
 
 function validateRubricPathContainment(rubricPath, runDir) {

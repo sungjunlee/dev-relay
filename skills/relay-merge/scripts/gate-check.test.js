@@ -437,6 +437,7 @@ test("gate-check rejects merge when manifest is missing anchor.rubric_path", () 
       { oid: "abc123", committedDate: "2026-04-03T07:00:00Z" },
     ],
     manifest: {
+      run_id: "issue-40-20260412010000000",
       anchor: {},
       review: {
         last_reviewed_sha: "abc123",
@@ -604,6 +605,7 @@ test("gate-check allows grandfathered runs and surfaces the note", () => {
       { oid: "abc123", committedDate: "2026-04-03T07:00:00Z" },
     ],
     manifest: {
+      run_id: "issue-40-20260412010000000",
       anchor: {
         rubric_grandfathered: true,
       },

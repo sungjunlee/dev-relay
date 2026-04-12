@@ -339,6 +339,7 @@ test("updateManifestState allows valid transitions and rejects invalid ones", ()
 
 test("updateManifestState rejects dispatched -> review_pending when anchor.rubric_path is missing", () => {
   const manifest = {
+    run_id: "issue-42-20260412000000000",
     state: STATES.DISPATCHED,
     next_action: "await_dispatch_result",
     anchor: {},
@@ -396,6 +397,60 @@ test("getRubricAnchorStatus rejects invalid run_id even for grandfathered runs",
     }),
     /may not contain '\.\.' segments/
   );
+});
+
+test("getRubricAnchorStatus rejects missing and empty run_id before rubric or grandfathered handling", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-manifest-missing-runid-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+
+  const cases = [
+    {
+      label: "missing run_id with rubric_path",
+      manifest: {
+        anchor: { rubric_path: "rubric.yaml" },
+        paths: { repo_root: repoRoot },
+      },
+      pattern: /got undefined/,
+    },
+    {
+      label: "empty run_id with rubric_path",
+      manifest: {
+        run_id: "",
+        anchor: { rubric_path: "rubric.yaml" },
+        paths: { repo_root: repoRoot },
+      },
+      pattern: /got ""/,
+    },
+    {
+      label: "missing run_id with grandfathered anchor",
+      manifest: {
+        anchor: { rubric_grandfathered: true },
+        paths: { repo_root: repoRoot },
+      },
+      pattern: /got undefined/,
+    },
+    {
+      label: "empty run_id with grandfathered anchor",
+      manifest: {
+        run_id: "",
+        anchor: { rubric_grandfathered: true },
+        paths: { repo_root: repoRoot },
+      },
+      pattern: /got ""/,
+    },
+  ];
+
+  for (const entry of cases) {
+    assert.throws(
+      () => getRubricAnchorStatus(entry.manifest),
+      (error) => {
+        assert.match(error.message, /run_id must be set to a single path segment/);
+        assert.match(error.message, entry.pattern);
+        return true;
+      },
+      entry.label
+    );
+  }
 });
 
 test("getRubricAnchorStatus distinguishes satisfied, empty, outside_run_dir, and grandfathered", () => {
