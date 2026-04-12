@@ -1,5 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const { execFileSync } = require("child_process");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
@@ -9,10 +10,17 @@ const {
   createManifestSkeleton,
   createRunId,
   ensureRunLayout,
+  readManifest,
   updateManifestState,
   writeManifest,
 } = require("./relay-manifest");
 const { findManifestByRunId, resolveManifestRecord } = require("./relay-resolver");
+
+const CLOSE_RUN_SCRIPT = path.join(__dirname, "close-run.js");
+
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
 
 function ensureFixtureRubric(runDir, rubricPath) {
   if (
@@ -38,6 +46,7 @@ function writeManifestRecord(repoRoot, options = {}) {
   prNumber,
   grandfathered = true,
   rubricPath,
+  cleanupPolicy = "on_close",
   updatedAt = "2026-04-03T00:00:00.000Z",
   } = options;
   const { manifestPath, runDir } = ensureRunLayout(repoRoot, runId);
@@ -51,6 +60,7 @@ function writeManifestRecord(repoRoot, options = {}) {
     orchestrator: "codex",
     executor: "codex",
     reviewer: "claude",
+    cleanupPolicy,
   });
 
   manifest.anchor.rubric_grandfathered = grandfathered;
@@ -260,7 +270,7 @@ test("resolveManifestRecord rejects ambiguous non-terminal branch matches and re
   const secondPath = writeManifestRecord(repoRoot, {
     runId: secondRunId,
     branch: "feature-foo",
-    state: STATES.ESCALATED,
+    state: STATES.CHANGES_REQUESTED,
     updatedAt: "2026-04-03T00:10:00.000Z",
   });
 
@@ -329,8 +339,58 @@ test("resolveManifestRecord preserves dispatch-before-PR fallback for a single n
   assert.equal(match.data.run_id, runId);
 });
 
-test("resolveManifestRecord keeps escalated runs eligible for branch-only resolution", () => {
-  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-resolver-escalated-"));
+test("resolveManifestRecord rejects stale escalated branch fallback and names close-run plus --run-id recovery", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-resolver-escalated-stale-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  const runId = createRunId({
+    branch: "feature-auth",
+    timestamp: new Date("2026-04-03T00:00:00.000Z"),
+  });
+  const closeCommand = `node skills/relay-dispatch/scripts/close-run.js --repo ${JSON.stringify(repoRoot)} --run-id ${JSON.stringify(runId)} --reason ${JSON.stringify("stale_escalated_run")}`;
+  writeManifestRecord(repoRoot, {
+    runId,
+    branch: "feature-auth",
+    state: STATES.ESCALATED,
+    cleanupPolicy: "manual",
+    updatedAt: "2026-04-03T00:00:00.000Z",
+  });
+
+  assert.throws(
+    () => resolveManifestRecord({ repoRoot, branch: "feature-auth", prNumber: 120 }),
+    (error) => {
+      assert.match(error.message, /No relay manifest found for branch 'feature-auth' \+ pr '120'/);
+      assert.match(error.message, new RegExp(runId));
+      assert.match(error.message, /state=escalated, pr=unset/);
+      assert.match(error.message, new RegExp(escapeRegExp(closeCommand)));
+      assert.match(error.message, new RegExp(escapeRegExp(`--run-id ${JSON.stringify(runId)}`)));
+      return true;
+    }
+  );
+});
+
+test("resolveManifestRecord keeps escalated manifests addressable by matching pr_number", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-resolver-escalated-pr-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  const runId = createRunId({
+    branch: "feature-auth",
+    timestamp: new Date("2026-04-03T00:00:00.000Z"),
+  });
+  const manifestPath = writeManifestRecord(repoRoot, {
+    runId,
+    branch: "feature-auth",
+    state: STATES.ESCALATED,
+    prNumber: 120,
+    updatedAt: "2026-04-03T00:00:00.000Z",
+  });
+
+  const match = resolveManifestRecord({ repoRoot, branch: "feature-auth", prNumber: 120 });
+  assert.equal(match.manifestPath, manifestPath);
+  assert.equal(match.data.state, STATES.ESCALATED);
+  assert.equal(match.data.git.pr_number, 120);
+});
+
+test("resolveManifestRecord keeps escalated manifests addressable by explicit selectors", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-resolver-escalated-explicit-"));
   process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
   const runId = createRunId({
     branch: "issue-42",
@@ -343,7 +403,58 @@ test("resolveManifestRecord keeps escalated runs eligible for branch-only resolu
     updatedAt: "2026-04-03T00:00:00.000Z",
   });
 
-  const match = resolveManifestRecord({ repoRoot, branch: "issue-42" });
-  assert.equal(match.manifestPath, manifestPath);
-  assert.equal(match.data.state, STATES.ESCALATED);
+  const runIdMatch = resolveManifestRecord({ repoRoot, runId });
+  assert.equal(runIdMatch.manifestPath, manifestPath);
+  assert.equal(runIdMatch.data.state, STATES.ESCALATED);
+
+  const manifestMatch = resolveManifestRecord({ repoRoot, manifestPath });
+  assert.equal(manifestMatch.manifestPath, manifestPath);
+  assert.equal(manifestMatch.data.state, STATES.ESCALATED);
+});
+
+test("resolveManifestRecord recovers from stale escalated fallback after close-run and fresh dispatch", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-resolver-escalated-recovery-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  const staleRunId = createRunId({
+    branch: "feature-auth",
+    timestamp: new Date("2026-04-03T00:00:00.000Z"),
+  });
+  const staleManifestPath = writeManifestRecord(repoRoot, {
+    runId: staleRunId,
+    branch: "feature-auth",
+    state: STATES.ESCALATED,
+    cleanupPolicy: "manual",
+    updatedAt: "2026-04-03T00:00:00.000Z",
+  });
+
+  assert.throws(
+    () => resolveManifestRecord({ repoRoot, branch: "feature-auth", prNumber: 120 }),
+    new RegExp(escapeRegExp(`--run-id ${JSON.stringify(staleRunId)}`))
+  );
+
+  execFileSync("node", [
+    CLOSE_RUN_SCRIPT,
+    "--repo", repoRoot,
+    "--run-id", staleRunId,
+    "--reason", "stale_escalated_run",
+    "--json",
+  ], { encoding: "utf-8" });
+
+  const staleManifest = readManifest(staleManifestPath).data;
+  assert.equal(staleManifest.state, STATES.CLOSED);
+
+  const freshRunId = createRunId({
+    branch: "feature-auth",
+    timestamp: new Date("2026-04-03T00:15:00.000Z"),
+  });
+  const freshPath = writeManifestRecord(repoRoot, {
+    runId: freshRunId,
+    branch: "feature-auth",
+    cleanupPolicy: "manual",
+    updatedAt: "2026-04-03T00:15:00.000Z",
+  });
+
+  const match = resolveManifestRecord({ repoRoot, branch: "feature-auth", prNumber: 120 });
+  assert.equal(match.manifestPath, freshPath);
+  assert.equal(match.data.run_id, freshRunId);
 });

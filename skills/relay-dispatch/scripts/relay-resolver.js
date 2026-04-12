@@ -2,6 +2,12 @@ const path = require("path");
 const { STATES, listManifestRecords, readManifest, validateRunId } = require("./relay-manifest");
 
 const BRANCH_ONLY_TERMINAL_STATES = new Set([STATES.MERGED, STATES.CLOSED]);
+const BRANCH_PR_FALLBACK_INELIGIBLE_STATES = new Set([
+  ...BRANCH_ONLY_TERMINAL_STATES,
+  // #165: branch+PR fallback must not inherit stale escalated runs with no stored PR.
+  // Operators can still inspect/recover them explicitly via --run-id/--manifest.
+  STATES.ESCALATED,
+]);
 
 function formatSelector({ runId, manifestPath, branch, prNumber }) {
   if (manifestPath) return `manifest '${manifestPath}'`;
@@ -46,8 +52,35 @@ function filterByPr(records, prNumber) {
   return records.filter(({ data }) => Number(data?.git?.pr_number || 0) === Number(prNumber));
 }
 
+function filterByBranchPrFallback(records, branch) {
+  return filterByBranch(records, branch)
+    .filter((record) => !BRANCH_PR_FALLBACK_INELIGIBLE_STATES.has(record?.data?.state));
+}
+
 function hasStoredPrNumber(record) {
   return record?.data?.git?.pr_number !== undefined && record?.data?.git?.pr_number !== null;
+}
+
+function findStaleEscalatedBranchFallbackCandidate(records) {
+  if (records.length !== 1) {
+    return null;
+  }
+  const [record] = records;
+  if (record?.data?.state !== STATES.ESCALATED || hasStoredPrNumber(record)) {
+    return null;
+  }
+  return record;
+}
+
+function buildCloseRunCommand(repoRoot, runId, reason) {
+  return `node skills/relay-dispatch/scripts/close-run.js --repo ${JSON.stringify(repoRoot)} ` +
+    `--run-id ${JSON.stringify(runId)} --reason ${JSON.stringify(reason)}`;
+}
+
+function buildEscalatedRecoveryMessage(repoRoot, record) {
+  const runId = formatRunId(record);
+  return `Close the stale escalated run via ${buildCloseRunCommand(repoRoot, runId, "stale_escalated_run")} ` +
+    `before retrying, or inspect it explicitly via --run-id ${JSON.stringify(runId)}.`;
 }
 
 function validateRequestedRunId(runId) {
@@ -142,13 +175,13 @@ function resolveManifestRecord({
   let matches = allRecords;
   if (branch && prNumber !== undefined && prNumber !== null) {
     const branchMatches = filterByBranch(allRecords, branch);
-    const nonTerminalBranchMatches = filterByBranch(allRecords, branch, { excludeTerminal: true });
+    const branchFallbackMatches = filterByBranchPrFallback(allRecords, branch);
     matches = filterByPr(branchMatches, prNumber);
     if (matches.length === 0) {
-      if (nonTerminalBranchMatches.length === 1 && !hasStoredPrNumber(nonTerminalBranchMatches[0])) {
-        matches = nonTerminalBranchMatches;
-      } else if (nonTerminalBranchMatches.length > 1) {
-        throw buildAmbiguousResolutionError({ branch, prNumber }, nonTerminalBranchMatches);
+      if (branchFallbackMatches.length === 1 && !hasStoredPrNumber(branchFallbackMatches[0])) {
+        matches = branchFallbackMatches;
+      } else if (branchFallbackMatches.length > 1) {
+        throw buildAmbiguousResolutionError({ branch, prNumber }, branchFallbackMatches);
       }
     }
   } else if (branch) {
@@ -167,11 +200,14 @@ function resolveManifestRecord({
 
   if (branch && prNumber !== undefined && prNumber !== null && matches.length === 0) {
     const branchMatches = filterByBranch(allRecords, branch);
-    const nonTerminalBranchMatches = filterByBranch(allRecords, branch, { excludeTerminal: true });
+    const branchFallbackMatches = filterByBranchPrFallback(allRecords, branch);
+    const staleEscalatedRecord = findStaleEscalatedBranchFallbackCandidate(branchMatches);
     return validateManifestRecordRunId(ensureUniqueRecord(matches, { branch, prNumber }, {
       candidates: branchMatches.length > 0 ? branchMatches : [],
-      terminalOnly: branchMatches.length > 0 && nonTerminalBranchMatches.length === 0,
-      recovery: branchMatches.length > 0 && nonTerminalBranchMatches.length === 0
+      terminalOnly: branchMatches.length > 0 && branchFallbackMatches.length === 0 && !staleEscalatedRecord,
+      recovery: staleEscalatedRecord
+        ? buildEscalatedRecoveryMessage(repoRoot, staleEscalatedRecord)
+        : branchMatches.length > 0 && branchFallbackMatches.length === 0
         ? "Create a fresh dispatch for this branch before retrying."
         : "Pass --run-id <id> or --manifest <path> explicitly if you meant an existing run.",
     }));
