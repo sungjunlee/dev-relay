@@ -196,7 +196,17 @@ function main() {
       process.exit(1);
     }
     manifestData = manifestRecord.data;
-    runDir = getRunDir(manifestData.paths?.repo_root || process.cwd(), manifestData.run_id);
+    try {
+      runDir = getRunDir(manifestData.paths?.repo_root || process.cwd(), manifestData.run_id);
+    } catch (error) {
+      output({
+        status: "manifest_resolution_failed",
+        pr: PR_NUM,
+        readyToMerge: false,
+        reason: error.message,
+      });
+      process.exit(1);
+    }
   }
 
   const expectedReviewerLogin = manifestData?.review?.reviewer_login || null;

@@ -15,13 +15,16 @@ const {
   createRunId,
   ensureRunLayout,
   formatAttemptsForPrompt,
+  getManifestPath,
   getRubricAnchorStatus,
   getRepoSlug,
+  getRunDir,
   inferIssueNumber,
   readManifest,
   readPreviousAttempts,
   updateManifestCleanup,
   updateManifestState,
+  validateRunId,
   writeManifest,
 } = require("./relay-manifest");
 
@@ -79,11 +82,96 @@ test("createRunId is branch-stable and filesystem-safe", () => {
   assert.equal(runId, "feature-auth-flow-20260402123456000");
 });
 
+test("validateRunId accepts sampled historical relay run_ids", () => {
+  const historicalRunIds = [
+    "issue-114-20260408100846873",
+    "issue-132-20260410150841243",
+    "issue-138-20260412044608184",
+    "issue-148-20260412072649097",
+    "issue-156-20260412101412608",
+  ];
+
+  for (const runId of historicalRunIds) {
+    const result = validateRunId(runId);
+    assert.equal(result.valid, true, `${runId} should be accepted`);
+    assert.equal(result.status, "valid");
+    assert.equal(result.runId, runId);
+    assert.equal(result.reason, null);
+  }
+});
+
+test("validateRunId rejects unsafe and non-conforming values", () => {
+  const cases = [
+    {
+      runId: null,
+      status: "missing_run_id",
+      pattern: /run_id must be set to a single path segment/,
+    },
+    {
+      runId: "",
+      status: "missing_run_id",
+      pattern: /got ""/,
+    },
+    {
+      runId: ".",
+      status: "invalid_run_id",
+      pattern: /may not be '\.' or '\.\.'/,
+    },
+    {
+      runId: "..",
+      status: "invalid_run_id",
+      pattern: /may not be '\.' or '\.\.'/,
+    },
+    {
+      runId: "../victim-run",
+      status: "invalid_run_id",
+      pattern: /may not contain '\.\.' segments/,
+    },
+    {
+      runId: "issue-42/20260412000000000",
+      status: "invalid_run_id",
+      pattern: /may not contain '\/'/,
+    },
+    {
+      runId: "issue-42\\20260412000000000",
+      status: "invalid_run_id",
+      pattern: /may not contain '\\\\'/,
+    },
+    {
+      runId: "Issue-42-20260412000000000",
+      status: "invalid_run_id",
+      pattern: /shape emitted by createRunId/,
+    },
+  ];
+
+  for (const entry of cases) {
+    const result = validateRunId(entry.runId);
+    assert.equal(result.valid, false, `${JSON.stringify(entry.runId)} should be rejected`);
+    assert.equal(result.status, entry.status);
+    assert.match(result.reason, entry.pattern);
+    assert.match(result.reason, new RegExp(String.raw`${JSON.stringify(entry.runId).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
+  }
+});
+
+test("getRunDir and getManifestPath reject invalid run_id before path derivation", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-runid-paths-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+
+  assert.throws(
+    () => getRunDir(repoRoot, "../victim-run"),
+    /run_id must be a single path segment/
+  );
+  assert.throws(
+    () => getManifestPath(repoRoot, "issue-42\\20260412000000000"),
+    /run_id must be a single path segment/
+  );
+});
+
 test("manifest round-trips through frontmatter helpers", () => {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-manifest-"));
   process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
   initGitRepo(repoRoot, "Relay Maintainer");
-  const runId = "issue-42-20260402103000";
+  const runId = "issue-42-20260402103000000";
   const worktreePath = path.join(repoRoot, "wt");
   const { manifestPath } = ensureRunLayout(repoRoot, runId);
   const manifest = createManifestSkeleton({
@@ -115,7 +203,7 @@ test("manifest round-trips through frontmatter helpers", () => {
 test("manifest round-trips multiline scalar values", () => {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-manifest-multiline-"));
   process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
-  const runId = "issue-42-20260402103001";
+  const runId = "issue-42-20260402103001000";
   const worktreePath = path.join(repoRoot, "wt");
   const { manifestPath } = ensureRunLayout(repoRoot, runId);
   const manifest = createManifestSkeleton({
@@ -145,7 +233,7 @@ test("createManifestSkeleton falls back to unknown actor when git user.name is u
     const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-manifest-actor-missing-"));
     const manifest = createManifestSkeleton({
       repoRoot,
-      runId: "issue-42-20260402103002",
+      runId: "issue-42-20260402103002000",
       branch: "issue-42",
       baseBranch: "main",
       issueNumber: 42,
@@ -166,7 +254,7 @@ test("createManifestSkeleton stores optional intake linkage without changing sta
 
   const manifest = createManifestSkeleton({
     repoRoot,
-    runId: "issue-42-20260402103003",
+    runId: "issue-42-20260402103003000",
     branch: "issue-42",
     baseBranch: "main",
     issueNumber: 42,
@@ -190,7 +278,7 @@ test("createManifestSkeleton stores optional intake linkage without changing sta
 test("readManifest migrates v1 roles.worker to roles.executor", () => {
   const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-migrate-"));
   process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
-  const runId = "migrate-v1-20260402103000";
+  const runId = "migrate-v1-20260402103000000";
   const wtPath = path.join(tmpRoot, "wt");
   const { manifestPath } = ensureRunLayout(tmpRoot, runId);
   const manifest = createManifestSkeleton({
@@ -251,6 +339,7 @@ test("updateManifestState allows valid transitions and rejects invalid ones", ()
 
 test("updateManifestState rejects dispatched -> review_pending when anchor.rubric_path is missing", () => {
   const manifest = {
+    run_id: "issue-42-20260412000000000",
     state: STATES.DISPATCHED,
     next_action: "await_dispatch_result",
     anchor: {},
@@ -294,6 +383,74 @@ test("updateManifestState allows dispatched -> review_pending when rubric is gra
 
   const updated = updateManifestState(manifest, STATES.REVIEW_PENDING, "run_review");
   assert.equal(updated.state, STATES.REVIEW_PENDING);
+});
+
+test("getRubricAnchorStatus rejects invalid run_id even for grandfathered runs", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-manifest-grandfather-runid-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+
+  assert.throws(
+    () => getRubricAnchorStatus({
+      run_id: "../victim-run",
+      anchor: { rubric_grandfathered: true },
+      paths: { repo_root: repoRoot },
+    }),
+    /may not contain '\.\.' segments/
+  );
+});
+
+test("getRubricAnchorStatus rejects missing and empty run_id before rubric or grandfathered handling", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-manifest-missing-runid-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+
+  const cases = [
+    {
+      label: "missing run_id with rubric_path",
+      manifest: {
+        anchor: { rubric_path: "rubric.yaml" },
+        paths: { repo_root: repoRoot },
+      },
+      pattern: /got undefined/,
+    },
+    {
+      label: "empty run_id with rubric_path",
+      manifest: {
+        run_id: "",
+        anchor: { rubric_path: "rubric.yaml" },
+        paths: { repo_root: repoRoot },
+      },
+      pattern: /got ""/,
+    },
+    {
+      label: "missing run_id with grandfathered anchor",
+      manifest: {
+        anchor: { rubric_grandfathered: true },
+        paths: { repo_root: repoRoot },
+      },
+      pattern: /got undefined/,
+    },
+    {
+      label: "empty run_id with grandfathered anchor",
+      manifest: {
+        run_id: "",
+        anchor: { rubric_grandfathered: true },
+        paths: { repo_root: repoRoot },
+      },
+      pattern: /got ""/,
+    },
+  ];
+
+  for (const entry of cases) {
+    assert.throws(
+      () => getRubricAnchorStatus(entry.manifest),
+      (error) => {
+        assert.match(error.message, /run_id must be set to a single path segment/);
+        assert.match(error.message, entry.pattern);
+        return true;
+      },
+      entry.label
+    );
+  }
 });
 
 test("getRubricAnchorStatus distinguishes satisfied, empty, outside_run_dir, and grandfathered", () => {
