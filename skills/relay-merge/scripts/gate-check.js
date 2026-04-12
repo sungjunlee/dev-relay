@@ -112,15 +112,19 @@ function output(result) {
     } else if (result.status === "missing_rubric_file") {
       console.log(`✗ PR #${PR_NUM}: anchored rubric file is missing from the run directory — merge blocked`);
       if (result.reason) console.log(`  ${result.reason}`);
+      console.log("  Restore the anchored rubric file, or re-dispatch with a persisted rubric before rerunning relay-review.");
     } else if (result.status === "empty_rubric_file") {
       console.log(`✗ PR #${PR_NUM}: anchored rubric file is empty — merge blocked`);
       if (result.reason) console.log(`  ${result.reason}`);
+      console.log("  Regenerate the rubric with relay-plan and re-dispatch before rerunning relay-review.");
     } else if (result.status === "invalid_rubric_path") {
       console.log(`✗ PR #${PR_NUM}: anchor.rubric_path escapes the run directory — merge blocked`);
       if (result.reason) console.log(`  ${result.reason}`);
+      console.log("  Fix anchor.rubric_path to stay inside the run directory, then re-dispatch before rerunning relay-review.");
     } else if (result.status === "invalid_rubric_file") {
       console.log(`✗ PR #${PR_NUM}: anchor.rubric_path does not point to a readable rubric file — merge blocked`);
       if (result.reason) console.log(`  ${result.reason}`);
+      console.log("  Fix or restore the anchored rubric file, then re-dispatch before rerunning relay-review.");
     } else if (result.status === "manifest_resolution_failed") {
       console.log(`✗ PR #${PR_NUM}: unable to resolve relay manifest — merge blocked`);
       if (result.reason) console.log(`  ${result.reason}`);

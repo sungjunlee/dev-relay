@@ -38,7 +38,7 @@ function ensureDryRunRubricFixture(payload) {
   return { ...payload, runDir };
 }
 
-function runGateCheckDryRun(payload) {
+function runGateCheckDryRun(payload, { json = true } = {}) {
   const preparedPayload = Array.isArray(payload)
     ? payload
     : ensureDryRunRubricFixture(payload);
@@ -51,7 +51,7 @@ function runGateCheckDryRun(payload) {
     SCRIPT,
     "40",
     "--dry-run",
-    "--json",
+    ...(json ? ["--json"] : []),
   ], {
     input,
     encoding: "utf-8",
@@ -61,7 +61,7 @@ function runGateCheckDryRun(payload) {
     status: result.status,
     stdout: result.stdout,
     stderr: result.stderr,
-    json: result.stdout ? JSON.parse(result.stdout) : null,
+    json: json && result.stdout ? JSON.parse(result.stdout) : null,
   };
 }
 
@@ -127,17 +127,20 @@ function writeLiveManifest(repoRoot, relayHome, { anchor = {}, review = {}, git 
   return { manifestPath, runId, runDir };
 }
 
-function runGateCheckLive({ manifest, prViewPayload, rubricContent }) {
+function runGateCheckLive({ manifest, prViewPayload, rubricContent, json = true, afterManifestSetup = null }) {
   const repoRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "relay-gate-check-")));
   const relayHome = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-")));
   const binDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "relay-gh-bin-")));
   writeFakeGh(binDir);
-  writeLiveManifest(repoRoot, relayHome, { ...manifest, rubricContent });
+  const liveManifest = writeLiveManifest(repoRoot, relayHome, { ...manifest, rubricContent });
+  if (typeof afterManifestSetup === "function") {
+    afterManifestSetup({ ...liveManifest, repoRoot, relayHome, binDir });
+  }
 
   const result = spawnSync("node", [
     SCRIPT,
     "40",
-    "--json",
+    ...(json ? ["--json"] : []),
   ], {
     cwd: repoRoot,
     encoding: "utf-8",
@@ -153,8 +156,24 @@ function runGateCheckLive({ manifest, prViewPayload, rubricContent }) {
     status: result.status,
     stdout: result.stdout,
     stderr: result.stderr,
-    json: result.stdout ? JSON.parse(result.stdout) : null,
+    json: json && result.stdout ? JSON.parse(result.stdout) : null,
     relayHome,
+  };
+}
+
+function buildPassingReviewPayload() {
+  return {
+    headRefName: "issue-40",
+    comments: [
+      {
+        body: "<!-- relay-review -->\n## Relay Review\nVerdict: LGTM\nRounds: 1",
+        author: { login: "trusted-reviewer" },
+        createdAt: "2026-04-03T08:00:00Z",
+      },
+    ],
+    commits: [
+      { oid: "abc123", committedDate: "2026-04-03T07:00:00Z" },
+    ],
   };
 }
 
@@ -559,6 +578,173 @@ test("gate-check blocks merge when the anchored rubric file is empty", () => {
   assert.equal(result.json.status, "empty_rubric_file");
   assert.equal(result.json.rubricStatus, "empty");
   assert.match(result.json.reason, /empty/);
+});
+
+test("gate-check blocks merge when anchor.rubric_path escapes the run directory", () => {
+  const result = runGateCheckLive({
+    manifest: {
+      anchor: {
+        rubric_path: "../escape.yaml",
+      },
+      review: {
+        reviewer_login: "trusted-reviewer",
+        last_reviewed_sha: "abc123",
+      },
+    },
+    prViewPayload: {
+      headRefName: "issue-40",
+      comments: [
+        {
+          body: "<!-- relay-review -->\n## Relay Review\nVerdict: LGTM\nRounds: 1",
+          author: { login: "trusted-reviewer" },
+          createdAt: "2026-04-03T08:00:00Z",
+        },
+      ],
+      commits: [
+        { oid: "abc123", committedDate: "2026-04-03T07:00:00Z" },
+      ],
+    },
+  });
+
+  assert.equal(result.status, 1);
+  assert.equal(result.json.status, "invalid_rubric_path");
+  assert.equal(result.json.rubricStatus, "outside_run_dir");
+  assert.match(result.json.reason, /\.\./);
+});
+
+test("gate-check blocks merge when anchor.rubric_path does not resolve to a readable rubric file", () => {
+  const result = runGateCheckLive({
+    manifest: {
+      anchor: {
+        rubric_path: "rubric-dir",
+      },
+      review: {
+        reviewer_login: "trusted-reviewer",
+        last_reviewed_sha: "abc123",
+      },
+    },
+    rubricContent: false,
+    prViewPayload: {
+      headRefName: "issue-40",
+      comments: [
+        {
+          body: "<!-- relay-review -->\n## Relay Review\nVerdict: LGTM\nRounds: 1",
+          author: { login: "trusted-reviewer" },
+          createdAt: "2026-04-03T08:00:00Z",
+        },
+      ],
+      commits: [
+        { oid: "abc123", committedDate: "2026-04-03T07:00:00Z" },
+      ],
+    },
+    afterManifestSetup: ({ runDir }) => {
+      fs.mkdirSync(path.join(runDir, "rubric-dir"), { recursive: true });
+    },
+  });
+
+  const json = result.json;
+  assert.equal(result.status, 1);
+  assert.equal(json.status, "invalid_rubric_file");
+  assert.equal(json.rubricStatus, "not_file");
+  assert.match(json.reason, /must point to a file inside the run directory/i);
+});
+
+[
+  {
+    status: "missing_rubric_path",
+    run: () => runGateCheckDryRun({
+      comments: buildPassingReviewPayload().comments,
+      commits: buildPassingReviewPayload().commits,
+      manifest: {
+        run_id: "issue-40-20260412010000000",
+        anchor: {},
+        review: {
+          last_reviewed_sha: "abc123",
+        },
+      },
+    }, { json: false }),
+    output: [/run is missing anchor\.rubric_path/i, /Re-dispatch from relay-plan with --rubric-file/i],
+  },
+  {
+    status: "missing_rubric_file",
+    run: () => runGateCheckLive({
+      json: false,
+      manifest: {
+        anchor: {
+          rubric_path: "rubric.yaml",
+        },
+        review: {
+          reviewer_login: "trusted-reviewer",
+          last_reviewed_sha: "abc123",
+        },
+      },
+      rubricContent: false,
+      prViewPayload: buildPassingReviewPayload(),
+    }),
+    output: [/anchored rubric file is missing from the run directory/i, /Restore the anchored rubric file, or re-dispatch/i],
+  },
+  {
+    status: "empty_rubric_file",
+    run: () => runGateCheckLive({
+      json: false,
+      manifest: {
+        anchor: {
+          rubric_path: "rubric.yaml",
+        },
+        review: {
+          reviewer_login: "trusted-reviewer",
+          last_reviewed_sha: "abc123",
+        },
+      },
+      rubricContent: "   \n",
+      prViewPayload: buildPassingReviewPayload(),
+    }),
+    output: [/anchored rubric file is empty/i, /Regenerate the rubric with relay-plan and re-dispatch/i],
+  },
+  {
+    status: "invalid_rubric_path",
+    run: () => runGateCheckLive({
+      json: false,
+      manifest: {
+        anchor: {
+          rubric_path: "../escape.yaml",
+        },
+        review: {
+          reviewer_login: "trusted-reviewer",
+          last_reviewed_sha: "abc123",
+        },
+      },
+      prViewPayload: buildPassingReviewPayload(),
+    }),
+    output: [/anchor\.rubric_path escapes the run directory/i, /Fix anchor\.rubric_path to stay inside the run directory/i],
+  },
+  {
+    status: "invalid_rubric_file",
+    run: () => runGateCheckLive({
+      json: false,
+      manifest: {
+        anchor: {
+          rubric_path: "rubric-dir",
+        },
+        review: {
+          reviewer_login: "trusted-reviewer",
+          last_reviewed_sha: "abc123",
+        },
+      },
+      rubricContent: false,
+      afterManifestSetup: ({ runDir }) => {
+        fs.mkdirSync(path.join(runDir, "rubric-dir"), { recursive: true });
+      },
+      prViewPayload: buildPassingReviewPayload(),
+    }),
+    output: [/does not point to a readable rubric file/i, /Fix or restore the anchored rubric file, then re-dispatch/i],
+  },
+].forEach(({ status, run, output }) => {
+  test(`gate-check CLI output is actionable for ${status}`, () => {
+    const result = run();
+    assert.equal(result.status, 1);
+    output.forEach((pattern) => assert.match(result.stdout, pattern));
+  });
 });
 
 test("gate-check fails closed when PR manifest resolution fails", () => {

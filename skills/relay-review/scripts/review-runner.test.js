@@ -86,10 +86,108 @@ function setReviewPending(manifestPath) {
   writeManifest(manifestPath, updated, body);
 }
 
+function updateManifestRecord(manifestPath, updater) {
+  const { data, body } = readManifest(manifestPath);
+  const updated = updater(data);
+  writeManifest(manifestPath, updated, body);
+  return updated;
+}
+
+function configureRubricFixture({ manifestPath, repoRoot, runId, state }) {
+  const runDir = ensureRunLayout(repoRoot, runId).runDir;
+  fs.rmSync(path.join(runDir, "rubric.yaml"), { recursive: true, force: true });
+  fs.rmSync(path.join(runDir, "rubric-dir"), { recursive: true, force: true });
+
+  updateManifestRecord(manifestPath, (data) => {
+    const anchor = { ...(data.anchor || {}) };
+    delete anchor.rubric_grandfathered;
+    delete anchor.rubric_path;
+
+    if (state === "loaded" || state === "missing" || state === "empty") {
+      anchor.rubric_path = "rubric.yaml";
+    } else if (state === "outside_run_dir") {
+      anchor.rubric_path = "../escape.yaml";
+    } else if (state === "invalid") {
+      anchor.rubric_path = "rubric-dir";
+    } else if (state === "grandfathered") {
+      anchor.rubric_grandfathered = true;
+    }
+
+    return {
+      ...data,
+      anchor,
+    };
+  });
+
+  if (state === "loaded") {
+    fs.writeFileSync(path.join(runDir, "rubric.yaml"), "rubric:\n  factors:\n    - name: API pagination\n      target: \">= 8/10\"\n", "utf-8");
+  } else if (state === "empty") {
+    fs.writeFileSync(path.join(runDir, "rubric.yaml"), "   \n", "utf-8");
+  } else if (state === "invalid") {
+    fs.mkdirSync(path.join(runDir, "rubric-dir"), { recursive: true });
+  }
+
+  return runDir;
+}
+
 function writeVerdict(repoRoot, name, verdict) {
   const filePath = path.join(repoRoot, name);
   fs.writeFileSync(filePath, `${JSON.stringify(verdict, null, 2)}\n`, "utf-8");
   return filePath;
+}
+
+function writePassVerdict(repoRoot, name = "pass.json") {
+  return writeVerdict(repoRoot, name, {
+    verdict: "pass",
+    summary: "All done criteria are satisfied.",
+    contract_status: "pass",
+    quality_status: "pass",
+    next_action: "ready_to_merge",
+    issues: [],
+    rubric_scores: [],
+    scope_drift: { creep: [], missing: [] },
+  });
+}
+
+function prepareReviewRun({ repoRoot, runId, doneCriteriaPath, diffPath }) {
+  return JSON.parse(execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--run-id", runId,
+    "--pr", "123",
+    "--done-criteria-file", doneCriteriaPath,
+    "--diff-file", diffPath,
+    "--prepare-only",
+    "--json",
+  ], { encoding: "utf-8" }));
+}
+
+function runPassReview({
+  repoRoot,
+  runId,
+  doneCriteriaPath,
+  diffPath,
+  reviewFile,
+  env,
+  noComment = true,
+}) {
+  const args = [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--run-id", runId,
+    "--pr", "123",
+    "--done-criteria-file", doneCriteriaPath,
+    "--diff-file", diffPath,
+    "--review-file", reviewFile,
+  ];
+  if (noComment) {
+    args.push("--no-comment");
+  }
+  args.push("--json");
+  return JSON.parse(execFileSync("node", args, {
+    encoding: "utf-8",
+    env,
+  }));
 }
 
 function writeReviewerScript(repoRoot, name, verdict) {
@@ -1441,62 +1539,65 @@ test("review-runner loads rubric from run dir and includes rubric factor names a
 test("review-runner warns visibly when anchor.rubric_path is set but the rubric file is missing", () => {
   const { repoRoot, manifestPath, runId, doneCriteriaPath, diffPath } = setupRepo();
 
-  const { data, body } = readManifest(manifestPath);
-  const nextAnchor = { ...(data.anchor || {}), rubric_path: "rubric.yaml" };
-  delete nextAnchor.rubric_grandfathered;
-  writeManifest(manifestPath, {
-    ...data,
-    anchor: nextAnchor,
-  }, body);
-
-  const stdout = execFileSync("node", [
-    SCRIPT,
-    "--repo", repoRoot,
-    "--run-id", runId,
-    "--pr", "123",
-    "--done-criteria-file", doneCriteriaPath,
-    "--diff-file", diffPath,
-    "--prepare-only",
-    "--json",
-  ], { encoding: "utf-8" });
-
-  const result = JSON.parse(stdout);
+  configureRubricFixture({ manifestPath, repoRoot, runId, state: "missing" });
+  const result = prepareReviewRun({ repoRoot, runId, doneCriteriaPath, diffPath });
   assert.equal(result.rubricLoaded, "missing");
   assert.match(result.rubricWarning, /\[rubric missing\]/i);
   const promptText = fs.readFileSync(result.promptPath, "utf-8");
   assert.match(promptText, /## Scoring Rubric/);
   assert.match(promptText, /WARNING: \[rubric missing\]/i);
-  assert.match(promptText, /Flag this invariant failure/i);
+  assert.match(promptText, /Do NOT return PASS or ready_to_merge/i);
 });
 
 test("review-runner distinguishes rubric paths that resolve outside the run dir", () => {
   const { repoRoot, manifestPath, runId, doneCriteriaPath, diffPath } = setupRepo();
 
-  const { data, body } = readManifest(manifestPath);
-  const nextAnchor = { ...(data.anchor || {}), rubric_path: "../escape.yaml" };
-  delete nextAnchor.rubric_grandfathered;
-  writeManifest(manifestPath, {
-    ...data,
-    anchor: nextAnchor,
-  }, body);
-
-  const stdout = execFileSync("node", [
-    SCRIPT,
-    "--repo", repoRoot,
-    "--run-id", runId,
-    "--pr", "123",
-    "--done-criteria-file", doneCriteriaPath,
-    "--diff-file", diffPath,
-    "--prepare-only",
-    "--json",
-  ], { encoding: "utf-8" });
-
-  const result = JSON.parse(stdout);
+  configureRubricFixture({ manifestPath, repoRoot, runId, state: "outside_run_dir" });
+  const result = prepareReviewRun({ repoRoot, runId, doneCriteriaPath, diffPath });
   assert.equal(result.rubricLoaded, "outside_run_dir");
   assert.match(result.rubricWarning, /\[rubric path outside run dir\]/i);
   const promptText = fs.readFileSync(result.promptPath, "utf-8");
   assert.match(promptText, /WARNING: \[rubric path outside run dir\]/i);
   assert.match(promptText, /\.\./);
+});
+
+test("review-runner warns visibly when anchor.rubric_path is missing from the manifest", () => {
+  const { repoRoot, manifestPath, runId, doneCriteriaPath, diffPath } = setupRepo();
+
+  configureRubricFixture({ manifestPath, repoRoot, runId, state: "not_set" });
+  const result = prepareReviewRun({ repoRoot, runId, doneCriteriaPath, diffPath });
+
+  assert.equal(result.rubricLoaded, "not_set");
+  assert.match(result.rubricWarning, /\[rubric path not set\]/i);
+  const promptText = fs.readFileSync(result.promptPath, "utf-8");
+  assert.match(promptText, /WARNING: \[rubric path not set\]/i);
+  assert.match(promptText, /anchor\.rubric_path is required before review\/merge/i);
+});
+
+test("review-runner warns visibly when the anchored rubric file is empty", () => {
+  const { repoRoot, manifestPath, runId, doneCriteriaPath, diffPath } = setupRepo();
+
+  configureRubricFixture({ manifestPath, repoRoot, runId, state: "empty" });
+  const result = prepareReviewRun({ repoRoot, runId, doneCriteriaPath, diffPath });
+
+  assert.equal(result.rubricLoaded, "empty");
+  assert.match(result.rubricWarning, /\[rubric empty\]/i);
+  const promptText = fs.readFileSync(result.promptPath, "utf-8");
+  assert.match(promptText, /WARNING: \[rubric empty\]/i);
+  assert.match(promptText, /rubric file is empty/i);
+});
+
+test("review-runner warns visibly when anchor.rubric_path points to an invalid rubric target", () => {
+  const { repoRoot, manifestPath, runId, doneCriteriaPath, diffPath } = setupRepo();
+
+  configureRubricFixture({ manifestPath, repoRoot, runId, state: "invalid" });
+  const result = prepareReviewRun({ repoRoot, runId, doneCriteriaPath, diffPath });
+
+  assert.equal(result.rubricLoaded, "invalid");
+  assert.match(result.rubricWarning, /\[rubric invalid\]/i);
+  const promptText = fs.readFileSync(result.promptPath, "utf-8");
+  assert.match(promptText, /WARNING: \[rubric invalid\]/i);
+  assert.match(promptText, /must point to a file inside the run directory/i);
 });
 
 test("review-runner rejects empty rubric_scores when rubric is present", () => {
@@ -1568,4 +1669,83 @@ test("review-runner allows empty rubric_scores when no rubric file exists", () =
   const result = JSON.parse(stdout);
   assert.equal(result.state, STATES.READY_TO_MERGE);
   assert.equal(result.rubricLoaded, "grandfathered");
+});
+
+[
+  {
+    state: "missing",
+    recovery: /Restore the anchored rubric file in the run directory, or re-dispatch/i,
+  },
+  {
+    state: "outside_run_dir",
+    recovery: /Fix anchor\.rubric_path to resolve inside the run directory, then re-dispatch/i,
+  },
+  {
+    state: "empty",
+    recovery: /Regenerate the rubric with relay-plan and re-dispatch/i,
+  },
+  {
+    state: "invalid",
+    recovery: /Fix or restore the anchored rubric file, then re-dispatch/i,
+  },
+  {
+    state: "not_set",
+    recovery: /Re-dispatch from relay-plan with a persisted rubric, or explicitly grandfather/i,
+  },
+].forEach(({ state, recovery }) => {
+  test(`review-runner fail-closes PASS when rubric state is ${state}`, () => {
+    const { repoRoot, manifestPath, runId, doneCriteriaPath, diffPath } = setupRepo();
+    const commentCapturePath = path.join(repoRoot, `${state}-review-comment.txt`);
+
+    configureRubricFixture({ manifestPath, repoRoot, runId, state });
+    writeFakeGhScript(repoRoot, {
+      capturePath: commentCapturePath,
+      prBody: "",
+    });
+    const reviewFile = writePassVerdict(repoRoot, `${state}-pass.json`);
+    const result = runPassReview({
+      repoRoot,
+      runId,
+      doneCriteriaPath,
+      diffPath,
+      reviewFile,
+      noComment: false,
+      env: {
+        ...process.env,
+        PATH: `${repoRoot}:${process.env.PATH}`,
+      },
+    });
+
+    const manifest = readManifest(manifestPath).data;
+    const verdictRecord = JSON.parse(fs.readFileSync(result.verdictPath, "utf-8"));
+    const commentBody = fs.readFileSync(commentCapturePath, "utf-8");
+
+    assert.equal(result.rubricLoaded, state);
+    assert.equal(result.state, STATES.ESCALATED);
+    assert.equal(result.nextState, STATES.ESCALATED);
+    assert.equal(result.appliedVerdict, "escalated");
+    assert.equal(result.reviewGate.status, "rubric_state_failed_closed");
+    assert.equal(result.reviewGate.layer, "review-runner");
+    assert.equal(result.reviewGate.rubricState, state);
+    assert.match(result.reviewGate.recovery, recovery);
+
+    assert.equal(manifest.state, STATES.ESCALATED);
+    assert.equal(manifest.next_action, "inspect_review_failure");
+    assert.equal(manifest.review.latest_verdict, "rubric_state_failed_closed");
+    assert.equal(manifest.review.last_gate.layer, "review-runner");
+    assert.equal(manifest.review.last_gate.rubric_state, state);
+    assert.match(manifest.review.last_gate.recovery, recovery);
+
+    assert.equal(verdictRecord.verdict, "pass");
+    assert.equal(verdictRecord.next_action, "ready_to_merge");
+    assert.equal(verdictRecord.relay_gate.status, "rubric_state_failed_closed");
+    assert.equal(verdictRecord.relay_gate.layer, "review-runner");
+    assert.equal(verdictRecord.relay_gate.rubric_state, state);
+    assert.match(verdictRecord.relay_gate.recovery, recovery);
+
+    assert.match(commentBody, /Verdict: ESCALATED/);
+    assert.match(commentBody, /Layer: review-runner/);
+    assert.match(commentBody, new RegExp(`Rubric state: ${state.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
+    assert.match(commentBody, recovery);
+  });
 });
