@@ -77,6 +77,34 @@ test("resolveManifestRecord rejects ambiguous branch lookup", () => {
   );
 });
 
+test("update-manifest-state surfaces ambiguous branch resolution with explicit recovery guidance", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-update-ambiguous-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  writeReviewPendingManifest(repoRoot, createRunId({
+    branch: "issue-42",
+    timestamp: new Date("2026-04-03T00:00:00.000Z"),
+  }), "issue-42", "2026-04-03T00:00:00.000Z");
+  writeReviewPendingManifest(repoRoot, createRunId({
+    branch: "issue-42",
+    timestamp: new Date("2026-04-03T00:10:00.000Z"),
+  }), "issue-42", "2026-04-03T00:10:00.000Z");
+
+  assert.throws(
+    () => execFileSync("node", [
+      SCRIPT,
+      "--repo", repoRoot,
+      "--branch", "issue-42",
+      "--state", STATES.READY_TO_MERGE,
+      "--json",
+    ], { encoding: "utf-8", stdio: "pipe" }),
+    (error) => {
+      assert.match(String(error.stderr), /Ambiguous relay manifest/);
+      assert.match(String(error.stderr), /Pass --manifest <path> or --run-id <id> explicitly/);
+      return true;
+    }
+  );
+});
+
 test("resolveManifestRecord rejects conflicting branch and PR selectors", () => {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-find-conflict-"));
   process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));

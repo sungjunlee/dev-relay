@@ -26,7 +26,8 @@
 
 const { execFileSync } = require("child_process");
 const { buildSkipComment, evaluateReviewGate } = require("./review-gate");
-const { getRunDir } = require("../../relay-dispatch/scripts/relay-manifest");
+const { getRunDir, writeManifest } = require("../../relay-dispatch/scripts/relay-manifest");
+const { appendRunEvent } = require("../../relay-dispatch/scripts/relay-events");
 const { resolveManifestRecord } = require("../../relay-dispatch/scripts/relay-resolver");
 
 // ---------------------------------------------------------------------------
@@ -82,11 +83,37 @@ function gh(...ghArgs) {
 
 function tryResolveManifestForPr(prNumber, headRefName) {
   try {
-    return resolveManifestRecord({
+    const manifestRecord = resolveManifestRecord({
       repoRoot: process.cwd(),
       prNumber,
       branch: headRefName || undefined,
     });
+    const numericPrNumber = Number(prNumber);
+    if (
+      Number.isInteger(numericPrNumber)
+      && numericPrNumber >= 0
+      && (manifestRecord.data?.git?.pr_number === undefined || manifestRecord.data?.git?.pr_number === null)
+    ) {
+      const repoRoot = manifestRecord.data?.paths?.repo_root || process.cwd();
+      const updatedData = {
+        ...manifestRecord.data,
+        git: {
+          ...(manifestRecord.data?.git || {}),
+          pr_number: numericPrNumber,
+        },
+      };
+      writeManifest(manifestRecord.manifestPath, updatedData, manifestRecord.body);
+      appendRunEvent(repoRoot, updatedData.run_id, {
+        event: "pr_number_stamped",
+        state_from: updatedData.state,
+        state_to: updatedData.state,
+        head_sha: updatedData.git?.head_sha || null,
+        round: updatedData.review?.rounds || null,
+        reason: `Stamped git.pr_number=${numericPrNumber} during gate-check PR resolution`,
+      });
+      return { ...manifestRecord, data: updatedData };
+    }
+    return manifestRecord;
   } catch (error) {
     return { error };
   }

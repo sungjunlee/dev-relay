@@ -264,6 +264,37 @@ test("finalize-run rejects invalid manifest run_id before merge finalization", (
   assert.equal(branchExists(repoRoot, branch), true);
 });
 
+test("finalize-run fails closed when branch+PR resolution only finds a stale terminal manifest", () => {
+  const { repoRoot, manifestPath, branch } = setupRepo();
+  const record = readManifest(manifestPath);
+  const staleManifest = {
+    ...updateManifestState(record.data, STATES.MERGED, "manual_cleanup_required"),
+    git: {
+      ...(record.data.git || {}),
+      pr_number: null,
+    },
+  };
+  writeManifest(manifestPath, staleManifest, record.body);
+
+  assert.throws(() => execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--branch", branch,
+    "--pr", "123",
+    "--json",
+  ], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+  }), (error) => {
+    assert.match(String(error.stderr), /Only terminal branch matches exist/);
+    assert.match(String(error.stderr), /Create a fresh dispatch for this branch before retrying/);
+    return true;
+  });
+
+  assert.equal(readManifest(manifestPath).data.git.pr_number, null);
+});
+
 test("finalize-run resumes cleanup when the PR is already merged", () => {
   const { repoRoot, manifestPath, branch, worktreePath, headSha } = setupRepo();
   const logPath = path.join(repoRoot, "gh.log");
