@@ -786,3 +786,104 @@ test("dispatch allows --rubric-grandfathered for legacy same-run resumes", () =>
   assert.equal(result.rubricFile, null);
   assert.equal(result.rubricGrandfathered, true);
 });
+
+test("dispatch allows --rubric-grandfathered for legacy review_pending runs without re-dispatching", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  writeFakeCodex(binDir);
+  const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}` };
+
+  const first = JSON.parse(runDispatch(repoRoot, [
+    "-b", "issue-legacy-review-pending",
+    "--prompt", "first pass",
+    "--json",
+  ], env));
+
+  const manifestPath = first.manifestPath;
+  const runId = first.runId;
+  const record = readManifest(manifestPath);
+  const updated = {
+    ...record.data,
+    anchor: {
+      ...record.data.anchor,
+    },
+    timestamps: {
+      ...record.data.timestamps,
+      created_at: "2026-04-11T23:59:59.000Z",
+    },
+  };
+  delete updated.anchor.rubric_path;
+  delete updated.anchor.rubric_grandfathered;
+  writeManifest(manifestPath, updated, record.body);
+
+  const result = JSON.parse(execFileSync("node", [SCRIPT, repoRoot,
+    "--run-id", runId,
+    "--prompt", "grandfather legacy review pending run",
+    "--rubric-grandfathered",
+    "--json",
+  ], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe", env }));
+
+  assert.equal(result.mode, "resume");
+  assert.equal(result.status, "grandfathered");
+  assert.equal(result.runState, STATES.REVIEW_PENDING);
+  assert.equal(result.dispatchSkipped, true);
+  assert.equal(result.rubricGrandfathered, true);
+
+  const manifest = readManifest(manifestPath).data;
+  assert.equal(manifest.state, STATES.REVIEW_PENDING);
+  assert.equal(manifest.anchor.rubric_grandfathered, true);
+
+  const events = fs.readFileSync(getEventsPath(repoRoot, runId), "utf-8");
+  assert.match(events, /"event":"rubric_grandfathered"/);
+});
+
+test("dispatch allows --rubric-grandfathered for legacy ready_to_merge runs", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  writeFakeCodex(binDir);
+  const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}` };
+
+  const first = JSON.parse(runDispatch(repoRoot, [
+    "-b", "issue-legacy-ready",
+    "--prompt", "first pass",
+    "--json",
+  ], env));
+
+  const manifestPath = first.manifestPath;
+  const runId = first.runId;
+  const record = readManifest(manifestPath);
+  let updated = updateManifestState(record.data, STATES.READY_TO_MERGE, "merge");
+  updated = {
+    ...updated,
+    anchor: {
+      ...updated.anchor,
+    },
+    timestamps: {
+      ...updated.timestamps,
+      created_at: "2026-04-11T23:59:59.000Z",
+    },
+  };
+  delete updated.anchor.rubric_path;
+  delete updated.anchor.rubric_grandfathered;
+  writeManifest(manifestPath, updated, record.body);
+
+  const result = JSON.parse(execFileSync("node", [SCRIPT, repoRoot,
+    "--run-id", runId,
+    "--prompt", "grandfather legacy ready-to-merge run",
+    "--rubric-grandfathered",
+    "--dry-run",
+    "--json",
+  ], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe", env }));
+
+  assert.equal(result.mode, "resume");
+  assert.equal(result.status, "would-grandfather");
+  assert.equal(result.runState, STATES.READY_TO_MERGE);
+  assert.equal(result.dispatchSkipped, true);
+  assert.equal(result.rubricGrandfathered, true);
+
+  const manifest = readManifest(manifestPath).data;
+  assert.equal(manifest.state, STATES.READY_TO_MERGE);
+  assert.equal(manifest.anchor.rubric_grandfathered, undefined);
+});

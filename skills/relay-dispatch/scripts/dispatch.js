@@ -165,6 +165,7 @@ const DRY_RUN = hasFlag("--dry-run");
 const JSON_OUT = hasFlag("--json");
 const RESUME_MODE = !!RUN_ID || !!MANIFEST_INPUT;
 const RUBRIC_GRANDFATHER_CUTOFF_ISO = "2026-04-12T00:00:00.000Z";
+const GRANDFATHER_ONLY_STATES = new Set([STATES.REVIEW_PENDING, STATES.READY_TO_MERGE]);
 
 // ---------------------------------------------------------------------------
 // Validation
@@ -364,6 +365,38 @@ function enforceRubricPersistence(manifest) {
   }
 }
 
+function buildGrandfatherOnlyResult({
+  runId,
+  repoRoot,
+  manifestPath,
+  manifest,
+  cleanupPolicy,
+  executor,
+  worktree,
+  branch,
+  dryRun,
+}) {
+  const runDir = getRunDir(repoRoot, runId);
+  return {
+    runId,
+    runDir,
+    manifestPath,
+    rubricPath: null,
+    rubricGrandfathered: manifest.anchor?.rubric_grandfathered === true,
+    requestId: manifest.source?.request_id || null,
+    leafId: manifest.source?.leaf_id || null,
+    doneCriteriaPath: manifest.anchor?.done_criteria_path || null,
+    runState: manifest.state,
+    cleanupPolicy,
+    status: dryRun ? "would-grandfather" : "grandfathered",
+    executor,
+    worktree,
+    branch,
+    mode: "resume",
+    dispatchSkipped: true,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
@@ -390,6 +423,7 @@ async function main() {
   let manifest;
   let copiedFiles = [];
   let createdWorktree = false;
+  let grandfatherOnlyResume = false;
 
   if (RESUME_MODE) {
     const manifestRecord = resolveManifestRecord({
@@ -412,7 +446,8 @@ async function main() {
       console.error(`Error: manifest repo root is not a git repository: ${repoRoot}`);
       process.exit(1);
     }
-    if (manifest.state !== STATES.CHANGES_REQUESTED) {
+    grandfatherOnlyResume = RUBRIC_GRANDFATHERED && GRANDFATHER_ONLY_STATES.has(manifest.state);
+    if (manifest.state !== STATES.CHANGES_REQUESTED && !grandfatherOnlyResume) {
       console.error(`Error: same-run resume requires state='${STATES.CHANGES_REQUESTED}', got '${manifest.state}'`);
       process.exit(1);
     }
@@ -420,35 +455,37 @@ async function main() {
       console.error(`Error: manifest ${manifestPath} is missing git.working_branch`);
       process.exit(1);
     }
-    if (!wtPath || !fs.existsSync(wtPath)) {
-      console.error(`Error: retained worktree is missing for run '${runId}': ${wtPath || "(unset)"}`);
-      process.exit(1);
-    }
-    try {
-      const currentBranch = git(wtPath, "rev-parse", "--abbrev-ref", "HEAD");
-      if (currentBranch !== branch) {
-        console.error(`Error: retained worktree HEAD is '${currentBranch}', expected '${branch}'`);
+    if (!grandfatherOnlyResume) {
+      if (!wtPath || !fs.existsSync(wtPath)) {
+        console.error(`Error: retained worktree is missing for run '${runId}': ${wtPath || "(unset)"}`);
         process.exit(1);
       }
-    } catch (error) {
-      console.error(`Error: retained worktree is unusable: ${error.message}`);
-      process.exit(1);
-    }
-
-    // --- Environment drift check ---
-    const currentEnv = collectEnvironmentSnapshot(repoRoot, baseBranch);
-    const drift = compareEnvironmentSnapshot(manifest.environment, currentEnv);
-    if (drift.length) {
-      const driftMsg = drift.map(d => `${d.field}: ${d.from} → ${d.to}`).join(", ");
-      if (!JSON_OUT) {
-        console.error(`[WARN] Environment drift detected since initial dispatch: ${driftMsg}`);
+      try {
+        const currentBranch = git(wtPath, "rev-parse", "--abbrev-ref", "HEAD");
+        if (currentBranch !== branch) {
+          console.error(`Error: retained worktree HEAD is '${currentBranch}', expected '${branch}'`);
+          process.exit(1);
+        }
+      } catch (error) {
+        console.error(`Error: retained worktree is unusable: ${error.message}`);
+        process.exit(1);
       }
-      appendRunEvent(repoRoot, runId, {
-        event: "environment_drift",
-        state_from: manifest.state,
-        state_to: manifest.state,
-        reason: driftMsg,
-      });
+
+      // --- Environment drift check ---
+      const currentEnv = collectEnvironmentSnapshot(repoRoot, baseBranch);
+      const drift = compareEnvironmentSnapshot(manifest.environment, currentEnv);
+      if (drift.length) {
+        const driftMsg = drift.map(d => `${d.field}: ${d.from} → ${d.to}`).join(", ");
+        if (!JSON_OUT) {
+          console.error(`[WARN] Environment drift detected since initial dispatch: ${driftMsg}`);
+        }
+        appendRunEvent(repoRoot, runId, {
+          event: "environment_drift",
+          state_from: manifest.state,
+          state_to: manifest.state,
+          reason: driftMsg,
+        });
+      }
     }
   } else {
     runId = createRunId({ issueNumber, branch });
@@ -484,6 +521,38 @@ async function main() {
     }
   }
 
+  if (grandfatherOnlyResume) {
+    if (!DRY_RUN) {
+      appendRunEvent(repoRoot, runId, {
+        event: "rubric_grandfathered",
+        state_from: manifest.state,
+        state_to: manifest.state,
+        head_sha: manifest.git?.head_sha || null,
+        reason: "legacy_pre_change_run",
+      });
+    }
+    const result = buildGrandfatherOnlyResult({
+      runId,
+      repoRoot,
+      manifestPath,
+      manifest,
+      cleanupPolicy,
+      executor: EXECUTOR,
+      worktree: wtPath,
+      branch,
+      dryRun: DRY_RUN,
+    });
+    if (JSON_OUT) {
+      console.log(JSON.stringify(result, null, 2));
+    } else {
+      console.log(`Rubric grandfathered for legacy run ${runId}.`);
+      console.log(`  State:    ${manifest.state}`);
+      console.log(`  Manifest: ${manifestPath}`);
+      console.log("  Dispatch: skipped (migration-only manifest update)");
+    }
+    return;
+  }
+
   // --- Prepend iteration history on re-dispatch ---
   if (RESUME_MODE) {
     const previousAttempts = readPreviousAttempts(repoRoot, runId);
@@ -512,6 +581,8 @@ async function main() {
       leafId: LEAF_ID || manifest?.source?.leaf_id || null,
       doneCriteriaFile: resolvedDoneCriteriaPath || manifest?.anchor?.done_criteria_path || null,
       environment: RESUME_MODE ? (manifest?.environment || null) : "collected-at-dispatch",
+      runState: manifest?.state || null,
+      dispatchSkipped: false,
     };
     if (JSON_OUT) {
       console.log(JSON.stringify(plan, null, 2));

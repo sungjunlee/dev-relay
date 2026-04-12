@@ -108,6 +108,9 @@ function output(result) {
     } else if (result.status === "missing_rubric_path") {
       console.log(`✗ PR #${PR_NUM}: run is missing anchor.rubric_path — merge blocked`);
       console.log("  Re-dispatch from relay-plan with --rubric-file, or explicitly grandfather a pre-change run.");
+    } else if (result.status === "manifest_resolution_failed") {
+      console.log(`✗ PR #${PR_NUM}: unable to resolve relay manifest — merge blocked`);
+      if (result.reason) console.log(`  ${result.reason}`);
     } else if (result.status === "unauthorized_reviewer") {
       console.log(`✗ PR #${PR_NUM}: relay-review comment found but from unauthorized author (expected: ${result.expectedReviewerLogin})`);
     } else if (result.status === "stale") {
@@ -146,7 +149,6 @@ function main() {
   let comments;
   let commits;
   let manifestData = null;
-  let manifestResolutionNote = null;
   if (DRY_RUN) {
     // Dry-run: read JSON object/array from stdin, or plain text as single comment
     const stdin = require("fs").readFileSync(0, "utf-8").trim();
@@ -167,20 +169,23 @@ function main() {
     comments = parsed.comments || [];
     commits = parsed.commits || [];
     const manifestRecord = tryResolveManifestForPr(PR_NUM, parsed.headRefName || null);
-    manifestData = manifestRecord.data || null;
-    if (manifestRecord.error) {
-      manifestResolutionNote = (
-        `reviewer author verification skipped — unable to resolve relay manifest for PR #${PR_NUM}: ` +
-        manifestRecord.error.message
-      );
+    if (manifestRecord.error || !manifestRecord.data) {
+      output({
+        status: "manifest_resolution_failed",
+        pr: PR_NUM,
+        readyToMerge: false,
+        reason: manifestRecord.error
+          ? manifestRecord.error.message
+          : `resolveManifestRecord returned no manifest data for PR #${PR_NUM}`,
+      });
+      process.exit(1);
     }
+    manifestData = manifestRecord.data;
   }
 
   const expectedReviewerLogin = manifestData?.review?.reviewer_login || null;
-  if (!DRY_RUN && manifestResolutionNote) {
-    console.error(`Note: ${manifestResolutionNote}`);
-  } else if (!DRY_RUN && !expectedReviewerLogin && !manifestData) {
-    console.error("Note: reviewer author verification skipped — no manifest data. Use finalize-run.js for full verification.");
+  if (!DRY_RUN && !expectedReviewerLogin && manifestData) {
+    console.error("Note: reviewer author verification skipped — manifest is missing review.reviewer_login. Use finalize-run.js for full verification.");
   }
   const result = evaluateReviewGate({
     prNumber: PR_NUM,

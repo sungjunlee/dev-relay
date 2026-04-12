@@ -418,6 +418,38 @@ test("gate-check resolves the manifest in PR mode and rejects missing anchor.rub
   assert.equal(result.json.readyToMerge, false);
 });
 
+test("gate-check fails closed when PR manifest resolution fails", () => {
+  const result = runGateCheckLive({
+    manifest: {
+      anchor: {
+        rubric_path: "rubric.yaml",
+      },
+      review: {
+        reviewer_login: "trusted-reviewer",
+        last_reviewed_sha: "abc123",
+      },
+    },
+    prViewPayload: {
+      headRefName: "issue-missing",
+      comments: [
+        {
+          body: "<!-- relay-review -->\n## Relay Review\nVerdict: LGTM\nRounds: 1",
+          author: { login: "trusted-reviewer" },
+          createdAt: "2026-04-03T08:00:00Z",
+        },
+      ],
+      commits: [
+        { oid: "abc123", committedDate: "2026-04-03T07:00:00Z" },
+      ],
+    },
+  });
+
+  assert.equal(result.status, 1);
+  assert.equal(result.json.status, "manifest_resolution_failed");
+  assert.equal(result.json.readyToMerge, false);
+  assert.match(result.json.reason, /No relay manifest found/);
+});
+
 test("gate-check allows grandfathered runs and surfaces the note", () => {
   const result = runGateCheckDryRun({
     comments: [
