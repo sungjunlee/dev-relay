@@ -64,11 +64,15 @@ const {
   createRunId,
   ensureRunLayout,
   formatAttemptsForPrompt,
+  getRubricAnchorStatus,
   getManifestPath,
   getRunDir,
+  hasRubricPath,
   inferIssueNumber,
+  isRubricGrandfathered,
   readPreviousAttempts,
   updateManifestState,
+  validateRubricPathContainment,
   writeManifest,
 } = require("./relay-manifest");
 const { resolveManifestRecord } = require("./relay-resolver");
@@ -286,14 +290,6 @@ function validateResumeRequestLinkage(manifest, { requestId, leafId, doneCriteri
   }
 }
 
-function hasAnchoredRubricPath(manifest) {
-  return typeof manifest?.anchor?.rubric_path === "string" && manifest.anchor.rubric_path.trim() !== "";
-}
-
-function isRubricGrandfathered(manifest) {
-  return manifest?.anchor?.rubric_grandfathered === true;
-}
-
 function markRubricGrandfathered(manifest) {
   return {
     ...manifest,
@@ -310,19 +306,45 @@ function clearRubricGrandfathering(anchor = {}) {
   return nextAnchor;
 }
 
-function enforceRubricPersistence(manifest) {
+function failRubricPersistence(message) {
+  console.error(`Error: ${message}`);
+  process.exit(1);
+}
+
+function getPersistedRubricPath(runDir, rubricPath = "rubric.yaml") {
+  const containment = validateRubricPathContainment(rubricPath, runDir);
+  if (!containment.valid) {
+    failRubricPersistence(containment.reason);
+  }
+  return containment;
+}
+
+function enforceRubricPersistence(manifest, runDir) {
   // Grandfathering is an explicit per-run migration marker, not a timestamp-derived cutoff.
-  if (RUBRIC_GRANDFATHERED && hasAnchoredRubricPath(manifest)) {
-    console.error("Error: --rubric-grandfathered is only valid when the run does not already have anchor.rubric_path");
-    process.exit(1);
+  if (RUBRIC_GRANDFATHERED && hasRubricPath(manifest)) {
+    failRubricPersistence("--rubric-grandfathered is only valid when the run does not already have anchor.rubric_path");
   }
 
-  if (!RUBRIC_FILE && !hasAnchoredRubricPath(manifest) && !isRubricGrandfathered(manifest) && !RUBRIC_GRANDFATHERED) {
-    console.error(
-      "Error: --rubric-file is required. Generate the rubric with relay-plan and pass --rubric-file <path> to dispatch.js. " +
+  if (RUBRIC_FILE) {
+    getPersistedRubricPath(runDir);
+    return;
+  }
+
+  if (!hasRubricPath(manifest) && !isRubricGrandfathered(manifest) && !RUBRIC_GRANDFATHERED) {
+    failRubricPersistence(
+      "--rubric-file is required. Generate the rubric with relay-plan and pass --rubric-file <path> to dispatch.js. " +
       "Only explicit legacy-run migration may bypass this with --rubric-grandfathered."
     );
-    process.exit(1);
+  }
+
+  if (hasRubricPath(manifest) && !isRubricGrandfathered(manifest)) {
+    const rubricAnchor = getRubricAnchorStatus(manifest, { runDir });
+    if (!rubricAnchor.satisfied) {
+      failRubricPersistence(
+        `${rubricAnchor.error} Re-dispatch with --rubric-file to repair the run's rubric anchor, ` +
+        "or explicitly grandfather a pre-change run."
+      );
+    }
   }
 }
 
@@ -505,7 +527,8 @@ async function main() {
     }
   }
 
-  enforceRubricPersistence(manifest);
+  const manifestRunDir = getRunDir(repoRoot, runId);
+  enforceRubricPersistence(manifest, manifestRunDir);
 
   if (RESUME_MODE && RUBRIC_GRANDFATHERED) {
     manifest = markRubricGrandfathered(manifest);
@@ -703,15 +726,20 @@ async function main() {
   if (RUBRIC_FILE) {
     const rubricSrc = path.resolve(RUBRIC_FILE);
     const runDir = getRunDir(repoRoot, runId);
-    const rubricDest = path.join(runDir, "rubric.yaml");
+    const persistedRubric = getPersistedRubricPath(runDir, "rubric.yaml");
+    const rubricDest = persistedRubric.resolvedPath;
     fs.copyFileSync(rubricSrc, rubricDest);
     manifest = {
       ...manifest,
       anchor: {
         ...clearRubricGrandfathering(manifest.anchor || {}),
-        rubric_path: "rubric.yaml",
+        rubric_path: persistedRubric.rubricPath,
       },
     };
+    const rubricAnchor = getRubricAnchorStatus(manifest, { runDir });
+    if (!rubricAnchor.satisfied) {
+      failRubricPersistence(rubricAnchor.error);
+    }
     writeManifest(manifestPath, manifest);
   }
 
@@ -967,11 +995,12 @@ async function main() {
     }
   }
 
+  const rubricAnchor = getRubricAnchorStatus(manifest, { runDir });
   const result = {
     runId,
     runDir,
     manifestPath,
-    rubricPath: manifest.anchor?.rubric_path ? path.join(runDir, manifest.anchor.rubric_path) : null,
+    rubricPath: rubricAnchor.resolvedPath || null,
     rubricGrandfathered: manifest.anchor?.rubric_grandfathered === true,
     requestId: manifest.source?.request_id || null,
     leafId: manifest.source?.leaf_id || null,

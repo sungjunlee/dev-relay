@@ -298,17 +298,197 @@ function isRubricGrandfathered(data) {
   return data?.anchor?.rubric_grandfathered === true;
 }
 
-function getRubricAnchorStatus(data) {
+function resolveRubricRunDir(data, options = {}) {
+  if (options.runDir) {
+    return path.resolve(options.runDir);
+  }
+
+  const repoRoot = options.repoRoot || data?.paths?.repo_root || null;
+  const runId = options.runId || data?.run_id || null;
+  if (!repoRoot || !runId) {
+    return null;
+  }
+  return getRunDir(repoRoot, runId);
+}
+
+function validateRubricPathContainment(rubricPath, runDir) {
+  const normalizedPath = typeof rubricPath === "string" ? rubricPath.trim() : "";
+  const resolvedRunDir = typeof runDir === "string" && runDir.trim() !== ""
+    ? path.resolve(runDir)
+    : null;
+  const segments = normalizedPath.split(/[\\/]+/).filter(Boolean);
+  const containsParentTraversal = segments.includes("..");
+  const absolute = normalizedPath ? path.isAbsolute(normalizedPath) : false;
+  const resolvedPath = normalizedPath && resolvedRunDir
+    ? path.resolve(resolvedRunDir, normalizedPath)
+    : null;
+  const insideRunDir = Boolean(
+    resolvedRunDir &&
+    resolvedPath &&
+    resolvedPath !== resolvedRunDir &&
+    resolvedPath.startsWith(`${resolvedRunDir}${path.sep}`)
+  );
+
+  if (!normalizedPath) {
+    return {
+      valid: false,
+      status: "missing_path",
+      rubricPath: null,
+      runDir: resolvedRunDir,
+      resolvedPath: null,
+      reason: "anchor.rubric_path is not set.",
+    };
+  }
+
+  if (!resolvedRunDir) {
+    return {
+      valid: false,
+      status: "run_dir_unavailable",
+      rubricPath: normalizedPath,
+      runDir: null,
+      resolvedPath: null,
+      reason: `Unable to resolve the run directory for anchor.rubric_path=${JSON.stringify(normalizedPath)}.`,
+    };
+  }
+
+  if (absolute) {
+    return {
+      valid: false,
+      status: "outside_run_dir",
+      rubricPath: normalizedPath,
+      runDir: resolvedRunDir,
+      resolvedPath,
+      reason: `anchor.rubric_path must resolve inside the run directory; absolute paths are not allowed (got ${JSON.stringify(normalizedPath)}).`,
+    };
+  }
+
+  if (containsParentTraversal) {
+    return {
+      valid: false,
+      status: "outside_run_dir",
+      rubricPath: normalizedPath,
+      runDir: resolvedRunDir,
+      resolvedPath,
+      reason: `anchor.rubric_path must resolve inside the run directory and may not contain '..' segments (got ${JSON.stringify(normalizedPath)}).`,
+    };
+  }
+
+  if (!insideRunDir) {
+    return {
+      valid: false,
+      status: "outside_run_dir",
+      rubricPath: normalizedPath,
+      runDir: resolvedRunDir,
+      resolvedPath,
+      reason: `anchor.rubric_path must resolve inside the run directory ${JSON.stringify(resolvedRunDir)} (got ${JSON.stringify(normalizedPath)} -> ${JSON.stringify(resolvedPath)}).`,
+    };
+  }
+
+  return {
+    valid: true,
+    status: "contained",
+    rubricPath: normalizedPath,
+    runDir: resolvedRunDir,
+    resolvedPath,
+    reason: null,
+  };
+}
+
+function getRubricAnchorStatus(data, options = {}) {
   const rubricPath = hasRubricPath(data) ? data.anchor.rubric_path.trim() : null;
   const grandfathered = isRubricGrandfathered(data);
-  return {
+  const runDir = resolveRubricRunDir(data, options);
+  const baseStatus = {
+    status: "missing_path",
     rubricPath,
+    runDir,
+    resolvedPath: null,
     grandfathered,
-    satisfied: Boolean(rubricPath) || grandfathered,
-    note: grandfathered
-      ? "Grandfathered pre-rubric run: merge/review gates are allowing missing anchor.rubric_path because anchor.rubric_grandfathered=true."
-      : null,
+    satisfied: false,
+    exists: false,
+    empty: false,
+    content: null,
+    note: null,
+    error: null,
   };
+
+  // Grandfathering is an explicit legacy-run override. If both fields are present,
+  // keep the run on the grandfathered path rather than reinterpreting it mid-flight.
+  if (grandfathered) {
+    return {
+      ...baseStatus,
+      status: "grandfathered",
+      satisfied: true,
+      note: "Grandfathered pre-rubric run: merge/review gates are allowing missing anchor.rubric_path because anchor.rubric_grandfathered=true.",
+    };
+  }
+
+  if (!rubricPath) {
+    return {
+      ...baseStatus,
+      error: "anchor.rubric_path is required before review/merge unless anchor.rubric_grandfathered=true.",
+    };
+  }
+
+  const containment = validateRubricPathContainment(rubricPath, runDir);
+  if (!containment.valid) {
+    return {
+      ...baseStatus,
+      ...containment,
+      status: containment.status,
+      error: containment.reason,
+    };
+  }
+
+  try {
+    const stat = fs.statSync(containment.resolvedPath);
+    if (!stat.isFile()) {
+      return {
+        ...baseStatus,
+        ...containment,
+        status: "not_file",
+        error: `anchor.rubric_path must point to a file inside the run directory (got ${JSON.stringify(containment.resolvedPath)}).`,
+      };
+    }
+
+    const content = fs.readFileSync(containment.resolvedPath, "utf-8");
+    const trimmedContent = content.trim();
+    if (!trimmedContent) {
+      return {
+        ...baseStatus,
+        ...containment,
+        status: "empty",
+        exists: true,
+        empty: true,
+        error: `rubric file is empty: ${containment.resolvedPath}`,
+      };
+    }
+
+    return {
+      ...baseStatus,
+      ...containment,
+      status: "satisfied",
+      satisfied: true,
+      exists: true,
+      content: options.includeContent ? trimmedContent : null,
+    };
+  } catch (error) {
+    if (error.code === "ENOENT") {
+      return {
+        ...baseStatus,
+        ...containment,
+        status: "missing",
+        error: `rubric file is missing from the run directory: ${containment.resolvedPath}`,
+      };
+    }
+
+    return {
+      ...baseStatus,
+      ...containment,
+      status: "unreadable",
+      error: `Unable to read rubric file ${containment.resolvedPath}: ${summarizeError(error)}`,
+    };
+  }
 }
 
 function validateTransitionInvariants(data, fromState, toState) {
@@ -316,7 +496,7 @@ function validateTransitionInvariants(data, fromState, toState) {
     const rubricAnchor = getRubricAnchorStatus(data);
     if (!rubricAnchor.satisfied) {
       throw new Error(
-        "Cannot transition dispatched -> review_pending without anchor.rubric_path. " +
+        `Cannot transition dispatched -> review_pending because ${rubricAnchor.error} ` +
         "Generate the rubric with relay-plan and dispatch with --rubric-file, " +
         "or explicitly grandfather a pre-change run with anchor.rubric_grandfathered: true."
       );
@@ -726,6 +906,7 @@ module.exports = {
   summarizeError,
   updateManifestCleanup,
   updateManifestState,
+  validateRubricPathContainment,
   validateTransition,
   validateTransitionInvariants,
   writeManifest,

@@ -25,6 +25,7 @@
 const { execFileSync } = require("child_process");
 const path = require("path");
 const {
+  getRunDir,
   STATES,
   updateManifestState,
   writeManifest,
@@ -283,6 +284,7 @@ function main() {
         commits: preMerge.commits,
         manifestData: data,
         expectedReviewerLogin: data.review?.reviewer_login || null,
+        runDir: getRunDir(data.paths?.repo_root || repoPath, data.run_id),
       });
       if (!reviewGate.readyToMerge) {
         if (!dryRun) {

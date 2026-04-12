@@ -35,6 +35,7 @@ const { REVIEW_VERDICT_JSON_SCHEMA } = require("./review-schema");
 const {
   STATES,
   ensureRunLayout,
+  getRubricAnchorStatus,
   getRunDir,
   readManifest,
   updateManifestState,
@@ -263,18 +264,91 @@ function formatPriorRoundContext(runDir, round) {
   return ["## Prior Round Context", "", "Verify whether prior issues were resolved.", "", ...lines].join("\n");
 }
 
+function formatRubricWarning(label, rubricAnchor) {
+  const details = [];
+  if (rubricAnchor.rubricPath) {
+    details.push(`anchor.rubric_path=${JSON.stringify(rubricAnchor.rubricPath)}`);
+  }
+  if (rubricAnchor.resolvedPath) {
+    details.push(`resolved_path=${JSON.stringify(rubricAnchor.resolvedPath)}`);
+  }
+  return [
+    `WARNING: [${label}] ${rubricAnchor.error}`,
+    details.length ? `Context: ${details.join(", ")}` : null,
+    "Flag this invariant failure in the review output instead of silently evaluating without the rubric.",
+  ].filter(Boolean).join("\n");
+}
+
 function loadRubricFromRunDir(runDir, manifestData) {
-  const rubricPath = manifestData?.anchor?.rubric_path;
-  if (!rubricPath || !runDir) return null;
-  const fullPath = path.join(runDir, rubricPath);
-  try {
-    return fs.readFileSync(fullPath, "utf-8").trim();
-  } catch {
-    return null;
+  const rubricAnchor = getRubricAnchorStatus(manifestData, { runDir, includeContent: true });
+  switch (rubricAnchor.status) {
+    case "satisfied":
+      return {
+        state: "loaded",
+        status: rubricAnchor.status,
+        content: rubricAnchor.content,
+        warning: null,
+        rubricPath: rubricAnchor.rubricPath,
+        resolvedPath: rubricAnchor.resolvedPath,
+      };
+    case "grandfathered":
+      return {
+        state: "grandfathered",
+        status: rubricAnchor.status,
+        content: null,
+        warning: null,
+        rubricPath: rubricAnchor.rubricPath,
+        resolvedPath: rubricAnchor.resolvedPath,
+      };
+    case "missing_path":
+      return {
+        state: "not_set",
+        status: rubricAnchor.status,
+        content: null,
+        warning: null,
+        rubricPath: rubricAnchor.rubricPath,
+        resolvedPath: rubricAnchor.resolvedPath,
+      };
+    case "missing":
+      return {
+        state: "missing",
+        status: rubricAnchor.status,
+        content: null,
+        warning: formatRubricWarning("rubric missing", rubricAnchor),
+        rubricPath: rubricAnchor.rubricPath,
+        resolvedPath: rubricAnchor.resolvedPath,
+      };
+    case "outside_run_dir":
+      return {
+        state: "outside_run_dir",
+        status: rubricAnchor.status,
+        content: null,
+        warning: formatRubricWarning("rubric path outside run dir", rubricAnchor),
+        rubricPath: rubricAnchor.rubricPath,
+        resolvedPath: rubricAnchor.resolvedPath,
+      };
+    case "empty":
+      return {
+        state: "empty",
+        status: rubricAnchor.status,
+        content: null,
+        warning: formatRubricWarning("rubric empty", rubricAnchor),
+        rubricPath: rubricAnchor.rubricPath,
+        resolvedPath: rubricAnchor.resolvedPath,
+      };
+    default:
+      return {
+        state: "invalid",
+        status: rubricAnchor.status,
+        content: null,
+        warning: formatRubricWarning("rubric invalid", rubricAnchor),
+        rubricPath: rubricAnchor.rubricPath,
+        resolvedPath: rubricAnchor.resolvedPath,
+      };
   }
 }
 
-function buildPrompt({ round, prNumber, branch, issueNumber, doneCriteria, doneCriteriaSource, diffText, runDir, rubricContent }) {
+function buildPrompt({ round, prNumber, branch, issueNumber, doneCriteria, doneCriteriaSource, diffText, runDir, rubricLoad }) {
   const template = readText(REVIEWER_PROMPT_PATH)
     .replace("source=\"done-criteria\"", `source="${doneCriteriaSource || "done-criteria"}"`)
     .replace("[PASTE DONE CRITERIA HERE]", doneCriteria)
@@ -290,7 +364,13 @@ function buildPrompt({ round, prNumber, branch, issueNumber, doneCriteria, doneC
     template,
   ];
 
-  if (rubricContent) {
+  if (rubricLoad.warning) {
+    sections.push(
+      "",
+      "## Scoring Rubric",
+      rubricLoad.warning,
+    );
+  } else if (rubricLoad.content) {
     sections.push(
       "",
       "## Scoring Rubric",
@@ -298,7 +378,7 @@ function buildPrompt({ round, prNumber, branch, issueNumber, doneCriteria, doneC
       "For each factor, populate a `rubric_scores` entry with `factor`, `target`, `observed`, `status`, `tier`, and `notes`.",
       "Do NOT leave `rubric_scores` empty when a rubric is provided.",
       "",
-      rubricContent,
+      rubricLoad.content,
     );
   }
 
@@ -319,7 +399,7 @@ function buildPrompt({ round, prNumber, branch, issueNumber, doneCriteria, doneC
     '- If `verdict` is `pass`, set both `contract_status` and `quality_status` to `pass`.',
     '- If `verdict` is `changes_requested`, include actionable issues with `file` and `line`, and set `next_action` to `changes_requested`.',
     '- If `verdict` is `escalated`, include the blocking issues or reason that automation should stop, and set `next_action` to `escalated`.',
-    rubricContent
+    rubricLoad.content
       ? '- `rubric_scores` is REQUIRED — score every factor from the rubric. Each entry must include `factor`, `target`, `observed`, `status`, `tier`, and `notes`.'
       : '- If no Score Log is available, set `rubric_scores` to `[]`.',
     '- When `rubric_scores` is not empty, each entry must include `factor`, `target`, `observed`, `status`, `tier`, and `notes`.',
@@ -1014,8 +1094,8 @@ function run() {
     data
   );
   const diffText = loadDiff(repoPath, prNumber, diffFile);
-  const rubricContent = loadRubricFromRunDir(runDir, data);
-  const promptText = buildPrompt({ round, prNumber, branch, issueNumber, doneCriteria, doneCriteriaSource, diffText, runDir, rubricContent });
+  const rubricLoad = loadRubricFromRunDir(runDir, data);
+  const promptText = buildPrompt({ round, prNumber, branch, issueNumber, doneCriteria, doneCriteriaSource, diffText, runDir, rubricLoad });
 
   const doneCriteriaPath = path.join(runDir, `review-round-${round}-done-criteria.md`);
   const diffPath = path.join(runDir, `review-round-${round}-diff.patch`);
@@ -1052,7 +1132,9 @@ function run() {
     reviewer: reviewerName,
     reviewerScript,
     reviewFile: reviewFile || null,
-    rubricLoaded: !!rubricContent,
+    rubricLoaded: rubricLoad.state,
+    rubricStatus: rubricLoad.status,
+    rubricWarning: rubricLoad.warning || null,
     rawResponsePath: null,
     verdictPath: null,
     redispatchPath: null,
@@ -1126,7 +1208,7 @@ function run() {
   }
 
   let verdict = parseReviewVerdict(reviewText);
-  if (rubricContent && (!Array.isArray(verdict.rubric_scores) || verdict.rubric_scores.length === 0)) {
+  if (rubricLoad.state === "loaded" && (!Array.isArray(verdict.rubric_scores) || verdict.rubric_scores.length === 0)) {
     throw new Error(
       "Review verdict has empty rubric_scores but a rubric was provided. " +
       "The reviewer must score every rubric factor."
