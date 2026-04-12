@@ -9,6 +9,7 @@ const {
   STATES,
   createManifestSkeleton,
   ensureRunLayout,
+  getRunsDir,
   updateManifestState,
   writeManifest,
   readManifest,
@@ -309,6 +310,32 @@ test("pass verdict rejects quality_status=not_run", () => {
   const manifest = readManifest(manifestPath).data;
   assert.equal(manifest.state, STATES.REVIEW_PENDING);
   assert.equal(manifest.review.latest_verdict, "pending");
+});
+
+test("review-runner rejects invalid manifest run_id before creating a sibling run directory", () => {
+  const { repoRoot, manifestPath, diffPath } = setupRepo();
+  const record = readManifest(manifestPath);
+  const victimRunDir = path.resolve(getRunsDir(repoRoot), "../victim-review-run");
+
+  writeManifest(manifestPath, {
+    ...record.data,
+    run_id: "../victim-review-run",
+  }, record.body);
+
+  assert.equal(fs.existsSync(victimRunDir), false);
+  assert.throws(() => execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--manifest", manifestPath,
+    "--pr", "123",
+    "--diff-file", diffPath,
+    "--prepare-only",
+    "--json",
+  ], { encoding: "utf-8", stdio: "pipe" }), (error) => {
+    assert.match(String(error.stderr), /run_id must be a single path segment/);
+    return true;
+  });
+  assert.equal(fs.existsSync(victimRunDir), false);
 });
 
 test("changes_requested verdict creates a re-dispatch artifact", () => {

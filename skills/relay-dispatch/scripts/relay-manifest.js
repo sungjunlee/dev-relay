@@ -106,10 +106,97 @@ function inferIssueNumber(branch) {
   return match ? Number(match[1]) : null;
 }
 
+const RUN_ID_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*-\d{17}$/;
+const RUN_ID_PATTERN_DESCRIPTION = "/^[a-z0-9]+(?:-[a-z0-9]+)*-\\d{17}$/";
+
+function validateRunId(runId) {
+  const normalizedRunId = typeof runId === "string" ? runId.trim() : "";
+  const runIdSegments = normalizedRunId.split(/[\\/]+/).filter(Boolean);
+  const buildResult = ({ valid, status, reason }) => ({
+    valid,
+    status,
+    runId: normalizedRunId || null,
+    reason,
+  });
+
+  if (!normalizedRunId) {
+    return buildResult({
+      valid: false,
+      status: "missing_run_id",
+      reason: `run_id must be set to a single path segment matching ${RUN_ID_PATTERN_DESCRIPTION} (got ${JSON.stringify(runId)}).`,
+    });
+  }
+
+  if (normalizedRunId === "." || normalizedRunId === "..") {
+    return buildResult({
+      valid: false,
+      status: "invalid_run_id",
+      reason: `run_id must be a single path segment matching ${RUN_ID_PATTERN_DESCRIPTION} and may not be '.' or '..' (got ${JSON.stringify(normalizedRunId)}).`,
+    });
+  }
+
+  if (runIdSegments.includes("..")) {
+    return buildResult({
+      valid: false,
+      status: "invalid_run_id",
+      reason: `run_id must be a single path segment matching ${RUN_ID_PATTERN_DESCRIPTION} and may not contain '..' segments (got ${JSON.stringify(normalizedRunId)}).`,
+    });
+  }
+
+  if (normalizedRunId.includes("/")) {
+    return buildResult({
+      valid: false,
+      status: "invalid_run_id",
+      reason: `run_id must be a single path segment matching ${RUN_ID_PATTERN_DESCRIPTION} and may not contain '/' (got ${JSON.stringify(normalizedRunId)}).`,
+    });
+  }
+
+  if (normalizedRunId.includes("\\")) {
+    return buildResult({
+      valid: false,
+      status: "invalid_run_id",
+      reason: `run_id must be a single path segment matching ${RUN_ID_PATTERN_DESCRIPTION} and may not contain '\\\\' (got ${JSON.stringify(normalizedRunId)}).`,
+    });
+  }
+
+  if (
+    path.basename(normalizedRunId) !== normalizedRunId
+    || path.win32.basename(normalizedRunId) !== normalizedRunId
+  ) {
+    return buildResult({
+      valid: false,
+      status: "invalid_run_id",
+      reason: `run_id must resolve to a single path segment matching ${RUN_ID_PATTERN_DESCRIPTION} (got ${JSON.stringify(normalizedRunId)}).`,
+    });
+  }
+
+  if (!RUN_ID_PATTERN.test(normalizedRunId)) {
+    return buildResult({
+      valid: false,
+      status: "invalid_run_id",
+      reason: `run_id must match the shape emitted by createRunId (${RUN_ID_PATTERN_DESCRIPTION}) and remain a single path segment (got ${JSON.stringify(normalizedRunId)}).`,
+    });
+  }
+
+  return buildResult({
+    valid: true,
+    status: "valid",
+    reason: null,
+  });
+}
+
+function requireValidRunId(runId) {
+  const validation = validateRunId(runId);
+  if (!validation.valid) {
+    throw new Error(validation.reason);
+  }
+  return validation.runId;
+}
+
 function createRunId({ issueNumber, branch, timestamp = new Date() } = {}) {
   const prefix = issueNumber ? `issue-${issueNumber}` : slugify(branch || "run");
   const iso = timestamp.toISOString().replace(/[-:TZ.]/g, "").slice(0, 17);
-  return `${prefix}-${iso}`;
+  return requireValidRunId(`${prefix}-${iso}`);
 }
 
 function getRunsDir(repoRoot) {
@@ -117,11 +204,11 @@ function getRunsDir(repoRoot) {
 }
 
 function getRunDir(repoRoot, runId) {
-  return path.join(getRunsDir(repoRoot), runId);
+  return path.join(getRunsDir(repoRoot), requireValidRunId(runId));
 }
 
 function getManifestPath(repoRoot, runId) {
-  return path.join(getRunsDir(repoRoot), `${runId}.md`);
+  return path.join(getRunsDir(repoRoot), `${requireValidRunId(runId)}.md`);
 }
 
 function getEventsPath(repoRoot, runId) {
@@ -308,7 +395,7 @@ function resolveRubricRunDir(data, options = {}) {
   if (!repoRoot || !runId) {
     return null;
   }
-  return getRunDir(repoRoot, runId);
+  return path.resolve(getRunDir(repoRoot, runId));
 }
 
 function validateRubricPathContainment(rubricPath, runDir) {
@@ -563,10 +650,11 @@ function createManifestSkeleton({
   doneCriteriaSource = null,
 }) {
   const createdAt = nowIso();
+  const normalizedRunId = requireValidRunId(runId);
 
   const manifest = {
     relay_version: RELAY_VERSION,
-    run_id: runId,
+    run_id: normalizedRunId,
     state: STATES.DRAFT,
     next_action: "start_dispatch",
     actor: {
@@ -907,6 +995,7 @@ module.exports = {
   updateManifestCleanup,
   updateManifestState,
   validateRubricPathContainment,
+  validateRunId,
   validateTransition,
   validateTransitionInvariants,
   writeManifest,

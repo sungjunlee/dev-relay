@@ -1059,8 +1059,9 @@ function run() {
 
   const round = Number(data.review?.rounds || 0) + 1;
   const maxRounds = Number(data.review?.max_rounds || 20);
-  const runDir = getRunDir(repoPath, data.run_id);
-  ensureRunLayout(repoPath, data.run_id);
+  const runRepoPath = path.resolve(data.paths?.repo_root || repoPath);
+  const runDir = getRunDir(runRepoPath, data.run_id);
+  ensureRunLayout(runRepoPath, data.run_id);
   let reviewedHeadSha = null;
   try {
     reviewedHeadSha = git(reviewRepoPath, "rev-parse", "HEAD").trim();

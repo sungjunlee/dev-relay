@@ -1,5 +1,5 @@
 const path = require("path");
-const { listManifestRecords, readManifest } = require("./relay-manifest");
+const { listManifestRecords, readManifest, validateRunId } = require("./relay-manifest");
 
 function formatSelector({ runId, manifestPath, branch, prNumber }) {
   if (manifestPath) return `manifest '${manifestPath}'`;
@@ -22,14 +22,36 @@ function hasStoredPrNumber(record) {
   return record?.data?.git?.pr_number !== undefined && record?.data?.git?.pr_number !== null;
 }
 
+function validateRequestedRunId(runId) {
+  const validation = validateRunId(runId);
+  if (!validation.valid) {
+    throw new Error(validation.reason);
+  }
+  return validation.runId;
+}
+
+function validateManifestRecordRunId(record) {
+  const validation = validateRunId(record?.data?.run_id);
+  if (!validation.valid) {
+    throw new Error(
+      `Relay manifest ${JSON.stringify(record?.manifestPath || "unknown")} has invalid run_id: ${validation.reason}`
+    );
+  }
+  return record;
+}
+
 function findManifestByRunId(repoRoot, runId) {
+  const normalizedRunId = validateRequestedRunId(runId);
   const matches = listManifestRecords(repoRoot)
-    .filter(({ data, manifestPath }) => data?.run_id === runId || path.basename(manifestPath, ".md") === runId);
+    .filter(({ data, manifestPath }) => (
+      data?.run_id === normalizedRunId
+      || path.basename(manifestPath, ".md") === normalizedRunId
+    ));
 
   if (matches.length > 1) {
-    throw new Error(`Ambiguous relay manifest for run_id '${runId}'`);
+    throw new Error(`Ambiguous relay manifest for run_id '${normalizedRunId}'`);
   }
-  return matches[0] || null;
+  return matches[0] ? validateManifestRecordRunId(matches[0]) : null;
 }
 
 function ensureUniqueRecord(matches, selector) {
@@ -54,7 +76,7 @@ function resolveManifestRecord({
 }) {
   if (manifestPath) {
     const resolved = path.resolve(manifestPath);
-    return { manifestPath: resolved, ...readManifest(resolved) };
+    return validateManifestRecordRunId({ manifestPath: resolved, ...readManifest(resolved) });
   }
 
   if (runId) {
@@ -85,7 +107,7 @@ function resolveManifestRecord({
     matches = filterByPr(allRecords, prNumber);
   }
 
-  return ensureUniqueRecord(matches, { branch, prNumber });
+  return validateManifestRecordRunId(ensureUniqueRecord(matches, { branch, prNumber }));
 }
 
 module.exports = {
