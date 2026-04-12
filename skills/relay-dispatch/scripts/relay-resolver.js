@@ -48,7 +48,11 @@ function filterByPr(records, prNumber) {
 
 function filterByBranchPrFallback(records, branch) {
   return filterByBranch(records, branch, { excludeTerminal: true })
-    .filter((record) => !(record?.data?.state === STATES.ESCALATED && !hasStoredPrNumber(record)));
+    .filter((record) => {
+      // #165: `escalated + pr_number:null` stays recoverable via explicit selectors, but branch+PR fallback
+      // only exists for stale-inheritance scenarios on reused branches, so this path must treat that case as terminal.
+      return !(record?.data?.state === STATES.ESCALATED && !hasStoredPrNumber(record));
+    });
 }
 
 function hasStoredPrNumber(record) {
