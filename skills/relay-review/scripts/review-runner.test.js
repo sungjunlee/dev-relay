@@ -1306,9 +1306,11 @@ test("review-runner loads rubric from run dir and includes rubric factor names a
     "    - name: API pagination",
     "      target: \">= 8/10\"",
   ].join("\n"), "utf-8");
+  const nextAnchor = { ...(data.anchor || {}), rubric_path: "rubric.yaml" };
+  delete nextAnchor.rubric_grandfathered;
   const updated = {
     ...data,
-    anchor: { ...data.anchor, rubric_path: "rubric.yaml" },
+    anchor: nextAnchor,
   };
   writeManifest(manifestPath, updated, body);
 
@@ -1324,12 +1326,73 @@ test("review-runner loads rubric from run dir and includes rubric factor names a
   ], { encoding: "utf-8" });
 
   const result = JSON.parse(stdout);
-  assert.equal(result.rubricLoaded, true);
+  assert.equal(result.rubricLoaded, "loaded");
   const promptText = fs.readFileSync(result.promptPath, "utf-8");
   assert.match(promptText, /## Scoring Rubric/);
   assert.match(promptText, /API pagination/);
   assert.match(promptText, />= 8\/10/);
   assert.match(promptText, /rubric_scores.*REQUIRED/i);
+});
+
+test("review-runner warns visibly when anchor.rubric_path is set but the rubric file is missing", () => {
+  const { repoRoot, manifestPath, runId, doneCriteriaPath, diffPath } = setupRepo();
+
+  const { data, body } = readManifest(manifestPath);
+  const nextAnchor = { ...(data.anchor || {}), rubric_path: "rubric.yaml" };
+  delete nextAnchor.rubric_grandfathered;
+  writeManifest(manifestPath, {
+    ...data,
+    anchor: nextAnchor,
+  }, body);
+
+  const stdout = execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--run-id", runId,
+    "--pr", "123",
+    "--done-criteria-file", doneCriteriaPath,
+    "--diff-file", diffPath,
+    "--prepare-only",
+    "--json",
+  ], { encoding: "utf-8" });
+
+  const result = JSON.parse(stdout);
+  assert.equal(result.rubricLoaded, "missing");
+  assert.match(result.rubricWarning, /\[rubric missing\]/i);
+  const promptText = fs.readFileSync(result.promptPath, "utf-8");
+  assert.match(promptText, /## Scoring Rubric/);
+  assert.match(promptText, /WARNING: \[rubric missing\]/i);
+  assert.match(promptText, /Flag this invariant failure/i);
+});
+
+test("review-runner distinguishes rubric paths that resolve outside the run dir", () => {
+  const { repoRoot, manifestPath, runId, doneCriteriaPath, diffPath } = setupRepo();
+
+  const { data, body } = readManifest(manifestPath);
+  const nextAnchor = { ...(data.anchor || {}), rubric_path: "../escape.yaml" };
+  delete nextAnchor.rubric_grandfathered;
+  writeManifest(manifestPath, {
+    ...data,
+    anchor: nextAnchor,
+  }, body);
+
+  const stdout = execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--run-id", runId,
+    "--pr", "123",
+    "--done-criteria-file", doneCriteriaPath,
+    "--diff-file", diffPath,
+    "--prepare-only",
+    "--json",
+  ], { encoding: "utf-8" });
+
+  const result = JSON.parse(stdout);
+  assert.equal(result.rubricLoaded, "outside_run_dir");
+  assert.match(result.rubricWarning, /\[rubric path outside run dir\]/i);
+  const promptText = fs.readFileSync(result.promptPath, "utf-8");
+  assert.match(promptText, /WARNING: \[rubric path outside run dir\]/i);
+  assert.match(promptText, /\.\./);
 });
 
 test("review-runner rejects empty rubric_scores when rubric is present", () => {
@@ -1339,9 +1402,11 @@ test("review-runner rejects empty rubric_scores when rubric is present", () => {
   const { data, body } = readManifest(manifestPath);
   const runDir = ensureRunLayout(repoRoot, runId).runDir;
   fs.writeFileSync(path.join(runDir, "rubric.yaml"), "rubric:\n  factors:\n    - name: test\n", "utf-8");
+  const nextAnchor = { ...(data.anchor || {}), rubric_path: "rubric.yaml" };
+  delete nextAnchor.rubric_grandfathered;
   const updated = {
     ...data,
-    anchor: { ...data.anchor, rubric_path: "rubric.yaml" },
+    anchor: nextAnchor,
   };
   writeManifest(manifestPath, updated, body);
 
@@ -1398,5 +1463,5 @@ test("review-runner allows empty rubric_scores when no rubric file exists", () =
 
   const result = JSON.parse(stdout);
   assert.equal(result.state, STATES.READY_TO_MERGE);
-  assert.equal(result.rubricLoaded, false);
+  assert.equal(result.rubricLoaded, "grandfathered");
 });

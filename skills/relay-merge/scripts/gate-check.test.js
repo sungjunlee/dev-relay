@@ -8,16 +8,44 @@ const {
   createManifestSkeleton,
   createRunId,
   getManifestPath,
+  getRunDir,
   writeManifest,
 } = require("../../relay-dispatch/scripts/relay-manifest");
 
 const SCRIPT = path.join(__dirname, "gate-check.js");
 
+function looksLikeContainedRubricPath(rubricPath) {
+  return typeof rubricPath === "string"
+    && rubricPath.trim() !== ""
+    && !path.isAbsolute(rubricPath)
+    && !rubricPath.split(/[\\/]+/).includes("..");
+}
+
+function ensureDryRunRubricFixture(payload) {
+  if (!payload?.manifest?.anchor?.rubric_path || payload.runDir) {
+    return payload;
+  }
+
+  const rubricPath = payload.manifest.anchor.rubric_path;
+  if (!looksLikeContainedRubricPath(rubricPath)) {
+    return payload;
+  }
+
+  const runDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-gate-run-"));
+  const fullPath = path.join(runDir, rubricPath);
+  fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+  fs.writeFileSync(fullPath, "rubric:\n  factors:\n    - name: gate check\n", "utf-8");
+  return { ...payload, runDir };
+}
+
 function runGateCheckDryRun(payload) {
+  const preparedPayload = Array.isArray(payload)
+    ? payload
+    : ensureDryRunRubricFixture(payload);
   const input = JSON.stringify(
-    Array.isArray(payload)
-      ? payload.map((body) => ({ body }))
-      : payload
+    Array.isArray(preparedPayload)
+      ? preparedPayload.map((body) => ({ body }))
+      : preparedPayload
   );
   const result = spawnSync("node", [
     SCRIPT,
@@ -51,7 +79,7 @@ process.exit(1);
   fs.chmodSync(ghPath, 0o755);
 }
 
-function writeLiveManifest(repoRoot, relayHome, { anchor = {}, review = {}, git = {} } = {}) {
+function writeLiveManifest(repoRoot, relayHome, { anchor = {}, review = {}, git = {}, rubricContent } = {}) {
   process.env.RELAY_HOME = relayHome;
   const runId = createRunId({
     issueNumber: 40,
@@ -87,15 +115,21 @@ function writeLiveManifest(repoRoot, relayHome, { anchor = {}, review = {}, git 
     },
   };
   writeManifest(manifestPath, manifest);
-  return { manifestPath, runId };
+  const runDir = getRunDir(repoRoot, runId);
+  if (looksLikeContainedRubricPath(anchor.rubric_path) && rubricContent !== false) {
+    const fullPath = path.join(runDir, anchor.rubric_path);
+    fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+    fs.writeFileSync(fullPath, rubricContent || "rubric:\n  factors:\n    - name: live gate check\n", "utf-8");
+  }
+  return { manifestPath, runId, runDir };
 }
 
-function runGateCheckLive({ manifest, prViewPayload }) {
+function runGateCheckLive({ manifest, prViewPayload, rubricContent }) {
   const repoRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "relay-gate-check-")));
   const relayHome = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-")));
   const binDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "relay-gh-bin-")));
   writeFakeGh(binDir);
-  writeLiveManifest(repoRoot, relayHome, manifest);
+  writeLiveManifest(repoRoot, relayHome, { ...manifest, rubricContent });
 
   const result = spawnSync("node", [
     SCRIPT,
@@ -416,6 +450,89 @@ test("gate-check resolves the manifest in PR mode and rejects missing anchor.rub
   assert.equal(result.status, 1);
   assert.equal(result.json.status, "missing_rubric_path");
   assert.equal(result.json.readyToMerge, false);
+});
+
+test("gate-check blocks merge when the anchored rubric file is missing at merge time", () => {
+  const repoRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "relay-gate-check-missing-file-")));
+  const relayHome = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-")));
+  const binDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "relay-gh-bin-")));
+  writeFakeGh(binDir);
+  const { runDir } = writeLiveManifest(repoRoot, relayHome, {
+    anchor: {
+      rubric_path: "rubric.yaml",
+    },
+    review: {
+      reviewer_login: "trusted-reviewer",
+      last_reviewed_sha: "abc123",
+    },
+  });
+  fs.unlinkSync(path.join(runDir, "rubric.yaml"));
+
+  const result = spawnSync("node", [
+    SCRIPT,
+    "40",
+    "--json",
+  ], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    env: {
+      ...process.env,
+      RELAY_HOME: relayHome,
+      PATH: `${binDir}:${process.env.PATH}`,
+      FAKE_GH_PR_VIEW_JSON: JSON.stringify({
+        headRefName: "issue-40",
+        comments: [
+          {
+            body: "<!-- relay-review -->\n## Relay Review\nVerdict: LGTM\nRounds: 1",
+            author: { login: "trusted-reviewer" },
+            createdAt: "2026-04-03T08:00:00Z",
+          },
+        ],
+        commits: [
+          { oid: "abc123", committedDate: "2026-04-03T07:00:00Z" },
+        ],
+      }),
+    },
+  });
+
+  const json = JSON.parse(result.stdout);
+  assert.equal(result.status, 1);
+  assert.equal(json.status, "missing_rubric_file");
+  assert.equal(json.rubricStatus, "missing");
+  assert.match(json.reason, /missing from the run directory/);
+});
+
+test("gate-check blocks merge when the anchored rubric file is empty", () => {
+  const result = runGateCheckLive({
+    manifest: {
+      anchor: {
+        rubric_path: "rubric.yaml",
+      },
+      review: {
+        reviewer_login: "trusted-reviewer",
+        last_reviewed_sha: "abc123",
+      },
+    },
+    rubricContent: "   \n",
+    prViewPayload: {
+      headRefName: "issue-40",
+      comments: [
+        {
+          body: "<!-- relay-review -->\n## Relay Review\nVerdict: LGTM\nRounds: 1",
+          author: { login: "trusted-reviewer" },
+          createdAt: "2026-04-03T08:00:00Z",
+        },
+      ],
+      commits: [
+        { oid: "abc123", committedDate: "2026-04-03T07:00:00Z" },
+      ],
+    },
+  });
+
+  assert.equal(result.status, 1);
+  assert.equal(result.json.status, "empty_rubric_file");
+  assert.equal(result.json.rubricStatus, "empty");
+  assert.match(result.json.reason, /empty/);
 });
 
 test("gate-check fails closed when PR manifest resolution fails", () => {

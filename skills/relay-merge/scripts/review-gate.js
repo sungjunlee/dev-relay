@@ -49,26 +49,76 @@ function extractLatestCommit(commits) {
 }
 
 function withRubricNote(result, rubricAnchor) {
-  if (!rubricAnchor?.note) return result;
-  return {
+  if (!rubricAnchor) return result;
+  const next = {
     ...result,
-    note: rubricAnchor.note,
-    rubricGrandfathered: true,
+    rubricStatus: rubricAnchor.status,
   };
+  if (rubricAnchor.rubricPath) {
+    next.rubricPath = rubricAnchor.rubricPath;
+  }
+  if (rubricAnchor.resolvedPath) {
+    next.rubricResolvedPath = rubricAnchor.resolvedPath;
+  }
+  if (rubricAnchor.note) {
+    next.note = rubricAnchor.note;
+  }
+  if (rubricAnchor.status === "grandfathered") {
+    next.rubricGrandfathered = true;
+  }
+  return next;
 }
 
-function evaluateReviewGate({ prNumber, comments, commits, manifestData, expectedReviewerLogin }) {
+function buildRubricGateFailure(prNumber, rubricAnchor) {
+  switch (rubricAnchor?.status) {
+    case "missing_path":
+      return withRubricNote({
+        status: "missing_rubric_path",
+        pr: prNumber,
+        readyToMerge: false,
+        reason: "anchor.rubric_path is required before merge unless anchor.rubric_grandfathered=true",
+      }, rubricAnchor);
+    case "missing":
+      return withRubricNote({
+        status: "missing_rubric_file",
+        pr: prNumber,
+        readyToMerge: false,
+        reason: rubricAnchor.error,
+      }, rubricAnchor);
+    case "empty":
+      return withRubricNote({
+        status: "empty_rubric_file",
+        pr: prNumber,
+        readyToMerge: false,
+        reason: rubricAnchor.error,
+      }, rubricAnchor);
+    case "outside_run_dir":
+    case "run_dir_unavailable":
+      return withRubricNote({
+        status: "invalid_rubric_path",
+        pr: prNumber,
+        readyToMerge: false,
+        reason: rubricAnchor.error,
+      }, rubricAnchor);
+    default:
+      return withRubricNote({
+        status: "invalid_rubric_file",
+        pr: prNumber,
+        readyToMerge: false,
+        reason: rubricAnchor?.error || "anchor.rubric_path did not resolve to a readable rubric file",
+      }, rubricAnchor);
+  }
+}
+
+function evaluateReviewGate({ prNumber, comments, commits, manifestData, expectedReviewerLogin, runDir }) {
   const commentRecords = normalizeCommentRecords(comments);
   const { latestCommit, latestCommitAt } = extractLatestCommit(commits);
-  const rubricAnchor = getRubricAnchorStatus(manifestData);
+  const rubricAnchor = manifestData
+    ? getRubricAnchorStatus(manifestData, runDir ? { runDir } : undefined)
+    : null;
 
   if (manifestData && !rubricAnchor.satisfied) {
-    return {
-      status: "missing_rubric_path",
-      pr: prNumber,
-      readyToMerge: false,
-      reason: "anchor.rubric_path is required before merge unless anchor.rubric_grandfathered=true",
-    };
+    return buildRubricGateFailure(prNumber, rubricAnchor);
   }
 
   let lastReviewComment = null;

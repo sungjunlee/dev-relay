@@ -15,6 +15,7 @@ const {
   createRunId,
   ensureRunLayout,
   formatAttemptsForPrompt,
+  getRubricAnchorStatus,
   getRepoSlug,
   inferIssueNumber,
   readManifest,
@@ -28,6 +29,14 @@ function initGitRepo(repoRoot, actor = "Relay Test") {
   execFileSync("git", ["init", "-b", "main"], { cwd: repoRoot, stdio: "pipe" });
   execFileSync("git", ["config", "user.name", actor], { cwd: repoRoot, stdio: "pipe" });
   execFileSync("git", ["config", "user.email", "relay@example.com"], { cwd: repoRoot, stdio: "pipe" });
+}
+
+function writeRunRubric(repoRoot, runId, rubricPath = "rubric.yaml", content = "rubric:\n  factors:\n    - name: manifest\n") {
+  const { runDir } = ensureRunLayout(repoRoot, runId);
+  const fullPath = path.join(runDir, rubricPath);
+  fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+  fs.writeFileSync(fullPath, content, "utf-8");
+  return { runDir, fullPath };
 }
 
 function withGitIdentityDisabled(testFn) {
@@ -255,10 +264,17 @@ test("updateManifestState rejects dispatched -> review_pending when anchor.rubri
 });
 
 test("updateManifestState allows dispatched -> review_pending when anchor.rubric_path is present", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-manifest-rubric-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  initGitRepo(repoRoot, "Relay Maintainer");
+  const runId = "issue-42-20260412000001000";
+  writeRunRubric(repoRoot, runId);
   const manifest = {
+    run_id: runId,
     state: STATES.DISPATCHED,
     next_action: "await_dispatch_result",
     anchor: { rubric_path: "rubric.yaml" },
+    paths: { repo_root: repoRoot },
     timestamps: { created_at: "2026-04-12T00:00:00Z", updated_at: "2026-04-12T00:00:00Z" },
   };
 
@@ -268,14 +284,58 @@ test("updateManifestState allows dispatched -> review_pending when anchor.rubric
 
 test("updateManifestState allows dispatched -> review_pending when rubric is grandfathered", () => {
   const manifest = {
+    run_id: "issue-42-20260412000002000",
     state: STATES.DISPATCHED,
     next_action: "await_dispatch_result",
     anchor: { rubric_grandfathered: true },
+    paths: { repo_root: "/tmp/relay-grandfathered" },
     timestamps: { created_at: "2026-04-12T00:00:00Z", updated_at: "2026-04-12T00:00:00Z" },
   };
 
   const updated = updateManifestState(manifest, STATES.REVIEW_PENDING, "run_review");
   assert.equal(updated.state, STATES.REVIEW_PENDING);
+});
+
+test("getRubricAnchorStatus distinguishes satisfied, empty, outside_run_dir, and grandfathered", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-manifest-anchor-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  initGitRepo(repoRoot, "Relay Maintainer");
+
+  const runId = "issue-42-20260412000003000";
+  writeRunRubric(repoRoot, runId);
+  const satisfied = getRubricAnchorStatus({
+    run_id: runId,
+    anchor: { rubric_path: "rubric.yaml" },
+    paths: { repo_root: repoRoot },
+  });
+  assert.equal(satisfied.status, "satisfied");
+  assert.equal(satisfied.satisfied, true);
+
+  const emptyRunId = "issue-42-20260412000004000";
+  writeRunRubric(repoRoot, emptyRunId, "rubric.yaml", "   \n");
+  const empty = getRubricAnchorStatus({
+    run_id: emptyRunId,
+    anchor: { rubric_path: "rubric.yaml" },
+    paths: { repo_root: repoRoot },
+  });
+  assert.equal(empty.status, "empty");
+  assert.equal(empty.satisfied, false);
+
+  const escaped = getRubricAnchorStatus({
+    run_id: runId,
+    anchor: { rubric_path: "../escape.yaml" },
+    paths: { repo_root: repoRoot },
+  });
+  assert.equal(escaped.status, "outside_run_dir");
+  assert.equal(escaped.satisfied, false);
+
+  const grandfathered = getRubricAnchorStatus({
+    run_id: runId,
+    anchor: { rubric_path: "rubric.yaml", rubric_grandfathered: true },
+    paths: { repo_root: repoRoot },
+  });
+  assert.equal(grandfathered.status, "grandfathered");
+  assert.equal(grandfathered.satisfied, true);
 });
 
 test("updateManifestCleanup records cleanup metadata without changing state", () => {
