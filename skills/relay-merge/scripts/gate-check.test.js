@@ -5,10 +5,13 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const {
+  STATES,
   createManifestSkeleton,
   createRunId,
   getManifestPath,
   getRunDir,
+  readManifest,
+  updateManifestState,
   writeManifest,
 } = require("../../relay-dispatch/scripts/relay-manifest");
 
@@ -79,7 +82,39 @@ process.exit(1);
   fs.chmodSync(ghPath, 0o755);
 }
 
-function writeLiveManifest(repoRoot, relayHome, { anchor = {}, review = {}, git = {}, rubricContent, storedRunId } = {}) {
+function applyManifestState(manifest, state) {
+  if (!state || state === STATES.DRAFT) {
+    return manifest;
+  }
+
+  manifest = updateManifestState(manifest, STATES.DISPATCHED, "await_dispatch_result");
+  if ([STATES.REVIEW_PENDING, STATES.ESCALATED, STATES.MERGED, STATES.CLOSED].includes(state)) {
+    manifest = updateManifestState(manifest, STATES.REVIEW_PENDING, "run_review");
+  }
+  if (state === STATES.ESCALATED) {
+    manifest = updateManifestState(manifest, STATES.ESCALATED, "inspect_review_failure");
+  }
+  if (state === STATES.MERGED) {
+    manifest = updateManifestState(
+      updateManifestState(manifest, STATES.READY_TO_MERGE, "await_explicit_merge"),
+      STATES.MERGED,
+      "manual_cleanup_required"
+    );
+  }
+  if (state === STATES.CLOSED) {
+    manifest = updateManifestState(manifest, STATES.CLOSED, "done");
+  }
+  return manifest;
+}
+
+function writeLiveManifest(repoRoot, relayHome, {
+  anchor = {},
+  review = {},
+  git = {},
+  rubricContent,
+  storedRunId,
+  state = null,
+} = {}) {
   process.env.RELAY_HOME = relayHome;
   const runId = createRunId({
     issueNumber: 40,
@@ -87,7 +122,13 @@ function writeLiveManifest(repoRoot, relayHome, { anchor = {}, review = {}, git 
     timestamp: new Date("2026-04-12T01:00:00.000Z"),
   });
   const manifestPath = getManifestPath(repoRoot, runId);
-  const manifest = {
+  const runDir = getRunDir(repoRoot, runId);
+  if (looksLikeContainedRubricPath(anchor.rubric_path) && rubricContent !== false) {
+    const fullPath = path.join(runDir, anchor.rubric_path);
+    fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+    fs.writeFileSync(fullPath, rubricContent || "rubric:\n  factors:\n    - name: live gate check\n", "utf-8");
+  }
+  let manifest = {
     ...createManifestSkeleton({
       repoRoot,
       runId,
@@ -117,17 +158,12 @@ function writeLiveManifest(repoRoot, relayHome, { anchor = {}, review = {}, git 
   if (typeof storedRunId === "string") {
     manifest.run_id = storedRunId;
   }
+  manifest = applyManifestState(manifest, state);
   writeManifest(manifestPath, manifest);
-  const runDir = getRunDir(repoRoot, runId);
-  if (looksLikeContainedRubricPath(anchor.rubric_path) && rubricContent !== false) {
-    const fullPath = path.join(runDir, anchor.rubric_path);
-    fs.mkdirSync(path.dirname(fullPath), { recursive: true });
-    fs.writeFileSync(fullPath, rubricContent || "rubric:\n  factors:\n    - name: live gate check\n", "utf-8");
-  }
   return { manifestPath, runId, runDir };
 }
 
-function runGateCheckLive({ manifest, prViewPayload, rubricContent, json = true, afterManifestSetup = null }) {
+function createLiveGateFixture({ manifest, rubricContent, afterManifestSetup = null }) {
   const repoRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "relay-gate-check-")));
   const relayHome = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-")));
   const binDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "relay-gh-bin-")));
@@ -136,18 +172,21 @@ function runGateCheckLive({ manifest, prViewPayload, rubricContent, json = true,
   if (typeof afterManifestSetup === "function") {
     afterManifestSetup({ ...liveManifest, repoRoot, relayHome, binDir });
   }
+  return { ...liveManifest, repoRoot, relayHome, binDir };
+}
 
+function runGateCheckWithFixture(fixture, { prViewPayload, json = true } = {}) {
   const result = spawnSync("node", [
     SCRIPT,
     "40",
     ...(json ? ["--json"] : []),
   ], {
-    cwd: repoRoot,
+    cwd: fixture.repoRoot,
     encoding: "utf-8",
     env: {
       ...process.env,
-      RELAY_HOME: relayHome,
-      PATH: `${binDir}:${process.env.PATH}`,
+      RELAY_HOME: fixture.relayHome,
+      PATH: `${fixture.binDir}:${process.env.PATH}`,
       FAKE_GH_PR_VIEW_JSON: JSON.stringify(prViewPayload),
     },
   });
@@ -157,8 +196,13 @@ function runGateCheckLive({ manifest, prViewPayload, rubricContent, json = true,
     stdout: result.stdout,
     stderr: result.stderr,
     json: json && result.stdout ? JSON.parse(result.stdout) : null,
-    relayHome,
+    ...fixture,
   };
+}
+
+function runGateCheckLive({ manifest, prViewPayload, rubricContent, json = true, afterManifestSetup = null }) {
+  const fixture = createLiveGateFixture({ manifest, rubricContent, afterManifestSetup });
+  return runGateCheckWithFixture(fixture, { prViewPayload, json });
 }
 
 function buildPassingReviewPayload() {
@@ -495,6 +539,84 @@ test("gate-check resolves the manifest in PR mode and rejects missing anchor.rub
   assert.equal(result.status, 1);
   assert.equal(result.json.status, "missing_rubric_path");
   assert.equal(result.json.readyToMerge, false);
+});
+
+test("gate-check stamps git.pr_number on first successful PR-mode resolution and does not re-stamp", () => {
+  const fixture = createLiveGateFixture({
+    manifest: {
+      state: STATES.REVIEW_PENDING,
+      anchor: {
+        rubric_path: "rubric.yaml",
+        rubric_grandfathered: false,
+      },
+      review: {
+        reviewer_login: "trusted-reviewer",
+        last_reviewed_sha: "abc123",
+      },
+      git: {
+        pr_number: null,
+      },
+    },
+  });
+
+  const first = runGateCheckWithFixture(fixture, {
+    prViewPayload: buildPassingReviewPayload(),
+  });
+  assert.equal(first.status, 0);
+  assert.equal(first.json.status, "lgtm");
+
+  let stored = readManifest(fixture.manifestPath).data;
+  assert.equal(stored.git.pr_number, 40);
+
+  let events = fs.readFileSync(path.join(fixture.runDir, "events.jsonl"), "utf-8")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => JSON.parse(line))
+    .filter((entry) => entry.event === "pr_number_stamped");
+  assert.equal(events.length, 1);
+  assert.match(events[0].reason, /git\.pr_number=40/);
+
+  const second = runGateCheckWithFixture(fixture, {
+    prViewPayload: buildPassingReviewPayload(),
+  });
+  assert.equal(second.status, 0);
+  assert.equal(second.json.status, "lgtm");
+
+  stored = readManifest(fixture.manifestPath).data;
+  assert.equal(stored.git.pr_number, 40);
+  events = fs.readFileSync(path.join(fixture.runDir, "events.jsonl"), "utf-8")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => JSON.parse(line))
+    .filter((entry) => entry.event === "pr_number_stamped");
+  assert.equal(events.length, 1);
+});
+
+test("gate-check PR mode fails closed when only a stale merged manifest exists on the reused branch", () => {
+  const result = runGateCheckLive({
+    manifest: {
+      state: STATES.MERGED,
+      anchor: {
+        rubric_grandfathered: true,
+      },
+      review: {
+        reviewer_login: "trusted-reviewer",
+        last_reviewed_sha: "abc123",
+      },
+      git: {
+        pr_number: null,
+      },
+    },
+    prViewPayload: buildPassingReviewPayload(),
+  });
+
+  assert.equal(result.status, 1);
+  assert.equal(result.json.status, "manifest_resolution_failed");
+  assert.equal(result.json.readyToMerge, false);
+  assert.match(result.json.reason, /Only terminal branch matches exist/);
+  assert.match(result.json.reason, /Create a fresh dispatch/);
 });
 
 test("gate-check blocks merge when the anchored rubric file is missing at merge time", () => {
