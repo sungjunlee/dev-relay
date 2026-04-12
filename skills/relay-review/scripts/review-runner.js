@@ -947,6 +947,17 @@ function buildReviewRunnerRubricGateFailure(rubricLoad) {
   };
 }
 
+function refreshManifestWithoutStateChange(data, nextAction) {
+  return {
+    ...data,
+    next_action: nextAction,
+    timestamps: {
+      ...(data.timestamps || {}),
+      updated_at: new Date().toISOString(),
+    },
+  };
+}
+
 function applyVerdictToManifest(data, verdict, round, prNumber, reviewedHeadSha, repeatedIssueCount, options = {}) {
   const rubricGateFailure = options.rubricGateFailure || null;
   let nextState;
@@ -955,8 +966,8 @@ function applyVerdictToManifest(data, verdict, round, prNumber, reviewedHeadSha,
 
   if (verdict.verdict === "pass") {
     if (rubricGateFailure) {
-      nextState = STATES.ESCALATED;
-      nextAction = "inspect_review_failure";
+      nextState = data.state;
+      nextAction = "repair_rubric_and_rerun_review";
       latestVerdict = rubricGateFailure.status;
     } else {
       nextState = STATES.READY_TO_MERGE;
@@ -973,7 +984,9 @@ function applyVerdictToManifest(data, verdict, round, prNumber, reviewedHeadSha,
     latestVerdict = "escalated";
   }
 
-  const updated = updateManifestState(data, nextState, nextAction);
+  const updated = nextState === data.state
+    ? refreshManifestWithoutStateChange(data, nextAction)
+    : updateManifestState(data, nextState, nextAction);
   return {
     ...updated,
     git: {

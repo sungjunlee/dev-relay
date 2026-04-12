@@ -1780,16 +1780,16 @@ test("review-runner allows empty rubric_scores when no rubric file exists", () =
     const commentBody = fs.readFileSync(commentCapturePath, "utf-8");
 
     assert.equal(result.rubricLoaded, state);
-    assert.equal(result.state, STATES.ESCALATED);
-    assert.equal(result.nextState, STATES.ESCALATED);
+    assert.equal(result.state, STATES.REVIEW_PENDING);
+    assert.equal(result.nextState, STATES.REVIEW_PENDING);
     assert.equal(result.appliedVerdict, "escalated");
     assert.equal(result.reviewGate.status, "rubric_state_failed_closed");
     assert.equal(result.reviewGate.layer, "review-runner");
     assert.equal(result.reviewGate.rubricState, state);
     assert.match(result.reviewGate.recovery, recovery);
 
-    assert.equal(manifest.state, STATES.ESCALATED);
-    assert.equal(manifest.next_action, "inspect_review_failure");
+    assert.equal(manifest.state, STATES.REVIEW_PENDING);
+    assert.equal(manifest.next_action, "repair_rubric_and_rerun_review");
     assert.equal(manifest.review.latest_verdict, "rubric_state_failed_closed");
     assert.equal(manifest.review.last_gate.layer, "review-runner");
     assert.equal(manifest.review.last_gate.rubric_state, state);
