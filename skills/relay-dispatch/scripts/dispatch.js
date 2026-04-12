@@ -22,7 +22,8 @@
  *   --sandbox <mode>       workspace-write | read-only (default: workspace-write)
  *   --copy <file,...>      Additional files to copy
  *   --timeout <seconds>    Exec timeout (default: 1800)
- *   --rubric-file <path>   Copy rubric YAML to run dir (persists for review)
+ *   --rubric-file <path>   REQUIRED: copy rubric YAML to run dir (persists for review)
+ *   --rubric-grandfathered Migration-only escape hatch for legacy same-run resumes without a rubric
  *   --request-id <id>      Link the run back to a relay-intake request
  *   --leaf-id <id>         Link the run back to a relay-intake leaf handoff
  *   --done-criteria-file   Persist a frozen Done Criteria anchor path
@@ -81,7 +82,7 @@ const args = process.argv.slice(2);
 
 const KNOWN_FLAGS = [
   "--branch", "-b", "--run-id", "--manifest", "--prompt", "-p", "--prompt-file", "--executor", "-e",
-  "--model", "-m", "--sandbox", "--copy", "--timeout", "--rubric-file",
+  "--model", "-m", "--sandbox", "--copy", "--timeout", "--rubric-file", "--rubric-grandfathered",
   "--request-id", "--leaf-id", "--done-criteria-file",
   "--register", "--no-cleanup", "--dry-run", "--json", "--help", "-h",
 ];
@@ -102,11 +103,12 @@ if (!args.length || args.includes("--help") || args.includes("-h")) {
   console.log("  --sandbox          workspace-write | read-only (default: workspace-write)");
   console.log("  --copy <files>     Additional files to copy (comma-separated)");
   console.log("  --timeout          Exec timeout in seconds (default: 1800)");
+  console.log("  --rubric-file      REQUIRED: copy rubric YAML to run dir (persists for review)");
+  console.log("  --rubric-grandfathered  Migration-only escape hatch for legacy same-run resumes without a rubric");
   console.log("  --request-id       Link the run back to a relay-intake request");
   console.log("  --leaf-id          Link the run back to a relay-intake leaf handoff");
   console.log("  --done-criteria-file  Persist a frozen Done Criteria anchor path");
   console.log("  --register         Register session in executor's app (keeps worktree)");
-  console.log("  --rubric-file      Copy rubric YAML to run dir (persists for review)");
   console.log("  --no-cleanup       Compatibility alias; worktree is retained by default");
   console.log("  --dry-run          Show plan without executing");
   console.log("  --json             Output as JSON");
@@ -127,11 +129,11 @@ const hasFlag = (f) => args.includes(f);
 // Positional arg: first arg that isn't a flag and isn't consumed as a flag's value
 const consumedIndices = new Set();
 for (let i = 0; i < args.length; i++) {
-  if (KNOWN_FLAGS.includes(args[i]) && !["--register", "--no-cleanup", "--dry-run", "--json", "--help", "-h"].includes(args[i])) {
+  if (KNOWN_FLAGS.includes(args[i]) && !["--register", "--no-cleanup", "--dry-run", "--json", "--help", "-h", "--rubric-grandfathered"].includes(args[i])) {
     consumedIndices.add(i);
     consumedIndices.add(i + 1);
     i++; // skip the value
-  } else if (["--register", "--no-cleanup", "--dry-run", "--json", "--help", "-h"].includes(args[i])) {
+  } else if (["--register", "--no-cleanup", "--dry-run", "--json", "--help", "-h", "--rubric-grandfathered"].includes(args[i])) {
     consumedIndices.add(i);
   }
 }
@@ -148,6 +150,7 @@ const MODEL = getArg(["--model", "-m"], undefined);
 const SANDBOX = getArg("--sandbox", "workspace-write");
 const COPY_FILES = getArg("--copy", "").split(",").filter(Boolean);
 const RUBRIC_FILE = getArg("--rubric-file", undefined);
+const RUBRIC_GRANDFATHERED = hasFlag("--rubric-grandfathered");
 const REQUEST_ID = getArg("--request-id", undefined);
 const LEAF_ID = getArg("--leaf-id", undefined);
 const DONE_CRITERIA_FILE = getArg("--done-criteria-file", undefined);
@@ -161,6 +164,7 @@ const NO_CLEANUP = hasFlag("--no-cleanup");
 const DRY_RUN = hasFlag("--dry-run");
 const JSON_OUT = hasFlag("--json");
 const RESUME_MODE = !!RUN_ID || !!MANIFEST_INPUT;
+const GRANDFATHER_ONLY_STATES = new Set([STATES.REVIEW_PENDING, STATES.READY_TO_MERGE]);
 
 // ---------------------------------------------------------------------------
 // Validation
@@ -176,17 +180,22 @@ if (!RESUME_MODE && !BRANCH) {
   process.exit(1);
 }
 
-if (!PROMPT && !PROMPT_FILE) {
-  console.error("Error: --prompt or --prompt-file is required");
-  process.exit(1);
-}
-
 if (RUBRIC_FILE) {
   const rubricPath = path.resolve(RUBRIC_FILE);
   if (!fs.existsSync(rubricPath)) {
     console.error(`Error: rubric file not found: ${rubricPath}`);
     process.exit(1);
   }
+}
+
+if (RUBRIC_FILE && RUBRIC_GRANDFATHERED) {
+  console.error("Error: use either --rubric-file or --rubric-grandfathered, not both");
+  process.exit(1);
+}
+
+if (RUBRIC_GRANDFATHERED && !RESUME_MODE) {
+  console.error("Error: --rubric-grandfathered is only valid with --run-id or --manifest for legacy pre-change runs");
+  process.exit(1);
 }
 
 if (DONE_CRITERIA_FILE) {
@@ -205,30 +214,8 @@ if (!MANIFEST_INPUT && !fs.existsSync(path.join(REPO_PATH, ".git"))) {
   process.exit(1);
 }
 
-// Executor CLI validation
 // To add a new executor: add entry here + execution branch in Step 3.
 const EXECUTOR_CLI = { codex: "codex", claude: "claude" };
-const cli = EXECUTOR_CLI[EXECUTOR];
-if (!cli) {
-  console.error(`Error: unknown executor '${EXECUTOR}'. Supported: ${Object.keys(EXECUTOR_CLI).join(", ")}`);
-  process.exit(1);
-}
-try {
-  execFileSync(cli, ["--version"], { encoding: "utf-8", stdio: "pipe" });
-} catch {
-  console.error(`Error: ${cli} CLI not found.`);
-  process.exit(1);
-}
-
-let taskPrompt = PROMPT;
-if (PROMPT_FILE) {
-  const promptPath = path.resolve(PROMPT_FILE);
-  if (!fs.existsSync(promptPath)) {
-    console.error(`Error: prompt file not found: ${promptPath}`);
-    process.exit(1);
-  }
-  taskPrompt = fs.readFileSync(promptPath, "utf-8").trim();
-}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -299,6 +286,110 @@ function validateResumeRequestLinkage(manifest, { requestId, leafId, doneCriteri
   }
 }
 
+function hasAnchoredRubricPath(manifest) {
+  return typeof manifest?.anchor?.rubric_path === "string" && manifest.anchor.rubric_path.trim() !== "";
+}
+
+function isRubricGrandfathered(manifest) {
+  return manifest?.anchor?.rubric_grandfathered === true;
+}
+
+function markRubricGrandfathered(manifest) {
+  return {
+    ...manifest,
+    anchor: {
+      ...(manifest.anchor || {}),
+      rubric_grandfathered: true,
+    },
+  };
+}
+
+function clearRubricGrandfathering(anchor = {}) {
+  const nextAnchor = { ...anchor };
+  delete nextAnchor.rubric_grandfathered;
+  return nextAnchor;
+}
+
+function enforceRubricPersistence(manifest) {
+  // Grandfathering is an explicit per-run migration marker, not a timestamp-derived cutoff.
+  if (RUBRIC_GRANDFATHERED && hasAnchoredRubricPath(manifest)) {
+    console.error("Error: --rubric-grandfathered is only valid when the run does not already have anchor.rubric_path");
+    process.exit(1);
+  }
+
+  if (!RUBRIC_FILE && !hasAnchoredRubricPath(manifest) && !isRubricGrandfathered(manifest) && !RUBRIC_GRANDFATHERED) {
+    console.error(
+      "Error: --rubric-file is required. Generate the rubric with relay-plan and pass --rubric-file <path> to dispatch.js. " +
+      "Only explicit legacy-run migration may bypass this with --rubric-grandfathered."
+    );
+    process.exit(1);
+  }
+}
+
+function validateExecutorCli() {
+  const cli = EXECUTOR_CLI[EXECUTOR];
+  if (!cli) {
+    console.error(`Error: unknown executor '${EXECUTOR}'. Supported: ${Object.keys(EXECUTOR_CLI).join(", ")}`);
+    process.exit(1);
+  }
+  try {
+    execFileSync(cli, ["--version"], { encoding: "utf-8", stdio: "pipe" });
+  } catch {
+    console.error(`Error: ${cli} CLI not found.`);
+    process.exit(1);
+  }
+}
+
+function readTaskPrompt() {
+  if (!PROMPT && !PROMPT_FILE) {
+    console.error("Error: --prompt or --prompt-file is required");
+    process.exit(1);
+  }
+
+  if (!PROMPT_FILE) {
+    return PROMPT;
+  }
+
+  const promptPath = path.resolve(PROMPT_FILE);
+  if (!fs.existsSync(promptPath)) {
+    console.error(`Error: prompt file not found: ${promptPath}`);
+    process.exit(1);
+  }
+  return fs.readFileSync(promptPath, "utf-8").trim();
+}
+
+function buildGrandfatherOnlyResult({
+  runId,
+  repoRoot,
+  manifestPath,
+  manifest,
+  cleanupPolicy,
+  executor,
+  worktree,
+  branch,
+  dryRun,
+}) {
+  const runDir = getRunDir(repoRoot, runId);
+  return {
+    runId,
+    runDir,
+    manifestPath,
+    rubricPath: null,
+    rubricGrandfathered: manifest.anchor?.rubric_grandfathered === true,
+    requestId: manifest.source?.request_id || null,
+    leafId: manifest.source?.leaf_id || null,
+    doneCriteriaPath: manifest.anchor?.done_criteria_path || null,
+    runState: manifest.state,
+    cleanupPolicy,
+    status: dryRun ? "would-grandfather" : "grandfathered",
+    executor,
+    worktree,
+    branch,
+    mode: "resume",
+    dispatchSkipped: true,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
@@ -325,6 +416,7 @@ async function main() {
   let manifest;
   let copiedFiles = [];
   let createdWorktree = false;
+  let grandfatherOnlyResume = false;
 
   if (RESUME_MODE) {
     const manifestRecord = resolveManifestRecord({
@@ -347,7 +439,8 @@ async function main() {
       console.error(`Error: manifest repo root is not a git repository: ${repoRoot}`);
       process.exit(1);
     }
-    if (manifest.state !== STATES.CHANGES_REQUESTED) {
+    grandfatherOnlyResume = RUBRIC_GRANDFATHERED && GRANDFATHER_ONLY_STATES.has(manifest.state);
+    if (manifest.state !== STATES.CHANGES_REQUESTED && !grandfatherOnlyResume) {
       console.error(`Error: same-run resume requires state='${STATES.CHANGES_REQUESTED}', got '${manifest.state}'`);
       process.exit(1);
     }
@@ -355,35 +448,37 @@ async function main() {
       console.error(`Error: manifest ${manifestPath} is missing git.working_branch`);
       process.exit(1);
     }
-    if (!wtPath || !fs.existsSync(wtPath)) {
-      console.error(`Error: retained worktree is missing for run '${runId}': ${wtPath || "(unset)"}`);
-      process.exit(1);
-    }
-    try {
-      const currentBranch = git(wtPath, "rev-parse", "--abbrev-ref", "HEAD");
-      if (currentBranch !== branch) {
-        console.error(`Error: retained worktree HEAD is '${currentBranch}', expected '${branch}'`);
+    if (!grandfatherOnlyResume) {
+      if (!wtPath || !fs.existsSync(wtPath)) {
+        console.error(`Error: retained worktree is missing for run '${runId}': ${wtPath || "(unset)"}`);
         process.exit(1);
       }
-    } catch (error) {
-      console.error(`Error: retained worktree is unusable: ${error.message}`);
-      process.exit(1);
-    }
-
-    // --- Environment drift check ---
-    const currentEnv = collectEnvironmentSnapshot(repoRoot, baseBranch);
-    const drift = compareEnvironmentSnapshot(manifest.environment, currentEnv);
-    if (drift.length) {
-      const driftMsg = drift.map(d => `${d.field}: ${d.from} → ${d.to}`).join(", ");
-      if (!JSON_OUT) {
-        console.error(`[WARN] Environment drift detected since initial dispatch: ${driftMsg}`);
+      try {
+        const currentBranch = git(wtPath, "rev-parse", "--abbrev-ref", "HEAD");
+        if (currentBranch !== branch) {
+          console.error(`Error: retained worktree HEAD is '${currentBranch}', expected '${branch}'`);
+          process.exit(1);
+        }
+      } catch (error) {
+        console.error(`Error: retained worktree is unusable: ${error.message}`);
+        process.exit(1);
       }
-      appendRunEvent(repoRoot, runId, {
-        event: "environment_drift",
-        state_from: manifest.state,
-        state_to: manifest.state,
-        reason: driftMsg,
-      });
+
+      // --- Environment drift check ---
+      const currentEnv = collectEnvironmentSnapshot(repoRoot, baseBranch);
+      const drift = compareEnvironmentSnapshot(manifest.environment, currentEnv);
+      if (drift.length) {
+        const driftMsg = drift.map(d => `${d.field}: ${d.from} → ${d.to}`).join(", ");
+        if (!JSON_OUT) {
+          console.error(`[WARN] Environment drift detected since initial dispatch: ${driftMsg}`);
+        }
+        appendRunEvent(repoRoot, runId, {
+          event: "environment_drift",
+          state_from: manifest.state,
+          state_to: manifest.state,
+          reason: driftMsg,
+        });
+      }
     }
   } else {
     runId = createRunId({ issueNumber, branch });
@@ -410,6 +505,50 @@ async function main() {
     }
   }
 
+  enforceRubricPersistence(manifest);
+
+  if (RESUME_MODE && RUBRIC_GRANDFATHERED) {
+    manifest = markRubricGrandfathered(manifest);
+    if (!DRY_RUN) {
+      writeManifest(manifestPath, manifest);
+    }
+  }
+
+  if (grandfatherOnlyResume) {
+    if (!DRY_RUN) {
+      appendRunEvent(repoRoot, runId, {
+        event: "rubric_grandfathered",
+        state_from: manifest.state,
+        state_to: manifest.state,
+        head_sha: manifest.git?.head_sha || null,
+        reason: "legacy_pre_change_run",
+      });
+    }
+    const result = buildGrandfatherOnlyResult({
+      runId,
+      repoRoot,
+      manifestPath,
+      manifest,
+      cleanupPolicy,
+      executor: EXECUTOR,
+      worktree: wtPath,
+      branch,
+      dryRun: DRY_RUN,
+    });
+    if (JSON_OUT) {
+      console.log(JSON.stringify(result, null, 2));
+    } else {
+      console.log(`Rubric grandfathered for legacy run ${runId}.`);
+      console.log(`  State:    ${manifest.state}`);
+      console.log(`  Manifest: ${manifestPath}`);
+      console.log("  Dispatch: skipped (migration-only manifest update)");
+    }
+    return;
+  }
+
+  validateExecutorCli();
+  let taskPrompt = readTaskPrompt();
+
   // --- Prepend iteration history on re-dispatch ---
   if (RESUME_MODE) {
     const previousAttempts = readPreviousAttempts(repoRoot, runId);
@@ -433,10 +572,13 @@ async function main() {
       cleanupPolicy,
       worktreeinclude: includeFiles,
       rubricFile: RUBRIC_FILE || null,
+      rubricGrandfathered: RUBRIC_GRANDFATHERED || isRubricGrandfathered(manifest),
       requestId: REQUEST_ID || manifest?.source?.request_id || null,
       leafId: LEAF_ID || manifest?.source?.leaf_id || null,
       doneCriteriaFile: resolvedDoneCriteriaPath || manifest?.anchor?.done_criteria_path || null,
       environment: RESUME_MODE ? (manifest?.environment || null) : "collected-at-dispatch",
+      runState: manifest?.state || null,
+      dispatchSkipped: false,
     };
     if (JSON_OUT) {
       console.log(JSON.stringify(plan, null, 2));
@@ -458,6 +600,9 @@ async function main() {
       console.log(`  Timeout:  ${TIMEOUT}s`);
       if (RUBRIC_FILE) {
         console.log(`  Rubric:   ${RUBRIC_FILE}`);
+      }
+      if (RUBRIC_GRANDFATHERED || isRubricGrandfathered(manifest)) {
+        console.log("  Rubric:   grandfathered pre-change run");
       }
       if (REQUEST_ID || manifest?.source?.request_id) {
         console.log(`  Request:  ${REQUEST_ID || manifest.source.request_id}`);
@@ -563,7 +708,7 @@ async function main() {
     manifest = {
       ...manifest,
       anchor: {
-        ...(manifest.anchor || {}),
+        ...clearRubricGrandfathering(manifest.anchor || {}),
         rubric_path: "rubric.yaml",
       },
     };
@@ -827,6 +972,7 @@ async function main() {
     runDir,
     manifestPath,
     rubricPath: manifest.anchor?.rubric_path ? path.join(runDir, manifest.anchor.rubric_path) : null,
+    rubricGrandfathered: manifest.anchor?.rubric_grandfathered === true,
     requestId: manifest.source?.request_id || null,
     leafId: manifest.source?.leaf_id || null,
     doneCriteriaPath: manifest.anchor?.done_criteria_path || null,

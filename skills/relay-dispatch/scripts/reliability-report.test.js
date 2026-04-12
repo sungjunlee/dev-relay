@@ -46,6 +46,7 @@ function writeRun(repoRoot, { runId, state, rounds, updatedAt }) {
   });
   manifest = updateManifestState(manifest, STATES.DISPATCHED, "await_dispatch_result");
   if (state !== STATES.DISPATCHED) {
+    manifest.anchor.rubric_grandfathered = true;
     manifest = updateManifestState(manifest, STATES.REVIEW_PENDING, "run_review");
   }
   if (state === STATES.READY_TO_MERGE || state === STATES.MERGED) {

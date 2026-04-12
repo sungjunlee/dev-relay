@@ -929,12 +929,15 @@ test("scenario: /relay auto-routes raw text through intake, then continues to di
     RELAY_HOME: relayHome,
     PATH: `${binDir}:${process.env.PATH}`,
   };
+  const rubricPath = path.join(repoRoot, "rubric.yaml");
+  fs.writeFileSync(rubricPath, "rubric:\n  factors:\n    - name: intake relay handoff\n      target: exit 0\n", "utf-8");
 
   const dispatchStdout = execFileSync("node", [
     DISPATCH_SCRIPT,
     repoRoot,
     "-b", "issue-127-raw-intake",
     "--prompt-file", intake.handoffPath,
+    "--rubric-file", rubricPath,
     "--request-id", intake.requestId,
     "--leaf-id", intake.leafId,
     "--done-criteria-file", intake.doneCriteriaPath,

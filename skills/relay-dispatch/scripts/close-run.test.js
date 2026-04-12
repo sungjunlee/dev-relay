@@ -54,6 +54,7 @@ function setupRepo({ dirtyWorktree = false } = {}) {
     reviewer: "codex",
   });
   manifest = updateManifestState(manifest, STATES.DISPATCHED, "await_dispatch_result");
+  manifest.anchor.rubric_grandfathered = true;
   manifest = updateManifestState(manifest, STATES.REVIEW_PENDING, "run_review");
   writeManifest(manifestPath, manifest);
 

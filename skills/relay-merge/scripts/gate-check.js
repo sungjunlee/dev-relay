@@ -26,6 +26,7 @@
 
 const { execFileSync } = require("child_process");
 const { buildSkipComment, evaluateReviewGate } = require("./review-gate");
+const { resolveManifestRecord } = require("../../relay-dispatch/scripts/relay-resolver");
 
 // ---------------------------------------------------------------------------
 // Args
@@ -70,6 +71,26 @@ if (SKIP && !SKIP_REASON) {
 // Helpers
 // ---------------------------------------------------------------------------
 
+function gh(...ghArgs) {
+  const ghBin = process.env.RELAY_GH_BIN || "gh";
+  return execFileSync(ghBin, ghArgs, {
+    encoding: "utf-8",
+    stdio: "pipe",
+  });
+}
+
+function tryResolveManifestForPr(prNumber, headRefName) {
+  try {
+    return resolveManifestRecord({
+      repoRoot: process.cwd(),
+      prNumber,
+      branch: headRefName || undefined,
+    });
+  } catch (error) {
+    return { error };
+  }
+}
+
 function output(result) {
   if (JSON_OUT) {
     console.log(JSON.stringify(result, null, 2));
@@ -84,6 +105,12 @@ function output(result) {
     } else if (result.status === "changes_requested") {
       console.log(`✗ PR #${PR_NUM}: relay-review requested changes — re-dispatch or fix the branch before merge`);
       if (result.issues) console.log(`  ${result.issues}`);
+    } else if (result.status === "missing_rubric_path") {
+      console.log(`✗ PR #${PR_NUM}: run is missing anchor.rubric_path — merge blocked`);
+      console.log("  Re-dispatch from relay-plan with --rubric-file, or explicitly grandfather a pre-change run.");
+    } else if (result.status === "manifest_resolution_failed") {
+      console.log(`✗ PR #${PR_NUM}: unable to resolve relay manifest — merge blocked`);
+      if (result.reason) console.log(`  ${result.reason}`);
     } else if (result.status === "unauthorized_reviewer") {
       console.log(`✗ PR #${PR_NUM}: relay-review comment found but from unauthorized author (expected: ${result.expectedReviewerLogin})`);
     } else if (result.status === "stale") {
@@ -137,17 +164,28 @@ function main() {
       commits = [];
     }
   } else {
-    const raw = execFileSync("gh", [
-      "pr", "view", PR_NUM, "--json", "comments,commits",
-    ], { encoding: "utf-8", stdio: "pipe" });
+    const raw = gh("pr", "view", PR_NUM, "--json", "comments,commits,headRefName");
     const parsed = JSON.parse(raw);
     comments = parsed.comments || [];
     commits = parsed.commits || [];
+    const manifestRecord = tryResolveManifestForPr(PR_NUM, parsed.headRefName || null);
+    if (manifestRecord.error || !manifestRecord.data) {
+      output({
+        status: "manifest_resolution_failed",
+        pr: PR_NUM,
+        readyToMerge: false,
+        reason: manifestRecord.error
+          ? manifestRecord.error.message
+          : `resolveManifestRecord returned no manifest data for PR #${PR_NUM}`,
+      });
+      process.exit(1);
+    }
+    manifestData = manifestRecord.data;
   }
 
   const expectedReviewerLogin = manifestData?.review?.reviewer_login || null;
-  if (!DRY_RUN && !expectedReviewerLogin) {
-    console.error("Note: reviewer author verification skipped — no manifest data. Use finalize-run.js for full verification.");
+  if (!DRY_RUN && !expectedReviewerLogin && manifestData) {
+    console.error("Note: reviewer author verification skipped — manifest is missing review.reviewer_login. Use finalize-run.js for full verification.");
   }
   const result = evaluateReviewGate({
     prNumber: PR_NUM,
@@ -156,6 +194,9 @@ function main() {
     manifestData,
     expectedReviewerLogin,
   });
+  if (result.note) {
+    console.error(`Note: ${result.note}`);
+  }
   output(result);
   if (!result.readyToMerge) {
     process.exit(1);

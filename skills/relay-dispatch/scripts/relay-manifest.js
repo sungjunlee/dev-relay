@@ -289,8 +289,44 @@ function validateTransition(fromState, toState) {
   }
 }
 
+function hasRubricPath(data) {
+  return typeof data?.anchor?.rubric_path === "string" && data.anchor.rubric_path.trim() !== "";
+}
+
+// TODO(2026-Q3): remove grandfather path once all pre-2026-04 runs are closed.
+function isRubricGrandfathered(data) {
+  return data?.anchor?.rubric_grandfathered === true;
+}
+
+function getRubricAnchorStatus(data) {
+  const rubricPath = hasRubricPath(data) ? data.anchor.rubric_path.trim() : null;
+  const grandfathered = isRubricGrandfathered(data);
+  return {
+    rubricPath,
+    grandfathered,
+    satisfied: Boolean(rubricPath) || grandfathered,
+    note: grandfathered
+      ? "Grandfathered pre-rubric run: merge/review gates are allowing missing anchor.rubric_path because anchor.rubric_grandfathered=true."
+      : null,
+  };
+}
+
+function validateTransitionInvariants(data, fromState, toState) {
+  if (fromState === STATES.DISPATCHED && toState === STATES.REVIEW_PENDING) {
+    const rubricAnchor = getRubricAnchorStatus(data);
+    if (!rubricAnchor.satisfied) {
+      throw new Error(
+        "Cannot transition dispatched -> review_pending without anchor.rubric_path. " +
+        "Generate the rubric with relay-plan and dispatch with --rubric-file, " +
+        "or explicitly grandfather a pre-change run with anchor.rubric_grandfathered: true."
+      );
+    }
+  }
+}
+
 function updateManifestState(data, toState, nextAction) {
   validateTransition(data.state, toState);
+  validateTransitionInvariants(data, data.state, toState);
   return {
     ...data,
     state: toState,
@@ -667,6 +703,7 @@ module.exports = {
   createRunId,
   ensureRunLayout,
   formatAttemptsForPrompt,
+  getRubricAnchorStatus,
   getActorName,
   getAttemptsPath,
   getEventsPath,
@@ -676,7 +713,9 @@ module.exports = {
   getRunDir,
   getRunsBase,
   getRunsDir,
+  hasRubricPath,
   inferIssueNumber,
+  isRubricGrandfathered,
   isTerminalState,
   listManifestRecords,
   listManifestPaths,
@@ -688,5 +727,6 @@ module.exports = {
   updateManifestCleanup,
   updateManifestState,
   validateTransition,
+  validateTransitionInvariants,
   writeManifest,
 };
