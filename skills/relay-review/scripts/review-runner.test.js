@@ -9,6 +9,7 @@ const {
   STATES,
   createManifestSkeleton,
   ensureRunLayout,
+  getRunsDir,
   updateManifestState,
   writeManifest,
   readManifest,
@@ -311,6 +312,32 @@ test("pass verdict rejects quality_status=not_run", () => {
   assert.equal(manifest.review.latest_verdict, "pending");
 });
 
+test("review-runner rejects invalid manifest run_id before creating a sibling run directory", () => {
+  const { repoRoot, manifestPath, diffPath } = setupRepo();
+  const record = readManifest(manifestPath);
+  const victimRunDir = path.resolve(getRunsDir(repoRoot), "../victim-review-run");
+
+  writeManifest(manifestPath, {
+    ...record.data,
+    run_id: "../victim-review-run",
+  }, record.body);
+
+  assert.equal(fs.existsSync(victimRunDir), false);
+  assert.throws(() => execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--manifest", manifestPath,
+    "--pr", "123",
+    "--diff-file", diffPath,
+    "--prepare-only",
+    "--json",
+  ], { encoding: "utf-8", stdio: "pipe" }), (error) => {
+    assert.match(String(error.stderr), /run_id must be a single path segment/);
+    return true;
+  });
+  assert.equal(fs.existsSync(victimRunDir), false);
+});
+
 test("changes_requested verdict creates a re-dispatch artifact", () => {
   const { repoRoot, manifestPath, doneCriteriaPath, diffPath } = setupRepo();
   const reviewFile = writeVerdict(repoRoot, "changes.json", {
@@ -536,6 +563,83 @@ test("review-runner records score divergence and appends warning text to the PR 
   assert.match(commentBody, /Score divergence warnings:/);
   assert.match(commentBody, /Coverage: executor 9, reviewer 6 \(\+3\)/);
   assert.doesNotMatch(commentBody, /Docs & Notes\?: executor 8, reviewer 7/);
+});
+
+test("review-runner keeps event journals on the manifest repo slug when --repo is a symlinked alias", () => {
+  const { repoRoot, manifestPath, runId, doneCriteriaPath, diffPath } = setupRepo();
+  const repoAliasPath = `${repoRoot}-alias`;
+  fs.symlinkSync(repoRoot, repoAliasPath, "dir");
+  writeFakeGhScript(repoRoot, {
+    capturePath: path.join(repoRoot, "unused-comment.txt"),
+    prBody: [
+      "## Score Log",
+      "",
+      "| Factor | Target | Baseline | Iter 1 | Final | Status |",
+      "|--------|--------|----------|--------|-------|--------|",
+      "| Coverage | >= 8 | — | 9 | 9 | locked |",
+    ].join("\n"),
+  });
+  const reviewFile = writeVerdict(repoRoot, "changes-with-alias-divergence.json", {
+    verdict: "changes_requested",
+    summary: "Coverage still misses the bar.",
+    contract_status: "fail",
+    quality_status: "pass",
+    next_action: "changes_requested",
+    issues: [
+      {
+        title: "Missing smoke file",
+        body: "The PR does not add the required smoke.txt output.",
+        file: "src/index.js",
+        line: 12,
+        category: "contract",
+        severity: "high",
+      },
+    ],
+    rubric_scores: [
+      {
+        factor: "Coverage",
+        target: ">= 8",
+        observed: "6",
+        status: "fail",
+        notes: "Still below bar.",
+        tier: "contract",
+      },
+    ],
+    scope_drift: { creep: [], missing: [] },
+  });
+
+  const stdout = execFileSync("node", [
+    SCRIPT,
+    "--repo", repoAliasPath,
+    "--manifest", manifestPath,
+    "--pr", "123",
+    "--done-criteria-file", doneCriteriaPath,
+    "--diff-file", diffPath,
+    "--review-file", reviewFile,
+    "--no-comment",
+    "--json",
+  ], {
+    encoding: "utf-8",
+    env: {
+      ...process.env,
+      PATH: `${repoRoot}:${process.env.PATH}`,
+    },
+  });
+
+  const result = JSON.parse(stdout);
+  const canonicalRunDir = path.join(getRunsDir(repoRoot), runId);
+  const aliasEventsPath = path.join(getRunsDir(repoAliasPath), runId, "events.jsonl");
+  const events = readRunEvents(repoRoot, runId);
+
+  assert.ok(result.verdictPath.startsWith(canonicalRunDir));
+  assert.deepEqual(events.map((event) => event.event), [
+    "review_apply",
+    "iteration_score",
+    "score_divergence",
+  ]);
+  assert.equal(events.at(-1).divergences[0].factor, "Coverage");
+  assert.equal(fs.existsSync(aliasEventsPath), false);
+  assert.deepEqual(readRunEvents(repoAliasPath, runId), []);
 });
 
 test("reviewer-script invocation can drive a round without --review-file", () => {

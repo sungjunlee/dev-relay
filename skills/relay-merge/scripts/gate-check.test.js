@@ -79,7 +79,7 @@ process.exit(1);
   fs.chmodSync(ghPath, 0o755);
 }
 
-function writeLiveManifest(repoRoot, relayHome, { anchor = {}, review = {}, git = {}, rubricContent } = {}) {
+function writeLiveManifest(repoRoot, relayHome, { anchor = {}, review = {}, git = {}, rubricContent, storedRunId } = {}) {
   process.env.RELAY_HOME = relayHome;
   const runId = createRunId({
     issueNumber: 40,
@@ -114,6 +114,9 @@ function writeLiveManifest(repoRoot, relayHome, { anchor = {}, review = {}, git 
       ...review,
     },
   };
+  if (typeof storedRunId === "string") {
+    manifest.run_id = storedRunId;
+  }
   writeManifest(manifestPath, manifest);
   const runDir = getRunDir(repoRoot, runId);
   if (looksLikeContainedRubricPath(anchor.rubric_path) && rubricContent !== false) {
@@ -151,6 +154,7 @@ function runGateCheckLive({ manifest, prViewPayload, rubricContent }) {
     stdout: result.stdout,
     stderr: result.stderr,
     json: result.stdout ? JSON.parse(result.stdout) : null,
+    relayHome,
   };
 }
 
@@ -316,6 +320,27 @@ test("gate-check passes review from authorized author when reviewer_login is set
   assert.equal(result.json.readyToMerge, true);
 });
 
+test("gate-check rejects manifests whose stored run_id is invalid", () => {
+  const result = runGateCheckLive({
+    manifest: {
+      anchor: {
+        rubric_grandfathered: true,
+      },
+      storedRunId: "../victim-gate-run",
+    },
+    prViewPayload: {
+      comments: [],
+      commits: [],
+      headRefName: "issue-40",
+    },
+  });
+
+  assert.equal(result.status, 1);
+  assert.equal(result.json.status, "manifest_resolution_failed");
+  assert.match(result.json.reason, /run_id must be a single path segment/);
+  assert.equal(fs.existsSync(path.join(result.relayHome, "runs", "victim-gate-run")), false);
+});
+
 test("gate-check skips unauthorized and uses authorized review when both exist", () => {
   const result = runGateCheckDryRun({
     comments: [
@@ -412,6 +437,7 @@ test("gate-check rejects merge when manifest is missing anchor.rubric_path", () 
       { oid: "abc123", committedDate: "2026-04-03T07:00:00Z" },
     ],
     manifest: {
+      run_id: "issue-40-20260412010000000",
       anchor: {},
       review: {
         last_reviewed_sha: "abc123",
@@ -579,6 +605,7 @@ test("gate-check allows grandfathered runs and surfaces the note", () => {
       { oid: "abc123", committedDate: "2026-04-03T07:00:00Z" },
     ],
     manifest: {
+      run_id: "issue-40-20260412010000000",
       anchor: {
         rubric_grandfathered: true,
       },

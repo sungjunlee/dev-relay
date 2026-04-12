@@ -221,6 +221,49 @@ test("finalize-run merges and cleans a ready run", () => {
   assert.match(ghLog, /issue close 42 --comment Resolved in PR #123/);
 });
 
+test("finalize-run rejects invalid manifest run_id before merge finalization", () => {
+  const { repoRoot, manifestPath, branch, worktreePath, headSha } = setupRepo();
+  const logPath = path.join(repoRoot, "gh.log");
+  const fakeGh = writeFakeGh(logPath, {
+    comments: [
+      {
+        body: "<!-- relay-review -->\n## Relay Review\nVerdict: LGTM\nRounds: 1",
+        createdAt: "2026-04-03T08:00:00Z",
+      },
+    ],
+    commits: [
+      {
+        oid: headSha,
+        committedDate: "2026-04-03T08:00:00Z",
+      },
+    ],
+  });
+  const record = readManifest(manifestPath);
+  writeManifest(manifestPath, {
+    ...record.data,
+    run_id: "../victim-finalize-run",
+  }, record.body);
+
+  assert.throws(() => execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--branch", branch,
+    "--pr", "123",
+    "--json",
+  ], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+    env: { ...process.env, RELAY_GH_BIN: fakeGh },
+  }), (error) => {
+    assert.match(String(error.stderr), /run_id must be a single path segment/);
+    return true;
+  });
+
+  assert.equal(fs.existsSync(worktreePath), true);
+  assert.equal(branchExists(repoRoot, branch), true);
+});
+
 test("finalize-run resumes cleanup when the PR is already merged", () => {
   const { repoRoot, manifestPath, branch, worktreePath, headSha } = setupRepo();
   const logPath = path.join(repoRoot, "gh.log");

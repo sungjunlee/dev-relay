@@ -8,6 +8,7 @@ const path = require("path");
 const {
   STATES,
   createManifestSkeleton,
+  createRunId,
   ensureRunLayout,
   updateManifestState,
   writeManifest,
@@ -66,26 +67,29 @@ test("reliability-report derives the core scorecard from manifests and events", 
   process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
   const recentTs = new Date(Date.now() - 1 * 60 * 60 * 1000).toISOString(); // 1 hour ago
   const staleTs = new Date(Date.now() - 10 * 24 * 60 * 60 * 1000).toISOString(); // 10 days ago
+  const runReady = createRunId({ branch: "run-ready", timestamp: new Date("2026-04-12T00:00:00.000Z") });
+  const runMerged = createRunId({ branch: "run-merged", timestamp: new Date("2026-04-12T00:00:01.000Z") });
+  const runStaleOpen = createRunId({ branch: "run-stale-open", timestamp: new Date("2026-04-12T00:00:02.000Z") });
   writeRun(repoRoot, {
-    runId: "run-ready",
+    runId: runReady,
     state: STATES.READY_TO_MERGE,
     rounds: 2,
     updatedAt: recentTs,
   });
   writeRun(repoRoot, {
-    runId: "run-merged",
+    runId: runMerged,
     state: STATES.MERGED,
     rounds: 4,
     updatedAt: recentTs,
   });
   writeRun(repoRoot, {
-    runId: "run-stale-open",
+    runId: runStaleOpen,
     state: STATES.REVIEW_PENDING,
     rounds: 1,
     updatedAt: staleTs,
   });
 
-  appendRunEvent(repoRoot, "run-ready", {
+  appendRunEvent(repoRoot, runReady, {
     event: "dispatch_start",
     state_from: STATES.CHANGES_REQUESTED,
     state_to: STATES.DISPATCHED,
@@ -93,7 +97,7 @@ test("reliability-report derives the core scorecard from manifests and events", 
     round: 2,
     reason: "same_run_resume",
   });
-  appendRunEvent(repoRoot, "run-ready", {
+  appendRunEvent(repoRoot, runReady, {
     event: "dispatch_result",
     state_from: STATES.DISPATCHED,
     state_to: STATES.REVIEW_PENDING,
@@ -101,7 +105,7 @@ test("reliability-report derives the core scorecard from manifests and events", 
     round: 2,
     reason: "same_run_resume:completed",
   });
-  appendRunEvent(repoRoot, "run-ready", {
+  appendRunEvent(repoRoot, runReady, {
     event: "review_apply",
     state_from: STATES.REVIEW_PENDING,
     state_to: STATES.READY_TO_MERGE,
@@ -109,7 +113,7 @@ test("reliability-report derives the core scorecard from manifests and events", 
     round: 2,
     reason: "pass",
   });
-  appendRunEvent(repoRoot, "run-merged", {
+  appendRunEvent(repoRoot, runMerged, {
     event: "merge_blocked",
     state_from: STATES.READY_TO_MERGE,
     state_to: STATES.READY_TO_MERGE,
@@ -117,7 +121,7 @@ test("reliability-report derives the core scorecard from manifests and events", 
     round: 4,
     reason: "stale",
   });
-  appendRunEvent(repoRoot, "run-merged", {
+  appendRunEvent(repoRoot, runMerged, {
     event: "merge_finalize",
     state_from: STATES.READY_TO_MERGE,
     state_to: STATES.MERGED,
@@ -141,48 +145,51 @@ test("reliability-report aggregates factor analysis across runs and rounds", () 
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-report-factors-"));
   process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
   const recentTs = new Date(Date.now() - 1 * 60 * 60 * 1000).toISOString();
+  const runA = createRunId({ branch: "run-a", timestamp: new Date("2026-04-12T01:00:00.000Z") });
+  const runB = createRunId({ branch: "run-b", timestamp: new Date("2026-04-12T01:00:01.000Z") });
+  const runC = createRunId({ branch: "run-c", timestamp: new Date("2026-04-12T01:00:02.000Z") });
 
   writeRun(repoRoot, {
-    runId: "run-a",
+    runId: runA,
     state: STATES.CHANGES_REQUESTED,
     rounds: 3,
     updatedAt: recentTs,
   });
   writeRun(repoRoot, {
-    runId: "run-b",
+    runId: runB,
     state: STATES.CHANGES_REQUESTED,
     rounds: 2,
     updatedAt: recentTs,
   });
   writeRun(repoRoot, {
-    runId: "run-c",
+    runId: runC,
     state: STATES.READY_TO_MERGE,
     rounds: 1,
     updatedAt: recentTs,
   });
 
-  appendIterationScore(repoRoot, "run-a", {
+  appendIterationScore(repoRoot, runA, {
     round: 1,
     scores: [
       { factor: "Coverage", target: ">= 8", observed: "6", met: false, status: "fail" },
       { factor: "Docs", target: ">= 8", observed: "not started", met: false, status: "not_run" },
     ],
   });
-  appendIterationScore(repoRoot, "run-a", {
+  appendIterationScore(repoRoot, runA, {
     round: 2,
     scores: [
       { factor: "Coverage", target: ">= 8", observed: "8", met: true, status: "pass" },
       { factor: "Docs", target: ">= 8", observed: "6", met: false, status: "fail" },
     ],
   });
-  appendIterationScore(repoRoot, "run-a", {
+  appendIterationScore(repoRoot, runA, {
     round: 3,
     scores: [
       { factor: "Docs", target: ">= 8", observed: "8", met: true, status: "pass" },
     ],
   });
 
-  appendIterationScore(repoRoot, "run-b", {
+  appendIterationScore(repoRoot, runB, {
     round: 1,
     scores: [
       { factor: "Coverage", target: ">= 8", observed: "5", met: false, status: "fail" },
@@ -190,14 +197,14 @@ test("reliability-report aggregates factor analysis across runs and rounds", () 
       { factor: "Perf", target: ">= 8", observed: "8", met: true, status: "pass" },
     ],
   });
-  appendIterationScore(repoRoot, "run-b", {
+  appendIterationScore(repoRoot, runB, {
     round: 2,
     scores: [
       { factor: "Coverage", target: ">= 8", observed: "7", met: false, status: "fail" },
     ],
   });
 
-  appendIterationScore(repoRoot, "run-c", {
+  appendIterationScore(repoRoot, runC, {
     round: 1,
     scores: [
       { factor: "Coverage", target: ">= 8", observed: "9", met: true, status: "pass" },
@@ -233,9 +240,10 @@ test("reliability-report keeps factor analysis backwards compatible without iter
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-report-empty-factors-"));
   process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
   const recentTs = new Date(Date.now() - 1 * 60 * 60 * 1000).toISOString();
+  const runReady = createRunId({ branch: "run-ready", timestamp: new Date("2026-04-12T02:00:00.000Z") });
 
   writeRun(repoRoot, {
-    runId: "run-ready",
+    runId: runReady,
     state: STATES.READY_TO_MERGE,
     rounds: 2,
     updatedAt: recentTs,
@@ -254,9 +262,10 @@ test("reliability-report keeps rubric_insights null-safe when new events are abs
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-report-empty-insights-"));
   process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
   const recentTs = new Date(Date.now() - 1 * 60 * 60 * 1000).toISOString();
+  const runReady = createRunId({ branch: "run-ready", timestamp: new Date("2026-04-12T02:10:00.000Z") });
 
   writeRun(repoRoot, {
-    runId: "run-ready",
+    runId: runReady,
     state: STATES.READY_TO_MERGE,
     rounds: 1,
     updatedAt: recentTs,
@@ -278,21 +287,23 @@ test("reliability-report derives rubric grade distribution and average quality r
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-report-rubric-quality-"));
   process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
   const recentTs = new Date(Date.now() - 1 * 60 * 60 * 1000).toISOString();
+  const runA = createRunId({ branch: "run-a", timestamp: new Date("2026-04-12T03:00:00.000Z") });
+  const runB = createRunId({ branch: "run-b", timestamp: new Date("2026-04-12T03:00:01.000Z") });
 
   writeRun(repoRoot, {
-    runId: "run-a",
+    runId: runA,
     state: STATES.READY_TO_MERGE,
     rounds: 2,
     updatedAt: recentTs,
   });
   writeRun(repoRoot, {
-    runId: "run-b",
+    runId: runB,
     state: STATES.CHANGES_REQUESTED,
     rounds: 3,
     updatedAt: recentTs,
   });
 
-  appendRubricQuality(repoRoot, "run-a", {
+  appendRubricQuality(repoRoot, runA, {
     grade: "A",
     prerequisites: 2,
     contract_factors: 2,
@@ -303,7 +314,7 @@ test("reliability-report derives rubric grade distribution and average quality r
     risk_signals: [],
     task_size: "M",
   });
-  appendRubricQuality(repoRoot, "run-b", {
+  appendRubricQuality(repoRoot, runB, {
     grade: "C",
     prerequisites: 2,
     contract_factors: 2,
@@ -341,34 +352,36 @@ test("reliability-report derives tier effectiveness from tiered iteration scores
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-report-tier-effectiveness-"));
   process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
   const recentTs = new Date(Date.now() - 1 * 60 * 60 * 1000).toISOString();
+  const runA = createRunId({ branch: "run-a", timestamp: new Date("2026-04-12T04:00:00.000Z") });
+  const runB = createRunId({ branch: "run-b", timestamp: new Date("2026-04-12T04:00:01.000Z") });
 
   writeRun(repoRoot, {
-    runId: "run-a",
+    runId: runA,
     state: STATES.CHANGES_REQUESTED,
     rounds: 2,
     updatedAt: recentTs,
   });
   writeRun(repoRoot, {
-    runId: "run-b",
+    runId: runB,
     state: STATES.READY_TO_MERGE,
     rounds: 1,
     updatedAt: recentTs,
   });
 
-  appendIterationScore(repoRoot, "run-a", {
+  appendIterationScore(repoRoot, runA, {
     round: 1,
     scores: [
       { factor: "Coverage", target: ">= 8", observed: "5", met: false, status: "fail", tier: "contract" },
       { factor: "Docs", target: ">= 8", observed: "8", met: true, status: "pass", tier: "quality" },
     ],
   });
-  appendIterationScore(repoRoot, "run-a", {
+  appendIterationScore(repoRoot, runA, {
     round: 2,
     scores: [
       { factor: "Coverage", target: ">= 8", observed: "8", met: true, status: "pass", tier: "contract" },
     ],
   });
-  appendIterationScore(repoRoot, "run-b", {
+  appendIterationScore(repoRoot, runB, {
     round: 1,
     scores: [
       { factor: "Latency", target: "< 200ms", observed: "180ms", met: true, status: "pass", tier: "contract" },
@@ -395,15 +408,16 @@ test("reliability-report derives divergence hotspots from score_divergence event
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-report-divergence-"));
   process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
   const recentTs = new Date(Date.now() - 1 * 60 * 60 * 1000).toISOString();
+  const runA = createRunId({ branch: "run-a", timestamp: new Date("2026-04-12T05:00:00.000Z") });
 
   writeRun(repoRoot, {
-    runId: "run-a",
+    runId: runA,
     state: STATES.CHANGES_REQUESTED,
     rounds: 2,
     updatedAt: recentTs,
   });
 
-  appendScoreDivergence(repoRoot, "run-a", {
+  appendScoreDivergence(repoRoot, runA, {
     round: 1,
     divergences: [
       { factor: "Coverage", executor: "9", reviewer: "6", delta: 3, tier: "contract" },
@@ -435,15 +449,16 @@ test("reliability-report populates only available rubric insight subfields", () 
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-report-partial-insights-"));
   process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
   const recentTs = new Date(Date.now() - 1 * 60 * 60 * 1000).toISOString();
+  const runA = createRunId({ branch: "run-a", timestamp: new Date("2026-04-12T05:10:00.000Z") });
 
   writeRun(repoRoot, {
-    runId: "run-a",
+    runId: runA,
     state: STATES.READY_TO_MERGE,
     rounds: 1,
     updatedAt: recentTs,
   });
 
-  appendRubricQuality(repoRoot, "run-a", {
+  appendRubricQuality(repoRoot, runA, {
     grade: "B",
     prerequisites: 1,
     contract_factors: 1,
@@ -484,15 +499,17 @@ test("reliability-report adds run-level grouping when --by-actor is set", () => 
   process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
   initGitRepo(repoRoot, "Alice");
   const recentTs = new Date(Date.now() - 1 * 60 * 60 * 1000).toISOString();
+  const runAlice = createRunId({ branch: "run-alice", timestamp: new Date("2026-04-12T06:00:00.000Z") });
+  const runBob = createRunId({ branch: "run-bob", timestamp: new Date("2026-04-12T06:00:01.000Z") });
 
   setGitActor(repoRoot, "Alice");
   writeRun(repoRoot, {
-    runId: "run-alice",
+    runId: runAlice,
     state: STATES.READY_TO_MERGE,
     rounds: 2,
     updatedAt: recentTs,
   });
-  appendIterationScore(repoRoot, "run-alice", {
+  appendIterationScore(repoRoot, runAlice, {
     round: 1,
     scores: [
       { factor: "Coverage", target: ">= 8", observed: "8", met: true, status: "pass" },
@@ -501,12 +518,12 @@ test("reliability-report adds run-level grouping when --by-actor is set", () => 
 
   setGitActor(repoRoot, "Bob");
   writeRun(repoRoot, {
-    runId: "run-bob",
+    runId: runBob,
     state: STATES.CHANGES_REQUESTED,
     rounds: 3,
     updatedAt: recentTs,
   });
-  appendIterationScore(repoRoot, "run-bob", {
+  appendIterationScore(repoRoot, runBob, {
     round: 1,
     scores: [
       { factor: "Docs", target: ">= 8", observed: "5", met: false, status: "fail" },

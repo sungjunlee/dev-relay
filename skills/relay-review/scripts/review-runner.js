@@ -1059,8 +1059,9 @@ function run() {
 
   const round = Number(data.review?.rounds || 0) + 1;
   const maxRounds = Number(data.review?.max_rounds || 20);
-  const runDir = getRunDir(repoPath, data.run_id);
-  ensureRunLayout(repoPath, data.run_id);
+  const runRepoPath = path.resolve(data.paths?.repo_root || repoPath);
+  const runDir = getRunDir(runRepoPath, data.run_id);
+  ensureRunLayout(runRepoPath, data.run_id);
   let reviewedHeadSha = null;
   try {
     reviewedHeadSha = git(reviewRepoPath, "rev-parse", "HEAD").trim();
@@ -1075,7 +1076,7 @@ function run() {
       "max_rounds_exceeded"
     );
     writeManifest(manifestPath, escalatedManifest, body);
-    appendRunEvent(repoPath, data.run_id, {
+    appendRunEvent(runRepoPath, data.run_id, {
       event: "review_apply",
       state_from: data.state,
       state_to: STATES.ESCALATED,
@@ -1191,7 +1192,7 @@ function run() {
         "policy_violation"
       );
       writeManifest(manifestPath, escalatedManifest, body);
-      appendRunEvent(repoPath, data.run_id, {
+      appendRunEvent(runRepoPath, data.run_id, {
         event: "review_apply",
         state_from: data.state,
         state_to: STATES.ESCALATED,
@@ -1260,7 +1261,7 @@ function run() {
     }
   }
   writeManifest(manifestPath, updatedManifest, body);
-  appendRunEvent(repoPath, data.run_id, {
+  appendRunEvent(runRepoPath, data.run_id, {
     event: "review_apply",
     state_from: data.state,
     state_to: updatedManifest.state,
@@ -1269,7 +1270,7 @@ function run() {
     reason: verdict.verdict,
   });
   if (Array.isArray(verdict.rubric_scores) && verdict.rubric_scores.length > 0) {
-    appendIterationScore(repoPath, data.run_id, {
+    appendIterationScore(runRepoPath, data.run_id, {
       round,
       scores: verdict.rubric_scores.map((score) => ({
         factor: score.factor,
@@ -1282,7 +1283,7 @@ function run() {
     });
   }
   if (divergencePayload.length > 0) {
-    appendScoreDivergence(repoPath, data.run_id, {
+    appendScoreDivergence(runRepoPath, data.run_id, {
       round,
       divergences: divergencePayload,
     });
