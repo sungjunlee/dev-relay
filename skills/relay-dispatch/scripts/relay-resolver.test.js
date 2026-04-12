@@ -321,6 +321,38 @@ test("resolveManifestRecord rejects stored pr_number mismatch and recovers with 
   assert.equal(recovered.manifestPath, manifestPath);
 });
 
+test("resolveManifestRecord keeps escalated stored-pr mismatches recoverable via explicit selectors", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-resolver-escalated-pr-mismatch-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  const runId = createRunId({
+    branch: "feature-auth",
+    timestamp: new Date("2026-04-03T00:00:00.000Z"),
+  });
+  const manifestPath = writeManifestRecord(repoRoot, {
+    runId,
+    branch: "feature-auth",
+    state: STATES.ESCALATED,
+    prNumber: 100,
+    updatedAt: "2026-04-03T00:00:00.000Z",
+  });
+
+  assert.throws(
+    () => resolveManifestRecord({ repoRoot, branch: "feature-auth", prNumber: 120 }),
+    (error) => {
+      assert.match(error.message, /No relay manifest found for branch 'feature-auth' \+ pr '120'/);
+      assert.match(error.message, new RegExp(runId));
+      assert.match(error.message, /state=escalated, pr=100/);
+      assert.match(error.message, /Pass --run-id <id> or --manifest <path> explicitly/);
+      assert.doesNotMatch(error.message, /Only terminal branch matches exist/);
+      assert.doesNotMatch(error.message, /Create a fresh dispatch for this branch before retrying/);
+      return true;
+    }
+  );
+
+  const recovered = resolveManifestRecord({ repoRoot, runId });
+  assert.equal(recovered.manifestPath, manifestPath);
+});
+
 test("resolveManifestRecord preserves dispatch-before-PR fallback for a single non-terminal manifest without stored pr_number", () => {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-resolver-pr-fallback-"));
   process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
