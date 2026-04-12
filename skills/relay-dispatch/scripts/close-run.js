@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+// Operator recovery path for stale escalated runs (#165): close the stale run here,
+// then retry resolution or re-dispatch with an explicit selector.
 
 const path = require("path");
 const {
