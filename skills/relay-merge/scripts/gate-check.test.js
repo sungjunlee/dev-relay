@@ -16,6 +16,7 @@ const {
 } = require("../../relay-dispatch/scripts/relay-manifest");
 
 const SCRIPT = path.join(__dirname, "gate-check.js");
+const HISTORICAL_FIXTURE_DIR = path.join(__dirname, "__fixtures__", "historical-issue-401");
 
 function looksLikeContainedRubricPath(rubricPath) {
   return typeof rubricPath === "string"
@@ -205,9 +206,55 @@ function runGateCheckLive({ manifest, prViewPayload, rubricContent, json = true,
   return runGateCheckWithFixture(fixture, { prViewPayload, json });
 }
 
-function buildPassingReviewPayload() {
+function createHistoricalLegacyFixture() {
+  const repoRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "relay-gate-historical-")));
+  const relayHome = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-")));
+  const binDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "relay-gh-bin-")));
+  process.env.RELAY_HOME = relayHome;
+  writeFakeGh(binDir);
+
+  const sourceManifestPath = path.join(HISTORICAL_FIXTURE_DIR, "manifest.md");
+  const sourceRubricPath = path.join(HISTORICAL_FIXTURE_DIR, "rubric.yaml");
+  const { data, body } = readManifest(sourceManifestPath);
+  const manifestPath = getManifestPath(repoRoot, data.run_id);
+  const runDir = getRunDir(repoRoot, data.run_id);
+
+  fs.mkdirSync(runDir, { recursive: true });
+  fs.copyFileSync(sourceRubricPath, path.join(runDir, "rubric.yaml"));
+
+  writeManifest(manifestPath, {
+    ...data,
+    issue: {
+      ...(data.issue || {}),
+      number: 401,
+    },
+    git: {
+      ...(data.git || {}),
+      base_branch: "main",
+      working_branch: "issue-401",
+      pr_number: null,
+      head_sha: "abc123",
+    },
+    review: {
+      ...(data.review || {}),
+      rounds: 1,
+      latest_verdict: "pass",
+      reviewer_login: "trusted-reviewer",
+      last_reviewed_sha: "abc123",
+    },
+    paths: {
+      ...(data.paths || {}),
+      repo_root: repoRoot,
+      worktree: path.join(repoRoot, "worktree"),
+    },
+  }, body);
+
+  return { repoRoot, relayHome, binDir, manifestPath, runDir, runId: data.run_id };
+}
+
+function buildPassingReviewPayload({ headRefName = "issue-40" } = {}) {
   return {
-    headRefName: "issue-40",
+    headRefName,
     comments: [
       {
         body: "<!-- relay-review -->\n## Relay Review\nVerdict: LGTM\nRounds: 1",
@@ -592,6 +639,41 @@ test("gate-check stamps git.pr_number on first successful PR-mode resolution and
     .map((line) => JSON.parse(line))
     .filter((entry) => entry.event === "pr_number_stamped");
   assert.equal(events.length, 1);
+});
+
+test("gate-check resolves and stamps a historical legacy manifest sample with pr_number=null", () => {
+  const fixture = createHistoricalLegacyFixture();
+  const result = spawnSync("node", [
+    SCRIPT,
+    "401",
+    "--json",
+  ], {
+    cwd: fixture.repoRoot,
+    encoding: "utf-8",
+    env: {
+      ...process.env,
+      RELAY_HOME: fixture.relayHome,
+      PATH: `${fixture.binDir}:${process.env.PATH}`,
+      FAKE_GH_PR_VIEW_JSON: JSON.stringify(buildPassingReviewPayload({ headRefName: "issue-401" })),
+    },
+  });
+
+  assert.equal(result.status, 0);
+  const json = JSON.parse(result.stdout);
+  assert.equal(json.status, "lgtm");
+  assert.equal(json.readyToMerge, true);
+
+  const stored = readManifest(fixture.manifestPath).data;
+  assert.equal(stored.git.pr_number, 401);
+
+  const events = fs.readFileSync(path.join(fixture.runDir, "events.jsonl"), "utf-8")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => JSON.parse(line))
+    .filter((entry) => entry.event === "pr_number_stamped");
+  assert.equal(events.length, 1);
+  assert.match(events[0].reason, /git\.pr_number=401/);
 });
 
 test("gate-check PR mode fails closed when only a stale merged manifest exists on the reused branch", () => {
