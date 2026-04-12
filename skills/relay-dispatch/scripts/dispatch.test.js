@@ -724,6 +724,23 @@ test("dispatch without --rubric-file fails loudly even in dry-run mode", () => {
   assert.match(result.stderr, /relay-plan/);
 });
 
+test("dispatch without --rubric-file fails loudly in non-dry-run mode", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  writeFakeCodex(binDir);
+  const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}` };
+
+  const result = spawnSync("node", [SCRIPT, repoRoot,
+    "-b", "issue-norubric3",
+    "--prompt", "no rubric test",
+    "--json",
+  ], { cwd: repoRoot, encoding: "utf-8", env });
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /--rubric-file/);
+});
+
 test("dispatch rejects --rubric-grandfathered on new dispatches", () => {
   const { repoRoot, relayHome } = setupRepo();
   process.env.RELAY_HOME = relayHome;
