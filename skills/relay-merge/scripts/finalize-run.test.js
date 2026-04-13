@@ -296,6 +296,77 @@ test("finalize-run fails closed when branch+PR resolution only finds a stale ter
   assert.equal(readManifest(manifestPath).data.git.pr_number, null);
 });
 
+test("finalize-run --skip-merge --pr resolves a merged manifest and continues cleanup", () => {
+  const { repoRoot, manifestPath, branch, worktreePath } = setupRepo();
+  const record = readManifest(manifestPath);
+  writeManifest(
+    manifestPath,
+    updateManifestState(record.data, STATES.MERGED, "manual_cleanup_required"),
+    record.body
+  );
+
+  const logPath = path.join(repoRoot, "gh.log");
+  const fakeGh = writeFakeGh(logPath);
+
+  const stdout = execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--pr", "123",
+    "--skip-merge",
+    "--json",
+  ], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+    env: { ...process.env, RELAY_GH_BIN: fakeGh },
+  });
+
+  const result = JSON.parse(stdout);
+  assert.equal(result.previousState, STATES.MERGED);
+  assert.equal(result.mergePerformed, false);
+  assert.equal(result.state, STATES.MERGED);
+  assert.equal(result.nextAction, "done");
+  assert.equal(result.cleanup.cleanupStatus, "succeeded");
+  assert.equal(fs.existsSync(worktreePath), false);
+  assert.equal(branchExists(repoRoot, branch), false);
+
+  const manifest = readManifest(manifestPath).data;
+  assert.equal(manifest.state, STATES.MERGED);
+  assert.equal(manifest.cleanup.status, "succeeded");
+
+  const ghLog = fs.readFileSync(logPath, "utf-8");
+  assert.doesNotMatch(ghLog, /pr merge 123 --squash/);
+  assert.match(ghLog, /issue close 42 --comment Resolved in PR #123/);
+});
+
+test("finalize-run keeps standalone --pr hardened for stale merged manifests unless --skip-merge is set", () => {
+  const { repoRoot, manifestPath, worktreePath } = setupRepo();
+  const record = readManifest(manifestPath);
+  writeManifest(
+    manifestPath,
+    updateManifestState(record.data, STATES.MERGED, "manual_cleanup_required"),
+    record.body
+  );
+
+  assert.throws(() => execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--pr", "123",
+    "--json",
+  ], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+  }), (error) => {
+    assert.match(String(error.stderr), /No relay manifest found for pr '123'/);
+    assert.match(String(error.stderr), /Only terminal PR matches exist/);
+    return true;
+  });
+
+  assert.equal(fs.existsSync(worktreePath), true);
+  assert.equal(readManifest(manifestPath).data.state, STATES.MERGED);
+});
+
 test("finalize-run resumes cleanup when the PR is already merged", () => {
   const { repoRoot, manifestPath, branch, worktreePath, headSha } = setupRepo();
   const logPath = path.join(repoRoot, "gh.log");

@@ -1,23 +1,32 @@
 // ---------------------------------------------------------------------------
-// Resolver selector state-awareness audit table
-// (selector-composition axis enumeration meta-rule — memory/feedback_rubric_fail_closed.md)
-//
-// | Selector                     | State-awareness        | Closed by |
-// | ---------------------------- | ---------------------- | --------- |
-// | filterByBranch               | excludeTerminal opt-in | #149      |
-// | filterByPr                   | composed downstream    | #170      |
-// | filterByBranchPrFallback     | dispatched-only allow  | #168      |
-// | findManifestByRunId          | state-blind by design  | n/a       |
-//
-// When adding a new selector, add a row here AND a top-of-function comment.
-// When fixing a state-machine invariant in selector A, audit every other selector
-// that feeds the same `matches` variable in resolveManifestRecord.
+// Resolver selector x CALL-SITE audit table (#174)
+// Call-site extension meta-rule: when fixing one selector call site, audit every other call site
+// of that selector in the same PR (iteration-4 scope-boundary trap note, memory/feedback_rubric_fail_closed.md; closes the #149 -> #165 -> #168 -> #170 ladder).
+// | Selector                 | Call site (line)                                    | State-awareness verdict                                | Closed by |
+// | ------------------------ | --------------------------------------------------- | ------------------------------------------------------ | --------- |
+// | filterByBranch           | filterByBranchPrFallback:112                        | state-aware via excludeTerminal=true                   | #149      |
+// | filterByBranch           | resolveManifestRecord:341 branchMatches             | state-blind by purpose (error pool; sibling excludes)  | #174      |
+// | filterByBranch           | resolveManifestRecord:342 nonTerminalBranchMatches  | state-aware via excludeTerminal=true                   | #149      |
+// | filterByBranch           | resolveManifestRecord:372 branchMatches             | state-blind by purpose (error pool; sibling excludes)  | #174      |
+// | filterByBranch           | resolveManifestRecord:373 branch-only matches       | state-aware via excludeTerminal=true                   | #149      |
+// | filterByBranch           | resolveManifestRecord:402 branchMatches             | state-blind by purpose (error pool; sibling excludes)  | #174      |
+// | filterByBranch           | resolveManifestRecord:404 nonTerminalBranchMatches  | state-aware via excludeTerminal=true                   | #149      |
+// | filterByPr               | resolveManifestRecord:351 branch+PR on nonTerminal  | state-aware via composed subset                        | #170      |
+// | filterByPr               | resolveManifestRecord:382 standalone --pr candidates| state-blind by purpose (full PR candidate error pool)  | #174      |
+// | filterByPr               | resolveManifestRecord:387 standalone --pr opt-in    | state-blind by opt-in includeTerminal=true             | #174      |
+// | filterByPr               | resolveManifestRecord:391 standalone --pr default   | state-aware via filterOutTerminal composition          | #174      |
+// | filterByPr               | resolveManifestRecord:408 retry terminal-only       | terminal-only by purpose (mixed-state detector)        | #170/#174 |
+// | filterByBranchPrFallback | resolveManifestRecord:343 branch+PR fallback        | dispatched-only whitelist                              | #168      |
+// | filterByBranchPrFallback | resolveManifestRecord:403 retry fallback            | dispatched-only whitelist                              | #168      |
+// | findManifestByRunId      | resolveManifestRecord:327 explicit --run-id         | state-blind by design                                  | n/a       |
+// See docs/issue-174-resolver-hardening.md for consumer audit, sibling-builder audit, and pattern-break rationale.
 // ---------------------------------------------------------------------------
 
 const path = require("path");
-const { STATES, listManifestRecords, readManifest, validateRunId } = require("./relay-manifest");
+const { STATES, listManifestRecords, readManifest, validateRunId, validateTransition } = require("./relay-manifest");
 
 const BRANCH_ONLY_TERMINAL_STATES = new Set([STATES.MERGED, STATES.CLOSED]);
+const KNOWN_STATES = new Set(Object.values(STATES));
 
 function formatSelector({ runId, manifestPath, branch, prNumber }) {
   if (manifestPath) return `manifest '${manifestPath}'`;
@@ -28,8 +37,19 @@ function formatSelector({ runId, manifestPath, branch, prNumber }) {
   return parts.join(" + ") || "selector";
 }
 
+function formatManifestBasename(record) {
+  return path.basename(record?.manifestPath || "unknown", ".md");
+}
+
 function formatRunId(record) {
-  return record?.data?.run_id || path.basename(record?.manifestPath || "unknown", ".md");
+  // Raw stored run_id stays available for happy-path rendering and validated explicit selectors.
+  // Error builders must use safeFormatRunId so tampered manifests cannot echo unsafe values (#171/#174).
+  return record?.data?.run_id || formatManifestBasename(record);
+}
+
+function safeFormatRunId(record) {
+  const validation = validateRunId(record?.data?.run_id);
+  return validation.valid ? validation.runId : formatManifestBasename(record);
 }
 
 function formatCandidateRunIds(records) {
@@ -40,14 +60,32 @@ function formatCandidateDetails(records) {
   return records.map((record) => {
     const state = record?.data?.state || "unknown";
     const storedPr = hasStoredPrNumber(record) ? record.data.git.pr_number : "unset";
-    return `${formatRunId(record)} (state=${state}, pr=${storedPr})`;
+    return `${safeFormatRunId(record)} (state=${state}, pr=${storedPr})`;
   }).join(", ");
 }
 
+function getSelectorCandidateLabel(selector) {
+  return selector?.prNumber !== undefined && selector?.prNumber !== null && !selector?.branch
+    ? "PR"
+    : "Branch";
+}
+
+function isKnownState(state) {
+  return KNOWN_STATES.has(state);
+}
+
+function isTerminalState(state) {
+  return BRANCH_ONLY_TERMINAL_STATES.has(state);
+}
+
+function filterOutTerminal(records) {
+  return records.filter((record) => !isTerminalState(record?.data?.state));
+}
+
 function filterByBranch(records, branch, { excludeTerminal = false } = {}) {
-  // [state-aware] via excludeTerminal opt-in (#149). Callers must opt in for
-  // stale-inheritance-sensitive paths; standalone branch-only resolution does.
-  // Selector-composition audit table at top of file.
+  // [state-aware] via excludeTerminal opt-in (#149). See audit table; this selector has
+  // 7 resolveManifestRecord call sites plus 1 helper-composition call site in this file.
+  // Callers must opt in for stale-inheritance-sensitive paths; standalone branch-only resolution does.
   return records.filter((record) => {
     if (record?.data?.git?.working_branch !== branch) {
       return false;
@@ -62,15 +100,15 @@ function filterByBranch(records, branch, { excludeTerminal = false } = {}) {
 }
 
 function filterByPr(records, prNumber) {
-  // [state-aware] via composition with nonTerminalBranchMatches at the branch+PR
-  // call site (#170). Standalone --pr consumers are not currently exposed; if that
-  // changes, audit per #170 / selector-composition meta-rule.
+  // [state-aware] only when callers compose it with the correct subset. See audit table;
+  // this selector has 5 call sites in resolveManifestRecord, and #174 audits each one for
+  // terminal-state handling so the selector itself stays simple.
   return records.filter(({ data }) => Number(data?.git?.pr_number || 0) === Number(prNumber));
 }
 
 function filterByBranchPrFallback(records, branch) {
-  // [state-aware whitelist] dispatched + null only (#168). Treat the state axis as a
-  // whitelist, not a blacklist — see memory/feedback_rubric_fail_closed.md.
+  // [state-aware whitelist] dispatched + null only (#168). See audit table; this selector has
+  // 2 resolveManifestRecord call sites, and the state axis stays a whitelist, not a blacklist.
   return filterByBranch(records, branch, { excludeTerminal: true })
     .filter((record) => {
       // #168: treat the state-machine axis as a whitelist, not a blacklist. Fixing only the state named
@@ -81,6 +119,35 @@ function filterByBranchPrFallback(records, branch) {
 
 function hasStoredPrNumber(record) {
   return record?.data?.git?.pr_number !== undefined && record?.data?.git?.pr_number !== null;
+}
+
+function hasTerminalExactPrSibling(records, prNumber) {
+  return records.some((record) => (
+    isTerminalState(record?.data?.state)
+    && Number(record?.data?.git?.pr_number || 0) === Number(prNumber)
+  ));
+}
+
+function isStaleNullPrSibling(record) {
+  return !isTerminalState(record?.data?.state)
+    && record?.data?.state !== STATES.DISPATCHED
+    && !hasStoredPrNumber(record);
+}
+
+function shouldPreferSingleBranchFallback({ branchMatches, nonTerminalBranchMatches, branchFallbackMatches, prNumber }) {
+  if (branchFallbackMatches.length !== 1) {
+    return false;
+  }
+  if (nonTerminalBranchMatches.length === 1) {
+    return true;
+  }
+  if (!hasTerminalExactPrSibling(branchMatches, prNumber)) {
+    return false;
+  }
+  const [fallbackRecord] = branchFallbackMatches;
+  return nonTerminalBranchMatches
+    .filter((record) => record?.manifestPath !== fallbackRecord?.manifestPath)
+    .every(isStaleNullPrSibling);
 }
 
 function findStaleNonTerminalBranchFallbackCandidate(records) {
@@ -105,9 +172,45 @@ function buildCloseRunCommand(repoRoot, runId, reason) {
     `--run-id ${JSON.stringify(runId)} --reason ${JSON.stringify(reason)}`;
 }
 
+function formatQuotedValue(value) {
+  return `'${String(value ?? "unknown")
+    .replace(/\\/g, "\\\\")
+    .replace(/'/g, "\\'")
+    .replace(/\r/g, "\\r")
+    .replace(/\n/g, "\\n")}'`;
+}
+
+function canTransitionToClosed(state) {
+  if (!isKnownState(state)) {
+    return false;
+  }
+  try {
+    validateTransition(state, STATES.CLOSED);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function buildStaleBranchFallbackRecoveryMessage(repoRoot, record) {
-  const runId = formatRunId(record);
+  // #174 reachability audit: close-run is only suggested when validateTransition(state, CLOSED)
+  // succeeds. Terminal and invalid states get command-free recovery text instead.
+  const runId = safeFormatRunId(record);
   const state = record?.data?.state || "unknown";
+  const manifestPath = record?.manifestPath || "unknown";
+  const branch = record?.data?.git?.working_branch || "unknown";
+  if (!isKnownState(state)) {
+    return `Manifest at ${JSON.stringify(manifestPath)} has invalid state ${formatQuotedValue(state)}; ` +
+      "manually inspect and correct the state field, or remove the run directory.";
+  }
+  if (isTerminalState(state)) {
+    return `Run ${JSON.stringify(runId)} is already ${state}; close-run is a no-op for terminal manifests. ` +
+      `Create a fresh dispatch for branch '${branch}' before retrying.`;
+  }
+  if (!canTransitionToClosed(state)) {
+    return `Run ${JSON.stringify(runId)} is in state ${state} and cannot be auto-closed here; ` +
+      `inspect it explicitly via --run-id ${JSON.stringify(runId)}.`;
+  }
   return `Close the stale ${state} run via ${buildCloseRunCommand(repoRoot, runId, `stale_${state}_run`)} ` +
     `before retrying, or inspect it explicitly via --run-id ${JSON.stringify(runId)}.`;
 }
@@ -131,12 +234,19 @@ function validateManifestRecordRunId(record) {
 }
 
 function buildNoManifestError(selector, { candidates = [], terminalOnly = false, recovery } = {}) {
+  // #174 reachability audit: this builder only emits commandless terminal-only/fresh-dispatch text
+  // plus caller-supplied recovery that must already be state-validated by the caller.
   const parts = [`No relay manifest found for ${formatSelector(selector)}.`];
+  const candidateLabel = getSelectorCandidateLabel(selector);
   if (candidates.length > 0) {
-    parts.push(`Branch candidates: ${formatCandidateDetails(candidates)}.`);
+    parts.push(`${candidateLabel} candidates: ${formatCandidateDetails(candidates)}.`);
   }
   if (terminalOnly) {
-    parts.push("Only terminal branch matches exist; create a fresh dispatch for this branch before retrying.");
+    parts.push(
+      candidateLabel === "PR"
+        ? "Only terminal PR matches exist; create a fresh dispatch that records this PR before retrying, or pass --run-id <id> or --manifest <path> to target an existing terminal run explicitly."
+        : "Only terminal branch matches exist; create a fresh dispatch for this branch before retrying."
+    );
   }
   if (recovery) {
     parts.push(recovery);
@@ -145,16 +255,38 @@ function buildNoManifestError(selector, { candidates = [], terminalOnly = false,
 }
 
 function buildAmbiguousResolutionError(selector, matches) {
+  // #174 reachability audit: the only operator actions named here are explicit selectors, which remain
+  // valid for every ambiguous candidate set. Mixed terminal/non-terminal recovery uses its own builder.
   return new Error(
     `Ambiguous relay manifest for ${formatSelector(selector)} (${matches.length} candidates): ` +
-    `${formatCandidateDetails(matches)}. Pass --manifest <path> or --run-id <id> explicitly. ` +
-    "Close stale runs via close-run.js --run-id <id> before retrying if needed."
+    `${formatCandidateDetails(matches)}. Pass --manifest <path> or --run-id <id> explicitly.`
+  );
+}
+
+function buildMixedStateRecoveryMessage(repoRoot, { terminalCandidate, freshCandidate }) {
+  // #174 reachability audit: the terminal sibling is already terminal and the fresh sibling cannot
+  // advance via same-run resume here, so the only documented recovery is a fresh dispatch.
+  const branch = freshCandidate?.data?.git?.working_branch
+    || terminalCandidate?.data?.git?.working_branch
+    || "unknown";
+  const terminalState = terminalCandidate?.data?.state || "unknown";
+  const freshState = freshCandidate?.data?.state || "unknown";
+  const terminalStoredPr = hasStoredPrNumber(terminalCandidate)
+    ? terminalCandidate.data.git.pr_number
+    : "unset";
+  return new Error(
+    `Mixed relay manifest reuse detected on branch '${branch}' for stored PR '${terminalStoredPr}': ` +
+    `${formatCandidateDetails([terminalCandidate, freshCandidate])}. ` +
+    `The terminal sibling ${JSON.stringify(safeFormatRunId(terminalCandidate))} is already ${terminalState}, ` +
+    "so close-run is a no-op for it. " +
+    `The ${freshState} sibling ${JSON.stringify(safeFormatRunId(freshCandidate))} does not carry the caller PR. ` +
+    `Create a fresh dispatch for branch '${branch}' before retrying.`
   );
 }
 
 function findManifestByRunId(repoRoot, runId) {
-  // [state-blind by design] explicit selectors must resolve EVERY state to keep
-  // operator recovery reachable (#149/#165/#157/#163).
+  // [state-blind by design] explicit selectors must resolve EVERY state to keep operator
+  // recovery reachable; see audit table for the single resolveManifestRecord call site.
   const normalizedRunId = validateRequestedRunId(runId);
   const matches = listManifestRecords(repoRoot)
     .filter(({ data, manifestPath }) => (
@@ -184,6 +316,7 @@ function resolveManifestRecord({
   runId,
   branch,
   prNumber,
+  includeTerminal = false,
 }) {
   if (manifestPath) {
     const resolved = path.resolve(manifestPath);
@@ -208,19 +341,30 @@ function resolveManifestRecord({
     const branchMatches = filterByBranch(allRecords, branch);
     const nonTerminalBranchMatches = filterByBranch(allRecords, branch, { excludeTerminal: true });
     const branchFallbackMatches = filterByBranchPrFallback(allRecords, branch);
-    // #170: compose filterByPr with nonTerminalBranchMatches so stale merged/closed
+    // #170: compose the PR selector with the non-terminal branch subset so stale merged/closed
     // manifests with stored pr_number === prNumber cannot shadow a fresh dispatched+null run.
     // Selector-composition axis enumeration meta-rule (memory/feedback_rubric_fail_closed.md):
-    // the state-machine axis is a property of EVERY resolver selector; #149 closed it for
-    // filterByBranch, #168 closed it for filterByBranchPrFallback, this commit closes it for
-    // filterByPr at this composition site. branchMatches stays bound for the preserved
+    // the state-machine axis is a property of EVERY resolver selector; #149 closed it for the
+    // branch selector, #168 for the dispatched-only fallback helper, and this commit closes it for
+    // the exact-PR selector at this composition site. branchMatches stays bound for the preserved
     // candidates list passed into the no-match error.
     matches = filterByPr(nonTerminalBranchMatches, prNumber);
     if (matches.length === 0) {
-      if (nonTerminalBranchMatches.length > 1) {
+      // #174 end-to-end recovery audit: when a mixed terminal/non-terminal collision tells the
+      // operator to create a fresh DISPATCHED run, the next lookup must let that single fallback
+      // win over stale null-pr siblings instead of re-opening the ambiguity ladder.
+      if (shouldPreferSingleBranchFallback({
+        branchMatches,
+        nonTerminalBranchMatches,
+        branchFallbackMatches,
+        prNumber,
+      })) {
+        matches = branchFallbackMatches;
+      }
+      if (matches.length === 0 && nonTerminalBranchMatches.length > 1) {
         throw buildAmbiguousResolutionError({ branch, prNumber }, nonTerminalBranchMatches);
       }
-      if (branchFallbackMatches.length === 1) {
+      if (matches.length === 0 && branchFallbackMatches.length === 1) {
         matches = branchFallbackMatches;
       }
     }
@@ -235,13 +379,32 @@ function resolveManifestRecord({
         : undefined,
     }));
   } else if (prNumber !== undefined && prNumber !== null) {
-    matches = filterByPr(allRecords, prNumber);
+    const prCandidates = filterByPr(
+      allRecords,
+      prNumber
+    );
+    if (includeTerminal) {
+      matches = filterByPr(allRecords, prNumber); // standalone --pr is hardened by default (E1, #174); finalize-run --skip-merge opts into terminal inclusion to preserve the documented cleanup workflow.
+    } else {
+      // #174 / call-site extension meta-rule: standalone --pr must also exclude merged/closed
+      // siblings, not just the branch+PR composition path.
+      matches = filterByPr(filterOutTerminal(allRecords), prNumber);
+      if (matches.length === 0 && prCandidates.length > 0) {
+        throw buildNoManifestError({ prNumber }, {
+          candidates: prCandidates,
+          terminalOnly: true,
+        });
+      }
+    }
   }
 
   if (branch && prNumber !== undefined && prNumber !== null && matches.length === 0) {
     const branchMatches = filterByBranch(allRecords, branch);
     const branchFallbackMatches = filterByBranchPrFallback(allRecords, branch);
     const nonTerminalBranchMatches = filterByBranch(allRecords, branch, { excludeTerminal: true });
+    // #174: this retry path deliberately asks a DIFFERENT question than the exact-PR resolver above.
+    // Feed the PR selector a terminal-only subset here so the mixed-state detector can distinguish
+    // "stale terminal stored the caller PR" from ordinary non-terminal ambiguity.
     const terminalExactPrMatches = filterByPr(
       branchMatches.filter((record) => BRANCH_ONLY_TERMINAL_STATES.has(record?.data?.state)),
       prNumber
@@ -252,16 +415,10 @@ function resolveManifestRecord({
       && nonTerminalBranchMatches.length === 1
       && nonTerminalBranchMatches[0]?.data?.state === STATES.REVIEW_PENDING
     ) {
-      // #170 round 2: once branch+PR resolution has already missed on the non-terminal set,
-      // a mixed terminal exact-PR sibling plus a lone review_pending sibling is the explicit
-      // post-stamp ambiguity called out in the issue. The matching-pr review_pending path
-      // resolves earlier via filterByPr(nonTerminalBranchMatches, prNumber); reaching this block
-      // means the review_pending manifest does NOT carry the caller PR, so do not misclassify it
-      // as stale branch-fallback recovery.
-      throw buildAmbiguousResolutionError(
-        { branch, prNumber },
-        [...terminalExactPrMatches, ...nonTerminalBranchMatches]
-      );
+      throw buildMixedStateRecoveryMessage(repoRoot, {
+        terminalCandidate: terminalExactPrMatches[0],
+        freshCandidate: nonTerminalBranchMatches[0],
+      });
     }
     const staleFallbackRecord = findStaleNonTerminalBranchFallbackCandidate(nonTerminalBranchMatches);
     return validateManifestRecordRunId(ensureUniqueRecord(matches, { branch, prNumber }, {

@@ -226,6 +226,7 @@ function main() {
     runId,
     branch,
     prNumber,
+    includeTerminal: skipMerge,
   });
   if ((manifestArg || runId) && !repoArg && manifestRecord.data.paths?.repo_root) {
     repoPath = path.resolve(manifestRecord.data.paths.repo_root);
@@ -235,6 +236,7 @@ function main() {
       runId,
       branch,
       prNumber,
+      includeTerminal: skipMerge,
     });
   }
 
