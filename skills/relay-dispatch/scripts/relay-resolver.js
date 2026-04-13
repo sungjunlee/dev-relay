@@ -4,21 +4,21 @@
 // of that selector in the same PR (iteration-4 scope-boundary trap note, memory/feedback_rubric_fail_closed.md; closes the #149 -> #165 -> #168 -> #170 ladder).
 // | Selector                 | Call site (line)                                    | State-awareness verdict                                | Closed by |
 // | ------------------------ | --------------------------------------------------- | ------------------------------------------------------ | --------- |
-// | filterByBranch           | filterByBranchPrFallback:111                        | state-aware via excludeTerminal=true                   | #149      |
-// | filterByBranch           | resolveManifestRecord:340 branchMatches             | state-blind by purpose (error pool; sibling excludes)  | #174      |
-// | filterByBranch           | resolveManifestRecord:341 nonTerminalBranchMatches  | state-aware via excludeTerminal=true                   | #149      |
-// | filterByBranch           | resolveManifestRecord:371 branchMatches             | state-blind by purpose (error pool; sibling excludes)  | #174      |
-// | filterByBranch           | resolveManifestRecord:372 branch-only matches       | state-aware via excludeTerminal=true                   | #149      |
-// | filterByBranch           | resolveManifestRecord:401 branchMatches             | state-blind by purpose (error pool; sibling excludes)  | #174      |
-// | filterByBranch           | resolveManifestRecord:403 nonTerminalBranchMatches  | state-aware via excludeTerminal=true                   | #149      |
-// | filterByPr               | resolveManifestRecord:350 branch+PR on nonTerminal  | state-aware via composed subset                        | #170      |
-// | filterByPr               | resolveManifestRecord:381 standalone --pr candidates| state-blind by purpose (full PR candidate error pool)  | #174      |
-// | filterByPr               | resolveManifestRecord:386 standalone --pr opt-in    | state-blind by opt-in includeTerminal=true             | #174      |
-// | filterByPr               | resolveManifestRecord:390 standalone --pr default   | state-aware via filterOutTerminal composition          | #174      |
-// | filterByPr               | resolveManifestRecord:407 retry terminal-only       | terminal-only by purpose (mixed-state detector)        | #170/#174 |
-// | filterByBranchPrFallback | resolveManifestRecord:342 branch+PR fallback        | dispatched-only whitelist                              | #168      |
-// | filterByBranchPrFallback | resolveManifestRecord:402 retry fallback            | dispatched-only whitelist                              | #168      |
-// | findManifestByRunId      | resolveManifestRecord:326 explicit --run-id         | state-blind by design                                  | n/a       |
+// | filterByBranch           | filterByBranchPrFallback:112                        | state-aware via excludeTerminal=true                   | #149      |
+// | filterByBranch           | resolveManifestRecord:341 branchMatches             | state-blind by purpose (error pool; sibling excludes)  | #174      |
+// | filterByBranch           | resolveManifestRecord:342 nonTerminalBranchMatches  | state-aware via excludeTerminal=true                   | #149      |
+// | filterByBranch           | resolveManifestRecord:372 branchMatches             | state-blind by purpose (error pool; sibling excludes)  | #174      |
+// | filterByBranch           | resolveManifestRecord:373 branch-only matches       | state-aware via excludeTerminal=true                   | #149      |
+// | filterByBranch           | resolveManifestRecord:402 branchMatches             | state-blind by purpose (error pool; sibling excludes)  | #174      |
+// | filterByBranch           | resolveManifestRecord:404 nonTerminalBranchMatches  | state-aware via excludeTerminal=true                   | #149      |
+// | filterByPr               | resolveManifestRecord:351 branch+PR on nonTerminal  | state-aware via composed subset                        | #170      |
+// | filterByPr               | resolveManifestRecord:382 standalone --pr candidates| state-blind by purpose (full PR candidate error pool)  | #174      |
+// | filterByPr               | resolveManifestRecord:387 standalone --pr opt-in    | state-blind by opt-in includeTerminal=true             | #174      |
+// | filterByPr               | resolveManifestRecord:391 standalone --pr default   | state-aware via filterOutTerminal composition          | #174      |
+// | filterByPr               | resolveManifestRecord:408 retry terminal-only       | terminal-only by purpose (mixed-state detector)        | #170/#174 |
+// | filterByBranchPrFallback | resolveManifestRecord:343 branch+PR fallback        | dispatched-only whitelist                              | #168      |
+// | filterByBranchPrFallback | resolveManifestRecord:403 retry fallback            | dispatched-only whitelist                              | #168      |
+// | findManifestByRunId      | resolveManifestRecord:327 explicit --run-id         | state-blind by design                                  | n/a       |
 // See docs/issue-174-resolver-hardening.md for consumer audit, sibling-builder audit, and pattern-break rationale.
 // ---------------------------------------------------------------------------
 
