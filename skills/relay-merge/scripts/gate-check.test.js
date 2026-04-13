@@ -701,6 +701,52 @@ test("gate-check PR mode fails closed when only a stale merged manifest exists o
   assert.match(result.json.reason, /Create a fresh dispatch/);
 });
 
+test("gate-check PR mode with headRefName:null fails closed via standalone --pr when only a stale merged PR match exists", () => {
+  const fixture = createLiveGateFixture({
+    manifest: {
+      state: STATES.MERGED,
+      anchor: {
+        rubric_grandfathered: true,
+      },
+      review: {
+        reviewer_login: "trusted-reviewer",
+        last_reviewed_sha: "abc123",
+      },
+      git: {
+        pr_number: 42,
+        working_branch: "feature-stale",
+      },
+    },
+  });
+
+  // Anti-theater: before #174, headRefName:null fell through to standalone --pr resolution and the
+  // terminal-inclusive exact-PR selector returned the merged manifest instead of fail-closing.
+  const result = spawnSync("node", [
+    SCRIPT,
+    "42",
+    "--json",
+  ], {
+    cwd: fixture.repoRoot,
+    encoding: "utf-8",
+    env: {
+      ...process.env,
+      RELAY_HOME: fixture.relayHome,
+      PATH: `${fixture.binDir}:${process.env.PATH}`,
+      FAKE_GH_PR_VIEW_JSON: JSON.stringify(buildPassingReviewPayload({ headRefName: null })),
+    },
+  });
+
+  const json = JSON.parse(result.stdout);
+  assert.equal(result.status, 1);
+  assert.equal(json.status, "manifest_resolution_failed");
+  assert.equal(json.readyToMerge, false);
+  assert.match(json.reason, /No relay manifest found for pr '42'/);
+  assert.match(json.reason, /state=merged, pr=42/);
+  assert.match(json.reason, /Only terminal PR matches exist/);
+  assert.match(json.reason, /create a fresh dispatch that records this PR before retrying/i);
+  assert.doesNotMatch(json.reason, /close-run/i);
+});
+
 test("gate-check blocks merge when the anchored rubric file is missing at merge time", () => {
   const repoRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "relay-gate-check-missing-file-")));
   const relayHome = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-")));

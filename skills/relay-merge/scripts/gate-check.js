@@ -83,6 +83,7 @@ function gh(...ghArgs) {
 
 function tryResolveManifestForPr(prNumber, headRefName) {
   try {
+    // gate-check runs before merge finalization, so it must never resolve merged/closed manifests.
     const manifestRecord = resolveManifestRecord({
       repoRoot: process.cwd(),
       prNumber,
