@@ -1,24 +1,24 @@
 // ---------------------------------------------------------------------------
 // Resolver selector x CALL-SITE audit table (#174)
-// Call-site extension meta-rule: when fixing one selector call site, audit every
-// other call site of that selector in the same PR (iteration-4 scope-boundary trap
-// note, memory/feedback_rubric_fail_closed.md; closes the #149 -> #165 -> #168 -> #170 ladder).
-//
-// | Selector                 | Call site (line)                                 | State-awareness verdict               | Closed by |
-// | ------------------------ | ------------------------------------------------ | ------------------------------------- | --------- |
-// | filterByBranch           | filterByBranchPrFallback:105                     | state-aware via excludeTerminal=true  | #149      |
-// | filterByBranch           | resolveManifestRecord:328 branchMatches          | state-blind by purpose (error pool)   | #174      |
-// | filterByBranch           | resolveManifestRecord:329 nonTerminal            | state-aware via excludeTerminal=true  | #149      |
-// | filterByBranch           | resolveManifestRecord:359 branchMatches          | state-blind by purpose (error pool)   | #149      |
-// | filterByBranch           | resolveManifestRecord:360 branch-only            | state-aware via excludeTerminal=true  | #149      |
-// | filterByBranch           | resolveManifestRecord:375 branchMatches          | state-blind by purpose (error pool)   | #174      |
-// | filterByBranch           | resolveManifestRecord:377 nonTerminal retry      | state-aware via excludeTerminal=true  | #149      |
-// | filterByPr               | resolveManifestRecord:338 branch+PR nonTerminal  | state-aware via composed subset       | #170      |
-// | filterByPr               | resolveManifestRecord:371 standalone --pr        | state-aware via filterOutTerminal; includeTerminal opt-in for cleanup-only | #174 |
-// | filterByPr               | resolveManifestRecord:381 retry terminal-only    | state-aware by purpose (mixed-state)  | #174      |
-// | filterByBranchPrFallback | resolveManifestRecord:330 branch+PR fallback     | dispatched-only whitelist             | #168      |
-// | filterByBranchPrFallback | resolveManifestRecord:376 retry fallback         | dispatched-only whitelist             | #168      |
-// | findManifestByRunId      | resolveManifestRecord:314 explicit --run-id      | state-blind by design                 | n/a       |
+// Call-site extension meta-rule: when fixing one selector call site, audit every other call site
+// of that selector in the same PR (iteration-4 scope-boundary trap note, memory/feedback_rubric_fail_closed.md; closes the #149 -> #165 -> #168 -> #170 ladder).
+// | Selector                 | Call site (line)                                    | State-awareness verdict                                | Closed by |
+// | ------------------------ | --------------------------------------------------- | ------------------------------------------------------ | --------- |
+// | filterByBranch           | filterByBranchPrFallback:111                        | state-aware via excludeTerminal=true                   | #149      |
+// | filterByBranch           | resolveManifestRecord:340 branchMatches             | state-blind by purpose (error pool; sibling excludes)  | #174      |
+// | filterByBranch           | resolveManifestRecord:341 nonTerminalBranchMatches  | state-aware via excludeTerminal=true                   | #149      |
+// | filterByBranch           | resolveManifestRecord:371 branchMatches             | state-blind by purpose (error pool; sibling excludes)  | #174      |
+// | filterByBranch           | resolveManifestRecord:372 branch-only matches       | state-aware via excludeTerminal=true                   | #149      |
+// | filterByBranch           | resolveManifestRecord:401 branchMatches             | state-blind by purpose (error pool; sibling excludes)  | #174      |
+// | filterByBranch           | resolveManifestRecord:403 nonTerminalBranchMatches  | state-aware via excludeTerminal=true                   | #149      |
+// | filterByPr               | resolveManifestRecord:350 branch+PR on nonTerminal  | state-aware via composed subset                        | #170      |
+// | filterByPr               | resolveManifestRecord:381 standalone --pr candidates| state-blind by purpose (full PR candidate error pool)  | #174      |
+// | filterByPr               | resolveManifestRecord:386 standalone --pr opt-in    | state-blind by opt-in includeTerminal=true             | #174      |
+// | filterByPr               | resolveManifestRecord:390 standalone --pr default   | state-aware via filterOutTerminal composition          | #174      |
+// | filterByPr               | resolveManifestRecord:407 retry terminal-only       | terminal-only by purpose (mixed-state detector)        | #170/#174 |
+// | filterByBranchPrFallback | resolveManifestRecord:342 branch+PR fallback        | dispatched-only whitelist                              | #168      |
+// | filterByBranchPrFallback | resolveManifestRecord:402 retry fallback            | dispatched-only whitelist                              | #168      |
+// | findManifestByRunId      | resolveManifestRecord:326 explicit --run-id         | state-blind by design                                  | n/a       |
 // ---------------------------------------------------------------------------
 
 const path = require("path");
@@ -82,9 +82,9 @@ function filterOutTerminal(records) {
 }
 
 function filterByBranch(records, branch, { excludeTerminal = false } = {}) {
-  // [state-aware] via excludeTerminal opt-in (#149). Callers must opt in for
-  // stale-inheritance-sensitive paths; standalone branch-only resolution does.
-  // Selector-composition audit table at top of file.
+  // [state-aware] via excludeTerminal opt-in (#149). See audit table; this selector has
+  // 7 resolveManifestRecord call sites plus 1 helper-composition call site in this file.
+  // Callers must opt in for stale-inheritance-sensitive paths; standalone branch-only resolution does.
   return records.filter((record) => {
     if (record?.data?.git?.working_branch !== branch) {
       return false;
@@ -99,15 +99,15 @@ function filterByBranch(records, branch, { excludeTerminal = false } = {}) {
 }
 
 function filterByPr(records, prNumber) {
-  // [state-aware] only when callers compose it with the correct subset. #174 extends
-  // the selector-composition audit rule to CALL SITES, so every filterByPr call site
-  // in this file is enumerated in the top audit table.
+  // [state-aware] only when callers compose it with the correct subset. See audit table;
+  // this selector has 5 call sites in resolveManifestRecord, and #174 audits each one for
+  // terminal-state handling so the selector itself stays simple.
   return records.filter(({ data }) => Number(data?.git?.pr_number || 0) === Number(prNumber));
 }
 
 function filterByBranchPrFallback(records, branch) {
-  // [state-aware whitelist] dispatched + null only (#168). Treat the state axis as a
-  // whitelist, not a blacklist — see memory/feedback_rubric_fail_closed.md.
+  // [state-aware whitelist] dispatched + null only (#168). See audit table; this selector has
+  // 2 resolveManifestRecord call sites, and the state axis stays a whitelist, not a blacklist.
   return filterByBranch(records, branch, { excludeTerminal: true })
     .filter((record) => {
       // #168: treat the state-machine axis as a whitelist, not a blacklist. Fixing only the state named
@@ -284,8 +284,8 @@ function buildMixedStateRecoveryMessage(repoRoot, { terminalCandidate, freshCand
 }
 
 function findManifestByRunId(repoRoot, runId) {
-  // [state-blind by design] explicit selectors must resolve EVERY state to keep
-  // operator recovery reachable (#149/#165/#157/#163).
+  // [state-blind by design] explicit selectors must resolve EVERY state to keep operator
+  // recovery reachable; see audit table for the single resolveManifestRecord call site.
   const normalizedRunId = validateRequestedRunId(runId);
   const matches = listManifestRecords(repoRoot)
     .filter(({ data, manifestPath }) => (
@@ -340,12 +340,12 @@ function resolveManifestRecord({
     const branchMatches = filterByBranch(allRecords, branch);
     const nonTerminalBranchMatches = filterByBranch(allRecords, branch, { excludeTerminal: true });
     const branchFallbackMatches = filterByBranchPrFallback(allRecords, branch);
-    // #170: compose filterByPr with nonTerminalBranchMatches so stale merged/closed
+    // #170: compose the PR selector with the non-terminal branch subset so stale merged/closed
     // manifests with stored pr_number === prNumber cannot shadow a fresh dispatched+null run.
     // Selector-composition axis enumeration meta-rule (memory/feedback_rubric_fail_closed.md):
-    // the state-machine axis is a property of EVERY resolver selector; #149 closed it for
-    // filterByBranch, #168 closed it for filterByBranchPrFallback, this commit closes it for
-    // filterByPr at this composition site. branchMatches stays bound for the preserved
+    // the state-machine axis is a property of EVERY resolver selector; #149 closed it for the
+    // branch selector, #168 for the dispatched-only fallback helper, and this commit closes it for
+    // the exact-PR selector at this composition site. branchMatches stays bound for the preserved
     // candidates list passed into the no-match error.
     matches = filterByPr(nonTerminalBranchMatches, prNumber);
     if (matches.length === 0) {
@@ -402,7 +402,7 @@ function resolveManifestRecord({
     const branchFallbackMatches = filterByBranchPrFallback(allRecords, branch);
     const nonTerminalBranchMatches = filterByBranch(allRecords, branch, { excludeTerminal: true });
     // #174: this retry path deliberately asks a DIFFERENT question than the exact-PR resolver above.
-    // Feed filterByPr a terminal-only subset here so the mixed-state detector can distinguish
+    // Feed the PR selector a terminal-only subset here so the mixed-state detector can distinguish
     // "stale terminal stored the caller PR" from ordinary non-terminal ambiguity.
     const terminalExactPrMatches = filterByPr(
       branchMatches.filter((record) => BRANCH_ONLY_TERMINAL_STATES.has(record?.data?.state)),

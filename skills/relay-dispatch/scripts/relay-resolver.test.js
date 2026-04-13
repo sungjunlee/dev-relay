@@ -824,6 +824,40 @@ test("resolveManifestRecord includeTerminal:false rejects standalone --pr termin
   assert.equal(recovered.data.state, STATES.DISPATCHED);
 });
 
+test("resolveManifestRecord rejects standalone --pr closed-only matches with the same terminal-only recovery shape", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-resolver-pr-only-closed-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  const stalePath = writeManifestRecord(repoRoot, {
+    runId: createRunId({
+      branch: "feature-pr-only-closed",
+      timestamp: new Date("2026-04-03T00:00:00.000Z"),
+    }),
+    storedRunId: "../closed-run",
+    branch: "feature-pr-only-closed",
+    state: STATES.CLOSED,
+    prNumber: EXACT_PR_COLLISION_PR,
+    updatedAt: "2026-04-03T00:00:00.000Z",
+  });
+
+  // Anti-theater: before #174, standalone --pr fed filterByPr(allRecords, 40), so the terminal
+  // exact-PR selector returned closed manifests too instead of fail-closing on every terminal state.
+  assert.throws(
+    () => resolveManifestRecord({ repoRoot, prNumber: EXACT_PR_COLLISION_PR }),
+    (error) => {
+      assert.match(error.message, /No relay manifest found for pr '40'/);
+      assert.match(error.message, /PR candidates:/);
+      assert.match(error.message, /state=closed, pr=40/);
+      assert.match(error.message, /Only terminal PR matches exist/);
+      assert.match(error.message, /create a fresh dispatch that records this PR before retrying/i);
+      assert.match(error.message, /pass --run-id <id> or --manifest <path> to target an existing terminal run explicitly/i);
+      assert.doesNotMatch(error.message, /close-run/i);
+      assert.doesNotMatch(error.message, /existing active run/i);
+      assertSanitizedRunIdLeak(error, stalePath, "../closed-run");
+      return true;
+    }
+  );
+});
+
 test("resolveManifestRecord rejects standalone --pr when a stale terminal PR match shares a branch with a fresh null-pr run", () => {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-resolver-pr-only-mixed-"));
   process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
@@ -856,6 +890,40 @@ test("resolveManifestRecord rejects standalone --pr when a stale terminal PR mat
     /No relay manifest found for pr '123'/
   );
   assertExplicitSelectorsResolve(repoRoot, freshPath, freshRunId, STATES.READY_TO_MERGE);
+});
+
+test("resolveManifestRecord standalone --pr lets the cross-branch dispatched exact-PR match win over a stale merged sibling", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-resolver-pr-only-cross-branch-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  writeManifestRecord(repoRoot, {
+    runId: createRunId({
+      branch: "feature-stale",
+      timestamp: new Date("2026-04-03T00:00:00.000Z"),
+    }),
+    branch: "feature-stale",
+    state: STATES.MERGED,
+    prNumber: EXACT_PR_COLLISION_PR,
+    updatedAt: "2026-04-03T00:00:00.000Z",
+  });
+  const freshRunId = createRunId({
+    branch: "feature-fresh",
+    timestamp: new Date("2026-04-03T00:10:00.000Z"),
+  });
+  const freshPath = writeManifestRecord(repoRoot, {
+    runId: freshRunId,
+    branch: "feature-fresh",
+    state: STATES.DISPATCHED,
+    prNumber: EXACT_PR_COLLISION_PR,
+    updatedAt: "2026-04-03T00:10:00.000Z",
+  });
+
+  // Anti-theater: before #174, standalone --pr stayed terminal-inclusive and this exact-PR lookup
+  // was ambiguous across both branches. Dispatched wins now because merged is filtered out before
+  // the standalone --pr ambiguity check.
+  const match = resolveManifestRecord({ repoRoot, prNumber: EXACT_PR_COLLISION_PR });
+  assert.equal(match.manifestPath, freshPath);
+  assert.equal(match.data.run_id, freshRunId);
+  assert.equal(match.data.state, STATES.DISPATCHED);
 });
 
 test("resolveManifestRecord preserves standalone --pr for active exact-PR matches", () => {
