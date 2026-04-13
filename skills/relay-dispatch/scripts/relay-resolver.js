@@ -14,7 +14,7 @@
 // | filterByBranch           | resolveManifestRecord:375 branchMatches          | state-blind by purpose (error pool)   | #174      |
 // | filterByBranch           | resolveManifestRecord:377 nonTerminal retry      | state-aware via excludeTerminal=true  | #149      |
 // | filterByPr               | resolveManifestRecord:338 branch+PR nonTerminal  | state-aware via composed subset       | #170      |
-// | filterByPr               | resolveManifestRecord:371 standalone --pr        | state-aware via filterOutTerminal     | #174      |
+// | filterByPr               | resolveManifestRecord:371 standalone --pr        | state-aware via filterOutTerminal; includeTerminal opt-in for cleanup-only | #174 |
 // | filterByPr               | resolveManifestRecord:381 retry terminal-only    | state-aware by purpose (mixed-state)  | #174      |
 // | filterByBranchPrFallback | resolveManifestRecord:330 branch+PR fallback     | dispatched-only whitelist             | #168      |
 // | filterByBranchPrFallback | resolveManifestRecord:376 retry fallback         | dispatched-only whitelist             | #168      |
@@ -61,6 +61,12 @@ function formatCandidateDetails(records) {
     const storedPr = hasStoredPrNumber(record) ? record.data.git.pr_number : "unset";
     return `${safeFormatRunId(record)} (state=${state}, pr=${storedPr})`;
   }).join(", ");
+}
+
+function getSelectorCandidateLabel(selector) {
+  return selector?.prNumber !== undefined && selector?.prNumber !== null && !selector?.branch
+    ? "PR"
+    : "Branch";
 }
 
 function isKnownState(state) {
@@ -230,11 +236,16 @@ function buildNoManifestError(selector, { candidates = [], terminalOnly = false,
   // #174 reachability audit: this builder only emits commandless terminal-only/fresh-dispatch text
   // plus caller-supplied recovery that must already be state-validated by the caller.
   const parts = [`No relay manifest found for ${formatSelector(selector)}.`];
+  const candidateLabel = getSelectorCandidateLabel(selector);
   if (candidates.length > 0) {
-    parts.push(`Branch candidates: ${formatCandidateDetails(candidates)}.`);
+    parts.push(`${candidateLabel} candidates: ${formatCandidateDetails(candidates)}.`);
   }
   if (terminalOnly) {
-    parts.push("Only terminal branch matches exist; create a fresh dispatch for this branch before retrying.");
+    parts.push(
+      candidateLabel === "PR"
+        ? "Only terminal PR matches exist; create a fresh dispatch that records this PR before retrying, or pass --run-id <id> or --manifest <path> to target an existing terminal run explicitly."
+        : "Only terminal branch matches exist; create a fresh dispatch for this branch before retrying."
+    );
   }
   if (recovery) {
     parts.push(recovery);
@@ -304,6 +315,7 @@ function resolveManifestRecord({
   runId,
   branch,
   prNumber,
+  includeTerminal = false,
 }) {
   if (manifestPath) {
     const resolved = path.resolve(manifestPath);
@@ -366,9 +378,23 @@ function resolveManifestRecord({
         : undefined,
     }));
   } else if (prNumber !== undefined && prNumber !== null) {
-    // #174 / call-site extension meta-rule: standalone --pr must also exclude merged/closed
-    // siblings, not just the branch+PR composition path.
-    matches = filterByPr(filterOutTerminal(allRecords), prNumber);
+    const prCandidates = filterByPr(
+      allRecords,
+      prNumber
+    );
+    if (includeTerminal) {
+      matches = filterByPr(allRecords, prNumber); // standalone --pr is hardened by default (E1, #174); finalize-run --skip-merge opts into terminal inclusion to preserve the documented cleanup workflow.
+    } else {
+      // #174 / call-site extension meta-rule: standalone --pr must also exclude merged/closed
+      // siblings, not just the branch+PR composition path.
+      matches = filterByPr(filterOutTerminal(allRecords), prNumber);
+      if (matches.length === 0 && prCandidates.length > 0) {
+        throw buildNoManifestError({ prNumber }, {
+          candidates: prCandidates,
+          terminalOnly: true,
+        });
+      }
+    }
   }
 
   if (branch && prNumber !== undefined && prNumber !== null && matches.length === 0) {

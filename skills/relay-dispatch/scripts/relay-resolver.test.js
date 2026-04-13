@@ -696,7 +696,73 @@ test("resolveManifestRecord keeps merged and closed manifests reachable via expl
   assertExplicitSelectorsResolve(repoRoot, closedPath, closedRunId, STATES.CLOSED);
 });
 
-test("resolveManifestRecord rejects standalone --pr when only a stale terminal manifest carries the PR", () => {
+test("resolveManifestRecord includeTerminal:true returns a single merged manifest on standalone --pr", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-resolver-pr-only-include-terminal-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  const runId = createRunId({
+    branch: "feature-pr-only",
+    timestamp: new Date("2026-04-03T00:00:00.000Z"),
+  });
+  const manifestPath = writeManifestRecord(repoRoot, {
+    runId,
+    branch: "feature-pr-only",
+    state: STATES.MERGED,
+    prNumber: EXACT_PR_COLLISION_PR,
+    updatedAt: "2026-04-03T00:00:00.000Z",
+  });
+
+  const match = resolveManifestRecord({
+    repoRoot,
+    prNumber: EXACT_PR_COLLISION_PR,
+    includeTerminal: true,
+  });
+  assert.equal(match.manifestPath, manifestPath);
+  assert.equal(match.data.run_id, runId);
+  assert.equal(match.data.state, STATES.MERGED);
+});
+
+test("resolveManifestRecord includeTerminal:true keeps standalone --pr ambiguous across multiple merged matches", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-resolver-pr-only-include-terminal-ambiguous-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  const firstRunId = createRunId({
+    branch: "feature-pr-only-a",
+    timestamp: new Date("2026-04-03T00:00:00.000Z"),
+  });
+  const secondRunId = createRunId({
+    branch: "feature-pr-only-b",
+    timestamp: new Date("2026-04-03T00:10:00.000Z"),
+  });
+  writeManifestRecord(repoRoot, {
+    runId: firstRunId,
+    branch: "feature-pr-only-a",
+    state: STATES.MERGED,
+    prNumber: EXACT_PR_COLLISION_PR,
+    updatedAt: "2026-04-03T00:00:00.000Z",
+  });
+  writeManifestRecord(repoRoot, {
+    runId: secondRunId,
+    branch: "feature-pr-only-b",
+    state: STATES.MERGED,
+    prNumber: EXACT_PR_COLLISION_PR,
+    updatedAt: "2026-04-03T00:10:00.000Z",
+  });
+
+  assert.throws(
+    () => resolveManifestRecord({
+      repoRoot,
+      prNumber: EXACT_PR_COLLISION_PR,
+      includeTerminal: true,
+    }),
+    (error) => {
+      assert.match(error.message, /Ambiguous relay manifest for pr '40'/);
+      assert.match(error.message, new RegExp(firstRunId));
+      assert.match(error.message, new RegExp(secondRunId));
+      return true;
+    }
+  );
+});
+
+test("resolveManifestRecord includeTerminal:false rejects standalone --pr terminal-only matches with actionable recovery and clean recovery chain", () => {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-resolver-pr-only-terminal-"));
   process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
   const staleRunId = createRunId({
@@ -705,20 +771,57 @@ test("resolveManifestRecord rejects standalone --pr when only a stale terminal m
   });
   const stalePath = writeManifestRecord(repoRoot, {
     runId: staleRunId,
+    storedRunId: "../stale-run",
     branch: "feature-pr-only",
     state: STATES.MERGED,
-    prNumber: 123,
+    prNumber: EXACT_PR_COLLISION_PR,
     updatedAt: "2026-04-03T00:00:00.000Z",
   });
 
   // Anti-theater: before the #174 standalone --pr hardening at relay-resolver.js:369-371, this
-  // selector ran `filterByPr(allRecords, 123)` and silently returned the merged manifest. Call-site
+  // selector ran `filterByPr(allRecords, 40)` and silently returned the merged manifest. Call-site
   // extension meta-rule, memory/feedback_rubric_fail_closed.md; #170/#174.
   assert.throws(
-    () => resolveManifestRecord({ repoRoot, prNumber: 123 }),
-    /No relay manifest found for pr '123'/
+    () => resolveManifestRecord({ repoRoot, prNumber: EXACT_PR_COLLISION_PR, includeTerminal: false }),
+    (error) => {
+      assert.match(error.message, /No relay manifest found for pr '40'/);
+      assert.match(error.message, /PR candidates:/);
+      assert.match(error.message, /state=merged, pr=40/);
+      assert.match(error.message, /Only terminal PR matches exist/);
+      assert.match(error.message, /create a fresh dispatch that records this PR before retrying/i);
+      assert.match(error.message, /pass --run-id <id> or --manifest <path> to target an existing terminal run explicitly/i);
+      assert.doesNotMatch(error.message, /close-run/i);
+      assert.doesNotMatch(error.message, /existing active run/i);
+      assertSanitizedRunIdLeak(error, stalePath, "../stale-run");
+      return true;
+    }
   );
-  assertExplicitSelectorsResolve(repoRoot, stalePath, staleRunId, STATES.MERGED);
+  // Recovery must hinge on a fresh dispatch that actually records the caller PR. A fresh null-pr
+  // run on any branch is invisible to standalone --pr and must keep rejecting.
+  writeFreshDispatchedManifest(repoRoot, "feature-pr-only", "2026-04-03T00:15:00.000Z");
+  assert.throws(
+    () => resolveManifestRecord({ repoRoot, prNumber: EXACT_PR_COLLISION_PR, includeTerminal: false }),
+    /Only terminal PR matches exist/
+  );
+
+  // Once a fresh non-terminal manifest carries the same stored PR, standalone --pr resolves cleanly
+  // to that active run while keeping the stale merged sibling explicit-only.
+  const freshRunId = createRunId({
+    branch: "feature-pr-only",
+    timestamp: new Date("2026-04-03T00:30:00.000Z"),
+  });
+  const freshPath = writeManifestRecord(repoRoot, {
+    runId: freshRunId,
+    branch: "feature-pr-only",
+    state: STATES.DISPATCHED,
+    prNumber: EXACT_PR_COLLISION_PR,
+    updatedAt: "2026-04-03T00:30:00.000Z",
+  });
+
+  const recovered = resolveManifestRecord({ repoRoot, prNumber: EXACT_PR_COLLISION_PR, includeTerminal: false });
+  assert.equal(recovered.manifestPath, freshPath);
+  assert.equal(recovered.data.run_id, freshRunId);
+  assert.equal(recovered.data.state, STATES.DISPATCHED);
 });
 
 test("resolveManifestRecord rejects standalone --pr when a stale terminal PR match shares a branch with a fresh null-pr run", () => {
