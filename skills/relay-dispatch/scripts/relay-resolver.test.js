@@ -282,51 +282,151 @@ test("resolveManifestRecord covers the stored-pr terminal exact-PR collision mat
     {
       label: "merged + matching stored pr + no fresh dispatch",
       terminalState: STATES.MERGED,
+      callerPrNumber: EXACT_PR_COLLISION_PR,
+      freshState: null,
       freshPrNumber: null,
-      expected: "terminal-only-rejection",
+      expected: { type: "terminal-only-rejection" },
       // Anti-theater: pre-#170, relay-resolver.js:185 (`matches = filterByPr(branchMatches, 40);`)
       // returned the merged manifest because branchMatches was terminal-inclusive.
     },
     {
       label: "merged + matching stored pr + fresh dispatched + pr unset",
       terminalState: STATES.MERGED,
+      callerPrNumber: EXACT_PR_COLLISION_PR,
+      freshState: STATES.DISPATCHED,
       freshPrNumber: undefined,
-      expected: "fresh-dispatched-null-pr",
+      expected: {
+        type: "match",
+        state: STATES.DISPATCHED,
+        prNumber: null,
+      },
       // Anti-theater: pre-#170, relay-resolver.js:185 returned the merged manifest before the
       // dispatched+null branch fallback could recover the fresh run.
     },
     {
       label: "merged + matching stored pr + fresh dispatched + matching pr",
       terminalState: STATES.MERGED,
+      callerPrNumber: EXACT_PR_COLLISION_PR,
+      freshState: STATES.DISPATCHED,
       freshPrNumber: EXACT_PR_COLLISION_PR,
-      expected: "fresh-dispatched-matching-pr",
+      expected: {
+        type: "match",
+        state: STATES.DISPATCHED,
+        prNumber: EXACT_PR_COLLISION_PR,
+      },
       // Anti-theater: pre-#170, filterByPr(branchMatches, 40) kept both manifests and raised
       // ambiguity. The #170 call-site fix intentionally drops the terminal sibling first, so the
       // fresh dispatched manifest wins instead of surfacing ambiguity for a stale collision.
     },
     {
+      label: "merged + matching stored pr + fresh review_pending + matching pr",
+      terminalState: STATES.MERGED,
+      callerPrNumber: EXACT_PR_COLLISION_PR,
+      freshState: STATES.REVIEW_PENDING,
+      freshPrNumber: EXACT_PR_COLLISION_PR,
+      expected: {
+        type: "match",
+        state: STATES.REVIEW_PENDING,
+        prNumber: EXACT_PR_COLLISION_PR,
+      },
+      // The round-2 ambiguity guard must stay scoped to exact-PR misses. When the fresh
+      // review_pending manifest carries the caller PR, the non-terminal exact-PR selector
+      // still wins directly.
+    },
+    {
+      label: "merged + matching stored pr + fresh review_pending + pr unset",
+      terminalState: STATES.MERGED,
+      callerPrNumber: EXACT_PR_COLLISION_PR,
+      freshState: STATES.REVIEW_PENDING,
+      freshPrNumber: undefined,
+      expected: {
+        type: "ambiguity",
+        freshState: STATES.REVIEW_PENDING,
+        freshPrLabel: "unset",
+      },
+      // Anti-theater: before the round-2 fix, this exact-PR miss fell through to the stale
+      // review_pending fallback message instead of surfacing the mixed terminal/non-terminal
+      // ambiguity called out in #170.
+    },
+    {
+      label: "merged + matching stored pr + fresh dispatched + pr unset + caller pr miss",
+      terminalState: STATES.MERGED,
+      callerPrNumber: 99,
+      freshState: STATES.DISPATCHED,
+      freshPrNumber: undefined,
+      expected: {
+        type: "match",
+        state: STATES.DISPATCHED,
+        prNumber: null,
+      },
+      // Preserve the #168 whitelist fallback: when exact-PR matching misses entirely,
+      // dispatched+null must still rebind to the fresh run.
+    },
+    {
       label: "closed + matching stored pr + no fresh dispatch",
       terminalState: STATES.CLOSED,
+      callerPrNumber: EXACT_PR_COLLISION_PR,
+      freshState: null,
       freshPrNumber: null,
-      expected: "terminal-only-rejection",
+      expected: { type: "terminal-only-rejection" },
       // Anti-theater: pre-#170, relay-resolver.js:185 returned the closed manifest because
       // branchMatches still included terminal records on the exact-PR selector path.
     },
     {
       label: "closed + matching stored pr + fresh dispatched + pr unset",
       terminalState: STATES.CLOSED,
+      callerPrNumber: EXACT_PR_COLLISION_PR,
+      freshState: STATES.DISPATCHED,
       freshPrNumber: undefined,
-      expected: "fresh-dispatched-null-pr",
+      expected: {
+        type: "match",
+        state: STATES.DISPATCHED,
+        prNumber: null,
+      },
       // Anti-theater: pre-#170, relay-resolver.js:185 returned the stale closed manifest before
       // the dispatched+null fallback could rebind resolution to the fresh run.
     },
     {
       label: "closed + matching stored pr + fresh dispatched + matching pr",
       terminalState: STATES.CLOSED,
+      callerPrNumber: EXACT_PR_COLLISION_PR,
+      freshState: STATES.DISPATCHED,
       freshPrNumber: EXACT_PR_COLLISION_PR,
-      expected: "fresh-dispatched-matching-pr",
+      expected: {
+        type: "match",
+        state: STATES.DISPATCHED,
+        prNumber: EXACT_PR_COLLISION_PR,
+      },
       // Anti-theater: pre-#170, filterByPr(branchMatches, 40) surfaced both manifests and stopped
       // in ambiguity. Post-#170, terminal siblings are excluded before exact-PR matching.
+    },
+    {
+      label: "closed + matching stored pr + fresh review_pending + matching pr",
+      terminalState: STATES.CLOSED,
+      callerPrNumber: EXACT_PR_COLLISION_PR,
+      freshState: STATES.REVIEW_PENDING,
+      freshPrNumber: EXACT_PR_COLLISION_PR,
+      expected: {
+        type: "match",
+        state: STATES.REVIEW_PENDING,
+        prNumber: EXACT_PR_COLLISION_PR,
+      },
+      // The fresh review_pending manifest remains authoritative when it carries the caller PR,
+      // even with a stale closed sibling on the same branch.
+    },
+    {
+      label: "closed + matching stored pr + fresh review_pending + pr unset",
+      terminalState: STATES.CLOSED,
+      callerPrNumber: EXACT_PR_COLLISION_PR,
+      freshState: STATES.REVIEW_PENDING,
+      freshPrNumber: undefined,
+      expected: {
+        type: "ambiguity",
+        freshState: STATES.REVIEW_PENDING,
+        freshPrLabel: "unset",
+      },
+      // Anti-theater: before the round-2 fix, this closed+review_pending post-stamp miss also
+      // dropped into stale-fallback recovery instead of naming both candidates.
     },
   ];
 
@@ -347,25 +447,29 @@ test("resolveManifestRecord covers the stored-pr terminal exact-PR collision mat
       });
 
       let freshPath = null;
-      if (testCase.expected !== "terminal-only-rejection") {
-        const freshRunId = createRunId({
+      let freshRunId = null;
+      if (testCase.freshState) {
+        freshRunId = createRunId({
           branch: "feature-x",
           timestamp: new Date("2026-04-03T00:15:00.000Z"),
         });
         freshPath = writeManifestRecord(repoRoot, {
           runId: freshRunId,
           branch: "feature-x",
-          state: STATES.DISPATCHED,
+          state: testCase.freshState,
           ...(testCase.freshPrNumber === undefined ? {} : { prNumber: testCase.freshPrNumber }),
           updatedAt: "2026-04-03T00:15:00.000Z",
         });
       }
 
-      if (testCase.expected === "terminal-only-rejection") {
+      if (testCase.expected.type === "terminal-only-rejection") {
         assert.throws(
-          () => resolveManifestRecord({ repoRoot, branch: "feature-x", prNumber: EXACT_PR_COLLISION_PR }),
+          () => resolveManifestRecord({ repoRoot, branch: "feature-x", prNumber: testCase.callerPrNumber }),
           (error) => {
-            assert.match(error.message, /No relay manifest found for branch 'feature-x' \+ pr '40'/);
+            assert.match(
+              error.message,
+              new RegExp(`No relay manifest found for branch 'feature-x' \\+ pr '${testCase.callerPrNumber}'`)
+            );
             assert.match(error.message, new RegExp(staleRunId));
             assert.match(error.message, /Only terminal branch matches exist/);
             assert.match(error.message, /Create a fresh dispatch for this branch before retrying/);
@@ -375,13 +479,34 @@ test("resolveManifestRecord covers the stored-pr terminal exact-PR collision mat
         return;
       }
 
-      const match = resolveManifestRecord({ repoRoot, branch: "feature-x", prNumber: EXACT_PR_COLLISION_PR });
+      if (testCase.expected.type === "ambiguity") {
+        assert.throws(
+          () => resolveManifestRecord({ repoRoot, branch: "feature-x", prNumber: testCase.callerPrNumber }),
+          (error) => {
+            assert.match(error.message, /Ambiguous relay manifest/);
+            assert.match(error.message, /2 candidates/);
+            assert.match(error.message, new RegExp(staleRunId));
+            assert.match(
+              error.message,
+              new RegExp(`state=${escapeRegExp(testCase.terminalState)}, pr=${EXACT_PR_COLLISION_PR}`)
+            );
+            assert.match(error.message, new RegExp(freshRunId));
+            assert.match(
+              error.message,
+              new RegExp(
+                `state=${escapeRegExp(testCase.expected.freshState)}, pr=${testCase.expected.freshPrLabel}`
+              )
+            );
+            return true;
+          }
+        );
+        return;
+      }
+
+      const match = resolveManifestRecord({ repoRoot, branch: "feature-x", prNumber: testCase.callerPrNumber });
       assert.equal(match.manifestPath, freshPath);
-      assert.equal(match.data.state, STATES.DISPATCHED);
-      assert.equal(
-        match.data.git.pr_number,
-        testCase.expected === "fresh-dispatched-matching-pr" ? EXACT_PR_COLLISION_PR : null
-      );
+      assert.equal(match.data.state, testCase.expected.state);
+      assert.equal(match.data.git.pr_number, testCase.expected.prNumber);
     });
   }
 });

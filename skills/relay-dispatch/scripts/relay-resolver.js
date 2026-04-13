@@ -242,6 +242,27 @@ function resolveManifestRecord({
     const branchMatches = filterByBranch(allRecords, branch);
     const branchFallbackMatches = filterByBranchPrFallback(allRecords, branch);
     const nonTerminalBranchMatches = filterByBranch(allRecords, branch, { excludeTerminal: true });
+    const terminalExactPrMatches = filterByPr(
+      branchMatches.filter((record) => BRANCH_ONLY_TERMINAL_STATES.has(record?.data?.state)),
+      prNumber
+    );
+    if (
+      terminalExactPrMatches.length > 0
+      && branchFallbackMatches.length === 0
+      && nonTerminalBranchMatches.length === 1
+      && nonTerminalBranchMatches[0]?.data?.state === STATES.REVIEW_PENDING
+    ) {
+      // #170 round 2: once branch+PR resolution has already missed on the non-terminal set,
+      // a mixed terminal exact-PR sibling plus a lone review_pending sibling is the explicit
+      // post-stamp ambiguity called out in the issue. The matching-pr review_pending path
+      // resolves earlier via filterByPr(nonTerminalBranchMatches, prNumber); reaching this block
+      // means the review_pending manifest does NOT carry the caller PR, so do not misclassify it
+      // as stale branch-fallback recovery.
+      throw buildAmbiguousResolutionError(
+        { branch, prNumber },
+        [...terminalExactPrMatches, ...nonTerminalBranchMatches]
+      );
+    }
     const staleFallbackRecord = findStaleNonTerminalBranchFallbackCandidate(nonTerminalBranchMatches);
     return validateManifestRecordRunId(ensureUniqueRecord(matches, { branch, prNumber }, {
       candidates: branchMatches.length > 0 ? branchMatches : [],
