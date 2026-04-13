@@ -19,6 +19,7 @@
 // | filterByBranchPrFallback | resolveManifestRecord:342 branch+PR fallback        | dispatched-only whitelist                              | #168      |
 // | filterByBranchPrFallback | resolveManifestRecord:402 retry fallback            | dispatched-only whitelist                              | #168      |
 // | findManifestByRunId      | resolveManifestRecord:326 explicit --run-id         | state-blind by design                                  | n/a       |
+// See docs/issue-174-resolver-hardening.md for consumer audit, sibling-builder audit, and pattern-break rationale.
 // ---------------------------------------------------------------------------
 
 const path = require("path");
