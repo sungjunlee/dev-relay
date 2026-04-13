@@ -26,6 +26,13 @@ const NON_TERMINAL_BRANCH_PR_STATES = [
   STATES.READY_TO_MERGE,
   STATES.ESCALATED,
 ];
+const ACTIVE_CLOSE_RUN_STATES = [
+  STATES.DISPATCHED,
+  STATES.REVIEW_PENDING,
+  STATES.CHANGES_REQUESTED,
+  STATES.READY_TO_MERGE,
+  STATES.ESCALATED,
+];
 const BRANCH_PR_CASES = [
   { label: "pr_number:null", prNumber: undefined },
   { label: "pr_number:matches", prNumber: 120 },
@@ -132,6 +139,26 @@ function assertExplicitSelectorsResolve(repoRoot, manifestPath, runId, expectedS
   assert.equal(manifestMatch.data.state, expectedState);
 }
 
+function assertSanitizedRunIdLeak(error, manifestPath, unsafeRunId) {
+  assert.match(error.message, new RegExp(escapeRegExp(path.basename(manifestPath, ".md"))));
+  assert.doesNotMatch(error.message, new RegExp(escapeRegExp(unsafeRunId)));
+}
+
+function writeFreshDispatchedManifest(repoRoot, branch, updatedAt = "2026-04-03T00:15:00.000Z") {
+  const runId = createRunId({
+    branch,
+    timestamp: new Date(updatedAt),
+  });
+  const manifestPath = writeManifestRecord(repoRoot, {
+    runId,
+    branch,
+    state: STATES.DISPATCHED,
+    cleanupPolicy: "manual",
+    updatedAt,
+  });
+  return { runId, manifestPath };
+}
+
 test("findManifestByRunId rejects invalid run_id selectors before scanning manifests", () => {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-resolver-find-"));
   process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
@@ -177,6 +204,100 @@ test("resolveManifestRecord rejects manifests whose stored run_id is invalid", (
   assert.throws(
     () => resolveManifestRecord({ repoRoot, branch: "issue-42" }),
     /has invalid run_id: run_id must be a single path segment/
+  );
+});
+
+test("resolveManifestRecord sanitizes tampered run_id in stale-fallback recovery text", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-resolver-safe-stale-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  const manifestPath = writeManifestRecord(repoRoot, {
+    runId: createRunId({
+      branch: "feature-auth",
+      timestamp: new Date("2026-04-03T00:00:00.000Z"),
+    }),
+    storedRunId: "../victim",
+    branch: "feature-auth",
+    state: STATES.REVIEW_PENDING,
+    cleanupPolicy: "manual",
+    updatedAt: "2026-04-03T00:00:00.000Z",
+  });
+
+  // Anti-theater: without the #174 safeFormatRunId hardening at relay-resolver.js:191-208 and
+  // buildNoManifestError candidate rendering at :232-240, this stale-fallback branch reused the
+  // raw stored run_id in operator-facing close-run text. Sibling-field enumeration + end-to-end
+  // recovery meta-rules, memory/feedback_rubric_fail_closed.md; #171/#174.
+  assert.throws(
+    () => resolveManifestRecord({ repoRoot, branch: "feature-auth", prNumber: 120 }),
+    (error) => {
+      assert.match(error.message, /Close the stale review_pending run/);
+      assertSanitizedRunIdLeak(error, manifestPath, "../victim");
+      return true;
+    }
+  );
+});
+
+test("resolveManifestRecord sanitizes tampered run_id in mixed-state recovery text", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-resolver-safe-mixed-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  const staleManifestPath = writeManifestRecord(repoRoot, {
+    runId: createRunId({
+      branch: "feature-auth",
+      timestamp: new Date("2026-04-03T00:00:00.000Z"),
+    }),
+    storedRunId: "../victim",
+    branch: "feature-auth",
+    state: STATES.MERGED,
+    prNumber: 123,
+    updatedAt: "2026-04-03T00:00:00.000Z",
+  });
+  writeManifestRecord(repoRoot, {
+    runId: createRunId({
+      branch: "feature-auth",
+      timestamp: new Date("2026-04-03T00:10:00.000Z"),
+    }),
+    branch: "feature-auth",
+    state: STATES.REVIEW_PENDING,
+    updatedAt: "2026-04-03T00:10:00.000Z",
+  });
+
+  // Anti-theater: before the #174 mixed-state builder at relay-resolver.js:254-272 switched to
+  // safeFormatRunId, the new ambiguity path echoed the tampered stored run_id verbatim. Sibling-field
+  // enumeration meta-rule, memory/feedback_rubric_fail_closed.md; #171/#174.
+  assert.throws(
+    () => resolveManifestRecord({ repoRoot, branch: "feature-auth", prNumber: 123 }),
+    (error) => {
+      assert.match(error.message, /Create a fresh dispatch for branch 'feature-auth'/);
+      assertSanitizedRunIdLeak(error, staleManifestPath, "../victim");
+      return true;
+    }
+  );
+});
+
+test("resolveManifestRecord sanitizes tampered run_id in terminal-only rejection text", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-resolver-safe-terminal-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  const staleManifestPath = writeManifestRecord(repoRoot, {
+    runId: createRunId({
+      branch: "feature-auth",
+      timestamp: new Date("2026-04-03T00:00:00.000Z"),
+    }),
+    storedRunId: "../victim",
+    branch: "feature-auth",
+    state: STATES.MERGED,
+    prNumber: 123,
+    updatedAt: "2026-04-03T00:00:00.000Z",
+  });
+
+  // Anti-theater: without the #174 safe candidate rendering in relay-resolver.js:232-240, the
+  // terminal-only rejection still leaked the tampered stored run_id in the candidate list. Call-site
+  // extension + sibling-field enumeration meta-rules, memory/feedback_rubric_fail_closed.md; #170/#174.
+  assert.throws(
+    () => resolveManifestRecord({ repoRoot, branch: "feature-auth", prNumber: 123 }),
+    (error) => {
+      assert.match(error.message, /Only terminal branch matches exist/);
+      assertSanitizedRunIdLeak(error, staleManifestPath, "../victim");
+      return true;
+    }
   );
 });
 
@@ -340,13 +461,14 @@ test("resolveManifestRecord covers the stored-pr terminal exact-PR collision mat
       freshState: STATES.REVIEW_PENDING,
       freshPrNumber: undefined,
       expected: {
-        type: "ambiguity",
+        type: "mixed-state-recovery",
         freshState: STATES.REVIEW_PENDING,
         freshPrLabel: "unset",
       },
-      // Anti-theater: before the round-2 fix, this exact-PR miss fell through to the stale
-      // review_pending fallback message instead of surfacing the mixed terminal/non-terminal
-      // ambiguity called out in #170.
+      // Anti-theater: before the #174 mixed-state recovery builder at relay-resolver.js:391-394,
+      // this exact-PR miss either fell into stale review_pending fallback or surfaced a generic
+      // ambiguity that suggested unreachable actions. End-to-end recovery meta-rule,
+      // memory/feedback_rubric_fail_closed.md; #170/#174.
     },
     {
       label: "merged + matching stored pr + fresh dispatched + pr unset + caller pr miss",
@@ -421,12 +543,13 @@ test("resolveManifestRecord covers the stored-pr terminal exact-PR collision mat
       freshState: STATES.REVIEW_PENDING,
       freshPrNumber: undefined,
       expected: {
-        type: "ambiguity",
+        type: "mixed-state-recovery",
         freshState: STATES.REVIEW_PENDING,
         freshPrLabel: "unset",
       },
-      // Anti-theater: before the round-2 fix, this closed+review_pending post-stamp miss also
-      // dropped into stale-fallback recovery instead of naming both candidates.
+      // Anti-theater: before the #174 mixed-state recovery builder at relay-resolver.js:391-394,
+      // this closed+review_pending post-stamp miss also surfaced the wrong recovery path. End-to-end
+      // recovery meta-rule, memory/feedback_rubric_fail_closed.md; #170/#174.
     },
   ];
 
@@ -479,12 +602,11 @@ test("resolveManifestRecord covers the stored-pr terminal exact-PR collision mat
         return;
       }
 
-      if (testCase.expected.type === "ambiguity") {
+      if (testCase.expected.type === "mixed-state-recovery") {
         assert.throws(
           () => resolveManifestRecord({ repoRoot, branch: "feature-x", prNumber: testCase.callerPrNumber }),
           (error) => {
-            assert.match(error.message, /Ambiguous relay manifest/);
-            assert.match(error.message, /2 candidates/);
+            assert.match(error.message, /Mixed relay manifest reuse detected/);
             assert.match(error.message, new RegExp(staleRunId));
             assert.match(
               error.message,
@@ -497,6 +619,9 @@ test("resolveManifestRecord covers the stored-pr terminal exact-PR collision mat
                 `state=${escapeRegExp(testCase.expected.freshState)}, pr=${testCase.expected.freshPrLabel}`
               )
             );
+            assert.match(error.message, /Create a fresh dispatch for branch 'feature-x'/);
+            assert.doesNotMatch(error.message, /close-run\.js --run-id/);
+            assert.doesNotMatch(error.message, /--run-id/);
             return true;
           }
         );
@@ -571,6 +696,89 @@ test("resolveManifestRecord keeps merged and closed manifests reachable via expl
   assertExplicitSelectorsResolve(repoRoot, closedPath, closedRunId, STATES.CLOSED);
 });
 
+test("resolveManifestRecord rejects standalone --pr when only a stale terminal manifest carries the PR", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-resolver-pr-only-terminal-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  const staleRunId = createRunId({
+    branch: "feature-pr-only",
+    timestamp: new Date("2026-04-03T00:00:00.000Z"),
+  });
+  const stalePath = writeManifestRecord(repoRoot, {
+    runId: staleRunId,
+    branch: "feature-pr-only",
+    state: STATES.MERGED,
+    prNumber: 123,
+    updatedAt: "2026-04-03T00:00:00.000Z",
+  });
+
+  // Anti-theater: before the #174 standalone --pr hardening at relay-resolver.js:369-371, this
+  // selector ran `filterByPr(allRecords, 123)` and silently returned the merged manifest. Call-site
+  // extension meta-rule, memory/feedback_rubric_fail_closed.md; #170/#174.
+  assert.throws(
+    () => resolveManifestRecord({ repoRoot, prNumber: 123 }),
+    /No relay manifest found for pr '123'/
+  );
+  assertExplicitSelectorsResolve(repoRoot, stalePath, staleRunId, STATES.MERGED);
+});
+
+test("resolveManifestRecord rejects standalone --pr when a stale terminal PR match shares a branch with a fresh null-pr run", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-resolver-pr-only-mixed-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  writeManifestRecord(repoRoot, {
+    runId: createRunId({
+      branch: "feature-pr-only",
+      timestamp: new Date("2026-04-03T00:00:00.000Z"),
+    }),
+    branch: "feature-pr-only",
+    state: STATES.MERGED,
+    prNumber: 123,
+    updatedAt: "2026-04-03T00:00:00.000Z",
+  });
+  const freshRunId = createRunId({
+    branch: "feature-pr-only",
+    timestamp: new Date("2026-04-03T00:10:00.000Z"),
+  });
+  const freshPath = writeManifestRecord(repoRoot, {
+    runId: freshRunId,
+    branch: "feature-pr-only",
+    state: STATES.READY_TO_MERGE,
+    updatedAt: "2026-04-03T00:10:00.000Z",
+  });
+
+  // Anti-theater: before the #174 standalone --pr hardening at relay-resolver.js:369-371, the
+  // stale merged exact-PR match shadowed the fresh non-terminal sibling because the call site was
+  // terminal-inclusive. Call-site extension meta-rule, memory/feedback_rubric_fail_closed.md; #170/#174.
+  assert.throws(
+    () => resolveManifestRecord({ repoRoot, prNumber: 123 }),
+    /No relay manifest found for pr '123'/
+  );
+  assertExplicitSelectorsResolve(repoRoot, freshPath, freshRunId, STATES.READY_TO_MERGE);
+});
+
+test("resolveManifestRecord preserves standalone --pr for active exact-PR matches", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-resolver-pr-only-active-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  const runId = createRunId({
+    branch: "feature-pr-only",
+    timestamp: new Date("2026-04-03T00:00:00.000Z"),
+  });
+  const manifestPath = writeManifestRecord(repoRoot, {
+    runId,
+    branch: "feature-pr-only",
+    state: STATES.DISPATCHED,
+    prNumber: 123,
+    updatedAt: "2026-04-03T00:00:00.000Z",
+  });
+
+  // Anti-theater: the #174 narrowing at relay-resolver.js:369-371 must stay exact-PR preserving for
+  // active runs; otherwise the call-site extension fix would over-correct and strand legitimate resume
+  // by PR. Call-site extension meta-rule, memory/feedback_rubric_fail_closed.md; #174.
+  const match = resolveManifestRecord({ repoRoot, prNumber: 123 });
+  assert.equal(match.manifestPath, manifestPath);
+  assert.equal(match.data.run_id, runId);
+  assert.equal(match.data.state, STATES.DISPATCHED);
+});
+
 test("resolveManifestRecord exercises the #170 stale-terminal recovery flow end-to-end", () => {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-resolver-terminal-e2e-"));
   process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
@@ -627,6 +835,55 @@ test("resolveManifestRecord exercises the #170 stale-terminal recovery flow end-
   assert.equal(match.data.run_id, freshRunId);
   assert.equal(match.data.state, STATES.DISPATCHED);
   assert.equal(match.data.git.pr_number, null);
+});
+
+test("resolveManifestRecord names fresh dispatch for mixed terminal plus review_pending reuse and that recovery resolves cleanly", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-resolver-mixed-e2e-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  writeManifestRecord(repoRoot, {
+    runId: createRunId({
+      branch: "feature-mixed",
+      timestamp: new Date("2026-04-03T00:00:00.000Z"),
+    }),
+    branch: "feature-mixed",
+    state: STATES.MERGED,
+    prNumber: 123,
+    updatedAt: "2026-04-03T00:00:00.000Z",
+  });
+  writeManifestRecord(repoRoot, {
+    runId: createRunId({
+      branch: "feature-mixed",
+      timestamp: new Date("2026-04-03T00:10:00.000Z"),
+    }),
+    branch: "feature-mixed",
+    state: STATES.REVIEW_PENDING,
+    updatedAt: "2026-04-03T00:10:00.000Z",
+  });
+
+  // Anti-theater: without the #174 mixed-state recovery branch at relay-resolver.js:381-394 and the
+  // fresh-dispatch reachability preference at :340-355, this path either suggested unreachable
+  // commands or re-opened ambiguity after the operator followed the documented recovery. End-to-end
+  // recovery meta-rule, memory/feedback_rubric_fail_closed.md; #163/#170/#174.
+  assert.throws(
+    () => resolveManifestRecord({ repoRoot, branch: "feature-mixed", prNumber: 123 }),
+    (error) => {
+      assert.match(error.message, /Create a fresh dispatch for branch 'feature-mixed'/);
+      assert.match(error.message, /close-run is a no-op/);
+      assert.doesNotMatch(error.message, /close-run\.js --run-id/);
+      assert.doesNotMatch(error.message, /--run-id/);
+      return true;
+    }
+  );
+
+  const { manifestPath: freshPath, runId: freshRunId } = writeFreshDispatchedManifest(
+    repoRoot,
+    "feature-mixed",
+    "2026-04-03T00:20:00.000Z"
+  );
+  const match = resolveManifestRecord({ repoRoot, branch: "feature-mixed", prNumber: 123 });
+  assert.equal(match.manifestPath, freshPath);
+  assert.equal(match.data.run_id, freshRunId);
+  assert.equal(match.data.state, STATES.DISPATCHED);
 });
 
 test("resolveManifestRecord rejects ambiguous non-terminal branch matches and recovers with explicit selectors", () => {
@@ -942,6 +1199,38 @@ test("resolveManifestRecord keeps escalated manifests addressable by explicit se
   assertExplicitSelectorsResolve(repoRoot, manifestPath, runId, STATES.ESCALATED);
 });
 
+test("resolveManifestRecord rejects stale fallback candidates with invalid states instead of suggesting impossible close-run reasons", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-resolver-invalid-state-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  const runId = createRunId({
+    branch: "feature-invalid",
+    timestamp: new Date("2026-04-03T00:00:00.000Z"),
+  });
+  const manifestPath = writeManifestRecord(repoRoot, {
+    runId,
+    branch: "feature-invalid",
+    state: STATES.REVIEW_PENDING,
+    cleanupPolicy: "manual",
+    updatedAt: "2026-04-03T00:00:00.000Z",
+  });
+  const manifest = readManifest(manifestPath).data;
+  manifest.state = "bogus";
+  writeManifest(manifestPath, manifest);
+
+  // Anti-theater: before the #174 invalid-state guard at relay-resolver.js:195-208, this path
+  // interpolated `stale_bogus_run` into the suggested command even though close-run would reject the
+  // manifest state. End-to-end recovery meta-rule, memory/feedback_rubric_fail_closed.md; #172/#174.
+  assert.throws(
+    () => resolveManifestRecord({ repoRoot, branch: "feature-invalid", prNumber: 120 }),
+    (error) => {
+      assert.match(error.message, /invalid state 'bogus'/);
+      assert.doesNotMatch(error.message, /stale_bogus_run/);
+      assert.doesNotMatch(error.message, /close-run\.js --run-id/);
+      return true;
+    }
+  );
+});
+
 test("resolveManifestRecord recovers from stale review_pending fallback after close-run and fresh dispatch", () => {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-resolver-review-pending-recovery-"));
   process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
@@ -999,6 +1288,70 @@ test("resolveManifestRecord recovers from stale review_pending fallback after cl
   const match = resolveManifestRecord({ repoRoot, branch: "feature-auth", prNumber: 120 });
   assert.equal(match.manifestPath, freshPath);
   assert.equal(match.data.run_id, freshRunId);
+});
+
+test("close-run remains reachable across active states named in stale-fallback recovery contracts", async (t) => {
+  for (const state of ACTIVE_CLOSE_RUN_STATES) {
+    await t.test(state, () => {
+      const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-resolver-close-state-"));
+      process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+      const branch = `feature-${state}`;
+      const runId = createRunId({
+        branch,
+        timestamp: new Date("2026-04-03T00:00:00.000Z"),
+      });
+      const manifestPath = writeManifestRecord(repoRoot, {
+        runId,
+        branch,
+        state,
+        cleanupPolicy: "manual",
+        updatedAt: "2026-04-03T00:00:00.000Z",
+      });
+
+      if (state !== STATES.DISPATCHED) {
+        const expectedReason = `stale_${state}_run`;
+        // Anti-theater: the #174 state whitelist in relay-resolver.js:195-208 must keep recommending
+        // only close-run commands that the real state machine accepts. End-to-end recovery meta-rule,
+        // memory/feedback_rubric_fail_closed.md; #163/#172/#174.
+        assert.throws(
+          () => resolveManifestRecord({ repoRoot, branch, prNumber: 120 }),
+          (error) => {
+            assert.match(error.message, new RegExp(escapeRegExp(`--reason ${JSON.stringify(expectedReason)}`)));
+            assert.match(error.message, new RegExp(escapeRegExp(`--run-id ${JSON.stringify(runId)}`)));
+            return true;
+          }
+        );
+      } else {
+        // Anti-theater: dispatched is the whitelist baseline. It does not emit stale-fallback recovery
+        // text because relay-resolver.js:354-355 returns it directly, but close-run must still accept
+        // the state so the #172 whitelist stays behaviorally true end to end.
+        const match = resolveManifestRecord({ repoRoot, branch, prNumber: 120 });
+        assert.equal(match.manifestPath, manifestPath);
+      }
+
+      const raw = execFileSync("node", [
+        CLOSE_RUN_SCRIPT,
+        "--repo", repoRoot,
+        "--run-id", runId,
+        "--reason", `stale_${state}_run`,
+        "--json",
+      ], { encoding: "utf-8" });
+      const result = JSON.parse(raw);
+      assert.equal(result.previousState, state);
+      assert.equal(result.state, STATES.CLOSED);
+      assert.equal(readManifest(manifestPath).data.state, STATES.CLOSED);
+
+      const { manifestPath: freshPath, runId: freshRunId } = writeFreshDispatchedManifest(
+        repoRoot,
+        branch,
+        "2026-04-03T00:15:00.000Z"
+      );
+      const match = resolveManifestRecord({ repoRoot, branch, prNumber: 120 });
+      assert.equal(match.manifestPath, freshPath);
+      assert.equal(match.data.run_id, freshRunId);
+      assert.equal(match.data.state, STATES.DISPATCHED);
+    });
+  }
 });
 
 test("resolveManifestRecord recovers from stale escalated fallback after close-run and fresh dispatch", () => {
