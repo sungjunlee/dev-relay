@@ -49,6 +49,34 @@ If the report returns valid JSON but there are no prior runs (`manifests: 0`, `e
 | Malformed manifest or event data | `Reliability report unavailable: <cause>. Proceeding without historical signal.` Use the first stderr line as `<cause>` and still render each `historical_signal.*` field as `no historical data available`. |
 | Any other non-zero exit (missing script, broken dependency, runtime error) | `Reliability report unavailable: <cause>. Proceeding without historical signal.` Surface the first stderr line when present, otherwise the exit code, then continue rubric design. |
 
+### 1.6 Read probe quality signals
+
+Before designing the rubric, read the repo-local quality signals:
+
+```bash
+node ${CLAUDE_SKILL_DIR}/scripts/probe-executor-env.js . --project-only --json
+```
+
+**Informational only:** the `probe_signal.*` output does not gate dispatch, does not alter state transitions, and does not modify rubric structure. Use the signal to inform rubric design, prerequisite naming, and Available Tools context; the planner picks what fits the task, the signal does not pick for them. No autonomy scoring, no auto-calibration of rubric depth — data exposure only.
+
+Focus on the current producer fields:
+
+| Probe signal field | Read from | Planning use |
+|--------------------|-----------|--------------|
+| `probe_signal.test_infra` | `project_tools.frameworks` filtered to test runners (`jest`, `vitest`, `mocha`, `playwright`, `@playwright/test`, `cypress`, `pytest`) | Use the detected runner to inform a prerequisite or automated factor when it fits the task; the signal informs the choice, it does not require one |
+| `probe_signal.lint_format` | `project_tools.frameworks` filtered to linters/formatters (`eslint`, `prettier`, `ruff`, `black`, `isort`, `pylint`) | Reuse the detected hygiene tool in prerequisites when that keeps the rubric grounded to repo-native checks |
+| `probe_signal.type_check` | `project_tools.frameworks` filtered to type checkers (`typescript`, `mypy`) plus `project_tools.scripts` commands containing `tsc --noEmit` or `mypy` | Prefer an existing type-check command such as `tsc --noEmit` or `mypy --strict` when it matches the task and repo conventions |
+| `probe_signal.ci` | `project_tools.ci` from `.github/workflows/*.yml` and `.github/workflows/*.yaml` | Reference detected CI workflows in the dispatch prompt's Available Tools context when that helps explain what automation already exists |
+| `probe_signal.scripts` | `project_tools.scripts` (top 5 by name order) | Pick an existing script as the prerequisite command rather than inventing a new one when the repo already exposes the right check |
+
+Optional additional fields such as `probe_signal.bundlers`, `probe_signal.a11y`, `probe_signal.bundle_size`, or `probe_signal.security` may be surfaced when present. Omit them when absent; the baseline five fields above stay fixed.
+
+| Case | Planner handling |
+|------|------------------|
+| No signals detected | `Probe signal: no quality infra detected.` Render each `probe_signal.*` field as `no quality infra detected`. This is acceptable, not an error. |
+| Probe failure / `agent_probe_error` present | `Probe signals unavailable: <cause>. Proceeding without probe signal.` Use the first stderr line, the `agent_probe_error` string, or the exit code as `<cause>`, then continue rubric design. |
+| Malformed JSON on stdout | `Probe signals unavailable: <cause>. Proceeding without probe signal.` Surface the parse error and continue rubric design. |
+
 ### 2. Build the rubric
 
 Use the guided interview (`references/rubric-design-guide.md`) to derive factors from AC, or convert directly:
@@ -168,9 +196,11 @@ Prerequisites (hygiene): as many as needed, uncounted. Factors (contract + quali
 
 Summarize the rubric before dispatch so weak calibration is visible:
 
+The `Probe signal` lines below are rendered from `probe-executor-env.js --project-only --json` and stay informational only.
+
 ```text
-Populated history example
--------------------------
+Synthetic populated signal example
+---------------------------------
 Prerequisites count: 2
 Contract factors: 2
 Quality factors: 2
@@ -183,11 +213,17 @@ Historical signal:
 historical_signal.stuck_factors: Docs (met_rate=0.5, avg_rounds_to_met=3); Coverage (met_rate=0.6667, avg_rounds_to_met=1.5)
 historical_signal.divergence_hotspots: Coverage (avg_delta=2.5, recommendation=Executor scores trend higher than review; tighten examples or add automation.); Docs (avg_delta=-2, recommendation=Reviewer scores trend higher than executor; check whether the factor is underspecified.)
 historical_signal.avg_rounds: contract.avg_rounds_to_met=1.5; quality.avg_rounds_to_met=1; metrics.median_rounds_to_ready=3
+Probe signal:
+probe_signal.test_infra: jest
+probe_signal.lint_format: eslint, prettier
+probe_signal.type_check: typescript, tsc --noEmit
+probe_signal.ci: GitHub Actions (ci.yml)
+probe_signal.scripts: npm run lint, npm run test, npm run typecheck
 Grade: A
 Action: dispatch allowed
 
-No-history example
-------------------
+No-history + no-signal example
+------------------------------
 Prerequisites count: 2
 Contract factors: 2
 Quality factors: 2
@@ -200,6 +236,12 @@ Historical signal: Empty-data state — historical signal not available, proceed
 historical_signal.stuck_factors: no historical data available
 historical_signal.divergence_hotspots: no historical data available
 historical_signal.avg_rounds: no historical data available
+Probe signal: no quality infra detected.
+probe_signal.test_infra: no quality infra detected
+probe_signal.lint_format: no quality infra detected
+probe_signal.type_check: no quality infra detected
+probe_signal.ci: no quality infra detected
+probe_signal.scripts: no quality infra detected
 Grade: A
 Action: dispatch allowed
 
@@ -217,6 +259,12 @@ Historical signal: Reliability report unavailable: Unexpected end of JSON input.
 historical_signal.stuck_factors: no historical data available
 historical_signal.divergence_hotspots: no historical data available
 historical_signal.avg_rounds: no historical data available
+Probe signal: Probe signals unavailable: probe timed out after 30s. Proceeding without probe signal.
+probe_signal.test_infra: no quality infra detected
+probe_signal.lint_format: no quality infra detected
+probe_signal.type_check: no quality infra detected
+probe_signal.ci: no quality infra detected
+probe_signal.scripts: no quality infra detected
 Grade: A
 Action: dispatch allowed
 ```
