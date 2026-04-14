@@ -81,4 +81,17 @@ New resolver regressions added in this PR:
 - preserved dispatched exact-PR resolution at both site A and site B
 - preserved `finalize-run --skip-merge --pr` merged-manifest cleanup path
 
-This mirror intentionally leaves `cleanup-worktrees.js:88,94` out of scope. That raw `run_id` leak remains tracked separately as `#176`.
+## Deferred Out Of Scope
+
+This mirror intentionally leaves the following out of scope. Each deferred item remains tracked as its own issue; this PR does not touch them even where the audit tempts.
+
+- `#176` — `cleanup-worktrees.js:88,94` raw `run_id` leak (MED). Filed as a separate follow-up to the iteration-6 codex challenge; linked from `#177`.
+- `#166` — concurrent gate-check stamping duplicates audit events (LOW).
+- `#163` — layer-higher recovery-path executability (MED).
+- `#160` — `paths.repo_root` / `paths.worktree` trust root validation (sibling-field class from #156).
+- `#161` — symlink rubric bypass (`path.resolve` vs `fs.realpath`).
+- `#158` — run-id collision under concurrent dispatch (LOW-MED).
+- `#151` — grandfather flag redesign into migration manifest + provenance.
+- `#150` — skip-path rubric status in audit trail.
+- `#152` — consistent repo-slug + path resolution.
+- `#153` — test fixtures default grandfathered; attack-surface coverage.
