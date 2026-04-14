@@ -67,11 +67,26 @@ test("scanProjectTools extracts pyproject.toml tools", () => {
   assert.ok(result.frameworks.some((f) => f.name === "ruff"));
 });
 
+test("scanProjectTools detects GitHub Actions workflows", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "probe-ci-"));
+  const workflowsDir = path.join(repoRoot, ".github", "workflows");
+  fs.mkdirSync(workflowsDir, { recursive: true });
+  fs.writeFileSync(path.join(workflowsDir, "ci.yml"), "name: CI\n", "utf-8");
+  fs.writeFileSync(path.join(workflowsDir, "nightly.yaml"), "name: Nightly\n", "utf-8");
+
+  const result = scanProjectTools(repoRoot);
+  assert.deepEqual(result.ci, [
+    { name: "ci.yml", source: ".github/workflows" },
+    { name: "nightly.yaml", source: ".github/workflows" },
+  ]);
+});
+
 test("scanProjectTools handles missing files gracefully", () => {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "probe-empty-"));
   const result = scanProjectTools(repoRoot);
   assert.deepEqual(result.scripts, []);
   assert.deepEqual(result.frameworks, []);
+  assert.deepEqual(result.ci, []);
 });
 
 test("scanProjectTools handles malformed package.json gracefully", () => {
@@ -80,6 +95,7 @@ test("scanProjectTools handles malformed package.json gracefully", () => {
   const result = scanProjectTools(repoRoot);
   assert.deepEqual(result.scripts, []);
   assert.deepEqual(result.frameworks, []);
+  assert.deepEqual(result.ci, []);
 });
 
 test("scanProjectTools merges results from package.json + Makefile + pyproject.toml", () => {
@@ -96,6 +112,7 @@ test("scanProjectTools merges results from package.json + Makefile + pyproject.t
   assert.ok(result.scripts.some((s) => s.name === "make lint" && s.source === "Makefile"));
   assert.ok(result.frameworks.some((f) => f.name === "jest" && f.source === "package.json"));
   assert.ok(result.frameworks.some((f) => f.name === "pytest" && f.source === "pyproject.toml"));
+  assert.deepEqual(result.ci, []);
 });
 
 // ---------------------------------------------------------------------------
@@ -152,6 +169,7 @@ test("CLI --project-only works without executor", () => {
   assert.equal(output.executor, null);
   assert.ok(output.project_tools.scripts.some((s) => s.name === "npm run test"));
   assert.ok(output.project_tools.frameworks.some((f) => f.name === "jest"));
+  assert.deepEqual(output.project_tools.ci, []);
 });
 
 test("CLI requires --executor when not --project-only", () => {
