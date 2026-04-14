@@ -44,9 +44,24 @@ Rules 3, 6, and 7 are directly load-bearing on this PR. Rules 1 and 4 are indire
 | `skills/relay-review/scripts/review-runner.js` | **UNCHANGED** | Review still does not consume probe signals; the evidence lives in this mirror doc. |
 | `skills/relay-merge/scripts/finalize-run.js` | **UNCHANGED** | Merge flow remains independent of probe-signal consumption. |
 
+Additional adjacent-path rows required by factor 4:
+
+| Consumer | Selector usage | Delta under #140 | Re-tested or deferred |
+| --- | --- | --- | --- |
+| `skills/relay-plan/scripts/reliability-report-consumer.js` | #139 historical-signal consumer | **UNCHANGED** — independent consumer, no coupling to probe signals | Covered by #139's own tests |
+| `skills/relay-plan/scripts/reliability-report-consumer.test.js` | #139 historical-signal consumer tests | **UNCHANGED** | Covered by #139's own suite |
+| `skills/relay-intake/**` | Intake skill | **UNCHANGED** — intake does not consume probe signals under #140 | n/a |
+| `skills/relay/**` | Umbrella relay skill | **UNCHANGED** — does not consume probe signals under #140 | n/a |
+
 ## Probe-Extension Choice
 
 Path X was taken. `skills/relay-plan/scripts/probe-executor-env.js` now scans `.github/workflows/*.yml` and `.github/workflows/*.yaml` into `project_tools.ci`, which lets the Quality Card render the literal AC2 example shape (`probe_signal.ci: GitHub Actions (...)`) without deferring a repo-local signal that was already cheap to expose. The change is additive only: `project_tools.scripts` and `project_tools.frameworks` are unchanged, and the planner consumer still treats every detected signal as informational only.
+
+## Out-of-Scope / Deferred
+
+- **autonomy scoring / auto-calibration** — EXPLICITLY DEFERRED. AC4 draws the line; anything that reads as "if signal X → decision Y" belongs to Phase 2.1 / 2.2, not Phase 0.3. No follow-up issue; this is an intentional non-goal.
+- **Non-`--project-only` agent-probe path** — EXPLICITLY DEFERRED. The agent probe (codex/claude `PROBE_PROMPT`) is consumed today by dispatch infra for tool availability context; keeping it there is part of the scope guard. #140 consumes only the `--project-only` output for rubric design.
+- **anti-temptation guard** — if during implementation or review a real producer bug surfaces in `probe-executor-env.js` outside #140's scope, the executor FILES A NEW ISSUE rather than folding in. Scope creep is the iteration-4 / #174 trap; it cannot be deferred post-hoc.
 
 ## Deferred-Issue Inventory
 
@@ -127,6 +142,15 @@ $ grep -rn "probe-executor-env" skills/relay-dispatch/SKILL.md skills/relay-revi
 $ grep -n "Rubric Quality Card" skills/relay-plan/SKILL.md
 195:### Rubric Quality Card
 ```
+
+## Line-number drift discipline
+
+**Line-number drift discipline.** The Section 1.6 insertion shifts every downstream SKILL.md line number — most visibly the `Rubric Quality Card` block (previously `:167-222` on the post-#139 tree, now `:195-269` on this PR's head). Every future review round that edits `skills/relay-plan/SKILL.md` MUST regenerate the pinned references in this docs mirror as the LAST edit of the round. The #174 round 4 / #177 round 3-4 / #139 round 2 drift pattern showed that round-2 content shifts silently invalidate round-1 line numbers; treat regeneration as a round-discipline rule, not an afterthought.
+
+Regeneration steps:
+1. Re-run `grep -n "Rubric Quality Card" skills/relay-plan/SKILL.md` and update the quoted line number.
+2. Re-run every self-review grep command in the section above and replace the recorded output verbatim.
+3. Confirm every `skills/relay-plan/SKILL.md:<N>` reference in this mirror resolves to the expected content on PR head.
 
 ## Rendered Examples
 
