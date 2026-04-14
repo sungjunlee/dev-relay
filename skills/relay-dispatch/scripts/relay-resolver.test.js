@@ -160,6 +160,17 @@ function writeFreshDispatchedManifest(repoRoot, branch, updatedAt = "2026-04-03T
   return { runId, manifestPath };
 }
 
+function tamperManifestState(manifestPath, stateValue) {
+  const record = readManifest(manifestPath);
+  const manifest = record.data;
+  if (stateValue === undefined) {
+    delete manifest.state;
+  } else {
+    manifest.state = stateValue;
+  }
+  writeManifest(manifestPath, manifest, record.body);
+}
+
 test("findManifestByRunId rejects invalid run_id selectors before scanning manifests", () => {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-resolver-find-"));
   process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
@@ -949,6 +960,215 @@ test("resolveManifestRecord preserves standalone --pr for active exact-PR matche
   assert.equal(match.manifestPath, manifestPath);
   assert.equal(match.data.run_id, runId);
   assert.equal(match.data.state, STATES.DISPATCHED);
+});
+
+test("resolveManifestRecord branch+PR fails closed when a bogus exact-PR sibling shares a branch with a fresh dispatched null-pr sibling", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-resolver-issue-177-branch-pr-bogus-fresh-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  const stalePath = writeManifestRecord(repoRoot, {
+    runId: createRunId({
+      branch: "feature-x",
+      timestamp: new Date("2026-04-03T00:00:00.000Z"),
+    }),
+    branch: "feature-x",
+    state: STATES.MERGED,
+    prNumber: 123,
+    updatedAt: "2026-04-03T00:00:00.000Z",
+  });
+  tamperManifestState(stalePath, "bogus");
+  writeManifestRecord(repoRoot, {
+    runId: createRunId({
+      branch: "feature-x",
+      timestamp: new Date("2026-04-03T00:10:00.000Z"),
+    }),
+    branch: "feature-x",
+    state: STATES.DISPATCHED,
+    updatedAt: "2026-04-03T00:10:00.000Z",
+  });
+
+  // Pre-fix bypass at relay-resolver.js:~95 (filterByBranch excludeTerminal admitted unknown state
+  // via !BRANCH_ONLY_TERMINAL_STATES.has); returned the stale bogus record in the iteration-6
+  // codex challenge on 501eb8e.
+  assert.throws(
+    () => resolveManifestRecord({ repoRoot, branch: "feature-x", prNumber: 123 }),
+    (error) => {
+      assert.match(error.message, /No relay manifest found for branch 'feature-x' \+ pr '123'/);
+      assert.match(error.message, /invalid state 'bogus'/);
+      return true;
+    }
+  );
+});
+
+test("resolveManifestRecord branch+PR fails closed when a bogus exact-PR sibling is the only branch match", () => {
+  // Pre-fix bypass at relay-resolver.js:~95 (filterByBranch excludeTerminal admitted unknown
+  // state via !BRANCH_ONLY_TERMINAL_STATES.has) — iteration-6 probe 4, /tmp/codex-174-challenge.out.
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-resolver-issue-177-branch-pr-bogus-only-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  const stalePath = writeManifestRecord(repoRoot, {
+    runId: createRunId({
+      branch: "feature-x",
+      timestamp: new Date("2026-04-03T00:00:00.000Z"),
+    }),
+    branch: "feature-x",
+    state: STATES.MERGED,
+    prNumber: 123,
+    updatedAt: "2026-04-03T00:00:00.000Z",
+  });
+  tamperManifestState(stalePath, "bogus");
+
+  assert.throws(
+    () => resolveManifestRecord({ repoRoot, branch: "feature-x", prNumber: 123 }),
+    (error) => {
+      assert.match(error.message, /No relay manifest found for branch 'feature-x' \+ pr '123'/);
+      assert.match(error.message, /invalid state 'bogus'/);
+      return true;
+    }
+  );
+});
+
+test("resolveManifestRecord branch+PR fails closed when an exact-PR sibling is missing state", () => {
+  // Pre-fix bypass at relay-resolver.js:~95 (filterByBranch excludeTerminal admitted missing
+  // state via !BRANCH_ONLY_TERMINAL_STATES.has returning !false=true for undefined).
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-resolver-issue-177-branch-pr-missing-state-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  const stalePath = writeManifestRecord(repoRoot, {
+    runId: createRunId({
+      branch: "feature-x",
+      timestamp: new Date("2026-04-03T00:00:00.000Z"),
+    }),
+    branch: "feature-x",
+    state: STATES.MERGED,
+    prNumber: 123,
+    updatedAt: "2026-04-03T00:00:00.000Z",
+  });
+  tamperManifestState(stalePath, undefined);
+
+  // `undefined` is not in KNOWN_NON_TERMINAL_STATES either, so exact-PR branch resolution must
+  // fail closed instead of rebinding to the stale manifest.
+  assert.throws(
+    () => resolveManifestRecord({ repoRoot, branch: "feature-x", prNumber: 123 }),
+    (error) => {
+      assert.match(error.message, /No relay manifest found for branch 'feature-x' \+ pr '123'/);
+      assert.match(error.message, /invalid state 'unknown'/);
+      return true;
+    }
+  );
+});
+
+test("resolveManifestRecord standalone --pr fails closed when a bogus PR match coexists with a fresh null-pr sibling", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-resolver-issue-177-pr-only-bogus-fresh-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  const stalePath = writeManifestRecord(repoRoot, {
+    runId: createRunId({
+      branch: "feature-stale",
+      timestamp: new Date("2026-04-03T00:00:00.000Z"),
+    }),
+    branch: "feature-stale",
+    state: STATES.MERGED,
+    prNumber: 123,
+    updatedAt: "2026-04-03T00:00:00.000Z",
+  });
+  tamperManifestState(stalePath, "bogus");
+  writeManifestRecord(repoRoot, {
+    runId: createRunId({
+      branch: "feature-fresh",
+      timestamp: new Date("2026-04-03T00:10:00.000Z"),
+    }),
+    branch: "feature-fresh",
+    state: STATES.DISPATCHED,
+    updatedAt: "2026-04-03T00:10:00.000Z",
+  });
+
+  // Pre-fix bypass at relay-resolver.js:~82 (filterOutTerminal admitted unknown state via
+  // !isTerminalState); returned the stale bogus record in the iteration-6 codex challenge on 501eb8e.
+  assert.throws(
+    () => resolveManifestRecord({ repoRoot, prNumber: 123 }),
+    (error) => {
+      assert.match(error.message, /No relay manifest found for pr '123'/);
+      assert.match(error.message, /invalid state 'bogus'/);
+      return true;
+    }
+  );
+});
+
+test("resolveManifestRecord standalone --pr fails closed when a bogus PR match is the only candidate", () => {
+  // Pre-fix bypass at relay-resolver.js:~82 (filterOutTerminal admitted unknown state via
+  // !isTerminalState) — iteration-6 probe 8, /tmp/codex-174-challenge.out.
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-resolver-issue-177-pr-only-bogus-only-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  const stalePath = writeManifestRecord(repoRoot, {
+    runId: createRunId({
+      branch: "feature-pr-only",
+      timestamp: new Date("2026-04-03T00:00:00.000Z"),
+    }),
+    branch: "feature-pr-only",
+    state: STATES.MERGED,
+    prNumber: 123,
+    updatedAt: "2026-04-03T00:00:00.000Z",
+  });
+  tamperManifestState(stalePath, "bogus");
+
+  assert.throws(
+    () => resolveManifestRecord({ repoRoot, prNumber: 123 }),
+    (error) => {
+      assert.match(error.message, /No relay manifest found for pr '123'/);
+      assert.match(error.message, /invalid state 'bogus'/);
+      return true;
+    }
+  );
+});
+
+test("resolveManifestRecord standalone --pr fails closed when a PR match is missing state", () => {
+  // Pre-fix bypass at relay-resolver.js:~82 (filterOutTerminal admitted missing state via
+  // !isTerminalState returning !false=true for undefined).
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-resolver-issue-177-pr-only-missing-state-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  const stalePath = writeManifestRecord(repoRoot, {
+    runId: createRunId({
+      branch: "feature-pr-only",
+      timestamp: new Date("2026-04-03T00:00:00.000Z"),
+    }),
+    branch: "feature-pr-only",
+    state: STATES.MERGED,
+    prNumber: 123,
+    updatedAt: "2026-04-03T00:00:00.000Z",
+  });
+  tamperManifestState(stalePath, undefined);
+
+  // `undefined` is not in KNOWN_NON_TERMINAL_STATES either, so standalone --pr must reject it
+  // instead of treating the missing state like a non-terminal exact-PR match.
+  assert.throws(
+    () => resolveManifestRecord({ repoRoot, prNumber: 123 }),
+    (error) => {
+      assert.match(error.message, /No relay manifest found for pr '123'/);
+      assert.match(error.message, /invalid state 'unknown'/);
+      return true;
+    }
+  );
+});
+
+test("resolveManifestRecord preserves valid dispatched exact-PR resolution at branch+PR and standalone --pr sites", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-resolver-issue-177-dispatched-preserve-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  const runId = createRunId({
+    branch: "feature-x",
+    timestamp: new Date("2026-04-03T00:00:00.000Z"),
+  });
+  const manifestPath = writeManifestRecord(repoRoot, {
+    runId,
+    branch: "feature-x",
+    state: STATES.DISPATCHED,
+    prNumber: 123,
+    updatedAt: "2026-04-03T00:00:00.000Z",
+  });
+
+  const branchMatch = resolveManifestRecord({ repoRoot, branch: "feature-x", prNumber: 123 });
+  assert.equal(branchMatch.manifestPath, manifestPath);
+  assert.equal(branchMatch.data.state, STATES.DISPATCHED);
+
+  const prMatch = resolveManifestRecord({ repoRoot, prNumber: 123 });
+  assert.equal(prMatch.manifestPath, manifestPath);
+  assert.equal(prMatch.data.state, STATES.DISPATCHED);
 });
 
 test("resolveManifestRecord exercises the #170 stale-terminal recovery flow end-to-end", () => {
