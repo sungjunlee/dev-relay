@@ -1000,6 +1000,8 @@ test("resolveManifestRecord branch+PR fails closed when a bogus exact-PR sibling
 });
 
 test("resolveManifestRecord branch+PR fails closed when a bogus exact-PR sibling is the only branch match", () => {
+  // Pre-fix bypass at relay-resolver.js:~95 (filterByBranch excludeTerminal admitted unknown
+  // state via !BRANCH_ONLY_TERMINAL_STATES.has) — iteration-6 probe 4, /tmp/codex-174-challenge.out.
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-resolver-issue-177-branch-pr-bogus-only-"));
   process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
   const stalePath = writeManifestRecord(repoRoot, {
@@ -1025,6 +1027,8 @@ test("resolveManifestRecord branch+PR fails closed when a bogus exact-PR sibling
 });
 
 test("resolveManifestRecord branch+PR fails closed when an exact-PR sibling is missing state", () => {
+  // Pre-fix bypass at relay-resolver.js:~95 (filterByBranch excludeTerminal admitted missing
+  // state via !BRANCH_ONLY_TERMINAL_STATES.has returning !false=true for undefined).
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-resolver-issue-177-branch-pr-missing-state-"));
   process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
   const stalePath = writeManifestRecord(repoRoot, {
@@ -1088,6 +1092,8 @@ test("resolveManifestRecord standalone --pr fails closed when a bogus PR match c
 });
 
 test("resolveManifestRecord standalone --pr fails closed when a bogus PR match is the only candidate", () => {
+  // Pre-fix bypass at relay-resolver.js:~82 (filterOutTerminal admitted unknown state via
+  // !isTerminalState) — iteration-6 probe 8, /tmp/codex-174-challenge.out.
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-resolver-issue-177-pr-only-bogus-only-"));
   process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
   const stalePath = writeManifestRecord(repoRoot, {
@@ -1113,6 +1119,8 @@ test("resolveManifestRecord standalone --pr fails closed when a bogus PR match i
 });
 
 test("resolveManifestRecord standalone --pr fails closed when a PR match is missing state", () => {
+  // Pre-fix bypass at relay-resolver.js:~82 (filterOutTerminal admitted missing state via
+  // !isTerminalState returning !false=true for undefined).
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-resolver-issue-177-pr-only-missing-state-"));
   process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
   const stalePath = writeManifestRecord(repoRoot, {

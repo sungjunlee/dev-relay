@@ -94,19 +94,25 @@ function findInvalidStateRecord(records) {
 }
 
 function filterOutTerminal(records) {
+  // [fail-closed whitelist] meta-rule 7 (memory/feedback_rubric_fail_closed.md): unknown/tampered
+  // states fail-closed via the derived KNOWN_NON_TERMINAL_STATES whitelist rather than fail-open via
+  // negation of BRANCH_ONLY_TERMINAL_STATES. Called at the standalone --pr default site (#174/#177).
   return records.filter((record) => isNonTerminalState(record?.data?.state));
 }
 
 function filterByBranch(records, branch, { excludeTerminal = false } = {}) {
-  // [state-aware] via excludeTerminal opt-in (#149). See audit table; this selector has
+  // [fail-closed whitelist] via excludeTerminal opt-in (#149/#177). See audit table; this selector
   // 7 resolveManifestRecord call sites plus 1 helper-composition call site in this file.
   // Callers must opt in for stale-inheritance-sensitive paths; standalone branch-only resolution does.
   return records.filter((record) => {
     if (record?.data?.git?.working_branch !== branch) {
       return false;
     }
-    // #149: branch-only resolution must ignore merged/closed runs; escalated stays eligible because
-    // operators can recover by closing and re-dispatching (#163), so only true terminal states are excluded.
+    // #149 introduced terminal exclusion; #177 meta-rule 7 (memory/feedback_rubric_fail_closed.md)
+    // converts the predicate from terminal-blacklist negation (fail-open on unknown)
+    // to !isNonTerminalState(state) (fail-closed on unknown/tampered state values). Escalated stays
+    // eligible because operators can recover by closing and re-dispatching (#163); only known
+    // terminal states and unknown/tampered states are excluded.
     if (excludeTerminal && !isNonTerminalState(record?.data?.state)) {
       return false;
     }
@@ -144,6 +150,10 @@ function hasTerminalExactPrSibling(records, prNumber) {
 }
 
 function isStaleNullPrSibling(record) {
+  // [fail-closed classifier] meta-rule 7 (memory/feedback_rubric_fail_closed.md): uses the derived
+  // KNOWN_NON_TERMINAL_STATES whitelist as defense-in-depth. In normal flow this classifier only
+  // receives records from nonTerminalBranchMatches (already whitelist-filtered via filterByBranch),
+  // but tightening keeps the classifier safe if a future caller feeds it an unfiltered set.
   return isNonTerminalState(record?.data?.state)
     && record?.data?.state !== STATES.DISPATCHED
     && !hasStoredPrNumber(record);
@@ -425,14 +435,16 @@ function resolveManifestRecord({
     const branchFallbackMatches = filterByBranchPrFallback(allRecords, branch);
     const nonTerminalBranchMatches = filterByBranch(allRecords, branch, { excludeTerminal: true });
     const invalidBranchStateRecord = findInvalidStateRecord(branchMatches);
-    // #174: this retry path deliberately asks a DIFFERENT question than the exact-PR resolver above.
-    // Feed the PR selector a terminal-only subset here so the mixed-state detector can distinguish
-    // "stale terminal stored the caller PR" from ordinary non-terminal ambiguity.
-    // INTENTIONAL DETECTION — unlike the EXCLUSION sites converted under meta-rule 7
-    // (fail-closed state-validation, memory/feedback_rubric_fail_closed.md), this predicate asks
-    // "which branch matches are KNOWN terminal states?" and correctly excludes tampered/unknown
-    // states from terminalExactPrMatches. Do NOT flip to whitelist — a tampered `bogus` state is
-    // NOT a terminal sibling and correctly stays out of the mixed-state detector's input.
+    // #170/#174/meta-rule 7: this retry path deliberately asks a DIFFERENT question than the
+    // exact-PR resolver above. The mixed-state detector originated in #170 (stale terminal +
+    // matching stored PR vs fresh non-terminal sibling); #174 refined the ambiguity branch;
+    // #177 converted every EXCLUSION site to the KNOWN_NON_TERMINAL_STATES whitelist but
+    // INTENTIONALLY preserves blacklist semantics HERE because the predicate asks "which branch
+    // matches are KNOWN terminal states?" for positive detection, not for exclusion
+    // (memory/feedback_rubric_fail_closed.md, meta-rule 7). A tampered `bogus` state is NOT a
+    // terminal sibling and correctly stays out of terminalExactPrMatches; do NOT flip to
+    // whitelist here — the mixed-state detector would then misfire on unknown states and mask
+    // the fail-closed contract at the EXCLUSION sites.
     const terminalExactPrMatches = filterByPr(
       branchMatches.filter((record) => BRANCH_ONLY_TERMINAL_STATES.has(record?.data?.state)),
       prNumber
