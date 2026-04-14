@@ -46,8 +46,8 @@ If the report returns valid JSON but there are no prior runs (`manifests: 0`, `e
 | Case | Planner handling |
 |------|------------------|
 | No prior runs / empty history | `Empty-data state — historical signal not available, proceed to rubric design.` Render each `historical_signal.*` field as `no historical data available`. |
-| Malformed manifest or event data | `Reliability report unavailable: <cause>. Proceeding without historical signal.` Use the first stderr line as `<cause>` and still render each `historical_signal.*` field as `no historical data available`. |
-| Any other non-zero exit (missing script, broken dependency, runtime error) | `Reliability report unavailable: <cause>. Proceeding without historical signal.` Surface the first stderr line when present, otherwise the exit code, then continue rubric design. |
+| Malformed manifest or event data | `Reliability report unavailable: <cause>. Proceeding without historical signal.` Use the first stderr line (with any leading `Error:` prefix stripped) as `<cause>` and still render each `historical_signal.*` field as `no historical data available`. |
+| Any other non-zero exit (missing script, broken dependency, runtime error) | `Reliability report unavailable: <cause>. Proceeding without historical signal.` Surface the first stderr line (with any leading `Error:` prefix stripped) when present, otherwise the exit code, then continue rubric design. |
 
 ### 1.6 Read probe quality signals
 
@@ -74,7 +74,7 @@ Optional additional fields such as `probe_signal.bundlers`, `probe_signal.a11y`,
 | Case | Planner handling |
 |------|------------------|
 | No signals detected | `Probe signal: no quality infra detected.` Render each `probe_signal.*` field as `no quality infra detected`. This is acceptable, not an error. |
-| Probe failure / `agent_probe_error` present | `Probe signals unavailable: <cause>. Proceeding without probe signal.` Use the first stderr line, the `agent_probe_error` string, or the exit code as `<cause>`, then continue rubric design. |
+| Probe failure / `agent_probe_error` present | `Probe signals unavailable: <cause>. Proceeding without probe signal.` Use the first stderr line (with any leading `Error:` prefix stripped), the `agent_probe_error` string, or the exit code as `<cause>`, then continue rubric design. |
 | Malformed JSON on stdout | `Probe signals unavailable: <cause>. Proceeding without probe signal.` Surface the parse error and continue rubric design. |
 
 ### 2. Build the rubric
