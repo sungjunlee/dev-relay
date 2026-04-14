@@ -60,15 +60,21 @@ Rules 3, 6, and 7 are directly load-bearing on this PR. Rules 1 and 4 are indire
 ## Self-Review Grep
 
 ```text
-$ grep -rn "reliability-report" skills/relay-dispatch/SKILL.md skills/relay-review/SKILL.md skills/relay-merge/SKILL.md skills/relay-intake/SKILL.md skills/relay/SKILL.md
-skills/relay-dispatch/SKILL.md:148:${CLAUDE_SKILL_DIR}/scripts/reliability-report.js --repo . --json
+$ grep -n "does not gate dispatch" skills/relay-plan/SKILL.md
+34:**Informational only:** the `historical_signal.*` output does not gate dispatch, does not alter state transitions, and does not modify rubric structure. Use this `reliability-report.js` input to tighten factor wording, calibration examples, and review guidance; the existing rubric structure, grading logic, and dispatch eligibility are unchanged.
 
-$ grep -n "reliability-report" skills/relay-plan/SKILL.md
-31:node ${CLAUDE_SKILL_DIR}/../relay-dispatch/scripts/reliability-report.js --repo . --json
-34:informational only: use this `reliability-report.js` input to tighten factor wording, calibration examples, and review guidance, but keep the existing rubric structure, grading logic, and dispatch eligibility unchanged.
+$ grep -n "does not alter state transitions" skills/relay-plan/SKILL.md
+34:**Informational only:** the `historical_signal.*` output does not gate dispatch, does not alter state transitions, and does not modify rubric structure. Use this `reliability-report.js` input to tighten factor wording, calibration examples, and review guidance; the existing rubric structure, grading logic, and dispatch eligibility are unchanged.
+
+$ grep -n "does not modify rubric structure" skills/relay-plan/SKILL.md
+34:**Informational only:** the `historical_signal.*` output does not gate dispatch, does not alter state transitions, and does not modify rubric structure. Use this `reliability-report.js` input to tighten factor wording, calibration examples, and review guidance; the existing rubric structure, grading logic, and dispatch eligibility are unchanged.
+
+$ grep -n "factor_analysis.factors" skills/relay-plan/SKILL.md
+40:| `historical_signal.stuck_factors` | `factor_analysis.most_stuck_factor` plus every entry in `factor_analysis.factors` where `met_rate < 1.0` or `avg_rounds_to_met >= 3` | Surface factors that historically stall so the rubric names the weak spot directly |
 
 $ grep -n "historical_signal\." skills/relay-plan/SKILL.md
-40:| `historical_signal.stuck_factors` | `factor_analysis.most_stuck_factor` plus every factor where `met_rate < 1.0` or `avg_rounds_to_met >= 3` | Surface factors that historically stall so the rubric names the weak spot directly |
+34:**Informational only:** the `historical_signal.*` output does not gate dispatch, does not alter state transitions, and does not modify rubric structure. Use this `reliability-report.js` input to tighten factor wording, calibration examples, and review guidance; the existing rubric structure, grading logic, and dispatch eligibility are unchanged.
+40:| `historical_signal.stuck_factors` | `factor_analysis.most_stuck_factor` plus every entry in `factor_analysis.factors` where `met_rate < 1.0` or `avg_rounds_to_met >= 3` | Surface factors that historically stall so the rubric names the weak spot directly |
 41:| `historical_signal.divergence_hotspots` | `rubric_insights.divergence_hotspots` (top 3 by `occurrences`, carrying `factor_pattern`, `avg_delta`, and `recommendation` verbatim) | Surface disagreement hotspots so the rubric tightens examples or adds automation where useful |
 42:| `historical_signal.avg_rounds` | `rubric_insights.tier_effectiveness.contract.avg_rounds_to_met`, `rubric_insights.tier_effectiveness.quality.avg_rounds_to_met`, and `metrics.median_rounds_to_ready` | Calibrate how sharp the contract vs quality checks need to be |
 48:| No prior runs / empty history | `Empty-data state — historical signal not available, proceed to rubric design.` Render each `historical_signal.*` field as `no historical data available`. |
@@ -83,16 +89,14 @@ $ grep -n "historical_signal\." skills/relay-plan/SKILL.md
 218:historical_signal.divergence_hotspots: no historical data available
 219:historical_signal.avg_rounds: no historical data available
 
-$ grep -n "informational only" skills/relay-plan/SKILL.md
-34:informational only: use this `reliability-report.js` input to tighten factor wording, calibration examples, and review guidance, but keep the existing rubric structure, grading logic, and dispatch eligibility unchanged.
-
-$ grep -nE "(reject|block|fail|abort|gate).*(most_stuck|divergence|historical_signal|reliability.report)" skills/relay-plan/SKILL.md
+$ grep -rn "reliability-report" skills/relay-dispatch/SKILL.md skills/relay-review/SKILL.md skills/relay-merge/SKILL.md skills/relay-intake/SKILL.md skills/relay/SKILL.md
+skills/relay-dispatch/SKILL.md:148:${CLAUDE_SKILL_DIR}/scripts/reliability-report.js --repo . --json
 
 $ grep -n "Rubric Quality Card" skills/relay-plan/SKILL.md
 167:### Rubric Quality Card
 ```
 
-The first grep is not empty because `skills/relay-dispatch/SKILL.md:148` already contained a pre-existing operator command reference to `reliability-report.js` before #139. That line is unchanged by this PR and is captured here so the mirror stays truthful.
+The cross-skill `reliability-report` grep is not empty because `skills/relay-dispatch/SKILL.md:148` already contained a pre-existing operator command reference to `reliability-report.js` before #139. That line is unchanged by this PR and is captured here so the mirror stays truthful.
 
 ## Rendered Examples
 
