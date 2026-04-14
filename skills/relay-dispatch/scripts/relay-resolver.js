@@ -7,21 +7,21 @@
 // negation of the terminal blacklist.
 // | Selector                 | Call site (line)                                    | State-awareness verdict                                | Closed by |
 // | ------------------------ | --------------------------------------------------- | ------------------------------------------------------ | --------- |
-// | filterByBranch           | filterByBranchPrFallback:127                        | fail-closed via derived non-terminal whitelist (meta-rule 7) | #149/#177 |
-// | filterByBranch           | resolveManifestRecord:356 branchMatches             | state-blind by purpose (error pool; sibling excludes)  | #174      |
-// | filterByBranch           | resolveManifestRecord:357 nonTerminalBranchMatches  | fail-closed via derived non-terminal whitelist (meta-rule 7) | #149/#177 |
-// | filterByBranch           | resolveManifestRecord:390 branchMatches             | state-blind by purpose (error pool; sibling excludes)  | #174      |
-// | filterByBranch           | resolveManifestRecord:391 branch-only matches       | fail-closed via derived non-terminal whitelist (meta-rule 7) | #149/#177 |
-// | filterByBranch           | resolveManifestRecord:424 branchMatches             | state-blind by purpose (error pool; sibling excludes)  | #174      |
-// | filterByBranch           | resolveManifestRecord:426 nonTerminalBranchMatches  | fail-closed via derived non-terminal whitelist (meta-rule 7) | #149/#177 |
-// | filterByPr               | resolveManifestRecord:367 branch+PR on nonTerminal  | fail-closed via derived non-terminal whitelist composition (meta-rule 7) | #170/#177 |
-// | filterByPr               | resolveManifestRecord:400 standalone --pr candidates| state-blind by purpose (full PR candidate error pool)  | #174      |
-// | filterByPr               | resolveManifestRecord:406 standalone --pr opt-in    | state-blind by opt-in includeTerminal=true             | #174      |
-// | filterByPr               | resolveManifestRecord:410 standalone --pr default   | fail-closed via derived non-terminal whitelist composition (meta-rule 7) | #174/#177 |
-// | filterByPr               | resolveManifestRecord:436 retry terminal-only       | terminal-only by purpose (mixed-state detector)        | #170/#174/#177 |
-// | filterByBranchPrFallback | resolveManifestRecord:358 branch+PR fallback        | fail-closed via derived non-terminal whitelist (meta-rule 7) + dispatched-only whitelist | #168/#177 |
-// | filterByBranchPrFallback | resolveManifestRecord:425 retry fallback            | fail-closed via derived non-terminal whitelist (meta-rule 7) + dispatched-only whitelist | #168/#177 |
-// | findManifestByRunId      | resolveManifestRecord:342 explicit --run-id         | state-blind by design                                  | n/a       |
+// | filterByBranch           | filterByBranchPrFallback:133                        | fail-closed via derived non-terminal whitelist (meta-rule 7) | #149/#177 |
+// | filterByBranch           | resolveManifestRecord:366 branchMatches             | state-blind by purpose (error pool; sibling excludes)  | #174      |
+// | filterByBranch           | resolveManifestRecord:367 nonTerminalBranchMatches  | fail-closed via derived non-terminal whitelist (meta-rule 7) | #149/#177 |
+// | filterByBranch           | resolveManifestRecord:400 branchMatches             | state-blind by purpose (error pool; sibling excludes)  | #174      |
+// | filterByBranch           | resolveManifestRecord:401 branch-only matches       | fail-closed via derived non-terminal whitelist (meta-rule 7) | #149/#177 |
+// | filterByBranch           | resolveManifestRecord:434 branchMatches             | state-blind by purpose (error pool; sibling excludes)  | #174      |
+// | filterByBranch           | resolveManifestRecord:436 nonTerminalBranchMatches  | fail-closed via derived non-terminal whitelist (meta-rule 7) | #149/#177 |
+// | filterByPr               | resolveManifestRecord:377 branch+PR on nonTerminal  | fail-closed via derived non-terminal whitelist composition (meta-rule 7) | #170/#177 |
+// | filterByPr               | resolveManifestRecord:410 standalone --pr candidates| state-blind by purpose (full PR candidate error pool)  | #174      |
+// | filterByPr               | resolveManifestRecord:416 standalone --pr opt-in    | state-blind by opt-in includeTerminal=true             | #174      |
+// | filterByPr               | resolveManifestRecord:420 standalone --pr default   | fail-closed via derived non-terminal whitelist composition (meta-rule 7) | #174/#177 |
+// | filterByPr               | resolveManifestRecord:448 retry terminal-only       | terminal-only by purpose (mixed-state detector)        | #170/#174/#177 |
+// | filterByBranchPrFallback | resolveManifestRecord:368 branch+PR fallback        | fail-closed via derived non-terminal whitelist (meta-rule 7) + dispatched-only whitelist | #168/#177 |
+// | filterByBranchPrFallback | resolveManifestRecord:435 retry fallback            | fail-closed via derived non-terminal whitelist (meta-rule 7) + dispatched-only whitelist | #168/#177 |
+// | findManifestByRunId      | resolveManifestRecord:352 explicit --run-id         | state-blind by design                                  | n/a       |
 // See docs/issue-177-fail-closed-state-validation.md for consumer audit, grep proof, and the
 // iteration-6 pattern-break rationale.
 // ---------------------------------------------------------------------------
