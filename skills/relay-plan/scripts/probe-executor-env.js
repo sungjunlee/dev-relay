@@ -147,14 +147,30 @@ function scanPyproject(repoPath) {
   }
 }
 
+function scanCiWorkflows(repoPath) {
+  const workflowsDir = path.join(repoPath, ".github", "workflows");
+  if (!fs.existsSync(workflowsDir)) return [];
+
+  try {
+    return fs.readdirSync(workflowsDir)
+      .filter((name) => /\.ya?ml$/i.test(name))
+      .sort((left, right) => left.localeCompare(right))
+      .map((name) => ({ name, source: ".github/workflows" }));
+  } catch {
+    return [];
+  }
+}
+
 function scanProjectTools(repoPath) {
   const pkg = scanPackageJson(repoPath);
   const makeTargets = scanMakefile(repoPath);
   const pyTools = scanPyproject(repoPath);
+  const ci = scanCiWorkflows(repoPath);
 
   return {
     scripts: [...pkg.scripts, ...makeTargets],
     frameworks: [...pkg.devDeps, ...pyTools],
+    ci,
   };
 }
 
@@ -250,6 +266,11 @@ function run({ repoPath, executor, timeout, projectOnly, jsonOut }) {
     if (projectTools.scripts.length > 0) {
       console.log(`\nProject scripts:`);
       projectTools.scripts.forEach((t) => console.log(`  ${t.name} (${t.source})`));
+    }
+
+    if (projectTools.ci.length > 0) {
+      console.log(`\nCI workflows:`);
+      projectTools.ci.forEach((t) => console.log(`  ${t.name} (${t.source})`));
     }
   }
 }
