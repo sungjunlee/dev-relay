@@ -1,31 +1,38 @@
 // ---------------------------------------------------------------------------
-// Resolver selector x CALL-SITE audit table (#174)
+// Resolver selector x CALL-SITE audit table (#177)
 // Call-site extension meta-rule: when fixing one selector call site, audit every other call site
 // of that selector in the same PR (iteration-4 scope-boundary trap note, memory/feedback_rubric_fail_closed.md; closes the #149 -> #165 -> #168 -> #170 ladder).
+// Fail-closed state-validation meta-rule 7 (memory/feedback_rubric_fail_closed.md): every
+// EXCLUSION site that filters by state must gate on a whitelist derived from STATES, not on
+// negation of the terminal blacklist.
 // | Selector                 | Call site (line)                                    | State-awareness verdict                                | Closed by |
 // | ------------------------ | --------------------------------------------------- | ------------------------------------------------------ | --------- |
-// | filterByBranch           | filterByBranchPrFallback:112                        | state-aware via excludeTerminal=true                   | #149      |
-// | filterByBranch           | resolveManifestRecord:341 branchMatches             | state-blind by purpose (error pool; sibling excludes)  | #174      |
-// | filterByBranch           | resolveManifestRecord:342 nonTerminalBranchMatches  | state-aware via excludeTerminal=true                   | #149      |
-// | filterByBranch           | resolveManifestRecord:372 branchMatches             | state-blind by purpose (error pool; sibling excludes)  | #174      |
-// | filterByBranch           | resolveManifestRecord:373 branch-only matches       | state-aware via excludeTerminal=true                   | #149      |
-// | filterByBranch           | resolveManifestRecord:402 branchMatches             | state-blind by purpose (error pool; sibling excludes)  | #174      |
-// | filterByBranch           | resolveManifestRecord:404 nonTerminalBranchMatches  | state-aware via excludeTerminal=true                   | #149      |
-// | filterByPr               | resolveManifestRecord:351 branch+PR on nonTerminal  | state-aware via composed subset                        | #170      |
-// | filterByPr               | resolveManifestRecord:382 standalone --pr candidates| state-blind by purpose (full PR candidate error pool)  | #174      |
-// | filterByPr               | resolveManifestRecord:387 standalone --pr opt-in    | state-blind by opt-in includeTerminal=true             | #174      |
-// | filterByPr               | resolveManifestRecord:391 standalone --pr default   | state-aware via filterOutTerminal composition          | #174      |
-// | filterByPr               | resolveManifestRecord:408 retry terminal-only       | terminal-only by purpose (mixed-state detector)        | #170/#174 |
-// | filterByBranchPrFallback | resolveManifestRecord:343 branch+PR fallback        | dispatched-only whitelist                              | #168      |
-// | filterByBranchPrFallback | resolveManifestRecord:403 retry fallback            | dispatched-only whitelist                              | #168      |
-// | findManifestByRunId      | resolveManifestRecord:327 explicit --run-id         | state-blind by design                                  | n/a       |
-// See docs/issue-174-resolver-hardening.md for consumer audit, sibling-builder audit, and pattern-break rationale.
+// | filterByBranch           | filterByBranchPrFallback:133                        | fail-closed via derived non-terminal whitelist (meta-rule 7) | #149/#177 |
+// | filterByBranch           | resolveManifestRecord:366 branchMatches             | state-blind by purpose (error pool; sibling excludes)  | #174      |
+// | filterByBranch           | resolveManifestRecord:367 nonTerminalBranchMatches  | fail-closed via derived non-terminal whitelist (meta-rule 7) | #149/#177 |
+// | filterByBranch           | resolveManifestRecord:400 branchMatches             | state-blind by purpose (error pool; sibling excludes)  | #174      |
+// | filterByBranch           | resolveManifestRecord:401 branch-only matches       | fail-closed via derived non-terminal whitelist (meta-rule 7) | #149/#177 |
+// | filterByBranch           | resolveManifestRecord:434 branchMatches             | state-blind by purpose (error pool; sibling excludes)  | #174      |
+// | filterByBranch           | resolveManifestRecord:436 nonTerminalBranchMatches  | fail-closed via derived non-terminal whitelist (meta-rule 7) | #149/#177 |
+// | filterByPr               | resolveManifestRecord:377 branch+PR on nonTerminal  | fail-closed via derived non-terminal whitelist composition (meta-rule 7) | #170/#177 |
+// | filterByPr               | resolveManifestRecord:410 standalone --pr candidates| state-blind by purpose (full PR candidate error pool)  | #174      |
+// | filterByPr               | resolveManifestRecord:416 standalone --pr opt-in    | state-blind by opt-in includeTerminal=true             | #174      |
+// | filterByPr               | resolveManifestRecord:420 standalone --pr default   | fail-closed via derived non-terminal whitelist composition (meta-rule 7) | #174/#177 |
+// | filterByPr               | resolveManifestRecord:448 retry terminal-only       | terminal-only by purpose (mixed-state detector)        | #170/#174/#177 |
+// | filterByBranchPrFallback | resolveManifestRecord:368 branch+PR fallback        | fail-closed via derived non-terminal whitelist (meta-rule 7) + dispatched-only whitelist | #168/#177 |
+// | filterByBranchPrFallback | resolveManifestRecord:435 retry fallback            | fail-closed via derived non-terminal whitelist (meta-rule 7) + dispatched-only whitelist | #168/#177 |
+// | findManifestByRunId      | resolveManifestRecord:352 explicit --run-id         | state-blind by design                                  | n/a       |
+// See docs/issue-177-fail-closed-state-validation.md for consumer audit, grep proof, and the
+// iteration-6 pattern-break rationale.
 // ---------------------------------------------------------------------------
 
 const path = require("path");
 const { STATES, listManifestRecords, readManifest, validateRunId, validateTransition } = require("./relay-manifest");
 
 const BRANCH_ONLY_TERMINAL_STATES = new Set([STATES.MERGED, STATES.CLOSED]);
+const KNOWN_NON_TERMINAL_STATES = new Set(
+  Object.values(STATES).filter((state) => BRANCH_ONLY_TERMINAL_STATES.has(state) === false)
+);
 const KNOWN_STATES = new Set(Object.values(STATES));
 
 function formatSelector({ runId, manifestPath, branch, prNumber }) {
@@ -78,21 +85,35 @@ function isTerminalState(state) {
   return BRANCH_ONLY_TERMINAL_STATES.has(state);
 }
 
+function isNonTerminalState(state) {
+  return KNOWN_NON_TERMINAL_STATES.has(state);
+}
+
+function findInvalidStateRecord(records) {
+  return records.find((record) => !isKnownState(record?.data?.state)) || null;
+}
+
 function filterOutTerminal(records) {
-  return records.filter((record) => !isTerminalState(record?.data?.state));
+  // [fail-closed whitelist] meta-rule 7 (memory/feedback_rubric_fail_closed.md): unknown/tampered
+  // states fail-closed via the derived KNOWN_NON_TERMINAL_STATES whitelist rather than fail-open via
+  // negation of BRANCH_ONLY_TERMINAL_STATES. Called at the standalone --pr default site (#174/#177).
+  return records.filter((record) => isNonTerminalState(record?.data?.state));
 }
 
 function filterByBranch(records, branch, { excludeTerminal = false } = {}) {
-  // [state-aware] via excludeTerminal opt-in (#149). See audit table; this selector has
+  // [fail-closed whitelist] via excludeTerminal opt-in (#149/#177). See audit table; this selector
   // 7 resolveManifestRecord call sites plus 1 helper-composition call site in this file.
   // Callers must opt in for stale-inheritance-sensitive paths; standalone branch-only resolution does.
   return records.filter((record) => {
     if (record?.data?.git?.working_branch !== branch) {
       return false;
     }
-    // #149: branch-only resolution must ignore merged/closed runs; escalated stays eligible because
-    // operators can recover by closing and re-dispatching (#163), so only true terminal states are excluded.
-    if (excludeTerminal && BRANCH_ONLY_TERMINAL_STATES.has(record?.data?.state)) {
+    // #149 introduced terminal exclusion; #177 meta-rule 7 (memory/feedback_rubric_fail_closed.md)
+    // converts the predicate from terminal-blacklist negation (fail-open on unknown)
+    // to !isNonTerminalState(state) (fail-closed on unknown/tampered state values). Escalated stays
+    // eligible because operators can recover by closing and re-dispatching (#163); only known
+    // terminal states and unknown/tampered states are excluded.
+    if (excludeTerminal && !isNonTerminalState(record?.data?.state)) {
       return false;
     }
     return true;
@@ -129,7 +150,11 @@ function hasTerminalExactPrSibling(records, prNumber) {
 }
 
 function isStaleNullPrSibling(record) {
-  return !isTerminalState(record?.data?.state)
+  // [fail-closed classifier] meta-rule 7 (memory/feedback_rubric_fail_closed.md): uses the derived
+  // KNOWN_NON_TERMINAL_STATES whitelist as defense-in-depth. In normal flow this classifier only
+  // receives records from nonTerminalBranchMatches (already whitelist-filtered via filterByBranch),
+  // but tightening keeps the classifier safe if a future caller feeds it an unfiltered set.
+  return isNonTerminalState(record?.data?.state)
     && record?.data?.state !== STATES.DISPATCHED
     && !hasStoredPrNumber(record);
 }
@@ -341,6 +366,7 @@ function resolveManifestRecord({
     const branchMatches = filterByBranch(allRecords, branch);
     const nonTerminalBranchMatches = filterByBranch(allRecords, branch, { excludeTerminal: true });
     const branchFallbackMatches = filterByBranchPrFallback(allRecords, branch);
+    const invalidBranchStateRecord = findInvalidStateRecord(branchMatches);
     // #170: compose the PR selector with the non-terminal branch subset so stale merged/closed
     // manifests with stored pr_number === prNumber cannot shadow a fresh dispatched+null run.
     // Selector-composition axis enumeration meta-rule (memory/feedback_rubric_fail_closed.md):
@@ -358,13 +384,15 @@ function resolveManifestRecord({
         nonTerminalBranchMatches,
         branchFallbackMatches,
         prNumber,
-      })) {
+      }) && !invalidBranchStateRecord) {
         matches = branchFallbackMatches;
       }
       if (matches.length === 0 && nonTerminalBranchMatches.length > 1) {
         throw buildAmbiguousResolutionError({ branch, prNumber }, nonTerminalBranchMatches);
       }
-      if (matches.length === 0 && branchFallbackMatches.length === 1) {
+      // #177 / meta-rule 7: a branch with an unknown or missing state must fail closed instead of
+      // silently rebinding exact-PR resolution to the dispatched+null fallback.
+      if (matches.length === 0 && !invalidBranchStateRecord && branchFallbackMatches.length === 1) {
         matches = branchFallbackMatches;
       }
     }
@@ -383,6 +411,7 @@ function resolveManifestRecord({
       allRecords,
       prNumber
     );
+    const invalidPrCandidate = findInvalidStateRecord(prCandidates);
     if (includeTerminal) {
       matches = filterByPr(allRecords, prNumber); // standalone --pr is hardened by default (E1, #174); finalize-run --skip-merge opts into terminal inclusion to preserve the documented cleanup workflow.
     } else {
@@ -392,7 +421,10 @@ function resolveManifestRecord({
       if (matches.length === 0 && prCandidates.length > 0) {
         throw buildNoManifestError({ prNumber }, {
           candidates: prCandidates,
-          terminalOnly: true,
+          terminalOnly: !invalidPrCandidate,
+          recovery: invalidPrCandidate
+            ? buildStaleBranchFallbackRecoveryMessage(repoRoot, invalidPrCandidate)
+            : undefined,
         });
       }
     }
@@ -402,9 +434,17 @@ function resolveManifestRecord({
     const branchMatches = filterByBranch(allRecords, branch);
     const branchFallbackMatches = filterByBranchPrFallback(allRecords, branch);
     const nonTerminalBranchMatches = filterByBranch(allRecords, branch, { excludeTerminal: true });
-    // #174: this retry path deliberately asks a DIFFERENT question than the exact-PR resolver above.
-    // Feed the PR selector a terminal-only subset here so the mixed-state detector can distinguish
-    // "stale terminal stored the caller PR" from ordinary non-terminal ambiguity.
+    const invalidBranchStateRecord = findInvalidStateRecord(branchMatches);
+    // #170/#174/meta-rule 7: this retry path deliberately asks a DIFFERENT question than the
+    // exact-PR resolver above. The mixed-state detector originated in #170 (stale terminal +
+    // matching stored PR vs fresh non-terminal sibling); #174 refined the ambiguity branch;
+    // #177 converted every EXCLUSION site to the KNOWN_NON_TERMINAL_STATES whitelist but
+    // INTENTIONALLY preserves blacklist semantics HERE because the predicate asks "which branch
+    // matches are KNOWN terminal states?" for positive detection, not for exclusion
+    // (memory/feedback_rubric_fail_closed.md, meta-rule 7). A tampered `bogus` state is NOT a
+    // terminal sibling and correctly stays out of terminalExactPrMatches; do NOT flip to
+    // whitelist here — the mixed-state detector would then misfire on unknown states and mask
+    // the fail-closed contract at the EXCLUSION sites.
     const terminalExactPrMatches = filterByPr(
       branchMatches.filter((record) => BRANCH_ONLY_TERMINAL_STATES.has(record?.data?.state)),
       prNumber
@@ -424,7 +464,9 @@ function resolveManifestRecord({
     return validateManifestRecordRunId(ensureUniqueRecord(matches, { branch, prNumber }, {
       candidates: branchMatches.length > 0 ? branchMatches : [],
       terminalOnly: branchMatches.length > 0 && nonTerminalBranchMatches.length === 0,
-      recovery: staleFallbackRecord
+      recovery: invalidBranchStateRecord
+        ? buildStaleBranchFallbackRecoveryMessage(repoRoot, invalidBranchStateRecord)
+        : staleFallbackRecord
         ? buildStaleBranchFallbackRecoveryMessage(repoRoot, staleFallbackRecord)
         : branchMatches.length > 0 && nonTerminalBranchMatches.length === 0
         ? "Create a fresh dispatch for this branch before retrying."
