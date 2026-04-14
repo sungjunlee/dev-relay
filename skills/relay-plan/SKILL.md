@@ -23,6 +23,32 @@ Read the normalized task source (try in order, use first that succeeds):
 
 If relay-intake already produced a handoff brief, treat that file as the source of truth instead of re-reading the raw request.
 
+### 1.5 Read historical signal
+
+Before designing the rubric, read the relay reliability history:
+
+```bash
+node ${CLAUDE_SKILL_DIR}/../relay-dispatch/scripts/reliability-report.js --repo . --json
+```
+
+informational only: use this `reliability-report.js` input to tighten factor wording, calibration examples, and review guidance, but keep the existing rubric structure, grading logic, and dispatch eligibility unchanged.
+
+Focus on the current producer fields:
+
+| Historical signal field | Read from | Planning use |
+|-------------------------|-----------|--------------|
+| `historical_signal.stuck_factors` | `factor_analysis.most_stuck_factor` plus every factor where `met_rate < 1.0` or `avg_rounds_to_met >= 3` | Surface factors that historically stall so the rubric names the weak spot directly |
+| `historical_signal.divergence_hotspots` | `rubric_insights.divergence_hotspots` (top 3 by `occurrences`, carrying `factor_pattern`, `avg_delta`, and `recommendation` verbatim) | Surface disagreement hotspots so the rubric tightens examples or adds automation where useful |
+| `historical_signal.avg_rounds` | `rubric_insights.tier_effectiveness.contract.avg_rounds_to_met`, `rubric_insights.tier_effectiveness.quality.avg_rounds_to_met`, and `metrics.median_rounds_to_ready` | Calibrate how sharp the contract vs quality checks need to be |
+
+If the report returns valid JSON but there are no prior runs (`manifests: 0`, `events: 0`), treat that as empty history rather than an error.
+
+| Case | Planner handling |
+|------|------------------|
+| No prior runs / empty history | `Empty-data state — historical signal not available, proceed to rubric design.` Render each `historical_signal.*` field as `no historical data available`. |
+| Malformed manifest or event data | `Reliability report unavailable: <cause>. Proceeding without historical signal.` Use the first stderr line as `<cause>` and still render each `historical_signal.*` field as `no historical data available`. |
+| Any other non-zero exit (missing script, broken dependency, runtime error) | `Reliability report unavailable: <cause>. Proceeding without historical signal.` Surface the first stderr line when present, otherwise the exit code, then continue rubric design. |
+
 ### 2. Build the rubric
 
 Use the guided interview (`references/rubric-design-guide.md`) to derive factors from AC, or convert directly:
@@ -143,8 +169,8 @@ Prerequisites (hygiene): as many as needed, uncounted. Factors (contract + quali
 Summarize the rubric before dispatch so weak calibration is visible:
 
 ```text
-Rubric Quality Card
--------------------
+Populated history example
+-------------------------
 Prerequisites count: 2
 Contract factors: 2
 Quality factors: 2
@@ -153,6 +179,44 @@ Quality ratio: 50%
 Auto coverage: 3 / 6 checks automated across prerequisites + factors
 Calibration status: skipped (S/M task)
 Risk signals: none
+Historical signal:
+historical_signal.stuck_factors: Docs (met_rate=0.5, avg_rounds_to_met=3); Coverage (met_rate=0.6667, avg_rounds_to_met=1.5)
+historical_signal.divergence_hotspots: Coverage (avg_delta=2.5, recommendation=Executor scores trend higher than review; tighten examples or add automation.); Docs (avg_delta=-2, recommendation=Reviewer scores trend higher than executor; check whether the factor is underspecified.)
+historical_signal.avg_rounds: contract.avg_rounds_to_met=1.5; quality.avg_rounds_to_met=1; metrics.median_rounds_to_ready=3
+Grade: A
+Action: dispatch allowed
+
+No-history example
+------------------
+Prerequisites count: 2
+Contract factors: 2
+Quality factors: 2
+Substantive total: 4
+Quality ratio: 50%
+Auto coverage: 3 / 6 checks automated across prerequisites + factors
+Calibration status: skipped (S/M task)
+Risk signals: none
+Historical signal: Empty-data state — historical signal not available, proceed to rubric design.
+historical_signal.stuck_factors: no historical data available
+historical_signal.divergence_hotspots: no historical data available
+historical_signal.avg_rounds: no historical data available
+Grade: A
+Action: dispatch allowed
+
+Fallback example
+----------------
+Prerequisites count: 2
+Contract factors: 2
+Quality factors: 2
+Substantive total: 4
+Quality ratio: 50%
+Auto coverage: 3 / 6 checks automated across prerequisites + factors
+Calibration status: skipped (S/M task)
+Risk signals: none
+Historical signal: Reliability report unavailable: Unexpected end of JSON input. Proceeding without historical signal.
+historical_signal.stuck_factors: no historical data available
+historical_signal.divergence_hotspots: no historical data available
+historical_signal.avg_rounds: no historical data available
 Grade: A
 Action: dispatch allowed
 ```
