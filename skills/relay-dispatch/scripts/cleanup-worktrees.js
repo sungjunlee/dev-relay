@@ -22,6 +22,7 @@ const {
   writeManifest,
 } = require("./relay-manifest");
 const { appendRunEvent } = require("./relay-events");
+const { safeFormatRunId } = require("./relay-resolver");
 
 const args = process.argv.slice(2);
 
@@ -83,15 +84,18 @@ function run() {
     const updatedAt = Date.parse(data.timestamps?.updated_at || data.timestamps?.created_at || 0);
     const ageHours = updatedAt ? Math.round((now - updatedAt) / (60 * 60 * 1000)) : null;
     const cleanupStatus = data.cleanup?.status || CLEANUP_STATUSES.PENDING;
+    // safeFormatRunId falls back to the manifest basename on tampered run_id so cleanup still
+    // enumerates stale runs defensively; JSON.stringify keeps the closeCommand shell-safe.
+    const runId = safeFormatRunId({ manifestPath, data });
     const baseInfo = {
       manifestPath,
-      runId: data.run_id || path.basename(manifestPath, ".md"),
+      runId,
       state: data.state,
       branch: data.git?.working_branch || null,
       worktree: data.paths?.worktree || null,
       ageHours,
       cleanupStatus,
-      closeCommand: `node skills/relay-dispatch/scripts/close-run.js --repo ${JSON.stringify(repoRoot)} --run-id ${JSON.stringify(data.run_id || path.basename(manifestPath, ".md"))} --reason ${JSON.stringify("stale_non_terminal_run")}`,
+      closeCommand: `node skills/relay-dispatch/scripts/close-run.js --repo ${JSON.stringify(repoRoot)} --run-id ${JSON.stringify(runId)} --reason ${JSON.stringify("stale_non_terminal_run")}`,
     };
 
     if (!all && updatedAt && updatedAt > cutoff) {

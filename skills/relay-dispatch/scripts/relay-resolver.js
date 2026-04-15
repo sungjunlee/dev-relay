@@ -483,4 +483,5 @@ module.exports = {
   findManifestByRunId,
   hasStoredPrNumber,
   resolveManifestRecord,
+  safeFormatRunId,
 };

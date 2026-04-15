@@ -1,6 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { execFileSync } = require("child_process");
+const { execFileSync, spawnSync } = require("child_process");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
@@ -16,6 +16,7 @@ const {
 } = require("./relay-manifest");
 
 const SCRIPT = path.join(__dirname, "cleanup-worktrees.js");
+const PROJECT_ROOT = path.resolve(__dirname, "..", "..", "..");
 
 function setupRepo() {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-janitor-"));
@@ -134,4 +135,53 @@ test("cleanup-worktrees reports stale open runs without deleting them", () => {
   const manifest = readManifest(manifestPath).data;
   assert.equal(manifest.cleanup.status, "pending");
   assert.equal(manifest.next_action, "run_review");
+});
+
+test("cleanup-worktrees does not echo tampered run_id into operator output (#176)", () => {
+  // Anti-theater: without the #176 safeFormatRunId reuse at cleanup-worktrees.js:88/:94,
+  // the tampered run_id leaks into result.staleOpen[*].runId and the closeCommand --run-id.
+  const repoRoot = setupRepo();
+  const updatedAt = "2026-04-01T00:00:00.000Z";
+  const { manifestPath } = writeRun(repoRoot, {
+    branch: "issue-999",
+    state: STATES.REVIEW_PENDING,
+    updatedAt,
+  });
+  const fallbackRunId = path.basename(manifestPath, ".md");
+  const { data: tamperedManifest, body } = readManifest(manifestPath);
+  tamperedManifest.run_id = "../victim-run";
+  writeManifest(manifestPath, tamperedManifest, body);
+
+  const jsonRun = spawnSync(
+    process.execPath,
+    [SCRIPT, "--repo", repoRoot, "--all", "--json"],
+    { cwd: PROJECT_ROOT, encoding: "utf-8" }
+  );
+  assert.equal(jsonRun.status, 0, jsonRun.stderr);
+
+  const result = JSON.parse(jsonRun.stdout);
+  const allEntries = [
+    ...result.cleaned,
+    ...result.failed,
+    ...result.staleOpen,
+    ...result.skipped,
+  ];
+  assert.ok(allEntries.length > 0, "fixture should produce at least one entry");
+  for (const entry of allEntries) {
+    assert.doesNotMatch(entry.runId, /\.\.\/victim-run/, "runId field must not contain tampered substring");
+    assert.equal(entry.runId, fallbackRunId, "runId field should fall back to the manifest basename");
+    if (entry.closeCommand) {
+      assert.doesNotMatch(entry.closeCommand, /\.\.\/victim-run/, "closeCommand must not contain tampered substring");
+      assert.match(entry.closeCommand, new RegExp(fallbackRunId), "closeCommand uses basename fallback");
+    }
+  }
+
+  const textRun = spawnSync(
+    process.execPath,
+    [SCRIPT, "--repo", repoRoot, "--all"],
+    { cwd: PROJECT_ROOT, encoding: "utf-8" }
+  );
+  assert.equal(textRun.status, 0, textRun.stderr);
+  assert.doesNotMatch(textRun.stdout, /\.\.\/victim-run/, "text output must not contain tampered substring");
+  assert.match(textRun.stdout, new RegExp(fallbackRunId), "text output should use the manifest basename");
 });
