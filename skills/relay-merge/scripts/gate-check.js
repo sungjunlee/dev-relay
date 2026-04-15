@@ -30,7 +30,7 @@ const { execFileSync } = require("child_process");
 const { buildSkipComment, evaluateReviewGate } = require("./review-gate");
 const { getRunDir, readManifest, writeManifest } = require("../../relay-dispatch/scripts/relay-manifest");
 const { appendRunEvent, readRunEvents } = require("../../relay-dispatch/scripts/relay-events");
-const { resolveManifestRecord } = require("../../relay-dispatch/scripts/relay-resolver");
+const { resolveManifestRecord, isNonTerminalState } = require("../../relay-dispatch/scripts/relay-resolver");
 
 const PR_NUMBER_STAMP_LOCK_NAME = ".pr_number_stamp.lock";
 const PR_NUMBER_STAMP_LOCK_TIMEOUT_MS = 5000;
@@ -132,6 +132,16 @@ function stampPrNumberUnderLock(manifestRecord, numericPrNumber) {
 
   try {
     const freshRecord = readFreshManifestRecord(manifestRecord);
+
+    // Rule 4 (#166): re-apply the non-terminal whitelist after the fresh read.
+    // resolveManifestRecord filtered out merged/closed at the caller, but a
+    // concurrent close-run / finalize-run may have transitioned the manifest
+    // during our bounded wait. Fail-safe skip preserves the caller's contract
+    // without turning the race into a throw.
+    if (!isNonTerminalState(freshRecord.data?.state)) {
+      return freshRecord;
+    }
+
     if (freshRecord.data?.git?.pr_number !== undefined && freshRecord.data?.git?.pr_number !== null) {
       return freshRecord;
     }

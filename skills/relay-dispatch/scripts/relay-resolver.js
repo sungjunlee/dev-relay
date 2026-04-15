@@ -482,6 +482,7 @@ module.exports = {
   filterByPr,
   findManifestByRunId,
   hasStoredPrNumber,
+  isNonTerminalState,
   resolveManifestRecord,
   safeFormatRunId,
 };

@@ -13,6 +13,7 @@ This is a concurrency-containment fix within the write-once event contract intro
 - Rule 1, enforcement-layer split: layer A serializes the read-modify-write branch with a run-local lock, and layer B dedupes `pr_number_stamped` against the committed journal. Fixing only the manifest write would have repeated the old compliance-theater mistake because the corruption lived in the append-only audit layer.
 - Rule 3, end-to-end regression: the new regression spawns real `gate-check.js` child processes that share `RELAY_HOME` and the same fake PR payload, then asserts on committed `events.jsonl` contents. The pre-fix failure was verified out-of-band during dispatch round 1 on a scratch branch: rerunning this test against `gate-check.js:84-121` on `26c58fa` produced 3 duplicate `pr_number_stamped` rows. The checked-in harness exercises only the fixed `SCRIPT`.
 - Rule 4, state-machine-axis applicability: the relay state machine is intentionally untouched because `#166` is not a bad transition bug. The defect sits below `validateTransition()` in a first-resolution write path that already converged at the manifest layer.
+- Rule 4, inside-lock invariant preservation: `stampPrNumberUnderLock()` now re-applies `isNonTerminalState()` after `readFreshManifestRecord()`. That keeps the caller's non-terminal resolver contract intact if `close-run` or `finalize-run` transitions the manifest during the bounded lock wait.
 - Rule 6, call-site enumeration: every `pr_number_stamped` producer and every `git.pr_number` stamping path across `skills/relay-merge/`, `skills/relay-dispatch/`, and `skills/relay-review/` is classified below, with extra grep-only helper/read sites called out explicitly so there is no hidden sibling producer.
 - Rule 7, fail-safe vs fail-closed: lock timeout and prior-event detection are treated as fail-safe concurrency degradation, so gate-check re-reads and continues. That is deliberately distinct from the fail-closed security-correctness posture used in `#148` / `#155` / `#174` / `#177`.
 
@@ -20,7 +21,7 @@ This is a concurrency-containment fix within the write-once event contract intro
 
 | Site | Field / Event | Pattern | Classification |
 | --- | --- | --- | --- |
-| `gate-check.js:119-197` (`stampPrNumberUnderLock()` + `tryResolveManifestForPr()`) | `git.pr_number` + `pr_number_stamped` | first-resolution stamping when field is null | **FIXED** — layer-A mutex + layer-B committed-journal dedup applied at the only first-resolution discover-and-fill site. |
+| `gate-check.js:119-212` (`stampPrNumberUnderLock()` + `tryResolveManifestForPr()`) | `git.pr_number` + `pr_number_stamped` | first-resolution stamping when field is null | **FIXED** — layer-A mutex + layer-B committed-journal dedup applied at the only first-resolution discover-and-fill site, and the fresh locked read now re-applies the non-terminal whitelist before stamping. |
 | `finalize-run.js:293-300,359-366,373-380` | `merge_blocked` | per-attempt audit | **UNCHANGED — per-attempt audit**. Multiple rows are intentional because each blocked merge attempt is a separate audit fact. |
 | `finalize-run.js:396-414` | `git.head_sha` + `merge_finalize` | merge-finalization write/audit | **UNCHANGED — single writer in practice**. Only one `finalize-run.js --run-id <id> --merge-method squash` invocation is expected per run; `gh pr merge` is the authoritative single action, and `fetchPrMergeState()` short-circuits once `MERGED` is observed. Cross-process concurrent finalize-run calls are not a supported workflow; file a separate issue if observed. |
 | `finalize-run.js:439-448` | `cleanup_result` | per-cleanup attempt audit | **UNCHANGED — per-attempt audit**. Duplicate rows are intentional when cleanup is retried. |
@@ -43,27 +44,27 @@ The sole first-resolution stamping site claim still holds on this head: `gate-ch
 
 ```text
 $ grep -n "pr_number_stamped" skills/relay-merge/scripts/gate-check.js
-150:    // regression cannot emit duplicate first-resolution pr_number_stamped events.
-152:      .some((entry) => entry.event === "pr_number_stamped");
-156:        event: "pr_number_stamped",
+160:    // regression cannot emit duplicate first-resolution pr_number_stamped events.
+162:      .some((entry) => entry.event === "pr_number_stamped");
+166:        event: "pr_number_stamped",
 
 $ grep -rn "pr_number_stamped" skills/ | grep -v "\.test\.js"
-skills/relay-merge/scripts/gate-check.js:150:    // regression cannot emit duplicate first-resolution pr_number_stamped events.
-skills/relay-merge/scripts/gate-check.js:152:      .some((entry) => entry.event === "pr_number_stamped");
-skills/relay-merge/scripts/gate-check.js:156:        event: "pr_number_stamped",
+skills/relay-merge/scripts/gate-check.js:160:    // regression cannot emit duplicate first-resolution pr_number_stamped events.
+skills/relay-merge/scripts/gate-check.js:162:      .some((entry) => entry.event === "pr_number_stamped");
+skills/relay-merge/scripts/gate-check.js:166:        event: "pr_number_stamped",
 
 $ grep -nE "git\.pr_number" skills/relay-merge/scripts/gate-check.js
-161:        reason: `Stamped git.pr_number=${numericPrNumber} during gate-check PR resolution`,
+171:        reason: `Stamped git.pr_number=${numericPrNumber} during gate-check PR resolution`,
 
 $ grep -n "openSync\|\.lock\|readRunEvents" skills/relay-merge/scripts/gate-check.js
 32:const { appendRunEvent, readRunEvents } = require("../../relay-dispatch/scripts/relay-events");
 35:const PR_NUMBER_STAMP_LOCK_NAME = ".pr_number_stamp.lock";
 107:      return fs.openSync(lockPath, "wx");
-151:    const alreadyStamped = readRunEvents(repoRoot, updatedData.run_id)
+161:    const alreadyStamped = readRunEvents(repoRoot, updatedData.run_id)
 
 $ grep -n "appendRunEvent" skills/relay-merge/scripts/gate-check.js
 32:const { appendRunEvent, readRunEvents } = require("../../relay-dispatch/scripts/relay-events");
-155:      appendRunEvent(repoRoot, updatedData.run_id, {
+165:      appendRunEvent(repoRoot, updatedData.run_id, {
 
 $ grep -n "pr_number_stamped" skills/relay-dispatch/scripts/reliability-report.js || echo "(no consumer count-site — report keys on run_id)"
 (no consumer count-site — report keys on run_id)
@@ -75,7 +76,19 @@ $ grep -n "^const .* = require" skills/relay-merge/scripts/gate-check.js
 30:const { buildSkipComment, evaluateReviewGate } = require("./review-gate");
 31:const { getRunDir, readManifest, writeManifest } = require("../../relay-dispatch/scripts/relay-manifest");
 32:const { appendRunEvent, readRunEvents } = require("../../relay-dispatch/scripts/relay-events");
-33:const { resolveManifestRecord } = require("../../relay-dispatch/scripts/relay-resolver");
+33:const { resolveManifestRecord, isNonTerminalState } = require("../../relay-dispatch/scripts/relay-resolver");
+
+$ grep -n "isNonTerminalState" skills/relay-merge/scripts/gate-check.js
+33:const { resolveManifestRecord, isNonTerminalState } = require("../../relay-dispatch/scripts/relay-resolver");
+141:    if (!isNonTerminalState(freshRecord.data?.state)) {
+
+$ grep -n "isNonTerminalState" skills/relay-dispatch/scripts/relay-resolver.js
+88:function isNonTerminalState(state) {
+100:  return records.filter((record) => isNonTerminalState(record?.data?.state));
+113:    // to !isNonTerminalState(state) (fail-closed on unknown/tampered state values). Escalated stays
+116:    if (excludeTerminal && !isNonTerminalState(record?.data?.state)) {
+157:  return isNonTerminalState(record?.data?.state)
+485:  isNonTerminalState,
 ```
 
 ## Scope / Out Of Scope
