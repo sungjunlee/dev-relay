@@ -642,10 +642,14 @@ test("gate-check stamps git.pr_number on first successful PR-mode resolution and
 });
 
 test("gate-check produces at most one pr_number_stamped event under concurrent invocations (#166)", async () => {
-  // Anti-theater: on 26c58fa, gate-check.js:96-114 is a plain read-check-write-append
-  // sequence with no mutex and no event-journal dedup. Two concurrent invocations
-  // both pass the null check, both append, and events.jsonl gains duplicate
-  // pr_number_stamped rows. This test uses real child processes to prove the fix.
+  // Anti-theater scope (#166): this test asserts the post-fix invariant -
+  // exactly one pr_number_stamped row in the committed journal after
+  // concurrent child invocations. The pre-fix failure (3 duplicate rows
+  // against gate-check.js:84-121 on `26c58fa`) was verified out-of-band
+  // on a scratch branch during dispatch round 1; the committed harness
+  // only exercises the fixed SCRIPT. Reviewers: to reproduce the pre-fix
+  // failure, `git checkout 26c58fa -- skills/relay-merge/scripts/gate-check.js`
+  // and rerun this test.
   const fixture = createLiveGateFixture({
     manifest: {
       state: STATES.DISPATCHED,
