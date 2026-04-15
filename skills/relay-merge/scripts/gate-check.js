@@ -28,14 +28,25 @@ const fs = require("fs");
 const path = require("path");
 const { execFileSync } = require("child_process");
 const { buildSkipComment, evaluateReviewGate } = require("./review-gate");
-const { getRunDir, readManifest, writeManifest } = require("../../relay-dispatch/scripts/relay-manifest");
+const { STATES, getRunDir, readManifest, writeManifest } = require("../../relay-dispatch/scripts/relay-manifest");
 const { appendRunEvent, readRunEvents } = require("../../relay-dispatch/scripts/relay-events");
-const { resolveManifestRecord, isNonTerminalState } = require("../../relay-dispatch/scripts/relay-resolver");
+const { resolveManifestRecord } = require("../../relay-dispatch/scripts/relay-resolver");
 
 const PR_NUMBER_STAMP_LOCK_NAME = ".pr_number_stamp.lock";
 const PR_NUMBER_STAMP_LOCK_TIMEOUT_MS = 5000;
 const PR_NUMBER_STAMP_LOCK_POLL_MS = 50;
 const PR_NUMBER_STAMP_WAIT_STATE = new Int32Array(new SharedArrayBuffer(4));
+// Rule 7 (#177 / #166): whitelist non-terminal states so tampered or missing
+// state values fail-closed (skip stamping) at the inside-lock recheck. Scoped
+// locally in gate-check.js to keep #166's fix inside the agreed file boundary
+// and avoid widening relay-resolver.js's public API.
+const NON_TERMINAL_STATES_FOR_PR_STAMP = new Set(
+  Object.values(STATES).filter((state) => state !== STATES.MERGED && state !== STATES.CLOSED)
+);
+
+function isNonTerminalStateForPrStamp(state) {
+  return NON_TERMINAL_STATES_FOR_PR_STAMP.has(state);
+}
 
 // ---------------------------------------------------------------------------
 // Args
@@ -138,7 +149,7 @@ function stampPrNumberUnderLock(manifestRecord, numericPrNumber) {
     // concurrent close-run / finalize-run may have transitioned the manifest
     // during our bounded wait. Fail-safe skip preserves the caller's contract
     // without turning the race into a throw.
-    if (!isNonTerminalState(freshRecord.data?.state)) {
+    if (!isNonTerminalStateForPrStamp(freshRecord.data?.state)) {
       return freshRecord;
     }
 
