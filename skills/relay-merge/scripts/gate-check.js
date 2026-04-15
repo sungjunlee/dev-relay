@@ -24,11 +24,29 @@
  *   echo '<json>' | ./gate-check.js 42 --dry-run  # Test with mock data
  */
 
+const fs = require("fs");
+const path = require("path");
 const { execFileSync } = require("child_process");
 const { buildSkipComment, evaluateReviewGate } = require("./review-gate");
-const { getRunDir, writeManifest } = require("../../relay-dispatch/scripts/relay-manifest");
-const { appendRunEvent } = require("../../relay-dispatch/scripts/relay-events");
+const { STATES, getRunDir, readManifest, writeManifest } = require("../../relay-dispatch/scripts/relay-manifest");
+const { appendRunEvent, readRunEvents } = require("../../relay-dispatch/scripts/relay-events");
 const { resolveManifestRecord } = require("../../relay-dispatch/scripts/relay-resolver");
+
+const PR_NUMBER_STAMP_LOCK_NAME = ".pr_number_stamp.lock";
+const PR_NUMBER_STAMP_LOCK_TIMEOUT_MS = 5000;
+const PR_NUMBER_STAMP_LOCK_POLL_MS = 50;
+const PR_NUMBER_STAMP_WAIT_STATE = new Int32Array(new SharedArrayBuffer(4));
+// Rule 7 (#177 / #166): whitelist non-terminal states so tampered or missing
+// state values fail-closed (skip stamping) at the inside-lock recheck. Scoped
+// locally in gate-check.js to keep #166's fix inside the agreed file boundary
+// and avoid widening relay-resolver.js's public API.
+const NON_TERMINAL_STATES_FOR_PR_STAMP = new Set(
+  Object.values(STATES).filter((state) => state !== STATES.MERGED && state !== STATES.CLOSED)
+);
+
+function isNonTerminalStateForPrStamp(state) {
+  return NON_TERMINAL_STATES_FOR_PR_STAMP.has(state);
+}
 
 // ---------------------------------------------------------------------------
 // Args
@@ -81,6 +99,108 @@ function gh(...ghArgs) {
   });
 }
 
+function readFreshManifestRecord(manifestRecord) {
+  const fresh = readManifest(manifestRecord.manifestPath);
+  return {
+    ...manifestRecord,
+    data: fresh.data,
+    body: fresh.body,
+  };
+}
+
+function waitForPrNumberStampLock(lockPath) {
+  const deadline = Date.now() + PR_NUMBER_STAMP_LOCK_TIMEOUT_MS;
+
+  while (Date.now() < deadline) {
+    try {
+      // Rule 1 layer A (#166): serialize the read-check-write-append branch so only one
+      // gate-check process performs first-resolution stamping for a run at a time.
+      return fs.openSync(lockPath, "wx");
+    } catch (error) {
+      if (error.code !== "EEXIST") {
+        throw error;
+      }
+      Atomics.wait(PR_NUMBER_STAMP_WAIT_STATE, 0, 0, PR_NUMBER_STAMP_LOCK_POLL_MS);
+    }
+  }
+
+  return null;
+}
+
+function stampPrNumberUnderLock(manifestRecord, numericPrNumber) {
+  const repoRoot = manifestRecord.data?.paths?.repo_root || process.cwd();
+  const runDir = getRunDir(repoRoot, manifestRecord.data?.run_id);
+  const lockPath = path.join(runDir, PR_NUMBER_STAMP_LOCK_NAME);
+  let lockFd = null;
+
+  fs.mkdirSync(runDir, { recursive: true });
+  lockFd = waitForPrNumberStampLock(lockPath);
+  if (lockFd === null) {
+    // #166 is fail-safe under contention: timed-out lock acquisition re-reads the
+    // committed manifest and continues, instead of turning a CI rerun race into a throw.
+    return readFreshManifestRecord(manifestRecord);
+  }
+
+  try {
+    const freshRecord = readFreshManifestRecord(manifestRecord);
+
+    // Rule 4 (#166): re-apply the non-terminal whitelist after the fresh read.
+    // resolveManifestRecord filtered out merged/closed at the caller, but a
+    // concurrent close-run / finalize-run may have transitioned the manifest
+    // during our bounded wait. Fail-safe skip preserves the caller's contract
+    // without turning the race into a throw.
+    if (!isNonTerminalStateForPrStamp(freshRecord.data?.state)) {
+      return freshRecord;
+    }
+
+    if (freshRecord.data?.git?.pr_number !== undefined && freshRecord.data?.git?.pr_number !== null) {
+      return freshRecord;
+    }
+
+    const updatedData = {
+      ...freshRecord.data,
+      git: {
+        ...(freshRecord.data?.git || {}),
+        pr_number: numericPrNumber,
+      },
+    };
+
+    writeManifest(manifestRecord.manifestPath, updatedData, freshRecord.body);
+
+    // Rule 1 layer B (#166): dedupe against the committed journal so even a future lock
+    // regression cannot emit duplicate first-resolution pr_number_stamped events.
+    const alreadyStamped = readRunEvents(repoRoot, updatedData.run_id)
+      .some((entry) => entry.event === "pr_number_stamped");
+
+    if (!alreadyStamped) {
+      appendRunEvent(repoRoot, updatedData.run_id, {
+        event: "pr_number_stamped",
+        state_from: updatedData.state,
+        state_to: updatedData.state,
+        head_sha: updatedData.git?.head_sha || null,
+        round: updatedData.review?.rounds || null,
+        reason: `Stamped git.pr_number=${numericPrNumber} during gate-check PR resolution`,
+      });
+    }
+
+    return {
+      ...freshRecord,
+      data: updatedData,
+    };
+  } finally {
+    try {
+      fs.closeSync(lockFd);
+    } catch {}
+    try {
+      fs.unlinkSync(lockPath);
+    } catch (error) {
+      if (error.code !== "ENOENT") {
+        throw error;
+      }
+    }
+  }
+}
+
 function tryResolveManifestForPr(prNumber, headRefName) {
   try {
     // gate-check runs before merge finalization, so it must never resolve merged/closed manifests.
@@ -95,24 +215,7 @@ function tryResolveManifestForPr(prNumber, headRefName) {
       && numericPrNumber >= 0
       && (manifestRecord.data?.git?.pr_number === undefined || manifestRecord.data?.git?.pr_number === null)
     ) {
-      const repoRoot = manifestRecord.data?.paths?.repo_root || process.cwd();
-      const updatedData = {
-        ...manifestRecord.data,
-        git: {
-          ...(manifestRecord.data?.git || {}),
-          pr_number: numericPrNumber,
-        },
-      };
-      writeManifest(manifestRecord.manifestPath, updatedData, manifestRecord.body);
-      appendRunEvent(repoRoot, updatedData.run_id, {
-        event: "pr_number_stamped",
-        state_from: updatedData.state,
-        state_to: updatedData.state,
-        head_sha: updatedData.git?.head_sha || null,
-        round: updatedData.review?.rounds || null,
-        reason: `Stamped git.pr_number=${numericPrNumber} during gate-check PR resolution`,
-      });
-      return { ...manifestRecord, data: updatedData };
+      return stampPrNumberUnderLock(manifestRecord, numericPrNumber);
     }
     return manifestRecord;
   } catch (error) {

@@ -1,6 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { spawnSync } = require("child_process");
+const { spawn, spawnSync } = require("child_process");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
@@ -81,6 +81,49 @@ process.stderr.write("unsupported fake gh invocation");
 process.exit(1);
 `, "utf-8");
   fs.chmodSync(ghPath, 0o755);
+}
+
+function writeResolverOverridePreload(binDir, manifestPath, overrideState) {
+  const preloadPath = path.join(binDir, "override-resolver.cjs");
+  const relayManifestPath = path.resolve(__dirname, "../../relay-dispatch/scripts/relay-manifest.js");
+  const relayResolverPath = path.resolve(__dirname, "../../relay-dispatch/scripts/relay-resolver.js");
+  fs.writeFileSync(preloadPath, `const Module = require("module");
+const { readManifest } = require(${JSON.stringify(relayManifestPath)});
+const resolverPath = ${JSON.stringify(relayResolverPath)};
+const manifestPath = ${JSON.stringify(manifestPath)};
+const overrideState = ${JSON.stringify(overrideState)};
+const originalLoad = Module._load;
+
+Module._load = function patchedModuleLoad(request, parent, isMain) {
+  let resolved;
+  try {
+    resolved = Module._resolveFilename(request, parent, isMain);
+  } catch {
+    return originalLoad.apply(this, arguments);
+  }
+
+  const loaded = originalLoad.apply(this, arguments);
+  if (resolved !== resolverPath) {
+    return loaded;
+  }
+
+  return {
+    ...loaded,
+    resolveManifestRecord() {
+      const manifest = readManifest(manifestPath);
+      return {
+        manifestPath,
+        data: {
+          ...manifest.data,
+          state: overrideState,
+        },
+        body: manifest.body,
+      };
+    },
+  };
+};
+`, "utf-8");
+  return preloadPath;
 }
 
 function applyManifestState(manifest, state) {
@@ -639,6 +682,148 @@ test("gate-check stamps git.pr_number on first successful PR-mode resolution and
     .map((line) => JSON.parse(line))
     .filter((entry) => entry.event === "pr_number_stamped");
   assert.equal(events.length, 1);
+});
+
+test("gate-check skips first-resolution stamping when the fresh locked read is already terminal (#166)", () => {
+  const fixture = createLiveGateFixture({
+    manifest: {
+      state: STATES.MERGED,
+      anchor: {
+        rubric_path: "rubric.yaml",
+        rubric_grandfathered: false,
+      },
+      review: {
+        reviewer_login: "trusted-reviewer",
+        last_reviewed_sha: "abc123",
+      },
+      git: {
+        pr_number: null,
+      },
+    },
+  });
+  const preloadPath = writeResolverOverridePreload(fixture.binDir, fixture.manifestPath, STATES.DISPATCHED);
+
+  // Anti-theater scope (#166 round 4): the on-disk manifest is already terminal, but the
+  // test-only resolver override feeds gate-check a stale non-terminal record so the fresh-read
+  // guard is exercised directly. Before the fix, stampPrNumberUnderLock() would have stamped and
+  // appended because it only re-checked git.pr_number === null after acquiring the lock.
+  const result = spawnSync("node", [
+    SCRIPT,
+    "40",
+    "--json",
+  ], {
+    cwd: fixture.repoRoot,
+    encoding: "utf-8",
+    env: {
+      ...process.env,
+      RELAY_HOME: fixture.relayHome,
+      PATH: `${fixture.binDir}:${process.env.PATH}`,
+      NODE_OPTIONS: `${process.env.NODE_OPTIONS ? `${process.env.NODE_OPTIONS} ` : ""}--require ${preloadPath}`,
+      FAKE_GH_PR_VIEW_JSON: JSON.stringify(buildPassingReviewPayload()),
+    },
+  });
+
+  assert.equal(result.status, 0);
+  const json = JSON.parse(result.stdout);
+  assert.equal(json.status, "lgtm");
+
+  const stored = readManifest(fixture.manifestPath).data;
+  assert.equal(stored.state, STATES.MERGED);
+  assert.equal(stored.git.pr_number, null);
+
+  const eventsPath = path.join(fixture.runDir, "events.jsonl");
+  const events = fs.existsSync(eventsPath)
+    ? fs.readFileSync(eventsPath, "utf-8")
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line) => JSON.parse(line))
+      .filter((entry) => entry.event === "pr_number_stamped")
+    : [];
+  assert.equal(events.length, 0);
+});
+
+test("gate-check produces at most one pr_number_stamped event under concurrent invocations (#166)", async () => {
+  // Anti-theater scope (#166): this test asserts the post-fix invariant -
+  // exactly one pr_number_stamped row in the committed journal after
+  // concurrent child invocations. The pre-fix failure (3 duplicate rows
+  // against gate-check.js:84-121 on `26c58fa`) was verified out-of-band
+  // on a scratch branch during dispatch round 1; the committed harness
+  // only exercises the fixed SCRIPT. Reviewers: to reproduce the pre-fix
+  // failure, `git checkout 26c58fa -- skills/relay-merge/scripts/gate-check.js`
+  // and rerun this test.
+  const fixture = createLiveGateFixture({
+    manifest: {
+      state: STATES.DISPATCHED,
+      anchor: {
+        rubric_path: "rubric.yaml",
+        rubric_grandfathered: false,
+      },
+      review: {
+        reviewer_login: "trusted-reviewer",
+        last_reviewed_sha: "abc123",
+      },
+      git: {
+        pr_number: null,
+      },
+    },
+  });
+
+  const env = {
+    ...process.env,
+    RELAY_HOME: fixture.relayHome,
+    PATH: `${fixture.binDir}:${process.env.PATH}`,
+    FAKE_GH_PR_VIEW_JSON: JSON.stringify(buildPassingReviewPayload()),
+  };
+
+  function spawnGateCheckChild() {
+    return new Promise((resolve) => {
+      const child = spawn("node", [SCRIPT, "40", "--json"], {
+        cwd: fixture.repoRoot,
+        env,
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      let stdout = "";
+      let stderr = "";
+      child.stdout.on("data", (chunk) => {
+        stdout += String(chunk);
+      });
+      child.stderr.on("data", (chunk) => {
+        stderr += String(chunk);
+      });
+      child.on("close", (code) => {
+        resolve({ code, stdout, stderr });
+      });
+    });
+  }
+
+  const results = await Promise.all([
+    spawnGateCheckChild(),
+    spawnGateCheckChild(),
+    spawnGateCheckChild(),
+  ]);
+
+  assert.ok(
+    results.some((result) => result.code === 0),
+    `expected at least one successful gate-check child, got ${JSON.stringify(results, null, 2)}`
+  );
+
+  const stored = readManifest(fixture.manifestPath).data;
+  assert.equal(stored.git.pr_number, 40);
+
+  const events = fs.readFileSync(path.join(fixture.runDir, "events.jsonl"), "utf-8")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => JSON.parse(line))
+    .filter((entry) => entry.event === "pr_number_stamped");
+
+  assert.equal(
+    events.length,
+    1,
+    `expected exactly one pr_number_stamped event, got ${events.length}: ${JSON.stringify(events, null, 2)}`
+  );
+  assert.match(events[0].reason, /git\.pr_number=40/);
 });
 
 test("gate-check fails closed on a historical review_pending legacy manifest sample with pr_number=null", () => {
