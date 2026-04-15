@@ -684,6 +684,79 @@ test("gate-check stamps git.pr_number on first successful PR-mode resolution and
   assert.equal(events.length, 1);
 });
 
+test("gate-check refuses merge when pr_number stamp lock times out (#185)", () => {
+  // Anti-theater scope (#185): pre-fix gate-check.js:137 on c450588 returned
+  // readFreshManifestRecord(manifestRecord) on timeout, which fed an unstamped
+  // manifest into evaluateReviewGate() and let merge advance with
+  // { status: \"lgtm\", readyToMerge: true }.
+  const fixture = createLiveGateFixture({
+    manifest: {
+      state: STATES.DISPATCHED,
+      anchor: {
+        rubric_path: "rubric.yaml",
+        rubric_grandfathered: false,
+      },
+      review: {
+        reviewer_login: "trusted-reviewer",
+        last_reviewed_sha: "abc123",
+      },
+      git: {
+        pr_number: null,
+      },
+    },
+  });
+  const stampLockPath = path.join(fixture.runDir, ".pr_number_stamp.lock");
+  fs.writeFileSync(stampLockPath, "stale peer pid 99999", { flag: "wx" });
+
+  const blocked = runGateCheckWithFixture(fixture, {
+    prViewPayload: buildPassingReviewPayload(),
+  });
+  assert.equal(blocked.status, 1, "merge must be blocked while the stale lock remains");
+  assert.equal(blocked.json.status, "manifest_resolution_failed");
+  assert.equal(blocked.json.readyToMerge, false);
+  assert.match(blocked.json.reason, /\.pr_number_stamp\.lock/);
+  assert.match(blocked.json.reason, /stale lock|peer crash/i);
+  assert.match(blocked.json.reason, /#185 \/ #166/);
+  assert.ok(
+    blocked.json.reason.includes(stampLockPath),
+    `expected concrete lock path in error, got: ${blocked.json.reason}`
+  );
+
+  const blockedManifest = readManifest(fixture.manifestPath).data;
+  assert.equal(blockedManifest.git.pr_number, null);
+
+  const blockedEventsPath = path.join(fixture.runDir, "events.jsonl");
+  const blockedEvents = fs.existsSync(blockedEventsPath)
+    ? fs.readFileSync(blockedEventsPath, "utf-8")
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line) => JSON.parse(line))
+      .filter((entry) => entry.event === "pr_number_stamped")
+    : [];
+  assert.equal(blockedEvents.length, 0);
+
+  fs.unlinkSync(stampLockPath);
+
+  const recovered = runGateCheckWithFixture(fixture, {
+    prViewPayload: buildPassingReviewPayload(),
+  });
+  assert.equal(recovered.status, 0);
+  assert.equal(recovered.json.status, "lgtm");
+  assert.equal(recovered.json.readyToMerge, true);
+
+  const recoveredManifest = readManifest(fixture.manifestPath).data;
+  assert.equal(recoveredManifest.git.pr_number, 40);
+
+  const recoveredEvents = fs.readFileSync(blockedEventsPath, "utf-8")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => JSON.parse(line))
+    .filter((entry) => entry.event === "pr_number_stamped");
+  assert.equal(recoveredEvents.length, 1);
+});
+
 test("gate-check skips first-resolution stamping when the fresh locked read is already terminal (#166)", () => {
   const fixture = createLiveGateFixture({
     manifest: {

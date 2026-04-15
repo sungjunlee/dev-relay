@@ -136,9 +136,22 @@ function stampPrNumberUnderLock(manifestRecord, numericPrNumber) {
   fs.mkdirSync(runDir, { recursive: true });
   lockFd = waitForPrNumberStampLock(lockPath);
   if (lockFd === null) {
-    // #166 is fail-safe under contention: timed-out lock acquisition re-reads the
-    // committed manifest and continues, instead of turning a CI rerun race into a throw.
-    return readFreshManifestRecord(manifestRecord);
+    // #185 / meta-rule 1 recursive: the timeout fallthrough serves two downstream
+    // consumers. Audit-trail dedup is still fail-safe, but the merge gate must
+    // fail-closed if a stale lock or peer crash left git.pr_number unset. Re-read
+    // first so healthy contention still succeeds when the peer finished stamping
+    // during our wait.
+    const freshRecord = readFreshManifestRecord(manifestRecord);
+    const freshPrNumber = freshRecord.data?.git?.pr_number;
+    if (freshPrNumber !== undefined && freshPrNumber !== null) {
+      return freshRecord;
+    }
+    throw new Error(
+      "gate-check: .pr_number_stamp.lock contention timeout left git.pr_number unset after a fresh re-read. "
+      + "This indicates a stale lock or peer crash during first-resolution stamping. "
+      + `Clear the .pr_number_stamp.lock file and retry: rm ${JSON.stringify(lockPath)}. `
+      + "See #185 / #166 for background."
+    );
   }
 
   try {
