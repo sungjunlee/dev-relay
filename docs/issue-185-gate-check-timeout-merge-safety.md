@@ -29,7 +29,40 @@ The intended new rule 8 for `~/.claude/projects/-Users-sjlee-workspace-active-ha
 ## Rendered Self-Review Grep Output
 
 ```text
-TODO: replace with final post-fix grep output from PR head.
+$ grep -n "lockFd === null\|waitForPrNumberStampLock\|throw" skills/relay-merge/scripts/gate-check.js
+111:function waitForPrNumberStampLock(lockPath) {
+121:        throw error;
+137:  lockFd = waitForPrNumberStampLock(lockPath);
+138:  if (lockFd === null) {
+149:    throw new Error(
+164:    // without turning the race into a throw.
+211:        throw error;
+
+$ grep -n "\.pr_number_stamp\.lock" skills/relay-merge/scripts/gate-check.js
+35:const PR_NUMBER_STAMP_LOCK_NAME = ".pr_number_stamp.lock";
+150:      "gate-check: .pr_number_stamp.lock contention timeout left git.pr_number unset after a fresh re-read. "
+152:      + `Clear the .pr_number_stamp.lock file and retry: rm ${JSON.stringify(lockPath)}. `
+
+$ grep -n "manifest_resolution_failed\|tryResolveManifestForPr" skills/relay-merge/scripts/gate-check.js
+217:function tryResolveManifestForPr(prNumber, headRefName) {
+272:    } else if (result.status === "manifest_resolution_failed") {
+334:    const manifestRecord = tryResolveManifestForPr(PR_NUM, parsed.headRefName || null);
+337:        status: "manifest_resolution_failed",
+351:        status: "manifest_resolution_failed",
+
+$ grep -n "^const .* = require" skills/relay-merge/scripts/gate-check.js
+27:const fs = require("fs");
+28:const path = require("path");
+29:const { execFileSync } = require("child_process");
+30:const { buildSkipComment, evaluateReviewGate } = require("./review-gate");
+31:const { STATES, getRunDir, readManifest, writeManifest } = require("../../relay-dispatch/scripts/relay-manifest");
+32:const { appendRunEvent, readRunEvents } = require("../../relay-dispatch/scripts/relay-events");
+33:const { resolveManifestRecord } = require("../../relay-dispatch/scripts/relay-resolver");
+
+$ git diff --name-only c450588..HEAD
+docs/issue-185-gate-check-timeout-merge-safety.md
+skills/relay-merge/scripts/gate-check.js
+skills/relay-merge/scripts/gate-check.test.js
 ```
 
 ## Call-Site Audit Recheck
