@@ -119,6 +119,7 @@ $ grep -n "relay-resolver" skills/relay-merge/scripts/gate-check.js
 
 ## Fail-Safe-Vs-Fail-Closed Rationale
 
+**Note (2026-04-15, superseding)**: this section's unified fail-safe timeout rationale is split by `#185` / PR #186 into (a) audit-trail fail-safe (layer B, unchanged), (b) merge-gate fail-closed (layer A timeout with `git.pr_number: null` after a fresh re-read), and (c) healthy-contention unchanged; see [docs/issue-185-gate-check-timeout-merge-safety.md](/Users/sjlee/.relay/worktrees/de339e07/dev-relay/docs/issue-185-gate-check-timeout-merge-safety.md) for the full split policy and the compliance-theater prior-art citation (`#138` / `#155`), and read the warning below as applying to the pre-split uniform policy rather than the post-`#185` merge-gate throw condition.
 When the layer-A lock times out or layer-B dedup sees an already-committed `pr_number_stamped` row, the stamping branch is skipped cleanly and gate-check continues with a freshly read manifest. That is fail-safe behavior for legitimate concurrent CI reruns: the audit trail stays clean, and merge gating still evaluates against the latest committed state. It is intentionally different from fail-closed security fixes such as `#148`, `#155`, `#174`, and `#177`, which must refuse to proceed. Future iterations should not tighten this concurrency skip into a throw.
 
 ## Prior Art
