@@ -4,7 +4,7 @@
 
 Issue #185 closes the HIGH merge-safety class surfaced by the codex post-merge challenge of `#166` / PR #184, merged as `c450588` probe 4. On that tree, `skills/relay-merge/scripts/gate-check.js:137-153` could time out on `.pr_number_stamp.lock`, re-read the manifest, and still return `git.pr_number: null`; `skills/relay-merge/scripts/review-gate.js:113` then accepted the unstamped manifest as LGTM because the merge gate never read `manifestData.git.pr_number`.
 
-The fix keeps the audit-trail side of `#166` unchanged but splits the timeout policy by enforcement layer: audit-trail handling remains fail-safe, while the merge gate now fails closed when the timeout re-read still sees `git.pr_number: null`. This is the same compliance-theater pattern as `#138` / `#155`, one layer deeper.
+The fix keeps the audit-trail side of `#166` unchanged but splits the timeout policy by enforcement layer: audit-trail handling remains fail-safe, concurrent terminalization remains a fail-safe skip, and the merge gate now fails closed only when the timeout re-read is still non-terminal with `git.pr_number: null`. This is the same compliance-theater pattern as `#138` / `#155`, one layer deeper.
 
 ## Pattern-Break Rationale
 
@@ -33,32 +33,38 @@ The full 8-rule feedback file is committed at `memory/feedback_rubric_fail_close
 ## Fail-Safe-Vs-Fail-Closed Split
 
 - Audit-trail, layer B, prior-event dedup: fail-safe. If the earlier process already appended `pr_number_stamped`, the current process does not duplicate it. This remains exactly as shipped in `#166`.
-- Merge-gate, layer A timeout with `git.pr_number: null`: fail-closed. The timeout branch now re-reads once, and if the manifest is still unstamped it throws an actionable error so `main()` emits `manifest_resolution_failed` and exits 1.
+- Merge-gate, layer A timeout with `git.pr_number: null`: fail-closed. The timeout branch now re-reads once, returns early if a concurrent close/finalize already made the manifest terminal, and only throws when the fresh state is still non-terminal and unstamped so `main()` emits `manifest_resolution_failed` and exits 1.
 - Healthy contention, lock acquired or peer finished during wait: unchanged. The timeout branch still succeeds when the fresh re-read finds a non-null `git.pr_number`, and the in-lock path still performs fresh-read, non-terminal recheck, write, dedup, and append without widening scope.
 
 ## Rendered Self-Review Grep Output
 
 ```text
 $ grep -n "lockFd === null\|waitForPrNumberStampLock\|throw" skills/relay-merge/scripts/gate-check.js
-111:function waitForPrNumberStampLock(lockPath) {
-121:        throw error;
-137:  lockFd = waitForPrNumberStampLock(lockPath);
-138:  if (lockFd === null) {
-149:    throw new Error(
-164:    // without turning the race into a throw.
-211:        throw error;
+120:function waitForPrNumberStampLock(lockPath) {
+130:        throw error;
+146:  lockFd = waitForPrNumberStampLock(lockPath);
+147:  if (lockFd === null) {
+161:    throw new Error(
+176:    // without turning the race into a throw.
+223:        throw error;
+
+$ grep -n "isNonTerminalStateForPrStamp\|still-running holder\|clear it only after confirming" skills/relay-merge/scripts/gate-check.js
+56:function isNonTerminalStateForPrStamp(state) {
+154:    if (!isNonTerminalStateForPrStamp(freshRecord.data?.state)) {
+163:      + "This may indicate a stale lock, peer crash, or a still-running holder on a slow filesystem. "
+164:      + `Inspect ${JSON.stringify(lockPath)} and clear it only after confirming no active holder is still stamping. `
+177:    if (!isNonTerminalStateForPrStamp(freshRecord.data?.state)) {
 
 $ grep -n "\.pr_number_stamp\.lock" skills/relay-merge/scripts/gate-check.js
-35:const PR_NUMBER_STAMP_LOCK_NAME = ".pr_number_stamp.lock";
-150:      "gate-check: .pr_number_stamp.lock contention timeout left git.pr_number unset after a fresh re-read. "
-152:      + `Clear the .pr_number_stamp.lock file and retry: rm ${JSON.stringify(lockPath)}. `
+44:const PR_NUMBER_STAMP_LOCK_NAME = ".pr_number_stamp.lock";
+162:      "gate-check: .pr_number_stamp.lock contention timeout left git.pr_number unset after a fresh re-read. "
 
 $ grep -n "manifest_resolution_failed\|tryResolveManifestForPr" skills/relay-merge/scripts/gate-check.js
-217:function tryResolveManifestForPr(prNumber, headRefName) {
-272:    } else if (result.status === "manifest_resolution_failed") {
-334:    const manifestRecord = tryResolveManifestForPr(PR_NUM, parsed.headRefName || null);
-337:        status: "manifest_resolution_failed",
-351:        status: "manifest_resolution_failed",
+229:function tryResolveManifestForPr(prNumber, headRefName) {
+284:    } else if (result.status === "manifest_resolution_failed") {
+346:    const manifestRecord = tryResolveManifestForPr(PR_NUM, parsed.headRefName || null);
+349:        status: "manifest_resolution_failed",
+363:        status: "manifest_resolution_failed",
 
 $ grep -n "^const .* = require" skills/relay-merge/scripts/gate-check.js
 27:const fs = require("fs");
@@ -70,7 +76,9 @@ $ grep -n "^const .* = require" skills/relay-merge/scripts/gate-check.js
 33:const { resolveManifestRecord } = require("../../relay-dispatch/scripts/relay-resolver");
 
 $ git diff --name-only c450588..HEAD
+docs/issue-166-gate-check-stamping-concurrency.md
 docs/issue-185-gate-check-timeout-merge-safety.md
+memory/feedback_rubric_fail_closed.md
 skills/relay-merge/scripts/gate-check.js
 skills/relay-merge/scripts/gate-check.test.js
 ```
@@ -95,7 +103,7 @@ The original `#166` audit claim still holds on this head: `gate-check.js` remain
 
 ## Cross-Reference To Issue 166 Mirror
 
-See [docs/issue-166-gate-check-stamping-concurrency.md](/Users/sjlee/.relay/worktrees/de339e07/dev-relay/docs/issue-166-gate-check-stamping-concurrency.md) for the original layer-A / layer-B split from `#166`. Its unified timeout rationale is superseded by the three-way split documented here for `#185`.
+See [docs/issue-166-gate-check-stamping-concurrency.md](./issue-166-gate-check-stamping-concurrency.md) for the original layer-A / layer-B split from `#166`. Its unified timeout rationale is superseded by the three-way split documented here for `#185`.
 
 ## Prior Art
 
