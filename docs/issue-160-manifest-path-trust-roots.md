@@ -25,6 +25,8 @@ This change closes the manifest trust-root gap for `paths.repo_root` and `paths.
   Manual close/recovery now validates manifest paths before state transitions or cleanup.
 - Fixed: `skills/relay-dispatch/scripts/relay-manifest.js`
   Cleanup helpers now validate manifest paths internally so a raw caller cannot retarget cleanup side effects through manifest data.
+- Unchanged but enumerated: `skills/relay-dispatch/scripts/relay-manifest.js` (`resolveRubricRunDir()` fallback inside `getRubricAnchorStatus()`)
+  This helper still falls back to `data.paths.repo_root` when callers omit `options.repoRoot` and `options.runDir`. That remaining raw reader is outside the `#160` bypass surface: the in-scope dispatch/review/merge consumers now pass a validated repo root or run dir before any filesystem write or GitHub operation, and the only zero-option caller left is the relay-manifest-local `validateTransitionInvariants()` rubric-state read path. No change here in this PR; if rubric-status reads become their own trust boundary, file a follow-up rather than silently widening this fix.
 
 ## Regression Coverage
 

@@ -1,6 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { execFileSync } = require("child_process");
+const { execFileSync, spawnSync } = require("child_process");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
@@ -515,6 +515,42 @@ test("review-runner rejects relay-base same-name worktrees before preparing prom
 
   assert.equal(fs.existsSync(path.join(attackerWorktree, "review-round-1-prompt.md")), false);
   assert.equal(fs.existsSync(path.join(attackerWorktree, "sentinel.txt")), true);
+});
+
+test("review-runner rejects tampered paths.repo_root before prepare-only prompt side effects", () => {
+  const { repoRoot, worktreePath, manifestPath, runId, doneCriteriaPath, diffPath } = setupRepo();
+  const { attackerRoot } = createUnrelatedRelayOwnedWorktree(repoRoot);
+  const record = readManifest(manifestPath);
+  const runDir = getRunsDir(repoRoot);
+  const actualPromptPath = path.join(runDir, runId, "review-round-1-prompt.md");
+  const actualDiffPath = path.join(runDir, runId, "review-round-1-diff.patch");
+  const attackerRunDir = path.join(getRunsDir(attackerRoot), runId);
+  writeManifest(manifestPath, {
+    ...record.data,
+    paths: {
+      ...(record.data.paths || {}),
+      repo_root: attackerRoot,
+    },
+  }, record.body);
+
+  const result = spawnSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--run-id", runId,
+    "--pr", "123",
+    "--done-criteria-file", doneCriteriaPath,
+    "--diff-file", diffPath,
+    "--prepare-only",
+    "--json",
+  ], { encoding: "utf-8" });
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /manifest paths\.repo_root/);
+  assert.equal(fs.existsSync(actualPromptPath), false, "prepare-only must reject before writing the prompt bundle");
+  assert.equal(fs.existsSync(actualDiffPath), false, "prepare-only must reject before writing the diff bundle");
+  assert.equal(fs.existsSync(attackerRunDir), false, "prepare-only must not create a run dir under the tampered repo_root");
+  assert.equal(fs.existsSync(worktreePath), true, "prepare-only must reject before touching the retained checkout");
+  assert.equal(readManifest(manifestPath).data.state, STATES.REVIEW_PENDING);
 });
 
 test("review-runner fails closed when branch+PR resolution only finds a stale terminal manifest", () => {
