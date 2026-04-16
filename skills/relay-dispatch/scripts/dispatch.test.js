@@ -176,6 +176,65 @@ test("dispatch reuses the same run and worktree on resume", () => {
   assert.match(events, /"reason":"same_run_resume:completed"/);
 });
 
+test("dispatch resumes rubric fail-closed recovery runs from changes_requested", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  writeFakeCodex(binDir);
+  const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}` };
+
+  const first = JSON.parse(runDispatch(repoRoot, [
+    "-b", "issue-163",
+    "--prompt", "first pass",
+    "--json",
+  ], env));
+  assert.equal(first.runState, STATES.REVIEW_PENDING);
+
+  const manifestPath = first.manifestPath;
+  const runId = first.runId;
+  const fixedRubricPath = path.join(repoRoot, "fixed-rubric.yaml");
+  fs.writeFileSync(fixedRubricPath, [
+    "rubric:",
+    "  factors:",
+    "    - name: recovery rubric",
+    "      target: pass",
+  ].join("\n"), "utf-8");
+
+  const record = readManifest(manifestPath);
+  const updated = {
+    ...updateManifestState(record.data, STATES.CHANGES_REQUESTED, "repair_rubric_and_redispatch"),
+    review: {
+      ...(record.data.review || {}),
+      latest_verdict: "rubric_state_failed_closed",
+      last_gate: {
+        status: "rubric_state_failed_closed",
+        layer: "review-runner",
+        rubric_state: "missing",
+        rubric_status: "missing",
+        recovery_command: `node skills/relay-dispatch/scripts/dispatch.js . --run-id ${runId} --prompt-file <task.md> --rubric-file <fixed-rubric.yaml>`,
+        recovery: "Restore or replace the missing rubric, then re-dispatch.",
+        reason: "Rubric file is missing.",
+      },
+    },
+  };
+  writeManifest(manifestPath, updated, record.body);
+
+  const second = JSON.parse(runDispatch(repoRoot, [
+    "--run-id", runId,
+    "--prompt", "resume rubric recovery",
+    "--rubric-file", fixedRubricPath,
+    "--json",
+  ], env));
+
+  assert.equal(second.mode, "resume");
+  assert.equal(second.runState, STATES.REVIEW_PENDING);
+
+  const manifest = readManifest(manifestPath).data;
+  assert.equal(manifest.state, STATES.REVIEW_PENDING);
+  assert.equal(manifest.review.latest_verdict, "rubric_state_failed_closed");
+  assert.equal(manifest.review.last_gate.status, "rubric_state_failed_closed");
+});
+
 test("dispatch resume fails loudly when the retained worktree is missing", () => {
   const { repoRoot, relayHome } = setupRepo();
   process.env.RELAY_HOME = relayHome;
