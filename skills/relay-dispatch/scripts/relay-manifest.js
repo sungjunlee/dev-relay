@@ -22,6 +22,17 @@ function getRunsBase() {
   return process.env.RELAY_RUNS_BASE || path.join(getRelayHome(), "runs");
 }
 
+function getRelayWorktreeBase() {
+  const base = process.env.RELAY_WORKTREE_BASE || path.join(getRelayHome(), "worktrees");
+  if (!path.isAbsolute(base)) {
+    throw new Error(
+      `RELAY_WORKTREE_BASE must be an absolute path, got: ${JSON.stringify(base)}. ` +
+      `Either set RELAY_WORKTREE_BASE explicitly or ensure RELAY_HOME resolves to an absolute path.`
+    );
+  }
+  return path.resolve(base);
+}
+
 function getRepoSlug(repoRoot) {
   if (!repoRoot || typeof repoRoot !== "string") {
     throw new Error(`getRepoSlug requires a non-empty repoRoot path, got: ${JSON.stringify(repoRoot)}`);
@@ -362,6 +373,119 @@ function listManifestRecords(repoRoot) {
   return listManifestPaths(repoRoot)
     .map((manifestPath) => ({ manifestPath, ...readManifest(manifestPath) }))
     .sort((left, right) => sortKeyForManifest(right).localeCompare(sortKeyForManifest(left)));
+}
+
+function isPathContainedWithin(basePath, candidatePath, { allowEqual = false } = {}) {
+  if (!basePath || !candidatePath) return false;
+  const resolvedBase = path.resolve(basePath);
+  const resolvedCandidate = path.resolve(candidatePath);
+  const relative = path.relative(resolvedBase, resolvedCandidate);
+  if (relative === "") {
+    return allowEqual;
+  }
+  return relative !== ".."
+    && !relative.startsWith(`..${path.sep}`)
+    && !path.isAbsolute(relative);
+}
+
+function sameFilesystemLocation(leftPath, rightPath) {
+  if (!leftPath || !rightPath) return false;
+  try {
+    return fs.realpathSync.native(leftPath) === fs.realpathSync.native(rightPath);
+  } catch {
+    return false;
+  }
+}
+
+function validateManifestPaths(paths, {
+  expectedRepoRoot,
+  manifestPath,
+  runId,
+  requireWorktree = false,
+  caller = "relay manifest consumer",
+} = {}) {
+  if (!paths || typeof paths !== "object" || Array.isArray(paths)) {
+    throw new Error(`${caller}: manifest paths must be an object`);
+  }
+
+  const repoRootRaw = typeof paths.repo_root === "string" ? paths.repo_root.trim() : "";
+  if (!repoRootRaw) {
+    throw new Error(`${caller}: manifest paths.repo_root must be a non-empty path`);
+  }
+
+  const repoRoot = path.resolve(repoRootRaw);
+  const normalizedExpectedRepoRoot = typeof expectedRepoRoot === "string" && expectedRepoRoot.trim() !== ""
+    ? path.resolve(expectedRepoRoot)
+    : null;
+  const normalizedManifestPath = typeof manifestPath === "string" && manifestPath.trim() !== ""
+    ? path.resolve(manifestPath)
+    : null;
+  const normalizedRunId = requireValidRunId(
+    runId ?? paths.run_id ?? (() => {
+      throw new Error(`${caller}: run_id is required to validate manifest paths`);
+    })()
+  );
+
+  if (
+    normalizedExpectedRepoRoot
+    && repoRoot !== normalizedExpectedRepoRoot
+    && !sameFilesystemLocation(repoRoot, normalizedExpectedRepoRoot)
+  ) {
+    throw new Error(
+      `${caller}: manifest paths.repo_root ${JSON.stringify(repoRoot)} does not match the expected repo root ` +
+      `${JSON.stringify(normalizedExpectedRepoRoot)}. Refusing to trust manifest-owned repo paths.`
+    );
+  }
+
+  if (normalizedManifestPath) {
+    const expectedManifestPath = getManifestPath(repoRoot, normalizedRunId);
+    if (normalizedManifestPath !== expectedManifestPath) {
+      throw new Error(
+        `${caller}: manifest paths.repo_root ${JSON.stringify(repoRoot)} does not match the manifest storage path ` +
+        `${JSON.stringify(normalizedManifestPath)} for run ${JSON.stringify(normalizedRunId)}. ` +
+        `Expected ${JSON.stringify(expectedManifestPath)}.`
+      );
+    }
+  } else if (!normalizedExpectedRepoRoot) {
+    throw new Error(
+      `${caller}: validateManifestPaths requires either expectedRepoRoot or manifestPath when validating ` +
+      `repo_root for run ${JSON.stringify(normalizedRunId)}.`
+    );
+  }
+
+  const worktreeRaw = typeof paths.worktree === "string" ? paths.worktree.trim() : "";
+  if (!worktreeRaw) {
+    if (requireWorktree) {
+      throw new Error(`${caller}: manifest paths.worktree must be set`);
+    }
+    return {
+      repoRoot,
+      worktree: null,
+      worktreeLocation: "missing",
+      relayWorktreeBase: getRelayWorktreeBase(),
+    };
+  }
+
+  const worktree = path.resolve(worktreeRaw);
+  const relayWorktreeBase = getRelayWorktreeBase();
+  const repoContainedWorktree = isPathContainedWithin(repoRoot, worktree);
+  const relayOwnedWorktree = isPathContainedWithin(relayWorktreeBase, worktree)
+    && path.basename(worktree) === path.basename(repoRoot);
+
+  if (!repoContainedWorktree && !relayOwnedWorktree) {
+    throw new Error(
+      `${caller}: manifest paths.worktree ${JSON.stringify(worktree)} is not contained under the expected repo root ` +
+      `${JSON.stringify(repoRoot)} and is not a relay-owned worktree under ${JSON.stringify(relayWorktreeBase)} ` +
+      `for repo ${JSON.stringify(path.basename(repoRoot))}.`
+    );
+  }
+
+  return {
+    repoRoot,
+    worktree,
+    worktreeLocation: repoContainedWorktree ? "repo_root" : "relay_worktree",
+    relayWorktreeBase,
+  };
 }
 
 function validateTransition(fromState, toState) {
@@ -772,9 +896,22 @@ function isTerminalState(state) {
 }
 
 function runCleanup({ repoRoot, data, gitBin = "git", dryRun = false, deleteMergedBranch = false }) {
+  const validatedPaths = validateManifestPaths(data?.paths, {
+    expectedRepoRoot: repoRoot,
+    runId: data?.run_id,
+    caller: "runCleanup",
+  });
+  const normalizedData = {
+    ...data,
+    paths: {
+      ...(data?.paths || {}),
+      repo_root: validatedPaths.repoRoot,
+      worktree: validatedPaths.worktree,
+    },
+  };
   const attemptedAt = nowIso();
-  const worktreePath = data.paths?.worktree || null;
-  const branch = data.git?.working_branch || null;
+  const worktreePath = normalizedData.paths?.worktree || null;
+  const branch = normalizedData.git?.working_branch || null;
   const worktreeStatus = readWorktreeStatus(gitBin, worktreePath);
   const branchExistsBefore = localBranchExists(gitBin, repoRoot, branch);
   const errors = [];
@@ -828,12 +965,12 @@ function runCleanup({ repoRoot, data, gitBin = "git", dryRun = false, deleteMerg
     ? "done"
     : "manual_cleanup_required";
 
-  const updatedData = updateManifestCleanup(data, {
+  const updatedData = updateManifestCleanup(normalizedData, {
     status: cleanupStatus,
     last_attempted_at: attemptedAt,
     cleaned_at: cleanupStatus === CLEANUP_STATUSES.SUCCEEDED
       ? attemptedAt
-      : (data.cleanup?.cleaned_at || null),
+      : (normalizedData.cleanup?.cleaned_at || null),
     worktree_removed: worktreeRemoved,
     branch_deleted: branchDeleted,
     prune_ran: pruneRan,
@@ -1000,6 +1137,7 @@ module.exports = {
   summarizeError,
   updateManifestCleanup,
   updateManifestState,
+  validateManifestPaths,
   validateRubricPathContainment,
   validateRunId,
   validateTransition,

@@ -290,6 +290,53 @@ test("dispatch resume fails when --run-id does not resolve", () => {
   assert.match(result.stderr, new RegExp(`No relay manifest found for run_id '${missingRunId}'`));
 });
 
+test("dispatch resume rejects crafted manifest repo roots before touching an unrelated repo", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  writeFakeCodex(binDir);
+  const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}` };
+
+  const first = JSON.parse(runDispatch(repoRoot, [
+    "-b", "issue-160",
+    "--prompt", "first pass",
+    "--json",
+  ], env));
+  const manifestPath = first.manifestPath;
+  const runId = first.runId;
+
+  const attackerRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-dispatch-attacker-"));
+  execFileSync("git", ["init", "-b", "main"], { cwd: attackerRoot, encoding: "utf-8", stdio: "pipe" });
+  execFileSync("git", ["config", "user.name", "Attacker"], { cwd: attackerRoot, encoding: "utf-8", stdio: "pipe" });
+  execFileSync("git", ["config", "user.email", "attacker@example.com"], { cwd: attackerRoot, encoding: "utf-8", stdio: "pipe" });
+  fs.writeFileSync(path.join(attackerRoot, "README.md"), "attacker\n", "utf-8");
+  execFileSync("git", ["add", "README.md"], { cwd: attackerRoot, encoding: "utf-8", stdio: "pipe" });
+  execFileSync("git", ["commit", "-m", "init"], { cwd: attackerRoot, encoding: "utf-8", stdio: "pipe" });
+
+  const record = readManifest(manifestPath);
+  writeManifest(manifestPath, {
+    ...updateManifestState(record.data, STATES.CHANGES_REQUESTED, "re_dispatch_requested_changes"),
+    paths: {
+      ...(record.data.paths || {}),
+      repo_root: attackerRoot,
+      worktree: path.join(attackerRoot, "wt", "issue-160"),
+    },
+  }, record.body);
+
+  const result = spawnSync("node", [SCRIPT, repoRoot, "--run-id", runId, "--prompt", "resume", "--json"], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    env,
+  });
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /manifest paths\.repo_root/);
+  assert.equal(fs.existsSync(path.join(attackerRoot, "first.txt")), false, "dispatch must reject before writing into the attacker repo");
+
+  const manifest = readManifest(manifestPath).data;
+  assert.equal(manifest.state, STATES.CHANGES_REQUESTED);
+});
+
 test("dispatch with --executor claude creates worktree and collects result", () => {
   const { repoRoot, relayHome } = setupRepo();
   process.env.RELAY_HOME = relayHome;

@@ -185,3 +185,40 @@ test("cleanup-worktrees does not echo tampered run_id into operator output (#176
   assert.doesNotMatch(textRun.stdout, /\.\.\/victim-run/, "text output must not contain tampered substring");
   assert.match(textRun.stdout, new RegExp(fallbackRunId), "text output should use the manifest basename");
 });
+
+test("cleanup-worktrees rejects crafted manifest worktrees before deleting unrelated checkouts", () => {
+  const repoRoot = setupRepo();
+  const updatedAt = "2026-04-01T00:00:00.000Z";
+  const { manifestPath } = writeRun(repoRoot, {
+    branch: "issue-160",
+    state: STATES.MERGED,
+    updatedAt,
+  });
+  const victimRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-janitor-victim-"));
+  fs.writeFileSync(path.join(victimRoot, "sentinel.txt"), "keep\n", "utf-8");
+
+  const record = readManifest(manifestPath);
+  writeManifest(manifestPath, {
+    ...record.data,
+    paths: {
+      ...(record.data.paths || {}),
+      worktree: victimRoot,
+    },
+  }, record.body);
+
+  const stdout = execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--all",
+    "--json",
+  ], { encoding: "utf-8" });
+
+  const result = JSON.parse(stdout);
+  assert.equal(result.cleaned.length, 0);
+  assert.equal(result.failed.length, 1);
+  assert.match(result.failed[0].error, /manifest paths\.worktree/);
+  assert.equal(fs.existsSync(victimRoot), true, "cleanup-worktrees must fail closed before removing the victim checkout");
+
+  const manifest = readManifest(manifestPath).data;
+  assert.equal(manifest.cleanup.status, "pending");
+});

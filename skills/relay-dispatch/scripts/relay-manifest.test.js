@@ -24,6 +24,7 @@ const {
   readPreviousAttempts,
   updateManifestCleanup,
   updateManifestState,
+  validateManifestPaths,
   validateRunId,
   writeManifest,
 } = require("./relay-manifest");
@@ -165,6 +166,76 @@ test("getRunDir and getManifestPath reject invalid run_id before path derivation
     () => getManifestPath(repoRoot, "issue-42\\20260412000000000"),
     /run_id must be a single path segment/
   );
+});
+
+test("validateManifestPaths accepts repo-contained and relay-owned worktrees", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-manifest-paths-ok-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  const runId = "issue-42-20260402103000500";
+  const manifestPath = ensureRunLayout(repoRoot, runId).manifestPath;
+
+  const repoContained = validateManifestPaths({
+    repo_root: repoRoot,
+    worktree: path.join(repoRoot, "wt", "issue-42"),
+  }, {
+    expectedRepoRoot: repoRoot,
+    manifestPath,
+    runId,
+    caller: "relay-manifest.test repo-contained",
+  });
+  assert.equal(repoContained.repoRoot, path.resolve(repoRoot));
+  assert.equal(repoContained.worktree, path.join(repoRoot, "wt", "issue-42"));
+  assert.equal(repoContained.worktreeLocation, "repo_root");
+
+  const relayOwnedWorktree = path.join(process.env.RELAY_HOME, "worktrees", "abc123", path.basename(repoRoot));
+  const relayOwned = validateManifestPaths({
+    repo_root: repoRoot,
+    worktree: relayOwnedWorktree,
+  }, {
+    expectedRepoRoot: repoRoot,
+    manifestPath,
+    runId,
+    caller: "relay-manifest.test relay-owned",
+  });
+  assert.equal(relayOwned.worktree, relayOwnedWorktree);
+  assert.equal(relayOwned.worktreeLocation, "relay_worktree");
+});
+
+test("validateManifestPaths rejects mismatched repo roots, escaped worktrees, and manifest-path mismatches", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-manifest-paths-bad-"));
+  const attackerRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-manifest-paths-attacker-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  const runId = "issue-42-20260402103000600";
+  const manifestPath = ensureRunLayout(repoRoot, runId).manifestPath;
+
+  assert.throws(() => validateManifestPaths({
+    repo_root: attackerRoot,
+    worktree: path.join(attackerRoot, "wt", "issue-42"),
+  }, {
+    expectedRepoRoot: repoRoot,
+    manifestPath,
+    runId,
+    caller: "relay-manifest.test mismatched repo",
+  }), /does not match the expected repo root/);
+
+  assert.throws(() => validateManifestPaths({
+    repo_root: repoRoot,
+    worktree: attackerRoot,
+  }, {
+    expectedRepoRoot: repoRoot,
+    manifestPath,
+    runId,
+    caller: "relay-manifest.test escaped worktree",
+  }), /is not contained under the expected repo root/);
+
+  assert.throws(() => validateManifestPaths({
+    repo_root: attackerRoot,
+    worktree: path.join(attackerRoot, "wt", path.basename(attackerRoot)),
+  }, {
+    manifestPath,
+    runId,
+    caller: "relay-manifest.test manifest mismatch",
+  }), /does not match the manifest storage path/);
 });
 
 test("manifest round-trips through frontmatter helpers", () => {

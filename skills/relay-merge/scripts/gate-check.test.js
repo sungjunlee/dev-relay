@@ -527,6 +527,39 @@ test("gate-check rejects manifests whose stored run_id is invalid", () => {
   assert.equal(fs.existsSync(path.join(result.relayHome, "runs", "victim-gate-run")), false);
 });
 
+test("gate-check rejects crafted manifest repo roots before stamping or merge gating", () => {
+  const attackerRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-gate-attacker-"));
+  const result = runGateCheckLive({
+    manifest: {
+      anchor: {
+        rubric_grandfathered: true,
+      },
+      state: STATES.REVIEW_PENDING,
+    },
+    afterManifestSetup: ({ manifestPath }) => {
+      const record = readManifest(manifestPath);
+      writeManifest(manifestPath, {
+        ...record.data,
+        paths: {
+          ...(record.data.paths || {}),
+          repo_root: attackerRoot,
+          worktree: path.join(attackerRoot, "wt", "dev-relay"),
+        },
+      }, record.body);
+    },
+    prViewPayload: {
+      comments: [],
+      commits: [],
+      headRefName: "issue-40",
+    },
+  });
+
+  assert.equal(result.status, 1);
+  assert.equal(result.json.status, "manifest_resolution_failed");
+  assert.equal(result.json.readyToMerge, false);
+  assert.match(result.json.reason, /manifest paths\.repo_root/);
+});
+
 test("gate-check skips unauthorized and uses authorized review when both exist", () => {
   const result = runGateCheckDryRun({
     comments: [

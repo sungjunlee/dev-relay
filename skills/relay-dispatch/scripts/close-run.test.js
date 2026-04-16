@@ -154,3 +154,35 @@ test("close-run accepts escalated runs as close targets for manual recovery", ()
   assert.equal(manifest.state, STATES.CLOSED);
   assert.equal(manifest.cleanup.status, "succeeded");
 });
+
+test("close-run rejects crafted manifest worktrees outside the trusted repo before cleanup", () => {
+  const { repoRoot, manifestPath, runId } = setupRepo();
+  const victimRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-close-run-victim-"));
+  fs.writeFileSync(path.join(victimRoot, "sentinel.txt"), "keep\n", "utf-8");
+  const record = readManifest(manifestPath);
+  writeManifest(manifestPath, {
+    ...record.data,
+    paths: {
+      ...(record.data.paths || {}),
+      worktree: victimRoot,
+    },
+  }, record.body);
+
+  const result = spawnSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--run-id", runId,
+    "--reason", "stale_non_terminal_run",
+    "--json",
+  ], {
+    encoding: "utf-8",
+  });
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /manifest paths\.worktree/);
+  assert.equal(fs.existsSync(victimRoot), true, "close-run must reject before touching the victim checkout");
+
+  const manifest = readManifest(manifestPath).data;
+  assert.equal(manifest.state, STATES.REVIEW_PENDING);
+  assert.equal(manifest.cleanup.status, "pending");
+});

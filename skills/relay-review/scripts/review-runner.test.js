@@ -464,6 +464,36 @@ test("review-runner rejects invalid manifest run_id before creating a sibling ru
   assert.equal(fs.existsSync(victimRunDir), false);
 });
 
+test("review-runner rejects crafted manifest worktrees before preparing prompts in an unrelated checkout", () => {
+  const { repoRoot, manifestPath, runId, doneCriteriaPath, diffPath } = setupRepo();
+  const victimRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-victim-"));
+  fs.writeFileSync(path.join(victimRoot, "sentinel.txt"), "keep\n", "utf-8");
+  const record = readManifest(manifestPath);
+  writeManifest(manifestPath, {
+    ...record.data,
+    paths: {
+      ...(record.data.paths || {}),
+      worktree: victimRoot,
+    },
+  }, record.body);
+
+  assert.throws(() => execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--run-id", runId,
+    "--pr", "123",
+    "--done-criteria-file", doneCriteriaPath,
+    "--diff-file", diffPath,
+    "--prepare-only",
+    "--json",
+  ], { encoding: "utf-8", stdio: "pipe" }), (error) => {
+    assert.match(String(error.stderr), /manifest paths\.worktree/);
+    return true;
+  });
+
+  assert.equal(fs.existsSync(path.join(victimRoot, "review-round-1-prompt.md")), false);
+});
+
 test("review-runner fails closed when branch+PR resolution only finds a stale terminal manifest", () => {
   const { repoRoot, manifestPath, doneCriteriaPath, diffPath } = setupRepo();
   const record = readManifest(manifestPath);

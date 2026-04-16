@@ -19,6 +19,7 @@ const {
   listManifestPaths,
   readManifest,
   runCleanup,
+  validateManifestPaths,
   writeManifest,
 } = require("./relay-manifest");
 const { appendRunEvent } = require("./relay-events");
@@ -98,12 +99,43 @@ function run() {
       closeCommand: `node skills/relay-dispatch/scripts/close-run.js --repo ${JSON.stringify(repoRoot)} --run-id ${JSON.stringify(runId)} --reason ${JSON.stringify("stale_non_terminal_run")}`,
     };
 
+    let normalizedData = data;
+    try {
+      const validatedPaths = validateManifestPaths(data.paths, {
+        expectedRepoRoot: repoRoot,
+        manifestPath,
+        runId: data.run_id,
+        caller: "cleanup-worktrees",
+      });
+      normalizedData = {
+        ...data,
+        paths: {
+          ...(data.paths || {}),
+          repo_root: validatedPaths.repoRoot,
+          worktree: validatedPaths.worktree,
+        },
+      };
+    } catch (error) {
+      const sanitizedError = /run_id must be a single path segment/.test(String(error.message || ""))
+        ? `cleanup-worktrees: manifest ${JSON.stringify(path.basename(manifestPath))} has an invalid stored run_id; inspect the manifest before retrying.`
+        : error.message;
+      result.failed.push({
+        ...baseInfo,
+        nextAction: "inspect_manifest_paths",
+        worktreeRemoved: false,
+        branchDeleted: false,
+        pruneRan: false,
+        error: sanitizedError,
+      });
+      continue;
+    }
+
     if (!all && updatedAt && updatedAt > cutoff) {
       result.skipped.push({ ...baseInfo, reason: "recent" });
       continue;
     }
 
-    if (!isTerminalState(data.state)) {
+    if (!isTerminalState(normalizedData.state)) {
       result.staleOpen.push({ ...baseInfo, reason: "non-terminal" });
       continue;
     }
@@ -115,10 +147,10 @@ function run() {
 
     const cleanupResult = runCleanup({
       repoRoot,
-      data,
+      data: normalizedData,
       gitBin,
       dryRun,
-      deleteMergedBranch: data.state === "merged",
+      deleteMergedBranch: normalizedData.state === "merged",
     });
 
     const item = {

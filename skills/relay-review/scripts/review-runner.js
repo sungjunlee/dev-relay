@@ -39,6 +39,7 @@ const {
   getRunDir,
   readManifest,
   updateManifestState,
+  validateManifestPaths,
   writeManifest,
 } = require("../../relay-dispatch/scripts/relay-manifest");
 const { resolveManifestRecord } = require("../../relay-dispatch/scripts/relay-resolver");
@@ -150,6 +151,10 @@ function readText(filePath) {
 function writeText(filePath, text) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   fs.writeFileSync(filePath, text, "utf-8");
+}
+
+function looksLikeGitRepo(repoPath) {
+  return fs.existsSync(path.join(repoPath, ".git"));
 }
 
 function resolvePrForBranch(repoPath, branch) {
@@ -1072,15 +1077,34 @@ function resolveContext(repoPath, manifestPathArg, runIdArg, branchArg, prArg) {
     branch,
     prNumber,
   });
+  const validatedPaths = validateManifestPaths(manifest.data?.paths, {
+    expectedRepoRoot: looksLikeGitRepo(repoPath) ? repoPath : undefined,
+    manifestPath: manifest.manifestPath,
+    runId: manifest.data?.run_id,
+    requireWorktree: true,
+    caller: "review-runner",
+  });
   branch = branch || manifest.data?.git?.working_branch || null;
   prNumber = prNumber || manifest.data?.git?.pr_number || null;
   if (!prNumber && branch) {
     prNumber = resolvePrForBranch(repoPath, branch);
   }
   const issueNumber = resolveIssueNumber(repoPath, prNumber, branch, manifest.data);
-  const reviewRepoPath = path.resolve(manifest.data?.paths?.worktree || repoPath);
+  const reviewRepoPath = validatedPaths.worktree;
+  const runRepoPath = validatedPaths.repoRoot;
+  const normalizedManifest = {
+    ...manifest,
+    data: {
+      ...(manifest.data || {}),
+      paths: {
+        ...(manifest.data?.paths || {}),
+        repo_root: validatedPaths.repoRoot,
+        worktree: validatedPaths.worktree,
+      },
+    },
+  };
 
-  return { branch, prNumber, issueNumber, manifest, reviewRepoPath };
+  return { branch, prNumber, issueNumber, manifest: normalizedManifest, reviewRepoPath, runRepoPath };
 }
 
 function postComment(repoPath, prNumber, commentBody) {
@@ -1182,7 +1206,7 @@ function run() {
   const noComment = hasFlag("--no-comment");
   const jsonOut = hasFlag("--json");
 
-  const { branch, prNumber, issueNumber, manifest, reviewRepoPath } = resolveContext(
+  const { branch, prNumber, issueNumber, manifest, reviewRepoPath, runRepoPath } = resolveContext(
     repoPath,
     manifestPathArg,
     runIdArg,
@@ -1200,7 +1224,6 @@ function run() {
 
   const round = Number(data.review?.rounds || 0) + 1;
   const maxRounds = Number(data.review?.max_rounds || 20);
-  const runRepoPath = path.resolve(data.paths?.repo_root || repoPath);
   const runDir = getRunDir(runRepoPath, data.run_id);
   ensureRunLayout(runRepoPath, data.run_id);
   let reviewedHeadSha = null;
