@@ -229,6 +229,25 @@ test("validateManifestPaths accepts repo-contained and relay-owned worktrees", (
   });
   assert.equal(relayOwned.worktree, relayOwnedWorktree);
   assert.equal(relayOwned.worktreeLocation, "relay_worktree");
+
+  const linkedRepoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-manifest-linked-root-"));
+  execFileSync("git", ["worktree", "add", linkedRepoRoot, "-b", "issue-42-linked-root"], {
+    cwd: repoRoot,
+    stdio: "pipe",
+  });
+  const linkedManifestPath = ensureRunLayout(linkedRepoRoot, runId).manifestPath;
+  const linkedRelayOwnedWorktree = createRelayOwnedWorktree(linkedRepoRoot, "issue-42-linked-relay");
+  const linkedRelayOwned = validateManifestPaths({
+    repo_root: linkedRepoRoot,
+    worktree: linkedRelayOwnedWorktree,
+  }, {
+    expectedRepoRoot: linkedRepoRoot,
+    manifestPath: linkedManifestPath,
+    runId,
+    caller: "relay-manifest.test linked relay-owned",
+  });
+  assert.equal(linkedRelayOwned.worktree, linkedRelayOwnedWorktree);
+  assert.equal(linkedRelayOwned.worktreeLocation, "relay_worktree");
 });
 
 test("validateManifestPaths rejects mismatched repo roots, escaped worktrees, and manifest-path mismatches", () => {

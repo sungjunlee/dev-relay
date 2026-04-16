@@ -502,7 +502,7 @@ function validateManifestPaths(paths, {
   const repoContainedWorktree = isPathContainedWithin(repoRoot, worktree);
   const relayOwnedWorktreeCandidate = isPathContainedWithin(relayWorktreeBase, worktree)
     && path.basename(worktree) === path.basename(repoRoot);
-  const expectedGitCommonDir = path.join(repoRoot, ".git");
+  const expectedGitCommonDir = getWorktreeGitCommonDir(repoRoot) || path.join(repoRoot, ".git");
   const relayOwnedWorktree = relayOwnedWorktreeCandidate
     && (
       !fs.existsSync(worktree)
