@@ -64,6 +64,29 @@ function setupRepo({ dirtyWorktree = false, state = STATES.REVIEW_PENDING } = {}
   return { repoRoot, manifestPath, runId, worktreePath };
 }
 
+function createUnrelatedRelayOwnedWorktree(repoRoot, branch = "issue-42") {
+  const attackerParent = fs.mkdtempSync(path.join(os.tmpdir(), "relay-close-foreign-"));
+  const attackerRoot = path.join(attackerParent, path.basename(repoRoot));
+  fs.mkdirSync(attackerRoot, { recursive: true });
+  execFileSync("git", ["init", "-b", "main"], { cwd: attackerRoot, encoding: "utf-8", stdio: "pipe" });
+  execFileSync("git", ["config", "user.name", "Relay Close Foreign"], { cwd: attackerRoot, encoding: "utf-8", stdio: "pipe" });
+  execFileSync("git", ["config", "user.email", "relay-close-foreign@example.com"], { cwd: attackerRoot, encoding: "utf-8", stdio: "pipe" });
+  fs.writeFileSync(path.join(attackerRoot, "README.md"), "foreign\n", "utf-8");
+  execFileSync("git", ["add", "README.md"], { cwd: attackerRoot, encoding: "utf-8", stdio: "pipe" });
+  execFileSync("git", ["commit", "-m", "init"], { cwd: attackerRoot, encoding: "utf-8", stdio: "pipe" });
+  const relayWorktrees = path.join(process.env.RELAY_HOME, "worktrees");
+  fs.mkdirSync(relayWorktrees, { recursive: true });
+  const attackerWorktreeParent = fs.mkdtempSync(path.join(relayWorktrees, "foreign-"));
+  const attackerWorktree = path.join(attackerWorktreeParent, path.basename(repoRoot));
+  execFileSync("git", ["worktree", "add", attackerWorktree, "-b", branch], {
+    cwd: attackerRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+  });
+  fs.writeFileSync(path.join(attackerWorktree, "sentinel.txt"), "foreign\n", "utf-8");
+  return { attackerRoot, attackerWorktree };
+}
+
 test("close-run closes an active run and cleans a clean worktree", () => {
   const { repoRoot, manifestPath, runId, worktreePath } = setupRepo();
 
@@ -155,16 +178,15 @@ test("close-run accepts escalated runs as close targets for manual recovery", ()
   assert.equal(manifest.cleanup.status, "succeeded");
 });
 
-test("close-run rejects crafted manifest worktrees outside the trusted repo before cleanup", () => {
+test("close-run rejects relay-base same-name worktrees before cleanup", () => {
   const { repoRoot, manifestPath, runId } = setupRepo();
-  const victimRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-close-run-victim-"));
-  fs.writeFileSync(path.join(victimRoot, "sentinel.txt"), "keep\n", "utf-8");
+  const { attackerWorktree } = createUnrelatedRelayOwnedWorktree(repoRoot);
   const record = readManifest(manifestPath);
   writeManifest(manifestPath, {
     ...record.data,
     paths: {
       ...(record.data.paths || {}),
-      worktree: victimRoot,
+      worktree: attackerWorktree,
     },
   }, record.body);
 
@@ -180,7 +202,8 @@ test("close-run rejects crafted manifest worktrees outside the trusted repo befo
 
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /manifest paths\.worktree/);
-  assert.equal(fs.existsSync(victimRoot), true, "close-run must reject before touching the victim checkout");
+  assert.equal(fs.existsSync(attackerWorktree), true, "close-run must reject before touching the foreign relay worktree");
+  assert.equal(fs.existsSync(path.join(attackerWorktree, "sentinel.txt")), true);
 
   const manifest = readManifest(manifestPath).data;
   assert.equal(manifest.state, STATES.REVIEW_PENDING);

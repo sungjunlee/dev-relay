@@ -397,6 +397,37 @@ function sameFilesystemLocation(leftPath, rightPath) {
   }
 }
 
+function getWorktreeGitCommonDir(worktreePath) {
+  if (!worktreePath || !fs.existsSync(worktreePath)) {
+    return null;
+  }
+  try {
+    const gitEntry = path.join(worktreePath, ".git");
+    if (!fs.existsSync(gitEntry)) {
+      return null;
+    }
+    const gitEntryStat = fs.statSync(gitEntry);
+    if (gitEntryStat.isDirectory()) {
+      return path.resolve(gitEntry);
+    }
+
+    const gitEntryText = fs.readFileSync(gitEntry, "utf-8").trim();
+    const gitDirPrefix = "gitdir:";
+    if (!gitEntryText.startsWith(gitDirPrefix)) {
+      return null;
+    }
+    const gitDir = path.resolve(worktreePath, gitEntryText.slice(gitDirPrefix.length).trim());
+    const commonDirPath = path.join(gitDir, "commondir");
+    if (!fs.existsSync(commonDirPath)) {
+      return gitDir;
+    }
+    const commonDirText = fs.readFileSync(commonDirPath, "utf-8").trim();
+    return commonDirText ? path.resolve(gitDir, commonDirText) : gitDir;
+  } catch {
+    return null;
+  }
+}
+
 function validateManifestPaths(paths, {
   expectedRepoRoot,
   manifestPath,
@@ -469,14 +500,27 @@ function validateManifestPaths(paths, {
   const worktree = path.resolve(worktreeRaw);
   const relayWorktreeBase = getRelayWorktreeBase();
   const repoContainedWorktree = isPathContainedWithin(repoRoot, worktree);
-  const relayOwnedWorktree = isPathContainedWithin(relayWorktreeBase, worktree)
+  const relayOwnedWorktreeCandidate = isPathContainedWithin(relayWorktreeBase, worktree)
     && path.basename(worktree) === path.basename(repoRoot);
+  const expectedGitCommonDir = path.join(repoRoot, ".git");
+  const relayOwnedWorktree = relayOwnedWorktreeCandidate
+    && (
+      !fs.existsSync(worktree)
+      || (() => {
+        const worktreeGitCommonDir = getWorktreeGitCommonDir(worktree);
+        return worktreeGitCommonDir
+          && (
+            worktreeGitCommonDir === expectedGitCommonDir
+            || sameFilesystemLocation(worktreeGitCommonDir, expectedGitCommonDir)
+          );
+      })()
+    );
 
   if (!repoContainedWorktree && !relayOwnedWorktree) {
     throw new Error(
       `${caller}: manifest paths.worktree ${JSON.stringify(worktree)} is not contained under the expected repo root ` +
       `${JSON.stringify(repoRoot)} and is not a relay-owned worktree under ${JSON.stringify(relayWorktreeBase)} ` +
-      `for repo ${JSON.stringify(path.basename(repoRoot))}.`
+      `that is bound to ${JSON.stringify(expectedGitCommonDir)} for repo ${JSON.stringify(path.basename(repoRoot))}.`
     );
   }
 

@@ -78,6 +78,29 @@ function setupRepo() {
   return { repoRoot, worktreePath, manifestPath, runId, doneCriteriaPath, diffPath };
 }
 
+function createUnrelatedRelayOwnedWorktree(repoRoot, branch = "issue-42") {
+  const attackerParent = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-foreign-"));
+  const attackerRoot = path.join(attackerParent, path.basename(repoRoot));
+  fs.mkdirSync(attackerRoot, { recursive: true });
+  execFileSync("git", ["init", "-b", "main"], { cwd: attackerRoot, encoding: "utf-8", stdio: "pipe" });
+  execFileSync("git", ["config", "user.name", "Relay Review Foreign"], { cwd: attackerRoot, encoding: "utf-8", stdio: "pipe" });
+  execFileSync("git", ["config", "user.email", "relay-review-foreign@example.com"], { cwd: attackerRoot, encoding: "utf-8", stdio: "pipe" });
+  fs.writeFileSync(path.join(attackerRoot, "README.md"), "foreign\n", "utf-8");
+  execFileSync("git", ["add", "README.md"], { cwd: attackerRoot, encoding: "utf-8", stdio: "pipe" });
+  execFileSync("git", ["commit", "-m", "init"], { cwd: attackerRoot, encoding: "utf-8", stdio: "pipe" });
+  const relayWorktrees = path.join(process.env.RELAY_HOME, "worktrees");
+  fs.mkdirSync(relayWorktrees, { recursive: true });
+  const attackerWorktreeParent = fs.mkdtempSync(path.join(relayWorktrees, "foreign-"));
+  const attackerWorktree = path.join(attackerWorktreeParent, path.basename(repoRoot));
+  execFileSync("git", ["worktree", "add", attackerWorktree, "-b", branch], {
+    cwd: attackerRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+  });
+  fs.writeFileSync(path.join(attackerWorktree, "sentinel.txt"), "foreign\n", "utf-8");
+  return { attackerRoot, attackerWorktree };
+}
+
 function setReviewPending(manifestPath) {
   const { data, body } = readManifest(manifestPath);
   let updated = data;
@@ -464,16 +487,15 @@ test("review-runner rejects invalid manifest run_id before creating a sibling ru
   assert.equal(fs.existsSync(victimRunDir), false);
 });
 
-test("review-runner rejects crafted manifest worktrees before preparing prompts in an unrelated checkout", () => {
+test("review-runner rejects relay-base same-name worktrees before preparing prompts in an unrelated checkout", () => {
   const { repoRoot, manifestPath, runId, doneCriteriaPath, diffPath } = setupRepo();
-  const victimRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-victim-"));
-  fs.writeFileSync(path.join(victimRoot, "sentinel.txt"), "keep\n", "utf-8");
+  const { attackerWorktree } = createUnrelatedRelayOwnedWorktree(repoRoot);
   const record = readManifest(manifestPath);
   writeManifest(manifestPath, {
     ...record.data,
     paths: {
       ...(record.data.paths || {}),
-      worktree: victimRoot,
+      worktree: attackerWorktree,
     },
   }, record.body);
 
@@ -491,7 +513,8 @@ test("review-runner rejects crafted manifest worktrees before preparing prompts 
     return true;
   });
 
-  assert.equal(fs.existsSync(path.join(victimRoot, "review-round-1-prompt.md")), false);
+  assert.equal(fs.existsSync(path.join(attackerWorktree, "review-round-1-prompt.md")), false);
+  assert.equal(fs.existsSync(path.join(attackerWorktree, "sentinel.txt")), true);
 });
 
 test("review-runner fails closed when branch+PR resolution only finds a stale terminal manifest", () => {

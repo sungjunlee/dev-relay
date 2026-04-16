@@ -1,6 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { spawn, spawnSync } = require("child_process");
+const { execFileSync, spawn, spawnSync } = require("child_process");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
@@ -217,6 +217,29 @@ function createLiveGateFixture({ manifest, rubricContent, afterManifestSetup = n
     afterManifestSetup({ ...liveManifest, repoRoot, relayHome, binDir });
   }
   return { ...liveManifest, repoRoot, relayHome, binDir };
+}
+
+function createUnrelatedRelayOwnedWorktree(repoRoot, relayHome, branch = "issue-40") {
+  const attackerParent = fs.mkdtempSync(path.join(os.tmpdir(), "relay-gate-foreign-"));
+  const attackerRoot = path.join(attackerParent, path.basename(repoRoot));
+  fs.mkdirSync(attackerRoot, { recursive: true });
+  execFileSync("git", ["init", "-b", "main"], { cwd: attackerRoot, encoding: "utf-8", stdio: "pipe" });
+  execFileSync("git", ["config", "user.name", "Relay Gate Foreign"], { cwd: attackerRoot, encoding: "utf-8", stdio: "pipe" });
+  execFileSync("git", ["config", "user.email", "relay-gate-foreign@example.com"], { cwd: attackerRoot, encoding: "utf-8", stdio: "pipe" });
+  fs.writeFileSync(path.join(attackerRoot, "README.md"), "foreign\n", "utf-8");
+  execFileSync("git", ["add", "README.md"], { cwd: attackerRoot, encoding: "utf-8", stdio: "pipe" });
+  execFileSync("git", ["commit", "-m", "init"], { cwd: attackerRoot, encoding: "utf-8", stdio: "pipe" });
+  const relayWorktrees = path.join(relayHome, "worktrees");
+  fs.mkdirSync(relayWorktrees, { recursive: true });
+  const attackerWorktreeParent = fs.mkdtempSync(path.join(relayWorktrees, "foreign-"));
+  const attackerWorktree = path.join(attackerWorktreeParent, path.basename(repoRoot));
+  execFileSync("git", ["worktree", "add", attackerWorktree, "-b", branch], {
+    cwd: attackerRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+  });
+  fs.writeFileSync(path.join(attackerWorktree, "sentinel.txt"), "foreign\n", "utf-8");
+  return { attackerRoot, attackerWorktree };
 }
 
 function buildStampLockEnv({ timeoutMs = 75, pollMs = 5 } = {}) {
@@ -558,6 +581,40 @@ test("gate-check rejects crafted manifest repo roots before stamping or merge ga
   assert.equal(result.json.status, "manifest_resolution_failed");
   assert.equal(result.json.readyToMerge, false);
   assert.match(result.json.reason, /manifest paths\.repo_root/);
+});
+
+test("gate-check rejects relay-base same-name worktrees before stamping or merge gating", () => {
+  const fixture = createLiveGateFixture({
+    manifest: {
+      anchor: {
+        rubric_grandfathered: true,
+      },
+      state: STATES.REVIEW_PENDING,
+    },
+  });
+  const { attackerWorktree } = createUnrelatedRelayOwnedWorktree(fixture.repoRoot, fixture.relayHome);
+  const record = readManifest(fixture.manifestPath);
+  writeManifest(fixture.manifestPath, {
+    ...record.data,
+    paths: {
+      ...(record.data.paths || {}),
+      worktree: attackerWorktree,
+    },
+  }, record.body);
+
+  const result = runGateCheckWithFixture(fixture, {
+    prViewPayload: {
+      comments: [],
+      commits: [],
+      headRefName: "issue-40",
+    },
+  });
+
+  assert.equal(result.status, 1);
+  assert.equal(result.json.status, "manifest_resolution_failed");
+  assert.equal(result.json.readyToMerge, false);
+  assert.match(result.json.reason, /manifest paths\.worktree/);
+  assert.equal(fs.existsSync(path.join(attackerWorktree, "sentinel.txt")), true);
 });
 
 test("gate-check skips unauthorized and uses authorized review when both exist", () => {

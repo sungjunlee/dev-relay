@@ -30,6 +30,29 @@ function setupRepo() {
   return repoRoot;
 }
 
+function createUnrelatedRelayOwnedWorktree(repoRoot, branch = "issue-42") {
+  const attackerParent = fs.mkdtempSync(path.join(os.tmpdir(), "relay-janitor-foreign-"));
+  const attackerRoot = path.join(attackerParent, path.basename(repoRoot));
+  fs.mkdirSync(attackerRoot, { recursive: true });
+  execFileSync("git", ["init", "-b", "main"], { cwd: attackerRoot, encoding: "utf-8", stdio: "pipe" });
+  execFileSync("git", ["config", "user.name", "Relay Janitor Foreign"], { cwd: attackerRoot, encoding: "utf-8", stdio: "pipe" });
+  execFileSync("git", ["config", "user.email", "relay-janitor-foreign@example.com"], { cwd: attackerRoot, encoding: "utf-8", stdio: "pipe" });
+  fs.writeFileSync(path.join(attackerRoot, "README.md"), "foreign\n", "utf-8");
+  execFileSync("git", ["add", "README.md"], { cwd: attackerRoot, encoding: "utf-8", stdio: "pipe" });
+  execFileSync("git", ["commit", "-m", "init"], { cwd: attackerRoot, encoding: "utf-8", stdio: "pipe" });
+  const relayWorktrees = path.join(process.env.RELAY_HOME, "worktrees");
+  fs.mkdirSync(relayWorktrees, { recursive: true });
+  const attackerWorktreeParent = fs.mkdtempSync(path.join(relayWorktrees, "foreign-"));
+  const attackerWorktree = path.join(attackerWorktreeParent, path.basename(repoRoot));
+  execFileSync("git", ["worktree", "add", attackerWorktree, "-b", branch], {
+    cwd: attackerRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+  });
+  fs.writeFileSync(path.join(attackerWorktree, "sentinel.txt"), "foreign\n", "utf-8");
+  return { attackerRoot, attackerWorktree };
+}
+
 function writeRun(repoRoot, { branch, state, updatedAt }) {
   const worktreePath = path.join(repoRoot, "wt", branch);
   fs.mkdirSync(path.dirname(worktreePath), { recursive: true });
@@ -186,7 +209,7 @@ test("cleanup-worktrees does not echo tampered run_id into operator output (#176
   assert.match(textRun.stdout, new RegExp(fallbackRunId), "text output should use the manifest basename");
 });
 
-test("cleanup-worktrees rejects crafted manifest worktrees before deleting unrelated checkouts", () => {
+test("cleanup-worktrees rejects relay-base same-name worktrees before deleting unrelated checkouts", () => {
   const repoRoot = setupRepo();
   const updatedAt = "2026-04-01T00:00:00.000Z";
   const { manifestPath } = writeRun(repoRoot, {
@@ -194,15 +217,14 @@ test("cleanup-worktrees rejects crafted manifest worktrees before deleting unrel
     state: STATES.MERGED,
     updatedAt,
   });
-  const victimRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-janitor-victim-"));
-  fs.writeFileSync(path.join(victimRoot, "sentinel.txt"), "keep\n", "utf-8");
+  const { attackerWorktree } = createUnrelatedRelayOwnedWorktree(repoRoot, "issue-160");
 
   const record = readManifest(manifestPath);
   writeManifest(manifestPath, {
     ...record.data,
     paths: {
       ...(record.data.paths || {}),
-      worktree: victimRoot,
+      worktree: attackerWorktree,
     },
   }, record.body);
 
@@ -217,7 +239,8 @@ test("cleanup-worktrees rejects crafted manifest worktrees before deleting unrel
   assert.equal(result.cleaned.length, 0);
   assert.equal(result.failed.length, 1);
   assert.match(result.failed[0].error, /manifest paths\.worktree/);
-  assert.equal(fs.existsSync(victimRoot), true, "cleanup-worktrees must fail closed before removing the victim checkout");
+  assert.equal(fs.existsSync(attackerWorktree), true, "cleanup-worktrees must fail closed before removing the foreign relay worktree");
+  assert.equal(fs.existsSync(path.join(attackerWorktree, "sentinel.txt")), true);
 
   const manifest = readManifest(manifestPath).data;
   assert.equal(manifest.cleanup.status, "pending");
