@@ -17,6 +17,7 @@ const {
 const { readRunEvents } = require("../../relay-dispatch/scripts/relay-events");
 
 const SCRIPT = path.join(__dirname, "review-runner.js");
+const DISPATCH_SCRIPT = path.join(__dirname, "../../relay-dispatch/scripts/dispatch.js");
 
 function setupRepo() {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-runner-"));
@@ -248,6 +249,32 @@ process.exit(1);
 `, "utf-8");
   fs.chmodSync(filePath, 0o755);
   return filePath;
+}
+
+function writeFakeCodex(binDir) {
+  const codexPath = path.join(binDir, "codex");
+  fs.writeFileSync(codexPath, `#!/usr/bin/env node
+const fs = require("fs");
+const { execFileSync } = require("child_process");
+const args = process.argv.slice(2);
+if (args[0] === "--version") {
+  process.stdout.write("codex-fake\\n");
+  process.exit(0);
+}
+if (args[0] !== "exec") {
+  process.stderr.write("unsupported fake codex invocation");
+  process.exit(1);
+}
+const cwd = args[args.indexOf("-C") + 1];
+const output = args[args.indexOf("-o") + 1];
+const fileName = fs.existsSync(cwd + "/first.txt") ? "resume.txt" : "first.txt";
+fs.writeFileSync(cwd + "/" + fileName, fileName + "\\n", "utf-8");
+execFileSync("git", ["-C", cwd, "add", fileName], { stdio: "pipe" });
+execFileSync("git", ["-C", cwd, "commit", "-m", "fake " + fileName], { stdio: "pipe" });
+fs.writeFileSync(output, "ok\\n", "utf-8");
+`, "utf-8");
+  fs.chmodSync(codexPath, 0o755);
+  return codexPath;
 }
 
 test("prepare-only writes a prompt bundle without changing manifest state", () => {
@@ -1766,23 +1793,23 @@ test("review-runner allows empty rubric_scores when no rubric file exists", () =
 [
   {
     state: "missing",
-    recovery: /Restore the anchored rubric file in the run directory, or re-dispatch/i,
+    recovery: /Restore or replace the missing rubric, then run `node skills\/relay-dispatch\/scripts\/dispatch\.js \. --run-id/i,
   },
   {
     state: "outside_run_dir",
-    recovery: /Fix anchor\.rubric_path to resolve inside the run directory, then re-dispatch/i,
+    recovery: /Replace the escaped rubric anchor with a contained rubric, then run `node skills\/relay-dispatch\/scripts\/dispatch\.js \. --run-id/i,
   },
   {
     state: "empty",
-    recovery: /Regenerate the rubric with relay-plan and re-dispatch/i,
+    recovery: /Regenerate the empty rubric, then run `node skills\/relay-dispatch\/scripts\/dispatch\.js \. --run-id/i,
   },
   {
     state: "invalid",
-    recovery: /Fix or restore the anchored rubric file, then re-dispatch/i,
+    recovery: /Fix or replace the rubric anchor, then run `node skills\/relay-dispatch\/scripts\/dispatch\.js \. --run-id/i,
   },
   {
     state: "not_set",
-    recovery: /Re-dispatch from relay-plan with a persisted rubric, or explicitly grandfather/i,
+    recovery: /Persist a rubric for this run, then run `node skills\/relay-dispatch\/scripts\/dispatch\.js \. --run-id/i,
   },
 ].forEach(({ state, recovery }) => {
   test(`review-runner fail-closes PASS when rubric state is ${state}`, () => {
@@ -1813,19 +1840,28 @@ test("review-runner allows empty rubric_scores when no rubric file exists", () =
     const commentBody = fs.readFileSync(commentCapturePath, "utf-8");
 
     assert.equal(result.rubricLoaded, state);
-    assert.equal(result.state, STATES.REVIEW_PENDING);
-    assert.equal(result.nextState, STATES.REVIEW_PENDING);
-    assert.equal(result.appliedVerdict, "escalated");
+    assert.equal(result.state, STATES.CHANGES_REQUESTED);
+    assert.equal(result.nextState, STATES.CHANGES_REQUESTED);
+    assert.equal(result.appliedVerdict, "changes_requested");
+    assert.ok(result.redispatchPath);
     assert.equal(result.reviewGate.status, "rubric_state_failed_closed");
     assert.equal(result.reviewGate.layer, "review-runner");
     assert.equal(result.reviewGate.rubricState, state);
+    assert.match(
+      result.reviewGate.recoveryCommand,
+      new RegExp(`--run-id ${runId} --prompt-file ${result.redispatchPath.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\\\$&")}`)
+    );
     assert.match(result.reviewGate.recovery, recovery);
 
-    assert.equal(manifest.state, STATES.REVIEW_PENDING);
-    assert.equal(manifest.next_action, "repair_rubric_and_rerun_review");
+    assert.equal(manifest.state, STATES.CHANGES_REQUESTED);
+    assert.equal(manifest.next_action, "repair_rubric_and_redispatch");
     assert.equal(manifest.review.latest_verdict, "rubric_state_failed_closed");
     assert.equal(manifest.review.last_gate.layer, "review-runner");
     assert.equal(manifest.review.last_gate.rubric_state, state);
+    assert.match(
+      manifest.review.last_gate.recovery_command,
+      new RegExp(`--run-id ${runId} --prompt-file ${result.redispatchPath.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\\\$&")}`)
+    );
     assert.match(manifest.review.last_gate.recovery, recovery);
 
     assert.equal(verdictRecord.verdict, "pass");
@@ -1833,11 +1869,106 @@ test("review-runner allows empty rubric_scores when no rubric file exists", () =
     assert.equal(verdictRecord.relay_gate.status, "rubric_state_failed_closed");
     assert.equal(verdictRecord.relay_gate.layer, "review-runner");
     assert.equal(verdictRecord.relay_gate.rubric_state, state);
+    assert.match(
+      verdictRecord.relay_gate.recovery_command,
+      new RegExp(`--run-id ${runId} --prompt-file ${result.redispatchPath.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\\\$&")}`)
+    );
     assert.match(verdictRecord.relay_gate.recovery, recovery);
 
-    assert.match(commentBody, /Verdict: ESCALATED/);
+    assert.match(commentBody, /Verdict: CHANGES_REQUESTED/);
+    assert.match(commentBody, /Gate status: rubric_state_failed_closed/);
     assert.match(commentBody, /Layer: review-runner/);
     assert.match(commentBody, new RegExp(`Rubric state: ${state.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
+    assert.match(
+      commentBody,
+      new RegExp(
+        `Recovery command: node skills/relay-dispatch/scripts/dispatch\\.js \\. --run-id ${runId} --prompt-file ${result.redispatchPath.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\\\$&")}`
+      )
+    );
     assert.match(commentBody, recovery);
   });
+});
+
+test("review-runner fail-closed path can re-dispatch with a fixed rubric and pass the next review", () => {
+  const { repoRoot, manifestPath, runId, doneCriteriaPath, diffPath } = setupRepo();
+  configureRubricFixture({ manifestPath, repoRoot, runId, state: "missing" });
+
+  const firstReviewFile = writePassVerdict(repoRoot, "missing-pass.json");
+  const firstRound = runPassReview({
+    repoRoot,
+    runId,
+    doneCriteriaPath,
+    diffPath,
+    reviewFile: firstReviewFile,
+  });
+  assert.equal(firstRound.state, STATES.CHANGES_REQUESTED);
+  assert.ok(firstRound.redispatchPath);
+
+  const fixedRubricPath = path.join(repoRoot, "fixed-rubric.yaml");
+  fs.writeFileSync(fixedRubricPath, [
+    "rubric:",
+    "  factors:",
+    "    - name: API pagination",
+    "      target: \">= 8/10\"",
+  ].join("\n"), "utf-8");
+
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-codex-bin-"));
+  writeFakeCodex(binDir);
+  const dispatchResult = JSON.parse(execFileSync("node", [
+    DISPATCH_SCRIPT,
+    repoRoot,
+    "--run-id", runId,
+    "--prompt-file", firstRound.redispatchPath,
+    "--rubric-file", fixedRubricPath,
+    "--json",
+  ], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    env: {
+      ...process.env,
+      PATH: `${binDir}:${process.env.PATH}`,
+    },
+  }));
+
+  assert.equal(dispatchResult.mode, "resume");
+  assert.equal(dispatchResult.runState, STATES.REVIEW_PENDING);
+
+  const secondReviewFile = writeVerdict(repoRoot, "loaded-pass.json", {
+    verdict: "pass",
+    summary: "All done criteria are satisfied.",
+    contract_status: "pass",
+    quality_status: "pass",
+    next_action: "ready_to_merge",
+    issues: [],
+    rubric_scores: [
+      {
+        factor: "API pagination",
+        target: ">= 8/10",
+        observed: "9/10",
+        status: "pass",
+        tier: "contract",
+        notes: "Pagination behavior meets the rubric target.",
+      },
+    ],
+    scope_drift: { creep: [], missing: [] },
+  });
+  const secondRound = runPassReview({
+    repoRoot,
+    runId,
+    doneCriteriaPath,
+    diffPath,
+    reviewFile: secondReviewFile,
+  });
+
+  assert.equal(secondRound.round, 2);
+  assert.equal(secondRound.rubricLoaded, "loaded");
+  assert.equal(secondRound.state, STATES.READY_TO_MERGE);
+  assert.equal(secondRound.nextState, STATES.READY_TO_MERGE);
+  assert.equal(secondRound.appliedVerdict, "pass");
+
+  const manifest = readManifest(manifestPath).data;
+  assert.equal(manifest.state, STATES.READY_TO_MERGE);
+  assert.equal(manifest.next_action, "await_explicit_merge");
+  assert.equal(manifest.review.latest_verdict, "lgtm");
+  assert.equal(manifest.review.last_gate, null);
 });

@@ -589,15 +589,17 @@ function appendCommentWarnings(commentBody, warnings = []) {
 function buildCommentBody(verdict, round, { warnings = [], gateFailure = null } = {}) {
   if (gateFailure) {
     return appendCommentWarnings([
-      REVIEW_MARKER,
-      "## Relay Review",
-      "Verdict: ESCALATED",
+      REVIEW_ROUND_MARKER,
+      `## Relay Review Round ${round}`,
+      "Verdict: CHANGES_REQUESTED",
       `Summary: ${gateFailure.summary}`,
-      `Rounds: ${round}`,
       `Reviewer verdict: ${String(verdict.verdict || "unknown").toUpperCase()} (next_action=${verdict.next_action || "unknown"})`,
+      `Gate status: ${gateFailure.status}`,
       `Layer: ${gateFailure.layer}`,
       `Rubric state: ${gateFailure.rubricState} (anchor status: ${gateFailure.rubricStatus})`,
-      `Recovery: ${gateFailure.recovery}`,
+      `Recovery command: ${gateFailure.recoveryCommand}`,
+      "Issues:",
+      `- Rubric gate failed closed: ${gateFailure.reason}. ${gateFailure.recovery}`,
     ].join("\n"), warnings);
   }
 
@@ -912,37 +914,64 @@ function toEscalatedVerdict(baseVerdict, summary) {
   };
 }
 
+function buildRubricRecoveryCommand(runId, redispatchPath) {
+  return `node skills/relay-dispatch/scripts/dispatch.js . --run-id ${runId} --prompt-file ${redispatchPath} --rubric-file <fixed-rubric.yaml>`;
+}
+
+function buildRubricGateRedispatchPrompt(gateFailure, doneCriteria, doneCriteriaSource) {
+  return [
+    "Rubric recovery re-dispatch",
+    "",
+    "relay-review failed closed on the rubric anchor, not on the code diff.",
+    "",
+    `Gate status: ${gateFailure.status}`,
+    `Rubric state: ${gateFailure.rubricState} (anchor status: ${gateFailure.rubricStatus})`,
+    `Reason: ${gateFailure.reason}`,
+    `Recovery command: ${gateFailure.recoveryCommand}`,
+    "",
+    "Instructions:",
+    "- Fix the rubric anchor or supply a replacement rubric with --rubric-file.",
+    "- Keep the accepted task scope unchanged while re-dispatching.",
+    "- After the re-dispatch completes, rerun relay-review on the same run.",
+    "",
+    `Done Criteria source: ${doneCriteriaSource}`,
+    "Done Criteria:",
+    doneCriteria,
+  ].join("\n");
+}
+
 /**
- * Rubric fail-closed keeps `data.state` unchanged downstream instead of forcing
- * `escalated` so operators can repair the rubric and resume with
- * `dispatch --run-id`, matching the dispatcher's recoverable
- * `review_pending` / `changes_requested` re-dispatch flow.
- * `next_action=repair_rubric_and_rerun_review` tells the operator to fix the
- * anchored rubric state before rerunning relay-review, and
+ * Rubric fail-closed moves the run into `changes_requested` so the documented
+ * `dispatch --run-id` recovery command remains executable without widening
+ * dispatcher resume rules for arbitrary `review_pending` runs.
+ * `next_action=repair_rubric_and_redispatch` tells the operator to fix the
+ * anchored rubric state, re-dispatch the run, then rerun relay-review, and
  * `review.latest_verdict="rubric_state_failed_closed"` records that the raw
  * reviewer PASS was blocked by review-runner rubric enforcement.
  */
-function buildReviewRunnerRubricGateFailure(rubricLoad) {
+function buildReviewRunnerRubricGateFailure(runId, redispatchPath, rubricLoad) {
   if (!rubricLoad || RUBRIC_PASS_THROUGH_STATES.has(rubricLoad.state)) {
     return null;
   }
 
+  const recoveryCommand = buildRubricRecoveryCommand(runId, redispatchPath);
+  const rerunReviewStep = "After the re-dispatch completes, rerun relay-review.";
   let recovery;
   switch (rubricLoad.state) {
     case "not_set":
-      recovery = "Re-dispatch from relay-plan with a persisted rubric, or explicitly grandfather a pre-rubric run before rerunning relay-review.";
+      recovery = `Persist a rubric for this run, then run \`${recoveryCommand}\`. ${rerunReviewStep}`;
       break;
     case "missing":
-      recovery = "Restore the anchored rubric file in the run directory, or re-dispatch with a persisted rubric before rerunning relay-review.";
+      recovery = `Restore or replace the missing rubric, then run \`${recoveryCommand}\`. ${rerunReviewStep}`;
       break;
     case "outside_run_dir":
-      recovery = "Fix anchor.rubric_path to resolve inside the run directory, then re-dispatch before rerunning relay-review.";
+      recovery = `Replace the escaped rubric anchor with a contained rubric, then run \`${recoveryCommand}\`. ${rerunReviewStep}`;
       break;
     case "empty":
-      recovery = "Regenerate the rubric with relay-plan and re-dispatch before rerunning relay-review.";
+      recovery = `Regenerate the empty rubric, then run \`${recoveryCommand}\`. ${rerunReviewStep}`;
       break;
     default:
-      recovery = "Fix or restore the anchored rubric file, then re-dispatch before rerunning relay-review.";
+      recovery = `Fix or replace the rubric anchor, then run \`${recoveryCommand}\`. ${rerunReviewStep}`;
       break;
   }
 
@@ -952,6 +981,7 @@ function buildReviewRunnerRubricGateFailure(rubricLoad) {
     rubricState: rubricLoad.state,
     rubricStatus: rubricLoad.status,
     reason: rubricLoad.error || "Rubric is not loaded.",
+    recoveryCommand,
     recovery,
     summary: `review-runner fail-closed: rubricLoad.state='${rubricLoad.state}' blocked ready_to_merge despite reviewer PASS. ${recovery}`,
   };
@@ -976,8 +1006,8 @@ function applyVerdictToManifest(data, verdict, round, prNumber, reviewedHeadSha,
 
   if (verdict.verdict === "pass") {
     if (rubricGateFailure) {
-      nextState = data.state;
-      nextAction = "repair_rubric_and_rerun_review";
+      nextState = STATES.CHANGES_REQUESTED;
+      nextAction = "repair_rubric_and_redispatch";
       latestVerdict = rubricGateFailure.status;
     } else {
       nextState = STATES.READY_TO_MERGE;
@@ -1015,6 +1045,7 @@ function applyVerdictToManifest(data, verdict, round, prNumber, reviewedHeadSha,
         layer: rubricGateFailure.layer,
         rubric_state: rubricGateFailure.rubricState,
         rubric_status: rubricGateFailure.rubricStatus,
+        recovery_command: rubricGateFailure.recoveryCommand,
         recovery: rubricGateFailure.recovery,
         reason: rubricGateFailure.reason,
       } : null,
@@ -1334,8 +1365,9 @@ function run() {
       `Repeated identical review issues hit ${repeatedIssueCount} consecutive rounds.`
     );
   }
+  const rubricGateRedispatchPath = path.join(runDir, `review-round-${round}-redispatch.md`);
   const rubricGateFailure = verdict.verdict === "pass"
-    ? buildReviewRunnerRubricGateFailure(rubricLoad)
+    ? buildReviewRunnerRubricGateFailure(data.run_id, rubricGateRedispatchPath, rubricLoad)
     : null;
   const verdictPath = path.join(runDir, `review-round-${round}-verdict.json`);
   const verdictRecord = rubricGateFailure
@@ -1347,6 +1379,7 @@ function run() {
         rubric_state: rubricGateFailure.rubricState,
         rubric_status: rubricGateFailure.rubricStatus,
         reason: rubricGateFailure.reason,
+        recovery_command: rubricGateFailure.recoveryCommand,
         recovery: rubricGateFailure.recovery,
       },
     }
@@ -1354,9 +1387,14 @@ function run() {
   writeText(verdictPath, `${JSON.stringify(verdictRecord, null, 2)}\n`);
 
   let redispatchPath = null;
-  if (verdict.verdict === "changes_requested") {
-    redispatchPath = path.join(runDir, `review-round-${round}-redispatch.md`);
-    writeText(redispatchPath, `${buildRedispatchPrompt(verdict, doneCriteria, runDir, round, churnGrowth, doneCriteriaSource)}\n`);
+  if (verdict.verdict === "changes_requested" || rubricGateFailure) {
+    redispatchPath = rubricGateFailure
+      ? rubricGateRedispatchPath
+      : path.join(runDir, `review-round-${round}-redispatch.md`);
+    const redispatchPrompt = rubricGateFailure
+      ? buildRubricGateRedispatchPrompt(rubricGateFailure, doneCriteria, doneCriteriaSource)
+      : buildRedispatchPrompt(verdict, doneCriteria, runDir, round, churnGrowth, doneCriteriaSource);
+    writeText(redispatchPath, `${redispatchPrompt}\n`);
   }
 
   const { warnings: divergenceWarnings, eventPayload: divergencePayload } = buildScoreDivergenceAnalysis(
@@ -1424,13 +1462,14 @@ function run() {
   result.verdictPath = verdictPath;
   result.redispatchPath = redispatchPath;
   result.repeatedIssueCount = repeatedIssueCount;
-  result.appliedVerdict = rubricGateFailure ? "escalated" : verdict.verdict;
+  result.appliedVerdict = rubricGateFailure ? "changes_requested" : verdict.verdict;
   result.reviewGate = rubricGateFailure ? {
     status: rubricGateFailure.status,
     layer: rubricGateFailure.layer,
     rubricState: rubricGateFailure.rubricState,
     rubricStatus: rubricGateFailure.rubricStatus,
     reason: rubricGateFailure.reason,
+    recoveryCommand: rubricGateFailure.recoveryCommand,
     recovery: rubricGateFailure.recovery,
   } : null;
 
