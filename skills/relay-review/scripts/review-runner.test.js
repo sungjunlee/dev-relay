@@ -1847,7 +1847,10 @@ test("review-runner allows empty rubric_scores when no rubric file exists", () =
     assert.equal(result.reviewGate.status, "rubric_state_failed_closed");
     assert.equal(result.reviewGate.layer, "review-runner");
     assert.equal(result.reviewGate.rubricState, state);
-    assert.match(result.reviewGate.recoveryCommand, new RegExp(`--run-id ${runId}`));
+    assert.match(
+      result.reviewGate.recoveryCommand,
+      new RegExp(`--run-id ${runId} --prompt-file ${result.redispatchPath.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\\\$&")}`)
+    );
     assert.match(result.reviewGate.recovery, recovery);
 
     assert.equal(manifest.state, STATES.CHANGES_REQUESTED);
@@ -1855,7 +1858,10 @@ test("review-runner allows empty rubric_scores when no rubric file exists", () =
     assert.equal(manifest.review.latest_verdict, "rubric_state_failed_closed");
     assert.equal(manifest.review.last_gate.layer, "review-runner");
     assert.equal(manifest.review.last_gate.rubric_state, state);
-    assert.match(manifest.review.last_gate.recovery_command, new RegExp(`--run-id ${runId}`));
+    assert.match(
+      manifest.review.last_gate.recovery_command,
+      new RegExp(`--run-id ${runId} --prompt-file ${result.redispatchPath.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\\\$&")}`)
+    );
     assert.match(manifest.review.last_gate.recovery, recovery);
 
     assert.equal(verdictRecord.verdict, "pass");
@@ -1863,14 +1869,22 @@ test("review-runner allows empty rubric_scores when no rubric file exists", () =
     assert.equal(verdictRecord.relay_gate.status, "rubric_state_failed_closed");
     assert.equal(verdictRecord.relay_gate.layer, "review-runner");
     assert.equal(verdictRecord.relay_gate.rubric_state, state);
-    assert.match(verdictRecord.relay_gate.recovery_command, new RegExp(`--run-id ${runId}`));
+    assert.match(
+      verdictRecord.relay_gate.recovery_command,
+      new RegExp(`--run-id ${runId} --prompt-file ${result.redispatchPath.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\\\$&")}`)
+    );
     assert.match(verdictRecord.relay_gate.recovery, recovery);
 
     assert.match(commentBody, /Verdict: CHANGES_REQUESTED/);
     assert.match(commentBody, /Gate status: rubric_state_failed_closed/);
     assert.match(commentBody, /Layer: review-runner/);
     assert.match(commentBody, new RegExp(`Rubric state: ${state.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
-    assert.match(commentBody, new RegExp(`Recovery command: node skills/relay-dispatch/scripts/dispatch\\.js \\. --run-id ${runId}`));
+    assert.match(
+      commentBody,
+      new RegExp(
+        `Recovery command: node skills/relay-dispatch/scripts/dispatch\\.js \\. --run-id ${runId} --prompt-file ${result.redispatchPath.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\\\$&")}`
+      )
+    );
     assert.match(commentBody, recovery);
   });
 });

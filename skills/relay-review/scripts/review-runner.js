@@ -914,8 +914,8 @@ function toEscalatedVerdict(baseVerdict, summary) {
   };
 }
 
-function buildRubricRecoveryCommand(runId) {
-  return `node skills/relay-dispatch/scripts/dispatch.js . --run-id ${runId} --prompt-file <task.md> --rubric-file <fixed-rubric.yaml>`;
+function buildRubricRecoveryCommand(runId, redispatchPath) {
+  return `node skills/relay-dispatch/scripts/dispatch.js . --run-id ${runId} --prompt-file ${redispatchPath} --rubric-file <fixed-rubric.yaml>`;
 }
 
 function buildRubricGateRedispatchPrompt(gateFailure, doneCriteria, doneCriteriaSource) {
@@ -949,12 +949,12 @@ function buildRubricGateRedispatchPrompt(gateFailure, doneCriteria, doneCriteria
  * `review.latest_verdict="rubric_state_failed_closed"` records that the raw
  * reviewer PASS was blocked by review-runner rubric enforcement.
  */
-function buildReviewRunnerRubricGateFailure(runId, rubricLoad) {
+function buildReviewRunnerRubricGateFailure(runId, redispatchPath, rubricLoad) {
   if (!rubricLoad || RUBRIC_PASS_THROUGH_STATES.has(rubricLoad.state)) {
     return null;
   }
 
-  const recoveryCommand = buildRubricRecoveryCommand(runId);
+  const recoveryCommand = buildRubricRecoveryCommand(runId, redispatchPath);
   const rerunReviewStep = "After the re-dispatch completes, rerun relay-review.";
   let recovery;
   switch (rubricLoad.state) {
@@ -1365,8 +1365,9 @@ function run() {
       `Repeated identical review issues hit ${repeatedIssueCount} consecutive rounds.`
     );
   }
+  const rubricGateRedispatchPath = path.join(runDir, `review-round-${round}-redispatch.md`);
   const rubricGateFailure = verdict.verdict === "pass"
-    ? buildReviewRunnerRubricGateFailure(data.run_id, rubricLoad)
+    ? buildReviewRunnerRubricGateFailure(data.run_id, rubricGateRedispatchPath, rubricLoad)
     : null;
   const verdictPath = path.join(runDir, `review-round-${round}-verdict.json`);
   const verdictRecord = rubricGateFailure
@@ -1387,7 +1388,9 @@ function run() {
 
   let redispatchPath = null;
   if (verdict.verdict === "changes_requested" || rubricGateFailure) {
-    redispatchPath = path.join(runDir, `review-round-${round}-redispatch.md`);
+    redispatchPath = rubricGateFailure
+      ? rubricGateRedispatchPath
+      : path.join(runDir, `review-round-${round}-redispatch.md`);
     const redispatchPrompt = rubricGateFailure
       ? buildRubricGateRedispatchPrompt(rubricGateFailure, doneCriteria, doneCriteriaSource)
       : buildRedispatchPrompt(verdict, doneCriteria, runDir, round, churnGrowth, doneCriteriaSource);
