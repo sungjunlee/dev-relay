@@ -341,6 +341,31 @@ test("gate-check blocks merge when a later review round requests changes", () =>
   assert.match(result.json.issues, /foo\.js:1/);
 });
 
+test("gate-check preserves rubric fail-closed recovery details from a changes_requested review round", () => {
+  const result = runGateCheckDryRun([
+    "<!-- relay-review -->\n## Relay Review\nVerdict: LGTM\nRounds: 1",
+    [
+      "<!-- relay-review-round -->",
+      "## Relay Review Round 2",
+      "Verdict: CHANGES_REQUESTED",
+      "Summary: review-runner fail-closed on the rubric anchor.",
+      "Reviewer verdict: PASS (next_action=ready_to_merge)",
+      "Gate status: rubric_state_failed_closed",
+      "Layer: review-runner",
+      "Rubric state: missing (anchor status: missing)",
+      "Recovery command: node skills/relay-dispatch/scripts/dispatch.js . --run-id issue-163-20260412010000000 --prompt-file <task.md> --rubric-file <fixed-rubric.yaml>",
+      "Issues:",
+      "- Rubric gate failed closed: Rubric file is missing. Restore or replace the missing rubric, then run `node skills/relay-dispatch/scripts/dispatch.js . --run-id issue-163-20260412010000000 --prompt-file <task.md> --rubric-file <fixed-rubric.yaml>`.",
+    ].join("\n"),
+  ]);
+
+  assert.equal(result.status, 1);
+  assert.equal(result.json.status, "changes_requested");
+  assert.equal(result.json.readyToMerge, false);
+  assert.match(result.json.issues, /Rubric gate failed closed/);
+  assert.match(result.json.issues, /dispatch\.js \. --run-id issue-163-20260412010000000/);
+});
+
 test("gate-check blocks stale LGTM comments when a newer commit exists", () => {
   const result = runGateCheckDryRun({
     comments: [
