@@ -219,7 +219,14 @@ function createLiveGateFixture({ manifest, rubricContent, afterManifestSetup = n
   return { ...liveManifest, repoRoot, relayHome, binDir };
 }
 
-function runGateCheckWithFixture(fixture, { prViewPayload, json = true } = {}) {
+function buildStampLockEnv({ timeoutMs = 75, pollMs = 5 } = {}) {
+  return {
+    RELAY_PR_NUMBER_STAMP_LOCK_TIMEOUT_MS: String(timeoutMs),
+    RELAY_PR_NUMBER_STAMP_LOCK_POLL_MS: String(pollMs),
+  };
+}
+
+function runGateCheckWithFixture(fixture, { prViewPayload, json = true, env = {} } = {}) {
   const result = spawnSync("node", [
     SCRIPT,
     "40",
@@ -232,6 +239,7 @@ function runGateCheckWithFixture(fixture, { prViewPayload, json = true } = {}) {
       RELAY_HOME: fixture.relayHome,
       PATH: `${fixture.binDir}:${process.env.PATH}`,
       FAKE_GH_PR_VIEW_JSON: JSON.stringify(prViewPayload),
+      ...env,
     },
   });
 
@@ -682,6 +690,141 @@ test("gate-check stamps git.pr_number on first successful PR-mode resolution and
     .map((line) => JSON.parse(line))
     .filter((entry) => entry.event === "pr_number_stamped");
   assert.equal(events.length, 1);
+});
+
+test("gate-check refuses merge when pr_number stamp lock times out (#185)", () => {
+  // Anti-theater scope (#185): pre-fix gate-check.js:137 on c450588 returned
+  // readFreshManifestRecord(manifestRecord) on timeout, which fed an unstamped
+  // manifest into evaluateReviewGate() and let merge advance with
+  // { status: \"lgtm\", readyToMerge: true }.
+  const fixture = createLiveGateFixture({
+    manifest: {
+      state: STATES.DISPATCHED,
+      anchor: {
+        rubric_path: "rubric.yaml",
+        rubric_grandfathered: false,
+      },
+      review: {
+        reviewer_login: "trusted-reviewer",
+        last_reviewed_sha: "abc123",
+      },
+      git: {
+        pr_number: null,
+      },
+    },
+  });
+  const stampLockPath = path.join(fixture.runDir, ".pr_number_stamp.lock");
+  fs.writeFileSync(stampLockPath, "stale peer pid 99999", { flag: "wx" });
+
+  const blocked = runGateCheckWithFixture(fixture, {
+    prViewPayload: buildPassingReviewPayload(),
+    env: buildStampLockEnv(),
+  });
+  assert.equal(blocked.status, 1, "merge must be blocked while the stale lock remains");
+  assert.equal(blocked.json.status, "manifest_resolution_failed");
+  assert.equal(blocked.json.readyToMerge, false);
+  assert.match(blocked.json.reason, /\.pr_number_stamp\.lock/);
+  assert.match(blocked.json.reason, /stale lock|peer crash|still-running holder/i);
+  assert.match(blocked.json.reason, /#185 \/ #166/);
+  assert.match(blocked.json.reason, /clear it only after confirming no active holder/i);
+  assert.ok(
+    blocked.json.reason.includes(stampLockPath),
+    `expected concrete lock path in error, got: ${blocked.json.reason}`
+  );
+
+  const blockedManifest = readManifest(fixture.manifestPath).data;
+  assert.equal(blockedManifest.git.pr_number, null);
+
+  const blockedEventsPath = path.join(fixture.runDir, "events.jsonl");
+  const blockedEvents = fs.existsSync(blockedEventsPath)
+    ? fs.readFileSync(blockedEventsPath, "utf-8")
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line) => JSON.parse(line))
+      .filter((entry) => entry.event === "pr_number_stamped")
+    : [];
+  assert.equal(blockedEvents.length, 0);
+
+  fs.unlinkSync(stampLockPath);
+
+  const recovered = runGateCheckWithFixture(fixture, {
+    prViewPayload: buildPassingReviewPayload(),
+    env: buildStampLockEnv(),
+  });
+  assert.equal(recovered.status, 0);
+  assert.equal(recovered.json.status, "lgtm");
+  assert.equal(recovered.json.readyToMerge, true);
+
+  const recoveredManifest = readManifest(fixture.manifestPath).data;
+  assert.equal(recoveredManifest.git.pr_number, 40);
+
+  const recoveredEvents = fs.readFileSync(blockedEventsPath, "utf-8")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => JSON.parse(line))
+    .filter((entry) => entry.event === "pr_number_stamped");
+  assert.equal(recoveredEvents.length, 1);
+});
+
+test("gate-check timeout path treats a fresh terminal manifest as healthy contention (#185)", () => {
+  const fixture = createLiveGateFixture({
+    manifest: {
+      state: STATES.MERGED,
+      anchor: {
+        rubric_path: "rubric.yaml",
+        rubric_grandfathered: false,
+      },
+      review: {
+        reviewer_login: "trusted-reviewer",
+        last_reviewed_sha: "abc123",
+      },
+      git: {
+        pr_number: null,
+      },
+    },
+  });
+  const preloadPath = writeResolverOverridePreload(fixture.binDir, fixture.manifestPath, STATES.DISPATCHED);
+  const stampLockPath = path.join(fixture.runDir, ".pr_number_stamp.lock");
+  fs.writeFileSync(stampLockPath, "slow peer pid 99999", { flag: "wx" });
+
+  const result = spawnSync("node", [
+    SCRIPT,
+    "40",
+    "--json",
+  ], {
+    cwd: fixture.repoRoot,
+    encoding: "utf-8",
+    env: {
+      ...process.env,
+      ...buildStampLockEnv(),
+      RELAY_HOME: fixture.relayHome,
+      PATH: `${fixture.binDir}:${process.env.PATH}`,
+      NODE_OPTIONS: `${process.env.NODE_OPTIONS ? `${process.env.NODE_OPTIONS} ` : ""}--require ${preloadPath}`,
+      FAKE_GH_PR_VIEW_JSON: JSON.stringify(buildPassingReviewPayload()),
+    },
+  });
+
+  assert.equal(result.status, 0);
+  const json = JSON.parse(result.stdout);
+  assert.equal(json.status, "lgtm");
+
+  const stored = readManifest(fixture.manifestPath).data;
+  assert.equal(stored.state, STATES.MERGED);
+  assert.equal(stored.git.pr_number, null);
+
+  const eventsPath = path.join(fixture.runDir, "events.jsonl");
+  const events = fs.existsSync(eventsPath)
+    ? fs.readFileSync(eventsPath, "utf-8")
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line) => JSON.parse(line))
+      .filter((entry) => entry.event === "pr_number_stamped")
+    : [];
+  assert.equal(events.length, 0);
+  assert.ok(fs.existsSync(stampLockPath), "timeout fast-path should not unlink a lock it never acquired");
 });
 
 test("gate-check skips first-resolution stamping when the fresh locked read is already terminal (#166)", () => {

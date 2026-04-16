@@ -32,9 +32,18 @@ const { STATES, getRunDir, readManifest, writeManifest } = require("../../relay-
 const { appendRunEvent, readRunEvents } = require("../../relay-dispatch/scripts/relay-events");
 const { resolveManifestRecord } = require("../../relay-dispatch/scripts/relay-resolver");
 
+function parsePositiveIntEnv(name, fallback) {
+  const raw = process.env[name];
+  if (raw === undefined) {
+    return fallback;
+  }
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
 const PR_NUMBER_STAMP_LOCK_NAME = ".pr_number_stamp.lock";
-const PR_NUMBER_STAMP_LOCK_TIMEOUT_MS = 5000;
-const PR_NUMBER_STAMP_LOCK_POLL_MS = 50;
+const PR_NUMBER_STAMP_LOCK_TIMEOUT_MS = parsePositiveIntEnv("RELAY_PR_NUMBER_STAMP_LOCK_TIMEOUT_MS", 5000);
+const PR_NUMBER_STAMP_LOCK_POLL_MS = parsePositiveIntEnv("RELAY_PR_NUMBER_STAMP_LOCK_POLL_MS", 50);
 const PR_NUMBER_STAMP_WAIT_STATE = new Int32Array(new SharedArrayBuffer(4));
 // Rule 7 (#177 / #166): whitelist non-terminal states so tampered or missing
 // state values fail-closed (skip stamping) at the inside-lock recheck. Scoped
@@ -136,9 +145,25 @@ function stampPrNumberUnderLock(manifestRecord, numericPrNumber) {
   fs.mkdirSync(runDir, { recursive: true });
   lockFd = waitForPrNumberStampLock(lockPath);
   if (lockFd === null) {
-    // #166 is fail-safe under contention: timed-out lock acquisition re-reads the
-    // committed manifest and continues, instead of turning a CI rerun race into a throw.
-    return readFreshManifestRecord(manifestRecord);
+    // #185 / meta-rule 1 recursive: the timeout fallthrough serves two downstream
+    // consumers. Audit-trail dedup is still fail-safe, but the merge gate must
+    // fail-closed if a stale lock or peer crash left git.pr_number unset. Re-read
+    // first so healthy contention still succeeds when the peer finished stamping
+    // during our wait.
+    const freshRecord = readFreshManifestRecord(manifestRecord);
+    if (!isNonTerminalStateForPrStamp(freshRecord.data?.state)) {
+      return freshRecord;
+    }
+    const freshPrNumber = freshRecord.data?.git?.pr_number;
+    if (freshPrNumber !== undefined && freshPrNumber !== null) {
+      return freshRecord;
+    }
+    throw new Error(
+      "gate-check: .pr_number_stamp.lock contention timeout left git.pr_number unset after a fresh re-read. "
+      + "This may indicate a stale lock, peer crash, or a still-running holder on a slow filesystem. "
+      + `Inspect ${JSON.stringify(lockPath)} and clear it only after confirming no active holder is still stamping. `
+      + "See #185 / #166 for background."
+    );
   }
 
   try {
