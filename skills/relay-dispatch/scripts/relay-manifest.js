@@ -574,9 +574,249 @@ function hasRubricPath(data) {
   return typeof data?.anchor?.rubric_path === "string" && data.anchor.rubric_path.trim() !== "";
 }
 
-// TODO(2026-Q3): remove grandfather path once all pre-2026-04 runs are closed.
+const LEGACY_RUBRIC_GRANDFATHER_WARNED_RUN_IDS = new Set();
+const RUBRIC_GRANDFATHER_REQUIRED_FIELDS = Object.freeze(["from_migration", "applied_at", "actor"]);
+const RUBRIC_MIGRATION_MANIFEST_BASENAME = "rubric-mandatory.yaml";
+const STRICT_ISO_TIMESTAMP_PATTERN = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{3}))?(Z|([+-])(\d{2}):(\d{2}))$/;
+
+function warnLegacyRubricGrandfather(runId) {
+  const normalizedRunId = typeof runId === "string" && runId.trim() !== ""
+    ? runId.trim()
+    : "unknown-run";
+  if (LEGACY_RUBRIC_GRANDFATHER_WARNED_RUN_IDS.has(normalizedRunId)) {
+    return;
+  }
+  LEGACY_RUBRIC_GRANDFATHER_WARNED_RUN_IDS.add(normalizedRunId);
+  console.error(
+    `Warning: run ${normalizedRunId} uses legacy boolean anchor.rubric_grandfathered=true; ` +
+    "migrate it with relay-migrate-rubric.js."
+  );
+}
+
+function isStrictIsoTimestamp(value) {
+  if (typeof value !== "string") {
+    return false;
+  }
+
+  const match = STRICT_ISO_TIMESTAMP_PATTERN.exec(value);
+  if (!match) {
+    return false;
+  }
+
+  const [
+    ,
+    yearText,
+    monthText,
+    dayText,
+    hourText,
+    minuteText,
+    secondText,
+    millisecondText,
+    timezone,
+    offsetSign,
+    offsetHourText,
+    offsetMinuteText,
+  ] = match;
+
+  const year = Number.parseInt(yearText, 10);
+  const month = Number.parseInt(monthText, 10);
+  const day = Number.parseInt(dayText, 10);
+  const hour = Number.parseInt(hourText, 10);
+  const minute = Number.parseInt(minuteText, 10);
+  const second = Number.parseInt(secondText, 10);
+  const millisecond = millisecondText === undefined ? 0 : Number.parseInt(millisecondText, 10);
+  const offsetHours = offsetHourText === undefined ? 0 : Number.parseInt(offsetHourText, 10);
+  const offsetMinutes = offsetMinuteText === undefined ? 0 : Number.parseInt(offsetMinuteText, 10);
+
+  if (month < 1 || month > 12 || day < 1 || day > 31) {
+    return false;
+  }
+  if (hour > 23 || minute > 59 || second > 59) {
+    return false;
+  }
+  if (offsetHours > 23 || offsetMinutes > 59) {
+    return false;
+  }
+
+  const offsetTotalMinutes = timezone === "Z"
+    ? 0
+    : ((offsetSign === "-" ? -1 : 1) * ((offsetHours * 60) + offsetMinutes));
+  const utcMillis = Date.UTC(year, month - 1, day, hour, minute, second, millisecond) - (offsetTotalMinutes * 60 * 1000);
+  if (Number.isNaN(utcMillis)) {
+    return false;
+  }
+
+  const localTimestamp = new Date(utcMillis + (offsetTotalMinutes * 60 * 1000));
+  return (
+    localTimestamp.getUTCFullYear() === year
+    && localTimestamp.getUTCMonth() === month - 1
+    && localTimestamp.getUTCDate() === day
+    && localTimestamp.getUTCHours() === hour
+    && localTimestamp.getUTCMinutes() === minute
+    && localTimestamp.getUTCSeconds() === second
+    && localTimestamp.getUTCMilliseconds() === millisecond
+  );
+}
+
+function buildRubricGrandfatherDiagnostic(rawValue) {
+  if (!rawValue || typeof rawValue !== "object" || Array.isArray(rawValue)) {
+    return "anchor.rubric_grandfathered must be true or an object with from_migration, applied_at, and actor.";
+  }
+
+  const missingFields = RUBRIC_GRANDFATHER_REQUIRED_FIELDS.filter((field) => {
+    return typeof rawValue[field] !== "string" || rawValue[field].trim() === "";
+  });
+  if (missingFields.length > 0) {
+    return `anchor.rubric_grandfathered object is invalid: missing ${missingFields.join(", ")}.`;
+  }
+
+  if (!isStrictIsoTimestamp(rawValue.applied_at)) {
+    return `anchor.rubric_grandfathered.applied_at must be an ISO timestamp, got ${JSON.stringify(rawValue.applied_at)}.`;
+  }
+
+  if (rawValue.reason !== undefined && rawValue.reason !== null && typeof rawValue.reason !== "string") {
+    return "anchor.rubric_grandfathered.reason must be a string when set.";
+  }
+
+  return null;
+}
+
+function verifyRubricGrandfatherProvenance(data, provenance) {
+  const runId = typeof data?.run_id === "string" ? data.run_id.trim() : "";
+  if (!runId) {
+    return "anchor.rubric_grandfathered provenance requires a valid run_id for migration-manifest verification.";
+  }
+  if (provenance.from_migration !== RUBRIC_MIGRATION_MANIFEST_BASENAME) {
+    return (
+      `anchor.rubric_grandfathered.from_migration must be ${JSON.stringify(RUBRIC_MIGRATION_MANIFEST_BASENAME)} ` +
+      `for authoritative verification, got ${JSON.stringify(provenance.from_migration)}.`
+    );
+  }
+
+  const manifestPath = path.join(getRelayHome(), "migrations", RUBRIC_MIGRATION_MANIFEST_BASENAME);
+
+  try {
+    const { readMigrationManifest } = require("./relay-migrate-rubric");
+    const document = readMigrationManifest(manifestPath);
+    const entry = (document.runs || []).find((candidate) => candidate.run_id === runId);
+    if (!entry) {
+      return (
+        `anchor.rubric_grandfathered provenance is not backed by ${manifestPath}: ` +
+        `run ${runId} is not listed in the migration manifest.`
+      );
+    }
+    if (!isStrictIsoTimestamp(entry.applied_at)) {
+      return (
+        `anchor.rubric_grandfathered provenance is not backed by ${manifestPath}: ` +
+        `runs[].applied_at for run ${runId} must be a strict ISO timestamp.`
+      );
+    }
+    const normalizedAppliedAt = new Date(Date.parse(entry.applied_at)).toISOString();
+    if (normalizedAppliedAt !== provenance.applied_at) {
+      return (
+        `anchor.rubric_grandfathered provenance is not backed by ${manifestPath}: ` +
+        `run ${runId} applied_at ${JSON.stringify(provenance.applied_at)} does not match migration manifest value ` +
+        `${JSON.stringify(normalizedAppliedAt)}.`
+      );
+    }
+  } catch (error) {
+    return (
+      `anchor.rubric_grandfathered provenance could not be verified against ${manifestPath}: ` +
+      summarizeError(error)
+    );
+  }
+
+  return null;
+}
+
+function getRubricGrandfatherMetadata(data) {
+  const rawValue = data?.anchor?.rubric_grandfathered;
+  if (rawValue === true) {
+    warnLegacyRubricGrandfather(data?.run_id);
+    return {
+      grandfathered: true,
+      legacyGrandfather: true,
+      provenance: null,
+      diagnostic: null,
+    };
+  }
+
+  if (rawValue === undefined || rawValue === null || rawValue === false) {
+    return {
+      grandfathered: false,
+      legacyGrandfather: false,
+      provenance: null,
+      diagnostic: null,
+    };
+  }
+
+  const diagnostic = buildRubricGrandfatherDiagnostic(rawValue);
+  if (diagnostic) {
+    return {
+      grandfathered: false,
+      legacyGrandfather: false,
+      provenance: null,
+      diagnostic,
+    };
+  }
+
+  const normalizedProvenance = {
+    from_migration: rawValue.from_migration.trim(),
+    applied_at: new Date(Date.parse(rawValue.applied_at)).toISOString(),
+    actor: rawValue.actor.trim(),
+    reason: typeof rawValue.reason === "string" && rawValue.reason.trim() !== ""
+      ? rawValue.reason.trim()
+      : null,
+  };
+  const verificationDiagnostic = verifyRubricGrandfatherProvenance(data, normalizedProvenance);
+  if (verificationDiagnostic) {
+    return {
+      grandfathered: false,
+      legacyGrandfather: false,
+      provenance: null,
+      diagnostic: verificationDiagnostic,
+    };
+  }
+
+  return {
+    grandfathered: true,
+    legacyGrandfather: false,
+    provenance: normalizedProvenance,
+    diagnostic: null,
+  };
+}
+
+// TODO(2026-Q3): remove legacy boolean compat once the migration issue closes.
 function isRubricGrandfathered(data) {
-  return data?.anchor?.rubric_grandfathered === true;
+  return getRubricGrandfatherMetadata(data).grandfathered;
+}
+
+function formatRubricGrandfatherNote(metadata) {
+  if (metadata.legacyGrandfather) {
+    return "Grandfathered pre-rubric run via legacy boolean anchor.rubric_grandfathered=true. " +
+      "This deprecated form should be migrated with relay-migrate-rubric.js.";
+  }
+
+  if (!metadata.provenance) {
+    return "Grandfathered pre-rubric run.";
+  }
+
+  const details = [
+    `migration=${metadata.provenance.from_migration}`,
+    `applied_at=${metadata.provenance.applied_at}`,
+    `actor=${metadata.provenance.actor}`,
+  ];
+  if (metadata.provenance.reason) {
+    details.push(`reason=${metadata.provenance.reason}`);
+  }
+  return `Grandfathered pre-rubric run via migration provenance (${details.join(", ")}).`;
+}
+
+function prependGrandfatherDiagnostic(message, metadata) {
+  if (!metadata?.diagnostic) {
+    return message;
+  }
+  return `${metadata.diagnostic} ${message}`;
 }
 
 function resolveRubricRunDir(data, options = {}) {
@@ -811,14 +1051,17 @@ function readTextFileWithoutFollowingSymlinks(targetPath, realPath) {
 
 function getRubricAnchorStatus(data, options = {}) {
   const rubricPath = hasRubricPath(data) ? data.anchor.rubric_path.trim() : null;
-  const grandfathered = isRubricGrandfathered(data);
   const runDir = resolveRubricRunDir(data, options);
+  const grandfatherMetadata = getRubricGrandfatherMetadata(data);
+  const grandfathered = grandfatherMetadata.grandfathered;
   const baseStatus = {
     status: "missing_path",
     rubricPath,
     runDir,
     resolvedPath: null,
     grandfathered,
+    grandfatherProvenance: grandfatherMetadata.provenance,
+    legacyGrandfather: grandfatherMetadata.legacyGrandfather,
     satisfied: false,
     exists: false,
     empty: false,
@@ -834,14 +1077,17 @@ function getRubricAnchorStatus(data, options = {}) {
       ...baseStatus,
       status: "grandfathered",
       satisfied: true,
-      note: "Grandfathered pre-rubric run: merge/review gates are allowing missing anchor.rubric_path because anchor.rubric_grandfathered=true.",
+      note: formatRubricGrandfatherNote(grandfatherMetadata),
     };
   }
 
   if (!rubricPath) {
     return {
       ...baseStatus,
-      error: "anchor.rubric_path is required before review/merge unless anchor.rubric_grandfathered=true.",
+      error: prependGrandfatherDiagnostic(
+        "anchor.rubric_path is required before review/merge unless anchor.rubric_grandfathered is a valid legacy boolean or provenance object.",
+        grandfatherMetadata
+      ),
     };
   }
 
@@ -851,7 +1097,7 @@ function getRubricAnchorStatus(data, options = {}) {
       ...baseStatus,
       ...containment,
       status: containment.status,
-      error: containment.reason,
+      error: prependGrandfatherDiagnostic(containment.reason, grandfatherMetadata),
     };
   }
 
@@ -869,7 +1115,7 @@ function getRubricAnchorStatus(data, options = {}) {
         status: "empty",
         exists: true,
         empty: true,
-        error: `rubric file is empty: ${containment.resolvedPath}`,
+        error: prependGrandfatherDiagnostic(`rubric file is empty: ${containment.resolvedPath}`, grandfatherMetadata),
       };
     }
 
@@ -887,7 +1133,10 @@ function getRubricAnchorStatus(data, options = {}) {
         ...baseStatus,
         ...containment,
         status: "missing",
-        error: `rubric file is missing from the run directory: ${containment.resolvedPath}`,
+        error: prependGrandfatherDiagnostic(
+          `rubric file is missing from the run directory: ${containment.resolvedPath}`,
+          grandfatherMetadata
+        ),
       };
     }
 
@@ -896,7 +1145,10 @@ function getRubricAnchorStatus(data, options = {}) {
         ...baseStatus,
         ...containment,
         status: "symlink_escape",
-        error: `anchor.rubric_path must not be a symlink (got ${JSON.stringify(containment.rubricPath)} -> ${JSON.stringify(containment.resolvedPath)}).`,
+        error: prependGrandfatherDiagnostic(
+          `anchor.rubric_path must not be a symlink (got ${JSON.stringify(containment.rubricPath)} -> ${JSON.stringify(containment.resolvedPath)}).`,
+          grandfatherMetadata
+        ),
       };
     }
 
@@ -905,7 +1157,10 @@ function getRubricAnchorStatus(data, options = {}) {
         ...baseStatus,
         ...containment,
         status: "not_file",
-        error: `anchor.rubric_path must point to a file inside the run directory (got ${JSON.stringify(containment.resolvedPath)}).`,
+        error: prependGrandfatherDiagnostic(
+          `anchor.rubric_path must point to a file inside the run directory (got ${JSON.stringify(containment.resolvedPath)}).`,
+          grandfatherMetadata
+        ),
       };
     }
 
@@ -913,7 +1168,10 @@ function getRubricAnchorStatus(data, options = {}) {
       ...baseStatus,
       ...containment,
       status: "unreadable",
-      error: `Unable to read rubric file ${containment.resolvedPath}: ${summarizeError(error)}`,
+      error: prependGrandfatherDiagnostic(
+        `Unable to read rubric file ${containment.resolvedPath}: ${summarizeError(error)}`,
+        grandfatherMetadata
+      ),
     };
   }
 }
@@ -925,7 +1183,7 @@ function validateTransitionInvariants(data, fromState, toState) {
       throw new Error(
         `Cannot transition dispatched -> review_pending because ${rubricAnchor.error} ` +
         "Generate the rubric with relay-plan and dispatch with --rubric-file, " +
-        "or explicitly grandfather a pre-change run with anchor.rubric_grandfathered: true."
+        "or migrate an approved pre-change run with relay-migrate-rubric.js."
       );
     }
   }
@@ -1325,6 +1583,7 @@ module.exports = {
   ensureRunLayout,
   formatAttemptsForPrompt,
   getRubricAnchorStatus,
+  getRubricGrandfatherMetadata,
   getActorName,
   getAttemptsPath,
   getCanonicalRepoRoot,

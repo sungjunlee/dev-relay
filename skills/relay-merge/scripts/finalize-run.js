@@ -39,7 +39,7 @@ const { runCleanup, summarizeError } = require("../../relay-dispatch/scripts/rel
 const {
   buildSkipComment,
   evaluateReviewGate,
-  summarizeRubricStatusForSkip,
+  summarizeRubricAuditForSkip,
 } = require("./review-gate");
 
 const args = process.argv.slice(2);
@@ -307,9 +307,10 @@ function main() {
   let issueClosed = false;
   let issueCloseWarning = null;
   let reviewGate = null;
-  const skipReviewRubricStatus = summarizeRubricStatusForSkip(safeData, {
+  const skipReviewRubricAudit = summarizeRubricAuditForSkip(safeData, {
     runDir: getRunDir(validatedPaths.repoRoot, safeData.run_id),
   });
+  const skipReviewRubricStatus = skipReviewRubricAudit.rubricStatus;
 
   if (!skipMerge && safeData.state === STATES.READY_TO_MERGE) {
     if (skipReviewReason) {
@@ -321,7 +322,7 @@ function main() {
         readyToMerge: true,
       };
       if (!dryRun) {
-        const skipComment = buildSkipComment(skipReviewReason, skipReviewRubricStatus);
+        const skipComment = buildSkipComment(skipReviewReason, skipReviewRubricAudit);
         appendRunEvent(repoPath, safeData.run_id, {
           event: "skip_review",
           state_from: safeData.state,
