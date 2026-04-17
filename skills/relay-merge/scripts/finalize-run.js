@@ -26,6 +26,7 @@ const { execFileSync } = require("child_process");
 const fs = require("fs");
 const path = require("path");
 const {
+  getEventsPath,
   getRunDir,
   STATES,
   updateManifestState,
@@ -35,7 +36,11 @@ const {
 const { resolveManifestRecord } = require("../../relay-dispatch/scripts/relay-resolver");
 const { appendRunEvent } = require("../../relay-dispatch/scripts/relay-events");
 const { runCleanup, summarizeError } = require("../../relay-dispatch/scripts/relay-manifest");
-const { buildSkipComment, evaluateReviewGate } = require("./review-gate");
+const {
+  buildSkipComment,
+  evaluateReviewGate,
+  summarizeRubricStatusForSkip,
+} = require("./review-gate");
 
 const args = process.argv.slice(2);
 const KNOWN_FLAGS = [
@@ -210,6 +215,28 @@ function deleteRemoteBranch(gitBin, repoPath, branch) {
   }
 }
 
+function appendRunEventWithExtras(repoRoot, runId, eventData, extras = {}) {
+  const record = appendRunEvent(repoRoot, runId, eventData);
+  const extraEntries = Object.entries(extras).filter(([, value]) => value !== undefined);
+  if (extraEntries.length === 0) {
+    return record;
+  }
+
+  const eventsPath = getEventsPath(repoRoot, runId);
+  const lines = fs.readFileSync(eventsPath, "utf-8").trimEnd().split("\n");
+  if (lines.length === 0) {
+    throw new Error(`Unable to enrich relay event for ${runId}: events journal is empty after appendRunEvent.`);
+  }
+
+  const enrichedRecord = { ...JSON.parse(lines[lines.length - 1]) };
+  for (const [key, value] of extraEntries) {
+    enrichedRecord[key] = value;
+  }
+  lines[lines.length - 1] = JSON.stringify(enrichedRecord);
+  fs.writeFileSync(eventsPath, `${lines.join("\n")}\n`, "utf-8");
+  return enrichedRecord;
+}
+
 function main() {
   const repoArg = getArg("--repo");
   let repoPath = path.resolve(repoArg || ".");
@@ -295,6 +322,9 @@ function main() {
   let issueClosed = false;
   let issueCloseWarning = null;
   let reviewGate = null;
+  const skipReviewRubricStatus = summarizeRubricStatusForSkip(safeData, {
+    runDir: getRunDir(validatedPaths.repoRoot, safeData.run_id),
+  });
 
   if (!skipMerge && safeData.state === STATES.READY_TO_MERGE) {
     if (skipReviewReason) {
@@ -302,10 +332,22 @@ function main() {
         status: "skipped",
         pr: prNumber,
         reason: skipReviewReason,
+        rubricStatus: skipReviewRubricStatus,
         readyToMerge: true,
       };
       if (!dryRun) {
-        gh(ghBin, repoPath, "pr", "comment", String(prNumber), "--body", buildSkipComment(skipReviewReason));
+        const skipComment = buildSkipComment(skipReviewReason, skipReviewRubricStatus);
+        appendRunEventWithExtras(repoPath, safeData.run_id, {
+          event: "skip_review",
+          state_from: safeData.state,
+          state_to: safeData.state,
+          head_sha: safeData.git?.head_sha || null,
+          round: safeData.review?.rounds || null,
+          reason: skipReviewReason,
+        }, {
+          rubric_status: skipReviewRubricStatus,
+        });
+        gh(ghBin, repoPath, "pr", "comment", String(prNumber), "--body", skipComment);
       }
     } else {
       const preMerge = fetchPreMergeContext(ghBin, repoPath, prNumber);

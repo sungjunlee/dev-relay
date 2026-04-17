@@ -27,7 +27,11 @@
 const fs = require("fs");
 const path = require("path");
 const { execFileSync } = require("child_process");
-const { buildSkipComment, evaluateReviewGate } = require("./review-gate");
+const {
+  buildSkipComment,
+  evaluateReviewGate,
+  summarizeRubricStatusForSkip,
+} = require("./review-gate");
 const {
   STATES,
   getRunDir,
@@ -260,6 +264,50 @@ function tryResolveManifestForPr(prNumber, headRefName) {
   }
 }
 
+function resolveSkipAuditContext(prNumber) {
+  try {
+    const raw = gh("pr", "view", String(prNumber), "--json", "headRefName");
+    const parsed = JSON.parse(raw);
+    const manifestRecord = tryResolveManifestForPr(prNumber, parsed.headRefName || null);
+    if (manifestRecord.error || !manifestRecord.data) {
+      return {
+        rubricStatus: "unresolved-manifest",
+        manifestData: null,
+        runDir: null,
+      };
+    }
+
+    let manifestData = manifestRecord.data;
+    const validatedPaths = validateManifestPaths(manifestData.paths, {
+      expectedRepoRoot: process.cwd(),
+      manifestPath: manifestRecord.manifestPath,
+      runId: manifestData.run_id,
+      caller: "gate-check skip audit",
+    });
+    manifestData = {
+      ...manifestData,
+      paths: {
+        ...(manifestData.paths || {}),
+        repo_root: validatedPaths.repoRoot,
+        worktree: validatedPaths.worktree,
+      },
+    };
+
+    const runDir = getRunDir(validatedPaths.repoRoot, manifestData.run_id);
+    return {
+      rubricStatus: summarizeRubricStatusForSkip(manifestData, { runDir }),
+      manifestData,
+      runDir,
+    };
+  } catch {
+    return {
+      rubricStatus: "unresolved-manifest",
+      manifestData: null,
+      runDir: null,
+    };
+  }
+}
+
 function output(result) {
   if (JSON_OUT) {
     console.log(JSON.stringify(result, null, 2));
@@ -316,16 +364,29 @@ function output(result) {
 function main() {
   // --- Skip path: write audit comment and exit ---
   if (SKIP) {
-    const skipComment = buildSkipComment(SKIP_REASON);
+    const skipAudit = DRY_RUN
+      ? { rubricStatus: "unresolved-manifest", manifestData: null, runDir: null }
+      : resolveSkipAuditContext(PR_NUM);
+    const skipComment = buildSkipComment(SKIP_REASON, skipAudit.rubricStatus);
 
     if (DRY_RUN) {
-      output({ status: "skipped", pr: PR_NUM, reason: SKIP_REASON, comment: skipComment, readyToMerge: true });
-    } else {
-      execFileSync("gh", ["pr", "comment", PR_NUM, "--body", skipComment], {
-        encoding: "utf-8",
-        stdio: "pipe",
+      output({
+        status: "skipped",
+        pr: PR_NUM,
+        reason: SKIP_REASON,
+        comment: skipComment,
+        rubricStatus: skipAudit.rubricStatus,
+        readyToMerge: true,
       });
-      output({ status: "skipped", pr: PR_NUM, reason: SKIP_REASON, readyToMerge: true });
+    } else {
+      gh("pr", "comment", PR_NUM, "--body", skipComment);
+      output({
+        status: "skipped",
+        pr: PR_NUM,
+        reason: SKIP_REASON,
+        rubricStatus: skipAudit.rubricStatus,
+        readyToMerge: true,
+      });
     }
     return;
   }
