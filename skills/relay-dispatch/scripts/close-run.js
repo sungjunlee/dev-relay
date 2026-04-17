@@ -9,6 +9,7 @@ const {
   runCleanup,
   updateManifestCleanup,
   updateManifestState,
+  validateManifestPaths,
   writeManifest,
 } = require("./relay-manifest");
 const { resolveManifestRecord } = require("./relay-resolver");
@@ -70,11 +71,25 @@ function main() {
   }
 
   const { manifestPath, data, body } = resolveManifestRecord({ repoRoot, runId });
-  if (data.state === STATES.MERGED || data.state === STATES.CLOSED) {
-    throw new Error(`close-run only supports active runs, got '${data.state}'`);
+  const validatedPaths = validateManifestPaths(data.paths, {
+    expectedRepoRoot: repoRoot,
+    manifestPath,
+    runId: data.run_id,
+    caller: "close-run",
+  });
+  const safeData = {
+    ...data,
+    paths: {
+      ...(data.paths || {}),
+      repo_root: validatedPaths.repoRoot,
+      worktree: validatedPaths.worktree,
+    },
+  };
+  if (safeData.state === STATES.MERGED || safeData.state === STATES.CLOSED) {
+    throw new Error(`close-run only supports active runs, got '${safeData.state}'`);
   }
 
-  let updated = updateManifestState(data, STATES.CLOSED, "manual_cleanup_required");
+  let updated = updateManifestState(safeData, STATES.CLOSED, "manual_cleanup_required");
   let cleanupResult = null;
   if ((updated.policy?.cleanup || "on_close") === "on_close") {
     cleanupResult = runCleanup({
@@ -97,7 +112,7 @@ function main() {
     writeManifest(manifestPath, updated, body);
     appendRunEvent(repoRoot, updated.run_id, {
       event: "close",
-      state_from: data.state,
+      state_from: safeData.state,
       state_to: STATES.CLOSED,
       head_sha: updated.git?.head_sha || null,
       round: updated.review?.rounds || null,
@@ -118,7 +133,7 @@ function main() {
   const result = {
     manifestPath,
     runId: updated.run_id,
-    previousState: data.state,
+    previousState: safeData.state,
     state: updated.state,
     nextAction: updated.next_action,
     reason,
@@ -130,7 +145,7 @@ function main() {
     console.log(JSON.stringify(result, null, 2));
   } else {
     console.log(`Closed relay run: ${manifestPath}`);
-    console.log(`  State:        ${data.state} -> ${updated.state}`);
+    console.log(`  State:        ${safeData.state} -> ${updated.state}`);
     console.log(`  Next action:  ${updated.next_action}`);
     console.log(`  Reason:       ${reason}`);
     console.log(`  Cleanup:      ${cleanupResult.summary.cleanupStatus}`);

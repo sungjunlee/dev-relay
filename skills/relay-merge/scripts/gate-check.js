@@ -28,7 +28,13 @@ const fs = require("fs");
 const path = require("path");
 const { execFileSync } = require("child_process");
 const { buildSkipComment, evaluateReviewGate } = require("./review-gate");
-const { STATES, getRunDir, readManifest, writeManifest } = require("../../relay-dispatch/scripts/relay-manifest");
+const {
+  STATES,
+  getRunDir,
+  readManifest,
+  validateManifestPaths,
+  writeManifest,
+} = require("../../relay-dispatch/scripts/relay-manifest");
 const { appendRunEvent, readRunEvents } = require("../../relay-dispatch/scripts/relay-events");
 const { resolveManifestRecord } = require("../../relay-dispatch/scripts/relay-resolver");
 
@@ -137,7 +143,13 @@ function waitForPrNumberStampLock(lockPath) {
 }
 
 function stampPrNumberUnderLock(manifestRecord, numericPrNumber) {
-  const repoRoot = manifestRecord.data?.paths?.repo_root || process.cwd();
+  const validatedPaths = validateManifestPaths(manifestRecord.data?.paths, {
+    expectedRepoRoot: process.cwd(),
+    manifestPath: manifestRecord.manifestPath,
+    runId: manifestRecord.data?.run_id,
+    caller: "gate-check PR stamping",
+  });
+  const repoRoot = validatedPaths.repoRoot;
   const runDir = getRunDir(repoRoot, manifestRecord.data?.run_id);
   const lockPath = path.join(runDir, PR_NUMBER_STAMP_LOCK_NAME);
   let lockFd = null;
@@ -357,7 +369,21 @@ function main() {
     }
     manifestData = manifestRecord.data;
     try {
-      runDir = getRunDir(manifestData.paths?.repo_root || process.cwd(), manifestData.run_id);
+      const validatedPaths = validateManifestPaths(manifestData.paths, {
+        expectedRepoRoot: process.cwd(),
+        manifestPath: manifestRecord.manifestPath,
+        runId: manifestData.run_id,
+        caller: "gate-check",
+      });
+      manifestData = {
+        ...manifestData,
+        paths: {
+          ...(manifestData.paths || {}),
+          repo_root: validatedPaths.repoRoot,
+          worktree: validatedPaths.worktree,
+        },
+      };
+      runDir = getRunDir(validatedPaths.repoRoot, manifestData.run_id);
     } catch (error) {
       output({
         status: "manifest_resolution_failed",

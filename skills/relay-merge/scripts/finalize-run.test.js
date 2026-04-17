@@ -75,6 +75,47 @@ function setupRepo({ dirtyWorktree = false } = {}) {
   return { repoRoot, manifestPath, branch, worktreePath, headSha };
 }
 
+function createUnrelatedRelayOwnedWorktree(repoRoot, branch = "issue-42") {
+  const attackerParent = fs.mkdtempSync(path.join(os.tmpdir(), "relay-finalize-foreign-"));
+  const attackerRoot = path.join(attackerParent, path.basename(repoRoot));
+  fs.mkdirSync(attackerRoot, { recursive: true });
+  execFileSync("git", ["init", "-b", "main"], { cwd: attackerRoot, encoding: "utf-8", stdio: "pipe" });
+  execFileSync("git", ["config", "user.name", "Relay Finalize Foreign"], { cwd: attackerRoot, encoding: "utf-8", stdio: "pipe" });
+  execFileSync("git", ["config", "user.email", "relay-finalize-foreign@example.com"], { cwd: attackerRoot, encoding: "utf-8", stdio: "pipe" });
+  fs.writeFileSync(path.join(attackerRoot, "README.md"), "foreign\n", "utf-8");
+  execFileSync("git", ["add", "README.md"], { cwd: attackerRoot, encoding: "utf-8", stdio: "pipe" });
+  execFileSync("git", ["commit", "-m", "init"], { cwd: attackerRoot, encoding: "utf-8", stdio: "pipe" });
+  const relayWorktrees = path.join(process.env.RELAY_HOME, "worktrees");
+  fs.mkdirSync(relayWorktrees, { recursive: true });
+  const attackerWorktreeParent = fs.mkdtempSync(path.join(relayWorktrees, "foreign-"));
+  const attackerWorktree = path.join(attackerWorktreeParent, path.basename(repoRoot));
+  execFileSync("git", ["worktree", "add", attackerWorktree, "-b", branch], {
+    cwd: attackerRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+  });
+  fs.writeFileSync(path.join(attackerWorktree, "sentinel.txt"), "foreign\n", "utf-8");
+  return { attackerRoot, attackerWorktree };
+}
+
+function createMissingRelayOwnedWorktree(repoRoot) {
+  const relayWorktrees = path.join(process.env.RELAY_HOME, "worktrees");
+  fs.mkdirSync(relayWorktrees, { recursive: true });
+  const worktreeParent = fs.mkdtempSync(path.join(relayWorktrees, "missing-"));
+  return path.join(worktreeParent, path.basename(repoRoot));
+}
+
+function createUnrelatedGitRepo(prefix = "relay-finalize-manifest-cwd-") {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  execFileSync("git", ["init", "-b", "main"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
+  execFileSync("git", ["config", "user.name", "Relay Finalize Manifest"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
+  execFileSync("git", ["config", "user.email", "relay-finalize-manifest@example.com"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
+  fs.writeFileSync(path.join(repoRoot, "README.md"), "manifest selector\n", "utf-8");
+  execFileSync("git", ["add", "README.md"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
+  execFileSync("git", ["commit", "-m", "init"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
+  return repoRoot;
+}
+
 function branchExists(repoRoot, branch) {
   try {
     execFileSync("git", ["-C", repoRoot, "rev-parse", "--verify", `refs/heads/${branch}`], {
@@ -263,6 +304,156 @@ test("finalize-run rejects invalid manifest run_id before merge finalization", (
 
   assert.equal(fs.existsSync(worktreePath), true);
   assert.equal(branchExists(repoRoot, branch), true);
+});
+
+test("finalize-run rejects crafted manifest repo roots before merge or cleanup side effects", () => {
+  const { repoRoot, manifestPath, branch, worktreePath, headSha } = setupRepo();
+  const attackerRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-finalize-attacker-"));
+  const logPath = path.join(repoRoot, "gh.log");
+  const fakeGh = writeFakeGh(logPath, {
+    comments: [
+      {
+        body: "<!-- relay-review -->\n## Relay Review\nVerdict: LGTM\nRounds: 1",
+        createdAt: "2026-04-03T08:00:00Z",
+      },
+    ],
+    commits: [
+      {
+        oid: headSha,
+        committedDate: "2026-04-03T08:00:00Z",
+      },
+    ],
+  });
+  const record = readManifest(manifestPath);
+  writeManifest(manifestPath, {
+    ...record.data,
+    paths: {
+      ...(record.data.paths || {}),
+      repo_root: attackerRoot,
+      worktree: path.join(attackerRoot, "wt", "issue-42"),
+    },
+  }, record.body);
+
+  assert.throws(() => execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--branch", branch,
+    "--pr", "123",
+    "--json",
+  ], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+    env: { ...process.env, RELAY_GH_BIN: fakeGh },
+  }), (error) => {
+    assert.match(String(error.stderr), /manifest paths\.repo_root/);
+    return true;
+  });
+
+  assert.equal(fs.existsSync(worktreePath), true, "finalize-run must reject before cleaning the real worktree");
+  assert.equal(branchExists(repoRoot, branch), true);
+  assert.equal(readManifest(manifestPath).data.state, STATES.READY_TO_MERGE);
+  assert.equal(fs.existsSync(logPath), false);
+});
+
+test("finalize-run rejects relay-base same-name worktrees before merge or cleanup side effects", () => {
+  const { repoRoot, manifestPath, branch, worktreePath, headSha } = setupRepo();
+  const { attackerWorktree } = createUnrelatedRelayOwnedWorktree(repoRoot, branch);
+  const logPath = path.join(repoRoot, "gh.log");
+  const fakeGh = writeFakeGh(logPath, {
+    comments: [
+      {
+        body: "<!-- relay-review -->\n## Relay Review\nVerdict: LGTM\nRounds: 1",
+        createdAt: "2026-04-03T08:00:00Z",
+      },
+    ],
+    commits: [
+      {
+        oid: headSha,
+        committedDate: "2026-04-03T08:00:00Z",
+      },
+    ],
+  });
+  const record = readManifest(manifestPath);
+  writeManifest(manifestPath, {
+    ...record.data,
+    paths: {
+      ...(record.data.paths || {}),
+      worktree: attackerWorktree,
+    },
+  }, record.body);
+
+  assert.throws(() => execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--branch", branch,
+    "--pr", "123",
+    "--json",
+  ], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+    env: { ...process.env, RELAY_GH_BIN: fakeGh },
+  }), (error) => {
+    assert.match(String(error.stderr), /manifest paths\.worktree/);
+    return true;
+  });
+
+  assert.equal(fs.existsSync(worktreePath), true, "finalize-run must reject before cleaning the real worktree");
+  assert.equal(fs.existsSync(path.join(attackerWorktree, "sentinel.txt")), true);
+  assert.equal(branchExists(repoRoot, branch), true);
+  assert.equal(readManifest(manifestPath).data.state, STATES.READY_TO_MERGE);
+  assert.equal(fs.existsSync(logPath), false);
+});
+
+test("finalize-run rejects missing relay-base same-name worktrees before merge or cleanup side effects", () => {
+  const { repoRoot, manifestPath, branch, worktreePath, headSha } = setupRepo();
+  const missingWorktree = createMissingRelayOwnedWorktree(repoRoot);
+  const logPath = path.join(repoRoot, "gh.log");
+  const fakeGh = writeFakeGh(logPath, {
+    comments: [
+      {
+        body: "<!-- relay-review -->\n## Relay Review\nVerdict: LGTM\nRounds: 1",
+        createdAt: "2026-04-03T08:00:00Z",
+      },
+    ],
+    commits: [
+      {
+        oid: headSha,
+        committedDate: "2026-04-03T08:00:00Z",
+      },
+    ],
+  });
+  const record = readManifest(manifestPath);
+  writeManifest(manifestPath, {
+    ...record.data,
+    paths: {
+      ...(record.data.paths || {}),
+      worktree: missingWorktree,
+    },
+  }, record.body);
+
+  assert.throws(() => execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--branch", branch,
+    "--pr", "123",
+    "--json",
+  ], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+    env: { ...process.env, RELAY_GH_BIN: fakeGh },
+  }), (error) => {
+    assert.match(String(error.stderr), /manifest paths\.worktree/);
+    return true;
+  });
+
+  assert.equal(fs.existsSync(worktreePath), true, "finalize-run must reject before cleaning the real worktree");
+  assert.equal(branchExists(repoRoot, branch), true);
+  assert.equal(fs.existsSync(missingWorktree), false);
+  assert.equal(readManifest(manifestPath).data.state, STATES.READY_TO_MERGE);
+  assert.equal(fs.existsSync(logPath), false);
 });
 
 test("finalize-run fails closed when branch+PR resolution only finds a stale terminal manifest", () => {
@@ -627,8 +818,9 @@ test("finalize-run preserves dirty worktrees and records manual cleanup follow-u
   assert.match(manifest.cleanup.error, /dirty worktree/);
 });
 
-test("finalize-run can derive the repo root from --manifest alone", () => {
+test("finalize-run can derive the repo root from --manifest alone even from an unrelated git repo", () => {
   const { repoRoot, manifestPath, branch, worktreePath, headSha } = setupRepo();
+  const selectorRepo = createUnrelatedGitRepo();
   const logPath = path.join(repoRoot, "gh.log");
   const fakeGh = writeFakeGh(logPath, {
     comments: [
@@ -651,7 +843,7 @@ test("finalize-run can derive the repo root from --manifest alone", () => {
     "--pr", "123",
     "--json",
   ], {
-    cwd: os.tmpdir(),
+    cwd: selectorRepo,
     encoding: "utf-8",
     stdio: "pipe",
     env: { ...process.env, RELAY_GH_BIN: fakeGh },

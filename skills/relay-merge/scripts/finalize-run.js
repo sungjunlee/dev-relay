@@ -23,11 +23,13 @@
  */
 
 const { execFileSync } = require("child_process");
+const fs = require("fs");
 const path = require("path");
 const {
   getRunDir,
   STATES,
   updateManifestState,
+  validateManifestPaths,
   writeManifest,
 } = require("../../relay-dispatch/scripts/relay-manifest");
 const { resolveManifestRecord } = require("../../relay-dispatch/scripts/relay-resolver");
@@ -93,6 +95,10 @@ function git(gitBin, repoPath, ...gitArgs) {
     encoding: "utf-8",
     stdio: "pipe",
   }).trim();
+}
+
+function looksLikeGitRepo(repoPath) {
+  return fs.existsSync(path.join(repoPath, ".git"));
 }
 
 function resolveBranch(ghBin, repoPath, prNumber, branchArg, manifestData) {
@@ -228,8 +234,17 @@ function main() {
     prNumber,
     includeTerminal: skipMerge,
   });
-  if ((manifestArg || runId) && !repoArg && manifestRecord.data.paths?.repo_root) {
-    repoPath = path.resolve(manifestRecord.data.paths.repo_root);
+  const selectorExpectedRepoRoot = manifestArg
+    ? undefined
+    : ((repoArg || looksLikeGitRepo(repoPath)) ? repoPath : undefined);
+  let validatedPaths = validateManifestPaths(manifestRecord.data?.paths, {
+    expectedRepoRoot: selectorExpectedRepoRoot,
+    manifestPath: manifestRecord.manifestPath,
+    runId: manifestRecord.data?.run_id,
+    caller: "finalize-run",
+  });
+  repoPath = validatedPaths.repoRoot;
+  if ((manifestArg || runId) && !repoArg) {
     manifestRecord = resolveManifestRecord({
       repoRoot: repoPath,
       manifestPath: manifestArg,
@@ -238,24 +253,38 @@ function main() {
       prNumber,
       includeTerminal: skipMerge,
     });
+    validatedPaths = validateManifestPaths(manifestRecord.data?.paths, {
+      expectedRepoRoot: manifestArg ? undefined : repoPath,
+      manifestPath: manifestRecord.manifestPath,
+      runId: manifestRecord.data?.run_id,
+      caller: "finalize-run",
+    });
   }
 
   const { manifestPath, data, body } = manifestRecord;
-  prNumber = prNumber || data.git?.pr_number || null;
-  branch = resolveBranch(ghBin, repoPath, prNumber, branch, data);
+  const safeData = {
+    ...data,
+    paths: {
+      ...(data.paths || {}),
+      repo_root: validatedPaths.repoRoot,
+      worktree: validatedPaths.worktree,
+    },
+  };
+  prNumber = prNumber || safeData.git?.pr_number || null;
+  branch = resolveBranch(ghBin, repoPath, prNumber, branch, safeData);
   if (!skipMerge && !prNumber) {
     throw new Error("PR number is required for merge finalization");
   }
-  if (skipMerge && data.state !== STATES.MERGED) {
+  if (skipMerge && safeData.state !== STATES.MERGED) {
     throw new Error("--skip-merge can only be used for runs that are already in the merged state");
   }
-  if (!skipMerge && data.state !== STATES.READY_TO_MERGE) {
-    if (data.state !== STATES.MERGED) {
-      throw new Error(`Expected relay run to be ${STATES.READY_TO_MERGE} before merge, got ${data.state}`);
+  if (!skipMerge && safeData.state !== STATES.READY_TO_MERGE) {
+    if (safeData.state !== STATES.MERGED) {
+      throw new Error(`Expected relay run to be ${STATES.READY_TO_MERGE} before merge, got ${safeData.state}`);
     }
   }
 
-  let updated = data;
+  let updated = safeData;
   let mergePerformed = false;
   let mergeRecovered = false;
   let prMergeState = dryRun ? { state: "MERGED", mergeCommitSha: null } : null;
@@ -267,7 +296,7 @@ function main() {
   let issueCloseWarning = null;
   let reviewGate = null;
 
-  if (!skipMerge && data.state === STATES.READY_TO_MERGE) {
+  if (!skipMerge && safeData.state === STATES.READY_TO_MERGE) {
     if (skipReviewReason) {
       reviewGate = {
         status: "skipped",
@@ -284,18 +313,18 @@ function main() {
         prNumber,
         comments: preMerge.comments,
         commits: preMerge.commits,
-        manifestData: data,
-        expectedReviewerLogin: data.review?.reviewer_login || null,
-        runDir: getRunDir(data.paths?.repo_root || repoPath, data.run_id),
+        manifestData: safeData,
+        expectedReviewerLogin: safeData.review?.reviewer_login || null,
+        runDir: getRunDir(validatedPaths.repoRoot, safeData.run_id),
       });
       if (!reviewGate.readyToMerge) {
         if (!dryRun) {
-          appendRunEvent(repoPath, data.run_id, {
+          appendRunEvent(repoPath, safeData.run_id, {
             event: "merge_blocked",
-            state_from: data.state,
-            state_to: data.state,
-            head_sha: reviewGate.latestCommit || data.git?.head_sha || null,
-            round: data.review?.rounds || null,
+            state_from: safeData.state,
+            state_to: safeData.state,
+            head_sha: reviewGate.latestCommit || safeData.git?.head_sha || null,
+            round: safeData.review?.rounds || null,
             reason: reviewGate.status,
           });
         }
@@ -316,7 +345,7 @@ function main() {
     }
   }
 
-  if (!skipMerge && data.state === STATES.READY_TO_MERGE) {
+  if (!skipMerge && safeData.state === STATES.READY_TO_MERGE) {
 
     prMergeState = dryRun ? prMergeState : fetchPrMergeState(ghBin, repoPath, prNumber);
     if (!dryRun && prMergeState.state !== "MERGED") {
@@ -356,12 +385,12 @@ function main() {
         prMergeState = fetchPrMergeState(ghBin, repoPath, prNumber);
         if (prMergeState.state === "MERGED") break;
         if (prMergeState.state === "OPEN") {
-          appendRunEvent(repoPath, data.run_id, {
+          appendRunEvent(repoPath, safeData.run_id, {
             event: "merge_blocked",
-            state_from: data.state,
-            state_to: data.state,
-            head_sha: reviewGate?.latestCommit || data.git?.head_sha || null,
-            round: data.review?.rounds || null,
+            state_from: safeData.state,
+            state_to: safeData.state,
+            head_sha: reviewGate?.latestCommit || safeData.git?.head_sha || null,
+            round: safeData.review?.rounds || null,
             reason: "removed_from_merge_queue",
           });
           throw new Error(
@@ -370,12 +399,12 @@ function main() {
         }
       }
       if (prMergeState.state !== "MERGED") {
-        appendRunEvent(repoPath, data.run_id, {
+        appendRunEvent(repoPath, safeData.run_id, {
           event: "merge_blocked",
-          state_from: data.state,
-          state_to: data.state,
-          head_sha: reviewGate?.latestCommit || data.git?.head_sha || null,
-          round: data.review?.rounds || null,
+          state_from: safeData.state,
+          state_to: safeData.state,
+          head_sha: reviewGate?.latestCommit || safeData.git?.head_sha || null,
+          round: safeData.review?.rounds || null,
           reason: `merge_queue_timeout:${prMergeState.state || "unknown"}`,
         });
         const totalWaitMin = Math.round((MERGE_QUEUE_POLL_INTERVAL_MS * MERGE_QUEUE_MAX_POLLS) / 60000);
@@ -402,9 +431,9 @@ function main() {
       },
     };
     if (!dryRun) {
-      appendRunEvent(repoPath, data.run_id, {
+      appendRunEvent(repoPath, safeData.run_id, {
         event: "merge_finalize",
-        state_from: data.state,
+        state_from: safeData.state,
         state_to: STATES.MERGED,
         head_sha: updated.git?.head_sha || null,
         round: updated.review?.rounds || null,
@@ -454,7 +483,7 @@ function main() {
 
   const result = {
     manifestPath,
-    previousState: data.state,
+    previousState: safeData.state,
     state: updated.state,
     nextAction: updated.next_action,
     branch,
@@ -479,7 +508,7 @@ function main() {
     console.log(JSON.stringify(result, null, 2));
   } else {
     console.log(`Finalized relay run: ${manifestPath}`);
-    console.log(`  State:        ${data.state} -> ${updated.state}`);
+    console.log(`  State:        ${safeData.state} -> ${updated.state}`);
     console.log(`  Next action:  ${updated.next_action}`);
     console.log(`  Merge:        ${mergePerformed ? `performed (${mergeMethod})` : (skipMerge ? "skipped" : "already merged")}`);
     if (!skipMerge) {

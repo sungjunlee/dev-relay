@@ -30,6 +30,36 @@ function setupRepo() {
   return repoRoot;
 }
 
+function createUnrelatedRelayOwnedWorktree(repoRoot, branch = "issue-42") {
+  const attackerParent = fs.mkdtempSync(path.join(os.tmpdir(), "relay-janitor-foreign-"));
+  const attackerRoot = path.join(attackerParent, path.basename(repoRoot));
+  fs.mkdirSync(attackerRoot, { recursive: true });
+  execFileSync("git", ["init", "-b", "main"], { cwd: attackerRoot, encoding: "utf-8", stdio: "pipe" });
+  execFileSync("git", ["config", "user.name", "Relay Janitor Foreign"], { cwd: attackerRoot, encoding: "utf-8", stdio: "pipe" });
+  execFileSync("git", ["config", "user.email", "relay-janitor-foreign@example.com"], { cwd: attackerRoot, encoding: "utf-8", stdio: "pipe" });
+  fs.writeFileSync(path.join(attackerRoot, "README.md"), "foreign\n", "utf-8");
+  execFileSync("git", ["add", "README.md"], { cwd: attackerRoot, encoding: "utf-8", stdio: "pipe" });
+  execFileSync("git", ["commit", "-m", "init"], { cwd: attackerRoot, encoding: "utf-8", stdio: "pipe" });
+  const relayWorktrees = path.join(process.env.RELAY_HOME, "worktrees");
+  fs.mkdirSync(relayWorktrees, { recursive: true });
+  const attackerWorktreeParent = fs.mkdtempSync(path.join(relayWorktrees, "foreign-"));
+  const attackerWorktree = path.join(attackerWorktreeParent, path.basename(repoRoot));
+  execFileSync("git", ["worktree", "add", attackerWorktree, "-b", branch], {
+    cwd: attackerRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+  });
+  fs.writeFileSync(path.join(attackerWorktree, "sentinel.txt"), "foreign\n", "utf-8");
+  return { attackerRoot, attackerWorktree };
+}
+
+function createMissingRelayOwnedWorktree(repoRoot) {
+  const relayWorktrees = path.join(process.env.RELAY_HOME, "worktrees");
+  fs.mkdirSync(relayWorktrees, { recursive: true });
+  const worktreeParent = fs.mkdtempSync(path.join(relayWorktrees, "missing-"));
+  return path.join(worktreeParent, path.basename(repoRoot));
+}
+
 function writeRun(repoRoot, { branch, state, updatedAt }) {
   const worktreePath = path.join(repoRoot, "wt", branch);
   fs.mkdirSync(path.dirname(worktreePath), { recursive: true });
@@ -184,4 +214,117 @@ test("cleanup-worktrees does not echo tampered run_id into operator output (#176
   assert.equal(textRun.status, 0, textRun.stderr);
   assert.doesNotMatch(textRun.stdout, /\.\.\/victim-run/, "text output must not contain tampered substring");
   assert.match(textRun.stdout, new RegExp(fallbackRunId), "text output should use the manifest basename");
+});
+
+test("cleanup-worktrees rejects relay-base same-name worktrees before deleting unrelated checkouts", () => {
+  const repoRoot = setupRepo();
+  const updatedAt = "2026-04-01T00:00:00.000Z";
+  const { manifestPath } = writeRun(repoRoot, {
+    branch: "issue-160",
+    state: STATES.MERGED,
+    updatedAt,
+  });
+  const { attackerWorktree } = createUnrelatedRelayOwnedWorktree(repoRoot, "issue-160");
+
+  const record = readManifest(manifestPath);
+  writeManifest(manifestPath, {
+    ...record.data,
+    paths: {
+      ...(record.data.paths || {}),
+      worktree: attackerWorktree,
+    },
+  }, record.body);
+
+  const stdout = execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--all",
+    "--json",
+  ], { encoding: "utf-8" });
+
+  const result = JSON.parse(stdout);
+  assert.equal(result.cleaned.length, 0);
+  assert.equal(result.failed.length, 1);
+  assert.match(result.failed[0].error, /manifest paths\.worktree/);
+  assert.equal(fs.existsSync(attackerWorktree), true, "cleanup-worktrees must fail closed before removing the foreign relay worktree");
+  assert.equal(fs.existsSync(path.join(attackerWorktree, "sentinel.txt")), true);
+
+  const manifest = readManifest(manifestPath).data;
+  assert.equal(manifest.cleanup.status, "pending");
+});
+
+test("cleanup-worktrees rejects missing relay-base same-name worktrees before cleanup side effects", () => {
+  const repoRoot = setupRepo();
+  const updatedAt = "2026-04-01T00:00:00.000Z";
+  const { manifestPath, worktreePath } = writeRun(repoRoot, {
+    branch: "issue-160b",
+    state: STATES.MERGED,
+    updatedAt,
+  });
+  const missingWorktree = createMissingRelayOwnedWorktree(repoRoot);
+
+  const record = readManifest(manifestPath);
+  writeManifest(manifestPath, {
+    ...record.data,
+    paths: {
+      ...(record.data.paths || {}),
+      worktree: missingWorktree,
+    },
+  }, record.body);
+
+  const stdout = execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--all",
+    "--json",
+  ], { encoding: "utf-8" });
+
+  const result = JSON.parse(stdout);
+  assert.equal(result.cleaned.length, 0);
+  assert.equal(result.failed.length, 1);
+  assert.match(result.failed[0].error, /manifest paths\.worktree/);
+  assert.equal(fs.existsSync(worktreePath), true, "cleanup-worktrees must fail closed before removing the real worktree");
+  assert.equal(branchExists(repoRoot, "issue-160b"), true);
+  assert.equal(fs.existsSync(missingWorktree), false);
+  assert.equal(readManifest(manifestPath).data.cleanup.status, "pending");
+});
+
+test("cleanup-worktrees rejects tampered paths.repo_root before cleanup side effects", () => {
+  const repoRoot = setupRepo();
+  const updatedAt = "2026-04-01T00:00:00.000Z";
+  const { manifestPath, worktreePath } = writeRun(repoRoot, {
+    branch: "issue-161",
+    state: STATES.MERGED,
+    updatedAt,
+  });
+  const { attackerRoot } = createUnrelatedRelayOwnedWorktree(repoRoot, "issue-161");
+
+  const record = readManifest(manifestPath);
+  writeManifest(manifestPath, {
+    ...record.data,
+    paths: {
+      ...(record.data.paths || {}),
+      repo_root: attackerRoot,
+    },
+  }, record.body);
+
+  const stdout = execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--all",
+    "--json",
+  ], { encoding: "utf-8" });
+
+  const result = JSON.parse(stdout);
+  assert.equal(result.cleaned.length, 0);
+  assert.equal(result.failed.length, 1);
+  assert.match(result.failed[0].error, /manifest paths\.repo_root/);
+  assert.equal(result.failed[0].worktreeRemoved, false);
+  assert.equal(result.failed[0].branchDeleted, false);
+  assert.equal(result.failed[0].pruneRan, false);
+  assert.equal(fs.existsSync(worktreePath), true, "cleanup-worktrees must reject before removing the retained worktree");
+  assert.equal(branchExists(repoRoot, "issue-161"), true, "cleanup-worktrees must reject before deleting the branch");
+
+  const manifest = readManifest(manifestPath).data;
+  assert.equal(manifest.cleanup.status, "pending");
 });

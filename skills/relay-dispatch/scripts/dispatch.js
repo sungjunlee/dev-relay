@@ -72,6 +72,7 @@ const {
   isRubricGrandfathered,
   readPreviousAttempts,
   updateManifestState,
+  validateManifestPaths,
   validateRubricPathContainment,
   writeManifest,
 } = require("./relay-manifest");
@@ -239,6 +240,10 @@ function git(repoDir, ...gitArgs) {
 
 function shellQuote(s) {
   return "'" + s.replace(/'/g, "'\\''") + "'";
+}
+
+function looksLikeGitRepo(repoPath) {
+  return fs.existsSync(path.join(repoPath, ".git"));
 }
 
 function terminateProcessTree(pid) {
@@ -448,11 +453,25 @@ async function main() {
     });
     manifestPath = manifestRecord.manifestPath;
     manifest = manifestRecord.data;
-    repoRoot = path.resolve(manifest.paths?.repo_root || repoRoot);
+    const validatedPaths = validateManifestPaths(manifest.paths, {
+      expectedRepoRoot: MANIFEST_INPUT ? undefined : ((repoPathRaw || looksLikeGitRepo(repoRoot)) ? repoRoot : undefined),
+      manifestPath,
+      runId: manifest.run_id || runId,
+      caller: "dispatch resume",
+    });
+    repoRoot = validatedPaths.repoRoot;
     projectName = path.basename(repoRoot);
     branch = manifest.git?.working_branch || branch;
     runId = manifest.run_id || runId;
-    wtPath = manifest.paths?.worktree || null;
+    wtPath = validatedPaths.worktree;
+    manifest = {
+      ...manifest,
+      paths: {
+        ...(manifest.paths || {}),
+        repo_root: validatedPaths.repoRoot,
+        worktree: validatedPaths.worktree,
+      },
+    };
     cleanupPolicy = manifest.policy?.cleanup || cleanupPolicy;
     baseBranch = manifest.git?.base_branch || baseBranch;
     issueNumber = manifest.issue?.number || inferIssueNumber(branch);
