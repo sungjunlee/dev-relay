@@ -1089,13 +1089,16 @@ function readTextFileWithoutFollowingSymlinks(targetPath, realPath) {
 // After opening an fd, verify it refers to a regular file — not a FIFO,
 // socket, device, or directory. Mirrors the check in the read helper. Opens
 // on a FIFO can block the writer; opens on a socket/device can have
-// side-effects we don't want. Closes the fd and throws EINVAL otherwise.
+// side-effects we don't want. Closes the fd and throws ENOT_REGULAR_FILE
+// (non-POSIX, distinct from kernel EINVAL) so the outer catch below does
+// NOT swallow it as a fallback trigger — same fix as the read helper
+// (round-4 codex finding, now mirrored on the write side per round-5).
 function gateWritableFd(fd, targetPath) {
   const stat = fs.fstatSync(fd);
   if (!stat.isFile()) {
     fs.closeSync(fd);
     const error = new Error(`Not a regular file: ${targetPath}`);
-    error.code = "EINVAL";
+    error.code = ERR_NOT_REGULAR_FILE;
     throw error;
   }
   return fd;

@@ -1342,15 +1342,15 @@ test("write helpers refuse a FIFO at the target path (POSIX only)", { skip: proc
   // on Linux/macOS — that's an acceptable refusal (attacker attempt blocked)
   // even though it doesn't go through our ELOOP path. Alternately, if the
   // platform opens it (with a reader attached, hypothetically), the fstat
-  // gate inside gateWritableFd catches it with EINVAL. Either way, no
-  // writeSync lands on the FIFO.
+  // gate inside gateWritableFd catches it with ENOT_REGULAR_FILE. Either
+  // way, no writeSync lands on the FIFO.
   assert.throws(
     () => appendTextFileWithoutFollowingSymlinks(target, "x\n"),
-    (error) => ["EINVAL", "ENXIO"].includes(error.code) || /Not a regular file/.test(error.message)
+    (error) => ["ENOT_REGULAR_FILE", "ENXIO"].includes(error.code) || /Not a regular file/.test(error.message)
   );
   assert.throws(
     () => writeTextFileWithoutFollowingSymlinks(target, "x"),
-    (error) => ["EINVAL", "ENXIO"].includes(error.code) || /Not a regular file/.test(error.message)
+    (error) => ["ENOT_REGULAR_FILE", "ENXIO"].includes(error.code) || /Not a regular file/.test(error.message)
   );
 });
 
