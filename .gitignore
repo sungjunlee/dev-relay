@@ -20,6 +20,3 @@ node_modules/
 
 # AI-generated planning artifacts
 docs/superpowers/
-
-# Local backlog (managed by dev-backlog)
-backlog/

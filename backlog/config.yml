@@ -1,0 +1,7 @@
+project_name: "dev-relay"
+default_status: "To Do"
+statuses: ["To Do", "In Progress", "Done"]
+task_prefix: "RELAY"
+labels: ["enhancement", "backlog"]
+milestones: ["Agentic Patterns Phase 0 — Wire What Exists"]
+auto_commit: false
