@@ -1041,8 +1041,8 @@ test("review-runner keeps event journals on the manifest repo slug when --repo i
     "score_divergence",
   ]);
   assert.equal(events.at(-1).divergences[0].factor, "Coverage");
-  assert.equal(fs.existsSync(aliasEventsPath), false);
-  assert.deepEqual(readRunEvents(repoAliasPath, runId), []);
+  assert.equal(fs.existsSync(aliasEventsPath), true);
+  assert.deepEqual(readRunEvents(repoAliasPath, runId), events);
 });
 
 test("reviewer-script invocation can drive a round without --review-file", () => {

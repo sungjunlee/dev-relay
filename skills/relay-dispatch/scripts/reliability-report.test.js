@@ -23,6 +23,9 @@ const {
 const SCRIPT = path.join(__dirname, "reliability-report.js");
 
 function initGitRepo(repoRoot, actor = "Relay Test") {
+  if (fs.existsSync(path.join(repoRoot, ".git"))) {
+    return;
+  }
   execFileSync("git", ["init", "-b", "main"], { cwd: repoRoot, stdio: "pipe" });
   execFileSync("git", ["config", "user.name", actor], { cwd: repoRoot, stdio: "pipe" });
   execFileSync("git", ["config", "user.email", "relay@example.com"], { cwd: repoRoot, stdio: "pipe" });
@@ -33,6 +36,7 @@ function setGitActor(repoRoot, actor) {
 }
 
 function writeRun(repoRoot, { runId, state, rounds, updatedAt }) {
+  initGitRepo(repoRoot);
   const manifestPath = ensureRunLayout(repoRoot, runId).manifestPath;
   let manifest = createManifestSkeleton({
     repoRoot,
