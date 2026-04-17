@@ -24,6 +24,7 @@ Options:
   --manifest <path>     Migration manifest path (default: ~/.relay/migrations/rubric-mandatory.yaml)
   --dry-run             Print what would happen without writing
   --json                Output JSON`;
+const RUBRIC_MIGRATION_MANIFEST_BASENAME = "rubric-mandatory.yaml";
 
 function parseScalar(value) {
   const trimmed = String(value || "").trim();
@@ -197,7 +198,7 @@ function requireMigrationEntry(entriesByRunId, runId, manifestPath) {
 
 function createProvenanceStamp({ repoRoot, entry, manifestPath, appliedAt }) {
   return {
-    from_migration: path.basename(manifestPath),
+    from_migration: RUBRIC_MIGRATION_MANIFEST_BASENAME,
     applied_at: appliedAt,
     actor: getActorName(repoRoot),
     reason: entry.reason,
@@ -260,7 +261,7 @@ function parseArgs(argv) {
   }
 
   let repoArg = ".";
-  let manifestArg = path.join(getRelayHome(), "migrations", "rubric-mandatory.yaml");
+  let manifestArg = path.join(getRelayHome(), "migrations", RUBRIC_MIGRATION_MANIFEST_BASENAME);
   let dryRun = false;
   let json = false;
 
