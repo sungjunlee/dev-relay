@@ -234,8 +234,11 @@ function main() {
     prNumber,
     includeTerminal: skipMerge,
   });
+  const selectorExpectedRepoRoot = manifestArg
+    ? undefined
+    : ((repoArg || looksLikeGitRepo(repoPath)) ? repoPath : undefined);
   let validatedPaths = validateManifestPaths(manifestRecord.data?.paths, {
-    expectedRepoRoot: (repoArg || looksLikeGitRepo(repoPath)) ? repoPath : undefined,
+    expectedRepoRoot: selectorExpectedRepoRoot,
     manifestPath: manifestRecord.manifestPath,
     runId: manifestRecord.data?.run_id,
     caller: "finalize-run",
@@ -251,7 +254,7 @@ function main() {
       includeTerminal: skipMerge,
     });
     validatedPaths = validateManifestPaths(manifestRecord.data?.paths, {
-      expectedRepoRoot: repoPath,
+      expectedRepoRoot: manifestArg ? undefined : repoPath,
       manifestPath: manifestRecord.manifestPath,
       runId: manifestRecord.data?.run_id,
       caller: "finalize-run",

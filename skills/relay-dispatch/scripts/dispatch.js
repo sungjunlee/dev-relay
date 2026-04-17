@@ -454,7 +454,7 @@ async function main() {
     manifestPath = manifestRecord.manifestPath;
     manifest = manifestRecord.data;
     const validatedPaths = validateManifestPaths(manifest.paths, {
-      expectedRepoRoot: (repoPathRaw || looksLikeGitRepo(repoRoot)) ? repoRoot : undefined,
+      expectedRepoRoot: MANIFEST_INPUT ? undefined : ((repoPathRaw || looksLikeGitRepo(repoRoot)) ? repoRoot : undefined),
       manifestPath,
       runId: manifest.run_id || runId,
       caller: "dispatch resume",

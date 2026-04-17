@@ -1078,7 +1078,7 @@ function resolveContext(repoPath, manifestPathArg, runIdArg, branchArg, prArg) {
     prNumber,
   });
   const validatedPaths = validateManifestPaths(manifest.data?.paths, {
-    expectedRepoRoot: looksLikeGitRepo(repoPath) ? repoPath : undefined,
+    expectedRepoRoot: manifestPathArg ? undefined : (looksLikeGitRepo(repoPath) ? repoPath : undefined),
     manifestPath: manifest.manifestPath,
     runId: manifest.data?.run_id,
     requireWorktree: true,

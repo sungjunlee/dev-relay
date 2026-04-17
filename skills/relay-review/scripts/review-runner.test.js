@@ -101,6 +101,17 @@ function createUnrelatedRelayOwnedWorktree(repoRoot, branch = "issue-42") {
   return { attackerRoot, attackerWorktree };
 }
 
+function createUnrelatedGitRepo(prefix = "relay-review-manifest-cwd-") {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  execFileSync("git", ["init", "-b", "main"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
+  execFileSync("git", ["config", "user.name", "Relay Review Manifest"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
+  execFileSync("git", ["config", "user.email", "relay-review-manifest@example.com"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
+  fs.writeFileSync(path.join(repoRoot, "README.md"), "manifest selector\n", "utf-8");
+  execFileSync("git", ["add", "README.md"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
+  execFileSync("git", ["commit", "-m", "init"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
+  return repoRoot;
+}
+
 function setReviewPending(manifestPath) {
   const { data, body } = readManifest(manifestPath);
   let updated = data;
@@ -485,6 +496,30 @@ test("review-runner rejects invalid manifest run_id before creating a sibling ru
     return true;
   });
   assert.equal(fs.existsSync(victimRunDir), false);
+});
+
+test("review-runner can prepare from --manifest when --repo points at an unrelated git repo", () => {
+  const { repoRoot, manifestPath, runId, worktreePath, doneCriteriaPath, diffPath } = setupRepo();
+  const selectorRepo = createUnrelatedGitRepo();
+
+  const stdout = execFileSync("node", [
+    SCRIPT,
+    "--repo", selectorRepo,
+    "--manifest", manifestPath,
+    "--pr", "123",
+    "--done-criteria-file", doneCriteriaPath,
+    "--diff-file", diffPath,
+    "--prepare-only",
+    "--json",
+  ], { encoding: "utf-8", stdio: "pipe" });
+
+  const result = JSON.parse(stdout);
+  const canonicalRunDir = path.join(getRunsDir(repoRoot), runId);
+  assert.equal(result.prepareOnly, true);
+  assert.ok(result.promptPath.startsWith(canonicalRunDir));
+  assert.ok(result.diffPath.startsWith(canonicalRunDir));
+  assert.equal(result.reviewRepoPath, worktreePath);
+  assert.equal(readManifest(manifestPath).data.state, STATES.REVIEW_PENDING);
 });
 
 test("review-runner rejects relay-base same-name worktrees before preparing prompts in an unrelated checkout", () => {
