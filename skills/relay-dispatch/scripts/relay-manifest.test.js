@@ -64,6 +64,13 @@ function createUnrelatedRelayOwnedWorktree(repoRoot, branch = "issue-42") {
   return { attackerRoot, worktreePath };
 }
 
+function createMissingRelayOwnedWorktree(repoRoot) {
+  const relayWorktrees = path.join(process.env.RELAY_HOME, "worktrees");
+  fs.mkdirSync(relayWorktrees, { recursive: true });
+  const worktreeParent = fs.mkdtempSync(path.join(relayWorktrees, "relay-missing-"));
+  return path.join(worktreeParent, path.basename(repoRoot));
+}
+
 function writeRunRubric(repoRoot, runId, rubricPath = "rubric.yaml", content = "rubric:\n  factors:\n    - name: manifest\n") {
   const { runDir } = ensureRunLayout(repoRoot, runId);
   const fullPath = path.join(runDir, rubricPath);
@@ -256,6 +263,7 @@ test("validateManifestPaths rejects mismatched repo roots, escaped worktrees, an
   process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
   const runId = "issue-42-20260402103000600";
   const manifestPath = ensureRunLayout(repoRoot, runId).manifestPath;
+  const missingRelayOwnedWorktree = createMissingRelayOwnedWorktree(repoRoot);
 
   assert.throws(() => validateManifestPaths({
     repo_root: attackerRoot,
@@ -275,6 +283,16 @@ test("validateManifestPaths rejects mismatched repo roots, escaped worktrees, an
     manifestPath,
     runId,
     caller: "relay-manifest.test escaped worktree",
+  }), /is not contained under the expected repo root/);
+
+  assert.throws(() => validateManifestPaths({
+    repo_root: repoRoot,
+    worktree: missingRelayOwnedWorktree,
+  }, {
+    expectedRepoRoot: repoRoot,
+    manifestPath,
+    runId,
+    caller: "relay-manifest.test missing relay-owned worktree",
   }), /is not contained under the expected repo root/);
 
   assert.throws(() => validateManifestPaths({

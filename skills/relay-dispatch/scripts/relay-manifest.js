@@ -505,8 +505,8 @@ function validateManifestPaths(paths, {
   const expectedGitCommonDir = getWorktreeGitCommonDir(repoRoot) || path.join(repoRoot, ".git");
   const relayOwnedWorktree = relayOwnedWorktreeCandidate
     && (
-      !fs.existsSync(worktree)
-      || (() => {
+      fs.existsSync(worktree)
+      && (() => {
         const worktreeGitCommonDir = getWorktreeGitCommonDir(worktree);
         return worktreeGitCommonDir
           && (

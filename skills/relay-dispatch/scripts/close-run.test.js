@@ -87,6 +87,13 @@ function createUnrelatedRelayOwnedWorktree(repoRoot, branch = "issue-42") {
   return { attackerRoot, attackerWorktree };
 }
 
+function createMissingRelayOwnedWorktree(repoRoot) {
+  const relayWorktrees = path.join(process.env.RELAY_HOME, "worktrees");
+  fs.mkdirSync(relayWorktrees, { recursive: true });
+  const worktreeParent = fs.mkdtempSync(path.join(relayWorktrees, "missing-"));
+  return path.join(worktreeParent, path.basename(repoRoot));
+}
+
 function branchExists(repoRoot, branch) {
   try {
     execFileSync("git", ["-C", repoRoot, "rev-parse", "--verify", `refs/heads/${branch}`], {
@@ -216,6 +223,38 @@ test("close-run rejects relay-base same-name worktrees before cleanup", () => {
   assert.match(result.stderr, /manifest paths\.worktree/);
   assert.equal(fs.existsSync(attackerWorktree), true, "close-run must reject before touching the foreign relay worktree");
   assert.equal(fs.existsSync(path.join(attackerWorktree, "sentinel.txt")), true);
+
+  const manifest = readManifest(manifestPath).data;
+  assert.equal(manifest.state, STATES.REVIEW_PENDING);
+  assert.equal(manifest.cleanup.status, "pending");
+});
+
+test("close-run rejects missing relay-base same-name worktrees before cleanup", () => {
+  const { repoRoot, manifestPath, runId, worktreePath } = setupRepo();
+  const missingWorktree = createMissingRelayOwnedWorktree(repoRoot);
+  const record = readManifest(manifestPath);
+  writeManifest(manifestPath, {
+    ...record.data,
+    paths: {
+      ...(record.data.paths || {}),
+      worktree: missingWorktree,
+    },
+  }, record.body);
+
+  const result = spawnSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--run-id", runId,
+    "--reason", "stale_non_terminal_run",
+    "--json",
+  ], {
+    encoding: "utf-8",
+  });
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /manifest paths\.worktree/);
+  assert.equal(fs.existsSync(worktreePath), true, "close-run must fail before touching the real worktree");
+  assert.equal(fs.existsSync(missingWorktree), false);
 
   const manifest = readManifest(manifestPath).data;
   assert.equal(manifest.state, STATES.REVIEW_PENDING);
