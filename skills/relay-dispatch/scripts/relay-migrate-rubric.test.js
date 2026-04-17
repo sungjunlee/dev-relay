@@ -153,6 +153,35 @@ test("relay-migrate-rubric is idempotent after a manifest entry is applied", () 
   assert.ok(migrationDoc.runs[0].applied_at);
 });
 
+test("relay-migrate-rubric rejects falsy non-string applied_at values in the migration manifest", () => {
+  const { repoRoot, relayHome } = initRepo();
+  const runId = "issue-151-20260417080000005";
+  const manifestPath = writeLegacyRun(repoRoot, runId);
+  const migrationManifestPath = path.join(relayHome, "migrations", "rubric-mandatory.yaml");
+  fs.mkdirSync(path.dirname(migrationManifestPath), { recursive: true });
+  fs.writeFileSync(migrationManifestPath, `version: 1
+runs:
+  - run_id: "${runId}"
+    registered_by: "sjlee"
+    registered_at: "2026-04-17T08:00:00Z"
+    reason: "pre-rubric run needed merge after a hotfix"
+    applied_at: 0
+`, "utf-8");
+
+  const result = spawnSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--manifest", migrationManifestPath,
+    "--json",
+  ], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /applied_at must be a non-empty ISO timestamp string when set/);
+
+  const persistedManifest = readManifest(manifestPath).data;
+  assert.deepEqual(persistedManifest.anchor, {});
+});
+
 test("relay-migrate-rubric syncs the canonical manifest when --manifest uses an override path", () => {
   const { repoRoot, relayHome } = initRepo();
   const runId = "issue-151-20260417080000004";

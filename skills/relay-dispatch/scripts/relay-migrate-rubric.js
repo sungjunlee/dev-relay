@@ -77,8 +77,14 @@ function validateMigrationEntry(entry, index, manifestPath) {
   if (Number.isNaN(Date.parse(entry.registered_at))) {
     throw new Error(`${manifestPath}: runs[${index}].registered_at must be an ISO timestamp`);
   }
-  if (entry.applied_at !== undefined && entry.applied_at !== null && Number.isNaN(Date.parse(entry.applied_at))) {
-    throw new Error(`${manifestPath}: runs[${index}].applied_at must be an ISO timestamp when set`);
+  if (entry.applied_at !== undefined && entry.applied_at !== null) {
+    if (
+      typeof entry.applied_at !== "string"
+      || entry.applied_at.trim() === ""
+      || Number.isNaN(Date.parse(entry.applied_at))
+    ) {
+      throw new Error(`${manifestPath}: runs[${index}].applied_at must be a non-empty ISO timestamp string when set`);
+    }
   }
 }
 
@@ -175,7 +181,7 @@ function serializeMigrationManifest(document) {
     lines.push(`    registered_by: ${formatScalar(entry.registered_by)}`);
     lines.push(`    registered_at: ${formatScalar(entry.registered_at)}`);
     lines.push(`    reason: ${formatScalar(entry.reason)}`);
-    if (entry.applied_at) {
+    if (entry.applied_at !== undefined && entry.applied_at !== null) {
       lines.push(`    applied_at: ${formatScalar(entry.applied_at)}`);
     }
   }
@@ -341,7 +347,7 @@ function runMigration(options) {
   };
 
   for (const entry of document.runs) {
-    if (entry.applied_at) {
+    if (entry.applied_at !== undefined && entry.applied_at !== null) {
       result.skipped.push({
         run_id: entry.run_id,
         status: "already_applied",
