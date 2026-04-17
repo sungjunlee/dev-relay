@@ -4,11 +4,18 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 
-const { evaluateReviewGate } = require("./review-gate");
+const { buildSkipComment, evaluateReviewGate } = require("./review-gate");
+const {
+  createGrandfatheredRubricAnchor,
+  registerGrandfatheredRubricMigration,
+} = require("../../relay-dispatch/scripts/test-support");
 
 function createRubricStateFixture(state) {
   const runDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-gate-"));
+  const runId = "issue-40-20260403070000000";
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
   const manifestData = {
+    run_id: runId,
     anchor: {},
     review: {
       last_reviewed_sha: "abc123",
@@ -37,7 +44,13 @@ function createRubricStateFixture(state) {
     fs.writeFileSync(siblingTarget, "rubric:\n  factors:\n    - name: symlink\n", "utf-8");
     fs.symlinkSync(siblingTarget, path.join(runDir, "rubric.yaml"));
   } else if (state === "grandfathered") {
-    manifestData.anchor.rubric_grandfathered = true;
+    manifestData.anchor.rubric_grandfathered = createGrandfatheredRubricAnchor({
+      actor: "review-gate-test",
+    });
+    registerGrandfatheredRubricMigration(runId, {
+      applied_at: manifestData.anchor.rubric_grandfathered.applied_at,
+      reason: manifestData.anchor.rubric_grandfathered.reason,
+    });
   }
 
   return { runDir, manifestData };
@@ -124,5 +137,24 @@ test("evaluateReviewGate still accepts PASS when rubric state is grandfathered",
   assert.equal(result.status, "lgtm");
   assert.equal(result.rubricStatus, "grandfathered");
   assert.equal(result.rubricGrandfathered, true);
+  assert.equal(result.grandfatherProvenance.actor, "review-gate-test");
   assert.equal(result.readyToMerge, true);
+});
+
+test("buildSkipComment preserves grandfather provenance in the audit comment", () => {
+  const comment = buildSkipComment("hotfix", {
+    rubricStatus: "grandfathered",
+    grandfatherProvenance: {
+      from_migration: "rubric-mandatory.yaml",
+      applied_at: "2026-04-17T08:00:05.000Z",
+      actor: "Relay Merge Test",
+      reason: "pre-rubric run needed merge after a hotfix",
+    },
+  });
+
+  assert.match(comment, /rubric_status: grandfathered/);
+  assert.match(comment, /rubric_grandfathered\.from_migration: rubric-mandatory\.yaml/);
+  assert.match(comment, /rubric_grandfathered\.applied_at: 2026-04-17T08:00:05\.000Z/);
+  assert.match(comment, /rubric_grandfathered\.actor: Relay Merge Test/);
+  assert.match(comment, /rubric_grandfathered\.reason: pre-rubric run needed merge after a hotfix/);
 });

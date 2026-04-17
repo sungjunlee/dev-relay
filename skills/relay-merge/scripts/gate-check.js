@@ -30,7 +30,7 @@ const { execFileSync } = require("child_process");
 const {
   buildSkipComment,
   evaluateReviewGate,
-  summarizeRubricStatusForSkip,
+  summarizeRubricAuditForSkip,
 } = require("./review-gate");
 const {
   STATES,
@@ -277,6 +277,7 @@ function resolveSkipAuditContext(prNumber) {
     if (manifestRecord.error || !manifestRecord.data) {
       return {
         rubricStatus: "unresolved-manifest",
+        grandfatherProvenance: null,
         manifestData: null,
         runDir: null,
       };
@@ -299,14 +300,17 @@ function resolveSkipAuditContext(prNumber) {
     };
 
     const runDir = getRunDir(validatedPaths.repoRoot, manifestData.run_id);
+    const rubricAudit = summarizeRubricAuditForSkip(manifestData, { runDir });
     return {
-      rubricStatus: summarizeRubricStatusForSkip(manifestData, { runDir }),
+      rubricStatus: rubricAudit.rubricStatus,
+      grandfatherProvenance: rubricAudit.grandfatherProvenance,
       manifestData,
       runDir,
     };
   } catch {
     return {
       rubricStatus: "unresolved-manifest",
+      grandfatherProvenance: null,
       manifestData: null,
       runDir: null,
     };
@@ -329,7 +333,7 @@ function output(result) {
       if (result.issues) console.log(`  ${result.issues}`);
     } else if (result.status === "missing_rubric_path") {
       console.log(`✗ PR #${PR_NUM}: run is missing anchor.rubric_path — merge blocked`);
-      console.log("  Re-dispatch from relay-plan with --rubric-file, or explicitly grandfather a pre-change run.");
+      console.log("  Re-dispatch from relay-plan with --rubric-file, or stamp an approved pre-change run with relay-migrate-rubric.js.");
     } else if (result.status === "missing_rubric_file") {
       console.log(`✗ PR #${PR_NUM}: anchored rubric file is missing from the run directory — merge blocked`);
       if (result.reason) console.log(`  ${result.reason}`);
@@ -370,9 +374,14 @@ function main() {
   // --- Skip path: write audit comment and exit ---
   if (SKIP) {
     const skipAudit = DRY_RUN
-      ? { rubricStatus: "unresolved-manifest", manifestData: null, runDir: null }
+      ? {
+          rubricStatus: "unresolved-manifest",
+          grandfatherProvenance: null,
+          manifestData: null,
+          runDir: null,
+        }
       : resolveSkipAuditContext(PR_NUM);
-    const skipComment = buildSkipComment(SKIP_REASON, skipAudit.rubricStatus);
+    const skipComment = buildSkipComment(SKIP_REASON, skipAudit);
 
     if (DRY_RUN) {
       output({

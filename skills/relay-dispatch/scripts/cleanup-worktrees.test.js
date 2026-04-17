@@ -14,6 +14,10 @@ const {
   updateManifestState,
   writeManifest,
 } = require("./relay-manifest");
+const {
+  createGrandfatheredRubricAnchor,
+  registerGrandfatheredRubricMigration,
+} = require("./test-support");
 
 const SCRIPT = path.join(__dirname, "cleanup-worktrees.js");
 const PROJECT_ROOT = path.resolve(__dirname, "..", "..", "..");
@@ -85,7 +89,13 @@ function writeRun(repoRoot, { branch, state, updatedAt }) {
     reviewer: "codex",
   });
   manifest = updateManifestState(manifest, STATES.DISPATCHED, "await_dispatch_result");
-  manifest.anchor.rubric_grandfathered = true;
+  manifest.anchor.rubric_grandfathered = createGrandfatheredRubricAnchor({
+    actor: "cleanup-worktrees-test",
+  });
+  registerGrandfatheredRubricMigration(runId, {
+    applied_at: manifest.anchor.rubric_grandfathered.applied_at,
+    reason: manifest.anchor.rubric_grandfathered.reason,
+  });
   manifest = updateManifestState(manifest, STATES.REVIEW_PENDING, "run_review");
   if (state === STATES.READY_TO_MERGE || state === STATES.MERGED) {
     manifest = updateManifestState(manifest, STATES.READY_TO_MERGE, "await_explicit_merge");

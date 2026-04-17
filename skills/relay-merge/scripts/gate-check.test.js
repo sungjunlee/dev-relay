@@ -14,7 +14,11 @@ const {
   updateManifestState,
   writeManifest,
 } = require("../../relay-dispatch/scripts/relay-manifest");
-const { createEnforcementFixture } = require("../../relay-dispatch/scripts/test-support");
+const {
+  createEnforcementFixture,
+  createGrandfatheredRubricAnchor,
+  registerGrandfatheredRubricMigration,
+} = require("../../relay-dispatch/scripts/test-support");
 
 const SCRIPT = path.join(__dirname, "gate-check.js");
 const HISTORICAL_FIXTURE_DIR = path.join(__dirname, "__fixtures__", "historical-issue-401");
@@ -678,12 +682,16 @@ test("gate-check --skip audit comment records rubric_status: persisted", () => {
 
 test("gate-check --skip audit comment records rubric_status: grandfathered", () => {
   const result = runGateCheckSkipLive({ grandfather: true });
+  const ghLog = fs.readFileSync(result.logPath, "utf-8");
 
   assert.equal(result.status, 0);
   assert.equal(result.json.status, "skipped");
   assert.equal(result.json.readyToMerge, true);
   assert.equal(result.json.rubricStatus, "grandfathered");
-  assert.match(fs.readFileSync(result.logPath, "utf-8"), /rubric_status: grandfathered/);
+  assert.match(ghLog, /rubric_status: grandfathered/);
+  assert.match(ghLog, /rubric_grandfathered\.from_migration: rubric-mandatory\.yaml/);
+  assert.match(ghLog, /rubric_grandfathered\.applied_at:/);
+  assert.match(ghLog, /rubric_grandfathered\.actor: test/);
 });
 
 test("gate-check --skip audit comment records rubric_status: missing", () => {
@@ -1641,6 +1649,8 @@ test("gate-check fails closed when PR manifest resolution fails", () => {
 });
 
 test("gate-check allows grandfathered runs and surfaces the note", () => {
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  registerGrandfatheredRubricMigration("issue-40-20260412010000000");
   const result = runGateCheckDryRun({
     comments: [
       {
@@ -1654,8 +1664,9 @@ test("gate-check allows grandfathered runs and surfaces the note", () => {
     manifest: {
       run_id: "issue-40-20260412010000000",
       anchor: {
-        // GRANDFATHER FIXTURE — remove after migration complete per #151
-        rubric_grandfathered: true,
+        rubric_grandfathered: createGrandfatheredRubricAnchor({
+          actor: "gate-check-test",
+        }),
       },
       review: {
         last_reviewed_sha: "abc123",
@@ -1668,6 +1679,7 @@ test("gate-check allows grandfathered runs and surfaces the note", () => {
   assert.equal(result.json.readyToMerge, true);
   assert.equal(result.json.rubricGrandfathered, true);
   assert.match(result.json.note, /Grandfathered pre-rubric run/);
+  assert.equal(result.json.grandfatherProvenance.actor, "gate-check-test");
   assert.match(result.stderr, /Grandfathered pre-rubric run/);
 });
 

@@ -323,7 +323,7 @@ function loadRubricFromRunDir(runDir, manifestData) {
         state: "grandfathered",
         status: rubricAnchor.status,
         content: null,
-        warning: null,
+        warning: rubricAnchor.note,
         rubricPath: rubricAnchor.rubricPath,
         resolvedPath: rubricAnchor.resolvedPath,
         error: rubricAnchor.error,

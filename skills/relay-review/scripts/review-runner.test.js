@@ -17,7 +17,9 @@ const {
 const { readRunEvents } = require("../../relay-dispatch/scripts/relay-events");
 const {
   DEFAULT_ENFORCEMENT_RUBRIC,
+  createGrandfatheredRubricAnchor,
   createEnforcementFixture,
+  registerGrandfatheredRubricMigration,
 } = require("../../relay-dispatch/scripts/test-support");
 
 const SCRIPT = path.join(__dirname, "review-runner.js");
@@ -2090,11 +2092,17 @@ test("review-runner rejects empty rubric_scores when rubric is present", () => {
 
 test("review-runner allows empty rubric_scores when no rubric file exists", () => {
   const { repoRoot, manifestPath, runId, doneCriteriaPath, diffPath } = setupRepo();
+  const rubricGrandfathered = createGrandfatheredRubricAnchor({
+    actor: "review-runner-test",
+  });
+  registerGrandfatheredRubricMigration(runId, {
+    applied_at: rubricGrandfathered.applied_at,
+    reason: rubricGrandfathered.reason,
+  });
   updateManifestRecord(manifestPath, (data) => ({
     ...data,
     anchor: {
-      // GRANDFATHER FIXTURE — remove after migration complete per #151
-      rubric_grandfathered: true,
+      rubric_grandfathered: rubricGrandfathered,
     },
   }));
   fs.rmSync(path.join(ensureRunLayout(repoRoot, runId).runDir, "rubric.yaml"), { force: true });

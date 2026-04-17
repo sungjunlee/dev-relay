@@ -1038,13 +1038,17 @@ test("finalize-run skip-review journals rubric_status: persisted", () => {
 });
 
 test("finalize-run skip-review journals rubric_status: grandfathered", () => {
-  const { result, events } = runFinalizeSkipReview({ grandfather: true });
+  const { result, events, logPath } = runFinalizeSkipReview({ grandfather: true });
   const skipEvent = events.find((entry) => entry.event === "skip_review");
+  const ghLog = fs.readFileSync(logPath, "utf-8");
 
   assert.equal(result.state, STATES.MERGED);
   assert.equal(result.reviewGate.status, "skipped");
   assert.equal(result.reviewGate.rubricStatus, "grandfathered");
   assert.equal(skipEvent?.rubric_status, "grandfathered");
+  assert.match(ghLog, /rubric_grandfathered\.from_migration: rubric-mandatory\.yaml/);
+  assert.match(ghLog, /rubric_grandfathered\.applied_at:/);
+  assert.match(ghLog, /rubric_grandfathered\.actor:/);
 });
 
 test("finalize-run skip-review with a missing rubric merges and records rubric_status: missing in comment and events", () => {

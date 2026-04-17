@@ -1221,6 +1221,7 @@ test("dispatch without --rubric-file fails loudly in non-dry-run mode", () => {
 });
 
 test("dispatch rejects --rubric-grandfathered on new dispatches", () => {
+  // #151
   const { repoRoot, relayHome } = setupRepo();
   process.env.RELAY_HOME = relayHome;
   const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
@@ -1236,10 +1237,11 @@ test("dispatch rejects --rubric-grandfathered on new dispatches", () => {
   ], { cwd: repoRoot, encoding: "utf-8", env });
 
   assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /--run-id or --manifest/);
+  assert.match(result.stderr, /relay-migrate-rubric\.js/);
+  assert.match(result.stderr, /deprecated/i);
 });
 
-test("dispatch allows --rubric-grandfathered for explicit same-run grandfathering without timestamp checks", () => {
+test("dispatch rejects --rubric-grandfathered on same-run resumes and points to the migration script", () => {
   const { repoRoot, relayHome } = setupRepo();
   process.env.RELAY_HOME = relayHome;
   const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
@@ -1270,20 +1272,20 @@ test("dispatch allows --rubric-grandfathered for explicit same-run grandfatherin
   delete updated.anchor.rubric_grandfathered;
   writeManifest(manifestPath, updated, record.body);
 
-  const result = JSON.parse(execFileSync("node", [SCRIPT, repoRoot,
+  const result = spawnSync("node", [SCRIPT, repoRoot,
     "--run-id", runId,
     "--prompt", "resume legacy migration",
     "--rubric-grandfathered",
     "--dry-run",
     "--json",
-  ], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe", env }));
+  ], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe", env });
 
-  assert.equal(result.mode, "resume");
-  assert.equal(result.rubricFile, null);
-  assert.equal(result.rubricGrandfathered, true);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /relay-migrate-rubric\.js/);
 });
 
-test("dispatch allows --rubric-grandfathered for review_pending runs without re-dispatching after the old cutoff", () => {
+test("dispatch rejects --rubric-grandfathered for review_pending legacy runs", () => {
+  // LEGACY GRANDFATHER DISPATCH PATH — remove when deprecation completes
   const { repoRoot, relayHome } = setupRepo();
   process.env.RELAY_HOME = relayHome;
   const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
@@ -1313,7 +1315,7 @@ test("dispatch allows --rubric-grandfathered for review_pending runs without re-
   delete updated.anchor.rubric_grandfathered;
   writeManifest(manifestPath, updated, record.body);
 
-  const result = JSON.parse(execFileSync(process.execPath, [SCRIPT, repoRoot,
+  const result = spawnSync(process.execPath, [SCRIPT, repoRoot,
     "--run-id", runId,
     "--rubric-grandfathered",
     "--json",
@@ -1322,23 +1324,17 @@ test("dispatch allows --rubric-grandfathered for review_pending runs without re-
     encoding: "utf-8",
     stdio: "pipe",
     env: { ...env, PATH: createGitOnlyPath() },
-  }));
+  });
 
-  assert.equal(result.mode, "resume");
-  assert.equal(result.status, "grandfathered");
-  assert.equal(result.runState, STATES.REVIEW_PENDING);
-  assert.equal(result.dispatchSkipped, true);
-  assert.equal(result.rubricGrandfathered, true);
-
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /relay-migrate-rubric\.js/);
   const manifest = readManifest(manifestPath).data;
   assert.equal(manifest.state, STATES.REVIEW_PENDING);
-  assert.equal(manifest.anchor.rubric_grandfathered, true);
-
-  const events = fs.readFileSync(getEventsPath(repoRoot, runId), "utf-8");
-  assert.match(events, /"event":"rubric_grandfathered"/);
+  assert.equal(manifest.anchor.rubric_grandfathered, undefined);
 });
 
-test("dispatch allows --rubric-grandfathered for ready_to_merge runs after the old cutoff", () => {
+test("dispatch rejects --rubric-grandfathered for ready_to_merge legacy runs", () => {
+  // LEGACY GRANDFATHER DISPATCH PATH — remove when deprecation completes
   const { repoRoot, relayHome } = setupRepo();
   process.env.RELAY_HOME = relayHome;
   const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
@@ -1369,7 +1365,7 @@ test("dispatch allows --rubric-grandfathered for ready_to_merge runs after the o
   delete updated.anchor.rubric_grandfathered;
   writeManifest(manifestPath, updated, record.body);
 
-  const result = JSON.parse(execFileSync(process.execPath, [SCRIPT, repoRoot,
+  const result = spawnSync(process.execPath, [SCRIPT, repoRoot,
     "--run-id", runId,
     "--rubric-grandfathered",
     "--dry-run",
@@ -1379,14 +1375,10 @@ test("dispatch allows --rubric-grandfathered for ready_to_merge runs after the o
     encoding: "utf-8",
     stdio: "pipe",
     env: { ...env, PATH: createGitOnlyPath() },
-  }));
+  });
 
-  assert.equal(result.mode, "resume");
-  assert.equal(result.status, "would-grandfather");
-  assert.equal(result.runState, STATES.READY_TO_MERGE);
-  assert.equal(result.dispatchSkipped, true);
-  assert.equal(result.rubricGrandfathered, true);
-
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /relay-migrate-rubric\.js/);
   const manifest = readManifest(manifestPath).data;
   assert.equal(manifest.state, STATES.READY_TO_MERGE);
   assert.equal(manifest.anchor.rubric_grandfathered, undefined);
