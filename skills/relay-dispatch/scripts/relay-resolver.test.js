@@ -16,6 +16,7 @@ const {
   writeManifest,
 } = require("./relay-manifest");
 const { findManifestByRunId, resolveManifestRecord } = require("./relay-resolver");
+const { createEnforcementFixture } = require("./test-support");
 
 const CLOSE_RUN_SCRIPT = path.join(__dirname, "close-run.js");
 const EXACT_PR_COLLISION_PR = 40;
@@ -44,20 +45,6 @@ function escapeRegExp(value) {
   return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-function ensureFixtureRubric(runDir, rubricPath) {
-  if (
-    typeof rubricPath !== "string"
-    || rubricPath.trim() === ""
-    || path.isAbsolute(rubricPath)
-    || rubricPath.split(/[\\/]+/).includes("..")
-  ) {
-    return;
-  }
-  const fullPath = path.join(runDir, rubricPath);
-  fs.mkdirSync(path.dirname(fullPath), { recursive: true });
-  fs.writeFileSync(fullPath, "rubric:\n  factors:\n    - name: resolver fixture\n", "utf-8");
-}
-
 function writeManifestRecord(repoRoot, options = {}) {
   const {
   runId,
@@ -66,12 +53,12 @@ function writeManifestRecord(repoRoot, options = {}) {
   issueNumber = 42,
   state = STATES.REVIEW_PENDING,
   prNumber,
-  grandfathered = true,
-  rubricPath,
+  grandfathered = false,
+  rubricPath = "rubric.yaml",
   cleanupPolicy = "on_close",
   updatedAt = "2026-04-03T00:00:00.000Z",
   } = options;
-  const { manifestPath, runDir } = ensureRunLayout(repoRoot, runId);
+  const { manifestPath } = ensureRunLayout(repoRoot, runId);
   let manifest = createManifestSkeleton({
     repoRoot,
     runId,
@@ -84,12 +71,18 @@ function writeManifestRecord(repoRoot, options = {}) {
     reviewer: "claude",
     cleanupPolicy,
   });
-
-  manifest.anchor.rubric_grandfathered = grandfathered;
-  if (rubricPath !== undefined) {
-    manifest.anchor.rubric_path = rubricPath;
-  }
-  ensureFixtureRubric(runDir, rubricPath);
+  manifest.anchor = createEnforcementFixture({
+    repoRoot,
+    runId,
+    state: grandfathered ? "loaded" : (
+      typeof rubricPath === "string" && path.isAbsolute(rubricPath)
+        ? "outside_run_dir"
+        : (rubricPath === "rubric-dir" ? "invalid" : "loaded")
+    ),
+    grandfather: grandfathered,
+    rubricPath,
+    rubricContent: "rubric:\n  factors:\n    - name: resolver fixture\n",
+  }).anchor;
 
   if (state !== STATES.DRAFT) {
     manifest = updateManifestState(manifest, STATES.DISPATCHED, "await_dispatch_result");
@@ -344,6 +337,40 @@ test("resolveManifestRecord returns the fresh non-terminal manifest on a reused 
   assert.equal(match.data.run_id, freshRunId);
   assert.equal(match.data.anchor.rubric_path, "fresh-rubric.yaml");
   assert.notEqual(match.data.anchor.rubric_grandfathered, true);
+});
+
+test("resolveManifestRecord does not inherit a terminal run when a reused branch has a fresh PR match", () => {
+  // #153 enforcement-path coverage (#138 fixture-default-grandfathered remediation)
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-resolver-branch-reuse-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  writeManifestRecord(repoRoot, {
+    runId: createRunId({
+      branch: "issue-100",
+      timestamp: new Date("2026-04-03T00:00:00.000Z"),
+    }),
+    branch: "issue-100",
+    state: STATES.MERGED,
+    prNumber: 100,
+    rubricPath: "merged-rubric.yaml",
+    updatedAt: "2026-04-03T00:00:00.000Z",
+  });
+  const freshRunId = createRunId({
+    branch: "issue-100",
+    timestamp: new Date("2026-04-03T00:10:00.000Z"),
+  });
+  const freshPath = writeManifestRecord(repoRoot, {
+    runId: freshRunId,
+    branch: "issue-100",
+    state: STATES.DISPATCHED,
+    prNumber: 120,
+    rubricPath: "fresh-rubric.yaml",
+    updatedAt: "2026-04-03T00:10:00.000Z",
+  });
+
+  const match = resolveManifestRecord({ repoRoot, branch: "issue-100", prNumber: 120 });
+  assert.equal(match.manifestPath, freshPath);
+  assert.equal(match.data.run_id, freshRunId);
+  assert.equal(match.data.git.pr_number, 120);
 });
 
 test("resolveManifestRecord rejects stale terminal-only branch reuse and names the fresh-dispatch recovery", () => {

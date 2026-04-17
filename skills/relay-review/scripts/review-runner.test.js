@@ -15,6 +15,10 @@ const {
   readManifest,
 } = require("../../relay-dispatch/scripts/relay-manifest");
 const { readRunEvents } = require("../../relay-dispatch/scripts/relay-events");
+const {
+  DEFAULT_ENFORCEMENT_RUBRIC,
+  createEnforcementFixture,
+} = require("../../relay-dispatch/scripts/test-support");
 
 const SCRIPT = path.join(__dirname, "review-runner.js");
 const DISPATCH_SCRIPT = path.join(__dirname, "../../relay-dispatch/scripts/dispatch.js");
@@ -52,13 +56,12 @@ function setupRepo() {
     reviewer: "claude",
   });
   manifest = updateManifestState(manifest, STATES.DISPATCHED, "await_dispatch_result");
-  manifest = {
-    ...manifest,
-    anchor: {
-      ...(manifest.anchor || {}),
-      rubric_grandfathered: true,
-    },
-  };
+  manifest.anchor = createEnforcementFixture({
+    repoRoot,
+    runId,
+    state: "loaded",
+    rubricContent: DEFAULT_ENFORCEMENT_RUBRIC,
+  }).anchor;
   manifest = {
     ...manifest,
     git: {
@@ -130,40 +133,14 @@ function updateManifestRecord(manifestPath, updater) {
 }
 
 function configureRubricFixture({ manifestPath, repoRoot, runId, state }) {
-  const runDir = ensureRunLayout(repoRoot, runId).runDir;
-  fs.rmSync(path.join(runDir, "rubric.yaml"), { recursive: true, force: true });
-  fs.rmSync(path.join(runDir, "rubric-dir"), { recursive: true, force: true });
-
-  updateManifestRecord(manifestPath, (data) => {
-    const anchor = { ...(data.anchor || {}) };
-    delete anchor.rubric_grandfathered;
-    delete anchor.rubric_path;
-
-    if (state === "loaded" || state === "missing" || state === "empty") {
-      anchor.rubric_path = "rubric.yaml";
-    } else if (state === "outside_run_dir") {
-      anchor.rubric_path = "../escape.yaml";
-    } else if (state === "invalid") {
-      anchor.rubric_path = "rubric-dir";
-    } else if (state === "grandfathered") {
-      anchor.rubric_grandfathered = true;
-    }
-
-    return {
-      ...data,
-      anchor,
-    };
-  });
-
-  if (state === "loaded") {
-    fs.writeFileSync(path.join(runDir, "rubric.yaml"), "rubric:\n  factors:\n    - name: API pagination\n      target: \">= 8/10\"\n", "utf-8");
-  } else if (state === "empty") {
-    fs.writeFileSync(path.join(runDir, "rubric.yaml"), "   \n", "utf-8");
-  } else if (state === "invalid") {
-    fs.mkdirSync(path.join(runDir, "rubric-dir"), { recursive: true });
-  }
-
-  return runDir;
+  return createEnforcementFixture({
+    repoRoot,
+    runId,
+    manifestPath,
+    state: state === "grandfathered" ? "loaded" : state,
+    grandfather: state === "grandfathered",
+    rubricContent: "rubric:\n  factors:\n    - name: API pagination\n      target: \">= 8/10\"\n",
+  }).runDir;
 }
 
 function writeVerdict(repoRoot, name, verdict) {
@@ -180,9 +157,22 @@ function writePassVerdict(repoRoot, name = "pass.json") {
     quality_status: "pass",
     next_action: "ready_to_merge",
     issues: [],
-    rubric_scores: [],
+    rubric_scores: defaultRubricScores(),
     scope_drift: { creep: [], missing: [] },
   });
+}
+
+function defaultRubricScores() {
+  return [
+    {
+      factor: "Default enforcement rubric",
+      target: ">= 1/1",
+      observed: "1/1",
+      status: "pass",
+      tier: "contract",
+      notes: "The enforcement fixture rubric remained satisfied.",
+    },
+  ];
 }
 
 function prepareReviewRun({ repoRoot, runId, doneCriteriaPath, diffPath }) {
@@ -484,7 +474,7 @@ test("pass verdict moves review_pending to ready_to_merge", () => {
     quality_status: "pass",
     next_action: "ready_to_merge",
     issues: [],
-    rubric_scores: [],
+    rubric_scores: defaultRubricScores(),
     scope_drift: { creep: [], missing: [] },
   });
 
@@ -524,7 +514,7 @@ test("pass verdict rejects quality_status=not_run", () => {
     quality_status: "not_run",
     next_action: "ready_to_merge",
     issues: [],
-    rubric_scores: [],
+    rubric_scores: defaultRubricScores(),
     scope_drift: { creep: [], missing: [] },
   });
 
@@ -769,7 +759,7 @@ test("changes_requested verdict creates a re-dispatch artifact", () => {
         severity: "high",
       },
     ],
-    rubric_scores: [],
+    rubric_scores: defaultRubricScores(),
     scope_drift: { creep: [], missing: [] },
   });
 
@@ -1064,7 +1054,7 @@ test("reviewer-script invocation can drive a round without --review-file", () =>
     quality_status: "pass",
     next_action: "ready_to_merge",
     issues: [],
-    rubric_scores: [],
+    rubric_scores: defaultRubricScores(),
     scope_drift: { creep: [], missing: [] },
   });
 
@@ -1110,7 +1100,7 @@ test("invalid pass verdict is rejected", () => {
         severity: "low",
       },
     ],
-    rubric_scores: [],
+    rubric_scores: defaultRubricScores(),
     scope_drift: { creep: [], missing: [] },
   });
 
@@ -1204,7 +1194,7 @@ test("pass verdict with not_done scope_drift entry is rejected", () => {
     quality_status: "pass",
     next_action: "ready_to_merge",
     issues: [],
-    rubric_scores: [],
+    rubric_scores: defaultRubricScores(),
     scope_drift: {
       creep: [],
       missing: [{ criteria: "Add smoke.txt", status: "not_done" }],
@@ -1233,7 +1223,7 @@ test("pass verdict with partial scope_drift entry is rejected", () => {
     quality_status: "pass",
     next_action: "ready_to_merge",
     issues: [],
-    rubric_scores: [],
+    rubric_scores: defaultRubricScores(),
     scope_drift: {
       creep: [],
       missing: [{ criteria: "Add smoke.txt", status: "partial" }],
@@ -1262,7 +1252,7 @@ test("invalid scope_drift missing status is rejected", () => {
     quality_status: "not_run",
     next_action: "changes_requested",
     issues: [{ title: "Missing", body: "Not implemented", file: "x.js", line: 1, category: "contract", severity: "high" }],
-    rubric_scores: [],
+    rubric_scores: defaultRubricScores(),
     scope_drift: {
       creep: [],
       missing: [{ criteria: "Add smoke.txt", status: "unknown" }],
@@ -1291,7 +1281,7 @@ test("changes_requested verdict with scope_drift includes drift in redispatch", 
     quality_status: "not_run",
     next_action: "changes_requested",
     issues: [{ title: "Creep", body: "Unrelated change", file: "extra.js", line: 1, category: "scope", severity: "medium" }],
-    rubric_scores: [],
+    rubric_scores: defaultRubricScores(),
     scope_drift: {
       creep: [{ file: "extra.js", reason: "Not in Done Criteria" }],
       missing: [
@@ -1332,7 +1322,7 @@ test("reviewer write policy violation escalates the manifest", () => {
     quality_status: "pass",
     next_action: "ready_to_merge",
     issues: [],
-    rubric_scores: [],
+    rubric_scores: defaultRubricScores(),
     scope_drift: { creep: [], missing: [] },
   });
 
@@ -1383,7 +1373,7 @@ process.stdout.write(JSON.stringify({
     category: "contract",
     severity: "high"
   }],
-  rubric_scores: [],
+  rubric_scores: ${JSON.stringify(defaultRubricScores())},
   scope_drift: { creep: [], missing: [] }
 }));
 `, "utf-8");
@@ -1450,7 +1440,7 @@ test("repeated identical issues escalate on the third consecutive round", () => 
         severity: "high",
       },
     ],
-    rubric_scores: [],
+    rubric_scores: defaultRubricScores(),
     scope_drift: { creep: [], missing: [] },
   });
 
@@ -1578,7 +1568,7 @@ test("round 2 review prompt contains Prior Round Context section", () => {
       category: "contract",
       severity: "high",
     }],
-    rubric_scores: [],
+    rubric_scores: defaultRubricScores(),
     scope_drift: { creep: [], missing: [] },
   });
 
@@ -1636,7 +1626,7 @@ test("round 2 redispatch artifact contains prior round summary", () => {
       category: "contract",
       severity: "high",
     }],
-    rubric_scores: [],
+    rubric_scores: defaultRubricScores(),
     scope_drift: { creep: [], missing: [] },
   });
 
@@ -1669,7 +1659,7 @@ test("round 2 redispatch artifact contains prior round summary", () => {
       category: "contract",
       severity: "high",
     }],
-    rubric_scores: [],
+    rubric_scores: defaultRubricScores(),
     scope_drift: { creep: [], missing: [] },
   });
 
@@ -1911,10 +1901,18 @@ test("review-runner advances loaded-rubric PASS reviews to ready_to_merge", () =
 });
 
 test("review-runner warns visibly when anchor.rubric_path is set but the rubric file is missing", () => {
+  // #153 enforcement-path coverage (#138 fixture-default-grandfathered remediation)
   const { repoRoot, manifestPath, runId, doneCriteriaPath, diffPath } = setupRepo();
 
   configureRubricFixture({ manifestPath, repoRoot, runId, state: "missing" });
+  const rubricLoad = JSON.parse(runReviewRunnerModule([
+    `const { loadRubricFromRunDir } = reviewRunner;`,
+    `const result = loadRubricFromRunDir(${JSON.stringify(ensureRunLayout(repoRoot, runId).runDir)}, ${JSON.stringify(readManifest(manifestPath).data)});`,
+    `process.stdout.write(JSON.stringify(result));`,
+  ]));
   const result = prepareReviewRun({ repoRoot, runId, doneCriteriaPath, diffPath });
+  assert.equal(rubricLoad.state, "missing");
+  assert.match(rubricLoad.warning, /\[rubric missing\]/i);
   assert.equal(result.rubricLoaded, "missing");
   assert.match(result.rubricWarning, /\[rubric missing\]/i);
   const promptText = fs.readFileSync(result.promptPath, "utf-8");
@@ -1923,16 +1921,34 @@ test("review-runner warns visibly when anchor.rubric_path is set but the rubric 
   assert.match(promptText, /Do NOT return PASS or ready_to_merge/i);
 });
 
-test("review-runner distinguishes rubric paths that resolve outside the run dir", () => {
-  const { repoRoot, manifestPath, runId, doneCriteriaPath, diffPath } = setupRepo();
+test("review-runner surfaces containment warnings for parent-relative and absolute rubric paths", async (t) => {
+  // #153 enforcement-path coverage (#138 fixture-default-grandfathered remediation)
+  for (const rubricPath of ["../escape.yaml", "/etc/passwd"]) {
+    await t.test(rubricPath, () => {
+      const { repoRoot, manifestPath, runId, doneCriteriaPath, diffPath } = setupRepo();
+      createEnforcementFixture({
+        repoRoot,
+        runId,
+        manifestPath,
+        state: "outside_run_dir",
+        rubricPath,
+      });
+      const rubricLoad = JSON.parse(runReviewRunnerModule([
+        `const { loadRubricFromRunDir } = reviewRunner;`,
+        `const result = loadRubricFromRunDir(${JSON.stringify(ensureRunLayout(repoRoot, runId).runDir)}, ${JSON.stringify(readManifest(manifestPath).data)});`,
+        `process.stdout.write(JSON.stringify(result));`,
+      ]));
+      const result = prepareReviewRun({ repoRoot, runId, doneCriteriaPath, diffPath });
+      const promptText = fs.readFileSync(result.promptPath, "utf-8");
 
-  configureRubricFixture({ manifestPath, repoRoot, runId, state: "outside_run_dir" });
-  const result = prepareReviewRun({ repoRoot, runId, doneCriteriaPath, diffPath });
-  assert.equal(result.rubricLoaded, "outside_run_dir");
-  assert.match(result.rubricWarning, /\[rubric path outside run dir\]/i);
-  const promptText = fs.readFileSync(result.promptPath, "utf-8");
-  assert.match(promptText, /WARNING: \[rubric path outside run dir\]/i);
-  assert.match(promptText, /\.\./);
+      assert.equal(rubricLoad.state, "outside_run_dir");
+      assert.match(rubricLoad.warning, /\[rubric path outside run dir\]/i);
+      assert.equal(result.rubricLoaded, "outside_run_dir");
+      assert.match(result.rubricWarning, /\[rubric path outside run dir\]/i);
+      assert.match(promptText, /WARNING: \[rubric path outside run dir\]/i);
+      assert.match(promptText, new RegExp(rubricPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+    });
+  }
 });
 
 test("review-runner warns visibly when anchor.rubric_path is missing from the manifest", () => {
@@ -1979,6 +1995,7 @@ test("loadRubricFromRunDir returns the invalid warning branch when anchor.rubric
   const runDir = ensureRunLayout(repoRoot, runId).runDir;
   const siblingTarget = path.join(runDir, "rubric-copy.yaml");
   fs.writeFileSync(siblingTarget, "rubric:\n  factors:\n    - name: sibling\n", "utf-8");
+  fs.rmSync(path.join(runDir, "rubric.yaml"), { force: true });
   fs.symlinkSync(siblingTarget, path.join(runDir, "rubric.yaml"));
 
   const { data, body } = readManifest(manifestPath);
@@ -2045,8 +2062,15 @@ test("review-runner rejects empty rubric_scores when rubric is present", () => {
 
 test("review-runner allows empty rubric_scores when no rubric file exists", () => {
   const { repoRoot, manifestPath, runId, doneCriteriaPath, diffPath } = setupRepo();
+  updateManifestRecord(manifestPath, (data) => ({
+    ...data,
+    anchor: {
+      // GRANDFATHER FIXTURE — remove after migration complete per #151
+      rubric_grandfathered: true,
+    },
+  }));
+  fs.rmSync(path.join(ensureRunLayout(repoRoot, runId).runDir, "rubric.yaml"), { force: true });
 
-  // No rubric file, no rubric_path in manifest; setupRepo marks the run grandfathered.
   const reviewFile = writeVerdict(repoRoot, "no-rubric-pass.json", {
     verdict: "pass",
     summary: "All done criteria are satisfied.",

@@ -14,6 +14,7 @@ const {
   updateManifestState,
   writeManifest,
 } = require("../../relay-dispatch/scripts/relay-manifest");
+const { createEnforcementFixture } = require("../../relay-dispatch/scripts/test-support");
 
 const SCRIPT = path.join(__dirname, "finalize-run.js");
 
@@ -62,7 +63,11 @@ function setupRepo({ dirtyWorktree = false } = {}) {
     reviewer: "codex",
   });
   manifest = updateManifestState(manifest, STATES.DISPATCHED, "await_dispatch_result");
-  manifest.anchor.rubric_grandfathered = true;
+  manifest.anchor = createEnforcementFixture({
+    repoRoot,
+    runId,
+    state: "loaded",
+  }).anchor;
   manifest = updateManifestState(manifest, STATES.REVIEW_PENDING, "run_review");
   manifest = updateManifestState(manifest, STATES.READY_TO_MERGE, "await_explicit_merge");
   manifest.git.pr_number = 123;
