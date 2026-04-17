@@ -1303,3 +1303,53 @@ test("writeTextFileWithoutFollowingSymlinks creates a new file when the target i
   assert.equal(fs.readFileSync(target, "utf-8"), '[{"ok":true}]');
   assert.equal(fs.lstatSync(target).isSymbolicLink(), false);
 });
+
+test("appendTextFileWithoutFollowingSymlinks refuses a dangling symlink at target", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-append-dangling-"));
+  const target = path.join(dir, "events.jsonl");
+  const danglingTarget = path.join(dir, "does-not-exist.jsonl");
+  fs.symlinkSync(danglingTarget, target);
+
+  assert.throws(
+    () => appendTextFileWithoutFollowingSymlinks(target, "malicious\n"),
+    /Refusing to open symlinked path/
+  );
+  assert.equal(fs.existsSync(danglingTarget), false, "dangling target must not have been created through the symlink");
+});
+
+test("appendTextFileWithoutFollowingSymlinks creates a new file when the target is truly absent", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-append-create-"));
+  const target = path.join(dir, "events.jsonl");
+  appendTextFileWithoutFollowingSymlinks(target, "{\"event\":\"one\"}\n");
+  appendTextFileWithoutFollowingSymlinks(target, "{\"event\":\"two\"}\n");
+  assert.equal(
+    fs.readFileSync(target, "utf-8"),
+    "{\"event\":\"one\"}\n{\"event\":\"two\"}\n"
+  );
+  assert.equal(fs.lstatSync(target).isSymbolicLink(), false);
+});
+
+test("write helpers refuse a FIFO at the target path (POSIX only)", { skip: process.platform === "win32" }, () => {
+  // Defense-in-depth: trust-root protection isn't only about symlinks. A FIFO
+  // dropped at the target path could block `open(O_WRONLY)` forever waiting
+  // for a reader, or a socket/device could have side-effects. The helpers
+  // use O_NONBLOCK on POSIX and gate the fd with fstat+isFile.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-fifo-"));
+  const target = path.join(dir, "events.jsonl");
+  execFileSync("mkfifo", [target], { stdio: "pipe" });
+
+  // With O_NONBLOCK, open(O_WRONLY) on a reader-less FIFO fails with ENXIO
+  // on Linux/macOS — that's an acceptable refusal (attacker attempt blocked)
+  // even though it doesn't go through our ELOOP path. Alternately, if the
+  // platform opens it (with a reader attached, hypothetically), the fstat
+  // gate inside gateWritableFd catches it with EINVAL. Either way, no
+  // writeSync lands on the FIFO.
+  assert.throws(
+    () => appendTextFileWithoutFollowingSymlinks(target, "x\n"),
+    (error) => ["EINVAL", "ENXIO"].includes(error.code) || /Not a regular file/.test(error.message)
+  );
+  assert.throws(
+    () => writeTextFileWithoutFollowingSymlinks(target, "x"),
+    (error) => ["EINVAL", "ENXIO"].includes(error.code) || /Not a regular file/.test(error.message)
+  );
+});

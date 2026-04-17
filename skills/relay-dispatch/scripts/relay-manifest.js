@@ -1010,13 +1010,23 @@ function readTextFileWithoutFollowingSymlinks(targetPath, realPath) {
   try {
     if (typeof noFollowFlag === "number") {
       fd = fs.openSync(openPath, fs.constants.O_RDONLY | noFollowFlag);
-      const stat = fs.fstatSync(fd);
-      if (!stat.isFile()) {
-        const error = new Error(`Not a file: ${openPath}`);
-        error.code = "EINVAL";
-        throw error;
+      try {
+        const stat = fs.fstatSync(fd);
+        if (!stat.isFile()) {
+          const error = new Error(`Not a file: ${openPath}`);
+          error.code = "EINVAL";
+          throw error;
+        }
+        // Pre-fix: this `return fs.readFileSync(fd, ...)` did NOT close the
+        // fd on success because the outer catch only runs on throw. Wrap in
+        // try/finally so the fd is closed on both the success and throw
+        // paths. Matters more now that readRunEvents / readPreviousAttempts
+        // route through this helper on every call.
+        return fs.readFileSync(fd, "utf-8");
+      } finally {
+        fs.closeSync(fd);
+        fd = null;
       }
-      return fs.readFileSync(fd, "utf-8");
     }
   } catch (error) {
     if (fd !== null) {
@@ -1056,6 +1066,21 @@ function readTextFileWithoutFollowingSymlinks(targetPath, realPath) {
 //
 // `mode` is "w" (truncate/create) or "a" (append/create). All writes use
 // 0o600 as the file mode on creation.
+// After opening an fd, verify it refers to a regular file — not a FIFO,
+// socket, device, or directory. Mirrors the check in the read helper. Opens
+// on a FIFO can block the writer; opens on a socket/device can have
+// side-effects we don't want. Closes the fd and throws EINVAL otherwise.
+function gateWritableFd(fd, targetPath) {
+  const stat = fs.fstatSync(fd);
+  if (!stat.isFile()) {
+    fs.closeSync(fd);
+    const error = new Error(`Not a regular file: ${targetPath}`);
+    error.code = "EINVAL";
+    throw error;
+  }
+  return fd;
+}
+
 function openForWriteWithoutFollowingSymlinks(targetPath, mode) {
   const modeFlags = {
     w: fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_TRUNC,
@@ -1066,10 +1091,15 @@ function openForWriteWithoutFollowingSymlinks(targetPath, mode) {
     throw new Error(`openForWriteWithoutFollowingSymlinks: invalid mode ${mode}`);
   }
   const noFollowFlag = fs.constants.O_NOFOLLOW;
+  // O_NONBLOCK prevents `open(O_WRONLY)` from blocking on a FIFO with no
+  // reader. Regular-file writes are unaffected. Not every platform defines
+  // it (Windows), so fall back to 0 (no-op) when unavailable.
+  const nonBlockFlag = typeof fs.constants.O_NONBLOCK === "number" ? fs.constants.O_NONBLOCK : 0;
 
   if (typeof noFollowFlag === "number") {
     try {
-      return fs.openSync(targetPath, flags | noFollowFlag, 0o600);
+      const fd = fs.openSync(targetPath, flags | noFollowFlag | nonBlockFlag, 0o600);
+      return gateWritableFd(fd, targetPath);
     } catch (error) {
       if (error.code === "ELOOP") {
         const wrapped = new Error(`Refusing to open symlinked path: ${targetPath}`);
@@ -1102,13 +1132,13 @@ function openForWriteWithoutFollowingSymlinks(targetPath, mode) {
     }
     // Existing regular file — open normally. A small TOCTOU window between
     // lstat and open is unavoidable on platforms without O_NOFOLLOW.
-    return fs.openSync(targetPath, flags, 0o600);
+    return gateWritableFd(fs.openSync(targetPath, flags | nonBlockFlag, 0o600), targetPath);
   }
   // No entry at the path — create atomically with O_EXCL so an attacker
   // dropping a symlink between our lstat and open loses the race (EEXIST
   // instead of creating through the link).
   try {
-    return fs.openSync(targetPath, flags | fs.constants.O_EXCL, 0o600);
+    return gateWritableFd(fs.openSync(targetPath, flags | fs.constants.O_EXCL | nonBlockFlag, 0o600), targetPath);
   } catch (error) {
     if (error.code === "EEXIST") {
       const raced = fs.lstatSync(targetPath);
@@ -1117,7 +1147,7 @@ function openForWriteWithoutFollowingSymlinks(targetPath, mode) {
         wrapped.code = "ELOOP";
         throw wrapped;
       }
-      return fs.openSync(targetPath, flags, 0o600);
+      return gateWritableFd(fs.openSync(targetPath, flags | nonBlockFlag, 0o600), targetPath);
     }
     throw error;
   }
