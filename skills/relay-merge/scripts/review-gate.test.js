@@ -4,7 +4,7 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 
-const { evaluateReviewGate } = require("./review-gate");
+const { buildSkipComment, evaluateReviewGate } = require("./review-gate");
 const { createGrandfatheredRubricAnchor } = require("../../relay-dispatch/scripts/test-support");
 
 function createRubricStateFixture(state) {
@@ -129,4 +129,22 @@ test("evaluateReviewGate still accepts PASS when rubric state is grandfathered",
   assert.equal(result.rubricGrandfathered, true);
   assert.equal(result.grandfatherProvenance.actor, "review-gate-test");
   assert.equal(result.readyToMerge, true);
+});
+
+test("buildSkipComment preserves grandfather provenance in the audit comment", () => {
+  const comment = buildSkipComment("hotfix", {
+    rubricStatus: "grandfathered",
+    grandfatherProvenance: {
+      from_migration: "rubric-mandatory.yaml",
+      applied_at: "2026-04-17T08:00:05.000Z",
+      actor: "Relay Merge Test",
+      reason: "pre-rubric run needed merge after a hotfix",
+    },
+  });
+
+  assert.match(comment, /rubric_status: grandfathered/);
+  assert.match(comment, /rubric_grandfathered\.from_migration: rubric-mandatory\.yaml/);
+  assert.match(comment, /rubric_grandfathered\.applied_at: 2026-04-17T08:00:05\.000Z/);
+  assert.match(comment, /rubric_grandfathered\.actor: Relay Merge Test/);
+  assert.match(comment, /rubric_grandfathered\.reason: pre-rubric run needed merge after a hotfix/);
 });

@@ -30,30 +30,54 @@ function hasRelayReviewMarker(body) {
 }
 
 function summarizeRubricStatusForSkip(manifestData, options = {}) {
+  return summarizeRubricAuditForSkip(manifestData, options).rubricStatus;
+}
+
+function summarizeRubricAuditForSkip(manifestData, options = {}) {
   if (!manifestData) {
-    return "unresolved-manifest";
+    return {
+      rubricStatus: "unresolved-manifest",
+      grandfatherProvenance: null,
+    };
   }
 
   const rubricAnchor = getRubricAnchorStatus(manifestData, options.runDir ? { runDir: options.runDir } : undefined);
+  let rubricStatus = "missing";
   if (rubricAnchor.status === "satisfied") {
-    return "persisted";
+    rubricStatus = "persisted";
+  } else if (rubricAnchor.status === "grandfathered") {
+    rubricStatus = "grandfathered";
+  } else if (MISSING_SKIP_AUDIT_RUBRIC_STATUSES.has(rubricAnchor.status)) {
+    rubricStatus = "missing";
   }
-  if (rubricAnchor.status === "grandfathered") {
-    return "grandfathered";
-  }
-  if (MISSING_SKIP_AUDIT_RUBRIC_STATUSES.has(rubricAnchor.status)) {
-    return "missing";
-  }
-  return "missing";
+  return {
+    rubricStatus,
+    grandfatherProvenance: rubricAnchor.grandfatherProvenance || null,
+  };
 }
 
-function buildSkipComment(reason, rubricStatus = "unresolved-manifest") {
-  return [
+function buildSkipComment(reason, rubricAudit = "unresolved-manifest") {
+  const normalizedAudit = typeof rubricAudit === "string"
+    ? { rubricStatus: rubricAudit, grandfatherProvenance: null }
+    : {
+        rubricStatus: rubricAudit?.rubricStatus || "unresolved-manifest",
+        grandfatherProvenance: rubricAudit?.grandfatherProvenance || null,
+      };
+  const lines = [
     "<!-- relay-review-skip -->",
     "## Relay Review — Skipped",
     `Reason: ${reason}`,
-    `rubric_status: ${rubricStatus}`,
-  ].join("\n");
+    `rubric_status: ${normalizedAudit.rubricStatus}`,
+  ];
+  if (normalizedAudit.grandfatherProvenance) {
+    lines.push(`rubric_grandfathered.from_migration: ${normalizedAudit.grandfatherProvenance.from_migration}`);
+    lines.push(`rubric_grandfathered.applied_at: ${normalizedAudit.grandfatherProvenance.applied_at}`);
+    lines.push(`rubric_grandfathered.actor: ${normalizedAudit.grandfatherProvenance.actor}`);
+    if (normalizedAudit.grandfatherProvenance.reason) {
+      lines.push(`rubric_grandfathered.reason: ${normalizedAudit.grandfatherProvenance.reason}`);
+    }
+  }
+  return lines.join("\n");
 }
 
 function normalizeCommentRecords(comments) {
@@ -273,6 +297,7 @@ module.exports = {
   hasRelayReviewMarker,
   normalizeCommentRecords,
   SKIP_AUDIT_RUBRIC_STATUSES,
+  summarizeRubricAuditForSkip,
   summarizeRubricStatusForSkip,
   toIsoOrNull,
 };

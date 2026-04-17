@@ -120,7 +120,7 @@ test("relay-migrate-rubric is idempotent after a manifest entry is applied", () 
 
   const stampedManifest = readManifest(ensureRunLayout(repoRoot, runId).manifestPath).data;
   assert.equal(stampedManifest.anchor.rubric_grandfathered.from_migration, "rubric-mandatory.yaml");
-  assert.equal(stampedManifest.anchor.rubric_grandfathered.actor, "sjlee");
+  assert.equal(stampedManifest.anchor.rubric_grandfathered.actor, "Relay Migrate Test");
 
   const eventsAfterFirstRun = fs.readFileSync(getEventsPath(repoRoot, runId), "utf-8")
     .trim()

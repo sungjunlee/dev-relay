@@ -14,7 +14,7 @@ runs:
     applied_at: 2026-04-17T08:00:05Z
 ```
 
-`run_id`, `registered_by`, `registered_at`, and `reason` are required. `applied_at` is absent until the migration script stamps the run.
+`run_id`, `registered_by`, `registered_at`, and `reason` are required. `applied_at` is absent until the migration script stamps the run. `registered_by` records who listed the run in the migration manifest; `anchor.rubric_grandfathered.actor` records the repo git user who actually applied the migration.
 
 ## One-Shot Semantics
 
@@ -25,7 +25,7 @@ anchor:
   rubric_grandfathered:
     from_migration: rubric-mandatory.yaml
     applied_at: 2026-04-17T08:00:05Z
-    actor: sjlee
+    actor: <repo git user.name>
     reason: "pre-rubric run from 2026-04-10 needed merge after a production hotfix"
 ```
 

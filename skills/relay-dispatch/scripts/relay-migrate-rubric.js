@@ -6,6 +6,7 @@ const path = require("path");
 
 const {
   getCanonicalRepoRoot,
+  getActorName,
   getRelayHome,
   getRubricGrandfatherMetadata,
   readManifest,
@@ -194,11 +195,11 @@ function requireMigrationEntry(entriesByRunId, runId, manifestPath) {
   return entry;
 }
 
-function createProvenanceStamp(entry, manifestPath, appliedAt) {
+function createProvenanceStamp({ repoRoot, entry, manifestPath, appliedAt }) {
   return {
     from_migration: path.basename(manifestPath),
     applied_at: appliedAt,
-    actor: entry.registered_by,
+    actor: getActorName(repoRoot),
     reason: entry.reason,
   };
 }
@@ -217,7 +218,12 @@ function applyMigrationStamp({ repoRoot, runId, entriesByRunId, manifestPath, dr
     );
   }
 
-  const stamp = createProvenanceStamp(entry, manifestPath, appliedAt);
+  const stamp = createProvenanceStamp({
+    repoRoot,
+    entry,
+    manifestPath,
+    appliedAt,
+  });
   const nextManifest = {
     ...manifestRecord.data,
     anchor: {

@@ -681,12 +681,16 @@ test("gate-check --skip audit comment records rubric_status: persisted", () => {
 
 test("gate-check --skip audit comment records rubric_status: grandfathered", () => {
   const result = runGateCheckSkipLive({ grandfather: true });
+  const ghLog = fs.readFileSync(result.logPath, "utf-8");
 
   assert.equal(result.status, 0);
   assert.equal(result.json.status, "skipped");
   assert.equal(result.json.readyToMerge, true);
   assert.equal(result.json.rubricStatus, "grandfathered");
-  assert.match(fs.readFileSync(result.logPath, "utf-8"), /rubric_status: grandfathered/);
+  assert.match(ghLog, /rubric_status: grandfathered/);
+  assert.match(ghLog, /rubric_grandfathered\.from_migration: rubric-mandatory\.yaml/);
+  assert.match(ghLog, /rubric_grandfathered\.applied_at:/);
+  assert.match(ghLog, /rubric_grandfathered\.actor: test/);
 });
 
 test("gate-check --skip audit comment records rubric_status: missing", () => {
