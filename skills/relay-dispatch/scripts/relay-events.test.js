@@ -139,6 +139,21 @@ test("appendRunEvent writes actor from git config user.name", () => {
   assert.equal(parsed.actor, "Relay Operator");
 });
 
+test("appendRunEvent persists rubric_status when provided", () => {
+  const { repoRoot, runId } = createContext();
+  const record = appendRunEvent(repoRoot, runId, {
+    event: "skip_review",
+    state_from: "ready_to_merge",
+    state_to: "ready_to_merge",
+    reason: "hotfix",
+    rubric_status: "missing",
+  });
+
+  const [parsed] = readRunEvents(repoRoot, runId);
+  assert.equal(record.rubric_status, "missing");
+  assert.equal(parsed.rubric_status, "missing");
+});
+
 test("appendIterationScore requires run_id", () => {
   const { repoRoot } = createContext();
   assert.throws(() => appendIterationScore(repoRoot, "", {
