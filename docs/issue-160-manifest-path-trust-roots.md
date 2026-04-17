@@ -14,7 +14,7 @@ This change closes the manifest trust-root gap for `paths.repo_root` and `paths.
 - Fixed: `skills/relay-dispatch/scripts/dispatch.js`
   Resume now validates manifest-owned repo/worktree paths before reusing the repo root, retained worktree, run directory, or previous-attempts state. Explicit `--manifest` resume keeps the manifest storage path as the trust root instead of binding to the caller's cwd repo.
 - Fixed: `skills/relay-review/scripts/review-runner.js`
-  Review preparation now validates the retained checkout before prompt generation, SHA reads, or event journal writes. Explicit `--manifest` review uses the manifest storage path as the repo-root trust source even when `--repo` points at another checkout.
+  Review preparation now validates the retained checkout before prompt generation, SHA reads, or event journal writes. Explicit `--manifest` review uses the manifest storage path as the repo-root trust source even when `--repo` points at another checkout, and the validated repo root now carries through PR/issue resolution, diff loading, PR-body divergence analysis, and review comment writes instead of falling back to the caller cwd.
 - Fixed: `skills/relay-merge/scripts/gate-check.js`
   PR-mode manifest resolution now validates manifest paths before PR stamping, run-dir lock creation, or merge-gate evaluation.
 - Fixed: `skills/relay-merge/scripts/finalize-run.js`

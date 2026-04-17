@@ -1086,12 +1086,12 @@ function resolveContext(repoPath, manifestPathArg, runIdArg, branchArg, prArg) {
   });
   branch = branch || manifest.data?.git?.working_branch || null;
   prNumber = prNumber || manifest.data?.git?.pr_number || null;
-  if (!prNumber && branch) {
-    prNumber = resolvePrForBranch(repoPath, branch);
-  }
-  const issueNumber = resolveIssueNumber(repoPath, prNumber, branch, manifest.data);
-  const reviewRepoPath = validatedPaths.worktree;
   const runRepoPath = validatedPaths.repoRoot;
+  if (!prNumber && branch) {
+    prNumber = resolvePrForBranch(runRepoPath, branch);
+  }
+  const issueNumber = resolveIssueNumber(runRepoPath, prNumber, branch, manifest.data);
+  const reviewRepoPath = validatedPaths.worktree;
   const normalizedManifest = {
     ...manifest,
     data: {
@@ -1252,13 +1252,13 @@ function run() {
   }
 
   const { text: doneCriteria, source: doneCriteriaSource } = loadDoneCriteria(
-    repoPath,
+    runRepoPath,
     issueNumber,
     prNumber,
     doneCriteriaFile,
     data
   );
-  const diffText = loadDiff(repoPath, prNumber, diffFile);
+  const diffText = loadDiff(runRepoPath, prNumber, diffFile);
   const rubricLoad = loadRubricFromRunDir(runDir, data);
   const promptText = buildPrompt({ round, prNumber, branch, issueNumber, doneCriteria, doneCriteriaSource, diffText, runDir, rubricLoad });
 
@@ -1421,7 +1421,7 @@ function run() {
   }
 
   const { warnings: divergenceWarnings, eventPayload: divergencePayload } = buildScoreDivergenceAnalysis(
-    loadPrBody(repoPath, prNumber),
+    loadPrBody(runRepoPath, prNumber),
     verdict.rubric_scores
   );
   const commentBody = buildCommentBody(verdict, round, {
@@ -1429,7 +1429,7 @@ function run() {
     gateFailure: rubricGateFailure,
   });
   if (!noComment) {
-    postComment(repoPath, prNumber, commentBody);
+    postComment(runRepoPath, prNumber, commentBody);
     result.commentPosted = true;
   }
 

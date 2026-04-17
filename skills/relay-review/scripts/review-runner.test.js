@@ -285,6 +285,82 @@ process.exit(1);
   return filePath;
 }
 
+function writeManifestOnlyGhScript(binDir, { trustedRepoRoot, capturePath, issueBody, diffText, prBody }) {
+  const filePath = path.join(binDir, "gh");
+  fs.writeFileSync(filePath, `#!/usr/bin/env node
+const fs = require("fs");
+const path = require("path");
+const cwd = fs.realpathSync(process.cwd());
+const trustedRepoRoot = ${JSON.stringify(fs.realpathSync(trustedRepoRoot))};
+const capturePath = ${JSON.stringify(capturePath)};
+const issueBody = ${JSON.stringify(issueBody)};
+const diffText = ${JSON.stringify(diffText)};
+const prBody = ${JSON.stringify(prBody)};
+const args = process.argv.slice(2);
+
+if (cwd !== trustedRepoRoot) {
+  process.stderr.write("gh invoked from unexpected cwd: " + cwd);
+  process.exit(19);
+}
+
+if (args[0] === "pr" && args[1] === "list") {
+  process.stdout.write(JSON.stringify([{ number: 123 }]));
+  process.exit(0);
+}
+
+if (args[0] === "issue" && args[1] === "view") {
+  process.stdout.write(JSON.stringify({
+    number: 42,
+    title: "Manifest-selected issue",
+    body: issueBody,
+  }));
+  process.exit(0);
+}
+
+if (args[0] === "pr" && args[1] === "diff") {
+  process.stdout.write(diffText);
+  process.exit(0);
+}
+
+if (args[0] === "pr" && args[1] === "view") {
+  const jsonIndex = args.indexOf("--json");
+  const fields = jsonIndex === -1 ? "" : args[jsonIndex + 1];
+  if (fields === "closingIssuesReferences,body,headRefName") {
+    process.stdout.write(JSON.stringify({
+      closingIssuesReferences: [{ number: 42 }],
+      body: prBody,
+      headRefName: "issue-42",
+    }));
+    process.exit(0);
+  }
+  if (fields === "body") {
+    process.stdout.write(JSON.stringify({ body: prBody }));
+    process.exit(0);
+  }
+  if (fields === "title,body,number") {
+    process.stdout.write(JSON.stringify({
+      number: 123,
+      title: "Manifest-selected PR",
+      body: prBody,
+    }));
+    process.exit(0);
+  }
+}
+
+if (args[0] === "pr" && args[1] === "comment") {
+  const bodyIndex = args.indexOf("--body");
+  const body = bodyIndex !== -1 ? args[bodyIndex + 1] : "";
+  fs.writeFileSync(capturePath, body, "utf-8");
+  process.exit(0);
+}
+
+process.stderr.write("Unsupported gh invocation: " + args.join(" "));
+process.exit(1);
+`, "utf-8");
+  fs.chmodSync(filePath, 0o755);
+  return filePath;
+}
+
 function writeFakeCodex(binDir) {
   const codexPath = path.join(binDir, "codex");
   fs.writeFileSync(codexPath, `#!/usr/bin/env node
@@ -520,6 +596,61 @@ test("review-runner can prepare from --manifest when --repo points at an unrelat
   assert.ok(result.diffPath.startsWith(canonicalRunDir));
   assert.equal(result.reviewRepoPath, worktreePath);
   assert.equal(readManifest(manifestPath).data.state, STATES.REVIEW_PENDING);
+});
+
+test("review-runner manifest-only rounds keep gh-backed reads and comments on the validated repo root", () => {
+  const { repoRoot, manifestPath, runId } = setupRepo();
+  const selectorRepo = createUnrelatedGitRepo();
+  const fakeBin = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-gh-"));
+  const commentCapturePath = path.join(repoRoot, "manifest-only-comment.txt");
+  const reviewFile = writePassVerdict(repoRoot, "manifest-only-pass.json");
+  writeManifestOnlyGhScript(fakeBin, {
+    trustedRepoRoot: repoRoot,
+    capturePath: commentCapturePath,
+    issueBody: "## Done Criteria\n\n- Keep gh operations bound to the manifest repo\n",
+    diffText: "diff --git a/smoke.txt b/smoke.txt\n+ok\n",
+    prBody: [
+      "## Score Log",
+      "",
+      "| Factor | Target | Baseline | Iter 1 | Final | Status |",
+      "|--------|--------|----------|--------|-------|--------|",
+      "| Coverage | >= 8 | — | 9 | 9 | locked |",
+    ].join("\n"),
+  });
+
+  updateManifestRecord(manifestPath, (data) => ({
+    ...data,
+    issue: {},
+    git: {
+      ...(data.git || {}),
+      pr_number: null,
+    },
+  }));
+
+  const stdout = execFileSync("node", [
+    SCRIPT,
+    "--repo", selectorRepo,
+    "--manifest", manifestPath,
+    "--review-file", reviewFile,
+    "--json",
+  ], {
+    encoding: "utf-8",
+    env: {
+      ...process.env,
+      PATH: `${fakeBin}:${process.env.PATH}`,
+    },
+  });
+
+  const result = JSON.parse(stdout);
+  const manifest = readManifest(manifestPath).data;
+  assert.equal(result.prNumber, 123);
+  assert.equal(result.issueNumber, 42);
+  assert.equal(result.state, STATES.READY_TO_MERGE);
+  assert.equal(result.commentPosted, true);
+  assert.match(fs.readFileSync(commentCapturePath, "utf-8"), /LGTM/);
+  assert.equal(manifest.state, STATES.READY_TO_MERGE);
+  assert.equal(manifest.git.pr_number, 123);
+  assert.equal(manifest.review.latest_verdict, "lgtm");
 });
 
 test("review-runner rejects relay-base same-name worktrees before preparing prompts in an unrelated checkout", () => {
