@@ -77,10 +77,29 @@ function createEnforcementFixture({
 
   if (manifestPath) {
     const record = readManifest(manifestPath);
+    // Merge into the existing persisted anchor so unrelated fields
+    // (done_criteria_path, done_criteria_source, rubric_source, etc.)
+    // are preserved. Only the rubric-related keys are owned by this helper.
+    const existingAnchor = record.data.anchor || {};
+    const mergedAnchor = { ...existingAnchor, ...nextAnchor };
+    if (grandfather) {
+      delete mergedAnchor.rubric_path;
+    } else {
+      delete mergedAnchor.rubric_grandfathered;
+      if (state === "not_set") {
+        delete mergedAnchor.rubric_path;
+      }
+    }
     writeManifest(manifestPath, {
       ...record.data,
-      anchor: nextAnchor,
+      anchor: mergedAnchor,
     }, record.body);
+    return {
+      runDir,
+      anchor: mergedAnchor,
+      rubricPath: mergedAnchor.rubric_path || null,
+      rubricContent,
+    };
   }
 
   return {
