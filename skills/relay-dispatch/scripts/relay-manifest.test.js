@@ -766,6 +766,32 @@ test("getRubricAnchorStatus fails closed for malformed grandfather provenance ob
   assert.match(result.error, /missing applied_at, actor|missing actor, applied_at/);
 });
 
+test("getRubricAnchorStatus fails closed for parseable non-ISO grandfather provenance timestamps", () => {
+  // #151
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-manifest-non-iso-grandfather-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  initGitRepo(repoRoot, "Relay Maintainer");
+
+  const result = getRubricAnchorStatus({
+    run_id: "issue-42-20260412000003003",
+    anchor: {
+      rubric_grandfathered: {
+        from_migration: "rubric-mandatory.yaml",
+        applied_at: "04/17/2026",
+        actor: "Relay Maintainer",
+      },
+    },
+    paths: { repo_root: repoRoot },
+  });
+
+  assert.equal(result.status, "missing_path");
+  assert.equal(result.grandfathered, false);
+  assert.equal(result.satisfied, false);
+  assert.equal(result.legacyGrandfather, false);
+  assert.equal(result.grandfatherProvenance, null);
+  assert.match(result.error, /applied_at must be an ISO timestamp/);
+});
+
 test("getRubricAnchorStatus rejects symlinked rubric files even when they target readable files", () => {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-manifest-symlink-"));
   process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));

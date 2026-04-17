@@ -576,6 +576,7 @@ function hasRubricPath(data) {
 
 const LEGACY_RUBRIC_GRANDFATHER_WARNED_RUN_IDS = new Set();
 const RUBRIC_GRANDFATHER_REQUIRED_FIELDS = Object.freeze(["from_migration", "applied_at", "actor"]);
+const STRICT_ISO_TIMESTAMP_PATTERN = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{3}))?(Z|([+-])(\d{2}):(\d{2}))$/;
 
 function warnLegacyRubricGrandfather(runId) {
   const normalizedRunId = typeof runId === "string" && runId.trim() !== ""
@@ -591,6 +592,71 @@ function warnLegacyRubricGrandfather(runId) {
   );
 }
 
+function isStrictIsoTimestamp(value) {
+  if (typeof value !== "string") {
+    return false;
+  }
+
+  const match = STRICT_ISO_TIMESTAMP_PATTERN.exec(value);
+  if (!match) {
+    return false;
+  }
+
+  const [
+    ,
+    yearText,
+    monthText,
+    dayText,
+    hourText,
+    minuteText,
+    secondText,
+    millisecondText,
+    timezone,
+    offsetSign,
+    offsetHourText,
+    offsetMinuteText,
+  ] = match;
+
+  const year = Number.parseInt(yearText, 10);
+  const month = Number.parseInt(monthText, 10);
+  const day = Number.parseInt(dayText, 10);
+  const hour = Number.parseInt(hourText, 10);
+  const minute = Number.parseInt(minuteText, 10);
+  const second = Number.parseInt(secondText, 10);
+  const millisecond = millisecondText === undefined ? 0 : Number.parseInt(millisecondText, 10);
+  const offsetHours = offsetHourText === undefined ? 0 : Number.parseInt(offsetHourText, 10);
+  const offsetMinutes = offsetMinuteText === undefined ? 0 : Number.parseInt(offsetMinuteText, 10);
+
+  if (month < 1 || month > 12 || day < 1 || day > 31) {
+    return false;
+  }
+  if (hour > 23 || minute > 59 || second > 59) {
+    return false;
+  }
+  if (offsetHours > 23 || offsetMinutes > 59) {
+    return false;
+  }
+
+  const offsetTotalMinutes = timezone === "Z"
+    ? 0
+    : ((offsetSign === "-" ? -1 : 1) * ((offsetHours * 60) + offsetMinutes));
+  const utcMillis = Date.UTC(year, month - 1, day, hour, minute, second, millisecond) - (offsetTotalMinutes * 60 * 1000);
+  if (Number.isNaN(utcMillis)) {
+    return false;
+  }
+
+  const localTimestamp = new Date(utcMillis + (offsetTotalMinutes * 60 * 1000));
+  return (
+    localTimestamp.getUTCFullYear() === year
+    && localTimestamp.getUTCMonth() === month - 1
+    && localTimestamp.getUTCDate() === day
+    && localTimestamp.getUTCHours() === hour
+    && localTimestamp.getUTCMinutes() === minute
+    && localTimestamp.getUTCSeconds() === second
+    && localTimestamp.getUTCMilliseconds() === millisecond
+  );
+}
+
 function buildRubricGrandfatherDiagnostic(rawValue) {
   if (!rawValue || typeof rawValue !== "object" || Array.isArray(rawValue)) {
     return "anchor.rubric_grandfathered must be true or an object with from_migration, applied_at, and actor.";
@@ -603,8 +669,7 @@ function buildRubricGrandfatherDiagnostic(rawValue) {
     return `anchor.rubric_grandfathered object is invalid: missing ${missingFields.join(", ")}.`;
   }
 
-  const appliedAt = Date.parse(rawValue.applied_at);
-  if (Number.isNaN(appliedAt)) {
+  if (!isStrictIsoTimestamp(rawValue.applied_at)) {
     return `anchor.rubric_grandfathered.applied_at must be an ISO timestamp, got ${JSON.stringify(rawValue.applied_at)}.`;
   }
 
