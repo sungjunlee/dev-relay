@@ -206,11 +206,16 @@ function appendScoreDivergence(repoRoot, runId, { round, divergences } = {}) {
 
 function readRunEvents(repoRoot, runId) {
   const eventsPath = getEventsPath(repoRoot, runId);
-  if (!fs.existsSync(eventsPath)) return [];
+  // Do NOT short-circuit on fs.existsSync — existsSync follows symlinks, so a
+  // dangling symlink at eventsPath would return false and we'd silently
+  // return []. That's exactly the fail-open class #157/#197 prohibit. Let
+  // the safe reader handle the symlink check; distinguish ENOENT (truly
+  // missing) from ELOOP (symlink refused) in the catch.
   let rawText;
   try {
     rawText = readTextFileWithoutFollowingSymlinks(eventsPath);
   } catch (error) {
+    if (error.code === "ENOENT") return [];
     if (error.code === "ELOOP") {
       throw new Error(
         `Refusing to read symlinked events.jsonl at ${eventsPath}: ${error.message}`
