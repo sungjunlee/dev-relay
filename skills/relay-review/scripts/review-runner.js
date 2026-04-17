@@ -39,6 +39,7 @@ const {
   getRunDir,
   readManifest,
   updateManifestState,
+  validateManifestPaths,
   writeManifest,
 } = require("../../relay-dispatch/scripts/relay-manifest");
 const { resolveManifestRecord } = require("../../relay-dispatch/scripts/relay-resolver");
@@ -150,6 +151,10 @@ function readText(filePath) {
 function writeText(filePath, text) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   fs.writeFileSync(filePath, text, "utf-8");
+}
+
+function looksLikeGitRepo(repoPath) {
+  return fs.existsSync(path.join(repoPath, ".git"));
 }
 
 function resolvePrForBranch(repoPath, branch) {
@@ -1072,15 +1077,34 @@ function resolveContext(repoPath, manifestPathArg, runIdArg, branchArg, prArg) {
     branch,
     prNumber,
   });
+  const validatedPaths = validateManifestPaths(manifest.data?.paths, {
+    expectedRepoRoot: manifestPathArg ? undefined : (looksLikeGitRepo(repoPath) ? repoPath : undefined),
+    manifestPath: manifest.manifestPath,
+    runId: manifest.data?.run_id,
+    requireWorktree: true,
+    caller: "review-runner",
+  });
   branch = branch || manifest.data?.git?.working_branch || null;
   prNumber = prNumber || manifest.data?.git?.pr_number || null;
+  const runRepoPath = validatedPaths.repoRoot;
   if (!prNumber && branch) {
-    prNumber = resolvePrForBranch(repoPath, branch);
+    prNumber = resolvePrForBranch(runRepoPath, branch);
   }
-  const issueNumber = resolveIssueNumber(repoPath, prNumber, branch, manifest.data);
-  const reviewRepoPath = path.resolve(manifest.data?.paths?.worktree || repoPath);
+  const issueNumber = resolveIssueNumber(runRepoPath, prNumber, branch, manifest.data);
+  const reviewRepoPath = validatedPaths.worktree;
+  const normalizedManifest = {
+    ...manifest,
+    data: {
+      ...(manifest.data || {}),
+      paths: {
+        ...(manifest.data?.paths || {}),
+        repo_root: validatedPaths.repoRoot,
+        worktree: validatedPaths.worktree,
+      },
+    },
+  };
 
-  return { branch, prNumber, issueNumber, manifest, reviewRepoPath };
+  return { branch, prNumber, issueNumber, manifest: normalizedManifest, reviewRepoPath, runRepoPath };
 }
 
 function postComment(repoPath, prNumber, commentBody) {
@@ -1182,7 +1206,7 @@ function run() {
   const noComment = hasFlag("--no-comment");
   const jsonOut = hasFlag("--json");
 
-  const { branch, prNumber, issueNumber, manifest, reviewRepoPath } = resolveContext(
+  const { branch, prNumber, issueNumber, manifest, reviewRepoPath, runRepoPath } = resolveContext(
     repoPath,
     manifestPathArg,
     runIdArg,
@@ -1200,7 +1224,6 @@ function run() {
 
   const round = Number(data.review?.rounds || 0) + 1;
   const maxRounds = Number(data.review?.max_rounds || 20);
-  const runRepoPath = path.resolve(data.paths?.repo_root || repoPath);
   const runDir = getRunDir(runRepoPath, data.run_id);
   ensureRunLayout(runRepoPath, data.run_id);
   let reviewedHeadSha = null;
@@ -1229,13 +1252,13 @@ function run() {
   }
 
   const { text: doneCriteria, source: doneCriteriaSource } = loadDoneCriteria(
-    repoPath,
+    runRepoPath,
     issueNumber,
     prNumber,
     doneCriteriaFile,
     data
   );
-  const diffText = loadDiff(repoPath, prNumber, diffFile);
+  const diffText = loadDiff(runRepoPath, prNumber, diffFile);
   const rubricLoad = loadRubricFromRunDir(runDir, data);
   const promptText = buildPrompt({ round, prNumber, branch, issueNumber, doneCriteria, doneCriteriaSource, diffText, runDir, rubricLoad });
 
@@ -1398,7 +1421,7 @@ function run() {
   }
 
   const { warnings: divergenceWarnings, eventPayload: divergencePayload } = buildScoreDivergenceAnalysis(
-    loadPrBody(repoPath, prNumber),
+    loadPrBody(runRepoPath, prNumber),
     verdict.rubric_scores
   );
   const commentBody = buildCommentBody(verdict, round, {
@@ -1406,7 +1429,7 @@ function run() {
     gateFailure: rubricGateFailure,
   });
   if (!noComment) {
-    postComment(repoPath, prNumber, commentBody);
+    postComment(runRepoPath, prNumber, commentBody);
     result.commentPosted = true;
   }
 
