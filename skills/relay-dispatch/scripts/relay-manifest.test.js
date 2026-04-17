@@ -644,6 +644,85 @@ test("getRubricAnchorStatus distinguishes satisfied, empty, outside_run_dir, and
   assert.equal(grandfathered.satisfied, true);
 });
 
+test("getRubricAnchorStatus rejects symlinked rubric files even when they target readable files", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-manifest-symlink-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+
+  const outsideTarget = path.join(os.tmpdir(), `relay-outside-rubric-${Date.now()}.yaml`);
+  fs.writeFileSync(outsideTarget, "outside: true\n", "utf-8");
+
+  const sameRunId = "issue-42-20260412000005000";
+  const sameRunLayout = ensureRunLayout(repoRoot, sameRunId);
+  const siblingTarget = path.join(sameRunLayout.runDir, "rubric-copy.yaml");
+  fs.writeFileSync(siblingTarget, "rubric:\n  factors:\n    - name: sibling\n", "utf-8");
+  fs.symlinkSync(siblingTarget, path.join(sameRunLayout.runDir, "rubric.yaml"));
+
+  const otherRunId = "issue-42-20260412000006000";
+  const otherRunTarget = writeRunRubric(repoRoot, otherRunId).fullPath;
+  const linkedRunId = "issue-42-20260412000007000";
+  const linkedRunLayout = ensureRunLayout(repoRoot, linkedRunId);
+  fs.symlinkSync(otherRunTarget, path.join(linkedRunLayout.runDir, "rubric.yaml"));
+
+  const outsideRunId = "issue-42-20260412000008000";
+  const outsideRunLayout = ensureRunLayout(repoRoot, outsideRunId);
+  fs.symlinkSync(outsideTarget, path.join(outsideRunLayout.runDir, "rubric.yaml"));
+
+  [
+    { runId: outsideRunId, label: "outside file" },
+    { runId: linkedRunId, label: "other run rubric" },
+    { runId: sameRunId, label: "same run sibling file" },
+  ].forEach(({ runId, label }) => {
+    const result = getRubricAnchorStatus({
+      run_id: runId,
+      anchor: { rubric_path: "rubric.yaml" },
+      paths: { repo_root: repoRoot },
+    });
+
+    assert.equal(result.status, "symlink_escape", label);
+    assert.equal(result.satisfied, false, label);
+  });
+});
+
+test("getRubricAnchorStatus fails closed for contained-but-malformed rubric paths", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-manifest-malformed-rubric-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+
+  const runId = "issue-42-20260412000008500";
+  const { runDir } = ensureRunLayout(repoRoot, runId);
+  fs.writeFileSync(path.join(runDir, "rubric.yaml"), "rubric:\n  factors:\n    - name: malformed\n", "utf-8");
+
+  const result = getRubricAnchorStatus({
+    run_id: runId,
+    anchor: { rubric_path: "rubric.yaml/child" },
+    paths: { repo_root: repoRoot },
+  });
+
+  assert.equal(result.status, "unreadable");
+  assert.equal(result.satisfied, false);
+  assert.match(result.error, /rubric\.yaml\/child/);
+});
+
+test("getRubricAnchorStatus distinguishes parent symlink escapes from lexical outside_run_dir", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-manifest-parent-symlink-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+
+  const runId = "issue-42-20260412000009000";
+  const { runDir } = ensureRunLayout(repoRoot, runId);
+  const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-rubric-outside-dir-"));
+  const escapedParent = path.join(runDir, "rubric-link");
+  fs.symlinkSync(outsideDir, escapedParent);
+
+  const result = getRubricAnchorStatus({
+    run_id: runId,
+    anchor: { rubric_path: "rubric-link/rubric.yaml" },
+    paths: { repo_root: repoRoot },
+  });
+
+  assert.equal(result.status, "follows_outside_run_dir");
+  assert.equal(result.satisfied, false);
+  assert.match(result.error, /real run directory/i);
+});
+
 test("updateManifestCleanup records cleanup metadata without changing state", () => {
   const manifest = {
     state: STATES.MERGED,

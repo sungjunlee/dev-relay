@@ -1974,6 +1974,36 @@ test("review-runner warns visibly when anchor.rubric_path points to an invalid r
   assert.match(promptText, /must point to a file inside the run directory/i);
 });
 
+test("loadRubricFromRunDir returns the invalid warning branch when anchor.rubric_path is a symlink", () => {
+  const { repoRoot, manifestPath, runId } = setupRepo();
+  const runDir = ensureRunLayout(repoRoot, runId).runDir;
+  const siblingTarget = path.join(runDir, "rubric-copy.yaml");
+  fs.writeFileSync(siblingTarget, "rubric:\n  factors:\n    - name: sibling\n", "utf-8");
+  fs.symlinkSync(siblingTarget, path.join(runDir, "rubric.yaml"));
+
+  const { data, body } = readManifest(manifestPath);
+  const nextAnchor = { ...(data.anchor || {}), rubric_path: "rubric.yaml" };
+  delete nextAnchor.rubric_grandfathered;
+  writeManifest(manifestPath, {
+    ...data,
+    anchor: nextAnchor,
+  }, body);
+
+  const rubricLoad = JSON.parse(runReviewRunnerModule([
+    `const { loadRubricFromRunDir } = reviewRunner;`,
+    `const result = loadRubricFromRunDir(${JSON.stringify(runDir)}, ${JSON.stringify({
+      ...data,
+      anchor: nextAnchor,
+    })});`,
+    `process.stdout.write(JSON.stringify(result));`,
+  ]));
+
+  assert.equal(rubricLoad.state, "invalid");
+  assert.equal(rubricLoad.status, "symlink_escape");
+  assert.match(rubricLoad.warning, /\[rubric invalid\]/i);
+  assert.match(rubricLoad.warning, /must not be a symlink/i);
+});
+
 test("review-runner rejects empty rubric_scores when rubric is present", () => {
   const { repoRoot, manifestPath, runId, doneCriteriaPath, diffPath } = setupRepo();
 
