@@ -107,12 +107,51 @@ function gh(repoPath, ...ghArgs) {
   });
 }
 
+// DNS hostname validation — conservative label allowlist. Rejects leading
+// dashes (which could be interpreted as flags by some CLI tools), whitespace,
+// empty strings, and other malformed values. Accepts FQDNs and single-label
+// hosts that some enterprise setups still use internally.
+const DNS_LABEL = "[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?";
+const HOSTNAME_RE = new RegExp(`^${DNS_LABEL}(?:\\.${DNS_LABEL})*$`);
+
+function isValidHostname(host) {
+  return typeof host === "string" && host.length > 0 && host.length <= 253 && HOSTNAME_RE.test(host);
+}
+
 function parseRemoteHost(url) {
   if (!url) return null;
-  // Matches HTTPS (https://host/owner/repo), SSH URL form
-  // (ssh://[user@]host/owner/repo), and scp-like SSH (git@host:owner/repo).
-  const match = String(url).trim().match(/^(?:https?:\/\/|ssh:\/\/(?:[^@/]+@)?|[^@\s]+@)([^/:]+)/);
-  return match ? match[1] : null;
+  const trimmed = String(url).trim();
+  if (!trimmed) return null;
+
+  // HTTP(S) — use WHATWG URL so credentials (https://user@host/...) and ports
+  // don't contaminate the hostname. URL also lowercases/normalizes the host.
+  if (/^https?:\/\//i.test(trimmed)) {
+    try {
+      const parsed = new URL(trimmed);
+      return isValidHostname(parsed.hostname) ? parsed.hostname : null;
+    } catch {
+      return null;
+    }
+  }
+
+  // ssh:// URL form — WHATWG URL parses this too.
+  if (/^ssh:\/\//i.test(trimmed)) {
+    try {
+      const parsed = new URL(trimmed);
+      return isValidHostname(parsed.hostname) ? parsed.hostname : null;
+    } catch {
+      return null;
+    }
+  }
+
+  // scp-like SSH: user@host:owner/repo. Anchor on the FIRST `@` and stop at
+  // the first `:` or `/`. Greedy left-of-@ is fine because we discard it.
+  const scpMatch = trimmed.match(/^[^@\s:/]+@([^:/\s]+):/);
+  if (scpMatch && isValidHostname(scpMatch[1])) {
+    return scpMatch[1];
+  }
+
+  return null;
 }
 
 function resolveRemoteHost(repoPath) {
@@ -131,31 +170,58 @@ function resolveRemoteHost(repoPath) {
 
 function getGhLogin(repoPath) {
   const host = resolveRemoteHost(repoPath);
-  const attempts = [];
-  if (host) {
-    attempts.push({ args: ["--hostname", host, "api", "user", "--jq", ".login"], tag: `host=${host}` });
-  }
-  attempts.push({ args: ["api", "user", "--jq", ".login"], tag: "default host" });
 
-  let lastError = null;
-  for (const { args, tag } of attempts) {
+  // When origin resolved to a host, the ONLY acceptable login is the one
+  // scoped to that host. Falling back to zero-arg `gh api user` would return
+  // the operator's default-host identity (typically personal github.com),
+  // which is exactly the bug #199 fixes — gate-check then rejects the PR as
+  // unauthorized_reviewer because the comment author on the repo host does
+  // not match. Fail-closed: return null with a warning. (#199 AC nominally
+  // asked for zero-arg fallback, but that re-creates the bug the AC says
+  // the PR must fix — documented in the PR description.)
+  if (host) {
+    const args = ["--hostname", host, "api", "user", "--jq", ".login"];
     try {
-      const login = execFileSync("gh", args, {
-        encoding: "utf-8",
-        stdio: "pipe",
-      }).trim();
+      const login = execFileSync("gh", args, { encoding: "utf-8", stdio: "pipe" }).trim();
       if (login) return login;
-      lastError = `gh api user (${tag}) returned empty login`;
+      console.error(
+        `Warning: gh api user --hostname ${host} returned empty login — ` +
+        `reviewer_login will not be recorded, author verification will be skipped at merge time.`
+      );
+      return null;
     } catch (error) {
-      lastError = `gh api user (${tag}) failed: ${error.message || error}`;
+      console.error(
+        `Warning: gh api user --hostname ${host} failed — ` +
+        `reviewer_login will not be recorded, author verification will be skipped at merge time. ` +
+        `Cause: ${error.message || error}`
+      );
+      return null;
     }
   }
-  console.error(
-    `Warning: could not determine GitHub login for reviewer verification — ` +
-    `reviewer_login will not be recorded, author verification will be skipped at merge time. ` +
-    `Last attempt: ${lastError}`
-  );
-  return null;
+
+  // No resolvable origin host (manifest-only review, no git repo, unparseable
+  // remote). Zero-arg gh is the best we can do — the default host is the
+  // only host the operator is signed into, so the identity match is
+  // unambiguous from the operator's perspective.
+  try {
+    const login = execFileSync("gh", ["api", "user", "--jq", ".login"], {
+      encoding: "utf-8",
+      stdio: "pipe",
+    }).trim();
+    if (login) return login;
+    console.error(
+      "Warning: gh api user returned empty login — " +
+      "reviewer_login will not be recorded, author verification will be skipped at merge time."
+    );
+    return null;
+  } catch (error) {
+    console.error(
+      `Warning: could not determine GitHub login for reviewer verification — ` +
+      `reviewer_login will not be recorded, author verification will be skipped at merge time. ` +
+      `Cause: ${error.message || error}`
+    );
+    return null;
+  }
 }
 
 function git(repoPath, ...gitArgs) {
