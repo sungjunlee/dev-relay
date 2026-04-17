@@ -470,12 +470,18 @@ function main() {
   // host was resolvable but gh could not return a host-scoped login. Without
   // this hard-stop, fail-closed in getGhLogin would silently degrade into a
   // skipped verification gate on non-default GitHub hosts (issue #199).
-  if (manifestData?.review?.reviewer_login_required === true && !expectedReviewerLogin) {
+  //
+  // Gate on the flag regardless of reviewer_login presence: review-runner
+  // clears reviewer_login when setting the flag, but if a manifest arrives
+  // with both fields populated (older code, manual edit), the flag is
+  // authoritative — the operator explicitly signaled that any previously
+  // recorded login is no longer trustworthy.
+  if (manifestData?.review?.reviewer_login_required === true) {
     output({
       status: "reviewer_login_required",
       pr: PR_NUM,
       readyToMerge: false,
-      reason: "manifest.review.reviewer_login_required is set but review.reviewer_login is missing — host-scoped gh api user failed during relay-review; fix host auth (GH_HOST / gh auth switch --hostname <host>) and rerun relay-review",
+      reason: "manifest.review.reviewer_login_required is set — host-scoped gh api user failed during relay-review; fix host auth (GH_HOST / gh auth switch --hostname <host>) and rerun relay-review",
     });
     process.exit(1);
   }

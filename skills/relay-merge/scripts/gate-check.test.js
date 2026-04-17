@@ -1762,3 +1762,37 @@ test("gate-check still blocks escalated review comments", () => {
   assert.equal(result.json.status, "escalated");
   assert.equal(result.json.readyToMerge, false);
 });
+
+test("gate-check refuses merge when reviewer_login_required is set even if a stale reviewer_login is still present", () => {
+  // Regression guard (codex round-4): applyVerdictToManifest preserves prior
+  // review.* fields. If an earlier round recorded reviewer_login and a later
+  // host-auth-failed round sets reviewer_login_required:true WITHOUT
+  // clearing the stale login (e.g., manifest produced by older review-runner
+  // code or a manual edit), a gate-check guarded by `required && !login`
+  // would silently skip and let any LGTM from that stale identity through.
+  // Gate-check must treat the flag as authoritative.
+  const result = runGateCheckDryRun({
+    comments: [
+      {
+        body: "<!-- relay-review -->\n## Relay Review\nVerdict: LGTM\nRounds: 2",
+        author: { login: "stale-round-1-reviewer" },
+        createdAt: "2026-04-17T09:00:00Z",
+      },
+    ],
+    commits: [
+      { oid: "abc456", committedDate: "2026-04-17T08:00:00Z" },
+    ],
+    manifest: {
+      anchor: { rubric_path: "rubric.yaml" },
+      review: {
+        reviewer_login_required: true,
+        reviewer_login: "stale-round-1-reviewer",
+        last_reviewed_sha: "abc456",
+      },
+    },
+  });
+
+  assert.equal(result.status, 1);
+  assert.equal(result.json.status, "reviewer_login_required");
+  assert.equal(result.json.readyToMerge, false);
+});

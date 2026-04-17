@@ -1571,11 +1571,15 @@ function run() {
   );
   if (!noComment) {
     const { login: reviewerLogin, status: loginStatus } = getGhLogin(runRepoPath);
+    const nextReview = { ...(updatedManifest.review || {}) };
     if (reviewerLogin) {
-      updatedManifest.review = {
-        ...(updatedManifest.review || {}),
-        reviewer_login: reviewerLogin,
-      };
+      // Successful lookup — record the login AND clear any stale
+      // reviewer_login_required from an earlier round. Without the clear,
+      // a previous host-auth-failed round would leave the flag set and
+      // gate-check would still refuse even though this round recorded a
+      // valid login.
+      nextReview.reviewer_login = reviewerLogin;
+      delete nextReview.reviewer_login_required;
     } else if (loginStatus === "host_auth_failed") {
       // Origin resolved to a host but host-scoped gh could not return a
       // login. Signal the gate: without this marker, relay-merge's
@@ -1583,11 +1587,17 @@ function run() {
       // is absent, which would defeat the fail-closed property this PR
       // claims. The gate-check companion change treats this flag as a
       // hard-stop.
-      updatedManifest.review = {
-        ...(updatedManifest.review || {}),
-        reviewer_login_required: true,
-      };
+      //
+      // Critically, ALSO delete any stale reviewer_login from an earlier
+      // round. Otherwise the flag-and-login combination would satisfy
+      // gate-check's `reviewer_login_required && !reviewer_login` test
+      // (because reviewer_login is still present from round N-1), the
+      // gate would skip, and a later LGTM from any author could ride
+      // that stale identity through merge.
+      nextReview.reviewer_login_required = true;
+      delete nextReview.reviewer_login;
     }
+    updatedManifest.review = nextReview;
   }
   writeManifest(manifestPath, updatedManifest, body);
   appendRunEvent(runRepoPath, data.run_id, {
