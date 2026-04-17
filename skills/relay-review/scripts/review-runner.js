@@ -144,11 +144,22 @@ function parseRemoteHost(url) {
     }
   }
 
-  // scp-like SSH: user@host:owner/repo. Anchor on the FIRST `@` and stop at
-  // the first `:` or `/`. Greedy left-of-@ is fine because we discard it.
-  const scpMatch = trimmed.match(/^[^@\s:/]+@([^:/\s]+):/);
-  if (scpMatch && isValidHostname(scpMatch[1])) {
-    return scpMatch[1];
+  // scp-like SSH: [user@]host:path. Git accepts both `user@host:owner/repo`
+  // and `host:owner/repo` (no user) as valid remote forms. The optional user
+  // group uses a char class that disallows further @ or :, and the host
+  // group likewise, so inputs like `a@b@c:d/e` fail to match (no single
+  // user+host split satisfies both char classes). The `(?!\/\/)` lookahead
+  // after the colon keeps `foo://bar` shapes from falling through here.
+  const scpMatch = trimmed.match(/^(?:([^@\s:/]+)@)?([^@:/\s]+):(?!\/\/)/);
+  if (scpMatch) {
+    const host = scpMatch[2];
+    // Windows drive-letter guard: `C:/foo` parses as scp-like under Git's
+    // legacy heuristic but is clearly a local path, not a remote host.
+    // Reject single-ASCII-letter hosts — single-label SSH hosts are vanishingly
+    // rare in practice, and rejecting them costs nothing while closing the
+    // `C:/...` ambiguity cleanly.
+    if (/^[A-Za-z]$/.test(host)) return null;
+    if (isValidHostname(host)) return host;
   }
 
   return null;

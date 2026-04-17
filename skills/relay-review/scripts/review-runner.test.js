@@ -2339,6 +2339,24 @@ test("parseRemoteHost extracts host from SSH origin (scp-like)", () => {
   assert.equal(parseRemoteHost("git@github.com:sungjunlee/dev-relay.git"), "github.com");
 });
 
+test("parseRemoteHost accepts scp-like SSH without an explicit user", () => {
+  // Git allows `host:path` as a valid scp-like remote (no `user@`). Without
+  // this, a non-default-host repo whose origin omitted the user would
+  // silently fall into the no-host path in getGhLogin and use zero-arg gh —
+  // the exact regression #199 is filed to close.
+  assert.equal(parseRemoteHost("ghe.corp.example.com:owner/repo.git"), "ghe.corp.example.com");
+  assert.equal(parseRemoteHost("github.com:sungjunlee/dev-relay.git"), "github.com");
+});
+
+test("parseRemoteHost rejects Windows-style local paths that look scp-like", () => {
+  // Single-ASCII-letter `host` is almost certainly a drive letter, not a
+  // remote. Git's legacy heuristic would parse `C:/foo/bar` as scp-like,
+  // but we reject it to avoid `gh --hostname C` argv surprises.
+  assert.equal(parseRemoteHost("C:/Users/relay/project"), null);
+  assert.equal(parseRemoteHost("D:/repos/dev-relay"), null);
+  assert.equal(parseRemoteHost("x:/tmp/scratch"), null);
+});
+
 test("parseRemoteHost extracts host from ssh:// URL form", () => {
   assert.equal(parseRemoteHost("ssh://git@ghe.corp.example.com/owner/repo.git"), "ghe.corp.example.com");
   assert.equal(parseRemoteHost("ssh://ghe.corp.example.com/owner/repo.git"), "ghe.corp.example.com");
