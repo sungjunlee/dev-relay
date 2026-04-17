@@ -1045,6 +1045,34 @@ test("review-runner keeps event journals on the manifest repo slug when --repo i
   assert.deepEqual(readRunEvents(repoAliasPath, runId), events);
 });
 
+test("review-runner accepts a worktree --repo selector and still validates against the canonical repo root", () => {
+  const { repoRoot, worktreePath, runId, doneCriteriaPath, diffPath } = setupRepo();
+
+  const stdout = execFileSync("node", [
+    SCRIPT,
+    "--repo", worktreePath,
+    "--branch", "issue-42",
+    "--pr", "123",
+    "--done-criteria-file", doneCriteriaPath,
+    "--diff-file", diffPath,
+    "--prepare-only",
+    "--json",
+  ], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+  });
+
+  const result = JSON.parse(stdout);
+  const expectedRunDir = ensureRunLayout(repoRoot, runId).runDir;
+  assert.equal(result.branch, "issue-42");
+  assert.equal(result.prNumber, 123);
+  assert.equal(result.runId, runId);
+  assert.equal(result.rubricLoaded, "loaded");
+  assert.equal(result.reviewRepoPath, worktreePath);
+  assert.equal(path.dirname(result.promptPath), expectedRunDir);
+});
+
 test("reviewer-script invocation can drive a round without --review-file", () => {
   const { repoRoot, manifestPath, doneCriteriaPath, diffPath } = setupRepo();
   const reviewerScript = writeReviewerScript(repoRoot, "reviewer-pass.js", {
