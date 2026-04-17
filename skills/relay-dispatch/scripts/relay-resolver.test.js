@@ -367,10 +367,18 @@ test("resolveManifestRecord does not inherit a terminal run when a reused branch
     updatedAt: "2026-04-03T00:10:00.000Z",
   });
 
-  const match = resolveManifestRecord({ repoRoot, branch: "issue-100", prNumber: 120 });
-  assert.equal(match.manifestPath, freshPath);
-  assert.equal(match.data.run_id, freshRunId);
-  assert.equal(match.data.git.pr_number, 120);
+  // Exact-PR match: resolver must prefer the fresh non-terminal run.
+  const withPr = resolveManifestRecord({ repoRoot, branch: "issue-100", prNumber: 120 });
+  assert.equal(withPr.manifestPath, freshPath);
+  assert.equal(withPr.data.run_id, freshRunId);
+  assert.equal(withPr.data.git.pr_number, 120);
+
+  // Branch-only resolution (no prNumber): BRANCH_ONLY_TERMINAL_STATES must
+  // filter out the MERGED run, so the non-terminal dispatched run is returned.
+  // This sub-assertion is what the anti-theater stub targets.
+  const branchOnly = resolveManifestRecord({ repoRoot, branch: "issue-100" });
+  assert.equal(branchOnly.manifestPath, freshPath);
+  assert.equal(branchOnly.data.run_id, freshRunId);
 });
 
 test("resolveManifestRecord rejects stale terminal-only branch reuse and names the fresh-dispatch recovery", () => {
