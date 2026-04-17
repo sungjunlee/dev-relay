@@ -67,7 +67,7 @@ const KNOWN_FLAGS = [
   "--json", "--help", "-h",
 ];
 
-if (!args.length || args.includes("--help") || args.includes("-h")) {
+if (require.main === module && (!args.length || args.includes("--help") || args.includes("-h"))) {
   console.log("Usage: review-runner.js --repo <path> (--run-id <id> | --branch <name> | --pr <number>) [options]");
   console.log("\nPrepare or apply a structured relay review round.");
   console.log("\nOptions:");
@@ -107,25 +107,55 @@ function gh(repoPath, ...ghArgs) {
   });
 }
 
-function getGhLogin() {
+function parseRemoteHost(url) {
+  if (!url) return null;
+  // Matches HTTPS (https://host/owner/repo), SSH URL form
+  // (ssh://[user@]host/owner/repo), and scp-like SSH (git@host:owner/repo).
+  const match = String(url).trim().match(/^(?:https?:\/\/|ssh:\/\/(?:[^@/]+@)?|[^@\s]+@)([^/:]+)/);
+  return match ? match[1] : null;
+}
+
+function resolveRemoteHost(repoPath) {
+  if (!repoPath) return null;
   try {
-    const login = execFileSync("gh", ["api", "user", "--jq", ".login"], {
+    const url = execFileSync("git", ["remote", "get-url", "origin"], {
+      cwd: repoPath,
       encoding: "utf-8",
       stdio: "pipe",
     }).trim();
-    if (!login) {
-      console.error("Warning: gh api user returned empty login — reviewer_login will not be recorded, author verification will be skipped at merge time");
-      return null;
-    }
-    return login;
-  } catch (error) {
-    console.error(
-      `Warning: could not determine GitHub login for reviewer verification — ` +
-      `reviewer_login will not be recorded, author verification will be skipped at merge time. ` +
-      `Cause: ${error.message || error}`
-    );
+    return parseRemoteHost(url);
+  } catch {
     return null;
   }
+}
+
+function getGhLogin(repoPath) {
+  const host = resolveRemoteHost(repoPath);
+  const attempts = [];
+  if (host) {
+    attempts.push({ args: ["--hostname", host, "api", "user", "--jq", ".login"], tag: `host=${host}` });
+  }
+  attempts.push({ args: ["api", "user", "--jq", ".login"], tag: "default host" });
+
+  let lastError = null;
+  for (const { args, tag } of attempts) {
+    try {
+      const login = execFileSync("gh", args, {
+        encoding: "utf-8",
+        stdio: "pipe",
+      }).trim();
+      if (login) return login;
+      lastError = `gh api user (${tag}) returned empty login`;
+    } catch (error) {
+      lastError = `gh api user (${tag}) failed: ${error.message || error}`;
+    }
+  }
+  console.error(
+    `Warning: could not determine GitHub login for reviewer verification — ` +
+    `reviewer_login will not be recorded, author verification will be skipped at merge time. ` +
+    `Last attempt: ${lastError}`
+  );
+  return null;
 }
 
 function git(repoPath, ...gitArgs) {
@@ -1448,7 +1478,7 @@ function run() {
     { rubricGateFailure }
   );
   if (!noComment) {
-    const reviewerLogin = getGhLogin();
+    const reviewerLogin = getGhLogin(runRepoPath);
     if (reviewerLogin) {
       updatedManifest.review = {
         ...(updatedManifest.review || {}),
@@ -1533,10 +1563,13 @@ module.exports = {
   formatIssueList,
   formatPriorVerdictSummary,
   formatScopeDrift,
+  getGhLogin,
   loadRubricFromRunDir,
+  parseRemoteHost,
   parseScoreLog,
   parseReviewVerdict,
   resolveIssueNumber,
+  resolveRemoteHost,
   validateReviewVerdict,
   validateScopeDrift,
 };

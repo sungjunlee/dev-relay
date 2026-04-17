@@ -2309,3 +2309,101 @@ test("review-runner fail-closed path can re-dispatch with a fixed rubric and pas
   assert.equal(manifest.review.latest_verdict, "lgtm");
   assert.equal(manifest.review.last_gate, null);
 });
+
+// -------------------------------------------------------------------------
+// getGhLogin --hostname resolution (issue #199)
+// -------------------------------------------------------------------------
+
+const {
+  parseRemoteHost,
+  resolveRemoteHost,
+  getGhLogin,
+} = require("./review-runner");
+
+test("parseRemoteHost extracts host from HTTPS origin", () => {
+  assert.equal(parseRemoteHost("https://ghe.corp.example.com/owner/repo.git"), "ghe.corp.example.com");
+  assert.equal(parseRemoteHost("http://example.org/owner/repo"), "example.org");
+  assert.equal(parseRemoteHost("https://github.com/sungjunlee/dev-relay.git"), "github.com");
+});
+
+test("parseRemoteHost extracts host from SSH origin (scp-like)", () => {
+  assert.equal(parseRemoteHost("git@ghe.corp.example.com:owner/repo.git"), "ghe.corp.example.com");
+  assert.equal(parseRemoteHost("git@github.com:sungjunlee/dev-relay.git"), "github.com");
+});
+
+test("parseRemoteHost extracts host from ssh:// URL form", () => {
+  assert.equal(parseRemoteHost("ssh://git@ghe.corp.example.com/owner/repo.git"), "ghe.corp.example.com");
+  assert.equal(parseRemoteHost("ssh://ghe.corp.example.com/owner/repo.git"), "ghe.corp.example.com");
+});
+
+test("parseRemoteHost returns null for empty or unrecognized input", () => {
+  assert.equal(parseRemoteHost(""), null);
+  assert.equal(parseRemoteHost(null), null);
+  assert.equal(parseRemoteHost(undefined), null);
+  assert.equal(parseRemoteHost("not a url"), null);
+});
+
+test("resolveRemoteHost returns origin host from a real git repo (HTTPS)", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-host-"));
+  execFileSync("git", ["init", "-b", "main"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
+  execFileSync("git", ["remote", "add", "origin", "https://ghe.corp.example.com/owner/repo.git"], {
+    cwd: repoRoot, encoding: "utf-8", stdio: "pipe",
+  });
+  assert.equal(resolveRemoteHost(repoRoot), "ghe.corp.example.com");
+});
+
+test("resolveRemoteHost returns origin host from a real git repo (SSH)", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-host-"));
+  execFileSync("git", ["init", "-b", "main"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
+  execFileSync("git", ["remote", "add", "origin", "git@ghe.corp.example.com:owner/repo.git"], {
+    cwd: repoRoot, encoding: "utf-8", stdio: "pipe",
+  });
+  assert.equal(resolveRemoteHost(repoRoot), "ghe.corp.example.com");
+});
+
+test("resolveRemoteHost returns null when origin is missing", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-host-"));
+  execFileSync("git", ["init", "-b", "main"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
+  // No remote configured.
+  assert.equal(resolveRemoteHost(repoRoot), null);
+});
+
+test("resolveRemoteHost returns null when repoPath is falsy", () => {
+  assert.equal(resolveRemoteHost(null), null);
+  assert.equal(resolveRemoteHost(undefined), null);
+  assert.equal(resolveRemoteHost(""), null);
+});
+
+test("getGhLogin falls back and does not crash when gh is unavailable", () => {
+  // Simulate "gh not found for any host" by putting an empty PATH directory
+  // that shadows the real gh. The function must not throw; it must emit a
+  // warning and return null.
+  const shimDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-shim-"));
+  const fakeGh = path.join(shimDir, "gh");
+  fs.writeFileSync(fakeGh, "#!/bin/sh\nexit 4\n", "utf-8");
+  fs.chmodSync(fakeGh, 0o755);
+
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-host-"));
+  execFileSync("git", ["init", "-b", "main"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
+  execFileSync("git", ["remote", "add", "origin", "https://ghe.corp.example.com/owner/repo.git"], {
+    cwd: repoRoot, encoding: "utf-8", stdio: "pipe",
+  });
+
+  const originalPath = process.env.PATH;
+  const originalStderrWrite = process.stderr.write.bind(process.stderr);
+  const captured = [];
+  process.stderr.write = (chunk, ...rest) => {
+    captured.push(typeof chunk === "string" ? chunk : chunk.toString());
+    return true;
+  };
+  process.env.PATH = shimDir;
+  try {
+    const result = getGhLogin(repoRoot);
+    assert.equal(result, null);
+  } finally {
+    process.env.PATH = originalPath;
+    process.stderr.write = originalStderrWrite;
+  }
+  const warning = captured.join("");
+  assert.match(warning, /reviewer_login will not be recorded/);
+});
