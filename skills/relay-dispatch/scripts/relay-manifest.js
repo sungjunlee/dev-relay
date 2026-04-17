@@ -1083,15 +1083,44 @@ function openForWriteWithoutFollowingSymlinks(targetPath, mode) {
     }
   }
 
-  if (fs.existsSync(targetPath)) {
-    const entry = fs.lstatSync(targetPath);
-    if (entry.isSymbolicLink()) {
+  // Non-O_NOFOLLOW fallback (primarily Windows). Do NOT use fs.existsSync
+  // here — existsSync follows symlinks, so a dangling symlink would report
+  // "missing" and the subsequent open(O_CREAT, ...) would create through it.
+  // Use lstatSync unconditionally and treat ENOENT as the true "missing"
+  // signal.
+  let existingStat = null;
+  try {
+    existingStat = fs.lstatSync(targetPath);
+  } catch (statError) {
+    if (statError.code !== "ENOENT") throw statError;
+  }
+  if (existingStat) {
+    if (existingStat.isSymbolicLink()) {
       const error = new Error(`Refusing to open symlinked path: ${targetPath}`);
       error.code = "ELOOP";
       throw error;
     }
+    // Existing regular file — open normally. A small TOCTOU window between
+    // lstat and open is unavoidable on platforms without O_NOFOLLOW.
+    return fs.openSync(targetPath, flags, 0o600);
   }
-  return fs.openSync(targetPath, flags, 0o600);
+  // No entry at the path — create atomically with O_EXCL so an attacker
+  // dropping a symlink between our lstat and open loses the race (EEXIST
+  // instead of creating through the link).
+  try {
+    return fs.openSync(targetPath, flags | fs.constants.O_EXCL, 0o600);
+  } catch (error) {
+    if (error.code === "EEXIST") {
+      const raced = fs.lstatSync(targetPath);
+      if (raced.isSymbolicLink()) {
+        const wrapped = new Error(`Refusing to open symlinked path: ${targetPath}`);
+        wrapped.code = "ELOOP";
+        throw wrapped;
+      }
+      return fs.openSync(targetPath, flags, 0o600);
+    }
+    throw error;
+  }
 }
 
 function appendTextFileWithoutFollowingSymlinks(targetPath, text) {
@@ -1541,13 +1570,16 @@ function getAttemptsPath(repoRoot, runId) {
 
 function readPreviousAttempts(repoRoot, runId) {
   const attemptsPath = getAttemptsPath(repoRoot, runId);
-  if (!fs.existsSync(attemptsPath)) return [];
+  // Do NOT short-circuit on fs.existsSync — existsSync follows symlinks, so a
+  // dangling symlink at attemptsPath would return false and we'd silently
+  // return []. That repeats the #157 fail-open class that #197 closes. Let
+  // the safe reader handle the symlink check; distinguish ENOENT (truly
+  // missing) from ELOOP (symlink refused).
   let rawText;
   try {
     rawText = readTextFileWithoutFollowingSymlinks(attemptsPath);
   } catch (error) {
-    // Symlink refusal must surface — do not silently fall through to [], which
-    // would mask a trust-root attack (same failure class as #157 fail-open).
+    if (error.code === "ENOENT") return [];
     if (error.code === "ELOOP") {
       throw new Error(
         `Refusing to read symlinked previous-attempts.json at ${attemptsPath}: ${error.message}`

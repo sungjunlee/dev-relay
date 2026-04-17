@@ -1200,3 +1200,106 @@ function findAttemptsFile(dir) {
   }
   return null;
 }
+
+test("readPreviousAttempts refuses dangling symlinks instead of silently returning []", () => {
+  // #197 fail-closed: dangling symlink must NOT be treated as "file missing".
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-manifest-dangling-read-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-dangling-"));
+  execFileSync("git", ["init", "-b", "main"], { cwd: repoRoot, stdio: "pipe" });
+  const runId = "issue-197-20260417000000002";
+
+  // Seed one attempt so the run layout exists, then remove the file and
+  // replace it with a dangling symlink.
+  captureAttempt(repoRoot, runId, { score_log: "first attempt" });
+  const attemptsPath = findAttemptsFile(process.env.RELAY_HOME);
+  fs.rmSync(attemptsPath);
+  fs.symlinkSync("/nonexistent-relay-attempts-target-xyz", attemptsPath);
+
+  assert.throws(
+    () => readPreviousAttempts(repoRoot, runId),
+    /Refusing to (read|open) symlinked previous-attempts\.json/i
+  );
+});
+
+test("captureAttempt refuses dangling symlinks (no create-through on write)", () => {
+  // Proves the write helper also refuses dangling symlinks — defense-in-depth
+  // for platforms without O_NOFOLLOW where the pre-fix existsSync fallback
+  // would have happily created through the link.
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-manifest-dangling-write-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-dangling-w-"));
+  execFileSync("git", ["init", "-b", "main"], { cwd: repoRoot, stdio: "pipe" });
+  const runId = "issue-197-20260417000000003";
+
+  captureAttempt(repoRoot, runId, { score_log: "first attempt" });
+  const attemptsPath = findAttemptsFile(process.env.RELAY_HOME);
+
+  const victimDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-attempts-dangling-"));
+  const victimTarget = path.join(victimDir, "victim.json");
+  fs.rmSync(attemptsPath);
+  fs.symlinkSync(victimTarget, attemptsPath);
+
+  assert.throws(
+    () => captureAttempt(repoRoot, runId, { score_log: "second attempt" }),
+    /Refusing to (read|write|open) symlinked previous-attempts\.json/i
+  );
+  assert.equal(fs.existsSync(victimTarget), false, "victim must not have been created through the symlink");
+});
+
+// Direct unit tests for the shared write helpers — prove that the write path
+// itself (independent of captureAttempt's read-then-write sequencing) refuses
+// symlinks. Exported via relay-manifest.
+const {
+  appendTextFileWithoutFollowingSymlinks,
+  writeTextFileWithoutFollowingSymlinks,
+} = require("./relay-manifest");
+
+test("appendTextFileWithoutFollowingSymlinks refuses an existing symlink at target", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-append-symlink-"));
+  const target = path.join(dir, "events.jsonl");
+  const victim = path.join(dir, "victim.jsonl");
+  fs.writeFileSync(victim, "pre-existing\n", "utf-8");
+  fs.symlinkSync(victim, target);
+
+  assert.throws(
+    () => appendTextFileWithoutFollowingSymlinks(target, "malicious\n"),
+    /Refusing to open symlinked path/
+  );
+  assert.equal(fs.readFileSync(victim, "utf-8"), "pre-existing\n");
+});
+
+test("writeTextFileWithoutFollowingSymlinks refuses an existing symlink at target", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-write-symlink-"));
+  const target = path.join(dir, "attempts.json");
+  const victim = path.join(dir, "victim.json");
+  fs.writeFileSync(victim, "pre-existing", "utf-8");
+  fs.symlinkSync(victim, target);
+
+  assert.throws(
+    () => writeTextFileWithoutFollowingSymlinks(target, '[{"spoofed":true}]'),
+    /Refusing to open symlinked path/
+  );
+  assert.equal(fs.readFileSync(victim, "utf-8"), "pre-existing");
+});
+
+test("writeTextFileWithoutFollowingSymlinks refuses a dangling symlink at target", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-write-dangling-"));
+  const target = path.join(dir, "attempts.json");
+  const danglingTarget = path.join(dir, "does-not-exist.json");
+  fs.symlinkSync(danglingTarget, target);
+
+  assert.throws(
+    () => writeTextFileWithoutFollowingSymlinks(target, '[{"ok":true}]'),
+    /Refusing to open symlinked path/
+  );
+  assert.equal(fs.existsSync(danglingTarget), false, "dangling target must not have been created through the symlink");
+});
+
+test("writeTextFileWithoutFollowingSymlinks creates a new file when the target is truly absent", () => {
+  // Regression check: make sure the "no entry at path" code path still works
+  // end-to-end and produces a regular file with the expected content.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-write-create-"));
+  const target = path.join(dir, "attempts.json");
+  writeTextFileWithoutFollowingSymlinks(target, '[{"ok":true}]');
+  assert.equal(fs.readFileSync(target, "utf-8"), '[{"ok":true}]');
+  assert.equal(fs.lstatSync(target).isSymbolicLink(), false);
+});

@@ -372,3 +372,43 @@ test("readRunEvents refuses when events.jsonl is a symlink", () => {
     /Refusing to (read|open) symlinked/i
   );
 });
+
+test("readRunEvents refuses dangling symlinks instead of silently returning []", () => {
+  // #197 fail-closed: a dangling symlink at events.jsonl must NOT be treated
+  // as "file missing" (existsSync follows links and would say "missing").
+  const { repoRoot, runId } = createContext();
+  appendRunEvent(repoRoot, runId, { event: "plan" });
+
+  const eventsPath = getEventsPath(repoRoot, runId);
+  fs.rmSync(eventsPath);
+  // Point at a path that does not exist — dangling symlink.
+  fs.symlinkSync("/nonexistent-relay-target-xyz", eventsPath);
+
+  assert.throws(
+    () => readRunEvents(repoRoot, runId),
+    /Refusing to (read|open) symlinked/i
+  );
+});
+
+test("appendRunEvent refuses dangling symlinks (no silent create-through)", () => {
+  // #197 defense-in-depth: on platforms without O_NOFOLLOW, the previous
+  // fallback used existsSync and would have called openSync(O_CREAT) through
+  // a dangling symlink. This test proves the behavior on any platform — the
+  // fallback in openForWriteWithoutFollowingSymlinks refuses dangling links.
+  const { repoRoot, runId } = createContext();
+  // Seed layout (without an events.jsonl yet).
+  appendRunEvent(repoRoot, runId, { event: "plan" });
+
+  const eventsPath = getEventsPath(repoRoot, runId);
+  fs.rmSync(eventsPath);
+  const victimDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-events-dangling-"));
+  const victimTarget = path.join(victimDir, "victim.jsonl");
+  // Dangling: victimTarget does not exist yet.
+  fs.symlinkSync(victimTarget, eventsPath);
+
+  assert.throws(
+    () => appendRunEvent(repoRoot, runId, { event: "dispatch" }),
+    /Refusing to (append to|open) symlinked/i
+  );
+  assert.equal(fs.existsSync(victimTarget), false, "victim target must not have been created through the symlink");
+});
