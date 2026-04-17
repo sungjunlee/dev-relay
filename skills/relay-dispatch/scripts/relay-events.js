@@ -53,6 +53,9 @@ function appendRunEvent(repoRoot, runId, eventData) {
     ...(eventData.rubric_status !== undefined
       ? { rubric_status: normalizeEventValue(eventData.rubric_status) }
       : {}),
+    ...(eventData.last_reviewed_sha !== undefined
+      ? { last_reviewed_sha: normalizeEventValue(eventData.last_reviewed_sha) }
+      : {}),
   };
 
   appendEventLine(repoRoot, runId, record);
