@@ -1353,3 +1353,34 @@ test("write helpers refuse a FIFO at the target path (POSIX only)", { skip: proc
     (error) => ["EINVAL", "ENXIO"].includes(error.code) || /Not a regular file/.test(error.message)
   );
 });
+
+test("write helpers loop on short writes so records are never truncated", () => {
+  // fs.writeSync may return fewer bytes than requested. For regular disk
+  // files this is rare, but when it happens (page-cache pressure, signal
+  // interruption, future fs overlay), a truncated JSONL record would
+  // silently corrupt events.jsonl or previous-attempts.json.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-short-write-"));
+  const target = path.join(dir, "attempts.json");
+  const payload = '[{"dispatch_number":1,"score_log":"AB"}]';
+
+  const realWriteSync = fs.writeSync;
+  let calls = 0;
+  fs.writeSync = function patchedWriteSync(fd, buffer, offset, length, position) {
+    calls += 1;
+    // On the first call, write only 5 bytes of the requested length — a
+    // deliberate short write. Subsequent calls complete the remainder.
+    if (calls === 1 && Buffer.isBuffer(buffer)) {
+      const partial = Math.min(5, length);
+      return realWriteSync.call(fs, fd, buffer, offset, partial, position);
+    }
+    return realWriteSync.apply(fs, arguments);
+  };
+  try {
+    writeTextFileWithoutFollowingSymlinks(target, payload);
+  } finally {
+    fs.writeSync = realWriteSync;
+  }
+
+  assert.equal(fs.readFileSync(target, "utf-8"), payload, "full payload must land on disk despite the short write");
+  assert.ok(calls >= 2, "short-write path must have been exercised");
+});
