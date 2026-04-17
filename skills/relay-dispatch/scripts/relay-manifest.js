@@ -576,6 +576,7 @@ function hasRubricPath(data) {
 
 const LEGACY_RUBRIC_GRANDFATHER_WARNED_RUN_IDS = new Set();
 const RUBRIC_GRANDFATHER_REQUIRED_FIELDS = Object.freeze(["from_migration", "applied_at", "actor"]);
+const RUBRIC_MIGRATION_MANIFEST_BASENAME = "rubric-mandatory.yaml";
 const STRICT_ISO_TIMESTAMP_PATTERN = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{3}))?(Z|([+-])(\d{2}):(\d{2}))$/;
 
 function warnLegacyRubricGrandfather(runId) {
@@ -680,6 +681,54 @@ function buildRubricGrandfatherDiagnostic(rawValue) {
   return null;
 }
 
+function verifyRubricGrandfatherProvenance(data, provenance) {
+  const runId = typeof data?.run_id === "string" ? data.run_id.trim() : "";
+  if (!runId) {
+    return "anchor.rubric_grandfathered provenance requires a valid run_id for migration-manifest verification.";
+  }
+  if (provenance.from_migration !== RUBRIC_MIGRATION_MANIFEST_BASENAME) {
+    return (
+      `anchor.rubric_grandfathered.from_migration must be ${JSON.stringify(RUBRIC_MIGRATION_MANIFEST_BASENAME)} ` +
+      `for authoritative verification, got ${JSON.stringify(provenance.from_migration)}.`
+    );
+  }
+
+  const manifestPath = path.join(getRelayHome(), "migrations", RUBRIC_MIGRATION_MANIFEST_BASENAME);
+
+  try {
+    const { readMigrationManifest } = require("./relay-migrate-rubric");
+    const document = readMigrationManifest(manifestPath);
+    const entry = (document.runs || []).find((candidate) => candidate.run_id === runId);
+    if (!entry) {
+      return (
+        `anchor.rubric_grandfathered provenance is not backed by ${manifestPath}: ` +
+        `run ${runId} is not listed in the migration manifest.`
+      );
+    }
+    if (!isStrictIsoTimestamp(entry.applied_at)) {
+      return (
+        `anchor.rubric_grandfathered provenance is not backed by ${manifestPath}: ` +
+        `runs[].applied_at for run ${runId} must be a strict ISO timestamp.`
+      );
+    }
+    const normalizedAppliedAt = new Date(Date.parse(entry.applied_at)).toISOString();
+    if (normalizedAppliedAt !== provenance.applied_at) {
+      return (
+        `anchor.rubric_grandfathered provenance is not backed by ${manifestPath}: ` +
+        `run ${runId} applied_at ${JSON.stringify(provenance.applied_at)} does not match migration manifest value ` +
+        `${JSON.stringify(normalizedAppliedAt)}.`
+      );
+    }
+  } catch (error) {
+    return (
+      `anchor.rubric_grandfathered provenance could not be verified against ${manifestPath}: ` +
+      summarizeError(error)
+    );
+  }
+
+  return null;
+}
+
 function getRubricGrandfatherMetadata(data) {
   const rawValue = data?.anchor?.rubric_grandfathered;
   if (rawValue === true) {
@@ -711,17 +760,28 @@ function getRubricGrandfatherMetadata(data) {
     };
   }
 
+  const normalizedProvenance = {
+    from_migration: rawValue.from_migration.trim(),
+    applied_at: new Date(Date.parse(rawValue.applied_at)).toISOString(),
+    actor: rawValue.actor.trim(),
+    reason: typeof rawValue.reason === "string" && rawValue.reason.trim() !== ""
+      ? rawValue.reason.trim()
+      : null,
+  };
+  const verificationDiagnostic = verifyRubricGrandfatherProvenance(data, normalizedProvenance);
+  if (verificationDiagnostic) {
+    return {
+      grandfathered: false,
+      legacyGrandfather: false,
+      provenance: null,
+      diagnostic: verificationDiagnostic,
+    };
+  }
+
   return {
     grandfathered: true,
     legacyGrandfather: false,
-    provenance: {
-      from_migration: rawValue.from_migration.trim(),
-      applied_at: new Date(Date.parse(rawValue.applied_at)).toISOString(),
-      actor: rawValue.actor.trim(),
-      reason: typeof rawValue.reason === "string" && rawValue.reason.trim() !== ""
-        ? rawValue.reason.trim()
-        : null,
-    },
+    provenance: normalizedProvenance,
     diagnostic: null,
   };
 }

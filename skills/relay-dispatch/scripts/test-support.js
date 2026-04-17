@@ -3,9 +3,14 @@ const path = require("path");
 
 const {
   ensureRunLayout,
+  getRelayHome,
   readManifest,
   writeManifest,
 } = require("./relay-manifest");
+const {
+  parseMigrationManifest,
+  writeMigrationManifest,
+} = require("./relay-migrate-rubric");
 
 const DEFAULT_RUBRIC_PATH = "rubric.yaml";
 const DEFAULT_ENFORCEMENT_RUBRIC = [
@@ -23,6 +28,34 @@ function createGrandfatheredRubricAnchor(overrides = {}) {
     reason: "test fixture grandfathered run",
     ...overrides,
   };
+}
+
+function registerGrandfatheredRubricMigration(runId, overrides = {}) {
+  if (typeof runId !== "string" || runId.trim() === "") {
+    throw new Error(`registerGrandfatheredRubricMigration requires a non-empty runId, got ${JSON.stringify(runId)}`);
+  }
+
+  const manifestPath = path.join(getRelayHome(), "migrations", "rubric-mandatory.yaml");
+  const nextEntry = {
+    run_id: runId,
+    registered_by: "test-registration",
+    registered_at: "2026-04-17T08:00:00Z",
+    reason: "test fixture grandfathered run",
+    applied_at: "2026-04-17T08:00:05Z",
+    ...overrides,
+  };
+
+  let document = { version: 1, runs: [] };
+  if (fs.existsSync(manifestPath)) {
+    document = parseMigrationManifest(fs.readFileSync(manifestPath, "utf-8"), manifestPath);
+  }
+
+  document.runs = [
+    ...(document.runs || []).filter((entry) => entry.run_id !== runId),
+    nextEntry,
+  ];
+  writeMigrationManifest(manifestPath, document);
+  return { manifestPath, entry: nextEntry };
 }
 
 function createEnforcementFixture({
@@ -58,6 +91,12 @@ function createEnforcementFixture({
             ? anchorOverrides.rubric_grandfathered
             : {}
         );
+    if (!legacy) {
+      registerGrandfatheredRubricMigration(runId, {
+        applied_at: nextAnchor.rubric_grandfathered.applied_at,
+        reason: nextAnchor.rubric_grandfathered.reason || "test fixture grandfathered run",
+      });
+    }
   } else {
     switch (state) {
       case "loaded":
@@ -131,4 +170,5 @@ module.exports = {
   DEFAULT_ENFORCEMENT_RUBRIC,
   createGrandfatheredRubricAnchor,
   createEnforcementFixture,
+  registerGrandfatheredRubricMigration,
 };

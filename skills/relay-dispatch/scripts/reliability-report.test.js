@@ -19,7 +19,10 @@ const {
   appendRunEvent,
   appendScoreDivergence,
 } = require("./relay-events");
-const { createGrandfatheredRubricAnchor } = require("./test-support");
+const {
+  createGrandfatheredRubricAnchor,
+  registerGrandfatheredRubricMigration,
+} = require("./test-support");
 
 const SCRIPT = path.join(__dirname, "reliability-report.js");
 
@@ -54,6 +57,10 @@ function writeRun(repoRoot, { runId, state, rounds, updatedAt }) {
   if (state !== STATES.DISPATCHED) {
     manifest.anchor.rubric_grandfathered = createGrandfatheredRubricAnchor({
       actor: "reliability-report-test",
+    });
+    registerGrandfatheredRubricMigration(runId, {
+      applied_at: manifest.anchor.rubric_grandfathered.applied_at,
+      reason: manifest.anchor.rubric_grandfathered.reason,
     });
     manifest = updateManifestState(manifest, STATES.REVIEW_PENDING, "run_review");
   }

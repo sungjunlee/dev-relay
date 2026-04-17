@@ -5,11 +5,17 @@ const os = require("os");
 const path = require("path");
 
 const { buildSkipComment, evaluateReviewGate } = require("./review-gate");
-const { createGrandfatheredRubricAnchor } = require("../../relay-dispatch/scripts/test-support");
+const {
+  createGrandfatheredRubricAnchor,
+  registerGrandfatheredRubricMigration,
+} = require("../../relay-dispatch/scripts/test-support");
 
 function createRubricStateFixture(state) {
   const runDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-gate-"));
+  const runId = "issue-40-20260403070000000";
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
   const manifestData = {
+    run_id: runId,
     anchor: {},
     review: {
       last_reviewed_sha: "abc123",
@@ -40,6 +46,10 @@ function createRubricStateFixture(state) {
   } else if (state === "grandfathered") {
     manifestData.anchor.rubric_grandfathered = createGrandfatheredRubricAnchor({
       actor: "review-gate-test",
+    });
+    registerGrandfatheredRubricMigration(runId, {
+      applied_at: manifestData.anchor.rubric_grandfathered.applied_at,
+      reason: manifestData.anchor.rubric_grandfathered.reason,
     });
   }
 

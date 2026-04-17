@@ -17,6 +17,7 @@ const {
 const {
   createEnforcementFixture,
   createGrandfatheredRubricAnchor,
+  registerGrandfatheredRubricMigration,
 } = require("../../relay-dispatch/scripts/test-support");
 
 const SCRIPT = path.join(__dirname, "gate-check.js");
@@ -1648,6 +1649,8 @@ test("gate-check fails closed when PR manifest resolution fails", () => {
 });
 
 test("gate-check allows grandfathered runs and surfaces the note", () => {
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  registerGrandfatheredRubricMigration("issue-40-20260412010000000");
   const result = runGateCheckDryRun({
     comments: [
       {
