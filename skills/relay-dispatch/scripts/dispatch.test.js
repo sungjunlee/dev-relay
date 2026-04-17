@@ -10,12 +10,15 @@ const {
   captureAttempt,
   createRunId,
   getEventsPath,
+  getRubricAnchorStatus,
   getRunDir,
   listManifestPaths,
   readManifest,
   updateManifestState,
   writeManifest,
 } = require("./relay-manifest");
+const { evaluateReviewGate } = require("../../relay-merge/scripts/review-gate");
+const { createEnforcementFixture } = require("./test-support");
 
 const SCRIPT = path.join(__dirname, "dispatch.js");
 
@@ -118,6 +121,8 @@ fs.writeFileSync(output, "ok\\n", "utf-8");
 }
 
 function withRequiredRubric(args) {
+  // AUTO-INJECT ENFORCEMENT RUBRIC — this is the contract side, NOT a grandfather bypass.
+  // Tests that specifically cover rubric-missing scenarios must NOT use this helper.
   if (args.includes("--rubric-file") || args.includes("--rubric-grandfathered")) {
     return args;
   }
@@ -739,6 +744,56 @@ test("dispatch dry-run includes rubric file info", () => {
   assert.equal(result.rubricFile, rubricFile);
 
   fs.unlinkSync(rubricFile);
+});
+
+test("dispatched run whose persisted rubric is empty fails closed at the review gate", () => {
+  // #153 enforcement-path coverage — negative case the #147 suite missed
+  // (originating findings: #148 file-existence/containment invariant,
+  // #149 manifest resolution stricture, #151 grandfather-provenance scope).
+  //
+  // Contract: a dispatched run whose rubric.yaml is empty must NOT pass the
+  // downstream review/merge gate. This test simulates post-dispatch rubric
+  // truncation (operator tampering or stale state) and verifies
+  // evaluateReviewGate returns status=empty_rubric_file / readyToMerge=false.
+  // Dispatch-time rejection of empty --rubric-file is #148's territory and is
+  // intentionally NOT re-tested here.
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  writeFakeCodex(binDir);
+  const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}` };
+
+  const validRubricFile = path.join(os.tmpdir(), `relay-valid-rubric-${Date.now()}.yaml`);
+  fs.writeFileSync(validRubricFile, "rubric:\n  factors:\n    - name: ok\n      target: pass\n", "utf-8");
+  const result = JSON.parse(runDispatch(repoRoot, [
+    "-b", "issue-truncated-rubric",
+    "--prompt", "truncation test",
+    "--rubric-file", validRubricFile,
+    "--json",
+  ], env));
+  assert.equal(result.status, "completed");
+  fs.unlinkSync(validRubricFile);
+
+  createEnforcementFixture({
+    repoRoot,
+    runId: result.runId,
+    manifestPath: result.manifestPath,
+    state: "empty",
+  });
+  const manifest = readManifest(result.manifestPath).data;
+  const runDir = getRunDir(repoRoot, result.runId);
+  const rubricAnchor = getRubricAnchorStatus(manifest, { runDir });
+  const gate = evaluateReviewGate({
+    prNumber: 123,
+    comments: [],
+    commits: [],
+    manifestData: manifest,
+    runDir,
+  });
+
+  assert.equal(rubricAnchor.status, "empty");
+  assert.equal(gate.status, "empty_rubric_file");
+  assert.equal(gate.readyToMerge, false);
 });
 
 test("dispatch stores request linkage and frozen done criteria anchor in manifest", () => {
