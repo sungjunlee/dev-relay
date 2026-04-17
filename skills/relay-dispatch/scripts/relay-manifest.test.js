@@ -1384,3 +1384,29 @@ test("write helpers loop on short writes so records are never truncated", () => 
   assert.equal(fs.readFileSync(target, "utf-8"), payload, "full payload must land on disk despite the short write");
   assert.ok(calls >= 2, "short-write path must have been exercised");
 });
+
+const { readTextFileWithoutFollowingSymlinks } = require("./relay-manifest");
+
+test("read helper refuses a FIFO at the target path (POSIX only)", { skip: process.platform === "win32" }, () => {
+  // Round-4 codex catch: on platforms with O_NOFOLLOW, a FIFO would pass the
+  // O_NOFOLLOW check (it's not a symlink), and the fstat+isFile guard inside
+  // the primary branch was self-throwing EINVAL — which the outer catch then
+  // swallowed, falling through to the lstat path which would reopen the FIFO
+  // without O_NOFOLLOW. That path can block on open(O_RDONLY) waiting for a
+  // writer, or worse, have side-effects on devices.
+  //
+  // The fix uses a distinct ENOT_REGULAR_FILE code so the outer catch does
+  // NOT swallow it, and adds O_NONBLOCK so the open(O_RDONLY) returns
+  // immediately for non-regular files. Either path is an acceptable refusal.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-read-fifo-"));
+  const target = path.join(dir, "events.jsonl");
+  execFileSync("mkfifo", [target], { stdio: "pipe" });
+
+  assert.throws(
+    () => readTextFileWithoutFollowingSymlinks(target),
+    (error) =>
+      error.code === "ENOT_REGULAR_FILE"
+      || error.code === "ENXIO"
+      || /Not a regular file/.test(error.message)
+  );
+});

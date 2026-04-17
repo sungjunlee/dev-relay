@@ -1002,40 +1002,52 @@ function validateRubricPathContainment(rubricPath, runDir) {
   }
 }
 
+// Self-thrown code when the target is not a regular file (FIFO, socket,
+// directory, device). Distinct from kernel-level EINVAL so the outer
+// swallow list (for platforms that raise EINVAL on O_NOFOLLOW) can't be
+// confused with "we already verified this is not a regular file".
+const ERR_NOT_REGULAR_FILE = "ENOT_REGULAR_FILE";
+
 function readTextFileWithoutFollowingSymlinks(targetPath, realPath) {
-  let fd = null;
   const noFollowFlag = fs.constants.O_NOFOLLOW;
+  // O_NONBLOCK prevents open(O_RDONLY) from blocking on a writer-less FIFO
+  // while we're verifying the target is a regular file. Regular files are
+  // unaffected. Falls back to 0 on platforms that don't expose it.
+  const nonBlockFlag = typeof fs.constants.O_NONBLOCK === "number" ? fs.constants.O_NONBLOCK : 0;
   const openPath = realPath || targetPath;
 
-  try {
-    if (typeof noFollowFlag === "number") {
-      fd = fs.openSync(openPath, fs.constants.O_RDONLY | noFollowFlag);
+  if (typeof noFollowFlag === "number") {
+    let fd = null;
+    try {
+      fd = fs.openSync(openPath, fs.constants.O_RDONLY | noFollowFlag | nonBlockFlag);
+    } catch (error) {
+      // Kernel-level rejections — fall through to the lstat-guarded fallback.
+      // Other errors (notably ENOENT) propagate to the caller.
+      if (!["ELOOP", "ENOTSUP", "EINVAL"].includes(error.code)) {
+        throw error;
+      }
+    }
+    if (fd !== null) {
       try {
         const stat = fs.fstatSync(fd);
         if (!stat.isFile()) {
-          const error = new Error(`Not a file: ${openPath}`);
-          error.code = "EINVAL";
+          // Use a distinct code from the kernel-reject set above — if we
+          // reused "EINVAL" here, the outer swallow-and-fall-back logic
+          // would kick in and the fallback path would reopen the FIFO /
+          // socket / device with plain O_RDONLY, which can block (FIFO)
+          // or have side effects (device). ENOT_REGULAR_FILE is non-POSIX
+          // and therefore never confused with a kernel response.
+          const error = new Error(`Not a regular file: ${openPath}`);
+          error.code = ERR_NOT_REGULAR_FILE;
           throw error;
         }
-        // Pre-fix: this `return fs.readFileSync(fd, ...)` did NOT close the
-        // fd on success because the outer catch only runs on throw. Wrap in
-        // try/finally so the fd is closed on both the success and throw
-        // paths. Matters more now that readRunEvents / readPreviousAttempts
-        // route through this helper on every call.
         return fs.readFileSync(fd, "utf-8");
       } finally {
         fs.closeSync(fd);
-        fd = null;
       }
     }
-  } catch (error) {
-    if (fd !== null) {
-      fs.closeSync(fd);
-      fd = null;
-    }
-    if (!["ELOOP", "ENOTSUP", "EINVAL"].includes(error.code)) {
-      throw error;
-    }
+    // fd === null here means we caught ELOOP/ENOTSUP/EINVAL above. Fall
+    // through to the lstat-guarded fallback below.
   }
 
   const targetEntry = fs.lstatSync(targetPath);
@@ -1044,13 +1056,21 @@ function readTextFileWithoutFollowingSymlinks(targetPath, realPath) {
     error.code = "ELOOP";
     throw error;
   }
+  if (!targetEntry.isFile()) {
+    // Non-regular target without crossing through open() — we already know
+    // from lstat it's not a symlink and not a regular file. Refuse before
+    // we open, to avoid blocking on a reader-less FIFO.
+    const error = new Error(`Not a regular file: ${targetPath}`);
+    error.code = ERR_NOT_REGULAR_FILE;
+    throw error;
+  }
 
-  fd = fs.openSync(openPath, fs.constants.O_RDONLY);
+  const fd = fs.openSync(openPath, fs.constants.O_RDONLY | nonBlockFlag);
   try {
     const stat = fs.fstatSync(fd);
     if (!stat.isFile()) {
-      const error = new Error(`Not a file: ${openPath}`);
-      error.code = "EINVAL";
+      const error = new Error(`Not a regular file: ${openPath}`);
+      error.code = ERR_NOT_REGULAR_FILE;
       throw error;
     }
     return fs.readFileSync(fd, "utf-8");
@@ -1295,7 +1315,7 @@ function getRubricAnchorStatus(data, options = {}) {
       };
     }
 
-    if (error.code === "EINVAL") {
+    if (error.code === "EINVAL" || error.code === ERR_NOT_REGULAR_FILE) {
       return {
         ...baseStatus,
         ...containment,
