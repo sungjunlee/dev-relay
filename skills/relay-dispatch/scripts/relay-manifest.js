@@ -572,6 +572,37 @@ function resolveRubricRunDir(data, options = {}) {
   return path.resolve(getRunDir(repoRoot, validation.runId));
 }
 
+function realpathSyncCompat(targetPath) {
+  return typeof fs.realpathSync.native === "function"
+    ? fs.realpathSync.native(targetPath)
+    : fs.realpathSync(targetPath);
+}
+
+function resolveRealPathCandidate(targetPath) {
+  const pendingSegments = [];
+  let currentPath = targetPath;
+
+  for (;;) {
+    try {
+      const resolvedExistingPath = realpathSyncCompat(currentPath);
+      return pendingSegments.length === 0
+        ? resolvedExistingPath
+        : path.join(resolvedExistingPath, ...pendingSegments);
+    } catch (error) {
+      if (error.code !== "ENOENT") {
+        throw error;
+      }
+
+      const parentPath = path.dirname(currentPath);
+      if (parentPath === currentPath) {
+        throw error;
+      }
+      pendingSegments.unshift(path.basename(currentPath));
+      currentPath = parentPath;
+    }
+  }
+}
+
 function validateRubricPathContainment(rubricPath, runDir) {
   const normalizedPath = typeof rubricPath === "string" ? rubricPath.trim() : "";
   const resolvedRunDir = typeof runDir === "string" && runDir.trim() !== ""
@@ -586,8 +617,7 @@ function validateRubricPathContainment(rubricPath, runDir) {
   const insideRunDir = Boolean(
     resolvedRunDir &&
     resolvedPath &&
-    resolvedPath !== resolvedRunDir &&
-    resolvedPath.startsWith(`${resolvedRunDir}${path.sep}`)
+    isPathContainedWithin(resolvedRunDir, resolvedPath)
   );
 
   if (!normalizedPath) {
@@ -645,14 +675,108 @@ function validateRubricPathContainment(rubricPath, runDir) {
     };
   }
 
-  return {
-    valid: true,
-    status: "contained",
-    rubricPath: normalizedPath,
-    runDir: resolvedRunDir,
-    resolvedPath,
-    reason: null,
-  };
+  try {
+    // Refuse symlinks outright: rubric.yaml is persisted by dispatch into the run dir, so a symlink indicates tampering rather than a legitimate operator workflow. This also avoids a check/read race on the anchored path itself.
+    const rubricEntry = fs.lstatSync(resolvedPath);
+    if (rubricEntry.isSymbolicLink()) {
+      return {
+        valid: false,
+        status: "symlink_escape",
+        rubricPath: normalizedPath,
+        runDir: resolvedRunDir,
+        resolvedPath,
+        realPath: null,
+        reason: `anchor.rubric_path must not be a symlink (got ${JSON.stringify(normalizedPath)} -> ${JSON.stringify(resolvedPath)}).`,
+      };
+    }
+  } catch (error) {
+    if (error.code !== "ENOENT") {
+      throw error;
+    }
+  }
+
+  try {
+    const realRunDir = resolveRealPathCandidate(resolvedRunDir);
+    const realRubricPath = resolveRealPathCandidate(resolvedPath);
+    if (!isPathContainedWithin(realRunDir, realRubricPath)) {
+      return {
+        valid: false,
+        status: "follows_outside_run_dir",
+        rubricPath: normalizedPath,
+        runDir: resolvedRunDir,
+        resolvedPath,
+        realPath: realRubricPath,
+        reason: `anchor.rubric_path must stay inside the real run directory ${JSON.stringify(realRunDir)} after symlink resolution (got ${JSON.stringify(normalizedPath)} -> ${JSON.stringify(realRubricPath)}).`,
+      };
+    }
+
+    return {
+      valid: true,
+      status: "contained",
+      rubricPath: normalizedPath,
+      runDir: resolvedRunDir,
+      resolvedPath,
+      realPath: realRubricPath,
+      reason: null,
+    };
+  } catch (error) {
+    return {
+      valid: false,
+      status: "run_dir_unavailable",
+      rubricPath: normalizedPath,
+      runDir: resolvedRunDir,
+      resolvedPath,
+      realPath: null,
+      reason: `Unable to resolve the real run directory for anchor.rubric_path=${JSON.stringify(normalizedPath)}: ${summarizeError(error)}`,
+    };
+  }
+}
+
+function readTextFileWithoutFollowingSymlinks(targetPath, realPath) {
+  let fd = null;
+  const noFollowFlag = fs.constants.O_NOFOLLOW;
+  const openPath = realPath || targetPath;
+
+  try {
+    if (typeof noFollowFlag === "number") {
+      fd = fs.openSync(openPath, fs.constants.O_RDONLY | noFollowFlag);
+      const stat = fs.fstatSync(fd);
+      if (!stat.isFile()) {
+        const error = new Error(`Not a file: ${openPath}`);
+        error.code = "EINVAL";
+        throw error;
+      }
+      return fs.readFileSync(fd, "utf-8");
+    }
+  } catch (error) {
+    if (fd !== null) {
+      fs.closeSync(fd);
+      fd = null;
+    }
+    if (!["ELOOP", "ENOTSUP", "EINVAL"].includes(error.code)) {
+      throw error;
+    }
+  }
+
+  const rubricEntry = fs.lstatSync(targetPath);
+  if (rubricEntry.isSymbolicLink()) {
+    const error = new Error(`Refusing to read symlinked rubric path: ${targetPath}`);
+    error.code = "ELOOP";
+    throw error;
+  }
+
+  fd = fs.openSync(openPath, fs.constants.O_RDONLY);
+  try {
+    const stat = fs.fstatSync(fd);
+    if (!stat.isFile()) {
+      const error = new Error(`Not a file: ${openPath}`);
+      error.code = "EINVAL";
+      throw error;
+    }
+    return fs.readFileSync(fd, "utf-8");
+  } finally {
+    fs.closeSync(fd);
+  }
 }
 
 function getRubricAnchorStatus(data, options = {}) {
@@ -702,17 +826,11 @@ function getRubricAnchorStatus(data, options = {}) {
   }
 
   try {
-    const stat = fs.statSync(containment.resolvedPath);
-    if (!stat.isFile()) {
-      return {
-        ...baseStatus,
-        ...containment,
-        status: "not_file",
-        error: `anchor.rubric_path must point to a file inside the run directory (got ${JSON.stringify(containment.resolvedPath)}).`,
-      };
-    }
-
-    const content = fs.readFileSync(containment.resolvedPath, "utf-8");
+    // Refuse symlinks outright: rubric.yaml is persisted by dispatch into the run dir — a symlink indicates tampering, not a legitimate operator workflow. Avoids TOCTOU between lstat and readFileSync.
+    const content = readTextFileWithoutFollowingSymlinks(
+      containment.resolvedPath,
+      containment.realPath || containment.resolvedPath
+    );
     const trimmedContent = content.trim();
     if (!trimmedContent) {
       return {
@@ -740,6 +858,24 @@ function getRubricAnchorStatus(data, options = {}) {
         ...containment,
         status: "missing",
         error: `rubric file is missing from the run directory: ${containment.resolvedPath}`,
+      };
+    }
+
+    if (error.code === "ELOOP") {
+      return {
+        ...baseStatus,
+        ...containment,
+        status: "symlink_escape",
+        error: `anchor.rubric_path must not be a symlink (got ${JSON.stringify(containment.rubricPath)} -> ${JSON.stringify(containment.resolvedPath)}).`,
+      };
+    }
+
+    if (error.code === "EINVAL") {
+      return {
+        ...baseStatus,
+        ...containment,
+        status: "not_file",
+        error: `anchor.rubric_path must point to a file inside the run directory (got ${JSON.stringify(containment.resolvedPath)}).`,
       };
     }
 

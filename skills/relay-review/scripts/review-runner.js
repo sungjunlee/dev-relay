@@ -1528,6 +1528,7 @@ module.exports = {
   formatIssueList,
   formatPriorVerdictSummary,
   formatScopeDrift,
+  loadRubricFromRunDir,
   parseScoreLog,
   parseReviewVerdict,
   resolveIssueNumber,
