@@ -212,9 +212,9 @@ function applyMigrationStamp({ repoRoot, runId, entriesByRunId, manifestPath, dr
   // One-shot semantic: once a run carries object-form provenance, do not let a
   // cleared migration-manifest applied_at field re-stamp it. That prevents a
   // tamper-then-rerun flow from silently rewriting audit provenance.
-  if (currentMetadata.provenance) {
+  if (currentMetadata.provenance || currentMetadata.diagnostic) {
     throw new Error(
-      `Run ${runId} already has object-form anchor.rubric_grandfathered provenance; refusing to re-apply from ${manifestPath}.`
+      `Run ${runId} already has pre-existing object-form anchor.rubric_grandfathered state; refusing to re-apply from ${manifestPath}.`
     );
   }
 

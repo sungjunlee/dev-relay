@@ -175,7 +175,51 @@ test("relay-migrate-rubric refuses to reapply when object-form provenance alread
   ], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
 
   assert.notEqual(rerun.status, 0);
-  assert.match(rerun.stderr, /already has object-form anchor\.rubric_grandfathered provenance/);
+  assert.match(rerun.stderr, /already has pre-existing object-form anchor\.rubric_grandfathered state/);
+
+  const events = fs.readFileSync(getEventsPath(repoRoot, runId), "utf-8")
+    .trim()
+    .split("\n")
+    .filter(Boolean);
+  assert.equal(events.length, 1);
+});
+
+test("relay-migrate-rubric refuses to reapply after object-form provenance is tampered", () => {
+  const { repoRoot, relayHome } = initRepo();
+  const runId = "issue-151-20260417080000003";
+  const manifestPath = writeLegacyRun(repoRoot, runId);
+  const migrationManifestPath = path.join(relayHome, "migrations", "rubric-mandatory.yaml");
+  writeMigrationDoc(migrationManifestPath, runId);
+
+  execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--manifest", migrationManifestPath,
+    "--json",
+  ], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
+
+  const tamperedManifest = readManifest(manifestPath).data;
+  tamperedManifest.anchor.rubric_grandfathered = {
+    from_migration: "rubric-mandatory.yaml",
+    applied_at: "",
+    actor: "tampered-operator",
+    reason: "tampered object should still block rerun",
+  };
+  writeManifest(manifestPath, tamperedManifest);
+  writeMigrationDoc(migrationManifestPath, runId, { appliedAt: null });
+
+  const rerun = spawnSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--manifest", migrationManifestPath,
+    "--json",
+  ], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
+
+  assert.notEqual(rerun.status, 0);
+  assert.match(rerun.stderr, /already has pre-existing object-form anchor\.rubric_grandfathered state/);
+
+  const persistedManifest = readManifest(manifestPath).data;
+  assert.equal(persistedManifest.anchor.rubric_grandfathered.applied_at, "");
 
   const events = fs.readFileSync(getEventsPath(repoRoot, runId), "utf-8")
     .trim()
