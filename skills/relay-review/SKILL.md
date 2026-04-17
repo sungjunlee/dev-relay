@@ -142,6 +142,10 @@ The runner:
 
 <!-- NOTE: gate-check.js now treats the latest relay-review or relay-review-round comment as authoritative and blocks merge on CHANGES_REQUESTED or ESCALATED. -->
 
+## Non-default GitHub Hosts
+
+If the repository origin is not `github.com` (GitHub Enterprise, self-hosted GitHub), `review-runner.js` may record the wrong `reviewer_login`, causing gate-check to reject the PR with `unauthorized_reviewer`. See [non-default-github-host.md](../relay/references/non-default-github-host.md) for workarounds.
+
 ## Re-dispatch (when issues found)
 
 Use the generated `review-round-N-redispatch.md` artifact as the targeted fix prompt. It already includes the issue list, scope guardrail, and original Done Criteria.

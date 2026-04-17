@@ -91,7 +91,7 @@ On re-dispatch, previous Score Log + reviewer feedback are auto-prepended to the
 | Timeout (with commits) | `completed-with-warning` — check worktree for uncommitted changes, proceed to review |
 | Timeout (no commits) | Increase `--timeout` or split task into smaller pieces |
 | Executor error / no commits | Read result file; revise prompt and re-dispatch |
-| No PR created | Check `git log` in worktree; push manually or re-dispatch |
+| No PR created | Check `git log` in worktree; push manually or re-dispatch. If repo is on a non-default GitHub host, see [non-default-github-host.md](../relay/references/non-default-github-host.md). |
 | Branch conflicts | Resolve in worktree or create fresh worktree from updated main |
 | Network/transient error | Wait 30s, retry once. If it fails again, escalate to user |
 
