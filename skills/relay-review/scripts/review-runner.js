@@ -182,30 +182,46 @@ function resolveRemoteHost(repoPath) {
 // Returns { login, status }.
 //   login: resolved GitHub login string, or null if not available
 //   status: "recorded"          → login is set, normal path
-//           "host_auth_failed"  → origin host was resolvable but the
-//                                 host-scoped gh call could not return a
+//           "host_auth_failed"  → origin host was resolvable AND gh has
+//                                 auth configured for that host BUT the
+//                                 host-scoped call could not return a
 //                                 login. Callers MUST record this as a
 //                                 gating condition on the manifest so
 //                                 relay-merge refuses merge — otherwise the
 //                                 fail-closed claim silently degrades into
 //                                 a skipped author-verification gate.
-//           "no_login"          → origin unresolvable and zero-arg gh also
-//                                 failed/returned empty. Callers may record
-//                                 nothing (matches current gate-check
+//           "no_login"          → origin unresolvable / origin host has no
+//                                 gh auth configured / zero-arg gh also
+//                                 failed. Callers may record nothing
+//                                 (matches pre-existing gate-check
 //                                 "missing = soft-skip" semantics).
+//
+// Why the gh-auth-status probe: some origin hosts are SSH transports only
+// (ssh.github.com on github.com), and some GHE setups keep SSH and API on
+// separate hostnames. Calling `gh api user --hostname <transport-host>`
+// would fail with an auth error even though the operator is fully
+// authenticated via the API host. The probe distinguishes "GHE with
+// host-scoped auth set up, use --hostname" from "transport-only or
+// un-authed host, fall back to the default host (which is the same host
+// `gh pr comment` uses, so gate-check lines up)".
+function hostHasGhAuth(host) {
+  try {
+    execFileSync("gh", ["auth", "status", "--hostname", host], {
+      stdio: "pipe",
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function getGhLogin(repoPath) {
   const host = resolveRemoteHost(repoPath);
 
-  // When origin resolved to a host, the ONLY acceptable login is the one
-  // scoped to that host. Falling back to zero-arg `gh api user` would return
-  // the operator's default-host identity (typically personal github.com),
-  // which is exactly the bug #199 fixes — gate-check then rejects the PR as
-  // unauthorized_reviewer because the comment author on the repo host does
-  // not match. Fail-closed: return null with a warning AND signal
-  // "host_auth_failed" so the caller can block merge. (#199 AC nominally
-  // asked for zero-arg fallback, but that re-creates the bug the AC says
-  // the PR must fix — documented in the PR description.)
-  if (host) {
+  if (host && hostHasGhAuth(host)) {
+    // gh confirms auth for this host. Host-scoped call is the only
+    // acceptable source of reviewer_login; falling back to zero-arg would
+    // silently write the default-host identity (the #199 bug).
     const args = ["--hostname", host, "api", "user", "--jq", ".login"];
     try {
       const login = execFileSync("gh", args, { encoding: "utf-8", stdio: "pipe" }).trim();
@@ -225,10 +241,16 @@ function getGhLogin(repoPath) {
     }
   }
 
-  // No resolvable origin host (manifest-only review, no git repo, unparseable
-  // remote). Zero-arg gh is the best we can do — the default host is the
-  // only host the operator is signed into, so the identity match is
-  // unambiguous from the operator's perspective.
+  // One of:
+  //   (a) origin unresolvable (manifest-only run, no git repo),
+  //   (b) origin resolved but gh has no auth for that host — typical for
+  //       transport-only hosts like ssh.github.com (github.com repo) and
+  //       for GHE repos where the operator hasn't run
+  //       `gh auth login --hostname <host>` yet.
+  // In both cases, zero-arg gh is the matching signal: it uses the
+  // default host, which is the same identity `gh pr comment` uses when
+  // no --hostname is provided — so reviewer_login lines up with the
+  // actual comment author at gate-check time.
   try {
     const login = execFileSync("gh", ["api", "user", "--jq", ".login"], {
       encoding: "utf-8",

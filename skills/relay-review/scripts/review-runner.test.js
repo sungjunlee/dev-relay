@@ -2439,18 +2439,22 @@ function writeShim(dir, name, body) {
   return file;
 }
 
-test("getGhLogin is fail-closed when origin resolves but the host-scoped gh call fails", () => {
+test("getGhLogin is fail-closed when origin resolves, gh has auth, but the host-scoped call fails", () => {
   // The PR-208 critical bug: previously, when origin resolved to a non-default
   // host and host-scoped `gh api user --hostname <host>` failed, the fallback
   // would silently succeed on `gh api user` (default host) and write the
   // operator's personal github.com login into reviewer_login. gate-check then
   // rejected the PR as unauthorized_reviewer. Verify the fallback is gone.
   const shimDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-shim-"));
-  // Fake gh: fail when called with --hostname; succeed with a default-host
-  // login when called without. A regression to two-stage fallback would let
-  // "personal-default-host-login" leak into reviewer_login.
+  // Fake gh:
+  //   `gh auth status --hostname <host>` → exit 0 (host IS authed).
+  //   `gh api user --hostname <host>` → exit 4 (API call fails anyway).
+  //   `gh api user` (zero-arg) → would return default-host login; a
+  //      regression to two-stage fallback would let it leak into
+  //      reviewer_login.
   writeShim(shimDir, "gh", [
     '#!/bin/sh',
+    'if [ "$1" = "auth" ] && [ "$2" = "status" ]; then exit 0; fi',
     'for arg in "$@"; do',
     '  if [ "$arg" = "--hostname" ]; then',
     '    exit 4',
@@ -2482,6 +2486,47 @@ test("getGhLogin is fail-closed when origin resolves but the host-scoped gh call
   const warning = captured.join("");
   assert.match(warning, /ghe\.corp\.example\.com/);
   assert.match(warning, /reviewer_login will not be recorded/);
+});
+
+test("getGhLogin falls back to zero-arg gh when origin host has no gh auth (e.g. ssh.github.com)", () => {
+  // Round-5 codex finding: transport-only hosts (ssh.github.com for a
+  // github.com repo, or GHES installs where SSH and API are on different
+  // hostnames) would previously fail with host_auth_failed even though
+  // the operator IS fully authed on the API host. Fix: probe
+  // `gh auth status --hostname <host>` first; if gh doesn't know about
+  // this host, fall back to zero-arg — same host `gh pr comment` uses,
+  // so reviewer_login lines up with the actual comment author.
+  const shimDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-shim-"));
+  writeShim(shimDir, "gh", [
+    '#!/bin/sh',
+    'if [ "$1" = "auth" ] && [ "$2" = "status" ]; then',
+    '  # The transport host is NOT a known gh host.',
+    '  exit 1',
+    'fi',
+    'for arg in "$@"; do',
+    '  if [ "$arg" = "--hostname" ]; then',
+    '    # Must not be called in this case.',
+    '    exit 5',
+    '  fi',
+    'done',
+    'echo personal-github-login',
+    '',
+  ].join("\n"));
+  writeShim(shimDir, "git", [
+    '#!/bin/sh',
+    'if [ "$1" = "remote" ] && [ "$2" = "get-url" ] && [ "$3" = "origin" ]; then',
+    '  echo ssh://git@ssh.github.com:443/sungjunlee/dev-relay.git',
+    '  exit 0',
+    'fi',
+    'exit 0',
+    '',
+  ].join("\n"));
+
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-host-"));
+  const captured = [];
+  const result = withShimmedPath(shimDir, captured, () => getGhLogin(repoRoot));
+  assert.equal(result.login, "personal-github-login");
+  assert.equal(result.status, "recorded");
 });
 
 test("getGhLogin uses zero-arg gh when no origin host is resolvable", () => {
