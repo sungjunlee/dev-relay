@@ -99,6 +99,12 @@ function withRubricNote(result, rubricAnchor) {
   if (rubricAnchor.note) {
     next.note = rubricAnchor.note;
   }
+  if (rubricAnchor.grandfatherProvenance) {
+    next.grandfatherProvenance = rubricAnchor.grandfatherProvenance;
+  }
+  if (rubricAnchor.legacyGrandfather) {
+    next.legacyGrandfather = true;
+  }
   if (rubricAnchor.status === "grandfathered") {
     next.rubricGrandfathered = true;
   }
@@ -112,7 +118,7 @@ function buildRubricGateFailure(prNumber, rubricAnchor) {
         status: "missing_rubric_path",
         pr: prNumber,
         readyToMerge: false,
-        reason: "anchor.rubric_path is required before merge unless anchor.rubric_grandfathered=true",
+        reason: rubricAnchor?.error || "anchor.rubric_path is required before merge unless anchor.rubric_grandfathered is a valid legacy boolean or provenance object",
       }, rubricAnchor);
     case "missing":
       return withRubricNote({

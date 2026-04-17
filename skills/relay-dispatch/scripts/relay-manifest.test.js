@@ -30,6 +30,7 @@ const {
   validateRunId,
   writeManifest,
 } = require("./relay-manifest");
+const { createGrandfatheredRubricAnchor } = require("./test-support");
 
 function initGitRepo(repoRoot, actor = "Relay Test") {
   execFileSync("git", ["init", "-b", "main"], { cwd: repoRoot, stdio: "pipe" });
@@ -595,7 +596,7 @@ test("updateManifestState allows dispatched -> review_pending when rubric is gra
     run_id: "issue-42-20260412000002000",
     state: STATES.DISPATCHED,
     next_action: "await_dispatch_result",
-    anchor: { rubric_grandfathered: true },
+    anchor: { rubric_grandfathered: createGrandfatheredRubricAnchor() },
     paths: { repo_root: repoRoot },
     timestamps: { created_at: "2026-04-12T00:00:00Z", updated_at: "2026-04-12T00:00:00Z" },
   };
@@ -612,7 +613,7 @@ test("getRubricAnchorStatus rejects invalid run_id even for grandfathered runs",
   assert.throws(
     () => getRubricAnchorStatus({
       run_id: "../victim-run",
-      anchor: { rubric_grandfathered: true },
+      anchor: { rubric_grandfathered: createGrandfatheredRubricAnchor() },
       paths: { repo_root: repoRoot },
     }),
     /may not contain '\.\.' segments/
@@ -645,7 +646,7 @@ test("getRubricAnchorStatus rejects missing and empty run_id before rubric or gr
     {
       label: "missing run_id with grandfathered anchor",
       manifest: {
-        anchor: { rubric_grandfathered: true },
+        anchor: { rubric_grandfathered: createGrandfatheredRubricAnchor() },
         paths: { repo_root: repoRoot },
       },
       pattern: /got undefined/,
@@ -654,7 +655,7 @@ test("getRubricAnchorStatus rejects missing and empty run_id before rubric or gr
       label: "empty run_id with grandfathered anchor",
       manifest: {
         run_id: "",
-        anchor: { rubric_grandfathered: true },
+        anchor: { rubric_grandfathered: createGrandfatheredRubricAnchor() },
         paths: { repo_root: repoRoot },
       },
       pattern: /got ""/,
@@ -709,11 +710,60 @@ test("getRubricAnchorStatus distinguishes satisfied, empty, outside_run_dir, and
 
   const grandfathered = getRubricAnchorStatus({
     run_id: runId,
-    anchor: { rubric_path: "rubric.yaml", rubric_grandfathered: true },
+    anchor: { rubric_path: "rubric.yaml", rubric_grandfathered: createGrandfatheredRubricAnchor() },
     paths: { repo_root: repoRoot },
   });
   assert.equal(grandfathered.status, "grandfathered");
   assert.equal(grandfathered.satisfied, true);
+  assert.equal(grandfathered.legacyGrandfather, false);
+  assert.equal(grandfathered.grandfatherProvenance.actor, "test");
+});
+
+test("getRubricAnchorStatus keeps legacy boolean grandfathering for audit compatibility", () => {
+  // #151
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-manifest-legacy-grandfather-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  initGitRepo(repoRoot, "Relay Maintainer");
+
+  const result = getRubricAnchorStatus({
+    run_id: "issue-42-20260412000003001",
+    anchor: {
+      // LEGACY GRANDFATHER FORM — backward-compat test
+      rubric_grandfathered: true,
+    },
+    paths: { repo_root: repoRoot },
+  });
+
+  assert.equal(result.status, "grandfathered");
+  assert.equal(result.satisfied, true);
+  assert.equal(result.legacyGrandfather, true);
+  assert.equal(result.grandfatherProvenance, null);
+  assert.match(result.note, /legacy boolean/);
+});
+
+test("getRubricAnchorStatus fails closed for malformed grandfather provenance objects", () => {
+  // #151
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-manifest-malformed-grandfather-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  initGitRepo(repoRoot, "Relay Maintainer");
+
+  const result = getRubricAnchorStatus({
+    run_id: "issue-42-20260412000003002",
+    anchor: {
+      rubric_grandfathered: {
+        from_migration: "rubric-mandatory.yaml",
+        reason: "missing actor and applied_at",
+      },
+    },
+    paths: { repo_root: repoRoot },
+  });
+
+  assert.equal(result.status, "missing_path");
+  assert.equal(result.grandfathered, false);
+  assert.equal(result.satisfied, false);
+  assert.equal(result.legacyGrandfather, false);
+  assert.equal(result.grandfatherProvenance, null);
+  assert.match(result.error, /missing applied_at, actor|missing actor, applied_at/);
 });
 
 test("getRubricAnchorStatus rejects symlinked rubric files even when they target readable files", () => {

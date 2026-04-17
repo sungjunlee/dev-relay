@@ -15,12 +15,23 @@ const DEFAULT_ENFORCEMENT_RUBRIC = [
   "      target: \">= 1/1\"",
 ].join("\n");
 
+function createGrandfatheredRubricAnchor(overrides = {}) {
+  return {
+    from_migration: "rubric-mandatory.yaml",
+    applied_at: "2026-04-17T08:00:05Z",
+    actor: "test",
+    reason: "test fixture grandfathered run",
+    ...overrides,
+  };
+}
+
 function createEnforcementFixture({
   repoRoot,
   runId,
   manifestPath = null,
   state = "loaded",
   grandfather = false,
+  legacy = false,
   rubricPath = undefined,
   rubricContent = DEFAULT_ENFORCEMENT_RUBRIC,
   anchorOverrides = {},
@@ -40,7 +51,13 @@ function createEnforcementFixture({
   delete nextAnchor.rubric_path;
 
   if (grandfather) {
-    nextAnchor.rubric_grandfathered = true;
+    nextAnchor.rubric_grandfathered = legacy
+      ? true
+      : createGrandfatheredRubricAnchor(
+          typeof anchorOverrides.rubric_grandfathered === "object" && anchorOverrides.rubric_grandfathered !== null
+            ? anchorOverrides.rubric_grandfathered
+            : {}
+        );
   } else {
     switch (state) {
       case "loaded":
@@ -112,5 +129,6 @@ function createEnforcementFixture({
 
 module.exports = {
   DEFAULT_ENFORCEMENT_RUBRIC,
+  createGrandfatheredRubricAnchor,
   createEnforcementFixture,
 };

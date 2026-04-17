@@ -329,7 +329,7 @@ function output(result) {
       if (result.issues) console.log(`  ${result.issues}`);
     } else if (result.status === "missing_rubric_path") {
       console.log(`✗ PR #${PR_NUM}: run is missing anchor.rubric_path — merge blocked`);
-      console.log("  Re-dispatch from relay-plan with --rubric-file, or explicitly grandfather a pre-change run.");
+      console.log("  Re-dispatch from relay-plan with --rubric-file, or stamp an approved pre-change run with relay-migrate-rubric.js.");
     } else if (result.status === "missing_rubric_file") {
       console.log(`✗ PR #${PR_NUM}: anchored rubric file is missing from the run directory — merge blocked`);
       if (result.reason) console.log(`  ${result.reason}`);

@@ -574,9 +574,124 @@ function hasRubricPath(data) {
   return typeof data?.anchor?.rubric_path === "string" && data.anchor.rubric_path.trim() !== "";
 }
 
-// TODO(2026-Q3): remove grandfather path once all pre-2026-04 runs are closed.
+const LEGACY_RUBRIC_GRANDFATHER_WARNED_RUN_IDS = new Set();
+const RUBRIC_GRANDFATHER_REQUIRED_FIELDS = Object.freeze(["from_migration", "applied_at", "actor"]);
+
+function warnLegacyRubricGrandfather(runId) {
+  const normalizedRunId = typeof runId === "string" && runId.trim() !== ""
+    ? runId.trim()
+    : "unknown-run";
+  if (LEGACY_RUBRIC_GRANDFATHER_WARNED_RUN_IDS.has(normalizedRunId)) {
+    return;
+  }
+  LEGACY_RUBRIC_GRANDFATHER_WARNED_RUN_IDS.add(normalizedRunId);
+  console.error(
+    `Warning: run ${normalizedRunId} uses legacy boolean anchor.rubric_grandfathered=true; ` +
+    "migrate it with relay-migrate-rubric.js."
+  );
+}
+
+function buildRubricGrandfatherDiagnostic(rawValue) {
+  if (!rawValue || typeof rawValue !== "object" || Array.isArray(rawValue)) {
+    return "anchor.rubric_grandfathered must be true or an object with from_migration, applied_at, and actor.";
+  }
+
+  const missingFields = RUBRIC_GRANDFATHER_REQUIRED_FIELDS.filter((field) => {
+    return typeof rawValue[field] !== "string" || rawValue[field].trim() === "";
+  });
+  if (missingFields.length > 0) {
+    return `anchor.rubric_grandfathered object is invalid: missing ${missingFields.join(", ")}.`;
+  }
+
+  const appliedAt = Date.parse(rawValue.applied_at);
+  if (Number.isNaN(appliedAt)) {
+    return `anchor.rubric_grandfathered.applied_at must be an ISO timestamp, got ${JSON.stringify(rawValue.applied_at)}.`;
+  }
+
+  if (rawValue.reason !== undefined && rawValue.reason !== null && typeof rawValue.reason !== "string") {
+    return "anchor.rubric_grandfathered.reason must be a string when set.";
+  }
+
+  return null;
+}
+
+function getRubricGrandfatherMetadata(data) {
+  const rawValue = data?.anchor?.rubric_grandfathered;
+  if (rawValue === true) {
+    warnLegacyRubricGrandfather(data?.run_id);
+    return {
+      grandfathered: true,
+      legacyGrandfather: true,
+      provenance: null,
+      diagnostic: null,
+    };
+  }
+
+  if (rawValue === undefined || rawValue === null || rawValue === false) {
+    return {
+      grandfathered: false,
+      legacyGrandfather: false,
+      provenance: null,
+      diagnostic: null,
+    };
+  }
+
+  const diagnostic = buildRubricGrandfatherDiagnostic(rawValue);
+  if (diagnostic) {
+    return {
+      grandfathered: false,
+      legacyGrandfather: false,
+      provenance: null,
+      diagnostic,
+    };
+  }
+
+  return {
+    grandfathered: true,
+    legacyGrandfather: false,
+    provenance: {
+      from_migration: rawValue.from_migration.trim(),
+      applied_at: new Date(Date.parse(rawValue.applied_at)).toISOString(),
+      actor: rawValue.actor.trim(),
+      reason: typeof rawValue.reason === "string" && rawValue.reason.trim() !== ""
+        ? rawValue.reason.trim()
+        : null,
+    },
+    diagnostic: null,
+  };
+}
+
+// TODO(2026-Q3): remove legacy boolean compat once the migration issue closes.
 function isRubricGrandfathered(data) {
-  return data?.anchor?.rubric_grandfathered === true;
+  return getRubricGrandfatherMetadata(data).grandfathered;
+}
+
+function formatRubricGrandfatherNote(metadata) {
+  if (metadata.legacyGrandfather) {
+    return "Grandfathered pre-rubric run via legacy boolean anchor.rubric_grandfathered=true. " +
+      "This deprecated form should be migrated with relay-migrate-rubric.js.";
+  }
+
+  if (!metadata.provenance) {
+    return "Grandfathered pre-rubric run.";
+  }
+
+  const details = [
+    `migration=${metadata.provenance.from_migration}`,
+    `applied_at=${metadata.provenance.applied_at}`,
+    `actor=${metadata.provenance.actor}`,
+  ];
+  if (metadata.provenance.reason) {
+    details.push(`reason=${metadata.provenance.reason}`);
+  }
+  return `Grandfathered pre-rubric run via migration provenance (${details.join(", ")}).`;
+}
+
+function prependGrandfatherDiagnostic(message, metadata) {
+  if (!metadata?.diagnostic) {
+    return message;
+  }
+  return `${metadata.diagnostic} ${message}`;
 }
 
 function resolveRubricRunDir(data, options = {}) {
@@ -811,14 +926,17 @@ function readTextFileWithoutFollowingSymlinks(targetPath, realPath) {
 
 function getRubricAnchorStatus(data, options = {}) {
   const rubricPath = hasRubricPath(data) ? data.anchor.rubric_path.trim() : null;
-  const grandfathered = isRubricGrandfathered(data);
   const runDir = resolveRubricRunDir(data, options);
+  const grandfatherMetadata = getRubricGrandfatherMetadata(data);
+  const grandfathered = grandfatherMetadata.grandfathered;
   const baseStatus = {
     status: "missing_path",
     rubricPath,
     runDir,
     resolvedPath: null,
     grandfathered,
+    grandfatherProvenance: grandfatherMetadata.provenance,
+    legacyGrandfather: grandfatherMetadata.legacyGrandfather,
     satisfied: false,
     exists: false,
     empty: false,
@@ -834,14 +952,17 @@ function getRubricAnchorStatus(data, options = {}) {
       ...baseStatus,
       status: "grandfathered",
       satisfied: true,
-      note: "Grandfathered pre-rubric run: merge/review gates are allowing missing anchor.rubric_path because anchor.rubric_grandfathered=true.",
+      note: formatRubricGrandfatherNote(grandfatherMetadata),
     };
   }
 
   if (!rubricPath) {
     return {
       ...baseStatus,
-      error: "anchor.rubric_path is required before review/merge unless anchor.rubric_grandfathered=true.",
+      error: prependGrandfatherDiagnostic(
+        "anchor.rubric_path is required before review/merge unless anchor.rubric_grandfathered is a valid legacy boolean or provenance object.",
+        grandfatherMetadata
+      ),
     };
   }
 
@@ -851,7 +972,7 @@ function getRubricAnchorStatus(data, options = {}) {
       ...baseStatus,
       ...containment,
       status: containment.status,
-      error: containment.reason,
+      error: prependGrandfatherDiagnostic(containment.reason, grandfatherMetadata),
     };
   }
 
@@ -869,7 +990,7 @@ function getRubricAnchorStatus(data, options = {}) {
         status: "empty",
         exists: true,
         empty: true,
-        error: `rubric file is empty: ${containment.resolvedPath}`,
+        error: prependGrandfatherDiagnostic(`rubric file is empty: ${containment.resolvedPath}`, grandfatherMetadata),
       };
     }
 
@@ -887,7 +1008,10 @@ function getRubricAnchorStatus(data, options = {}) {
         ...baseStatus,
         ...containment,
         status: "missing",
-        error: `rubric file is missing from the run directory: ${containment.resolvedPath}`,
+        error: prependGrandfatherDiagnostic(
+          `rubric file is missing from the run directory: ${containment.resolvedPath}`,
+          grandfatherMetadata
+        ),
       };
     }
 
@@ -896,7 +1020,10 @@ function getRubricAnchorStatus(data, options = {}) {
         ...baseStatus,
         ...containment,
         status: "symlink_escape",
-        error: `anchor.rubric_path must not be a symlink (got ${JSON.stringify(containment.rubricPath)} -> ${JSON.stringify(containment.resolvedPath)}).`,
+        error: prependGrandfatherDiagnostic(
+          `anchor.rubric_path must not be a symlink (got ${JSON.stringify(containment.rubricPath)} -> ${JSON.stringify(containment.resolvedPath)}).`,
+          grandfatherMetadata
+        ),
       };
     }
 
@@ -905,7 +1032,10 @@ function getRubricAnchorStatus(data, options = {}) {
         ...baseStatus,
         ...containment,
         status: "not_file",
-        error: `anchor.rubric_path must point to a file inside the run directory (got ${JSON.stringify(containment.resolvedPath)}).`,
+        error: prependGrandfatherDiagnostic(
+          `anchor.rubric_path must point to a file inside the run directory (got ${JSON.stringify(containment.resolvedPath)}).`,
+          grandfatherMetadata
+        ),
       };
     }
 
@@ -913,7 +1043,10 @@ function getRubricAnchorStatus(data, options = {}) {
       ...baseStatus,
       ...containment,
       status: "unreadable",
-      error: `Unable to read rubric file ${containment.resolvedPath}: ${summarizeError(error)}`,
+      error: prependGrandfatherDiagnostic(
+        `Unable to read rubric file ${containment.resolvedPath}: ${summarizeError(error)}`,
+        grandfatherMetadata
+      ),
     };
   }
 }
@@ -925,7 +1058,7 @@ function validateTransitionInvariants(data, fromState, toState) {
       throw new Error(
         `Cannot transition dispatched -> review_pending because ${rubricAnchor.error} ` +
         "Generate the rubric with relay-plan and dispatch with --rubric-file, " +
-        "or explicitly grandfather a pre-change run with anchor.rubric_grandfathered: true."
+        "or migrate an approved pre-change run with relay-migrate-rubric.js."
       );
     }
   }
@@ -1325,6 +1458,7 @@ module.exports = {
   ensureRunLayout,
   formatAttemptsForPrompt,
   getRubricAnchorStatus,
+  getRubricGrandfatherMetadata,
   getActorName,
   getAttemptsPath,
   getCanonicalRepoRoot,

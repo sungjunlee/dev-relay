@@ -5,6 +5,7 @@ const os = require("os");
 const path = require("path");
 
 const { evaluateReviewGate } = require("./review-gate");
+const { createGrandfatheredRubricAnchor } = require("../../relay-dispatch/scripts/test-support");
 
 function createRubricStateFixture(state) {
   const runDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-gate-"));
@@ -37,7 +38,9 @@ function createRubricStateFixture(state) {
     fs.writeFileSync(siblingTarget, "rubric:\n  factors:\n    - name: symlink\n", "utf-8");
     fs.symlinkSync(siblingTarget, path.join(runDir, "rubric.yaml"));
   } else if (state === "grandfathered") {
-    manifestData.anchor.rubric_grandfathered = true;
+    manifestData.anchor.rubric_grandfathered = createGrandfatheredRubricAnchor({
+      actor: "review-gate-test",
+    });
   }
 
   return { runDir, manifestData };
@@ -124,5 +127,6 @@ test("evaluateReviewGate still accepts PASS when rubric state is grandfathered",
   assert.equal(result.status, "lgtm");
   assert.equal(result.rubricStatus, "grandfathered");
   assert.equal(result.rubricGrandfathered, true);
+  assert.equal(result.grandfatherProvenance.actor, "review-gate-test");
   assert.equal(result.readyToMerge, true);
 });

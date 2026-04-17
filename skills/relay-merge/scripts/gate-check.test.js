@@ -14,7 +14,10 @@ const {
   updateManifestState,
   writeManifest,
 } = require("../../relay-dispatch/scripts/relay-manifest");
-const { createEnforcementFixture } = require("../../relay-dispatch/scripts/test-support");
+const {
+  createEnforcementFixture,
+  createGrandfatheredRubricAnchor,
+} = require("../../relay-dispatch/scripts/test-support");
 
 const SCRIPT = path.join(__dirname, "gate-check.js");
 const HISTORICAL_FIXTURE_DIR = path.join(__dirname, "__fixtures__", "historical-issue-401");
@@ -1654,8 +1657,9 @@ test("gate-check allows grandfathered runs and surfaces the note", () => {
     manifest: {
       run_id: "issue-40-20260412010000000",
       anchor: {
-        // GRANDFATHER FIXTURE — remove after migration complete per #151
-        rubric_grandfathered: true,
+        rubric_grandfathered: createGrandfatheredRubricAnchor({
+          actor: "gate-check-test",
+        }),
       },
       review: {
         last_reviewed_sha: "abc123",
@@ -1668,6 +1672,7 @@ test("gate-check allows grandfathered runs and surfaces the note", () => {
   assert.equal(result.json.readyToMerge, true);
   assert.equal(result.json.rubricGrandfathered, true);
   assert.match(result.json.note, /Grandfathered pre-rubric run/);
+  assert.equal(result.json.grandfatherProvenance.actor, "gate-check-test");
   assert.match(result.stderr, /Grandfathered pre-rubric run/);
 });
 
