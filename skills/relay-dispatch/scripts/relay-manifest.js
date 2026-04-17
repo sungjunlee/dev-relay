@@ -1153,10 +1153,31 @@ function openForWriteWithoutFollowingSymlinks(targetPath, mode) {
   }
 }
 
+// fs.writeSync may write fewer bytes than requested (short write) and the
+// caller is responsible for looping on the returned count. Short writes
+// are very unlikely on the small run-dir files we target, but a truncated
+// events.jsonl record or half-written previous-attempts.json would be
+// silently corrupt if we didn't handle it — drain the buffer ourselves.
+function writeAllSync(fd, text, targetPath) {
+  const buffer = Buffer.from(text, "utf-8");
+  let offset = 0;
+  while (offset < buffer.length) {
+    const written = fs.writeSync(fd, buffer, offset, buffer.length - offset);
+    if (written <= 0) {
+      const error = new Error(
+        `writeSync made no progress writing to ${targetPath} at offset ${offset}/${buffer.length}`
+      );
+      error.code = "EIO";
+      throw error;
+    }
+    offset += written;
+  }
+}
+
 function appendTextFileWithoutFollowingSymlinks(targetPath, text) {
   const fd = openForWriteWithoutFollowingSymlinks(targetPath, "a");
   try {
-    fs.writeSync(fd, text);
+    writeAllSync(fd, text, targetPath);
   } finally {
     fs.closeSync(fd);
   }
@@ -1165,7 +1186,7 @@ function appendTextFileWithoutFollowingSymlinks(targetPath, text) {
 function writeTextFileWithoutFollowingSymlinks(targetPath, text) {
   const fd = openForWriteWithoutFollowingSymlinks(targetPath, "w");
   try {
-    fs.writeSync(fd, text);
+    writeAllSync(fd, text, targetPath);
   } finally {
     fs.closeSync(fd);
   }
