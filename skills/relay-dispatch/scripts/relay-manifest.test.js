@@ -1134,3 +1134,69 @@ test("manifest round-trips with environment block", () => {
   assert.equal(parsed.data.environment.lockfile_hash, "sha256:aabbccdd");
   assert.equal(parsed.data.environment.dispatch_ts, "2026-04-06T04:00:00.000Z");
 });
+
+// ---------------------------------------------------------------------------
+// #197 — previous-attempts.json symlink trust-root refusal
+// ---------------------------------------------------------------------------
+
+test("readPreviousAttempts refuses when previous-attempts.json is a symlink", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-manifest-symlink-attempts-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-attempts-"));
+  execFileSync("git", ["init", "-b", "main"], { cwd: repoRoot, stdio: "pipe" });
+  const runId = "issue-197-20260417000000000";
+
+  // Seed a first legit attempt so the file exists.
+  captureAttempt(repoRoot, runId, { score_log: "first attempt" });
+  const attemptsPath = findAttemptsFile(process.env.RELAY_HOME);
+
+  const foreignDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-attempts-foreign-"));
+  const foreignAttempts = path.join(foreignDir, "foreign-attempts.json");
+  fs.writeFileSync(foreignAttempts, '[{"score_log":"spoofed"}]', "utf-8");
+
+  fs.rmSync(attemptsPath);
+  fs.symlinkSync(foreignAttempts, attemptsPath);
+
+  // Must NOT silently fall back to [] — symlink refusal surfaces as a thrown
+  // error (fail-closed, per #157 class avoidance).
+  assert.throws(
+    () => readPreviousAttempts(repoRoot, runId),
+    /Refusing to (read|open) symlinked previous-attempts\.json/i
+  );
+});
+
+test("captureAttempt refuses when previous-attempts.json is a symlink", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-manifest-symlink-capture-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-capture-"));
+  execFileSync("git", ["init", "-b", "main"], { cwd: repoRoot, stdio: "pipe" });
+  const runId = "issue-197-20260417000000001";
+
+  captureAttempt(repoRoot, runId, { score_log: "first attempt" });
+  const attemptsPath = findAttemptsFile(process.env.RELAY_HOME);
+
+  const victimDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-attempts-victim-"));
+  const victim = path.join(victimDir, "victim.json");
+  fs.writeFileSync(victim, "original victim content", "utf-8");
+
+  fs.rmSync(attemptsPath);
+  fs.symlinkSync(victim, attemptsPath);
+
+  assert.throws(
+    () => captureAttempt(repoRoot, runId, { score_log: "second attempt" }),
+    /Refusing to (read|write|open) symlinked previous-attempts\.json/i
+  );
+  // Victim file must not have been mutated — whether the refusal fires on the
+  // read-before-append path or on the write path, the net effect is identical.
+  assert.equal(fs.readFileSync(victim, "utf-8"), "original victim content");
+});
+
+function findAttemptsFile(dir) {
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      const found = findAttemptsFile(full);
+      if (found) return found;
+    }
+    if (entry.name === "previous-attempts.json") return full;
+  }
+  return null;
+}

@@ -1028,9 +1028,9 @@ function readTextFileWithoutFollowingSymlinks(targetPath, realPath) {
     }
   }
 
-  const rubricEntry = fs.lstatSync(targetPath);
-  if (rubricEntry.isSymbolicLink()) {
-    const error = new Error(`Refusing to read symlinked rubric path: ${targetPath}`);
+  const targetEntry = fs.lstatSync(targetPath);
+  if (targetEntry.isSymbolicLink()) {
+    const error = new Error(`Refusing to read symlinked path: ${targetPath}`);
     error.code = "ELOOP";
     throw error;
   }
@@ -1044,6 +1044,69 @@ function readTextFileWithoutFollowingSymlinks(targetPath, realPath) {
       throw error;
     }
     return fs.readFileSync(fd, "utf-8");
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+// Opens targetPath for writing without following symlinks. On platforms that
+// expose O_NOFOLLOW the kernel refuses the open atomically; on platforms
+// without it, we lstat first and refuse if the existing entry is a symlink
+// (best-effort fallback — a small TOCTOU window is unavoidable there).
+//
+// `mode` is "w" (truncate/create) or "a" (append/create). All writes use
+// 0o600 as the file mode on creation.
+function openForWriteWithoutFollowingSymlinks(targetPath, mode) {
+  const modeFlags = {
+    w: fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_TRUNC,
+    a: fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_APPEND,
+  };
+  const flags = modeFlags[mode];
+  if (flags === undefined) {
+    throw new Error(`openForWriteWithoutFollowingSymlinks: invalid mode ${mode}`);
+  }
+  const noFollowFlag = fs.constants.O_NOFOLLOW;
+
+  if (typeof noFollowFlag === "number") {
+    try {
+      return fs.openSync(targetPath, flags | noFollowFlag, 0o600);
+    } catch (error) {
+      if (error.code === "ELOOP") {
+        const wrapped = new Error(`Refusing to open symlinked path: ${targetPath}`);
+        wrapped.code = "ELOOP";
+        throw wrapped;
+      }
+      if (!["ENOTSUP", "EINVAL"].includes(error.code)) {
+        throw error;
+      }
+      // fall through to the lstat-guarded fallback below
+    }
+  }
+
+  if (fs.existsSync(targetPath)) {
+    const entry = fs.lstatSync(targetPath);
+    if (entry.isSymbolicLink()) {
+      const error = new Error(`Refusing to open symlinked path: ${targetPath}`);
+      error.code = "ELOOP";
+      throw error;
+    }
+  }
+  return fs.openSync(targetPath, flags, 0o600);
+}
+
+function appendTextFileWithoutFollowingSymlinks(targetPath, text) {
+  const fd = openForWriteWithoutFollowingSymlinks(targetPath, "a");
+  try {
+    fs.writeSync(fd, text);
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+function writeTextFileWithoutFollowingSymlinks(targetPath, text) {
+  const fd = openForWriteWithoutFollowingSymlinks(targetPath, "w");
+  try {
+    fs.writeSync(fd, text);
   } finally {
     fs.closeSync(fd);
   }
@@ -1479,8 +1542,21 @@ function getAttemptsPath(repoRoot, runId) {
 function readPreviousAttempts(repoRoot, runId) {
   const attemptsPath = getAttemptsPath(repoRoot, runId);
   if (!fs.existsSync(attemptsPath)) return [];
+  let rawText;
   try {
-    return JSON.parse(fs.readFileSync(attemptsPath, "utf-8"));
+    rawText = readTextFileWithoutFollowingSymlinks(attemptsPath);
+  } catch (error) {
+    // Symlink refusal must surface — do not silently fall through to [], which
+    // would mask a trust-root attack (same failure class as #157 fail-open).
+    if (error.code === "ELOOP") {
+      throw new Error(
+        `Refusing to read symlinked previous-attempts.json at ${attemptsPath}: ${error.message}`
+      );
+    }
+    throw error;
+  }
+  try {
+    return JSON.parse(rawText);
   } catch {
     console.error(`Warning: corrupted previous-attempts.json at ${attemptsPath}, ignoring`);
     return [];
@@ -1505,7 +1581,19 @@ function captureAttempt(repoRoot, runId, attemptData) {
     failed_approaches: attemptData.failed_approaches || [],
   };
   attempts.push(record);
-  fs.writeFileSync(getAttemptsPath(repoRoot, runId), JSON.stringify(attempts, null, 2), "utf-8");
+  try {
+    writeTextFileWithoutFollowingSymlinks(
+      getAttemptsPath(repoRoot, runId),
+      JSON.stringify(attempts, null, 2)
+    );
+  } catch (error) {
+    if (error.code === "ELOOP") {
+      throw new Error(
+        `Refusing to write symlinked previous-attempts.json at ${getAttemptsPath(repoRoot, runId)}: ${error.message}`
+      );
+    }
+    throw error;
+  }
   return record;
 }
 
@@ -1574,6 +1662,7 @@ module.exports = {
   NOTES_TEMPLATE,
   RELAY_VERSION,
   STATES,
+  appendTextFileWithoutFollowingSymlinks,
   captureAttempt,
   collectEnvironmentSnapshot,
   compareEnvironmentSnapshot,
@@ -1603,6 +1692,7 @@ module.exports = {
   parseFrontmatter,
   readManifest,
   readPreviousAttempts,
+  readTextFileWithoutFollowingSymlinks,
   runCleanup,
   summarizeError,
   updateManifestCleanup,
@@ -1613,4 +1703,5 @@ module.exports = {
   validateTransition,
   validateTransitionInvariants,
   writeManifest,
+  writeTextFileWithoutFollowingSymlinks,
 };

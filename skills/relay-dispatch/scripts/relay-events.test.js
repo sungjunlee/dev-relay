@@ -330,3 +330,45 @@ test("appendScoreDivergence rejects a missing factor", () => {
     divergences: [createDivergence({ factor: "   " })],
   }), /divergences\[0\]\.factor is required/);
 });
+
+// ---------------------------------------------------------------------------
+// #197 — events.jsonl symlink trust-root refusal
+// ---------------------------------------------------------------------------
+
+test("appendRunEvent refuses when events.jsonl is replaced with a symlink", () => {
+  const { repoRoot, runId } = createContext();
+  // Seed the run layout with a legit first event.
+  appendRunEvent(repoRoot, runId, { event: "plan" });
+
+  const eventsPath = getEventsPath(repoRoot, runId);
+  const victim = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "relay-events-victim-")), "victim.jsonl");
+  fs.writeFileSync(victim, "pre-existing victim content\n", "utf-8");
+
+  fs.rmSync(eventsPath);
+  fs.symlinkSync(victim, eventsPath);
+
+  assert.throws(
+    () => appendRunEvent(repoRoot, runId, { event: "dispatch" }),
+    /Refusing to (append to|open) symlinked/i
+  );
+  // Victim file must not have been mutated.
+  assert.equal(fs.readFileSync(victim, "utf-8"), "pre-existing victim content\n");
+});
+
+test("readRunEvents refuses when events.jsonl is a symlink", () => {
+  const { repoRoot, runId } = createContext();
+  appendRunEvent(repoRoot, runId, { event: "plan" });
+
+  const eventsPath = getEventsPath(repoRoot, runId);
+  const foreignDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-events-foreign-"));
+  const foreignEvents = path.join(foreignDir, "foreign-events.jsonl");
+  fs.writeFileSync(foreignEvents, '{"event":"spoofed","run_id":"other"}\n', "utf-8");
+
+  fs.rmSync(eventsPath);
+  fs.symlinkSync(foreignEvents, eventsPath);
+
+  assert.throws(
+    () => readRunEvents(repoRoot, runId),
+    /Refusing to (read|open) symlinked/i
+  );
+});
