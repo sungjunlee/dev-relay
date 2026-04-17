@@ -120,6 +120,21 @@ fs.writeFileSync(output, "ok\\n", "utf-8");
   return codexPath;
 }
 
+function writePreloadScript(dir, name, source) {
+  const preloadPath = path.join(dir, name);
+  fs.writeFileSync(preloadPath, source, "utf-8");
+  return preloadPath;
+}
+
+function withNodePreload(env, preloadPath) {
+  return {
+    ...env,
+    NODE_OPTIONS: env.NODE_OPTIONS
+      ? `${env.NODE_OPTIONS} --require ${preloadPath}`
+      : `--require ${preloadPath}`,
+  };
+}
+
 function withRequiredRubric(args) {
   // AUTO-INJECT ENFORCEMENT RUBRIC — this is the contract side, NOT a grandfather bypass.
   // Tests that specifically cover rubric-missing scenarios must NOT use this helper.
@@ -443,6 +458,115 @@ test("dispatch resume rejects relay-base same-name worktrees from a different re
   assert.match(result.stderr, /manifest paths\.worktree/);
   assert.equal(fs.existsSync(path.join(attackerWorktree, "resume.txt")), false, "dispatch must reject before reusing the foreign relay worktree");
   assert.equal(readManifest(first.manifestPath).data.state, STATES.CHANGES_REQUESTED);
+});
+
+test("dispatch refuses same-ms same-branch run-dir collisions for new runs", () => {
+  // #158 anti-theater
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  writeFakeCodex(binDir);
+  const preloadPath = writePreloadScript(binDir, "fixed-run-id-preload.js", `const crypto = require("crypto");
+const fixedTime = new Date("2026-04-17T08:00:00.000Z");
+const RealDate = Date;
+let randomCallCount = 0;
+global.Date = class FixedDate extends RealDate {
+  constructor(...args) {
+    super(...(args.length ? args : [fixedTime.toISOString()]));
+  }
+  static now() {
+    return fixedTime.valueOf();
+  }
+  static parse(value) {
+    return RealDate.parse(value);
+  }
+  static UTC(...args) {
+    return RealDate.UTC(...args);
+  }
+};
+crypto.randomBytes = function randomBytes(size) {
+  randomCallCount += 1;
+  if (size === 4 && randomCallCount === 1) {
+    const wtSeed = Buffer.alloc(4);
+    wtSeed.writeUInt32BE(process.pid >>> 0, 0);
+    return wtSeed;
+  }
+  if (size === 4 && randomCallCount === 2) {
+    return Buffer.from("a1b2c3d4", "hex");
+  }
+  return Buffer.alloc(size, 0x5a);
+};`);
+  const env = withNodePreload({ ...process.env, PATH: `${binDir}:${process.env.PATH}` }, preloadPath);
+
+  const first = JSON.parse(runDispatch(repoRoot, [
+    "-b", "issue-158",
+    "--prompt", "first pass",
+    "--json",
+  ], env));
+  assert.equal(first.status, "completed");
+
+  const second = spawnSync("node", [SCRIPT, repoRoot, ...withRequiredRubric([
+    "-b", "issue-158",
+    "--prompt", "second pass",
+    "--json",
+  ])], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    env,
+  });
+
+  assert.notEqual(second.status, 0);
+  assert.match(second.stderr, /Refusing to overwrite existing run dir:/);
+  assert.match(second.stderr, new RegExp(first.runId));
+  assert.match(second.stderr, /Pass --run-id <id> to resume, or --manifest <path> to resume from an explicit manifest\./);
+});
+
+test("dispatch cleans up tmp rubric files when atomic rubric persistence fails", () => {
+  // #158 anti-theater
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  writeFakeCodex(binDir);
+  const preloadPath = writePreloadScript(binDir, "rename-failure-preload.js", `const fs = require("fs");
+const path = require("path");
+const originalRenameSync = fs.renameSync;
+fs.renameSync = function renameSync(sourcePath, destPath) {
+  if (
+    typeof sourcePath === "string"
+    && typeof destPath === "string"
+    && sourcePath.endsWith(\`\${path.sep}rubric.yaml.tmp\`)
+    && destPath.endsWith(\`\${path.sep}rubric.yaml\`)
+  ) {
+    const error = new Error("simulated rubric rename failure");
+    error.code = "EXDEV";
+    throw error;
+  }
+  return originalRenameSync.call(this, sourcePath, destPath);
+};`);
+  const rubricFile = path.join(os.tmpdir(), `relay-dispatch-atomic-${Date.now()}.yaml`);
+  fs.writeFileSync(rubricFile, "rubric:\n  factors:\n    - name: atomic copy\n", "utf-8");
+  const env = withNodePreload({ ...process.env, PATH: `${binDir}:${process.env.PATH}` }, preloadPath);
+
+  const result = spawnSync("node", [SCRIPT, repoRoot, ...withRequiredRubric([
+    "-b", "issue-158-atomic",
+    "--prompt", "atomic rubric copy",
+    "--rubric-file", rubricFile,
+    "--json",
+  ])], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    env,
+  });
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /simulated rubric rename failure/);
+
+  const manifestPath = listManifestPaths(repoRoot)[0];
+  assert.ok(manifestPath, "dispatch should have persisted the manifest before rubric copy");
+  const manifest = readManifest(manifestPath).data;
+  const runDir = getRunDir(repoRoot, manifest.run_id);
+  assert.equal(fs.existsSync(path.join(runDir, "rubric.yaml")), false);
+  assert.equal(fs.existsSync(path.join(runDir, "rubric.yaml.tmp")), false);
 });
 
 test("dispatch with --executor claude creates worktree and collects result", () => {

@@ -117,8 +117,9 @@ function inferIssueNumber(branch) {
   return match ? Number(match[1]) : null;
 }
 
-const RUN_ID_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*-\d{17}$/;
-const RUN_ID_PATTERN_DESCRIPTION = "/^[a-z0-9]+(?:-[a-z0-9]+)*-\\d{17}$/";
+// Optional hex suffix keeps legacy run_ids valid while new runs get same-ms collision entropy.
+const RUN_ID_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*-\d{17}(?:-[a-f0-9]{8})?$/;
+const RUN_ID_PATTERN_DESCRIPTION = "/^[a-z0-9]+(?:-[a-z0-9]+)*-\\d{17}(?:-[a-f0-9]{8})?$/";
 
 function validateRunId(runId) {
   const normalizedRunId = typeof runId === "string" ? runId.trim() : "";
@@ -207,7 +208,8 @@ function requireValidRunId(runId) {
 function createRunId({ issueNumber, branch, timestamp = new Date() } = {}) {
   const prefix = issueNumber ? `issue-${issueNumber}` : slugify(branch || "run");
   const iso = timestamp.toISOString().replace(/[-:TZ.]/g, "").slice(0, 17);
-  return requireValidRunId(`${prefix}-${iso}`);
+  const entropy = crypto.randomBytes(4).toString("hex"); // 32 bits of entropy makes same-ms branch collisions negligible.
+  return requireValidRunId(`${prefix}-${iso}-${entropy}`);
 }
 
 function getRunsDir(repoRoot) {
