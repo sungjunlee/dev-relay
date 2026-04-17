@@ -153,34 +153,42 @@ test("relay-migrate-rubric is idempotent after a manifest entry is applied", () 
   assert.ok(migrationDoc.runs[0].applied_at);
 });
 
-test("applyMigrationStamp stamps the canonical migration id even when --manifest uses a different basename", () => {
+test("relay-migrate-rubric syncs the canonical manifest when --manifest uses an override path", () => {
   const { repoRoot, relayHome } = initRepo();
   const runId = "issue-151-20260417080000004";
   const manifestPath = writeLegacyRun(repoRoot, runId);
   const authoritativeManifestPath = path.join(relayHome, "migrations", "rubric-mandatory.yaml");
   const overrideManifestPath = path.join(relayHome, "migrations", "custom-rubric-override.yaml");
-  const appliedAt = "2026-04-17T08:00:05.000Z";
+  writeMigrationDoc(overrideManifestPath, runId);
 
-  writeMigrationDoc(authoritativeManifestPath, runId, { appliedAt });
-
-  applyMigrationStamp({
-    repoRoot,
-    runId,
-    entriesByRunId: buildEntriesByRunId(parseMigrationManifest(
-      fs.readFileSync(authoritativeManifestPath, "utf-8"),
-      authoritativeManifestPath
-    )),
-    manifestPath: overrideManifestPath,
-    dryRun: false,
-    appliedAt,
-  });
+  JSON.parse(execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--manifest", overrideManifestPath,
+    "--json",
+  ], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" }));
 
   const stampedManifest = readManifest(manifestPath).data;
   assert.equal(stampedManifest.anchor.rubric_grandfathered.from_migration, "rubric-mandatory.yaml");
+  const appliedAt = stampedManifest.anchor.rubric_grandfathered.applied_at;
 
   const grandfatherMetadata = getRubricGrandfatherMetadata(stampedManifest);
   assert.equal(grandfatherMetadata.grandfathered, true);
   assert.equal(grandfatherMetadata.diagnostic, null);
+
+  const authoritativeDocument = parseMigrationManifest(
+    fs.readFileSync(authoritativeManifestPath, "utf-8"),
+    authoritativeManifestPath
+  );
+  const authoritativeEntry = authoritativeDocument.runs.find((entry) => entry.run_id === runId);
+  assert.ok(authoritativeEntry, "canonical migration manifest should include the migrated run");
+  assert.equal(authoritativeEntry.applied_at, appliedAt);
+
+  const overrideDocument = parseMigrationManifest(
+    fs.readFileSync(overrideManifestPath, "utf-8"),
+    overrideManifestPath
+  );
+  assert.equal(overrideDocument.runs[0].applied_at, appliedAt);
 });
 
 test("relay-migrate-rubric refuses to reapply when object-form provenance already exists", () => {

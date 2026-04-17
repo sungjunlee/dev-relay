@@ -161,6 +161,13 @@ function readMigrationManifest(manifestPath) {
   return parseMigrationManifest(text, manifestPath);
 }
 
+function readOptionalMigrationManifest(manifestPath) {
+  if (!fs.existsSync(manifestPath)) {
+    return { version: 1, runs: [] };
+  }
+  return readMigrationManifest(manifestPath);
+}
+
 function serializeMigrationManifest(document) {
   const lines = ["version: 1", "runs:"];
   for (const entry of document.runs || []) {
@@ -297,9 +304,34 @@ function parseArgs(argv) {
   };
 }
 
+function getAuthoritativeMigrationManifestPath() {
+  return path.join(getRelayHome(), "migrations", RUBRIC_MIGRATION_MANIFEST_BASENAME);
+}
+
+function syncAuthoritativeMigrationEntry({ document, runId, sourceEntry, appliedAt }) {
+  const nextEntry = {
+    ...sourceEntry,
+    applied_at: appliedAt,
+  };
+  const existingIndex = (document.runs || []).findIndex((entry) => entry.run_id === runId);
+  if (existingIndex === -1) {
+    document.runs = [...(document.runs || []), nextEntry];
+    return;
+  }
+  document.runs[existingIndex] = {
+    ...document.runs[existingIndex],
+    applied_at: appliedAt,
+  };
+}
+
 function runMigration(options) {
   const document = readMigrationManifest(options.manifestPath);
   const entriesByRunId = buildEntriesByRunId(document);
+  const authoritativeManifestPath = getAuthoritativeMigrationManifestPath();
+  const sharesAuthoritativeManifest = options.manifestPath === authoritativeManifestPath;
+  const authoritativeDocument = sharesAuthoritativeManifest
+    ? document
+    : readOptionalMigrationManifest(authoritativeManifestPath);
   const result = {
     repoRoot: options.repoRoot,
     manifestPath: options.manifestPath,
@@ -331,6 +363,15 @@ function runMigration(options) {
     if (!options.dryRun) {
       entry.applied_at = appliedAt;
       writeMigrationManifest(options.manifestPath, document);
+      if (!sharesAuthoritativeManifest) {
+        syncAuthoritativeMigrationEntry({
+          document: authoritativeDocument,
+          runId: entry.run_id,
+          sourceEntry: entry,
+          appliedAt,
+        });
+        writeMigrationManifest(authoritativeManifestPath, authoritativeDocument);
+      }
     }
   }
 
