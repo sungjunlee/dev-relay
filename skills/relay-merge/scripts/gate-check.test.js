@@ -19,6 +19,28 @@ const { createEnforcementFixture } = require("../../relay-dispatch/scripts/test-
 const SCRIPT = path.join(__dirname, "gate-check.js");
 const HISTORICAL_FIXTURE_DIR = path.join(__dirname, "__fixtures__", "historical-issue-401");
 
+function createCommittedRepo(repoRoot, actor = "Relay Gate Test") {
+  execFileSync("git", ["init", "-b", "main"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
+  execFileSync("git", ["config", "user.name", actor], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
+  execFileSync("git", ["config", "user.email", "relay-gate@example.com"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
+  fs.writeFileSync(path.join(repoRoot, "README.md"), "base\n", "utf-8");
+  execFileSync("git", ["add", "README.md"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
+  execFileSync("git", ["commit", "-m", "init"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
+}
+
+function createRelayOwnedWorktree(repoRoot, relayHome, branch = "issue-40-worktree") {
+  const relayWorktrees = path.join(relayHome, "worktrees");
+  fs.mkdirSync(relayWorktrees, { recursive: true });
+  const worktreeParent = fs.mkdtempSync(path.join(relayWorktrees, "gate-owned-"));
+  const worktreePath = path.join(worktreeParent, path.basename(repoRoot));
+  execFileSync("git", ["worktree", "add", worktreePath, "-b", branch], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+  });
+  return worktreePath;
+}
+
 function looksLikeContainedRubricPath(rubricPath) {
   return typeof rubricPath === "string"
     && rubricPath.trim() !== ""
@@ -218,6 +240,7 @@ function createLiveGateFixture({ manifest, rubricContent, afterManifestSetup = n
   const relayHome = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-")));
   const binDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "relay-gh-bin-")));
   const logPath = path.join(repoRoot, "gh.log");
+  createCommittedRepo(repoRoot);
   writeFakeGh(binDir, logPath);
   const liveManifest = writeLiveManifest(repoRoot, relayHome, { ...manifest, rubricContent });
   if (typeof afterManifestSetup === "function") {
@@ -256,14 +279,14 @@ function buildStampLockEnv({ timeoutMs = 75, pollMs = 5 } = {}) {
   };
 }
 
-function runGateCheckWithFixture(fixture, { prViewPayload, json = true, env = {}, extraArgs = [] } = {}) {
+function runGateCheckWithFixture(fixture, { prViewPayload, json = true, env = {}, extraArgs = [], cwd = fixture.repoRoot } = {}) {
   const result = spawnSync("node", [
     SCRIPT,
     "40",
     ...extraArgs,
     ...(json ? ["--json"] : []),
   ], {
-    cwd: fixture.repoRoot,
+    cwd,
     encoding: "utf-8",
     env: {
       ...process.env,
@@ -328,6 +351,7 @@ function createHistoricalLegacyFixture() {
   const repoRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "relay-gate-historical-")));
   const relayHome = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-")));
   const binDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "relay-gh-bin-")));
+  createCommittedRepo(repoRoot, "Relay Gate Historical");
   process.env.RELAY_HOME = relayHome;
   writeFakeGh(binDir);
 
@@ -394,6 +418,41 @@ test("gate-check passes when the latest relay review comment is LGTM", () => {
   assert.equal(result.status, 0);
   assert.equal(result.json.status, "lgtm");
   assert.equal(result.json.readyToMerge, true);
+});
+
+test("gate-check resolves the same manifest from the main repo and a relay worktree", () => {
+  const fixture = createLiveGateFixture({
+    manifest: {
+      state: STATES.REVIEW_PENDING,
+      anchor: {
+        rubric_path: "rubric.yaml",
+      },
+      git: {
+        pr_number: 40,
+        head_sha: "abc123",
+        working_branch: "issue-40",
+      },
+      review: {
+        reviewer_login: "trusted-reviewer",
+      },
+    },
+  });
+  const worktreePath = createRelayOwnedWorktree(fixture.repoRoot, fixture.relayHome);
+  const options = {
+    prViewPayload: buildPassingReviewPayload(),
+    extraArgs: ["--skip", "same-manifest"],
+  };
+
+  const fromMainRepo = runGateCheckWithFixture(fixture, options);
+  const fromWorktree = runGateCheckWithFixture(fixture, { ...options, cwd: worktreePath });
+
+  assert.equal(fromMainRepo.status, 0);
+  assert.equal(fromMainRepo.json.status, "skipped");
+  assert.equal(fromMainRepo.json.rubricStatus, "persisted");
+  assert.equal(fromWorktree.status, 0);
+  assert.equal(fromWorktree.json.status, "skipped");
+  assert.equal(fromWorktree.json.rubricStatus, "persisted");
+  assert.equal(readManifest(fixture.manifestPath).data.git.pr_number, 40);
 });
 
 test("gate-check blocks merge when a later review round requests changes", () => {
@@ -1302,6 +1361,7 @@ test("gate-check blocks merge when the anchored rubric file is missing at merge 
   const repoRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "relay-gate-check-missing-file-")));
   const relayHome = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-")));
   const binDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "relay-gh-bin-")));
+  createCommittedRepo(repoRoot);
   writeFakeGh(binDir);
   const { runDir } = writeLiveManifest(repoRoot, relayHome, {
     anchor: {

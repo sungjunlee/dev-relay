@@ -918,6 +918,48 @@ test("finalize-run can derive the repo root from --manifest alone even from an u
   assert.equal(manifest.cleanup.status, "succeeded");
 });
 
+test("finalize-run accepts a worktree --repo selector and validates against the canonical repo root", () => {
+  const { repoRoot, branch, worktreePath, headSha, manifestPath } = setupRepo();
+  const logPath = path.join(repoRoot, "gh.log");
+  const fakeGh = writeFakeGh(logPath, {
+    comments: [
+      {
+        body: "<!-- relay-review -->\n## Relay Review\nVerdict: LGTM\nRounds: 1",
+        createdAt: "2026-04-03T08:00:00Z",
+      },
+    ],
+    commits: [
+      {
+        oid: headSha,
+        committedDate: "2026-04-03T08:00:00Z",
+      },
+    ],
+  });
+
+  const stdout = execFileSync("node", [
+    SCRIPT,
+    "--repo", worktreePath,
+    "--branch", branch,
+    "--pr", "123",
+    "--json",
+  ], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+    env: { ...process.env, RELAY_GH_BIN: fakeGh },
+  });
+
+  const result = JSON.parse(stdout);
+  assert.equal(result.branch, branch);
+  assert.equal(result.state, STATES.MERGED);
+  assert.equal(result.nextAction, "done");
+  assert.equal(fs.existsSync(worktreePath), false);
+
+  const manifest = readManifest(manifestPath).data;
+  assert.equal(manifest.state, STATES.MERGED);
+  assert.equal(manifest.cleanup.status, "succeeded");
+});
+
 test("finalize-run blocks merge when review is stale for current HEAD", () => {
   const { repoRoot, manifestPath, branch, worktreePath } = setupRepo();
   fs.writeFileSync(path.join(worktreePath, "followup.txt"), "new\n", "utf-8");

@@ -16,6 +16,7 @@ const {
   createRunId,
   ensureRunLayout,
   formatAttemptsForPrompt,
+  getCanonicalRepoRoot,
   getManifestPath,
   getRubricAnchorStatus,
   getRepoSlug,
@@ -205,6 +206,7 @@ test("validateRunId rejects unsafe and non-conforming values", () => {
 test("getRunDir and getManifestPath reject invalid run_id before path derivation", () => {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-runid-paths-"));
   process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  initGitRepo(repoRoot);
 
   assert.throws(
     () => getRunDir(repoRoot, "../victim-run"),
@@ -273,6 +275,8 @@ test("validateManifestPaths rejects mismatched repo roots, escaped worktrees, an
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-manifest-paths-bad-"));
   const attackerRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-manifest-paths-attacker-"));
   process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  createCommittedRepo(repoRoot, "Relay Paths");
+  createCommittedRepo(attackerRoot, "Relay Attacker");
   const runId = "issue-42-20260402103000600";
   const manifestPath = ensureRunLayout(repoRoot, runId).manifestPath;
   const missingRelayOwnedWorktree = createMissingRelayOwnedWorktree(repoRoot);
@@ -364,6 +368,7 @@ test("manifest round-trips through frontmatter helpers", () => {
 test("manifest round-trips multiline scalar values", () => {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-manifest-multiline-"));
   process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  initGitRepo(repoRoot, "Relay Maintainer");
   const runId = "issue-42-20260402103001000";
   const worktreePath = path.join(repoRoot, "wt");
   const { manifestPath } = ensureRunLayout(repoRoot, runId);
@@ -439,6 +444,7 @@ test("createManifestSkeleton stores optional intake linkage without changing sta
 test("readManifest migrates v1 roles.worker to roles.executor", () => {
   const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-migrate-"));
   process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  initGitRepo(tmpRoot, "Relay Maintainer");
   const runId = "migrate-v1-20260402103000000";
   const wtPath = path.join(tmpRoot, "wt");
   const { manifestPath } = ensureRunLayout(tmpRoot, runId);
@@ -463,16 +469,66 @@ test("readManifest migrates v1 roles.worker to roles.executor", () => {
   assert.equal(parsed.data.roles.worker, undefined);
 });
 
-test("getRepoSlug is deterministic and collision-resistant", () => {
-  const slug1 = getRepoSlug("/Users/dev/my-project");
-  const slug2 = getRepoSlug("/Users/dev/my-project");
-  assert.equal(slug1, slug2);
+test("getRepoSlug canonicalizes repo roots across subdirs, symlinks, and worktrees", () => {
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  const repoParent = fs.mkdtempSync(path.join(os.tmpdir(), "relay-slug-parent-"));
+  const repoRoot = path.join(repoParent, "my-project");
+  fs.mkdirSync(repoRoot, { recursive: true });
+  createCommittedRepo(repoRoot);
+  const canonicalRepoRoot = fs.realpathSync(repoRoot);
 
-  const slug3 = getRepoSlug("/Users/other/my-project");
+  const subdir = path.join(repoRoot, "nested", "dir");
+  fs.mkdirSync(subdir, { recursive: true });
+
+  const symlinkParent = fs.mkdtempSync(path.join(os.tmpdir(), "relay-slug-link-"));
+  const symlinkPath = path.join(symlinkParent, "my-project-link");
+  fs.symlinkSync(repoRoot, symlinkPath, "dir");
+
+  const worktreePath = createRelayOwnedWorktree(repoRoot, "issue-42-slug");
+
+  const slugFromRepo = getRepoSlug(repoRoot);
+  assert.equal(getCanonicalRepoRoot(repoRoot), canonicalRepoRoot);
+  assert.equal(getCanonicalRepoRoot(subdir), canonicalRepoRoot);
+  assert.equal(getCanonicalRepoRoot(symlinkPath), canonicalRepoRoot);
+  assert.equal(getCanonicalRepoRoot(worktreePath), canonicalRepoRoot);
+  assert.equal(getRepoSlug(subdir), slugFromRepo);
+  assert.equal(getRepoSlug(symlinkPath), slugFromRepo);
+  assert.equal(getRepoSlug(worktreePath), slugFromRepo);
+  assert.match(slugFromRepo, /^my-project-[a-f0-9]{8}$/);
+});
+
+test("getRepoSlug stays deterministic and differentiates same-name repos by canonical path", () => {
+  const repoParentA = fs.mkdtempSync(path.join(os.tmpdir(), "relay-slug-a-"));
+  const repoRootA = path.join(repoParentA, "my-project");
+  fs.mkdirSync(repoRootA, { recursive: true });
+  createCommittedRepo(repoRootA);
+
+  const repoParentB = fs.mkdtempSync(path.join(os.tmpdir(), "relay-slug-b-"));
+  const repoRootB = path.join(repoParentB, "my-project");
+  fs.mkdirSync(repoRootB, { recursive: true });
+  createCommittedRepo(repoRootB);
+
+  const slug1 = getRepoSlug(repoRootA);
+  const slug2 = getRepoSlug(repoRootA);
+  const slug3 = getRepoSlug(repoRootB);
+
+  assert.equal(slug1, slug2);
   assert.notEqual(slug1, slug3);
   assert.match(slug1, /^my-project-[a-f0-9]{8}$/);
   assert.match(slug3, /^my-project-[a-f0-9]{8}$/);
+});
 
+test("getCanonicalRepoRoot and getRepoSlug fail clearly for non-git paths", () => {
+  const nonGitPath = fs.mkdtempSync(path.join(os.tmpdir(), "relay-non-git-"));
+
+  assert.throws(
+    () => getCanonicalRepoRoot(nonGitPath),
+    /getCanonicalRepoRoot: unable to resolve main repo root from .*relay-non-git-.*: /
+  );
+  assert.throws(
+    () => getRepoSlug(nonGitPath),
+    /getCanonicalRepoRoot: unable to resolve main repo root from .*relay-non-git-.*: /
+  );
   assert.throws(() => getRepoSlug(null), /non-empty repoRoot/);
   assert.throws(() => getRepoSlug(""), /non-empty repoRoot/);
   assert.throws(() => getRepoSlug(undefined), /non-empty repoRoot/);
@@ -533,12 +589,14 @@ test("updateManifestState allows dispatched -> review_pending when anchor.rubric
 });
 
 test("updateManifestState allows dispatched -> review_pending when rubric is grandfathered", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-grandfathered-"));
+  initGitRepo(repoRoot, "Relay Maintainer");
   const manifest = {
     run_id: "issue-42-20260412000002000",
     state: STATES.DISPATCHED,
     next_action: "await_dispatch_result",
     anchor: { rubric_grandfathered: true },
-    paths: { repo_root: "/tmp/relay-grandfathered" },
+    paths: { repo_root: repoRoot },
     timestamps: { created_at: "2026-04-12T00:00:00Z", updated_at: "2026-04-12T00:00:00Z" },
   };
 
@@ -549,6 +607,7 @@ test("updateManifestState allows dispatched -> review_pending when rubric is gra
 test("getRubricAnchorStatus rejects invalid run_id even for grandfathered runs", () => {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-manifest-grandfather-runid-"));
   process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  initGitRepo(repoRoot, "Relay Maintainer");
 
   assert.throws(
     () => getRubricAnchorStatus({
@@ -563,6 +622,7 @@ test("getRubricAnchorStatus rejects invalid run_id even for grandfathered runs",
 test("getRubricAnchorStatus rejects missing and empty run_id before rubric or grandfathered handling", () => {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-manifest-missing-runid-"));
   process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  initGitRepo(repoRoot, "Relay Maintainer");
 
   const cases = [
     {
@@ -659,6 +719,7 @@ test("getRubricAnchorStatus distinguishes satisfied, empty, outside_run_dir, and
 test("getRubricAnchorStatus rejects symlinked rubric files even when they target readable files", () => {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-manifest-symlink-"));
   process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  initGitRepo(repoRoot, "Relay Maintainer");
 
   const outsideTarget = path.join(os.tmpdir(), `relay-outside-rubric-${Date.now()}.yaml`);
   fs.writeFileSync(outsideTarget, "outside: true\n", "utf-8");
@@ -698,6 +759,7 @@ test("getRubricAnchorStatus rejects symlinked rubric files even when they target
 test("getRubricAnchorStatus fails closed for contained-but-malformed rubric paths", () => {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-manifest-malformed-rubric-"));
   process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  initGitRepo(repoRoot, "Relay Maintainer");
 
   const runId = "issue-42-20260412000008500";
   const { runDir } = ensureRunLayout(repoRoot, runId);
@@ -717,6 +779,7 @@ test("getRubricAnchorStatus fails closed for contained-but-malformed rubric path
 test("getRubricAnchorStatus distinguishes parent symlink escapes from lexical outside_run_dir", () => {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-manifest-parent-symlink-"));
   process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  initGitRepo(repoRoot, "Relay Maintainer");
 
   const runId = "issue-42-20260412000009000";
   const { runDir } = ensureRunLayout(repoRoot, runId);
@@ -770,6 +833,7 @@ test("updateManifestCleanup records cleanup metadata without changing state", ()
 test("readPreviousAttempts returns [] on corrupted JSON", () => {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-corrupt-"));
   process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  initGitRepo(repoRoot, "Relay Maintainer");
   const runId = "issue-corrupt-20260403120000000";
 
   // Write a valid attempt to create the file at the correct path
@@ -795,6 +859,7 @@ test("readPreviousAttempts returns [] on corrupted JSON", () => {
 test("captureAttempt writes and readPreviousAttempts reads correctly", () => {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-attempts-"));
   process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  initGitRepo(repoRoot, "Relay Maintainer");
   const runId = "issue-42-20260403120000000";
   ensureRunLayout(repoRoot, runId);
 
@@ -933,6 +998,7 @@ test("compareEnvironmentSnapshot skips fields that are null in both", () => {
 test("manifest round-trips with environment block", () => {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-env-rt-"));
   process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  initGitRepo(repoRoot, "Relay Maintainer");
   const runId = "issue-96-20260406040000000";
   const { manifestPath } = ensureRunLayout(repoRoot, runId);
   const manifest = createManifestSkeleton({

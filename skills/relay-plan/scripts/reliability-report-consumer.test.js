@@ -3,7 +3,7 @@ const assert = require("node:assert/strict");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { spawnSync } = require("child_process");
+const { execFileSync, spawnSync } = require("child_process");
 
 const { createRunId, ensureRunLayout } = require("../../relay-dispatch/scripts/relay-manifest");
 const {
@@ -28,6 +28,12 @@ function withRelayHome(relayHome, callback) {
   }
 }
 
+function initGitRepo(repoRoot, actor = "Relay Plan Test") {
+  execFileSync("git", ["init", "-b", "main"], { cwd: repoRoot, stdio: "pipe" });
+  execFileSync("git", ["config", "user.name", actor], { cwd: repoRoot, stdio: "pipe" });
+  execFileSync("git", ["config", "user.email", "relay-plan@example.com"], { cwd: repoRoot, stdio: "pipe" });
+}
+
 function runReliabilityReport(repoRoot, relayHome) {
   return spawnSync(process.execPath, [REPORT_SCRIPT, "--repo", repoRoot, "--json"], {
     encoding: "utf-8",
@@ -43,6 +49,7 @@ test("consumer treats no prior runs as empty history instead of a fallback error
   // Failure-mode axis A: empty history must stay on the no-history path.
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-plan-empty-history-"));
   const relayHome = fs.mkdtempSync(path.join(os.tmpdir(), "relay-plan-home-"));
+  initGitRepo(repoRoot);
 
   const result = runReliabilityReport(repoRoot, relayHome);
   assert.equal(result.status, 0, result.stderr);
@@ -69,6 +76,7 @@ test("consumer surfaces the producer stderr cause when stored relay data is malf
   // Failure-mode axis B: malformed stored data must downgrade to a named fallback.
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-plan-bad-history-"));
   const relayHome = fs.mkdtempSync(path.join(os.tmpdir(), "relay-plan-home-"));
+  initGitRepo(repoRoot);
   const runId = createRunId({
     branch: "bad-history",
     timestamp: new Date("2026-04-14T00:00:00.000Z"),

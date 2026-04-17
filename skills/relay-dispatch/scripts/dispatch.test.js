@@ -135,6 +135,15 @@ function withNodePreload(env, preloadPath) {
   };
 }
 
+function createGitOnlyPath() {
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-git-only-bin-"));
+  const gitShim = path.join(binDir, "git");
+  const gitPath = execFileSync("which", ["git"], { encoding: "utf-8", stdio: "pipe" }).trim();
+  fs.writeFileSync(gitShim, `#!/bin/sh\nexec ${JSON.stringify(gitPath)} \"$@\"\n`, "utf-8");
+  fs.chmodSync(gitShim, 0o755);
+  return binDir;
+}
+
 function withRequiredRubric(args) {
   // AUTO-INJECT ENFORCEMENT RUBRIC — this is the contract side, NOT a grandfather bypass.
   // Tests that specifically cover rubric-missing scenarios must NOT use this helper.
@@ -1312,7 +1321,7 @@ test("dispatch allows --rubric-grandfathered for review_pending runs without re-
     cwd: repoRoot,
     encoding: "utf-8",
     stdio: "pipe",
-    env: { ...env, PATH: "" },
+    env: { ...env, PATH: createGitOnlyPath() },
   }));
 
   assert.equal(result.mode, "resume");
@@ -1369,7 +1378,7 @@ test("dispatch allows --rubric-grandfathered for ready_to_merge runs after the o
     cwd: repoRoot,
     encoding: "utf-8",
     stdio: "pipe",
-    env: { ...env, PATH: "" },
+    env: { ...env, PATH: createGitOnlyPath() },
   }));
 
   assert.equal(result.mode, "resume");
