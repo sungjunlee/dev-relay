@@ -1901,7 +1901,7 @@ test("review-runner advances loaded-rubric PASS reviews to ready_to_merge", () =
 });
 
 test("review-runner warns visibly when anchor.rubric_path is set but the rubric file is missing", () => {
-  // #153 enforcement-path coverage (#138 fixture-default-grandfathered remediation)
+  // #153 enforcement-path coverage — originating findings: #148 file-existence/containment, #149 manifest resolution, #151 grandfather provenance
   const { repoRoot, manifestPath, runId, doneCriteriaPath, diffPath } = setupRepo();
 
   configureRubricFixture({ manifestPath, repoRoot, runId, state: "missing" });
@@ -1922,7 +1922,7 @@ test("review-runner warns visibly when anchor.rubric_path is set but the rubric 
 });
 
 test("review-runner surfaces containment warnings for parent-relative and absolute rubric paths", async (t) => {
-  // #153 enforcement-path coverage (#138 fixture-default-grandfathered remediation)
+  // #153 enforcement-path coverage — originating findings: #148 file-existence/containment, #149 manifest resolution, #151 grandfather provenance
   for (const rubricPath of ["../escape.yaml", "/etc/passwd"]) {
     await t.test(rubricPath, () => {
       const { repoRoot, manifestPath, runId, doneCriteriaPath, diffPath } = setupRepo();

@@ -531,7 +531,7 @@ test("gate-check passes review from authorized author when reviewer_login is set
 });
 
 test("gate-check live PR mode blocks merge when anchor.rubric_path points to a missing file", () => {
-  // #153 enforcement-path coverage (#138 fixture-default-grandfathered remediation)
+  // #153 enforcement-path coverage — originating findings: #148 file-existence/containment, #149 manifest resolution, #151 grandfather provenance
   const fixture = createLiveGateFixture({
     manifest: {
       state: STATES.REVIEW_PENDING,

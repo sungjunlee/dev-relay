@@ -746,36 +746,23 @@ test("dispatch dry-run includes rubric file info", () => {
   fs.unlinkSync(rubricFile);
 });
 
-test("dispatch with empty --rubric-file is rejected at dispatch-time; post-dispatch empty rubric still fails downstream gate", () => {
-  // #153 enforcement-path coverage (#138 fixture-default-grandfathered remediation)
+test("dispatched run whose persisted rubric is empty fails closed at the review gate", () => {
+  // #153 enforcement-path coverage — negative case the #147 suite missed
+  // (originating findings: #148 file-existence/containment invariant,
+  // #149 manifest resolution stricture, #151 grandfather-provenance scope).
   //
-  // Two-part test pinning the defense-in-depth layering #148 landed:
-  //   (a) Dispatch-time enforcement (#148 / PR #155): an empty --rubric-file is
-  //       rejected before the manifest transitions to review_pending.
-  //   (b) Post-dispatch downstream enforcement: if an attacker truncates the
-  //       persisted rubric.yaml after a valid dispatch, evaluateReviewGate still
-  //       catches it with status=empty_rubric_file.
+  // Contract: a dispatched run whose rubric.yaml is empty must NOT pass the
+  // downstream review/merge gate. This test simulates post-dispatch rubric
+  // truncation (operator tampering or stale state) and verifies
+  // evaluateReviewGate returns status=empty_rubric_file / readyToMerge=false.
+  // Dispatch-time rejection of empty --rubric-file is #148's territory and is
+  // intentionally NOT re-tested here.
   const { repoRoot, relayHome } = setupRepo();
   process.env.RELAY_HOME = relayHome;
   const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
   writeFakeCodex(binDir);
   const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}` };
 
-  // (a) Empty --rubric-file rejected at dispatch.
-  const emptyRubricFile = path.join(os.tmpdir(), `relay-empty-rubric-${Date.now()}.yaml`);
-  fs.writeFileSync(emptyRubricFile, "   \n", "utf-8");
-  assert.throws(
-    () => runDispatch(repoRoot, [
-      "-b", "issue-empty-rubric",
-      "--prompt", "empty rubric test",
-      "--rubric-file", emptyRubricFile,
-      "--json",
-    ], env),
-    /rubric file is empty/i,
-  );
-  fs.unlinkSync(emptyRubricFile);
-
-  // (b) Valid dispatch, then post-dispatch truncation, then downstream gate.
   const validRubricFile = path.join(os.tmpdir(), `relay-valid-rubric-${Date.now()}.yaml`);
   fs.writeFileSync(validRubricFile, "rubric:\n  factors:\n    - name: ok\n      target: pass\n", "utf-8");
   const result = JSON.parse(runDispatch(repoRoot, [

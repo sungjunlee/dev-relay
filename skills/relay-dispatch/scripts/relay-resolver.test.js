@@ -340,7 +340,7 @@ test("resolveManifestRecord returns the fresh non-terminal manifest on a reused 
 });
 
 test("resolveManifestRecord does not inherit a terminal run when a reused branch has a fresh PR match", () => {
-  // #153 enforcement-path coverage (#138 fixture-default-grandfathered remediation)
+  // #153 enforcement-path coverage — originating findings: #148 file-existence/containment, #149 manifest resolution, #151 grandfather provenance
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-resolver-branch-reuse-"));
   process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
   writeManifestRecord(repoRoot, {
