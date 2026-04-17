@@ -70,18 +70,23 @@ function runGateCheckDryRun(payload, { json = true } = {}) {
   };
 }
 
-function writeFakeGh(binDir) {
+function writeFakeGh(binDir, logPath = path.join(binDir, "gh.log")) {
   const ghPath = path.join(binDir, "gh");
   fs.writeFileSync(ghPath, `#!/usr/bin/env node
 const args = process.argv.slice(2);
+require("fs").appendFileSync(${JSON.stringify(logPath)}, args.join(" ") + "\\n", "utf-8");
 if (args[0] === "pr" && args[1] === "view") {
   process.stdout.write(process.env.FAKE_GH_PR_VIEW_JSON || "{}");
+  process.exit(0);
+}
+if (args[0] === "pr" && args[1] === "comment") {
   process.exit(0);
 }
 process.stderr.write("unsupported fake gh invocation");
 process.exit(1);
 `, "utf-8");
   fs.chmodSync(ghPath, 0o755);
+  return { ghPath, logPath };
 }
 
 function writeResolverOverridePreload(binDir, manifestPath, overrideState) {
@@ -212,12 +217,13 @@ function createLiveGateFixture({ manifest, rubricContent, afterManifestSetup = n
   const repoRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "relay-gate-check-")));
   const relayHome = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-")));
   const binDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "relay-gh-bin-")));
-  writeFakeGh(binDir);
+  const logPath = path.join(repoRoot, "gh.log");
+  writeFakeGh(binDir, logPath);
   const liveManifest = writeLiveManifest(repoRoot, relayHome, { ...manifest, rubricContent });
   if (typeof afterManifestSetup === "function") {
-    afterManifestSetup({ ...liveManifest, repoRoot, relayHome, binDir });
+    afterManifestSetup({ ...liveManifest, repoRoot, relayHome, binDir, logPath });
   }
-  return { ...liveManifest, repoRoot, relayHome, binDir };
+  return { ...liveManifest, repoRoot, relayHome, binDir, logPath };
 }
 
 function createUnrelatedRelayOwnedWorktree(repoRoot, relayHome, branch = "issue-40") {
@@ -250,10 +256,11 @@ function buildStampLockEnv({ timeoutMs = 75, pollMs = 5 } = {}) {
   };
 }
 
-function runGateCheckWithFixture(fixture, { prViewPayload, json = true, env = {} } = {}) {
+function runGateCheckWithFixture(fixture, { prViewPayload, json = true, env = {}, extraArgs = [] } = {}) {
   const result = spawnSync("node", [
     SCRIPT,
     "40",
+    ...extraArgs,
     ...(json ? ["--json"] : []),
   ], {
     cwd: fixture.repoRoot,
@@ -279,6 +286,42 @@ function runGateCheckWithFixture(fixture, { prViewPayload, json = true, env = {}
 function runGateCheckLive({ manifest, prViewPayload, rubricContent, json = true, afterManifestSetup = null }) {
   const fixture = createLiveGateFixture({ manifest, rubricContent, afterManifestSetup });
   return runGateCheckWithFixture(fixture, { prViewPayload, json });
+}
+
+function runGateCheckSkipLive({
+  fixtureState = "loaded",
+  grandfather = false,
+  reason = "hotfix",
+} = {}) {
+  const fixture = createLiveGateFixture({
+    manifest: {
+      state: STATES.REVIEW_PENDING,
+      anchor: {
+        rubric_path: "rubric.yaml",
+      },
+      git: {
+        pr_number: 40,
+      },
+    },
+  });
+
+  createEnforcementFixture({
+    repoRoot: fixture.repoRoot,
+    runId: fixture.runId,
+    manifestPath: fixture.manifestPath,
+    state: fixtureState,
+    grandfather,
+  });
+
+  const result = runGateCheckWithFixture(fixture, {
+    prViewPayload: buildPassingReviewPayload(),
+    extraArgs: ["--skip", reason],
+  });
+
+  return {
+    ...fixture,
+    ...result,
+  };
 }
 
 function createHistoricalLegacyFixture() {
@@ -562,6 +605,36 @@ test("gate-check live PR mode blocks merge when anchor.rubric_path points to a m
   assert.equal(result.json.status, "missing_rubric_file");
   assert.equal(result.json.readyToMerge, false);
   assert.equal(result.json.rubricStatus, "missing");
+});
+
+test("gate-check --skip audit comment records rubric_status: persisted", () => {
+  const result = runGateCheckSkipLive();
+
+  assert.equal(result.status, 0);
+  assert.equal(result.json.status, "skipped");
+  assert.equal(result.json.readyToMerge, true);
+  assert.equal(result.json.rubricStatus, "persisted");
+  assert.match(fs.readFileSync(result.logPath, "utf-8"), /rubric_status: persisted/);
+});
+
+test("gate-check --skip audit comment records rubric_status: grandfathered", () => {
+  const result = runGateCheckSkipLive({ grandfather: true });
+
+  assert.equal(result.status, 0);
+  assert.equal(result.json.status, "skipped");
+  assert.equal(result.json.readyToMerge, true);
+  assert.equal(result.json.rubricStatus, "grandfathered");
+  assert.match(fs.readFileSync(result.logPath, "utf-8"), /rubric_status: grandfathered/);
+});
+
+test("gate-check --skip audit comment records rubric_status: missing", () => {
+  const result = runGateCheckSkipLive({ fixtureState: "missing" });
+
+  assert.equal(result.status, 0);
+  assert.equal(result.json.status, "skipped");
+  assert.equal(result.json.readyToMerge, true);
+  assert.equal(result.json.rubricStatus, "missing");
+  assert.match(fs.readFileSync(result.logPath, "utf-8"), /rubric_status: missing/);
 });
 
 test("gate-check rejects manifests whose stored run_id is invalid", () => {

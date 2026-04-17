@@ -1,6 +1,23 @@
 const { getRubricAnchorStatus } = require("../../relay-dispatch/scripts/relay-manifest");
 
 const REVIEW_MARKER_PATTERN = /^\s*<!-- relay-review(?:-round)? -->\s*$/m;
+const SKIP_AUDIT_RUBRIC_STATUSES = Object.freeze([
+  "persisted",
+  "grandfathered",
+  "missing",
+  "unresolved-manifest",
+]);
+const MISSING_SKIP_AUDIT_RUBRIC_STATUSES = new Set([
+  "missing",
+  "missing_path",
+  "empty",
+  "not_file",
+  "outside_run_dir",
+  "run_dir_unavailable",
+  "symlink_escape",
+  "follows_outside_run_dir",
+  "unreadable",
+]);
 
 function toIsoOrNull(value) {
   if (!value) return null;
@@ -12,11 +29,30 @@ function hasRelayReviewMarker(body) {
   return REVIEW_MARKER_PATTERN.test(String(body || ""));
 }
 
-function buildSkipComment(reason) {
+function summarizeRubricStatusForSkip(manifestData, options = {}) {
+  if (!manifestData) {
+    return "unresolved-manifest";
+  }
+
+  const rubricAnchor = getRubricAnchorStatus(manifestData, options.runDir ? { runDir: options.runDir } : undefined);
+  if (rubricAnchor.status === "satisfied") {
+    return "persisted";
+  }
+  if (rubricAnchor.status === "grandfathered") {
+    return "grandfathered";
+  }
+  if (MISSING_SKIP_AUDIT_RUBRIC_STATUSES.has(rubricAnchor.status)) {
+    return "missing";
+  }
+  return "missing";
+}
+
+function buildSkipComment(reason, rubricStatus = "unresolved-manifest") {
   return [
     "<!-- relay-review-skip -->",
     "## Relay Review — Skipped",
     `Reason: ${reason}`,
+    `rubric_status: ${rubricStatus}`,
   ].join("\n");
 }
 
@@ -230,5 +266,7 @@ module.exports = {
   evaluateReviewGate,
   hasRelayReviewMarker,
   normalizeCommentRecords,
+  SKIP_AUDIT_RUBRIC_STATUSES,
+  summarizeRubricStatusForSkip,
   toIsoOrNull,
 };
