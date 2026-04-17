@@ -18,7 +18,17 @@ const { resolveManifestRecord } = require("./relay-resolver");
 
 const SCRIPT = path.join(__dirname, "update-manifest-state.js");
 
+function ensureGitRepo(repoRoot, actor = "Relay Update Test") {
+  if (fs.existsSync(path.join(repoRoot, ".git"))) {
+    return;
+  }
+  execFileSync("git", ["init", "-b", "main"], { cwd: repoRoot, stdio: "pipe" });
+  execFileSync("git", ["config", "user.name", actor], { cwd: repoRoot, stdio: "pipe" });
+  execFileSync("git", ["config", "user.email", "relay-update@example.com"], { cwd: repoRoot, stdio: "pipe" });
+}
+
 function writeReviewPendingManifest(repoRoot, runId, branch, updatedAt) {
+  ensureGitRepo(repoRoot);
   const manifestPath = ensureRunLayout(repoRoot, runId).manifestPath;
   let manifest = createManifestSkeleton({
     repoRoot,

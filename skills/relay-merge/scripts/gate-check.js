@@ -34,6 +34,7 @@ const {
 } = require("./review-gate");
 const {
   STATES,
+  getCanonicalRepoRoot,
   getRunDir,
   readManifest,
   validateManifestPaths,
@@ -65,6 +66,10 @@ const NON_TERMINAL_STATES_FOR_PR_STAMP = new Set(
 
 function isNonTerminalStateForPrStamp(state) {
   return NON_TERMINAL_STATES_FOR_PR_STAMP.has(state);
+}
+
+function getGateCheckRepoRoot() {
+  return getCanonicalRepoRoot(process.cwd());
 }
 
 // ---------------------------------------------------------------------------
@@ -148,7 +153,7 @@ function waitForPrNumberStampLock(lockPath) {
 
 function stampPrNumberUnderLock(manifestRecord, numericPrNumber) {
   const validatedPaths = validateManifestPaths(manifestRecord.data?.paths, {
-    expectedRepoRoot: process.cwd(),
+    expectedRepoRoot: getGateCheckRepoRoot(),
     manifestPath: manifestRecord.manifestPath,
     runId: manifestRecord.data?.run_id,
     caller: "gate-check PR stamping",
@@ -246,7 +251,7 @@ function tryResolveManifestForPr(prNumber, headRefName) {
   try {
     // gate-check runs before merge finalization, so it must never resolve merged/closed manifests.
     const manifestRecord = resolveManifestRecord({
-      repoRoot: process.cwd(),
+      repoRoot: getGateCheckRepoRoot(),
       prNumber,
       branch: headRefName || undefined,
     });
@@ -279,7 +284,7 @@ function resolveSkipAuditContext(prNumber) {
 
     let manifestData = manifestRecord.data;
     const validatedPaths = validateManifestPaths(manifestData.paths, {
-      expectedRepoRoot: process.cwd(),
+      expectedRepoRoot: getGateCheckRepoRoot(),
       manifestPath: manifestRecord.manifestPath,
       runId: manifestData.run_id,
       caller: "gate-check skip audit",
@@ -431,7 +436,7 @@ function main() {
     manifestData = manifestRecord.data;
     try {
       const validatedPaths = validateManifestPaths(manifestData.paths, {
-        expectedRepoRoot: process.cwd(),
+        expectedRepoRoot: getGateCheckRepoRoot(),
         manifestPath: manifestRecord.manifestPath,
         runId: manifestData.run_id,
         caller: "gate-check",

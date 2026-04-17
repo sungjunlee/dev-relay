@@ -58,8 +58,11 @@ function createContext(actor = "Relay Events Test") {
 
 function createContextWithoutActor() {
   process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-events-missing-actor-"));
+  execFileSync("git", ["init", "-b", "main"], { cwd: repoRoot, stdio: "pipe" });
+  execFileSync("git", ["config", "user.email", "relay@example.com"], { cwd: repoRoot, stdio: "pipe" });
   return {
-    repoRoot: fs.mkdtempSync(path.join(os.tmpdir(), "relay-events-missing-actor-")),
+    repoRoot,
     runId: "issue-95-20260406000000001",
   };
 }

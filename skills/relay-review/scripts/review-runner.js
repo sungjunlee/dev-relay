@@ -35,6 +35,7 @@ const { REVIEW_VERDICT_JSON_SCHEMA } = require("./review-schema");
 const {
   STATES,
   ensureRunLayout,
+  getCanonicalRepoRoot,
   getRubricAnchorStatus,
   getRunDir,
   readManifest,
@@ -155,6 +156,10 @@ function writeText(filePath, text) {
 
 function looksLikeGitRepo(repoPath) {
   return fs.existsSync(path.join(repoPath, ".git"));
+}
+
+function getExpectedManifestRepoRoot(repoPath) {
+  return looksLikeGitRepo(repoPath) ? getCanonicalRepoRoot(repoPath) : undefined;
 }
 
 function resolvePrForBranch(repoPath, branch) {
@@ -1078,7 +1083,7 @@ function resolveContext(repoPath, manifestPathArg, runIdArg, branchArg, prArg) {
     prNumber,
   });
   const validatedPaths = validateManifestPaths(manifest.data?.paths, {
-    expectedRepoRoot: manifestPathArg ? undefined : (looksLikeGitRepo(repoPath) ? repoPath : undefined),
+    expectedRepoRoot: manifestPathArg ? undefined : getExpectedManifestRepoRoot(repoPath),
     manifestPath: manifest.manifestPath,
     runId: manifest.data?.run_id,
     requireWorktree: true,

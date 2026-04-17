@@ -33,13 +33,37 @@ function getRelayWorktreeBase() {
   return path.resolve(base);
 }
 
+function getCanonicalRepoRoot(input) {
+  if (typeof input !== "string" || input.trim() === "") {
+    throw new Error(`getCanonicalRepoRoot requires a non-empty input path, got: ${JSON.stringify(input)}`);
+  }
+
+  const repoInput = input.trim();
+  try {
+    const commonDirText = execFileSync("git", ["-C", repoInput, "rev-parse", "--git-common-dir"], {
+      encoding: "utf-8",
+      stdio: "pipe",
+    }).trim();
+    const commonDir = path.isAbsolute(commonDirText)
+      ? commonDirText
+      : path.resolve(repoInput, commonDirText);
+    return fs.realpathSync(path.dirname(commonDir));
+  } catch (error) {
+    const resolutionError = new Error(
+      `getCanonicalRepoRoot: unable to resolve main repo root from ${repoInput}: ${summarizeError(error)}`
+    );
+    resolutionError.name = "CanonicalRepoRootResolutionError";
+    throw resolutionError;
+  }
+}
+
 function getRepoSlug(repoRoot) {
   if (!repoRoot || typeof repoRoot !== "string") {
     throw new Error(`getRepoSlug requires a non-empty repoRoot path, got: ${JSON.stringify(repoRoot)}`);
   }
-  const resolved = path.resolve(repoRoot);
-  const base = path.basename(resolved).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "repo";
-  const hash = crypto.createHash("sha256").update(resolved).digest("hex").slice(0, 8);
+  const canonicalRepoRoot = getCanonicalRepoRoot(repoRoot);
+  const base = path.basename(canonicalRepoRoot).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "repo";
+  const hash = crypto.createHash("sha256").update(canonicalRepoRoot).digest("hex").slice(0, 8);
   return `${base}-${hash}`;
 }
 
@@ -1303,6 +1327,7 @@ module.exports = {
   getRubricAnchorStatus,
   getActorName,
   getAttemptsPath,
+  getCanonicalRepoRoot,
   getEventsPath,
   getManifestPath,
   getRelayHome,

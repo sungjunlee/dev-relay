@@ -26,6 +26,7 @@ const { execFileSync } = require("child_process");
 const fs = require("fs");
 const path = require("path");
 const {
+  getCanonicalRepoRoot,
   getRunDir,
   STATES,
   updateManifestState,
@@ -103,6 +104,13 @@ function git(gitBin, repoPath, ...gitArgs) {
 
 function looksLikeGitRepo(repoPath) {
   return fs.existsSync(path.join(repoPath, ".git"));
+}
+
+function getExpectedManifestRepoRoot(repoPath, repoArg) {
+  if (!repoArg && !looksLikeGitRepo(repoPath)) {
+    return undefined;
+  }
+  return getCanonicalRepoRoot(repoPath);
 }
 
 function resolveBranch(ghBin, repoPath, prNumber, branchArg, manifestData) {
@@ -240,7 +248,7 @@ function main() {
   });
   const selectorExpectedRepoRoot = manifestArg
     ? undefined
-    : ((repoArg || looksLikeGitRepo(repoPath)) ? repoPath : undefined);
+    : getExpectedManifestRepoRoot(repoPath, repoArg);
   let validatedPaths = validateManifestPaths(manifestRecord.data?.paths, {
     expectedRepoRoot: selectorExpectedRepoRoot,
     manifestPath: manifestRecord.manifestPath,

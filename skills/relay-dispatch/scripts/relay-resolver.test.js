@@ -41,6 +41,15 @@ const BRANCH_PR_CASES = [
   { label: "pr_number:mismatch", prNumber: 100 },
 ];
 
+function ensureGitRepo(repoRoot, actor = "Relay Resolver Test") {
+  if (fs.existsSync(path.join(repoRoot, ".git"))) {
+    return;
+  }
+  execFileSync("git", ["init", "-b", "main"], { cwd: repoRoot, stdio: "pipe" });
+  execFileSync("git", ["config", "user.name", actor], { cwd: repoRoot, stdio: "pipe" });
+  execFileSync("git", ["config", "user.email", "relay-resolver@example.com"], { cwd: repoRoot, stdio: "pipe" });
+}
+
 function escapeRegExp(value) {
   return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -58,6 +67,7 @@ function writeManifestRecord(repoRoot, options = {}) {
   cleanupPolicy = "on_close",
   updatedAt = "2026-04-03T00:00:00.000Z",
   } = options;
+  ensureGitRepo(repoRoot);
   const { manifestPath } = ensureRunLayout(repoRoot, runId);
   let manifest = createManifestSkeleton({
     repoRoot,
@@ -167,6 +177,7 @@ function tamperManifestState(manifestPath, stateValue) {
 test("findManifestByRunId rejects invalid run_id selectors before scanning manifests", () => {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-resolver-find-"));
   process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  ensureGitRepo(repoRoot);
 
   assert.throws(
     () => findManifestByRunId(repoRoot, "../victim-run"),
