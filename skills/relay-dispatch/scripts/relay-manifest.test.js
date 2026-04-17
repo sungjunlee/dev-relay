@@ -683,6 +683,25 @@ test("getRubricAnchorStatus rejects symlinked rubric files even when they target
   });
 });
 
+test("getRubricAnchorStatus fails closed for contained-but-malformed rubric paths", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-manifest-malformed-rubric-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+
+  const runId = "issue-42-20260412000008500";
+  const { runDir } = ensureRunLayout(repoRoot, runId);
+  fs.writeFileSync(path.join(runDir, "rubric.yaml"), "rubric:\n  factors:\n    - name: malformed\n", "utf-8");
+
+  const result = getRubricAnchorStatus({
+    run_id: runId,
+    anchor: { rubric_path: "rubric.yaml/child" },
+    paths: { repo_root: repoRoot },
+  });
+
+  assert.equal(result.status, "unreadable");
+  assert.equal(result.satisfied, false);
+  assert.match(result.error, /rubric\.yaml\/child/);
+});
+
 test("getRubricAnchorStatus distinguishes parent symlink escapes from lexical outside_run_dir", () => {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-manifest-parent-symlink-"));
   process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));

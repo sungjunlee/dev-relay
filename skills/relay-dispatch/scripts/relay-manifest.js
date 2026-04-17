@@ -578,6 +578,10 @@ function realpathSyncCompat(targetPath) {
     : fs.realpathSync(targetPath);
 }
 
+function isRubricLookupError(error) {
+  return error?.code === "ENOENT" || error?.code === "ENOTDIR";
+}
+
 function resolveRealPathCandidate(targetPath) {
   const pendingSegments = [];
   let currentPath = targetPath;
@@ -589,7 +593,7 @@ function resolveRealPathCandidate(targetPath) {
         ? resolvedExistingPath
         : path.join(resolvedExistingPath, ...pendingSegments);
     } catch (error) {
-      if (error.code !== "ENOENT") {
+      if (!isRubricLookupError(error)) {
         throw error;
       }
 
@@ -690,7 +694,7 @@ function validateRubricPathContainment(rubricPath, runDir) {
       };
     }
   } catch (error) {
-    if (error.code !== "ENOENT") {
+    if (!isRubricLookupError(error)) {
       throw error;
     }
   }
