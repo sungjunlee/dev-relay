@@ -1,6 +1,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const { execFileSync } = require("child_process");
+const crypto = require("crypto");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
@@ -112,11 +113,21 @@ test("inferIssueNumber extracts issue numbers from issue branches", () => {
 });
 
 test("createRunId is branch-stable and filesystem-safe", () => {
-  const runId = createRunId({
-    branch: "Feature/Auth Flow",
-    timestamp: new Date("2026-04-02T12:34:56Z"),
-  });
-  assert.equal(runId, "feature-auth-flow-20260402123456000");
+  const originalRandomBytes = crypto.randomBytes;
+  try {
+    crypto.randomBytes = (size) => {
+      assert.equal(size, 4);
+      return Buffer.from("a1b2c3d4", "hex");
+    };
+
+    const runId = createRunId({
+      branch: "Feature/Auth Flow",
+      timestamp: new Date("2026-04-02T12:34:56Z"),
+    });
+    assert.equal(runId, "feature-auth-flow-20260402123456000-a1b2c3d4");
+  } finally {
+    crypto.randomBytes = originalRandomBytes;
+  }
 });
 
 test("validateRunId accepts sampled historical relay run_ids", () => {
@@ -126,6 +137,7 @@ test("validateRunId accepts sampled historical relay run_ids", () => {
     "issue-138-20260412044608184",
     "issue-148-20260412072649097",
     "issue-156-20260412101412608",
+    "issue-158-20260417080000000-a1b2c3d4",
   ];
 
   for (const runId of historicalRunIds) {

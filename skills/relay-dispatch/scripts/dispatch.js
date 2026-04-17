@@ -316,6 +316,35 @@ function failRubricPersistence(message) {
   process.exit(1);
 }
 
+function formatManifestDisplayPath(manifestPath) {
+  const resolvedPath = path.resolve(manifestPath);
+  const homeDir = os.homedir();
+  return resolvedPath.startsWith(`${homeDir}${path.sep}`)
+    ? `~${resolvedPath.slice(homeDir.length)}`
+    : resolvedPath;
+}
+
+function failRunDirCollision(runId, manifestPath) {
+  console.error([
+    "Refusing to overwrite existing run dir:",
+    `  run_id: ${runId}`,
+    `  manifest: ${formatManifestDisplayPath(manifestPath)}`,
+    "Pass --run-id <id> to resume, or --manifest <path> to resume from an explicit manifest.",
+  ].join("\n"));
+  process.exit(1);
+}
+
+function copyFileAtomically(sourcePath, finalPath) {
+  const tmpPath = `${finalPath}.tmp`;
+  try {
+    fs.copyFileSync(sourcePath, tmpPath);
+    fs.renameSync(tmpPath, finalPath);
+  } catch (error) {
+    try { fs.unlinkSync(tmpPath); } catch {}
+    throw error;
+  }
+}
+
 function getPersistedRubricPath(runDir, rubricPath = "rubric.yaml") {
   const containment = validateRubricPathContainment(rubricPath, runDir);
   if (!containment.valid) {
@@ -524,6 +553,9 @@ async function main() {
   } else {
     runId = createRunId({ issueNumber, branch });
     manifestPath = getManifestPath(repoRoot, runId);
+    if (fs.existsSync(getRunDir(repoRoot, runId))) {
+      failRunDirCollision(runId, manifestPath);
+    }
     try {
       baseBranch = git(repoRoot, "rev-parse", "--abbrev-ref", "HEAD") || "main";
     } catch {}
@@ -747,7 +779,7 @@ async function main() {
     const runDir = getRunDir(repoRoot, runId);
     const persistedRubric = getPersistedRubricPath(runDir, "rubric.yaml");
     const rubricDest = persistedRubric.resolvedPath;
-    fs.copyFileSync(rubricSrc, rubricDest);
+    copyFileAtomically(rubricSrc, rubricDest);
     manifest = {
       ...manifest,
       anchor: {
