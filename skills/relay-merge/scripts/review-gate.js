@@ -93,6 +93,8 @@ function buildRubricGateFailure(prNumber, rubricAnchor) {
         reason: rubricAnchor.error,
       }, rubricAnchor);
     case "outside_run_dir":
+    case "follows_outside_run_dir":
+    case "symlink_escape":
     case "run_dir_unavailable":
       return withRubricNote({
         status: "invalid_rubric_path",

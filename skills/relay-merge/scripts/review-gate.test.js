@@ -28,6 +28,14 @@ function createRubricStateFixture(state) {
   } else if (state === "invalid") {
     manifestData.anchor.rubric_path = "rubric-dir";
     fs.mkdirSync(path.join(runDir, "rubric-dir"), { recursive: true });
+  } else if (state === "malformed") {
+    manifestData.anchor.rubric_path = "rubric.yaml/child";
+    fs.writeFileSync(path.join(runDir, "rubric.yaml"), "rubric:\n  factors:\n    - name: malformed\n", "utf-8");
+  } else if (state === "symlink_escape") {
+    manifestData.anchor.rubric_path = "rubric.yaml";
+    const siblingTarget = path.join(runDir, "rubric-copy.yaml");
+    fs.writeFileSync(siblingTarget, "rubric:\n  factors:\n    - name: symlink\n", "utf-8");
+    fs.symlinkSync(siblingTarget, path.join(runDir, "rubric.yaml"));
   } else if (state === "grandfathered") {
     manifestData.anchor.rubric_grandfathered = true;
   }
@@ -76,6 +84,16 @@ function evaluatePassWithRubricState(state) {
     state: "invalid",
     status: "invalid_rubric_file",
     rubricStatus: "not_file",
+  },
+  {
+    state: "malformed",
+    status: "invalid_rubric_file",
+    rubricStatus: "unreadable",
+  },
+  {
+    state: "symlink_escape",
+    status: "invalid_rubric_path",
+    rubricStatus: "symlink_escape",
   },
   {
     state: "not_set",
