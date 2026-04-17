@@ -14,11 +14,16 @@ const {
   updateManifestState,
   writeManifest,
 } = require("../../relay-dispatch/scripts/relay-manifest");
+const { readRunEvents } = require("../../relay-dispatch/scripts/relay-events");
 const { createEnforcementFixture } = require("../../relay-dispatch/scripts/test-support");
 
 const SCRIPT = path.join(__dirname, "finalize-run.js");
 
-function setupRepo({ dirtyWorktree = false } = {}) {
+function setupRepo({
+  dirtyWorktree = false,
+  enforcementState = "loaded",
+  grandfather = false,
+} = {}) {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-finalize-"));
   process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
   const originRoot = path.join(repoRoot, "origin.git");
@@ -66,7 +71,8 @@ function setupRepo({ dirtyWorktree = false } = {}) {
   manifest.anchor = createEnforcementFixture({
     repoRoot,
     runId,
-    state: "loaded",
+    state: enforcementState,
+    grandfather,
   }).anchor;
   manifest = updateManifestState(manifest, STATES.REVIEW_PENDING, "run_review");
   manifest = updateManifestState(manifest, STATES.READY_TO_MERGE, "await_explicit_merge");
@@ -77,7 +83,7 @@ function setupRepo({ dirtyWorktree = false } = {}) {
   manifest.review.rounds = 1;
   writeManifest(manifestPath, manifest);
 
-  return { repoRoot, manifestPath, branch, worktreePath, headSha };
+  return { repoRoot, manifestPath, branch, worktreePath, headSha, runId };
 }
 
 function createUnrelatedRelayOwnedWorktree(repoRoot, branch = "issue-42") {
@@ -210,6 +216,54 @@ if (args[0] === "pr" && args[1] === "view") {
 `, "utf-8");
   fs.chmodSync(ghPath, 0o755);
   return ghPath;
+}
+
+function runFinalizeSkipReview({
+  enforcementState = "loaded",
+  grandfather = false,
+  reason = "hotfix",
+} = {}) {
+  const fixture = setupRepo();
+  if (enforcementState !== "loaded" || grandfather) {
+    createEnforcementFixture({
+      repoRoot: fixture.repoRoot,
+      runId: fixture.runId,
+      manifestPath: fixture.manifestPath,
+      state: enforcementState,
+      grandfather,
+    });
+  }
+  const logPath = path.join(fixture.repoRoot, "gh.log");
+  const fakeGh = writeFakeGh(logPath, {
+    comments: [],
+    commits: [
+      {
+        oid: fixture.headSha,
+        committedDate: "2026-04-03T08:00:00Z",
+      },
+    ],
+  });
+
+  const stdout = execFileSync("node", [
+    SCRIPT,
+    "--repo", fixture.repoRoot,
+    "--branch", fixture.branch,
+    "--pr", "123",
+    "--skip-review", reason,
+    "--json",
+  ], {
+    cwd: fixture.repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+    env: { ...process.env, RELAY_GH_BIN: fakeGh },
+  });
+
+  return {
+    ...fixture,
+    logPath,
+    result: JSON.parse(stdout),
+    events: readRunEvents(fixture.repoRoot, fixture.runId),
+  };
 }
 
 test("finalize-run merges and cleans a ready run", () => {
@@ -931,37 +985,34 @@ test("finalize-run blocks merge when no relay review audit trail exists", () => 
   }), /Fresh review gate failed: missing/);
 });
 
-test("finalize-run accepts an explicit skip-review reason", () => {
-  const { repoRoot, branch, headSha } = setupRepo();
-  const logPath = path.join(repoRoot, "gh.log");
-  const fakeGh = writeFakeGh(logPath, {
-    comments: [],
-    commits: [
-      {
-        oid: headSha,
-        committedDate: "2026-04-03T08:00:00Z",
-      },
-    ],
-  });
+test("finalize-run skip-review journals rubric_status: persisted", () => {
+  const { result, events } = runFinalizeSkipReview();
+  const skipEvent = events.find((entry) => entry.event === "skip_review");
 
-  const stdout = execFileSync("node", [
-    SCRIPT,
-    "--repo", repoRoot,
-    "--branch", branch,
-    "--pr", "123",
-    "--skip-review", "hotfix",
-    "--json",
-  ], {
-    cwd: repoRoot,
-    encoding: "utf-8",
-    stdio: "pipe",
-    env: { ...process.env, RELAY_GH_BIN: fakeGh },
-  });
-
-  const result = JSON.parse(stdout);
   assert.equal(result.state, STATES.MERGED);
   assert.equal(result.reviewGate.status, "skipped");
+  assert.equal(result.reviewGate.rubricStatus, "persisted");
+  assert.equal(skipEvent?.rubric_status, "persisted");
+});
 
-  const ghLog = fs.readFileSync(logPath, "utf-8");
-  assert.match(ghLog, /pr comment 123 --body/);
+test("finalize-run skip-review journals rubric_status: grandfathered", () => {
+  const { result, events } = runFinalizeSkipReview({ grandfather: true });
+  const skipEvent = events.find((entry) => entry.event === "skip_review");
+
+  assert.equal(result.state, STATES.MERGED);
+  assert.equal(result.reviewGate.status, "skipped");
+  assert.equal(result.reviewGate.rubricStatus, "grandfathered");
+  assert.equal(skipEvent?.rubric_status, "grandfathered");
+});
+
+test("finalize-run skip-review with a missing rubric merges and records rubric_status: missing in comment and events", () => {
+  const { result, events, logPath } = runFinalizeSkipReview({ enforcementState: "missing" });
+  const skipEvent = events.find((entry) => entry.event === "skip_review");
+
+  assert.equal(result.state, STATES.MERGED);
+  assert.equal(result.reviewGate.status, "skipped");
+  assert.equal(result.reviewGate.rubricStatus, "missing");
+  assert.equal(skipEvent?.rubric_status, "missing");
+  assert.equal(skipEvent?.reason, "hotfix");
+  assert.match(fs.readFileSync(logPath, "utf-8"), /rubric_status: missing/);
 });

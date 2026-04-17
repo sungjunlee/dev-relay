@@ -34,6 +34,9 @@ function appendRunEvent(repoRoot, runId, eventData) {
     head_sha: normalizeEventValue(eventData.head_sha),
     round: normalizeEventValue(eventData.round),
     reason: normalizeEventValue(eventData.reason),
+    ...(eventData.rubric_status !== undefined
+      ? { rubric_status: normalizeEventValue(eventData.rubric_status) }
+      : {}),
   };
 
   fs.appendFileSync(getEventsPath(repoRoot, runId), `${JSON.stringify(record)}\n`, "utf-8");

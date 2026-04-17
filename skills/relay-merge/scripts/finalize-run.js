@@ -35,7 +35,11 @@ const {
 const { resolveManifestRecord } = require("../../relay-dispatch/scripts/relay-resolver");
 const { appendRunEvent } = require("../../relay-dispatch/scripts/relay-events");
 const { runCleanup, summarizeError } = require("../../relay-dispatch/scripts/relay-manifest");
-const { buildSkipComment, evaluateReviewGate } = require("./review-gate");
+const {
+  buildSkipComment,
+  evaluateReviewGate,
+  summarizeRubricStatusForSkip,
+} = require("./review-gate");
 
 const args = process.argv.slice(2);
 const KNOWN_FLAGS = [
@@ -295,6 +299,9 @@ function main() {
   let issueClosed = false;
   let issueCloseWarning = null;
   let reviewGate = null;
+  const skipReviewRubricStatus = summarizeRubricStatusForSkip(safeData, {
+    runDir: getRunDir(validatedPaths.repoRoot, safeData.run_id),
+  });
 
   if (!skipMerge && safeData.state === STATES.READY_TO_MERGE) {
     if (skipReviewReason) {
@@ -302,10 +309,21 @@ function main() {
         status: "skipped",
         pr: prNumber,
         reason: skipReviewReason,
+        rubricStatus: skipReviewRubricStatus,
         readyToMerge: true,
       };
       if (!dryRun) {
-        gh(ghBin, repoPath, "pr", "comment", String(prNumber), "--body", buildSkipComment(skipReviewReason));
+        const skipComment = buildSkipComment(skipReviewReason, skipReviewRubricStatus);
+        appendRunEvent(repoPath, safeData.run_id, {
+          event: "skip_review",
+          state_from: safeData.state,
+          state_to: safeData.state,
+          head_sha: safeData.git?.head_sha || null,
+          round: safeData.review?.rounds || null,
+          reason: skipReviewReason,
+          rubric_status: skipReviewRubricStatus,
+        });
+        gh(ghBin, repoPath, "pr", "comment", String(prNumber), "--body", skipComment);
       }
     } else {
       const preMerge = fetchPreMergeContext(ghBin, repoPath, prNumber);
