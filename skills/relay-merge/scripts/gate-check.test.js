@@ -604,6 +604,39 @@ test("gate-check blocks review from unauthorized author when reviewer_login is s
   assert.equal(result.json.expectedReviewerLogin, "trusted-reviewer");
 });
 
+test("gate-check blocks merge when reviewer_login_required is set but reviewer_login is missing", () => {
+  // review-runner.js sets manifest.review.reviewer_login_required when the
+  // origin host resolved but gh api user --hostname <host> failed. Without
+  // this hard-stop, the fail-closed in getGhLogin silently degrades into
+  // the existing "missing login → soft skip" behavior — which is exactly
+  // the bug #199 is supposed to close. This test guards against a
+  // regression to that silent-skip.
+  const result = runGateCheckDryRun({
+    comments: [
+      {
+        body: "<!-- relay-review -->\n## Relay Review\nVerdict: LGTM\nRounds: 1",
+        author: { login: "any-user-at-all" },
+        createdAt: "2026-04-17T08:00:00Z",
+      },
+    ],
+    commits: [
+      { oid: "abc123", committedDate: "2026-04-17T07:00:00Z" },
+    ],
+    manifest: {
+      anchor: { rubric_path: "rubric.yaml" },
+      review: {
+        reviewer_login_required: true,
+        // reviewer_login deliberately absent.
+        last_reviewed_sha: "abc123",
+      },
+    },
+  });
+
+  assert.equal(result.status, 1);
+  assert.equal(result.json.status, "reviewer_login_required");
+  assert.equal(result.json.readyToMerge, false);
+});
+
 test("gate-check passes review from authorized author when reviewer_login is set", () => {
   const result = runGateCheckDryRun({
     comments: [

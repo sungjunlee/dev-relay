@@ -2474,7 +2474,11 @@ test("getGhLogin is fail-closed when origin resolves but the host-scoped gh call
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-host-"));
   const captured = [];
   const result = withShimmedPath(shimDir, captured, () => getGhLogin(repoRoot));
-  assert.equal(result, null, "must not silently leak a default-host login");
+  assert.equal(result.login, null, "must not silently leak a default-host login");
+  // Signal the merge gate so reviewer_login_required can be persisted on the
+  // manifest — without this, fail-closed in getGhLogin silently degrades to
+  // a skipped verification gate in relay-merge/gate-check.
+  assert.equal(result.status, "host_auth_failed");
   const warning = captured.join("");
   assert.match(warning, /ghe\.corp\.example\.com/);
   assert.match(warning, /reviewer_login will not be recorded/);
@@ -2509,12 +2513,15 @@ test("getGhLogin uses zero-arg gh when no origin host is resolvable", () => {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-host-"));
   const captured = [];
   const result = withShimmedPath(shimDir, captured, () => getGhLogin(repoRoot));
-  assert.equal(result, "default-host-login");
+  assert.equal(result.login, "default-host-login");
+  assert.equal(result.status, "recorded");
 });
 
 test("getGhLogin does not crash when both origin-resolution and gh fail", () => {
   // Total-failure case: no origin, gh also unavailable. Must emit a warning
-  // and return null, not throw.
+  // and return { login: null, status: "no_login" }, not throw. Status is
+  // NOT "host_auth_failed" because we never resolved a host to fail on —
+  // gate-check's current "missing login → soft skip" behavior is preserved.
   const shimDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-shim-"));
   writeShim(shimDir, "gh", "#!/bin/sh\nexit 4\n");
   writeShim(shimDir, "git", "#!/bin/sh\nexit 2\n");
@@ -2522,7 +2529,8 @@ test("getGhLogin does not crash when both origin-resolution and gh fail", () => 
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-host-"));
   const captured = [];
   const result = withShimmedPath(shimDir, captured, () => getGhLogin(repoRoot));
-  assert.equal(result, null);
+  assert.equal(result.login, null);
+  assert.equal(result.status, "no_login");
   const warning = captured.join("");
   assert.match(warning, /reviewer_login will not be recorded/);
 });

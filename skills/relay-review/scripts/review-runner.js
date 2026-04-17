@@ -179,6 +179,20 @@ function resolveRemoteHost(repoPath) {
   }
 }
 
+// Returns { login, status }.
+//   login: resolved GitHub login string, or null if not available
+//   status: "recorded"          → login is set, normal path
+//           "host_auth_failed"  → origin host was resolvable but the
+//                                 host-scoped gh call could not return a
+//                                 login. Callers MUST record this as a
+//                                 gating condition on the manifest so
+//                                 relay-merge refuses merge — otherwise the
+//                                 fail-closed claim silently degrades into
+//                                 a skipped author-verification gate.
+//           "no_login"          → origin unresolvable and zero-arg gh also
+//                                 failed/returned empty. Callers may record
+//                                 nothing (matches current gate-check
+//                                 "missing = soft-skip" semantics).
 function getGhLogin(repoPath) {
   const host = resolveRemoteHost(repoPath);
 
@@ -187,26 +201,27 @@ function getGhLogin(repoPath) {
   // the operator's default-host identity (typically personal github.com),
   // which is exactly the bug #199 fixes — gate-check then rejects the PR as
   // unauthorized_reviewer because the comment author on the repo host does
-  // not match. Fail-closed: return null with a warning. (#199 AC nominally
+  // not match. Fail-closed: return null with a warning AND signal
+  // "host_auth_failed" so the caller can block merge. (#199 AC nominally
   // asked for zero-arg fallback, but that re-creates the bug the AC says
   // the PR must fix — documented in the PR description.)
   if (host) {
     const args = ["--hostname", host, "api", "user", "--jq", ".login"];
     try {
       const login = execFileSync("gh", args, { encoding: "utf-8", stdio: "pipe" }).trim();
-      if (login) return login;
+      if (login) return { login, status: "recorded" };
       console.error(
         `Warning: gh api user --hostname ${host} returned empty login — ` +
-        `reviewer_login will not be recorded, author verification will be skipped at merge time.`
+        `reviewer_login will not be recorded; relay-merge will refuse to merge without it.`
       );
-      return null;
+      return { login: null, status: "host_auth_failed" };
     } catch (error) {
       console.error(
         `Warning: gh api user --hostname ${host} failed — ` +
-        `reviewer_login will not be recorded, author verification will be skipped at merge time. ` +
+        `reviewer_login will not be recorded; relay-merge will refuse to merge without it. ` +
         `Cause: ${error.message || error}`
       );
-      return null;
+      return { login: null, status: "host_auth_failed" };
     }
   }
 
@@ -219,19 +234,19 @@ function getGhLogin(repoPath) {
       encoding: "utf-8",
       stdio: "pipe",
     }).trim();
-    if (login) return login;
+    if (login) return { login, status: "recorded" };
     console.error(
       "Warning: gh api user returned empty login — " +
       "reviewer_login will not be recorded, author verification will be skipped at merge time."
     );
-    return null;
+    return { login: null, status: "no_login" };
   } catch (error) {
     console.error(
       `Warning: could not determine GitHub login for reviewer verification — ` +
       `reviewer_login will not be recorded, author verification will be skipped at merge time. ` +
       `Cause: ${error.message || error}`
     );
-    return null;
+    return { login: null, status: "no_login" };
   }
 }
 
@@ -1555,11 +1570,22 @@ function run() {
     { rubricGateFailure }
   );
   if (!noComment) {
-    const reviewerLogin = getGhLogin(runRepoPath);
+    const { login: reviewerLogin, status: loginStatus } = getGhLogin(runRepoPath);
     if (reviewerLogin) {
       updatedManifest.review = {
         ...(updatedManifest.review || {}),
         reviewer_login: reviewerLogin,
+      };
+    } else if (loginStatus === "host_auth_failed") {
+      // Origin resolved to a host but host-scoped gh could not return a
+      // login. Signal the gate: without this marker, relay-merge's
+      // gate-check silently skips author verification when reviewer_login
+      // is absent, which would defeat the fail-closed property this PR
+      // claims. The gate-check companion change treats this flag as a
+      // hard-stop.
+      updatedManifest.review = {
+        ...(updatedManifest.review || {}),
+        reviewer_login_required: true,
       };
     }
   }
