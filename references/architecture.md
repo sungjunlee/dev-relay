@@ -142,15 +142,31 @@ timestamps:
 
 ## Event Journal
 
-Each run keeps an append-only event log at `~/.relay/runs/<repo-slug>/<run-id>/events.jsonl`:
+Each run keeps an append-only event log at `~/.relay/runs/<repo-slug>/<run-id>/events.jsonl`. Records are emitted by `appendRunEvent()` in `skills/relay-dispatch/scripts/relay-events.js` and share a common envelope (`ts`, `event`, `actor`, `run_id`, `state_from`, `state_to`, `head_sha`, `round`, `reason`) plus optional fields (`reviewer`, `rubric_status`, `last_reviewed_sha`, `model`, `before`, `after`):
 
 ```jsonl
-{"event":"dispatch_started","timestamp":"...","executor":"codex","branch":"issue-42"}
-{"event":"dispatch_completed","timestamp":"...","status":"completed","runState":"review_pending"}
-{"event":"review_apply","timestamp":"...","round":1,"reviewer":"codex","reason":"changes_requested"}
-{"event":"review_apply","timestamp":"...","round":2,"reviewer":"codex","reason":"pass"}
-{"event":"state_transition","timestamp":"...","from":"review_pending","to":"ready_to_merge"}
+{"ts":"2026-04-18T12:00:00.000Z","event":"dispatch_start","actor":"codex","run_id":"issue-42-20260418120000000","state_from":"draft","state_to":"dispatched","head_sha":"abc123","round":null,"reason":"new_dispatch","model":"gpt-5-codex"}
+{"ts":"2026-04-18T12:05:00.000Z","event":"dispatch_result","actor":"codex","run_id":"issue-42-20260418120000000","state_from":"dispatched","state_to":"review_pending","head_sha":"def456","round":null,"reason":"new_dispatch:completed"}
+{"ts":"2026-04-18T12:10:00.000Z","event":"review_invoke","actor":"claude","run_id":"issue-42-20260418120000000","state_from":"review_pending","state_to":"review_pending","head_sha":"def456","round":1,"reason":"codex","model":"haiku"}
+{"ts":"2026-04-18T12:12:00.000Z","event":"review_apply","actor":"claude","run_id":"issue-42-20260418120000000","state_from":"review_pending","state_to":"changes_requested","head_sha":"def456","round":1,"reviewer":"codex","reason":"changes_requested"}
+{"ts":"2026-04-18T12:40:00.000Z","event":"review_apply","actor":"claude","run_id":"issue-42-20260418120000000","state_from":"review_pending","state_to":"ready_to_merge","head_sha":"ghi789","round":2,"reviewer":"codex","reason":"pass"}
+{"ts":"2026-04-18T12:45:00.000Z","event":"merge_finalize","actor":"codex","run_id":"issue-42-20260418120000000","state_from":"ready_to_merge","state_to":"merged","head_sha":"ghi789","round":2,"reason":"squash"}
 ```
+
+**Source of truth** — `relay-events.js` owns the envelope; event names are emitted across production scripts. To enumerate all events, grep `event:` inside `skills/*/scripts/` (excluding `*.test.js`). Known events today:
+
+| Event | Emitted by |
+|-------|------------|
+| `dispatch_start`, `dispatch_result`, `environment_drift`, `model_hints_updated` | `relay-dispatch/scripts/dispatch.js` |
+| `iteration_score`, `rubric_quality`, `score_divergence` | `relay-dispatch/scripts/relay-events.js` (helpers) |
+| `close`, `cleanup_result` | `relay-dispatch/scripts/close-run.js`, `cleanup-worktrees.js` |
+| `state_recovery` | `relay-dispatch/scripts/recover-state.js` |
+| `review_invoke` | `relay-review/scripts/review-runner/reviewer-invoke.js` |
+| `review_apply` | `relay-review/scripts/review-runner.js`, `reviewer-invoke.js` |
+| `pr_number_stamped`, `merge_blocked`, `skip_review`, `merge_finalize`, `cleanup_result` | `relay-merge/scripts/finalize-run.js`, `gate-check.js` |
+| `request_persisted`, `proposal_presented`, `question_asked`, `question_answered`, `proposal_accepted`, `proposal_edited`, `relay_ready_handoff_persisted` | `relay-intake/scripts/relay-request.js` |
+
+There is no standalone `state_transition` event — state changes ride on the lifecycle event that caused them (`state_from`/`state_to` fields on `dispatch_start`, `dispatch_result`, `review_apply`, `merge_finalize`, etc.).
 
 For reviewer analytics, `roles.reviewer` answers "who was assigned to review this run?" while `review_apply.reviewer` answers "who actually executed this review round?". Keep them separate. If a run shows review activity in the manifest but lacks `review_apply` reviewer data, report that gap explicitly rather than backfilling from the assigned role binding.
 
@@ -191,9 +207,14 @@ Each round produces files under `~/.relay/runs/<repo-slug>/<run-id>/`:
 ### Adding a new reviewer adapter
 
 1. Create `skills/relay-review/scripts/invoke-reviewer-<name>.js`
-2. The script receives: `--diff-file`, `--done-criteria-file`, `--prompt-file`, `--output-file`
-3. It must write a JSON verdict to `--output-file` matching the schema in `review-schema.js`
-4. `review-runner.js` auto-discovers adapters by naming convention: `invoke-reviewer-<name>.js`
+2. The script is invoked by `review-runner/reviewer-invoke.js:invokeReviewer()` as:
+   ```
+   node invoke-reviewer-<name>.js --repo <repoPath> --prompt-file <promptPath> --json [--model <name>]
+   ```
+   The `<promptPath>` bundle already contains the diff, Done Criteria, and rubric — adapters read that single prompt file, not separate `--diff-file` / `--done-criteria-file` flags.
+3. It must print a JSON verdict to **stdout** matching `REVIEW_VERDICT_JSON_SCHEMA` in `skills/relay-review/scripts/review-schema.js`. `review-runner` captures stdout via `execFileSync({ stdio: "pipe" })` and writes it to `review-round-N-raw-response.txt`; adapters must not write their own output files or mutate the repo.
+4. `review-runner.js` auto-discovers adapters via `resolveReviewerScript()` by naming convention: `invoke-reviewer-<name>.js`. The `<name>` must match `/^[a-z0-9-]+$/`.
+5. Existing adapters share small utilities (`getArg`, `hasFlag`, `summarizeFailure`, `ensureJsonText`) but NOT full execution logic — each adapter encodes its own execution contract (e.g. Claude uses `--json-schema` + stdout recovery; Codex uses temp-file exchange + `--ephemeral` + sandbox). New adapters should extract only the small utilities.
 
 ### Role binding
 
