@@ -19,6 +19,7 @@
  *   --prompt-file <path>   Read prompt from file (for large prompts)
  *   --executor, -e <name>  Executor to use (default: codex)
  *   --model, -m <name>     Model override (default: from executor config)
+ *   --model-hints <spec>   Persist per-phase model hints (phase=model,...)
  *   --sandbox <mode>       workspace-write | read-only (default: workspace-write)
  *   --copy <file,...>      Additional files to copy
  *   --timeout <seconds>    Exec timeout (default: 1800)
@@ -98,7 +99,7 @@ const args = process.argv.slice(2);
 
 const KNOWN_FLAGS = [
   "--branch", "-b", "--run-id", "--manifest", "--prompt", "-p", "--prompt-file", "--executor", "-e",
-  "--model", "-m", "--sandbox", "--copy", "--timeout", "--rubric-file", "--rubric-grandfathered",
+  "--model", "-m", "--model-hints", "--sandbox", "--copy", "--timeout", "--rubric-file", "--rubric-grandfathered",
   "--request-id", "--leaf-id", "--done-criteria-file",
   "--register", "--no-cleanup", "--dry-run", "--json", "--help", "-h",
 ];
@@ -116,6 +117,7 @@ if (!args.length || args.includes("--help") || args.includes("-h")) {
   console.log("  --prompt-file      Read prompt from file");
   console.log("  --executor, -e     Executor: codex (default), claude");
   console.log("  --model, -m        Model override");
+  console.log("  --model-hints      Persist per-phase model hints (phase=model,...)");
   console.log("  --sandbox          workspace-write | read-only (default: workspace-write)");
   console.log("  --copy <files>     Additional files to copy (comma-separated)");
   console.log("  --timeout          Exec timeout in seconds (default: 1800)");
@@ -153,6 +155,7 @@ const PROMPT = getArg(args, ["--prompt", "-p"], undefined, CLI_ARG_OPTIONS);
 const PROMPT_FILE = getArg(args, "--prompt-file", undefined, CLI_ARG_OPTIONS);
 const EXECUTOR = getArg(args, ["--executor", "-e"], "codex", CLI_ARG_OPTIONS);
 const MODEL = getArg(args, ["--model", "-m"], undefined, CLI_ARG_OPTIONS);
+const MODEL_HINTS_RAW = getArg(args, "--model-hints", undefined, CLI_ARG_OPTIONS);
 const SANDBOX = getArg(args, "--sandbox", "workspace-write", CLI_ARG_OPTIONS);
 const COPY_FILES = getArg(args, "--copy", "", CLI_ARG_OPTIONS).split(",").filter(Boolean);
 const RUBRIC_FILE = getArg(args, "--rubric-file", undefined, CLI_ARG_OPTIONS);
@@ -165,6 +168,53 @@ if (isNaN(TIMEOUT) || TIMEOUT <= 0) {
   console.error("Error: --timeout must be a positive integer");
   process.exit(1);
 }
+
+const MODEL_HINT_PHASES = new Set(["plan", "dispatch", "review", "merge"]);
+
+function parseModelHints(raw) {
+  if (raw === undefined) return undefined;
+
+  const hints = {};
+  const seen = new Set();
+  for (const token of raw.split(",")) {
+    if (!token) {
+      throw new Error("invalid --model-hints token '': empty pair");
+    }
+    const separator = token.indexOf("=");
+    if (separator === -1) {
+      throw new Error(`invalid --model-hints token '${token}': missing '='`);
+    }
+
+    const phase = token.slice(0, separator).trim();
+    const value = token.slice(separator + 1).trim();
+    if (!phase) {
+      throw new Error(`invalid --model-hints token '${token}': empty phase`);
+    }
+    if (!value) {
+      throw new Error(`invalid --model-hints token '${token}': empty value`);
+    }
+    if (!MODEL_HINT_PHASES.has(phase)) {
+      throw new Error(`invalid --model-hints token '${token}': unknown phase '${phase}'`);
+    }
+    if (seen.has(phase)) {
+      throw new Error(`invalid --model-hints token '${token}': duplicate phase '${phase}'`);
+    }
+
+    seen.add(phase);
+    hints[phase] = value;
+  }
+
+  return hints;
+}
+
+let MODEL_HINTS;
+try {
+  MODEL_HINTS = parseModelHints(MODEL_HINTS_RAW);
+} catch (error) {
+  console.error(`Error: ${error.message}`);
+  process.exit(1);
+}
+
 const REGISTER = hasFlag(args, "--register");
 const NO_CLEANUP = hasFlag(args, "--no-cleanup");
 const DRY_RUN = hasFlag(args, "--dry-run");
@@ -400,6 +450,17 @@ function readTaskPrompt() {
   return fs.readFileSync(promptPath, "utf-8").trim();
 }
 
+function resolveEffectiveDispatchModel({ cliModel, manifestModelHints, cliModelHints }) {
+  if (cliModel) return cliModel;
+  if (manifestModelHints && typeof manifestModelHints.dispatch === "string" && manifestModelHints.dispatch.trim()) {
+    return manifestModelHints.dispatch;
+  }
+  if (cliModelHints && typeof cliModelHints.dispatch === "string" && cliModelHints.dispatch.trim()) {
+    return cliModelHints.dispatch;
+  }
+  return null;
+}
+
 // ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
@@ -543,6 +604,32 @@ async function main() {
     }
   }
 
+  if (RESUME_MODE && MODEL_HINTS !== undefined) {
+    const beforeModelHints = manifest.model_hints ?? null;
+    manifest = {
+      ...manifest,
+      model_hints: MODEL_HINTS,
+    };
+    if (!DRY_RUN) {
+      writeManifest(manifestPath, manifest);
+      appendRunEvent(repoRoot, runId, {
+        event: "model_hints_updated",
+        state_from: manifest.state,
+        state_to: manifest.state,
+        head_sha: manifest.git?.head_sha || null,
+        reason: "dispatch_cli_replace",
+        before: beforeModelHints,
+        after: MODEL_HINTS,
+      });
+    }
+  }
+
+  const effectiveDispatchModel = resolveEffectiveDispatchModel({
+    cliModel: MODEL,
+    manifestModelHints: manifest?.model_hints,
+    cliModelHints: MODEL_HINTS,
+  });
+
   // --- Dry run ---
   if (DRY_RUN) {
     const worktreePlan = createWorktree({
@@ -571,6 +658,12 @@ async function main() {
       runState: manifest?.state || null,
       dispatchSkipped: false,
     };
+    if (MODEL_HINTS !== undefined || manifest?.model_hints !== undefined) {
+      plan.model_hints = MODEL_HINTS ?? manifest?.model_hints ?? null;
+    }
+    if (effectiveDispatchModel !== null) {
+      plan.effective_dispatch_model = effectiveDispatchModel;
+    }
     if (JSON_OUT) {
       console.log(JSON.stringify(plan, null, 2));
     } else {
@@ -581,7 +674,7 @@ async function main() {
         repoRoot,
         manifestPath,
         prompt: taskPrompt,
-        model: MODEL,
+        model: effectiveDispatchModel,
         sandbox: SANDBOX,
         register: REGISTER,
         resultFile,
@@ -669,6 +762,7 @@ async function main() {
       leafId: LEAF_ID || null,
       doneCriteriaPath: resolvedDoneCriteriaPath,
       doneCriteriaSource: resolvedDoneCriteriaPath ? "request_snapshot" : null,
+      modelHints: MODEL_HINTS,
     });
     ensureRunLayout(repoRoot, runId);
     writeManifest(manifestPath, manifest);
@@ -714,7 +808,7 @@ async function main() {
   if (EXECUTOR === "codex") {
     cmd = "codex";
     execArgs = ["exec", "-C", wtPath, "--full-auto", "--color", "never", "-o", resultFile];
-    if (MODEL) execArgs.push("-m", MODEL);
+    if (effectiveDispatchModel) execArgs.push("-m", effectiveDispatchModel);
     execArgs.push("--sandbox", SANDBOX);
     execArgs.push(execPrompt);
   } else if (EXECUTOR === "claude") {
@@ -725,7 +819,7 @@ async function main() {
       "--dangerously-skip-permissions", // full autonomy in isolated worktree
       "--output-format", "text",
     ];
-    if (MODEL) execArgs.push("--model", MODEL);
+    if (effectiveDispatchModel) execArgs.push("--model", effectiveDispatchModel);
     execArgs.push(execPrompt);
     if (SANDBOX !== "workspace-write") {
       console.error(`Warning: --sandbox '${SANDBOX}' is not supported for Claude executor; using --dangerously-skip-permissions`);
@@ -772,6 +866,7 @@ async function main() {
     state_to: STATES.DISPATCHED,
     head_sha: startHead || null,
     reason: RESUME_MODE ? "same_run_resume" : "new_dispatch",
+    model: effectiveDispatchModel,
   });
 
   // Redirect stdout/stderr to files. Using spawn with detached: true gives us
