@@ -220,6 +220,7 @@ function run() {
     data,
     manifestPath,
     prNumber,
+    promptPath,
     reviewFile,
     reviewRepoPath,
     reviewedHeadSha,
