@@ -1511,7 +1511,46 @@ test("gate-check blocks merge when anchor.rubric_path escapes the run directory"
   assert.equal(result.status, 1);
   assert.equal(result.json.status, "invalid_rubric_path");
   assert.equal(result.json.rubricStatus, "outside_run_dir");
+  assert.deepEqual(result.json.reviewRunnerRubricGate, {
+    status: "rubric_state_failed_closed",
+    layer: "review-runner",
+    rubricState: "outside_run_dir",
+    rubricStatus: "outside_run_dir",
+  });
   assert.match(result.json.reason, /\.\./);
+});
+
+test("gate-check blocks merge when anchor.rubric_path is a symlinked rubric", () => {
+  const result = runGateCheckLive({
+    manifest: {
+      anchor: {
+        rubric_path: "rubric.yaml",
+      },
+      review: {
+        reviewer_login: "trusted-reviewer",
+        last_reviewed_sha: "abc123",
+      },
+    },
+    rubricContent: false,
+    prViewPayload: buildPassingReviewPayload(),
+    afterManifestSetup: ({ runDir }) => {
+      fs.mkdirSync(runDir, { recursive: true });
+      const siblingTarget = path.join(runDir, "rubric-copy.yaml");
+      fs.writeFileSync(siblingTarget, "rubric:\n  factors:\n    - name: symlink\n", "utf-8");
+      fs.symlinkSync(siblingTarget, path.join(runDir, "rubric.yaml"));
+    },
+  });
+
+  assert.equal(result.status, 1);
+  assert.equal(result.json.status, "invalid_rubric_path");
+  assert.equal(result.json.rubricStatus, "symlink_escape");
+  assert.deepEqual(result.json.reviewRunnerRubricGate, {
+    status: "rubric_state_failed_closed",
+    layer: "review-runner",
+    rubricState: "invalid",
+    rubricStatus: "symlink_escape",
+  });
+  assert.match(result.json.reason, /must not be a symlink/i);
 });
 
 test("gate-check blocks merge when anchor.rubric_path does not resolve to a readable rubric file", () => {
@@ -1548,7 +1587,43 @@ test("gate-check blocks merge when anchor.rubric_path does not resolve to a read
   assert.equal(result.status, 1);
   assert.equal(json.status, "invalid_rubric_file");
   assert.equal(json.rubricStatus, "not_file");
+  assert.deepEqual(json.reviewRunnerRubricGate, {
+    status: "rubric_state_failed_closed",
+    layer: "review-runner",
+    rubricState: "invalid",
+    rubricStatus: "not_file",
+  });
   assert.match(json.reason, /must point to a file inside the run directory/i);
+});
+
+test("gate-check blocks merge when anchor.rubric_path becomes unreadable", () => {
+  const result = runGateCheckLive({
+    manifest: {
+      anchor: {
+        rubric_path: "rubric.yaml/child",
+      },
+      review: {
+        reviewer_login: "trusted-reviewer",
+        last_reviewed_sha: "abc123",
+      },
+    },
+    rubricContent: false,
+    prViewPayload: buildPassingReviewPayload(),
+    afterManifestSetup: ({ runDir }) => {
+      fs.mkdirSync(runDir, { recursive: true });
+      fs.writeFileSync(path.join(runDir, "rubric.yaml"), "rubric:\n  factors:\n    - name: malformed\n", "utf-8");
+    },
+  });
+
+  assert.equal(result.status, 1);
+  assert.equal(result.json.status, "invalid_rubric_file");
+  assert.equal(result.json.rubricStatus, "unreadable");
+  assert.deepEqual(result.json.reviewRunnerRubricGate, {
+    status: "rubric_state_failed_closed",
+    layer: "review-runner",
+    rubricState: "invalid",
+    rubricStatus: "unreadable",
+  });
 });
 
 [

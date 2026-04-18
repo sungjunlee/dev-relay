@@ -32,6 +32,8 @@ const {
   evaluateReviewGate,
   summarizeRubricAuditForSkip,
 } = require("./review-gate");
+const { loadRubricFromRunDir } = require("../../relay-review/scripts/review-runner/context");
+const { buildReviewRunnerRubricGateFailure } = require("../../relay-review/scripts/review-runner/redispatch");
 const {
   STATES,
 } = require("../../relay-dispatch/scripts/manifest/lifecycle");
@@ -318,6 +320,29 @@ function resolveSkipAuditContext(prNumber) {
   }
 }
 
+function deriveReviewRunnerRubricGate(manifestData, runDir) {
+  if (!manifestData || !runDir) {
+    return null;
+  }
+
+  const rubricLoad = loadRubricFromRunDir(runDir, manifestData);
+  const gateFailure = buildReviewRunnerRubricGateFailure(
+    manifestData.run_id,
+    path.join(runDir, ".gate-check-rubric-recovery.md"),
+    rubricLoad
+  );
+  if (!gateFailure) {
+    return null;
+  }
+
+  return {
+    status: gateFailure.status,
+    layer: gateFailure.layer,
+    rubricState: gateFailure.rubricState,
+    rubricStatus: gateFailure.rubricStatus,
+  };
+}
+
 function output(result) {
   if (JSON_OUT) {
     console.log(JSON.stringify(result, null, 2));
@@ -506,11 +531,15 @@ function main() {
     expectedReviewerLogin,
     runDir,
   });
-  if (result.note) {
-    console.error(`Note: ${result.note}`);
+  const reviewRunnerRubricGate = deriveReviewRunnerRubricGate(manifestData, runDir);
+  const enrichedResult = reviewRunnerRubricGate
+    ? { ...result, reviewRunnerRubricGate }
+    : result;
+  if (enrichedResult.note) {
+    console.error(`Note: ${enrichedResult.note}`);
   }
-  output(result);
-  if (!result.readyToMerge) {
+  output(enrichedResult);
+  if (!enrichedResult.readyToMerge) {
     process.exit(1);
   }
 }

@@ -65,6 +65,37 @@ test("context/loadRubricFromRunDir preserves the rubric state matrix", async (t)
   }
 });
 
+test("context/loadRubricFromRunDir classifies a symlinked rubric as invalid", () => {
+  const { runDir, runId } = createRunFixture();
+  const siblingTarget = path.join(runDir, "rubric-copy.yaml");
+  fs.writeFileSync(siblingTarget, "rubric:\n  factors:\n    - name: sibling\n", "utf-8");
+  fs.symlinkSync(siblingTarget, path.join(runDir, "rubric.yaml"));
+
+  const result = loadRubricFromRunDir(runDir, {
+    run_id: runId,
+    anchor: { rubric_path: "rubric.yaml" },
+  });
+
+  assert.equal(result.state, "invalid");
+  assert.equal(result.status, "symlink_escape");
+  assert.match(result.warning, /\[rubric invalid\]/i);
+  assert.match(result.warning, /must not be a symlink/i);
+});
+
+test("context/loadRubricFromRunDir classifies a malformed rubric path as invalid", () => {
+  const { runDir, runId } = createRunFixture();
+  fs.writeFileSync(path.join(runDir, "rubric.yaml"), "rubric:\n  factors:\n    - name: malformed\n", "utf-8");
+
+  const result = loadRubricFromRunDir(runDir, {
+    run_id: runId,
+    anchor: { rubric_path: "rubric.yaml/child" },
+  });
+
+  assert.equal(result.state, "invalid");
+  assert.equal(result.status, "unreadable");
+  assert.match(result.warning, /\[rubric invalid\]/i);
+});
+
 test("context/parseRemoteHost preserves the origin parsing matrix", async (t) => {
   const cases = [
     ["https origin", "https://github.example.com/acme/repo.git", "github.example.com"],

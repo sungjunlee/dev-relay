@@ -5,6 +5,8 @@ const os = require("os");
 const path = require("path");
 
 const {
+  buildRubricGateRedispatchPrompt,
+  buildRubricRecoveryCommand,
   buildReviewRunnerRubricGateFailure,
   computeRepeatedIssueCount,
   detectChurnGrowth,
@@ -78,4 +80,29 @@ test("redispatch/buildReviewRunnerRubricGateFailure preserves the fail-closed re
       error: null,
     }), null);
   });
+});
+
+test("redispatch/buildRubricRecoveryCommand preserves the caller contract", () => {
+  assert.equal(
+    buildRubricRecoveryCommand("issue-189", "/tmp/review-round-2-redispatch.md"),
+    "node skills/relay-dispatch/scripts/dispatch.js . --run-id issue-189 --prompt-file /tmp/review-round-2-redispatch.md --rubric-file <fixed-rubric.yaml>"
+  );
+});
+
+test("redispatch/buildRubricGateRedispatchPrompt includes the recovery command and scope anchor", () => {
+  const gateFailure = buildReviewRunnerRubricGateFailure("issue-189", "/tmp/review-round-2-redispatch.md", {
+    state: "missing",
+    status: "missing",
+    error: "rubric missing",
+  });
+  const prompt = buildRubricGateRedispatchPrompt(
+    gateFailure,
+    "# Issue #189\n\nKeep the split scoped to extracted review-runner helpers.",
+    "github-issue"
+  );
+
+  assert.match(prompt, /Gate status: rubric_state_failed_closed/);
+  assert.match(prompt, /Recovery command: node skills\/relay-dispatch\/scripts\/dispatch\.js \. --run-id issue-189 --prompt-file \/tmp\/review-round-2-redispatch\.md --rubric-file <fixed-rubric\.yaml>/);
+  assert.match(prompt, /Done Criteria source: github-issue/);
+  assert.match(prompt, /Keep the split scoped to extracted review-runner helpers\./);
 });

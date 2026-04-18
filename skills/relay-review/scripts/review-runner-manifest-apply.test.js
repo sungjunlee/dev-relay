@@ -5,18 +5,14 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 
-const {
-  STATES,
-  createManifestSkeleton,
-  ensureRunLayout,
-  updateManifestState,
-} = require("../../relay-dispatch/scripts/relay-manifest");
+const { STATES, updateManifestState } = require("../../relay-dispatch/scripts/manifest/lifecycle");
+const { createManifestSkeleton, ensureRunLayout } = require("../../relay-dispatch/scripts/manifest/store");
 const {
   applyPolicyViolationToManifest,
   applyVerdictToManifest,
 } = require("./review-runner/manifest-apply");
 
-function createReviewPendingManifest() {
+function createManifestInState(state = STATES.REVIEW_PENDING) {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-manifest-"));
   process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
   execFileSync("git", ["init", "-b", "main"], { cwd: repoRoot, stdio: "pipe" });
@@ -29,7 +25,8 @@ function createReviewPendingManifest() {
   const runId = "issue-189-20260418020202020";
   const { runDir } = ensureRunLayout(repoRoot, runId);
   fs.writeFileSync(path.join(runDir, "rubric.yaml"), "rubric:\n  factors:\n    - name: Behavior\n", "utf-8");
-  const data = createManifestSkeleton({
+
+  let manifest = createManifestSkeleton({
     repoRoot,
     runId,
     branch: "issue-189",
@@ -40,12 +37,70 @@ function createReviewPendingManifest() {
     executor: "codex",
     reviewer: "claude",
   });
-  data.anchor = { rubric_path: "rubric.yaml" };
-  return updateManifestState(
-    updateManifestState(data, STATES.DISPATCHED, "await_dispatch_result"),
-    STATES.REVIEW_PENDING,
-    "run_review"
-  );
+  manifest = {
+    ...manifest,
+    anchor: {
+      ...(manifest.anchor || {}),
+      rubric_path: "rubric.yaml",
+    },
+    git: {
+      ...(manifest.git || {}),
+      pr_number: 11,
+      head_sha: "old-head-sha",
+    },
+    review: {
+      ...(manifest.review || {}),
+      reviewer_login: "trusted-reviewer",
+      last_gate: { status: "old_gate" },
+    },
+  };
+
+  if (state === STATES.DISPATCHED) {
+    return updateManifestState(manifest, STATES.DISPATCHED, "await_dispatch_result");
+  }
+  if (state === STATES.REVIEW_PENDING) {
+    return updateManifestState(
+      updateManifestState(manifest, STATES.DISPATCHED, "await_dispatch_result"),
+      STATES.REVIEW_PENDING,
+      "run_review"
+    );
+  }
+  if (state === STATES.CHANGES_REQUESTED) {
+    return updateManifestState(
+      createManifestInState(STATES.REVIEW_PENDING),
+      STATES.CHANGES_REQUESTED,
+      "re_dispatch_requested_changes"
+    );
+  }
+  if (state === STATES.READY_TO_MERGE) {
+    return updateManifestState(
+      createManifestInState(STATES.REVIEW_PENDING),
+      STATES.READY_TO_MERGE,
+      "await_explicit_merge"
+    );
+  }
+  if (state === STATES.ESCALATED) {
+    return updateManifestState(
+      createManifestInState(STATES.REVIEW_PENDING),
+      STATES.ESCALATED,
+      "inspect_review_failure"
+    );
+  }
+  if (state === STATES.MERGED) {
+    return updateManifestState(
+      createManifestInState(STATES.READY_TO_MERGE),
+      STATES.MERGED,
+      "manual_cleanup_required"
+    );
+  }
+  if (state === STATES.CLOSED) {
+    return updateManifestState(
+      createManifestInState(STATES.ESCALATED),
+      STATES.CLOSED,
+      "done"
+    );
+  }
+  return manifest;
 }
 
 function makeVerdict(verdict, nextAction) {
@@ -55,9 +110,26 @@ function makeVerdict(verdict, nextAction) {
   };
 }
 
-test("manifest-apply/applyVerdictToManifest keeps PASS -> ready_to_merge", () => {
+function normalizeUpdatedTimestamp(manifest) {
+  return {
+    ...manifest,
+    timestamps: {
+      ...(manifest.timestamps || {}),
+      updated_at: "<updated>",
+    },
+  };
+}
+
+function assertManifestWriteParity(actual, before, expected) {
+  assert.equal(actual.timestamps.created_at, before.timestamps.created_at);
+  assert.ok(Date.parse(actual.timestamps.updated_at) >= Date.parse(before.timestamps.updated_at));
+  assert.deepEqual(normalizeUpdatedTimestamp(actual), normalizeUpdatedTimestamp(expected));
+}
+
+test("manifest-apply/applyVerdictToManifest preserves the PASS field-write contract", () => {
+  const manifest = createManifestInState(STATES.REVIEW_PENDING);
   const result = applyVerdictToManifest(
-    createReviewPendingManifest(),
+    manifest,
     makeVerdict("pass", "ready_to_merge"),
     1,
     189,
@@ -65,72 +137,243 @@ test("manifest-apply/applyVerdictToManifest keeps PASS -> ready_to_merge", () =>
     0
   );
 
-  assert.equal(result.state, STATES.READY_TO_MERGE);
-  assert.equal(result.next_action, "await_explicit_merge");
-  assert.equal(result.review.latest_verdict, "lgtm");
+  assertManifestWriteParity(result, manifest, {
+    ...manifest,
+    state: STATES.READY_TO_MERGE,
+    next_action: "await_explicit_merge",
+    git: {
+      ...manifest.git,
+      pr_number: 189,
+      head_sha: "abc123",
+    },
+    review: {
+      ...manifest.review,
+      rounds: 1,
+      latest_verdict: "lgtm",
+      repeated_issue_count: 0,
+      last_reviewed_sha: "abc123",
+      last_gate: null,
+    },
+  });
 });
 
-test("manifest-apply/applyVerdictToManifest fail-closes PASS with a rubric gate failure", () => {
+test("manifest-apply/applyVerdictToManifest fail-closes PASS with the full rubric gate payload", () => {
+  const manifest = createManifestInState(STATES.REVIEW_PENDING);
+  const rubricGateFailure = {
+    status: "rubric_state_failed_closed",
+    layer: "review-runner",
+    rubricState: "missing",
+    rubricStatus: "missing",
+    recoveryCommand: "node dispatch.js --run-id issue-189",
+    recovery: "Restore rubric and re-dispatch.",
+    reason: "rubric missing",
+  };
   const result = applyVerdictToManifest(
-    createReviewPendingManifest(),
+    manifest,
     makeVerdict("pass", "ready_to_merge"),
     2,
     189,
     "abc123",
     0,
-    {
-      rubricGateFailure: {
+    { rubricGateFailure }
+  );
+
+  assertManifestWriteParity(result, manifest, {
+    ...manifest,
+    state: STATES.CHANGES_REQUESTED,
+    next_action: "repair_rubric_and_redispatch",
+    git: {
+      ...manifest.git,
+      pr_number: 189,
+      head_sha: "abc123",
+    },
+    review: {
+      ...manifest.review,
+      rounds: 2,
+      latest_verdict: "rubric_state_failed_closed",
+      repeated_issue_count: 0,
+      last_reviewed_sha: "abc123",
+      last_gate: {
         status: "rubric_state_failed_closed",
         layer: "review-runner",
-        rubricState: "missing",
-        rubricStatus: "missing",
-        recoveryCommand: "node dispatch.js ...",
+        rubric_state: "missing",
+        rubric_status: "missing",
+        recovery_command: "node dispatch.js --run-id issue-189",
         recovery: "Restore rubric and re-dispatch.",
         reason: "rubric missing",
       },
-    }
-  );
-
-  assert.equal(result.state, STATES.CHANGES_REQUESTED);
-  assert.equal(result.next_action, "repair_rubric_and_redispatch");
-  assert.equal(result.review.latest_verdict, "rubric_state_failed_closed");
-  assert.equal(result.review.last_gate.rubric_state, "missing");
+    },
+  });
 });
 
-test("manifest-apply/applyVerdictToManifest keeps repeated issue count only for changes_requested", () => {
-  const changesRequested = applyVerdictToManifest(
-    createReviewPendingManifest(),
+test("manifest-apply/applyVerdictToManifest preserves the CHANGES_REQUESTED field-write contract", () => {
+  const manifest = createManifestInState(STATES.REVIEW_PENDING);
+  const result = applyVerdictToManifest(
+    manifest,
     makeVerdict("changes_requested", "changes_requested"),
     3,
     189,
     "abc123",
     4
   );
-  const escalated = applyVerdictToManifest(
-    createReviewPendingManifest(),
-    makeVerdict("escalated", "escalated"),
-    3,
-    189,
-    "abc123",
-    4
-  );
 
-  assert.equal(changesRequested.state, STATES.CHANGES_REQUESTED);
-  assert.equal(changesRequested.review.repeated_issue_count, 4);
-  assert.equal(escalated.state, STATES.ESCALATED);
-  assert.equal(escalated.review.repeated_issue_count, 0);
+  assertManifestWriteParity(result, manifest, {
+    ...manifest,
+    state: STATES.CHANGES_REQUESTED,
+    next_action: "re_dispatch_requested_changes",
+    git: {
+      ...manifest.git,
+      pr_number: 189,
+      head_sha: "abc123",
+    },
+    review: {
+      ...manifest.review,
+      rounds: 3,
+      latest_verdict: "changes_requested",
+      repeated_issue_count: 4,
+      last_reviewed_sha: "abc123",
+      last_gate: null,
+    },
+  });
 });
 
-test("manifest-apply/applyPolicyViolationToManifest escalates with the supplied reason", () => {
-  const result = applyPolicyViolationToManifest(
-    createReviewPendingManifest(),
+test("manifest-apply/applyVerdictToManifest refreshes same-state CHANGES_REQUESTED without a transition", () => {
+  const manifest = createManifestInState(STATES.CHANGES_REQUESTED);
+  const result = applyVerdictToManifest(
+    manifest,
+    makeVerdict("changes_requested", "changes_requested"),
+    4,
+    189,
+    "abc123",
+    2
+  );
+
+  assertManifestWriteParity(result, manifest, {
+    ...manifest,
+    next_action: "re_dispatch_requested_changes",
+    git: {
+      ...manifest.git,
+      pr_number: 189,
+      head_sha: "abc123",
+    },
+    review: {
+      ...manifest.review,
+      rounds: 4,
+      latest_verdict: "changes_requested",
+      repeated_issue_count: 2,
+      last_reviewed_sha: "abc123",
+      last_gate: null,
+    },
+  });
+});
+
+test("manifest-apply/applyVerdictToManifest preserves the ESCALATED field-write contract", () => {
+  const manifest = createManifestInState(STATES.REVIEW_PENDING);
+  const result = applyVerdictToManifest(
+    manifest,
+    makeVerdict("escalated", "escalated"),
     5,
+    189,
+    "abc123",
+    7
+  );
+
+  assertManifestWriteParity(result, manifest, {
+    ...manifest,
+    state: STATES.ESCALATED,
+    next_action: "inspect_review_failure",
+    git: {
+      ...manifest.git,
+      pr_number: 189,
+      head_sha: "abc123",
+    },
+    review: {
+      ...manifest.review,
+      rounds: 5,
+      latest_verdict: "escalated",
+      repeated_issue_count: 0,
+      last_reviewed_sha: "abc123",
+      last_gate: null,
+    },
+  });
+});
+
+test("manifest-apply/applyVerdictToManifest denies changes_requested -> pass and -> escalated transitions", async (t) => {
+  const manifest = createManifestInState(STATES.CHANGES_REQUESTED);
+
+  await t.test("pass", () => {
+    assert.throws(() => applyVerdictToManifest(
+      manifest,
+      makeVerdict("pass", "ready_to_merge"),
+      6,
+      189,
+      "abc123",
+      0
+    ), /Invalid relay state transition: changes_requested -> ready_to_merge/);
+  });
+
+  await t.test("escalated", () => {
+    assert.throws(() => applyVerdictToManifest(
+      manifest,
+      makeVerdict("escalated", "escalated"),
+      6,
+      189,
+      "abc123",
+      0
+    ), /Invalid relay state transition: changes_requested -> escalated/);
+  });
+});
+
+test("manifest-apply/applyVerdictToManifest denies terminal-state mutations via validateTransition", async (t) => {
+  for (const state of [STATES.MERGED, STATES.CLOSED]) {
+    await t.test(state, () => {
+      assert.throws(() => applyVerdictToManifest(
+        createManifestInState(state),
+        makeVerdict("pass", "ready_to_merge"),
+        7,
+        189,
+        "abc123",
+        0
+      ), new RegExp(`Invalid relay state transition: ${state} -> ready_to_merge`));
+    });
+  }
+});
+
+test("manifest-apply/applyPolicyViolationToManifest preserves the escalation write contract", () => {
+  const manifest = createManifestInState(STATES.REVIEW_PENDING);
+  const result = applyPolicyViolationToManifest(
+    manifest,
+    8,
     189,
     "abc123",
     "policy_violation"
   );
 
-  assert.equal(result.state, STATES.ESCALATED);
-  assert.equal(result.next_action, "inspect_review_failure");
-  assert.equal(result.review.latest_verdict, "policy_violation");
+  assertManifestWriteParity(result, manifest, {
+    ...manifest,
+    state: STATES.ESCALATED,
+    next_action: "inspect_review_failure",
+    git: {
+      ...manifest.git,
+      pr_number: 189,
+      head_sha: "abc123",
+    },
+    review: {
+      ...manifest.review,
+      rounds: 8,
+      latest_verdict: "policy_violation",
+      repeated_issue_count: 0,
+      last_reviewed_sha: "abc123",
+    },
+  });
+});
+
+test("manifest-apply/applyPolicyViolationToManifest denies terminal-state escalation", () => {
+  assert.throws(() => applyPolicyViolationToManifest(
+    createManifestInState(STATES.MERGED),
+    9,
+    189,
+    "abc123",
+    "policy_violation"
+  ), /Invalid relay state transition: merged -> escalated/);
 });
