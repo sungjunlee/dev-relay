@@ -157,6 +157,34 @@ test("appendRunEvent persists rubric_status when provided", () => {
   assert.equal(parsed.rubric_status, "missing");
 });
 
+test("appendRunEvent persists last_reviewed_sha when provided", () => {
+  const { repoRoot, runId } = createContext();
+  const record = appendRunEvent(repoRoot, runId, {
+    event: "state_recovery",
+    state_from: "changes_requested",
+    state_to: "review_pending",
+    head_sha: "deadbeef",
+    reason: "external commit",
+    last_reviewed_sha: "cafef00d",
+  });
+
+  const [parsed] = readRunEvents(repoRoot, runId);
+  assert.equal(record.last_reviewed_sha, "cafef00d");
+  assert.equal(parsed.last_reviewed_sha, "cafef00d");
+});
+
+test("appendRunEvent omits last_reviewed_sha when absent", () => {
+  const { repoRoot, runId } = createContext();
+  const record = appendRunEvent(repoRoot, runId, {
+    event: "dispatch",
+    state_from: "draft",
+    state_to: "dispatched",
+    reason: "start",
+  });
+
+  assert.equal(Object.prototype.hasOwnProperty.call(record, "last_reviewed_sha"), false);
+});
+
 test("appendIterationScore requires run_id", () => {
   const { repoRoot } = createContext();
   assert.throws(() => appendIterationScore(repoRoot, "", {

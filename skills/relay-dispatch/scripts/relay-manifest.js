@@ -1369,6 +1369,28 @@ function updateManifestState(data, toState, nextAction) {
   };
 }
 
+// Operator-recovery path: skips ALLOWED_TRANSITIONS but keeps state-enum + invariant checks.
+// Only `recover-state.js` should call this; its own whitelist is the authority on which
+// recovery transitions are allowed.
+function forceTransitionState(data, toState, nextAction) {
+  if (!Object.values(STATES).includes(data.state)) {
+    throw new Error(`Unknown relay state: ${data.state}`);
+  }
+  if (!Object.values(STATES).includes(toState)) {
+    throw new Error(`Unknown relay state: ${toState}`);
+  }
+  validateTransitionInvariants(data, data.state, toState);
+  return {
+    ...data,
+    state: toState,
+    next_action: nextAction,
+    timestamps: {
+      ...(data.timestamps || {}),
+      updated_at: nowIso(),
+    },
+  };
+}
+
 function validateCleanupStatus(status) {
   if (!Object.values(CLEANUP_STATUSES).includes(status)) {
     throw new Error(`Unknown relay cleanup status: ${status}`);
@@ -1808,6 +1830,7 @@ module.exports = {
   validateRunId,
   validateTransition,
   validateTransitionInvariants,
+  forceTransitionState,
   writeManifest,
   writeTextFileWithoutFollowingSymlinks,
 };
