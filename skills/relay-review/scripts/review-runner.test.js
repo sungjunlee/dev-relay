@@ -24,6 +24,8 @@ const {
 
 const SCRIPT = path.join(__dirname, "review-runner.js");
 const DISPATCH_SCRIPT = path.join(__dirname, "../../relay-dispatch/scripts/dispatch.js");
+const REVIEW_RUNNER_LINE_CAP = 420;
+const REVIEW_RUNNER_FUNCTION_CAP = 12;
 
 function setupRepo() {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-runner-"));
@@ -255,6 +257,11 @@ function runReviewRunnerModule(lines) {
   return execFileSync("node", [helperPath], { encoding: "utf-8" });
 }
 
+function countFileLines(text) {
+  if (text.length === 0) return 0;
+  return text.split(/\r?\n/).length - (text.endsWith("\n") ? 1 : 0);
+}
+
 function writeFakeGhScript(repoRoot, { prBody, capturePath }) {
   const filePath = path.join(repoRoot, "gh");
   fs.writeFileSync(filePath, `#!/usr/bin/env node
@@ -403,6 +410,28 @@ test("prepare-only writes a prompt bundle without changing manifest state", () =
   assert.ok(fs.existsSync(result.diffPath));
   assert.equal(readManifest(manifestPath).data.state, STATES.REVIEW_PENDING);
   assert.equal(readManifest(manifestPath).data.run_id, runId);
+});
+
+test("review-runner facade stays within orchestrator caps and preserves CLI help", () => {
+  const source = fs.readFileSync(SCRIPT, "utf-8");
+  const lineCount = countFileLines(source);
+  const topLevelFunctions = (source.match(/^(?:async )?function\s+\w+/gm) || []).length;
+
+  assert.ok(
+    lineCount <= REVIEW_RUNNER_LINE_CAP,
+    `review-runner.js must stay <= ${REVIEW_RUNNER_LINE_CAP} lines (got ${lineCount})`
+  );
+  assert.ok(
+    topLevelFunctions <= REVIEW_RUNNER_FUNCTION_CAP,
+    `review-runner.js must stay <= ${REVIEW_RUNNER_FUNCTION_CAP} top-level functions (got ${topLevelFunctions})`
+  );
+
+  const help = spawnSync("node", [SCRIPT, "--help"], { encoding: "utf-8" });
+  assert.equal(help.status, 0);
+  assert.equal(help.stderr, "");
+  assert.match(help.stdout, /Usage: review-runner\.js --repo <path>/);
+  assert.match(help.stdout, /--prepare-only/);
+  assert.match(help.stdout, /--reviewer-script <path>/);
 });
 
 test("prepare-only loads frozen Done Criteria from manifest anchor before GitHub fallbacks", () => {
