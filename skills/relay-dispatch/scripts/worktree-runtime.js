@@ -36,7 +36,6 @@ function formatDispatchDryRun({
   cleanupPolicy,
   timeout,
   rubricFile = null,
-  rubricGrandfathered = false,
   requestId = null,
   leafId = null,
   doneCriteriaFile = null,
@@ -61,9 +60,6 @@ function formatDispatchDryRun({
   ];
   if (rubricFile) {
     lines.push(`  Rubric:   ${rubricFile}`);
-  }
-  if (rubricGrandfathered) {
-    lines.push("  Rubric:   grandfathered pre-change run");
   }
   if (requestId) {
     lines.push(`  Request:  ${requestId}`);

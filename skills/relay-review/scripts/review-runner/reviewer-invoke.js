@@ -64,6 +64,12 @@ function invokeReviewer({
   };
 }
 
+function resolveReviewerModel(data, reviewerModel) {
+  if (reviewerModel) return reviewerModel;
+  const hintedModel = data?.model_hints?.review;
+  return typeof hintedModel === "string" && hintedModel.trim() ? hintedModel : null;
+}
+
 function captureGitStatus(repoPath) {
   return git(repoPath, "status", "--short", "--untracked-files=all").trim();
 }
@@ -73,11 +79,22 @@ function loadReviewText({ body, data, manifestPath, prNumber, promptPath, review
     return { rawResponsePath: null, reviewText: readText(reviewFile) };
   }
 
+  const effectiveReviewerModel = resolveReviewerModel(data, reviewerModel);
+  appendRunEvent(runRepoPath, data.run_id, {
+    event: "review_invoke",
+    state_from: data.state,
+    state_to: data.state,
+    head_sha: reviewedHeadSha || null,
+    round,
+    reason: reviewerName,
+    model: effectiveReviewerModel,
+  });
+
   const statusBeforeReviewer = captureGitStatus(reviewRepoPath);
   const invoked = invokeReviewer({
     repoPath: reviewRepoPath,
     promptPath,
-    reviewerModel,
+    reviewerModel: effectiveReviewerModel,
     reviewerName,
     reviewerScript,
   });
@@ -135,5 +152,6 @@ module.exports = {
   invokeReviewer,
   loadReviewText,
   resolveReviewerName,
+  resolveReviewerModel,
   resolveReviewerScript,
 };

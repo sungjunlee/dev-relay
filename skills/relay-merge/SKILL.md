@@ -30,6 +30,7 @@ ${CLAUDE_SKILL_DIR}/scripts/gate-check.js $PR_NUM
 ${CLAUDE_SKILL_DIR}/scripts/gate-check.js $PR_NUM --skip "reason here"
 ```
 This writes a `<!-- relay-review-skip -->` comment to the PR — maintaining audit trail even when review is bypassed. The skip reason is recorded on the PR for future reference.
+`gate-check.js --skip` does not invoke any executor or reviewer, so it does not consume manifest `model_hints`.
 
 **Do NOT merge without running gate-check.** This is the audit trail that review actually happened (or was intentionally skipped with documented reason).
 
@@ -56,6 +57,8 @@ Emergency escape hatch:
 ```bash
 node ${CLAUDE_SKILL_DIR}/scripts/finalize-run.js --repo . --run-id "$RUN_ID" --skip-review "hotfix" --json
 ```
+
+`finalize-run.js --skip-review` bypasses reviewer invocation, so `model_hints.review` is a non-consumer on that path.
 
 ### 2. Sprint file update (if available)
 

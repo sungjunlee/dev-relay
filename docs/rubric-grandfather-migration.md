@@ -1,40 +1,33 @@
 # Rubric Grandfather Migration
 
-## Migration Manifest Schema
+Historical note: `anchor.rubric_grandfathered` was retired in `#190`.
 
-`relay-migrate-rubric.js` reads `~/.relay/migrations/rubric-mandatory.yaml` by default and accepts the following YAML:
+## Historical baseline
 
-```yaml
-version: 1
-runs:
-  - run_id: issue-42-20260412000000000-a1b2c3d4
-    registered_by: sjlee
-    registered_at: 2026-04-17T08:00:00Z
-    reason: "pre-rubric run from 2026-04-10 needed merge after a production hotfix"
-    applied_at: 2026-04-17T08:00:05Z
+Issue `#151` introduced an authenticated migration gate for pre-rubric manifests. That gate used `~/.relay/migrations/rubric-mandatory.yaml` as an operator-owned audit record and stamped migration provenance into `anchor.rubric_grandfathered`.
+
+Issue `#190` removes the runtime meaning of that field. Dispatch, review, and merge now fail closed whenever a retained manifest still carries `anchor.rubric_grandfathered` in any non-`undefined` shape.
+
+## Pre-landing inventory
+
+Verbatim orchestrator-host check before landing `#190`:
+
+```bash
+grep -l "rubric_grandfathered" ~/.relay/runs/*/*.md
 ```
 
-`run_id`, `registered_by`, `registered_at`, and `reason` are required. `applied_at` is absent until the migration script stamps the run. `registered_by` records who listed the run in the migration manifest; `anchor.rubric_grandfathered.actor` records the repo git user who actually applied the migration.
+Expected result on the orchestrator host: `0` matches.
 
-## One-Shot Semantics
+## Operator recovery
 
-Each successful stamp writes object-form provenance into `anchor.rubric_grandfathered`:
+`~/.relay/migrations/rubric-mandatory.yaml` remains as historical audit evidence only. Runtime code no longer reads it.
 
-```yaml
-anchor:
-  rubric_grandfathered:
-    from_migration: rubric-mandatory.yaml
-    applied_at: 2026-04-17T08:00:05Z
-    actor: <repo git user.name>
-    reason: "pre-rubric run from 2026-04-10 needed merge after a production hotfix"
-```
+If a foreign host still has a retained manifest with `anchor.rubric_grandfathered`:
 
-The script also writes the same timestamp into the migration manifest entry’s `applied_at`. Future runs of the script skip entries with `applied_at` already set. As a stress-test defense, the script refuses to stamp any run that already carries object-form provenance, even if an operator clears `applied_at` in the migration manifest. That blocks a tamper-then-rerun attempt from silently rewriting audit history.
+1. Open the manifest under `~/.relay/runs/<repo-slug>/<run-id>.md`.
+2. Remove `anchor.rubric_grandfathered`.
+3. Persist a rubric file inside the run directory, typically `~/.relay/runs/<repo-slug>/<run-id>/rubric.yaml`.
+4. Set `anchor.rubric_path` to that in-run file.
+5. Retry dispatch, review, or merge. If the run is no longer worth repairing, close it with `skills/relay-dispatch/scripts/close-run.js`.
 
-## Rollout Plan
-
-Issue #138’s audit found zero pre-rubric legacy runs, so the repository ships with an empty migration manifest and the normal path remains `relay-plan` -> `dispatch --rubric-file`. If an exceptional legacy run ever appears, an operator adds one explicit manifest entry with a human justification, runs `relay-migrate-rubric.js`, and keeps the resulting `rubric_migrated` event plus provenance object as the audit trail.
-
-## Deprecation Timeline
-
-Legacy boolean compat (`anchor.rubric_grandfathered: true`) stays read-only for now so old manifests fail open only for audit purposes. `dispatch.js --rubric-grandfathered` is now a warn-and-error alias that points operators to `relay-migrate-rubric.js`. Remove the boolean fallback only in a future tracking issue after the migration manifest stays unused for a full cleanup window and all remaining legacy fixtures are deleted.
+There is no migration CLI after `#190`. Recovery is a manual manifest repair or a terminal close.
