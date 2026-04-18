@@ -18,37 +18,37 @@ The post-merge challenge scope for this PR is narrowed to the 5-part Batch 1.5 i
 
 ## Selector x Call-Site x State-Awareness Audit Table
 
-Restated from `skills/relay-dispatch/scripts/relay-resolver.js:1-27` so the review bundle includes the audit-table contract item directly. Line numbers below are pinned to the post-fix source on `issue-177` HEAD; if a future change shifts them, update both the source header and this table together.
+The runtime file now keeps only the invariant pointer at `skills/relay-dispatch/scripts/relay-resolver.js:1-5`; the full audit table lives in `docs/relay-resolver-audit-history.md`. Line numbers below are pinned to the current `relay-resolver.js` tree so this historical mirror stays re-anchored with the runtime selectors.
 
 | Selector | Call site (line) | State-awareness verdict | Closed by |
 | --- | --- | --- | --- |
-| `filterByBranch` | `filterByBranchPrFallback:133` | fail-closed via derived non-terminal whitelist (meta-rule 7) | #149/#177 |
-| `filterByBranch` | `resolveManifestRecord:366` `branchMatches` | state-blind by purpose (error pool; sibling excludes) | #174 |
-| `filterByBranch` | `resolveManifestRecord:367` `nonTerminalBranchMatches` | fail-closed via derived non-terminal whitelist (meta-rule 7) | #149/#177 |
-| `filterByBranch` | `resolveManifestRecord:400` `branchMatches` | state-blind by purpose (error pool; sibling excludes) | #174 |
-| `filterByBranch` | `resolveManifestRecord:401` `branch-only matches` | fail-closed via derived non-terminal whitelist (meta-rule 7) | #149/#177 |
-| `filterByBranch` | `resolveManifestRecord:434` `branchMatches` | state-blind by purpose (error pool; sibling excludes) | #174 |
-| `filterByBranch` | `resolveManifestRecord:436` `nonTerminalBranchMatches` | fail-closed via derived non-terminal whitelist (meta-rule 7) | #149/#177 |
-| `filterByPr` | `resolveManifestRecord:377` branch+PR on `nonTerminal` | fail-closed via derived non-terminal whitelist composition (meta-rule 7) | #170/#177 |
-| `filterByPr` | `resolveManifestRecord:410` standalone `--pr` candidates | state-blind by purpose (full PR candidate error pool) | #174 |
-| `filterByPr` | `resolveManifestRecord:416` standalone `--pr` opt-in | state-blind by opt-in `includeTerminal=true` | #174 |
-| `filterByPr` | `resolveManifestRecord:420` standalone `--pr` default | fail-closed via derived non-terminal whitelist composition (meta-rule 7) | #174/#177 |
-| `filterByPr` | `resolveManifestRecord:448` retry terminal-only | terminal-only by purpose (mixed-state detector) | #170/#174/#177 |
-| `filterByBranchPrFallback` | `resolveManifestRecord:368` branch+PR fallback | fail-closed via derived non-terminal whitelist (meta-rule 7) + dispatched-only whitelist | #168/#177 |
-| `filterByBranchPrFallback` | `resolveManifestRecord:435` retry fallback | fail-closed via derived non-terminal whitelist (meta-rule 7) + dispatched-only whitelist | #168/#177 |
-| `findManifestByRunId` | `resolveManifestRecord:352` explicit `--run-id` | state-blind by design | n/a |
+| `filterByBranch` | `filterByBranchPrFallback:98` | fail-closed via derived non-terminal whitelist (meta-rule 7) | #149/#177 |
+| `filterByBranch` | `resolveManifestRecord:318` `branchMatches` | state-blind by purpose (error pool; sibling excludes) | #174 |
+| `filterByBranch` | `resolveManifestRecord:319` `nonTerminalBranchMatches` | fail-closed via derived non-terminal whitelist (meta-rule 7) | #149/#177 |
+| `filterByBranch` | `resolveManifestRecord:341` `branchMatches` | state-blind by purpose (error pool; sibling excludes) | #174 |
+| `filterByBranch` | `resolveManifestRecord:342` `branch-only matches` | fail-closed via derived non-terminal whitelist (meta-rule 7) | #149/#177 |
+| `filterByBranch` | `resolveManifestRecord:374` `branchMatches` | state-blind by purpose (error pool; sibling excludes) | #174 |
+| `filterByBranch` | `resolveManifestRecord:376` `nonTerminalBranchMatches` | fail-closed via derived non-terminal whitelist (meta-rule 7) | #149/#177 |
+| `filterByPr` | `resolveManifestRecord:323` branch+PR on `nonTerminal` | fail-closed via derived non-terminal whitelist composition (meta-rule 7) | #170/#177 |
+| `filterByPr` | `resolveManifestRecord:351` standalone `--pr` candidates | state-blind by purpose (full PR candidate error pool) | #174 |
+| `filterByPr` | `resolveManifestRecord:357` standalone `--pr` opt-in | state-blind by opt-in `includeTerminal=true` | #174 |
+| `filterByPr` | `resolveManifestRecord:360` standalone `--pr` default | fail-closed via derived non-terminal whitelist composition (meta-rule 7) | #174/#177 |
+| `filterByPr` | `resolveManifestRecord:379` retry terminal-only | terminal-only by purpose (mixed-state detector) | #170/#174/#177 |
+| `filterByBranchPrFallback` | `resolveManifestRecord:320` branch+PR fallback | fail-closed via derived non-terminal whitelist (meta-rule 7) + dispatched-only whitelist | #168/#177 |
+| `filterByBranchPrFallback` | `resolveManifestRecord:375` retry fallback | fail-closed via derived non-terminal whitelist (meta-rule 7) + dispatched-only whitelist | #168/#177 |
+| `findManifestByRunId` | `resolveManifestRecord:304` explicit `--run-id` | state-blind by design | n/a |
 
 ## Consumer Audit Delta
 
 | Consumer | Selector usage | Delta under #177 | Re-tested or deferred |
 | --- | --- | --- | --- |
-| `dispatch.js:444` | explicit `--run-id`/`--manifest` only | NO CHANGE | Dispatch suite |
-| `close-run.js:72` | explicit `--run-id` only | NO CHANGE | Close-run suite |
-| `update-manifest-state.js:120` | `--run-id` or `--branch` | NO CHANGE on `--run-id`; `--branch` path inherits whitelist via branch-only resolver | Update-state suite |
-| `gate-check.js:~87` (called from `:217`) | `prNumber + (headRefName \|\| undefined)` | BRANCHLESS `--pr` fallback fail-closes on unknown states via new whitelist | Resolver standalone-`--pr` tests + gate-check PR-mode suite |
-| `finalize-run.js:223` | all selectors | **CENTERPIECE**: default standalone `--pr` fail-closes on unknown states; `--skip-merge` path via `includeTerminal: true` UNAFFECTED — whitelist applies only to `excludeTerminal: true` / default-standalone paths | Resolver standalone-`--pr` tests + finalize-run suite |
-| `finalize-run.js:233` | repo-root rebind retry, same selectors | Same as `:223` | Finalize-run suite |
-| `review-runner.js:1037` | branch resolved first at `:1033` | NO CHANGE; does not hit standalone `--pr` | Review-runner suite |
+| `dispatch.js:429` | explicit `--run-id`/`--manifest` only | NO CHANGE | Dispatch suite |
+| `close-run.js:60` | explicit `--run-id` only | NO CHANGE | Close-run suite |
+| `update-manifest-state.js:105` | `--run-id` or `--branch` | NO CHANGE on `--run-id`; `--branch` path inherits whitelist via branch-only resolver | Update-state suite |
+| `gate-check.js:256` | `prNumber + (headRefName \|\| undefined)` | BRANCHLESS `--pr` fallback fail-closes on unknown states via new whitelist | Resolver standalone-`--pr` tests + gate-check PR-mode suite |
+| `finalize-run.js:243` | all selectors | **CENTERPIECE**: default standalone `--pr` fail-closes on unknown states; `--skip-merge` path via `includeTerminal: true` UNAFFECTED — whitelist applies only to `excludeTerminal: true` / default-standalone paths | Resolver standalone-`--pr` tests + finalize-run suite |
+| `finalize-run.js:262` | repo-root rebind retry, same selectors | Same as `:243` | Finalize-run suite |
+| `review-runner/context.js:226` | branch resolved first at `:223` | NO CHANGE; does not hit standalone `--pr` | Review-runner suite |
 
 ## Self-Review Grep
 
@@ -56,21 +56,18 @@ Restated from `skills/relay-dispatch/scripts/relay-resolver.js:1-27` so the revi
 $ grep -n "!BRANCH_ONLY_TERMINAL_STATES" skills/relay-dispatch/scripts/relay-resolver.js
 
 $ grep -n "BRANCH_ONLY_TERMINAL_STATES\|KNOWN_NON_TERMINAL_STATES\|isNonTerminalState" skills/relay-dispatch/scripts/relay-resolver.js
-32:const BRANCH_ONLY_TERMINAL_STATES = new Set([STATES.MERGED, STATES.CLOSED]);
-33:const KNOWN_NON_TERMINAL_STATES = new Set(
-34:  Object.values(STATES).filter((state) => BRANCH_ONLY_TERMINAL_STATES.has(state) === false)
-85:  return BRANCH_ONLY_TERMINAL_STATES.has(state);
-88:function isNonTerminalState(state) {
-89:  return KNOWN_NON_TERMINAL_STATES.has(state);
-98:  // states fail-closed via the derived KNOWN_NON_TERMINAL_STATES whitelist rather than fail-open via
-99:  // negation of BRANCH_ONLY_TERMINAL_STATES. Called at the standalone --pr default site (#174/#177).
-100:  return records.filter((record) => isNonTerminalState(record?.data?.state));
-113:    // to !isNonTerminalState(state) (fail-closed on unknown/tampered state values). Escalated stays
-116:    if (excludeTerminal && !isNonTerminalState(record?.data?.state)) {
-154:  // KNOWN_NON_TERMINAL_STATES whitelist as defense-in-depth. In normal flow this classifier only
-157:  return isNonTerminalState(record?.data?.state)
-441:    // #177 converted every EXCLUSION site to the KNOWN_NON_TERMINAL_STATES whitelist but
-449:      branchMatches.filter((record) => BRANCH_ONLY_TERMINAL_STATES.has(record?.data?.state)),
+1:// Resolver invariants: state exclusions fail closed via KNOWN_NON_TERMINAL_STATES,
+12:const BRANCH_ONLY_TERMINAL_STATES = new Set([STATES.MERGED, STATES.CLOSED]);
+13:const KNOWN_NON_TERMINAL_STATES = new Set(
+14:  Object.values(STATES).filter((state) => BRANCH_ONLY_TERMINAL_STATES.has(state) === false)
+64:  return BRANCH_ONLY_TERMINAL_STATES.has(state);
+67:function isNonTerminalState(state) {
+68:  return KNOWN_NON_TERMINAL_STATES.has(state);
+76:  // Fail-closed: exclude-by-state sites admit only KNOWN_NON_TERMINAL_STATES.
+77:  return records.filter((record) => isNonTerminalState(record?.data?.state));
+86:    if (excludeTerminal && !isNonTerminalState(record?.data?.state)) {
+119:  return isNonTerminalState(record?.data?.state)
+380:      branchMatches.filter((record) => BRANCH_ONLY_TERMINAL_STATES.has(record?.data?.state)),
 ```
 
 ## Verification

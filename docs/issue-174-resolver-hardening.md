@@ -26,37 +26,37 @@ The cross-iteration STOP signal came from `memory/feedback_rubric_fail_closed.md
 
 ## Selector x Call-Site x State-Awareness Audit Table
 
-Restated from `skills/relay-dispatch/scripts/relay-resolver.js:1-23` so the review bundle includes the audit-table contract item directly. Line numbers are pinned to the post-fix source on `issue-174` HEAD; if a future change shifts them, update both the source header and this table together (call-site extension meta-rule, `memory/feedback_rubric_fail_closed.md`).
+The runtime file now keeps only the invariant pointer at `skills/relay-dispatch/scripts/relay-resolver.js:1-5`; the full audit table lives in `docs/relay-resolver-audit-history.md`. Line numbers below are pinned to the current `relay-resolver.js` tree so this historical mirror stays re-anchored with the runtime selectors.
 
 | Selector | Call site (line) | State-awareness verdict | Closed by |
 | --- | --- | --- | --- |
-| `filterByBranch` | `filterByBranchPrFallback:112` | state-aware via `excludeTerminal=true` | #149 |
+| `filterByBranch` | `filterByBranchPrFallback:98` | state-aware via `excludeTerminal=true` | #149 |
+| `filterByBranch` | `resolveManifestRecord:318` `branchMatches` | state-blind by purpose (error pool; sibling excludes) | #174 |
+| `filterByBranch` | `resolveManifestRecord:319` `nonTerminalBranchMatches` | state-aware via `excludeTerminal=true` | #149 |
 | `filterByBranch` | `resolveManifestRecord:341` `branchMatches` | state-blind by purpose (error pool; sibling excludes) | #174 |
-| `filterByBranch` | `resolveManifestRecord:342` `nonTerminalBranchMatches` | state-aware via `excludeTerminal=true` | #149 |
-| `filterByBranch` | `resolveManifestRecord:372` `branchMatches` | state-blind by purpose (error pool; sibling excludes) | #174 |
-| `filterByBranch` | `resolveManifestRecord:373` `branch-only matches` | state-aware via `excludeTerminal=true` | #149 |
-| `filterByBranch` | `resolveManifestRecord:402` `branchMatches` | state-blind by purpose (error pool; sibling excludes) | #174 |
-| `filterByBranch` | `resolveManifestRecord:404` `nonTerminalBranchMatches` | state-aware via `excludeTerminal=true` | #149 |
-| `filterByPr` | `resolveManifestRecord:351` branch+PR on `nonTerminal` | state-aware via composed subset | #170 |
-| `filterByPr` | `resolveManifestRecord:382` standalone `--pr` candidates | state-blind by purpose (full PR candidate error pool) | #174 |
-| `filterByPr` | `resolveManifestRecord:387` standalone `--pr` opt-in | state-blind by opt-in `includeTerminal=true` | #174 |
-| `filterByPr` | `resolveManifestRecord:391` standalone `--pr` default | state-aware via `filterOutTerminal` composition | #174 |
-| `filterByPr` | `resolveManifestRecord:408` retry terminal-only | terminal-only by purpose (mixed-state detector) | #170/#174 |
-| `filterByBranchPrFallback` | `resolveManifestRecord:343` branch+PR fallback | dispatched-only whitelist | #168 |
-| `filterByBranchPrFallback` | `resolveManifestRecord:403` retry fallback | dispatched-only whitelist | #168 |
-| `findManifestByRunId` | `resolveManifestRecord:327` explicit `--run-id` | state-blind by design | n/a |
+| `filterByBranch` | `resolveManifestRecord:342` `branch-only matches` | state-aware via `excludeTerminal=true` | #149 |
+| `filterByBranch` | `resolveManifestRecord:374` `branchMatches` | state-blind by purpose (error pool; sibling excludes) | #174 |
+| `filterByBranch` | `resolveManifestRecord:376` `nonTerminalBranchMatches` | state-aware via `excludeTerminal=true` | #149 |
+| `filterByPr` | `resolveManifestRecord:323` branch+PR on `nonTerminal` | state-aware via composed subset | #170 |
+| `filterByPr` | `resolveManifestRecord:351` standalone `--pr` candidates | state-blind by purpose (full PR candidate error pool) | #174 |
+| `filterByPr` | `resolveManifestRecord:357` standalone `--pr` opt-in | state-blind by opt-in `includeTerminal=true` | #174 |
+| `filterByPr` | `resolveManifestRecord:360` standalone `--pr` default | state-aware via `filterOutTerminal` composition | #174 |
+| `filterByPr` | `resolveManifestRecord:379` retry terminal-only | terminal-only by purpose (mixed-state detector) | #170/#174 |
+| `filterByBranchPrFallback` | `resolveManifestRecord:320` branch+PR fallback | dispatched-only whitelist | #168 |
+| `filterByBranchPrFallback` | `resolveManifestRecord:375` retry fallback | dispatched-only whitelist | #168 |
+| `findManifestByRunId` | `resolveManifestRecord:304` explicit `--run-id` | state-blind by design | n/a |
 
 ## Consumer Audit
 
 | Consumer | Selector | Delta | Re-tested or deferred |
 | --- | --- | --- | --- |
-| `skills/relay-dispatch/scripts/dispatch.js:444` | explicit `--run-id` / `--manifest` only | No change | Re-tested by the full dispatch suite |
-| `skills/relay-dispatch/scripts/close-run.js:72` | explicit `--run-id` only | No change | Re-tested by the close-run suite |
-| `skills/relay-dispatch/scripts/update-manifest-state.js:120` | explicit `--run-id` or `--branch` only | No change | Re-tested by the full suite |
-| `skills/relay-merge/scripts/gate-check.js:87` | `prNumber + (headRefName || undefined)` | Branchless `--pr` fallback now inherits the hardened standalone `--pr` contract | Re-tested by the resolver standalone-`--pr` tests and the gate-check PR-mode suite |
-| `skills/relay-merge/scripts/finalize-run.js:223` | all selectors, including `--pr` alone | Default standalone `--pr` stays hardened; `includeTerminal: skipMerge` preserves cleanup-by-PR for `--skip-merge` | Re-tested by the resolver standalone-`--pr` tests and the full finalize-run suite |
-| `skills/relay-merge/scripts/finalize-run.js:233` | repo-root rebind retry with the same selector set | Same as above | Re-tested by the full finalize-run suite |
-| `skills/relay-review/scripts/review-runner.js:1037` | branch resolved first at `:1033` before resolver call | No change; this path does not hit standalone `--pr` resolution | Re-tested by the full review-runner suite |
+| `skills/relay-dispatch/scripts/dispatch.js:429` | explicit `--run-id` / `--manifest` only | No change | Re-tested by the full dispatch suite |
+| `skills/relay-dispatch/scripts/close-run.js:60` | explicit `--run-id` only | No change | Re-tested by the close-run suite |
+| `skills/relay-dispatch/scripts/update-manifest-state.js:105` | explicit `--run-id` or `--branch` only | No change | Re-tested by the full suite |
+| `skills/relay-merge/scripts/gate-check.js:256` | `prNumber + (headRefName || undefined)` | Branchless `--pr` fallback now inherits the hardened standalone `--pr` contract | Re-tested by the resolver standalone-`--pr` tests and the gate-check PR-mode suite |
+| `skills/relay-merge/scripts/finalize-run.js:243` | all selectors, including `--pr` alone | Default standalone `--pr` stays hardened; `includeTerminal: skipMerge` preserves cleanup-by-PR for `--skip-merge` | Re-tested by the resolver standalone-`--pr` tests and the full finalize-run suite |
+| `skills/relay-merge/scripts/finalize-run.js:262` | repo-root rebind retry with the same selector set | Same as above | Re-tested by the full finalize-run suite |
+| `skills/relay-review/scripts/review-runner/context.js:226` | branch resolved first at `:223` before resolver call | No change; this path does not hit standalone `--pr` resolution | Re-tested by the full review-runner suite |
 
 ## Sibling-Builder Audit
 

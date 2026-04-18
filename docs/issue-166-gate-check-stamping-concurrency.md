@@ -35,7 +35,7 @@ This is a concurrency-containment fix within the write-once event contract intro
 | `cleanup-worktrees.js:136-145` | `cleanup_result` | cleanup sweep audit | **UNCHANGED — per-attempt audit**. Each cleanup invocation intentionally records its own result row. |
 | `relay-manifest.js:661-677` | `git.pr_number: null` init | manifest creation | **UNCHANGED — single writer**. Manifest creation is the only writer at initialization time; this is not a discover-and-fill path. |
 | `relay-events.js:18-36` | generic `appendRunEvent()` | shared append primitive | **UNCHANGED — helper definition**. `#166` is fixed at the only write-once caller instead of changing global append semantics for every event producer. |
-| `relay-resolver.js:66-70,297-300` | `git.pr_number` reads | read-only diagnostics/selectors | **UNCHANGED — read-only**. These sites render or compare stored PR values; they do not mutate manifests or emit `pr_number_stamped`. |
+| `relay-resolver.js:45-50,93-114,252-253` | `git.pr_number` reads | read-only diagnostics/selectors | **UNCHANGED — read-only**. These sites render or compare stored PR values; they do not mutate manifests or emit `pr_number_stamped`. |
 | `update-manifest-state.js:17,55` | `git.pr_number` help text | CLI usage string | **UNCHANGED — help text**. Grep surfaces these strings, but they are not producers. |
 
 The sole first-resolution stamping site claim still holds on this head: `gate-check.js` is the ONLY path that reads `git.pr_number === null`, discovers the PR from external state, writes it back, and emits a corresponding audit row - the pattern that defines `#166`'s bug class. The siblings above may or may not have separate concurrency concerns under concurrent cross-process invocation, but none of them match that first-resolution discover-and-fill pattern.
@@ -44,27 +44,30 @@ The sole first-resolution stamping site claim still holds on this head: `gate-ch
 
 ```text
 $ grep -n "pr_number_stamped" skills/relay-merge/scripts/gate-check.js
-171:    // regression cannot emit duplicate first-resolution pr_number_stamped events.
-173:      .some((entry) => entry.event === "pr_number_stamped");
-177:        event: "pr_number_stamped",
+220:    // regression cannot emit duplicate first-resolution pr_number_stamped events.
+222:      .some((entry) => entry.event === "pr_number_stamped");
+226:        event: "pr_number_stamped",
 
 $ grep -rn "pr_number_stamped" skills/ | grep -v "\.test\.js"
-skills/relay-merge/scripts/gate-check.js:171:    // regression cannot emit duplicate first-resolution pr_number_stamped events.
-skills/relay-merge/scripts/gate-check.js:173:      .some((entry) => entry.event === "pr_number_stamped");
-skills/relay-merge/scripts/gate-check.js:177:        event: "pr_number_stamped",
+skills/relay-merge/scripts/gate-check.js:220:    // regression cannot emit duplicate first-resolution pr_number_stamped events.
+skills/relay-merge/scripts/gate-check.js:222:      .some((entry) => entry.event === "pr_number_stamped");
+skills/relay-merge/scripts/gate-check.js:226:        event: "pr_number_stamped",
 
 $ grep -nE "git\.pr_number" skills/relay-merge/scripts/gate-check.js
-182:        reason: `Stamped git.pr_number=${numericPrNumber} during gate-check PR resolution`,
+174:    // fail-closed if a stale lock or peer crash left git.pr_number unset. Re-read
+186:      "gate-check: .pr_number_stamp.lock contention timeout left git.pr_number unset after a fresh re-read. "
+231:        reason: `Stamped git.pr_number=${numericPrNumber} during gate-check PR resolution`,
 
 $ grep -n "openSync\|\.lock\|readRunEvents" skills/relay-merge/scripts/gate-check.js
-32:const { appendRunEvent, readRunEvents } = require("../../relay-dispatch/scripts/relay-events");
-35:const PR_NUMBER_STAMP_LOCK_NAME = ".pr_number_stamp.lock";
-118:      return fs.openSync(lockPath, "wx");
-172:    const alreadyStamped = readRunEvents(repoRoot, updatedData.run_id)
+46:const { appendRunEvent, readRunEvents } = require("../../relay-dispatch/scripts/relay-events");
+58:const PR_NUMBER_STAMP_LOCK_NAME = ".pr_number_stamp.lock";
+145:      return fs.openSync(lockPath, "wx");
+186:      "gate-check: .pr_number_stamp.lock contention timeout left git.pr_number unset after a fresh re-read. "
+221:    const alreadyStamped = readRunEvents(repoRoot, updatedData.run_id)
 
 $ grep -n "appendRunEvent" skills/relay-merge/scripts/gate-check.js
-32:const { appendRunEvent, readRunEvents } = require("../../relay-dispatch/scripts/relay-events");
-176:      appendRunEvent(repoRoot, updatedData.run_id, {
+46:const { appendRunEvent, readRunEvents } = require("../../relay-dispatch/scripts/relay-events");
+225:      appendRunEvent(repoRoot, updatedData.run_id, {
 
 $ grep -n "pr_number_stamped" skills/relay-dispatch/scripts/reliability-report.js || echo "(no consumer count-site — report keys on run_id)"
 (no consumer count-site — report keys on run_id)
@@ -73,31 +76,33 @@ $ grep -n "^const .* = require" skills/relay-merge/scripts/gate-check.js
 27:const fs = require("fs");
 28:const path = require("path");
 29:const { execFileSync } = require("child_process");
-30:const { buildSkipComment, evaluateReviewGate } = require("./review-gate");
-31:const { STATES, getRunDir, readManifest, writeManifest } = require("../../relay-dispatch/scripts/relay-manifest");
-32:const { appendRunEvent, readRunEvents } = require("../../relay-dispatch/scripts/relay-events");
-33:const { resolveManifestRecord } = require("../../relay-dispatch/scripts/relay-resolver");
+35:const { loadRubricFromRunDir } = require("../../relay-review/scripts/review-runner/context");
+36:const { buildReviewRunnerRubricGateFailure } = require("../../relay-review/scripts/review-runner/redispatch");
+45:const { readManifest, writeManifest } = require("../../relay-dispatch/scripts/manifest/store");
+46:const { appendRunEvent, readRunEvents } = require("../../relay-dispatch/scripts/relay-events");
+47:const { resolveManifestRecord } = require("../../relay-dispatch/scripts/relay-resolver");
 
 $ grep -n "isNonTerminalStateForPrStamp\\|NON_TERMINAL_STATES_FOR_PR_STAMP" skills/relay-merge/scripts/gate-check.js
-43:const NON_TERMINAL_STATES_FOR_PR_STAMP = new Set(
-47:function isNonTerminalStateForPrStamp(state) {
-48:  return NON_TERMINAL_STATES_FOR_PR_STAMP.has(state);
-152:    if (!isNonTerminalStateForPrStamp(freshRecord.data?.state)) {
+66:const NON_TERMINAL_STATES_FOR_PR_STAMP = new Set(
+70:function isNonTerminalStateForPrStamp(state) {
+71:  return NON_TERMINAL_STATES_FOR_PR_STAMP.has(state);
+178:    if (!isNonTerminalStateForPrStamp(freshRecord.data?.state)) {
+201:    if (!isNonTerminalStateForPrStamp(freshRecord.data?.state)) {
 
 $ grep -n "isNonTerminalState" skills/relay-merge/scripts/gate-check.js
-47:function isNonTerminalStateForPrStamp(state) {
-152:    if (!isNonTerminalStateForPrStamp(freshRecord.data?.state)) {
+70:function isNonTerminalStateForPrStamp(state) {
+178:    if (!isNonTerminalStateForPrStamp(freshRecord.data?.state)) {
+201:    if (!isNonTerminalStateForPrStamp(freshRecord.data?.state)) {
 
 $ grep -n "isNonTerminalState" skills/relay-dispatch/scripts/relay-resolver.js
-88:function isNonTerminalState(state) {
-100:  return records.filter((record) => isNonTerminalState(record?.data?.state));
-113:    // to !isNonTerminalState(state) (fail-closed on unknown/tampered state values). Escalated stays
-116:    if (excludeTerminal && !isNonTerminalState(record?.data?.state)) {
-157:  return isNonTerminalState(record?.data?.state)
+67:function isNonTerminalState(state) {
+77:  return records.filter((record) => isNonTerminalState(record?.data?.state));
+86:    if (excludeTerminal && !isNonTerminalState(record?.data?.state)) {
+119:  return isNonTerminalState(record?.data?.state)
 
 $ grep -n "relay-resolver" skills/relay-merge/scripts/gate-check.js
-33:const { resolveManifestRecord } = require("../../relay-dispatch/scripts/relay-resolver");
-42:// and avoid widening relay-resolver.js's public API.
+47:const { resolveManifestRecord } = require("../../relay-dispatch/scripts/relay-resolver");
+65:// and avoid widening relay-resolver.js's public API.
 ```
 
 ## Scope / Out Of Scope
