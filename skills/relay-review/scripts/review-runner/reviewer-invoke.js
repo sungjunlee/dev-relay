@@ -10,8 +10,9 @@ const { git, readText, writeText } = require("./common");
 function resolveReviewerName(data, reviewerArg) {
   const manifestReviewer = data.roles?.reviewer;
   if (reviewerArg) return reviewerArg;
+  if (process.env.RELAY_REVIEWER) return process.env.RELAY_REVIEWER;
   if (manifestReviewer && manifestReviewer !== "unknown") return manifestReviewer;
-  return process.env.RELAY_REVIEWER || "codex";
+  return "codex";
 }
 
 function resolveReviewerScript(reviewerName, reviewerScriptArg) {

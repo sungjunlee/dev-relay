@@ -37,7 +37,7 @@ Orchestrator             Executor                    GitHub
  +-- cleanup + sprint update                           |
 ```
 
-Roles are bound at manifest creation time and serve as defaults. Any supported agent can plan, execute, or review. The reviewer can be overridden at review time with `--reviewer` or the `RELAY_REVIEWER` environment variable.
+Roles are bound at manifest creation time and serve as defaults. Any supported agent can plan, execute, or review. Standard Codex operation is `RELAY_ORCHESTRATOR=codex` plus `review-runner --reviewer codex`. The reviewer can still be overridden at review time with `--reviewer` or the `RELAY_REVIEWER` environment variable.
 
 ## Install
 

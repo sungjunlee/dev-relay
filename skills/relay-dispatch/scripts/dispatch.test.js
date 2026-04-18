@@ -1138,11 +1138,37 @@ test("dispatch pushes the branch and opens a PR from the orchestrator on success
   assert.equal(manifest.git.pr_number, 321);
   assert.equal(manifest.github.pr_number, 321);
   assert.equal(manifest.github.pr_created_by_orchestrator, true);
+  assert.equal(manifest.roles.orchestrator, "codex");
+  assert.equal(manifest.roles.reviewer, "codex");
 
   const ghCalls = readJsonLines(ghLogPath);
   assert.deepEqual(ghCalls.map((args) => args.slice(0, 2)), [["pr", "list"], ["pr", "create"]]);
   const execCalls = readJsonLines(execLogPath);
   assert.ok(execCalls.some((entry) => entry.command === "git" && entry.args.includes("push")));
+});
+
+test("dispatch lets explicit role env vars override the codex defaults", () => {
+  const { repoRoot, relayHome } = setupRepoWithOrigin();
+  const { env } = createPushPrTestEnv({
+    relayHome,
+    ghState: {
+      prCreateUrl: "https://github.com/acme/dev-relay/pull/325",
+    },
+  });
+
+  const result = JSON.parse(runDispatch(repoRoot, [
+    "-b", "issue-198-role-override",
+    "--prompt", "respect explicit role bindings",
+    "--json",
+  ], {
+    ...env,
+    RELAY_ORCHESTRATOR: "claude",
+    RELAY_REVIEWER: "claude",
+  }));
+
+  const manifest = readManifest(result.manifestPath).data;
+  assert.equal(manifest.roles.orchestrator, "claude");
+  assert.equal(manifest.roles.reviewer, "claude");
 });
 
 test("dispatch dry-run never invokes orchestrator push or PR creation", () => {

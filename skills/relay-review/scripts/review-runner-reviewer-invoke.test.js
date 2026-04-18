@@ -85,7 +85,7 @@ test("reviewer-invoke/resolveReviewerName preserves arg, manifest, env precedenc
 
   process.env.RELAY_REVIEWER = "env-reviewer";
   assert.equal(resolveReviewerName({ roles: { reviewer: "manifest-reviewer" } }, "arg-reviewer"), "arg-reviewer");
-  assert.equal(resolveReviewerName({ roles: { reviewer: "manifest-reviewer" } }), "manifest-reviewer");
+  assert.equal(resolveReviewerName({ roles: { reviewer: "manifest-reviewer" } }), "env-reviewer");
   assert.equal(resolveReviewerName({ roles: { reviewer: "unknown" } }), "env-reviewer");
 });
 
