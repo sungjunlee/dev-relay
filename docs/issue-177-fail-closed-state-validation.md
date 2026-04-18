@@ -42,13 +42,13 @@ The runtime file now keeps only the invariant pointer at `skills/relay-dispatch/
 
 | Consumer | Selector usage | Delta under #177 | Re-tested or deferred |
 | --- | --- | --- | --- |
-| `dispatch.js:444` | explicit `--run-id`/`--manifest` only | NO CHANGE | Dispatch suite |
-| `close-run.js:72` | explicit `--run-id` only | NO CHANGE | Close-run suite |
-| `update-manifest-state.js:120` | `--run-id` or `--branch` | NO CHANGE on `--run-id`; `--branch` path inherits whitelist via branch-only resolver | Update-state suite |
-| `gate-check.js:~87` (called from `:217`) | `prNumber + (headRefName \|\| undefined)` | BRANCHLESS `--pr` fallback fail-closes on unknown states via new whitelist | Resolver standalone-`--pr` tests + gate-check PR-mode suite |
-| `finalize-run.js:223` | all selectors | **CENTERPIECE**: default standalone `--pr` fail-closes on unknown states; `--skip-merge` path via `includeTerminal: true` UNAFFECTED — whitelist applies only to `excludeTerminal: true` / default-standalone paths | Resolver standalone-`--pr` tests + finalize-run suite |
-| `finalize-run.js:233` | repo-root rebind retry, same selectors | Same as `:223` | Finalize-run suite |
-| `review-runner.js:1037` | branch resolved first at `:1033` | NO CHANGE; does not hit standalone `--pr` | Review-runner suite |
+| `dispatch.js:429` | explicit `--run-id`/`--manifest` only | NO CHANGE | Dispatch suite |
+| `close-run.js:60` | explicit `--run-id` only | NO CHANGE | Close-run suite |
+| `update-manifest-state.js:105` | `--run-id` or `--branch` | NO CHANGE on `--run-id`; `--branch` path inherits whitelist via branch-only resolver | Update-state suite |
+| `gate-check.js:256` | `prNumber + (headRefName \|\| undefined)` | BRANCHLESS `--pr` fallback fail-closes on unknown states via new whitelist | Resolver standalone-`--pr` tests + gate-check PR-mode suite |
+| `finalize-run.js:243` | all selectors | **CENTERPIECE**: default standalone `--pr` fail-closes on unknown states; `--skip-merge` path via `includeTerminal: true` UNAFFECTED — whitelist applies only to `excludeTerminal: true` / default-standalone paths | Resolver standalone-`--pr` tests + finalize-run suite |
+| `finalize-run.js:262` | repo-root rebind retry, same selectors | Same as `:243` | Finalize-run suite |
+| `review-runner/context.js:226` | branch resolved first at `:223` | NO CHANGE; does not hit standalone `--pr` | Review-runner suite |
 
 ## Self-Review Grep
 
@@ -56,21 +56,18 @@ The runtime file now keeps only the invariant pointer at `skills/relay-dispatch/
 $ grep -n "!BRANCH_ONLY_TERMINAL_STATES" skills/relay-dispatch/scripts/relay-resolver.js
 
 $ grep -n "BRANCH_ONLY_TERMINAL_STATES\|KNOWN_NON_TERMINAL_STATES\|isNonTerminalState" skills/relay-dispatch/scripts/relay-resolver.js
-32:const BRANCH_ONLY_TERMINAL_STATES = new Set([STATES.MERGED, STATES.CLOSED]);
-33:const KNOWN_NON_TERMINAL_STATES = new Set(
-34:  Object.values(STATES).filter((state) => BRANCH_ONLY_TERMINAL_STATES.has(state) === false)
-85:  return BRANCH_ONLY_TERMINAL_STATES.has(state);
-88:function isNonTerminalState(state) {
-89:  return KNOWN_NON_TERMINAL_STATES.has(state);
-98:  // states fail-closed via the derived KNOWN_NON_TERMINAL_STATES whitelist rather than fail-open via
-99:  // negation of BRANCH_ONLY_TERMINAL_STATES. Called at the standalone --pr default site (#174/#177).
-100:  return records.filter((record) => isNonTerminalState(record?.data?.state));
-113:    // to !isNonTerminalState(state) (fail-closed on unknown/tampered state values). Escalated stays
-116:    if (excludeTerminal && !isNonTerminalState(record?.data?.state)) {
-154:  // KNOWN_NON_TERMINAL_STATES whitelist as defense-in-depth. In normal flow this classifier only
-157:  return isNonTerminalState(record?.data?.state)
-441:    // #177 converted every EXCLUSION site to the KNOWN_NON_TERMINAL_STATES whitelist but
-449:      branchMatches.filter((record) => BRANCH_ONLY_TERMINAL_STATES.has(record?.data?.state)),
+1:// Resolver invariants: state exclusions fail closed via KNOWN_NON_TERMINAL_STATES,
+12:const BRANCH_ONLY_TERMINAL_STATES = new Set([STATES.MERGED, STATES.CLOSED]);
+13:const KNOWN_NON_TERMINAL_STATES = new Set(
+14:  Object.values(STATES).filter((state) => BRANCH_ONLY_TERMINAL_STATES.has(state) === false)
+64:  return BRANCH_ONLY_TERMINAL_STATES.has(state);
+67:function isNonTerminalState(state) {
+68:  return KNOWN_NON_TERMINAL_STATES.has(state);
+76:  // Fail-closed: exclude-by-state sites admit only KNOWN_NON_TERMINAL_STATES.
+77:  return records.filter((record) => isNonTerminalState(record?.data?.state));
+86:    if (excludeTerminal && !isNonTerminalState(record?.data?.state)) {
+119:  return isNonTerminalState(record?.data?.state)
+380:      branchMatches.filter((record) => BRANCH_ONLY_TERMINAL_STATES.has(record?.data?.state)),
 ```
 
 ## Verification

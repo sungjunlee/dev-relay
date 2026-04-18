@@ -50,13 +50,13 @@ The runtime file now keeps only the invariant pointer at `skills/relay-dispatch/
 
 | Consumer | Selector | Delta | Re-tested or deferred |
 | --- | --- | --- | --- |
-| `skills/relay-dispatch/scripts/dispatch.js:444` | explicit `--run-id` / `--manifest` only | No change | Re-tested by the full dispatch suite |
-| `skills/relay-dispatch/scripts/close-run.js:72` | explicit `--run-id` only | No change | Re-tested by the close-run suite |
-| `skills/relay-dispatch/scripts/update-manifest-state.js:120` | explicit `--run-id` or `--branch` only | No change | Re-tested by the full suite |
-| `skills/relay-merge/scripts/gate-check.js:87` | `prNumber + (headRefName || undefined)` | Branchless `--pr` fallback now inherits the hardened standalone `--pr` contract | Re-tested by the resolver standalone-`--pr` tests and the gate-check PR-mode suite |
-| `skills/relay-merge/scripts/finalize-run.js:223` | all selectors, including `--pr` alone | Default standalone `--pr` stays hardened; `includeTerminal: skipMerge` preserves cleanup-by-PR for `--skip-merge` | Re-tested by the resolver standalone-`--pr` tests and the full finalize-run suite |
-| `skills/relay-merge/scripts/finalize-run.js:233` | repo-root rebind retry with the same selector set | Same as above | Re-tested by the full finalize-run suite |
-| `skills/relay-review/scripts/review-runner.js:1037` | branch resolved first at `:1033` before resolver call | No change; this path does not hit standalone `--pr` resolution | Re-tested by the full review-runner suite |
+| `skills/relay-dispatch/scripts/dispatch.js:429` | explicit `--run-id` / `--manifest` only | No change | Re-tested by the full dispatch suite |
+| `skills/relay-dispatch/scripts/close-run.js:60` | explicit `--run-id` only | No change | Re-tested by the close-run suite |
+| `skills/relay-dispatch/scripts/update-manifest-state.js:105` | explicit `--run-id` or `--branch` only | No change | Re-tested by the full suite |
+| `skills/relay-merge/scripts/gate-check.js:256` | `prNumber + (headRefName || undefined)` | Branchless `--pr` fallback now inherits the hardened standalone `--pr` contract | Re-tested by the resolver standalone-`--pr` tests and the gate-check PR-mode suite |
+| `skills/relay-merge/scripts/finalize-run.js:243` | all selectors, including `--pr` alone | Default standalone `--pr` stays hardened; `includeTerminal: skipMerge` preserves cleanup-by-PR for `--skip-merge` | Re-tested by the resolver standalone-`--pr` tests and the full finalize-run suite |
+| `skills/relay-merge/scripts/finalize-run.js:262` | repo-root rebind retry with the same selector set | Same as above | Re-tested by the full finalize-run suite |
+| `skills/relay-review/scripts/review-runner/context.js:226` | branch resolved first at `:223` before resolver call | No change; this path does not hit standalone `--pr` resolution | Re-tested by the full review-runner suite |
 
 ## Sibling-Builder Audit
 
