@@ -714,15 +714,17 @@ test("gate-check --skip audit comment records rubric_status: persisted", () => {
   assert.match(fs.readFileSync(result.logPath, "utf-8"), /rubric_status: persisted/);
 });
 
-test("gate-check --skip audit comment records rubric_status: legacy_grandfather_field", () => {
+test("gate-check --skip blocks legacy_grandfather_field instead of emitting skip audit", () => {
   const result = runGateCheckSkipLive({ rubricGrandfathered: true });
   const ghLog = fs.readFileSync(result.logPath, "utf-8");
 
-  assert.equal(result.status, 0);
-  assert.equal(result.json.status, "skipped");
-  assert.equal(result.json.readyToMerge, true);
+  assert.equal(result.status, 1);
+  assert.equal(result.json.status, "unsupported_grandfather_field");
+  assert.equal(result.json.readyToMerge, false);
   assert.equal(result.json.rubricStatus, "legacy_grandfather_field");
-  assert.match(ghLog, /rubric_status: legacy_grandfather_field/);
+  assert.match(result.json.reason, /anchor\.rubric_grandfathered is no longer supported/);
+  assert.doesNotMatch(ghLog, /pr comment 40 --body/);
+  assert.doesNotMatch(ghLog, /rubric_status: legacy_grandfather_field/);
   assert.doesNotMatch(ghLog, /rubric_grandfathered\./);
 });
 

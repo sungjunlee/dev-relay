@@ -1037,16 +1037,50 @@ test("finalize-run skip-review journals rubric_status: persisted", () => {
   assert.equal(skipEvent?.rubric_status, "persisted");
 });
 
-test("finalize-run skip-review journals rubric_status: legacy_grandfather_field", () => {
-  const { result, events, logPath } = runFinalizeSkipReview({ rubricGrandfathered: true });
-  const skipEvent = events.find((entry) => entry.event === "skip_review");
-  const ghLog = fs.readFileSync(logPath, "utf-8");
+test("finalize-run skip-review blocks legacy_grandfather_field instead of merging", () => {
+  const fixture = setupRepo();
+  createEnforcementFixture({
+    repoRoot: fixture.repoRoot,
+    runId: fixture.runId,
+    manifestPath: fixture.manifestPath,
+    state: "loaded",
+    anchorOverrides: { rubric_grandfathered: true },
+  });
+  const logPath = path.join(fixture.repoRoot, "gh.log");
+  const fakeGh = writeFakeGh(logPath, {
+    comments: [],
+    commits: [
+      {
+        oid: fixture.headSha,
+        committedDate: "2026-04-03T08:00:00Z",
+      },
+    ],
+  });
 
-  assert.equal(result.state, STATES.MERGED);
-  assert.equal(result.reviewGate.status, "skipped");
-  assert.equal(result.reviewGate.rubricStatus, "legacy_grandfather_field");
-  assert.equal(skipEvent?.rubric_status, "legacy_grandfather_field");
-  assert.match(ghLog, /rubric_status: legacy_grandfather_field/);
+  assert.throws(() => execFileSync("node", [
+    SCRIPT,
+    "--repo", fixture.repoRoot,
+    "--branch", fixture.branch,
+    "--pr", "123",
+    "--skip-review", "hotfix",
+    "--json",
+  ], {
+    cwd: fixture.repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+    env: { ...process.env, RELAY_GH_BIN: fakeGh },
+  }), /Fresh review gate failed: unsupported_grandfather_field/);
+
+  const manifest = readManifest(fixture.manifestPath).data;
+  const events = readRunEvents(fixture.repoRoot, fixture.runId);
+  const skipEvent = events.find((entry) => entry.event === "skip_review");
+  const mergeBlockedEvent = events.find((entry) => entry.event === "merge_blocked");
+  const ghLog = fs.existsSync(logPath) ? fs.readFileSync(logPath, "utf-8") : "";
+
+  assert.equal(manifest.state, STATES.READY_TO_MERGE);
+  assert.equal(skipEvent, undefined);
+  assert.equal(mergeBlockedEvent?.reason, "unsupported_grandfather_field");
+  assert.doesNotMatch(ghLog, /rubric_status: legacy_grandfather_field/);
   assert.doesNotMatch(ghLog, /rubric_grandfathered\./);
 });
 

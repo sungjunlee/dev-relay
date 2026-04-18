@@ -3,7 +3,6 @@ const { getRubricAnchorStatus } = require("../../relay-dispatch/scripts/manifest
 const REVIEW_MARKER_PATTERN = /^\s*<!-- relay-review(?:-round)? -->\s*$/m;
 const SKIP_AUDIT_RUBRIC_STATUSES = Object.freeze([
   "persisted",
-  "legacy_grandfather_field",
   "missing",
   "unresolved-manifest",
 ]);
@@ -37,20 +36,43 @@ function summarizeRubricAuditForSkip(manifestData, options = {}) {
   if (!manifestData) {
     return {
       rubricStatus: "unresolved-manifest",
+      readyToMerge: true,
     };
   }
 
   const rubricAnchor = getRubricAnchorStatus(manifestData, options.runDir ? { runDir: options.runDir } : undefined);
   let rubricStatus = "missing";
+  let readyToMerge = true;
+  let status = null;
+  let reason = null;
   if (rubricAnchor.status === "satisfied") {
     rubricStatus = "persisted";
   } else if (rubricAnchor.status === "legacy_grandfather_field") {
     rubricStatus = "legacy_grandfather_field";
+    readyToMerge = false;
+    status = "unsupported_grandfather_field";
+    reason = rubricAnchor.error;
   } else if (MISSING_SKIP_AUDIT_RUBRIC_STATUSES.has(rubricAnchor.status)) {
     rubricStatus = "missing";
   }
   return {
     rubricStatus,
+    readyToMerge,
+    status,
+    reason,
+  };
+}
+
+function buildSkipReviewGateFailure(prNumber, rubricAudit) {
+  if (!rubricAudit || rubricAudit.readyToMerge !== false) {
+    return null;
+  }
+  return {
+    status: rubricAudit.status || "invalid_rubric_file",
+    pr: prNumber,
+    readyToMerge: false,
+    reason: rubricAudit.reason || null,
+    rubricStatus: rubricAudit.rubricStatus || "unresolved-manifest",
   };
 }
 
@@ -279,6 +301,7 @@ function evaluateReviewGate({ prNumber, comments, commits, manifestData, expecte
 }
 
 module.exports = {
+  buildSkipReviewGateFailure,
   buildSkipComment,
   evaluateReviewGate,
   hasRelayReviewMarker,

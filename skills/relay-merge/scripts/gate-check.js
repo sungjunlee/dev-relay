@@ -28,6 +28,7 @@ const fs = require("fs");
 const path = require("path");
 const { execFileSync } = require("child_process");
 const {
+  buildSkipReviewGateFailure,
   buildSkipComment,
   evaluateReviewGate,
   summarizeRubricAuditForSkip,
@@ -304,13 +305,14 @@ function resolveSkipAuditContext(prNumber) {
     const runDir = getRunDir(validatedPaths.repoRoot, manifestData.run_id);
     const rubricAudit = summarizeRubricAuditForSkip(manifestData, { runDir });
     return {
-      rubricStatus: rubricAudit.rubricStatus,
+      ...rubricAudit,
       manifestData,
       runDir,
     };
   } catch {
     return {
       rubricStatus: "unresolved-manifest",
+      readyToMerge: true,
       manifestData: null,
       runDir: null,
     };
@@ -407,10 +409,16 @@ function main() {
     const skipAudit = DRY_RUN
       ? {
           rubricStatus: "unresolved-manifest",
+          readyToMerge: true,
           manifestData: null,
           runDir: null,
         }
       : resolveSkipAuditContext(PR_NUM);
+    const skipGateFailure = buildSkipReviewGateFailure(PR_NUM, skipAudit);
+    if (skipGateFailure) {
+      output(skipGateFailure);
+      process.exit(1);
+    }
     const skipComment = buildSkipComment(SKIP_REASON, skipAudit);
 
     if (DRY_RUN) {
