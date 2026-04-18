@@ -10,7 +10,10 @@ const args = process.argv.slice(2);
 const RESERVED = { reservedFlags: ["-h"] };
 
 if (hasFlag(args, ["--help", "-h"])) {
-  console.log("Usage: reliability-report.js [--repo <path>] [--stale-hours <hours>] [--json] [--by-actor] [--by-role]");
+  console.log(
+    "Usage: reliability-report.js [--repo <path>] [--stale-hours <hours>] " +
+    "[--json] [--by-actor] [--by-role] [--by-acting-reviewer]"
+  );
   process.exit(0);
 }
 
@@ -49,6 +52,14 @@ function normalizeActorName(value) {
 
 function normalizeRoleName(value) {
   return typeof value === "string" && value.trim() ? value.trim() : "unknown";
+}
+
+function hasRecordedReviewActivity(data) {
+  return (
+    Number(data?.review?.rounds || 0) > 0
+    || (typeof data?.review?.last_reviewer === "string" && data.review.last_reviewer.trim())
+    || (typeof data?.review?.last_reviewed_sha === "string" && data.review.last_reviewed_sha.trim())
+  );
 }
 
 function buildEmptyRubricInsights() {
@@ -505,6 +516,77 @@ function buildRoleReports({ repoRoot, staleHours, now, manifests, events }) {
   }));
 }
 
+function buildActingReviewerReports({ repoRoot, staleHours, now, manifests, events }) {
+  const reviewApplyEvents = events.filter((event) => event.event === "review_apply" && event.run_id);
+  const buckets = new Map();
+  const reviewersByRun = new Map();
+
+  for (const event of reviewApplyEvents) {
+    const reviewerName = normalizeRoleName(event.reviewer);
+    if (!buckets.has(reviewerName)) {
+      buckets.set(reviewerName, {
+        runIds: new Set(),
+        reviewApplyEvents: 0,
+        exclusiveRunIds: new Set(),
+        mixedRunIds: new Set(),
+      });
+    }
+
+    const bucket = buckets.get(reviewerName);
+    bucket.reviewApplyEvents += 1;
+    bucket.runIds.add(event.run_id);
+
+    if (!reviewersByRun.has(event.run_id)) {
+      reviewersByRun.set(event.run_id, new Set());
+    }
+    reviewersByRun.get(event.run_id).add(reviewerName);
+  }
+
+  for (const [runId, reviewerNames] of reviewersByRun.entries()) {
+    const destination = reviewerNames.size > 1 ? "mixedRunIds" : "exclusiveRunIds";
+    for (const reviewerName of reviewerNames) {
+      buckets.get(reviewerName)[destination].add(runId);
+    }
+  }
+
+  const missingRunIds = manifests
+    .map(({ data }) => data)
+    .filter((data) => data?.run_id && hasRecordedReviewActivity(data) && !reviewersByRun.has(data.run_id))
+    .map((data) => data.run_id)
+    .sort((left, right) => left.localeCompare(right));
+
+  const reviewerEntries = [...buckets.entries()].sort(([left], [right]) => left.localeCompare(right));
+
+  return {
+    reviewers: Object.fromEntries(reviewerEntries.map(([reviewerName, bucket]) => {
+      const reviewerManifests = manifests.filter(({ data }) => bucket.runIds.has(data?.run_id));
+      const reviewerEvents = events.filter((event) => bucket.runIds.has(event.run_id));
+      return [reviewerName, {
+        ...buildReport({
+          repoRoot,
+          staleHours,
+          now,
+          manifests: reviewerManifests,
+          events: reviewerEvents,
+        }),
+        acting_review: {
+          review_apply_events: bucket.reviewApplyEvents,
+          review_apply_runs: bucket.runIds.size,
+          exclusive_review_apply_runs: bucket.exclusiveRunIds.size,
+          mixed_review_apply_runs: bucket.mixedRunIds.size,
+        },
+      }];
+    })),
+    summary: {
+      review_apply_events: reviewApplyEvents.length,
+      review_apply_runs: reviewersByRun.size,
+      multi_reviewer_runs: [...reviewersByRun.values()].filter((reviewerNames) => reviewerNames.size > 1).length,
+      missing_review_apply_runs: missingRunIds.length,
+      missing_review_apply_run_ids: missingRunIds,
+    },
+  };
+}
+
 function main() {
   const repoRoot = path.resolve(getArg(args, "--repo", ".", RESERVED));
   const staleHours = parseHours(getArg(args, "--stale-hours", "72", RESERVED));
@@ -518,6 +600,9 @@ function main() {
   }
   if (hasFlag(args, "--by-role")) {
     report.by_role = buildRoleReports({ repoRoot, staleHours, now, manifests, events });
+  }
+  if (hasFlag(args, "--by-acting-reviewer")) {
+    report.by_acting_reviewer = buildActingReviewerReports({ repoRoot, staleHours, now, manifests, events });
   }
 
   if (hasFlag(args, "--json")) {
@@ -576,6 +661,32 @@ function main() {
           `most_stuck_factor=${scopedReport.factor_analysis.most_stuck_factor ?? "n/a"}`
         );
       }
+    }
+  }
+  if (hasFlag(args, "--by-acting-reviewer")) {
+    const actingReviewerEntries = Object.entries(report.by_acting_reviewer?.reviewers || {});
+    const actingReviewerSummary = report.by_acting_reviewer?.summary || {};
+    console.log("  by_acting_reviewer:");
+    if (actingReviewerEntries.length === 0) {
+      console.log("    n/a");
+    }
+    for (const [reviewerName, scopedReport] of actingReviewerEntries) {
+      console.log(
+        `    ${reviewerName}: review_apply_events=${scopedReport.acting_review.review_apply_events} ` +
+        `review_apply_runs=${scopedReport.acting_review.review_apply_runs} ` +
+        `mixed_runs=${scopedReport.acting_review.mixed_review_apply_runs} ` +
+        `manifests=${scopedReport.totals.manifests} events=${scopedReport.totals.events} ` +
+        `most_stuck_factor=${scopedReport.factor_analysis.most_stuck_factor ?? "n/a"}`
+      );
+    }
+    console.log(
+      `    summary: review_apply_events=${actingReviewerSummary.review_apply_events ?? 0} ` +
+      `review_apply_runs=${actingReviewerSummary.review_apply_runs ?? 0} ` +
+      `multi_reviewer_runs=${actingReviewerSummary.multi_reviewer_runs ?? 0} ` +
+      `missing_review_apply_runs=${actingReviewerSummary.missing_review_apply_runs ?? 0}`
+    );
+    if ((actingReviewerSummary.missing_review_apply_run_ids || []).length > 0) {
+      console.log(`    missing_review_apply_run_ids: ${actingReviewerSummary.missing_review_apply_run_ids.join(", ")}`);
     }
   }
 }

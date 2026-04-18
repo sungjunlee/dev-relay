@@ -365,6 +365,8 @@ roles:
 
 Override the reviewer at review time with `--reviewer` or the `RELAY_REVIEWER` environment variable. That changes the acting reviewer for that round, which is recorded in `review.last_reviewer` and the `review_apply` event payload.
 
+Assigned reviewer analytics stay under `roles.reviewer`. Actual reviewer execution analytics should use `review_apply.reviewer`; `review.last_reviewer` is only the latest-round stamp, not a replacement for the event log.
+
 ## `.worktreeinclude`
 
 Git worktrees don't include gitignored files (`.env`, config, keys). Add a `.worktreeinclude` file to your project root to auto-copy them into worktrees:
@@ -404,9 +406,15 @@ Aggregate metrics from run history:
 ```bash
 node skills/relay-dispatch/scripts/reliability-report.js --repo .
 node skills/relay-dispatch/scripts/reliability-report.js --repo . --json
+node skills/relay-dispatch/scripts/reliability-report.js --repo . --by-role --json
+node skills/relay-dispatch/scripts/reliability-report.js --repo . --by-acting-reviewer --json
 ```
 
 Tracks: resume success rate, median review rounds, stale run count, terminal state distribution.
+
+- `--by-role` groups by assigned manifest bindings such as `roles.reviewer`
+- `--by-acting-reviewer` groups actual review execution from `review_apply.reviewer`
+- runs with recorded review state but missing `review_apply` data are reported explicitly instead of being attributed to the assigned reviewer
 
 ## Works With dev-backlog
 
