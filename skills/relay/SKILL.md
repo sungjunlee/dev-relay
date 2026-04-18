@@ -15,11 +15,11 @@ Execute the plan → dispatch → review cycle. Stop at `ready_to_merge` unless 
 
 | Role | Default | Override |
 |------|---------|----------|
-| Orchestrator | Claude Code | `RELAY_ORCHESTRATOR` env |
+| Orchestrator | Codex (explicitly stamped) | `RELAY_ORCHESTRATOR` env |
 | Executor | Codex | `--executor` flag |
 | Reviewer | Codex (read-only) | `--reviewer` flag, `RELAY_REVIEWER` env |
 
-These defaults work well for most workflows. Override per-role when using different agents or self-hosted models.
+Standard Codex path: stamp `RELAY_ORCHESTRATOR=codex` and run review through `review-runner --reviewer codex`. Override per-role when using Claude or another supported reviewer.
 
 ## Step 0: Re-Anchor
 

@@ -398,6 +398,11 @@ function readTaskPrompt() {
   return fs.readFileSync(promptPath, "utf-8").trim();
 }
 
+function resolveRoleBinding(envName, fallback) {
+  const explicit = process.env[envName];
+  return typeof explicit === "string" && explicit.trim() ? explicit.trim() : fallback;
+}
+
 // ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
@@ -660,9 +665,9 @@ async function main() {
       baseBranch,
       issueNumber,
       worktreePath: wtPath,
-      orchestrator: process.env.RELAY_ORCHESTRATOR || "unknown",
+      orchestrator: resolveRoleBinding("RELAY_ORCHESTRATOR", "codex"),
       executor: EXECUTOR,
-      reviewer: process.env.RELAY_REVIEWER || "unknown",
+      reviewer: resolveRoleBinding("RELAY_REVIEWER", "codex"),
       cleanupPolicy,
       environment,
       requestId: REQUEST_ID || null,

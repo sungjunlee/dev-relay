@@ -305,6 +305,13 @@ function run() {
     repeatedIssueCount,
     { rubricGateFailure }
   );
+  updatedManifest = {
+    ...updatedManifest,
+    roles: {
+      ...(updatedManifest.roles || {}),
+      reviewer: reviewerName,
+    },
+  };
   updatedManifest = applyReviewerIdentity(updatedManifest, noComment, runRepoPath);
   writeManifest(manifestPath, updatedManifest, body);
   appendRunEvent(runRepoPath, data.run_id, {
