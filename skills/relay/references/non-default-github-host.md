@@ -13,50 +13,19 @@ delete-when: "#198 and #199 are both closed"
 > that closes **both** [#198](https://github.com/sungjunlee/dev-relay/issues/198)
 > and [#199](https://github.com/sungjunlee/dev-relay/issues/199).
 
+> Update (2026-04-18): [#198](https://github.com/sungjunlee/dev-relay/issues/198)
+> is fixed. `relay-dispatch` now handles branch publication and PR creation
+> from the orchestrator shell. The remaining stopgap here is issue
+> [#199](https://github.com/sungjunlee/dev-relay/issues/199).
+
 ## Background
 
-Relay makes `gh` and `git push` calls in two places:
+Relay still makes host-sensitive `gh` calls during `relay-review`, where the
+outer orchestrator shell records `reviewer_login` on the manifest.
 
-1. Inside the **executor subprocess** (e.g., Codex CLI, Claude CLI) during
-   `relay-dispatch`, which currently runs `git push -u origin <branch>` and
-   `gh pr create` from the executor's sandbox.
-2. Inside the **outer orchestrator shell** during `relay-review`, which
-   runs `gh api user` to record `reviewer_login` on the manifest.
-
-On `github.com` repos both calls succeed silently. On non-default hosts
-both can fail in ways that are easy to miss.
-
-## Symptom 1 — executor push fails silently, no PR opens
-
-`relay-dispatch` completes, the commit exists in the worktree, but no PR
-is created. The orchestrator sees `status: "completed"` but `gh pr list
---head <branch>` is empty.
-
-Root cause: the executor sandbox cannot reach the repo's GitHub host.
-Typical observations:
-
-- `Could not resolve host: <host>` from inside the executor run log.
-- `gh auth status -h <host>` inside the sandbox reports the host token
-  invalid, even though the outer shell is authenticated.
-
-**Workaround (manual push from outer shell):**
-
-```bash
-# Find the worktree path from the run manifest or dispatch output.
-cd <worktree-path>
-git push -u origin <branch>
-gh pr create --base main --head <branch> --title "<title>" --body "<body>"
-```
-
-Update the manifest with the resulting PR number if downstream steps
-require it. Tracked in [#198](https://github.com/sungjunlee/dev-relay/issues/198);
-the structural fix moves push + PR creation into `dispatch.js` in the
-outer shell.
-
-The `skills/relay-dispatch/SKILL.md` troubleshooting table already has a
-row for this — `"No PR created → Check git log in worktree; push
-manually or re-dispatch."`. That row is load-bearing for non-default
-hosts until #198 lands.
+On `github.com` repos this succeeds silently. On non-default hosts the
+remaining failure mode is easy to miss unless operators know which layer
+still depends on host-scoped auth.
 
 ## Symptom 2 — gate-check rejects PR as `unauthorized_reviewer`
 
@@ -104,7 +73,7 @@ workaround even when gate-check happens to pass.
 ## Preferred pre-run workarounds
 
 Set up the outer shell so the default host matches the repo before
-invoking relay. Both remove Symptom 2 (Symptom 1 still needs #198):
+invoking relay:
 
 - `export GH_HOST=<host>` in the shell that invokes relay.
 - `gh auth switch --hostname <host>` before invoking relay (if multiple

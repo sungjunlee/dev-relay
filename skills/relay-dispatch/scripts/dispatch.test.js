@@ -28,13 +28,21 @@ const CANONICAL_DRY_RUN_SLUG = "repo-c079affd";
 function setupRepo() {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-dispatch-"));
   const relayHome = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  const remoteRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-dispatch-origin-"));
   execFileSync("git", ["init", "-b", "main"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
+  execFileSync("git", ["init", "--bare", remoteRoot], { encoding: "utf-8", stdio: "pipe" });
   execFileSync("git", ["config", "user.name", "Relay Dispatch Test"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
   execFileSync("git", ["config", "user.email", "relay-dispatch@example.com"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
   fs.writeFileSync(path.join(repoRoot, "README.md"), "base\n", "utf-8");
   execFileSync("git", ["add", "README.md"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
   execFileSync("git", ["commit", "-m", "init"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
-  return { repoRoot, relayHome };
+  execFileSync("git", ["remote", "add", "origin", remoteRoot], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
+  execFileSync("git", ["push", "-u", "origin", "main"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
+  return { repoRoot, relayHome, remoteRoot };
+}
+
+function setupRepoWithOrigin() {
+  return setupRepo();
 }
 
 function createUnrelatedRelayOwnedWorktree(repoRoot, relayHome, branch = "issue-42") {
@@ -72,6 +80,7 @@ function createUnrelatedGitRepo(prefix = "relay-dispatch-manifest-cwd-") {
 }
 
 function writeFakeClaude(binDir) {
+  ensureDefaultFakeGh(binDir);
   const claudePath = path.join(binDir, "claude");
   fs.writeFileSync(claudePath, `#!/usr/bin/env node
 const fs = require("fs");
@@ -98,6 +107,7 @@ process.stdout.write("ok\\n");
 }
 
 function writeFakeCodex(binDir) {
+  ensureDefaultFakeGh(binDir);
   const codexPath = path.join(binDir, "codex");
   fs.writeFileSync(codexPath, `#!/usr/bin/env node
 const fs = require("fs");
@@ -123,6 +133,84 @@ fs.writeFileSync(output, "ok\\n", "utf-8");
   return codexPath;
 }
 
+function writeNoOpCodex(binDir) {
+  ensureDefaultFakeGh(binDir);
+  const codexPath = path.join(binDir, "codex");
+  fs.writeFileSync(codexPath, `#!/usr/bin/env node
+const fs = require("fs");
+const args = process.argv.slice(2);
+if (args[0] === "--version") {
+  process.stdout.write("codex-fake\\n");
+  process.exit(0);
+}
+if (args[0] !== "exec") {
+  process.stderr.write("unsupported fake codex invocation");
+  process.exit(1);
+}
+const output = args[args.indexOf("-o") + 1];
+fs.writeFileSync(output, "ok\\n", "utf-8");
+`, "utf-8");
+  fs.chmodSync(codexPath, 0o755);
+  return codexPath;
+}
+
+function writeFakeGh(binDir) {
+  const ghPath = path.join(binDir, "gh");
+  fs.writeFileSync(ghPath, `#!/usr/bin/env node
+const fs = require("fs");
+const args = process.argv.slice(2);
+const statePath = process.env.RELAY_TEST_GH_STATE;
+const logPath = process.env.RELAY_TEST_GH_LOG;
+if (logPath) {
+  fs.appendFileSync(logPath, JSON.stringify(args) + "\\n");
+}
+const state = statePath && fs.existsSync(statePath)
+  ? JSON.parse(fs.readFileSync(statePath, "utf-8"))
+  : {};
+if (args[0] === "pr" && args[1] === "list") {
+  if (state.failPrList) {
+    process.stderr.write(state.failPrList + "\\n");
+    process.exit(1);
+  }
+  if (state.prListNumber !== undefined && state.prListNumber !== null) {
+    process.stdout.write(String(state.prListNumber) + "\\n");
+  }
+  process.exit(0);
+}
+if (args[0] === "pr" && args[1] === "create") {
+  if (state.failPrCreate) {
+    process.stderr.write(state.failPrCreate + "\\n");
+    process.exit(1);
+  }
+  process.stdout.write(String(state.prCreateUrl || "") + "\\n");
+  process.exit(0);
+}
+process.stderr.write("unexpected fake gh invocation: " + args.join(" ") + "\\n");
+process.exit(1);
+`, "utf-8");
+  fs.chmodSync(ghPath, 0o755);
+  return ghPath;
+}
+
+function ensureDefaultFakeGh(binDir) {
+  const ghPath = path.join(binDir, "gh");
+  if (fs.existsSync(ghPath)) return ghPath;
+  fs.writeFileSync(ghPath, `#!/usr/bin/env node
+const args = process.argv.slice(2);
+if (args[0] === "pr" && args[1] === "list") {
+  process.exit(0);
+}
+if (args[0] === "pr" && args[1] === "create") {
+  process.stdout.write("https://example.test/acme/dev-relay/pull/123\\n");
+  process.exit(0);
+}
+process.stderr.write("unexpected fake gh invocation: " + args.join(" ") + "\\n");
+process.exit(1);
+`, "utf-8");
+  fs.chmodSync(ghPath, 0o755);
+  return ghPath;
+}
+
 function writePreloadScript(dir, name, source) {
   const preloadPath = path.join(dir, name);
   fs.writeFileSync(preloadPath, source, "utf-8");
@@ -136,6 +224,64 @@ function withNodePreload(env, preloadPath) {
       ? `${env.NODE_OPTIONS} --require ${preloadPath}`
       : `--require ${preloadPath}`,
   };
+}
+
+function readJsonLines(filePath) {
+  if (!fs.existsSync(filePath)) return [];
+  return fs.readFileSync(filePath, "utf-8")
+    .trim()
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => JSON.parse(line));
+}
+
+function createPushPrTestEnv({ relayHome, ghState = {}, failGitPush = false, codexMode = "commit" }) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "relay-dispatch-push-pr-"));
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-dispatch-push-pr-bin-"));
+  if (codexMode === "noop") {
+    writeNoOpCodex(binDir);
+  } else {
+    writeFakeCodex(binDir);
+  }
+  writeFakeGh(binDir);
+
+  const ghStatePath = path.join(root, "gh-state.json");
+  const ghLogPath = path.join(root, "gh-log.jsonl");
+  const execLogPath = path.join(root, "exec-log.jsonl");
+  fs.writeFileSync(ghStatePath, JSON.stringify(ghState), "utf-8");
+
+  const preloadPath = writePreloadScript(root, "dispatch-push-pr-preload.js", `
+const fs = require("fs");
+const childProcess = require("child_process");
+const originalExecFileSync = childProcess.execFileSync;
+childProcess.execFileSync = function patchedExecFileSync(command, args, options) {
+  const argv = Array.isArray(args) ? args : [];
+  const logPath = process.env.RELAY_TEST_EXEC_LOG;
+  const isPush = command === "git" && argv.includes("push");
+  const isGh = command === "gh";
+  if (logPath && (isPush || isGh)) {
+    fs.appendFileSync(logPath, JSON.stringify({ command, args: argv }) + "\\n");
+  }
+  if (process.env.RELAY_TEST_FAIL_GIT_PUSH === "1" && isPush) {
+    const error = new Error("simulated git push failure");
+    error.stderr = Buffer.from("simulated git push failure\\n");
+    throw error;
+  }
+  return originalExecFileSync.call(this, command, args, options);
+};
+`);
+
+  const env = withNodePreload({
+    ...process.env,
+    PATH: `${binDir}:${process.env.PATH}`,
+    RELAY_HOME: relayHome,
+    RELAY_TEST_GH_STATE: ghStatePath,
+    RELAY_TEST_GH_LOG: ghLogPath,
+    RELAY_TEST_EXEC_LOG: execLogPath,
+    ...(failGitPush ? { RELAY_TEST_FAIL_GIT_PUSH: "1" } : {}),
+  }, preloadPath);
+
+  return { env, ghLogPath, execLogPath, ghStatePath };
 }
 
 function createGitOnlyPath() {
@@ -723,6 +869,7 @@ test("timeout with commits produces completed-with-warning", () => {
   const { repoRoot, relayHome } = setupRepo();
   process.env.RELAY_HOME = relayHome;
   const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  ensureDefaultFakeGh(binDir);
   // Fake codex that commits a file then sleeps forever (killed by timeout)
   const codexPath = path.join(binDir, "codex");
   fs.writeFileSync(codexPath, `#!/usr/bin/env node
@@ -757,6 +904,7 @@ test("timeout without commits produces failed", () => {
   const { repoRoot, relayHome } = setupRepo();
   process.env.RELAY_HOME = relayHome;
   const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  ensureDefaultFakeGh(binDir);
   // Fake codex that does nothing but sleep
   const codexPath = path.join(binDir, "codex");
   fs.writeFileSync(codexPath, `#!/usr/bin/env node
@@ -780,6 +928,186 @@ setTimeout(() => {}, 60000);
   assert.equal(result.status, "failed");
   assert.equal(result.runState, STATES.ESCALATED);
   assert.match(result.error, /timed out/);
+});
+
+test("dispatch pushes the branch and opens a PR from the orchestrator on success", () => {
+  const { repoRoot, relayHome } = setupRepoWithOrigin();
+  const { env, ghLogPath, execLogPath } = createPushPrTestEnv({
+    relayHome,
+    ghState: {
+      prCreateUrl: "https://github.com/acme/dev-relay/pull/321",
+    },
+  });
+
+  const result = JSON.parse(runDispatch(repoRoot, [
+    "-b", "issue-198",
+    "--prompt", "implement orchestrator PR creation",
+    "--json",
+  ], env));
+
+  assert.equal(result.status, "completed");
+  assert.equal(result.runState, STATES.REVIEW_PENDING);
+  assert.equal(result.prNumber, 321);
+  assert.equal(result.prCreatedByUs, true);
+
+  const manifest = readManifest(result.manifestPath).data;
+  assert.equal(manifest.git.pr_number, 321);
+  assert.equal(manifest.github.pr_number, 321);
+  assert.equal(manifest.github.pr_created_by_orchestrator, true);
+
+  const remoteHeads = execFileSync("git", ["ls-remote", "--heads", "origin", "issue-198"], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+  }).trim();
+  assert.match(remoteHeads, /issue-198$/m);
+
+  const ghCalls = readJsonLines(ghLogPath);
+  assert.deepEqual(ghCalls.map((args) => args.slice(0, 2)), [["pr", "list"], ["pr", "create"]]);
+  const execCalls = readJsonLines(execLogPath);
+  assert.ok(execCalls.some((entry) => entry.command === "git" && entry.args.includes("push")));
+});
+
+test("dispatch dry-run never invokes orchestrator push or PR creation", () => {
+  const { repoRoot, relayHome } = setupRepoWithOrigin();
+  const { env, ghLogPath, execLogPath } = createPushPrTestEnv({
+    relayHome,
+    ghState: {
+      prCreateUrl: "https://github.com/acme/dev-relay/pull/322",
+    },
+  });
+
+  const result = JSON.parse(runDispatch(repoRoot, [
+    "-b", "issue-198-dry-run",
+    "--prompt", "preview only",
+    "--dry-run",
+    "--json",
+  ], env));
+
+  assert.equal(result.mode, "new");
+  assert.equal(result.runState, null);
+  assert.deepEqual(readJsonLines(ghLogPath), []);
+  assert.deepEqual(readJsonLines(execLogPath), []);
+});
+
+test("dispatch escalates when orchestrator git push fails", () => {
+  const { repoRoot, relayHome } = setupRepoWithOrigin();
+  const { env } = createPushPrTestEnv({
+    relayHome,
+    ghState: {
+      prCreateUrl: "https://github.com/acme/dev-relay/pull/323",
+    },
+    failGitPush: true,
+  });
+
+  const proc = spawnSync("node", [SCRIPT, repoRoot, ...withRequiredRubric([
+    "-b", "issue-198-push-fail",
+    "--prompt", "trigger push failure",
+    "--json",
+  ])], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    env,
+  });
+
+  assert.notEqual(proc.status, 0);
+  const result = JSON.parse(proc.stdout);
+  assert.equal(result.status, "failed");
+  assert.equal(result.runState, STATES.ESCALATED);
+  assert.match(result.error, /push_or_pr_failed: git_push_failed/);
+
+  const manifest = readManifest(result.manifestPath).data;
+  assert.equal(manifest.state, STATES.ESCALATED);
+  assert.equal(manifest.git.pr_number, null);
+});
+
+test("dispatch escalates when orchestrator PR creation fails", () => {
+  const { repoRoot, relayHome } = setupRepoWithOrigin();
+  const { env } = createPushPrTestEnv({
+    relayHome,
+    ghState: {
+      failPrCreate: "simulated gh pr create failure",
+    },
+  });
+
+  const proc = spawnSync("node", [SCRIPT, repoRoot, ...withRequiredRubric([
+    "-b", "issue-198-pr-fail",
+    "--prompt", "trigger PR failure",
+    "--json",
+  ])], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    env,
+  });
+
+  assert.notEqual(proc.status, 0);
+  const result = JSON.parse(proc.stdout);
+  assert.equal(result.status, "failed");
+  assert.equal(result.runState, STATES.ESCALATED);
+  assert.match(result.error, /push_or_pr_failed: gh_pr_create_failed/);
+
+  const manifest = readManifest(result.manifestPath).data;
+  assert.equal(manifest.state, STATES.ESCALATED);
+  assert.equal(manifest.git.pr_number, null);
+});
+
+test("dispatch skips PR creation when the branch already has an open PR", () => {
+  const { repoRoot, relayHome } = setupRepoWithOrigin();
+  const { env, ghLogPath } = createPushPrTestEnv({
+    relayHome,
+    ghState: {
+      prListNumber: 654,
+      prCreateUrl: "https://github.com/acme/dev-relay/pull/999",
+    },
+  });
+
+  const result = JSON.parse(runDispatch(repoRoot, [
+    "-b", "issue-198-existing-pr",
+    "--prompt", "reuse existing PR",
+    "--json",
+  ], env));
+
+  assert.equal(result.status, "completed");
+  assert.equal(result.runState, STATES.REVIEW_PENDING);
+  assert.equal(result.prNumber, 654);
+  assert.equal(result.prCreatedByUs, false);
+
+  const manifest = readManifest(result.manifestPath).data;
+  assert.equal(manifest.git.pr_number, 654);
+  assert.equal(manifest.github.pr_number, 654);
+  assert.equal(manifest.github.pr_created_by_orchestrator, false);
+
+  const ghCalls = readJsonLines(ghLogPath);
+  assert.deepEqual(ghCalls.map((args) => args.slice(0, 2)), [["pr", "list"]]);
+});
+
+test("dispatch silent-failure path skips orchestrator push and PR creation when no commits were made", () => {
+  const { repoRoot, relayHome } = setupRepoWithOrigin();
+  const { env, ghLogPath, execLogPath } = createPushPrTestEnv({
+    relayHome,
+    ghState: {
+      prCreateUrl: "https://github.com/acme/dev-relay/pull/324",
+    },
+    codexMode: "noop",
+  });
+
+  const proc = spawnSync("node", [SCRIPT, repoRoot, ...withRequiredRubric([
+    "-b", "issue-198-no-commits",
+    "--prompt", "do nothing",
+    "--json",
+  ])], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    env,
+  });
+
+  assert.notEqual(proc.status, 0);
+  const result = JSON.parse(proc.stdout);
+  assert.equal(result.status, "failed");
+  assert.equal(result.runState, STATES.ESCALATED);
+  assert.match(result.error, /silent failure/);
+  assert.deepEqual(readJsonLines(ghLogPath), []);
+  assert.deepEqual(readJsonLines(execLogPath), []);
 });
 
 test("re-dispatch prompt includes previous iteration history", () => {
@@ -849,8 +1177,7 @@ test("new dispatch manifest includes environment snapshot", () => {
   assert.ok(manifest.environment);
   assert.equal(manifest.environment.node_version, process.version);
   assert.equal(typeof manifest.environment.dispatch_ts, "string");
-  // No remote in test repo, so main_sha is null
-  assert.equal(manifest.environment.main_sha, null);
+  assert.match(manifest.environment.main_sha, /^[0-9a-f]{40}$/);
 });
 
 test("re-dispatch detects environment drift and records event", () => {

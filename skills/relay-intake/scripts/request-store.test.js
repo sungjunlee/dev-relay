@@ -28,12 +28,16 @@ const REVIEW_RUNNER_SCRIPT = path.join(__dirname, "..", "..", "relay-review", "s
 function setupRepo() {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-intake-"));
   const relayHome = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  const remoteRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-intake-origin-"));
   execFileSync("git", ["init", "-b", "main"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
+  execFileSync("git", ["init", "--bare", remoteRoot], { encoding: "utf-8", stdio: "pipe" });
   execFileSync("git", ["config", "user.name", "Relay Intake Test"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
   execFileSync("git", ["config", "user.email", "relay-intake@example.com"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
   fs.writeFileSync(path.join(repoRoot, "README.md"), "base\n", "utf-8");
   execFileSync("git", ["add", "README.md"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
   execFileSync("git", ["commit", "-m", "init"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
+  execFileSync("git", ["remote", "add", "origin", remoteRoot], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
+  execFileSync("git", ["push", "-u", "origin", "main"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
   process.env.RELAY_HOME = relayHome;
   return { repoRoot, relayHome };
 }
@@ -181,6 +185,22 @@ function proposeDelegateFallback(repoRoot, requestId, {
 }
 
 function writeFakeCodex(binDir) {
+  const ghPath = path.join(binDir, "gh");
+  if (!fs.existsSync(ghPath)) {
+    fs.writeFileSync(ghPath, `#!/usr/bin/env node
+const args = process.argv.slice(2);
+if (args[0] === "pr" && args[1] === "list") {
+  process.exit(0);
+}
+if (args[0] === "pr" && args[1] === "create") {
+  process.stdout.write("https://example.test/acme/dev-relay/pull/123\\n");
+  process.exit(0);
+}
+process.stderr.write("Unsupported gh invocation: " + args.join(" "));
+process.exit(1);
+`, "utf-8");
+    fs.chmodSync(ghPath, 0o755);
+  }
   const codexPath = path.join(binDir, "codex");
   fs.writeFileSync(codexPath, `#!/usr/bin/env node
 const fs = require("fs");
