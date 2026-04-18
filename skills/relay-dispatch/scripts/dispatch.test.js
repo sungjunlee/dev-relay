@@ -931,6 +931,52 @@ test("dispatch with --executor claude supports resume", () => {
   assert.equal(second.runState, STATES.REVIEW_PENDING);
 });
 
+test("dispatch with --register --executor claude does not emit the codex-only warning", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-claude-bin-"));
+  const preloadRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-claude-register-preload-"));
+  writeFakeClaude(binDir);
+  const preloadPath = writePreloadScript(preloadRoot, "dispatch-claude-register-preload.js", `
+const Module = require("module");
+const originalLoad = Module._load;
+Module._load = function patchedLoad(request, parent, isMain) {
+  if (request === "./claude-app-register" || request.endsWith("/claude-app-register")) {
+    return {
+      registerClaudeApp() {
+        return {
+          sessionId: "claude-session-fixed",
+          metadataPath: "/tmp/claude-registration.json",
+        };
+      },
+    };
+  }
+  return originalLoad(request, parent, isMain);
+};
+`);
+  const env = withNodePreload({
+    ...process.env,
+    PATH: `${binDir}:${process.env.PATH}`,
+    RELAY_HOME: relayHome,
+  }, preloadPath);
+
+  const result = spawnSync("node", [SCRIPT, repoRoot, ...withRequiredRubric([
+    "-b", "issue-87-claude-register",
+    "-e", "claude",
+    "--prompt", "register claude task",
+    "--register",
+  ])], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    env,
+  });
+
+  assert.equal(result.status, 0);
+  assert.doesNotMatch(result.stdout, /--register is only supported for codex executor/);
+  assert.doesNotMatch(result.stdout, /claude registration failed:/);
+  assert.match(result.stdout, /Registered in claude app\./);
+});
+
 test("timeout with commits produces completed-with-warning", () => {
   const { repoRoot, relayHome } = setupRepo();
   process.env.RELAY_HOME = relayHome;
