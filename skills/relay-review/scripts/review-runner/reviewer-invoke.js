@@ -9,8 +9,11 @@ const { git, readText, writeText } = require("./common");
 
 function resolveReviewerName(data, reviewerArg) {
   const manifestReviewer = data.roles?.reviewer;
+  const envReviewer = typeof process.env.RELAY_REVIEWER === "string"
+    ? process.env.RELAY_REVIEWER.trim()
+    : "";
   if (reviewerArg) return reviewerArg;
-  if (process.env.RELAY_REVIEWER) return process.env.RELAY_REVIEWER;
+  if (envReviewer) return envReviewer;
   if (manifestReviewer && manifestReviewer !== "unknown") return manifestReviewer;
   return "codex";
 }
@@ -102,13 +105,21 @@ function loadReviewText({ body, data, manifestPath, prNumber, promptPath, review
       reviewedHeadSha,
       "policy_violation"
     );
-    writeManifest(manifestPath, escalatedManifest, body);
+    const reviewerStampedManifest = {
+      ...escalatedManifest,
+      review: {
+        ...(escalatedManifest.review || {}),
+        last_reviewer: reviewerName,
+      },
+    };
+    writeManifest(manifestPath, reviewerStampedManifest, body);
     appendRunEvent(runRepoPath, data.run_id, {
       event: "review_apply",
       state_from: data.state,
       state_to: STATES.ESCALATED,
       head_sha: reviewedHeadSha,
       round,
+      reviewer: reviewerName,
       reason: "policy_violation",
     });
     throw new Error(`Reviewer write policy violation detected; manifest escalated and details saved to ${violationPath}`);

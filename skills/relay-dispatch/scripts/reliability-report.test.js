@@ -603,6 +603,14 @@ test("reliability-report adds role-level grouping when --by-role is set", () => 
       reviewer: "claude",
     },
   }, claudeRecord.body);
+  appendRunEvent(repoRoot, runClaude, {
+    event: "review_apply",
+    state_from: STATES.REVIEW_PENDING,
+    state_to: STATES.CHANGES_REQUESTED,
+    round: 2,
+    reviewer: "claude",
+    reason: "changes_requested",
+  });
 
   const stdout = execFileSync("node", [SCRIPT, "--repo", repoRoot, "--json", "--by-role"], { encoding: "utf-8" });
   const report = JSON.parse(stdout);
@@ -610,6 +618,7 @@ test("reliability-report adds role-level grouping when --by-role is set", () => 
   assert.equal(report.by_role.orchestrator.codex.totals.manifests, 2);
   assert.equal(report.by_role.executor.codex.totals.manifests, 1);
   assert.equal(report.by_role.executor.claude.totals.manifests, 1);
+  assert.equal(report.by_role.executor.claude.totals.events, 1);
   assert.equal(report.by_role.reviewer.codex.totals.manifests, 1);
   assert.equal(report.by_role.reviewer.claude.totals.manifests, 1);
 });

@@ -199,4 +199,4 @@ roles: {
 }
 ```
 
-The `RELAY_REVIEWER` environment variable and `--reviewer` flag override the manifest default at review time.
+At review time, `--reviewer` (or `RELAY_REVIEWER`) selects the acting reviewer for the round. The assigned `roles.reviewer` binding stays immutable; the acting reviewer is recorded in `review.last_reviewer` and the `review_apply` event payload.

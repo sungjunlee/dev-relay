@@ -1122,12 +1122,17 @@ test("dispatch pushes the branch and opens a PR from the orchestrator on success
       prCreateUrl: "https://github.com/acme/dev-relay/pull/321",
     },
   });
+  const dispatchEnv = {
+    ...env,
+    RELAY_ORCHESTRATOR: "",
+    RELAY_REVIEWER: "",
+  };
 
   const result = JSON.parse(runDispatch(repoRoot, [
     "-b", "issue-198",
     "--prompt", "implement orchestrator PR creation",
     "--json",
-  ], env));
+  ], dispatchEnv));
 
   assert.equal(result.status, "completed");
   assert.equal(result.runState, STATES.REVIEW_PENDING);

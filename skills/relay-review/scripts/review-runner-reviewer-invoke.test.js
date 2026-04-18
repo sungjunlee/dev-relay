@@ -87,6 +87,8 @@ test("reviewer-invoke/resolveReviewerName preserves arg, manifest, env precedenc
   assert.equal(resolveReviewerName({ roles: { reviewer: "manifest-reviewer" } }, "arg-reviewer"), "arg-reviewer");
   assert.equal(resolveReviewerName({ roles: { reviewer: "manifest-reviewer" } }), "env-reviewer");
   assert.equal(resolveReviewerName({ roles: { reviewer: "unknown" } }), "env-reviewer");
+  process.env.RELAY_REVIEWER = "   ";
+  assert.equal(resolveReviewerName({ roles: { reviewer: "manifest-reviewer" } }), "manifest-reviewer");
 });
 
 test("reviewer-invoke/resolveReviewerScript resolves built-in adapters and rejects invalid names", () => {
@@ -197,8 +199,10 @@ process.stdout.write("{\\"verdict\\":\\"pass\\"}\\n");
   assert.equal(updatedManifest.review.rounds, 1);
   assert.equal(updatedManifest.review.latest_verdict, "policy_violation");
   assert.equal(updatedManifest.review.last_reviewed_sha, "abc123");
+  assert.equal(updatedManifest.review.last_reviewer, "codex");
   assert.match(fs.readFileSync(violationPath, "utf-8"), /mutated\.txt/);
   assert.match(fs.readFileSync(eventsPath, "utf-8"), /"reason":"policy_violation"/);
+  assert.match(fs.readFileSync(eventsPath, "utf-8"), /"reviewer":"codex"/);
 });
 
 test("reviewer-invoke/captureGitStatus preserves dirty-worktree detection", () => {

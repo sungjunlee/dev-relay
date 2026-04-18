@@ -140,12 +140,8 @@ The runner:
 - writes `review-round-N-policy-violation.txt` if the reviewer changed files
 - writes `review-round-N-redispatch.md` when changes are requested
 
-<!-- NOTE: gate-check.js now treats the latest relay-review or relay-review-round comment as authoritative and blocks merge on CHANGES_REQUESTED or ESCALATED. -->
-
 ## Re-dispatch (when issues found)
 
 Use the generated `review-round-N-redispatch.md` artifact as the targeted fix prompt. It already includes the issue list, scope guardrail, and original Done Criteria.
 
-See `references/evaluate-criteria.md` for escalation policy (auto re-dispatch vs ask user).
-
-On non-default GitHub hosts (GHE, self-hosted), `reviewer_login` can be recorded with the wrong identity, which causes `relay-merge` gate-check to reject the PR as `unauthorized_reviewer`. Stopgap workaround and tracking until [#199](https://github.com/sungjunlee/dev-relay/issues/199) lands: `../relay/references/non-default-github-host.md`.
+See `references/evaluate-criteria.md` for escalation policy (auto re-dispatch vs ask user). On non-default GitHub hosts (GHE, self-hosted), `reviewer_login` can be recorded with the wrong identity, which causes `relay-merge` gate-check to reject the PR as `unauthorized_reviewer`. Stopgap workaround and tracking until [#199](https://github.com/sungjunlee/dev-relay/issues/199) lands: `../relay/references/non-default-github-host.md`.
