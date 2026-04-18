@@ -513,16 +513,21 @@ function buildRoleReports({ repoRoot, staleHours, now, manifests, events }) {
 // reviewer that executed a round), not from the assigned `roles.reviewer`
 // binding. A single run can appear under multiple acting reviewers if it was
 // reviewed by different agents across rounds; that's intentional so
-// override-heavy runs show up in every bucket they contributed to. Runs with
-// no `review_apply` events appear in no bucket; runs whose `review_apply`
-// events lack a `reviewer` field are bucketed under "unknown" rather than
-// silently attributed to the assigned reviewer.
+// override-heavy runs show up in every bucket they contributed to.
+//
+// Events with no `reviewer` field are system-emitted state transitions
+// (e.g., review-runner's `max_rounds_exceeded` escalation), not rounds any
+// reviewer actually performed — those are skipped so they don't phantom-count
+// into an "unknown" bucket. Events that carry an explicit but empty/whitespace
+// reviewer value do land in "unknown" so data-integrity issues remain visible.
+// Runs with no reviewer-tagged `review_apply` events appear in no bucket.
 function buildActingReviewerReports({ repoRoot, staleHours, now, manifests, events }) {
   const runsByReviewer = new Map();
   const roundsByReviewer = new Map();
 
   for (const event of events) {
     if (event.event !== "review_apply" || !event.run_id) continue;
+    if (event.reviewer === undefined || event.reviewer === null) continue;
     const reviewer = normalizeActingReviewerName(event.reviewer);
     if (!runsByReviewer.has(reviewer)) {
       runsByReviewer.set(reviewer, new Set());

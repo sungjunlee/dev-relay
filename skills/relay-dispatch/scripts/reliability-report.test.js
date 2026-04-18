@@ -800,36 +800,48 @@ test("reliability-report --by-acting-reviewer aggregates multiple rounds by the 
   assert.equal(report.by_acting_reviewer.codex.review_rounds_performed, 3);
 });
 
-test("reliability-report --by-acting-reviewer buckets review_apply without reviewer field as unknown", () => {
+test("reliability-report --by-acting-reviewer skips review_apply events with no reviewer field", () => {
+  // System-emitted review_apply events (e.g. review-runner max_rounds_exceeded
+  // escalation) have no `reviewer` field because no reviewer actually ran a
+  // round. They must not be bucketed — not to the assigned reviewer, not to
+  // "unknown" — so acting-reviewer analytics reflect real reviewer execution.
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-report-acting-missing-"));
   process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
   initGitRepo(repoRoot, "Relay Test");
   const recentTs = new Date(Date.now() - 1 * 60 * 60 * 1000).toISOString();
-  const runMissing = createRunId({ branch: "run-missing", timestamp: new Date("2026-04-12T10:00:00.000Z") });
-  const runNoReview = createRunId({ branch: "run-no-review", timestamp: new Date("2026-04-12T10:00:01.000Z") });
+  const runSystemOnly = createRunId({ branch: "run-system-only", timestamp: new Date("2026-04-12T10:00:00.000Z") });
+  const runRealReview = createRunId({ branch: "run-real-review", timestamp: new Date("2026-04-12T10:00:01.000Z") });
 
   writeRun(repoRoot, {
-    runId: runMissing,
+    runId: runSystemOnly,
+    state: STATES.ESCALATED,
+    rounds: 20,
+    updatedAt: recentTs,
+  });
+  writeRun(repoRoot, {
+    runId: runRealReview,
     state: STATES.CHANGES_REQUESTED,
     rounds: 1,
     updatedAt: recentTs,
   });
-  writeRun(repoRoot, {
-    runId: runNoReview,
-    state: STATES.DISPATCHED,
-    rounds: 0,
-    updatedAt: recentTs,
-  });
-  setManifestReviewerRole(repoRoot, runMissing, "codex");
-  setManifestReviewerRole(repoRoot, runNoReview, "codex");
+  setManifestReviewerRole(repoRoot, runSystemOnly, "codex");
+  setManifestReviewerRole(repoRoot, runRealReview, "codex");
 
-  // Legacy event recorded before the reviewer field was added — no `reviewer`
-  // key at all. Must not be silently attributed to the assigned reviewer.
-  appendRunEvent(repoRoot, runMissing, {
+  // Simulates review-runner.js line ~149 — escalation transition with no
+  // reviewer on the event. Must be skipped by the acting-reviewer aggregator.
+  appendRunEvent(repoRoot, runSystemOnly, {
+    event: "review_apply",
+    state_from: STATES.REVIEW_PENDING,
+    state_to: STATES.ESCALATED,
+    round: 20,
+    reason: "max_rounds_exceeded",
+  });
+  appendRunEvent(repoRoot, runRealReview, {
     event: "review_apply",
     state_from: STATES.REVIEW_PENDING,
     state_to: STATES.CHANGES_REQUESTED,
     round: 1,
+    reviewer: "codex",
     reason: "changes_requested",
   });
 
@@ -841,10 +853,50 @@ test("reliability-report --by-acting-reviewer buckets review_apply without revie
   ], { encoding: "utf-8" });
   const report = JSON.parse(stdout);
 
-  // Run with no review_apply events is not in any bucket.
-  // Run with reviewer-less review_apply event goes to `unknown`, not `codex`.
+  // Only the run with a real reviewer-tagged review_apply lands in a bucket.
+  // No "unknown" bucket is created for the system-emitted escalation.
+  assert.deepEqual(Object.keys(report.by_acting_reviewer), ["codex"]);
+  assert.equal(report.by_acting_reviewer.codex.totals.manifests, 1);
+  assert.equal(report.by_acting_reviewer.codex.review_rounds_performed, 1);
+});
+
+test("reliability-report --by-acting-reviewer routes explicit-but-empty reviewer to unknown bucket", () => {
+  // A review_apply with `reviewer: ""` (or null after stringification) means
+  // the producer intended to record a reviewer but sent corrupt data. We keep
+  // that visible in an "unknown" bucket so data-integrity issues surface in
+  // the report rather than being silently dropped.
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-report-acting-empty-reviewer-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  initGitRepo(repoRoot, "Relay Test");
+  const recentTs = new Date(Date.now() - 1 * 60 * 60 * 1000).toISOString();
+  const runCorrupt = createRunId({ branch: "run-corrupt", timestamp: new Date("2026-04-12T10:15:00.000Z") });
+
+  writeRun(repoRoot, {
+    runId: runCorrupt,
+    state: STATES.CHANGES_REQUESTED,
+    rounds: 1,
+    updatedAt: recentTs,
+  });
+  setManifestReviewerRole(repoRoot, runCorrupt, "codex");
+
+  appendRunEvent(repoRoot, runCorrupt, {
+    event: "review_apply",
+    state_from: STATES.REVIEW_PENDING,
+    state_to: STATES.CHANGES_REQUESTED,
+    round: 1,
+    reviewer: "   ",
+    reason: "changes_requested",
+  });
+
+  const stdout = execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--json",
+    "--by-acting-reviewer",
+  ], { encoding: "utf-8" });
+  const report = JSON.parse(stdout);
+
   assert.deepEqual(Object.keys(report.by_acting_reviewer), ["unknown"]);
-  assert.equal(report.by_acting_reviewer.unknown.totals.manifests, 1);
   assert.equal(report.by_acting_reviewer.unknown.review_rounds_performed, 1);
 });
 
