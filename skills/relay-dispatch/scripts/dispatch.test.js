@@ -548,7 +548,7 @@ test("dispatch reuses the same run and worktree on resume", () => {
   assert.match(events, /"reason":"same_run_resume:completed"/);
 });
 
-test("dispatch stores model_hints on a new run when --model-hints is provided", () => {
+test("dispatch stores model_hints for all four phases verbatim", () => {
   const { repoRoot, relayHome } = setupRepo();
   process.env.RELAY_HOME = relayHome;
   const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
@@ -562,13 +562,15 @@ test("dispatch stores model_hints on a new run when --model-hints is provided", 
   const result = JSON.parse(runDispatch(repoRoot, [
     "-b", "issue-109-model-hints-new",
     "--prompt", "persist new-run model hints",
-    "--model-hints", "dispatch=opus,review=haiku",
+    "--model-hints", "plan=X,dispatch=Y,review=Z,merge=W",
     "--json",
   ], env));
 
   assert.deepEqual(readManifest(result.manifestPath).data.model_hints, {
-    dispatch: "opus",
-    review: "haiku",
+    plan: "X",
+    dispatch: "Y",
+    review: "Z",
+    merge: "W",
   });
 });
 
@@ -617,6 +619,40 @@ test("dispatch resume replaces model_hints and records model_hints_updated befor
     dispatch: "sonnet",
     merge: "gpt-5.4",
   });
+});
+
+test("dispatch resume without --model-hints preserves stored hints and emits no model_hints_updated event", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  writeFakeCodex(binDir);
+  const env = {
+    ...process.env,
+    PATH: `${binDir}:${process.env.PATH}`,
+    RELAY_HOME: relayHome,
+  };
+
+  const first = JSON.parse(runDispatch(repoRoot, [
+    "-b", "issue-109-model-hints-preserve",
+    "--prompt", "initial dispatch",
+    "--model-hints", "dispatch=opus,review=haiku",
+    "--json",
+  ], env));
+  const record = readManifest(first.manifestPath);
+  writeManifest(first.manifestPath, {
+    ...updateManifestState(record.data, STATES.CHANGES_REQUESTED, "re_dispatch_requested_changes"),
+  }, record.body);
+
+  const expectedHints = JSON.stringify(readManifest(first.manifestPath).data.model_hints);
+  runDispatch(repoRoot, [
+    "--run-id", first.runId,
+    "--prompt", "resume dispatch",
+    "--json",
+  ], env);
+
+  assert.equal(JSON.stringify(readManifest(first.manifestPath).data.model_hints), expectedHints);
+  const events = readJsonLines(getEventsPath(repoRoot, first.runId));
+  assert.equal(events.filter((event) => event.event === "model_hints_updated").length, 0);
 });
 
 test("dispatch --model-hints rejects unknown phase keys without writing a manifest", () => {
@@ -905,6 +941,45 @@ test("dispatch dry-run resolves effective_dispatch_model from model hints and em
 
   assert.equal(result.effective_dispatch_model, "opus");
   assert.equal(listManifestPaths(repoRoot).length, 0);
+});
+
+test("dispatch resume --dry-run with new --model-hints reports the new hint in effective_dispatch_model and does NOT write the manifest or emit events", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  writeFakeCodex(binDir);
+  const env = {
+    ...process.env,
+    PATH: `${binDir}:${process.env.PATH}`,
+    RELAY_HOME: relayHome,
+  };
+
+  const first = JSON.parse(runDispatch(repoRoot, [
+    "-b", "issue-109-model-hints-dry-run-resume",
+    "--prompt", "initial dispatch",
+    "--model-hints", "dispatch=opus",
+    "--json",
+  ], env));
+  const record = readManifest(first.manifestPath);
+  writeManifest(first.manifestPath, {
+    ...updateManifestState(record.data, STATES.CHANGES_REQUESTED, "re_dispatch_requested_changes"),
+  }, record.body);
+
+  const beforeManifest = readManifest(first.manifestPath).data;
+  const result = JSON.parse(runDispatch(repoRoot, [
+    "--run-id", first.runId,
+    "--prompt", "resume dispatch dry-run",
+    "--model-hints", "dispatch=sonnet",
+    "--dry-run",
+    "--json",
+  ], env));
+
+  assert.equal(result.effective_dispatch_model, "sonnet");
+  const afterManifest = readManifest(first.manifestPath).data;
+  assert.equal(afterManifest.model_hints.dispatch, "opus");
+  const events = readJsonLines(getEventsPath(repoRoot, first.runId));
+  assert.equal(events.filter((event) => event.event === "model_hints_updated").length, 0);
+  assert.deepEqual(afterManifest.model_hints, beforeManifest.model_hints);
 });
 
 test("dispatch resumes rubric fail-closed recovery runs from changes_requested", () => {
