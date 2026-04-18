@@ -1002,48 +1002,214 @@ function validateRubricPathContainment(rubricPath, runDir) {
   }
 }
 
+// Self-thrown code when the target is not a regular file (FIFO, socket,
+// directory, device). Distinct from kernel-level EINVAL so the outer
+// swallow list (for platforms that raise EINVAL on O_NOFOLLOW) can't be
+// confused with "we already verified this is not a regular file".
+const ERR_NOT_REGULAR_FILE = "ENOT_REGULAR_FILE";
+
 function readTextFileWithoutFollowingSymlinks(targetPath, realPath) {
-  let fd = null;
   const noFollowFlag = fs.constants.O_NOFOLLOW;
+  // O_NONBLOCK prevents open(O_RDONLY) from blocking on a writer-less FIFO
+  // while we're verifying the target is a regular file. Regular files are
+  // unaffected. Falls back to 0 on platforms that don't expose it.
+  const nonBlockFlag = typeof fs.constants.O_NONBLOCK === "number" ? fs.constants.O_NONBLOCK : 0;
   const openPath = realPath || targetPath;
 
-  try {
-    if (typeof noFollowFlag === "number") {
-      fd = fs.openSync(openPath, fs.constants.O_RDONLY | noFollowFlag);
-      const stat = fs.fstatSync(fd);
-      if (!stat.isFile()) {
-        const error = new Error(`Not a file: ${openPath}`);
-        error.code = "EINVAL";
+  if (typeof noFollowFlag === "number") {
+    let fd = null;
+    try {
+      fd = fs.openSync(openPath, fs.constants.O_RDONLY | noFollowFlag | nonBlockFlag);
+    } catch (error) {
+      // Kernel-level rejections — fall through to the lstat-guarded fallback.
+      // Other errors (notably ENOENT) propagate to the caller.
+      if (!["ELOOP", "ENOTSUP", "EINVAL"].includes(error.code)) {
         throw error;
       }
-      return fs.readFileSync(fd, "utf-8");
     }
-  } catch (error) {
     if (fd !== null) {
-      fs.closeSync(fd);
-      fd = null;
+      try {
+        const stat = fs.fstatSync(fd);
+        if (!stat.isFile()) {
+          // Use a distinct code from the kernel-reject set above — if we
+          // reused "EINVAL" here, the outer swallow-and-fall-back logic
+          // would kick in and the fallback path would reopen the FIFO /
+          // socket / device with plain O_RDONLY, which can block (FIFO)
+          // or have side effects (device). ENOT_REGULAR_FILE is non-POSIX
+          // and therefore never confused with a kernel response.
+          const error = new Error(`Not a regular file: ${openPath}`);
+          error.code = ERR_NOT_REGULAR_FILE;
+          throw error;
+        }
+        return fs.readFileSync(fd, "utf-8");
+      } finally {
+        fs.closeSync(fd);
+      }
     }
-    if (!["ELOOP", "ENOTSUP", "EINVAL"].includes(error.code)) {
-      throw error;
-    }
+    // fd === null here means we caught ELOOP/ENOTSUP/EINVAL above. Fall
+    // through to the lstat-guarded fallback below.
   }
 
-  const rubricEntry = fs.lstatSync(targetPath);
-  if (rubricEntry.isSymbolicLink()) {
-    const error = new Error(`Refusing to read symlinked rubric path: ${targetPath}`);
+  const targetEntry = fs.lstatSync(targetPath);
+  if (targetEntry.isSymbolicLink()) {
+    const error = new Error(`Refusing to read symlinked path: ${targetPath}`);
     error.code = "ELOOP";
     throw error;
   }
+  if (!targetEntry.isFile()) {
+    // Non-regular target without crossing through open() — we already know
+    // from lstat it's not a symlink and not a regular file. Refuse before
+    // we open, to avoid blocking on a reader-less FIFO.
+    const error = new Error(`Not a regular file: ${targetPath}`);
+    error.code = ERR_NOT_REGULAR_FILE;
+    throw error;
+  }
 
-  fd = fs.openSync(openPath, fs.constants.O_RDONLY);
+  const fd = fs.openSync(openPath, fs.constants.O_RDONLY | nonBlockFlag);
   try {
     const stat = fs.fstatSync(fd);
     if (!stat.isFile()) {
-      const error = new Error(`Not a file: ${openPath}`);
-      error.code = "EINVAL";
+      const error = new Error(`Not a regular file: ${openPath}`);
+      error.code = ERR_NOT_REGULAR_FILE;
       throw error;
     }
     return fs.readFileSync(fd, "utf-8");
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+// Opens targetPath for writing without following symlinks. On platforms that
+// expose O_NOFOLLOW the kernel refuses the open atomically; on platforms
+// without it, we lstat first and refuse if the existing entry is a symlink
+// (best-effort fallback — a small TOCTOU window is unavoidable there).
+//
+// `mode` is "w" (truncate/create) or "a" (append/create). All writes use
+// 0o600 as the file mode on creation.
+// After opening an fd, verify it refers to a regular file — not a FIFO,
+// socket, device, or directory. Mirrors the check in the read helper. Opens
+// on a FIFO can block the writer; opens on a socket/device can have
+// side-effects we don't want. Closes the fd and throws ENOT_REGULAR_FILE
+// (non-POSIX, distinct from kernel EINVAL) so the outer catch below does
+// NOT swallow it as a fallback trigger — same fix as the read helper
+// (round-4 codex finding, now mirrored on the write side per round-5).
+function gateWritableFd(fd, targetPath) {
+  const stat = fs.fstatSync(fd);
+  if (!stat.isFile()) {
+    fs.closeSync(fd);
+    const error = new Error(`Not a regular file: ${targetPath}`);
+    error.code = ERR_NOT_REGULAR_FILE;
+    throw error;
+  }
+  return fd;
+}
+
+function openForWriteWithoutFollowingSymlinks(targetPath, mode) {
+  const modeFlags = {
+    w: fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_TRUNC,
+    a: fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_APPEND,
+  };
+  const flags = modeFlags[mode];
+  if (flags === undefined) {
+    throw new Error(`openForWriteWithoutFollowingSymlinks: invalid mode ${mode}`);
+  }
+  const noFollowFlag = fs.constants.O_NOFOLLOW;
+  // O_NONBLOCK prevents `open(O_WRONLY)` from blocking on a FIFO with no
+  // reader. Regular-file writes are unaffected. Not every platform defines
+  // it (Windows), so fall back to 0 (no-op) when unavailable.
+  const nonBlockFlag = typeof fs.constants.O_NONBLOCK === "number" ? fs.constants.O_NONBLOCK : 0;
+
+  if (typeof noFollowFlag === "number") {
+    try {
+      const fd = fs.openSync(targetPath, flags | noFollowFlag | nonBlockFlag, 0o600);
+      return gateWritableFd(fd, targetPath);
+    } catch (error) {
+      if (error.code === "ELOOP") {
+        const wrapped = new Error(`Refusing to open symlinked path: ${targetPath}`);
+        wrapped.code = "ELOOP";
+        throw wrapped;
+      }
+      if (!["ENOTSUP", "EINVAL"].includes(error.code)) {
+        throw error;
+      }
+      // fall through to the lstat-guarded fallback below
+    }
+  }
+
+  // Non-O_NOFOLLOW fallback (primarily Windows). Do NOT use fs.existsSync
+  // here — existsSync follows symlinks, so a dangling symlink would report
+  // "missing" and the subsequent open(O_CREAT, ...) would create through it.
+  // Use lstatSync unconditionally and treat ENOENT as the true "missing"
+  // signal.
+  let existingStat = null;
+  try {
+    existingStat = fs.lstatSync(targetPath);
+  } catch (statError) {
+    if (statError.code !== "ENOENT") throw statError;
+  }
+  if (existingStat) {
+    if (existingStat.isSymbolicLink()) {
+      const error = new Error(`Refusing to open symlinked path: ${targetPath}`);
+      error.code = "ELOOP";
+      throw error;
+    }
+    // Existing regular file — open normally. A small TOCTOU window between
+    // lstat and open is unavoidable on platforms without O_NOFOLLOW.
+    return gateWritableFd(fs.openSync(targetPath, flags | nonBlockFlag, 0o600), targetPath);
+  }
+  // No entry at the path — create atomically with O_EXCL so an attacker
+  // dropping a symlink between our lstat and open loses the race (EEXIST
+  // instead of creating through the link).
+  try {
+    return gateWritableFd(fs.openSync(targetPath, flags | fs.constants.O_EXCL | nonBlockFlag, 0o600), targetPath);
+  } catch (error) {
+    if (error.code === "EEXIST") {
+      const raced = fs.lstatSync(targetPath);
+      if (raced.isSymbolicLink()) {
+        const wrapped = new Error(`Refusing to open symlinked path: ${targetPath}`);
+        wrapped.code = "ELOOP";
+        throw wrapped;
+      }
+      return gateWritableFd(fs.openSync(targetPath, flags | nonBlockFlag, 0o600), targetPath);
+    }
+    throw error;
+  }
+}
+
+// fs.writeSync may write fewer bytes than requested (short write) and the
+// caller is responsible for looping on the returned count. Short writes
+// are very unlikely on the small run-dir files we target, but a truncated
+// events.jsonl record or half-written previous-attempts.json would be
+// silently corrupt if we didn't handle it — drain the buffer ourselves.
+function writeAllSync(fd, text, targetPath) {
+  const buffer = Buffer.from(text, "utf-8");
+  let offset = 0;
+  while (offset < buffer.length) {
+    const written = fs.writeSync(fd, buffer, offset, buffer.length - offset);
+    if (written <= 0) {
+      const error = new Error(
+        `writeSync made no progress writing to ${targetPath} at offset ${offset}/${buffer.length}`
+      );
+      error.code = "EIO";
+      throw error;
+    }
+    offset += written;
+  }
+}
+
+function appendTextFileWithoutFollowingSymlinks(targetPath, text) {
+  const fd = openForWriteWithoutFollowingSymlinks(targetPath, "a");
+  try {
+    writeAllSync(fd, text, targetPath);
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+function writeTextFileWithoutFollowingSymlinks(targetPath, text) {
+  const fd = openForWriteWithoutFollowingSymlinks(targetPath, "w");
+  try {
+    writeAllSync(fd, text, targetPath);
   } finally {
     fs.closeSync(fd);
   }
@@ -1152,7 +1318,7 @@ function getRubricAnchorStatus(data, options = {}) {
       };
     }
 
-    if (error.code === "EINVAL") {
+    if (error.code === "EINVAL" || error.code === ERR_NOT_REGULAR_FILE) {
       return {
         ...baseStatus,
         ...containment,
@@ -1478,9 +1644,25 @@ function getAttemptsPath(repoRoot, runId) {
 
 function readPreviousAttempts(repoRoot, runId) {
   const attemptsPath = getAttemptsPath(repoRoot, runId);
-  if (!fs.existsSync(attemptsPath)) return [];
+  // Do NOT short-circuit on fs.existsSync — existsSync follows symlinks, so a
+  // dangling symlink at attemptsPath would return false and we'd silently
+  // return []. That repeats the #157 fail-open class that #197 closes. Let
+  // the safe reader handle the symlink check; distinguish ENOENT (truly
+  // missing) from ELOOP (symlink refused).
+  let rawText;
   try {
-    return JSON.parse(fs.readFileSync(attemptsPath, "utf-8"));
+    rawText = readTextFileWithoutFollowingSymlinks(attemptsPath);
+  } catch (error) {
+    if (error.code === "ENOENT") return [];
+    if (error.code === "ELOOP") {
+      throw new Error(
+        `Refusing to read symlinked previous-attempts.json at ${attemptsPath}: ${error.message}`
+      );
+    }
+    throw error;
+  }
+  try {
+    return JSON.parse(rawText);
   } catch {
     console.error(`Warning: corrupted previous-attempts.json at ${attemptsPath}, ignoring`);
     return [];
@@ -1505,7 +1687,19 @@ function captureAttempt(repoRoot, runId, attemptData) {
     failed_approaches: attemptData.failed_approaches || [],
   };
   attempts.push(record);
-  fs.writeFileSync(getAttemptsPath(repoRoot, runId), JSON.stringify(attempts, null, 2), "utf-8");
+  try {
+    writeTextFileWithoutFollowingSymlinks(
+      getAttemptsPath(repoRoot, runId),
+      JSON.stringify(attempts, null, 2)
+    );
+  } catch (error) {
+    if (error.code === "ELOOP") {
+      throw new Error(
+        `Refusing to write symlinked previous-attempts.json at ${getAttemptsPath(repoRoot, runId)}: ${error.message}`
+      );
+    }
+    throw error;
+  }
   return record;
 }
 
@@ -1574,6 +1768,7 @@ module.exports = {
   NOTES_TEMPLATE,
   RELAY_VERSION,
   STATES,
+  appendTextFileWithoutFollowingSymlinks,
   captureAttempt,
   collectEnvironmentSnapshot,
   compareEnvironmentSnapshot,
@@ -1603,6 +1798,7 @@ module.exports = {
   parseFrontmatter,
   readManifest,
   readPreviousAttempts,
+  readTextFileWithoutFollowingSymlinks,
   runCleanup,
   summarizeError,
   updateManifestCleanup,
@@ -1613,4 +1809,5 @@ module.exports = {
   validateTransition,
   validateTransitionInvariants,
   writeManifest,
+  writeTextFileWithoutFollowingSymlinks,
 };

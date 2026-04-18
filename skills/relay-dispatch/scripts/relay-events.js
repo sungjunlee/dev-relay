@@ -1,10 +1,26 @@
 const fs = require("fs");
 const {
+  appendTextFileWithoutFollowingSymlinks,
   ensureRunLayout,
   getEventsPath,
   getActorName,
   getRunsDir,
+  readTextFileWithoutFollowingSymlinks,
 } = require("./relay-manifest");
+
+function appendEventLine(repoRoot, runId, record) {
+  const eventsPath = getEventsPath(repoRoot, runId);
+  try {
+    appendTextFileWithoutFollowingSymlinks(eventsPath, `${JSON.stringify(record)}\n`);
+  } catch (error) {
+    if (error.code === "ELOOP") {
+      throw new Error(
+        `Refusing to append to symlinked events.jsonl at ${eventsPath}: ${error.message}`
+      );
+    }
+    throw error;
+  }
+}
 
 const ALLOWED_ITERATION_STATUSES = new Set(["pass", "fail", "not_run"]);
 const ALLOWED_SCORE_TIERS = new Set(["contract", "quality"]);
@@ -39,7 +55,7 @@ function appendRunEvent(repoRoot, runId, eventData) {
       : {}),
   };
 
-  fs.appendFileSync(getEventsPath(repoRoot, runId), `${JSON.stringify(record)}\n`, "utf-8");
+  appendEventLine(repoRoot, runId, record);
   return record;
 }
 
@@ -87,7 +103,7 @@ function appendIterationScore(repoRoot, runId, { round, scores } = {}) {
     })),
   };
 
-  fs.appendFileSync(getEventsPath(repoRoot, runId), `${JSON.stringify(record)}\n`, "utf-8");
+  appendEventLine(repoRoot, runId, record);
   return record;
 }
 
@@ -137,7 +153,7 @@ function appendRubricQuality(repoRoot, runId, data = {}) {
     task_size: data.task_size,
   };
 
-  fs.appendFileSync(getEventsPath(repoRoot, runId), `${JSON.stringify(record)}\n`, "utf-8");
+  appendEventLine(repoRoot, runId, record);
   return record;
 }
 
@@ -184,14 +200,30 @@ function appendScoreDivergence(repoRoot, runId, { round, divergences } = {}) {
     })),
   };
 
-  fs.appendFileSync(getEventsPath(repoRoot, runId), `${JSON.stringify(record)}\n`, "utf-8");
+  appendEventLine(repoRoot, runId, record);
   return record;
 }
 
 function readRunEvents(repoRoot, runId) {
   const eventsPath = getEventsPath(repoRoot, runId);
-  if (!fs.existsSync(eventsPath)) return [];
-  return fs.readFileSync(eventsPath, "utf-8")
+  // Do NOT short-circuit on fs.existsSync — existsSync follows symlinks, so a
+  // dangling symlink at eventsPath would return false and we'd silently
+  // return []. That's exactly the fail-open class #157/#197 prohibit. Let
+  // the safe reader handle the symlink check; distinguish ENOENT (truly
+  // missing) from ELOOP (symlink refused) in the catch.
+  let rawText;
+  try {
+    rawText = readTextFileWithoutFollowingSymlinks(eventsPath);
+  } catch (error) {
+    if (error.code === "ENOENT") return [];
+    if (error.code === "ELOOP") {
+      throw new Error(
+        `Refusing to read symlinked events.jsonl at ${eventsPath}: ${error.message}`
+      );
+    }
+    throw error;
+  }
+  return rawText
     .split("\n")
     .map((line) => line.trim())
     .filter(Boolean)
