@@ -83,6 +83,7 @@ const {
   isRubricGrandfathered,
   validateRubricPathContainment,
 } = require("./manifest/rubric");
+const { getArg, hasFlag } = require("./cli-args");
 const { formatAttemptsForPrompt, readPreviousAttempts } = require("./manifest/attempts");
 const { STATES, updateManifestState } = require("./manifest/lifecycle");
 const { resolveManifestRecord } = require("./relay-resolver");
@@ -129,17 +130,6 @@ if (!args.length || args.includes("--help") || args.includes("-h")) {
   process.exit(args.includes("--help") || args.includes("-h") ? 0 : 1);
 }
 
-function getArg(flags, fallback) {
-  for (const flag of Array.isArray(flags) ? flags : [flags]) {
-    const idx = args.indexOf(flag);
-    if (idx !== -1 && idx + 1 < args.length && !KNOWN_FLAGS.includes(args[idx + 1])) {
-      return args[idx + 1];
-    }
-  }
-  return fallback;
-}
-const hasFlag = (f) => args.includes(f);
-
 // Positional arg: first arg that isn't a flag and isn't consumed as a flag's value
 const consumedIndices = new Set();
 for (let i = 0; i < args.length; i++) {
@@ -154,29 +144,29 @@ for (let i = 0; i < args.length; i++) {
 const repoPathRaw = args.find((a, i) => !consumedIndices.has(i) && !a.startsWith("-"));
 const REPO_PATH = path.resolve(repoPathRaw || ".");
 const PROJECT_NAME = path.basename(REPO_PATH);
-const BRANCH = getArg(["--branch", "-b"], undefined);
-const RUN_ID = getArg("--run-id", undefined);
-const MANIFEST_INPUT = getArg("--manifest", undefined);
-const PROMPT = getArg(["--prompt", "-p"], undefined);
-const PROMPT_FILE = getArg("--prompt-file", undefined);
-const EXECUTOR = getArg(["--executor", "-e"], "codex");
-const MODEL = getArg(["--model", "-m"], undefined);
-const SANDBOX = getArg("--sandbox", "workspace-write");
-const COPY_FILES = getArg("--copy", "").split(",").filter(Boolean);
-const RUBRIC_FILE = getArg("--rubric-file", undefined);
-const RUBRIC_GRANDFATHERED = hasFlag("--rubric-grandfathered");
-const REQUEST_ID = getArg("--request-id", undefined);
-const LEAF_ID = getArg("--leaf-id", undefined);
-const DONE_CRITERIA_FILE = getArg("--done-criteria-file", undefined);
-const TIMEOUT = parseInt(getArg("--timeout", "1800"), 10);
+const BRANCH = getArg(args, ["--branch", "-b"], undefined);
+const RUN_ID = getArg(args, "--run-id", undefined);
+const MANIFEST_INPUT = getArg(args, "--manifest", undefined);
+const PROMPT = getArg(args, ["--prompt", "-p"], undefined);
+const PROMPT_FILE = getArg(args, "--prompt-file", undefined);
+const EXECUTOR = getArg(args, ["--executor", "-e"], "codex");
+const MODEL = getArg(args, ["--model", "-m"], undefined);
+const SANDBOX = getArg(args, "--sandbox", "workspace-write");
+const COPY_FILES = getArg(args, "--copy", "").split(",").filter(Boolean);
+const RUBRIC_FILE = getArg(args, "--rubric-file", undefined);
+const RUBRIC_GRANDFATHERED = hasFlag(args, "--rubric-grandfathered");
+const REQUEST_ID = getArg(args, "--request-id", undefined);
+const LEAF_ID = getArg(args, "--leaf-id", undefined);
+const DONE_CRITERIA_FILE = getArg(args, "--done-criteria-file", undefined);
+const TIMEOUT = parseInt(getArg(args, "--timeout", "1800"), 10);
 if (isNaN(TIMEOUT) || TIMEOUT <= 0) {
   console.error("Error: --timeout must be a positive integer");
   process.exit(1);
 }
-const REGISTER = hasFlag("--register");
-const NO_CLEANUP = hasFlag("--no-cleanup");
-const DRY_RUN = hasFlag("--dry-run");
-const JSON_OUT = hasFlag("--json");
+const REGISTER = hasFlag(args, "--register");
+const NO_CLEANUP = hasFlag(args, "--no-cleanup");
+const DRY_RUN = hasFlag(args, "--dry-run");
+const JSON_OUT = hasFlag(args, "--json");
 const RESUME_MODE = !!RUN_ID || !!MANIFEST_INPUT;
 // ---------------------------------------------------------------------------
 // Validation

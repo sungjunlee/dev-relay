@@ -26,25 +26,25 @@ The cross-iteration STOP signal came from `memory/feedback_rubric_fail_closed.md
 
 ## Selector x Call-Site x State-Awareness Audit Table
 
-Restated from `skills/relay-dispatch/scripts/relay-resolver.js:1-23` so the review bundle includes the audit-table contract item directly. Line numbers are pinned to the post-fix source on `issue-174` HEAD; if a future change shifts them, update both the source header and this table together (call-site extension meta-rule, `memory/feedback_rubric_fail_closed.md`).
+The runtime file now keeps only the invariant pointer at `skills/relay-dispatch/scripts/relay-resolver.js:1-5`; the full audit table lives in `docs/relay-resolver-audit-history.md`. Line numbers below are pinned to the current `relay-resolver.js` tree so this historical mirror stays re-anchored with the runtime selectors.
 
 | Selector | Call site (line) | State-awareness verdict | Closed by |
 | --- | --- | --- | --- |
-| `filterByBranch` | `filterByBranchPrFallback:112` | state-aware via `excludeTerminal=true` | #149 |
+| `filterByBranch` | `filterByBranchPrFallback:98` | state-aware via `excludeTerminal=true` | #149 |
+| `filterByBranch` | `resolveManifestRecord:318` `branchMatches` | state-blind by purpose (error pool; sibling excludes) | #174 |
+| `filterByBranch` | `resolveManifestRecord:319` `nonTerminalBranchMatches` | state-aware via `excludeTerminal=true` | #149 |
 | `filterByBranch` | `resolveManifestRecord:341` `branchMatches` | state-blind by purpose (error pool; sibling excludes) | #174 |
-| `filterByBranch` | `resolveManifestRecord:342` `nonTerminalBranchMatches` | state-aware via `excludeTerminal=true` | #149 |
-| `filterByBranch` | `resolveManifestRecord:372` `branchMatches` | state-blind by purpose (error pool; sibling excludes) | #174 |
-| `filterByBranch` | `resolveManifestRecord:373` `branch-only matches` | state-aware via `excludeTerminal=true` | #149 |
-| `filterByBranch` | `resolveManifestRecord:402` `branchMatches` | state-blind by purpose (error pool; sibling excludes) | #174 |
-| `filterByBranch` | `resolveManifestRecord:404` `nonTerminalBranchMatches` | state-aware via `excludeTerminal=true` | #149 |
-| `filterByPr` | `resolveManifestRecord:351` branch+PR on `nonTerminal` | state-aware via composed subset | #170 |
-| `filterByPr` | `resolveManifestRecord:382` standalone `--pr` candidates | state-blind by purpose (full PR candidate error pool) | #174 |
-| `filterByPr` | `resolveManifestRecord:387` standalone `--pr` opt-in | state-blind by opt-in `includeTerminal=true` | #174 |
-| `filterByPr` | `resolveManifestRecord:391` standalone `--pr` default | state-aware via `filterOutTerminal` composition | #174 |
-| `filterByPr` | `resolveManifestRecord:408` retry terminal-only | terminal-only by purpose (mixed-state detector) | #170/#174 |
-| `filterByBranchPrFallback` | `resolveManifestRecord:343` branch+PR fallback | dispatched-only whitelist | #168 |
-| `filterByBranchPrFallback` | `resolveManifestRecord:403` retry fallback | dispatched-only whitelist | #168 |
-| `findManifestByRunId` | `resolveManifestRecord:327` explicit `--run-id` | state-blind by design | n/a |
+| `filterByBranch` | `resolveManifestRecord:342` `branch-only matches` | state-aware via `excludeTerminal=true` | #149 |
+| `filterByBranch` | `resolveManifestRecord:374` `branchMatches` | state-blind by purpose (error pool; sibling excludes) | #174 |
+| `filterByBranch` | `resolveManifestRecord:376` `nonTerminalBranchMatches` | state-aware via `excludeTerminal=true` | #149 |
+| `filterByPr` | `resolveManifestRecord:323` branch+PR on `nonTerminal` | state-aware via composed subset | #170 |
+| `filterByPr` | `resolveManifestRecord:351` standalone `--pr` candidates | state-blind by purpose (full PR candidate error pool) | #174 |
+| `filterByPr` | `resolveManifestRecord:357` standalone `--pr` opt-in | state-blind by opt-in `includeTerminal=true` | #174 |
+| `filterByPr` | `resolveManifestRecord:360` standalone `--pr` default | state-aware via `filterOutTerminal` composition | #174 |
+| `filterByPr` | `resolveManifestRecord:379` retry terminal-only | terminal-only by purpose (mixed-state detector) | #170/#174 |
+| `filterByBranchPrFallback` | `resolveManifestRecord:320` branch+PR fallback | dispatched-only whitelist | #168 |
+| `filterByBranchPrFallback` | `resolveManifestRecord:375` retry fallback | dispatched-only whitelist | #168 |
+| `findManifestByRunId` | `resolveManifestRecord:304` explicit `--run-id` | state-blind by design | n/a |
 
 ## Consumer Audit
 

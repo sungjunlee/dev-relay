@@ -9,26 +9,15 @@ const {
   validateManifestPaths,
 } = require("./manifest/paths");
 const { writeManifest } = require("./manifest/store");
+const { getArg, hasFlag } = require("./cli-args");
 const { resolveManifestRecord } = require("./relay-resolver");
 const { appendRunEvent } = require("./relay-events");
 
 const args = process.argv.slice(2);
-const KNOWN_FLAGS = ["--repo", "--run-id", "--reason", "--dry-run", "--json", "--help", "-h"];
 
-if (!args.length || args.includes("--help") || args.includes("-h")) {
+if (!args.length || hasFlag(args, ["--help", "-h"])) {
   console.log("Usage: close-run.js --repo <path> --run-id <id> --reason <text> [--dry-run] [--json]");
-  process.exit(args.includes("--help") || args.includes("-h") ? 0 : 1);
-}
-
-function getArg(flag) {
-  const index = args.indexOf(flag);
-  if (index === -1 || index + 1 >= args.length) return undefined;
-  const value = args[index + 1];
-  return KNOWN_FLAGS.includes(value) ? undefined : value;
-}
-
-function hasFlag(flag) {
-  return args.includes(flag);
+  process.exit(hasFlag(args, ["--help", "-h"]) ? 0 : 1);
 }
 
 function buildSkippedCleanupSummary(data, dryRun) {
@@ -53,11 +42,11 @@ function buildSkippedCleanupSummary(data, dryRun) {
 }
 
 function main() {
-  const repoRoot = path.resolve(getArg("--repo") || ".");
-  const runId = getArg("--run-id");
-  const reason = getArg("--reason");
-  const dryRun = hasFlag("--dry-run");
-  const jsonOut = hasFlag("--json");
+  const repoRoot = path.resolve(getArg(args, "--repo") || ".");
+  const runId = getArg(args, "--run-id");
+  const reason = getArg(args, "--reason");
+  const dryRun = hasFlag(args, "--dry-run");
+  const jsonOut = hasFlag(args, "--json");
   const gitBin = process.env.RELAY_GIT_BIN || "git";
 
   if (!runId) {

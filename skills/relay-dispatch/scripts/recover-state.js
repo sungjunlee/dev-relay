@@ -22,6 +22,7 @@ const {
   validateManifestPaths,
 } = require("./manifest/paths");
 const { writeManifest } = require("./manifest/store");
+const { getArg, hasFlag } = require("./cli-args");
 const { resolveManifestRecord } = require("./relay-resolver");
 const { appendRunEvent } = require("./relay-events");
 
@@ -67,8 +68,6 @@ const RECOVERY_TRANSITIONS = Object.freeze([
   },
 ]);
 
-const KNOWN_FLAGS = ["--repo", "--run-id", "--manifest", "--to", "--reason", "--force", "--dry-run", "--json", "--help", "-h"];
-
 function printUsage(stream = console.log) {
   stream(
     "Usage: recover-state.js (--repo <path> --run-id <id> | --manifest <path>) --to <state> --reason <text> [--force] [--dry-run] [--json]\n" +
@@ -80,17 +79,6 @@ function printUsage(stream = console.log) {
       return `  ${t.from} -> ${t.to}${forceFlag}${freshFlag}`;
     }).join("\n")
   );
-}
-
-function getArg(args, flag) {
-  const index = args.indexOf(flag);
-  if (index === -1 || index + 1 >= args.length) return undefined;
-  const value = args[index + 1];
-  return KNOWN_FLAGS.includes(value) ? undefined : value;
-}
-
-function hasFlag(args, flag) {
-  return args.includes(flag);
 }
 
 function findRecovery(fromState, toState) {

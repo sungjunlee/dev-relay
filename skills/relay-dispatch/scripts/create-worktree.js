@@ -37,6 +37,7 @@ const {
   formatPlan,
   registerWorktree,
 } = require("./worktree-runtime");
+const { getArg, hasFlag } = require("./cli-args");
 
 // ---------------------------------------------------------------------------
 // Args
@@ -54,36 +55,25 @@ if (!args.length || args.includes("--help") || args.includes("-h")) {
   process.exit(args.includes("--help") || args.includes("-h") ? 0 : 1);
 }
 
-const KNOWN_FLAGS = ["--branch", "-b", "--title", "-t", "--topic", "--worktree-path", "--copy", "--pin", "--register", "--dry-run", "--json", "--help", "-h"];
-function getArg(flags, fallback) {
-  for (const flag of Array.isArray(flags) ? flags : [flags]) {
-    const idx = args.indexOf(flag);
-    if (idx !== -1 && idx + 1 < args.length && !KNOWN_FLAGS.includes(args[idx + 1])) {
-      return args[idx + 1];
-    }
-  }
-  return fallback;
-}
-const hasFlag = (f) => args.includes(f);
-
 const repoPathRaw = args.find((a) => !a.startsWith("-"));
 const REPO_PATH = path.resolve(repoPathRaw || ".");
 const PROJECT_NAME = path.basename(REPO_PATH);
-const TOPIC = getArg("--topic", undefined);
-const BRANCH = getArg(["--branch", "-b"], TOPIC ? `codex/${TOPIC}` : undefined);
+const TOPIC = getArg(args, "--topic", undefined);
+const BRANCH = getArg(args, ["--branch", "-b"], TOPIC ? `codex/${TOPIC}` : undefined);
 const TITLE = getArg(
+  args,
   ["--title", "-t"],
   BRANCH ? `Worktree: ${BRANCH}` : `Worktree: ${PROJECT_NAME}`
 );
-const WORKTREE_PATH = getArg("--worktree-path", undefined);
-const COPY_FILES = getArg("--copy", "")
+const WORKTREE_PATH = getArg(args, "--worktree-path", undefined);
+const COPY_FILES = getArg(args, "--copy", "")
   .split(",")
   .filter(Boolean);
-const PIN = hasFlag("--pin");
+const PIN = hasFlag(args, "--pin");
 // --worktree-path implies --register (the only reason to use it)
-const REGISTER = hasFlag("--register") || !!WORKTREE_PATH;
-const DRY_RUN = hasFlag("--dry-run");
-const JSON_OUT = hasFlag("--json");
+const REGISTER = hasFlag(args, "--register") || !!WORKTREE_PATH;
+const DRY_RUN = hasFlag(args, "--dry-run");
+const JSON_OUT = hasFlag(args, "--json");
 
 // ---------------------------------------------------------------------------
 // Paths

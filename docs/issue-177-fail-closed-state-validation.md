@@ -18,25 +18,25 @@ The post-merge challenge scope for this PR is narrowed to the 5-part Batch 1.5 i
 
 ## Selector x Call-Site x State-Awareness Audit Table
 
-Restated from `skills/relay-dispatch/scripts/relay-resolver.js:1-27` so the review bundle includes the audit-table contract item directly. Line numbers below are pinned to the post-fix source on `issue-177` HEAD; if a future change shifts them, update both the source header and this table together.
+The runtime file now keeps only the invariant pointer at `skills/relay-dispatch/scripts/relay-resolver.js:1-5`; the full audit table lives in `docs/relay-resolver-audit-history.md`. Line numbers below are pinned to the current `relay-resolver.js` tree so this historical mirror stays re-anchored with the runtime selectors.
 
 | Selector | Call site (line) | State-awareness verdict | Closed by |
 | --- | --- | --- | --- |
-| `filterByBranch` | `filterByBranchPrFallback:133` | fail-closed via derived non-terminal whitelist (meta-rule 7) | #149/#177 |
-| `filterByBranch` | `resolveManifestRecord:366` `branchMatches` | state-blind by purpose (error pool; sibling excludes) | #174 |
-| `filterByBranch` | `resolveManifestRecord:367` `nonTerminalBranchMatches` | fail-closed via derived non-terminal whitelist (meta-rule 7) | #149/#177 |
-| `filterByBranch` | `resolveManifestRecord:400` `branchMatches` | state-blind by purpose (error pool; sibling excludes) | #174 |
-| `filterByBranch` | `resolveManifestRecord:401` `branch-only matches` | fail-closed via derived non-terminal whitelist (meta-rule 7) | #149/#177 |
-| `filterByBranch` | `resolveManifestRecord:434` `branchMatches` | state-blind by purpose (error pool; sibling excludes) | #174 |
-| `filterByBranch` | `resolveManifestRecord:436` `nonTerminalBranchMatches` | fail-closed via derived non-terminal whitelist (meta-rule 7) | #149/#177 |
-| `filterByPr` | `resolveManifestRecord:377` branch+PR on `nonTerminal` | fail-closed via derived non-terminal whitelist composition (meta-rule 7) | #170/#177 |
-| `filterByPr` | `resolveManifestRecord:410` standalone `--pr` candidates | state-blind by purpose (full PR candidate error pool) | #174 |
-| `filterByPr` | `resolveManifestRecord:416` standalone `--pr` opt-in | state-blind by opt-in `includeTerminal=true` | #174 |
-| `filterByPr` | `resolveManifestRecord:420` standalone `--pr` default | fail-closed via derived non-terminal whitelist composition (meta-rule 7) | #174/#177 |
-| `filterByPr` | `resolveManifestRecord:448` retry terminal-only | terminal-only by purpose (mixed-state detector) | #170/#174/#177 |
-| `filterByBranchPrFallback` | `resolveManifestRecord:368` branch+PR fallback | fail-closed via derived non-terminal whitelist (meta-rule 7) + dispatched-only whitelist | #168/#177 |
-| `filterByBranchPrFallback` | `resolveManifestRecord:435` retry fallback | fail-closed via derived non-terminal whitelist (meta-rule 7) + dispatched-only whitelist | #168/#177 |
-| `findManifestByRunId` | `resolveManifestRecord:352` explicit `--run-id` | state-blind by design | n/a |
+| `filterByBranch` | `filterByBranchPrFallback:98` | fail-closed via derived non-terminal whitelist (meta-rule 7) | #149/#177 |
+| `filterByBranch` | `resolveManifestRecord:318` `branchMatches` | state-blind by purpose (error pool; sibling excludes) | #174 |
+| `filterByBranch` | `resolveManifestRecord:319` `nonTerminalBranchMatches` | fail-closed via derived non-terminal whitelist (meta-rule 7) | #149/#177 |
+| `filterByBranch` | `resolveManifestRecord:341` `branchMatches` | state-blind by purpose (error pool; sibling excludes) | #174 |
+| `filterByBranch` | `resolveManifestRecord:342` `branch-only matches` | fail-closed via derived non-terminal whitelist (meta-rule 7) | #149/#177 |
+| `filterByBranch` | `resolveManifestRecord:374` `branchMatches` | state-blind by purpose (error pool; sibling excludes) | #174 |
+| `filterByBranch` | `resolveManifestRecord:376` `nonTerminalBranchMatches` | fail-closed via derived non-terminal whitelist (meta-rule 7) | #149/#177 |
+| `filterByPr` | `resolveManifestRecord:323` branch+PR on `nonTerminal` | fail-closed via derived non-terminal whitelist composition (meta-rule 7) | #170/#177 |
+| `filterByPr` | `resolveManifestRecord:351` standalone `--pr` candidates | state-blind by purpose (full PR candidate error pool) | #174 |
+| `filterByPr` | `resolveManifestRecord:357` standalone `--pr` opt-in | state-blind by opt-in `includeTerminal=true` | #174 |
+| `filterByPr` | `resolveManifestRecord:360` standalone `--pr` default | fail-closed via derived non-terminal whitelist composition (meta-rule 7) | #174/#177 |
+| `filterByPr` | `resolveManifestRecord:379` retry terminal-only | terminal-only by purpose (mixed-state detector) | #170/#174/#177 |
+| `filterByBranchPrFallback` | `resolveManifestRecord:320` branch+PR fallback | fail-closed via derived non-terminal whitelist (meta-rule 7) + dispatched-only whitelist | #168/#177 |
+| `filterByBranchPrFallback` | `resolveManifestRecord:375` retry fallback | fail-closed via derived non-terminal whitelist (meta-rule 7) + dispatched-only whitelist | #168/#177 |
+| `findManifestByRunId` | `resolveManifestRecord:304` explicit `--run-id` | state-blind by design | n/a |
 
 ## Consumer Audit Delta
 

@@ -23,21 +23,11 @@ const {
   readManifest,
   writeManifest,
 } = require("./manifest/store");
+const { getArg, hasFlag } = require("./cli-args");
 const { appendRunEvent } = require("./relay-events");
 const { safeFormatRunId } = require("./relay-resolver");
 
 const args = process.argv.slice(2);
-
-function hasFlag(flag) {
-  return args.includes(flag);
-}
-
-function getArg(flag, fallback) {
-  const index = args.indexOf(flag);
-  if (index === -1 || index + 1 >= args.length) return fallback;
-  const value = args[index + 1];
-  return value.startsWith("--") ? fallback : value;
-}
 
 function parseHours(value, label) {
   const parsed = Number(value);
@@ -47,7 +37,7 @@ function parseHours(value, label) {
   return parsed;
 }
 
-if (hasFlag("--help") || hasFlag("-h")) {
+if (hasFlag(args, ["--help", "-h"])) {
   console.log("Usage: cleanup-worktrees.js [options]");
   console.log("\nManifest-aware relay janitor for stale worktrees.");
   console.log("\nOptions:");
@@ -60,12 +50,12 @@ if (hasFlag("--help") || hasFlag("-h")) {
 }
 
 function run() {
-  const repoRoot = path.resolve(getArg("--repo", "."));
-  const dryRun = hasFlag("--dry-run");
-  const all = hasFlag("--all");
-  const jsonOut = hasFlag("--json");
+  const repoRoot = path.resolve(getArg(args, "--repo", "."));
+  const dryRun = hasFlag(args, "--dry-run");
+  const all = hasFlag(args, "--all");
+  const jsonOut = hasFlag(args, "--json");
   const gitBin = process.env.RELAY_GIT_BIN || "git";
-  const olderThanHours = all ? 0 : parseHours(getArg("--older-than", "24"), "--older-than");
+  const olderThanHours = all ? 0 : parseHours(getArg(args, "--older-than", "24"), "--older-than");
   const now = Date.now();
   const cutoff = now - olderThanHours * 60 * 60 * 1000;
 

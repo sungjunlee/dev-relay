@@ -3,25 +3,14 @@
 const path = require("path");
 const { STATES } = require("./manifest/lifecycle");
 const { listManifestRecords } = require("./manifest/store");
+const { getArg, hasFlag } = require("./cli-args");
 const { readAllRunEvents } = require("./relay-events");
 
 const args = process.argv.slice(2);
-const KNOWN_FLAGS = ["--repo", "--stale-hours", "--json", "--by-actor", "--help", "-h"];
 
-if (args.includes("--help") || args.includes("-h")) {
+if (hasFlag(args, ["--help", "-h"])) {
   console.log("Usage: reliability-report.js [--repo <path>] [--stale-hours <hours>] [--json] [--by-actor]");
   process.exit(0);
-}
-
-function getArg(flag, fallback) {
-  const index = args.indexOf(flag);
-  if (index === -1 || index + 1 >= args.length) return fallback;
-  const value = args[index + 1];
-  return KNOWN_FLAGS.includes(value) ? fallback : value;
-}
-
-function hasFlag(flag) {
-  return args.includes(flag);
 }
 
 function parseHours(value) {
@@ -455,18 +444,18 @@ function buildActorReports({ repoRoot, staleHours, now, manifests, events }) {
 }
 
 function main() {
-  const repoRoot = path.resolve(getArg("--repo", "."));
-  const staleHours = parseHours(getArg("--stale-hours", "72"));
+  const repoRoot = path.resolve(getArg(args, "--repo", "."));
+  const staleHours = parseHours(getArg(args, "--stale-hours", "72"));
   const now = Date.now();
   const manifests = listManifestRecords(repoRoot);
   const events = readAllRunEvents(repoRoot);
   const report = buildReport({ repoRoot, staleHours, now, manifests, events });
 
-  if (hasFlag("--by-actor")) {
+  if (hasFlag(args, "--by-actor")) {
     report.by_actor = buildActorReports({ repoRoot, staleHours, now, manifests, events });
   }
 
-  if (hasFlag("--json")) {
+  if (hasFlag(args, "--json")) {
     console.log(JSON.stringify(report, null, 2));
     return;
   }
@@ -488,7 +477,7 @@ function main() {
     console.log(`  avg_quality_ratio: ${report.rubric_insights.avg_quality_ratio ?? "n/a"}`);
     console.log(`  top_divergence_hotspot: ${topHotspot ? `${topHotspot.factor_pattern} (${topHotspot.avg_delta})` : "n/a"}`);
   }
-  if (hasFlag("--by-actor")) {
+  if (hasFlag(args, "--by-actor")) {
     const actorEntries = Object.entries(report.by_actor || {});
     console.log("  by_actor:");
     if (actorEntries.length === 0) {
