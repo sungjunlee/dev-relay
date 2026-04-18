@@ -1,4 +1,4 @@
-const { getRubricAnchorStatus } = require("../../relay-dispatch/scripts/relay-manifest");
+const { getRubricAnchorStatus } = require("../../relay-dispatch/scripts/manifest/rubric");
 
 const REVIEW_MARKER_PATTERN = /^\s*<!-- relay-review(?:-round)? -->\s*$/m;
 const SKIP_AUDIT_RUBRIC_STATUSES = Object.freeze([

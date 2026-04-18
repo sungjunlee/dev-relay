@@ -13,15 +13,16 @@
  */
 
 const path = require("path");
+const { isTerminalState } = require("./manifest/lifecycle");
 const {
   CLEANUP_STATUSES,
-  isTerminalState,
-  listManifestPaths,
-  readManifest,
   runCleanup,
-  validateManifestPaths,
+} = require("./manifest/cleanup");
+const { listManifestPaths, validateManifestPaths } = require("./manifest/paths");
+const {
+  readManifest,
   writeManifest,
-} = require("./relay-manifest");
+} = require("./manifest/store");
 const { appendRunEvent } = require("./relay-events");
 const { safeFormatRunId } = require("./relay-resolver");
 

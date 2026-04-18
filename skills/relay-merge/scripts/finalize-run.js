@@ -28,14 +28,16 @@ const path = require("path");
 const {
   getCanonicalRepoRoot,
   getRunDir,
+  validateManifestPaths,
+} = require("../../relay-dispatch/scripts/manifest/paths");
+const {
   STATES,
   updateManifestState,
-  validateManifestPaths,
-  writeManifest,
-} = require("../../relay-dispatch/scripts/relay-manifest");
+} = require("../../relay-dispatch/scripts/manifest/lifecycle");
+const { summarizeError, writeManifest } = require("../../relay-dispatch/scripts/manifest/store");
 const { resolveManifestRecord } = require("../../relay-dispatch/scripts/relay-resolver");
 const { appendRunEvent } = require("../../relay-dispatch/scripts/relay-events");
-const { runCleanup, summarizeError } = require("../../relay-dispatch/scripts/relay-manifest");
+const { runCleanup } = require("../../relay-dispatch/scripts/manifest/cleanup");
 const {
   buildSkipComment,
   evaluateReviewGate,

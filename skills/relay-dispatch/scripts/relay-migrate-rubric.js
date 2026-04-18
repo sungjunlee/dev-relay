@@ -4,14 +4,17 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 
+const { RUBRIC_MIGRATION_MANIFEST_BASENAME } = require("./manifest/rubric");
 const {
   getCanonicalRepoRoot,
-  getActorName,
   getRelayHome,
-  getRubricGrandfatherMetadata,
+} = require("./manifest/paths");
+const {
+  getActorName,
   readManifest,
   writeManifest,
-} = require("./relay-manifest");
+} = require("./manifest/store");
+const { getRubricGrandfatherMetadata } = require("./manifest/rubric");
 const { appendRunEvent } = require("./relay-events");
 const { resolveManifestRecord } = require("./relay-resolver");
 
@@ -24,7 +27,6 @@ Options:
   --manifest <path>     Migration manifest path (default: ~/.relay/migrations/rubric-mandatory.yaml)
   --dry-run             Print what would happen without writing
   --json                Output JSON`;
-const RUBRIC_MIGRATION_MANIFEST_BASENAME = "rubric-mandatory.yaml";
 
 function parseScalar(value) {
   const trimmed = String(value || "").trim();

@@ -17,12 +17,11 @@
 
 const path = require("path");
 const { execFileSync } = require("child_process");
+const { STATES, forceTransitionState } = require("./manifest/lifecycle");
 const {
-  STATES,
-  forceTransitionState,
   validateManifestPaths,
-  writeManifest,
-} = require("./relay-manifest");
+} = require("./manifest/paths");
+const { writeManifest } = require("./manifest/store");
 const { resolveManifestRecord } = require("./relay-resolver");
 const { appendRunEvent } = require("./relay-events");
 

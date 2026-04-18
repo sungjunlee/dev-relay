@@ -27,7 +27,9 @@
 // ---------------------------------------------------------------------------
 
 const path = require("path");
-const { STATES, listManifestRecords, readManifest, validateRunId, validateTransition } = require("./relay-manifest");
+const { STATES, validateTransition } = require("./manifest/lifecycle");
+const { listManifestRecords, readManifest } = require("./manifest/store");
+const { validateRunId } = require("./manifest/paths");
 
 const BRANCH_ONLY_TERMINAL_STATES = new Set([STATES.MERGED, STATES.CLOSED]);
 const KNOWN_NON_TERMINAL_STATES = new Set(

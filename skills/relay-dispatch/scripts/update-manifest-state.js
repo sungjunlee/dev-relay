@@ -27,12 +27,11 @@
  */
 
 const path = require("path");
+const { STATES, updateManifestState } = require("./manifest/lifecycle");
 const {
-  STATES,
   readManifest,
-  updateManifestState,
   writeManifest,
-} = require("./relay-manifest");
+} = require("./manifest/store");
 const { resolveManifestRecord } = require("./relay-resolver");
 
 const args = process.argv.slice(2);
