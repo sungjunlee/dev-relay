@@ -8,6 +8,7 @@ const fs = require("fs");
 const path = require("path");
 const { REVIEW_VERDICT_JSON_SCHEMA } = require("./review-schema");
 const { getArg: sharedGetArg, hasFlag: sharedHasFlag } = require("../../relay-dispatch/scripts/cli-args");
+const { summarizeFailure, ensureJsonText } = require("./reviewer-helpers");
 
 const args = process.argv.slice(2);
 const KNOWN_FLAGS = ["--repo", "--prompt-file", "--model", "--json", "--help", "-h"];
@@ -19,20 +20,6 @@ if (!args.length || args.includes("--help") || args.includes("-h")) {
 
 const getArg = (flag, fallback) => sharedGetArg(args, flag, fallback, { reservedFlags: KNOWN_FLAGS });
 const hasFlag = (flag) => sharedHasFlag(args, flag);
-
-function summarizeFailure(error) {
-  const stderr = String(error.stderr || "").trim();
-  const stdout = String(error.stdout || "").trim();
-  return stderr || stdout || error.message;
-}
-
-function ensureJsonText(text, label) {
-  try {
-    JSON.parse(text);
-  } catch (error) {
-    throw new Error(`${label} did not return valid JSON: ${error.message}`);
-  }
-}
 
 function main() {
   const repoPath = path.resolve(getArg("--repo") || ".");
