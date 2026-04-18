@@ -972,6 +972,7 @@ Module._load = function patchedLoad(request, parent, isMain) {
   });
 
   assert.equal(result.status, 0);
+  assert.doesNotMatch(result.stderr, /--register is only supported for codex executor/);
   assert.doesNotMatch(result.stdout, /--register is only supported for codex executor/);
   assert.doesNotMatch(result.stdout, /claude registration failed:/);
   assert.match(result.stdout, /Registered in claude app\./);
