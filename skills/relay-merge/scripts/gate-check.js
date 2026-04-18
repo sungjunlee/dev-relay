@@ -353,6 +353,10 @@ function output(result) {
     } else if (result.status === "manifest_resolution_failed") {
       console.log(`✗ PR #${PR_NUM}: unable to resolve relay manifest — merge blocked`);
       if (result.reason) console.log(`  ${result.reason}`);
+    } else if (result.status === "reviewer_login_required") {
+      console.log(`✗ PR #${PR_NUM}: reviewer_login was required for this run but could not be recorded — merge blocked`);
+      console.log("  Origin resolved to a non-default GitHub host but gh api user --hostname <host> failed during relay-review.");
+      console.log("  Fix the host auth (export GH_HOST=<host> or gh auth switch --hostname <host>), rerun relay-review, then retry.");
     } else if (result.status === "unauthorized_reviewer") {
       console.log(`✗ PR #${PR_NUM}: relay-review comment found but from unauthorized author (expected: ${result.expectedReviewerLogin})`);
     } else if (result.status === "stale") {
@@ -471,6 +475,25 @@ function main() {
   }
 
   const expectedReviewerLogin = manifestData?.review?.reviewer_login || null;
+  // review.reviewer_login_required is set by review-runner.js when the origin
+  // host was resolvable but gh could not return a host-scoped login. Without
+  // this hard-stop, fail-closed in getGhLogin would silently degrade into a
+  // skipped verification gate on non-default GitHub hosts (issue #199).
+  //
+  // Gate on the flag regardless of reviewer_login presence: review-runner
+  // clears reviewer_login when setting the flag, but if a manifest arrives
+  // with both fields populated (older code, manual edit), the flag is
+  // authoritative — the operator explicitly signaled that any previously
+  // recorded login is no longer trustworthy.
+  if (manifestData?.review?.reviewer_login_required === true) {
+    output({
+      status: "reviewer_login_required",
+      pr: PR_NUM,
+      readyToMerge: false,
+      reason: "manifest.review.reviewer_login_required is set — host-scoped gh api user failed during relay-review; fix host auth (GH_HOST / gh auth switch --hostname <host>) and rerun relay-review",
+    });
+    process.exit(1);
+  }
   if (!DRY_RUN && !expectedReviewerLogin && manifestData) {
     console.error("Note: reviewer author verification skipped — manifest is missing review.reviewer_login. Use finalize-run.js for full verification.");
   }
