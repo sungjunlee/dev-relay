@@ -166,7 +166,7 @@ On re-dispatch, iteration history (prior scores + reviewer feedback) is automati
 | `--sandbox` | `workspace-write` or `read-only` | `workspace-write` |
 | `--copy` | Additional files to copy (comma-separated) | ... |
 | `--timeout` | Timeout in seconds | `1800` |
-| `--register` | Additionally register in executor app (worktrees are retained by default) | `false` |
+| `--register` | Additionally register in the selected executor context (Codex app thread or Claude relay-side receipt; worktrees are retained by default) | `false` |
 | `--dry-run` | Print plan, don't execute | `false` |
 | `--json` | Structured JSON output | `false` |
 
@@ -343,7 +343,7 @@ dev-relay is designed to support new agents. No framework changes needed.
 
 2. Add an execution branch in the same file to wire up CLI arguments for the new executor
 
-3. Optional: app registration uses `create-worktree.js --register` (currently Codex-only, [#87](https://github.com/sungjunlee/dev-relay/issues/87) tracks broader support)
+3. Optional: dispatch-time app registration supports both executors. Codex writes a real Codex App thread; Claude writes a relay-side registration receipt under `~/.relay/worktrees/<wt-hash>/claude-registration.json`. `create-worktree.js --register` remains Codex-only.
 
 ### Adding a new reviewer
 
