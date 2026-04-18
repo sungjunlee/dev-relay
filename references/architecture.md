@@ -105,6 +105,7 @@ review:
   latest_verdict: pass           # pending | pass | changes_requested | escalated
   repeated_issue_count: 0
   last_reviewed_sha: abc123def
+  last_reviewer: codex           # acting reviewer for the most recent round
 
 cleanup:
   status: pending                # pending | succeeded | failed | skipped
@@ -137,17 +138,18 @@ timestamps:
 | `policy.reviewer_write` | `forbid` — review runner rejects rounds where reviewer mutated files |
 | `anchor.*` | Immutable review scope — prevents drift across rounds |
 | `review.last_reviewed_sha` | Gate-check blocks merge if HEAD has advanced past this |
+| `review.last_reviewer` | Tracks the acting reviewer for the latest round without mutating `roles.reviewer` |
 
 ## Event Journal
 
 Each run keeps an append-only event log at `~/.relay/runs/<repo-slug>/<run-id>/events.jsonl`:
 
 ```jsonl
-{"event":"dispatch_start","ts":"...","run_id":"issue-42-...","state_from":"draft","state_to":"dispatched","model":"opus"}
-{"event":"dispatch_result","ts":"...","run_id":"issue-42-...","state_from":"dispatched","state_to":"review_pending"}
-{"event":"review_invoke","ts":"...","run_id":"issue-42-...","round":1,"reason":"codex","model":"haiku"}
-{"event":"review_apply","ts":"...","run_id":"issue-42-...","round":1,"state_from":"review_pending","state_to":"changes_requested"}
-{"event":"review_apply","ts":"...","run_id":"issue-42-...","round":2,"state_from":"review_pending","state_to":"ready_to_merge"}
+{"event":"dispatch_started","timestamp":"...","executor":"codex","branch":"issue-42"}
+{"event":"dispatch_completed","timestamp":"...","status":"completed","runState":"review_pending"}
+{"event":"review_apply","timestamp":"...","round":1,"reviewer":"codex","reason":"changes_requested"}
+{"event":"review_apply","timestamp":"...","round":2,"reviewer":"codex","reason":"pass"}
+{"event":"state_transition","timestamp":"...","from":"review_pending","to":"ready_to_merge"}
 ```
 
 ## Review Round Artifacts
@@ -202,4 +204,4 @@ roles: {
 }
 ```
 
-The `RELAY_REVIEWER` environment variable and `--reviewer` flag override the manifest default at review time.
+At review time, `--reviewer` (or `RELAY_REVIEWER`) selects the acting reviewer for the round. The assigned `roles.reviewer` binding stays immutable; the acting reviewer is recorded in `review.last_reviewer` and the `review_apply` event payload.

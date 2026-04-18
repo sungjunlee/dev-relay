@@ -21,10 +21,10 @@ Reviews MUST run in a fresh context — no prior planning, dispatch, or conversa
 | Claude Code | `context: fork` frontmatter | Automatic — this SKILL.md's frontmatter triggers it |
 | Codex (reviewer adapter) | `--ephemeral --sandbox read-only` | Automatic — `invoke-reviewer-codex.js` passes these flags |
 | Claude (reviewer adapter) | `--bare --no-session-persistence` | Automatic — `invoke-reviewer-claude.js` passes these flags |
-| Codex (as orchestrator) | Start a new session | Manual — do not continue from the dispatch session |
+| Codex (manual inline review) | Start a new session | Manual — do not continue from the dispatch session |
 | Other / Fallback | Prefix prompt | Prepend: "You are reviewing code you did NOT write. You have no context about why it was written this way." |
 
-When using `--reviewer codex` or `--reviewer claude`, isolation is handled by the adapter scripts. When orchestrating manually or from an unsupported platform, you must ensure isolation yourself.
+Standard path: run `review-runner.js --reviewer codex` or `--reviewer claude`. In that path, isolation is already enforced by the adapter scripts. The manual "start a new session" rule applies only to inline reviews outside `review-runner`.
 
 ## Setup: Establish the anchor
 
@@ -142,10 +142,8 @@ The runner:
 - writes `review-round-N-policy-violation.txt` if the reviewer changed files
 - writes `review-round-N-redispatch.md` when changes are requested
 
-<!-- NOTE: gate-check.js now treats the latest relay-review or relay-review-round comment as authoritative and blocks merge on CHANGES_REQUESTED or ESCALATED. -->
-
 ## Re-dispatch (when issues found)
 
 Use the generated `review-round-N-redispatch.md` artifact as the targeted fix prompt. It already includes the issue list, scope guardrail, and original Done Criteria.
 
-See `references/evaluate-criteria.md` for escalation policy (auto re-dispatch vs ask user).
+See `references/evaluate-criteria.md` for escalation policy (auto re-dispatch vs ask user). On non-default GitHub hosts (GHE, self-hosted), `reviewer_login` can be recorded with the wrong identity, which causes `relay-merge` gate-check to reject the PR as `unauthorized_reviewer`. Stopgap workaround and tracking until [#199](https://github.com/sungjunlee/dev-relay/issues/199) lands: `../relay/references/non-default-github-host.md`.

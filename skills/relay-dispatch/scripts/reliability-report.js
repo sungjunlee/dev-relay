@@ -10,7 +10,7 @@ const args = process.argv.slice(2);
 const RESERVED = { reservedFlags: ["-h"] };
 
 if (hasFlag(args, ["--help", "-h"])) {
-  console.log("Usage: reliability-report.js [--repo <path>] [--stale-hours <hours>] [--json] [--by-actor]");
+  console.log("Usage: reliability-report.js [--repo <path>] [--stale-hours <hours>] [--json] [--by-actor] [--by-role]");
   process.exit(0);
 }
 
@@ -44,6 +44,10 @@ function average(values) {
 }
 
 function normalizeActorName(value) {
+  return typeof value === "string" && value.trim() ? value.trim() : "unknown";
+}
+
+function normalizeRoleName(value) {
   return typeof value === "string" && value.trim() ? value.trim() : "unknown";
 }
 
@@ -475,6 +479,32 @@ function buildActorReports({ repoRoot, staleHours, now, manifests, events }) {
   }));
 }
 
+function buildRoleReports({ repoRoot, staleHours, now, manifests, events }) {
+  const roleKeys = ["orchestrator", "executor", "reviewer"];
+  return Object.fromEntries(roleKeys.map((roleKey) => {
+    const roleNames = [...new Set(
+      manifests.map(({ data }) => normalizeRoleName(data?.roles?.[roleKey]))
+    )].sort((left, right) => left.localeCompare(right));
+
+    return [roleKey, Object.fromEntries(roleNames.map((roleName) => {
+      const roleManifests = manifests.filter(({ data }) => normalizeRoleName(data?.roles?.[roleKey]) === roleName);
+      const roleRunIds = new Set(
+        roleManifests
+          .map(({ data }) => data?.run_id)
+          .filter(Boolean)
+      );
+      const roleEvents = events.filter((event) => roleRunIds.has(event.run_id));
+      return [roleName, buildReport({
+        repoRoot,
+        staleHours,
+        now,
+        manifests: roleManifests,
+        events: roleEvents,
+      })];
+    }))];
+  }));
+}
+
 function main() {
   const repoRoot = path.resolve(getArg(args, "--repo", ".", RESERVED));
   const staleHours = parseHours(getArg(args, "--stale-hours", "72", RESERVED));
@@ -485,6 +515,9 @@ function main() {
 
   if (hasFlag(args, "--by-actor")) {
     report.by_actor = buildActorReports({ repoRoot, staleHours, now, manifests, events });
+  }
+  if (hasFlag(args, "--by-role")) {
+    report.by_role = buildRoleReports({ repoRoot, staleHours, now, manifests, events });
   }
 
   if (hasFlag(args, "--json")) {
@@ -523,6 +556,26 @@ function main() {
         `    ${actor}: manifests=${actorReport.totals.manifests} events=${actorReport.totals.events} ` +
         `most_stuck_factor=${actorReport.factor_analysis.most_stuck_factor ?? "n/a"}`
       );
+    }
+  }
+  if (hasFlag(args, "--by-role")) {
+    const roleEntries = Object.entries(report.by_role || {});
+    console.log("  by_role:");
+    if (roleEntries.length === 0) {
+      console.log("    n/a");
+    }
+    for (const [roleKey, roleReport] of roleEntries) {
+      const names = Object.entries(roleReport || {});
+      if (names.length === 0) {
+        console.log(`    ${roleKey}: n/a`);
+        continue;
+      }
+      for (const [roleName, scopedReport] of names) {
+        console.log(
+          `    ${roleKey}.${roleName}: manifests=${scopedReport.totals.manifests} events=${scopedReport.totals.events} ` +
+          `most_stuck_factor=${scopedReport.factor_analysis.most_stuck_factor ?? "n/a"}`
+        );
+      }
     }
   }
 }

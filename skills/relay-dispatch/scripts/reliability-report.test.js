@@ -10,6 +10,7 @@ const {
   createManifestSkeleton,
   createRunId,
   ensureRunLayout,
+  readManifest,
   updateManifestState,
   writeManifest,
 } = require("./relay-manifest");
@@ -617,4 +618,68 @@ test("reliability-report adds run-level grouping when --by-actor is set", () => 
   assert.equal(report.by_actor.Bob.totals.events, 1);
   assert.equal(report.by_actor.Bob.metrics.median_rounds_to_ready, null);
   assert.equal(report.by_actor.Bob.factor_analysis.most_stuck_factor, "Docs");
+});
+
+test("reliability-report adds role-level grouping when --by-role is set", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-report-by-role-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  initGitRepo(repoRoot, "Relay Test");
+  const recentTs = new Date(Date.now() - 1 * 60 * 60 * 1000).toISOString();
+  const runCodex = createRunId({ branch: "run-codex", timestamp: new Date("2026-04-12T07:00:00.000Z") });
+  const runClaude = createRunId({ branch: "run-claude", timestamp: new Date("2026-04-12T07:00:01.000Z") });
+
+  writeRun(repoRoot, {
+    runId: runCodex,
+    state: STATES.READY_TO_MERGE,
+    rounds: 1,
+    updatedAt: recentTs,
+  });
+  writeRun(repoRoot, {
+    runId: runClaude,
+    state: STATES.CHANGES_REQUESTED,
+    rounds: 2,
+    updatedAt: recentTs,
+  });
+
+  const codexManifestPath = ensureRunLayout(repoRoot, runCodex).manifestPath;
+  const claudeManifestPath = ensureRunLayout(repoRoot, runClaude).manifestPath;
+  const codexRecord = readManifest(codexManifestPath);
+  const claudeRecord = readManifest(claudeManifestPath);
+
+  writeManifest(codexManifestPath, {
+    ...codexRecord.data,
+    roles: {
+      ...codexRecord.data.roles,
+      orchestrator: "codex",
+      executor: "codex",
+      reviewer: "codex",
+    },
+  }, codexRecord.body);
+  writeManifest(claudeManifestPath, {
+    ...claudeRecord.data,
+    roles: {
+      ...claudeRecord.data.roles,
+      orchestrator: "codex",
+      executor: "claude",
+      reviewer: "claude",
+    },
+  }, claudeRecord.body);
+  appendRunEvent(repoRoot, runClaude, {
+    event: "review_apply",
+    state_from: STATES.REVIEW_PENDING,
+    state_to: STATES.CHANGES_REQUESTED,
+    round: 2,
+    reviewer: "claude",
+    reason: "changes_requested",
+  });
+
+  const stdout = execFileSync("node", [SCRIPT, "--repo", repoRoot, "--json", "--by-role"], { encoding: "utf-8" });
+  const report = JSON.parse(stdout);
+
+  assert.equal(report.by_role.orchestrator.codex.totals.manifests, 2);
+  assert.equal(report.by_role.executor.codex.totals.manifests, 1);
+  assert.equal(report.by_role.executor.claude.totals.manifests, 1);
+  assert.equal(report.by_role.executor.claude.totals.events, 1);
+  assert.equal(report.by_role.reviewer.codex.totals.manifests, 1);
+  assert.equal(report.by_role.reviewer.claude.totals.manifests, 1);
 });
