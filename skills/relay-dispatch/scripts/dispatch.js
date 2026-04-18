@@ -23,7 +23,7 @@
  *   --copy <file,...>      Additional files to copy
  *   --timeout <seconds>    Exec timeout (default: 1800)
  *   --rubric-file <path>   REQUIRED: copy rubric YAML to run dir (persists for review)
- *   --rubric-grandfathered Deprecated alias; dispatch now rejects it and points to relay-migrate-rubric.js
+ *   --rubric-grandfathered Retired alias; dispatch rejects it
  *   --request-id <id>      Link the run back to a relay-intake request
  *   --leaf-id <id>         Link the run back to a relay-intake leaf handoff
  *   --done-criteria-file   Persist a frozen Done Criteria anchor path
@@ -80,7 +80,7 @@ const {
 const {
   getRubricAnchorStatus,
   hasRubricPath,
-  isRubricGrandfathered,
+  rejectLegacyGrandfatherField,
   validateRubricPathContainment,
 } = require("./manifest/rubric");
 const { getArg, hasFlag } = require("./cli-args");
@@ -119,7 +119,7 @@ if (!args.length || args.includes("--help") || args.includes("-h")) {
   console.log("  --copy <files>     Additional files to copy (comma-separated)");
   console.log("  --timeout          Exec timeout in seconds (default: 1800)");
   console.log("  --rubric-file      REQUIRED: copy rubric YAML to run dir (persists for review)");
-  console.log("  --rubric-grandfathered  Deprecated alias; use relay-migrate-rubric.js instead");
+  console.log("  --rubric-grandfathered  Retired alias; remove anchor.rubric_grandfathered manually");
   console.log("  --request-id       Link the run back to a relay-intake request");
   console.log("  --leaf-id          Link the run back to a relay-intake leaf handoff");
   console.log("  --done-criteria-file  Persist a frozen Done Criteria anchor path");
@@ -197,8 +197,10 @@ if (RUBRIC_FILE && RUBRIC_GRANDFATHERED) {
 }
 
 if (RUBRIC_GRANDFATHERED) {
-  console.error("Warning: --rubric-grandfathered is deprecated; use relay-migrate-rubric.js instead.");
-  console.error("Error: dispatch.js no longer applies grandfathering; use relay-migrate-rubric.js instead.");
+  console.error("Error: --rubric-grandfathered is retired.");
+  console.error(
+    "Remove anchor.rubric_grandfathered from the manifest and persist anchor.rubric_path with --rubric-file."
+  );
   process.exit(1);
 }
 
@@ -294,12 +296,6 @@ function validateResumeRequestLinkage(manifest, { requestId, leafId, doneCriteri
   }
 }
 
-function clearRubricGrandfathering(anchor = {}) {
-  const nextAnchor = { ...anchor };
-  delete nextAnchor.rubric_grandfathered;
-  return nextAnchor;
-}
-
 function failRubricPersistence(message) {
   console.error(`Error: ${message}`);
   process.exit(1);
@@ -343,24 +339,29 @@ function getPersistedRubricPath(runDir, rubricPath = "rubric.yaml") {
 }
 
 function enforceRubricPersistence(manifest, runDir) {
+  const legacyGrandfatherField = rejectLegacyGrandfatherField(manifest);
+  if (!legacyGrandfatherField.ok) {
+    failRubricPersistence(legacyGrandfatherField.error);
+  }
+
   if (RUBRIC_FILE) {
     getPersistedRubricPath(runDir);
     return;
   }
 
-  if (!hasRubricPath(manifest) && !isRubricGrandfathered(manifest)) {
+  if (!hasRubricPath(manifest)) {
     failRubricPersistence(
       "--rubric-file is required. Generate the rubric with relay-plan and pass --rubric-file <path> to dispatch.js. " +
-      "Legacy pre-rubric runs must be stamped with relay-migrate-rubric.js before dispatch resume."
+      "Retained manifests must carry anchor.rubric_path before dispatch resume."
     );
   }
 
-  if (hasRubricPath(manifest) && !isRubricGrandfathered(manifest)) {
+  if (hasRubricPath(manifest)) {
     const rubricAnchor = getRubricAnchorStatus(manifest, { runDir });
     if (!rubricAnchor.satisfied) {
       failRubricPersistence(
         `${rubricAnchor.error} Re-dispatch with --rubric-file to repair the run's rubric anchor, ` +
-        "or migrate an approved pre-change run with relay-migrate-rubric.js."
+        "or remove anchor.rubric_grandfathered if the retained manifest still carries it."
       );
     }
   }
@@ -562,7 +563,6 @@ async function main() {
       cleanupPolicy,
       worktreeinclude: worktreePlan.worktreeinclude,
       rubricFile: RUBRIC_FILE || null,
-      rubricGrandfathered: isRubricGrandfathered(manifest),
       requestId: REQUEST_ID || manifest?.source?.request_id || null,
       leafId: LEAF_ID || manifest?.source?.leaf_id || null,
       doneCriteriaFile: resolvedDoneCriteriaPath || manifest?.anchor?.done_criteria_path || null,
@@ -587,7 +587,6 @@ async function main() {
         cleanupPolicy,
         timeout: TIMEOUT,
         rubricFile: RUBRIC_FILE || null,
-        rubricGrandfathered: isRubricGrandfathered(manifest),
         requestId: REQUEST_ID || manifest?.source?.request_id || null,
         leafId: LEAF_ID || manifest?.source?.leaf_id || null,
         doneCriteriaFile: resolvedDoneCriteriaPath || manifest?.anchor?.done_criteria_path || null,
@@ -684,7 +683,7 @@ async function main() {
     manifest = {
       ...manifest,
       anchor: {
-        ...clearRubricGrandfathering(manifest.anchor || {}),
+        ...(manifest.anchor || {}),
         rubric_path: persistedRubric.rubricPath,
       },
     };
@@ -983,7 +982,6 @@ async function main() {
     runDir,
     manifestPath,
     rubricPath: rubricAnchor.resolvedPath || null,
-    rubricGrandfathered: isRubricGrandfathered(manifest),
     requestId: manifest.source?.request_id || null,
     leafId: manifest.source?.leaf_id || null,
     doneCriteriaPath: manifest.anchor?.done_criteria_path || null,

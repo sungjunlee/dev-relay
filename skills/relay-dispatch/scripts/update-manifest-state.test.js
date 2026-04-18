@@ -15,10 +15,6 @@ const {
   writeManifest,
 } = require("./relay-manifest");
 const { resolveManifestRecord } = require("./relay-resolver");
-const {
-  createGrandfatheredRubricAnchor,
-  registerGrandfatheredRubricMigration,
-} = require("./test-support");
 
 const SCRIPT = path.join(__dirname, "update-manifest-state.js");
 
@@ -46,13 +42,8 @@ function writeReviewPendingManifest(repoRoot, runId, branch, updatedAt) {
     reviewer: "claude",
   });
   manifest = updateManifestState(manifest, STATES.DISPATCHED, "await_dispatch_result");
-  manifest.anchor.rubric_grandfathered = createGrandfatheredRubricAnchor({
-    actor: "update-manifest-state-test",
-  });
-  registerGrandfatheredRubricMigration(runId, {
-    applied_at: manifest.anchor.rubric_grandfathered.applied_at,
-    reason: manifest.anchor.rubric_grandfathered.reason,
-  });
+  manifest.anchor.rubric_path = "rubric.yaml";
+  fs.writeFileSync(path.join(ensureRunLayout(repoRoot, runId).runDir, "rubric.yaml"), "rubric:\n  factors:\n    - name: update-state\n", "utf-8");
   manifest = updateManifestState(manifest, STATES.REVIEW_PENDING, "run_review");
   manifest.timestamps.updated_at = updatedAt;
   manifest.timestamps.created_at = updatedAt;

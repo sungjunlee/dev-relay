@@ -19,7 +19,6 @@ const {
   DEFAULT_ENFORCEMENT_RUBRIC,
   createGrandfatheredRubricAnchor,
   createEnforcementFixture,
-  registerGrandfatheredRubricMigration,
 } = require("../../relay-dispatch/scripts/test-support");
 
 const SCRIPT = path.join(__dirname, "review-runner.js");
@@ -145,8 +144,7 @@ function configureRubricFixture({ manifestPath, repoRoot, runId, state }) {
     repoRoot,
     runId,
     manifestPath,
-    state: state === "grandfathered" ? "loaded" : state,
-    grandfather: state === "grandfathered",
+    state,
     rubricContent: "rubric:\n  factors:\n    - name: API pagination\n      target: \">= 8/10\"\n",
   }).runDir;
 }
@@ -2139,22 +2137,20 @@ test("review-runner rejects empty rubric_scores when rubric is present", () => {
   ], { encoding: "utf-8", stdio: "pipe" }), /empty rubric_scores.*rubric was provided/i);
 });
 
-test("review-runner allows empty rubric_scores when no rubric file exists", () => {
+test("review-runner fails closed when the manifest still carries anchor.rubric_grandfathered", () => {
   const { repoRoot, manifestPath, runId, doneCriteriaPath, diffPath } = setupRepo();
   const rubricGrandfathered = createGrandfatheredRubricAnchor({
     actor: "review-runner-test",
   });
-  registerGrandfatheredRubricMigration(runId, {
-    applied_at: rubricGrandfathered.applied_at,
-    reason: rubricGrandfathered.reason,
-  });
   updateManifestRecord(manifestPath, (data) => ({
     ...data,
     anchor: {
+      rubric_path: "rubric.yaml",
       rubric_grandfathered: rubricGrandfathered,
     },
   }));
-  fs.rmSync(path.join(ensureRunLayout(repoRoot, runId).runDir, "rubric.yaml"), { force: true });
+  const runDir = ensureRunLayout(repoRoot, runId).runDir;
+  fs.writeFileSync(path.join(runDir, "rubric.yaml"), DEFAULT_ENFORCEMENT_RUBRIC, "utf-8");
 
   const reviewFile = writeVerdict(repoRoot, "no-rubric-pass.json", {
     verdict: "pass",
@@ -2167,21 +2163,30 @@ test("review-runner allows empty rubric_scores when no rubric file exists", () =
     scope_drift: { creep: [], missing: [] },
   });
 
-  const stdout = execFileSync("node", [
-    SCRIPT,
-    "--repo", repoRoot,
-    "--run-id", runId,
-    "--pr", "123",
-    "--done-criteria-file", doneCriteriaPath,
-    "--diff-file", diffPath,
-    "--review-file", reviewFile,
-    "--no-comment",
-    "--json",
-  ], { encoding: "utf-8" });
+  const result = runPassReview({
+    repoRoot,
+    runId,
+    doneCriteriaPath,
+    diffPath,
+    reviewFile,
+    noComment: true,
+  });
 
-  const result = JSON.parse(stdout);
-  assert.equal(result.state, STATES.READY_TO_MERGE);
-  assert.equal(result.rubricLoaded, "grandfathered");
+  assert.equal(result.state, STATES.CHANGES_REQUESTED);
+  assert.equal(result.appliedVerdict, "changes_requested");
+  assert.equal(result.reviewGate.status, "rubric_state_failed_closed");
+  assert.equal(result.reviewGate.layer, "review-runner");
+  assert.equal(result.reviewGate.rubricState, "invalid");
+  assert.match(result.reviewGate.reason, /anchor\.rubric_grandfathered is no longer supported/);
+  assert.match(result.reviewGate.recovery, /Fix or replace the rubric anchor/);
+
+  const manifest = readManifest(manifestPath).data;
+  assert.equal(manifest.state, STATES.CHANGES_REQUESTED);
+  assert.equal(manifest.review.latest_verdict, "rubric_state_failed_closed");
+  assert.match(
+    manifest.review.last_gate.reason,
+    /anchor\.rubric_grandfathered is no longer supported/
+  );
 });
 
 [

@@ -41,7 +41,7 @@ The gate must read an **external reference** — another file, a migration manif
 
 Examples of acceptable external verifiers:
 
-- `~/.relay/migrations/rubric-mandatory.yaml` cross-checked against the stamped object (applied in #151/PR #207 round 4).
+- `~/.relay/migrations/rubric-mandatory.yaml` cross-checked against the stamped object (applied in #151/PR #207 round 4; retired at runtime in #190, but still useful as historical context when auditing the migration design).
 - An event in `events.jsonl` that could only have been emitted by a code path the attacker cannot invoke.
 - A filesystem property (file owner, immutable bit, `fs.realpath` under a trust-root directory) that the attacker cannot reproduce in their write zone.
 
@@ -68,9 +68,9 @@ Taken verbatim from the original rubric that shipped to PR #207 round 3 before c
 
 **Why this failed at round 4**: the factor answered question 2 partially (mentions "fail closed" but does not name the gate site), did not answer question 1 at all ("malformed" ≠ "forged"; a plausible object is not malformed), and did not answer question 3 (no external verifier). A script-literate operator writes a plausible `{from_migration: "rubric-mandatory", applied_at: "2026-04-17", actor: "ops"}` and the run is grandfathered forever.
 
-### Good rubric (#151 round 8)
+### Good rubric (#151 round 8, later retired by #190)
 
-Replacement factors that landed after round 4 surfaced the gap. Note that question 1 and question 3 are each a **separate factor** — not a criterion bullet inside a broader factor.
+Replacement factors that landed after round 4 surfaced the gap. Note that question 1 and question 3 are each a **separate factor** — not a criterion bullet inside a broader factor. This remained the correct design for `#151`; `#190` later retired the runtime field entirely instead of continuing to authenticate it.
 
 ```yaml
 - name: migration_manifest_present

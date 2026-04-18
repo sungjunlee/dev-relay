@@ -8,7 +8,7 @@ const { resolveManifestRecord } = require("../../../relay-dispatch/scripts/relay
 const { getRubricAnchorStatus } = require("../../../relay-dispatch/scripts/manifest/rubric");
 const { gh, looksLikeGitRepo, parsePositiveInt, readText } = require("./common");
 
-const RUBRIC_PASS_THROUGH_STATES = new Set(["loaded", "grandfathered"]);
+const RUBRIC_PASS_THROUGH_STATES = new Set(["loaded"]);
 
 // DNS hostname validation — conservative label allowlist. Rejects leading
 // dashes (which could be interpreted as flags by some CLI tools), whitespace,
@@ -427,16 +427,6 @@ function loadRubricFromRunDir(runDir, manifestData) {
         status: rubricAnchor.status,
         content: rubricAnchor.content,
         warning: null,
-        rubricPath: rubricAnchor.rubricPath,
-        resolvedPath: rubricAnchor.resolvedPath,
-        error: rubricAnchor.error,
-      });
-    case "grandfathered":
-      return createRubricLoad({
-        state: "grandfathered",
-        status: rubricAnchor.status,
-        content: null,
-        warning: rubricAnchor.note,
         rubricPath: rubricAnchor.rubricPath,
         resolvedPath: rubricAnchor.resolvedPath,
         error: rubricAnchor.error,
