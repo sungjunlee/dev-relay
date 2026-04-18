@@ -73,6 +73,22 @@ function writeExecutable(dir, name, body) {
   return filePath;
 }
 
+function writeReviewerArgEchoScript(dir, name = "reviewer-echo-argv.js") {
+  return writeExecutable(dir, name, `#!/usr/bin/env node
+process.stdout.write(JSON.stringify({
+  verdict: "pass",
+  summary: "ok",
+  contract_status: "pass",
+  quality_status: "pass",
+  next_action: "ready_to_merge",
+  issues: [],
+  rubric_scores: [],
+  scope_drift: { creep: [], missing: [] },
+  argv: process.argv.slice(2),
+}) + "\\n");
+`);
+}
+
 test("reviewer-invoke/resolveReviewerName preserves arg, manifest, env precedence", (t) => {
   const originalReviewer = process.env.RELAY_REVIEWER;
   t.after(() => {
@@ -146,6 +162,185 @@ process.stdout.write(JSON.stringify({
     promptPath,
     promptText: "Return a passing review.",
   });
+});
+
+test("reviewer-invoke precedence R1 regression: CLI reviewerModel beats manifest hint in reviewer argv", (t) => {
+  const originalRelayHome = process.env.RELAY_HOME;
+  const { relayHome, repoRoot, runDir, manifestPath, manifest, promptPath } = setupReviewRun();
+  t.after(() => {
+    if (originalRelayHome === undefined) {
+      delete process.env.RELAY_HOME;
+      return;
+    }
+    process.env.RELAY_HOME = originalRelayHome;
+  });
+  process.env.RELAY_HOME = relayHome;
+
+  const helperDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-helper-"));
+  const reviewerScript = writeReviewerArgEchoScript(helperDir, "reviewer-r1.js");
+
+  const { reviewText } = loadReviewText({
+    body: "# Notes\n",
+    data: {
+      ...manifest,
+      model_hints: {
+        review: "haiku",
+      },
+    },
+    manifestPath,
+    prNumber: 11,
+    promptPath,
+    reviewFile: null,
+    reviewRepoPath: repoRoot,
+    reviewedHeadSha: "abc123",
+    reviewerModel: "opus",
+    reviewerName: "codex",
+    reviewerScript,
+    round: 1,
+    runDir,
+    runRepoPath: repoRoot,
+  });
+
+  assert.deepEqual(JSON.parse(reviewText).argv, [
+    "--repo", repoRoot,
+    "--prompt-file", promptPath,
+    "--json",
+    "--model", "opus",
+  ]);
+});
+
+test("reviewer-invoke precedence R2 regression: CLI reviewerModel works when manifest hint is absent", (t) => {
+  const originalRelayHome = process.env.RELAY_HOME;
+  const { relayHome, repoRoot, runDir, manifestPath, manifest, promptPath } = setupReviewRun();
+  t.after(() => {
+    if (originalRelayHome === undefined) {
+      delete process.env.RELAY_HOME;
+      return;
+    }
+    process.env.RELAY_HOME = originalRelayHome;
+  });
+  process.env.RELAY_HOME = relayHome;
+
+  const helperDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-helper-"));
+  const reviewerScript = writeReviewerArgEchoScript(helperDir, "reviewer-r2.js");
+
+  const { reviewText } = loadReviewText({
+    body: "# Notes\n",
+    data: manifest,
+    manifestPath,
+    prNumber: 11,
+    promptPath,
+    reviewFile: null,
+    reviewRepoPath: repoRoot,
+    reviewedHeadSha: "abc123",
+    reviewerModel: "opus",
+    reviewerName: "codex",
+    reviewerScript,
+    round: 1,
+    runDir,
+    runRepoPath: repoRoot,
+  });
+
+  assert.deepEqual(JSON.parse(reviewText).argv, [
+    "--repo", repoRoot,
+    "--prompt-file", promptPath,
+    "--json",
+    "--model", "opus",
+  ]);
+});
+
+test("reviewer-invoke precedence R3 regression: manifest hint supplies the effective reviewer model when CLI is unset", (t) => {
+  const originalRelayHome = process.env.RELAY_HOME;
+  const { relayHome, repoRoot, runDir, manifestPath, manifest, promptPath, runId } = setupReviewRun();
+  t.after(() => {
+    if (originalRelayHome === undefined) {
+      delete process.env.RELAY_HOME;
+      return;
+    }
+    process.env.RELAY_HOME = originalRelayHome;
+  });
+  process.env.RELAY_HOME = relayHome;
+
+  const helperDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-helper-"));
+  const reviewerScript = writeReviewerArgEchoScript(helperDir, "reviewer-r3.js");
+
+  const { reviewText } = loadReviewText({
+    body: "# Notes\n",
+    data: {
+      ...manifest,
+      model_hints: {
+        review: "haiku",
+      },
+    },
+    manifestPath,
+    prNumber: 11,
+    promptPath,
+    reviewFile: null,
+    reviewRepoPath: repoRoot,
+    reviewedHeadSha: "abc123",
+    reviewerModel: null,
+    reviewerName: "codex",
+    reviewerScript,
+    round: 1,
+    runDir,
+    runRepoPath: repoRoot,
+  });
+
+  assert.deepEqual(JSON.parse(reviewText).argv, [
+    "--repo", repoRoot,
+    "--prompt-file", promptPath,
+    "--json",
+    "--model", "haiku",
+  ]);
+
+  const eventLines = fs.readFileSync(getEventsPath(repoRoot, runId), "utf-8").trim().split("\n").filter(Boolean);
+  const reviewInvokeEvent = JSON.parse(eventLines.at(-1));
+  assert.equal(reviewInvokeEvent.event, "review_invoke");
+  assert.equal(reviewInvokeEvent.model, "haiku");
+});
+
+test("reviewer-invoke precedence R4 regression: reviewer argv stays byte-identical when CLI and manifest hint are both absent", (t) => {
+  const originalRelayHome = process.env.RELAY_HOME;
+  const { relayHome, repoRoot, runDir, manifestPath, manifest, promptPath, runId } = setupReviewRun();
+  t.after(() => {
+    if (originalRelayHome === undefined) {
+      delete process.env.RELAY_HOME;
+      return;
+    }
+    process.env.RELAY_HOME = originalRelayHome;
+  });
+  process.env.RELAY_HOME = relayHome;
+
+  const helperDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-helper-"));
+  const reviewerScript = writeReviewerArgEchoScript(helperDir, "reviewer-r4.js");
+
+  const { reviewText } = loadReviewText({
+    body: "# Notes\n",
+    data: manifest,
+    manifestPath,
+    prNumber: 11,
+    promptPath,
+    reviewFile: null,
+    reviewRepoPath: repoRoot,
+    reviewedHeadSha: "abc123",
+    reviewerModel: null,
+    reviewerName: "codex",
+    reviewerScript,
+    round: 1,
+    runDir,
+    runRepoPath: repoRoot,
+  });
+
+  assert.deepEqual(JSON.parse(reviewText).argv, [
+    "--repo", repoRoot,
+    "--prompt-file", promptPath,
+    "--json",
+  ]);
+
+  const eventLines = fs.readFileSync(getEventsPath(repoRoot, runId), "utf-8").trim().split("\n").filter(Boolean);
+  const reviewInvokeEvent = JSON.parse(eventLines.at(-1));
+  assert.equal(reviewInvokeEvent.event, "review_invoke");
+  assert.equal(reviewInvokeEvent.model, null);
 });
 
 test("reviewer-invoke/loadReviewText escalates when the reviewer mutates the worktree", (t) => {

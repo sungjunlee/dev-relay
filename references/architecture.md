@@ -82,6 +82,10 @@ roles:
   executor: codex               # who implements
   reviewer: claude              # who reviews (isolated)
 
+model_hints:
+  dispatch: opus                # optional per-phase advisory model preference
+  review: haiku                 # optional per-phase advisory model preference
+
 paths:
   repo_root: /Users/me/project
   worktree: /tmp/relay-wt-issue-42
@@ -128,6 +132,7 @@ timestamps:
 | Field | Purpose |
 |-------|---------|
 | `roles.*` | Immutable per-run binding. Decouples who decides, who implements, who validates |
+| `model_hints.*` | Optional advisory per-phase model preference. Current runtime consumers: `dispatch`, `review` |
 | `policy.merge` | `manual_after_lgtm` — orchestrator must explicitly merge |
 | `policy.reviewer_write` | `forbid` — review runner rejects rounds where reviewer mutated files |
 | `anchor.*` | Immutable review scope — prevents drift across rounds |
@@ -138,11 +143,11 @@ timestamps:
 Each run keeps an append-only event log at `~/.relay/runs/<repo-slug>/<run-id>/events.jsonl`:
 
 ```jsonl
-{"event":"dispatch_started","timestamp":"...","executor":"codex","branch":"issue-42"}
-{"event":"dispatch_completed","timestamp":"...","status":"completed","runState":"review_pending"}
-{"event":"review_round","timestamp":"...","round":1,"reviewer":"codex","verdict":"changes_requested"}
-{"event":"review_round","timestamp":"...","round":2,"reviewer":"codex","verdict":"pass"}
-{"event":"state_transition","timestamp":"...","from":"review_pending","to":"ready_to_merge"}
+{"event":"dispatch_start","ts":"...","run_id":"issue-42-...","state_from":"draft","state_to":"dispatched","model":"opus"}
+{"event":"dispatch_result","ts":"...","run_id":"issue-42-...","state_from":"dispatched","state_to":"review_pending"}
+{"event":"review_invoke","ts":"...","run_id":"issue-42-...","round":1,"reason":"codex","model":"haiku"}
+{"event":"review_apply","ts":"...","run_id":"issue-42-...","round":1,"state_from":"review_pending","state_to":"changes_requested"}
+{"event":"review_apply","ts":"...","run_id":"issue-42-...","round":2,"state_from":"review_pending","state_to":"ready_to_merge"}
 ```
 
 ## Review Round Artifacts
