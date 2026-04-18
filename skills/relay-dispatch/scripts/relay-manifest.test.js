@@ -1134,3 +1134,279 @@ test("manifest round-trips with environment block", () => {
   assert.equal(parsed.data.environment.lockfile_hash, "sha256:aabbccdd");
   assert.equal(parsed.data.environment.dispatch_ts, "2026-04-06T04:00:00.000Z");
 });
+
+// ---------------------------------------------------------------------------
+// #197 — previous-attempts.json symlink trust-root refusal
+// ---------------------------------------------------------------------------
+
+test("readPreviousAttempts refuses when previous-attempts.json is a symlink", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-manifest-symlink-attempts-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-attempts-"));
+  execFileSync("git", ["init", "-b", "main"], { cwd: repoRoot, stdio: "pipe" });
+  const runId = "issue-197-20260417000000000";
+
+  // Seed a first legit attempt so the file exists.
+  captureAttempt(repoRoot, runId, { score_log: "first attempt" });
+  const attemptsPath = findAttemptsFile(process.env.RELAY_HOME);
+
+  const foreignDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-attempts-foreign-"));
+  const foreignAttempts = path.join(foreignDir, "foreign-attempts.json");
+  fs.writeFileSync(foreignAttempts, '[{"score_log":"spoofed"}]', "utf-8");
+
+  fs.rmSync(attemptsPath);
+  fs.symlinkSync(foreignAttempts, attemptsPath);
+
+  // Must NOT silently fall back to [] — symlink refusal surfaces as a thrown
+  // error (fail-closed, per #157 class avoidance).
+  assert.throws(
+    () => readPreviousAttempts(repoRoot, runId),
+    /Refusing to (read|open) symlinked previous-attempts\.json/i
+  );
+});
+
+test("captureAttempt refuses when previous-attempts.json is a symlink", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-manifest-symlink-capture-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-capture-"));
+  execFileSync("git", ["init", "-b", "main"], { cwd: repoRoot, stdio: "pipe" });
+  const runId = "issue-197-20260417000000001";
+
+  captureAttempt(repoRoot, runId, { score_log: "first attempt" });
+  const attemptsPath = findAttemptsFile(process.env.RELAY_HOME);
+
+  const victimDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-attempts-victim-"));
+  const victim = path.join(victimDir, "victim.json");
+  fs.writeFileSync(victim, "original victim content", "utf-8");
+
+  fs.rmSync(attemptsPath);
+  fs.symlinkSync(victim, attemptsPath);
+
+  assert.throws(
+    () => captureAttempt(repoRoot, runId, { score_log: "second attempt" }),
+    /Refusing to (read|write|open) symlinked previous-attempts\.json/i
+  );
+  // Victim file must not have been mutated — whether the refusal fires on the
+  // read-before-append path or on the write path, the net effect is identical.
+  assert.equal(fs.readFileSync(victim, "utf-8"), "original victim content");
+});
+
+function findAttemptsFile(dir) {
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      const found = findAttemptsFile(full);
+      if (found) return found;
+    }
+    if (entry.name === "previous-attempts.json") return full;
+  }
+  return null;
+}
+
+test("readPreviousAttempts refuses dangling symlinks instead of silently returning []", () => {
+  // #197 fail-closed: dangling symlink must NOT be treated as "file missing".
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-manifest-dangling-read-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-dangling-"));
+  execFileSync("git", ["init", "-b", "main"], { cwd: repoRoot, stdio: "pipe" });
+  const runId = "issue-197-20260417000000002";
+
+  // Seed one attempt so the run layout exists, then remove the file and
+  // replace it with a dangling symlink.
+  captureAttempt(repoRoot, runId, { score_log: "first attempt" });
+  const attemptsPath = findAttemptsFile(process.env.RELAY_HOME);
+  fs.rmSync(attemptsPath);
+  fs.symlinkSync("/nonexistent-relay-attempts-target-xyz", attemptsPath);
+
+  assert.throws(
+    () => readPreviousAttempts(repoRoot, runId),
+    /Refusing to (read|open) symlinked previous-attempts\.json/i
+  );
+});
+
+test("captureAttempt refuses dangling symlinks (no create-through on write)", () => {
+  // Proves the write helper also refuses dangling symlinks — defense-in-depth
+  // for platforms without O_NOFOLLOW where the pre-fix existsSync fallback
+  // would have happily created through the link.
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-manifest-dangling-write-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-dangling-w-"));
+  execFileSync("git", ["init", "-b", "main"], { cwd: repoRoot, stdio: "pipe" });
+  const runId = "issue-197-20260417000000003";
+
+  captureAttempt(repoRoot, runId, { score_log: "first attempt" });
+  const attemptsPath = findAttemptsFile(process.env.RELAY_HOME);
+
+  const victimDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-attempts-dangling-"));
+  const victimTarget = path.join(victimDir, "victim.json");
+  fs.rmSync(attemptsPath);
+  fs.symlinkSync(victimTarget, attemptsPath);
+
+  assert.throws(
+    () => captureAttempt(repoRoot, runId, { score_log: "second attempt" }),
+    /Refusing to (read|write|open) symlinked previous-attempts\.json/i
+  );
+  assert.equal(fs.existsSync(victimTarget), false, "victim must not have been created through the symlink");
+});
+
+// Direct unit tests for the shared write helpers — prove that the write path
+// itself (independent of captureAttempt's read-then-write sequencing) refuses
+// symlinks. Exported via relay-manifest.
+const {
+  appendTextFileWithoutFollowingSymlinks,
+  writeTextFileWithoutFollowingSymlinks,
+} = require("./relay-manifest");
+
+test("appendTextFileWithoutFollowingSymlinks refuses an existing symlink at target", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-append-symlink-"));
+  const target = path.join(dir, "events.jsonl");
+  const victim = path.join(dir, "victim.jsonl");
+  fs.writeFileSync(victim, "pre-existing\n", "utf-8");
+  fs.symlinkSync(victim, target);
+
+  assert.throws(
+    () => appendTextFileWithoutFollowingSymlinks(target, "malicious\n"),
+    /Refusing to open symlinked path/
+  );
+  assert.equal(fs.readFileSync(victim, "utf-8"), "pre-existing\n");
+});
+
+test("writeTextFileWithoutFollowingSymlinks refuses an existing symlink at target", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-write-symlink-"));
+  const target = path.join(dir, "attempts.json");
+  const victim = path.join(dir, "victim.json");
+  fs.writeFileSync(victim, "pre-existing", "utf-8");
+  fs.symlinkSync(victim, target);
+
+  assert.throws(
+    () => writeTextFileWithoutFollowingSymlinks(target, '[{"spoofed":true}]'),
+    /Refusing to open symlinked path/
+  );
+  assert.equal(fs.readFileSync(victim, "utf-8"), "pre-existing");
+});
+
+test("writeTextFileWithoutFollowingSymlinks refuses a dangling symlink at target", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-write-dangling-"));
+  const target = path.join(dir, "attempts.json");
+  const danglingTarget = path.join(dir, "does-not-exist.json");
+  fs.symlinkSync(danglingTarget, target);
+
+  assert.throws(
+    () => writeTextFileWithoutFollowingSymlinks(target, '[{"ok":true}]'),
+    /Refusing to open symlinked path/
+  );
+  assert.equal(fs.existsSync(danglingTarget), false, "dangling target must not have been created through the symlink");
+});
+
+test("writeTextFileWithoutFollowingSymlinks creates a new file when the target is truly absent", () => {
+  // Regression check: make sure the "no entry at path" code path still works
+  // end-to-end and produces a regular file with the expected content.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-write-create-"));
+  const target = path.join(dir, "attempts.json");
+  writeTextFileWithoutFollowingSymlinks(target, '[{"ok":true}]');
+  assert.equal(fs.readFileSync(target, "utf-8"), '[{"ok":true}]');
+  assert.equal(fs.lstatSync(target).isSymbolicLink(), false);
+});
+
+test("appendTextFileWithoutFollowingSymlinks refuses a dangling symlink at target", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-append-dangling-"));
+  const target = path.join(dir, "events.jsonl");
+  const danglingTarget = path.join(dir, "does-not-exist.jsonl");
+  fs.symlinkSync(danglingTarget, target);
+
+  assert.throws(
+    () => appendTextFileWithoutFollowingSymlinks(target, "malicious\n"),
+    /Refusing to open symlinked path/
+  );
+  assert.equal(fs.existsSync(danglingTarget), false, "dangling target must not have been created through the symlink");
+});
+
+test("appendTextFileWithoutFollowingSymlinks creates a new file when the target is truly absent", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-append-create-"));
+  const target = path.join(dir, "events.jsonl");
+  appendTextFileWithoutFollowingSymlinks(target, "{\"event\":\"one\"}\n");
+  appendTextFileWithoutFollowingSymlinks(target, "{\"event\":\"two\"}\n");
+  assert.equal(
+    fs.readFileSync(target, "utf-8"),
+    "{\"event\":\"one\"}\n{\"event\":\"two\"}\n"
+  );
+  assert.equal(fs.lstatSync(target).isSymbolicLink(), false);
+});
+
+test("write helpers refuse a FIFO at the target path (POSIX only)", { skip: process.platform === "win32" }, () => {
+  // Defense-in-depth: trust-root protection isn't only about symlinks. A FIFO
+  // dropped at the target path could block `open(O_WRONLY)` forever waiting
+  // for a reader, or a socket/device could have side-effects. The helpers
+  // use O_NONBLOCK on POSIX and gate the fd with fstat+isFile.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-fifo-"));
+  const target = path.join(dir, "events.jsonl");
+  execFileSync("mkfifo", [target], { stdio: "pipe" });
+
+  // With O_NONBLOCK, open(O_WRONLY) on a reader-less FIFO fails with ENXIO
+  // on Linux/macOS — that's an acceptable refusal (attacker attempt blocked)
+  // even though it doesn't go through our ELOOP path. Alternately, if the
+  // platform opens it (with a reader attached, hypothetically), the fstat
+  // gate inside gateWritableFd catches it with ENOT_REGULAR_FILE. Either
+  // way, no writeSync lands on the FIFO.
+  assert.throws(
+    () => appendTextFileWithoutFollowingSymlinks(target, "x\n"),
+    (error) => ["ENOT_REGULAR_FILE", "ENXIO"].includes(error.code) || /Not a regular file/.test(error.message)
+  );
+  assert.throws(
+    () => writeTextFileWithoutFollowingSymlinks(target, "x"),
+    (error) => ["ENOT_REGULAR_FILE", "ENXIO"].includes(error.code) || /Not a regular file/.test(error.message)
+  );
+});
+
+test("write helpers loop on short writes so records are never truncated", () => {
+  // fs.writeSync may return fewer bytes than requested. For regular disk
+  // files this is rare, but when it happens (page-cache pressure, signal
+  // interruption, future fs overlay), a truncated JSONL record would
+  // silently corrupt events.jsonl or previous-attempts.json.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-short-write-"));
+  const target = path.join(dir, "attempts.json");
+  const payload = '[{"dispatch_number":1,"score_log":"AB"}]';
+
+  const realWriteSync = fs.writeSync;
+  let calls = 0;
+  fs.writeSync = function patchedWriteSync(fd, buffer, offset, length, position) {
+    calls += 1;
+    // On the first call, write only 5 bytes of the requested length — a
+    // deliberate short write. Subsequent calls complete the remainder.
+    if (calls === 1 && Buffer.isBuffer(buffer)) {
+      const partial = Math.min(5, length);
+      return realWriteSync.call(fs, fd, buffer, offset, partial, position);
+    }
+    return realWriteSync.apply(fs, arguments);
+  };
+  try {
+    writeTextFileWithoutFollowingSymlinks(target, payload);
+  } finally {
+    fs.writeSync = realWriteSync;
+  }
+
+  assert.equal(fs.readFileSync(target, "utf-8"), payload, "full payload must land on disk despite the short write");
+  assert.ok(calls >= 2, "short-write path must have been exercised");
+});
+
+const { readTextFileWithoutFollowingSymlinks } = require("./relay-manifest");
+
+test("read helper refuses a FIFO at the target path (POSIX only)", { skip: process.platform === "win32" }, () => {
+  // Round-4 codex catch: on platforms with O_NOFOLLOW, a FIFO would pass the
+  // O_NOFOLLOW check (it's not a symlink), and the fstat+isFile guard inside
+  // the primary branch was self-throwing EINVAL — which the outer catch then
+  // swallowed, falling through to the lstat path which would reopen the FIFO
+  // without O_NOFOLLOW. That path can block on open(O_RDONLY) waiting for a
+  // writer, or worse, have side-effects on devices.
+  //
+  // The fix uses a distinct ENOT_REGULAR_FILE code so the outer catch does
+  // NOT swallow it, and adds O_NONBLOCK so the open(O_RDONLY) returns
+  // immediately for non-regular files. Either path is an acceptable refusal.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-read-fifo-"));
+  const target = path.join(dir, "events.jsonl");
+  execFileSync("mkfifo", [target], { stdio: "pipe" });
+
+  assert.throws(
+    () => readTextFileWithoutFollowingSymlinks(target),
+    (error) =>
+      error.code === "ENOT_REGULAR_FILE"
+      || error.code === "ENXIO"
+      || /Not a regular file/.test(error.message)
+  );
+});
