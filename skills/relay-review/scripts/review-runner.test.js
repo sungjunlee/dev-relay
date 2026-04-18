@@ -2317,3 +2317,273 @@ test("review-runner fail-closed path can re-dispatch with a fixed rubric and pas
   assert.equal(manifest.review.latest_verdict, "lgtm");
   assert.equal(manifest.review.last_gate, null);
 });
+
+// -------------------------------------------------------------------------
+// getGhLogin --hostname resolution (issue #199)
+// -------------------------------------------------------------------------
+
+const {
+  parseRemoteHost,
+  resolveRemoteHost,
+  getGhLogin,
+} = require("./review-runner");
+
+test("parseRemoteHost extracts host from HTTPS origin", () => {
+  assert.equal(parseRemoteHost("https://ghe.corp.example.com/owner/repo.git"), "ghe.corp.example.com");
+  assert.equal(parseRemoteHost("http://example.org/owner/repo"), "example.org");
+  assert.equal(parseRemoteHost("https://github.com/sungjunlee/dev-relay.git"), "github.com");
+});
+
+test("parseRemoteHost strips credentials and ports from HTTPS origins", () => {
+  // Regex-based extraction would return "user@host"; URL parsing returns
+  // just the host. `gh --hostname "user@host"` is not valid.
+  assert.equal(parseRemoteHost("https://user@ghe.corp.example.com/owner/repo.git"), "ghe.corp.example.com");
+  assert.equal(parseRemoteHost("https://user:token@ghe.corp.example.com/owner/repo.git"), "ghe.corp.example.com");
+  assert.equal(parseRemoteHost("https://ghe.corp.example.com:8443/owner/repo.git"), "ghe.corp.example.com");
+});
+
+test("parseRemoteHost extracts host from SSH origin (scp-like)", () => {
+  assert.equal(parseRemoteHost("git@ghe.corp.example.com:owner/repo.git"), "ghe.corp.example.com");
+  assert.equal(parseRemoteHost("git@github.com:sungjunlee/dev-relay.git"), "github.com");
+});
+
+test("parseRemoteHost accepts scp-like SSH without an explicit user", () => {
+  // Git allows `host:path` as a valid scp-like remote (no `user@`). Without
+  // this, a non-default-host repo whose origin omitted the user would
+  // silently fall into the no-host path in getGhLogin and use zero-arg gh —
+  // the exact regression #199 is filed to close.
+  assert.equal(parseRemoteHost("ghe.corp.example.com:owner/repo.git"), "ghe.corp.example.com");
+  assert.equal(parseRemoteHost("github.com:sungjunlee/dev-relay.git"), "github.com");
+});
+
+test("parseRemoteHost rejects Windows-style local paths that look scp-like", () => {
+  // Single-ASCII-letter `host` is almost certainly a drive letter, not a
+  // remote. Git's legacy heuristic would parse `C:/foo/bar` as scp-like,
+  // but we reject it to avoid `gh --hostname C` argv surprises.
+  assert.equal(parseRemoteHost("C:/Users/relay/project"), null);
+  assert.equal(parseRemoteHost("D:/repos/dev-relay"), null);
+  assert.equal(parseRemoteHost("x:/tmp/scratch"), null);
+});
+
+test("parseRemoteHost extracts host from ssh:// URL form", () => {
+  assert.equal(parseRemoteHost("ssh://git@ghe.corp.example.com/owner/repo.git"), "ghe.corp.example.com");
+  assert.equal(parseRemoteHost("ssh://ghe.corp.example.com/owner/repo.git"), "ghe.corp.example.com");
+});
+
+test("parseRemoteHost returns null for empty or unrecognized input", () => {
+  assert.equal(parseRemoteHost(""), null);
+  assert.equal(parseRemoteHost(null), null);
+  assert.equal(parseRemoteHost(undefined), null);
+  assert.equal(parseRemoteHost("not a url"), null);
+});
+
+test("parseRemoteHost rejects hosts that are not valid DNS labels", () => {
+  // Leading-dash hosts — could be interpreted as flags by some CLI tools.
+  assert.equal(parseRemoteHost("git@-hostile:owner/repo.git"), null);
+  assert.equal(parseRemoteHost("ssh://-hostile/owner/repo.git"), null);
+  // Whitespace in host.
+  assert.equal(parseRemoteHost("https://ex ample.com/owner/repo"), null);
+  // Trailing dash / invalid label.
+  assert.equal(parseRemoteHost("git@host-:owner/repo.git"), null);
+  // Double-@ ambiguity — scp-like form with multiple @ before colon is
+  // rejected because we anchor left of the FIRST @ on a char class that
+  // disallows @.
+  assert.equal(parseRemoteHost("a@b@c:d/e"), null);
+});
+
+test("resolveRemoteHost returns origin host from a real git repo (HTTPS)", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-host-"));
+  execFileSync("git", ["init", "-b", "main"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
+  execFileSync("git", ["remote", "add", "origin", "https://ghe.corp.example.com/owner/repo.git"], {
+    cwd: repoRoot, encoding: "utf-8", stdio: "pipe",
+  });
+  assert.equal(resolveRemoteHost(repoRoot), "ghe.corp.example.com");
+});
+
+test("resolveRemoteHost returns origin host from a real git repo (SSH)", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-host-"));
+  execFileSync("git", ["init", "-b", "main"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
+  execFileSync("git", ["remote", "add", "origin", "git@ghe.corp.example.com:owner/repo.git"], {
+    cwd: repoRoot, encoding: "utf-8", stdio: "pipe",
+  });
+  assert.equal(resolveRemoteHost(repoRoot), "ghe.corp.example.com");
+});
+
+test("resolveRemoteHost returns null when origin is missing", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-host-"));
+  execFileSync("git", ["init", "-b", "main"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
+  // No remote configured.
+  assert.equal(resolveRemoteHost(repoRoot), null);
+});
+
+test("resolveRemoteHost returns null when repoPath is falsy", () => {
+  assert.equal(resolveRemoteHost(null), null);
+  assert.equal(resolveRemoteHost(undefined), null);
+  assert.equal(resolveRemoteHost(""), null);
+});
+
+function withShimmedPath(shimDir, captured, body) {
+  const originalPath = process.env.PATH;
+  const originalStderrWrite = process.stderr.write.bind(process.stderr);
+  process.stderr.write = (chunk) => {
+    captured.push(typeof chunk === "string" ? chunk : chunk.toString());
+    return true;
+  };
+  // Prepend the shim and keep the real PATH so other helpers (e.g. /bin/sh)
+  // still resolve. gh/git resolve to the shim because it's first.
+  process.env.PATH = `${shimDir}:${originalPath}`;
+  try {
+    return body();
+  } finally {
+    process.env.PATH = originalPath;
+    process.stderr.write = originalStderrWrite;
+  }
+}
+
+function writeShim(dir, name, body) {
+  const file = path.join(dir, name);
+  fs.writeFileSync(file, body, "utf-8");
+  fs.chmodSync(file, 0o755);
+  return file;
+}
+
+test("getGhLogin is fail-closed when origin resolves, gh has auth, but the host-scoped call fails", () => {
+  // The PR-208 critical bug: previously, when origin resolved to a non-default
+  // host and host-scoped `gh api user --hostname <host>` failed, the fallback
+  // would silently succeed on `gh api user` (default host) and write the
+  // operator's personal github.com login into reviewer_login. gate-check then
+  // rejected the PR as unauthorized_reviewer. Verify the fallback is gone.
+  const shimDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-shim-"));
+  // Fake gh:
+  //   `gh auth status --hostname <host>` → exit 0 (host IS authed).
+  //   `gh api user --hostname <host>` → exit 4 (API call fails anyway).
+  //   `gh api user` (zero-arg) → would return default-host login; a
+  //      regression to two-stage fallback would let it leak into
+  //      reviewer_login.
+  writeShim(shimDir, "gh", [
+    '#!/bin/sh',
+    'if [ "$1" = "auth" ] && [ "$2" = "status" ]; then exit 0; fi',
+    'for arg in "$@"; do',
+    '  if [ "$arg" = "--hostname" ]; then',
+    '    exit 4',
+    '  fi',
+    'done',
+    'echo personal-default-host-login',
+    '',
+  ].join("\n"));
+  // Fake git: return the enterprise origin URL so resolveRemoteHost picks
+  // up a non-default host and we actually exercise the --hostname code path.
+  writeShim(shimDir, "git", [
+    '#!/bin/sh',
+    'if [ "$1" = "remote" ] && [ "$2" = "get-url" ] && [ "$3" = "origin" ]; then',
+    '  echo https://ghe.corp.example.com/owner/repo.git',
+    '  exit 0',
+    'fi',
+    'exit 0',
+    '',
+  ].join("\n"));
+
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-host-"));
+  const captured = [];
+  const result = withShimmedPath(shimDir, captured, () => getGhLogin(repoRoot));
+  assert.equal(result.login, null, "must not silently leak a default-host login");
+  // Signal the merge gate so reviewer_login_required can be persisted on the
+  // manifest — without this, fail-closed in getGhLogin silently degrades to
+  // a skipped verification gate in relay-merge/gate-check.
+  assert.equal(result.status, "host_auth_failed");
+  const warning = captured.join("");
+  assert.match(warning, /ghe\.corp\.example\.com/);
+  assert.match(warning, /reviewer_login will not be recorded/);
+});
+
+test("getGhLogin falls back to zero-arg gh when origin host has no gh auth (e.g. ssh.github.com)", () => {
+  // Round-5 codex finding: transport-only hosts (ssh.github.com for a
+  // github.com repo, or GHES installs where SSH and API are on different
+  // hostnames) would previously fail with host_auth_failed even though
+  // the operator IS fully authed on the API host. Fix: probe
+  // `gh auth status --hostname <host>` first; if gh doesn't know about
+  // this host, fall back to zero-arg — same host `gh pr comment` uses,
+  // so reviewer_login lines up with the actual comment author.
+  const shimDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-shim-"));
+  writeShim(shimDir, "gh", [
+    '#!/bin/sh',
+    'if [ "$1" = "auth" ] && [ "$2" = "status" ]; then',
+    '  # The transport host is NOT a known gh host.',
+    '  exit 1',
+    'fi',
+    'for arg in "$@"; do',
+    '  if [ "$arg" = "--hostname" ]; then',
+    '    # Must not be called in this case.',
+    '    exit 5',
+    '  fi',
+    'done',
+    'echo personal-github-login',
+    '',
+  ].join("\n"));
+  writeShim(shimDir, "git", [
+    '#!/bin/sh',
+    'if [ "$1" = "remote" ] && [ "$2" = "get-url" ] && [ "$3" = "origin" ]; then',
+    '  echo ssh://git@ssh.github.com:443/sungjunlee/dev-relay.git',
+    '  exit 0',
+    'fi',
+    'exit 0',
+    '',
+  ].join("\n"));
+
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-host-"));
+  const captured = [];
+  const result = withShimmedPath(shimDir, captured, () => getGhLogin(repoRoot));
+  assert.equal(result.login, "personal-github-login");
+  assert.equal(result.status, "recorded");
+});
+
+test("getGhLogin uses zero-arg gh when no origin host is resolvable", () => {
+  // When the repo has no origin (manifest-only run or non-git scratch dir),
+  // zero-arg gh is the only signal available — the operator's default host is
+  // the host in scope, so the match is unambiguous.
+  const shimDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-shim-"));
+  writeShim(shimDir, "gh", [
+    '#!/bin/sh',
+    'for arg in "$@"; do',
+    '  if [ "$arg" = "--hostname" ]; then',
+    '    # Should not be called in this case.',
+    '    exit 5',
+    '  fi',
+    'done',
+    'echo default-host-login',
+    '',
+  ].join("\n"));
+  writeShim(shimDir, "git", [
+    '#!/bin/sh',
+    '# No remote configured — exit non-zero for remote get-url.',
+    'if [ "$1" = "remote" ] && [ "$2" = "get-url" ]; then',
+    '  exit 2',
+    'fi',
+    'exit 0',
+    '',
+  ].join("\n"));
+
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-host-"));
+  const captured = [];
+  const result = withShimmedPath(shimDir, captured, () => getGhLogin(repoRoot));
+  assert.equal(result.login, "default-host-login");
+  assert.equal(result.status, "recorded");
+});
+
+test("getGhLogin does not crash when both origin-resolution and gh fail", () => {
+  // Total-failure case: no origin, gh also unavailable. Must emit a warning
+  // and return { login: null, status: "no_login" }, not throw. Status is
+  // NOT "host_auth_failed" because we never resolved a host to fail on —
+  // gate-check's current "missing login → soft skip" behavior is preserved.
+  const shimDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-shim-"));
+  writeShim(shimDir, "gh", "#!/bin/sh\nexit 4\n");
+  writeShim(shimDir, "git", "#!/bin/sh\nexit 2\n");
+
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-host-"));
+  const captured = [];
+  const result = withShimmedPath(shimDir, captured, () => getGhLogin(repoRoot));
+  assert.equal(result.login, null);
+  assert.equal(result.status, "no_login");
+  const warning = captured.join("");
+  assert.match(warning, /reviewer_login will not be recorded/);
+});
