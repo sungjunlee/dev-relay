@@ -40,6 +40,7 @@ For background and parallel dispatch, see "Background & Parallel" section below.
 | `--prompt-file` | Read prompt from file (for large prompts) |
 | `--executor, -e` | Executor: `codex` (default), `claude` |
 | `--model, -m` | Model override |
+| `--model-hints` | Persist per-phase model hints as `phase=model[,phase=model...]` |
 | `--sandbox` | `workspace-write` (default) or `read-only` |
 | `--copy <files>` | Additional files to copy |
 | `--timeout` | Timeout in seconds (default: 1800) |
@@ -57,6 +58,11 @@ Creates worktree → writes a relay run manifest → runs executor → collects 
 Exits with non-zero code on failure.
 
 Each dispatch writes a manifest to `~/.relay/runs/<repo-slug>/<run-id>.md` and appends lifecycle evidence to `~/.relay/runs/<repo-slug>/<run-id>/events.jsonl`. `run_id` is the canonical identity for re-dispatch, review, merge, close, and reporting.
+
+`model_hints` is an optional top-level manifest field. Dispatch consumes `model_hints.dispatch` only when `--model/-m` is not passed:
+- precedence: `--model` -> `manifest.model_hints.dispatch` -> executor default
+- same-run resume with `--model-hints` replaces the stored object and records `model_hints_updated`
+- `--dry-run` resolves `effective_dispatch_model` for plan output but emits no events
 
 When dispatch resumes from relay-intake, it can also store `source.request_id`, `source.leaf_id`, and `anchor.done_criteria_path` so review stays pinned to the frozen snapshot.
 

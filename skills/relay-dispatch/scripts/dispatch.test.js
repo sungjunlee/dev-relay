@@ -134,6 +134,34 @@ fs.writeFileSync(output, "ok\\n", "utf-8");
   return codexPath;
 }
 
+function writeArgCaptureCodex(binDir, capturePath) {
+  ensureDefaultFakeGh(binDir);
+  const codexPath = path.join(binDir, "codex");
+  fs.writeFileSync(codexPath, `#!/usr/bin/env node
+const fs = require("fs");
+const { execFileSync } = require("child_process");
+const args = process.argv.slice(2);
+if (args[0] === "--version") {
+  process.stdout.write("codex-fake\\n");
+  process.exit(0);
+}
+if (args[0] !== "exec") {
+  process.stderr.write("unsupported fake codex invocation");
+  process.exit(1);
+}
+fs.writeFileSync(${JSON.stringify(capturePath)}, JSON.stringify(args), "utf-8");
+const cwd = args[args.indexOf("-C") + 1];
+const output = args[args.indexOf("-o") + 1];
+const fileName = "captured.txt";
+fs.writeFileSync(cwd + "/" + fileName, fileName + "\\n", "utf-8");
+execFileSync("git", ["-C", cwd, "add", fileName], { stdio: "pipe" });
+execFileSync("git", ["-C", cwd, "commit", "-m", "fake " + fileName], { stdio: "pipe" });
+fs.writeFileSync(output, "ok\\n", "utf-8");
+`, "utf-8");
+  fs.chmodSync(codexPath, 0o755);
+  return codexPath;
+}
+
 function writeNoOpCodex(binDir) {
   ensureDefaultFakeGh(binDir);
   const codexPath = path.join(binDir, "codex");
@@ -450,6 +478,13 @@ function normalizeDispatchDryRunOutput(output, { root }) {
   return normalizedRoot.replace(/\/runs\/[^/]+\//g, `/runs/${CANONICAL_DRY_RUN_SLUG}/`).trimEnd();
 }
 
+function buildDispatchExecPrompt(taskPrompt) {
+  return "[NON-INTERACTIVE DISPATCH] This is an automated, non-interactive execution. "
+    + "Do not present plans for approval or wait for user confirmation. "
+    + "Execute the task fully and autonomously.\n\n"
+    + taskPrompt;
+}
+
 function tamperResumableRunRubricPath(repoRoot, env, rubricPath) {
   const first = JSON.parse(runDispatch(repoRoot, [
     "-b", "issue-rubric-anchor",
@@ -511,6 +546,365 @@ test("dispatch reuses the same run and worktree on resume", () => {
   assert.match(events, /"event":"dispatch_start"/);
   assert.match(events, /"reason":"same_run_resume"/);
   assert.match(events, /"reason":"same_run_resume:completed"/);
+});
+
+test("dispatch stores model_hints on a new run when --model-hints is provided", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  writeFakeCodex(binDir);
+  const env = {
+    ...process.env,
+    PATH: `${binDir}:${process.env.PATH}`,
+    RELAY_HOME: relayHome,
+  };
+
+  const result = JSON.parse(runDispatch(repoRoot, [
+    "-b", "issue-109-model-hints-new",
+    "--prompt", "persist new-run model hints",
+    "--model-hints", "dispatch=opus,review=haiku",
+    "--json",
+  ], env));
+
+  assert.deepEqual(readManifest(result.manifestPath).data.model_hints, {
+    dispatch: "opus",
+    review: "haiku",
+  });
+});
+
+test("dispatch resume replaces model_hints and records model_hints_updated before redispatch", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  writeFakeCodex(binDir);
+  const env = {
+    ...process.env,
+    PATH: `${binDir}:${process.env.PATH}`,
+    RELAY_HOME: relayHome,
+  };
+
+  const first = JSON.parse(runDispatch(repoRoot, [
+    "-b", "issue-109-model-hints-resume",
+    "--prompt", "initial dispatch",
+    "--model-hints", "dispatch=opus,review=haiku",
+    "--json",
+  ], env));
+  const record = readManifest(first.manifestPath);
+  writeManifest(first.manifestPath, {
+    ...updateManifestState(record.data, STATES.CHANGES_REQUESTED, "re_dispatch_requested_changes"),
+  }, record.body);
+
+  const second = JSON.parse(runDispatch(repoRoot, [
+    "--run-id", first.runId,
+    "--prompt", "resume dispatch",
+    "--model-hints", "dispatch=sonnet,merge=gpt-5.4",
+    "--json",
+  ], env));
+
+  assert.equal(second.mode, "resume");
+  assert.deepEqual(readManifest(first.manifestPath).data.model_hints, {
+    dispatch: "sonnet",
+    merge: "gpt-5.4",
+  });
+
+  const events = readJsonLines(getEventsPath(repoRoot, first.runId));
+  const updatedEvent = events.find((event) => event.event === "model_hints_updated");
+  assert.deepEqual(updatedEvent.before, {
+    dispatch: "opus",
+    review: "haiku",
+  });
+  assert.deepEqual(updatedEvent.after, {
+    dispatch: "sonnet",
+    merge: "gpt-5.4",
+  });
+});
+
+test("dispatch --model-hints rejects unknown phase keys without writing a manifest", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  writeFakeCodex(binDir);
+  const env = {
+    ...process.env,
+    PATH: `${binDir}:${process.env.PATH}`,
+    RELAY_HOME: relayHome,
+  };
+
+  assert.throws(() => runDispatch(repoRoot, [
+    "-b", "issue-109-parse-unknown-phase",
+    "--prompt", "invalid model hints",
+    "--model-hints", "foo=bar",
+  ], env), (error) => {
+    assert.equal(String(error.stderr).trim(), "Error: invalid --model-hints token 'foo=bar': unknown phase 'foo'");
+    return true;
+  });
+  assert.equal(listManifestPaths(repoRoot).length, 0);
+});
+
+test("dispatch --model-hints rejects tokens missing '=' without writing a manifest", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  writeFakeCodex(binDir);
+  const env = {
+    ...process.env,
+    PATH: `${binDir}:${process.env.PATH}`,
+    RELAY_HOME: relayHome,
+  };
+
+  assert.throws(() => runDispatch(repoRoot, [
+    "-b", "issue-109-parse-missing-equals",
+    "--prompt", "invalid model hints",
+    "--model-hints", "dispatch",
+  ], env), (error) => {
+    assert.equal(String(error.stderr).trim(), "Error: invalid --model-hints token 'dispatch': missing '='");
+    return true;
+  });
+  assert.equal(listManifestPaths(repoRoot).length, 0);
+});
+
+test("dispatch --model-hints rejects empty phases without writing a manifest", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  writeFakeCodex(binDir);
+  const env = {
+    ...process.env,
+    PATH: `${binDir}:${process.env.PATH}`,
+    RELAY_HOME: relayHome,
+  };
+
+  assert.throws(() => runDispatch(repoRoot, [
+    "-b", "issue-109-parse-empty-phase",
+    "--prompt", "invalid model hints",
+    "--model-hints", "=opus",
+  ], env), (error) => {
+    assert.equal(String(error.stderr).trim(), "Error: invalid --model-hints token '=opus': empty phase");
+    return true;
+  });
+  assert.equal(listManifestPaths(repoRoot).length, 0);
+});
+
+test("dispatch --model-hints rejects empty model values without writing a manifest", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  writeFakeCodex(binDir);
+  const env = {
+    ...process.env,
+    PATH: `${binDir}:${process.env.PATH}`,
+    RELAY_HOME: relayHome,
+  };
+
+  assert.throws(() => runDispatch(repoRoot, [
+    "-b", "issue-109-parse-empty-value",
+    "--prompt", "invalid model hints",
+    "--model-hints", "dispatch=",
+  ], env), (error) => {
+    assert.equal(String(error.stderr).trim(), "Error: invalid --model-hints token 'dispatch=': empty value");
+    return true;
+  });
+  assert.equal(listManifestPaths(repoRoot).length, 0);
+});
+
+test("dispatch --model-hints rejects empty pairs without writing a manifest", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  writeFakeCodex(binDir);
+  const env = {
+    ...process.env,
+    PATH: `${binDir}:${process.env.PATH}`,
+    RELAY_HOME: relayHome,
+  };
+
+  assert.throws(() => runDispatch(repoRoot, [
+    "-b", "issue-109-parse-empty-pair",
+    "--prompt", "invalid model hints",
+    "--model-hints", "dispatch=sonnet,,review=opus",
+  ], env), (error) => {
+    assert.equal(String(error.stderr).trim(), "Error: invalid --model-hints token '': empty pair");
+    return true;
+  });
+  assert.equal(listManifestPaths(repoRoot).length, 0);
+});
+
+test("dispatch --model-hints rejects duplicate phases without writing a manifest", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  writeFakeCodex(binDir);
+  const env = {
+    ...process.env,
+    PATH: `${binDir}:${process.env.PATH}`,
+    RELAY_HOME: relayHome,
+  };
+
+  assert.throws(() => runDispatch(repoRoot, [
+    "-b", "issue-109-parse-duplicate-phase",
+    "--prompt", "invalid model hints",
+    "--model-hints", "dispatch=opus,dispatch=sonnet",
+  ], env), (error) => {
+    assert.equal(String(error.stderr).trim(), "Error: invalid --model-hints token 'dispatch=sonnet': duplicate phase 'dispatch'");
+    return true;
+  });
+  assert.equal(listManifestPaths(repoRoot).length, 0);
+});
+
+test("dispatch precedence D1 regression: CLI override beats manifest hint in executor argv", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  const capturePath = path.join(os.tmpdir(), `relay-dispatch-argv-${Date.now()}-d1.json`);
+  writeArgCaptureCodex(binDir, capturePath);
+  const env = {
+    ...process.env,
+    PATH: `${binDir}:${process.env.PATH}`,
+    RELAY_HOME: relayHome,
+  };
+  const taskPrompt = "dispatch matrix d1";
+
+  const result = JSON.parse(runDispatch(repoRoot, [
+    "-b", "issue-109-d1",
+    "--prompt", taskPrompt,
+    "--model", "sonnet",
+    "--model-hints", "dispatch=opus",
+    "--json",
+  ], env));
+
+  assert.deepEqual(JSON.parse(fs.readFileSync(capturePath, "utf-8")), [
+    "exec",
+    "-C", result.worktree,
+    "--full-auto",
+    "--color", "never",
+    "-o", result.resultFile,
+    "-m", "sonnet",
+    "--sandbox", "workspace-write",
+    buildDispatchExecPrompt(taskPrompt),
+  ]);
+});
+
+test("dispatch precedence D2 regression: CLI override works when manifest hint is absent", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  const capturePath = path.join(os.tmpdir(), `relay-dispatch-argv-${Date.now()}-d2.json`);
+  writeArgCaptureCodex(binDir, capturePath);
+  const env = {
+    ...process.env,
+    PATH: `${binDir}:${process.env.PATH}`,
+    RELAY_HOME: relayHome,
+  };
+  const taskPrompt = "dispatch matrix d2";
+
+  const result = JSON.parse(runDispatch(repoRoot, [
+    "-b", "issue-109-d2",
+    "--prompt", taskPrompt,
+    "--model", "sonnet",
+    "--json",
+  ], env));
+
+  assert.deepEqual(JSON.parse(fs.readFileSync(capturePath, "utf-8")), [
+    "exec",
+    "-C", result.worktree,
+    "--full-auto",
+    "--color", "never",
+    "-o", result.resultFile,
+    "-m", "sonnet",
+    "--sandbox", "workspace-write",
+    buildDispatchExecPrompt(taskPrompt),
+  ]);
+});
+
+test("dispatch precedence D3 regression: manifest hint supplies the effective model when CLI is unset", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  const capturePath = path.join(os.tmpdir(), `relay-dispatch-argv-${Date.now()}-d3.json`);
+  writeArgCaptureCodex(binDir, capturePath);
+  const env = {
+    ...process.env,
+    PATH: `${binDir}:${process.env.PATH}`,
+    RELAY_HOME: relayHome,
+  };
+  const taskPrompt = "dispatch matrix d3";
+
+  const result = JSON.parse(runDispatch(repoRoot, [
+    "-b", "issue-109-d3",
+    "--prompt", taskPrompt,
+    "--model-hints", "dispatch=opus",
+    "--json",
+  ], env));
+
+  assert.deepEqual(JSON.parse(fs.readFileSync(capturePath, "utf-8")), [
+    "exec",
+    "-C", result.worktree,
+    "--full-auto",
+    "--color", "never",
+    "-o", result.resultFile,
+    "-m", "opus",
+    "--sandbox", "workspace-write",
+    buildDispatchExecPrompt(taskPrompt),
+  ]);
+
+  const events = readJsonLines(getEventsPath(repoRoot, result.runId));
+  const dispatchStart = events.find((event) => event.event === "dispatch_start");
+  assert.equal(dispatchStart.model, "opus");
+});
+
+test("dispatch precedence D4 regression: executor argv stays byte-identical when CLI and manifest hint are both absent", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  const capturePath = path.join(os.tmpdir(), `relay-dispatch-argv-${Date.now()}-d4.json`);
+  writeArgCaptureCodex(binDir, capturePath);
+  const env = {
+    ...process.env,
+    PATH: `${binDir}:${process.env.PATH}`,
+    RELAY_HOME: relayHome,
+  };
+  const taskPrompt = "dispatch matrix d4";
+
+  const result = JSON.parse(runDispatch(repoRoot, [
+    "-b", "issue-109-d4",
+    "--prompt", taskPrompt,
+    "--json",
+  ], env));
+
+  assert.deepEqual(JSON.parse(fs.readFileSync(capturePath, "utf-8")), [
+    "exec",
+    "-C", result.worktree,
+    "--full-auto",
+    "--color", "never",
+    "-o", result.resultFile,
+    "--sandbox", "workspace-write",
+    buildDispatchExecPrompt(taskPrompt),
+  ]);
+
+  const events = readJsonLines(getEventsPath(repoRoot, result.runId));
+  const dispatchStart = events.find((event) => event.event === "dispatch_start");
+  assert.equal(dispatchStart.model, null);
+});
+
+test("dispatch dry-run resolves effective_dispatch_model from model hints and emits zero events", () => {
+  const { repoRoot, relayHome, rubricFile } = setupDryRunFixtureRepo();
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-dispatch-dry-run-bin-"));
+  writeFakeCodex(binDir);
+  const env = {
+    ...process.env,
+    PATH: `${binDir}:${process.env.PATH}`,
+    RELAY_HOME: relayHome,
+  };
+
+  const stdout = execFileSync("node", [SCRIPT, repoRoot,
+    "-b", "issue-109-dry-run-model-hints",
+    "--prompt", "dry run model hints",
+    "--rubric-file", rubricFile,
+    "--model-hints", "dispatch=opus",
+    "--dry-run",
+    "--json",
+  ], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+    env,
+  });
+  const result = JSON.parse(stdout);
+
+  assert.equal(result.effective_dispatch_model, "opus");
+  assert.equal(listManifestPaths(repoRoot).length, 0);
 });
 
 test("dispatch resumes rubric fail-closed recovery runs from changes_requested", () => {
