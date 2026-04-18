@@ -683,3 +683,249 @@ test("reliability-report adds role-level grouping when --by-role is set", () => 
   assert.equal(report.by_role.reviewer.codex.totals.manifests, 1);
   assert.equal(report.by_role.reviewer.claude.totals.manifests, 1);
 });
+
+function setManifestReviewerRole(repoRoot, runId, reviewerName) {
+  const manifestPath = ensureRunLayout(repoRoot, runId).manifestPath;
+  const record = readManifest(manifestPath);
+  writeManifest(manifestPath, {
+    ...record.data,
+    roles: {
+      ...record.data.roles,
+      reviewer: reviewerName,
+    },
+  }, record.body);
+}
+
+test("reliability-report --by-acting-reviewer groups by review_apply.reviewer, not assigned role", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-report-acting-basic-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  initGitRepo(repoRoot, "Relay Test");
+  const recentTs = new Date(Date.now() - 1 * 60 * 60 * 1000).toISOString();
+
+  // Assigned=codex, acting=codex
+  const runAlignedCodex = createRunId({ branch: "run-aligned-codex", timestamp: new Date("2026-04-12T08:00:00.000Z") });
+  // Assigned=codex, acting=claude (override)
+  const runOverride = createRunId({ branch: "run-override", timestamp: new Date("2026-04-12T08:00:01.000Z") });
+
+  writeRun(repoRoot, {
+    runId: runAlignedCodex,
+    state: STATES.READY_TO_MERGE,
+    rounds: 1,
+    updatedAt: recentTs,
+  });
+  writeRun(repoRoot, {
+    runId: runOverride,
+    state: STATES.CHANGES_REQUESTED,
+    rounds: 1,
+    updatedAt: recentTs,
+  });
+  setManifestReviewerRole(repoRoot, runAlignedCodex, "codex");
+  setManifestReviewerRole(repoRoot, runOverride, "codex");
+
+  appendRunEvent(repoRoot, runAlignedCodex, {
+    event: "review_apply",
+    state_from: STATES.REVIEW_PENDING,
+    state_to: STATES.READY_TO_MERGE,
+    round: 1,
+    reviewer: "codex",
+    reason: "pass",
+  });
+  appendRunEvent(repoRoot, runOverride, {
+    event: "review_apply",
+    state_from: STATES.REVIEW_PENDING,
+    state_to: STATES.CHANGES_REQUESTED,
+    round: 1,
+    reviewer: "claude",
+    reason: "changes_requested",
+  });
+
+  const stdout = execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--json",
+    "--by-role",
+    "--by-acting-reviewer",
+  ], { encoding: "utf-8" });
+  const report = JSON.parse(stdout);
+
+  // Assigned-role analytics: both runs assign codex as reviewer.
+  assert.equal(report.by_role.reviewer.codex.totals.manifests, 2);
+  assert.equal(Object.hasOwn(report.by_role.reviewer, "claude"), false);
+
+  // Acting-reviewer analytics: split by who actually executed the round.
+  assert.deepEqual(Object.keys(report.by_acting_reviewer).sort(), ["claude", "codex"]);
+  assert.equal(report.by_acting_reviewer.codex.totals.manifests, 1);
+  assert.equal(report.by_acting_reviewer.codex.review_rounds_performed, 1);
+  assert.equal(report.by_acting_reviewer.claude.totals.manifests, 1);
+  assert.equal(report.by_acting_reviewer.claude.review_rounds_performed, 1);
+});
+
+test("reliability-report --by-acting-reviewer aggregates multiple rounds by the same reviewer", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-report-acting-multi-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  initGitRepo(repoRoot, "Relay Test");
+  const recentTs = new Date(Date.now() - 1 * 60 * 60 * 1000).toISOString();
+  const runMulti = createRunId({ branch: "run-multi", timestamp: new Date("2026-04-12T09:00:00.000Z") });
+
+  writeRun(repoRoot, {
+    runId: runMulti,
+    state: STATES.READY_TO_MERGE,
+    rounds: 3,
+    updatedAt: recentTs,
+  });
+  setManifestReviewerRole(repoRoot, runMulti, "codex");
+
+  for (const round of [1, 2, 3]) {
+    appendRunEvent(repoRoot, runMulti, {
+      event: "review_apply",
+      state_from: STATES.REVIEW_PENDING,
+      state_to: round === 3 ? STATES.READY_TO_MERGE : STATES.CHANGES_REQUESTED,
+      round,
+      reviewer: "codex",
+      reason: round === 3 ? "pass" : "changes_requested",
+    });
+  }
+
+  const stdout = execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--json",
+    "--by-acting-reviewer",
+  ], { encoding: "utf-8" });
+  const report = JSON.parse(stdout);
+
+  assert.deepEqual(Object.keys(report.by_acting_reviewer), ["codex"]);
+  // The run appears once even though codex reviewed three rounds.
+  assert.equal(report.by_acting_reviewer.codex.totals.manifests, 1);
+  assert.equal(report.by_acting_reviewer.codex.review_rounds_performed, 3);
+});
+
+test("reliability-report --by-acting-reviewer buckets review_apply without reviewer field as unknown", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-report-acting-missing-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  initGitRepo(repoRoot, "Relay Test");
+  const recentTs = new Date(Date.now() - 1 * 60 * 60 * 1000).toISOString();
+  const runMissing = createRunId({ branch: "run-missing", timestamp: new Date("2026-04-12T10:00:00.000Z") });
+  const runNoReview = createRunId({ branch: "run-no-review", timestamp: new Date("2026-04-12T10:00:01.000Z") });
+
+  writeRun(repoRoot, {
+    runId: runMissing,
+    state: STATES.CHANGES_REQUESTED,
+    rounds: 1,
+    updatedAt: recentTs,
+  });
+  writeRun(repoRoot, {
+    runId: runNoReview,
+    state: STATES.DISPATCHED,
+    rounds: 0,
+    updatedAt: recentTs,
+  });
+  setManifestReviewerRole(repoRoot, runMissing, "codex");
+  setManifestReviewerRole(repoRoot, runNoReview, "codex");
+
+  // Legacy event recorded before the reviewer field was added — no `reviewer`
+  // key at all. Must not be silently attributed to the assigned reviewer.
+  appendRunEvent(repoRoot, runMissing, {
+    event: "review_apply",
+    state_from: STATES.REVIEW_PENDING,
+    state_to: STATES.CHANGES_REQUESTED,
+    round: 1,
+    reason: "changes_requested",
+  });
+
+  const stdout = execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--json",
+    "--by-acting-reviewer",
+  ], { encoding: "utf-8" });
+  const report = JSON.parse(stdout);
+
+  // Run with no review_apply events is not in any bucket.
+  // Run with reviewer-less review_apply event goes to `unknown`, not `codex`.
+  assert.deepEqual(Object.keys(report.by_acting_reviewer), ["unknown"]);
+  assert.equal(report.by_acting_reviewer.unknown.totals.manifests, 1);
+  assert.equal(report.by_acting_reviewer.unknown.review_rounds_performed, 1);
+});
+
+test("reliability-report --by-acting-reviewer returns empty object when no review_apply events exist", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-report-acting-empty-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  initGitRepo(repoRoot, "Relay Test");
+  const recentTs = new Date(Date.now() - 1 * 60 * 60 * 1000).toISOString();
+  const runOnly = createRunId({ branch: "run-only", timestamp: new Date("2026-04-12T10:30:00.000Z") });
+
+  writeRun(repoRoot, {
+    runId: runOnly,
+    state: STATES.DISPATCHED,
+    rounds: 0,
+    updatedAt: recentTs,
+  });
+  setManifestReviewerRole(repoRoot, runOnly, "codex");
+
+  const stdout = execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--json",
+    "--by-acting-reviewer",
+  ], { encoding: "utf-8" });
+  const report = JSON.parse(stdout);
+
+  assert.deepEqual(report.by_acting_reviewer, {});
+});
+
+test("reliability-report --by-acting-reviewer does not collapse into by-role and splits mixed-reviewer runs", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-report-acting-split-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  initGitRepo(repoRoot, "Relay Test");
+  const recentTs = new Date(Date.now() - 1 * 60 * 60 * 1000).toISOString();
+  // Single run, assigned reviewer = codex, reviewed once by codex then once by claude.
+  const runMixed = createRunId({ branch: "run-mixed", timestamp: new Date("2026-04-12T11:00:00.000Z") });
+
+  writeRun(repoRoot, {
+    runId: runMixed,
+    state: STATES.READY_TO_MERGE,
+    rounds: 2,
+    updatedAt: recentTs,
+  });
+  setManifestReviewerRole(repoRoot, runMixed, "codex");
+
+  appendRunEvent(repoRoot, runMixed, {
+    event: "review_apply",
+    state_from: STATES.REVIEW_PENDING,
+    state_to: STATES.CHANGES_REQUESTED,
+    round: 1,
+    reviewer: "codex",
+    reason: "changes_requested",
+  });
+  appendRunEvent(repoRoot, runMixed, {
+    event: "review_apply",
+    state_from: STATES.REVIEW_PENDING,
+    state_to: STATES.READY_TO_MERGE,
+    round: 2,
+    reviewer: "claude",
+    reason: "pass",
+  });
+
+  const stdout = execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--json",
+    "--by-role",
+    "--by-acting-reviewer",
+  ], { encoding: "utf-8" });
+  const report = JSON.parse(stdout);
+
+  // Assigned-role view: one manifest, one reviewer = codex; claude absent.
+  assert.equal(report.by_role.reviewer.codex.totals.manifests, 1);
+  assert.equal(Object.hasOwn(report.by_role.reviewer, "claude"), false);
+
+  // Acting-reviewer view: same run appears under both buckets because it had
+  // review_apply events from both — proving the slice is event-derived and
+  // does not collapse back into the assigned-role view.
+  assert.deepEqual(Object.keys(report.by_acting_reviewer).sort(), ["claude", "codex"]);
+  assert.equal(report.by_acting_reviewer.codex.totals.manifests, 1);
+  assert.equal(report.by_acting_reviewer.codex.review_rounds_performed, 1);
+  assert.equal(report.by_acting_reviewer.claude.totals.manifests, 1);
+  assert.equal(report.by_acting_reviewer.claude.review_rounds_performed, 1);
+});

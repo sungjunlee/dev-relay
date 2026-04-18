@@ -84,6 +84,7 @@ node skills/relay-dispatch/scripts/cleanup-worktrees.js --repo . --dry-run
 # Reliability report
 node skills/relay-dispatch/scripts/reliability-report.js --repo . --json
 node skills/relay-dispatch/scripts/reliability-report.js --repo . --by-role --json
+node skills/relay-dispatch/scripts/reliability-report.js --repo . --by-acting-reviewer --json
 ```
 
 ## Key Design Decisions
