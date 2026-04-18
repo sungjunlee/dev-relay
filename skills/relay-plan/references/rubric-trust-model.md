@@ -27,11 +27,13 @@ Assume an attacker has **write access to the run manifest or run dir** (the rela
 
 Name the **exact `file:function` call site** at which runtime enforcement happens. The factor must quote the line, not gesture at "the gate layer". Common sites in relay:
 
-- `skills/relay-dispatch/scripts/relay-manifest.js:getRubricAnchorStatus`
+- `skills/relay-dispatch/scripts/manifest/rubric.js:getRubricAnchorStatus`
 - `skills/relay-merge/scripts/review-gate.js:evaluateReviewGate`
 - `skills/relay-merge/scripts/gate-check.js` (gate-time cross-checks)
 - `skills/relay-dispatch/scripts/relay-resolver.js` (selector-level state enforcement)
-- `skills/relay-dispatch/scripts/relay-manifest.js:validateTransition*`
+- `skills/relay-dispatch/scripts/manifest/lifecycle.js:validateTransition*`
+
+Manifest internals were split in #188 under `skills/relay-dispatch/scripts/manifest/*.js`; the top-level `relay-manifest.js` is now a 17-line compat facade that re-exports everything. Rubric factors should name the split submodule (`manifest/rubric.js`, `manifest/lifecycle.js`, etc.) — that path is stable across re-exports and matches what tests and runtime call sites actually import.
 
 If the gate lives in prompt text (reviewer prompt, dispatch prompt) rather than a code-path transition, that is **not** a gate — it is at best a visible warning. See `feedback_rubric_fail_closed.md` meta-rule 1: "visible" and "fail-closed" are distinct layers; the rubric must name both.
 
@@ -51,7 +53,7 @@ If the answer is "the claim proves itself", the factor is incomplete.
 
 ### Bad rubric (pre-#151 round 4)
 
-Taken verbatim from the original rubric that shipped to PR #207 round 3 before codex surfaced the gap.
+Taken verbatim from the original rubric that shipped to PR #207 round 3 before codex surfaced the gap. This example is retained for its *shape* — a schema-only factor masquerading as an auth factor — even though the underlying `anchor.rubric_grandfathered` field was retired in #190 and dispatch now rejects it outright (see `skills/relay-dispatch/SKILL.md` and `dispatch.js:245`).
 
 ```yaml
 - name: grandfather_object_schema
@@ -70,7 +72,7 @@ Taken verbatim from the original rubric that shipped to PR #207 round 3 before c
 
 ### Good rubric (#151 round 8, later retired by #190)
 
-Replacement factors that landed after round 4 surfaced the gap. Note that question 1 and question 3 are each a **separate factor** — not a criterion bullet inside a broader factor. This remained the correct design for `#151`; `#190` later retired the runtime field entirely instead of continuing to authenticate it.
+Replacement factors that landed after round 4 surfaced the gap. Note that question 1 and question 3 are each a **separate factor** — not a criterion bullet inside a broader factor. This remained the correct design for `#151`; `#190` later retired the runtime field entirely instead of continuing to authenticate it. The worked example still illustrates the *pattern* (schema + authentication + regression tests as three distinct factors) — just don't use `anchor.rubric_grandfathered` as a real factor target today; dispatch rejects the flag.
 
 ```yaml
 - name: migration_manifest_present
@@ -84,10 +86,11 @@ Replacement factors that landed after round 4 surfaced the gap. Note that questi
   tier: contract
   type: evaluated
   criteria: |
-    - `getRubricAnchorStatus` in `skills/relay-dispatch/scripts/relay-manifest.js`
+    - `getRubricAnchorStatus` in `skills/relay-dispatch/scripts/manifest/rubric.js`
       reads `anchor.rubric_grandfathered` and, when object-shaped, calls
       `loadMigrationManifest()` and requires `from_migration` to match a
-      registered entry.
+      registered entry. (Callers may also import via the `relay-manifest.js`
+      compat facade; the split submodule is the canonical source.)
     - Hand-edited objects that reference an unregistered migration id fail closed
       with `reason: "migration_not_registered"`.
     - `evaluateReviewGate` in `skills/relay-merge/scripts/review-gate.js` reads
