@@ -1,5 +1,5 @@
-# Claude Code local settings
-.claude/settings.local.json
+# Claude Code local settings and runtime state
+.claude/
 
 # OS
 .DS_Store
