@@ -1138,8 +1138,8 @@ test("dispatch pushes the branch and opens a PR from the orchestrator on success
   assert.equal(manifest.git.pr_number, 321);
   assert.equal(manifest.github.pr_number, 321);
   assert.equal(manifest.github.pr_created_by_orchestrator, true);
-  assert.equal(manifest.roles.orchestrator, "codex");
-  assert.equal(manifest.roles.reviewer, "codex");
+  assert.equal(manifest.roles.orchestrator, "unknown");
+  assert.equal(manifest.roles.reviewer, "unknown");
 
   const ghCalls = readJsonLines(ghLogPath);
   assert.deepEqual(ghCalls.map((args) => args.slice(0, 2)), [["pr", "list"], ["pr", "create"]]);
@@ -1147,7 +1147,7 @@ test("dispatch pushes the branch and opens a PR from the orchestrator on success
   assert.ok(execCalls.some((entry) => entry.command === "git" && entry.args.includes("push")));
 });
 
-test("dispatch lets explicit role env vars override the codex defaults", () => {
+test("dispatch lets explicit role env vars override the unknown defaults", () => {
   const { repoRoot, relayHome } = setupRepoWithOrigin();
   const { env } = createPushPrTestEnv({
     relayHome,

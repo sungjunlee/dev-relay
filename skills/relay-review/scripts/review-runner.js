@@ -307,9 +307,9 @@ function run() {
   );
   updatedManifest = {
     ...updatedManifest,
-    roles: {
-      ...(updatedManifest.roles || {}),
-      reviewer: reviewerName,
+    review: {
+      ...(updatedManifest.review || {}),
+      last_reviewer: reviewerName,
     },
   };
   updatedManifest = applyReviewerIdentity(updatedManifest, noComment, runRepoPath);
@@ -320,6 +320,7 @@ function run() {
     state_to: updatedManifest.state,
     head_sha: reviewedHeadSha,
     round,
+    reviewer: reviewerName,
     reason: rubricGateFailure ? rubricGateFailure.status : verdict.verdict,
   });
 
