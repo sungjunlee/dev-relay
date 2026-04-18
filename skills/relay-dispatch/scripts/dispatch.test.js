@@ -17,7 +17,7 @@ const {
   updateManifestState,
   writeManifest,
 } = require("./relay-manifest");
-const { buildPrBody, pushAndOpenPR } = require("./dispatch-publish");
+const { buildPrBody, pushAndOpenPR, resolveBranchRemote } = require("./dispatch-publish");
 const { evaluateReviewGate } = require("../../relay-merge/scripts/review-gate");
 const { createEnforcementFixture } = require("./test-support");
 
@@ -264,13 +264,29 @@ function readJsonLines(filePath) {
     .map((line) => JSON.parse(line));
 }
 
-function createExecFileMock({ existingPrNumber = null, prCreateUrl = null, gitPushError = null, prCreateError = null, gitLogOutput = "fake: dispatch publish" } = {}) {
+function createExecFileMock({
+  existingPrNumber = null,
+  prCreateUrl = null,
+  gitPushError = null,
+  prCreateError = null,
+  gitLogOutput = "fake: dispatch publish",
+  branchRemote = "origin",
+  branchRemoteError = false,
+} = {}) {
   const calls = [];
   const execFile = (command, args, options) => {
     calls.push({ command, args: [...args], options });
 
     if (command === "gh" && args[0] === "pr" && args[1] === "list") {
       return existingPrNumber === null ? "" : `${existingPrNumber}\n`;
+    }
+    if (command === "git" && args.includes("config")) {
+      if (branchRemoteError) {
+        const error = new Error("git config lookup failed");
+        error.stderr = Buffer.from("branch has no configured remote\n");
+        throw error;
+      }
+      return branchRemote ? `${branchRemote}\n` : "";
     }
     if (command === "git" && args.includes("push")) {
       if (gitPushError) {
@@ -1548,8 +1564,12 @@ test("pushAndOpenPR uses the injected execFile seam for happy-path publication",
     ["gh", ["pr", "list"]],
     ["git", ["-C", "/tmp/repo-worktree"]],
     ["git", ["-C", "/tmp/repo-worktree"]],
+    ["git", ["-C", "/tmp/repo-worktree"]],
     ["gh", ["pr", "create"]],
   ]);
+  const pushCall = calls.find(({ command, args }) => command === "git" && args.includes("push"));
+  assert.ok(pushCall, "expected git push call");
+  assert.deepEqual(pushCall.args, ["-C", "/tmp/repo-worktree", "push", "-u", "origin", "issue-198"]);
 
   const createCall = calls.find(({ command, args }) => command === "gh" && args[0] === "pr" && args[1] === "create");
   assert.ok(createCall, "expected gh pr create call");
@@ -1628,6 +1648,86 @@ test("pushAndOpenPR surfaces injected gh pr create failures", async () => {
     }),
     /gh_pr_create_failed: simulated gh pr create failure/
   );
+});
+
+test("pushAndOpenPR pushes to the branch-configured remote when it is not origin (#229)", async () => {
+  const { execFile, calls } = createExecFileMock({
+    prCreateUrl: "https://github.com/acme/dev-relay/pull/400",
+    gitLogOutput: "fix: resolve upstream remote",
+    branchRemote: "upstream",
+  });
+
+  const result = await pushAndOpenPR({
+    wtPath: "/tmp/repo-worktree",
+    branch: "issue-229-fork",
+    baseBranch: "main",
+    resultPreview: "Fork-remote publication.",
+    runId: "issue-229-fork-run",
+    executor: "codex",
+    execFile,
+  });
+
+  assert.deepEqual(result, { prNumber: 400, createdByUs: true });
+
+  const configCall = calls.find(({ command, args }) => command === "git" && args.includes("config"));
+  assert.ok(configCall, "expected git config lookup for branch remote");
+  assert.deepEqual(configCall.args, [
+    "-C", "/tmp/repo-worktree",
+    "config", "--get", "branch.issue-229-fork.remote",
+  ]);
+
+  const pushCall = calls.find(({ command, args }) => command === "git" && args.includes("push"));
+  assert.ok(pushCall, "expected git push call");
+  assert.deepEqual(pushCall.args, ["-C", "/tmp/repo-worktree", "push", "-u", "upstream", "issue-229-fork"]);
+});
+
+test("pushAndOpenPR falls back to origin when the branch has no configured remote (#229)", async () => {
+  const { execFile, calls } = createExecFileMock({
+    prCreateUrl: "https://github.com/acme/dev-relay/pull/401",
+    branchRemote: "",
+  });
+
+  await pushAndOpenPR({
+    wtPath: "/tmp/repo-worktree",
+    branch: "issue-229-no-config",
+    baseBranch: "main",
+    resultPreview: "No branch.<name>.remote configured.",
+    runId: "issue-229-no-config-run",
+    executor: "codex",
+    execFile,
+  });
+
+  const pushCall = calls.find(({ command, args }) => command === "git" && args.includes("push"));
+  assert.ok(pushCall, "expected git push call");
+  assert.deepEqual(pushCall.args, ["-C", "/tmp/repo-worktree", "push", "-u", "origin", "issue-229-no-config"]);
+});
+
+test("pushAndOpenPR falls back to origin when git config lookup fails (#229)", async () => {
+  const { execFile, calls } = createExecFileMock({
+    prCreateUrl: "https://github.com/acme/dev-relay/pull/402",
+    branchRemoteError: true,
+  });
+
+  await pushAndOpenPR({
+    wtPath: "/tmp/repo-worktree",
+    branch: "issue-229-config-fail",
+    baseBranch: "main",
+    resultPreview: "git config exits non-zero.",
+    runId: "issue-229-config-fail-run",
+    executor: "codex",
+    execFile,
+  });
+
+  const pushCall = calls.find(({ command, args }) => command === "git" && args.includes("push"));
+  assert.ok(pushCall, "expected git push call");
+  assert.deepEqual(pushCall.args, ["-C", "/tmp/repo-worktree", "push", "-u", "origin", "issue-229-config-fail"]);
+});
+
+test("resolveBranchRemote returns origin when branch is missing or empty (#229)", () => {
+  const { execFile, calls } = createExecFileMock();
+  assert.equal(resolveBranchRemote(execFile, "/tmp/repo-worktree", ""), "origin");
+  assert.equal(resolveBranchRemote(execFile, "/tmp/repo-worktree", null), "origin");
+  assert.equal(calls.length, 0, "no git config lookup for empty branch name");
 });
 
 test("dispatch pushes the branch and opens a PR from the orchestrator on success", () => {
