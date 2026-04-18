@@ -28,6 +28,7 @@ const fs = require("fs");
 const path = require("path");
 const { execFileSync } = require("child_process");
 const {
+  buildSkipReviewGateFailure,
   buildSkipComment,
   evaluateReviewGate,
   summarizeRubricAuditForSkip,
@@ -280,7 +281,6 @@ function resolveSkipAuditContext(prNumber) {
     if (manifestRecord.error || !manifestRecord.data) {
       return {
         rubricStatus: "unresolved-manifest",
-        grandfatherProvenance: null,
         manifestData: null,
         runDir: null,
       };
@@ -305,15 +305,14 @@ function resolveSkipAuditContext(prNumber) {
     const runDir = getRunDir(validatedPaths.repoRoot, manifestData.run_id);
     const rubricAudit = summarizeRubricAuditForSkip(manifestData, { runDir });
     return {
-      rubricStatus: rubricAudit.rubricStatus,
-      grandfatherProvenance: rubricAudit.grandfatherProvenance,
+      ...rubricAudit,
       manifestData,
       runDir,
     };
   } catch {
     return {
       rubricStatus: "unresolved-manifest",
-      grandfatherProvenance: null,
+      readyToMerge: true,
       manifestData: null,
       runDir: null,
     };
@@ -359,7 +358,7 @@ function output(result) {
       if (result.issues) console.log(`  ${result.issues}`);
     } else if (result.status === "missing_rubric_path") {
       console.log(`✗ PR #${PR_NUM}: run is missing anchor.rubric_path — merge blocked`);
-      console.log("  Re-dispatch from relay-plan with --rubric-file, or stamp an approved pre-change run with relay-migrate-rubric.js.");
+      console.log("  Re-dispatch from relay-plan with --rubric-file before rerunning relay-review.");
     } else if (result.status === "missing_rubric_file") {
       console.log(`✗ PR #${PR_NUM}: anchored rubric file is missing from the run directory — merge blocked`);
       if (result.reason) console.log(`  ${result.reason}`);
@@ -376,6 +375,10 @@ function output(result) {
       console.log(`✗ PR #${PR_NUM}: anchor.rubric_path does not point to a readable rubric file — merge blocked`);
       if (result.reason) console.log(`  ${result.reason}`);
       console.log("  Fix or restore the anchored rubric file, then re-dispatch before rerunning relay-review.");
+    } else if (result.status === "unsupported_grandfather_field") {
+      console.log(`✗ PR #${PR_NUM}: manifest still carries anchor.rubric_grandfathered — merge blocked`);
+      if (result.reason) console.log(`  ${result.reason}`);
+      console.log("  Remove anchor.rubric_grandfathered and persist a valid anchor.rubric_path before rerunning relay-review.");
     } else if (result.status === "manifest_resolution_failed") {
       console.log(`✗ PR #${PR_NUM}: unable to resolve relay manifest — merge blocked`);
       if (result.reason) console.log(`  ${result.reason}`);
@@ -406,11 +409,16 @@ function main() {
     const skipAudit = DRY_RUN
       ? {
           rubricStatus: "unresolved-manifest",
-          grandfatherProvenance: null,
+          readyToMerge: true,
           manifestData: null,
           runDir: null,
         }
       : resolveSkipAuditContext(PR_NUM);
+    const skipGateFailure = buildSkipReviewGateFailure(PR_NUM, skipAudit);
+    if (skipGateFailure) {
+      output(skipGateFailure);
+      process.exit(1);
+    }
     const skipComment = buildSkipComment(SKIP_REASON, skipAudit);
 
     if (DRY_RUN) {

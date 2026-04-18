@@ -3,7 +3,7 @@ const path = require("path");
 const { formatIssueList, formatScopeDrift } = require("./comment");
 const { formatPriorVerdictSummary } = require("./prompt");
 
-const RUBRIC_PASS_THROUGH_STATES = new Set(["loaded", "grandfathered"]);
+const RUBRIC_PASS_THROUGH_STATES = new Set(["loaded"]);
 
 function buildRedispatchPrompt(verdict, doneCriteria, runDir, round, churnGrowth, doneCriteriaSource) {
   const sections = [

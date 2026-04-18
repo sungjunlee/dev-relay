@@ -20,10 +20,6 @@ const {
   appendRunEvent,
   appendScoreDivergence,
 } = require("./relay-events");
-const {
-  createGrandfatheredRubricAnchor,
-  registerGrandfatheredRubricMigration,
-} = require("./test-support");
 
 const SCRIPT = path.join(__dirname, "reliability-report.js");
 
@@ -56,13 +52,8 @@ function writeRun(repoRoot, { runId, state, rounds, updatedAt }) {
   });
   manifest = updateManifestState(manifest, STATES.DISPATCHED, "await_dispatch_result");
   if (state !== STATES.DISPATCHED) {
-    manifest.anchor.rubric_grandfathered = createGrandfatheredRubricAnchor({
-      actor: "reliability-report-test",
-    });
-    registerGrandfatheredRubricMigration(runId, {
-      applied_at: manifest.anchor.rubric_grandfathered.applied_at,
-      reason: manifest.anchor.rubric_grandfathered.reason,
-    });
+    manifest.anchor.rubric_path = "rubric.yaml";
+    fs.writeFileSync(path.join(ensureRunLayout(repoRoot, runId).runDir, "rubric.yaml"), "rubric:\n  factors:\n    - name: reliability-report\n", "utf-8");
     manifest = updateManifestState(manifest, STATES.REVIEW_PENDING, "run_review");
   }
   if (state === STATES.READY_TO_MERGE || state === STATES.MERGED) {
@@ -154,6 +145,76 @@ test("reliability-report derives the core scorecard from manifests and events", 
   assert.equal(report.metrics.max_rounds_enforcement_rate, 1);
   assert.equal(report.metrics.median_rounds_to_ready, 3);
   assert.equal(report.metrics.stale_open_runs_72h, 1);
+});
+
+test("reliability-report aggregates model_per_phase from dispatch and review events", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-report-models-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  const recentTs = new Date(Date.now() - 1 * 60 * 60 * 1000).toISOString();
+  const runA = createRunId({ branch: "run-model-a", timestamp: new Date("2026-04-12T00:10:00.000Z") });
+  const runB = createRunId({ branch: "run-model-b", timestamp: new Date("2026-04-12T00:10:01.000Z") });
+
+  writeRun(repoRoot, {
+    runId: runA,
+    state: STATES.READY_TO_MERGE,
+    rounds: 1,
+    updatedAt: recentTs,
+  });
+  writeRun(repoRoot, {
+    runId: runB,
+    state: STATES.CHANGES_REQUESTED,
+    rounds: 1,
+    updatedAt: recentTs,
+  });
+
+  appendRunEvent(repoRoot, runA, {
+    event: "dispatch_start",
+    state_from: STATES.DRAFT,
+    state_to: STATES.DISPATCHED,
+    head_sha: "aaa111",
+    reason: "new_dispatch",
+    model: "opus",
+  });
+  appendRunEvent(repoRoot, runA, {
+    event: "review_invoke",
+    state_from: STATES.REVIEW_PENDING,
+    state_to: STATES.REVIEW_PENDING,
+    head_sha: "aaa111",
+    round: 1,
+    reason: "codex",
+    model: "haiku",
+  });
+  appendRunEvent(repoRoot, runB, {
+    event: "dispatch_start",
+    state_from: STATES.DRAFT,
+    state_to: STATES.DISPATCHED,
+    head_sha: "bbb222",
+    reason: "new_dispatch",
+    model: null,
+  });
+  appendRunEvent(repoRoot, runB, {
+    event: "review_invoke",
+    state_from: STATES.REVIEW_PENDING,
+    state_to: STATES.REVIEW_PENDING,
+    head_sha: "bbb222",
+    round: 1,
+    reason: "codex",
+    model: null,
+  });
+
+  const stdout = execFileSync("node", [SCRIPT, "--repo", repoRoot, "--json"], { encoding: "utf-8" });
+  const report = JSON.parse(stdout);
+
+  assert.deepEqual(report.model_per_phase, {
+    dispatch: {
+      null: 1,
+      opus: 1,
+    },
+    review: {
+      haiku: 1,
+      null: 1,
+    },
+  });
 });
 
 test("reliability-report aggregates factor analysis across runs and rounds", () => {

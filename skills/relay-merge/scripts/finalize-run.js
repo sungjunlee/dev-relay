@@ -39,6 +39,7 @@ const { resolveManifestRecord } = require("../../relay-dispatch/scripts/relay-re
 const { appendRunEvent } = require("../../relay-dispatch/scripts/relay-events");
 const { runCleanup } = require("../../relay-dispatch/scripts/manifest/cleanup");
 const {
+  buildSkipReviewGateFailure,
   buildSkipComment,
   evaluateReviewGate,
   summarizeRubricAuditForSkip,
@@ -316,6 +317,20 @@ function main() {
 
   if (!skipMerge && safeData.state === STATES.READY_TO_MERGE) {
     if (skipReviewReason) {
+      reviewGate = buildSkipReviewGateFailure(prNumber, skipReviewRubricAudit);
+      if (reviewGate) {
+        if (!dryRun) {
+          appendRunEvent(repoPath, safeData.run_id, {
+            event: "merge_blocked",
+            state_from: safeData.state,
+            state_to: safeData.state,
+            head_sha: safeData.git?.head_sha || null,
+            round: safeData.review?.rounds || null,
+            reason: reviewGate.status,
+          });
+        }
+        throw new Error(`Fresh review gate failed: ${reviewGate.status}`);
+      }
       reviewGate = {
         status: "skipped",
         pr: prNumber,

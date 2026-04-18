@@ -120,7 +120,8 @@ function toFrontmatter(data, indent = 0) {
     .map(([key, value]) => {
       const prefix = " ".repeat(indent);
       if (value && typeof value === "object" && !Array.isArray(value)) {
-        return `${prefix}${key}:\n${toFrontmatter(value, indent + 2)}`;
+        const nested = toFrontmatter(value, indent + 2);
+        return nested ? `${prefix}${key}:\n${nested}` : `${prefix}${key}:`;
       }
       return `${prefix}${key}: ${formatScalar(value)}`;
     })
@@ -174,6 +175,7 @@ function createManifestSkeleton({
   leafId = null,
   doneCriteriaPath = null,
   doneCriteriaSource = null,
+  modelHints = undefined,
 }) {
   const { STATES } = require("./lifecycle");
   const { createCleanupSkeleton } = require("./cleanup");
@@ -243,6 +245,10 @@ function createManifestSkeleton({
       ...(requestId ? { request_id: requestId } : {}),
       ...(leafId ? { leaf_id: leafId } : {}),
     };
+  }
+
+  if (modelHints !== undefined) {
+    manifest.model_hints = modelHints;
   }
 
   return manifest;

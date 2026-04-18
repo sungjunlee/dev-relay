@@ -66,6 +66,8 @@ Supported built-in adapters:
 Notes:
 - `codex` uses a read-only structured-output adapter and must return a full two-phase verdict.
 - `claude` requires an authenticated local Claude CLI session.
+- Model precedence for reviewer invocation is `--reviewer-model` -> `manifest.model_hints.review` -> reviewer default.
+- When the runner invokes the reviewer itself, it records a `review_invoke` event with the effective `model` value (or `null` when unset).
 
 4. Fallback path for unsupported environments or debugging:
 ```bash

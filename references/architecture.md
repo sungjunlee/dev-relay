@@ -82,6 +82,10 @@ roles:
   executor: codex               # who implements
   reviewer: claude              # who reviews (isolated)
 
+model_hints:
+  dispatch: opus                # optional per-phase advisory model preference
+  review: haiku                 # optional per-phase advisory model preference
+
 paths:
   repo_root: /Users/me/project
   worktree: /tmp/relay-wt-issue-42
@@ -129,6 +133,7 @@ timestamps:
 | Field | Purpose |
 |-------|---------|
 | `roles.*` | Immutable per-run binding. Decouples who decides, who implements, who validates |
+| `model_hints.*` | Optional advisory per-phase model preference. Current runtime consumers: `dispatch`, `review` |
 | `policy.merge` | `manual_after_lgtm` — orchestrator must explicitly merge |
 | `policy.reviewer_write` | `forbid` — review runner rejects rounds where reviewer mutated files |
 | `anchor.*` | Immutable review scope — prevents drift across rounds |

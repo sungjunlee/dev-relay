@@ -134,6 +134,34 @@ fs.writeFileSync(output, "ok\\n", "utf-8");
   return codexPath;
 }
 
+function writeArgCaptureCodex(binDir, capturePath) {
+  ensureDefaultFakeGh(binDir);
+  const codexPath = path.join(binDir, "codex");
+  fs.writeFileSync(codexPath, `#!/usr/bin/env node
+const fs = require("fs");
+const { execFileSync } = require("child_process");
+const args = process.argv.slice(2);
+if (args[0] === "--version") {
+  process.stdout.write("codex-fake\\n");
+  process.exit(0);
+}
+if (args[0] !== "exec") {
+  process.stderr.write("unsupported fake codex invocation");
+  process.exit(1);
+}
+fs.writeFileSync(${JSON.stringify(capturePath)}, JSON.stringify(args), "utf-8");
+const cwd = args[args.indexOf("-C") + 1];
+const output = args[args.indexOf("-o") + 1];
+const fileName = "captured.txt";
+fs.writeFileSync(cwd + "/" + fileName, fileName + "\\n", "utf-8");
+execFileSync("git", ["-C", cwd, "add", fileName], { stdio: "pipe" });
+execFileSync("git", ["-C", cwd, "commit", "-m", "fake " + fileName], { stdio: "pipe" });
+fs.writeFileSync(output, "ok\\n", "utf-8");
+`, "utf-8");
+  fs.chmodSync(codexPath, 0o755);
+  return codexPath;
+}
+
 function writeNoOpCodex(binDir) {
   ensureDefaultFakeGh(binDir);
   const codexPath = path.join(binDir, "codex");
@@ -450,6 +478,13 @@ function normalizeDispatchDryRunOutput(output, { root }) {
   return normalizedRoot.replace(/\/runs\/[^/]+\//g, `/runs/${CANONICAL_DRY_RUN_SLUG}/`).trimEnd();
 }
 
+function buildDispatchExecPrompt(taskPrompt) {
+  return "[NON-INTERACTIVE DISPATCH] This is an automated, non-interactive execution. "
+    + "Do not present plans for approval or wait for user confirmation. "
+    + "Execute the task fully and autonomously.\n\n"
+    + taskPrompt;
+}
+
 function tamperResumableRunRubricPath(repoRoot, env, rubricPath) {
   const first = JSON.parse(runDispatch(repoRoot, [
     "-b", "issue-rubric-anchor",
@@ -511,6 +546,440 @@ test("dispatch reuses the same run and worktree on resume", () => {
   assert.match(events, /"event":"dispatch_start"/);
   assert.match(events, /"reason":"same_run_resume"/);
   assert.match(events, /"reason":"same_run_resume:completed"/);
+});
+
+test("dispatch stores model_hints for all four phases verbatim", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  writeFakeCodex(binDir);
+  const env = {
+    ...process.env,
+    PATH: `${binDir}:${process.env.PATH}`,
+    RELAY_HOME: relayHome,
+  };
+
+  const result = JSON.parse(runDispatch(repoRoot, [
+    "-b", "issue-109-model-hints-new",
+    "--prompt", "persist new-run model hints",
+    "--model-hints", "plan=X,dispatch=Y,review=Z,merge=W",
+    "--json",
+  ], env));
+
+  assert.deepEqual(readManifest(result.manifestPath).data.model_hints, {
+    plan: "X",
+    dispatch: "Y",
+    review: "Z",
+    merge: "W",
+  });
+});
+
+test("dispatch resume replaces model_hints and records model_hints_updated before redispatch", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  writeFakeCodex(binDir);
+  const env = {
+    ...process.env,
+    PATH: `${binDir}:${process.env.PATH}`,
+    RELAY_HOME: relayHome,
+  };
+
+  const first = JSON.parse(runDispatch(repoRoot, [
+    "-b", "issue-109-model-hints-resume",
+    "--prompt", "initial dispatch",
+    "--model-hints", "dispatch=opus,review=haiku",
+    "--json",
+  ], env));
+  const record = readManifest(first.manifestPath);
+  writeManifest(first.manifestPath, {
+    ...updateManifestState(record.data, STATES.CHANGES_REQUESTED, "re_dispatch_requested_changes"),
+  }, record.body);
+
+  const second = JSON.parse(runDispatch(repoRoot, [
+    "--run-id", first.runId,
+    "--prompt", "resume dispatch",
+    "--model-hints", "dispatch=sonnet,merge=gpt-5.4",
+    "--json",
+  ], env));
+
+  assert.equal(second.mode, "resume");
+  assert.deepEqual(readManifest(first.manifestPath).data.model_hints, {
+    dispatch: "sonnet",
+    merge: "gpt-5.4",
+  });
+
+  const events = readJsonLines(getEventsPath(repoRoot, first.runId));
+  const updatedEvent = events.find((event) => event.event === "model_hints_updated");
+  assert.deepEqual(updatedEvent.before, {
+    dispatch: "opus",
+    review: "haiku",
+  });
+  assert.deepEqual(updatedEvent.after, {
+    dispatch: "sonnet",
+    merge: "gpt-5.4",
+  });
+});
+
+test("dispatch resume without --model-hints preserves stored hints and emits no model_hints_updated event", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  writeFakeCodex(binDir);
+  const env = {
+    ...process.env,
+    PATH: `${binDir}:${process.env.PATH}`,
+    RELAY_HOME: relayHome,
+  };
+
+  const first = JSON.parse(runDispatch(repoRoot, [
+    "-b", "issue-109-model-hints-preserve",
+    "--prompt", "initial dispatch",
+    "--model-hints", "dispatch=opus,review=haiku",
+    "--json",
+  ], env));
+  const record = readManifest(first.manifestPath);
+  writeManifest(first.manifestPath, {
+    ...updateManifestState(record.data, STATES.CHANGES_REQUESTED, "re_dispatch_requested_changes"),
+  }, record.body);
+
+  const expectedHints = JSON.stringify(readManifest(first.manifestPath).data.model_hints);
+  runDispatch(repoRoot, [
+    "--run-id", first.runId,
+    "--prompt", "resume dispatch",
+    "--json",
+  ], env);
+
+  assert.equal(JSON.stringify(readManifest(first.manifestPath).data.model_hints), expectedHints);
+  const events = readJsonLines(getEventsPath(repoRoot, first.runId));
+  assert.equal(events.filter((event) => event.event === "model_hints_updated").length, 0);
+});
+
+test("dispatch --model-hints rejects unknown phase keys without writing a manifest", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  writeFakeCodex(binDir);
+  const env = {
+    ...process.env,
+    PATH: `${binDir}:${process.env.PATH}`,
+    RELAY_HOME: relayHome,
+  };
+
+  assert.throws(() => runDispatch(repoRoot, [
+    "-b", "issue-109-parse-unknown-phase",
+    "--prompt", "invalid model hints",
+    "--model-hints", "foo=bar",
+  ], env), (error) => {
+    assert.equal(String(error.stderr).trim(), "Error: invalid --model-hints token 'foo=bar': unknown phase 'foo'");
+    return true;
+  });
+  assert.equal(listManifestPaths(repoRoot).length, 0);
+});
+
+test("dispatch --model-hints rejects tokens missing '=' without writing a manifest", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  writeFakeCodex(binDir);
+  const env = {
+    ...process.env,
+    PATH: `${binDir}:${process.env.PATH}`,
+    RELAY_HOME: relayHome,
+  };
+
+  assert.throws(() => runDispatch(repoRoot, [
+    "-b", "issue-109-parse-missing-equals",
+    "--prompt", "invalid model hints",
+    "--model-hints", "dispatch",
+  ], env), (error) => {
+    assert.equal(String(error.stderr).trim(), "Error: invalid --model-hints token 'dispatch': missing '='");
+    return true;
+  });
+  assert.equal(listManifestPaths(repoRoot).length, 0);
+});
+
+test("dispatch --model-hints rejects empty phases without writing a manifest", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  writeFakeCodex(binDir);
+  const env = {
+    ...process.env,
+    PATH: `${binDir}:${process.env.PATH}`,
+    RELAY_HOME: relayHome,
+  };
+
+  assert.throws(() => runDispatch(repoRoot, [
+    "-b", "issue-109-parse-empty-phase",
+    "--prompt", "invalid model hints",
+    "--model-hints", "=opus",
+  ], env), (error) => {
+    assert.equal(String(error.stderr).trim(), "Error: invalid --model-hints token '=opus': empty phase");
+    return true;
+  });
+  assert.equal(listManifestPaths(repoRoot).length, 0);
+});
+
+test("dispatch --model-hints rejects empty model values without writing a manifest", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  writeFakeCodex(binDir);
+  const env = {
+    ...process.env,
+    PATH: `${binDir}:${process.env.PATH}`,
+    RELAY_HOME: relayHome,
+  };
+
+  assert.throws(() => runDispatch(repoRoot, [
+    "-b", "issue-109-parse-empty-value",
+    "--prompt", "invalid model hints",
+    "--model-hints", "dispatch=",
+  ], env), (error) => {
+    assert.equal(String(error.stderr).trim(), "Error: invalid --model-hints token 'dispatch=': empty value");
+    return true;
+  });
+  assert.equal(listManifestPaths(repoRoot).length, 0);
+});
+
+test("dispatch --model-hints rejects empty pairs without writing a manifest", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  writeFakeCodex(binDir);
+  const env = {
+    ...process.env,
+    PATH: `${binDir}:${process.env.PATH}`,
+    RELAY_HOME: relayHome,
+  };
+
+  assert.throws(() => runDispatch(repoRoot, [
+    "-b", "issue-109-parse-empty-pair",
+    "--prompt", "invalid model hints",
+    "--model-hints", "dispatch=sonnet,,review=opus",
+  ], env), (error) => {
+    assert.equal(String(error.stderr).trim(), "Error: invalid --model-hints token '': empty pair");
+    return true;
+  });
+  assert.equal(listManifestPaths(repoRoot).length, 0);
+});
+
+test("dispatch --model-hints rejects duplicate phases without writing a manifest", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  writeFakeCodex(binDir);
+  const env = {
+    ...process.env,
+    PATH: `${binDir}:${process.env.PATH}`,
+    RELAY_HOME: relayHome,
+  };
+
+  assert.throws(() => runDispatch(repoRoot, [
+    "-b", "issue-109-parse-duplicate-phase",
+    "--prompt", "invalid model hints",
+    "--model-hints", "dispatch=opus,dispatch=sonnet",
+  ], env), (error) => {
+    assert.equal(String(error.stderr).trim(), "Error: invalid --model-hints token 'dispatch=sonnet': duplicate phase 'dispatch'");
+    return true;
+  });
+  assert.equal(listManifestPaths(repoRoot).length, 0);
+});
+
+test("dispatch precedence D1 regression: CLI override beats manifest hint in executor argv", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  const capturePath = path.join(os.tmpdir(), `relay-dispatch-argv-${Date.now()}-d1.json`);
+  writeArgCaptureCodex(binDir, capturePath);
+  const env = {
+    ...process.env,
+    PATH: `${binDir}:${process.env.PATH}`,
+    RELAY_HOME: relayHome,
+  };
+  const taskPrompt = "dispatch matrix d1";
+
+  const result = JSON.parse(runDispatch(repoRoot, [
+    "-b", "issue-109-d1",
+    "--prompt", taskPrompt,
+    "--model", "sonnet",
+    "--model-hints", "dispatch=opus",
+    "--json",
+  ], env));
+
+  assert.deepEqual(JSON.parse(fs.readFileSync(capturePath, "utf-8")), [
+    "exec",
+    "-C", result.worktree,
+    "--full-auto",
+    "--color", "never",
+    "-o", result.resultFile,
+    "-m", "sonnet",
+    "--sandbox", "workspace-write",
+    buildDispatchExecPrompt(taskPrompt),
+  ]);
+});
+
+test("dispatch precedence D2 regression: CLI override works when manifest hint is absent", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  const capturePath = path.join(os.tmpdir(), `relay-dispatch-argv-${Date.now()}-d2.json`);
+  writeArgCaptureCodex(binDir, capturePath);
+  const env = {
+    ...process.env,
+    PATH: `${binDir}:${process.env.PATH}`,
+    RELAY_HOME: relayHome,
+  };
+  const taskPrompt = "dispatch matrix d2";
+
+  const result = JSON.parse(runDispatch(repoRoot, [
+    "-b", "issue-109-d2",
+    "--prompt", taskPrompt,
+    "--model", "sonnet",
+    "--json",
+  ], env));
+
+  assert.deepEqual(JSON.parse(fs.readFileSync(capturePath, "utf-8")), [
+    "exec",
+    "-C", result.worktree,
+    "--full-auto",
+    "--color", "never",
+    "-o", result.resultFile,
+    "-m", "sonnet",
+    "--sandbox", "workspace-write",
+    buildDispatchExecPrompt(taskPrompt),
+  ]);
+});
+
+test("dispatch precedence D3 regression: manifest hint supplies the effective model when CLI is unset", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  const capturePath = path.join(os.tmpdir(), `relay-dispatch-argv-${Date.now()}-d3.json`);
+  writeArgCaptureCodex(binDir, capturePath);
+  const env = {
+    ...process.env,
+    PATH: `${binDir}:${process.env.PATH}`,
+    RELAY_HOME: relayHome,
+  };
+  const taskPrompt = "dispatch matrix d3";
+
+  const result = JSON.parse(runDispatch(repoRoot, [
+    "-b", "issue-109-d3",
+    "--prompt", taskPrompt,
+    "--model-hints", "dispatch=opus",
+    "--json",
+  ], env));
+
+  assert.deepEqual(JSON.parse(fs.readFileSync(capturePath, "utf-8")), [
+    "exec",
+    "-C", result.worktree,
+    "--full-auto",
+    "--color", "never",
+    "-o", result.resultFile,
+    "-m", "opus",
+    "--sandbox", "workspace-write",
+    buildDispatchExecPrompt(taskPrompt),
+  ]);
+
+  const events = readJsonLines(getEventsPath(repoRoot, result.runId));
+  const dispatchStart = events.find((event) => event.event === "dispatch_start");
+  assert.equal(dispatchStart.model, "opus");
+});
+
+test("dispatch precedence D4 regression: executor argv stays byte-identical when CLI and manifest hint are both absent", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  const capturePath = path.join(os.tmpdir(), `relay-dispatch-argv-${Date.now()}-d4.json`);
+  writeArgCaptureCodex(binDir, capturePath);
+  const env = {
+    ...process.env,
+    PATH: `${binDir}:${process.env.PATH}`,
+    RELAY_HOME: relayHome,
+  };
+  const taskPrompt = "dispatch matrix d4";
+
+  const result = JSON.parse(runDispatch(repoRoot, [
+    "-b", "issue-109-d4",
+    "--prompt", taskPrompt,
+    "--json",
+  ], env));
+
+  assert.deepEqual(JSON.parse(fs.readFileSync(capturePath, "utf-8")), [
+    "exec",
+    "-C", result.worktree,
+    "--full-auto",
+    "--color", "never",
+    "-o", result.resultFile,
+    "--sandbox", "workspace-write",
+    buildDispatchExecPrompt(taskPrompt),
+  ]);
+
+  const events = readJsonLines(getEventsPath(repoRoot, result.runId));
+  const dispatchStart = events.find((event) => event.event === "dispatch_start");
+  assert.equal(dispatchStart.model, null);
+});
+
+test("dispatch dry-run resolves effective_dispatch_model from model hints and emits zero events", () => {
+  const { repoRoot, relayHome, rubricFile } = setupDryRunFixtureRepo();
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-dispatch-dry-run-bin-"));
+  writeFakeCodex(binDir);
+  const env = {
+    ...process.env,
+    PATH: `${binDir}:${process.env.PATH}`,
+    RELAY_HOME: relayHome,
+  };
+
+  const stdout = execFileSync("node", [SCRIPT, repoRoot,
+    "-b", "issue-109-dry-run-model-hints",
+    "--prompt", "dry run model hints",
+    "--rubric-file", rubricFile,
+    "--model-hints", "dispatch=opus",
+    "--dry-run",
+    "--json",
+  ], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+    env,
+  });
+  const result = JSON.parse(stdout);
+
+  assert.equal(result.effective_dispatch_model, "opus");
+  assert.equal(listManifestPaths(repoRoot).length, 0);
+});
+
+test("dispatch resume --dry-run with new --model-hints reports the new hint in effective_dispatch_model and does NOT write the manifest or emit events", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  writeFakeCodex(binDir);
+  const env = {
+    ...process.env,
+    PATH: `${binDir}:${process.env.PATH}`,
+    RELAY_HOME: relayHome,
+  };
+
+  const first = JSON.parse(runDispatch(repoRoot, [
+    "-b", "issue-109-model-hints-dry-run-resume",
+    "--prompt", "initial dispatch",
+    "--model-hints", "dispatch=opus",
+    "--json",
+  ], env));
+  const record = readManifest(first.manifestPath);
+  writeManifest(first.manifestPath, {
+    ...updateManifestState(record.data, STATES.CHANGES_REQUESTED, "re_dispatch_requested_changes"),
+  }, record.body);
+
+  const beforeManifest = readManifest(first.manifestPath).data;
+  const result = JSON.parse(runDispatch(repoRoot, [
+    "--run-id", first.runId,
+    "--prompt", "resume dispatch dry-run",
+    "--model-hints", "dispatch=sonnet",
+    "--dry-run",
+    "--json",
+  ], env));
+
+  assert.equal(result.effective_dispatch_model, "sonnet");
+  const afterManifest = readManifest(first.manifestPath).data;
+  assert.equal(afterManifest.model_hints.dispatch, "opus");
+  const events = readJsonLines(getEventsPath(repoRoot, first.runId));
+  assert.equal(events.filter((event) => event.event === "model_hints_updated").length, 0);
+  assert.deepEqual(afterManifest.model_hints, beforeManifest.model_hints);
 });
 
 test("dispatch resumes rubric fail-closed recovery runs from changes_requested", () => {
@@ -929,6 +1398,53 @@ test("dispatch with --executor claude supports resume", () => {
   assert.equal(second.worktree, first.worktree);
   assert.equal(second.executor, "claude");
   assert.equal(second.runState, STATES.REVIEW_PENDING);
+});
+
+test("dispatch with --register --executor claude does not emit the codex-only warning", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-claude-bin-"));
+  const preloadRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-claude-register-preload-"));
+  writeFakeClaude(binDir);
+  const preloadPath = writePreloadScript(preloadRoot, "dispatch-claude-register-preload.js", `
+const Module = require("module");
+const originalLoad = Module._load;
+Module._load = function patchedLoad(request, parent, isMain) {
+  if (request === "./claude-app-register" || request.endsWith("/claude-app-register")) {
+    return {
+      registerClaudeApp() {
+        return {
+          sessionId: "claude-session-fixed",
+          metadataPath: "/tmp/claude-registration.json",
+        };
+      },
+    };
+  }
+  return originalLoad(request, parent, isMain);
+};
+`);
+  const env = withNodePreload({
+    ...process.env,
+    PATH: `${binDir}:${process.env.PATH}`,
+    RELAY_HOME: relayHome,
+  }, preloadPath);
+
+  const result = spawnSync("node", [SCRIPT, repoRoot, ...withRequiredRubric([
+    "-b", "issue-87-claude-register",
+    "-e", "claude",
+    "--prompt", "register claude task",
+    "--register",
+  ])], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    env,
+  });
+
+  assert.equal(result.status, 0);
+  assert.doesNotMatch(result.stderr, /--register is only supported for codex executor/);
+  assert.doesNotMatch(result.stdout, /--register is only supported for codex executor/);
+  assert.doesNotMatch(result.stdout, /claude registration failed:/);
+  assert.match(result.stdout, /Registered in claude app\./);
 });
 
 test("timeout with commits produces completed-with-warning", () => {
@@ -1845,7 +2361,6 @@ test("dispatch without --rubric-file fails loudly in non-dry-run mode", () => {
 });
 
 test("dispatch rejects --rubric-grandfathered on new dispatches", () => {
-  // #151
   const { repoRoot, relayHome } = setupRepo();
   process.env.RELAY_HOME = relayHome;
   const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
@@ -1861,11 +2376,12 @@ test("dispatch rejects --rubric-grandfathered on new dispatches", () => {
   ], { cwd: repoRoot, encoding: "utf-8", env });
 
   assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /relay-migrate-rubric\.js/);
-  assert.match(result.stderr, /deprecated/i);
+  assert.match(result.stderr, /--rubric-grandfathered is retired/);
+  assert.match(result.stderr, /Remove anchor\.rubric_grandfathered/);
+  assert.doesNotMatch(result.stderr, /relay-migrate-rubric/);
 });
 
-test("dispatch rejects --rubric-grandfathered on same-run resumes and points to the migration script", () => {
+test("dispatch rejects --rubric-grandfathered on same-run resumes", () => {
   const { repoRoot, relayHome } = setupRepo();
   process.env.RELAY_HOME = relayHome;
   const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
@@ -1905,11 +2421,10 @@ test("dispatch rejects --rubric-grandfathered on same-run resumes and points to 
   ], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe", env });
 
   assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /relay-migrate-rubric\.js/);
+  assert.match(result.stderr, /--rubric-grandfathered is retired/);
 });
 
 test("dispatch rejects --rubric-grandfathered for review_pending legacy runs", () => {
-  // LEGACY GRANDFATHER DISPATCH PATH — remove when deprecation completes
   const { repoRoot, relayHome } = setupRepo();
   process.env.RELAY_HOME = relayHome;
   const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
@@ -1936,7 +2451,6 @@ test("dispatch rejects --rubric-grandfathered for review_pending legacy runs", (
     },
   };
   delete updated.anchor.rubric_path;
-  delete updated.anchor.rubric_grandfathered;
   writeManifest(manifestPath, updated, record.body);
 
   const result = spawnSync(process.execPath, [SCRIPT, repoRoot,
@@ -1951,14 +2465,13 @@ test("dispatch rejects --rubric-grandfathered for review_pending legacy runs", (
   });
 
   assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /relay-migrate-rubric\.js/);
+  assert.match(result.stderr, /--rubric-grandfathered is retired/);
   const manifest = readManifest(manifestPath).data;
   assert.equal(manifest.state, STATES.REVIEW_PENDING);
   assert.equal(manifest.anchor.rubric_grandfathered, undefined);
 });
 
 test("dispatch rejects --rubric-grandfathered for ready_to_merge legacy runs", () => {
-  // LEGACY GRANDFATHER DISPATCH PATH — remove when deprecation completes
   const { repoRoot, relayHome } = setupRepo();
   process.env.RELAY_HOME = relayHome;
   const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
@@ -1986,7 +2499,6 @@ test("dispatch rejects --rubric-grandfathered for ready_to_merge legacy runs", (
     },
   };
   delete updated.anchor.rubric_path;
-  delete updated.anchor.rubric_grandfathered;
   writeManifest(manifestPath, updated, record.body);
 
   const result = spawnSync(process.execPath, [SCRIPT, repoRoot,
@@ -2002,8 +2514,69 @@ test("dispatch rejects --rubric-grandfathered for ready_to_merge legacy runs", (
   });
 
   assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /relay-migrate-rubric\.js/);
+  assert.match(result.stderr, /--rubric-grandfathered is retired/);
   const manifest = readManifest(manifestPath).data;
   assert.equal(manifest.state, STATES.READY_TO_MERGE);
   assert.equal(manifest.anchor.rubric_grandfathered, undefined);
+});
+
+test("dispatch pre-flight applies the legacy-grandfather retirement matrix", async (t) => {
+  const cases = [
+    { label: "undefined", value: undefined, allowed: true },
+    { label: "false", value: false, allowed: false },
+    { label: "true", value: true, allowed: false },
+    {
+      label: "object",
+      value: {
+        from_migration: "rubric-mandatory.yaml",
+        applied_at: "2026-04-17T08:00:05.000Z",
+        actor: "dispatch-test",
+      },
+      allowed: false,
+    },
+  ];
+
+  for (const entry of cases) {
+    await t.test(entry.label, () => {
+      const { repoRoot, relayHome } = setupRepo();
+      process.env.RELAY_HOME = relayHome;
+      const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+      writeFakeCodex(binDir);
+      const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}` };
+
+      const first = JSON.parse(runDispatch(repoRoot, [
+        "-b", `issue-grandfather-matrix-${entry.label}`,
+        "--prompt", "first pass",
+        "--json",
+      ], env));
+
+      const record = readManifest(first.manifestPath);
+      const updatedAnchor = { ...(record.data.anchor || {}) };
+      if (entry.value === undefined) {
+        delete updatedAnchor.rubric_grandfathered;
+      } else {
+        updatedAnchor.rubric_grandfathered = entry.value;
+      }
+      writeManifest(first.manifestPath, {
+        ...updateManifestState(record.data, STATES.CHANGES_REQUESTED, "re_dispatch_requested_changes"),
+        anchor: updatedAnchor,
+      }, record.body);
+
+      const result = spawnSync("node", [SCRIPT, repoRoot,
+        "--run-id", first.runId,
+        "--prompt", "resume matrix",
+        "--dry-run",
+        "--json",
+      ], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe", env });
+
+      if (entry.allowed) {
+        assert.equal(result.status, 0);
+        const parsed = JSON.parse(result.stdout);
+        assert.equal(parsed.runId, first.runId);
+      } else {
+        assert.notEqual(result.status, 0);
+        assert.match(result.stderr, /anchor\.rubric_grandfathered is no longer supported/);
+      }
+    });
+  }
 });

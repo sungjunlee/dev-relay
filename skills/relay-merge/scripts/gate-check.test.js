@@ -17,7 +17,6 @@ const {
 const {
   createEnforcementFixture,
   createGrandfatheredRubricAnchor,
-  registerGrandfatheredRubricMigration,
 } = require("../../relay-dispatch/scripts/test-support");
 
 const SCRIPT = path.join(__dirname, "gate-check.js");
@@ -317,7 +316,7 @@ function runGateCheckLive({ manifest, prViewPayload, rubricContent, json = true,
 
 function runGateCheckSkipLive({
   fixtureState = "loaded",
-  grandfather = false,
+  rubricGrandfathered = undefined,
   reason = "hotfix",
 } = {}) {
   const fixture = createLiveGateFixture({
@@ -337,7 +336,9 @@ function runGateCheckSkipLive({
     runId: fixture.runId,
     manifestPath: fixture.manifestPath,
     state: fixtureState,
-    grandfather,
+    anchorOverrides: rubricGrandfathered === undefined
+      ? {}
+      : { rubric_grandfathered: rubricGrandfathered },
   });
 
   const result = runGateCheckWithFixture(fixture, {
@@ -713,18 +714,18 @@ test("gate-check --skip audit comment records rubric_status: persisted", () => {
   assert.match(fs.readFileSync(result.logPath, "utf-8"), /rubric_status: persisted/);
 });
 
-test("gate-check --skip audit comment records rubric_status: grandfathered", () => {
-  const result = runGateCheckSkipLive({ grandfather: true });
+test("gate-check --skip blocks legacy_grandfather_field instead of emitting skip audit", () => {
+  const result = runGateCheckSkipLive({ rubricGrandfathered: true });
   const ghLog = fs.readFileSync(result.logPath, "utf-8");
 
-  assert.equal(result.status, 0);
-  assert.equal(result.json.status, "skipped");
-  assert.equal(result.json.readyToMerge, true);
-  assert.equal(result.json.rubricStatus, "grandfathered");
-  assert.match(ghLog, /rubric_status: grandfathered/);
-  assert.match(ghLog, /rubric_grandfathered\.from_migration: rubric-mandatory\.yaml/);
-  assert.match(ghLog, /rubric_grandfathered\.applied_at:/);
-  assert.match(ghLog, /rubric_grandfathered\.actor: test/);
+  assert.equal(result.status, 1);
+  assert.equal(result.json.status, "unsupported_grandfather_field");
+  assert.equal(result.json.readyToMerge, false);
+  assert.equal(result.json.rubricStatus, "legacy_grandfather_field");
+  assert.match(result.json.reason, /anchor\.rubric_grandfathered is no longer supported/);
+  assert.doesNotMatch(ghLog, /pr comment 40 --body/);
+  assert.doesNotMatch(ghLog, /rubric_status: legacy_grandfather_field/);
+  assert.doesNotMatch(ghLog, /rubric_grandfathered\./);
 });
 
 test("gate-check --skip audit comment records rubric_status: missing", () => {
@@ -968,7 +969,6 @@ test("gate-check stamps git.pr_number on first successful PR-mode resolution and
       state: STATES.DISPATCHED,
       anchor: {
         rubric_path: "rubric.yaml",
-        rubric_grandfathered: false,
       },
       review: {
         reviewer_login: "trusted-reviewer",
@@ -1025,7 +1025,6 @@ test("gate-check refuses merge when pr_number stamp lock times out (#185)", () =
       state: STATES.DISPATCHED,
       anchor: {
         rubric_path: "rubric.yaml",
-        rubric_grandfathered: false,
       },
       review: {
         reviewer_login: "trusted-reviewer",
@@ -1097,7 +1096,6 @@ test("gate-check timeout path treats a fresh terminal manifest as healthy conten
       state: STATES.MERGED,
       anchor: {
         rubric_path: "rubric.yaml",
-        rubric_grandfathered: false,
       },
       review: {
         reviewer_login: "trusted-reviewer",
@@ -1156,7 +1154,6 @@ test("gate-check skips first-resolution stamping when the fresh locked read is a
       state: STATES.MERGED,
       anchor: {
         rubric_path: "rubric.yaml",
-        rubric_grandfathered: false,
       },
       review: {
         reviewer_login: "trusted-reviewer",
@@ -1223,7 +1220,6 @@ test("gate-check produces at most one pr_number_stamped event under concurrent i
       state: STATES.DISPATCHED,
       anchor: {
         rubric_path: "rubric.yaml",
-        rubric_grandfathered: false,
       },
       review: {
         reviewer_login: "trusted-reviewer",
@@ -1756,9 +1752,8 @@ test("gate-check fails closed when PR manifest resolution fails", () => {
   assert.match(result.json.reason, /No relay manifest found/);
 });
 
-test("gate-check allows grandfathered runs and surfaces the note", () => {
+test("gate-check rejects manifests that still carry anchor.rubric_grandfathered", () => {
   process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
-  registerGrandfatheredRubricMigration("issue-40-20260412010000000");
   const result = runGateCheckDryRun({
     comments: [
       {
@@ -1772,6 +1767,7 @@ test("gate-check allows grandfathered runs and surfaces the note", () => {
     manifest: {
       run_id: "issue-40-20260412010000000",
       anchor: {
+        rubric_path: "rubric.yaml",
         rubric_grandfathered: createGrandfatheredRubricAnchor({
           actor: "gate-check-test",
         }),
@@ -1782,13 +1778,10 @@ test("gate-check allows grandfathered runs and surfaces the note", () => {
     },
   });
 
-  assert.equal(result.status, 0);
-  assert.equal(result.json.status, "lgtm");
-  assert.equal(result.json.readyToMerge, true);
-  assert.equal(result.json.rubricGrandfathered, true);
-  assert.match(result.json.note, /Grandfathered pre-rubric run/);
-  assert.equal(result.json.grandfatherProvenance.actor, "gate-check-test");
-  assert.match(result.stderr, /Grandfathered pre-rubric run/);
+  assert.equal(result.status, 1);
+  assert.equal(result.json.status, "unsupported_grandfather_field");
+  assert.equal(result.json.readyToMerge, false);
+  assert.match(result.json.reason, /anchor\.rubric_grandfathered is no longer supported/);
 });
 
 test("gate-check resolves reviewer_login in PR mode and blocks unauthorized authors", () => {

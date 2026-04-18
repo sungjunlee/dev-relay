@@ -57,6 +57,15 @@ function appendRunEvent(repoRoot, runId, eventData) {
     ...(eventData.last_reviewed_sha !== undefined
       ? { last_reviewed_sha: normalizeEventValue(eventData.last_reviewed_sha) }
       : {}),
+    ...(eventData.model !== undefined
+      ? { model: normalizeEventValue(eventData.model) }
+      : {}),
+    ...(eventData.before !== undefined
+      ? { before: normalizeEventValue(eventData.before) }
+      : {}),
+    ...(eventData.after !== undefined
+      ? { after: normalizeEventValue(eventData.after) }
+      : {}),
   };
 
   appendEventLine(repoRoot, runId, record);

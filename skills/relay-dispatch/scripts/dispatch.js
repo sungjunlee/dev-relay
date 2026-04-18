@@ -19,11 +19,12 @@
  *   --prompt-file <path>   Read prompt from file (for large prompts)
  *   --executor, -e <name>  Executor to use (default: codex)
  *   --model, -m <name>     Model override (default: from executor config)
+ *   --model-hints <spec>   Persist per-phase model hints (phase=model,...)
  *   --sandbox <mode>       workspace-write | read-only (default: workspace-write)
  *   --copy <file,...>      Additional files to copy
  *   --timeout <seconds>    Exec timeout (default: 1800)
  *   --rubric-file <path>   REQUIRED: copy rubric YAML to run dir (persists for review)
- *   --rubric-grandfathered Deprecated alias; dispatch now rejects it and points to relay-migrate-rubric.js
+ *   --rubric-grandfathered Retired alias; dispatch rejects it
  *   --request-id <id>      Link the run back to a relay-intake request
  *   --leaf-id <id>         Link the run back to a relay-intake leaf handoff
  *   --done-criteria-file   Persist a frozen Done Criteria anchor path
@@ -55,6 +56,7 @@ const path = require("path");
 const crypto = require("crypto");
 const os = require("os");
 const { pushAndOpenPR } = require("./dispatch-publish");
+const { registerClaudeApp } = require("./claude-app-register");
 const {
   createWorktree,
   formatDispatchDryRun,
@@ -80,7 +82,7 @@ const {
 const {
   getRubricAnchorStatus,
   hasRubricPath,
-  isRubricGrandfathered,
+  rejectLegacyGrandfatherField,
   validateRubricPathContainment,
 } = require("./manifest/rubric");
 const { getArg, hasFlag } = require("./cli-args");
@@ -97,7 +99,7 @@ const args = process.argv.slice(2);
 
 const KNOWN_FLAGS = [
   "--branch", "-b", "--run-id", "--manifest", "--prompt", "-p", "--prompt-file", "--executor", "-e",
-  "--model", "-m", "--sandbox", "--copy", "--timeout", "--rubric-file", "--rubric-grandfathered",
+  "--model", "-m", "--model-hints", "--sandbox", "--copy", "--timeout", "--rubric-file", "--rubric-grandfathered",
   "--request-id", "--leaf-id", "--done-criteria-file",
   "--register", "--no-cleanup", "--dry-run", "--json", "--help", "-h",
 ];
@@ -115,11 +117,12 @@ if (!args.length || args.includes("--help") || args.includes("-h")) {
   console.log("  --prompt-file      Read prompt from file");
   console.log("  --executor, -e     Executor: codex (default), claude");
   console.log("  --model, -m        Model override");
+  console.log("  --model-hints      Persist per-phase model hints (phase=model,...)");
   console.log("  --sandbox          workspace-write | read-only (default: workspace-write)");
   console.log("  --copy <files>     Additional files to copy (comma-separated)");
   console.log("  --timeout          Exec timeout in seconds (default: 1800)");
   console.log("  --rubric-file      REQUIRED: copy rubric YAML to run dir (persists for review)");
-  console.log("  --rubric-grandfathered  Deprecated alias; use relay-migrate-rubric.js instead");
+  console.log("  --rubric-grandfathered  Retired alias; remove anchor.rubric_grandfathered manually");
   console.log("  --request-id       Link the run back to a relay-intake request");
   console.log("  --leaf-id          Link the run back to a relay-intake leaf handoff");
   console.log("  --done-criteria-file  Persist a frozen Done Criteria anchor path");
@@ -152,6 +155,7 @@ const PROMPT = getArg(args, ["--prompt", "-p"], undefined, CLI_ARG_OPTIONS);
 const PROMPT_FILE = getArg(args, "--prompt-file", undefined, CLI_ARG_OPTIONS);
 const EXECUTOR = getArg(args, ["--executor", "-e"], "codex", CLI_ARG_OPTIONS);
 const MODEL = getArg(args, ["--model", "-m"], undefined, CLI_ARG_OPTIONS);
+const MODEL_HINTS_RAW = getArg(args, "--model-hints", undefined, CLI_ARG_OPTIONS);
 const SANDBOX = getArg(args, "--sandbox", "workspace-write", CLI_ARG_OPTIONS);
 const COPY_FILES = getArg(args, "--copy", "", CLI_ARG_OPTIONS).split(",").filter(Boolean);
 const RUBRIC_FILE = getArg(args, "--rubric-file", undefined, CLI_ARG_OPTIONS);
@@ -164,6 +168,53 @@ if (isNaN(TIMEOUT) || TIMEOUT <= 0) {
   console.error("Error: --timeout must be a positive integer");
   process.exit(1);
 }
+
+const MODEL_HINT_PHASES = new Set(["plan", "dispatch", "review", "merge"]);
+
+function parseModelHints(raw) {
+  if (raw === undefined) return undefined;
+
+  const hints = {};
+  const seen = new Set();
+  for (const token of raw.split(",")) {
+    if (!token) {
+      throw new Error("invalid --model-hints token '': empty pair");
+    }
+    const separator = token.indexOf("=");
+    if (separator === -1) {
+      throw new Error(`invalid --model-hints token '${token}': missing '='`);
+    }
+
+    const phase = token.slice(0, separator).trim();
+    const value = token.slice(separator + 1).trim();
+    if (!phase) {
+      throw new Error(`invalid --model-hints token '${token}': empty phase`);
+    }
+    if (!value) {
+      throw new Error(`invalid --model-hints token '${token}': empty value`);
+    }
+    if (!MODEL_HINT_PHASES.has(phase)) {
+      throw new Error(`invalid --model-hints token '${token}': unknown phase '${phase}'`);
+    }
+    if (seen.has(phase)) {
+      throw new Error(`invalid --model-hints token '${token}': duplicate phase '${phase}'`);
+    }
+
+    seen.add(phase);
+    hints[phase] = value;
+  }
+
+  return hints;
+}
+
+let MODEL_HINTS;
+try {
+  MODEL_HINTS = parseModelHints(MODEL_HINTS_RAW);
+} catch (error) {
+  console.error(`Error: ${error.message}`);
+  process.exit(1);
+}
+
 const REGISTER = hasFlag(args, "--register");
 const NO_CLEANUP = hasFlag(args, "--no-cleanup");
 const DRY_RUN = hasFlag(args, "--dry-run");
@@ -197,8 +248,10 @@ if (RUBRIC_FILE && RUBRIC_GRANDFATHERED) {
 }
 
 if (RUBRIC_GRANDFATHERED) {
-  console.error("Warning: --rubric-grandfathered is deprecated; use relay-migrate-rubric.js instead.");
-  console.error("Error: dispatch.js no longer applies grandfathering; use relay-migrate-rubric.js instead.");
+  console.error("Error: --rubric-grandfathered is retired.");
+  console.error(
+    "Remove anchor.rubric_grandfathered from the manifest and persist anchor.rubric_path with --rubric-file."
+  );
   process.exit(1);
 }
 
@@ -294,12 +347,6 @@ function validateResumeRequestLinkage(manifest, { requestId, leafId, doneCriteri
   }
 }
 
-function clearRubricGrandfathering(anchor = {}) {
-  const nextAnchor = { ...anchor };
-  delete nextAnchor.rubric_grandfathered;
-  return nextAnchor;
-}
-
 function failRubricPersistence(message) {
   console.error(`Error: ${message}`);
   process.exit(1);
@@ -343,24 +390,29 @@ function getPersistedRubricPath(runDir, rubricPath = "rubric.yaml") {
 }
 
 function enforceRubricPersistence(manifest, runDir) {
+  const legacyGrandfatherField = rejectLegacyGrandfatherField(manifest);
+  if (!legacyGrandfatherField.ok) {
+    failRubricPersistence(legacyGrandfatherField.error);
+  }
+
   if (RUBRIC_FILE) {
     getPersistedRubricPath(runDir);
     return;
   }
 
-  if (!hasRubricPath(manifest) && !isRubricGrandfathered(manifest)) {
+  if (!hasRubricPath(manifest)) {
     failRubricPersistence(
       "--rubric-file is required. Generate the rubric with relay-plan and pass --rubric-file <path> to dispatch.js. " +
-      "Legacy pre-rubric runs must be stamped with relay-migrate-rubric.js before dispatch resume."
+      "Retained manifests must carry anchor.rubric_path before dispatch resume."
     );
   }
 
-  if (hasRubricPath(manifest) && !isRubricGrandfathered(manifest)) {
+  if (hasRubricPath(manifest)) {
     const rubricAnchor = getRubricAnchorStatus(manifest, { runDir });
     if (!rubricAnchor.satisfied) {
       failRubricPersistence(
         `${rubricAnchor.error} Re-dispatch with --rubric-file to repair the run's rubric anchor, ` +
-        "or migrate an approved pre-change run with relay-migrate-rubric.js."
+        "or remove anchor.rubric_grandfathered if the retained manifest still carries it."
       );
     }
   }
@@ -401,6 +453,17 @@ function readTaskPrompt() {
 function resolveRoleBinding(envName, fallback) {
   const explicit = process.env[envName];
   return typeof explicit === "string" && explicit.trim() ? explicit.trim() : fallback;
+}
+
+function resolveEffectiveDispatchModel({ cliModel, manifestModelHints, cliModelHints }) {
+  if (cliModel) return cliModel;
+  if (manifestModelHints && typeof manifestModelHints.dispatch === "string" && manifestModelHints.dispatch.trim()) {
+    return manifestModelHints.dispatch;
+  }
+  if (cliModelHints && typeof cliModelHints.dispatch === "string" && cliModelHints.dispatch.trim()) {
+    return cliModelHints.dispatch;
+  }
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -546,6 +609,32 @@ async function main() {
     }
   }
 
+  if (RESUME_MODE && MODEL_HINTS !== undefined) {
+    const beforeModelHints = manifest.model_hints ?? null;
+    manifest = {
+      ...manifest,
+      model_hints: MODEL_HINTS,
+    };
+    if (!DRY_RUN) {
+      writeManifest(manifestPath, manifest);
+      appendRunEvent(repoRoot, runId, {
+        event: "model_hints_updated",
+        state_from: manifest.state,
+        state_to: manifest.state,
+        head_sha: manifest.git?.head_sha || null,
+        reason: "dispatch_cli_replace",
+        before: beforeModelHints,
+        after: MODEL_HINTS,
+      });
+    }
+  }
+
+  const effectiveDispatchModel = resolveEffectiveDispatchModel({
+    cliModel: MODEL,
+    manifestModelHints: manifest?.model_hints,
+    cliModelHints: MODEL_HINTS,
+  });
+
   // --- Dry run ---
   if (DRY_RUN) {
     const worktreePlan = createWorktree({
@@ -567,7 +656,6 @@ async function main() {
       cleanupPolicy,
       worktreeinclude: worktreePlan.worktreeinclude,
       rubricFile: RUBRIC_FILE || null,
-      rubricGrandfathered: isRubricGrandfathered(manifest),
       requestId: REQUEST_ID || manifest?.source?.request_id || null,
       leafId: LEAF_ID || manifest?.source?.leaf_id || null,
       doneCriteriaFile: resolvedDoneCriteriaPath || manifest?.anchor?.done_criteria_path || null,
@@ -575,6 +663,12 @@ async function main() {
       runState: manifest?.state || null,
       dispatchSkipped: false,
     };
+    if (MODEL_HINTS !== undefined || manifest?.model_hints !== undefined) {
+      plan.model_hints = MODEL_HINTS ?? manifest?.model_hints ?? null;
+    }
+    if (effectiveDispatchModel !== null) {
+      plan.effective_dispatch_model = effectiveDispatchModel;
+    }
     if (JSON_OUT) {
       console.log(JSON.stringify(plan, null, 2));
     } else {
@@ -585,14 +679,13 @@ async function main() {
         repoRoot,
         manifestPath,
         prompt: taskPrompt,
-        model: MODEL,
+        model: effectiveDispatchModel,
         sandbox: SANDBOX,
         register: REGISTER,
         resultFile,
         cleanupPolicy,
         timeout: TIMEOUT,
         rubricFile: RUBRIC_FILE || null,
-        rubricGrandfathered: isRubricGrandfathered(manifest),
         requestId: REQUEST_ID || manifest?.source?.request_id || null,
         leafId: LEAF_ID || manifest?.source?.leaf_id || null,
         doneCriteriaFile: resolvedDoneCriteriaPath || manifest?.anchor?.done_criteria_path || null,
@@ -674,6 +767,7 @@ async function main() {
       leafId: LEAF_ID || null,
       doneCriteriaPath: resolvedDoneCriteriaPath,
       doneCriteriaSource: resolvedDoneCriteriaPath ? "request_snapshot" : null,
+      modelHints: MODEL_HINTS,
     });
     ensureRunLayout(repoRoot, runId);
     writeManifest(manifestPath, manifest);
@@ -689,7 +783,7 @@ async function main() {
     manifest = {
       ...manifest,
       anchor: {
-        ...clearRubricGrandfathering(manifest.anchor || {}),
+        ...(manifest.anchor || {}),
         rubric_path: persistedRubric.rubricPath,
       },
     };
@@ -719,7 +813,7 @@ async function main() {
   if (EXECUTOR === "codex") {
     cmd = "codex";
     execArgs = ["exec", "-C", wtPath, "--full-auto", "--color", "never", "-o", resultFile];
-    if (MODEL) execArgs.push("-m", MODEL);
+    if (effectiveDispatchModel) execArgs.push("-m", effectiveDispatchModel);
     execArgs.push("--sandbox", SANDBOX);
     execArgs.push(execPrompt);
   } else if (EXECUTOR === "claude") {
@@ -730,7 +824,7 @@ async function main() {
       "--dangerously-skip-permissions", // full autonomy in isolated worktree
       "--output-format", "text",
     ];
-    if (MODEL) execArgs.push("--model", MODEL);
+    if (effectiveDispatchModel) execArgs.push("--model", effectiveDispatchModel);
     execArgs.push(execPrompt);
     if (SANDBOX !== "workspace-write") {
       console.error(`Warning: --sandbox '${SANDBOX}' is not supported for Claude executor; using --dangerously-skip-permissions`);
@@ -777,6 +871,7 @@ async function main() {
     state_to: STATES.DISPATCHED,
     head_sha: startHead || null,
     reason: RESUME_MODE ? "same_run_resume" : "new_dispatch",
+    model: effectiveDispatchModel,
   });
 
   // Redirect stdout/stderr to files. Using spawn with detached: true gives us
@@ -962,11 +1057,8 @@ async function main() {
       : `${RESUME_MODE ? "same_run_resume" : "new_dispatch"}:${status}`,
   });
 
-  // --- Step 4.5: Optional app registration (Codex-only) ---
+  // --- Step 4.5: Optional app registration ---
   let threadId = null;
-  if (REGISTER && EXECUTOR !== "codex" && !JSON_OUT) {
-    console.log(`\n  Warning: --register is only supported for codex executor`);
-  }
   if (REGISTER && status !== "failed" && EXECUTOR === "codex") {
     try {
       const reg = registerWorktree({
@@ -980,6 +1072,19 @@ async function main() {
     } catch (e) {
       if (!JSON_OUT) console.log(`\n  Warning: app registration failed: ${e.message.split("\n")[0]}`);
     }
+  } else if (REGISTER && status !== "failed" && EXECUTOR === "claude") {
+    try {
+      const reg = registerClaudeApp({
+        wtPath,
+        repoPath: repoRoot,
+        branch,
+        title: `Dispatch: ${branch}`,
+      });
+      threadId = reg.sessionId;
+      if (!JSON_OUT) console.log(`\n  Registered in ${EXECUTOR} app.`);
+    } catch (e) {
+      if (!JSON_OUT) console.log(`\n  Warning: claude registration failed: ${e.message.split("\n")[0]}`);
+    }
   }
 
   const rubricAnchor = getRubricAnchorStatus(manifest, { runDir });
@@ -988,7 +1093,6 @@ async function main() {
     runDir,
     manifestPath,
     rubricPath: rubricAnchor.resolvedPath || null,
-    rubricGrandfathered: isRubricGrandfathered(manifest),
     requestId: manifest.source?.request_id || null,
     leafId: manifest.source?.leaf_id || null,
     doneCriteriaPath: manifest.anchor?.done_criteria_path || null,

@@ -6,8 +6,8 @@ const os = require("os");
 const path = require("path");
 
 const {
-  RUBRIC_MIGRATION_MANIFEST_BASENAME,
   getRubricAnchorStatus,
+  rejectLegacyGrandfatherField,
   validateRubricPathContainment,
 } = require("./rubric");
 const { ensureRunLayout } = require("./paths");
@@ -23,25 +23,10 @@ function initGitRepo(repoRoot, actor = "Relay Rubric Test") {
 
 function createRunLayout(runId) {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-rubric-repo-"));
-  const relayHome = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
-  process.env.RELAY_HOME = relayHome;
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
   initGitRepo(repoRoot);
   const layout = ensureRunLayout(repoRoot, runId);
-  return { repoRoot, relayHome, runDir: layout.runDir };
-}
-
-function writeMigrationManifest(relayHome, runId, appliedAt = "2026-04-17T08:00:05.000Z") {
-  const migrationManifestPath = path.join(relayHome, "migrations", RUBRIC_MIGRATION_MANIFEST_BASENAME);
-  fs.mkdirSync(path.dirname(migrationManifestPath), { recursive: true });
-  fs.writeFileSync(migrationManifestPath, `version: 1
-runs:
-  - run_id: "${runId}"
-    registered_by: "test-registration"
-    registered_at: "2026-04-17T08:00:00Z"
-    reason: "direct rubric coverage"
-    applied_at: "${appliedAt}"
-`, "utf-8");
-  return { migrationManifestPath, appliedAt };
+  return { repoRoot, runDir: layout.runDir };
 }
 
 test("manifest/rubric reports missing rubric paths directly", () => {
@@ -57,40 +42,46 @@ test("manifest/rubric reports missing rubric paths directly", () => {
   assert.equal(result.satisfied, false);
 });
 
-test("manifest/rubric accepts registered migration-manifest provenance", () => {
-  const runId = "issue-188-20260418091011124-a1b2c3d4";
-  const { repoRoot, relayHome } = createRunLayout(runId);
-  const { appliedAt } = writeMigrationManifest(relayHome, runId);
-
-  const result = getRubricAnchorStatus({
-    run_id: runId,
-    anchor: {
+test("manifest/rubric rejectLegacyGrandfatherField rejects every retained legacy shape", async (t) => {
+  const cases = [
+    ["undefined", {}, true],
+    ["false", { rubric_grandfathered: false }, false],
+    ["true", { rubric_grandfathered: true }, false],
+    ["object", {
       rubric_grandfathered: {
-        from_migration: RUBRIC_MIGRATION_MANIFEST_BASENAME,
-        applied_at: appliedAt,
+        from_migration: "rubric-mandatory.yaml",
+        applied_at: "2026-04-17T08:00:05.000Z",
         actor: "test-reviewer",
-        reason: "direct rubric coverage",
       },
-    },
-    paths: { repo_root: repoRoot },
-  });
+    }, false],
+  ];
 
-  assert.equal(result.status, "grandfathered");
-  assert.equal(result.satisfied, true);
-  assert.equal(result.legacyGrandfather, false);
-  assert.equal(result.grandfatherProvenance.from_migration, RUBRIC_MIGRATION_MANIFEST_BASENAME);
+  for (const [label, anchor, ok] of cases) {
+    await t.test(label, () => {
+      const result = rejectLegacyGrandfatherField({
+        run_id: "issue-188-20260418091011124-a1b2c3d4",
+        anchor,
+      });
+      assert.equal(result.ok, ok);
+      if (!ok) {
+        assert.match(result.error, /issue-188-20260418091011124-a1b2c3d4/);
+        assert.match(result.error, /anchor\.rubric_grandfathered is no longer supported/);
+        assert.match(result.error, /close-run\.js/);
+      }
+    });
+  }
 });
 
-test("manifest/rubric rejects unregistered migration-manifest provenance", () => {
+test("manifest/rubric rejects legacy grandfather field during anchor resolution", () => {
   const runId = "issue-188-20260418091011125-a1b2c3d4";
-  const { repoRoot, relayHome } = createRunLayout(runId);
-  writeMigrationManifest(relayHome, "issue-188-20260418091011126-a1b2c3d4");
+  const { repoRoot } = createRunLayout(runId);
 
   const result = getRubricAnchorStatus({
     run_id: runId,
     anchor: {
+      rubric_path: "rubric.yaml",
       rubric_grandfathered: {
-        from_migration: RUBRIC_MIGRATION_MANIFEST_BASENAME,
+        from_migration: "rubric-mandatory.yaml",
         applied_at: "2026-04-17T08:00:05.000Z",
         actor: "test-reviewer",
       },
@@ -98,9 +89,9 @@ test("manifest/rubric rejects unregistered migration-manifest provenance", () =>
     paths: { repo_root: repoRoot },
   });
 
-  assert.equal(result.status, "missing_path");
+  assert.equal(result.status, "legacy_grandfather_field");
   assert.equal(result.satisfied, false);
-  assert.match(result.error, /is not listed in the migration manifest/);
+  assert.match(result.error, /anchor\.rubric_grandfathered is no longer supported/);
 });
 
 test("manifest/rubric rejects parent traversal through getRubricAnchorStatus", () => {

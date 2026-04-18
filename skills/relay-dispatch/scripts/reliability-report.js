@@ -362,6 +362,36 @@ function buildFactorAnalysis(events) {
   };
 }
 
+function buildModelPerPhase(events) {
+  const phaseBuckets = {
+    dispatch: new Map(),
+    review: new Map(),
+  };
+
+  for (const event of events) {
+    let phase = null;
+    if (event.event === "dispatch_start") {
+      phase = "dispatch";
+    } else if (event.event === "review_invoke") {
+      phase = "review";
+    }
+    if (!phase || !Object.prototype.hasOwnProperty.call(event, "model")) continue;
+
+    const key = event.model === null ? "null" : String(event.model);
+    phaseBuckets[phase].set(key, (phaseBuckets[phase].get(key) || 0) + 1);
+  }
+
+  const hasData = [...phaseBuckets.dispatch.values(), ...phaseBuckets.review.values()].length > 0;
+  if (!hasData) return null;
+
+  return Object.fromEntries(
+    Object.entries(phaseBuckets).map(([phase, counts]) => [
+      phase,
+      Object.fromEntries([...counts.entries()].sort(([left], [right]) => left.localeCompare(right))),
+    ])
+  );
+}
+
 function buildReport({ repoRoot, staleHours, now, manifests, events }) {
   const resumeStarts = events.filter((event) => (
     event.event === "dispatch_start" && event.state_from === STATES.CHANGES_REQUESTED
@@ -419,6 +449,7 @@ function buildReport({ repoRoot, staleHours, now, manifests, events }) {
       median_rounds_to_ready: median(readyRounds),
       stale_open_runs_72h: staleOpenRuns.length,
     },
+    model_per_phase: buildModelPerPhase(events),
     factor_analysis: buildFactorAnalysis(events),
     rubric_insights: buildRubricInsights(events, manifests),
   };
@@ -500,6 +531,9 @@ function main() {
   console.log(`  max_rounds_enforcement_rate: ${report.metrics.max_rounds_enforcement_rate ?? "n/a"}`);
   console.log(`  median_rounds_to_ready: ${report.metrics.median_rounds_to_ready ?? "n/a"}`);
   console.log(`  stale_open_runs_72h: ${report.metrics.stale_open_runs_72h}`);
+  if (report.model_per_phase) {
+    console.log(`  model_per_phase: ${JSON.stringify(report.model_per_phase)}`);
+  }
   console.log(`  most_stuck_factor: ${report.factor_analysis.most_stuck_factor ?? "n/a"}`);
   if (hasRubricInsights(report.rubric_insights)) {
     const gradeDistribution = report.rubric_insights.quality_grade_distribution;

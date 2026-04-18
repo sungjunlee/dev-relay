@@ -32,7 +32,6 @@ const {
 } = require("./relay-manifest");
 const {
   createGrandfatheredRubricAnchor,
-  registerGrandfatheredRubricMigration,
 } = require("./test-support");
 
 function initGitRepo(repoRoot, actor = "Relay Test") {
@@ -616,29 +615,29 @@ test("updateManifestState allows dispatched -> review_pending when anchor.rubric
   assert.equal(updated.state, STATES.REVIEW_PENDING);
 });
 
-test("updateManifestState allows dispatched -> review_pending when rubric is grandfathered", () => {
+test("updateManifestState rejects dispatched -> review_pending when the legacy grandfather field is true", () => {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-grandfathered-"));
   process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
   initGitRepo(repoRoot, "Relay Maintainer");
-  registerGrandfatheredRubricMigration("issue-42-20260412000002000");
   const manifest = {
     run_id: "issue-42-20260412000002000",
     state: STATES.DISPATCHED,
     next_action: "await_dispatch_result",
-    anchor: { rubric_grandfathered: createGrandfatheredRubricAnchor() },
+    anchor: { rubric_grandfathered: true },
     paths: { repo_root: repoRoot },
     timestamps: { created_at: "2026-04-12T00:00:00Z", updated_at: "2026-04-12T00:00:00Z" },
   };
 
-  const updated = updateManifestState(manifest, STATES.REVIEW_PENDING, "run_review");
-  assert.equal(updated.state, STATES.REVIEW_PENDING);
+  assert.throws(
+    () => updateManifestState(manifest, STATES.REVIEW_PENDING, "run_review"),
+    /anchor\.rubric_grandfathered is no longer supported/
+  );
 });
 
 test("getRubricAnchorStatus rejects invalid run_id even for grandfathered runs", () => {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-manifest-grandfather-runid-"));
   process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
   initGitRepo(repoRoot, "Relay Maintainer");
-  registerGrandfatheredRubricMigration("victim-run");
 
   assert.throws(
     () => getRubricAnchorStatus({
@@ -705,13 +704,12 @@ test("getRubricAnchorStatus rejects missing and empty run_id before rubric or gr
   }
 });
 
-test("getRubricAnchorStatus distinguishes satisfied, empty, outside_run_dir, and grandfathered", () => {
+test("getRubricAnchorStatus distinguishes satisfied, empty, outside_run_dir, and legacy grandfather-field rejection", () => {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-manifest-anchor-"));
   process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
   initGitRepo(repoRoot, "Relay Maintainer");
 
   const runId = "issue-42-20260412000003000";
-  registerGrandfatheredRubricMigration(runId);
   writeRunRubric(repoRoot, runId);
   const satisfied = getRubricAnchorStatus({
     run_id: runId,
@@ -744,36 +742,32 @@ test("getRubricAnchorStatus distinguishes satisfied, empty, outside_run_dir, and
     anchor: { rubric_path: "rubric.yaml", rubric_grandfathered: createGrandfatheredRubricAnchor() },
     paths: { repo_root: repoRoot },
   });
-  assert.equal(grandfathered.status, "grandfathered");
-  assert.equal(grandfathered.satisfied, true);
-  assert.equal(grandfathered.legacyGrandfather, false);
-  assert.equal(grandfathered.grandfatherProvenance.actor, "test");
+  assert.equal(grandfathered.status, "legacy_grandfather_field");
+  assert.equal(grandfathered.satisfied, false);
+  assert.match(grandfathered.error, /anchor\.rubric_grandfathered is no longer supported/);
 });
 
-test("getRubricAnchorStatus keeps legacy boolean grandfathering for audit compatibility", () => {
-  // #151
+test("getRubricAnchorStatus rejects explicit false after grandfather retirement", () => {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-manifest-legacy-grandfather-"));
   process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
   initGitRepo(repoRoot, "Relay Maintainer");
+  writeRunRubric(repoRoot, "issue-42-20260412000003001");
 
   const result = getRubricAnchorStatus({
     run_id: "issue-42-20260412000003001",
     anchor: {
-      // LEGACY GRANDFATHER FORM — backward-compat test
-      rubric_grandfathered: true,
+      rubric_path: "rubric.yaml",
+      rubric_grandfathered: false,
     },
     paths: { repo_root: repoRoot },
   });
 
-  assert.equal(result.status, "grandfathered");
-  assert.equal(result.satisfied, true);
-  assert.equal(result.legacyGrandfather, true);
-  assert.equal(result.grandfatherProvenance, null);
-  assert.match(result.note, /legacy boolean/);
+  assert.equal(result.status, "legacy_grandfather_field");
+  assert.equal(result.satisfied, false);
+  assert.match(result.error, /anchor\.rubric_grandfathered is no longer supported/);
 });
 
 test("getRubricAnchorStatus fails closed for malformed grandfather provenance objects", () => {
-  // #151
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-manifest-malformed-grandfather-"));
   process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
   initGitRepo(repoRoot, "Relay Maintainer");
@@ -789,16 +783,12 @@ test("getRubricAnchorStatus fails closed for malformed grandfather provenance ob
     paths: { repo_root: repoRoot },
   });
 
-  assert.equal(result.status, "missing_path");
-  assert.equal(result.grandfathered, false);
+  assert.equal(result.status, "legacy_grandfather_field");
   assert.equal(result.satisfied, false);
-  assert.equal(result.legacyGrandfather, false);
-  assert.equal(result.grandfatherProvenance, null);
-  assert.match(result.error, /missing applied_at, actor|missing actor, applied_at/);
+  assert.match(result.error, /anchor\.rubric_grandfathered is no longer supported/);
 });
 
-test("getRubricAnchorStatus rejects object-form grandfather provenance not backed by the migration manifest", () => {
-  // #151
+test("getRubricAnchorStatus rejects object-form grandfather provenance regardless of provenance shape", () => {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-manifest-unbacked-grandfather-"));
   process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
   initGitRepo(repoRoot, "Relay Maintainer");
@@ -813,16 +803,12 @@ test("getRubricAnchorStatus rejects object-form grandfather provenance not backe
     paths: { repo_root: repoRoot },
   });
 
-  assert.equal(result.status, "missing_path");
-  assert.equal(result.grandfathered, false);
+  assert.equal(result.status, "legacy_grandfather_field");
   assert.equal(result.satisfied, false);
-  assert.equal(result.legacyGrandfather, false);
-  assert.equal(result.grandfatherProvenance, null);
-  assert.match(result.error, /could not be verified against .*rubric-mandatory\.yaml/);
+  assert.match(result.error, /anchor\.rubric_grandfathered is no longer supported/);
 });
 
 test("getRubricAnchorStatus fails closed for parseable non-ISO grandfather provenance timestamps", () => {
-  // #151
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-manifest-non-iso-grandfather-"));
   process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
   initGitRepo(repoRoot, "Relay Maintainer");
@@ -839,12 +825,9 @@ test("getRubricAnchorStatus fails closed for parseable non-ISO grandfather prove
     paths: { repo_root: repoRoot },
   });
 
-  assert.equal(result.status, "missing_path");
-  assert.equal(result.grandfathered, false);
+  assert.equal(result.status, "legacy_grandfather_field");
   assert.equal(result.satisfied, false);
-  assert.equal(result.legacyGrandfather, false);
-  assert.equal(result.grandfatherProvenance, null);
-  assert.match(result.error, /applied_at must be an ISO timestamp/);
+  assert.match(result.error, /anchor\.rubric_grandfathered is no longer supported/);
 });
 
 test("getRubricAnchorStatus rejects symlinked rubric files even when they target readable files", () => {

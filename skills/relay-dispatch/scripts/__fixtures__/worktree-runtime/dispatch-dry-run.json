@@ -15,7 +15,6 @@
   "cleanupPolicy": "on_close",
   "worktreeinclude": [],
   "rubricFile": "/tmp/issue187-fixtures/rubric.yaml",
-  "rubricGrandfathered": false,
   "requestId": null,
   "leafId": null,
   "doneCriteriaFile": null,

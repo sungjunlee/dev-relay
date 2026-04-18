@@ -12,7 +12,6 @@ const {
   validateTransition,
 } = require("./lifecycle");
 const { ensureRunLayout } = require("./paths");
-const { RUBRIC_MIGRATION_MANIFEST_BASENAME } = require("./rubric");
 
 const EXPECTED_TRANSITIONS = Object.freeze({
   [STATES.DRAFT]: new Set([STATES.DISPATCHED, STATES.CLOSED]),
@@ -63,33 +62,19 @@ function createMissingRubricManifest({ runId, rubricPath = "rubric.yaml" } = {})
   };
 }
 
-function createGrandfatheredManifest({ runId, appliedAt = "2026-04-17T08:00:05.000Z" } = {}) {
+function createLegacyGrandfatherManifest({ runId, rubricGrandfathered } = {}) {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-lifecycle-grandfather-"));
-  const relayHome = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
-  process.env.RELAY_HOME = relayHome;
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
   initGitRepo(repoRoot);
-
-  const migrationManifestPath = path.join(relayHome, "migrations", RUBRIC_MIGRATION_MANIFEST_BASENAME);
-  fs.mkdirSync(path.dirname(migrationManifestPath), { recursive: true });
-  fs.writeFileSync(migrationManifestPath, `version: 1
-runs:
-  - run_id: "${runId}"
-    registered_by: "test-registration"
-    registered_at: "2026-04-17T08:00:00Z"
-    reason: "direct lifecycle coverage"
-    applied_at: "${appliedAt}"
-`, "utf-8");
+  const { runDir } = ensureRunLayout(repoRoot, runId);
+  fs.writeFileSync(path.join(runDir, "rubric.yaml"), "rubric:\n  factors:\n    - name: lifecycle\n", "utf-8");
 
   return {
     run_id: runId,
     state: STATES.DISPATCHED,
     anchor: {
-      rubric_grandfathered: {
-        from_migration: RUBRIC_MIGRATION_MANIFEST_BASENAME,
-        applied_at: appliedAt,
-        actor: "test-reviewer",
-        reason: "direct lifecycle coverage",
-      },
+      rubric_path: "rubric.yaml",
+      rubric_grandfathered: rubricGrandfathered,
     },
     paths: { repo_root: repoRoot },
     timestamps: {},
@@ -143,7 +128,7 @@ test("manifest/lifecycle validateTransitionInvariants only gates dispatched -> r
   );
 });
 
-test("manifest/lifecycle validateTransitionInvariants accepts rubric-backed and grandfathered review gates", () => {
+test("manifest/lifecycle validateTransitionInvariants accepts rubric-backed gates and rejects legacy grandfather fields", () => {
   assert.doesNotThrow(() => validateTransitionInvariants(
     createRubricBackedManifest({
       runId: "issue-188-20260418091011123-a1b2c3d4",
@@ -152,13 +137,29 @@ test("manifest/lifecycle validateTransitionInvariants accepts rubric-backed and 
     STATES.REVIEW_PENDING
   ));
 
-  assert.doesNotThrow(() => validateTransitionInvariants(
-    createGrandfatheredManifest({
-      runId: "issue-188-20260418091011124-a1b2c3d4",
-    }),
-    STATES.DISPATCHED,
-    STATES.REVIEW_PENDING
-  ));
+  assert.throws(
+    () => validateTransitionInvariants(
+      createLegacyGrandfatherManifest({
+        runId: "issue-188-20260418091011124-a1b2c3d4",
+        rubricGrandfathered: false,
+      }),
+      STATES.DISPATCHED,
+      STATES.REVIEW_PENDING
+    ),
+    /anchor\.rubric_grandfathered is no longer supported/
+  );
+
+  assert.throws(
+    () => validateTransitionInvariants(
+      createLegacyGrandfatherManifest({
+        runId: "issue-188-20260418091011125-a1b2c3d4",
+        rubricGrandfathered: true,
+      }),
+      STATES.DISPATCHED,
+      STATES.REVIEW_PENDING
+    ),
+    /anchor\.rubric_grandfathered is no longer supported/
+  );
 });
 
 test("manifest/lifecycle forceTransitionState keeps recovery edges but still enforces invariant and enum gates", () => {

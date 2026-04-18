@@ -3,7 +3,6 @@ const { getRubricAnchorStatus } = require("../../relay-dispatch/scripts/manifest
 const REVIEW_MARKER_PATTERN = /^\s*<!-- relay-review(?:-round)? -->\s*$/m;
 const SKIP_AUDIT_RUBRIC_STATUSES = Object.freeze([
   "persisted",
-  "grandfathered",
   "missing",
   "unresolved-manifest",
 ]);
@@ -37,46 +36,58 @@ function summarizeRubricAuditForSkip(manifestData, options = {}) {
   if (!manifestData) {
     return {
       rubricStatus: "unresolved-manifest",
-      grandfatherProvenance: null,
+      readyToMerge: true,
     };
   }
 
   const rubricAnchor = getRubricAnchorStatus(manifestData, options.runDir ? { runDir: options.runDir } : undefined);
   let rubricStatus = "missing";
+  let readyToMerge = true;
+  let status = null;
+  let reason = null;
   if (rubricAnchor.status === "satisfied") {
     rubricStatus = "persisted";
-  } else if (rubricAnchor.status === "grandfathered") {
-    rubricStatus = "grandfathered";
+  } else if (rubricAnchor.status === "legacy_grandfather_field") {
+    rubricStatus = "legacy_grandfather_field";
+    readyToMerge = false;
+    status = "unsupported_grandfather_field";
+    reason = rubricAnchor.error;
   } else if (MISSING_SKIP_AUDIT_RUBRIC_STATUSES.has(rubricAnchor.status)) {
     rubricStatus = "missing";
   }
   return {
     rubricStatus,
-    grandfatherProvenance: rubricAnchor.grandfatherProvenance || null,
+    readyToMerge,
+    status,
+    reason,
+  };
+}
+
+function buildSkipReviewGateFailure(prNumber, rubricAudit) {
+  if (!rubricAudit || rubricAudit.readyToMerge !== false) {
+    return null;
+  }
+  return {
+    status: rubricAudit.status || "invalid_rubric_file",
+    pr: prNumber,
+    readyToMerge: false,
+    reason: rubricAudit.reason || null,
+    rubricStatus: rubricAudit.rubricStatus || "unresolved-manifest",
   };
 }
 
 function buildSkipComment(reason, rubricAudit = "unresolved-manifest") {
   const normalizedAudit = typeof rubricAudit === "string"
-    ? { rubricStatus: rubricAudit, grandfatherProvenance: null }
+    ? { rubricStatus: rubricAudit }
     : {
-        rubricStatus: rubricAudit?.rubricStatus || "unresolved-manifest",
-        grandfatherProvenance: rubricAudit?.grandfatherProvenance || null,
-      };
+      rubricStatus: rubricAudit?.rubricStatus || "unresolved-manifest",
+    };
   const lines = [
     "<!-- relay-review-skip -->",
     "## Relay Review — Skipped",
     `Reason: ${reason}`,
     `rubric_status: ${normalizedAudit.rubricStatus}`,
   ];
-  if (normalizedAudit.grandfatherProvenance) {
-    lines.push(`rubric_grandfathered.from_migration: ${normalizedAudit.grandfatherProvenance.from_migration}`);
-    lines.push(`rubric_grandfathered.applied_at: ${normalizedAudit.grandfatherProvenance.applied_at}`);
-    lines.push(`rubric_grandfathered.actor: ${normalizedAudit.grandfatherProvenance.actor}`);
-    if (normalizedAudit.grandfatherProvenance.reason) {
-      lines.push(`rubric_grandfathered.reason: ${normalizedAudit.grandfatherProvenance.reason}`);
-    }
-  }
   return lines.join("\n");
 }
 
@@ -123,26 +134,24 @@ function withRubricNote(result, rubricAnchor) {
   if (rubricAnchor.note) {
     next.note = rubricAnchor.note;
   }
-  if (rubricAnchor.grandfatherProvenance) {
-    next.grandfatherProvenance = rubricAnchor.grandfatherProvenance;
-  }
-  if (rubricAnchor.legacyGrandfather) {
-    next.legacyGrandfather = true;
-  }
-  if (rubricAnchor.status === "grandfathered") {
-    next.rubricGrandfathered = true;
-  }
   return next;
 }
 
 function buildRubricGateFailure(prNumber, rubricAnchor) {
   switch (rubricAnchor?.status) {
+    case "legacy_grandfather_field":
+      return withRubricNote({
+        status: "unsupported_grandfather_field",
+        pr: prNumber,
+        readyToMerge: false,
+        reason: rubricAnchor.error,
+      }, rubricAnchor);
     case "missing_path":
       return withRubricNote({
         status: "missing_rubric_path",
         pr: prNumber,
         readyToMerge: false,
-        reason: rubricAnchor?.error || "anchor.rubric_path is required before merge unless anchor.rubric_grandfathered is a valid legacy boolean or provenance object",
+        reason: rubricAnchor?.error || "anchor.rubric_path is required before merge",
       }, rubricAnchor);
     case "missing":
       return withRubricNote({
@@ -292,6 +301,7 @@ function evaluateReviewGate({ prNumber, comments, commits, manifestData, expecte
 }
 
 module.exports = {
+  buildSkipReviewGateFailure,
   buildSkipComment,
   evaluateReviewGate,
   hasRelayReviewMarker,
