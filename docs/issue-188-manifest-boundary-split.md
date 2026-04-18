@@ -77,7 +77,7 @@ skills/relay-dispatch/scripts/relay-manifest.test.js
 ## Trust-model audit
 
 - **Q1 (forge)**: yes — an attacker with manifest write access could previously forge a gate bypass. The split keeps single owners for `validateTransition` and `getRubricAnchorStatus` rather than leaving duplicated gate logic in multiple files. — factor: `gate-layer-behavior-byte-identical`
-- **Q2 (gate)**: `skills/relay-dispatch/scripts/manifest/lifecycle.js:validateTransition`, `skills/relay-dispatch/scripts/manifest/lifecycle.js:forceTransitionState`, `skills/relay-dispatch/scripts/manifest/paths.js:validateManifestPaths`, `skills/relay-dispatch/scripts/manifest/rubric.js:getRubricAnchorStatus`, `skills/relay-merge/scripts/review-gate.js:evaluateReviewGate` — factor: `gate-sites-named-and-verified`
+- **Q2 (gate)**: `skills/relay-dispatch/scripts/manifest/lifecycle.js:validateTransition`, `skills/relay-dispatch/scripts/manifest/lifecycle.js:validateTransitionInvariants`, `skills/relay-dispatch/scripts/manifest/lifecycle.js:forceTransitionState`, `skills/relay-dispatch/scripts/manifest/paths.js:validateManifestPaths`, `skills/relay-dispatch/scripts/manifest/rubric.js:getRubricAnchorStatus` — factor: `gate-sites-named-and-verified`
 - **Q3 (external verifier)**: `~/.relay/migrations/rubric-mandatory.yaml` via `loadMigrationManifest()` in [`manifest/rubric.js`](../skills/relay-dispatch/scripts/manifest/rubric.js#L123) — factor: `external-verifier-reference-preserved`
 
 ## Tests

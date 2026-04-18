@@ -728,6 +728,7 @@ function getRubricAnchorStatus(data, options = {}) {
 }
 
 module.exports = {
+  RUBRIC_MIGRATION_MANIFEST_BASENAME,
   appendTextFileWithoutFollowingSymlinks,
   getRubricAnchorStatus,
   getRubricGrandfatherMetadata,
