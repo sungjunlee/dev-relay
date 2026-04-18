@@ -1,0 +1,16 @@
+  Run:      test-branch-20260418005000000-22222222
+Dry run:
+  Mode:     new
+  Executor: codex
+  Repo:     /tmp/issue187-fixtures/repo
+  Worktree: /tmp/issue187-fixtures/relay-home/worktrees/11111111/repo
+  Branch:   test-branch
+  Manifest: /tmp/issue187-fixtures/relay-home/runs/repo-c079affd/test-branch-20260418005000000-22222222.md
+  Prompt:   task...
+  Model:    (default)
+  Sandbox:  workspace-write
+  Register: false
+  Result:   /tmp/issue187-fixtures/tmp/dispatch-codex-11111111.txt
+  Cleanup:  on_close
+  Timeout:  1800s
+  Rubric:   /tmp/issue187-fixtures/rubric.yaml

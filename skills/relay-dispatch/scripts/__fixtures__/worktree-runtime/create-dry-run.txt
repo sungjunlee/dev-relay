@@ -1,0 +1,5 @@
+Dry run:
+  Worktree: /tmp/issue187-fixtures/relay-home/worktrees/11111111/repo
+  Branch:   codex/wt-11111111-repo
+  Title:    Worktree: repo
+  Register: false

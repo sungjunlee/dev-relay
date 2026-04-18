@@ -1,0 +1,8 @@
+{
+  "worktree": "/tmp/issue187-fixtures/relay-home/worktrees/11111111/repo",
+  "branch": "feature-register",
+  "title": "Pinned Register",
+  "register": true,
+  "pin": true,
+  "worktreeinclude": []
+}
