@@ -52,8 +52,22 @@ function buildPrBody({ resultPreview, runId, executor, branch }) {
   ].join("\n");
 }
 
+function resolveBranchRemote(execFile, wtPath, branch) {
+  if (!branch) return "origin";
+  try {
+    const result = execFile(
+      "git",
+      ["-C", wtPath, "config", "--get", `branch.${branch}.remote`],
+      { encoding: "utf-8", stdio: "pipe" },
+    );
+    const name = String(result || "").trim();
+    return name || "origin";
+  } catch {
+    return "origin";
+  }
+}
+
 async function pushAndOpenPR({
-  repoRoot,
   wtPath,
   branch,
   baseBranch,
@@ -78,8 +92,10 @@ async function pushAndOpenPR({
     throw new Error(`gh_pr_list_failed: ${formatExecError(error)}`);
   }
 
+  const remoteName = resolveBranchRemote(execFile, wtPath, branch);
+
   try {
-    execFile("git", ["-C", wtPath, "push", "-u", "origin", branch], gitOpts);
+    execFile("git", ["-C", wtPath, "push", "-u", remoteName, branch], gitOpts);
   } catch (error) {
     throw new Error(`git_push_failed: ${formatExecError(error)}`);
   }
@@ -124,4 +140,5 @@ module.exports = {
   formatExecError,
   parsePrNumber,
   pushAndOpenPR,
+  resolveBranchRemote,
 };
