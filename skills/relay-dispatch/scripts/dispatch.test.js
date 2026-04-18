@@ -1026,11 +1026,17 @@ test("pushAndOpenPR uses the injected execFile seam for happy-path publication",
   assert.ok(createCall.args.includes("--title"));
   assert.ok(createCall.args.includes("feat: publish orchestrator PR"));
   assert.ok(createCall.args.includes("--body"));
-  assert.ok(createCall.args.includes(buildPrBody({
+  const body = buildPrBody({
     resultPreview: "Implemented orchestrator-side publication.",
     runId: "issue-198-run",
     executor: "codex",
-  })));
+    branch: "issue-198",
+  });
+  assert.ok(createCall.args.includes(body));
+  assert.match(body, /^## Score Log$/m);
+  assert.match(body, /^- Run: issue-198-run$/m);
+  assert.match(body, /^- Executor: codex$/m);
+  assert.match(body, /^- Branch: issue-198$/m);
 });
 
 test("pushAndOpenPR skips PR creation when the branch already has an open PR", async () => {

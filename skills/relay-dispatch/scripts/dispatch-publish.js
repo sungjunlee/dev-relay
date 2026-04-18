@@ -31,9 +31,14 @@ function parsePrNumber(rawText) {
   return null;
 }
 
-function buildPrBody({ resultPreview, runId, executor }) {
+function buildPrBody({ resultPreview, runId, executor, branch }) {
   const preview = String(resultPreview || "").trim().slice(0, 500);
   const summary = preview || "Dispatch completed successfully.";
+  const scoreLog = [
+    `- Run: ${String(runId || "").trim() || "unknown"}`,
+    `- Executor: ${String(executor || "").trim() || "unknown"}`,
+    `- Branch: ${String(branch || "").trim() || "unknown"}`,
+  ];
   return [
     "## Dispatch Summary",
     "",
@@ -41,7 +46,9 @@ function buildPrBody({ resultPreview, runId, executor }) {
     summary,
     "```",
     "",
-    `Created by relay-dispatch (run: ${runId}, executor: ${executor}).`,
+    "## Score Log",
+    "",
+    ...scoreLog,
   ].join("\n");
 }
 
@@ -89,7 +96,7 @@ async function pushAndOpenPR({
   }
   if (!title) title = `Dispatch ${branch}`;
 
-  const body = buildPrBody({ resultPreview, runId, executor });
+  const body = buildPrBody({ resultPreview, runId, executor, branch });
 
   let prCreateOutput;
   try {
