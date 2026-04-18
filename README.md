@@ -416,9 +416,18 @@ groups by the `reviewer` field on `review_apply` events (who actually executed
 each round). Use `--by-acting-reviewer` to compare real Codex-vs-Claude reviewer
 execution, including override-heavy runs where acting reviewer differs from the
 assigned binding. A single run can appear under multiple acting reviewers if it
-was reviewed by different agents across rounds. Review events missing a
-`reviewer` field are bucketed under `"unknown"` rather than silently attributed
-to the assigned reviewer.
+was reviewed by different agents across rounds. System-emitted `review_apply`
+events with no `reviewer` field (e.g. `max_rounds_exceeded` escalations) are
+skipped so they don't phantom-count as rounds performed; events with corrupt or
+empty reviewer values bucket under `"unknown"` so data-integrity issues remain
+visible.
+
+Each bucket reports `review_rounds_performed` — the count of `review_apply`
+events that reviewer actually executed within the bucket's runs. That's the
+round-exclusive number to use for direct execution comparisons. Run-level
+rollup metrics (`metrics.median_rounds_to_ready`, `totals.manifests`) are not
+round-exclusive for mixed-reviewer runs: the same run shows up in every bucket
+it contributed to.
 
 ## Works With dev-backlog
 
