@@ -55,6 +55,7 @@ const path = require("path");
 const crypto = require("crypto");
 const os = require("os");
 const { pushAndOpenPR } = require("./dispatch-publish");
+const { registerClaudeApp } = require("./claude-app-register");
 const {
   createWorktree,
   formatDispatchDryRun,
@@ -956,11 +957,8 @@ async function main() {
       : `${RESUME_MODE ? "same_run_resume" : "new_dispatch"}:${status}`,
   });
 
-  // --- Step 4.5: Optional app registration (Codex-only) ---
+  // --- Step 4.5: Optional app registration ---
   let threadId = null;
-  if (REGISTER && EXECUTOR !== "codex" && !JSON_OUT) {
-    console.log(`\n  Warning: --register is only supported for codex executor`);
-  }
   if (REGISTER && status !== "failed" && EXECUTOR === "codex") {
     try {
       const reg = registerWorktree({
@@ -973,6 +971,19 @@ async function main() {
       if (!JSON_OUT) console.log(`\n  Registered in ${EXECUTOR} app.`);
     } catch (e) {
       if (!JSON_OUT) console.log(`\n  Warning: app registration failed: ${e.message.split("\n")[0]}`);
+    }
+  } else if (REGISTER && status !== "failed" && EXECUTOR === "claude") {
+    try {
+      const reg = registerClaudeApp({
+        wtPath,
+        repoPath: repoRoot,
+        branch,
+        title: `Dispatch: ${branch}`,
+      });
+      threadId = reg.sessionId;
+      if (!JSON_OUT) console.log(`\n  Registered in ${EXECUTOR} app.`);
+    } catch (e) {
+      if (!JSON_OUT) console.log(`\n  Warning: claude registration failed: ${e.message.split("\n")[0]}`);
     }
   }
 
