@@ -8,7 +8,7 @@ No review semantics were intentionally changed. `parseReviewVerdict`, `validateR
 
 ## Facade Guard
 
-- [`review-runner.js`](../skills/relay-review/scripts/review-runner.js) is now `385` lines.
+- [`review-runner.js`](../skills/relay-review/scripts/review-runner.js) is now `386` lines.
 - `grep -c '^function\|^async function' skills/relay-review/scripts/review-runner.js` returns `4`.
 - `run()` remains in the facade; stage logic now lives in `context.js`, `prompt.js`, `verdict.js`, `comment.js`, `divergence.js`, `redispatch.js`, `manifest-apply.js`, and `reviewer-invoke.js`.
 
@@ -96,11 +96,17 @@ Pre-split references below point at commit `47ef371`, the last revision where ev
   - `review-runner-divergence.test.js`
   - `review-runner-reviewer-invoke.test.js`
 
+## Trust-Model Audit
+
+- **Q1 (forge)**: yes — reviewer JSON is an attacker-controlled claim surface if a compromised adapter or hand-edited `--review-file` tries to mint a passing verdict. The split keeps the acceptance/rejection gate centralized in [`verdict.js`](../skills/relay-review/scripts/review-runner/verdict.js) at `parseReviewVerdict()`, `validateReviewVerdict()`, and `validateScopeDrift()`, so forged-but-invalid verdict payloads still fail closed before any manifest mutation. — factor: `verdict-gate-behavior-byte-identical`
+- **Q2 (gate)**: [`manifest-apply.js`](../skills/relay-review/scripts/review-runner/manifest-apply.js) remains the runtime gate. `applyVerdictToManifest()` and `applyPolicyViolationToManifest()` are still the only owners that turn a review verdict into a manifest state transition, and [`review-runner.js`](../skills/relay-review/scripts/review-runner.js#L99) still routes every applied result through those functions rather than mutating state inline. — factor: `manifest-apply-gate-behavior-byte-identical`
+- **Q3 (external verifier)**: the external verifier remains the authenticated rubric anchor under `~/.relay/runs/<repo-slug>/<run-id>/`, loaded through `skills/relay-dispatch/scripts/manifest/rubric.js:getRubricAnchorStatus`, consumed by [`context.js`](../skills/relay-review/scripts/review-runner/context.js#L421) `loadRubricFromRunDir()`, and surfaced by [`redispatch.js`](../skills/relay-review/scripts/review-runner/redispatch.js#L160) `buildReviewRunnerRubricGateFailure()`. [`gate-check.js`](../skills/relay-merge/scripts/gate-check.js#L35) still cross-checks the same authenticated rubric state from the narrower imports. — factor: `rubric-gate-preserved`
+
 ## Grep Evidence
 
 ```text
 $ wc -l skills/relay-review/scripts/review-runner.js
-385 skills/relay-review/scripts/review-runner.js
+386 skills/relay-review/scripts/review-runner.js
 ```
 
 ```text
@@ -109,16 +115,36 @@ $ grep -c '^function\|^async function' skills/relay-review/scripts/review-runner
 ```
 
 ```text
-$ grep -n 'require.*review-runner' skills/relay-merge/scripts/gate-check.js
-<no output>
+$ grep -rn 'require.*review-runner' skills/
+skills/relay-review/scripts/review-runner-redispatch.test.js:13:} = require("./review-runner/redispatch");
+skills/relay-review/scripts/review-runner-divergence.test.js:7:} = require("./review-runner/divergence");
+skills/relay-review/scripts/review-runner-manifest-apply.test.js:13:} = require("./review-runner/manifest-apply");
+skills/relay-review/scripts/review-runner-verdict.test.js:10:} = require("./review-runner/verdict");
+skills/relay-review/scripts/review-runner.js:8:const { git, writeText } = require("./review-runner/common");
+skills/relay-review/scripts/review-runner.js:19:} = require("./review-runner/context");
+skills/relay-review/scripts/review-runner.js:20:const { buildPrompt, formatPriorVerdictSummary } = require("./review-runner/prompt");
+skills/relay-review/scripts/review-runner.js:21:const { ALLOWED_SCORE_TIERS, parseReviewVerdict, validateReviewVerdict, validateScopeDrift } = require("./review-runner/verdict");
+skills/relay-review/scripts/review-runner.js:22:const { buildCommentBody, formatIssueList, formatScopeDrift, postComment } = require("./review-runner/comment");
+skills/relay-review/scripts/review-runner.js:23:const { buildScoreDivergenceAnalysis, loadPrBody, parseScoreLog } = require("./review-runner/divergence");
+skills/relay-review/scripts/review-runner.js:31:} = require("./review-runner/redispatch");
+skills/relay-review/scripts/review-runner.js:32:const { applyPolicyViolationToManifest, applyVerdictToManifest } = require("./review-runner/manifest-apply");
+skills/relay-review/scripts/review-runner.js:33:const { loadReviewText, resolveReviewerName, resolveReviewerScript } = require("./review-runner/reviewer-invoke");
+skills/relay-review/scripts/review-runner-context.test.js:16:} = require("./review-runner/context");
+skills/relay-review/scripts/review-runner-reviewer-invoke.test.js:16:} = require("./review-runner/reviewer-invoke");
+skills/relay-review/scripts/review-runner-prompt.test.js:7:const { buildPrompt } = require("./review-runner/prompt");
+skills/relay-review/scripts/review-runner.test.js:2358:} = require("./review-runner");
+skills/relay-review/scripts/review-runner-comment.test.js:4:const { buildCommentBody } = require("./review-runner/comment");
+skills/relay-merge/scripts/gate-check.js:35:const { loadRubricFromRunDir } = require("../../relay-review/scripts/review-runner/context");
+skills/relay-merge/scripts/gate-check.js:36:const { buildReviewRunnerRubricGateFailure } = require("../../relay-review/scripts/review-runner/redispatch");
+skills/relay-merge/scripts/gate-check.js:504:  // review.reviewer_login_required is set by review-runner.js when the origin
 ```
 
 ## Tests
 
 - Direct-import review-stage suite: `node --test skills/relay-review/scripts/*.test.js`
-- Result: `121/121` passing.
+- Result: `162/162` passing.
 - Full suite: `node --test skills/relay-intake/scripts/*.test.js skills/relay-plan/scripts/*.test.js skills/relay-dispatch/scripts/*.test.js skills/relay-review/scripts/*.test.js skills/relay-merge/scripts/*.test.js`
-- Result: `509/509` passing.
+- Result: `552/552` passing.
 
 ## Deferred Inventory
 
@@ -126,6 +152,7 @@ $ grep -n 'require.*review-runner' skills/relay-merge/scripts/gate-check.js
 - `#191` resolver / CLI hygiene remains separate.
 - No barrel `review-runner/index.js` was added.
 - `invoke-reviewer-codex.js` and `invoke-reviewer-claude.js` stay untouched.
+- `review-runner.test.js` remains the legacy facade-compatibility consumer in this PR; any future migration of that bundle to narrower stage imports is deferred follow-up work, not part of #189.
 
 ## Line-Number Drift Discipline
 
