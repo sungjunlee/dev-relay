@@ -54,8 +54,12 @@ const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
 const os = require("os");
-const { copyWorktreeFiles, getWorktreeIncludeFiles } = require("./worktreeinclude");
-const { registerCodexApp } = require("./codex-app-register");
+const {
+  createWorktree,
+  formatDispatchDryRun,
+  registerWorktree,
+  removeWorktree,
+} = require("./worktree-runtime");
 const {
   STATES,
   collectEnvironmentSnapshot,
@@ -543,7 +547,14 @@ async function main() {
 
   // --- Dry run ---
   if (DRY_RUN) {
-    const includeFiles = getWorktreeIncludeFiles(repoRoot);
+    const worktreePlan = createWorktree({
+      repoRoot,
+      worktreePath: wtPath,
+      branch,
+      title: `Dispatch: ${branch}`,
+      register: REGISTER,
+      dryRun: true,
+    });
     const plan = {
       mode: RESUME_MODE ? "resume" : "new",
       runId,
@@ -553,7 +564,7 @@ async function main() {
       model: MODEL, sandbox: SANDBOX, register: REGISTER,
       resultFile, stdoutLog, stderrLog, timeout: TIMEOUT,
       cleanupPolicy,
-      worktreeinclude: includeFiles,
+      worktreeinclude: worktreePlan.worktreeinclude,
       rubricFile: RUBRIC_FILE || null,
       rubricGrandfathered: isRubricGrandfathered(manifest),
       requestId: REQUEST_ID || manifest?.source?.request_id || null,
@@ -566,39 +577,26 @@ async function main() {
     if (JSON_OUT) {
       console.log(JSON.stringify(plan, null, 2));
     } else {
-      console.log(`  Run:      ${runId}`);
-      console.log("Dry run:");
-      console.log(`  Mode:     ${RESUME_MODE ? "resume" : "new"}`);
-      console.log(`  Executor: ${EXECUTOR}`);
-      console.log(`  Repo:     ${repoRoot}`);
-      console.log(`  Worktree: ${wtPath}`);
-      console.log(`  Branch:   ${branch}`);
-      console.log(`  Manifest: ${manifestPath}`);
-      console.log(`  Prompt:   ${taskPrompt.slice(0, 80)}...`);
-      console.log(`  Model:    ${MODEL || "(default)"}`);
-      console.log(`  Sandbox:  ${SANDBOX}`);
-      console.log(`  Register: ${REGISTER}`);
-      console.log(`  Result:   ${resultFile}`);
-      console.log(`  Cleanup:  ${cleanupPolicy}`);
-      console.log(`  Timeout:  ${TIMEOUT}s`);
-      if (RUBRIC_FILE) {
-        console.log(`  Rubric:   ${RUBRIC_FILE}`);
-      }
-      if (isRubricGrandfathered(manifest)) {
-        console.log("  Rubric:   grandfathered pre-change run");
-      }
-      if (REQUEST_ID || manifest?.source?.request_id) {
-        console.log(`  Request:  ${REQUEST_ID || manifest.source.request_id}`);
-      }
-      if (LEAF_ID || manifest?.source?.leaf_id) {
-        console.log(`  Leaf:     ${LEAF_ID || manifest.source.leaf_id}`);
-      }
-      if (resolvedDoneCriteriaPath || manifest?.anchor?.done_criteria_path) {
-        console.log(`  Done AC:  ${resolvedDoneCriteriaPath || manifest.anchor.done_criteria_path}`);
-      }
-      if (includeFiles.length) {
-        console.log(`  .worktreeinclude: ${includeFiles.join(", ")}`);
-      }
+      console.log(formatDispatchDryRun({
+        runId,
+        mode: RESUME_MODE ? "resume" : "new",
+        executor: EXECUTOR,
+        repoRoot,
+        manifestPath,
+        prompt: taskPrompt,
+        model: MODEL,
+        sandbox: SANDBOX,
+        register: REGISTER,
+        resultFile,
+        cleanupPolicy,
+        timeout: TIMEOUT,
+        rubricFile: RUBRIC_FILE || null,
+        rubricGrandfathered: isRubricGrandfathered(manifest),
+        requestId: REQUEST_ID || manifest?.source?.request_id || null,
+        leafId: LEAF_ID || manifest?.source?.leaf_id || null,
+        doneCriteriaFile: resolvedDoneCriteriaPath || manifest?.anchor?.done_criteria_path || null,
+        worktreePlan,
+      }));
     }
     return;
   }
@@ -608,7 +606,7 @@ async function main() {
   function cleanup() {
     terminateProcessTree(executorPid);
     if (createdWorktree) {
-      try { git(repoRoot, "worktree", "remove", "--force", wtPath); } catch {}
+      removeWorktree({ repoRoot, worktreePath: wtPath });
     }
     process.exit(1);
   }
@@ -616,24 +614,22 @@ async function main() {
   process.on("SIGTERM", cleanup);
 
   if (!RESUME_MODE) {
-    fs.mkdirSync(path.dirname(wtPath), { recursive: true });
     try {
-      git(repoRoot, "worktree", "add", wtPath, "-b", branch);
-    } catch {
-      try {
-        git(repoRoot, "worktree", "add", wtPath, branch);
-      } catch (e) {
-        console.error(`Error: failed to create worktree for branch '${branch}': ${e.message}`);
-        process.exit(1);
-      }
+      const created = createWorktree({
+        repoRoot,
+        worktreePath: wtPath,
+        branch,
+        title: `Dispatch: ${branch}`,
+        copyFiles: COPY_FILES,
+        register: false,
+        assertWithin,
+      });
+      copiedFiles = created.copiedFiles;
+      createdWorktree = true;
+    } catch (error) {
+      console.error(`Error: ${error.message}`);
+      process.exit(1);
     }
-    createdWorktree = true;
-
-    const copied = copyWorktreeFiles(repoRoot, wtPath, {
-      copyFiles: COPY_FILES,
-      assertWithin,
-    });
-    copiedFiles = copied.copied;
 
     // Merge base branch into worktree so the executor works on merged state.
     // Prevents wasted rounds from stale-base conflicts or CI failures.
@@ -653,7 +649,7 @@ async function main() {
         git(wtPath, "merge", `origin/${baseBranch}`, "--no-edit");
       } catch (mergeErr) {
         try { git(wtPath, "merge", "--abort"); } catch {}
-        try { git(repoRoot, "worktree", "remove", "--force", wtPath); } catch {}
+        removeWorktree({ repoRoot, worktreePath: wtPath });
         const reason = (mergeErr.stderr || mergeErr.message || String(mergeErr)).split("\n")[0];
         console.error(`Error: failed to merge origin/${baseBranch} into worktree: ${reason}`);
         process.exit(1);
@@ -942,9 +938,9 @@ async function main() {
   }
   if (REGISTER && status !== "failed" && EXECUTOR === "codex") {
     try {
-      const reg = registerCodexApp({
-        wtPath,
-        repoPath: repoRoot,
+      const reg = registerWorktree({
+        repoRoot,
+        worktreePath: wtPath,
         branch,
         title: `Dispatch: ${branch}`,
       });

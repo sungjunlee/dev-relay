@@ -1,0 +1,8 @@
+{
+  "worktree": "/tmp/issue187-fixtures/relay-home/worktrees/11111111/repo",
+  "branch": "codex/wt-11111111-repo",
+  "title": "Worktree: repo",
+  "register": false,
+  "pin": false,
+  "worktreeinclude": []
+}

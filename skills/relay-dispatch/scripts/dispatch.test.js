@@ -21,6 +21,9 @@ const { evaluateReviewGate } = require("../../relay-merge/scripts/review-gate");
 const { createEnforcementFixture } = require("./test-support");
 
 const SCRIPT = path.join(__dirname, "dispatch.js");
+const WORKTREE_RUNTIME_FIXTURE_DIR = path.join(__dirname, "__fixtures__", "worktree-runtime");
+const CANONICAL_DRY_RUN_ROOT = "/tmp/issue187-fixtures";
+const CANONICAL_DRY_RUN_SLUG = "repo-c079affd";
 
 function setupRepo() {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-dispatch-"));
@@ -174,6 +177,65 @@ function runDispatch(repoRoot, args, env) {
     stdio: "pipe",
     env,
   });
+}
+
+function setupDryRunFixtureRepo() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "relay-dispatch-dry-run-"));
+  const repoRoot = path.join(root, "repo");
+  const relayHome = path.join(root, "relay-home");
+  const tmpDir = path.join(root, "tmp");
+  fs.mkdirSync(repoRoot, { recursive: true });
+  fs.mkdirSync(relayHome, { recursive: true });
+  fs.mkdirSync(tmpDir, { recursive: true });
+  execFileSync("git", ["init", "-b", "main"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
+  execFileSync("git", ["config", "user.name", "Relay Dispatch Dry Run"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
+  execFileSync("git", ["config", "user.email", "relay-dispatch-dry-run@example.com"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
+  fs.writeFileSync(path.join(repoRoot, "README.md"), "base\n", "utf-8");
+  execFileSync("git", ["add", "README.md"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
+  execFileSync("git", ["commit", "-m", "init"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
+  const rubricFile = path.join(root, "rubric.yaml");
+  fs.writeFileSync(rubricFile, "rubric:\n  factors:\n    - name: test\n      target: pass\n", "utf-8");
+
+  const preloadPath = writePreloadScript(root, "dispatch-dry-run-preload.js", `
+const crypto = require("crypto");
+const seq = ["11111111", "22222222"];
+let idx = 0;
+const originalRandomBytes = crypto.randomBytes;
+crypto.randomBytes = function patchedRandomBytes(size) {
+  const next = seq[Math.min(idx++, seq.length - 1)];
+  const buf = Buffer.from(next, "hex");
+  return buf.length === size ? buf : originalRandomBytes(size);
+};
+const RealDate = Date;
+const fixedNow = new RealDate("2026-04-18T00:50:00.000Z").valueOf();
+class FixedDate extends RealDate {
+  constructor(...args) {
+    super(...(args.length ? args : [fixedNow]));
+  }
+  static now() {
+    return fixedNow;
+  }
+}
+global.Date = FixedDate;
+process.env.RELAY_HOME = ${JSON.stringify(relayHome)};
+process.env.TMPDIR = ${JSON.stringify(tmpDir)};
+`);
+
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-dispatch-dry-run-bin-"));
+  writeFakeCodex(binDir);
+  const env = withNodePreload({
+    ...process.env,
+    PATH: `${binDir}:${process.env.PATH}`,
+    RELAY_HOME: relayHome,
+    TMPDIR: tmpDir,
+  }, preloadPath);
+
+  return { root, repoRoot, rubricFile, env };
+}
+
+function normalizeDispatchDryRunOutput(output, { root }) {
+  const normalizedRoot = output.split(root).join(CANONICAL_DRY_RUN_ROOT);
+  return normalizedRoot.replace(/\/runs\/[^/]+\//g, `/runs/${CANONICAL_DRY_RUN_SLUG}/`).trimEnd();
 }
 
 function tamperResumableRunRubricPath(repoRoot, env, rubricPath) {
@@ -877,6 +939,33 @@ test("dispatch dry-run includes rubric file info", () => {
   assert.equal(result.rubricFile, rubricFile);
 
   fs.unlinkSync(rubricFile);
+});
+
+test("dispatch dry-run json matches the frozen fixture", () => {
+  const fixtureRun = setupDryRunFixtureRepo();
+  const stdout = runDispatch(fixtureRun.repoRoot, [
+    "-b", "test-branch",
+    "--prompt", "task",
+    "--rubric-file", fixtureRun.rubricFile,
+    "--dry-run",
+    "--json",
+  ], fixtureRun.env);
+
+  const expected = fs.readFileSync(path.join(WORKTREE_RUNTIME_FIXTURE_DIR, "dispatch-dry-run.json"), "utf-8").trimEnd();
+  assert.equal(normalizeDispatchDryRunOutput(stdout, fixtureRun), expected);
+});
+
+test("dispatch dry-run text matches the frozen fixture", () => {
+  const fixtureRun = setupDryRunFixtureRepo();
+  const stdout = runDispatch(fixtureRun.repoRoot, [
+    "-b", "test-branch",
+    "--prompt", "task",
+    "--rubric-file", fixtureRun.rubricFile,
+    "--dry-run",
+  ], fixtureRun.env);
+
+  const expected = fs.readFileSync(path.join(WORKTREE_RUNTIME_FIXTURE_DIR, "dispatch-dry-run.txt"), "utf-8").trimEnd();
+  assert.equal(normalizeDispatchDryRunOutput(stdout, fixtureRun), expected);
 });
 
 test("dispatched run whose persisted rubric is empty fails closed at the review gate", () => {
