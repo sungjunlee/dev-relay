@@ -3,7 +3,7 @@ const { getRubricAnchorStatus } = require("../../relay-dispatch/scripts/manifest
 const REVIEW_MARKER_PATTERN = /^\s*<!-- relay-review(?:-round)? -->\s*$/m;
 const SKIP_AUDIT_RUBRIC_STATUSES = Object.freeze([
   "persisted",
-  "grandfathered",
+  "legacy_grandfather_field",
   "missing",
   "unresolved-manifest",
 ]);
@@ -37,7 +37,6 @@ function summarizeRubricAuditForSkip(manifestData, options = {}) {
   if (!manifestData) {
     return {
       rubricStatus: "unresolved-manifest",
-      grandfatherProvenance: null,
     };
   }
 
@@ -45,38 +44,28 @@ function summarizeRubricAuditForSkip(manifestData, options = {}) {
   let rubricStatus = "missing";
   if (rubricAnchor.status === "satisfied") {
     rubricStatus = "persisted";
-  } else if (rubricAnchor.status === "grandfathered") {
-    rubricStatus = "grandfathered";
+  } else if (rubricAnchor.status === "legacy_grandfather_field") {
+    rubricStatus = "legacy_grandfather_field";
   } else if (MISSING_SKIP_AUDIT_RUBRIC_STATUSES.has(rubricAnchor.status)) {
     rubricStatus = "missing";
   }
   return {
     rubricStatus,
-    grandfatherProvenance: rubricAnchor.grandfatherProvenance || null,
   };
 }
 
 function buildSkipComment(reason, rubricAudit = "unresolved-manifest") {
   const normalizedAudit = typeof rubricAudit === "string"
-    ? { rubricStatus: rubricAudit, grandfatherProvenance: null }
+    ? { rubricStatus: rubricAudit }
     : {
-        rubricStatus: rubricAudit?.rubricStatus || "unresolved-manifest",
-        grandfatherProvenance: rubricAudit?.grandfatherProvenance || null,
-      };
+      rubricStatus: rubricAudit?.rubricStatus || "unresolved-manifest",
+    };
   const lines = [
     "<!-- relay-review-skip -->",
     "## Relay Review — Skipped",
     `Reason: ${reason}`,
     `rubric_status: ${normalizedAudit.rubricStatus}`,
   ];
-  if (normalizedAudit.grandfatherProvenance) {
-    lines.push(`rubric_grandfathered.from_migration: ${normalizedAudit.grandfatherProvenance.from_migration}`);
-    lines.push(`rubric_grandfathered.applied_at: ${normalizedAudit.grandfatherProvenance.applied_at}`);
-    lines.push(`rubric_grandfathered.actor: ${normalizedAudit.grandfatherProvenance.actor}`);
-    if (normalizedAudit.grandfatherProvenance.reason) {
-      lines.push(`rubric_grandfathered.reason: ${normalizedAudit.grandfatherProvenance.reason}`);
-    }
-  }
   return lines.join("\n");
 }
 
@@ -123,26 +112,24 @@ function withRubricNote(result, rubricAnchor) {
   if (rubricAnchor.note) {
     next.note = rubricAnchor.note;
   }
-  if (rubricAnchor.grandfatherProvenance) {
-    next.grandfatherProvenance = rubricAnchor.grandfatherProvenance;
-  }
-  if (rubricAnchor.legacyGrandfather) {
-    next.legacyGrandfather = true;
-  }
-  if (rubricAnchor.status === "grandfathered") {
-    next.rubricGrandfathered = true;
-  }
   return next;
 }
 
 function buildRubricGateFailure(prNumber, rubricAnchor) {
   switch (rubricAnchor?.status) {
+    case "legacy_grandfather_field":
+      return withRubricNote({
+        status: "unsupported_grandfather_field",
+        pr: prNumber,
+        readyToMerge: false,
+        reason: rubricAnchor.error,
+      }, rubricAnchor);
     case "missing_path":
       return withRubricNote({
         status: "missing_rubric_path",
         pr: prNumber,
         readyToMerge: false,
-        reason: rubricAnchor?.error || "anchor.rubric_path is required before merge unless anchor.rubric_grandfathered is a valid legacy boolean or provenance object",
+        reason: rubricAnchor?.error || "anchor.rubric_path is required before merge",
       }, rubricAnchor);
     case "missing":
       return withRubricNote({

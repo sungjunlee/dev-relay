@@ -15,10 +15,6 @@ const {
   updateManifestState,
   writeManifest,
 } = require("./relay-manifest");
-const {
-  createGrandfatheredRubricAnchor,
-  registerGrandfatheredRubricMigration,
-} = require("./test-support");
 
 const SCRIPT = path.join(__dirname, "close-run.js");
 
@@ -58,13 +54,8 @@ function setupRepo({ dirtyWorktree = false, state = STATES.REVIEW_PENDING } = {}
     reviewer: "codex",
   });
   manifest = updateManifestState(manifest, STATES.DISPATCHED, "await_dispatch_result");
-  manifest.anchor.rubric_grandfathered = createGrandfatheredRubricAnchor({
-    actor: "close-run-test",
-  });
-  registerGrandfatheredRubricMigration(runId, {
-    applied_at: manifest.anchor.rubric_grandfathered.applied_at,
-    reason: manifest.anchor.rubric_grandfathered.reason,
-  });
+  manifest.anchor.rubric_path = "rubric.yaml";
+  fs.writeFileSync(path.join(ensureRunLayout(repoRoot, runId).runDir, "rubric.yaml"), "rubric:\n  factors:\n    - name: close-run\n", "utf-8");
   manifest = updateManifestState(manifest, STATES.REVIEW_PENDING, "run_review");
   if (state === STATES.ESCALATED) {
     manifest = updateManifestState(manifest, STATES.ESCALATED, "inspect_review_failure");

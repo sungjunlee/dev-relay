@@ -32,7 +32,6 @@ function createRunFixture() {
 test("context/loadRubricFromRunDir preserves the rubric state matrix", async (t) => {
   const cases = [
     { label: "loaded", fixture: { state: "loaded" }, expectedState: "loaded", expectedStatus: "satisfied", warning: null },
-    { label: "grandfathered", fixture: { grandfather: true }, expectedState: "grandfathered", expectedStatus: "grandfathered", warning: /migration provenance/i },
     { label: "not_set", fixture: { state: "not_set" }, expectedState: "not_set", expectedStatus: "missing_path", warning: /\[rubric path not set\]/i },
     { label: "missing", fixture: { state: "missing" }, expectedState: "missing", expectedStatus: "missing", warning: /\[rubric missing\]/i },
     { label: "outside_run_dir", fixture: { state: "outside_run_dir" }, expectedState: "outside_run_dir", expectedStatus: "outside_run_dir", warning: /\[rubric path outside run dir\]/i },
@@ -60,6 +59,51 @@ test("context/loadRubricFromRunDir preserves the rubric state matrix", async (t)
         assert.equal(result.warning, null);
       } else {
         assert.match(result.warning, entry.warning);
+      }
+    });
+  }
+});
+
+test("context/loadRubricFromRunDir applies the legacy-grandfather retirement matrix", async (t) => {
+  const cases = [
+    { label: "undefined", value: undefined, expectedState: "loaded", expectedStatus: "satisfied" },
+    { label: "false", value: false, expectedState: "invalid", expectedStatus: "legacy_grandfather_field" },
+    { label: "true", value: true, expectedState: "invalid", expectedStatus: "legacy_grandfather_field" },
+    {
+      label: "object",
+      value: {
+        from_migration: "rubric-mandatory.yaml",
+        applied_at: "2026-04-17T08:00:05.000Z",
+        actor: "review-runner-context-test",
+      },
+      expectedState: "invalid",
+      expectedStatus: "legacy_grandfather_field",
+    },
+  ];
+
+  for (const entry of cases) {
+    await t.test(entry.label, () => {
+      const { repoRoot, runDir, runId } = createRunFixture();
+      const fixture = createEnforcementFixture({
+        repoRoot,
+        runId,
+        state: "loaded",
+        anchorOverrides: entry.value === undefined
+          ? {}
+          : { rubric_grandfathered: entry.value },
+      });
+      const result = loadRubricFromRunDir(runDir, {
+        run_id: runId,
+        anchor: fixture.anchor,
+      });
+
+      assert.equal(result.state, entry.expectedState);
+      assert.equal(result.status, entry.expectedStatus);
+      if (entry.expectedState === "loaded") {
+        assert.equal(result.warning, null);
+      } else {
+        assert.match(result.warning, /anchor\.rubric_grandfathered is no longer supported/);
+        assert.match(result.warning, /close-run\.js/);
       }
     });
   }

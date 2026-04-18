@@ -44,8 +44,7 @@ function validateTransitionInvariants(data, fromState, toState) {
     if (!rubricAnchor.satisfied) {
       throw new Error(
         `Cannot transition dispatched -> review_pending because ${rubricAnchor.error} ` +
-        "Generate the rubric with relay-plan and dispatch with --rubric-file, " +
-        "or migrate an approved pre-change run with relay-migrate-rubric.js."
+        "Generate the rubric with relay-plan and dispatch with --rubric-file."
       );
     }
   }

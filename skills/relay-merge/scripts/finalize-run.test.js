@@ -22,7 +22,6 @@ const SCRIPT = path.join(__dirname, "finalize-run.js");
 function setupRepo({
   dirtyWorktree = false,
   enforcementState = "loaded",
-  grandfather = false,
 } = {}) {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-finalize-"));
   process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
@@ -72,7 +71,6 @@ function setupRepo({
     repoRoot,
     runId,
     state: enforcementState,
-    grandfather,
   }).anchor;
   manifest = updateManifestState(manifest, STATES.REVIEW_PENDING, "run_review");
   manifest = updateManifestState(manifest, STATES.READY_TO_MERGE, "await_explicit_merge");
@@ -220,17 +218,19 @@ if (args[0] === "pr" && args[1] === "view") {
 
 function runFinalizeSkipReview({
   enforcementState = "loaded",
-  grandfather = false,
+  rubricGrandfathered = undefined,
   reason = "hotfix",
 } = {}) {
   const fixture = setupRepo();
-  if (enforcementState !== "loaded" || grandfather) {
+  if (enforcementState !== "loaded" || rubricGrandfathered !== undefined) {
     createEnforcementFixture({
       repoRoot: fixture.repoRoot,
       runId: fixture.runId,
       manifestPath: fixture.manifestPath,
       state: enforcementState,
-      grandfather,
+      anchorOverrides: rubricGrandfathered === undefined
+        ? {}
+        : { rubric_grandfathered: rubricGrandfathered },
     });
   }
   const logPath = path.join(fixture.repoRoot, "gh.log");
@@ -1037,18 +1037,17 @@ test("finalize-run skip-review journals rubric_status: persisted", () => {
   assert.equal(skipEvent?.rubric_status, "persisted");
 });
 
-test("finalize-run skip-review journals rubric_status: grandfathered", () => {
-  const { result, events, logPath } = runFinalizeSkipReview({ grandfather: true });
+test("finalize-run skip-review journals rubric_status: legacy_grandfather_field", () => {
+  const { result, events, logPath } = runFinalizeSkipReview({ rubricGrandfathered: true });
   const skipEvent = events.find((entry) => entry.event === "skip_review");
   const ghLog = fs.readFileSync(logPath, "utf-8");
 
   assert.equal(result.state, STATES.MERGED);
   assert.equal(result.reviewGate.status, "skipped");
-  assert.equal(result.reviewGate.rubricStatus, "grandfathered");
-  assert.equal(skipEvent?.rubric_status, "grandfathered");
-  assert.match(ghLog, /rubric_grandfathered\.from_migration: rubric-mandatory\.yaml/);
-  assert.match(ghLog, /rubric_grandfathered\.applied_at:/);
-  assert.match(ghLog, /rubric_grandfathered\.actor:/);
+  assert.equal(result.reviewGate.rubricStatus, "legacy_grandfather_field");
+  assert.equal(skipEvent?.rubric_status, "legacy_grandfather_field");
+  assert.match(ghLog, /rubric_status: legacy_grandfather_field/);
+  assert.doesNotMatch(ghLog, /rubric_grandfathered\./);
 });
 
 test("finalize-run skip-review with a missing rubric merges and records rubric_status: missing in comment and events", () => {
