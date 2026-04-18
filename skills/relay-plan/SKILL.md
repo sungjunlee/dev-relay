@@ -165,6 +165,24 @@ Consult `references/rubric-*.md` for specialist thinking. Design factors from AC
 | README, guides, API docs, specs | `rubric-documentation.md` | Reader testing score, zero-context completeness |
 | Design-driven features, UX flows | `rubric-design.md` | Value → Usability → Delight hierarchy |
 
+### Trust-model audit factor (auth-boundary tasks)
+
+Before finalizing a rubric, check whether the task crosses an **auth boundary** in the relay runtime. Triggers:
+
+- Label: `phase-0-follow-up`, or
+- Keywords in the issue / AC: trust root, anchor, invariant, grandfather, validate, forge, bypass, gate-check, auth-boundary, or any `validateTransition*` / `validateManifest*` / `evaluateReviewGate` callsite, or
+- Operator judgment: the task touches manifest fields that feed filesystem / GitHub / state-transition operations.
+
+If triggered, follow `references/rubric-trust-model.md` and answer three questions; each yes becomes a named factor, not a criterion bullet:
+
+1. **Who can forge a claim?** — authentication factor distinct from any schema-acceptance factor.
+2. **Where is the gate?** — exact `file:function` call site, not "the gate layer".
+3. **What independently verifies the claim?** — external reference the gate reads; self-attestation does not count.
+
+Put the answers (factor names + gate sites) in the PR body under `### Trust-model audit` before dispatch. A rubric that triggered the check but left any of the three unanswered is Grade D (dispatch blocked, revise).
+
+This reference sharpens `rubric-security.md` rather than replacing it — use both.
+
 ### 3. Validate the rubric
 
 Before dispatch, verify:

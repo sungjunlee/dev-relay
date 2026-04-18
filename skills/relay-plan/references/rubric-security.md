@@ -4,6 +4,8 @@ Metrics a security-minded engineer actually checks. Not "did we run a scanner" b
 
 Use this alongside the primary domain rubric when a task touches user input, auth, APIs, file uploads, secrets, or sensitive data. Pull in only the relevant factors for the task; security should sharpen the rubric, not create a separate review phase.
 
+> **See also**: `rubric-trust-model.md` for **auth-boundary** tasks in the relay runtime itself (manifest anchors, trust roots, gate callsites). That reference adds a distinct enforcement-layer / authentication-factor check on top of this file. The two are complementary: this file covers the broad security surface; `rubric-trust-model.md` covers the narrower case where a schema change can preserve a vulnerability under a new shape.
+
 ## Prerequisites (Hygiene)
 
 Use this section only for checks that would apply to ANY PR in this repo. They gate the run and do not count toward factor totals.
