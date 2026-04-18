@@ -54,6 +54,7 @@ const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
 const os = require("os");
+const { pushAndOpenPR } = require("./dispatch-publish");
 const {
   createWorktree,
   formatDispatchDryRun,
@@ -903,6 +904,28 @@ async function main() {
     status = "failed";
   }
 
+  let prNumber = manifest.git?.pr_number ?? manifest.github?.pr_number ?? null;
+  let prCreatedByUs = null;
+  if ((status === "completed" || status === "completed-with-warning") && !DRY_RUN && gitLog) {
+    try {
+      const prResult = await pushAndOpenPR({
+        repoRoot,
+        wtPath,
+        branch,
+        baseBranch,
+        resultPreview: resultText,
+        runId,
+        executor: EXECUTOR,
+      });
+      prNumber = prResult.prNumber;
+      prCreatedByUs = prResult.createdByUs;
+    } catch (e) {
+      status = "failed";
+      exitCode = exitCode || 1;
+      error = `push_or_pr_failed: ${String(e.message || e).split("\n")[0]}`;
+    }
+  }
+
   // Persist dispatch artifacts in the run directory for post-mortem analysis.
   const runDir = getRunDir(repoRoot, runId);
   try {
@@ -921,7 +944,15 @@ async function main() {
     ...manifest,
     git: {
       ...(manifest.git || {}),
+      ...(prNumber !== null ? { pr_number: prNumber } : {}),
       head_sha: currentHead || startHead || null,
+    },
+    // Persist github.pr_number as the dispatch-owned PR anchor while keeping
+    // git.pr_number populated for existing review/merge consumers.
+    github: {
+      ...(manifest.github || {}),
+      ...(prNumber !== null ? { pr_number: prNumber } : {}),
+      ...(prCreatedByUs !== null ? { pr_created_by_orchestrator: prCreatedByUs } : {}),
     },
   };
   writeManifest(manifestPath, manifest);
@@ -973,6 +1004,8 @@ async function main() {
     branch,
     mode: RESUME_MODE ? "resume" : "new",
     headSha: currentHead || startHead || null,
+    prNumber,
+    prCreatedByUs,
     resultFile,
     stdoutLog,
     stderrLog,
@@ -994,6 +1027,9 @@ async function main() {
     console.log(`\n--- Dispatch ${result.status} (${elapsed}s) ---`);
     if (error) console.log(`  Error: ${error}`);
     console.log(`  Run state: ${result.runState}`);
+    if (prNumber !== null) {
+      console.log(`  PR:        #${prNumber}${prCreatedByUs === true ? " (created by orchestrator)" : prCreatedByUs === false ? " (existing)" : ""}`);
+    }
     if (gitLog) {
       console.log(`  Commits:`);
       gitLog.split("\n").forEach((l) => console.log(`    ${l}`));

@@ -91,7 +91,7 @@ On re-dispatch, previous Score Log + reviewer feedback are auto-prepended to the
 | Timeout (with commits) | `completed-with-warning` — check worktree for uncommitted changes, proceed to review |
 | Timeout (no commits) | Increase `--timeout` or split task into smaller pieces |
 | Executor error / no commits | Read result file; revise prompt and re-dispatch |
-| No PR created | Check `git log` in worktree; push manually or re-dispatch. On non-default GitHub hosts (GHE, self-hosted) this is expected until [#198](https://github.com/sungjunlee/dev-relay/issues/198) lands — see `../relay/references/non-default-github-host.md`. |
+| Branch publication / PR creation failed | Inspect the dispatch error and outer-shell GitHub auth. `relay-dispatch` handles publication from the orchestrator shell. |
 | Branch conflicts | Resolve in worktree or create fresh worktree from updated main |
 | Network/transient error | Wait 30s, retry once. If it fails again, escalate to user |
 
