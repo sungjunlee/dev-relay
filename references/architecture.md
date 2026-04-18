@@ -225,6 +225,9 @@ Current shared helpers:
 | Module | Owner | Consumers |
 |--------|-------|-----------|
 | `skills/relay-dispatch/scripts/cli-args.js` | relay-dispatch | `review-runner.js`, `invoke-reviewer-claude.js`, `invoke-reviewer-codex.js`, `finalize-run.js`, `persist-request.js`, `probe-executor-env.js` |
+| `skills/relay-review/scripts/reviewer-helpers.js` | relay-review | `invoke-reviewer-claude.js`, `invoke-reviewer-codex.js` |
+
+`reviewer-helpers.js` is scoped to `summarizeFailure` and `ensureJsonText`. The two reviewer adapters intentionally keep divergent execution contracts (Claude uses `--json-schema` + stdout recovery; Codex uses temp schema/result files + `--ephemeral` + sandbox), so a full adapter factory would hide meaningful differences and make it harder to add a third executor. See item 5 under "Adding a new reviewer adapter" above.
 
 Call sites take a local-wrapper pattern so inline flag lists (`KNOWN_FLAGS`) keep acting as fail-closed `reservedFlags`:
 

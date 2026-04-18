@@ -9,6 +9,7 @@ const os = require("os");
 const path = require("path");
 const { REVIEW_VERDICT_JSON_SCHEMA } = require("./review-schema");
 const { getArg: sharedGetArg, hasFlag: sharedHasFlag } = require("../../relay-dispatch/scripts/cli-args");
+const { summarizeFailure, ensureJsonText } = require("./reviewer-helpers");
 
 const args = process.argv.slice(2);
 const KNOWN_FLAGS = ["--repo", "--prompt-file", "--model", "--json", "--help", "-h"];
@@ -25,20 +26,6 @@ function readNonEmptyFile(filePath) {
   if (!fs.existsSync(filePath)) return null;
   const text = fs.readFileSync(filePath, "utf-8").trim();
   return text || null;
-}
-
-function summarizeFailure(error) {
-  const stderr = String(error.stderr || "").trim();
-  const stdout = String(error.stdout || "").trim();
-  return stderr || stdout || error.message;
-}
-
-function ensureJsonText(text, label) {
-  try {
-    JSON.parse(text);
-  } catch (error) {
-    throw new Error(`${label} did not return valid JSON: ${error.message}`);
-  }
 }
 
 function main() {
