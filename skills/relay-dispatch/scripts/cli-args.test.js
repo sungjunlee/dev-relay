@@ -61,6 +61,35 @@ test("getArg keeps a single-dash token as data", () => {
   );
 });
 
+test("getArg can treat reserved short aliases as missing values", () => {
+  // Anti-theater: shared dedupe must not widen caller behavior. `create-worktree` and `dispatch`
+  // previously rejected sibling short aliases from their local KNOWN_FLAGS lists, so the shared
+  // helper needs an opt-in guard to preserve that fail-closed contract.
+  assert.equal(
+    getArg(
+      ["--title", "-b", "--branch", "feature"],
+      "--title",
+      "fallback",
+      { reservedFlags: ["-b", "-t"] }
+    ),
+    "fallback"
+  );
+});
+
+test("getArg can treat reserved long flags as missing values", () => {
+  // Anti-theater: callers that already maintain a full known-flag list should get the same answer
+  // for both long and short aliases through one shared helper path.
+  assert.equal(
+    getArg(
+      ["--prompt", "--executor", "codex"],
+      "--prompt",
+      "fallback",
+      { reservedFlags: ["--executor", "-e"] }
+    ),
+    "fallback"
+  );
+});
+
 test("hasFlag detects a present string flag", () => {
   // Anti-theater: the shared helper contract includes presence checks alongside value reads so thin
   // CLIs do not duplicate ad-hoc flag scans next to `getArg(...)`.

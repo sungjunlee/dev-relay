@@ -44,6 +44,10 @@ const { getArg, hasFlag } = require("./cli-args");
 // ---------------------------------------------------------------------------
 
 const args = process.argv.slice(2);
+const KNOWN_FLAGS = [
+  "--branch", "-b", "--title", "-t", "--topic", "--worktree-path", "--copy",
+  "--pin", "--register", "--dry-run", "--json", "--help", "-h",
+];
 if (!args.length || args.includes("--help") || args.includes("-h")) {
   console.log(
     "Usage: create-worktree.js <repo-path> [--branch <name>] [--title <text>]"
@@ -58,15 +62,17 @@ if (!args.length || args.includes("--help") || args.includes("-h")) {
 const repoPathRaw = args.find((a) => !a.startsWith("-"));
 const REPO_PATH = path.resolve(repoPathRaw || ".");
 const PROJECT_NAME = path.basename(REPO_PATH);
-const TOPIC = getArg(args, "--topic", undefined);
-const BRANCH = getArg(args, ["--branch", "-b"], TOPIC ? `codex/${TOPIC}` : undefined);
+const CLI_ARG_OPTIONS = { reservedFlags: KNOWN_FLAGS };
+const TOPIC = getArg(args, "--topic", undefined, CLI_ARG_OPTIONS);
+const BRANCH = getArg(args, ["--branch", "-b"], TOPIC ? `codex/${TOPIC}` : undefined, CLI_ARG_OPTIONS);
 const TITLE = getArg(
   args,
   ["--title", "-t"],
-  BRANCH ? `Worktree: ${BRANCH}` : `Worktree: ${PROJECT_NAME}`
+  BRANCH ? `Worktree: ${BRANCH}` : `Worktree: ${PROJECT_NAME}`,
+  CLI_ARG_OPTIONS
 );
-const WORKTREE_PATH = getArg(args, "--worktree-path", undefined);
-const COPY_FILES = getArg(args, "--copy", "")
+const WORKTREE_PATH = getArg(args, "--worktree-path", undefined, CLI_ARG_OPTIONS);
+const COPY_FILES = getArg(args, "--copy", "", CLI_ARG_OPTIONS)
   .split(",")
   .filter(Boolean);
 const PIN = hasFlag(args, "--pin");

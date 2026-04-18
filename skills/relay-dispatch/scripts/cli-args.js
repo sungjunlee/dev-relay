@@ -1,10 +1,14 @@
-function getArg(args, flag, fallback = undefined) {
+function getArg(args, flag, fallback = undefined, options = {}) {
+  const reservedFlags = new Set(options.reservedFlags || []);
   for (const variant of Array.isArray(flag) ? flag : [flag]) {
     const index = args.indexOf(variant);
     if (index === -1) continue;
     if (index + 1 >= args.length) return fallback;
     const value = args[index + 1];
-    return value.startsWith("--") ? fallback : value;
+    if (value.startsWith("--") || reservedFlags.has(value)) {
+      return fallback;
+    }
+    return value;
   }
   return fallback;
 }
