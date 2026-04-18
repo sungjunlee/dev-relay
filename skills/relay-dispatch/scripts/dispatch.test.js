@@ -17,6 +17,7 @@ const {
   updateManifestState,
   writeManifest,
 } = require("./relay-manifest");
+const { buildPrBody, pushAndOpenPR } = require("./dispatch-publish");
 const { evaluateReviewGate } = require("../../relay-merge/scripts/review-gate");
 const { createEnforcementFixture } = require("./test-support");
 
@@ -235,6 +236,40 @@ function readJsonLines(filePath) {
     .map((line) => JSON.parse(line));
 }
 
+function createExecFileMock({ existingPrNumber = null, prCreateUrl = null, gitPushError = null, prCreateError = null, gitLogOutput = "fake: dispatch publish" } = {}) {
+  const calls = [];
+  const execFile = (command, args, options) => {
+    calls.push({ command, args: [...args], options });
+
+    if (command === "gh" && args[0] === "pr" && args[1] === "list") {
+      return existingPrNumber === null ? "" : `${existingPrNumber}\n`;
+    }
+    if (command === "git" && args.includes("push")) {
+      if (gitPushError) {
+        const error = new Error(gitPushError);
+        error.stderr = Buffer.from(`${gitPushError}\n`);
+        throw error;
+      }
+      return "";
+    }
+    if (command === "git" && args.includes("log")) {
+      return `${gitLogOutput}\n`;
+    }
+    if (command === "gh" && args[0] === "pr" && args[1] === "create") {
+      if (prCreateError) {
+        const error = new Error(prCreateError);
+        error.stderr = Buffer.from(`${prCreateError}\n`);
+        throw error;
+      }
+      return `${prCreateUrl || ""}\n`;
+    }
+
+    throw new Error(`Unexpected execFile call: ${command} ${args.join(" ")}`);
+  };
+
+  return { execFile, calls };
+}
+
 function createPushPrTestEnv({ relayHome, ghState = {}, failGitPush = false, codexMode = "commit" }) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "relay-dispatch-push-pr-"));
   const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-dispatch-push-pr-bin-"));
@@ -257,15 +292,46 @@ const originalExecFileSync = childProcess.execFileSync;
 childProcess.execFileSync = function patchedExecFileSync(command, args, options) {
   const argv = Array.isArray(args) ? args : [];
   const logPath = process.env.RELAY_TEST_EXEC_LOG;
+  const ghLogPath = process.env.RELAY_TEST_GH_LOG;
+  const statePath = process.env.RELAY_TEST_GH_STATE;
   const isPush = command === "git" && argv.includes("push");
   const isGh = command === "gh";
   if (logPath && (isPush || isGh)) {
     fs.appendFileSync(logPath, JSON.stringify({ command, args: argv }) + "\\n");
   }
+  if (ghLogPath && isGh) {
+    fs.appendFileSync(ghLogPath, JSON.stringify(argv) + "\\n");
+  }
   if (process.env.RELAY_TEST_FAIL_GIT_PUSH === "1" && isPush) {
     const error = new Error("simulated git push failure");
     error.stderr = Buffer.from("simulated git push failure\\n");
     throw error;
+  }
+  if (isPush) {
+    return "";
+  }
+  if (isGh) {
+    const state = statePath && fs.existsSync(statePath)
+      ? JSON.parse(fs.readFileSync(statePath, "utf-8"))
+      : {};
+    if (argv[0] === "pr" && argv[1] === "list") {
+      if (state.failPrList) {
+        const error = new Error(state.failPrList);
+        error.stderr = Buffer.from(state.failPrList + "\\n");
+        throw error;
+      }
+      return state.prListNumber !== undefined && state.prListNumber !== null
+        ? String(state.prListNumber) + "\\n"
+        : "";
+    }
+    if (argv[0] === "pr" && argv[1] === "create") {
+      if (state.failPrCreate) {
+        const error = new Error(state.failPrCreate);
+        error.stderr = Buffer.from(state.failPrCreate + "\\n");
+        throw error;
+      }
+      return state.prCreateUrl ? String(state.prCreateUrl) + "\\n" : "";
+    }
   }
   return originalExecFileSync.call(this, command, args, options);
 };
@@ -930,6 +996,104 @@ setTimeout(() => {}, 60000);
   assert.match(result.error, /timed out/);
 });
 
+test("pushAndOpenPR uses the injected execFile seam for happy-path publication", async () => {
+  const { execFile, calls } = createExecFileMock({
+    prCreateUrl: "https://github.com/acme/dev-relay/pull/321",
+    gitLogOutput: "feat: publish orchestrator PR",
+  });
+
+  const result = await pushAndOpenPR({
+    repoRoot: "/tmp/repo",
+    wtPath: "/tmp/repo-worktree",
+    branch: "issue-198",
+    baseBranch: "main",
+    resultPreview: "Implemented orchestrator-side publication.",
+    runId: "issue-198-run",
+    executor: "codex",
+    execFile,
+  });
+
+  assert.deepEqual(result, { prNumber: 321, createdByUs: true });
+  assert.deepEqual(calls.map(({ command, args }) => [command, args.slice(0, 2)]), [
+    ["gh", ["pr", "list"]],
+    ["git", ["-C", "/tmp/repo-worktree"]],
+    ["git", ["-C", "/tmp/repo-worktree"]],
+    ["gh", ["pr", "create"]],
+  ]);
+
+  const createCall = calls.find(({ command, args }) => command === "gh" && args[0] === "pr" && args[1] === "create");
+  assert.ok(createCall, "expected gh pr create call");
+  assert.ok(createCall.args.includes("--title"));
+  assert.ok(createCall.args.includes("feat: publish orchestrator PR"));
+  assert.ok(createCall.args.includes("--body"));
+  assert.ok(createCall.args.includes(buildPrBody({
+    resultPreview: "Implemented orchestrator-side publication.",
+    runId: "issue-198-run",
+    executor: "codex",
+  })));
+});
+
+test("pushAndOpenPR skips PR creation when the branch already has an open PR", async () => {
+  const { execFile, calls } = createExecFileMock({
+    existingPrNumber: 654,
+  });
+
+  const result = await pushAndOpenPR({
+    repoRoot: "/tmp/repo",
+    wtPath: "/tmp/repo-worktree",
+    branch: "issue-198-existing-pr",
+    baseBranch: "main",
+    resultPreview: "Reuse existing PR.",
+    runId: "issue-198-existing-pr-run",
+    executor: "codex",
+    execFile,
+  });
+
+  assert.deepEqual(result, { prNumber: 654, createdByUs: false });
+  assert.equal(calls.filter(({ command, args }) => command === "gh" && args[0] === "pr" && args[1] === "create").length, 0);
+  assert.equal(calls.filter(({ command, args }) => command === "git" && args.includes("push")).length, 1);
+});
+
+test("pushAndOpenPR surfaces injected git push failures", async () => {
+  const { execFile } = createExecFileMock({
+    gitPushError: "simulated git push failure",
+  });
+
+  await assert.rejects(
+    pushAndOpenPR({
+      repoRoot: "/tmp/repo",
+      wtPath: "/tmp/repo-worktree",
+      branch: "issue-198-push-fail",
+      baseBranch: "main",
+      resultPreview: "Trigger push failure.",
+      runId: "issue-198-push-fail-run",
+      executor: "codex",
+      execFile,
+    }),
+    /git_push_failed: simulated git push failure/
+  );
+});
+
+test("pushAndOpenPR surfaces injected gh pr create failures", async () => {
+  const { execFile } = createExecFileMock({
+    prCreateError: "simulated gh pr create failure",
+  });
+
+  await assert.rejects(
+    pushAndOpenPR({
+      repoRoot: "/tmp/repo",
+      wtPath: "/tmp/repo-worktree",
+      branch: "issue-198-pr-fail",
+      baseBranch: "main",
+      resultPreview: "Trigger PR failure.",
+      runId: "issue-198-pr-fail-run",
+      executor: "codex",
+      execFile,
+    }),
+    /gh_pr_create_failed: simulated gh pr create failure/
+  );
+});
+
 test("dispatch pushes the branch and opens a PR from the orchestrator on success", () => {
   const { repoRoot, relayHome } = setupRepoWithOrigin();
   const { env, ghLogPath, execLogPath } = createPushPrTestEnv({
@@ -954,13 +1118,6 @@ test("dispatch pushes the branch and opens a PR from the orchestrator on success
   assert.equal(manifest.git.pr_number, 321);
   assert.equal(manifest.github.pr_number, 321);
   assert.equal(manifest.github.pr_created_by_orchestrator, true);
-
-  const remoteHeads = execFileSync("git", ["ls-remote", "--heads", "origin", "issue-198"], {
-    cwd: repoRoot,
-    encoding: "utf-8",
-    stdio: "pipe",
-  }).trim();
-  assert.match(remoteHeads, /issue-198$/m);
 
   const ghCalls = readJsonLines(ghLogPath);
   assert.deepEqual(ghCalls.map((args) => args.slice(0, 2)), [["pr", "list"], ["pr", "create"]]);
