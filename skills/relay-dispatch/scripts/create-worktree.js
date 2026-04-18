@@ -32,8 +32,11 @@ const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
 const os = require("os");
-const { copyWorktreeFiles, getWorktreeIncludeFiles } = require("./worktreeinclude");
-const { registerCodexApp } = require("./codex-app-register");
+const {
+  createWorktree,
+  formatPlan,
+  registerWorktree,
+} = require("./worktree-runtime");
 
 // ---------------------------------------------------------------------------
 // Args
@@ -147,6 +150,7 @@ function shellQuote(s) {
 
 function main() {
   let wtPath, branch;
+  let createResult = null;
 
   if (WORKTREE_PATH) {
     // ---- External worktree mode ----
@@ -178,47 +182,54 @@ function main() {
 
     // --- Dry run ---
     if (DRY_RUN) {
-      const includeFiles = getWorktreeIncludeFiles(REPO_PATH);
-      const plan = { worktree: wtPath, branch, title: TITLE, register: REGISTER, pin: PIN, worktreeinclude: includeFiles };
+      const plan = createWorktree({
+        repoRoot: REPO_PATH,
+        worktreePath: wtPath,
+        branch,
+        title: TITLE,
+        register: REGISTER,
+        pin: PIN,
+        dryRun: true,
+      });
       if (JSON_OUT) {
         console.log(JSON.stringify(plan, null, 2));
       } else {
-        console.log("Dry run:");
-        console.log(`  Worktree: ${wtPath}`);
-        console.log(`  Branch:   ${branch}`);
-        console.log(`  Title:    ${TITLE}`);
-        console.log(`  Register: ${REGISTER}`);
-        if (PIN) console.log("  Pinned:   yes");
-        if (includeFiles.length) console.log(`  .worktreeinclude: ${includeFiles.join(", ")}`);
+        console.log(formatPlan({
+          worktreePath: wtPath,
+          branch,
+          title: TITLE,
+          register: REGISTER,
+          pin: PIN,
+          includeFiles: plan.worktreeinclude,
+        }));
       }
       return;
     }
 
-    // --- Step 1: Create git worktree ---
-    fs.mkdirSync(path.dirname(wtPath), { recursive: true });
     try {
-      git(REPO_PATH, "worktree", "add", wtPath, "-b", branch);
-    } catch {
-      try {
-        git(REPO_PATH, "worktree", "add", wtPath, branch);
-      } catch (e) {
-        console.error(`Error: failed to create worktree for branch '${branch}': ${e.message}`);
-        process.exit(1);
-      }
+      createResult = createWorktree({
+        repoRoot: REPO_PATH,
+        worktreePath: wtPath,
+        branch,
+        title: TITLE,
+        copyFiles: COPY_FILES,
+        register: REGISTER,
+        pin: PIN,
+        assertWithin,
+      });
+    } catch (error) {
+      console.error(`Error: ${error.message}`);
+      process.exit(1);
     }
-
-    // --- Step 2: Copy files (.worktreeinclude + explicit flags) ---
-    copyWorktreeFiles(REPO_PATH, wtPath, {
-      copyFiles: COPY_FILES,
-      assertWithin,
-    });
   }
 
   // --- Step 3 (optional): Register in Codex state ---
   let threadId = null;
-  if (REGISTER) {
-    const reg = registerCodexApp({ wtPath, repoPath: REPO_PATH, branch, title: TITLE, pin: PIN });
+  if (REGISTER && WORKTREE_PATH) {
+    const reg = registerWorktree({ repoRoot: REPO_PATH, worktreePath: wtPath, branch, title: TITLE, pin: PIN });
     threadId = reg.threadId;
+  } else if (REGISTER) {
+    threadId = createResult?.threadId || null;
   }
 
   // --- Output ---

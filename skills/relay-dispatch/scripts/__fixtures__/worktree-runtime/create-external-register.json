@@ -1,0 +1,9 @@
+{
+  "worktree": "/tmp/issue187-fixtures-external/worktree",
+  "branch": "ext-branch",
+  "threadId": "thread-fixed",
+  "title": "External Title",
+  "registered": true,
+  "exec": null,
+  "resume": "codex resume thread-fixed"
+}

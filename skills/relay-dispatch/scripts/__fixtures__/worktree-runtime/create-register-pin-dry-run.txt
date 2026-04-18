@@ -1,0 +1,6 @@
+Dry run:
+  Worktree: /tmp/issue187-fixtures/relay-home/worktrees/11111111/repo
+  Branch:   feature-register
+  Title:    Pinned Register
+  Register: true
+  Pinned:   yes
