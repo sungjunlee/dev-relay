@@ -2,7 +2,7 @@
 
 ## Summary
 
-#176 closes a containment-at-side-path leak in `cleanup-worktrees.js` by reusing the `safeFormatRunId()` helper introduced by PR #175 (`#174`). The two raw `data.run_id` operator-emission sites at `skills/relay-dispatch/scripts/cleanup-worktrees.js:89` (`baseInfo.runId`) and `:98` (`baseInfo.closeCommand`) now route through the shared validator-backed formatter instead of duplicating an inline fallback. Sibling trust roots `paths.repo_root` and `paths.worktree` are explicitly deferred to `#160`.
+#176 closes a containment-at-side-path leak in `cleanup-worktrees.js` by reusing the `safeFormatRunId()` helper introduced by PR #175 (`#174`). The two raw `data.run_id` operator-emission sites at `skills/relay-dispatch/scripts/cleanup-worktrees.js:81` (`baseInfo.runId`) and `:90` (`baseInfo.closeCommand`) now route through the shared validator-backed formatter instead of duplicating an inline fallback. Sibling trust roots `paths.repo_root` and `paths.worktree` are explicitly deferred to `#160`.
 
 ## Pattern-Break Rationale
 
@@ -19,65 +19,71 @@ This is a containment-at-side-path fix within the already-established `#156` / `
 
 | Site | Delta | Rationale |
 | --- | --- | --- |
-| `cleanup-worktrees.js:89` | **FIXED** | `data.run_id \|\| path.basename(...)` became `safeFormatRunId({ manifestPath, data })`, computed once as `runId` and reused. |
-| `cleanup-worktrees.js:98` | **FIXED** | `closeCommand` now uses the same `runId` variable, preserving the `JSON.stringify(...)` wrapper around `--run-id`. |
-| `cleanup-worktrees.js:136` | **UNCHANGED — fail-closed upstream** | `cleanupResult.updatedData.run_id` feeds `appendRunEvent()`; that path hits `ensureRunLayout()` -> `getRunDir()` -> `requireValidRunId()` in `relay-manifest.js`, so tampered values throw before any write-side effect. |
-| `close-run.js:98` | **UNCHANGED — resolver-validated** | `updated.run_id` descends from `resolveManifestRecord()` at `close-run.js:64`, which validates manifest `run_id` via `validateManifestRecordRunId()` before returning. |
-| `close-run.js:106` | **UNCHANGED — resolver-validated** | Same descent as `:98`; event emission stays behind resolver validation. |
-| `close-run.js:120` | **UNCHANGED — resolver-validated** | Same descent as `:98`; JSON result rendering stays behind resolver validation. |
-| `dispatch.js:454` | **UNCHANGED — resolver-validated** | `manifest.run_id` descends from `resolveManifestRecord()` at `dispatch.js:444`; resume mode inherits the resolver validation contract. |
-| `relay-resolver.js:51` (`formatRunId`) | **UNCHANGED — happy-path renderer** | Inline comment documents that raw stored `run_id` remains available only for validated happy-path rendering; error builders use `safeFormatRunId()`. |
-| `relay-resolver.js:57` (`safeFormatRunId`) | **EXPORTED** | The helper remains single-sourced and is now exported via `module.exports` at `relay-resolver.js:480-486` for `cleanup-worktrees.js` reuse. |
-| `reliability-report.js:89/93/97, 207-214, 292-301, 387/391, 441/445` | **UNCHANGED — event-journal domain** | These uses key aggregate metrics by `event.run_id` / `manifest.data.run_id`; they do not emit per-run operator recovery commands, and the write-side journal path is already validated by `ensureRunLayout()`. |
+| `cleanup-worktrees.js:81` | **FIXED** | `data.run_id \|\| path.basename(...)` became `safeFormatRunId({ manifestPath, data })`, computed once as `runId` and reused. |
+| `cleanup-worktrees.js:90` | **FIXED** | `closeCommand` now uses the same `runId` variable, preserving the `JSON.stringify(...)` wrapper around `--run-id`. |
+| `cleanup-worktrees.js:159` | **UNCHANGED — fail-closed upstream** | `cleanupResult.updatedData.run_id` feeds `appendRunEvent()`; that path hits `ensureRunLayout()` -> `getRunDir()` -> `requireValidRunId()` in `relay-manifest.js`, so tampered values throw before any write-side effect. |
+| `close-run.js:100` | **UNCHANGED — resolver-validated** | `updated.run_id` descends from `resolveManifestRecord()` at `close-run.js:60`, which validates manifest `run_id` via `validateManifestRecordRunId()` before returning. |
+| `close-run.js:108` | **UNCHANGED — resolver-validated** | Same descent as `:100`; event emission stays behind resolver validation. |
+| `close-run.js:122` | **UNCHANGED — resolver-validated** | Same descent as `:100`; JSON result rendering stays behind resolver validation. |
+| `dispatch.js:445` | **UNCHANGED — resolver-validated** | `manifest.run_id` descends from `resolveManifestRecord()` at `dispatch.js:429`; resume mode inherits the resolver validation contract. |
+| `relay-resolver.js:31` (`formatRunId`) | **UNCHANGED — happy-path renderer** | Inline comment documents that raw stored `run_id` remains available only for validated happy-path rendering; error builders use `safeFormatRunId()`. |
+| `relay-resolver.js:36` (`safeFormatRunId`) | **EXPORTED** | The helper remains single-sourced and is now exported via `module.exports` at `relay-resolver.js:411-417` for `cleanup-worktrees.js` reuse. |
+| `reliability-report.js:80/84/88, 198-199, 283-292, 378, 432` | **UNCHANGED — event-journal domain** | These uses key aggregate metrics by `event.run_id` / `manifest.data.run_id`; they do not emit per-run operator recovery commands, and the write-side journal path is already validated by `ensureRunLayout()`. |
 
-`grep -nE "\\bdata\\.run_id\\b|\\bdata\\?\\.run_id\\b|\\bmanifest\\.run_id\\b|\\bupdated\\.run_id\\b|\\bupdatedData\\.run_id\\b" skills/relay-dispatch/scripts/*.js | grep -v "\\.test\\.js"` also matches non-emission validator/selector sites at `relay-manifest.js:396` and `relay-resolver.js:252,318`; those are intentionally omitted from the table because they validate or compare `run_id` rather than render it into operator-facing output.
+`grep -nE "\\bdata\\.run_id\\b|\\bdata\\?\\.run_id\\b|\\bmanifest\\.run_id\\b|\\bupdated\\.run_id\\b|\\bupdatedData\\.run_id\\b" skills/relay-dispatch/scripts/*.js | grep -v "\\.test\\.js"` also matches non-emission validator/selector sites at `relay-resolver.js:208,270`; those are intentionally omitted from the table because they validate or compare `run_id` rather than render it into operator-facing output.
 
 ## Rendered Self-Review Grep
 
 ```text
 $ grep -n "safeFormatRunId" skills/relay-dispatch/scripts/cleanup-worktrees.js
-25:const { safeFormatRunId } = require("./relay-resolver");
-87:    // safeFormatRunId falls back to the manifest basename on tampered run_id so cleanup still
-89:    const runId = safeFormatRunId({ manifestPath, data });
+28:const { safeFormatRunId } = require("./relay-resolver");
+79:    // safeFormatRunId falls back to the manifest basename on tampered run_id so cleanup still
+81:    const runId = safeFormatRunId({ manifestPath, data });
 
 $ grep -n "safeFormatRunId" skills/relay-dispatch/scripts/relay-resolver.js
-53:  // Error builders must use safeFormatRunId so tampered manifests cannot echo unsafe values (#171/#174).
-57:function safeFormatRunId(record) {
-70:    return `${safeFormatRunId(record)} (state=${state}, pr=${storedPr})`;
-223:  const runId = safeFormatRunId(record);
-305:    `The terminal sibling ${JSON.stringify(safeFormatRunId(terminalCandidate))} is already ${terminalState}, ` +
-307:    `The ${freshState} sibling ${JSON.stringify(safeFormatRunId(freshCandidate))} does not carry the caller PR. ` +
-486:  safeFormatRunId,
+32:  // Happy-path rendering may use the stored run_id; error builders must use safeFormatRunId.
+36:function safeFormatRunId(record) {
+49:    return `${safeFormatRunId(record)} (state=${state}, pr=${storedPr})`;
+179:  const runId = safeFormatRunId(record);
+258:    `The terminal sibling ${JSON.stringify(safeFormatRunId(terminalCandidate))} is already ${terminalState}, ` +
+260:    `The ${freshState} sibling ${JSON.stringify(safeFormatRunId(freshCandidate))} does not carry the caller PR. ` +
+417:  safeFormatRunId,
 
 $ grep -n "module.exports" skills/relay-dispatch/scripts/relay-resolver.js -A 10
-480:module.exports = {
-481-  filterByBranch,
-482-  filterByPr,
-483-  findManifestByRunId,
-484-  hasStoredPrNumber,
-485-  resolveManifestRecord,
-486-  safeFormatRunId,
-487-};
+411:module.exports = {
+412-  filterByBranch,
+413-  filterByPr,
+414-  findManifestByRunId,
+415-  hasStoredPrNumber,
+416-  resolveManifestRecord,
+417-  safeFormatRunId,
+418-};
 
 $ grep -nE "data\.run_id\s*\|\|" skills/relay-dispatch/scripts/cleanup-worktrees.js
 
 $ grep -nE "\bdata\.run_id\b" skills/relay-dispatch/scripts/cleanup-worktrees.js
+98:        runId: data.run_id,
 
 $ grep -nE "\bdata\.run_id\b|\bdata\?\.run_id\b|\bmanifest\.run_id\b|\bupdated\.run_id\b|\bupdatedData\.run_id\b" skills/relay-dispatch/scripts/*.js | grep -v "\.test\.js"
-skills/relay-dispatch/scripts/cleanup-worktrees.js:136:      appendRunEvent(repoRoot, cleanupResult.updatedData.run_id, {
-skills/relay-dispatch/scripts/close-run.js:98:    appendRunEvent(repoRoot, updated.run_id, {
-skills/relay-dispatch/scripts/close-run.js:106:    appendRunEvent(repoRoot, updated.run_id, {
-skills/relay-dispatch/scripts/close-run.js:120:    runId: updated.run_id,
-skills/relay-dispatch/scripts/dispatch.js:454:    runId = manifest.run_id || runId;
-skills/relay-dispatch/scripts/relay-manifest.js:396:    : data?.run_id;
-skills/relay-dispatch/scripts/relay-resolver.js:54:  return record?.data?.run_id || formatManifestBasename(record);
-skills/relay-dispatch/scripts/relay-resolver.js:58:  const validation = validateRunId(record?.data?.run_id);
-skills/relay-dispatch/scripts/relay-resolver.js:252:  const validation = validateRunId(record?.data?.run_id);
-skills/relay-dispatch/scripts/relay-resolver.js:318:      data?.run_id === normalizedRunId
-skills/relay-dispatch/scripts/reliability-report.js:207:      .filter((manifest) => manifest?.data?.run_id)
-skills/relay-dispatch/scripts/reliability-report.js:208:      .map((manifest) => [manifest.data.run_id, manifest.data])
-skills/relay-dispatch/scripts/reliability-report.js:387:    reviewRuns.set(manifest.data.run_id, Number(manifest.data.review?.max_rounds || 20));
-skills/relay-dispatch/scripts/reliability-report.js:441:        .map(({ data }) => data?.run_id)
+skills/relay-dispatch/scripts/cleanup-worktrees.js:98:        runId: data.run_id,
+skills/relay-dispatch/scripts/cleanup-worktrees.js:159:      appendRunEvent(repoRoot, cleanupResult.updatedData.run_id, {
+skills/relay-dispatch/scripts/close-run.js:64:    runId: data.run_id,
+skills/relay-dispatch/scripts/close-run.js:100:    appendRunEvent(repoRoot, updated.run_id, {
+skills/relay-dispatch/scripts/close-run.js:108:    appendRunEvent(repoRoot, updated.run_id, {
+skills/relay-dispatch/scripts/close-run.js:122:    runId: updated.run_id,
+skills/relay-dispatch/scripts/dispatch.js:439:      runId: manifest.run_id || runId,
+skills/relay-dispatch/scripts/dispatch.js:445:    runId = manifest.run_id || runId;
+skills/relay-dispatch/scripts/recover-state.js:165:    runId: data.run_id,
+skills/relay-dispatch/scripts/recover-state.js:209:    appendRunEvent(repoRoot, updated.run_id, {
+skills/relay-dispatch/scripts/recover-state.js:222:    runId: updated.run_id,
+skills/relay-dispatch/scripts/relay-resolver.js:33:  return record?.data?.run_id || formatManifestBasename(record);
+skills/relay-dispatch/scripts/relay-resolver.js:37:  const validation = validateRunId(record?.data?.run_id);
+skills/relay-dispatch/scripts/relay-resolver.js:208:  const validation = validateRunId(record?.data?.run_id);
+skills/relay-dispatch/scripts/relay-resolver.js:270:      data?.run_id === normalizedRunId
+skills/relay-dispatch/scripts/reliability-report.js:198:      .filter((manifest) => manifest?.data?.run_id)
+skills/relay-dispatch/scripts/reliability-report.js:199:      .map((manifest) => [manifest.data.run_id, manifest.data])
+skills/relay-dispatch/scripts/reliability-report.js:378:    reviewRuns.set(manifest.data.run_id, Number(manifest.data.review?.max_rounds || 20));
+skills/relay-dispatch/scripts/reliability-report.js:432:        .map(({ data }) => data?.run_id)
 ```
 
 ## Scope / Out Of Scope

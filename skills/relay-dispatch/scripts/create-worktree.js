@@ -37,12 +37,17 @@ const {
   formatPlan,
   registerWorktree,
 } = require("./worktree-runtime");
+const { getArg, hasFlag } = require("./cli-args");
 
 // ---------------------------------------------------------------------------
 // Args
 // ---------------------------------------------------------------------------
 
 const args = process.argv.slice(2);
+const KNOWN_FLAGS = [
+  "--branch", "-b", "--title", "-t", "--topic", "--worktree-path", "--copy",
+  "--pin", "--register", "--dry-run", "--json", "--help", "-h",
+];
 if (!args.length || args.includes("--help") || args.includes("-h")) {
   console.log(
     "Usage: create-worktree.js <repo-path> [--branch <name>] [--title <text>]"
@@ -54,36 +59,27 @@ if (!args.length || args.includes("--help") || args.includes("-h")) {
   process.exit(args.includes("--help") || args.includes("-h") ? 0 : 1);
 }
 
-const KNOWN_FLAGS = ["--branch", "-b", "--title", "-t", "--topic", "--worktree-path", "--copy", "--pin", "--register", "--dry-run", "--json", "--help", "-h"];
-function getArg(flags, fallback) {
-  for (const flag of Array.isArray(flags) ? flags : [flags]) {
-    const idx = args.indexOf(flag);
-    if (idx !== -1 && idx + 1 < args.length && !KNOWN_FLAGS.includes(args[idx + 1])) {
-      return args[idx + 1];
-    }
-  }
-  return fallback;
-}
-const hasFlag = (f) => args.includes(f);
-
 const repoPathRaw = args.find((a) => !a.startsWith("-"));
 const REPO_PATH = path.resolve(repoPathRaw || ".");
 const PROJECT_NAME = path.basename(REPO_PATH);
-const TOPIC = getArg("--topic", undefined);
-const BRANCH = getArg(["--branch", "-b"], TOPIC ? `codex/${TOPIC}` : undefined);
+const CLI_ARG_OPTIONS = { reservedFlags: KNOWN_FLAGS };
+const TOPIC = getArg(args, "--topic", undefined, CLI_ARG_OPTIONS);
+const BRANCH = getArg(args, ["--branch", "-b"], TOPIC ? `codex/${TOPIC}` : undefined, CLI_ARG_OPTIONS);
 const TITLE = getArg(
+  args,
   ["--title", "-t"],
-  BRANCH ? `Worktree: ${BRANCH}` : `Worktree: ${PROJECT_NAME}`
+  BRANCH ? `Worktree: ${BRANCH}` : `Worktree: ${PROJECT_NAME}`,
+  CLI_ARG_OPTIONS
 );
-const WORKTREE_PATH = getArg("--worktree-path", undefined);
-const COPY_FILES = getArg("--copy", "")
+const WORKTREE_PATH = getArg(args, "--worktree-path", undefined, CLI_ARG_OPTIONS);
+const COPY_FILES = getArg(args, "--copy", "", CLI_ARG_OPTIONS)
   .split(",")
   .filter(Boolean);
-const PIN = hasFlag("--pin");
+const PIN = hasFlag(args, "--pin");
 // --worktree-path implies --register (the only reason to use it)
-const REGISTER = hasFlag("--register") || !!WORKTREE_PATH;
-const DRY_RUN = hasFlag("--dry-run");
-const JSON_OUT = hasFlag("--json");
+const REGISTER = hasFlag(args, "--register") || !!WORKTREE_PATH;
+const DRY_RUN = hasFlag(args, "--dry-run");
+const JSON_OUT = hasFlag(args, "--json");
 
 // ---------------------------------------------------------------------------
 // Paths
