@@ -558,6 +558,30 @@ test("updateManifestState allows valid transitions and rejects invalid ones", ()
   );
 });
 
+test("forceTransitionState bypasses ALLOWED_TRANSITIONS but keeps enum + invariant checks", () => {
+  const { forceTransitionState } = require("./relay-manifest");
+  const manifest = {
+    state: STATES.CHANGES_REQUESTED,
+    next_action: "await_redispatch",
+    timestamps: { created_at: "2026-04-17T13:00:00Z", updated_at: "2026-04-17T13:00:00Z" },
+  };
+
+  // changes_requested -> review_pending is NOT in ALLOWED_TRANSITIONS but forceTransitionState allows it.
+  const recovered = forceTransitionState(manifest, STATES.REVIEW_PENDING, "run_review");
+  assert.equal(recovered.state, STATES.REVIEW_PENDING);
+  assert.equal(recovered.next_action, "run_review");
+
+  // Unknown state values are still rejected (enum check preserved).
+  assert.throws(
+    () => forceTransitionState(manifest, "not_a_state", "???"),
+    /Unknown relay state/
+  );
+  assert.throws(
+    () => forceTransitionState({ ...manifest, state: "bogus" }, STATES.REVIEW_PENDING, "run_review"),
+    /Unknown relay state/
+  );
+});
+
 test("updateManifestState rejects dispatched -> review_pending when anchor.rubric_path is missing", () => {
   const manifest = {
     run_id: "issue-42-20260412000000000",
