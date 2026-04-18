@@ -97,11 +97,6 @@ test("verdict/validateIssue preserves the malformed-field matrix", async (t) => 
       issue: makeIssue({ line: 0 }),
       expected: /issues\[0\]\.line must be a positive integer/,
     },
-    {
-      label: "unexpected key",
-      issue: { ...makeIssue(), extra: true },
-      expected: /issues\[0\] has unexpected keys: extra/,
-    },
   ];
 
   for (const { label, issue, expected } of cases) {
@@ -153,11 +148,6 @@ test("verdict/validateRubricScore preserves the validation matrix", async (t) =>
       score: makeRubricScore({ tier: "style" }),
       expected: /rubric_scores\[0\]\.tier must be one of: contract, quality/,
     },
-    {
-      label: "unexpected key",
-      score: { ...makeRubricScore(), extra: true },
-      expected: /rubric_scores\[0\] has unexpected keys: extra/,
-    },
   ];
 
   for (const { label, score, expected } of cases) {
@@ -167,11 +157,30 @@ test("verdict/validateRubricScore preserves the validation matrix", async (t) =>
   }
 });
 
-test("verdict/validateReviewVerdict rejects stray top-level keys", () => {
-  assert.throws(
-    () => validateReviewVerdict({ ...makePassVerdict(), stray: true }),
-    /Review verdict has unexpected keys: stray/
-  );
+test("verdict validation preserves pre-split tolerance for extra keys", () => {
+  const issue = { ...makeIssue(), extra: true };
+  const score = { ...makeRubricScore(), extra: true };
+  const scopeDrift = {
+    creep: [{ file: "a.js", reason: "extra work", stray: true }],
+    missing: [{ criteria: "Ship feature", status: "verified", stray: true }],
+    extra: true,
+  };
+  const verdict = validateReviewVerdict({
+    ...makePassVerdict(),
+    issues: [],
+    rubric_scores: [score],
+    scope_drift: scopeDrift,
+    stray: true,
+  });
+
+  assert.equal(validateIssue(issue, 0), undefined);
+  assert.equal(validateRubricScore(score, 0), undefined);
+  assert.equal(validateScopeDrift(scopeDrift), undefined);
+  assert.equal(verdict.stray, true);
+  assert.equal(verdict.rubric_scores[0].extra, true);
+  assert.equal(verdict.scope_drift.extra, true);
+  assert.equal(verdict.scope_drift.creep[0].stray, true);
+  assert.equal(verdict.scope_drift.missing[0].stray, true);
 });
 
 test("verdict/validateReviewVerdict rejects PASS with issues", () => {
@@ -208,28 +217,4 @@ test("verdict/validateScopeDrift rejects missing status entries", () => {
     creep: [],
     missing: [{ criteria: "Ship feature" }],
   }), /scope_drift\.missing\[0\]\.status/i);
-});
-
-test("verdict/validateScopeDrift rejects stray keys on nested entries", async (t) => {
-  await t.test("scope_drift root", () => {
-    assert.throws(() => validateScopeDrift({
-      creep: [],
-      missing: [],
-      stray: true,
-    }), /scope_drift has unexpected keys: stray/);
-  });
-
-  await t.test("scope_drift creep entry", () => {
-    assert.throws(() => validateScopeDrift({
-      creep: [{ file: "a.js", reason: "extra work", stray: true }],
-      missing: [],
-    }), /scope_drift\.creep\[0\] has unexpected keys: stray/);
-  });
-
-  await t.test("scope_drift missing entry", () => {
-    assert.throws(() => validateScopeDrift({
-      creep: [],
-      missing: [{ criteria: "Ship feature", status: "verified", stray: true }],
-    }), /scope_drift\.missing\[0\] has unexpected keys: stray/);
-  });
 });

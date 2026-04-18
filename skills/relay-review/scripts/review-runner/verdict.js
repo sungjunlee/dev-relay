@@ -7,23 +7,6 @@ const ALLOWED_SCORE_TIERS = new Set(["contract", "quality"]);
 const ALLOWED_DRIFT_STATUSES = new Set(
   REVIEW_VERDICT_JSON_SCHEMA.properties.scope_drift.properties.missing.items.properties.status.enum
 );
-const REVIEW_VERDICT_KEYS = Object.keys(REVIEW_VERDICT_JSON_SCHEMA.properties);
-const ISSUE_KEYS = Object.keys(REVIEW_VERDICT_JSON_SCHEMA.properties.issues.items.properties);
-const RUBRIC_SCORE_KEYS = Object.keys(REVIEW_VERDICT_JSON_SCHEMA.properties.rubric_scores.items.properties);
-const SCOPE_DRIFT_KEYS = Object.keys(REVIEW_VERDICT_JSON_SCHEMA.properties.scope_drift.properties);
-const SCOPE_CREEP_KEYS = Object.keys(
-  REVIEW_VERDICT_JSON_SCHEMA.properties.scope_drift.properties.creep.items.properties
-);
-const SCOPE_MISSING_KEYS = Object.keys(
-  REVIEW_VERDICT_JSON_SCHEMA.properties.scope_drift.properties.missing.items.properties
-);
-
-function validateNoUnexpectedKeys(value, location, allowedKeys) {
-  const unexpectedKeys = Object.keys(value).filter((key) => !allowedKeys.includes(key));
-  if (unexpectedKeys.length > 0) {
-    throw new Error(`${location} has unexpected keys: ${unexpectedKeys.join(", ")}`);
-  }
-}
 
 function parseReviewVerdict(text) {
   let parsed;
@@ -40,7 +23,6 @@ function validateIssue(issue, index) {
   if (!issue || typeof issue !== "object" || Array.isArray(issue)) {
     throw new Error(`${location} must be an object`);
   }
-  validateNoUnexpectedKeys(issue, location, ISSUE_KEYS);
   for (const key of ["title", "body", "file", "category", "severity"]) {
     if (!String(issue[key] || "").trim()) {
       throw new Error(`${location}.${key} is required`);
@@ -56,7 +38,6 @@ function validateRubricScore(score, index) {
   if (!score || typeof score !== "object" || Array.isArray(score)) {
     throw new Error(`${location} must be an object`);
   }
-  validateNoUnexpectedKeys(score, location, RUBRIC_SCORE_KEYS);
   for (const key of ["factor", "target", "observed", "notes"]) {
     if (!String(score[key] || "").trim()) {
       throw new Error(`${location}.${key} is required`);
@@ -77,7 +58,6 @@ function validateScopeDrift(scopeDrift) {
   if (!scopeDrift || typeof scopeDrift !== "object" || Array.isArray(scopeDrift)) {
     throw new Error("scope_drift must be an object with creep and missing arrays");
   }
-  validateNoUnexpectedKeys(scopeDrift, "scope_drift", SCOPE_DRIFT_KEYS);
   if (!Array.isArray(scopeDrift.creep)) {
     throw new Error("scope_drift.creep must be an array");
   }
@@ -88,7 +68,6 @@ function validateScopeDrift(scopeDrift) {
     if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
       throw new Error(`scope_drift.creep[${index}] must be an object`);
     }
-    validateNoUnexpectedKeys(entry, `scope_drift.creep[${index}]`, SCOPE_CREEP_KEYS);
     if (!String(entry.file || "").trim()) throw new Error(`scope_drift.creep[${index}].file is required`);
     if (!String(entry.reason || "").trim()) throw new Error(`scope_drift.creep[${index}].reason is required`);
   });
@@ -96,7 +75,6 @@ function validateScopeDrift(scopeDrift) {
     if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
       throw new Error(`scope_drift.missing[${index}] must be an object`);
     }
-    validateNoUnexpectedKeys(entry, `scope_drift.missing[${index}]`, SCOPE_MISSING_KEYS);
     if (!String(entry.criteria || "").trim()) throw new Error(`scope_drift.missing[${index}].criteria is required`);
     if (!ALLOWED_DRIFT_STATUSES.has(entry.status)) {
       throw new Error(`scope_drift.missing[${index}].status must be one of: ${Array.from(ALLOWED_DRIFT_STATUSES).join(", ")}`);
@@ -108,7 +86,6 @@ function validateReviewVerdict(data) {
   if (!data || typeof data !== "object" || Array.isArray(data)) {
     throw new Error("Review verdict must be a JSON object");
   }
-  validateNoUnexpectedKeys(data, "Review verdict", REVIEW_VERDICT_KEYS);
 
   if (!ALLOWED_VERDICTS.has(data.verdict)) {
     throw new Error(`Invalid review verdict: ${data.verdict}`);
