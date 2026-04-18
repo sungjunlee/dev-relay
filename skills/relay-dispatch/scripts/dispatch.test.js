@@ -963,7 +963,21 @@ setTimeout(() => {}, 60000);
 
   assert.equal(result.status, "completed-with-warning");
   assert.equal(result.runState, STATES.REVIEW_PENDING);
+  assert.equal(result.prNumber, 123);
+  assert.equal(result.prCreatedByUs, true);
   assert.match(result.error, /timed out/);
+
+  const remoteBranch = execFileSync("git", ["ls-remote", "--heads", "origin", "issue-timeout-work"], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+  }).trim();
+  assert.match(remoteBranch, /\brefs\/heads\/issue-timeout-work$/);
+
+  const manifest = readManifest(result.manifestPath).data;
+  assert.equal(manifest.git.pr_number, 123);
+  assert.equal(manifest.github.pr_number, 123);
+  assert.equal(manifest.github.pr_created_by_orchestrator, true);
 });
 
 test("timeout without commits produces failed", () => {

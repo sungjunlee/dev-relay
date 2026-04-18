@@ -906,7 +906,7 @@ async function main() {
 
   let prNumber = manifest.git?.pr_number ?? manifest.github?.pr_number ?? null;
   let prCreatedByUs = null;
-  if (status === "completed" && !DRY_RUN && gitLog) {
+  if ((status === "completed" || status === "completed-with-warning") && !DRY_RUN && gitLog) {
     try {
       const prResult = await pushAndOpenPR({
         repoRoot,
