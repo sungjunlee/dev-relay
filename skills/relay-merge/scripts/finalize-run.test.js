@@ -22,7 +22,6 @@ const SCRIPT = path.join(__dirname, "finalize-run.js");
 function setupRepo({
   dirtyWorktree = false,
   enforcementState = "loaded",
-  grandfather = false,
 } = {}) {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-finalize-"));
   process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
@@ -72,7 +71,6 @@ function setupRepo({
     repoRoot,
     runId,
     state: enforcementState,
-    grandfather,
   }).anchor;
   manifest = updateManifestState(manifest, STATES.REVIEW_PENDING, "run_review");
   manifest = updateManifestState(manifest, STATES.READY_TO_MERGE, "await_explicit_merge");
@@ -220,17 +218,19 @@ if (args[0] === "pr" && args[1] === "view") {
 
 function runFinalizeSkipReview({
   enforcementState = "loaded",
-  grandfather = false,
+  rubricGrandfathered = undefined,
   reason = "hotfix",
 } = {}) {
   const fixture = setupRepo();
-  if (enforcementState !== "loaded" || grandfather) {
+  if (enforcementState !== "loaded" || rubricGrandfathered !== undefined) {
     createEnforcementFixture({
       repoRoot: fixture.repoRoot,
       runId: fixture.runId,
       manifestPath: fixture.manifestPath,
       state: enforcementState,
-      grandfather,
+      anchorOverrides: rubricGrandfathered === undefined
+        ? {}
+        : { rubric_grandfathered: rubricGrandfathered },
     });
   }
   const logPath = path.join(fixture.repoRoot, "gh.log");
@@ -1037,18 +1037,51 @@ test("finalize-run skip-review journals rubric_status: persisted", () => {
   assert.equal(skipEvent?.rubric_status, "persisted");
 });
 
-test("finalize-run skip-review journals rubric_status: grandfathered", () => {
-  const { result, events, logPath } = runFinalizeSkipReview({ grandfather: true });
-  const skipEvent = events.find((entry) => entry.event === "skip_review");
-  const ghLog = fs.readFileSync(logPath, "utf-8");
+test("finalize-run skip-review blocks legacy_grandfather_field instead of merging", () => {
+  const fixture = setupRepo();
+  createEnforcementFixture({
+    repoRoot: fixture.repoRoot,
+    runId: fixture.runId,
+    manifestPath: fixture.manifestPath,
+    state: "loaded",
+    anchorOverrides: { rubric_grandfathered: true },
+  });
+  const logPath = path.join(fixture.repoRoot, "gh.log");
+  const fakeGh = writeFakeGh(logPath, {
+    comments: [],
+    commits: [
+      {
+        oid: fixture.headSha,
+        committedDate: "2026-04-03T08:00:00Z",
+      },
+    ],
+  });
 
-  assert.equal(result.state, STATES.MERGED);
-  assert.equal(result.reviewGate.status, "skipped");
-  assert.equal(result.reviewGate.rubricStatus, "grandfathered");
-  assert.equal(skipEvent?.rubric_status, "grandfathered");
-  assert.match(ghLog, /rubric_grandfathered\.from_migration: rubric-mandatory\.yaml/);
-  assert.match(ghLog, /rubric_grandfathered\.applied_at:/);
-  assert.match(ghLog, /rubric_grandfathered\.actor:/);
+  assert.throws(() => execFileSync("node", [
+    SCRIPT,
+    "--repo", fixture.repoRoot,
+    "--branch", fixture.branch,
+    "--pr", "123",
+    "--skip-review", "hotfix",
+    "--json",
+  ], {
+    cwd: fixture.repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+    env: { ...process.env, RELAY_GH_BIN: fakeGh },
+  }), /Fresh review gate failed: unsupported_grandfather_field/);
+
+  const manifest = readManifest(fixture.manifestPath).data;
+  const events = readRunEvents(fixture.repoRoot, fixture.runId);
+  const skipEvent = events.find((entry) => entry.event === "skip_review");
+  const mergeBlockedEvent = events.find((entry) => entry.event === "merge_blocked");
+  const ghLog = fs.existsSync(logPath) ? fs.readFileSync(logPath, "utf-8") : "";
+
+  assert.equal(manifest.state, STATES.READY_TO_MERGE);
+  assert.equal(skipEvent, undefined);
+  assert.equal(mergeBlockedEvent?.reason, "unsupported_grandfather_field");
+  assert.doesNotMatch(ghLog, /rubric_status: legacy_grandfather_field/);
+  assert.doesNotMatch(ghLog, /rubric_grandfathered\./);
 });
 
 test("finalize-run skip-review with a missing rubric merges and records rubric_status: missing in comment and events", () => {

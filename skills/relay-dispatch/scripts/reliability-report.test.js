@@ -19,10 +19,6 @@ const {
   appendRunEvent,
   appendScoreDivergence,
 } = require("./relay-events");
-const {
-  createGrandfatheredRubricAnchor,
-  registerGrandfatheredRubricMigration,
-} = require("./test-support");
 
 const SCRIPT = path.join(__dirname, "reliability-report.js");
 
@@ -55,13 +51,8 @@ function writeRun(repoRoot, { runId, state, rounds, updatedAt }) {
   });
   manifest = updateManifestState(manifest, STATES.DISPATCHED, "await_dispatch_result");
   if (state !== STATES.DISPATCHED) {
-    manifest.anchor.rubric_grandfathered = createGrandfatheredRubricAnchor({
-      actor: "reliability-report-test",
-    });
-    registerGrandfatheredRubricMigration(runId, {
-      applied_at: manifest.anchor.rubric_grandfathered.applied_at,
-      reason: manifest.anchor.rubric_grandfathered.reason,
-    });
+    manifest.anchor.rubric_path = "rubric.yaml";
+    fs.writeFileSync(path.join(ensureRunLayout(repoRoot, runId).runDir, "rubric.yaml"), "rubric:\n  factors:\n    - name: reliability-report\n", "utf-8");
     manifest = updateManifestState(manifest, STATES.REVIEW_PENDING, "run_review");
   }
   if (state === STATES.READY_TO_MERGE || state === STATES.MERGED) {
