@@ -516,8 +516,23 @@ function buildRoleReports({ repoRoot, staleHours, now, manifests, events }) {
   }));
 }
 
+// `review_apply` events without a `reviewer` field are system-emitted state
+// transitions (e.g., review-runner.js's `max_rounds_exceeded` escalation), not
+// rounds any reviewer actually performed. Filtering them here prevents phantom
+// round counts in the "unknown" bucket. Runs whose only review_apply events
+// lack a reviewer still surface as data-integrity signals via
+// `summary.missing_review_apply_run_ids` (since `hasRecordedReviewActivity`
+// will report the run as missing reviewer-tagged events). Events that carry
+// an explicit but empty/whitespace reviewer fall through to
+// `normalizeRoleName` and land in "unknown" so real corrupt-value cases stay
+// visible.
 function buildActingReviewerReports({ repoRoot, staleHours, now, manifests, events }) {
-  const reviewApplyEvents = events.filter((event) => event.event === "review_apply" && event.run_id);
+  const reviewApplyEvents = events.filter((event) => (
+    event.event === "review_apply"
+    && event.run_id
+    && event.reviewer !== undefined
+    && event.reviewer !== null
+  ));
   const buckets = new Map();
   const reviewersByRun = new Map();
 

@@ -879,3 +879,111 @@ test("reliability-report keeps missing acting reviewer data explicit in text out
   assert.match(stdout, /summary: review_apply_events=1 review_apply_runs=1 multi_reviewer_runs=0 missing_review_apply_runs=1/);
   assert.match(stdout, new RegExp(`missing_review_apply_run_ids: ${runMissingReviewApply}`));
 });
+
+test("reliability-report --by-acting-reviewer skips system-emitted review_apply events with no reviewer field", () => {
+  // review-runner.js emits `review_apply` with no reviewer field on the
+  // `max_rounds_exceeded` escalation path. Counting those as rounds performed
+  // by an "unknown" reviewer inflates phantom counts on every escalated run.
+  // The aggregator must treat missing-reviewer events as system transitions
+  // and surface affected runs via `missing_review_apply_run_ids` instead.
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-report-acting-system-emitted-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  initGitRepo(repoRoot, "Relay Test");
+  const recentTs = new Date(Date.now() - 1 * 60 * 60 * 1000).toISOString();
+  const runEscalated = createRunId({ branch: "run-escalated", timestamp: new Date("2026-04-12T09:00:00.000Z") });
+  const runNormal = createRunId({ branch: "run-normal", timestamp: new Date("2026-04-12T09:00:01.000Z") });
+
+  writeRun(repoRoot, {
+    runId: runEscalated,
+    state: STATES.ESCALATED,
+    rounds: 20,
+    updatedAt: recentTs,
+    reviewer: "codex",
+    lastReviewedSha: "escalated111",
+  });
+  writeRun(repoRoot, {
+    runId: runNormal,
+    state: STATES.CHANGES_REQUESTED,
+    rounds: 1,
+    updatedAt: recentTs,
+    reviewer: "codex",
+    lastReviewedSha: "normal111",
+  });
+
+  // Simulates review-runner.js:149 — no `reviewer` field.
+  appendRunEvent(repoRoot, runEscalated, {
+    event: "review_apply",
+    state_from: STATES.REVIEW_PENDING,
+    state_to: STATES.ESCALATED,
+    round: 20,
+    reason: "max_rounds_exceeded",
+  });
+  appendRunEvent(repoRoot, runNormal, {
+    event: "review_apply",
+    state_from: STATES.REVIEW_PENDING,
+    state_to: STATES.CHANGES_REQUESTED,
+    round: 1,
+    reviewer: "codex",
+    reason: "changes_requested",
+  });
+
+  const stdout = execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--json",
+    "--by-acting-reviewer",
+  ], { encoding: "utf-8" });
+  const report = JSON.parse(stdout);
+
+  // No "unknown" bucket — the reviewer-less event was skipped.
+  assert.deepEqual(Object.keys(report.by_acting_reviewer.reviewers).sort(), ["codex"]);
+  assert.equal(report.by_acting_reviewer.reviewers.codex.acting_review.review_apply_events, 1);
+  assert.equal(report.by_acting_reviewer.reviewers.codex.acting_review.review_apply_runs, 1);
+
+  // Escalated run surfaces as a missing_review_apply_run (data-integrity signal).
+  assert.equal(report.by_acting_reviewer.summary.review_apply_events, 1);
+  assert.equal(report.by_acting_reviewer.summary.review_apply_runs, 1);
+  assert.equal(report.by_acting_reviewer.summary.missing_review_apply_runs, 1);
+  assert.deepEqual(report.by_acting_reviewer.summary.missing_review_apply_run_ids, [runEscalated]);
+});
+
+test("reliability-report --by-acting-reviewer still routes explicit-but-empty reviewer to unknown bucket", () => {
+  // Distinction vs system-emitted events: if the event carries a reviewer
+  // field with a corrupt/whitespace value, we DO bucket it (as "unknown") so
+  // data-integrity issues remain visible rather than being silently dropped.
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-report-acting-empty-reviewer-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  initGitRepo(repoRoot, "Relay Test");
+  const recentTs = new Date(Date.now() - 1 * 60 * 60 * 1000).toISOString();
+  const runCorrupt = createRunId({ branch: "run-corrupt", timestamp: new Date("2026-04-12T09:15:00.000Z") });
+
+  writeRun(repoRoot, {
+    runId: runCorrupt,
+    state: STATES.CHANGES_REQUESTED,
+    rounds: 1,
+    updatedAt: recentTs,
+    reviewer: "codex",
+    lastReviewedSha: "corrupt111",
+  });
+
+  appendRunEvent(repoRoot, runCorrupt, {
+    event: "review_apply",
+    state_from: STATES.REVIEW_PENDING,
+    state_to: STATES.CHANGES_REQUESTED,
+    round: 1,
+    reviewer: "   ",
+    reason: "changes_requested",
+  });
+
+  const stdout = execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--json",
+    "--by-acting-reviewer",
+  ], { encoding: "utf-8" });
+  const report = JSON.parse(stdout);
+
+  assert.deepEqual(Object.keys(report.by_acting_reviewer.reviewers), ["unknown"]);
+  assert.equal(report.by_acting_reviewer.reviewers.unknown.acting_review.review_apply_events, 1);
+  assert.equal(report.by_acting_reviewer.summary.missing_review_apply_runs, 0);
+});
