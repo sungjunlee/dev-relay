@@ -48,6 +48,9 @@ function appendRunEvent(repoRoot, runId, eventData) {
     head_sha: normalizeEventValue(eventData.head_sha),
     round: normalizeEventValue(eventData.round),
     reason: normalizeEventValue(eventData.reason),
+    ...(eventData.reviewer !== undefined
+      ? { reviewer: normalizeEventValue(eventData.reviewer) }
+      : {}),
     ...(eventData.rubric_status !== undefined
       ? { rubric_status: normalizeEventValue(eventData.rubric_status) }
       : {}),

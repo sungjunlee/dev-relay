@@ -305,6 +305,13 @@ function run() {
     repeatedIssueCount,
     { rubricGateFailure }
   );
+  updatedManifest = {
+    ...updatedManifest,
+    review: {
+      ...(updatedManifest.review || {}),
+      last_reviewer: reviewerName,
+    },
+  };
   updatedManifest = applyReviewerIdentity(updatedManifest, noComment, runRepoPath);
   writeManifest(manifestPath, updatedManifest, body);
   appendRunEvent(runRepoPath, data.run_id, {
@@ -313,6 +320,7 @@ function run() {
     state_to: updatedManifest.state,
     head_sha: reviewedHeadSha,
     round,
+    reviewer: reviewerName,
     reason: rubricGateFailure ? rubricGateFailure.status : verdict.verdict,
   });
 
