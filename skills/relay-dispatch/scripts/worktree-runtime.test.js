@@ -7,6 +7,7 @@ const path = require("path");
 
 const {
   createWorktree,
+  formatDispatchDryRun,
   formatPlan,
   removeWorktree,
 } = require("./worktree-runtime");
@@ -36,6 +37,31 @@ test("formatPlan matches the frozen create-worktree text fixture", () => {
     includeFiles: [],
   });
   const expected = fs.readFileSync(path.join(FIXTURE_DIR, "create-dry-run.txt"), "utf-8").trimEnd();
+  assert.equal(actual, expected);
+});
+
+test("formatDispatchDryRun matches the frozen dispatch text fixture", () => {
+  const actual = formatDispatchDryRun({
+    runId: "test-branch-20260418005000000-22222222",
+    mode: "new",
+    executor: "codex",
+    repoRoot: "/tmp/issue187-fixtures/repo",
+    manifestPath: "/tmp/issue187-fixtures/relay-home/runs/repo-c079affd/test-branch-20260418005000000-22222222.md",
+    prompt: "task",
+    model: null,
+    sandbox: "workspace-write",
+    register: false,
+    resultFile: "/tmp/issue187-fixtures/tmp/dispatch-codex-11111111.txt",
+    cleanupPolicy: "on_close",
+    timeout: 1800,
+    rubricFile: "/tmp/issue187-fixtures/rubric.yaml",
+    worktreePlan: {
+      worktree: "/tmp/issue187-fixtures/relay-home/worktrees/11111111/repo",
+      branch: "test-branch",
+      worktreeinclude: [],
+    },
+  });
+  const expected = fs.readFileSync(path.join(FIXTURE_DIR, "dispatch-dry-run.txt"), "utf-8").trimEnd();
   assert.equal(actual, expected);
 });
 

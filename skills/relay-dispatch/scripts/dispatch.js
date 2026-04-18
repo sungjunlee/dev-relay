@@ -56,6 +56,7 @@ const crypto = require("crypto");
 const os = require("os");
 const {
   createWorktree,
+  formatDispatchDryRun,
   registerWorktree,
   removeWorktree,
 } = require("./worktree-runtime");
@@ -576,39 +577,26 @@ async function main() {
     if (JSON_OUT) {
       console.log(JSON.stringify(plan, null, 2));
     } else {
-      console.log(`  Run:      ${runId}`);
-      console.log("Dry run:");
-      console.log(`  Mode:     ${RESUME_MODE ? "resume" : "new"}`);
-      console.log(`  Executor: ${EXECUTOR}`);
-      console.log(`  Repo:     ${repoRoot}`);
-      console.log(`  Worktree: ${wtPath}`);
-      console.log(`  Branch:   ${branch}`);
-      console.log(`  Manifest: ${manifestPath}`);
-      console.log(`  Prompt:   ${taskPrompt.slice(0, 80)}...`);
-      console.log(`  Model:    ${MODEL || "(default)"}`);
-      console.log(`  Sandbox:  ${SANDBOX}`);
-      console.log(`  Register: ${REGISTER}`);
-      console.log(`  Result:   ${resultFile}`);
-      console.log(`  Cleanup:  ${cleanupPolicy}`);
-      console.log(`  Timeout:  ${TIMEOUT}s`);
-      if (RUBRIC_FILE) {
-        console.log(`  Rubric:   ${RUBRIC_FILE}`);
-      }
-      if (isRubricGrandfathered(manifest)) {
-        console.log("  Rubric:   grandfathered pre-change run");
-      }
-      if (REQUEST_ID || manifest?.source?.request_id) {
-        console.log(`  Request:  ${REQUEST_ID || manifest.source.request_id}`);
-      }
-      if (LEAF_ID || manifest?.source?.leaf_id) {
-        console.log(`  Leaf:     ${LEAF_ID || manifest.source.leaf_id}`);
-      }
-      if (resolvedDoneCriteriaPath || manifest?.anchor?.done_criteria_path) {
-        console.log(`  Done AC:  ${resolvedDoneCriteriaPath || manifest.anchor.done_criteria_path}`);
-      }
-      if (worktreePlan.worktreeinclude.length) {
-        console.log(`  .worktreeinclude: ${worktreePlan.worktreeinclude.join(", ")}`);
-      }
+      console.log(formatDispatchDryRun({
+        runId,
+        mode: RESUME_MODE ? "resume" : "new",
+        executor: EXECUTOR,
+        repoRoot,
+        manifestPath,
+        prompt: taskPrompt,
+        model: MODEL,
+        sandbox: SANDBOX,
+        register: REGISTER,
+        resultFile,
+        cleanupPolicy,
+        timeout: TIMEOUT,
+        rubricFile: RUBRIC_FILE || null,
+        rubricGrandfathered: isRubricGrandfathered(manifest),
+        requestId: REQUEST_ID || manifest?.source?.request_id || null,
+        leafId: LEAF_ID || manifest?.source?.leaf_id || null,
+        doneCriteriaFile: resolvedDoneCriteriaPath || manifest?.anchor?.done_criteria_path || null,
+        worktreePlan,
+      }));
     }
     return;
   }

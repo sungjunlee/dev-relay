@@ -22,6 +22,64 @@ function formatPlan({ worktreePath, branch, title, register, pin, includeFiles }
   return lines.join("\n");
 }
 
+function formatDispatchDryRun({
+  runId,
+  mode,
+  executor,
+  repoRoot,
+  manifestPath,
+  prompt,
+  model,
+  sandbox,
+  register,
+  resultFile,
+  cleanupPolicy,
+  timeout,
+  rubricFile = null,
+  rubricGrandfathered = false,
+  requestId = null,
+  leafId = null,
+  doneCriteriaFile = null,
+  worktreePlan,
+}) {
+  const lines = [
+    `  Run:      ${runId}`,
+    "Dry run:",
+    `  Mode:     ${mode}`,
+    `  Executor: ${executor}`,
+    `  Repo:     ${repoRoot}`,
+    `  Worktree: ${worktreePlan.worktree}`,
+    `  Branch:   ${worktreePlan.branch}`,
+    `  Manifest: ${manifestPath}`,
+    `  Prompt:   ${prompt.slice(0, 80)}...`,
+    `  Model:    ${model || "(default)"}`,
+    `  Sandbox:  ${sandbox}`,
+    `  Register: ${register}`,
+    `  Result:   ${resultFile}`,
+    `  Cleanup:  ${cleanupPolicy}`,
+    `  Timeout:  ${timeout}s`,
+  ];
+  if (rubricFile) {
+    lines.push(`  Rubric:   ${rubricFile}`);
+  }
+  if (rubricGrandfathered) {
+    lines.push("  Rubric:   grandfathered pre-change run");
+  }
+  if (requestId) {
+    lines.push(`  Request:  ${requestId}`);
+  }
+  if (leafId) {
+    lines.push(`  Leaf:     ${leafId}`);
+  }
+  if (doneCriteriaFile) {
+    lines.push(`  Done AC:  ${doneCriteriaFile}`);
+  }
+  if (worktreePlan.worktreeinclude.length) {
+    lines.push(`  .worktreeinclude: ${worktreePlan.worktreeinclude.join(", ")}`);
+  }
+  return lines.join("\n");
+}
+
 function removeWorktree({ repoRoot, worktreePath, dependencies = {} }) {
   const gitRunner = dependencies.gitRunner || git;
   try {
@@ -144,6 +202,7 @@ function createWorktree({
 
 module.exports = {
   createWorktree,
+  formatDispatchDryRun,
   formatPlan,
   registerWorktree,
   removeWorktree,
