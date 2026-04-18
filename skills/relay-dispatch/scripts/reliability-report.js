@@ -10,7 +10,7 @@ const args = process.argv.slice(2);
 const RESERVED = { reservedFlags: ["-h"] };
 
 if (hasFlag(args, ["--help", "-h"])) {
-  console.log("Usage: reliability-report.js [--repo <path>] [--stale-hours <hours>] [--json] [--by-actor] [--by-role]");
+  console.log("Usage: reliability-report.js [--repo <path>] [--stale-hours <hours>] [--json] [--by-actor] [--by-role] [--by-acting-reviewer]");
   process.exit(0);
 }
 
@@ -48,6 +48,10 @@ function normalizeActorName(value) {
 }
 
 function normalizeRoleName(value) {
+  return typeof value === "string" && value.trim() ? value.trim() : "unknown";
+}
+
+function normalizeActingReviewerName(value) {
   return typeof value === "string" && value.trim() ? value.trim() : "unknown";
 }
 
@@ -505,6 +509,55 @@ function buildRoleReports({ repoRoot, staleHours, now, manifests, events }) {
   }));
 }
 
+// Acting-reviewer analytics are derived from `review_apply` events (the actual
+// reviewer that executed a round), not from the assigned `roles.reviewer`
+// binding. A single run can appear under multiple acting reviewers if it was
+// reviewed by different agents across rounds; that's intentional so
+// override-heavy runs show up in every bucket they contributed to. Runs with
+// no `review_apply` events appear in no bucket; runs whose `review_apply`
+// events lack a `reviewer` field are bucketed under "unknown" rather than
+// silently attributed to the assigned reviewer.
+function buildActingReviewerReports({ repoRoot, staleHours, now, manifests, events }) {
+  const runsByReviewer = new Map();
+  const roundsByReviewer = new Map();
+
+  for (const event of events) {
+    if (event.event !== "review_apply" || !event.run_id) continue;
+    const reviewer = normalizeActingReviewerName(event.reviewer);
+    if (!runsByReviewer.has(reviewer)) {
+      runsByReviewer.set(reviewer, new Set());
+    }
+    runsByReviewer.get(reviewer).add(event.run_id);
+    roundsByReviewer.set(reviewer, (roundsByReviewer.get(reviewer) || 0) + 1);
+  }
+
+  if (runsByReviewer.size === 0) return {};
+
+  const manifestByRun = new Map(
+    manifests
+      .filter(({ data }) => data?.run_id)
+      .map((manifest) => [manifest.data.run_id, manifest])
+  );
+
+  const reviewerNames = [...runsByReviewer.keys()].sort((left, right) => left.localeCompare(right));
+  return Object.fromEntries(reviewerNames.map((reviewer) => {
+    const runIds = runsByReviewer.get(reviewer);
+    const scopedManifests = [...runIds]
+      .map((runId) => manifestByRun.get(runId))
+      .filter(Boolean);
+    const scopedEvents = events.filter((event) => runIds.has(event.run_id));
+    const scopedReport = buildReport({
+      repoRoot,
+      staleHours,
+      now,
+      manifests: scopedManifests,
+      events: scopedEvents,
+    });
+    scopedReport.review_rounds_performed = roundsByReviewer.get(reviewer) || 0;
+    return [reviewer, scopedReport];
+  }));
+}
+
 function main() {
   const repoRoot = path.resolve(getArg(args, "--repo", ".", RESERVED));
   const staleHours = parseHours(getArg(args, "--stale-hours", "72", RESERVED));
@@ -518,6 +571,9 @@ function main() {
   }
   if (hasFlag(args, "--by-role")) {
     report.by_role = buildRoleReports({ repoRoot, staleHours, now, manifests, events });
+  }
+  if (hasFlag(args, "--by-acting-reviewer")) {
+    report.by_acting_reviewer = buildActingReviewerReports({ repoRoot, staleHours, now, manifests, events });
   }
 
   if (hasFlag(args, "--json")) {
@@ -576,6 +632,20 @@ function main() {
           `most_stuck_factor=${scopedReport.factor_analysis.most_stuck_factor ?? "n/a"}`
         );
       }
+    }
+  }
+  if (hasFlag(args, "--by-acting-reviewer")) {
+    const reviewerEntries = Object.entries(report.by_acting_reviewer || {});
+    console.log("  by_acting_reviewer (source: review_apply events; assigned roles.reviewer is separate):");
+    if (reviewerEntries.length === 0) {
+      console.log("    n/a");
+    }
+    for (const [reviewer, scopedReport] of reviewerEntries) {
+      console.log(
+        `    ${reviewer}: runs=${scopedReport.totals.manifests} rounds_performed=${scopedReport.review_rounds_performed} ` +
+        `median_rounds_to_ready=${scopedReport.metrics.median_rounds_to_ready ?? "n/a"} ` +
+        `most_stuck_factor=${scopedReport.factor_analysis.most_stuck_factor ?? "n/a"}`
+      );
     }
   }
 }

@@ -404,9 +404,21 @@ Aggregate metrics from run history:
 ```bash
 node skills/relay-dispatch/scripts/reliability-report.js --repo .
 node skills/relay-dispatch/scripts/reliability-report.js --repo . --json
+node skills/relay-dispatch/scripts/reliability-report.js --repo . --by-role --json
+node skills/relay-dispatch/scripts/reliability-report.js --repo . --by-acting-reviewer --json
 ```
 
 Tracks: resume success rate, median review rounds, stale run count, terminal state distribution.
+
+**Assigned reviewer vs. acting reviewer.** `--by-role` groups by the immutable
+`roles.reviewer` manifest binding (who was assigned). `--by-acting-reviewer`
+groups by the `reviewer` field on `review_apply` events (who actually executed
+each round). Use `--by-acting-reviewer` to compare real Codex-vs-Claude reviewer
+execution, including override-heavy runs where acting reviewer differs from the
+assigned binding. A single run can appear under multiple acting reviewers if it
+was reviewed by different agents across rounds. Review events missing a
+`reviewer` field are bucketed under `"unknown"` rather than silently attributed
+to the assigned reviewer.
 
 ## Works With dev-backlog
 

@@ -205,3 +205,12 @@ roles: {
 ```
 
 At review time, `--reviewer` (or `RELAY_REVIEWER`) selects the acting reviewer for the round. The assigned `roles.reviewer` binding stays immutable; the acting reviewer is recorded in `review.last_reviewer` and the `review_apply` event payload.
+
+### Reliability slices: assigned vs. acting reviewer
+
+`reliability-report.js` exposes two separate reviewer views:
+
+- `--by-role` — groups runs by the assigned `roles.reviewer` binding (a manifest property). This answers "who was supposed to review?"
+- `--by-acting-reviewer` — groups runs by the `reviewer` field on `review_apply` events (derived from events, never from manifest role bindings). This answers "who actually reviewed, round by round?"
+
+The two slices are independent and never merged. A run whose assigned reviewer is `codex` but whose round-1 `review_apply` event carries `reviewer: "claude"` shows up under `by_role.reviewer.codex` *and* `by_acting_reviewer.claude`. Runs whose `review_apply` events lack a `reviewer` field are bucketed under `"unknown"` in the acting-reviewer slice rather than silently attributed to the assigned reviewer. Runs with zero `review_apply` events do not appear in the acting-reviewer slice at all.
