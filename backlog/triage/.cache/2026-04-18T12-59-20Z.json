@@ -1,0 +1,296 @@
+{
+  "generated": "2026-04-18T12:59:20.778Z",
+  "repo": "sungjunlee/dev-relay",
+  "config_path": "backlog/triage-config.yml",
+  "issues": [
+    {
+      "number": 228,
+      "title": "review-runner.js: emit reviewer field on max_rounds_exceeded review_apply events",
+      "body": "## Problem\n\n`review-runner.js:149` emits `review_apply` events on the `max_rounds_exceeded` escalation path without a `reviewer` field:\n\n\\`\\`\\`js\nappendRunEvent(runRepoPath, data.run_id, {\n  event: \\\"review_apply\\\",\n  state_from: data.state,\n  state_to: STATES.ESCALATED,\n  head_sha: reviewedHeadSha,\n  round: Number(data.review?.rounds || 0),\n  reason: \\\"max_rounds_exceeded\\\",\n});\n\\`\\`\\`\n\nThis is a system-forced state transition — no reviewer actually performed the round — but consumers can't tell that from the event shape alone. The current `max_rounds_exceeded` emission looks identical to a round that a reviewer genuinely ran.\n\n## Why this matters\n\nDiscovered during #224 via Codex adversarial review on PR #225. The initial acting-reviewer aggregator (PR #226) ran every `review_apply` event through `normalizeRoleName(event.reviewer)`, which coerced missing reviewer fields to `\\\"unknown\\\"`. Every escalated run phantom-inflated an \\\"unknown\\\" reviewer's round count.\n\nPR #227 patched the consumer: it now filters `reviewer === undefined || null` out of `reviewApplyEvents` and surfaces affected runs via `summary.missing_review_apply_run_ids`. That works, but:\n\n- The next analytics consumer will hit the same trap unless they also filter.\n- The event log is ambiguous about whether a review actually happened.\n- `review.last_reviewer` in the manifest may be stale when escalation fires.\n\n## Proposal\n\nMake the producer unambiguous. Either:\n\n- **A) Emit an explicit marker** — e.g., `reviewer: null` together with a new `origin: \\\"system\\\"` or `actor_type: \\\"system\\\"` discriminator on system-emitted transitions. Consumers decide what to do.\n- **B) Split event types** — emit a new event like `review_escalated` / `review_cap_exceeded` so `review_apply` is reserved for rounds a reviewer actually ran. Semantically cleanest; requires migration of any consumer that also looks at system transitions.\n\nA is minimal diff; B is the long-term clean shape.\n\n## Scope (this issue)\n\n- Decide A vs B\n- Update `review-runner.js` escalation path (single call site, review-runner.js:~149)\n- Update any consumer that previously relied on counting all `review_apply` events (`reliability-report.js` is the only known one today)\n- Keep backward-compatible read for existing events in storage — old events have no reviewer field and must continue to be handled the same way `reliability-report` handles them now\n\n## Out of scope\n\n- Changing the acting-reviewer analytics shape in #226 — that's the correct design.\n- Any other system-emitted `review_apply` paths (review-runner.js has one escalation site; verify no others exist as part of this issue).\n\n## Context links\n\n- PR #225 (closed, superseded) — where the bug was first caught by Codex adversarial\n- PR #226 (merged, `c580f0b`) — base acting-reviewer analytics\n- PR #227 (merged, `a3a1820`) — consumer-side narrow fix",
+      "labels": [
+        "bug"
+      ],
+      "createdAt": "2026-04-18T12:56:54Z",
+      "updatedAt": "2026-04-18T12:57:03Z",
+      "milestone": null,
+      "buckets": {
+        "label": {
+          "type": "bug",
+          "priority": "medium",
+          "status": "todo"
+        },
+        "theme": "uncategorized",
+        "age": "<7d",
+        "activity": "recent",
+        "milestone": "unassigned"
+      }
+    },
+    {
+      "number": 154,
+      "title": "Benchmark gstack-codex adversarial style into relay-review",
+      "body": "## Summary\n\nThe gstack-codex `challenge` mode surfaced **9 substantive findings** on PR #147 that relay-review's 6 sequential rounds missed — including real production bypasses (file deletion after dispatch, path escape, branch-reuse manifest inheritance, skip-path rubric bypass) and a sharp critique of compliance-theater rounds.\n\nRelay-review is currently collaborative-critical (find issues the executor should fix). gstack-codex challenge is adversarial (try to break it; think like an attacker; no compliments). Different mode, different yield. Benchmark the style difference and decide which pieces to adopt.\n\n## Observed style difference (empirical, from PR #147)\n\n| Dimension | relay-review (6 rounds) | gstack-codex challenge (1 pass) |\n|-----------|-------------------------|---------------------------------|\n| Findings that were genuine code gaps | 4 rounds × 1-3 issues | 9 findings in 1 pass |\n| Bypass vectors found | 0 explicit | 4 (file delete, path escape, branch reuse, skip-path) |\n| Test-suite critique | 0 | \"suite mostly proves bypasses work, not enforcement\" |\n| Compliance-theater detection | 0 (round 5 was theater, reviewer acknowledged but scored it as contract fail) | Round 4 + 5 explicitly called out as theater |\n| Token spend | ~50-80k per round × 6 | 1.23M single pass |\n| Latency | ~10-20 min × 6 = 1h 40min | ~5 min |\n\nrelay-review is thorough about rubric compliance. It's not adversarial about invariant surface area. Both styles are useful; neither replaces the other. But right now relay-review's rubric-grep-driven grading reinforces compliance thinking.\n\n## Design options\n\n### Option 1 (minimal): Add an adversarial pass after LGTM\nWhen a round verdicts `lgtm`, run one final `codex exec --sandbox read-only` with the challenge prompt (adversarial, try-to-break, no-compliments, specific file:line). If challenge finds `[P1]` severity issues, demote verdict back to `changes_requested` and feed findings into round N+1's redispatch prompt. Otherwise merge with challenge report attached.\n\n**Pros**: additive, doesn't disrupt rubric-based protocol. Catches exactly what PR #147 landed with.\n**Cons**: adds ~5 min + ~1M tokens per PR. Risks \"forever round\" if challenge always finds something.\n\n### Option 2 (medium): Second-opinion reviewer role\nAdd a `roles.adversary` field to the relay manifest. Every N-th round (or every round for high-stakes tasks), invoke the adversary alongside the normal reviewer. Verdicts must agree (or adversary's verdict wins if more restrictive).\n\n**Pros**: codifies the two-reviewer pattern. Independent context for adversary prevents rubric-bias.\n**Cons**: doubles review token cost. Manifest schema change. Role-binding complexity.\n\n### Option 3 (structural): Challenge-mode rubric factors\nAdd quality-tier factors keyed on \"attack surface\" themes: \"List 3 paths where this enforcement could be bypassed\", \"Write a test that attempts to defeat the invariant\", etc. Reviewer must answer these explicitly, which forces adversarial framing within the rubric.\n\n**Pros**: no new reviewer role. Rubric authoring becomes the locus of adversarial thinking. Reusable across tasks.\n**Cons**: depends on rubric-author discipline. Doesn't catch rubric-grading loopholes (like round 5's grep-pattern compliance).\n\n### Option 4 (hybrid): Challenge-mode as an opt-in tier\nRubric YAML gets a new `challenge:` section listing \"try to break\" prompts. When set, relay-review runs the normal rubric scoring AND a challenge pass. LGTM requires both to pass.\n\n**Pros**: opt-in per task. High-stakes PRs get adversarial; low-stakes don't pay the cost.\n**Cons**: decision load on planner (\"do I need challenge mode?\"). Easy to forget.\n\n## Recommended next step\n\n1. **Read the gstack-codex skill source** (`~/.claude/skills/gstack-codex/` — specifically the challenge prompt template) and compare against `skills/relay-review/references/reviewer-prompt.md`\n2. **Post-mortem PR #147**: take the 9 findings codex produced and ask \"what rubric language or review protocol change would have caused relay-review to find each one?\" This is the empirical design input.\n3. **Prototype Option 1** on a single future PR — measure latency + token cost + marginal finding count vs. baseline\n4. **Decide**: adopt Option 1, 2, 3, 4, or \"don't adopt\" based on prototype data\n\n## Acceptance Criteria\n\n<!-- AC:BEGIN -->\n- [ ] Design doc `docs/relay-review-adversarial-benchmark.md` with the 9 findings from PR #147 mapped against \"what change would have caught this\"\n- [ ] Prototype implementation of Option 1 on a feature branch (not merged)\n- [ ] Single-PR comparison: run relay-review with and without the adversarial pass, report diff in findings, latency, token cost\n- [ ] Decision recorded in `backlog/sprints/_context.md` under \"Architecture Decisions\" (or new ADR file)\n- [ ] If adopted: SKILL.md + reviewer-prompt updated; otherwise: close with rationale\n<!-- AC:END -->\n\n## Priority\n\n**Enhancement / idea** — not urgent, but high-leverage. The review process is the trust boundary that gates every PR; improving it compounds.\n\n## Context\n\n- gstack-codex location: `~/.claude/skills/gstack-codex/SKILL.md` (Challenge mode at Step 2B)\n- PR #147 adversarial review output captured in session log (2026-04-12, codex 1.23M tokens, 9 findings)\n- Related: any Phase 2+ of agentic-patterns-adoption doc",
+      "labels": [
+        "enhancement"
+      ],
+      "createdAt": "2026-04-12T07:12:46Z",
+      "updatedAt": "2026-04-12T07:13:26Z",
+      "milestone": null,
+      "buckets": {
+        "label": {
+          "type": "uncategorized",
+          "priority": "medium",
+          "status": "todo"
+        },
+        "theme": "uncategorized",
+        "age": "<7d",
+        "activity": "recent",
+        "milestone": "unassigned"
+      }
+    },
+    {
+      "number": 146,
+      "title": "relay-merge: sprint-close candidate pattern reporting",
+      "body": "## Summary\n\nAt sprint close, scan the sprint's run retros for factors scored high (9/10+) across 2+ runs in the same sprint. Report these as candidate patterns for manual promotion to `_context.md`. **No file mutation** — report only.\n\n## Motivation\n\nFrom `docs/agentic-patterns-adoption.md` Phase 3.1. Originally proposed as auto-append to `_context.md` — Codex correctly flagged: \"Many runs produce issue-local fixes, not conventions. Auto-appending creates another stale-review queue.\"\n\nThe narrowed form: terminal report during sprint-close. Human decides what's worth promoting. No dev-backlog contract change.\n\n## Depends On\n\n- **#143** (retrospective integration) — need per-run retro data to aggregate\n- **#139** (reliability-report consumption) — aggregation logic lives alongside existing report\n\n## Acceptance Criteria\n\n<!-- AC:BEGIN -->\n- [ ] `sprint-close.sh` (dev-backlog) or equivalent entry point scans sprint's completed runs\n- [ ] Threshold: factor scored >=9/10 across >=2 runs in the same sprint = candidate\n- [ ] Output to terminal: \"Candidate patterns this sprint: [list]. Promote manually to _context.md if applicable.\"\n- [ ] No auto-write to `_context.md` or any shared file\n- [ ] No dev-backlog integration contract change\n- [ ] Tunable threshold via backlog config (floor prevents noise)\n<!-- AC:END -->\n\n## Context\n\n- Design doc: `docs/agentic-patterns-adoption.md` Phase 3.1\n- Codex: \"Replace #5 with sprint-close reporting of candidate patterns, not file mutation.\"",
+      "labels": [
+        "enhancement",
+        "backlog"
+      ],
+      "createdAt": "2026-04-12T04:35:06Z",
+      "updatedAt": "2026-04-12T04:35:13Z",
+      "milestone": null,
+      "buckets": {
+        "label": {
+          "type": "uncategorized",
+          "priority": "medium",
+          "status": "todo"
+        },
+        "theme": "uncategorized",
+        "age": "<7d",
+        "activity": "recent",
+        "milestone": "unassigned"
+      }
+    },
+    {
+      "number": 145,
+      "title": "relay-plan: TDD auto-suggestion from probe + factor type",
+      "body": "## Summary\n\nWhen probe detects test infrastructure AND the task has automated contract factors, suggest `tdd_mode: true` in Rubric Quality Card. Planner still decides — no auto-apply.\n\n## Motivation\n\nFrom `docs/agentic-patterns-adoption.md` Phase 2.3. After #142 (TDD mode) ships as opt-in, the planner has to remember to enable it. This issue reduces the forget-factor.\n\n## Depends On\n\n- **#140** (probe quality signals) — need to detect test infra\n- **#142** (TDD mode) — `tdd_mode` flag must exist in rubric schema\n\n## Acceptance Criteria\n\n<!-- AC:BEGIN -->\n- [ ] Rubric Quality Card surfaces \"TDD suggested: test infra detected (jest) and contract factors have automated checks\"\n- [ ] Suggestion only — planner explicitly sets `tdd_mode: true` or declines\n- [ ] Suggestion is suppressed for S-size tasks (overhead too high)\n- [ ] Suggestion is suppressed for non-code tasks (docs, CSS-only)\n<!-- AC:END -->\n\n## Context\n\n- Design doc: `docs/agentic-patterns-adoption.md` Phase 2.3",
+      "labels": [
+        "enhancement",
+        "backlog"
+      ],
+      "createdAt": "2026-04-12T04:34:52Z",
+      "updatedAt": "2026-04-12T04:34:59Z",
+      "milestone": null,
+      "buckets": {
+        "label": {
+          "type": "uncategorized",
+          "priority": "medium",
+          "status": "todo"
+        },
+        "theme": "uncategorized",
+        "age": "<7d",
+        "activity": "recent",
+        "milestone": "unassigned"
+      }
+    },
+    {
+      "number": 144,
+      "title": "relay-plan: rubric templates keyed to probe signals",
+      "body": "## Summary\n\nUse probe signals (#140) to drive deterministic rubric templates. Project has playwright + jest + tsc strict → apply corresponding factor template. No LLM \"autonomy scoring\" — template matching only.\n\n## Motivation\n\nFrom `docs/agentic-patterns-adoption.md` Phase 2.2. Codex: \"Replace #3 autonomy scoring with rubric templates keyed off actual executable checks present in the repo. Fewer abstractions, more determinism.\"\n\n## Depends On\n\n- **#140** (probe quality signals in rubric design) — template matching needs signals exposed to planner first\n- **#139** (reliability-report consumption) — templates should be informed by historical performance of similar rubrics\n\n## Acceptance Criteria\n\n<!-- AC:BEGIN -->\n- [ ] Template catalog: `skills/relay-plan/references/rubric-templates/` with one file per detected signal combo (e.g., `jest-tsc-strict.yaml`, `pytest-mypy-strict.yaml`)\n- [ ] `relay-plan` SKILL.md: after probe, match detected signals to nearest template and offer it as a starting point\n- [ ] Planner can accept, modify, or reject the template\n- [ ] No auto-apply — template is a suggestion\n- [ ] At least 3 templates shipped initially (jest/tsc, pytest/mypy, go-test)\n<!-- AC:END -->\n\n## Context\n\n- Design doc: `docs/agentic-patterns-adoption.md` Phase 2.2",
+      "labels": [
+        "enhancement",
+        "backlog"
+      ],
+      "createdAt": "2026-04-12T04:34:46Z",
+      "updatedAt": "2026-04-12T04:35:38Z",
+      "milestone": null,
+      "buckets": {
+        "label": {
+          "type": "uncategorized",
+          "priority": "medium",
+          "status": "todo"
+        },
+        "theme": "uncategorized",
+        "age": "<7d",
+        "activity": "recent",
+        "milestone": "unassigned"
+      }
+    },
+    {
+      "number": 143,
+      "title": "relay-plan: retrospective integration with qualitative annotations",
+      "body": "## Summary\n\nBuild on #139 (reliability-report consumption) by adding qualitative annotations to run retros — which rubric design choices correlated with fast convergence, which factor types stall most, what fix_hints actually helped.\n\n## Motivation\n\nFrom \\`docs/agentic-patterns-adoption.md\\` Phase 2.1. #139 exposes quantitative data; this issue adds interpretable signal on top.\n\nCodex correctly warned: \"Adding run_retro.notable mostly creates unstructured sludge.\" The mitigation: only emit retro annotations when the data supports a specific interpretation (e.g., \"fix_hint on error-recovery correlated with -2 rounds to green across 5 runs this sprint\") — no free-text sludge.\n\n## Depends On\n\n- **#139** (reliability-report consumption) — qualitative layer sits on top of quantitative data\n\n## Related\n\n- **#15** (rubric-builder: self-improving rubrics via autoloop) — longer-term vision this feeds into\n\n## Acceptance Criteria\n\n<!-- AC:BEGIN -->\n- [ ] \\`finalize-run.js\\` emits structured retro event on merge (schema: review_rounds, rubric_grade, stuck_factors, fix_hint_effectiveness)\n- [ ] reliability-report.js aggregates retro events into \"qualitative signals\" section\n- [ ] Signals gated on minimum sample size (N>=3 runs) — no single-run inferences\n- [ ] No LLM-generated free-text narrative — structured fields only\n- [ ] Consumed by relay-plan via #139's consumption path — planner sees qualitative signals alongside raw metrics\n<!-- AC:END -->\n\n## Context\n\n- Design doc: \\`docs/agentic-patterns-adoption.md\\` Phase 2.1\n- Replaces (and absorbs) the original doc's Proposal #4",
+      "labels": [
+        "enhancement",
+        "backlog"
+      ],
+      "createdAt": "2026-04-12T04:34:36Z",
+      "updatedAt": "2026-04-12T04:35:04Z",
+      "milestone": null,
+      "buckets": {
+        "label": {
+          "type": "uncategorized",
+          "priority": "medium",
+          "status": "todo"
+        },
+        "theme": "uncategorized",
+        "age": "<7d",
+        "activity": "recent",
+        "milestone": "unassigned"
+      }
+    },
+    {
+      "number": 142,
+      "title": "relay-plan/dispatch: TDD mode with phase-scoped expected failures",
+      "body": "## Summary\n\nAdd optional `tdd_mode: true` to rubric schema. When enabled, iteration protocol gains Step 0: write failing test → commit → verify red → proceed to implementation. Prerequisite runner temporarily excludes `tdd_anchor` paths during Step 0.\n\n## Motivation\n\nFrom `docs/agentic-patterns-adoption.md` Phase 1.2. Willison: \"Every good model understands 'red/green TDD' as shorthand.\" Current iteration protocol allows tests and implementation to be written together, producing tests shaped around the implementation rather than the spec.\n\n**Effort upgraded to M** after Codex flagged that phase-scoped expected failures affect CI, review timing, and commit history — this is not a prompt-template-only change.\n\n## Depends On\n\n- **#138** (rubric persistence mandatory) — reviewer must see `tdd_mode` flag in rubric to correctly interpret the branch's intentional red commits\n\n## Acceptance Criteria\n\n<!-- AC:BEGIN -->\n- [ ] Rubric schema accepts `tdd_mode: boolean` and `tdd_anchor: string` per factor\n- [ ] Dispatch prompt template gains Step 0 (test-first) block when `tdd_mode: true`\n- [ ] Prerequisite runner excludes `tdd_anchor` paths during Step 0 (TDD-aware prerequisite)\n- [ ] Step 0's red commit is squashed into final commit on branch history\n- [ ] Reviewer prompt explains TDD mode so expected-red commits aren't flagged as broken\n- [ ] Opt-in only — planner sets `tdd_mode: true` explicitly (no auto-suggestion here; that's Phase 2.3 / #144)\n- [ ] S-size tasks: `tdd_mode: false` by default (red-confirmation overhead too high)\n- [ ] Regression test: non-TDD rubrics behave identically to today\n- [ ] Integration test: TDD rubric produces red commit → green commit → reviewer passes\n<!-- AC:END -->\n\n## Failure Modes\n\n**Critical**: if prerequisite runner exclusion is wrong, TDD's intentionally-failing test breaks the prereq gate silently → wastes an iteration. Integration test must cover this end-to-end with real npm test invocation.\n\n## Context\n\n- Design doc: `docs/agentic-patterns-adoption.md` Phase 1.2\n- Codex: \"Introduces a temporary known-bad branch state and asks the system to bless failing commits. Affects prerequisite semantics, review timing, CI expectations, and commit-history hygiene.\"",
+      "labels": [
+        "enhancement",
+        "backlog"
+      ],
+      "createdAt": "2026-04-12T04:34:20Z",
+      "updatedAt": "2026-04-14T23:36:01Z",
+      "milestone": null,
+      "buckets": {
+        "label": {
+          "type": "uncategorized",
+          "priority": "medium",
+          "status": "todo"
+        },
+        "theme": "uncategorized",
+        "age": "<7d",
+        "activity": "recent",
+        "milestone": "unassigned"
+      }
+    },
+    {
+      "number": 141,
+      "title": "relay-review: structured rejection log in redispatch prompt",
+      "body": "## Summary\n\nExtend `formatPriorVerdictSummary()` in review-runner.js to emit per-factor structured rejection reasoning. Re-dispatch prompt gains \"Previously rejected approaches\" section so the executor doesn't repeat rejected patterns.\n\n## Motivation\n\nFrom `docs/agentic-patterns-adoption.md` Phase 1.1. Re-dispatch already carries prior-round data, but unstructured narrative loses per-factor granularity. When round 2 rejects a specific approach to error handling, round 3 should know exactly what was tried and why it failed.\n\n**Trustworthy producer**: the reviewer is independent and anchored to rubric, so rejection reasoning is verifiable (unlike a planner emitting \"decision rationale\" — see the killed #1a in the design doc).\n\n## Depends On\n\n- **#138** (rubric persistence mandatory) — reviewer must have rubric access to emit factor-scoped rejections\n\n## Current State\n\n- `review-runner.js:706-744` (`buildRedispatchPrompt`) calls `readPriorVerdicts()` + `formatPriorVerdictSummary()`\n- Format is narrative; factor granularity lost in round-to-round replay\n\n## Acceptance Criteria\n\n<!-- AC:BEGIN -->\n- [ ] review-round-N-verdict.json schema extended with per-factor `issues[]`: `{factor, issue, fix_direction, attempted_approach}`\n- [ ] `formatPriorVerdictSummary` emits \"Previously rejected approaches\" section grouped by factor\n- [ ] Re-dispatch prompt shows the last 1-2 rejections per factor (not all history — noise)\n- [ ] Regression test: existing single-round review still works\n- [ ] Regression test: multi-round re-dispatch preserves factor continuity\n<!-- AC:END -->\n\n## Context\n\n- Design doc: `docs/agentic-patterns-adoption.md` Phase 1.1\n- Related: cleaner re-dispatch reduces stuck_factor metrics (consumed via #139)",
+      "labels": [
+        "enhancement",
+        "backlog"
+      ],
+      "createdAt": "2026-04-12T04:34:05Z",
+      "updatedAt": "2026-04-14T23:35:55Z",
+      "milestone": null,
+      "buckets": {
+        "label": {
+          "type": "uncategorized",
+          "priority": "medium",
+          "status": "todo"
+        },
+        "theme": "uncategorized",
+        "age": "<7d",
+        "activity": "recent",
+        "milestone": "unassigned"
+      }
+    },
+    {
+      "number": 131,
+      "title": "relay-intake: add optional external refinement adapters after core preflight lands",
+      "body": "## Summary\n\nAdd optional external refinement adapters such as gstack and superpowers *after* the core relay-native preflight path is stable.\n\n## Background\n\nSome weak requests may benefit from stronger adversarial review or rewrite support before relay starts. gstack and superpowers can help here, but they use their own logs, plan files, and local conventions. relay should ingest their outputs, not outsource its state to them.\n\nThis is explicitly a phase-2 enhancement. Core correctness should come from relay-native request artifacts, readiness assessment, decomposition, and handoff. External adapters are useful acceleration, not launch-critical infrastructure.\n\nParent epic: #126\n\n## Sequencing\n\nBlocked by the core preflight path landing first:\n\n- #127 standalone skill contract + handoff boundary\n- #128 request persistence + readiness assessment + interaction events\n- #130 run handoff + review anchor integrity\n\n## Proposed Behavior\n\n- Detect actual delegate availability, not just PATH stubs or plugin cache presence\n- Invoke gstack/superpowers only as optional refinement adapters\n- Record delegate lifecycle in request events (`delegate_started`, `delegate_completed`, etc.)\n- Persist resulting artifacts/links back into the relay request contract\n- Fall back cleanly to native preflight when delegates are unavailable or fail\n\n## Non-goals\n\n- Required dependency on gstack or superpowers\n- Using external tool logs as authoritative relay state\n- Blocking core intake/preflight launch on adapter support\n\n## Considerations\n\n- gstack review logs and superpowers plan files are not authoritative relay state\n- Adapter behavior should be observable but not required for correctness\n- Installation checks should reflect real usability, not partial local leftovers\n\n## Existing Infrastructure\n\n- gstack review/timeline logs under `~/.gstack/projects/...`\n- superpowers plan + reviewer workflows\n- relay request/event model introduced by this epic\n",
+      "labels": [
+        "enhancement",
+        "backlog"
+      ],
+      "createdAt": "2026-04-09T03:16:10Z",
+      "updatedAt": "2026-04-09T04:30:30Z",
+      "milestone": "Relay Intake / Preflight",
+      "buckets": {
+        "label": {
+          "type": "uncategorized",
+          "priority": "medium",
+          "status": "todo"
+        },
+        "theme": "uncategorized",
+        "age": "7-30d",
+        "activity": "recent",
+        "milestone": "assigned"
+      }
+    },
+    {
+      "number": 108,
+      "title": "dispatch: batch parallel dispatch for independent sprint items",
+      "body": "## Summary\n\nDispatch multiple independent sprint items to N worktrees simultaneously, reducing total execution time for batches with no inter-task dependencies.\n\n## Background\n\nCurrently relay-dispatch processes one task at a time in a single worktree. When a sprint batch contains independent items (no shared file modifications), they could run in parallel. The worktree infrastructure (`create-worktree.js`, `cleanup-worktrees.js`) already exists, making the extension cost low.\n\nCommunity evidence shows that parallel worktree patterns (e.g., 16 parallel rule-fixers producing 16 PRs from a single command) are practical and deliver significant throughput gains.\n\n## Proposed Behavior\n\n```\nSprint Plan:\n- [ ] #38 DB schema (~15min)     → worktree-1\n- [ ] #39 Seed data (~10min)     → worktree-2  (concurrent)\n- [ ] #40 Config update (~10min) → worktree-3  (concurrent)\n```\n\n- Auto-detect independent items within the same sprint batch\n- `relay-dispatch --batch` or `relay-dispatch --parallel N` flag for concurrent dispatch\n- Each worktree gets its own manifest and produces its own PR\n- Sprint file updated in bulk after completion (`[ ]` → `[~]` → `[x]`)\n\n## Considerations\n\n- **Dependency detection**: Identify items that may touch the same files (heuristic or explicit annotation)\n- **Manifest uniqueness**: Ensure run-id collision is impossible under concurrent creation\n- **Executor quota**: Limit concurrent dispatches to respect API rate limits / subscription caps\n- **Integration contract**: Extend dev-backlog checkpoint regex patterns for bulk state transitions\n- **Failure isolation**: One worktree failure should not block others; partial success should be reportable\n\n## Existing Infrastructure\n\n- `create-worktree.js` — worktree creation + optional app registration\n- `cleanup-worktrees.js` — stale worktree pruning\n- `relay-manifest.js` — manifest CRUD with state machine\n- `relay-events.js` — event journal per run",
+      "labels": [
+        "backlog"
+      ],
+      "createdAt": "2026-04-07T09:56:06Z",
+      "updatedAt": "2026-04-07T10:05:47Z",
+      "milestone": null,
+      "buckets": {
+        "label": {
+          "type": "uncategorized",
+          "priority": "medium",
+          "status": "todo"
+        },
+        "theme": "uncategorized",
+        "age": "7-30d",
+        "activity": "recent",
+        "milestone": "unassigned"
+      }
+    },
+    {
+      "number": 33,
+      "title": "dispatch: broker pattern for warm-start sequential dispatches",
+      "body": "## Context\n\nWhen running sequential dispatches (e.g. Release 11: #231→#236), each dispatch spawns a fresh `codex app-server` process. The startup cost adds up.\n\ncodex-plugin-cc solves this with a **broker** — a Unix socket proxy that keeps one `codex app-server` alive across multiple invocations.\n\n## Current State (updated 2026-04-05)\n\nAs of #65, dispatch.js supports Codex + Claude Code executors. Sequential dispatches still spawn fresh processes for each run. The broker pattern only applies to Codex app-server, making this a Codex-specific optimization.\n\n**Still relevant if:**\n- Batch relay operations become frequent (many dispatches in sequence)\n- App-server migration (#32) is completed first\n\n**Reduced urgency because:**\n- #32 (app-server migration) is itself backlogged\n- Current sequential dispatch overhead is tolerable for typical batch sizes\n\n## Proposal\n\nAfter app-server migration (#32), add an optional broker mode:\n\n1. First dispatch starts broker + app-server, writes socket path to state file\n2. Subsequent dispatches connect to existing broker\n3. Broker returns `-32001` (BUSY) if a turn is active; client waits or falls back to direct spawn\n4. Session cleanup kills broker at end\n\n## Prerequisites\n\n- Depends on #32 (app-server migration)\n\n## References\n\n- Analysis: `docs/codex-app-server-analysis.md`\n- Pattern source: `references/codex-plugin-cc/plugins/codex/scripts/lib/broker-lifecycle.mjs`\n- Pattern source: `references/codex-plugin-cc/plugins/codex/scripts/app-server-broker.mjs`\n\n## Effort\n\nLarge — broker process, socket management, session lifecycle, fallback logic.",
+      "labels": [],
+      "createdAt": "2026-03-31T12:51:11Z",
+      "updatedAt": "2026-04-05T04:45:16Z",
+      "milestone": null,
+      "buckets": {
+        "label": {
+          "type": "uncategorized",
+          "priority": "medium",
+          "status": "todo"
+        },
+        "theme": "uncategorized",
+        "age": "7-30d",
+        "activity": "recent",
+        "milestone": "unassigned"
+      }
+    },
+    {
+      "number": 32,
+      "title": "dispatch: migrate Codex executor to app-server protocol",
+      "body": "## Context\n\ndispatch.js uses `codex exec` (one-shot CLI) to run tasks. OpenAI's codex-plugin-cc uses `codex app-server` (JSON-RPC over stdio), which provides:\n\n- **Protocol-level approval bypass** (`approvalPolicy: \"never\"`) — replaces the `[NON-INTERACTIVE DISPATCH]` prompt prefix hack\n- **Real-time progress tracking** — notifications for each action (editing, verifying, etc.) — eliminates the \"is it idle?\" guessing problem\n- **Structured output** — typed `TurnCaptureState` with file changes, commands, errors\n- **Session resume** — `thread/resume` to continue interrupted work\n\n## Current State (updated 2026-04-05)\n\nAs of #65, dispatch.js supports multiple executors via `EXECUTOR_CLI` map + executor-specific branches. Claude Code executor was added alongside Codex. The exec-based pattern works for both.\n\nTimeout handling was improved in #67 (completed-with-warning for partial work). This reduces but doesn't eliminate the progress visibility gap — we still can't tell if a timed-out executor made useful progress until after it exits.\n\n**Remaining value of app-server migration:**\n- Real-time progress notifications (the main win)\n- Protocol-level sandbox/approval config (cleaner than prompt prefix)\n- Session resume for interrupted work\n\n**Reduced urgency because:**\n- Multi-executor architecture already works (#65)\n- Timeout partial-work handling is in place (#67)\n- This is Codex-specific — only benefits one executor path\n\n## Proposal\n\nAdd `codex app-server` as an enhanced execution path for the Codex executor, alongside the existing `codex exec` path:\n\n1. Spawn `codex app-server` as child process\n2. JSON-RPC handshake (`initialize`)\n3. `thread/start` with `approvalPolicy: \"never\"`, `sandbox`, `cwd`\n4. `turn/start` with prompt\n5. Stream notifications for progress\n6. Await `turn/completed`, collect structured results\n7. Clean shutdown\n\nKeep `codex exec` as fallback for simplicity and for environments where app-server isn't available.\n\n## References\n\n- Analysis: `docs/codex-app-server-analysis.md`\n- Key source: `references/codex-plugin-cc/plugins/codex/scripts/lib/codex.mjs`\n- Key source: `references/codex-plugin-cc/plugins/codex/scripts/lib/app-server.mjs`\n\n## Effort\n\nMedium-large — new JSON-RPC client, notification handler, structured result collection.",
+      "labels": [],
+      "createdAt": "2026-03-31T12:51:08Z",
+      "updatedAt": "2026-04-05T04:45:02Z",
+      "milestone": null,
+      "buckets": {
+        "label": {
+          "type": "uncategorized",
+          "priority": "medium",
+          "status": "todo"
+        },
+        "theme": "uncategorized",
+        "age": "7-30d",
+        "activity": "recent",
+        "milestone": "unassigned"
+      }
+    },
+    {
+      "number": 22,
+      "title": "relay-review: cross-model review option (Claude spec + Codex quality)",
+      "body": "## Summary\n\nAdd a cross-model review option where Phase 1 and Phase 2 use different models, leveraging each model's strengths:\n- Phase 1 (Spec Compliance): Claude — strong at intent understanding and faithfulness judgment\n- Phase 2 (Code Quality): Codex — efficient at mechanical pattern checking\n\nAchieves multi-model consensus in a simple two-stage structure. Compensates for blind spots that occur when the same model both implements and reviews.\n\n## Context\n\n### Updated 2026-04-07\n\nCommunity evidence confirms demand and effectiveness:\n\n**Evidence 1: Adversarial Codex Review**\n- Codex used as independent adversarial reviewer alongside Claude\n- Fallback to Claude sub-agent when Codex is unavailable\n- **Eval result: 92% (with adversarial review) vs 83% (without)** — 9pp improvement\n- Key insight: same-model implementation + review shares blind spots\n\n**Evidence 2: Generator-Evaluator Separation**\n- Multiple plugins applied Generator-Evaluator separation to prevent self-praise bias\n- Multi-model orchestration: GPT-PRO (research) + Codex (code gen) + Claude (orchestration)\n\n### Updated 2026-04-05\n\n- **#20 (two-stage review split) — completed** (merged in PR #26)\n- Both reviewer adapters already exist: `invoke-reviewer-codex.js` and `invoke-reviewer-claude.js`\n- Infrastructure for multi-reviewer is in place — implementation complexity is lower than originally estimated\n- Remaining work: orchestration logic to automatically route Phase 1 → Claude, Phase 2 → Codex within a single review run\n\n### Original context\n\nDisagreement between models requires an escalation protocol to surface conflicting opinions to the user.\n\n## Proposed Enhancement\n\nBeyond the original \"Phase 1 Claude → Phase 2 Codex\" sequential structure:\n\n- **`--adversarial` flag**: Both models independently review the **same scope** → surface disagreements\n- **Disagreement protocol**: When verdicts differ, present both perspectives to user for escalation\n- **Selective trigger**: Auto-activate when rubric has 3+ quality-tier factors (cost management)\n- **Metrics**: Track relay-review score delta with/without adversarial review (extend `reliability-report.js`)\n\n## References\n\n- `docs/32-cross-platform-compatibility.md` § Cross-Model Review Option\n- Octopus 75% consensus gate (references/analysis/02-claude-octopus.md)\n- gstack cross-model review (references/analysis/05-gstack.md)",
+      "labels": [
+        "backlog"
+      ],
+      "createdAt": "2026-03-30T02:52:50Z",
+      "updatedAt": "2026-04-07T10:06:17Z",
+      "milestone": null,
+      "buckets": {
+        "label": {
+          "type": "uncategorized",
+          "priority": "medium",
+          "status": "todo"
+        },
+        "theme": "uncategorized",
+        "age": "7-30d",
+        "activity": "recent",
+        "milestone": "unassigned"
+      }
+    }
+  ]
+}
