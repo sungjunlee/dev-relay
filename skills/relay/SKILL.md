@@ -15,11 +15,11 @@ Execute the plan → dispatch → review cycle. Stop at `ready_to_merge` unless 
 
 | Role | Default | Override |
 |------|---------|----------|
-| Orchestrator | Codex (explicitly stamped) | `RELAY_ORCHESTRATOR` env |
+| Orchestrator | `unknown` until explicitly stamped | `RELAY_ORCHESTRATOR` env |
 | Executor | Codex | `--executor` flag |
-| Reviewer | Codex (read-only) | `--reviewer` flag, `RELAY_REVIEWER` env |
+| Reviewer | `unknown` until explicitly stamped | `--reviewer` flag, `RELAY_REVIEWER` env |
 
-Standard Codex path: stamp `RELAY_ORCHESTRATOR=codex` and run review through `review-runner --reviewer codex`. Override per-role when using Claude or another supported reviewer.
+Standard Codex path: stamp `RELAY_ORCHESTRATOR=codex` and run review through `review-runner --reviewer codex`. Assigned manifest roles stay immutable; the acting reviewer for a round is recorded separately under `review.last_reviewer` and the `review_apply` event.
 
 ## Step 0: Re-Anchor
 

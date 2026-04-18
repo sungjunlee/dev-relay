@@ -4,7 +4,7 @@ Orchestrator-agnostic relay system for plan → dispatch → review → merge wo
 
 ## Architecture
 
-Relay runs are stateful, manifest-backed lifecycle contracts stored in `~/.relay/runs/<repo-slug>/<run-id>.md`. Each manifest records immutable role bindings (`roles.orchestrator`, `roles.executor`, `roles.reviewer`), policy fields, and review anchors. The state machine governs all transitions:
+Relay runs are stateful, manifest-backed lifecycle contracts stored in `~/.relay/runs/<repo-slug>/<run-id>.md`. Each manifest records immutable role bindings (`roles.orchestrator`, `roles.executor`, `roles.reviewer`), policy fields, and review anchors. Review-time overrides are tracked separately under `review.last_reviewer` and review events rather than mutating those bindings. The state machine governs all transitions:
 
 ```
 draft → dispatched → review_pending → ready_to_merge → merged

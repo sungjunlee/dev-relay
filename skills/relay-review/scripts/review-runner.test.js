@@ -556,7 +556,7 @@ test("pass verdict moves review_pending to ready_to_merge", () => {
   assert.ok(manifest.review.last_reviewed_sha);
 });
 
-test("pass verdict stamps the resolved reviewer into manifest roles", () => {
+test("pass verdict preserves assigned reviewer role and records the acting reviewer separately", () => {
   const { repoRoot, manifestPath, runId, doneCriteriaPath, diffPath } = setupRepo();
   const reviewFile = writePassVerdict(repoRoot);
 
@@ -574,8 +574,13 @@ test("pass verdict stamps the resolved reviewer into manifest roles", () => {
   ], { encoding: "utf-8" });
 
   const result = JSON.parse(stdout);
+  const manifest = readManifest(manifestPath).data;
+  const events = readRunEvents(repoRoot, runId);
+  const reviewApplyEvent = [...events].reverse().find((event) => event.event === "review_apply");
   assert.equal(result.reviewer, "codex");
-  assert.equal(readManifest(manifestPath).data.roles.reviewer, "codex");
+  assert.equal(manifest.roles.reviewer, "claude");
+  assert.equal(manifest.review.last_reviewer, "codex");
+  assert.equal(reviewApplyEvent?.reviewer, "codex");
 });
 
 test("pass verdict rejects quality_status=not_run", () => {

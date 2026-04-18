@@ -37,7 +37,7 @@ Orchestrator             Executor                    GitHub
  +-- cleanup + sprint update                           |
 ```
 
-Roles are bound at manifest creation time and serve as defaults. Any supported agent can plan, execute, or review. Standard Codex operation is `RELAY_ORCHESTRATOR=codex` plus `review-runner --reviewer codex`. The reviewer can still be overridden at review time with `--reviewer` or the `RELAY_REVIEWER` environment variable.
+Roles are bound at manifest creation time and remain the run's assigned role bindings. Any supported agent can plan, execute, or review. Standard Codex operation is `RELAY_ORCHESTRATOR=codex` plus `review-runner --reviewer codex`. If review-time overrides are used, the acting reviewer is recorded under `review.last_reviewer` and in the `review_apply` event payload instead of mutating `roles.reviewer`.
 
 ## Install
 
@@ -354,7 +354,7 @@ dev-relay is designed to support new agents. No framework changes needed.
 
 ### Role binding
 
-Roles are set at manifest creation time and serve as defaults for the run:
+Roles are set at manifest creation time as the run's assigned bindings:
 
 ```yaml
 roles:
@@ -363,7 +363,7 @@ roles:
   reviewer: claude        # who reviews (isolated context)
 ```
 
-Override the reviewer at review time with `--reviewer` or the `RELAY_REVIEWER` environment variable.
+Override the reviewer at review time with `--reviewer` or the `RELAY_REVIEWER` environment variable. That changes the acting reviewer for that round, which is recorded in `review.last_reviewer` and the `review_apply` event payload.
 
 ## `.worktreeinclude`
 
