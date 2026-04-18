@@ -85,6 +85,6 @@ Check for:
 Run tests. Fix failures. Repeat review-fix until solid.
 
 ## When Satisfied
-Create a PR referencing #N with a clear description.
-Do NOT merge — leave open for review.
+Stop after local verification and leave the branch ready for the orchestrator.
+The orchestrator handles branch publication and PR creation for review.
 ```

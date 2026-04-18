@@ -29,13 +29,17 @@ const REVIEW_RUNNER_FUNCTION_CAP = 12;
 
 function setupRepo() {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-runner-"));
+  const remoteRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-origin-"));
   process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
   execFileSync("git", ["init", "-b", "main"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
+  execFileSync("git", ["init", "--bare", remoteRoot], { encoding: "utf-8", stdio: "pipe" });
   execFileSync("git", ["config", "user.name", "Relay Review Test"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
   execFileSync("git", ["config", "user.email", "relay-review@example.com"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
   fs.writeFileSync(path.join(repoRoot, "README.md"), "base\n", "utf-8");
   execFileSync("git", ["add", "README.md"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
   execFileSync("git", ["commit", "-m", "init"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
+  execFileSync("git", ["remote", "add", "origin", remoteRoot], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
+  execFileSync("git", ["push", "-u", "origin", "main"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
 
   const runId = "issue-42-20260403010000000";
   const worktreePath = path.join(repoRoot, "wt", "issue-42");
@@ -361,6 +365,22 @@ process.exit(1);
 }
 
 function writeFakeCodex(binDir) {
+  const ghPath = path.join(binDir, "gh");
+  if (!fs.existsSync(ghPath)) {
+    fs.writeFileSync(ghPath, `#!/usr/bin/env node
+const args = process.argv.slice(2);
+if (args[0] === "pr" && args[1] === "list") {
+  process.exit(0);
+}
+if (args[0] === "pr" && args[1] === "create") {
+  process.stdout.write("https://example.test/acme/dev-relay/pull/123\\n");
+  process.exit(0);
+}
+process.stderr.write("Unsupported gh invocation: " + args.join(" "));
+process.exit(1);
+`, "utf-8");
+    fs.chmodSync(ghPath, 0o755);
+  }
   const codexPath = path.join(binDir, "codex");
   fs.writeFileSync(codexPath, `#!/usr/bin/env node
 const fs = require("fs");
@@ -2288,7 +2308,7 @@ test("review-runner fail-closed path can re-dispatch with a fixed rubric and pas
 
   const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-codex-bin-"));
   writeFakeCodex(binDir);
-  const dispatchResult = JSON.parse(execFileSync("node", [
+  const dispatch = spawnSync("node", [
     DISPATCH_SCRIPT,
     repoRoot,
     "--run-id", runId,
@@ -2302,7 +2322,9 @@ test("review-runner fail-closed path can re-dispatch with a fixed rubric and pas
       ...process.env,
       PATH: `${binDir}:${process.env.PATH}`,
     },
-  }));
+  });
+  assert.equal(dispatch.status, 0, dispatch.stderr || dispatch.stdout);
+  const dispatchResult = JSON.parse(dispatch.stdout);
 
   assert.equal(dispatchResult.mode, "resume");
   assert.equal(dispatchResult.runState, STATES.REVIEW_PENDING);
