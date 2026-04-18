@@ -31,6 +31,7 @@ const {
 } = require("./review-runner/redispatch");
 const { applyPolicyViolationToManifest, applyVerdictToManifest } = require("./review-runner/manifest-apply");
 const { loadReviewText, resolveReviewerName, resolveReviewerScript } = require("./review-runner/reviewer-invoke");
+const { getArg: sharedGetArg, hasFlag: sharedHasFlag } = require("../../relay-dispatch/scripts/cli-args");
 
 const args = process.argv.slice(2);
 const KNOWN_FLAGS = [
@@ -61,16 +62,8 @@ if (require.main === module && (!args.length || args.includes("--help") || args.
   process.exit(args.includes("--help") || args.includes("-h") ? 0 : 1);
 }
 
-function getArg(flag) {
-  const index = args.indexOf(flag);
-  if (index === -1 || index + 1 >= args.length) return undefined;
-  const value = args[index + 1];
-  return KNOWN_FLAGS.includes(value) ? undefined : value;
-}
-
-function hasFlag(flag) {
-  return args.includes(flag);
-}
+const getArg = (flag, fallback) => sharedGetArg(args, flag, fallback, { reservedFlags: KNOWN_FLAGS });
+const hasFlag = (flag) => sharedHasFlag(args, flag);
 
 function printResult({ doneCriteriaPath, diffPath, jsonOut, manifestPath, originalState, prepareOnly, prNumber, promptPath, redispatchPath, result, updatedManifest, verdictPath }) {
   if (jsonOut) {

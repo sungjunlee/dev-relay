@@ -38,6 +38,7 @@ const { summarizeError, writeManifest } = require("../../relay-dispatch/scripts/
 const { resolveManifestRecord } = require("../../relay-dispatch/scripts/relay-resolver");
 const { appendRunEvent } = require("../../relay-dispatch/scripts/relay-events");
 const { runCleanup } = require("../../relay-dispatch/scripts/manifest/cleanup");
+const { getArg: sharedGetArg, hasFlag: sharedHasFlag } = require("../../relay-dispatch/scripts/cli-args");
 const {
   buildSkipReviewGateFailure,
   buildSkipComment,
@@ -69,16 +70,8 @@ if (!args.length || args.includes("--help") || args.includes("-h")) {
   process.exit(args.includes("--help") || args.includes("-h") ? 0 : 1);
 }
 
-function getArg(flag) {
-  const index = args.indexOf(flag);
-  if (index === -1 || index + 1 >= args.length) return undefined;
-  const value = args[index + 1];
-  return KNOWN_FLAGS.includes(value) ? undefined : value;
-}
-
-function hasFlag(flag) {
-  return args.includes(flag);
-}
+const getArg = (flag, fallback) => sharedGetArg(args, flag, fallback, { reservedFlags: KNOWN_FLAGS });
+const hasFlag = (flag) => sharedHasFlag(args, flag);
 
 function parsePositiveInt(value, label) {
   if (value === undefined) return undefined;
