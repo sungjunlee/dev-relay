@@ -1,12 +1,10 @@
 const fs = require("fs");
+const { getActorName } = require("./manifest/store");
+const { ensureRunLayout, getEventsPath, getRunsDir } = require("./manifest/paths");
 const {
   appendTextFileWithoutFollowingSymlinks,
-  ensureRunLayout,
-  getEventsPath,
-  getActorName,
-  getRunsDir,
   readTextFileWithoutFollowingSymlinks,
-} = require("./relay-manifest");
+} = require("./manifest/rubric");
 
 function appendEventLine(repoRoot, runId, record) {
   const eventsPath = getEventsPath(repoRoot, runId);

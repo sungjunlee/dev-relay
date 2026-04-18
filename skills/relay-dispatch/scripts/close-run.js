@@ -3,15 +3,12 @@
 // then retry resolution or re-dispatch with an explicit selector.
 
 const path = require("path");
+const { CLEANUP_STATUSES, runCleanup, updateManifestCleanup } = require("./manifest/cleanup");
+const { STATES, updateManifestState } = require("./manifest/lifecycle");
 const {
-  CLEANUP_STATUSES,
-  STATES,
-  runCleanup,
-  updateManifestCleanup,
-  updateManifestState,
   validateManifestPaths,
-  writeManifest,
-} = require("./relay-manifest");
+} = require("./manifest/paths");
+const { writeManifest } = require("./manifest/store");
 const { resolveManifestRecord } = require("./relay-resolver");
 const { appendRunEvent } = require("./relay-events");
 

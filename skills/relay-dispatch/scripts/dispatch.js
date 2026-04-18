@@ -61,25 +61,29 @@ const {
   removeWorktree,
 } = require("./worktree-runtime");
 const {
-  STATES,
   collectEnvironmentSnapshot,
   compareEnvironmentSnapshot,
+} = require("./manifest/environment");
+const {
   createManifestSkeleton,
+  writeManifest,
+} = require("./manifest/store");
+const {
   createRunId,
   ensureRunLayout,
-  formatAttemptsForPrompt,
-  getRubricAnchorStatus,
   getManifestPath,
   getRunDir,
-  hasRubricPath,
   inferIssueNumber,
-  isRubricGrandfathered,
-  readPreviousAttempts,
-  updateManifestState,
   validateManifestPaths,
+} = require("./manifest/paths");
+const {
+  getRubricAnchorStatus,
+  hasRubricPath,
+  isRubricGrandfathered,
   validateRubricPathContainment,
-  writeManifest,
-} = require("./relay-manifest");
+} = require("./manifest/rubric");
+const { formatAttemptsForPrompt, readPreviousAttempts } = require("./manifest/attempts");
+const { STATES, updateManifestState } = require("./manifest/lifecycle");
 const { resolveManifestRecord } = require("./relay-resolver");
 const { appendRunEvent } = require("./relay-events");
 
