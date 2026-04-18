@@ -195,6 +195,26 @@ Each round produces files under `~/.relay/runs/<repo-slug>/<run-id>/`:
 3. It must write a JSON verdict to `--output-file` matching the schema in `review-schema.js`
 4. `review-runner.js` auto-discovers adapters by naming convention: `invoke-reviewer-<name>.js`
 
+### Shared utilities (cross-skill)
+
+Small, pure utilities that multiple skills import live under `skills/relay-dispatch/scripts/` alongside the runtime modules they share kinship with — not in a neutral top-level directory. `skills/` packages independent publishable skills, but at runtime the skill boundary is packaging only (see retro: `gate-check.js` → relay-review internals, `review-runner.js` → relay-dispatch internals). Placement rule: the skill most often invoked as a dependency hosts the shared helper.
+
+Current shared helpers:
+
+| Module | Owner | Consumers |
+|--------|-------|-----------|
+| `skills/relay-dispatch/scripts/cli-args.js` | relay-dispatch | `review-runner.js`, `invoke-reviewer-claude.js`, `invoke-reviewer-codex.js`, `finalize-run.js`, `persist-request.js`, `probe-executor-env.js` |
+
+Call sites take a local-wrapper pattern so inline flag lists (`KNOWN_FLAGS`) keep acting as fail-closed `reservedFlags`:
+
+```js
+const { getArg: sharedGetArg, hasFlag: sharedHasFlag } = require("../../relay-dispatch/scripts/cli-args");
+const getArg = (flag, fallback) => sharedGetArg(args, flag, fallback, { reservedFlags: KNOWN_FLAGS });
+const hasFlag = (flag) => sharedHasFlag(args, flag);
+```
+
+This keeps behavior identical to the original inline helpers while centralizing the `--*` look-alike guard and the reserved-flag handling.
+
 ### Role binding
 
 Roles are set at manifest creation time in `createManifestSkeleton()`:
