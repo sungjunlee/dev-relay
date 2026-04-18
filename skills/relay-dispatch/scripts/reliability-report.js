@@ -7,6 +7,7 @@ const { getArg, hasFlag } = require("./cli-args");
 const { readAllRunEvents } = require("./relay-events");
 
 const args = process.argv.slice(2);
+const RESERVED = { reservedFlags: ["-h"] };
 
 if (hasFlag(args, ["--help", "-h"])) {
   console.log("Usage: reliability-report.js [--repo <path>] [--stale-hours <hours>] [--json] [--by-actor]");
@@ -444,8 +445,8 @@ function buildActorReports({ repoRoot, staleHours, now, manifests, events }) {
 }
 
 function main() {
-  const repoRoot = path.resolve(getArg(args, "--repo", "."));
-  const staleHours = parseHours(getArg(args, "--stale-hours", "72"));
+  const repoRoot = path.resolve(getArg(args, "--repo", ".", RESERVED));
+  const staleHours = parseHours(getArg(args, "--stale-hours", "72", RESERVED));
   const now = Date.now();
   const manifests = listManifestRecords(repoRoot);
   const events = readAllRunEvents(repoRoot);

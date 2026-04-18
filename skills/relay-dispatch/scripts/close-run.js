@@ -14,6 +14,7 @@ const { resolveManifestRecord } = require("./relay-resolver");
 const { appendRunEvent } = require("./relay-events");
 
 const args = process.argv.slice(2);
+const RESERVED = { reservedFlags: ["-h"] };
 
 if (!args.length || hasFlag(args, ["--help", "-h"])) {
   console.log("Usage: close-run.js --repo <path> --run-id <id> --reason <text> [--dry-run] [--json]");
@@ -42,9 +43,9 @@ function buildSkippedCleanupSummary(data, dryRun) {
 }
 
 function main() {
-  const repoRoot = path.resolve(getArg(args, "--repo") || ".");
-  const runId = getArg(args, "--run-id");
-  const reason = getArg(args, "--reason");
+  const repoRoot = path.resolve(getArg(args, "--repo", undefined, RESERVED) || ".");
+  const runId = getArg(args, "--run-id", undefined, RESERVED);
+  const reason = getArg(args, "--reason", undefined, RESERVED);
   const dryRun = hasFlag(args, "--dry-run");
   const jsonOut = hasFlag(args, "--json");
   const gitBin = process.env.RELAY_GIT_BIN || "git";

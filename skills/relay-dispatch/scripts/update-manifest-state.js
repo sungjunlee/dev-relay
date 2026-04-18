@@ -36,6 +36,7 @@ const { getArg, hasFlag } = require("./cli-args");
 const { resolveManifestRecord } = require("./relay-resolver");
 
 const args = process.argv.slice(2);
+const RESERVED = { reservedFlags: ["-h"] };
 
 if (!args.length || hasFlag(args, ["--help", "-h"])) {
   console.log("Usage: update-manifest-state.js (--manifest <path> | --repo <path> --run-id <id> | --repo <path> --branch <name>) --state <state> [options]");
@@ -86,10 +87,10 @@ function defaultNextAction(state) {
 }
 
 function resolveManifestPath() {
-  const manifestPath = getArg(args, "--manifest");
-  const repoPath = getArg(args, "--repo");
-  const runId = getArg(args, "--run-id");
-  const branch = getArg(args, "--branch");
+  const manifestPath = getArg(args, "--manifest", undefined, RESERVED);
+  const repoPath = getArg(args, "--repo", undefined, RESERVED);
+  const runId = getArg(args, "--run-id", undefined, RESERVED);
+  const branch = getArg(args, "--branch", undefined, RESERVED);
 
   if (manifestPath && (repoPath || branch || runId)) {
     throw new Error("Use either --manifest or --repo with --run-id/--branch, not both");
@@ -106,21 +107,21 @@ function resolveManifestPath() {
 }
 
 function main() {
-  const targetState = getArg(args, "--state");
+  const targetState = getArg(args, "--state", undefined, RESERVED);
   if (!targetState) {
     throw new Error("--state is required");
   }
 
   const manifestPath = resolveManifestPath();
   const { data, body } = readManifest(manifestPath);
-  const nextAction = getArg(args, "--next-action") || defaultNextAction(targetState);
-  const prNumber = parsePositiveInt(getArg(args, "--pr-number"), "--pr-number");
-  const headSha = getArg(args, "--head-sha");
-  const rounds = parsePositiveInt(getArg(args, "--rounds"), "--rounds");
-  const verdict = getArg(args, "--verdict");
-  const lastReviewedSha = getArg(args, "--last-reviewed-sha");
-  const maxRounds = parsePositiveInt(getArg(args, "--max-rounds"), "--max-rounds");
-  const repeatedIssueCount = parsePositiveInt(getArg(args, "--repeated-issue-count"), "--repeated-issue-count");
+  const nextAction = getArg(args, "--next-action", undefined, RESERVED) || defaultNextAction(targetState);
+  const prNumber = parsePositiveInt(getArg(args, "--pr-number", undefined, RESERVED), "--pr-number");
+  const headSha = getArg(args, "--head-sha", undefined, RESERVED);
+  const rounds = parsePositiveInt(getArg(args, "--rounds", undefined, RESERVED), "--rounds");
+  const verdict = getArg(args, "--verdict", undefined, RESERVED);
+  const lastReviewedSha = getArg(args, "--last-reviewed-sha", undefined, RESERVED);
+  const maxRounds = parsePositiveInt(getArg(args, "--max-rounds", undefined, RESERVED), "--max-rounds");
+  const repeatedIssueCount = parsePositiveInt(getArg(args, "--repeated-issue-count", undefined, RESERVED), "--repeated-issue-count");
 
   let updated = updateManifestState(data, targetState, nextAction);
 

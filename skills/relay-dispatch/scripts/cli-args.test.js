@@ -76,6 +76,33 @@ test("getArg can treat reserved short aliases as missing values", () => {
   );
 });
 
+test("getArg rejects -h as a value for close-run and recover-state style reason flags", () => {
+  // Anti-theater: pre-r3 helper call sites widened behavior by accepting `-h` as the value for
+  // `--reason`; these CLIs historically rejected the token because their KNOWN_FLAGS included `-h`.
+  assert.equal(
+    getArg(["--reason", "-h"], "--reason", undefined, { reservedFlags: ["-h"] }),
+    undefined
+  );
+});
+
+test("getArg rejects -h as a value for update-manifest-state state flags", () => {
+  // Anti-theater: state-transition selectors must not reinterpret the short help alias as the
+  // requested manifest state when the caller declares `-h` reserved.
+  assert.equal(
+    getArg(["--state", "-h"], "--state", undefined, { reservedFlags: ["-h"] }),
+    undefined
+  );
+});
+
+test("getArg rejects -h as a value for reliability-report numeric flags", () => {
+  // Anti-theater: reporting CLIs still need the old fail-closed `-h` guard so `--stale-hours -h`
+  // falls back instead of parsing the help alias as hours data.
+  assert.equal(
+    getArg(["--stale-hours", "-h"], "--stale-hours", undefined, { reservedFlags: ["-h"] }),
+    undefined
+  );
+});
+
 test("getArg can treat reserved long flags as missing values", () => {
   // Anti-theater: callers that already maintain a full known-flag list should get the same answer
   // for both long and short aliases through one shared helper path.

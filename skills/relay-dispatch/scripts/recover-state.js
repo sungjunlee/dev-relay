@@ -25,6 +25,7 @@ const { writeManifest } = require("./manifest/store");
 const { getArg, hasFlag } = require("./cli-args");
 const { resolveManifestRecord } = require("./relay-resolver");
 const { appendRunEvent } = require("./relay-events");
+const RESERVED = { reservedFlags: ["-h"] };
 
 // Whitelist: recovery transitions that the normal dispatch/review/merge flow does NOT support.
 // If `ALLOWED_TRANSITIONS` in relay-manifest.js changes, this table must be reviewed — recovery
@@ -134,11 +135,11 @@ function main() {
     process.exit(hasFlag(args, "--help") || hasFlag(args, "-h") ? 0 : 1);
   }
 
-  const repoRoot = path.resolve(getArg(args, "--repo") || ".");
-  const runId = getArg(args, "--run-id");
-  const manifestArg = getArg(args, "--manifest");
-  const toState = getArg(args, "--to");
-  const reason = getArg(args, "--reason");
+  const repoRoot = path.resolve(getArg(args, "--repo", undefined, RESERVED) || ".");
+  const runId = getArg(args, "--run-id", undefined, RESERVED);
+  const manifestArg = getArg(args, "--manifest", undefined, RESERVED);
+  const toState = getArg(args, "--to", undefined, RESERVED);
+  const reason = getArg(args, "--reason", undefined, RESERVED);
   const force = hasFlag(args, "--force");
   const dryRun = hasFlag(args, "--dry-run");
   const jsonOut = hasFlag(args, "--json");

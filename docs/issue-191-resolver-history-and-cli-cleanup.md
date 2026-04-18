@@ -10,15 +10,17 @@ This PR is packaging-only cleanup for `relay-dispatch`: resolver history moves o
 
 ## CLI Helper Consumer Audit
 
-| Consumer | Helper import | Helper usage |
-| --- | --- | --- |
-| `cleanup-worktrees.js` | `skills/relay-dispatch/scripts/cleanup-worktrees.js:26` | `getArg(args, ...)`, `hasFlag(args, ...)` replace local `--repo` / `--older-than` parsing. |
-| `close-run.js` | `skills/relay-dispatch/scripts/close-run.js:12` | `getArg(args, ...)`, `hasFlag(args, ...)` replace local `--repo` / `--run-id` / `--reason` parsing. |
-| `create-worktree.js` | `skills/relay-dispatch/scripts/create-worktree.js:40` | Array-form aliases (`["--branch", "-b"]`, `["--title", "-t"]`) now route through the shared helper. |
-| `dispatch.js` | `skills/relay-dispatch/scripts/dispatch.js:86` | Shared helper replaces local arg parsing while `KNOWN_FLAGS` remains for positional-arg consumption. |
-| `recover-state.js` | `skills/relay-dispatch/scripts/recover-state.js:25` | Shared helper preserves explicit `args`-first parsing for the recovery CLI. |
-| `reliability-report.js` | `skills/relay-dispatch/scripts/reliability-report.js:6` | Shared helper replaces local `--repo`, `--stale-hours`, and report-flag parsing. |
-| `update-manifest-state.js` | `skills/relay-dispatch/scripts/update-manifest-state.js:35` | Shared helper replaces local selector/state/update flag parsing. |
+| Consumer | Helper import | Helper usage | `reservedFlags` |
+| --- | --- | --- | --- |
+| `cleanup-worktrees.js` | `skills/relay-dispatch/scripts/cleanup-worktrees.js:26` | `getArg(args, ...)`, `hasFlag(args, ...)` replace local `--repo` / `--older-than` parsing. | none; origin/main already used `startsWith("--")`, so no `-h` regression. |
+| `close-run.js` | `skills/relay-dispatch/scripts/close-run.js:12` | `getArg(args, ...)`, `hasFlag(args, ...)` replace local `--repo` / `--run-id` / `--reason` parsing. | `["-h"]` |
+| `create-worktree.js` | `skills/relay-dispatch/scripts/create-worktree.js:40` | Array-form aliases (`["--branch", "-b"]`, `["--title", "-t"]`) now route through the shared helper. | local `KNOWN_FLAGS` list, including `-b`, `-t`, `-h` |
+| `dispatch.js` | `skills/relay-dispatch/scripts/dispatch.js:86` | Shared helper replaces local arg parsing while `KNOWN_FLAGS` remains for positional-arg consumption. | local `KNOWN_FLAGS` list, including `-b`, `-p`, `-e`, `-m`, `-h` |
+| `recover-state.js` | `skills/relay-dispatch/scripts/recover-state.js:25` | Shared helper preserves explicit `args`-first parsing for the recovery CLI. | `["-h"]` |
+| `reliability-report.js` | `skills/relay-dispatch/scripts/reliability-report.js:6` | Shared helper replaces local `--repo`, `--stale-hours`, and report-flag parsing. | `["-h"]` |
+| `update-manifest-state.js` | `skills/relay-dispatch/scripts/update-manifest-state.js:35` | Shared helper replaces local selector/state/update flag parsing. | `["-h"]` |
+
+Round 3 restores origin/main `-h` guard semantics for the four remaining callers: `close-run.js`, `recover-state.js`, `reliability-report.js`, and `update-manifest-state.js`. `cleanup-worktrees.js` did not carry this regression because its origin/main parser already rejected only `--*` lookalikes via `startsWith("--")`, so no short-alias reservation was needed there.
 
 ## Scope Boundaries
 
