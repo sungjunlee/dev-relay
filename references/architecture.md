@@ -138,7 +138,7 @@ timestamps:
 | `policy.reviewer_write` | `forbid` — review runner rejects rounds where reviewer mutated files |
 | `anchor.*` | Immutable review scope — prevents drift across rounds |
 | `review.last_reviewed_sha` | Gate-check blocks merge if HEAD has advanced past this |
-| `review.last_reviewer` | Tracks the acting reviewer for the latest round without mutating `roles.reviewer` |
+| `review.last_reviewer` | Tracks the acting reviewer for the latest round without mutating `roles.reviewer`; analytics must still use `review_apply.reviewer` as the round-level source of truth |
 
 ## Event Journal
 
@@ -151,6 +151,8 @@ Each run keeps an append-only event log at `~/.relay/runs/<repo-slug>/<run-id>/e
 {"event":"review_apply","timestamp":"...","round":2,"reviewer":"codex","reason":"pass"}
 {"event":"state_transition","timestamp":"...","from":"review_pending","to":"ready_to_merge"}
 ```
+
+For reviewer analytics, `roles.reviewer` answers "who was assigned to review this run?" while `review_apply.reviewer` answers "who actually executed this review round?". Keep them separate. If a run shows review activity in the manifest but lacks `review_apply` reviewer data, report that gap explicitly rather than backfilling from the assigned role binding.
 
 ## Review Round Artifacts
 
@@ -204,4 +206,4 @@ roles: {
 }
 ```
 
-At review time, `--reviewer` (or `RELAY_REVIEWER`) selects the acting reviewer for the round. The assigned `roles.reviewer` binding stays immutable; the acting reviewer is recorded in `review.last_reviewer` and the `review_apply` event payload.
+At review time, `--reviewer` (or `RELAY_REVIEWER`) selects the acting reviewer for the round. The assigned `roles.reviewer` binding stays immutable; the acting reviewer is recorded in `review.last_reviewer` and the `review_apply` event payload. Reporting that compares Codex vs Claude review execution should read `review_apply.reviewer`, not `roles.reviewer`.

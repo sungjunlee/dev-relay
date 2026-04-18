@@ -36,7 +36,15 @@ function setGitActor(repoRoot, actor) {
   execFileSync("git", ["config", "user.name", actor], { cwd: repoRoot, stdio: "pipe" });
 }
 
-function writeRun(repoRoot, { runId, state, rounds, updatedAt }) {
+function writeRun(repoRoot, {
+  runId,
+  state,
+  rounds,
+  updatedAt,
+  reviewer = "codex",
+  lastReviewer = null,
+  lastReviewedSha = null,
+}) {
   initGitRepo(repoRoot);
   const manifestPath = ensureRunLayout(repoRoot, runId).manifestPath;
   let manifest = createManifestSkeleton({
@@ -48,7 +56,7 @@ function writeRun(repoRoot, { runId, state, rounds, updatedAt }) {
     worktreePath: path.join(repoRoot, "wt", runId),
     orchestrator: "codex",
     executor: "codex",
-    reviewer: "codex",
+    reviewer,
   });
   manifest = updateManifestState(manifest, STATES.DISPATCHED, "await_dispatch_result");
   if (state !== STATES.DISPATCHED) {
@@ -63,6 +71,8 @@ function writeRun(repoRoot, { runId, state, rounds, updatedAt }) {
     manifest = updateManifestState(manifest, STATES.MERGED, "done");
   }
   manifest.review.rounds = rounds;
+  manifest.review.last_reviewer = lastReviewer;
+  manifest.review.last_reviewed_sha = lastReviewedSha;
   manifest.timestamps.created_at = updatedAt;
   manifest.timestamps.updated_at = updatedAt;
   writeManifest(manifestPath, manifest);
@@ -682,4 +692,190 @@ test("reliability-report adds role-level grouping when --by-role is set", () => 
   assert.equal(report.by_role.executor.claude.totals.events, 1);
   assert.equal(report.by_role.reviewer.codex.totals.manifests, 1);
   assert.equal(report.by_role.reviewer.claude.totals.manifests, 1);
+});
+
+test("reliability-report adds acting reviewer grouping without mutating assigned reviewer analytics", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-report-by-acting-reviewer-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  initGitRepo(repoRoot, "Relay Test");
+  const recentTs = new Date(Date.now() - 1 * 60 * 60 * 1000).toISOString();
+  const runAssignedAndActingCodex = createRunId({
+    branch: "run-assigned-and-acting-codex",
+    timestamp: new Date("2026-04-12T08:00:00.000Z"),
+  });
+  const runAssignedCodexActingClaude = createRunId({
+    branch: "run-assigned-codex-acting-claude",
+    timestamp: new Date("2026-04-12T08:00:01.000Z"),
+  });
+  const runMixedActingReviewers = createRunId({
+    branch: "run-mixed-acting-reviewers",
+    timestamp: new Date("2026-04-12T08:00:02.000Z"),
+  });
+  const runMissingReviewApply = createRunId({
+    branch: "run-missing-review-apply",
+    timestamp: new Date("2026-04-12T08:00:03.000Z"),
+  });
+
+  writeRun(repoRoot, {
+    runId: runAssignedAndActingCodex,
+    state: STATES.READY_TO_MERGE,
+    rounds: 2,
+    updatedAt: recentTs,
+    reviewer: "codex",
+    lastReviewer: "codex",
+    lastReviewedSha: "codex222",
+  });
+  writeRun(repoRoot, {
+    runId: runAssignedCodexActingClaude,
+    state: STATES.CHANGES_REQUESTED,
+    rounds: 1,
+    updatedAt: recentTs,
+    reviewer: "codex",
+    lastReviewer: "claude",
+    lastReviewedSha: "claude111",
+  });
+  writeRun(repoRoot, {
+    runId: runMixedActingReviewers,
+    state: STATES.READY_TO_MERGE,
+    rounds: 2,
+    updatedAt: recentTs,
+    reviewer: "codex",
+    lastReviewer: "claude",
+    lastReviewedSha: "mixed222",
+  });
+  writeRun(repoRoot, {
+    runId: runMissingReviewApply,
+    state: STATES.CHANGES_REQUESTED,
+    rounds: 1,
+    updatedAt: recentTs,
+    reviewer: "codex",
+    lastReviewer: "claude",
+    lastReviewedSha: "missing111",
+  });
+
+  appendRunEvent(repoRoot, runAssignedAndActingCodex, {
+    event: "review_apply",
+    state_from: STATES.REVIEW_PENDING,
+    state_to: STATES.CHANGES_REQUESTED,
+    round: 1,
+    reviewer: "codex",
+    reason: "changes_requested",
+  });
+  appendRunEvent(repoRoot, runAssignedAndActingCodex, {
+    event: "review_apply",
+    state_from: STATES.REVIEW_PENDING,
+    state_to: STATES.READY_TO_MERGE,
+    round: 2,
+    reviewer: "codex",
+    reason: "pass",
+  });
+  appendRunEvent(repoRoot, runAssignedCodexActingClaude, {
+    event: "review_apply",
+    state_from: STATES.REVIEW_PENDING,
+    state_to: STATES.CHANGES_REQUESTED,
+    round: 1,
+    reviewer: "claude",
+    reason: "changes_requested",
+  });
+  appendRunEvent(repoRoot, runMixedActingReviewers, {
+    event: "review_apply",
+    state_from: STATES.REVIEW_PENDING,
+    state_to: STATES.CHANGES_REQUESTED,
+    round: 1,
+    reviewer: "codex",
+    reason: "changes_requested",
+  });
+  appendRunEvent(repoRoot, runMixedActingReviewers, {
+    event: "review_apply",
+    state_from: STATES.REVIEW_PENDING,
+    state_to: STATES.READY_TO_MERGE,
+    round: 2,
+    reviewer: "claude",
+    reason: "pass",
+  });
+
+  const stdout = execFileSync(
+    "node",
+    [SCRIPT, "--repo", repoRoot, "--json", "--by-role", "--by-acting-reviewer"],
+    { encoding: "utf-8" }
+  );
+  const report = JSON.parse(stdout);
+
+  assert.deepEqual(Object.keys(report.by_role.reviewer), ["codex"]);
+  assert.deepEqual(Object.keys(report.by_acting_reviewer.reviewers), ["claude", "codex"]);
+
+  assert.equal(report.by_role.reviewer.codex.totals.manifests, 4);
+
+  assert.deepEqual(report.by_acting_reviewer.reviewers.codex.acting_review, {
+    review_apply_events: 3,
+    review_apply_runs: 2,
+    exclusive_review_apply_runs: 1,
+    mixed_review_apply_runs: 1,
+  });
+  assert.equal(report.by_acting_reviewer.reviewers.codex.totals.manifests, 2);
+
+  assert.deepEqual(report.by_acting_reviewer.reviewers.claude.acting_review, {
+    review_apply_events: 2,
+    review_apply_runs: 2,
+    exclusive_review_apply_runs: 1,
+    mixed_review_apply_runs: 1,
+  });
+  assert.equal(report.by_acting_reviewer.reviewers.claude.totals.manifests, 2);
+
+  assert.deepEqual(report.by_acting_reviewer.summary, {
+    review_apply_events: 5,
+    review_apply_runs: 3,
+    multi_reviewer_runs: 1,
+    missing_review_apply_runs: 1,
+    missing_review_apply_run_ids: [runMissingReviewApply],
+  });
+});
+
+test("reliability-report keeps missing acting reviewer data explicit in text output", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-report-acting-reviewer-text-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  const recentTs = new Date(Date.now() - 1 * 60 * 60 * 1000).toISOString();
+  const runActingClaude = createRunId({
+    branch: "run-acting-claude",
+    timestamp: new Date("2026-04-12T08:10:00.000Z"),
+  });
+  const runMissingReviewApply = createRunId({
+    branch: "run-missing-review-apply",
+    timestamp: new Date("2026-04-12T08:10:01.000Z"),
+  });
+
+  writeRun(repoRoot, {
+    runId: runActingClaude,
+    state: STATES.CHANGES_REQUESTED,
+    rounds: 1,
+    updatedAt: recentTs,
+    reviewer: "codex",
+    lastReviewer: "claude",
+    lastReviewedSha: "claude111",
+  });
+  writeRun(repoRoot, {
+    runId: runMissingReviewApply,
+    state: STATES.CHANGES_REQUESTED,
+    rounds: 1,
+    updatedAt: recentTs,
+    reviewer: "codex",
+    lastReviewer: "claude",
+    lastReviewedSha: "missing111",
+  });
+
+  appendRunEvent(repoRoot, runActingClaude, {
+    event: "review_apply",
+    state_from: STATES.REVIEW_PENDING,
+    state_to: STATES.CHANGES_REQUESTED,
+    round: 1,
+    reviewer: "claude",
+    reason: "changes_requested",
+  });
+
+  const stdout = execFileSync("node", [SCRIPT, "--repo", repoRoot, "--by-acting-reviewer"], { encoding: "utf-8" });
+
+  assert.match(stdout, /by_acting_reviewer:/);
+  assert.match(stdout, /claude: review_apply_events=1 review_apply_runs=1 mixed_runs=0 manifests=1 events=1/);
+  assert.match(stdout, /summary: review_apply_events=1 review_apply_runs=1 multi_reviewer_runs=0 missing_review_apply_runs=1/);
+  assert.match(stdout, new RegExp(`missing_review_apply_run_ids: ${runMissingReviewApply}`));
 });
