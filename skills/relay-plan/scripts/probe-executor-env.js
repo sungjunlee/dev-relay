@@ -16,6 +16,7 @@
 const { execFileSync, spawnSync } = require("child_process");
 const fs = require("fs");
 const path = require("path");
+const { getArg: sharedGetArg, hasFlag: sharedHasFlag } = require("../../relay-dispatch/scripts/cli-args");
 
 // ---------------------------------------------------------------------------
 // CLI (only when run directly)
@@ -37,17 +38,12 @@ function parseCli(argv) {
     process.exit(0);
   }
 
-  function getArg(flags, fallback) {
-    for (const flag of Array.isArray(flags) ? flags : [flags]) {
-      const idx = args.indexOf(flag);
-      if (idx !== -1 && idx + 1 < args.length && !KNOWN_FLAGS.includes(args[idx + 1])) {
-        return args[idx + 1];
-      }
-    }
-    return fallback;
-  }
-  const hasFlag = (f) => args.includes(f);
+  const getArg = (flags, fallback) => sharedGetArg(args, flags, fallback, { reservedFlags: KNOWN_FLAGS });
+  const hasFlag = (flag) => sharedHasFlag(args, flag);
 
+  // Positional repo-path parsing is local to this script — the shared helper
+  // is flag-only. We still use `KNOWN_FLAGS` to walk flag/value pairs so the
+  // first unconsumed non-flag argv slot becomes the repo path.
   const consumedIndices = new Set();
   for (let i = 0; i < args.length; i++) {
     if (KNOWN_FLAGS.includes(args[i]) && !["--project-only", "--json", "--help", "-h"].includes(args[i])) {

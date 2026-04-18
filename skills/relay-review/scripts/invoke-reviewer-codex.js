@@ -8,6 +8,7 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const { REVIEW_VERDICT_JSON_SCHEMA } = require("./review-schema");
+const { getArg: sharedGetArg, hasFlag: sharedHasFlag } = require("../../relay-dispatch/scripts/cli-args");
 
 const args = process.argv.slice(2);
 const KNOWN_FLAGS = ["--repo", "--prompt-file", "--model", "--json", "--help", "-h"];
@@ -17,16 +18,8 @@ if (!args.length || args.includes("--help") || args.includes("-h")) {
   process.exit(args.includes("--help") || args.includes("-h") ? 0 : 1);
 }
 
-function getArg(flag) {
-  const index = args.indexOf(flag);
-  if (index === -1 || index + 1 >= args.length) return undefined;
-  const value = args[index + 1];
-  return KNOWN_FLAGS.includes(value) ? undefined : value;
-}
-
-function hasFlag(flag) {
-  return args.includes(flag);
-}
+const getArg = (flag, fallback) => sharedGetArg(args, flag, fallback, { reservedFlags: KNOWN_FLAGS });
+const hasFlag = (flag) => sharedHasFlag(args, flag);
 
 function readNonEmptyFile(filePath) {
   if (!fs.existsSync(filePath)) return null;
