@@ -65,16 +65,10 @@ function validateScopeDrift(scopeDrift) {
     throw new Error("scope_drift.missing must be an array");
   }
   scopeDrift.creep.forEach((entry, index) => {
-    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
-      throw new Error(`scope_drift.creep[${index}] must be an object`);
-    }
     if (!String(entry.file || "").trim()) throw new Error(`scope_drift.creep[${index}].file is required`);
     if (!String(entry.reason || "").trim()) throw new Error(`scope_drift.creep[${index}].reason is required`);
   });
   scopeDrift.missing.forEach((entry, index) => {
-    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
-      throw new Error(`scope_drift.missing[${index}] must be an object`);
-    }
     if (!String(entry.criteria || "").trim()) throw new Error(`scope_drift.missing[${index}].criteria is required`);
     if (!ALLOWED_DRIFT_STATUSES.has(entry.status)) {
       throw new Error(`scope_drift.missing[${index}].status must be one of: ${Array.from(ALLOWED_DRIFT_STATUSES).join(", ")}`);

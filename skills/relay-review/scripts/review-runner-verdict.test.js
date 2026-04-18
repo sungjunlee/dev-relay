@@ -218,3 +218,44 @@ test("verdict/validateScopeDrift rejects missing status entries", () => {
     missing: [{ criteria: "Ship feature" }],
   }), /scope_drift\.missing\[0\]\.status/i);
 });
+
+test("verdict/validateScopeDrift preserves legacy malformed nested-entry behavior", async (t) => {
+  const cases = [
+    {
+      label: "creep null entry still throws native property access error",
+      scopeDrift: { creep: [null], missing: [] },
+      expected: /Cannot read properties of null \(reading 'file'\)/,
+    },
+    {
+      label: "creep string entry still fails on missing file field",
+      scopeDrift: { creep: ["extra"], missing: [] },
+      expected: /scope_drift\.creep\[0\]\.file is required/,
+    },
+    {
+      label: "creep array entry still fails on missing file field",
+      scopeDrift: { creep: [[]], missing: [] },
+      expected: /scope_drift\.creep\[0\]\.file is required/,
+    },
+    {
+      label: "missing null entry still throws native property access error",
+      scopeDrift: { creep: [], missing: [null] },
+      expected: /Cannot read properties of null \(reading 'criteria'\)/,
+    },
+    {
+      label: "missing string entry still fails on missing criteria field",
+      scopeDrift: { creep: [], missing: ["extra"] },
+      expected: /scope_drift\.missing\[0\]\.criteria is required/,
+    },
+    {
+      label: "missing array entry still fails on missing criteria field",
+      scopeDrift: { creep: [], missing: [[]] },
+      expected: /scope_drift\.missing\[0\]\.criteria is required/,
+    },
+  ];
+
+  for (const { label, scopeDrift, expected } of cases) {
+    await t.test(label, () => {
+      assert.throws(() => validateScopeDrift(scopeDrift), expected);
+    });
+  }
+});
