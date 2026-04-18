@@ -34,12 +34,13 @@ const {
 } = require("./review-gate");
 const {
   STATES,
+} = require("../../relay-dispatch/scripts/manifest/lifecycle");
+const {
   getCanonicalRepoRoot,
   getRunDir,
-  readManifest,
   validateManifestPaths,
-  writeManifest,
-} = require("../../relay-dispatch/scripts/relay-manifest");
+} = require("../../relay-dispatch/scripts/manifest/paths");
+const { readManifest, writeManifest } = require("../../relay-dispatch/scripts/manifest/store");
 const { appendRunEvent, readRunEvents } = require("../../relay-dispatch/scripts/relay-events");
 const { resolveManifestRecord } = require("../../relay-dispatch/scripts/relay-resolver");
 

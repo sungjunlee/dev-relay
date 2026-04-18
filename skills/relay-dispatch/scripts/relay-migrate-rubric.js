@@ -6,12 +6,14 @@ const path = require("path");
 
 const {
   getCanonicalRepoRoot,
-  getActorName,
   getRelayHome,
-  getRubricGrandfatherMetadata,
+} = require("./manifest/paths");
+const {
+  getActorName,
   readManifest,
   writeManifest,
-} = require("./relay-manifest");
+} = require("./manifest/store");
+const { getRubricGrandfatherMetadata } = require("./manifest/rubric");
 const { appendRunEvent } = require("./relay-events");
 const { resolveManifestRecord } = require("./relay-resolver");
 

@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 
 const path = require("path");
-const { STATES, listManifestRecords } = require("./relay-manifest");
+const { STATES } = require("./manifest/lifecycle");
+const { listManifestRecords } = require("./manifest/store");
 const { readAllRunEvents } = require("./relay-events");
 
 const args = process.argv.slice(2);

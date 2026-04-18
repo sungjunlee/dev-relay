@@ -32,17 +32,15 @@ const { execFileSync } = require("child_process");
 const fs = require("fs");
 const path = require("path");
 const { REVIEW_VERDICT_JSON_SCHEMA } = require("./review-schema");
+const { STATES, updateManifestState } = require("../../relay-dispatch/scripts/manifest/lifecycle");
 const {
-  STATES,
   ensureRunLayout,
   getCanonicalRepoRoot,
-  getRubricAnchorStatus,
   getRunDir,
-  readManifest,
-  updateManifestState,
   validateManifestPaths,
-  writeManifest,
-} = require("../../relay-dispatch/scripts/relay-manifest");
+} = require("../../relay-dispatch/scripts/manifest/paths");
+const { getRubricAnchorStatus } = require("../../relay-dispatch/scripts/manifest/rubric");
+const { readManifest, writeManifest } = require("../../relay-dispatch/scripts/manifest/store");
 const { resolveManifestRecord } = require("../../relay-dispatch/scripts/relay-resolver");
 const {
   appendIterationScore,
