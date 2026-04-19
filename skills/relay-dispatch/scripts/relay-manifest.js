@@ -1,3 +1,6 @@
+// Compatibility facade — see `references/architecture.md` § Module Boundaries.
+// Runtime code imports `./manifest/<submodule>` directly; this file exists for
+// legacy public-surface tests and deferred consumers (#188).
 const paths = require("./manifest/paths");
 const store = require("./manifest/store");
 const lifecycle = require("./manifest/lifecycle");
