@@ -96,20 +96,33 @@ function readPriorVerdicts(runDir, currentRound) {
   return verdicts;
 }
 
+/**
+ * Calls `onVerdict(verdict, roundNum)` for each prior verdict from newest round
+ * to oldest. Return `false` to stop iteration early; any other return continues.
+ */
+function scanPriorVerdicts(runDir, currentRound, onVerdict) {
+  const verdicts = readPriorVerdicts(runDir, currentRound);
+  for (let round = currentRound - 1, index = 0; round >= 1 && index < verdicts.length; round -= 1) {
+    if (!fs.existsSync(path.join(runDir, `review-round-${round}-verdict.json`))) continue;
+    if (onVerdict(verdicts[index], round) === false) return;
+    index += 1;
+  }
+}
+
 function computeRepeatedIssueCount(runDir, round, issues) {
   if (!issues.length) return 0;
 
   let repeating = new Set(issues.map(fingerprintIssue));
   let count = 1;
-  for (const verdict of readPriorVerdicts(runDir, round)) {
+  scanPriorVerdicts(runDir, round, (verdict) => {
     if (verdict.verdict !== "changes_requested" || !Array.isArray(verdict.issues) || verdict.issues.length === 0) {
-      break;
+      return false;
     }
     const prior = new Set(verdict.issues.map(fingerprintIssue));
     repeating = new Set([...repeating].filter((entry) => prior.has(entry)));
-    if (repeating.size === 0) break;
+    if (repeating.size === 0) return false;
     count += 1;
-  }
+  });
   return count;
 }
 
@@ -205,5 +218,6 @@ module.exports = {
   fingerprintIssue,
   normalizeFingerprintPart,
   readPriorVerdicts,
+  scanPriorVerdicts,
   toEscalatedVerdict,
 };
