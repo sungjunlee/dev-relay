@@ -159,7 +159,7 @@ function run() {
   );
   const diffText = loadDiff(runRepoPath, prNumber, diffFile);
   const rubricLoad = loadRubricFromRunDir(runDir, data);
-  const promptText = buildPrompt({ round, prNumber, branch, issueNumber, doneCriteria, doneCriteriaSource, diffText, runDir, rubricLoad });
+  const promptText = buildPrompt({ round, prNumber, branch, issueNumber, doneCriteria, doneCriteriaSource, diffText, reviewRepoPath, runDir, rubricLoad });
 
   const doneCriteriaPath = path.join(runDir, `review-round-${round}-done-criteria.md`);
   const diffPath = path.join(runDir, `review-round-${round}-diff.patch`);
