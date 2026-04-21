@@ -226,6 +226,7 @@ function createManifestSkeleton({
       latest_verdict: "pending",
       repeated_issue_count: 0,
       last_reviewed_sha: null,
+      reviewer_swap_count: 0,
     },
     cleanup: createCleanupSkeleton(),
     environment: environment || {
