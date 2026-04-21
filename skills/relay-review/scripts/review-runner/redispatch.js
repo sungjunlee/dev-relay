@@ -77,10 +77,13 @@ function normalizeFingerprintPart(value) {
     .replace(/\s+/g, " ");
 }
 
+/**
+ * Excludes `line` so the same semantic issue still repeats when reviewers restate
+ * it at a different location across rounds.
+ */
 function fingerprintIssue(issue) {
   return [
     normalizeFingerprintPart(issue.file),
-    String(issue.line),
     normalizeFingerprintPart(issue.category),
     normalizeFingerprintPart(issue.title),
   ].join("|");
