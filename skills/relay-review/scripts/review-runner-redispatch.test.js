@@ -8,6 +8,7 @@ const {
   buildRubricGateRedispatchPrompt,
   buildRubricRecoveryCommand,
   buildReviewRunnerRubricGateFailure,
+  computeFactorStatusFlips,
   computeRepeatedIssueCount,
   detectChurnGrowth,
   scanPriorVerdicts,
@@ -102,6 +103,30 @@ test("redispatch/scanPriorVerdicts does not invoke the callback when no prior ve
   scanPriorVerdicts(runDir, 1, () => { calls += 1; });
   scanPriorVerdicts(runDir, 3, () => { calls += 1; });
   assert.equal(calls, 0);
+});
+
+test("redispatch/computeFactorStatusFlips detects pass-fail-pass with normalized factor names", () => {
+  const runDir = tempRunDir();
+  fs.writeFileSync(path.join(runDir, "review-round-1-verdict.json"), JSON.stringify({ rubric_scores: [{ factor: " Behavior ", status: "pass" }] }), "utf-8");
+  fs.writeFileSync(path.join(runDir, "review-round-2-verdict.json"), JSON.stringify({ rubric_scores: [{ factor: "behavior", status: "fail" }] }), "utf-8");
+  const flips = computeFactorStatusFlips(runDir, 3, { rubric_scores: [{ factor: "BEHAVIOR", status: "pass" }] });
+  assert.deepEqual(flips, [{ factor: "BEHAVIOR", trace: ["pass", "fail", "pass"] }]);
+});
+
+test("redispatch/computeFactorStatusFlips ignores two-round changes and not_run gaps", () => {
+  const runDir = tempRunDir();
+  fs.writeFileSync(path.join(runDir, "review-round-1-verdict.json"), JSON.stringify({ rubric_scores: [{ factor: "behavior", status: "pass" }] }), "utf-8");
+  fs.writeFileSync(path.join(runDir, "review-round-2-verdict.json"), JSON.stringify({ rubric_scores: [{ factor: "behavior", status: "not_run" }] }), "utf-8");
+  const flips = computeFactorStatusFlips(runDir, 3, { rubric_scores: [{ factor: "behavior", status: "fail" }] });
+  assert.deepEqual(flips, []);
+});
+
+test("redispatch/computeFactorStatusFlips ignores factors that change in different rounds", () => {
+  const runDir = tempRunDir();
+  fs.writeFileSync(path.join(runDir, "review-round-1-verdict.json"), JSON.stringify({ rubric_scores: [{ factor: "A", status: "pass" }, { factor: "B", status: "pass" }] }), "utf-8");
+  fs.writeFileSync(path.join(runDir, "review-round-2-verdict.json"), JSON.stringify({ rubric_scores: [{ factor: "A", status: "fail" }, { factor: "B", status: "pass" }] }), "utf-8");
+  const flips = computeFactorStatusFlips(runDir, 3, { rubric_scores: [{ factor: "A", status: "fail" }, { factor: "B", status: "fail" }] });
+  assert.deepEqual(flips, []);
 });
 
 test("redispatch/buildReviewRunnerRubricGateFailure preserves the fail-closed recovery matrix", async (t) => {
