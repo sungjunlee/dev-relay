@@ -11,9 +11,11 @@ const {
   DEFAULT_ENFORCEMENT_RUBRIC,
 } = require("../../relay-dispatch/scripts/test-support");
 const {
+  loadProjectConventions,
   loadRubricFromRunDir,
   parseRemoteHost,
 } = require("./review-runner/context");
+const { buildPrompt } = require("./review-runner/prompt");
 
 function createRunFixture() {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-context-"));
@@ -138,6 +140,42 @@ test("context/loadRubricFromRunDir classifies a malformed rubric path as invalid
   assert.equal(result.state, "invalid");
   assert.equal(result.status, "unreadable");
   assert.match(result.warning, /\[rubric invalid\]/i);
+});
+
+test("context/loadProjectConventions returns empty when .gitignore is missing and omits the prompt section", () => {
+  const { repoRoot } = createRunFixture();
+  assert.equal(loadProjectConventions(repoRoot), "");
+  const prompt = buildPrompt({
+    round: 1, prNumber: 246, branch: "issue-246", issueNumber: 246, doneCriteria: "# Done Criteria\n", doneCriteriaSource: "github-issue",
+    diffText: "diff --git a/a.js b/a.js\n", reviewRepoPath: repoRoot, runDir: null, rubricLoad: { warning: null, content: null },
+  });
+  assert.doesNotMatch(prompt, /## Project Conventions/);
+});
+
+test("context/loadProjectConventions truncates .gitignore at 2KB with marker", () => {
+  const { repoRoot } = createRunFixture();
+  fs.writeFileSync(path.join(repoRoot, ".gitignore"), "a".repeat(2050), "utf-8");
+  assert.equal(loadProjectConventions(repoRoot), `${"a".repeat(2048)}\n# ...truncated at 2KB`);
+});
+
+test("context/loadProjectConventions ignores symlinked .gitignore escaping the repo root", () => {
+  const { repoRoot } = createRunFixture();
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-outside-"));
+  fs.writeFileSync(path.join(outside, "escaped.gitignore"), "*.g.dart\n", "utf-8");
+  fs.symlinkSync(path.join(outside, "escaped.gitignore"), path.join(repoRoot, ".gitignore"));
+  assert.equal(loadProjectConventions(repoRoot), "");
+});
+
+test("context/loadProjectConventions content is injected into buildPrompt", () => {
+  const { repoRoot } = createRunFixture();
+  fs.writeFileSync(path.join(repoRoot, ".gitignore"), "*.g.dart\nbuild/\n", "utf-8");
+  const prompt = buildPrompt({
+    round: 1, prNumber: 246, branch: "issue-246", issueNumber: 246, doneCriteria: "# Done Criteria\n", doneCriteriaSource: "github-issue",
+    diffText: "diff --git a/a.js b/a.js\n", reviewRepoPath: repoRoot, runDir: null, rubricLoad: { warning: null, content: null },
+  });
+  assert.match(prompt, /## Project Conventions/);
+  assert.match(prompt, /Do not flag violations of these as issues/);
+  assert.match(prompt, /\*\.g\.dart\nbuild\//);
 });
 
 test("context/parseRemoteHost preserves the origin parsing matrix", async (t) => {

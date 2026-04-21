@@ -1,15 +1,20 @@
 const path = require("path");
 const { REVIEW_VERDICT_JSON_SCHEMA } = require("../review-schema");
 const { readText } = require("./common");
-const { formatPriorRoundContext } = require("./context");
+const { formatPriorRoundContext, loadProjectConventions } = require("./context");
 
 const REVIEWER_PROMPT_PATH = path.join(__dirname, "..", "..", "references", "reviewer-prompt.md");
 
-function buildPrompt({ round, prNumber, branch, issueNumber, doneCriteria, doneCriteriaSource, diffText, runDir, rubricLoad }) {
-  const template = readText(REVIEWER_PROMPT_PATH)
+function renderProjectConventions(template, conventions) {
+  if (conventions) return template.replace("[PASTE PROJECT CONVENTIONS HERE]", conventions);
+  return template.replace(/\n## Project Conventions[\s\S]*?<\/task-content>\n(?=\n## PR Diff)/, "\n");
+}
+
+function buildPrompt({ round, prNumber, branch, issueNumber, doneCriteria, doneCriteriaSource, diffText, reviewRepoPath, runDir, rubricLoad }) {
+  const template = renderProjectConventions(readText(REVIEWER_PROMPT_PATH)
     .replace("source=\"done-criteria\"", `source="${doneCriteriaSource || "done-criteria"}"`)
     .replace("[PASTE DONE CRITERIA HERE]", doneCriteria)
-    .replace("[PASTE PR DIFF OR FILE PATH HERE]", diffText);
+    .replace("[PASTE PR DIFF OR FILE PATH HERE]", diffText), reviewRepoPath ? loadProjectConventions(reviewRepoPath) : "");
 
   const sections = [
     `# Relay Review Round ${round}`,
