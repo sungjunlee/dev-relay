@@ -25,6 +25,7 @@ const {
   buildRedispatchPrompt,
   buildReviewRunnerRubricGateFailure,
   buildRubricGateRedispatchPrompt,
+  computeFactorStatusFlips,
   computeRepeatedIssueCount,
   detectChurnGrowth,
   toEscalatedVerdict,
@@ -241,6 +242,13 @@ function run() {
     verdict = toEscalatedVerdict(
       verdict,
       `Repeated identical review issues hit ${repeatedIssueCount} consecutive rounds.`
+    );
+  }
+  const factorFlips = computeFactorStatusFlips(runDir, round, verdict);
+  if (factorFlips.length) {
+    verdict = toEscalatedVerdict(
+      verdict,
+      factorFlips.map(({ factor, trace }) => `Rubric factor '${factor}' status flipped across 3 rounds (trace: ${trace.join("→")}). Owner decision required — reviewer cannot converge autonomously.`).join("; ")
     );
   }
 
