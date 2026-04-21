@@ -32,6 +32,7 @@ const {
 } = require("./review-runner/redispatch");
 const { applyPolicyViolationToManifest, applyVerdictToManifest } = require("./review-runner/manifest-apply");
 const { loadReviewText, resolveReviewerName, resolveReviewerScript } = require("./review-runner/reviewer-invoke");
+const { maybeSwapReviewer } = require("./review-runner/reviewer-swap");
 const { getArg: sharedGetArg, hasFlag: sharedHasFlag } = require("../../relay-dispatch/scripts/cli-args");
 
 const args = process.argv.slice(2);
@@ -113,7 +114,10 @@ function run() {
     branchArg,
     prArg
   );
-  const { data, body, manifestPath } = manifest;
+  const { body, manifestPath } = manifest;
+  let { data } = manifest;
+
+  data = maybeSwapReviewer(data, reviewerArg, body, manifestPath, runRepoPath);
 
   if (data.state !== STATES.REVIEW_PENDING) {
     throw new Error(`Review runner requires state=review_pending, got '${data.state}'`);
