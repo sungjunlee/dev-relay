@@ -15,6 +15,14 @@ You are reviewing code you did NOT write. Be objective and thorough.
 [PASTE DONE CRITERIA HERE]
 </task-content>
 
+## Project Conventions
+
+Project conventions below. Do not flag violations of these as issues — files and patterns listed here are intentionally excluded by the project.
+
+<task-content source="project-conventions">
+[PASTE PROJECT CONVENTIONS HERE]
+</task-content>
+
 ## PR Diff
 
 <task-content source="pr-diff">

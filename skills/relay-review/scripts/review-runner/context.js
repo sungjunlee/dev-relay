@@ -1,5 +1,6 @@
 const { execFileSync } = require("child_process");
 const fs = require("fs");
+const path = require("path");
 const {
   getCanonicalRepoRoot,
   validateManifestPaths,
@@ -367,6 +368,27 @@ function loadDiff(repoPath, prNumber, diffFile) {
   return gh(repoPath, "pr", "diff", String(prNumber)).trim();
 }
 
+function loadProjectConventions(reviewRepoPath) {
+  const repoRoot = getCanonicalRepoRoot(reviewRepoPath);
+  const conventionsPath = path.join(repoRoot, ".gitignore");
+  try {
+    const realPath = fs.realpathSync(conventionsPath);
+    const relative = path.relative(repoRoot, realPath);
+    if (relative && (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative))) return "";
+    const fd = fs.openSync(realPath, "r");
+    try {
+      const buffer = Buffer.alloc(2048);
+      const bytes = fs.readSync(fd, buffer, 0, buffer.length, 0);
+      const text = buffer.subarray(0, bytes).toString("utf-8");
+      return fs.statSync(realPath).size > buffer.length ? `${text}${text.endsWith("\n") ? "" : "\n"}# ...truncated at 2KB` : text;
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {
+    return "";
+  }
+}
+
 function formatPriorRoundContext(runDir, round) {
   if (!runDir || round <= 1) return "";
 
@@ -493,6 +515,7 @@ module.exports = {
   isValidHostname,
   loadDiff,
   loadDoneCriteria,
+  loadProjectConventions,
   loadRubricFromRunDir,
   parseRemoteHost,
   resolveContext,
