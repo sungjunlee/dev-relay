@@ -46,6 +46,53 @@ function setupRepoWithOrigin() {
   return setupRepo();
 }
 
+function configureOriginHead(repoRoot, remoteRoot, branch) {
+  if (branch !== "main") {
+    execFileSync("git", ["checkout", "-b", branch], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
+    execFileSync("git", ["push", "-u", "origin", branch], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
+  }
+  execFileSync("git", ["symbolic-ref", "HEAD", `refs/heads/${branch}`], {
+    cwd: remoteRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+  });
+  execFileSync("git", ["remote", "set-head", "origin", branch], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+  });
+}
+
+function detachHead(repoRoot) {
+  const headSha = execFileSync("git", ["rev-parse", "HEAD"], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+  }).trim();
+  execFileSync("git", ["checkout", "--detach", headSha], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+  });
+}
+
+function setupDetachedHeadRepo({ originHeadBranch } = {}) {
+  const fixture = setupRepo();
+  if (originHeadBranch) {
+    configureOriginHead(fixture.repoRoot, fixture.remoteRoot, originHeadBranch);
+  } else {
+    try {
+      execFileSync("git", ["update-ref", "-d", "refs/remotes/origin/HEAD"], {
+        cwd: fixture.repoRoot,
+        encoding: "utf-8",
+        stdio: "pipe",
+      });
+    } catch {}
+  }
+  detachHead(fixture.repoRoot);
+  return fixture;
+}
+
 function createUnrelatedRelayOwnedWorktree(repoRoot, relayHome, branch = "issue-42") {
   const attackerParent = fs.mkdtempSync(path.join(os.tmpdir(), "relay-dispatch-foreign-"));
   const attackerRoot = path.join(attackerParent, path.basename(repoRoot));
@@ -1090,6 +1137,67 @@ test("dispatch can resume from --manifest while invoked from an unrelated git re
   assert.equal(second.worktree, first.worktree);
   assert.equal(second.runState, STATES.REVIEW_PENDING);
   assert.equal(readManifest(first.manifestPath).data.state, STATES.REVIEW_PENDING);
+});
+
+test("dispatch remaps detached HEAD to origin default branch before manifest creation (#253)", () => {
+  const { repoRoot, relayHome } = setupDetachedHeadRepo({ originHeadBranch: "trunk" });
+  const { env, ghLogPath } = createPushPrTestEnv({
+    relayHome,
+    ghState: {
+      prCreateUrl: "https://github.com/acme/dev-relay/pull/253",
+    },
+  });
+
+  const result = spawnSync("node", [SCRIPT, repoRoot, ...withRequiredRubric([
+    "-b", "issue-253-fallback",
+    "--prompt", "exercise detached HEAD fallback",
+    "--json",
+  ])], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    env,
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stderr, /\[relay-dispatch\] base_branch fallback:/);
+  assert.match(result.stderr, /using origin default 'trunk'/);
+
+  const parsed = JSON.parse(result.stdout);
+  const manifest = readManifest(parsed.manifestPath).data;
+  assert.equal(manifest.git.base_branch, "trunk");
+  assert.notEqual(manifest.git.base_branch, "HEAD");
+
+  const ghCreateCall = readJsonLines(ghLogPath).find((args) => args[0] === "pr" && args[1] === "create");
+  assert.ok(ghCreateCall, "expected gh pr create call");
+  const baseFlagIndex = ghCreateCall.indexOf("--base");
+  assert.notEqual(baseFlagIndex, -1, "expected --base flag");
+  assert.equal(ghCreateCall[baseFlagIndex + 1], "trunk");
+});
+
+test("dispatch fails closed on detached HEAD when origin HEAD is unresolved before worktree creation (#253)", () => {
+  const { repoRoot, relayHome } = setupDetachedHeadRepo();
+  const env = {
+    ...process.env,
+    PATH: createGitOnlyPath(),
+    RELAY_HOME: relayHome,
+  };
+
+  const result = spawnSync(process.execPath, [SCRIPT, repoRoot, ...withRequiredRubric([
+    "-b", "issue-253-fail-closed",
+    "--prompt", "exercise detached HEAD failure",
+    "--json",
+  ])], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    env,
+  });
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /unable to determine base branch for new dispatch when repository HEAD is detached/i);
+  assert.match(result.stderr, /git remote set-head origin --auto/);
+  assert.equal(listManifestPaths(repoRoot).length, 0);
+  assert.equal(fs.existsSync(path.join(relayHome, "runs")), false);
+  assert.equal(fs.existsSync(path.join(relayHome, "worktrees")), false);
 });
 
 test("dispatch resume fails loudly when the retained worktree is missing", () => {
