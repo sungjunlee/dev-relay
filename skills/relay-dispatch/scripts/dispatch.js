@@ -290,6 +290,48 @@ function git(repoDir, ...gitArgs) {
   return execFileSync("git", ["-C", repoDir, ...gitArgs], { encoding: "utf-8" }).trim();
 }
 
+function isValidBaseBranchName(branch) {
+  return typeof branch === "string" && branch.trim() !== "" && branch.trim() !== "HEAD";
+}
+
+function resolveOriginDefaultBranch(repoDir) {
+  const remoteHeadRef = git(repoDir, "symbolic-ref", "refs/remotes/origin/HEAD");
+  const prefix = "refs/remotes/origin/";
+  if (!remoteHeadRef.startsWith(prefix)) {
+    throw new Error(`origin/HEAD resolved to unexpected ref '${remoteHeadRef}'`);
+  }
+
+  const branch = remoteHeadRef.slice(prefix.length).trim();
+  if (!isValidBaseBranchName(branch)) {
+    throw new Error(`origin/HEAD resolved to invalid branch '${branch || "(empty)"}'`);
+  }
+  return branch;
+}
+
+function resolveBaseBranchForNewDispatch(repoDir) {
+  let detectedBranch = "";
+  try {
+    detectedBranch = git(repoDir, "rev-parse", "--abbrev-ref", "HEAD");
+  } catch {}
+
+  if (isValidBaseBranchName(detectedBranch)) {
+    return detectedBranch;
+  }
+
+  try {
+    const fallbackBranch = resolveOriginDefaultBranch(repoDir);
+    console.error(
+      `[relay-dispatch] base_branch fallback: rev-parse returned '${detectedBranch || "(empty)"}', using origin default '${fallbackBranch}'`
+    );
+    return fallbackBranch;
+  } catch (error) {
+    throw new Error(
+      "unable to determine base branch for new dispatch when repository HEAD is detached. " +
+      `Run 'git remote set-head origin --auto' to repair refs/remotes/origin/HEAD, then retry. (${error.message})`
+    );
+  }
+}
+
 function shellQuote(s) {
   return "'" + s.replace(/'/g, "'\\''") + "'";
 }
@@ -572,9 +614,7 @@ async function main() {
     if (fs.existsSync(getRunDir(repoRoot, runId))) {
       failRunDirCollision(runId, manifestPath);
     }
-    try {
-      baseBranch = git(repoRoot, "rev-parse", "--abbrev-ref", "HEAD") || "main";
-    } catch {}
+    baseBranch = resolveBaseBranchForNewDispatch(repoRoot);
     if (fs.existsSync(wtPath)) {
       console.error(`Error: worktree path already exists: ${wtPath}`);
       process.exit(1);
