@@ -3,6 +3,7 @@ const path = require("path");
 const { formatIssueList, formatScopeDrift } = require("./comment");
 const { formatPriorVerdictSummary } = require("./prompt");
 
+const FLIP_STATES = new Set(["pass", "fail"]);
 const RUBRIC_PASS_THROUGH_STATES = new Set(["loaded"]);
 
 function buildRedispatchPrompt(verdict, doneCriteria, runDir, round, churnGrowth, doneCriteriaSource) {
@@ -23,6 +24,14 @@ function buildRedispatchPrompt(verdict, doneCriteria, runDir, round, churnGrowth
     const priorSummary = formatPriorVerdictSummary(priorVerdicts);
     if (priorSummary) {
       sections.push("", priorSummary);
+    }
+    const factorFlips = listPriorFactorStatusFlips(runDir, round);
+    if (factorFlips.length) {
+      sections.push(
+        "",
+        "Prior-round factor flips (reviewer cannot converge on these — do NOT re-flag as blocker; owner decision needed):",
+        ...factorFlips.map(({ factor, trace }) => `- ${factor}: ${trace.join("→")}`)
+      );
     }
   }
 
@@ -129,6 +138,53 @@ function computeRepeatedIssueCount(runDir, round, issues) {
   return count;
 }
 
+function mapRubricStatuses(verdict) {
+  return new Map((Array.isArray(verdict?.rubric_scores) ? verdict.rubric_scores : [])
+    .map((score) => [normalizeFingerprintPart(score.factor), { factor: score.factor, status: score.status }]));
+}
+
+function isFlipTrace(trace) {
+  return trace.length === 3
+    && trace.every((status) => FLIP_STATES.has(status))
+    && trace[0] === trace[2]
+    && trace[0] !== trace[1];
+}
+
+function collectFactorStatusFlips(verdicts) {
+  const [first, second, third] = verdicts.map(mapRubricStatuses);
+  return [...third.entries()].flatMap(([key, current]) => {
+    const trace = [first.get(key)?.status, second.get(key)?.status, current.status];
+    return isFlipTrace(trace) ? [{ factor: current.factor, trace }] : [];
+  });
+}
+
+function computeFactorStatusFlips(runDir, round, currentVerdict) {
+  const priorVerdicts = [];
+  scanPriorVerdicts(runDir, round, (verdict, verdictRound) => {
+    if (verdictRound < round - 2) return false;
+    priorVerdicts.push(verdict);
+  });
+  return priorVerdicts.length < 2 ? [] : collectFactorStatusFlips([priorVerdicts[1], priorVerdicts[0], currentVerdict]);
+}
+
+function hasConsecutiveRounds(entries, index) {
+  return index >= 2
+    && entries[index - 2].round + 1 === entries[index - 1].round
+    && entries[index - 1].round + 1 === entries[index].round;
+}
+
+function listPriorFactorStatusFlips(runDir, round) {
+  const priorVerdicts = [];
+  scanPriorVerdicts(runDir, round, (verdict, verdictRound) => priorVerdicts.push({ round: verdictRound, verdict }));
+  priorVerdicts.reverse();
+  const flips = priorVerdicts.reduce((memo, _entry, index, entries) => {
+    if (!hasConsecutiveRounds(entries, index)) return memo;
+    for (const flip of collectFactorStatusFlips(entries.slice(index - 2, index + 1).map((entry) => entry.verdict))) memo.set(normalizeFingerprintPart(flip.factor), flip);
+    return memo;
+  }, new Map());
+  return [...flips.values()];
+}
+
 function toEscalatedVerdict(baseVerdict, summary) {
   return {
     ...baseVerdict,
@@ -216,6 +272,7 @@ module.exports = {
   buildReviewRunnerRubricGateFailure,
   buildRubricGateRedispatchPrompt,
   buildRubricRecoveryCommand,
+  computeFactorStatusFlips,
   computeRepeatedIssueCount,
   detectChurnGrowth,
   fingerprintIssue,

@@ -1576,6 +1576,24 @@ test("repeated identical issues escalate on the third consecutive round", () => 
   assert.equal(manifest.review.repeated_issue_count, 0);
 });
 
+test("rubric factor flip-flops escalate even when the reviewer returns pass", () => {
+  const { repoRoot, manifestPath, runId, doneCriteriaPath, diffPath } = setupRepo();
+  const runDir = ensureRunLayout(repoRoot, runId).runDir;
+  fs.writeFileSync(path.join(runDir, "review-round-1-verdict.json"), JSON.stringify({ verdict: "changes_requested", rubric_scores: [{ factor: "Behavior", status: "pass" }] }), "utf-8");
+  fs.writeFileSync(path.join(runDir, "review-round-2-verdict.json"), JSON.stringify({ verdict: "changes_requested", rubric_scores: [{ factor: "behavior", status: "fail" }] }), "utf-8");
+  updateManifestRecord(manifestPath, (data) => ({ ...data, review: { ...(data.review || {}), rounds: 2 } }));
+  const reviewFile = writeVerdict(repoRoot, "flip-pass.json", {
+    verdict: "pass", summary: "Looks good.", contract_status: "pass", quality_status: "pass", next_action: "ready_to_merge", issues: [],
+    rubric_scores: [{ factor: "BEHAVIOR", target: ">= 1/1", observed: "1/1", status: "pass", tier: "contract", notes: "Recovered." }],
+    scope_drift: { creep: [], missing: [] },
+  });
+  const result = JSON.parse(execFileSync("node", [SCRIPT, "--repo", repoRoot, "--run-id", runId, "--pr", "123", "--done-criteria-file", doneCriteriaPath, "--diff-file", diffPath, "--review-file", reviewFile, "--no-comment", "--json"], { encoding: "utf-8" }));
+  const verdict = JSON.parse(fs.readFileSync(result.verdictPath, "utf-8"));
+  assert.equal(result.state, STATES.ESCALATED);
+  assert.equal(verdict.verdict, "escalated");
+  assert.equal(verdict.summary, "Rubric factor 'BEHAVIOR' status flipped across 3 rounds (trace: pass→fail→pass). Owner decision required — reviewer cannot converge autonomously.");
+});
+
 test("formatPriorVerdictSummary produces correct round numbers and rubric summaries", () => {
   // Module-level argv parsing prevents direct require(), so use a helper script
   // that sets process.argv before requiring the module.
@@ -1903,6 +1921,23 @@ test("buildRedispatchPrompt omits churn WARNING when churnGrowth is null", () =>
   const out = execFileSync("node", [helperPath], { encoding: "utf-8" });
   assert.ok(!out.includes("WARNING"));
   assert.ok(!out.includes("Apply minimal"));
+});
+
+test("buildRedispatchPrompt includes prior-round factor flips", () => {
+  const runDir = fs.mkdtempSync(path.join(os.tmpdir(), "redispatch-factor-flips-"));
+  fs.writeFileSync(path.join(runDir, "review-round-1-verdict.json"), JSON.stringify({ rubric_scores: [{ factor: "Behavior", status: "pass" }] }), "utf-8");
+  fs.writeFileSync(path.join(runDir, "review-round-2-verdict.json"), JSON.stringify({ rubric_scores: [{ factor: "behavior", status: "fail" }] }), "utf-8");
+  fs.writeFileSync(path.join(runDir, "review-round-3-verdict.json"), JSON.stringify({ rubric_scores: [{ factor: "BEHAVIOR", status: "pass" }] }), "utf-8");
+  const helperPath = path.join(os.tmpdir(), `redispatch-flips-${Date.now()}.js`);
+  fs.writeFileSync(helperPath, [
+    `process.argv = ["node", "helper.js", "--repo", "/dev/null", "--branch", "x", "--pr", "1"];`,
+    `const { buildRedispatchPrompt } = require(${JSON.stringify(SCRIPT)});`,
+    `const verdict = { verdict: "changes_requested", summary: "test", issues: [{ title: "t", body: "b", file: "x.js", line: 1, category: "contract", severity: "high" }], scope_drift: { creep: [], missing: [] } };`,
+    `process.stdout.write(buildRedispatchPrompt(verdict, "AC: do X", ${JSON.stringify(runDir)}, 4, null));`,
+  ].join("\n"), "utf-8");
+  const out = execFileSync("node", [helperPath], { encoding: "utf-8" });
+  assert.match(out, /Prior-round factor flips \(reviewer cannot converge on these — do NOT re-flag as blocker; owner decision needed\):/);
+  assert.match(out, /- BEHAVIOR: pass→fail→pass/);
 });
 
 test("review-runner loads rubric from run dir and includes rubric factor names and targets in the prompt", () => {
