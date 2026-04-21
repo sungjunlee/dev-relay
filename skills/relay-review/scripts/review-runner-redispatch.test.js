@@ -52,6 +52,27 @@ test("redispatch/computeRepeatedIssueCount only counts consecutive identical cha
   assert.equal(computeRepeatedIssueCount(runDir, 3, [issue]), 3);
 });
 
+test("redispatch/computeRepeatedIssueCount repeats across line churn", () => {
+  const runDir = tempRunDir();
+  for (const [round, line] of [[1, 11], [2, 27], [3, 42]]) fs.writeFileSync(path.join(runDir, `review-round-${round}-verdict.json`), JSON.stringify({ verdict: "changes_requested", issues: [{ file: "line-shift.js", line, category: "bug", title: "Preserve retry budget" }] }), "utf-8");
+  assert.equal(computeRepeatedIssueCount(runDir, 3, [{ file: "line-shift.js", line: 99, category: "bug", title: "Preserve retry budget" }]), 3);
+});
+
+test("redispatch/computeRepeatedIssueCount does not merge distinct titles", () => {
+  const runDir = tempRunDir();
+  for (const [round, title] of [[1, "First cache fix"], [2, "Second cache fix"], [3, "Third cache fix"]]) fs.writeFileSync(path.join(runDir, `review-round-${round}-verdict.json`), JSON.stringify({ verdict: "changes_requested", issues: [{ file: "title-guard.js", line: 18, category: "bug", title }] }), "utf-8");
+  assert.equal(computeRepeatedIssueCount(runDir, 3, [{ file: "title-guard.js", line: 18, category: "bug", title: "Third cache fix" }]), 1);
+});
+
+test("redispatch/computeRepeatedIssueCount keeps identical non-regression fingerprints repeating", async (t) => {
+  await t.test("same file/category/title still counts to three", () => {
+    const runDir = tempRunDir();
+    const issue = { file: "repeat-still.js", line: 14, category: "bug", title: "Keep diff anchor stable" };
+    for (const round of [1, 2, 3]) fs.writeFileSync(path.join(runDir, `review-round-${round}-verdict.json`), JSON.stringify({ verdict: "changes_requested", issues: [issue] }), "utf-8");
+    assert.equal(computeRepeatedIssueCount(runDir, 3, [issue]), 3);
+  });
+});
+
 test("redispatch/scanPriorVerdicts walks reverse-chronological rounds and skips missing files", () => {
   const runDir = tempRunDir();
   for (const round of [1, 3, 4]) {
