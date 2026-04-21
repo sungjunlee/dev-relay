@@ -17,7 +17,7 @@ const ALLOWED_TRANSITIONS = Object.freeze({
   [STATES.REVIEW_PENDING]: new Set([STATES.CHANGES_REQUESTED, STATES.READY_TO_MERGE, STATES.ESCALATED, STATES.CLOSED]),
   [STATES.CHANGES_REQUESTED]: new Set([STATES.DISPATCHED, STATES.CLOSED]),
   [STATES.READY_TO_MERGE]: new Set([STATES.MERGED, STATES.CLOSED]),
-  [STATES.ESCALATED]: new Set([STATES.CLOSED]),
+  [STATES.ESCALATED]: new Set([STATES.REVIEW_PENDING, STATES.CLOSED]),
   [STATES.MERGED]: new Set(),
   [STATES.CLOSED]: new Set(),
 });
@@ -45,6 +45,15 @@ function validateTransitionInvariants(data, fromState, toState) {
       throw new Error(
         `Cannot transition dispatched -> review_pending because ${rubricAnchor.error} ` +
         "Generate the rubric with relay-plan and dispatch with --rubric-file."
+      );
+    }
+  }
+  if (fromState === STATES.ESCALATED && toState === STATES.REVIEW_PENDING) {
+    const swapCount = Number(data.review?.reviewer_swap_count || 0);
+    if (swapCount >= 1) {
+      throw new Error(
+        `Cannot transition escalated -> review_pending: reviewer_swap_count=${swapCount} (max 1 per run). ` +
+        "Use close-run.js --reason to close, or start a new run."
       );
     }
   }

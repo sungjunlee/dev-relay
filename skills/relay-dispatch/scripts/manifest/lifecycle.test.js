@@ -19,7 +19,7 @@ const EXPECTED_TRANSITIONS = Object.freeze({
   [STATES.REVIEW_PENDING]: new Set([STATES.CHANGES_REQUESTED, STATES.READY_TO_MERGE, STATES.ESCALATED, STATES.CLOSED]),
   [STATES.CHANGES_REQUESTED]: new Set([STATES.DISPATCHED, STATES.CLOSED]),
   [STATES.READY_TO_MERGE]: new Set([STATES.MERGED, STATES.CLOSED]),
-  [STATES.ESCALATED]: new Set([STATES.CLOSED]),
+  [STATES.ESCALATED]: new Set([STATES.REVIEW_PENDING, STATES.CLOSED]),
   [STATES.MERGED]: new Set(),
   [STATES.CLOSED]: new Set(),
 });
@@ -106,9 +106,8 @@ test("manifest/lifecycle validateTransitionInvariants only gates dispatched -> r
   const states = Object.values(STATES);
   for (const fromState of states) {
     for (const toState of states) {
-      if (fromState === STATES.DISPATCHED && toState === STATES.REVIEW_PENDING) {
-        continue;
-      }
+      if (fromState === STATES.DISPATCHED && toState === STATES.REVIEW_PENDING) continue;
+      if (fromState === STATES.ESCALATED && toState === STATES.REVIEW_PENDING) continue;
       assert.doesNotThrow(
         () => validateTransitionInvariants({}, fromState, toState),
         `${fromState} -> ${toState} should remain invariant-free`
@@ -125,6 +124,27 @@ test("manifest/lifecycle validateTransitionInvariants only gates dispatched -> r
       STATES.REVIEW_PENDING
     ),
     /rubric file is missing/
+  );
+});
+
+test("manifest/lifecycle validateTransitionInvariants gates escalated -> review_pending on reviewer_swap_count", () => {
+  assert.doesNotThrow(() => validateTransitionInvariants(
+    { review: { reviewer_swap_count: 0 } },
+    STATES.ESCALATED,
+    STATES.REVIEW_PENDING
+  ));
+  assert.doesNotThrow(() => validateTransitionInvariants(
+    {},
+    STATES.ESCALATED,
+    STATES.REVIEW_PENDING
+  ));
+  assert.throws(
+    () => validateTransitionInvariants(
+      { review: { reviewer_swap_count: 1 } },
+      STATES.ESCALATED,
+      STATES.REVIEW_PENDING
+    ),
+    /reviewer_swap_count=1 \(max 1 per run\)/
   );
 });
 

@@ -66,6 +66,15 @@ function appendRunEvent(repoRoot, runId, eventData) {
     ...(eventData.after !== undefined
       ? { after: normalizeEventValue(eventData.after) }
       : {}),
+    ...(eventData.from_reviewer !== undefined
+      ? { from_reviewer: normalizeEventValue(eventData.from_reviewer) }
+      : {}),
+    ...(eventData.to_reviewer !== undefined
+      ? { to_reviewer: normalizeEventValue(eventData.to_reviewer) }
+      : {}),
+    ...(eventData.reviewer_swap_count !== undefined
+      ? { reviewer_swap_count: normalizeEventValue(eventData.reviewer_swap_count) }
+      : {}),
   };
 
   appendEventLine(repoRoot, runId, record);
