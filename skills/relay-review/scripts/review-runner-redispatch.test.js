@@ -10,6 +10,7 @@ const {
   buildReviewRunnerRubricGateFailure,
   computeRepeatedIssueCount,
   detectChurnGrowth,
+  scanPriorVerdicts,
 } = require("./review-runner/redispatch");
 
 function tempRunDir() {
@@ -49,6 +50,37 @@ test("redispatch/computeRepeatedIssueCount only counts consecutive identical cha
 
   assert.equal(computeRepeatedIssueCount(runDir, 4, [issue]), 1);
   assert.equal(computeRepeatedIssueCount(runDir, 3, [issue]), 3);
+});
+
+test("redispatch/scanPriorVerdicts walks reverse-chronological rounds and skips missing files", () => {
+  const runDir = tempRunDir();
+  for (const round of [1, 3, 4]) {
+    fs.writeFileSync(path.join(runDir, `review-round-${round}-verdict.json`), JSON.stringify({ verdict: `round-${round}` }), "utf-8");
+  }
+  const rounds = [];
+  scanPriorVerdicts(runDir, 5, (_verdict, round) => rounds.push(round));
+  assert.deepEqual(rounds, [4, 3, 1]);
+});
+
+test("redispatch/scanPriorVerdicts only stops on false", () => {
+  const runDir = tempRunDir();
+  for (const round of [1, 2, 3]) {
+    fs.writeFileSync(path.join(runDir, `review-round-${round}-verdict.json`), JSON.stringify({ verdict: `round-${round}` }), "utf-8");
+  }
+  const rounds = [];
+  scanPriorVerdicts(runDir, 4, (_verdict, round) => {
+    rounds.push(round);
+    return round === 2 ? false : null;
+  });
+  assert.deepEqual(rounds, [3, 2]);
+});
+
+test("redispatch/scanPriorVerdicts does not invoke the callback when no prior verdicts exist", () => {
+  const runDir = tempRunDir();
+  let calls = 0;
+  scanPriorVerdicts(runDir, 1, () => { calls += 1; });
+  scanPriorVerdicts(runDir, 3, () => { calls += 1; });
+  assert.equal(calls, 0);
 });
 
 test("redispatch/buildReviewRunnerRubricGateFailure preserves the fail-closed recovery matrix", async (t) => {

@@ -370,20 +370,18 @@ function loadDiff(repoPath, prNumber, diffFile) {
 function formatPriorRoundContext(runDir, round) {
   if (!runDir || round <= 1) return "";
 
-  const { readPriorVerdicts } = require("./redispatch");
+  const { scanPriorVerdicts } = require("./redispatch");
   const { formatIssueList } = require("./comment");
 
-  const verdicts = readPriorVerdicts(runDir, round);
-  if (!verdicts.length) return "";
-
-  const lines = verdicts.map((verdict, index) => {
-    const roundNum = verdicts.length - index;
+  const lines = [];
+  scanPriorVerdicts(runDir, round, (verdict, roundNum) => {
     const parts = [`### Round ${roundNum}: ${verdict.verdict}`, verdict.summary];
     if (Array.isArray(verdict.issues) && verdict.issues.length) {
       parts.push("Issues flagged:", formatIssueList(verdict.issues));
     }
-    return parts.join("\n");
+    lines.push(parts.join("\n"));
   });
+  if (!lines.length) return "";
 
   return ["## Prior Round Context", "", "Verify whether prior issues were resolved.", "", ...lines].join("\n");
 }
