@@ -224,7 +224,48 @@ if (args[0] !== "exec") {
   process.exit(1);
 }
 const output = args[args.indexOf("-o") + 1];
-fs.writeFileSync(output, "ok\\n", "utf-8");
+fs.writeFileSync(output, "already applied\\n", "utf-8");
+`, "utf-8");
+  fs.chmodSync(codexPath, 0o755);
+  return codexPath;
+}
+
+function writeSilentCodex(binDir) {
+  ensureDefaultFakeGh(binDir);
+  const codexPath = path.join(binDir, "codex");
+  fs.writeFileSync(codexPath, `#!/usr/bin/env node
+const args = process.argv.slice(2);
+if (args[0] === "--version") {
+  process.stdout.write("codex-fake\\n");
+  process.exit(0);
+}
+if (args[0] !== "exec") {
+  process.stderr.write("unsupported fake codex invocation");
+  process.exit(1);
+}
+`, "utf-8");
+  fs.chmodSync(codexPath, 0o755);
+  return codexPath;
+}
+
+function writeUncommittedCodex(binDir) {
+  ensureDefaultFakeGh(binDir);
+  const codexPath = path.join(binDir, "codex");
+  fs.writeFileSync(codexPath, `#!/usr/bin/env node
+const fs = require("fs");
+const args = process.argv.slice(2);
+if (args[0] === "--version") {
+  process.stdout.write("codex-fake\\n");
+  process.exit(0);
+}
+if (args[0] !== "exec") {
+  process.stderr.write("unsupported fake codex invocation");
+  process.exit(1);
+}
+const cwd = args[args.indexOf("-C") + 1];
+const output = args[args.indexOf("-o") + 1];
+fs.appendFileSync(cwd + "/README.md", "dirty\\n", "utf-8");
+fs.writeFileSync(output, "work completed without commit\\n", "utf-8");
 `, "utf-8");
   fs.chmodSync(codexPath, 0o755);
   return codexPath;
@@ -366,6 +407,10 @@ function createPushPrTestEnv({ relayHome, ghState = {}, failGitPush = false, cod
   const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-dispatch-push-pr-bin-"));
   if (codexMode === "noop") {
     writeNoOpCodex(binDir);
+  } else if (codexMode === "silent") {
+    writeSilentCodex(binDir);
+  } else if (codexMode === "uncommitted") {
+    writeUncommittedCodex(binDir);
   } else {
     writeFakeCodex(binDir);
   }
@@ -374,12 +419,35 @@ function createPushPrTestEnv({ relayHome, ghState = {}, failGitPush = false, cod
   const ghStatePath = path.join(root, "gh-state.json");
   const ghLogPath = path.join(root, "gh-log.jsonl");
   const execLogPath = path.join(root, "exec-log.jsonl");
+  const pushPrCountPath = path.join(root, "push-pr-count.txt");
   fs.writeFileSync(ghStatePath, JSON.stringify(ghState), "utf-8");
+  fs.writeFileSync(pushPrCountPath, "0", "utf-8");
 
   const preloadPath = writePreloadScript(root, "dispatch-push-pr-preload.js", `
 const fs = require("fs");
+const Module = require("module");
 const childProcess = require("child_process");
+const originalLoad = Module._load;
 const originalExecFileSync = childProcess.execFileSync;
+Module._load = function patchedLoad(request, parent, isMain) {
+  const loaded = originalLoad.apply(this, arguments);
+  if (request === "./dispatch-publish" || request.endsWith("/dispatch-publish")) {
+    return {
+      ...loaded,
+      async pushAndOpenPR(...args) {
+        const countPath = process.env.RELAY_TEST_PUSH_PR_COUNT;
+        if (countPath) {
+          const current = fs.existsSync(countPath)
+            ? Number(fs.readFileSync(countPath, "utf-8")) || 0
+            : 0;
+          fs.writeFileSync(countPath, String(current + 1), "utf-8");
+        }
+        return loaded.pushAndOpenPR(...args);
+      },
+    };
+  }
+  return loaded;
+};
 childProcess.execFileSync = function patchedExecFileSync(command, args, options) {
   const argv = Array.isArray(args) ? args : [];
   const logPath = process.env.RELAY_TEST_EXEC_LOG;
@@ -435,10 +503,11 @@ childProcess.execFileSync = function patchedExecFileSync(command, args, options)
     RELAY_TEST_GH_STATE: ghStatePath,
     RELAY_TEST_GH_LOG: ghLogPath,
     RELAY_TEST_EXEC_LOG: execLogPath,
+    RELAY_TEST_PUSH_PR_COUNT: pushPrCountPath,
     ...(failGitPush ? { RELAY_TEST_FAIL_GIT_PUSH: "1" } : {}),
   }, preloadPath);
 
-  return { env, ghLogPath, execLogPath, ghStatePath };
+  return { env, ghLogPath, execLogPath, ghStatePath, pushPrCountPath };
 }
 
 function createGitOnlyPath() {
@@ -2013,14 +2082,14 @@ test("dispatch skips PR creation when the branch already has an open PR", () => 
   assert.deepEqual(ghCalls.map((args) => args.slice(0, 2)), [["pr", "list"]]);
 });
 
-test("dispatch silent-failure path skips orchestrator push and PR creation when no commits were made", () => {
+test("dispatch silent failure escalates when executor exits cleanly without stdout or result file", () => {
   const { repoRoot, relayHome } = setupRepoWithOrigin();
-  const { env, ghLogPath, execLogPath } = createPushPrTestEnv({
+  const { env, ghLogPath, execLogPath, pushPrCountPath } = createPushPrTestEnv({
     relayHome,
     ghState: {
       prCreateUrl: "https://github.com/acme/dev-relay/pull/324",
     },
-    codexMode: "noop",
+    codexMode: "silent",
   });
 
   const proc = spawnSync("node", [SCRIPT, repoRoot, ...withRequiredRubric([
@@ -2038,8 +2107,101 @@ test("dispatch silent-failure path skips orchestrator push and PR creation when 
   assert.equal(result.status, "failed");
   assert.equal(result.runState, STATES.ESCALATED);
   assert.match(result.error, /silent failure/);
+  const manifest = readManifest(result.manifestPath).data;
+  assert.equal(manifest.state, STATES.ESCALATED);
+  assert.equal(fs.existsSync(result.resultFile), false);
   assert.deepEqual(readJsonLines(ghLogPath), []);
   assert.deepEqual(readJsonLines(execLogPath), []);
+  assert.equal(Number(fs.readFileSync(pushPrCountPath, "utf-8")), 0);
+});
+
+test("dispatch marks verified no-op runs as completed-no-op and skips orchestrator publication", () => {
+  const { repoRoot, relayHome } = setupRepoWithOrigin();
+  const { env, ghLogPath, execLogPath, pushPrCountPath } = createPushPrTestEnv({
+    relayHome,
+    ghState: {
+      prCreateUrl: "https://github.com/acme/dev-relay/pull/325",
+    },
+    codexMode: "noop",
+  });
+
+  const result = JSON.parse(runDispatch(repoRoot, [
+    "-b", "issue-263-noop",
+    "--prompt", "nothing to do",
+    "--json",
+  ], env));
+
+  assert.equal(result.status, "completed-no-op");
+  assert.equal(result.runState, STATES.REVIEW_PENDING);
+  assert.equal(result.commits, "");
+  assert.equal(result.uncommitted, null);
+  const manifest = readManifest(result.manifestPath).data;
+  assert.equal(manifest.state, STATES.REVIEW_PENDING);
+  assert.deepEqual(readJsonLines(ghLogPath), []);
+  assert.deepEqual(readJsonLines(execLogPath), []);
+  assert.equal(Number(fs.readFileSync(pushPrCountPath, "utf-8")), 0);
+});
+
+test("dispatch marks uncommitted result runs as completed-uncommitted and skips orchestrator publication", () => {
+  const { repoRoot, relayHome } = setupRepoWithOrigin();
+  const { env, ghLogPath, execLogPath, pushPrCountPath } = createPushPrTestEnv({
+    relayHome,
+    ghState: {
+      prCreateUrl: "https://github.com/acme/dev-relay/pull/326",
+    },
+    codexMode: "uncommitted",
+  });
+
+  const result = JSON.parse(runDispatch(repoRoot, [
+    "-b", "issue-263-uncommitted",
+    "--prompt", "work without commit",
+    "--json",
+  ], env));
+
+  assert.equal(result.status, "completed-uncommitted");
+  assert.equal(result.runState, STATES.REVIEW_PENDING);
+  assert.equal(result.commits, "");
+  assert.match(result.uncommitted, /README\.md/);
+  const manifest = readManifest(result.manifestPath).data;
+  assert.equal(manifest.state, STATES.REVIEW_PENDING);
+  assert.deepEqual(readJsonLines(ghLogPath), []);
+  assert.deepEqual(readJsonLines(execLogPath), []);
+  assert.equal(Number(fs.readFileSync(pushPrCountPath, "utf-8")), 0);
+});
+
+test("dispatch uses result-file presence to distinguish silent failure from verified no-op", () => {
+  const silentFixture = setupRepoWithOrigin();
+  const silentEnv = createPushPrTestEnv({
+    relayHome: silentFixture.relayHome,
+    codexMode: "silent",
+  });
+  const silentProc = spawnSync("node", [SCRIPT, silentFixture.repoRoot, ...withRequiredRubric([
+    "-b", "issue-263-silent-pair",
+    "--prompt", "same inputs without result file",
+    "--json",
+  ])], {
+    cwd: silentFixture.repoRoot,
+    encoding: "utf-8",
+    env: silentEnv.env,
+  });
+  assert.notEqual(silentProc.status, 0);
+  const silentResult = JSON.parse(silentProc.stdout);
+
+  const noOpFixture = setupRepoWithOrigin();
+  const noOpEnv = createPushPrTestEnv({
+    relayHome: noOpFixture.relayHome,
+    codexMode: "noop",
+  });
+  const noOpResult = JSON.parse(runDispatch(noOpFixture.repoRoot, [
+    "-b", "issue-263-noop-pair",
+    "--prompt", "same inputs with result file",
+    "--json",
+  ], noOpEnv.env));
+
+  assert.equal(silentResult.status, "failed");
+  assert.equal(noOpResult.status, "completed-no-op");
+  assert.equal(fs.existsSync(silentResult.resultFile), false);
+  assert.equal(fs.existsSync(noOpResult.resultFile), true);
 });
 
 test("re-dispatch prompt includes previous iteration history", () => {
