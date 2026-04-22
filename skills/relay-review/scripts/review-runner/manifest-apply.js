@@ -11,6 +11,23 @@ function refreshManifestWithoutStateChange(data, nextAction) {
   };
 }
 
+function buildReviewStatusFields(verdict) {
+  const reviewStatus = {};
+  if (typeof verdict.contract_status === "string") {
+    reviewStatus.last_contract_status = verdict.contract_status;
+  }
+  if (typeof verdict.quality_review_status === "string") {
+    reviewStatus.last_quality_review_status = verdict.quality_review_status;
+  }
+  if (typeof verdict.quality_execution_status === "string") {
+    reviewStatus.last_quality_execution_status = verdict.quality_execution_status;
+  }
+  if (typeof verdict.quality_execution_reason === "string" || verdict.quality_execution_reason === null) {
+    reviewStatus.last_quality_execution_reason = verdict.quality_execution_reason;
+  }
+  return reviewStatus;
+}
+
 function applyVerdictToManifest(data, verdict, round, prNumber, reviewedHeadSha, repeatedIssueCount, options = {}) {
   const rubricGateFailure = options.rubricGateFailure || null;
   let nextState;
@@ -53,6 +70,7 @@ function applyVerdictToManifest(data, verdict, round, prNumber, reviewedHeadSha,
       latest_verdict: latestVerdict,
       repeated_issue_count: verdict.verdict === "changes_requested" ? repeatedIssueCount : 0,
       last_reviewed_sha: reviewedHeadSha || null,
+      ...buildReviewStatusFields(verdict),
       last_gate: rubricGateFailure ? {
         status: rubricGateFailure.status,
         layer: rubricGateFailure.layer,
@@ -88,5 +106,6 @@ function applyPolicyViolationToManifest(data, round, prNumber, reviewedHeadSha, 
 module.exports = {
   applyPolicyViolationToManifest,
   applyVerdictToManifest,
+  buildReviewStatusFields,
   refreshManifestWithoutStateChange,
 };

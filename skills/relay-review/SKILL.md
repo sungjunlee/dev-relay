@@ -94,7 +94,7 @@ Two phases, run in order. Each round re-measures against the **original anchor**
    - **Security**: Auth/token handling, input validation, injection risks?
 
 6. **Rubric verification** (when Score Log present):
-   - Re-run ALL automated checks independently — do not trust the executor's reported results
+   - The reviewer evaluates `quality_review_status` by inspection; the runner independently verifies `quality_execution_status` via a SHA-bound execution-evidence artifact. The reviewer cannot execute code, so quality evidence comes from two trust roots.
    - Re-score ALL evaluated factors with fresh eyes (1-10)
    - Any required factor below target → issue
    - Score divergence ≥2 points from the executor → flag for review
@@ -134,6 +134,7 @@ node ${CLAUDE_SKILL_DIR}/scripts/review-runner.js --repo . --run-id "$RUN_ID" --
 The runner:
 - validates the JSON verdict
 - optionally invokes the reviewer adapter itself when `--reviewer <name>` is used
+- computes and overrides `quality_execution_status` from `execution-evidence.json`
 - rejects the round if the reviewer mutates the repo and escalates the manifest
 - writes the PR audit comment
 - updates the relay manifest to `ready_to_merge`, `changes_requested`, or `escalated`
@@ -141,6 +142,9 @@ The runner:
 - writes `review-round-N-raw-response.txt` when it invoked the reviewer itself
 - writes `review-round-N-policy-violation.txt` if the reviewer changed files
 - writes `review-round-N-redispatch.md` when changes are requested
+
+Backward compatibility:
+- Pre-261 runs do not have `execution-evidence.json`. In that case the runner computes `quality_execution_status=missing`, a reviewer PASS cannot be applied, and operators should use `finalize-run --force-finalize-nonready --reason "pre-261 run, no artifact"` only after independent verification.
 
 ## Re-dispatch (when issues found)
 

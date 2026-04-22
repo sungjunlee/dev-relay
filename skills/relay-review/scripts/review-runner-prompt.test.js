@@ -26,6 +26,26 @@ test("prompt/buildPrompt preserves rubric warnings in the rendered prompt", () =
   assert.match(prompt, /\[rubric missing\]/i);
 });
 
+test("prompt/buildPrompt includes the reviewer versus runner trust-boundary rationale", () => {
+  const prompt = buildPrompt({
+    round: 1,
+    prNumber: 261,
+    branch: "issue-261",
+    issueNumber: 261,
+    doneCriteria: "# Done Criteria\n\n- Verify SHA-bound execution evidence\n",
+    doneCriteriaSource: "github-issue",
+    diffText: "diff --git a/a.js b/a.js\n",
+    runDir: null,
+    rubricLoad: {
+      warning: null,
+      content: null,
+    },
+  });
+
+  assert.match(prompt, /reviewer cannot execute code/i);
+  assert.match(prompt, /runner independently verifies SHA-bound execution evidence/i);
+});
+
 test("prompt/buildPrompt preserves prior-round context rendering", () => {
   const runDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-prompt-"));
   fs.writeFileSync(path.join(runDir, "review-round-1-verdict.json"), JSON.stringify({

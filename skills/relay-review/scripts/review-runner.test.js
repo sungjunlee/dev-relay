@@ -20,6 +20,10 @@ const {
   createGrandfatheredRubricAnchor,
   createEnforcementFixture,
 } = require("../../relay-dispatch/scripts/test-support");
+const {
+  EXECUTION_EVIDENCE_FILENAME,
+  FORCE_FINALIZE_GUIDANCE,
+} = require("./review-runner/execution-evidence");
 
 const SCRIPT = path.join(__dirname, "review-runner.js");
 const DISPATCH_SCRIPT = path.join(__dirname, "../../relay-dispatch/scripts/dispatch.js");
@@ -50,7 +54,7 @@ function setupRepo() {
   });
   fs.writeFileSync(path.join(worktreePath, "marker.txt"), "worktree\n", "utf-8");
 
-  const manifestPath = ensureRunLayout(repoRoot, runId).manifestPath;
+  const { manifestPath, runDir } = ensureRunLayout(repoRoot, runId);
   let manifest = createManifestSkeleton({
     repoRoot,
     runId,
@@ -79,6 +83,7 @@ function setupRepo() {
   };
   manifest = updateManifestState(manifest, STATES.REVIEW_PENDING, "run_review");
   writeManifest(manifestPath, manifest);
+  writeExecutionEvidence(runDir, manifest.git.head_sha);
 
   const doneCriteriaPath = path.join(repoRoot, "done-criteria.md");
   const diffPath = path.join(repoRoot, "pr.diff");
@@ -86,6 +91,25 @@ function setupRepo() {
   fs.writeFileSync(diffPath, "diff --git a/smoke.txt b/smoke.txt\n+ok\n", "utf-8");
 
   return { repoRoot, worktreePath, manifestPath, runId, doneCriteriaPath, diffPath };
+}
+
+function buildExecutionEvidence(headSha, overrides = {}) {
+  return {
+    schema_version: 1,
+    head_sha: headSha,
+    test_command: "unspecified",
+    test_result_hash: "unspecified",
+    test_result_summary: "unspecified",
+    recorded_at: "2026-04-22T00:00:00.000Z",
+    recorded_by: "dispatch-orchestrator-v1",
+    ...overrides,
+  };
+}
+
+function writeExecutionEvidence(runDir, headSha, overrides = {}) {
+  const filePath = path.join(runDir, EXECUTION_EVIDENCE_FILENAME);
+  fs.writeFileSync(filePath, `${JSON.stringify(buildExecutionEvidence(headSha, overrides), null, 2)}\n`, "utf-8");
+  return filePath;
 }
 
 function createUnrelatedRelayOwnedWorktree(repoRoot, branch = "issue-42") {
@@ -160,7 +184,8 @@ function writePassVerdict(repoRoot, name = "pass.json") {
     verdict: "pass",
     summary: "All done criteria are satisfied.",
     contract_status: "pass",
-    quality_status: "pass",
+    quality_review_status: "pass",
+    quality_execution_status: "pass",
     next_action: "ready_to_merge",
     issues: [],
     rubric_scores: defaultRubricScores(),
@@ -520,7 +545,8 @@ test("pass verdict moves review_pending to ready_to_merge", () => {
     verdict: "pass",
     summary: "All done criteria are satisfied.",
     contract_status: "pass",
-    quality_status: "pass",
+    quality_review_status: "pass",
+    quality_execution_status: "pass",
     next_action: "ready_to_merge",
     issues: [],
     rubric_scores: defaultRubricScores(),
@@ -552,6 +578,10 @@ test("pass verdict moves review_pending to ready_to_merge", () => {
   assert.equal(manifest.review.rounds, 1);
   assert.equal(manifest.review.latest_verdict, "lgtm");
   assert.ok(manifest.review.last_reviewed_sha);
+  assert.equal(manifest.review.last_contract_status, "pass");
+  assert.equal(manifest.review.last_quality_review_status, "pass");
+  assert.equal(manifest.review.last_quality_execution_status, "pass");
+  assert.equal(manifest.review.last_quality_execution_reason, null);
 });
 
 test("pass verdict preserves assigned reviewer role and records the acting reviewer separately", () => {
@@ -581,13 +611,14 @@ test("pass verdict preserves assigned reviewer role and records the acting revie
   assert.equal(reviewApplyEvent?.reviewer, "codex");
 });
 
-test("pass verdict rejects quality_status=not_run", () => {
+test("pass verdict rejects quality_review_status=not_run", () => {
   const { repoRoot, manifestPath, doneCriteriaPath, diffPath } = setupRepo();
   const reviewFile = writeVerdict(repoRoot, "phase1-pass.json", {
     verdict: "pass",
     summary: "No blocking review issues found.",
     contract_status: "pass",
-    quality_status: "not_run",
+    quality_review_status: "not_run",
+    quality_execution_status: "pass",
     next_action: "ready_to_merge",
     issues: [],
     rubric_scores: defaultRubricScores(),
@@ -605,13 +636,195 @@ test("pass verdict rejects quality_status=not_run", () => {
     "--no-comment",
     "--json",
   ], { encoding: "utf-8", stdio: "pipe" }), (error) => {
-    assert.match(String(error.stderr), /PASS verdict requires contract_status=pass and quality_status=pass/);
+    assert.match(String(error.stderr), /PASS verdict failed: quality_review_status=not_run/);
     return true;
   });
 
   const manifest = readManifest(manifestPath).data;
   assert.equal(manifest.state, STATES.REVIEW_PENDING);
   assert.equal(manifest.review.latest_verdict, "pending");
+});
+
+test("review-runner fail-closes reviewer PASS into changes_requested when execution evidence is absent", () => {
+  const { repoRoot, manifestPath, runId, doneCriteriaPath, diffPath } = setupRepo();
+  const runDir = ensureRunLayout(repoRoot, runId).runDir;
+  const commentCapturePath = path.join(repoRoot, "missing-execution-comment.txt");
+  fs.unlinkSync(path.join(runDir, EXECUTION_EVIDENCE_FILENAME));
+  writeFakeGhScript(repoRoot, {
+    capturePath: commentCapturePath,
+    prBody: "",
+  });
+
+  const reviewFile = writeVerdict(repoRoot, "forged-execution-pass.json", {
+    verdict: "pass",
+    summary: "Inspection passed.",
+    contract_status: "pass",
+    quality_review_status: "pass",
+    quality_execution_status: "pass",
+    next_action: "ready_to_merge",
+    issues: [],
+    rubric_scores: defaultRubricScores(),
+    scope_drift: { creep: [], missing: [] },
+  });
+
+  const result = JSON.parse(execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--run-id", runId,
+    "--pr", "123",
+    "--done-criteria-file", doneCriteriaPath,
+    "--diff-file", diffPath,
+    "--review-file", reviewFile,
+    "--json",
+  ], {
+    encoding: "utf-8",
+    env: {
+      ...process.env,
+      PATH: `${repoRoot}:${process.env.PATH}`,
+    },
+  }));
+  const verdictRecord = JSON.parse(fs.readFileSync(result.verdictPath, "utf-8"));
+  const commentBody = fs.readFileSync(commentCapturePath, "utf-8");
+
+  const manifest = readManifest(manifestPath).data;
+  const reviewApplyEvent = readRunEvents(repoRoot, runId).find((event) => event.event === "review_apply");
+
+  assert.equal(result.appliedVerdict, "changes_requested");
+  assert.equal(result.state, STATES.CHANGES_REQUESTED);
+  assert.equal(verdictRecord.verdict, "changes_requested");
+  assert.equal(verdictRecord.quality_execution_status, "missing");
+  assert.match(verdictRecord.summary, /fail-closed reviewer PASS/);
+  assert.equal(verdictRecord.issues[0].file, EXECUTION_EVIDENCE_FILENAME);
+  assert.match(verdictRecord.issues[0].body, new RegExp(FORCE_FINALIZE_GUIDANCE.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  assert.equal(manifest.state, STATES.CHANGES_REQUESTED);
+  assert.equal(manifest.review.latest_verdict, "changes_requested");
+  assert.equal(manifest.review.last_quality_execution_status, "missing");
+  assert.match(commentBody, /Verdict: CHANGES_REQUESTED/);
+  assert.match(commentBody, /Quality Execution: MISSING/);
+  assert.match(commentBody, new RegExp(FORCE_FINALIZE_GUIDANCE.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  assert.equal(reviewApplyEvent?.reason, "changes_requested");
+});
+
+test("review-runner stores the runner-computed quality_execution_status in the verdict file, comment, and manifest", () => {
+  const { repoRoot, manifestPath, runId, doneCriteriaPath, diffPath } = setupRepo();
+  const runDir = ensureRunLayout(repoRoot, runId).runDir;
+  const commentCapturePath = path.join(repoRoot, "execution-status-comment.txt");
+  fs.unlinkSync(path.join(runDir, EXECUTION_EVIDENCE_FILENAME));
+  writeFakeGhScript(repoRoot, {
+    capturePath: commentCapturePath,
+    prBody: "",
+  });
+
+  const reviewFile = writeVerdict(repoRoot, "changes-with-forged-execution.json", {
+    verdict: "changes_requested",
+    summary: "Contract drift found.",
+    contract_status: "fail",
+    quality_review_status: "not_run",
+    quality_execution_status: "pass",
+    next_action: "changes_requested",
+    issues: [{
+      title: "Missing contract item",
+      body: "smoke.txt is not present in the diff.",
+      file: "src/index.js",
+      line: 10,
+      category: "contract",
+      severity: "high",
+    }],
+    rubric_scores: defaultRubricScores(),
+    scope_drift: { creep: [], missing: [] },
+  });
+
+  const result = JSON.parse(execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--run-id", runId,
+    "--pr", "123",
+    "--done-criteria-file", doneCriteriaPath,
+    "--diff-file", diffPath,
+    "--review-file", reviewFile,
+    "--json",
+  ], {
+    encoding: "utf-8",
+    env: {
+      ...process.env,
+      PATH: `${repoRoot}:${process.env.PATH}`,
+    },
+  }));
+
+  const verdictRecord = JSON.parse(fs.readFileSync(result.verdictPath, "utf-8"));
+  const manifest = readManifest(manifestPath).data;
+  const commentBody = fs.readFileSync(commentCapturePath, "utf-8");
+
+  assert.equal(result.state, STATES.CHANGES_REQUESTED);
+  assert.equal(verdictRecord.quality_execution_status, "missing");
+  assert.match(verdictRecord.quality_execution_reason, /pre-261 run, no artifact/);
+  assert.equal(manifest.review.last_quality_execution_status, "missing");
+  assert.match(manifest.review.last_quality_execution_reason, /pre-261 run, no artifact/);
+  assert.match(commentBody, /Quality Execution: MISSING/);
+});
+
+test("review-runner fail-closes reviewer PASS into changes_requested when execution evidence is stale", () => {
+  const { repoRoot, manifestPath, runId, doneCriteriaPath, diffPath } = setupRepo();
+  const runDir = ensureRunLayout(repoRoot, runId).runDir;
+  const commentCapturePath = path.join(repoRoot, "stale-execution-comment.txt");
+  writeExecutionEvidence(runDir, "0".repeat(40), {
+    test_result_hash: "1".repeat(64),
+    test_result_summary: "codex result.txt hashed",
+  });
+  writeFakeGhScript(repoRoot, {
+    capturePath: commentCapturePath,
+    prBody: "",
+  });
+
+  const reviewFile = writeVerdict(repoRoot, "pass-with-stale-execution.json", {
+    verdict: "pass",
+    summary: "Inspection passed.",
+    contract_status: "pass",
+    quality_review_status: "pass",
+    quality_execution_status: "pass",
+    next_action: "ready_to_merge",
+    issues: [],
+    rubric_scores: defaultRubricScores(),
+    scope_drift: { creep: [], missing: [] },
+  });
+
+  const result = JSON.parse(execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--run-id", runId,
+    "--pr", "123",
+    "--done-criteria-file", doneCriteriaPath,
+    "--diff-file", diffPath,
+    "--review-file", reviewFile,
+    "--json",
+  ], {
+    encoding: "utf-8",
+    env: {
+      ...process.env,
+      PATH: `${repoRoot}:${process.env.PATH}`,
+    },
+  }));
+  const verdictRecord = JSON.parse(fs.readFileSync(result.verdictPath, "utf-8"));
+  const commentBody = fs.readFileSync(commentCapturePath, "utf-8");
+  const manifest = readManifest(manifestPath).data;
+  const reviewApplyEvent = readRunEvents(repoRoot, runId).find((event) => event.event === "review_apply");
+
+  assert.equal(result.appliedVerdict, "changes_requested");
+  assert.equal(result.state, STATES.CHANGES_REQUESTED);
+  assert.equal(verdictRecord.verdict, "changes_requested");
+  assert.equal(verdictRecord.quality_execution_status, "fail");
+  assert.match(verdictRecord.summary, /quality_execution_status=fail/);
+  assert.match(verdictRecord.quality_execution_reason, /stale artifact/);
+  assert.equal(verdictRecord.issues[0].file, EXECUTION_EVIDENCE_FILENAME);
+  assert.match(verdictRecord.issues[0].body, /stale artifact/);
+  assert.equal(manifest.state, STATES.CHANGES_REQUESTED);
+  assert.equal(manifest.review.latest_verdict, "changes_requested");
+  assert.equal(manifest.review.last_quality_execution_status, "fail");
+  assert.match(manifest.review.last_quality_execution_reason, /stale artifact/);
+  assert.match(commentBody, /Verdict: CHANGES_REQUESTED/);
+  assert.match(commentBody, /Quality Execution: FAIL/);
+  assert.match(commentBody, /stale artifact/);
+  assert.equal(reviewApplyEvent?.reason, "changes_requested");
 });
 
 test("review-runner rejects invalid manifest run_id before creating a sibling run directory", () => {
@@ -823,7 +1036,8 @@ test("changes_requested verdict creates a re-dispatch artifact", () => {
     verdict: "changes_requested",
     summary: "One requirement is missing.",
     contract_status: "fail",
-    quality_status: "pass",
+    quality_review_status: "pass",
+    quality_execution_status: "pass",
     next_action: "changes_requested",
     issues: [
       {
@@ -873,7 +1087,8 @@ test("review-runner records rubric_scores as iteration_score events", () => {
     verdict: "changes_requested",
     summary: "Coverage and docs still need work.",
     contract_status: "fail",
-    quality_status: "pass",
+    quality_review_status: "pass",
+    quality_execution_status: "pass",
     next_action: "changes_requested",
     issues: [
       {
@@ -968,7 +1183,7 @@ test("review-runner records score divergence and appends warning text to the PR 
     verdict: "changes_requested",
     summary: "Scores disagree on implementation quality.",
     contract_status: "fail",
-    quality_status: "fail",
+    quality_review_status: "fail",
     next_action: "changes_requested",
     issues: [
       {
@@ -1062,7 +1277,8 @@ test("review-runner keeps event journals on the manifest repo slug when --repo i
     verdict: "changes_requested",
     summary: "Coverage still misses the bar.",
     contract_status: "fail",
-    quality_status: "pass",
+    quality_review_status: "pass",
+    quality_execution_status: "pass",
     next_action: "changes_requested",
     issues: [
       {
@@ -1155,7 +1371,8 @@ test("reviewer-script invocation can drive a round without --review-file", () =>
     verdict: "pass",
     summary: "Automated reviewer passed the change.",
     contract_status: "pass",
-    quality_status: "pass",
+    quality_review_status: "pass",
+    quality_execution_status: "pass",
     next_action: "ready_to_merge",
     issues: [],
     rubric_scores: defaultRubricScores(),
@@ -1192,7 +1409,8 @@ test("invalid pass verdict is rejected", () => {
     verdict: "pass",
     summary: "Looks good.",
     contract_status: "pass",
-    quality_status: "pass",
+    quality_review_status: "pass",
+    quality_execution_status: "pass",
     next_action: "ready_to_merge",
     issues: [
       {
@@ -1227,7 +1445,8 @@ test("invalid rubric score entry is rejected", () => {
     verdict: "pass",
     summary: "Looks good.",
     contract_status: "pass",
-    quality_status: "pass",
+    quality_review_status: "pass",
+    quality_execution_status: "pass",
     next_action: "ready_to_merge",
     issues: [],
     rubric_scores: [
@@ -1261,7 +1480,8 @@ test("review-runner rejects rubric score without tier", () => {
     verdict: "pass",
     summary: "Looks good.",
     contract_status: "pass",
-    quality_status: "pass",
+    quality_review_status: "pass",
+    quality_execution_status: "pass",
     next_action: "ready_to_merge",
     issues: [],
     rubric_scores: [
@@ -1295,7 +1515,8 @@ test("pass verdict with not_done scope_drift entry is rejected", () => {
     verdict: "pass",
     summary: "All good.",
     contract_status: "pass",
-    quality_status: "pass",
+    quality_review_status: "pass",
+    quality_execution_status: "pass",
     next_action: "ready_to_merge",
     issues: [],
     rubric_scores: defaultRubricScores(),
@@ -1324,7 +1545,8 @@ test("pass verdict with partial scope_drift entry is rejected", () => {
     verdict: "pass",
     summary: "Mostly done.",
     contract_status: "pass",
-    quality_status: "pass",
+    quality_review_status: "pass",
+    quality_execution_status: "pass",
     next_action: "ready_to_merge",
     issues: [],
     rubric_scores: defaultRubricScores(),
@@ -1353,7 +1575,7 @@ test("invalid scope_drift missing status is rejected", () => {
     verdict: "changes_requested",
     summary: "Missing requirement.",
     contract_status: "fail",
-    quality_status: "not_run",
+    quality_review_status: "not_run",
     next_action: "changes_requested",
     issues: [{ title: "Missing", body: "Not implemented", file: "x.js", line: 1, category: "contract", severity: "high" }],
     rubric_scores: defaultRubricScores(),
@@ -1382,7 +1604,7 @@ test("changes_requested verdict with scope_drift includes drift in redispatch", 
     verdict: "changes_requested",
     summary: "Scope creep and missing requirement.",
     contract_status: "fail",
-    quality_status: "not_run",
+    quality_review_status: "not_run",
     next_action: "changes_requested",
     issues: [{ title: "Creep", body: "Unrelated change", file: "extra.js", line: 1, category: "scope", severity: "medium" }],
     rubric_scores: defaultRubricScores(),
@@ -1423,7 +1645,8 @@ test("reviewer write policy violation escalates the manifest", () => {
     verdict: "pass",
     summary: "This should not be trusted.",
     contract_status: "pass",
-    quality_status: "pass",
+    quality_review_status: "pass",
+    quality_execution_status: "pass",
     next_action: "ready_to_merge",
     issues: [],
     rubric_scores: defaultRubricScores(),
@@ -1467,7 +1690,8 @@ process.stdout.write(JSON.stringify({
   verdict: marker === "retained-worktree" ? "pass" : "changes_requested",
   summary: marker === "retained-worktree" ? "Read retained checkout" : "Wrong checkout",
   contract_status: marker === "retained-worktree" ? "pass" : "fail",
-  quality_status: "pass",
+  quality_review_status: "pass",
+    quality_execution_status: "pass",
   next_action: marker === "retained-worktree" ? "ready_to_merge" : "changes_requested",
   issues: marker === "retained-worktree" ? [] : [{
     title: "Wrong checkout",
@@ -1537,7 +1761,8 @@ test("repeated identical issues escalate on the third consecutive round", () => 
     verdict: "changes_requested",
     summary: "Same issue persists.",
     contract_status: "fail",
-    quality_status: "pass",
+    quality_review_status: "pass",
+    quality_execution_status: "pass",
     next_action: "changes_requested",
     issues: [
       {
@@ -1588,7 +1813,8 @@ test("rubric factor flip-flops escalate even when the reviewer returns pass", ()
   fs.writeFileSync(path.join(runDir, "review-round-2-verdict.json"), JSON.stringify({ verdict: "changes_requested", rubric_scores: [{ factor: "behavior", status: "fail" }] }), "utf-8");
   updateManifestRecord(manifestPath, (data) => ({ ...data, review: { ...(data.review || {}), rounds: 2 } }));
   const reviewFile = writeVerdict(repoRoot, "flip-pass.json", {
-    verdict: "pass", summary: "Looks good.", contract_status: "pass", quality_status: "pass", next_action: "ready_to_merge", issues: [],
+    verdict: "pass", summary: "Looks good.", contract_status: "pass", quality_review_status: "pass",
+    quality_execution_status: "pass", next_action: "ready_to_merge", issues: [],
     rubric_scores: [{ factor: "BEHAVIOR", target: ">= 1/1", observed: "1/1", status: "pass", tier: "contract", notes: "Recovered." }],
     scope_drift: { creep: [], missing: [] },
   });
@@ -1685,7 +1911,8 @@ test("round 2 review prompt contains Prior Round Context section", () => {
     verdict: "changes_requested",
     summary: "Smoke file not created.",
     contract_status: "fail",
-    quality_status: "pass",
+    quality_review_status: "pass",
+    quality_execution_status: "pass",
     next_action: "changes_requested",
     issues: [{
       title: "Missing smoke file",
@@ -1743,7 +1970,8 @@ test("round 2 redispatch artifact contains prior round summary", () => {
     verdict: "changes_requested",
     summary: "Missing smoke file.",
     contract_status: "fail",
-    quality_status: "pass",
+    quality_review_status: "pass",
+    quality_execution_status: "pass",
     next_action: "changes_requested",
     issues: [{
       title: "No smoke.txt",
@@ -1776,7 +2004,8 @@ test("round 2 redispatch artifact contains prior round summary", () => {
     verdict: "changes_requested",
     summary: "Still missing.",
     contract_status: "fail",
-    quality_status: "pass",
+    quality_review_status: "pass",
+    quality_execution_status: "pass",
     next_action: "changes_requested",
     issues: [{
       title: "No smoke.txt",
@@ -2008,7 +2237,8 @@ test("review-runner advances loaded-rubric PASS reviews to ready_to_merge", () =
     verdict: "pass",
     summary: "All done criteria are satisfied.",
     contract_status: "pass",
-    quality_status: "pass",
+    quality_review_status: "pass",
+    quality_execution_status: "pass",
     next_action: "ready_to_merge",
     issues: [],
     rubric_scores: [
@@ -2184,7 +2414,8 @@ test("review-runner rejects empty rubric_scores when rubric is present", () => {
     verdict: "pass",
     summary: "Looks good.",
     contract_status: "pass",
-    quality_status: "pass",
+    quality_review_status: "pass",
+    quality_execution_status: "pass",
     next_action: "ready_to_merge",
     issues: [],
     rubric_scores: [],
@@ -2223,7 +2454,8 @@ test("review-runner fails closed when the manifest still carries anchor.rubric_g
     verdict: "pass",
     summary: "All done criteria are satisfied.",
     contract_status: "pass",
-    quality_status: "pass",
+    quality_review_status: "pass",
+    quality_execution_status: "pass",
     next_action: "ready_to_merge",
     issues: [],
     rubric_scores: [],
@@ -2405,7 +2637,8 @@ test("review-runner fail-closed path can re-dispatch with a fixed rubric and pas
     verdict: "pass",
     summary: "All done criteria are satisfied.",
     contract_status: "pass",
-    quality_status: "pass",
+    quality_review_status: "pass",
+    quality_execution_status: "pass",
     next_action: "ready_to_merge",
     issues: [],
     rubric_scores: [

@@ -34,6 +34,10 @@ function formatScopeDrift(scopeDrift) {
   return parts.join("\n");
 }
 
+function formatStatus(value) {
+  return String(value || "unknown").toUpperCase();
+}
+
 function buildCommentBody(verdict, round, { warnings = [], gateFailure = null } = {}) {
   if (gateFailure) {
     return appendCommentWarnings([
@@ -42,6 +46,9 @@ function buildCommentBody(verdict, round, { warnings = [], gateFailure = null } 
       "Verdict: CHANGES_REQUESTED",
       `Summary: ${gateFailure.summary}`,
       `Reviewer verdict: ${String(verdict.verdict || "unknown").toUpperCase()} (next_action=${verdict.next_action || "unknown"})`,
+      `Contract: ${formatStatus(verdict.contract_status)}`,
+      `Quality Review: ${formatStatus(verdict.quality_review_status)}`,
+      `Quality Execution: ${formatStatus(verdict.quality_execution_status)}`,
       `Gate status: ${gateFailure.status}`,
       `Layer: ${gateFailure.layer}`,
       `Rubric state: ${gateFailure.rubricState} (anchor status: ${gateFailure.rubricStatus})`,
@@ -57,8 +64,9 @@ function buildCommentBody(verdict, round, { warnings = [], gateFailure = null } 
       "## Relay Review",
       "Verdict: LGTM",
       `Summary: ${verdict.summary}`,
-      `Contract: ${verdict.contract_status.toUpperCase()}`,
-      `Quality: ${verdict.quality_status.toUpperCase()}`,
+      `Contract: ${formatStatus(verdict.contract_status)}`,
+      `Quality Review: ${formatStatus(verdict.quality_review_status)}`,
+      `Quality Execution: ${formatStatus(verdict.quality_execution_status)}`,
       `Rounds: ${round}`,
     ].join("\n"), warnings);
   }
@@ -69,6 +77,9 @@ function buildCommentBody(verdict, round, { warnings = [], gateFailure = null } 
       `## Relay Review Round ${round}`,
       "Verdict: CHANGES_REQUESTED",
       `Summary: ${verdict.summary}`,
+      `Contract: ${formatStatus(verdict.contract_status)}`,
+      `Quality Review: ${formatStatus(verdict.quality_review_status)}`,
+      `Quality Execution: ${formatStatus(verdict.quality_execution_status)}`,
       "Issues:",
       formatIssueList(verdict.issues),
     ].join("\n"), warnings);
@@ -79,6 +90,9 @@ function buildCommentBody(verdict, round, { warnings = [], gateFailure = null } 
     "## Relay Review",
     "Verdict: ESCALATED",
     `Summary: ${verdict.summary}`,
+    `Contract: ${formatStatus(verdict.contract_status)}`,
+    `Quality Review: ${formatStatus(verdict.quality_review_status)}`,
+    `Quality Execution: ${formatStatus(verdict.quality_execution_status)}`,
     `Rounds: ${round}`,
     "Issues:",
     formatIssueList(verdict.issues),
@@ -95,6 +109,7 @@ function postComment(repoPath, prNumber, commentBody) {
 module.exports = {
   appendCommentWarnings,
   buildCommentBody,
+  formatStatus,
   formatIssueList,
   formatScopeDrift,
   postComment,

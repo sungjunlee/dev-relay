@@ -7,7 +7,7 @@ const { execFileSync } = require("child_process");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { REVIEW_VERDICT_JSON_SCHEMA } = require("./review-schema");
+const { REVIEWER_VERDICT_JSON_SCHEMA } = require("./review-schema");
 const { getArg: sharedGetArg, hasFlag: sharedHasFlag } = require("../../relay-dispatch/scripts/cli-args");
 const { summarizeFailure, ensureJsonText } = require("./reviewer-helpers");
 
@@ -43,7 +43,7 @@ function main() {
   const resultPath = path.join(os.tmpdir(), `relay-review-codex-${process.pid}-${Date.now()}.json`);
 
   try {
-    fs.writeFileSync(schemaPath, `${JSON.stringify(REVIEW_VERDICT_JSON_SCHEMA, null, 2)}\n`, "utf-8");
+    fs.writeFileSync(schemaPath, `${JSON.stringify(REVIEWER_VERDICT_JSON_SCHEMA, null, 2)}\n`, "utf-8");
 
     const fullPrompt = [
       "[NON-INTERACTIVE REVIEW]",

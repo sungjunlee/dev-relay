@@ -8,11 +8,14 @@ test("comment/buildCommentBody preserves the LGTM review marker shape", () => {
     verdict: "pass",
     summary: "Looks good.",
     contract_status: "pass",
-    quality_status: "pass",
+    quality_review_status: "pass",
+    quality_execution_status: "pass",
   }, 2);
 
   assert.match(body, /<!-- relay-review -->/);
   assert.match(body, /Verdict: LGTM/);
+  assert.match(body, /Quality Review: PASS/);
+  assert.match(body, /Quality Execution: PASS/);
   assert.match(body, /Rounds: 2/);
 });
 
@@ -20,6 +23,9 @@ test("comment/buildCommentBody preserves rubric gate failures as CHANGES_REQUEST
   const body = buildCommentBody({
     verdict: "pass",
     summary: "Looks good.",
+    contract_status: "pass",
+    quality_review_status: "pass",
+    quality_execution_status: "missing",
     next_action: "ready_to_merge",
   }, 3, {
     gateFailure: {
@@ -36,5 +42,6 @@ test("comment/buildCommentBody preserves rubric gate failures as CHANGES_REQUEST
 
   assert.match(body, /<!-- relay-review-round -->/);
   assert.match(body, /Verdict: CHANGES_REQUESTED/);
+  assert.match(body, /Quality Execution: MISSING/);
   assert.match(body, /Recovery command: node dispatch\.js/);
 });

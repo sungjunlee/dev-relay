@@ -38,7 +38,8 @@ function makePassVerdict(overrides = {}) {
     verdict: "pass",
     summary: "Looks good.",
     contract_status: "pass",
-    quality_status: "pass",
+    quality_review_status: "pass",
+    quality_execution_status: "pass",
     next_action: "ready_to_merge",
     issues: [],
     rubric_scores: [makeRubricScore()],
@@ -54,6 +55,14 @@ test("verdict/parseReviewVerdict preserves a valid payload shape", () => {
 
   assert.deepEqual(parsed, payload);
   assert.equal(JSON.stringify(parsed), encoded);
+});
+
+test("verdict/validateReviewVerdict allows reviewer payloads to omit quality_execution_status before runner override", () => {
+  const reviewerPayload = makePassVerdict();
+  delete reviewerPayload.quality_execution_status;
+
+  const validated = validateReviewVerdict(reviewerPayload, { requireExecutionStatus: false });
+  assert.equal(validated.quality_execution_status, undefined);
 });
 
 test("verdict/parseReviewVerdict rejects invalid JSON", () => {
@@ -193,6 +202,19 @@ test("verdict/validateReviewVerdict rejects PASS with blocking scope drift", () 
   assert.throws(() => validateReviewVerdict(makePassVerdict({
     scope_drift: { creep: [], missing: [{ criteria: "Ship feature", status: "not_done" }] },
   })), /scope_drift\.missing entries/i);
+});
+
+test("verdict/validateReviewVerdict rejects PASS when quality_review_status is not pass", () => {
+  assert.throws(() => validateReviewVerdict(makePassVerdict({
+    quality_review_status: "not_run",
+  })), /PASS verdict failed: quality_review_status=not_run/);
+});
+
+test("verdict/validateReviewVerdict rejects PASS when quality_execution_status is missing", () => {
+  assert.throws(() => validateReviewVerdict(makePassVerdict({
+    quality_execution_status: "missing",
+    quality_execution_reason: 'execution-evidence.json missing; if this is a pre-261 run, use finalize-run --force-finalize-nonready --reason "pre-261 run, no artifact"',
+  })), /PASS verdict failed: quality_execution_status=missing/);
 });
 
 test("verdict/validateReviewVerdict rejects changes_requested without issues", () => {

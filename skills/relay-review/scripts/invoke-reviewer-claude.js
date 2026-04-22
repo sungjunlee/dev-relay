@@ -6,7 +6,7 @@
 const { execFileSync } = require("child_process");
 const fs = require("fs");
 const path = require("path");
-const { REVIEW_VERDICT_JSON_SCHEMA } = require("./review-schema");
+const { REVIEWER_VERDICT_JSON_SCHEMA } = require("./review-schema");
 const { getArg: sharedGetArg, hasFlag: sharedHasFlag } = require("../../relay-dispatch/scripts/cli-args");
 const { summarizeFailure, ensureJsonText } = require("./reviewer-helpers");
 
@@ -88,7 +88,7 @@ function main() {
     "--bare",
     "--no-session-persistence",
     "--output-format", "text",
-    "--json-schema", JSON.stringify(REVIEW_VERDICT_JSON_SCHEMA),
+    "--json-schema", JSON.stringify(REVIEWER_VERDICT_JSON_SCHEMA),
     "--allowedTools=Read",
   ];
   if (model) execArgs.push("--model", model);
