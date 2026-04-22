@@ -161,3 +161,37 @@ process.stdout.write(JSON.stringify({
   assert.match(loggedArgs, /--allowedTools=Read/);
   assert.match(loggedArgs, /Return a passing review\./);
 });
+
+test("claude adapter fails fast with an auth setup error before JSON parsing", () => {
+  const { repoRoot, promptPath } = setupRepo();
+  const fakeDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-fake-claude-auth-"));
+  const fakeClaude = writeExecutable(fakeDir, "fake-claude.js", `#!/usr/bin/env node
+process.stdout.write("Not logged in · Please run /login\\n");
+process.exit(1);
+`);
+
+  let error;
+  try {
+    execFileSync("node", [
+      CLAUDE_SCRIPT,
+      "--repo", repoRoot,
+      "--prompt-file", promptPath,
+      "--json",
+    ], {
+      cwd: repoRoot,
+      encoding: "utf-8",
+      stdio: "pipe",
+      env: { ...process.env, RELAY_CLAUDE_BIN: fakeClaude },
+    });
+    assert.fail("expected invoke-reviewer-claude.js to fail");
+  } catch (caught) {
+    error = caught;
+  }
+
+  assert.ok(error);
+  assert.notEqual(error.status, 0);
+  const stderr = String(error.stderr || "");
+  assert.match(stderr, /not authenticated/i);
+  assert.match(stderr, /ANTHROPIC_API_KEY|claude login --api-key/);
+  assert.doesNotMatch(stderr, /did not return valid JSON/);
+});
