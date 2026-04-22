@@ -63,13 +63,33 @@ test("dispatch execution evidence preserves the caller test-command verbatim", (
   assert.equal(result.test_result_summary, "unspecified");
 });
 
+test("dispatch execution evidence distinguishes an absent test-command from an explicit empty string", () => {
+  const omitted = buildExecutionEvidence({
+    headSha: "c".repeat(40),
+    testCommand: undefined,
+    resultFilePath: null,
+    executor: "codex",
+    recordedAt: "2026-04-22T00:00:00.000Z",
+  });
+  const explicitEmpty = buildExecutionEvidence({
+    headSha: "d".repeat(40),
+    testCommand: "",
+    resultFilePath: null,
+    executor: "codex",
+    recordedAt: "2026-04-22T00:00:00.000Z",
+  });
+
+  assert.equal(omitted.test_command, "unspecified");
+  assert.equal(explicitEmpty.test_command, "");
+});
+
 test("dispatch execution evidence is not corrupted by a second tmp file in the run dir", () => {
   const runDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-dispatch-execution-concurrent-"));
   const staleTmpPath = path.join(runDir, `${EXECUTION_EVIDENCE_FILENAME}.stale.tmp`);
   fs.writeFileSync(staleTmpPath, "garbage\n", "utf-8");
 
   const finalPath = writeExecutionEvidence(runDir, buildExecutionEvidence({
-    headSha: "c".repeat(40),
+    headSha: "e".repeat(40),
     testCommand: "unspecified",
     resultFilePath: null,
     executor: "codex",
@@ -77,6 +97,6 @@ test("dispatch execution evidence is not corrupted by a second tmp file in the r
   }));
 
   const written = JSON.parse(fs.readFileSync(finalPath, "utf-8"));
-  assert.equal(written.head_sha, "c".repeat(40));
+  assert.equal(written.head_sha, "e".repeat(40));
   assert.equal(fs.readFileSync(staleTmpPath, "utf-8"), "garbage\n");
 });

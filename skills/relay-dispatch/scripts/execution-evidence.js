@@ -21,7 +21,7 @@ function buildExecutionEvidence({ headSha, testCommand, resultFilePath, executor
   return {
     schema_version: EXECUTION_EVIDENCE_SCHEMA_VERSION,
     head_sha: headSha,
-    test_command: testCommand || "unspecified",
+    test_command: testCommand === undefined || testCommand === null ? "unspecified" : testCommand,
     test_result_hash: resultHash || "unspecified",
     test_result_summary: resultHash ? `${executor || "executor"} result.txt hashed` : "unspecified",
     recorded_at: recordedAt || new Date().toISOString(),

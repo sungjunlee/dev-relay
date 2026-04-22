@@ -7,6 +7,7 @@ const path = require("path");
 const {
   EXECUTION_EVIDENCE_FILENAME,
   applyQualityExecutionStatus,
+  buildMissingExecutionEvidenceVerdict,
   computeQualityExecutionStatus,
   parseExecutionEvidenceArtifact,
   readExecutionEvidenceArtifact,
@@ -35,6 +36,13 @@ test("execution-evidence parses a strict schema_version=1 artifact", () => {
   const parsed = parseExecutionEvidenceArtifact(JSON.stringify(makeArtifact("a".repeat(40))));
   assert.equal(parsed.head_sha, "a".repeat(40));
   assert.equal(parsed.schema_version, 1);
+});
+
+test("execution-evidence accepts an explicitly empty test_command for verbatim capture", () => {
+  const parsed = parseExecutionEvidenceArtifact(JSON.stringify(makeArtifact("a".repeat(40), {
+    test_command: "",
+  })));
+  assert.equal(parsed.test_command, "");
 });
 
 test("execution-evidence returns pass when artifact head matches reviewed head", () => {
@@ -113,4 +121,25 @@ test("execution-evidence override drops a reviewer-forged execution status in fa
 
   assert.equal(verdict.quality_execution_status, "missing");
   assert.match(verdict.quality_execution_reason, /pre-261 run, no artifact/);
+});
+
+test("execution-evidence builds a fail-closed changes_requested verdict for missing artifacts", () => {
+  const verdict = buildMissingExecutionEvidenceVerdict({
+    verdict: "pass",
+    summary: "Inspection passed.",
+    contract_status: "pass",
+    quality_review_status: "pass",
+    quality_execution_status: "missing",
+    quality_execution_reason: 'execution-evidence.json missing; if this is a pre-261 run, use finalize-run --force-finalize-nonready --reason "pre-261 run, no artifact"',
+    next_action: "ready_to_merge",
+    issues: [],
+    rubric_scores: [],
+    scope_drift: { creep: [], missing: [] },
+  });
+
+  assert.equal(verdict.verdict, "changes_requested");
+  assert.equal(verdict.next_action, "changes_requested");
+  assert.match(verdict.summary, /fail-closed reviewer PASS/);
+  assert.equal(verdict.issues[0].file, EXECUTION_EVIDENCE_FILENAME);
+  assert.match(verdict.issues[0].body, /pre-261 run, no artifact/);
 });

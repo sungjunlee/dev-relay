@@ -2386,7 +2386,31 @@ test("dispatch writes execution evidence for no-op runs with the stable start he
   assert.equal(result.status, "completed-no-op");
   assert.equal(result.headSha, startHead);
   assert.equal(evidence.head_sha, startHead);
+  assert.equal(evidence.test_command, "unspecified");
   assert.match(evidence.test_result_hash, /^[0-9a-f]{64}$/);
+});
+
+test("dispatch writes execution evidence with an explicitly empty test command verbatim", () => {
+  const fixture = setupRepoWithOrigin();
+  const env = createPushPrTestEnv({
+    relayHome: fixture.relayHome,
+    codexMode: "commit",
+    ghState: {
+      prCreateUrl: "https://example.test/acme/dev-relay/pull/261",
+    },
+  });
+
+  const result = JSON.parse(runDispatch(fixture.repoRoot, [
+    "-b", "issue-261-empty-test-command",
+    "--prompt", "record empty execution evidence",
+    "--test-command", "",
+    "--json",
+  ], env.env));
+  const evidence = readExecutionEvidence(result.runDir);
+
+  assert.equal(result.status, "completed");
+  assert.equal(evidence.head_sha, result.headSha);
+  assert.equal(evidence.test_command, "");
 });
 
 test("re-dispatch prompt includes previous iteration history", () => {

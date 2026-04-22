@@ -23,6 +23,24 @@ function buildMissingExecutionEvidenceReason() {
   return `execution-evidence.json missing; if this is a pre-261 run, use ${FORCE_FINALIZE_GUIDANCE}`;
 }
 
+function buildMissingExecutionEvidenceVerdict(verdict) {
+  const reason = verdict.quality_execution_reason || buildMissingExecutionEvidenceReason();
+  return {
+    ...verdict,
+    verdict: "changes_requested",
+    summary: "review-runner fail-closed reviewer PASS because execution-evidence.json is missing for the reviewed HEAD.",
+    next_action: "changes_requested",
+    issues: [{
+      title: "Missing execution evidence for reviewed HEAD",
+      body: `${reason} Reviewer PASS cannot be applied without SHA-bound execution evidence for this commit.`,
+      file: EXECUTION_EVIDENCE_FILENAME,
+      line: 1,
+      category: "quality",
+      severity: "high",
+    }],
+  };
+}
+
 function parseExecutionEvidenceArtifact(text) {
   let artifact;
   try {
@@ -36,7 +54,7 @@ function parseExecutionEvidenceArtifact(text) {
   }
 
   for (const field of REQUIRED_EXECUTION_EVIDENCE_FIELDS) {
-    if (artifact[field] === undefined || artifact[field] === null || artifact[field] === "") {
+    if (artifact[field] === undefined || artifact[field] === null) {
       throw new Error(`execution evidence missing required field '${field}'`);
     }
   }
@@ -47,8 +65,8 @@ function parseExecutionEvidenceArtifact(text) {
   if (!isNonEmptyString(artifact.head_sha) || !SHA40_PATTERN.test(artifact.head_sha)) {
     throw new Error("execution evidence head_sha must be a 40-character hex SHA");
   }
-  if (!isNonEmptyString(artifact.test_command)) {
-    throw new Error("execution evidence test_command must be a non-empty string");
+  if (typeof artifact.test_command !== "string") {
+    throw new Error("execution evidence test_command must be a string");
   }
   if (!isNonEmptyString(artifact.test_result_summary)) {
     throw new Error("execution evidence test_result_summary must be a non-empty string");
@@ -139,6 +157,7 @@ module.exports = {
   FORCE_FINALIZE_GUIDANCE,
   REQUIRED_EXECUTION_EVIDENCE_FIELDS,
   applyQualityExecutionStatus,
+  buildMissingExecutionEvidenceVerdict,
   buildMissingExecutionEvidenceReason,
   computeQualityExecutionStatus,
   parseExecutionEvidenceArtifact,

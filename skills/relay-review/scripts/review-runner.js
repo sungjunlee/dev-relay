@@ -23,6 +23,7 @@ const { buildCommentBody, formatIssueList, formatScopeDrift, postComment } = req
 const { buildScoreDivergenceAnalysis, loadPrBody, parseScoreLog } = require("./review-runner/divergence");
 const {
   applyQualityExecutionStatus,
+  buildMissingExecutionEvidenceVerdict,
   computeQualityExecutionStatus,
 } = require("./review-runner/execution-evidence");
 const {
@@ -244,10 +245,11 @@ function run() {
       "The reviewer must score every rubric factor."
     );
   }
-  verdict = applyQualityExecutionStatus(
-    verdict,
-    computeQualityExecutionStatus({ runDir, reviewedHead: reviewedHeadSha })
-  );
+  const executionStatus = computeQualityExecutionStatus({ runDir, reviewedHead: reviewedHeadSha });
+  verdict = applyQualityExecutionStatus(verdict, executionStatus);
+  if (verdict.verdict === "pass" && executionStatus.status === "missing") {
+    verdict = buildMissingExecutionEvidenceVerdict(verdict);
+  }
   validateReviewVerdict(verdict);
 
   const repeatedIssueCount = verdict.verdict === "changes_requested"

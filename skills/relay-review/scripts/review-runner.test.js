@@ -645,10 +645,15 @@ test("pass verdict rejects quality_review_status=not_run", () => {
   assert.equal(manifest.review.latest_verdict, "pending");
 });
 
-test("review-runner overrides reviewer-forged quality_execution_status=pass to missing when execution evidence is absent", () => {
+test("review-runner fail-closes reviewer PASS into changes_requested when execution evidence is absent", () => {
   const { repoRoot, manifestPath, runId, doneCriteriaPath, diffPath } = setupRepo();
   const runDir = ensureRunLayout(repoRoot, runId).runDir;
+  const commentCapturePath = path.join(repoRoot, "missing-execution-comment.txt");
   fs.unlinkSync(path.join(runDir, EXECUTION_EVIDENCE_FILENAME));
+  writeFakeGhScript(repoRoot, {
+    capturePath: commentCapturePath,
+    prBody: "",
+  });
 
   const reviewFile = writeVerdict(repoRoot, "forged-execution-pass.json", {
     verdict: "pass",
@@ -662,7 +667,7 @@ test("review-runner overrides reviewer-forged quality_execution_status=pass to m
     scope_drift: { creep: [], missing: [] },
   });
 
-  assert.throws(() => execFileSync("node", [
+  const result = JSON.parse(execFileSync("node", [
     SCRIPT,
     "--repo", repoRoot,
     "--run-id", runId,
@@ -670,17 +675,34 @@ test("review-runner overrides reviewer-forged quality_execution_status=pass to m
     "--done-criteria-file", doneCriteriaPath,
     "--diff-file", diffPath,
     "--review-file", reviewFile,
-    "--no-comment",
     "--json",
-  ], { encoding: "utf-8", stdio: "pipe" }), (error) => {
-    assert.match(String(error.stderr), /PASS verdict failed: quality_execution_status=missing/);
-    assert.match(String(error.stderr), new RegExp(FORCE_FINALIZE_GUIDANCE.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
-    return true;
-  });
+  ], {
+    encoding: "utf-8",
+    env: {
+      ...process.env,
+      PATH: `${repoRoot}:${process.env.PATH}`,
+    },
+  }));
+  const verdictRecord = JSON.parse(fs.readFileSync(result.verdictPath, "utf-8"));
+  const commentBody = fs.readFileSync(commentCapturePath, "utf-8");
 
   const manifest = readManifest(manifestPath).data;
-  assert.equal(manifest.state, STATES.REVIEW_PENDING);
-  assert.equal(manifest.review.latest_verdict, "pending");
+  const reviewApplyEvent = readRunEvents(repoRoot, runId).find((event) => event.event === "review_apply");
+
+  assert.equal(result.appliedVerdict, "changes_requested");
+  assert.equal(result.state, STATES.CHANGES_REQUESTED);
+  assert.equal(verdictRecord.verdict, "changes_requested");
+  assert.equal(verdictRecord.quality_execution_status, "missing");
+  assert.match(verdictRecord.summary, /fail-closed reviewer PASS/);
+  assert.equal(verdictRecord.issues[0].file, EXECUTION_EVIDENCE_FILENAME);
+  assert.match(verdictRecord.issues[0].body, new RegExp(FORCE_FINALIZE_GUIDANCE.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  assert.equal(manifest.state, STATES.CHANGES_REQUESTED);
+  assert.equal(manifest.review.latest_verdict, "changes_requested");
+  assert.equal(manifest.review.last_quality_execution_status, "missing");
+  assert.match(commentBody, /Verdict: CHANGES_REQUESTED/);
+  assert.match(commentBody, /Quality Execution: MISSING/);
+  assert.match(commentBody, new RegExp(FORCE_FINALIZE_GUIDANCE.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  assert.equal(reviewApplyEvent?.reason, "changes_requested");
 });
 
 test("review-runner stores the runner-computed quality_execution_status in the verdict file, comment, and manifest", () => {
