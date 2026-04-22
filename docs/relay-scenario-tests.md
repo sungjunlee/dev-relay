@@ -45,7 +45,7 @@ Expect:
 - dispatched worktree still exists after the command returns
 - harness explicitly removes the retained worktree during teardown
 
-### 3. Dispatch no-op failure writes manifest and ends in `escalated`
+### 3. Dispatch structured no-op writes manifest and ends in `review_pending`
 
 Command:
 
@@ -56,13 +56,14 @@ python3 skills/relay-dispatch/scripts/smoke_dispatch_scenarios.py
 Scenario:
 
 - create a temp git repo
-- dispatch a worker that inspects only and makes no changes
+- dispatch a worker that inspects only, makes no changes, and exits with a structured no-op summary
 
 Expect:
 
-- command exit code non-zero
-- `runState: escalated`
-- manifest contains `state: 'escalated'`
+- command exit code `0`
+- dispatch status `completed-no-op`
+- `runState: review_pending`
+- manifest contains `state: 'review_pending'`
 - manifest contains `cleanup: 'on_close'`
 - dispatched worktree still exists after the command returns
 - harness explicitly removes the retained worktree during teardown
