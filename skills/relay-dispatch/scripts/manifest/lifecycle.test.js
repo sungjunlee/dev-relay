@@ -7,6 +7,7 @@ const path = require("path");
 
 const {
   STATES,
+  forceUpdateManifestState,
   validateTransitionInvariants,
   forceTransitionState,
   validateTransition,
@@ -209,5 +210,31 @@ test("manifest/lifecycle forceTransitionState keeps recovery edges but still enf
   assert.throws(
     () => forceTransitionState({ state: "bogus", timestamps: {} }, STATES.REVIEW_PENDING, "run_review"),
     /Unknown relay state/
+  );
+});
+
+test("manifest/lifecycle forceUpdateManifestState annotates last_force while bypassing the transition matrix", () => {
+  const updated = forceUpdateManifestState(
+    { state: STATES.ESCALATED, timestamps: {} },
+    STATES.MERGED,
+    "manual_cleanup_required",
+    { reason: "operator override", operator: "Relay Lifecycle Test" }
+  );
+
+  assert.equal(updated.state, STATES.MERGED);
+  assert.equal(updated.next_action, "manual_cleanup_required");
+  assert.equal(updated.last_force.from_state, STATES.ESCALATED);
+  assert.equal(updated.last_force.to_state, STATES.MERGED);
+  assert.equal(updated.last_force.reason, "operator override");
+  assert.equal(updated.last_force.operator, "Relay Lifecycle Test");
+
+  assert.throws(
+    () => forceUpdateManifestState(
+      { state: STATES.ESCALATED, timestamps: {} },
+      STATES.MERGED,
+      "manual_cleanup_required",
+      { reason: "   " }
+    ),
+    /forceUpdateManifestState requires reason/
   );
 });

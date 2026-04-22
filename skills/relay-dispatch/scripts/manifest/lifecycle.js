@@ -92,6 +92,24 @@ function forceTransitionState(data, toState, nextAction) {
   };
 }
 
+function forceUpdateManifestState(data, toState, nextAction, { reason, operator } = {}) {
+  if (typeof reason !== "string" || !reason.trim()) {
+    throw new Error("forceUpdateManifestState requires reason");
+  }
+
+  const updated = forceTransitionState(data, toState, nextAction);
+  return {
+    ...updated,
+    last_force: {
+      ts: nowIso(),
+      from_state: data.state,
+      to_state: toState,
+      reason,
+      operator: operator || null,
+    },
+  };
+}
+
 function isTerminalState(state) {
   return state === STATES.MERGED || state === STATES.CLOSED;
 }
@@ -99,6 +117,7 @@ function isTerminalState(state) {
 module.exports = {
   ALLOWED_TRANSITIONS,
   STATES,
+  forceUpdateManifestState,
   forceTransitionState,
   isTerminalState,
   updateManifestState,
