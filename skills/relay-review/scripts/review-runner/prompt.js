@@ -1,5 +1,5 @@
 const path = require("path");
-const { REVIEW_VERDICT_JSON_SCHEMA } = require("../review-schema");
+const { REVIEWER_VERDICT_JSON_SCHEMA } = require("../review-schema");
 const { readText } = require("./common");
 const { formatPriorRoundContext, loadProjectConventions } = require("./context");
 
@@ -54,11 +54,12 @@ function buildPrompt({ round, prNumber, branch, issueNumber, doneCriteria, doneC
     "## Structured Output",
     "Return ONLY valid JSON. Do not wrap it in markdown fences.",
     "",
-    JSON.stringify(REVIEW_VERDICT_JSON_SCHEMA, null, 2),
+    JSON.stringify(REVIEWER_VERDICT_JSON_SCHEMA, null, 2),
     "",
     "Validation rules:",
     "- If `verdict` is `pass`, then `issues` must be `[]` and `next_action` must be `ready_to_merge`.",
-    "- If `verdict` is `pass`, set both `contract_status` and `quality_status` to `pass`.",
+    "- If `verdict` is `pass`, set both `contract_status` and `quality_review_status` to `pass`.",
+    "- Set ONLY `quality_review_status`. Do NOT set `quality_execution_status`; the review runner computes it from execution-evidence.json.",
     "- If `verdict` is `changes_requested`, include actionable issues with `file` and `line`, and set `next_action` to `changes_requested`.",
     "- If `verdict` is `escalated`, include the blocking issues or reason that automation should stop, and set `next_action` to `escalated`.",
     rubricLoad.content

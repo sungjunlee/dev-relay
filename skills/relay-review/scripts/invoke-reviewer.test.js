@@ -49,10 +49,11 @@ fs.writeFileSync(resultPath, JSON.stringify({
   verdict: "pass",
   summary: "Looks good.",
   contract_status: "pass",
-  quality_status: "pass",
+  quality_review_status: "pass",
   next_action: "ready_to_merge",
   issues: [],
   rubric_scores: [],
+  scope_drift: { creep: [], missing: [] },
 }) + "\\n", "utf-8");
 `);
 
@@ -75,6 +76,8 @@ fs.writeFileSync(resultPath, JSON.stringify({
   assert.match(loggedArgs, /--ephemeral/);
   assert.match(loggedArgs, /--sandbox\nread-only/);
   assert.match(loggedArgs, /--output-schema/);
+  assert.equal(schema.properties.quality_execution_status.enum.includes("missing"), true);
+  assert.equal(schema.required.includes("quality_execution_status"), false);
   assert.deepEqual(schema.properties.rubric_scores.items.required, [
     "factor",
     "target",
@@ -97,10 +100,11 @@ fs.writeFileSync(resultPath, JSON.stringify({
   verdict: "pass",
   summary: "Recovered.",
   contract_status: "pass",
-  quality_status: "pass",
+  quality_review_status: "pass",
   next_action: "ready_to_merge",
   issues: [],
   rubric_scores: [],
+  scope_drift: { creep: [], missing: [] },
 }) + "\\n", "utf-8");
 process.stderr.write("simulated failure\\n");
 process.exit(1);
@@ -134,10 +138,11 @@ process.stdout.write(JSON.stringify({
   verdict: "pass",
   summary: "Looks good.",
   contract_status: "pass",
-  quality_status: "pass",
+  quality_review_status: "pass",
   next_action: "ready_to_merge",
   issues: [],
   rubric_scores: [],
+  scope_drift: { creep: [], missing: [] },
 }));
 `);
 

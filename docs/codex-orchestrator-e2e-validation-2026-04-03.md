@@ -210,9 +210,9 @@ Minimal blockers fixed in this repo during the live runs:
 - `skills/relay-dispatch/scripts/relay-manifest.js`
   - serialize multiline scalar values safely in frontmatter
 - `skills/relay-review/scripts/review-runner.js`
-  - validation initially normalized phase-1 `pass + quality_status=not_run` to close the live run
+  - validation initially normalized phase-1 `pass + quality_review_status=not_run` to close the live run
   - follow-up review removed that shortcut so `verdict=pass` again requires a real quality pass
-  - make the prompt explicitly require `quality_status=pass` on a pass verdict
+  - make the prompt explicitly require `quality_review_status=pass` on a pass verdict
 - `skills/relay-merge/scripts/finalize-run.js`
   - stop relying on `gh pr merge --delete-branch`
   - follow-up review tightened merge finalization so the manifest only advances after GitHub reports `MERGED`, then remote branch cleanup runs separately

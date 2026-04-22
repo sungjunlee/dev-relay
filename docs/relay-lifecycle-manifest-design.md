@@ -271,7 +271,8 @@ The reviewer model should return a structured verdict. A first-pass schema is:
 {
   "verdict": "pass",
   "contract_status": "pass",
-  "quality_status": "pass",
+  "quality_review_status": "pass",
+  "quality_execution_status": "pass",
   "next_action": "ready_to_merge",
   "issues": [],
   "rubric_scores": []

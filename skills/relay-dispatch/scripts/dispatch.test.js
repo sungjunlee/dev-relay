@@ -18,6 +18,7 @@ const {
   writeManifest,
 } = require("./relay-manifest");
 const { buildPrBody, pushAndOpenPR, resolveBranchRemote } = require("./dispatch-publish");
+const { EXECUTION_EVIDENCE_FILENAME } = require("./execution-evidence");
 const { evaluateReviewGate } = require("../../relay-merge/scripts/review-gate");
 const { createEnforcementFixture } = require("./test-support");
 
@@ -600,6 +601,10 @@ function runDispatch(repoRoot, args, env) {
     stdio: "pipe",
     env,
   });
+}
+
+function readExecutionEvidence(runDir) {
+  return JSON.parse(fs.readFileSync(path.join(runDir, EXECUTION_EVIDENCE_FILENAME), "utf-8"));
 }
 
 function setupDryRunFixtureRepo() {
@@ -2325,6 +2330,63 @@ test("dispatch uses result-file presence to distinguish silent failure from veri
   assert.equal(noOpResult.status, "completed-no-op");
   assert.equal(fs.existsSync(silentResult.resultFile), false);
   assert.equal(fs.existsSync(noOpResult.resultFile), true);
+});
+
+test("dispatch writes execution evidence with the post-dispatch HEAD and the caller test command", () => {
+  const fixture = setupRepoWithOrigin();
+  const env = createPushPrTestEnv({
+    relayHome: fixture.relayHome,
+    codexMode: "commit",
+    ghState: {
+      prCreateUrl: "https://example.test/acme/dev-relay/pull/261",
+    },
+  });
+  const startHead = execFileSync("git", ["rev-parse", "HEAD"], {
+    cwd: fixture.repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+  }).trim();
+
+  const result = JSON.parse(runDispatch(fixture.repoRoot, [
+    "-b", "issue-261-execution-evidence",
+    "--prompt", "record execution evidence",
+    "--test-command", "node --test skills/relay-review/scripts/*.test.js",
+    "--json",
+  ], env.env));
+  const evidence = readExecutionEvidence(result.runDir);
+
+  assert.equal(result.status, "completed");
+  assert.notEqual(result.headSha, startHead);
+  assert.equal(evidence.head_sha, result.headSha);
+  assert.equal(evidence.test_command, "node --test skills/relay-review/scripts/*.test.js");
+  assert.match(evidence.test_result_hash, /^[0-9a-f]{64}$/);
+  assert.equal(evidence.test_result_summary, "codex result.txt hashed");
+  assert.equal(evidence.recorded_by, "dispatch-orchestrator-v1");
+});
+
+test("dispatch writes execution evidence for no-op runs with the stable start head", () => {
+  const fixture = setupRepoWithOrigin();
+  const env = createPushPrTestEnv({
+    relayHome: fixture.relayHome,
+    codexMode: "noop",
+  });
+  const startHead = execFileSync("git", ["rev-parse", "HEAD"], {
+    cwd: fixture.repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+  }).trim();
+
+  const result = JSON.parse(runDispatch(fixture.repoRoot, [
+    "-b", "issue-261-execution-evidence-noop",
+    "--prompt", "record noop execution evidence",
+    "--json",
+  ], env.env));
+  const evidence = readExecutionEvidence(result.runDir);
+
+  assert.equal(result.status, "completed-no-op");
+  assert.equal(result.headSha, startHead);
+  assert.equal(evidence.head_sha, startHead);
+  assert.match(evidence.test_result_hash, /^[0-9a-f]{64}$/);
 });
 
 test("re-dispatch prompt includes previous iteration history", () => {
