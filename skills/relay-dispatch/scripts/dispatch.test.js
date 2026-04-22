@@ -248,6 +248,31 @@ if (args[0] !== "exec") {
   return codexPath;
 }
 
+function writeCommittedNoResultCodex(binDir) {
+  ensureDefaultFakeGh(binDir);
+  const codexPath = path.join(binDir, "codex");
+  fs.writeFileSync(codexPath, `#!/usr/bin/env node
+const fs = require("fs");
+const { execFileSync } = require("child_process");
+const args = process.argv.slice(2);
+if (args[0] === "--version") {
+  process.stdout.write("codex-fake\\n");
+  process.exit(0);
+}
+if (args[0] !== "exec") {
+  process.stderr.write("unsupported fake codex invocation");
+  process.exit(1);
+}
+const cwd = args[args.indexOf("-C") + 1];
+const fileName = "commit-no-result.txt";
+fs.writeFileSync(cwd + "/" + fileName, "commit without result\\n", "utf-8");
+execFileSync("git", ["-C", cwd, "add", fileName], { stdio: "pipe" });
+execFileSync("git", ["-C", cwd, "commit", "-m", "commit without result"], { stdio: "pipe" });
+`, "utf-8");
+  fs.chmodSync(codexPath, 0o755);
+  return codexPath;
+}
+
 function writeUncommittedCodex(binDir) {
   ensureDefaultFakeGh(binDir);
   const codexPath = path.join(binDir, "codex");
@@ -266,6 +291,28 @@ const cwd = args[args.indexOf("-C") + 1];
 const output = args[args.indexOf("-o") + 1];
 fs.appendFileSync(cwd + "/README.md", "dirty\\n", "utf-8");
 fs.writeFileSync(output, "work completed without commit\\n", "utf-8");
+`, "utf-8");
+  fs.chmodSync(codexPath, 0o755);
+  return codexPath;
+}
+
+function writePartialNoResultCodex(binDir) {
+  ensureDefaultFakeGh(binDir);
+  const codexPath = path.join(binDir, "codex");
+  fs.writeFileSync(codexPath, `#!/usr/bin/env node
+const fs = require("fs");
+const args = process.argv.slice(2);
+if (args[0] === "--version") {
+  process.stdout.write("codex-fake\\n");
+  process.exit(0);
+}
+if (args[0] !== "exec") {
+  process.stderr.write("unsupported fake codex invocation");
+  process.exit(1);
+}
+const cwd = args[args.indexOf("-C") + 1];
+fs.appendFileSync(cwd + "/README.md", "partial without result\\n", "utf-8");
+setTimeout(() => {}, 60000);
 `, "utf-8");
   fs.chmodSync(codexPath, 0o755);
   return codexPath;
@@ -409,8 +456,12 @@ function createPushPrTestEnv({ relayHome, ghState = {}, failGitPush = false, cod
     writeNoOpCodex(binDir);
   } else if (codexMode === "silent") {
     writeSilentCodex(binDir);
+  } else if (codexMode === "commit-no-result") {
+    writeCommittedNoResultCodex(binDir);
   } else if (codexMode === "uncommitted") {
     writeUncommittedCodex(binDir);
+  } else if (codexMode === "partial-no-result") {
+    writePartialNoResultCodex(binDir);
   } else {
     writeFakeCodex(binDir);
   }
@@ -2110,6 +2161,78 @@ test("dispatch silent failure escalates when executor exits cleanly without stdo
   const manifest = readManifest(result.manifestPath).data;
   assert.equal(manifest.state, STATES.ESCALATED);
   assert.equal(fs.existsSync(result.resultFile), false);
+  assert.deepEqual(readJsonLines(ghLogPath), []);
+  assert.deepEqual(readJsonLines(execLogPath), []);
+  assert.equal(Number(fs.readFileSync(pushPrCountPath, "utf-8")), 0);
+});
+
+test("dispatch escalates committed work when the executor omits the structured result file", () => {
+  const { repoRoot, relayHome } = setupRepoWithOrigin();
+  const { env, ghLogPath, execLogPath, pushPrCountPath } = createPushPrTestEnv({
+    relayHome,
+    ghState: {
+      prCreateUrl: "https://github.com/acme/dev-relay/pull/325",
+    },
+    codexMode: "commit-no-result",
+  });
+
+  const proc = spawnSync("node", [SCRIPT, repoRoot, ...withRequiredRubric([
+    "-b", "issue-263-commit-no-result",
+    "--prompt", "commit work but skip the structured result file",
+    "--json",
+  ])], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    env,
+  });
+
+  assert.notEqual(proc.status, 0);
+  const result = JSON.parse(proc.stdout);
+  assert.equal(result.status, "failed");
+  assert.equal(result.runState, STATES.ESCALATED);
+  assert.match(result.error, /structured result|silent failure/i);
+  assert.match(result.commits, /commit without result/);
+  assert.equal(result.uncommitted, null);
+  assert.equal(fs.existsSync(result.resultFile), false);
+  const manifest = readManifest(result.manifestPath).data;
+  assert.equal(manifest.state, STATES.ESCALATED);
+  assert.deepEqual(readJsonLines(ghLogPath), []);
+  assert.deepEqual(readJsonLines(execLogPath), []);
+  assert.equal(Number(fs.readFileSync(pushPrCountPath, "utf-8")), 0);
+});
+
+test("dispatch escalates partial timed-out work when the executor omits the structured result file", () => {
+  const { repoRoot, relayHome } = setupRepoWithOrigin();
+  const { env, ghLogPath, execLogPath, pushPrCountPath } = createPushPrTestEnv({
+    relayHome,
+    ghState: {
+      prCreateUrl: "https://github.com/acme/dev-relay/pull/326",
+    },
+    codexMode: "partial-no-result",
+  });
+
+  const proc = spawnSync("node", [SCRIPT, repoRoot, ...withRequiredRubric([
+    "-b", "issue-263-partial-no-result",
+    "--prompt", "leave partial work without a structured result file",
+    "--timeout", "1",
+    "--json",
+  ])], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    env,
+  });
+
+  assert.notEqual(proc.status, 0);
+  const result = JSON.parse(proc.stdout);
+  assert.equal(result.status, "failed");
+  assert.equal(result.runState, STATES.ESCALATED);
+  assert.match(result.error, /timed out/);
+  assert.equal(result.commits, "");
+  assert.match(result.uncommitted, /README\.md/);
+  assert.match(result.uncommittedDiff, /README\.md/);
+  assert.equal(fs.existsSync(result.resultFile), false);
+  const manifest = readManifest(result.manifestPath).data;
+  assert.equal(manifest.state, STATES.ESCALATED);
   assert.deepEqual(readJsonLines(ghLogPath), []);
   assert.deepEqual(readJsonLines(execLogPath), []);
   assert.equal(Number(fs.readFileSync(pushPrCountPath, "utf-8")), 0);
