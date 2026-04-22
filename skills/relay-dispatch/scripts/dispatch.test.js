@@ -2413,6 +2413,29 @@ test("dispatch writes execution evidence with an explicitly empty test command v
   assert.equal(evidence.test_command, "");
 });
 
+test("dispatch writes execution evidence with a flag-like test command verbatim", () => {
+  const fixture = setupRepoWithOrigin();
+  const env = createPushPrTestEnv({
+    relayHome: fixture.relayHome,
+    codexMode: "commit",
+    ghState: {
+      prCreateUrl: "https://example.test/acme/dev-relay/pull/261",
+    },
+  });
+
+  const result = JSON.parse(runDispatch(fixture.repoRoot, [
+    "-b", "issue-261-flaglike-test-command",
+    "--prompt", "record flag-like execution evidence",
+    "--test-command", "--grep smoke",
+    "--json",
+  ], env.env));
+  const evidence = readExecutionEvidence(result.runDir);
+
+  assert.equal(result.status, "completed");
+  assert.equal(evidence.head_sha, result.headSha);
+  assert.equal(evidence.test_command, "--grep smoke");
+});
+
 test("re-dispatch prompt includes previous iteration history", () => {
   const { repoRoot, relayHome } = setupRepo();
   process.env.RELAY_HOME = relayHome;

@@ -70,6 +70,7 @@ Review the changed code for issues that still matter before merge:
 
 Set `quality_review_status` by inspection only. The review runner computes `quality_execution_status` from `execution-evidence.json`.
 Reviewer MUST NOT set `quality_execution_status`.
+The reviewer cannot execute code, and the runner independently verifies SHA-bound execution evidence for the reviewed HEAD. This preserves the trust boundary between inspection evidence and execution evidence.
 
 If the rubric includes tiered factors, review them differently:
 - **Contract-tier factors**: verify pass/fail. Did the specific AC item get implemented? Treat these as binary checks with minimal interpretation.
