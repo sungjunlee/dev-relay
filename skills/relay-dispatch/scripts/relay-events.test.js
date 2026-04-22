@@ -188,6 +188,22 @@ test("appendRunEvent persists last_reviewed_sha when provided", () => {
   assert.equal(parsed.last_reviewed_sha, "cafef00d");
 });
 
+test("appendRunEvent persists pr_number when provided", () => {
+  const { repoRoot, runId } = createContext();
+  const record = appendRunEvent(repoRoot, runId, {
+    event: "force_finalize",
+    state_from: "escalated",
+    state_to: "merged",
+    head_sha: "deadbeef",
+    reason: "operator override",
+    pr_number: 123,
+  });
+
+  const [parsed] = readRunEvents(repoRoot, runId);
+  assert.equal(record.pr_number, 123);
+  assert.equal(parsed.pr_number, 123);
+});
+
 test("appendRunEvent omits last_reviewed_sha when absent", () => {
   const { repoRoot, runId } = createContext();
   const record = appendRunEvent(repoRoot, runId, {

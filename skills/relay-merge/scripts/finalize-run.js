@@ -1,6 +1,10 @@
 #!/usr/bin/env node
 /**
  * Merge a ready relay run, then finalize cleanup and manifest metadata.
+ * Operator-only escape hatch: `--force-finalize-nonready --reason <text>`
+ * bypasses the manifest state gate for non-terminal runs, emits a loud
+ * `force_finalize` audit event, and records `last_force` in the manifest
+ * before the merge side effect.
  *
  * Usage:
  *   ./finalize-run.js --repo <path> --run-id <id> [options]
@@ -15,6 +19,9 @@
  *   --pr <number>          Pull request number (optional when stored in manifest)
  *   --merge-method <name>  squash | merge | rebase (default: squash)
  *   --skip-review <reason> Bypass the fresh-review gate with an audit reason
+ *   --force-finalize-nonready
+ *                          Operator-only: bypass non-ready state gate
+ *   --reason <text>        Required with --force-finalize-nonready
  *   --skip-merge           Skip the PR merge step and run cleanup only
  *   --no-issue-close       Skip linked issue close
  *   --dry-run              Print what would happen without writing
@@ -32,9 +39,14 @@ const {
 } = require("../../relay-dispatch/scripts/manifest/paths");
 const {
   STATES,
+  forceUpdateManifestState,
   updateManifestState,
 } = require("../../relay-dispatch/scripts/manifest/lifecycle");
-const { summarizeError, writeManifest } = require("../../relay-dispatch/scripts/manifest/store");
+const {
+  getActorName,
+  summarizeError,
+  writeManifest,
+} = require("../../relay-dispatch/scripts/manifest/store");
 const { resolveManifestRecord } = require("../../relay-dispatch/scripts/relay-resolver");
 const { appendRunEvent } = require("../../relay-dispatch/scripts/relay-events");
 const { runCleanup } = require("../../relay-dispatch/scripts/manifest/cleanup");
@@ -49,6 +61,7 @@ const {
 const args = process.argv.slice(2);
 const KNOWN_FLAGS = [
   "--repo", "--run-id", "--manifest", "--branch", "--pr", "--merge-method", "--skip-review",
+  "--force-finalize-nonready", "--reason",
   "--skip-merge", "--no-issue-close", "--dry-run", "--json", "--help", "-h",
 ];
 
@@ -63,6 +76,9 @@ if (!args.length || args.includes("--help") || args.includes("-h")) {
   console.log("  --pr <number>          Pull request number (optional when stored in manifest)");
   console.log("  --merge-method <name>  squash | merge | rebase (default: squash)");
   console.log("  --skip-review <reason> Bypass the fresh-review gate with an audit reason");
+  console.log("  --force-finalize-nonready");
+  console.log("                         Operator-only: bypass non-ready state gate");
+  console.log("  --reason <text>        Required with --force-finalize-nonready");
   console.log("  --skip-merge           Skip the PR merge step and run cleanup only");
   console.log("  --no-issue-close       Skip linked issue close");
   console.log("  --dry-run              Print what would happen without writing");
@@ -153,6 +169,20 @@ function fetchPrMergeState(ghBin, repoPath, prNumber) {
   };
 }
 
+function assertPreMergeSafety(preMerge, prNumber) {
+  if (preMerge.mergeable === "CONFLICTING") {
+    throw new Error(
+      `PR #${prNumber} has merge conflicts with the base branch. Resolve conflicts and push, then retry.`
+    );
+  }
+  if (preMerge.failing.length > 0) {
+    const names = preMerge.failing.map((c) => c.name || c.context || "unknown").join(", ");
+    throw new Error(
+      `PR #${prNumber} has failing CI checks: ${names}. Fix these before merging.`
+    );
+  }
+}
+
 function resolveRemoteName(gitBin, repoPath, branch) {
   if (!branch) return null;
   try {
@@ -226,12 +256,17 @@ function main() {
   let prNumber = parsePositiveInt(getArg("--pr"), "--pr");
   const mergeMethod = getArg("--merge-method") || "squash";
   const skipReviewReason = getArg("--skip-review");
+  const forceFinalizeNonready = hasFlag("--force-finalize-nonready");
+  const forceFinalizeReason = getArg("--reason");
   const dryRun = hasFlag("--dry-run");
   const skipMerge = hasFlag("--skip-merge");
   const skipIssueClose = hasFlag("--no-issue-close");
   const jsonOut = hasFlag("--json");
   const ghBin = process.env.RELAY_GH_BIN || "gh";
   const gitBin = process.env.RELAY_GIT_BIN || "git";
+  if (forceFinalizeNonready && !String(forceFinalizeReason || "").trim()) {
+    throw new Error("--force-finalize-nonready requires --reason <non-empty-text>");
+  }
 
   let branch = getArg("--branch");
   let manifestRecord = resolveManifestRecord({
@@ -278,19 +313,35 @@ function main() {
       worktree: validatedPaths.worktree,
     },
   };
+  const FORCE_FINALIZE_ALLOWED_STATES = new Set([
+    STATES.DRAFT,
+    STATES.DISPATCHED,
+    STATES.REVIEW_PENDING,
+    STATES.CHANGES_REQUESTED,
+    STATES.ESCALATED,
+    STATES.READY_TO_MERGE,
+  ]);
   prNumber = prNumber || safeData.git?.pr_number || null;
   branch = resolveBranch(ghBin, repoPath, prNumber, branch, safeData);
   if (!skipMerge && !prNumber) {
     throw new Error("PR number is required for merge finalization");
   }
+  if (forceFinalizeNonready && (safeData.state === STATES.MERGED || safeData.state === STATES.CLOSED)) {
+    throw new Error(`force-finalize cannot be used from terminal state ${safeData.state}`);
+  }
+  if (forceFinalizeNonready && !FORCE_FINALIZE_ALLOWED_STATES.has(safeData.state)) {
+    throw new Error(`force-finalize cannot be used from state ${safeData.state}`);
+  }
   if (skipMerge && safeData.state !== STATES.MERGED) {
     throw new Error("--skip-merge can only be used for runs that are already in the merged state");
   }
-  if (!skipMerge && safeData.state !== STATES.READY_TO_MERGE) {
+  if (!skipMerge && !forceFinalizeNonready && safeData.state !== STATES.READY_TO_MERGE) {
     if (safeData.state !== STATES.MERGED) {
       throw new Error(`Expected relay run to be ${STATES.READY_TO_MERGE} before merge, got ${safeData.state}`);
     }
   }
+  const mergeAllowed = !skipMerge && (safeData.state === STATES.READY_TO_MERGE || forceFinalizeNonready);
+  const operatorName = getActorName(repoPath);
 
   let updated = safeData;
   let mergePerformed = false;
@@ -303,33 +354,35 @@ function main() {
   let issueClosed = false;
   let issueCloseWarning = null;
   let reviewGate = null;
+  let currentHeadSha = safeData.git?.head_sha || null;
   const skipReviewRubricAudit = summarizeRubricAuditForSkip(safeData, {
     runDir: getRunDir(validatedPaths.repoRoot, safeData.run_id),
   });
   const skipReviewRubricStatus = skipReviewRubricAudit.rubricStatus;
 
-  if (!skipMerge && safeData.state === STATES.READY_TO_MERGE) {
+  if (mergeAllowed) {
+    currentHeadSha = git(gitBin, validatedPaths.worktree, "rev-parse", "HEAD");
     if (skipReviewReason) {
-      reviewGate = buildSkipReviewGateFailure(prNumber, skipReviewRubricAudit);
-      if (reviewGate) {
+      const skipReviewFailure = buildSkipReviewGateFailure(prNumber, skipReviewRubricAudit);
+      if (skipReviewFailure) {
         if (!dryRun) {
           appendRunEvent(repoPath, safeData.run_id, {
             event: "merge_blocked",
             state_from: safeData.state,
             state_to: safeData.state,
-            head_sha: safeData.git?.head_sha || null,
+            head_sha: currentHeadSha,
             round: safeData.review?.rounds || null,
-            reason: reviewGate.status,
+            reason: skipReviewFailure.status,
           });
         }
-        throw new Error(`Fresh review gate failed: ${reviewGate.status}`);
+        throw new Error(`Fresh review gate failed: ${skipReviewFailure.status}`);
       }
       reviewGate = {
         status: "skipped",
         pr: prNumber,
         reason: skipReviewReason,
         rubricStatus: skipReviewRubricStatus,
-        readyToMerge: true,
+        readyToMerge: safeData.state === STATES.READY_TO_MERGE,
       };
       if (!dryRun) {
         const skipComment = buildSkipComment(skipReviewReason, skipReviewRubricAudit);
@@ -337,14 +390,14 @@ function main() {
           event: "skip_review",
           state_from: safeData.state,
           state_to: safeData.state,
-          head_sha: safeData.git?.head_sha || null,
+          head_sha: currentHeadSha,
           round: safeData.review?.rounds || null,
           reason: skipReviewReason,
           rubric_status: skipReviewRubricStatus,
         });
         gh(ghBin, repoPath, "pr", "comment", String(prNumber), "--body", skipComment);
       }
-    } else {
+    } else if (safeData.state === STATES.READY_TO_MERGE) {
       const preMerge = fetchPreMergeContext(ghBin, repoPath, prNumber);
       reviewGate = evaluateReviewGate({
         prNumber,
@@ -360,29 +413,33 @@ function main() {
             event: "merge_blocked",
             state_from: safeData.state,
             state_to: safeData.state,
-            head_sha: reviewGate.latestCommit || safeData.git?.head_sha || null,
+            head_sha: reviewGate.latestCommit || currentHeadSha,
             round: safeData.review?.rounds || null,
             reason: reviewGate.status,
           });
         }
         throw new Error(`Fresh review gate failed: ${reviewGate.status}`);
       }
-      // CI status and merge conflict check (from the same API call)
-      if (preMerge.mergeable === "CONFLICTING") {
-        throw new Error(
-          `PR #${prNumber} has merge conflicts with the base branch. Resolve conflicts and push, then retry.`
-        );
-      }
-      if (preMerge.failing.length > 0) {
-        const names = preMerge.failing.map((c) => c.name || c.context || "unknown").join(", ");
-        throw new Error(
-          `PR #${prNumber} has failing CI checks: ${names}. Fix these before merging.`
-        );
-      }
+      assertPreMergeSafety(preMerge, prNumber);
+    } else if (forceFinalizeNonready) {
+      const preMerge = fetchPreMergeContext(ghBin, repoPath, prNumber);
+      assertPreMergeSafety(preMerge, prNumber);
     }
   }
 
-  if (!skipMerge && safeData.state === STATES.READY_TO_MERGE) {
+  if (mergeAllowed) {
+    if (forceFinalizeNonready && !dryRun) {
+      appendRunEvent(repoPath, safeData.run_id, {
+        event: "force_finalize",
+        state_from: safeData.state,
+        state_to: STATES.MERGED,
+        head_sha: currentHeadSha,
+        round: safeData.review?.rounds || null,
+        reason: forceFinalizeReason,
+        pr_number: prNumber,
+        last_reviewed_sha: safeData.review?.last_reviewed_sha,
+      });
+    }
 
     prMergeState = dryRun ? prMergeState : fetchPrMergeState(ghBin, repoPath, prNumber);
     if (!dryRun && prMergeState.state !== "MERGED") {
@@ -426,7 +483,7 @@ function main() {
             event: "merge_blocked",
             state_from: safeData.state,
             state_to: safeData.state,
-            head_sha: reviewGate?.latestCommit || safeData.git?.head_sha || null,
+            head_sha: reviewGate?.latestCommit || currentHeadSha,
             round: safeData.review?.rounds || null,
             reason: "removed_from_merge_queue",
           });
@@ -440,7 +497,7 @@ function main() {
           event: "merge_blocked",
           state_from: safeData.state,
           state_to: safeData.state,
-          head_sha: reviewGate?.latestCommit || safeData.git?.head_sha || null,
+          head_sha: reviewGate?.latestCommit || currentHeadSha,
           round: safeData.review?.rounds || null,
           reason: `merge_queue_timeout:${prMergeState.state || "unknown"}`,
         });
@@ -459,12 +516,17 @@ function main() {
     } else {
       remoteBranchDeleted = true;
     }
-    updated = updateManifestState(updated, STATES.MERGED, "manual_cleanup_required");
+    updated = forceFinalizeNonready
+      ? forceUpdateManifestState(updated, STATES.MERGED, "manual_cleanup_required", {
+        reason: forceFinalizeReason,
+        operator: operatorName,
+      })
+      : updateManifestState(updated, STATES.MERGED, "manual_cleanup_required");
     updated = {
       ...updated,
       git: {
         ...(updated.git || {}),
-        head_sha: reviewGate?.latestCommit || updated.review?.last_reviewed_sha || updated.git?.head_sha || null,
+        head_sha: currentHeadSha || reviewGate?.latestCommit || updated.review?.last_reviewed_sha || updated.git?.head_sha || null,
       },
     };
     if (!dryRun) {
@@ -539,6 +601,8 @@ function main() {
     issueCloseWarning,
     cleanup: cleanupResult.summary,
     dryRun,
+    forceFinalized: forceFinalizeNonready,
+    forceFinalizeReason: forceFinalizeNonready ? forceFinalizeReason : null,
   };
 
   if (jsonOut) {

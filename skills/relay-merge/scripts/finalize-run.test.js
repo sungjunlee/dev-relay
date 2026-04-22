@@ -18,10 +18,81 @@ const { readRunEvents } = require("../../relay-dispatch/scripts/relay-events");
 const { createEnforcementFixture } = require("../../relay-dispatch/scripts/test-support");
 
 const SCRIPT = path.join(__dirname, "finalize-run.js");
+const DEFAULT_COMMIT_DATE = "2026-04-03T08:00:00Z";
+const DEFAULT_REVIEW_COMMENT = {
+  body: "<!-- relay-review -->\n## Relay Review\nVerdict: LGTM\nRounds: 1",
+  createdAt: DEFAULT_COMMIT_DATE,
+};
+
+function buildManifestForState(manifest, targetState) {
+  switch (targetState) {
+    case STATES.DRAFT:
+      return manifest;
+    case STATES.DISPATCHED:
+      return updateManifestState(manifest, STATES.DISPATCHED, "await_dispatch_result");
+    case STATES.REVIEW_PENDING: {
+      const dispatched = updateManifestState(manifest, STATES.DISPATCHED, "await_dispatch_result");
+      const reviewPending = updateManifestState(dispatched, STATES.REVIEW_PENDING, "run_review");
+      return {
+        ...reviewPending,
+        review: {
+          ...(reviewPending.review || {}),
+          last_reviewed_sha: reviewPending.git?.head_sha || null,
+          latest_verdict: "pending",
+          rounds: 1,
+        },
+      };
+    }
+    case STATES.CHANGES_REQUESTED: {
+      const reviewPending = buildManifestForState(manifest, STATES.REVIEW_PENDING);
+      const requested = updateManifestState(reviewPending, STATES.CHANGES_REQUESTED, "re_dispatch_requested_changes");
+      return {
+        ...requested,
+        review: {
+          ...(requested.review || {}),
+          latest_verdict: "changes_requested",
+        },
+      };
+    }
+    case STATES.READY_TO_MERGE: {
+      const reviewPending = buildManifestForState(manifest, STATES.REVIEW_PENDING);
+      const ready = updateManifestState(reviewPending, STATES.READY_TO_MERGE, "await_explicit_merge");
+      return {
+        ...ready,
+        review: {
+          ...(ready.review || {}),
+          latest_verdict: "lgtm",
+        },
+      };
+    }
+    case STATES.ESCALATED: {
+      const reviewPending = buildManifestForState(manifest, STATES.REVIEW_PENDING);
+      const escalated = updateManifestState(reviewPending, STATES.ESCALATED, "inspect_review_failure");
+      return {
+        ...escalated,
+        review: {
+          ...(escalated.review || {}),
+          latest_verdict: "escalated",
+        },
+      };
+    }
+    case STATES.MERGED: {
+      const ready = buildManifestForState(manifest, STATES.READY_TO_MERGE);
+      return updateManifestState(ready, STATES.MERGED, "manual_cleanup_required");
+    }
+    case STATES.CLOSED: {
+      const ready = buildManifestForState(manifest, STATES.READY_TO_MERGE);
+      return updateManifestState(ready, STATES.CLOSED, "done");
+    }
+    default:
+      throw new Error(`Unsupported fixture manifest state: ${targetState}`);
+  }
+}
 
 function setupRepo({
   dirtyWorktree = false,
   enforcementState = "loaded",
+  manifestState = STATES.READY_TO_MERGE,
 } = {}) {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-finalize-"));
   process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
@@ -66,19 +137,14 @@ function setupRepo({
     executor: "codex",
     reviewer: "codex",
   });
-  manifest = updateManifestState(manifest, STATES.DISPATCHED, "await_dispatch_result");
   manifest.anchor = createEnforcementFixture({
     repoRoot,
     runId,
     state: enforcementState,
   }).anchor;
-  manifest = updateManifestState(manifest, STATES.REVIEW_PENDING, "run_review");
-  manifest = updateManifestState(manifest, STATES.READY_TO_MERGE, "await_explicit_merge");
   manifest.git.pr_number = 123;
   manifest.git.head_sha = headSha;
-  manifest.review.last_reviewed_sha = headSha;
-  manifest.review.latest_verdict = "lgtm";
-  manifest.review.rounds = 1;
+  manifest = buildManifestForState(manifest, manifestState);
   writeManifest(manifestPath, manifest);
 
   return { repoRoot, manifestPath, branch, worktreePath, headSha, runId };
@@ -265,6 +331,273 @@ function runFinalizeSkipReview({
     events: readRunEvents(fixture.repoRoot, fixture.runId),
   };
 }
+
+function execFinalize(fixture, {
+  extraArgs = [],
+  ghOptions = {},
+  env = {},
+  selectorArgs = ["--repo", fixture.repoRoot, "--branch", fixture.branch],
+  cwd = fixture.repoRoot,
+} = {}) {
+  const logPath = path.join(fixture.repoRoot, "gh.log");
+  const fakeGh = writeFakeGh(logPath, {
+    comments: [],
+    commits: [
+      {
+        oid: fixture.headSha,
+        committedDate: DEFAULT_COMMIT_DATE,
+      },
+    ],
+    ...ghOptions,
+  });
+
+  const stdout = execFileSync("node", [
+    SCRIPT,
+    ...selectorArgs,
+    "--pr", "123",
+    ...extraArgs,
+    "--json",
+  ], {
+    cwd,
+    encoding: "utf-8",
+    stdio: "pipe",
+    env: { ...process.env, RELAY_GH_BIN: fakeGh, ...env },
+  });
+
+  return {
+    ...fixture,
+    logPath,
+    result: JSON.parse(stdout),
+    events: readRunEvents(fixture.repoRoot, fixture.runId),
+  };
+}
+
+test("finalize-run force-finalize merges an escalated run with an auditable event trail", () => {
+  const fixture = setupRepo({ manifestState: STATES.ESCALATED });
+  const forceReason = "reviewer-swap exhausted, diff clean per manual inspection";
+  const { result, events, repoRoot, manifestPath, branch, worktreePath, logPath, headSha } = execFinalize(fixture, {
+    extraArgs: ["--force-finalize-nonready", "--reason", forceReason],
+  });
+
+  const forceEvent = events.find((entry) => entry.event === "force_finalize");
+  const mergeEvent = events.find((entry) => entry.event === "merge_finalize");
+  const manifest = readManifest(manifestPath).data;
+
+  assert.equal(result.previousState, STATES.ESCALATED);
+  assert.equal(result.state, STATES.MERGED);
+  assert.equal(result.forceFinalized, true);
+  assert.equal(result.forceFinalizeReason, forceReason);
+  assert.equal(forceEvent?.state_from, STATES.ESCALATED);
+  assert.equal(forceEvent?.state_to, STATES.MERGED);
+  assert.equal(forceEvent?.reason, forceReason);
+  assert.equal(forceEvent?.pr_number, 123);
+  assert.equal(forceEvent?.last_reviewed_sha, headSha);
+  assert.equal(forceEvent?.head_sha, headSha);
+  assert.equal(mergeEvent?.state_to, STATES.MERGED);
+  assert.equal(manifest.state, STATES.MERGED);
+  assert.equal(manifest.last_force.reason, forceReason);
+  assert.equal(manifest.last_force.from_state, STATES.ESCALATED);
+  assert.equal(manifest.last_force.to_state, STATES.MERGED);
+  assert.equal(fs.existsSync(worktreePath), false);
+  assert.equal(branchExists(repoRoot, branch), false);
+  assert.equal(remoteBranchExists(repoRoot, branch), false);
+  assert.match(fs.readFileSync(logPath, "utf-8"), /pr merge 123 --squash/);
+});
+
+for (const sourceState of [
+  STATES.REVIEW_PENDING,
+  STATES.CHANGES_REQUESTED,
+  STATES.DISPATCHED,
+  STATES.DRAFT,
+]) {
+  test(`finalize-run force-finalize merges a ${sourceState} run`, () => {
+    const fixture = setupRepo({ manifestState: sourceState });
+    const { result, events, manifestPath } = execFinalize(fixture, {
+      extraArgs: ["--force-finalize-nonready", "--reason", `operator override from ${sourceState}`],
+    });
+
+    const forceEvent = events.find((entry) => entry.event === "force_finalize");
+    const manifest = readManifest(manifestPath).data;
+
+    assert.equal(result.previousState, sourceState);
+    assert.equal(result.state, STATES.MERGED);
+    assert.equal(forceEvent?.state_from, sourceState);
+    assert.equal(forceEvent?.state_to, STATES.MERGED);
+    assert.equal(forceEvent?.head_sha, fixture.headSha);
+    assert.equal(manifest.state, STATES.MERGED);
+    assert.equal(manifest.last_force.from_state, sourceState);
+    assert.equal(manifest.last_force.to_state, STATES.MERGED);
+  });
+}
+
+test("finalize-run force-finalize from ready_to_merge still emits a force audit event", () => {
+  const fixture = setupRepo({ manifestState: STATES.READY_TO_MERGE });
+  const forceReason = "operator requested explicit audit trail";
+  const { result, events, manifestPath } = execFinalize(fixture, {
+    extraArgs: ["--force-finalize-nonready", "--reason", forceReason],
+    ghOptions: {
+      comments: [DEFAULT_REVIEW_COMMENT],
+    },
+  });
+
+  const forceEvent = events.find((entry) => entry.event === "force_finalize");
+  const mergeEvent = events.find((entry) => entry.event === "merge_finalize");
+  const manifest = readManifest(manifestPath).data;
+
+  assert.equal(result.previousState, STATES.READY_TO_MERGE);
+  assert.equal(result.state, STATES.MERGED);
+  assert.equal(forceEvent?.state_from, STATES.READY_TO_MERGE);
+  assert.equal(forceEvent?.reason, forceReason);
+  assert.equal(mergeEvent?.state_to, STATES.MERGED);
+  assert.equal(manifest.last_force.reason, forceReason);
+  assert.equal(manifest.last_force.from_state, STATES.READY_TO_MERGE);
+});
+
+test("finalize-run rejects force-finalize from merged without mutating audit state", () => {
+  const fixture = setupRepo({ manifestState: STATES.MERGED });
+
+  assert.throws(() => execFileSync("node", [
+    SCRIPT,
+    "--manifest", fixture.manifestPath,
+    "--pr", "123",
+    "--force-finalize-nonready",
+    "--reason", "stuck",
+    "--json",
+  ], {
+    cwd: fixture.repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+  }), (error) => {
+    assert.match(String(error.stderr), /force-finalize cannot be used from terminal state merged/);
+    return true;
+  });
+
+  const manifest = readManifest(fixture.manifestPath).data;
+  assert.equal(manifest.state, STATES.MERGED);
+  assert.equal("last_force" in manifest, false);
+  assert.deepEqual(readRunEvents(fixture.repoRoot, fixture.runId), []);
+  assert.equal(fs.existsSync(fixture.worktreePath), true);
+  assert.equal(branchExists(fixture.repoRoot, fixture.branch), true);
+});
+
+test("finalize-run rejects force-finalize from closed without mutating audit state", () => {
+  const fixture = setupRepo({ manifestState: STATES.CLOSED });
+
+  assert.throws(() => execFileSync("node", [
+    SCRIPT,
+    "--manifest", fixture.manifestPath,
+    "--pr", "123",
+    "--force-finalize-nonready",
+    "--reason", "stuck",
+    "--json",
+  ], {
+    cwd: fixture.repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+  }), (error) => {
+    assert.match(String(error.stderr), /force-finalize cannot be used from terminal state closed/);
+    return true;
+  });
+
+  const manifest = readManifest(fixture.manifestPath).data;
+  assert.equal(manifest.state, STATES.CLOSED);
+  assert.equal("last_force" in manifest, false);
+  assert.deepEqual(readRunEvents(fixture.repoRoot, fixture.runId), []);
+  assert.equal(fs.existsSync(fixture.worktreePath), true);
+  assert.equal(branchExists(fixture.repoRoot, fixture.branch), true);
+});
+
+test("finalize-run rejects force-finalize without --reason before any side effect", () => {
+  const fixture = setupRepo({ manifestState: STATES.ESCALATED });
+
+  assert.throws(() => execFileSync("node", [
+    SCRIPT,
+    "--repo", fixture.repoRoot,
+    "--branch", fixture.branch,
+    "--pr", "123",
+    "--force-finalize-nonready",
+    "--json",
+  ], {
+    cwd: fixture.repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+  }), (error) => {
+    assert.match(String(error.stderr), /--force-finalize-nonready requires --reason <non-empty-text>/);
+    return true;
+  });
+
+  assert.equal(readManifest(fixture.manifestPath).data.state, STATES.ESCALATED);
+  assert.deepEqual(readRunEvents(fixture.repoRoot, fixture.runId), []);
+  assert.equal(fs.existsSync(fixture.worktreePath), true);
+  assert.equal(branchExists(fixture.repoRoot, fixture.branch), true);
+  assert.equal(remoteBranchExists(fixture.repoRoot, fixture.branch), true);
+  assert.equal(fs.existsSync(path.join(fixture.repoRoot, "gh.log")), false);
+});
+
+test("finalize-run rejects force-finalize with a whitespace-only --reason", () => {
+  const fixture = setupRepo({ manifestState: STATES.ESCALATED });
+
+  assert.throws(() => execFileSync("node", [
+    SCRIPT,
+    "--repo", fixture.repoRoot,
+    "--branch", fixture.branch,
+    "--pr", "123",
+    "--force-finalize-nonready",
+    "--reason", "   ",
+    "--json",
+  ], {
+    cwd: fixture.repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+  }), (error) => {
+    assert.match(String(error.stderr), /--force-finalize-nonready requires --reason <non-empty-text>/);
+    return true;
+  });
+
+  assert.equal(readManifest(fixture.manifestPath).data.state, STATES.ESCALATED);
+  assert.deepEqual(readRunEvents(fixture.repoRoot, fixture.runId), []);
+  assert.equal(fs.existsSync(fixture.worktreePath), true);
+  assert.equal(branchExists(fixture.repoRoot, fixture.branch), true);
+});
+
+test("finalize-run force-finalize dry-run is observation-only and does not append audit events", () => {
+  const fixture = setupRepo({ manifestState: STATES.ESCALATED });
+  const { result } = execFinalize(fixture, {
+    extraArgs: ["--force-finalize-nonready", "--reason", "dry-run check", "--dry-run"],
+  });
+
+  assert.equal(result.dryRun, true);
+  assert.equal(result.forceFinalized, true);
+  assert.equal(readManifest(fixture.manifestPath).data.state, STATES.ESCALATED);
+  assert.deepEqual(readRunEvents(fixture.repoRoot, fixture.runId), []);
+  assert.equal(fs.existsSync(fixture.worktreePath), true);
+  assert.equal(branchExists(fixture.repoRoot, fixture.branch), true);
+  assert.equal(remoteBranchExists(fixture.repoRoot, fixture.branch), true);
+});
+
+test("finalize-run combined skip-review and force-finalize emits both audit events", () => {
+  const fixture = setupRepo({ manifestState: STATES.REVIEW_PENDING });
+  const { result, events, logPath, manifestPath } = execFinalize(fixture, {
+    extraArgs: [
+      "--force-finalize-nonready",
+      "--reason", "stuck",
+      "--skip-review", "no reviewer",
+    ],
+  });
+
+  const skipEvent = events.find((entry) => entry.event === "skip_review");
+  const forceEvent = events.find((entry) => entry.event === "force_finalize");
+  const manifest = readManifest(manifestPath).data;
+  const ghLog = fs.readFileSync(logPath, "utf-8");
+
+  assert.equal(result.state, STATES.MERGED);
+  assert.equal(skipEvent?.reason, "no reviewer");
+  assert.equal(forceEvent?.reason, "stuck");
+  assert.equal(forceEvent?.state_from, STATES.REVIEW_PENDING);
+  assert.equal(manifest.last_force.reason, "stuck");
+  assert.match(ghLog, /pr comment 123 --body/);
+  assert.match(ghLog, /pr merge 123 --squash/);
+});
 
 test("finalize-run merges and cleans a ready run", () => {
   const { repoRoot, manifestPath, branch, worktreePath, headSha } = setupRepo();
