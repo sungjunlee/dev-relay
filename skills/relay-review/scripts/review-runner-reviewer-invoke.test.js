@@ -79,7 +79,7 @@ process.stdout.write(JSON.stringify({
   verdict: "pass",
   summary: "ok",
   contract_status: "pass",
-  quality_status: "pass",
+  quality_review_status: "pass",
   next_action: "ready_to_merge",
   issues: [],
   rubric_scores: [],

@@ -22,6 +22,12 @@ const { ALLOWED_SCORE_TIERS, parseReviewVerdict, validateReviewVerdict, validate
 const { buildCommentBody, formatIssueList, formatScopeDrift, postComment } = require("./review-runner/comment");
 const { buildScoreDivergenceAnalysis, loadPrBody, parseScoreLog } = require("./review-runner/divergence");
 const {
+  applyQualityExecutionStatus,
+  buildExecutionEvidenceFailureVerdict,
+  buildMissingExecutionEvidenceVerdict,
+  computeQualityExecutionStatus,
+} = require("./review-runner/execution-evidence");
+const {
   buildRedispatchPrompt,
   buildReviewRunnerRubricGateFailure,
   buildRubricGateRedispatchPrompt,
@@ -233,13 +239,21 @@ function run() {
   });
   result.rawResponsePath = rawResponsePath;
 
-  let verdict = parseReviewVerdict(reviewText);
+  let verdict = parseReviewVerdict(reviewText, { requireExecutionStatus: false });
   if (rubricLoad.state === "loaded" && (!Array.isArray(verdict.rubric_scores) || verdict.rubric_scores.length === 0)) {
     throw new Error(
       "Review verdict has empty rubric_scores but a rubric was provided. " +
       "The reviewer must score every rubric factor."
     );
   }
+  const executionStatus = computeQualityExecutionStatus({ runDir, reviewedHead: reviewedHeadSha });
+  verdict = applyQualityExecutionStatus(verdict, executionStatus);
+  if (verdict.verdict === "pass" && executionStatus.status !== "pass") {
+    verdict = executionStatus.status === "missing"
+      ? buildMissingExecutionEvidenceVerdict(verdict)
+      : buildExecutionEvidenceFailureVerdict(verdict);
+  }
+  validateReviewVerdict(verdict);
 
   const repeatedIssueCount = verdict.verdict === "changes_requested"
     ? computeRepeatedIssueCount(runDir, round, verdict.issues)

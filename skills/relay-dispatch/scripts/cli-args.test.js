@@ -117,6 +117,34 @@ test("getArg can treat reserved long flags as missing values", () => {
   );
 });
 
+test("getArg can preserve a flag-like token verbatim when the caller opts in", () => {
+  // Anti-theater: `dispatch --test-command \"--grep smoke\"` must record the quoted payload exactly
+  // instead of dropping it just because the token starts with `--`.
+  assert.equal(
+    getArg(
+      ["--test-command", "--grep smoke"],
+      "--test-command",
+      undefined,
+      { reservedFlags: ["--json"], allowFlagLikeValue: true }
+    ),
+    "--grep smoke"
+  );
+});
+
+test("getArg preserves exact reserved tokens when flag-like values are enabled", () => {
+  // Anti-theater: issue #261 requires `dispatch --test-command '--json'` to record the caller
+  // payload verbatim even when it matches a token in the shared reserved flag list.
+  assert.equal(
+    getArg(
+      ["--test-command", "--json"],
+      "--test-command",
+      "fallback",
+      { reservedFlags: ["--json"], allowFlagLikeValue: true }
+    ),
+    "--json"
+  );
+});
+
 test("hasFlag detects a present string flag", () => {
   // Anti-theater: the shared helper contract includes presence checks alongside value reads so thin
   // CLIs do not duplicate ad-hoc flag scans next to `getArg(...)`.

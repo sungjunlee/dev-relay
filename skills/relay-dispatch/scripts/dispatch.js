@@ -24,6 +24,7 @@
  *   --copy <file,...>      Additional files to copy
  *   --timeout <seconds>    Exec timeout (default: 1800)
  *   --rubric-file <path>   REQUIRED: copy rubric YAML to run dir (persists for review)
+ *   --test-command <cmd>   Record the executor-side test command in execution evidence
  *   --rubric-grandfathered Retired alias; dispatch rejects it
  *   --request-id <id>      Link the run back to a relay-intake request
  *   --leaf-id <id>         Link the run back to a relay-intake leaf handoff
@@ -57,6 +58,10 @@ const crypto = require("crypto");
 const os = require("os");
 const { pushAndOpenPR } = require("./dispatch-publish");
 const { registerClaudeApp } = require("./claude-app-register");
+const {
+  buildExecutionEvidence,
+  writeExecutionEvidence,
+} = require("./execution-evidence");
 const {
   createWorktree,
   formatDispatchDryRun,
@@ -99,7 +104,7 @@ const args = process.argv.slice(2);
 
 const KNOWN_FLAGS = [
   "--branch", "-b", "--run-id", "--manifest", "--prompt", "-p", "--prompt-file", "--executor", "-e",
-  "--model", "-m", "--model-hints", "--sandbox", "--copy", "--timeout", "--rubric-file", "--rubric-grandfathered",
+  "--model", "-m", "--model-hints", "--sandbox", "--copy", "--timeout", "--rubric-file", "--test-command", "--rubric-grandfathered",
   "--request-id", "--leaf-id", "--done-criteria-file",
   "--register", "--no-cleanup", "--dry-run", "--json", "--help", "-h",
 ];
@@ -122,6 +127,7 @@ if (!args.length || args.includes("--help") || args.includes("-h")) {
   console.log("  --copy <files>     Additional files to copy (comma-separated)");
   console.log("  --timeout          Exec timeout in seconds (default: 1800)");
   console.log("  --rubric-file      REQUIRED: copy rubric YAML to run dir (persists for review)");
+  console.log("  --test-command     Record the executor-side test command in execution evidence");
   console.log("  --rubric-grandfathered  Retired alias; remove anchor.rubric_grandfathered manually");
   console.log("  --request-id       Link the run back to a relay-intake request");
   console.log("  --leaf-id          Link the run back to a relay-intake leaf handoff");
@@ -159,6 +165,10 @@ const MODEL_HINTS_RAW = getArg(args, "--model-hints", undefined, CLI_ARG_OPTIONS
 const SANDBOX = getArg(args, "--sandbox", "workspace-write", CLI_ARG_OPTIONS);
 const COPY_FILES = getArg(args, "--copy", "", CLI_ARG_OPTIONS).split(",").filter(Boolean);
 const RUBRIC_FILE = getArg(args, "--rubric-file", undefined, CLI_ARG_OPTIONS);
+const TEST_COMMAND = getArg(args, "--test-command", undefined, {
+  ...CLI_ARG_OPTIONS,
+  allowFlagLikeValue: true,
+});
 const RUBRIC_GRANDFATHERED = hasFlag(args, "--rubric-grandfathered");
 const REQUEST_ID = getArg(args, "--request-id", undefined, CLI_ARG_OPTIONS);
 const LEAF_ID = getArg(args, "--leaf-id", undefined, CLI_ARG_OPTIONS);
@@ -1067,6 +1077,19 @@ async function main() {
   try {
     if (resultText) fs.writeFileSync(path.join(runDir, "dispatch-result.txt"), resultText, "utf-8");
   } catch {}
+  let executionEvidencePath = null;
+  try {
+    executionEvidencePath = writeExecutionEvidence(runDir, buildExecutionEvidence({
+      headSha: currentHead || startHead || null,
+      testCommand: TEST_COMMAND,
+      resultFilePath: fs.existsSync(resultFile) ? resultFile : null,
+      executor: EXECUTOR,
+    }));
+  } catch (executionEvidenceError) {
+    status = "failed";
+    exitCode = exitCode || 1;
+    error = `execution_evidence_write_failed: ${String(executionEvidenceError.message || executionEvidenceError)}`;
+  }
 
   manifest = updateManifestState(
     manifest,
@@ -1148,6 +1171,7 @@ async function main() {
     headSha: currentHead || startHead || null,
     prNumber,
     prCreatedByUs,
+    executionEvidencePath,
     resultFile,
     stdoutLog,
     stderrLog,

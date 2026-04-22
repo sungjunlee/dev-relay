@@ -60,13 +60,17 @@ For each Done Criteria item, verify it is implemented in the diff by locating th
 - **Dead code**: unused imports, functions, variables
 - **Boundary violation**: areas marked "do not change" were modified
 
-If any contract issue exists, stop there and return `verdict=changes_requested` with `contract_status=fail` and `quality_status=not_run`.
+If any contract issue exists, stop there and return `verdict=changes_requested` with `contract_status=fail` and `quality_review_status=not_run`.
 
 ### Quality checks (only after contract passes)
 Review the changed code for issues that still matter before merge:
 - **Correctness risks**: edge cases, stale assumptions, unsafe recovery paths
 - **Structural quality**: confusing control flow, hidden side effects, misleading state transitions
 - **Simplification**: dead code, redundant branches, unnecessary complexity
+
+Set `quality_review_status` by inspection only. The review runner computes `quality_execution_status` from `execution-evidence.json`.
+Reviewer MUST NOT set `quality_execution_status`.
+The reviewer cannot execute code, and the runner independently verifies SHA-bound execution evidence for the reviewed HEAD. This preserves the trust boundary between inspection evidence and execution evidence.
 
 If the rubric includes tiered factors, review them differently:
 - **Contract-tier factors**: verify pass/fail. Did the specific AC item get implemented? Treat these as binary checks with minimal interpretation.
@@ -104,8 +108,8 @@ Reply with one of:
 - **Issues found** — list each issue with `file:line` reference and what needs to change
 
 Status rules:
-- Contract failed: `contract_status=fail`, `quality_status=not_run`
-- Contract passed but quality found issues: `contract_status=pass`, `quality_status=fail`
-- Full pass: `contract_status=pass`, `quality_status=pass`
+- Contract failed: `contract_status=fail`, `quality_review_status=not_run`, final PASS impossible
+- Contract passed but quality found issues: `contract_status=pass`, `quality_review_status=fail`, final PASS impossible
+- Inspection pass only: `contract_status=pass`, `quality_review_status=pass`; final PASS still requires runner-computed `quality_execution_status=pass`
 
 Do NOT flag stylistic improvements or cosmetic nits. Only flag issues that should block merge.
