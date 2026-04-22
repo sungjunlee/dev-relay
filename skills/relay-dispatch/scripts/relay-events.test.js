@@ -157,6 +157,21 @@ test("appendRunEvent persists rubric_status when provided", () => {
   assert.equal(parsed.rubric_status, "missing");
 });
 
+test("appendRunEvent persists origin when provided", () => {
+  const { repoRoot, runId } = createContext();
+  const record = appendRunEvent(repoRoot, runId, {
+    event: "review_apply",
+    state_from: "review_pending",
+    state_to: "escalated",
+    reason: "max_rounds_exceeded",
+    origin: "system",
+  });
+
+  const [parsed] = readRunEvents(repoRoot, runId);
+  assert.equal(record.origin, "system");
+  assert.equal(parsed.origin, "system");
+});
+
 test("appendRunEvent persists last_reviewed_sha when provided", () => {
   const { repoRoot, runId } = createContext();
   const record = appendRunEvent(repoRoot, runId, {

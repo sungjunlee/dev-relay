@@ -880,12 +880,11 @@ test("reliability-report keeps missing acting reviewer data explicit in text out
   assert.match(stdout, new RegExp(`missing_review_apply_run_ids: ${runMissingReviewApply}`));
 });
 
-test("reliability-report --by-acting-reviewer skips system-emitted review_apply events with no reviewer field", () => {
-  // review-runner.js emits `review_apply` with no reviewer field on the
-  // `max_rounds_exceeded` escalation path. Counting those as rounds performed
-  // by an "unknown" reviewer inflates phantom counts on every escalated run.
-  // The aggregator must treat missing-reviewer events as system transitions
-  // and surface affected runs via `missing_review_apply_run_ids` instead.
+test("reliability-report --by-acting-reviewer skips system-marked review_apply events", () => {
+  // New producer shape: review-runner.js marks the `max_rounds_exceeded`
+  // escalation path with `origin: "system"` and still omits `reviewer`.
+  // The aggregator must exclude those events from acting-reviewer buckets
+  // while keeping the run visible via `missing_review_apply_run_ids`.
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-report-acting-system-emitted-"));
   process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
   initGitRepo(repoRoot, "Relay Test");
@@ -917,6 +916,7 @@ test("reliability-report --by-acting-reviewer skips system-emitted review_apply 
     state_to: STATES.ESCALATED,
     round: 20,
     reason: "max_rounds_exceeded",
+    origin: "system",
   });
   appendRunEvent(repoRoot, runNormal, {
     event: "review_apply",
@@ -941,6 +941,66 @@ test("reliability-report --by-acting-reviewer skips system-emitted review_apply 
   assert.equal(report.by_acting_reviewer.reviewers.codex.acting_review.review_apply_runs, 1);
 
   // Escalated run surfaces as a missing_review_apply_run (data-integrity signal).
+  assert.equal(report.by_acting_reviewer.summary.review_apply_events, 1);
+  assert.equal(report.by_acting_reviewer.summary.review_apply_runs, 1);
+  assert.equal(report.by_acting_reviewer.summary.missing_review_apply_runs, 1);
+  assert.deepEqual(report.by_acting_reviewer.summary.missing_review_apply_run_ids, [runEscalated]);
+});
+
+test("reliability-report --by-acting-reviewer still skips legacy reviewer-less review_apply events", () => {
+  // Backward compatibility: older events predate `origin: "system"` and only
+  // omit `reviewer`. Keep filtering those until stored history ages out.
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-report-acting-legacy-reviewerless-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  initGitRepo(repoRoot, "Relay Test");
+  const recentTs = new Date(Date.now() - 1 * 60 * 60 * 1000).toISOString();
+  const runEscalated = createRunId({ branch: "run-escalated", timestamp: new Date("2026-04-12T09:10:00.000Z") });
+  const runNormal = createRunId({ branch: "run-normal", timestamp: new Date("2026-04-12T09:10:01.000Z") });
+
+  writeRun(repoRoot, {
+    runId: runEscalated,
+    state: STATES.ESCALATED,
+    rounds: 20,
+    updatedAt: recentTs,
+    reviewer: "codex",
+    lastReviewedSha: "legacy111",
+  });
+  writeRun(repoRoot, {
+    runId: runNormal,
+    state: STATES.CHANGES_REQUESTED,
+    rounds: 1,
+    updatedAt: recentTs,
+    reviewer: "codex",
+    lastReviewedSha: "normal222",
+  });
+
+  appendRunEvent(repoRoot, runEscalated, {
+    event: "review_apply",
+    state_from: STATES.REVIEW_PENDING,
+    state_to: STATES.ESCALATED,
+    round: 20,
+    reason: "max_rounds_exceeded",
+  });
+  appendRunEvent(repoRoot, runNormal, {
+    event: "review_apply",
+    state_from: STATES.REVIEW_PENDING,
+    state_to: STATES.CHANGES_REQUESTED,
+    round: 1,
+    reviewer: "codex",
+    reason: "changes_requested",
+  });
+
+  const stdout = execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--json",
+    "--by-acting-reviewer",
+  ], { encoding: "utf-8" });
+  const report = JSON.parse(stdout);
+
+  assert.deepEqual(Object.keys(report.by_acting_reviewer.reviewers).sort(), ["codex"]);
+  assert.equal(report.by_acting_reviewer.reviewers.codex.acting_review.review_apply_events, 1);
+  assert.equal(report.by_acting_reviewer.reviewers.codex.acting_review.review_apply_runs, 1);
   assert.equal(report.by_acting_reviewer.summary.review_apply_events, 1);
   assert.equal(report.by_acting_reviewer.summary.review_apply_runs, 1);
   assert.equal(report.by_acting_reviewer.summary.missing_review_apply_runs, 1);

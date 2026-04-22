@@ -1522,8 +1522,13 @@ test("review runner enforces max_rounds before starting a new round", () => {
   ], { encoding: "utf-8", stdio: "pipe" }), /Review round cap exceeded/);
 
   const manifest = readManifest(manifestPath).data;
+  const events = readRunEvents(repoRoot, runId);
+  const reviewApplyEvent = [...events].reverse().find((event) => event.event === "review_apply");
   assert.equal(manifest.state, STATES.ESCALATED);
   assert.equal(manifest.review.latest_verdict, "max_rounds_exceeded");
+  assert.equal(reviewApplyEvent?.origin, "system");
+  assert.equal(reviewApplyEvent?.state_to, STATES.ESCALATED);
+  assert.equal("reviewer" in reviewApplyEvent, false);
 });
 
 test("repeated identical issues escalate on the third consecutive round", () => {
