@@ -1006,9 +1006,7 @@ async function main() {
     uncommitted = git(wtPath, "status", "--porcelain");
   } catch {}
 
-  // Warn if executor produced no output (likely silent failure)
-  const stdoutSize = fs.statSync(stdoutLog).size;
-  const noOutput = stdoutSize === 0 && !resultText;
+  const hasResult = resultText !== "";
 
   // Detect approval-wait: executor stopped to ask for confirmation instead of working.
   const BLOCKED_PATTERNS = [
@@ -1024,15 +1022,19 @@ async function main() {
   if (looksBlocked) {
     status = "failed";
     error = error || `executor blocked on approval: ${resultText.split("\n")[0].slice(0, 120)}`;
+  } else if (!hasResult) {
+    status = "failed";
+    error = error || "executor produced no structured result file or summary (silent failure)";
   } else if (execResult.timedOut && hasWork) {
     status = "completed-with-warning";
-  } else if (exitCode === 0 && (noOutput || !hasWork)) {
-    status = "failed";
-    error = error || "executor produced no output and no changes (silent failure)";
-  } else if (exitCode === 0) {
+  } else if (exitCode === 0 && !gitLog && !uncommitted) {
+    status = "completed-no-op";
+  } else if (exitCode === 0 && !gitLog && uncommitted) {
+    status = "completed-uncommitted";
+  } else if (exitCode === 0 && gitLog) {
     status = "completed";
   } else {
-    status = "failed";
+    status = exitCode === 0 ? "completed" : "failed";
   }
 
   let prNumber = manifest.git?.pr_number ?? manifest.github?.pr_number ?? null;
