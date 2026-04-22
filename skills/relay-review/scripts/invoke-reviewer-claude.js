@@ -12,6 +12,7 @@ const { summarizeFailure, ensureJsonText } = require("./reviewer-helpers");
 
 const args = process.argv.slice(2);
 const KNOWN_FLAGS = ["--repo", "--prompt-file", "--model", "--json", "--help", "-h"];
+const CLAUDE_AUTH_PATTERNS = [/not logged/i, /please run \/login/i];
 
 if (!args.length || args.includes("--help") || args.includes("-h")) {
   console.log("Usage: invoke-reviewer-claude.js --repo <path> --prompt-file <path> [--model <name>] [--json]");
@@ -20,6 +21,45 @@ if (!args.length || args.includes("--help") || args.includes("-h")) {
 
 const getArg = (flag, fallback) => sharedGetArg(args, flag, fallback, { reservedFlags: KNOWN_FLAGS });
 const hasFlag = (flag) => sharedHasFlag(args, flag);
+
+function isClaudeBareAuthError(text) {
+  const normalized = String(text || "").trim();
+  return normalized ? CLAUDE_AUTH_PATTERNS.some((pattern) => pattern.test(normalized)) : false;
+}
+
+function buildClaudeAuthError() {
+  return new Error(
+    "claude --bare mode is not authenticated. It uses a separate token from the interactive Claude OAuth session. Set ANTHROPIC_API_KEY or run `claude login --api-key` before using `--reviewer claude` (directly or via reviewer-swap). See skills/relay-review/SKILL.md."
+  );
+}
+
+function probeClaudeAuth(claudeBin, repoPath) {
+  const probeArgs = ["-p", "--bare", "--no-session-persistence", "ping"];
+  let probeOutput;
+
+  try {
+    probeOutput = execFileSync(claudeBin, probeArgs, {
+      cwd: repoPath,
+      encoding: "utf-8",
+      stdio: "pipe",
+      timeout: 15000,
+      maxBuffer: 1024 * 1024,
+    }).trim();
+  } catch (error) {
+    const output = [String(error.stdout || ""), String(error.stderr || ""), error.message]
+      .filter(Boolean)
+      .join("\n")
+      .trim();
+    if (isClaudeBareAuthError(output)) {
+      throw buildClaudeAuthError();
+    }
+    throw new Error(`Claude reviewer auth probe failed: ${summarizeFailure(error)}`);
+  }
+
+  if (isClaudeBareAuthError(probeOutput)) {
+    throw buildClaudeAuthError();
+  }
+}
 
 function main() {
   const repoPath = path.resolve(getArg("--repo") || ".");
@@ -30,6 +70,8 @@ function main() {
   if (!promptFile) {
     throw new Error("--prompt-file is required");
   }
+
+  probeClaudeAuth(claudeBin, repoPath);
 
   const promptText = fs.readFileSync(promptFile, "utf-8").trim();
   const fullPrompt = [
