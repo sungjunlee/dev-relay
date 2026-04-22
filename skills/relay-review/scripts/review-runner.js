@@ -23,6 +23,7 @@ const { buildCommentBody, formatIssueList, formatScopeDrift, postComment } = req
 const { buildScoreDivergenceAnalysis, loadPrBody, parseScoreLog } = require("./review-runner/divergence");
 const {
   applyQualityExecutionStatus,
+  buildExecutionEvidenceFailureVerdict,
   buildMissingExecutionEvidenceVerdict,
   computeQualityExecutionStatus,
 } = require("./review-runner/execution-evidence");
@@ -247,8 +248,10 @@ function run() {
   }
   const executionStatus = computeQualityExecutionStatus({ runDir, reviewedHead: reviewedHeadSha });
   verdict = applyQualityExecutionStatus(verdict, executionStatus);
-  if (verdict.verdict === "pass" && executionStatus.status === "missing") {
-    verdict = buildMissingExecutionEvidenceVerdict(verdict);
+  if (verdict.verdict === "pass" && executionStatus.status !== "pass") {
+    verdict = executionStatus.status === "missing"
+      ? buildMissingExecutionEvidenceVerdict(verdict)
+      : buildExecutionEvidenceFailureVerdict(verdict);
   }
   validateReviewVerdict(verdict);
 

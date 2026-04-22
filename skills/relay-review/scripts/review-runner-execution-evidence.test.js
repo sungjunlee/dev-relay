@@ -7,6 +7,7 @@ const path = require("path");
 const {
   EXECUTION_EVIDENCE_FILENAME,
   applyQualityExecutionStatus,
+  buildExecutionEvidenceFailureVerdict,
   buildMissingExecutionEvidenceVerdict,
   computeQualityExecutionStatus,
   parseExecutionEvidenceArtifact,
@@ -142,4 +143,25 @@ test("execution-evidence builds a fail-closed changes_requested verdict for miss
   assert.match(verdict.summary, /fail-closed reviewer PASS/);
   assert.equal(verdict.issues[0].file, EXECUTION_EVIDENCE_FILENAME);
   assert.match(verdict.issues[0].body, /pre-261 run, no artifact/);
+});
+
+test("execution-evidence builds a fail-closed changes_requested verdict for stale or invalid artifacts", () => {
+  const verdict = buildExecutionEvidenceFailureVerdict({
+    verdict: "pass",
+    summary: "Inspection passed.",
+    contract_status: "pass",
+    quality_review_status: "pass",
+    quality_execution_status: "fail",
+    quality_execution_reason: "stale artifact: recorded at aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, reviewed at bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    next_action: "ready_to_merge",
+    issues: [],
+    rubric_scores: [],
+    scope_drift: { creep: [], missing: [] },
+  });
+
+  assert.equal(verdict.verdict, "changes_requested");
+  assert.equal(verdict.next_action, "changes_requested");
+  assert.match(verdict.summary, /quality_execution_status=fail/);
+  assert.equal(verdict.issues[0].file, EXECUTION_EVIDENCE_FILENAME);
+  assert.match(verdict.issues[0].body, /stale artifact/);
 });

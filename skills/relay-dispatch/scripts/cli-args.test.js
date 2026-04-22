@@ -131,9 +131,9 @@ test("getArg can preserve a flag-like token verbatim when the caller opts in", (
   );
 });
 
-test("getArg still rejects exact reserved flags when flag-like values are enabled", () => {
-  // Anti-theater: opting into flag-like payloads must not swallow a sibling CLI flag such as
-  // `--json` when the caller declares it reserved.
+test("getArg preserves exact reserved tokens when flag-like values are enabled", () => {
+  // Anti-theater: issue #261 requires `dispatch --test-command '--json'` to record the caller
+  // payload verbatim even when it matches a token in the shared reserved flag list.
   assert.equal(
     getArg(
       ["--test-command", "--json"],
@@ -141,7 +141,7 @@ test("getArg still rejects exact reserved flags when flag-like values are enable
       "fallback",
       { reservedFlags: ["--json"], allowFlagLikeValue: true }
     ),
-    "fallback"
+    "--json"
   );
 });
 

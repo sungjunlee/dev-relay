@@ -763,6 +763,70 @@ test("review-runner stores the runner-computed quality_execution_status in the v
   assert.match(commentBody, /Quality Execution: MISSING/);
 });
 
+test("review-runner fail-closes reviewer PASS into changes_requested when execution evidence is stale", () => {
+  const { repoRoot, manifestPath, runId, doneCriteriaPath, diffPath } = setupRepo();
+  const runDir = ensureRunLayout(repoRoot, runId).runDir;
+  const commentCapturePath = path.join(repoRoot, "stale-execution-comment.txt");
+  writeExecutionEvidence(runDir, "0".repeat(40), {
+    test_result_hash: "1".repeat(64),
+    test_result_summary: "codex result.txt hashed",
+  });
+  writeFakeGhScript(repoRoot, {
+    capturePath: commentCapturePath,
+    prBody: "",
+  });
+
+  const reviewFile = writeVerdict(repoRoot, "pass-with-stale-execution.json", {
+    verdict: "pass",
+    summary: "Inspection passed.",
+    contract_status: "pass",
+    quality_review_status: "pass",
+    quality_execution_status: "pass",
+    next_action: "ready_to_merge",
+    issues: [],
+    rubric_scores: defaultRubricScores(),
+    scope_drift: { creep: [], missing: [] },
+  });
+
+  const result = JSON.parse(execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--run-id", runId,
+    "--pr", "123",
+    "--done-criteria-file", doneCriteriaPath,
+    "--diff-file", diffPath,
+    "--review-file", reviewFile,
+    "--json",
+  ], {
+    encoding: "utf-8",
+    env: {
+      ...process.env,
+      PATH: `${repoRoot}:${process.env.PATH}`,
+    },
+  }));
+  const verdictRecord = JSON.parse(fs.readFileSync(result.verdictPath, "utf-8"));
+  const commentBody = fs.readFileSync(commentCapturePath, "utf-8");
+  const manifest = readManifest(manifestPath).data;
+  const reviewApplyEvent = readRunEvents(repoRoot, runId).find((event) => event.event === "review_apply");
+
+  assert.equal(result.appliedVerdict, "changes_requested");
+  assert.equal(result.state, STATES.CHANGES_REQUESTED);
+  assert.equal(verdictRecord.verdict, "changes_requested");
+  assert.equal(verdictRecord.quality_execution_status, "fail");
+  assert.match(verdictRecord.summary, /quality_execution_status=fail/);
+  assert.match(verdictRecord.quality_execution_reason, /stale artifact/);
+  assert.equal(verdictRecord.issues[0].file, EXECUTION_EVIDENCE_FILENAME);
+  assert.match(verdictRecord.issues[0].body, /stale artifact/);
+  assert.equal(manifest.state, STATES.CHANGES_REQUESTED);
+  assert.equal(manifest.review.latest_verdict, "changes_requested");
+  assert.equal(manifest.review.last_quality_execution_status, "fail");
+  assert.match(manifest.review.last_quality_execution_reason, /stale artifact/);
+  assert.match(commentBody, /Verdict: CHANGES_REQUESTED/);
+  assert.match(commentBody, /Quality Execution: FAIL/);
+  assert.match(commentBody, /stale artifact/);
+  assert.equal(reviewApplyEvent?.reason, "changes_requested");
+});
+
 test("review-runner rejects invalid manifest run_id before creating a sibling run directory", () => {
   const { repoRoot, manifestPath, diffPath } = setupRepo();
   const record = readManifest(manifestPath);

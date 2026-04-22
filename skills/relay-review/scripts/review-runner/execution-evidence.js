@@ -24,14 +24,28 @@ function buildMissingExecutionEvidenceReason() {
 }
 
 function buildMissingExecutionEvidenceVerdict(verdict) {
-  const reason = verdict.quality_execution_reason || buildMissingExecutionEvidenceReason();
+  return buildExecutionEvidenceFailureVerdict({
+    ...verdict,
+    quality_execution_status: "missing",
+    quality_execution_reason: verdict.quality_execution_reason || buildMissingExecutionEvidenceReason(),
+  });
+}
+
+function buildExecutionEvidenceFailureVerdict(verdict) {
+  const reason = String(verdict.quality_execution_reason || "").trim()
+    || buildMissingExecutionEvidenceReason();
+  const status = verdict.quality_execution_status || "missing";
   return {
     ...verdict,
     verdict: "changes_requested",
-    summary: "review-runner fail-closed reviewer PASS because execution-evidence.json is missing for the reviewed HEAD.",
+    summary: status === "missing"
+      ? "review-runner fail-closed reviewer PASS because execution-evidence.json is missing for the reviewed HEAD."
+      : `review-runner fail-closed reviewer PASS because execution-evidence.json reported quality_execution_status=${status} for the reviewed HEAD.`,
     next_action: "changes_requested",
     issues: [{
-      title: "Missing execution evidence for reviewed HEAD",
+      title: status === "missing"
+        ? "Missing execution evidence for reviewed HEAD"
+        : "Execution evidence failed validation for reviewed HEAD",
       body: `${reason} Reviewer PASS cannot be applied without SHA-bound execution evidence for this commit.`,
       file: EXECUTION_EVIDENCE_FILENAME,
       line: 1,
@@ -157,6 +171,7 @@ module.exports = {
   FORCE_FINALIZE_GUIDANCE,
   REQUIRED_EXECUTION_EVIDENCE_FIELDS,
   applyQualityExecutionStatus,
+  buildExecutionEvidenceFailureVerdict,
   buildMissingExecutionEvidenceVerdict,
   buildMissingExecutionEvidenceReason,
   computeQualityExecutionStatus,
