@@ -151,6 +151,8 @@ function run() {
       head_sha: reviewedHeadSha,
       round: Number(data.review?.rounds || 0),
       reason: "max_rounds_exceeded",
+      // No reviewer round executed here; mark the system-forced transition explicitly.
+      origin: "system",
     });
     throw new Error(`Review round cap exceeded: next round ${round} would exceed max_rounds=${maxRounds}`);
   }
