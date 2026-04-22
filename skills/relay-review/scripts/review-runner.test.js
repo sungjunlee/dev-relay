@@ -1527,6 +1527,7 @@ test("review runner enforces max_rounds before starting a new round", () => {
   assert.equal(manifest.state, STATES.ESCALATED);
   assert.equal(manifest.review.latest_verdict, "max_rounds_exceeded");
   assert.equal(reviewApplyEvent?.origin, "system");
+  assert.equal(reviewApplyEvent?.state_to, STATES.ESCALATED);
   assert.equal("reviewer" in reviewApplyEvent, false);
 });
 
