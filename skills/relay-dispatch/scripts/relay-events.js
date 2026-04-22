@@ -60,6 +60,9 @@ function appendRunEvent(repoRoot, runId, eventData) {
     ...(eventData.last_reviewed_sha !== undefined
       ? { last_reviewed_sha: normalizeEventValue(eventData.last_reviewed_sha) }
       : {}),
+    ...(eventData.pr_number !== undefined
+      ? { pr_number: normalizeEventValue(eventData.pr_number) }
+      : {}),
     ...(eventData.model !== undefined
       ? { model: normalizeEventValue(eventData.model) }
       : {}),

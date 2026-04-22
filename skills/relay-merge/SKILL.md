@@ -60,6 +60,29 @@ node ${CLAUDE_SKILL_DIR}/scripts/finalize-run.js --repo . --run-id "$RUN_ID" --s
 
 `finalize-run.js --skip-review` bypasses reviewer invocation, so `model_hints.review` is a non-consumer on that path.
 
+#### Operator-only force finalize for non-ready runs
+
+```bash
+node ${CLAUDE_SKILL_DIR}/scripts/finalize-run.js --repo . --run-id "$RUN_ID" \
+  --force-finalize-nonready --reason "reviewer-swap exhausted, diff clean per manual inspection" --json
+```
+
+Use this only when an operator has independently checked that the PR is mergeable but the manifest cannot reach `ready_to_merge`.
+Typical cases: state stuck at `escalated` with a clean diff; reviewer-swap unavailable; manifest/PR state desync.
+This path is loud on purpose: it records a `force_finalize` event before merge and writes `last_force` into the manifest.
+`--force-finalize-nonready` requires `--reason <non-empty-text>`.
+`--dry-run` is observation-only on this path: it does not append `force_finalize`.
+
+Do not use it for retry loops.
+Do not use it as a test shortcut.
+Do not use it to paper over a wrong manifest state that should be repaired instead.
+
+Audit every use:
+
+```bash
+jq 'select(.event == "force_finalize")' ~/.relay/runs/<repo-slug>/<run-id>/events.jsonl
+```
+
 ### 2. Sprint file update (if available)
 
 If `backlog/sprints/` has an active sprint file, update it. If no sprint file exists, skip this step.
