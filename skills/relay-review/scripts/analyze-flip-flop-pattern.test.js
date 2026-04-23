@@ -204,6 +204,48 @@ test("analyze-flip-flop-pattern records explicit data-gap reasons for missing re
   assert.equal(findRun(summary, "issue-211-20260420011111110-eebbffcc").dataGapReason, "invalid_verdict_json");
 });
 
+test("analyze-flip-flop-pattern classifies missing verdict-file round gaps as data_gap", () => {
+  const fixture = materializeFixture("corner-cases");
+  const summary = analyzeRuns({
+    now: fixture.now,
+    runsDir: fixture.runsDir,
+    windowDays: 30,
+  });
+
+  const run = findRun(summary, "issue-401-20260422040101010-aabbccdd");
+  assert.equal(run.bucket, "data_gap");
+  assert.equal(run.dataGapReason, "missing_verdict_round");
+  assert.equal(run.missingVerdictRound, 2);
+  assert.deepEqual(run.flipFactors, []);
+});
+
+test("analyze-flip-flop-pattern reports mixed flip and stable factors without inventing stable-factor flips", () => {
+  const fixture = materializeFixture("corner-cases");
+  const summary = analyzeRuns({
+    now: fixture.now,
+    runsDir: fixture.runsDir,
+    windowDays: 30,
+  });
+
+  const run = findRun(summary, "issue-402-20260422040202020-bbccddee");
+  assert.equal(run.bucket, "progressive-shaped");
+  assert.deepEqual(run.flipFactors.map((flip) => flip.factor), ["Behavior"]);
+  assert.deepEqual(run.flipFactors.map((flip) => flip.traceLabel), ["r1:pass -> r2:fail -> r3:pass"]);
+});
+
+test("analyze-flip-flop-pattern ignores skipped statuses when counting pass/fail transitions", () => {
+  const fixture = materializeFixture("corner-cases");
+  const summary = analyzeRuns({
+    now: fixture.now,
+    runsDir: fixture.runsDir,
+    windowDays: 30,
+  });
+
+  const run = findRun(summary, "issue-403-20260422040303030-ccddeeff");
+  assert.equal(run.bucket, "no_flip_flop");
+  assert.deepEqual(run.flipFactors, []);
+});
+
 test("analyze-flip-flop-pattern renderReport emits the required headings and percentage output", () => {
   const fixture = materializeFixture("baseline");
   const summary = analyzeRuns({

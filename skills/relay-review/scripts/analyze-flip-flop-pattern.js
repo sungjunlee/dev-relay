@@ -253,6 +253,23 @@ function loadVerdictRounds(verdictPaths) {
   return { errors, rounds };
 }
 
+function findVerdictRoundGap(verdictPaths) {
+  const rounds = verdictPaths
+    .map((verdictPath) => extractRoundNumber(path.basename(verdictPath)))
+    .filter((round) => Number.isInteger(round))
+    .sort((left, right) => left - right);
+
+  if (rounds.length < 2) return null;
+  if (rounds[0] !== 1) return 1;
+
+  for (let index = 1; index < rounds.length; index += 1) {
+    const expectedRound = rounds[index - 1] + 1;
+    if (rounds[index] !== expectedRound) return expectedRound;
+  }
+
+  return null;
+}
+
 function buildFactorTraceMap(rounds) {
   const traceMap = new Map();
 
@@ -376,11 +393,17 @@ function resolveManifestData(manifestRecord, expectedRunId) {
 }
 
 function classifyRun(candidate) {
+  const missingVerdictRound = findVerdictRoundGap(candidate.verdictPaths);
   const verdictLoad = loadVerdictRounds(candidate.verdictPaths);
   const manifest = resolveManifestData(candidate.manifestRecord, candidate.runId);
-  const flipFactors = verdictLoad.errors.length > 0 ? [] : findFlipFactors(verdictLoad.rounds);
+  const flipFactors = missingVerdictRound || verdictLoad.errors.length > 0
+    ? []
+    : findFlipFactors(verdictLoad.rounds);
 
   let dataGapReason = manifest.dataGapReason;
+  if (!dataGapReason && missingVerdictRound) {
+    dataGapReason = "missing_verdict_round";
+  }
   if (!dataGapReason && verdictLoad.errors.length > 0) {
     dataGapReason = verdictLoad.errors[0].reason;
   }
@@ -402,6 +425,7 @@ function classifyRun(candidate) {
     prNumber: manifest.manifestData?.git?.pr_number ?? null,
     repeatedIssueCount: manifest.repeatedIssueCount,
     roundCount: candidate.verdictPaths.length,
+    missingVerdictRound,
     runDir: candidate.runDir,
     runId: candidate.runId,
     slug: candidate.slug,
