@@ -114,8 +114,11 @@ const REVIEW_VERDICT_JSON_SCHEMA = {
   properties: REVIEW_VERDICT_PROPERTIES,
 };
 
+const { quality_execution_status: _reviewerExecutionStatusOmitted, ...REVIEWER_VERDICT_PROPERTIES } = REVIEW_VERDICT_PROPERTIES;
+
 const REVIEWER_VERDICT_JSON_SCHEMA = {
-  ...REVIEW_VERDICT_JSON_SCHEMA,
+  type: "object",
+  additionalProperties: false,
   required: [
     "verdict",
     "summary",
@@ -126,6 +129,7 @@ const REVIEWER_VERDICT_JSON_SCHEMA = {
     "rubric_scores",
     "scope_drift",
   ],
+  properties: REVIEWER_VERDICT_PROPERTIES,
 };
 
 module.exports = {

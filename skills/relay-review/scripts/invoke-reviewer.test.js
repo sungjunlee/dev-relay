@@ -76,8 +76,13 @@ fs.writeFileSync(resultPath, JSON.stringify({
   assert.match(loggedArgs, /--ephemeral/);
   assert.match(loggedArgs, /--sandbox\nread-only/);
   assert.match(loggedArgs, /--output-schema/);
-  assert.equal(schema.properties.quality_execution_status.enum.includes("missing"), true);
+  assert.equal(schema.properties.quality_execution_status, undefined);
   assert.equal(schema.required.includes("quality_execution_status"), false);
+  assert.deepEqual(
+    Object.keys(schema.properties).sort(),
+    [...schema.required].sort(),
+    "codex response_format requires every property key to be in required"
+  );
   assert.deepEqual(schema.properties.rubric_scores.items.required, [
     "factor",
     "target",
