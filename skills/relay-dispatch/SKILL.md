@@ -31,6 +31,8 @@ For background and parallel dispatch, see "Background & Parallel" section below.
 
 ## Options
 
+All CLI flags are registered with an explicit `parsed` or `verbatim` read mode. See `references/cli-schema.md` before adding or changing flags.
+
 | Flag | Description |
 |---|---|
 | `--branch, -b` | Branch name (required) |

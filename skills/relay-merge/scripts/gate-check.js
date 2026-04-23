@@ -46,6 +46,12 @@ const {
 const { readManifest, writeManifest } = require("../../relay-dispatch/scripts/manifest/store");
 const { appendRunEvent, readRunEvents } = require("../../relay-dispatch/scripts/relay-events");
 const { resolveManifestRecord } = require("../../relay-dispatch/scripts/relay-resolver");
+const {
+  getArg,
+  getPositionals,
+  hasFlag,
+  modeLabel,
+} = require("../../relay-dispatch/scripts/cli-args");
 
 function parsePositiveIntEnv(name, fallback) {
   const raw = process.env[name];
@@ -81,34 +87,30 @@ function getGateCheckRepoRoot() {
 // ---------------------------------------------------------------------------
 
 const args = process.argv.slice(2);
+const CLI_ARG_OPTIONS = { commandName: "gate-check", reservedFlags: ["-h"] };
+const hasCliFlag = (flag) => hasFlag(args, flag, CLI_ARG_OPTIONS);
 
-if (!args.length || args.includes("--help") || args.includes("-h")) {
+if (!args.length || hasCliFlag("--help") || hasCliFlag("-h")) {
   console.log("Usage: gate-check.js <PR-number> [--skip <reason>] [--dry-run] [--json]");
   console.log("\nVerify relay-review audit trail before merge.");
   console.log("\nOptions:");
-  console.log("  --skip <reason>   Skip review with documented reason (writes PR comment)");
-  console.log("  --dry-run         Read comment JSON from stdin instead of gh CLI");
-  console.log("  --json            Output as JSON");
-  process.exit(args.includes("--help") || args.includes("-h") ? 0 : 1);
+  console.log(`  --skip <reason>   ${modeLabel("--skip")} Skip review with documented reason (writes PR comment)`);
+  console.log(`  --dry-run         ${modeLabel("--dry-run")} Read comment JSON from stdin instead of gh CLI`);
+  console.log(`  --json            ${modeLabel("--json")} Output as JSON`);
+  process.exit(hasCliFlag("--help") || hasCliFlag("-h") ? 0 : 1);
 }
 
-const KNOWN_FLAGS = ["--skip", "--dry-run", "--json", "--help", "-h"];
-
-const PR_NUM = args.find((a) => !a.startsWith("-") && !KNOWN_FLAGS.includes(a));
+const PR_NUM = getPositionals(args, "gate-check")[0];
 if (!PR_NUM || !/^\d+$/.test(PR_NUM)) {
   console.error("Error: PR number is required (positive integer)");
   process.exit(1);
 }
 
-const DRY_RUN = args.includes("--dry-run");
-const JSON_OUT = args.includes("--json");
+const DRY_RUN = hasCliFlag("--dry-run");
+const JSON_OUT = hasCliFlag("--json");
 
-// --skip <reason>: flag is at index i, reason is at index i+1
-const skipIdx = args.indexOf("--skip");
-const SKIP = skipIdx !== -1;
-const SKIP_REASON = SKIP && skipIdx + 1 < args.length && !args[skipIdx + 1].startsWith("-")
-  ? args[skipIdx + 1]
-  : null;
+const SKIP = hasCliFlag("--skip");
+const SKIP_REASON = getArg(args, "--skip", null, CLI_ARG_OPTIONS);
 
 if (SKIP && !SKIP_REASON) {
   console.error("Error: --skip requires a reason. Example: --skip \"hotfix for production outage\"");

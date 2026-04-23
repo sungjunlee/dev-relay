@@ -43,12 +43,12 @@ test("getArg returns the fallback when the flag is the last token", () => {
   );
 });
 
-test("getArg returns the fallback when the next token looks like a long flag", () => {
+test("getArg returns the fallback when a parsed-mode value looks like a long flag", () => {
   // Anti-theater: rejects the naive `args[args.indexOf(flag) + 1]` helper because `--json` is a
-  // sibling flag, not the value for `--repo`.
+  // sibling flag, not the value for parsed-mode flags.
   assert.equal(
-    getArg(["--repo", "--json"], "--repo", "."),
-    "."
+    getArg(["--timeout", "--json"], "--timeout", "30"),
+    "30"
   );
 });
 
@@ -61,10 +61,9 @@ test("getArg keeps a single-dash token as data", () => {
   );
 });
 
-test("getArg can treat reserved short aliases as missing values", () => {
-  // Anti-theater: shared dedupe must not widen caller behavior. `create-worktree` and `dispatch`
-  // previously rejected sibling short aliases from their local KNOWN_FLAGS lists, so the shared
-  // helper needs an opt-in guard to preserve that fail-closed contract.
+test("getArg preserves reserved short aliases for verbatim-mode flags", () => {
+  // Anti-theater: branch/title-like operator text is now explicitly verbatim, so a token that
+  // matches another flag alias must stay data when the flag declares that contract.
   assert.equal(
     getArg(
       ["--title", "-b", "--branch", "feature"],
@@ -72,16 +71,15 @@ test("getArg can treat reserved short aliases as missing values", () => {
       "fallback",
       { reservedFlags: ["-b", "-t"] }
     ),
-    "fallback"
+    "-b"
   );
 });
 
-test("getArg rejects -h as a value for close-run and recover-state style reason flags", () => {
-  // Anti-theater: pre-r3 helper call sites widened behavior by accepting `-h` as the value for
-  // `--reason`; these CLIs historically rejected the token because their KNOWN_FLAGS included `-h`.
+test("getArg preserves -h as a value for verbatim-mode reason flags", () => {
+  // Anti-theater: audit reasons are verbatim text, so even reserved-looking tokens remain data.
   assert.equal(
     getArg(["--reason", "-h"], "--reason", undefined, { reservedFlags: ["-h"] }),
-    undefined
+    "-h"
   );
 });
 
@@ -108,16 +106,16 @@ test("getArg can treat reserved long flags as missing values", () => {
   // for both long and short aliases through one shared helper path.
   assert.equal(
     getArg(
-      ["--prompt", "--executor", "codex"],
-      "--prompt",
+      ["--timeout", "--json"],
+      "--timeout",
       "fallback",
-      { reservedFlags: ["--executor", "-e"] }
+      { reservedFlags: ["--json"] }
     ),
     "fallback"
   );
 });
 
-test("getArg can preserve a flag-like token verbatim when the caller opts in", () => {
+test("getArg preserves a flag-like token verbatim when the schema declares it", () => {
   // Anti-theater: `dispatch --test-command \"--grep smoke\"` must record the quoted payload exactly
   // instead of dropping it just because the token starts with `--`.
   assert.equal(
@@ -125,13 +123,13 @@ test("getArg can preserve a flag-like token verbatim when the caller opts in", (
       ["--test-command", "--grep smoke"],
       "--test-command",
       undefined,
-      { reservedFlags: ["--json"], allowFlagLikeValue: true }
+      { reservedFlags: ["--json"] }
     ),
     "--grep smoke"
   );
 });
 
-test("getArg preserves exact reserved tokens when flag-like values are enabled", () => {
+test("getArg preserves exact reserved tokens for verbatim-mode flags", () => {
   // Anti-theater: issue #261 requires `dispatch --test-command '--json'` to record the caller
   // payload verbatim even when it matches a token in the shared reserved flag list.
   assert.equal(
@@ -139,9 +137,16 @@ test("getArg preserves exact reserved tokens when flag-like values are enabled",
       ["--test-command", "--json"],
       "--test-command",
       "fallback",
-      { reservedFlags: ["--json"], allowFlagLikeValue: true }
+      { commandName: "dispatch", reservedFlags: ["--json"] }
     ),
     "--json"
+  );
+});
+
+test("hasFlag ignores tokens consumed as verbatim values", () => {
+  assert.equal(
+    hasFlag(["--test-command", "--json"], "--json", { commandName: "dispatch" }),
+    false
   );
 });
 

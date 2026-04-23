@@ -9,16 +9,23 @@ const {
   validateManifestPaths,
 } = require("./manifest/paths");
 const { writeManifest } = require("./manifest/store");
-const { getArg, hasFlag } = require("./cli-args");
+const { getArg, hasFlag, modeLabel } = require("./cli-args");
 const { resolveManifestRecord } = require("./relay-resolver");
 const { appendRunEvent } = require("./relay-events");
 
 const args = process.argv.slice(2);
-const RESERVED = { reservedFlags: ["-h"] };
+const CLI_ARG_OPTIONS = { commandName: "close-run", reservedFlags: ["-h"] };
+const hasCliFlag = (flag) => hasFlag(args, flag, CLI_ARG_OPTIONS);
 
-if (!args.length || hasFlag(args, ["--help", "-h"])) {
+if (!args.length || hasCliFlag(["--help", "-h"])) {
   console.log("Usage: close-run.js --repo <path> --run-id <id> --reason <text> [--dry-run] [--json]");
-  process.exit(hasFlag(args, ["--help", "-h"]) ? 0 : 1);
+  console.log("\nOptions:");
+  console.log(`  --repo <path>    ${modeLabel("--repo")} Repository root`);
+  console.log(`  --run-id <id>    ${modeLabel("--run-id")} Relay run identifier`);
+  console.log(`  --reason <text>  ${modeLabel("--reason")} Audit reason`);
+  console.log(`  --dry-run        ${modeLabel("--dry-run")} Print result without writing`);
+  console.log(`  --json           ${modeLabel("--json")} Output JSON`);
+  process.exit(hasCliFlag(["--help", "-h"]) ? 0 : 1);
 }
 
 function buildSkippedCleanupSummary(data, dryRun) {
@@ -43,11 +50,11 @@ function buildSkippedCleanupSummary(data, dryRun) {
 }
 
 function main() {
-  const repoRoot = path.resolve(getArg(args, "--repo", undefined, RESERVED) || ".");
-  const runId = getArg(args, "--run-id", undefined, RESERVED);
-  const reason = getArg(args, "--reason", undefined, RESERVED);
-  const dryRun = hasFlag(args, "--dry-run");
-  const jsonOut = hasFlag(args, "--json");
+  const repoRoot = path.resolve(getArg(args, "--repo", undefined, CLI_ARG_OPTIONS) || ".");
+  const runId = getArg(args, "--run-id", undefined, CLI_ARG_OPTIONS);
+  const reason = getArg(args, "--reason", undefined, CLI_ARG_OPTIONS);
+  const dryRun = hasCliFlag("--dry-run");
+  const jsonOut = hasCliFlag("--json");
   const gitBin = process.env.RELAY_GIT_BIN || "git";
 
   if (!runId) {
