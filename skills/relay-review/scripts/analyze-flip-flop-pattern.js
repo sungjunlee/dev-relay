@@ -31,6 +31,13 @@ const {
   validateRunId,
 } = require("../../relay-dispatch/scripts/manifest/paths");
 const { readManifest } = require("../../relay-dispatch/scripts/manifest/store");
+const {
+  findUnknownFlags,
+  getArg,
+  getPositionals,
+  hasFlag,
+  modeLabel,
+} = require("../../relay-dispatch/scripts/cli-args");
 
 const DEFAULT_WINDOW_DAYS = 30;
 const PASS_FAIL_STATUSES = new Set(["pass", "fail"]);
@@ -44,6 +51,10 @@ const KNOWN_FLAGS = new Set([
   "--help",
   "-h",
 ]);
+const CLI_ARG_OPTIONS = {
+  commandName: "analyze-flip-flop-pattern",
+  reservedFlags: [...KNOWN_FLAGS],
+};
 
 function parsePositiveInt(value, label) {
   const parsed = Number(value);
@@ -55,49 +66,35 @@ function parsePositiveInt(value, label) {
 
 function parseArgs(argv) {
   const args = [...argv];
+  const unknownFlags = findUnknownFlags(args, "analyze-flip-flop-pattern");
+  if (unknownFlags.length > 0) {
+    throw new Error(`Unknown flag: ${unknownFlags[0]}`);
+  }
+  const positionals = getPositionals(args, "analyze-flip-flop-pattern");
+  if (positionals.length > 0) {
+    throw new Error(`Unexpected positional argument: ${positionals[0]}`);
+  }
+
+  const issueRaw = getArg(args, "--issue", undefined, CLI_ARG_OPTIONS);
+  const windowDaysRaw = getArg(args, "--window-days", undefined, CLI_ARG_OPTIONS);
+  const runsDirRaw = getArg(args, "--runs-dir", undefined, CLI_ARG_OPTIONS);
   const options = {
-    help: false,
-    issueNumber: null,
-    postComment: false,
+    help: hasFlag(args, ["--help", "-h"], CLI_ARG_OPTIONS),
+    issueNumber: issueRaw === undefined ? null : parsePositiveInt(issueRaw, "--issue"),
+    postComment: hasFlag(args, "--post-comment", CLI_ARG_OPTIONS),
     print: true,
-    runsDir: getRunsBase(),
-    windowDays: DEFAULT_WINDOW_DAYS,
+    runsDir: path.resolve(runsDirRaw || getRunsBase()),
+    windowDays: windowDaysRaw === undefined ? DEFAULT_WINDOW_DAYS : parsePositiveInt(windowDaysRaw, "--window-days"),
   };
 
-  for (let index = 0; index < args.length; index += 1) {
-    const arg = args[index];
-    switch (arg) {
-      case "--print":
-        options.print = true;
-        break;
-      case "--post-comment":
-        options.postComment = true;
-        break;
-      case "--issue":
-        index += 1;
-        if (index >= args.length) throw new Error("--issue requires a value");
-        options.issueNumber = parsePositiveInt(args[index], "--issue");
-        break;
-      case "--window-days":
-        index += 1;
-        if (index >= args.length) throw new Error("--window-days requires a value");
-        options.windowDays = parsePositiveInt(args[index], "--window-days");
-        break;
-      case "--runs-dir":
-        index += 1;
-        if (index >= args.length) throw new Error("--runs-dir requires a value");
-        options.runsDir = path.resolve(args[index]);
-        break;
-      case "--help":
-      case "-h":
-        options.help = true;
-        break;
-      default:
-        if (arg.startsWith("--") || arg.startsWith("-")) {
-          throw new Error(`Unknown flag: ${arg}`);
-        }
-        throw new Error(`Unexpected positional argument: ${arg}`);
-    }
+  if (hasFlag(args, "--issue", CLI_ARG_OPTIONS) && issueRaw === undefined) {
+    throw new Error("--issue requires a value");
+  }
+  if (hasFlag(args, "--window-days", CLI_ARG_OPTIONS) && windowDaysRaw === undefined) {
+    throw new Error("--window-days requires a value");
+  }
+  if (hasFlag(args, "--runs-dir", CLI_ARG_OPTIONS) && runsDirRaw === undefined) {
+    throw new Error("--runs-dir requires a value");
   }
 
   if (options.postComment && !options.issueNumber) {
@@ -113,12 +110,12 @@ function printHelp() {
   console.log("Scan recent relay review runs and measure whether flip-flops look progressive or thrashy.");
   console.log("");
   console.log("Options:");
-  console.log("  --print               Emit the markdown report to stdout (default)");
-  console.log("  --post-comment        Post the same markdown report to a GitHub issue comment");
-  console.log("  --issue <N>           GitHub issue number to use with --post-comment");
-  console.log(`  --window-days <N>     Scan runs whose latest artifact mtime is within the last N days (default: ${DEFAULT_WINDOW_DAYS})`);
-  console.log("  --runs-dir <path>     Override the relay runs base directory (default: ~/.relay/runs)");
-  console.log("  --help, -h            Show this help text");
+  console.log(`  --print               ${modeLabel("--print")} Emit the markdown report to stdout (default)`);
+  console.log(`  --post-comment        ${modeLabel("--post-comment")} Post the same markdown report to a GitHub issue comment`);
+  console.log(`  --issue <N>           ${modeLabel("--issue")} GitHub issue number to use with --post-comment`);
+  console.log(`  --window-days <N>     ${modeLabel("--window-days")} Scan runs whose latest artifact mtime is within the last N days (default: ${DEFAULT_WINDOW_DAYS})`);
+  console.log(`  --runs-dir <path>     ${modeLabel("--runs-dir")} Override the relay runs base directory (default: ~/.relay/runs)`);
+  console.log(`  --help, -h            ${modeLabel("--help")} Show this help text`);
 }
 
 function normalizeStatus(status) {

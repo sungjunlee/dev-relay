@@ -22,10 +22,10 @@ const {
   validateManifestPaths,
 } = require("./manifest/paths");
 const { writeManifest } = require("./manifest/store");
-const { getArg, hasFlag } = require("./cli-args");
+const { getArg, hasFlag, modeLabel } = require("./cli-args");
 const { resolveManifestRecord } = require("./relay-resolver");
 const { appendRunEvent } = require("./relay-events");
-const RESERVED = { reservedFlags: ["-h"] };
+const CLI_ARG_OPTIONS = { commandName: "recover-state", reservedFlags: ["-h"] };
 
 // Whitelist: recovery transitions that the normal dispatch/review/merge flow does NOT support.
 // If `ALLOWED_TRANSITIONS` in relay-manifest.js changes, this table must be reviewed — recovery
@@ -72,6 +72,16 @@ const RECOVERY_TRANSITIONS = Object.freeze([
 function printUsage(stream = console.log) {
   stream(
     "Usage: recover-state.js (--repo <path> --run-id <id> | --manifest <path>) --to <state> --reason <text> [--force] [--dry-run] [--json]\n" +
+    "\n" +
+    "Options:\n" +
+    `  --repo <path>     ${modeLabel("--repo")} Repository root\n` +
+    `  --run-id <id>     ${modeLabel("--run-id")} Relay run identifier\n` +
+    `  --manifest <path> ${modeLabel("--manifest")} Explicit manifest path\n` +
+    `  --to <state>      ${modeLabel("--to")} Recovery target state\n` +
+    `  --reason <text>   ${modeLabel("--reason")} Audit reason\n` +
+    `  --force           ${modeLabel("--force")} Confirm selected recovery transitions\n` +
+    `  --dry-run         ${modeLabel("--dry-run")} Print result without writing\n` +
+    `  --json            ${modeLabel("--json")} Output JSON\n` +
     "\n" +
     "Whitelisted recovery transitions:\n" +
     RECOVERY_TRANSITIONS.map((t) => {
@@ -130,19 +140,20 @@ function requireFreshCommitOnBranch({ repoRoot, manifestData }) {
 
 function main() {
   const args = process.argv.slice(2);
-  if (!args.length || hasFlag(args, "--help") || hasFlag(args, "-h")) {
+  const hasCliFlag = (flag) => hasFlag(args, flag, CLI_ARG_OPTIONS);
+  if (!args.length || hasCliFlag("--help") || hasCliFlag("-h")) {
     printUsage(console.log);
-    process.exit(hasFlag(args, "--help") || hasFlag(args, "-h") ? 0 : 1);
+    process.exit(hasCliFlag("--help") || hasCliFlag("-h") ? 0 : 1);
   }
 
-  const repoRoot = path.resolve(getArg(args, "--repo", undefined, RESERVED) || ".");
-  const runId = getArg(args, "--run-id", undefined, RESERVED);
-  const manifestArg = getArg(args, "--manifest", undefined, RESERVED);
-  const toState = getArg(args, "--to", undefined, RESERVED);
-  const reason = getArg(args, "--reason", undefined, RESERVED);
-  const force = hasFlag(args, "--force");
-  const dryRun = hasFlag(args, "--dry-run");
-  const jsonOut = hasFlag(args, "--json");
+  const repoRoot = path.resolve(getArg(args, "--repo", undefined, CLI_ARG_OPTIONS) || ".");
+  const runId = getArg(args, "--run-id", undefined, CLI_ARG_OPTIONS);
+  const manifestArg = getArg(args, "--manifest", undefined, CLI_ARG_OPTIONS);
+  const toState = getArg(args, "--to", undefined, CLI_ARG_OPTIONS);
+  const reason = getArg(args, "--reason", undefined, CLI_ARG_OPTIONS);
+  const force = hasCliFlag("--force");
+  const dryRun = hasCliFlag("--dry-run");
+  const jsonOut = hasCliFlag("--json");
 
   if (!runId && !manifestArg) {
     throw new Error("Provide --run-id or --manifest");

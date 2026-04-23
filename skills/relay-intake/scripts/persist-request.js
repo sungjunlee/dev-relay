@@ -4,20 +4,29 @@ const fs = require("fs");
 const path = require("path");
 
 const { persistRequestContract } = require("./relay-request");
-const { getArg: sharedGetArg, hasFlag: sharedHasFlag } = require("../../relay-dispatch/scripts/cli-args");
+const {
+  getArg: sharedGetArg,
+  hasFlag: sharedHasFlag,
+  modeLabel,
+} = require("../../relay-dispatch/scripts/cli-args");
 
 const args = process.argv.slice(2);
 const KNOWN_FLAGS = ["--repo", "--contract-file", "--json", "--help", "-h"];
+const CLI_ARG_OPTIONS = { commandName: "persist-request", reservedFlags: KNOWN_FLAGS };
+const getArg = (flag, fallback) => sharedGetArg(args, flag, fallback, CLI_ARG_OPTIONS);
+const hasFlag = (flag) => sharedHasFlag(args, flag, CLI_ARG_OPTIONS);
 
-if (!args.length || args.includes("--help") || args.includes("-h")) {
+if (!args.length || hasFlag(["--help", "-h"])) {
   console.log("Usage: persist-request.js --repo <path> --contract-file <path> [--json]");
   console.log("");
   console.log("Persist a relay-intake request artifact and one-or-more leaf handoff bundles.");
-  process.exit(args.includes("--help") || args.includes("-h") ? 0 : 1);
+  console.log("");
+  console.log("Options:");
+  console.log(`  --repo <path>          ${modeLabel("--repo")} Repository root`);
+  console.log(`  --contract-file <path> ${modeLabel("--contract-file")} Request contract JSON path`);
+  console.log(`  --json                 ${modeLabel("--json")} Output JSON`);
+  process.exit(hasFlag(["--help", "-h"]) ? 0 : 1);
 }
-
-const getArg = (flag, fallback) => sharedGetArg(args, flag, fallback, { reservedFlags: KNOWN_FLAGS });
-const hasFlag = (flag) => sharedHasFlag(args, flag);
 
 const repoRoot = path.resolve(getArg("--repo") || ".");
 const contractFile = getArg("--contract-file");

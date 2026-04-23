@@ -222,7 +222,7 @@ for (const { name, args, pattern } of [
   {
     name: "empty artifact path",
     args: ["--artifact-path", "", "--writer-pr", "267", "--reason", "operator checked"],
-    pattern: /--artifact-path <path> is required/,
+    pattern: /--artifact-path (?:<path> is required|requires a non-empty value)/,
   },
   {
     name: "missing writer PR",

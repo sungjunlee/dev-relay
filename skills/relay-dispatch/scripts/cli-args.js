@@ -1,21 +1,17 @@
+const {
+  findUnknownFlags,
+  getPositionals,
+  hasFlag: schemaHasFlag,
+  modeLabel,
+  readArg,
+} = require("./cli-schema");
+
 function getArg(args, flag, fallback = undefined, options = {}) {
-  const reservedFlags = new Set(options.reservedFlags || []);
-  const allowFlagLikeValue = options.allowFlagLikeValue === true;
-  for (const variant of Array.isArray(flag) ? flag : [flag]) {
-    const index = args.indexOf(variant);
-    if (index === -1) continue;
-    if (index + 1 >= args.length) return fallback;
-    const value = args[index + 1];
-    if (!allowFlagLikeValue && (value.startsWith("--") || reservedFlags.has(value))) {
-      return fallback;
-    }
-    return value;
-  }
-  return fallback;
+  return readArg(args, flag, fallback, options);
 }
 
-const hasFlag = (args, flag) => (
-  (Array.isArray(flag) ? flag : [flag]).some((variant) => args.includes(variant))
-);
+function hasFlag(args, flag, options = {}) {
+  return schemaHasFlag(args, flag, options);
+}
 
-module.exports = { getArg, hasFlag };
+module.exports = { findUnknownFlags, getArg, getPositionals, hasFlag, modeLabel };
