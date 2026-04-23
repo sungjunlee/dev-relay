@@ -1,0 +1,308 @@
+{
+  "now": "2026-04-23T12:00:00.000Z",
+  "runs": [
+    {
+      "slug": "alpha-11111111",
+      "runId": "issue-201-20260420010101010-aa11bb22",
+      "latestMtime": "2026-04-20T10:00:00.000Z",
+      "manifest": {
+        "prNumber": 201,
+        "repeatedIssueCount": 0
+      },
+      "rounds": [
+        {
+          "round": 1,
+          "rubricScores": [
+            ["Behavior", "pass"],
+            ["Security", "pass"]
+          ]
+        },
+        {
+          "round": 2,
+          "rubricScores": [
+            ["Behavior", "fail"]
+          ]
+        },
+        {
+          "round": 3,
+          "rubricScores": [
+            ["Behavior", "pass"]
+          ]
+        }
+      ]
+    },
+    {
+      "slug": "alpha-11111111",
+      "runId": "issue-202-20260420010202020-bb22cc33",
+      "latestMtime": "2026-04-20T11:00:00.000Z",
+      "manifest": {
+        "prNumber": 202,
+        "repeatedIssueCount": 2
+      },
+      "rounds": [
+        {
+          "round": 1,
+          "rubricScores": [
+            ["Forensics", "fail"]
+          ]
+        },
+        {
+          "round": 2,
+          "rubricScores": [
+            ["Forensics", "pass"]
+          ]
+        },
+        {
+          "round": 3,
+          "rubricScores": [
+            ["Forensics", "fail"]
+          ]
+        }
+      ]
+    },
+    {
+      "slug": "alpha-11111111",
+      "runId": "issue-203-20260420010303030-cc33dd44",
+      "latestMtime": "2026-04-20T12:00:00.000Z",
+      "manifest": {
+        "prNumber": 203,
+        "repeatedIssueCount": 0
+      },
+      "rounds": [
+        {
+          "round": 1,
+          "rubricScores": [
+            ["Behavior", "pass"]
+          ]
+        },
+        {
+          "round": 2,
+          "rubricScores": [
+            ["Behavior", "fail"]
+          ]
+        }
+      ]
+    },
+    {
+      "slug": "alpha-11111111",
+      "runId": "issue-204-20260420010404040-dd44ee55",
+      "latestMtime": "2026-04-20T13:00:00.000Z",
+      "manifest": {
+        "prNumber": 204,
+        "omitRepeatedIssueCount": true
+      },
+      "rounds": [
+        {
+          "round": 1,
+          "rubricScores": [
+            ["Behavior", "pass"]
+          ]
+        },
+        {
+          "round": 2,
+          "rubricScores": [
+            ["Behavior", "fail"]
+          ]
+        },
+        {
+          "round": 3,
+          "rubricScores": [
+            ["Behavior", "pass"]
+          ]
+        }
+      ]
+    },
+    {
+      "slug": "beta-22222222",
+      "runId": "issue-205-20260420010505050-ee55ff66",
+      "latestMtime": "2026-04-21T09:00:00.000Z",
+      "manifest": {
+        "prNumber": 205,
+        "repeatedIssueCount": 0
+      },
+      "rounds": [
+        {
+          "round": 1,
+          "rubricScores": [
+            ["Behavior", "pass"]
+          ]
+        },
+        {
+          "round": 2,
+          "rubricScores": [
+            ["Behavior", "not_run"]
+          ]
+        },
+        {
+          "round": 3,
+          "rubricScores": [
+            ["Behavior", "fail"]
+          ]
+        }
+      ]
+    },
+    {
+      "slug": "beta-22222222",
+      "runId": "issue-206-20260420010606060-ff66aa77",
+      "latestMtime": "2026-04-21T10:00:00.000Z",
+      "manifest": {
+        "prNumber": 206,
+        "repeatedIssueCount": 0
+      },
+      "rounds": [
+        {
+          "round": 1,
+          "rubricScores": [
+            ["Behavior", "pass"]
+          ]
+        },
+        {
+          "round": 2,
+          "rubricScores": [
+            ["Other", "pass"]
+          ]
+        },
+        {
+          "round": 3,
+          "rubricScores": [
+            ["Behavior", "fail"]
+          ]
+        }
+      ]
+    },
+    {
+      "slug": "beta-22222222",
+      "runId": "issue-207-20260420010707070-aa77bb88",
+      "latestMtime": "2026-04-21T11:00:00.000Z",
+      "manifest": {
+        "prNumber": 207,
+        "repeatedIssueCount": 0
+      },
+      "rounds": [
+        {
+          "round": 1,
+          "rubricScores": [
+            ["Behavior", "pass"]
+          ]
+        },
+        {
+          "round": 2,
+          "rubricScores": [
+            ["Behavior", "pass"]
+          ]
+        },
+        {
+          "round": 3,
+          "rubricScores": [
+            ["Behavior", "fail"]
+          ]
+        },
+        {
+          "round": 4,
+          "rubricScores": [
+            ["Behavior", "pass"]
+          ]
+        }
+      ]
+    },
+    {
+      "slug": "beta-22222222",
+      "runId": "issue-208-20260301010808080-bb88cc99",
+      "latestMtime": "2026-03-01T11:00:00.000Z",
+      "manifest": {
+        "prNumber": 208,
+        "repeatedIssueCount": 0
+      },
+      "rounds": [
+        {
+          "round": 1,
+          "rubricScores": [
+            ["Behavior", "pass"]
+          ]
+        },
+        {
+          "round": 2,
+          "rubricScores": [
+            ["Behavior", "fail"]
+          ]
+        },
+        {
+          "round": 3,
+          "rubricScores": [
+            ["Behavior", "pass"]
+          ]
+        }
+      ]
+    },
+    {
+      "slug": "beta-22222222",
+      "runId": "issue-209-20260420010909090-cc99ddaa",
+      "latestMtime": "2026-04-21T12:00:00.000Z",
+      "manifest": {
+        "prNumber": 209,
+        "repeatedIssueCount": 0
+      },
+      "rounds": [
+        {
+          "round": 1,
+          "rubricScores": [
+            ["Behavior", "pass"]
+          ]
+        }
+      ]
+    },
+    {
+      "slug": "gamma-33333333",
+      "runId": "issue-210-20260420011010100-ddaaeebb",
+      "latestMtime": "2026-04-22T09:00:00.000Z",
+      "manifest": false,
+      "rounds": [
+        {
+          "round": 1,
+          "rubricScores": [
+            ["Behavior", "pass"]
+          ]
+        },
+        {
+          "round": 2,
+          "rubricScores": [
+            ["Behavior", "fail"]
+          ]
+        },
+        {
+          "round": 3,
+          "rubricScores": [
+            ["Behavior", "pass"]
+          ]
+        }
+      ]
+    },
+    {
+      "slug": "gamma-33333333",
+      "runId": "issue-211-20260420011111110-eebbffcc",
+      "latestMtime": "2026-04-22T10:00:00.000Z",
+      "manifest": {
+        "prNumber": 211,
+        "repeatedIssueCount": 0
+      },
+      "rounds": [
+        {
+          "round": 1,
+          "rubricScores": [
+            ["Behavior", "pass"]
+          ]
+        },
+        {
+          "round": 2,
+          "raw": "{ invalid json"
+        },
+        {
+          "round": 3,
+          "rubricScores": [
+            ["Behavior", "pass"]
+          ]
+        }
+      ]
+    }
+  ]
+}
