@@ -53,7 +53,7 @@ const FLAGS = [
   { flag: "--project-only", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Presence flag; no value is consumed." },
   { flag: "--prompt", aliases: ["-p"], kind: VALUE, mode: MODE_VERBATIM, valueName: "<text>", rationale: "Operator-supplied prompt text; keep the literal argv token." },
   { flag: "--prompt-file", kind: VALUE, mode: MODE_VERBATIM, valueName: "<path>", rationale: "Operator-supplied prompt path; keep the literal argv token." },
-  { flag: "--reason", kind: VALUE, mode: MODE_VERBATIM, valueName: "<text>", rejectWhitespaceOnly: true, rationale: "Audit reason text must be recorded exactly and must not be blank." },
+  { flag: "--reason", kind: VALUE, mode: MODE_VERBATIM, valueName: "<text>", rationale: "Audit reason text must be recorded exactly and must not be blank." },
   { flag: "--register", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Presence flag; no value is consumed." },
   { flag: "--repeated-issue-count", kind: VALUE, mode: MODE_PARSED, valueName: "<n>", rationale: "Numeric review field; flag-like following tokens should mean the value is missing." },
   { flag: "--repo", kind: VALUE, mode: MODE_VERBATIM, valueName: "<path>", rationale: "Operator-supplied repository path; keep the literal argv token." },
@@ -68,9 +68,9 @@ const FLAGS = [
   { flag: "--runs-dir", kind: VALUE, mode: MODE_VERBATIM, valueName: "<path>", rationale: "Operator-supplied runs directory path; keep the literal argv token." },
   { flag: "--run-id", kind: VALUE, mode: MODE_PARSED, valueName: "<id>", rationale: "Structured relay run identifier; flag-like following tokens should mean the value is missing." },
   { flag: "--sandbox", kind: VALUE, mode: MODE_PARSED, valueName: "<mode>", rationale: "Closed sandbox selector; flag-like following tokens should mean the value is missing." },
-  { flag: "--skip", kind: VALUE, mode: MODE_VERBATIM, valueName: "<reason>", rationale: "Audit skip reason must be recorded exactly." },
+  { flag: "--skip", kind: VALUE, mode: MODE_VERBATIM, valueName: "<reason>", rationale: "Audit skip reason must be recorded exactly and must not be blank." },
   { flag: "--skip-merge", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Presence flag; no value is consumed." },
-  { flag: "--skip-review", kind: VALUE, mode: MODE_VERBATIM, valueName: "<reason>", rejectWhitespaceOnly: true, rationale: "Audit skip reason must be recorded exactly and must not be blank." },
+  { flag: "--skip-review", kind: VALUE, mode: MODE_VERBATIM, valueName: "<reason>", rationale: "Audit skip reason must be recorded exactly and must not be blank." },
   { flag: "--stale-hours", kind: VALUE, mode: MODE_PARSED, valueName: "<hours>", rationale: "Numeric threshold; flag-like following tokens should mean the value is missing." },
   { flag: "--state", kind: VALUE, mode: MODE_PARSED, valueName: "<state>", rationale: "Closed manifest state selector; flag-like following tokens should mean the value is missing." },
   { flag: "--test-command", kind: VALUE, mode: MODE_VERBATIM, valueName: "<cmd>", rationale: "Execution evidence must preserve the operator-supplied command token exactly." },
@@ -282,7 +282,7 @@ function schemaDefault(definition, fallback) {
 }
 
 function validateValue(definition, value) {
-  if (definition.rejectWhitespaceOnly && String(value).trim() === "") {
+  if (definition.mode === MODE_VERBATIM && String(value).trim() === "") {
     throw new CliSchemaError(`${definition.flag} requires a non-empty value`, {
       flag: definition.flag,
       mode: definition.mode,

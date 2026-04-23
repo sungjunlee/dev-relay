@@ -18,6 +18,28 @@ const {
 const valueFlags = FLAGS.filter((flag) => flag.kind === VALUE);
 const verbatimFlags = valueFlags.filter((flag) => flag.mode === MODE_VERBATIM);
 const parsedValueFlags = valueFlags.filter((flag) => flag.mode === MODE_PARSED);
+const CLI_SCHEMA_FIXTURE = path.join(__dirname, "__fixtures__", "cli-schema-reader.js");
+
+function runCliSchemaFixture(argv, { flag, fallback = "fallback", commandName } = {}) {
+  const env = {
+    ...process.env,
+    CLI_SCHEMA_TEST_FLAG: flag,
+    CLI_SCHEMA_TEST_FALLBACK: fallback,
+  };
+
+  if (commandName) {
+    env.CLI_SCHEMA_TEST_COMMAND = commandName;
+  } else {
+    delete env.CLI_SCHEMA_TEST_COMMAND;
+  }
+
+  return JSON.parse(
+    execFileSync(process.execPath, [CLI_SCHEMA_FIXTURE, ...argv], {
+      encoding: "utf-8",
+      env,
+    })
+  );
+}
 
 test("every registered command flag has an explicit parsed/verbatim mode", () => {
   for (const [commandName, flags] of Object.entries(COMMAND_FLAGS)) {
@@ -37,29 +59,37 @@ test("unregistered flag reads fail closed", () => {
 for (const definition of verbatimFlags) {
   const flag = definition.flag;
 
-  test(`${flag} verbatim mode preserves adversarial values`, () => {
-    assert.equal(readArg([flag, "--watch"], flag, "fallback"), "--watch");
-    assert.equal(readArg([flag, "--skip-review"], flag, "fallback"), "--skip-review");
-    assert.equal(readArg([flag, "📦 bootstrap"], flag, "fallback"), "📦 bootstrap");
-    assert.equal(readArg([flag, "npm test && echo done"], flag, "fallback"), "npm test && echo done");
-    assert.equal(readArg([flag, "a\"b'c"], flag, "fallback"), "a\"b'c");
-    assert.equal(readArg([flag], flag, "fallback"), "fallback");
-    assert.equal(readArg([`${flag}=--inline`], flag, "fallback"), "--inline");
+  test(`${flag} verbatim mode preserves adversarial values through argv`, () => {
+    const acceptedCases = [
+      { label: "--prefix value", argv: [flag, "--watch"], expected: "--watch" },
+      { label: "reserved token", argv: [flag, "--skip-review"], expected: "--skip-review" },
+      { label: "unicode", argv: [flag, "📦 bootstrap"], expected: "📦 bootstrap" },
+      { label: "shell-special chars", argv: [flag, "npm test && echo done"], expected: "npm test && echo done" },
+      { label: "quotes", argv: [flag, "a\"b'c"], expected: "a\"b'c" },
+      { label: "final token fallback", argv: [flag], expected: "fallback" },
+      { label: "--flag=value", argv: [`${flag}=--inline`], expected: "--inline" },
+    ];
 
-    if (definition.rejectWhitespaceOnly) {
-      assert.throws(() => readArg([flag, ""], flag, "fallback"), /requires a non-empty value/);
-      assert.throws(() => readArg([flag, "   "], flag, "fallback"), /requires a non-empty value/);
-    } else {
-      assert.equal(readArg([flag, ""], flag, "fallback"), "");
-      assert.equal(readArg([flag, "   "], flag, "fallback"), "   ");
+    for (const testCase of acceptedCases) {
+      assert.deepEqual(
+        runCliSchemaFixture(testCase.argv, { flag }),
+        { ok: true, value: testCase.expected },
+        `${flag} ${testCase.label}`
+      );
+    }
+
+    for (const testCase of [
+      { label: "empty string", argv: [flag, ""] },
+      { label: "whitespace-only", argv: [flag, "   "] },
+      { label: "--flag= empty string", argv: [`${flag}=`] },
+      { label: "--flag= whitespace-only", argv: [`${flag}=   `] },
+    ]) {
+      const result = runCliSchemaFixture(testCase.argv, { flag });
+      assert.equal(result.ok, false, `${flag} ${testCase.label}`);
+      assert.match(result.message, /requires a non-empty value/, `${flag} ${testCase.label}`);
     }
   });
 }
-
-test("reason rejects empty and whitespace-only audit text", () => {
-  assert.throws(() => readArg(["--reason", ""], "--reason"), /requires a non-empty value/);
-  assert.throws(() => readArg(["--reason", "   "], "--reason"), /requires a non-empty value/);
-});
 
 test("verbatim values that look like flags do not activate sibling flags", () => {
   const args = ["--test-command", "--json"];
@@ -70,9 +100,9 @@ test("verbatim values that look like flags do not activate sibling flags", () =>
 for (const definition of parsedValueFlags) {
   const flag = definition.flag;
 
-  test(`${flag} parsed mode treats --prefix input as missing`, () => {
-    assert.equal(readArg([flag, "--watch"], flag, "fallback"), "fallback");
-    assert.equal(readArg([`${flag}=--watch`], flag, "fallback"), "fallback");
+  test(`${flag} parsed mode treats --prefix input as missing through argv`, () => {
+    assert.deepEqual(runCliSchemaFixture([flag, "--watch"], { flag }), { ok: true, value: "fallback" });
+    assert.deepEqual(runCliSchemaFixture([`${flag}=--watch`], { flag }), { ok: true, value: "fallback" });
   });
 }
 

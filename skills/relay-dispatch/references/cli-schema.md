@@ -3,7 +3,7 @@
 Relay CLI scripts declare every supported flag in `scripts/cli-schema.js`. Each value flag has one of two read modes:
 
 - `parsed`: the next token is a value only when it does not look like another flag. A following `--...` token, or a registered reserved token such as `-h`, means the value is missing and the caller fallback is returned.
-- `verbatim`: the next argv token is the value exactly as supplied. `--...`, reserved-looking tokens, unicode, quotes, shell metacharacters, and empty strings stay data. The fallback is returned only when the flag is absent or is the final argv token.
+- `verbatim`: the next argv token is the value exactly as supplied. `--...`, reserved-looking tokens, unicode, quotes, and shell metacharacters stay data, but blank and whitespace-only values are rejected. The fallback is returned only when the flag is absent or is the final argv token.
 
 Presence flags still declare `mode: "parsed"` so the registry can audit all flags uniformly, but they never consume a value.
 
@@ -96,7 +96,7 @@ Generated from `formatFlagAuditMarkdown()` in `scripts/cli-schema.js`.
 | `--run-id` | `parsed` | Structured relay run identifier; flag-like following tokens should mean the value is missing. |
 | `--runs-dir` | `verbatim` | Operator-supplied runs directory path; keep the literal argv token. |
 | `--sandbox` | `parsed` | Closed sandbox selector; flag-like following tokens should mean the value is missing. |
-| `--skip` | `verbatim` | Audit skip reason must be recorded exactly. |
+| `--skip` | `verbatim` | Audit skip reason must be recorded exactly and must not be blank. |
 | `--skip-merge` | `parsed` | Presence flag; no value is consumed. |
 | `--skip-review` | `verbatim` | Audit skip reason must be recorded exactly and must not be blank. |
 | `--stale-hours` | `parsed` | Numeric threshold; flag-like following tokens should mean the value is missing. |
