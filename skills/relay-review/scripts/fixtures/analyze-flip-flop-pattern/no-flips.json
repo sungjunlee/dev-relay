@@ -1,0 +1,74 @@
+{
+  "now": "2026-04-23T12:00:00.000Z",
+  "runs": [
+    {
+      "slug": "delta-44444444",
+      "runId": "issue-301-20260422010101010-1122aabb",
+      "latestMtime": "2026-04-22T10:00:00.000Z",
+      "manifest": {
+        "prNumber": 301,
+        "repeatedIssueCount": 0
+      },
+      "rounds": [
+        {
+          "round": 1,
+          "rubricScores": [
+            ["Behavior", "pass"]
+          ]
+        },
+        {
+          "round": 2,
+          "rubricScores": [
+            ["Behavior", "fail"]
+          ]
+        }
+      ]
+    },
+    {
+      "slug": "delta-44444444",
+      "runId": "issue-302-20260422010202020-2233bbcc",
+      "latestMtime": "2026-04-22T11:00:00.000Z",
+      "manifest": {
+        "prNumber": 302,
+        "repeatedIssueCount": 1
+      },
+      "rounds": [
+        {
+          "round": 1,
+          "rubricScores": [
+            ["Behavior", "pass"]
+          ]
+        },
+        {
+          "round": 2,
+          "rubricScores": [
+            ["Behavior", "not_run"]
+          ]
+        },
+        {
+          "round": 3,
+          "rubricScores": [
+            ["Behavior", "fail"]
+          ]
+        }
+      ]
+    },
+    {
+      "slug": "delta-44444444",
+      "runId": "issue-303-20260422010303030-3344ccdd",
+      "latestMtime": "2026-04-22T12:00:00.000Z",
+      "manifest": {
+        "prNumber": 303,
+        "repeatedIssueCount": 0
+      },
+      "rounds": [
+        {
+          "round": 1,
+          "rubricScores": [
+            ["Only round", "pass"]
+          ]
+        }
+      ]
+    }
+  ]
+}
