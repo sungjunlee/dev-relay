@@ -17,6 +17,10 @@
  *
  * Decision gate: if progressive / (progressive + thrash) >= 20%, Phase B is
  * worth building. Otherwise deprioritize. Context: issue #270.
+ *
+ * Re-run before any Phase B go/no-go decision, after new multi-round relay
+ * review data enters the last-30-days window, or whenever reusing an older
+ * issue #270 report would make the decision gate stale.
  */
 const { execFileSync } = require("child_process");
 const fs = require("fs");
