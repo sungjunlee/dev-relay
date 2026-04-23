@@ -1,0 +1,119 @@
+{
+  "now": "2026-04-23T12:00:00.000Z",
+  "runs": [
+    {
+      "slug": "epsilon-55555555",
+      "runId": "issue-401-20260422040101010-aabbccdd",
+      "latestMtime": "2026-04-22T10:00:00.000Z",
+      "manifest": {
+        "prNumber": 401,
+        "repeatedIssueCount": 0
+      },
+      "rounds": [
+        {
+          "round": 1,
+          "rubricScores": [
+            ["Behavior", "pass"]
+          ]
+        },
+        {
+          "round": 3,
+          "rubricScores": [
+            ["Behavior", "pass"]
+          ]
+        }
+      ]
+    },
+    {
+      "slug": "epsilon-55555555",
+      "runId": "issue-402-20260422040202020-bbccddee",
+      "latestMtime": "2026-04-22T11:00:00.000Z",
+      "manifest": {
+        "prNumber": 402,
+        "repeatedIssueCount": 0
+      },
+      "rounds": [
+        {
+          "round": 1,
+          "rubricScores": [
+            ["Behavior", "pass"],
+            ["Security", "pass"]
+          ]
+        },
+        {
+          "round": 2,
+          "rubricScores": [
+            ["Behavior", "fail"],
+            ["Security", "pass"]
+          ]
+        },
+        {
+          "round": 3,
+          "rubricScores": [
+            ["Behavior", "pass"],
+            ["Security", "pass"]
+          ]
+        }
+      ]
+    },
+    {
+      "slug": "epsilon-55555555",
+      "runId": "issue-403-20260422040303030-ccddeeff",
+      "latestMtime": "2026-04-22T12:00:00.000Z",
+      "manifest": {
+        "prNumber": 403,
+        "repeatedIssueCount": 0
+      },
+      "rounds": [
+        {
+          "round": 1,
+          "rubricScores": [
+            ["Behavior", "pass"]
+          ]
+        },
+        {
+          "round": 2,
+          "rubricScores": [
+            ["Behavior", "skipped"]
+          ]
+        },
+        {
+          "round": 3,
+          "rubricScores": [
+            ["Behavior", "fail"]
+          ]
+        },
+        {
+          "round": 4,
+          "rubricScores": [
+            ["Behavior", "pass"]
+          ]
+        }
+      ]
+    },
+    {
+      "slug": "epsilon-55555555",
+      "runId": "issue-404-20260422040404040-ddeeffaa",
+      "latestMtime": "2026-04-22T13:00:00.000Z",
+      "manifest": {
+        "prNumber": 404,
+        "repeatedIssueCount": 0,
+        "rounds": 3
+      },
+      "rounds": [
+        {
+          "round": 1,
+          "rubricScores": [
+            ["Behavior", "pass"]
+          ]
+        },
+        {
+          "round": 2,
+          "rubricScores": [
+            ["Behavior", "fail"]
+          ]
+        }
+      ]
+    }
+  ]
+}
