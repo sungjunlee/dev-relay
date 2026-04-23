@@ -50,7 +50,11 @@ const {
 const { resolveManifestRecord } = require("../../relay-dispatch/scripts/relay-resolver");
 const { appendRunEvent } = require("../../relay-dispatch/scripts/relay-events");
 const { runCleanup } = require("../../relay-dispatch/scripts/manifest/cleanup");
-const { getArg: sharedGetArg, hasFlag: sharedHasFlag } = require("../../relay-dispatch/scripts/cli-args");
+const {
+  getArg: sharedGetArg,
+  hasFlag: sharedHasFlag,
+  modeLabel,
+} = require("../../relay-dispatch/scripts/cli-args");
 const {
   buildSkipReviewGateFailure,
   buildSkipComment,
@@ -65,30 +69,32 @@ const KNOWN_FLAGS = [
   "--skip-merge", "--no-issue-close", "--dry-run", "--json", "--help", "-h",
 ];
 const LEGACY_BOOTSTRAP_REASON_PREFIX = /^\s*bootstrap:/i;
+const CLI_ARG_OPTIONS = { commandName: "finalize-run", reservedFlags: KNOWN_FLAGS };
+const helpRequested = sharedHasFlag(args, ["--help", "-h"], CLI_ARG_OPTIONS);
 
-if (!args.length || args.includes("--help") || args.includes("-h")) {
+if (!args.length || helpRequested) {
   console.log("Usage: finalize-run.js (--repo <path> --run-id <id> | --repo <path> --pr <number> | --manifest <path>) [options]");
   console.log("\nMerge a ready relay run, then finalize cleanup and manifest metadata.");
   console.log("\nOptions:");
-  console.log("  --repo <path>          Repository root (default: .)");
-  console.log("  --run-id <id>          Relay run identifier");
-  console.log("  --manifest <path>      Explicit manifest path");
-  console.log("  --branch <name>        Override branch name");
-  console.log("  --pr <number>          Pull request number (optional when stored in manifest)");
-  console.log("  --merge-method <name>  squash | merge | rebase (default: squash)");
-  console.log("  --skip-review <reason> Bypass the fresh-review gate with an audit reason");
-  console.log("  --force-finalize-nonready");
+  console.log(`  --repo <path>          ${modeLabel("--repo")} Repository root (default: .)`);
+  console.log(`  --run-id <id>          ${modeLabel("--run-id")} Relay run identifier`);
+  console.log(`  --manifest <path>      ${modeLabel("--manifest")} Explicit manifest path`);
+  console.log(`  --branch <name>        ${modeLabel("--branch")} Override branch name`);
+  console.log(`  --pr <number>          ${modeLabel("--pr")} Pull request number (optional when stored in manifest)`);
+  console.log(`  --merge-method <name>  ${modeLabel("--merge-method")} squash | merge | rebase (default: squash)`);
+  console.log(`  --skip-review <reason> ${modeLabel("--skip-review")} Bypass the fresh-review gate with an audit reason`);
+  console.log(`  --force-finalize-nonready ${modeLabel("--force-finalize-nonready")}`);
   console.log("                         Operator-only: bypass non-ready state gate");
-  console.log("  --reason <text>        Required with --force-finalize-nonready");
-  console.log("  --skip-merge           Skip the PR merge step and run cleanup only");
-  console.log("  --no-issue-close       Skip linked issue close");
-  console.log("  --dry-run              Print what would happen without writing");
-  console.log("  --json                 Output JSON");
-  process.exit(args.includes("--help") || args.includes("-h") ? 0 : 1);
+  console.log(`  --reason <text>        ${modeLabel("--reason")} Required with --force-finalize-nonready`);
+  console.log(`  --skip-merge           ${modeLabel("--skip-merge")} Skip the PR merge step and run cleanup only`);
+  console.log(`  --no-issue-close       ${modeLabel("--no-issue-close")} Skip linked issue close`);
+  console.log(`  --dry-run              ${modeLabel("--dry-run")} Print what would happen without writing`);
+  console.log(`  --json                 ${modeLabel("--json")} Output JSON`);
+  process.exit(helpRequested ? 0 : 1);
 }
 
-const getArg = (flag, fallback) => sharedGetArg(args, flag, fallback, { reservedFlags: KNOWN_FLAGS });
-const hasFlag = (flag) => sharedHasFlag(args, flag);
+const getArg = (flag, fallback) => sharedGetArg(args, flag, fallback, CLI_ARG_OPTIONS);
+const hasFlag = (flag) => sharedHasFlag(args, flag, CLI_ARG_OPTIONS);
 
 function parsePositiveInt(value, label) {
   if (value === undefined) return undefined;
@@ -262,7 +268,16 @@ function main() {
   const mergeMethod = getArg("--merge-method") || "squash";
   const skipReviewReason = getArg("--skip-review");
   const forceFinalizeNonready = hasFlag("--force-finalize-nonready");
-  const forceFinalizeReason = getArg("--reason");
+  let forceFinalizeReason;
+  try {
+    forceFinalizeReason = getArg("--reason");
+  } catch (error) {
+    if (forceFinalizeNonready && error.name === "CliSchemaError" && error.details?.flag === "--reason") {
+      forceFinalizeReason = "";
+    } else {
+      throw error;
+    }
+  }
   const dryRun = hasFlag("--dry-run");
   const skipMerge = hasFlag("--skip-merge");
   const skipIssueClose = hasFlag("--no-issue-close");

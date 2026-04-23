@@ -90,7 +90,7 @@ const {
   rejectLegacyGrandfatherField,
   validateRubricPathContainment,
 } = require("./manifest/rubric");
-const { getArg, hasFlag } = require("./cli-args");
+const { getArg, getPositionals, hasFlag, modeLabel } = require("./cli-args");
 const { formatAttemptsForPrompt, readPreviousAttempts } = require("./manifest/attempts");
 const { STATES, updateManifestState } = require("./manifest/lifecycle");
 const { resolveManifestRecord } = require("./relay-resolver");
@@ -108,52 +108,43 @@ const KNOWN_FLAGS = [
   "--request-id", "--leaf-id", "--done-criteria-file",
   "--register", "--no-cleanup", "--dry-run", "--json", "--help", "-h",
 ];
+const CLI_ARG_OPTIONS = { commandName: "dispatch", reservedFlags: KNOWN_FLAGS };
+const hasCliFlag = (flag) => hasFlag(args, flag, CLI_ARG_OPTIONS);
 
-if (!args.length || args.includes("--help") || args.includes("-h")) {
+if (!args.length || hasCliFlag(["--help", "-h"])) {
   console.log("Usage: dispatch.js <repo-path> --branch <name> --prompt <task> [options]");
   console.log("       dispatch.js <repo-path> --branch <name> --prompt-file <path> [options]");
   console.log("       dispatch.js <repo-path> --run-id <id> --prompt <task> [options]");
   console.log("       dispatch.js --manifest <path> --prompt-file <path> [options]");
   console.log("\nOptions:");
-  console.log("  --branch, -b       Branch name (required)");
-  console.log("  --run-id           Resume an existing relay run");
-  console.log("  --manifest         Resume an existing relay run from its manifest");
-  console.log("  --prompt, -p       Task prompt");
-  console.log("  --prompt-file      Read prompt from file");
-  console.log("  --executor, -e     Executor: codex (default), claude");
-  console.log("  --model, -m        Model override");
-  console.log("  --model-hints      Persist per-phase model hints (phase=model,...)");
-  console.log("  --sandbox          workspace-write | read-only (default: workspace-write)");
-  console.log("  --copy <files>     Additional files to copy (comma-separated)");
-  console.log("  --timeout          Exec timeout in seconds (default: 1800)");
-  console.log("  --rubric-file      REQUIRED: copy rubric YAML to run dir (persists for review)");
-  console.log("  --test-command     Record the executor-side test command in execution evidence");
-  console.log("  --rubric-grandfathered  Retired alias; remove anchor.rubric_grandfathered manually");
-  console.log("  --request-id       Link the run back to a relay-intake request");
-  console.log("  --leaf-id          Link the run back to a relay-intake leaf handoff");
-  console.log("  --done-criteria-file  Persist a frozen Done Criteria anchor path");
-  console.log("  --register         Register session in executor's app (keeps worktree)");
-  console.log("  --no-cleanup       Compatibility alias; worktree is retained by default");
-  console.log("  --dry-run          Show plan without executing");
-  console.log("  --json             Output as JSON");
-  process.exit(args.includes("--help") || args.includes("-h") ? 0 : 1);
+  console.log(`  --branch, -b       ${modeLabel("--branch")} Branch name (required)`);
+  console.log(`  --run-id           ${modeLabel("--run-id")} Resume an existing relay run`);
+  console.log(`  --manifest         ${modeLabel("--manifest")} Resume an existing relay run from its manifest`);
+  console.log(`  --prompt, -p       ${modeLabel("--prompt")} Task prompt`);
+  console.log(`  --prompt-file      ${modeLabel("--prompt-file")} Read prompt from file`);
+  console.log(`  --executor, -e     ${modeLabel("--executor")} Executor: codex (default), claude`);
+  console.log(`  --model, -m        ${modeLabel("--model")} Model override`);
+  console.log(`  --model-hints      ${modeLabel("--model-hints")} Persist per-phase model hints (phase=model,...)`);
+  console.log(`  --sandbox          ${modeLabel("--sandbox")} workspace-write | read-only (default: workspace-write)`);
+  console.log(`  --copy <files>     ${modeLabel("--copy")} Additional files to copy (comma-separated)`);
+  console.log(`  --timeout          ${modeLabel("--timeout")} Exec timeout in seconds (default: 1800)`);
+  console.log(`  --rubric-file      ${modeLabel("--rubric-file")} REQUIRED: copy rubric YAML to run dir (persists for review)`);
+  console.log(`  --test-command     ${modeLabel("--test-command")} Record the executor-side test command in execution evidence`);
+  console.log(`  --rubric-grandfathered  ${modeLabel("--rubric-grandfathered")} Retired alias; remove anchor.rubric_grandfathered manually`);
+  console.log(`  --request-id       ${modeLabel("--request-id")} Link the run back to a relay-intake request`);
+  console.log(`  --leaf-id          ${modeLabel("--leaf-id")} Link the run back to a relay-intake leaf handoff`);
+  console.log(`  --done-criteria-file  ${modeLabel("--done-criteria-file")} Persist a frozen Done Criteria anchor path`);
+  console.log(`  --register         ${modeLabel("--register")} Register session in executor's app (keeps worktree)`);
+  console.log(`  --no-cleanup       ${modeLabel("--no-cleanup")} Compatibility alias; worktree is retained by default`);
+  console.log(`  --dry-run          ${modeLabel("--dry-run")} Show plan without executing`);
+  console.log(`  --json             ${modeLabel("--json")} Output as JSON`);
+  process.exit(hasCliFlag(["--help", "-h"]) ? 0 : 1);
 }
 
-// Positional arg: first arg that isn't a flag and isn't consumed as a flag's value
-const consumedIndices = new Set();
-for (let i = 0; i < args.length; i++) {
-  if (KNOWN_FLAGS.includes(args[i]) && !["--register", "--no-cleanup", "--dry-run", "--json", "--help", "-h", "--rubric-grandfathered"].includes(args[i])) {
-    consumedIndices.add(i);
-    consumedIndices.add(i + 1);
-    i++; // skip the value
-  } else if (["--register", "--no-cleanup", "--dry-run", "--json", "--help", "-h", "--rubric-grandfathered"].includes(args[i])) {
-    consumedIndices.add(i);
-  }
-}
-const repoPathRaw = args.find((a, i) => !consumedIndices.has(i) && !a.startsWith("-"));
+// Positional arg: first arg that isn't a flag and isn't consumed as a flag's value.
+const repoPathRaw = getPositionals(args, "dispatch")[0];
 const REPO_PATH = path.resolve(repoPathRaw || ".");
 const PROJECT_NAME = path.basename(REPO_PATH);
-const CLI_ARG_OPTIONS = { reservedFlags: KNOWN_FLAGS };
 const BRANCH = getArg(args, ["--branch", "-b"], undefined, CLI_ARG_OPTIONS);
 const RUN_ID = getArg(args, "--run-id", undefined, CLI_ARG_OPTIONS);
 const MANIFEST_INPUT = getArg(args, "--manifest", undefined, CLI_ARG_OPTIONS);
@@ -165,11 +156,8 @@ const MODEL_HINTS_RAW = getArg(args, "--model-hints", undefined, CLI_ARG_OPTIONS
 const SANDBOX = getArg(args, "--sandbox", "workspace-write", CLI_ARG_OPTIONS);
 const COPY_FILES = getArg(args, "--copy", "", CLI_ARG_OPTIONS).split(",").filter(Boolean);
 const RUBRIC_FILE = getArg(args, "--rubric-file", undefined, CLI_ARG_OPTIONS);
-const TEST_COMMAND = getArg(args, "--test-command", undefined, {
-  ...CLI_ARG_OPTIONS,
-  allowFlagLikeValue: true,
-});
-const RUBRIC_GRANDFATHERED = hasFlag(args, "--rubric-grandfathered");
+const TEST_COMMAND = getArg(args, "--test-command", undefined, CLI_ARG_OPTIONS);
+const RUBRIC_GRANDFATHERED = hasCliFlag("--rubric-grandfathered");
 const REQUEST_ID = getArg(args, "--request-id", undefined, CLI_ARG_OPTIONS);
 const LEAF_ID = getArg(args, "--leaf-id", undefined, CLI_ARG_OPTIONS);
 const DONE_CRITERIA_FILE = getArg(args, "--done-criteria-file", undefined, CLI_ARG_OPTIONS);
@@ -225,10 +213,10 @@ try {
   process.exit(1);
 }
 
-const REGISTER = hasFlag(args, "--register");
-const NO_CLEANUP = hasFlag(args, "--no-cleanup");
-const DRY_RUN = hasFlag(args, "--dry-run");
-const JSON_OUT = hasFlag(args, "--json");
+const REGISTER = hasCliFlag("--register");
+const NO_CLEANUP = hasCliFlag("--no-cleanup");
+const DRY_RUN = hasCliFlag("--dry-run");
+const JSON_OUT = hasCliFlag("--json");
 const RESUME_MODE = !!RUN_ID || !!MANIFEST_INPUT;
 // ---------------------------------------------------------------------------
 // Validation

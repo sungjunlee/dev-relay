@@ -3,17 +3,25 @@
 const path = require("path");
 const { STATES } = require("./manifest/lifecycle");
 const { listManifestRecords } = require("./manifest/store");
-const { getArg, hasFlag } = require("./cli-args");
+const { getArg, hasFlag, modeLabel } = require("./cli-args");
 const { readAllRunEvents } = require("./relay-events");
 
 const args = process.argv.slice(2);
-const RESERVED = { reservedFlags: ["-h"] };
+const CLI_ARG_OPTIONS = { commandName: "reliability-report", reservedFlags: ["-h"] };
+const hasCliFlag = (flag) => hasFlag(args, flag, CLI_ARG_OPTIONS);
 
-if (hasFlag(args, ["--help", "-h"])) {
+if (hasCliFlag(["--help", "-h"])) {
   console.log(
     "Usage: reliability-report.js [--repo <path>] [--stale-hours <hours>] " +
     "[--json] [--by-actor] [--by-role] [--by-acting-reviewer]"
   );
+  console.log("\nOptions:");
+  console.log(`  --repo <path>           ${modeLabel("--repo")} Repository root (default: .)`);
+  console.log(`  --stale-hours <hours>   ${modeLabel("--stale-hours")} Stale open-run threshold (default: 72)`);
+  console.log(`  --json                  ${modeLabel("--json")} Output JSON`);
+  console.log(`  --by-actor              ${modeLabel("--by-actor")} Include actor breakdown`);
+  console.log(`  --by-role               ${modeLabel("--by-role")} Include role breakdown`);
+  console.log(`  --by-acting-reviewer    ${modeLabel("--by-acting-reviewer")} Include acting reviewer breakdown`);
   process.exit(0);
 }
 
@@ -615,24 +623,24 @@ function buildActingReviewerReports({ repoRoot, staleHours, now, manifests, even
 }
 
 function main() {
-  const repoRoot = path.resolve(getArg(args, "--repo", ".", RESERVED));
-  const staleHours = parseHours(getArg(args, "--stale-hours", "72", RESERVED));
+  const repoRoot = path.resolve(getArg(args, "--repo", ".", CLI_ARG_OPTIONS));
+  const staleHours = parseHours(getArg(args, "--stale-hours", "72", CLI_ARG_OPTIONS));
   const now = Date.now();
   const manifests = listManifestRecords(repoRoot);
   const events = readAllRunEvents(repoRoot);
   const report = buildReport({ repoRoot, staleHours, now, manifests, events });
 
-  if (hasFlag(args, "--by-actor")) {
+  if (hasCliFlag("--by-actor")) {
     report.by_actor = buildActorReports({ repoRoot, staleHours, now, manifests, events });
   }
-  if (hasFlag(args, "--by-role")) {
+  if (hasCliFlag("--by-role")) {
     report.by_role = buildRoleReports({ repoRoot, staleHours, now, manifests, events });
   }
-  if (hasFlag(args, "--by-acting-reviewer")) {
+  if (hasCliFlag("--by-acting-reviewer")) {
     report.by_acting_reviewer = buildActingReviewerReports({ repoRoot, staleHours, now, manifests, events });
   }
 
-  if (hasFlag(args, "--json")) {
+  if (hasCliFlag("--json")) {
     console.log(JSON.stringify(report, null, 2));
     return;
   }
@@ -657,7 +665,7 @@ function main() {
     console.log(`  avg_quality_ratio: ${report.rubric_insights.avg_quality_ratio ?? "n/a"}`);
     console.log(`  top_divergence_hotspot: ${topHotspot ? `${topHotspot.factor_pattern} (${topHotspot.avg_delta})` : "n/a"}`);
   }
-  if (hasFlag(args, "--by-actor")) {
+  if (hasCliFlag("--by-actor")) {
     const actorEntries = Object.entries(report.by_actor || {});
     console.log("  by_actor:");
     if (actorEntries.length === 0) {
@@ -670,7 +678,7 @@ function main() {
       );
     }
   }
-  if (hasFlag(args, "--by-role")) {
+  if (hasCliFlag("--by-role")) {
     const roleEntries = Object.entries(report.by_role || {});
     console.log("  by_role:");
     if (roleEntries.length === 0) {
@@ -690,7 +698,7 @@ function main() {
       }
     }
   }
-  if (hasFlag(args, "--by-acting-reviewer")) {
+  if (hasCliFlag("--by-acting-reviewer")) {
     const actingReviewerEntries = Object.entries(report.by_acting_reviewer?.reviewers || {});
     const actingReviewerSummary = report.by_acting_reviewer?.summary || {};
     console.log("  by_acting_reviewer:");

@@ -32,32 +32,33 @@ const {
   readManifest,
   writeManifest,
 } = require("./manifest/store");
-const { getArg, hasFlag } = require("./cli-args");
+const { getArg, hasFlag, modeLabel } = require("./cli-args");
 const { resolveManifestRecord } = require("./relay-resolver");
 
 const args = process.argv.slice(2);
-const RESERVED = { reservedFlags: ["-h"] };
+const CLI_ARG_OPTIONS = { commandName: "update-manifest-state", reservedFlags: ["-h"] };
+const hasCliFlag = (flag) => hasFlag(args, flag, CLI_ARG_OPTIONS);
 
-if (!args.length || hasFlag(args, ["--help", "-h"])) {
+if (!args.length || hasCliFlag(["--help", "-h"])) {
   console.log("Usage: update-manifest-state.js (--manifest <path> | --repo <path> --run-id <id> | --repo <path> --branch <name>) --state <state> [options]");
   console.log("\nUpdate relay run state after review or merge.");
   console.log("\nOptions:");
-  console.log("  --manifest <path>    Manifest path to update");
-  console.log("  --repo <path>        Repository root used with --run-id or --branch");
-  console.log("  --run-id <id>        Relay run identifier");
-  console.log("  --branch <name>      Working branch convenience selector");
-  console.log("  --state <state>      Target relay state");
-  console.log("  --next-action <name> Override next_action");
-  console.log("  --pr-number <n>      Persist git.pr_number");
-  console.log("  --head-sha <sha>     Persist git.head_sha");
-  console.log("  --rounds <n>         Persist review.rounds");
-  console.log("  --verdict <name>     Persist review.latest_verdict");
-  console.log("  --last-reviewed-sha <sha> Persist review.last_reviewed_sha");
-  console.log("  --max-rounds <n>     Persist review.max_rounds");
-  console.log("  --repeated-issue-count <n> Persist review.repeated_issue_count");
-  console.log("  --dry-run            Print result without writing");
-  console.log("  --json               Output JSON");
-  process.exit(hasFlag(args, ["--help", "-h"]) ? 0 : 1);
+  console.log(`  --manifest <path>    ${modeLabel("--manifest")} Manifest path to update`);
+  console.log(`  --repo <path>        ${modeLabel("--repo")} Repository root used with --run-id or --branch`);
+  console.log(`  --run-id <id>        ${modeLabel("--run-id")} Relay run identifier`);
+  console.log(`  --branch <name>      ${modeLabel("--branch")} Working branch convenience selector`);
+  console.log(`  --state <state>      ${modeLabel("--state")} Target relay state`);
+  console.log(`  --next-action <name> ${modeLabel("--next-action")} Override next_action`);
+  console.log(`  --pr-number <n>      ${modeLabel("--pr-number")} Persist git.pr_number`);
+  console.log(`  --head-sha <sha>     ${modeLabel("--head-sha")} Persist git.head_sha`);
+  console.log(`  --rounds <n>         ${modeLabel("--rounds")} Persist review.rounds`);
+  console.log(`  --verdict <name>     ${modeLabel("--verdict")} Persist review.latest_verdict`);
+  console.log(`  --last-reviewed-sha <sha> ${modeLabel("--last-reviewed-sha")} Persist review.last_reviewed_sha`);
+  console.log(`  --max-rounds <n>     ${modeLabel("--max-rounds")} Persist review.max_rounds`);
+  console.log(`  --repeated-issue-count <n> ${modeLabel("--repeated-issue-count")} Persist review.repeated_issue_count`);
+  console.log(`  --dry-run            ${modeLabel("--dry-run")} Print result without writing`);
+  console.log(`  --json               ${modeLabel("--json")} Output JSON`);
+  process.exit(hasCliFlag(["--help", "-h"]) ? 0 : 1);
 }
 
 function parsePositiveInt(value, label) {
@@ -87,10 +88,10 @@ function defaultNextAction(state) {
 }
 
 function resolveManifestPath() {
-  const manifestPath = getArg(args, "--manifest", undefined, RESERVED);
-  const repoPath = getArg(args, "--repo", undefined, RESERVED);
-  const runId = getArg(args, "--run-id", undefined, RESERVED);
-  const branch = getArg(args, "--branch", undefined, RESERVED);
+  const manifestPath = getArg(args, "--manifest", undefined, CLI_ARG_OPTIONS);
+  const repoPath = getArg(args, "--repo", undefined, CLI_ARG_OPTIONS);
+  const runId = getArg(args, "--run-id", undefined, CLI_ARG_OPTIONS);
+  const branch = getArg(args, "--branch", undefined, CLI_ARG_OPTIONS);
 
   if (manifestPath && (repoPath || branch || runId)) {
     throw new Error("Use either --manifest or --repo with --run-id/--branch, not both");
@@ -107,21 +108,21 @@ function resolveManifestPath() {
 }
 
 function main() {
-  const targetState = getArg(args, "--state", undefined, RESERVED);
+  const targetState = getArg(args, "--state", undefined, CLI_ARG_OPTIONS);
   if (!targetState) {
     throw new Error("--state is required");
   }
 
   const manifestPath = resolveManifestPath();
   const { data, body } = readManifest(manifestPath);
-  const nextAction = getArg(args, "--next-action", undefined, RESERVED) || defaultNextAction(targetState);
-  const prNumber = parsePositiveInt(getArg(args, "--pr-number", undefined, RESERVED), "--pr-number");
-  const headSha = getArg(args, "--head-sha", undefined, RESERVED);
-  const rounds = parsePositiveInt(getArg(args, "--rounds", undefined, RESERVED), "--rounds");
-  const verdict = getArg(args, "--verdict", undefined, RESERVED);
-  const lastReviewedSha = getArg(args, "--last-reviewed-sha", undefined, RESERVED);
-  const maxRounds = parsePositiveInt(getArg(args, "--max-rounds", undefined, RESERVED), "--max-rounds");
-  const repeatedIssueCount = parsePositiveInt(getArg(args, "--repeated-issue-count", undefined, RESERVED), "--repeated-issue-count");
+  const nextAction = getArg(args, "--next-action", undefined, CLI_ARG_OPTIONS) || defaultNextAction(targetState);
+  const prNumber = parsePositiveInt(getArg(args, "--pr-number", undefined, CLI_ARG_OPTIONS), "--pr-number");
+  const headSha = getArg(args, "--head-sha", undefined, CLI_ARG_OPTIONS);
+  const rounds = parsePositiveInt(getArg(args, "--rounds", undefined, CLI_ARG_OPTIONS), "--rounds");
+  const verdict = getArg(args, "--verdict", undefined, CLI_ARG_OPTIONS);
+  const lastReviewedSha = getArg(args, "--last-reviewed-sha", undefined, CLI_ARG_OPTIONS);
+  const maxRounds = parsePositiveInt(getArg(args, "--max-rounds", undefined, CLI_ARG_OPTIONS), "--max-rounds");
+  const repeatedIssueCount = parsePositiveInt(getArg(args, "--repeated-issue-count", undefined, CLI_ARG_OPTIONS), "--repeated-issue-count");
 
   let updated = updateManifestState(data, targetState, nextAction);
 
@@ -167,14 +168,14 @@ function main() {
     rounds: updated.review?.rounds ?? null,
     verdict: updated.review?.latest_verdict || null,
     lastReviewedSha: updated.review?.last_reviewed_sha || null,
-    dryRun: hasFlag(args, "--dry-run"),
+    dryRun: hasCliFlag("--dry-run"),
   };
 
-  if (!hasFlag(args, "--dry-run")) {
+  if (!hasCliFlag("--dry-run")) {
     writeManifest(manifestPath, updated, body);
   }
 
-  if (hasFlag(args, "--json")) {
+  if (hasCliFlag("--json")) {
     console.log(JSON.stringify(result, null, 2));
   } else {
     console.log(`Updated relay manifest: ${manifestPath}`);

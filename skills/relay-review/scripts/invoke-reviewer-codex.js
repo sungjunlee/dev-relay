@@ -8,19 +8,28 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const { REVIEWER_VERDICT_JSON_SCHEMA } = require("./review-schema");
-const { getArg: sharedGetArg, hasFlag: sharedHasFlag } = require("../../relay-dispatch/scripts/cli-args");
+const {
+  getArg: sharedGetArg,
+  hasFlag: sharedHasFlag,
+  modeLabel,
+} = require("../../relay-dispatch/scripts/cli-args");
 const { summarizeFailure, ensureJsonText } = require("./reviewer-helpers");
 
 const args = process.argv.slice(2);
 const KNOWN_FLAGS = ["--repo", "--prompt-file", "--model", "--json", "--help", "-h"];
+const CLI_ARG_OPTIONS = { commandName: "invoke-reviewer-codex", reservedFlags: KNOWN_FLAGS };
+const getArg = (flag, fallback) => sharedGetArg(args, flag, fallback, CLI_ARG_OPTIONS);
+const hasFlag = (flag) => sharedHasFlag(args, flag, CLI_ARG_OPTIONS);
 
-if (!args.length || args.includes("--help") || args.includes("-h")) {
+if (!args.length || hasFlag(["--help", "-h"])) {
   console.log("Usage: invoke-reviewer-codex.js --repo <path> --prompt-file <path> [--model <name>] [--json]");
-  process.exit(args.includes("--help") || args.includes("-h") ? 0 : 1);
+  console.log("\nOptions:");
+  console.log(`  --repo <path>        ${modeLabel("--repo")} Repository root`);
+  console.log(`  --prompt-file <path> ${modeLabel("--prompt-file")} Prompt bundle path`);
+  console.log(`  --model <name>       ${modeLabel("--model")} Model override`);
+  console.log(`  --json               ${modeLabel("--json")} Output JSON`);
+  process.exit(hasFlag(["--help", "-h"]) ? 0 : 1);
 }
-
-const getArg = (flag, fallback) => sharedGetArg(args, flag, fallback, { reservedFlags: KNOWN_FLAGS });
-const hasFlag = (flag) => sharedHasFlag(args, flag);
 
 function readNonEmptyFile(filePath) {
   if (!fs.existsSync(filePath)) return null;

@@ -2390,7 +2390,7 @@ test("dispatch writes execution evidence for no-op runs with the stable start he
   assert.match(evidence.test_result_hash, /^[0-9a-f]{64}$/);
 });
 
-test("dispatch writes execution evidence with an explicitly empty test command verbatim", () => {
+test("dispatch rejects blank test-command values before writing execution evidence", () => {
   const fixture = setupRepoWithOrigin();
   const env = createPushPrTestEnv({
     relayHome: fixture.relayHome,
@@ -2400,17 +2400,14 @@ test("dispatch writes execution evidence with an explicitly empty test command v
     },
   });
 
-  const result = JSON.parse(runDispatch(fixture.repoRoot, [
-    "-b", "issue-261-empty-test-command",
-    "--prompt", "record empty execution evidence",
-    "--test-command", "",
-    "--json",
-  ], env.env));
-  const evidence = readExecutionEvidence(result.runDir);
-
-  assert.equal(result.status, "completed");
-  assert.equal(evidence.head_sha, result.headSha);
-  assert.equal(evidence.test_command, "");
+  for (const blankValue of ["", "   "]) {
+    assert.throws(() => runDispatch(fixture.repoRoot, [
+      "-b", "issue-261-empty-test-command",
+      "--prompt", "record empty execution evidence",
+      "--test-command", blankValue,
+      "--json",
+    ], env.env), /--test-command requires a non-empty value/);
+  }
 });
 
 test("dispatch writes execution evidence with a flag-like test command verbatim", () => {

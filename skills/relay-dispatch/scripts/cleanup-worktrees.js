@@ -23,11 +23,13 @@ const {
   readManifest,
   writeManifest,
 } = require("./manifest/store");
-const { getArg, hasFlag } = require("./cli-args");
+const { getArg, hasFlag, modeLabel } = require("./cli-args");
 const { appendRunEvent } = require("./relay-events");
 const { safeFormatRunId } = require("./relay-resolver");
 
 const args = process.argv.slice(2);
+const CLI_ARG_OPTIONS = { commandName: "cleanup-worktrees" };
+const hasCliFlag = (flag) => hasFlag(args, flag, CLI_ARG_OPTIONS);
 
 function parseHours(value, label) {
   const parsed = Number(value);
@@ -37,25 +39,25 @@ function parseHours(value, label) {
   return parsed;
 }
 
-if (hasFlag(args, ["--help", "-h"])) {
+if (hasCliFlag(["--help", "-h"])) {
   console.log("Usage: cleanup-worktrees.js [options]");
   console.log("\nManifest-aware relay janitor for stale worktrees.");
   console.log("\nOptions:");
-  console.log("  --repo <path>          Repository root (default: .)");
-  console.log("  --older-than <hours>   Only consider runs older than N hours (default: 24)");
-  console.log("  --all                  Ignore age threshold");
-  console.log("  --dry-run              Show what would be cleaned without writing");
-  console.log("  --json                 Output as JSON");
+  console.log(`  --repo <path>          ${modeLabel("--repo")} Repository root (default: .)`);
+  console.log(`  --older-than <hours>   ${modeLabel("--older-than")} Only consider runs older than N hours (default: 24)`);
+  console.log(`  --all                  ${modeLabel("--all")} Ignore age threshold`);
+  console.log(`  --dry-run              ${modeLabel("--dry-run")} Show what would be cleaned without writing`);
+  console.log(`  --json                 ${modeLabel("--json")} Output as JSON`);
   process.exit(0);
 }
 
 function run() {
-  const repoRoot = path.resolve(getArg(args, "--repo", "."));
-  const dryRun = hasFlag(args, "--dry-run");
-  const all = hasFlag(args, "--all");
-  const jsonOut = hasFlag(args, "--json");
+  const repoRoot = path.resolve(getArg(args, "--repo", ".", CLI_ARG_OPTIONS));
+  const dryRun = hasCliFlag("--dry-run");
+  const all = hasCliFlag("--all");
+  const jsonOut = hasCliFlag("--json");
   const gitBin = process.env.RELAY_GIT_BIN || "git";
-  const olderThanHours = all ? 0 : parseHours(getArg(args, "--older-than", "24"), "--older-than");
+  const olderThanHours = all ? 0 : parseHours(getArg(args, "--older-than", "24", CLI_ARG_OPTIONS), "--older-than");
   const now = Date.now();
   const cutoff = now - olderThanHours * 60 * 60 * 1000;
 

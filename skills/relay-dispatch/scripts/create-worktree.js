@@ -37,7 +37,7 @@ const {
   formatPlan,
   registerWorktree,
 } = require("./worktree-runtime");
-const { getArg, hasFlag } = require("./cli-args");
+const { getArg, getPositionals, hasFlag, modeLabel } = require("./cli-args");
 
 // ---------------------------------------------------------------------------
 // Args
@@ -48,7 +48,10 @@ const KNOWN_FLAGS = [
   "--branch", "-b", "--title", "-t", "--topic", "--worktree-path", "--copy",
   "--pin", "--register", "--dry-run", "--json", "--help", "-h",
 ];
-if (!args.length || args.includes("--help") || args.includes("-h")) {
+const CLI_ARG_OPTIONS = { commandName: "create-worktree", reservedFlags: KNOWN_FLAGS };
+const hasCliFlag = (flag) => hasFlag(args, flag, CLI_ARG_OPTIONS);
+
+if (!args.length || hasCliFlag(["--help", "-h"])) {
   console.log(
     "Usage: create-worktree.js <repo-path> [--branch <name>] [--title <text>]"
   );
@@ -56,13 +59,22 @@ if (!args.length || args.includes("--help") || args.includes("-h")) {
     "       [--topic <name>] [--worktree-path <path>] [--copy <files>]"
   );
   console.log("       [--pin] [--register] [--dry-run] [--json]");
-  process.exit(args.includes("--help") || args.includes("-h") ? 0 : 1);
+  console.log("\nOptions:");
+  console.log(`  --branch, -b       ${modeLabel("--branch")} Branch name (default: auto from topic)`);
+  console.log(`  --title, -t        ${modeLabel("--title")} Thread title in Codex App`);
+  console.log(`  --topic            ${modeLabel("--topic")} Topic slug -> branch becomes codex/<topic>`);
+  console.log(`  --worktree-path    ${modeLabel("--worktree-path")} Register an existing worktree`);
+  console.log(`  --copy             ${modeLabel("--copy")} Additional files to copy`);
+  console.log(`  --pin              ${modeLabel("--pin")} Pin thread to prevent auto-cleanup`);
+  console.log(`  --register         ${modeLabel("--register")} Pre-register in SQLite + global state`);
+  console.log(`  --dry-run          ${modeLabel("--dry-run")} Show plan without executing`);
+  console.log(`  --json             ${modeLabel("--json")} Output as JSON`);
+  process.exit(hasCliFlag(["--help", "-h"]) ? 0 : 1);
 }
 
-const repoPathRaw = args.find((a) => !a.startsWith("-"));
+const repoPathRaw = getPositionals(args, "create-worktree")[0];
 const REPO_PATH = path.resolve(repoPathRaw || ".");
 const PROJECT_NAME = path.basename(REPO_PATH);
-const CLI_ARG_OPTIONS = { reservedFlags: KNOWN_FLAGS };
 const TOPIC = getArg(args, "--topic", undefined, CLI_ARG_OPTIONS);
 const BRANCH = getArg(args, ["--branch", "-b"], TOPIC ? `codex/${TOPIC}` : undefined, CLI_ARG_OPTIONS);
 const TITLE = getArg(
@@ -75,11 +87,11 @@ const WORKTREE_PATH = getArg(args, "--worktree-path", undefined, CLI_ARG_OPTIONS
 const COPY_FILES = getArg(args, "--copy", "", CLI_ARG_OPTIONS)
   .split(",")
   .filter(Boolean);
-const PIN = hasFlag(args, "--pin");
+const PIN = hasCliFlag("--pin");
 // --worktree-path implies --register (the only reason to use it)
-const REGISTER = hasFlag(args, "--register") || !!WORKTREE_PATH;
-const DRY_RUN = hasFlag(args, "--dry-run");
-const JSON_OUT = hasFlag(args, "--json");
+const REGISTER = hasCliFlag("--register") || !!WORKTREE_PATH;
+const DRY_RUN = hasCliFlag("--dry-run");
+const JSON_OUT = hasCliFlag("--json");
 
 // ---------------------------------------------------------------------------
 // Paths

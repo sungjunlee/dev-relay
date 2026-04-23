@@ -16,7 +16,12 @@
 const { execFileSync, spawnSync } = require("child_process");
 const fs = require("fs");
 const path = require("path");
-const { getArg: sharedGetArg, hasFlag: sharedHasFlag } = require("../../relay-dispatch/scripts/cli-args");
+const {
+  getArg: sharedGetArg,
+  getPositionals,
+  hasFlag: sharedHasFlag,
+  modeLabel,
+} = require("../../relay-dispatch/scripts/cli-args");
 
 // ---------------------------------------------------------------------------
 // CLI (only when run directly)
@@ -27,34 +32,21 @@ function parseCli(argv) {
   const KNOWN_FLAGS = [
     "--executor", "-e", "--timeout", "--project-only", "--json", "--help", "-h",
   ];
+  const CLI_ARG_OPTIONS = { commandName: "probe-executor-env", reservedFlags: KNOWN_FLAGS };
+  const getArg = (flags, fallback) => sharedGetArg(args, flags, fallback, CLI_ARG_OPTIONS);
+  const hasFlag = (flag) => sharedHasFlag(args, flag, CLI_ARG_OPTIONS);
 
-  if (!args.length || args.includes("--help") || args.includes("-h")) {
+  if (!args.length || hasFlag(["--help", "-h"])) {
     console.log("Usage: probe-executor-env.js <repo-path> --executor <codex|claude> [options]");
     console.log("\nOptions:");
-    console.log("  --executor, -e   Executor to probe (codex, claude)");
-    console.log("  --timeout        Probe timeout in seconds (default: 30)");
-    console.log("  --project-only   Skip agent probe, only scan project tools");
-    console.log("  --json           Output as JSON");
+    console.log(`  --executor, -e   ${modeLabel("--executor")} Executor to probe (codex, claude)`);
+    console.log(`  --timeout        ${modeLabel("--timeout")} Probe timeout in seconds (default: 30)`);
+    console.log(`  --project-only   ${modeLabel("--project-only")} Skip agent probe, only scan project tools`);
+    console.log(`  --json           ${modeLabel("--json")} Output as JSON`);
     process.exit(0);
   }
 
-  const getArg = (flags, fallback) => sharedGetArg(args, flags, fallback, { reservedFlags: KNOWN_FLAGS });
-  const hasFlag = (flag) => sharedHasFlag(args, flag);
-
-  // Positional repo-path parsing is local to this script — the shared helper
-  // is flag-only. We still use `KNOWN_FLAGS` to walk flag/value pairs so the
-  // first unconsumed non-flag argv slot becomes the repo path.
-  const consumedIndices = new Set();
-  for (let i = 0; i < args.length; i++) {
-    if (KNOWN_FLAGS.includes(args[i]) && !["--project-only", "--json", "--help", "-h"].includes(args[i])) {
-      consumedIndices.add(i);
-      consumedIndices.add(i + 1);
-      i++;
-    } else if (["--project-only", "--json", "--help", "-h"].includes(args[i])) {
-      consumedIndices.add(i);
-    }
-  }
-  const repoPathRaw = args.find((a, i) => !consumedIndices.has(i) && !a.startsWith("-"));
+  const repoPathRaw = getPositionals(args, "probe-executor-env")[0];
 
   return {
     repoPath: path.resolve(repoPathRaw || "."),
