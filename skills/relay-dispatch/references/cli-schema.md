@@ -39,7 +39,78 @@ Defaults belong at the call site, not in the global schema, because the same fla
 
 ## Current Flag Audit
 
-Generated from `formatFlagAuditMarkdown()` in `scripts/cli-schema.js`.
+Generated from `formatFlagAuditMarkdown()` in `scripts/cli-schema.js`. The same table is mirrored in the PR body when the schema changes — see PR #276 for the audit snapshot convention.
+
+<!-- BEGIN formatFlagAuditMarkdown() -->
+| flag | mode | rationale |
+|---|---|---|
+| `--all` | `parsed` | Presence flag; no value is consumed. |
+| `--branch, -b` | `verbatim` | Git branch names are operator-supplied and may legally begin with --. |
+| `--by-acting-reviewer` | `parsed` | Presence flag; no value is consumed. |
+| `--by-actor` | `parsed` | Presence flag; no value is consumed. |
+| `--by-role` | `parsed` | Presence flag; no value is consumed. |
+| `--contract-file` | `verbatim` | Operator-supplied artifact path; keep the literal argv token. |
+| `--copy` | `verbatim` | Operator-supplied file list; keep the literal argv token. |
+| `--diff-file` | `verbatim` | Operator-supplied fixture path; keep the literal argv token. |
+| `--done-criteria-file` | `verbatim` | Operator-supplied anchor path; keep the literal argv token. |
+| `--dry-run` | `parsed` | Presence flag; no value is consumed. |
+| `--executor, -e` | `parsed` | Closed selector; flag-like following tokens should mean the value is missing. |
+| `--force` | `parsed` | Presence flag; no value is consumed. |
+| `--force-finalize-nonready` | `parsed` | Presence flag; no value is consumed. |
+| `--head-sha` | `parsed` | Structured SHA field; flag-like following tokens should mean the value is missing. |
+| `--help, -h` | `parsed` | Presence flag; no value is consumed. |
+| `--issue` | `parsed` | Numeric selector; flag-like following tokens should mean the value is missing. |
+| `--json` | `parsed` | Presence flag; no value is consumed. |
+| `--last-reviewed-sha` | `parsed` | Structured SHA field; flag-like following tokens should mean the value is missing. |
+| `--leaf-id` | `parsed` | Structured relay-intake identifier; flag-like following tokens should mean the value is missing. |
+| `--manifest` | `verbatim` | Operator-supplied manifest path; keep the literal argv token. |
+| `--max-rounds` | `parsed` | Numeric policy field; flag-like following tokens should mean the value is missing. |
+| `--merge-method` | `parsed` | Closed merge selector; flag-like following tokens should mean the value is missing. |
+| `--model-hints` | `parsed` | Structured phase=model spec; flag-like following tokens should mean the value is missing. |
+| `--model, -m` | `parsed` | Model selector; flag-like following tokens should mean the value is missing. |
+| `--next-action` | `verbatim` | Operator-supplied manifest text; keep the literal argv token. |
+| `--no-cleanup` | `parsed` | Presence flag; no value is consumed. |
+| `--no-comment` | `parsed` | Presence flag; no value is consumed. |
+| `--no-issue-close` | `parsed` | Presence flag; no value is consumed. |
+| `--older-than` | `parsed` | Numeric threshold; flag-like following tokens should mean the value is missing. |
+| `--pin` | `parsed` | Presence flag; no value is consumed. |
+| `--post-comment` | `parsed` | Presence flag; no value is consumed. |
+| `--pr` | `parsed` | Numeric PR selector; flag-like following tokens should mean the value is missing. |
+| `--pr-number` | `parsed` | Numeric manifest field; flag-like following tokens should mean the value is missing. |
+| `--prepare-only` | `parsed` | Presence flag; no value is consumed. |
+| `--print` | `parsed` | Presence flag; no value is consumed. |
+| `--project-only` | `parsed` | Presence flag; no value is consumed. |
+| `--prompt-file` | `verbatim` | Operator-supplied prompt path; keep the literal argv token. |
+| `--prompt, -p` | `verbatim` | Operator-supplied prompt text; keep the literal argv token. |
+| `--reason` | `verbatim` | Audit reason text must be recorded exactly and must not be blank. |
+| `--register` | `parsed` | Presence flag; no value is consumed. |
+| `--repeated-issue-count` | `parsed` | Numeric review field; flag-like following tokens should mean the value is missing. |
+| `--repo` | `verbatim` | Operator-supplied repository path; keep the literal argv token. |
+| `--request-id` | `parsed` | Structured relay-intake identifier; flag-like following tokens should mean the value is missing. |
+| `--review-file` | `verbatim` | Operator-supplied verdict path; keep the literal argv token. |
+| `--reviewer` | `parsed` | Reviewer adapter selector; flag-like following tokens should mean the value is missing. |
+| `--reviewer-model` | `parsed` | Reviewer model selector; flag-like following tokens should mean the value is missing. |
+| `--reviewer-script` | `verbatim` | Operator-supplied adapter path; keep the literal argv token. |
+| `--rounds` | `parsed` | Numeric review field; flag-like following tokens should mean the value is missing. |
+| `--rubric-file` | `verbatim` | Operator-supplied rubric path; keep the literal argv token. |
+| `--rubric-grandfathered` | `parsed` | Retired presence flag; no value is consumed. |
+| `--run-id` | `parsed` | Structured relay run identifier; flag-like following tokens should mean the value is missing. |
+| `--runs-dir` | `verbatim` | Operator-supplied runs directory path; keep the literal argv token. |
+| `--sandbox` | `parsed` | Closed sandbox selector; flag-like following tokens should mean the value is missing. |
+| `--skip` | `verbatim` | Audit skip reason must be recorded exactly and must not be blank. |
+| `--skip-merge` | `parsed` | Presence flag; no value is consumed. |
+| `--skip-review` | `verbatim` | Audit skip reason must be recorded exactly and must not be blank. |
+| `--stale-hours` | `parsed` | Numeric threshold; flag-like following tokens should mean the value is missing. |
+| `--state` | `parsed` | Closed manifest state selector; flag-like following tokens should mean the value is missing. |
+| `--test-command` | `verbatim` | Execution evidence must preserve the operator-supplied command token exactly. |
+| `--timeout` | `parsed` | Numeric timeout; flag-like following tokens should mean the value is missing. |
+| `--title, -t` | `verbatim` | Operator-supplied thread title; keep the literal argv token. |
+| `--to` | `parsed` | Closed recovery state selector; flag-like following tokens should mean the value is missing. |
+| `--topic` | `verbatim` | Operator-supplied topic text used to derive a branch; keep the literal argv token. |
+| `--verdict` | `parsed` | Closed review verdict selector; flag-like following tokens should mean the value is missing. |
+| `--window-days` | `parsed` | Numeric scan window; flag-like following tokens should mean the value is missing. |
+| `--worktree-path` | `verbatim` | Operator-supplied worktree path; keep the literal argv token. |
+<!-- END formatFlagAuditMarkdown() -->
 
 | flag | mode | rationale |
 |---|---|---|
