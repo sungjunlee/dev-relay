@@ -18,7 +18,7 @@ function loadFixtureSpec(name) {
   return JSON.parse(fs.readFileSync(path.join(FIXTURES_DIR, `${name}.json`), "utf-8"));
 }
 
-function writeManifest(manifestPath, { prNumber, repeatedIssueCount, omitRepeatedIssueCount }, runId) {
+function writeManifest(manifestPath, { prNumber, repeatedIssueCount, omitRepeatedIssueCount, rounds }, runId) {
   const lines = [
     "---",
     "relay_version: 2",
@@ -26,6 +26,7 @@ function writeManifest(manifestPath, { prNumber, repeatedIssueCount, omitRepeate
     "git:",
     `  pr_number: ${prNumber === null || prNumber === undefined ? "null" : prNumber}`,
     "review:",
+    `  rounds: ${rounds}`,
   ];
 
   if (!omitRepeatedIssueCount) {
@@ -86,7 +87,12 @@ function materializeFixture(name) {
 
     if (run.manifest !== false) {
       const manifestPath = path.join(slugDir, `${run.runId}.md`);
-      writeManifest(manifestPath, run.manifest, run.runId);
+      const roundNumbers = run.rounds.map((round) => round.round);
+      const manifest = {
+        ...run.manifest,
+        rounds: run.manifest.rounds ?? Math.max(...roundNumbers, 0),
+      };
+      writeManifest(manifestPath, manifest, run.runId);
       setIsoMtime(manifestPath, run.latestMtime);
     }
 
@@ -219,6 +225,22 @@ test("analyze-flip-flop-pattern classifies missing verdict-file round gaps as da
   assert.deepEqual(run.flipFactors, []);
 });
 
+test("analyze-flip-flop-pattern classifies terminal missing manifest rounds as data_gap", () => {
+  const fixture = materializeFixture("corner-cases");
+  const summary = analyzeRuns({
+    now: fixture.now,
+    runsDir: fixture.runsDir,
+    windowDays: 30,
+  });
+
+  const run = findRun(summary, "issue-404-20260422040404040-ddeeffaa");
+  assert.equal(run.bucket, "data_gap");
+  assert.equal(run.dataGapReason, "missing_verdict_round");
+  assert.equal(run.missingVerdictRound, 3);
+  assert.equal(run.roundCount, 3);
+  assert.deepEqual(run.flipFactors, []);
+});
+
 test("analyze-flip-flop-pattern reports mixed flip and stable factors without inventing stable-factor flips", () => {
   const fixture = materializeFixture("corner-cases");
   const summary = analyzeRuns({
@@ -260,7 +282,7 @@ test("analyze-flip-flop-pattern renderReport emits the required headings and per
   assert.match(report, /## Flip-flop classification/);
   assert.match(report, /## Decision metric/);
   assert.match(report, /## Per-run breakdown/);
-  assert.match(report, /progressive \/ \(progressive \+ thrash\) = \*\*66\.7%\*\*/);
+  assert.match(report, /progressive \/ \(progressive \+ thrash\) = \*\*67%\*\*/);
   assert.match(report, /\*\*Recommendation\*\*: `>=20% -> proceed to Phase B`/);
 });
 

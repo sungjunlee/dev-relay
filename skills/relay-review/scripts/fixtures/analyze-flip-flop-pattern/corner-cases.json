@@ -90,6 +90,30 @@
           ]
         }
       ]
+    },
+    {
+      "slug": "epsilon-55555555",
+      "runId": "issue-404-20260422040404040-ddeeffaa",
+      "latestMtime": "2026-04-22T13:00:00.000Z",
+      "manifest": {
+        "prNumber": 404,
+        "repeatedIssueCount": 0,
+        "rounds": 3
+      },
+      "rounds": [
+        {
+          "round": 1,
+          "rubricScores": [
+            ["Behavior", "pass"]
+          ]
+        },
+        {
+          "round": 2,
+          "rubricScores": [
+            ["Behavior", "fail"]
+          ]
+        }
+      ]
     }
   ]
 }

@@ -12,8 +12,8 @@
  * - no_flip_flop: no factor shows >=2 pass/fail transitions inside any
  *   3-round sliding window
  * - data_gap: the run cannot be classified confidently because required input
- *   is missing or invalid (for example missing manifest, invalid verdict JSON,
- *   or missing review.repeated_issue_count)
+ *   is missing or invalid (for example missing manifest, missing verdict round,
+ *   invalid verdict JSON, or missing review.repeated_issue_count)
  *
  * Decision gate: if progressive / (progressive + thrash) >= 20%, Phase B is
  * worth building. Otherwise deprioritize. Context: issue #270.
@@ -253,11 +253,29 @@ function loadVerdictRounds(verdictPaths) {
   return { errors, rounds };
 }
 
-function findVerdictRoundGap(verdictPaths) {
+function getRecordedReviewRoundCount(manifestRecord, expectedRunId) {
+  if (!manifestRecord || manifestRecord.error) return null;
+  if (manifestRecord.data?.run_id && manifestRecord.data.run_id !== expectedRunId) return null;
+
+  const rounds = manifestRecord.data?.review?.rounds;
+  if (rounds === undefined || rounds === null) return null;
+  if (!Number.isInteger(Number(rounds)) || Number(rounds) < 0) return null;
+  return Number(rounds);
+}
+
+function findVerdictRoundGap(verdictPaths, expectedRoundCount = null) {
   const rounds = verdictPaths
     .map((verdictPath) => extractRoundNumber(path.basename(verdictPath)))
     .filter((round) => Number.isInteger(round))
     .sort((left, right) => left - right);
+
+  if (expectedRoundCount !== null && expectedRoundCount !== undefined) {
+    const roundSet = new Set(rounds);
+    for (let round = 1; round <= expectedRoundCount; round += 1) {
+      if (!roundSet.has(round)) return round;
+    }
+    return null;
+  }
 
   if (rounds.length < 2) return null;
   if (rounds[0] !== 1) return 1;
@@ -393,7 +411,11 @@ function resolveManifestData(manifestRecord, expectedRunId) {
 }
 
 function classifyRun(candidate) {
-  const missingVerdictRound = findVerdictRoundGap(candidate.verdictPaths);
+  const recordedRoundCount = candidate.recordedRoundCount ?? getRecordedReviewRoundCount(
+    candidate.manifestRecord,
+    candidate.runId
+  );
+  const missingVerdictRound = findVerdictRoundGap(candidate.verdictPaths, recordedRoundCount);
   const verdictLoad = loadVerdictRounds(candidate.verdictPaths);
   const manifest = resolveManifestData(candidate.manifestRecord, candidate.runId);
   const flipFactors = missingVerdictRound || verdictLoad.errors.length > 0
@@ -424,7 +446,7 @@ function classifyRun(candidate) {
     manifestPath: candidate.manifestRecord?.manifestPath || null,
     prNumber: manifest.manifestData?.git?.pr_number ?? null,
     repeatedIssueCount: manifest.repeatedIssueCount,
-    roundCount: candidate.verdictPaths.length,
+    roundCount: recordedRoundCount ?? candidate.verdictPaths.length,
     missingVerdictRound,
     runDir: candidate.runDir,
     runId: candidate.runId,
@@ -443,8 +465,7 @@ function countBySlug(records) {
 
 function formatPercentage(value) {
   if (value === null || value === undefined) return "n/a";
-  const rounded = Math.round(value * 10) / 10;
-  return Number.isInteger(rounded) ? `${rounded}` : `${rounded.toFixed(1)}`;
+  return `${Math.round(value)}`;
 }
 
 function summarizeDecisionMetric(classificationCounts) {
@@ -492,9 +513,12 @@ function analyzeRuns({ now = new Date(), runsDir = getRunsBase(), windowDays = D
       if (latestMtimeMs < windowStartMs) continue;
 
       const verdictPaths = listVerdictFiles(runDir);
+      const manifestRecord = manifestIndex.get(runId) || null;
+      const recordedRoundCount = getRecordedReviewRoundCount(manifestRecord, runId);
       const candidate = {
         latestMtimeMs,
-        manifestRecord: manifestIndex.get(runId) || null,
+        manifestRecord,
+        recordedRoundCount,
         runDir,
         runId,
         slug,
@@ -502,7 +526,7 @@ function analyzeRuns({ now = new Date(), runsDir = getRunsBase(), windowDays = D
       };
 
       recentRuns.push(candidate);
-      if (verdictPaths.length < 2) continue;
+      if ((recordedRoundCount ?? verdictPaths.length) < 2) continue;
       inScopeRuns.push(classifyRun(candidate));
     }
   }
