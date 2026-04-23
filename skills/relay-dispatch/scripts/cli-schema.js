@@ -16,6 +16,7 @@ const VALUE = "value";
 
 const FLAGS = [
   { flag: "--all", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Presence flag; no value is consumed." },
+  { flag: "--artifact-path", kind: VALUE, mode: MODE_VERBATIM, valueName: "<path>", rationale: "Operator-supplied artifact path being reconciled; keep the literal argv token." },
   { flag: "--branch", aliases: ["-b"], kind: VALUE, mode: MODE_VERBATIM, valueName: "<name>", rationale: "Git branch names are operator-supplied and may legally begin with --." },
   { flag: "--by-acting-reviewer", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Presence flag; no value is consumed." },
   { flag: "--by-actor", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Presence flag; no value is consumed." },
@@ -81,6 +82,7 @@ const FLAGS = [
   { flag: "--verdict", kind: VALUE, mode: MODE_PARSED, valueName: "<name>", rationale: "Closed review verdict selector; flag-like following tokens should mean the value is missing." },
   { flag: "--window-days", kind: VALUE, mode: MODE_PARSED, valueName: "<N>", rationale: "Numeric scan window; flag-like following tokens should mean the value is missing." },
   { flag: "--worktree-path", kind: VALUE, mode: MODE_VERBATIM, valueName: "<path>", rationale: "Operator-supplied worktree path; keep the literal argv token." },
+  { flag: "--writer-pr", kind: VALUE, mode: MODE_PARSED, valueName: "<number>", rationale: "Numeric PR selector for the writer PR; flag-like following tokens should mean the value is missing." },
 ];
 
 const COMMAND_FLAGS = {
@@ -125,6 +127,11 @@ const COMMAND_FLAGS = {
   ],
   "recover-state": [
     "--repo", "--run-id", "--manifest", "--to", "--reason", "--force", "--dry-run", "--json", "--help",
+  ],
+  "relay-reconcile-artifact": [
+    "--repo", "--run-id", "--manifest", "--branch", "--pr",
+    "--artifact-path", "--writer-pr", "--reason", "--skip-review",
+    "--json", "--help",
   ],
   "reliability-report": [
     "--repo", "--stale-hours", "--json", "--by-actor", "--by-role", "--by-acting-reviewer", "--help",

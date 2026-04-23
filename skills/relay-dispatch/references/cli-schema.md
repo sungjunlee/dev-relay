@@ -45,6 +45,7 @@ Generated from `formatFlagAuditMarkdown()` in `scripts/cli-schema.js`. The same 
 | flag | mode | rationale |
 |---|---|---|
 | `--all` | `parsed` | Presence flag; no value is consumed. |
+| `--artifact-path` | `verbatim` | Operator-supplied artifact path being reconciled; keep the literal argv token. |
 | `--branch, -b` | `verbatim` | Git branch names are operator-supplied and may legally begin with --. |
 | `--by-acting-reviewer` | `parsed` | Presence flag; no value is consumed. |
 | `--by-actor` | `parsed` | Presence flag; no value is consumed. |
@@ -110,6 +111,7 @@ Generated from `formatFlagAuditMarkdown()` in `scripts/cli-schema.js`. The same 
 | `--verdict` | `parsed` | Closed review verdict selector; flag-like following tokens should mean the value is missing. |
 | `--window-days` | `parsed` | Numeric scan window; flag-like following tokens should mean the value is missing. |
 | `--worktree-path` | `verbatim` | Operator-supplied worktree path; keep the literal argv token. |
+| `--writer-pr` | `parsed` | Numeric PR selector for the writer PR; flag-like following tokens should mean the value is missing. |
 <!-- END formatFlagAuditMarkdown() -->
 
 | flag | mode | rationale |
