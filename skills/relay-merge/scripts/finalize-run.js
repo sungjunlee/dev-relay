@@ -64,6 +64,7 @@ const KNOWN_FLAGS = [
   "--force-finalize-nonready", "--reason",
   "--skip-merge", "--no-issue-close", "--dry-run", "--json", "--help", "-h",
 ];
+const LEGACY_BOOTSTRAP_REASON_PREFIX = /^\s*bootstrap:/i;
 
 if (!args.length || args.includes("--help") || args.includes("-h")) {
   console.log("Usage: finalize-run.js (--repo <path> --run-id <id> | --repo <path> --pr <number> | --manifest <path>) [options]");
@@ -96,6 +97,10 @@ function parsePositiveInt(value, label) {
     throw new Error(`${label} must be a positive integer`);
   }
   return parsed;
+}
+
+function hasLegacyBootstrapReasonPrefix(reason) {
+  return LEGACY_BOOTSTRAP_REASON_PREFIX.exec(String(reason || "")) !== null;
 }
 
 function gh(ghBin, repoPath, ...ghArgs) {
@@ -266,6 +271,12 @@ function main() {
   const gitBin = process.env.RELAY_GIT_BIN || "git";
   if (forceFinalizeNonready && !String(forceFinalizeReason || "").trim()) {
     throw new Error("--force-finalize-nonready requires --reason <non-empty-text>");
+  }
+  if (forceFinalizeNonready && hasLegacyBootstrapReasonPrefix(forceFinalizeReason)) {
+    console.error(
+      "Warning: bootstrap-prefixed --force-finalize-nonready reasons are deprecated. " +
+      "Use relay-reconcile-artifact --artifact-path <path> --writer-pr <pr> --reason <reason>."
+    );
   }
 
   let branch = getArg("--branch");

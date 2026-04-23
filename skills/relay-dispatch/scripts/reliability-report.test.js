@@ -44,6 +44,7 @@ function writeRun(repoRoot, {
   reviewer = "codex",
   lastReviewer = null,
   lastReviewedSha = null,
+  bootstrapExempt = null,
 }) {
   initGitRepo(repoRoot);
   const manifestPath = ensureRunLayout(repoRoot, runId).manifestPath;
@@ -73,6 +74,9 @@ function writeRun(repoRoot, {
   manifest.review.rounds = rounds;
   manifest.review.last_reviewer = lastReviewer;
   manifest.review.last_reviewed_sha = lastReviewedSha;
+  if (bootstrapExempt) {
+    manifest.bootstrap_exempt = bootstrapExempt;
+  }
   manifest.timestamps.created_at = updatedAt;
   manifest.timestamps.updated_at = updatedAt;
   writeManifest(manifestPath, manifest);
@@ -97,6 +101,12 @@ test("reliability-report derives the core scorecard from manifests and events", 
     state: STATES.MERGED,
     rounds: 4,
     updatedAt: recentTs,
+    bootstrapExempt: {
+      enabled: true,
+      artifact_path: "execution-evidence.json",
+      writer_pr: 267,
+      reason: "run predates artifact writer",
+    },
   });
   writeRun(repoRoot, {
     runId: runStaleOpen,
@@ -155,6 +165,7 @@ test("reliability-report derives the core scorecard from manifests and events", 
   assert.equal(report.metrics.max_rounds_enforcement_rate, 1);
   assert.equal(report.metrics.median_rounds_to_ready, 3);
   assert.equal(report.metrics.stale_open_runs_72h, 1);
+  assert.equal(report.bootstrap_exempt_runs, 1);
 });
 
 test("reliability-report aggregates model_per_phase from dispatch and review events", () => {

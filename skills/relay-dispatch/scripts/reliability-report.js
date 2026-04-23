@@ -457,6 +457,7 @@ function buildReport({ repoRoot, staleHours, now, manifests, events }) {
   return {
     repoRoot,
     staleHours,
+    bootstrap_exempt_runs: manifests.filter(({ data }) => data?.bootstrap_exempt?.enabled === true).length,
     totals: {
       manifests: manifests.length,
       events: events.length,

@@ -1,6 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { execFileSync } = require("child_process");
+const { execFileSync, spawnSync } = require("child_process");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
@@ -372,6 +372,36 @@ function execFinalize(fixture, {
   };
 }
 
+function spawnForceFinalize(fixture, reason) {
+  const logPath = path.join(fixture.repoRoot, "gh.log");
+  const fakeGh = writeFakeGh(logPath, {
+    comments: [],
+    commits: [
+      {
+        oid: fixture.headSha,
+        committedDate: DEFAULT_COMMIT_DATE,
+      },
+    ],
+  });
+
+  const result = spawnSync("node", [
+    SCRIPT,
+    "--repo", fixture.repoRoot,
+    "--branch", fixture.branch,
+    "--pr", "123",
+    "--force-finalize-nonready",
+    "--reason", reason,
+    "--json",
+  ], {
+    cwd: fixture.repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+    env: { ...process.env, RELAY_GH_BIN: fakeGh },
+  });
+
+  return { ...fixture, logPath, result };
+}
+
 test("finalize-run force-finalize merges an escalated run with an auditable event trail", () => {
   const fixture = setupRepo({ manifestState: STATES.ESCALATED });
   const forceReason = "reviewer-swap exhausted, diff clean per manual inspection";
@@ -391,6 +421,7 @@ test("finalize-run force-finalize merges an escalated run with an auditable even
   assert.equal(forceEvent?.state_to, STATES.MERGED);
   assert.equal(forceEvent?.reason, forceReason);
   assert.equal(forceEvent?.pr_number, 123);
+  assert.equal("bootstrap_exempt" in forceEvent, false);
   assert.equal(forceEvent?.last_reviewed_sha, headSha);
   assert.equal(forceEvent?.head_sha, headSha);
   assert.equal(mergeEvent?.state_to, STATES.MERGED);
@@ -402,6 +433,27 @@ test("finalize-run force-finalize merges an escalated run with an auditable even
   assert.equal(branchExists(repoRoot, branch), false);
   assert.equal(remoteBranchExists(repoRoot, branch), false);
   assert.match(fs.readFileSync(logPath, "utf-8"), /pr merge 123 --squash/);
+});
+
+test("finalize-run warns but succeeds for legacy bootstrap-prefixed force-finalize reasons", () => {
+  const fixture = setupRepo({ manifestState: STATES.ESCALATED });
+  const { result } = spawnForceFinalize(fixture, "Bootstrap: this PR introduces the writer");
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stderr, /relay-reconcile-artifact/);
+  const parsed = JSON.parse(result.stdout);
+  assert.equal(parsed.state, STATES.MERGED);
+  assert.equal(readManifest(fixture.manifestPath).data.state, STATES.MERGED);
+});
+
+test("finalize-run does not warn for non-bootstrap force-finalize reasons", () => {
+  const fixture = setupRepo({ manifestState: STATES.ESCALATED });
+  const { result } = spawnForceFinalize(fixture, "operator override after manual review");
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.doesNotMatch(result.stderr, /relay-reconcile-artifact/);
+  const parsed = JSON.parse(result.stdout);
+  assert.equal(parsed.state, STATES.MERGED);
 });
 
 for (const sourceState of [

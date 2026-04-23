@@ -119,6 +119,13 @@ cleanup:
 timestamps:
   created_at: "2026-04-03T12:00:00.000Z"
   updated_at: "2026-04-03T13:30:00.000Z"
+
+# Optional; present only when relay-reconcile-artifact is used.
+bootstrap_exempt:
+  enabled: true
+  artifact_path: ~/.relay/runs/project-abcd1234/issue-42-20260403120000000/execution-evidence.json
+  writer_pr: 267
+  reason: "this run predates the artifact writer"
 ---
 
 # Notes
@@ -139,10 +146,34 @@ timestamps:
 | `anchor.*` | Immutable review scope — prevents drift across rounds |
 | `review.last_reviewed_sha` | Gate-check blocks merge if HEAD has advanced past this |
 | `review.last_reviewer` | Tracks the acting reviewer for the latest round without mutating `roles.reviewer`; analytics must still use `review_apply.reviewer` as the round-level source of truth |
+| `bootstrap_exempt.*` | Optional operator-declared reconciliation for runs that predate an artifact writer but are closed after that writer lands |
+
+### Bootstrap exemptions
+
+`bootstrap_exempt` is absent for normal runs. It is populated only by `relay-reconcile-artifact`, which exists for bootstrap cases where a run cannot satisfy a newly introduced artifact requirement because the run itself produced that writer.
+
+Shape:
+
+```yaml
+bootstrap_exempt:
+  enabled: true
+  artifact_path: <path to the reconciled artifact contract>
+  writer_pr: <pull request number that introduced the writer>
+  reason: <operator audit reason>
+```
+
+Semantics:
+
+- `enabled: true` marks the run as a structured bootstrap exemption; analytics must count this field, not reason-string prefixes.
+- `artifact_path` records the artifact contract that the run predates or reconciles.
+- `writer_pr` records the PR that introduced the writer or artifact contract.
+- `reason` remains an operator-readable audit explanation.
+- Re-running `relay-reconcile-artifact` with identical fields against the already merged exempt run is a no-op and does not append another event.
+- Existing manifests without this field remain valid and load as non-exempt runs.
 
 ## Event Journal
 
-Each run keeps an append-only event log at `~/.relay/runs/<repo-slug>/<run-id>/events.jsonl`. Records are emitted by `appendRunEvent()` in `skills/relay-dispatch/scripts/relay-events.js` and share a common envelope (`ts`, `event`, `actor`, `run_id`, `state_from`, `state_to`, `head_sha`, `round`, `reason`) plus optional fields (`reviewer`, `rubric_status`, `last_reviewed_sha`, `model`, `before`, `after`):
+Each run keeps an append-only event log at `~/.relay/runs/<repo-slug>/<run-id>/events.jsonl`. Records are emitted by `appendRunEvent()` in `skills/relay-dispatch/scripts/relay-events.js` and share a common envelope (`ts`, `event`, `actor`, `run_id`, `state_from`, `state_to`, `head_sha`, `round`, `reason`) plus optional fields (`reviewer`, `rubric_status`, `last_reviewed_sha`, `pr_number`, `bootstrap_exempt`, `model`, `before`, `after`):
 
 ```jsonl
 {"ts":"2026-04-18T12:00:00.000Z","event":"dispatch_start","actor":"codex","run_id":"issue-42-20260418120000000","state_from":"draft","state_to":"dispatched","head_sha":"abc123","round":null,"reason":"new_dispatch","model":"gpt-5-codex"}
@@ -163,7 +194,7 @@ Each run keeps an append-only event log at `~/.relay/runs/<repo-slug>/<run-id>/e
 | `state_recovery` | `relay-dispatch/scripts/recover-state.js` |
 | `review_invoke` | `relay-review/scripts/review-runner/reviewer-invoke.js` |
 | `review_apply` | `relay-review/scripts/review-runner.js`, `reviewer-invoke.js` |
-| `pr_number_stamped`, `merge_blocked`, `skip_review`, `merge_finalize`, `cleanup_result` | `relay-merge/scripts/finalize-run.js`, `gate-check.js` |
+| `pr_number_stamped`, `merge_blocked`, `skip_review`, `force_finalize`, `merge_finalize`, `cleanup_result` | `relay-merge/scripts/finalize-run.js`, `relay-reconcile-artifact.js`, `gate-check.js` |
 | `request_persisted`, `proposal_presented`, `question_asked`, `question_answered`, `proposal_accepted`, `proposal_edited`, `relay_ready_handoff_persisted` | `relay-intake/scripts/relay-request.js` |
 
 There is no standalone `state_transition` event — state changes ride on the lifecycle event that caused them (`state_from`/`state_to` fields on `dispatch_start`, `dispatch_result`, `review_apply`, `merge_finalize`, etc.).

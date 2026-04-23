@@ -83,6 +83,18 @@ Audit every use:
 jq 'select(.event == "force_finalize")' ~/.relay/runs/<repo-slug>/<run-id>/events.jsonl
 ```
 
+#### Bootstrap artifact reconciliation
+
+When a run predates an artifact writer that the run itself introduced, use the structured reconciliation command instead of encoding that fact in a force-finalize reason:
+
+```bash
+node ${CLAUDE_SKILL_DIR}/scripts/relay-reconcile-artifact.js --repo . --run-id "$RUN_ID" \
+  --artifact-path "~/.relay/runs/<repo-slug>/<run-id>/execution-evidence.json" \
+  --writer-pr 267 --reason "run predates the artifact writer" --json
+```
+
+This stamps `bootstrap_exempt` in the manifest, emits `force_finalize` with `bootstrap_exempt: true`, and marks the run merged without invoking the PR merge path.
+
 ### 2. Sprint file update (if available)
 
 If `backlog/sprints/` has an active sprint file, update it. If no sprint file exists, skip this step.
