@@ -45,7 +45,9 @@ const FLAGS = [
   { flag: "--no-comment", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Presence flag; no value is consumed." },
   { flag: "--no-issue-close", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Presence flag; no value is consumed." },
   { flag: "--older-than", kind: VALUE, mode: MODE_PARSED, valueName: "<hours>", rationale: "Numeric threshold; flag-like following tokens should mean the value is missing." },
+  { flag: "--out-dir", kind: VALUE, mode: MODE_VERBATIM, valueName: "<path>", rationale: "Operator-supplied output directory path; keep the literal argv token." },
   { flag: "--pin", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Presence flag; no value is consumed." },
+  { flag: "--planner", kind: VALUE, mode: MODE_PARSED, valueName: "<name>", allowedValues: ["codex", "claude"], rationale: "Planner adapter selector; flag-like following tokens should mean the value is missing." },
   { flag: "--post-comment", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Presence flag; no value is consumed." },
   { flag: "--pr", kind: VALUE, mode: MODE_PARSED, valueName: "<number>", rationale: "Numeric PR selector; flag-like following tokens should mean the value is missing." },
   { flag: "--pr-body-file", kind: VALUE, mode: MODE_VERBATIM, valueName: "<path>", rationale: "Operator-supplied PR body path; keep the literal argv token." },
@@ -123,6 +125,9 @@ const COMMAND_FLAGS = {
   ],
   "invoke-reviewer-codex": [
     "--repo", "--prompt-file", "--model", "--json", "--help",
+  ],
+  "plan-runner": [
+    "--issue", "--planner", "--repo", "--runs-dir", "--out-dir", "--json", "--help",
   ],
   "persist-request": [
     "--repo", "--contract-file", "--json", "--help",
