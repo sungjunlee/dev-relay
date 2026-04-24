@@ -57,6 +57,9 @@ const FLAGS = [
   { flag: "--prompt", aliases: ["-p"], kind: VALUE, mode: MODE_VERBATIM, valueName: "<text>", rationale: "Operator-supplied prompt text; keep the literal argv token." },
   { flag: "--prompt-file", kind: VALUE, mode: MODE_VERBATIM, valueName: "<path>", rationale: "Operator-supplied prompt path; keep the literal argv token." },
   { flag: "--reason", kind: VALUE, mode: MODE_VERBATIM, valueName: "<text>", rationale: "Audit reason text must be recorded exactly and must not be blank." },
+  { flag: "--reasoning", kind: VALUE, mode: MODE_PARSED, valueName: "<level>",
+    allowedValues: ["none", "minimal", "low", "medium", "high", "xhigh"],
+    rationale: "Codex reasoning_effort override; closed selector over codex CLI levels." },
   { flag: "--register", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Presence flag; no value is consumed." },
   { flag: "--repeated-issue-count", kind: VALUE, mode: MODE_PARSED, valueName: "<n>", rationale: "Numeric review field; flag-like following tokens should mean the value is missing." },
   { flag: "--repo", kind: VALUE, mode: MODE_VERBATIM, valueName: "<path>", rationale: "Operator-supplied repository path; keep the literal argv token." },
@@ -103,7 +106,7 @@ const COMMAND_FLAGS = {
   ],
   dispatch: [
     "--branch", "--run-id", "--manifest", "--prompt", "--prompt-file", "--executor",
-    "--model", "--model-hints", "--sandbox", "--copy", "--timeout", "--rubric-file",
+    "--model", "--model-hints", "--sandbox", "--copy", "--timeout", "--reasoning", "--rubric-file",
     "--test-command", "--rubric-grandfathered", "--request-id", "--leaf-id",
     "--done-criteria-file", "--register", "--no-cleanup", "--dry-run", "--json", "--help",
   ],
