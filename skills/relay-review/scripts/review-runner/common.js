@@ -3,10 +3,15 @@ const fs = require("fs");
 const path = require("path");
 
 function gh(repoPath, ...ghArgs) {
+  const lastArg = ghArgs.at(-1);
+  const options = lastArg && typeof lastArg === "object" && !Array.isArray(lastArg)
+    ? ghArgs.pop()
+    : {};
   return execFileSync("gh", ghArgs, {
     cwd: repoPath,
     encoding: "utf-8",
     stdio: "pipe",
+    ...(options.timeout ? { timeout: options.timeout } : {}),
   });
 }
 
