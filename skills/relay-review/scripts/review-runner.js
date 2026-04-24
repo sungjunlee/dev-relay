@@ -37,6 +37,7 @@ const {
   toEscalatedVerdict,
 } = require("./review-runner/redispatch");
 const { applyPolicyViolationToManifest, applyVerdictToManifest } = require("./review-runner/manifest-apply");
+const { writePrBodySnapshot } = require("./review-runner/pr-body-snapshot");
 const { loadReviewText, resolveReviewerName, resolveReviewerScript } = require("./review-runner/reviewer-invoke");
 const { maybeSwapReviewer } = require("./review-runner/reviewer-swap");
 const {
@@ -46,12 +47,7 @@ const {
 } = require("../../relay-dispatch/scripts/cli-args");
 
 const args = process.argv.slice(2);
-const KNOWN_FLAGS = [
-  "--repo", "--run-id", "--branch", "--pr", "--manifest", "--done-criteria-file",
-  "--diff-file", "--review-file", "--reviewer", "--reviewer-script",
-  "--reviewer-model", "--prepare-only", "--no-comment",
-  "--json", "--help", "-h",
-];
+const KNOWN_FLAGS = ["--repo", "--run-id", "--branch", "--pr", "--manifest", "--done-criteria-file", "--diff-file", "--review-file", "--reviewer", "--reviewer-script", "--reviewer-model", "--prepare-only", "--no-comment", "--json", "--help", "-h"];
 const CLI_ARG_OPTIONS = { commandName: "review-runner", reservedFlags: KNOWN_FLAGS };
 const getArg = (flag, fallback) => sharedGetArg(args, flag, fallback, CLI_ARG_OPTIONS);
 const hasFlag = (flag) => sharedHasFlag(args, flag, CLI_ARG_OPTIONS);
@@ -176,11 +172,13 @@ function run() {
   );
   const diffText = loadDiff(runRepoPath, prNumber, diffFile);
   const rubricLoad = loadRubricFromRunDir(runDir, data);
-  const promptText = buildPrompt({ round, prNumber, branch, issueNumber, doneCriteria, doneCriteriaSource, diffText, reviewRepoPath, runDir, rubricLoad });
 
   const doneCriteriaPath = path.join(runDir, `review-round-${round}-done-criteria.md`);
   const diffPath = path.join(runDir, `review-round-${round}-diff.patch`);
+  const prBodyPath = path.join(runDir, `review-round-${round}-pr-body.md`);
   const promptPath = path.join(runDir, `review-round-${round}-prompt.md`);
+  const prBodySnapshot = writePrBodySnapshot({ repoPath: runRepoPath, runId: data.run_id, round, prNumber, prBodyPath });
+  const promptText = buildPrompt({ round, prNumber, branch, issueNumber, doneCriteria, doneCriteriaSource, diffText, reviewRepoPath, runDir, rubricLoad, prBodyPath, prBodySnapshot });
   writeText(doneCriteriaPath, `${doneCriteria}\n`);
   writeText(diffPath, `${diffText}\n`);
   writeText(promptPath, `${promptText}\n`);
@@ -201,6 +199,8 @@ function run() {
     issueNumber,
     manifestPath,
     nextState: null,
+    prBodyPath,
+    prBodySnapshot,
     prNumber,
     prepareOnly,
     promptPath,
