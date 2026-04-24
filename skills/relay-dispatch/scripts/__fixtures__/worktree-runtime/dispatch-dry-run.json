@@ -11,7 +11,7 @@
   "resultFile": "/tmp/issue187-fixtures/tmp/dispatch-codex-11111111.txt",
   "stdoutLog": "/tmp/issue187-fixtures/tmp/dispatch-codex-11111111.log",
   "stderrLog": "/tmp/issue187-fixtures/tmp/dispatch-codex-11111111.err",
-  "timeout": 1800,
+  "timeout": 2400,
   "cleanupPolicy": "on_close",
   "worktreeinclude": [],
   "rubricFile": "/tmp/issue187-fixtures/rubric.yaml",
