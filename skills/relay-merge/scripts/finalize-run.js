@@ -90,6 +90,11 @@ if (!args.length || helpRequested) {
   console.log(`  --no-issue-close       ${modeLabel("--no-issue-close")} Skip linked issue close`);
   console.log(`  --dry-run              ${modeLabel("--dry-run")} Print what would happen without writing`);
   console.log(`  --json                 ${modeLabel("--json")} Output JSON`);
+  console.log("\nReview-bypass decision tree:");
+  console.log("  State is 'review_pending' + you want to skip review:     --skip-review <reason>");
+  console.log("  State is 'changes_requested' + reviewer-bundle limit:    --force-finalize-nonready --reason <text>");
+  console.log("  State is 'escalated' + dispatch-level failure resolved:  --force-finalize-nonready --reason <text>");
+  console.log("  State is 'ready_to_merge':                               neither - just run finalize-run");
   process.exit(helpRequested ? 0 : 1);
 }
 
