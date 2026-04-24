@@ -24,6 +24,20 @@ const DEFAULT_REVIEW_COMMENT = {
   createdAt: DEFAULT_COMMIT_DATE,
 };
 
+test("finalize-run help includes review-bypass decision tree", () => {
+  const result = spawnSync("node", [SCRIPT, "--help"], {
+    encoding: "utf-8",
+    stdio: "pipe",
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /Review-bypass decision tree/);
+  assert.ok(result.stdout.split(/\r?\n/).some((line) => (
+    line.includes("State is 'review_pending'")
+    && line.includes("--skip-review <reason>")
+  )));
+});
+
 function buildManifestForState(manifest, targetState) {
   switch (targetState) {
     case STATES.DRAFT:
