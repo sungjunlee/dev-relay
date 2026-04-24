@@ -210,6 +210,33 @@ fs.writeFileSync(output, "ok\\n", "utf-8");
   return codexPath;
 }
 
+function writeArgCaptureClaude(binDir, capturePath) {
+  ensureDefaultFakeGh(binDir);
+  const claudePath = path.join(binDir, "claude");
+  fs.writeFileSync(claudePath, `#!/usr/bin/env node
+const fs = require("fs");
+const { execFileSync } = require("child_process");
+const args = process.argv.slice(2);
+if (args[0] === "--version") {
+  process.stdout.write("claude-fake\\n");
+  process.exit(0);
+}
+if (args[0] !== "-p") {
+  process.stderr.write("unsupported fake claude invocation");
+  process.exit(1);
+}
+fs.writeFileSync(${JSON.stringify(capturePath)}, JSON.stringify(args), "utf-8");
+const cwd = process.cwd();
+const fileName = "captured-claude.txt";
+fs.writeFileSync(cwd + "/" + fileName, fileName + "\\n", "utf-8");
+execFileSync("git", ["-C", cwd, "add", fileName], { stdio: "pipe" });
+execFileSync("git", ["-C", cwd, "commit", "-m", "fake " + fileName], { stdio: "pipe" });
+process.stdout.write("ok\\n");
+`, "utf-8");
+  fs.chmodSync(claudePath, 0o755);
+  return claudePath;
+}
+
 function writeNoOpCodex(binDir) {
   ensureDefaultFakeGh(binDir);
   const codexPath = path.join(binDir, "codex");
@@ -995,6 +1022,7 @@ test("dispatch precedence D1 regression: CLI override beats manifest hint in exe
     "--full-auto",
     "--color", "never",
     "-o", result.resultFile,
+    "-c", "model_reasoning_effort=xhigh",
     "-m", "sonnet",
     "--sandbox", "workspace-write",
     buildDispatchExecPrompt(taskPrompt),
@@ -1026,6 +1054,7 @@ test("dispatch precedence D2 regression: CLI override works when manifest hint i
     "--full-auto",
     "--color", "never",
     "-o", result.resultFile,
+    "-c", "model_reasoning_effort=xhigh",
     "-m", "sonnet",
     "--sandbox", "workspace-write",
     buildDispatchExecPrompt(taskPrompt),
@@ -1058,6 +1087,7 @@ test("dispatch precedence D3 regression: manifest hint supplies the effective mo
     "--full-auto",
     "--color", "never",
     "-o", result.resultFile,
+    "-c", "model_reasoning_effort=xhigh",
     "-m", "opus",
     "--sandbox", "workspace-write",
     buildDispatchExecPrompt(taskPrompt),
@@ -1093,6 +1123,7 @@ test("dispatch precedence D4 regression: executor argv stays byte-identical when
     "--full-auto",
     "--color", "never",
     "-o", result.resultFile,
+    "-c", "model_reasoning_effort=xhigh",
     "--sandbox", "workspace-write",
     buildDispatchExecPrompt(taskPrompt),
   ]);
@@ -1100,6 +1131,108 @@ test("dispatch precedence D4 regression: executor argv stays byte-identical when
   const events = readJsonLines(getEventsPath(repoRoot, result.runId));
   const dispatchStart = events.find((event) => event.event === "dispatch_start");
   assert.equal(dispatchStart.model, null);
+});
+
+function writeTempRubric(contents) {
+  const rubricFile = path.join(os.tmpdir(), `relay-rubric-${Date.now()}-${Math.random().toString(16).slice(2)}.yaml`);
+  fs.writeFileSync(rubricFile, contents, "utf-8");
+  return rubricFile;
+}
+
+function reasoningArgValue(args) {
+  const index = args.indexOf("-c");
+  return index === -1 ? null : args[index + 1];
+}
+
+function captureCodexReasoning({ branch, rubricText = null, extraArgs = [] }) {
+  const { repoRoot, relayHome } = setupRepo();
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  const capturePath = path.join(os.tmpdir(), `relay-dispatch-argv-${Date.now()}-${branch}.json`);
+  writeArgCaptureCodex(binDir, capturePath);
+  const env = {
+    ...process.env,
+    PATH: `${binDir}:${process.env.PATH}`,
+    RELAY_HOME: relayHome,
+  };
+  const rubricArgs = [];
+  if (rubricText !== null) {
+    rubricArgs.push("--rubric-file", writeTempRubric(rubricText));
+  }
+  runDispatch(repoRoot, [
+    "-b", branch,
+    "--prompt", `reasoning dispatch ${branch}`,
+    ...rubricArgs,
+    ...extraArgs,
+    "--json",
+  ], env);
+  return JSON.parse(fs.readFileSync(capturePath, "utf-8"));
+}
+
+test("dispatch scales codex reasoning effort by rubric size", () => {
+  for (const [size, expected] of [
+    ["S", "medium"],
+    ["M", "high"],
+    ["L", "xhigh"],
+    ["XL", "xhigh"],
+  ]) {
+    const args = captureCodexReasoning({
+      branch: `issue-reasoning-size-${size.toLowerCase()}`,
+      rubricText: `size: "${size}"\nrubric:\n  factors: []\n`,
+    });
+    assert.equal(reasoningArgValue(args), `model_reasoning_effort=${expected}`);
+  }
+});
+
+test("dispatch --reasoning overrides rubric-size codex reasoning effort", () => {
+  const args = captureCodexReasoning({
+    branch: "issue-reasoning-override",
+    rubricText: "size: \"L\"\nrubric:\n  factors: []\n",
+    extraArgs: ["--reasoning", "low"],
+  });
+  assert.equal(reasoningArgValue(args), "model_reasoning_effort=low");
+});
+
+test("dispatch falls back to xhigh codex reasoning when rubric size is unavailable or unrecognized", () => {
+  const noRubric = captureCodexReasoning({
+    branch: "issue-reasoning-no-rubric",
+  });
+  const noSize = captureCodexReasoning({
+    branch: "issue-reasoning-no-size",
+    rubricText: "rubric:\n  factors: []\n",
+  });
+  const weirdSize = captureCodexReasoning({
+    branch: "issue-reasoning-weird-size",
+    rubricText: "size: \"WEIRD\"\nrubric:\n  factors: []\n",
+  });
+
+  assert.equal(reasoningArgValue(noRubric), "model_reasoning_effort=xhigh");
+  assert.equal(reasoningArgValue(noSize), "model_reasoning_effort=xhigh");
+  assert.equal(reasoningArgValue(weirdSize), "model_reasoning_effort=xhigh");
+});
+
+test("dispatch leaves claude executor argv untouched by rubric-size reasoning", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-claude-bin-"));
+  const capturePath = path.join(os.tmpdir(), `relay-dispatch-argv-${Date.now()}-claude-reasoning.json`);
+  writeArgCaptureClaude(binDir, capturePath);
+  const env = {
+    ...process.env,
+    PATH: `${binDir}:${process.env.PATH}`,
+    RELAY_HOME: relayHome,
+  };
+  const rubricFile = writeTempRubric("size: \"S\"\nrubric:\n  factors: []\n");
+
+  runDispatch(repoRoot, [
+    "-b", "issue-reasoning-claude",
+    "--executor", "claude",
+    "--prompt", "claude reasoning dispatch",
+    "--rubric-file", rubricFile,
+    "--json",
+  ], env);
+
+  const args = JSON.parse(fs.readFileSync(capturePath, "utf-8"));
+  assert.equal(args.includes("-c"), false);
+  assert.equal(args.some((arg) => arg.startsWith("model_reasoning_effort=")), false);
 });
 
 test("dispatch dry-run resolves effective_dispatch_model from model hints and emits zero events", () => {

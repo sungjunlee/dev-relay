@@ -23,6 +23,7 @@
  *   --sandbox <mode>       workspace-write | read-only (default: workspace-write)
  *   --copy <file,...>      Additional files to copy
  *   --timeout <seconds>    Exec timeout (default: 2400 for codex, 1800 for others)
+ *   --reasoning <level>    Codex reasoning effort override (default by rubric size: S=medium, M=high, L/XL=xhigh)
  *   --rubric-file <path>   REQUIRED: copy rubric YAML to run dir (persists for review)
  *   --test-command <cmd>   Record the executor-side test command in execution evidence
  *   --rubric-grandfathered Retired alias; dispatch rejects it
@@ -104,7 +105,7 @@ const args = process.argv.slice(2);
 
 const KNOWN_FLAGS = [
   "--branch", "-b", "--run-id", "--manifest", "--prompt", "-p", "--prompt-file", "--executor", "-e",
-  "--model", "-m", "--model-hints", "--sandbox", "--copy", "--timeout", "--rubric-file", "--test-command", "--rubric-grandfathered",
+  "--model", "-m", "--model-hints", "--sandbox", "--copy", "--timeout", "--reasoning", "--rubric-file", "--test-command", "--rubric-grandfathered",
   "--request-id", "--leaf-id", "--done-criteria-file",
   "--register", "--no-cleanup", "--dry-run", "--json", "--help", "-h",
 ];
@@ -128,6 +129,7 @@ if (!args.length || hasCliFlag(["--help", "-h"])) {
   console.log(`  --sandbox          ${modeLabel("--sandbox")} workspace-write | read-only (default: workspace-write)`);
   console.log(`  --copy <files>     ${modeLabel("--copy")} Additional files to copy (comma-separated)`);
   console.log(`  --timeout          ${modeLabel("--timeout")} Exec timeout in seconds (default: 2400 for codex, 1800 for others)`);
+  console.log(`  --reasoning        ${modeLabel("--reasoning")} Codex reasoning effort (default by rubric size: S=medium, M=high, L/XL=xhigh)`);
   console.log(`  --rubric-file      ${modeLabel("--rubric-file")} REQUIRED: copy rubric YAML to run dir (persists for review)`);
   console.log(`  --test-command     ${modeLabel("--test-command")} Record the executor-side test command in execution evidence`);
   console.log(`  --rubric-grandfathered  ${modeLabel("--rubric-grandfathered")} Retired alias; remove anchor.rubric_grandfathered manually`);
@@ -152,9 +154,11 @@ const PROMPT = getArg(args, ["--prompt", "-p"], undefined, CLI_ARG_OPTIONS);
 const PROMPT_FILE = getArg(args, "--prompt-file", undefined, CLI_ARG_OPTIONS);
 const EXECUTOR = getArg(args, ["--executor", "-e"], "codex", CLI_ARG_OPTIONS);
 const DEFAULT_TIMEOUT_BY_EXECUTOR = { codex: 2400, claude: 1800 };
+const DEFAULT_REASONING_BY_SIZE = { S: "medium", M: "high", L: "xhigh", XL: "xhigh" };
 const defaultTimeout = String(DEFAULT_TIMEOUT_BY_EXECUTOR[EXECUTOR] ?? 1800);
 const MODEL = getArg(args, ["--model", "-m"], undefined, CLI_ARG_OPTIONS);
 const MODEL_HINTS_RAW = getArg(args, "--model-hints", undefined, CLI_ARG_OPTIONS);
+const REASONING_OVERRIDE = getArg(args, "--reasoning", undefined, CLI_ARG_OPTIONS);
 const SANDBOX = getArg(args, "--sandbox", "workspace-write", CLI_ARG_OPTIONS);
 const COPY_FILES = getArg(args, "--copy", "", CLI_ARG_OPTIONS).split(",").filter(Boolean);
 const RUBRIC_FILE = getArg(args, "--rubric-file", undefined, CLI_ARG_OPTIONS);
@@ -508,6 +512,19 @@ function resolveEffectiveDispatchModel({ cliModel, manifestModelHints, cliModelH
   return null;
 }
 
+function extractRubricSize(rubricPath) {
+  if (!rubricPath || !fs.existsSync(rubricPath)) return null;
+  const rubricText = fs.readFileSync(rubricPath, "utf-8");
+  const match = rubricText.match(/^size:\s*["']?([A-Za-z]+)["']?\s*$/m);
+  return match ? match[1].toUpperCase() : null;
+}
+
+function resolveReasoningEffort({ override, rubricPath }) {
+  if (override) return override;
+  const rubricSize = extractRubricSize(rubricPath);
+  return DEFAULT_REASONING_BY_SIZE[rubricSize] || "xhigh";
+}
+
 // ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
@@ -841,6 +858,14 @@ async function main() {
 
   let cmd, execArgs;
   let execCwd;
+  const reasoningRunDir = getRunDir(repoRoot, runId);
+  const rubricPathForReasoning = manifest?.anchor?.rubric_path
+    ? path.join(reasoningRunDir, manifest.anchor.rubric_path)
+    : null;
+  const resolvedReasoningEffort = resolveReasoningEffort({
+    override: REASONING_OVERRIDE,
+    rubricPath: rubricPathForReasoning,
+  });
 
   // Prepend non-interactive directive so the model doesn't wait for approval
   // (e.g. brainstorming HARD-GATE or design-confirmation patterns).
@@ -853,6 +878,7 @@ async function main() {
   if (EXECUTOR === "codex") {
     cmd = "codex";
     execArgs = ["exec", "-C", wtPath, "--full-auto", "--color", "never", "-o", resultFile];
+    execArgs.push("-c", `model_reasoning_effort=${resolvedReasoningEffort}`);
     if (effectiveDispatchModel) execArgs.push("-m", effectiveDispatchModel);
     execArgs.push("--sandbox", SANDBOX);
     execArgs.push(execPrompt);
