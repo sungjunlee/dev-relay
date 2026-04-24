@@ -6,6 +6,7 @@ const path = require("node:path");
 const {
   COMMAND_FLAGS,
   FLAGS,
+  BOOLEAN,
   MODE_PARSED,
   MODE_VERBATIM,
   VALUE,
@@ -121,6 +122,26 @@ test("flag audit markdown enumerates every migrated flag", () => {
   }
 });
 
+test("recover-commit flags are registered with explicit required modes", () => {
+  const definitions = new Map(FLAGS.map((definition) => [definition.flag, definition]));
+  const expected = [
+    ["--reason", VALUE, MODE_VERBATIM],
+    ["--pr-title", VALUE, MODE_VERBATIM],
+    ["--pr-body-file", VALUE, MODE_VERBATIM],
+    ["--manifest", VALUE, MODE_VERBATIM],
+    ["--run-id", VALUE, MODE_PARSED],
+    ["--dry-run", BOOLEAN, MODE_PARSED],
+    ["--json", BOOLEAN, MODE_PARSED],
+    ["--help", BOOLEAN, MODE_PARSED],
+  ];
+
+  for (const [flag, kind, mode] of expected) {
+    assert.ok(COMMAND_FLAGS["recover-commit"].includes(flag), `recover-commit should allow ${flag}`);
+    assert.equal(definitions.get(flag)?.kind, kind, `${flag} kind`);
+    assert.equal(definitions.get(flag)?.mode, mode, `${flag} mode`);
+  }
+});
+
 const HELP_COMMANDS = [
   ["analyze-flip-flop-pattern", path.join(__dirname, "../../relay-review/scripts/analyze-flip-flop-pattern.js")],
   ["cleanup-worktrees", path.join(__dirname, "cleanup-worktrees.js")],
@@ -133,6 +154,7 @@ const HELP_COMMANDS = [
   ["invoke-reviewer-codex", path.join(__dirname, "../../relay-review/scripts/invoke-reviewer-codex.js")],
   ["persist-request", path.join(__dirname, "../../relay-intake/scripts/persist-request.js")],
   ["probe-executor-env", path.join(__dirname, "../../relay-plan/scripts/probe-executor-env.js")],
+  ["recover-commit", path.join(__dirname, "recover-commit.js")],
   ["recover-state", path.join(__dirname, "recover-state.js")],
   ["reliability-report", path.join(__dirname, "reliability-report.js")],
   ["review-runner", path.join(__dirname, "../../relay-review/scripts/review-runner.js")],
