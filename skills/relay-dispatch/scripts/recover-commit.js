@@ -13,9 +13,10 @@ const { parsePrNumber, formatExecError } = require("./dispatch-publish");
 const { resolveManifestRecord } = require("./relay-resolver");
 const { appendRunEvent } = require("./relay-events");
 const { STATES } = require("./manifest/lifecycle");
-const { getCanonicalRepoRoot, validateManifestPaths } = require("./manifest/paths");
+const { getCanonicalRepoRoot, getRunDir, validateManifestPaths } = require("./manifest/paths");
 const { summarizeError } = require("./manifest/store");
 const { stampPrNumberUnderLock } = require("./manifest/pr-number-stamp");
+const { rebrandEvidence } = require("./execution-evidence");
 const {
   findUnknownFlags,
   getArg,
@@ -315,6 +316,21 @@ function main() {
       const detail = formatExecError(error);
       appendFailureEvent(validatedPaths.repoRoot, data, "commit_failed", detail, commitSha, branch);
       throw new Error(`commit_failed: ${detail}`);
+    }
+  }
+  if (commitCreated) {
+    const rebrandResult = rebrandEvidence(getRunDir(validatedPaths.repoRoot, data.run_id), {
+      newHeadSha: commitSha,
+      recordedBy: "recover-commit-rebrand",
+      reason: `recover-commit added new commit; previous evidence bound to pre-commit SHA. Audit reason: ${reason}`,
+    });
+    if (rebrandResult.rewritten) {
+      appendRunEvent(validatedPaths.repoRoot, data.run_id, {
+        event: "execution_evidence_rebranded",
+        previous_head_sha: rebrandResult.previousSha,
+        new_head_sha: commitSha,
+        reason,
+      });
     }
   }
 

@@ -15,6 +15,10 @@ const {
   writeManifest,
 } = require("./relay-manifest");
 const { readRunEvents } = require("./relay-events");
+const {
+  EXECUTION_EVIDENCE_FILENAME,
+  writeExecutionEvidence,
+} = require("./execution-evidence");
 
 const SCRIPT = path.join(__dirname, "recover-commit.js");
 
@@ -117,7 +121,7 @@ function buildManifestForState(manifest, state, repoRoot, runId) {
   throw new Error(`Unsupported test state: ${state}`);
 }
 
-function setupRepo({ dirty = false, unpushed = false, manifestState = STATES.REVIEW_PENDING } = {}) {
+function setupRepo({ dirty = false, unpushed = false, evidence = false, manifestState = STATES.REVIEW_PENDING } = {}) {
   const repoRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "relay-recover-commit-")));
   const relayHome = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-")));
   const binDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "relay-gh-")));
@@ -151,7 +155,9 @@ function setupRepo({ dirty = false, unpushed = false, manifestState = STATES.REV
   }
 
   const runId = createRunId({ issueNumber: 281, branch, timestamp: new Date("2026-04-24T01:00:00.000Z") });
-  const manifestPath = ensureRunLayout(repoRoot, runId).manifestPath;
+  const runLayout = ensureRunLayout(repoRoot, runId);
+  const manifestPath = runLayout.manifestPath;
+  const runDir = runLayout.runDir;
   let manifest = createManifestSkeleton({
     repoRoot,
     runId,
@@ -165,6 +171,18 @@ function setupRepo({ dirty = false, unpushed = false, manifestState = STATES.REV
   });
   manifest = buildManifestForState(manifest, manifestState, repoRoot, runId);
   writeManifest(manifestPath, manifest);
+  if (evidence) {
+    const headSha = execFileSync("git", ["-C", worktreePath, "rev-parse", "HEAD"], { encoding: "utf-8" }).trim();
+    writeExecutionEvidence(runDir, {
+      schema_version: 1,
+      head_sha: headSha,
+      test_command: "node --test skills/relay-*/scripts/*.test.js",
+      test_result_hash: "unspecified",
+      test_result_summary: "unspecified",
+      recorded_at: "2026-04-24T01:00:00.000Z",
+      recorded_by: "dispatch-orchestrator-v1",
+    });
+  }
 
   const ghPath = writeFakeGh(binDir, statePath, ghLogPath);
   const preloadPath = writeEventPreload(binDir, eventLogPath);
@@ -178,7 +196,7 @@ function setupRepo({ dirty = false, unpushed = false, manifestState = STATES.REV
       ? `${process.env.NODE_OPTIONS} --require ${preloadPath}`
       : `--require ${preloadPath}`,
   };
-  return { repoRoot, relayHome, runId, manifestPath, worktreePath, branch, statePath, ghLogPath, eventLogPath, env };
+  return { repoRoot, relayHome, runId, manifestPath, runDir, worktreePath, branch, statePath, ghLogPath, eventLogPath, env };
 }
 
 function runRecover(fixture, extraArgs = []) {
@@ -221,8 +239,48 @@ test("happy path commits dirty worktree, pushes, opens PR, stamps manifest, and 
   assert.equal(recoverEvent.commit_sha, parsed.commitSha);
   assert.equal(recoverEvent.pr_number, 281);
   assert.equal(events.filter((entry) => entry.event === "pr_number_stamped").length, 1);
+  assert.equal(events.filter((entry) => entry.event === "execution_evidence_rebranded").length, 0);
   assert.ok(readJsonLines(fixture.eventLogPath).some((entry) => entry.eventData.event === "recover_commit"));
   assert.equal(readJsonLines(fixture.ghLogPath).filter((argv) => argv[0] === "pr" && argv[1] === "create").length, 1);
+});
+
+test("dirty worktree recovery rebrands execution evidence to the created commit and emits event", () => {
+  const fixture = setupRepo({ dirty: true, evidence: true });
+  const evidencePath = path.join(fixture.runDir, EXECUTION_EVIDENCE_FILENAME);
+  const beforeEvidence = JSON.parse(fs.readFileSync(evidencePath, "utf-8"));
+  const result = runRecover(fixture, ["--reason", "executor completed before commit", "--json"]);
+
+  assert.equal(result.status, 0, result.stderr);
+  const parsed = JSON.parse(result.stdout);
+  const afterEvidence = JSON.parse(fs.readFileSync(evidencePath, "utf-8"));
+  assert.equal(parsed.commitCreated, true);
+  assert.equal(afterEvidence.head_sha, parsed.commitSha);
+  assert.equal(afterEvidence.recorded_by, "recover-commit-rebrand");
+  assert.equal(afterEvidence.rebrand.previous_head_sha, beforeEvidence.head_sha);
+  assert.equal(afterEvidence.rebrand.previous_recorded_by, "dispatch-orchestrator-v1");
+  assert.match(afterEvidence.rebrand.reason, /Audit reason: executor completed before commit/);
+
+  const events = readRunEvents(fixture.repoRoot, fixture.runId);
+  const rebrandEvent = events.find((entry) => entry.event === "execution_evidence_rebranded");
+  assert.equal(rebrandEvent.previous_head_sha, beforeEvidence.head_sha);
+  assert.equal(rebrandEvent.new_head_sha, parsed.commitSha);
+  assert.equal(rebrandEvent.reason, "executor completed before commit");
+});
+
+test("already-committed recovery leaves execution evidence byte-identical", () => {
+  const fixture = setupRepo({ unpushed: true, evidence: true });
+  const evidencePath = path.join(fixture.runDir, EXECUTION_EVIDENCE_FILENAME);
+  const beforeEvidence = fs.readFileSync(evidencePath, "utf-8");
+  const result = runRecover(fixture, ["--reason", "executor committed but did not push", "--json"]);
+
+  assert.equal(result.status, 0, result.stderr);
+  const parsed = JSON.parse(result.stdout);
+  assert.equal(parsed.commitCreated, false);
+  assert.equal(fs.readFileSync(evidencePath, "utf-8"), beforeEvidence);
+  assert.equal(
+    readRunEvents(fixture.repoRoot, fixture.runId).filter((entry) => entry.event === "execution_evidence_rebranded").length,
+    0
+  );
 });
 
 test("clean worktree with no unpushed commits rejects as nothing to recover", () => {
