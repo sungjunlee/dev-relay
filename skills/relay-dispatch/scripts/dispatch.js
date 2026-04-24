@@ -22,7 +22,7 @@
  *   --model-hints <spec>   Persist per-phase model hints (phase=model,...)
  *   --sandbox <mode>       workspace-write | read-only (default: workspace-write)
  *   --copy <file,...>      Additional files to copy
- *   --timeout <seconds>    Exec timeout (default: 1800)
+ *   --timeout <seconds>    Exec timeout (default: 2400 for codex, 1800 for others)
  *   --rubric-file <path>   REQUIRED: copy rubric YAML to run dir (persists for review)
  *   --test-command <cmd>   Record the executor-side test command in execution evidence
  *   --rubric-grandfathered Retired alias; dispatch rejects it
@@ -127,7 +127,7 @@ if (!args.length || hasCliFlag(["--help", "-h"])) {
   console.log(`  --model-hints      ${modeLabel("--model-hints")} Persist per-phase model hints (phase=model,...)`);
   console.log(`  --sandbox          ${modeLabel("--sandbox")} workspace-write | read-only (default: workspace-write)`);
   console.log(`  --copy <files>     ${modeLabel("--copy")} Additional files to copy (comma-separated)`);
-  console.log(`  --timeout          ${modeLabel("--timeout")} Exec timeout in seconds (default: 1800)`);
+  console.log(`  --timeout          ${modeLabel("--timeout")} Exec timeout in seconds (default: 2400 for codex, 1800 for others)`);
   console.log(`  --rubric-file      ${modeLabel("--rubric-file")} REQUIRED: copy rubric YAML to run dir (persists for review)`);
   console.log(`  --test-command     ${modeLabel("--test-command")} Record the executor-side test command in execution evidence`);
   console.log(`  --rubric-grandfathered  ${modeLabel("--rubric-grandfathered")} Retired alias; remove anchor.rubric_grandfathered manually`);
@@ -151,6 +151,8 @@ const MANIFEST_INPUT = getArg(args, "--manifest", undefined, CLI_ARG_OPTIONS);
 const PROMPT = getArg(args, ["--prompt", "-p"], undefined, CLI_ARG_OPTIONS);
 const PROMPT_FILE = getArg(args, "--prompt-file", undefined, CLI_ARG_OPTIONS);
 const EXECUTOR = getArg(args, ["--executor", "-e"], "codex", CLI_ARG_OPTIONS);
+const DEFAULT_TIMEOUT_BY_EXECUTOR = { codex: 2400, claude: 1800 };
+const defaultTimeout = String(DEFAULT_TIMEOUT_BY_EXECUTOR[EXECUTOR] ?? 1800);
 const MODEL = getArg(args, ["--model", "-m"], undefined, CLI_ARG_OPTIONS);
 const MODEL_HINTS_RAW = getArg(args, "--model-hints", undefined, CLI_ARG_OPTIONS);
 const SANDBOX = getArg(args, "--sandbox", "workspace-write", CLI_ARG_OPTIONS);
@@ -161,7 +163,7 @@ const RUBRIC_GRANDFATHERED = hasCliFlag("--rubric-grandfathered");
 const REQUEST_ID = getArg(args, "--request-id", undefined, CLI_ARG_OPTIONS);
 const LEAF_ID = getArg(args, "--leaf-id", undefined, CLI_ARG_OPTIONS);
 const DONE_CRITERIA_FILE = getArg(args, "--done-criteria-file", undefined, CLI_ARG_OPTIONS);
-const TIMEOUT = parseInt(getArg(args, "--timeout", "1800", CLI_ARG_OPTIONS), 10);
+const TIMEOUT = parseInt(getArg(args, "--timeout", defaultTimeout, CLI_ARG_OPTIONS), 10);
 if (isNaN(TIMEOUT) || TIMEOUT <= 0) {
   console.error("Error: --timeout must be a positive integer");
   process.exit(1);
