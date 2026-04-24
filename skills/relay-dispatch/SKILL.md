@@ -156,6 +156,26 @@ ${CLAUDE_SKILL_DIR}/scripts/close-run.js --repo . --run-id <run-id> --reason "st
 ${CLAUDE_SKILL_DIR}/scripts/reliability-report.js --repo . --json
 ```
 
+## Executor completed but did not commit
+
+`recover-commit.js` handles the canonical "executor finished implementation but timed out before committing" path. Replaces the ad-hoc `git add -A && git commit && git push -u && gh pr create` shell sequence with a single command that preflights, commits via template, pushes (no force), creates the PR (idempotent on re-run), stamps `git.pr_number` via the shared lock helper, and emits a `recover_commit` event. Manifest STATE stays `review_pending` — the next step is the normal review.
+
+```bash
+# Standard recovery — dispatch returned commits="" + uncommitted!=""
+${CLAUDE_SKILL_DIR}/scripts/recover-commit.js --run-id <id> \
+  --reason "executor timeout at 1800s on 18-file refactor"
+
+# Preview without touching anything
+${CLAUDE_SKILL_DIR}/scripts/recover-commit.js --run-id <id> \
+  --reason "..." --dry-run
+
+# Override PR title / body (defaults derive from branch + run-id)
+${CLAUDE_SKILL_DIR}/scripts/recover-commit.js --run-id <id> \
+  --reason "..." --pr-title "..." --pr-body-file /tmp/pr-body.md
+```
+
+If a PR already exists for the branch, the command no-ops the create step and stamps `pr_number` from the existing PR — safe to re-run after a partial failure. Use `--dry-run` first when uncertain.
+
 ## Operator state recovery
 
 `recover-state.js` advances a relay run's state after an external event (fix commit pushed directly, dispatch stalled, no-op re-dispatch escalated the manifest). Replaces hand-edited `manual_state_override` entries with structured `state_recovery` events and validated transitions.
