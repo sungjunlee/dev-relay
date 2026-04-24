@@ -45,10 +45,41 @@ function writeExecutionEvidence(runDir, evidence, options = {}) {
   return finalPath;
 }
 
+function rebrandEvidence(runDir, { newHeadSha, recordedBy = "recover-commit-rebrand", reason } = {}) {
+  const evidencePath = path.join(runDir, EXECUTION_EVIDENCE_FILENAME);
+  if (!fs.existsSync(evidencePath)) {
+    return { skipped: "no_existing_evidence" };
+  }
+  if (!/^[0-9a-f]{40}$/.test(newHeadSha || "")) {
+    throw new Error("newHeadSha must be a 40-character lowercase hex SHA");
+  }
+
+  const existing = JSON.parse(fs.readFileSync(evidencePath, "utf-8"));
+  if (existing.head_sha === newHeadSha) {
+    return { skipped: "sha_unchanged" };
+  }
+
+  const previousSha = existing.head_sha;
+  writeExecutionEvidence(runDir, {
+    ...existing,
+    head_sha: newHeadSha,
+    recorded_by: recordedBy,
+    rebrand: {
+      previous_head_sha: previousSha,
+      previous_recorded_by: existing.recorded_by,
+      reason,
+      recorded_at: new Date().toISOString(),
+    },
+  });
+
+  return { rewritten: true, previousSha, newHeadSha };
+}
+
 module.exports = {
   EXECUTION_EVIDENCE_FILENAME,
   EXECUTION_EVIDENCE_SCHEMA_VERSION,
   buildExecutionEvidence,
   hashFileSha256,
+  rebrandEvidence,
   writeExecutionEvidence,
 };
