@@ -119,6 +119,17 @@ Before persisting the draft rubric, apply the 6 heuristics in `references/rubric
 
 This applies to all task sizes; do not gate it on S/M vs L/XL. Rewrite prescriptive HOW language into observable WHAT, merge overlapping factors, remove unsupported defensive clauses, and verify weights before dispatch.
 
+### 3.45 Optional isolated planner draft
+
+For standalone opt-in planner isolation, generate draft artifacts without changing the default `/relay` flow:
+
+```bash
+node ${CLAUDE_SKILL_DIR}/scripts/plan-runner.js \
+  --issue 42 --planner codex --repo . --out-dir /tmp/relay-plan-42 --json
+```
+
+This writes `rubric.yaml`, `dispatch-prompt.md`, and `planner-notes.md` under the output directory. The orchestrator still reviews and may edit the draft before dispatch.
+
 ### 3.5 Review the rubric (L/XL tasks)
 
 - **S/M (1-4 AC)**: skip
