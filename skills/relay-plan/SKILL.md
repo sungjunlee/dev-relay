@@ -113,6 +113,12 @@ Quick gate before dispatch:
 
 Full validation checklist, factor count rules, Rubric Quality Card examples, grading (A/B/C/D), and risk signals: `references/rubric-validation.md`. Grade D = revise before dispatch; Grade C = warn and make the tradeoff explicit.
 
+### 3.4 Simplify the rubric
+
+Before persisting the draft rubric, apply the 6 heuristics in `references/rubric-simplification.md`.
+
+This applies to all task sizes; do not gate it on S/M vs L/XL. Rewrite prescriptive HOW language into observable WHAT, merge overlapping factors, remove unsupported defensive clauses, and verify weights before dispatch.
+
 ### 3.5 Review the rubric (L/XL tasks)
 
 - **S/M (1-4 AC)**: skip
