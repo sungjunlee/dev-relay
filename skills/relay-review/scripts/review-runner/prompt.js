@@ -10,7 +10,28 @@ function renderProjectConventions(template, conventions) {
   return template.replace(/\n## Project Conventions[\s\S]*?<\/task-content>\n(?=\n## PR Diff)/, "\n");
 }
 
-function buildPrompt({ round, prNumber, branch, issueNumber, doneCriteria, doneCriteriaSource, diffText, reviewRepoPath, runDir, rubricLoad }) {
+function formatPrBodySnapshotSection(prBodyPath, prBodySnapshot) {
+  if (!prBodyPath) return null;
+  if (prBodySnapshot?.status === "failed") {
+    return [
+      "## PR Description Snapshot",
+      "",
+      `PR description snapshot at time of review is unavailable; PR body fetch failed: ${prBodySnapshot.reason || "unknown error"}.`,
+      `Snapshot path: ${prBodyPath}`,
+      "The snapshot file contains a structured failure sentinel. Treat the PR body / PR description / PR body content as unavailable for this round.",
+    ].join("\n");
+  }
+
+  return [
+    "## PR Description Snapshot",
+    "",
+    "PR description snapshot at time of review (authoritative for any DC clause referencing 'PR body' / 'PR description'):",
+    `Snapshot path: ${prBodyPath}`,
+    "Load this file alongside the diff before evaluating any Done Criteria or rubric clause about PR body content.",
+  ].join("\n");
+}
+
+function buildPrompt({ round, prNumber, branch, issueNumber, doneCriteria, doneCriteriaSource, diffText, reviewRepoPath, runDir, rubricLoad, prBodyPath, prBodySnapshot }) {
   const template = renderProjectConventions(readText(REVIEWER_PROMPT_PATH)
     .replace("source=\"done-criteria\"", `source="${doneCriteriaSource || "done-criteria"}"`)
     .replace("[PASTE DONE CRITERIA HERE]", doneCriteria)
@@ -22,9 +43,10 @@ function buildPrompt({ round, prNumber, branch, issueNumber, doneCriteria, doneC
     `PR: #${prNumber || "unknown"}`,
     `Branch: ${branch || "unknown"}`,
     `Issue: ${issueNumber || "unknown"}`,
-    "",
-    template,
   ];
+  const prBodySnapshotSection = formatPrBodySnapshotSection(prBodyPath, prBodySnapshot);
+  if (prBodySnapshotSection) sections.push("", prBodySnapshotSection);
+  sections.push("", template);
 
   if (rubricLoad.warning) {
     sections.push(
@@ -88,5 +110,6 @@ function formatPriorVerdictSummary(verdicts) {
 
 module.exports = {
   buildPrompt,
+  formatPrBodySnapshotSection,
   formatPriorVerdictSummary,
 };

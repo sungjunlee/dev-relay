@@ -46,6 +46,55 @@ test("prompt/buildPrompt includes the reviewer versus runner trust-boundary rati
   assert.match(prompt, /runner independently verifies SHA-bound execution evidence/i);
 });
 
+test("prompt/buildPrompt frames PR body snapshot path before Done Criteria", () => {
+  const prBodyPath = "/tmp/relay/review-round-1-pr-body.md";
+  const prompt = buildPrompt({
+    round: 1,
+    prNumber: 277,
+    branch: "issue-277",
+    issueNumber: 277,
+    doneCriteria: "# Done Criteria\n\n- PR description contains the audit table\n",
+    doneCriteriaSource: "github-issue",
+    diffText: "diff --git a/a.js b/a.js\n",
+    prBodyPath,
+    prBodySnapshot: { status: "loaded", reason: null },
+    runDir: null,
+    rubricLoad: {
+      warning: null,
+      content: null,
+    },
+  });
+
+  assert.match(prompt, /## PR Description Snapshot/);
+  assert.match(prompt, new RegExp(prBodyPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  assert.match(prompt, /authoritative for any DC clause referencing 'PR body' \/ 'PR description'/);
+  assert.ok(prompt.indexOf("## PR Description Snapshot") < prompt.indexOf("<task-content source="));
+});
+
+test("prompt/buildPrompt makes failed PR body snapshots explicit", () => {
+  const prompt = buildPrompt({
+    round: 1,
+    prNumber: 277,
+    branch: "issue-277",
+    issueNumber: 277,
+    doneCriteria: "# Done Criteria\n",
+    doneCriteriaSource: "github-issue",
+    diffText: "diff --git a/a.js b/a.js\n",
+    prBodyPath: "/tmp/relay/review-round-1-pr-body.md",
+    prBodySnapshot: { status: "failed", reason: "gh pr view failed (status: 1): auth required" },
+    runDir: null,
+    rubricLoad: {
+      warning: null,
+      content: null,
+    },
+  });
+
+  assert.match(prompt, /PR description snapshot at time of review is unavailable/i);
+  assert.match(prompt, /PR body fetch failed: gh pr view failed/);
+  assert.match(prompt, /Treat the PR body \/ PR description \/ PR body content as unavailable/);
+  assert.doesNotMatch(prompt, /authoritative for any DC clause/);
+});
+
 test("prompt/buildPrompt preserves prior-round context rendering", () => {
   const runDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-prompt-"));
   fs.writeFileSync(path.join(runDir, "review-round-1-verdict.json"), JSON.stringify({

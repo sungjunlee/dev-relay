@@ -295,6 +295,10 @@ function writeFakeGhScript(repoRoot, { prBody, capturePath }) {
 const fs = require("fs");
 const args = process.argv.slice(2);
 if (args[0] === "pr" && args[1] === "view") {
+  if (args.includes("-q") && args[args.indexOf("-q") + 1] === ".body") {
+    process.stdout.write(${JSON.stringify(prBody)});
+    process.exit(0);
+  }
   process.stdout.write(JSON.stringify({ body: ${JSON.stringify(prBody)} }));
   process.exit(0);
 }
@@ -303,6 +307,21 @@ if (args[0] === "pr" && args[1] === "comment") {
   const body = bodyIndex !== -1 ? args[bodyIndex + 1] : "";
   fs.writeFileSync(${JSON.stringify(capturePath)}, body, "utf-8");
   process.exit(0);
+}
+process.stderr.write("Unsupported gh invocation: " + args.join(" "));
+process.exit(1);
+`, "utf-8");
+  fs.chmodSync(filePath, 0o755);
+  return filePath;
+}
+
+function writeFailingPrBodyGhScript(repoRoot, message = "simulated pr body fetch failure") {
+  const filePath = path.join(repoRoot, "gh");
+  fs.writeFileSync(filePath, `#!/usr/bin/env node
+const args = process.argv.slice(2);
+if (args[0] === "pr" && args[1] === "view" && args.includes("-q") && args[args.indexOf("-q") + 1] === ".body") {
+  process.stderr.write(${JSON.stringify(message)});
+  process.exit(37);
 }
 process.stderr.write("Unsupported gh invocation: " + args.join(" "));
 process.exit(1);
@@ -349,6 +368,10 @@ if (args[0] === "pr" && args[1] === "diff") {
 }
 
 if (args[0] === "pr" && args[1] === "view") {
+  if (args.includes("-q") && args[args.indexOf("-q") + 1] === ".body") {
+    process.stdout.write(prBody);
+    process.exit(0);
+  }
   const jsonIndex = args.indexOf("--json");
   const fields = jsonIndex === -1 ? "" : args[jsonIndex + 1];
   if (fields === "closingIssuesReferences,body,headRefName") {
@@ -453,6 +476,163 @@ test("prepare-only writes a prompt bundle without changing manifest state", () =
   assert.ok(fs.existsSync(result.diffPath));
   assert.equal(readManifest(manifestPath).data.state, STATES.REVIEW_PENDING);
   assert.equal(readManifest(manifestPath).data.run_id, runId);
+});
+
+test("prepare-only writes PR body snapshot and cites it in the prompt", () => {
+  const { repoRoot, runId, doneCriteriaPath, diffPath } = setupRepo();
+  const prBody = [
+    "## Summary",
+    "",
+    "| flag | mode | rationale |",
+    "|------|------|-----------|",
+    "| audit | strict | required by Done Criteria |",
+  ].join("\n");
+  writeFakeGhScript(repoRoot, {
+    capturePath: path.join(repoRoot, "unused-comment.txt"),
+    prBody,
+  });
+
+  const result = JSON.parse(execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--run-id", runId,
+    "--pr", "123",
+    "--done-criteria-file", doneCriteriaPath,
+    "--diff-file", diffPath,
+    "--prepare-only",
+    "--json",
+  ], {
+    encoding: "utf-8",
+    env: {
+      ...process.env,
+      PATH: `${repoRoot}:${process.env.PATH}`,
+    },
+  }));
+
+  assert.equal(path.basename(result.prBodyPath), "review-round-1-pr-body.md");
+  assert.deepEqual(result.prBodySnapshot, { status: "loaded", reason: null });
+  assert.equal(fs.readFileSync(result.prBodyPath, "utf-8"), `${prBody}\n`);
+
+  const promptText = fs.readFileSync(result.promptPath, "utf-8");
+  assert.match(promptText, /## PR Description Snapshot/);
+  assert.match(promptText, new RegExp(result.prBodyPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  assert.match(promptText, /authoritative for any DC clause referencing 'PR body' \/ 'PR description'/);
+});
+
+test("prepare-only records auditable PR body snapshot failure and still writes the bundle", () => {
+  const { repoRoot, runId, doneCriteriaPath, diffPath } = setupRepo();
+  writeFailingPrBodyGhScript(repoRoot, "auth required for pr body");
+
+  const result = JSON.parse(execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--run-id", runId,
+    "--pr", "123",
+    "--done-criteria-file", doneCriteriaPath,
+    "--diff-file", diffPath,
+    "--prepare-only",
+    "--json",
+  ], {
+    encoding: "utf-8",
+    env: {
+      ...process.env,
+      PATH: `${repoRoot}:${process.env.PATH}`,
+    },
+  }));
+
+  assert.equal(result.prepareOnly, true);
+  assert.equal(result.prBodySnapshot.status, "failed");
+  assert.match(result.prBodySnapshot.reason, /auth required for pr body/);
+  assert.ok(fs.existsSync(result.promptPath));
+
+  const snapshotText = fs.readFileSync(result.prBodyPath, "utf-8");
+  assert.match(snapshotText, /# PR Body Snapshot Unavailable/);
+  assert.match(snapshotText, /"status": "failed"/);
+  assert.match(snapshotText, /auth required for pr body/);
+
+  const promptText = fs.readFileSync(result.promptPath, "utf-8");
+  assert.match(promptText, /PR description snapshot at time of review is unavailable/i);
+  assert.match(promptText, /PR body fetch failed: gh pr view failed/);
+
+  const failureEvent = readRunEvents(repoRoot, runId).find((event) => event.event === "pr_body_snapshot_failed");
+  assert.equal(failureEvent?.round, 1);
+  assert.equal(failureEvent?.pr_number, 123);
+  assert.match(failureEvent?.reason, /auth required for pr body/);
+});
+
+test("review-runner snapshots PR body separately for round 2", () => {
+  const { repoRoot, manifestPath, runId, doneCriteriaPath, diffPath } = setupRepo();
+  const firstBody = "round 1 PR body\n\n| flag | mode | rationale |\n";
+  const secondBody = "round 2 PR body\n\n| flag | mode | rationale |\n";
+  writeFakeGhScript(repoRoot, {
+    capturePath: path.join(repoRoot, "unused-comment.txt"),
+    prBody: firstBody,
+  });
+  const reviewFile = writeVerdict(repoRoot, "round-one-changes.json", {
+    verdict: "changes_requested",
+    summary: "Need one more update.",
+    contract_status: "fail",
+    quality_review_status: "pass",
+    next_action: "changes_requested",
+    issues: [{
+      title: "Missing follow-up",
+      body: "Round 2 should re-check the PR body snapshot.",
+      file: "README.md",
+      line: 1,
+      category: "contract",
+      severity: "high",
+    }],
+    rubric_scores: defaultRubricScores(),
+    scope_drift: { creep: [], missing: [] },
+  });
+
+  const first = JSON.parse(execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--run-id", runId,
+    "--pr", "123",
+    "--done-criteria-file", doneCriteriaPath,
+    "--diff-file", diffPath,
+    "--review-file", reviewFile,
+    "--no-comment",
+    "--json",
+  ], {
+    encoding: "utf-8",
+    env: {
+      ...process.env,
+      PATH: `${repoRoot}:${process.env.PATH}`,
+    },
+  }));
+  assert.equal(first.round, 1);
+  assert.equal(fs.readFileSync(first.prBodyPath, "utf-8"), firstBody);
+
+  setReviewPending(manifestPath);
+  writeFakeGhScript(repoRoot, {
+    capturePath: path.join(repoRoot, "unused-comment.txt"),
+    prBody: secondBody,
+  });
+  const second = JSON.parse(execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--run-id", runId,
+    "--pr", "123",
+    "--done-criteria-file", doneCriteriaPath,
+    "--diff-file", diffPath,
+    "--prepare-only",
+    "--json",
+  ], {
+    encoding: "utf-8",
+    env: {
+      ...process.env,
+      PATH: `${repoRoot}:${process.env.PATH}`,
+    },
+  }));
+
+  assert.equal(second.round, 2);
+  assert.equal(path.basename(second.prBodyPath), "review-round-2-pr-body.md");
+  assert.notEqual(first.prBodyPath, second.prBodyPath);
+  assert.equal(fs.readFileSync(first.prBodyPath, "utf-8"), firstBody);
+  assert.equal(fs.readFileSync(second.prBodyPath, "utf-8"), secondBody);
 });
 
 test("review-runner facade stays within orchestrator caps and preserves CLI help", () => {
