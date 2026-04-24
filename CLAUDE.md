@@ -84,6 +84,16 @@ node skills/relay-dispatch/scripts/cleanup-worktrees.js --repo . --dry-run
 # Reliability report
 node skills/relay-dispatch/scripts/reliability-report.js --repo . --json
 node skills/relay-dispatch/scripts/reliability-report.js --repo . --by-role --json
+
+# Review (cross-skill: review-runner lives under relay-review, not relay-dispatch)
+node skills/relay-review/scripts/review-runner.js --repo . --run-id <id> --reviewer codex --json
+
+# Recovery (when codex finishes but does not commit/push/PR)
+node skills/relay-dispatch/scripts/recover-commit.js --run-id <id> --reason "..."
+
+# Finalize / merge (cross-skill: finalize-run lives under relay-merge, not relay-dispatch)
+node skills/relay-merge/scripts/finalize-run.js --run-id <id> --merge-method squash --json
+node skills/relay-merge/scripts/finalize-run.js --run-id <id> --force-finalize-nonready --reason "..." --json
 ```
 
 ## Key Design Decisions
