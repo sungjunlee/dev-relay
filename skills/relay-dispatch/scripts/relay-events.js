@@ -63,6 +63,12 @@ function appendRunEvent(repoRoot, runId, eventData) {
     ...(eventData.pr_number !== undefined
       ? { pr_number: normalizeEventValue(eventData.pr_number) }
       : {}),
+    ...(eventData.commit_sha !== undefined
+      ? { commit_sha: normalizeEventValue(eventData.commit_sha) }
+      : {}),
+    ...(eventData.branch !== undefined
+      ? { branch: normalizeEventValue(eventData.branch) }
+      : {}),
     ...(eventData.bootstrap_exempt !== undefined
       ? { bootstrap_exempt: eventData.bootstrap_exempt === true }
       : {}),

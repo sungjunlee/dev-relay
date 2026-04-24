@@ -204,6 +204,26 @@ test("appendRunEvent persists pr_number when provided", () => {
   assert.equal(parsed.pr_number, 123);
 });
 
+test("appendRunEvent persists recover commit commit_sha and branch when provided", () => {
+  const { repoRoot, runId } = createContext();
+  const record = appendRunEvent(repoRoot, runId, {
+    event: "recover_commit",
+    state_from: "review_pending",
+    state_to: "review_pending",
+    head_sha: "deadbeef",
+    commit_sha: "deadbeef",
+    branch: "issue-281",
+    reason: "executor completed before commit",
+    pr_number: 281,
+  });
+
+  const [parsed] = readRunEvents(repoRoot, runId);
+  assert.equal(record.commit_sha, "deadbeef");
+  assert.equal(parsed.commit_sha, "deadbeef");
+  assert.equal(record.branch, "issue-281");
+  assert.equal(parsed.branch, "issue-281");
+});
+
 test("appendRunEvent omits last_reviewed_sha when absent", () => {
   const { repoRoot, runId } = createContext();
   const record = appendRunEvent(repoRoot, runId, {

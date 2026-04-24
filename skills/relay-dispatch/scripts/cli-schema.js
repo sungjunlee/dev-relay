@@ -48,7 +48,9 @@ const FLAGS = [
   { flag: "--pin", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Presence flag; no value is consumed." },
   { flag: "--post-comment", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Presence flag; no value is consumed." },
   { flag: "--pr", kind: VALUE, mode: MODE_PARSED, valueName: "<number>", rationale: "Numeric PR selector; flag-like following tokens should mean the value is missing." },
+  { flag: "--pr-body-file", kind: VALUE, mode: MODE_VERBATIM, valueName: "<path>", rationale: "Operator-supplied PR body path; keep the literal argv token." },
   { flag: "--pr-number", kind: VALUE, mode: MODE_PARSED, valueName: "<n>", rationale: "Numeric manifest field; flag-like following tokens should mean the value is missing." },
+  { flag: "--pr-title", kind: VALUE, mode: MODE_VERBATIM, valueName: "<text>", rationale: "Operator-supplied PR title; preserve free text and embedded flag-like tokens." },
   { flag: "--prepare-only", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Presence flag; no value is consumed." },
   { flag: "--print", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Presence flag; no value is consumed." },
   { flag: "--project-only", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Presence flag; no value is consumed." },
@@ -127,6 +129,10 @@ const COMMAND_FLAGS = {
   ],
   "recover-state": [
     "--repo", "--run-id", "--manifest", "--to", "--reason", "--force", "--dry-run", "--json", "--help",
+  ],
+  "recover-commit": [
+    "--repo", "--run-id", "--manifest", "--reason", "--pr-title", "--pr-body-file",
+    "--dry-run", "--json", "--help",
   ],
   "relay-reconcile-artifact": [
     "--repo", "--run-id", "--manifest", "--branch", "--pr",
