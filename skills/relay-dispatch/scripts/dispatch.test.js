@@ -2614,6 +2614,39 @@ test("dispatch dry-run includes rubric file info", () => {
   fs.unlinkSync(rubricFile);
 });
 
+test("dispatch dry-run resolves per-executor timeout defaults and preserves explicit override", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-timeout-default-bin-"));
+  writeFakeCodex(binDir);
+  writeFakeClaude(binDir);
+  const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}` };
+
+  const codexDefault = JSON.parse(runDispatch(repoRoot, [
+    "-b", "issue-timeout-codex-default",
+    "--executor", "codex",
+    "--prompt", "codex timeout default",
+    "--dry-run", "--json",
+  ], env));
+  const claudeDefault = JSON.parse(runDispatch(repoRoot, [
+    "-b", "issue-timeout-claude-default",
+    "--executor", "claude",
+    "--prompt", "claude timeout default",
+    "--dry-run", "--json",
+  ], env));
+  const codexOverride = JSON.parse(runDispatch(repoRoot, [
+    "-b", "issue-timeout-codex-override",
+    "--executor", "codex",
+    "--prompt", "codex timeout override",
+    "--timeout", "600",
+    "--dry-run", "--json",
+  ], env));
+
+  assert.equal(codexDefault.timeout, 2400);
+  assert.equal(claudeDefault.timeout, 1800);
+  assert.equal(codexOverride.timeout, 600);
+});
+
 test("dispatch dry-run json matches the frozen fixture", () => {
   const fixtureRun = setupDryRunFixtureRepo();
   const stdout = runDispatch(fixtureRun.repoRoot, [
