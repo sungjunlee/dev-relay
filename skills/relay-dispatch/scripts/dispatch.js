@@ -521,6 +521,8 @@ function extractRubricSize(rubricPath) {
 
 function resolveReasoningEffort({ override, rubricPath }) {
   if (override) return override;
+  // Defensive-only: enforceRubricPersistence() guarantees new dispatch runs have
+  // a rubric before argv construction, but keep the resolver safe standalone.
   const rubricSize = extractRubricSize(rubricPath);
   return DEFAULT_REASONING_BY_SIZE[rubricSize] || "xhigh";
 }

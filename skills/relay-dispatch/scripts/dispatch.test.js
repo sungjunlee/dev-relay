@@ -1192,9 +1192,9 @@ test("dispatch --reasoning overrides rubric-size codex reasoning effort", () => 
   assert.equal(reasoningArgValue(args), "model_reasoning_effort=low");
 });
 
-test("dispatch falls back to xhigh codex reasoning when rubric size is unavailable or unrecognized", () => {
-  const noRubric = captureCodexReasoning({
-    branch: "issue-reasoning-no-rubric",
+test("dispatch falls back to xhigh codex reasoning when rubric size is missing or unrecognized", () => {
+  const injectedRubricWithoutSize = captureCodexReasoning({
+    branch: "issue-reasoning-injected-rubric-without-size",
   });
   const noSize = captureCodexReasoning({
     branch: "issue-reasoning-no-size",
@@ -1205,7 +1205,7 @@ test("dispatch falls back to xhigh codex reasoning when rubric size is unavailab
     rubricText: "size: \"WEIRD\"\nrubric:\n  factors: []\n",
   });
 
-  assert.equal(reasoningArgValue(noRubric), "model_reasoning_effort=xhigh");
+  assert.equal(reasoningArgValue(injectedRubricWithoutSize), "model_reasoning_effort=xhigh");
   assert.equal(reasoningArgValue(noSize), "model_reasoning_effort=xhigh");
   assert.equal(reasoningArgValue(weirdSize), "model_reasoning_effort=xhigh");
 });
