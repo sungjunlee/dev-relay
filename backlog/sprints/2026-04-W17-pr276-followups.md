@@ -1,8 +1,8 @@
 ---
 milestone: PR #276 follow-ups (W17 cleanup)
-status: active
+status: completed
 started: 2026-04-24
-due: TBD
+completed: 2026-04-24
 ---
 
 # PR #276 follow-ups — reviewer-bundle, recovery CLI, hygiene
@@ -26,18 +26,18 @@ Sequencing reflects priority **and** blast radius. #277 lands first because it a
   - Reviewer/executor: codex + codex.
 
 ### Batch 3 — Operator clarity (tiny)
-- [ ] #279 `finalize-run --help` decision tree (~10 min)
+- [x] #279 `finalize-run --help` decision tree (~10 min) → PR #285 (merged, 1 round clean)
   - Disambiguates `--skip-review` vs `--force-finalize-nonready` after observing operator misuse twice this week.
   - Success signal: `--help` output includes the four-row decision tree; no behavior change; existing finalize-run tests still pass.
   - Reviewer/executor: codex + codex.
 
 ### Batch 4 — Rubric-author guidance (reassess after #277)
-- [ ] #278 rubric-design "no PR-description gates" paragraph (~15 min)
+- [x] #278 rubric-design "no PR-description gates" paragraph — closed as superseded by #277 / PR #282
   - **Decision deferred until #277 PR drafted**: if the #277 PR includes the guidance inline (a single paragraph in `rubric-design.md` cross-linking #277), close #278 as inlined. Otherwise ship as a standalone docs-only PR.
   - Success signal (standalone path): one paragraph added to `skills/relay-plan/references/rubric-design.md`; no new files; cross-references #277 so the constraint auto-expires when #277 lands.
 
 ### Batch 5 — Codex timeout bump (low-confidence, bundle or defer)
-- [ ] #280 codex executor default timeout 1800→2400s (~10 min)
+- [x] #280 codex executor default timeout 1800→2400s (~10 min) → PR #286 (merged, 1 round clean)
   - One direct data point (PR #271). Either bundle into the #281 PR (recovery CLI + timeout bump in one commit) or ship at the end of the sprint as a one-line PR.
   - Success signal: codex default 2400s, other executors unchanged; `--help` reflects new default; existing dispatch tests still pass.
   - Reviewer/executor: codex + codex.
@@ -66,3 +66,24 @@ Sequencing reflects priority **and** blast radius. #277 lands first because it a
 - 2026-04-24 05:14 UTC: Round 1 codex review = `changes_requested`. 4/5 rubric factors PASS, sole blocker: memory file not yet updated to reference recover-commit (codex sandbox boundary). Orchestrator updated `feedback_executor_did_not_open_pr.md` + MEMORY.md index, mirrored guidance into `relay-dispatch/SKILL.md` ("Executor completed but did not commit" section), committed `334262c` to PR #283. Used `recover-state.js --to review_pending --reason "..."` to transition `changes_requested → review_pending` (precondition: fresh commit at `334262c`).
 - 2026-04-24 05:24 UTC: Round 2 codex review = ALL 5 rubric factors PASS, Contract PASS, Quality PASS — but review-runner downgraded to `changes_requested` because execution-evidence.json was bound to base SHA `4fddd8d` (pre-orchestrator-commits). Orchestrator re-ran tests at HEAD `334262c` (820 pass), refreshed `execution-evidence.json` via `buildExecutionEvidence` helper. `recover-state --force` refused to retransition because HEAD == last_reviewed_sha (unconditional guard). Force-finalized via `--force-finalize-nonready --reason "stale-execution-evidence: reviewer rd2 PASS, all 5/5 factors verified, evidence refreshed at reviewed HEAD by orchestrator"`. PR #283 merged as `d106d75`.
 - 2026-04-24 05:28 UTC: Filed follow-up #284 — `relay-record-execution` operator command for evidence refresh after recovery commits (Option A) OR relaxing `recover-state --force` HEAD-equality guard (Option B). Names the structural defect that #281 doesn't cover.
+- 2026-04-24 05:32 UTC: #279 dispatched (run `issue-279-20260424053236783-cf3c0095`, codex 0.124.0, timeout 1200s). Codex completed clean in 269s (`status: completed`, auto-committed `63abae3`, opened PR #285 itself — first dispatch this session to avoid the recover-commit pattern). Diff 19 lines / 2 files (finalize-run.js +5, finalize-run.test.js +14). Round 1 review = `pass` → merged as `934ffc8` (1 round clean).
+- 2026-04-24 05:33 UTC: #278 closed as superseded by #277 (PR #282). Issue text already anticipated retirement; the constraint #278 forbids became observable once the reviewer bundle gained PR-body snapshot. Positive-polarity guidance deferred until live evidence requires it.
+- 2026-04-24 05:41 UTC: #280 dispatched (run `issue-280-20260424054147722-6f40e157`, codex 0.124.0, timeout 1200s). Codex completed clean in 702s (`status: completed`, auto-committed `2c3fdaa`, opened PR #286). Diff 41 insertions across dispatch.js + dispatch.test.js + 2 dry-run fixtures + worktree-runtime.test.js. `DEFAULT_TIMEOUT_BY_EXECUTOR = { codex: 2400, claude: 1800 }` lookup table added. Round 1 review = `pass` → merged as `8ca26ef` (1 round clean).
+- 2026-04-24 05:55 UTC: Sprint closed. 5/5 items merged. Two clean (1-round): #279, #280. Two force-finalized for known recovery-pattern artifacts: #277 (reviewer-bundle-limitation, retired by its own merge), #281 (stale-execution-evidence, tracked as #284). One closed as superseded: #278. Plus #284 filed as follow-up. Test baseline 802 → 822 (+20). Memory updated: `feedback_executor_did_not_open_pr` (rewritten to recover-commit), `feedback_stale_execution_evidence_after_recovery` (new), `feedback_reviewer_cannot_see_pr_body` (marked resolved). 
+
+## Sprint retrospective
+
+### What worked
+- **Codex auto-commit on clean tasks**: #279 and #280 dispatches both ended with `status: completed` (codex committed itself + opened the PR). The recover-commit pattern (now #281) was only needed on the larger #277 and #281 dispatches.
+- **Sprint sequencing held**: #277 → #281 → #279 → #278 → #280 played out exactly as planned. The "auto-retire #278" prediction was correct.
+- **Force-finalize-nonready as a measured escape**: used twice, both times with structured reasons that pointed at concrete follow-up issues (the PR #282 force was self-resolving; the PR #283 force surfaced #284). Force-finalize did NOT become a "skip review" shortcut — verdict, rubric, and Done Criteria were verified before each invocation.
+
+### What struggled
+- **Stale execution-evidence after orchestrator commits**: hit twice (PR #282 r1 self-resolved when codex auto-committed; PR #283 r2 required force-finalize). Now tracked as #284. Workaround memory written.
+- **`recover-state --force` HEAD-equality guard**: unconditional guard prevents legitimate re-review after evidence refresh. #284 Option B would relax this.
+- **Codex CLI 0.122.0 + global config gpt-5.5**: cost ~10 minutes early in the session resolving the model-access mismatch. Operator upgraded to 0.124.0; non-issue going forward.
+
+### Patterns to keep
+- **Small rubrics for S-size docs** (#279, #280): 2 factors with clear weights, ≤200 words each. Codex hit both clean in one round.
+- **Always file follow-up issues for recovery-pattern artifacts**: #281 surfaced #284. Naming structural defects as issues prevents them from accumulating in memory as workarounds.
+- **Sprint file Progress as audit trail**: 9 dated entries in chronological order make the session readable end-to-end. Future retrospectives can cite specific timestamps.
