@@ -51,7 +51,7 @@ function rebrandEvidence(runDir, { newHeadSha, recordedBy = "recover-commit-rebr
     return { skipped: "no_existing_evidence" };
   }
   if (!/^[0-9a-f]{40}$/.test(newHeadSha || "")) {
-    throw new Error("newHeadSha must be a 40-character lowercase hex SHA");
+    return { skipped: "rejected_bad_sha", reason: "newHeadSha must be a 40-character lowercase hex SHA" };
   }
 
   const existing = JSON.parse(fs.readFileSync(evidencePath, "utf-8"));

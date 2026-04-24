@@ -161,3 +161,22 @@ test("rebrandEvidence skips unchanged SHA without rewriting", () => {
   });
   assert.equal(fs.readFileSync(evidencePath, "utf-8"), before);
 });
+
+test("rebrandEvidence returns structured rejected outcome for invalid SHA without rewriting", () => {
+  const runDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-dispatch-execution-bad-sha-"));
+  const evidencePath = writeExecutionEvidence(runDir, {
+    schema_version: 1,
+    head_sha: "d".repeat(40),
+    test_command: "node --test",
+    test_result_hash: "unspecified",
+    test_result_summary: "unspecified",
+    recorded_at: "2026-04-22T00:00:00.000Z",
+    recorded_by: "dispatch-orchestrator-v1",
+  });
+  const before = fs.readFileSync(evidencePath, "utf-8");
+
+  const result = rebrandEvidence(runDir, { newHeadSha: "not-a-sha" });
+  assert.equal(result.skipped, "rejected_bad_sha");
+  assert.match(result.reason, /40-character lowercase hex/);
+  assert.equal(fs.readFileSync(evidencePath, "utf-8"), before);
+});
