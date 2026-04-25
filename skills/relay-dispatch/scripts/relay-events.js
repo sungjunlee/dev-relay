@@ -96,6 +96,21 @@ function appendRunEvent(repoRoot, runId, eventData) {
     ...(eventData.reviewer_swap_count !== undefined
       ? { reviewer_swap_count: normalizeEventValue(eventData.reviewer_swap_count) }
       : {}),
+    ...(eventData.trigger !== undefined
+      ? { trigger: normalizeEventValue(eventData.trigger) }
+      : {}),
+    ...(eventData.factors !== undefined
+      ? { factors: normalizeEventValue(eventData.factors) }
+      : {}),
+    ...(eventData.traces !== undefined
+      ? { traces: normalizeEventValue(eventData.traces) }
+      : {}),
+    ...(eventData.lineage_summary !== undefined
+      ? { lineage_summary: normalizeEventValue(eventData.lineage_summary) }
+      : {}),
+    ...(eventData.decision !== undefined
+      ? { decision: normalizeEventValue(eventData.decision) }
+      : {}),
   };
 
   appendEventLine(repoRoot, runId, record);

@@ -101,6 +101,18 @@ In your summary, enumerate each Done Criteria item with one of four statuses. Ba
 
 If any item is NOT_DONE or CHANGED, verdict cannot be pass. PARTIAL items require `changes_requested`.
 
+### Lineage labeling
+
+For every entry in `issues[]`, populate `lineage`; populate `relates_to` whenever a prior issue or factor exists.
+
+Use `lineage: "new"` when this is a first-time finding with no prior-round ancestor; omit `relates_to` unless a specific prior note helps.
+Use `lineage: "deepening"` when the prior issue was valid but the current finding exposes a narrower or deeper edge case; set `relates_to` to the prior issue title or stable id when known.
+Use `lineage: "repeat"` when the same issue still blocks the PR; set `relates_to` to the prior issue title or stable id when known.
+Use `lineage: "newly_scoreable"` when earlier rounds could not score the factor (`not_run`, missing evidence, or blocked prerequisite) and this round reveals a scoreable finding; set `relates_to` to the prior unscoreable factor or issue when known.
+Use `lineage: "unknown"` only when you cannot determine the relationship from prior-round context.
+
+Do not invent prior ids. `relates_to` may be a concise prior issue title, factor name, or round/factor reference, but it must be non-empty when present.
+
 ### Verdict
 
 Reply with one of:

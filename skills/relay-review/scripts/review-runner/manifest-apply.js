@@ -30,6 +30,7 @@ function buildReviewStatusFields(verdict) {
 
 function applyVerdictToManifest(data, verdict, round, prNumber, reviewedHeadSha, repeatedIssueCount, options = {}) {
   const rubricGateFailure = options.rubricGateFailure || null;
+  const escalationDecision = options.escalationDecision || null;
   let nextState;
   let nextAction;
   let latestVerdict;
@@ -71,6 +72,7 @@ function applyVerdictToManifest(data, verdict, round, prNumber, reviewedHeadSha,
       repeated_issue_count: verdict.verdict === "changes_requested" ? repeatedIssueCount : 0,
       last_reviewed_sha: reviewedHeadSha || null,
       ...buildReviewStatusFields(verdict),
+      ...(escalationDecision ? { last_escalation_decision: escalationDecision } : {}),
       last_gate: rubricGateFailure ? {
         status: rubricGateFailure.status,
         layer: rubricGateFailure.layer,
@@ -84,7 +86,7 @@ function applyVerdictToManifest(data, verdict, round, prNumber, reviewedHeadSha,
   };
 }
 
-function applyPolicyViolationToManifest(data, round, prNumber, reviewedHeadSha, reason) {
+function applyPolicyViolationToManifest(data, round, prNumber, reviewedHeadSha, reason, options = {}) {
   const updated = updateManifestState(data, STATES.ESCALATED, "inspect_review_failure");
   return {
     ...updated,
@@ -99,6 +101,7 @@ function applyPolicyViolationToManifest(data, round, prNumber, reviewedHeadSha, 
       latest_verdict: reason || "policy_violation",
       repeated_issue_count: 0,
       last_reviewed_sha: reviewedHeadSha || null,
+      ...(options.escalationDecision ? { last_escalation_decision: options.escalationDecision } : {}),
     },
   };
 }
