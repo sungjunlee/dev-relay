@@ -1,5 +1,6 @@
 const { execFileSync } = require("child_process");
 const fs = require("fs");
+const path = require("path");
 
 const { validateManifestPaths } = require("./paths");
 const { summarizeError } = require("./store");
@@ -84,10 +85,43 @@ function readWorktreeStatus(gitBin, worktreePath) {
   }
 }
 
-function runCleanup({ repoRoot, data, gitBin = "git", dryRun = false, deleteMergedBranch = false }) {
+function isRealpathContainedWithin(basePath, candidatePath) {
+  try {
+    const realBase = fs.realpathSync.native(basePath);
+    const realCandidate = fs.realpathSync.native(candidatePath);
+    const relative = path.relative(realBase, realCandidate);
+    return relative !== ""
+      && relative !== ".."
+      && !relative.startsWith(`..${path.sep}`)
+      && !path.isAbsolute(relative);
+  } catch {
+    return false;
+  }
+}
+
+function removePrunedRelayWorktreeDirectory(worktreePath, relayWorktreeBase) {
+  if (!fs.existsSync(worktreePath)) {
+    return true;
+  }
+  if (!isRealpathContainedWithin(relayWorktreeBase, worktreePath)) {
+    throw new Error(`refusing rm fallback outside relay worktree base: ${worktreePath}`);
+  }
+  fs.rmSync(worktreePath, { recursive: true, force: true });
+  return !fs.existsSync(worktreePath);
+}
+
+function runCleanup({
+  repoRoot,
+  data,
+  gitBin = "git",
+  dryRun = false,
+  deleteMergedBranch = false,
+  acceptPrunedRelayOwned = false,
+}) {
   const validatedPaths = validateManifestPaths(data?.paths, {
     expectedRepoRoot: repoRoot,
     runId: data?.run_id,
+    acceptPrunedRelayOwned,
     caller: "runCleanup",
   });
   const normalizedData = {
@@ -102,6 +136,9 @@ function runCleanup({ repoRoot, data, gitBin = "git", dryRun = false, deleteMerg
   const worktreePath = normalizedData.paths?.worktree || null;
   const branch = normalizedData.git?.working_branch || null;
   const worktreeStatus = readWorktreeStatus(gitBin, worktreePath);
+  const allowPrunedRelayWorktreeRemoval = acceptPrunedRelayOwned
+    && validatedPaths.prunedRelayOwnedForCleanup
+    && validatedPaths.worktreeLocation === "relay_worktree";
   const branchExistsBefore = localBranchExists(gitBin, repoRoot, branch);
   const errors = [];
 
@@ -109,7 +146,7 @@ function runCleanup({ repoRoot, data, gitBin = "git", dryRun = false, deleteMerg
   let branchDeleted = !deleteMergedBranch || !branch || !branchExistsBefore;
   let pruneRan = false;
 
-  if (worktreeStatus.exists && !worktreeStatus.clean) {
+  if (worktreeStatus.exists && !worktreeStatus.clean && !allowPrunedRelayWorktreeRemoval) {
     errors.push(`dirty worktree: ${worktreeStatus.text}`);
   }
 
@@ -119,7 +156,21 @@ function runCleanup({ repoRoot, data, gitBin = "git", dryRun = false, deleteMerg
         gitExec(gitBin, repoRoot, "worktree", "remove", "--force", worktreePath);
         worktreeRemoved = true;
       } catch (error) {
-        errors.push(`worktree remove failed: ${summarizeError(error)}`);
+        if (allowPrunedRelayWorktreeRemoval) {
+          try {
+            worktreeRemoved = removePrunedRelayWorktreeDirectory(worktreePath, validatedPaths.relayWorktreeBase);
+            if (!worktreeRemoved) {
+              errors.push(`worktree remove fallback failed: ${worktreePath} still exists`);
+            }
+          } catch (fallbackError) {
+            errors.push(
+              `worktree remove failed: ${summarizeError(error)}; ` +
+              `rm fallback failed: ${summarizeError(fallbackError)}`
+            );
+          }
+        } else {
+          errors.push(`worktree remove failed: ${summarizeError(error)}`);
+        }
       }
     }
   }
@@ -177,7 +228,7 @@ function runCleanup({ repoRoot, data, gitBin = "git", dryRun = false, deleteMerg
       worktreePath,
       worktreeExistsBefore: worktreeStatus.exists,
       worktreeRemoved,
-      worktreeDirty: worktreeStatus.exists && !worktreeStatus.clean,
+      worktreeDirty: worktreeStatus.exists && !worktreeStatus.clean && !allowPrunedRelayWorktreeRemoval,
       worktreeStatus: worktreeStatus.text || null,
       branch,
       branchExistedBefore: branchExistsBefore,
