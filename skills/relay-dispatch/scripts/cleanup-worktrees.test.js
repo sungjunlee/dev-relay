@@ -87,6 +87,40 @@ function writeStaleMissingRelayRun(repoRoot, { branch, updatedAt }) {
   return { manifestPath: layout.manifestPath, runId, worktreePath };
 }
 
+function writeStalePrunedRelayRun(repoRoot, { branch, updatedAt }) {
+  const runId = createRunId({
+    branch,
+    timestamp: new Date(updatedAt),
+  });
+  const worktreePath = path.join(getRelayWorktreeBase(), `pruned-${branch}`, path.basename(repoRoot));
+  fs.mkdirSync(worktreePath, { recursive: true });
+  fs.writeFileSync(path.join(worktreePath, ".git"), `gitdir: ${path.join(path.dirname(worktreePath), "missing-admin")}\n`, "utf-8");
+  fs.writeFileSync(path.join(worktreePath, "sentinel.txt"), "stale\n", "utf-8");
+
+  const layout = ensureRunLayout(repoRoot, runId);
+  let manifest = createManifestSkeleton({
+    repoRoot,
+    runId,
+    branch,
+    baseBranch: "main",
+    issueNumber: 295,
+    worktreePath,
+    orchestrator: "codex",
+    executor: "codex",
+    reviewer: "codex",
+  });
+  manifest = updateManifestState(manifest, STATES.DISPATCHED, "await_dispatch_result");
+  manifest.anchor.rubric_path = "rubric.yaml";
+  fs.writeFileSync(path.join(layout.runDir, "rubric.yaml"), "rubric:\n  factors:\n    - name: stale-cleanup\n", "utf-8");
+  manifest = updateManifestState(manifest, STATES.REVIEW_PENDING, "run_review");
+  manifest = updateManifestState(manifest, STATES.READY_TO_MERGE, "await_explicit_merge");
+  manifest = updateManifestState(manifest, STATES.MERGED, "manual_cleanup_required");
+  manifest.timestamps.created_at = updatedAt;
+  manifest.timestamps.updated_at = updatedAt;
+  writeManifest(layout.manifestPath, manifest);
+  return { manifestPath: layout.manifestPath, runId, worktreePath };
+}
+
 function writeRun(repoRoot, { branch, state, updatedAt }) {
   const worktreePath = path.join(repoRoot, "wt", branch);
   fs.mkdirSync(path.dirname(worktreePath), { recursive: true });
@@ -336,6 +370,45 @@ test("cleanup-worktrees cleans stale missing relay-owned manifests and is idempo
   assert.equal(secondRunResult.cleaned.length, 0);
   assert.equal(skippedById.get(first.runId), "already_cleaned");
   assert.equal(skippedById.get(second.runId), "already_cleaned");
+});
+
+test("cleanup-worktrees removes existing relay-owned directories with pruned git bindings", () => {
+  const repoRoot = setupRepo();
+  const updatedAt = "2026-04-01T00:00:00.000Z";
+  const stale = writeStalePrunedRelayRun(repoRoot, {
+    branch: "issue-295-pruned",
+    updatedAt,
+  });
+
+  const dryRunStdout = execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--all",
+    "--dry-run",
+    "--json",
+  ], { encoding: "utf-8" });
+
+  const dryRunResult = JSON.parse(dryRunStdout);
+  assert.equal(dryRunResult.failed.length, 0);
+  assert.equal(dryRunResult.cleaned.some((entry) => entry.runId === stale.runId), true);
+  assert.equal(fs.existsSync(stale.worktreePath), true, "dry-run must not remove the pruned directory");
+  assert.equal(readManifest(stale.manifestPath).data.cleanup.status, "pending", "dry-run must not persist cleanup state");
+
+  const cleanupStdout = execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--all",
+    "--json",
+  ], { encoding: "utf-8" });
+
+  const cleanupResult = JSON.parse(cleanupStdout);
+  const cleaned = cleanupResult.cleaned.find((entry) => entry.runId === stale.runId);
+  assert.ok(cleaned);
+  assert.equal(cleanupResult.failed.length, 0);
+  assert.equal(cleaned.worktreeRemoved, true);
+  assert.equal(cleaned.error, null);
+  assert.equal(fs.existsSync(stale.worktreePath), false);
+  assert.equal(readManifest(stale.manifestPath).data.cleanup.status, "succeeded");
 });
 
 test("cleanup-worktrees rejects tampered paths.repo_root before cleanup side effects", () => {

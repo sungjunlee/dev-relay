@@ -59,6 +59,11 @@ test("manifest/paths cleanup mode accepts pruned and missing relay-owned worktre
 
   const prunedWorktree = path.join(relayWorktreeBase, "pruned-binding", repoBasename);
   fs.mkdirSync(prunedWorktree, { recursive: true });
+  fs.writeFileSync(
+    path.join(prunedWorktree, ".git"),
+    `gitdir: ${path.join(relayWorktreeBase, "pruned-binding-admin")}\n`,
+    "utf-8"
+  );
   const prunedResult = validateManifestPaths({
     repo_root: repoRoot,
     worktree: prunedWorktree,
@@ -71,6 +76,7 @@ test("manifest/paths cleanup mode accepts pruned and missing relay-owned worktre
   });
   assert.equal(prunedResult.worktree, prunedWorktree);
   assert.equal(prunedResult.worktreeLocation, "relay_worktree");
+  assert.equal(prunedResult.prunedRelayOwnedForCleanup, true);
 
   const missingWorktree = path.join(relayWorktreeBase, "missing-directory", repoBasename);
   fs.mkdirSync(path.dirname(missingWorktree), { recursive: true });

@@ -375,21 +375,21 @@ function validateManifestPaths(paths, {
   const relayOwnedWorktreeCandidate = isPathContainedWithin(relayWorktreeBase, worktree)
     && path.basename(worktree) === path.basename(repoRoot);
   const expectedGitCommonDir = getWorktreeGitCommonDir(repoRoot) || path.join(repoRoot, ".git");
+  const worktreeGitCommonDir = fs.existsSync(worktree)
+    ? getWorktreeGitCommonDir(worktree)
+    : null;
   const relayOwnedWorktree = relayOwnedWorktreeCandidate
     && (
       fs.existsSync(worktree)
-      && (() => {
-        const worktreeGitCommonDir = getWorktreeGitCommonDir(worktree);
-        return worktreeGitCommonDir
-          && (
-            worktreeGitCommonDir === expectedGitCommonDir
-            || sameFilesystemLocation(worktreeGitCommonDir, expectedGitCommonDir)
-          );
-      })()
+      && worktreeGitCommonDir
+      && (
+        worktreeGitCommonDir === expectedGitCommonDir
+        || sameFilesystemLocation(worktreeGitCommonDir, expectedGitCommonDir)
+      )
     );
   const prunedRelayOwnedWorktreeForCleanup = acceptPrunedRelayOwned
     && !relayOwnedWorktree
-    && (!fs.existsSync(worktree) || !getWorktreeGitCommonDir(worktree))
+    && (!worktreeGitCommonDir || !fs.existsSync(worktreeGitCommonDir))
     && isRelayOwnedWorktreeShapeForCleanup({ relayWorktreeBase, worktree, repoRoot });
 
   if (!repoContainedWorktree && !relayOwnedWorktree && !prunedRelayOwnedWorktreeForCleanup) {
@@ -404,6 +404,7 @@ function validateManifestPaths(paths, {
     repoRoot,
     worktree,
     worktreeLocation: repoContainedWorktree ? "repo_root" : "relay_worktree",
+    prunedRelayOwnedForCleanup: prunedRelayOwnedWorktreeForCleanup,
     relayWorktreeBase,
   };
 }
