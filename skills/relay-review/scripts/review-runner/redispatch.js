@@ -188,12 +188,16 @@ function allFlippedFactorIssuesDeepen(issues, factorFlips) {
   return tiedIssues.length > 0 && tiedIssues.every((issue) => issue.lineage === "deepening");
 }
 
+function isCleanPassVerdict(verdict) {
+  return verdict?.verdict === "pass" && (!Array.isArray(verdict.issues) || verdict.issues.length === 0);
+}
+
 function decideFlipFlopEscalation({ verdict, factorFlips, repeatedIssueCount }) {
   const factors = factorFlips.map(({ factor }) => factor);
   const traces = factorFlips.map(({ factor, trace }) => ({ factor, trace }));
   const lineage_summary = summarizeLineage(verdict?.issues || []);
   if (!factorFlips.length) return { decision: "continue", reason: "no_trigger", factors: [], traces: [], lineage_summary };
-  if (repeatedIssueCount === 0 && allFlippedFactorIssuesDeepen(verdict?.issues, factorFlips)) {
+  if (repeatedIssueCount === 0 && (isCleanPassVerdict(verdict) || allFlippedFactorIssuesDeepen(verdict?.issues, factorFlips))) {
     return { decision: "continue", reason: "progressive_deepening", factors, traces, lineage_summary };
   }
   return { decision: "escalate", reason: "flip_flop_thrash", factors, traces, lineage_summary };

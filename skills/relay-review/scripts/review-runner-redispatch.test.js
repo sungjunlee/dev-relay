@@ -159,6 +159,16 @@ test("redispatch/decideFlipFlopEscalation suppresses progressive deepening flip-
   });
 });
 
+test("redispatch/decideFlipFlopEscalation preserves clean pass verdicts on flip-flop with zero repeats", () => {
+  assert.deepEqual(makeFlipDecision({ verdict: { verdict: "pass", issues: [] } }), {
+    decision: "continue",
+    reason: "progressive_deepening",
+    factors: ["Behavior"],
+    traces: [{ factor: "Behavior", trace: ["pass", "fail", "pass"] }],
+    lineage_summary: { deepening: 0, repeat: 0, new: 0, newly_scoreable: 0, unknown: 0 },
+  });
+});
+
 test("redispatch/decideFlipFlopEscalation escalates mixed lineage flip-flops", () => {
   const decision = makeFlipDecision({
     verdict: { issues: [makeFlipIssue(), makeFlipIssue({ title: "Behavior still broken", lineage: "repeat" })] },

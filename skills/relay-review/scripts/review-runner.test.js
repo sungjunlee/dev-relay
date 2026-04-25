@@ -2023,7 +2023,7 @@ test("repeated identical issues escalate on the third consecutive round", () => 
   assert.equal(manifest.review.repeated_issue_count, 0);
 });
 
-test("rubric factor flip-flops escalate even when the reviewer returns pass", () => {
+test("rubric factor flip-flops preserve pass verdicts when there are zero repeated issues", () => {
   const { repoRoot, manifestPath, runId, doneCriteriaPath, diffPath } = setupRepo();
   const runDir = ensureRunLayout(repoRoot, runId).runDir;
   fs.writeFileSync(path.join(runDir, "review-round-1-verdict.json"), JSON.stringify({ verdict: "changes_requested", rubric_scores: [{ factor: "Behavior", status: "pass" }] }), "utf-8");
@@ -2037,9 +2037,11 @@ test("rubric factor flip-flops escalate even when the reviewer returns pass", ()
   });
   const result = JSON.parse(execFileSync("node", [SCRIPT, "--repo", repoRoot, "--run-id", runId, "--pr", "123", "--done-criteria-file", doneCriteriaPath, "--diff-file", diffPath, "--review-file", reviewFile, "--no-comment", "--json"], { encoding: "utf-8" }));
   const verdict = JSON.parse(fs.readFileSync(result.verdictPath, "utf-8"));
-  assert.equal(result.state, STATES.ESCALATED);
-  assert.equal(verdict.verdict, "escalated");
-  assert.equal(verdict.summary, "Rubric factor 'BEHAVIOR' status flipped across 3 rounds (trace: pass→fail→pass). Owner decision required — reviewer cannot converge autonomously.");
+  const manifest = readManifest(manifestPath).data;
+  assert.equal(result.state, STATES.READY_TO_MERGE);
+  assert.equal(verdict.verdict, "pass");
+  assert.equal(manifest.review.last_escalation_decision.decision, "continue");
+  assert.equal(manifest.review.last_escalation_decision.reason, "progressive_deepening");
 });
 
 test("formatPriorVerdictSummary produces correct round numbers and rubric summaries", () => {
