@@ -32,6 +32,13 @@ function formatPrBodySnapshotSection(prBodyPath, prBodySnapshot) {
   ].join("\n");
 }
 
+function formatDoneCriteriaSource(doneCriteriaSource) {
+  if (doneCriteriaSource === "planner_decision") {
+    return "planner_decision (operator-authored Phase 1 decision; supersedes issue body)";
+  }
+  return doneCriteriaSource || "done-criteria";
+}
+
 function buildPrompt({ round, prNumber, branch, issueNumber, doneCriteria, doneCriteriaSource, diffText, reviewRepoPath, runDir, rubricLoad, prBodyPath, prBodySnapshot }) {
   const template = renderProjectConventions(readText(REVIEWER_PROMPT_PATH)
     .replace("source=\"done-criteria\"", `source="${doneCriteriaSource || "done-criteria"}"`)
@@ -44,6 +51,7 @@ function buildPrompt({ round, prNumber, branch, issueNumber, doneCriteria, doneC
     `PR: #${prNumber || "unknown"}`,
     `Branch: ${branch || "unknown"}`,
     `Issue: ${issueNumber || "unknown"}`,
+    `Done Criteria source: ${formatDoneCriteriaSource(doneCriteriaSource)}`,
   ];
   const prBodySnapshotSection = formatPrBodySnapshotSection(prBodyPath, prBodySnapshot);
   if (prBodySnapshotSection) sections.push("", prBodySnapshotSection);
@@ -113,4 +121,5 @@ module.exports = {
   buildPrompt,
   formatPrBodySnapshotSection,
   formatPriorVerdictSummary,
+  formatDoneCriteriaSource,
 };

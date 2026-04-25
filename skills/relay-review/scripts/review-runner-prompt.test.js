@@ -73,6 +73,29 @@ test("prompt/buildPrompt frames PR body snapshot path before Done Criteria", () 
   assert.ok(prompt.indexOf("## PR Description Snapshot") < prompt.indexOf("<task-content source="));
 });
 
+test("prompt/buildPrompt labels planner_decision Done Criteria source", () => {
+  const prompt = buildPrompt({
+    round: 1,
+    prNumber: 294,
+    branch: "issue-294",
+    issueNumber: 294,
+    doneCriteria: "# Done Criteria\n\n- Follow the Phase 1 deviation\n",
+    doneCriteriaSource: "planner_decision",
+    diffText: "diff --git a/a.js b/a.js\n",
+    runDir: null,
+    rubricLoad: {
+      warning: null,
+      content: null,
+    },
+  });
+
+  assert.match(
+    prompt,
+    /Done Criteria source: planner_decision \(operator-authored Phase 1 decision; supersedes issue body\)/
+  );
+  assert.match(prompt, /<task-content source="planner_decision">/);
+});
+
 test("prompt/buildPrompt makes failed PR body snapshots explicit", () => {
   const prompt = buildPrompt({
     round: 1,

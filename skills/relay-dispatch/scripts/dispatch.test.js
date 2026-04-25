@@ -2888,6 +2888,61 @@ test("dispatch stores request linkage and frozen done criteria anchor in manifes
   assert.equal(manifest.anchor.done_criteria_source, "request_snapshot");
 });
 
+test("dispatch infers planner_decision for canonical run-dir done criteria anchor", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  writeFakeCodex(binDir);
+  const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}` };
+  const runId = "issue-294-20260425020202000-cafebabe";
+  const runDir = getRunDir(repoRoot, runId);
+  fs.mkdirSync(runDir, { recursive: true });
+  const doneCriteriaFile = path.join(runDir, "done-criteria.md");
+  fs.writeFileSync(doneCriteriaFile, "# Done Criteria\n\n- Planner decision\n", "utf-8");
+  const rubricFile = path.join(repoRoot, "rubric.yaml");
+  fs.writeFileSync(rubricFile, "rubric:\n  factors:\n    - name: planner anchor\n      target: source planner_decision\n", "utf-8");
+
+  const result = JSON.parse(runDispatch(repoRoot, [
+    "--run-id", runId,
+    "-b", "issue-294",
+    "--prompt", "planner anchor test",
+    "--done-criteria-file", doneCriteriaFile,
+    "--rubric-file", rubricFile,
+    "--json",
+  ], env));
+
+  assert.equal(result.status, "completed");
+  assert.equal(result.mode, "new");
+  assert.equal(result.doneCriteriaPath, doneCriteriaFile);
+
+  const manifest = readManifest(result.manifestPath).data;
+  assert.equal(manifest.run_id, runId);
+  assert.equal(manifest.anchor.done_criteria_path, doneCriteriaFile);
+  assert.equal(manifest.anchor.done_criteria_source, "planner_decision");
+});
+
+test("dispatch preserves file source for ad-hoc done criteria paths", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  writeFakeCodex(binDir);
+  const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}` };
+  const doneCriteriaFile = path.join(repoRoot, "adhoc-done-criteria.md");
+  fs.writeFileSync(doneCriteriaFile, "# Done Criteria\n\n- Ad-hoc file\n", "utf-8");
+
+  const result = JSON.parse(runDispatch(repoRoot, [
+    "-b", "issue-294-adhoc",
+    "--prompt", "ad-hoc anchor test",
+    "--done-criteria-file", doneCriteriaFile,
+    "--json",
+  ], env));
+
+  assert.equal(result.status, "completed");
+  const manifest = readManifest(result.manifestPath).data;
+  assert.equal(manifest.anchor.done_criteria_path, doneCriteriaFile);
+  assert.equal(manifest.anchor.done_criteria_source, "file");
+});
+
 test("dispatch dry-run includes request linkage and frozen done criteria file info", () => {
   const { repoRoot, relayHome } = setupRepo();
   process.env.RELAY_HOME = relayHome;
