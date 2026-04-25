@@ -36,6 +36,11 @@ const REVIEW_VERDICT_PROPERTIES = {
         line: { type: "integer", minimum: 1 },
         category: { type: "string", minLength: 1 },
         severity: { type: "string", minLength: 1 },
+        lineage: {
+          type: "string",
+          enum: ["new", "deepening", "repeat", "newly_scoreable", "unknown"],
+        },
+        relates_to: { type: "string", minLength: 1 },
       },
     },
   },

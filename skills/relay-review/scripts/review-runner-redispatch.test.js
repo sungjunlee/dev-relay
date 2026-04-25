@@ -10,12 +10,32 @@ const {
   buildReviewRunnerRubricGateFailure,
   computeFactorStatusFlips,
   computeRepeatedIssueCount,
+  decideFlipFlopEscalation,
   detectChurnGrowth,
   scanPriorVerdicts,
+  summarizeLineage,
 } = require("./review-runner/redispatch");
 
 function tempRunDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-redispatch-"));
+}
+
+function makeFlipIssue(overrides = {}) {
+  return {
+    title: "Behavior edge case",
+    category: "Behavior",
+    lineage: "deepening",
+    ...overrides,
+  };
+}
+
+function makeFlipDecision(overrides = {}) {
+  return decideFlipFlopEscalation({
+    verdict: { issues: [makeFlipIssue()] },
+    factorFlips: [{ factor: "Behavior", trace: ["pass", "fail", "pass"] }],
+    repeatedIssueCount: 0,
+    ...overrides,
+  });
 }
 
 test("redispatch/detectChurnGrowth preserves the diff-growth matrix", () => {
@@ -127,6 +147,57 @@ test("redispatch/computeFactorStatusFlips ignores factors that change in differe
   fs.writeFileSync(path.join(runDir, "review-round-2-verdict.json"), JSON.stringify({ rubric_scores: [{ factor: "A", status: "fail" }, { factor: "B", status: "pass" }] }), "utf-8");
   const flips = computeFactorStatusFlips(runDir, 3, { rubric_scores: [{ factor: "A", status: "fail" }, { factor: "B", status: "fail" }] });
   assert.deepEqual(flips, []);
+});
+
+test("redispatch/decideFlipFlopEscalation suppresses progressive deepening flip-flops", () => {
+  assert.deepEqual(makeFlipDecision(), {
+    decision: "continue",
+    reason: "progressive_deepening",
+    factors: ["Behavior"],
+    traces: [{ factor: "Behavior", trace: ["pass", "fail", "pass"] }],
+    lineage_summary: { deepening: 1, repeat: 0, new: 0, newly_scoreable: 0, unknown: 0 },
+  });
+});
+
+test("redispatch/decideFlipFlopEscalation preserves clean pass verdicts on flip-flop with zero repeats", () => {
+  assert.deepEqual(makeFlipDecision({ verdict: { verdict: "pass", issues: [] } }), {
+    decision: "continue",
+    reason: "progressive_deepening",
+    factors: ["Behavior"],
+    traces: [{ factor: "Behavior", trace: ["pass", "fail", "pass"] }],
+    lineage_summary: { deepening: 0, repeat: 0, new: 0, newly_scoreable: 0, unknown: 0 },
+  });
+});
+
+test("redispatch/decideFlipFlopEscalation escalates mixed lineage flip-flops", () => {
+  const decision = makeFlipDecision({
+    verdict: { issues: [makeFlipIssue(), makeFlipIssue({ title: "Behavior still broken", lineage: "repeat" })] },
+  });
+  assert.equal(decision.decision, "escalate");
+  assert.equal(decision.reason, "flip_flop_thrash");
+  assert.deepEqual(decision.lineage_summary, { deepening: 1, repeat: 1, new: 0, newly_scoreable: 0, unknown: 0 });
+});
+
+test("redispatch/decideFlipFlopEscalation escalates repeated-issue thrash even with deepening lineage", () => {
+  const decision = makeFlipDecision({ repeatedIssueCount: 1 });
+  assert.equal(decision.decision, "escalate");
+  assert.equal(decision.reason, "flip_flop_thrash");
+});
+
+test("redispatch/decideFlipFlopEscalation escalates missing lineage on flipped-factor issues", () => {
+  const decision = makeFlipDecision({ verdict: { issues: [makeFlipIssue({ lineage: undefined })] } });
+  assert.equal(decision.decision, "escalate");
+  assert.equal(decision.reason, "flip_flop_thrash");
+  assert.deepEqual(decision.lineage_summary, { deepening: 0, repeat: 0, new: 0, newly_scoreable: 0, unknown: 1 });
+});
+
+test("redispatch/summarizeLineage distinguishes unknown from repeat", () => {
+  assert.deepEqual(summarizeLineage([
+    { lineage: "repeat" },
+    { lineage: "unknown" },
+    {},
+    { lineage: "made_up" },
+  ]), { deepening: 0, repeat: 1, new: 0, newly_scoreable: 0, unknown: 3 });
 });
 
 test("redispatch/buildReviewRunnerRubricGateFailure preserves the fail-closed recovery matrix", async (t) => {

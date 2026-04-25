@@ -35,6 +35,7 @@ function parseScalar(value) {
   if (value === "null") return null;
   if (value === "true") return true;
   if (value === "false") return false;
+  if (value.startsWith("[") && value.endsWith("]")) return JSON.parse(value);
   if (/^-?\d+(?:\.\d+)?$/.test(value)) return Number(value);
   if (value.startsWith("'") && value.endsWith("'")) {
     return value.slice(1, -1).replace(/''/g, "'");
@@ -108,6 +109,7 @@ function parseFrontmatter(text) {
 
 function formatScalar(value) {
   if (value === null) return "null";
+  if (Array.isArray(value)) return JSON.stringify(value);
   if (typeof value === "boolean" || typeof value === "number") return String(value);
   if (typeof value === "string" && value.includes("\n")) {
     return JSON.stringify(value);

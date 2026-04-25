@@ -48,6 +48,17 @@ function makePassVerdict(overrides = {}) {
   };
 }
 
+function makeChangesRequestedVerdict(issueOverrides = {}) {
+  return makePassVerdict({
+    verdict: "changes_requested",
+    summary: "Fix the blocking issue.",
+    contract_status: "fail",
+    quality_review_status: "not_run",
+    next_action: "changes_requested",
+    issues: [makeIssue(issueOverrides)],
+  });
+}
+
 test("verdict/parseReviewVerdict preserves a valid payload shape", () => {
   const payload = makePassVerdict();
   const encoded = JSON.stringify(payload);
@@ -63,6 +74,35 @@ test("verdict/validateReviewVerdict allows reviewer payloads to omit quality_exe
 
   const validated = validateReviewVerdict(reviewerPayload, { requireExecutionStatus: false });
   assert.equal(validated.quality_execution_status, undefined);
+});
+
+test("verdict/validateReviewVerdict accepts every lineage enum value", async (t) => {
+  for (const lineage of ["new", "deepening", "repeat", "newly_scoreable", "unknown"]) {
+    await t.test(lineage, () => {
+      const verdict = validateReviewVerdict(makeChangesRequestedVerdict({ lineage, relates_to: "round-1 issue" }));
+      assert.equal(verdict.issues[0].lineage, lineage);
+    });
+  }
+});
+
+test("verdict/validateReviewVerdict accepts missing lineage for back-compat", () => {
+  const verdict = validateReviewVerdict(makeChangesRequestedVerdict());
+  assert.equal(verdict.issues[0].lineage, undefined);
+});
+
+test("verdict/validateReviewVerdict rejects unrecognized lineage values", () => {
+  assert.throws(
+    () => validateReviewVerdict(makeChangesRequestedVerdict({ lineage: "made_up" })),
+    /issues\[0\]\.lineage must be one of: new, deepening, repeat, newly_scoreable, unknown/
+  );
+});
+
+test("verdict/validateReviewVerdict validates relates_to when present", () => {
+  assert.equal(validateReviewVerdict(makeChangesRequestedVerdict({ relates_to: "prior finding" })).issues[0].relates_to, "prior finding");
+  assert.throws(
+    () => validateReviewVerdict(makeChangesRequestedVerdict({ relates_to: "" })),
+    /issues\[0\]\.relates_to must be a non-empty string when present/
+  );
 });
 
 test("verdict/parseReviewVerdict rejects invalid JSON", () => {

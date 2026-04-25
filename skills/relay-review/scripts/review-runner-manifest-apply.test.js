@@ -120,6 +120,19 @@ function normalizeUpdatedTimestamp(manifest) {
   };
 }
 
+function makeEscalationDecision(overrides = {}) {
+  return {
+    round: 1,
+    trigger: "none",
+    factors: [],
+    traces: [],
+    lineage_summary: { deepening: 0, repeat: 0, new: 0, newly_scoreable: 0, unknown: 0 },
+    decision: "continue",
+    reason: "no_trigger",
+    ...overrides,
+  };
+}
+
 function assertManifestWriteParity(actual, before, expected) {
   assert.equal(actual.timestamps.created_at, before.timestamps.created_at);
   assert.ok(Date.parse(actual.timestamps.updated_at) >= Date.parse(before.timestamps.updated_at));
@@ -155,6 +168,22 @@ test("manifest-apply/applyVerdictToManifest preserves the PASS field-write contr
       last_gate: null,
     },
   });
+});
+
+test("manifest-apply/applyVerdictToManifest writes last_escalation_decision on clean rounds", () => {
+  const manifest = createManifestInState(STATES.REVIEW_PENDING);
+  const escalationDecision = makeEscalationDecision();
+  const result = applyVerdictToManifest(
+    manifest,
+    makeVerdict("pass", "ready_to_merge"),
+    1,
+    189,
+    "abc123",
+    0,
+    { escalationDecision }
+  );
+
+  assert.deepEqual(result.review.last_escalation_decision, escalationDecision);
 });
 
 test("manifest-apply/applyVerdictToManifest fail-closes PASS with the full rubric gate payload", () => {

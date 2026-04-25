@@ -21,19 +21,16 @@ const { buildPrompt, formatPriorVerdictSummary } = require("./review-runner/prom
 const { ALLOWED_SCORE_TIERS, parseReviewVerdict, validateReviewVerdict, validateScopeDrift } = require("./review-runner/verdict");
 const { buildCommentBody, formatIssueList, formatScopeDrift, postComment } = require("./review-runner/comment");
 const { buildScoreDivergenceAnalysis, loadPrBody, parseScoreLog } = require("./review-runner/divergence");
-const {
-  applyQualityExecutionStatus,
-  buildExecutionEvidenceFailureVerdict,
-  buildMissingExecutionEvidenceVerdict,
-  computeQualityExecutionStatus,
-} = require("./review-runner/execution-evidence");
+const { applyQualityExecutionStatus, buildExecutionEvidenceFailureVerdict, buildMissingExecutionEvidenceVerdict, computeQualityExecutionStatus } = require("./review-runner/execution-evidence");
 const {
   buildRedispatchPrompt,
   buildReviewRunnerRubricGateFailure,
   buildRubricGateRedispatchPrompt,
   computeFactorStatusFlips,
   computeRepeatedIssueCount,
+  decideFlipFlopEscalation,
   detectChurnGrowth,
+  summarizeLineage,
   toEscalatedVerdict,
 } = require("./review-runner/redispatch");
 const { applyPolicyViolationToManifest, applyVerdictToManifest } = require("./review-runner/manifest-apply");
@@ -142,14 +139,13 @@ function run() {
   } catch {}
 
   if (round > maxRounds) {
-    const escalatedManifest = applyPolicyViolationToManifest(
-      data,
-      Number(data.review?.rounds || 0),
-      prNumber,
-      reviewedHeadSha,
-      "max_rounds_exceeded"
-    );
+    const escalationDecision = {
+      round: Number(data.review?.rounds || 0), trigger: "max_rounds", factors: [], traces: [],
+      lineage_summary: summarizeLineage([]), decision: "escalate", reason: "max_rounds_exceeded",
+    };
+    const escalatedManifest = applyPolicyViolationToManifest(data, Number(data.review?.rounds || 0), prNumber, reviewedHeadSha, "max_rounds_exceeded", { escalationDecision });
     writeManifest(manifestPath, escalatedManifest, body);
+    appendRunEvent(runRepoPath, data.run_id, { event: "escalation_decision", state_from: data.state, state_to: STATES.ESCALATED, head_sha: reviewedHeadSha, ...escalationDecision });
     appendRunEvent(runRepoPath, data.run_id, {
       event: "review_apply",
       state_from: data.state,
@@ -262,14 +258,19 @@ function run() {
   const repeatedIssueCount = verdict.verdict === "changes_requested"
     ? computeRepeatedIssueCount(runDir, round, verdict.issues)
     : 0;
+  let escalationDecision = { round, trigger: "none", factors: [], traces: [], lineage_summary: summarizeLineage(verdict.issues), decision: "continue", reason: "no_trigger" };
   if (verdict.verdict === "changes_requested" && repeatedIssueCount >= 3) {
     verdict = toEscalatedVerdict(
       verdict,
       `Repeated identical review issues hit ${repeatedIssueCount} consecutive rounds.`
     );
+    escalationDecision = { ...escalationDecision, trigger: "repeated_issues", decision: "escalate", reason: "repeated_issues" };
   }
   const factorFlips = computeFactorStatusFlips(runDir, round, verdict);
-  if (factorFlips.length) {
+  if (factorFlips.length && escalationDecision.trigger !== "repeated_issues") {
+    escalationDecision = { round, trigger: "flip_flop", ...decideFlipFlopEscalation({ verdict, factorFlips, repeatedIssueCount }) };
+  }
+  if (escalationDecision.decision === "escalate" && escalationDecision.trigger === "flip_flop") {
     verdict = toEscalatedVerdict(
       verdict,
       factorFlips.map(({ factor, trace }) => `Rubric factor '${factor}' status flipped across 3 rounds (trace: ${trace.join("→")}). Owner decision required — reviewer cannot converge autonomously.`).join("; ")
@@ -321,15 +322,7 @@ function run() {
     result.commentPosted = true;
   }
 
-  let updatedManifest = applyVerdictToManifest(
-    data,
-    verdict,
-    round,
-    prNumber,
-    reviewedHeadSha,
-    repeatedIssueCount,
-    { rubricGateFailure }
-  );
+  let updatedManifest = applyVerdictToManifest(data, verdict, round, prNumber, reviewedHeadSha, repeatedIssueCount, { rubricGateFailure, escalationDecision });
   updatedManifest = {
     ...updatedManifest,
     review: {
@@ -339,6 +332,7 @@ function run() {
   };
   updatedManifest = applyReviewerIdentity(updatedManifest, noComment, runRepoPath);
   writeManifest(manifestPath, updatedManifest, body);
+  appendRunEvent(runRepoPath, data.run_id, { event: "escalation_decision", state_from: data.state, state_to: updatedManifest.state, head_sha: reviewedHeadSha, ...escalationDecision });
   appendRunEvent(runRepoPath, data.run_id, {
     event: "review_apply",
     state_from: data.state,
