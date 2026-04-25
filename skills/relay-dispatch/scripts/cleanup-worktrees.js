@@ -98,6 +98,7 @@ function run() {
         expectedRepoRoot: repoRoot,
         manifestPath,
         runId: data.run_id,
+        acceptPrunedRelayOwned: true,
         caller: "cleanup-worktrees",
       });
       normalizedData = {
@@ -144,6 +145,7 @@ function run() {
       gitBin,
       dryRun,
       deleteMergedBranch: normalizedData.state === "merged",
+      acceptPrunedRelayOwned: true,
     });
 
     const item = {

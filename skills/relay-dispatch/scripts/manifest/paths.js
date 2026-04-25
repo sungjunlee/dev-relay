@@ -238,6 +238,36 @@ function sameFilesystemLocation(leftPath, rightPath) {
   }
 }
 
+function isRealpathContainedWithin(basePath, candidatePath, { allowEqual = false } = {}) {
+  if (!basePath || !candidatePath) return false;
+  try {
+    const realBase = fs.realpathSync.native(basePath);
+    const realCandidate = fs.realpathSync.native(candidatePath);
+    return isPathContainedWithin(realBase, realCandidate, { allowEqual });
+  } catch {
+    return false;
+  }
+}
+
+function isRelayOwnedWorktreeShapeForCleanup({ relayWorktreeBase, worktree, repoRoot }) {
+  const structurallyRelayOwned = isPathContainedWithin(relayWorktreeBase, worktree)
+    && path.basename(worktree) === path.basename(repoRoot);
+  if (!structurallyRelayOwned) {
+    return false;
+  }
+
+  if (fs.existsSync(worktree)) {
+    return isRealpathContainedWithin(relayWorktreeBase, worktree);
+  }
+
+  // A missing stale worktree cannot be realpath-resolved. In cleanup mode this
+  // structural recorded-path check is sufficient because cleanup consumes only
+  // the recorded path (git worktree remove --force when present; absent paths
+  // have no target to dereference). Malicious manifest write paths are a
+  // separate manifest-authoring trust boundary.
+  return true;
+}
+
 function getWorktreeGitCommonDir(worktreePath) {
   if (!worktreePath || !fs.existsSync(worktreePath)) {
     return null;
@@ -274,6 +304,7 @@ function validateManifestPaths(paths, {
   manifestPath,
   runId,
   requireWorktree = false,
+  acceptPrunedRelayOwned = false,
   caller = "relay manifest consumer",
 } = {}) {
   if (!paths || typeof paths !== "object" || Array.isArray(paths)) {
@@ -356,8 +387,12 @@ function validateManifestPaths(paths, {
           );
       })()
     );
+  const prunedRelayOwnedWorktreeForCleanup = acceptPrunedRelayOwned
+    && !relayOwnedWorktree
+    && (!fs.existsSync(worktree) || !getWorktreeGitCommonDir(worktree))
+    && isRelayOwnedWorktreeShapeForCleanup({ relayWorktreeBase, worktree, repoRoot });
 
-  if (!repoContainedWorktree && !relayOwnedWorktree) {
+  if (!repoContainedWorktree && !relayOwnedWorktree && !prunedRelayOwnedWorktreeForCleanup) {
     throw new Error(
       `${caller}: manifest paths.worktree ${JSON.stringify(worktree)} is not contained under the expected repo root ` +
       `${JSON.stringify(repoRoot)} and is not a relay-owned worktree under ${JSON.stringify(relayWorktreeBase)} ` +

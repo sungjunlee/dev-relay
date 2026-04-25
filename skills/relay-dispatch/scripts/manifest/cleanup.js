@@ -84,10 +84,18 @@ function readWorktreeStatus(gitBin, worktreePath) {
   }
 }
 
-function runCleanup({ repoRoot, data, gitBin = "git", dryRun = false, deleteMergedBranch = false }) {
+function runCleanup({
+  repoRoot,
+  data,
+  gitBin = "git",
+  dryRun = false,
+  deleteMergedBranch = false,
+  acceptPrunedRelayOwned = false,
+}) {
   const validatedPaths = validateManifestPaths(data?.paths, {
     expectedRepoRoot: repoRoot,
     runId: data?.run_id,
+    acceptPrunedRelayOwned,
     caller: "runCleanup",
   });
   const normalizedData = {
