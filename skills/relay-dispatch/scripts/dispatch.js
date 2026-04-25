@@ -13,7 +13,7 @@
  *
  * Options:
  *   --branch, -b <name>    Branch name (required)
- *   --run-id <id>          Resume an existing relay run
+ *   --run-id <id>          Resume an existing run, or reserve id for new dispatch with --branch
  *   --manifest <path>      Resume an existing relay run from its manifest
  *   --prompt, -p <text>    Task prompt
  *   --prompt-file <path>   Read prompt from file (for large prompts)
@@ -83,6 +83,7 @@ const {
   getManifestPath,
   getRunDir,
   inferIssueNumber,
+  sameFilesystemLocation,
   validateManifestPaths,
 } = require("./manifest/paths");
 const {
@@ -119,7 +120,7 @@ if (!args.length || hasCliFlag(["--help", "-h"])) {
   console.log("       dispatch.js --manifest <path> --prompt-file <path> [options]");
   console.log("\nOptions:");
   console.log(`  --branch, -b       ${modeLabel("--branch")} Branch name (required)`);
-  console.log(`  --run-id           ${modeLabel("--run-id")} Resume an existing relay run`);
+  console.log(`  --run-id           ${modeLabel("--run-id")} Resume an existing run, or reserve id for new dispatch with --branch`);
   console.log(`  --manifest         ${modeLabel("--manifest")} Resume an existing relay run from its manifest`);
   console.log(`  --prompt, -p       ${modeLabel("--prompt")} Task prompt`);
   console.log(`  --prompt-file      ${modeLabel("--prompt-file")} Read prompt from file`);
@@ -223,7 +224,7 @@ const REGISTER = hasCliFlag("--register");
 const NO_CLEANUP = hasCliFlag("--no-cleanup");
 const DRY_RUN = hasCliFlag("--dry-run");
 const JSON_OUT = hasCliFlag("--json");
-const RESUME_MODE = !!RUN_ID || !!MANIFEST_INPUT;
+const RESUME_MODE = !!MANIFEST_INPUT || (!!RUN_ID && !BRANCH);
 // ---------------------------------------------------------------------------
 // Validation
 // ---------------------------------------------------------------------------
@@ -414,6 +415,28 @@ function failRunDirCollision(runId, manifestPath) {
     "Pass --run-id <id> to resume, or --manifest <path> to resume from an explicit manifest.",
   ].join("\n"));
   process.exit(1);
+}
+
+function isPlannerAnchorOnlyRunDir(runDir) {
+  if (!fs.existsSync(runDir)) return false;
+  const entries = fs.readdirSync(runDir).filter((entry) => entry !== ".DS_Store");
+  return entries.length === 1 && entries[0] === "done-criteria.md";
+}
+
+function isCanonicalPlannerDoneCriteriaPath(repoRoot, runId, doneCriteriaPath) {
+  if (!doneCriteriaPath) return false;
+  const canonicalPath = path.join(getRunDir(repoRoot, runId), "done-criteria.md");
+  return path.resolve(doneCriteriaPath) === canonicalPath
+    || sameFilesystemLocation(doneCriteriaPath, canonicalPath);
+}
+
+function inferDoneCriteriaSource({ repoRoot, runId, doneCriteriaPath, requestId, leafId }) {
+  if (!doneCriteriaPath) return null;
+  if (requestId || leafId) return "request_snapshot";
+  if (isCanonicalPlannerDoneCriteriaPath(repoRoot, runId, doneCriteriaPath)) {
+    return "planner_decision";
+  }
+  return "file";
 }
 
 function copyFileAtomically(sourcePath, finalPath) {
@@ -628,9 +651,10 @@ async function main() {
       });
     }
   } else {
-    runId = createRunId({ issueNumber, branch });
+    runId = runId || createRunId({ issueNumber, branch });
     manifestPath = getManifestPath(repoRoot, runId);
-    if (fs.existsSync(getRunDir(repoRoot, runId))) {
+    const runDir = getRunDir(repoRoot, runId);
+    if (fs.existsSync(manifestPath) || (fs.existsSync(runDir) && !isPlannerAnchorOnlyRunDir(runDir))) {
       failRunDirCollision(runId, manifestPath);
     }
     baseBranch = resolveBaseBranchForNewDispatch(repoRoot);
@@ -825,7 +849,13 @@ async function main() {
       requestId: REQUEST_ID || null,
       leafId: LEAF_ID || null,
       doneCriteriaPath: resolvedDoneCriteriaPath,
-      doneCriteriaSource: resolvedDoneCriteriaPath ? "request_snapshot" : null,
+      doneCriteriaSource: inferDoneCriteriaSource({
+        repoRoot,
+        runId,
+        doneCriteriaPath: resolvedDoneCriteriaPath,
+        requestId: REQUEST_ID,
+        leafId: LEAF_ID,
+      }),
       modelHints: MODEL_HINTS,
     });
     ensureRunLayout(repoRoot, runId);

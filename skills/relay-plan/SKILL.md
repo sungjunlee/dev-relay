@@ -31,7 +31,7 @@ Before designing the rubric, read relay reliability history:
 node ${CLAUDE_SKILL_DIR}/../relay-dispatch/scripts/reliability-report.js --repo . --json
 ```
 
-Use `historical_signal.stuck_factors`, `historical_signal.divergence_hotspots`, and `historical_signal.avg_rounds` to tighten factor wording, calibration examples, and review guidance. The signal does not gate dispatch, alter state transitions, or modify rubric structure. Empty-history and failure cases are rendered as `no historical data available`. Full field mapping + case handling: `references/signals.md` § Historical signal.
+Use `historical_signal.stuck_factors`, `divergence_hotspots`, and `avg_rounds` to tighten factor wording and calibration. The signal does not gate dispatch or alter state. Empty/failure cases render as `no historical data available`; details: `references/signals.md`.
 
 ### 1.6 Read probe quality signals
 
@@ -41,7 +41,7 @@ Before designing the rubric, read repo-local quality signals:
 node ${CLAUDE_SKILL_DIR}/scripts/probe-executor-env.js . --project-only --json
 ```
 
-Use `probe_signal.test_infra`, `probe_signal.lint_format`, `probe_signal.type_check`, `probe_signal.ci`, and `probe_signal.scripts` to inform rubric design, prerequisite naming, and Available Tools context. The planner picks what fits the task — the signal exposes data, it does not pick for them. No-signal and failure cases are rendered as `no quality infra detected`. Full field mapping + case handling: `references/signals.md` § Probe signal.
+Use `probe_signal.test_infra`, `lint_format`, `type_check`, `ci`, and `scripts` to inform rubric design, prerequisites, and Available Tools. The signal exposes data; it does not pick. No-signal/failure cases render as `no quality infra detected`; details: `references/signals.md`.
 
 ### 2. Build the rubric
 
@@ -49,57 +49,34 @@ Use the guided interview (`references/rubric-design-guide.md`) to derive factors
 
 ```yaml
 rubric:
-  setup: "npm install && npm start &"              # run before checks (if needed)
-  baseline: "npm run metrics > baseline.json"      # capture before-state (if delta metrics used)
-
-  prerequisites:                                    # repo-wide hygiene; must all pass; uncounted
+  prerequisites:
     - command: "npm test"
       target: "exit 0"
-    - command: "npx tsc --noEmit"
-      target: "exit 0"
-
-  factors:                                          # substantive checks (contract + quality)
+  factors:
     - name: API returns cursor-paginated response
       tier: contract
       type: automated
       command: "curl -s localhost:3000/api/items?limit=10 | jq '.next_cursor'"
       target: "non-null cursor string"
       weight: required
-
     - name: Pagination robustness
       tier: quality
       type: evaluated
-      criteria: |
-        - Last page: returns empty array + no next cursor (not null, not error)
-        - Concurrent writes: cursor stable when items inserted/deleted mid-pagination
-        - Large result set: query plan uses index scan (EXPLAIN ANALYZE)
-        - Cursor opacity: cursor is encoded, not raw DB id exposed to client
-      scoring_guide:
-        low: "Happy path works, last page returns error or null cursor"
-        mid: "Last page handled, but cursor is raw ID, no query plan check"
-        high: "All four criteria met, cursor is opaque, query uses index"
+      criteria: "Last page works; cursor is opaque and stable under writes."
+      scoring_guide: { low: "happy path only", mid: "last page handled", high: "opaque stable cursor" }
       target: ">= 8/10"
       weight: required
 ```
 
-Tier classification (hygiene / contract / quality), `type` = `automated` vs `evaluated`, and `weight` = `required` vs `best-effort`: see `references/rubric-design-guide.md` § Guided Interview. `setup`/`baseline` run before checks; `criteria` must be specific bullets; `scoring_guide` provides three anchors (low/mid/high) that executor and reviewer share.
+Tier classification, `type`, `weight`, `setup`/`baseline`, `criteria`, and `scoring_guide`: see `references/rubric-design-guide.md`.
 
-### Domain references (for expert perspective)
+### Domain references
 
-Consult `references/rubric-*.md` for specialist thinking. Design factors from AC, informed by (not copied from) references.
-
-| Task type | Reference | Key signal |
-|-----------|-----------|-----------|
-| UI components, pages, interactions | `rubric-frontend.md` | Lighthouse, CLS, a11y, interaction fidelity |
-| API endpoints, data layer, infra | `rubric-backend.md` | Query count, response time, failure modes |
-| User input, auth, file uploads, APIs with sensitive data | `rubric-security.md` | Trust boundaries, auth coverage, injection resistance, exposure control |
-| Code restructuring, migration | `rubric-refactoring.md` | Dead code delta, concept count, dependency direction |
-| README, guides, API docs, specs | `rubric-documentation.md` | Reader testing score, zero-context completeness |
-| Design-driven features, UX flows | `rubric-design.md` | Value → Usability → Delight hierarchy |
+Consult `references/rubric-*.md` for frontend, backend, security, refactoring, documentation, and design thinking. Design factors from AC, informed by references.
 
 ### Trust-model audit factor (auth-boundary tasks)
 
-If the task crosses an auth boundary (label `phase-0-follow-up`; keywords trust root, anchor, invariant, grandfather, validate, forge, bypass, gate-check, auth-boundary; or any `validateTransition*` / `validateManifest*` / `evaluateReviewGate` callsite), follow `references/rubric-trust-model.md`. Each of the three questions (who forges? where is the gate? what verifies?) becomes a **named factor**, not a criterion bullet. Record the answers under `### Trust-model audit` in the PR body before dispatch. This reference sharpens `rubric-security.md` — use both.
+If the task crosses an auth boundary (trust root, anchor, invariant, validate, forge, bypass, gate-check, auth-boundary, or `validateTransition*` / `validateManifest*` / `evaluateReviewGate`), follow `references/rubric-trust-model.md`. Each question becomes a named factor. Record answers under `### Trust-model audit` in the PR body before dispatch.
 
 ### 3. Validate the rubric
 
@@ -111,13 +88,13 @@ Quick gate before dispatch:
 - Every evaluated factor has `scoring_guide` with low/mid/high anchors
 - Criteria are specific and reference discoverable artifacts; targets are concrete
 
-Full validation checklist, factor count rules, Rubric Quality Card examples, grading (A/B/C/D), and risk signals: `references/rubric-validation.md`. Grade D = revise before dispatch; Grade C = warn and make the tradeoff explicit.
+Full checklist, factor counts, grading, and risk signals: `references/rubric-validation.md`. Grade D = revise; Grade C = warn and state the tradeoff.
 
 ### 3.4 Simplify the rubric
 
 Before persisting the draft rubric, apply the 6 heuristics in `references/rubric-simplification.md`.
 
-This applies to all task sizes; do not gate it on S/M vs L/XL. Rewrite prescriptive HOW language into observable WHAT, merge overlapping factors, remove unsupported defensive clauses, and verify weights before dispatch.
+Apply to all task sizes: rewrite HOW into observable WHAT, merge overlaps, remove unsupported defensive clauses, and verify weights.
 
 ### 3.45 Optional isolated planner draft
 
@@ -128,24 +105,32 @@ node ${CLAUDE_SKILL_DIR}/scripts/plan-runner.js \
   --issue 42 --planner codex --repo . --out-dir /tmp/relay-plan-42 --json
 ```
 
-This writes `rubric.yaml`, `dispatch-prompt.md`, and `planner-notes.md` under the output directory. The orchestrator still reviews and may edit the draft before dispatch.
+This writes `rubric.yaml`, `dispatch-prompt.md`, and `planner-notes.md`. The orchestrator reviews and may edit before dispatch.
+
+### Persisting Phase 1 deviations as anchor
+
+Use this when operator planning rejects or narrows the issue body AC. Persist the operator-authored Phase 1 decision before dispatch so fresh-context review uses the same scope anchor.
+
+```bash
+RUN_ID=issue-42-$(date -u +%Y%m%d%H%M%S000)-deadbeef
+node ${CLAUDE_SKILL_DIR}/scripts/persist-done-criteria.js \
+  --repo . --run-id "$RUN_ID" --file /tmp/done-criteria-42.md --json
+
+node ${CLAUDE_SKILL_DIR}/../relay-dispatch/scripts/dispatch.js . \
+  --run-id "$RUN_ID" -b issue-42 --prompt-file /tmp/dispatch-42.md \
+  --rubric-file /tmp/rubric-42.yaml \
+  --done-criteria-file ~/.relay/runs/<repo-slug>/$RUN_ID/done-criteria.md
+```
+
+The helper writes `~/.relay/runs/<repo-slug>/<run-id>/done-criteria.md` with source `planner_decision`. Dispatch picks it up via `--done-criteria-file` when the same run id is used. Canonical filename is always `done-criteria.md`; ad-hoc file paths remain source `file`.
 
 ### 3.5 Review the rubric (L/XL tasks)
 
-- **S/M (1-4 AC)**: skip
-- **L (5-6 AC)**: stress-test (max 1 round) — subagent games rubric (gaming vectors, coverage gaps, disappear test, Padding Test)
-- **XL (7+ or cross-domain)**: stress-test + calibration simulation (parallel)
-
-Skip: re-dispatches with iteration history, all-automated rubrics. Full protocol + prompt templates: `references/rubric-stress-test.md`.
+S/M skips. L does one stress-test round. XL adds calibration simulation. Skip re-dispatches with iteration history and all-automated rubrics. Protocol: `references/rubric-stress-test.md`.
 
 ### 4. Generate dispatch prompt
 
-Take the base template (`../relay/references/prompt-template.md`) and append:
-
-- **Setup** — setup commands from rubric
-- **Scoring Rubric** — automated checks table + evaluated factors table
-- **Iteration Protocol** — measure-fix-keep loop with regression check, adversarial self-review, and stuck detection
-- **Score Log** — iteration scores table appended to the PR description (reviewer re-scores independently)
+Take the base template (`../relay/references/prompt-template.md`) and append Setup, Scoring Rubric, Iteration Protocol, and Score Log sections.
 
 Full iteration-protocol text + Score Log format: `references/iteration-protocol.md`.
 
@@ -154,7 +139,7 @@ Full iteration-protocol text + Score Log format: `references/iteration-protocol.
 Write the rubric YAML to a temp file alongside the dispatch prompt. Every relay dispatch must pass `--rubric-file` so the rubric is persisted at `anchor.rubric_path` for review and merge gates.
 
 ```bash
-${CLAUDE_SKILL_DIR}/../relay-dispatch/scripts/dispatch.js . \
+node ${CLAUDE_SKILL_DIR}/../relay-dispatch/scripts/dispatch.js . \
   -b issue-42 --prompt-file /tmp/dispatch-42.md --rubric-file /tmp/rubric-42.yaml --timeout 3600
 ```
 
