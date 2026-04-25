@@ -5,6 +5,7 @@ const ALLOWED_NEXT_ACTIONS = new Set(["ready_to_merge", "changes_requested", "es
 const ALLOWED_REVIEW_STATUSES = new Set(["pass", "fail", "not_run"]);
 const ALLOWED_EXECUTION_STATUSES = new Set(["pass", "fail", "not_run", "missing"]);
 const ALLOWED_SCORE_TIERS = new Set(["contract", "quality"]);
+const ALLOWED_LINEAGE_VALUES = new Set(["new", "deepening", "repeat", "newly_scoreable", "unknown"]);
 const ALLOWED_DRIFT_STATUSES = new Set(
   REVIEW_VERDICT_JSON_SCHEMA.properties.scope_drift.properties.missing.items.properties.status.enum
 );
@@ -31,6 +32,12 @@ function validateIssue(issue, index) {
   }
   if (!Number.isInteger(issue.line) || issue.line <= 0) {
     throw new Error(`${location}.line must be a positive integer`);
+  }
+  if (issue.lineage !== undefined && !ALLOWED_LINEAGE_VALUES.has(issue.lineage)) {
+    throw new Error(`${location}.lineage must be one of: ${Array.from(ALLOWED_LINEAGE_VALUES).join(", ")}`);
+  }
+  if (issue.relates_to !== undefined && (typeof issue.relates_to !== "string" || !issue.relates_to.trim())) {
+    throw new Error(`${location}.relates_to must be a non-empty string when present`);
   }
 }
 
@@ -174,6 +181,7 @@ function validateReviewVerdict(data, options = {}) {
 
 module.exports = {
   ALLOWED_EXECUTION_STATUSES,
+  ALLOWED_LINEAGE_VALUES,
   ALLOWED_SCORE_TIERS,
   ALLOWED_REVIEW_STATUSES,
   parseReviewVerdict,

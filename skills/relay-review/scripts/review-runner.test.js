@@ -792,6 +792,41 @@ test("pass verdict preserves assigned reviewer role and records the acting revie
   assert.equal(reviewApplyEvent?.reviewer, "codex");
 });
 
+test("review-runner appends escalation_decision event on a clean no-trigger round", () => {
+  const { repoRoot, manifestPath, runId, doneCriteriaPath, diffPath } = setupRepo();
+  const reviewFile = writePassVerdict(repoRoot);
+
+  execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--run-id", runId,
+    "--pr", "123",
+    "--done-criteria-file", doneCriteriaPath,
+    "--diff-file", diffPath,
+    "--review-file", reviewFile,
+    "--reviewer", "codex",
+    "--no-comment",
+    "--json",
+  ], { encoding: "utf-8" });
+
+  const manifest = readManifest(manifestPath).data;
+  const events = readRunEvents(repoRoot, runId);
+  const escalationEvent = events.find((event) => event.event === "escalation_decision");
+  assert.deepEqual(manifest.review.last_escalation_decision, {
+    round: 1,
+    trigger: "none",
+    factors: [],
+    traces: [],
+    lineage_summary: { deepening: 0, repeat: 0, new: 0, newly_scoreable: 0, unknown: 0 },
+    decision: "continue",
+    reason: "no_trigger",
+  });
+  assert.equal(escalationEvent?.head_sha, manifest.git.head_sha);
+  assert.equal(escalationEvent?.state_from, STATES.REVIEW_PENDING);
+  assert.equal(escalationEvent?.state_to, STATES.READY_TO_MERGE);
+  assert.equal(escalationEvent?.reason, "no_trigger");
+});
+
 test("pass verdict rejects quality_review_status=not_run", () => {
   const { repoRoot, manifestPath, doneCriteriaPath, diffPath } = setupRepo();
   const reviewFile = writeVerdict(repoRoot, "phase1-pass.json", {
@@ -1509,6 +1544,7 @@ test("review-runner keeps event journals on the manifest repo slug when --repo i
 
   assert.ok(result.verdictPath.startsWith(canonicalRunDir));
   assert.deepEqual(events.map((event) => event.event), [
+    "escalation_decision",
     "review_apply",
     "iteration_score",
     "score_divergence",

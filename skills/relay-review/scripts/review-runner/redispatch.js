@@ -5,6 +5,7 @@ const { formatPriorVerdictSummary } = require("./prompt");
 
 const FLIP_STATES = new Set(["pass", "fail"]);
 const RUBRIC_PASS_THROUGH_STATES = new Set(["loaded"]);
+const LINEAGE_VALUES = ["deepening", "repeat", "new", "newly_scoreable", "unknown"];
 
 function buildRedispatchPrompt(verdict, doneCriteria, runDir, round, churnGrowth, doneCriteriaSource) {
   const sections = [
@@ -167,6 +168,37 @@ function computeFactorStatusFlips(runDir, round, currentVerdict) {
   return priorVerdicts.length < 2 ? [] : collectFactorStatusFlips([priorVerdicts[1], priorVerdicts[0], currentVerdict]);
 }
 
+function summarizeLineage(issues = []) {
+  const summary = Object.fromEntries(LINEAGE_VALUES.map((value) => [value, 0]));
+  for (const issue of Array.isArray(issues) ? issues : []) {
+    const lineage = LINEAGE_VALUES.includes(issue?.lineage) ? issue.lineage : "unknown";
+    summary[lineage] += 1;
+  }
+  return summary;
+}
+
+function issueMatchesFactor(issue, factor) {
+  const needle = normalizeFingerprintPart(factor);
+  return Boolean(needle) && ["category", "title"].some((key) => normalizeFingerprintPart(issue?.[key]).includes(needle));
+}
+
+function allFlippedFactorIssuesDeepen(issues, factorFlips) {
+  if (!Array.isArray(issues) || issues.length === 0) return false;
+  const tiedIssues = issues.filter((issue) => factorFlips.some(({ factor }) => issueMatchesFactor(issue, factor)));
+  return tiedIssues.length > 0 && tiedIssues.every((issue) => issue.lineage === "deepening");
+}
+
+function decideFlipFlopEscalation({ verdict, factorFlips, repeatedIssueCount }) {
+  const factors = factorFlips.map(({ factor }) => factor);
+  const traces = factorFlips.map(({ factor, trace }) => ({ factor, trace }));
+  const lineage_summary = summarizeLineage(verdict?.issues || []);
+  if (!factorFlips.length) return { decision: "continue", reason: "no_trigger", factors: [], traces: [], lineage_summary };
+  if (repeatedIssueCount === 0 && allFlippedFactorIssuesDeepen(verdict?.issues, factorFlips)) {
+    return { decision: "continue", reason: "progressive_deepening", factors, traces, lineage_summary };
+  }
+  return { decision: "escalate", reason: "flip_flop_thrash", factors, traces, lineage_summary };
+}
+
 function hasConsecutiveRounds(entries, index) {
   return index >= 2
     && entries[index - 2].round + 1 === entries[index - 1].round
@@ -274,10 +306,12 @@ module.exports = {
   buildRubricRecoveryCommand,
   computeFactorStatusFlips,
   computeRepeatedIssueCount,
+  decideFlipFlopEscalation,
   detectChurnGrowth,
   fingerprintIssue,
   normalizeFingerprintPart,
   readPriorVerdicts,
   scanPriorVerdicts,
+  summarizeLineage,
   toEscalatedVerdict,
 };
