@@ -164,6 +164,7 @@ On re-dispatch, iteration history (prior scores + reviewer feedback) is automati
 | `--executor, -e` | Executor type (`codex` or `claude`) | `codex` |
 | `--model, -m` | Model override | ... |
 | `--sandbox` | `workspace-write` or `read-only` | `workspace-write` |
+| `--network-access` | `disabled` or `enabled`; `enabled` passes Codex `sandbox_workspace_write.network_access=true` and is only supported with `--executor codex --sandbox workspace-write` | `disabled` |
 | `--copy` | Additional files to copy (comma-separated) | ... |
 | `--timeout` | Timeout in seconds | `1800` |
 | `--register` | Additionally register in the selected executor context (Codex app thread or Claude relay-side receipt; worktrees are retained by default) | `false` |
@@ -428,8 +429,8 @@ For sprint-level orchestration, pair it with [dev-backlog](https://github.com/su
 
 ## Known Limitations
 
-- **Nested Codex GitHub API calls**: When Codex runs as executor inside a nested session, `gh pr create` and some `gh` API calls can fail with `error connecting to api.github.com`, even when `git push` succeeds. Workaround: create the PR manually against the already-pushed branch, or rerun the orchestrator without sandboxing.
-- **Sandbox sensitivity**: `codex exec --full-auto` and stricter sandbox modes behave differently for GitHub reachability. If the executor can push but can't create a PR, try a less restrictive sandbox setting.
+- **Nested Codex GitHub API calls**: When Codex runs as executor inside a nested session, `gh pr create` and some `gh` API calls can fail with `error connecting to api.github.com`, even when `git push` succeeds. For Codex CLI executor runs that need networked quality gates or PR/API calls, use `--network-access enabled`; otherwise create the PR manually against the already-pushed branch or run a host-side quality gate.
+- **Sandbox sensitivity**: `codex exec --full-auto` and stricter sandbox modes behave differently for GitHub reachability. Relay only enables network inside Codex `workspace-write` via `[sandbox_workspace_write].network_access`; domain allowlists from managed permission profiles are not yet wired into dispatch.
 - **Sprint-file automation is partial**: The relay loop works end-to-end, but plan status transitions (`[ ] -> [~] -> [x]`) and merge-time Running Context updates in sprint files still require manual intervention.
 
 See [docs/codex-orchestrator-e2e-validation-2026-04-03.md](docs/codex-orchestrator-e2e-validation-2026-04-03.md) for the full validation report.

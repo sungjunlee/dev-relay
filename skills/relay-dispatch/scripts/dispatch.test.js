@@ -276,6 +276,26 @@ if (args[0] !== "exec") {
   return codexPath;
 }
 
+function writeNetworkFailCodex(binDir) {
+  ensureDefaultFakeGh(binDir);
+  const codexPath = path.join(binDir, "codex");
+  fs.writeFileSync(codexPath, `#!/usr/bin/env node
+const args = process.argv.slice(2);
+if (args[0] === "--version") {
+  process.stdout.write("codex-fake\\n");
+  process.exit(0);
+}
+if (args[0] !== "exec") {
+  process.stderr.write("unsupported fake codex invocation");
+  process.exit(1);
+}
+process.stderr.write("curl: (6) Could not resolve host: api.github.com\\n");
+process.exit(1);
+`, "utf-8");
+  fs.chmodSync(codexPath, 0o755);
+  return codexPath;
+}
+
 function writeCommittedNoResultCodex(binDir) {
   ensureDefaultFakeGh(binDir);
   const codexPath = path.join(binDir, "codex");
@@ -1131,6 +1151,115 @@ test("dispatch precedence D4 regression: executor argv stays byte-identical when
   const events = readJsonLines(getEventsPath(repoRoot, result.runId));
   const dispatchStart = events.find((event) => event.event === "dispatch_start");
   assert.equal(dispatchStart.model, null);
+});
+
+test("dispatch network-access enabled adds codex workspace-write network override and audit stamps", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  const capturePath = path.join(os.tmpdir(), `relay-dispatch-argv-${Date.now()}-network.json`);
+  writeArgCaptureCodex(binDir, capturePath);
+  const env = {
+    ...process.env,
+    PATH: `${binDir}:${process.env.PATH}`,
+    RELAY_HOME: relayHome,
+  };
+  const taskPrompt = "dispatch with network";
+
+  const result = JSON.parse(runDispatch(repoRoot, [
+    "-b", "issue-network-enabled",
+    "--prompt", taskPrompt,
+    "--network-access", "enabled",
+    "--json",
+  ], env));
+
+  const capturedArgs = JSON.parse(fs.readFileSync(capturePath, "utf-8"));
+  assert.deepEqual(capturedArgs.slice(0, 10), [
+    "exec",
+    "-C", result.worktree,
+    "--full-auto",
+    "--color", "never",
+    "-o", result.resultFile,
+    "-c", "model_reasoning_effort=xhigh",
+  ]);
+  assert.ok(capturedArgs.includes("sandbox_workspace_write.network_access=true"));
+  assert.equal(result.executorNetwork.access, "enabled");
+  assert.equal(result.executorNetwork.mechanism, "sandbox_workspace_write.network_access");
+
+  const manifest = readManifest(result.manifestPath).data;
+  assert.deepEqual(manifest.policy.executor_network, {
+    access: "enabled",
+    mechanism: "sandbox_workspace_write.network_access",
+    domains: null,
+  });
+
+  const events = readJsonLines(getEventsPath(repoRoot, result.runId));
+  const dispatchStart = events.find((event) => event.event === "dispatch_start");
+  const dispatchResult = events.find((event) => event.event === "dispatch_result");
+  assert.equal(dispatchStart.executor_network.access, "enabled");
+  assert.equal(dispatchResult.executor_network.access, "enabled");
+});
+
+test("dispatch rejects network-access enabled outside codex workspace-write", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  writeFakeCodex(binDir);
+  writeFakeClaude(binDir);
+  const env = {
+    ...process.env,
+    PATH: `${binDir}:${process.env.PATH}`,
+    RELAY_HOME: relayHome,
+  };
+
+  assert.throws(() => runDispatch(repoRoot, [
+    "-b", "issue-network-readonly",
+    "--prompt", "bad network readonly",
+    "--network-access", "enabled",
+    "--sandbox", "read-only",
+  ], env), (error) => {
+    assert.match(String(error.stderr), /--network-access enabled requires --sandbox workspace-write/);
+    return true;
+  });
+
+  assert.throws(() => runDispatch(repoRoot, [
+    "-b", "issue-network-claude",
+    "--prompt", "bad network claude",
+    "--network-access", "enabled",
+    "--executor", "claude",
+  ], env), (error) => {
+    assert.match(String(error.stderr), /--network-access enabled is only supported for codex executor/);
+    return true;
+  });
+});
+
+test("dispatch classifies sandbox network failures for audit events", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  writeNetworkFailCodex(binDir);
+  const env = {
+    ...process.env,
+    PATH: `${binDir}:${process.env.PATH}`,
+    RELAY_HOME: relayHome,
+  };
+
+  const proc = spawnSync("node", [SCRIPT, repoRoot, ...withRequiredRubric([
+    "-b", "issue-network-fail",
+    "--prompt", "trigger network failure",
+    "--json",
+  ])], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    env,
+  });
+
+  assert.notEqual(proc.status, 0);
+  const result = JSON.parse(proc.stdout);
+  assert.equal(result.status, "failed");
+  assert.match(result.error, /Could not resolve host: api\.github\.com/);
+  const events = readJsonLines(getEventsPath(repoRoot, result.runId));
+  const dispatchResult = events.find((event) => event.event === "dispatch_result");
+  assert.equal(dispatchResult.failure_class, "network_blocked_or_unavailable");
 });
 
 function writeTempRubric(contents) {

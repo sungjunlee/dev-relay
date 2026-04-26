@@ -21,6 +21,7 @@
  *   --model, -m <name>     Model override (default: from executor config)
  *   --model-hints <spec>   Persist per-phase model hints (phase=model,...)
  *   --sandbox <mode>       workspace-write | read-only (default: workspace-write)
+ *   --network-access <mode> disabled | enabled (default: disabled; codex workspace-write only)
  *   --copy <file,...>      Additional files to copy
  *   --timeout <seconds>    Exec timeout (default: 2400 for codex, 1800 for others)
  *   --reasoning <level>    Codex reasoning effort override (default by rubric size: S=medium, M=high, L/XL=xhigh)
@@ -106,7 +107,7 @@ const args = process.argv.slice(2);
 
 const KNOWN_FLAGS = [
   "--branch", "-b", "--run-id", "--manifest", "--prompt", "-p", "--prompt-file", "--executor", "-e",
-  "--model", "-m", "--model-hints", "--sandbox", "--copy", "--timeout", "--reasoning", "--rubric-file", "--test-command", "--rubric-grandfathered",
+  "--model", "-m", "--model-hints", "--sandbox", "--network-access", "--copy", "--timeout", "--reasoning", "--rubric-file", "--test-command", "--rubric-grandfathered",
   "--request-id", "--leaf-id", "--done-criteria-file",
   "--register", "--no-cleanup", "--dry-run", "--json", "--help", "-h",
 ];
@@ -128,6 +129,7 @@ if (!args.length || hasCliFlag(["--help", "-h"])) {
   console.log(`  --model, -m        ${modeLabel("--model")} Model override`);
   console.log(`  --model-hints      ${modeLabel("--model-hints")} Persist per-phase model hints (phase=model,...)`);
   console.log(`  --sandbox          ${modeLabel("--sandbox")} workspace-write | read-only (default: workspace-write)`);
+  console.log(`  --network-access   ${modeLabel("--network-access")} disabled | enabled (default: disabled; codex workspace-write only)`);
   console.log(`  --copy <files>     ${modeLabel("--copy")} Additional files to copy (comma-separated)`);
   console.log(`  --timeout          ${modeLabel("--timeout")} Exec timeout in seconds (default: 2400 for codex, 1800 for others)`);
   console.log(`  --reasoning        ${modeLabel("--reasoning")} Codex reasoning effort (default by rubric size: S=medium, M=high, L/XL=xhigh)`);
@@ -161,6 +163,7 @@ const MODEL = getArg(args, ["--model", "-m"], undefined, CLI_ARG_OPTIONS);
 const MODEL_HINTS_RAW = getArg(args, "--model-hints", undefined, CLI_ARG_OPTIONS);
 const REASONING_OVERRIDE = getArg(args, "--reasoning", undefined, CLI_ARG_OPTIONS);
 const SANDBOX = getArg(args, "--sandbox", "workspace-write", CLI_ARG_OPTIONS);
+const NETWORK_ACCESS = getArg(args, "--network-access", "disabled", CLI_ARG_OPTIONS);
 const COPY_FILES = getArg(args, "--copy", "", CLI_ARG_OPTIONS).split(",").filter(Boolean);
 const RUBRIC_FILE = getArg(args, "--rubric-file", undefined, CLI_ARG_OPTIONS);
 const TEST_COMMAND = getArg(args, "--test-command", undefined, CLI_ARG_OPTIONS);
@@ -172,6 +175,39 @@ const TIMEOUT = parseInt(getArg(args, "--timeout", defaultTimeout, CLI_ARG_OPTIO
 if (isNaN(TIMEOUT) || TIMEOUT <= 0) {
   console.error("Error: --timeout must be a positive integer");
   process.exit(1);
+}
+if (!["disabled", "enabled"].includes(NETWORK_ACCESS)) {
+  console.error("Error: --network-access must be disabled or enabled");
+  process.exit(1);
+}
+if (NETWORK_ACCESS === "enabled" && EXECUTOR !== "codex") {
+  console.error("Error: --network-access enabled is only supported for codex executor");
+  process.exit(1);
+}
+if (NETWORK_ACCESS === "enabled" && SANDBOX !== "workspace-write") {
+  console.error("Error: --network-access enabled requires --sandbox workspace-write");
+  process.exit(1);
+}
+
+const executorNetworkPolicy = {
+  access: NETWORK_ACCESS,
+  mechanism: NETWORK_ACCESS === "enabled" ? "sandbox_workspace_write.network_access" : "default",
+  domains: null,
+};
+
+function classifyNetworkFailure(text) {
+  if (!text) return null;
+  const patterns = [
+    /CODEX_SANDBOX_NETWORK_DISABLED=1/i,
+    /Could not resolve host/i,
+    /error connecting to api\.github\.com/i,
+    /network is unreachable/i,
+    /Name or service not known/i,
+    /Temporary failure in name resolution/i,
+    /nodename nor servname provided/i,
+    /failed to resolve .*domain/i,
+  ];
+  return patterns.some((pattern) => pattern.test(text)) ? "network_blocked_or_unavailable" : null;
 }
 
 const MODEL_HINT_PHASES = new Set(["plan", "dispatch", "review", "merge"]);
@@ -734,7 +770,7 @@ async function main() {
       manifestPath,
       executor: EXECUTOR, worktree: wtPath, branch,
       prompt: taskPrompt.slice(0, 200),
-      model: MODEL, sandbox: SANDBOX, register: REGISTER,
+      model: MODEL, sandbox: SANDBOX, networkAccess: NETWORK_ACCESS, register: REGISTER,
       resultFile, stdoutLog, stderrLog, timeout: TIMEOUT,
       cleanupPolicy,
       worktreeinclude: worktreePlan.worktreeinclude,
@@ -764,6 +800,7 @@ async function main() {
         prompt: taskPrompt,
         model: effectiveDispatchModel,
         sandbox: SANDBOX,
+        networkAccess: NETWORK_ACCESS,
         register: REGISTER,
         resultFile,
         cleanupPolicy,
@@ -858,7 +895,23 @@ async function main() {
       }),
       modelHints: MODEL_HINTS,
     });
+    manifest = {
+      ...manifest,
+      policy: {
+        ...(manifest.policy || {}),
+        executor_network: executorNetworkPolicy,
+      },
+    };
     ensureRunLayout(repoRoot, runId);
+    writeManifest(manifestPath, manifest);
+  } else if (manifest) {
+    manifest = {
+      ...manifest,
+      policy: {
+        ...(manifest.policy || {}),
+        executor_network: executorNetworkPolicy,
+      },
+    };
     writeManifest(manifestPath, manifest);
   }
 
@@ -911,6 +964,9 @@ async function main() {
     cmd = "codex";
     execArgs = ["exec", "-C", wtPath, "--full-auto", "--color", "never", "-o", resultFile];
     execArgs.push("-c", `model_reasoning_effort=${resolvedReasoningEffort}`);
+    if (NETWORK_ACCESS === "enabled") {
+      execArgs.push("-c", "sandbox_workspace_write.network_access=true");
+    }
     if (effectiveDispatchModel) execArgs.push("-m", effectiveDispatchModel);
     execArgs.push("--sandbox", SANDBOX);
     execArgs.push(execPrompt);
@@ -939,6 +995,7 @@ async function main() {
     console.log(`  Branch:   ${branch}`);
     console.log(`  Manifest: ${manifestPath}`);
     if (copiedFiles.length) console.log(`  Copied:   ${copiedFiles.join(", ")}`);
+    console.log(`  Network:  ${NETWORK_ACCESS}`);
     console.log(`  Result:   ${resultFile}`);
   }
 
@@ -970,6 +1027,7 @@ async function main() {
     head_sha: startHead || null,
     reason: RESUME_MODE ? "same_run_resume" : "new_dispatch",
     model: effectiveDispatchModel,
+    executor_network: executorNetworkPolicy,
   });
 
   // Redirect stdout/stderr to files. Using spawn with detached: true gives us
@@ -1031,6 +1089,10 @@ async function main() {
   let resultText = "";
   if (fs.existsSync(resultFile)) {
     resultText = fs.readFileSync(resultFile, "utf-8").trim();
+  }
+  const networkFailure = classifyNetworkFailure([stderrText, resultText].filter(Boolean).join("\n"));
+  if (networkFailure && !error) {
+    error = networkFailure;
   }
 
   // Only show commits created by this run (startHead..HEAD).
@@ -1168,6 +1230,8 @@ async function main() {
     reason: status === "failed"
       ? `${RESUME_MODE ? "same_run_resume" : "new_dispatch"}:${error || "dispatch_failed"}`
       : `${RESUME_MODE ? "same_run_resume" : "new_dispatch"}:${status}`,
+    executor_network: executorNetworkPolicy,
+    failure_class: networkFailure,
   });
 
   // --- Step 4.5: Optional app registration ---
@@ -1213,6 +1277,7 @@ async function main() {
     cleanupPolicy,
     status,
     executor: EXECUTOR,
+    executorNetwork: executorNetworkPolicy,
     worktree: wtPath,
     branch,
     mode: RESUME_MODE ? "resume" : "new",

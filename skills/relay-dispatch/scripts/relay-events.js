@@ -81,6 +81,12 @@ function appendRunEvent(repoRoot, runId, eventData) {
     ...(eventData.model !== undefined
       ? { model: normalizeEventValue(eventData.model) }
       : {}),
+    ...(eventData.executor_network !== undefined
+      ? { executor_network: normalizeEventValue(eventData.executor_network) }
+      : {}),
+    ...(eventData.failure_class !== undefined
+      ? { failure_class: normalizeEventValue(eventData.failure_class) }
+      : {}),
     ...(eventData.before !== undefined
       ? { before: normalizeEventValue(eventData.before) }
       : {}),

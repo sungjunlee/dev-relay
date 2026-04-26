@@ -9,6 +9,7 @@ Dry run:
   Prompt:   task...
   Model:    (default)
   Sandbox:  workspace-write
+  Network:  disabled
   Register: false
   Result:   /tmp/issue187-fixtures/tmp/dispatch-codex-11111111.txt
   Cleanup:  on_close
