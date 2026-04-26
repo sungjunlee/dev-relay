@@ -1,26 +1,10 @@
 const {
-  extractTddFactors,
+  extractAllFactors,
   firstProbeTestInfra,
 } = require("./tdd-flavor");
 
 const CONTRACT_TIER = "contract";
 const AUTOMATED_TYPE = "automated";
-
-function stripInlineComment(value) {
-  const hashIndex = value.indexOf(" #");
-  return hashIndex === -1 ? value : value.slice(0, hashIndex);
-}
-
-function unquoteYamlScalar(value) {
-  const trimmed = stripInlineComment(String(value || "").trim());
-  if (
-    (trimmed.startsWith("\"") && trimmed.endsWith("\"")) ||
-    (trimmed.startsWith("'") && trimmed.endsWith("'"))
-  ) {
-    return trimmed.slice(1, -1);
-  }
-  return trimmed;
-}
 
 function assertNoUnclosedInlineCollection(rubricYaml) {
   const stack = [];
@@ -59,27 +43,55 @@ function assertNoUnclosedInlineCollection(rubricYaml) {
   }
 }
 
-function parseRubricFactors(rubricYaml) {
+function stripInlineComment(value) {
+  const hashIndex = value.indexOf(" #");
+  return hashIndex === -1 ? value : value.slice(0, hashIndex);
+}
+
+function isQuotedScalar(value) {
+  const trimmed = stripInlineComment(String(value || "").trim());
+  return (
+    (trimmed.startsWith("\"") && trimmed.endsWith("\"")) ||
+    (trimmed.startsWith("'") && trimmed.endsWith("'"))
+  );
+}
+
+function assertValidRequiredFieldScalar(fieldName, value) {
+  const trimmed = stripInlineComment(value).trim();
+  if (!trimmed) {
+    throw new Error(`Invalid rubric YAML: ${fieldName} must be a scalar value`);
+  }
+  if (!isQuotedScalar(trimmed) && trimmed.includes(":")) {
+    throw new Error(`Invalid rubric YAML: malformed ${fieldName} scalar`);
+  }
+}
+
+function assertRubricYamlStructurallyValid(rubricYaml) {
+  if (rubricYaml == null || String(rubricYaml).trim() === "") {
+    throw new Error("Invalid rubric YAML: input is empty");
+  }
+
   assertNoUnclosedInlineCollection(rubricYaml);
 
-  const factors = [];
+  if (!String(rubricYaml).split(/\r?\n/).some((line) => /^rubric:\s*(?:#.*)?$/.test(line))) {
+    throw new Error("Invalid rubric YAML: missing top-level rubric key");
+  }
+
   let inFactors = false;
   let factorsIndent = null;
-  let current = null;
-  let currentIndent = null;
-
-  function pushCurrent() {
-    if (current) factors.push(current);
-    current = null;
-    currentIndent = null;
-  }
+  let factorsKeySeen = false;
+  let factorsSequenceSeen = false;
 
   for (const line of String(rubricYaml || "").split(/\r?\n/)) {
     if (/^\s*(#.*)?$/.test(line)) continue;
 
     const section = line.match(/^(\s*)([A-Za-z_][\w.-]*):\s*(.*?)\s*$/);
     if (section && section[2] === "factors") {
-      pushCurrent();
+      factorsKeySeen = true;
+      factorsSequenceSeen = section[3] === "[]";
+      if (section[3] && section[3] !== "[]") {
+        throw new Error("Invalid rubric YAML: factors must be a sequence");
+      }
       if (section[3] === "[]") {
         inFactors = false;
         factorsIndent = null;
@@ -87,9 +99,6 @@ function parseRubricFactors(rubricYaml) {
       }
       inFactors = true;
       factorsIndent = section[1].length;
-      if (section[3]) {
-        throw new Error("Invalid rubric YAML: factors must be a block sequence");
-      }
       continue;
     }
 
@@ -97,33 +106,31 @@ function parseRubricFactors(rubricYaml) {
 
     const indent = line.match(/^\s*/)[0].length;
     if (section && indent <= factorsIndent) {
-      pushCurrent();
       inFactors = false;
       continue;
     }
 
-    const factorStart = line.match(/^(\s*)-\s+name:\s*(.+?)\s*$/);
-    if (factorStart) {
-      pushCurrent();
-      current = {
-        name: unquoteYamlScalar(factorStart[2]),
-        tier: null,
-        type: null,
-        tdd_anchor: null,
-      };
-      currentIndent = factorStart[1].length;
+    const factorItem = line.match(/^\s*-\s*(?:([A-Za-z_][\w.-]*):\s*(.*))?$/);
+    if (factorItem) {
+      factorsSequenceSeen = true;
+      if (factorItem[1] === "tier" || factorItem[1] === "type") {
+        assertValidRequiredFieldScalar(factorItem[1], factorItem[2]);
+      }
       continue;
     }
 
-    if (!current || indent <= currentIndent) continue;
-    const field = line.match(/^\s*(tier|type|tdd_anchor):\s*(.*?)\s*$/);
-    if (field) {
-      current[field[1]] = unquoteYamlScalar(field[2]);
+    const requiredField = line.match(/^\s*(tier|type):\s*(.*?)\s*$/);
+    if (requiredField) {
+      assertValidRequiredFieldScalar(requiredField[1], requiredField[2]);
     }
   }
 
-  pushCurrent();
-  return factors;
+  if (!factorsKeySeen) {
+    throw new Error("Invalid rubric YAML: missing factors key");
+  }
+  if (!factorsSequenceSeen) {
+    throw new Error("Invalid rubric YAML: factors must be a sequence");
+  }
 }
 
 function isAutomatedContractFactor(factor) {
@@ -135,8 +142,9 @@ function hasNonEmptyTddAnchor(factor) {
 }
 
 function evaluateTddSuggestion({ rubricYaml, probeSignal }) {
-  const factors = parseRubricFactors(rubricYaml);
-  const tddFactors = extractTddFactors(rubricYaml);
+  assertRubricYamlStructurallyValid(rubricYaml);
+
+  const factors = extractAllFactors(rubricYaml);
   const runner = firstProbeTestInfra(probeSignal);
 
   if (!runner) {
@@ -148,7 +156,7 @@ function evaluateTddSuggestion({ rubricYaml, probeSignal }) {
     return { suggest: false, reason: "no_automated_contract_factor" };
   }
 
-  if (tddFactors.length > 0) {
+  if (factors.some(hasNonEmptyTddAnchor)) {
     return { suggest: false, reason: "tdd_already_opted_in" };
   }
 

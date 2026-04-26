@@ -29,21 +29,19 @@ function rubricWithFactors(factors) {
 }
 
 test("suggests TDD when test infra, contract automated factor, and no tdd_anchor are present", () => {
-  const rubricYaml = rubricWithFactors([
-    {
-      name: "Parser rejects invalid input",
-      tier: "contract",
-      type: "automated",
-      command: "node --test tests/parser.test.js",
-      target: "exit 0",
-    },
-    {
-      name: "Error copy is clear",
-      tier: "quality",
-      type: "evaluated",
-      target: ">= 8/10",
-    },
-  ]);
+  const rubricYaml = [
+    "rubric:",
+    "  factors:",
+    "    - command: \"node --test tests/parser.test.js\"",
+    "      tier: contract",
+    "      type: automated",
+    "      name: Parser rejects invalid input",
+    "      target: \"exit 0\"",
+    "    - type: evaluated",
+    "      name: Error copy is clear",
+    "      tier: quality",
+    "      target: \">= 8/10\"",
+  ].join("\n");
 
   const result = evaluateTddSuggestion({
     rubricYaml,
@@ -132,7 +130,38 @@ test("does not suggest TDD when any factor already has a tdd_anchor", () => {
 
 test("throws invalid YAML parse failures at the function boundary", () => {
   assert.throws(() => evaluateTddSuggestion({
+    rubricYaml: "   \n\t",
+    probeSignal: PROBE_WITH_JEST,
+  }));
+
+  assert.throws(() => evaluateTddSuggestion({
+    rubricYaml: "factors:\n  - name: Parser rejects invalid input",
+    probeSignal: PROBE_WITH_JEST,
+  }));
+
+  assert.throws(() => evaluateTddSuggestion({
+    rubricYaml: "rubric:\n  prerequisites: []",
+    probeSignal: PROBE_WITH_JEST,
+  }));
+
+  assert.throws(() => evaluateTddSuggestion({
+    rubricYaml: "rubric:\n  factors: none",
+    probeSignal: PROBE_WITH_JEST,
+  }));
+
+  assert.throws(() => evaluateTddSuggestion({
     rubricYaml: "factors: [unterminated",
+    probeSignal: PROBE_WITH_JEST,
+  }));
+
+  assert.throws(() => evaluateTddSuggestion({
+    rubricYaml: [
+      "rubric:",
+      "  factors:",
+      "    - name: Parser rejects invalid input",
+      "      tier: contract: automated",
+      "      type: automated",
+    ].join("\n"),
     probeSignal: PROBE_WITH_JEST,
   }));
 });
