@@ -60,3 +60,27 @@ Concrete checks:
 - Runner resolution: `tdd_runner` names the targeted test framework.
 - Prerequisite exclusion: Step 0a excludes `tests/parser-frontmatter.test.js` from prerequisite commands only.
 - Review relaxation: the red commit helps the parser contract factor only; `Error message clarity` is still reviewed under the normal quality standard.
+
+## Why the rubric uses per-factor `tdd_anchor` and not a top-level `tdd_mode`
+
+This pattern rejected the original #142 issue body's `tdd_mode: boolean` field in favor of per-factor `tdd_anchor` opt-in. Reasons:
+
+- A top-level `tdd_mode: true` paired with zero factor-level `tdd_anchor` creates an architecturally impossible failure mode that requires a validator. Per `feedback_rubric_unreachable_path_clauses.md`, do not prescribe fallback for impossible states. Dropping `tdd_mode` deletes both the failure mode and the validator.
+- Per-factor opt-in matches the reality that within one rubric some factors are TDD-appropriate (algorithmic, crisp specs) and others are not (text/docs/conventions/UI).
+- The verdict-side strict-mode invariant test (PR #304 / #301) stays trivially green because the verdict schema is untouched.
+
+The deviation is recorded under `done_criteria_source: planner_decision` in the persisted Done Criteria anchor at `~/.relay/runs/<repo-slug>/<run-id>/done-criteria.md`.
+
+## Out of scope
+
+- Top-level `tdd_mode: boolean` field (this pattern's primary deviation from #142's issue body).
+- TDD auto-suggestion (#145) — planner choosing `tdd_anchor` based on probe signals.
+- Adding `tdd_anchor`, `tdd_runner`, or any TDD-related field to the verdict schema.
+- Per-commit CI gating; dev-relay reviews HEAD diff, not per-commit.
+- Multiple `tdd: red — ` commits (one per factor); a single combined commit covers all anchors.
+- Generalization to a "factor flavor" framework with multiple flavors (TDD + walking-skeleton + property-based + …); rule of three — generalize when a third flavor appears, not before.
+
+## See also
+
+- `skills/relay-plan/references/rubric-design-guide.md` — overall rubric design guidance and tier classification.
+- `skills/relay-review/references/reviewer-prompt.md` § "TDD factor flavor" — reviewer-side regex gating and relaxation scope.
