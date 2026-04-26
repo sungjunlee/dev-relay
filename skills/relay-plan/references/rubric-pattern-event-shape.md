@@ -3,10 +3,10 @@
 Use this pattern when a quality factor concerns event schema evolution.
 The rubric must name the complete event tuple, not just the newly added field.
 
-## **Field presence** — new field name + literal value expected
+## Field presence
 
-Name the new marker field exactly and require the literal value that proves the
-new shape was emitted by the intended path.
+Name the new marker field exactly and require the literal value expected. The
+literal value proves the new shape was emitted by the intended path.
 
 Do not write "includes the new marker." Write the assertion:
 
@@ -14,7 +14,7 @@ Do not write "includes the new marker." Write the assertion:
 criteria: "`review_apply` event includes `origin: \"system\"`"
 ```
 
-## **Field absence** — related fields that MUST remain absent
+## Field absence
 
 Name related fields that must not appear when the event is system-generated.
 This prevents implementations from satisfying the new field while preserving
@@ -23,20 +23,20 @@ an incompatible legacy shape.
 For a system-forced review transition, the event must not invent reviewer-only
 fields that imply a human or model review round ran.
 
-## **State context** — `state_to`, `state_from`, round, or other tuple members
+## State context
 
-Pin the event to the transition that generates it. Include the state movement,
-round value, reason, or other tuple members needed to distinguish the target
-event from similar emissions.
+Pin the event to the transition that generates it. Include `state_to`,
+`state_from`, round number, or other tuple members needed to distinguish the
+target event from similar emissions.
 
 For escalation paths, require the terminal state and the policy reason rather
 than checking only the event name.
 
-## **Legacy shape tolerance** — explicit assertion that pre-change events (without the new marker) continue to be read correctly
+## Legacy shape tolerance
 
 Schema evolution rubrics must also protect old manifests and event journals.
-State that events emitted before the new marker existed still parse and retain
-their original meaning.
+State explicitly that pre-change events emitted without the new marker still
+parse and retain their original meaning.
 
 This is a compatibility assertion, not a request to backfill historical events.
 
