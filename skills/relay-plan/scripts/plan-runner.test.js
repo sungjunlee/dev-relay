@@ -6,6 +6,7 @@ const os = require("os");
 const path = require("path");
 
 const SCRIPT = path.join(__dirname, "plan-runner.js");
+const { applyPlannerPostProcessing } = require("./plan-runner");
 
 function writeExecutable(dir, name, body) {
   const filePath = path.join(dir, name);
@@ -172,4 +173,33 @@ test("plan-runner propagates adapter failure and writes no partial artifacts", (
   assert.equal(fs.existsSync(path.join(outDir, "rubric.yaml")), false);
   assert.equal(fs.existsSync(path.join(outDir, "dispatch-prompt.md")), false);
   assert.equal(fs.existsSync(path.join(outDir, "planner-notes.md")), false);
+});
+
+test("planner post-processing emits Step 0a when rubric has tdd_anchor", () => {
+  const processed = applyPlannerPostProcessing({
+    rubric_yaml: [
+      "rubric:",
+      "  factors:",
+      "    - name: Calculator adds numbers",
+      "      tier: contract",
+      "      type: automated",
+      "      command: \"node --test tests/calculator.test.js\"",
+      "      target: \"exit 0\"",
+      "      tdd_anchor: \"tests/calculator.test.js\"",
+    ].join("\n"),
+    dispatch_prompt_md: [
+      "# Dispatch",
+      "",
+      "LOOP (max 5 iterations):",
+      "  0. PREREQUISITE GATE: Run all prerequisite checks.",
+    ].join("\n"),
+    planner_notes_md: "# Notes\n",
+  }, JSON.stringify({ test_infra: [{ name: "node:test" }] }));
+
+  assert.match(processed.dispatch_prompt_md, /0a\. TDD RED ANCHOR STEP/);
+  assert.match(processed.dispatch_prompt_md, /`tests\/calculator\.test\.js` via `node:test`/);
+  assert.ok(
+    processed.dispatch_prompt_md.indexOf("0a. TDD RED ANCHOR STEP") <
+    processed.dispatch_prompt_md.indexOf("  0. PREREQUISITE GATE")
+  );
 });

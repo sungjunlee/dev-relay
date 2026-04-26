@@ -4,6 +4,31 @@ How to derive high-quality rubrics from task acceptance criteria. Covers the gui
 
 Before dispatch, persist the finished rubric to a file and pass it through `relay-dispatch --rubric-file <path>`. This is required so the run records `anchor.rubric_path` for review and merge gating.
 
+## Factor Fields
+
+Common factor fields are `name`, `tier`, `type`, `command`, `criteria`, `target`, `weight`, `baseline`, `setup`, `scoring_guide`, and `fix_hint`.
+
+Optional TDD factor fields:
+
+```yaml
+rubric:
+  factors:
+    - name: Parser handles malformed input
+      tier: contract
+      type: automated
+      command: "node --test tests/parser.test.js"
+      target: "exit 0"
+      weight: required
+      tdd_anchor: "tests/parser.test.js"
+      tdd_runner: "node:test"
+```
+
+`tdd_anchor: <path-string>` is a per-factor opt-in. Its presence means the dispatch prompt inserts Step 0a for that factor. Do not add a top-level `tdd_mode`.
+
+`tdd_runner: <jest|pytest|mocha|vitest|...>` is an optional companion. If it is omitted, the executor falls back to the first `test_infra` entry from `probe-executor-env.js --project-only --json`. If no test infra is reported, the executor stops before Step 0a with a clear error.
+
+Use `tdd_anchor` only when red-first testing fits the factor's contract: crisp behavior, a specific path, and a runner that can target that path. Leave documentation, prose, UI judgment, and broad design factors without `tdd_anchor`.
+
 ## Guided Interview
 
 Walk through these questions to design a task-specific rubric from AC. Each question derives a rubric element. The goal is a rubric tailored to *this* task, not a generic template applied to it.
