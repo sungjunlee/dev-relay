@@ -68,7 +68,7 @@ rubric:
       weight: required
 ```
 
-Tier classification, `type`, `weight`, `setup`/`baseline`, `criteria`, and `scoring_guide`: see `references/rubric-design-guide.md`.
+Tier classification, `type`, `weight`, `setup`/`baseline`, `criteria`, and `scoring_guide`: see `references/rubric-design-guide.md`. For event-schema evolution, use the [event-shape rubric pattern](references/rubric-pattern-event-shape.md).
 
 ### Domain references
 
