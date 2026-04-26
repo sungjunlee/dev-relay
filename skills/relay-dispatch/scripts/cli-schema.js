@@ -40,6 +40,7 @@ const FLAGS = [
   { flag: "--merge-method", kind: VALUE, mode: MODE_PARSED, valueName: "<name>", rationale: "Closed merge selector; flag-like following tokens should mean the value is missing." },
   { flag: "--model", aliases: ["-m"], kind: VALUE, mode: MODE_PARSED, valueName: "<name>", rationale: "Model selector; flag-like following tokens should mean the value is missing." },
   { flag: "--model-hints", kind: VALUE, mode: MODE_PARSED, valueName: "<spec>", rationale: "Structured phase=model spec; flag-like following tokens should mean the value is missing." },
+  { flag: "--network-access", kind: VALUE, mode: MODE_PARSED, valueName: "<mode>", allowedValues: ["disabled", "enabled"], rationale: "Closed executor network selector; flag-like following tokens should mean the value is missing." },
   { flag: "--next-action", kind: VALUE, mode: MODE_VERBATIM, valueName: "<name>", rationale: "Operator-supplied manifest text; keep the literal argv token." },
   { flag: "--no-cleanup", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Presence flag; no value is consumed." },
   { flag: "--no-comment", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Presence flag; no value is consumed." },
@@ -108,7 +109,7 @@ const COMMAND_FLAGS = {
   ],
   dispatch: [
     "--branch", "--run-id", "--manifest", "--prompt", "--prompt-file", "--executor",
-    "--model", "--model-hints", "--sandbox", "--copy", "--timeout", "--reasoning", "--rubric-file",
+    "--model", "--model-hints", "--sandbox", "--network-access", "--copy", "--timeout", "--reasoning", "--rubric-file",
     "--test-command", "--rubric-grandfathered", "--request-id", "--leaf-id",
     "--done-criteria-file", "--register", "--no-cleanup", "--dry-run", "--json", "--help",
   ],
