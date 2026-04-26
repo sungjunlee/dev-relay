@@ -25,29 +25,79 @@ function unquoteYamlScalar(value) {
   return trimmed;
 }
 
-function extractTddFactors(rubricYaml) {
+function createFactor() {
+  return {
+    name: null,
+    tier: null,
+    type: null,
+    tdd_anchor: null,
+    tdd_runner: null,
+  };
+}
+
+function extractAllFactors(rubricYaml) {
   const factors = [];
+  let inFactors = false;
+  let factorsIndent = null;
   let current = null;
+  let currentIndent = null;
+
+  function pushCurrent() {
+    if (current) factors.push(current);
+    current = null;
+    currentIndent = null;
+  }
+
   for (const line of String(rubricYaml || "").split(/\r?\n/)) {
-    const factorStart = line.match(/^\s*-\s+name:\s*(.+?)\s*$/);
+    if (/^\s*(#.*)?$/.test(line)) continue;
+
+    const section = line.match(/^(\s*)([A-Za-z_][\w.-]*):\s*(.*?)\s*$/);
+    if (section && section[2] === "factors") {
+      pushCurrent();
+      inFactors = !section[3];
+      factorsIndent = inFactors ? section[1].length : null;
+      continue;
+    }
+
+    if (!inFactors) continue;
+
+    const indent = line.match(/^\s*/)[0].length;
+    if (section && indent <= factorsIndent) {
+      pushCurrent();
+      inFactors = false;
+      continue;
+    }
+
+    const factorStart = line.match(/^(\s*)-\s*(?:([A-Za-z_][\w.-]*):\s*(.*?)\s*)?$/);
     if (factorStart) {
-      if (current) factors.push(current);
-      current = { name: unquoteYamlScalar(factorStart[1]), tdd_anchor: null, tdd_runner: null };
+      pushCurrent();
+      current = createFactor();
+      currentIndent = factorStart[1].length;
+      if (["name", "tier", "type", "tdd_anchor", "tdd_runner"].includes(factorStart[2])) {
+        current[factorStart[2]] = unquoteYamlScalar(factorStart[3]);
+      }
       continue;
     }
-    if (!current) continue;
-    const anchor = line.match(/^\s*tdd_anchor:\s*(.+?)\s*$/);
-    if (anchor) {
-      current.tdd_anchor = unquoteYamlScalar(anchor[1]);
-      continue;
-    }
-    const runner = line.match(/^\s*tdd_runner:\s*(.+?)\s*$/);
-    if (runner) {
-      current.tdd_runner = unquoteYamlScalar(runner[1]);
+
+    if (!current || indent <= currentIndent) continue;
+    const field = line.match(/^\s*(name|tier|type|tdd_anchor|tdd_runner):\s*(.*?)\s*$/);
+    if (field) {
+      current[field[1]] = unquoteYamlScalar(field[2]);
     }
   }
-  if (current) factors.push(current);
-  return factors.filter((factor) => factor.tdd_anchor && factor.tdd_anchor.trim() !== "");
+
+  pushCurrent();
+  return factors;
+}
+
+function extractTddFactors(rubricYaml) {
+  return extractAllFactors(rubricYaml)
+    .filter((factor) => factor.tdd_anchor && factor.tdd_anchor.trim() !== "")
+    .map((factor) => ({
+      name: factor.name,
+      tdd_anchor: factor.tdd_anchor,
+      tdd_runner: factor.tdd_runner,
+    }));
 }
 
 function normalizeProbeSignal(probeSignal) {
@@ -156,6 +206,7 @@ module.exports = {
   TDD_STEP_MARKER,
   applyTddFlavorToDispatchPrompt,
   buildTddStep0a,
+  extractAllFactors,
   extractTddFactors,
   firstProbeTestInfra,
   hasTddAnchor,

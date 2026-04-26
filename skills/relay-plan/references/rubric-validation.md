@@ -52,6 +52,7 @@ historical_signal.divergence_hotspots: Coverage (avg_delta=2.5, recommendation=E
 historical_signal.avg_rounds: contract.avg_rounds_to_met=1.5; quality.avg_rounds_to_met=1; metrics.median_rounds_to_ready=3
 Probe signal:
 probe_signal.test_infra: jest
+TDD suggestion: enable tdd_anchor on Parser rejects malformed front matter (probe runner: jest)
 probe_signal.lint_format: eslint, prettier
 probe_signal.type_check: typescript, tsc --noEmit
 probe_signal.ci: GitHub Actions (ci.yml)
@@ -75,6 +76,7 @@ historical_signal.divergence_hotspots: no historical data available
 historical_signal.avg_rounds: no historical data available
 Probe signal: no quality infra detected.
 probe_signal.test_infra: no quality infra detected
+TDD suggestion: none (no_test_infra)
 probe_signal.lint_format: no quality infra detected
 probe_signal.type_check: no quality infra detected
 probe_signal.ci: no quality infra detected
@@ -98,6 +100,7 @@ historical_signal.divergence_hotspots: no historical data available
 historical_signal.avg_rounds: no historical data available
 Probe signal: Probe signals unavailable: probe timed out after 30s. Proceeding without probe signal.
 probe_signal.test_infra: no quality infra detected
+TDD suggestion: none (no_test_infra)
 probe_signal.lint_format: no quality infra detected
 probe_signal.type_check: no quality infra detected
 probe_signal.ci: no quality infra detected

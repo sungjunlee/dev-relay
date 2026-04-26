@@ -8,6 +8,7 @@ const path = require("path");
 const {
   TDD_COMMIT_PREFIX,
   applyTddFlavorToDispatchPrompt,
+  extractAllFactors,
   hasTddAnchor,
   renderIterationProtocolForRubric,
   resolveTddFactors,
@@ -118,6 +119,46 @@ test("empty tdd_anchor values do not activate Step 0a", () => {
     probeSignal: PROBE_WITH_TEST_INFRA,
   }), []);
   assert.equal(rendered, baseline);
+});
+
+test("extractAllFactors returns every factor regardless of tdd_anchor presence", () => {
+  const rubric = [
+    "rubric:",
+    "  factors:",
+    "    - command: \"node --test tests/parser.test.js\"",
+    "      tier: contract",
+    "      type: automated",
+    "      name: Parser rejects invalid input",
+    "      tdd_anchor: \"tests/parser.test.js\"",
+    "      tdd_runner: \"node:test\"",
+    "    - type: evaluated",
+    "      name: Error copy is actionable",
+    "      tier: quality",
+  ].join("\n");
+  const factors = extractAllFactors(rubric);
+
+  assert.deepEqual(factors.map((factor) => ({
+    name: factor.name,
+    tier: factor.tier,
+    type: factor.type,
+    tdd_anchor: factor.tdd_anchor,
+    tdd_runner: factor.tdd_runner,
+  })), [
+    {
+      name: "Parser rejects invalid input",
+      tier: "contract",
+      type: "automated",
+      tdd_anchor: "tests/parser.test.js",
+      tdd_runner: "node:test",
+    },
+    {
+      name: "Error copy is actionable",
+      tier: "quality",
+      type: "evaluated",
+      tdd_anchor: null,
+      tdd_runner: null,
+    },
+  ]);
 });
 
 test("tdd_runner falls back to first probe test_infra entry", () => {

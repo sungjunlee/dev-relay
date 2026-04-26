@@ -74,7 +74,6 @@ The deviation is recorded under `done_criteria_source: planner_decision` in the 
 ## Out of scope
 
 - Top-level `tdd_mode: boolean` field (this pattern's primary deviation from #142's issue body).
-- TDD auto-suggestion (#145) — planner choosing `tdd_anchor` based on probe signals.
 - Adding `tdd_anchor`, `tdd_runner`, or any TDD-related field to the verdict schema.
 - Per-commit CI gating; dev-relay reviews HEAD diff, not per-commit.
 - Multiple `tdd: red — ` commits (one per factor); a single combined commit covers all anchors.
@@ -83,4 +82,5 @@ The deviation is recorded under `done_criteria_source: planner_decision` in the 
 ## See also
 
 - `skills/relay-plan/references/rubric-design-guide.md` — overall rubric design guidance and tier classification.
+- `skills/relay-plan/scripts/tdd-suggestion.js` — TDD suggestion trigger and Quality Card line.
 - `skills/relay-review/references/reviewer-prompt.md` § "TDD factor flavor" — reviewer-side regex gating and relaxation scope.
