@@ -8,6 +8,7 @@ const {
   validateRubricScore,
   validateScopeDrift,
 } = require("./review-runner/verdict");
+const { REVIEW_VERDICT_JSON_SCHEMA, REVIEWER_VERDICT_JSON_SCHEMA } = require("./review-schema");
 
 function makeIssue(overrides = {}) {
   return {
@@ -99,9 +100,10 @@ test("verdict/validateReviewVerdict rejects unrecognized lineage values", () => 
 
 test("verdict/validateReviewVerdict validates relates_to when present", () => {
   assert.equal(validateReviewVerdict(makeChangesRequestedVerdict({ relates_to: "prior finding" })).issues[0].relates_to, "prior finding");
+  assert.equal(validateReviewVerdict(makeChangesRequestedVerdict({ relates_to: null })).issues[0].relates_to, null);
   assert.throws(
     () => validateReviewVerdict(makeChangesRequestedVerdict({ relates_to: "" })),
-    /issues\[0\]\.relates_to must be a non-empty string when present/
+    /issues\[0\]\.relates_to must be a non-empty string or null when present/
   );
 });
 
@@ -320,4 +322,34 @@ test("verdict/validateScopeDrift preserves legacy malformed nested-entry behavio
       assert.throws(() => validateScopeDrift(scopeDrift), expected);
     });
   }
+});
+
+test("schema/strict-mode invariant: every additionalProperties:false object lists every property in required (OpenAI strict-mode)", () => {
+  function findStrictModeViolations(node, pathParts, violations) {
+    if (!node || typeof node !== "object") return;
+    if (node.type === "object" && node.additionalProperties === false) {
+      const propKeys = Object.keys(node.properties || {});
+      const required = new Set(node.required || []);
+      const missing = propKeys.filter((key) => !required.has(key));
+      if (missing.length) {
+        violations.push({ path: pathParts.join(".") || "<root>", missing });
+      }
+    }
+    for (const [key, value] of Object.entries(node)) {
+      findStrictModeViolations(value, [...pathParts, key], violations);
+    }
+  }
+
+  for (const [label, schema] of [
+    ["REVIEW_VERDICT_JSON_SCHEMA", REVIEW_VERDICT_JSON_SCHEMA],
+    ["REVIEWER_VERDICT_JSON_SCHEMA", REVIEWER_VERDICT_JSON_SCHEMA],
+  ]) {
+    const violations = [];
+    findStrictModeViolations(schema, [label], violations);
+    assert.deepEqual(violations, [], `${label} has properties missing from required: ${JSON.stringify(violations)}`);
+  }
+});
+
+test("verdict/validateIssue accepts relates_to=null (codex strict-mode emits null when no relation)", () => {
+  assert.doesNotThrow(() => validateIssue(makeIssue({ lineage: "new", relates_to: null }), 0));
 });

@@ -28,7 +28,7 @@ const REVIEW_VERDICT_PROPERTIES = {
     items: {
       type: "object",
       additionalProperties: false,
-      required: ["title", "body", "file", "line", "category", "severity"],
+      required: ["title", "body", "file", "line", "category", "severity", "lineage", "relates_to"],
       properties: {
         title: { type: "string", minLength: 1 },
         body: { type: "string", minLength: 1 },
@@ -40,7 +40,7 @@ const REVIEW_VERDICT_PROPERTIES = {
           type: "string",
           enum: ["new", "deepening", "repeat", "newly_scoreable", "unknown"],
         },
-        relates_to: { type: "string", minLength: 1 },
+        relates_to: { type: ["string", "null"] },
       },
     },
   },
