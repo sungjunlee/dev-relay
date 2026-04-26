@@ -765,6 +765,95 @@ test("pass verdict moves review_pending to ready_to_merge", () => {
   assert.equal(manifest.review.last_quality_execution_reason, null);
 });
 
+test("mixed TDD rubric pass keeps non-TDD factor scoring unchanged", () => {
+  const { repoRoot, worktreePath, manifestPath, runId, doneCriteriaPath, diffPath } = setupRepo();
+  fs.writeFileSync(path.join(worktreePath, "anchor.test.js"), "red first\n", "utf-8");
+  execFileSync("git", ["-C", worktreePath, "add", "anchor.test.js"], { encoding: "utf-8", stdio: "pipe" });
+  execFileSync("git", ["-C", worktreePath, "commit", "-m", "tdd: red — add anchor test"], {
+    encoding: "utf-8",
+    stdio: "pipe",
+  });
+  fs.writeFileSync(path.join(worktreePath, "anchor.test.js"), "green at head\n", "utf-8");
+  execFileSync("git", ["-C", worktreePath, "add", "anchor.test.js"], { encoding: "utf-8", stdio: "pipe" });
+  execFileSync("git", ["-C", worktreePath, "commit", "-m", "Implement anchor behavior"], {
+    encoding: "utf-8",
+    stdio: "pipe",
+  });
+  const headSha = execFileSync("git", ["-C", worktreePath, "rev-parse", "HEAD"], {
+    encoding: "utf-8",
+    stdio: "pipe",
+  }).trim();
+  const runDir = createEnforcementFixture({
+    repoRoot,
+    runId,
+    manifestPath,
+    state: "loaded",
+    rubricContent: [
+      "rubric:",
+      "  factors:",
+      "    - name: TDD anchor behavior",
+      "      tier: contract",
+      "      type: automated",
+      "      command: \"node --test anchor.test.js\"",
+      "      target: \"exit 0\"",
+      "      tdd_anchor: \"anchor.test.js\"",
+      "      tdd_runner: \"node:test\"",
+      "    - name: Non-TDD design review",
+      "      tier: quality",
+      "      type: evaluated",
+      "      target: \">= 8/10\"",
+    ].join("\n"),
+  }).runDir;
+  updateManifestRecord(manifestPath, (manifest) => ({
+    ...manifest,
+    git: {
+      ...(manifest.git || {}),
+      head_sha: headSha,
+    },
+  }));
+  writeExecutionEvidence(runDir, headSha, {
+    test_command: "node --test anchor.test.js",
+    test_result_summary: "exit 0",
+  });
+  const reviewFile = writeVerdict(repoRoot, "mixed-tdd-pass.json", {
+    verdict: "pass",
+    summary: "TDD and non-TDD factors both pass at HEAD.",
+    contract_status: "pass",
+    quality_review_status: "pass",
+    quality_execution_status: "pass",
+    next_action: "ready_to_merge",
+    issues: [],
+    rubric_scores: [
+      {
+        factor: "TDD anchor behavior",
+        target: "exit 0",
+        observed: "red commit is green at HEAD",
+        status: "pass",
+        tier: "contract",
+        notes: "The tdd_anchor factor is satisfied at HEAD.",
+      },
+      {
+        factor: "Non-TDD design review",
+        target: ">= 8/10",
+        observed: "8/10",
+        status: "pass",
+        tier: "quality",
+        notes: "Scored under the normal quality rubric; no TDD relaxation applied.",
+      },
+    ],
+    scope_drift: { creep: [], missing: [] },
+  });
+
+  const result = runPassReview({ repoRoot, runId, doneCriteriaPath, diffPath, reviewFile });
+  const scoreEvent = readRunEvents(repoRoot, runId).find((event) => event.event === "iteration_score");
+  const promptText = fs.readFileSync(path.join(runDir, "review-round-1-prompt.md"), "utf-8");
+
+  assert.equal(result.state, STATES.READY_TO_MERGE);
+  assert.deepEqual(scoreEvent.scores.map((score) => score.factor), ["TDD anchor behavior", "Non-TDD design review"]);
+  assert.match(promptText, /regex `\^\\s\*tdd_anchor:\\s\*\\S\+`/);
+  assert.match(promptText, /Review non-TDD factors in the same rubric exactly as usual/);
+});
+
 test("pass verdict preserves assigned reviewer role and records the acting reviewer separately", () => {
   const { repoRoot, manifestPath, runId, doneCriteriaPath, diffPath } = setupRepo();
   const reviewFile = writePassVerdict(repoRoot);

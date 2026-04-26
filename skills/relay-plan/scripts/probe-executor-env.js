@@ -162,6 +162,24 @@ function scanProjectTools(repoPath) {
   };
 }
 
+function deriveTestInfra(projectTools) {
+  const known = new Set(["jest", "vitest", "mocha", "playwright", "@playwright/test", "pytest"]);
+  const frameworks = Array.isArray(projectTools?.frameworks) ? projectTools.frameworks : [];
+  const scripts = Array.isArray(projectTools?.scripts) ? projectTools.scripts : [];
+  const infra = [];
+  for (const framework of frameworks) {
+    if (known.has(framework.name)) {
+      infra.push({ name: framework.name, source: framework.source });
+    }
+  }
+  for (const script of scripts) {
+    if (/\b(node --test|jest|vitest|mocha|pytest|playwright test)\b/.test(script.command || script.name || "")) {
+      infra.push({ name: script.name, command: script.command || null, source: script.source });
+    }
+  }
+  return infra;
+}
+
 // ---------------------------------------------------------------------------
 // Agent probe
 // ---------------------------------------------------------------------------
@@ -229,6 +247,7 @@ function run({ repoPath, executor, timeout, projectOnly, jsonOut }) {
     repo: repoPath,
     agent_tools_raw: agentProbe.raw,
     agent_probe_error: agentProbe.error || null,
+    test_infra: deriveTestInfra(projectTools),
     project_tools: projectTools,
   };
 
@@ -276,4 +295,4 @@ if (require.main === module) {
   run(opts);
 }
 
-module.exports = { scanProjectTools, probeAgent, run };
+module.exports = { deriveTestInfra, scanProjectTools, probeAgent, run };
