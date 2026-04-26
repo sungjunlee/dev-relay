@@ -13,12 +13,18 @@
  */
 
 const path = require("path");
+const fs = require("fs");
 const { isTerminalState } = require("./manifest/lifecycle");
 const {
   CLEANUP_STATUSES,
   runCleanup,
 } = require("./manifest/cleanup");
-const { listManifestPaths, validateManifestPaths } = require("./manifest/paths");
+const {
+  getRelayWorktreeBase,
+  isPathContainedWithin,
+  listManifestPaths,
+  validateManifestPaths,
+} = require("./manifest/paths");
 const {
   readManifest,
   writeManifest,
@@ -30,6 +36,7 @@ const { safeFormatRunId } = require("./relay-resolver");
 const args = process.argv.slice(2);
 const CLI_ARG_OPTIONS = { commandName: "cleanup-worktrees" };
 const hasCliFlag = (flag) => hasFlag(args, flag, CLI_ARG_OPTIONS);
+const OS_DETRITUS = new Set([".DS_Store", "Thumbs.db"]);
 
 function parseHours(value, label) {
   const parsed = Number(value);
@@ -37,6 +44,59 @@ function parseHours(value, label) {
     throw new Error(`${label} must be a non-negative number`);
   }
   return parsed;
+}
+
+function relayWorktreeChildPath(base, name) {
+  const candidate = path.join(base, name);
+  if (!isPathContainedWithin(base, candidate)) {
+    throw new Error(`refusing to sweep outside relay worktree base: ${candidate}`);
+  }
+  return candidate;
+}
+
+function inspectShellContents(shellPath) {
+  return fs.readdirSync(shellPath).map((name) => {
+    const childPath = path.join(shellPath, name);
+    const stat = fs.lstatSync(childPath);
+    return { name, childPath, removable: OS_DETRITUS.has(name) && stat.isFile() };
+  });
+}
+
+function reapShell(shellPath, removableEntries, { dryRun }) {
+  if (dryRun) {
+    console.warn(`cleanup-worktrees: dry-run would reap orphaned worktree shell ${shellPath}`);
+    return true;
+  }
+  for (const entry of removableEntries) {
+    fs.unlinkSync(entry.childPath);
+  }
+  fs.rmdirSync(shellPath);
+  return !fs.existsSync(shellPath);
+}
+
+function sweepOrphanedWorktreeShells({ dryRun }) {
+  const relayWorktreeBase = getRelayWorktreeBase();
+  const result = { reaped: [], skipped: [] };
+  if (!fs.existsSync(relayWorktreeBase)) return result;
+
+  for (const name of fs.readdirSync(relayWorktreeBase)) {
+    const shellPath = relayWorktreeChildPath(relayWorktreeBase, name);
+    const shellStat = fs.lstatSync(shellPath);
+    if (!shellStat.isDirectory()) continue;
+
+    const contents = inspectShellContents(shellPath);
+    const stray = contents.filter((entry) => !entry.removable);
+    if (stray.length) {
+      console.warn(`cleanup-worktrees: preserving ${shellPath}; contains ${stray.map((entry) => entry.name).join(", ")}`);
+      result.skipped.push({ path: shellPath, reason: "non_detritus", entries: stray.map((entry) => entry.name) });
+      continue;
+    }
+
+    if (reapShell(shellPath, contents, { dryRun })) {
+      result.reaped.push({ path: shellPath, dryRun });
+    }
+  }
+  return result;
 }
 
 if (hasCliFlag(["--help", "-h"])) {
@@ -70,6 +130,8 @@ function run() {
     failed: [],
     staleOpen: [],
     skipped: [],
+    reapedShells: [],
+    skippedShells: [],
   };
 
   const manifestPaths = listManifestPaths(repoRoot);
@@ -178,6 +240,10 @@ function run() {
       result.failed.push(item);
     }
   }
+
+  const shellSweep = sweepOrphanedWorktreeShells({ dryRun });
+  result.reapedShells = shellSweep.reaped;
+  result.skippedShells = shellSweep.skipped;
 
   if (jsonOut) {
     console.log(JSON.stringify(result, null, 2));

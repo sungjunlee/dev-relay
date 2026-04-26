@@ -411,6 +411,63 @@ test("cleanup-worktrees removes existing relay-owned directories with pruned git
   assert.equal(readManifest(stale.manifestPath).data.cleanup.status, "succeeded");
 });
 
+test("cleanup-worktrees reaps empty relay worktree parent shells", () => {
+  const repoRoot = setupRepo();
+  const shellPath = path.join(getRelayWorktreeBase(), "empty-shell");
+  fs.mkdirSync(shellPath, { recursive: true });
+
+  const stdout = execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--all",
+    "--json",
+  ], { encoding: "utf-8" });
+
+  const result = JSON.parse(stdout);
+  assert.equal(fs.existsSync(shellPath), false);
+  assert.equal(result.reapedShells.some((entry) => entry.path === shellPath), true);
+});
+
+test("cleanup-worktrees reaps relay worktree parent shells containing only .DS_Store", () => {
+  const repoRoot = setupRepo();
+  const shellPath = path.join(getRelayWorktreeBase(), "detritus-shell");
+  fs.mkdirSync(shellPath, { recursive: true });
+  fs.writeFileSync(path.join(shellPath, ".DS_Store"), "detritus\n", "utf-8");
+
+  const stdout = execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--all",
+    "--json",
+  ], { encoding: "utf-8" });
+
+  const result = JSON.parse(stdout);
+  assert.equal(fs.existsSync(shellPath), false);
+  assert.equal(result.reapedShells.some((entry) => entry.path === shellPath), true);
+});
+
+test("cleanup-worktrees preserves relay worktree parent shells with stray content and warns", () => {
+  const repoRoot = setupRepo();
+  const shellPath = path.join(getRelayWorktreeBase(), "stray-shell");
+  const strayPath = path.join(shellPath, "notes.txt");
+  fs.mkdirSync(shellPath, { recursive: true });
+  fs.writeFileSync(strayPath, "manual artifact\n", "utf-8");
+
+  const run = spawnSync(process.execPath, [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--all",
+    "--json",
+  ], { cwd: PROJECT_ROOT, encoding: "utf-8" });
+
+  assert.equal(run.status, 0, run.stderr);
+  const result = JSON.parse(run.stdout);
+  assert.equal(fs.existsSync(shellPath), true);
+  assert.equal(fs.existsSync(strayPath), true);
+  assert.match(run.stderr, /preserving .*stray-shell.*notes\.txt/);
+  assert.equal(result.skippedShells.some((entry) => entry.path === shellPath), true);
+});
+
 test("cleanup-worktrees rejects tampered paths.repo_root before cleanup side effects", () => {
   const repoRoot = setupRepo();
   const updatedAt = "2026-04-01T00:00:00.000Z";
