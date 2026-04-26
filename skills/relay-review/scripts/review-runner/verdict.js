@@ -36,8 +36,8 @@ function validateIssue(issue, index) {
   if (issue.lineage !== undefined && !ALLOWED_LINEAGE_VALUES.has(issue.lineage)) {
     throw new Error(`${location}.lineage must be one of: ${Array.from(ALLOWED_LINEAGE_VALUES).join(", ")}`);
   }
-  if (issue.relates_to !== undefined && (typeof issue.relates_to !== "string" || !issue.relates_to.trim())) {
-    throw new Error(`${location}.relates_to must be a non-empty string when present`);
+  if (issue.relates_to !== undefined && issue.relates_to !== null && (typeof issue.relates_to !== "string" || !issue.relates_to.trim())) {
+    throw new Error(`${location}.relates_to must be a non-empty string or null when present`);
   }
 }
 
