@@ -133,6 +133,14 @@ test("redispatch/computeFactorStatusFlips detects pass-fail-pass with normalized
   assert.deepEqual(flips, [{ factor: "BEHAVIOR", trace: ["pass", "fail", "pass"] }]);
 });
 
+test("redispatch/computeFactorStatusFlips detects fail-pass-fail (symmetric direction)", () => {
+  const runDir = tempRunDir();
+  fs.writeFileSync(path.join(runDir, "review-round-1-verdict.json"), JSON.stringify({ rubric_scores: [{ factor: "Behavior", status: "fail" }] }), "utf-8");
+  fs.writeFileSync(path.join(runDir, "review-round-2-verdict.json"), JSON.stringify({ rubric_scores: [{ factor: "Behavior", status: "pass" }] }), "utf-8");
+  const flips = computeFactorStatusFlips(runDir, 3, { rubric_scores: [{ factor: "Behavior", status: "fail" }] });
+  assert.deepEqual(flips, [{ factor: "Behavior", trace: ["fail", "pass", "fail"] }]);
+});
+
 test("redispatch/computeFactorStatusFlips ignores two-round changes and not_run gaps", () => {
   const runDir = tempRunDir();
   fs.writeFileSync(path.join(runDir, "review-round-1-verdict.json"), JSON.stringify({ rubric_scores: [{ factor: "behavior", status: "pass" }] }), "utf-8");
