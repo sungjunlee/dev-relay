@@ -178,3 +178,32 @@ test("prompt/buildPrompt includes TDD reviewer gating without changing verdict s
   assert.match(prompt, /"rubric_scores"/);
   assert.doesNotMatch(prompt, /tdd_mode:\s*true/);
 });
+
+test("prompt/buildPrompt omits TDD reviewer section for non-TDD rubrics", () => {
+  const prompt = buildPrompt({
+    round: 1,
+    prNumber: 143,
+    branch: "issue-143",
+    issueNumber: 143,
+    doneCriteria: "# Done Criteria\n\n- Review non-TDD rubric\n",
+    doneCriteriaSource: "planner_decision",
+    diffText: "diff --git a/a.js b/a.js\n",
+    runDir: null,
+    rubricLoad: {
+      warning: null,
+      content: [
+        "rubric:",
+        "  factors:",
+        "    - name: Non-TDD factor",
+        "      tier: quality",
+        "      target: \">= 8/10\"",
+      ].join("\n"),
+    },
+  });
+
+  assert.doesNotMatch(prompt, /### TDD factor flavor/);
+  assert.doesNotMatch(prompt, /tdd: red — /);
+  assert.doesNotMatch(prompt, /This relaxation applies only to factors carrying `tdd_anchor`/);
+  assert.match(prompt, /### Scope Drift Detection \(run first\)/);
+  assert.match(prompt, /## Scoring Rubric/);
+});

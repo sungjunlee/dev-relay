@@ -4,6 +4,8 @@ const { readText } = require("./common");
 const { formatPriorRoundContext, loadProjectConventions } = require("./context");
 
 const REVIEWER_PROMPT_PATH = path.join(__dirname, "..", "..", "references", "reviewer-prompt.md");
+const TDD_ANCHOR_LINE_REGEX = /^\s*tdd_anchor:\s*\S+/m;
+const TDD_REVIEWER_SECTION_REGEX = /\n### TDD factor flavor[\s\S]*?(?=\n### Scope Drift Detection \(run first\))/;
 
 function renderProjectConventions(template, conventions) {
   if (conventions) return template.replace("[PASTE PROJECT CONVENTIONS HERE]", conventions);
@@ -39,11 +41,20 @@ function formatDoneCriteriaSource(doneCriteriaSource) {
   return doneCriteriaSource || "done-criteria";
 }
 
+function shouldIncludeTddReviewerSection(rubricLoad) {
+  return Boolean(rubricLoad?.content && TDD_ANCHOR_LINE_REGEX.test(rubricLoad.content));
+}
+
+function gateTddReviewerSection(template, rubricLoad) {
+  if (shouldIncludeTddReviewerSection(rubricLoad)) return template;
+  return template.replace(TDD_REVIEWER_SECTION_REGEX, "");
+}
+
 function buildPrompt({ round, prNumber, branch, issueNumber, doneCriteria, doneCriteriaSource, diffText, reviewRepoPath, runDir, rubricLoad, prBodyPath, prBodySnapshot }) {
-  const template = renderProjectConventions(readText(REVIEWER_PROMPT_PATH)
+  const template = gateTddReviewerSection(renderProjectConventions(readText(REVIEWER_PROMPT_PATH)
     .replace("source=\"done-criteria\"", `source="${doneCriteriaSource || "done-criteria"}"`)
     .replace("[PASTE DONE CRITERIA HERE]", doneCriteria)
-    .replace("[PASTE PR DIFF OR FILE PATH HERE]", diffText), reviewRepoPath ? loadProjectConventions(reviewRepoPath) : "");
+    .replace("[PASTE PR DIFF OR FILE PATH HERE]", diffText), reviewRepoPath ? loadProjectConventions(reviewRepoPath) : ""), rubricLoad);
 
   const sections = [
     `# Relay Review Round ${round}`,
@@ -122,4 +133,6 @@ module.exports = {
   formatPrBodySnapshotSection,
   formatPriorVerdictSummary,
   formatDoneCriteriaSource,
+  gateTddReviewerSection,
+  shouldIncludeTddReviewerSection,
 };

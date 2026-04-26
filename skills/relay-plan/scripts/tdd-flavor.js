@@ -6,7 +6,7 @@ const TDD_STEP_MARKER = "  0a. TDD RED ANCHOR STEP:";
 const TDD_COMMIT_PREFIX = "tdd: red — ";
 
 function hasTddAnchor(rubricYaml) {
-  return TDD_ANCHOR_LINE_REGEX.test(String(rubricYaml || ""));
+  return extractTddFactors(rubricYaml).length > 0;
 }
 
 function stripInlineComment(value) {
@@ -47,7 +47,7 @@ function extractTddFactors(rubricYaml) {
     }
   }
   if (current) factors.push(current);
-  return factors.filter((factor) => factor.tdd_anchor);
+  return factors.filter((factor) => factor.tdd_anchor && factor.tdd_anchor.trim() !== "");
 }
 
 function normalizeProbeSignal(probeSignal) {
