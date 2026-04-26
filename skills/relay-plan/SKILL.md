@@ -68,7 +68,7 @@ rubric:
       weight: required
 ```
 
-Tier classification, `type`, `weight`, `setup`/`baseline`, `criteria`, and `scoring_guide`: see `references/rubric-design-guide.md`. For event-schema evolution, use the [event-shape rubric pattern](references/rubric-pattern-event-shape.md).
+Tier classification, `type`, `weight`, `setup`/`baseline`, `criteria`, `scoring_guide`, and optional per-factor `tdd_anchor` / `tdd_runner`: see `references/rubric-design-guide.md`. For event-schema evolution, use the [event-shape rubric pattern](references/rubric-pattern-event-shape.md). For red-first factor opt-in, use the [TDD factor flavor pattern](references/rubric-pattern-tdd-flavor.md).
 
 ### Domain references
 
@@ -130,7 +130,7 @@ S/M skips. L does one stress-test round. XL adds calibration simulation. Skip re
 
 ### 4. Generate dispatch prompt
 
-Take the base template (`../relay/references/prompt-template.md`) and append Setup, Scoring Rubric, Iteration Protocol, and Score Log sections.
+Take the base template (`../relay/references/prompt-template.md`) and append Setup, Scoring Rubric, Iteration Protocol, and Score Log sections. Insert the optional Step 0a block from `references/iteration-protocol.md` iff any factor has a non-empty `tdd_anchor`; when no factor has `tdd_anchor`, keep the emitted prompt identical to the pre-TDD baseline.
 
 Full iteration-protocol text + Score Log format: `references/iteration-protocol.md`.
 

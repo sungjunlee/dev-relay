@@ -5,7 +5,7 @@ const os = require("os");
 const path = require("path");
 const { spawnSync } = require("child_process");
 
-const { scanProjectTools, probeAgent } = require("./probe-executor-env");
+const { deriveTestInfra, scanProjectTools, probeAgent } = require("./probe-executor-env");
 
 const SCRIPT = path.join(__dirname, "probe-executor-env.js");
 
@@ -115,6 +115,19 @@ test("scanProjectTools merges results from package.json + Makefile + pyproject.t
   assert.deepEqual(result.ci, []);
 });
 
+test("deriveTestInfra exposes runner candidates for TDD fallback", () => {
+  const projectTools = {
+    scripts: [{ name: "npm run test", command: "node --test tests/*.test.js", source: "package.json" }],
+    frameworks: [{ name: "jest", source: "package.json" }, { name: "eslint", source: "package.json" }],
+    ci: [],
+  };
+
+  assert.deepEqual(deriveTestInfra(projectTools), [
+    { name: "jest", source: "package.json" },
+    { name: "npm run test", command: "node --test tests/*.test.js", source: "package.json" },
+  ]);
+});
+
 // ---------------------------------------------------------------------------
 // probeAgent (raw text pass-through, no parsing)
 // ---------------------------------------------------------------------------
@@ -167,6 +180,8 @@ test("CLI --project-only works without executor", () => {
   assert.equal(result.status, 0);
   const output = JSON.parse(result.stdout);
   assert.equal(output.executor, null);
+  assert.ok(output.test_infra.some((entry) => entry.name === "jest"));
+  assert.ok(output.test_infra.some((entry) => entry.name === "npm run test"));
   assert.ok(output.project_tools.scripts.some((s) => s.name === "npm run test"));
   assert.ok(output.project_tools.frameworks.some((f) => f.name === "jest"));
   assert.deepEqual(output.project_tools.ci, []);

@@ -31,6 +31,16 @@ Project conventions below. Do not flag violations of these as issues — files a
 
 ## Review Process
 
+### TDD factor flavor
+
+Activate this section iff the pasted "## Scoring Rubric" content contains at least one line matching the regex `^\s*tdd_anchor:\s*\S+`.
+
+When the regex matches, a non-HEAD commit whose subject starts with `tdd: red — ` MUST NOT be flagged as a broken commit, defective implementation, or scope drift, provided HEAD diff resolves the introduced failures. Evaluate against HEAD as today; `tdd: red — ` commits are evidence of protocol adherence.
+
+This relaxation applies only to factors carrying `tdd_anchor`. Review non-TDD factors in the same rubric exactly as usual.
+
+Do not relax the outcome contract. If HEAD still leaves any `tdd_anchor` test failing, flag it under the normal contract and `scope_drift.missing` rules.
+
 ### Scope Drift Detection (run first)
 
 Before reviewing code quality, check: did the executor build what was requested — nothing more, nothing less?

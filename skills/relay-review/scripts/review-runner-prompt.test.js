@@ -147,3 +147,63 @@ test("prompt/buildPrompt preserves prior-round context rendering", () => {
   assert.match(prompt, /Fix auth boundary/);
   assert.match(prompt, /auth\.js:19 — Auth/);
 });
+
+test("prompt/buildPrompt includes TDD reviewer gating without changing verdict schema", () => {
+  const prompt = buildPrompt({
+    round: 1,
+    prNumber: 142,
+    branch: "issue-142",
+    issueNumber: 142,
+    doneCriteria: "# Done Criteria\n\n- Review TDD factor flavor\n",
+    doneCriteriaSource: "planner_decision",
+    diffText: "diff --git a/a.js b/a.js\n",
+    runDir: null,
+    rubricLoad: {
+      warning: null,
+      content: [
+        "rubric:",
+        "  factors:",
+        "    - name: TDD factor",
+        "      tdd_anchor: tests/parser.test.js",
+        "    - name: Non-TDD factor",
+        "      tier: quality",
+      ].join("\n"),
+    },
+  });
+
+  assert.match(prompt, /regex `\^\\s\*tdd_anchor:\\s\*\\S\+`/);
+  assert.match(prompt, /tdd: red — /);
+  assert.match(prompt, /This relaxation applies only to factors carrying `tdd_anchor`/);
+  assert.match(prompt, /Review non-TDD factors in the same rubric exactly as usual/);
+  assert.match(prompt, /"rubric_scores"/);
+  assert.doesNotMatch(prompt, /tdd_mode:\s*true/);
+});
+
+test("prompt/buildPrompt omits TDD reviewer section for non-TDD rubrics", () => {
+  const prompt = buildPrompt({
+    round: 1,
+    prNumber: 143,
+    branch: "issue-143",
+    issueNumber: 143,
+    doneCriteria: "# Done Criteria\n\n- Review non-TDD rubric\n",
+    doneCriteriaSource: "planner_decision",
+    diffText: "diff --git a/a.js b/a.js\n",
+    runDir: null,
+    rubricLoad: {
+      warning: null,
+      content: [
+        "rubric:",
+        "  factors:",
+        "    - name: Non-TDD factor",
+        "      tier: quality",
+        "      target: \">= 8/10\"",
+      ].join("\n"),
+    },
+  });
+
+  assert.doesNotMatch(prompt, /### TDD factor flavor/);
+  assert.doesNotMatch(prompt, /tdd: red — /);
+  assert.doesNotMatch(prompt, /This relaxation applies only to factors carrying `tdd_anchor`/);
+  assert.match(prompt, /### Scope Drift Detection \(run first\)/);
+  assert.match(prompt, /## Scoring Rubric/);
+});

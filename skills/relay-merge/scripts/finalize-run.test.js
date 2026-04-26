@@ -449,6 +449,108 @@ test("finalize-run force-finalize merges an escalated run with an auditable even
   assert.match(fs.readFileSync(logPath, "utf-8"), /pr merge 123 --squash/);
 });
 
+test("finalize-run default squash collapses TDD red branch history to one base commit", () => {
+  const fixture = setupRepo({ manifestState: STATES.READY_TO_MERGE });
+  const baseBefore = Number(execFileSync("git", ["-C", fixture.repoRoot, "rev-list", "--count", "main"], {
+    encoding: "utf-8",
+    stdio: "pipe",
+  }).trim());
+
+  fs.writeFileSync(path.join(fixture.worktreePath, "anchor.test.js"), "assert red first\n", "utf-8");
+  execFileSync("git", ["-C", fixture.worktreePath, "add", "anchor.test.js"], { encoding: "utf-8", stdio: "pipe" });
+  execFileSync("git", ["-C", fixture.worktreePath, "commit", "-m", "tdd: red — add anchor test"], {
+    encoding: "utf-8",
+    stdio: "pipe",
+  });
+  fs.writeFileSync(path.join(fixture.worktreePath, "anchor.test.js"), "assert green at head\n", "utf-8");
+  execFileSync("git", ["-C", fixture.worktreePath, "add", "anchor.test.js"], { encoding: "utf-8", stdio: "pipe" });
+  execFileSync("git", ["-C", fixture.worktreePath, "commit", "-m", "Implement anchor behavior"], {
+    encoding: "utf-8",
+    stdio: "pipe",
+  });
+  execFileSync("git", ["-C", fixture.worktreePath, "push"], { encoding: "utf-8", stdio: "pipe" });
+  const headSha = execFileSync("git", ["-C", fixture.worktreePath, "rev-parse", "HEAD"], {
+    encoding: "utf-8",
+    stdio: "pipe",
+  }).trim();
+  const manifest = readManifest(fixture.manifestPath).data;
+  manifest.git.head_sha = headSha;
+  manifest.review.last_reviewed_sha = headSha;
+  writeManifest(fixture.manifestPath, manifest);
+
+  const logPath = path.join(fixture.repoRoot, "gh-tdd-squash.log");
+  const ghPath = path.join(fixture.repoRoot, "fake-gh-tdd-squash.js");
+  const statePath = path.join(fixture.repoRoot, "fake-gh-tdd-squash-state.json");
+  fs.writeFileSync(statePath, JSON.stringify({
+    state: "OPEN",
+    mergeCommit: null,
+  }), "utf-8");
+  fs.writeFileSync(ghPath, `#!/usr/bin/env node
+const { execFileSync } = require("child_process");
+const fs = require("fs");
+const args = process.argv.slice(2);
+const repoRoot = ${JSON.stringify(fixture.repoRoot)};
+const statePath = ${JSON.stringify(statePath)};
+fs.appendFileSync(${JSON.stringify(logPath)}, args.join(" ") + "\\n", "utf-8");
+function loadState() { return JSON.parse(fs.readFileSync(statePath, "utf-8")); }
+function saveState(next) { fs.writeFileSync(statePath, JSON.stringify(next), "utf-8"); }
+if (args[0] === "pr" && args[1] === "view") {
+  const state = loadState();
+  process.stdout.write(JSON.stringify({
+    headRefName: ${JSON.stringify(fixture.branch)},
+    state: state.state,
+    mergeCommit: state.mergeCommit,
+    comments: [{ body: "<!-- relay-review -->\\n## Relay Review\\nVerdict: PASS\\nRounds: 1", createdAt: ${JSON.stringify(DEFAULT_COMMIT_DATE)} }],
+    commits: [{ oid: ${JSON.stringify(headSha)}, committedDate: ${JSON.stringify(DEFAULT_COMMIT_DATE)} }],
+    mergeable: "MERGEABLE",
+    statusCheckRollup: []
+  }));
+  process.exit(0);
+}
+if (args[0] === "pr" && args[1] === "merge") {
+  execFileSync("git", ["-C", repoRoot, "checkout", "main"], { stdio: "pipe" });
+  execFileSync("git", ["-C", repoRoot, "merge", "--squash", ${JSON.stringify(fixture.branch)}], { stdio: "pipe" });
+  execFileSync("git", ["-C", repoRoot, "commit", "-m", "Squash TDD branch"], { stdio: "pipe" });
+  const sha = execFileSync("git", ["-C", repoRoot, "rev-parse", "HEAD"], { encoding: "utf-8", stdio: "pipe" }).trim();
+  saveState({ state: "MERGED", mergeCommit: { oid: sha } });
+  process.exit(0);
+}
+if (args[0] === "issue" && args[1] === "close") process.exit(0);
+process.exit(0);
+`, "utf-8");
+  fs.chmodSync(ghPath, 0o755);
+
+  const stdout = execFileSync("node", [
+    SCRIPT,
+    "--repo", fixture.repoRoot,
+    "--branch", fixture.branch,
+    "--pr", "123",
+    "--json",
+  ], {
+    cwd: fixture.repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+    env: { ...process.env, RELAY_GH_BIN: ghPath },
+  });
+
+  const result = JSON.parse(stdout);
+  const baseAfter = Number(execFileSync("git", ["-C", fixture.repoRoot, "rev-list", "--count", "main"], {
+    encoding: "utf-8",
+    stdio: "pipe",
+  }).trim());
+  const lastSubject = execFileSync("git", ["-C", fixture.repoRoot, "log", "-1", "--pretty=%s", "main"], {
+    encoding: "utf-8",
+    stdio: "pipe",
+  }).trim();
+  const ghLog = fs.readFileSync(logPath, "utf-8");
+
+  assert.equal(result.state, STATES.MERGED);
+  assert.equal(baseAfter, baseBefore + 1);
+  assert.equal(lastSubject, "Squash TDD branch");
+  assert.doesNotMatch(lastSubject, /^tdd: red — /);
+  assert.match(ghLog, /pr merge 123 --squash/);
+});
+
 test("finalize-run warns but succeeds for legacy bootstrap-prefixed force-finalize reasons", () => {
   const fixture = setupRepo({ manifestState: STATES.ESCALATED });
   const { result } = spawnForceFinalize(fixture, "Bootstrap: this PR introduces the writer");

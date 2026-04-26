@@ -8,6 +8,7 @@ const {
   hasFlag: sharedHasFlag,
   modeLabel,
 } = require("../../relay-dispatch/scripts/cli-args");
+const { applyTddFlavorToDispatchPrompt } = require("./tdd-flavor");
 
 const args = process.argv.slice(2);
 const KNOWN_FLAGS = ["--issue", "--planner", "--repo", "--runs-dir", "--out-dir", "--json", "--help", "-h"];
@@ -171,6 +172,17 @@ function writeArtifacts(outDir, plannerOutput) {
   return paths;
 }
 
+function applyPlannerPostProcessing(plannerOutput, probeSignal) {
+  return {
+    ...plannerOutput,
+    dispatch_prompt_md: applyTddFlavorToDispatchPrompt({
+      dispatchPrompt: plannerOutput.dispatch_prompt_md,
+      rubricYaml: plannerOutput.rubric_yaml,
+      probeSignal,
+    }),
+  };
+}
+
 function printResult(result, jsonOut) {
   if (jsonOut) {
     console.log(JSON.stringify(result, null, 2));
@@ -210,7 +222,8 @@ function run() {
 
     const rawOutput = invokePlanner({ plannerScript, promptPath });
     const plannerOutput = parsePlannerOutput(rawOutput);
-    const artifactPaths = writeArtifacts(outDir, plannerOutput);
+    const processedOutput = applyPlannerPostProcessing(plannerOutput, probeSignal);
+    const artifactPaths = writeArtifacts(outDir, processedOutput);
 
     printResult({
       issue: Number(issueNumber),
@@ -236,6 +249,7 @@ if (require.main === module) {
 module.exports = {
   buildPrompt,
   parsePlannerOutput,
+  applyPlannerPostProcessing,
   readProbeSignal,
   readReliabilitySignal,
   resolvePlannerScript,

@@ -42,6 +42,9 @@ Use the reliability signal to tighten wording when historical stuck factors or d
 - Produce `planner-notes.md` explaining why the factors were chosen, which issue-body details were treated as historical context, and which simplifications were applied.
 - Keep contract factors observable. Avoid prescribing helper names, internal control flow, or exact line counts unless the issue explicitly requires a format.
 - Include tests or validation only when the repo probe or issue body gives a discoverable path to run them.
+- If a factor needs red-first treatment, use per-factor `tdd_anchor: <path>` plus optional `tdd_runner: <framework>`. Do not emit a top-level `tdd_mode`.
+- Insert Step 0a only when at least one factor has a non-empty `tdd_anchor`. If no factor has `tdd_anchor`, keep the dispatch prompt's iteration protocol in the normal pre-TDD shape.
+- When `tdd_runner` is omitted on a factor with `tdd_anchor`, use the first probe `test_infra` entry. If no test infra exists, report the problem in `planner_notes_md` instead of inventing a runner.
 
 ## Output Contract
 
