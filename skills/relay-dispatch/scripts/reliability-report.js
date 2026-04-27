@@ -1,10 +1,12 @@
 #!/usr/bin/env node
 
+const fs = require("fs");
 const path = require("path");
 const { STATES } = require("./manifest/lifecycle");
 const { listManifestRecords } = require("./manifest/store");
 const { getArg, hasFlag, modeLabel } = require("./cli-args");
 const { readAllRunEvents } = require("./relay-events");
+const { extractAllFactors } = require("../../relay-plan/scripts/tdd-flavor");
 
 const args = process.argv.slice(2);
 const CLI_ARG_OPTIONS = { commandName: "reliability-report", reservedFlags: ["-h"] };
@@ -392,6 +394,136 @@ function buildFactorAnalysis(events) {
   };
 }
 
+function resolveManifestRubricPath(manifest) {
+  const rubricPath = manifest?.data?.anchor?.rubric_path;
+  const runId = manifest?.data?.run_id;
+  if (typeof rubricPath !== "string" || !rubricPath.trim() || !manifest?.manifestPath || !runId) {
+    return null;
+  }
+
+  const runDir = path.join(path.dirname(manifest.manifestPath), runId);
+  const resolved = path.resolve(runDir, rubricPath);
+  const relative = path.relative(runDir, resolved);
+  if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+    return null;
+  }
+  return resolved;
+}
+
+function readRubricFactors(manifest) {
+  const rubricPath = resolveManifestRubricPath(manifest);
+  if (!rubricPath) return null;
+
+  try {
+    return extractAllFactors(fs.readFileSync(rubricPath, "utf-8"))
+      .filter((factor) => typeof factor?.name === "string" && factor.name.trim())
+      .map((factor) => ({
+        name: factor.name.trim(),
+        fixHintPresent: typeof factor.fix_hint === "string" && factor.fix_hint.trim() !== "",
+      }));
+  } catch {
+    return null;
+  }
+}
+
+function buildIterationScoreIndex(events) {
+  const scoresByRun = new Map();
+
+  for (const event of events) {
+    if (event?.event !== "iteration_score" || !event.run_id || !Array.isArray(event.scores)) continue;
+    if (!scoresByRun.has(event.run_id)) {
+      scoresByRun.set(event.run_id, new Map());
+    }
+
+    const round = Number(event.round);
+    const roundNumber = Number.isInteger(round) && round >= 1 ? round : null;
+    const scoresByFactor = scoresByRun.get(event.run_id);
+
+    for (const score of event.scores) {
+      const factor = typeof score?.factor === "string" ? score.factor.trim() : "";
+      if (!factor) continue;
+      if (!scoresByFactor.has(factor)) {
+        scoresByFactor.set(factor, { firstMetRound: null });
+      }
+
+      if (score.met === true && roundNumber !== null) {
+        const current = scoresByFactor.get(factor);
+        if (current.firstMetRound === null || roundNumber < current.firstMetRound) {
+          current.firstMetRound = roundNumber;
+        }
+      }
+    }
+  }
+
+  return scoresByRun;
+}
+
+function buildQualitativeSignals(manifests, events) {
+  const scoresByRun = buildIterationScoreIndex(events);
+  const withFixHint = { sampleSize: 0, rounds: [] };
+  const withoutFixHint = { sampleSize: 0, rounds: [] };
+  let contributingManifests = 0;
+
+  for (const manifest of manifests) {
+    const runId = manifest?.data?.run_id;
+    if (!runId) continue;
+
+    const rubricFactors = readRubricFactors(manifest);
+    if (!rubricFactors || rubricFactors.length === 0) continue;
+
+    const scoredFactors = scoresByRun.get(runId);
+    if (!scoredFactors) continue;
+
+    let manifestContributed = false;
+    let manifestWithFixHint = false;
+    let manifestWithoutFixHint = false;
+
+    for (const factor of rubricFactors) {
+      const scored = scoredFactors.get(factor.name);
+      if (!scored) continue;
+
+      manifestContributed = true;
+      if (scored.firstMetRound === null) continue;
+
+      if (factor.fixHintPresent) {
+        withFixHint.rounds.push(scored.firstMetRound);
+        manifestWithFixHint = true;
+      } else {
+        withoutFixHint.rounds.push(scored.firstMetRound);
+        manifestWithoutFixHint = true;
+      }
+    }
+
+    if (manifestContributed) {
+      contributingManifests += 1;
+    }
+    if (manifestWithFixHint) {
+      withFixHint.sampleSize += 1;
+    }
+    if (manifestWithoutFixHint) {
+      withoutFixHint.sampleSize += 1;
+    }
+  }
+
+  if (contributingManifests < 3 || withFixHint.sampleSize < 3 || withoutFixHint.sampleSize < 3) {
+    return null;
+  }
+
+  const withAverage = average(withFixHint.rounds);
+  const withoutAverage = average(withoutFixHint.rounds);
+  return {
+    with: {
+      sample_size: withFixHint.sampleSize,
+      avg_first_met_round: withAverage,
+    },
+    without: {
+      sample_size: withoutFixHint.sampleSize,
+      avg_first_met_round: withoutAverage,
+    },
+    delta: Number((withAverage - withoutAverage).toFixed(4)),
+  };
+}
+
 function buildModelPerPhase(events) {
   const phaseBuckets = {
     dispatch: new Map(),
@@ -483,6 +615,7 @@ function buildReport({ repoRoot, staleHours, now, manifests, events }) {
     model_per_phase: buildModelPerPhase(events),
     factor_analysis: buildFactorAnalysis(events),
     rubric_insights: buildRubricInsights(events, manifests),
+    qualitative_signals: buildQualitativeSignals(manifests, events),
   };
 }
 

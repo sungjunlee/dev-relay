@@ -110,12 +110,22 @@ function extractAverageRounds(report) {
   return values.length > 0 ? values.join("; ") : NO_HISTORY_TEXT;
 }
 
+function extractQualitativeSignals(report) {
+  const signal = report?.qualitative_signals;
+  if (!signal || typeof signal !== "object") {
+    return NO_HISTORY_TEXT;
+  }
+
+  return `Factors with fix_hint averaged ${signal.with.avg_first_met_round} rounds-to-met vs ${signal.without.avg_first_met_round} for factors without (delta ${signal.delta}) across ${signal.with.sample_size}+${signal.without.sample_size} runs.`;
+}
+
 function renderHistoricalSignalSection(result) {
   if (result.status === "unavailable") {
     return [
       `Historical signal: Reliability report unavailable: ${result.cause}. Proceeding without historical signal.`,
       `historical_signal.stuck_factors: ${NO_HISTORY_TEXT}`,
       `historical_signal.divergence_hotspots: ${NO_HISTORY_TEXT}`,
+      `historical_signal.qualitative_signals: ${NO_HISTORY_TEXT}`,
       `historical_signal.avg_rounds: ${NO_HISTORY_TEXT}`,
     ];
   }
@@ -125,6 +135,7 @@ function renderHistoricalSignalSection(result) {
       "Historical signal: Empty-data state — historical signal not available, proceed to rubric design.",
       `historical_signal.stuck_factors: ${NO_HISTORY_TEXT}`,
       `historical_signal.divergence_hotspots: ${NO_HISTORY_TEXT}`,
+      `historical_signal.qualitative_signals: ${NO_HISTORY_TEXT}`,
       `historical_signal.avg_rounds: ${NO_HISTORY_TEXT}`,
     ];
   }
@@ -133,6 +144,7 @@ function renderHistoricalSignalSection(result) {
     "Historical signal:",
     `historical_signal.stuck_factors: ${result.historical_signal.stuck_factors}`,
     `historical_signal.divergence_hotspots: ${result.historical_signal.divergence_hotspots}`,
+    `historical_signal.qualitative_signals: ${result.historical_signal.qualitative_signals}`,
     `historical_signal.avg_rounds: ${result.historical_signal.avg_rounds}`,
   ];
 }
@@ -153,6 +165,7 @@ function readHistoricalSignal(repoRoot, command = buildDefaultCommand(repoRoot))
       historical_signal: {
         stuck_factors: extractStuckFactors(report),
         divergence_hotspots: extractDivergenceHotspots(report),
+        qualitative_signals: extractQualitativeSignals(report),
         avg_rounds: extractAverageRounds(report),
       },
     };
@@ -163,6 +176,7 @@ function readHistoricalSignal(repoRoot, command = buildDefaultCommand(repoRoot))
       historical_signal: {
         stuck_factors: NO_HISTORY_TEXT,
         divergence_hotspots: NO_HISTORY_TEXT,
+        qualitative_signals: NO_HISTORY_TEXT,
         avg_rounds: NO_HISTORY_TEXT,
       },
     };

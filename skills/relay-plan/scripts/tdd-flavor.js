@@ -32,6 +32,7 @@ function createFactor() {
     type: null,
     tdd_anchor: null,
     tdd_runner: null,
+    fix_hint: null,
   };
 }
 
@@ -73,14 +74,14 @@ function extractAllFactors(rubricYaml) {
       pushCurrent();
       current = createFactor();
       currentIndent = factorStart[1].length;
-      if (["name", "tier", "type", "tdd_anchor", "tdd_runner"].includes(factorStart[2])) {
+      if (["name", "tier", "type", "tdd_anchor", "tdd_runner", "fix_hint"].includes(factorStart[2])) {
         current[factorStart[2]] = unquoteYamlScalar(factorStart[3]);
       }
       continue;
     }
 
     if (!current || indent <= currentIndent) continue;
-    const field = line.match(/^\s*(name|tier|type|tdd_anchor|tdd_runner):\s*(.*?)\s*$/);
+    const field = line.match(/^\s*(name|tier|type|tdd_anchor|tdd_runner|fix_hint):\s*(.*?)\s*$/);
     if (field) {
       current[field[1]] = unquoteYamlScalar(field[2]);
     }
