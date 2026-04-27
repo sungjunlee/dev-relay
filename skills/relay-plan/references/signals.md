@@ -17,6 +17,7 @@ Field mapping (current producers):
 | `stuck_factors` | `factor_analysis.most_stuck_factor` plus every entry in `factor_analysis.factors` where `met_rate < 1.0` or `avg_rounds_to_met >= 3` | Surface factors that historically stall so the rubric names the weak spot directly |
 | `divergence_hotspots` | `rubric_insights.divergence_hotspots` (top 3 by `occurrences`, carrying `factor_pattern`, `avg_delta`, and `recommendation` verbatim) | Surface executor/reviewer disagreement hotspots so the rubric tightens examples or adds automation |
 | `avg_rounds` | `rubric_insights.tier_effectiveness.contract.avg_rounds_to_met`, `rubric_insights.tier_effectiveness.quality.avg_rounds_to_met`, and `metrics.median_rounds_to_ready` | Calibrate how sharp the contract vs quality checks need to be |
+| `qualitative_signals` | `qualitative_signals` (single optional object summarizing fix_hint round-delta correlation when ≥3 runs have rubric data across both cohorts) | Use the round delta as a weak prior to interpret in light of the rubric draft, not as a directive. |
 
 If the report returns valid JSON but there are no prior runs (`manifests: 0`, `events: 0`), treat that as empty history rather than an error.
 

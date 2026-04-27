@@ -9,6 +9,7 @@ const {
   TDD_COMMIT_PREFIX,
   applyTddFlavorToDispatchPrompt,
   extractAllFactors,
+  extractTddFactors,
   hasTddAnchor,
   renderIterationProtocolForRubric,
   resolveTddFactors,
@@ -157,6 +158,45 @@ test("extractAllFactors returns every factor regardless of tdd_anchor presence",
       type: "evaluated",
       tdd_anchor: null,
       tdd_runner: null,
+    },
+  ]);
+});
+
+test("extractAllFactors carries fix_hint additively without changing TDD projections", () => {
+  const rubric = [
+    "rubric:",
+    "  factors:",
+    "    - name: Parser rejects invalid input",
+    "      tier: contract",
+    "      type: automated",
+    "      tdd_anchor: \"tests/parser.test.js\"",
+    "      tdd_runner: \"node:test\"",
+    "      fix_hint: \"Add focused parser rejection coverage\" # executor hint",
+    "    - name: Error copy is actionable",
+    "      tier: quality",
+    "      type: evaluated",
+  ].join("\n");
+
+  const factors = extractAllFactors(rubric);
+
+  assert.deepEqual(factors.map((factor) => ({
+    name: factor.name,
+    fix_hint: factor.fix_hint,
+  })), [
+    {
+      name: "Parser rejects invalid input",
+      fix_hint: "Add focused parser rejection coverage",
+    },
+    {
+      name: "Error copy is actionable",
+      fix_hint: null,
+    },
+  ]);
+  assert.deepEqual(extractTddFactors(rubric), [
+    {
+      name: "Parser rejects invalid input",
+      tdd_anchor: "tests/parser.test.js",
+      tdd_runner: "node:test",
     },
   ]);
 });
