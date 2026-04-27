@@ -82,6 +82,75 @@ function writeRun(repoRoot, {
   writeManifest(manifestPath, manifest);
 }
 
+function setRubric(repoRoot, runId, rubricContent, rubricPath = "rubric.yaml") {
+  const { manifestPath, runDir } = ensureRunLayout(repoRoot, runId);
+  fs.writeFileSync(path.join(runDir, rubricPath), rubricContent, "utf-8");
+  const manifest = readManifest(manifestPath).data;
+  manifest.anchor.rubric_path = rubricPath;
+  writeManifest(manifestPath, manifest);
+}
+
+function setRubricAnchor(repoRoot, runId, rubricPath) {
+  const { manifestPath } = ensureRunLayout(repoRoot, runId);
+  const manifest = readManifest(manifestPath).data;
+  manifest.anchor.rubric_path = rubricPath;
+  writeManifest(manifestPath, manifest);
+}
+
+function unsetRubricAnchor(repoRoot, runId) {
+  const { manifestPath } = ensureRunLayout(repoRoot, runId);
+  const manifest = readManifest(manifestPath).data;
+  delete manifest.anchor.rubric_path;
+  writeManifest(manifestPath, manifest);
+}
+
+function buildQualitativeRubric({
+  withName = "Hinted factor",
+  withoutName = "Unhinted factor",
+  extraWithName = null,
+  includeWithout = true,
+} = {}) {
+  const lines = [
+    "rubric:",
+    "  factors:",
+    `    - name: ${withName}`,
+    "      tier: contract",
+    "      type: automated",
+    "      fix_hint: \"Apply the focused repair\"",
+  ];
+  if (extraWithName) {
+    lines.push(
+      `    - name: ${extraWithName}`,
+      "      tier: contract",
+      "      type: automated",
+      "      fix_hint: \"Add the missing focused guard\""
+    );
+  }
+  if (includeWithout) {
+    lines.push(
+      `    - name: ${withoutName}`,
+      "      tier: quality",
+      "      type: evaluated"
+    );
+  }
+  return lines.join("\n");
+}
+
+function appendScore(repoRoot, runId, round, factor, met = true) {
+  appendIterationScore(repoRoot, runId, {
+    round,
+    scores: [
+      {
+        factor,
+        target: ">= 8",
+        observed: met ? "8" : "5",
+        met,
+        status: met ? "pass" : "fail",
+      },
+    ],
+  });
+}
+
 test("reliability-report derives the core scorecard from manifests and events", () => {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-report-"));
   process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
@@ -353,6 +422,162 @@ test("reliability-report keeps factor analysis backwards compatible without iter
     factors: {},
     most_stuck_factor: null,
   });
+});
+
+test("reliability-report keeps qualitative_signals null below the minimum readable-rubric threshold", () => {
+  for (const count of [0, 1, 2]) {
+    const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), `relay-report-qual-threshold-${count}-`));
+    process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+    initGitRepo(repoRoot);
+    const recentTs = new Date(Date.now() - 1 * 60 * 60 * 1000).toISOString();
+
+    for (let index = 0; index < count; index += 1) {
+      const runId = createRunId({
+        branch: `run-qual-${count}-${index}`,
+        timestamp: new Date(`2026-04-12T02:2${count}:${index.toString().padStart(2, "0")}.000Z`),
+      });
+      writeRun(repoRoot, {
+        runId,
+        state: STATES.READY_TO_MERGE,
+        rounds: 1,
+        updatedAt: recentTs,
+      });
+      setRubric(repoRoot, runId, buildQualitativeRubric());
+      appendScore(repoRoot, runId, 1, "Hinted factor");
+      appendScore(repoRoot, runId, 1, "Unhinted factor");
+    }
+
+    const stdout = execFileSync("node", [SCRIPT, "--repo", repoRoot, "--json"], { encoding: "utf-8" });
+    const report = JSON.parse(stdout);
+
+    assert.equal(report.qualitative_signals, null);
+  }
+});
+
+test("reliability-report keeps qualitative_signals null when either cohort has fewer than three contributing manifests", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-report-qual-small-cohort-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  const recentTs = new Date(Date.now() - 1 * 60 * 60 * 1000).toISOString();
+
+  for (let index = 0; index < 3; index += 1) {
+    const runId = createRunId({
+      branch: `run-small-cohort-${index}`,
+      timestamp: new Date(`2026-04-12T02:3${index}:00.000Z`),
+    });
+    writeRun(repoRoot, {
+      runId,
+      state: STATES.READY_TO_MERGE,
+      rounds: 1,
+      updatedAt: recentTs,
+    });
+    setRubric(repoRoot, runId, buildQualitativeRubric({ includeWithout: index < 2 }));
+    appendScore(repoRoot, runId, 1, "Hinted factor");
+    if (index < 2) {
+      appendScore(repoRoot, runId, 1, "Unhinted factor");
+    }
+  }
+
+  const stdout = execFileSync("node", [SCRIPT, "--repo", repoRoot, "--json"], { encoding: "utf-8" });
+  const report = JSON.parse(stdout);
+
+  assert.equal(report.qualitative_signals, null);
+});
+
+test("reliability-report derives qualitative_signals across fix_hint cohorts", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-report-qual-signals-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  const recentTs = new Date(Date.now() - 1 * 60 * 60 * 1000).toISOString();
+  const runs = [
+    {
+      runId: createRunId({ branch: "run-qual-a", timestamp: new Date("2026-04-12T02:40:00.000Z") }),
+      withRounds: [["Hinted factor", 1]],
+      withoutRounds: [["Unhinted factor", 2]],
+    },
+    {
+      runId: createRunId({ branch: "run-qual-b", timestamp: new Date("2026-04-12T02:40:01.000Z") }),
+      withRounds: [["Hinted factor", 2]],
+      withoutRounds: [["Unhinted factor", 3]],
+    },
+    {
+      runId: createRunId({ branch: "run-qual-c", timestamp: new Date("2026-04-12T02:40:02.000Z") }),
+      extraWithName: "Second hinted factor",
+      withRounds: [["Hinted factor", 4], ["Second hinted factor", 1]],
+      withoutRounds: [["Unhinted factor", 5]],
+    },
+  ];
+
+  for (const run of runs) {
+    writeRun(repoRoot, {
+      runId: run.runId,
+      state: STATES.READY_TO_MERGE,
+      rounds: 5,
+      updatedAt: recentTs,
+    });
+    setRubric(repoRoot, run.runId, buildQualitativeRubric({ extraWithName: run.extraWithName }));
+    for (const [factor, round] of run.withRounds) {
+      appendScore(repoRoot, run.runId, round, factor);
+    }
+    for (const [factor, round] of run.withoutRounds) {
+      appendScore(repoRoot, run.runId, round, factor);
+    }
+  }
+
+  const stdout = execFileSync("node", [SCRIPT, "--repo", repoRoot, "--json"], { encoding: "utf-8" });
+  const report = JSON.parse(stdout);
+
+  assert.deepEqual(report.qualitative_signals, {
+    with: {
+      sample_size: 3,
+      avg_first_met_round: 2,
+    },
+    without: {
+      sample_size: 3,
+      avg_first_met_round: 3.3333,
+    },
+    delta: -1.3333,
+  });
+});
+
+test("reliability-report silently skips missing or malformed rubric anchors for qualitative_signals", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-report-qual-skip-rubrics-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  const recentTs = new Date(Date.now() - 1 * 60 * 60 * 1000).toISOString();
+  const runValid = createRunId({ branch: "run-valid", timestamp: new Date("2026-04-12T02:50:00.000Z") });
+  const runUnset = createRunId({ branch: "run-unset", timestamp: new Date("2026-04-12T02:50:01.000Z") });
+  const runUnreadable = createRunId({ branch: "run-unreadable", timestamp: new Date("2026-04-12T02:50:02.000Z") });
+  const runMalformed = createRunId({ branch: "run-malformed", timestamp: new Date("2026-04-12T02:50:03.000Z") });
+
+  for (const runId of [runValid, runUnset, runUnreadable, runMalformed]) {
+    writeRun(repoRoot, {
+      runId,
+      state: STATES.READY_TO_MERGE,
+      rounds: 1,
+      updatedAt: recentTs,
+    });
+  }
+
+  setRubric(repoRoot, runValid, buildQualitativeRubric());
+  unsetRubricAnchor(repoRoot, runUnset);
+  setRubricAnchor(repoRoot, runUnreadable, "missing-rubric.yaml");
+  setRubric(repoRoot, runMalformed, "rubric:\n  factors: [not parsed\n");
+
+  appendScore(repoRoot, runValid, 1, "Hinted factor");
+  appendScore(repoRoot, runValid, 1, "Unhinted factor");
+  appendScore(repoRoot, runUnset, 1, "Skipped unset anchor");
+  appendScore(repoRoot, runUnreadable, 1, "Skipped unreadable anchor");
+  appendScore(repoRoot, runMalformed, 1, "Skipped malformed rubric");
+
+  const stdout = execFileSync("node", [SCRIPT, "--repo", repoRoot, "--json"], { encoding: "utf-8" });
+  const report = JSON.parse(stdout);
+
+  assert.equal(report.qualitative_signals, null);
+  assert.deepEqual(Object.keys(report.factor_analysis.factors).sort(), [
+    "Hinted factor",
+    "Skipped malformed rubric",
+    "Skipped unreadable anchor",
+    "Skipped unset anchor",
+    "Unhinted factor",
+  ]);
 });
 
 test("reliability-report keeps rubric_insights null-safe when new events are absent", () => {

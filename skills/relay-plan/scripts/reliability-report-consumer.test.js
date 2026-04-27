@@ -45,6 +45,13 @@ function runReliabilityReport(repoRoot, relayHome) {
   });
 }
 
+function jsonCommand(value) {
+  return {
+    command: process.execPath,
+    args: ["-e", `process.stdout.write(${JSON.stringify(JSON.stringify(value))})`],
+  };
+}
+
 test("consumer treats no prior runs as empty history instead of a fallback error", () => {
   // Failure-mode axis A: empty history must stay on the no-history path.
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-plan-empty-history-"));
@@ -65,6 +72,7 @@ test("consumer treats no prior runs as empty history instead of a fallback error
   const historicalSignal = withRelayHome(relayHome, () => readHistoricalSignal(repoRoot));
   assert.equal(historicalSignal.status, "available");
   assert.equal(historicalSignal.empty_history, true);
+  assert.equal(historicalSignal.historical_signal.qualitative_signals, NO_HISTORY_TEXT);
 
   const rendered = renderHistoricalSignalSection(historicalSignal).join("\n");
   assert.match(rendered, /Empty-data state — historical signal not available, proceed to rubric design\./);
@@ -91,6 +99,7 @@ test("consumer surfaces the producer stderr cause when stored relay data is malf
   const historicalSignal = withRelayHome(relayHome, () => readHistoricalSignal(repoRoot));
   assert.equal(historicalSignal.status, "unavailable");
   assert.equal(historicalSignal.cause, "Invalid manifest entry on line 2");
+  assert.equal(historicalSignal.historical_signal.qualitative_signals, NO_HISTORY_TEXT);
 
   const rendered = renderHistoricalSignalSection(historicalSignal).join("\n");
   assert.match(
@@ -110,6 +119,7 @@ test("consumer falls back cleanly on a generic non-zero command and still procee
 
   assert.equal(historicalSignal.status, "unavailable");
   assert.equal(historicalSignal.cause, "fake producer failure");
+  assert.equal(historicalSignal.historical_signal.qualitative_signals, NO_HISTORY_TEXT);
 
   const rendered = renderHistoricalSignalSection(historicalSignal).join("\n");
   assert.match(
@@ -117,4 +127,46 @@ test("consumer falls back cleanly on a generic non-zero command and still procee
     /Reliability report unavailable: fake producer failure\. Proceeding without historical signal\./
   );
   assert.doesNotMatch(rendered, /dispatch blocked/i);
+});
+
+test("consumer renders qualitative_signals as no-history text when the report field is null", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-plan-qual-null-"));
+  const historicalSignal = readHistoricalSignal(repoRoot, jsonCommand({
+    totals: { manifests: 1, events: 1 },
+    qualitative_signals: null,
+  }));
+
+  assert.equal(historicalSignal.status, "available");
+  assert.equal(historicalSignal.empty_history, false);
+  assert.equal(historicalSignal.historical_signal.qualitative_signals, NO_HISTORY_TEXT);
+});
+
+test("consumer renders qualitative_signals with the prescribed template and line order", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-plan-qual-template-"));
+  const historicalSignal = readHistoricalSignal(repoRoot, jsonCommand({
+    totals: { manifests: 3, events: 6 },
+    qualitative_signals: {
+      with: {
+        sample_size: 3,
+        avg_first_met_round: 2,
+      },
+      without: {
+        sample_size: 4,
+        avg_first_met_round: 3.25,
+      },
+      delta: -1.25,
+    },
+  }));
+
+  assert.equal(
+    historicalSignal.historical_signal.qualitative_signals,
+    "Factors with fix_hint averaged 2 rounds-to-met vs 3.25 for factors without (delta -1.25) across 3+4 runs."
+  );
+  assert.deepEqual(renderHistoricalSignalSection(historicalSignal), [
+    "Historical signal:",
+    `historical_signal.stuck_factors: ${NO_HISTORY_TEXT}`,
+    `historical_signal.divergence_hotspots: ${NO_HISTORY_TEXT}`,
+    "historical_signal.qualitative_signals: Factors with fix_hint averaged 2 rounds-to-met vs 3.25 for factors without (delta -1.25) across 3+4 runs.",
+    `historical_signal.avg_rounds: ${NO_HISTORY_TEXT}`,
+  ]);
 });
