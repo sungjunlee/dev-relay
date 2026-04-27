@@ -28,23 +28,12 @@ Standard path: run `review-runner.js --reviewer codex` or `--reviewer claude`. I
 
 ## Setup: Establish the anchor
 
-1. Get the PR diff and Done Criteria (this runs in a fresh context — fetch everything needed):
+1. Get the PR diff and Done Criteria (this runs in a fresh context — fetch everything needed). The resolver tries `closingIssuesReferences`, then PR-body keyword grep, then branch-name regex; exits 1 if all three fail.
 ```bash
 PR_NUM=$(gh pr list --head <branch> --json number -q '.[0].number')
 BRANCH=$(gh pr view $PR_NUM --json headRefName -q '.headRefName')
 gh pr diff $PR_NUM > /tmp/pr-diff.txt
-
-# Issue number extraction — try each method until one succeeds:
-ISSUE_NUM=$(gh pr view $PR_NUM --json closingIssuesReferences -q '.[0].number')
-# Fallback 1: grep PR body for issue keywords
-[ -z "$ISSUE_NUM" ] && ISSUE_NUM=$(gh pr view $PR_NUM --json body -q '.body' | grep -oiE '(closes|fixes|resolves|refs|related to) #[0-9]+' | grep -oE '[0-9]+' | head -1)
-# Fallback 2: extract from branch name (try issue-<N> first, then any number)
-if [ -z "$ISSUE_NUM" ]; then
-  ISSUE_NUM=$(echo "$BRANCH" | grep -oE 'issue-[0-9]+' | grep -oE '[0-9]+')
-  [ -z "$ISSUE_NUM" ] && ISSUE_NUM=$(echo "$BRANCH" | grep -oE '[0-9]+' | tail -1)
-fi
-# If all fail: escalate — cannot review without Done Criteria
-[ -z "$ISSUE_NUM" ] && echo "ERROR: Cannot determine issue number. Provide it manually." && exit 1
+ISSUE_NUM=$(${CLAUDE_SKILL_DIR}/scripts/resolve-issue-number.sh "$PR_NUM" "$BRANCH")
 gh issue view $ISSUE_NUM  # Done Criteria / Acceptance Criteria source
 ```
 

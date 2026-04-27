@@ -111,16 +111,9 @@ This writes `rubric.yaml`, `dispatch-prompt.md`, and `planner-notes.md`. The orc
 
 Use this when operator planning rejects or narrows the issue body AC. Persist the operator-authored Phase 1 decision before dispatch so fresh-context review uses the same scope anchor.
 
-```bash
-RUN_ID=issue-42-$(date -u +%Y%m%d%H%M%S000)-deadbeef
-node ${CLAUDE_SKILL_DIR}/scripts/persist-done-criteria.js \
-  --repo . --run-id "$RUN_ID" --file /tmp/done-criteria-42.md --json
-
-node ${CLAUDE_SKILL_DIR}/../relay-dispatch/scripts/dispatch.js . \
-  --run-id "$RUN_ID" -b issue-42 --prompt-file /tmp/dispatch-42.md \
-  --rubric-file /tmp/rubric-42.yaml \
-  --done-criteria-file ~/.relay/runs/<repo-slug>/$RUN_ID/done-criteria.md
-```
+1. Choose `RUN_ID` (e.g., `issue-<N>-$(date -u +%Y%m%d%H%M%S000)-<short-sha>`).
+2. Persist: `node ${CLAUDE_SKILL_DIR}/scripts/persist-done-criteria.js --repo . --run-id "$RUN_ID" --file /tmp/done-criteria-<N>.md --json`
+3. Dispatch with the same `RUN_ID`, adding `--done-criteria-file ~/.relay/runs/<repo-slug>/$RUN_ID/done-criteria.md` to the Step 5 invocation below.
 
 The helper writes `~/.relay/runs/<repo-slug>/<run-id>/done-criteria.md` with source `planner_decision`. Dispatch picks it up via `--done-criteria-file` when the same run id is used. Canonical filename is always `done-criteria.md`; ad-hoc file paths remain source `file`.
 
