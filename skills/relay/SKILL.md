@@ -87,12 +87,7 @@ Write the rubric YAML to a temp file (e.g., `/tmp/rubric-<N>.yaml`).
 ```bash
 ${CLAUDE_SKILL_DIR}/../relay-dispatch/scripts/dispatch.js . \
   -b issue-<N> --prompt-file /tmp/dispatch-<N>.md --rubric-file /tmp/rubric-<N>.yaml --timeout 3600
-```
-
-If intake ran, also pass:
-
-```bash
-  --request-id <request-id> --leaf-id <leaf-id> --done-criteria-file <done-criteria-path>
+# If intake ran, append: --request-id <id> --leaf-id <id> --done-criteria-file <done-criteria-path>
 ```
 
 While dispatch runs in the background, optionally monitor progress:
