@@ -85,6 +85,5 @@ Check for:
 Run tests. Fix failures. Repeat review-fix until solid.
 
 ## When Satisfied
-Stop after local verification and leave the branch ready for the orchestrator.
-The orchestrator handles branch publication and PR creation for review.
+Commit your final work to the branch with a clear message. The orchestrator handles `git push` + `gh pr create` after the dispatch returns (and is idempotent if you also push or open a PR yourself). Do NOT skip the commit — that is the one step the orchestrator cannot recover automatically.
 ```
