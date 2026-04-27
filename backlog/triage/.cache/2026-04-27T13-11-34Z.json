@@ -1,0 +1,414 @@
+{
+  "generated": "2026-04-27T13:11:34.172Z",
+  "repo": "sungjunlee/dev-relay",
+  "config_path": "backlog/triage-config.yml",
+  "issues": [
+    {
+      "number": 319,
+      "title": "test: collapse cross-CLI validateManifestPaths smoke coverage from 12 to 1 unit + 4 smoke (~400 LoC)",
+      "body": "## Context\nEach of finalize-run / gate-check / dispatch / review-runner re-tests the same three perimeter checks of `validateManifestPaths` (`invalid run_id`, `crafted repo_root`, `relay-base same-name worktrees`) — 12 tests total. The unit-level validator is already covered by `relay-manifest.test.js:277`. The 12 CLI-level tests prove \"the validator is wired up\" but most could collapse to 1 smoke test per CLI.\n\nThis is **medium risk** (per simplify-tests classification) — separated from the low-risk parameterize batch in #317.\n\n## Findings\n- `finalize-run.test.js:826, 869, 919, 969` (4 tests, ~140 LoC)\n- `gate-check.test.js:741, 762, 795` (3 tests, ~100 LoC)\n- `dispatch.test.js:1645, 1692` (2 tests, ~80 LoC)\n- `review-runner.test.js:1135, 1240, 1270` (3 tests, ~120 LoC)\n\n## Acceptance Criteria\n- [ ] 1 unit test in `relay-manifest.test.js` (or new `manifest-paths.test.js`) covers all perimeter cases against `validateManifestPaths` directly\n- [ ] 1 smoke test per CLI (4 total) confirms the validator is invoked at the right entry point\n- [ ] ~400 LoC reclaimed\n- [ ] **Validation step**: pick one CLI; manually break the validator wire-up (skip the call); confirm the 1-smoke test still fails. Repeat per CLI. This proves 1-smoke per CLI is sufficient for catching wire-up regressions.\n- [ ] Per-CLI validator-wired-up coverage no worse than before\n\n## Effort\nM (medium risk — requires the wire-up validation step above)\n\n## Source\nsimplify-tests pass",
+      "labels": [
+        "enhancement",
+        "backlog"
+      ],
+      "createdAt": "2026-04-27T12:42:30Z",
+      "updatedAt": "2026-04-27T12:42:36Z",
+      "milestone": null,
+      "buckets": {
+        "label": {
+          "type": "uncategorized",
+          "priority": "medium",
+          "status": "todo"
+        },
+        "theme": "uncategorized",
+        "age": "<7d",
+        "activity": "recent",
+        "milestone": "unassigned"
+      }
+    },
+    {
+      "number": 318,
+      "title": "test: parameterize 3 duplicate-shape test clusters (~630 LoC reclaim)",
+      "body": "## Context\nsimplify-tests pass identified 3 clusters where N near-identical tests should be 1 parameterized table. Total reclaim ≈ 630 LoC out of 24,887 (low-risk only — separate medium-risk smoke reduction in #318).\n\n## Items\n\n### 1. dispatch.test.js model-hints rejection 6-pack — ~500 LoC\n- **Where**: `skills/relay-dispatch/scripts/dispatch.test.js:893-1017` — six tests, each ~20 lines, body byte-identical apart from input string and asserted error suffix\n- **Cases**: `unknown phase`, `missing '='`, `empty phase`, `empty value`, `empty pair`, `duplicate phase`\n- **Replacement**: 1 parameterized test against the parser fn directly (it's pure, no I/O) + 1 integration test confirming \"any parse error skips manifest write\"\n- **Note**: also tighten the brittle `assert.equal(stderr, \"Error: invalid --model-hints token 'foo=bar': unknown phase 'foo'\")` exact-string equalities to `assert.match` patterns at lines 908, 929, 950, 971, 992, 1013\n\n### 2. relay-events.test.js `appendRunEvent persists X when provided` 5-pack — ~80 LoC\n- **Where**: `skills/relay-dispatch/scripts/relay-events.test.js:145, 160, 175, 191, 207`\n- **Cases**: round-trips `rubric_status`, `origin`, `last_reviewed_sha`, `pr_number`, `recover commit_sha/branch` through JSONL\n- **Replacement**: 1 parameterized test with `[fieldName, value]` table\n\n### 3. finalize-run.test.js `--reason` empty/whitespace pair — ~50 LoC\n- **Where**: `skills/relay-merge/scripts/finalize-run.test.js:678` (no `--reason`) and `:705` (whitespace `--reason`)\n- **Replacement**: parameterize over `[undefined, \"   \", \"\\t\", \"\"]`\n\n## Acceptance Criteria\n- [ ] 3 parameterized tests replace 13 individual tests\n- [ ] All branches still covered (manual trace through parameterized table)\n- [ ] Test count: -10 (13 → 3); LoC: ~-630\n- [ ] Test runtime improves (fewer fixture setups for the model-hints cluster)\n\n## Effort\nS (~1 hour, low risk — collapsing within single test files)\n\n## Source\nsimplify-tests pass\n\n## Sequencing\nIndependent of #312-#317; can land in parallel.",
+      "labels": [
+        "enhancement"
+      ],
+      "createdAt": "2026-04-27T12:42:18Z",
+      "updatedAt": "2026-04-27T12:43:19Z",
+      "milestone": null,
+      "buckets": {
+        "label": {
+          "type": "uncategorized",
+          "priority": "medium",
+          "status": "todo"
+        },
+        "theme": "uncategorized",
+        "age": "<7d",
+        "activity": "recent",
+        "milestone": "unassigned"
+      }
+    },
+    {
+      "number": 317,
+      "title": "chore: audit two structural decisions (legacy bootstrap warning + cross-skill rubric import)",
+      "body": "## Context\nTwo findings need an operator-usage / layering decision before any code change. Filing as one audit issue rather than two pre-decided issues.\n\n## Decisions needed\n\n### 1. `hasLegacyBootstrapReasonPrefix` — drop or fail-close?\n- **Where**: `skills/relay-merge/scripts/finalize-run.js:113-115, 295-300` + test `finalize-run.test.js:554`\n- **What**: regex check for legacy `bootstrap:`-prefixed `--force-finalize-nonready --reason` strings; emits `console.error` warning but proceeds\n- **Triggering deprecation**: `relay-reconcile-artifact` migration; warning has been around through ≥1 migration\n- **Audit needed**: search ops logs / event journals for `LEGACY_BOOTSTRAP_REASON_PREFIX` matches in the last 30 days\n  - Zero matches → drop the helper, regex constant, and test\n  - Any matches → upgrade to fail-closed (reject the legacy prefix outright with migration message)\n\n### 2. `gate-check → review-runner/{context,redispatch}` cross-skill import\n- **Where**: `skills/relay-merge/scripts/gate-check.js` imports `buildReviewRunnerRubricGateFailure` and `loadRubricFromRunDir` from `relay-review/scripts/review-runner/{redispatch,context}.js`\n- **Layering observation**: this is the **only** inbound import into relay-review across the whole project. Every other cross-skill import is `* → relay-dispatch/manifest/*` or `relay-merge → relay-dispatch`. The merge→review direction contradicts the otherwise strict one-way layering.\n- **Options**:\n  - **(a) Relocate**: move `buildReviewRunnerRubricGateFailure` and `loadRubricFromRunDir` to `relay-dispatch/scripts/manifest/rubric.js` (already owns rubric audit) → restores one-way layering\n  - **(b) Document**: add comment in CLAUDE.md \"Working on This Project\" that this specific cross-skill import is intentional (and why)\n\n## Acceptance Criteria\n- [ ] Decision 1: log audit complete, choice (drop vs fail-close) recorded in this issue thread\n- [ ] Decision 2: choice (a) or (b) recorded; if (a), follow-up PR filed\n- [ ] If either decision triggers code change, it lands in a follow-up PR (not bundled with audit)\n\n## Effort\nS audit + S-M follow-up depending on decisions\n\n## Source\nsimplify-quality (dead-code residue) + simplify-reuse (cross-skill imports inventory)",
+      "labels": [
+        "enhancement",
+        "backlog"
+      ],
+      "createdAt": "2026-04-27T12:42:02Z",
+      "updatedAt": "2026-04-27T12:43:32Z",
+      "milestone": null,
+      "buckets": {
+        "label": {
+          "type": "uncategorized",
+          "priority": "medium",
+          "status": "todo"
+        },
+        "theme": "uncategorized",
+        "age": "<7d",
+        "activity": "recent",
+        "milestone": "unassigned"
+      }
+    },
+    {
+      "number": 316,
+      "title": "chore: small-utilities consolidation pass + dead-code drops + gate-check switch flatten",
+      "body": "## Context\nBatch of low-risk cleanups identified by the simplify pass. Each item is S effort and can land as its own commit for atomic revert.\n\n## Items\n\n### Dead-code drops\n- [ ] **`manifest.github.pr_number` dual-write** is dead — only `dispatch.js:1160` self-fallback reads it; all other consumers (`relay-resolver.js:48,253`, `gate-check.js:121`, `recover-commit.js:381`) use `git.pr_number` exclusively. Drop:\n  - `dispatch.js:1218-1222` (the dual-write)\n  - `dispatch.js:1160` (the `?? manifest.github?.pr_number` fallback clause)\n  - 6 test assertions: `dispatch.test.js:2006, 2007, 2255, 2256, 2396, 2397`\n\n- [ ] **`cli-args.js` shim wrappers** `getArg = readArg`, `hasFlag = schemaHasFlag` (file lines 1-17). After #315 lands, replace with `bindCliArgs` export only; no-op rename layer is removed.\n\n### Small utility consolidation (target: `manifest/paths.js` as deepest leaf)\n- [ ] `looksLikeGitRepo` — 4× byte-identical → 1 (`dispatch.js:380`, `finalize-run.js:133`, `relay-reconcile-artifact.js:89`, `review-runner/common.js:44`)\n- [ ] `getExpectedManifestRepoRoot` — 3× near-identical → 1 (`finalize-run.js:137`, `relay-reconcile-artifact.js:93`, `review-runner/context.js:199`)\n- [ ] `summarizeError` / `summarizeFailure` — 6× → 1 (currently canonical in `reviewer-helpers.js:1`; move to neutral home)\n- [ ] `parsePositiveInt` — 5× → 1 (`review-runner/common.js:26`, `analyze-flip-flop-pattern.js:59`, `finalize-run.js:104`, `relay-reconcile-artifact.js:78`, `update-manifest-state.js:64`)\n- [ ] `nowIso` — 8× → 1 (across `manifest/{store,lifecycle,cleanup,environment,attempts}.js` + `recover-commit.js:55` + `relay-intake/scripts/relay-request.js:30`; standardize casing — `nowIso` not `nowISO`)\n- [ ] `RUBRIC_PASS_THROUGH_STATES = new Set([\"loaded\"])` — 2× → 1 (move to `review-runner/common.js`, import from `redispatch.js:7` and `context.js:12`)\n\n### Switch flatten\n- [ ] **`gate-check.js::output` 12-branch if/else** (L199-253) → lookup table `STATUS_RENDERERS = { lgtm: (r,p) => `..`, ... }`. Each entry is a render function; `STATUS_RENDERERS[status]?.(result, PR_NUM) ?? defaultRenderer(...)`.\n\n## Acceptance Criteria\n- [ ] Each item lands as one focused commit (so any single one can be reverted in isolation)\n- [ ] All existing tests pass after each commit\n- [ ] No behavioral change (`gate-check.js::output` rendering byte-identical for all 12 statuses)\n\n## Effort\nS per item × 8 items = M total (~3 hours batched)\n\n## Source\nsimplify-reuse #2-6 + simplify-quality (dead-code, switches)\n\n## Sequencing\nLand after #313 (EVENTS enum) and #315 (bindCliArgs) — those refactor the import surface that this batch consolidates.",
+      "labels": [
+        "enhancement"
+      ],
+      "createdAt": "2026-04-27T12:41:43Z",
+      "updatedAt": "2026-04-27T12:41:49Z",
+      "milestone": null,
+      "buckets": {
+        "label": {
+          "type": "uncategorized",
+          "priority": "medium",
+          "status": "todo"
+        },
+        "theme": "uncategorized",
+        "age": "<7d",
+        "activity": "recent",
+        "milestone": "unassigned"
+      }
+    },
+    {
+      "number": 315,
+      "title": "refactor(cli-args): add bindCliArgs() to dedupe getArg/hasFlag boilerplate across 10+ entry points",
+      "body": "## Context\n10+ scripts re-roll the same 3-line CLI binding closure:\n\\`\\`\\`js\nconst CLI_ARG_OPTIONS = { commandName, reservedFlags: KNOWN_FLAGS };\nconst getArg = (flag, fb) => sharedGetArg(args, flag, fb, CLI_ARG_OPTIONS);\nconst hasFlag = (flag) => sharedHasFlag(args, flag, CLI_ARG_OPTIONS);\n\\`\\`\\`\n\nCloses the open retro item from MEMORY `project_retro_2026_04_18` (\"cli-args dedup\").\n\n## Findings (per simplify-reuse #7+8)\nLocations of the pattern:\n- `relay-merge/scripts/finalize-run.js:101-102`\n- `relay-merge/scripts/relay-reconcile-artifact.js:67-68`\n- `relay-plan/scripts/plan-runner.js:16-17`\n- `relay-plan/scripts/invoke-planner-claude.js:19-20`\n- `relay-plan/scripts/invoke-planner-codex.js:19-20`\n- `relay-plan/scripts/probe-executor-env.js:36-37`\n- `relay-plan/scripts/persist-done-criteria.js:20-32` (re-rolls own primitive parsers — convert to shared first)\n- `relay-review/scripts/review-runner.js:49-50`\n- `relay-review/scripts/invoke-reviewer-claude.js:20-21`\n- `relay-review/scripts/invoke-reviewer-codex.js:21-22`\n- `relay-intake/scripts/persist-request.js:16-17`\n\n## Acceptance Criteria\n- [ ] `cli-args.js` exports `bindCliArgs(args, {commandName, reservedFlags})` returning `{getArg, hasFlag, options}`\n- [ ] All 10+ entry points use `bindCliArgs`\n- [ ] `persist-done-criteria.js` migrated from custom primitive parsers to shared cli-args (gives unknown-flag detection for free)\n- [ ] All existing tests pass\n\n## Effort\nM (mechanical, but touches every CLI entry-point; ~2 hours)\n\n## Source\nsimplify-reuse #7+8 + MEMORY `project_retro_2026_04_18` open item",
+      "labels": [
+        "enhancement"
+      ],
+      "createdAt": "2026-04-27T12:41:16Z",
+      "updatedAt": "2026-04-27T12:41:22Z",
+      "milestone": null,
+      "buckets": {
+        "label": {
+          "type": "uncategorized",
+          "priority": "medium",
+          "status": "todo"
+        },
+        "theme": "uncategorized",
+        "age": "<7d",
+        "activity": "recent",
+        "milestone": "unassigned"
+      }
+    },
+    {
+      "number": 314,
+      "title": "refactor: consolidate git()/gh() execFile wrappers into shared exec helpers",
+      "body": "## Context\n6 near-identical `git()` wrappers + 3 `gh()` wrappers + 4 separate `RELAY_GIT_BIN`/`RELAY_GH_BIN` env-var resolutions across the relay-* skills. Each copy slightly different (some take `gitBin`, some don't; some `.trim()` results, some don't), creating a behavioral drift surface.\n\n## Findings (per simplify-reuse #1+9 + simplify-quality #3)\n**`git()` re-rolled in 6+ places**:\n- `skills/relay-dispatch/scripts/dispatch.js:331`\n- `skills/relay-dispatch/scripts/claude-app-register.js:31`\n- `skills/relay-dispatch/scripts/codex-app-register.js:37`\n- `skills/relay-dispatch/scripts/create-worktree.js:140`\n- `skills/relay-dispatch/scripts/worktree-runtime.js:9`\n- `skills/relay-dispatch/scripts/recover-commit.js:59-72`\n- `skills/relay-merge/scripts/finalize-run.js:117-131`\n- `skills/relay-review/scripts/review-runner/common.js:18` (uses `cwd:` variant — reconcile with `-C` form)\n\n**`gh()` re-rolled in 3+ places** (similar shape).\n\n**`RELAY_*_BIN` env resolution** duplicated at:\n- `relay-dispatch/scripts/cleanup-worktrees.js:119`\n- `relay-dispatch/scripts/close-run.js:58`\n- `relay-dispatch/scripts/recover-commit.js:205-206`\n- `relay-merge/scripts/finalize-run.js:289-290`\n\n## Acceptance Criteria\n- [ ] New `skills/relay-dispatch/scripts/exec.js` exports `execGit(repoPath, args, opts?)` and `execGh(repoPath, args, opts?)` with `RELAY_GIT_BIN`/`RELAY_GH_BIN` resolution built in\n- [ ] Decision documented in PR body: `-C <repo>` vs `cwd: <repo>` reconciliation (recommend `-C` for git, `cwd:` for gh API calls — match common practice)\n- [ ] All 9+ call sites import from exec.js; per-file env-var reads removed\n- [ ] Existing tests pass; behavior preserved (`.trim()` semantics on stdout consistent)\n- [ ] One new test for the env-var override path\n\n## Effort\nM (mechanical edits but touches every relay-* skill; ~2 hours)\n\n## Source\nsimplify-reuse #1+9 + simplify-quality #3",
+      "labels": [
+        "enhancement"
+      ],
+      "createdAt": "2026-04-27T12:41:15Z",
+      "updatedAt": "2026-04-27T12:41:21Z",
+      "milestone": null,
+      "buckets": {
+        "label": {
+          "type": "uncategorized",
+          "priority": "medium",
+          "status": "todo"
+        },
+        "theme": "uncategorized",
+        "age": "<7d",
+        "activity": "recent",
+        "milestone": "unassigned"
+      }
+    },
+    {
+      "number": 313,
+      "title": "relay-events: introduce EVENTS enum to prevent silent journal-name typos",
+      "body": "## Context\n~50 raw event-name string literals are scattered across 12+ files. `relay-events.js` doesn't export an event-name whitelist, so a typo (e.g., `\"reviewer_swp\"` instead of `\"reviewer_swap\"`) corrupts the journal silently with no test signal.\n\nThis compounds the producer-side coercion class documented in MEMORY entry `feedback_event_bucketing_missing_vs_empty` — that memory addresses missing-vs-empty distinction; this issue addresses the orthogonal typo-vs-canonical-name distinction.\n\n## Findings\nExamples of duplicated literals (per simplify-quality analysis):\n- `\"review_apply\"` (17×)\n- `\"merge_blocked\"` (5×)\n- `\"dispatch_start\"` (5×)\n- Plus: `force_finalize`, `escalation_decision`, `pr_body_snapshot_failed`, `reviewer_swap`, `state_recovery`, `pr_number_stamped`, `cleanup_result`, `environment_drift`, `model_hints_updated`, `recover_commit`, ...\n\nLocations: spread across `relay-intake/`, `relay-review/`, `relay-merge/`, `relay-dispatch/` — exhaustive list via `grep -rE \"event:\\s*\\\"[a-z_]+\\\"\" skills/`\n\n## Acceptance Criteria\n- [ ] `relay-events.js` exports `EVENTS = Object.freeze({REVIEW_APPLY: \"review_apply\", ...})` covering every event name actually emitted\n- [ ] All 50+ literal event names at producer call sites replaced with `EVENTS.X`\n- [ ] `appendRunEvent` validates `eventData.event` is in `Object.values(EVENTS)` — throws on unknown name\n- [ ] Test added: emitting an event name not in EVENTS throws (replaces typo silent-corruption class)\n- [ ] Reader-side string comparisons (e.g., `events.find(e => e.event === \"...\")` in tests) audited — either ported to `EVENTS.X` or deliberately left as canary against schema drift\n\n## Effort\nM (mechanical edit across 12+ files + new validation + new test; ~2-3 hours)\n\n## Source\nsimplify-quality pass (Stringly-typed leakage #1) + MEMORY `feedback_event_bucketing_missing_vs_empty`",
+      "labels": [
+        "enhancement",
+        "priority:high"
+      ],
+      "createdAt": "2026-04-27T12:40:55Z",
+      "updatedAt": "2026-04-27T12:41:01Z",
+      "milestone": null,
+      "buckets": {
+        "label": {
+          "type": "uncategorized",
+          "priority": "high",
+          "status": "todo"
+        },
+        "theme": "uncategorized",
+        "age": "<7d",
+        "activity": "recent",
+        "milestone": "unassigned"
+      }
+    },
+    {
+      "number": 307,
+      "title": "relay-review: round-end reflection event (Reflexion Phase A analyzer)",
+      "body": "# relay-review: round-end reflection event (Reflexion-style)\n\n## Summary\n\nEmit a structured `round_lesson` event at the end of every review round (parallel to `escalation_decision` from #270 Phase B). Captures what changed between rounds — which issues from round N-1 were addressed, which persist, what the reviewer learned that the next round can use.\n\nPhase A: write an analyzer that derives lesson candidates from existing manifest + events.jsonl + verdict files (no new producer needed). Phase B: promote the analyzer's heuristic into a real event with a typed schema, mirroring how #270 promoted flip-flop heuristics into `lineage` + `escalation_decision`.\n\n## Motivation\n\ndev-relay already carries prior-round context into the next reviewer prompt (`formatPriorVerdictSummary` in `prompt.js`), but it's an unstructured prose summary. The reviewer reads \"Round 2 said X, Round 3 said Y\" but has no structured signal for \"the executor *responded* to issue Z by doing W.\"\n\nReflexion (Shinn 2023) shows that explicit lesson extraction between iterations measurably improves convergence on multi-step tasks. dev-relay's existing iteration loop is the right shape — just missing the lesson-extraction step.\n\nConcrete evidence from recent runs:\n- PR #298 R1 → R2 took 260s for the contract gap fix (good, fast). But the round-end transition was implicit — the executor inferred from the issue text alone what to fix. A structured `round_lesson` (\"Round 1 issue resolved by Z; remaining gaps: none\") would have made the transition deterministic.\n- PR #270 Phase A's `analyze-flip-flop-pattern.js` already derives flip-flop classification from prior verdicts on demand. Same pattern, same author, same shape: derive first, structure later.\n\n## Why this is a separate issue from #142\n\n#142 is contract-tier convention work (per-factor TDD opt-in). Round-end reflection is a structured-event addition — closer to #270 Phase B in shape, requiring its own design pass and probably its own Phase A measurement run before Phase B encoding.\n\n## Phased Acceptance Criteria\n\n### Phase A — Analyzer (this issue's first-stage)\n\n<!-- AC:BEGIN -->\n- [ ] `skills/relay-review/scripts/analyze-round-lesson.js` reads a run's manifest + events.jsonl + verdict-round-N.json files\n- [ ] For every round transition (round N → round N+1), emits a derived lesson candidate with: `resolved_issues`, `persisting_issues`, `new_issues`, `lineage_summary` (reuse #270 Phase B enum), `transition_quality` (one of `clean`, `partial`, `stuck`, `regressed`)\n- [ ] Output JSON or human-readable; same flag pattern as `reliability-report.js`\n- [ ] No event emission, no manifest mutation — pure analyzer\n- [ ] Test fixture: at least 3 historical runs from `~/.relay/runs/` produce sane lesson candidates\n- [ ] Regression test: empty/single-round runs return empty lesson list cleanly (not error)\n<!-- AC:END -->\n\n### Phase B — Structured event (filed as separate issue after Phase A data accrues)\n\nPhase B is a **separate future issue**, not part of this one. Pattern:\n\n- After ~30 days / ~20 runs of Phase A data, audit lesson candidates for recurring patterns.\n- Promote the heuristic to a typed `round_lesson` event written by `review-runner.js` at every round-end.\n- Reviewer prompt's prior-round context section is rewritten to consume structured events instead of prose summaries.\n\nThis staging mirrors #270 (Phase A `analyze-flip-flop-pattern.js` → Phase B `escalation_decision` event + lineage enum).\n\n## Failure Modes\n\n**Phase A**: empty/sparse historical data could produce noisy lesson candidates that are misleading rather than informative. Mitigation: explicit \"insufficient data\" output state, mirrored on `reliability-report.js`'s no-history path.\n\n**Phase B (future)**: schema bootstrap paradox if `round_lesson` event shape changes mid-deployment. Mitigation: same structural invariant test pattern as PR #304.\n\n## Dependencies\n\n- Pattern reuse from `analyze-flip-flop-pattern.js` (PR #298 era).\n- Reuse `lineage` enum from `REVIEWER_VERDICT_JSON_SCHEMA` (PR #298 / #304).\n- Phase B requires #142 NOT shipped first? No — orthogonal.\n\n## Out of Scope\n\n- Auto-acting on lessons (e.g., re-prompting the executor with \"you missed X last round\"). That's Phase 3+.\n- Cross-run lesson aggregation (lessons from prior runs inform current run). Nice-to-have, distinct issue.\n- Reviewer-side LLM-generated free-text lesson narrative. Phase A is structural only.\n\n## Context\n\n- Reflexion paper: Shinn et al., 2023.\n- #270 Phase A analyzer pattern: `skills/relay-review/scripts/analyze-flip-flop-pattern.js`.\n- #270 Phase B promotion: PR #298 → `a2d1492` (lineage enum + `escalation_decision` event).\n- Memory: `~/.claude/projects/-Users-sjlee-workspace-active-harness-stack-dev-relay/memory/project_270_phase_a_findings.md`\n",
+      "labels": [
+        "enhancement",
+        "backlog"
+      ],
+      "createdAt": "2026-04-26T05:59:54Z",
+      "updatedAt": "2026-04-26T06:00:32Z",
+      "milestone": null,
+      "buckets": {
+        "label": {
+          "type": "uncategorized",
+          "priority": "medium",
+          "status": "todo"
+        },
+        "theme": "uncategorized",
+        "age": "<7d",
+        "activity": "recent",
+        "milestone": "unassigned"
+      }
+    },
+    {
+      "number": 306,
+      "title": "relay-review: confidence-banded reviewer findings (low/medium/high)",
+      "body": "# relay-review: confidence-banded reviewer findings\n\n## Summary\n\nAdd `confidence: low | medium | high` to every entry in `verdict.issues[]`. The reviewer scores each finding's confidence; downstream gates use the band to decide blocking severity.\n\n## Motivation\n\nReviewer noise is a recurring drag — low-signal nits get the same blocking weight as critical defects. Anthropic's eval guidance and Reflexion-style critic patterns both treat confidence as a first-class signal: high-confidence + critical → block; low-confidence → advisory note that doesn't gate merge.\n\nConcrete dev-relay evidence:\n- PR #298 R1 caught a real contract gap, and PR #300 R1 caught a heading-text mismatch — both were correctly blocking. But several recent rounds also surfaced near-cosmetic \"consider renaming\" issues that the reviewer prompt's \"do not invent nitpicks\" directive failed to suppress.\n- A confidence band gives the reviewer a sanctioned channel for \"I'm not sure but flagging\" without forcing it into either \"ignore\" or \"block.\"\n\n## Why this is a separate issue from #142\n\nVerdict-schema additions trigger the bootstrap paradox documented in `feedback_schema_bootstrap_paradox.md`. PR #298 → #304 chain showed how easy it is to ship a strict-mode-incompatible schema change because the running reviewer is on the *previous* schema. Confidence bands need:\n\n- a structural invariant test pass (already exists since PR #304),\n- a strict-mode-correct addition to `REVIEWER_VERDICT_JSON_SCHEMA`,\n- explicit `required` membership for the new field,\n- a coordinated installed-skills rsync before the next dispatch.\n\n#142 explicitly avoids touching the verdict schema for exactly this reason. Bundling confidence bands into #142 would re-introduce the failure mode #142 was designed to dodge.\n\n## Acceptance Criteria\n\n<!-- AC:BEGIN -->\n- [ ] `REVIEWER_VERDICT_JSON_SCHEMA` and `REVIEW_VERDICT_JSON_SCHEMA` add `confidence` to `issues[].properties` with enum `[\"low\", \"medium\", \"high\"]`\n- [ ] `confidence` is in `required` for both schemas (strict-mode invariant)\n- [ ] Reviewer prompt instructs: \"Score every issue's confidence. high = clear defect, reproducible from diff alone. medium = likely defect, may need execution to confirm. low = stylistic or speculative, do not block on this alone.\"\n- [ ] `validateIssue` enforces enum membership\n- [ ] Verdict gate logic: a `verdict=changes_requested` payload where all issues have `confidence=low` is downgraded to `verdict=advisory_pass` (new value? or kept as `pass` with notes?) — open design question, see Failure Modes\n- [ ] Structural invariant test (`schema/strict-mode invariant: ...`) passes after this change\n- [ ] Back-compat: existing reviewer payloads without `confidence` are rejected with a clear error pointing at the field (no silent default)\n- [ ] Memory `feedback_schema_bootstrap_paradox.md` referenced in the PR description as the failure-mode this PR explicitly mitigates\n<!-- AC:END -->\n\n## Failure Modes\n\n**Critical**: schema strict-mode regression. Per PR #304, every `additionalProperties: false` object must list every property in `required`. The structural invariant test in `review-runner-verdict.test.js` is the gate.\n\n**Design open**: how should \"all-low-confidence changes_requested\" be transported? Options:\n1. New verdict value `advisory_pass` (4-value enum, breaking change to consumers)\n2. Keep `verdict=pass` but populate `notes` with the advisory issues (no schema change but loses the \"we found something worth mentioning\" signal)\n3. Keep `verdict=changes_requested` but consumers (gate-check.js, finalize-run.js) downgrade based on confidence band\n\nRecommendation: option 3. Smallest schema delta; consumers already distinguish blocking from advisory.\n\n## Dependencies\n\n- Lessons from #270 Phase B (lineage enum addition pattern) and PR #304 (structural invariant test). Reuse the same test + rsync workflow.\n\n## Out of Scope\n\n- Auto-tuning confidence thresholds based on historical data. (Phase 2 if value validates.)\n- Surfacing confidence in `escalation_decision` events. (Possible Phase B follow-up.)\n- Reviewer disagreement metric (cross-reviewer confidence delta). (Distinct issue.)\n\n## Context\n\n- Bootstrap paradox lesson: `~/.claude/projects/-Users-sjlee-workspace-active-harness-stack-dev-relay/memory/feedback_schema_bootstrap_paradox.md`\n- Strict-mode invariant test: `skills/relay-review/scripts/review-runner-verdict.test.js`\n- Lineage enum precedent (same shape of change): PR #298 → `a2d1492`\n",
+      "labels": [
+        "enhancement",
+        "backlog"
+      ],
+      "createdAt": "2026-04-26T05:59:52Z",
+      "updatedAt": "2026-04-26T06:00:00Z",
+      "milestone": null,
+      "buckets": {
+        "label": {
+          "type": "uncategorized",
+          "priority": "medium",
+          "status": "todo"
+        },
+        "theme": "uncategorized",
+        "age": "<7d",
+        "activity": "recent",
+        "milestone": "unassigned"
+      }
+    },
+    {
+      "number": 154,
+      "title": "Benchmark gstack-codex adversarial style into relay-review",
+      "body": "## Summary\n\nThe gstack-codex `challenge` mode surfaced **9 substantive findings** on PR #147 that relay-review's 6 sequential rounds missed — including real production bypasses (file deletion after dispatch, path escape, branch-reuse manifest inheritance, skip-path rubric bypass) and a sharp critique of compliance-theater rounds.\n\nRelay-review is currently collaborative-critical (find issues the executor should fix). gstack-codex challenge is adversarial (try to break it; think like an attacker; no compliments). Different mode, different yield. Benchmark the style difference and decide which pieces to adopt.\n\n## Observed style difference (empirical, from PR #147)\n\n| Dimension | relay-review (6 rounds) | gstack-codex challenge (1 pass) |\n|-----------|-------------------------|---------------------------------|\n| Findings that were genuine code gaps | 4 rounds × 1-3 issues | 9 findings in 1 pass |\n| Bypass vectors found | 0 explicit | 4 (file delete, path escape, branch reuse, skip-path) |\n| Test-suite critique | 0 | \"suite mostly proves bypasses work, not enforcement\" |\n| Compliance-theater detection | 0 (round 5 was theater, reviewer acknowledged but scored it as contract fail) | Round 4 + 5 explicitly called out as theater |\n| Token spend | ~50-80k per round × 6 | 1.23M single pass |\n| Latency | ~10-20 min × 6 = 1h 40min | ~5 min |\n\nrelay-review is thorough about rubric compliance. It's not adversarial about invariant surface area. Both styles are useful; neither replaces the other. But right now relay-review's rubric-grep-driven grading reinforces compliance thinking.\n\n## Design options\n\n### Option 1 (minimal): Add an adversarial pass after LGTM\nWhen a round verdicts `lgtm`, run one final `codex exec --sandbox read-only` with the challenge prompt (adversarial, try-to-break, no-compliments, specific file:line). If challenge finds `[P1]` severity issues, demote verdict back to `changes_requested` and feed findings into round N+1's redispatch prompt. Otherwise merge with challenge report attached.\n\n**Pros**: additive, doesn't disrupt rubric-based protocol. Catches exactly what PR #147 landed with.\n**Cons**: adds ~5 min + ~1M tokens per PR. Risks \"forever round\" if challenge always finds something.\n\n### Option 2 (medium): Second-opinion reviewer role\nAdd a `roles.adversary` field to the relay manifest. Every N-th round (or every round for high-stakes tasks), invoke the adversary alongside the normal reviewer. Verdicts must agree (or adversary's verdict wins if more restrictive).\n\n**Pros**: codifies the two-reviewer pattern. Independent context for adversary prevents rubric-bias.\n**Cons**: doubles review token cost. Manifest schema change. Role-binding complexity.\n\n### Option 3 (structural): Challenge-mode rubric factors\nAdd quality-tier factors keyed on \"attack surface\" themes: \"List 3 paths where this enforcement could be bypassed\", \"Write a test that attempts to defeat the invariant\", etc. Reviewer must answer these explicitly, which forces adversarial framing within the rubric.\n\n**Pros**: no new reviewer role. Rubric authoring becomes the locus of adversarial thinking. Reusable across tasks.\n**Cons**: depends on rubric-author discipline. Doesn't catch rubric-grading loopholes (like round 5's grep-pattern compliance).\n\n### Option 4 (hybrid): Challenge-mode as an opt-in tier\nRubric YAML gets a new `challenge:` section listing \"try to break\" prompts. When set, relay-review runs the normal rubric scoring AND a challenge pass. LGTM requires both to pass.\n\n**Pros**: opt-in per task. High-stakes PRs get adversarial; low-stakes don't pay the cost.\n**Cons**: decision load on planner (\"do I need challenge mode?\"). Easy to forget.\n\n## Recommended next step\n\n1. **Read the gstack-codex skill source** (`~/.claude/skills/gstack-codex/` — specifically the challenge prompt template) and compare against `skills/relay-review/references/reviewer-prompt.md`\n2. **Post-mortem PR #147**: take the 9 findings codex produced and ask \"what rubric language or review protocol change would have caused relay-review to find each one?\" This is the empirical design input.\n3. **Prototype Option 1** on a single future PR — measure latency + token cost + marginal finding count vs. baseline\n4. **Decide**: adopt Option 1, 2, 3, 4, or \"don't adopt\" based on prototype data\n\n## Acceptance Criteria\n\n<!-- AC:BEGIN -->\n- [ ] Design doc `docs/relay-review-adversarial-benchmark.md` with the 9 findings from PR #147 mapped against \"what change would have caught this\"\n- [ ] Prototype implementation of Option 1 on a feature branch (not merged)\n- [ ] Single-PR comparison: run relay-review with and without the adversarial pass, report diff in findings, latency, token cost\n- [ ] Decision recorded in `backlog/sprints/_context.md` under \"Architecture Decisions\" (or new ADR file)\n- [ ] If adopted: SKILL.md + reviewer-prompt updated; otherwise: close with rationale\n<!-- AC:END -->\n\n## Priority\n\n**Enhancement / idea** — not urgent, but high-leverage. The review process is the trust boundary that gates every PR; improving it compounds.\n\n## Context\n\n- gstack-codex location: `~/.claude/skills/gstack-codex/SKILL.md` (Challenge mode at Step 2B)\n- PR #147 adversarial review output captured in session log (2026-04-12, codex 1.23M tokens, 9 findings)\n- Related: any Phase 2+ of agentic-patterns-adoption doc",
+      "labels": [
+        "enhancement"
+      ],
+      "createdAt": "2026-04-12T07:12:46Z",
+      "updatedAt": "2026-04-12T07:13:26Z",
+      "milestone": null,
+      "buckets": {
+        "label": {
+          "type": "uncategorized",
+          "priority": "medium",
+          "status": "todo"
+        },
+        "theme": "uncategorized",
+        "age": "7-30d",
+        "activity": "warm",
+        "milestone": "unassigned"
+      }
+    },
+    {
+      "number": 146,
+      "title": "relay-merge: sprint-close candidate pattern reporting",
+      "body": "## Summary\n\nAt sprint close, scan the sprint's run retros for factors scored high (9/10+) across 2+ runs in the same sprint. Report these as candidate patterns for manual promotion to `_context.md`. **No file mutation** — report only.\n\n## Motivation\n\nFrom `docs/agentic-patterns-adoption.md` Phase 3.1. Originally proposed as auto-append to `_context.md` — Codex correctly flagged: \"Many runs produce issue-local fixes, not conventions. Auto-appending creates another stale-review queue.\"\n\nThe narrowed form: terminal report during sprint-close. Human decides what's worth promoting. No dev-backlog contract change.\n\n## Depends On\n\n- **#143** (retrospective integration) — need per-run retro data to aggregate\n- **#139** (reliability-report consumption) — aggregation logic lives alongside existing report\n\n## Acceptance Criteria\n\n<!-- AC:BEGIN -->\n- [ ] `sprint-close.sh` (dev-backlog) or equivalent entry point scans sprint's completed runs\n- [ ] Threshold: factor scored >=9/10 across >=2 runs in the same sprint = candidate\n- [ ] Output to terminal: \"Candidate patterns this sprint: [list]. Promote manually to _context.md if applicable.\"\n- [ ] No auto-write to `_context.md` or any shared file\n- [ ] No dev-backlog integration contract change\n- [ ] Tunable threshold via backlog config (floor prevents noise)\n<!-- AC:END -->\n\n## Context\n\n- Design doc: `docs/agentic-patterns-adoption.md` Phase 3.1\n- Codex: \"Replace #5 with sprint-close reporting of candidate patterns, not file mutation.\"",
+      "labels": [
+        "enhancement",
+        "backlog",
+        "priority:high"
+      ],
+      "createdAt": "2026-04-12T04:35:06Z",
+      "updatedAt": "2026-04-18T13:05:40Z",
+      "milestone": "Sprint W17",
+      "buckets": {
+        "label": {
+          "type": "uncategorized",
+          "priority": "high",
+          "status": "todo"
+        },
+        "theme": "uncategorized",
+        "age": "7-30d",
+        "activity": "recent",
+        "milestone": "assigned"
+      }
+    },
+    {
+      "number": 144,
+      "title": "relay-plan: rubric templates keyed to probe signals",
+      "body": "## Summary\n\nUse probe signals (#140) to drive deterministic rubric templates. Project has playwright + jest + tsc strict → apply corresponding factor template. No LLM \"autonomy scoring\" — template matching only.\n\n## Motivation\n\nFrom `docs/agentic-patterns-adoption.md` Phase 2.2. Codex: \"Replace #3 autonomy scoring with rubric templates keyed off actual executable checks present in the repo. Fewer abstractions, more determinism.\"\n\n## Depends On\n\n- **#140** (probe quality signals in rubric design) — template matching needs signals exposed to planner first\n- **#139** (reliability-report consumption) — templates should be informed by historical performance of similar rubrics\n\n## Acceptance Criteria\n\n<!-- AC:BEGIN -->\n- [ ] Template catalog: `skills/relay-plan/references/rubric-templates/` with one file per detected signal combo (e.g., `jest-tsc-strict.yaml`, `pytest-mypy-strict.yaml`)\n- [ ] `relay-plan` SKILL.md: after probe, match detected signals to nearest template and offer it as a starting point\n- [ ] Planner can accept, modify, or reject the template\n- [ ] No auto-apply — template is a suggestion\n- [ ] At least 3 templates shipped initially (jest/tsc, pytest/mypy, go-test)\n<!-- AC:END -->\n\n## Context\n\n- Design doc: `docs/agentic-patterns-adoption.md` Phase 2.2",
+      "labels": [
+        "enhancement",
+        "backlog",
+        "priority:high"
+      ],
+      "createdAt": "2026-04-12T04:34:46Z",
+      "updatedAt": "2026-04-18T13:05:36Z",
+      "milestone": "Sprint W17",
+      "buckets": {
+        "label": {
+          "type": "uncategorized",
+          "priority": "high",
+          "status": "todo"
+        },
+        "theme": "uncategorized",
+        "age": "7-30d",
+        "activity": "recent",
+        "milestone": "assigned"
+      }
+    },
+    {
+      "number": 141,
+      "title": "relay-review: structured rejection log in redispatch prompt",
+      "body": "## Summary\n\nExtend `formatPriorVerdictSummary()` in review-runner.js to emit per-factor structured rejection reasoning. Re-dispatch prompt gains \"Previously rejected approaches\" section so the executor doesn't repeat rejected patterns.\n\n## Motivation\n\nFrom `docs/agentic-patterns-adoption.md` Phase 1.1. Re-dispatch already carries prior-round data, but unstructured narrative loses per-factor granularity. When round 2 rejects a specific approach to error handling, round 3 should know exactly what was tried and why it failed.\n\n**Trustworthy producer**: the reviewer is independent and anchored to rubric, so rejection reasoning is verifiable (unlike a planner emitting \"decision rationale\" — see the killed #1a in the design doc).\n\n## Depends On\n\n- **#138** (rubric persistence mandatory) — reviewer must have rubric access to emit factor-scoped rejections\n\n## Current State\n\n- `review-runner.js:706-744` (`buildRedispatchPrompt`) calls `readPriorVerdicts()` + `formatPriorVerdictSummary()`\n- Format is narrative; factor granularity lost in round-to-round replay\n\n## Acceptance Criteria\n\n<!-- AC:BEGIN -->\n- [ ] review-round-N-verdict.json schema extended with per-factor `issues[]`: `{factor, issue, fix_direction, attempted_approach}`\n- [ ] `formatPriorVerdictSummary` emits \"Previously rejected approaches\" section grouped by factor\n- [ ] Re-dispatch prompt shows the last 1-2 rejections per factor (not all history — noise)\n- [ ] Regression test: existing single-round review still works\n- [ ] Regression test: multi-round re-dispatch preserves factor continuity\n<!-- AC:END -->\n\n## Context\n\n- Design doc: `docs/agentic-patterns-adoption.md` Phase 1.1\n- Related: cleaner re-dispatch reduces stuck_factor metrics (consumed via #139)",
+      "labels": [
+        "enhancement",
+        "backlog"
+      ],
+      "createdAt": "2026-04-12T04:34:05Z",
+      "updatedAt": "2026-04-21T23:15:32Z",
+      "milestone": null,
+      "buckets": {
+        "label": {
+          "type": "uncategorized",
+          "priority": "medium",
+          "status": "todo"
+        },
+        "theme": "uncategorized",
+        "age": "7-30d",
+        "activity": "recent",
+        "milestone": "unassigned"
+      }
+    },
+    {
+      "number": 131,
+      "title": "relay-intake: add optional external refinement adapters after core preflight lands",
+      "body": "## Summary\n\nAdd optional external refinement adapters such as gstack and superpowers *after* the core relay-native preflight path is stable.\n\n## Background\n\nSome weak requests may benefit from stronger adversarial review or rewrite support before relay starts. gstack and superpowers can help here, but they use their own logs, plan files, and local conventions. relay should ingest their outputs, not outsource its state to them.\n\nThis is explicitly a phase-2 enhancement. Core correctness should come from relay-native request artifacts, readiness assessment, decomposition, and handoff. External adapters are useful acceleration, not launch-critical infrastructure.\n\nParent epic: #126\n\n## Sequencing\n\nBlocked by the core preflight path landing first:\n\n- #127 standalone skill contract + handoff boundary\n- #128 request persistence + readiness assessment + interaction events\n- #130 run handoff + review anchor integrity\n\n## Proposed Behavior\n\n- Detect actual delegate availability, not just PATH stubs or plugin cache presence\n- Invoke gstack/superpowers only as optional refinement adapters\n- Record delegate lifecycle in request events (`delegate_started`, `delegate_completed`, etc.)\n- Persist resulting artifacts/links back into the relay request contract\n- Fall back cleanly to native preflight when delegates are unavailable or fail\n\n## Non-goals\n\n- Required dependency on gstack or superpowers\n- Using external tool logs as authoritative relay state\n- Blocking core intake/preflight launch on adapter support\n\n## Considerations\n\n- gstack review logs and superpowers plan files are not authoritative relay state\n- Adapter behavior should be observable but not required for correctness\n- Installation checks should reflect real usability, not partial local leftovers\n\n## Existing Infrastructure\n\n- gstack review/timeline logs under `~/.gstack/projects/...`\n- superpowers plan + reviewer workflows\n- relay request/event model introduced by this epic\n",
+      "labels": [
+        "enhancement",
+        "backlog"
+      ],
+      "createdAt": "2026-04-09T03:16:10Z",
+      "updatedAt": "2026-04-09T04:30:30Z",
+      "milestone": "Relay Intake / Preflight",
+      "buckets": {
+        "label": {
+          "type": "uncategorized",
+          "priority": "medium",
+          "status": "todo"
+        },
+        "theme": "uncategorized",
+        "age": "7-30d",
+        "activity": "warm",
+        "milestone": "assigned"
+      }
+    },
+    {
+      "number": 108,
+      "title": "dispatch: batch parallel dispatch for independent sprint items",
+      "body": "## Summary\n\nDispatch multiple independent sprint items to N worktrees simultaneously, reducing total execution time for batches with no inter-task dependencies.\n\n## Background\n\nCurrently relay-dispatch processes one task at a time in a single worktree. When a sprint batch contains independent items (no shared file modifications), they could run in parallel. The worktree infrastructure (`create-worktree.js`, `cleanup-worktrees.js`) already exists, making the extension cost low.\n\nCommunity evidence shows that parallel worktree patterns (e.g., 16 parallel rule-fixers producing 16 PRs from a single command) are practical and deliver significant throughput gains.\n\n## Proposed Behavior\n\n```\nSprint Plan:\n- [ ] #38 DB schema (~15min)     → worktree-1\n- [ ] #39 Seed data (~10min)     → worktree-2  (concurrent)\n- [ ] #40 Config update (~10min) → worktree-3  (concurrent)\n```\n\n- Auto-detect independent items within the same sprint batch\n- `relay-dispatch --batch` or `relay-dispatch --parallel N` flag for concurrent dispatch\n- Each worktree gets its own manifest and produces its own PR\n- Sprint file updated in bulk after completion (`[ ]` → `[~]` → `[x]`)\n\n## Considerations\n\n- **Dependency detection**: Identify items that may touch the same files (heuristic or explicit annotation)\n- **Manifest uniqueness**: Ensure run-id collision is impossible under concurrent creation\n- **Executor quota**: Limit concurrent dispatches to respect API rate limits / subscription caps\n- **Integration contract**: Extend dev-backlog checkpoint regex patterns for bulk state transitions\n- **Failure isolation**: One worktree failure should not block others; partial success should be reportable\n\n## Existing Infrastructure\n\n- `create-worktree.js` — worktree creation + optional app registration\n- `cleanup-worktrees.js` — stale worktree pruning\n- `relay-manifest.js` — manifest CRUD with state machine\n- `relay-events.js` — event journal per run",
+      "labels": [
+        "backlog"
+      ],
+      "createdAt": "2026-04-07T09:56:06Z",
+      "updatedAt": "2026-04-07T10:05:47Z",
+      "milestone": null,
+      "buckets": {
+        "label": {
+          "type": "uncategorized",
+          "priority": "medium",
+          "status": "todo"
+        },
+        "theme": "uncategorized",
+        "age": "7-30d",
+        "activity": "warm",
+        "milestone": "unassigned"
+      }
+    },
+    {
+      "number": 33,
+      "title": "dispatch: broker pattern for warm-start sequential dispatches",
+      "body": "## Context\n\nWhen running sequential dispatches (e.g. Release 11: #231→#236), each dispatch spawns a fresh `codex app-server` process. The startup cost adds up.\n\ncodex-plugin-cc solves this with a **broker** — a Unix socket proxy that keeps one `codex app-server` alive across multiple invocations.\n\n## Current State (updated 2026-04-05)\n\nAs of #65, dispatch.js supports Codex + Claude Code executors. Sequential dispatches still spawn fresh processes for each run. The broker pattern only applies to Codex app-server, making this a Codex-specific optimization.\n\n**Still relevant if:**\n- Batch relay operations become frequent (many dispatches in sequence)\n- App-server migration (#32) is completed first\n\n**Reduced urgency because:**\n- #32 (app-server migration) is itself backlogged\n- Current sequential dispatch overhead is tolerable for typical batch sizes\n\n## Proposal\n\nAfter app-server migration (#32), add an optional broker mode:\n\n1. First dispatch starts broker + app-server, writes socket path to state file\n2. Subsequent dispatches connect to existing broker\n3. Broker returns `-32001` (BUSY) if a turn is active; client waits or falls back to direct spawn\n4. Session cleanup kills broker at end\n\n## Prerequisites\n\n- Depends on #32 (app-server migration)\n\n## References\n\n- Analysis: `docs/codex-app-server-analysis.md`\n- Pattern source: `references/codex-plugin-cc/plugins/codex/scripts/lib/broker-lifecycle.mjs`\n- Pattern source: `references/codex-plugin-cc/plugins/codex/scripts/app-server-broker.mjs`\n\n## Effort\n\nLarge — broker process, socket management, session lifecycle, fallback logic.",
+      "labels": [
+        "priority:high"
+      ],
+      "createdAt": "2026-03-31T12:51:11Z",
+      "updatedAt": "2026-04-18T13:05:31Z",
+      "milestone": "Sprint W17",
+      "buckets": {
+        "label": {
+          "type": "uncategorized",
+          "priority": "high",
+          "status": "todo"
+        },
+        "theme": "uncategorized",
+        "age": "7-30d",
+        "activity": "recent",
+        "milestone": "assigned"
+      }
+    },
+    {
+      "number": 32,
+      "title": "dispatch: migrate Codex executor to app-server protocol",
+      "body": "## Context\n\ndispatch.js uses `codex exec` (one-shot CLI) to run tasks. OpenAI's codex-plugin-cc uses `codex app-server` (JSON-RPC over stdio), which provides:\n\n- **Protocol-level approval bypass** (`approvalPolicy: \"never\"`) — replaces the `[NON-INTERACTIVE DISPATCH]` prompt prefix hack\n- **Real-time progress tracking** — notifications for each action (editing, verifying, etc.) — eliminates the \"is it idle?\" guessing problem\n- **Structured output** — typed `TurnCaptureState` with file changes, commands, errors\n- **Session resume** — `thread/resume` to continue interrupted work\n\n## Current State (updated 2026-04-05)\n\nAs of #65, dispatch.js supports multiple executors via `EXECUTOR_CLI` map + executor-specific branches. Claude Code executor was added alongside Codex. The exec-based pattern works for both.\n\nTimeout handling was improved in #67 (completed-with-warning for partial work). This reduces but doesn't eliminate the progress visibility gap — we still can't tell if a timed-out executor made useful progress until after it exits.\n\n**Remaining value of app-server migration:**\n- Real-time progress notifications (the main win)\n- Protocol-level sandbox/approval config (cleaner than prompt prefix)\n- Session resume for interrupted work\n\n**Reduced urgency because:**\n- Multi-executor architecture already works (#65)\n- Timeout partial-work handling is in place (#67)\n- This is Codex-specific — only benefits one executor path\n\n## Proposal\n\nAdd `codex app-server` as an enhanced execution path for the Codex executor, alongside the existing `codex exec` path:\n\n1. Spawn `codex app-server` as child process\n2. JSON-RPC handshake (`initialize`)\n3. `thread/start` with `approvalPolicy: \"never\"`, `sandbox`, `cwd`\n4. `turn/start` with prompt\n5. Stream notifications for progress\n6. Await `turn/completed`, collect structured results\n7. Clean shutdown\n\nKeep `codex exec` as fallback for simplicity and for environments where app-server isn't available.\n\n## References\n\n- Analysis: `docs/codex-app-server-analysis.md`\n- Key source: `references/codex-plugin-cc/plugins/codex/scripts/lib/codex.mjs`\n- Key source: `references/codex-plugin-cc/plugins/codex/scripts/lib/app-server.mjs`\n\n## Effort\n\nMedium-large — new JSON-RPC client, notification handler, structured result collection.",
+      "labels": [
+        "priority:high"
+      ],
+      "createdAt": "2026-03-31T12:51:08Z",
+      "updatedAt": "2026-04-18T13:05:30Z",
+      "milestone": "Sprint W17",
+      "buckets": {
+        "label": {
+          "type": "uncategorized",
+          "priority": "high",
+          "status": "todo"
+        },
+        "theme": "uncategorized",
+        "age": "7-30d",
+        "activity": "recent",
+        "milestone": "assigned"
+      }
+    },
+    {
+      "number": 22,
+      "title": "relay-review: cross-model review option (Claude spec + Codex quality)",
+      "body": "## Summary\n\nAdd a cross-model review option where Phase 1 and Phase 2 use different models, leveraging each model's strengths:\n- Phase 1 (Spec Compliance): Claude — strong at intent understanding and faithfulness judgment\n- Phase 2 (Code Quality): Codex — efficient at mechanical pattern checking\n\nAchieves multi-model consensus in a simple two-stage structure. Compensates for blind spots that occur when the same model both implements and reviews.\n\n## Context\n\n### Updated 2026-04-07\n\nCommunity evidence confirms demand and effectiveness:\n\n**Evidence 1: Adversarial Codex Review**\n- Codex used as independent adversarial reviewer alongside Claude\n- Fallback to Claude sub-agent when Codex is unavailable\n- **Eval result: 92% (with adversarial review) vs 83% (without)** — 9pp improvement\n- Key insight: same-model implementation + review shares blind spots\n\n**Evidence 2: Generator-Evaluator Separation**\n- Multiple plugins applied Generator-Evaluator separation to prevent self-praise bias\n- Multi-model orchestration: GPT-PRO (research) + Codex (code gen) + Claude (orchestration)\n\n### Updated 2026-04-05\n\n- **#20 (two-stage review split) — completed** (merged in PR #26)\n- Both reviewer adapters already exist: `invoke-reviewer-codex.js` and `invoke-reviewer-claude.js`\n- Infrastructure for multi-reviewer is in place — implementation complexity is lower than originally estimated\n- Remaining work: orchestration logic to automatically route Phase 1 → Claude, Phase 2 → Codex within a single review run\n\n### Original context\n\nDisagreement between models requires an escalation protocol to surface conflicting opinions to the user.\n\n## Proposed Enhancement\n\nBeyond the original \"Phase 1 Claude → Phase 2 Codex\" sequential structure:\n\n- **`--adversarial` flag**: Both models independently review the **same scope** → surface disagreements\n- **Disagreement protocol**: When verdicts differ, present both perspectives to user for escalation\n- **Selective trigger**: Auto-activate when rubric has 3+ quality-tier factors (cost management)\n- **Metrics**: Track relay-review score delta with/without adversarial review (extend `reliability-report.js`)\n\n## References\n\n- `docs/32-cross-platform-compatibility.md` § Cross-Model Review Option\n- Octopus 75% consensus gate (references/analysis/02-claude-octopus.md)\n- gstack cross-model review (references/analysis/05-gstack.md)",
+      "labels": [
+        "backlog"
+      ],
+      "createdAt": "2026-03-30T02:52:50Z",
+      "updatedAt": "2026-04-07T10:06:17Z",
+      "milestone": null,
+      "buckets": {
+        "label": {
+          "type": "uncategorized",
+          "priority": "medium",
+          "status": "todo"
+        },
+        "theme": "uncategorized",
+        "age": "7-30d",
+        "activity": "warm",
+        "milestone": "unassigned"
+      }
+    }
+  ]
+}
