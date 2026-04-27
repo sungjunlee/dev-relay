@@ -2,7 +2,7 @@
 name: relay-plan
 argument-hint: "[issue-number]"
 description: Convert task acceptance criteria into a scored rubric for autonomous iteration. Always used before relay-dispatch — rubric depth scales with task size.
-compatibility: Requires gh CLI. Task AC reading falls back to local files or user input.
+compatibility: Requires gh CLI.
 metadata:
   related-skills: "relay, relay-intake, relay-dispatch, relay-review, dev-backlog"
 ---

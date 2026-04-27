@@ -3,7 +3,7 @@ name: relay-review
 argument-hint: "[run-id or branch-name or PR-number]"
 description: Independent PR review against Done Criteria in a fresh context, free from planning bias. Use after dispatch completes and a PR exists.
 context: fork
-compatibility: "Requires gh CLI. Context isolation is enforced per-platform (see Context Isolation section)."
+compatibility: Requires gh CLI.
 metadata:
   related-skills: "relay, relay-intake, relay-plan, relay-dispatch, relay-merge"
 ---
