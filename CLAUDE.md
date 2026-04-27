@@ -112,6 +112,7 @@ node skills/relay-merge/scripts/finalize-run.js --run-id <id> --force-finalize-n
 - Test script changes with `--dry-run` flag before real dispatch
 - Executor-specific internal paths (e.g., Codex SQLite, global state) are fragile — document which version they target
 - Keep each SKILL.md under 150 lines; use `references/` for details
+- Operator utilities and recovery playbooks live in `skills/<skill>/references/`, not SKILL.md. Sunset deprecated flags within one release.
 - Manifest state transitions must go through `validateTransition()` — direct state assignment is a bug
 - New executors: add entry to `EXECUTOR_CLI` + execution branch in `dispatch.js`; app registration uses `create-worktree.js --register`
 - New reviewers: create `invoke-reviewer-<name>.js` in `relay-review/scripts/`
