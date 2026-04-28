@@ -28,12 +28,12 @@ Standard path: run `review-runner.js --reviewer codex` or `--reviewer claude`. I
 
 ## Setup: Establish the anchor
 
-1. Get the PR diff and Done Criteria (this runs in a fresh context — fetch everything needed). The resolver tries `closingIssuesReferences`, then PR-body keyword grep, then branch-name regex; exits 1 if all three fail.
+1. Get the PR diff and Done Criteria (this runs in a fresh context — fetch everything needed). `review-runner.js` keeps file-backed Done Criteria strongest: `--done-criteria-file`, then `anchor.done_criteria_path`, then issue loading. When it must infer a GitHub issue, it tries `manifest.issue.number`, explicit PR-body closing keywords (`Fix/Fixes`, `Close/Closes`, `Resolve/Resolves`), branch `issue-N`, then a single `closingIssuesReferences` entry. It ignores `Refs`, `Related`, and incidental issue prose; multiple inferred closing refs fail instead of silently selecting one.
 ```bash
 PR_NUM=$(gh pr list --head <branch> --json number -q '.[0].number')
 BRANCH=$(gh pr view $PR_NUM --json headRefName -q '.headRefName')
 gh pr diff $PR_NUM > /tmp/pr-diff.txt
-ISSUE_NUM=$(${CLAUDE_SKILL_DIR}/scripts/resolve-issue-number.sh "$PR_NUM" "$BRANCH")
+ISSUE_NUM=$(${CLAUDE_SKILL_DIR}/scripts/resolve-issue-number.sh "$PR_NUM" "$BRANCH")  # legacy manual helper; runner resolution is canonical
 gh issue view $ISSUE_NUM  # Done Criteria / Acceptance Criteria source
 ```
 

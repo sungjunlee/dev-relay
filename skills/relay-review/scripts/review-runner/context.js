@@ -176,24 +176,75 @@ function getGhLogin(repoPath) {
   }
 }
 
-function resolveIssueNumber(repoPath, prNumber, branch, manifestData) {
+const PR_BODY_CLOSING_KEYWORD_RE = /\b(?:close|closes|fix|fixes|resolve|resolves)\s+#(\d+)\b/gi;
+
+function uniquePositiveIssueNumbers(values) {
+  const numbers = new Set();
+  for (const value of values) {
+    const number = Number(value);
+    if (Number.isInteger(number) && number > 0) {
+      numbers.add(number);
+    }
+  }
+  return [...numbers];
+}
+
+function resolvePrBodyClosingIssue(body) {
+  const matches = String(body || "").matchAll(PR_BODY_CLOSING_KEYWORD_RE);
+  const numbers = uniquePositiveIssueNumbers([...matches].map((match) => match[1]));
+  if (numbers.length > 1) {
+    throw new Error(
+      `Ambiguous PR body closing keywords reference multiple issues: ${numbers.map((number) => `#${number}`).join(", ")}. ` +
+      "Provide --done-criteria-file, manifest.issue.number, or anchor.done_criteria_path to select the Done Criteria source explicitly."
+    );
+  }
+  return numbers[0] || null;
+}
+
+function resolveBranchIssueNumber(branch) {
+  const issueMatch = String(branch || "").match(/issue-(\d+)/i);
+  return issueMatch ? Number(issueMatch[1]) : null;
+}
+
+function resolveClosingReferenceIssue(closingIssuesReferences, prNumber) {
+  const numbers = uniquePositiveIssueNumbers(
+    (Array.isArray(closingIssuesReferences) ? closingIssuesReferences : [])
+      .map((reference) => reference?.number)
+  );
+  if (numbers.length > 1) {
+    throw new Error(
+      `Ambiguous GitHub closing issue references for PR #${prNumber}: ${numbers.map((number) => `#${number}`).join(", ")}. ` +
+      "Add manifest.issue.number, use one explicit PR body closing keyword (Fixes #N, Closes #N, or Resolves #N), " +
+      "rename the branch to issue-N, or provide --done-criteria-file or anchor.done_criteria_path."
+    );
+  }
+  return numbers[0] || null;
+}
+
+function hasFileBackedDoneCriteria(manifestData, options = {}) {
+  return Boolean(options.doneCriteriaFile || options.skipIssueInference || manifestData?.anchor?.done_criteria_path);
+}
+
+function resolveIssueNumber(repoPath, prNumber, branch, manifestData, options = {}) {
   if (manifestData?.issue?.number) {
     return Number(manifestData.issue.number);
   }
 
-  if (!prNumber) return null;
+  if (hasFileBackedDoneCriteria(manifestData, options)) return null;
+
+  if (!prNumber) return resolveBranchIssueNumber(branch);
 
   const raw = gh(repoPath, "pr", "view", String(prNumber), "--json", "closingIssuesReferences,body,headRefName");
   const parsed = JSON.parse(raw);
-  const closingIssue = (parsed.closingIssuesReferences || [])[0];
-  if (closingIssue?.number) return Number(closingIssue.number);
 
-  const bodyMatch = String(parsed.body || "").match(/(?:closes|fixes|resolves|refs|related to)\s+#(\d+)/i);
-  if (bodyMatch) return Number(bodyMatch[1]);
+  const bodyIssue = resolvePrBodyClosingIssue(parsed.body);
+  if (bodyIssue) return bodyIssue;
 
   const branchSource = branch || parsed.headRefName || "";
-  const issueMatch = branchSource.match(/issue-(\d+)/);
-  return issueMatch ? Number(issueMatch[1]) : null;
+  const branchIssue = resolveBranchIssueNumber(branchSource);
+  if (branchIssue) return branchIssue;
+
+  return resolveClosingReferenceIssue(parsed.closingIssuesReferences, prNumber);
 }
 
 function getExpectedManifestRepoRoot(repoPath) {
@@ -212,7 +263,7 @@ function resolveBranchForPr(repoPath, prNumber) {
   return JSON.parse(raw).headRefName;
 }
 
-function resolveContext(repoPath, manifestPathArg, runIdArg, branchArg, prArg) {
+function resolveContext(repoPath, manifestPathArg, runIdArg, branchArg, prArg, doneCriteriaFileArg = null) {
   let branch = branchArg;
   let prNumber = parsePositiveInt(prArg, "--pr");
 
@@ -245,7 +296,9 @@ function resolveContext(repoPath, manifestPathArg, runIdArg, branchArg, prArg) {
   if (!prNumber && branch) {
     prNumber = resolvePrForBranch(runRepoPath, branch);
   }
-  const issueNumber = resolveIssueNumber(runRepoPath, prNumber, branch, manifest.data);
+  const issueNumber = resolveIssueNumber(runRepoPath, prNumber, branch, manifest.data, {
+    doneCriteriaFile: doneCriteriaFileArg,
+  });
   const normalizedManifest = {
     ...manifest,
     data: {
