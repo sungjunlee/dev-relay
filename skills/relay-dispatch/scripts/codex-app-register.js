@@ -12,6 +12,7 @@ const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
 const os = require("os");
+const { execGit } = require("./exec");
 
 const SOURCE = "vscode";
 const MODEL_PROVIDER = "openai";
@@ -31,10 +32,6 @@ function generateUUIDv7() {
   buf[8] = (buf[8] & 0x3f) | 0x80;
   const hex = buf.toString("hex");
   return [hex.slice(0, 8), hex.slice(8, 12), hex.slice(12, 16), hex.slice(16, 20), hex.slice(20, 32)].join("-");
-}
-
-function git(repoDir, ...gitArgs) {
-  return execFileSync("git", ["-C", repoDir, ...gitArgs], { encoding: "utf-8" }).trim();
 }
 
 function sql(db, query) {
@@ -81,8 +78,8 @@ function registerCodexApp({ wtPath, repoPath, branch, title, pin = false }) {
   const epoch = Math.floor(Date.now() / 1000);
 
   let gitSha = "", gitOrigin = "";
-  try { gitSha = git(wtPath, "rev-parse", "HEAD"); } catch {}
-  try { gitOrigin = git(repoPath, "remote", "get-url", "origin"); } catch {}
+  try { gitSha = execGit(wtPath, ["rev-parse", "HEAD"]); } catch {}
+  try { gitOrigin = execGit(repoPath, ["remote", "get-url", "origin"]); } catch {}
 
   // Rollout file
   const cliVersion = getCodexVersion();

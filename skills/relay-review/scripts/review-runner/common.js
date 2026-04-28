@@ -1,27 +1,16 @@
-const { execFileSync } = require("child_process");
 const fs = require("fs");
 const path = require("path");
+const { execGit, execGh } = require("../../../relay-dispatch/scripts/exec");
 
-function gh(repoPath, ...ghArgs) {
+const gh = (repoPath, ...ghArgs) => {
   const lastArg = ghArgs.at(-1);
   const options = lastArg && typeof lastArg === "object" && !Array.isArray(lastArg)
     ? ghArgs.pop()
     : {};
-  return execFileSync("gh", ghArgs, {
-    cwd: repoPath,
-    encoding: "utf-8",
-    stdio: "pipe",
-    ...(options.timeout ? { timeout: options.timeout } : {}),
-  });
-}
+  return execGh(repoPath, ghArgs, options);
+};
 
-function git(repoPath, ...gitArgs) {
-  return execFileSync("git", gitArgs, {
-    cwd: repoPath,
-    encoding: "utf-8",
-    stdio: "pipe",
-  });
-}
+const git = (repoPath, ...gitArgs) => execGit(repoPath, gitArgs);
 
 function parsePositiveInt(value, label) {
   if (value === undefined) return undefined;

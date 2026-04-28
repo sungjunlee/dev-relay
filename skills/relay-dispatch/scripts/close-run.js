@@ -55,7 +55,6 @@ function main() {
   const reason = getArg(args, "--reason", undefined, CLI_ARG_OPTIONS);
   const dryRun = hasCliFlag("--dry-run");
   const jsonOut = hasCliFlag("--json");
-  const gitBin = process.env.RELAY_GIT_BIN || "git";
 
   if (!runId) {
     throw new Error("--run-id is required");
@@ -89,7 +88,6 @@ function main() {
     cleanupResult = runCleanup({
       repoRoot,
       data: updated,
-      gitBin,
       dryRun,
       deleteMergedBranch: false,
     });

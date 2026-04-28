@@ -7,7 +7,6 @@
 
 const fs = require("fs");
 const path = require("path");
-const { execFileSync } = require("child_process");
 
 const { parsePrNumber, formatExecError } = require("./dispatch-publish");
 const { resolveManifestRecord } = require("./relay-resolver");
@@ -23,6 +22,7 @@ const {
   hasFlag,
   modeLabel,
 } = require("./cli-args");
+const { execGit, execGh } = require("./exec");
 
 const args = process.argv.slice(2);
 const CLI_ARG_OPTIONS = { commandName: "recover-commit", reservedFlags: ["-h"] };
@@ -54,21 +54,6 @@ if (!args.length || hasCliFlag(["--help", "-h"])) {
 
 function nowIso() {
   return new Date().toISOString();
-}
-
-function git(gitBin, repoPath, ...gitArgs) {
-  return execFileSync(gitBin, ["-C", repoPath, ...gitArgs], {
-    encoding: "utf-8",
-    stdio: "pipe",
-  }).trim();
-}
-
-function gh(ghBin, repoPath, ...ghArgs) {
-  return execFileSync(ghBin, ghArgs, {
-    cwd: repoPath,
-    encoding: "utf-8",
-    stdio: "pipe",
-  }).trim();
 }
 
 function shellQuote(value) {
@@ -139,16 +124,16 @@ function expectedRepoRootForValidation(repoArg, manifestArg) {
   return getCanonicalRepoRoot(path.resolve(repoArg || "."));
 }
 
-function countRange(gitBin, worktreePath, range) {
-  const raw = git(gitBin, worktreePath, "rev-list", "--count", range);
+function countRange(worktreePath, range) {
+  const raw = execGit(worktreePath, ["rev-list", "--count", range]);
   const count = Number(raw);
   return Number.isInteger(count) && count > 0 ? count : 0;
 }
 
-function countUnpushedCommits(gitBin, worktreePath, branch, baseBranch) {
+function countUnpushedCommits(worktreePath, branch, baseBranch) {
   try {
-    const upstream = git(gitBin, worktreePath, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}");
-    if (upstream) return countRange(gitBin, worktreePath, `${upstream}..HEAD`);
+    const upstream = execGit(worktreePath, ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"]);
+    if (upstream) return countRange(worktreePath, `${upstream}..HEAD`);
   } catch {}
 
   for (const ref of [
@@ -156,15 +141,15 @@ function countUnpushedCommits(gitBin, worktreePath, branch, baseBranch) {
     ...(baseBranch ? [`refs/remotes/origin/${baseBranch}`, baseBranch] : []),
   ]) {
     try {
-      git(gitBin, worktreePath, "rev-parse", "--verify", ref);
-      return countRange(gitBin, worktreePath, `${ref}..HEAD`);
+      execGit(worktreePath, ["rev-parse", "--verify", ref]);
+      return countRange(worktreePath, `${ref}..HEAD`);
     } catch {}
   }
   return 0;
 }
 
-function findExistingPr(ghBin, worktreePath, branch) {
-  const raw = gh(ghBin, worktreePath, "pr", "list", "--head", branch, "--json", "number", "--jq", ".[0].number");
+function findExistingPr(worktreePath, branch) {
+  const raw = execGh(worktreePath, ["pr", "list", "--head", branch, "--json", "number", "--jq", ".[0].number"]);
   return parsePrNumber(raw);
 }
 
@@ -202,8 +187,6 @@ function main() {
   const prBodyFile = getCliArg("--pr-body-file");
   const dryRun = hasCliFlag("--dry-run");
   const jsonOut = hasCliFlag("--json");
-  const gitBin = process.env.RELAY_GIT_BIN || "git";
-  const ghBin = process.env.RELAY_GH_BIN || "gh";
   const timestamp = nowIso();
 
   if (!runId && !manifestArg) {
@@ -245,14 +228,14 @@ function main() {
     throw new Error("manifest is missing git.working_branch");
   }
 
-  const currentBranch = git(gitBin, worktreePath, "rev-parse", "--abbrev-ref", "HEAD");
+  const currentBranch = execGit(worktreePath, ["rev-parse", "--abbrev-ref", "HEAD"]);
   if (currentBranch !== branch) {
     throw new Error(`manifest worktree is on branch ${currentBranch}, expected ${branch}`);
   }
 
-  const statusText = git(gitBin, worktreePath, "status", "--porcelain");
+  const statusText = execGit(worktreePath, ["status", "--porcelain"]);
   const hasUncommittedChanges = statusText.trim() !== "";
-  const unpushedCommits = countUnpushedCommits(gitBin, worktreePath, branch, data.git?.base_branch);
+  const unpushedCommits = countUnpushedCommits(worktreePath, branch, data.git?.base_branch);
   const prBody = readPrBodyFile(prBodyFile) || buildPrBody({
     runId: data.run_id,
     reason,
@@ -265,19 +248,19 @@ function main() {
   const commitTitle = `Recover relay run ${data.run_id}`;
   const commitBody = buildCommitBody({ runId: data.run_id, reason, timestamp });
   const plannedCommands = [
-    commandRecord(worktreePath, [ghBin, "pr", "list", "--head", branch, "--json", "number", "--jq", ".[0].number"]),
+    commandRecord(worktreePath, ["gh", "pr", "list", "--head", branch, "--json", "number", "--jq", ".[0].number"]),
   ];
   if (hasUncommittedChanges) {
-    plannedCommands.push(commandRecord(worktreePath, [gitBin, "-C", worktreePath, "add", "-A"]));
-    plannedCommands.push(commandRecord(worktreePath, [gitBin, "-C", worktreePath, "commit", "-m", commitTitle, "-m", commitBody]));
+    plannedCommands.push(commandRecord(worktreePath, ["git", "-C", worktreePath, "add", "-A"]));
+    plannedCommands.push(commandRecord(worktreePath, ["git", "-C", worktreePath, "commit", "-m", commitTitle, "-m", commitBody]));
   }
-  plannedCommands.push(commandRecord(worktreePath, [gitBin, "-C", worktreePath, "push", "-u", "origin", branch]));
-  plannedCommands.push(commandRecord(worktreePath, [ghBin, "pr", "create", "--title", prTitle, "--body", prBody]));
+  plannedCommands.push(commandRecord(worktreePath, ["git", "-C", worktreePath, "push", "-u", "origin", branch]));
+  plannedCommands.push(commandRecord(worktreePath, ["gh", "pr", "create", "--title", prTitle, "--body", prBody]));
 
   let existingPrNumber = null;
   if (!dryRun) {
     try {
-      existingPrNumber = findExistingPr(ghBin, worktreePath, branch);
+      existingPrNumber = findExistingPr(worktreePath, branch);
     } catch (error) {
       throw new Error(`pr_list_failed: ${formatExecError(error)}`);
     }
@@ -304,13 +287,13 @@ function main() {
     return;
   }
 
-  let commitSha = git(gitBin, worktreePath, "rev-parse", "HEAD");
+  let commitSha = execGit(worktreePath, ["rev-parse", "HEAD"]);
   let commitCreated = false;
   if (hasUncommittedChanges) {
     try {
-      git(gitBin, worktreePath, "add", "-A");
-      git(gitBin, worktreePath, "commit", "-m", commitTitle, "-m", commitBody);
-      commitSha = git(gitBin, worktreePath, "rev-parse", "HEAD");
+      execGit(worktreePath, ["add", "-A"]);
+      execGit(worktreePath, ["commit", "-m", commitTitle, "-m", commitBody]);
+      commitSha = execGit(worktreePath, ["rev-parse", "HEAD"]);
       commitCreated = true;
     } catch (error) {
       const detail = formatExecError(error);
@@ -339,7 +322,7 @@ function main() {
   const shouldPush = prNumber === null || hasUncommittedChanges || unpushedCommits > 0;
   if (shouldPush) {
     try {
-      git(gitBin, worktreePath, "push", "-u", "origin", branch);
+      execGit(worktreePath, ["push", "-u", "origin", branch]);
     } catch (error) {
       const detail = formatExecError(error);
       appendFailureEvent(validatedPaths.repoRoot, data, "push_failed", detail, commitSha, branch);
@@ -349,7 +332,7 @@ function main() {
 
   if (prNumber === null) {
     try {
-      prNumber = findExistingPr(ghBin, worktreePath, branch);
+      prNumber = findExistingPr(worktreePath, branch);
     } catch (error) {
       const detail = formatExecError(error);
       appendFailureEvent(validatedPaths.repoRoot, data, "pr_create_failed", detail, commitSha, branch);
@@ -357,7 +340,7 @@ function main() {
     }
     if (prNumber === null) {
       try {
-        const raw = gh(ghBin, worktreePath, "pr", "create", "--title", prTitle, "--body", prBody);
+        const raw = execGh(worktreePath, ["pr", "create", "--title", prTitle, "--body", prBody]);
         prNumber = parsePrNumber(raw);
       } catch (error) {
         const detail = formatExecError(error);
