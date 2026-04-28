@@ -1,13 +1,9 @@
-const { execFileSync } = require("child_process");
 const fs = require("fs");
 const path = require("path");
 
 const { copyWorktreeFiles, getWorktreeIncludeFiles } = require("./worktreeinclude");
 const { registerCodexApp } = require("./codex-app-register");
-
-function git(repoDir, ...gitArgs) {
-  return execFileSync("git", ["-C", repoDir, ...gitArgs], { encoding: "utf-8" }).trim();
-}
+const { execGit } = require("./exec");
 
 function formatPlan({ worktreePath, branch, title, register, pin, includeFiles }) {
   const lines = [
@@ -79,7 +75,7 @@ function formatDispatchDryRun({
 }
 
 function removeWorktree({ repoRoot, worktreePath, dependencies = {} }) {
-  const gitRunner = dependencies.gitRunner || git;
+  const gitRunner = dependencies.gitRunner || ((repoDir, ...gitArgs) => execGit(repoDir, gitArgs));
   try {
     gitRunner(repoRoot, "worktree", "remove", "--force", worktreePath);
   } catch {}
@@ -122,7 +118,7 @@ function createWorktree({
   assertWithin = null,
   dependencies = {},
 }) {
-  const gitRunner = dependencies.gitRunner || git;
+  const gitRunner = dependencies.gitRunner || ((repoDir, ...gitArgs) => execGit(repoDir, gitArgs));
   const getWorktreeIncludeFilesImpl = dependencies.getWorktreeIncludeFilesImpl || getWorktreeIncludeFiles;
   const copyWorktreeFilesImpl = dependencies.copyWorktreeFilesImpl || copyWorktreeFiles;
   const registerWorktreeImpl = dependencies.registerWorktreeImpl || registerWorktree;

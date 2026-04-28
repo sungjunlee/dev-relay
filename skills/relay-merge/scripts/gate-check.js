@@ -26,7 +26,6 @@
 
 const fs = require("fs");
 const path = require("path");
-const { execFileSync } = require("child_process");
 const {
   buildSkipReviewGateFailure,
   buildSkipComment,
@@ -49,6 +48,7 @@ const {
   hasFlag,
   modeLabel,
 } = require("../../relay-dispatch/scripts/cli-args");
+const { execGh } = require("../../relay-dispatch/scripts/exec");
 
 function getGateCheckRepoRoot() {
   return getCanonicalRepoRoot(process.cwd());
@@ -93,14 +93,6 @@ if (SKIP && !SKIP_REASON) {
 // Helpers
 // ---------------------------------------------------------------------------
 
-function gh(...ghArgs) {
-  const ghBin = process.env.RELAY_GH_BIN || "gh";
-  return execFileSync(ghBin, ghArgs, {
-    encoding: "utf-8",
-    stdio: "pipe",
-  });
-}
-
 function tryResolveManifestForPr(prNumber, headRefName) {
   try {
     // gate-check runs before merge finalization, so it must never resolve merged/closed manifests.
@@ -129,7 +121,7 @@ function tryResolveManifestForPr(prNumber, headRefName) {
 
 function resolveSkipAuditContext(prNumber) {
   try {
-    const raw = gh("pr", "view", String(prNumber), "--json", "headRefName");
+    const raw = execGh(null, ["pr", "view", String(prNumber), "--json", "headRefName"]);
     const parsed = JSON.parse(raw);
     const manifestRecord = tryResolveManifestForPr(prNumber, parsed.headRefName || null);
     if (manifestRecord.error || !manifestRecord.data) {
@@ -285,7 +277,7 @@ function main() {
         readyToMerge: true,
       });
     } else {
-      gh("pr", "comment", PR_NUM, "--body", skipComment);
+      execGh(null, ["pr", "comment", PR_NUM, "--body", skipComment]);
       output({
         status: "skipped",
         pr: PR_NUM,
@@ -318,7 +310,7 @@ function main() {
       commits = [];
     }
   } else {
-    const raw = gh("pr", "view", PR_NUM, "--json", "comments,commits,headRefName");
+    const raw = execGh(null, ["pr", "view", PR_NUM, "--json", "comments,commits,headRefName"]);
     const parsed = JSON.parse(raw);
     comments = parsed.comments || [];
     commits = parsed.commits || [];

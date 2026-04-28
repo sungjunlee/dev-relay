@@ -51,7 +51,7 @@ function writePrBodySnapshot({ repoPath, runId, round, prNumber, prBodyPath }) {
     const body = gh(
       repoPath,
       "pr", "view", String(prNumber), "--json", "body", "-q", ".body",
-      { timeout: PR_BODY_SNAPSHOT_TIMEOUT_MS }
+      { timeout: PR_BODY_SNAPSHOT_TIMEOUT_MS, raw: true }
     );
     writeText(prBodyPath, `${String(body).replace(/\r\n/g, "\n").replace(/\r/g, "\n").replace(/\n?$/, "\n")}`);
     return { status: "loaded", reason: null };

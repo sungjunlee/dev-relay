@@ -98,6 +98,7 @@ const { formatAttemptsForPrompt, readPreviousAttempts } = require("./manifest/at
 const { STATES, updateManifestState } = require("./manifest/lifecycle");
 const { resolveManifestRecord } = require("./relay-resolver");
 const { appendRunEvent, EVENTS } = require("./relay-events");
+const { execGit } = require("./exec");
 
 // ---------------------------------------------------------------------------
 // Args
@@ -327,16 +328,12 @@ function assertWithin(base, resolved, label) {
   }
 }
 
-function git(repoDir, ...gitArgs) {
-  return execFileSync("git", ["-C", repoDir, ...gitArgs], { encoding: "utf-8" }).trim();
-}
-
 function isValidBaseBranchName(branch) {
   return typeof branch === "string" && branch.trim() !== "" && branch.trim() !== "HEAD";
 }
 
 function resolveOriginDefaultBranch(repoDir) {
-  const remoteHeadRef = git(repoDir, "symbolic-ref", "refs/remotes/origin/HEAD");
+  const remoteHeadRef = execGit(repoDir, ["symbolic-ref", "refs/remotes/origin/HEAD"]);
   const prefix = "refs/remotes/origin/";
   if (!remoteHeadRef.startsWith(prefix)) {
     throw new Error(`origin/HEAD resolved to unexpected ref '${remoteHeadRef}'`);
@@ -352,7 +349,7 @@ function resolveOriginDefaultBranch(repoDir) {
 function resolveBaseBranchForNewDispatch(repoDir) {
   let detectedBranch = "";
   try {
-    detectedBranch = git(repoDir, "rev-parse", "--abbrev-ref", "HEAD");
+    detectedBranch = execGit(repoDir, ["rev-parse", "--abbrev-ref", "HEAD"]);
   } catch {}
 
   if (isValidBaseBranchName(detectedBranch)) {
@@ -661,7 +658,7 @@ async function main() {
       process.exit(1);
     }
     try {
-      const currentBranch = git(wtPath, "rev-parse", "--abbrev-ref", "HEAD");
+      const currentBranch = execGit(wtPath, ["rev-parse", "--abbrev-ref", "HEAD"]);
       if (currentBranch !== branch) {
         console.error(`Error: retained worktree HEAD is '${currentBranch}', expected '${branch}'`);
         process.exit(1);
@@ -850,7 +847,7 @@ async function main() {
     // On merge conflict, the worktree is cleaned up and dispatch aborts.
     let fetchSucceeded = false;
     try {
-      git(wtPath, "fetch", "origin", baseBranch);
+      execGit(wtPath, ["fetch", "origin", baseBranch]);
       fetchSucceeded = true;
     } catch (fetchErr) {
       const msg = (fetchErr.stderr || fetchErr.message || String(fetchErr)).split("\n")[0];
@@ -860,9 +857,9 @@ async function main() {
     }
     if (fetchSucceeded) {
       try {
-        git(wtPath, "merge", `origin/${baseBranch}`, "--no-edit");
+        execGit(wtPath, ["merge", `origin/${baseBranch}`, "--no-edit"]);
       } catch (mergeErr) {
-        try { git(wtPath, "merge", "--abort"); } catch {}
+        try { execGit(wtPath, ["merge", "--abort"]); } catch {}
         removeWorktree({ repoRoot, worktreePath: wtPath });
         const reason = (mergeErr.stderr || mergeErr.message || String(mergeErr)).split("\n")[0];
         console.error(`Error: failed to merge origin/${baseBranch} into worktree: ${reason}`);
@@ -1007,7 +1004,7 @@ async function main() {
   // Record HEAD before execution so we can measure only new work.
   let startHead = "";
   try {
-    startHead = git(wtPath, "rev-parse", "HEAD");
+    startHead = execGit(wtPath, ["rev-parse", "HEAD"]);
   } catch {}
 
   const dispatchFromState = manifest.state;
@@ -1099,31 +1096,31 @@ async function main() {
   let gitLog = "";
   let currentHead = startHead;
   try {
-    currentHead = git(wtPath, "rev-parse", "HEAD");
+    currentHead = execGit(wtPath, ["rev-parse", "HEAD"]);
     if (startHead && currentHead !== startHead) {
-      gitLog = git(wtPath, "log", "--oneline", `${startHead}..HEAD`);
+      gitLog = execGit(wtPath, ["log", "--oneline", `${startHead}..HEAD`]);
     }
   } catch {}
 
   let diffStat = "";
   try {
     if (startHead && gitLog) {
-      diffStat = git(wtPath, "diff", "--stat", `${startHead}..HEAD`);
+      diffStat = execGit(wtPath, ["diff", "--stat", `${startHead}..HEAD`]);
     }
   } catch {}
 
   // Also capture uncommitted diff for partial runs (timeout, interrupted).
   let uncommittedDiff = "";
   try {
-    const wd = git(wtPath, "diff", "--stat");
-    const staged = git(wtPath, "diff", "--stat", "--cached");
+    const wd = execGit(wtPath, ["diff", "--stat"]);
+    const staged = execGit(wtPath, ["diff", "--stat", "--cached"]);
     uncommittedDiff = [wd, staged].filter(Boolean).join("\n");
   } catch {}
 
   // Check for uncommitted work (executor may have worked but not committed)
   let uncommitted = "";
   try {
-    uncommitted = git(wtPath, "status", "--porcelain");
+    uncommitted = execGit(wtPath, ["status", "--porcelain"]);
   } catch {}
 
   const hasResult = resultText !== "";

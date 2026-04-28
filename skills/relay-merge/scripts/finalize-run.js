@@ -29,7 +29,6 @@
  *   --help, -h             Show usage
  */
 
-const { execFileSync } = require("child_process");
 const fs = require("fs");
 const path = require("path");
 const {
@@ -50,6 +49,7 @@ const {
 const { resolveManifestRecord } = require("../../relay-dispatch/scripts/relay-resolver");
 const { appendRunEvent, EVENTS } = require("../../relay-dispatch/scripts/relay-events");
 const { runCleanup } = require("../../relay-dispatch/scripts/manifest/cleanup");
+const { execGit, execGh } = require("../../relay-dispatch/scripts/exec");
 const {
   bindCliArgs,
   modeLabel,
@@ -113,22 +113,6 @@ function hasLegacyBootstrapReasonPrefix(reason) {
   return LEGACY_BOOTSTRAP_REASON_PREFIX.exec(String(reason || "")) !== null;
 }
 
-function gh(ghBin, repoPath, ...ghArgs) {
-  return execFileSync(ghBin, ghArgs, {
-    cwd: repoPath,
-    encoding: "utf-8",
-    stdio: "pipe",
-  }).trim();
-}
-
-function git(gitBin, repoPath, ...gitArgs) {
-  return execFileSync(gitBin, ["-C", repoPath, ...gitArgs], {
-    cwd: repoPath,
-    encoding: "utf-8",
-    stdio: "pipe",
-  }).trim();
-}
-
 function looksLikeGitRepo(repoPath) {
   return fs.existsSync(path.join(repoPath, ".git"));
 }
@@ -140,11 +124,11 @@ function getExpectedManifestRepoRoot(repoPath, repoArg) {
   return getCanonicalRepoRoot(repoPath);
 }
 
-function resolveBranch(ghBin, repoPath, prNumber, branchArg, manifestData) {
+function resolveBranch(repoPath, prNumber, branchArg, manifestData) {
   if (branchArg) return branchArg;
   if (manifestData?.git?.working_branch) return manifestData.git.working_branch;
   if (!prNumber) return null;
-  const raw = gh(ghBin, repoPath, "pr", "view", String(prNumber), "--json", "headRefName");
+  const raw = execGh(repoPath, ["pr", "view", String(prNumber), "--json", "headRefName"]);
   return JSON.parse(raw).headRefName;
 }
 
@@ -161,9 +145,9 @@ function mergeFlag(method) {
   }
 }
 
-function fetchPreMergeContext(ghBin, repoPath, prNumber) {
-  const raw = gh(ghBin, repoPath, "pr", "view", String(prNumber),
-    "--json", "comments,commits,mergeable,statusCheckRollup");
+function fetchPreMergeContext(repoPath, prNumber) {
+  const raw = execGh(repoPath, ["pr", "view", String(prNumber),
+    "--json", "comments,commits,mergeable,statusCheckRollup"]);
   const parsed = JSON.parse(raw);
   const checks = parsed.statusCheckRollup || [];
   return {
@@ -175,8 +159,8 @@ function fetchPreMergeContext(ghBin, repoPath, prNumber) {
   };
 }
 
-function fetchPrMergeState(ghBin, repoPath, prNumber) {
-  const raw = gh(ghBin, repoPath, "pr", "view", String(prNumber), "--json", "state,mergeCommit");
+function fetchPrMergeState(repoPath, prNumber) {
+  const raw = execGh(repoPath, ["pr", "view", String(prNumber), "--json", "state,mergeCommit"]);
   const parsed = JSON.parse(raw);
   return {
     state: parsed.state || null,
@@ -198,38 +182,38 @@ function assertPreMergeSafety(preMerge, prNumber) {
   }
 }
 
-function resolveRemoteName(gitBin, repoPath, branch) {
+function resolveRemoteName(repoPath, branch) {
   if (!branch) return null;
   try {
-    return git(gitBin, repoPath, "config", `branch.${branch}.remote`) || "origin";
+    return execGit(repoPath, ["config", `branch.${branch}.remote`]) || "origin";
   } catch {
     return "origin";
   }
 }
 
-function hasRemote(gitBin, repoPath, remoteName) {
+function hasRemote(repoPath, remoteName) {
   if (!remoteName) return false;
   try {
-    git(gitBin, repoPath, "remote", "get-url", remoteName);
+    execGit(repoPath, ["remote", "get-url", remoteName]);
     return true;
   } catch {
     return false;
   }
 }
 
-function remoteBranchExists(gitBin, repoPath, remoteName, branch) {
+function remoteBranchExists(repoPath, remoteName, branch) {
   if (!remoteName || !branch) return false;
   try {
-    git(gitBin, repoPath, "ls-remote", "--exit-code", "--heads", remoteName, branch);
+    execGit(repoPath, ["ls-remote", "--exit-code", "--heads", remoteName, branch]);
     return true;
   } catch {
     return false;
   }
 }
 
-function deleteRemoteBranch(gitBin, repoPath, branch) {
-  const remoteName = resolveRemoteName(gitBin, repoPath, branch);
-  if (!remoteName || !hasRemote(gitBin, repoPath, remoteName)) {
+function deleteRemoteBranch(repoPath, branch) {
+  const remoteName = resolveRemoteName(repoPath, branch);
+  if (!remoteName || !hasRemote(repoPath, remoteName)) {
     return {
       remoteName,
       attempted: false,
@@ -237,7 +221,7 @@ function deleteRemoteBranch(gitBin, repoPath, branch) {
       warning: null,
     };
   }
-  if (!remoteBranchExists(gitBin, repoPath, remoteName, branch)) {
+  if (!remoteBranchExists(repoPath, remoteName, branch)) {
     return {
       remoteName,
       attempted: false,
@@ -246,7 +230,7 @@ function deleteRemoteBranch(gitBin, repoPath, branch) {
     };
   }
   try {
-    git(gitBin, repoPath, "push", remoteName, "--delete", branch);
+    execGit(repoPath, ["push", remoteName, "--delete", branch]);
     return {
       remoteName,
       attempted: true,
@@ -286,8 +270,6 @@ function main() {
   const skipMerge = hasFlag("--skip-merge");
   const skipIssueClose = hasFlag("--no-issue-close");
   const jsonOut = hasFlag("--json");
-  const ghBin = process.env.RELAY_GH_BIN || "gh";
-  const gitBin = process.env.RELAY_GIT_BIN || "git";
   if (forceFinalizeNonready && !String(forceFinalizeReason || "").trim()) {
     throw new Error("--force-finalize-nonready requires --reason <non-empty-text>");
   }
@@ -352,7 +334,7 @@ function main() {
     STATES.READY_TO_MERGE,
   ]);
   prNumber = prNumber || safeData.git?.pr_number || null;
-  branch = resolveBranch(ghBin, repoPath, prNumber, branch, safeData);
+  branch = resolveBranch(repoPath, prNumber, branch, safeData);
   if (!skipMerge && !prNumber) {
     throw new Error("PR number is required for merge finalization");
   }
@@ -391,7 +373,7 @@ function main() {
   const skipReviewRubricStatus = skipReviewRubricAudit.rubricStatus;
 
   if (mergeAllowed) {
-    currentHeadSha = git(gitBin, validatedPaths.worktree, "rev-parse", "HEAD");
+    currentHeadSha = execGit(validatedPaths.worktree, ["rev-parse", "HEAD"]);
     if (skipReviewReason) {
       const skipReviewFailure = buildSkipReviewGateFailure(prNumber, skipReviewRubricAudit);
       if (skipReviewFailure) {
@@ -425,10 +407,10 @@ function main() {
           reason: skipReviewReason,
           rubric_status: skipReviewRubricStatus,
         });
-        gh(ghBin, repoPath, "pr", "comment", String(prNumber), "--body", skipComment);
+        execGh(repoPath, ["pr", "comment", String(prNumber), "--body", skipComment]);
       }
     } else if (safeData.state === STATES.READY_TO_MERGE) {
-      const preMerge = fetchPreMergeContext(ghBin, repoPath, prNumber);
+      const preMerge = fetchPreMergeContext(repoPath, prNumber);
       reviewGate = evaluateReviewGate({
         prNumber,
         comments: preMerge.comments,
@@ -452,7 +434,7 @@ function main() {
       }
       assertPreMergeSafety(preMerge, prNumber);
     } else if (forceFinalizeNonready) {
-      const preMerge = fetchPreMergeContext(ghBin, repoPath, prNumber);
+      const preMerge = fetchPreMergeContext(repoPath, prNumber);
       assertPreMergeSafety(preMerge, prNumber);
     }
   }
@@ -471,14 +453,14 @@ function main() {
       });
     }
 
-    prMergeState = dryRun ? prMergeState : fetchPrMergeState(ghBin, repoPath, prNumber);
+    prMergeState = dryRun ? prMergeState : fetchPrMergeState(repoPath, prNumber);
     if (!dryRun && prMergeState.state !== "MERGED") {
       try {
-        gh(ghBin, repoPath, "pr", "merge", String(prNumber), mergeFlag(mergeMethod));
+        execGh(repoPath, ["pr", "merge", String(prNumber), mergeFlag(mergeMethod)]);
         mergePerformed = true;
-        prMergeState = fetchPrMergeState(ghBin, repoPath, prNumber);
+        prMergeState = fetchPrMergeState(repoPath, prNumber);
       } catch (error) {
-        prMergeState = fetchPrMergeState(ghBin, repoPath, prNumber);
+        prMergeState = fetchPrMergeState(repoPath, prNumber);
         if (prMergeState.state !== "MERGED") {
           throw error;
         }
@@ -506,7 +488,7 @@ function main() {
       }
       for (let i = 0; i < MERGE_QUEUE_MAX_POLLS; i++) {
         Atomics.wait(sleepBuf, 0, 0, MERGE_QUEUE_POLL_INTERVAL_MS);
-        prMergeState = fetchPrMergeState(ghBin, repoPath, prNumber);
+        prMergeState = fetchPrMergeState(repoPath, prNumber);
         if (prMergeState.state === "MERGED") break;
         if (prMergeState.state === "OPEN") {
           appendRunEvent(repoPath, safeData.run_id, {
@@ -538,7 +520,7 @@ function main() {
       }
     }
     if (!dryRun) {
-      const remoteDelete = deleteRemoteBranch(gitBin, repoPath, branch);
+      const remoteDelete = deleteRemoteBranch(repoPath, branch);
       remoteName = remoteDelete.remoteName;
       remoteBranchDeleteAttempted = remoteDelete.attempted;
       remoteBranchDeleted = remoteDelete.deleted;
@@ -577,7 +559,7 @@ function main() {
   if (!skipIssueClose && issueNumber) {
     if (!dryRun) {
       try {
-        gh(ghBin, repoPath, "issue", "close", String(issueNumber), "--comment", `Resolved in PR #${prNumber}`);
+        execGh(repoPath, ["issue", "close", String(issueNumber), "--comment", `Resolved in PR #${prNumber}`]);
         issueClosed = true;
       } catch (error) {
         issueCloseWarning = summarizeError(error);
@@ -588,7 +570,6 @@ function main() {
   const cleanupResult = runCleanup({
     repoRoot: repoPath,
     data: updated,
-    gitBin,
     dryRun,
     deleteMergedBranch: updated.state === STATES.MERGED,
   });
