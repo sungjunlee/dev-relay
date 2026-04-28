@@ -7,6 +7,12 @@ const {
   getRunDir,
   requireValidRunId,
 } = require("../../relay-dispatch/scripts/manifest/paths");
+const {
+  bindCliArgs,
+  findUnknownFlags,
+} = require("../../relay-dispatch/scripts/cli-args");
+
+const KNOWN_FLAGS = ["--repo", "--run-id", "--text", "--file", "--json", "--help", "-h"];
 
 function usage() {
   console.error([
@@ -15,20 +21,6 @@ function usage() {
     "Writes operator-authored Phase 1 Done Criteria to:",
     "  ~/.relay/runs/<repo-slug>/<run-id>/done-criteria.md",
   ].join("\n"));
-}
-
-function getArg(args, name) {
-  const index = args.indexOf(name);
-  if (index === -1) return undefined;
-  const value = args[index + 1];
-  if (value === undefined || value.startsWith("--")) {
-    throw new Error(`${name} requires a value`);
-  }
-  return value;
-}
-
-function hasFlag(args, name) {
-  return args.includes(name);
 }
 
 function readInputText({ text, file }) {
@@ -58,14 +50,24 @@ function persistDoneCriteria({ repo, runId, text }) {
 
 function main() {
   const args = process.argv.slice(2);
-  if (hasFlag(args, "--help") || hasFlag(args, "-h")) {
-    usage();
-    return;
-  }
+  const { getArg, hasFlag } = bindCliArgs(args, {
+    commandName: "persist-done-criteria",
+    reservedFlags: KNOWN_FLAGS,
+  });
 
   try {
-    const repo = getArg(args, "--repo");
-    const runId = getArg(args, "--run-id");
+    const unknownFlags = findUnknownFlags(args, "persist-done-criteria");
+    if (unknownFlags.length) {
+      throw new Error(`unknown flag(s): ${unknownFlags.join(", ")}`);
+    }
+
+    if (hasFlag("--help") || hasFlag("-h")) {
+      usage();
+      return;
+    }
+
+    const repo = getArg("--repo");
+    const runId = getArg("--run-id");
     if (!repo) throw new Error("--repo is required");
     if (!runId) throw new Error("--run-id is required");
 
@@ -73,12 +75,12 @@ function main() {
       repo,
       runId,
       text: readInputText({
-        text: getArg(args, "--text"),
-        file: getArg(args, "--file"),
+        text: getArg("--text"),
+        file: getArg("--file"),
       }),
     });
 
-    if (hasFlag(args, "--json")) {
+    if (hasFlag("--json")) {
       console.log(JSON.stringify(result, null, 2));
     } else {
       console.log(`Done Criteria: ${result.path}`);

@@ -27,6 +27,7 @@ const FLAGS = [
   { flag: "--done-criteria-file", kind: VALUE, mode: MODE_VERBATIM, valueName: "<path>", rationale: "Operator-supplied anchor path; keep the literal argv token." },
   { flag: "--dry-run", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Presence flag; no value is consumed." },
   { flag: "--executor", aliases: ["-e"], kind: VALUE, mode: MODE_PARSED, valueName: "<name>", rationale: "Closed selector; flag-like following tokens should mean the value is missing." },
+  { flag: "--file", kind: VALUE, mode: MODE_VERBATIM, valueName: "<path>", rationale: "Operator-supplied input file path; keep the literal argv token." },
   { flag: "--force", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Presence flag; no value is consumed." },
   { flag: "--force-finalize-nonready", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Presence flag; no value is consumed." },
   { flag: "--head-sha", kind: VALUE, mode: MODE_PARSED, valueName: "<sha>", rationale: "Structured SHA field; flag-like following tokens should mean the value is missing." },
@@ -83,6 +84,7 @@ const FLAGS = [
   { flag: "--stale-hours", kind: VALUE, mode: MODE_PARSED, valueName: "<hours>", rationale: "Numeric threshold; flag-like following tokens should mean the value is missing." },
   { flag: "--state", kind: VALUE, mode: MODE_PARSED, valueName: "<state>", rationale: "Closed manifest state selector; flag-like following tokens should mean the value is missing." },
   { flag: "--test-command", kind: VALUE, mode: MODE_VERBATIM, valueName: "<cmd>", rationale: "Execution evidence must preserve the operator-supplied command token exactly." },
+  { flag: "--text", kind: VALUE, mode: MODE_VERBATIM, valueName: "<text>", rationale: "Operator-supplied Done Criteria text body; keep the literal argv token." },
   { flag: "--timeout", kind: VALUE, mode: MODE_PARSED, valueName: "<seconds>", rationale: "Numeric timeout; flag-like following tokens should mean the value is missing." },
   { flag: "--title", aliases: ["-t"], kind: VALUE, mode: MODE_VERBATIM, valueName: "<text>", rationale: "Operator-supplied thread title; keep the literal argv token." },
   { flag: "--to", kind: VALUE, mode: MODE_PARSED, valueName: "<state>", rationale: "Closed recovery state selector; flag-like following tokens should mean the value is missing." },
@@ -129,6 +131,9 @@ const COMMAND_FLAGS = {
   ],
   "plan-runner": [
     "--issue", "--planner", "--repo", "--runs-dir", "--out-dir", "--json", "--help",
+  ],
+  "persist-done-criteria": [
+    "--repo", "--run-id", "--text", "--file", "--json", "--help",
   ],
   "persist-request": [
     "--repo", "--contract-file", "--json", "--help",

@@ -4,17 +4,17 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const {
-  getArg: sharedGetArg,
-  hasFlag: sharedHasFlag,
+  bindCliArgs,
   modeLabel,
 } = require("../../relay-dispatch/scripts/cli-args");
 const { applyTddFlavorToDispatchPrompt } = require("./tdd-flavor");
 
 const args = process.argv.slice(2);
 const KNOWN_FLAGS = ["--issue", "--planner", "--repo", "--runs-dir", "--out-dir", "--json", "--help", "-h"];
-const CLI_ARG_OPTIONS = { commandName: "plan-runner", reservedFlags: KNOWN_FLAGS };
-const getArg = (flag, fallback) => sharedGetArg(args, flag, fallback, CLI_ARG_OPTIONS);
-const hasFlag = (flag) => sharedHasFlag(args, flag, CLI_ARG_OPTIONS);
+const { getArg, hasFlag } = bindCliArgs(args, {
+  commandName: "plan-runner",
+  reservedFlags: KNOWN_FLAGS,
+});
 
 const PLANNER_FIELDS = ["rubric_yaml", "dispatch_prompt_md", "planner_notes_md"];
 const NO_HISTORY_TEXT = "no historical data available";

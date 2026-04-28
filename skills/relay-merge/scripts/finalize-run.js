@@ -51,8 +51,7 @@ const { resolveManifestRecord } = require("../../relay-dispatch/scripts/relay-re
 const { appendRunEvent, EVENTS } = require("../../relay-dispatch/scripts/relay-events");
 const { runCleanup } = require("../../relay-dispatch/scripts/manifest/cleanup");
 const {
-  getArg: sharedGetArg,
-  hasFlag: sharedHasFlag,
+  bindCliArgs,
   modeLabel,
 } = require("../../relay-dispatch/scripts/cli-args");
 const {
@@ -69,8 +68,11 @@ const KNOWN_FLAGS = [
   "--skip-merge", "--no-issue-close", "--dry-run", "--json", "--help", "-h",
 ];
 const LEGACY_BOOTSTRAP_REASON_PREFIX = /^\s*bootstrap:/i;
-const CLI_ARG_OPTIONS = { commandName: "finalize-run", reservedFlags: KNOWN_FLAGS };
-const helpRequested = sharedHasFlag(args, ["--help", "-h"], CLI_ARG_OPTIONS);
+const { getArg, hasFlag } = bindCliArgs(args, {
+  commandName: "finalize-run",
+  reservedFlags: KNOWN_FLAGS,
+});
+const helpRequested = hasFlag(["--help", "-h"]);
 
 if (!args.length || helpRequested) {
   console.log("Usage: finalize-run.js (--repo <path> --run-id <id> | --repo <path> --pr <number> | --manifest <path>) [options]");
@@ -97,9 +99,6 @@ if (!args.length || helpRequested) {
   console.log("  State is 'ready_to_merge':                               neither - just run finalize-run");
   process.exit(helpRequested ? 0 : 1);
 }
-
-const getArg = (flag, fallback) => sharedGetArg(args, flag, fallback, CLI_ARG_OPTIONS);
-const hasFlag = (flag) => sharedHasFlag(args, flag, CLI_ARG_OPTIONS);
 
 function parsePositiveInt(value, label) {
   if (value === undefined) return undefined;
