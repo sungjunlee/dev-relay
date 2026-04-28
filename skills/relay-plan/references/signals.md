@@ -1,6 +1,6 @@
 # Planner Input Signals
 
-Two informational signals feed into rubric design during `relay-plan` steps 1.5 and 1.6. Both are read-only inputs; neither gates dispatch, alters state transitions, or modifies rubric structure. They inform factor wording, prerequisite naming, and Available Tools context only.
+Two informational signals feed into rubric design during `relay-plan` steps 2 and 3. Both are read-only inputs; neither gates dispatch, alters state transitions, or modifies rubric structure. They inform factor wording, prerequisite naming, and Available Tools context only.
 
 ## Historical signal — `reliability-report.js`
 

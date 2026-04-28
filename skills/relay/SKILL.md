@@ -70,7 +70,7 @@ PR_NUM=$(gh pr list --head issue-<N> --json number -q '.[0].number')
 
 ## Step 2: Plan
 
-**Always build a rubric.** Follow relay-plan's process (Steps 1-3 only: read task → build rubric → generate prompt). Do NOT dispatch from relay-plan — Step 3 below handles dispatch. See `relay-plan` SKILL.md for rubric depth by task size (S/M/L/XL).
+**Always build a rubric.** Follow relay-plan's process (Steps 1-10 only: read task → build rubric → generate prompt). Do NOT dispatch from relay-plan — Step 3 below handles dispatch. See `relay-plan` SKILL.md for rubric depth by task size (S/M/L/XL).
 
 Write the dispatch prompt to a temp file (e.g., `/tmp/dispatch-<N>.md`).
 If intake ran, the relay-ready handoff brief becomes the task source of truth for planning.
