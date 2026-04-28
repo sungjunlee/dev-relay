@@ -70,13 +70,7 @@ PR_NUM=$(gh pr list --head issue-<N> --json number -q '.[0].number')
 
 ## Step 2: Plan
 
-**Always build a rubric.** Follow relay-plan's process (Steps 1-3 only: read task → build rubric → generate prompt). Do NOT dispatch from relay-plan — Step 3 below handles dispatch.
-
-Rubric depth scales with task size (determined by orchestrator judgment on normalized AC + file scope, not raw issue AC count):
-- **S** (simple fix, typo, 1-liner): 1-2 factors, skip stress-test
-- **M** (standard feature): 3-5 factors, skip stress-test
-- **L** (cross-cutting, multi-file): 4-6 factors + stress-test
-- **XL** (architecture change): 5-8 factors + stress-test + calibration
+**Always build a rubric.** Follow relay-plan's process (Steps 1-3 only: read task → build rubric → generate prompt). Do NOT dispatch from relay-plan — Step 3 below handles dispatch. See `relay-plan` SKILL.md for rubric depth by task size (S/M/L/XL).
 
 Write the dispatch prompt to a temp file (e.g., `/tmp/dispatch-<N>.md`).
 If intake ran, the relay-ready handoff brief becomes the task source of truth for planning.
@@ -123,11 +117,7 @@ If sprint file exists, mark Plan item as in-flight: `[~] #42 OAuth2 flow → PR 
 
 Verify PR exists: `gh pr list --head issue-<N>`
 
-Invoke **relay-review** in an isolated context (no planning bias). The review runner manages rounds, PR comments, and manifest updates. See relay-review's **Context Isolation** section for per-platform mechanisms — adapter scripts handle this automatically when using `--reviewer`.
-
-- **Phase 1 — Spec Compliance:** Done Criteria faithfulness, stubs, security, integration, rubric re-verification. Must pass before Phase 2.
-- **Phase 2 — Code Quality:** Code review + simplification on changed files. Issues re-dispatch back to Phase 1.
-- **Runner:** `scripts/review-runner.js` invokes an isolated reviewer via adapter (built-in: `codex`, `claude`), rejects reviewer-written diffs, posts the PR comment, and updates manifest state
+Invoke **relay-review** in an isolated context (no planning bias). It runs two phases (Spec Compliance → Code Quality), re-dispatches on issues, and updates manifest state. See `relay-review` SKILL.md for the Phase 1/2 procedure, Context Isolation per platform, and runner details.
 
 The rubric from relay-plan anchors each iteration — prevents context drift across rounds. Safety cap: 20 rounds (most PRs converge in 1-3).
 
