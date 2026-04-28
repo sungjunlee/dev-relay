@@ -11,6 +11,7 @@ const {
   appendRubricQuality,
   appendRunEvent,
   appendScoreDivergence,
+  EVENTS,
   readRunEvents,
 } = require("./relay-events");
 
@@ -132,7 +133,7 @@ test("appendIterationScore writes an iteration_score record to events.jsonl", ()
 test("appendRunEvent writes actor from git config user.name", () => {
   const { repoRoot, runId } = createContext("Relay Operator");
   const record = appendRunEvent(repoRoot, runId, {
-    event: "dispatch_start",
+    event: EVENTS.DISPATCH_START,
     state_from: "draft",
     state_to: "dispatched",
   });
@@ -145,7 +146,7 @@ test("appendRunEvent writes actor from git config user.name", () => {
 test("appendRunEvent persists rubric_status when provided", () => {
   const { repoRoot, runId } = createContext();
   const record = appendRunEvent(repoRoot, runId, {
-    event: "skip_review",
+    event: EVENTS.SKIP_REVIEW,
     state_from: "ready_to_merge",
     state_to: "ready_to_merge",
     reason: "hotfix",
@@ -160,7 +161,7 @@ test("appendRunEvent persists rubric_status when provided", () => {
 test("appendRunEvent persists origin when provided", () => {
   const { repoRoot, runId } = createContext();
   const record = appendRunEvent(repoRoot, runId, {
-    event: "review_apply",
+    event: EVENTS.REVIEW_APPLY,
     state_from: "review_pending",
     state_to: "escalated",
     reason: "max_rounds_exceeded",
@@ -175,7 +176,7 @@ test("appendRunEvent persists origin when provided", () => {
 test("appendRunEvent persists last_reviewed_sha when provided", () => {
   const { repoRoot, runId } = createContext();
   const record = appendRunEvent(repoRoot, runId, {
-    event: "state_recovery",
+    event: EVENTS.STATE_RECOVERY,
     state_from: "changes_requested",
     state_to: "review_pending",
     head_sha: "deadbeef",
@@ -191,7 +192,7 @@ test("appendRunEvent persists last_reviewed_sha when provided", () => {
 test("appendRunEvent persists pr_number when provided", () => {
   const { repoRoot, runId } = createContext();
   const record = appendRunEvent(repoRoot, runId, {
-    event: "force_finalize",
+    event: EVENTS.FORCE_FINALIZE,
     state_from: "escalated",
     state_to: "merged",
     head_sha: "deadbeef",
@@ -207,7 +208,7 @@ test("appendRunEvent persists pr_number when provided", () => {
 test("appendRunEvent persists recover commit commit_sha and branch when provided", () => {
   const { repoRoot, runId } = createContext();
   const record = appendRunEvent(repoRoot, runId, {
-    event: "recover_commit",
+    event: EVENTS.RECOVER_COMMIT,
     state_from: "review_pending",
     state_to: "review_pending",
     head_sha: "deadbeef",
@@ -227,13 +228,38 @@ test("appendRunEvent persists recover commit commit_sha and branch when provided
 test("appendRunEvent omits last_reviewed_sha when absent", () => {
   const { repoRoot, runId } = createContext();
   const record = appendRunEvent(repoRoot, runId, {
-    event: "dispatch",
+    event: EVENTS.DISPATCH_START,
     state_from: "draft",
     state_to: "dispatched",
     reason: "start",
   });
 
   assert.equal(Object.prototype.hasOwnProperty.call(record, "last_reviewed_sha"), false);
+});
+
+// Test-side bare event strings below are intentional canaries: one proves write-time
+// rejection of unknown current names, and one proves read-time tolerance for legacy
+// historical journal names.
+test("appendRunEvent throws on event name not in EVENTS", () => {
+  const { repoRoot, runId } = createContext();
+  assert.throws(
+    () => appendRunEvent(repoRoot, runId, {
+      event: "not_a_relay_event",
+      state_from: "draft",
+      state_to: "draft",
+    }),
+    /Unknown relay event name "not_a_relay_event"/
+  );
+});
+
+test("readRunEvents tolerates historical-only event names", () => {
+  const { repoRoot, runId } = createContext();
+  const eventsPath = getEventsPath(repoRoot, runId);
+  fs.mkdirSync(path.dirname(eventsPath), { recursive: true });
+  const historicalEvent = { event: "manual_state_override", run_id: runId };
+  fs.writeFileSync(eventsPath, `${JSON.stringify(historicalEvent)}\n`, "utf-8");
+
+  assert.deepEqual(readRunEvents(repoRoot, runId), [historicalEvent]);
 });
 
 test("appendIterationScore requires run_id", () => {
@@ -417,7 +443,7 @@ test("appendScoreDivergence rejects a missing factor", () => {
 test("appendRunEvent refuses when events.jsonl is replaced with a symlink", () => {
   const { repoRoot, runId } = createContext();
   // Seed the run layout with a legit first event.
-  appendRunEvent(repoRoot, runId, { event: "plan" });
+  appendRunEvent(repoRoot, runId, { event: EVENTS.DISPATCH_START });
 
   const eventsPath = getEventsPath(repoRoot, runId);
   const victim = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "relay-events-victim-")), "victim.jsonl");
@@ -427,7 +453,7 @@ test("appendRunEvent refuses when events.jsonl is replaced with a symlink", () =
   fs.symlinkSync(victim, eventsPath);
 
   assert.throws(
-    () => appendRunEvent(repoRoot, runId, { event: "dispatch" }),
+    () => appendRunEvent(repoRoot, runId, { event: EVENTS.DISPATCH_RESULT }),
     /Refusing to (append to|open) symlinked/i
   );
   // Victim file must not have been mutated.
@@ -436,7 +462,7 @@ test("appendRunEvent refuses when events.jsonl is replaced with a symlink", () =
 
 test("readRunEvents refuses when events.jsonl is a symlink", () => {
   const { repoRoot, runId } = createContext();
-  appendRunEvent(repoRoot, runId, { event: "plan" });
+  appendRunEvent(repoRoot, runId, { event: EVENTS.DISPATCH_START });
 
   const eventsPath = getEventsPath(repoRoot, runId);
   const foreignDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-events-foreign-"));
@@ -456,7 +482,7 @@ test("readRunEvents refuses dangling symlinks instead of silently returning []",
   // #197 fail-closed: a dangling symlink at events.jsonl must NOT be treated
   // as "file missing" (existsSync follows links and would say "missing").
   const { repoRoot, runId } = createContext();
-  appendRunEvent(repoRoot, runId, { event: "plan" });
+  appendRunEvent(repoRoot, runId, { event: EVENTS.DISPATCH_START });
 
   const eventsPath = getEventsPath(repoRoot, runId);
   fs.rmSync(eventsPath);
@@ -476,7 +502,7 @@ test("appendRunEvent refuses dangling symlinks (no silent create-through)", () =
   // fallback in openForWriteWithoutFollowingSymlinks refuses dangling links.
   const { repoRoot, runId } = createContext();
   // Seed layout (without an events.jsonl yet).
-  appendRunEvent(repoRoot, runId, { event: "plan" });
+  appendRunEvent(repoRoot, runId, { event: EVENTS.DISPATCH_START });
 
   const eventsPath = getEventsPath(repoRoot, runId);
   fs.rmSync(eventsPath);
@@ -486,7 +512,7 @@ test("appendRunEvent refuses dangling symlinks (no silent create-through)", () =
   fs.symlinkSync(victimTarget, eventsPath);
 
   assert.throws(
-    () => appendRunEvent(repoRoot, runId, { event: "dispatch" }),
+    () => appendRunEvent(repoRoot, runId, { event: EVENTS.DISPATCH_RESULT }),
     /Refusing to (append to|open) symlinked/i
   );
   assert.equal(fs.existsSync(victimTarget), false, "victim target must not have been created through the symlink");

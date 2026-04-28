@@ -11,7 +11,7 @@ const { execFileSync } = require("child_process");
 
 const { parsePrNumber, formatExecError } = require("./dispatch-publish");
 const { resolveManifestRecord } = require("./relay-resolver");
-const { appendRunEvent } = require("./relay-events");
+const { appendRunEvent, EVENTS } = require("./relay-events");
 const { STATES } = require("./manifest/lifecycle");
 const { getCanonicalRepoRoot, getRunDir, validateManifestPaths } = require("./manifest/paths");
 const { summarizeError } = require("./manifest/store");
@@ -184,7 +184,7 @@ function appendRecoveryEvent(repoRoot, data, event, reason, commitSha, prNumber,
 
 function appendFailureEvent(repoRoot, data, status, detail, commitSha, branch) {
   try {
-    appendRecoveryEvent(repoRoot, data, "recover_commit_failed", `${status}: ${detail}`, commitSha, null, branch);
+    appendRecoveryEvent(repoRoot, data, EVENTS.RECOVER_COMMIT_FAILED, `${status}: ${detail}`, commitSha, null, branch);
   } catch {}
 }
 
@@ -326,7 +326,7 @@ function main() {
     });
     if (rebrandResult.rewritten) {
       appendRunEvent(validatedPaths.repoRoot, data.run_id, {
-        event: "execution_evidence_rebranded",
+        event: EVENTS.EXECUTION_EVIDENCE_REBRANDED,
         previous_head_sha: rebrandResult.previousSha,
         new_head_sha: commitSha,
         reason,
@@ -382,7 +382,7 @@ function main() {
     });
   }
 
-  appendRecoveryEvent(validatedPaths.repoRoot, stampedRecord.data || data, "recover_commit", reason, commitSha, prNumber, branch);
+  appendRecoveryEvent(validatedPaths.repoRoot, stampedRecord.data || data, EVENTS.RECOVER_COMMIT, reason, commitSha, prNumber, branch);
 
   const result = {
     status: "recovered",

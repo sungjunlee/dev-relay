@@ -30,7 +30,7 @@ const {
   writeManifest,
 } = require("./manifest/store");
 const { getArg, hasFlag, modeLabel } = require("./cli-args");
-const { appendRunEvent } = require("./relay-events");
+const { appendRunEvent, EVENTS } = require("./relay-events");
 const { safeFormatRunId } = require("./relay-resolver");
 
 const args = process.argv.slice(2);
@@ -223,7 +223,7 @@ function run() {
     if (!dryRun) {
       writeManifest(manifestPath, cleanupResult.updatedData, body);
       appendRunEvent(repoRoot, cleanupResult.updatedData.run_id, {
-        event: "cleanup_result",
+        event: EVENTS.CLEANUP_RESULT,
         state_from: cleanupResult.updatedData.state,
         state_to: cleanupResult.updatedData.state,
         head_sha: cleanupResult.updatedData.git?.head_sha || null,

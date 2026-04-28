@@ -10,7 +10,7 @@ const {
   validateManifestPaths,
 } = require("./paths");
 const { readManifest, writeManifest } = require("./store");
-const { appendRunEvent, readRunEvents } = require("../relay-events");
+const { appendRunEvent, EVENTS, readRunEvents } = require("../relay-events");
 
 function parsePositiveIntEnv(name, fallback) {
   const raw = process.env[name];
@@ -136,11 +136,11 @@ function stampPrNumberUnderLock(manifestRecord, numericPrNumber, options = {}) {
     // Rule 1 layer B (#166): dedupe against the committed journal so even a future lock
     // regression cannot emit duplicate first-resolution pr_number_stamped events.
     const alreadyStamped = readRunEvents(repoRoot, updatedData.run_id)
-      .some((entry) => entry.event === "pr_number_stamped");
+      .some((entry) => entry.event === EVENTS.PR_NUMBER_STAMPED);
 
     if (!alreadyStamped) {
       appendRunEvent(repoRoot, updatedData.run_id, {
-        event: "pr_number_stamped",
+        event: EVENTS.PR_NUMBER_STAMPED,
         state_from: updatedData.state,
         state_to: updatedData.state,
         head_sha: updatedData.git?.head_sha || null,

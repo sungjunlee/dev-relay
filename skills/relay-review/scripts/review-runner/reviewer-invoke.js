@@ -3,7 +3,7 @@ const fs = require("fs");
 const path = require("path");
 const { STATES } = require("../../../relay-dispatch/scripts/manifest/lifecycle");
 const { writeManifest } = require("../../../relay-dispatch/scripts/manifest/store");
-const { appendRunEvent } = require("../../../relay-dispatch/scripts/relay-events");
+const { appendRunEvent, EVENTS } = require("../../../relay-dispatch/scripts/relay-events");
 const { applyPolicyViolationToManifest } = require("./manifest-apply");
 const { git, readText, writeText } = require("./common");
 
@@ -81,7 +81,7 @@ function loadReviewText({ body, data, manifestPath, prNumber, promptPath, review
 
   const effectiveReviewerModel = resolveReviewerModel(data, reviewerModel);
   appendRunEvent(runRepoPath, data.run_id, {
-    event: "review_invoke",
+    event: EVENTS.REVIEW_INVOKE,
     state_from: data.state,
     state_to: data.state,
     head_sha: reviewedHeadSha || null,
@@ -131,7 +131,7 @@ function loadReviewText({ body, data, manifestPath, prNumber, promptPath, review
     };
     writeManifest(manifestPath, reviewerStampedManifest, body);
     appendRunEvent(runRepoPath, data.run_id, {
-      event: "review_apply",
+      event: EVENTS.REVIEW_APPLY,
       state_from: data.state,
       state_to: STATES.ESCALATED,
       head_sha: reviewedHeadSha,
