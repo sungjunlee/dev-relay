@@ -138,4 +138,10 @@ node ${CLAUDE_SKILL_DIR}/../relay-dispatch/scripts/dispatch.js . \
 
 ## When to use
 
-All tasks dispatched via relay. S/M = lightweight rubric (1-5 factors), skip stress-test. L/XL = detailed rubric with stress-test and calibration. Re-dispatches automatically prepend previous Score Log + reviewer feedback to the prompt (see `relay-dispatch` docs). Full rubric guide: `references/rubric-design-guide.md`.
+All tasks dispatched via relay. Rubric depth scales with task size (determined by orchestrator judgment on normalized AC + file scope, not raw issue AC count):
+- **S** (simple fix, typo, 1-liner): 1-2 factors, skip stress-test
+- **M** (standard feature): 3-5 factors, skip stress-test
+- **L** (cross-cutting, multi-file): 4-6 factors + stress-test
+- **XL** (architecture change): 5-8 factors + stress-test + calibration
+
+Re-dispatches automatically prepend previous Score Log + reviewer feedback to the prompt (see `relay-dispatch` docs). Full rubric guide: `references/rubric-design-guide.md`.
