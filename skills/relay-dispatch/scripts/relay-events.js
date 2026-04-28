@@ -114,6 +114,9 @@ function appendRunEvent(repoRoot, runId, eventData) {
     ...(eventData.pr_number !== undefined
       ? { pr_number: normalizeEventValue(eventData.pr_number) }
       : {}),
+    ...(eventData.pr_body_only !== undefined
+      ? { pr_body_only: eventData.pr_body_only === true }
+      : {}),
     ...(eventData.commit_sha !== undefined
       ? { commit_sha: normalizeEventValue(eventData.commit_sha) }
       : {}),
