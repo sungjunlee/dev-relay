@@ -8,16 +8,13 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const {
-  getArg: sharedGetArg,
-  hasFlag: sharedHasFlag,
+  bindCliArgs,
   modeLabel,
 } = require("../../relay-dispatch/scripts/cli-args");
 
 const args = process.argv.slice(2);
 const KNOWN_FLAGS = ["--prompt-file", "--model", "--json", "--help", "-h"];
-const CLI_ARG_OPTIONS = { reservedFlags: KNOWN_FLAGS };
-const getArg = (flag, fallback) => sharedGetArg(args, flag, fallback, CLI_ARG_OPTIONS);
-const hasFlag = (flag) => sharedHasFlag(args, flag, CLI_ARG_OPTIONS);
+const { getArg, hasFlag } = bindCliArgs(args, { reservedFlags: KNOWN_FLAGS });
 
 const PLANNER_RESULT_JSON_SCHEMA = {
   type: "object",

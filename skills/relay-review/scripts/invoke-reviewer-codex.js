@@ -9,17 +9,17 @@ const os = require("os");
 const path = require("path");
 const { REVIEWER_VERDICT_JSON_SCHEMA } = require("./review-schema");
 const {
-  getArg: sharedGetArg,
-  hasFlag: sharedHasFlag,
+  bindCliArgs,
   modeLabel,
 } = require("../../relay-dispatch/scripts/cli-args");
 const { summarizeFailure, ensureJsonText } = require("./reviewer-helpers");
 
 const args = process.argv.slice(2);
 const KNOWN_FLAGS = ["--repo", "--prompt-file", "--model", "--json", "--help", "-h"];
-const CLI_ARG_OPTIONS = { commandName: "invoke-reviewer-codex", reservedFlags: KNOWN_FLAGS };
-const getArg = (flag, fallback) => sharedGetArg(args, flag, fallback, CLI_ARG_OPTIONS);
-const hasFlag = (flag) => sharedHasFlag(args, flag, CLI_ARG_OPTIONS);
+const { getArg, hasFlag } = bindCliArgs(args, {
+  commandName: "invoke-reviewer-codex",
+  reservedFlags: KNOWN_FLAGS,
+});
 
 if (!args.length || hasFlag(["--help", "-h"])) {
   console.log("Usage: invoke-reviewer-codex.js --repo <path> --prompt-file <path> [--model <name>] [--json]");

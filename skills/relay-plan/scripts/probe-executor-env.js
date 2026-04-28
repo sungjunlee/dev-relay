@@ -17,9 +17,8 @@ const { execFileSync, spawnSync } = require("child_process");
 const fs = require("fs");
 const path = require("path");
 const {
-  getArg: sharedGetArg,
+  bindCliArgs,
   getPositionals,
-  hasFlag: sharedHasFlag,
   modeLabel,
 } = require("../../relay-dispatch/scripts/cli-args");
 
@@ -32,9 +31,10 @@ function parseCli(argv) {
   const KNOWN_FLAGS = [
     "--executor", "-e", "--timeout", "--project-only", "--json", "--help", "-h",
   ];
-  const CLI_ARG_OPTIONS = { commandName: "probe-executor-env", reservedFlags: KNOWN_FLAGS };
-  const getArg = (flags, fallback) => sharedGetArg(args, flags, fallback, CLI_ARG_OPTIONS);
-  const hasFlag = (flag) => sharedHasFlag(args, flag, CLI_ARG_OPTIONS);
+  const { getArg, hasFlag } = bindCliArgs(args, {
+    commandName: "probe-executor-env",
+    reservedFlags: KNOWN_FLAGS,
+  });
 
   if (!args.length || hasFlag(["--help", "-h"])) {
     console.log("Usage: probe-executor-env.js <repo-path> --executor <codex|claude> [options]");

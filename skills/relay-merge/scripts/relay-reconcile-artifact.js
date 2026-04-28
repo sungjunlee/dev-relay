@@ -37,7 +37,7 @@ const {
 } = require("../../relay-dispatch/scripts/manifest/store");
 const { resolveManifestRecord } = require("../../relay-dispatch/scripts/relay-resolver");
 const { appendRunEvent, EVENTS } = require("../../relay-dispatch/scripts/relay-events");
-const { getArg: sharedGetArg, hasFlag: sharedHasFlag } = require("../../relay-dispatch/scripts/cli-args");
+const { bindCliArgs } = require("../../relay-dispatch/scripts/cli-args");
 
 const args = process.argv.slice(2);
 const KNOWN_FLAGS = [
@@ -45,7 +45,10 @@ const KNOWN_FLAGS = [
   "--artifact-path", "--writer-pr", "--reason", "--skip-review",
   "--json", "--help", "-h",
 ];
-const CLI_ARG_OPTIONS = { commandName: "relay-reconcile-artifact", reservedFlags: KNOWN_FLAGS };
+const { getArg, hasFlag } = bindCliArgs(args, {
+  commandName: "relay-reconcile-artifact",
+  reservedFlags: KNOWN_FLAGS,
+});
 
 if (!args.length || args.includes("--help") || args.includes("-h")) {
   console.log("Usage: relay-reconcile-artifact (--repo <path> --run-id <id> | --manifest <path>) --artifact-path <path> --writer-pr <int> --reason <text> [options]");
@@ -63,9 +66,6 @@ if (!args.length || args.includes("--help") || args.includes("-h")) {
   console.log("  --json                 Output JSON");
   process.exit(args.includes("--help") || args.includes("-h") ? 0 : 1);
 }
-
-const getArg = (flag, fallback) => sharedGetArg(args, flag, fallback, CLI_ARG_OPTIONS);
-const hasFlag = (flag) => sharedHasFlag(args, flag, CLI_ARG_OPTIONS);
 
 function requireNonEmptyArg(flag, label) {
   const value = getArg(flag);

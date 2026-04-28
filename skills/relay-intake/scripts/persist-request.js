@@ -5,16 +5,16 @@ const path = require("path");
 
 const { persistRequestContract } = require("./relay-request");
 const {
-  getArg: sharedGetArg,
-  hasFlag: sharedHasFlag,
+  bindCliArgs,
   modeLabel,
 } = require("../../relay-dispatch/scripts/cli-args");
 
 const args = process.argv.slice(2);
 const KNOWN_FLAGS = ["--repo", "--contract-file", "--json", "--help", "-h"];
-const CLI_ARG_OPTIONS = { commandName: "persist-request", reservedFlags: KNOWN_FLAGS };
-const getArg = (flag, fallback) => sharedGetArg(args, flag, fallback, CLI_ARG_OPTIONS);
-const hasFlag = (flag) => sharedHasFlag(args, flag, CLI_ARG_OPTIONS);
+const { getArg, hasFlag } = bindCliArgs(args, {
+  commandName: "persist-request",
+  reservedFlags: KNOWN_FLAGS,
+});
 
 if (!args.length || hasFlag(["--help", "-h"])) {
   console.log("Usage: persist-request.js --repo <path> --contract-file <path> [--json]");
