@@ -6,7 +6,52 @@ const {
   readTextFileWithoutFollowingSymlinks,
 } = require("./manifest/rubric");
 
+// EVENTS covers write-time names that land in ~/.relay/runs/<slug>/<run-id>/events.jsonl
+// through appendRunEvent, recover-commit's appendRecoveryEvent wrapper, or the three
+// helper writers in this module. Out of scope: relay-intake/scripts/relay-request.js
+// writes a separate ~/.relay/requests/ artifact log, and worktree-runtime.js emits
+// pluggable logger metadata rather than journal entries. Historical-only journal names
+// (manual_recovery, manual_state_correction, manual_state_override) are intentionally
+// absent: current producer code no longer emits them, and readRunEvents remains tolerant
+// because validation is write-only.
+const EVENTS = Object.freeze({
+  CLEANUP_RESULT: "cleanup_result",
+  CLOSE: "close",
+  DISPATCH_RESULT: "dispatch_result",
+  DISPATCH_START: "dispatch_start",
+  ENVIRONMENT_DRIFT: "environment_drift",
+  ESCALATION_DECISION: "escalation_decision",
+  EXECUTION_EVIDENCE_REBRANDED: "execution_evidence_rebranded",
+  FORCE_FINALIZE: "force_finalize",
+  ITERATION_SCORE: "iteration_score",
+  MERGE_BLOCKED: "merge_blocked",
+  MERGE_FINALIZE: "merge_finalize",
+  MODEL_HINTS_UPDATED: "model_hints_updated",
+  PR_BODY_SNAPSHOT_FAILED: "pr_body_snapshot_failed",
+  PR_NUMBER_STAMPED: "pr_number_stamped",
+  RECOVER_COMMIT: "recover_commit",
+  RECOVER_COMMIT_FAILED: "recover_commit_failed",
+  REVIEW_APPLY: "review_apply",
+  REVIEW_INVOKE: "review_invoke",
+  REVIEWER_SWAP: "reviewer_swap",
+  RUBRIC_QUALITY: "rubric_quality",
+  SCORE_DIVERGENCE: "score_divergence",
+  SKIP_REVIEW: "skip_review",
+  STATE_RECOVERY: "state_recovery",
+});
+
+const EVENT_VALUES = Object.freeze(Object.values(EVENTS));
+
+function validateKnownEventName(eventName) {
+  if (!EVENT_VALUES.includes(eventName)) {
+    throw new Error(
+      `Unknown relay event name "${String(eventName)}"; expected one of: ${EVENT_VALUES.join(", ")}`
+    );
+  }
+}
+
 function appendEventLine(repoRoot, runId, record) {
+  validateKnownEventName(record?.event);
   const eventsPath = getEventsPath(repoRoot, runId);
   try {
     appendTextFileWithoutFollowingSymlinks(eventsPath, `${JSON.stringify(record)}\n`);
@@ -153,7 +198,7 @@ function appendIterationScore(repoRoot, runId, { round, scores } = {}) {
   ensureRunLayout(repoRoot, runId);
   const record = {
     ts: new Date().toISOString(),
-    event: "iteration_score",
+    event: EVENTS.ITERATION_SCORE,
     actor: getActorName(repoRoot),
     run_id: runId,
     round,
@@ -203,7 +248,7 @@ function appendRubricQuality(repoRoot, runId, data = {}) {
   ensureRunLayout(repoRoot, runId);
   const record = {
     ts: new Date().toISOString(),
-    event: "rubric_quality",
+    event: EVENTS.RUBRIC_QUALITY,
     actor: getActorName(repoRoot),
     run_id: runId,
     grade: data.grade,
@@ -251,7 +296,7 @@ function appendScoreDivergence(repoRoot, runId, { round, divergences } = {}) {
   ensureRunLayout(repoRoot, runId);
   const record = {
     ts: new Date().toISOString(),
-    event: "score_divergence",
+    event: EVENTS.SCORE_DIVERGENCE,
     actor: getActorName(repoRoot),
     run_id: runId,
     round,
@@ -308,6 +353,7 @@ module.exports = {
   appendRubricQuality,
   appendRunEvent,
   appendScoreDivergence,
+  EVENTS,
   readAllRunEvents,
   readRunEvents,
 };

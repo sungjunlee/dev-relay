@@ -1,6 +1,6 @@
 const { STATES, forceTransitionState } = require("../../../relay-dispatch/scripts/manifest/lifecycle");
 const { writeManifest } = require("../../../relay-dispatch/scripts/manifest/store");
-const { appendRunEvent } = require("../../../relay-dispatch/scripts/relay-events");
+const { appendRunEvent, EVENTS } = require("../../../relay-dispatch/scripts/relay-events");
 const { resolveReviewerName } = require("./reviewer-invoke");
 
 function maybeSwapReviewer(data, reviewerArg, body, manifestPath, runRepoPath) {
@@ -23,7 +23,7 @@ function maybeSwapReviewer(data, reviewerArg, body, manifestPath, runRepoPath) {
   };
   writeManifest(manifestPath, swappedManifest, body);
   appendRunEvent(runRepoPath, data.run_id, {
-    event: "reviewer_swap",
+    event: EVENTS.REVIEWER_SWAP,
     state_from: STATES.ESCALATED,
     state_to: STATES.REVIEW_PENDING,
     from_reviewer: lastReviewer,

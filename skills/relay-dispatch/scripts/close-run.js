@@ -11,7 +11,7 @@ const {
 const { writeManifest } = require("./manifest/store");
 const { getArg, hasFlag, modeLabel } = require("./cli-args");
 const { resolveManifestRecord } = require("./relay-resolver");
-const { appendRunEvent } = require("./relay-events");
+const { appendRunEvent, EVENTS } = require("./relay-events");
 
 const args = process.argv.slice(2);
 const CLI_ARG_OPTIONS = { commandName: "close-run", reservedFlags: ["-h"] };
@@ -105,7 +105,7 @@ function main() {
   if (!dryRun) {
     writeManifest(manifestPath, updated, body);
     appendRunEvent(repoRoot, updated.run_id, {
-      event: "close",
+      event: EVENTS.CLOSE,
       state_from: safeData.state,
       state_to: STATES.CLOSED,
       head_sha: updated.git?.head_sha || null,
@@ -113,7 +113,7 @@ function main() {
       reason,
     });
     appendRunEvent(repoRoot, updated.run_id, {
-      event: "cleanup_result",
+      event: EVENTS.CLEANUP_RESULT,
       state_from: updated.state,
       state_to: updated.state,
       head_sha: updated.git?.head_sha || null,

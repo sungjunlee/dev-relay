@@ -1,3 +1,4 @@
+// canary: bare-string `event === "..."` reader assertions in this file are deliberate canaries against EVENTS schema drift; do not port to EVENTS.X (see #313).
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const { execFileSync, spawn, spawnSync } = require("child_process");

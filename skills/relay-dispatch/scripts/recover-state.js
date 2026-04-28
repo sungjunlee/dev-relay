@@ -24,7 +24,7 @@ const {
 const { writeManifest } = require("./manifest/store");
 const { getArg, hasFlag, modeLabel } = require("./cli-args");
 const { resolveManifestRecord } = require("./relay-resolver");
-const { appendRunEvent } = require("./relay-events");
+const { appendRunEvent, EVENTS } = require("./relay-events");
 const CLI_ARG_OPTIONS = { commandName: "recover-state", reservedFlags: ["-h"] };
 
 // Whitelist: recovery transitions that the normal dispatch/review/merge flow does NOT support.
@@ -218,7 +218,7 @@ function main() {
   if (!dryRun) {
     writeManifest(manifestPath, updated, body);
     appendRunEvent(repoRoot, updated.run_id, {
-      event: "state_recovery",
+      event: EVENTS.STATE_RECOVERY,
       state_from: fromState,
       state_to: toState,
       head_sha: commitContext?.currentHead || updated.git?.head_sha || null,
