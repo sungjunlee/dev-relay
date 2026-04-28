@@ -195,7 +195,7 @@ function resolvePrBodyClosingIssue(body) {
   if (numbers.length > 1) {
     throw new Error(
       `Ambiguous PR body closing keywords reference multiple issues: ${numbers.map((number) => `#${number}`).join(", ")}. ` +
-      "Provide manifest.issue.number or anchor.done_criteria_path to select the Done Criteria source explicitly."
+      "Provide --done-criteria-file, manifest.issue.number, or anchor.done_criteria_path to select the Done Criteria source explicitly."
     );
   }
   return numbers[0] || null;
@@ -215,16 +215,22 @@ function resolveClosingReferenceIssue(closingIssuesReferences, prNumber) {
     throw new Error(
       `Ambiguous GitHub closing issue references for PR #${prNumber}: ${numbers.map((number) => `#${number}`).join(", ")}. ` +
       "Add manifest.issue.number, use one explicit PR body closing keyword (Fixes #N, Closes #N, or Resolves #N), " +
-      "rename the branch to issue-N, or provide anchor.done_criteria_path."
+      "rename the branch to issue-N, or provide --done-criteria-file or anchor.done_criteria_path."
     );
   }
   return numbers[0] || null;
 }
 
-function resolveIssueNumber(repoPath, prNumber, branch, manifestData) {
+function hasFileBackedDoneCriteria(manifestData, options = {}) {
+  return Boolean(options.doneCriteriaFile || options.skipIssueInference || manifestData?.anchor?.done_criteria_path);
+}
+
+function resolveIssueNumber(repoPath, prNumber, branch, manifestData, options = {}) {
   if (manifestData?.issue?.number) {
     return Number(manifestData.issue.number);
   }
+
+  if (hasFileBackedDoneCriteria(manifestData, options)) return null;
 
   if (!prNumber) return resolveBranchIssueNumber(branch);
 
@@ -257,7 +263,7 @@ function resolveBranchForPr(repoPath, prNumber) {
   return JSON.parse(raw).headRefName;
 }
 
-function resolveContext(repoPath, manifestPathArg, runIdArg, branchArg, prArg) {
+function resolveContext(repoPath, manifestPathArg, runIdArg, branchArg, prArg, doneCriteriaFileArg = null) {
   let branch = branchArg;
   let prNumber = parsePositiveInt(prArg, "--pr");
 
@@ -290,7 +296,9 @@ function resolveContext(repoPath, manifestPathArg, runIdArg, branchArg, prArg) {
   if (!prNumber && branch) {
     prNumber = resolvePrForBranch(runRepoPath, branch);
   }
-  const issueNumber = resolveIssueNumber(runRepoPath, prNumber, branch, manifest.data);
+  const issueNumber = resolveIssueNumber(runRepoPath, prNumber, branch, manifest.data, {
+    doneCriteriaFile: doneCriteriaFileArg,
+  });
   const normalizedManifest = {
     ...manifest,
     data: {

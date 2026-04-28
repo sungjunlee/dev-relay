@@ -89,6 +89,26 @@ test("context/resolveIssueNumber prefers manifest issue before GitHub fallbacks"
   });
 });
 
+test("context/resolveIssueNumber skips inference when explicit Done Criteria file is present", () => {
+  withFakeGh({ failOnCall: true }, (repoRoot) => {
+    assert.equal(
+      resolveIssueNumber(repoRoot, 123, "issue-42", {}, { doneCriteriaFile: "/tmp/done-criteria.md" }),
+      null
+    );
+  });
+});
+
+test("context/resolveIssueNumber skips inference when manifest Done Criteria anchor is present", () => {
+  withFakeGh({ failOnCall: true }, (repoRoot) => {
+    assert.equal(
+      resolveIssueNumber(repoRoot, 123, "issue-42", {
+        anchor: { done_criteria_path: "/tmp/frozen-done-criteria.md" },
+      }),
+      null
+    );
+  });
+});
+
 test("context/resolveIssueNumber accepts explicit PR body closing keywords", async (t) => {
   const cases = [
     ["fixes", "Fixes #51", 51],
