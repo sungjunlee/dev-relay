@@ -74,6 +74,67 @@ function defaultPrTitle(branch, runId) {
   return `Recover ${branch} (${runId})`;
 }
 
+function normalizeIssueNumber(value) {
+  const issueNumber = Number(value);
+  return Number.isSafeInteger(issueNumber) && issueNumber > 0 ? issueNumber : null;
+}
+
+function inferIssueNumberFromBranch(branch) {
+  const matches = [...String(branch || "").matchAll(/(?:^|\/)issue-(\d+)(?=$|[-/])/g)];
+  if (matches.length !== 1) return null;
+  return normalizeIssueNumber(matches[0][1]);
+}
+
+function resolveIssueNumberForTitle(data, branch) {
+  return normalizeIssueNumber(data.issue?.number) || inferIssueNumberFromBranch(branch);
+}
+
+function fetchIssueTitle(repoPath, issueNumber) {
+  const raw = execGh(repoPath, ["issue", "view", String(issueNumber), "--json", "title,number"]);
+  const parsed = JSON.parse(raw);
+  const parsedNumber = normalizeIssueNumber(parsed.number);
+  const title = String(parsed.title || "").trim();
+  if (parsedNumber !== issueNumber || !title) {
+    throw new Error(`gh issue view returned invalid title data for issue #${issueNumber}`);
+  }
+  return title;
+}
+
+function resolvePrTitle({ explicitTitle, repoPath, branch, runId, data }) {
+  if (explicitTitle) {
+    return {
+      title: explicitTitle,
+      source: "explicit",
+      issueNumber: null,
+    };
+  }
+
+  const fallbackTitle = defaultPrTitle(branch, runId);
+  const issueNumber = resolveIssueNumberForTitle(data, branch);
+  if (!issueNumber) {
+    return {
+      title: fallbackTitle,
+      source: "fallback",
+      issueNumber: null,
+    };
+  }
+
+  try {
+    const issueTitle = fetchIssueTitle(repoPath, issueNumber);
+    return {
+      title: `${issueTitle} (#${issueNumber})`,
+      source: normalizeIssueNumber(data.issue?.number) ? "manifest_issue" : "branch_issue",
+      issueNumber,
+    };
+  } catch {
+    return {
+      title: fallbackTitle,
+      source: "fallback",
+      issueNumber,
+    };
+  }
+}
+
 function buildPrBody({ runId, reason, branch, timestamp, manifestPath, data }) {
   return [
     "## Recovery Summary",
@@ -244,18 +305,8 @@ function main() {
     manifestPath: manifestRecord.manifestPath,
     data,
   });
-  const prTitle = prTitleArg || defaultPrTitle(branch, data.run_id);
   const commitTitle = `Recover relay run ${data.run_id}`;
   const commitBody = buildCommitBody({ runId: data.run_id, reason, timestamp });
-  const plannedCommands = [
-    commandRecord(worktreePath, ["gh", "pr", "list", "--head", branch, "--json", "number", "--jq", ".[0].number"]),
-  ];
-  if (hasUncommittedChanges) {
-    plannedCommands.push(commandRecord(worktreePath, ["git", "-C", worktreePath, "add", "-A"]));
-    plannedCommands.push(commandRecord(worktreePath, ["git", "-C", worktreePath, "commit", "-m", commitTitle, "-m", commitBody]));
-  }
-  plannedCommands.push(commandRecord(worktreePath, ["git", "-C", worktreePath, "push", "-u", "origin", branch]));
-  plannedCommands.push(commandRecord(worktreePath, ["gh", "pr", "create", "--title", prTitle, "--body", prBody]));
 
   let existingPrNumber = null;
   if (!dryRun) {
@@ -270,11 +321,31 @@ function main() {
   }
 
   if (dryRun) {
+    const prTitleResolution = resolvePrTitle({
+      explicitTitle: prTitleArg,
+      repoPath: worktreePath,
+      branch,
+      runId: data.run_id,
+      data,
+    });
+    const plannedCommands = [
+      commandRecord(worktreePath, ["gh", "pr", "list", "--head", branch, "--json", "number", "--jq", ".[0].number"]),
+    ];
+    if (hasUncommittedChanges) {
+      plannedCommands.push(commandRecord(worktreePath, ["git", "-C", worktreePath, "add", "-A"]));
+      plannedCommands.push(commandRecord(worktreePath, ["git", "-C", worktreePath, "commit", "-m", commitTitle, "-m", commitBody]));
+    }
+    plannedCommands.push(commandRecord(worktreePath, ["git", "-C", worktreePath, "push", "-u", "origin", branch]));
+    plannedCommands.push(commandRecord(worktreePath, ["gh", "pr", "create", "--title", prTitleResolution.title, "--body", prBody]));
+
     const result = {
       status: "dry_run",
       runId: data.run_id,
       branch,
       worktree: worktreePath,
+      prTitle: prTitleResolution.title,
+      prTitleSource: prTitleResolution.source,
+      prTitleIssueNumber: prTitleResolution.issueNumber,
       hasUncommittedChanges,
       unpushedCommits,
       commands: plannedCommands,
@@ -340,7 +411,14 @@ function main() {
     }
     if (prNumber === null) {
       try {
-        const raw = execGh(worktreePath, ["pr", "create", "--title", prTitle, "--body", prBody]);
+        const prTitleResolution = resolvePrTitle({
+          explicitTitle: prTitleArg,
+          repoPath: worktreePath,
+          branch,
+          runId: data.run_id,
+          data,
+        });
+        const raw = execGh(worktreePath, ["pr", "create", "--title", prTitleResolution.title, "--body", prBody]);
         prNumber = parsePrNumber(raw);
       } catch (error) {
         const detail = formatExecError(error);

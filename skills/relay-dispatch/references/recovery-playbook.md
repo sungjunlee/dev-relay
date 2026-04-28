@@ -15,10 +15,12 @@ ${CLAUDE_SKILL_DIR}/scripts/recover-commit.js --run-id <id> \
 ${CLAUDE_SKILL_DIR}/scripts/recover-commit.js --run-id <id> \
   --reason "..." --dry-run
 
-# Override PR title / body (defaults derive from branch + run-id)
+# Override PR title / body (default title prefers linked issue title, then branch + run-id)
 ${CLAUDE_SKILL_DIR}/scripts/recover-commit.js --run-id <id> \
   --reason "..." --pr-title "..." --pr-body-file /tmp/pr-body.md
 ```
+
+When `--pr-title` is omitted, the PR title defaults to the linked GitHub issue title as `<issue title> (#<N>)`, first from `manifest.issue.number`, then from an unambiguous `issue-N` branch name. If issue lookup fails or no issue is linked, it falls back to `Recover <branch> (<run-id>)`. `--pr-title` always wins exactly.
 
 If a PR already exists for the branch, the command no-ops the create step and stamps `pr_number` from the existing PR — safe to re-run after a partial failure. Use `--dry-run` first when uncertain.
 

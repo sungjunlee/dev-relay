@@ -23,7 +23,7 @@ const {
 
 const SCRIPT = path.join(__dirname, "recover-commit.js");
 
-function writeFakeGh(binDir, statePath, logPath) {
+function writeFakeGh(binDir, statePath, logPath, initialState = {}) {
   const ghPath = path.join(binDir, "gh");
   fs.writeFileSync(ghPath, `#!/usr/bin/env node
 const fs = require("fs");
@@ -55,11 +55,31 @@ if (args[0] === "pr" && args[1] === "create") {
   process.stdout.write("https://github.com/acme/dev-relay/pull/" + state.existingPrNumber + "\\n");
   process.exit(0);
 }
+if (args[0] === "issue" && args[1] === "view") {
+  const issueNumber = String(args[2]);
+  state.issueViewCalls = Number(state.issueViewCalls || 0) + 1;
+  save();
+  if (state.failIssueView) {
+    process.stderr.write(state.failIssueView + "\\n");
+    process.exit(1);
+  }
+  const title = state.issueTitles && state.issueTitles[issueNumber];
+  if (!title) {
+    process.stderr.write("issue not found: " + issueNumber + "\\n");
+    process.exit(1);
+  }
+  process.stdout.write(JSON.stringify({ number: Number(issueNumber), title }) + "\\n");
+  process.exit(0);
+}
 process.stderr.write("unexpected fake gh invocation: " + args.join(" ") + "\\n");
 process.exit(1);
 `, "utf-8");
   fs.chmodSync(ghPath, 0o755);
-  fs.writeFileSync(statePath, JSON.stringify({ createNumber: 281 }, null, 2));
+  fs.writeFileSync(statePath, JSON.stringify({
+    createNumber: 281,
+    issueTitles: { "281": "Recover commit should use the issue title" },
+    ...initialState,
+  }, null, 2));
   fs.writeFileSync(logPath, "");
   return ghPath;
 }
@@ -122,7 +142,15 @@ function buildManifestForState(manifest, state, repoRoot, runId) {
   throw new Error(`Unsupported test state: ${state}`);
 }
 
-function setupRepo({ dirty = false, unpushed = false, evidence = false, manifestState = STATES.REVIEW_PENDING } = {}) {
+function setupRepo({
+  dirty = false,
+  unpushed = false,
+  evidence = false,
+  manifestState = STATES.REVIEW_PENDING,
+  branch = "issue-281",
+  issueNumber = 281,
+  ghState = {},
+} = {}) {
   const repoRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "relay-recover-commit-")));
   const relayHome = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-")));
   const binDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "relay-gh-")));
@@ -142,7 +170,6 @@ function setupRepo({ dirty = false, unpushed = false, evidence = false, manifest
   execFileSync("git", ["commit", "-m", "init"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
   execFileSync("git", ["push", "-u", "origin", "main"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
 
-  const branch = "issue-281";
   const worktreePath = path.join(repoRoot, "wt", branch);
   fs.mkdirSync(path.dirname(worktreePath), { recursive: true });
   execFileSync("git", ["worktree", "add", worktreePath, "-b", branch], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
@@ -155,7 +182,7 @@ function setupRepo({ dirty = false, unpushed = false, evidence = false, manifest
     execFileSync("git", ["-C", worktreePath, "commit", "-m", "Executor commit"], { encoding: "utf-8", stdio: "pipe" });
   }
 
-  const runId = createRunId({ issueNumber: 281, branch, timestamp: new Date("2026-04-24T01:00:00.000Z") });
+  const runId = createRunId({ issueNumber, branch, timestamp: new Date("2026-04-24T01:00:00.000Z") });
   const runLayout = ensureRunLayout(repoRoot, runId);
   const manifestPath = runLayout.manifestPath;
   const runDir = runLayout.runDir;
@@ -164,7 +191,7 @@ function setupRepo({ dirty = false, unpushed = false, evidence = false, manifest
     runId,
     branch,
     baseBranch: "main",
-    issueNumber: 281,
+    issueNumber,
     worktreePath,
     orchestrator: "codex",
     executor: "codex",
@@ -185,7 +212,7 @@ function setupRepo({ dirty = false, unpushed = false, evidence = false, manifest
     });
   }
 
-  const ghPath = writeFakeGh(binDir, statePath, ghLogPath);
+  const ghPath = writeFakeGh(binDir, statePath, ghLogPath, ghState);
   const preloadPath = writeEventPreload(binDir, eventLogPath);
   const env = {
     ...process.env,
@@ -211,6 +238,15 @@ function runRecover(fixture, extraArgs = []) {
 function readJsonLines(filePath) {
   const text = fs.existsSync(filePath) ? fs.readFileSync(filePath, "utf-8").trim() : "";
   return text ? text.split("\n").map((line) => JSON.parse(line)) : [];
+}
+
+function findGhCall(fixture, command, subcommand) {
+  return readJsonLines(fixture.ghLogPath).find((argv) => argv[0] === command && argv[1] === subcommand);
+}
+
+function ghArg(argv, flag) {
+  const index = argv.indexOf(flag);
+  return index === -1 ? undefined : argv[index + 1];
 }
 
 test("happy path commits dirty worktree, pushes, opens PR, stamps manifest, and emits audit event", () => {
@@ -243,6 +279,58 @@ test("happy path commits dirty worktree, pushes, opens PR, stamps manifest, and 
   assert.equal(events.filter((entry) => entry.event === "execution_evidence_rebranded").length, 0);
   assert.ok(readJsonLines(fixture.eventLogPath).some((entry) => entry.eventData.event === "recover_commit"));
   assert.equal(readJsonLines(fixture.ghLogPath).filter((argv) => argv[0] === "pr" && argv[1] === "create").length, 1);
+});
+
+test("default PR title uses manifest issue title when available", () => {
+  const fixture = setupRepo({ dirty: true });
+  const result = runRecover(fixture, ["--reason", "executor completed before commit", "--json"]);
+
+  assert.equal(result.status, 0, result.stderr);
+  const issueView = findGhCall(fixture, "issue", "view");
+  assert.deepEqual(issueView, ["issue", "view", "281", "--json", "title,number"]);
+  const prCreate = findGhCall(fixture, "pr", "create");
+  assert.equal(ghArg(prCreate, "--title"), "Recover commit should use the issue title (#281)");
+});
+
+test("default PR title uses branch-inferred issue title when manifest issue is absent", () => {
+  const fixture = setupRepo({
+    dirty: true,
+    branch: "issue-282",
+    issueNumber: null,
+    ghState: { issueTitles: { "282": "Branch inferred recovery title" } },
+  });
+  const result = runRecover(fixture, ["--reason", "executor completed before commit", "--json"]);
+
+  assert.equal(result.status, 0, result.stderr);
+  const issueView = findGhCall(fixture, "issue", "view");
+  assert.deepEqual(issueView, ["issue", "view", "282", "--json", "title,number"]);
+  const prCreate = findGhCall(fixture, "pr", "create");
+  assert.equal(ghArg(prCreate, "--title"), "Branch inferred recovery title (#282)");
+});
+
+test("explicit --pr-title wins without issue title lookup", () => {
+  const fixture = setupRepo({ dirty: true });
+  const result = runRecover(fixture, [
+    "--reason", "executor completed before commit",
+    "--pr-title", "Operator supplied recovery title",
+    "--json",
+  ]);
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(findGhCall(fixture, "issue", "view"), undefined);
+  const prCreate = findGhCall(fixture, "pr", "create");
+  assert.equal(ghArg(prCreate, "--title"), "Operator supplied recovery title");
+});
+
+test("issue lookup failure falls back to existing recovery title", () => {
+  const fixture = setupRepo({ dirty: true, ghState: { failIssueView: "not found" } });
+  const result = runRecover(fixture, ["--reason", "executor completed before commit", "--json"]);
+
+  assert.equal(result.status, 0, result.stderr);
+  const issueView = findGhCall(fixture, "issue", "view");
+  assert.deepEqual(issueView, ["issue", "view", "281", "--json", "title,number"]);
+  const prCreate = findGhCall(fixture, "pr", "create");
+  assert.equal(ghArg(prCreate, "--title"), `Recover ${fixture.branch} (${fixture.runId})`);
 });
 
 test("dirty worktree recovery rebrands execution evidence to the created commit and emits event", () => {
@@ -309,7 +397,7 @@ test("unknown run id fails through resolveManifestRecord", () => {
   assert.match(result.stderr, /No relay manifest found/);
 });
 
-test("dry-run previews commands without committing, calling gh, or mutating manifest", () => {
+test("dry-run previews commands and computed PR title without committing or mutating manifest", () => {
   const fixture = setupRepo({ dirty: true });
   const beforeHead = execFileSync("git", ["-C", fixture.worktreePath, "rev-parse", "HEAD"], { encoding: "utf-8" }).trim();
   const result = runRecover(fixture, ["--reason", "preview only", "--dry-run", "--json"]);
@@ -317,13 +405,18 @@ test("dry-run previews commands without committing, calling gh, or mutating mani
   assert.equal(result.status, 0, result.stderr);
   const parsed = JSON.parse(result.stdout);
   assert.equal(parsed.status, "dry_run");
+  assert.equal(parsed.prTitle, "Recover commit should use the issue title (#281)");
+  assert.equal(parsed.prTitleSource, "manifest_issue");
+  assert.equal(parsed.prTitleIssueNumber, 281);
   assert.ok(parsed.commands.some((cmd) => cmd.argv.includes("add") && cmd.argv.includes("-A")));
   assert.ok(parsed.commands.some((cmd) => cmd.argv.includes("commit")));
   assert.ok(parsed.commands.some((cmd) => cmd.argv.includes("push")));
   assert.ok(parsed.commands.some((cmd) => cmd.argv.includes("create")));
+  const prCreate = parsed.commands.find((cmd) => cmd.argv[1] === "pr" && cmd.argv[2] === "create");
+  assert.equal(ghArg(prCreate.argv, "--title"), "Recover commit should use the issue title (#281)");
   assert.equal(readManifest(fixture.manifestPath).data.git.pr_number, null);
   assert.equal(readRunEvents(fixture.repoRoot, fixture.runId).length, 0);
-  assert.equal(readJsonLines(fixture.ghLogPath).length, 0);
+  assert.deepEqual(readJsonLines(fixture.ghLogPath), [["issue", "view", "281", "--json", "title,number"]]);
   assert.equal(execFileSync("git", ["-C", fixture.worktreePath, "rev-parse", "HEAD"], { encoding: "utf-8" }).trim(), beforeHead);
 });
 
@@ -353,6 +446,23 @@ test("closed terminal state rejection matches finalize-run force-finalize shape"
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /force-finalize cannot be used from terminal state closed/);
   assert.equal(readManifest(fixture.manifestPath).data.state, STATES.CLOSED);
+});
+
+test("existing PR reuse does not create or rename a PR", () => {
+  const fixture = setupRepo({ dirty: true, ghState: { existingPrNumber: 333 } });
+  const result = runRecover(fixture, ["--reason", "recover onto existing PR", "--json"]);
+
+  assert.equal(result.status, 0, result.stderr);
+  const parsed = JSON.parse(result.stdout);
+  assert.equal(parsed.existingPr, true);
+  assert.equal(parsed.prCreated, false);
+  assert.equal(parsed.prNumber, 333);
+
+  const calls = readJsonLines(fixture.ghLogPath);
+  assert.equal(calls.filter((argv) => argv[0] === "pr" && argv[1] === "create").length, 0);
+  assert.equal(calls.filter((argv) => argv[0] === "pr" && argv[1] === "edit").length, 0);
+  assert.equal(calls.filter((argv) => argv[0] === "issue" && argv[1] === "view").length, 0);
+  assert.equal(readManifest(fixture.manifestPath).data.git.pr_number, 333);
 });
 
 test("idempotent re-run reuses existing PR without restamping or creating a second PR", () => {
