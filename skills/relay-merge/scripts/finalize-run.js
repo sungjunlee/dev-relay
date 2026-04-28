@@ -48,7 +48,7 @@ const {
   writeManifest,
 } = require("../../relay-dispatch/scripts/manifest/store");
 const { resolveManifestRecord } = require("../../relay-dispatch/scripts/relay-resolver");
-const { appendRunEvent } = require("../../relay-dispatch/scripts/relay-events");
+const { appendRunEvent, EVENTS } = require("../../relay-dispatch/scripts/relay-events");
 const { runCleanup } = require("../../relay-dispatch/scripts/manifest/cleanup");
 const {
   getArg: sharedGetArg,
@@ -398,7 +398,7 @@ function main() {
       if (skipReviewFailure) {
         if (!dryRun) {
           appendRunEvent(repoPath, safeData.run_id, {
-            event: "merge_blocked",
+            event: EVENTS.MERGE_BLOCKED,
             state_from: safeData.state,
             state_to: safeData.state,
             head_sha: currentHeadSha,
@@ -418,7 +418,7 @@ function main() {
       if (!dryRun) {
         const skipComment = buildSkipComment(skipReviewReason, skipReviewRubricAudit);
         appendRunEvent(repoPath, safeData.run_id, {
-          event: "skip_review",
+          event: EVENTS.SKIP_REVIEW,
           state_from: safeData.state,
           state_to: safeData.state,
           head_sha: currentHeadSha,
@@ -441,7 +441,7 @@ function main() {
       if (!reviewGate.readyToMerge) {
         if (!dryRun) {
           appendRunEvent(repoPath, safeData.run_id, {
-            event: "merge_blocked",
+            event: EVENTS.MERGE_BLOCKED,
             state_from: safeData.state,
             state_to: safeData.state,
             head_sha: reviewGate.latestCommit || currentHeadSha,
@@ -461,7 +461,7 @@ function main() {
   if (mergeAllowed) {
     if (forceFinalizeNonready && !dryRun) {
       appendRunEvent(repoPath, safeData.run_id, {
-        event: "force_finalize",
+        event: EVENTS.FORCE_FINALIZE,
         state_from: safeData.state,
         state_to: STATES.MERGED,
         head_sha: currentHeadSha,
@@ -511,7 +511,7 @@ function main() {
         if (prMergeState.state === "MERGED") break;
         if (prMergeState.state === "OPEN") {
           appendRunEvent(repoPath, safeData.run_id, {
-            event: "merge_blocked",
+            event: EVENTS.MERGE_BLOCKED,
             state_from: safeData.state,
             state_to: safeData.state,
             head_sha: reviewGate?.latestCommit || currentHeadSha,
@@ -525,7 +525,7 @@ function main() {
       }
       if (prMergeState.state !== "MERGED") {
         appendRunEvent(repoPath, safeData.run_id, {
-          event: "merge_blocked",
+          event: EVENTS.MERGE_BLOCKED,
           state_from: safeData.state,
           state_to: safeData.state,
           head_sha: reviewGate?.latestCommit || currentHeadSha,
@@ -562,7 +562,7 @@ function main() {
     };
     if (!dryRun) {
       appendRunEvent(repoPath, safeData.run_id, {
-        event: "merge_finalize",
+        event: EVENTS.MERGE_FINALIZE,
         state_from: safeData.state,
         state_to: STATES.MERGED,
         head_sha: updated.git?.head_sha || null,
@@ -596,7 +596,7 @@ function main() {
   updated = cleanupResult.updatedData;
   if (!dryRun) {
     appendRunEvent(repoPath, updated.run_id, {
-      event: "cleanup_result",
+      event: EVENTS.CLEANUP_RESULT,
       state_from: updated.state,
       state_to: updated.state,
       head_sha: updated.git?.head_sha || null,

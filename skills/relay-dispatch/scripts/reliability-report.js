@@ -5,7 +5,7 @@ const path = require("path");
 const { STATES } = require("./manifest/lifecycle");
 const { listManifestRecords } = require("./manifest/store");
 const { getArg, hasFlag, modeLabel } = require("./cli-args");
-const { readAllRunEvents } = require("./relay-events");
+const { EVENTS, readAllRunEvents } = require("./relay-events");
 const { extractAllFactors } = require("../../relay-plan/scripts/tdd-flavor");
 
 const args = process.argv.slice(2);
@@ -73,12 +73,12 @@ function hasRecordedReviewActivity(data) {
 }
 
 function isSystemReviewApplyEvent(event) {
-  return event?.event === "review_apply" && event?.origin === "system";
+  return event?.event === EVENTS.REVIEW_APPLY && event?.origin === "system";
 }
 
 function isLegacyReviewerlessReviewApplyEvent(event) {
   return (
-    event?.event === "review_apply"
+    event?.event === EVENTS.REVIEW_APPLY
     && (event?.reviewer === undefined || event?.reviewer === null)
   );
 }
@@ -113,7 +113,7 @@ function buildTierEffectiveness(events) {
   const runFactors = new Map();
 
   for (const event of events) {
-    if (event.event !== "iteration_score" || !event.run_id || !Array.isArray(event.scores)) continue;
+    if (event.event !== EVENTS.ITERATION_SCORE || !event.run_id || !Array.isArray(event.scores)) continue;
     const round = Number(event.round);
     const roundNumber = Number.isFinite(round) ? round : null;
 
@@ -180,7 +180,7 @@ function buildTierEffectiveness(events) {
 }
 
 function buildDivergenceHotspots(events) {
-  const divergenceEvents = events.filter((event) => event.event === "score_divergence" && Array.isArray(event.divergences));
+  const divergenceEvents = events.filter((event) => event.event === EVENTS.SCORE_DIVERGENCE && Array.isArray(event.divergences));
   if (divergenceEvents.length === 0) return null;
 
   const grouped = new Map();
@@ -283,7 +283,7 @@ function buildAutoVsEvalCorrelation(rubricQualityEvents, manifests) {
 
 function buildRubricInsights(events, manifests) {
   const insights = buildEmptyRubricInsights();
-  const rubricQualityEvents = events.filter((event) => event.event === "rubric_quality");
+  const rubricQualityEvents = events.filter((event) => event.event === EVENTS.RUBRIC_QUALITY);
 
   if (rubricQualityEvents.length > 0) {
     insights.quality_grade_distribution = { A: 0, B: 0, C: 0, D: 0 };
@@ -316,7 +316,7 @@ function buildFactorAnalysis(events) {
   const factorsByRun = new Map();
 
   for (const event of events) {
-    if (event.event !== "iteration_score" || !event.run_id) continue;
+    if (event.event !== EVENTS.ITERATION_SCORE || !event.run_id) continue;
     if (!Array.isArray(event.scores) || event.scores.length === 0) continue;
 
     const round = Number(event.round);
@@ -430,7 +430,7 @@ function buildIterationScoreIndex(events) {
   const scoresByRun = new Map();
 
   for (const event of events) {
-    if (event?.event !== "iteration_score" || !event.run_id || !Array.isArray(event.scores)) continue;
+    if (event?.event !== EVENTS.ITERATION_SCORE || !event.run_id || !Array.isArray(event.scores)) continue;
     if (!scoresByRun.has(event.run_id)) {
       scoresByRun.set(event.run_id, new Map());
     }
@@ -532,9 +532,9 @@ function buildModelPerPhase(events) {
 
   for (const event of events) {
     let phase = null;
-    if (event.event === "dispatch_start") {
+    if (event.event === EVENTS.DISPATCH_START) {
       phase = "dispatch";
-    } else if (event.event === "review_invoke") {
+    } else if (event.event === EVENTS.REVIEW_INVOKE) {
       phase = "review";
     }
     if (!phase || !Object.prototype.hasOwnProperty.call(event, "model")) continue;
@@ -556,18 +556,18 @@ function buildModelPerPhase(events) {
 
 function buildReport({ repoRoot, staleHours, now, manifests, events }) {
   const resumeStarts = events.filter((event) => (
-    event.event === "dispatch_start" && event.state_from === STATES.CHANGES_REQUESTED
+    event.event === EVENTS.DISPATCH_START && event.state_from === STATES.CHANGES_REQUESTED
   ));
   const resumeSuccesses = events.filter((event) => (
-    event.event === "dispatch_result" &&
+    event.event === EVENTS.DISPATCH_RESULT &&
     event.state_to === STATES.REVIEW_PENDING &&
     String(event.reason || "").startsWith("same_run_resume:")
   ));
 
   const mergeGateOutcomes = events.filter((event) => (
-    event.event === "merge_blocked" || event.event === "merge_finalize"
+    event.event === EVENTS.MERGE_BLOCKED || event.event === EVENTS.MERGE_FINALIZE
   ));
-  const mergeBlocks = mergeGateOutcomes.filter((event) => event.event === "merge_blocked");
+  const mergeBlocks = mergeGateOutcomes.filter((event) => event.event === EVENTS.MERGE_BLOCKED);
 
   const reviewRuns = new Map();
   for (const manifest of manifests) {
@@ -575,7 +575,7 @@ function buildReport({ repoRoot, staleHours, now, manifests, events }) {
   }
   const maxRoundsCompliant = new Set();
   for (const [runId, maxRounds] of reviewRuns.entries()) {
-    const runEvents = events.filter((event) => event.run_id === runId && event.event === "review_apply");
+    const runEvents = events.filter((event) => event.run_id === runId && event.event === EVENTS.REVIEW_APPLY);
     const overflow = runEvents.some((event) => Number(event.round || 0) > maxRounds);
     if (!overflow) {
       maxRoundsCompliant.add(runId);
@@ -681,7 +681,7 @@ function buildRoleReports({ repoRoot, staleHours, now, manifests, events }) {
 // cases stay visible.
 function buildActingReviewerReports({ repoRoot, staleHours, now, manifests, events }) {
   const reviewApplyEvents = events.filter((event) => (
-    event.event === "review_apply"
+    event.event === EVENTS.REVIEW_APPLY
     && event.run_id
     && !isSystemReviewApplyEvent(event)
     && !isLegacyReviewerlessReviewApplyEvent(event)

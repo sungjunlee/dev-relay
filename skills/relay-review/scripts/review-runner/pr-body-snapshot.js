@@ -1,4 +1,4 @@
-const { appendRunEvent } = require("../../../relay-dispatch/scripts/relay-events");
+const { appendRunEvent, EVENTS } = require("../../../relay-dispatch/scripts/relay-events");
 const { gh, writeText } = require("./common");
 
 const PR_BODY_SNAPSHOT_TIMEOUT_MS = 15000;
@@ -39,7 +39,7 @@ function writePrBodySnapshot({ repoPath, runId, round, prNumber, prBodyPath }) {
     const reason = "PR number is unavailable; cannot fetch PR body";
     writeText(prBodyPath, `${buildFailureSentinel({ runId, round, prNumber, reason })}\n`);
     appendRunEvent(repoPath, runId, {
-      event: "pr_body_snapshot_failed",
+      event: EVENTS.PR_BODY_SNAPSHOT_FAILED,
       round,
       pr_number: prNumber ?? null,
       reason,
@@ -59,7 +59,7 @@ function writePrBodySnapshot({ repoPath, runId, round, prNumber, prBodyPath }) {
     const reason = summarizeGhFailure(error);
     writeText(prBodyPath, `${buildFailureSentinel({ runId, round, prNumber, reason })}\n`);
     appendRunEvent(repoPath, runId, {
-      event: "pr_body_snapshot_failed",
+      event: EVENTS.PR_BODY_SNAPSHOT_FAILED,
       round,
       pr_number: prNumber,
       reason,

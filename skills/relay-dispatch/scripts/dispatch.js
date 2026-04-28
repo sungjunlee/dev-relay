@@ -97,7 +97,7 @@ const { getArg, getPositionals, hasFlag, modeLabel } = require("./cli-args");
 const { formatAttemptsForPrompt, readPreviousAttempts } = require("./manifest/attempts");
 const { STATES, updateManifestState } = require("./manifest/lifecycle");
 const { resolveManifestRecord } = require("./relay-resolver");
-const { appendRunEvent } = require("./relay-events");
+const { appendRunEvent, EVENTS } = require("./relay-events");
 
 // ---------------------------------------------------------------------------
 // Args
@@ -680,7 +680,7 @@ async function main() {
         console.error(`[WARN] Environment drift detected since initial dispatch: ${driftMsg}`);
       }
       appendRunEvent(repoRoot, runId, {
-        event: "environment_drift",
+        event: EVENTS.ENVIRONMENT_DRIFT,
         state_from: manifest.state,
         state_to: manifest.state,
         reason: driftMsg,
@@ -737,7 +737,7 @@ async function main() {
     if (!DRY_RUN) {
       writeManifest(manifestPath, manifest);
       appendRunEvent(repoRoot, runId, {
-        event: "model_hints_updated",
+        event: EVENTS.MODEL_HINTS_UPDATED,
         state_from: manifest.state,
         state_to: manifest.state,
         head_sha: manifest.git?.head_sha || null,
@@ -1021,7 +1021,7 @@ async function main() {
   };
   writeManifest(manifestPath, manifest);
   appendRunEvent(repoRoot, runId, {
-    event: "dispatch_start",
+    event: EVENTS.DISPATCH_START,
     state_from: dispatchFromState,
     state_to: STATES.DISPATCHED,
     head_sha: startHead || null,
@@ -1223,7 +1223,7 @@ async function main() {
   };
   writeManifest(manifestPath, manifest);
   appendRunEvent(repoRoot, runId, {
-    event: "dispatch_result",
+    event: EVENTS.DISPATCH_RESULT,
     state_from: STATES.DISPATCHED,
     state_to: manifest.state,
     head_sha: currentHead || startHead || null,

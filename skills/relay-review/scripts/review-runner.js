@@ -4,7 +4,7 @@ const path = require("path");
 const { STATES } = require("../../relay-dispatch/scripts/manifest/lifecycle");
 const { ensureRunLayout, getRunDir } = require("../../relay-dispatch/scripts/manifest/paths");
 const { writeManifest } = require("../../relay-dispatch/scripts/manifest/store");
-const { appendIterationScore, appendRunEvent, appendScoreDivergence } = require("../../relay-dispatch/scripts/relay-events");
+const { appendIterationScore, appendRunEvent, appendScoreDivergence, EVENTS } = require("../../relay-dispatch/scripts/relay-events");
 const { git, writeText } = require("./review-runner/common");
 const {
   applyReviewerIdentity,
@@ -145,9 +145,9 @@ function run() {
     };
     const escalatedManifest = applyPolicyViolationToManifest(data, Number(data.review?.rounds || 0), prNumber, reviewedHeadSha, "max_rounds_exceeded", { escalationDecision });
     writeManifest(manifestPath, escalatedManifest, body);
-    appendRunEvent(runRepoPath, data.run_id, { event: "escalation_decision", state_from: data.state, state_to: STATES.ESCALATED, head_sha: reviewedHeadSha, ...escalationDecision });
+    appendRunEvent(runRepoPath, data.run_id, { event: EVENTS.ESCALATION_DECISION, state_from: data.state, state_to: STATES.ESCALATED, head_sha: reviewedHeadSha, ...escalationDecision });
     appendRunEvent(runRepoPath, data.run_id, {
-      event: "review_apply",
+      event: EVENTS.REVIEW_APPLY,
       state_from: data.state,
       state_to: STATES.ESCALATED,
       head_sha: reviewedHeadSha,
@@ -332,9 +332,9 @@ function run() {
   };
   updatedManifest = applyReviewerIdentity(updatedManifest, noComment, runRepoPath);
   writeManifest(manifestPath, updatedManifest, body);
-  appendRunEvent(runRepoPath, data.run_id, { event: "escalation_decision", state_from: data.state, state_to: updatedManifest.state, head_sha: reviewedHeadSha, ...escalationDecision });
+  appendRunEvent(runRepoPath, data.run_id, { event: EVENTS.ESCALATION_DECISION, state_from: data.state, state_to: updatedManifest.state, head_sha: reviewedHeadSha, ...escalationDecision });
   appendRunEvent(runRepoPath, data.run_id, {
-    event: "review_apply",
+    event: EVENTS.REVIEW_APPLY,
     state_from: data.state,
     state_to: updatedManifest.state,
     head_sha: reviewedHeadSha,

@@ -36,7 +36,7 @@ const {
   writeManifest,
 } = require("../../relay-dispatch/scripts/manifest/store");
 const { resolveManifestRecord } = require("../../relay-dispatch/scripts/relay-resolver");
-const { appendRunEvent } = require("../../relay-dispatch/scripts/relay-events");
+const { appendRunEvent, EVENTS } = require("../../relay-dispatch/scripts/relay-events");
 const { getArg: sharedGetArg, hasFlag: sharedHasFlag } = require("../../relay-dispatch/scripts/cli-args");
 
 const args = process.argv.slice(2);
@@ -215,7 +215,7 @@ function main() {
 
   if (skipReviewReason) {
     appendRunEvent(repoPath, safeData.run_id, {
-      event: "skip_review",
+      event: EVENTS.SKIP_REVIEW,
       state_from: safeData.state,
       state_to: safeData.state,
       head_sha: safeData.git?.head_sha || null,
@@ -225,7 +225,7 @@ function main() {
     });
   }
   appendRunEvent(repoPath, safeData.run_id, {
-    event: "force_finalize",
+    event: EVENTS.FORCE_FINALIZE,
     state_from: safeData.state,
     state_to: STATES.MERGED,
     head_sha: safeData.git?.head_sha || null,
