@@ -1,7 +1,7 @@
-const { execFileSync } = require("child_process");
 const fs = require("fs");
 const path = require("path");
 
+const { execGit } = require("../exec");
 const { validateManifestPaths } = require("./paths");
 const { summarizeError } = require("./store");
 
@@ -53,32 +53,22 @@ function updateManifestCleanup(data, cleanupPatch = {}, nextAction = data.next_a
   };
 }
 
-function gitExec(gitBin, repoPath, ...gitArgs) {
-  return execFileSync(gitBin, ["-C", repoPath, ...gitArgs], {
-    encoding: "utf-8",
-    stdio: "pipe",
-  }).trim();
-}
-
-function localBranchExists(gitBin, repoRoot, branch) {
+function localBranchExists(repoRoot, branch) {
   if (!branch) return false;
   try {
-    gitExec(gitBin, repoRoot, "rev-parse", "--verify", `refs/heads/${branch}`);
+    execGit(repoRoot, ["rev-parse", "--verify", `refs/heads/${branch}`]);
     return true;
   } catch {
     return false;
   }
 }
 
-function readWorktreeStatus(gitBin, worktreePath) {
+function readWorktreeStatus(worktreePath) {
   if (!worktreePath || !fs.existsSync(worktreePath)) {
     return { exists: false, clean: true, text: "" };
   }
   try {
-    const status = execFileSync(gitBin, ["-C", worktreePath, "status", "--short", "--untracked-files=all"], {
-      encoding: "utf-8",
-      stdio: "pipe",
-    }).trim();
+    const status = execGit(worktreePath, ["status", "--short", "--untracked-files=all"]);
     return { exists: true, clean: status === "", text: status };
   } catch (error) {
     return { exists: true, clean: false, text: `unable to inspect worktree: ${summarizeError(error)}` };
@@ -113,7 +103,6 @@ function removePrunedRelayWorktreeDirectory(worktreePath, relayWorktreeBase) {
 function runCleanup({
   repoRoot,
   data,
-  gitBin = "git",
   dryRun = false,
   deleteMergedBranch = false,
   acceptPrunedRelayOwned = false,
@@ -135,11 +124,11 @@ function runCleanup({
   const attemptedAt = nowIso();
   const worktreePath = normalizedData.paths?.worktree || null;
   const branch = normalizedData.git?.working_branch || null;
-  const worktreeStatus = readWorktreeStatus(gitBin, worktreePath);
+  const worktreeStatus = readWorktreeStatus(worktreePath);
   const allowPrunedRelayWorktreeRemoval = acceptPrunedRelayOwned
     && validatedPaths.prunedRelayOwnedForCleanup
     && validatedPaths.worktreeLocation === "relay_worktree";
-  const branchExistsBefore = localBranchExists(gitBin, repoRoot, branch);
+  const branchExistsBefore = localBranchExists(repoRoot, branch);
   const errors = [];
 
   let worktreeRemoved = !worktreeStatus.exists;
@@ -153,7 +142,7 @@ function runCleanup({
   if (errors.length === 0 && worktreeStatus.exists) {
     if (!dryRun) {
       try {
-        gitExec(gitBin, repoRoot, "worktree", "remove", "--force", worktreePath);
+        execGit(repoRoot, ["worktree", "remove", "--force", worktreePath]);
         worktreeRemoved = true;
       } catch (error) {
         if (allowPrunedRelayWorktreeRemoval) {
@@ -178,7 +167,7 @@ function runCleanup({
   if (errors.length === 0 && deleteMergedBranch && branch && branchExistsBefore) {
     if (!dryRun) {
       try {
-        gitExec(gitBin, repoRoot, "branch", "-D", branch);
+        execGit(repoRoot, ["branch", "-D", branch]);
         branchDeleted = true;
       } catch (error) {
         errors.push(`branch delete failed: ${summarizeError(error)}`);
@@ -189,7 +178,7 @@ function runCleanup({
   if (errors.length === 0) {
     if (!dryRun) {
       try {
-        gitExec(gitBin, repoRoot, "worktree", "prune");
+        execGit(repoRoot, ["worktree", "prune"]);
         pruneRan = true;
       } catch (error) {
         errors.push(`worktree prune failed: ${summarizeError(error)}`);

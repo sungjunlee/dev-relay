@@ -38,6 +38,7 @@ const {
   registerWorktree,
 } = require("./worktree-runtime");
 const { getArg, getPositionals, hasFlag, modeLabel } = require("./cli-args");
+const { execGit } = require("./exec");
 
 // ---------------------------------------------------------------------------
 // Args
@@ -136,10 +137,6 @@ if (REGISTER) {
 // Helpers
 // ---------------------------------------------------------------------------
 
-function git(repoDir, ...gitArgs) {
-  return execFileSync("git", ["-C", repoDir, ...gitArgs], { encoding: "utf-8" }).trim();
-}
-
 function assertWithin(base, resolved, label) {
   const norm = path.resolve(resolved);
   if (!norm.startsWith(base + path.sep) && norm !== base) {
@@ -171,7 +168,7 @@ function main() {
     branch = BRANCH;
     if (!branch) {
       try {
-        branch = git(wtPath, "rev-parse", "--abbrev-ref", "HEAD");
+        branch = execGit(wtPath, ["rev-parse", "--abbrev-ref", "HEAD"]);
       } catch {
         console.error("Error: --branch required (could not detect from worktree)");
         process.exit(1);

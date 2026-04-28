@@ -116,7 +116,6 @@ function run() {
   const dryRun = hasCliFlag("--dry-run");
   const all = hasCliFlag("--all");
   const jsonOut = hasCliFlag("--json");
-  const gitBin = process.env.RELAY_GIT_BIN || "git";
   const olderThanHours = all ? 0 : parseHours(getArg(args, "--older-than", "24", CLI_ARG_OPTIONS), "--older-than");
   const now = Date.now();
   const cutoff = now - olderThanHours * 60 * 60 * 1000;
@@ -204,7 +203,6 @@ function run() {
     const cleanupResult = runCleanup({
       repoRoot,
       data: normalizedData,
-      gitBin,
       dryRun,
       deleteMergedBranch: normalizedData.state === "merged",
       acceptPrunedRelayOwned: true,
