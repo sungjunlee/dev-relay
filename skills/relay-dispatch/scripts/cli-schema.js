@@ -16,6 +16,7 @@ const VALUE = "value";
 
 const FLAGS = [
   { flag: "--all", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Presence flag; no value is consumed." },
+  { flag: "--allow-same-head", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Explicit same-HEAD recovery opt-in; no value is consumed." },
   { flag: "--artifact-path", kind: VALUE, mode: MODE_VERBATIM, valueName: "<path>", rationale: "Operator-supplied artifact path being reconciled; keep the literal argv token." },
   { flag: "--branch", aliases: ["-b"], kind: VALUE, mode: MODE_VERBATIM, valueName: "<name>", rationale: "Git branch names are operator-supplied and may legally begin with --." },
   { flag: "--by-acting-reviewer", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Presence flag; no value is consumed." },
@@ -68,6 +69,7 @@ const FLAGS = [
   { flag: "--repeated-issue-count", kind: VALUE, mode: MODE_PARSED, valueName: "<n>", rationale: "Numeric review field; flag-like following tokens should mean the value is missing." },
   { flag: "--repo", kind: VALUE, mode: MODE_VERBATIM, valueName: "<path>", rationale: "Operator-supplied repository path; keep the literal argv token." },
   { flag: "--request-id", kind: VALUE, mode: MODE_PARSED, valueName: "<id>", rationale: "Structured relay-intake identifier; flag-like following tokens should mean the value is missing." },
+  { flag: "--require-pr-body-change", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Require audited PR body evidence for same-HEAD recovery; no value is consumed." },
   { flag: "--review-file", kind: VALUE, mode: MODE_VERBATIM, valueName: "<path>", rationale: "Operator-supplied verdict path; keep the literal argv token." },
   { flag: "--reviewer", kind: VALUE, mode: MODE_PARSED, valueName: "<name>", rationale: "Reviewer adapter selector; flag-like following tokens should mean the value is missing." },
   { flag: "--reviewer-model", kind: VALUE, mode: MODE_PARSED, valueName: "<name>", rationale: "Reviewer model selector; flag-like following tokens should mean the value is missing." },
@@ -143,6 +145,7 @@ const COMMAND_FLAGS = {
   ],
   "recover-state": [
     "--repo", "--run-id", "--manifest", "--to", "--reason", "--force", "--dry-run", "--json", "--help",
+    "--allow-same-head", "--require-pr-body-change",
   ],
   "recover-commit": [
     "--repo", "--run-id", "--manifest", "--reason", "--pr-title", "--pr-body-file",
