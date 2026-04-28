@@ -8,17 +8,17 @@ const fs = require("fs");
 const path = require("path");
 const { REVIEWER_VERDICT_JSON_SCHEMA } = require("./review-schema");
 const {
-  getArg: sharedGetArg,
-  hasFlag: sharedHasFlag,
+  bindCliArgs,
   modeLabel,
 } = require("../../relay-dispatch/scripts/cli-args");
 const { summarizeFailure, ensureJsonText } = require("./reviewer-helpers");
 
 const args = process.argv.slice(2);
 const KNOWN_FLAGS = ["--repo", "--prompt-file", "--model", "--json", "--help", "-h"];
-const CLI_ARG_OPTIONS = { commandName: "invoke-reviewer-claude", reservedFlags: KNOWN_FLAGS };
-const getArg = (flag, fallback) => sharedGetArg(args, flag, fallback, CLI_ARG_OPTIONS);
-const hasFlag = (flag) => sharedHasFlag(args, flag, CLI_ARG_OPTIONS);
+const { getArg, hasFlag } = bindCliArgs(args, {
+  commandName: "invoke-reviewer-claude",
+  reservedFlags: KNOWN_FLAGS,
+});
 const CLAUDE_AUTH_PATTERNS = [/not logged/i, /please run \/login/i];
 
 if (!args.length || hasFlag(["--help", "-h"])) {

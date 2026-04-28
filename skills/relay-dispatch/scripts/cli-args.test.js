@@ -1,7 +1,24 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 
-const { getArg, hasFlag } = require("./cli-args");
+const { bindCliArgs, getArg, hasFlag } = require("./cli-args");
+
+test("bindCliArgs returns callable bound helpers and options", () => {
+  const bound = bindCliArgs(["--repo", "/tmp/repo", "--json"], {
+    commandName: "persist-request",
+    reservedFlags: ["--repo", "--json"],
+  });
+
+  assert.deepEqual(Object.keys(bound).sort(), ["getArg", "hasFlag", "options"]);
+  assert.equal(typeof bound.getArg, "function");
+  assert.equal(typeof bound.hasFlag, "function");
+  assert.deepEqual(bound.options, {
+    commandName: "persist-request",
+    reservedFlags: ["--repo", "--json"],
+  });
+  assert.equal(bound.getArg("--repo"), "/tmp/repo");
+  assert.equal(bound.hasFlag("--json"), true);
+});
 
 test("getArg returns the value for a present single flag", () => {
   // Anti-theater: rejects the naive `args[args.indexOf(flag) + 1]` helper once the value is a

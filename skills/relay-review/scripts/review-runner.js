@@ -38,16 +38,16 @@ const { writePrBodySnapshot } = require("./review-runner/pr-body-snapshot");
 const { loadReviewText, resolveReviewerName, resolveReviewerScript } = require("./review-runner/reviewer-invoke");
 const { maybeSwapReviewer } = require("./review-runner/reviewer-swap");
 const {
-  getArg: sharedGetArg,
-  hasFlag: sharedHasFlag,
+  bindCliArgs,
   modeLabel,
 } = require("../../relay-dispatch/scripts/cli-args");
 
 const args = process.argv.slice(2);
 const KNOWN_FLAGS = ["--repo", "--run-id", "--branch", "--pr", "--manifest", "--done-criteria-file", "--diff-file", "--review-file", "--reviewer", "--reviewer-script", "--reviewer-model", "--prepare-only", "--no-comment", "--json", "--help", "-h"];
-const CLI_ARG_OPTIONS = { commandName: "review-runner", reservedFlags: KNOWN_FLAGS };
-const getArg = (flag, fallback) => sharedGetArg(args, flag, fallback, CLI_ARG_OPTIONS);
-const hasFlag = (flag) => sharedHasFlag(args, flag, CLI_ARG_OPTIONS);
+const { getArg, hasFlag } = bindCliArgs(args, {
+  commandName: "review-runner",
+  reservedFlags: KNOWN_FLAGS,
+});
 
 if (require.main === module && (!args.length || hasFlag(["--help", "-h"]))) {
   console.log("Usage: review-runner.js --repo <path> (--run-id <id> | --branch <name> | --pr <number>) [options]");
