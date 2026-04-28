@@ -14,6 +14,7 @@ const {
   loadProjectConventions,
   loadRubricFromRunDir,
   parseRemoteHost,
+  resolveIssueNumber,
 } = require("./review-runner/context");
 const { buildPrompt } = require("./review-runner/prompt");
 
@@ -30,6 +31,127 @@ function createRunFixture() {
   const { runDir } = ensureRunLayout(repoRoot, runId);
   return { repoRoot, runDir, runId };
 }
+
+function withFakeGh(fixture, callback) {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-gh-repo-"));
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-gh-bin-"));
+  const ghPath = path.join(binDir, "gh");
+  fs.writeFileSync(ghPath, `#!/usr/bin/env node
+const fixture = JSON.parse(process.env.RELAY_REVIEW_FAKE_GH_FIXTURE || "{}");
+const args = process.argv.slice(2);
+
+if (fixture.failOnCall) {
+  process.stderr.write("gh should not have been called");
+  process.exit(91);
+}
+
+if (args[0] === "pr" && args[1] === "view") {
+  const jsonIndex = args.indexOf("--json");
+  const fields = jsonIndex === -1 ? "" : args[jsonIndex + 1];
+  if (fields === "closingIssuesReferences,body,headRefName") {
+    process.stdout.write(JSON.stringify({
+      closingIssuesReferences: fixture.closingIssuesReferences || [],
+      body: fixture.body || "",
+      headRefName: fixture.headRefName || "",
+    }));
+    process.exit(0);
+  }
+}
+
+process.stderr.write("Unsupported gh invocation: " + args.join(" "));
+process.exit(1);
+`, "utf-8");
+  fs.chmodSync(ghPath, 0o755);
+
+  const originalPath = process.env.PATH;
+  const originalFixture = process.env.RELAY_REVIEW_FAKE_GH_FIXTURE;
+  process.env.PATH = `${binDir}:${originalPath}`;
+  process.env.RELAY_REVIEW_FAKE_GH_FIXTURE = JSON.stringify(fixture);
+  try {
+    return callback(repoRoot);
+  } finally {
+    process.env.PATH = originalPath;
+    if (originalFixture === undefined) {
+      delete process.env.RELAY_REVIEW_FAKE_GH_FIXTURE;
+    } else {
+      process.env.RELAY_REVIEW_FAKE_GH_FIXTURE = originalFixture;
+    }
+  }
+}
+
+test("context/resolveIssueNumber prefers manifest issue before GitHub fallbacks", () => {
+  withFakeGh({ failOnCall: true }, (repoRoot) => {
+    const issueNumber = resolveIssueNumber(repoRoot, 123, "issue-42", {
+      issue: { number: 77 },
+    });
+
+    assert.equal(issueNumber, 77);
+  });
+});
+
+test("context/resolveIssueNumber accepts explicit PR body closing keywords", async (t) => {
+  const cases = [
+    ["fixes", "Fixes #51", 51],
+    ["closes", "Closes #52", 52],
+    ["resolves", "Resolves #53", 53],
+    ["fix", "Fix #54", 54],
+    ["close", "Close #55", 55],
+    ["resolve", "Resolve #56", 56],
+  ];
+
+  for (const [label, body, expected] of cases) {
+    await t.test(label, () => {
+      withFakeGh({
+        body,
+        closingIssuesReferences: [{ number: 99 }],
+        headRefName: "issue-12",
+      }, (repoRoot) => {
+        assert.equal(resolveIssueNumber(repoRoot, 123, null, {}), expected);
+      });
+    });
+  }
+});
+
+test("context/resolveIssueNumber ignores Refs, Related, and incidental issue prose", () => {
+  withFakeGh({
+    body: "Refs #31\nRelated to #32\nSprint 3, #33 should stay incidental.",
+    closingIssuesReferences: [],
+    headRefName: "feature/issue-44-review-anchor",
+  }, (repoRoot) => {
+    assert.equal(resolveIssueNumber(repoRoot, 123, null, {}), 44);
+  });
+});
+
+test("context/resolveIssueNumber treats closingIssuesReferences as the weakest fallback", () => {
+  withFakeGh({
+    body: "",
+    closingIssuesReferences: [{ number: 99 }],
+    headRefName: "feature/issue-44-review-anchor",
+  }, (repoRoot) => {
+    assert.equal(resolveIssueNumber(repoRoot, 123, null, {}), 44);
+  });
+
+  withFakeGh({
+    body: "",
+    closingIssuesReferences: [{ number: 99 }],
+    headRefName: "feature/no-issue-anchor",
+  }, (repoRoot) => {
+    assert.equal(resolveIssueNumber(repoRoot, 123, null, {}), 99);
+  });
+});
+
+test("context/resolveIssueNumber rejects multiple inferred closing refs without a stronger anchor", () => {
+  withFakeGh({
+    body: "Refs #31\nRelated to #32",
+    closingIssuesReferences: [{ number: 99 }, { number: 100 }],
+    headRefName: "feature/no-issue-anchor",
+  }, (repoRoot) => {
+    assert.throws(
+      () => resolveIssueNumber(repoRoot, 123, null, {}),
+      /Ambiguous GitHub closing issue references for PR #123: #99, #100.*manifest\.issue\.number.*anchor\.done_criteria_path/s
+    );
+  });
+});
 
 test("context/loadRubricFromRunDir preserves the rubric state matrix", async (t) => {
   const cases = [

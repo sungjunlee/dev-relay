@@ -1,10 +1,14 @@
 #!/usr/bin/env bash
-# Resolve the GitHub issue number associated with a PR.
+# Resolve the GitHub issue number associated with a PR for legacy manual review.
 #
-# Tries three fallbacks in order, prints the first match to stdout:
-#   1. PR's `closingIssuesReferences` API field (gh-linked issue)
-#   2. PR body grep for `(closes|fixes|resolves|refs|related to) #N`
-#   3. Branch name — `issue-N` first, then any trailing number
+# `review-runner/context.js` is the canonical resolver. This helper mirrors its
+# conservative fallback order where manual shell review still uses it:
+#   1. PR body explicit closing keywords: Fix/Fixes, Close/Closes, Resolve/Resolves
+#   2. Branch name — `issue-N`
+#   3. A single PR `closingIssuesReferences` API entry
+#
+# Manifest issue anchors and file-backed Done Criteria anchors are runner-only;
+# pass those to review-runner instead of this helper.
 #
 # Usage:  resolve-issue-number.sh <PR_NUMBER> [<BRANCH>]
 # Stdout: the resolved issue number
@@ -15,28 +19,46 @@ set -euo pipefail
 PR_NUM="${1:?usage: resolve-issue-number.sh <PR_NUMBER> [<BRANCH>]}"
 BRANCH="${2:-}"
 
-# Method 1: PR-linked issue via gh API
-ISSUE_NUM=$(gh pr view "$PR_NUM" --json closingIssuesReferences \
-  -q '.closingIssuesReferences[0].number' 2>/dev/null || true)
-[ "$ISSUE_NUM" = "null" ] && ISSUE_NUM=""
+PR_JSON=$(gh pr view "$PR_NUM" --json closingIssuesReferences,body,headRefName 2>/dev/null || true)
 
-# Method 2: PR body keyword grep
-if [ -z "$ISSUE_NUM" ]; then
-  ISSUE_NUM=$(gh pr view "$PR_NUM" --json body -q '.body' 2>/dev/null \
-    | grep -oiE '(closes|fixes|resolves|refs|related to) #[0-9]+' \
-    | grep -oE '[0-9]+' \
-    | head -1 || true)
-fi
+set +e
+ISSUE_NUM=$(PR_JSON="$PR_JSON" BRANCH="$BRANCH" PR_NUM="$PR_NUM" node <<'NODE'
+const parsed = process.env.PR_JSON ? JSON.parse(process.env.PR_JSON) : {};
+const unique = (values) => [...new Set(values.map(Number).filter((number) => Number.isInteger(number) && number > 0))];
 
-# Method 3: branch name (issue-N preferred, else trailing digits)
-if [ -z "$ISSUE_NUM" ]; then
-  if [ -z "$BRANCH" ]; then
-    BRANCH=$(gh pr view "$PR_NUM" --json headRefName -q '.headRefName' 2>/dev/null || true)
-  fi
-  ISSUE_NUM=$(echo "$BRANCH" | grep -oE 'issue-[0-9]+' | grep -oE '[0-9]+' || true)
-  if [ -z "$ISSUE_NUM" ]; then
-    ISSUE_NUM=$(echo "$BRANCH" | grep -oE '[0-9]+' | tail -1 || true)
-  fi
+const bodyMatches = String(parsed.body || "").matchAll(/\b(?:close|closes|fix|fixes|resolve|resolves)\s+#(\d+)\b/gi);
+const bodyNumbers = unique([...bodyMatches].map((match) => match[1]));
+if (bodyNumbers.length > 1) {
+  console.error(`ERROR: Ambiguous PR body closing keywords reference multiple issues: ${bodyNumbers.map((number) => `#${number}`).join(", ")}.`);
+  process.exit(2);
+}
+if (bodyNumbers.length === 1) {
+  console.log(bodyNumbers[0]);
+  process.exit(0);
+}
+
+const branch = process.env.BRANCH || parsed.headRefName || "";
+const branchMatch = String(branch).match(/issue-(\d+)/i);
+if (branchMatch) {
+  console.log(branchMatch[1]);
+  process.exit(0);
+}
+
+const closingNumbers = unique((Array.isArray(parsed.closingIssuesReferences) ? parsed.closingIssuesReferences : []).map((reference) => reference && reference.number));
+if (closingNumbers.length > 1) {
+  console.error(`ERROR: Ambiguous GitHub closing issue references for PR #${process.env.PR_NUM}: ${closingNumbers.map((number) => `#${number}`).join(", ")}. Provide an explicit Done Criteria anchor.`);
+  process.exit(2);
+}
+if (closingNumbers.length === 1) {
+  console.log(closingNumbers[0]);
+}
+NODE
+)
+STATUS=$?
+set -e
+
+if [ "$STATUS" -ne 0 ]; then
+  exit "$STATUS"
 fi
 
 if [ -z "$ISSUE_NUM" ]; then
