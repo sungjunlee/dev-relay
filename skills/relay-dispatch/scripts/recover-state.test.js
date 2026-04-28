@@ -15,13 +15,14 @@ const {
   updateManifestState,
   writeManifest,
 } = require("./relay-manifest");
+const { readRunEvents } = require("./relay-events");
 
 const SCRIPT = path.join(__dirname, "recover-state.js");
 
 // Runs the manifest through DRAFT -> DISPATCHED -> REVIEW_PENDING -> desired end state.
 // After REVIEW_PENDING the fixture records review.last_reviewed_sha = <initial HEAD on branch>
 // so tests can simulate "no fresh commits" vs "fresh commit landed" scenarios.
-function setupRepo({ state = STATES.CHANGES_REQUESTED, branch = "issue-211" } = {}) {
+function setupRepo({ state = STATES.CHANGES_REQUESTED, branch = "issue-211", prNumber = null, githubPrNumber = null } = {}) {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-recover-"));
   const relayHome = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
   process.env.RELAY_HOME = relayHome;
@@ -38,7 +39,8 @@ function setupRepo({ state = STATES.CHANGES_REQUESTED, branch = "issue-211" } = 
   execFileSync("git", ["worktree", "add", worktreePath, "-b", branch], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
 
   const runId = createRunId({ branch, timestamp: new Date("2026-04-17T13:00:00.000Z") });
-  const manifestPath = ensureRunLayout(repoRoot, runId).manifestPath;
+  const runLayout = ensureRunLayout(repoRoot, runId);
+  const manifestPath = runLayout.manifestPath;
   let manifest = createManifestSkeleton({
     repoRoot,
     runId,
@@ -50,9 +52,13 @@ function setupRepo({ state = STATES.CHANGES_REQUESTED, branch = "issue-211" } = 
     executor: "codex",
     reviewer: "codex",
   });
+  manifest.git.pr_number = prNumber;
+  if (githubPrNumber !== null) {
+    manifest.github = { pr_number: githubPrNumber };
+  }
   manifest = updateManifestState(manifest, STATES.DISPATCHED, "await_dispatch_result");
   manifest.anchor.rubric_path = "rubric.yaml";
-  fs.writeFileSync(path.join(ensureRunLayout(repoRoot, runId).runDir, "rubric.yaml"), "rubric:\n  factors:\n    - name: recover-state\n", "utf-8");
+  fs.writeFileSync(path.join(runLayout.runDir, "rubric.yaml"), "rubric:\n  factors:\n    - name: recover-state\n", "utf-8");
   manifest = updateManifestState(manifest, STATES.REVIEW_PENDING, "run_review");
 
   // Record the current HEAD as if review round 1 just completed.
@@ -71,7 +77,7 @@ function setupRepo({ state = STATES.CHANGES_REQUESTED, branch = "issue-211" } = 
 
   writeManifest(manifestPath, manifest);
 
-  return { repoRoot, manifestPath, runId, worktreePath, branch, initialHead };
+  return { repoRoot, manifestPath, runId, runDir: runLayout.runDir, worktreePath, branch, initialHead };
 }
 
 function addCommitOnBranch(worktreePath, branch, filename = "fix.txt") {
@@ -87,6 +93,31 @@ function addCommitOnBranch(worktreePath, branch, filename = "fix.txt") {
   }).trim();
   assert.notEqual(newHead, existing);
   return newHead;
+}
+
+function writeGhPrBodyScript(body) {
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-gh-"));
+  const ghPath = path.join(binDir, "gh");
+  fs.writeFileSync(ghPath, `#!/usr/bin/env node
+const args = process.argv.slice(2);
+if (
+  args[0] === "pr"
+  && args[1] === "view"
+  && args.includes("--json")
+  && args.includes("body")
+  && args.includes("-q")
+  && args[args.indexOf("-q") + 1] === ".body"
+) {
+  process.stdout.write(${JSON.stringify(body)});
+  process.exit(0);
+}
+console.error("unexpected gh args: " + args.join(" "));
+process.exit(2);
+`, "utf-8");
+  fs.chmodSync(ghPath, 0o755);
+  return {
+    PATH: `${binDir}${path.delimiter}${process.env.PATH || ""}`,
+  };
 }
 
 test("changes_requested -> review_pending succeeds after a fresh commit", () => {
@@ -138,6 +169,164 @@ test("changes_requested -> review_pending fails when HEAD equals last_reviewed_s
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /equals review\.last_reviewed_sha/);
   assert.match(result.stderr, /Push the fix commit first/);
+});
+
+test("changes_requested -> review_pending supports audited same-HEAD PR-body-only recovery", () => {
+  const { repoRoot, manifestPath, runId, runDir, initialHead } = setupRepo({
+    state: STATES.CHANGES_REQUESTED,
+    prNumber: 334,
+  });
+  fs.writeFileSync(path.join(runDir, "review-round-1-pr-body.md"), "missing metadata\n", "utf-8");
+  const env = { ...process.env, ...writeGhPrBodyScript("fixed metadata\n") };
+
+  const stdout = execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--run-id", runId,
+    "--to", STATES.REVIEW_PENDING,
+    "--reason", "PR body metadata fixed with gh pr edit",
+    "--allow-same-head",
+    "--require-pr-body-change",
+    "--json",
+  ], { encoding: "utf-8", env });
+
+  const result = JSON.parse(stdout);
+  assert.equal(result.state, STATES.REVIEW_PENDING);
+  assert.equal(result.previousState, STATES.CHANGES_REQUESTED);
+  assert.equal(result.nextAction, "run_review");
+  assert.equal(result.freshCommit, null);
+  assert.equal(result.prBodyOnly.prBodyOnly, true);
+  assert.equal(result.prBodyOnly.currentHead, initialHead);
+  assert.equal(result.prBodyOnly.lastReviewedSha, initialHead);
+  assert.equal(result.prBodyOnly.prNumber, 334);
+  assert.equal(path.basename(result.prBodyOnly.previousSnapshotPath), "review-round-1-pr-body.md");
+
+  const manifest = readManifest(manifestPath).data;
+  assert.equal(manifest.state, STATES.REVIEW_PENDING);
+  assert.equal(manifest.next_action, "run_review");
+  assert.equal(manifest.review.last_reviewed_sha, initialHead, "recovery must NOT auto-reset last_reviewed_sha");
+
+  const event = readRunEvents(repoRoot, runId).find((entry) => entry.event === "state_recovery");
+  assert.equal(event?.head_sha, initialHead);
+  assert.equal(event?.last_reviewed_sha, initialHead);
+  assert.equal(event?.pr_body_only, true);
+  assert.equal(event?.pr_number, 334);
+  assert.equal(event?.reason, "PR body metadata fixed with gh pr edit");
+});
+
+test("same-HEAD PR-body-only recovery requires a PR number", () => {
+  const { repoRoot, runId, runDir } = setupRepo({ state: STATES.CHANGES_REQUESTED });
+  fs.writeFileSync(path.join(runDir, "review-round-1-pr-body.md"), "missing metadata\n", "utf-8");
+  const env = { ...process.env, ...writeGhPrBodyScript("fixed metadata\n") };
+
+  const result = spawnSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--run-id", runId,
+    "--to", STATES.REVIEW_PENDING,
+    "--reason", "PR body metadata fixed",
+    "--allow-same-head",
+    "--require-pr-body-change",
+    "--json",
+  ], { encoding: "utf-8", env });
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /manifest has no PR number/);
+});
+
+test("same-HEAD PR-body-only recovery accepts github.pr_number fallback", () => {
+  const { repoRoot, runId, runDir } = setupRepo({
+    state: STATES.CHANGES_REQUESTED,
+    githubPrNumber: 335,
+  });
+  fs.writeFileSync(path.join(runDir, "review-round-1-pr-body.md"), "missing metadata\n", "utf-8");
+  const env = { ...process.env, ...writeGhPrBodyScript("fixed metadata\n") };
+
+  const stdout = execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--run-id", runId,
+    "--to", STATES.REVIEW_PENDING,
+    "--reason", "PR body metadata fixed",
+    "--allow-same-head",
+    "--require-pr-body-change",
+    "--dry-run",
+    "--json",
+  ], { encoding: "utf-8", env });
+
+  const result = JSON.parse(stdout);
+  assert.equal(result.state, STATES.REVIEW_PENDING);
+  assert.equal(result.dryRun, true);
+  assert.equal(result.prBodyOnly.prNumber, 335);
+});
+
+test("same-HEAD PR-body-only recovery requires a prior PR body snapshot", () => {
+  const { repoRoot, runId } = setupRepo({
+    state: STATES.CHANGES_REQUESTED,
+    prNumber: 334,
+  });
+  const env = { ...process.env, ...writeGhPrBodyScript("fixed metadata\n") };
+
+  const result = spawnSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--run-id", runId,
+    "--to", STATES.REVIEW_PENDING,
+    "--reason", "PR body metadata fixed",
+    "--allow-same-head",
+    "--require-pr-body-change",
+    "--json",
+  ], { encoding: "utf-8", env });
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /no prior PR body snapshot/);
+});
+
+test("same-HEAD PR-body-only recovery compares the latest numbered PR body snapshot", () => {
+  const { repoRoot, runId, runDir } = setupRepo({
+    state: STATES.CHANGES_REQUESTED,
+    prNumber: 334,
+  });
+  fs.writeFileSync(path.join(runDir, "review-round-1-pr-body.md"), "old metadata\n", "utf-8");
+  fs.writeFileSync(path.join(runDir, "review-round-2-pr-body.md"), "fixed metadata\n", "utf-8");
+  fs.writeFileSync(path.join(runDir, "review-round-10-pr-body.md"), "latest metadata\n", "utf-8");
+  const env = { ...process.env, ...writeGhPrBodyScript("latest metadata\n") };
+
+  const result = spawnSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--run-id", runId,
+    "--to", STATES.REVIEW_PENDING,
+    "--reason", "PR body metadata fixed",
+    "--allow-same-head",
+    "--require-pr-body-change",
+    "--json",
+  ], { encoding: "utf-8", env });
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /matches latest prior PR body snapshot review-round-10-pr-body\.md/);
+});
+
+test("same-HEAD PR-body-only recovery requires both explicit opt-in flags", () => {
+  const { repoRoot, runId, runDir } = setupRepo({
+    state: STATES.CHANGES_REQUESTED,
+    prNumber: 334,
+  });
+  fs.writeFileSync(path.join(runDir, "review-round-1-pr-body.md"), "missing metadata\n", "utf-8");
+  const env = { ...process.env, ...writeGhPrBodyScript("fixed metadata\n") };
+
+  const result = spawnSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--run-id", runId,
+    "--to", STATES.REVIEW_PENDING,
+    "--reason", "PR body metadata fixed",
+    "--allow-same-head",
+    "--json",
+  ], { encoding: "utf-8", env });
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /must be passed together/);
 });
 
 test("escalated -> review_pending requires --force; succeeds with --force", () => {

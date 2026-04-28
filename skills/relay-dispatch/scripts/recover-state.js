@@ -16,16 +16,20 @@
 //     independent artifact (git's object db for the branch).
 
 const path = require("path");
+const fs = require("fs");
 const { execFileSync } = require("child_process");
 const { STATES, forceTransitionState } = require("./manifest/lifecycle");
 const {
+  getRunDir,
   validateManifestPaths,
 } = require("./manifest/paths");
 const { writeManifest } = require("./manifest/store");
+const { readTextFileWithoutFollowingSymlinks } = require("./manifest/rubric");
 const { getArg, hasFlag, modeLabel } = require("./cli-args");
 const { resolveManifestRecord } = require("./relay-resolver");
 const { appendRunEvent, EVENTS } = require("./relay-events");
 const CLI_ARG_OPTIONS = { commandName: "recover-state", reservedFlags: ["-h"] };
+const PR_BODY_FETCH_TIMEOUT_MS = 15000;
 
 // Whitelist: recovery transitions that the normal dispatch/review/merge flow does NOT support.
 // If `ALLOWED_TRANSITIONS` in relay-manifest.js changes, this table must be reviewed — recovery
@@ -80,13 +84,17 @@ function printUsage(stream = console.log) {
     `  --to <state>      ${modeLabel("--to")} Recovery target state\n` +
     `  --reason <text>   ${modeLabel("--reason")} Audit reason\n` +
     `  --force           ${modeLabel("--force")} Confirm selected recovery transitions\n` +
+    `  --allow-same-head ${modeLabel("--allow-same-head")} Allow same-HEAD review recovery when PR-body evidence changed\n` +
+    `  --require-pr-body-change ${modeLabel("--require-pr-body-change")} Require current PR body to differ from the latest review snapshot\n` +
     `  --dry-run         ${modeLabel("--dry-run")} Print result without writing\n` +
     `  --json            ${modeLabel("--json")} Output JSON\n` +
     "\n" +
     "Whitelisted recovery transitions:\n" +
     RECOVERY_TRANSITIONS.map((t) => {
       const forceFlag = t.requireForce ? " (--force required)" : "";
-      const freshFlag = t.requireFreshCommit ? " (fresh commit required on branch)" : "";
+      const freshFlag = t.requireFreshCommit
+        ? " (fresh commit required on branch; same-HEAD PR-body-only recovery requires both same-HEAD flags)"
+        : "";
       return `  ${t.from} -> ${t.to}${forceFlag}${freshFlag}`;
     }).join("\n")
   );
@@ -107,7 +115,7 @@ function readHeadSha(repoRoot, branch) {
   return execFileSync("git", args, { encoding: "utf-8", stdio: "pipe" }).trim();
 }
 
-function requireFreshCommitOnBranch({ repoRoot, manifestData }) {
+function getBranchHeadContext({ repoRoot, manifestData }) {
   const branch = manifestData?.git?.working_branch;
   if (!branch) {
     throw new Error(
@@ -127,6 +135,12 @@ function requireFreshCommitOnBranch({ repoRoot, manifestData }) {
   }
 
   const lastReviewedSha = manifestData?.review?.last_reviewed_sha || null;
+  return { currentHead, lastReviewedSha };
+}
+
+function requireFreshCommitOnBranch({ repoRoot, manifestData }) {
+  const { currentHead, lastReviewedSha } = getBranchHeadContext({ repoRoot, manifestData });
+  const branch = manifestData?.git?.working_branch;
   if (lastReviewedSha && currentHead === lastReviewedSha) {
     throw new Error(
       `Refusing recovery: git HEAD for '${branch}' (${currentHead}) equals review.last_reviewed_sha. ` +
@@ -136,6 +150,112 @@ function requireFreshCommitOnBranch({ repoRoot, manifestData }) {
   }
 
   return { currentHead, lastReviewedSha };
+}
+
+function normalizePrBody(text) {
+  return `${String(text || "").replace(/\r\n/g, "\n").replace(/\r/g, "\n").replace(/\n?$/, "\n")}`;
+}
+
+function collapseWhitespace(text) {
+  return String(text || "").replace(/\s+/g, " ").trim();
+}
+
+function summarizeCommandFailure(error) {
+  const status = error?.status ?? error?.signal ?? "unknown";
+  const stderr = collapseWhitespace(error?.stderr || "");
+  const stdout = collapseWhitespace(error?.stdout || "");
+  const message = collapseWhitespace(error?.message || String(error));
+  const detail = stderr || stdout || message || "unknown error";
+  const truncated = detail.length > 500 ? `${detail.slice(0, 497)}...` : detail;
+  return `status ${status}: ${truncated}`;
+}
+
+function getManifestPrNumber(manifestData) {
+  const raw = manifestData?.git?.pr_number ?? manifestData?.github?.pr_number ?? null;
+  const parsed = Number(raw);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
+function findLatestPrBodySnapshot(runDir) {
+  let entries;
+  try {
+    entries = fs.readdirSync(runDir, { withFileTypes: true });
+  } catch (error) {
+    if (error.code === "ENOENT") return null;
+    throw error;
+  }
+
+  const snapshots = entries
+    .map((entry) => {
+      const match = entry.name.match(/^review-round-(\d+)-pr-body\.md$/);
+      if (!match) return null;
+      return {
+        name: entry.name,
+        path: path.join(runDir, entry.name),
+        round: Number(match[1]),
+      };
+    })
+    .filter(Boolean)
+    .sort((left, right) => (right.round - left.round) || left.name.localeCompare(right.name));
+
+  return snapshots[0] || null;
+}
+
+function fetchCurrentPrBody(repoRoot, prNumber) {
+  try {
+    const body = execFileSync(
+      "gh",
+      ["pr", "view", String(prNumber), "--json", "body", "-q", ".body"],
+      {
+        cwd: repoRoot,
+        encoding: "utf-8",
+        stdio: "pipe",
+        timeout: PR_BODY_FETCH_TIMEOUT_MS,
+      }
+    );
+    return normalizePrBody(body);
+  } catch (error) {
+    throw new Error(
+      `Cannot fetch current PR body for PR #${prNumber}: ${summarizeCommandFailure(error)}`
+    );
+  }
+}
+
+function requirePrBodyOnlyEvidence({ repoRoot, manifestData, currentHead, lastReviewedSha }) {
+  const prNumber = getManifestPrNumber(manifestData);
+  if (!prNumber) {
+    throw new Error(
+      "Refusing same-HEAD PR-body-only recovery: manifest has no PR number " +
+      "(expected git.pr_number or github.pr_number)."
+    );
+  }
+
+  const runDir = getRunDir(repoRoot, manifestData.run_id);
+  const latestSnapshot = findLatestPrBodySnapshot(runDir);
+  if (!latestSnapshot) {
+    throw new Error(
+      `Refusing same-HEAD PR-body-only recovery: no prior PR body snapshot found in ${runDir}. ` +
+      "Expected review-round-N-pr-body.md from an earlier review round."
+    );
+  }
+
+  const previousBody = readTextFileWithoutFollowingSymlinks(latestSnapshot.path);
+  const currentBody = fetchCurrentPrBody(repoRoot, prNumber);
+  if (currentBody === normalizePrBody(previousBody)) {
+    throw new Error(
+      "Refusing same-HEAD PR-body-only recovery: current PR body matches latest prior " +
+      `PR body snapshot ${latestSnapshot.name}. Edit the PR body before retrying.`
+    );
+  }
+
+  return {
+    currentHead,
+    lastReviewedSha,
+    prBodyOnly: true,
+    prNumber,
+    previousSnapshotPath: latestSnapshot.path,
+    previousSnapshotRound: latestSnapshot.round,
+  };
 }
 
 function main() {
@@ -152,6 +272,8 @@ function main() {
   const toState = getArg(args, "--to", undefined, CLI_ARG_OPTIONS);
   const reason = getArg(args, "--reason", undefined, CLI_ARG_OPTIONS);
   const force = hasCliFlag("--force");
+  const allowSameHead = hasCliFlag("--allow-same-head");
+  const requirePrBodyChange = hasCliFlag("--require-pr-body-change");
   const dryRun = hasCliFlag("--dry-run");
   const jsonOut = hasCliFlag("--json");
 
@@ -163,6 +285,12 @@ function main() {
   }
   if (!reason) {
     throw new Error("--reason <text> is required (audit trail)");
+  }
+  if (allowSameHead !== requirePrBodyChange) {
+    throw new Error(
+      "--allow-same-head and --require-pr-body-change must be passed together. " +
+      "Same-HEAD recovery is only supported for audited PR-body-only evidence changes."
+    );
   }
 
   const { manifestPath, data, body } = resolveManifestRecord({
@@ -202,11 +330,26 @@ function main() {
   }
 
   let commitContext = null;
+  let prBodyOnlyContext = null;
   if (recovery.requireFreshCommit) {
-    commitContext = requireFreshCommitOnBranch({
+    const headContext = getBranchHeadContext({
       repoRoot: validatedPaths.repoRoot,
       manifestData: safeData,
     });
+    const sameReviewedHead = headContext.lastReviewedSha
+      && headContext.currentHead === headContext.lastReviewedSha;
+    if (sameReviewedHead && allowSameHead && requirePrBodyChange) {
+      prBodyOnlyContext = requirePrBodyOnlyEvidence({
+        repoRoot: validatedPaths.repoRoot,
+        manifestData: safeData,
+        ...headContext,
+      });
+    } else {
+      commitContext = requireFreshCommitOnBranch({
+        repoRoot: validatedPaths.repoRoot,
+        manifestData: safeData,
+      });
+    }
   }
 
   const updated = forceTransitionState(safeData, toState, recovery.nextAction);
@@ -221,10 +364,18 @@ function main() {
       event: EVENTS.STATE_RECOVERY,
       state_from: fromState,
       state_to: toState,
-      head_sha: commitContext?.currentHead || updated.git?.head_sha || null,
-      round: updated.review?.rounds || null,
+      head_sha: commitContext?.currentHead || prBodyOnlyContext?.currentHead || updated.git?.head_sha || null,
+      round: prBodyOnlyContext?.previousSnapshotRound || updated.review?.rounds || null,
       reason,
-      last_reviewed_sha: commitContext?.lastReviewedSha ?? (safeData.review?.last_reviewed_sha || null),
+      last_reviewed_sha: commitContext?.lastReviewedSha
+        ?? prBodyOnlyContext?.lastReviewedSha
+        ?? (safeData.review?.last_reviewed_sha || null),
+      ...(prBodyOnlyContext
+        ? {
+            pr_body_only: true,
+            pr_number: prBodyOnlyContext.prNumber,
+          }
+        : {}),
     });
   }
 
@@ -237,6 +388,7 @@ function main() {
     reason,
     force,
     freshCommit: commitContext,
+    prBodyOnly: prBodyOnlyContext,
     dryRun,
   };
 
@@ -250,6 +402,13 @@ function main() {
     if (commitContext) {
       console.log(`  HEAD sha:     ${commitContext.currentHead}`);
       console.log(`  Prev reviewed: ${commitContext.lastReviewedSha || "(none)"}`);
+    }
+    if (prBodyOnlyContext) {
+      console.log("  PR body only: true");
+      console.log(`  HEAD sha:     ${prBodyOnlyContext.currentHead}`);
+      console.log(`  Prev reviewed: ${prBodyOnlyContext.lastReviewedSha || "(none)"}`);
+      console.log(`  PR number:    ${prBodyOnlyContext.prNumber}`);
+      console.log(`  Snapshot:     ${prBodyOnlyContext.previousSnapshotPath}`);
     }
     if (dryRun) console.log("  dry-run:      no changes written");
   }
