@@ -316,6 +316,34 @@ process.exit(1);
   return filePath;
 }
 
+function writeIssueInferenceGuardGhScript(binDir) {
+  const filePath = path.join(binDir, "gh");
+  fs.writeFileSync(filePath, `#!/usr/bin/env node
+const args = process.argv.slice(2);
+if (args[0] === "pr" && args[1] === "view") {
+  const jsonIndex = args.indexOf("--json");
+  const fields = jsonIndex === -1 ? "" : args[jsonIndex + 1];
+  if (fields === "closingIssuesReferences,body,headRefName") {
+    process.stderr.write("issue inference should be skipped when Done Criteria are file-backed");
+    process.exit(91);
+  }
+  if (fields === "body") {
+    const body = "Refs #999\\nRelated to #1000\\nSprint 3, #1001";
+    if (args.includes("-q") && args[args.indexOf("-q") + 1] === ".body") {
+      process.stdout.write(body);
+    } else {
+      process.stdout.write(JSON.stringify({ body }));
+    }
+    process.exit(0);
+  }
+}
+process.stderr.write("Unsupported gh invocation: " + args.join(" "));
+process.exit(1);
+`, "utf-8");
+  fs.chmodSync(filePath, 0o755);
+  return filePath;
+}
+
 function writeFailingPrBodyGhScript(repoRoot, message = "simulated pr body fetch failure") {
   const filePath = path.join(repoRoot, "gh");
   fs.writeFileSync(filePath, `#!/usr/bin/env node
@@ -659,6 +687,36 @@ test("review-runner facade stays within orchestrator caps and preserves CLI help
   assert.match(help.stdout, /--reviewer-script <path>/);
 });
 
+test("prepare-only with explicit Done Criteria file skips issue inference ambiguity", () => {
+  const { repoRoot, manifestPath, runId, doneCriteriaPath, diffPath } = setupRepo();
+  updateManifestRecord(manifestPath, (data) => {
+    const next = { ...data };
+    delete next.issue;
+    return next;
+  });
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-gh-bin-"));
+  writeIssueInferenceGuardGhScript(binDir);
+
+  const stdout = execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--run-id", runId,
+    "--pr", "123",
+    "--done-criteria-file", doneCriteriaPath,
+    "--diff-file", diffPath,
+    "--prepare-only",
+    "--json",
+  ], {
+    encoding: "utf-8",
+    env: { ...process.env, PATH: `${binDir}:${process.env.PATH}` },
+  });
+
+  const result = JSON.parse(stdout);
+  const promptText = fs.readFileSync(result.promptPath, "utf-8");
+  assert.match(promptText, /Issue: unknown/);
+  assert.match(fs.readFileSync(result.doneCriteriaPath, "utf-8"), /Add smoke\.txt/);
+});
+
 test("prepare-only loads frozen Done Criteria from manifest anchor before GitHub fallbacks", () => {
   const { repoRoot, manifestPath, runId, diffPath } = setupRepo();
   const anchoredDoneCriteriaPath = path.join(repoRoot, "frozen-done-criteria.md");
@@ -673,7 +731,10 @@ test("prepare-only loads frozen Done Criteria from manifest anchor before GitHub
       done_criteria_source: "request_snapshot",
     },
   };
+  delete updated.issue;
   writeManifest(manifestPath, updated, record.body);
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-gh-bin-"));
+  writeIssueInferenceGuardGhScript(binDir);
 
   const stdout = execFileSync("node", [
     SCRIPT,
@@ -683,11 +744,15 @@ test("prepare-only loads frozen Done Criteria from manifest anchor before GitHub
     "--diff-file", diffPath,
     "--prepare-only",
     "--json",
-  ], { encoding: "utf-8" });
+  ], {
+    encoding: "utf-8",
+    env: { ...process.env, PATH: `${binDir}:${process.env.PATH}` },
+  });
 
   const result = JSON.parse(stdout);
   const promptText = fs.readFileSync(result.promptPath, "utf-8");
   const doneCriteriaText = fs.readFileSync(result.doneCriteriaPath, "utf-8");
+  assert.match(promptText, /Issue: unknown/);
   assert.match(promptText, /source="request_snapshot"/);
   assert.match(doneCriteriaText, /Use the persisted intake snapshot/);
 });

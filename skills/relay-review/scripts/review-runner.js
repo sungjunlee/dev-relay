@@ -115,7 +115,8 @@ function run() {
     manifestPathArg,
     runIdArg,
     branchArg,
-    prArg
+    prArg,
+    doneCriteriaFile
   );
   const { body, manifestPath } = manifest;
   let { data } = manifest;
