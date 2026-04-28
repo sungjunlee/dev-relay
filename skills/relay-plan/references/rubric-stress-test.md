@@ -17,7 +17,7 @@ For complex tasks (5+ AC items), stress-test the rubric before dispatch. A subag
 Insert this between "Validate the rubric" (step 3) and "Generate dispatch prompt" (step 4):
 
 ```
-Step 3 (Validate) → Step 3.5 (Rubric Review) → Step 4 (Generate dispatch prompt)
+Step 5 (Validate) → Step 9 (Rubric Review) → Step 10 (Generate dispatch prompt)
 ```
 
 ## Stress-Test (L and XL)

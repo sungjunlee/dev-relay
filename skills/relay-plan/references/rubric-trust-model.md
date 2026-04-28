@@ -4,7 +4,7 @@ Authoring guidance for rubrics on tasks that cross an **auth boundary**. Schema-
 
 ## When to apply
 
-Trigger this checklist during rubric design (relay-plan step 2) if any of the following is true:
+Trigger this checklist during rubric design (relay-plan step 4) if any of the following is true:
 
 - The issue carries the `phase-0-follow-up` label.
 - The issue or its AC mentions any of: **trust root**, **anchor**, **invariant**, **grandfather**, **validate**, **forge/forgery**, **bypass**, **gate-check**, **auth(-boundary)**, or any `validateTransition*` / `validateManifest*` / `evaluateReviewGate` callsite.

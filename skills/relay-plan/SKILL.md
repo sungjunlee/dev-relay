@@ -23,7 +23,7 @@ Read the normalized task source (try in order, use first that succeeds):
 
 If relay-intake already produced a handoff brief, treat that file as the source of truth instead of re-reading the raw request.
 
-### 1.5 Read historical signal
+### 2. Read historical signal
 
 Before designing the rubric, read relay reliability history:
 
@@ -33,7 +33,7 @@ node ${CLAUDE_SKILL_DIR}/../relay-dispatch/scripts/reliability-report.js --repo 
 
 Use `historical_signal.stuck_factors`, `divergence_hotspots`, and `avg_rounds` to tighten factor wording and calibration. The signal does not gate dispatch or alter state. Empty/failure cases render as `no historical data available`; details: `references/signals.md`.
 
-### 1.6 Read probe quality signals
+### 3. Read probe quality signals
 
 Before designing the rubric, read repo-local quality signals:
 
@@ -43,7 +43,7 @@ node ${CLAUDE_SKILL_DIR}/scripts/probe-executor-env.js . --project-only --json
 
 Use `probe_signal.test_infra`, `lint_format`, `type_check`, `ci`, and `scripts` to inform rubric design, prerequisites, and Available Tools. The signal exposes data; it does not pick. No-signal/failure cases render as `no quality infra detected`; details: `references/signals.md`. The `test_infra` field is consumed by `references/rubric-pattern-tdd-flavor.md` and `scripts/tdd-suggestion.js`.
 
-### 2. Build the rubric
+### 4. Build the rubric
 
 Use the guided interview (`references/rubric-design-guide.md`) to derive factors from AC, or convert directly:
 
@@ -78,7 +78,7 @@ Consult `references/rubric-*.md` for frontend, backend, security, refactoring, d
 
 If the task crosses an auth boundary (trust root, anchor, invariant, validate, forge, bypass, gate-check, auth-boundary, or `validateTransition*` / `validateManifest*` / `evaluateReviewGate`), follow `references/rubric-trust-model.md`. Each question becomes a named factor. Record answers under `### Trust-model audit` in the PR body before dispatch.
 
-### 3. Validate the rubric
+### 5. Validate the rubric
 
 Quick gate before dispatch:
 
@@ -90,13 +90,13 @@ Quick gate before dispatch:
 
 Full checklist, factor counts, grading, and risk signals: `references/rubric-validation.md`. Grade D = revise; Grade C = warn and state the tradeoff.
 
-### 3.4 Simplify the rubric
+### 6. Simplify the rubric
 
 Before persisting the draft rubric, apply the 6 heuristics in `references/rubric-simplification.md`.
 
 Apply to all task sizes: rewrite HOW into observable WHAT, merge overlaps, remove unsupported defensive clauses, and verify weights.
 
-### 3.45 Optional isolated planner draft
+### 7. Optional isolated planner draft
 
 For standalone opt-in planner isolation, generate draft artifacts without changing the default `/relay` flow:
 
@@ -107,27 +107,27 @@ node ${CLAUDE_SKILL_DIR}/scripts/plan-runner.js \
 
 This writes `rubric.yaml`, `dispatch-prompt.md`, and `planner-notes.md`. The orchestrator reviews and may edit before dispatch.
 
-### Persisting Phase 1 deviations as anchor
+### 8. Persisting Phase 1 deviations as anchor
 
 Use this when operator planning rejects or narrows the issue body AC. Persist the operator-authored Phase 1 decision before dispatch so fresh-context review uses the same scope anchor.
 
 1. Choose `RUN_ID` (e.g., `issue-<N>-$(date -u +%Y%m%d%H%M%S000)-<short-sha>`).
 2. Persist: `node ${CLAUDE_SKILL_DIR}/scripts/persist-done-criteria.js --repo . --run-id "$RUN_ID" --file /tmp/done-criteria-<N>.md --json`
-3. Dispatch with the same `RUN_ID`, adding `--done-criteria-file ~/.relay/runs/<repo-slug>/$RUN_ID/done-criteria.md` to the Step 5 invocation below.
+3. Dispatch with the same `RUN_ID`, adding `--done-criteria-file ~/.relay/runs/<repo-slug>/$RUN_ID/done-criteria.md` to the Step 11 invocation below.
 
 The helper writes `~/.relay/runs/<repo-slug>/<run-id>/done-criteria.md` with source `planner_decision`. Dispatch picks it up via `--done-criteria-file` when the same run id is used. Canonical filename is always `done-criteria.md`; ad-hoc file paths remain source `file`.
 
-### 3.5 Review the rubric (L/XL tasks)
+### 9. Review the rubric (L/XL tasks)
 
 S/M skips. L does one stress-test round. XL adds calibration simulation. Skip re-dispatches with iteration history and all-automated rubrics. Protocol: `references/rubric-stress-test.md`.
 
-### 4. Generate dispatch prompt
+### 10. Generate dispatch prompt
 
 Take the base template (`../relay/references/prompt-template.md`) and append Setup, Scoring Rubric, Iteration Protocol, and Score Log sections. Insert the optional Step 0a block from `references/iteration-protocol.md` iff any factor has a non-empty `tdd_anchor`; when no factor has `tdd_anchor`, keep the emitted prompt identical to the pre-TDD baseline.
 
 Full iteration-protocol text + Score Log format: `references/iteration-protocol.md`.
 
-### 5. Dispatch
+### 11. Dispatch
 
 Write the rubric YAML to a temp file alongside the dispatch prompt. Every relay dispatch must pass `--rubric-file` so the rubric is persisted at `anchor.rubric_path` for review and merge gates.
 
