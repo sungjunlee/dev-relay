@@ -1200,15 +1200,16 @@ async function main() {
     status === "failed" ? STATES.ESCALATED : STATES.REVIEW_PENDING,
     status === "failed" ? "inspect_dispatch_failure" : "run_review"
   );
-  const { pr_number: _legacyGithubPrNumber, ...githubFields } = manifest.github || {};
+  const { github: _legacyGithub, ...manifestSansGithub } = manifest;
+  const { pr_number: _legacyGithubPrNumber, ...githubFields } = _legacyGithub || {};
   const github = {
     ...githubFields,
     ...(prCreatedByUs !== null ? { pr_created_by_orchestrator: prCreatedByUs } : {}),
   };
   manifest = {
-    ...manifest,
+    ...manifestSansGithub,
     git: {
-      ...(manifest.git || {}),
+      ...(manifestSansGithub.git || {}),
       ...(prNumber !== null ? { pr_number: prNumber } : {}),
       head_sha: currentHead || startHead || null,
     },
