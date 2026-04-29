@@ -25,7 +25,7 @@ const {
 } = require("./manifest/paths");
 const { writeManifest } = require("./manifest/store");
 const { readTextFileWithoutFollowingSymlinks } = require("./manifest/rubric");
-const { getArg, hasFlag, modeLabel } = require("./cli-args");
+const { modeLabel, readArg, schemaHasFlag } = require("./cli-args");
 const { resolveManifestRecord } = require("./relay-resolver");
 const { appendRunEvent, EVENTS } = require("./relay-events");
 const CLI_ARG_OPTIONS = { commandName: "recover-state", reservedFlags: ["-h"] };
@@ -260,17 +260,17 @@ function requirePrBodyOnlyEvidence({ repoRoot, manifestData, currentHead, lastRe
 
 function main() {
   const args = process.argv.slice(2);
-  const hasCliFlag = (flag) => hasFlag(args, flag, CLI_ARG_OPTIONS);
+  const hasCliFlag = (flag) => schemaHasFlag(args, flag, CLI_ARG_OPTIONS);
   if (!args.length || hasCliFlag("--help") || hasCliFlag("-h")) {
     printUsage(console.log);
     process.exit(hasCliFlag("--help") || hasCliFlag("-h") ? 0 : 1);
   }
 
-  const repoRoot = path.resolve(getArg(args, "--repo", undefined, CLI_ARG_OPTIONS) || ".");
-  const runId = getArg(args, "--run-id", undefined, CLI_ARG_OPTIONS);
-  const manifestArg = getArg(args, "--manifest", undefined, CLI_ARG_OPTIONS);
-  const toState = getArg(args, "--to", undefined, CLI_ARG_OPTIONS);
-  const reason = getArg(args, "--reason", undefined, CLI_ARG_OPTIONS);
+  const repoRoot = path.resolve(readArg(args, "--repo", undefined, CLI_ARG_OPTIONS) || ".");
+  const runId = readArg(args, "--run-id", undefined, CLI_ARG_OPTIONS);
+  const manifestArg = readArg(args, "--manifest", undefined, CLI_ARG_OPTIONS);
+  const toState = readArg(args, "--to", undefined, CLI_ARG_OPTIONS);
+  const reason = readArg(args, "--reason", undefined, CLI_ARG_OPTIONS);
   const force = hasCliFlag("--force");
   const allowSameHead = hasCliFlag("--allow-same-head");
   const requirePrBodyChange = hasCliFlag("--require-pr-body-change");

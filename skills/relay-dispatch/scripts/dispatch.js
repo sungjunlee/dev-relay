@@ -94,7 +94,7 @@ const {
   rejectLegacyGrandfatherField,
   validateRubricPathContainment,
 } = require("./manifest/rubric");
-const { getArg, getPositionals, hasFlag, modeLabel } = require("./cli-args");
+const { getPositionals, modeLabel, readArg, schemaHasFlag } = require("./cli-args");
 const { formatAttemptsForPrompt, readPreviousAttempts } = require("./manifest/attempts");
 const { STATES, updateManifestState } = require("./manifest/lifecycle");
 const { resolveManifestRecord } = require("./relay-resolver");
@@ -114,7 +114,7 @@ const KNOWN_FLAGS = [
   "--register", "--no-cleanup", "--dry-run", "--json", "--help", "-h",
 ];
 const CLI_ARG_OPTIONS = { commandName: "dispatch", reservedFlags: KNOWN_FLAGS };
-const hasCliFlag = (flag) => hasFlag(args, flag, CLI_ARG_OPTIONS);
+const hasCliFlag = (flag) => schemaHasFlag(args, flag, CLI_ARG_OPTIONS);
 
 if (!args.length || hasCliFlag(["--help", "-h"])) {
   console.log("Usage: dispatch.js <repo-path> --branch <name> --prompt <task> [options]");
@@ -152,28 +152,28 @@ if (!args.length || hasCliFlag(["--help", "-h"])) {
 const repoPathRaw = getPositionals(args, "dispatch")[0];
 const REPO_PATH = path.resolve(repoPathRaw || ".");
 const PROJECT_NAME = path.basename(REPO_PATH);
-const BRANCH = getArg(args, ["--branch", "-b"], undefined, CLI_ARG_OPTIONS);
-const RUN_ID = getArg(args, "--run-id", undefined, CLI_ARG_OPTIONS);
-const MANIFEST_INPUT = getArg(args, "--manifest", undefined, CLI_ARG_OPTIONS);
-const PROMPT = getArg(args, ["--prompt", "-p"], undefined, CLI_ARG_OPTIONS);
-const PROMPT_FILE = getArg(args, "--prompt-file", undefined, CLI_ARG_OPTIONS);
-const EXECUTOR = getArg(args, ["--executor", "-e"], "codex", CLI_ARG_OPTIONS);
+const BRANCH = readArg(args, ["--branch", "-b"], undefined, CLI_ARG_OPTIONS);
+const RUN_ID = readArg(args, "--run-id", undefined, CLI_ARG_OPTIONS);
+const MANIFEST_INPUT = readArg(args, "--manifest", undefined, CLI_ARG_OPTIONS);
+const PROMPT = readArg(args, ["--prompt", "-p"], undefined, CLI_ARG_OPTIONS);
+const PROMPT_FILE = readArg(args, "--prompt-file", undefined, CLI_ARG_OPTIONS);
+const EXECUTOR = readArg(args, ["--executor", "-e"], "codex", CLI_ARG_OPTIONS);
 const DEFAULT_TIMEOUT_BY_EXECUTOR = { codex: 2400, claude: 1800 };
 const DEFAULT_REASONING_BY_SIZE = { S: "medium", M: "high", L: "xhigh", XL: "xhigh" };
 const defaultTimeout = String(DEFAULT_TIMEOUT_BY_EXECUTOR[EXECUTOR] ?? 1800);
-const MODEL = getArg(args, ["--model", "-m"], undefined, CLI_ARG_OPTIONS);
-const MODEL_HINTS_RAW = getArg(args, "--model-hints", undefined, CLI_ARG_OPTIONS);
-const REASONING_OVERRIDE = getArg(args, "--reasoning", undefined, CLI_ARG_OPTIONS);
-const SANDBOX = getArg(args, "--sandbox", "workspace-write", CLI_ARG_OPTIONS);
-const NETWORK_ACCESS = getArg(args, "--network-access", "disabled", CLI_ARG_OPTIONS);
-const COPY_FILES = getArg(args, "--copy", "", CLI_ARG_OPTIONS).split(",").filter(Boolean);
-const RUBRIC_FILE = getArg(args, "--rubric-file", undefined, CLI_ARG_OPTIONS);
-const TEST_COMMAND = getArg(args, "--test-command", undefined, CLI_ARG_OPTIONS);
+const MODEL = readArg(args, ["--model", "-m"], undefined, CLI_ARG_OPTIONS);
+const MODEL_HINTS_RAW = readArg(args, "--model-hints", undefined, CLI_ARG_OPTIONS);
+const REASONING_OVERRIDE = readArg(args, "--reasoning", undefined, CLI_ARG_OPTIONS);
+const SANDBOX = readArg(args, "--sandbox", "workspace-write", CLI_ARG_OPTIONS);
+const NETWORK_ACCESS = readArg(args, "--network-access", "disabled", CLI_ARG_OPTIONS);
+const COPY_FILES = readArg(args, "--copy", "", CLI_ARG_OPTIONS).split(",").filter(Boolean);
+const RUBRIC_FILE = readArg(args, "--rubric-file", undefined, CLI_ARG_OPTIONS);
+const TEST_COMMAND = readArg(args, "--test-command", undefined, CLI_ARG_OPTIONS);
 const RUBRIC_GRANDFATHERED = hasCliFlag("--rubric-grandfathered");
-const REQUEST_ID = getArg(args, "--request-id", undefined, CLI_ARG_OPTIONS);
-const LEAF_ID = getArg(args, "--leaf-id", undefined, CLI_ARG_OPTIONS);
-const DONE_CRITERIA_FILE = getArg(args, "--done-criteria-file", undefined, CLI_ARG_OPTIONS);
-const TIMEOUT = parseInt(getArg(args, "--timeout", defaultTimeout, CLI_ARG_OPTIONS), 10);
+const REQUEST_ID = readArg(args, "--request-id", undefined, CLI_ARG_OPTIONS);
+const LEAF_ID = readArg(args, "--leaf-id", undefined, CLI_ARG_OPTIONS);
+const DONE_CRITERIA_FILE = readArg(args, "--done-criteria-file", undefined, CLI_ARG_OPTIONS);
+const TIMEOUT = parseInt(readArg(args, "--timeout", defaultTimeout, CLI_ARG_OPTIONS), 10);
 if (isNaN(TIMEOUT) || TIMEOUT <= 0) {
   console.error("Error: --timeout must be a positive integer");
   process.exit(1);

@@ -9,13 +9,13 @@ const {
   validateManifestPaths,
 } = require("./manifest/paths");
 const { writeManifest } = require("./manifest/store");
-const { getArg, hasFlag, modeLabel } = require("./cli-args");
+const { modeLabel, readArg, schemaHasFlag } = require("./cli-args");
 const { resolveManifestRecord } = require("./relay-resolver");
 const { appendRunEvent, EVENTS } = require("./relay-events");
 
 const args = process.argv.slice(2);
 const CLI_ARG_OPTIONS = { commandName: "close-run", reservedFlags: ["-h"] };
-const hasCliFlag = (flag) => hasFlag(args, flag, CLI_ARG_OPTIONS);
+const hasCliFlag = (flag) => schemaHasFlag(args, flag, CLI_ARG_OPTIONS);
 
 if (!args.length || hasCliFlag(["--help", "-h"])) {
   console.log("Usage: close-run.js --repo <path> --run-id <id> --reason <text> [--dry-run] [--json]");
@@ -50,9 +50,9 @@ function buildSkippedCleanupSummary(data, dryRun) {
 }
 
 function main() {
-  const repoRoot = path.resolve(getArg(args, "--repo", undefined, CLI_ARG_OPTIONS) || ".");
-  const runId = getArg(args, "--run-id", undefined, CLI_ARG_OPTIONS);
-  const reason = getArg(args, "--reason", undefined, CLI_ARG_OPTIONS);
+  const repoRoot = path.resolve(readArg(args, "--repo", undefined, CLI_ARG_OPTIONS) || ".");
+  const runId = readArg(args, "--run-id", undefined, CLI_ARG_OPTIONS);
+  const reason = readArg(args, "--reason", undefined, CLI_ARG_OPTIONS);
   const dryRun = hasCliFlag("--dry-run");
   const jsonOut = hasCliFlag("--json");
 

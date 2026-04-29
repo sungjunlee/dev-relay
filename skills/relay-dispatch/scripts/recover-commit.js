@@ -17,16 +17,16 @@ const { stampPrNumberUnderLock } = require("./manifest/pr-number-stamp");
 const { rebrandEvidence } = require("./execution-evidence");
 const {
   findUnknownFlags,
-  getArg,
-  hasFlag,
   modeLabel,
+  readArg,
+  schemaHasFlag,
 } = require("./cli-args");
 const { execGit, execGh } = require("./exec");
 
 const args = process.argv.slice(2);
 const CLI_ARG_OPTIONS = { commandName: "recover-commit", reservedFlags: ["-h"] };
-const hasCliFlag = (flag) => hasFlag(args, flag, CLI_ARG_OPTIONS);
-const getCliArg = (flag, fallback) => getArg(args, flag, fallback, CLI_ARG_OPTIONS);
+const hasCliFlag = (flag) => schemaHasFlag(args, flag, CLI_ARG_OPTIONS);
+const getCliArg = (flag, fallback) => readArg(args, flag, fallback, CLI_ARG_OPTIONS);
 
 function printHelp(exitCode) {
   console.log("Usage: recover-commit.js (--repo <path> --run-id <id> | --manifest <path>) --reason <text> [options]");

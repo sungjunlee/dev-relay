@@ -29,13 +29,13 @@ const {
   readManifest,
   writeManifest,
 } = require("./manifest/store");
-const { getArg, hasFlag, modeLabel } = require("./cli-args");
+const { modeLabel, readArg, schemaHasFlag } = require("./cli-args");
 const { appendRunEvent, EVENTS } = require("./relay-events");
 const { safeFormatRunId } = require("./relay-resolver");
 
 const args = process.argv.slice(2);
 const CLI_ARG_OPTIONS = { commandName: "cleanup-worktrees" };
-const hasCliFlag = (flag) => hasFlag(args, flag, CLI_ARG_OPTIONS);
+const hasCliFlag = (flag) => schemaHasFlag(args, flag, CLI_ARG_OPTIONS);
 const OS_DETRITUS = new Set([".DS_Store", "Thumbs.db"]);
 
 function parseHours(value, label) {
@@ -112,11 +112,11 @@ if (hasCliFlag(["--help", "-h"])) {
 }
 
 function run() {
-  const repoRoot = path.resolve(getArg(args, "--repo", ".", CLI_ARG_OPTIONS));
+  const repoRoot = path.resolve(readArg(args, "--repo", ".", CLI_ARG_OPTIONS));
   const dryRun = hasCliFlag("--dry-run");
   const all = hasCliFlag("--all");
   const jsonOut = hasCliFlag("--json");
-  const olderThanHours = all ? 0 : parseHours(getArg(args, "--older-than", "24", CLI_ARG_OPTIONS), "--older-than");
+  const olderThanHours = all ? 0 : parseHours(readArg(args, "--older-than", "24", CLI_ARG_OPTIONS), "--older-than");
   const now = Date.now();
   const cutoff = now - olderThanHours * 60 * 60 * 1000;
 

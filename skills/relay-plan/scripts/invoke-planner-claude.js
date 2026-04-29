@@ -15,7 +15,7 @@ const {
 
 const args = process.argv.slice(2);
 const KNOWN_FLAGS = ["--prompt-file", "--model", "--json", "--help", "-h"];
-const { getArg, hasFlag } = bindCliArgs(args, { reservedFlags: KNOWN_FLAGS });
+const cliArgs = bindCliArgs(args, { reservedFlags: KNOWN_FLAGS });
 
 const PLANNER_RESULT_JSON_SCHEMA = {
   type: "object",
@@ -28,13 +28,13 @@ const PLANNER_RESULT_JSON_SCHEMA = {
   required: ["rubric_yaml", "dispatch_prompt_md", "planner_notes_md"],
 };
 
-if (!args.length || hasFlag(["--help", "-h"])) {
+if (!args.length || cliArgs.hasFlag(["--help", "-h"])) {
   console.log("Usage: invoke-planner-claude.js --prompt-file <path> [--model <name>] [--json]");
   console.log("\nOptions:");
   console.log(`  --prompt-file <path> ${modeLabel("--prompt-file")} Prompt bundle path`);
   console.log(`  --model <name>       ${modeLabel("--model")} Model override`);
   console.log(`  --json               ${modeLabel("--json")} Output JSON`);
-  process.exit(hasFlag(["--help", "-h"]) ? 0 : 1);
+  process.exit(cliArgs.hasFlag(["--help", "-h"]) ? 0 : 1);
 }
 
 function ensurePlannerJson(text, label) {
@@ -53,8 +53,8 @@ function ensurePlannerJson(text, label) {
 }
 
 function main() {
-  const promptFile = getArg("--prompt-file");
-  const model = getArg("--model");
+  const promptFile = cliArgs.getArg("--prompt-file");
+  const model = cliArgs.getArg("--model");
   const claudeBin = process.env.RELAY_CLAUDE_BIN || "claude";
 
   if (!promptFile) {
@@ -105,7 +105,7 @@ function main() {
     }
     ensurePlannerJson(result, "Claude planner");
 
-    if (hasFlag("--json")) {
+    if (cliArgs.hasFlag("--json")) {
       console.log(result);
     } else {
       process.stdout.write(result);

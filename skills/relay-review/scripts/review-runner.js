@@ -44,12 +44,12 @@ const {
 
 const args = process.argv.slice(2);
 const KNOWN_FLAGS = ["--repo", "--run-id", "--branch", "--pr", "--manifest", "--done-criteria-file", "--diff-file", "--review-file", "--reviewer", "--reviewer-script", "--reviewer-model", "--prepare-only", "--no-comment", "--json", "--help", "-h"];
-const { getArg, hasFlag } = bindCliArgs(args, {
+const cliArgs = bindCliArgs(args, {
   commandName: "review-runner",
   reservedFlags: KNOWN_FLAGS,
 });
 
-if (require.main === module && (!args.length || hasFlag(["--help", "-h"]))) {
+if (require.main === module && (!args.length || cliArgs.hasFlag(["--help", "-h"]))) {
   console.log("Usage: review-runner.js --repo <path> (--run-id <id> | --branch <name> | --pr <number>) [options]");
   console.log("\nPrepare or apply a structured relay review round.");
   console.log("\nOptions:");
@@ -67,7 +67,7 @@ if (require.main === module && (!args.length || hasFlag(["--help", "-h"]))) {
   console.log(`  --prepare-only               ${modeLabel("--prepare-only")} Emit prompt bundle only; do not apply verdict`);
   console.log(`  --no-comment                 ${modeLabel("--no-comment")} Do not post a PR comment`);
   console.log(`  --json                       ${modeLabel("--json")} Output JSON`);
-  process.exit(hasFlag(["--help", "-h"]) ? 0 : 1);
+  process.exit(cliArgs.hasFlag(["--help", "-h"]) ? 0 : 1);
 }
 
 function printResult({ doneCriteriaPath, diffPath, jsonOut, manifestPath, originalState, prepareOnly, prNumber, promptPath, redispatchPath, result, updatedManifest, verdictPath }) {
@@ -95,21 +95,21 @@ function printResult({ doneCriteriaPath, diffPath, jsonOut, manifestPath, origin
 }
 
 function run() {
-  const repoArg = getArg("--repo");
+  const repoArg = cliArgs.getArg("--repo");
   const repoPath = path.resolve(repoArg || ".");
-  const manifestPathArg = getArg("--manifest");
-  const runIdArg = getArg("--run-id");
-  const branchArg = getArg("--branch");
-  const prArg = getArg("--pr");
-  const doneCriteriaFile = getArg("--done-criteria-file");
-  const diffFile = getArg("--diff-file");
-  const reviewFile = getArg("--review-file");
-  const reviewerArg = getArg("--reviewer");
-  const reviewerScriptArg = getArg("--reviewer-script");
-  const reviewerModel = getArg("--reviewer-model");
-  const prepareOnly = hasFlag("--prepare-only");
-  const noComment = hasFlag("--no-comment");
-  const jsonOut = hasFlag("--json");
+  const manifestPathArg = cliArgs.getArg("--manifest");
+  const runIdArg = cliArgs.getArg("--run-id");
+  const branchArg = cliArgs.getArg("--branch");
+  const prArg = cliArgs.getArg("--pr");
+  const doneCriteriaFile = cliArgs.getArg("--done-criteria-file");
+  const diffFile = cliArgs.getArg("--diff-file");
+  const reviewFile = cliArgs.getArg("--review-file");
+  const reviewerArg = cliArgs.getArg("--reviewer");
+  const reviewerScriptArg = cliArgs.getArg("--reviewer-script");
+  const reviewerModel = cliArgs.getArg("--reviewer-model");
+  const prepareOnly = cliArgs.hasFlag("--prepare-only");
+  const noComment = cliArgs.hasFlag("--no-comment");
+  const jsonOut = cliArgs.hasFlag("--json");
 
   const { branch, issueNumber, manifest, prNumber, reviewRepoPath, runRepoPath } = resolveContext(
     repoPath,
