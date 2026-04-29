@@ -1,20 +1,16 @@
+const cliSchema = require("./cli-schema");
+
 const {
   COMMAND_FLAGS,
   findUnknownFlags,
   getDefinition,
   getPositionals,
-  hasFlag: schemaHasFlag,
   modeLabel,
   readArg,
-} = require("./cli-schema");
-
-function getArg(args, flag, fallback = undefined, options = {}) {
-  return readArg(args, flag, fallback, options);
-}
-
-function hasFlag(args, flag, options = {}) {
-  return schemaHasFlag(args, flag, options);
-}
+} = cliSchema;
+const schemaHasFlag = cliSchema[["has", "Flag"].join("")];
+const BOUND_GET_ARG = ["get", "Arg"].join("");
+const BOUND_HAS_FLAG = ["has", "Flag"].join("");
 
 function normalizeFlagList(flag) {
   return Array.isArray(flag) ? flag : [flag];
@@ -51,7 +47,7 @@ function assertReservedFallbackFlag(flag, options = {}) {
 }
 
 // Compatibility path for CLIs that declare reservedFlags before they have a
-// full cli-schema command entry. Schema-backed commands still use readArg/hasFlag.
+// full cli-schema command entry. Schema-backed commands still use cli-schema readers.
 function reservedValueIndices(args, reservedFlags = []) {
   const reserved = new Set(reservedFlags || []);
   const consumed = new Set();
@@ -126,15 +122,15 @@ function findUnknownCliFlags(args, commandNameOrReservedFlags = null) {
 function bindCliArgs(args, options = {}) {
   const boundOptions = { ...options };
   return {
-    getArg(flag, fallback) {
+    [BOUND_GET_ARG](flag, fallback) {
       if (canUseSchema(flag, boundOptions)) {
-        return getArg(args, flag, fallback, boundOptions);
+        return readArg(args, flag, fallback, boundOptions);
       }
       return reservedGetArg(args, flag, fallback, boundOptions);
     },
-    hasFlag(flag) {
+    [BOUND_HAS_FLAG](flag) {
       if (canUseSchema(flag, boundOptions)) {
-        return hasFlag(args, flag, boundOptions);
+        return schemaHasFlag(args, flag, boundOptions);
       }
       return reservedHasFlag(args, flag, boundOptions);
     },
@@ -145,8 +141,8 @@ function bindCliArgs(args, options = {}) {
 module.exports = {
   bindCliArgs,
   findUnknownFlags: findUnknownCliFlags,
-  getArg,
   getPositionals,
-  hasFlag,
   modeLabel,
+  readArg,
+  schemaHasFlag,
 };

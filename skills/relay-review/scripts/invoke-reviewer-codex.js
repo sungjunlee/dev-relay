@@ -16,19 +16,19 @@ const { summarizeFailure, ensureJsonText } = require("./reviewer-helpers");
 
 const args = process.argv.slice(2);
 const KNOWN_FLAGS = ["--repo", "--prompt-file", "--model", "--json", "--help", "-h"];
-const { getArg, hasFlag } = bindCliArgs(args, {
+const cliArgs = bindCliArgs(args, {
   commandName: "invoke-reviewer-codex",
   reservedFlags: KNOWN_FLAGS,
 });
 
-if (!args.length || hasFlag(["--help", "-h"])) {
+if (!args.length || cliArgs.hasFlag(["--help", "-h"])) {
   console.log("Usage: invoke-reviewer-codex.js --repo <path> --prompt-file <path> [--model <name>] [--json]");
   console.log("\nOptions:");
   console.log(`  --repo <path>        ${modeLabel("--repo")} Repository root`);
   console.log(`  --prompt-file <path> ${modeLabel("--prompt-file")} Prompt bundle path`);
   console.log(`  --model <name>       ${modeLabel("--model")} Model override`);
   console.log(`  --json               ${modeLabel("--json")} Output JSON`);
-  process.exit(hasFlag(["--help", "-h"]) ? 0 : 1);
+  process.exit(cliArgs.hasFlag(["--help", "-h"]) ? 0 : 1);
 }
 
 function readNonEmptyFile(filePath) {
@@ -38,9 +38,9 @@ function readNonEmptyFile(filePath) {
 }
 
 function main() {
-  const repoPath = path.resolve(getArg("--repo") || ".");
-  const promptFile = getArg("--prompt-file");
-  const model = getArg("--model");
+  const repoPath = path.resolve(cliArgs.getArg("--repo") || ".");
+  const promptFile = cliArgs.getArg("--prompt-file");
+  const model = cliArgs.getArg("--model");
   const codexBin = process.env.RELAY_CODEX_BIN || "codex";
 
   if (!promptFile) {
@@ -95,7 +95,7 @@ function main() {
       throw new Error("Codex reviewer did not produce a structured result");
     }
     ensureJsonText(result, "Codex reviewer");
-    if (hasFlag("--json")) {
+    if (cliArgs.hasFlag("--json")) {
       console.log(result);
     } else {
       process.stdout.write(result);

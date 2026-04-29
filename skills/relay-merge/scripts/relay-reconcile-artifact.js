@@ -45,7 +45,7 @@ const KNOWN_FLAGS = [
   "--artifact-path", "--writer-pr", "--reason", "--skip-review",
   "--json", "--help", "-h",
 ];
-const { getArg, hasFlag } = bindCliArgs(args, {
+const cliArgs = bindCliArgs(args, {
   commandName: "relay-reconcile-artifact",
   reservedFlags: KNOWN_FLAGS,
 });
@@ -68,7 +68,7 @@ if (!args.length || args.includes("--help") || args.includes("-h")) {
 }
 
 function requireNonEmptyArg(flag, label) {
-  const value = getArg(flag);
+  const value = cliArgs.getArg(flag);
   if (typeof value !== "string" || !value.trim()) {
     throw new Error(`${label} is required`);
   }
@@ -89,20 +89,20 @@ function main() {
   const artifactPath = requireNonEmptyArg("--artifact-path", "--artifact-path <path>");
   const writerPr = parsePositiveInt(requireNonEmptyArg("--writer-pr", "--writer-pr <int>"), "--writer-pr <int>");
   const reason = requireNonEmptyArg("--reason", "--reason <text>");
-  const skipReviewReason = getArg("--skip-review");
-  if (hasFlag("--skip-review") && !String(skipReviewReason || "").trim()) {
+  const skipReviewReason = cliArgs.getArg("--skip-review");
+  if (cliArgs.hasFlag("--skip-review") && !String(skipReviewReason || "").trim()) {
     throw new Error("--skip-review <reason> is required when --skip-review is used");
   }
 
-  const repoArg = getArg("--repo");
+  const repoArg = cliArgs.getArg("--repo");
   let repoPath = path.resolve(repoArg || ".");
-  const manifestArg = getArg("--manifest");
-  const runId = getArg("--run-id");
-  const branch = getArg("--branch");
-  const prNumber = getArg("--pr") === undefined
+  const manifestArg = cliArgs.getArg("--manifest");
+  const runId = cliArgs.getArg("--run-id");
+  const branch = cliArgs.getArg("--branch");
+  const prNumber = cliArgs.getArg("--pr") === undefined
     ? undefined
-    : parsePositiveInt(getArg("--pr"), "--pr");
-  const jsonOut = hasFlag("--json");
+    : parsePositiveInt(cliArgs.getArg("--pr"), "--pr");
+  const jsonOut = cliArgs.hasFlag("--json");
 
   let manifestRecord = resolveManifestRecord({
     repoRoot: repoPath,

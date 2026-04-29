@@ -33,12 +33,12 @@ const {
   writeManifest,
 } = require("./manifest/store");
 const { parsePositiveInt } = require("./manifest/paths");
-const { getArg, hasFlag, modeLabel } = require("./cli-args");
+const { modeLabel, readArg, schemaHasFlag } = require("./cli-args");
 const { resolveManifestRecord } = require("./relay-resolver");
 
 const args = process.argv.slice(2);
 const CLI_ARG_OPTIONS = { commandName: "update-manifest-state", reservedFlags: ["-h"] };
-const hasCliFlag = (flag) => hasFlag(args, flag, CLI_ARG_OPTIONS);
+const hasCliFlag = (flag) => schemaHasFlag(args, flag, CLI_ARG_OPTIONS);
 
 if (!args.length || hasCliFlag(["--help", "-h"])) {
   console.log("Usage: update-manifest-state.js (--manifest <path> | --repo <path> --run-id <id> | --repo <path> --branch <name>) --state <state> [options]");
@@ -80,10 +80,10 @@ function defaultNextAction(state) {
 }
 
 function resolveManifestPath() {
-  const manifestPath = getArg(args, "--manifest", undefined, CLI_ARG_OPTIONS);
-  const repoPath = getArg(args, "--repo", undefined, CLI_ARG_OPTIONS);
-  const runId = getArg(args, "--run-id", undefined, CLI_ARG_OPTIONS);
-  const branch = getArg(args, "--branch", undefined, CLI_ARG_OPTIONS);
+  const manifestPath = readArg(args, "--manifest", undefined, CLI_ARG_OPTIONS);
+  const repoPath = readArg(args, "--repo", undefined, CLI_ARG_OPTIONS);
+  const runId = readArg(args, "--run-id", undefined, CLI_ARG_OPTIONS);
+  const branch = readArg(args, "--branch", undefined, CLI_ARG_OPTIONS);
 
   if (manifestPath && (repoPath || branch || runId)) {
     throw new Error("Use either --manifest or --repo with --run-id/--branch, not both");
@@ -100,21 +100,21 @@ function resolveManifestPath() {
 }
 
 function main() {
-  const targetState = getArg(args, "--state", undefined, CLI_ARG_OPTIONS);
+  const targetState = readArg(args, "--state", undefined, CLI_ARG_OPTIONS);
   if (!targetState) {
     throw new Error("--state is required");
   }
 
   const manifestPath = resolveManifestPath();
   const { data, body } = readManifest(manifestPath);
-  const nextAction = getArg(args, "--next-action", undefined, CLI_ARG_OPTIONS) || defaultNextAction(targetState);
-  const prNumber = parsePositiveInt(getArg(args, "--pr-number", undefined, CLI_ARG_OPTIONS), "--pr-number", { allowZero: true });
-  const headSha = getArg(args, "--head-sha", undefined, CLI_ARG_OPTIONS);
-  const rounds = parsePositiveInt(getArg(args, "--rounds", undefined, CLI_ARG_OPTIONS), "--rounds", { allowZero: true });
-  const verdict = getArg(args, "--verdict", undefined, CLI_ARG_OPTIONS);
-  const lastReviewedSha = getArg(args, "--last-reviewed-sha", undefined, CLI_ARG_OPTIONS);
-  const maxRounds = parsePositiveInt(getArg(args, "--max-rounds", undefined, CLI_ARG_OPTIONS), "--max-rounds", { allowZero: true });
-  const repeatedIssueCount = parsePositiveInt(getArg(args, "--repeated-issue-count", undefined, CLI_ARG_OPTIONS), "--repeated-issue-count", { allowZero: true });
+  const nextAction = readArg(args, "--next-action", undefined, CLI_ARG_OPTIONS) || defaultNextAction(targetState);
+  const prNumber = parsePositiveInt(readArg(args, "--pr-number", undefined, CLI_ARG_OPTIONS), "--pr-number", { allowZero: true });
+  const headSha = readArg(args, "--head-sha", undefined, CLI_ARG_OPTIONS);
+  const rounds = parsePositiveInt(readArg(args, "--rounds", undefined, CLI_ARG_OPTIONS), "--rounds", { allowZero: true });
+  const verdict = readArg(args, "--verdict", undefined, CLI_ARG_OPTIONS);
+  const lastReviewedSha = readArg(args, "--last-reviewed-sha", undefined, CLI_ARG_OPTIONS);
+  const maxRounds = parsePositiveInt(readArg(args, "--max-rounds", undefined, CLI_ARG_OPTIONS), "--max-rounds", { allowZero: true });
+  const repeatedIssueCount = parsePositiveInt(readArg(args, "--repeated-issue-count", undefined, CLI_ARG_OPTIONS), "--repeated-issue-count", { allowZero: true });
 
   let updated = updateManifestState(data, targetState, nextAction);
 

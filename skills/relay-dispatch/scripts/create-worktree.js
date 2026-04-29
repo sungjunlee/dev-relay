@@ -37,7 +37,7 @@ const {
   formatPlan,
   registerWorktree,
 } = require("./worktree-runtime");
-const { getArg, getPositionals, hasFlag, modeLabel } = require("./cli-args");
+const { getPositionals, modeLabel, readArg, schemaHasFlag } = require("./cli-args");
 const { execGit } = require("./exec");
 
 // ---------------------------------------------------------------------------
@@ -50,7 +50,7 @@ const KNOWN_FLAGS = [
   "--pin", "--register", "--dry-run", "--json", "--help", "-h",
 ];
 const CLI_ARG_OPTIONS = { commandName: "create-worktree", reservedFlags: KNOWN_FLAGS };
-const hasCliFlag = (flag) => hasFlag(args, flag, CLI_ARG_OPTIONS);
+const hasCliFlag = (flag) => schemaHasFlag(args, flag, CLI_ARG_OPTIONS);
 
 if (!args.length || hasCliFlag(["--help", "-h"])) {
   console.log(
@@ -76,16 +76,16 @@ if (!args.length || hasCliFlag(["--help", "-h"])) {
 const repoPathRaw = getPositionals(args, "create-worktree")[0];
 const REPO_PATH = path.resolve(repoPathRaw || ".");
 const PROJECT_NAME = path.basename(REPO_PATH);
-const TOPIC = getArg(args, "--topic", undefined, CLI_ARG_OPTIONS);
-const BRANCH = getArg(args, ["--branch", "-b"], TOPIC ? `codex/${TOPIC}` : undefined, CLI_ARG_OPTIONS);
-const TITLE = getArg(
+const TOPIC = readArg(args, "--topic", undefined, CLI_ARG_OPTIONS);
+const BRANCH = readArg(args, ["--branch", "-b"], TOPIC ? `codex/${TOPIC}` : undefined, CLI_ARG_OPTIONS);
+const TITLE = readArg(
   args,
   ["--title", "-t"],
   BRANCH ? `Worktree: ${BRANCH}` : `Worktree: ${PROJECT_NAME}`,
   CLI_ARG_OPTIONS
 );
-const WORKTREE_PATH = getArg(args, "--worktree-path", undefined, CLI_ARG_OPTIONS);
-const COPY_FILES = getArg(args, "--copy", "", CLI_ARG_OPTIONS)
+const WORKTREE_PATH = readArg(args, "--worktree-path", undefined, CLI_ARG_OPTIONS);
+const COPY_FILES = readArg(args, "--copy", "", CLI_ARG_OPTIONS)
   .split(",")
   .filter(Boolean);
 const PIN = hasCliFlag("--pin");

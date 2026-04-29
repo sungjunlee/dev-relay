@@ -12,7 +12,7 @@ const { applyTddFlavorToDispatchPrompt } = require("./tdd-flavor");
 
 const args = process.argv.slice(2);
 const KNOWN_FLAGS = ["--issue", "--planner", "--repo", "--runs-dir", "--out-dir", "--json", "--help", "-h"];
-const { getArg, hasFlag } = bindCliArgs(args, {
+const cliArgs = bindCliArgs(args, {
   commandName: "plan-runner",
   reservedFlags: KNOWN_FLAGS,
 });
@@ -21,7 +21,7 @@ const PLANNER_FIELDS = ["rubric_yaml", "dispatch_prompt_md", "planner_notes_md"]
 const NO_HISTORY_TEXT = "no historical data available";
 const NO_PROBE_TEXT = "no quality infra detected";
 
-if (require.main === module && (!args.length || hasFlag(["--help", "-h"]))) {
+if (require.main === module && (!args.length || cliArgs.hasFlag(["--help", "-h"]))) {
   console.log("Usage: plan-runner.js --issue <N> --planner <codex|claude> --out-dir <path> [options]");
   console.log("\nDraft relay-plan artifacts with an isolated planner adapter.");
   console.log("\nOptions:");
@@ -31,7 +31,7 @@ if (require.main === module && (!args.length || hasFlag(["--help", "-h"]))) {
   console.log(`  --runs-dir <path> ${modeLabel("--runs-dir")} Reliability report runs base override`);
   console.log(`  --out-dir <path>  ${modeLabel("--out-dir")} Directory for generated artifacts`);
   console.log(`  --json            ${modeLabel("--json")} Output JSON`);
-  process.exit(hasFlag(["--help", "-h"]) ? 0 : 1);
+  process.exit(cliArgs.hasFlag(["--help", "-h"]) ? 0 : 1);
 }
 
 function readIssueBody(repoPath, issueNumber) {
@@ -191,12 +191,12 @@ function printResult(result, jsonOut) {
 }
 
 function run() {
-  const issueNumber = getArg("--issue");
-  const planner = getArg("--planner");
-  const repoPath = path.resolve(getArg("--repo") || ".");
-  const runsDir = getArg("--runs-dir");
-  const outDir = getArg("--out-dir");
-  const jsonOut = hasFlag("--json");
+  const issueNumber = cliArgs.getArg("--issue");
+  const planner = cliArgs.getArg("--planner");
+  const repoPath = path.resolve(cliArgs.getArg("--repo") || ".");
+  const runsDir = cliArgs.getArg("--runs-dir");
+  const outDir = cliArgs.getArg("--out-dir");
+  const jsonOut = cliArgs.hasFlag("--json");
 
   if (!issueNumber) throw new Error("--issue is required");
   if (!planner) throw new Error("--planner is required");

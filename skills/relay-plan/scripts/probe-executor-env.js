@@ -31,12 +31,12 @@ function parseCli(argv) {
   const KNOWN_FLAGS = [
     "--executor", "-e", "--timeout", "--project-only", "--json", "--help", "-h",
   ];
-  const { getArg, hasFlag } = bindCliArgs(args, {
+  const cliArgs = bindCliArgs(args, {
     commandName: "probe-executor-env",
     reservedFlags: KNOWN_FLAGS,
   });
 
-  if (!args.length || hasFlag(["--help", "-h"])) {
+  if (!args.length || cliArgs.hasFlag(["--help", "-h"])) {
     console.log("Usage: probe-executor-env.js <repo-path> --executor <codex|claude> [options]");
     console.log("\nOptions:");
     console.log(`  --executor, -e   ${modeLabel("--executor")} Executor to probe (codex, claude)`);
@@ -50,10 +50,10 @@ function parseCli(argv) {
 
   return {
     repoPath: path.resolve(repoPathRaw || "."),
-    executor: getArg(["--executor", "-e"], undefined),
-    timeout: parseInt(getArg("--timeout", "30"), 10),
-    projectOnly: hasFlag("--project-only"),
-    jsonOut: hasFlag("--json"),
+    executor: cliArgs.getArg(["--executor", "-e"], undefined),
+    timeout: parseInt(cliArgs.getArg("--timeout", "30"), 10),
+    projectOnly: cliArgs.hasFlag("--project-only"),
+    jsonOut: cliArgs.hasFlag("--json"),
   };
 }
 

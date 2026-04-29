@@ -4,13 +4,13 @@ const fs = require("fs");
 const path = require("path");
 const { STATES } = require("./manifest/lifecycle");
 const { listManifestRecords } = require("./manifest/store");
-const { getArg, hasFlag, modeLabel } = require("./cli-args");
+const { modeLabel, readArg, schemaHasFlag } = require("./cli-args");
 const { EVENTS, readAllRunEvents } = require("./relay-events");
 const { extractAllFactors } = require("../../relay-plan/scripts/tdd-flavor");
 
 const args = process.argv.slice(2);
 const CLI_ARG_OPTIONS = { commandName: "reliability-report", reservedFlags: ["-h"] };
-const hasCliFlag = (flag) => hasFlag(args, flag, CLI_ARG_OPTIONS);
+const hasCliFlag = (flag) => schemaHasFlag(args, flag, CLI_ARG_OPTIONS);
 
 if (hasCliFlag(["--help", "-h"])) {
   console.log(
@@ -756,8 +756,8 @@ function buildActingReviewerReports({ repoRoot, staleHours, now, manifests, even
 }
 
 function main() {
-  const repoRoot = path.resolve(getArg(args, "--repo", ".", CLI_ARG_OPTIONS));
-  const staleHours = parseHours(getArg(args, "--stale-hours", "72", CLI_ARG_OPTIONS));
+  const repoRoot = path.resolve(readArg(args, "--repo", ".", CLI_ARG_OPTIONS));
+  const staleHours = parseHours(readArg(args, "--stale-hours", "72", CLI_ARG_OPTIONS));
   const now = Date.now();
   const manifests = listManifestRecords(repoRoot);
   const events = readAllRunEvents(repoRoot);

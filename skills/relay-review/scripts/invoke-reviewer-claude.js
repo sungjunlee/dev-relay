@@ -15,20 +15,20 @@ const { summarizeFailure, ensureJsonText } = require("./reviewer-helpers");
 
 const args = process.argv.slice(2);
 const KNOWN_FLAGS = ["--repo", "--prompt-file", "--model", "--json", "--help", "-h"];
-const { getArg, hasFlag } = bindCliArgs(args, {
+const cliArgs = bindCliArgs(args, {
   commandName: "invoke-reviewer-claude",
   reservedFlags: KNOWN_FLAGS,
 });
 const CLAUDE_AUTH_PATTERNS = [/not logged/i, /please run \/login/i];
 
-if (!args.length || hasFlag(["--help", "-h"])) {
+if (!args.length || cliArgs.hasFlag(["--help", "-h"])) {
   console.log("Usage: invoke-reviewer-claude.js --repo <path> --prompt-file <path> [--model <name>] [--json]");
   console.log("\nOptions:");
   console.log(`  --repo <path>        ${modeLabel("--repo")} Repository root`);
   console.log(`  --prompt-file <path> ${modeLabel("--prompt-file")} Prompt bundle path`);
   console.log(`  --model <name>       ${modeLabel("--model")} Model override`);
   console.log(`  --json               ${modeLabel("--json")} Output JSON`);
-  process.exit(hasFlag(["--help", "-h"]) ? 0 : 1);
+  process.exit(cliArgs.hasFlag(["--help", "-h"]) ? 0 : 1);
 }
 
 function isClaudeBareAuthError(text) {
@@ -71,9 +71,9 @@ function probeClaudeAuth(claudeBin, repoPath) {
 }
 
 function main() {
-  const repoPath = path.resolve(getArg("--repo") || ".");
-  const promptFile = getArg("--prompt-file");
-  const model = getArg("--model");
+  const repoPath = path.resolve(cliArgs.getArg("--repo") || ".");
+  const promptFile = cliArgs.getArg("--prompt-file");
+  const model = cliArgs.getArg("--model");
   const claudeBin = process.env.RELAY_CLAUDE_BIN || "claude";
 
   if (!promptFile) {
@@ -124,7 +124,7 @@ function main() {
   }
   ensureJsonText(result, "Claude reviewer");
 
-  if (hasFlag("--json")) {
+  if (cliArgs.hasFlag("--json")) {
     console.log(result);
   } else {
     process.stdout.write(result);
