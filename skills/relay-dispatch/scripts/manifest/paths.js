@@ -71,11 +71,13 @@ function getExpectedManifestRepoRoot(repoPath, repoArg) {
   return getCanonicalRepoRoot(repoPath);
 }
 
-function parsePositiveInt(value, label) {
+function parsePositiveInt(value, label, { allowZero = false } = {}) {
   if (value === undefined) return undefined;
   const parsed = Number(value);
-  if (!Number.isInteger(parsed) || parsed <= 0) {
-    throw new Error(`${label} must be a positive integer`);
+  const minRejected = allowZero ? parsed < 0 : parsed <= 0;
+  if (!Number.isInteger(parsed) || minRejected) {
+    const requirement = allowZero ? "non-negative integer" : "positive integer";
+    throw new Error(`${label} must be a ${requirement}`);
   }
   return parsed;
 }

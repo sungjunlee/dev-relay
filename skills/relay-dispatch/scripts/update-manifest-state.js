@@ -108,13 +108,13 @@ function main() {
   const manifestPath = resolveManifestPath();
   const { data, body } = readManifest(manifestPath);
   const nextAction = getArg(args, "--next-action", undefined, CLI_ARG_OPTIONS) || defaultNextAction(targetState);
-  const prNumber = parsePositiveInt(getArg(args, "--pr-number", undefined, CLI_ARG_OPTIONS), "--pr-number");
+  const prNumber = parsePositiveInt(getArg(args, "--pr-number", undefined, CLI_ARG_OPTIONS), "--pr-number", { allowZero: true });
   const headSha = getArg(args, "--head-sha", undefined, CLI_ARG_OPTIONS);
-  const rounds = parsePositiveInt(getArg(args, "--rounds", undefined, CLI_ARG_OPTIONS), "--rounds");
+  const rounds = parsePositiveInt(getArg(args, "--rounds", undefined, CLI_ARG_OPTIONS), "--rounds", { allowZero: true });
   const verdict = getArg(args, "--verdict", undefined, CLI_ARG_OPTIONS);
   const lastReviewedSha = getArg(args, "--last-reviewed-sha", undefined, CLI_ARG_OPTIONS);
-  const maxRounds = parsePositiveInt(getArg(args, "--max-rounds", undefined, CLI_ARG_OPTIONS), "--max-rounds");
-  const repeatedIssueCount = parsePositiveInt(getArg(args, "--repeated-issue-count", undefined, CLI_ARG_OPTIONS), "--repeated-issue-count");
+  const maxRounds = parsePositiveInt(getArg(args, "--max-rounds", undefined, CLI_ARG_OPTIONS), "--max-rounds", { allowZero: true });
+  const repeatedIssueCount = parsePositiveInt(getArg(args, "--repeated-issue-count", undefined, CLI_ARG_OPTIONS), "--repeated-issue-count", { allowZero: true });
 
   let updated = updateManifestState(data, targetState, nextAction);
 
