@@ -12,6 +12,8 @@ const gh = (repoPath, ...ghArgs) => {
 
 const git = (repoPath, ...gitArgs) => execGit(repoPath, gitArgs);
 
+const RUBRIC_PASS_THROUGH_STATES = new Set(["loaded"]);
+
 function parsePositiveInt(value, label) {
   if (value === undefined) return undefined;
   const parsed = Number(value);
@@ -40,5 +42,6 @@ module.exports = {
   looksLikeGitRepo,
   parsePositiveInt,
   readText,
+  RUBRIC_PASS_THROUGH_STATES,
   writeText,
 };

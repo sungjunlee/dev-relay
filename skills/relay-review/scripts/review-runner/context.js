@@ -7,9 +7,7 @@ const {
 } = require("../../../relay-dispatch/scripts/manifest/paths");
 const { resolveManifestRecord } = require("../../../relay-dispatch/scripts/relay-resolver");
 const { getRubricAnchorStatus } = require("../../../relay-dispatch/scripts/manifest/rubric");
-const { gh, looksLikeGitRepo, parsePositiveInt, readText } = require("./common");
-
-const RUBRIC_PASS_THROUGH_STATES = new Set(["loaded"]);
+const { gh, looksLikeGitRepo, parsePositiveInt, readText, RUBRIC_PASS_THROUGH_STATES } = require("./common");
 
 // DNS hostname validation — conservative label allowlist. Rejects leading
 // dashes (which could be interpreted as flags by some CLI tools), whitespace,
