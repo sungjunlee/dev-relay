@@ -188,60 +188,79 @@ function deriveReviewRunnerRubricGate(manifestData, runDir) {
   };
 }
 
+const STATUS_RENDERERS = {
+  lgtm(result, prNumber) {
+    console.log(`✓ PR #${prNumber}: relay-review LGTM (round ${result.round || "?"}) — ready to merge`);
+  },
+  skipped(result, prNumber) {
+    console.log(`⊘ PR #${prNumber}: review skipped — ${result.reason} — merge explicitly if appropriate`);
+  },
+  escalated(result, prNumber) {
+    console.log(`✗ PR #${prNumber}: relay-review ESCALATED — resolve issues before merge`);
+    if (result.issues) console.log(`  ${result.issues}`);
+  },
+  changes_requested(result, prNumber) {
+    console.log(`✗ PR #${prNumber}: relay-review requested changes — re-dispatch or fix the branch before merge`);
+    if (result.issues) console.log(`  ${result.issues}`);
+  },
+  missing_rubric_path(result, prNumber) {
+    console.log(`✗ PR #${prNumber}: run is missing anchor.rubric_path — merge blocked`);
+    console.log("  Re-dispatch from relay-plan with --rubric-file before rerunning relay-review.");
+  },
+  missing_rubric_file(result, prNumber) {
+    console.log(`✗ PR #${prNumber}: anchored rubric file is missing from the run directory — merge blocked`);
+    if (result.reason) console.log(`  ${result.reason}`);
+    console.log("  Restore the anchored rubric file, or re-dispatch with a persisted rubric before rerunning relay-review.");
+  },
+  empty_rubric_file(result, prNumber) {
+    console.log(`✗ PR #${prNumber}: anchored rubric file is empty — merge blocked`);
+    if (result.reason) console.log(`  ${result.reason}`);
+    console.log("  Regenerate the rubric with relay-plan and re-dispatch before rerunning relay-review.");
+  },
+  invalid_rubric_path(result, prNumber) {
+    console.log(`✗ PR #${prNumber}: anchor.rubric_path escapes the run directory — merge blocked`);
+    if (result.reason) console.log(`  ${result.reason}`);
+    console.log("  Fix anchor.rubric_path to stay inside the run directory, then re-dispatch before rerunning relay-review.");
+  },
+  invalid_rubric_file(result, prNumber) {
+    console.log(`✗ PR #${prNumber}: anchor.rubric_path does not point to a readable rubric file — merge blocked`);
+    if (result.reason) console.log(`  ${result.reason}`);
+    console.log("  Fix or restore the anchored rubric file, then re-dispatch before rerunning relay-review.");
+  },
+  unsupported_grandfather_field(result, prNumber) {
+    console.log(`✗ PR #${prNumber}: manifest still carries anchor.rubric_grandfathered — merge blocked`);
+    if (result.reason) console.log(`  ${result.reason}`);
+    console.log("  Remove anchor.rubric_grandfathered and persist a valid anchor.rubric_path before rerunning relay-review.");
+  },
+  manifest_resolution_failed(result, prNumber) {
+    console.log(`✗ PR #${prNumber}: unable to resolve relay manifest — merge blocked`);
+    if (result.reason) console.log(`  ${result.reason}`);
+  },
+  reviewer_login_required(result, prNumber) {
+    console.log(`✗ PR #${prNumber}: reviewer_login was required for this run but could not be recorded — merge blocked`);
+    console.log("  Origin resolved to a non-default GitHub host but gh api user --hostname <host> failed during relay-review.");
+    console.log("  Fix the host auth (export GH_HOST=<host> or gh auth switch --hostname <host>), rerun relay-review, then retry.");
+  },
+  unauthorized_reviewer(result, prNumber) {
+    console.log(`✗ PR #${prNumber}: relay-review comment found but from unauthorized author (expected: ${result.expectedReviewerLogin})`);
+  },
+  stale(result, prNumber) {
+    console.log(`✗ PR #${prNumber}: relay-review is stale — run review again for the latest commit before merge`);
+    if (result.latestCommit) console.log(`  Latest commit: ${result.latestCommit}`);
+    if (result.reviewedAt) console.log(`  Review time:   ${result.reviewedAt}`);
+  },
+};
+
+function defaultStatusRenderer(result, prNumber) {
+  console.log(`✗ PR #${prNumber}: no relay-review comment found`);
+  console.log("  Run /relay-review first, or use --skip <reason> to bypass with audit trail.");
+}
+
 function output(result) {
   if (JSON_OUT) {
     console.log(JSON.stringify(result, null, 2));
   } else {
-    if (result.status === "lgtm") {
-      console.log(`✓ PR #${PR_NUM}: relay-review LGTM (round ${result.round || "?"}) — ready to merge`);
-    } else if (result.status === "skipped") {
-      console.log(`⊘ PR #${PR_NUM}: review skipped — ${result.reason} — merge explicitly if appropriate`);
-    } else if (result.status === "escalated") {
-      console.log(`✗ PR #${PR_NUM}: relay-review ESCALATED — resolve issues before merge`);
-      if (result.issues) console.log(`  ${result.issues}`);
-    } else if (result.status === "changes_requested") {
-      console.log(`✗ PR #${PR_NUM}: relay-review requested changes — re-dispatch or fix the branch before merge`);
-      if (result.issues) console.log(`  ${result.issues}`);
-    } else if (result.status === "missing_rubric_path") {
-      console.log(`✗ PR #${PR_NUM}: run is missing anchor.rubric_path — merge blocked`);
-      console.log("  Re-dispatch from relay-plan with --rubric-file before rerunning relay-review.");
-    } else if (result.status === "missing_rubric_file") {
-      console.log(`✗ PR #${PR_NUM}: anchored rubric file is missing from the run directory — merge blocked`);
-      if (result.reason) console.log(`  ${result.reason}`);
-      console.log("  Restore the anchored rubric file, or re-dispatch with a persisted rubric before rerunning relay-review.");
-    } else if (result.status === "empty_rubric_file") {
-      console.log(`✗ PR #${PR_NUM}: anchored rubric file is empty — merge blocked`);
-      if (result.reason) console.log(`  ${result.reason}`);
-      console.log("  Regenerate the rubric with relay-plan and re-dispatch before rerunning relay-review.");
-    } else if (result.status === "invalid_rubric_path") {
-      console.log(`✗ PR #${PR_NUM}: anchor.rubric_path escapes the run directory — merge blocked`);
-      if (result.reason) console.log(`  ${result.reason}`);
-      console.log("  Fix anchor.rubric_path to stay inside the run directory, then re-dispatch before rerunning relay-review.");
-    } else if (result.status === "invalid_rubric_file") {
-      console.log(`✗ PR #${PR_NUM}: anchor.rubric_path does not point to a readable rubric file — merge blocked`);
-      if (result.reason) console.log(`  ${result.reason}`);
-      console.log("  Fix or restore the anchored rubric file, then re-dispatch before rerunning relay-review.");
-    } else if (result.status === "unsupported_grandfather_field") {
-      console.log(`✗ PR #${PR_NUM}: manifest still carries anchor.rubric_grandfathered — merge blocked`);
-      if (result.reason) console.log(`  ${result.reason}`);
-      console.log("  Remove anchor.rubric_grandfathered and persist a valid anchor.rubric_path before rerunning relay-review.");
-    } else if (result.status === "manifest_resolution_failed") {
-      console.log(`✗ PR #${PR_NUM}: unable to resolve relay manifest — merge blocked`);
-      if (result.reason) console.log(`  ${result.reason}`);
-    } else if (result.status === "reviewer_login_required") {
-      console.log(`✗ PR #${PR_NUM}: reviewer_login was required for this run but could not be recorded — merge blocked`);
-      console.log("  Origin resolved to a non-default GitHub host but gh api user --hostname <host> failed during relay-review.");
-      console.log("  Fix the host auth (export GH_HOST=<host> or gh auth switch --hostname <host>), rerun relay-review, then retry.");
-    } else if (result.status === "unauthorized_reviewer") {
-      console.log(`✗ PR #${PR_NUM}: relay-review comment found but from unauthorized author (expected: ${result.expectedReviewerLogin})`);
-    } else if (result.status === "stale") {
-      console.log(`✗ PR #${PR_NUM}: relay-review is stale — run review again for the latest commit before merge`);
-      if (result.latestCommit) console.log(`  Latest commit: ${result.latestCommit}`);
-      if (result.reviewedAt) console.log(`  Review time:   ${result.reviewedAt}`);
-    } else {
-      console.log(`✗ PR #${PR_NUM}: no relay-review comment found`);
-      console.log("  Run /relay-review first, or use --skip <reason> to bypass with audit trail.");
-    }
+    (STATUS_RENDERERS[result.status] || defaultStatusRenderer)(result, PR_NUM);
   }
 }
 
