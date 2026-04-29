@@ -12,8 +12,6 @@ const gh = (repoPath, ...ghArgs) => {
 
 const git = (repoPath, ...gitArgs) => execGit(repoPath, gitArgs);
 
-const RUBRIC_PASS_THROUGH_STATES = new Set(["loaded"]);
-
 function readText(filePath) {
   return fs.readFileSync(filePath, "utf-8");
 }
@@ -27,6 +25,5 @@ module.exports = {
   gh,
   git,
   readText,
-  RUBRIC_PASS_THROUGH_STATES,
   writeText,
 };
