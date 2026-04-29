@@ -50,7 +50,7 @@ function persistDoneCriteria({ repo, runId, text }) {
 
 function main() {
   const args = process.argv.slice(2);
-  const { getArg, hasFlag } = bindCliArgs(args, {
+  const cliArgs = bindCliArgs(args, {
     commandName: "persist-done-criteria",
     reservedFlags: KNOWN_FLAGS,
   });
@@ -61,13 +61,13 @@ function main() {
       throw new Error(`unknown flag(s): ${unknownFlags.join(", ")}`);
     }
 
-    if (hasFlag("--help") || hasFlag("-h")) {
+    if (cliArgs.hasFlag("--help") || cliArgs.hasFlag("-h")) {
       usage();
       return;
     }
 
-    const repo = getArg("--repo");
-    const runId = getArg("--run-id");
+    const repo = cliArgs.getArg("--repo");
+    const runId = cliArgs.getArg("--run-id");
     if (!repo) throw new Error("--repo is required");
     if (!runId) throw new Error("--run-id is required");
 
@@ -75,12 +75,12 @@ function main() {
       repo,
       runId,
       text: readInputText({
-        text: getArg("--text"),
-        file: getArg("--file"),
+        text: cliArgs.getArg("--text"),
+        file: cliArgs.getArg("--file"),
       }),
     });
 
-    if (hasFlag("--json")) {
+    if (cliArgs.hasFlag("--json")) {
       console.log(JSON.stringify(result, null, 2));
     } else {
       console.log(`Done Criteria: ${result.path}`);

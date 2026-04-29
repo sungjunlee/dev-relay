@@ -11,12 +11,12 @@ const {
 
 const args = process.argv.slice(2);
 const KNOWN_FLAGS = ["--repo", "--contract-file", "--json", "--help", "-h"];
-const { getArg, hasFlag } = bindCliArgs(args, {
+const cliArgs = bindCliArgs(args, {
   commandName: "persist-request",
   reservedFlags: KNOWN_FLAGS,
 });
 
-if (!args.length || hasFlag(["--help", "-h"])) {
+if (!args.length || cliArgs.hasFlag(["--help", "-h"])) {
   console.log("Usage: persist-request.js --repo <path> --contract-file <path> [--json]");
   console.log("");
   console.log("Persist a relay-intake request artifact and one-or-more leaf handoff bundles.");
@@ -25,12 +25,12 @@ if (!args.length || hasFlag(["--help", "-h"])) {
   console.log(`  --repo <path>          ${modeLabel("--repo")} Repository root`);
   console.log(`  --contract-file <path> ${modeLabel("--contract-file")} Request contract JSON path`);
   console.log(`  --json                 ${modeLabel("--json")} Output JSON`);
-  process.exit(hasFlag(["--help", "-h"]) ? 0 : 1);
+  process.exit(cliArgs.hasFlag(["--help", "-h"]) ? 0 : 1);
 }
 
-const repoRoot = path.resolve(getArg("--repo") || ".");
-const contractFile = getArg("--contract-file");
-const jsonOut = hasFlag("--json");
+const repoRoot = path.resolve(cliArgs.getArg("--repo") || ".");
+const contractFile = cliArgs.getArg("--contract-file");
+const jsonOut = cliArgs.hasFlag("--json");
 
 if (!contractFile) {
   console.error("Error: --contract-file is required");

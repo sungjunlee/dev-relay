@@ -43,10 +43,10 @@ const { appendRunEvent } = require("../../relay-dispatch/scripts/relay-events");
 const { resolveManifestRecord } = require("../../relay-dispatch/scripts/relay-resolver");
 const { stampPrNumberUnderLock } = require("../../relay-dispatch/scripts/manifest/pr-number-stamp");
 const {
-  getArg,
   getPositionals,
-  hasFlag,
   modeLabel,
+  readArg,
+  schemaHasFlag,
 } = require("../../relay-dispatch/scripts/cli-args");
 const { execGh } = require("../../relay-dispatch/scripts/exec");
 
@@ -60,7 +60,7 @@ function getGateCheckRepoRoot() {
 
 const args = process.argv.slice(2);
 const CLI_ARG_OPTIONS = { commandName: "gate-check", reservedFlags: ["-h"] };
-const hasCliFlag = (flag) => hasFlag(args, flag, CLI_ARG_OPTIONS);
+const hasCliFlag = (flag) => schemaHasFlag(args, flag, CLI_ARG_OPTIONS);
 
 if (!args.length || hasCliFlag("--help") || hasCliFlag("-h")) {
   console.log("Usage: gate-check.js <PR-number> [--skip <reason>] [--dry-run] [--json]");
@@ -82,7 +82,7 @@ const DRY_RUN = hasCliFlag("--dry-run");
 const JSON_OUT = hasCliFlag("--json");
 
 const SKIP = hasCliFlag("--skip");
-const SKIP_REASON = getArg(args, "--skip", null, CLI_ARG_OPTIONS);
+const SKIP_REASON = readArg(args, "--skip", null, CLI_ARG_OPTIONS);
 
 if (SKIP && !SKIP_REASON) {
   console.error("Error: --skip requires a reason. Example: --skip \"hotfix for production outage\"");

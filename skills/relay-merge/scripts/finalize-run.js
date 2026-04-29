@@ -68,11 +68,11 @@ const KNOWN_FLAGS = [
   "--skip-merge", "--no-issue-close", "--dry-run", "--json", "--help", "-h",
 ];
 const LEGACY_BOOTSTRAP_REASON_PREFIX = /^\s*bootstrap:/i;
-const { getArg, hasFlag } = bindCliArgs(args, {
+const cliArgs = bindCliArgs(args, {
   commandName: "finalize-run",
   reservedFlags: KNOWN_FLAGS,
 });
-const helpRequested = hasFlag(["--help", "-h"]);
+const helpRequested = cliArgs.hasFlag(["--help", "-h"]);
 
 if (!args.length || helpRequested) {
   console.log("Usage: finalize-run.js (--repo <path> --run-id <id> | --repo <path> --pr <number> | --manifest <path>) [options]");
@@ -228,17 +228,17 @@ function deleteRemoteBranch(repoPath, branch) {
 }
 
 function main() {
-  const repoArg = getArg("--repo");
+  const repoArg = cliArgs.getArg("--repo");
   let repoPath = path.resolve(repoArg || ".");
-  const manifestArg = getArg("--manifest");
-  const runId = getArg("--run-id");
-  let prNumber = parsePositiveInt(getArg("--pr"), "--pr");
-  const mergeMethod = getArg("--merge-method") || "squash";
-  const skipReviewReason = getArg("--skip-review");
-  const forceFinalizeNonready = hasFlag("--force-finalize-nonready");
+  const manifestArg = cliArgs.getArg("--manifest");
+  const runId = cliArgs.getArg("--run-id");
+  let prNumber = parsePositiveInt(cliArgs.getArg("--pr"), "--pr");
+  const mergeMethod = cliArgs.getArg("--merge-method") || "squash";
+  const skipReviewReason = cliArgs.getArg("--skip-review");
+  const forceFinalizeNonready = cliArgs.hasFlag("--force-finalize-nonready");
   let forceFinalizeReason;
   try {
-    forceFinalizeReason = getArg("--reason");
+    forceFinalizeReason = cliArgs.getArg("--reason");
   } catch (error) {
     if (forceFinalizeNonready && error.name === "CliSchemaError" && error.details?.flag === "--reason") {
       forceFinalizeReason = "";
@@ -246,10 +246,10 @@ function main() {
       throw error;
     }
   }
-  const dryRun = hasFlag("--dry-run");
-  const skipMerge = hasFlag("--skip-merge");
-  const skipIssueClose = hasFlag("--no-issue-close");
-  const jsonOut = hasFlag("--json");
+  const dryRun = cliArgs.hasFlag("--dry-run");
+  const skipMerge = cliArgs.hasFlag("--skip-merge");
+  const skipIssueClose = cliArgs.hasFlag("--no-issue-close");
+  const jsonOut = cliArgs.hasFlag("--json");
   if (forceFinalizeNonready && !String(forceFinalizeReason || "").trim()) {
     throw new Error("--force-finalize-nonready requires --reason <non-empty-text>");
   }
@@ -260,7 +260,7 @@ function main() {
     );
   }
 
-  let branch = getArg("--branch");
+  let branch = cliArgs.getArg("--branch");
   let manifestRecord = resolveManifestRecord({
     repoRoot: repoPath,
     manifestPath: manifestArg,

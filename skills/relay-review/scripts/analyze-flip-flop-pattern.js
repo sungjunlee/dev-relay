@@ -34,10 +34,10 @@ const {
 const { readManifest } = require("../../relay-dispatch/scripts/manifest/store");
 const {
   findUnknownFlags,
-  getArg,
   getPositionals,
-  hasFlag,
   modeLabel,
+  readArg,
+  schemaHasFlag,
 } = require("../../relay-dispatch/scripts/cli-args");
 
 const DEFAULT_WINDOW_DAYS = 30;
@@ -68,25 +68,25 @@ function parseArgs(argv) {
     throw new Error(`Unexpected positional argument: ${positionals[0]}`);
   }
 
-  const issueRaw = getArg(args, "--issue", undefined, CLI_ARG_OPTIONS);
-  const windowDaysRaw = getArg(args, "--window-days", undefined, CLI_ARG_OPTIONS);
-  const runsDirRaw = getArg(args, "--runs-dir", undefined, CLI_ARG_OPTIONS);
+  const issueRaw = readArg(args, "--issue", undefined, CLI_ARG_OPTIONS);
+  const windowDaysRaw = readArg(args, "--window-days", undefined, CLI_ARG_OPTIONS);
+  const runsDirRaw = readArg(args, "--runs-dir", undefined, CLI_ARG_OPTIONS);
   const options = {
-    help: hasFlag(args, ["--help", "-h"], CLI_ARG_OPTIONS),
+    help: schemaHasFlag(args, ["--help", "-h"], CLI_ARG_OPTIONS),
     issueNumber: issueRaw === undefined ? null : parsePositiveInt(issueRaw, "--issue"),
-    postComment: hasFlag(args, "--post-comment", CLI_ARG_OPTIONS),
+    postComment: schemaHasFlag(args, "--post-comment", CLI_ARG_OPTIONS),
     print: true,
     runsDir: path.resolve(runsDirRaw || getRunsBase()),
     windowDays: windowDaysRaw === undefined ? DEFAULT_WINDOW_DAYS : parsePositiveInt(windowDaysRaw, "--window-days"),
   };
 
-  if (hasFlag(args, "--issue", CLI_ARG_OPTIONS) && issueRaw === undefined) {
+  if (schemaHasFlag(args, "--issue", CLI_ARG_OPTIONS) && issueRaw === undefined) {
     throw new Error("--issue requires a value");
   }
-  if (hasFlag(args, "--window-days", CLI_ARG_OPTIONS) && windowDaysRaw === undefined) {
+  if (schemaHasFlag(args, "--window-days", CLI_ARG_OPTIONS) && windowDaysRaw === undefined) {
     throw new Error("--window-days requires a value");
   }
-  if (hasFlag(args, "--runs-dir", CLI_ARG_OPTIONS) && runsDirRaw === undefined) {
+  if (schemaHasFlag(args, "--runs-dir", CLI_ARG_OPTIONS) && runsDirRaw === undefined) {
     throw new Error("--runs-dir requires a value");
   }
 
