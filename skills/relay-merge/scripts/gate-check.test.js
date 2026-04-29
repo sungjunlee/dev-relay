@@ -96,6 +96,57 @@ function runGateCheckDryRun(payload, { json = true } = {}) {
   };
 }
 
+test("gate-check text output preserves representative status renderings byte-for-byte", () => {
+  const escalated = runGateCheckDryRun([
+    "<!-- relay-review -->\n## Relay Review\nVerdict: ESCALATED\nIssues:\n- foo.js:1 — blocked",
+  ], { json: false });
+  assert.equal(escalated.status, 1);
+  assert.equal(
+    escalated.stdout,
+    "✗ PR #40: relay-review ESCALATED — resolve issues before merge\n"
+      + "  - foo.js:1 — blocked\n"
+  );
+
+  const runDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-gate-output-"));
+  const missingRubric = runGateCheckDryRun({
+    comments: [
+      {
+        body: "<!-- relay-review -->\n## Relay Review\nVerdict: LGTM\nRounds: 1",
+        createdAt: "2026-04-03T08:00:00Z",
+      },
+    ],
+    commits: [
+      { oid: "abc123", committedDate: "2026-04-03T07:00:00Z" },
+    ],
+    manifest: {
+      run_id: "issue-40-20260412010000000",
+      anchor: {
+        rubric_path: "rubric.yaml",
+      },
+      review: {
+        last_reviewed_sha: "abc123",
+      },
+    },
+    runDir,
+  }, { json: false });
+  assert.equal(missingRubric.status, 1);
+  assert.equal(
+    missingRubric.stdout,
+    "✗ PR #40: anchored rubric file is missing from the run directory — merge blocked\n"
+      + `  rubric file is missing from the run directory: ${path.join(runDir, "rubric.yaml")}\n`
+      + "  Restore the anchored rubric file, or re-dispatch with a persisted rubric before rerunning relay-review.\n"
+  );
+
+  const lgtm = runGateCheckDryRun([
+    "<!-- relay-review -->\n## Relay Review\nVerdict: LGTM\nRounds: 2",
+  ], { json: false });
+  assert.equal(lgtm.status, 0);
+  assert.equal(
+    lgtm.stdout,
+    "✓ PR #40: relay-review LGTM (round 2) — ready to merge\n"
+  );
+});
+
 function writeFakeGh(binDir, logPath = path.join(binDir, "gh.log")) {
   const ghPath = path.join(binDir, "gh");
   fs.writeFileSync(ghPath, `#!/usr/bin/env node
