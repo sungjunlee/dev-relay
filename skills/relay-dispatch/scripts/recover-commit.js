@@ -12,7 +12,7 @@ const { parsePrNumber, formatExecError } = require("./dispatch-publish");
 const { resolveManifestRecord } = require("./relay-resolver");
 const { appendRunEvent, EVENTS } = require("./relay-events");
 const { STATES } = require("./manifest/lifecycle");
-const { getCanonicalRepoRoot, getRunDir, summarizeFailure, validateManifestPaths } = require("./manifest/paths");
+const { getCanonicalRepoRoot, getRunDir, nowIso, summarizeFailure, validateManifestPaths } = require("./manifest/paths");
 const { stampPrNumberUnderLock } = require("./manifest/pr-number-stamp");
 const { rebrandEvidence } = require("./execution-evidence");
 const {
@@ -49,10 +49,6 @@ function printHelp(exitCode) {
 
 if (!args.length || hasCliFlag(["--help", "-h"])) {
   printHelp(hasCliFlag(["--help", "-h"]) ? 0 : 1);
-}
-
-function nowIso() {
-  return new Date().toISOString();
 }
 
 function shellQuote(value) {

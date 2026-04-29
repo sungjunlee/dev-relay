@@ -5,15 +5,12 @@ const path = require("path");
 const {
   ensureRunLayout,
   listManifestPaths,
+  nowIso,
   requireValidRunId,
 } = require("./paths");
 
 const RELAY_VERSION = 2;
 const NOTES_TEMPLATE = "# Notes\n\n## Context\n\n## Review History\n";
-
-function nowIso() {
-  return new Date().toISOString();
-}
 
 function getActorName(repoRoot) {
   if (!repoRoot || typeof repoRoot !== "string") {

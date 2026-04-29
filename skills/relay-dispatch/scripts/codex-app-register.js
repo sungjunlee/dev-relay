@@ -13,6 +13,7 @@ const path = require("path");
 const crypto = require("crypto");
 const os = require("os");
 const { execGit } = require("./exec");
+const { nowIso } = require("./manifest/paths");
 
 const SOURCE = "vscode";
 const MODEL_PROVIDER = "openai";
@@ -46,10 +47,6 @@ function getCodexVersion() {
   }
 }
 
-function nowISO() {
-  return new Date().toISOString().replace(/\.\d{3}Z$/, ".000Z");
-}
-
 function ensureInArray(obj, key, value) {
   const arr = obj[key] || [];
   if (!arr.includes(value)) arr.push(value);
@@ -74,7 +71,7 @@ function registerCodexApp({ wtPath, repoPath, branch, title, pin = false }) {
   const SESSION_INDEX = path.join(CODEX_HOME, "session_index.jsonl");
 
   const threadId = generateUUIDv7();
-  const now = nowISO();
+  const now = nowIso({ zeroMilliseconds: true });
   const epoch = Math.floor(Date.now() / 1000);
 
   let gitSha = "", gitOrigin = "";

@@ -80,6 +80,11 @@ function parsePositiveInt(value, label) {
   return parsed;
 }
 
+function nowIso({ zeroMilliseconds = false } = {}) {
+  const iso = new Date().toISOString();
+  return zeroMilliseconds ? iso.replace(/\.\d{3}Z$/, ".000Z") : iso;
+}
+
 function getRepoSlug(repoRoot) {
   if (!repoRoot || typeof repoRoot !== "string") {
     throw new Error(`getRepoSlug requires a non-empty repoRoot path, got: ${JSON.stringify(repoRoot)}`);
@@ -447,6 +452,7 @@ module.exports = {
   isPathContainedWithin,
   listManifestPaths,
   looksLikeGitRepo,
+  nowIso,
   parsePositiveInt,
   requireValidRunId,
   sameFilesystemLocation,

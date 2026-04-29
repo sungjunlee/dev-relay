@@ -2,7 +2,7 @@ const fs = require("fs");
 const path = require("path");
 
 const { execGit } = require("../exec");
-const { summarizeFailure, validateManifestPaths } = require("./paths");
+const { nowIso, summarizeFailure, validateManifestPaths } = require("./paths");
 
 const CLEANUP_STATUSES = Object.freeze({
   PENDING: "pending",
@@ -10,10 +10,6 @@ const CLEANUP_STATUSES = Object.freeze({
   FAILED: "failed",
   SKIPPED: "skipped",
 });
-
-function nowIso() {
-  return new Date().toISOString();
-}
 
 function createCleanupSkeleton() {
   return {
