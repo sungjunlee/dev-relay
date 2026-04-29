@@ -84,6 +84,7 @@ const {
   getManifestPath,
   getRunDir,
   inferIssueNumber,
+  looksLikeGitRepo,
   sameFilesystemLocation,
   validateManifestPaths,
 } = require("./manifest/paths");
@@ -372,10 +373,6 @@ function resolveBaseBranchForNewDispatch(repoDir) {
 
 function shellQuote(s) {
   return "'" + s.replace(/'/g, "'\\''") + "'";
-}
-
-function looksLikeGitRepo(repoPath) {
-  return fs.existsSync(path.join(repoPath, ".git"));
 }
 
 function terminateProcessTree(pid) {

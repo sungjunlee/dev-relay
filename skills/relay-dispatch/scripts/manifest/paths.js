@@ -60,6 +60,10 @@ function getCanonicalRepoRoot(input) {
   }
 }
 
+function looksLikeGitRepo(repoPath) {
+  return fs.existsSync(path.join(repoPath, ".git"));
+}
+
 function getRepoSlug(repoRoot) {
   if (!repoRoot || typeof repoRoot !== "string") {
     throw new Error(`getRepoSlug requires a non-empty repoRoot path, got: ${JSON.stringify(repoRoot)}`);
@@ -425,6 +429,7 @@ module.exports = {
   inferIssueNumber,
   isPathContainedWithin,
   listManifestPaths,
+  looksLikeGitRepo,
   requireValidRunId,
   sameFilesystemLocation,
   validateManifestPaths,

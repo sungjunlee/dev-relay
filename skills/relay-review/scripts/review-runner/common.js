@@ -32,14 +32,9 @@ function writeText(filePath, text) {
   fs.writeFileSync(filePath, text, "utf-8");
 }
 
-function looksLikeGitRepo(repoPath) {
-  return fs.existsSync(path.join(repoPath, ".git"));
-}
-
 module.exports = {
   gh,
   git,
-  looksLikeGitRepo,
   parsePositiveInt,
   readText,
   RUBRIC_PASS_THROUGH_STATES,

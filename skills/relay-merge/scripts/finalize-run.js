@@ -29,11 +29,11 @@
  *   --help, -h             Show usage
  */
 
-const fs = require("fs");
 const path = require("path");
 const {
   getCanonicalRepoRoot,
   getRunDir,
+  looksLikeGitRepo,
   validateManifestPaths,
 } = require("../../relay-dispatch/scripts/manifest/paths");
 const {
@@ -111,10 +111,6 @@ function parsePositiveInt(value, label) {
 
 function hasLegacyBootstrapReasonPrefix(reason) {
   return LEGACY_BOOTSTRAP_REASON_PREFIX.exec(String(reason || "")) !== null;
-}
-
-function looksLikeGitRepo(repoPath) {
-  return fs.existsSync(path.join(repoPath, ".git"));
 }
 
 function getExpectedManifestRepoRoot(repoPath, repoArg) {

@@ -22,9 +22,9 @@
  */
 
 const path = require("path");
-const fs = require("fs");
 const {
   getCanonicalRepoRoot,
+  looksLikeGitRepo,
   validateManifestPaths,
 } = require("../../relay-dispatch/scripts/manifest/paths");
 const {
@@ -84,10 +84,6 @@ function parsePositiveInt(value, label) {
     throw new Error(`${label} must be a positive integer`);
   }
   return parsed;
-}
-
-function looksLikeGitRepo(repoPath) {
-  return fs.existsSync(path.join(repoPath, ".git"));
 }
 
 function getExpectedManifestRepoRoot(repoPath, repoArg) {
