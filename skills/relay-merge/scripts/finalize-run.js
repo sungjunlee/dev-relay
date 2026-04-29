@@ -67,7 +67,6 @@ const KNOWN_FLAGS = [
   "--force-finalize-nonready", "--reason",
   "--skip-merge", "--no-issue-close", "--dry-run", "--json", "--help", "-h",
 ];
-const LEGACY_BOOTSTRAP_REASON_PREFIX = /^\s*bootstrap:/i;
 const cliArgs = bindCliArgs(args, {
   commandName: "finalize-run",
   reservedFlags: KNOWN_FLAGS,
@@ -98,10 +97,6 @@ if (!args.length || helpRequested) {
   console.log("  State is 'escalated' + dispatch-level failure resolved:  --force-finalize-nonready --reason <text>");
   console.log("  State is 'ready_to_merge':                               neither - just run finalize-run");
   process.exit(helpRequested ? 0 : 1);
-}
-
-function hasLegacyBootstrapReasonPrefix(reason) {
-  return LEGACY_BOOTSTRAP_REASON_PREFIX.exec(String(reason || "")) !== null;
 }
 
 function resolveBranch(repoPath, prNumber, branchArg, manifestData) {
@@ -252,12 +247,6 @@ function main() {
   const jsonOut = cliArgs.hasFlag("--json");
   if (forceFinalizeNonready && !String(forceFinalizeReason || "").trim()) {
     throw new Error("--force-finalize-nonready requires --reason <non-empty-text>");
-  }
-  if (forceFinalizeNonready && hasLegacyBootstrapReasonPrefix(forceFinalizeReason)) {
-    console.error(
-      "Warning: bootstrap-prefixed --force-finalize-nonready reasons are deprecated. " +
-      "Use relay-reconcile-artifact --artifact-path <path> --writer-pr <pr> --reason <reason>."
-    );
   }
 
   let branch = cliArgs.getArg("--branch");
