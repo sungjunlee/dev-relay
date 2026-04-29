@@ -33,6 +33,7 @@ const path = require("path");
 const {
   getExpectedManifestRepoRoot,
   getRunDir,
+  parsePositiveInt,
   summarizeFailure,
   validateManifestPaths,
 } = require("../../relay-dispatch/scripts/manifest/paths");
@@ -97,15 +98,6 @@ if (!args.length || helpRequested) {
   console.log("  State is 'escalated' + dispatch-level failure resolved:  --force-finalize-nonready --reason <text>");
   console.log("  State is 'ready_to_merge':                               neither - just run finalize-run");
   process.exit(helpRequested ? 0 : 1);
-}
-
-function parsePositiveInt(value, label) {
-  if (value === undefined) return undefined;
-  const parsed = Number(value);
-  if (!Number.isInteger(parsed) || parsed <= 0) {
-    throw new Error(`${label} must be a positive integer`);
-  }
-  return parsed;
 }
 
 function hasLegacyBootstrapReasonPrefix(reason) {

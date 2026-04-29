@@ -32,6 +32,7 @@ const {
   readManifest,
   writeManifest,
 } = require("./manifest/store");
+const { parsePositiveInt } = require("./manifest/paths");
 const { getArg, hasFlag, modeLabel } = require("./cli-args");
 const { resolveManifestRecord } = require("./relay-resolver");
 
@@ -59,15 +60,6 @@ if (!args.length || hasCliFlag(["--help", "-h"])) {
   console.log(`  --dry-run            ${modeLabel("--dry-run")} Print result without writing`);
   console.log(`  --json               ${modeLabel("--json")} Output JSON`);
   process.exit(hasCliFlag(["--help", "-h"]) ? 0 : 1);
-}
-
-function parsePositiveInt(value, label) {
-  if (value === undefined) return undefined;
-  const parsed = Number(value);
-  if (!Number.isInteger(parsed) || parsed < 0) {
-    throw new Error(`${label} must be a non-negative integer`);
-  }
-  return parsed;
 }
 
 function defaultNextAction(state) {

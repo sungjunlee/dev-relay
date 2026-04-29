@@ -71,6 +71,15 @@ function getExpectedManifestRepoRoot(repoPath, repoArg) {
   return getCanonicalRepoRoot(repoPath);
 }
 
+function parsePositiveInt(value, label) {
+  if (value === undefined) return undefined;
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new Error(`${label} must be a positive integer`);
+  }
+  return parsed;
+}
+
 function getRepoSlug(repoRoot) {
   if (!repoRoot || typeof repoRoot !== "string") {
     throw new Error(`getRepoSlug requires a non-empty repoRoot path, got: ${JSON.stringify(repoRoot)}`);
@@ -438,6 +447,7 @@ module.exports = {
   isPathContainedWithin,
   listManifestPaths,
   looksLikeGitRepo,
+  parsePositiveInt,
   requireValidRunId,
   sameFilesystemLocation,
   summarizeFailure,
