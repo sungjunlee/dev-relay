@@ -3,7 +3,7 @@ const fs = require("fs");
 const path = require("path");
 const {
   getCanonicalRepoRoot,
-  looksLikeGitRepo,
+  getExpectedManifestRepoRoot,
   validateManifestPaths,
 } = require("../../../relay-dispatch/scripts/manifest/paths");
 const { resolveManifestRecord } = require("../../../relay-dispatch/scripts/relay-resolver");
@@ -246,10 +246,6 @@ function resolveIssueNumber(repoPath, prNumber, branch, manifestData, options = 
   return resolveClosingReferenceIssue(parsed.closingIssuesReferences, prNumber);
 }
 
-function getExpectedManifestRepoRoot(repoPath) {
-  return looksLikeGitRepo(repoPath) ? getCanonicalRepoRoot(repoPath) : undefined;
-}
-
 function resolvePrForBranch(repoPath, branch) {
   const raw = gh(repoPath, "pr", "list", "--head", branch, "--json", "number");
   const parsed = JSON.parse(raw);
@@ -262,7 +258,7 @@ function resolveBranchForPr(repoPath, prNumber) {
   return JSON.parse(raw).headRefName;
 }
 
-function resolveContext(repoPath, manifestPathArg, runIdArg, branchArg, prArg, doneCriteriaFileArg = null) {
+function resolveContext(repoPath, repoArg, manifestPathArg, runIdArg, branchArg, prArg, doneCriteriaFileArg = null) {
   let branch = branchArg;
   let prNumber = parsePositiveInt(prArg, "--pr");
 
@@ -282,7 +278,7 @@ function resolveContext(repoPath, manifestPathArg, runIdArg, branchArg, prArg, d
     prNumber,
   });
   const validatedPaths = validateManifestPaths(manifest.data?.paths, {
-    expectedRepoRoot: manifestPathArg ? undefined : getExpectedManifestRepoRoot(repoPath),
+    expectedRepoRoot: manifestPathArg ? undefined : getExpectedManifestRepoRoot(repoPath, repoArg),
     manifestPath: manifest.manifestPath,
     runId: manifest.data?.run_id,
     requireWorktree: true,

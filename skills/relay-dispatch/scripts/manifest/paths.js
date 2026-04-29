@@ -64,6 +64,13 @@ function looksLikeGitRepo(repoPath) {
   return fs.existsSync(path.join(repoPath, ".git"));
 }
 
+function getExpectedManifestRepoRoot(repoPath, repoArg) {
+  if (!repoArg && !looksLikeGitRepo(repoPath)) {
+    return undefined;
+  }
+  return getCanonicalRepoRoot(repoPath);
+}
+
 function getRepoSlug(repoRoot) {
   if (!repoRoot || typeof repoRoot !== "string") {
     throw new Error(`getRepoSlug requires a non-empty repoRoot path, got: ${JSON.stringify(repoRoot)}`);
@@ -418,6 +425,7 @@ module.exports = {
   ensureRunLayout,
   getCanonicalRepoRoot,
   getEventsPath,
+  getExpectedManifestRepoRoot,
   getManifestPath,
   getRelayHome,
   getRelayWorktreeBase,

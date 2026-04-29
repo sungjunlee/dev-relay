@@ -23,8 +23,7 @@
 
 const path = require("path");
 const {
-  getCanonicalRepoRoot,
-  looksLikeGitRepo,
+  getExpectedManifestRepoRoot,
   validateManifestPaths,
 } = require("../../relay-dispatch/scripts/manifest/paths");
 const {
@@ -84,13 +83,6 @@ function parsePositiveInt(value, label) {
     throw new Error(`${label} must be a positive integer`);
   }
   return parsed;
-}
-
-function getExpectedManifestRepoRoot(repoPath, repoArg) {
-  if (!repoArg && !looksLikeGitRepo(repoPath)) {
-    return undefined;
-  }
-  return getCanonicalRepoRoot(repoPath);
 }
 
 function sameBootstrapExemption(data, { artifactPath, writerPr, reason }) {

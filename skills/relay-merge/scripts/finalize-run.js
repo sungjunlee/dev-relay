@@ -31,9 +31,8 @@
 
 const path = require("path");
 const {
-  getCanonicalRepoRoot,
+  getExpectedManifestRepoRoot,
   getRunDir,
-  looksLikeGitRepo,
   validateManifestPaths,
 } = require("../../relay-dispatch/scripts/manifest/paths");
 const {
@@ -111,13 +110,6 @@ function parsePositiveInt(value, label) {
 
 function hasLegacyBootstrapReasonPrefix(reason) {
   return LEGACY_BOOTSTRAP_REASON_PREFIX.exec(String(reason || "")) !== null;
-}
-
-function getExpectedManifestRepoRoot(repoPath, repoArg) {
-  if (!repoArg && !looksLikeGitRepo(repoPath)) {
-    return undefined;
-  }
-  return getCanonicalRepoRoot(repoPath);
 }
 
 function resolveBranch(repoPath, prNumber, branchArg, manifestData) {
