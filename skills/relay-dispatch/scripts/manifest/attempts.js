@@ -3,15 +3,12 @@ const path = require("path");
 const {
   ensureRunLayout,
   getRunDir,
+  nowIso,
 } = require("./paths");
 const {
   readTextFileWithoutFollowingSymlinks,
   writeTextFileWithoutFollowingSymlinks,
 } = require("./rubric");
-
-function nowIso() {
-  return new Date().toISOString();
-}
 
 function getAttemptsPath(repoRoot, runId) {
   return path.join(getRunDir(repoRoot, runId), "previous-attempts.json");

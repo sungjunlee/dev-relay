@@ -1,3 +1,4 @@
+const { nowIso } = require("./paths");
 const { getRubricAnchorStatus } = require("./rubric");
 
 const STATES = Object.freeze({
@@ -21,10 +22,6 @@ const ALLOWED_TRANSITIONS = Object.freeze({
   [STATES.MERGED]: new Set(),
   [STATES.CLOSED]: new Set(),
 });
-
-function nowIso() {
-  return new Date().toISOString();
-}
 
 function validateTransition(fromState, toState) {
   if (!Object.values(STATES).includes(fromState)) {

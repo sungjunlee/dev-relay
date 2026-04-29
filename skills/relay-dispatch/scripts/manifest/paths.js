@@ -4,7 +4,7 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 
-function summarizeError(error) {
+function summarizeFailure(error) {
   const stderr = String(error.stderr || "").trim();
   const stdout = String(error.stdout || "").trim();
   return stderr || stdout || error.message;
@@ -53,11 +53,38 @@ function getCanonicalRepoRoot(input) {
     return fs.realpathSync(path.dirname(commonDir));
   } catch (error) {
     const resolutionError = new Error(
-      `getCanonicalRepoRoot: unable to resolve main repo root from ${repoInput}: ${summarizeError(error)}`
+      `getCanonicalRepoRoot: unable to resolve main repo root from ${repoInput}: ${summarizeFailure(error)}`
     );
     resolutionError.name = "CanonicalRepoRootResolutionError";
     throw resolutionError;
   }
+}
+
+function looksLikeGitRepo(repoPath) {
+  return fs.existsSync(path.join(repoPath, ".git"));
+}
+
+function getExpectedManifestRepoRoot(repoPath, repoArg) {
+  if (!repoArg && !looksLikeGitRepo(repoPath)) {
+    return undefined;
+  }
+  return getCanonicalRepoRoot(repoPath);
+}
+
+function parsePositiveInt(value, label, { allowZero = false } = {}) {
+  if (value === undefined) return undefined;
+  const parsed = Number(value);
+  const minRejected = allowZero ? parsed < 0 : parsed <= 0;
+  if (!Number.isInteger(parsed) || minRejected) {
+    const requirement = allowZero ? "non-negative integer" : "positive integer";
+    throw new Error(`${label} must be a ${requirement}`);
+  }
+  return parsed;
+}
+
+function nowIso({ zeroMilliseconds = false } = {}) {
+  const iso = new Date().toISOString();
+  return zeroMilliseconds ? iso.replace(/\.\d{3}Z$/, ".000Z") : iso;
 }
 
 function getRepoSlug(repoRoot) {
@@ -414,6 +441,7 @@ module.exports = {
   ensureRunLayout,
   getCanonicalRepoRoot,
   getEventsPath,
+  getExpectedManifestRepoRoot,
   getManifestPath,
   getRelayHome,
   getRelayWorktreeBase,
@@ -425,8 +453,12 @@ module.exports = {
   inferIssueNumber,
   isPathContainedWithin,
   listManifestPaths,
+  looksLikeGitRepo,
+  nowIso,
+  parsePositiveInt,
   requireValidRunId,
   sameFilesystemLocation,
+  summarizeFailure,
   validateManifestPaths,
   validateRunId,
 };

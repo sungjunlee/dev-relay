@@ -3,13 +3,13 @@ const fs = require("fs");
 const path = require("path");
 const {
   getCanonicalRepoRoot,
+  getExpectedManifestRepoRoot,
+  parsePositiveInt,
   validateManifestPaths,
 } = require("../../../relay-dispatch/scripts/manifest/paths");
 const { resolveManifestRecord } = require("../../../relay-dispatch/scripts/relay-resolver");
 const { getRubricAnchorStatus } = require("../../../relay-dispatch/scripts/manifest/rubric");
-const { gh, looksLikeGitRepo, parsePositiveInt, readText } = require("./common");
-
-const RUBRIC_PASS_THROUGH_STATES = new Set(["loaded"]);
+const { gh, readText, RUBRIC_PASS_THROUGH_STATES } = require("./common");
 
 // DNS hostname validation — conservative label allowlist. Rejects leading
 // dashes (which could be interpreted as flags by some CLI tools), whitespace,
@@ -247,10 +247,6 @@ function resolveIssueNumber(repoPath, prNumber, branch, manifestData, options = 
   return resolveClosingReferenceIssue(parsed.closingIssuesReferences, prNumber);
 }
 
-function getExpectedManifestRepoRoot(repoPath) {
-  return looksLikeGitRepo(repoPath) ? getCanonicalRepoRoot(repoPath) : undefined;
-}
-
 function resolvePrForBranch(repoPath, branch) {
   const raw = gh(repoPath, "pr", "list", "--head", branch, "--json", "number");
   const parsed = JSON.parse(raw);
@@ -263,7 +259,7 @@ function resolveBranchForPr(repoPath, prNumber) {
   return JSON.parse(raw).headRefName;
 }
 
-function resolveContext(repoPath, manifestPathArg, runIdArg, branchArg, prArg, doneCriteriaFileArg = null) {
+function resolveContext(repoPath, repoArg, manifestPathArg, runIdArg, branchArg, prArg, doneCriteriaFileArg = null) {
   let branch = branchArg;
   let prNumber = parsePositiveInt(prArg, "--pr");
 
@@ -283,7 +279,7 @@ function resolveContext(repoPath, manifestPathArg, runIdArg, branchArg, prArg, d
     prNumber,
   });
   const validatedPaths = validateManifestPaths(manifest.data?.paths, {
-    expectedRepoRoot: manifestPathArg ? undefined : getExpectedManifestRepoRoot(repoPath),
+    expectedRepoRoot: manifestPathArg ? undefined : getExpectedManifestRepoRoot(repoPath, repoArg),
     manifestPath: manifest.manifestPath,
     runId: manifest.data?.run_id,
     requireWorktree: true,

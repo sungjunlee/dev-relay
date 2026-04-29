@@ -22,9 +22,9 @@
  */
 
 const path = require("path");
-const fs = require("fs");
 const {
-  getCanonicalRepoRoot,
+  getExpectedManifestRepoRoot,
+  parsePositiveInt,
   validateManifestPaths,
 } = require("../../relay-dispatch/scripts/manifest/paths");
 const {
@@ -75,28 +75,6 @@ function requireNonEmptyArg(flag, label) {
   return value.trim();
 }
 
-function parsePositiveInt(value, label) {
-  if (typeof value !== "string" || !value.trim()) {
-    throw new Error(`${label} is required`);
-  }
-  const parsed = Number(value);
-  if (!Number.isInteger(parsed) || parsed <= 0) {
-    throw new Error(`${label} must be a positive integer`);
-  }
-  return parsed;
-}
-
-function looksLikeGitRepo(repoPath) {
-  return fs.existsSync(path.join(repoPath, ".git"));
-}
-
-function getExpectedManifestRepoRoot(repoPath, repoArg) {
-  if (!repoArg && !looksLikeGitRepo(repoPath)) {
-    return undefined;
-  }
-  return getCanonicalRepoRoot(repoPath);
-}
-
 function sameBootstrapExemption(data, { artifactPath, writerPr, reason }) {
   const existing = data?.bootstrap_exempt || {};
   return (
@@ -109,7 +87,7 @@ function sameBootstrapExemption(data, { artifactPath, writerPr, reason }) {
 
 function main() {
   const artifactPath = requireNonEmptyArg("--artifact-path", "--artifact-path <path>");
-  const writerPr = parsePositiveInt(getArg("--writer-pr"), "--writer-pr <int>");
+  const writerPr = parsePositiveInt(requireNonEmptyArg("--writer-pr", "--writer-pr <int>"), "--writer-pr <int>");
   const reason = requireNonEmptyArg("--reason", "--reason <text>");
   const skipReviewReason = getArg("--skip-review");
   if (hasFlag("--skip-review") && !String(skipReviewReason || "").trim()) {

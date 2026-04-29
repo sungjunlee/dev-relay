@@ -6,7 +6,7 @@ const {
   isPathContainedWithin,
   validateRunId,
 } = require("./paths");
-const { summarizeError } = require("./store");
+const { summarizeFailure } = require("./paths");
 
 function hasRubricPath(data) {
   return typeof data?.anchor?.rubric_path === "string" && data.anchor.rubric_path.trim() !== "";
@@ -212,7 +212,7 @@ function validateRubricPathContainment(rubricPath, runDir) {
       runDir: resolvedRunDir,
       resolvedPath,
       realPath: null,
-      reason: `Unable to resolve the real run directory for anchor.rubric_path=${JSON.stringify(normalizedPath)}: ${summarizeError(error)}`,
+      reason: `Unable to resolve the real run directory for anchor.rubric_path=${JSON.stringify(normalizedPath)}: ${summarizeFailure(error)}`,
     };
   }
 }
@@ -476,7 +476,7 @@ function getRubricAnchorStatus(data, options = {}) {
       ...baseStatus,
       ...containment,
       status: "unreadable",
-      error: `Unable to read rubric file ${containment.resolvedPath}: ${summarizeError(error)}`,
+      error: `Unable to read rubric file ${containment.resolvedPath}: ${summarizeFailure(error)}`,
     };
   }
 }

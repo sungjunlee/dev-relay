@@ -3,6 +3,7 @@ const { execFileSync } = require("child_process");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
+const { summarizeFailure } = require("../../relay-dispatch/scripts/manifest/paths");
 const {
   bindCliArgs,
   modeLabel,
@@ -31,12 +32,6 @@ if (require.main === module && (!args.length || hasFlag(["--help", "-h"]))) {
   console.log(`  --out-dir <path>  ${modeLabel("--out-dir")} Directory for generated artifacts`);
   console.log(`  --json            ${modeLabel("--json")} Output JSON`);
   process.exit(hasFlag(["--help", "-h"]) ? 0 : 1);
-}
-
-function summarizeFailure(error) {
-  const stderr = String(error.stderr || "").trim();
-  const stdout = String(error.stdout || "").trim();
-  return stderr || stdout || error.message;
 }
 
 function readIssueBody(repoPath, issueNumber) {

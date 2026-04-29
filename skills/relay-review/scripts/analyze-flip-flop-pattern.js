@@ -28,6 +28,7 @@ const path = require("path");
 
 const {
   getRunsBase,
+  parsePositiveInt,
   validateRunId,
 } = require("../../relay-dispatch/scripts/manifest/paths");
 const { readManifest } = require("../../relay-dispatch/scripts/manifest/store");
@@ -55,14 +56,6 @@ const CLI_ARG_OPTIONS = {
   commandName: "analyze-flip-flop-pattern",
   reservedFlags: [...KNOWN_FLAGS],
 };
-
-function parsePositiveInt(value, label) {
-  const parsed = Number(value);
-  if (!Number.isInteger(parsed) || parsed <= 0) {
-    throw new Error(`${label} must be a positive integer`);
-  }
-  return parsed;
-}
 
 function parseArgs(argv) {
   const args = [...argv];

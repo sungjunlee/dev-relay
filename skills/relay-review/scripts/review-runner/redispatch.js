@@ -1,10 +1,10 @@
 const fs = require("fs");
 const path = require("path");
 const { formatIssueList, formatScopeDrift } = require("./comment");
+const { RUBRIC_PASS_THROUGH_STATES } = require("./common");
 const { formatPriorVerdictSummary } = require("./prompt");
 
 const FLIP_STATES = new Set(["pass", "fail"]);
-const RUBRIC_PASS_THROUGH_STATES = new Set(["loaded"]);
 const LINEAGE_VALUES = ["deepening", "repeat", "new", "newly_scoreable", "unknown"];
 
 function buildRedispatchPrompt(verdict, doneCriteria, runDir, round, churnGrowth, doneCriteriaSource) {
