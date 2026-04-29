@@ -5,15 +5,12 @@ const path = require("path");
 const {
   ensureRunLayout,
   listManifestPaths,
+  nowIso,
   requireValidRunId,
 } = require("./paths");
 
 const RELAY_VERSION = 2;
 const NOTES_TEMPLATE = "# Notes\n\n## Context\n\n## Review History\n";
-
-function nowIso() {
-  return new Date().toISOString();
-}
 
 function getActorName(repoRoot) {
   if (!repoRoot || typeof repoRoot !== "string") {
@@ -257,12 +254,6 @@ function createManifestSkeleton({
   return manifest;
 }
 
-function summarizeError(error) {
-  const stderr = String(error.stderr || "").trim();
-  const stdout = String(error.stdout || "").trim();
-  return stderr || stdout || error.message;
-}
-
 module.exports = {
   NOTES_TEMPLATE,
   RELAY_VERSION,
@@ -273,6 +264,5 @@ module.exports = {
   nowIso,
   parseFrontmatter,
   readManifest,
-  summarizeError,
   writeManifest,
 };

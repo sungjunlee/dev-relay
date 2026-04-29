@@ -1,8 +1,4 @@
-function summarizeFailure(error) {
-  const stderr = String(error.stderr || "").trim();
-  const stdout = String(error.stdout || "").trim();
-  return stderr || stdout || error.message;
-}
+const { summarizeFailure } = require("../../relay-dispatch/scripts/manifest/paths");
 
 function ensureJsonText(text, label) {
   try {

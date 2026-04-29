@@ -95,7 +95,8 @@ function printResult({ doneCriteriaPath, diffPath, jsonOut, manifestPath, origin
 }
 
 function run() {
-  const repoPath = path.resolve(getArg("--repo") || ".");
+  const repoArg = getArg("--repo");
+  const repoPath = path.resolve(repoArg || ".");
   const manifestPathArg = getArg("--manifest");
   const runIdArg = getArg("--run-id");
   const branchArg = getArg("--branch");
@@ -112,6 +113,7 @@ function run() {
 
   const { branch, issueNumber, manifest, prNumber, reviewRepoPath, runRepoPath } = resolveContext(
     repoPath,
+    repoArg,
     manifestPathArg,
     runIdArg,
     branchArg,

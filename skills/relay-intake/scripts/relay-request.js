@@ -8,6 +8,7 @@ const {
   parseFrontmatter,
   writeManifest,
 } = require("../../relay-dispatch/scripts/relay-manifest");
+const { nowIso } = require("../../relay-dispatch/scripts/manifest/paths");
 
 const READINESS_LEVELS = {
   clarity: new Set(["high", "medium", "low"]),
@@ -26,10 +27,6 @@ const DEFAULT_NEXT_ACTIONS = {
   propose: "await_proposal_response",
   structure: "await_proposal_response",
 };
-
-function nowIso() {
-  return new Date().toISOString();
-}
 
 function createRequestId(timestamp = new Date()) {
   const iso = timestamp.toISOString().replace(/[-:TZ.]/g, "").slice(0, 17);

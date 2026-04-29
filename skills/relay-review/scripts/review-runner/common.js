@@ -12,14 +12,7 @@ const gh = (repoPath, ...ghArgs) => {
 
 const git = (repoPath, ...gitArgs) => execGit(repoPath, gitArgs);
 
-function parsePositiveInt(value, label) {
-  if (value === undefined) return undefined;
-  const parsed = Number(value);
-  if (!Number.isInteger(parsed) || parsed <= 0) {
-    throw new Error(`${label} must be a positive integer`);
-  }
-  return parsed;
-}
+const RUBRIC_PASS_THROUGH_STATES = new Set(["loaded"]);
 
 function readText(filePath) {
   return fs.readFileSync(filePath, "utf-8");
@@ -30,15 +23,10 @@ function writeText(filePath, text) {
   fs.writeFileSync(filePath, text, "utf-8");
 }
 
-function looksLikeGitRepo(repoPath) {
-  return fs.existsSync(path.join(repoPath, ".git"));
-}
-
 module.exports = {
   gh,
   git,
-  looksLikeGitRepo,
-  parsePositiveInt,
   readText,
+  RUBRIC_PASS_THROUGH_STATES,
   writeText,
 };

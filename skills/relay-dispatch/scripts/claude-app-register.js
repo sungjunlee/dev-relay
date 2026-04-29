@@ -13,6 +13,7 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const { execGit } = require("./exec");
+const { nowIso } = require("./manifest/paths");
 
 function generateUUIDv7() {
   const now = BigInt(Date.now());
@@ -26,10 +27,6 @@ function generateUUIDv7() {
   buf[8] = (buf[8] & 0x3f) | 0x80;
   const hex = buf.toString("hex");
   return [hex.slice(0, 8), hex.slice(8, 12), hex.slice(12, 16), hex.slice(16, 20), hex.slice(20, 32)].join("-");
-}
-
-function nowISO() {
-  return new Date().toISOString().replace(/\.\d{3}Z$/, ".000Z");
 }
 
 function getClaudeVersion() {
@@ -65,7 +62,7 @@ function registerClaudeApp({ wtPath, repoPath, branch, title, pin = false }) {
 
   const metadata = {
     version: "1",
-    created_at: nowISO(),
+    created_at: nowIso({ zeroMilliseconds: true }),
     session_id: sessionId,
     branch,
     title,

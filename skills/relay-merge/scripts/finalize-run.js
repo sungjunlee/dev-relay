@@ -29,11 +29,12 @@
  *   --help, -h             Show usage
  */
 
-const fs = require("fs");
 const path = require("path");
 const {
-  getCanonicalRepoRoot,
+  getExpectedManifestRepoRoot,
   getRunDir,
+  parsePositiveInt,
+  summarizeFailure,
   validateManifestPaths,
 } = require("../../relay-dispatch/scripts/manifest/paths");
 const {
@@ -43,7 +44,6 @@ const {
 } = require("../../relay-dispatch/scripts/manifest/lifecycle");
 const {
   getActorName,
-  summarizeError,
   writeManifest,
 } = require("../../relay-dispatch/scripts/manifest/store");
 const { resolveManifestRecord } = require("../../relay-dispatch/scripts/relay-resolver");
@@ -100,28 +100,8 @@ if (!args.length || helpRequested) {
   process.exit(helpRequested ? 0 : 1);
 }
 
-function parsePositiveInt(value, label) {
-  if (value === undefined) return undefined;
-  const parsed = Number(value);
-  if (!Number.isInteger(parsed) || parsed <= 0) {
-    throw new Error(`${label} must be a positive integer`);
-  }
-  return parsed;
-}
-
 function hasLegacyBootstrapReasonPrefix(reason) {
   return LEGACY_BOOTSTRAP_REASON_PREFIX.exec(String(reason || "")) !== null;
-}
-
-function looksLikeGitRepo(repoPath) {
-  return fs.existsSync(path.join(repoPath, ".git"));
-}
-
-function getExpectedManifestRepoRoot(repoPath, repoArg) {
-  if (!repoArg && !looksLikeGitRepo(repoPath)) {
-    return undefined;
-  }
-  return getCanonicalRepoRoot(repoPath);
 }
 
 function resolveBranch(repoPath, prNumber, branchArg, manifestData) {
@@ -242,7 +222,7 @@ function deleteRemoteBranch(repoPath, branch) {
       remoteName,
       attempted: true,
       deleted: false,
-      warning: summarizeError(error),
+      warning: summarizeFailure(error),
     };
   }
 }
@@ -562,7 +542,7 @@ function main() {
         execGh(repoPath, ["issue", "close", String(issueNumber), "--comment", `Resolved in PR #${prNumber}`]);
         issueClosed = true;
       } catch (error) {
-        issueCloseWarning = summarizeError(error);
+        issueCloseWarning = summarizeFailure(error);
       }
     }
   }

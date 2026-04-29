@@ -2,10 +2,7 @@ const { execFileSync } = require("child_process");
 const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
-
-function nowIso() {
-  return new Date().toISOString();
-}
+const { nowIso } = require("./paths");
 
 function collectEnvironmentSnapshot(repoRoot, baseBranch) {
   let mainSha = null;
