@@ -1151,7 +1151,7 @@ async function main() {
     status = exitCode === 0 ? "completed" : "failed";
   }
 
-  let prNumber = manifest.git?.pr_number ?? manifest.github?.pr_number ?? null;
+  let prNumber = manifest.git?.pr_number ?? null;
   let prCreatedByUs = null;
   if ((status === "completed" || status === "completed-with-warning") && !DRY_RUN && gitLog) {
     try {
@@ -1200,6 +1200,11 @@ async function main() {
     status === "failed" ? STATES.ESCALATED : STATES.REVIEW_PENDING,
     status === "failed" ? "inspect_dispatch_failure" : "run_review"
   );
+  const { pr_number: _legacyGithubPrNumber, ...githubFields } = manifest.github || {};
+  const github = {
+    ...githubFields,
+    ...(prCreatedByUs !== null ? { pr_created_by_orchestrator: prCreatedByUs } : {}),
+  };
   manifest = {
     ...manifest,
     git: {
@@ -1207,13 +1212,7 @@ async function main() {
       ...(prNumber !== null ? { pr_number: prNumber } : {}),
       head_sha: currentHead || startHead || null,
     },
-    // Persist github.pr_number as the dispatch-owned PR anchor while keeping
-    // git.pr_number populated for existing review/merge consumers.
-    github: {
-      ...(manifest.github || {}),
-      ...(prNumber !== null ? { pr_number: prNumber } : {}),
-      ...(prCreatedByUs !== null ? { pr_created_by_orchestrator: prCreatedByUs } : {}),
-    },
+    ...(Object.keys(github).length ? { github } : {}),
   };
   writeManifest(manifestPath, manifest);
   appendRunEvent(repoRoot, runId, {

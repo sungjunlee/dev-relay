@@ -2004,7 +2004,6 @@ setTimeout(() => {}, 60000);
 
   const manifest = readManifest(result.manifestPath).data;
   assert.equal(manifest.git.pr_number, 123);
-  assert.equal(manifest.github.pr_number, 123);
   assert.equal(manifest.github.pr_created_by_orchestrator, true);
 });
 
@@ -2253,7 +2252,6 @@ test("dispatch pushes the branch and opens a PR from the orchestrator on success
 
   const manifest = readManifest(result.manifestPath).data;
   assert.equal(manifest.git.pr_number, 321);
-  assert.equal(manifest.github.pr_number, 321);
   assert.equal(manifest.github.pr_created_by_orchestrator, true);
   assert.equal(manifest.roles.orchestrator, "unknown");
   assert.equal(manifest.roles.reviewer, "unknown");
@@ -2394,7 +2392,6 @@ test("dispatch skips PR creation when the branch already has an open PR", () => 
 
   const manifest = readManifest(result.manifestPath).data;
   assert.equal(manifest.git.pr_number, 654);
-  assert.equal(manifest.github.pr_number, 654);
   assert.equal(manifest.github.pr_created_by_orchestrator, false);
 
   const ghCalls = readJsonLines(ghLogPath);
