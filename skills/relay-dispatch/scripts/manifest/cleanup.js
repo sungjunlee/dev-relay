@@ -2,8 +2,7 @@ const fs = require("fs");
 const path = require("path");
 
 const { execGit } = require("../exec");
-const { validateManifestPaths } = require("./paths");
-const { summarizeError } = require("./store");
+const { summarizeFailure, validateManifestPaths } = require("./paths");
 
 const CLEANUP_STATUSES = Object.freeze({
   PENDING: "pending",
@@ -71,7 +70,7 @@ function readWorktreeStatus(worktreePath) {
     const status = execGit(worktreePath, ["status", "--short", "--untracked-files=all"]);
     return { exists: true, clean: status === "", text: status };
   } catch (error) {
-    return { exists: true, clean: false, text: `unable to inspect worktree: ${summarizeError(error)}` };
+    return { exists: true, clean: false, text: `unable to inspect worktree: ${summarizeFailure(error)}` };
   }
 }
 
@@ -153,12 +152,12 @@ function runCleanup({
             }
           } catch (fallbackError) {
             errors.push(
-              `worktree remove failed: ${summarizeError(error)}; ` +
-              `rm fallback failed: ${summarizeError(fallbackError)}`
+              `worktree remove failed: ${summarizeFailure(error)}; ` +
+              `rm fallback failed: ${summarizeFailure(fallbackError)}`
             );
           }
         } else {
-          errors.push(`worktree remove failed: ${summarizeError(error)}`);
+          errors.push(`worktree remove failed: ${summarizeFailure(error)}`);
         }
       }
     }
@@ -170,7 +169,7 @@ function runCleanup({
         execGit(repoRoot, ["branch", "-D", branch]);
         branchDeleted = true;
       } catch (error) {
-        errors.push(`branch delete failed: ${summarizeError(error)}`);
+        errors.push(`branch delete failed: ${summarizeFailure(error)}`);
       }
     }
   }
@@ -181,7 +180,7 @@ function runCleanup({
         execGit(repoRoot, ["worktree", "prune"]);
         pruneRan = true;
       } catch (error) {
-        errors.push(`worktree prune failed: ${summarizeError(error)}`);
+        errors.push(`worktree prune failed: ${summarizeFailure(error)}`);
       }
     }
   }

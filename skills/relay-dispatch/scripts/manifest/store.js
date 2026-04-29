@@ -257,12 +257,6 @@ function createManifestSkeleton({
   return manifest;
 }
 
-function summarizeError(error) {
-  const stderr = String(error.stderr || "").trim();
-  const stdout = String(error.stdout || "").trim();
-  return stderr || stdout || error.message;
-}
-
 module.exports = {
   NOTES_TEMPLATE,
   RELAY_VERSION,
@@ -273,6 +267,5 @@ module.exports = {
   nowIso,
   parseFrontmatter,
   readManifest,
-  summarizeError,
   writeManifest,
 };

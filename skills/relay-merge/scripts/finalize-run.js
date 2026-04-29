@@ -33,6 +33,7 @@ const path = require("path");
 const {
   getExpectedManifestRepoRoot,
   getRunDir,
+  summarizeFailure,
   validateManifestPaths,
 } = require("../../relay-dispatch/scripts/manifest/paths");
 const {
@@ -42,7 +43,6 @@ const {
 } = require("../../relay-dispatch/scripts/manifest/lifecycle");
 const {
   getActorName,
-  summarizeError,
   writeManifest,
 } = require("../../relay-dispatch/scripts/manifest/store");
 const { resolveManifestRecord } = require("../../relay-dispatch/scripts/relay-resolver");
@@ -230,7 +230,7 @@ function deleteRemoteBranch(repoPath, branch) {
       remoteName,
       attempted: true,
       deleted: false,
-      warning: summarizeError(error),
+      warning: summarizeFailure(error),
     };
   }
 }
@@ -550,7 +550,7 @@ function main() {
         execGh(repoPath, ["issue", "close", String(issueNumber), "--comment", `Resolved in PR #${prNumber}`]);
         issueClosed = true;
       } catch (error) {
-        issueCloseWarning = summarizeError(error);
+        issueCloseWarning = summarizeFailure(error);
       }
     }
   }

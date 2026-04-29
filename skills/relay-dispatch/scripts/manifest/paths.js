@@ -4,7 +4,7 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 
-function summarizeError(error) {
+function summarizeFailure(error) {
   const stderr = String(error.stderr || "").trim();
   const stdout = String(error.stdout || "").trim();
   return stderr || stdout || error.message;
@@ -53,7 +53,7 @@ function getCanonicalRepoRoot(input) {
     return fs.realpathSync(path.dirname(commonDir));
   } catch (error) {
     const resolutionError = new Error(
-      `getCanonicalRepoRoot: unable to resolve main repo root from ${repoInput}: ${summarizeError(error)}`
+      `getCanonicalRepoRoot: unable to resolve main repo root from ${repoInput}: ${summarizeFailure(error)}`
     );
     resolutionError.name = "CanonicalRepoRootResolutionError";
     throw resolutionError;
@@ -440,6 +440,7 @@ module.exports = {
   looksLikeGitRepo,
   requireValidRunId,
   sameFilesystemLocation,
+  summarizeFailure,
   validateManifestPaths,
   validateRunId,
 };

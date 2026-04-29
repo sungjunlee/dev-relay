@@ -12,8 +12,7 @@ const { parsePrNumber, formatExecError } = require("./dispatch-publish");
 const { resolveManifestRecord } = require("./relay-resolver");
 const { appendRunEvent, EVENTS } = require("./relay-events");
 const { STATES } = require("./manifest/lifecycle");
-const { getCanonicalRepoRoot, getRunDir, validateManifestPaths } = require("./manifest/paths");
-const { summarizeError } = require("./manifest/store");
+const { getCanonicalRepoRoot, getRunDir, summarizeFailure, validateManifestPaths } = require("./manifest/paths");
 const { stampPrNumberUnderLock } = require("./manifest/pr-number-stamp");
 const { rebrandEvidence } = require("./execution-evidence");
 const {
@@ -176,7 +175,7 @@ function resolveRun({ repoArg, runId, manifestArg }) {
       runId,
     });
   } catch (error) {
-    throw new Error(`run_resolution_failed: ${summarizeError(error)}`);
+    throw new Error(`run_resolution_failed: ${summarizeFailure(error)}`);
   }
 }
 
