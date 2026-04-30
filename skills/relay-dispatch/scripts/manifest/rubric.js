@@ -8,6 +8,8 @@ const {
 } = require("./paths");
 const { summarizeFailure } = require("./paths");
 
+const RUBRIC_PASS_THROUGH_STATES = new Set(["loaded"]);
+
 function hasRubricPath(data) {
   return typeof data?.anchor?.rubric_path === "string" && data.anchor.rubric_path.trim() !== "";
 }
@@ -481,12 +483,165 @@ function getRubricAnchorStatus(data, options = {}) {
   }
 }
 
+function formatRubricWarning(label, rubricAnchor) {
+  const details = [];
+  if (rubricAnchor.rubricPath) {
+    details.push(`anchor.rubric_path=${JSON.stringify(rubricAnchor.rubricPath)}`);
+  }
+  if (rubricAnchor.resolvedPath) {
+    details.push(`resolved_path=${JSON.stringify(rubricAnchor.resolvedPath)}`);
+  }
+  return [
+    `WARNING: [${label}] ${rubricAnchor.error}`,
+    details.length ? `Context: ${details.join(", ")}` : null,
+    "Do NOT return PASS or ready_to_merge while this warning is present. Flag the invariant failure in the review output.",
+  ].filter(Boolean).join("\n");
+}
+
+function createRubricLoad({ state, status, content, warning, rubricPath, resolvedPath, error }) {
+  if (!RUBRIC_PASS_THROUGH_STATES.has(state) && warning === null) {
+    throw new Error(`Rubric load state '${state}' must include a visible warning`);
+  }
+  return {
+    state,
+    status,
+    content,
+    warning,
+    rubricPath,
+    resolvedPath,
+    error,
+  };
+}
+
+function loadRubricFromRunDir(runDir, manifestData) {
+  const rubricAnchor = getRubricAnchorStatus(manifestData, { runDir, includeContent: true });
+  switch (rubricAnchor.status) {
+    case "satisfied":
+      return createRubricLoad({
+        state: "loaded",
+        status: rubricAnchor.status,
+        content: rubricAnchor.content,
+        warning: null,
+        rubricPath: rubricAnchor.rubricPath,
+        resolvedPath: rubricAnchor.resolvedPath,
+        error: rubricAnchor.error,
+      });
+    case "missing_path":
+      return createRubricLoad({
+        state: "not_set",
+        status: rubricAnchor.status,
+        content: null,
+        warning: formatRubricWarning("rubric path not set", rubricAnchor),
+        rubricPath: rubricAnchor.rubricPath,
+        resolvedPath: rubricAnchor.resolvedPath,
+        error: rubricAnchor.error,
+      });
+    case "missing":
+      return createRubricLoad({
+        state: "missing",
+        status: rubricAnchor.status,
+        content: null,
+        warning: formatRubricWarning("rubric missing", rubricAnchor),
+        rubricPath: rubricAnchor.rubricPath,
+        resolvedPath: rubricAnchor.resolvedPath,
+        error: rubricAnchor.error,
+      });
+    case "outside_run_dir":
+      return createRubricLoad({
+        state: "outside_run_dir",
+        status: rubricAnchor.status,
+        content: null,
+        warning: formatRubricWarning("rubric path outside run dir", rubricAnchor),
+        rubricPath: rubricAnchor.rubricPath,
+        resolvedPath: rubricAnchor.resolvedPath,
+        error: rubricAnchor.error,
+      });
+    case "empty":
+      return createRubricLoad({
+        state: "empty",
+        status: rubricAnchor.status,
+        content: null,
+        warning: formatRubricWarning("rubric empty", rubricAnchor),
+        rubricPath: rubricAnchor.rubricPath,
+        resolvedPath: rubricAnchor.resolvedPath,
+        error: rubricAnchor.error,
+      });
+    default:
+      return createRubricLoad({
+        state: "invalid",
+        status: rubricAnchor.status,
+        content: null,
+        warning: formatRubricWarning("rubric invalid", rubricAnchor),
+        rubricPath: rubricAnchor.rubricPath,
+        resolvedPath: rubricAnchor.resolvedPath,
+        error: rubricAnchor.error,
+      });
+  }
+}
+
+function buildRubricRecoveryCommand(runId, redispatchPath) {
+  return `node skills/relay-dispatch/scripts/dispatch.js . --run-id ${runId} --prompt-file ${redispatchPath} --rubric-file <fixed-rubric.yaml>`;
+}
+
+/**
+ * Rubric fail-closed moves the run into `changes_requested` so the documented
+ * `dispatch --run-id` recovery command remains executable without widening
+ * dispatcher resume rules for arbitrary `review_pending` runs.
+ * `next_action=repair_rubric_and_redispatch` tells the operator to fix the
+ * anchored rubric state, re-dispatch the run, then rerun relay-review, and
+ * `review.latest_verdict="rubric_state_failed_closed"` records that the raw
+ * reviewer PASS was blocked by review-runner rubric enforcement.
+ */
+function buildReviewRunnerRubricGateFailure(runId, redispatchPath, rubricLoad) {
+  if (!rubricLoad || RUBRIC_PASS_THROUGH_STATES.has(rubricLoad.state)) {
+    return null;
+  }
+
+  const recoveryCommand = buildRubricRecoveryCommand(runId, redispatchPath);
+  const rerunReviewStep = "After the re-dispatch completes, rerun relay-review.";
+  let recovery;
+  switch (rubricLoad.state) {
+    case "not_set":
+      recovery = `Persist a rubric for this run, then run \`${recoveryCommand}\`. ${rerunReviewStep}`;
+      break;
+    case "missing":
+      recovery = `Restore or replace the missing rubric, then run \`${recoveryCommand}\`. ${rerunReviewStep}`;
+      break;
+    case "outside_run_dir":
+      recovery = `Replace the escaped rubric anchor with a contained rubric, then run \`${recoveryCommand}\`. ${rerunReviewStep}`;
+      break;
+    case "empty":
+      recovery = `Regenerate the empty rubric, then run \`${recoveryCommand}\`. ${rerunReviewStep}`;
+      break;
+    default:
+      recovery = `Fix or replace the rubric anchor, then run \`${recoveryCommand}\`. ${rerunReviewStep}`;
+      break;
+  }
+
+  return {
+    status: "rubric_state_failed_closed",
+    layer: "review-runner",
+    rubricState: rubricLoad.state,
+    rubricStatus: rubricLoad.status,
+    reason: rubricLoad.error || "Rubric is not loaded.",
+    recoveryCommand,
+    recovery,
+    summary: `review-runner fail-closed: rubricLoad.state='${rubricLoad.state}' blocked ready_to_merge despite reviewer PASS. ${recovery}`,
+  };
+}
+
 module.exports = {
   appendTextFileWithoutFollowingSymlinks,
+  buildReviewRunnerRubricGateFailure,
+  buildRubricRecoveryCommand,
+  createRubricLoad,
+  formatRubricWarning,
   getRubricAnchorStatus,
   hasRubricPath,
+  loadRubricFromRunDir,
   rejectLegacyGrandfatherField,
   readTextFileWithoutFollowingSymlinks,
+  RUBRIC_PASS_THROUGH_STATES,
   validateRubricPathContainment,
   writeTextFileWithoutFollowingSymlinks,
 };

@@ -3,6 +3,10 @@ const fs = require("fs");
 const path = require("path");
 const { STATES } = require("../../relay-dispatch/scripts/manifest/lifecycle");
 const { ensureRunLayout, getRunDir } = require("../../relay-dispatch/scripts/manifest/paths");
+const {
+  buildReviewRunnerRubricGateFailure,
+  loadRubricFromRunDir,
+} = require("../../relay-dispatch/scripts/manifest/rubric");
 const { writeManifest } = require("../../relay-dispatch/scripts/manifest/store");
 const { appendIterationScore, appendRunEvent, appendScoreDivergence, EVENTS } = require("../../relay-dispatch/scripts/relay-events");
 const { git, writeText } = require("./review-runner/common");
@@ -11,7 +15,6 @@ const {
   getGhLogin,
   loadDiff,
   loadDoneCriteria,
-  loadRubricFromRunDir,
   parseRemoteHost,
   resolveContext,
   resolveIssueNumber,
@@ -24,7 +27,6 @@ const { buildScoreDivergenceAnalysis, loadPrBody, parseScoreLog } = require("./r
 const { applyQualityExecutionStatus, buildExecutionEvidenceFailureVerdict, buildMissingExecutionEvidenceVerdict, computeQualityExecutionStatus } = require("./review-runner/execution-evidence");
 const {
   buildRedispatchPrompt,
-  buildReviewRunnerRubricGateFailure,
   buildRubricGateRedispatchPrompt,
   computeFactorStatusFlips,
   computeRepeatedIssueCount,

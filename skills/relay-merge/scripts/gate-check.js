@@ -32,8 +32,10 @@ const {
   evaluateReviewGate,
   summarizeRubricAuditForSkip,
 } = require("./review-gate");
-const { loadRubricFromRunDir } = require("../../relay-review/scripts/review-runner/context");
-const { buildReviewRunnerRubricGateFailure } = require("../../relay-review/scripts/review-runner/redispatch");
+const {
+  buildReviewRunnerRubricGateFailure,
+  loadRubricFromRunDir,
+} = require("../../relay-dispatch/scripts/manifest/rubric");
 const {
   getCanonicalRepoRoot,
   getRunDir,
@@ -205,7 +207,7 @@ const STATUS_RENDERERS = {
   },
   missing_rubric_path(result, prNumber) {
     console.log(`✗ PR #${prNumber}: run is missing anchor.rubric_path — merge blocked`);
-    console.log("  Re-dispatch from relay-plan with --rubric-file before rerunning relay-review.");
+    console.log("  Run relay-plan re-dispatch with --rubric-file before rerunning relay-review.");
   },
   missing_rubric_file(result, prNumber) {
     console.log(`✗ PR #${prNumber}: anchored rubric file is missing from the run directory — merge blocked`);
@@ -389,7 +391,7 @@ function main() {
       status: "reviewer_login_required",
       pr: PR_NUM,
       readyToMerge: false,
-      reason: "manifest.review.reviewer_login_required is set — host-scoped gh api user failed during relay-review; fix host auth (GH_HOST / gh auth switch --hostname <host>) and rerun relay-review",
+      reason: "host-scoped gh api user failed during review-runner; manifest.review.reviewer_login_required is set; fix host auth (GH_HOST / gh auth switch --hostname <host>) and rerun the review command",
     });
     process.exit(1);
   }

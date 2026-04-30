@@ -1688,7 +1688,7 @@ test("gate-check blocks merge when anchor.rubric_path becomes unreadable", () =>
         },
       },
     }, { json: false }),
-    output: [/run is missing anchor\.rubric_path/i, /Re-dispatch from relay-plan with --rubric-file/i],
+    output: [/run is missing anchor\.rubric_path/i, /Run relay-plan re-dispatch with --rubric-file/i],
   },
   {
     status: "missing_rubric_file",

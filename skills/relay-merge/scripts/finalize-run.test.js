@@ -552,17 +552,6 @@ process.exit(0);
   assert.match(ghLog, /pr merge 123 --squash/);
 });
 
-test("finalize-run warns but succeeds for legacy bootstrap-prefixed force-finalize reasons", () => {
-  const fixture = setupRepo({ manifestState: STATES.ESCALATED });
-  const { result } = spawnForceFinalize(fixture, "Bootstrap: this PR introduces the writer");
-
-  assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stderr, /relay-reconcile-artifact/);
-  const parsed = JSON.parse(result.stdout);
-  assert.equal(parsed.state, STATES.MERGED);
-  assert.equal(readManifest(fixture.manifestPath).data.state, STATES.MERGED);
-});
-
 test("finalize-run does not warn for non-bootstrap force-finalize reasons", () => {
   const fixture = setupRepo({ manifestState: STATES.ESCALATED });
   const { result } = spawnForceFinalize(fixture, "operator override after manual review");

@@ -12,10 +12,12 @@ const {
 } = require("../../relay-dispatch/scripts/test-support");
 const {
   loadProjectConventions,
-  loadRubricFromRunDir,
   parseRemoteHost,
   resolveIssueNumber,
 } = require("./review-runner/context");
+const {
+  loadRubricFromRunDir,
+} = require("../../relay-dispatch/scripts/manifest/rubric");
 const { buildPrompt } = require("./review-runner/prompt");
 
 function createRunFixture() {
