@@ -143,103 +143,93 @@ test("appendRunEvent writes actor from git config user.name", () => {
   assert.equal(parsed.actor, "Relay Operator");
 });
 
-test("appendRunEvent persists rubric_status when provided", () => {
-  const { repoRoot, runId } = createContext();
-  const record = appendRunEvent(repoRoot, runId, {
-    event: EVENTS.SKIP_REVIEW,
-    state_from: "ready_to_merge",
-    state_to: "ready_to_merge",
-    reason: "hotfix",
-    rubric_status: "missing",
-  });
+const RUN_EVENT_FIELD_CASES = [
+  {
+    label: "rubric_status",
+    fields: {
+      event: EVENTS.SKIP_REVIEW,
+      state_from: "ready_to_merge",
+      state_to: "ready_to_merge",
+      reason: "hotfix",
+      rubric_status: "missing",
+    },
+    expected: { rubric_status: "missing" },
+  },
+  {
+    label: "origin",
+    fields: {
+      event: EVENTS.REVIEW_APPLY,
+      state_from: "review_pending",
+      state_to: "escalated",
+      reason: "max_rounds_exceeded",
+      origin: "system",
+    },
+    expected: { origin: "system" },
+  },
+  {
+    label: "last_reviewed_sha",
+    fields: {
+      event: EVENTS.STATE_RECOVERY,
+      state_from: "changes_requested",
+      state_to: "review_pending",
+      head_sha: "deadbeef",
+      reason: "external commit",
+      last_reviewed_sha: "cafef00d",
+    },
+    expected: { last_reviewed_sha: "cafef00d" },
+  },
+  {
+    label: "pr_number",
+    fields: {
+      event: EVENTS.FORCE_FINALIZE,
+      state_from: "escalated",
+      state_to: "merged",
+      head_sha: "deadbeef",
+      reason: "operator override",
+      pr_number: 123,
+    },
+    expected: { pr_number: 123 },
+  },
+  {
+    label: "pr_body_only",
+    fields: {
+      event: EVENTS.STATE_RECOVERY,
+      state_from: "changes_requested",
+      state_to: "review_pending",
+      head_sha: "deadbeef",
+      reason: "PR body metadata fixed",
+      last_reviewed_sha: "deadbeef",
+      pr_body_only: true,
+    },
+    expected: { pr_body_only: true },
+  },
+  {
+    label: "recover commit commit_sha and branch",
+    fields: {
+      event: EVENTS.RECOVER_COMMIT,
+      state_from: "review_pending",
+      state_to: "review_pending",
+      head_sha: "deadbeef",
+      commit_sha: "deadbeef",
+      branch: "issue-281",
+      reason: "executor completed before commit",
+      pr_number: 281,
+    },
+    expected: { commit_sha: "deadbeef", branch: "issue-281" },
+  },
+];
 
-  const [parsed] = readRunEvents(repoRoot, runId);
-  assert.equal(record.rubric_status, "missing");
-  assert.equal(parsed.rubric_status, "missing");
-});
+test("appendRunEvent round-trips optional fields when provided", () => {
+  for (const row of RUN_EVENT_FIELD_CASES) {
+    const { repoRoot, runId } = createContext();
+    const record = appendRunEvent(repoRoot, runId, row.fields);
 
-test("appendRunEvent persists origin when provided", () => {
-  const { repoRoot, runId } = createContext();
-  const record = appendRunEvent(repoRoot, runId, {
-    event: EVENTS.REVIEW_APPLY,
-    state_from: "review_pending",
-    state_to: "escalated",
-    reason: "max_rounds_exceeded",
-    origin: "system",
-  });
-
-  const [parsed] = readRunEvents(repoRoot, runId);
-  assert.equal(record.origin, "system");
-  assert.equal(parsed.origin, "system");
-});
-
-test("appendRunEvent persists last_reviewed_sha when provided", () => {
-  const { repoRoot, runId } = createContext();
-  const record = appendRunEvent(repoRoot, runId, {
-    event: EVENTS.STATE_RECOVERY,
-    state_from: "changes_requested",
-    state_to: "review_pending",
-    head_sha: "deadbeef",
-    reason: "external commit",
-    last_reviewed_sha: "cafef00d",
-  });
-
-  const [parsed] = readRunEvents(repoRoot, runId);
-  assert.equal(record.last_reviewed_sha, "cafef00d");
-  assert.equal(parsed.last_reviewed_sha, "cafef00d");
-});
-
-test("appendRunEvent persists pr_number when provided", () => {
-  const { repoRoot, runId } = createContext();
-  const record = appendRunEvent(repoRoot, runId, {
-    event: EVENTS.FORCE_FINALIZE,
-    state_from: "escalated",
-    state_to: "merged",
-    head_sha: "deadbeef",
-    reason: "operator override",
-    pr_number: 123,
-  });
-
-  const [parsed] = readRunEvents(repoRoot, runId);
-  assert.equal(record.pr_number, 123);
-  assert.equal(parsed.pr_number, 123);
-});
-
-test("appendRunEvent persists pr_body_only when provided", () => {
-  const { repoRoot, runId } = createContext();
-  const record = appendRunEvent(repoRoot, runId, {
-    event: EVENTS.STATE_RECOVERY,
-    state_from: "changes_requested",
-    state_to: "review_pending",
-    head_sha: "deadbeef",
-    reason: "PR body metadata fixed",
-    last_reviewed_sha: "deadbeef",
-    pr_body_only: true,
-  });
-
-  const [parsed] = readRunEvents(repoRoot, runId);
-  assert.equal(record.pr_body_only, true);
-  assert.equal(parsed.pr_body_only, true);
-});
-
-test("appendRunEvent persists recover commit commit_sha and branch when provided", () => {
-  const { repoRoot, runId } = createContext();
-  const record = appendRunEvent(repoRoot, runId, {
-    event: EVENTS.RECOVER_COMMIT,
-    state_from: "review_pending",
-    state_to: "review_pending",
-    head_sha: "deadbeef",
-    commit_sha: "deadbeef",
-    branch: "issue-281",
-    reason: "executor completed before commit",
-    pr_number: 281,
-  });
-
-  const [parsed] = readRunEvents(repoRoot, runId);
-  assert.equal(record.commit_sha, "deadbeef");
-  assert.equal(parsed.commit_sha, "deadbeef");
-  assert.equal(record.branch, "issue-281");
-  assert.equal(parsed.branch, "issue-281");
+    const [parsed] = readRunEvents(repoRoot, runId);
+    for (const [key, value] of Object.entries(row.expected)) {
+      assert.equal(record[key], value, `${row.label} record ${key}`);
+      assert.equal(parsed[key], value, `${row.label} parsed ${key}`);
+    }
+  }
 });
 
 test("appendRunEvent omits last_reviewed_sha when absent", () => {
