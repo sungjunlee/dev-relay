@@ -910,6 +910,27 @@ test("parseModelHints rejects invalid model-hints tokens", () => {
   }
 });
 
+test("dispatch model-hints parse error skips manifest write", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  writeFakeCodex(binDir);
+  const env = {
+    ...process.env,
+    PATH: `${binDir}:${process.env.PATH}`,
+    RELAY_HOME: relayHome,
+  };
+
+  assert.throws(() => runDispatch(repoRoot, [
+    "-b", "issue-318-parse-error-no-manifest",
+    "--prompt", "invalid model hints",
+    "--model-hints", "foo=bar",
+  ], env), (error) => {
+    assert.match(String(error.stderr), /invalid --model-hints token/);
+    return true;
+  });
+  assert.equal(listManifestPaths(repoRoot).length, 0);
+});
+
 test("dispatch precedence D1 regression: CLI override beats manifest hint in executor argv", () => {
   const { repoRoot, relayHome } = setupRepo();
   const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
