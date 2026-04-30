@@ -8,8 +8,7 @@ const {
   validateManifestPaths,
 } = require("../../../relay-dispatch/scripts/manifest/paths");
 const { resolveManifestRecord } = require("../../../relay-dispatch/scripts/relay-resolver");
-const { getRubricAnchorStatus } = require("../../../relay-dispatch/scripts/manifest/rubric");
-const { gh, readText, RUBRIC_PASS_THROUGH_STATES } = require("./common");
+const { gh, readText } = require("./common");
 
 // DNS hostname validation — conservative label allowlist. Rejects leading
 // dashes (which could be interpreted as flags by some CLI tools), whitespace,
@@ -457,107 +456,9 @@ function formatPriorRoundContext(runDir, round) {
   return ["## Prior Round Context", "", "Verify whether prior issues were resolved.", "", ...lines].join("\n");
 }
 
-function formatRubricWarning(label, rubricAnchor) {
-  const details = [];
-  if (rubricAnchor.rubricPath) {
-    details.push(`anchor.rubric_path=${JSON.stringify(rubricAnchor.rubricPath)}`);
-  }
-  if (rubricAnchor.resolvedPath) {
-    details.push(`resolved_path=${JSON.stringify(rubricAnchor.resolvedPath)}`);
-  }
-  return [
-    `WARNING: [${label}] ${rubricAnchor.error}`,
-    details.length ? `Context: ${details.join(", ")}` : null,
-    "Do NOT return PASS or ready_to_merge while this warning is present. Flag the invariant failure in the review output.",
-  ].filter(Boolean).join("\n");
-}
-
-function createRubricLoad({ state, status, content, warning, rubricPath, resolvedPath, error }) {
-  if (!RUBRIC_PASS_THROUGH_STATES.has(state) && warning === null) {
-    throw new Error(`Rubric load state '${state}' must include a visible warning`);
-  }
-  return {
-    state,
-    status,
-    content,
-    warning,
-    rubricPath,
-    resolvedPath,
-    error,
-  };
-}
-
-function loadRubricFromRunDir(runDir, manifestData) {
-  const rubricAnchor = getRubricAnchorStatus(manifestData, { runDir, includeContent: true });
-  switch (rubricAnchor.status) {
-    case "satisfied":
-      return createRubricLoad({
-        state: "loaded",
-        status: rubricAnchor.status,
-        content: rubricAnchor.content,
-        warning: null,
-        rubricPath: rubricAnchor.rubricPath,
-        resolvedPath: rubricAnchor.resolvedPath,
-        error: rubricAnchor.error,
-      });
-    case "missing_path":
-      return createRubricLoad({
-        state: "not_set",
-        status: rubricAnchor.status,
-        content: null,
-        warning: formatRubricWarning("rubric path not set", rubricAnchor),
-        rubricPath: rubricAnchor.rubricPath,
-        resolvedPath: rubricAnchor.resolvedPath,
-        error: rubricAnchor.error,
-      });
-    case "missing":
-      return createRubricLoad({
-        state: "missing",
-        status: rubricAnchor.status,
-        content: null,
-        warning: formatRubricWarning("rubric missing", rubricAnchor),
-        rubricPath: rubricAnchor.rubricPath,
-        resolvedPath: rubricAnchor.resolvedPath,
-        error: rubricAnchor.error,
-      });
-    case "outside_run_dir":
-      return createRubricLoad({
-        state: "outside_run_dir",
-        status: rubricAnchor.status,
-        content: null,
-        warning: formatRubricWarning("rubric path outside run dir", rubricAnchor),
-        rubricPath: rubricAnchor.rubricPath,
-        resolvedPath: rubricAnchor.resolvedPath,
-        error: rubricAnchor.error,
-      });
-    case "empty":
-      return createRubricLoad({
-        state: "empty",
-        status: rubricAnchor.status,
-        content: null,
-        warning: formatRubricWarning("rubric empty", rubricAnchor),
-        rubricPath: rubricAnchor.rubricPath,
-        resolvedPath: rubricAnchor.resolvedPath,
-        error: rubricAnchor.error,
-      });
-    default:
-      return createRubricLoad({
-        state: "invalid",
-        status: rubricAnchor.status,
-        content: null,
-        warning: formatRubricWarning("rubric invalid", rubricAnchor),
-        rubricPath: rubricAnchor.rubricPath,
-        resolvedPath: rubricAnchor.resolvedPath,
-        error: rubricAnchor.error,
-      });
-  }
-}
-
 module.exports = {
   applyReviewerIdentity,
-  createRubricLoad,
   formatPriorRoundContext,
-  formatRubricWarning,
   getExpectedManifestRepoRoot,
   getGhLogin,
   hostHasGhAuth,
@@ -565,7 +466,6 @@ module.exports = {
   loadDiff,
   loadDoneCriteria,
   loadProjectConventions,
-  loadRubricFromRunDir,
   parseRemoteHost,
   resolveContext,
   resolveIssueNumber,

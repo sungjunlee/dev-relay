@@ -1,7 +1,6 @@
 const fs = require("fs");
 const path = require("path");
 const { formatIssueList, formatScopeDrift } = require("./comment");
-const { RUBRIC_PASS_THROUGH_STATES } = require("./common");
 const { formatPriorVerdictSummary } = require("./prompt");
 
 const FLIP_STATES = new Set(["pass", "fail"]);
@@ -230,10 +229,6 @@ function toEscalatedVerdict(baseVerdict, summary) {
   };
 }
 
-function buildRubricRecoveryCommand(runId, redispatchPath) {
-  return `node skills/relay-dispatch/scripts/dispatch.js . --run-id ${runId} --prompt-file ${redispatchPath} --rubric-file <fixed-rubric.yaml>`;
-}
-
 function buildRubricGateRedispatchPrompt(gateFailure, doneCriteria, doneCriteriaSource) {
   return [
     "Rubric recovery re-dispatch",
@@ -256,58 +251,9 @@ function buildRubricGateRedispatchPrompt(gateFailure, doneCriteria, doneCriteria
   ].join("\n");
 }
 
-/**
- * Rubric fail-closed moves the run into `changes_requested` so the documented
- * `dispatch --run-id` recovery command remains executable without widening
- * dispatcher resume rules for arbitrary `review_pending` runs.
- * `next_action=repair_rubric_and_redispatch` tells the operator to fix the
- * anchored rubric state, re-dispatch the run, then rerun relay-review, and
- * `review.latest_verdict="rubric_state_failed_closed"` records that the raw
- * reviewer PASS was blocked by review-runner rubric enforcement.
- */
-function buildReviewRunnerRubricGateFailure(runId, redispatchPath, rubricLoad) {
-  if (!rubricLoad || RUBRIC_PASS_THROUGH_STATES.has(rubricLoad.state)) {
-    return null;
-  }
-
-  const recoveryCommand = buildRubricRecoveryCommand(runId, redispatchPath);
-  const rerunReviewStep = "After the re-dispatch completes, rerun relay-review.";
-  let recovery;
-  switch (rubricLoad.state) {
-    case "not_set":
-      recovery = `Persist a rubric for this run, then run \`${recoveryCommand}\`. ${rerunReviewStep}`;
-      break;
-    case "missing":
-      recovery = `Restore or replace the missing rubric, then run \`${recoveryCommand}\`. ${rerunReviewStep}`;
-      break;
-    case "outside_run_dir":
-      recovery = `Replace the escaped rubric anchor with a contained rubric, then run \`${recoveryCommand}\`. ${rerunReviewStep}`;
-      break;
-    case "empty":
-      recovery = `Regenerate the empty rubric, then run \`${recoveryCommand}\`. ${rerunReviewStep}`;
-      break;
-    default:
-      recovery = `Fix or replace the rubric anchor, then run \`${recoveryCommand}\`. ${rerunReviewStep}`;
-      break;
-  }
-
-  return {
-    status: "rubric_state_failed_closed",
-    layer: "review-runner",
-    rubricState: rubricLoad.state,
-    rubricStatus: rubricLoad.status,
-    reason: rubricLoad.error || "Rubric is not loaded.",
-    recoveryCommand,
-    recovery,
-    summary: `review-runner fail-closed: rubricLoad.state='${rubricLoad.state}' blocked ready_to_merge despite reviewer PASS. ${recovery}`,
-  };
-}
-
 module.exports = {
   buildRedispatchPrompt,
-  buildReviewRunnerRubricGateFailure,
   buildRubricGateRedispatchPrompt,
-  buildRubricRecoveryCommand,
   computeFactorStatusFlips,
   computeRepeatedIssueCount,
   decideFlipFlopEscalation,
