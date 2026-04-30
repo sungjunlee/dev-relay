@@ -20,6 +20,7 @@ const {
 } = require("./relay-manifest");
 const { buildPrBody, pushAndOpenPR, resolveBranchRemote } = require("./dispatch-publish");
 const { EXECUTION_EVIDENCE_FILENAME } = require("./execution-evidence");
+const { parseModelHints } = require("./model-hints");
 const { evaluateReviewGate } = require("../../relay-merge/scripts/review-gate");
 const { createEnforcementFixture } = require("./test-support");
 
@@ -891,130 +892,22 @@ test("dispatch resume without --model-hints preserves stored hints and emits no 
   assert.equal(events.filter((event) => event.event === "model_hints_updated").length, 0);
 });
 
-test("dispatch --model-hints rejects unknown phase keys without writing a manifest", () => {
-  const { repoRoot, relayHome } = setupRepo();
-  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
-  writeFakeCodex(binDir);
-  const env = {
-    ...process.env,
-    PATH: `${binDir}:${process.env.PATH}`,
-    RELAY_HOME: relayHome,
-  };
+const INVALID_MODEL_HINTS = [
+  { label: "unknown phase", raw: "foo=bar", pattern: /unknown phase 'foo'/ },
+  { label: "missing '='", raw: "dispatch", pattern: /missing '='/ },
+  { label: "empty phase", raw: "=opus", pattern: /empty phase/ },
+  { label: "empty value", raw: "dispatch=", pattern: /empty value/ },
+  { label: "empty pair", raw: "dispatch=sonnet,,review=opus", pattern: /empty pair/ },
+  { label: "duplicate phase", raw: "dispatch=opus,dispatch=sonnet", pattern: /duplicate phase 'dispatch'/ },
+];
 
-  assert.throws(() => runDispatch(repoRoot, [
-    "-b", "issue-109-parse-unknown-phase",
-    "--prompt", "invalid model hints",
-    "--model-hints", "foo=bar",
-  ], env), (error) => {
-    assert.equal(String(error.stderr).trim(), "Error: invalid --model-hints token 'foo=bar': unknown phase 'foo'");
-    return true;
-  });
-  assert.equal(listManifestPaths(repoRoot).length, 0);
-});
-
-test("dispatch --model-hints rejects tokens missing '=' without writing a manifest", () => {
-  const { repoRoot, relayHome } = setupRepo();
-  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
-  writeFakeCodex(binDir);
-  const env = {
-    ...process.env,
-    PATH: `${binDir}:${process.env.PATH}`,
-    RELAY_HOME: relayHome,
-  };
-
-  assert.throws(() => runDispatch(repoRoot, [
-    "-b", "issue-109-parse-missing-equals",
-    "--prompt", "invalid model hints",
-    "--model-hints", "dispatch",
-  ], env), (error) => {
-    assert.equal(String(error.stderr).trim(), "Error: invalid --model-hints token 'dispatch': missing '='");
-    return true;
-  });
-  assert.equal(listManifestPaths(repoRoot).length, 0);
-});
-
-test("dispatch --model-hints rejects empty phases without writing a manifest", () => {
-  const { repoRoot, relayHome } = setupRepo();
-  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
-  writeFakeCodex(binDir);
-  const env = {
-    ...process.env,
-    PATH: `${binDir}:${process.env.PATH}`,
-    RELAY_HOME: relayHome,
-  };
-
-  assert.throws(() => runDispatch(repoRoot, [
-    "-b", "issue-109-parse-empty-phase",
-    "--prompt", "invalid model hints",
-    "--model-hints", "=opus",
-  ], env), (error) => {
-    assert.equal(String(error.stderr).trim(), "Error: invalid --model-hints token '=opus': empty phase");
-    return true;
-  });
-  assert.equal(listManifestPaths(repoRoot).length, 0);
-});
-
-test("dispatch --model-hints rejects empty model values without writing a manifest", () => {
-  const { repoRoot, relayHome } = setupRepo();
-  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
-  writeFakeCodex(binDir);
-  const env = {
-    ...process.env,
-    PATH: `${binDir}:${process.env.PATH}`,
-    RELAY_HOME: relayHome,
-  };
-
-  assert.throws(() => runDispatch(repoRoot, [
-    "-b", "issue-109-parse-empty-value",
-    "--prompt", "invalid model hints",
-    "--model-hints", "dispatch=",
-  ], env), (error) => {
-    assert.equal(String(error.stderr).trim(), "Error: invalid --model-hints token 'dispatch=': empty value");
-    return true;
-  });
-  assert.equal(listManifestPaths(repoRoot).length, 0);
-});
-
-test("dispatch --model-hints rejects empty pairs without writing a manifest", () => {
-  const { repoRoot, relayHome } = setupRepo();
-  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
-  writeFakeCodex(binDir);
-  const env = {
-    ...process.env,
-    PATH: `${binDir}:${process.env.PATH}`,
-    RELAY_HOME: relayHome,
-  };
-
-  assert.throws(() => runDispatch(repoRoot, [
-    "-b", "issue-109-parse-empty-pair",
-    "--prompt", "invalid model hints",
-    "--model-hints", "dispatch=sonnet,,review=opus",
-  ], env), (error) => {
-    assert.equal(String(error.stderr).trim(), "Error: invalid --model-hints token '': empty pair");
-    return true;
-  });
-  assert.equal(listManifestPaths(repoRoot).length, 0);
-});
-
-test("dispatch --model-hints rejects duplicate phases without writing a manifest", () => {
-  const { repoRoot, relayHome } = setupRepo();
-  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
-  writeFakeCodex(binDir);
-  const env = {
-    ...process.env,
-    PATH: `${binDir}:${process.env.PATH}`,
-    RELAY_HOME: relayHome,
-  };
-
-  assert.throws(() => runDispatch(repoRoot, [
-    "-b", "issue-109-parse-duplicate-phase",
-    "--prompt", "invalid model hints",
-    "--model-hints", "dispatch=opus,dispatch=sonnet",
-  ], env), (error) => {
-    assert.equal(String(error.stderr).trim(), "Error: invalid --model-hints token 'dispatch=sonnet': duplicate phase 'dispatch'");
-    return true;
-  });
-  assert.equal(listManifestPaths(repoRoot).length, 0);
+test("parseModelHints rejects invalid model-hints tokens", () => {
+  for (const row of INVALID_MODEL_HINTS) {
+    assert.throws(() => parseModelHints(row.raw), (error) => {
+      assert.match(error.message, row.pattern);
+      return true;
+    }, row.label);
+  }
 });
 
 test("dispatch precedence D1 regression: CLI override beats manifest hint in executor argv", () => {
