@@ -8,11 +8,6 @@ const {
   validateManifestPaths,
 } = require("../../../relay-dispatch/scripts/manifest/paths");
 const { resolveManifestRecord } = require("../../../relay-dispatch/scripts/relay-resolver");
-const {
-  createRubricLoad,
-  formatRubricWarning,
-  loadRubricFromRunDir,
-} = require("../../../relay-dispatch/scripts/manifest/rubric");
 const { gh, readText } = require("./common");
 
 // DNS hostname validation — conservative label allowlist. Rejects leading
@@ -463,9 +458,7 @@ function formatPriorRoundContext(runDir, round) {
 
 module.exports = {
   applyReviewerIdentity,
-  createRubricLoad,
   formatPriorRoundContext,
-  formatRubricWarning,
   getExpectedManifestRepoRoot,
   getGhLogin,
   hostHasGhAuth,
@@ -473,7 +466,6 @@ module.exports = {
   loadDiff,
   loadDoneCriteria,
   loadProjectConventions,
-  loadRubricFromRunDir,
   parseRemoteHost,
   resolveContext,
   resolveIssueNumber,

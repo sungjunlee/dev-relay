@@ -1,10 +1,6 @@
 const fs = require("fs");
 const path = require("path");
 const { formatIssueList, formatScopeDrift } = require("./comment");
-const {
-  buildReviewRunnerRubricGateFailure,
-  buildRubricRecoveryCommand,
-} = require("../../../relay-dispatch/scripts/manifest/rubric");
 const { formatPriorVerdictSummary } = require("./prompt");
 
 const FLIP_STATES = new Set(["pass", "fail"]);
@@ -257,9 +253,7 @@ function buildRubricGateRedispatchPrompt(gateFailure, doneCriteria, doneCriteria
 
 module.exports = {
   buildRedispatchPrompt,
-  buildReviewRunnerRubricGateFailure,
   buildRubricGateRedispatchPrompt,
-  buildRubricRecoveryCommand,
   computeFactorStatusFlips,
   computeRepeatedIssueCount,
   decideFlipFlopEscalation,

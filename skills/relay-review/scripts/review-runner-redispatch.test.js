@@ -6,8 +6,6 @@ const path = require("path");
 
 const {
   buildRubricGateRedispatchPrompt,
-  buildRubricRecoveryCommand,
-  buildReviewRunnerRubricGateFailure,
   computeFactorStatusFlips,
   computeRepeatedIssueCount,
   decideFlipFlopEscalation,
@@ -15,6 +13,10 @@ const {
   scanPriorVerdicts,
   summarizeLineage,
 } = require("./review-runner/redispatch");
+const {
+  buildRubricRecoveryCommand,
+  buildReviewRunnerRubricGateFailure,
+} = require("../../relay-dispatch/scripts/manifest/rubric");
 
 function tempRunDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-redispatch-"));
