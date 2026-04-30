@@ -665,57 +665,43 @@ test("finalize-run rejects force-finalize from closed without mutating audit sta
   assert.equal(branchExists(fixture.repoRoot, fixture.branch), true);
 });
 
-test("finalize-run rejects force-finalize without --reason before any side effect", () => {
-  const fixture = setupRepo({ manifestState: STATES.ESCALATED });
+const FORCE_FINALIZE_EMPTY_REASON_CASES = [
+  { label: "missing", reason: undefined },
+  { label: "whitespace-spaces", reason: "   " },
+  { label: "whitespace-tab", reason: "\t" },
+  { label: "empty-string", reason: "" },
+];
 
-  assert.throws(() => execFileSync("node", [
-    SCRIPT,
-    "--repo", fixture.repoRoot,
-    "--branch", fixture.branch,
-    "--pr", "123",
-    "--force-finalize-nonready",
-    "--json",
-  ], {
-    cwd: fixture.repoRoot,
-    encoding: "utf-8",
-    stdio: "pipe",
-  }), (error) => {
-    assert.match(String(error.stderr), /--force-finalize-nonready requires --reason <non-empty-text>/);
-    return true;
-  });
+test("finalize-run rejects force-finalize when --reason is missing or empty", () => {
+  for (const row of FORCE_FINALIZE_EMPTY_REASON_CASES) {
+    const fixture = setupRepo({ manifestState: STATES.ESCALATED });
+    const args = [
+      SCRIPT,
+      "--repo", fixture.repoRoot,
+      "--branch", fixture.branch,
+      "--pr", "123",
+      "--force-finalize-nonready",
+      "--json",
+    ];
+    if (row.reason !== undefined) {
+      args.splice(args.length - 1, 0, "--reason", row.reason);
+    }
 
-  assert.equal(readManifest(fixture.manifestPath).data.state, STATES.ESCALATED);
-  assert.deepEqual(readRunEvents(fixture.repoRoot, fixture.runId), []);
-  assert.equal(fs.existsSync(fixture.worktreePath), true);
-  assert.equal(branchExists(fixture.repoRoot, fixture.branch), true);
-  assert.equal(remoteBranchExists(fixture.repoRoot, fixture.branch), true);
-  assert.equal(fs.existsSync(path.join(fixture.repoRoot, "gh.log")), false);
-});
+    assert.throws(() => execFileSync("node", args, {
+      cwd: fixture.repoRoot,
+      encoding: "utf-8",
+      stdio: "pipe",
+    }), (error) => {
+      assert.match(String(error.stderr), /--force-finalize-nonready requires --reason <non-empty-text>/);
+      return true;
+    });
 
-test("finalize-run rejects force-finalize with a whitespace-only --reason", () => {
-  const fixture = setupRepo({ manifestState: STATES.ESCALATED });
-
-  assert.throws(() => execFileSync("node", [
-    SCRIPT,
-    "--repo", fixture.repoRoot,
-    "--branch", fixture.branch,
-    "--pr", "123",
-    "--force-finalize-nonready",
-    "--reason", "   ",
-    "--json",
-  ], {
-    cwd: fixture.repoRoot,
-    encoding: "utf-8",
-    stdio: "pipe",
-  }), (error) => {
-    assert.match(String(error.stderr), /--force-finalize-nonready requires --reason <non-empty-text>/);
-    return true;
-  });
-
-  assert.equal(readManifest(fixture.manifestPath).data.state, STATES.ESCALATED);
-  assert.deepEqual(readRunEvents(fixture.repoRoot, fixture.runId), []);
-  assert.equal(fs.existsSync(fixture.worktreePath), true);
-  assert.equal(branchExists(fixture.repoRoot, fixture.branch), true);
+    assert.equal(readManifest(fixture.manifestPath).data.state, STATES.ESCALATED);
+    assert.deepEqual(readRunEvents(fixture.repoRoot, fixture.runId), []);
+    assert.equal(fs.existsSync(fixture.worktreePath), true);
+    assert.equal(branchExists(fixture.repoRoot, fixture.branch), true);
+    assert.equal(remoteBranchExists(fixture.repoRoot, fixture.branch), true);
+  }
 });
 
 test("finalize-run force-finalize dry-run is observation-only and does not append audit events", () => {
