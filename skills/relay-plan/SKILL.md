@@ -97,15 +97,16 @@ Before persisting the draft rubric, apply the 6 heuristics in `references/rubric
 
 Apply to all task sizes: rewrite HOW into observable WHAT, merge overlaps, remove unsupported defensive clauses, and verify weights.
 
-### 7. Persisting Phase 1 deviations as anchor
+### 7. Persist Phase 1 deviations only when scope changes
 
-Use this when operator planning rejects or narrows the issue body AC. Persist the operator-authored Phase 1 decision before dispatch so fresh-context review uses the same scope anchor.
+If operator planning rejects or narrows issue-body AC, persist that decision before dispatch so fresh-context review uses the same anchor:
 
-1. Choose `RUN_ID` (e.g., `issue-<N>-$(date -u +%Y%m%d%H%M%S000)-<short-sha>`).
-2. Persist: `node ${CLAUDE_SKILL_DIR}/scripts/persist-done-criteria.js --repo . --run-id "$RUN_ID" --file /tmp/done-criteria-<N>.md --json`
-3. Dispatch with the same `RUN_ID`, adding `--done-criteria-file ~/.relay/runs/<repo-slug>/$RUN_ID/done-criteria.md` to the Step 11 invocation below.
+```bash
+node ${CLAUDE_SKILL_DIR}/scripts/persist-done-criteria.js --repo . \
+  --run-id "$RUN_ID" --file /tmp/done-criteria-<N>.md --json
+```
 
-The helper writes `~/.relay/runs/<repo-slug>/<run-id>/done-criteria.md` with source `planner_decision`. Dispatch picks it up via `--done-criteria-file` when the same run id is used. Canonical filename is always `done-criteria.md`; ad-hoc file paths remain source `file`.
+Dispatch with the same `RUN_ID` and `--done-criteria-file ~/.relay/runs/<repo-slug>/$RUN_ID/done-criteria.md`. Skip this step when the issue or intake handoff already provides the final Done Criteria.
 
 ### 8. Review the rubric (triggered L/XL tasks)
 
