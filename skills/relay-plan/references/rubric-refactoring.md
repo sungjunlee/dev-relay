@@ -2,6 +2,10 @@
 
 Metrics a senior engineer actually checks when refactoring. Not "does it still work" but "is the codebase genuinely simpler, or did you just move the mess around."
 
+## Candidate Axis Library
+
+Use this file to choose task-relevant rubric axes, not as a template to paste wholesale. For S-size mechanical cleanup, one contract factor plus hygiene prerequisites is enough unless the Acceptance Criteria introduce real simplification, boundary, or migration judgment. Pull at most the refactoring axes that match the changed code path.
+
 ## Prerequisites (Hygiene)
 
 Use this section only for checks that would apply to ANY PR in this repo. They gate the run and do not count toward factor totals.

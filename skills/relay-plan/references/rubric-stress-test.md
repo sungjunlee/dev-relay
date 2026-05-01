@@ -1,16 +1,18 @@
 # Rubric Stress-Test for L/XL Tasks
 
-For complex tasks (5+ AC items), stress-test the rubric before dispatch. A subagent with fresh context attempts to "game" the rubric — finding minimal implementations that technically pass but a senior engineer would reject.
+For complex, design-bearing tasks, stress-test the rubric before dispatch. A fresh-context reviewer attempts to "game" the rubric — finding minimal implementations that technically pass but a senior engineer would reject.
 
 ## Task Size Classification
 
 | Size | Criteria | Rubric Review |
 |------|----------|---------------|
 | S/M | 1-4 AC items | None (current flow) |
-| L | 5-6 AC items | Stress-test (1 subagent) |
-| XL | 7+ AC items or cross-domain | Stress-test + Calibration simulation (parallel) |
+| L | 5-6 AC items plus evaluated factors and ambiguity/risk signal | Stress-test (1 fresh-context reviewer) |
+| XL | 7+ AC items or cross-domain plus evaluated factors and ambiguity/risk signal | Stress-test + Calibration simulation (parallel only when useful) |
 
 **Cross-domain**: task spans frontend + backend, infra + application, or multiple services.
+
+**Ambiguity/risk signal**: novel quality criteria, historical score divergence, trust/security boundary, unclear AC decomposition, or factors that could be gamed by a minimal implementation.
 
 ## Process: Validate → Review → Generate
 
@@ -20,9 +22,9 @@ Insert this between "Validate the rubric" (step 3) and "Generate dispatch prompt
 Step 5 (Validate) → Step 9 (Rubric Review) → Step 10 (Generate dispatch prompt)
 ```
 
-## Stress-Test (L and XL)
+## Stress-Test (L and XL when triggered)
 
-Launch a subagent with **fresh context** (no planning conversation). Hand it the rubric YAML + original AC as a structured artifact.
+Use a fresh-context reviewer (subagent when available, otherwise a separate isolated review prompt). Hand it the rubric YAML + original AC as a structured artifact. Do not launch this for direct all-automated rubrics or simple L tasks where the AC already maps cleanly to checks.
 
 ### Prompt Template
 
@@ -77,7 +79,7 @@ not what's universally true of competent code.
 
 ## Calibration Simulation (XL only)
 
-Run **parallel** with stress-test. A second subagent imagines three implementations and scores each against evaluated factors.
+Run **parallel** with stress-test only when the XL rubric has novel or subjective evaluated factors. A second fresh-context reviewer imagines three implementations and scores each against evaluated factors.
 
 ### Prompt Template
 
@@ -142,6 +144,7 @@ After receiving stress-test (and calibration) results:
 ## When to Skip
 
 - **S/M tasks** (1-4 AC): Rubric is simple enough that stress-testing adds overhead without proportional value
+- **L tasks with no ambiguity/risk signal**: A direct rubric review by the orchestrator is enough
 - **Re-dispatches with iteration history**: The rubric was already stress-tested on the first dispatch; re-dispatch focuses on addressing reviewer feedback, not rubric quality
 - **All-automated rubrics**: No evaluated factors to calibrate — stress-test adds nothing
 - **Time-critical hotfixes**: Skip to dispatch immediately; accept rubric risk
@@ -150,7 +153,7 @@ After receiving stress-test (and calibration) results:
 
 | Size | Overhead | Mechanism |
 |------|----------|-----------|
-| L | ~2-3K tokens | 1 subagent (stress-test) |
-| XL | ~5-6K tokens | 2 subagents parallel (stress-test + calibration) |
+| L | ~2-3K tokens | 1 fresh-context reviewer (stress-test) |
+| XL | ~5-6K tokens | 1-2 fresh-context reviewers when calibration is useful |
 
 Compared to a failed dispatch + re-dispatch cycle (~50-100K tokens), the overhead is negligible for tasks where rubric quality is the primary risk.
