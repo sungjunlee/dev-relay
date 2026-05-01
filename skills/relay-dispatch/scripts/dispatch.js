@@ -101,6 +101,7 @@ const { STATES, updateManifestState } = require("./manifest/lifecycle");
 const { resolveManifestRecord } = require("./relay-resolver");
 const { appendRunEvent, EVENTS } = require("./relay-events");
 const { execGit } = require("./exec");
+const { resolveReasoningEffort } = require("./rubric-size");
 
 // ---------------------------------------------------------------------------
 // Args
@@ -526,21 +527,6 @@ function resolveEffectiveDispatchModel({ cliModel, manifestModelHints, cliModelH
     return cliModelHints.dispatch;
   }
   return null;
-}
-
-function extractRubricSize(rubricPath) {
-  if (!rubricPath || !fs.existsSync(rubricPath)) return null;
-  const rubricText = fs.readFileSync(rubricPath, "utf-8");
-  const match = rubricText.match(/^size:\s*["']?([A-Za-z]+)["']?\s*$/m);
-  return match ? match[1].toUpperCase() : null;
-}
-
-function resolveReasoningEffort({ override, rubricPath }) {
-  if (override) return override;
-  // Defensive-only: enforceRubricPersistence() guarantees new dispatch runs have
-  // a rubric before argv construction, but keep the resolver safe standalone.
-  const rubricSize = extractRubricSize(rubricPath);
-  return DEFAULT_REASONING_BY_SIZE[rubricSize] || "xhigh";
 }
 
 // ---------------------------------------------------------------------------
