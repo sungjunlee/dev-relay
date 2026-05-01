@@ -49,7 +49,7 @@ skills/relay-dispatch/scripts/cli-args.js:1:function getArg(args, flag, fallback
 
 ```text
 skills/relay-dispatch/scripts/cleanup-worktrees.js:26:const { getArg, hasFlag } = require("./cli-args");
-skills/relay-dispatch/scripts/cli-args.test.js:4:const { getArg, hasFlag } = require("./cli-args");
+tests/relay-dispatch/scripts/cli-args.test.js:4:const { getArg, hasFlag } = require("./cli-args");
 skills/relay-dispatch/scripts/close-run.js:12:const { getArg, hasFlag } = require("./cli-args");
 skills/relay-dispatch/scripts/create-worktree.js:40:const { getArg, hasFlag } = require("./cli-args");
 skills/relay-dispatch/scripts/dispatch.js:86:const { getArg, hasFlag } = require("./cli-args");

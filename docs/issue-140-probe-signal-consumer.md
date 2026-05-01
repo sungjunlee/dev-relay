@@ -37,9 +37,9 @@ Rules 3, 6, and 7 are directly load-bearing on this PR. Rules 1 and 4 are indire
 | --- | --- | --- |
 | `skills/relay-plan/SKILL.md` | **MODIFIED** | Adds `### 1.6 Read probe quality signals` at lines 52-78 and adds the `Probe signal` subsection inside the Quality Card examples at lines 195-269. |
 | `skills/relay-plan/scripts/probe-executor-env-consumer.js` | **ADDED** | Planner-side consumer helper that reads the project-only probe, derives the five `probe_signal.*` fields, and renders the named fallback contract without blocking dispatch. |
-| `skills/relay-plan/scripts/probe-executor-env-consumer.test.js` | **ADDED** | Three separate regression tests covering no-signal, surfaced-cause fallback, and generic non-zero failure. |
+| `tests/relay-plan/scripts/probe-executor-env-consumer.test.js` | **ADDED** | Three separate regression tests covering no-signal, surfaced-cause fallback, and generic non-zero failure. |
 | `skills/relay-plan/scripts/probe-executor-env.js` | **MODIFIED** | Adds additive `project_tools.ci` detection from `.github/workflows/*.yml|*.yaml`; existing `scripts` / `frameworks` producer fields stay unchanged. |
-| `skills/relay-plan/scripts/probe-executor-env.test.js` | **MODIFIED** | Adds CI workflow detection coverage and updates empty-shape expectations to include `ci: []`. |
+| `tests/relay-plan/scripts/probe-executor-env.test.js` | **MODIFIED** | Adds CI workflow detection coverage and updates empty-shape expectations to include `ci: []`. |
 | `skills/relay-dispatch/SKILL.md` | **UNCHANGED** | No new probe consumer logic added. The required cross-skill grep for `probe-executor-env` is empty. |
 | `skills/relay-review/scripts/review-runner.js` | **UNCHANGED** | Review still does not consume probe signals; the evidence lives in this mirror doc. |
 | `skills/relay-merge/scripts/finalize-run.js` | **UNCHANGED** | Merge flow remains independent of probe-signal consumption. |
@@ -49,7 +49,7 @@ Additional adjacent-path rows required by factor 4:
 | Consumer | Selector usage | Delta under #140 | Re-tested or deferred |
 | --- | --- | --- | --- |
 | `skills/relay-plan/scripts/reliability-report-consumer.js` | #139 historical-signal consumer | **UNCHANGED** — independent consumer, no coupling to probe signals | Covered by #139's own tests |
-| `skills/relay-plan/scripts/reliability-report-consumer.test.js` | #139 historical-signal consumer tests | **UNCHANGED** | Covered by #139's own suite |
+| `tests/relay-plan/scripts/reliability-report-consumer.test.js` | #139 historical-signal consumer tests | **UNCHANGED** | Covered by #139's own suite |
 | `skills/relay-intake/**` | Intake skill | **UNCHANGED** — intake does not consume probe signals under #140 | n/a |
 | `skills/relay/**` | Umbrella relay skill | **UNCHANGED** — does not consume probe signals under #140 | n/a |
 

@@ -80,7 +80,7 @@ docs/issue-166-gate-check-stamping-concurrency.md
 docs/issue-185-gate-check-timeout-merge-safety.md
 memory/feedback_rubric_fail_closed.md
 skills/relay-merge/scripts/gate-check.js
-skills/relay-merge/scripts/gate-check.test.js
+tests/relay-merge/scripts/gate-check.test.js
 ```
 
 ## Call-Site Audit Recheck
