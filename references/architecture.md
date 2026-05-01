@@ -293,6 +293,11 @@ Do not "simplify" the facade by collapsing submodules back into it or by force-m
 
 Small, pure utilities that multiple skills import live under `skills/relay-dispatch/scripts/` alongside the runtime modules they share kinship with — not in a neutral top-level directory. `skills/` packages independent publishable skills, but at runtime the skill boundary is packaging only (see retro: `gate-check.js` → relay-review internals, `review-runner.js` → relay-dispatch internals). Placement rule: the skill most often invoked as a dependency hosts the shared helper.
 
+Before deleting, moving, or reclassifying scripts, use the script inventory in
+[`docs/script-inventory-and-cleanup.md`](../docs/script-inventory-and-cleanup.md).
+Zero runtime imports are not enough to prove a script is dead: operator CLIs,
+adapter entry points, and archived measurement tools often have no importers.
+
 Current shared helpers:
 
 | Module | Owner | Consumers |
