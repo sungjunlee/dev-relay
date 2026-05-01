@@ -23,20 +23,10 @@ rubric:
 ```
 BEFORE LOOP: Run baseline if defined. RULE: Do NOT modify automated check commands.
 LOOP (max 5 iterations):
-  0. PREREQUISITE GATE: Run all prerequisite checks. Any fails → fix before proceeding.
-  1. Run ALL automated checks + self-evaluate ALL evaluated factors, record scores
-  2. REGRESSION CHECK: Any factor previously marked locked now below target?
-     → Revert this iteration's changes (git reset to previous commit)
-     → Re-attempt with constraint: "Maintain [factor] at [score] while improving [target factor]"
-     → Regression persists after 1 re-attempt → flag both factors, escalate
-  3. Append to Score Log — mark factors that meet target as locked
-  4. All required meet target → adversarial self-review:
-     - Review as if you did NOT write this code and are seeing it for the first time
-     - For each automated check: could the target be met by a shortcut that misses the intent?
-     - For each evaluated factor: re-read scoring_guide "high" — does it genuinely apply?
-     - Check: stubs, TODOs, hardcoded values, test manipulation, placeholder returns
-     → All clear → PR
-     → Issues found → fix → re-score → PR
-  5. Else → lowest required factor → if fix_hint exists, apply it as the starting fix → ONE focused change → commit → repeat
-  6. Stuck detection: same factor below target for 3 consecutive iterations → stop, create PR with partial progress
+  0. PREREQUISITE GATE: Run prerequisite checks. Any fails → fix before scoring factors.
+  1. Run automated factors and self-evaluate evaluated factors. Record evidence in the Score Log.
+  2. Fix the weakest required failing factor with one focused change. Do not modify rubric commands to make them pass.
+  3. Re-run affected checks plus any previously passing factor that could regress.
+  4. Stop only when all required factors meet target, self-review finds no stubs/TODOs/test shortcuts, and the final work is committed.
+  5. If the same required factor is still failing after 3 focused attempts, stop with partial progress, evidence, and a clear stuck note.
 ```

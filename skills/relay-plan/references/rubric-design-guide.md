@@ -167,18 +167,19 @@ Six principles for rubric quality, derived from autoresearch patterns and evalua
 ### 1. Factor counts by tier, not a flat 3-5 rule
 
 Prerequisites (hygiene): as many as needed, uncounted.
-Factors (contract + quality): satisfy the per-tier minimums first, then stop when the rubric feels complete. No hard cap, warning at 8+ substantive factors.
+Factors (contract + quality): satisfy the per-tier minimums first, then stop when the rubric feels complete. S-size mechanical tasks do not need a synthetic quality factor; add quality only when there is real design judgment to evaluate. No hard cap, warning at 8+ substantive factors.
 
 ```text
-┌─────────────┬──────────┬──────────┬───────────────────┐
-│   Size      │ Contract │ Quality  │ Substantive total │
-│             │   min    │   min    │                   │
-├─────────────┼──────────┼──────────┼───────────────────┤
-│ S (1-2 AC)  │   ≥ 1    │   ≥ 1    │  2+  (rec ~3)     │
-│ M (3-4 AC)  │   ≥ 2    │   ≥ 1    │  3+  (rec ~5)     │
-│ L (5-6 AC)  │   ≥ 2    │   ≥ 2    │  4+  (rec ~6)     │
-│ XL (7+ AC)  │   ≥ 3    │   ≥ 2    │  5+  (rec ~8)     │
-└─────────────┴──────────┴──────────┴───────────────────┘
+┌──────────────────────────┬──────────┬──────────┬───────────────────┐
+│   Size                   │ Contract │ Quality  │ Substantive total │
+│                          │   min    │   min    │                   │
+├──────────────────────────┼──────────┼──────────┼───────────────────┤
+│ S mechanical (1-2 AC)    │   ≥ 1    │    0     │  1+  (rec 1-2)    │
+│ S design-bearing (1-2 AC)│   ≥ 1    │   ≥ 1    │  2+  (rec ~2)     │
+│ M (3-4 AC)               │   ≥ 2    │   ≥ 1    │  3+  (rec ~5)     │
+│ L (5-6 AC)               │   ≥ 2    │   ≥ 2    │  4+  (rec ~6)     │
+│ XL (7+ AC)               │   ≥ 3    │   ≥ 2    │  5+  (rec ~8)     │
+└──────────────────────────┴──────────┴──────────┴───────────────────┘
 ```
 
 If you hit 8+ substantive factors, check for overlap. Usually two factors want to be merged, or a hygiene check is masquerading as a factor and should move to `prerequisites`.
@@ -211,7 +212,9 @@ The metric measurement command should not be something the agent can game. Separ
 
 When fixing one factor, the executor may silently degrade another. Factor interference is the #1 cause of wasted iterations — the agent oscillates between factors, never converging.
 
-**Locked factors.** When a required factor meets its target, it becomes locked. Subsequent iterations must not regress it below target. If they do, the iteration is discarded (git reset) and re-attempted with an explicit constraint to maintain the locked factor.
+**Compact default.** The default dispatch prompt asks the executor to re-run any previously passing factor that could regress. That is enough for S/M tasks and keeps the prompt readable.
+
+**Locked factors for L/XL.** When a large task has interfering factors, the planner may add explicit lock guidance: when a required factor meets its target, it becomes locked and subsequent iterations must not regress it below target. Keep this stricter language out of S/M prompts unless historical evidence says factor interference is the risk.
 
 ```
 | Factor         | Target  | Iter 1 | Iter 2   | Iter 3 | Status |
@@ -221,7 +224,7 @@ When fixing one factor, the executor may silently degrade another. Factor interf
 | API clarity    | ≥ 7     | 4      | 5        | 7 ✓    | locked |
 ```
 
-This pattern reduces factor interference in practice by preventing silent regression during multi-factor iteration. The iteration protocol enforces it: step 2 checks for regression before proceeding.
+This pattern reduces factor interference in practice by preventing silent regression during multi-factor iteration. Use it selectively; otherwise the process can become bigger than the change.
 
 ## Grounding
 
@@ -240,7 +243,7 @@ Grounding is about knowledge availability. Vague wording and ungrounded wording 
 
 ## Stuck Patterns
 
-Three pathological iteration patterns. The iteration protocol checks all three before proceeding (iteration loop step 6).
+Three pathological iteration patterns. Use these for L/XL planning, repeated re-dispatches, or historical reliability hotspots. Do not copy all of this into every S/M dispatch prompt.
 
 ### Single-factor stall
 

@@ -43,67 +43,45 @@ Do not relax the outcome contract. If HEAD still leaves any `tdd_anchor` test fa
 
 ### Scope Drift Detection (run first)
 
-Before reviewing code quality, check: did the executor build what was requested — nothing more, nothing less?
+First answer: did the executor build what was requested, nothing more and nothing less?
 
 Classify every changed file:
 - **IN-SCOPE**: directly required by Done Criteria
 - **SUPPORTING**: necessary for in-scope changes (imports, tests, config)
 - **OUT-OF-SCOPE**: unrelated to Done Criteria
 
-**SCOPE CREEP detection:**
-- Files changed that are unrelated to Done Criteria
-- New features or refactors not mentioned in the contract
-- "While I was in there..." changes that expand blast radius
-
-**MISSING REQUIREMENTS detection:**
-- Done Criteria items not addressed in the diff
-- Test coverage gaps for stated requirements
-- Partial implementations (started but not finished)
-
-Populate the `scope_drift` field in your verdict with any creep or missing items found.
+Populate `scope_drift.creep` with unrelated file/feature/refactor changes. Populate `scope_drift.missing` with every Done Criteria item and status: `verified`, `partial`, `not_done`, or `changed`.
 
 ### Contract checks (faithfulness)
-For each Done Criteria item, verify it is implemented in the diff by locating the relevant code changes. Also check for common executor blind spots:
-- **Stubs/placeholders**: `return null`, empty bodies, TODO, mock data in production paths
-- **Integration issues**: does it break callers/consumers of changed code?
-- **Security**: auth/token handling, input validation, injection risks
-- **Dead code**: unused imports, functions, variables
-- **Boundary violation**: areas marked "do not change" were modified
+Verify each Done Criteria item by locating supporting changes in the diff. Do not use the executor's PR description, commit message, or self-report as evidence.
 
-If any contract issue exists, stop there and return `verdict=changes_requested` with `contract_status=fail` and `quality_review_status=not_run`.
+Block on:
+- missing or partial Done Criteria
+- changed behavior outside the stated scope
+- production stubs/placeholders (`return null`, empty bodies, TODO, mock data)
+- integration breaks for changed callers/consumers
+- security boundary regressions around auth, tokens, input validation, or injection
+
+If any contract issue exists, return `verdict=changes_requested`, `contract_status=fail`, and `quality_review_status=not_run`.
 
 ### Quality checks (only after contract passes)
-Review the changed code for issues that still matter before merge:
-- **Correctness risks**: edge cases, stale assumptions, unsafe recovery paths
-- **Structural quality**: confusing control flow, hidden side effects, misleading state transitions
-- **Simplification**: dead code, redundant branches, unnecessary complexity
+Review only issues a senior engineer should fix before merge:
+- correctness risks in edge cases, stale assumptions, unsafe recovery paths
+- confusing control flow, hidden side effects, misleading state transitions
+- dead code, redundant branches, unnecessary complexity
 
-Set `quality_review_status` by inspection only. The review runner computes `quality_execution_status` from `execution-evidence.json`.
-Reviewer MUST NOT set `quality_execution_status`.
-The reviewer cannot execute code, and the runner independently verifies SHA-bound execution evidence for the reviewed HEAD. This preserves the trust boundary between inspection evidence and execution evidence.
+Set `quality_review_status` by inspection only. The reviewer cannot execute code; the runner independently verifies SHA-bound execution evidence from `execution-evidence.json`. This preserves the trust boundary between inspection evidence and execution evidence.
 
-If the rubric includes tiered factors, review them differently:
-- **Contract-tier factors**: verify pass/fail. Did the specific AC item get implemented? Treat these as binary checks with minimal interpretation.
-- **Quality-tier factors**: use the `scoring_guide` anchors (low/mid/high) for strict re-scoring. Re-read the `high` anchor and verify it genuinely applies before you accept a high score.
+If a rubric is present:
+- score every contract-tier factor as pass/fail against the diff
+- score every quality-tier factor independently using its `scoring_guide`
+- do not defer to executor self-scores
 
-Quality-tier factors deserve extra scrutiny. The executor naturally scores its own design decisions generously. Re-evaluate against the scoring_guide anchors independently.
-
-If the rubric includes `scoring_guide` anchors (low/mid/high), use them to calibrate your scoring — they define the shared scale between executor and reviewer. Score independently; do not defer to the executor's self-scores.
-
-Do not invent nitpicks. Only flag issues a senior engineer should fix before merge.
-
-### Common executor rationalizations (do not accept these)
-
-| Executor claim | Why it's wrong |
-|----------------|---------------|
-| "Tests pass, so AC is met" | Passing tests ≠ AC met. Verify each AC independently in the diff. |
-| "Refactored for clarity" | OUT-OF-SCOPE unless AC explicitly requires refactoring. Flag as scope creep. |
-| "Added for robustness" | Scope creep unless AC includes error handling or resilience requirements. |
-| "Minor cleanup while I was here" | Out-of-scope change that expands blast radius. Flag in `scope_drift.creep`. |
+Do not invent nitpicks. Style-only suggestions are not review findings.
 
 ### Verification evidence
 
-In your summary, enumerate each Done Criteria item with one of four statuses. Base each status on diff evidence, not on executor claims.
+In your summary, enumerate each Done Criteria item with one of four statuses, based on diff evidence:
 - **VERIFIED**: implementation confirmed by locating the relevant code in the diff
 - **PARTIAL**: started but incomplete — cite what is present and what remains
 - **NOT_DONE**: no supporting evidence found in the diff
