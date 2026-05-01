@@ -29,6 +29,8 @@ Common factor fields are:
 - `scoring_guide`: low/mid/high anchors for evaluated factors
 - `fix_hint`: optional directed iteration aid for known plateau patterns
 
+Reviewer verdicts record numeric quality scores separately from pass/fail state: `score` is the reviewer-observed 0-10 value, `target_score` is the numeric target when one exists. Contract factors usually leave both numeric fields `null`; quality factors with targets such as `>= 8/10` should produce `score: 7.5, target_score: 8` until they meet target.
+
 Optional TDD factor fields:
 
 ```yaml
