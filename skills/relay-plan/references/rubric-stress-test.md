@@ -19,7 +19,7 @@ For complex, design-bearing tasks, stress-test the rubric before dispatch. A fre
 Insert this between "Validate the rubric" and "Generate dispatch prompt":
 
 ```
-Step 5 (Validate) → Step 9 (Rubric Review) → Step 10 (Generate dispatch prompt)
+Step 6 (Validate) → Step 9 (Rubric Review) → Step 10 (Generate dispatch prompt)
 ```
 
 ## Stress-Test (L and XL when triggered)

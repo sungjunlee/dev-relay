@@ -61,6 +61,7 @@ test("rubric stress-test is gated by ambiguity or risk signal", () => {
   assert.match(text, /Do not launch this for direct all-automated rubrics or simple L tasks/);
   assert.match(text, /L tasks with no ambiguity\/risk signal/);
   assert.match(text, /Task Brief \/ Done Criteria/);
+  assert.match(text, /Step 6 \(Validate\) → Step 9 \(Rubric Review\) → Step 10 \(Generate dispatch prompt\)/);
   assert.match(text, /narrow scope, low ambiguity\/risk/);
   assert.match(skill, /Run stress-test only for L\/XL rubrics with evaluated factors and an ambiguity\/risk signal/);
   assert.doesNotMatch(skill, /L does one stress-test round/);
