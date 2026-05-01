@@ -119,7 +119,7 @@ node ${CLAUDE_SKILL_DIR}/scripts/persist-done-criteria.js --repo . \
 
 Dispatch with the same `RUN_ID` and `--done-criteria-file ~/.relay/runs/<repo-slug>/$RUN_ID/done-criteria.md`. Skip this step only when the issue or intake handoff already provides the final Done Criteria without planner changes.
 
-### 9. Review the rubric (triggered L/XL tasks)
+### 9. Review the rubric (triggered by ambiguity/risk)
 
 S/M usually skips, but ambiguity or risk can opt any size into stress-test. Run stress-test for L/XL rubrics with evaluated factors and an ambiguity/risk signal, and for smaller rubrics when the recovered Done Criteria are novel, vague, or easy to game. XL adds calibration simulation only when novel or subjective evaluated factors need it. Skip re-dispatches with iteration history, all-automated rubrics, and simple tasks where recovered Done Criteria map cleanly to checks. Protocol: `references/rubric-stress-test.md`.
 

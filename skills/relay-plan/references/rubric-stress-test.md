@@ -1,6 +1,6 @@
-# Rubric Stress-Test for L/XL Tasks
+# Rubric Stress-Test
 
-For complex, design-bearing tasks, stress-test the rubric before dispatch. A fresh-context reviewer attempts to "game" the rubric — finding minimal implementations that technically pass but a senior engineer would reject.
+For complex, ambiguous, or risk-bearing tasks, stress-test the rubric before dispatch. A fresh-context reviewer attempts to "game" the rubric — finding minimal implementations that technically pass but a senior engineer would reject.
 
 ## Task Size Classification
 
@@ -22,9 +22,9 @@ Insert this between "Validate the rubric" and "Generate dispatch prompt":
 Step 6 (Validate) → Step 9 (Rubric Review) → Step 10 (Generate dispatch prompt)
 ```
 
-## Stress-Test (L and XL when triggered)
+## Stress-Test (when triggered)
 
-Use a fresh-context reviewer (subagent when available, otherwise a separate isolated review prompt). Hand it the rubric YAML + task brief / recovered Done Criteria as a structured artifact. Do not launch this for direct all-automated rubrics or simple L tasks where the recovered Done Criteria already map cleanly to checks.
+Use a fresh-context reviewer (subagent when available, otherwise a separate isolated review prompt). Hand it the rubric YAML + task brief / recovered Done Criteria as a structured artifact. Do not launch this for direct all-automated rubrics or simple tasks where the recovered Done Criteria already map cleanly to checks.
 
 ### Prompt Template
 

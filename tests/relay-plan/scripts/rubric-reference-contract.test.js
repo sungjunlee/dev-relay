@@ -66,9 +66,10 @@ test("rubric stress-test is gated by ambiguity or risk signal", () => {
   const text = readReference("rubric-stress-test.md");
   const skill = readSkill();
 
-  assert.match(text, /complex, design-bearing tasks/);
+  assert.match(text, /complex, ambiguous, or risk-bearing tasks/);
   assert.match(text, /ambiguity\/risk signal/);
-  assert.match(text, /Do not launch this for direct all-automated rubrics or simple L tasks/);
+  assert.match(text, /## Stress-Test \(when triggered\)/);
+  assert.match(text, /Do not launch this for direct all-automated rubrics or simple tasks/);
   assert.match(text, /S\/M tasks with no ambiguity\/risk signal/);
   assert.match(text, /Task Brief \/ Done Criteria/);
   assert.match(text, /stress-test when ambiguity\/risk signal exists/);
@@ -77,6 +78,9 @@ test("rubric stress-test is gated by ambiguity or risk signal", () => {
   assert.match(text, /low ambiguity\/risk/);
   assert.match(skill, /ambiguity or risk can opt any size into stress-test/);
   assert.doesNotMatch(text, /uncovered AC/);
+  assert.doesNotMatch(text, /L and XL when triggered/);
+  assert.doesNotMatch(text, /simple L tasks/);
+  assert.doesNotMatch(skill, /triggered L\/XL tasks/);
   assert.doesNotMatch(skill, /L does one stress-test round/);
 });
 
