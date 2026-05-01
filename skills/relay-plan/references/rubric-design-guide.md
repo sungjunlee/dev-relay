@@ -1,6 +1,6 @@
 # Rubric Design Guide
 
-How to derive a task-specific rubric from Acceptance Criteria (AC). This file is the planning guide; validation, simplification, and stress-test detail live in their own references.
+How to synthesize a task-specific evaluation rubric from the full task brief. Acceptance Criteria (AC) are high-priority evidence, not the only source. When AC are missing, vague, or incomplete, first recover observable Done Criteria from task intent, repo context, quality signals, and risk.
 
 Before dispatch, persist the finished rubric to a file and pass it through `relay-dispatch --rubric-file <path>`. This records `anchor.rubric_path` for review and merge gates.
 
@@ -8,7 +8,7 @@ Before dispatch, persist the finished rubric to a file and pass it through `rela
 
 The domain `rubric-*.md` files are **candidate axis libraries**, not dispatch templates. Use them to sharpen task-specific judgment:
 
-- Pick only the axes earned by the Acceptance Criteria.
+- Pick only the axes earned by task-specific evidence: explicit AC, inferred Done Criteria, repo conventions, historical signal, probe signal, or concrete risk.
 - Do not copy a whole domain reference into a dispatch prompt.
 - S-size mechanical tasks may use one contract factor plus hygiene prerequisites and no quality factor.
 - Add quality factors only when the task has real design judgment or risk that a command cannot verify.
@@ -52,21 +52,33 @@ Use `tdd_anchor` only when red-first testing fits the factor's contract: crisp b
 
 ## Guided Interview
 
-Walk through these questions to design a task-specific rubric. Stop when the rubric covers the AC without adding generic quality wishes.
+Walk through these questions to design a task-specific rubric. Stop when the rubric covers the recovered Done Criteria without adding generic quality wishes.
 
-### Q1: What actually matters for this task?
+### Q1: What is the evaluation source model?
 
-Read the AC and rank the outcomes that would hurt most if they shipped wrong. Each kept concern must pass the tier test:
+List the evidence that defines success for this task:
+
+- Explicit AC, if present
+- Inferred Done Criteria from the user request, issue body, relay-intake handoff, and nearby repo conventions
+- Repo quality signals from available tests, lint, typecheck, CI, and scripts
+- Historical relay signals such as stuck factors, score divergence, and average rounds
+- Task risk such as trust boundaries, data loss, migrations, user-visible flows, performance, or operational failure modes
+
+If explicit AC and inferred Done Criteria disagree, resolve the conflict before drafting factors. Persist planner-authored Done Criteria when the final anchor differs from the issue body or intake handoff.
+
+### Q2: What actually matters for this task?
+
+Rank the outcomes that would hurt most if they shipped wrong. Each kept concern must pass the tier test:
 
 | Tier | Question | Placement | Examples |
 |---|---|---|---|
 | Hygiene | Would this apply to any PR in this repo? | `prerequisites` | `npm test`, `tsc --noEmit`, repo lint |
-| Contract | Does this verify a specific AC item exists? | `factors` | endpoint returns pagination metadata, config accepts a new field |
+| Contract | Does this verify a specific Done Criteria outcome exists? | `factors` | endpoint returns pagination metadata, config accepts a new field |
 | Quality | Does this judge how well the implementation is designed? | `factors` | failure-mode strategy, abstraction boundary, reader success |
 
 Contract is "is it there?" Quality is "is it good?" Move repo-wide checks to `prerequisites`; do not count them as substantive factors.
 
-### Q2: What can be measured with a command?
+### Q3: What can be measured with a command?
 
 Inventory project tools before deciding what is measurable:
 
@@ -74,14 +86,14 @@ Inventory project tools before deciding what is measurable:
 ${CLAUDE_SKILL_DIR}/scripts/probe-executor-env.js <repo-path> --project-only --json
 ```
 
-For each AC item, ask whether a shell command can verify the outcome with available tools.
+For each Done Criteria item, ask whether a shell command can verify the outcome with available tools.
 
 - Yes: make it an automated factor with an immutable `command` and concrete `target`.
-- No: make it an evaluated factor and continue to Q3.
+- No: make it an evaluated factor and continue to Q4.
 
 Examples:
 
-| AC item | Measurable command | Factor type |
+| Done Criteria item | Measurable command | Factor type |
 |---|---|---|
 | API responds within 200ms | `curl -w '%{time_total}'` | automated |
 | links in one doc work | `npx markdown-link-check <file>` | automated |
@@ -90,7 +102,7 @@ Examples:
 
 Automated does not automatically mean substantive. `npm test` is hygiene unless the command directly targets this task's changed behavior.
 
-### Q3: What would a specialist check?
+### Q4: What would a specialist check?
 
 For each evaluated factor, write criteria specific to this task. A useful evaluated factor names what to inspect, not a vague standard.
 
@@ -99,11 +111,11 @@ Good criteria:
 - name concrete files, functions, commands, user flows, or data shapes
 - use 3-5 bullets
 - distinguish required outcomes from nice-to-have polish
-- avoid helper names, exact line counts, or internal control flow unless the AC explicitly requires them
+- avoid helper names, exact line counts, or internal control flow unless the Done Criteria explicitly requires them
 
-Consult domain references only after drafting from AC. Borrow the thinking, not the whole checklist.
+Consult domain references only after drafting from task-specific evidence. Borrow the thinking, not the whole checklist.
 
-### Q4: What does each score level mean?
+### Q5: What does each score level mean?
 
 Every evaluated factor needs a `scoring_guide` with low/mid/high anchors.
 
@@ -124,7 +136,7 @@ fix_hint:
   mid_to_high: "Add exponential backoff with jitter and structured caller-actionable errors"
 ```
 
-### Q5: Is there a baseline?
+### Q6: Is there a baseline?
 
 For delta metrics such as performance, bundle size, complexity, or dead code, target the current state instead of an arbitrary number.
 

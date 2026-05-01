@@ -6,9 +6,9 @@ For complex, design-bearing tasks, stress-test the rubric before dispatch. A fre
 
 | Size | Criteria | Rubric Review |
 |------|----------|---------------|
-| S/M | 1-4 AC items | None (current flow) |
-| L | 5-6 AC items plus evaluated factors and ambiguity/risk signal | Stress-test (1 fresh-context reviewer) |
-| XL | 7+ AC items or cross-domain plus evaluated factors and ambiguity/risk signal | Stress-test + Calibration simulation (parallel only when useful) |
+| S/M | Narrow or standard task, low ambiguity/risk, limited file scope | None (current flow) |
+| L | Cross-cutting, multi-file, ambiguous, or risk-bearing task with evaluated factors and ambiguity/risk signal | Stress-test (1 fresh-context reviewer) |
+| XL | Architecture change, cross-domain work, migration, or high-risk boundary with evaluated factors and ambiguity/risk signal | Stress-test + Calibration simulation (parallel only when useful) |
 
 **Cross-domain**: task spans frontend + backend, infra + application, or multiple services.
 
@@ -16,24 +16,24 @@ For complex, design-bearing tasks, stress-test the rubric before dispatch. A fre
 
 ## Process: Validate → Review → Generate
 
-Insert this between "Validate the rubric" (step 3) and "Generate dispatch prompt" (step 4):
+Insert this between "Validate the rubric" and "Generate dispatch prompt":
 
 ```
-Step 5 (Validate) → Step 9 (Rubric Review) → Step 10 (Generate dispatch prompt)
+Step 6 (Validate) → Step 9 (Rubric Review) → Step 10 (Generate dispatch prompt)
 ```
 
 ## Stress-Test (L and XL when triggered)
 
-Use a fresh-context reviewer (subagent when available, otherwise a separate isolated review prompt). Hand it the rubric YAML + original AC as a structured artifact. Do not launch this for direct all-automated rubrics or simple L tasks where the AC already maps cleanly to checks.
+Use a fresh-context reviewer (subagent when available, otherwise a separate isolated review prompt). Hand it the rubric YAML + task brief / recovered Done Criteria as a structured artifact. Do not launch this for direct all-automated rubrics or simple L tasks where the recovered Done Criteria already map cleanly to checks.
 
 ### Prompt Template
 
 ```
 You are reviewing a scoring rubric for quality before it goes to an executor.
-You have NOT seen the planning conversation — only the rubric and the AC.
+You have NOT seen the planning conversation — only the rubric and the task brief / recovered Done Criteria.
 
-## Task AC
-{paste original acceptance criteria}
+## Task Brief / Done Criteria
+{paste task brief and recovered Done Criteria}
 
 ## Rubric
 {paste rubric YAML}
@@ -48,12 +48,12 @@ but a senior engineer would reject. Be concrete — name the shortcut,
 not "could be gamed."
 
 ### 2. Coverage Gap
-What does this factor fail to catch that the AC implies should be checked?
-Look for AC items with no corresponding factor, or factor criteria that
-miss an AC dimension.
+What does this factor fail to catch that the task brief or Done Criteria implies should be checked?
+Look for Done Criteria items with no corresponding factor, or factor criteria that
+miss a task-specific dimension.
 
 ### 3. Disappear Test
-If this specific AC item disappeared from the task, would this factor
+If this specific Done Criteria item disappeared from the task, would this factor
 still be a worthwhile quality check? If yes → the factor may be generic
 filler rather than task-specific.
 
@@ -143,7 +143,7 @@ After receiving stress-test (and calibration) results:
 
 ## When to Skip
 
-- **S/M tasks** (1-4 AC): Rubric is simple enough that stress-testing adds overhead without proportional value
+- **S/M tasks** (narrow scope, low ambiguity/risk): Rubric is simple enough that stress-testing adds overhead without proportional value
 - **L tasks with no ambiguity/risk signal**: A direct rubric review by the orchestrator is enough
 - **Re-dispatches with iteration history**: The rubric was already stress-tested on the first dispatch; re-dispatch focuses on addressing reviewer feedback, not rubric quality
 - **All-automated rubrics**: No evaluated factors to calibrate — stress-test adds nothing

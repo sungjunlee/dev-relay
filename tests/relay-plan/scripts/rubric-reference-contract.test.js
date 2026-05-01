@@ -38,6 +38,8 @@ test("rubric design guide states the reference use contract", () => {
   assert.match(text, /## Reference Use Contract/);
   assert.match(text, /candidate axis libraries/);
   assert.match(text, /Do not copy a whole domain reference into a dispatch prompt/);
+  assert.match(text, /Acceptance Criteria \(AC\) are high-priority evidence, not the only source/);
+  assert.match(text, /inferred Done Criteria/);
   assert.match(text, /fix_hint.*historical plateaus or non-obvious score transitions/);
 });
 
@@ -47,7 +49,7 @@ test("rubric validation preserves the S mechanical quality-card example", () => 
   assert.match(text, /S mechanical example/);
   assert.match(text, /Quality factors: 0/);
   assert.match(text, /Quality ratio: N\/A \(mechanical S-size task\)/);
-  assert.match(text, /Rationale: Acceptance Criteria only require one observable behavior change/);
+  assert.match(text, /Rationale: Recovered Done Criteria require one observable behavior change/);
 });
 
 test("rubric stress-test is gated by ambiguity or risk signal", () => {
@@ -58,6 +60,20 @@ test("rubric stress-test is gated by ambiguity or risk signal", () => {
   assert.match(text, /ambiguity\/risk signal/);
   assert.match(text, /Do not launch this for direct all-automated rubrics or simple L tasks/);
   assert.match(text, /L tasks with no ambiguity\/risk signal/);
+  assert.match(text, /Task Brief \/ Done Criteria/);
+  assert.match(text, /Step 6 \(Validate\) → Step 9 \(Rubric Review\) → Step 10 \(Generate dispatch prompt\)/);
+  assert.match(text, /narrow scope, low ambiguity\/risk/);
   assert.match(skill, /Run stress-test only for L\/XL rubrics with evaluated factors and an ambiguity\/risk signal/);
   assert.doesNotMatch(skill, /L does one stress-test round/);
+});
+
+test("relay-plan frames AC as one input signal, not the whole rubric source", () => {
+  const skill = readSkill();
+
+  assert.match(skill, /Synthesize task intent, explicit AC when present, repo signals, and task risk/);
+  assert.match(skill, /### 4\. Recover Done Criteria/);
+  assert.match(skill, /explicit AC as high-priority evidence, not the only source/);
+  assert.match(skill, /not raw issue AC count/);
+  assert.doesNotMatch(skill, /Convert task acceptance criteria into a scored rubric/);
+  assert.doesNotMatch(skill, /Build a scoring rubric from task Acceptance Criteria/);
 });

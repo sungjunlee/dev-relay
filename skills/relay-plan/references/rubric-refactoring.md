@@ -4,7 +4,7 @@ Refactoring candidate axes for behavior preservation, concept reduction, and mai
 
 ## Candidate Axis Library
 
-Use this file to choose task-relevant rubric axes, not as a template to paste wholesale. For S-size mechanical refactors, one contract factor plus hygiene prerequisites is enough unless the Acceptance Criteria introduce real design judgment.
+Use this file to choose task-relevant rubric axes, not as a template to paste wholesale. For S-size mechanical refactors, one contract factor plus hygiene prerequisites is enough unless explicit AC, inferred Done Criteria, or concrete risk introduce real design judgment.
 
 ## Hygiene Prerequisites
 
