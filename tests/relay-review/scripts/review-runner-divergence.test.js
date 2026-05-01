@@ -7,6 +7,7 @@ const {
   getRubricTargetNumber,
   parseTargetScore,
   parseScoreLog,
+  toIterationScoreEventEntry,
 } = require("../../../skills/relay-review/scripts/review-runner/divergence");
 
 test("divergence/parseScoreLog falls back to the last populated iteration", () => {
@@ -47,6 +48,27 @@ test("divergence numeric helpers prefer first-class score fields over observed t
   assert.equal(parseTargetScore("exit 0"), null);
   assert.equal(getRubricScoreNumber({ observed: "5/10", score: 7 }), 7);
   assert.equal(getRubricTargetNumber({ target: ">= 8/10", target_score: 8.5 }), 8.5);
+  assert.equal(getRubricScoreNumber({ observed: "5/10", score: null }), null);
+  assert.equal(getRubricTargetNumber({ target: ">= 8/10", target_score: null }), null);
+});
+
+test("divergence/toIterationScoreEventEntry respects explicit null numeric fields", () => {
+  assert.deepEqual(toIterationScoreEventEntry({
+    factor: "Contract smoke",
+    target: ">= 1/1",
+    observed: "1/1",
+    score: null,
+    target_score: null,
+    status: "pass",
+    tier: "contract",
+  }), {
+    factor: "Contract smoke",
+    target: ">= 1/1",
+    observed: "1/1",
+    met: true,
+    status: "pass",
+    tier: "contract",
+  });
 });
 
 test("divergence/buildScoreDivergenceAnalysis uses first-class reviewer score when available", () => {

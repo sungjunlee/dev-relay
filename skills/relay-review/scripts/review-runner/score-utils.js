@@ -28,12 +28,16 @@ function parseTargetScore(value) {
 }
 
 function getRubricScoreNumber(score) {
-  if (typeof score?.score === "number" && Number.isFinite(score.score)) return score.score;
+  if (Object.hasOwn(score || {}, "score")) {
+    return typeof score?.score === "number" && Number.isFinite(score.score) ? score.score : null;
+  }
   return parseNumericScore(score?.observed);
 }
 
 function getRubricTargetNumber(score) {
-  if (typeof score?.target_score === "number" && Number.isFinite(score.target_score)) return score.target_score;
+  if (Object.hasOwn(score || {}, "target_score")) {
+    return typeof score?.target_score === "number" && Number.isFinite(score.target_score) ? score.target_score : null;
+  }
   return parseTargetScore(score?.target);
 }
 

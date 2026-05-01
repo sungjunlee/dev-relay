@@ -283,6 +283,19 @@ test("verdict/validateRubricScore rejects quality pass below numeric target", ()
   );
 });
 
+test("verdict/validateRubricScore rejects explicit null numeric fields for numeric quality factors", () => {
+  assert.throws(
+    () => validateRubricScore(makeRubricScore({
+      tier: "quality",
+      target: ">= 8/10",
+      observed: "7/10",
+      score: null,
+      target_score: null,
+    }), 0),
+    /score and target_score are required for numeric quality factors/
+  );
+});
+
 test("verdict/validateRubricScore uses observed and target fallback for quality pass validation", () => {
   assert.throws(
     () => validateRubricScore(makeRubricScore({

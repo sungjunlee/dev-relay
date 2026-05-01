@@ -1,5 +1,10 @@
 const { REVIEW_VERDICT_JSON_SCHEMA } = require("../review-schema");
-const { getRubricScoreNumber, getRubricTargetNumber } = require("./score-utils");
+const {
+  getRubricScoreNumber,
+  getRubricTargetNumber,
+  parseNumericScore,
+  parseTargetScore,
+} = require("./score-utils");
 
 const ALLOWED_VERDICTS = new Set(["pass", "changes_requested", "escalated"]);
 const ALLOWED_NEXT_ACTIONS = new Set(["ready_to_merge", "changes_requested", "escalated"]);
@@ -71,6 +76,16 @@ function validateRubricScore(score, index) {
   }
   const numericScore = getRubricScoreNumber(score);
   const targetScore = getRubricTargetNumber(score);
+  const parsedObserved = parseNumericScore(score.observed);
+  const parsedTarget = parseTargetScore(score.target);
+  if (
+    score.tier === "quality"
+    && (score.score === null || score.target_score === null)
+    && parsedObserved !== null
+    && parsedTarget !== null
+  ) {
+    throw new Error(`${location}.score and target_score are required for numeric quality factors`);
+  }
   if (score.tier === "quality" && score.status === "pass" && numericScore !== null && targetScore !== null && numericScore < targetScore) {
     throw new Error(`${location}.status=pass conflicts with score ${numericScore} below target_score ${targetScore}`);
   }
