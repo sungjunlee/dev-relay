@@ -84,6 +84,7 @@ Quick gate before dispatch:
 
 - Prerequisites hold repo-wide hygiene only; factors stay substantive (tier test)
 - Contract/Quality tier minimums met for task size (S/M/L/XL)
+- S-size mechanical tasks may use 1 contract factor and no quality factor; do not invent quality factors just to fill a quota
 - ≥ 1 automated check across prerequisites + factors
 - Every evaluated factor has `scoring_guide` with low/mid/high anchors
 - Criteria are specific and reference discoverable artifacts; targets are concrete
@@ -139,7 +140,7 @@ node ${CLAUDE_SKILL_DIR}/../relay-dispatch/scripts/dispatch.js . \
 ## When to use
 
 All tasks dispatched via relay. Rubric depth scales with task size (determined by orchestrator judgment on normalized AC + file scope, not raw issue AC count):
-- **S** (simple fix, typo, 1-liner): 1-2 factors, skip stress-test
+- **S** (simple fix, typo, 1-liner): 1 contract factor; add a quality factor only when the task has real design judgment; skip stress-test
 - **M** (standard feature): 3-5 factors, skip stress-test
 - **L** (cross-cutting, multi-file): 4-6 factors + stress-test
 - **XL** (architecture change): 5-8 factors + stress-test + calibration

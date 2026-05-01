@@ -9,7 +9,7 @@ Before dispatch, verify:
 - [ ] Prerequisites gate: automated checks for repo-wide hygiene (if any) are in `prerequisites`, not `factors`
 - [ ] No hygiene in factors: every factor passes the tier test ("would this fail for a different task in this repo?" — if no, it's hygiene)
 - [ ] Contract minimum met: ≥ {size-based min} contract-tier factors
-- [ ] Quality minimum met: ≥ {size-based min} quality-tier factors
+- [ ] Quality minimum met when the task has real design judgment; S-size mechanical tasks may have zero quality factors
 - [ ] ≥ 1 automated check exists across prerequisites + factors
 - [ ] All automated check commands are immutable (executor cannot modify)
 - [ ] Every evaluated factor has `scoring_guide` with low/mid/high anchors
@@ -24,7 +24,8 @@ Prerequisites (hygiene): as many as needed, uncounted. Factors (contract + quali
 
 | Size | Contract min | Quality min | Substantive total | Recommended |
 |------|--------------|-------------|-------------------|-------------|
-| S (1-2 AC) | ≥ 1 | ≥ 1 | 2+ | ~3 |
+| S (1-2 AC, mechanical) | ≥ 1 | 0 | 1+ | 1-2 |
+| S (1-2 AC, design-bearing) | ≥ 1 | ≥ 1 | 2+ | ~2 |
 | M (3-4 AC) | ≥ 2 | ≥ 1 | 3+ | ~5 |
 | L (5-6 AC) | ≥ 2 | ≥ 2 | 4+ | ~6 |
 | XL (7+ AC) | ≥ 3 | ≥ 2 | 5+ | ~8 |
@@ -115,10 +116,10 @@ Apply downgrade checks first (`D`, then `C`), then assign `A` or `B`.
 
 | Grade | Criteria | Action |
 |-------|----------|--------|
-| **A** | Tier minimum met + quality ratio ≥ 40% + every evaluated factor has `scoring_guide` + criteria grounded to discoverable artifacts | Dispatch allowed |
-| **B** | Tier minimum met + quality ratio ≥ 25% + every evaluated factor has `scoring_guide` | Dispatch allowed, but note weaker quality coverage |
-| **C** | Tier minimum met, but quality is only at the exact size-based minimum OR exactly 1 evaluated factor is missing `scoring_guide` | Warning before dispatch |
-| **D** | Any tier minimum violated OR hygiene check left in `factors` | Dispatch blocked, revise first |
+| **A** | Tier minimum met + quality ratio ≥ 40% when quality factors are needed + every evaluated factor has `scoring_guide` + criteria grounded to discoverable artifacts | Dispatch allowed |
+| **B** | Tier minimum met + quality ratio ≥ 25% when quality factors are needed + every evaluated factor has `scoring_guide`; or S-size mechanical task with no quality factor and a clear rationale | Dispatch allowed, but note weaker quality coverage when applicable |
+| **C** | Tier minimum met, but quality is only at the exact size-based minimum for a design-bearing task OR exactly 1 evaluated factor is missing `scoring_guide` | Warning before dispatch |
+| **D** | Any tier minimum violated OR hygiene check left in `factors` OR design-bearing task has no quality coverage | Dispatch blocked, revise first |
 
 Grade D means stop and revise the rubric first. Grade C means warn before dispatch and make the tradeoff explicit.
 
@@ -132,6 +133,6 @@ Grade D means stop and revise the rubric first. Grade C means warn before dispat
 | `vague_criteria` | Criteria contain "good", "proper", "clean", or "appropriate" |
 | `proxy_metric` | Automated checks measure effort or process instead of outcome |
 | `high_factor_count` | 8+ substantive factors |
-| `all_contract` | Zero quality coverage beyond the size-based minimum |
+| `all_contract` | Zero quality coverage on a design-bearing task |
 
 Any check fails → revise. See `rubric-design-guide.md` for fix patterns.
