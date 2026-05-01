@@ -52,7 +52,7 @@ Before drafting factors, identify the evaluation source model:
 - Historical relay signal from stuck factors and score divergence
 - Task-specific risk from touched domains, trust boundaries, data loss, migrations, UX flows, or operational failure modes
 
-If AC are missing, vague, or incomplete, write observable Done Criteria first. Treat explicit AC as high-priority evidence, not the only source. If planner judgment expands, rejects, or narrows issue-body AC, persist that decision in step 8 so the reviewer has the same anchor.
+If AC are missing, vague, or incomplete, write observable Done Criteria first. Treat explicit AC as high-priority evidence, not the only source. If the final review anchor is planner-authored or differs from the task source, persist it in step 8 so the reviewer has the same anchor.
 
 ### 5. Build the rubric
 
@@ -108,20 +108,20 @@ Before persisting the draft rubric, apply the 6 heuristics in `references/rubric
 
 Apply to all task sizes: rewrite HOW into observable WHAT, merge overlaps, remove unsupported defensive clauses, and verify weights.
 
-### 8. Persist Phase 1 deviations only when Done Criteria change
+### 8. Persist planner-authored Done Criteria
 
-If operator planning expands, rejects, or narrows issue-body AC, persist that decision before dispatch so fresh-context review uses the same anchor:
+If operator planning writes the final Done Criteria, persist that decision before dispatch so fresh-context review uses the same anchor. This includes AC-missing inputs, user-provided descriptions, and any case where planning expands, rejects, or narrows issue-body AC:
 
 ```bash
 node ${CLAUDE_SKILL_DIR}/scripts/persist-done-criteria.js --repo . \
   --run-id "$RUN_ID" --file /tmp/done-criteria-<N>.md --json
 ```
 
-Dispatch with the same `RUN_ID` and `--done-criteria-file ~/.relay/runs/<repo-slug>/$RUN_ID/done-criteria.md`. Skip this step when the issue or intake handoff already provides the final Done Criteria.
+Dispatch with the same `RUN_ID` and `--done-criteria-file ~/.relay/runs/<repo-slug>/$RUN_ID/done-criteria.md`. Skip this step only when the issue or intake handoff already provides the final Done Criteria without planner changes.
 
 ### 9. Review the rubric (triggered L/XL tasks)
 
-S/M skips. Run stress-test only for L/XL rubrics with evaluated factors and an ambiguity/risk signal. XL adds calibration simulation only when novel or subjective evaluated factors need it. Skip re-dispatches with iteration history, all-automated rubrics, and simple L tasks where recovered Done Criteria map cleanly to checks. Protocol: `references/rubric-stress-test.md`.
+S/M usually skips, but ambiguity or risk can opt any size into stress-test. Run stress-test for L/XL rubrics with evaluated factors and an ambiguity/risk signal, and for smaller rubrics when the recovered Done Criteria are novel, vague, or easy to game. XL adds calibration simulation only when novel or subjective evaluated factors need it. Skip re-dispatches with iteration history, all-automated rubrics, and simple tasks where recovered Done Criteria map cleanly to checks. Protocol: `references/rubric-stress-test.md`.
 
 ### 10. Generate dispatch prompt
 

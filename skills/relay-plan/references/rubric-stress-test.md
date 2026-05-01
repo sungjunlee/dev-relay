@@ -6,13 +6,13 @@ For complex, design-bearing tasks, stress-test the rubric before dispatch. A fre
 
 | Size | Criteria | Rubric Review |
 |------|----------|---------------|
-| S/M | Narrow or standard task, low ambiguity/risk, limited file scope | None (current flow) |
+| S/M | Narrow or standard task, low ambiguity/risk, limited file scope | Usually none; stress-test when ambiguity/risk signal exists |
 | L | Cross-cutting, multi-file, ambiguous, or risk-bearing task with evaluated factors and ambiguity/risk signal | Stress-test (1 fresh-context reviewer) |
 | XL | Architecture change, cross-domain work, migration, or high-risk boundary with evaluated factors and ambiguity/risk signal | Stress-test + Calibration simulation (parallel only when useful) |
 
 **Cross-domain**: task spans frontend + backend, infra + application, or multiple services.
 
-**Ambiguity/risk signal**: novel quality criteria, historical score divergence, trust/security boundary, unclear AC decomposition, or factors that could be gamed by a minimal implementation.
+**Ambiguity/risk signal**: novel quality criteria, historical score divergence, trust/security boundary, unclear Done Criteria recovery, or factors that could be gamed by a minimal implementation.
 
 ## Process: Validate → Review → Generate
 
@@ -73,7 +73,7 @@ not what's universally true of competent code.
 
 ## Summary
 - Factors that need tightening: {list}
-- Missing factors for uncovered AC: {list}
+- Missing factors for uncovered Done Criteria: {list}
 - Generic factors to reconsider: {list}
 ```
 
@@ -143,7 +143,7 @@ After receiving stress-test (and calibration) results:
 
 ## When to Skip
 
-- **S/M tasks** (narrow scope, low ambiguity/risk): Rubric is simple enough that stress-testing adds overhead without proportional value
+- **S/M tasks with no ambiguity/risk signal**: Rubric is simple enough that stress-testing adds overhead without proportional value
 - **L tasks with no ambiguity/risk signal**: A direct rubric review by the orchestrator is enough
 - **Re-dispatches with iteration history**: The rubric was already stress-tested on the first dispatch; re-dispatch focuses on addressing reviewer feedback, not rubric quality
 - **All-automated rubrics**: No evaluated factors to calibrate — stress-test adds nothing
