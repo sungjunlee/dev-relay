@@ -227,6 +227,8 @@ Two patterns look like inconsistencies but are intentional. Both are pinned by t
 
 `skills/` exists so users can install individual skills via `npx skills add sungjunlee/dev-relay/<skill>`. At runtime, the boundary is purely how files are packaged — Node imports routinely cross it.
 
+Tests and test fixtures intentionally live under `tests/<skill>/`, not inside `skills/<skill>/`. The skills installer copies each skill directory without a project-specific ignore manifest, so keeping test assets outside `skills/` is the packaging contract that prevents installed skills from carrying repository-only test files.
+
 Current cross-skill imports:
 
 | Importer | Imports from |
@@ -251,7 +253,7 @@ Convention (from [#188 manifest boundary split](../docs/issue-188-manifest-bound
 - **Runtime code** imports direct submodules: `require("./manifest/lifecycle")`. The docs list every runtime caller and its narrow submodule set.
 - **Compatibility tests** (e.g. `relay-manifest.test.js`, `dispatch.test.js`, `close-run.test.js`) and **out-of-scope runtime callers** (today: `relay-intake/scripts/relay-request.js`) continue to import via the facade. Each retained consumer is catalogued in the boundary-split doc with the reason it stayed.
 
-Enforcement: [`manifest-direct-imports.test.js`](../skills/relay-dispatch/scripts/manifest-direct-imports.test.js) asserts the facade stays ≤40 lines with zero function declarations and transitively runs every `manifest/*.test.js`. If the facade regains logic — or if submodules fall out of test — that file fails.
+Enforcement: [`manifest-direct-imports.test.js`](../tests/relay-dispatch/scripts/manifest-direct-imports.test.js) asserts the facade stays ≤40 lines with zero function declarations and transitively runs every `manifest/*.test.js`. If the facade regains logic — or if submodules fall out of test — that file fails.
 
 Do not "simplify" the facade by collapsing submodules back into it or by force-migrating the remaining facade consumers. Both moves regress the boundary the test pins.
 

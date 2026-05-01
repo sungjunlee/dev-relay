@@ -8,7 +8,7 @@ No correctness delta was intended in this split. The only `cleanup-worktrees.js`
 
 ## Facade Guard
 
-- [`skills/relay-dispatch/scripts/manifest-direct-imports.test.js`](../skills/relay-dispatch/scripts/manifest-direct-imports.test.js) now fails if [`skills/relay-dispatch/scripts/relay-manifest.js`](../skills/relay-dispatch/scripts/relay-manifest.js) grows past `40` lines or regains any `function` / `async function` declarations.
+- [`tests/relay-dispatch/scripts/manifest-direct-imports.test.js`](../tests/relay-dispatch/scripts/manifest-direct-imports.test.js) now fails if [`skills/relay-dispatch/scripts/relay-manifest.js`](../skills/relay-dispatch/scripts/relay-manifest.js) grows past `40` lines or regains any `function` / `async function` declarations.
 - Current facade shape: [`relay-manifest.js`](../skills/relay-dispatch/scripts/relay-manifest.js#L1) is `17` lines and only re-exports the slice modules.
 
 ## Function-Level Boundary Audit
@@ -115,23 +115,23 @@ Every remaining `relay-manifest` import is either a deliberate public-surface co
 
 | Consumer | Why it still imports the facade |
 |---|---|
-| [cleanup-worktrees.test.js](../skills/relay-dispatch/scripts/cleanup-worktrees.test.js) | Compatibility test; it intentionally exercises the legacy public surface instead of a private slice. |
-| [close-run.test.js](../skills/relay-dispatch/scripts/close-run.test.js) | Compatibility test for the CLI contract, not a slice-internal unit test. |
-| [dispatch.test.js](../skills/relay-dispatch/scripts/dispatch.test.js) | Compatibility test; keeps the public manifest API under regression coverage. |
-| [recover-state.test.js](../skills/relay-dispatch/scripts/recover-state.test.js) | Compatibility test for operator recovery flows that still target the public facade. |
-| [relay-events.test.js](../skills/relay-dispatch/scripts/relay-events.test.js) | Compatibility test; uses the published manifest API to build fixture state. |
-| [relay-manifest.test.js](../skills/relay-dispatch/scripts/relay-manifest.test.js) | Explicit facade contract test; this file exists to pin the compatibility layer itself. |
-| [relay-migrate-rubric.test.js](../skills/relay-dispatch/scripts/relay-migrate-rubric.test.js) | Compatibility test for the rubric-migration CLI’s public manifest helpers. |
-| [relay-resolver.test.js](../skills/relay-dispatch/scripts/relay-resolver.test.js) | Compatibility test for resolver behavior that historically imported the facade. |
-| [reliability-report.test.js](../skills/relay-dispatch/scripts/reliability-report.test.js) | Compatibility test for reporting behavior built around the public manifest surface. |
+| [cleanup-worktrees.test.js](../tests/relay-dispatch/scripts/cleanup-worktrees.test.js) | Compatibility test; it intentionally exercises the legacy public surface instead of a private slice. |
+| [close-run.test.js](../tests/relay-dispatch/scripts/close-run.test.js) | Compatibility test for the CLI contract, not a slice-internal unit test. |
+| [dispatch.test.js](../tests/relay-dispatch/scripts/dispatch.test.js) | Compatibility test; keeps the public manifest API under regression coverage. |
+| [recover-state.test.js](../tests/relay-dispatch/scripts/recover-state.test.js) | Compatibility test for operator recovery flows that still target the public facade. |
+| [relay-events.test.js](../tests/relay-dispatch/scripts/relay-events.test.js) | Compatibility test; uses the published manifest API to build fixture state. |
+| [relay-manifest.test.js](../tests/relay-dispatch/scripts/relay-manifest.test.js) | Explicit facade contract test; this file exists to pin the compatibility layer itself. |
+| [relay-migrate-rubric.test.js](../tests/relay-dispatch/scripts/relay-migrate-rubric.test.js) | Compatibility test for the rubric-migration CLI’s public manifest helpers. |
+| [relay-resolver.test.js](../tests/relay-dispatch/scripts/relay-resolver.test.js) | Compatibility test for resolver behavior that historically imported the facade. |
+| [reliability-report.test.js](../tests/relay-dispatch/scripts/reliability-report.test.js) | Compatibility test for reporting behavior built around the public manifest surface. |
 | [test-support.js](../skills/relay-dispatch/scripts/test-support.js) | Shared test fixture helper; keeping one facade import avoids duplicating slice wiring across legacy tests. |
-| [update-manifest-state.test.js](../skills/relay-dispatch/scripts/update-manifest-state.test.js) | Compatibility test for the state-update CLI contract. |
+| [update-manifest-state.test.js](../tests/relay-dispatch/scripts/update-manifest-state.test.js) | Compatibility test for the state-update CLI contract. |
 | [relay-request.js](../skills/relay-intake/scripts/relay-request.js) | Intake is out of scope for #188; it stays on the stable facade until a separate boundary pass lands. |
-| [request-store.test.js](../skills/relay-intake/scripts/request-store.test.js) | Intake compatibility test; it follows the deferred intake runtime consumer. |
-| [finalize-run.test.js](../skills/relay-merge/scripts/finalize-run.test.js) | Compatibility test for merge finalization behavior that still targets the public manifest API. |
-| [gate-check.test.js](../skills/relay-merge/scripts/gate-check.test.js) | Compatibility test for merge-gate behavior that historically used the facade. |
-| [reliability-report-consumer.test.js](../skills/relay-plan/scripts/reliability-report-consumer.test.js) | Plan-side consumer is explicitly deferred by the issue fence; the test pins that deferred compatibility contract. |
-| [review-runner.test.js](../skills/relay-review/scripts/review-runner.test.js) | Compatibility test for review orchestration behavior built around the public manifest surface. |
+| [request-store.test.js](../tests/relay-intake/scripts/request-store.test.js) | Intake compatibility test; it follows the deferred intake runtime consumer. |
+| [finalize-run.test.js](../tests/relay-merge/scripts/finalize-run.test.js) | Compatibility test for merge finalization behavior that still targets the public manifest API. |
+| [gate-check.test.js](../tests/relay-merge/scripts/gate-check.test.js) | Compatibility test for merge-gate behavior that historically used the facade. |
+| [reliability-report-consumer.test.js](../tests/relay-plan/scripts/reliability-report-consumer.test.js) | Plan-side consumer is explicitly deferred by the issue fence; the test pins that deferred compatibility contract. |
+| [review-runner.test.js](../tests/relay-review/scripts/review-runner.test.js) | Compatibility test for review orchestration behavior built around the public manifest surface. |
 
 ## Grep Evidence
 
@@ -147,23 +147,23 @@ $ wc -l skills/relay-dispatch/scripts/relay-manifest.js
 
 ```text
 $ grep -rn 'require.*relay-manifest' skills/ | awk -F: '{print $1}' | sort -u
-skills/relay-dispatch/scripts/cleanup-worktrees.test.js
-skills/relay-dispatch/scripts/close-run.test.js
-skills/relay-dispatch/scripts/dispatch.test.js
-skills/relay-dispatch/scripts/recover-state.test.js
-skills/relay-dispatch/scripts/relay-events.test.js
-skills/relay-dispatch/scripts/relay-manifest.test.js
-skills/relay-dispatch/scripts/relay-migrate-rubric.test.js
-skills/relay-dispatch/scripts/relay-resolver.test.js
-skills/relay-dispatch/scripts/reliability-report.test.js
+tests/relay-dispatch/scripts/cleanup-worktrees.test.js
+tests/relay-dispatch/scripts/close-run.test.js
+tests/relay-dispatch/scripts/dispatch.test.js
+tests/relay-dispatch/scripts/recover-state.test.js
+tests/relay-dispatch/scripts/relay-events.test.js
+tests/relay-dispatch/scripts/relay-manifest.test.js
+tests/relay-dispatch/scripts/relay-migrate-rubric.test.js
+tests/relay-dispatch/scripts/relay-resolver.test.js
+tests/relay-dispatch/scripts/reliability-report.test.js
 skills/relay-dispatch/scripts/test-support.js
-skills/relay-dispatch/scripts/update-manifest-state.test.js
+tests/relay-dispatch/scripts/update-manifest-state.test.js
 skills/relay-intake/scripts/relay-request.js
-skills/relay-intake/scripts/request-store.test.js
-skills/relay-merge/scripts/finalize-run.test.js
-skills/relay-merge/scripts/gate-check.test.js
-skills/relay-plan/scripts/reliability-report-consumer.test.js
-skills/relay-review/scripts/review-runner.test.js
+tests/relay-intake/scripts/request-store.test.js
+tests/relay-merge/scripts/finalize-run.test.js
+tests/relay-merge/scripts/gate-check.test.js
+tests/relay-plan/scripts/reliability-report-consumer.test.js
+tests/relay-review/scripts/review-runner.test.js
 ```
 
 ```text
@@ -174,9 +174,9 @@ $ for f in skills/relay-dispatch/scripts/dispatch.js skills/relay-dispatch/scrip
 ```text
 $ grep -rn 'forceTransitionState' skills/ | awk -F: '{print $1}' | sort -u
 skills/relay-dispatch/scripts/manifest/lifecycle.js
-skills/relay-dispatch/scripts/manifest/lifecycle.test.js
+tests/relay-dispatch/scripts/manifest/lifecycle.test.js
 skills/relay-dispatch/scripts/recover-state.js
-skills/relay-dispatch/scripts/relay-manifest.test.js
+tests/relay-dispatch/scripts/relay-manifest.test.js
 ```
 
 ## Trust-Model Audit
@@ -187,9 +187,9 @@ skills/relay-dispatch/scripts/relay-manifest.test.js
 
 ## Tests
 
-- Final suite: `node --test skills/relay-intake/scripts/*.test.js skills/relay-plan/scripts/*.test.js skills/relay-dispatch/scripts/*.test.js skills/relay-review/scripts/*.test.js skills/relay-merge/scripts/*.test.js`
+- Final suite: `node --test tests/relay-intake/scripts/*.test.js tests/relay-plan/scripts/*.test.js tests/relay-dispatch/scripts/*.test.js tests/relay-review/scripts/*.test.js tests/relay-merge/scripts/*.test.js`
 - Final result: `465/465` passing.
-- New direct-import slice coverage lives in [`manifest-direct-imports.test.js`](../skills/relay-dispatch/scripts/manifest-direct-imports.test.js) plus the seven `scripts/manifest/*.test.js` files it requires.
+- New direct-import slice coverage lives in [`manifest-direct-imports.test.js`](../tests/relay-dispatch/scripts/manifest-direct-imports.test.js) plus the seven `scripts/manifest/*.test.js` files it requires.
 
 ## Deferred Inventory
 

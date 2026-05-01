@@ -17,5 +17,5 @@ Scope: `resolveManifestRecord()` changed branch and PR matching semantics. This 
 
 - Source manifest sampled on 2026-04-12: `~/.relay/runs/finjuice-9621f35f/issue-401-20260412015920920.md`
 - Source rubric sampled on 2026-04-12: `~/.relay/runs/finjuice-9621f35f/issue-401-20260412015920920/rubric.yaml`
-- Bundle equivalent: `skills/relay-merge/scripts/__fixtures__/historical-issue-401/`
+- Bundle equivalent: `tests/relay-merge/fixtures/historical-issue-401/`
 - Verified behavior: a real legacy manifest with `git.pr_number: null` and `anchor.rubric_path: rubric.yaml` still resolves in PR mode, stamps `git.pr_number = 401`, and records a single `pr_number_stamped` event.

@@ -104,7 +104,7 @@ Replacement factors that landed after round 4 surfaced the gap. Note that questi
 - name: unregistered_migration_regression_tests
   tier: contract
   type: automated
-  command: "node --test skills/relay-dispatch/scripts/relay-manifest.test.js --grep 'unregistered migration'"
+  command: "node --test tests/relay-dispatch/scripts/relay-manifest.test.js --grep 'unregistered migration'"
   target: "exit 0"
   # Regression surface for question 1: the tests encode the threat model,
   # so future refactors cannot silently re-open the bypass.

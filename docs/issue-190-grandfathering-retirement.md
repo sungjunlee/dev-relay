@@ -58,9 +58,9 @@ Path A: retire the migration CLI entirely. Once runtime rejects every retained `
 Post-change verification:
 
 ```bash
-node --test skills/relay-dispatch/scripts/*.test.js
-node --test skills/relay-review/scripts/*.test.js
-node --test skills/relay-merge/scripts/*.test.js
+node --test tests/relay-dispatch/scripts/*.test.js
+node --test tests/relay-review/scripts/*.test.js
+node --test tests/relay-merge/scripts/*.test.js
 ```
 
 Observed totals after the final tree:

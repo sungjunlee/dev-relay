@@ -94,7 +94,7 @@ Expect:
 Command:
 
 ```bash
-node --test skills/relay-dispatch/scripts/update-manifest-state.test.js
+node --test tests/relay-dispatch/scripts/update-manifest-state.test.js
 ```
 
 Expect:
@@ -109,7 +109,7 @@ Expect:
 Command:
 
 ```bash
-node --test skills/relay-dispatch/scripts/dispatch.test.js
+node --test tests/relay-dispatch/scripts/dispatch.test.js
 ```
 
 Expect:
@@ -125,7 +125,7 @@ Expect:
 Command:
 
 ```bash
-node --test skills/relay-review/scripts/review-runner.test.js
+node --test tests/relay-review/scripts/review-runner.test.js
 ```
 
 Expect:
@@ -164,7 +164,7 @@ Interpretation:
 Command:
 
 ```bash
-node --test skills/relay-intake/scripts/request-store.test.js
+node --test tests/relay-intake/scripts/request-store.test.js
 ```
 
 Expect:
@@ -194,7 +194,7 @@ Current result:
 Command:
 
 ```bash
-node --test skills/relay-merge/scripts/finalize-run.test.js
+node --test tests/relay-merge/scripts/finalize-run.test.js
 ```
 
 Expect:
@@ -211,7 +211,7 @@ Expect:
 Command:
 
 ```bash
-node --test skills/relay-dispatch/scripts/close-run.test.js
+node --test tests/relay-dispatch/scripts/close-run.test.js
 ```
 
 Expect:
@@ -225,7 +225,7 @@ Expect:
 Command:
 
 ```bash
-node --test skills/relay-dispatch/scripts/reliability-report.test.js
+node --test tests/relay-dispatch/scripts/reliability-report.test.js
 ```
 
 Expect:
@@ -238,7 +238,7 @@ Expect:
 Command:
 
 ```bash
-node --test skills/relay-dispatch/scripts/cleanup-worktrees.test.js
+node --test tests/relay-dispatch/scripts/cleanup-worktrees.test.js
 ```
 
 Expect:
@@ -264,7 +264,7 @@ Covers:
 Command:
 
 ```bash
-node --test skills/relay-intake/scripts/request-store.test.js
+node --test tests/relay-intake/scripts/request-store.test.js
 ```
 
 Expect:

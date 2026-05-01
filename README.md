@@ -466,11 +466,11 @@ Issues and PRs welcome. Please open an issue first for non-trivial changes.
 ### Running tests
 
 ```bash
-node --test skills/relay-intake/scripts/*.test.js
-node --test skills/relay-plan/scripts/*.test.js
-node --test skills/relay-dispatch/scripts/*.test.js
-node --test skills/relay-review/scripts/*.test.js
-node --test skills/relay-merge/scripts/*.test.js
+node --test tests/relay-intake/scripts/*.test.js
+node --test tests/relay-plan/scripts/*.test.js
+node --test tests/relay-dispatch/scripts/*.test.js
+node --test tests/relay-review/scripts/*.test.js
+node --test tests/relay-merge/scripts/*.test.js
 ```
 
 ## License
