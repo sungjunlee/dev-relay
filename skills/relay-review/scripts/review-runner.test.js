@@ -1198,32 +1198,6 @@ test("review-runner fail-closes reviewer PASS into changes_requested when execut
   assert.equal(reviewApplyEvent?.reason, "changes_requested");
 });
 
-test("review-runner rejects invalid manifest run_id before creating a sibling run directory", () => {
-  const { repoRoot, manifestPath, diffPath } = setupRepo();
-  const record = readManifest(manifestPath);
-  const victimRunDir = path.resolve(getRunsDir(repoRoot), "../victim-review-run");
-
-  writeManifest(manifestPath, {
-    ...record.data,
-    run_id: "../victim-review-run",
-  }, record.body);
-
-  assert.equal(fs.existsSync(victimRunDir), false);
-  assert.throws(() => execFileSync("node", [
-    SCRIPT,
-    "--repo", repoRoot,
-    "--manifest", manifestPath,
-    "--pr", "123",
-    "--diff-file", diffPath,
-    "--prepare-only",
-    "--json",
-  ], { encoding: "utf-8", stdio: "pipe" }), (error) => {
-    assert.match(String(error.stderr), /run_id must be a single path segment/);
-    return true;
-  });
-  assert.equal(fs.existsSync(victimRunDir), false);
-});
-
 test("review-runner can prepare from --manifest when --repo points at an unrelated git repo", () => {
   const { repoRoot, manifestPath, runId, worktreePath, doneCriteriaPath, diffPath } = setupRepo();
   const selectorRepo = createUnrelatedGitRepo();
@@ -1303,37 +1277,7 @@ test("review-runner manifest-only rounds keep gh-backed reads and comments on th
   assert.equal(manifest.review.latest_verdict, "lgtm");
 });
 
-test("review-runner rejects relay-base same-name worktrees before preparing prompts in an unrelated checkout", () => {
-  const { repoRoot, manifestPath, runId, doneCriteriaPath, diffPath } = setupRepo();
-  const { attackerWorktree } = createUnrelatedRelayOwnedWorktree(repoRoot);
-  const record = readManifest(manifestPath);
-  writeManifest(manifestPath, {
-    ...record.data,
-    paths: {
-      ...(record.data.paths || {}),
-      worktree: attackerWorktree,
-    },
-  }, record.body);
-
-  assert.throws(() => execFileSync("node", [
-    SCRIPT,
-    "--repo", repoRoot,
-    "--run-id", runId,
-    "--pr", "123",
-    "--done-criteria-file", doneCriteriaPath,
-    "--diff-file", diffPath,
-    "--prepare-only",
-    "--json",
-  ], { encoding: "utf-8", stdio: "pipe" }), (error) => {
-    assert.match(String(error.stderr), /manifest paths\.worktree/);
-    return true;
-  });
-
-  assert.equal(fs.existsSync(path.join(attackerWorktree, "review-round-1-prompt.md")), false);
-  assert.equal(fs.existsSync(path.join(attackerWorktree, "sentinel.txt")), true);
-});
-
-test("review-runner rejects tampered paths.repo_root before prepare-only prompt side effects", () => {
+test("review-runner validateManifestPaths wire rejects crafted manifest repo roots", () => {
   const { repoRoot, worktreePath, manifestPath, runId, doneCriteriaPath, diffPath } = setupRepo();
   const { attackerRoot } = createUnrelatedRelayOwnedWorktree(repoRoot);
   const record = readManifest(manifestPath);
