@@ -4,9 +4,14 @@ const fs = require("fs");
 const path = require("path");
 
 const REFERENCES_DIR = path.join(__dirname, "..", "references");
+const SKILL_PATH = path.join(__dirname, "..", "SKILL.md");
 
 function readReference(name) {
   return fs.readFileSync(path.join(REFERENCES_DIR, name), "utf-8");
+}
+
+function readSkill() {
+  return fs.readFileSync(SKILL_PATH, "utf-8");
 }
 
 test("domain rubric references declare candidate-axis usage", () => {
@@ -47,9 +52,12 @@ test("rubric validation preserves the S mechanical quality-card example", () => 
 
 test("rubric stress-test is gated by ambiguity or risk signal", () => {
   const text = readReference("rubric-stress-test.md");
+  const skill = readSkill();
 
   assert.match(text, /complex, design-bearing tasks/);
   assert.match(text, /ambiguity\/risk signal/);
   assert.match(text, /Do not launch this for direct all-automated rubrics or simple L tasks/);
   assert.match(text, /L tasks with no ambiguity\/risk signal/);
+  assert.match(skill, /Run stress-test only for L\/XL rubrics with evaluated factors and an ambiguity\/risk signal/);
+  assert.doesNotMatch(skill, /L does one stress-test round/);
 });

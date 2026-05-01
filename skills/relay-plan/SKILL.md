@@ -118,9 +118,9 @@ Use this when operator planning rejects or narrows the issue body AC. Persist th
 
 The helper writes `~/.relay/runs/<repo-slug>/<run-id>/done-criteria.md` with source `planner_decision`. Dispatch picks it up via `--done-criteria-file` when the same run id is used. Canonical filename is always `done-criteria.md`; ad-hoc file paths remain source `file`.
 
-### 9. Review the rubric (L/XL tasks)
+### 9. Review the rubric (triggered L/XL tasks)
 
-S/M skips. L does one stress-test round. XL adds calibration simulation. Skip re-dispatches with iteration history and all-automated rubrics. Protocol: `references/rubric-stress-test.md`.
+S/M skips. Run stress-test only for L/XL rubrics with evaluated factors and an ambiguity/risk signal. XL adds calibration simulation only when novel or subjective evaluated factors need it. Skip re-dispatches with iteration history, all-automated rubrics, and simple L tasks where AC maps cleanly to checks. Protocol: `references/rubric-stress-test.md`.
 
 ### 10. Generate dispatch prompt
 
@@ -142,7 +142,7 @@ node ${CLAUDE_SKILL_DIR}/../relay-dispatch/scripts/dispatch.js . \
 All tasks dispatched via relay. Rubric depth scales with task size (determined by orchestrator judgment on normalized AC + file scope, not raw issue AC count):
 - **S** (simple fix, typo, 1-liner): 1 contract factor; add a quality factor only when the task has real design judgment; skip stress-test
 - **M** (standard feature): 3-5 factors, skip stress-test
-- **L** (cross-cutting, multi-file): 4-6 factors + stress-test
-- **XL** (architecture change): 5-8 factors + stress-test + calibration
+- **L** (cross-cutting, multi-file): 4-6 factors; stress-test only when evaluated factors plus ambiguity/risk signal exist
+- **XL** (architecture change): 5-8 factors; stress-test only when evaluated factors plus ambiguity/risk signal exist; add calibration only when useful
 
 Re-dispatches automatically prepend previous Score Log + reviewer feedback to the prompt (see `relay-dispatch` docs). Full rubric guide: `references/rubric-design-guide.md`.
