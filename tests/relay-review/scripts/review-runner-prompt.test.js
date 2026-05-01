@@ -176,6 +176,8 @@ test("prompt/buildPrompt includes TDD reviewer gating without changing verdict s
   assert.match(prompt, /This relaxation applies only to factors carrying `tdd_anchor`/);
   assert.match(prompt, /Review non-TDD factors in the same rubric exactly as usual/);
   assert.match(prompt, /"rubric_scores"/);
+  assert.match(prompt, /"score"/);
+  assert.match(prompt, /"target_score"/);
   assert.doesNotMatch(prompt, /tdd_mode:\s*true/);
 });
 

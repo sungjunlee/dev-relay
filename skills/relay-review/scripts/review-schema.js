@@ -49,11 +49,13 @@ const REVIEW_VERDICT_PROPERTIES = {
     items: {
       type: "object",
       additionalProperties: false,
-      required: ["factor", "target", "observed", "status", "tier", "notes"],
+      required: ["factor", "target", "observed", "score", "target_score", "status", "tier", "notes"],
       properties: {
         factor: { type: "string", minLength: 1 },
         target: { type: "string", minLength: 1 },
         observed: { type: "string", minLength: 1 },
+        score: { type: ["number", "null"], minimum: 0, maximum: 10 },
+        target_score: { type: ["number", "null"], minimum: 0, maximum: 10 },
         tier: {
           type: "string",
           enum: ["contract", "quality"],

@@ -79,9 +79,9 @@ Two phases, run in order. Each round re-measures against the **original anchor**
 
 6. **Rubric verification** (when Score Log present):
    - The reviewer evaluates `quality_review_status` by inspection; the runner independently verifies `quality_execution_status` via a SHA-bound execution-evidence artifact. The reviewer cannot execute code, so quality evidence comes from two trust roots.
-   - Re-score ALL evaluated factors with fresh eyes (1-10)
+   - Re-score ALL evaluated quality factors with fresh eyes (0-10) and include numeric `score` / `target_score`; contract factors stay pass/fail and may use `null` numeric fields
    - Any required factor below target → issue
-   - Score divergence ≥2 points from the executor → flag for review
+   - The runner computes executor/reviewer divergence and re-dispatches toward the weakest below-target quality factor before falling back to generic issue repair
 
 7. **Phase 1 gate**: Issues found → return a structured verdict with `verdict=changes_requested`, then re-dispatch (see Re-dispatch below). Do NOT proceed to Phase 2 until Phase 1 passes.
 
@@ -97,6 +97,7 @@ Before any re-dispatch, check:
 - **Scope:** Does the fix address a review issue, or is it scope creep?
 - **Regression:** Are previously passing rubric factors still passing?
 - **Churn:** Is the total diff growing without convergence?
+- **Score trend:** Is the same quality factor flat for 3 rounds? If yes, pivot implementation approach without expanding scope, or escalate.
 - **Stuck:** Same issue 3+ consecutive rounds → escalate immediately (not fixable by the executor).
 
 ### Converge

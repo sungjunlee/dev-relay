@@ -5,11 +5,14 @@ const os = require("os");
 const path = require("path");
 
 const {
+  buildRedispatchPrompt,
   buildRubricGateRedispatchPrompt,
+  buildScoreOptimizationTarget,
   computeFactorStatusFlips,
   computeRepeatedIssueCount,
   decideFlipFlopEscalation,
   detectChurnGrowth,
+  findWeakestBelowTargetQualityScore,
   scanPriorVerdicts,
   summarizeLineage,
 } = require("../../../skills/relay-review/scripts/review-runner/redispatch");
@@ -38,6 +41,15 @@ function makeFlipDecision(overrides = {}) {
     repeatedIssueCount: 0,
     ...overrides,
   });
+}
+
+function makeReviewIssue() {
+  return {
+    title: "Improve hierarchy",
+    body: "The visual hierarchy is still flat.",
+    file: "src/view.js",
+    line: 12,
+  };
 }
 
 test("redispatch/detectChurnGrowth preserves the diff-growth matrix", () => {
@@ -125,6 +137,61 @@ test("redispatch/scanPriorVerdicts does not invoke the callback when no prior ve
   scanPriorVerdicts(runDir, 1, () => { calls += 1; });
   scanPriorVerdicts(runDir, 3, () => { calls += 1; });
   assert.equal(calls, 0);
+});
+
+test("redispatch/findWeakestBelowTargetQualityScore selects the largest quality score gap", () => {
+  const weakest = findWeakestBelowTargetQualityScore({
+    rubric_scores: [
+      { factor: "Contract", tier: "contract", target: "exit 0", observed: "pass", status: "pass" },
+      { factor: "Craft", tier: "quality", target: ">= 8/10", observed: "7/10", status: "fail", notes: "Needs polish." },
+      { factor: "Originality", tier: "quality", target: ">= 8/10", observed: "5.5/10", status: "fail", notes: "Too generic." },
+    ],
+  });
+
+  assert.deepEqual(weakest, {
+    factor: "Originality",
+    score: 5.5,
+    target_score: 8,
+    gap: 2.5,
+    notes: "Too generic.",
+  });
+});
+
+test("redispatch/buildScoreOptimizationTarget includes trend and stagnation guidance", () => {
+  const runDir = tempRunDir();
+  fs.writeFileSync(path.join(runDir, "review-round-1-verdict.json"), JSON.stringify({
+    rubric_scores: [{ factor: "Originality", tier: "quality", target: ">= 8/10", observed: "5.5/10", status: "fail" }],
+  }), "utf-8");
+  fs.writeFileSync(path.join(runDir, "review-round-2-verdict.json"), JSON.stringify({
+    rubric_scores: [{ factor: "Originality", tier: "quality", target: ">= 8/10", observed: "5.5/10", status: "fail" }],
+  }), "utf-8");
+
+  const text = buildScoreOptimizationTarget({
+    rubric_scores: [{ factor: "Originality", tier: "quality", target: ">= 8/10", observed: "5.5/10", status: "fail", notes: "Too close to stock UI." }],
+  }, runDir, 3);
+
+  assert.match(text, /Score optimization target/);
+  assert.match(text, /Weakest below-target quality factor: Originality/);
+  assert.match(text, /Reviewer score: 5.5\/10 \(target 8\/10, gap 2.5\)/);
+  assert.match(text, /Score trend: round 1: 5.5 → round 2: 5.5 → round 3: 5.5/);
+  assert.match(text, /Stagnation signal/);
+  assert.match(text, /pivot the implementation approach without expanding scope/);
+});
+
+test("redispatch/buildRedispatchPrompt adds score optimization beside issue fixes", () => {
+  const prompt = buildRedispatchPrompt({
+    issues: [makeReviewIssue()],
+    scope_drift: { creep: [], missing: [] },
+    rubric_scores: [
+      { factor: "Design craft", tier: "quality", target: ">= 8/10", observed: "6/10", score: 6, target_score: 8, status: "fail", notes: "Spacing and hierarchy are inconsistent." },
+    ],
+  }, "# Done Criteria\n\n- Improve design quality.", null, 1, null, "planner_decision");
+
+  assert.match(prompt, /Issues to fix/);
+  assert.match(prompt, /src\/view\.js:12/);
+  assert.match(prompt, /Score optimization target/);
+  assert.match(prompt, /Design craft/);
+  assert.match(prompt, /Improve this factor without regressing already passing contract or quality factors/);
 });
 
 test("redispatch/computeFactorStatusFlips detects pass-fail-pass with normalized factor names", () => {

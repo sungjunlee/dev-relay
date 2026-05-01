@@ -1,4 +1,10 @@
 const { REVIEW_VERDICT_JSON_SCHEMA } = require("../review-schema");
+const {
+  getRubricScoreNumber,
+  getRubricTargetNumber,
+  parseNumericScore,
+  parseTargetScore,
+} = require("./score-utils");
 
 const ALLOWED_VERDICTS = new Set(["pass", "changes_requested", "escalated"]);
 const ALLOWED_NEXT_ACTIONS = new Set(["ready_to_merge", "changes_requested", "escalated"]);
@@ -59,6 +65,29 @@ function validateRubricScore(score, index) {
   }
   if (!ALLOWED_SCORE_TIERS.has(score.tier)) {
     throw new Error(`${location}.tier must be one of: ${Array.from(ALLOWED_SCORE_TIERS).join(", ")}`);
+  }
+  for (const key of ["score", "target_score"]) {
+    if (score[key] !== undefined && score[key] !== null && (typeof score[key] !== "number" || !Number.isFinite(score[key]))) {
+      throw new Error(`${location}.${key} must be a finite number or null`);
+    }
+    if (typeof score[key] === "number" && (score[key] < 0 || score[key] > 10)) {
+      throw new Error(`${location}.${key} must be between 0 and 10`);
+    }
+  }
+  const numericScore = getRubricScoreNumber(score);
+  const targetScore = getRubricTargetNumber(score);
+  const parsedObserved = parseNumericScore(score.observed);
+  const parsedTarget = parseTargetScore(score.target);
+  if (
+    score.tier === "quality"
+    && (score.score === null || score.target_score === null)
+    && parsedObserved !== null
+    && parsedTarget !== null
+  ) {
+    throw new Error(`${location}.score and target_score are required for numeric quality factors`);
+  }
+  if (score.tier === "quality" && score.status === "pass" && numericScore !== null && targetScore !== null && numericScore < targetScore) {
+    throw new Error(`${location}.status=pass conflicts with score ${numericScore} below target_score ${targetScore}`);
   }
 }
 
