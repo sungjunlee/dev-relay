@@ -116,10 +116,10 @@ $ grep -c '^function\|^async function' skills/relay-review/scripts/review-runner
 
 ```text
 $ grep -rn 'require.*review-runner' skills/
-skills/relay-review/scripts/review-runner-redispatch.test.js:13:} = require("./review-runner/redispatch");
-skills/relay-review/scripts/review-runner-divergence.test.js:7:} = require("./review-runner/divergence");
-skills/relay-review/scripts/review-runner-manifest-apply.test.js:13:} = require("./review-runner/manifest-apply");
-skills/relay-review/scripts/review-runner-verdict.test.js:10:} = require("./review-runner/verdict");
+tests/relay-review/scripts/review-runner-redispatch.test.js:13:} = require("./review-runner/redispatch");
+tests/relay-review/scripts/review-runner-divergence.test.js:7:} = require("./review-runner/divergence");
+tests/relay-review/scripts/review-runner-manifest-apply.test.js:13:} = require("./review-runner/manifest-apply");
+tests/relay-review/scripts/review-runner-verdict.test.js:10:} = require("./review-runner/verdict");
 skills/relay-review/scripts/review-runner.js:8:const { git, writeText } = require("./review-runner/common");
 skills/relay-review/scripts/review-runner.js:19:} = require("./review-runner/context");
 skills/relay-review/scripts/review-runner.js:20:const { buildPrompt, formatPriorVerdictSummary } = require("./review-runner/prompt");
@@ -129,11 +129,11 @@ skills/relay-review/scripts/review-runner.js:23:const { buildScoreDivergenceAnal
 skills/relay-review/scripts/review-runner.js:31:} = require("./review-runner/redispatch");
 skills/relay-review/scripts/review-runner.js:32:const { applyPolicyViolationToManifest, applyVerdictToManifest } = require("./review-runner/manifest-apply");
 skills/relay-review/scripts/review-runner.js:33:const { loadReviewText, resolveReviewerName, resolveReviewerScript } = require("./review-runner/reviewer-invoke");
-skills/relay-review/scripts/review-runner-context.test.js:16:} = require("./review-runner/context");
-skills/relay-review/scripts/review-runner-reviewer-invoke.test.js:16:} = require("./review-runner/reviewer-invoke");
-skills/relay-review/scripts/review-runner-prompt.test.js:7:const { buildPrompt } = require("./review-runner/prompt");
-skills/relay-review/scripts/review-runner.test.js:2358:} = require("./review-runner");
-skills/relay-review/scripts/review-runner-comment.test.js:4:const { buildCommentBody } = require("./review-runner/comment");
+tests/relay-review/scripts/review-runner-context.test.js:16:} = require("./review-runner/context");
+tests/relay-review/scripts/review-runner-reviewer-invoke.test.js:16:} = require("./review-runner/reviewer-invoke");
+tests/relay-review/scripts/review-runner-prompt.test.js:7:const { buildPrompt } = require("./review-runner/prompt");
+tests/relay-review/scripts/review-runner.test.js:2358:} = require("./review-runner");
+tests/relay-review/scripts/review-runner-comment.test.js:4:const { buildCommentBody } = require("./review-runner/comment");
 skills/relay-merge/scripts/gate-check.js:35:const { loadRubricFromRunDir } = require("../../relay-review/scripts/review-runner/context");
 skills/relay-merge/scripts/gate-check.js:36:const { buildReviewRunnerRubricGateFailure } = require("../../relay-review/scripts/review-runner/redispatch");
 skills/relay-merge/scripts/gate-check.js:504:  // review.reviewer_login_required is set by review-runner.js when the origin
@@ -141,9 +141,9 @@ skills/relay-merge/scripts/gate-check.js:504:  // review.reviewer_login_required
 
 ## Tests
 
-- Direct-import review-stage suite: `node --test skills/relay-review/scripts/*.test.js`
+- Direct-import review-stage suite: `node --test tests/relay-review/scripts/*.test.js`
 - Result: `162/162` passing.
-- Full suite: `node --test skills/relay-intake/scripts/*.test.js skills/relay-plan/scripts/*.test.js skills/relay-dispatch/scripts/*.test.js skills/relay-review/scripts/*.test.js skills/relay-merge/scripts/*.test.js`
+- Full suite: `node --test tests/relay-intake/scripts/*.test.js tests/relay-plan/scripts/*.test.js tests/relay-dispatch/scripts/*.test.js tests/relay-review/scripts/*.test.js tests/relay-merge/scripts/*.test.js`
 - Result: `552/552` passing.
 
 ## Deferred Inventory

@@ -55,7 +55,7 @@ formatPlan({ worktreePath, branch, title, register, pin, includeFiles });
 Size M, 6 factors (4 contract + 2 quality), matching Batch 1.6 discipline.
 
 ### Prerequisites
-- `node --test skills/relay-dispatch/scripts/*.test.js` exits 0 on PR HEAD.
+- `node --test tests/relay-dispatch/scripts/*.test.js` exits 0 on PR HEAD.
 - No new `require()` cycles introduced (grep guard in CI or manual audit in the PR body).
 
 ### Contract factors
@@ -84,7 +84,7 @@ Size M, 6 factors (4 contract + 2 quality), matching Batch 1.6 discipline.
 ### Quality factors
 
 **5. Parity test suite for shared runtime**
-- New test file `skills/relay-dispatch/scripts/worktree-runtime.test.js` with at minimum: (a) create branch fresh, (b) create branch that already exists (fallback path), (c) `--dry-run` produces the fixture string, (d) register flag invokes `registerCodexApp` with the expected shape, (e) cleanup is idempotent.
+- New test file `tests/relay-dispatch/scripts/worktree-runtime.test.js` with at minimum: (a) create branch fresh, (b) create branch that already exists (fallback path), (c) `--dry-run` produces the fixture string, (d) register flag invokes `registerCodexApp` with the expected shape, (e) cleanup is idempotent.
 - Both entry-point tests (`create-worktree.test.js`, `dispatch.test.js` or equivalent) exercise the same runtime through their public CLI surface, not by importing the runtime directly — proves the parity claim end-to-end.
 - Test delta target: ≥ +8 tests; suite must remain 100% green.
 

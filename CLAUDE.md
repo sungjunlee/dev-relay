@@ -54,6 +54,10 @@ skills/
       gate-check.js        ← Pre-merge audit trail enforcement
       finalize-run.js      ← Merge PR, cleanup worktree, close manifest
       review-gate.js       ← Review state validation
+tests/
+  relay-*/                 ← Test suites and fixtures kept outside skills so installs stay runtime-only
+    scripts/
+    fixtures/
 ```
 
 Multi-skill design: each phase is independently invocable. `npx skills add sungjunlee/dev-relay` installs all 6 skills: `relay`, `relay-intake`, `relay-plan`, `relay-dispatch`, `relay-review`, `relay-merge`.
@@ -62,11 +66,11 @@ Multi-skill design: each phase is independently invocable. `npx skills add sungj
 
 ```bash
 # Run tests (Node.js built-in test runner, no install needed)
-node --test skills/relay-intake/scripts/*.test.js
-node --test skills/relay-plan/scripts/*.test.js
-node --test skills/relay-dispatch/scripts/*.test.js
-node --test skills/relay-review/scripts/*.test.js
-node --test skills/relay-merge/scripts/*.test.js
+node --test tests/relay-intake/scripts/*.test.js
+node --test tests/relay-plan/scripts/*.test.js
+node --test tests/relay-dispatch/scripts/*.test.js
+node --test tests/relay-review/scripts/*.test.js
+node --test tests/relay-merge/scripts/*.test.js
 
 # Probe executor environment (before rubric design)
 node skills/relay-plan/scripts/probe-executor-env.js . --executor codex --json
@@ -113,6 +117,7 @@ node skills/relay-merge/scripts/finalize-run.js --run-id <id> --force-finalize-n
 - Executor-specific internal paths (e.g., Codex SQLite, global state) are fragile — document which version they target
 - Keep each SKILL.md under 150 lines; use `references/` for details
 - Operator utilities and recovery playbooks live in `skills/<skill>/references/`, not SKILL.md. Sunset deprecated flags within one release.
+- Test files and test fixtures live under `tests/<skill>/`, never under `skills/<skill>/`, so `npx skills add` does not install them.
 - Manifest state transitions must go through `validateTransition()` — direct state assignment is a bug
 - New executors: add entry to `EXECUTOR_CLI` + execution branch in `dispatch.js`; app registration uses `create-worktree.js --register`
 - New reviewers: create `invoke-reviewer-<name>.js` in `relay-review/scripts/`

@@ -8,7 +8,7 @@ Third item of Epic #192 (Runtime Boundary Cleanup). Unblocked by #187 + #188 lan
 
 Two consumers exist outside the file:
 
-- `skills/relay-review/scripts/review-runner.test.js` (primary test consumer; imports most exports)
+- `tests/relay-review/scripts/review-runner.test.js` (primary test consumer; imports most exports)
 - `skills/relay-merge/scripts/gate-check.js` (cross-skill consumer; uses `loadRubricFromRunDir` + `buildReviewRunnerRubricGateFailure`)
 
 ## Goal
@@ -57,7 +57,7 @@ Target post-split size: `review-runner.js` ≤ ~400 lines (down from 1708).
 
 **Must NOT migrate in this PR**:
 
-- `skills/relay-review/scripts/review-runner.test.js` — stays on the main `review-runner.js` surface via the re-export layer. This is the whole reason re-exports exist. Test migration is a follow-up.
+- `tests/relay-review/scripts/review-runner.test.js` — stays on the main `review-runner.js` surface via the re-export layer. This is the whole reason re-exports exist. Test migration is a follow-up.
 
 The fence is bounded: only one runtime consumer to migrate. If the split produces stage modules that are genuinely self-sufficient, `gate-check.js` will migrate cleanly. If it doesn't, the split is wrong.
 
@@ -70,7 +70,7 @@ Size L, 8 factors (6 contract + 2 quality). Same shape as #188 — the refactor 
 
 ### Prerequisites
 
-- `node --test skills/**/scripts/*.test.js` exits 0 on PR HEAD (baseline 465/465 post-#188 merge).
+- `node --test tests/**/scripts/*.test.js` exits 0 on PR HEAD (baseline 465/465 post-#188 merge).
 - `grep -rn 'require.*review-runner' skills/` — only `review-runner.test.js` + `gate-check.js` reach for the main file post-PR.
 
 ### Contract factors
@@ -139,7 +139,7 @@ Post-split these live in `review-runner/context.js` and `review-runner/redispatc
 - Test delta target: **≥ +20 tests** across the new `review-runner/*.test.js` files. Baseline post-#188 is 465/465 green. Target final count ≥ 485.
 - `review-runner.test.js` is NOT deleted. It remains as a re-export regression test proving the orchestrator re-exports produce the same outputs as the stage modules.
 - Each new stage module has a `review-runner/<stage>.test.js` sibling that uses direct imports only.
-- Full suite: `node --test skills/**/scripts/*.test.js` remains 100% green.
+- Full suite: `node --test tests/**/scripts/*.test.js` remains 100% green.
 - CI run (GH Actions) shows green on the final commit; PR body links the run.
 
 ### Quality factors
@@ -147,7 +147,7 @@ Post-split these live in `review-runner/context.js` and `review-runner/redispatc
 **7. Import graph regression check and re-export audit**
 
 - Grep evidence in PR body: `grep -rn 'require.*review-runner' skills/` post-PR returns exactly:
-  - `skills/relay-review/scripts/review-runner.test.js` (re-export regression consumer; allowed)
+  - `tests/relay-review/scripts/review-runner.test.js` (re-export regression consumer; allowed)
   - any stage modules importing from sibling stage modules (allowed, documented in PR body)
   - zero other runtime consumers
 - `gate-check.js` shows zero imports from the main `review-runner.js` (only from narrower stage files).

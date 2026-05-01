@@ -71,12 +71,12 @@ The runtime file now keeps only the invariant pointer at `skills/relay-dispatch/
 
 Commands:
 
-- `node --test skills/*/scripts/*.test.js`
-- `node --test skills/relay-dispatch/scripts/relay-resolver.test.js`
+- `node --test tests/*/scripts/*.test.js`
+- `node --test tests/relay-dispatch/scripts/relay-resolver.test.js`
 - `node --check skills/relay-dispatch/scripts/relay-resolver.js`
 - `node --check skills/relay-merge/scripts/finalize-run.js`
 - `node --check skills/relay-merge/scripts/gate-check.js`
-- `grep -n "STATES.DRAFT\\|stale draft" skills/relay-dispatch/scripts/relay-resolver.test.js`
+- `grep -n "STATES.DRAFT\\|stale draft" tests/relay-dispatch/scripts/relay-resolver.test.js`
 
 New or expanded regression coverage:
 

@@ -37,7 +37,7 @@ Rules 3, 6, and 7 are directly load-bearing on this PR. Rules 1 and 4 are indire
 | --- | --- | --- |
 | `skills/relay-plan/SKILL.md` | **MODIFIED** | Adds `### 1.5 Read historical signal` at lines 26-50 and adds the `Historical signal` subsection plus examples inside the Quality Card section at lines 167-222. |
 | `skills/relay-plan/scripts/reliability-report-consumer.js` | **ADDED** | Planner-side consumer helper that reads the producer best-effort and renders the documented fallback contract without touching the producer. |
-| `skills/relay-plan/scripts/reliability-report-consumer.test.js` | **ADDED** | Three separate regression tests covering empty history, malformed stored data, and generic non-zero producer failure. |
+| `tests/relay-plan/scripts/reliability-report-consumer.test.js` | **ADDED** | Three separate regression tests covering empty history, malformed stored data, and generic non-zero producer failure. |
 | `skills/relay-dispatch/SKILL.md` | **UNCHANGED** | No new consumer logic added. The self-review grep still shows one pre-existing operator-command reference at line 148; this PR does not modify it. |
 | `skills/relay-review/scripts/review-runner.js` | **UNCHANGED** | Review does not consume reliability-report; the PR-body visibility gap is handled by this mirror doc. |
 | `skills/relay-merge/scripts/finalize-run.js` | **UNCHANGED** | Merge flow remains independent of reliability-report. |

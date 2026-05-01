@@ -38,12 +38,12 @@ Interpretation:
 
 Executed before or during the live runs against the current branch state:
 
-- `node --test skills/relay-dispatch/scripts/dispatch.test.js` -> pass
-- `node --test skills/relay-review/scripts/review-runner.test.js` -> pass
-- `node --test skills/relay-merge/scripts/finalize-run.test.js` -> pass
-- `node --test skills/relay-dispatch/scripts/close-run.test.js` -> pass
-- `node --test skills/relay-dispatch/scripts/reliability-report.test.js` -> pass
-- `node --test skills/relay-dispatch/scripts/relay-manifest.test.js` -> pass
+- `node --test tests/relay-dispatch/scripts/dispatch.test.js` -> pass
+- `node --test tests/relay-review/scripts/review-runner.test.js` -> pass
+- `node --test tests/relay-merge/scripts/finalize-run.test.js` -> pass
+- `node --test tests/relay-dispatch/scripts/close-run.test.js` -> pass
+- `node --test tests/relay-dispatch/scripts/reliability-report.test.js` -> pass
+- `node --test tests/relay-dispatch/scripts/relay-manifest.test.js` -> pass
 - `python3 skills/relay-dispatch/scripts/smoke_dispatch_scenarios.py` -> pass (`success_with_commit` and `noop_escalates` both passed)
 
 ## Run A: `dev-relay` Without Sprint
