@@ -28,7 +28,7 @@ Standard path: run `review-runner.js --reviewer codex` or `--reviewer claude`. I
 
 ## Setup: Establish the anchor
 
-1. Get the PR diff and Done Criteria (this runs in a fresh context — fetch everything needed). `review-runner.js` keeps file-backed Done Criteria strongest: `--done-criteria-file`, then `anchor.done_criteria_path`, then issue loading. When it must infer a GitHub issue, it tries `manifest.issue.number`, explicit PR-body closing keywords (`Fix/Fixes`, `Close/Closes`, `Resolve/Resolves`), branch `issue-N`, then a single `closingIssuesReferences` entry. It ignores `Refs`, `Related`, and incidental issue prose; multiple inferred closing refs fail instead of silently selecting one.
+1. Get the PR diff and Done Criteria (this runs in a fresh context — fetch everything needed). Runner resolution order and issue inference details are in `references/runner-notes.md`.
 ```bash
 PR_NUM=$(gh pr list --head <branch> --json number -q '.[0].number')
 BRANCH=$(gh pr view $PR_NUM --json headRefName -q '.headRefName')
@@ -63,12 +63,7 @@ Notes:
 node ${CLAUDE_SKILL_DIR}/scripts/review-runner.js --repo . --branch "$BRANCH" --pr "$PR_NUM" --prepare-only --json
 ```
 
-This writes round artifacts under `~/.relay/runs/<repo-slug>/<run-id>/`, including:
-- `review-round-N-prompt.md`
-- `review-round-N-done-criteria.md`
-- `review-round-N-diff.patch`
-
-The runner reviews the retained checkout recorded in `paths.worktree`, not the repo root. It also records `review.last_reviewed_sha`, enforces `review.max_rounds`, and escalates when the same issue fingerprint repeats 3 consecutive rounds.
+This writes round artifacts under `~/.relay/runs/<repo-slug>/<run-id>/`. See `references/runner-notes.md` for artifact names, retained-checkout behavior, stale-SHA handling, and repeated-issue escalation.
 
 ## Review Loop
 
@@ -120,20 +115,7 @@ Before any re-dispatch, check:
 node ${CLAUDE_SKILL_DIR}/scripts/review-runner.js --repo . --run-id "$RUN_ID" --pr "$PR_NUM" --review-file /tmp/review-verdict.json
 ```
 
-The runner:
-- validates the JSON verdict
-- optionally invokes the reviewer adapter itself when `--reviewer <name>` is used
-- computes and overrides `quality_execution_status` from `execution-evidence.json`
-- rejects the round if the reviewer mutates the repo and escalates the manifest
-- writes the PR audit comment
-- updates the relay manifest to `ready_to_merge`, `changes_requested`, or `escalated`
-- writes `review-round-N-verdict.json`
-- writes `review-round-N-raw-response.txt` when it invoked the reviewer itself
-- writes `review-round-N-policy-violation.txt` if the reviewer changed files
-- writes `review-round-N-redispatch.md` when changes are requested
-
-Backward compatibility:
-- Pre-261 runs do not have `execution-evidence.json`. In that case the runner computes `quality_execution_status=missing`, a reviewer PASS cannot be applied, and operators should use `finalize-run --force-finalize-nonready --reason "pre-261 run, no artifact"` only after independent verification.
+The runner validates the verdict, writes the PR audit comment, updates manifest state, and records round artifacts. See `references/runner-notes.md` for the full audit-trail and backward-compatibility behavior.
 
 ## Re-dispatch (when issues found)
 
