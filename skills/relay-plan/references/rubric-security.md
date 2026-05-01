@@ -6,6 +6,10 @@ Use this alongside the primary domain rubric when a task touches user input, aut
 
 > **See also**: `rubric-trust-model.md` for **auth-boundary** tasks in the relay runtime itself (manifest anchors, trust roots, gate callsites). That reference adds a distinct enforcement-layer / authentication-factor check on top of this file. The two are complementary: this file covers the broad security surface; `rubric-trust-model.md` covers the narrower case where a schema change can preserve a vulnerability under a new shape.
 
+## Candidate Axis Library
+
+Use this file to choose task-relevant rubric axes, not as a template to paste wholesale. For S-size mechanical changes, add security factors only when the Acceptance Criteria touch a trust boundary, sensitive data, dependency risk, or attacker-controlled input. Pull at most the security axes that sharpen the primary domain rubric.
+
 ## Prerequisites (Hygiene)
 
 Use this section only for checks that would apply to ANY PR in this repo. They gate the run and do not count toward factor totals.

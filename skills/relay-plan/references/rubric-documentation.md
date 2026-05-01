@@ -2,6 +2,10 @@
 
 Metrics a documentation specialist actually checks. Not "is the grammar correct" but "can someone with zero context complete a real task using only this document."
 
+## Candidate Axis Library
+
+Use this file to choose task-relevant rubric axes, not as a template to paste wholesale. For S-size mechanical docs changes, one contract factor plus hygiene prerequisites is enough unless the Acceptance Criteria introduce real reader-success judgment. Pull at most the documentation axes that match the changed document or workflow.
+
 ## Prerequisites (Hygiene)
 
 Use this section only for checks that would apply to ANY PR in this repo. They gate the run and do not count toward factor totals.

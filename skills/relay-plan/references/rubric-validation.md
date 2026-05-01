@@ -37,6 +37,28 @@ Summarize the rubric before dispatch so weak calibration is visible.
 The `Probe signal` lines below are rendered from `probe-executor-env.js --project-only --json` and stay informational only (see `signals.md`).
 
 ```text
+S mechanical example
+--------------------
+Prerequisites count: 1
+Contract factors: 1
+Quality factors: 0
+Substantive total: 1
+Quality ratio: N/A (mechanical S-size task)
+Auto coverage: 2 / 2 checks automated across prerequisites + factors
+Calibration status: skipped (S task)
+Risk signals: none
+Rationale: Acceptance Criteria only require one observable behavior change; no design-bearing quality judgment was introduced.
+Historical signal: no historical data available
+Probe signal:
+probe_signal.test_infra: node:test
+TDD suggestion: decline (S-size mechanical task)
+probe_signal.lint_format: no quality infra detected
+probe_signal.type_check: no quality infra detected
+probe_signal.ci: GitHub Actions (test.yml)
+probe_signal.scripts: no quality infra detected
+Grade: B
+Action: dispatch allowed
+
 Synthetic populated signal example
 ---------------------------------
 Prerequisites count: 2

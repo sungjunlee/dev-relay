@@ -2,6 +2,10 @@
 
 Metrics a senior frontend engineer actually checks. Not "does it render" but "does it respect the user's time, device, and attention."
 
+## Candidate Axis Library
+
+Use this file to choose task-relevant rubric axes, not as a template to paste wholesale. For S-size mechanical frontend changes, one contract factor plus hygiene prerequisites is enough unless the Acceptance Criteria introduce real UX or state-management judgment. Pull at most the frontend axes that match the changed surface.
+
 ## Prerequisites (Hygiene)
 
 Use this section only for checks that would apply to ANY PR in this repo. They gate the run and do not count toward factor totals.

@@ -4,6 +4,16 @@ How to derive high-quality rubrics from task acceptance criteria. Covers the gui
 
 Before dispatch, persist the finished rubric to a file and pass it through `relay-dispatch --rubric-file <path>`. This is required so the run records `anchor.rubric_path` for review and merge gating.
 
+## Reference Use Contract
+
+The domain `rubric-*.md` files are **candidate axis libraries**, not dispatch templates. Use them to sharpen task-specific judgment:
+
+- Pick only the axes earned by the Acceptance Criteria.
+- Do not copy a whole domain reference into a dispatch prompt.
+- S-size mechanical tasks may use one contract factor plus hygiene prerequisites and no quality factor.
+- Add quality factors only when the task has real design judgment or risk that a command cannot verify.
+- Treat `fix_hint` examples as optional escalation aids for historical plateaus or non-obvious score transitions, not default implementation instructions.
+
 ## Factor Fields
 
 Common factor fields are `name`, `tier`, `type`, `command`, `criteria`, `target`, `weight`, `baseline`, `setup`, `scoring_guide`, and `fix_hint`.
