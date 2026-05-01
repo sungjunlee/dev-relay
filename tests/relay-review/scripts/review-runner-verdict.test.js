@@ -246,6 +246,64 @@ test("verdict/validateReviewVerdict rejects PASS with blocking scope drift", () 
   })), /scope_drift\.missing entries/i);
 });
 
+test("verdict/validateRubricScore accepts numeric quality scores", () => {
+  const score = makeRubricScore({
+    tier: "quality",
+    target: ">= 8/10",
+    observed: "8.5/10",
+    score: 8.5,
+    target_score: 8,
+  });
+
+  assert.equal(validateRubricScore(score, 0), undefined);
+});
+
+test("verdict/validateRubricScore rejects invalid numeric score fields", () => {
+  assert.throws(
+    () => validateRubricScore(makeRubricScore({ score: 11 }), 0),
+    /rubric_scores\[0\]\.score must be between 0 and 10/
+  );
+  assert.throws(
+    () => validateRubricScore(makeRubricScore({ target_score: Number.NaN }), 0),
+    /rubric_scores\[0\]\.target_score must be a finite number or null/
+  );
+});
+
+test("verdict/validateRubricScore rejects quality pass below numeric target", () => {
+  assert.throws(
+    () => validateRubricScore(makeRubricScore({
+      tier: "quality",
+      status: "pass",
+      target: ">= 8/10",
+      observed: "7/10",
+      score: 7,
+      target_score: 8,
+    }), 0),
+    /status=pass conflicts with score 7 below target_score 8/
+  );
+});
+
+test("verdict/validateRubricScore uses observed and target fallback for quality pass validation", () => {
+  assert.throws(
+    () => validateRubricScore(makeRubricScore({
+      tier: "quality",
+      status: "pass",
+      target: ">= 8/10",
+      observed: "7.5/10",
+    }), 0),
+    /status=pass conflicts with score 7.5 below target_score 8/
+  );
+});
+
+test("verdict/validateRubricScore keeps contract factors binary without numeric score", () => {
+  assert.equal(validateRubricScore(makeRubricScore({
+    tier: "contract",
+    target: "exit 0",
+    observed: "tests pass",
+    status: "pass",
+  }), 0), undefined);
+});
+
 test("verdict/validateReviewVerdict rejects PASS when quality_review_status is not pass", () => {
   assert.throws(() => validateReviewVerdict(makePassVerdict({
     quality_review_status: "not_run",

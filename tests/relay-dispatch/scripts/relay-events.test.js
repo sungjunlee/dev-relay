@@ -130,6 +130,17 @@ test("appendIterationScore writes an iteration_score record to events.jsonl", ()
   assert.deepEqual(readRunEvents(repoRoot, runId), [record]);
 });
 
+test("appendIterationScore persists numeric score fields when provided", () => {
+  const { repoRoot, runId } = createContext();
+  const record = appendIterationScore(repoRoot, runId, {
+    round: 1,
+    scores: [createScore({ score: 7.5, target_score: 8 })],
+  });
+
+  assert.equal(record.scores[0].score, 7.5);
+  assert.equal(record.scores[0].target_score, 8);
+});
+
 test("appendRunEvent writes actor from git config user.name", () => {
   const { repoRoot, runId } = createContext("Relay Operator");
   const record = appendRunEvent(repoRoot, runId, {
@@ -339,6 +350,18 @@ test("appendIterationScore rejects invalid status values", () => {
     round: 1,
     scores: [createScore({ status: "partial" })],
   }), /scores\[0\]\.status must be one of: pass, fail, not_run/);
+});
+
+test("appendIterationScore rejects invalid numeric score fields", () => {
+  const { repoRoot, runId } = createContext();
+  assert.throws(() => appendIterationScore(repoRoot, runId, {
+    round: 1,
+    scores: [createScore({ score: -1 })],
+  }), /scores\[0\]\.score must be between 0 and 10/);
+  assert.throws(() => appendIterationScore(repoRoot, runId, {
+    round: 1,
+    scores: [createScore({ target_score: Number.NaN })],
+  }), /scores\[0\]\.target_score must be a finite number or null/);
 });
 
 test("appendIterationScore persists a valid tier and omits invalid or missing tiers", () => {

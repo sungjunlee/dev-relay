@@ -3,6 +3,9 @@ const assert = require("node:assert/strict");
 
 const {
   buildScoreDivergenceAnalysis,
+  getRubricScoreNumber,
+  getRubricTargetNumber,
+  parseTargetScore,
   parseScoreLog,
 } = require("../../../skills/relay-review/scripts/review-runner/divergence");
 
@@ -37,4 +40,34 @@ test("divergence/buildScoreDivergenceAnalysis keeps warning and event payload th
     tier: "contract",
   }]);
   assert.match(result.warnings[0], /executor 9\/10, reviewer 5\/10 \(\+4\)/);
+});
+
+test("divergence numeric helpers prefer first-class score fields over observed text", () => {
+  assert.equal(parseTargetScore(">= 8/10"), 8);
+  assert.equal(parseTargetScore("exit 0"), null);
+  assert.equal(getRubricScoreNumber({ observed: "5/10", score: 7 }), 7);
+  assert.equal(getRubricTargetNumber({ target: ">= 8/10", target_score: 8.5 }), 8.5);
+});
+
+test("divergence/buildScoreDivergenceAnalysis uses first-class reviewer score when available", () => {
+  const result = buildScoreDivergenceAnalysis([
+    "| Factor | Status | Final |",
+    "| --- | --- | --- |",
+    "| Craft | pass | 9/10 |",
+  ].join("\n"), [
+    {
+      factor: "Craft",
+      observed: "looks good",
+      score: 7,
+      tier: "quality",
+    },
+  ]);
+
+  assert.deepEqual(result.eventPayload, [{
+    factor: "Craft",
+    executor: "9/10",
+    reviewer: "looks good",
+    delta: 2,
+    tier: "quality",
+  }]);
 });

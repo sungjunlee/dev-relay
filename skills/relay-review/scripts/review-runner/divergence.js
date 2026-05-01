@@ -1,5 +1,14 @@
-const ALLOWED_SCORE_TIERS = new Set(["contract", "quality"]);
 const { gh } = require("./common");
+const {
+  ALLOWED_SCORE_TIERS,
+  getRubricScoreNumber,
+  getRubricTargetNumber,
+  isMissingScoreCell,
+  normalizeFactorKey,
+  parseNumericScore,
+  parseTargetScore,
+  toIterationScoreEventEntry,
+} = require("./score-utils");
 
 function splitMarkdownTableRow(line) {
   const trimmed = String(line || "").trim();
@@ -11,11 +20,6 @@ function splitMarkdownTableRow(line) {
 function isMarkdownTableDivider(line) {
   const cells = splitMarkdownTableRow(line);
   return Array.isArray(cells) && cells.length > 0 && cells.every((cell) => /^:?-{3,}:?$/.test(cell.replace(/\s+/g, "")));
-}
-
-function isMissingScoreCell(value) {
-  const normalized = String(value || "").trim().toLowerCase();
-  return !normalized || normalized === "—" || normalized === "–" || normalized === "-" || normalized === "n/a" || normalized === "na";
 }
 
 function parseScoreLog(markdownText) {
@@ -70,18 +74,6 @@ function parseScoreLog(markdownText) {
   return [];
 }
 
-function normalizeFactorKey(value) {
-  return String(value || "").trim().toLowerCase().replace(/\s+/g, " ");
-}
-
-function parseNumericScore(value) {
-  const text = String(value || "").trim();
-  if (isMissingScoreCell(text)) return null;
-  const match = text.match(/^(-?\d+(?:\.\d+)?)(?:\s*\/\s*10(?:\.0+)?)?$/);
-  if (!match) return null;
-  return Number(match[1]);
-}
-
 function loadPrBody(repoPath, prNumber) {
   if (!prNumber) return "";
   try {
@@ -114,7 +106,7 @@ function buildScoreDivergenceAnalysis(markdownText, rubricScores) {
     if (!executor) continue;
 
     const executorNumeric = parseNumericScore(executor);
-    const reviewerNumeric = parseNumericScore(score.observed);
+    const reviewerNumeric = getRubricScoreNumber(score);
     if (executorNumeric === null || reviewerNumeric === null) continue;
 
     const delta = Number((executorNumeric - reviewerNumeric).toFixed(4));
@@ -142,11 +134,15 @@ function buildScoreDivergenceAnalysis(markdownText, rubricScores) {
 module.exports = {
   buildScoreDivergenceAnalysis,
   formatDelta,
+  getRubricScoreNumber,
+  getRubricTargetNumber,
   isMarkdownTableDivider,
   isMissingScoreCell,
   loadPrBody,
   normalizeFactorKey,
   parseNumericScore,
+  parseTargetScore,
   parseScoreLog,
   splitMarkdownTableRow,
+  toIterationScoreEventEntry,
 };

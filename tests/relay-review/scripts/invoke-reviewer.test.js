@@ -87,6 +87,8 @@ fs.writeFileSync(resultPath, JSON.stringify({
     "factor",
     "target",
     "observed",
+    "score",
+    "target_score",
     "status",
     "tier",
     "notes",
