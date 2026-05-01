@@ -1,6 +1,6 @@
 # Rubric Validation, Grading, and Quality Card
 
-This reference holds the step-3 validation detail that used to live inline in `SKILL.md`. Apply it between `## 2. Build the rubric` and `## 4. Generate dispatch prompt`.
+This reference holds the validation detail that used to live inline in `SKILL.md`. Apply it after building the rubric and before simplification.
 
 ## Validate the rubric (full checklist)
 
@@ -24,11 +24,11 @@ Prerequisites (hygiene): as many as needed, uncounted. Factors (contract + quali
 
 | Size | Contract min | Quality min | Substantive total | Recommended |
 |------|--------------|-------------|-------------------|-------------|
-| S (1-2 AC, mechanical) | ≥ 1 | 0 | 1+ | 1-2 |
-| S (1-2 AC, design-bearing) | ≥ 1 | ≥ 1 | 2+ | ~2 |
-| M (3-4 AC) | ≥ 2 | ≥ 1 | 3+ | ~5 |
-| L (5-6 AC) | ≥ 2 | ≥ 2 | 4+ | ~6 |
-| XL (7+ AC) | ≥ 3 | ≥ 2 | 5+ | ~8 |
+| S (narrow mechanical outcome, low ambiguity/risk) | ≥ 1 | 0 | 1+ | 1-2 |
+| S (narrow design-bearing outcome) | ≥ 1 | ≥ 1 | 2+ | ~2 |
+| M (standard feature or fix with moderate file scope) | ≥ 2 | ≥ 1 | 3+ | ~5 |
+| L (cross-cutting, multi-file, ambiguous, or risk-bearing) | ≥ 2 | ≥ 2 | 4+ | ~6 |
+| XL (architecture change, cross-domain, migration, or high-risk boundary) | ≥ 3 | ≥ 2 | 5+ | ~8 |
 
 ## Rubric Quality Card
 
@@ -47,7 +47,7 @@ Quality ratio: N/A (mechanical S-size task)
 Auto coverage: 2 / 2 checks automated across prerequisites + factors
 Calibration status: skipped (S task)
 Risk signals: none
-Rationale: Acceptance Criteria only require one observable behavior change; no design-bearing quality judgment was introduced.
+Rationale: Recovered Done Criteria require one observable behavior change; no design-bearing quality judgment was introduced.
 Historical signal: no historical data available
 Probe signal:
 probe_signal.test_infra: node:test

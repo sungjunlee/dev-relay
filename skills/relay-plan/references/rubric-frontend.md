@@ -4,7 +4,7 @@ Frontend candidate axes for user-visible behavior, accessibility, responsiveness
 
 ## Candidate Axis Library
 
-Use this file to choose task-relevant rubric axes, not as a template to paste wholesale. For S-size mechanical frontend changes, one contract factor plus hygiene prerequisites is enough unless the Acceptance Criteria introduce real UX or state-management judgment.
+Use this file to choose task-relevant rubric axes, not as a template to paste wholesale. For S-size mechanical frontend changes, one contract factor plus hygiene prerequisites is enough unless explicit AC, inferred Done Criteria, or concrete risk introduce real UX or state-management judgment.
 
 ## Hygiene Prerequisites
 
@@ -18,7 +18,7 @@ Use only when they apply to any PR in the repo:
 
 ## Contract Axes
 
-Use when they verify a specific AC item:
+Use when they verify a specific Done Criteria item:
 
 | Axis | Example command | Target |
 |---|---|---|

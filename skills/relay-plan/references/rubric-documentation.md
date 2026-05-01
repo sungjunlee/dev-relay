@@ -4,7 +4,7 @@ Documentation candidate axes for reader success, maintainability, and executable
 
 ## Candidate Axis Library
 
-Use this file to choose task-relevant rubric axes, not as a template to paste wholesale. For S-size mechanical docs changes, one contract factor plus hygiene prerequisites is enough unless the Acceptance Criteria introduce real reader-success judgment.
+Use this file to choose task-relevant rubric axes, not as a template to paste wholesale. For S-size mechanical docs changes, one contract factor plus hygiene prerequisites is enough unless explicit AC, inferred Done Criteria, or concrete risk introduce real reader-success judgment.
 
 ## Hygiene Prerequisites
 
