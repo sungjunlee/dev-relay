@@ -34,7 +34,7 @@ No sprint file? Just do the `git fetch`. Takes <5 seconds; never skip this step.
 ## Step 1: Route and Read Context
 
 Gather task details and sprint context:
-1. **Task AC** (try in order, use first that succeeds):
+1. **Task evidence** (try in order, use first that succeeds):
    - Local task file: `backlog/tasks/{PREFIX}-{N} - {Title}.md`
    - GitHub: `gh issue view <N>`
    - User-provided description (from argument or conversation)
@@ -70,7 +70,7 @@ PR_NUM=$(gh pr list --head issue-<N> --json number -q '.[0].number')
 
 ## Step 2: Plan
 
-**Always build a rubric.** Follow relay-plan's process (Steps 1-10 only: read task → build rubric → generate prompt). Do NOT dispatch from relay-plan — Step 3 below handles dispatch. See `relay-plan` SKILL.md for rubric depth by task size (S/M/L/XL).
+**Always build a rubric.** Follow relay-plan's planning process (read task → recover Done Criteria → build rubric → generate prompt). Do NOT dispatch from relay-plan — Step 3 below handles dispatch. See `relay-plan` SKILL.md for rubric depth by task size (S/M/L/XL).
 
 Write the dispatch prompt to a temp file (e.g., `/tmp/dispatch-<N>.md`).
 If intake ran, the relay-ready handoff brief becomes the task source of truth for planning.
@@ -136,7 +136,7 @@ When multiple independent tasks are ready, dispatch in parallel instead of runni
 ## Summary Checklist
 
 After completing the relay cycle, verify:
-- [ ] Issue AC fully implemented (relay-review confirmed)
+- [ ] Done Criteria fully implemented (relay-review confirmed)
 - [ ] PR has `<!-- relay-review -->` LGTM comment (or `<!-- relay-review-skip -->` with reason)
 - [ ] PR marked `ready_to_merge`, or merged and closed if relay-merge was explicitly requested
 - [ ] Sprint file updated — if exists (Plan `[x]`, Progress entry with review round count)
