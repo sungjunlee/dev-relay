@@ -78,6 +78,15 @@ test("non-TDD rubric leaves dispatch prompt byte-identical to baseline", () => {
   assert.equal(rendered, baseline);
 });
 
+test("non-TDD baseline keeps the compact iteration protocol", () => {
+  const baseline = fs.readFileSync(BASELINE_PROMPT_PATH, "utf-8");
+
+  assert.match(baseline, /Fix the weakest required failing factor with one focused change/);
+  assert.match(baseline, /self-review finds no stubs\/TODOs\/test shortcuts/);
+  assert.doesNotMatch(baseline, /REGRESSION CHECK/);
+  assert.doesNotMatch(baseline, /Oscillation/);
+});
+
 test("TDD rubric inserts Step 0a, preserves existing Step 0 numbering, and scopes Step 4 relaxation", () => {
   const baseline = fs.readFileSync(BASELINE_PROMPT_PATH, "utf-8");
 
@@ -252,8 +261,8 @@ test("reference docs document the exact two-cell TDD state matrix and avoid top-
   const matrix = [
     "| any factor has `tdd_anchor` | Behavior |",
     "|------|----------|",
-    "| Yes  | Step 0a active for every anchor; reviewer TDD section active; prereq exclusion active for those paths; Step 4(a) relaxed for `tdd_anchor` factors only |",
-    "| No   | Pre-#142 baseline; byte-identical prompts; reviewer prompt unchanged |",
+    "| Yes  | Step 0a active for every anchor; reviewer TDD section active; prereq exclusion active for those paths; final self-review shortcut check relaxed for `tdd_anchor` factors only |",
+    "| No   | Compact default protocol; reviewer prompt unchanged |",
   ].join("\n");
 
   assert.match(rubricGuide, /tdd_anchor: <path-string>/);

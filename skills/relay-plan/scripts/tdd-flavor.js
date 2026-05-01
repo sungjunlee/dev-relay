@@ -157,11 +157,15 @@ function buildTddStep0a(factors) {
 }
 
 function relaxStep4ForTdd(protocolText) {
-  const needle = "     - For each automated check: could the target be met by a shortcut that misses the intent?";
-  if (!protocolText.includes(needle)) return protocolText;
+  const needles = [
+    "     - For each automated check: could the target be met by a shortcut that misses the intent?",
+    "  4. Stop only when all required factors meet target, self-review finds no stubs/TODOs/test shortcuts, and the final work is committed.",
+  ];
+  const needle = needles.find((candidate) => protocolText.includes(candidate));
+  if (!needle) return protocolText;
   const insertion = [
     needle,
-    "       For factors carrying `tdd_anchor`, a red test commit that is green at HEAD is not a shortcut by itself; this relaxation applies only to factors carrying `tdd_anchor`; other factors in the same rubric are reviewed under the existing rule.",
+    "     For factors carrying `tdd_anchor`, a red test commit that is green at HEAD is not a shortcut by itself; this relaxation applies only to factors carrying `tdd_anchor`; other factors in the same rubric are reviewed under the existing rule.",
   ].join("\n");
   return protocolText.replace(needle, insertion);
 }

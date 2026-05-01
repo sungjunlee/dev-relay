@@ -1,6 +1,6 @@
 # Iteration Protocol
 
-The measure-fix-keep loop that every dispatch prompt must include. Take the base template at `../../relay/references/prompt-template.md` and append the sections listed in `SKILL.md` § 4 — this file holds the full text of the iteration loop and the Score Log table format.
+The compact measure-fix-verify loop that every dispatch prompt must include. Take the base template at `../../relay/references/prompt-template.md` and append the sections listed in `SKILL.md` § 10. Keep the default protocol short; detailed lock/stuck mechanics belong in planner notes or L/XL task guidance, not every executor prompt.
 
 ## Optional TDD Factor Flavor
 
@@ -16,8 +16,8 @@ If the probe reports zero `test_infra` entries and `tdd_runner` is omitted on a 
 
 | any factor has `tdd_anchor` | Behavior |
 |------|----------|
-| Yes  | Step 0a active for every anchor; reviewer TDD section active; prereq exclusion active for those paths; Step 4(a) relaxed for `tdd_anchor` factors only |
-| No   | Pre-#142 baseline; byte-identical prompts; reviewer prompt unchanged |
+| Yes  | Step 0a active for every anchor; reviewer TDD section active; prereq exclusion active for those paths; final self-review shortcut check relaxed for `tdd_anchor` factors only |
+| No   | Compact default protocol; reviewer prompt unchanged |
 
 Optional Step 0a block to insert before Step 0 only when any factor carries a non-empty `tdd_anchor`:
 
@@ -32,33 +32,19 @@ Optional Step 0a block to insert before Step 0 only when any factor carries a no
      e) Proceed to Step 0 and the rest of the loop.
 ```
 
-When Step 0a is active, also append this sentence under Step 4(a): "For factors carrying `tdd_anchor`, a red test commit that is green at HEAD is not a shortcut by itself; this relaxation applies only to factors carrying `tdd_anchor`; other factors in the same rubric are reviewed under the existing rule."
+When Step 0a is active, also append this sentence under the final self-review step: "For factors carrying `tdd_anchor`, a red test commit that is green at HEAD is not a shortcut by itself; this relaxation applies only to factors carrying `tdd_anchor`; other factors in the same rubric are reviewed under the existing rule."
 
-## Iteration Protocol (autoloop-style measure-fix-keep)
+## Iteration Protocol (compact default)
 
 ```
 BEFORE LOOP: Run baseline if defined. RULE: Do NOT modify automated check commands.
 LOOP (max 5 iterations):
-  0. PREREQUISITE GATE: Run all prerequisite checks. Any fails → fix before proceeding. Prerequisites are not scored, just pass/fail.
-  1. Run ALL automated checks + self-evaluate ALL evaluated factors, record scores
-  2. REGRESSION CHECK: Any factor previously marked locked now below target?
-     → Revert this iteration's changes (git reset to previous commit)
-     → Re-attempt with constraint: "Maintain [factor] at [score] while improving [target factor]"
-     → Regression persists after 1 re-attempt → flag both factors, escalate
-  3. Append to Score Log — mark factors that meet target as locked
-  4. All required meet target → adversarial self-review:
-     - Review as if you did NOT write this code and are seeing it for the first time
-     - For each automated check: could the target be met by a shortcut that misses the intent?
-       (e.g., stubbed endpoint returns fast but does nothing; test modified to always pass)
-     - For each evaluated factor: re-read scoring_guide "high" — does it genuinely apply?
-     - Check: stubs, TODOs, hardcoded values, test manipulation, placeholder returns
-     → All clear → PR
-     → Issues found → fix → re-score → PR
-  5. Else → lowest required factor → if fix_hint exists, apply it as the starting fix → ONE focused change → commit → repeat
-  6. Stuck detection (any trigger → best-effort: note in PR, continue | required: stop, create PR with partial progress):
-     a) Single-factor stall: same factor below target for 3 consecutive iterations
-     b) Oscillation: any two factors alternate regression across 4+ iterations
-     c) Plateau: no required factor improved toward target over 2 consecutive iterations
+  0. PREREQUISITE GATE: Run prerequisite checks. Any fails → fix before scoring factors.
+  1. Run automated factors and self-evaluate evaluated factors. Record evidence in the Score Log.
+  2. Fix the weakest required failing factor with one focused change. Do not modify rubric commands to make them pass.
+  3. Re-run affected checks plus any previously passing factor that could regress.
+  4. Stop only when all required factors meet target, self-review finds no stubs/TODOs/test shortcuts, and the final work is committed.
+  5. If the same required factor is still failing after 3 focused attempts, stop with partial progress, evidence, and a clear stuck note.
 ```
 
 ## Score Log
@@ -70,4 +56,6 @@ Executor appends one row per iteration to the PR description. Reviewer re-scores
 |--------|--------|----------|--------|--------|-------|--------|
 ```
 
-Status: `—` (not met), `locked` (met target — must not regress in subsequent iterations).
+Status: `—` (not met), `pass`, `fail`, or `blocked`.
+
+For L/XL tasks with interfering factors, the planner may add stricter lock/oscillation guidance to the dispatch prompt. Do not add that machinery to S/M prompts by default.

@@ -41,6 +41,7 @@ Use the reliability signal to tighten wording when historical stuck factors or d
 - Produce a `dispatch-prompt.md` draft that gives the executor the acceptance criteria, the rubric, and a concise iteration protocol.
 - Produce `planner-notes.md` explaining why the factors were chosen, which issue-body details were treated as historical context, and which simplifications were applied.
 - Keep contract factors observable. Avoid prescribing helper names, internal control flow, or exact line counts unless the issue explicitly requires a format.
+- For S-size mechanical tasks, prefer one contract factor plus hygiene prerequisites. Add a quality factor only when the task has real design judgment; record the rationale when no quality factor is included.
 - Include tests or validation only when the repo probe or issue body gives a discoverable path to run them.
 - If a factor needs red-first treatment, use per-factor `tdd_anchor: <path>` plus optional `tdd_runner: <framework>`. Do not emit a top-level `tdd_mode`.
 - When probe `test_infra` is non-empty AND the draft rubric has ≥ 1 `tier: contract` + `type: automated` factor AND no factor already carries non-empty `tdd_anchor`, the planner MUST emit the Quality Card `TDD suggestion:` line using per-factor `tdd_anchor` vocabulary and record this exact planner-notes block:
