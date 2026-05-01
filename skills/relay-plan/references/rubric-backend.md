@@ -2,6 +2,10 @@
 
 Metrics a senior backend engineer actually checks. Not "does the API return 200" but "what happens at 3 AM when the database is slow and traffic spikes."
 
+## Candidate Axis Library
+
+Use this file to choose task-relevant rubric axes, not as a template to paste wholesale. For S-size mechanical backend changes, one contract factor plus hygiene prerequisites is enough unless the Acceptance Criteria introduce real production-design judgment. Pull at most the backend axes that match the changed surface.
+
 ## Prerequisites (Hygiene)
 
 Use this section only for checks that would apply to ANY PR in this repo. They gate the run and do not count toward factor totals.
