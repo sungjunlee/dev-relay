@@ -21,6 +21,12 @@ const {
 const { buildPrBody, pushAndOpenPR, resolveBranchRemote } = require("./dispatch-publish");
 const { EXECUTION_EVIDENCE_FILENAME } = require("./execution-evidence");
 const { parseModelHints } = require("./model-hints");
+const {
+  extractRubricSize,
+  resolveReasoningEffort,
+  RUBRIC_SIZE_MISSING,
+  RUBRIC_SIZE_UNPARSEABLE,
+} = require("./rubric-size");
 const { evaluateReviewGate } = require("../../relay-merge/scripts/review-gate");
 const { createEnforcementFixture } = require("./test-support");
 
@@ -3409,4 +3415,94 @@ test("dispatch pre-flight applies the legacy-grandfather retirement matrix", asy
       }
     });
   }
+});
+
+function writeRubricFixture(contents) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-rubric-size-"));
+  const rubricPath = path.join(dir, "rubric.yaml");
+  fs.writeFileSync(rubricPath, contents, "utf-8");
+  return rubricPath;
+}
+
+test("extractRubricSize accepts size and size_class at top-level and nested indentation", async (t) => {
+  const cases = [
+    { name: "top-level size:", input: "size: M\n", expected: "M" },
+    { name: "top-level size_class:", input: "size_class: M\n", expected: "M" },
+    { name: "nested rubric size:", input: "rubric:\n  size: M\n", expected: "M" },
+    { name: "nested rubric size_class:", input: "rubric:\n  size_class: M\n", expected: "M" },
+  ];
+
+  for (const entry of cases) {
+    await t.test(entry.name, () => {
+      const rubricPath = writeRubricFixture(entry.input);
+      assert.equal(extractRubricSize(rubricPath), entry.expected);
+    });
+  }
+});
+
+test("extractRubricSize returns exported sentinels for missing and unparseable size fields", () => {
+  const missingPath = writeRubricFixture("rubric:\n  criteria: []\n");
+  const unparseablePath = writeRubricFixture("rubric:\n  size: garbage\n");
+
+  assert.equal(extractRubricSize(missingPath), RUBRIC_SIZE_MISSING);
+  assert.equal(extractRubricSize(unparseablePath), RUBRIC_SIZE_UNPARSEABLE);
+  assert.notEqual(RUBRIC_SIZE_MISSING, RUBRIC_SIZE_UNPARSEABLE);
+});
+
+test("resolveReasoningEffort maps valid rubric size without stderr", () => {
+  const rubricPath = writeRubricFixture("rubric:\n  size_class: M\n");
+  const writes = [];
+  const originalWrite = process.stderr.write;
+  process.stderr.write = (chunk, ...rest) => {
+    writes.push(String(chunk));
+    return true;
+  };
+  try {
+    assert.equal(resolveReasoningEffort({ rubricPath }), "high");
+  } finally {
+    process.stderr.write = originalWrite;
+  }
+
+  assert.equal(writes.join(""), "");
+});
+
+test("resolveReasoningEffort falls back for missing rubric size without requiring a warning", () => {
+  const rubricPath = writeRubricFixture("rubric:\n  criteria: []\n");
+  assert.equal(resolveReasoningEffort({ rubricPath }), "xhigh");
+});
+
+test("resolveReasoningEffort warns and falls back for unparseable rubric size", () => {
+  const rubricPath = writeRubricFixture("rubric:\n  size: 42\n");
+  const writes = [];
+  const originalWrite = process.stderr.write;
+  process.stderr.write = (chunk, ...rest) => {
+    writes.push(String(chunk));
+    return true;
+  };
+  try {
+    assert.equal(resolveReasoningEffort({ rubricPath }), "xhigh");
+  } finally {
+    process.stderr.write = originalWrite;
+  }
+
+  const stderr = writes.join("");
+  assert.match(stderr, /unparseable|invalid/i);
+  assert.match(stderr, new RegExp(rubricPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+});
+
+test("resolveReasoningEffort override returns directly and silences unparseable warnings", () => {
+  const rubricPath = writeRubricFixture("rubric:\n  size: garbage\n");
+  const writes = [];
+  const originalWrite = process.stderr.write;
+  process.stderr.write = (chunk, ...rest) => {
+    writes.push(String(chunk));
+    return true;
+  };
+  try {
+    assert.equal(resolveReasoningEffort({ override: "medium", rubricPath }), "medium");
+  } finally {
+    process.stderr.write = originalWrite;
+  }
+
+  assert.equal(writes.join(""), "");
 });
