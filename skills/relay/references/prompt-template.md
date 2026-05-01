@@ -35,7 +35,7 @@ Use the same tier judgment questions everywhere:
 | Tier | Question | Placement | Examples |
 |------|----------|-----------|----------|
 | **Hygiene** | "Would this check apply to ANY PR in this repo?" | `prerequisites` | `npm test`, `tsc --noEmit`, `eslint` |
-| **Contract** | "Does this verify a SPECIFIC AC item is implemented?" | `factors` | endpoint returns paginated response, config includes new field |
+| **Contract** | "Does this verify a specific Done Criteria outcome is implemented?" | `factors` | endpoint returns paginated response, config includes new field |
 | **Quality** | "Does this probe HOW well it was designed/implemented?" | `factors` | error recovery strategy, abstraction boundaries, failure mode differentiation |
 
 **Contract = "is it there?"**  
@@ -48,7 +48,7 @@ rubric:
     - command: "[repo-wide hygiene check]"
       target: "exit 0"
   factors:
-    - name: "[specific AC implemented]"
+    - name: "[specific Done Criteria outcome]"
       tier: contract
       type: automated
       command: "[task-specific check]"

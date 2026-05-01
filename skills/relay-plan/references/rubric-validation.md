@@ -18,6 +18,18 @@ Before dispatch, verify:
 - [ ] Targets are concrete ("≥ 8/10", "< 200ms") not relative ("good", "fast")
 - [ ] Automated checks measure outcomes not proxies
 
+## Validate Done Criteria (full checklist)
+
+Before validating factor counts, verify the Done Criteria anchor itself:
+
+- [ ] Observable outcomes: each item describes a result a reviewer can inspect, run, or experience
+- [ ] Scope boundary: the anchor names what should change and, when useful, what should not change
+- [ ] Reviewability: each item maps to a file, command, user flow, API shape, event, or explicit inspection path
+- [ ] Risk coverage: trust boundaries, data loss, migrations, performance, UX failure states, and operational failure modes are either covered or explicitly out of scope
+- [ ] Verification path: at least one automated check or evaluated inspection path exists for the task
+
+If any Done Criteria check fails, revise or persist clearer planner-authored Done Criteria before dispatch.
+
 ## Factor count rules
 
 Prerequisites (hygiene): as many as needed, uncounted. Factors (contract + quality): no hard cap, warning at 8+.
@@ -156,5 +168,6 @@ Grade D means stop and revise the rubric first. Grade C means warn before dispat
 | `proxy_metric` | Automated checks measure effort or process instead of outcome |
 | `high_factor_count` | 8+ substantive factors |
 | `all_contract` | Zero quality coverage on a design-bearing task |
+| `weak_done_criteria` | Done Criteria are not observable, bounded, reviewable, risk-aware, or verifiable |
 
 Any check fails → revise. See `rubric-design-guide.md` for fix patterns.
