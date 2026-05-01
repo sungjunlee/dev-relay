@@ -40,8 +40,8 @@ When Step 0a is active, also append this sentence under the final self-review st
 BEFORE LOOP: Run baseline if defined. RULE: Do NOT modify automated check commands.
 LOOP (max 5 iterations):
   0. PREREQUISITE GATE: Run prerequisite checks. Any fails → fix before scoring factors.
-  1. Run automated factors and self-evaluate evaluated factors. Record evidence in the Score Log.
-  2. Fix the weakest required failing factor with one focused change. Do not modify rubric commands to make them pass.
+  1. Run automated factors and self-evaluate evaluated factors. Record evidence in the Score Log. Use 0-10 numbers for quality factors with numeric targets.
+  2. Fix the weakest required failing factor with one focused change. For below-target quality scores, optimize the lowest reviewer score without changing rubric commands.
   3. Re-run affected checks plus any previously passing factor that could regress.
   4. Stop only when all required factors meet target, self-review finds no stubs/TODOs/test shortcuts, and the final work is committed.
   5. If the same required factor is still failing after 3 focused attempts, stop with partial progress, evidence, and a clear stuck note.
@@ -49,7 +49,7 @@ LOOP (max 5 iterations):
 
 ## Score Log
 
-Executor appends one row per iteration to the PR description. Reviewer re-scores independently.
+Executor appends one row per iteration to the PR description. Reviewer re-scores independently. The runner stores reviewer numeric scores as first-class event data when available, then uses score trend to target re-dispatch.
 
 ```
 | Factor | Target | Baseline | Iter 1 | Iter 2 | Final | Status |
@@ -57,5 +57,7 @@ Executor appends one row per iteration to the PR description. Reviewer re-scores
 ```
 
 Status: `—` (not met), `pass`, `fail`, or `blocked`.
+
+Quality scores are optimization signals inside the normal review gate. Contract factors remain binary; quality factors can converge from `6/10 → 7.5/10 → 8/10` without adding new manifest states.
 
 For L/XL tasks with interfering factors, the planner may add stricter lock/oscillation guidance to the dispatch prompt. Do not add that machinery to S/M prompts by default.

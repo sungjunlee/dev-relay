@@ -196,6 +196,14 @@ function appendIterationScore(repoRoot, runId, { round, scores } = {}) {
     if (!ALLOWED_ITERATION_STATUSES.has(score.status)) {
       throw new Error(`${location}.status must be one of: pass, fail, not_run`);
     }
+    for (const key of ["score", "target_score"]) {
+      if (score[key] !== undefined && score[key] !== null && (typeof score[key] !== "number" || !Number.isFinite(score[key]))) {
+        throw new Error(`${location}.${key} must be a finite number or null`);
+      }
+      if (typeof score[key] === "number" && (score[key] < 0 || score[key] > 10)) {
+        throw new Error(`${location}.${key} must be between 0 and 10`);
+      }
+    }
   }
 
   ensureRunLayout(repoRoot, runId);
@@ -209,6 +217,8 @@ function appendIterationScore(repoRoot, runId, { round, scores } = {}) {
       factor: score.factor,
       target: score.target,
       observed: score.observed,
+      ...(typeof score.score === "number" && Number.isFinite(score.score) ? { score: score.score } : {}),
+      ...(typeof score.target_score === "number" && Number.isFinite(score.target_score) ? { target_score: score.target_score } : {}),
       met: score.met,
       status: score.status,
       ...(ALLOWED_SCORE_TIERS.has(score.tier) ? { tier: score.tier } : {}),

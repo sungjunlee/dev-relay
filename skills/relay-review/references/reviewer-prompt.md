@@ -74,7 +74,8 @@ Set `quality_review_status` by inspection only. The reviewer cannot execute code
 
 If a rubric is present:
 - score every contract-tier factor as pass/fail against the diff
-- score every quality-tier factor independently using its `scoring_guide`
+- score every quality-tier factor independently using its `scoring_guide`; when the target is numeric, include numeric `score` and `target_score` on the 0-10 scale
+- set numeric fields to `null` for factors that are not numeric
 - do not defer to executor self-scores
 
 Do not invent nitpicks. Style-only suggestions are not review findings.

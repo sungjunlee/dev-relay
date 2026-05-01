@@ -2,6 +2,7 @@ const fs = require("fs");
 const path = require("path");
 const { formatIssueList, formatScopeDrift } = require("./comment");
 const { formatPriorVerdictSummary } = require("./prompt");
+const { getRubricScoreNumber, getRubricTargetNumber } = require("./score-utils");
 
 const FLIP_STATES = new Set(["pass", "fail"]);
 const LINEAGE_VALUES = ["deepening", "repeat", "new", "newly_scoreable", "unknown"];
@@ -35,8 +36,13 @@ function buildRedispatchPrompt(verdict, doneCriteria, runDir, round, churnGrowth
     }
   }
 
+  const scoreTarget = buildScoreOptimizationTarget(verdict, runDir, round);
+  if (scoreTarget) {
+    sections.push("", scoreTarget);
+  }
+
   if (churnGrowth) {
-      sections.push(
+    sections.push(
       "",
       `WARNING: Diff has grown for 3+ consecutive rounds (${churnGrowth.prevPrevLines} → ${churnGrowth.prevLines} → ${churnGrowth.curLines} lines).`,
       "Apply minimal, targeted fixes only. Do not refactor, reorganize, or add code beyond what the issues require."
@@ -52,6 +58,81 @@ function buildRedispatchPrompt(verdict, doneCriteria, runDir, round, churnGrowth
   );
 
   return sections.join("\n");
+}
+
+function formatScoreValue(value) {
+  return Number.isInteger(value) ? String(value) : String(Number(value.toFixed(2)));
+}
+
+function qualityScoreGap(score) {
+  if (score?.tier !== "quality") return null;
+  const numericScore = getRubricScoreNumber(score);
+  const targetScore = getRubricTargetNumber(score);
+  if (numericScore === null || targetScore === null || numericScore >= targetScore) return null;
+  return {
+    factor: score.factor,
+    score: numericScore,
+    target_score: targetScore,
+    gap: Number((targetScore - numericScore).toFixed(4)),
+    notes: String(score.notes || "").trim(),
+  };
+}
+
+function findWeakestBelowTargetQualityScore(verdict) {
+  const candidates = (Array.isArray(verdict?.rubric_scores) ? verdict.rubric_scores : [])
+    .map(qualityScoreGap)
+    .filter(Boolean);
+  if (candidates.length === 0) return null;
+  return candidates.sort((left, right) => {
+    if (right.gap !== left.gap) return right.gap - left.gap;
+    return left.score - right.score;
+  })[0];
+}
+
+function buildScoreTrend(runDir, round, factor, currentScore) {
+  const entries = [];
+  if (runDir && round > 1) {
+    const priorEntries = [];
+    scanPriorVerdicts(runDir, round, (prior, priorRound) => priorEntries.push({ verdict: prior, round: priorRound }));
+    priorEntries.reverse().forEach(({ verdict: prior, round: priorRound }) => {
+      const match = (Array.isArray(prior?.rubric_scores) ? prior.rubric_scores : [])
+        .find((score) => normalizeFingerprintPart(score.factor) === normalizeFingerprintPart(factor));
+      const numericScore = getRubricScoreNumber(match);
+      if (numericScore !== null) {
+        entries.push({ round: priorRound, score: numericScore });
+      }
+    });
+  }
+  entries.push({ round, score: currentScore });
+  return entries;
+}
+
+function isFlatScoreTrend(trend) {
+  if (!Array.isArray(trend) || trend.length < 3) return false;
+  const recent = trend.slice(-3).map((entry) => entry.score);
+  return Math.max(...recent) - Math.min(...recent) <= 0.5;
+}
+
+function buildScoreOptimizationTarget(verdict, runDir, round) {
+  const weakest = findWeakestBelowTargetQualityScore(verdict);
+  if (!weakest) return "";
+  const trend = buildScoreTrend(runDir, round, weakest.factor, weakest.score);
+  const lines = [
+    "Score optimization target:",
+    `- Weakest below-target quality factor: ${weakest.factor}`,
+    `- Reviewer score: ${formatScoreValue(weakest.score)}/10 (target ${formatScoreValue(weakest.target_score)}/10, gap ${formatScoreValue(weakest.gap)})`,
+  ];
+  if (trend.length > 1) {
+    lines.push(`- Score trend: ${trend.map((entry) => `round ${entry.round}: ${formatScoreValue(entry.score)}`).join(" → ")}`);
+  }
+  if (weakest.notes) {
+    lines.push(`- Reviewer notes: ${weakest.notes}`);
+  }
+  if (isFlatScoreTrend(trend)) {
+    lines.push("- Stagnation signal: score has moved by <= 0.5 over the last 3 rounds. Refine the approach if the fix is obvious; otherwise pivot the implementation approach without expanding scope.");
+  }
+  lines.push("- Improve this factor without regressing already passing contract or quality factors.");
+  return lines.join("\n");
 }
 
 function detectChurnGrowth(runDir, round) {
@@ -253,12 +334,14 @@ function buildRubricGateRedispatchPrompt(gateFailure, doneCriteria, doneCriteria
 
 module.exports = {
   buildRedispatchPrompt,
+  buildScoreOptimizationTarget,
   buildRubricGateRedispatchPrompt,
   computeFactorStatusFlips,
   computeRepeatedIssueCount,
   decideFlipFlopEscalation,
   detectChurnGrowth,
   fingerprintIssue,
+  findWeakestBelowTargetQualityScore,
   normalizeFingerprintPart,
   readPriorVerdicts,
   scanPriorVerdicts,

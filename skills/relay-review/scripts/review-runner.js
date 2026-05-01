@@ -21,9 +21,9 @@ const {
   resolveRemoteHost,
 } = require("./review-runner/context");
 const { buildPrompt, formatPriorVerdictSummary } = require("./review-runner/prompt");
-const { ALLOWED_SCORE_TIERS, parseReviewVerdict, validateReviewVerdict, validateScopeDrift } = require("./review-runner/verdict");
+const { parseReviewVerdict, validateReviewVerdict, validateScopeDrift } = require("./review-runner/verdict");
 const { buildCommentBody, formatIssueList, formatScopeDrift, postComment } = require("./review-runner/comment");
-const { buildScoreDivergenceAnalysis, loadPrBody, parseScoreLog } = require("./review-runner/divergence");
+const { buildScoreDivergenceAnalysis, loadPrBody, parseScoreLog, toIterationScoreEventEntry } = require("./review-runner/divergence");
 const { applyQualityExecutionStatus, buildExecutionEvidenceFailureVerdict, buildMissingExecutionEvidenceVerdict, computeQualityExecutionStatus } = require("./review-runner/execution-evidence");
 const {
   buildRedispatchPrompt,
@@ -351,14 +351,7 @@ function run() {
   if (Array.isArray(verdict.rubric_scores) && verdict.rubric_scores.length > 0) {
     appendIterationScore(runRepoPath, data.run_id, {
       round,
-      scores: verdict.rubric_scores.map((score) => ({
-        factor: score.factor,
-        target: score.target,
-        observed: score.observed,
-        met: score.status === "pass",
-        status: score.status,
-        ...(ALLOWED_SCORE_TIERS.has(score.tier) ? { tier: score.tier } : {}),
-      })),
+      scores: verdict.rubric_scores.map(toIterationScoreEventEntry),
     });
   }
   if (divergencePayload.length > 0) {

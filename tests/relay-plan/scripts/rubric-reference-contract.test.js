@@ -51,6 +51,8 @@ test("rubric design guide states the reference use contract", () => {
   assert.match(text, /Acceptance Criteria \(AC\) are high-priority evidence, not the only source/);
   assert.match(text, /inferred Done Criteria/);
   assert.match(text, /fix_hint.*historical plateaus or non-obvious score transitions/);
+  assert.match(text, /Reviewer verdicts record numeric quality scores separately from pass\/fail state/);
+  assert.match(text, /score: 7\.5, target_score: 8/);
 });
 
 test("rubric validation preserves the S mechanical quality-card example", () => {
@@ -107,6 +109,16 @@ test("rubric validation gates Done Criteria quality before dispatch", () => {
   assert.match(text, /Risk coverage/);
   assert.match(text, /Verification path/);
   assert.match(text, /weak_done_criteria/);
+});
+
+test("iteration protocol treats quality scores as optimization signals", () => {
+  const text = readReference("iteration-protocol.md");
+
+  assert.match(text, /Use 0-10 numbers for quality factors with numeric targets/);
+  assert.match(text, /optimize the lowest reviewer score/);
+  assert.match(text, /first-class event data/);
+  assert.match(text, /quality factors can converge from `6\/10 → 7\.5\/10 → 8\/10`/);
+  assert.match(text, /without adding new manifest states/);
 });
 
 test("relay dispatch template and wrapper use Done Criteria outcome language", () => {
