@@ -97,18 +97,7 @@ Before persisting the draft rubric, apply the 6 heuristics in `references/rubric
 
 Apply to all task sizes: rewrite HOW into observable WHAT, merge overlaps, remove unsupported defensive clauses, and verify weights.
 
-### 7. Optional isolated planner draft
-
-For standalone opt-in planner isolation, generate draft artifacts without changing the default `/relay` flow:
-
-```bash
-node ${CLAUDE_SKILL_DIR}/scripts/plan-runner.js \
-  --issue 42 --planner codex --repo . --out-dir /tmp/relay-plan-42 --json
-```
-
-This writes `rubric.yaml`, `dispatch-prompt.md`, and `planner-notes.md`. The orchestrator reviews and may edit before dispatch.
-
-### 8. Persisting Phase 1 deviations as anchor
+### 7. Persisting Phase 1 deviations as anchor
 
 Use this when operator planning rejects or narrows the issue body AC. Persist the operator-authored Phase 1 decision before dispatch so fresh-context review uses the same scope anchor.
 
@@ -118,17 +107,17 @@ Use this when operator planning rejects or narrows the issue body AC. Persist th
 
 The helper writes `~/.relay/runs/<repo-slug>/<run-id>/done-criteria.md` with source `planner_decision`. Dispatch picks it up via `--done-criteria-file` when the same run id is used. Canonical filename is always `done-criteria.md`; ad-hoc file paths remain source `file`.
 
-### 9. Review the rubric (triggered L/XL tasks)
+### 8. Review the rubric (triggered L/XL tasks)
 
 S/M skips. Run stress-test only for L/XL rubrics with evaluated factors and an ambiguity/risk signal. XL adds calibration simulation only when novel or subjective evaluated factors need it. Skip re-dispatches with iteration history, all-automated rubrics, and simple L tasks where AC maps cleanly to checks. Protocol: `references/rubric-stress-test.md`.
 
-### 10. Generate dispatch prompt
+### 9. Generate dispatch prompt
 
 Take the base template (`../relay/references/prompt-template.md`) and append Setup, Scoring Rubric, Iteration Protocol, and Score Log sections. Insert the optional Step 0a block from `references/iteration-protocol.md` iff any factor has a non-empty `tdd_anchor`; when no factor has `tdd_anchor`, keep the emitted prompt identical to the pre-TDD baseline.
 
 Full iteration-protocol text + Score Log format: `references/iteration-protocol.md`.
 
-### 11. Dispatch
+### 10. Dispatch
 
 Write the rubric YAML to a temp file alongside the dispatch prompt. Every relay dispatch must pass `--rubric-file` so the rubric is persisted at `anchor.rubric_path` for review and merge gates.
 

@@ -61,12 +61,9 @@ an operator CLI, adapter entry point, or archived measurement tool.
 |--------|----------|----------|------------------|
 | `scripts/probe-executor-env.js` | Runtime entry point / signal producer | `/relay-plan` step 3 invokes it. | Keep. |
 | `scripts/persist-done-criteria.js` | Runtime entry point | `/relay-plan` uses it to persist Phase 1 deviations. | Keep. |
-| `scripts/plan-runner.js` | Decision needed | Optional isolated planner; not default relay flow. | Decide whether isolated planning is a supported product surface. If no, remove with `invoke-planner-*` and `cli-schema` entries. |
-| `scripts/invoke-planner-codex.js` | Adapter entry point / decision needed | Used only by `plan-runner.js`. | Keep only if `plan-runner.js` stays. |
-| `scripts/invoke-planner-claude.js` | Adapter entry point / decision needed | Used only by `plan-runner.js`. | Keep only if `plan-runner.js` stays. |
-| `scripts/tdd-flavor.js` | Shared helper | Imported by `reliability-report.js`, `sprint-close-report.js`, `plan-runner.js`, and `tdd-suggestion.js`. | Keep. Consider renaming to a rubric parser/renderer name because it is no longer plan-runner-only. |
+| `scripts/tdd-flavor.js` | Shared helper | Imported by `reliability-report.js`, `sprint-close-report.js`, and `tdd-suggestion.js`. | Keep. Consider renaming to a rubric parser/renderer name because it is shared outside the planner flow. |
 | `scripts/tdd-suggestion.js` | Decision needed | Mentioned by `SKILL.md` and TDD reference, but not wired into the default planner flow. | Either wire it into `/relay-plan` output or fold the heuristic into `rubric-pattern-tdd-flavor.md`. |
-| `scripts/reliability-report-consumer.js` | Decision needed | Tested and documented, but current `SKILL.md` reads raw producer output. | Either make `/relay-plan` or `plan-runner.js` consume it, or retire the helper and keep the contract in docs. |
+| `scripts/reliability-report-consumer.js` | Decision needed | Tested and documented, but current `SKILL.md` reads raw producer output. | Either make `/relay-plan` consume it, or retire the helper and keep the contract in docs. |
 | `scripts/probe-executor-env-consumer.js` | Decision needed | Same shape as reliability consumer. | Same decision: wire into flow or retire. |
 
 ### Relay Review
@@ -95,10 +92,9 @@ an operator CLI, adapter entry point, or archived measurement tool.
 ## Cleanup Order
 
 1. **Documented no-op pass:** keep this inventory current and add missing workflow references for tools that are intentionally public.
-2. **Plan-runner decision:** either promote isolated planning as a supported flow or remove `plan-runner.js`, `invoke-planner-*`, and related CLI schema entries together.
-3. **Consumer helper decision:** choose one signal-consumption path. Do not keep tested consumer helpers that no runtime flow calls.
-4. **Archived measurement move:** move one-off measurement tools out of packaged `skills/` unless they remain public operator commands.
-5. **Test-support move:** move test-only helpers under `tests/` when they do not need runtime package access.
+2. **Consumer helper decision:** choose one signal-consumption path. Do not keep tested consumer helpers that no runtime flow calls.
+3. **Archived measurement move:** move one-off measurement tools out of packaged `skills/` unless they remain public operator commands.
+4. **Test-support move:** move test-only helpers under `tests/` when they do not need runtime package access.
 
 Each cleanup PR should touch one category at a time. For every deleted or moved script,
 run:
@@ -116,7 +112,8 @@ node --test tests/relay-dispatch/scripts/cli-schema.test.js
 
 ## Decision Notes
 
-- `tdd-flavor.js` is a shared rubric helper despite its narrow name. Do not delete it as part of `plan-runner` cleanup.
+- `plan-runner.js` and its `invoke-planner-*` adapters were retired from the runtime skill package because isolated planning was optional and duplicated the human-in-the-loop `/relay-plan` flow.
+- `tdd-flavor.js` is a shared rubric helper despite its narrow name. It remains after `plan-runner` cleanup.
 - `sprint-close-report.js` is not dead code just because it lacks runtime imports. It landed as a report-only operator utility and needs a workflow reference or explicit archival decision.
 - `update-manifest-state.js` overlaps with `recover-state.js`, but overlap is not proof of dead code. It needs a deprecation decision because it remains in the public CLI schema.
 - `analyze-flip-flop-pattern.js` has the highest install-weight question: it is large, evidence-oriented, and registered as a command. Decide whether reproducibility belongs in the runtime skill package.
