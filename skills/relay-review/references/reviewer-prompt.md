@@ -91,6 +91,8 @@ If any item is NOT_DONE or CHANGED, verdict cannot be pass. PARTIAL items requir
 
 ### Lineage labeling
 
+Use `review-lineage.md` as the grammar reference for repeated-round findings.
+
 For every entry in `issues[]`, populate `lineage`; populate `relates_to` whenever a prior issue or factor exists.
 
 Use `lineage: "new"` when this is a first-time finding with no prior-round ancestor; omit `relates_to` unless a specific prior note helps.

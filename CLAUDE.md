@@ -48,6 +48,8 @@ skills/
       invoke-reviewer-claude.js ← Claude reviewer adapter
     references/
       evaluate-criteria.md
+      review-lineage.md
+      runner-notes.md
       reviewer-prompt.md
   relay-merge/             ← Merge + cleanup + sprint file update
     scripts/
