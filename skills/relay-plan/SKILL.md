@@ -90,6 +90,10 @@ Consult `references/rubric-*.md` for frontend, backend, security, refactoring, d
 
 If the task crosses an auth boundary (trust root, anchor, invariant, validate, forge, bypass, gate-check, auth-boundary, or `validateTransition*` / `validateManifest*` / `evaluateReviewGate`), follow `references/rubric-trust-model.md`. Each question becomes a named factor. Record answers under `### Trust-model audit` in the PR body before dispatch.
 
+### Fail-closed pattern library
+
+If the task touches relay gates, resolver selectors, recovery paths, audit stamps, or lock/deadline fallthrough behavior, apply `references/rubric-fail-closed-patterns.md`. Use it to split visible warnings from blocking enforcement and to enumerate sibling states, selectors, call sites, and downstream consumers.
+
 ### 6. Validate the rubric
 
 Quick gate before dispatch:

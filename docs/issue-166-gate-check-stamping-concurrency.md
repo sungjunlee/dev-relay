@@ -6,7 +6,7 @@
 
 ## Pattern-Break Rationale
 
-This is a concurrency-containment fix within the write-once event contract introduced by `#149` first-resolution stamping. No new ladder rung is added: the work stays inside `gate-check.js`, reuses the existing manifest atomic write primitive, and applies the already-established rubric-authoring rules around enforcement-layer splits and call-site enumeration. No new meta-rule surfaces here; `memory/feedback_rubric_fail_closed.md` is not extended by this PR.
+This is a concurrency-containment fix within the write-once event contract introduced by `#149` first-resolution stamping. No new ladder rung is added: the work stays inside `gate-check.js`, reuses the existing manifest atomic write primitive, and applies the already-established rubric-authoring rules around enforcement-layer splits and call-site enumeration. No new meta-rule surfaces here; `docs/rubric-fail-closed-history.md` is not extended by this PR.
 
 ## Rules Applied
 

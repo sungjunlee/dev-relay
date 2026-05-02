@@ -62,6 +62,7 @@ npx skills add . -g -y
 </details>
 
 Working from a repo checkout without installing skills? See [docs/direct-read-relay-operator-note.md](docs/direct-read-relay-operator-note.md).
+For repo-local design notes, issue evidence, and documentation retention rules, see [docs/README.md](docs/README.md).
 
 ### Prerequisites
 

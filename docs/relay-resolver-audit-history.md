@@ -4,9 +4,9 @@ This file carries the resolver's iteration history, selector audit table, and is
 
 ## Selector x Call-Site Audit Table
 
-Call-site extension meta-rule: when fixing one selector call site, audit every other call site of that selector in the same PR (iteration-4 scope-boundary trap note, `memory/feedback_rubric_fail_closed.md`; closes the `#149 -> #165 -> #168 -> #170` ladder).
+Call-site extension meta-rule: when fixing one selector call site, audit every other call site of that selector in the same PR (iteration-4 scope-boundary trap note, `docs/rubric-fail-closed-history.md`; closes the `#149 -> #165 -> #168 -> #170` ladder).
 
-Fail-closed state-validation meta-rule 7 (`memory/feedback_rubric_fail_closed.md`): every EXCLUSION site that filters by state must gate on a whitelist derived from `STATES`, not on negation of the terminal blacklist.
+Fail-closed state-validation meta-rule 7 (`docs/rubric-fail-closed-history.md`): every EXCLUSION site that filters by state must gate on a whitelist derived from `STATES`, not on negation of the terminal blacklist.
 
 | Selector | Call site (line) | State-awareness verdict | Closed by |
 | --- | --- | --- | --- |
@@ -37,7 +37,7 @@ See `docs/issue-177-fail-closed-state-validation.md` for consumer audit, grep pr
 
 ### `filterOutTerminal`
 
-> [fail-closed whitelist] meta-rule 7 (`memory/feedback_rubric_fail_closed.md`): unknown/tampered
+> [fail-closed whitelist] meta-rule 7 (`docs/rubric-fail-closed-history.md`): unknown/tampered
 > states fail-closed via the derived KNOWN_NON_TERMINAL_STATES whitelist rather than fail-open via
 > negation of BRANCH_ONLY_TERMINAL_STATES. Called at the standalone --pr default site (#174/#177).
 
@@ -47,7 +47,7 @@ See `docs/issue-177-fail-closed-state-validation.md` for consumer audit, grep pr
 > 7 resolveManifestRecord call sites plus 1 helper-composition call site in this file.
 > Callers must opt in for stale-inheritance-sensitive paths; standalone branch-only resolution does.
 
-> #149 introduced terminal exclusion; #177 meta-rule 7 (`memory/feedback_rubric_fail_closed.md`)
+> #149 introduced terminal exclusion; #177 meta-rule 7 (`docs/rubric-fail-closed-history.md`)
 > converts the predicate from terminal-blacklist negation (fail-open on unknown)
 > to !isNonTerminalState(state) (fail-closed on unknown/tampered state values). Escalated stays
 > eligible because operators can recover by closing and re-dispatching (#163); only known
@@ -69,7 +69,7 @@ See `docs/issue-177-fail-closed-state-validation.md` for consumer audit, grep pr
 
 ### `isStaleNullPrSibling`
 
-> [fail-closed classifier] meta-rule 7 (`memory/feedback_rubric_fail_closed.md`): uses the derived
+> [fail-closed classifier] meta-rule 7 (`docs/rubric-fail-closed-history.md`): uses the derived
 > KNOWN_NON_TERMINAL_STATES whitelist as defense-in-depth. In normal flow this classifier only
 > receives records from nonTerminalBranchMatches (already whitelist-filtered via filterByBranch),
 > but tightening keeps the classifier safe if a future caller feeds it an unfiltered set.
@@ -81,7 +81,7 @@ See `docs/issue-177-fail-closed-state-validation.md` for consumer audit, grep pr
 > pre-#168 predicate. Treat every such state the same way so recovery messaging is uniform
 > across escalated / review_pending / changes_requested / ready_to_merge. Generalizes the prior
 > escalated-only helper per the state-machine-axis whitelist meta-rule from
-> memory/feedback_rubric_fail_closed.md.
+> docs/rubric-fail-closed-history.md.
 
 ### `buildStaleBranchFallbackRecoveryMessage`
 
@@ -112,7 +112,7 @@ See `docs/issue-177-fail-closed-state-validation.md` for consumer audit, grep pr
 
 > #170: compose the PR selector with the non-terminal branch subset so stale merged/closed
 > manifests with stored pr_number === prNumber cannot shadow a fresh dispatched+null run.
-> Selector-composition axis enumeration meta-rule (`memory/feedback_rubric_fail_closed.md`):
+> Selector-composition axis enumeration meta-rule (`docs/rubric-fail-closed-history.md`):
 > the state-machine axis is a property of EVERY resolver selector; #149 closed it for the
 > branch selector, #168 for the dispatched-only fallback helper, and this commit closes it for
 > the exact-PR selector at this composition site. branchMatches stays bound for the preserved
@@ -136,7 +136,7 @@ See `docs/issue-177-fail-closed-state-validation.md` for consumer audit, grep pr
 > #177 converted every EXCLUSION site to the KNOWN_NON_TERMINAL_STATES whitelist but
 > INTENTIONALLY preserves blacklist semantics HERE because the predicate asks "which branch
 > matches are KNOWN terminal states?" for positive detection, not for exclusion
-> (`memory/feedback_rubric_fail_closed.md`, meta-rule 7). A tampered `bogus` state is NOT a
+> (`docs/rubric-fail-closed-history.md`, meta-rule 7). A tampered `bogus` state is NOT a
 > terminal sibling and correctly stays out of terminalExactPrMatches; do NOT flip to
 > whitelist here — the mixed-state detector would then misfire on unknown states and mask
 > the fail-closed contract at the EXCLUSION sites.

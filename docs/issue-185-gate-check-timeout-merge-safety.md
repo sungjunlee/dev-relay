@@ -10,11 +10,11 @@ The fix keeps the audit-trail side of `#166` unchanged but splits the timeout po
 
 `#166` already applied meta-rule 1 to the happy-path enforcement layers: layer A serialized the first-resolution stamp, and layer B deduped the audit event. `#185` applies that same rule recursively to the timeout fallthrough itself, because the timeout branch feeds two different downstream consumers with different safety requirements.
 
-Memory rule 8 is mirrored below in full, and the complete 8-rule feedback file is committed at `memory/feedback_rubric_fail_closed.md` in this repo. The in-repo file is the authoritative tracked mirror; the orchestrator session keeps an equivalent persistent copy at `~/.claude/projects/-Users-sjlee-workspace-active-harness-stack-dev-relay/memory/feedback_rubric_fail_closed.md` as its session index. The two copies are kept in sync whenever a new rule is authored.
+Memory rule 8 is mirrored below in full, and the complete 8-rule feedback file is committed at `docs/rubric-fail-closed-history.md` in this repo. The in-repo file is the tracked history; the orchestrator session kept an equivalent persistent copy at `~/.claude/projects/-Users-sjlee-workspace-active-harness-stack-dev-relay/memory/feedback_rubric_fail_closed.md` as its session index at the time this issue was authored.
 
 ## Memory Rule 8 — Full Text (mirrored from orchestrator memory)
 
-The full 8-rule feedback file is committed at `memory/feedback_rubric_fail_closed.md` at the repo root; an equivalent persistent copy lives in orchestrator-local memory at `~/.claude/projects/-Users-sjlee-workspace-active-harness-stack-dev-relay/memory/feedback_rubric_fail_closed.md` as the session index. The two copies are equivalent; future rules are authored into both at once. The rule 8 text is mirrored here so the lesson is discoverable directly from this issue mirror without leaving the docs tree.
+The full 8-rule feedback file is committed at `docs/rubric-fail-closed-history.md` at the repo root; an equivalent persistent copy lived in orchestrator-local memory at `~/.claude/projects/-Users-sjlee-workspace-active-harness-stack-dev-relay/memory/feedback_rubric_fail_closed.md` as the session index when this issue was authored. The rule 8 text is mirrored here so the lesson is discoverable directly from this issue mirror without leaving the docs tree.
 
 **Timeout / contention-fallthrough policy split (2026-04-15, from codex post-merge challenge of merged #166/PR #184/`c450588`, probe 4):** lock or contention-fallthrough paths inside a multi-layer invariant must split their TIMEOUT POLICY by enforcement layer too — not just their happy-path logic. A unified "fail-safe on timeout" clause at the outer layer masks fail-safety breaks at the downstream gate.
 
@@ -28,7 +28,7 @@ The full 8-rule feedback file is committed at `memory/feedback_rubric_fail_close
 - Rule 3: end-to-end recovery is exercised with a real `gate-check.js` child process that fails on a stale lock, then succeeds after the operator clears the file.
 - Rule 5: the cross-iteration STOP mechanism is the surfacing path here; this PR is the direct response to the HIGH class found after `#166` merged.
 - Rule 7: the merge-gate invariant is fail-closed while the audit-trail invariant remains fail-safe, because the two consumers are not allowed to share one policy.
-- Rule 8: timeout and contention fallthrough must be evaluated per downstream consumer, not per branch alone; the rule text is included in this round's evidence, and the full 8-rule file is committed at `memory/feedback_rubric_fail_closed.md` so the lesson ships inside the PR bundle.
+- Rule 8: timeout and contention fallthrough must be evaluated per downstream consumer, not per branch alone; the rule text is included in this round's evidence, and the full 8-rule file is committed at `docs/rubric-fail-closed-history.md` so the lesson ships inside the PR bundle.
 
 ## Fail-Safe-Vs-Fail-Closed Split
 
@@ -78,7 +78,7 @@ $ grep -n "^const .* = require" skills/relay-merge/scripts/gate-check.js
 $ git diff --name-only c450588..HEAD
 docs/issue-166-gate-check-stamping-concurrency.md
 docs/issue-185-gate-check-timeout-merge-safety.md
-memory/feedback_rubric_fail_closed.md
+docs/rubric-fail-closed-history.md
 skills/relay-merge/scripts/gate-check.js
 tests/relay-merge/scripts/gate-check.test.js
 ```
