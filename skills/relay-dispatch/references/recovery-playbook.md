@@ -61,7 +61,7 @@ The script refuses transitions `ALLOWED_TRANSITIONS` already supports — always
 
 ### Recovery command boundaries
 
-Use `rebrand-evidence` when the orchestrator already made a correction commit on the run branch and the only stale artifact is `execution-evidence.json`. It rebinds the existing evidence to the current branch HEAD and appends an `execution_evidence_rebranded` event; it does not commit, push, open a PR, or change manifest state. Use `recover-commit` when executor work still needs the missing commit/push/PR handoff. Use `finalize-run --force-finalize-nonready` only when an operator intentionally finalizes a non-ready run despite the review gate; it is not an evidence repair tool.
+Decision tree: if the executor finished implementation but did not commit, use `recover-commit.js`; it handles commit, push, PR publication/stamping, and evidence rebrand atomically. If the orchestrator hand-edited fixes after R1, the evidence is still bound to the dispatch SHA, and review at HEAD substantively PASSed, run `rebrand-evidence.js --run-id <id> --reason "..."`, then `finalize-run.js --run-id <id> --force-finalize-nonready --reason "stale-execution-evidence: orchestrator-correction"`. If the reviewer state machine refuses to re-trigger on the same SHA and no commit is needed, skip evidence repair and use `finalize-run.js --run-id <id> --force-finalize-nonready --reason "..."` directly.
 
 Use `recover-commit.js` when the executor changed files but did not commit, push, or create/stamp a PR. It creates the missing commit/PR handoff and leaves the manifest in `review_pending`.
 
