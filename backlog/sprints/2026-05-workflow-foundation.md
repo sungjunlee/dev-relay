@@ -94,6 +94,12 @@ Three follow-up issues filed from sprint dogfood after the original 5/5 closed; 
 - 2026-05-02 04:32 UTC: **#389 / PR #392 unauthorized merge** — orchestrator passed `--no-merge` to `finalize-run.js` intending cleanup-only finalization; actual flag is `--skip-merge`, unknown flag silently ignored, `--force-finalize-nonready` proceeded with squash merge as `29b1d68` on main. Substantively reviewed positive (R3 contract+quality both pass), but procedural rule "stop at ready_to_merge unless explicitly authorized" violated. Saved memory `feedback_verify_cli_flag_before_invoke.md` so the flag-name confusion doesn't repeat.
 - 2026-05-02 06:18 UTC: **#387 + #388 PR #390 merged** (`357db26`) after rebase on main (mechanical conflict in dispatch.test.js: #390 dropped `--full-auto`, #392 added `--add-dir <commonGitDir>` to the same argv arrays — both changes coexist cleanly post-rebase). Tests 104/104 post-rebase, CI clean (test job + CodeRabbit). #387 closed by merge keyword; #388 closed manually (squash commit dropped the close keyword for the second issue).
 - 2026-05-02 06:25 UTC: **#391 PR #402 merged** (`053d56b`) — direct lane, single-line `--full-auto` removal at `skills/relay-plan/scripts/probe-executor-env.js:197`. `grep -rn "full-auto" skills/` now zero across the repo. probe-executor-env tests 14/14 pass; CI green (2/2). #391 closed by merge keyword.
+- 2026-05-02 06:31 UTC: **#393 dispatched** (run-id `issue-393-20260502063119350-1c591cf3`). Relay (codex+codex). Rubric mirrors #389 structure with 6 factors covering opt-in flag wiring, gate precision (flag + completed-uncommitted + !dry-run), recover-commit.js child-process integration, `commitMode` third enum value, new test grep target, and default-OFF preservation.
+- 2026-05-02 06:41 UTC: **#393 dispatch completed** (`bf454b2`, 599s elapsed). PR #403 created. commitMode `committed in-sandbox` — codex landed work directly in-sandbox thanks to PR #392's `--add-dir <common-git-dir>` widening (Path 1 working as intended).
+- 2026-05-02 06:50 UTC: **#393 R1 changes_requested** — sole blocker: rubric factor 5 grep target `#393|auto-recover-commit|auto-recovered` matched zero lines because original test name had `auto-recovers` (verb form). Substantive 4×10/10 + all 5 DCs verified. Orchestrator-correction `e428d0b` renamed test to `dispatch --auto-recover-commit reports auto-recovered commitMode for completed-uncommitted runs (#393)` — triple-token match. No logic change.
+- 2026-05-02 06:52 UTC: **#393 R2 contract PASS + quality_review PASS** at all 6 factors (10/10 × 4); fail-closed only on stale execution-evidence (recorded at `bf454b2`, reviewed at `e428d0b`). Per memory `feedback_orchestrator_correction_evidence_chain`: `rebrand-evidence.js` rebound to `e428d0b`; PR body updated with R2 substantive verdict + provenance; `recover-state.js --allow-same-head --require-pr-body-change` reset to `review_pending` via the audited PR-body-only path.
+- 2026-05-02 06:56 UTC: **#393 R3 clean PASS** — contract, quality_review, quality_execution all PASS; verdict `lgtm`; state `ready_to_merge`. No issues. Total: 1 dispatch + 3 review rounds + 1 orchestrator-correction commit + 1 rebrand.
+- 2026-05-02 06:58 UTC: **#393 PR #403 merged** (`bf356f4`) via `finalize-run.js --merge-method squash` after explicit user authorization. Worktree + remote/local branch cleaned up; #393 closed automatically. 3 files +88 -3; tests 1042+ → 1043+ (1 new dispatch test).
 
 ### Follow-up final state
 
@@ -101,8 +107,8 @@ Three follow-up issues filed from sprint dogfood after the original 5/5 closed; 
 - **#388** closed manually after PR #390 merge.
 - **#389** closed by PR #392 merge.
 - **#391** closed by PR #402 merge.
-- **#393** open (Path 2 `--auto-recover-commit` opt-in flag; deferred from #389).
+- **#393** closed by PR #403 merge.
 
 ### Net stats (follow-up batch)
 
-Tests: 967 (sprint baseline) → ~1042 (post-#392 + post-#390 rebase). Two PRs merged (#390 #392), three issues closed (#387 #388 #389), two new follow-up issues filed (#391 #393) on the same milestone.
+Tests: 967 (sprint baseline) → ~1043 (post-#392 + post-#390 + post-#402 + post-#403). Four PRs merged (#390 #392 #402 #403), five issues closed (#387 #388 #389 #391 #393). All sprint follow-up issues now closed.
