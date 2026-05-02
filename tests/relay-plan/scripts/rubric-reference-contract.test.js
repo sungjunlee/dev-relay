@@ -127,6 +127,8 @@ test("relay dispatch template and wrapper use Done Criteria outcome language", (
 
   assert.match(template, /specific Done Criteria outcome is implemented/);
   assert.match(template, /\[specific Done Criteria outcome\]/);
+  assert.match(template, /## Completion Audit/);
+  assert.match(template, /proxy signal/i);
   assert.doesNotMatch(template, /specific AC (item|implemented)/i);
 
   assert.match(relaySkill, /Task evidence/);
