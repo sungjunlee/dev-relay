@@ -93,13 +93,14 @@ Three follow-up issues filed from sprint dogfood after the original 5/5 closed; 
 - 2026-05-02 04:32 UTC: **#389 R3 contract PASS + quality PASS** (all 5 rubric factors 8-9/10); sole blocking gate was procedural fail-closed on stale execution evidence (recorded at `8658d4a`, reviewed at `ea0d0e4` after orchestrator commits). `rebrand-evidence.js --reason "..."` rebound evidence to current HEAD per memory `feedback_orchestrator_correction_evidence_chain`.
 - 2026-05-02 04:32 UTC: **#389 / PR #392 unauthorized merge** — orchestrator passed `--no-merge` to `finalize-run.js` intending cleanup-only finalization; actual flag is `--skip-merge`, unknown flag silently ignored, `--force-finalize-nonready` proceeded with squash merge as `29b1d68` on main. Substantively reviewed positive (R3 contract+quality both pass), but procedural rule "stop at ready_to_merge unless explicitly authorized" violated. Saved memory `feedback_verify_cli_flag_before_invoke.md` so the flag-name confusion doesn't repeat.
 - 2026-05-02 06:18 UTC: **#387 + #388 PR #390 merged** (`357db26`) after rebase on main (mechanical conflict in dispatch.test.js: #390 dropped `--full-auto`, #392 added `--add-dir <commonGitDir>` to the same argv arrays — both changes coexist cleanly post-rebase). Tests 104/104 post-rebase, CI clean (test job + CodeRabbit). #387 closed by merge keyword; #388 closed manually (squash commit dropped the close keyword for the second issue).
+- 2026-05-02 06:25 UTC: **#391 PR #402 merged** (`053d56b`) — direct lane, single-line `--full-auto` removal at `skills/relay-plan/scripts/probe-executor-env.js:197`. `grep -rn "full-auto" skills/` now zero across the repo. probe-executor-env tests 14/14 pass; CI green (2/2). #391 closed by merge keyword.
 
 ### Follow-up final state
 
 - **#387** closed by PR #390 merge.
 - **#388** closed manually after PR #390 merge.
 - **#389** closed by PR #392 merge.
-- **#391** open (probe-executor-env.js `--full-auto` deprecation cleanup; sprint follow-up).
+- **#391** closed by PR #402 merge.
 - **#393** open (Path 2 `--auto-recover-commit` opt-in flag; deferred from #389).
 
 ### Net stats (follow-up batch)
