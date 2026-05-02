@@ -15,6 +15,9 @@ node_modules/
 # Relay runtime metadata
 .relay/
 
+# Local agent memory should stay outside the repo
+memory/
+
 # Git worktrees
 .worktrees/
 

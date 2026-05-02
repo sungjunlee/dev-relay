@@ -4,6 +4,10 @@ description: When authoring a relay-plan rubric for security-sensitive invariant
 type: feedback
 originSessionId: 49f1a91f-0df3-4cea-ae64-dd258cb2a200
 ---
+# Rubric Fail-Closed History
+
+This is the project-local historical ledger behind the distilled relay-plan guidance in `skills/relay-plan/references/rubric-fail-closed-patterns.md`. Keep detailed PR narratives and dated incident context here; keep installed-skill operating guidance in the reference file.
+
 When a rubric factor concerns a security-sensitive invariant, do not collapse "surfaces a warning" and "fails closed" into one factor. They are different enforcement layers (prompt text vs gate-state transition) and the executor will optimize the easier one.
 
 **Why:** On PR #155 (issue #148, 2026-04-12), rubric factor 3 was worded "`loadRubricFromRunDir` surfaces missing rubric as visible warning, not silent null." The executor implemented the visible warning. Relay-review LGTM'd round 1. Post-merge codex adversarial review surfaced that the warning was only rendered in the reviewer prompt text — the review-runner state transition still advanced to `ready_to_merge` on a PASS verdict regardless of rubric state. "Visible" got optimized for; fail-closed gating didn't. Same compliance-theater failure mode as #138 round 5, one layer up.
