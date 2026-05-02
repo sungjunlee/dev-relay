@@ -7,6 +7,14 @@ const REFERENCES_DIR = path.join(__dirname, "..", "..", "..", "skills", "relay-p
 const SKILL_PATH = path.join(__dirname, "..", "..", "..", "skills", "relay-plan", "SKILL.md");
 const RELAY_SKILL_PATH = path.join(__dirname, "..", "..", "..", "skills", "relay", "SKILL.md");
 const RELAY_REFERENCES_DIR = path.join(__dirname, "..", "..", "..", "skills", "relay", "references");
+const GUIDANCE_PACK_REFERENCE = "guidance-packs.md";
+const REQUIRED_GUIDANCE_PACKS = [
+  "surgical-change",
+  "verification-evidence",
+  "simplify-pass",
+  "docs-reader-success",
+  "trust-boundary",
+];
 
 function readReference(name) {
   return fs.readFileSync(path.join(REFERENCES_DIR, name), "utf-8");
@@ -22,6 +30,15 @@ function readRelaySkill() {
 
 function readRelayReference(name) {
   return fs.readFileSync(path.join(RELAY_REFERENCES_DIR, name), "utf-8");
+}
+
+function extractGuidancePackSections(text) {
+  const sections = new Map();
+  const packHeadingPattern = /^### `([^`]+)`\n([\s\S]*?)(?=^### `|(?![\s\S]))/gm;
+  for (const match of text.matchAll(packHeadingPattern)) {
+    sections.set(match[1], match[2].trim());
+  }
+  return sections;
 }
 
 test("domain rubric references declare candidate-axis usage", () => {
@@ -136,4 +153,58 @@ test("relay dispatch template and wrapper use Done Criteria outcome language", (
   assert.match(relaySkill, /Done Criteria fully implemented/);
   assert.doesNotMatch(relaySkill, /Steps 1-10 only/);
   assert.doesNotMatch(relaySkill, /Issue AC fully implemented/);
+});
+
+test("guidance pack reference declares exactly the initial five packs", () => {
+  const text = readReference(GUIDANCE_PACK_REFERENCE);
+  const skill = readSkill();
+  const taskProfile = readReference("task-profile.md");
+  const sections = extractGuidancePackSections(text);
+
+  assert.deepEqual([...sections.keys()], REQUIRED_GUIDANCE_PACKS);
+  assert.match(skill, /references\/guidance-packs\.md/);
+  assert.match(taskProfile, /references\/guidance-packs\.md/);
+});
+
+test("each guidance pack states use, non-use, and rubric boundary", () => {
+  const text = readReference(GUIDANCE_PACK_REFERENCE);
+  const sections = extractGuidancePackSections(text);
+
+  for (const pack of REQUIRED_GUIDANCE_PACKS) {
+    const section = sections.get(pack);
+    assert.ok(section, pack);
+    assert.match(section, /^#### Use when$/m, pack);
+    assert.match(section, /^#### Do not use when$/m, pack);
+    assert.match(section, /^#### Guidance$/m, pack);
+    assert.match(section, /^#### Rubric still carries$/m, pack);
+    assert.match(section, /advisory|does not override|must remain/i, pack);
+    assert.match(section, /Done Criteria|rubric factor|rubric factors/i, pack);
+  }
+});
+
+test("guidance packs stay compact and executor-agnostic", () => {
+  const text = readReference(GUIDANCE_PACK_REFERENCE);
+  const sections = extractGuidancePackSections(text);
+  const forbiddenProviderTerms = [
+    /\bCodex\b/,
+    /\bClaude\b/,
+    /\bGPT\b/,
+    /\bOpenAI\b/,
+    /\bAnthropic\b/,
+    /\bCLAUDE_SKILL_DIR\b/,
+    /\bgh\s+/,
+    /\bnpm\s+/,
+    /\bnode --test\b/,
+    /\bapply_patch\b/,
+  ];
+
+  for (const pack of REQUIRED_GUIDANCE_PACKS) {
+    const section = sections.get(pack);
+    const words = section.split(/\s+/).filter(Boolean);
+    assert.ok(words.length <= 170, `${pack} has ${words.length} words`);
+    assert.ok(section.split("\n").length <= 24, `${pack} is too long`);
+    for (const pattern of forbiddenProviderTerms) {
+      assert.doesNotMatch(section, pattern, pack);
+    }
+  }
 });
