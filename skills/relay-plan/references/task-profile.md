@@ -35,7 +35,7 @@ Build the profile from the same planning evidence used for the rubric:
 
 `task_profile` is planner metadata. It may be shown in dispatch artifacts so executors know why guidance was selected, but it is not a reviewer verdict field, manifest role binding, lifecycle state, or merge gate. Correctness still lives in Done Criteria and rubric factors.
 
-The only prompt-visible behavior in the profile step is the profile metadata block. Guidance pack text rendering, dispatch persistence/events, and reliability analytics are follow-up work.
+When `guidance_packs` is non-empty, dispatch prompts render both the profile metadata block and a Working Guidance section using the selected pack guidance bullets. Working Guidance is advisory and must not override Done Criteria, rubric commands, or scope boundaries. Dispatch persistence/events and reliability analytics are separate follow-up work.
 
 ## Selection Hints
 
