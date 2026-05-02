@@ -160,6 +160,7 @@ test("EVENTS is a frozen object map for current run journal event names", () => 
   assert.equal(Object.values(EVENTS).includes("manual_state_override"), false);
   assert.equal(Object.values(EVENTS).includes("request_persisted"), false);
   assert.equal(Object.values(EVENTS).includes("register"), false);
+  assert.equal(EVENTS.GUIDANCE_SELECTED, "guidance_selected");
 });
 
 test("EVENTS values match the event names emitted by producer call sites under skills", () => {

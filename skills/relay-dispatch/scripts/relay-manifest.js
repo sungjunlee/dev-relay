@@ -8,6 +8,7 @@ const rubric = require("./manifest/rubric");
 const cleanup = require("./manifest/cleanup");
 const attempts = require("./manifest/attempts");
 const environment = require("./manifest/environment");
+const guidance = require("./manifest/guidance");
 
 module.exports = {
   ...paths,
@@ -17,4 +18,5 @@ module.exports = {
   ...cleanup,
   ...attempts,
   ...environment,
+  ...guidance,
 };
