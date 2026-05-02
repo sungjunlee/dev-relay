@@ -170,6 +170,48 @@ Evaluated criteria must point to discoverable artifacts. If the executor would n
 | "consistent API style" | "match the response shape in `src/routes/users.ts`: `{ data, meta, errors }`" |
 | "matches component patterns" | "follow `src/components/UserCard.tsx`: props interface, named export, co-located test" |
 
+## Atomic-revert factor wording
+
+When a rubric factor scores commit count or commit-per-item structure (the "atomic-revert" check, often F2), avoid wording that prescribes an EXACT count. The orchestrator-correction flow — where R1 finds a real bug, the orchestrator hand-fixes and pushes a +1 commit, and R2 re-reviews — is a first-class flow (see `skills/relay-dispatch/references/recovery-playbook.md` § "Recovery command boundaries"). Strict "exactly N" wording forces a `--force-finalize-nonready` for every legitimate R1 catch.
+
+Anti-pattern (forces force-finalize on every R1 fix cycle):
+
+```yaml
+- name: Atomic-revert preserved
+  type: evaluated
+  criteria: "Exactly N commits, one per AC item, no fix-up commits."
+  target: ">= 8/10"
+```
+
+Recommended — allow one R1-fix commit explicitly:
+
+```yaml
+- name: Atomic-revert preserved
+  type: evaluated
+  criteria: >
+    >= N commits with one optional R1-fix-commit allowance.
+    Atomic-revert preserved in practice — `git revert <fix-sha> <original-sha>`
+    reverts <item> as a unit. Orchestrator-correction commits per
+    recovery-playbook.md are legitimate and do not violate this factor.
+  target: ">= 8/10"
+  scoring_guide:
+    low: "Single squashed commit; revert removes everything."
+    mid: "N or N+1 (with documented R1 fix) commits; multi-commit revert works."
+    high: "N commits, one per AC item, no fix-up needed; R1 was clean."
+```
+
+The N+1 affordance applies only to commits whose subject describes an R1-feedback fix. New AC scope shipped as fix-up commits is still graded down.
+
+Two dogfood data points (#316 Sub B PR #342 and #316 Sub A PR #343, same session) hit this exact pattern: R1 found a real substantive bug, orchestrator-correction added a +1 commit, R2 flagged F2 fail despite F3 PASS + green CI. Both required `--force-finalize-nonready` to merge. Below rule of three, but the pattern is intrinsic to the orchestrator-correction flow — fold this affordance into new rubrics rather than waiting for a third instance.
+
+### Force-finalize-nonready provenance template
+
+When R2 fails F2 only on commit count after a bug-fix cycle AND F3 (substantive) passes AND CI is green at HEAD, force-finalize is the right response. Cite all four:
+
+> "R2 confirmed F3 [substantive] PASS but flagged F2 [commit count] — R1 fix `<sha>` is a Nth commit. Same orchestrator-correction-becomes-extra-commit pattern as `<prior PR if any>`. CI green at HEAD `<sha>` (test pass <s>s visible in `gh pr checks <pr>`). Atomic-revert preserved in practice — `git revert <fix-sha> <original-sha>` reverts <item> as a unit."
+
+Rebase-fold to merge the fix into the original commit is technically cleaner but requires force-push and a fresh review round; cost rarely beats benefit for procedural-only blockers.
+
 ## What Lives Elsewhere
 
 - Validation checklist, quality card, grades, and risk signals: `rubric-validation.md`
