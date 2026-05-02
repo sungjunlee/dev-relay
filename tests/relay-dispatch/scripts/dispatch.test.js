@@ -1120,6 +1120,34 @@ test("dispatch network-access enabled adds codex workspace-write network overrid
   assert.equal(dispatchResult.executor_network.access, "enabled");
 });
 
+test("dispatch widens codex sandbox via --add-dir <git admin dir> for worktree (#389 sandbox-widening)", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  const capturePath = path.join(os.tmpdir(), `relay-dispatch-argv-${Date.now()}-389.json`);
+  writeArgCaptureCodex(binDir, capturePath);
+  const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}`, RELAY_HOME: relayHome };
+
+  const result = JSON.parse(runDispatch(repoRoot, [
+    "-b", "issue-389-add-dir",
+    "--prompt", "issue-389 add-dir sandbox-widening",
+    "--json",
+  ], env));
+
+  const expectedAdminDir = worktreeAdminDir(result.worktree);
+  assert.equal(result.codexGitAdminDir, expectedAdminDir);
+
+  const captured = JSON.parse(fs.readFileSync(capturePath, "utf-8"));
+  const addDirIdx = captured.indexOf("--add-dir");
+  assert.notEqual(addDirIdx, -1, "captured argv must contain --add-dir");
+  assert.equal(captured[addDirIdx + 1], expectedAdminDir);
+
+  const sandboxIdx = captured.indexOf("--sandbox");
+  assert.ok(sandboxIdx >= 0 && addDirIdx > sandboxIdx, "--add-dir must follow --sandbox in argv");
+
+  assert.match(expectedAdminDir, /\.git\/worktrees\//, "admin dir must point inside .git/worktrees/<name>");
+});
+
 test("dispatch rejects network-access enabled outside codex workspace-write", () => {
   const { repoRoot, relayHome } = setupRepo();
   const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));

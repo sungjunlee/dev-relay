@@ -82,6 +82,8 @@ If `--add-dir` IS supported and works: ship Path 1. Path 2 (`--auto-recover-comm
 
 If `--add-dir` is NOT supported or doesn't fix the failure: ship Path 2 and document Path 1's failure mode in recovery-playbook.md.
 
+#389 picked Path 1 (sandbox widening via `--add-dir`). Path 2 (`--auto-recover-commit` opt-in flag) is **deferred** to follow-up issue #393 — it remains optional defense-in-depth for residual cases (codex CLI crashes mid-commit, transient sandbox edge cases, codex versions that change `--add-dir` semantics). Until #393 lands, the existing `recover-commit.js` operator command remains the canonical recovery for those residual cases.
+
 Use normal `dispatch.js --run-id <id>` when reviewer feedback requires code changes. That path re-dispatches implementation work and must produce a fresh code handoff before review.
 
 Use `recover-state.js --to review_pending` for external events that make a new review valid without redispatch. The normal path still requires `HEAD != review.last_reviewed_sha`. The same-HEAD exception is only for PR-body-only evidence changes and emits a `state_recovery` event with `pr_body_only: true`, `head_sha`, `last_reviewed_sha`, `pr_number`, and the operator `reason`.
