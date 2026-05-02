@@ -2,7 +2,7 @@
 
 Compact execution guidance packs are advisory working-style snippets selected by `task_profile.guidance_packs`. They help the executor choose useful habits for the task shape, but Done Criteria, rubric factors, rubric commands, and scope boundaries remain authoritative.
 
-This reference is the pack library. Rendering the selected packs into dispatch prompts, persisting pack metadata in run artifacts, and reporting pack analytics are separate follow-up work.
+This reference is the pack library. Relay-plan renders the selected `#### Guidance` bullets into dispatch prompts. Persisting pack metadata in run artifacts and reporting pack analytics are separate follow-up work.
 
 ## Pack Contract
 

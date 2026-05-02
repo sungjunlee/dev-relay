@@ -126,7 +126,7 @@ S/M usually skips, but ambiguity or risk can opt any size into stress-test. Run 
 
 ### 10. Generate dispatch prompt
 
-Take the base template (`../relay/references/prompt-template.md`) and append Setup, optional `task_profile` metadata when guidance packs are selected, Scoring Rubric, Iteration Protocol, and Score Log sections. Selected pack names come from `references/guidance-packs.md`, but pack text rendering is follow-up work; keep this step limited to existing task profile metadata until Working Guidance rendering lands. Insert the optional Step 0a block from `references/iteration-protocol.md` iff any factor has a non-empty `tdd_anchor`; when no factor has `tdd_anchor`, keep the emitted prompt identical to the pre-TDD baseline.
+Take the base template (`../relay/references/prompt-template.md`) and append Setup, optional `task_profile` metadata plus Working Guidance when guidance packs are selected, Scoring Rubric, Iteration Protocol, and Score Log sections. Selected pack names and prompt-ready guidance bullets come from `references/guidance-packs.md`; the Working Guidance section is advisory and must state that it does not override Done Criteria, rubric commands, or scope boundaries. Insert the optional Step 0a block from `references/iteration-protocol.md` iff any factor has a non-empty `tdd_anchor`; when no factor has `tdd_anchor`, keep the emitted prompt identical to the pre-TDD baseline.
 
 Full iteration-protocol text + Score Log format: `references/iteration-protocol.md`.
 

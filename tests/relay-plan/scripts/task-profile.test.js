@@ -135,7 +135,7 @@ test("validate manifest wording selects trust-boundary guidance", () => {
   assert.equal(profile.execution_mode, "fresh-context");
 });
 
-test("selected task_profile is visible in dispatch prompt metadata only", () => {
+test("selected task_profile renders metadata and working guidance in dispatch prompts", () => {
   const baseline = fs.readFileSync(BASELINE_PROMPT_PATH, "utf-8");
   const profile = deriveTaskProfile({
     doneCriteria: "Add code in skills/relay-plan/scripts/task-profile.js with tests.",
@@ -154,7 +154,9 @@ test("selected task_profile is visible in dispatch prompt metadata only", () => 
   assert.match(rendered, /surgical-change/);
   assert.match(rendered, /derivation_inputs:/);
   assert.match(rendered, /advisory planner metadata/);
-  assert.doesNotMatch(rendered, /## Working Guidance/);
+  assert.match(rendered, /## Working Guidance/);
+  assert.match(rendered, /These instructions guide execution style\. They do not override Done Criteria, rubric commands, or scope boundaries\./);
+  assert.match(rendered, /### surgical-change/);
   assert.doesNotMatch(fs.readFileSync(REVIEW_SCHEMA_PATH, "utf-8"), /task_profile|guidance_packs|execution_mode/);
 });
 

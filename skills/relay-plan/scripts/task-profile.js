@@ -1,8 +1,14 @@
+const fs = require("fs");
+const path = require("path");
+
 const CHANGE_TYPES = new Set(["bugfix", "feature", "refactor", "docs", "test", "infra", "visual", "prompt"]);
 const EXECUTION_MODES = new Set(["quick", "standard", "fresh-context", "batch-wave"]);
 const SIZES = new Set(["S", "M", "L", "XL"]);
 const TRUST_BOUNDARY_PATTERN = /\b(?:trust[- ]boundary|auth[- ]boundary|trust root|forge|forged|bypass|fail closed|gate-check|validate[- ]?(?:manifest|transition)|state transition|state-machine)\b/;
 const STATE_MACHINE_PATTERN = /\b(?:state transition|state-machine|validate[- ]?transition|manifest state)\b/;
+const GUIDANCE_PACK_REFERENCE_PATH = path.join(__dirname, "..", "references", "guidance-packs.md");
+const WORKING_GUIDANCE_HEADING = "## Working Guidance";
+const WORKING_GUIDANCE_BOUNDARY = "These instructions guide execution style. They do not override Done Criteria, rubric commands, or scope boundaries.";
 
 function parseJsonish(value) {
   if (!value) return {};
@@ -202,12 +208,49 @@ function renderTaskProfileBlock(taskProfile) {
   return lines.join("\n");
 }
 
-function applyTaskProfileToDispatchPrompt({ dispatchPrompt, taskProfile }) {
-  const profile = normalizeTaskProfile(taskProfile);
-  if (profile.guidance_packs.length === 0) return dispatchPrompt;
-  if (String(dispatchPrompt || "").includes("## Task Profile")) return dispatchPrompt;
-  const block = renderTaskProfileBlock(profile);
-  const prompt = String(dispatchPrompt || "");
+function extractMarkdownSubsection(sectionText, heading) {
+  const lines = String(sectionText || "").split(/\r?\n/);
+  const headingIndex = lines.findIndex((line) => line.trim() === `#### ${heading}`);
+  if (headingIndex === -1) return "";
+  const content = [];
+  for (let index = headingIndex + 1; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (/^####\s+/.test(line)) break;
+    if (content.length === 0 && line.trim() === "") continue;
+    content.push(line);
+  }
+  return content.join("\n").trim();
+}
+
+function readGuidancePackLibrary() {
+  const text = fs.readFileSync(GUIDANCE_PACK_REFERENCE_PATH, "utf-8");
+  const sections = new Map();
+  const packHeadingPattern = /^### `([^`]+)`\n([\s\S]*?)(?=^### `|(?![\s\S]))/gm;
+  for (const match of text.matchAll(packHeadingPattern)) {
+    const guidance = extractMarkdownSubsection(match[2], "Guidance");
+    if (guidance) sections.set(match[1], guidance);
+  }
+  return sections;
+}
+
+function renderWorkingGuidanceBlock(guidancePacks) {
+  const packLibrary = readGuidancePackLibrary();
+  const lines = [
+    WORKING_GUIDANCE_HEADING,
+    "",
+    WORKING_GUIDANCE_BOUNDARY,
+  ];
+  for (const pack of guidancePacks) {
+    const guidance = packLibrary.get(pack);
+    if (!guidance) continue;
+    lines.push("", `### ${pack}`, guidance);
+  }
+  return lines.length > 3 ? lines.join("\n") : "";
+}
+
+function insertBlocksBeforeRubric(prompt, blocks) {
+  const block = blocks.filter(Boolean).join("\n\n");
+  if (!block) return prompt;
   const rubricHeading = "\n## Scoring Rubric";
   if (prompt.includes(rubricHeading)) {
     return prompt.replace(rubricHeading, `\n${block}\n${rubricHeading}`);
@@ -215,8 +258,23 @@ function applyTaskProfileToDispatchPrompt({ dispatchPrompt, taskProfile }) {
   return `${prompt.replace(/\s*$/, "")}\n\n${block}\n`;
 }
 
+function applyTaskProfileToDispatchPrompt({ dispatchPrompt, taskProfile }) {
+  const profile = normalizeTaskProfile(taskProfile);
+  if (profile.guidance_packs.length === 0) return dispatchPrompt;
+  const prompt = String(dispatchPrompt || "");
+  const blocks = [];
+  if (!prompt.includes("## Task Profile")) {
+    blocks.push(renderTaskProfileBlock(profile));
+  }
+  if (!prompt.includes(WORKING_GUIDANCE_HEADING)) {
+    blocks.push(renderWorkingGuidanceBlock(profile.guidance_packs));
+  }
+  return insertBlocksBeforeRubric(prompt, blocks);
+}
+
 module.exports = {
   applyTaskProfileToDispatchPrompt,
   deriveTaskProfile,
   renderTaskProfileBlock,
+  renderWorkingGuidanceBlock,
 };
