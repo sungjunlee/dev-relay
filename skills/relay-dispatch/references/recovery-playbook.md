@@ -61,6 +61,8 @@ The script refuses transitions `ALLOWED_TRANSITIONS` already supports — always
 
 ### Recovery command boundaries
 
+Decision tree: if the executor finished implementation but did not commit, use `recover-commit.js`; it handles commit, push, PR publication/stamping, and evidence rebrand atomically. If the orchestrator hand-edited fixes after R1, the evidence is still bound to the dispatch SHA, and review at HEAD substantively PASSed, run `rebrand-evidence.js --run-id <id> --reason "..."`, then `finalize-run.js --run-id <id> --force-finalize-nonready --reason "stale-execution-evidence: orchestrator-correction"`. If the reviewer state machine refuses to re-trigger on the same SHA and no commit is needed, skip evidence repair and use `finalize-run.js --run-id <id> --force-finalize-nonready --reason "..."` directly.
+
 Use `recover-commit.js` when the executor changed files but did not commit, push, or create/stamp a PR. It creates the missing commit/PR handoff and leaves the manifest in `review_pending`.
 
 Use normal `dispatch.js --run-id <id>` when reviewer feedback requires code changes. That path re-dispatches implementation work and must produce a fresh code handoff before review.
