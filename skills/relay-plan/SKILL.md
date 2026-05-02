@@ -51,6 +51,7 @@ Before drafting factors, identify the evaluation source model:
 - Repo quality signal from probes and available commands
 - Historical relay signal from stuck factors and score divergence
 - Task-specific risk from touched domains, trust boundaries, data loss, migrations, UX flows, or operational failure modes; derive `task_profile` per `references/task-profile.md`
+- Selected guidance pack names from `task_profile.guidance_packs`, using `references/guidance-packs.md` as the compact advisory pack library
 
 If AC are missing, vague, or incomplete, write observable Done Criteria first. Treat explicit AC as high-priority evidence, not the only source. If the final review anchor is planner-authored or differs from the task source, persist it in step 8 so the reviewer has the same anchor.
 
@@ -125,7 +126,7 @@ S/M usually skips, but ambiguity or risk can opt any size into stress-test. Run 
 
 ### 10. Generate dispatch prompt
 
-Take the base template (`../relay/references/prompt-template.md`) and append Setup, optional `task_profile` metadata when guidance packs are selected, Scoring Rubric, Iteration Protocol, and Score Log sections. Insert the optional Step 0a block from `references/iteration-protocol.md` iff any factor has a non-empty `tdd_anchor`; when no factor has `tdd_anchor`, keep the emitted prompt identical to the pre-TDD baseline.
+Take the base template (`../relay/references/prompt-template.md`) and append Setup, optional `task_profile` metadata when guidance packs are selected, Scoring Rubric, Iteration Protocol, and Score Log sections. Selected pack names come from `references/guidance-packs.md`, but pack text rendering is follow-up work; keep this step limited to existing task profile metadata until Working Guidance rendering lands. Insert the optional Step 0a block from `references/iteration-protocol.md` iff any factor has a non-empty `tdd_anchor`; when no factor has `tdd_anchor`, keep the emitted prompt identical to the pre-TDD baseline.
 
 Full iteration-protocol text + Score Log format: `references/iteration-protocol.md`.
 

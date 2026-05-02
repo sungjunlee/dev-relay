@@ -2,6 +2,8 @@
 
 `task_profile` is relay-plan metadata that makes guidance selection explicit and auditable before dispatch.
 
+Guidance pack names refer to the compact advisory library in `references/guidance-packs.md`.
+
 ```yaml
 task_profile:
   size: S | M | L | XL
@@ -33,7 +35,7 @@ Build the profile from the same planning evidence used for the rubric:
 
 `task_profile` is planner metadata. It may be shown in dispatch artifacts so executors know why guidance was selected, but it is not a reviewer verdict field, manifest role binding, lifecycle state, or merge gate. Correctness still lives in Done Criteria and rubric factors.
 
-The only prompt-visible behavior in this issue is the profile metadata block. Compact guidance pack text, dispatch persistence/events, and reliability analytics are follow-up work.
+The only prompt-visible behavior in the profile step is the profile metadata block. Guidance pack text rendering, dispatch persistence/events, and reliability analytics are follow-up work.
 
 ## Selection Hints
 
