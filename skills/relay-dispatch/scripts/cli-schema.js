@@ -147,6 +147,9 @@ const COMMAND_FLAGS = {
     "--repo", "--run-id", "--manifest", "--reason", "--pr-title", "--pr-body-file",
     "--dry-run", "--json", "--help",
   ],
+  "rebrand-evidence": [
+    "--repo", "--run-id", "--manifest", "--reason", "--dry-run", "--json", "--help",
+  ],
   "relay-reconcile-artifact": [
     "--repo", "--run-id", "--manifest", "--branch", "--pr",
     "--artifact-path", "--writer-pr", "--reason", "--skip-review",

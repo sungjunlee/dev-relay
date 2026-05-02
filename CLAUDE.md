@@ -96,6 +96,7 @@ node skills/relay-review/scripts/review-runner.js --repo . --run-id <id> --revie
 
 # Recovery (when codex finishes but does not commit/push/PR)
 node skills/relay-dispatch/scripts/recover-commit.js --run-id <id> --reason "..."
+node skills/relay-dispatch/scripts/rebrand-evidence.js --run-id <id> --reason "..."
 
 # Finalize / merge (cross-skill: finalize-run lives under relay-merge, not relay-dispatch)
 node skills/relay-merge/scripts/finalize-run.js --run-id <id> --merge-method squash --json
