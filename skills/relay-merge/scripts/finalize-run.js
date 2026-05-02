@@ -52,6 +52,7 @@ const { runCleanup } = require("../../relay-dispatch/scripts/manifest/cleanup");
 const { execGit, execGh } = require("../../relay-dispatch/scripts/exec");
 const {
   bindCliArgs,
+  findUnknownFlags,
   modeLabel,
 } = require("../../relay-dispatch/scripts/cli-args");
 const {
@@ -223,6 +224,11 @@ function deleteRemoteBranch(repoPath, branch) {
 }
 
 function main() {
+  const unknownFlags = findUnknownFlags(args, "finalize-run");
+  if (unknownFlags.length) {
+    throw new Error(`unknown flags: ${unknownFlags.join(", ")}`);
+  }
+
   const repoArg = cliArgs.getArg("--repo");
   let repoPath = path.resolve(repoArg || ".");
   const manifestArg = cliArgs.getArg("--manifest");

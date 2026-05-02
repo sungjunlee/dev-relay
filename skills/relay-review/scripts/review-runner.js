@@ -41,6 +41,7 @@ const { loadReviewText, resolveReviewerName, resolveReviewerScript } = require("
 const { maybeSwapReviewer } = require("./review-runner/reviewer-swap");
 const {
   bindCliArgs,
+  findUnknownFlags,
   modeLabel,
 } = require("../../relay-dispatch/scripts/cli-args");
 
@@ -97,6 +98,11 @@ function printResult({ doneCriteriaPath, diffPath, jsonOut, manifestPath, origin
 }
 
 function run() {
+  const unknownFlags = findUnknownFlags(args, "review-runner");
+  if (unknownFlags.length) {
+    throw new Error(`unknown flags: ${unknownFlags.join(", ")}`);
+  }
+
   const repoArg = cliArgs.getArg("--repo");
   const repoPath = path.resolve(repoArg || ".");
   const manifestPathArg = cliArgs.getArg("--manifest");
