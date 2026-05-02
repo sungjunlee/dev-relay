@@ -9,7 +9,7 @@ const {
   validateManifestPaths,
 } = require("./manifest/paths");
 const { writeManifest } = require("./manifest/store");
-const { modeLabel, readArg, schemaHasFlag } = require("./cli-args");
+const { findUnknownFlags, modeLabel, readArg, schemaHasFlag } = require("./cli-args");
 const { resolveManifestRecord } = require("./relay-resolver");
 const { appendRunEvent, EVENTS } = require("./relay-events");
 
@@ -50,6 +50,11 @@ function buildSkippedCleanupSummary(data, dryRun) {
 }
 
 function main() {
+  const unknownFlags = findUnknownFlags(args, "close-run");
+  if (unknownFlags.length) {
+    throw new Error(`unknown flags: ${unknownFlags.join(", ")}`);
+  }
+
   const repoRoot = path.resolve(readArg(args, "--repo", undefined, CLI_ARG_OPTIONS) || ".");
   const runId = readArg(args, "--run-id", undefined, CLI_ARG_OPTIONS);
   const reason = readArg(args, "--reason", undefined, CLI_ARG_OPTIONS);

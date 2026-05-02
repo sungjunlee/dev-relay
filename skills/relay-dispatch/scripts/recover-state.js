@@ -25,7 +25,7 @@ const {
 } = require("./manifest/paths");
 const { writeManifest } = require("./manifest/store");
 const { readTextFileWithoutFollowingSymlinks } = require("./manifest/rubric");
-const { modeLabel, readArg, schemaHasFlag } = require("./cli-args");
+const { findUnknownFlags, modeLabel, readArg, schemaHasFlag } = require("./cli-args");
 const { resolveManifestRecord } = require("./relay-resolver");
 const { appendRunEvent, EVENTS } = require("./relay-events");
 const CLI_ARG_OPTIONS = { commandName: "recover-state", reservedFlags: ["-h"] };
@@ -264,6 +264,11 @@ function main() {
   if (!args.length || hasCliFlag("--help") || hasCliFlag("-h")) {
     printUsage(console.log);
     process.exit(hasCliFlag("--help") || hasCliFlag("-h") ? 0 : 1);
+  }
+
+  const unknownFlags = findUnknownFlags(args, "recover-state");
+  if (unknownFlags.length) {
+    throw new Error(`unknown flags: ${unknownFlags.join(", ")}`);
   }
 
   const repoRoot = path.resolve(readArg(args, "--repo", undefined, CLI_ARG_OPTIONS) || ".");

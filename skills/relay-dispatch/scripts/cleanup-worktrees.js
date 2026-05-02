@@ -29,7 +29,7 @@ const {
   readManifest,
   writeManifest,
 } = require("./manifest/store");
-const { modeLabel, readArg, schemaHasFlag } = require("./cli-args");
+const { findUnknownFlags, modeLabel, readArg, schemaHasFlag } = require("./cli-args");
 const { appendRunEvent, EVENTS } = require("./relay-events");
 const { safeFormatRunId } = require("./relay-resolver");
 
@@ -112,6 +112,11 @@ if (hasCliFlag(["--help", "-h"])) {
 }
 
 function run() {
+  const unknownFlags = findUnknownFlags(args, "cleanup-worktrees");
+  if (unknownFlags.length) {
+    throw new Error(`unknown flags: ${unknownFlags.join(", ")}`);
+  }
+
   const repoRoot = path.resolve(readArg(args, "--repo", ".", CLI_ARG_OPTIONS));
   const dryRun = hasCliFlag("--dry-run");
   const all = hasCliFlag("--all");
