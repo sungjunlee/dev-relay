@@ -84,6 +84,10 @@ Check for:
 
 Run tests. Fix failures. Repeat review-fix until solid.
 
+## Completion Audit
+Before declaring done, build an objective-to-artifact checklist from the existing Done Criteria block and the rubric Score Log: for each Done Criteria item and each `weight: required` rubric factor, name the concrete artifact that proves it (file path, function name, test file, PR description section, manifest field, or equivalent).
+Treat tests, manifests, PR description text, and self-reports as proxy signals, not proof by themselves; the checklist must point to the implementation or reviewable artifact that makes each outcome independently verifiable.
+
 ## When Satisfied
 Commit your final work to the branch with a clear message. The orchestrator handles `git push` + `gh pr create` after the dispatch returns (and is idempotent if you also push or open a PR yourself). Do NOT skip the commit — that is the one step the orchestrator cannot recover automatically.
 ```
