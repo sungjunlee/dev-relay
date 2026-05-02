@@ -177,4 +177,4 @@ Evaluated criteria must point to discoverable artifacts. If the executor would n
 - L/XL ambiguity review and calibration simulation: `rubric-stress-test.md`
 - Planner input signals: `signals.md`
 - Domain candidate axes: `rubric-backend.md`, `rubric-frontend.md`, `rubric-security.md`, `rubric-refactoring.md`, `rubric-documentation.md`, `rubric-design.md`
-- Special patterns: `rubric-trust-model.md`, `rubric-pattern-event-shape.md`, `rubric-pattern-tdd-flavor.md`
+- Special patterns: `rubric-trust-model.md`, `rubric-pattern-event-shape.md`, `rubric-pattern-tdd-flavor.md`, `rubric-pattern-grep-token-precision.md`
