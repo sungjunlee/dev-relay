@@ -705,6 +705,14 @@ function buildDispatchExecPrompt(taskPrompt) {
     + taskPrompt;
 }
 
+function worktreeCommonGitDir(worktree) {
+  const raw = execFileSync("git", ["-C", worktree, "rev-parse", "--git-common-dir"], {
+    encoding: "utf-8",
+    stdio: "pipe",
+  }).trim();
+  return path.resolve(worktree, raw);
+}
+
 function tamperResumableRunRubricPath(repoRoot, env, rubricPath) {
   const first = JSON.parse(runDispatch(repoRoot, [
     "-b", "issue-rubric-anchor",
@@ -933,6 +941,7 @@ test("dispatch precedence D1 regression: CLI override beats manifest hint in exe
     "--model-hints", "dispatch=opus",
     "--json",
   ], env));
+  const commonGitDir = worktreeCommonGitDir(result.worktree);
 
   assert.deepEqual(JSON.parse(fs.readFileSync(capturePath, "utf-8")), [
     "exec",
@@ -943,8 +952,10 @@ test("dispatch precedence D1 regression: CLI override beats manifest hint in exe
     "-c", "model_reasoning_effort=xhigh",
     "-m", "sonnet",
     "--sandbox", "workspace-write",
+    "--add-dir", commonGitDir,
     buildDispatchExecPrompt(taskPrompt),
   ]);
+  assert.equal(result.codexGitCommonDir, commonGitDir);
 });
 
 test("dispatch precedence D2 regression: CLI override works when manifest hint is absent", () => {
@@ -965,6 +976,7 @@ test("dispatch precedence D2 regression: CLI override works when manifest hint i
     "--model", "sonnet",
     "--json",
   ], env));
+  const commonGitDir = worktreeCommonGitDir(result.worktree);
 
   assert.deepEqual(JSON.parse(fs.readFileSync(capturePath, "utf-8")), [
     "exec",
@@ -975,8 +987,10 @@ test("dispatch precedence D2 regression: CLI override works when manifest hint i
     "-c", "model_reasoning_effort=xhigh",
     "-m", "sonnet",
     "--sandbox", "workspace-write",
+    "--add-dir", commonGitDir,
     buildDispatchExecPrompt(taskPrompt),
   ]);
+  assert.equal(result.codexGitCommonDir, commonGitDir);
 });
 
 test("dispatch precedence D3 regression: manifest hint supplies the effective model when CLI is unset", () => {
@@ -998,6 +1012,7 @@ test("dispatch precedence D3 regression: manifest hint supplies the effective mo
     "--model-hints", "dispatch=opus",
     "--json",
   ], env));
+  const commonGitDir = worktreeCommonGitDir(result.worktree);
 
   assert.deepEqual(JSON.parse(fs.readFileSync(capturePath, "utf-8")), [
     "exec",
@@ -1008,8 +1023,10 @@ test("dispatch precedence D3 regression: manifest hint supplies the effective mo
     "-c", "model_reasoning_effort=xhigh",
     "-m", "opus",
     "--sandbox", "workspace-write",
+    "--add-dir", commonGitDir,
     buildDispatchExecPrompt(taskPrompt),
   ]);
+  assert.equal(result.codexGitCommonDir, commonGitDir);
 
   const events = readJsonLines(getEventsPath(repoRoot, result.runId));
   const dispatchStart = events.find((event) => event.event === "dispatch_start");
@@ -1034,6 +1051,7 @@ test("dispatch precedence D4 regression: executor argv stays byte-identical when
     "--prompt", taskPrompt,
     "--json",
   ], env));
+  const commonGitDir = worktreeCommonGitDir(result.worktree);
 
   assert.deepEqual(JSON.parse(fs.readFileSync(capturePath, "utf-8")), [
     "exec",
@@ -1043,8 +1061,10 @@ test("dispatch precedence D4 regression: executor argv stays byte-identical when
     "-o", result.resultFile,
     "-c", "model_reasoning_effort=xhigh",
     "--sandbox", "workspace-write",
+    "--add-dir", commonGitDir,
     buildDispatchExecPrompt(taskPrompt),
   ]);
+  assert.equal(result.codexGitCommonDir, commonGitDir);
 
   const events = readJsonLines(getEventsPath(repoRoot, result.runId));
   const dispatchStart = events.find((event) => event.event === "dispatch_start");
@@ -1072,6 +1092,7 @@ test("dispatch network-access enabled adds codex workspace-write network overrid
   ], env));
 
   const capturedArgs = JSON.parse(fs.readFileSync(capturePath, "utf-8"));
+  const commonGitDir = worktreeCommonGitDir(result.worktree);
   assert.deepEqual(capturedArgs.slice(0, 10), [
     "exec",
     "-C", result.worktree,
@@ -1081,6 +1102,8 @@ test("dispatch network-access enabled adds codex workspace-write network overrid
     "-c", "model_reasoning_effort=xhigh",
   ]);
   assert.ok(capturedArgs.includes("sandbox_workspace_write.network_access=true"));
+  assert.deepEqual(capturedArgs.slice(-3), ["--add-dir", commonGitDir, buildDispatchExecPrompt(taskPrompt)]);
+  assert.equal(result.codexGitCommonDir, commonGitDir);
   assert.equal(result.executorNetwork.access, "enabled");
   assert.equal(result.executorNetwork.mechanism, "sandbox_workspace_write.network_access");
 
@@ -1096,6 +1119,52 @@ test("dispatch network-access enabled adds codex workspace-write network overrid
   const dispatchResult = events.find((event) => event.event === "dispatch_result");
   assert.equal(dispatchStart.executor_network.access, "enabled");
   assert.equal(dispatchResult.executor_network.access, "enabled");
+});
+
+test("dispatch widens codex sandbox via --add-dir <common-git-dir> for worktree (#389 sandbox-widening)", () => {
+  // The common git dir (`<main-repo>/.git`) is the canonical writable area for
+  // linked-worktree git operations: it contains both the per-worktree admin dir
+  // (`worktrees/<name>/index.lock`) AND the shared `objects/` (blob writes from
+  // git add) and `refs/heads/<branch>` (ref updates from git commit). The fix
+  // passes the common git dir, not just the per-worktree admin dir, so codex
+  // can complete the full add+commit cycle inside the sandbox.
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  const capturePath = path.join(os.tmpdir(), `relay-dispatch-argv-${Date.now()}-389.json`);
+  writeArgCaptureCodex(binDir, capturePath);
+  const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}`, RELAY_HOME: relayHome };
+
+  const result = JSON.parse(runDispatch(repoRoot, [
+    "-b", "issue-389-add-dir",
+    "--prompt", "issue-389 add-dir sandbox-widening",
+    "--json",
+  ], env));
+
+  const expectedCommonDir = worktreeCommonGitDir(result.worktree);
+  assert.equal(result.codexGitCommonDir, expectedCommonDir);
+
+  const captured = JSON.parse(fs.readFileSync(capturePath, "utf-8"));
+  const addDirIdx = captured.indexOf("--add-dir");
+  assert.notEqual(addDirIdx, -1, "captured argv must contain --add-dir");
+  assert.equal(captured[addDirIdx + 1], expectedCommonDir);
+
+  const sandboxIdx = captured.indexOf("--sandbox");
+  assert.ok(sandboxIdx >= 0 && addDirIdx > sandboxIdx, "--add-dir must follow --sandbox in argv");
+
+  // Common git dir ends in `.git` (non-bare repo) — covers worktrees/, objects/, refs/, logs/
+  assert.match(expectedCommonDir, /\.git$/, "common git dir must end in .git");
+  // Sanity check: the worktree's admin dir should be a subdir of the common dir,
+  // proving the common-dir grant subsumes the per-worktree admin dir.
+  const adminDir = execFileSync("git", ["-C", result.worktree, "rev-parse", "--git-dir"], {
+    encoding: "utf-8",
+    stdio: "pipe",
+  }).trim();
+  const resolvedAdminDir = path.resolve(result.worktree, adminDir);
+  assert.ok(
+    resolvedAdminDir.startsWith(`${expectedCommonDir}${path.sep}`),
+    `worktree admin dir ${resolvedAdminDir} should be inside common dir ${expectedCommonDir}`
+  );
 });
 
 test("dispatch rejects network-access enabled outside codex workspace-write", () => {
@@ -1853,6 +1922,7 @@ setTimeout(() => {}, 60000);
   ], env));
 
   assert.equal(result.status, "completed-with-warning");
+  assert.equal(result.commitMode, "committed in-sandbox");
   assert.equal(result.runState, STATES.REVIEW_PENDING);
   assert.equal(result.prNumber, 123);
   assert.equal(result.prCreatedByUs, true);
@@ -2386,6 +2456,7 @@ test("dispatch marks verified no-op runs as completed-no-op and skips orchestrat
   ], env));
 
   assert.equal(result.status, "completed-no-op");
+  assert.equal(result.commitMode, "completed-no-op");
   assert.equal(result.runState, STATES.REVIEW_PENDING);
   assert.equal(result.commits, "");
   assert.equal(result.uncommitted, null);
@@ -2413,6 +2484,7 @@ test("dispatch marks uncommitted result runs as completed-uncommitted and skips 
   ], env));
 
   assert.equal(result.status, "completed-uncommitted");
+  assert.equal(result.commitMode, "completed-uncommitted, recover-commit required");
   assert.equal(result.runState, STATES.REVIEW_PENDING);
   assert.equal(result.commits, "");
   assert.match(result.uncommitted, /README\.md/);
@@ -2482,6 +2554,7 @@ test("dispatch writes execution evidence with the post-dispatch HEAD and the cal
   const evidence = readExecutionEvidence(result.runDir);
 
   assert.equal(result.status, "completed");
+  assert.equal(result.commitMode, "committed in-sandbox");
   assert.notEqual(result.headSha, startHead);
   assert.equal(evidence.head_sha, result.headSha);
   assert.equal(evidence.test_command, "node --test tests/relay-review/scripts/*.test.js");
