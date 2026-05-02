@@ -1886,9 +1886,11 @@ crypto.randomBytes = function randomBytes(size) {
   });
 
   assert.notEqual(second.status, 0);
-  assert.match(second.stderr, /Refusing to overwrite existing run dir:/);
+  // #408 in-flight check fires before the runDir-collision check when the branch carries
+  // an issue-N pattern; the runDir guard remains as a defense for non-issue branches.
+  assert.match(second.stderr, /Refusing to dispatch: 1 non-terminal run\(s\) already own issue-158/);
   assert.match(second.stderr, new RegExp(first.runId));
-  assert.match(second.stderr, /Pass --run-id <id> to resume, or --manifest <path> to resume from an explicit manifest\./);
+  assert.match(second.stderr, /--allow-conflicting-run/);
 });
 
 test("dispatch cleans up tmp rubric files when atomic rubric persistence fails", () => {

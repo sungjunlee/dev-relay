@@ -92,6 +92,11 @@ const {
   validateManifestPaths,
 } = require("./manifest/paths");
 const {
+  findInflightRunsForIssue,
+  formatInflightCollisionError,
+  inferIssueFromPromptOrBranch,
+} = require("./manifest/inflight-runs");
+const {
   getRubricAnchorStatus,
   hasRubricPath,
   rejectLegacyGrandfatherField,
@@ -120,7 +125,7 @@ const KNOWN_FLAGS = [
   "--branch", "-b", "--run-id", "--manifest", "--prompt", "-p", "--prompt-file", "--executor", "-e",
   "--model", "-m", "--model-hints", "--sandbox", "--network-access", "--copy", "--timeout", "--reasoning", "--rubric-file", "--test-command", "--rubric-grandfathered",
   "--request-id", "--leaf-id", "--done-criteria-file",
-  "--register", "--no-cleanup", "--auto-recover-commit", "--dry-run", "--json", "--help", "-h",
+  "--register", "--no-cleanup", "--auto-recover-commit", "--allow-conflicting-run", "--dry-run", "--json", "--help", "-h",
 ];
 const CLI_ARG_OPTIONS = { commandName: "dispatch", reservedFlags: KNOWN_FLAGS };
 const hasCliFlag = (flag) => schemaHasFlag(args, flag, CLI_ARG_OPTIONS);
@@ -153,6 +158,7 @@ if (!args.length || hasCliFlag(["--help", "-h"])) {
   console.log(`  --register         ${modeLabel("--register")} Register session in executor's app (keeps worktree)`);
   console.log(`  --no-cleanup       ${modeLabel("--no-cleanup")} Compatibility alias; worktree is retained by default`);
   console.log(`  --auto-recover-commit  ${modeLabel("--auto-recover-commit")} Opt-in: run recover-commit after completed-uncommitted (default: off)`);
+  console.log(`  --allow-conflicting-run  ${modeLabel("--allow-conflicting-run")} Bypass the in-flight run check (logs conflicting_run_override event)`);
   console.log(`  --dry-run          ${modeLabel("--dry-run")} Show plan without executing`);
   console.log(`  --json             ${modeLabel("--json")} Output as JSON`);
   process.exit(hasCliFlag(["--help", "-h"]) ? 0 : 1);
@@ -238,6 +244,7 @@ try {
 const REGISTER = hasCliFlag("--register");
 const NO_CLEANUP = hasCliFlag("--no-cleanup");
 const AUTO_RECOVER_COMMIT = hasCliFlag("--auto-recover-commit");
+const ALLOW_CONFLICTING_RUN = hasCliFlag("--allow-conflicting-run");
 const DRY_RUN = hasCliFlag("--dry-run");
 const JSON_OUT = hasCliFlag("--json");
 const RESUME_MODE = !!MANIFEST_INPUT || (!!RUN_ID && !BRANCH);
@@ -716,6 +723,15 @@ async function main() {
       });
     }
   } else {
+    const issueForCollisionCheck = issueNumber
+      || inferIssueFromPromptOrBranch(branch, PROMPT);
+    const inflightRuns = issueForCollisionCheck
+      ? findInflightRunsForIssue(repoRoot, issueForCollisionCheck)
+      : [];
+    if (inflightRuns.length > 0 && !ALLOW_CONFLICTING_RUN) {
+      console.error("Error: " + formatInflightCollisionError(inflightRuns, { issueNumber: issueForCollisionCheck }));
+      process.exit(1);
+    }
     runId = runId || createRunId({ issueNumber, branch });
     manifestPath = getManifestPath(repoRoot, runId);
     const runDir = getRunDir(repoRoot, runId);
@@ -726,6 +742,14 @@ async function main() {
     if (fs.existsSync(wtPath)) {
       console.error(`Error: worktree path already exists: ${wtPath}`);
       process.exit(1);
+    }
+    if (inflightRuns.length > 0 && ALLOW_CONFLICTING_RUN) {
+      appendRunEvent(repoRoot, runId, {
+        event: EVENTS.CONFLICTING_RUN_OVERRIDE,
+        state_from: STATES.DRAFT,
+        state_to: STATES.DRAFT,
+        reason: `bypassed ${inflightRuns.length} non-terminal run(s) for issue-${issueForCollisionCheck}: ${inflightRuns.map((run) => run.runId).join(", ")}`,
+      });
     }
   }
 

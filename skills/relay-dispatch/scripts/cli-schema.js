@@ -16,6 +16,7 @@ const VALUE = "value";
 
 const FLAGS = [
   { flag: "--all", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Presence flag; no value is consumed." },
+  { flag: "--allow-conflicting-run", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Operator override for the in-flight-run check; logs a conflicting_run_override event." },
   { flag: "--allow-same-head", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Explicit same-HEAD recovery opt-in; no value is consumed." },
   { flag: "--auto-recover-commit", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Explicit dispatch opt-in to run recover-commit after completed-uncommitted; no value is consumed." },
   { flag: "--artifact-path", kind: VALUE, mode: MODE_VERBATIM, valueName: "<path>", rationale: "Operator-supplied artifact path being reconciled; keep the literal argv token." },
@@ -115,7 +116,8 @@ const COMMAND_FLAGS = {
     "--branch", "--run-id", "--manifest", "--prompt", "--prompt-file", "--executor",
     "--model", "--model-hints", "--sandbox", "--network-access", "--copy", "--timeout", "--reasoning", "--rubric-file",
     "--test-command", "--rubric-grandfathered", "--request-id", "--leaf-id",
-    "--done-criteria-file", "--register", "--no-cleanup", "--auto-recover-commit", "--dry-run", "--json", "--help",
+    "--done-criteria-file", "--register", "--no-cleanup", "--auto-recover-commit",
+    "--allow-conflicting-run", "--dry-run", "--json", "--help",
   ],
   "finalize-run": [
     "--repo", "--run-id", "--manifest", "--branch", "--pr", "--merge-method",
