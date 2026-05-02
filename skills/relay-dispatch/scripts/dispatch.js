@@ -33,6 +33,7 @@
  *   --done-criteria-file   Persist a frozen Done Criteria anchor path
  *   --register             Register session in executor's app (keeps worktree)
  *   --no-cleanup           Compatibility alias; worktree is retained by default
+ *   --auto-recover-commit  Opt-in: run recover-commit after completed-uncommitted (default: off)
  *   --dry-run              Show plan without executing
  *   --json                 Output as JSON
  *
@@ -76,6 +77,7 @@ const {
 } = require("./manifest/environment");
 const {
   createManifestSkeleton,
+  readManifest,
   writeManifest,
 } = require("./manifest/store");
 const { parseModelHints } = require("./model-hints");
@@ -113,7 +115,7 @@ const KNOWN_FLAGS = [
   "--branch", "-b", "--run-id", "--manifest", "--prompt", "-p", "--prompt-file", "--executor", "-e",
   "--model", "-m", "--model-hints", "--sandbox", "--network-access", "--copy", "--timeout", "--reasoning", "--rubric-file", "--test-command", "--rubric-grandfathered",
   "--request-id", "--leaf-id", "--done-criteria-file",
-  "--register", "--no-cleanup", "--dry-run", "--json", "--help", "-h",
+  "--register", "--no-cleanup", "--auto-recover-commit", "--dry-run", "--json", "--help", "-h",
 ];
 const CLI_ARG_OPTIONS = { commandName: "dispatch", reservedFlags: KNOWN_FLAGS };
 const hasCliFlag = (flag) => schemaHasFlag(args, flag, CLI_ARG_OPTIONS);
@@ -145,6 +147,7 @@ if (!args.length || hasCliFlag(["--help", "-h"])) {
   console.log(`  --done-criteria-file  ${modeLabel("--done-criteria-file")} Persist a frozen Done Criteria anchor path`);
   console.log(`  --register         ${modeLabel("--register")} Register session in executor's app (keeps worktree)`);
   console.log(`  --no-cleanup       ${modeLabel("--no-cleanup")} Compatibility alias; worktree is retained by default`);
+  console.log(`  --auto-recover-commit  ${modeLabel("--auto-recover-commit")} Opt-in: run recover-commit after completed-uncommitted (default: off)`);
   console.log(`  --dry-run          ${modeLabel("--dry-run")} Show plan without executing`);
   console.log(`  --json             ${modeLabel("--json")} Output as JSON`);
   process.exit(hasCliFlag(["--help", "-h"]) ? 0 : 1);
@@ -223,6 +226,7 @@ try {
 
 const REGISTER = hasCliFlag("--register");
 const NO_CLEANUP = hasCliFlag("--no-cleanup");
+const AUTO_RECOVER_COMMIT = hasCliFlag("--auto-recover-commit");
 const DRY_RUN = hasCliFlag("--dry-run");
 const JSON_OUT = hasCliFlag("--json");
 const RESUME_MODE = !!MANIFEST_INPUT || (!!RUN_ID && !BRANCH);
@@ -1179,7 +1183,7 @@ async function main() {
   } else {
     status = exitCode === 0 ? "completed" : "failed";
   }
-  const commitMode = summarizeCommitMode({ status, gitLog, uncommitted });
+  let commitMode = summarizeCommitMode({ status, gitLog, uncommitted });
 
   let prNumber = manifest.git?.pr_number ?? null;
   let prCreatedByUs = null;
@@ -1257,6 +1261,48 @@ async function main() {
     executor_network: executorNetworkPolicy,
     failure_class: networkFailure,
   });
+
+  if (AUTO_RECOVER_COMMIT && status === "completed-uncommitted" && !DRY_RUN) {
+    const recoverCommitPath = path.join(__dirname, "recover-commit.js");
+    const reason = `auto-recovered after dispatch returned completed-uncommitted with --auto-recover-commit set (run ${runId})`;
+    try {
+      const recoveryOutput = execFileSync(process.execPath, [
+        recoverCommitPath,
+        "--repo", repoRoot,
+        "--run-id", runId,
+        "--reason", reason,
+        "--json",
+      ], {
+        encoding: "utf-8",
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      const recovery = JSON.parse(recoveryOutput);
+      commitMode = "auto-recovered";
+      prNumber = recovery.prNumber ?? prNumber;
+      currentHead = recovery.commitSha || currentHead;
+      try {
+        gitLog = execGit(wtPath, ["log", "--oneline", `${startHead}..HEAD`]);
+        uncommitted = execGit(wtPath, ["status", "--porcelain"]);
+        if (!uncommitted) uncommittedDiff = "";
+      } catch {}
+      try {
+        manifest = readManifest(manifestPath).data;
+        manifest = {
+          ...manifest,
+          git: {
+            ...(manifest.git || {}),
+            ...(prNumber !== null ? { pr_number: prNumber } : {}),
+            head_sha: currentHead || startHead || null,
+          },
+        };
+        writeManifest(manifestPath, manifest);
+      } catch {}
+    } catch (recoverError) {
+      const stderr = recoverError.stderr ? String(recoverError.stderr).trim() : "";
+      const message = stderr || String(recoverError.message || recoverError).split("\n")[0];
+      console.warn(`Warning: auto recover-commit failed: ${message}`);
+    }
+  }
 
   // --- Step 4.5: Optional app registration ---
   let threadId = null;

@@ -2624,6 +2624,44 @@ test("dispatch marks uncommitted result runs as completed-uncommitted and skips 
   assert.equal(Number(fs.readFileSync(pushPrCountPath, "utf-8")), 0);
 });
 
+test("dispatch --auto-recover-commit reports auto-recovered commitMode for completed-uncommitted runs (#393)", () => {
+  const { repoRoot, relayHome } = setupRepoWithOrigin();
+  process.env.RELAY_HOME = relayHome;
+  const { env, ghLogPath, execLogPath, pushPrCountPath } = createPushPrTestEnv({
+    relayHome,
+    ghState: {
+      prCreateUrl: "https://github.com/acme/dev-relay/pull/393",
+    },
+    codexMode: "uncommitted",
+  });
+
+  const result = JSON.parse(runDispatch(repoRoot, [
+    "-b", "issue-393-auto-recover",
+    "--prompt", "work without commit, then auto recover",
+    "--auto-recover-commit",
+    "--json",
+  ], env));
+
+  assert.equal(result.status, "completed-uncommitted");
+  assert.equal(result.commitMode, "auto-recovered");
+  assert.equal(result.runState, STATES.REVIEW_PENDING);
+  assert.equal(result.prNumber, 393);
+  assert.match(result.commits, /Recover relay run/);
+  assert.equal(result.uncommitted, null);
+  const manifest = readManifest(result.manifestPath).data;
+  assert.equal(manifest.state, STATES.REVIEW_PENDING);
+  assert.equal(manifest.git.pr_number, 393);
+  assert.equal(manifest.git.head_sha, result.headSha);
+  const ghCalls = readJsonLines(ghLogPath);
+  assert(ghCalls.some((args) => args[0] === "pr" && args[1] === "create"));
+  assert(readJsonLines(execLogPath).some(({ command, args }) => command === "git" && args.includes("push")));
+  assert.equal(Number(fs.readFileSync(pushPrCountPath, "utf-8")), 0);
+  const events = readJsonLines(getEventsPath(repoRoot, result.runId));
+  const recoveryEvent = events.find((event) => event.event === "recover_commit");
+  assert(recoveryEvent, JSON.stringify(events, null, 2));
+  assert.match(recoveryEvent.reason, /--auto-recover-commit set/);
+});
+
 test("dispatch uses result-file presence to distinguish silent failure from verified no-op", () => {
   const silentFixture = setupRepoWithOrigin();
   const silentEnv = createPushPrTestEnv({
