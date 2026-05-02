@@ -2,9 +2,9 @@
 
 ## Summary
 
-Relay dispatch gives Codex a worktree path with `codex exec -C <worktree> --sandbox workspace-write`. Normal file edits land under that worktree, but `git add` and `git commit` write lock and index files under the worktree's real Git admin directory, usually `<main-repo>/.git/worktrees/<name>/`. That directory is outside the worktree path, so Codex needs it in the workspace-write allowlist.
+Relay dispatch gives Codex a worktree path with `codex exec -C <worktree> --sandbox workspace-write`. Normal file edits land under that worktree, but a linked-worktree `git add` writes lock + index files at `<main-repo>/.git/worktrees/<name>/index.lock` AND blob objects at `<main-repo>/.git/objects/`, while `git commit` updates branch refs and reflogs at `<main-repo>/.git/refs/heads/<branch>` and `<main-repo>/.git/logs/refs/...`. All of these live under the **common git dir** (`<main-repo>/.git`), outside the worktree path. Codex needs the full common git dir in the workspace-write allowlist for the add+commit cycle to succeed.
 
-This PR ships Path 1: `dispatch.js` resolves the worktree admin dir with `git -C <worktree> rev-parse --git-dir`, validates that it is under `git -C <worktree> rev-parse --git-common-dir` plus `worktrees/`, and passes it to Codex as `--add-dir <admin-dir>` for Codex `workspace-write` executions. Path 2 remains available through the existing `recover-commit.js` operator recovery path and is not enabled by default.
+This PR ships Path 1: `dispatch.js` resolves the common git dir with `git -C <worktree> rev-parse --git-common-dir`, validates that the per-worktree admin dir from `--git-dir` lives under `<common>/worktrees/`, and passes the **common dir** (not just the admin dir) to Codex as `--add-dir <common-git-dir>` for Codex `workspace-write` executions. Round-2 reviewer flagged that admin-dir-only widening would leave objects/refs writes outside the sandbox; the fix widened to the common dir, which subsumes the per-worktree admin dir as a subdirectory. Path 2 remains available through the existing `recover-commit.js` operator recovery path and is not enabled by default.
 
 ## Codex 0.128.0 Config Surface
 
@@ -43,7 +43,7 @@ If `--add-dir` is NOT supported or doesn't fix the failure: ship Path 2 and docu
 Summary:
 
 - Documented the Codex 0.128.0 sandbox config surface and local repro limits.
-- Added Codex-only `--add-dir <admin-dir>` argv construction for relay worktrees.
+- Added Codex-only `--add-dir <common-git-dir>` argv construction for relay worktrees (covers per-worktree admin dir + objects/ + refs/ + logs/).
 - Surfaced dispatch handoff mode as `commitMode`, including `committed in-sandbox` and `completed-uncommitted, recover-commit required`.
 
 Decision-tree paths from #389, echoed verbatim:

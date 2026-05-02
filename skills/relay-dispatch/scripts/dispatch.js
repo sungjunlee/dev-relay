@@ -532,7 +532,13 @@ function realpathForContainment(targetPath) {
   return fs.realpathSync.native ? fs.realpathSync.native(targetPath) : fs.realpathSync(targetPath);
 }
 
-function resolveCodexWorktreeAdminDir(worktreePath) {
+function resolveCodexCommonGitDir(worktreePath) {
+  // Widen the codex sandbox to the common git dir (`<main-repo>/.git`), not just
+  // the per-worktree admin dir. Linked-worktree `git add` writes blob objects
+  // under `<common>/objects/`, and `git commit` updates branch refs and reflogs
+  // under `<common>/refs/...` and `<common>/logs/...` — both in the common dir,
+  // not in `<common>/worktrees/<name>/`. The worktree admin dir is a subdir of
+  // the common dir, so passing common-dir alone covers both paths.
   const adminDirRaw = execGit(worktreePath, ["rev-parse", "--git-dir"]);
   const commonDirRaw = execGit(worktreePath, ["rev-parse", "--git-common-dir"]);
   const adminDir = path.resolve(worktreePath, adminDirRaw);
@@ -546,7 +552,7 @@ function resolveCodexWorktreeAdminDir(worktreePath) {
       `codex worktree git admin dir is outside ${worktreesDir}: ${adminDir}`
     );
   }
-  return adminDir;
+  return commonDir;
 }
 
 function summarizeCommitMode({ status, gitLog, uncommitted }) {
@@ -919,7 +925,7 @@ async function main() {
 
   let cmd, execArgs;
   let execCwd;
-  let codexGitAdminDir = null;
+  let codexGitCommonDir = null;
   const reasoningRunDir = getRunDir(repoRoot, runId);
   const rubricPathForReasoning = manifest?.anchor?.rubric_path
     ? path.join(reasoningRunDir, manifest.anchor.rubric_path)
@@ -947,8 +953,8 @@ async function main() {
     if (effectiveDispatchModel) execArgs.push("-m", effectiveDispatchModel);
     execArgs.push("--sandbox", SANDBOX);
     if (SANDBOX === "workspace-write") {
-      codexGitAdminDir = resolveCodexWorktreeAdminDir(wtPath);
-      execArgs.push("--add-dir", codexGitAdminDir);
+      codexGitCommonDir = resolveCodexCommonGitDir(wtPath);
+      execArgs.push("--add-dir", codexGitCommonDir);
     }
     execArgs.push(execPrompt);
   } else if (EXECUTOR === "claude") {
@@ -1261,7 +1267,7 @@ async function main() {
     commitMode,
     executor: EXECUTOR,
     executorNetwork: executorNetworkPolicy,
-    codexGitAdminDir,
+    codexGitCommonDir,
     worktree: wtPath,
     branch,
     mode: RESUME_MODE ? "resume" : "new",
