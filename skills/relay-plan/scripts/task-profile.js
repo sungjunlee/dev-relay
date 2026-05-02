@@ -1,6 +1,8 @@
 const CHANGE_TYPES = new Set(["bugfix", "feature", "refactor", "docs", "test", "infra", "visual", "prompt"]);
 const EXECUTION_MODES = new Set(["quick", "standard", "fresh-context", "batch-wave"]);
 const SIZES = new Set(["S", "M", "L", "XL"]);
+const TRUST_BOUNDARY_PATTERN = /\b(?:trust[- ]boundary|auth[- ]boundary|trust root|forge|forged|bypass|fail closed|gate-check|validate[- ]?(?:manifest|transition)|state transition|state-machine)\b/;
+const STATE_MACHINE_PATTERN = /\b(?:state transition|state-machine|validate[- ]?transition|manifest state)\b/;
 
 function parseJsonish(value) {
   if (!value) return {};
@@ -75,10 +77,10 @@ function inferRiskTags(text, taskRisk) {
   const tags = [];
   addMany(tags, asStringArray(taskRisk?.risk_tags));
   addMany(tags, asStringArray(taskRisk?.riskTags));
-  if (/\btrust[- ]boundary|auth[- ]boundary|trust root|forg(e|ed)|bypass|fail closed|gate-check|validatemanifest|validatetransition|state transition|state-machine\b/.test(text)) {
+  if (TRUST_BOUNDARY_PATTERN.test(text)) {
     addUnique(tags, "trust-boundary");
   }
-  if (/\bstate transition|state-machine|validatetransition|manifest state\b/.test(text)) addUnique(tags, "state-machine");
+  if (STATE_MACHINE_PATTERN.test(text)) addUnique(tags, "state-machine");
   if (/\bpublic api|exported|schema|contract|cli flag|command line|user-facing\b/.test(text)) addUnique(tags, "public-api");
   if (/\bbackward|compat|byte-identical|unchanged|stable|existing behavior\b/.test(text)) addUnique(tags, "backward-compatibility");
   if (/\bprompt|rubric|skill\.md|dispatch prompt|reviewer prompt|done criteria|content boundary\b/.test(text)) addUnique(tags, "prompt-contract");

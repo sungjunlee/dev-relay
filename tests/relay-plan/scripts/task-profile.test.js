@@ -121,6 +121,20 @@ test("trust-boundary task profile selects trust-boundary guidance", () => {
   assert.ok(profile.guidance_packs.includes("trust-boundary"));
 });
 
+test("validate manifest wording selects trust-boundary guidance", () => {
+  const profile = deriveTaskProfile({
+    doneCriteria: "Validate manifest state before applying review gate decisions.",
+    probeSignal: PROBE_SIGNAL,
+    historicalSignal: HISTORICAL_SIGNAL,
+    taskRisk: {},
+    size: "M",
+  });
+
+  assert.ok(profile.risk_tags.includes("trust-boundary"));
+  assert.ok(profile.risk_tags.includes("state-machine"));
+  assert.equal(profile.execution_mode, "fresh-context");
+});
+
 test("selected task_profile is visible in dispatch prompt metadata only", () => {
   const baseline = fs.readFileSync(BASELINE_PROMPT_PATH, "utf-8");
   const profile = deriveTaskProfile({
