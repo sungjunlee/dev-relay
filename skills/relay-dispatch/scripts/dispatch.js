@@ -528,6 +528,46 @@ function resolveEffectiveDispatchModel({ cliModel, manifestModelHints, cliModelH
   return null;
 }
 
+function realpathForContainment(targetPath) {
+  return fs.realpathSync.native ? fs.realpathSync.native(targetPath) : fs.realpathSync(targetPath);
+}
+
+function resolveCodexCommonGitDir(worktreePath) {
+  // Widen the codex sandbox to the common git dir (`<main-repo>/.git`), not just
+  // the per-worktree admin dir. Linked-worktree `git add` writes blob objects
+  // under `<common>/objects/`, and `git commit` updates branch refs and reflogs
+  // under `<common>/refs/...` and `<common>/logs/...` — both in the common dir,
+  // not in `<common>/worktrees/<name>/`. The worktree admin dir is a subdir of
+  // the common dir, so passing common-dir alone covers both paths.
+  const adminDirRaw = execGit(worktreePath, ["rev-parse", "--git-dir"]);
+  const commonDirRaw = execGit(worktreePath, ["rev-parse", "--git-common-dir"]);
+  const adminDir = path.resolve(worktreePath, adminDirRaw);
+  const commonDir = path.resolve(worktreePath, commonDirRaw);
+  const worktreesDir = path.join(commonDir, "worktrees");
+
+  const realAdminDir = realpathForContainment(adminDir);
+  const realWorktreesDir = realpathForContainment(worktreesDir);
+  if (!realAdminDir.startsWith(`${realWorktreesDir}${path.sep}`)) {
+    throw new Error(
+      `codex worktree git admin dir is outside ${worktreesDir}: ${adminDir}`
+    );
+  }
+  return commonDir;
+}
+
+function summarizeCommitMode({ status, gitLog, uncommitted }) {
+  if (!gitLog && uncommitted) {
+    return "completed-uncommitted, recover-commit required";
+  }
+  if (status === "completed" || status === "completed-with-warning") {
+    return gitLog ? "committed in-sandbox" : status;
+  }
+  if (status === "completed-uncommitted") {
+    return "completed-uncommitted, recover-commit required";
+  }
+  return status;
+}
+
 // ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
@@ -885,6 +925,7 @@ async function main() {
 
   let cmd, execArgs;
   let execCwd;
+  let codexGitCommonDir = null;
   const reasoningRunDir = getRunDir(repoRoot, runId);
   const rubricPathForReasoning = manifest?.anchor?.rubric_path
     ? path.join(reasoningRunDir, manifest.anchor.rubric_path)
@@ -911,6 +952,10 @@ async function main() {
     }
     if (effectiveDispatchModel) execArgs.push("-m", effectiveDispatchModel);
     execArgs.push("--sandbox", SANDBOX);
+    if (SANDBOX === "workspace-write") {
+      codexGitCommonDir = resolveCodexCommonGitDir(wtPath);
+      execArgs.push("--add-dir", codexGitCommonDir);
+    }
     execArgs.push(execPrompt);
   } else if (EXECUTOR === "claude") {
     cmd = "claude";
@@ -1098,6 +1143,7 @@ async function main() {
   } else {
     status = exitCode === 0 ? "completed" : "failed";
   }
+  const commitMode = summarizeCommitMode({ status, gitLog, uncommitted });
 
   let prNumber = manifest.git?.pr_number ?? null;
   let prCreatedByUs = null;
@@ -1218,8 +1264,10 @@ async function main() {
     runState: manifest.state,
     cleanupPolicy,
     status,
+    commitMode,
     executor: EXECUTOR,
     executorNetwork: executorNetworkPolicy,
+    codexGitCommonDir,
     worktree: wtPath,
     branch,
     mode: RESUME_MODE ? "resume" : "new",
@@ -1248,6 +1296,7 @@ async function main() {
     console.log(`\n--- Dispatch ${result.status} (${elapsed}s) ---`);
     if (error) console.log(`  Error: ${error}`);
     console.log(`  Run state: ${result.runState}`);
+    console.log(`  Commit mode: ${result.commitMode}`);
     if (prNumber !== null) {
       console.log(`  PR:        #${prNumber}${prCreatedByUs === true ? " (created by orchestrator)" : prCreatedByUs === false ? " (existing)" : ""}`);
     }
