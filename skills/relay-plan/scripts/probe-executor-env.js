@@ -194,7 +194,7 @@ function probeAgent(executor, timeout) {
 
   if (executor === "codex") {
     cmd = "codex";
-    cmdArgs = ["exec", "--full-auto", "--sandbox", "read-only", "--color", "never", PROBE_PROMPT];
+    cmdArgs = ["exec", "--sandbox", "read-only", "--color", "never", PROBE_PROMPT];
   } else if (executor === "claude") {
     cmd = "claude";
     cmdArgs = ["-p", "--output-format", "text", PROBE_PROMPT];
