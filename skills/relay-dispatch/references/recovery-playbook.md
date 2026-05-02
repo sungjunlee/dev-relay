@@ -65,6 +65,23 @@ Decision tree: if the executor finished implementation but did not commit, use `
 
 Use `recover-commit.js` when the executor changed files but did not commit, push, or create/stamp a PR. It creates the missing commit/PR handoff and leaves the manifest in `review_pending`.
 
+### Codex worktree admin-dir sandbox
+
+Codex CLI 0.128.0 exposes two relevant sandbox configuration surfaces:
+
+- `codex exec --help` documents `--add-dir <DIR>` as "Additional directories that should be writable alongside the primary workspace".
+- `-c, --config <key=value>` accepts dotted config overrides parsed as TOML, and relay-dispatch already uses it for `sandbox_workspace_write.network_access=true`.
+
+For relay worktrees, the worktree `.git` file points at the real Git admin directory under the main repository, usually `<main-repo>/.git/worktrees/<name>/`. A Codex executor whose `-C` is the worktree path can write normal workspace files while Git still needs to create files such as `index.lock` in that external admin directory. `dispatch.js` now computes the admin dir after the retained worktree path is known and passes it to Codex as `--add-dir <admin-dir>` for Codex `workspace-write` runs.
+
+Investigation note for #389: `codex --version` reported `codex-cli 0.128.0`, and `codex exec --help` exposed `--add-dir <DIR>`. A temp worktree repro in this dispatch environment could not complete the model step because nested Codex DNS failed against `chatgpt.com`, so the local failure remains intermittent here. The startup logs did confirm the sandbox allowlist changed from `workspace-write [workdir, /tmp, $TMPDIR, <codex-home>/memories]` to `workspace-write [workdir, /tmp, $TMPDIR, <main-repo>/.git/worktrees/<name>, <codex-home>/memories]` when `--add-dir <admin-dir>` was present. Treat the original #332 retained evidence as the canonical observed failure: `dispatch_result` recorded `new_dispatch:completed-uncommitted`, and recovery used reason `codex finished implementation but sandbox blocked git add/commit step`; the canonical stderr shape is `fatal: Unable to create '<main-repo>/.git/worktrees/<name>/index.lock': Operation not permitted`.
+
+Decision-tree paths from #389, kept verbatim:
+
+If `--add-dir` IS supported and works: ship Path 1. Path 2 (`--auto-recover-commit`) becomes optional defense-in-depth — either bundle it or defer to a follow-up issue.
+
+If `--add-dir` is NOT supported or doesn't fix the failure: ship Path 2 and document Path 1's failure mode in recovery-playbook.md.
+
 Use normal `dispatch.js --run-id <id>` when reviewer feedback requires code changes. That path re-dispatches implementation work and must produce a fresh code handoff before review.
 
 Use `recover-state.js --to review_pending` for external events that make a new review valid without redispatch. The normal path still requires `HEAD != review.last_reviewed_sha`. The same-HEAD exception is only for PR-body-only evidence changes and emits a `state_recovery` event with `pr_body_only: true`, `head_sha`, `last_reviewed_sha`, `pr_number`, and the operator `reason`.
