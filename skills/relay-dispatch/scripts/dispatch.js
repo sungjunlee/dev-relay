@@ -97,7 +97,7 @@ const {
   rejectLegacyGrandfatherField,
   validateRubricPathContainment,
 } = require("./manifest/rubric");
-const { getPositionals, modeLabel, readArg, schemaHasFlag } = require("./cli-args");
+const { findUnknownFlags, getPositionals, modeLabel, readArg, schemaHasFlag } = require("./cli-args");
 const { formatAttemptsForPrompt, readPreviousAttempts } = require("./manifest/attempts");
 const {
   buildGuidanceMetadata,
@@ -156,6 +156,12 @@ if (!args.length || hasCliFlag(["--help", "-h"])) {
   console.log(`  --dry-run          ${modeLabel("--dry-run")} Show plan without executing`);
   console.log(`  --json             ${modeLabel("--json")} Output as JSON`);
   process.exit(hasCliFlag(["--help", "-h"]) ? 0 : 1);
+}
+
+const UNKNOWN_FLAGS = findUnknownFlags(args, "dispatch");
+if (UNKNOWN_FLAGS.length) {
+  console.error(`Error: unknown flags: ${UNKNOWN_FLAGS.join(", ")}`);
+  process.exit(1);
 }
 
 // Positional arg: first arg that isn't a flag and isn't consumed as a flag's value.
