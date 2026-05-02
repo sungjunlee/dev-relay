@@ -228,6 +228,37 @@ const RUN_EVENT_FIELD_CASES = [
     },
     expected: { commit_sha: "deadbeef", branch: "issue-281" },
   },
+  {
+    label: "guidance metadata",
+    fields: {
+      event: EVENTS.GUIDANCE_SELECTED,
+      state_from: "draft",
+      state_to: "draft",
+      reason: "new_dispatch",
+      guidance_packs: ["surgical-change", "verification-evidence"],
+      task_profile_summary: {
+        size: "M",
+        change_type: "feature",
+        domains: ["relay-dispatch"],
+        risk_tags: ["trust-boundary"],
+        execution_mode: "fresh-context",
+      },
+      guidance_source: "prompt",
+      guidance_artifact_path: "guidance-metadata.json",
+    },
+    expected: {
+      guidance_packs: ["surgical-change", "verification-evidence"],
+      task_profile_summary: {
+        size: "M",
+        change_type: "feature",
+        domains: ["relay-dispatch"],
+        risk_tags: ["trust-boundary"],
+        execution_mode: "fresh-context",
+      },
+      guidance_source: "prompt",
+      guidance_artifact_path: "guidance-metadata.json",
+    },
+  },
 ];
 
 test("appendRunEvent round-trips optional fields when provided", () => {
@@ -237,8 +268,8 @@ test("appendRunEvent round-trips optional fields when provided", () => {
 
     const [parsed] = readRunEvents(repoRoot, runId);
     for (const [key, value] of Object.entries(row.expected)) {
-      assert.equal(record[key], value, `${row.label} record ${key}`);
-      assert.equal(parsed[key], value, `${row.label} parsed ${key}`);
+      assert.deepEqual(record[key], value, `${row.label} record ${key}`);
+      assert.deepEqual(parsed[key], value, `${row.label} parsed ${key}`);
     }
   }
 });

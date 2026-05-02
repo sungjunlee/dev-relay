@@ -99,6 +99,11 @@ const {
 } = require("./manifest/rubric");
 const { getPositionals, modeLabel, readArg, schemaHasFlag } = require("./cli-args");
 const { formatAttemptsForPrompt, readPreviousAttempts } = require("./manifest/attempts");
+const {
+  buildGuidanceMetadata,
+  GUIDANCE_METADATA_FILENAME,
+  persistGuidanceMetadata,
+} = require("./manifest/guidance");
 const { STATES, updateManifestState } = require("./manifest/lifecycle");
 const { resolveManifestRecord } = require("./relay-resolver");
 const { appendRunEvent, EVENTS } = require("./relay-events");
@@ -956,6 +961,34 @@ async function main() {
       failRubricPersistence(rubricAnchor.error);
     }
     writeManifest(manifestPath, manifest);
+  }
+
+  const guidanceMetadata = buildGuidanceMetadata({
+    promptText: taskPrompt,
+    manifest,
+    promptSource: taskPromptResult.source,
+    rubricPath: manifest?.anchor?.rubric_path || null,
+  });
+  if (guidanceMetadata) {
+    const runDir = getRunDir(repoRoot, runId);
+    try {
+      manifest = persistGuidanceMetadata({ runDir, manifest, metadata: guidanceMetadata });
+      writeManifest(manifestPath, manifest);
+      appendRunEvent(repoRoot, runId, {
+        event: EVENTS.GUIDANCE_SELECTED,
+        state_from: manifest.state,
+        state_to: manifest.state,
+        head_sha: manifest.git?.head_sha || null,
+        reason: RESUME_MODE ? "same_run_resume" : "new_dispatch",
+        guidance_packs: guidanceMetadata.guidance_packs,
+        task_profile_summary: guidanceMetadata.task_profile_summary,
+        guidance_source: guidanceMetadata.source,
+        guidance_artifact_path: GUIDANCE_METADATA_FILENAME,
+      });
+    } catch (guidanceError) {
+      console.error(`Error: failed to persist guidance metadata: ${guidanceError.message}`);
+      process.exit(1);
+    }
   }
 
   // --- Step 3: Execute task ---
