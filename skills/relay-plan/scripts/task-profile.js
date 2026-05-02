@@ -75,10 +75,10 @@ function inferRiskTags(text, taskRisk) {
   const tags = [];
   addMany(tags, asStringArray(taskRisk?.risk_tags));
   addMany(tags, asStringArray(taskRisk?.riskTags));
-  if (/\btrust[- ]boundary|auth[- ]boundary|trust root|forg(e|ed)|bypass|fail closed|gate-check|validate(manifest|transition)?|state transition|state-machine\b/.test(text)) {
+  if (/\btrust[- ]boundary|auth[- ]boundary|trust root|forg(e|ed)|bypass|fail closed|gate-check|validatemanifest|validatetransition|state transition|state-machine\b/.test(text)) {
     addUnique(tags, "trust-boundary");
   }
-  if (/\bstate transition|state-machine|validateTransition|manifest state\b/.test(text)) addUnique(tags, "state-machine");
+  if (/\bstate transition|state-machine|validatetransition|manifest state\b/.test(text)) addUnique(tags, "state-machine");
   if (/\bpublic api|exported|schema|contract|cli flag|command line|user-facing\b/.test(text)) addUnique(tags, "public-api");
   if (/\bbackward|compat|byte-identical|unchanged|stable|existing behavior\b/.test(text)) addUnique(tags, "backward-compatibility");
   if (/\bprompt|rubric|skill\.md|dispatch prompt|reviewer prompt|done criteria|content boundary\b/.test(text)) addUnique(tags, "prompt-contract");

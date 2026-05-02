@@ -75,6 +75,21 @@ test("docs task profile selects docs reader-success guidance", () => {
   assert.ok(profile.guidance_packs.includes("docs-reader-success"));
 });
 
+test("generic validate wording does not imply trust-boundary guidance", () => {
+  const profile = deriveTaskProfile({
+    doneCriteria: "Validate docs/operator-guide.md examples so a reader can run the command.",
+    probeSignal: PROBE_SIGNAL,
+    historicalSignal: HISTORICAL_SIGNAL,
+    taskRisk: {},
+    size: "S",
+  });
+
+  assert.equal(profile.change_type, "docs");
+  assert.equal(profile.execution_mode, "quick");
+  assert.ok(!profile.risk_tags.includes("trust-boundary"));
+  assert.ok(!profile.guidance_packs.includes("trust-boundary"));
+});
+
 test("refactor task profile selects simplify guidance", () => {
   const profile = deriveTaskProfile({
     doneCriteria: "Refactor skills/relay-plan/scripts/probe-executor-env.js without behavior changes.",
