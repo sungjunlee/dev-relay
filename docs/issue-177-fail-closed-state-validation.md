@@ -6,7 +6,7 @@ This document mirrors the review-contract evidence for issue #177 into the track
 
 This follow-up closes the iteration-6 HIGH class surfaced by the post-merge codex challenge of PR #175 (`501eb8e`), not iteration 7 in a new ladder. The failure class was still the sibling-axis gap inside the #174 pattern break: exact-PR exclusion sites handled known terminal states but still failed open on tampered or missing `state` values.
 
-The post-merge challenge scope for this PR is narrowed to the 5-part Batch 1.5 invariant only, with no sibling-axis probes, because this PR is the sibling-axis closure for iteration 6. The canonical memory file is `~/.claude/projects/-Users-sjlee-workspace-active-harness-stack-dev-relay/memory/feedback_rubric_fail_closed.md`. The sprint cross-link for the stop trigger is `/Users/sjlee/workspace/active/harness-stack/dev-relay/backlog/sprints/2026-04-agentic-patterns-phase-0.md`, Progress entry `2026-04-13 13:53`, which records the iteration-6 STOP signal on `501eb8e`.
+The post-merge challenge scope for this PR is narrowed to the 5-part Batch 1.5 invariant only, with no sibling-axis probes, because this PR is the sibling-axis closure for iteration 6. The canonical memory file at the time was `~/.claude/projects/-Users-sjlee-workspace-active-harness-stack-dev-relay/memory/feedback_rubric_fail_closed.md`. The sprint cross-link for the stop trigger is `/Users/sjlee/workspace/active/harness-stack/dev-relay/backlog/sprints/2026-04-agentic-patterns-phase-0.md`, Progress entry `2026-04-13 13:53`, which records the iteration-6 STOP signal on `501eb8e`.
 
 ## Rule 7
 

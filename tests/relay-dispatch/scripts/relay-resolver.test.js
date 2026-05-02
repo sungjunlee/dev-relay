@@ -241,7 +241,7 @@ test("resolveManifestRecord sanitizes tampered run_id in stale-fallback recovery
   // Anti-theater: without the #174 safeFormatRunId hardening at relay-resolver.js:191-208 and
   // buildNoManifestError candidate rendering at :232-240, this stale-fallback branch reused the
   // raw stored run_id in operator-facing close-run text. Sibling-field enumeration + end-to-end
-  // recovery meta-rules, memory/feedback_rubric_fail_closed.md; #171/#174.
+  // recovery meta-rules, docs/rubric-fail-closed-history.md; #171/#174.
   assert.throws(
     () => resolveManifestRecord({ repoRoot, branch: "feature-auth", prNumber: 120 }),
     (error) => {
@@ -278,7 +278,7 @@ test("resolveManifestRecord sanitizes tampered run_id in mixed-state recovery te
 
   // Anti-theater: before the #174 mixed-state builder at relay-resolver.js:254-272 switched to
   // safeFormatRunId, the new ambiguity path echoed the tampered stored run_id verbatim. Sibling-field
-  // enumeration meta-rule, memory/feedback_rubric_fail_closed.md; #171/#174.
+  // enumeration meta-rule, docs/rubric-fail-closed-history.md; #171/#174.
   assert.throws(
     () => resolveManifestRecord({ repoRoot, branch: "feature-auth", prNumber: 123 }),
     (error) => {
@@ -306,7 +306,7 @@ test("resolveManifestRecord sanitizes tampered run_id in terminal-only rejection
 
   // Anti-theater: without the #174 safe candidate rendering in relay-resolver.js:232-240, the
   // terminal-only rejection still leaked the tampered stored run_id in the candidate list. Call-site
-  // extension + sibling-field enumeration meta-rules, memory/feedback_rubric_fail_closed.md; #170/#174.
+  // extension + sibling-field enumeration meta-rules, docs/rubric-fail-closed-history.md; #170/#174.
   assert.throws(
     () => resolveManifestRecord({ repoRoot, branch: "feature-auth", prNumber: 123 }),
     (error) => {
@@ -526,7 +526,7 @@ test("resolveManifestRecord covers the stored-pr terminal exact-PR collision mat
       // Anti-theater: before the #174 mixed-state recovery builder at relay-resolver.js:391-394,
       // this exact-PR miss either fell into stale review_pending fallback or surfaced a generic
       // ambiguity that suggested unreachable actions. End-to-end recovery meta-rule,
-      // memory/feedback_rubric_fail_closed.md; #170/#174.
+      // docs/rubric-fail-closed-history.md; #170/#174.
     },
     {
       label: "merged + matching stored pr + fresh dispatched + pr unset + caller pr miss",
@@ -607,7 +607,7 @@ test("resolveManifestRecord covers the stored-pr terminal exact-PR collision mat
       },
       // Anti-theater: before the #174 mixed-state recovery builder at relay-resolver.js:391-394,
       // this closed+review_pending post-stamp miss also surfaced the wrong recovery path. End-to-end
-      // recovery meta-rule, memory/feedback_rubric_fail_closed.md; #170/#174.
+      // recovery meta-rule, docs/rubric-fail-closed-history.md; #170/#174.
     },
   ];
 
@@ -838,7 +838,7 @@ test("resolveManifestRecord includeTerminal:false rejects standalone --pr termin
 
   // Anti-theater: before the #174 standalone --pr hardening at relay-resolver.js:369-371, this
   // selector ran `filterByPr(allRecords, 40)` and silently returned the merged manifest. Call-site
-  // extension meta-rule, memory/feedback_rubric_fail_closed.md; #170/#174.
+  // extension meta-rule, docs/rubric-fail-closed-history.md; #170/#174.
   assert.throws(
     () => resolveManifestRecord({ repoRoot, prNumber: EXACT_PR_COLLISION_PR, includeTerminal: false }),
     (error) => {
@@ -942,7 +942,7 @@ test("resolveManifestRecord rejects standalone --pr when a stale terminal PR mat
 
   // Anti-theater: before the #174 standalone --pr hardening at relay-resolver.js:369-371, the
   // stale merged exact-PR match shadowed the fresh non-terminal sibling because the call site was
-  // terminal-inclusive. Call-site extension meta-rule, memory/feedback_rubric_fail_closed.md; #170/#174.
+  // terminal-inclusive. Call-site extension meta-rule, docs/rubric-fail-closed-history.md; #170/#174.
   assert.throws(
     () => resolveManifestRecord({ repoRoot, prNumber: 123 }),
     /No relay manifest found for pr '123'/
@@ -1001,7 +1001,7 @@ test("resolveManifestRecord preserves standalone --pr for active exact-PR matche
 
   // Anti-theater: the #174 narrowing at relay-resolver.js:369-371 must stay exact-PR preserving for
   // active runs; otherwise the call-site extension fix would over-correct and strand legitimate resume
-  // by PR. Call-site extension meta-rule, memory/feedback_rubric_fail_closed.md; #174.
+  // by PR. Call-site extension meta-rule, docs/rubric-fail-closed-history.md; #174.
   const match = resolveManifestRecord({ repoRoot, prNumber: 123 });
   assert.equal(match.manifestPath, manifestPath);
   assert.equal(match.data.run_id, runId);
@@ -1234,7 +1234,7 @@ test("resolveManifestRecord exercises the #170 stale-terminal recovery flow end-
 
   // Anti-theater: pre-#170, relay-resolver.js:185 silently returned this merged manifest, so the
   // operator never hit the fresh-dispatch recovery path. #170 closes the fourth rung in the
-  // #149 -> #165 -> #168 -> #170 ladder; per memory/feedback_rubric_fail_closed.md's
+  // #149 -> #165 -> #168 -> #170 ladder; per docs/rubric-fail-closed-history.md's
   // end-to-end-recovery meta-rule, assert the stale terminal is rejected, close-run cannot help,
   // and a fresh dispatched run resolves cleanly on the same branch.
   assert.throws(
@@ -1301,7 +1301,7 @@ test("resolveManifestRecord names fresh dispatch for mixed terminal plus review_
   // Anti-theater: without the #174 mixed-state recovery branch at relay-resolver.js:381-394 and the
   // fresh-dispatch reachability preference at :340-355, this path either suggested unreachable
   // commands or re-opened ambiguity after the operator followed the documented recovery. End-to-end
-  // recovery meta-rule, memory/feedback_rubric_fail_closed.md; #163/#170/#174.
+  // recovery meta-rule, docs/rubric-fail-closed-history.md; #163/#170/#174.
   assert.throws(
     () => resolveManifestRecord({ repoRoot, branch: "feature-mixed", prNumber: 123 }),
     (error) => {
@@ -1657,7 +1657,7 @@ test("resolveManifestRecord rejects stale fallback candidates with invalid state
 
   // Anti-theater: before the #174 invalid-state guard at relay-resolver.js:195-208, this path
   // interpolated `stale_bogus_run` into the suggested command even though close-run would reject the
-  // manifest state. End-to-end recovery meta-rule, memory/feedback_rubric_fail_closed.md; #172/#174.
+  // manifest state. End-to-end recovery meta-rule, docs/rubric-fail-closed-history.md; #172/#174.
   assert.throws(
     () => resolveManifestRecord({ repoRoot, branch: "feature-invalid", prNumber: 120 }),
     (error) => {
@@ -1750,7 +1750,7 @@ test("close-run remains reachable across active states named in stale-fallback r
         const expectedReason = `stale_${state}_run`;
         // Anti-theater: the #174 state whitelist in relay-resolver.js:195-208 must keep recommending
         // only close-run commands that the real state machine accepts. End-to-end recovery meta-rule,
-        // memory/feedback_rubric_fail_closed.md; #163/#172/#174.
+        // docs/rubric-fail-closed-history.md; #163/#172/#174.
         assert.throws(
           () => resolveManifestRecord({ repoRoot, branch, prNumber: 120 }),
           (error) => {

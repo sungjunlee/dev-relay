@@ -35,7 +35,7 @@ Name the **exact `file:function` call site** at which runtime enforcement happen
 
 Manifest internals were split in #188 under `skills/relay-dispatch/scripts/manifest/*.js`; the top-level `relay-manifest.js` is now a 17-line compat facade that re-exports everything. Rubric factors should name the split submodule (`manifest/rubric.js`, `manifest/lifecycle.js`, etc.) — that path is stable across re-exports and matches what tests and runtime call sites actually import.
 
-If the gate lives in prompt text (reviewer prompt, dispatch prompt) rather than a code-path transition, that is **not** a gate — it is at best a visible warning. See `feedback_rubric_fail_closed.md` meta-rule 1: "visible" and "fail-closed" are distinct layers; the rubric must name both.
+If the gate lives in prompt text (reviewer prompt, dispatch prompt) rather than a code-path transition, that is **not** a gate — it is at best a visible warning. See `references/rubric-fail-closed-patterns.md`: "visible" and "fail-closed" are distinct layers; the rubric must name both.
 
 ### 3. What independently verifies the claim?
 
@@ -129,5 +129,4 @@ A PR that answered this reference's trigger but left any of the three questions 
 ## Related
 
 - `references/rubric-security.md` — broad security rubric guidance. Use alongside this reference; do not collapse.
-- `memory/feedback_rubric_enforcement_layer.md` — source meta-rule for questions 1-3.
-- `memory/feedback_rubric_fail_closed.md` — deeper meta-rule ladder (visible vs fail-closed vs recoverable vs authenticated).
+- `references/rubric-fail-closed-patterns.md` — deeper fail-closed pattern library (visible vs fail-closed vs recoverable vs authenticated).

@@ -6,7 +6,7 @@ This document mirrors the review-contract documentation from PR #175 into the tr
 
 This is one PR, not iteration 5, because the failure pattern was the ladder itself: #149 fixed `filterByBranch`, #165 fixed the escalated+null fallback, #168 converted the branch fallback to a dispatched-only whitelist, and #170 fixed the branch+PR `filterByPr` composition site. Issue #174 recorded the stop-signal after that ladder: four consecutive codex challenges (`#149 -> #165 -> #168 -> #170`) each landed a narrow patch and exposed the next sibling path.
 
-The cross-iteration STOP signal came from `memory/feedback_rubric_fail_closed.md` and is restated in issue #174: once the same invariant survives 3+ consecutive iterations, the next fix must break the pattern instead of adding another rung; issue #174 calls iteration 5 without a pattern break "compliance theater." The same memory update also adds the call-site extension meta-rule: the selector-composition audit axis applies to every call site of a selector, not only to the selector function name in the abstract.
+The cross-iteration STOP signal came from `docs/rubric-fail-closed-history.md` and is restated in issue #174: once the same invariant survives 3+ consecutive iterations, the next fix must break the pattern instead of adding another rung; issue #174 calls iteration 5 without a pattern break "compliance theater." The same memory update also adds the call-site extension meta-rule: the selector-composition audit axis applies to every call site of a selector, not only to the selector function name in the abstract.
 
 ## Implementation Choices
 

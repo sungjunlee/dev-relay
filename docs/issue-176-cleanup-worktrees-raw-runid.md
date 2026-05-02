@@ -6,7 +6,7 @@
 
 ## Pattern-Break Rationale
 
-This is a containment-at-side-path fix within the already-established `#156` / `#174` / `#177` pattern, not a new ladder rung. The helper already existed, the basename fallback contract already existed, and the issue was that `cleanup-worktrees.js` had drifted from that contract on an operator-facing side path. No new meta-rule surfaces here; `memory/feedback_rubric_fail_closed.md` is not extended by this PR.
+This is a containment-at-side-path fix within the already-established `#156` / `#174` / `#177` pattern, not a new ladder rung. The helper already existed, the basename fallback contract already existed, and the issue was that `cleanup-worktrees.js` had drifted from that contract on an operator-facing side path. No new meta-rule surfaces here; `docs/rubric-fail-closed-history.md` is not extended by this PR.
 
 ## Rules Applied
 
