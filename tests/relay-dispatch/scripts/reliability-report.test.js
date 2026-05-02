@@ -152,6 +152,28 @@ function appendScore(repoRoot, runId, round, factor, met = true) {
   });
 }
 
+function setManifestGuidance(repoRoot, runId, guidancePacks) {
+  const { manifestPath } = ensureRunLayout(repoRoot, runId);
+  const manifest = readManifest(manifestPath).data;
+  manifest.advisory = {
+    ...(manifest.advisory || {}),
+    guidance: {
+      guidance_packs: guidancePacks,
+      task_profile_summary: {
+        size: "M",
+        change_type: "feature",
+        domains: ["relay-dispatch"],
+        risk_tags: [],
+        execution_mode: "standard",
+      },
+      artifact_path: "guidance-metadata.json",
+      source: "prompt",
+      updated_at: new Date().toISOString(),
+    },
+  };
+  writeManifest(manifestPath, manifest);
+}
+
 test("reliability-report derives the core scorecard from manifests and events", () => {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-report-"));
   process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
@@ -423,6 +445,268 @@ test("reliability-report keeps factor analysis backwards compatible without iter
     factors: {},
     most_stuck_factor: null,
   });
+});
+
+test("reliability-report derives guidance pack insights from guidance events and manifest metadata", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-report-guidance-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  const recentTs = new Date(Date.now() - 1 * 60 * 60 * 1000).toISOString();
+  const runEventPass = createRunId({ branch: "run-guidance-event-pass", timestamp: new Date("2026-04-12T02:05:00.000Z") });
+  const runEventChanges = createRunId({ branch: "run-guidance-event-changes", timestamp: new Date("2026-04-12T02:05:01.000Z") });
+  const runEventMixed = createRunId({ branch: "run-guidance-event-mixed", timestamp: new Date("2026-04-12T02:05:02.000Z") });
+  const runManifestOnly = createRunId({ branch: "run-guidance-manifest-only", timestamp: new Date("2026-04-12T02:05:03.000Z") });
+  const runLegacy = createRunId({ branch: "run-guidance-legacy", timestamp: new Date("2026-04-12T02:05:04.000Z") });
+
+  writeRun(repoRoot, {
+    runId: runEventPass,
+    state: STATES.READY_TO_MERGE,
+    rounds: 1,
+    updatedAt: recentTs,
+  });
+  writeRun(repoRoot, {
+    runId: runEventChanges,
+    state: STATES.CHANGES_REQUESTED,
+    rounds: 3,
+    updatedAt: recentTs,
+  });
+  writeRun(repoRoot, {
+    runId: runEventMixed,
+    state: STATES.READY_TO_MERGE,
+    rounds: 2,
+    updatedAt: recentTs,
+  });
+  writeRun(repoRoot, {
+    runId: runManifestOnly,
+    state: STATES.READY_TO_MERGE,
+    rounds: 5,
+    updatedAt: recentTs,
+  });
+  writeRun(repoRoot, {
+    runId: runLegacy,
+    state: STATES.READY_TO_MERGE,
+    rounds: 4,
+    updatedAt: recentTs,
+  });
+  setManifestGuidance(repoRoot, runManifestOnly, ["surgical-change"]);
+
+  appendRunEvent(repoRoot, runEventPass, {
+    event: "guidance_selected",
+    state_from: STATES.DRAFT,
+    state_to: STATES.DISPATCHED,
+    guidance_packs: ["surgical-change", "verification-evidence"],
+    guidance_source: "prompt",
+  });
+  appendRunEvent(repoRoot, runEventChanges, {
+    event: "guidance_selected",
+    state_from: STATES.DRAFT,
+    state_to: STATES.DISPATCHED,
+    guidance_packs: ["surgical-change"],
+    guidance_source: "prompt",
+  });
+  appendRunEvent(repoRoot, runEventMixed, {
+    event: "guidance_selected",
+    state_from: STATES.DRAFT,
+    state_to: STATES.DISPATCHED,
+    guidance_packs: ["simplify-pass"],
+    guidance_source: "prompt",
+  });
+
+  appendRunEvent(repoRoot, runEventPass, {
+    event: "review_apply",
+    state_from: STATES.REVIEW_PENDING,
+    state_to: STATES.READY_TO_MERGE,
+    round: 1,
+    reviewer: "codex",
+    reason: "pass",
+  });
+  appendRunEvent(repoRoot, runEventChanges, {
+    event: "review_apply",
+    state_from: STATES.REVIEW_PENDING,
+    state_to: STATES.CHANGES_REQUESTED,
+    round: 3,
+    reviewer: "codex",
+    reason: "changes_requested",
+  });
+  appendRunEvent(repoRoot, runEventMixed, {
+    event: "review_apply",
+    state_from: STATES.REVIEW_PENDING,
+    state_to: STATES.CHANGES_REQUESTED,
+    round: 1,
+    reviewer: "codex",
+    reason: "changes_requested",
+  });
+  appendRunEvent(repoRoot, runEventMixed, {
+    event: "review_apply",
+    state_from: STATES.REVIEW_PENDING,
+    state_to: STATES.READY_TO_MERGE,
+    round: 2,
+    reviewer: "codex",
+    reason: "pass",
+  });
+
+  appendIterationScore(repoRoot, runEventPass, {
+    round: 1,
+    scores: [
+      { factor: "Coverage", target: ">= 8", observed: "8", met: true, status: "pass" },
+      { factor: "Docs", target: ">= 8", observed: "8", met: true, status: "pass" },
+    ],
+  });
+  appendIterationScore(repoRoot, runEventChanges, {
+    round: 1,
+    scores: [
+      { factor: "Coverage", target: ">= 8", observed: "5", met: false, status: "fail" },
+      { factor: "Docs", target: ">= 8", observed: "5", met: false, status: "fail" },
+    ],
+  });
+  appendIterationScore(repoRoot, runEventMixed, {
+    round: 2,
+    scores: [
+      { factor: "Refactor", target: ">= 8", observed: "8", met: true, status: "pass" },
+    ],
+  });
+  appendScoreDivergence(repoRoot, runEventPass, {
+    round: 1,
+    divergences: [
+      { factor: "Coverage", executor: "9", reviewer: "7", delta: 2, tier: "contract" },
+    ],
+  });
+  appendScoreDivergence(repoRoot, runEventChanges, {
+    round: 3,
+    divergences: [
+      { factor: "Docs", executor: "5", reviewer: "6", delta: -1, tier: "quality" },
+    ],
+  });
+
+  const stdout = execFileSync("node", [SCRIPT, "--repo", repoRoot, "--json"], { encoding: "utf-8" });
+  const report = JSON.parse(stdout);
+
+  assert.deepEqual(report.guidance_pack_insights, {
+    status: "available",
+    packs: {
+      "simplify-pass": {
+        usage_count: 1,
+        avg_review_rounds: 2,
+        changes_requested_rate: 1,
+        stuck_factors: [
+          {
+            factor: "Refactor",
+            appearances: 1,
+            met_rate: 1,
+            avg_rounds_to_met: 2,
+          },
+        ],
+        executor_reviewer_divergence: {
+          occurrences: 0,
+          avg_delta: null,
+          hotspots: [],
+        },
+      },
+      "surgical-change": {
+        usage_count: 3,
+        avg_review_rounds: 3,
+        changes_requested_rate: 0.3333,
+        stuck_factors: [
+          {
+            factor: "Coverage",
+            appearances: 2,
+            met_rate: 0.5,
+            avg_rounds_to_met: 1,
+          },
+          {
+            factor: "Docs",
+            appearances: 2,
+            met_rate: 0.5,
+            avg_rounds_to_met: 1,
+          },
+        ],
+        executor_reviewer_divergence: {
+          occurrences: 2,
+          avg_delta: 0.5,
+          hotspots: [
+            {
+              factor_pattern: "Coverage",
+              occurrences: 1,
+              avg_delta: 2,
+              recommendation: "Executor scores trend higher than review; tighten examples or add automation.",
+            },
+            {
+              factor_pattern: "Docs",
+              occurrences: 1,
+              avg_delta: -1,
+              recommendation: "Reviewer scores trend higher than executor; check whether the factor is underspecified.",
+            },
+          ],
+        },
+      },
+      "verification-evidence": {
+        usage_count: 1,
+        avg_review_rounds: 1,
+        changes_requested_rate: 0,
+        stuck_factors: [
+          {
+            factor: "Coverage",
+            appearances: 1,
+            met_rate: 1,
+            avg_rounds_to_met: 1,
+          },
+          {
+            factor: "Docs",
+            appearances: 1,
+            met_rate: 1,
+            avg_rounds_to_met: 1,
+          },
+        ],
+        executor_reviewer_divergence: {
+          occurrences: 1,
+          avg_delta: 2,
+          hotspots: [
+            {
+              factor_pattern: "Coverage",
+              occurrences: 1,
+              avg_delta: 2,
+              recommendation: "Executor scores trend higher than review; tighten examples or add automation.",
+            },
+          ],
+        },
+      },
+    },
+  });
+});
+
+test("reliability-report renders no guidance data available for empty and legacy runs", () => {
+  const emptyRepoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-report-guidance-empty-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  initGitRepo(emptyRepoRoot);
+
+  const emptyJson = JSON.parse(execFileSync("node", [SCRIPT, "--repo", emptyRepoRoot, "--json"], { encoding: "utf-8" }));
+  const emptyText = execFileSync("node", [SCRIPT, "--repo", emptyRepoRoot], { encoding: "utf-8" });
+
+  assert.deepEqual(emptyJson.guidance_pack_insights, {
+    status: "no guidance data available",
+    packs: {},
+  });
+  assert.match(emptyText, /guidance_pack_insights: no guidance data available/);
+
+  const legacyRepoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-report-guidance-legacy-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  const recentTs = new Date(Date.now() - 1 * 60 * 60 * 1000).toISOString();
+  const runLegacy = createRunId({ branch: "run-guidance-legacy-only", timestamp: new Date("2026-04-12T02:06:00.000Z") });
+
+  writeRun(legacyRepoRoot, {
+    runId: runLegacy,
+    state: STATES.READY_TO_MERGE,
+    rounds: 1,
+    updatedAt: recentTs,
+  });
+
+  const legacyJson = JSON.parse(execFileSync("node", [SCRIPT, "--repo", legacyRepoRoot, "--json"], { encoding: "utf-8" }));
+  const legacyText = execFileSync("node", [SCRIPT, "--repo", legacyRepoRoot], { encoding: "utf-8" });
+
+  assert.deepEqual(legacyJson.guidance_pack_insights, {
+    status: "no guidance data available",
+    packs: {},
+  });
+  assert.match(legacyText, /guidance_pack_insights: no guidance data available/);
 });
 
 test("reliability-report keeps qualitative_signals null below the minimum readable-rubric threshold", () => {

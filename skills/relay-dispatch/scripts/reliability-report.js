@@ -11,6 +11,7 @@ const { extractAllFactors } = require("../../relay-plan/scripts/tdd-flavor");
 const args = process.argv.slice(2);
 const CLI_ARG_OPTIONS = { commandName: "reliability-report", reservedFlags: ["-h"] };
 const hasCliFlag = (flag) => schemaHasFlag(args, flag, CLI_ARG_OPTIONS);
+const NO_GUIDANCE_DATA_TEXT = "no guidance data available";
 
 if (hasCliFlag(["--help", "-h"])) {
   console.log(
@@ -62,6 +63,18 @@ function normalizeActorName(value) {
 
 function normalizeRoleName(value) {
   return typeof value === "string" && value.trim() ? value.trim() : "unknown";
+}
+
+function normalizeGuidancePacks(value) {
+  if (!Array.isArray(value)) return [];
+  const result = [];
+  for (const entry of value) {
+    const pack = typeof entry === "string" ? entry.trim() : "";
+    if (pack && !result.includes(pack)) {
+      result.push(pack);
+    }
+  }
+  return result;
 }
 
 function hasRecordedReviewActivity(data) {
@@ -394,6 +407,159 @@ function buildFactorAnalysis(events) {
   };
 }
 
+function factorAnalysisToStuckFactors(factorAnalysis) {
+  return Object.entries(factorAnalysis?.factors || {})
+    .map(([factor, summary]) => ({
+      factor,
+      appearances: summary.appearances,
+      met_rate: summary.met_rate,
+      avg_rounds_to_met: summary.avg_rounds_to_met,
+    }))
+    .sort((left, right) => (
+      (left.met_rate ?? Number.POSITIVE_INFINITY) - (right.met_rate ?? Number.POSITIVE_INFINITY)
+      || right.appearances - left.appearances
+      || left.factor.localeCompare(right.factor)
+    ));
+}
+
+function buildGuidanceRunIndex(manifests, events) {
+  const packsByRun = new Map();
+
+  function addRunPacks(runId, guidancePacks) {
+    if (!runId) return;
+    const packs = normalizeGuidancePacks(guidancePacks);
+    if (packs.length === 0) return;
+    if (!packsByRun.has(runId)) {
+      packsByRun.set(runId, new Set());
+    }
+    const runPacks = packsByRun.get(runId);
+    for (const pack of packs) {
+      runPacks.add(pack);
+    }
+  }
+
+  for (const manifest of manifests) {
+    addRunPacks(
+      manifest?.data?.run_id,
+      manifest?.data?.advisory?.guidance?.guidance_packs
+    );
+  }
+
+  for (const event of events) {
+    if (event?.event === EVENTS.GUIDANCE_SELECTED) {
+      addRunPacks(event.run_id, event.guidance_packs);
+    }
+  }
+
+  return packsByRun;
+}
+
+function hasChangesRequestedOutcome(manifest, events) {
+  if (events.some((event) => (
+    event.event === EVENTS.REVIEW_APPLY
+    && (
+      event.state_to === STATES.CHANGES_REQUESTED
+      || event.reason === "changes_requested"
+    )
+  ))) {
+    return true;
+  }
+
+  const data = manifest?.data;
+  return (
+    data?.state === STATES.CHANGES_REQUESTED
+    || data?.review?.latest_verdict === "changes_requested"
+  );
+}
+
+function buildPackDivergenceSummary(events) {
+  const divergenceEvents = events.filter((event) => (
+    event.event === EVENTS.SCORE_DIVERGENCE
+    && Array.isArray(event.divergences)
+  ));
+  const deltas = [];
+
+  for (const event of divergenceEvents) {
+    for (const entry of event.divergences) {
+      const delta = Number(entry?.delta);
+      if (Number.isFinite(delta)) {
+        deltas.push(delta);
+      }
+    }
+  }
+
+  return {
+    occurrences: deltas.length,
+    avg_delta: average(deltas),
+    hotspots: buildDivergenceHotspots(divergenceEvents) || [],
+  };
+}
+
+function buildGuidancePackInsights(manifests, events) {
+  const packsByRun = buildGuidanceRunIndex(manifests, events);
+  if (packsByRun.size === 0) {
+    return {
+      status: NO_GUIDANCE_DATA_TEXT,
+      packs: {},
+    };
+  }
+
+  const manifestsByRun = new Map(
+    manifests
+      .filter((manifest) => manifest?.data?.run_id)
+      .map((manifest) => [manifest.data.run_id, manifest])
+  );
+  const eventsByRun = new Map();
+  for (const event of events) {
+    if (!event?.run_id) continue;
+    if (!eventsByRun.has(event.run_id)) {
+      eventsByRun.set(event.run_id, []);
+    }
+    eventsByRun.get(event.run_id).push(event);
+  }
+
+  const runIdsByPack = new Map();
+  for (const [runId, packs] of packsByRun.entries()) {
+    for (const pack of packs) {
+      if (!runIdsByPack.has(pack)) {
+        runIdsByPack.set(pack, new Set());
+      }
+      runIdsByPack.get(pack).add(runId);
+    }
+  }
+
+  const packSummaries = {};
+  for (const pack of [...runIdsByPack.keys()].sort((left, right) => left.localeCompare(right))) {
+    const runIds = runIdsByPack.get(pack);
+    const packManifests = [...runIds]
+      .map((runId) => manifestsByRun.get(runId))
+      .filter(Boolean);
+    const packEvents = events.filter((event) => runIds.has(event.run_id));
+    const reviewRounds = packManifests
+      .map((manifest) => Number(manifest.data?.review?.rounds))
+      .filter((value) => Number.isFinite(value) && value >= 0);
+    const changesRequestedRuns = [...runIds].filter((runId) => (
+      hasChangesRequestedOutcome(
+        manifestsByRun.get(runId),
+        eventsByRun.get(runId) || []
+      )
+    ));
+
+    packSummaries[pack] = {
+      usage_count: runIds.size,
+      avg_review_rounds: average(reviewRounds),
+      changes_requested_rate: ratio(changesRequestedRuns.length, runIds.size),
+      stuck_factors: factorAnalysisToStuckFactors(buildFactorAnalysis(packEvents)),
+      executor_reviewer_divergence: buildPackDivergenceSummary(packEvents),
+    };
+  }
+
+  return {
+    status: "available",
+    packs: packSummaries,
+  };
+}
+
 function resolveManifestRubricPath(manifest) {
   const rubricPath = manifest?.data?.anchor?.rubric_path;
   const runId = manifest?.data?.run_id;
@@ -616,6 +782,7 @@ function buildReport({ repoRoot, staleHours, now, manifests, events }) {
     factor_analysis: buildFactorAnalysis(events),
     rubric_insights: buildRubricInsights(events, manifests),
     qualitative_signals: buildQualitativeSignals(manifests, events),
+    guidance_pack_insights: buildGuidancePackInsights(manifests, events),
   };
 }
 
@@ -797,6 +964,21 @@ function main() {
     console.log(`  rubric_grades: ${gradeText}`);
     console.log(`  avg_quality_ratio: ${report.rubric_insights.avg_quality_ratio ?? "n/a"}`);
     console.log(`  top_divergence_hotspot: ${topHotspot ? `${topHotspot.factor_pattern} (${topHotspot.avg_delta})` : "n/a"}`);
+  }
+  if (report.guidance_pack_insights?.status === NO_GUIDANCE_DATA_TEXT) {
+    console.log(`  guidance_pack_insights: ${NO_GUIDANCE_DATA_TEXT}`);
+  } else {
+    console.log("  guidance_pack_insights:");
+    for (const [pack, summary] of Object.entries(report.guidance_pack_insights?.packs || {})) {
+      const topStuckFactor = summary.stuck_factors?.[0]?.factor || "n/a";
+      console.log(
+        `    ${pack}: usage_count=${summary.usage_count} ` +
+        `avg_review_rounds=${summary.avg_review_rounds ?? "n/a"} ` +
+        `changes_requested_rate=${summary.changes_requested_rate ?? "n/a"} ` +
+        `top_stuck_factor=${topStuckFactor} ` +
+        `divergence_avg_delta=${summary.executor_reviewer_divergence?.avg_delta ?? "n/a"}`
+      );
+    }
   }
   if (hasCliFlag("--by-actor")) {
     const actorEntries = Object.entries(report.by_actor || {});
