@@ -639,6 +639,51 @@ function readExecutionEvidence(runDir) {
   return JSON.parse(fs.readFileSync(path.join(runDir, EXECUTION_EVIDENCE_FILENAME), "utf-8"));
 }
 
+function guidancePrompt({ task = "guidance test task" } = {}) {
+  return [
+    "# Dispatch: Guidance persistence",
+    "",
+    task,
+    "",
+    "## Task Profile",
+    "",
+    "This is advisory planner metadata for executor working style. It is not a reviewer verdict field, manifest role binding, or merge gate.",
+    "",
+    "```yaml",
+    "task_profile:",
+    "  size: M",
+    "  change_type: feature",
+    "  domains:",
+    "    - relay-dispatch",
+    "    - tests",
+    "  risk_tags:",
+    "    - trust-boundary",
+    "    - prompt-contract",
+    "  execution_mode: fresh-context",
+    "  guidance_packs:",
+    "    - surgical-change",
+    "    - verification-evidence",
+    "    - trust-boundary",
+    "  derivation_inputs:",
+    "    - github_issue_398",
+    "    - issue_394_reference_doc",
+    "```",
+    "",
+    "## Working Guidance",
+    "",
+    "These instructions guide execution style. They do not override Done Criteria, rubric commands, or scope boundaries.",
+    "",
+    "### surgical-change",
+    "- Keep the diff narrow.",
+    "",
+    "### verification-evidence",
+    "- Record changed artifacts and checks.",
+    "",
+    "### trust-boundary",
+    "- Name the trust root and protected decision.",
+  ].join("\n");
+}
+
 function setupDryRunFixtureRepo() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "relay-dispatch-dry-run-"));
   const repoRoot = path.join(root, "repo");
@@ -1938,6 +1983,101 @@ test("dispatch artifacts are persisted in the run directory", () => {
   assert.ok(fs.existsSync(path.join(result.runDir, "dispatch-result.txt")));
   const resultText = fs.readFileSync(path.join(result.runDir, "dispatch-result.txt"), "utf-8");
   assert.match(resultText, /ok/);
+});
+
+test("dispatch persists selected guidance metadata in run artifacts and events", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  writeFakeCodex(binDir);
+  const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}` };
+
+  const result = JSON.parse(runDispatch(repoRoot, [
+    "-b", "issue-398-guidance",
+    "--prompt", guidancePrompt(),
+    "--json",
+  ], env));
+
+  assert.equal(result.status, "completed");
+  const manifest = readManifest(result.manifestPath).data;
+  assert.deepEqual(manifest.advisory.guidance.guidance_packs, [
+    "surgical-change",
+    "verification-evidence",
+    "trust-boundary",
+  ]);
+  assert.deepEqual(manifest.advisory.guidance.task_profile_summary, {
+    size: "M",
+    change_type: "feature",
+    domains: ["relay-dispatch", "tests"],
+    risk_tags: ["trust-boundary", "prompt-contract"],
+    execution_mode: "fresh-context",
+    derivation_inputs: ["github_issue_398", "issue_394_reference_doc"],
+  });
+  assert.equal(manifest.advisory.guidance.artifact_path, "guidance-metadata.json");
+  assert.equal(manifest.roles.executor, "codex");
+  assert.equal(manifest.review.latest_verdict, "pending");
+
+  const artifact = JSON.parse(fs.readFileSync(path.join(result.runDir, "guidance-metadata.json"), "utf-8"));
+  assert.equal(artifact.dispatch_prompt_path, "dispatch-prompt.md");
+  assert.equal(artifact.rubric_path, "rubric.yaml");
+  assert.deepEqual(artifact.guidance_packs, manifest.advisory.guidance.guidance_packs);
+  assert.deepEqual(artifact.task_profile_summary, manifest.advisory.guidance.task_profile_summary);
+
+  const events = readJsonLines(getEventsPath(repoRoot, result.runId));
+  const guidanceEvent = events.find((event) => event.event === "guidance_selected");
+  assert.ok(guidanceEvent, "guidance_selected event should be appended");
+  assert.equal(typeof guidanceEvent.ts, "string");
+  assert.equal(guidanceEvent.run_id, result.runId);
+  assert.deepEqual(guidanceEvent.guidance_packs, artifact.guidance_packs);
+  assert.deepEqual(guidanceEvent.task_profile_summary, artifact.task_profile_summary);
+});
+
+test("dispatch resume preserves guidance metadata without injecting stale Working Guidance blocks", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  writeFakeCodex(binDir);
+  const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}` };
+
+  const first = JSON.parse(runDispatch(repoRoot, [
+    "-b", "issue-398-guidance-resume",
+    "--prompt", guidancePrompt({ task: "initial guided dispatch" }),
+    "--json",
+  ], env));
+  const record = readManifest(first.manifestPath);
+  writeManifest(
+    first.manifestPath,
+    updateManifestState(record.data, STATES.CHANGES_REQUESTED, "re_dispatch_requested_changes"),
+    record.body
+  );
+
+  const second = JSON.parse(runDispatch(repoRoot, [
+    "--run-id", first.runId,
+    "--prompt", "fix review feedback without a new task profile",
+    "--json",
+  ], env));
+
+  assert.equal(second.mode, "resume");
+  const manifest = readManifest(first.manifestPath).data;
+  assert.deepEqual(manifest.advisory.guidance.guidance_packs, [
+    "surgical-change",
+    "verification-evidence",
+    "trust-boundary",
+  ]);
+
+  const artifact = JSON.parse(fs.readFileSync(path.join(second.runDir, "guidance-metadata.json"), "utf-8"));
+  assert.equal(artifact.source, "manifest-preserved");
+  assert.deepEqual(artifact.guidance_packs, manifest.advisory.guidance.guidance_packs);
+
+  const dispatchPrompt = fs.readFileSync(path.join(second.runDir, "dispatch-prompt.md"), "utf-8");
+  assert.match(dispatchPrompt, /fix review feedback without a new task profile/);
+  assert.doesNotMatch(dispatchPrompt, /## Working Guidance/);
+
+  const guidanceEvents = readJsonLines(getEventsPath(repoRoot, first.runId))
+    .filter((event) => event.event === "guidance_selected");
+  assert.equal(guidanceEvents.length, 2);
+  assert.deepEqual(guidanceEvents[1].guidance_packs, guidanceEvents[0].guidance_packs);
+  assert.equal(guidanceEvents[1].guidance_source, "manifest-preserved");
 });
 
 test("dispatch with --executor claude supports resume", () => {
