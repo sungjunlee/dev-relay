@@ -494,22 +494,54 @@ function validateExecutorCli() {
   }
 }
 
-function readTaskPrompt() {
-  if (!PROMPT && !PROMPT_FILE) {
+function findLatestRedispatchPrompt(runDir) {
+  if (!runDir || !fs.existsSync(runDir)) return null;
+  let latest = null;
+  for (const entry of fs.readdirSync(runDir)) {
+    const match = /^review-round-(\d+)-redispatch\.md$/.exec(entry);
+    if (!match) continue;
+    const round = parseInt(match[1], 10);
+    if (!Number.isFinite(round)) continue;
+    if (!latest || round > latest.round) {
+      latest = { round, path: path.join(runDir, entry) };
+    }
+  }
+  return latest;
+}
+
+function readTaskPrompt({ runDir, resumeMode } = {}) {
+  if (PROMPT_FILE) {
+    const promptPath = path.resolve(PROMPT_FILE);
+    if (!fs.existsSync(promptPath)) {
+      console.error(`Error: prompt file not found: ${promptPath}`);
+      process.exit(1);
+    }
+    return { prompt: fs.readFileSync(promptPath, "utf-8").trim(), source: "explicit-file", path: promptPath };
+  }
+
+  if (PROMPT) {
+    return { prompt: PROMPT, source: "explicit-arg", path: null };
+  }
+
+  if (resumeMode) {
+    const auto = findLatestRedispatchPrompt(runDir);
+    if (auto) {
+      return {
+        prompt: fs.readFileSync(auto.path, "utf-8").trim(),
+        source: "auto-discovered-redispatch",
+        path: auto.path,
+        round: auto.round,
+      };
+    }
     console.error("Error: --prompt or --prompt-file is required");
+    console.error(
+      `  Auto-discovery looked for review-round-<N>-redispatch.md in ${runDir} but found none.`
+    );
     process.exit(1);
   }
 
-  if (!PROMPT_FILE) {
-    return PROMPT;
-  }
-
-  const promptPath = path.resolve(PROMPT_FILE);
-  if (!fs.existsSync(promptPath)) {
-    console.error(`Error: prompt file not found: ${promptPath}`);
-    process.exit(1);
-  }
-  return fs.readFileSync(promptPath, "utf-8").trim();
+  console.error("Error: --prompt or --prompt-file is required");
+  process.exit(1);
 }
 
 function resolveRoleBinding(envName, fallback) {
@@ -699,7 +731,11 @@ async function main() {
   enforceRubricPersistence(manifest, manifestRunDir);
 
   validateExecutorCli();
-  let taskPrompt = readTaskPrompt();
+  const taskPromptResult = readTaskPrompt({ runDir: manifestRunDir, resumeMode: RESUME_MODE });
+  let taskPrompt = taskPromptResult.prompt;
+  if (taskPromptResult.source === "auto-discovered-redispatch" && !JSON_OUT) {
+    console.log(`Auto-discovered redispatch prompt (round ${taskPromptResult.round}): ${taskPromptResult.path}`);
+  }
 
   // --- Prepend iteration history on re-dispatch ---
   if (RESUME_MODE) {
@@ -945,7 +981,7 @@ async function main() {
 
   if (EXECUTOR === "codex") {
     cmd = "codex";
-    execArgs = ["exec", "-C", wtPath, "--full-auto", "--color", "never", "-o", resultFile];
+    execArgs = ["exec", "-C", wtPath, "--color", "never", "-o", resultFile];
     execArgs.push("-c", `model_reasoning_effort=${resolvedReasoningEffort}`);
     if (NETWORK_ACCESS === "enabled") {
       execArgs.push("-c", "sandbox_workspace_write.network_access=true");
