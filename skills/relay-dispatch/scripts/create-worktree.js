@@ -260,7 +260,7 @@ function main() {
       console.log(`  Resume: codex resume ${threadId}`);
     } else {
       console.log(`\n  Run:    dispatch.js ${shellQuote(REPO_PATH)} -b ${branch} --prompt "your task"`);
-      console.log(`  Or manually: codex exec -C ${shellQuote(wtPath)} --full-auto "your task"`);
+      console.log(`  Or manually: codex exec -C ${shellQuote(wtPath)} --sandbox workspace-write "your task"`);
     }
     if (PIN) console.log("  Pinned: yes (won't be auto-cleaned).");
   }

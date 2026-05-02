@@ -776,6 +776,140 @@ test("dispatch reuses the same run and worktree on resume", () => {
   assert.match(events, /"reason":"same_run_resume:completed"/);
 });
 
+function writeResumeCaptureCodex(binDir, capturePath) {
+  ensureDefaultFakeGh(binDir);
+  const codexPath = path.join(binDir, "codex");
+  fs.writeFileSync(codexPath, `#!/usr/bin/env node
+const fs = require("fs");
+const { execFileSync } = require("child_process");
+const args = process.argv.slice(2);
+if (args[0] === "--version") {
+  process.stdout.write("codex-fake\\n");
+  process.exit(0);
+}
+if (args[0] !== "exec") {
+  process.stderr.write("unsupported fake codex invocation");
+  process.exit(1);
+}
+fs.writeFileSync(${JSON.stringify(capturePath)}, JSON.stringify(args), "utf-8");
+const cwd = args[args.indexOf("-C") + 1];
+const output = args[args.indexOf("-o") + 1];
+const fileName = fs.existsSync(cwd + "/first.txt") ? "resume.txt" : "first.txt";
+fs.writeFileSync(cwd + "/" + fileName, fileName + "\\n", "utf-8");
+execFileSync("git", ["-C", cwd, "add", fileName], { stdio: "pipe" });
+execFileSync("git", ["-C", cwd, "commit", "-m", "fake " + fileName], { stdio: "pipe" });
+fs.writeFileSync(output, "ok\\n", "utf-8");
+`, "utf-8");
+  fs.chmodSync(codexPath, 0o755);
+  return codexPath;
+}
+
+test("dispatch resume auto-discovers latest review-round-N-redispatch.md when no prompt is given (#387)", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  const capturePath = path.join(os.tmpdir(), `relay-dispatch-argv-${Date.now()}-redispatch-auto.json`);
+  writeResumeCaptureCodex(binDir, capturePath);
+  const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}`, RELAY_HOME: relayHome };
+
+  const first = JSON.parse(runDispatch(repoRoot, [
+    "-b", "issue-387-auto",
+    "--prompt", "first pass",
+    "--json",
+  ], env));
+
+  const record = readManifest(first.manifestPath);
+  writeManifest(
+    first.manifestPath,
+    updateManifestState(record.data, STATES.CHANGES_REQUESTED, "re_dispatch_requested_changes"),
+    record.body
+  );
+
+  const runDir = getRunDir(repoRoot, first.runId);
+  fs.writeFileSync(path.join(runDir, "review-round-1-redispatch.md"), "ROUND ONE BODY\n", "utf-8");
+  fs.writeFileSync(path.join(runDir, "review-round-2-redispatch.md"), "ROUND TWO BODY\n", "utf-8");
+
+  const second = JSON.parse(runDispatch(repoRoot, [
+    "--run-id", first.runId,
+    "--json",
+  ], env));
+  assert.equal(second.mode, "resume");
+
+  const captured = JSON.parse(fs.readFileSync(capturePath, "utf-8"));
+  const finalPrompt = captured[captured.length - 1];
+  assert.match(finalPrompt, /ROUND TWO BODY/);
+  assert.doesNotMatch(finalPrompt, /ROUND ONE BODY/);
+});
+
+test("dispatch resume --prompt-file wins over redispatch auto-discovery (#387)", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  const capturePath = path.join(os.tmpdir(), `relay-dispatch-argv-${Date.now()}-redispatch-explicit.json`);
+  writeResumeCaptureCodex(binDir, capturePath);
+  const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}`, RELAY_HOME: relayHome };
+
+  const first = JSON.parse(runDispatch(repoRoot, [
+    "-b", "issue-387-explicit",
+    "--prompt", "first pass",
+    "--json",
+  ], env));
+
+  const record = readManifest(first.manifestPath);
+  writeManifest(
+    first.manifestPath,
+    updateManifestState(record.data, STATES.CHANGES_REQUESTED, "re_dispatch_requested_changes"),
+    record.body
+  );
+
+  const runDir = getRunDir(repoRoot, first.runId);
+  fs.writeFileSync(path.join(runDir, "review-round-1-redispatch.md"), "AUTO_DISCOVERED_BODY\n", "utf-8");
+
+  const explicitPath = path.join(os.tmpdir(), `relay-dispatch-explicit-${Date.now()}.md`);
+  fs.writeFileSync(explicitPath, "EXPLICIT_BODY\n", "utf-8");
+
+  runDispatch(repoRoot, [
+    "--run-id", first.runId,
+    "--prompt-file", explicitPath,
+    "--json",
+  ], env);
+
+  const captured = JSON.parse(fs.readFileSync(capturePath, "utf-8"));
+  const finalPrompt = captured[captured.length - 1];
+  assert.match(finalPrompt, /EXPLICIT_BODY/);
+  assert.doesNotMatch(finalPrompt, /AUTO_DISCOVERED_BODY/);
+});
+
+test("dispatch resume without redispatch artifact still errors with auto-discovery hint (#387)", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  writeFakeCodex(binDir);
+  const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}`, RELAY_HOME: relayHome };
+
+  const first = JSON.parse(runDispatch(repoRoot, [
+    "-b", "issue-387-missing",
+    "--prompt", "first pass",
+    "--json",
+  ], env));
+
+  const record = readManifest(first.manifestPath);
+  writeManifest(
+    first.manifestPath,
+    updateManifestState(record.data, STATES.CHANGES_REQUESTED, "re_dispatch_requested_changes"),
+    record.body
+  );
+
+  const result = spawnSync("node", [SCRIPT, repoRoot, "--run-id", first.runId, "--json"], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    env,
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /--prompt or --prompt-file is required/);
+  assert.match(result.stderr, /Auto-discovery looked for review-round-<N>-redispatch\.md/);
+});
+
 test("dispatch stores model_hints for all four phases verbatim", () => {
   const { repoRoot, relayHome } = setupRepo();
   process.env.RELAY_HOME = relayHome;
@@ -946,7 +1080,6 @@ test("dispatch precedence D1 regression: CLI override beats manifest hint in exe
   assert.deepEqual(JSON.parse(fs.readFileSync(capturePath, "utf-8")), [
     "exec",
     "-C", result.worktree,
-    "--full-auto",
     "--color", "never",
     "-o", result.resultFile,
     "-c", "model_reasoning_effort=xhigh",
@@ -981,7 +1114,6 @@ test("dispatch precedence D2 regression: CLI override works when manifest hint i
   assert.deepEqual(JSON.parse(fs.readFileSync(capturePath, "utf-8")), [
     "exec",
     "-C", result.worktree,
-    "--full-auto",
     "--color", "never",
     "-o", result.resultFile,
     "-c", "model_reasoning_effort=xhigh",
@@ -1017,7 +1149,6 @@ test("dispatch precedence D3 regression: manifest hint supplies the effective mo
   assert.deepEqual(JSON.parse(fs.readFileSync(capturePath, "utf-8")), [
     "exec",
     "-C", result.worktree,
-    "--full-auto",
     "--color", "never",
     "-o", result.resultFile,
     "-c", "model_reasoning_effort=xhigh",
@@ -1056,7 +1187,6 @@ test("dispatch precedence D4 regression: executor argv stays byte-identical when
   assert.deepEqual(JSON.parse(fs.readFileSync(capturePath, "utf-8")), [
     "exec",
     "-C", result.worktree,
-    "--full-auto",
     "--color", "never",
     "-o", result.resultFile,
     "-c", "model_reasoning_effort=xhigh",
@@ -1093,10 +1223,9 @@ test("dispatch network-access enabled adds codex workspace-write network overrid
 
   const capturedArgs = JSON.parse(fs.readFileSync(capturePath, "utf-8"));
   const commonGitDir = worktreeCommonGitDir(result.worktree);
-  assert.deepEqual(capturedArgs.slice(0, 10), [
+  assert.deepEqual(capturedArgs.slice(0, 9), [
     "exec",
     "-C", result.worktree,
-    "--full-auto",
     "--color", "never",
     "-o", result.resultFile,
     "-c", "model_reasoning_effort=xhigh",
