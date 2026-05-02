@@ -2624,7 +2624,7 @@ test("dispatch marks uncommitted result runs as completed-uncommitted and skips 
   assert.equal(Number(fs.readFileSync(pushPrCountPath, "utf-8")), 0);
 });
 
-test("dispatch auto-recovers uncommitted result runs when explicitly requested", () => {
+test("dispatch --auto-recover-commit reports auto-recovered commitMode for completed-uncommitted runs (#393)", () => {
   const { repoRoot, relayHome } = setupRepoWithOrigin();
   process.env.RELAY_HOME = relayHome;
   const { env, ghLogPath, execLogPath, pushPrCountPath } = createPushPrTestEnv({
