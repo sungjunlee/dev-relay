@@ -161,7 +161,6 @@ const PROMPT = readArg(args, ["--prompt", "-p"], undefined, CLI_ARG_OPTIONS);
 const PROMPT_FILE = readArg(args, "--prompt-file", undefined, CLI_ARG_OPTIONS);
 const EXECUTOR = readArg(args, ["--executor", "-e"], "codex", CLI_ARG_OPTIONS);
 const DEFAULT_TIMEOUT_BY_EXECUTOR = { codex: 2400, claude: 1800 };
-const DEFAULT_REASONING_BY_SIZE = { S: "medium", M: "high", L: "xhigh", XL: "xhigh" };
 const defaultTimeout = String(DEFAULT_TIMEOUT_BY_EXECUTOR[EXECUTOR] ?? 1800);
 const MODEL = readArg(args, ["--model", "-m"], undefined, CLI_ARG_OPTIONS);
 const MODEL_HINTS_RAW = readArg(args, "--model-hints", undefined, CLI_ARG_OPTIONS);
