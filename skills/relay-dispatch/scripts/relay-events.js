@@ -23,6 +23,7 @@ const EVENTS = Object.freeze({
   ESCALATION_DECISION: "escalation_decision",
   EXECUTION_EVIDENCE_REBRANDED: "execution_evidence_rebranded",
   FORCE_FINALIZE: "force_finalize",
+  GUIDANCE_SELECTED: "guidance_selected",
   ITERATION_SCORE: "iteration_score",
   MERGE_BLOCKED: "merge_blocked",
   MERGE_FINALIZE: "merge_finalize",
@@ -164,6 +165,18 @@ function appendRunEvent(repoRoot, runId, eventData) {
       : {}),
     ...(eventData.decision !== undefined
       ? { decision: normalizeEventValue(eventData.decision) }
+      : {}),
+    ...(eventData.guidance_packs !== undefined
+      ? { guidance_packs: normalizeEventValue(eventData.guidance_packs) }
+      : {}),
+    ...(eventData.task_profile_summary !== undefined
+      ? { task_profile_summary: normalizeEventValue(eventData.task_profile_summary) }
+      : {}),
+    ...(eventData.guidance_source !== undefined
+      ? { guidance_source: normalizeEventValue(eventData.guidance_source) }
+      : {}),
+    ...(eventData.guidance_artifact_path !== undefined
+      ? { guidance_artifact_path: normalizeEventValue(eventData.guidance_artifact_path) }
       : {}),
   };
 
