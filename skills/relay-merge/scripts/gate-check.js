@@ -45,6 +45,7 @@ const { appendRunEvent } = require("../../relay-dispatch/scripts/relay-events");
 const { resolveManifestRecord } = require("../../relay-dispatch/scripts/relay-resolver");
 const { stampPrNumberUnderLock } = require("../../relay-dispatch/scripts/manifest/pr-number-stamp");
 const {
+  findUnknownFlags,
   getPositionals,
   modeLabel,
   readArg,
@@ -72,6 +73,12 @@ if (!args.length || hasCliFlag("--help") || hasCliFlag("-h")) {
   console.log(`  --dry-run         ${modeLabel("--dry-run")} Read comment JSON from stdin instead of gh CLI`);
   console.log(`  --json            ${modeLabel("--json")} Output as JSON`);
   process.exit(hasCliFlag("--help") || hasCliFlag("-h") ? 0 : 1);
+}
+
+const UNKNOWN_FLAGS = findUnknownFlags(args, "gate-check");
+if (UNKNOWN_FLAGS.length) {
+  console.error(`Error: unknown flags: ${UNKNOWN_FLAGS.join(", ")}`);
+  process.exit(1);
 }
 
 const PR_NUM = getPositionals(args, "gate-check")[0];
