@@ -17,6 +17,7 @@ const {
 const EVENTS = Object.freeze({
   CLEANUP_RESULT: "cleanup_result",
   CLOSE: "close",
+  CONFLICTING_RUN_OVERRIDE: "conflicting_run_override",
   DISPATCH_RESULT: "dispatch_result",
   DISPATCH_START: "dispatch_start",
   ENVIRONMENT_DRIFT: "environment_drift",
