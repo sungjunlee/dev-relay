@@ -171,7 +171,9 @@ function probe({ timeout }) {
     warnings,
   });
 
-  return { error: probeError, raw };
+  // Match codex/claude probe semantics: any probe-run error returns raw=null so
+  // consumers do not treat failed probe output as discovered tools.
+  return { error: probeError, raw: probeError ? null : raw };
 }
 
 module.exports = {
