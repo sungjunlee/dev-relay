@@ -18,15 +18,20 @@ function realpathForContainment(targetPath) {
 }
 
 function resolveCodexCommonGitDir(worktreePath) {
-  const real = realpathForContainment(worktreePath);
-  try {
-    const out = execGit(real, ["rev-parse", "--git-common-dir"]);
-    const trimmed = out.trim();
-    if (path.isAbsolute(trimmed)) return trimmed;
-    return path.resolve(real, trimmed);
-  } catch {
-    return path.resolve(real, ".git");
+  const adminDirRaw = execGit(worktreePath, ["rev-parse", "--git-dir"]);
+  const commonDirRaw = execGit(worktreePath, ["rev-parse", "--git-common-dir"]);
+  const adminDir = path.resolve(worktreePath, adminDirRaw);
+  const commonDir = path.resolve(worktreePath, commonDirRaw);
+  const worktreesDir = path.join(commonDir, "worktrees");
+
+  const realAdminDir = realpathForContainment(adminDir);
+  const realWorktreesDir = realpathForContainment(worktreesDir);
+  if (!realAdminDir.startsWith(`${realWorktreesDir}${path.sep}`)) {
+    throw new Error(
+      `codex worktree git admin dir is outside ${worktreesDir}: ${adminDir}` // outside worktrees guard
+    );
   }
+  return commonDir;
 }
 
 function validateExecutionMode({ sandbox, networkAccess }) {
