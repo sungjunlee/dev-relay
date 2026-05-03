@@ -4,7 +4,7 @@
  * Informs rubric design by revealing which evaluated factors can become automated.
  *
  * Usage:
- *   ./probe-executor-env.js <repo-path> --executor <codex|claude> [options]
+ *   ./probe-executor-env.js <repo-path> --executor <name> [options]
  *
  * Options:
  *   --executor, -e <name>  Executor to probe (required)
@@ -13,7 +13,6 @@
  *   --json                 Output as JSON (default: human-readable)
  */
 
-const { execFileSync, spawnSync } = require("child_process");
 const fs = require("fs");
 const path = require("path");
 const {
@@ -21,6 +20,7 @@ const {
   getPositionals,
   modeLabel,
 } = require("../../relay-dispatch/scripts/cli-args");
+const { getExecutor, listExecutors } = require("../../relay-dispatch/scripts/executors");
 
 // ---------------------------------------------------------------------------
 // CLI (only when run directly)
@@ -37,9 +37,9 @@ function parseCli(argv) {
   });
 
   if (!args.length || cliArgs.hasFlag(["--help", "-h"])) {
-    console.log("Usage: probe-executor-env.js <repo-path> --executor <codex|claude> [options]");
+    console.log(`Usage: probe-executor-env.js <repo-path> --executor <${listExecutors().join("|")}> [options]`);
     console.log("\nOptions:");
-    console.log(`  --executor, -e   ${modeLabel("--executor")} Executor to probe (codex, claude)`);
+    console.log(`  --executor, -e   ${modeLabel("--executor")} Executor to probe (${listExecutors().join(", ")})`);
     console.log(`  --timeout        ${modeLabel("--timeout")} Probe timeout in seconds (default: 30)`);
     console.log(`  --project-only   ${modeLabel("--project-only")} Skip agent probe, only scan project tools`);
     console.log(`  --json           ${modeLabel("--json")} Output as JSON`);
@@ -184,50 +184,14 @@ function deriveTestInfra(projectTools) {
 // Agent probe
 // ---------------------------------------------------------------------------
 
-const PROBE_PROMPT =
-  "List ALL your available tools, MCP servers, and installed skills. " +
-  "Output a JSON array of objects with {name, type, description} fields. " +
-  "type is one of: skill, mcp_tool, built_in.";
-
 function probeAgent(executor, timeout) {
-  let cmd, cmdArgs;
-
-  if (executor === "codex") {
-    cmd = "codex";
-    cmdArgs = ["exec", "--sandbox", "read-only", "--color", "never", PROBE_PROMPT];
-  } else if (executor === "claude") {
-    cmd = "claude";
-    cmdArgs = ["-p", "--output-format", "text", PROBE_PROMPT];
-  } else {
+  let adapter;
+  try {
+    adapter = getExecutor(executor);
+  } catch {
     return { error: `unknown executor: ${executor}`, raw: null };
   }
-
-  // Check executor is available
-  try {
-    execFileSync(cmd, ["--version"], { encoding: "utf-8", stdio: "pipe" });
-  } catch {
-    return { error: `${cmd} CLI not found`, raw: null };
-  }
-
-  const result = spawnSync(cmd, cmdArgs, {
-    encoding: "utf-8",
-    stdio: "pipe",
-    timeout: timeout * 1000,
-  });
-
-  if (result.error) {
-    const msg = result.error.code === "ETIMEDOUT"
-      ? `probe timed out after ${timeout}s`
-      : result.error.message;
-    return { error: msg, raw: null };
-  }
-
-  if (result.status !== 0) {
-    return { error: `executor exited with code ${result.status}`, raw: null };
-  }
-
-  const stdout = (result.stdout || "").trim();
-  return { error: null, raw: stdout || null };
+  return adapter.probe({ timeout });
 }
 
 // ---------------------------------------------------------------------------

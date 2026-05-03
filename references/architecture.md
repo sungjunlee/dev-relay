@@ -261,21 +261,10 @@ Do not "simplify" the facade by collapsing submodules back into it or by force-m
 
 ### Adding a new executor
 
-1. **`dispatch.js` line ~181**: Add entry to `EXECUTOR_CLI` map
-   ```js
-   const EXECUTOR_CLI = { codex: "codex", gemini: "gemini-cli" };
-   ```
-
-2. **`dispatch.js` line ~396**: Add execution branch
-   ```js
-   } else if (EXECUTOR === "gemini") {
-     cmd = "gemini-cli";
-     execArgs = ["run", "--dir", wtPath, ...];
-     // ...
-   }
-   ```
-
-3. **Optional**: App registration uses `create-worktree.js --register` (executor-agnostic)
+1. Add `skills/relay-dispatch/scripts/executors/<name>.js` exporting the 6-field adapter contract.
+2. Register it in `skills/relay-dispatch/scripts/executors/index.js`.
+3. Add behavior-matrix coverage in `tests/relay-dispatch/scripts/executors.test.js`.
+4. Optional: implement adapter `register(...)` for dispatch-time app registration.
 
 ### Adding a new reviewer adapter
 

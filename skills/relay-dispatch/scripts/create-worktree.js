@@ -35,8 +35,8 @@ const os = require("os");
 const {
   createWorktree,
   formatPlan,
-  registerWorktree,
 } = require("./worktree-runtime");
+const { getExecutor } = require("./executors");
 const { getPositionals, modeLabel, readArg, schemaHasFlag } = require("./cli-args");
 const { execGit } = require("./exec");
 
@@ -93,6 +93,7 @@ const PIN = hasCliFlag("--pin");
 const REGISTER = hasCliFlag("--register") || !!WORKTREE_PATH;
 const DRY_RUN = hasCliFlag("--dry-run");
 const JSON_OUT = hasCliFlag("--json");
+const registerAdapter = getExecutor("codex");
 
 // ---------------------------------------------------------------------------
 // Paths
@@ -219,6 +220,7 @@ function main() {
         title: TITLE,
         copyFiles: COPY_FILES,
         register: REGISTER,
+        registerFn: registerAdapter.register,
         pin: PIN,
         assertWithin,
       });
@@ -231,7 +233,7 @@ function main() {
   // --- Step 3 (optional): Register in Codex state ---
   let threadId = null;
   if (REGISTER && WORKTREE_PATH) {
-    const reg = registerWorktree({ repoRoot: REPO_PATH, worktreePath: wtPath, branch, title: TITLE, pin: PIN });
+    const reg = registerAdapter.register({ wtPath, repoPath: REPO_PATH, branch, title: TITLE, pin: PIN });
     threadId = reg.threadId;
   } else if (REGISTER) {
     threadId = createResult?.threadId || null;

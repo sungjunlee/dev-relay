@@ -60,7 +60,6 @@ const path = require("path");
 const crypto = require("crypto");
 const os = require("os");
 const { pushAndOpenPR } = require("./dispatch-publish");
-const { registerClaudeApp } = require("./claude-app-register");
 const {
   buildExecutionEvidence,
   writeExecutionEvidence,
@@ -68,9 +67,9 @@ const {
 const {
   createWorktree,
   formatDispatchDryRun,
-  registerWorktree,
   removeWorktree,
 } = require("./worktree-runtime");
+const { getExecutor, listExecutors } = require("./executors");
 const {
   collectEnvironmentSnapshot,
   compareEnvironmentSnapshot,
@@ -141,7 +140,7 @@ if (!args.length || hasCliFlag(["--help", "-h"])) {
   console.log(`  --manifest         ${modeLabel("--manifest")} Resume an existing relay run from its manifest`);
   console.log(`  --prompt, -p       ${modeLabel("--prompt")} Task prompt`);
   console.log(`  --prompt-file      ${modeLabel("--prompt-file")} Read prompt from file`);
-  console.log(`  --executor, -e     ${modeLabel("--executor")} Executor: codex (default), claude`);
+  console.log(`  --executor, -e     ${modeLabel("--executor")} Executor: ${listExecutors().join(", ")} (default: codex)`);
   console.log(`  --model, -m        ${modeLabel("--model")} Model override`);
   console.log(`  --model-hints      ${modeLabel("--model-hints")} Persist per-phase model hints (phase=model,...)`);
   console.log(`  --sandbox          ${modeLabel("--sandbox")} workspace-write | read-only (default: workspace-write)`);
@@ -180,8 +179,14 @@ const MANIFEST_INPUT = readArg(args, "--manifest", undefined, CLI_ARG_OPTIONS);
 const PROMPT = readArg(args, ["--prompt", "-p"], undefined, CLI_ARG_OPTIONS);
 const PROMPT_FILE = readArg(args, "--prompt-file", undefined, CLI_ARG_OPTIONS);
 const EXECUTOR = readArg(args, ["--executor", "-e"], "codex", CLI_ARG_OPTIONS);
-const DEFAULT_TIMEOUT_BY_EXECUTOR = { codex: 2400, claude: 1800 };
-const defaultTimeout = String(DEFAULT_TIMEOUT_BY_EXECUTOR[EXECUTOR] ?? 1800);
+let adapter;
+try {
+  adapter = getExecutor(EXECUTOR);
+} catch (error) {
+  console.error(`Error: ${error.message}`);
+  process.exit(1);
+}
+const defaultTimeout = String(adapter.defaultTimeout ?? 1800);
 const MODEL = readArg(args, ["--model", "-m"], undefined, CLI_ARG_OPTIONS);
 const MODEL_HINTS_RAW = readArg(args, "--model-hints", undefined, CLI_ARG_OPTIONS);
 const REASONING_OVERRIDE = readArg(args, "--reasoning", undefined, CLI_ARG_OPTIONS);
@@ -203,13 +208,13 @@ if (!["disabled", "enabled"].includes(NETWORK_ACCESS)) {
   console.error("Error: --network-access must be disabled or enabled");
   process.exit(1);
 }
-if (NETWORK_ACCESS === "enabled" && EXECUTOR !== "codex") {
-  console.error("Error: --network-access enabled is only supported for codex executor");
+const modeValidation = adapter.validateExecutionMode({ sandbox: SANDBOX, networkAccess: NETWORK_ACCESS });
+if (!modeValidation.ok) {
+  console.error(`Error: ${modeValidation.error}`);
   process.exit(1);
 }
-if (NETWORK_ACCESS === "enabled" && SANDBOX !== "workspace-write") {
-  console.error("Error: --network-access enabled requires --sandbox workspace-write");
-  process.exit(1);
+for (const warn of (modeValidation.warnings || [])) {
+  console.error(`Warning: ${warn}`);
 }
 
 const executorNetworkPolicy = {
@@ -298,9 +303,6 @@ if (!MANIFEST_INPUT && !fs.existsSync(path.join(REPO_PATH, ".git"))) {
   console.error(`Error: ${msg}`);
   process.exit(1);
 }
-
-// To add a new executor: add entry here + execution branch in Step 3.
-const EXECUTOR_CLI = { codex: "codex", claude: "claude" };
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -503,15 +505,10 @@ function enforceRubricPersistence(manifest, runDir) {
 }
 
 function validateExecutorCli() {
-  const cli = EXECUTOR_CLI[EXECUTOR];
-  if (!cli) {
-    console.error(`Error: unknown executor '${EXECUTOR}'. Supported: ${Object.keys(EXECUTOR_CLI).join(", ")}`);
-    process.exit(1);
-  }
   try {
-    execFileSync(cli, ["--version"], { encoding: "utf-8", stdio: "pipe" });
-  } catch {
-    console.error(`Error: ${cli} CLI not found.`);
+    getExecutor(EXECUTOR);
+  } catch (error) {
+    console.error(`Error: ${error.message}`);
     process.exit(1);
   }
 }
@@ -580,33 +577,6 @@ function resolveEffectiveDispatchModel({ cliModel, manifestModelHints, cliModelH
     return cliModelHints.dispatch;
   }
   return null;
-}
-
-function realpathForContainment(targetPath) {
-  return fs.realpathSync.native ? fs.realpathSync.native(targetPath) : fs.realpathSync(targetPath);
-}
-
-function resolveCodexCommonGitDir(worktreePath) {
-  // Widen the codex sandbox to the common git dir (`<main-repo>/.git`), not just
-  // the per-worktree admin dir. Linked-worktree `git add` writes blob objects
-  // under `<common>/objects/`, and `git commit` updates branch refs and reflogs
-  // under `<common>/refs/...` and `<common>/logs/...` — both in the common dir,
-  // not in `<common>/worktrees/<name>/`. The worktree admin dir is a subdir of
-  // the common dir, so passing common-dir alone covers both paths.
-  const adminDirRaw = execGit(worktreePath, ["rev-parse", "--git-dir"]);
-  const commonDirRaw = execGit(worktreePath, ["rev-parse", "--git-common-dir"]);
-  const adminDir = path.resolve(worktreePath, adminDirRaw);
-  const commonDir = path.resolve(worktreePath, commonDirRaw);
-  const worktreesDir = path.join(commonDir, "worktrees");
-
-  const realAdminDir = realpathForContainment(adminDir);
-  const realWorktreesDir = realpathForContainment(worktreesDir);
-  if (!realAdminDir.startsWith(`${realWorktreesDir}${path.sep}`)) {
-    throw new Error(
-      `codex worktree git admin dir is outside ${worktreesDir}: ${adminDir}`
-    );
-  }
-  return commonDir;
 }
 
 function summarizeCommitMode({ status, gitLog, uncommitted }) {
@@ -1022,9 +992,7 @@ async function main() {
   }
 
   // --- Step 3: Execute task ---
-  // Executor-specific: build command + args + handle quirks.
-  // To add a new executor: add a branch here.
-  // execCwd: spawn cwd option — set when the executor has no CLI flag for CWD.
+  // Executor adapter builds command + args + spawn cwd.
 
   let cmd, execArgs;
   let execCwd;
@@ -1046,37 +1014,19 @@ async function main() {
     "Execute the task fully and autonomously.\n\n" +
     taskPrompt;
 
-  if (EXECUTOR === "codex") {
-    cmd = "codex";
-    execArgs = ["exec", "-C", wtPath, "--color", "never", "-o", resultFile];
-    execArgs.push("-c", `model_reasoning_effort=${resolvedReasoningEffort}`);
-    if (NETWORK_ACCESS === "enabled") {
-      execArgs.push("-c", "sandbox_workspace_write.network_access=true");
-    }
-    if (effectiveDispatchModel) execArgs.push("-m", effectiveDispatchModel);
-    execArgs.push("--sandbox", SANDBOX);
-    if (SANDBOX === "workspace-write") {
-      codexGitCommonDir = resolveCodexCommonGitDir(wtPath);
-      execArgs.push("--add-dir", codexGitCommonDir);
-    }
-    execArgs.push(execPrompt);
-  } else if (EXECUTOR === "claude") {
-    cmd = "claude";
-    execCwd = wtPath; // Claude Code has no --cwd flag; use spawn cwd instead
-    execArgs = [
-      "-p",                            // print (non-interactive) mode
-      "--dangerously-skip-permissions", // full autonomy in isolated worktree
-      "--output-format", "text",
-    ];
-    if (effectiveDispatchModel) execArgs.push("--model", effectiveDispatchModel);
-    execArgs.push(execPrompt);
-    if (SANDBOX !== "workspace-write") {
-      console.error(`Warning: --sandbox '${SANDBOX}' is not supported for Claude executor; using --dangerously-skip-permissions`);
-    }
-  } else {
-    console.error(`Error: executor '${EXECUTOR}' has no execution handler`);
-    process.exit(1);
-  }
+  const buildResult = adapter.buildExecCommand({
+    wtPath,
+    resultFile,
+    prompt: execPrompt,
+    model: effectiveDispatchModel,
+    sandbox: SANDBOX,
+    networkAccess: NETWORK_ACCESS,
+    reasoning: resolvedReasoningEffort,
+  });
+  cmd = buildResult.cmd;
+  execArgs = buildResult.args;
+  execCwd = buildResult.cwd;
+  codexGitCommonDir = buildResult.codexGitCommonDir || null;
 
   if (!JSON_OUT) {
     console.log(`Dispatching to ${EXECUTOR}...`);
@@ -1169,11 +1119,7 @@ async function main() {
   }
   const elapsed = Math.round((Date.now() - startTime) / 1000);
 
-  // For Claude executor, stdout IS the result — copy to resultFile so
-  // downstream collection logic works the same as Codex's -o flag.
-  if (EXECUTOR === "claude" && fs.existsSync(stdoutLog)) {
-    try { fs.copyFileSync(stdoutLog, resultFile); } catch {}
-  }
+  adapter.finalizeResult({ stdoutLog, resultFile });
 
   // --- Step 4: Collect results ---
   let resultText = "";
@@ -1369,11 +1315,11 @@ async function main() {
 
   // --- Step 4.5: Optional app registration ---
   let threadId = null;
-  if (REGISTER && status !== "failed" && EXECUTOR === "codex") {
+  if (REGISTER && status !== "failed") {
     try {
-      const reg = registerWorktree({
-        repoRoot,
-        worktreePath: wtPath,
+      const reg = adapter.register({
+        wtPath,
+        repoPath: repoRoot,
         branch,
         title: `Dispatch: ${branch}`,
       });
@@ -1381,19 +1327,6 @@ async function main() {
       if (!JSON_OUT) console.log(`\n  Registered in ${EXECUTOR} app.`);
     } catch (e) {
       if (!JSON_OUT) console.log(`\n  Warning: app registration failed: ${e.message.split("\n")[0]}`);
-    }
-  } else if (REGISTER && status !== "failed" && EXECUTOR === "claude") {
-    try {
-      const reg = registerClaudeApp({
-        wtPath,
-        repoPath: repoRoot,
-        branch,
-        title: `Dispatch: ${branch}`,
-      });
-      threadId = reg.sessionId;
-      if (!JSON_OUT) console.log(`\n  Registered in ${EXECUTOR} app.`);
-    } catch (e) {
-      if (!JSON_OUT) console.log(`\n  Warning: claude registration failed: ${e.message.split("\n")[0]}`);
     }
   }
 
