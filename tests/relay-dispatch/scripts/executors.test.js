@@ -30,9 +30,52 @@ after(() => {
   if (TMP_ROOT) fs.rmSync(TMP_ROOT, { recursive: true, force: true });
 });
 
-test("registry exposes codex and claude", () => {
-  assert.deepEqual(listExecutors().sort(), ["claude", "codex"]);
-  assert.throws(() => getExecutor("opencode"), /unknown executor/);
+test("registry exposes codex, claude, and opencode", () => {
+  assert.deepEqual(listExecutors().sort(), ["claude", "codex", "opencode"]);
+  assert.throws(() => getExecutor("nonexistent"), /unknown executor/);
+});
+
+test("opencode adapter exposes the same 7 fields", () => {
+  const o = getExecutor("opencode");
+  for (const k of ["cliBinary", "defaultTimeout", "validateExecutionMode", "buildExecCommand", "finalizeResult", "register", "probe"]) {
+    assert.ok(typeof o[k] !== "undefined", `missing field: ${k}`);
+  }
+  assert.equal(o.cliBinary, "opencode");
+});
+
+test("opencode buildExecCommand throws with #377 reference (probe-only adapter)", () => {
+  const o = getExecutor("opencode");
+  assert.throws(() => o.buildExecCommand({}), /#377/);
+});
+
+test("opencode register throws with #377 reference", () => {
+  const o = getExecutor("opencode");
+  assert.throws(() => o.register({}), /#377/);
+});
+
+test("opencode validateExecutionMode rejects with #377 reference", () => {
+  const o = getExecutor("opencode");
+  const result = o.validateExecutionMode({ sandbox: "workspace-write", networkAccess: "disabled" });
+  assert.equal(result.ok, false);
+  assert.match(result.error, /#377/);
+});
+
+test("opencode finalizeResult is a safe no-op", () => {
+  const o = getExecutor("opencode");
+  // Should not throw with garbage input
+  o.finalizeResult({ stdoutLog: "/nonexistent", resultFile: "/nonexistent" });
+});
+
+test("opencode probe returns {error, raw} shape when binary missing", () => {
+  const o = getExecutor("opencode");
+  // We can't reliably assume opencode is installed; assert the shape is consistent regardless.
+  const result = o.probe({ timeout: 5 });
+  assert.ok("error" in result, "probe result must have 'error' key");
+  assert.ok("raw" in result, "probe result must have 'raw' key");
+  // If binary is missing the error message should mention "opencode CLI not found"
+  if (result.raw === null && typeof result.error === "string") {
+    assert.match(result.error, /opencode CLI not found/);
+  }
 });
 
 test("codex buildExecCommand: workspace-write + network disabled + no model - full argv lock", () => {
