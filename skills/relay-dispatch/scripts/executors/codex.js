@@ -10,11 +10,7 @@ const PROBE_PROMPT =
   "type is one of: skill, mcp_tool, built_in.";
 
 function realpathForContainment(targetPath) {
-  try {
-    return fs.realpathSync(targetPath);
-  } catch {
-    return path.resolve(targetPath);
-  }
+  return fs.realpathSync.native ? fs.realpathSync.native(targetPath) : fs.realpathSync(targetPath);
 }
 
 function resolveCodexCommonGitDir(worktreePath) {
