@@ -66,15 +66,20 @@ test("opencode finalizeResult is a safe no-op", () => {
   o.finalizeResult({ stdoutLog: "/nonexistent", resultFile: "/nonexistent" });
 });
 
-test("opencode probe returns {error, raw} shape when binary missing", () => {
-  const o = getExecutor("opencode");
-  // We can't reliably assume opencode is installed; assert the shape is consistent regardless.
-  const result = o.probe({ timeout: 5 });
-  assert.ok("error" in result, "probe result must have 'error' key");
-  assert.ok("raw" in result, "probe result must have 'raw' key");
-  // If binary is missing the error message should mention "opencode CLI not found"
-  if (result.raw === null && typeof result.error === "string") {
+test("opencode probe returns {error: 'opencode CLI not found', raw: null} when binary missing", () => {
+  // Isolate PATH to a directory without opencode so this test never depends on the
+  // host machine having (or not having) opencode installed.
+  const emptyBin = path.join(TMP_ROOT, "empty-bin");
+  fs.mkdirSync(emptyBin, { recursive: true });
+  const originalPath = process.env.PATH;
+  process.env.PATH = emptyBin;
+  try {
+    const o = getExecutor("opencode");
+    const result = o.probe({ timeout: 5 });
+    assert.equal(result.raw, null);
     assert.match(result.error, /opencode CLI not found/);
+  } finally {
+    process.env.PATH = originalPath;
   }
 });
 
