@@ -31,8 +31,8 @@ an operator CLI, adapter entry point, or archived measurement tool.
 | `scripts/update-manifest-state.js` | Decision needed | Public CLI in `cli-schema.js`, tests, and historical docs; not the canonical recovery path. | Either deprecate in favor of `recover-state.js` or document the remaining use case. Do not delete silently. |
 | `scripts/reliability-report.js` | Optional operator tool / planner signal producer | `/relay-plan` reads it before rubric design. | Keep. |
 | `scripts/smoke_dispatch_scenarios.py` | Archived measurement tool | Referenced from scenario-test docs only. | Move out of packaged `skills/` if it is no longer a shipped operator tool. |
-| `scripts/claude-app-register.js` | Shared helper | Imported by `dispatch.js`. | Keep while Claude executor registration parity exists. |
-| `scripts/codex-app-register.js` | Shared helper | Imported by `worktree-runtime.js`. | Keep. |
+| `scripts/claude-app-register.js` | Shared helper | Imported by the Claude executor adapter. | Keep while Claude executor registration parity exists. |
+| `scripts/codex-app-register.js` | Shared helper | Imported by the Codex executor adapter. | Keep. |
 | `scripts/worktree-runtime.js` | Shared helper | Imported by `dispatch.js` and `create-worktree.js`. | Keep. |
 | `scripts/worktreeinclude.js` | Shared helper | Imported by `worktree-runtime.js`. | Keep or inline only if the worktree include contract stays trivial. |
 | `scripts/dispatch-publish.js` | Shared helper | Imported by `dispatch.js` and `recover-commit.js`. | Keep. |

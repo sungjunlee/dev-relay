@@ -338,14 +338,13 @@ dev-relay is designed to support new agents. No framework changes needed.
 
 ### Adding a new executor
 
-1. Add an entry to `EXECUTOR_CLI` in `skills/relay-dispatch/scripts/dispatch.js`:
-   ```js
-   const EXECUTOR_CLI = { codex: "codex", claude: "claude", yourAgent: "your-agent-cli" };
-   ```
+1. Add `skills/relay-dispatch/scripts/executors/<name>.js` exporting the adapter contract documented in `skills/relay-dispatch/scripts/executors/README.md`.
 
-2. Add an execution branch in the same file to wire up CLI arguments for the new executor
+2. Register it in `skills/relay-dispatch/scripts/executors/index.js`.
 
-3. Optional: dispatch-time app registration supports both executors. Codex writes a real Codex App thread; Claude writes a relay-side registration receipt under `~/.relay/worktrees/<wt-hash>/claude-registration.json`. `create-worktree.js --register` remains Codex-only.
+3. Add behavior-matrix coverage in `tests/relay-dispatch/scripts/executors.test.js`.
+
+4. Optional: implement adapter `register(...)`. Dispatch-time app registration supports both current executors. Codex writes a real Codex App thread; Claude writes a relay-side registration receipt under `~/.relay/worktrees/<wt-hash>/claude-registration.json`. `create-worktree.js --register` remains Codex-only.
 
 ### Adding a new reviewer
 
