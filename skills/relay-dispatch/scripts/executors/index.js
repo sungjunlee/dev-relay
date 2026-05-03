@@ -1,7 +1,8 @@
 const codex = require("./codex");
 const claude = require("./claude");
+const opencode = require("./opencode");
 
-const EXECUTORS = { codex, claude };
+const EXECUTORS = { codex, claude, opencode };
 
 function getExecutor(name) {
   if (!Object.prototype.hasOwnProperty.call(EXECUTORS, name)) {

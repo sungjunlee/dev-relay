@@ -14,3 +14,5 @@ Each file in this directory is an executor adapter. To add a new executor:
 3. Add tests in `tests/relay-dispatch/scripts/executors.test.js`.
 
 That's it. `dispatch.js` and `probe-executor-env.js` will pick up the new executor automatically via `getExecutor(name)`.
+
+opencode is registered as a probe-only adapter pending full executor support in #377. Its buildExecCommand/register/validateExecutionMode stubs throw with a `#377` reference.
