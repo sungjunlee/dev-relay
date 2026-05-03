@@ -30,9 +30,94 @@ after(() => {
   if (TMP_ROOT) fs.rmSync(TMP_ROOT, { recursive: true, force: true });
 });
 
-test("registry exposes codex and claude", () => {
-  assert.deepEqual(listExecutors().sort(), ["claude", "codex"]);
-  assert.throws(() => getExecutor("opencode"), /unknown executor/);
+test("registry exposes codex, claude, and opencode", () => {
+  assert.deepEqual(listExecutors().sort(), ["claude", "codex", "opencode"]);
+  assert.throws(() => getExecutor("nonexistent"), /unknown executor/);
+});
+
+test("opencode adapter exposes the same 7 fields", () => {
+  const o = getExecutor("opencode");
+  for (const k of ["cliBinary", "defaultTimeout", "validateExecutionMode", "buildExecCommand", "finalizeResult", "register", "probe"]) {
+    assert.ok(typeof o[k] !== "undefined", `missing field: ${k}`);
+  }
+  assert.equal(o.cliBinary, "opencode");
+});
+
+test("opencode buildExecCommand throws with #377 reference (probe-only adapter)", () => {
+  const o = getExecutor("opencode");
+  assert.throws(() => o.buildExecCommand({}), /#377/);
+});
+
+test("opencode register throws with #377 reference", () => {
+  const o = getExecutor("opencode");
+  assert.throws(() => o.register({}), /#377/);
+});
+
+test("opencode validateExecutionMode rejects with #377 reference", () => {
+  const o = getExecutor("opencode");
+  const result = o.validateExecutionMode({ sandbox: "workspace-write", networkAccess: "disabled" });
+  assert.equal(result.ok, false);
+  assert.match(result.error, /#377/);
+});
+
+test("opencode finalizeResult is a safe no-op", () => {
+  const o = getExecutor("opencode");
+  // Should not throw with garbage input
+  o.finalizeResult({ stdoutLog: "/nonexistent", resultFile: "/nonexistent" });
+});
+
+test("opencode probe returns {error: 'opencode CLI not found', raw: null} when binary missing", () => {
+  // Isolate PATH to a directory without opencode so this test never depends on the
+  // host machine having (or not having) opencode installed.
+  const emptyBin = path.join(TMP_ROOT, "empty-bin");
+  fs.mkdirSync(emptyBin, { recursive: true });
+  const originalPath = process.env.PATH;
+  process.env.PATH = emptyBin;
+  try {
+    const o = getExecutor("opencode");
+    const result = o.probe({ timeout: 5 });
+    assert.equal(result.raw, null);
+    assert.match(result.error, /opencode CLI not found/);
+  } finally {
+    process.env.PATH = originalPath;
+  }
+});
+
+test("opencode probe payload exposes cli_path and discovery outputs", () => {
+  const fakeBin = path.join(TMP_ROOT, "fake-bin");
+  const fakeOpencode = path.join(fakeBin, "opencode");
+  fs.mkdirSync(fakeBin);
+  fs.writeFileSync(fakeOpencode, `#!/bin/sh
+case "$1" in
+  --version) echo "opencode 1.2.3" ;;
+  --help) echo "Usage: opencode run auth models providers" ;;
+  auth)
+    if [ "$2" = "list" ]; then echo "github logged-in"; else exit 2; fi
+    ;;
+  models) echo "gpt-test" ;;
+  providers) echo "openai" ;;
+  run) echo '{"name":"tool","type":"built_in","description":"test"}' ;;
+  *) exit 2 ;;
+esac
+`);
+  fs.chmodSync(fakeOpencode, 0o755);
+
+  const originalPath = process.env.PATH;
+  process.env.PATH = `${fakeBin}${path.delimiter}${originalPath || ""}`;
+  try {
+    const o = getExecutor("opencode");
+    const result = o.probe({ timeout: 5 });
+    assert.equal(result.error, null);
+    const parsed = JSON.parse(result.raw);
+    assert.equal(parsed.version, "opencode 1.2.3");
+    assert.equal(parsed.cli_path, fakeOpencode);
+    assert.equal(parsed.auth_list, "github logged-in");
+    assert.equal(parsed.models_output, "gpt-test");
+    assert.equal(parsed.providers_output, "openai");
+    assert.ok(Array.isArray(parsed.warnings), "raw payload must include warnings array");
+  } finally {
+    process.env.PATH = originalPath;
+  }
 });
 
 test("codex buildExecCommand: workspace-write + network disabled + no model - full argv lock", () => {
