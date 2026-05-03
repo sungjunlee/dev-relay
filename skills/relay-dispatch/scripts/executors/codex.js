@@ -87,6 +87,7 @@ function probe({ timeout }) {
 }
 
 module.exports = {
+  cliBinary: "codex",
   defaultTimeout: 2400,
   validateExecutionMode,
   buildExecCommand,

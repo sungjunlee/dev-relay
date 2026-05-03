@@ -60,6 +60,7 @@ function probe({ timeout }) {
 }
 
 module.exports = {
+  cliBinary: "claude",
   defaultTimeout: 1800,
   validateExecutionMode,
   buildExecCommand,

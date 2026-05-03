@@ -2,7 +2,8 @@
 
 Each file in this directory is an executor adapter. To add a new executor:
 
-1. Drop a file here named `<executor>.js` exporting the 6-field contract:
+1. Drop a file here named `<executor>.js` exporting the 7-field contract:
+   - `cliBinary` (string) — binary name on PATH used for `--version` preflight
    - `defaultTimeout` (number, seconds)
    - `validateExecutionMode({sandbox, networkAccess})` -> `{ok, error?, warnings?}`
    - `buildExecCommand({wtPath, resultFile, prompt, model, sandbox, networkAccess, reasoning})` -> `{cmd, args, cwd?, codexGitCommonDir?}`

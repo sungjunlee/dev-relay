@@ -505,10 +505,18 @@ function enforceRubricPersistence(manifest, runDir) {
 }
 
 function validateExecutorCli() {
+  let adapter;
   try {
-    getExecutor(EXECUTOR);
+    adapter = getExecutor(EXECUTOR);
   } catch (error) {
     console.error(`Error: ${error.message}`);
+    process.exit(1);
+  }
+  const cli = adapter.cliBinary || EXECUTOR;
+  try {
+    execFileSync(cli, ["--version"], { encoding: "utf-8", stdio: "pipe" });
+  } catch {
+    console.error(`Error: ${cli} CLI not found.`);
     process.exit(1);
   }
 }
