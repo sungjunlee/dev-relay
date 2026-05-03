@@ -43,21 +43,74 @@ test("opencode adapter exposes the same 7 fields", () => {
   assert.equal(o.cliBinary, "opencode");
 });
 
-test("opencode buildExecCommand throws with #377 reference (probe-only adapter)", () => {
+test("opencode validateExecutionMode accepts workspace-write+disabled with experimental warning", () => {
   const o = getExecutor("opencode");
-  assert.throws(() => o.buildExecCommand({}), /#377/);
+  const r = o.validateExecutionMode({ sandbox: "workspace-write", networkAccess: "disabled" });
+  assert.equal(r.ok, true);
+  assert.ok(Array.isArray(r.warnings));
+  assert.ok(r.warnings.some((w) => /experimental/i.test(w)));
 });
 
-test("opencode register throws with #377 reference", () => {
+test("opencode validateExecutionMode warns on non-workspace-write sandbox", () => {
   const o = getExecutor("opencode");
-  assert.throws(() => o.register({}), /#377/);
+  const r = o.validateExecutionMode({ sandbox: "read-only", networkAccess: "disabled" });
+  assert.equal(r.ok, true);
+  assert.ok(r.warnings.some((w) => /not enforced/i.test(w)));
 });
 
-test("opencode validateExecutionMode rejects with #377 reference", () => {
+test("opencode buildExecCommand: happy path", () => {
   const o = getExecutor("opencode");
-  const result = o.validateExecutionMode({ sandbox: "workspace-write", networkAccess: "disabled" });
-  assert.equal(result.ok, false);
-  assert.match(result.error, /#377/);
+  const r = o.buildExecCommand({
+    wtPath: "/tmp/wt",
+    resultFile: "/tmp/r",
+    prompt: "P",
+    model: null,
+    sandbox: "workspace-write",
+    networkAccess: "disabled",
+    reasoning: "high",
+  });
+  assert.equal(r.cmd, "opencode");
+  assert.deepEqual(r.args, ["run", "P"]);
+  assert.equal(r.cwd, "/tmp/wt");
+  assert.equal(r.codexGitCommonDir, null);
+});
+
+test("opencode buildExecCommand: model passthrough via -m", () => {
+  const o = getExecutor("opencode");
+  const r = o.buildExecCommand({
+    wtPath: "/tmp/wt",
+    resultFile: "/tmp/r",
+    prompt: "P",
+    model: "openai/gpt-5",
+    sandbox: "workspace-write",
+    networkAccess: "disabled",
+    reasoning: "high",
+  });
+  assert.deepEqual(r.args, ["run", "-m", "openai/gpt-5", "P"]);
+});
+
+test("opencode register stub returns null thread id", () => {
+  const o = getExecutor("opencode");
+  const r = o.register({ wtPath: "/tmp/wt", repoPath: "/repo", branch: "b", title: "T" });
+  assert.equal(r.threadId, null);
+});
+
+test("opencode parseProvider extracts provider from model", () => {
+  const o = getExecutor("opencode");
+  assert.equal(o.parseProvider("openai/gpt-5"), "openai");
+  assert.equal(o.parseProvider("anthropic/claude-opus-4-7"), "anthropic");
+  assert.equal(o.parseProvider("gpt-5"), null);
+  assert.equal(o.parseProvider(""), null);
+  assert.equal(o.parseProvider(null), null);
+  assert.equal(o.parseProvider(undefined), null);
+});
+
+test("codex providerDefault is openai", () => {
+  assert.equal(getExecutor("codex").providerDefault, "openai");
+});
+
+test("claude providerDefault is anthropic", () => {
+  assert.equal(getExecutor("claude").providerDefault, "anthropic");
 });
 
 test("opencode finalizeResult is a safe no-op", () => {

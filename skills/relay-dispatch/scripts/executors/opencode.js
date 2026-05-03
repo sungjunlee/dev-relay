@@ -8,22 +8,46 @@ const PROBE_PROMPT =
   "Output a JSON array of objects with {name, type, description} fields. " +
   "type is one of: skill, mcp_tool, built_in.";
 
-const NOT_YET = "opencode executor is experimental and not yet wired up; see #377";
-
-function validateExecutionMode(/* { sandbox, networkAccess } */) {
-  return { ok: false, error: NOT_YET };
+function parseProvider(model) {
+  if (typeof model !== "string" || !model) return null;
+  const idx = model.indexOf("/");
+  if (idx <= 0) return null;
+  return model.slice(0, idx);
 }
 
-function buildExecCommand() {
-  throw new Error(NOT_YET);
+function validateExecutionMode({ sandbox, networkAccess }) {
+  const warnings = [];
+  if (sandbox !== "workspace-write") {
+    warnings.push(
+      `opencode executor: --sandbox '${sandbox}' is not enforced by opencode (no native sandboxing); proceeding with workspace-write semantics.`
+    );
+  }
+  if (networkAccess === "enabled") {
+    warnings.push(
+      "opencode executor: --network-access 'enabled' is informational only; opencode does not gate network access at the executor level."
+    );
+  }
+  warnings.push("opencode executor is experimental; review boundary defined in docs/reviewer-policy-opencode.md.");
+  return { ok: true, warnings };
 }
 
-function finalizeResult(/* { stdoutLog, resultFile } */) {
-  // safe no-op so dispatch.js can call this unconditionally
+function buildExecCommand({ wtPath, prompt, model }) {
+  const cmd = "opencode";
+  const args = ["run"];
+  if (model) args.push("-m", model);
+  args.push(prompt);
+  return { cmd, args, cwd: wtPath, codexGitCommonDir: null };
+}
+
+function finalizeResult({ stdoutLog, resultFile }) {
+  // opencode writes its result to stdout; copy to resultFile so downstream collection works.
+  if (fs.existsSync(stdoutLog)) {
+    try { fs.copyFileSync(stdoutLog, resultFile); } catch {}
+  }
 }
 
 function register() {
-  throw new Error(NOT_YET);
+  return { threadId: null, raw: { provider: "opencode", note: "no app registration surface" } };
 }
 
 function discoverConfigPath() {
@@ -184,4 +208,5 @@ module.exports = {
   finalizeResult,
   register,
   probe,
+  parseProvider,
 };
