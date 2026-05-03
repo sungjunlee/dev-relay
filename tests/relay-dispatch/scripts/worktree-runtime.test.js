@@ -121,7 +121,7 @@ test("createWorktree falls back to an existing branch when -b creation fails", (
   );
 });
 
-test("createWorktree forwards registration args through the shared runtime helper", () => {
+test("createWorktree forwards registration args through an adapter callback", () => {
   const { repoRoot, root } = setupRepo();
   const worktreePath = path.join(root, "worktrees", "register", "repo");
   const calls = [];
@@ -132,24 +132,21 @@ test("createWorktree forwards registration args through the shared runtime helpe
     branch: "issue-187-register",
     title: "Pinned Register",
     register: true,
+    registerFn(options) {
+      calls.push(options);
+      return { threadId: "thread-123" };
+    },
     pin: true,
     copyFiles: [],
-    dependencies: {
-      registerWorktreeImpl(options) {
-        calls.push(options);
-        return { threadId: "thread-123" };
-      },
-    },
   });
 
   assert.equal(result.threadId, "thread-123");
   assert.deepEqual(calls, [{
-    repoRoot,
-    worktreePath,
+    wtPath: worktreePath,
+    repoPath: repoRoot,
     branch: "issue-187-register",
     title: "Pinned Register",
     pin: true,
-    logger: null,
   }]);
 });
 
@@ -164,12 +161,10 @@ test("createWorktree removes the created worktree when a post-create step fails"
       branch: "issue-187-cleanup",
       title: "Cleanup Test",
       register: true,
-      copyFiles: [],
-      dependencies: {
-        registerWorktreeImpl() {
-          throw new Error("simulated register failure");
-        },
+      registerFn() {
+        throw new Error("simulated register failure");
       },
+      copyFiles: [],
     });
   }, /simulated register failure/);
 

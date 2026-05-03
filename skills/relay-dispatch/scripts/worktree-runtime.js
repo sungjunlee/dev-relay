@@ -2,7 +2,6 @@ const fs = require("fs");
 const path = require("path");
 
 const { copyWorktreeFiles, getWorktreeIncludeFiles } = require("./worktreeinclude");
-const { registerCodexApp } = require("./codex-app-register");
 const { execGit } = require("./exec");
 
 function formatPlan({ worktreePath, branch, title, register, pin, includeFiles }) {
@@ -81,29 +80,6 @@ function removeWorktree({ repoRoot, worktreePath, dependencies = {} }) {
   } catch {}
 }
 
-function registerWorktree({
-  repoRoot,
-  worktreePath,
-  branch,
-  title,
-  pin = false,
-  logger = null,
-  dependencies = {},
-}) {
-  const registerCodexAppImpl = dependencies.registerCodexAppImpl || registerCodexApp;
-  const registration = registerCodexAppImpl({
-    wtPath: worktreePath,
-    repoPath: repoRoot,
-    branch,
-    title,
-    pin,
-  });
-  if (typeof logger === "function") {
-    logger({ event: "register", worktreePath, branch, title, pin, threadId: registration.threadId || null });
-  }
-  return registration;
-}
-
 function createWorktree({
   repoRoot,
   worktreePath,
@@ -112,6 +88,7 @@ function createWorktree({
   includeFiles,
   copyFiles = [],
   register = false,
+  registerFn = null,
   pin = false,
   dryRun = false,
   logger = null,
@@ -121,7 +98,6 @@ function createWorktree({
   const gitRunner = dependencies.gitRunner || ((repoDir, ...gitArgs) => execGit(repoDir, gitArgs));
   const getWorktreeIncludeFilesImpl = dependencies.getWorktreeIncludeFilesImpl || getWorktreeIncludeFiles;
   const copyWorktreeFilesImpl = dependencies.copyWorktreeFilesImpl || copyWorktreeFiles;
-  const registerWorktreeImpl = dependencies.registerWorktreeImpl || registerWorktree;
   const removeWorktreeImpl = dependencies.removeWorktreeImpl || removeWorktree;
   const resolvedIncludeFiles = includeFiles || getWorktreeIncludeFilesImpl(repoRoot);
   const plan = {
@@ -169,16 +145,18 @@ function createWorktree({
       logger({ event: "copy", worktreePath, copiedFiles });
     }
 
-    if (register) {
-      const registration = registerWorktreeImpl({
-        repoRoot,
-        worktreePath,
+    if (register && registerFn) {
+      const registration = registerFn({
+        wtPath: worktreePath,
+        repoPath: repoRoot,
         branch,
         title,
         pin,
-        logger,
       });
-      threadId = registration.threadId || null;
+      threadId = registration.threadId || registration.sessionId || null;
+      if (typeof logger === "function") {
+        logger({ event: "register", worktreePath, branch, title, pin, threadId });
+      }
     }
   } catch (error) {
     if (createdWorktree) {
@@ -198,6 +176,5 @@ module.exports = {
   createWorktree,
   formatDispatchDryRun,
   formatPlan,
-  registerWorktree,
   removeWorktree,
 };

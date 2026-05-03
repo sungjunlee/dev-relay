@@ -122,5 +122,5 @@ node skills/relay-merge/scripts/finalize-run.js --run-id <id> --force-finalize-n
 - Operator utilities and recovery playbooks live in `skills/<skill>/references/`, not SKILL.md. Sunset deprecated flags within one release.
 - Test files and test fixtures live under `tests/<skill>/`, never under `skills/<skill>/`, so `npx skills add` does not install them.
 - Manifest state transitions must go through `validateTransition()` — direct state assignment is a bug
-- New executors: add entry to `EXECUTOR_CLI` + execution branch in `dispatch.js`; app registration uses `create-worktree.js --register`
+- New executors: drop a file in `skills/relay-dispatch/scripts/executors/` exporting the 6-field adapter contract, register in `executors/index.js`. See `skills/relay-dispatch/scripts/executors/README.md` for the contract and add a row to `tests/relay-dispatch/scripts/executors.test.js`.
 - New reviewers: create `invoke-reviewer-<name>.js` in `relay-review/scripts/`
