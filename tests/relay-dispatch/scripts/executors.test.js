@@ -78,6 +78,43 @@ test("opencode probe returns {error, raw} shape when binary missing", () => {
   }
 });
 
+test("opencode probe payload exposes cli_path and discovery outputs", () => {
+  const fakeBin = path.join(TMP_ROOT, "fake-bin");
+  const fakeOpencode = path.join(fakeBin, "opencode");
+  fs.mkdirSync(fakeBin);
+  fs.writeFileSync(fakeOpencode, `#!/bin/sh
+case "$1" in
+  --version) echo "opencode 1.2.3" ;;
+  --help) echo "Usage: opencode run auth models providers" ;;
+  auth)
+    if [ "$2" = "list" ]; then echo "github logged-in"; else exit 2; fi
+    ;;
+  models) echo "gpt-test" ;;
+  providers) echo "openai" ;;
+  run) echo '{"name":"tool","type":"built_in","description":"test"}' ;;
+  *) exit 2 ;;
+esac
+`);
+  fs.chmodSync(fakeOpencode, 0o755);
+
+  const originalPath = process.env.PATH;
+  process.env.PATH = `${fakeBin}${path.delimiter}${originalPath || ""}`;
+  try {
+    const o = getExecutor("opencode");
+    const result = o.probe({ timeout: 5 });
+    assert.equal(result.error, null);
+    const parsed = JSON.parse(result.raw);
+    assert.equal(parsed.version, "opencode 1.2.3");
+    assert.equal(parsed.cli_path, fakeOpencode);
+    assert.equal(parsed.auth_list, "github logged-in");
+    assert.equal(parsed.models_output, "gpt-test");
+    assert.equal(parsed.providers_output, "openai");
+    assert.ok(Array.isArray(parsed.warnings), "raw payload must include warnings array");
+  } finally {
+    process.env.PATH = originalPath;
+  }
+});
+
 test("codex buildExecCommand: workspace-write + network disabled + no model - full argv lock", () => {
   const codex = getExecutor("codex");
   const result = codex.buildExecCommand({

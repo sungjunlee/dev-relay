@@ -39,6 +39,10 @@ function discoverConfigPath() {
   return null;
 }
 
+function helpMentionsCommand(help, name) {
+  return new RegExp(`(^|\\s)${name}(\\s|,|$)`).test(help);
+}
+
 function probe({ timeout }) {
   const cmd = "opencode";
 
@@ -48,6 +52,25 @@ function probe({ timeout }) {
     version = execFileSync(cmd, ["--version"], { encoding: "utf-8", stdio: "pipe" }).trim();
   } catch {
     return { error: `${cmd} CLI not found`, raw: null };
+  }
+
+  let cliPath = null;
+  try {
+    const result = spawnSync("/bin/sh", ["-c", "command -v opencode"], {
+      encoding: "utf-8",
+      stdio: "pipe",
+    });
+    if (result.status === 0) cliPath = (result.stdout || "").trim() || null;
+  } catch {}
+  if (!cliPath) {
+    for (const dir of (process.env.PATH || "").split(path.delimiter)) {
+      const candidate = path.join(dir, process.platform === "win32" ? "opencode.exe" : "opencode");
+      try {
+        fs.accessSync(candidate, fs.constants.X_OK);
+        cliPath = candidate;
+        break;
+      } catch {}
+    }
   }
 
   // 2. Try richer discovery; degrade gracefully if any sub-command is unavailable.
@@ -83,6 +106,38 @@ function probe({ timeout }) {
     if (result.status === 0) authList = (result.stdout || "").trim();
   } catch {}
 
+  const discoveryProbes = [
+    { name: "models", argv: ["models"] },
+    { name: "providers", argv: ["providers"] },
+    { name: "model", argv: ["model"] },
+    { name: "list", argv: ["list"] },
+  ];
+  const discoveryResults = {};
+  for (const { name, argv } of discoveryProbes) {
+    if (help && helpMentionsCommand(help, name)) {
+      try {
+        const result = spawnSync(cmd, argv, {
+          encoding: "utf-8",
+          stdio: "pipe",
+          timeout: Math.min(timeout, 30) * 1000,
+        });
+        if (result.status === 0) {
+          discoveryResults[`${name}_output`] = (result.stdout || "").trim();
+        } else {
+          discoveryResults[`${name}_error`] =
+            `exit ${result.status}: ${(result.stderr || "").trim().slice(0, 200)}`;
+        }
+      } catch (e) {
+        discoveryResults[`${name}_error`] = e.message;
+      }
+    }
+  }
+  if (!help || (!helpMentionsCommand(help, "models") && !helpMentionsCommand(help, "providers"))) {
+    warnings.push(
+      "opencode --help does not expose models/providers discovery; provider state inferred from auth list only",
+    );
+  }
+
   // 3. Run the actual probe prompt against opencode if it has a `run` command. Time-boxed.
   // If this fails or times out, still return the version + auth info we collected.
   let probeOutput = null;
@@ -107,8 +162,10 @@ function probe({ timeout }) {
   // Compose the raw payload as a JSON string so existing consumers reading `raw` still get text.
   const raw = JSON.stringify({
     version,
+    cli_path: cliPath,
     config_path: configPath,
     auth_list: authList,
+    ...discoveryResults,
     probe_output: probeOutput,
     probe_error: probeError,
     warnings,
