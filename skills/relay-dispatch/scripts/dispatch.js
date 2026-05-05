@@ -80,6 +80,7 @@ const {
   writeManifest,
 } = require("./manifest/store");
 const { parseModelHints } = require("./model-hints");
+const { resolveExecutorDefaultModel } = require("./executor-model-config");
 const {
   createRunId,
   ensureRunLayout,
@@ -576,7 +577,7 @@ function resolveRoleBinding(envName, fallback) {
   return typeof explicit === "string" && explicit.trim() ? explicit.trim() : fallback;
 }
 
-function resolveEffectiveDispatchModel({ cliModel, manifestModelHints, cliModelHints }) {
+function resolveEffectiveDispatchModel({ cliModel, manifestModelHints, cliModelHints, executorDefaultModel }) {
   if (cliModel) return cliModel;
   if (manifestModelHints && typeof manifestModelHints.dispatch === "string" && manifestModelHints.dispatch.trim()) {
     return manifestModelHints.dispatch;
@@ -584,6 +585,10 @@ function resolveEffectiveDispatchModel({ cliModel, manifestModelHints, cliModelH
   if (cliModelHints && typeof cliModelHints.dispatch === "string" && cliModelHints.dispatch.trim()) {
     return cliModelHints.dispatch;
   }
+  const defaultModel = typeof executorDefaultModel === "function"
+    ? executorDefaultModel()
+    : executorDefaultModel;
+  if (defaultModel) return defaultModel;
   return null;
 }
 
@@ -787,6 +792,7 @@ async function main() {
     cliModel: MODEL,
     manifestModelHints: manifest?.model_hints,
     cliModelHints: MODEL_HINTS,
+    executorDefaultModel: () => resolveExecutorDefaultModel(EXECUTOR, { relayHome: RELAY_HOME }),
   });
   const provider = typeof adapter.parseProvider === "function"
     ? (adapter.parseProvider(effectiveDispatchModel) ?? adapter.providerDefault ?? null)

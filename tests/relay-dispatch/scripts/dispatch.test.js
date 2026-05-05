@@ -1480,6 +1480,237 @@ test("dispatch opencode executor records provider metadata", () => {
   assert.equal(manifest.dispatch.last_provider, "openai");
 });
 
+test("dispatch opencode executor uses bundled default model when no override is supplied", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-opencode-bin-"));
+  const capturePath = path.join(os.tmpdir(), `relay-dispatch-argv-${Date.now()}-opencode-bundled-default.json`);
+  writeArgCaptureOpencode(binDir, capturePath);
+  const env = {
+    ...process.env,
+    PATH: `${binDir}:${process.env.PATH}`,
+    RELAY_HOME: relayHome,
+  };
+  const taskPrompt = "test bundled opencode default";
+
+  const result = JSON.parse(runDispatch(repoRoot, [
+    "-b", "issue-opencode-bundled-default",
+    "-p", taskPrompt,
+    "-e", "opencode",
+    "--json",
+  ], env));
+
+  assert.deepEqual(JSON.parse(fs.readFileSync(capturePath, "utf-8")), [
+    "run",
+    "-m", "opencode-go/deepseek-v4-pro",
+    buildDispatchExecPrompt(taskPrompt),
+  ]);
+
+  const dispatchStart = readJsonLines(path.join(result.runDir, "events.jsonl"))
+    .find((event) => event.event === "dispatch_start");
+  assert.equal(dispatchStart.model, "opencode-go/deepseek-v4-pro");
+  assert.equal(dispatchStart.provider, "opencode-go");
+});
+
+test("dispatch opencode executor lets RELAY_HOME executors config override bundled model", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  fs.writeFileSync(path.join(relayHome, "executors.json"), JSON.stringify({
+    executors: {
+      opencode: {
+        default_model: "opencode-go/qwen3.6-plus",
+        candidate_models: ["opencode-go/qwen3.6-plus"],
+      },
+    },
+  }, null, 2), "utf-8");
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-opencode-bin-"));
+  const capturePath = path.join(os.tmpdir(), `relay-dispatch-argv-${Date.now()}-opencode-local-default.json`);
+  writeArgCaptureOpencode(binDir, capturePath);
+  const env = {
+    ...process.env,
+    PATH: `${binDir}:${process.env.PATH}`,
+    RELAY_HOME: relayHome,
+  };
+  const taskPrompt = "test local opencode default";
+
+  const result = JSON.parse(runDispatch(repoRoot, [
+    "-b", "issue-opencode-local-default",
+    "-p", taskPrompt,
+    "-e", "opencode",
+    "--json",
+  ], env));
+
+  assert.deepEqual(JSON.parse(fs.readFileSync(capturePath, "utf-8")), [
+    "run",
+    "-m", "opencode-go/qwen3.6-plus",
+    buildDispatchExecPrompt(taskPrompt),
+  ]);
+
+  const manifest = readManifest(result.manifestPath).data;
+  assert.equal(manifest.dispatch.last_model, "opencode-go/qwen3.6-plus");
+  assert.equal(manifest.dispatch.last_provider, "opencode-go");
+});
+
+test("dispatch lets local executor config define defaults for executors absent from bundled config", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  fs.writeFileSync(path.join(relayHome, "executors.json"), JSON.stringify({
+    executors: {
+      codex: {
+        default_model: "gpt-5.5",
+      },
+    },
+  }, null, 2), "utf-8");
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  const capturePath = path.join(os.tmpdir(), `relay-dispatch-argv-${Date.now()}-codex-local-default.json`);
+  writeArgCaptureCodex(binDir, capturePath);
+  const env = {
+    ...process.env,
+    PATH: `${binDir}:${process.env.PATH}`,
+    RELAY_HOME: relayHome,
+  };
+
+  const result = JSON.parse(runDispatch(repoRoot, [
+    "-b", "issue-codex-local-default",
+    "-p", "codex local default model",
+    "--json",
+  ], env));
+  const args = JSON.parse(fs.readFileSync(capturePath, "utf-8"));
+
+  assert.equal(result.status, "completed");
+  assert.equal(args[args.indexOf("-m") + 1], "gpt-5.5");
+});
+
+test("dispatch codex executor ignores malformed local executor model config", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  fs.writeFileSync(path.join(relayHome, "executors.json"), "{not-json", "utf-8");
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  const capturePath = path.join(os.tmpdir(), `relay-dispatch-argv-${Date.now()}-codex-malformed-local-model-config.json`);
+  writeArgCaptureCodex(binDir, capturePath);
+  const env = {
+    ...process.env,
+    PATH: `${binDir}:${process.env.PATH}`,
+    RELAY_HOME: relayHome,
+  };
+  const taskPrompt = "codex should ignore unrelated malformed executor config";
+
+  const result = JSON.parse(runDispatch(repoRoot, [
+    "-b", "issue-codex-ignore-malformed-model-config",
+    "-p", taskPrompt,
+    "--json",
+  ], env));
+  const args = JSON.parse(fs.readFileSync(capturePath, "utf-8"));
+
+  assert.equal(result.status, "completed");
+  assert.equal(args.includes("-m"), false);
+});
+
+test("dispatch opencode default model falls back to bundled config when local config schema is invalid", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  fs.writeFileSync(path.join(relayHome, "executors.json"), JSON.stringify({
+    executors: {
+      opencode: {
+        default_model: 123,
+      },
+    },
+  }), "utf-8");
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-opencode-bin-"));
+  const capturePath = path.join(os.tmpdir(), `relay-dispatch-argv-${Date.now()}-opencode-invalid-local-default.json`);
+  writeArgCaptureOpencode(binDir, capturePath);
+  const env = {
+    ...process.env,
+    PATH: `${binDir}:${process.env.PATH}`,
+    RELAY_HOME: relayHome,
+  };
+  const taskPrompt = "invalid local config should fall back to bundled opencode default";
+
+  const proc = spawnSync("node", [SCRIPT, repoRoot, ...withRequiredRubric([
+    "-b", "issue-opencode-invalid-local-default",
+    "-p", taskPrompt,
+    "-e", "opencode",
+    "--json",
+  ])], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    env,
+  });
+
+  assert.equal(proc.status, 0, proc.stderr);
+  assert.match(proc.stderr, /Warning: ignoring optional executor model config/);
+  assert.match(proc.stderr, /default_model must be a non-empty string/);
+  assert.deepEqual(JSON.parse(fs.readFileSync(capturePath, "utf-8")), [
+    "run",
+    "-m", "opencode-go/deepseek-v4-pro",
+    buildDispatchExecPrompt(taskPrompt),
+  ]);
+});
+
+test("dispatch opencode explicit --model skips malformed local executor model config", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  fs.writeFileSync(path.join(relayHome, "executors.json"), "{not-json", "utf-8");
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-opencode-bin-"));
+  const capturePath = path.join(os.tmpdir(), `relay-dispatch-argv-${Date.now()}-opencode-explicit-malformed-local.json`);
+  writeArgCaptureOpencode(binDir, capturePath);
+  const env = {
+    ...process.env,
+    PATH: `${binDir}:${process.env.PATH}`,
+    RELAY_HOME: relayHome,
+  };
+  const taskPrompt = "explicit opencode model should ignore malformed default config";
+
+  const result = JSON.parse(runDispatch(repoRoot, [
+    "-b", "issue-opencode-explicit-ignore-malformed-model-config",
+    "-p", taskPrompt,
+    "-e", "opencode",
+    "-m", "opencode-go/qwen3.6-plus",
+    "--json",
+  ], env));
+
+  assert.equal(result.status, "completed");
+  assert.deepEqual(JSON.parse(fs.readFileSync(capturePath, "utf-8")), [
+    "run",
+    "-m", "opencode-go/qwen3.6-plus",
+    buildDispatchExecPrompt(taskPrompt),
+  ]);
+});
+
+test("dispatch opencode default model falls back to bundled config when local config is malformed", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  fs.writeFileSync(path.join(relayHome, "executors.json"), "{not-json", "utf-8");
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-opencode-bin-"));
+  const capturePath = path.join(os.tmpdir(), `relay-dispatch-argv-${Date.now()}-opencode-malformed-local-default.json`);
+  writeArgCaptureOpencode(binDir, capturePath);
+  const env = {
+    ...process.env,
+    PATH: `${binDir}:${process.env.PATH}`,
+    RELAY_HOME: relayHome,
+  };
+  const taskPrompt = "malformed local config should fall back to bundled opencode default";
+
+  const proc = spawnSync("node", [SCRIPT, repoRoot, ...withRequiredRubric([
+    "-b", "issue-opencode-malformed-local-default",
+    "-p", taskPrompt,
+    "-e", "opencode",
+    "--json",
+  ])], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    env,
+  });
+
+  assert.equal(proc.status, 0, proc.stderr);
+  assert.match(proc.stderr, /Warning: ignoring optional executor model config/);
+  assert.deepEqual(JSON.parse(fs.readFileSync(capturePath, "utf-8")), [
+    "run",
+    "-m", "opencode-go/deepseek-v4-pro",
+    buildDispatchExecPrompt(taskPrompt),
+  ]);
+});
+
 function reasoningArgValue(args) {
   const index = args.indexOf("-c");
   return index === -1 ? null : args[index + 1];
