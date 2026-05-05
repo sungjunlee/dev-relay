@@ -21,6 +21,7 @@ const {
   resolveRemoteHost,
 } = require("./review-runner/context");
 const { buildPrompt, formatPriorVerdictSummary } = require("./review-runner/prompt");
+const { buildAdvisoryPrompt } = require("./review-runner/advisory-prompt");
 const { parseReviewVerdict, validateReviewVerdict, validateScopeDrift } = require("./review-runner/verdict");
 const { buildCommentBody, formatIssueList, formatScopeDrift, postComment } = require("./review-runner/comment");
 const { buildScoreDivergenceAnalysis, loadPrBody, parseScoreLog, toIterationScoreEventEntry } = require("./review-runner/divergence");
@@ -39,65 +40,26 @@ const { applyPolicyViolationToManifest, applyVerdictToManifest } = require("./re
 const { writePrBodySnapshot } = require("./review-runner/pr-body-snapshot");
 const { loadReviewText, resolveReviewerName, resolveReviewerScript } = require("./review-runner/reviewer-invoke");
 const { maybeSwapReviewer } = require("./review-runner/reviewer-swap");
+const { finishAdvisoryReview, parsePositiveSeconds, resolveAdvisoryModel, startAdvisoryReview, validateAdvisoryProfile } = require("./review-runner/advisory");
+const { printResult, printUsage } = require("./review-runner/output");
 const {
   bindCliArgs,
   findUnknownFlags,
-  modeLabel,
 } = require("../../relay-dispatch/scripts/cli-args");
 
 const args = process.argv.slice(2);
-const KNOWN_FLAGS = ["--repo", "--run-id", "--branch", "--pr", "--manifest", "--done-criteria-file", "--diff-file", "--review-file", "--reviewer", "--reviewer-script", "--reviewer-model", "--prepare-only", "--no-comment", "--json", "--help", "-h"];
+const KNOWN_FLAGS = ["--repo", "--run-id", "--branch", "--pr", "--manifest", "--done-criteria-file", "--diff-file", "--review-file", "--reviewer", "--reviewer-script", "--reviewer-model", "--advisory-reviewer", "--advisory-profile", "--advisory-reviewer-model", "--advisory-timeout", "--prepare-only", "--no-comment", "--json", "--help", "-h"];
 const cliArgs = bindCliArgs(args, {
   commandName: "review-runner",
   reservedFlags: KNOWN_FLAGS,
 });
 
 if (require.main === module && (!args.length || cliArgs.hasFlag(["--help", "-h"]))) {
-  console.log("Usage: review-runner.js --repo <path> (--run-id <id> | --branch <name> | --pr <number>) [options]");
-  console.log("\nPrepare or apply a structured relay review round.");
-  console.log("\nOptions:");
-  console.log(`  --repo <path>                ${modeLabel("--repo")} Repository root (default: .)`);
-  console.log(`  --run-id <id>                ${modeLabel("--run-id")} Relay run identifier`);
-  console.log(`  --branch <name>              ${modeLabel("--branch")} Working branch`);
-  console.log(`  --pr <number>                ${modeLabel("--pr")} PR number`);
-  console.log(`  --manifest <path>            ${modeLabel("--manifest")} Explicit manifest path`);
-  console.log(`  --done-criteria-file <path>  ${modeLabel("--done-criteria-file")} Use fixture file instead of gh issue fetch`);
-  console.log(`  --diff-file <path>           ${modeLabel("--diff-file")} Use fixture file instead of gh pr diff`);
-  console.log(`  --review-file <path>         ${modeLabel("--review-file")} Structured reviewer JSON verdict to apply`);
-  console.log(`  --reviewer <name>            ${modeLabel("--reviewer")} Reviewer adapter to invoke (codex|claude|...)`);
-  console.log(`  --reviewer-script <path>     ${modeLabel("--reviewer-script")} Override adapter script path`);
-  console.log(`  --reviewer-model <name>      ${modeLabel("--reviewer-model")} Reviewer model override`);
-  console.log(`  --prepare-only               ${modeLabel("--prepare-only")} Emit prompt bundle only; do not apply verdict`);
-  console.log(`  --no-comment                 ${modeLabel("--no-comment")} Do not post a PR comment`);
-  console.log(`  --json                       ${modeLabel("--json")} Output JSON`);
+  printUsage();
   process.exit(cliArgs.hasFlag(["--help", "-h"]) ? 0 : 1);
 }
 
-function printResult({ doneCriteriaPath, diffPath, jsonOut, manifestPath, originalState, prepareOnly, prNumber, promptPath, redispatchPath, result, updatedManifest, verdictPath }) {
-  if (jsonOut) {
-    console.log(JSON.stringify(result, null, 2));
-    return;
-  }
-
-  if (prepareOnly) {
-    console.log(`Prepared relay review round ${result.round}`);
-    console.log(`  Manifest:      ${manifestPath}`);
-    console.log(`  Prompt:        ${promptPath}`);
-    console.log(`  Done criteria: ${doneCriteriaPath}`);
-    console.log(`  Diff:          ${diffPath}`);
-    return;
-  }
-
-  console.log(`Applied relay review round ${result.round}`);
-  console.log(`  Manifest: ${manifestPath}`);
-  console.log(`  State:    ${originalState} -> ${updatedManifest.state}`);
-  console.log(`  Prompt:   ${promptPath}`);
-  console.log(`  Verdict:  ${verdictPath}`);
-  if (redispatchPath) console.log(`  Re-dispatch: ${redispatchPath}`);
-  if (result.commentPosted) console.log(`  PR comment posted to #${prNumber}`);
-}
-
-function run() {
+async function run() {
   const unknownFlags = findUnknownFlags(args, "review-runner");
   if (unknownFlags.length) {
     throw new Error(`unknown flags: ${unknownFlags.join(", ")}`);
@@ -115,9 +77,18 @@ function run() {
   const reviewerArg = cliArgs.getArg("--reviewer");
   const reviewerScriptArg = cliArgs.getArg("--reviewer-script");
   const reviewerModel = cliArgs.getArg("--reviewer-model");
+  const advisoryReviewerArg = cliArgs.getArg("--advisory-reviewer");
+  const advisoryProfileArg = cliArgs.getArg("--advisory-profile");
+  const advisoryReviewerModel = cliArgs.getArg("--advisory-reviewer-model");
+  const advisoryTimeoutArg = cliArgs.getArg("--advisory-timeout");
   const prepareOnly = cliArgs.hasFlag("--prepare-only");
   const noComment = cliArgs.hasFlag("--no-comment");
   const jsonOut = cliArgs.hasFlag("--json");
+  if (!advisoryReviewerArg && (advisoryProfileArg || advisoryReviewerModel || advisoryTimeoutArg)) {
+    throw new Error("--advisory-reviewer is required when advisory options are supplied");
+  }
+  const advisoryProfile = advisoryReviewerArg ? validateAdvisoryProfile(advisoryProfileArg || "blindspot") : null;
+  const advisoryTimeoutSeconds = advisoryReviewerArg ? parsePositiveSeconds(advisoryTimeoutArg) : null;
 
   const { branch, issueNumber, manifest, prNumber, reviewRepoPath, runRepoPath } = resolveContext(
     repoPath,
@@ -226,12 +197,37 @@ function run() {
     state: data.state,
     verdictPath: null,
   };
+  let advisoryRun = null;
+  let advisoryResult = null;
+  const finishAdvisoryOnce = async () => {
+    if (!advisoryRun || advisoryResult) return advisoryResult;
+    advisoryResult = await finishAdvisoryReview({
+      advisoryRun,
+      data,
+      headSha: reviewedHeadSha,
+      profile: advisoryProfile,
+      reviewRepoPath,
+      round,
+      runDir,
+      runRepoPath,
+      timeoutSeconds: advisoryTimeoutSeconds,
+    });
+    result.advisoryReview = advisoryResult;
+    return advisoryResult;
+  };
 
   if (prepareOnly) {
     printResult({ doneCriteriaPath, diffPath, jsonOut, manifestPath, originalState: data.state, prepareOnly, prNumber, promptPath, redispatchPath: null, result, updatedManifest: null, verdictPath: null });
     return;
   }
+  if (advisoryReviewerArg) {
+    const advisoryModel = resolveAdvisoryModel(data, advisoryReviewerArg, advisoryReviewerModel);
+    const advisoryPromptText = buildAdvisoryPrompt({ branch, diffText, doneCriteria, doneCriteriaSource, issueNumber, prNumber, profile: advisoryProfile, round, rubricLoad });
+    advisoryRun = startAdvisoryReview({ promptText: advisoryPromptText, reviewerModel: advisoryModel, reviewerName: advisoryReviewerArg, reviewRepoPath, round, runDir });
+    result.advisoryReview = { profile: advisoryProfile, reviewer: advisoryReviewerArg, status: "running" };
+  }
 
+  try {
   const { rawResponsePath, reviewText } = loadReviewText({
     body,
     data,
@@ -383,16 +379,19 @@ function run() {
   result.state = updatedManifest.state;
   result.verdictPath = verdictPath;
 
+  await finishAdvisoryOnce();
   printResult({ doneCriteriaPath, diffPath, jsonOut, manifestPath, originalState: data.state, prepareOnly, prNumber, promptPath, redispatchPath, result, updatedManifest, verdictPath });
+  } catch (error) {
+    await finishAdvisoryOnce();
+    throw error;
+  }
 }
 
 if (require.main === module) {
-  try {
-    run();
-  } catch (error) {
+  Promise.resolve(run()).catch((error) => {
     console.error(`Error: ${error.message}`);
     process.exit(1);
-  }
+  });
 }
 
 module.exports = {

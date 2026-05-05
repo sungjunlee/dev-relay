@@ -7,6 +7,7 @@ const path = require("path");
 
 const CODEX_SCRIPT = path.join(__dirname, "..", "..", "..", "skills", "relay-review", "scripts", "invoke-reviewer-codex.js");
 const CLAUDE_SCRIPT = path.join(__dirname, "..", "..", "..", "skills", "relay-review", "scripts", "invoke-reviewer-claude.js");
+const OPENCODE_SCRIPT = path.join(__dirname, "..", "..", "..", "skills", "relay-review", "scripts", "invoke-reviewer-opencode.js");
 
 function setupRepo() {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-adapter-"));
@@ -206,4 +207,42 @@ process.exit(1);
   assert.match(stderr, /not authenticated/i);
   assert.match(stderr, /ANTHROPIC_API_KEY|claude login --api-key/);
   assert.doesNotMatch(stderr, /did not return valid JSON/);
+});
+
+test("opencode adapter forwards model and preserves advisory prompt as one run argument", () => {
+  const { repoRoot, promptPath } = setupRepo();
+  const fakeDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-fake-opencode-"));
+  const logPath = path.join(fakeDir, "opencode-args.log");
+  const fakeOpencode = writeExecutable(fakeDir, "fake-opencode.js", `#!/usr/bin/env node
+const fs = require("fs");
+const args = process.argv.slice(2);
+fs.writeFileSync(${JSON.stringify(logPath)}, args.join("\\n") + "\\n", "utf-8");
+process.stdout.write(JSON.stringify({
+  profile: "blindspot",
+  summary: "No blocking blind spots.",
+  required_findings: [],
+  advisory_findings: [],
+  duplicate_or_low_confidence: [],
+}));
+`);
+
+  const stdout = execFileSync("node", [
+    OPENCODE_SCRIPT,
+    "--repo", repoRoot,
+    "--prompt-file", promptPath,
+    "--model", "opencode-go/deepseek-v4-pro",
+    "--json",
+  ], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+    env: { ...process.env, RELAY_OPENCODE_BIN: fakeOpencode },
+  });
+
+  const result = JSON.parse(stdout);
+  const loggedArgs = fs.readFileSync(logPath, "utf-8");
+  assert.equal(result.profile, "blindspot");
+  assert.match(loggedArgs, /^run\n-m\nopencode-go\/deepseek-v4-pro\n/);
+  assert.match(loggedArgs, /NON-INTERACTIVE ADVISORY REVIEW/);
+  assert.match(loggedArgs, /Return a passing review\./);
 });
