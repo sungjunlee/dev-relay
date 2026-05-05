@@ -124,7 +124,9 @@ function parseSprintIssueNumbers(sprintText) {
     if (inPlan && /^##\s+\S/.test(line)) break;
     if (!inPlan) continue;
 
-    const match = line.match(/^\s*-\s*\[[xX]\]\s*#(\d+)\b/);
+    if (!/^\s*-\s*\[[xX]\]\s+/.test(line)) continue;
+
+    const match = line.match(/#(\d+)\b/);
     if (!match) continue;
     const issueNumber = Number(match[1]);
     if (!seen.has(issueNumber)) {
