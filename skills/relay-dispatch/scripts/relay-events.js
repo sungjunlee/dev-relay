@@ -15,6 +15,7 @@ const {
 // absent: current producer code no longer emits them, and readRunEvents remains tolerant
 // because validation is write-only.
 const EVENTS = Object.freeze({
+  ADVISORY_REVIEW: "advisory_review",
   CLEANUP_RESULT: "cleanup_result",
   CLOSE: "close",
   CONFLICTING_RUN_OVERRIDE: "conflicting_run_override",
@@ -184,6 +185,33 @@ function appendRunEvent(repoRoot, runId, eventData) {
       : {}),
     ...(eventData.guidance_artifact_path !== undefined
       ? { guidance_artifact_path: normalizeEventValue(eventData.guidance_artifact_path) }
+      : {}),
+    ...(eventData.profile !== undefined
+      ? { profile: normalizeEventValue(eventData.profile) }
+      : {}),
+    ...(eventData.status !== undefined
+      ? { status: normalizeEventValue(eventData.status) }
+      : {}),
+    ...(eventData.artifact_path !== undefined
+      ? { artifact_path: normalizeEventValue(eventData.artifact_path) }
+      : {}),
+    ...(eventData.raw_response_path !== undefined
+      ? { raw_response_path: normalizeEventValue(eventData.raw_response_path) }
+      : {}),
+    ...(eventData.required_count !== undefined
+      ? { required_count: normalizeEventValue(eventData.required_count) }
+      : {}),
+    ...(eventData.advisory_count !== undefined
+      ? { advisory_count: normalizeEventValue(eventData.advisory_count) }
+      : {}),
+    ...(eventData.duplicate_low_confidence_count !== undefined
+      ? { duplicate_low_confidence_count: normalizeEventValue(eventData.duplicate_low_confidence_count) }
+      : {}),
+    ...(eventData.elapsed_ms !== undefined
+      ? { elapsed_ms: normalizeEventValue(eventData.elapsed_ms) }
+      : {}),
+    ...(eventData.failure_reason !== undefined
+      ? { failure_reason: normalizeEventValue(eventData.failure_reason) }
       : {}),
   };
 

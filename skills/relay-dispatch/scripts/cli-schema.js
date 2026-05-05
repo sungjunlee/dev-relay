@@ -18,6 +18,10 @@ const FLAGS = [
   { flag: "--all", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Presence flag; no value is consumed." },
   { flag: "--allow-conflicting-run", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Operator override for the in-flight-run check; logs a conflicting_run_override event." },
   { flag: "--allow-same-head", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Explicit same-HEAD recovery opt-in; no value is consumed." },
+  { flag: "--advisory-profile", kind: VALUE, mode: MODE_PARSED, valueName: "<name>", rationale: "Closed advisory review profile selector; flag-like following tokens should mean the value is missing." },
+  { flag: "--advisory-reviewer", kind: VALUE, mode: MODE_PARSED, valueName: "<name>", rationale: "Optional advisory reviewer adapter selector; flag-like following tokens should mean the value is missing." },
+  { flag: "--advisory-reviewer-model", kind: VALUE, mode: MODE_PARSED, valueName: "<name>", rationale: "Advisory reviewer model selector; flag-like following tokens should mean the value is missing." },
+  { flag: "--advisory-timeout", kind: VALUE, mode: MODE_PARSED, valueName: "<seconds>", rationale: "Advisory reviewer timeout; flag-like following tokens should mean the value is missing." },
   { flag: "--auto-recover-commit", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Explicit dispatch opt-in to run recover-commit after completed-uncommitted; no value is consumed." },
   { flag: "--artifact-path", kind: VALUE, mode: MODE_VERBATIM, valueName: "<path>", rationale: "Operator-supplied artifact path being reconciled; keep the literal argv token." },
   { flag: "--branch", aliases: ["-b"], kind: VALUE, mode: MODE_VERBATIM, valueName: "<name>", rationale: "Git branch names are operator-supplied and may legally begin with --." },
@@ -134,6 +138,9 @@ const COMMAND_FLAGS = {
   "invoke-reviewer-codex": [
     "--repo", "--prompt-file", "--model", "--json", "--help",
   ],
+  "invoke-reviewer-opencode": [
+    "--repo", "--prompt-file", "--model", "--json", "--help",
+  ],
   "persist-done-criteria": [
     "--repo", "--run-id", "--text", "--file", "--json", "--help",
   ],
@@ -165,7 +172,9 @@ const COMMAND_FLAGS = {
   "review-runner": [
     "--repo", "--run-id", "--branch", "--pr", "--manifest", "--done-criteria-file",
     "--diff-file", "--review-file", "--reviewer", "--reviewer-script",
-    "--reviewer-model", "--prepare-only", "--no-comment", "--json", "--help",
+    "--reviewer-model", "--advisory-reviewer", "--advisory-profile",
+    "--advisory-reviewer-model", "--advisory-timeout", "--prepare-only",
+    "--no-comment", "--json", "--help",
   ],
   "update-manifest-state": [
     "--manifest", "--repo", "--run-id", "--branch", "--state", "--next-action",

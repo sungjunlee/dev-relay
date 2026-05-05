@@ -58,6 +58,20 @@ Notes:
 - Model precedence for reviewer invocation is `--reviewer-model` -> `manifest.model_hints.review` -> reviewer default.
 - When the runner invokes the reviewer itself, it records a `review_invoke` event with the effective `model` value (or `null` when unset).
 
+Optional advisory path: add an opencode-powered blind-spot lane alongside the primary reviewer:
+```bash
+node ${CLAUDE_SKILL_DIR}/scripts/review-runner.js --repo . --run-id "$RUN_ID" --pr "$PR_NUM" \
+  --reviewer codex \
+  --advisory-reviewer opencode \
+  --advisory-profile blindspot \
+  --json
+```
+
+Advisory review is non-gating. Runner-managed advisory invocation starts concurrently with the primary reviewer and records `advisory_review` plus `review-round-N-advisory-<reviewer>-*` artifacts. Advisory findings are not merged into the trusted verdict or redispatch prompt in v1. Advisory failure, timeout, invalid JSON, or write-policy violation is recorded without changing the primary review outcome. Use `--advisory-reviewer-model` to override the model; otherwise opencode uses the same executor model defaults as dispatch (`skills/relay-dispatch/references/executor-models.json` plus optional `~/.relay/executors.json`).
+
+Current advisory profiles:
+- `blindspot`: look for likely misses from the primary review such as test gaps, bypass paths, edge cases, integration boundaries, stale docs, and operational failure modes.
+
 4. Fallback path for unsupported environments or debugging:
 ```bash
 node ${CLAUDE_SKILL_DIR}/scripts/review-runner.js --repo . --branch "$BRANCH" --pr "$PR_NUM" --prepare-only --json
