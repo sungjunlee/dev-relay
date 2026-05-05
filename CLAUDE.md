@@ -90,6 +90,7 @@ node skills/relay-dispatch/scripts/cleanup-worktrees.js --repo . --dry-run
 # Reliability report
 node skills/relay-dispatch/scripts/reliability-report.js --repo . --json
 node skills/relay-dispatch/scripts/reliability-report.js --repo . --by-role --json
+node skills/relay-dispatch/scripts/reliability-report.js --repo . --by-dispatch --json
 
 # Review (cross-skill: review-runner lives under relay-review, not relay-dispatch)
 node skills/relay-review/scripts/review-runner.js --repo . --run-id <id> --reviewer codex --json

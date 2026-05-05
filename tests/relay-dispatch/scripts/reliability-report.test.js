@@ -1,7 +1,7 @@
 // canary: bare-string `event: "..."` fixture literals AND reader assertions in this file are deliberate canaries against EVENTS schema drift; do not port to EVENTS.X (see #313).
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { execFileSync } = require("child_process");
+const { execFileSync, spawnSync } = require("child_process");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
@@ -171,6 +171,17 @@ function setManifestGuidance(repoRoot, runId, guidancePacks) {
       updated_at: new Date().toISOString(),
     },
   };
+  writeManifest(manifestPath, manifest);
+}
+
+function setManifestDispatch(repoRoot, runId, dispatch) {
+  const { manifestPath } = ensureRunLayout(repoRoot, runId);
+  const manifest = readManifest(manifestPath).data;
+  if (dispatch === undefined) {
+    delete manifest.dispatch;
+  } else {
+    manifest.dispatch = dispatch;
+  }
   writeManifest(manifestPath, manifest);
 }
 
@@ -1567,4 +1578,171 @@ test("reliability-report --by-acting-reviewer still routes explicit-but-empty re
   assert.deepEqual(Object.keys(report.by_acting_reviewer.reviewers), ["unknown"]);
   assert.equal(report.by_acting_reviewer.reviewers.unknown.acting_review.review_apply_events, 1);
   assert.equal(report.by_acting_reviewer.summary.missing_review_apply_runs, 0);
+});
+
+test("reliability-report includes dispatch reliability metrics in the top-level report", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-report-dispatch-metrics-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  initGitRepo(repoRoot, "Relay Test");
+  const recentTs = new Date(Date.now() - 1 * 60 * 60 * 1000).toISOString();
+  const runRecovered = createRunId({ branch: "run-recovered", timestamp: new Date("2026-04-12T10:00:00.000Z") });
+  const runPlain = createRunId({ branch: "run-plain", timestamp: new Date("2026-04-12T10:00:01.000Z") });
+
+  writeRun(repoRoot, {
+    runId: runRecovered,
+    state: STATES.REVIEW_PENDING,
+    rounds: 1,
+    updatedAt: recentTs,
+  });
+  writeRun(repoRoot, {
+    runId: runPlain,
+    state: STATES.REVIEW_PENDING,
+    rounds: 1,
+    updatedAt: recentTs,
+  });
+
+  appendRunEvent(repoRoot, runRecovered, {
+    event: "dispatch_result",
+    state_from: STATES.DISPATCHED,
+    state_to: STATES.REVIEW_PENDING,
+    reason: "new_dispatch:completed",
+    failure_class: "timeout",
+  });
+  appendRunEvent(repoRoot, runRecovered, {
+    event: "dispatch_result",
+    state_from: STATES.DISPATCHED,
+    state_to: STATES.ESCALATED,
+    reason: "new_dispatch:dispatch_failed",
+  });
+  appendRunEvent(repoRoot, runPlain, {
+    event: "dispatch_result",
+    state_from: STATES.DISPATCHED,
+    state_to: STATES.REVIEW_PENDING,
+    reason: "new_dispatch:completed",
+  });
+  appendRunEvent(repoRoot, runPlain, {
+    event: "dispatch_result",
+    state_from: STATES.DISPATCHED,
+    state_to: STATES.REVIEW_PENDING,
+    reason: "new_dispatch:completed",
+  });
+  appendRunEvent(repoRoot, runRecovered, {
+    event: "recover_commit",
+    state_from: STATES.REVIEW_PENDING,
+    state_to: STATES.REVIEW_PENDING,
+    reason: "completed-uncommitted recovery",
+  });
+
+  const stdout = execFileSync("node", [SCRIPT, "--repo", repoRoot, "--json"], { encoding: "utf-8" });
+  const report = JSON.parse(stdout);
+
+  assert.equal(report.metrics.dispatch_timeout_rate, 0.25);
+  assert.equal(report.metrics.dispatch_failure_rate, 0.25);
+  assert.equal(report.metrics.recover_commit_rate, 0.5);
+});
+
+test("reliability-report keeps dispatch reliability metrics null when denominators are empty", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-report-dispatch-empty-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  initGitRepo(repoRoot, "Relay Test");
+
+  const stdout = execFileSync("node", [SCRIPT, "--repo", repoRoot, "--json"], { encoding: "utf-8" });
+  const report = JSON.parse(stdout);
+
+  assert.equal(report.metrics.dispatch_timeout_rate, null);
+  assert.equal(report.metrics.dispatch_failure_rate, null);
+  assert.equal(report.metrics.recover_commit_rate, null);
+});
+
+test("reliability-report --by-dispatch groups by executor, model, and provider", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-report-by-dispatch-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  initGitRepo(repoRoot, "Relay Test");
+  const recentTs = new Date(Date.now() - 1 * 60 * 60 * 1000).toISOString();
+  const runA = createRunId({ branch: "run-a", timestamp: new Date("2026-04-12T10:05:00.000Z") });
+  const runB = createRunId({ branch: "run-b", timestamp: new Date("2026-04-12T10:05:01.000Z") });
+  const runC = createRunId({ branch: "run-c", timestamp: new Date("2026-04-12T10:05:02.000Z") });
+
+  for (const runId of [runA, runB, runC]) {
+    writeRun(repoRoot, {
+      runId,
+      state: STATES.REVIEW_PENDING,
+      rounds: 1,
+      updatedAt: recentTs,
+    });
+  }
+
+  setManifestDispatch(repoRoot, runA, {
+    last_executor: "codex",
+    last_model: "gpt-5",
+    last_provider: "openai",
+  });
+  setManifestDispatch(repoRoot, runB, {
+    last_executor: "claude",
+    last_model: "claude-sonnet-4",
+    last_provider: "anthropic",
+  });
+  setManifestDispatch(repoRoot, runC, {
+    last_executor: "opencode",
+    last_model: "openai/gpt-5",
+    last_provider: "openai",
+  });
+
+  const stdout = execFileSync("node", [SCRIPT, "--repo", repoRoot, "--json", "--by-dispatch"], { encoding: "utf-8" });
+  const report = JSON.parse(stdout);
+
+  assert.deepEqual(Object.keys(report.by_dispatch.executor).sort(), ["claude", "codex", "opencode"]);
+  assert.equal(report.by_dispatch.executor.codex.totals.manifests, 1);
+  assert.equal(report.by_dispatch.provider.openai.totals.manifests, 2);
+  assert.equal(report.by_dispatch.provider.anthropic.totals.manifests, 1);
+  assert.equal(report.by_dispatch.model["openai/gpt-5"].totals.manifests, 1);
+});
+
+test("reliability-report --by-dispatch buckets missing dispatch fields as unknown", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-report-by-dispatch-unknown-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  initGitRepo(repoRoot, "Relay Test");
+  const recentTs = new Date(Date.now() - 1 * 60 * 60 * 1000).toISOString();
+  const runLegacy = createRunId({ branch: "run-legacy", timestamp: new Date("2026-04-12T10:10:00.000Z") });
+  const runNullDispatch = createRunId({ branch: "run-null-dispatch", timestamp: new Date("2026-04-12T10:10:01.000Z") });
+
+  writeRun(repoRoot, {
+    runId: runLegacy,
+    state: STATES.REVIEW_PENDING,
+    rounds: 1,
+    updatedAt: recentTs,
+  });
+  writeRun(repoRoot, {
+    runId: runNullDispatch,
+    state: STATES.REVIEW_PENDING,
+    rounds: 1,
+    updatedAt: recentTs,
+  });
+  setManifestDispatch(repoRoot, runLegacy, undefined);
+  setManifestDispatch(repoRoot, runNullDispatch, {
+    last_executor: null,
+    last_model: null,
+    last_provider: "",
+  });
+
+  const stdout = execFileSync("node", [SCRIPT, "--repo", repoRoot, "--json", "--by-dispatch"], { encoding: "utf-8" });
+  const report = JSON.parse(stdout);
+
+  assert.equal(report.by_dispatch.executor.unknown.totals.manifests, 2);
+  assert.equal(report.by_dispatch.model.unknown.totals.manifests, 2);
+  assert.equal(report.by_dispatch.provider.unknown.totals.manifests, 2);
+  assert.equal(report.by_dispatch.executor.unknown.metrics.dispatch_timeout_rate, null);
+  assert.equal(report.by_dispatch.executor.unknown.metrics.dispatch_failure_rate, null);
+  assert.equal(report.by_dispatch.executor.unknown.metrics.recover_commit_rate, 0);
+});
+
+test("reliability-report --help mentions --by-dispatch", () => {
+  const result = spawnSync(process.execPath, [SCRIPT, "--help"], {
+    encoding: "utf-8",
+    stdio: "pipe",
+  });
+
+  assert.equal(result.status, 0);
+  assert.match(result.stdout, /--by-dispatch/);
+  assert.match(result.stdout, /executor\/model\/provider/);
 });

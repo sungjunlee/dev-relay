@@ -16,7 +16,7 @@ const NO_GUIDANCE_DATA_TEXT = "no guidance data available";
 if (hasCliFlag(["--help", "-h"])) {
   console.log(
     "Usage: reliability-report.js [--repo <path>] [--stale-hours <hours>] " +
-    "[--json] [--by-actor] [--by-role] [--by-acting-reviewer]"
+    "[--json] [--by-actor] [--by-role] [--by-acting-reviewer] [--by-dispatch]"
   );
   console.log("\nOptions:");
   console.log(`  --repo <path>           ${modeLabel("--repo")} Repository root (default: .)`);
@@ -25,6 +25,7 @@ if (hasCliFlag(["--help", "-h"])) {
   console.log(`  --by-actor              ${modeLabel("--by-actor")} Include actor breakdown`);
   console.log(`  --by-role               ${modeLabel("--by-role")} Include role breakdown`);
   console.log(`  --by-acting-reviewer    ${modeLabel("--by-acting-reviewer")} Include acting reviewer breakdown`);
+  console.log(`  --by-dispatch           ${modeLabel("--by-dispatch")} Include executor/model/provider breakdown`);
   process.exit(0);
 }
 
@@ -64,6 +65,8 @@ function normalizeActorName(value) {
 function normalizeRoleName(value) {
   return typeof value === "string" && value.trim() ? value.trim() : "unknown";
 }
+
+const normalizeDispatchKey = normalizeRoleName;
 
 function normalizeGuidancePacks(value) {
   if (!Array.isArray(value)) return [];
@@ -759,6 +762,16 @@ function buildReport({ repoRoot, staleHours, now, manifests, events }) {
     if (!updatedAt) return false;
     return updatedAt <= now - staleHours * 60 * 60 * 1000;
   });
+  const dispatchResults = events.filter((event) => event.event === EVENTS.DISPATCH_RESULT);
+  const dispatchTimeouts = dispatchResults.filter((event) => (
+    event.failure_class === "timeout" || /timeout/i.test(String(event.reason || ""))
+  ));
+  const dispatchFailures = dispatchResults.filter((event) => event.state_to === STATES.ESCALATED);
+  const recoveredRunIds = new Set(
+    events
+      .filter((event) => event.event === EVENTS.RECOVER_COMMIT && event.run_id)
+      .map((event) => event.run_id)
+  );
 
   return {
     repoRoot,
@@ -777,6 +790,9 @@ function buildReport({ repoRoot, staleHours, now, manifests, events }) {
       max_rounds_enforcement_rate: ratio(maxRoundsCompliant.size, reviewRuns.size),
       median_rounds_to_ready: median(readyRounds),
       stale_open_runs_72h: staleOpenRuns.length,
+      dispatch_timeout_rate: ratio(dispatchTimeouts.length, dispatchResults.length),
+      dispatch_failure_rate: ratio(dispatchFailures.length, dispatchResults.length),
+      recover_commit_rate: ratio(recoveredRunIds.size, manifests.length),
     },
     model_per_phase: buildModelPerPhase(events),
     factor_analysis: buildFactorAnalysis(events),
@@ -834,6 +850,40 @@ function buildRoleReports({ repoRoot, staleHours, now, manifests, events }) {
       })];
     }))];
   }));
+}
+
+function buildDispatchDimensionReport({ repoRoot, staleHours, now, manifests, events }, dimension) {
+  const fieldName = `last_${dimension}`;
+  const names = [...new Set(
+    manifests.map(({ data }) => normalizeDispatchKey(data?.dispatch?.[fieldName]))
+  )].sort((left, right) => left.localeCompare(right));
+
+  return Object.fromEntries(names.map((name) => {
+    const groupManifests = manifests.filter(
+      ({ data }) => normalizeDispatchKey(data?.dispatch?.[fieldName]) === name
+    );
+    const groupRunIds = new Set(
+      groupManifests
+        .map(({ data }) => data?.run_id)
+        .filter(Boolean)
+    );
+    const groupEvents = events.filter((event) => groupRunIds.has(event.run_id));
+    return [name, buildReport({
+      repoRoot,
+      staleHours,
+      now,
+      manifests: groupManifests,
+      events: groupEvents,
+    })];
+  }));
+}
+
+function buildDispatchReports(opts) {
+  return {
+    executor: buildDispatchDimensionReport(opts, "executor"),
+    model: buildDispatchDimensionReport(opts, "model"),
+    provider: buildDispatchDimensionReport(opts, "provider"),
+  };
 }
 
 // `review_apply` can be emitted for a system-forced escalation before any
@@ -939,6 +989,9 @@ function main() {
   if (hasCliFlag("--by-acting-reviewer")) {
     report.by_acting_reviewer = buildActingReviewerReports({ repoRoot, staleHours, now, manifests, events });
   }
+  if (hasCliFlag("--by-dispatch")) {
+    report.by_dispatch = buildDispatchReports({ repoRoot, staleHours, now, manifests, events });
+  }
 
   if (hasCliFlag("--json")) {
     console.log(JSON.stringify(report, null, 2));
@@ -951,6 +1004,9 @@ function main() {
   console.log(`  max_rounds_enforcement_rate: ${report.metrics.max_rounds_enforcement_rate ?? "n/a"}`);
   console.log(`  median_rounds_to_ready: ${report.metrics.median_rounds_to_ready ?? "n/a"}`);
   console.log(`  stale_open_runs_72h: ${report.metrics.stale_open_runs_72h}`);
+  console.log(`  dispatch_timeout_rate: ${report.metrics.dispatch_timeout_rate ?? "n/a"}`);
+  console.log(`  dispatch_failure_rate: ${report.metrics.dispatch_failure_rate ?? "n/a"}`);
+  console.log(`  recover_commit_rate: ${report.metrics.recover_commit_rate ?? "n/a"}`);
   if (report.model_per_phase) {
     console.log(`  model_per_phase: ${JSON.stringify(report.model_per_phase)}`);
   }
@@ -1009,6 +1065,29 @@ function main() {
         console.log(
           `    ${roleKey}.${roleName}: manifests=${scopedReport.totals.manifests} events=${scopedReport.totals.events} ` +
           `most_stuck_factor=${scopedReport.factor_analysis.most_stuck_factor ?? "n/a"}`
+        );
+      }
+    }
+  }
+  if (hasCliFlag("--by-dispatch")) {
+    const dispatchEntries = Object.entries(report.by_dispatch || {});
+    console.log("  by_dispatch:");
+    if (dispatchEntries.length === 0) {
+      console.log("    n/a");
+    }
+    for (const [dimensionKey, dimensionReport] of dispatchEntries) {
+      const names = Object.entries(dimensionReport || {});
+      if (names.length === 0) {
+        console.log(`    ${dimensionKey}: n/a`);
+        continue;
+      }
+      for (const [name, scopedReport] of names) {
+        console.log(
+          `    ${dimensionKey}.${name}: manifests=${scopedReport.totals.manifests} events=${scopedReport.totals.events} ` +
+          `pass_rate=${scopedReport.metrics.median_rounds_to_ready ?? "n/a"} ` +
+          `timeout_rate=${scopedReport.metrics.dispatch_timeout_rate ?? "n/a"} ` +
+          `failure_rate=${scopedReport.metrics.dispatch_failure_rate ?? "n/a"} ` +
+          `recover_commit_rate=${scopedReport.metrics.recover_commit_rate ?? "n/a"}`
         );
       }
     }
