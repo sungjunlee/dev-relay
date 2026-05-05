@@ -6,6 +6,7 @@ const { formatPriorRoundContext, loadProjectConventions } = require("./context")
 const REVIEWER_PROMPT_PATH = path.join(__dirname, "..", "..", "references", "reviewer-prompt.md");
 const TDD_ANCHOR_LINE_REGEX = /^\s*tdd_anchor:\s*\S+/m;
 const TDD_REVIEWER_SECTION_REGEX = /\n### TDD factor flavor[\s\S]*?(?=\n### Scope Drift Detection \(run first\))/;
+const MAX_REJECTED_APPROACHES_PER_FACTOR = 2;
 
 function renderProjectConventions(template, conventions) {
   if (conventions) return template.replace("[PASTE PROJECT CONVENTIONS HERE]", conventions);
@@ -104,6 +105,7 @@ function buildPrompt({ round, prNumber, branch, issueNumber, doneCriteria, doneC
     "- If `verdict` is `pass`, set both `contract_status` and `quality_review_status` to `pass`.",
     "- Set ONLY `quality_review_status`. Do NOT set `quality_execution_status`; the review runner computes it from execution-evidence.json.",
     "- If `verdict` is `changes_requested`, include actionable issues with `file` and `line`, and set `next_action` to `changes_requested`.",
+    "- For `changes_requested` issues, optionally include `factor`, `attempted_approach`, and `fix_direction` when that context would help a later re-dispatch avoid repeating a rejected approach.",
     "- If `verdict` is `escalated`, include the blocking issues or reason that automation should stop, and set `next_action` to `escalated`.",
     rubricLoad.content
       ? "- `rubric_scores` is REQUIRED — score every factor from the rubric. Each entry must include `factor`, `target`, `observed`, `score`, `target_score`, `status`, `tier`, and `notes`. Use `score:null` and `target_score:null` when numeric scoring does not apply."
@@ -116,6 +118,58 @@ function buildPrompt({ round, prNumber, branch, issueNumber, doneCriteria, doneC
   return sections.join("\n");
 }
 
+function compactText(value) {
+  return typeof value === "string" ? value.trim().replace(/\s+/g, " ") : "";
+}
+
+function withTerminalPunctuation(value) {
+  return /[.!?]$/.test(value) ? value : `${value}.`;
+}
+
+function collectRejectedApproaches(verdicts) {
+  const grouped = new Map();
+  verdicts.forEach((verdict, index) => {
+    const roundNum = verdicts.length - index;
+    for (const issue of Array.isArray(verdict.issues) ? verdict.issues : []) {
+      const factor = compactText(issue?.factor);
+      const attemptedApproach = compactText(issue?.attempted_approach);
+      const fixDirection = compactText(issue?.fix_direction);
+      if (!factor || (!attemptedApproach && !fixDirection)) continue;
+
+      const key = factor.toLowerCase();
+      if (!grouped.has(key)) {
+        grouped.set(key, { factor, entries: [] });
+      }
+      const group = grouped.get(key);
+      if (group.entries.length >= MAX_REJECTED_APPROACHES_PER_FACTOR) continue;
+      group.entries.push({ roundNum, attemptedApproach, fixDirection });
+    }
+  });
+  return [...grouped.values()].filter((group) => group.entries.length);
+}
+
+function formatRejectedApproachEntry(entry) {
+  const parts = [`Round ${entry.roundNum}:`];
+  if (entry.attemptedApproach) {
+    parts.push(`attempted ${withTerminalPunctuation(entry.attemptedApproach)}`);
+  }
+  if (entry.fixDirection) {
+    parts.push(`Fix direction: ${withTerminalPunctuation(entry.fixDirection)}`);
+  }
+  return `  - ${parts.join(" ")}`;
+}
+
+function formatRejectedApproaches(verdicts) {
+  const groups = collectRejectedApproaches(verdicts);
+  if (!groups.length) return "";
+  const lines = ["Previously rejected approaches:"];
+  for (const group of groups) {
+    lines.push(`- ${group.factor}:`);
+    lines.push(...group.entries.map(formatRejectedApproachEntry));
+  }
+  return lines.join("\n");
+}
+
 function formatPriorVerdictSummary(verdicts) {
   if (!verdicts.length) return "";
   const lines = verdicts.map((verdict, index) => {
@@ -126,7 +180,9 @@ function formatPriorVerdictSummary(verdicts) {
       : "no rubric scores";
     return `- Round ${roundNum}: ${verdict.verdict} — ${verdict.summary} [${issueCount} issue(s), ${rubricSummary}]`;
   });
-  return ["Prior review rounds:", ...lines].join("\n");
+  const rejectedApproaches = formatRejectedApproaches(verdicts);
+  if (!rejectedApproaches) return ["Prior review rounds:", ...lines].join("\n");
+  return ["Prior review rounds:", ...lines, "", rejectedApproaches].join("\n");
 }
 
 module.exports = {

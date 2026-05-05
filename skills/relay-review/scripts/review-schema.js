@@ -1,3 +1,9 @@
+const REJECTION_METADATA_PROPERTIES = {
+  factor: { type: "string", minLength: 1 },
+  attempted_approach: { type: "string", minLength: 1 },
+  fix_direction: { type: "string", minLength: 1 },
+};
+
 const REVIEW_VERDICT_PROPERTIES = {
   verdict: {
     type: "string",
@@ -36,6 +42,7 @@ const REVIEW_VERDICT_PROPERTIES = {
         line: { type: "integer", minimum: 1 },
         category: { type: "string", minLength: 1 },
         severity: { type: "string", minLength: 1 },
+        ...REJECTION_METADATA_PROPERTIES,
         lineage: {
           type: "string",
           enum: ["new", "deepening", "repeat", "newly_scoreable", "unknown"],

@@ -12,6 +12,7 @@ const ALLOWED_REVIEW_STATUSES = new Set(["pass", "fail", "not_run"]);
 const ALLOWED_EXECUTION_STATUSES = new Set(["pass", "fail", "not_run", "missing"]);
 const ALLOWED_SCORE_TIERS = new Set(["contract", "quality"]);
 const ALLOWED_LINEAGE_VALUES = new Set(["new", "deepening", "repeat", "newly_scoreable", "unknown"]);
+const OPTIONAL_ISSUE_REJECTION_METADATA = ["factor", "attempted_approach", "fix_direction"];
 const ALLOWED_DRIFT_STATUSES = new Set(
   REVIEW_VERDICT_JSON_SCHEMA.properties.scope_drift.properties.missing.items.properties.status.enum
 );
@@ -38,6 +39,11 @@ function validateIssue(issue, index) {
   }
   if (!Number.isInteger(issue.line) || issue.line <= 0) {
     throw new Error(`${location}.line must be a positive integer`);
+  }
+  for (const key of OPTIONAL_ISSUE_REJECTION_METADATA) {
+    if (issue[key] !== undefined && !String(issue[key] || "").trim()) {
+      throw new Error(`${location}.${key} must be a non-empty string when present`);
+    }
   }
   if (issue.lineage !== undefined && !ALLOWED_LINEAGE_VALUES.has(issue.lineage)) {
     throw new Error(`${location}.lineage must be one of: ${Array.from(ALLOWED_LINEAGE_VALUES).join(", ")}`);
