@@ -23,6 +23,7 @@ const FLAGS = [
   { flag: "--branch", aliases: ["-b"], kind: VALUE, mode: MODE_VERBATIM, valueName: "<name>", rationale: "Git branch names are operator-supplied and may legally begin with --." },
   { flag: "--by-acting-reviewer", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Presence flag; no value is consumed." },
   { flag: "--by-actor", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Presence flag; no value is consumed." },
+  { flag: "--by-dispatch", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Presence flag; no value is consumed." },
   { flag: "--by-role", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Presence flag; no value is consumed." },
   { flag: "--contract-file", kind: VALUE, mode: MODE_VERBATIM, valueName: "<path>", rationale: "Operator-supplied artifact path; keep the literal argv token." },
   { flag: "--copy", kind: VALUE, mode: MODE_VERBATIM, valueName: "<file,...>", rationale: "Operator-supplied file list; keep the literal argv token." },
@@ -159,7 +160,7 @@ const COMMAND_FLAGS = {
     "--json", "--help",
   ],
   "reliability-report": [
-    "--repo", "--stale-hours", "--json", "--by-actor", "--by-role", "--by-acting-reviewer", "--help",
+    "--repo", "--stale-hours", "--json", "--by-actor", "--by-role", "--by-acting-reviewer", "--by-dispatch", "--help",
   ],
   "review-runner": [
     "--repo", "--run-id", "--branch", "--pr", "--manifest", "--done-criteria-file",
