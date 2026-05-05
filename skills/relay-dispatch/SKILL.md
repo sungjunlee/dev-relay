@@ -11,7 +11,7 @@ metadata:
 
 ## Use when
 
-- Delegating implementation to an executor (`codex`, `claude`) via worktree isolation
+- Delegating implementation to an executor (`codex`, `claude`, `opencode`) via worktree isolation
 - Resuming a same-run after a `changes_requested` review
 - Running background or parallel dispatches for independent tasks
 
@@ -35,6 +35,9 @@ ${CLAUDE_SKILL_DIR}/scripts/dispatch.js . -e codex -b feature-auth -p "..." --ru
 
 # Claude Code as executor (no Codex required)
 ${CLAUDE_SKILL_DIR}/scripts/dispatch.js . -e claude -b feature-auth -p "..." --rubric-file rubric.yaml
+
+# Experimental opencode executor (uses bundled/default model config unless --model is set)
+${CLAUDE_SKILL_DIR}/scripts/dispatch.js . -e opencode -b feature-auth -p "..." --rubric-file rubric.yaml
 ```
 
 For background and parallel dispatch, see `../relay/SKILL.md` § Batch Mode (single source of truth for the parallel-fork flow).
@@ -50,8 +53,8 @@ All CLI flags are registered with an explicit `parsed` or `verbatim` read mode. 
 | `--manifest` | Resume an existing retained relay run by manifest path |
 | `--prompt, -p` | Task prompt (include Context + Done Criteria + self-review) |
 | `--prompt-file` | Read prompt from file (for large prompts) |
-| `--executor, -e` | Executor: `codex` (default), `claude` |
-| `--model, -m` | Model override |
+| `--executor, -e` | Executor: `codex` (default), `claude`, `opencode` |
+| `--model, -m` | Model override; for `opencode`, falls back to bundled `references/executor-models.json`, then optional `~/.relay/executors.json` override |
 | `--model-hints` | Persist per-phase model hints as `phase=model[,phase=model...]` |
 | `--sandbox` | `workspace-write` (default) or `read-only` |
 | `--copy <files>` | Additional files to copy |
@@ -66,6 +69,23 @@ All CLI flags are registered with an explicit `parsed` or `verbatim` read mode. 
 | `--json` | Structured JSON output (for background dispatch) |
 
 Manifest layout (`~/.relay/runs/<repo-slug>/<run-id>.md` + `events.jsonl`), `model_hints` precedence, and intake-source linkage (`source.request_id`, `source.leaf_id`, `anchor.done_criteria_path`) are documented in `../../references/architecture.md`.
+
+### Executor model config
+
+Bundled executor model recommendations live in `references/executor-models.json` so skill installs carry a usable default. Operators can override without editing the skill by writing `~/.relay/executors.json`:
+
+```json
+{
+  "executors": {
+    "opencode": {
+      "default_model": "opencode-go/deepseek-v4-pro",
+      "candidate_models": ["opencode-go/deepseek-v4-pro"]
+    }
+  }
+}
+```
+
+Precedence for dispatch model selection is: `--model` → manifest `model_hints.dispatch` → `--model-hints dispatch=...` → executor model config.
 
 ### Timeout guidance
 
