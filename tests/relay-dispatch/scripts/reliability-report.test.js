@@ -1639,6 +1639,7 @@ test("reliability-report includes dispatch reliability metrics in the top-level 
   assert.equal(report.metrics.dispatch_timeout_rate, 0.25);
   assert.equal(report.metrics.dispatch_failure_rate, 0.25);
   assert.equal(report.metrics.recover_commit_rate, 0.5);
+  assert.equal(report.metrics.pass_rate, 0);
 });
 
 test("reliability-report keeps dispatch reliability metrics null when denominators are empty", () => {
@@ -1652,6 +1653,26 @@ test("reliability-report keeps dispatch reliability metrics null when denominato
   assert.equal(report.metrics.dispatch_timeout_rate, null);
   assert.equal(report.metrics.dispatch_failure_rate, null);
   assert.equal(report.metrics.recover_commit_rate, null);
+  assert.equal(report.metrics.pass_rate, null);
+});
+
+test("reliability-report computes non-zero pass_rate when runs reach merged/ready_to_merge", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-report-pass-rate-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  initGitRepo(repoRoot, "Relay Test");
+  const recentTs = new Date(Date.now() - 1 * 60 * 60 * 1000).toISOString();
+  const runMerged = createRunId({ branch: "run-merged", timestamp: new Date("2026-04-12T10:10:00.000Z") });
+  const runReady = createRunId({ branch: "run-ready", timestamp: new Date("2026-04-12T10:10:01.000Z") });
+  const runOpen = createRunId({ branch: "run-open", timestamp: new Date("2026-04-12T10:10:02.000Z") });
+
+  writeRun(repoRoot, { runId: runMerged, state: STATES.MERGED, rounds: 2, updatedAt: recentTs });
+  writeRun(repoRoot, { runId: runReady, state: STATES.READY_TO_MERGE, rounds: 1, updatedAt: recentTs });
+  writeRun(repoRoot, { runId: runOpen, state: STATES.REVIEW_PENDING, rounds: 1, updatedAt: recentTs });
+
+  const stdout = execFileSync("node", [SCRIPT, "--repo", repoRoot, "--json"], { encoding: "utf-8" });
+  const report = JSON.parse(stdout);
+
+  assert.equal(report.metrics.pass_rate, Number((2 / 3).toFixed(4)));
 });
 
 test("reliability-report --by-dispatch groups by executor, model, and provider", () => {

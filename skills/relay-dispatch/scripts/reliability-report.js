@@ -751,8 +751,9 @@ function buildReport({ repoRoot, staleHours, now, manifests, events }) {
     }
   }
 
-  const readyRounds = manifests
-    .filter(({ data }) => [STATES.READY_TO_MERGE, STATES.MERGED].includes(data.state))
+  const passedRuns = manifests
+    .filter(({ data }) => [STATES.READY_TO_MERGE, STATES.MERGED].includes(data.state));
+  const readyRounds = passedRuns
     .map(({ data }) => Number(data.review?.rounds || 0))
     .filter((value) => value > 0);
 
@@ -790,6 +791,7 @@ function buildReport({ repoRoot, staleHours, now, manifests, events }) {
       max_rounds_enforcement_rate: ratio(maxRoundsCompliant.size, reviewRuns.size),
       median_rounds_to_ready: median(readyRounds),
       stale_open_runs_72h: staleOpenRuns.length,
+      pass_rate: ratio(passedRuns.length, manifests.length),
       dispatch_timeout_rate: ratio(dispatchTimeouts.length, dispatchResults.length),
       dispatch_failure_rate: ratio(dispatchFailures.length, dispatchResults.length),
       recover_commit_rate: ratio(recoveredRunIds.size, manifests.length),
@@ -1004,6 +1006,7 @@ function main() {
   console.log(`  max_rounds_enforcement_rate: ${report.metrics.max_rounds_enforcement_rate ?? "n/a"}`);
   console.log(`  median_rounds_to_ready: ${report.metrics.median_rounds_to_ready ?? "n/a"}`);
   console.log(`  stale_open_runs_72h: ${report.metrics.stale_open_runs_72h}`);
+  console.log(`  pass_rate: ${report.metrics.pass_rate ?? "n/a"}`);
   console.log(`  dispatch_timeout_rate: ${report.metrics.dispatch_timeout_rate ?? "n/a"}`);
   console.log(`  dispatch_failure_rate: ${report.metrics.dispatch_failure_rate ?? "n/a"}`);
   console.log(`  recover_commit_rate: ${report.metrics.recover_commit_rate ?? "n/a"}`);
@@ -1084,7 +1087,8 @@ function main() {
       for (const [name, scopedReport] of names) {
         console.log(
           `    ${dimensionKey}.${name}: manifests=${scopedReport.totals.manifests} events=${scopedReport.totals.events} ` +
-          `pass_rate=${scopedReport.metrics.median_rounds_to_ready ?? "n/a"} ` +
+          `pass_rate=${scopedReport.metrics.pass_rate ?? "n/a"} ` +
+          `median_rounds_to_ready=${scopedReport.metrics.median_rounds_to_ready ?? "n/a"} ` +
           `timeout_rate=${scopedReport.metrics.dispatch_timeout_rate ?? "n/a"} ` +
           `failure_rate=${scopedReport.metrics.dispatch_failure_rate ?? "n/a"} ` +
           `recover_commit_rate=${scopedReport.metrics.recover_commit_rate ?? "n/a"}`
