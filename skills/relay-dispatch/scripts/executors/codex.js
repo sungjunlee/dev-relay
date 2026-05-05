@@ -88,6 +88,7 @@ function probe({ timeout }) {
 
 module.exports = {
   cliBinary: "codex",
+  providerDefault: "openai",
   defaultTimeout: 2400,
   validateExecutionMode,
   buildExecCommand,

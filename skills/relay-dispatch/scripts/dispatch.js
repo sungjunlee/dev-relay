@@ -788,6 +788,9 @@ async function main() {
     manifestModelHints: manifest?.model_hints,
     cliModelHints: MODEL_HINTS,
   });
+  const provider = typeof adapter.parseProvider === "function"
+    ? (adapter.parseProvider(effectiveDispatchModel) ?? adapter.providerDefault ?? null)
+    : (adapter.providerDefault || null);
 
   // --- Dry run ---
   if (DRY_RUN) {
@@ -1036,6 +1039,10 @@ async function main() {
   execCwd = buildResult.cwd;
   codexGitCommonDir = buildResult.codexGitCommonDir || null;
 
+  if (EXECUTOR === "opencode") {
+    console.error("Warning: opencode executor is experimental; see docs/reviewer-policy-opencode.md for trust boundary and reviewer policy.");
+  }
+
   if (!JSON_OUT) {
     console.log(`Dispatching to ${EXECUTOR}...`);
     console.log(`  Run:      ${runId}`);
@@ -1066,6 +1073,12 @@ async function main() {
       ...(manifest.git || {}),
       head_sha: startHead || null,
     },
+    dispatch: {
+      ...(manifest.dispatch || {}),
+      last_executor: EXECUTOR,
+      last_model: effectiveDispatchModel,
+      last_provider: provider,
+    },
   };
   writeManifest(manifestPath, manifest);
   appendRunEvent(repoRoot, runId, {
@@ -1074,7 +1087,9 @@ async function main() {
     state_to: STATES.DISPATCHED,
     head_sha: startHead || null,
     reason: RESUME_MODE ? "same_run_resume" : "new_dispatch",
+    executor: EXECUTOR,
     model: effectiveDispatchModel,
+    provider,
     executor_network: executorNetworkPolicy,
   });
 
