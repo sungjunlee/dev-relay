@@ -91,32 +91,32 @@ async function finishAdvisoryReview({
   data,
   headSha,
   profile,
-  reviewRepoPath,
   round,
   runDir,
   runRepoPath,
   timeoutSeconds,
 }) {
   const timeoutMs = parsePositiveSeconds(timeoutSeconds) * 1000;
-  const timeout = new Promise((resolve) => {
-    const timer = setTimeout(() => {
-      advisoryRun.child.kill("SIGTERM");
-      resolve({ code: null, signal: "SIGTERM", timeout: true });
-    }, timeoutMs);
-    advisoryRun.completion.then(() => clearTimeout(timer));
-  });
-  const outcome = await Promise.race([advisoryRun.completion, timeout]);
-  const elapsedMs = Date.now() - advisoryRun.startedAt;
-  const stdout = advisoryRun.stdout();
-  const stderr = advisoryRun.stderr();
-  const rawResponsePath = writeRawResponse(runDir, round, advisoryRun.reviewerName, stdout, stderr);
-  const statusAfter = captureGitStatus(advisoryRun.advisoryRepoPath);
+  const elapsed = () => Date.now() - advisoryRun.startedAt;
   let artifactPath = null;
   let failureReason = null;
+  let rawResponsePath = null;
   let status = "success";
   let counts = { required_count: 0, advisory_count: 0, duplicate_low_confidence_count: 0 };
 
   try {
+    const timeout = new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        advisoryRun.child.kill("SIGTERM");
+        resolve({ code: null, signal: "SIGTERM", timeout: true });
+      }, timeoutMs);
+      advisoryRun.completion.then(() => clearTimeout(timer));
+    });
+    const outcome = await Promise.race([advisoryRun.completion, timeout]);
+    const stdout = advisoryRun.stdout();
+    const stderr = advisoryRun.stderr();
+    rawResponsePath = writeRawResponse(runDir, round, advisoryRun.reviewerName, stdout, stderr);
+    const statusAfter = captureGitStatus(advisoryRun.advisoryRepoPath);
     if (advisoryRun.statusBefore !== statusAfter) {
       status = "policy_violation";
       failureReason = "advisory_reviewer_modified_worktree";
@@ -154,25 +154,31 @@ async function finishAdvisoryReview({
     failureReason = error.message;
   }
 
-  appendRunEvent(runRepoPath, data.run_id, {
-    event: EVENTS.ADVISORY_REVIEW,
-    state_from: data.state,
-    state_to: data.state,
-    head_sha: headSha,
-    round,
-    reviewer: advisoryRun.reviewerName,
-    model: advisoryRun.reviewerModel,
-    profile,
-    status,
-    artifact_path: artifactPath,
-    raw_response_path: rawResponsePath,
-    elapsed_ms: elapsedMs,
-    failure_reason: failureReason,
-    ...counts,
-  });
-
-  cleanupAdvisoryWorktree(advisoryRun.baseRepoPath, advisoryRun.advisoryRepoPath);
-  return { artifactPath, elapsedMs, failureReason, profile, rawResponsePath, reviewer: advisoryRun.reviewerName, status, ...counts };
+  const result = { artifactPath, elapsedMs: elapsed(), failureReason, profile, rawResponsePath, reviewer: advisoryRun.reviewerName, status, ...counts };
+  try {
+    appendRunEvent(runRepoPath, data.run_id, {
+      event: EVENTS.ADVISORY_REVIEW,
+      state_from: data.state,
+      state_to: data.state,
+      head_sha: headSha,
+      round,
+      reviewer: advisoryRun.reviewerName,
+      model: advisoryRun.reviewerModel,
+      profile,
+      status,
+      artifact_path: artifactPath,
+      raw_response_path: rawResponsePath,
+      elapsed_ms: result.elapsedMs,
+      failure_reason: failureReason,
+      ...counts,
+    });
+  } catch (error) {
+    result.status = "failed";
+    result.failureReason = `advisory event write failed: ${error.message}`;
+  } finally {
+    cleanupAdvisoryWorktree(advisoryRun.baseRepoPath, advisoryRun.advisoryRepoPath);
+  }
+  return result;
 }
 
 module.exports = {

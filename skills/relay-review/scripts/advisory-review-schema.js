@@ -45,11 +45,18 @@ function requireFinding(value, location) {
   if (typeof confidence !== "number" || !Number.isFinite(confidence) || confidence < 0 || confidence > 1) {
     throw new Error(`${location}.confidence must be a number from 0 to 1`);
   }
+  let line = null;
+  if (value.line !== undefined && value.line !== null) {
+    if (!Number.isInteger(value.line) || value.line <= 0) {
+      throw new Error(`${location}.line must be a positive integer or null`);
+    }
+    line = value.line;
+  }
   return {
     title: requireString(value.title, `${location}.title`),
     body: requireString(value.body, `${location}.body`),
     file: requireString(value.file, `${location}.file`),
-    line: Number.isInteger(value.line) && value.line > 0 ? value.line : null,
+    line,
     severity,
     category,
     confidence,

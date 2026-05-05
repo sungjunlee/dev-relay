@@ -208,10 +208,35 @@ test("review-runner records successful opencode advisory review without gating p
   assert.equal(event.profile, "blindspot");
 });
 
+test("prepare-only with advisory flags writes only the primary prompt bundle", () => {
+  const { repoRoot, runDir, runId, doneCriteriaPath, diffPath } = setupRepo();
+
+  const result = JSON.parse(execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--run-id", runId,
+    "--pr", "429",
+    "--done-criteria-file", doneCriteriaPath,
+    "--diff-file", diffPath,
+    "--advisory-reviewer", "opencode",
+    "--prepare-only",
+    "--json",
+  ], {
+    encoding: "utf-8",
+    env: { ...process.env, RELAY_OPENCODE_BIN: path.join(repoRoot, "missing-opencode") },
+  }));
+
+  assert.equal(result.prepareOnly, true);
+  assert.equal(result.advisoryReview, undefined);
+  assert.equal(fs.existsSync(path.join(runDir, "review-round-1-advisory-opencode-prompt.md")), false);
+  assert.equal(fs.existsSync(path.join(runDir, "advisory-worktrees")), false);
+  assert.equal(readRunEvents(repoRoot, runId).some((record) => record.event === "advisory_review"), false);
+});
+
 test("advisory review starts before the primary reviewer completes", () => {
   const { repoRoot, runId, doneCriteriaPath, diffPath } = setupRepo();
   const logPath = path.join(repoRoot, "review-order.log");
-  const primaryScript = writePrimaryReviewer(repoRoot, passVerdict(), { logPath, delayMs: 300 });
+  const primaryScript = writePrimaryReviewer(repoRoot, passVerdict(), { logPath, delayMs: 1500 });
   const opencodeScript = writeFakeOpencode(repoRoot, { logPath });
 
   runReview({ repoRoot, runId, doneCriteriaPath, diffPath, primaryScript, opencodeScript });

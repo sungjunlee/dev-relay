@@ -45,3 +45,20 @@ test("advisory schema rejects unsupported profiles and invalid confidences", () 
     /confidence must be a number from 0 to 1/
   );
 });
+
+test("advisory schema rejects malformed finding line values", () => {
+  assert.throws(
+    () => parseAdvisoryReview(JSON.stringify(advisoryPayload({
+      advisory_findings: [{
+        title: "Bad line",
+        body: "Line values must not be silently coerced.",
+        file: "README.md",
+        line: 0,
+        severity: "P3",
+        category: "other",
+        confidence: 0.6,
+      }],
+    }))),
+    /line must be a positive integer or null/
+  );
+});

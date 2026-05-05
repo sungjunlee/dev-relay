@@ -206,7 +206,6 @@ async function run() {
       data,
       headSha: reviewedHeadSha,
       profile: advisoryProfile,
-      reviewRepoPath,
       round,
       runDir,
       runRepoPath,
