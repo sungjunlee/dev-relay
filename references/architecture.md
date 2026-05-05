@@ -85,6 +85,7 @@ roles:
 model_hints:
   dispatch: opus                # optional per-phase advisory model preference
   review: haiku                 # optional per-phase advisory model preference
+  advisory_review: opencode-go/deepseek-v4-pro  # optional non-gating advisory reviewer model
 
 paths:
   repo_root: /Users/me/project
@@ -144,7 +145,7 @@ bootstrap_exempt:
 | Field | Purpose |
 |-------|---------|
 | `roles.*` | Immutable per-run binding. Decouples who decides, who implements, who validates |
-| `model_hints.*` | Optional advisory per-phase model preference. Current runtime consumers: `dispatch`, `review` |
+| `model_hints.*` | Optional advisory per-phase model preference. Current runtime consumers: `dispatch`, `review`, `advisory_review` |
 | `dispatch.last_model` / executor config | Dispatch records the effective model. If no explicit model hint is present, executor defaults come from the skill-bundled `skills/relay-dispatch/references/executor-models.json` plus optional `~/.relay/executors.json` overrides |
 | `policy.merge` | `manual_after_lgtm` — orchestrator must explicitly merge |
 | `policy.reviewer_write` | `forbid` — review runner rejects rounds where reviewer mutated files |
@@ -178,12 +179,13 @@ Semantics:
 
 ## Event Journal
 
-Each run keeps an append-only event log at `~/.relay/runs/<repo-slug>/<run-id>/events.jsonl`. Records are emitted by `appendRunEvent()` in `skills/relay-dispatch/scripts/relay-events.js` and share a common envelope (`ts`, `event`, `actor`, `run_id`, `state_from`, `state_to`, `head_sha`, `round`, `reason`) plus optional fields (`reviewer`, `rubric_status`, `last_reviewed_sha`, `pr_number`, `bootstrap_exempt`, `model`, `executor_network`, `failure_class`, `before`, `after`):
+Each run keeps an append-only event log at `~/.relay/runs/<repo-slug>/<run-id>/events.jsonl`. Records are emitted by `appendRunEvent()` in `skills/relay-dispatch/scripts/relay-events.js` and share a common envelope (`ts`, `event`, `actor`, `run_id`, `state_from`, `state_to`, `head_sha`, `round`, `reason`) plus optional fields (`reviewer`, `rubric_status`, `last_reviewed_sha`, `pr_number`, `bootstrap_exempt`, `model`, `executor_network`, `failure_class`, `before`, `after`, `profile`, `status`, `artifact_path`, `raw_response_path`, `elapsed_ms`, `failure_reason`):
 
 ```jsonl
 {"ts":"2026-04-18T12:00:00.000Z","event":"dispatch_start","actor":"codex","run_id":"issue-42-20260418120000000","state_from":"draft","state_to":"dispatched","head_sha":"abc123","round":null,"reason":"new_dispatch","model":"gpt-5-codex","executor_network":{"access":"enabled","mechanism":"sandbox_workspace_write.network_access","domains":null}}
 {"ts":"2026-04-18T12:05:00.000Z","event":"dispatch_result","actor":"codex","run_id":"issue-42-20260418120000000","state_from":"dispatched","state_to":"review_pending","head_sha":"def456","round":null,"reason":"new_dispatch:completed","executor_network":{"access":"enabled","mechanism":"sandbox_workspace_write.network_access","domains":null},"failure_class":null}
 {"ts":"2026-04-18T12:10:00.000Z","event":"review_invoke","actor":"claude","run_id":"issue-42-20260418120000000","state_from":"review_pending","state_to":"review_pending","head_sha":"def456","round":1,"reason":"codex","model":"haiku"}
+{"ts":"2026-04-18T12:11:00.000Z","event":"advisory_review","actor":"claude","run_id":"issue-42-20260418120000000","state_from":"review_pending","state_to":"review_pending","head_sha":"def456","round":1,"reason":null,"reviewer":"opencode","model":"opencode-go/deepseek-v4-pro","profile":"blindspot","status":"success","artifact_path":"~/.relay/runs/project-abcd1234/issue-42-20260418120000000/review-round-1-advisory-opencode.json","raw_response_path":"~/.relay/runs/project-abcd1234/issue-42-20260418120000000/review-round-1-advisory-opencode-raw-response.txt","required_count":0,"advisory_count":1,"duplicate_low_confidence_count":0,"elapsed_ms":42000,"failure_reason":null}
 {"ts":"2026-04-18T12:12:00.000Z","event":"review_apply","actor":"claude","run_id":"issue-42-20260418120000000","state_from":"review_pending","state_to":"changes_requested","head_sha":"def456","round":1,"reviewer":"codex","reason":"changes_requested"}
 {"ts":"2026-04-18T12:40:00.000Z","event":"review_apply","actor":"claude","run_id":"issue-42-20260418120000000","state_from":"review_pending","state_to":"ready_to_merge","head_sha":"ghi789","round":2,"reviewer":"codex","reason":"pass"}
 {"ts":"2026-04-18T12:45:00.000Z","event":"merge_finalize","actor":"codex","run_id":"issue-42-20260418120000000","state_from":"ready_to_merge","state_to":"merged","head_sha":"ghi789","round":2,"reason":"squash"}
@@ -198,6 +200,7 @@ Each run keeps an append-only event log at `~/.relay/runs/<repo-slug>/<run-id>/e
 | `close`, `cleanup_result` | `relay-dispatch/scripts/close-run.js`, `cleanup-worktrees.js` |
 | `state_recovery` | `relay-dispatch/scripts/recover-state.js` |
 | `review_invoke` | `relay-review/scripts/review-runner/reviewer-invoke.js` |
+| `advisory_review` | `relay-review/scripts/review-runner/advisory.js` |
 | `review_apply` | `relay-review/scripts/review-runner.js`, `reviewer-invoke.js` |
 | `pr_number_stamped`, `merge_blocked`, `skip_review`, `force_finalize`, `merge_finalize`, `cleanup_result` | `relay-merge/scripts/finalize-run.js`, `relay-reconcile-artifact.js`, `gate-check.js` |
 | `request_persisted`, `proposal_presented`, `question_asked`, `question_answered`, `proposal_accepted`, `proposal_edited`, `relay_ready_handoff_persisted` | `relay-intake/scripts/relay-request.js` |
@@ -219,6 +222,10 @@ Each round produces files under `~/.relay/runs/<repo-slug>/<run-id>/`:
 | `review-round-N-raw-response.txt` | Raw reviewer output |
 | `review-round-N-redispatch.md` | Fix prompt (when changes requested) |
 | `review-round-N-policy-violation.txt` | If reviewer mutated code |
+| `review-round-N-advisory-<reviewer>-prompt.md` | Optional non-gating advisory prompt |
+| `review-round-N-advisory-<reviewer>-raw-response.txt` | Optional advisory raw output |
+| `review-round-N-advisory-<reviewer>.json` | Optional validated advisory findings |
+| `review-round-N-advisory-<reviewer>-policy-violation.txt` | If advisory reviewer mutated code; recorded without manifest escalation in v1 |
 
 ## Module Boundaries (and what they are NOT)
 
@@ -275,9 +282,11 @@ Do not "simplify" the facade by collapsing submodules back into it or by force-m
    node invoke-reviewer-<name>.js --repo <repoPath> --prompt-file <promptPath> --json [--model <name>]
    ```
    The `<promptPath>` bundle already contains the diff, Done Criteria, and rubric — adapters read that single prompt file, not separate `--diff-file` / `--done-criteria-file` flags.
-3. It must print a JSON verdict to **stdout** matching `REVIEW_VERDICT_JSON_SCHEMA` in `skills/relay-review/scripts/review-schema.js`. `review-runner` captures stdout via `execFileSync({ stdio: "pipe" })` and writes it to `review-round-N-raw-response.txt`; adapters must not write their own output files or mutate the repo.
+3. Trusted primary adapters must print a JSON verdict to **stdout** matching `REVIEW_VERDICT_JSON_SCHEMA` in `skills/relay-review/scripts/review-schema.js`. `review-runner` captures stdout via `execFileSync({ stdio: "pipe" })` and writes it to `review-round-N-raw-response.txt`; adapters must not write their own output files or mutate the repo.
 4. `review-runner.js` auto-discovers adapters via `resolveReviewerScript()` by naming convention: `invoke-reviewer-<name>.js`. The `<name>` must match `/^[a-z0-9-]+$/`.
 5. Existing adapters share small utilities (`getArg`, `hasFlag`, `summarizeFailure`, `ensureJsonText`) but NOT full execution logic — each adapter encodes its own execution contract (e.g. Claude uses `--json-schema` + stdout recovery; Codex uses temp-file exchange + `--ephemeral` + sandbox). New adapters should extract only the small utilities.
+
+`invoke-reviewer-opencode.js` is currently advisory-only: `review-runner --advisory-reviewer opencode` invokes it with a separate blind-spot prompt and validates output through `advisory-review-schema.js`, not the trusted verdict schema. Do not use opencode as the primary `--reviewer` until a trusted verdict adapter exists for it.
 
 ### Shared utilities (cross-skill)
 
@@ -292,10 +301,10 @@ Current shared helpers:
 
 | Module | Owner | Consumers |
 |--------|-------|-----------|
-| `skills/relay-dispatch/scripts/cli-args.js` | relay-dispatch | `review-runner.js`, `invoke-reviewer-claude.js`, `invoke-reviewer-codex.js`, `finalize-run.js`, `persist-request.js`, `probe-executor-env.js` |
-| `skills/relay-review/scripts/reviewer-helpers.js` | relay-review | `invoke-reviewer-claude.js`, `invoke-reviewer-codex.js` |
+| `skills/relay-dispatch/scripts/cli-args.js` | relay-dispatch | `review-runner.js`, `invoke-reviewer-claude.js`, `invoke-reviewer-codex.js`, `invoke-reviewer-opencode.js`, `finalize-run.js`, `persist-request.js`, `probe-executor-env.js` |
+| `skills/relay-review/scripts/reviewer-helpers.js` | relay-review | `invoke-reviewer-claude.js`, `invoke-reviewer-codex.js`, `invoke-reviewer-opencode.js` |
 
-`reviewer-helpers.js` is scoped to `summarizeFailure` and `ensureJsonText`. The two reviewer adapters intentionally keep divergent execution contracts (Claude uses `--json-schema` + stdout recovery; Codex uses temp schema/result files + `--ephemeral` + sandbox), so a full adapter factory would hide meaningful differences and make it harder to add a third executor. See item 5 under "Adding a new reviewer adapter" above.
+`reviewer-helpers.js` is scoped to `summarizeFailure` and `ensureJsonText`. Reviewer adapters intentionally keep divergent execution contracts (Claude uses `--json-schema` + stdout recovery; Codex uses temp schema/result files + `--ephemeral` + sandbox; opencode is advisory-only with prompt-enforced read-only behavior), so a full adapter factory would hide meaningful differences. See item 5 under "Adding a new reviewer adapter" above.
 
 Call sites take a local-wrapper pattern so inline flag lists (`KNOWN_FLAGS`) keep acting as fail-closed `reservedFlags`:
 
