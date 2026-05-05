@@ -15,4 +15,4 @@ Each file in this directory is an executor adapter. To add a new executor:
 
 That's it. `dispatch.js` and `probe-executor-env.js` will pick up the new executor automatically via `getExecutor(name)`.
 
-opencode is registered as a probe-only adapter pending full executor support in #377. Its buildExecCommand/register/validateExecutionMode stubs throw with a `#377` reference.
+opencode is an experimental dispatch executor. Reviewer policy is defined in `docs/reviewer-policy-opencode.md`. opencode does not provide native sandbox enforcement; warnings surface this fact at dispatch time.

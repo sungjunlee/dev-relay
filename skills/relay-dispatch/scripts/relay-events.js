@@ -128,8 +128,14 @@ function appendRunEvent(repoRoot, runId, eventData) {
     ...(eventData.bootstrap_exempt !== undefined
       ? { bootstrap_exempt: eventData.bootstrap_exempt === true }
       : {}),
+    ...(eventData.executor !== undefined
+      ? { executor: normalizeEventValue(eventData.executor) }
+      : {}),
     ...(eventData.model !== undefined
       ? { model: normalizeEventValue(eventData.model) }
+      : {}),
+    ...(eventData.provider !== undefined
+      ? { provider: normalizeEventValue(eventData.provider) }
       : {}),
     ...(eventData.executor_network !== undefined
       ? { executor_network: normalizeEventValue(eventData.executor_network) }

@@ -222,6 +222,27 @@ process.stdout.write("ok\\n");
   return claudePath;
 }
 
+function writeArgCaptureOpencode(binDir, capturePath) {
+  ensureDefaultFakeGh(binDir);
+  const oc = path.join(binDir, "opencode");
+  fs.writeFileSync(oc, `#!/usr/bin/env node
+const fs = require("fs");
+const { execFileSync } = require("child_process");
+const args = process.argv.slice(2);
+if (args[0] === "--version") { process.stdout.write("opencode-fake\\n"); process.exit(0); }
+if (args[0] !== "run") { process.stderr.write("unsupported fake opencode invocation"); process.exit(1); }
+fs.writeFileSync(${JSON.stringify(capturePath)}, JSON.stringify(args), "utf-8");
+const cwd = process.cwd();
+const fileName = "captured-opencode.txt";
+fs.writeFileSync(cwd + "/" + fileName, fileName + "\\n", "utf-8");
+execFileSync("git", ["-C", cwd, "add", fileName], { stdio: "pipe" });
+execFileSync("git", ["-C", cwd, "commit", "-m", "fake " + fileName], { stdio: "pipe" });
+process.stdout.write("ok\\n");
+`, "utf-8");
+  fs.chmodSync(oc, 0o755);
+  return oc;
+}
+
 function writeNoOpCodex(binDir) {
   ensureDefaultFakeGh(binDir);
   const codexPath = path.join(binDir, "codex");
@@ -1408,6 +1429,56 @@ function writeTempRubric(contents) {
   fs.writeFileSync(rubricFile, contents, "utf-8");
   return rubricFile;
 }
+
+test("dispatch opencode executor records provider metadata", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-opencode-bin-"));
+  const capturePath = path.join(os.tmpdir(), `relay-dispatch-argv-${Date.now()}-opencode.json`);
+  writeArgCaptureOpencode(binDir, capturePath);
+  const env = {
+    ...process.env,
+    PATH: `${binDir}:${process.env.PATH}`,
+    RELAY_HOME: relayHome,
+  };
+  const taskPrompt = "test prompt";
+  const rubricFile = writeTempRubric("size: \"S\"\nrubric:\n  factors: []\n");
+
+  const proc = spawnSync("node", [SCRIPT, repoRoot, ...withRequiredRubric([
+    "-b", "issue-test",
+    "-p", taskPrompt,
+    "-e", "opencode",
+    "-m", "openai/gpt-5",
+    "--rubric-file", rubricFile,
+    "--json",
+  ])], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    env,
+  });
+
+  assert.equal(proc.status, 0, proc.stderr);
+  assert.match(proc.stderr, /opencode executor is experimental/);
+  assert.match(proc.stderr, /reviewer-policy-opencode\.md/);
+  const result = JSON.parse(proc.stdout);
+
+  assert.deepEqual(JSON.parse(fs.readFileSync(capturePath, "utf-8")), [
+    "run",
+    "-m", "openai/gpt-5",
+    buildDispatchExecPrompt(taskPrompt),
+  ]);
+
+  const events = readJsonLines(path.join(result.runDir, "events.jsonl"));
+  const dispatchStart = events.find((event) => event.event === "dispatch_start");
+  assert.equal(dispatchStart.executor, "opencode");
+  assert.equal(dispatchStart.model, "openai/gpt-5");
+  assert.equal(dispatchStart.provider, "openai");
+
+  const manifest = readManifest(result.manifestPath).data;
+  assert.equal(manifest.dispatch.last_executor, "opencode");
+  assert.equal(manifest.dispatch.last_model, "openai/gpt-5");
+  assert.equal(manifest.dispatch.last_provider, "openai");
+});
 
 function reasoningArgValue(args) {
   const index = args.indexOf("-c");
