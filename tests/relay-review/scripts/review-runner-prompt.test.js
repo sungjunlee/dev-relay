@@ -4,7 +4,10 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 
-const { buildPrompt } = require("../../../skills/relay-review/scripts/review-runner/prompt");
+const {
+  buildPrompt,
+  formatPriorVerdictSummary,
+} = require("../../../skills/relay-review/scripts/review-runner/prompt");
 
 test("prompt/buildPrompt preserves rubric warnings in the rendered prompt", () => {
   const prompt = buildPrompt({
@@ -208,4 +211,98 @@ test("prompt/buildPrompt omits TDD reviewer section for non-TDD rubrics", () => 
   assert.doesNotMatch(prompt, /This relaxation applies only to factors carrying `tdd_anchor`/);
   assert.match(prompt, /### Scope Drift Detection \(run first\)/);
   assert.match(prompt, /## Scoring Rubric/);
+});
+
+test("prompt/formatPriorVerdictSummary preserves legacy output without rejection metadata", () => {
+  const summary = formatPriorVerdictSummary([{
+    verdict: "changes_requested",
+    summary: "Missing test coverage",
+    issues: [{ title: "Add tests", body: "Coverage is missing.", file: "tests/a.test.js", line: 12, category: "contract", severity: "high" }],
+    rubric_scores: [
+      { factor: "Coverage", target: ">= 8/10", observed: "6/10", status: "fail" },
+    ],
+  }]);
+
+  assert.equal(summary, [
+    "Prior review rounds:",
+    "- Round 1: changes_requested — Missing test coverage [1 issue(s), Coverage: 6/10 (target >= 8/10, fail)]",
+  ].join("\n"));
+  assert.doesNotMatch(summary, /Previously rejected approaches/);
+});
+
+test("prompt/formatPriorVerdictSummary groups rejection metadata by factor and caps latest entries", () => {
+  const summary = formatPriorVerdictSummary([
+    {
+      verdict: "changes_requested",
+      summary: "Round 3 blocker",
+      issues: [{
+        title: "Still drifts",
+        body: "Scope drift remains.",
+        file: "src/a.js",
+        line: 30,
+        category: "contract",
+        severity: "high",
+        factor: "Scope control",
+        attempted_approach: "Only reverted the visible UI file.",
+        fix_direction: "Trace the helper import and revert the paired state change.",
+      }],
+      rubric_scores: [],
+    },
+    {
+      verdict: "changes_requested",
+      summary: "Round 2 blocker",
+      issues: [{
+        title: "Still incomplete",
+        body: "The contract path still lacks tests.",
+        file: "src/a.js",
+        line: 20,
+        category: "contract",
+        severity: "high",
+        factor: "Scope control",
+        attempted_approach: "Added a broad smoke test.",
+        fix_direction: "Pin the test to the dispatch contract.",
+      }],
+      rubric_scores: [],
+    },
+    {
+      verdict: "changes_requested",
+      summary: "Round 1 blocker",
+      issues: [{
+        title: "Initial blocker",
+        body: "The fix missed the contract path.",
+        file: "src/a.js",
+        line: 10,
+        category: "contract",
+        severity: "high",
+        factor: "Scope control",
+        attempted_approach: "Copied the old helper without tests.",
+        fix_direction: "Add contract coverage before changing behavior.",
+      }],
+      rubric_scores: [],
+    },
+    {
+      verdict: "changes_requested",
+      summary: "Coverage blocker",
+      issues: [{
+        title: "Missing focused test",
+        body: "The rubric factor is not covered.",
+        file: "tests/a.test.js",
+        line: 44,
+        category: "contract",
+        severity: "high",
+        factor: "Rubric coverage",
+        attempted_approach: "Asserted only the generic prior summary.",
+        fix_direction: "Assert the structured rejection section.",
+      }],
+      rubric_scores: [],
+    },
+  ]);
+
+  assert.match(summary, /Previously rejected approaches:/);
+  assert.match(summary, /- Scope control:/);
+  assert.match(summary, /Round 4: attempted Only reverted the visible UI file\. Fix direction: Trace the helper import and revert the paired state change\./);
+  assert.match(summary, /Round 3: attempted Added a broad smoke test\. Fix direction: Pin the test to the dispatch contract\./);
+  assert.doesNotMatch(summary, /Copied the old helper without tests/);
+  assert.match(summary, /- Rubric coverage:/);
+  assert.match(summary, /Round 1: attempted Asserted only the generic prior summary\. Fix direction: Assert the structured rejection section\./);
 });
