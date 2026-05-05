@@ -124,8 +124,8 @@ function parseSprintIssueNumbers(sprintText) {
     if (inPlan && /^##\s+\S/.test(line)) break;
     if (!inPlan) continue;
 
+    // Keep checkbox detection separate so formatted issue refs stay easy to match.
     if (!/^\s*-\s*\[[xX]\]\s+/.test(line)) continue;
-
     const match = line.match(/#(\d+)\b/);
     if (!match) continue;
     const issueNumber = Number(match[1]);
