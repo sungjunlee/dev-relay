@@ -67,7 +67,15 @@ function createFakeGh(root) {
   return ghPath;
 }
 
-function createFixture({ runs, configText = null }) {
+function sprintLineForIssue(issue, format = "plain") {
+  if (format === "bold") return `- [x] **#${issue}** Fixture task -> PR #${issue + 100}`;
+  if (format === "link") return `- [x] [#${issue}](https://github.com/example/repo/issues/${issue}) Fixture task -> PR #${issue + 100}`;
+  if (format === "bold-link") return `- [x] **[#${issue}](https://github.com/example/repo/issues/${issue})** Fixture task -> PR #${issue + 100}`;
+  if (format === "unchecked") return `- [ ] **#${issue}** Fixture task -> PR #${issue + 100}`;
+  return `- [x] #${issue} Fixture task -> PR #${issue + 100}`;
+}
+
+function createFixture({ runs, configText = null, sprintFormats = {} }) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "relay-sprint-close-"));
   const repoRoot = initRepo();
   const relayHome = path.join(root, "relay-home");
@@ -86,7 +94,7 @@ function createFixture({ runs, configText = null }) {
       "---",
       "",
       "## Plan",
-      ...issueNumbers.map((issue) => `- [x] #${issue} Fixture task -> PR #${issue + 100}`),
+      ...issueNumbers.map((issue) => sprintLineForIssue(issue, sprintFormats[issue])),
       "",
       "## Notes",
     ].join("\n"), "utf-8");
@@ -136,8 +144,8 @@ function createFixture({ runs, configText = null }) {
   }
 }
 
-function createFixtureAndRun({ runs, configText = null, args = [] }) {
-  const fixture = createFixture({ runs, configText });
+function createFixtureAndRun({ runs, configText = null, sprintFormats = {}, args = [] }) {
+  const fixture = createFixture({ runs, configText, sprintFormats });
   const bodiesByPr = {};
   for (const run of runs) {
     const prNumber = run.pr ?? run.issue + 100;
@@ -173,6 +181,30 @@ test("(a) factor at score >= 9/10 in >= 2 runs in same sprint -> reported as can
   assert.match(result.stdout, /Candidate patterns this sprint:/);
   assert.match(result.stdout, /Reusable CLI pattern/);
   assert.match(result.stdout, /2 runs/);
+});
+
+test("sprint issue parsing accepts formatted checked issue refs and ignores unchecked rows", () => {
+  const { result } = createFixtureAndRun({
+    runs: [
+      { issue: 201, factor: "Formatted checklist issue", score: 9 },
+      { issue: 202, factor: "Formatted checklist issue", score: 10 },
+      { issue: 203, factor: "Formatted checklist issue", score: 10 },
+      { issue: 204, factor: "Formatted checklist issue", score: 10 },
+      { issue: 205, factor: "Formatted checklist issue", score: 10 },
+    ],
+    sprintFormats: {
+      202: "bold",
+      203: "link",
+      204: "bold-link",
+      205: "unchecked",
+    },
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /Sprint issues: #201, #202, #203, #204/);
+  assert.doesNotMatch(result.stdout, /Sprint issues: .*#205/);
+  assert.match(result.stdout, /Formatted checklist issue/);
+  assert.match(result.stdout, /4 runs/);
 });
 
 test("(b) factor at score >= 9/10 in only 1 run -> NOT reported (min-runs gate holds)", () => {
