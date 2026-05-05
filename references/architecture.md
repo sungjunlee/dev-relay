@@ -145,6 +145,7 @@ bootstrap_exempt:
 |-------|---------|
 | `roles.*` | Immutable per-run binding. Decouples who decides, who implements, who validates |
 | `model_hints.*` | Optional advisory per-phase model preference. Current runtime consumers: `dispatch`, `review` |
+| `dispatch.last_model` / executor config | Dispatch records the effective model. If no explicit model hint is present, executor defaults come from the skill-bundled `skills/relay-dispatch/references/executor-models.json` plus optional `~/.relay/executors.json` overrides |
 | `policy.merge` | `manual_after_lgtm` — orchestrator must explicitly merge |
 | `policy.reviewer_write` | `forbid` — review runner rejects rounds where reviewer mutated files |
 | `anchor.*` | Immutable review scope — prevents drift across rounds |
