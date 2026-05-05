@@ -194,6 +194,102 @@ test("redispatch/buildRedispatchPrompt adds score optimization beside issue fixe
   assert.match(prompt, /Improve this factor without regressing already passing contract or quality factors/);
 });
 
+test("redispatch/buildRedispatchPrompt omits rejected approaches when prior issues have no metadata", () => {
+  const runDir = tempRunDir();
+  fs.writeFileSync(path.join(runDir, "review-round-1-verdict.json"), JSON.stringify({
+    verdict: "changes_requested",
+    summary: "Missing smoke coverage",
+    issues: [{ title: "Add smoke coverage", body: "The dispatch path lacks coverage.", file: "tests/dispatch.test.js", line: 18, category: "contract", severity: "high" }],
+    rubric_scores: [],
+  }), "utf-8");
+
+  const prompt = buildRedispatchPrompt({
+    issues: [makeReviewIssue()],
+    scope_drift: { creep: [], missing: [] },
+    rubric_scores: [],
+  }, "# Done Criteria\n\n- Preserve prior summary behavior.", runDir, 2, null, "planner_decision");
+
+  assert.match(prompt, /Prior review rounds:/);
+  assert.match(prompt, /Round 1: changes_requested — Missing smoke coverage/);
+  assert.doesNotMatch(prompt, /Previously rejected approaches/);
+});
+
+test("redispatch/buildRedispatchPrompt renders compact rejected approaches grouped by factor", () => {
+  const runDir = tempRunDir();
+  fs.writeFileSync(path.join(runDir, "review-round-1-verdict.json"), JSON.stringify({
+    verdict: "changes_requested",
+    summary: "Round 1 rejected approach",
+    issues: [{
+      title: "Scope drift remains",
+      body: "The state helper still widens scope.",
+      file: "src/state.js",
+      line: 11,
+      category: "contract",
+      severity: "high",
+      factor: "Scope control",
+      attempted_approach: "Copied the old helper without checking callers.",
+      fix_direction: "Audit the state helper callers before changing behavior.",
+    }],
+    rubric_scores: [],
+  }), "utf-8");
+  fs.writeFileSync(path.join(runDir, "review-round-2-verdict.json"), JSON.stringify({
+    verdict: "changes_requested",
+    summary: "Round 2 rejected approach",
+    issues: [{
+      title: "Scope drift still remains",
+      body: "The state helper still widens scope.",
+      file: "src/state.js",
+      line: 22,
+      category: "contract",
+      severity: "high",
+      factor: "Scope control",
+      attempted_approach: "Reverted only the direct diff hunk.",
+      fix_direction: "Follow the helper import chain and revert the paired state change.",
+    }, {
+      title: "Rubric score lacks coverage",
+      body: "The reviewer cannot score the factor.",
+      file: "tests/review.test.js",
+      line: 31,
+      category: "contract",
+      severity: "high",
+      factor: "Rubric coverage",
+      attempted_approach: "Added assertions for the generic summary only.",
+      fix_direction: "Assert the structured rejection section.",
+    }],
+    rubric_scores: [],
+  }), "utf-8");
+  fs.writeFileSync(path.join(runDir, "review-round-3-verdict.json"), JSON.stringify({
+    verdict: "changes_requested",
+    summary: "Round 3 rejected approach",
+    issues: [{
+      title: "Scope drift persists",
+      body: "The state helper still widens scope.",
+      file: "src/state.js",
+      line: 33,
+      category: "contract",
+      severity: "high",
+      factor: "Scope control",
+      attempted_approach: "Moved the state change behind a wrapper.",
+      fix_direction: "Remove the state change instead of hiding it.",
+    }],
+    rubric_scores: [],
+  }), "utf-8");
+
+  const prompt = buildRedispatchPrompt({
+    issues: [makeReviewIssue()],
+    scope_drift: { creep: [], missing: [] },
+    rubric_scores: [],
+  }, "# Done Criteria\n\n- Keep redispatch targeted.", runDir, 4, null, "planner_decision");
+
+  assert.match(prompt, /Previously rejected approaches:/);
+  assert.match(prompt, /- Scope control:/);
+  assert.match(prompt, /Round 3: attempted Moved the state change behind a wrapper\. Fix direction: Remove the state change instead of hiding it\./);
+  assert.match(prompt, /Round 2: attempted Reverted only the direct diff hunk\. Fix direction: Follow the helper import chain and revert the paired state change\./);
+  assert.doesNotMatch(prompt, /Copied the old helper without checking callers/);
+  assert.match(prompt, /- Rubric coverage:/);
+  assert.match(prompt, /Round 2: attempted Added assertions for the generic summary only\. Fix direction: Assert the structured rejection section\./);
+});
+
 test("redispatch/computeFactorStatusFlips detects pass-fail-pass with normalized factor names", () => {
   const runDir = tempRunDir();
   fs.writeFileSync(path.join(runDir, "review-round-1-verdict.json"), JSON.stringify({ rubric_scores: [{ factor: " Behavior ", status: "pass" }] }), "utf-8");

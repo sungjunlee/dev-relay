@@ -107,6 +107,25 @@ test("verdict/validateReviewVerdict validates relates_to when present", () => {
   );
 });
 
+test("verdict/validateReviewVerdict accepts optional rejection metadata", () => {
+  const verdict = validateReviewVerdict(makeChangesRequestedVerdict({
+    factor: "Behavior parity",
+    attempted_approach: "Added a generic smoke test.",
+    fix_direction: "Cover the exact dispatch prompt branch.",
+  }));
+
+  assert.equal(verdict.issues[0].factor, "Behavior parity");
+  assert.equal(verdict.issues[0].attempted_approach, "Added a generic smoke test.");
+  assert.equal(verdict.issues[0].fix_direction, "Cover the exact dispatch prompt branch.");
+});
+
+test("verdict/validateReviewVerdict rejects blank rejection metadata", () => {
+  assert.throws(
+    () => validateReviewVerdict(makeChangesRequestedVerdict({ attempted_approach: " " })),
+    /issues\[0\]\.attempted_approach must be a non-empty string when present/
+  );
+});
+
 test("verdict/parseReviewVerdict rejects invalid JSON", () => {
   assert.throws(() => parseReviewVerdict("{"), /must be valid JSON/i);
 });
@@ -395,13 +414,19 @@ test("verdict/validateScopeDrift preserves legacy malformed nested-entry behavio
   }
 });
 
-test("schema/strict-mode invariant: every additionalProperties:false object lists every property in required (OpenAI strict-mode)", () => {
+test("schema/strict-mode invariant: every additionalProperties:false object lists every non-optional property in required", () => {
+  const OPTIONAL_REQUIRED_EXCEPTIONS = new Map([
+    ["REVIEW_VERDICT_JSON_SCHEMA.properties.issues.items", new Set(["factor", "attempted_approach", "fix_direction"])],
+    ["REVIEWER_VERDICT_JSON_SCHEMA.properties.issues.items", new Set(["factor", "attempted_approach", "fix_direction"])],
+  ]);
+
   function findStrictModeViolations(node, pathParts, violations) {
     if (!node || typeof node !== "object") return;
     if (node.type === "object" && node.additionalProperties === false) {
       const propKeys = Object.keys(node.properties || {});
       const required = new Set(node.required || []);
-      const missing = propKeys.filter((key) => !required.has(key));
+      const optional = OPTIONAL_REQUIRED_EXCEPTIONS.get(pathParts.join(".")) || new Set();
+      const missing = propKeys.filter((key) => !required.has(key) && !optional.has(key));
       if (missing.length) {
         violations.push({ path: pathParts.join(".") || "<root>", missing });
       }
