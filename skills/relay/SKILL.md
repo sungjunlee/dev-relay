@@ -58,6 +58,12 @@ Carry these artifacts forward:
 - frozen Done Criteria: `~/.relay/requests/<repo-slug>/<request-id>/done-criteria/<leaf-id>.md`
 - linkage: `request_id`, `leaf_id`
 
+## Readiness probe + chain prompt
+Before Step 2, run the deterministic readiness probe unless bypassed by: prior relay-ready artifact with `readiness_score` plus frozen review anchor; explicit `--bypass-readiness`; or sprint-batch entry already linked to a relay-ready handoff. Bypass/pass proceeds unchanged.
+On failure in an interactive TTY, ask once: `Readiness gaps detected: <summary>. Invoke relay-ready first? [y/n/abort]`
+`y` chains to relay-intake/relay-ready Q&A, persists the handoff, then resumes `/relay`; `n` proceeds and logs `readiness_chain_declined`; `abort` closes with `readiness_check_failed`.
+With `--non-interactive` or non-TTY, failure closes with `readiness_check_failed`; no prompt. Details: `relay-intake/references/design-v1.md`.
+
 ## Step 1.5: Check for in-flight work
 
 Check if this issue already has a PR in progress:

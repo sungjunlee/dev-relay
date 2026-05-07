@@ -25,3 +25,47 @@ Steps:
 Risks: dual shapes can confuse readers; mitigation is one precedence rule: `readiness_score` wins. Stale installed skills may keep writing `readiness`; mitigation is preserve validation and warn during #434 shim.
 
 Grandfather handling: do not mutate the 22 existing request artifacts. They remain v1-grandfathered with `readiness.*`; on next touch, consumers treat them as unscored and may rescore into `readiness_score`. Cutover starts only after the 20-run trigger above.
+
+## Call graph — /relay ↔ relay-ready
+
+### Diagram + state transitions
+
+```text
+User -> /relay-ready -> /relay                  [explicit two-step default]
+User -> /relay
+  -> probing: regex only, no LLM/Q&A; read `readiness_score` per D2
+     --probe-pass / readiness_probe--> proceeding
+     --probe-fail / readiness_probe--> chain_offered
+chain_offered asks once:
+  "Readiness gaps detected: <summary>. Invoke relay-ready first? [y/n/abort]"
+     --chain-y / readiness_chain_started--> chained
+chained -> relay-ready interactive Q&A
+     --readiness_chain_completed--> proceeding
+chain_offered --chain-n / readiness_chain_declined--> proceeding
+chain_offered --chain-abort / readiness_aborted--> aborted
+```
+
+`chain_offered` is the only state where `/relay` directly asks the user anything. Consumer for new run events: #437 `/relay` routing/resume; `reliability-report` may aggregate declines.
+
+### Non-interactive mode
+
+Non-interactive means explicit `--non-interactive` or non-TTY; the flag has precedence. Probe pass proceeds. Probe fail skips `chain_offered` and closes `aborted` with reason `readiness_check_failed`; `readiness_aborted` payload is `{mode:"non_interactive",reason:"readiness_check_failed",score,gaps}`.
+
+### Warning-fatigue handling
+
+Repeated `n` does not change UX. Every decline logs `readiness_chain_declined` with `{score,gaps,decision:"n",repeat_count}` and `/relay` proceeds. No stronger prompt, cooldown, or block.
+
+### Decision 1 — Non-interactive detection
+
+Decision: use both explicit `--non-interactive` and TTY checks; the flag wins, otherwise `!process.stdin.isTTY || !process.stdout.isTTY` is non-interactive.
+Rationale: CI/batch callers can be explicit, while piped automation remains safe by default.
+
+### Decision 2 — Chain-prompt prompt source
+
+Decision: `skills/relay/SKILL.md` is canonical; implementation copies the literal template into a const and pins it with tests.
+Rationale: operators read skill docs first, and #437 still needs a runtime string without parsing markdown.
+
+### Decision 3 — Probe latency budget
+
+Decision: p95 <= 200ms for the probe on real issue bodies.
+Rationale: this keeps the only new synchronous `/relay` gate cheap; pure regex/no subprocess/no LLM makes the cap realistic.
