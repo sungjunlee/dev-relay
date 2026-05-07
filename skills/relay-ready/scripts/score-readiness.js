@@ -62,6 +62,7 @@ const CLAUSE_AND_RE = new RegExp(
   `\\b(?:${ACTION_VERBS.join("|")})\\b[^\\n.;:]*\\band\\s+(?:${ACTION_VERBS.join("|")})\\b`,
   "i"
 );
+const TOP_LEVEL_AND_RE = /\band\b/i;
 
 function scoreReadiness(input, metadata = {}) {
   const normalized = normalizeInput(input, metadata);
@@ -209,11 +210,13 @@ function scoreClarity(signals, combinedText, scanText) {
     pushSignal(signals, "clarity", READINESS_CONDITIONS.OBSERVABLE_END_STATE, observableEndState.evidence);
   }
 
+  // Clarity low is an ANY-of contract: vague verb, missing target, or short body.
+  // High only applies when none of those low gates fired.
+  if (vagueVerb || !explicitTarget || shortBody) {
+    return "low";
+  }
   if (explicitTarget && observableEndState) {
     return "high";
-  }
-  if (vagueVerb || (!explicitTarget && shortBody)) {
-    return "low";
   }
   return "medium";
 }
@@ -336,14 +339,20 @@ function extractActionVerbs(opener) {
 }
 
 function detectTopLevelAnd(opener) {
-  if (!/\band\b/i.test(opener)) {
+  const andMatch = opener.match(TOP_LEVEL_AND_RE);
+  if (!andMatch) {
     return null;
   }
   if (SHARED_OBJECT_MULTI_VERB_RE.test(opener)) {
     return null;
   }
   const match = opener.match(CLAUSE_AND_RE);
-  return match ? match[0] : null;
+  if (match) {
+    return match[0];
+  }
+  const start = Math.max(0, andMatch.index - 40);
+  const end = Math.min(opener.length, andMatch.index + andMatch[0].length + 40);
+  return opener.slice(start, end);
 }
 
 function detectBulletsAcrossModules(text) {

@@ -124,7 +124,7 @@ Keep the existing architecture intact.
 });
 
 test("all-high scores proceed even without bypass", () => {
-  const body = "Update `src/relay-ready/parser.js` so `parseRequestTitle()` returns trimmed titles; verify `tests/relay-ready/parser.test.js` passes with p95 < 50ms.";
+  const body = "Update `src/relay-ready/parser.js` so `parseRequestTitle()` returns trimmed titles for blank-padded input while preserving existing null-safe behavior; keep the parser deterministic without I/O; verify `tests/relay-ready/parser.test.js` passes with p95 < 50ms.";
 
   const result = scoreReadiness(body);
 
@@ -135,6 +135,25 @@ test("all-high scores proceed even without bypass", () => {
   });
   assert.equal(result.bypass, false);
   assert.equal(result.next_action, "proceed");
+  assertSignalShape(result);
+});
+
+test("bypass rejects opener with top-level and before non-verb target", () => {
+  const body = `Update parser and docs in \`src/parser/index.js\`.
+
+## Done Criteria
+
+- \`src/parser/index.js\` keeps parse output stable.
+- \`tests/parser/index.test.js\` passes.
+`;
+
+  const result = scoreReadiness(body);
+
+  assert.equal(result.bypass, false);
+  assert.equal(result.readiness.granularity, "low");
+  assert.ok(hasSignal(result, "granularity", READINESS_CONDITIONS.TOP_LEVEL_AND));
+  assert.ok(hasSignal(result, "bypass", READINESS_CONDITIONS.SINGLE_LEAF));
+  assert.match(signalEvidence(result, "bypass", READINESS_CONDITIONS.SINGLE_LEAF), /^fail:/);
   assertSignalShape(result);
 });
 
@@ -175,6 +194,27 @@ test("minimal input marks clarity low and asks for QA", () => {
   assertSignalShape(result);
 });
 
+test("short input with a file target still marks clarity low", () => {
+  const result = scoreReadiness("Fix `src/a.js`.");
+
+  assert.equal(result.readiness.clarity, "low");
+  assert.ok(hasSignal(result, "clarity", READINESS_CONDITIONS.SHORT_BODY));
+  assert.ok(hasSignal(result, "clarity", READINESS_CONDITIONS.EXPLICIT_TARGET));
+  assertSignalShape(result);
+});
+
+test("missing target alone marks clarity low", () => {
+  const body = `Implement deterministic scoring so reviewer-visible output stays stable across repeated runs.
+
+The request names an observable p95 < 50ms threshold and enough details to avoid the short-body rule, but it intentionally omits a file path or function target so the clarity scorer must not promote it.`;
+
+  const result = scoreReadiness(body);
+
+  assert.equal(result.readiness.clarity, "low");
+  assert.ok(hasSignal(result, "clarity", READINESS_CONDITIONS.MISSING_TARGET));
+  assertSignalShape(result);
+});
+
 test("high-risk low-score input escalates", () => {
   const result = scoreReadiness({
     title: "Delete the production auth schema",
@@ -191,7 +231,21 @@ test("high-risk low-score input escalates", () => {
 
 test("score-readiness source does not reference child process APIs", () => {
   const source = fs.readFileSync(SOURCE, "utf-8");
-  assert.doesNotMatch(source, /child_process|child-process/);
+  const forbiddenSubprocessTokens = [
+    /child_process/,
+    /child-process/,
+    /node:child_process/,
+    /\bexecFileSync\b/,
+    /\bexecSync\b/,
+    /\bspawn\b/,
+    /\bspawnSync\b/,
+    /\bexec\b/,
+    /\bfork\b/,
+  ];
+
+  for (const token of forbiddenSubprocessTokens) {
+    assert.doesNotMatch(source, token);
+  }
 });
 
 test("scores deterministic 5KB bodies with p95 latency under 50ms", () => {
