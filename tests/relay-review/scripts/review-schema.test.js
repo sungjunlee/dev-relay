@@ -12,7 +12,10 @@ function issueSchema(schema) {
   return schema.properties.issues.items;
 }
 
-test("schema/verdict issues allow optional rejection metadata while staying strict", async (t) => {
+test("schema/verdict issues mark rejection metadata as nullable+required (OpenAI strict-mode)", async (t) => {
+  // OpenAI strict mode forbids genuinely-optional properties: every key in `properties` must
+  // appear in `required`. Optional fields are expressed as nullable types instead.
+  // Regression history: PR #304 (relates_to), #441 (factor/attempted_approach/fix_direction).
   for (const [label, schema] of [
     ["runner", REVIEW_VERDICT_JSON_SCHEMA],
     ["reviewer", REVIEWER_VERDICT_JSON_SCHEMA],
@@ -22,15 +25,15 @@ test("schema/verdict issues allow optional rejection metadata while staying stri
 
       assert.equal(issue.additionalProperties, false);
       for (const field of REJECTION_METADATA_FIELDS) {
-        assert.deepEqual(issue.properties[field], { type: "string", minLength: 1 });
-        assert.equal(issue.required.includes(field), false);
+        assert.deepEqual(issue.properties[field], { type: ["string", "null"], minLength: 1 });
+        assert.equal(issue.required.includes(field), true, `${field} must be in required`);
       }
       assert.equal(Object.hasOwn(issue.properties, "unknown_rejection_note"), false);
     });
   }
 });
 
-test("schema/verdict issue historical required fields do not gain rejection metadata", async (t) => {
+test("schema/verdict issue required matrix lists all 11 properties (strict-mode complete)", async (t) => {
   for (const [label, schema] of [
     ["runner", REVIEW_VERDICT_JSON_SCHEMA],
     ["reviewer", REVIEWER_VERDICT_JSON_SCHEMA],
@@ -45,6 +48,9 @@ test("schema/verdict issue historical required fields do not gain rejection meta
         "line",
         "category",
         "severity",
+        "factor",
+        "attempted_approach",
+        "fix_direction",
         "lineage",
         "relates_to",
       ]);

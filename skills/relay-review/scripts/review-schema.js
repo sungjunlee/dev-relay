@@ -1,7 +1,7 @@
 const REJECTION_METADATA_PROPERTIES = {
-  factor: { type: "string", minLength: 1 },
-  attempted_approach: { type: "string", minLength: 1 },
-  fix_direction: { type: "string", minLength: 1 },
+  factor: { type: ["string", "null"], minLength: 1 },
+  attempted_approach: { type: ["string", "null"], minLength: 1 },
+  fix_direction: { type: ["string", "null"], minLength: 1 },
 };
 
 const REVIEW_VERDICT_PROPERTIES = {
@@ -34,7 +34,19 @@ const REVIEW_VERDICT_PROPERTIES = {
     items: {
       type: "object",
       additionalProperties: false,
-      required: ["title", "body", "file", "line", "category", "severity", "lineage", "relates_to"],
+      required: [
+        "title",
+        "body",
+        "file",
+        "line",
+        "category",
+        "severity",
+        "factor",
+        "attempted_approach",
+        "fix_direction",
+        "lineage",
+        "relates_to",
+      ],
       properties: {
         title: { type: "string", minLength: 1 },
         body: { type: "string", minLength: 1 },

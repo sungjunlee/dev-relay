@@ -122,7 +122,7 @@ test("verdict/validateReviewVerdict accepts optional rejection metadata", () => 
 test("verdict/validateReviewVerdict rejects blank rejection metadata", () => {
   assert.throws(
     () => validateReviewVerdict(makeChangesRequestedVerdict({ attempted_approach: " " })),
-    /issues\[0\]\.attempted_approach must be a non-empty string when present/
+    /issues\[0\]\.attempted_approach must be a non-empty string, null, or absent/
   );
 });
 
@@ -414,19 +414,17 @@ test("verdict/validateScopeDrift preserves legacy malformed nested-entry behavio
   }
 });
 
-test("schema/strict-mode invariant: every additionalProperties:false object lists every non-optional property in required", () => {
-  const OPTIONAL_REQUIRED_EXCEPTIONS = new Map([
-    ["REVIEW_VERDICT_JSON_SCHEMA.properties.issues.items", new Set(["factor", "attempted_approach", "fix_direction"])],
-    ["REVIEWER_VERDICT_JSON_SCHEMA.properties.issues.items", new Set(["factor", "attempted_approach", "fix_direction"])],
-  ]);
-
+test("schema/strict-mode invariant: every additionalProperties:false object lists every property in required (OpenAI strict-mode forbids genuinely-optional)", () => {
+  // OpenAI structured-output strict mode requires every key in `properties` to also be in
+  // `required`. There are no genuinely-optional properties — make optional ones nullable
+  // (`type: ["string", "null"]`) and still list them in `required`.
+  // Regression history: PR #304 (relates_to), #441 (factor/attempted_approach/fix_direction).
   function findStrictModeViolations(node, pathParts, violations) {
     if (!node || typeof node !== "object") return;
     if (node.type === "object" && node.additionalProperties === false) {
       const propKeys = Object.keys(node.properties || {});
       const required = new Set(node.required || []);
-      const optional = OPTIONAL_REQUIRED_EXCEPTIONS.get(pathParts.join(".")) || new Set();
-      const missing = propKeys.filter((key) => !required.has(key) && !optional.has(key));
+      const missing = propKeys.filter((key) => !required.has(key));
       if (missing.length) {
         violations.push({ path: pathParts.join(".") || "<root>", missing });
       }
@@ -448,4 +446,11 @@ test("schema/strict-mode invariant: every additionalProperties:false object list
 
 test("verdict/validateIssue accepts relates_to=null (codex strict-mode emits null when no relation)", () => {
   assert.doesNotThrow(() => validateIssue(makeIssue({ lineage: "new", relates_to: null }), 0));
+});
+
+test("verdict/validateIssue accepts factor/attempted_approach/fix_direction = null (codex strict-mode emits null when not applicable)", () => {
+  assert.doesNotThrow(() => validateIssue(
+    makeIssue({ lineage: "new", relates_to: null, factor: null, attempted_approach: null, fix_direction: null }),
+    0,
+  ));
 });
