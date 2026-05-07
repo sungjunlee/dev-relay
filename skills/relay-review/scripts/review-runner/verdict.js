@@ -41,8 +41,8 @@ function validateIssue(issue, index) {
     throw new Error(`${location}.line must be a positive integer`);
   }
   for (const key of OPTIONAL_ISSUE_REJECTION_METADATA) {
-    if (issue[key] !== undefined && !String(issue[key] || "").trim()) {
-      throw new Error(`${location}.${key} must be a non-empty string when present`);
+    if (issue[key] !== undefined && issue[key] !== null && !String(issue[key] || "").trim()) {
+      throw new Error(`${location}.${key} must be a non-empty string, null, or absent`);
     }
   }
   if (issue.lineage !== undefined && !ALLOWED_LINEAGE_VALUES.has(issue.lineage)) {
