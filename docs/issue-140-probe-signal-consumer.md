@@ -50,7 +50,7 @@ Additional adjacent-path rows required by factor 4:
 | --- | --- | --- | --- |
 | `skills/relay-plan/scripts/reliability-report-consumer.js` | #139 historical-signal consumer | **UNCHANGED** — independent consumer, no coupling to probe signals | Covered by #139's own tests |
 | `tests/relay-plan/scripts/reliability-report-consumer.test.js` | #139 historical-signal consumer tests | **UNCHANGED** | Covered by #139's own suite |
-| `skills/relay-intake/**` | Intake skill | **UNCHANGED** — intake does not consume probe signals under #140 | n/a |
+| `skills/relay-ready/**` | Intake skill | **UNCHANGED** — intake does not consume probe signals under #140 | n/a |
 | `skills/relay/**` | Umbrella relay skill | **UNCHANGED** — does not consume probe signals under #140 | n/a |
 
 ## Probe-Extension Choice
@@ -137,7 +137,7 @@ $ grep -n "no quality infra detected" skills/relay-plan/SKILL.md
 266:probe_signal.ci: no quality infra detected
 267:probe_signal.scripts: no quality infra detected
 
-$ grep -rn "probe-executor-env" skills/relay-dispatch/SKILL.md skills/relay-review/SKILL.md skills/relay-merge/SKILL.md skills/relay-intake/SKILL.md skills/relay/SKILL.md
+$ grep -rn "probe-executor-env" skills/relay-dispatch/SKILL.md skills/relay-review/SKILL.md skills/relay-merge/SKILL.md skills/relay-ready/SKILL.md skills/relay/SKILL.md
 
 $ grep -n "Rubric Quality Card" skills/relay-plan/SKILL.md
 195:### Rubric Quality Card

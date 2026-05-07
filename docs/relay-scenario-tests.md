@@ -118,7 +118,7 @@ Expect:
 - re-dispatch keeps the same `run_id`
 - missing retained worktrees fail loudly without creating a replacement run
 - intake-linked runs can resume only with the exact same `request_id`, `leaf_id`, and `done_criteria_path`
-- issue-first runs cannot gain relay-intake linkage retroactively during resume
+- issue-first runs cannot gain relay-ready linkage retroactively during resume
 
 ### 7. Review runner validates structured verdicts and updates manifest state
 
@@ -164,7 +164,7 @@ Interpretation:
 Command:
 
 ```bash
-node --test tests/relay-intake/scripts/request-store.test.js
+node --test tests/relay-ready/scripts/request-store.test.js
 ```
 
 Expect:
@@ -264,7 +264,7 @@ Covers:
 Command:
 
 ```bash
-node --test tests/relay-intake/scripts/request-store.test.js
+node --test tests/relay-ready/scripts/request-store.test.js
 ```
 
 Expect:
@@ -353,5 +353,5 @@ Covered by the same command as Scenario 15.
 Expect:
 
 - `source.kind: github_issue` stays on the `/relay` fast path only when the input is already a single relay-sized task with a trustworthy review anchor
-- no relay-intake request artifact, request event log, or `relay_ready_handoff_persisted` event is created on the bypass path
+- no relay-ready request artifact, request event log, or `relay_ready_handoff_persisted` event is created on the bypass path
 - downstream planning and review continue from the existing issue/task anchor instead of a generated intake snapshot

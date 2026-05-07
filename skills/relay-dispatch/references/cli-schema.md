@@ -63,7 +63,7 @@ Generated from `formatFlagAuditMarkdown()` in `scripts/cli-schema.js`. The same 
 | `--issue` | `parsed` | Numeric selector; flag-like following tokens should mean the value is missing. |
 | `--json` | `parsed` | Presence flag; no value is consumed. |
 | `--last-reviewed-sha` | `parsed` | Structured SHA field; flag-like following tokens should mean the value is missing. |
-| `--leaf-id` | `parsed` | Structured relay-intake identifier; flag-like following tokens should mean the value is missing. |
+| `--leaf-id` | `parsed` | Structured relay-ready identifier; flag-like following tokens should mean the value is missing. |
 | `--manifest` | `verbatim` | Operator-supplied manifest path; keep the literal argv token. |
 | `--max-rounds` | `parsed` | Numeric policy field; flag-like following tokens should mean the value is missing. |
 | `--merge-method` | `parsed` | Closed merge selector; flag-like following tokens should mean the value is missing. |
@@ -87,7 +87,7 @@ Generated from `formatFlagAuditMarkdown()` in `scripts/cli-schema.js`. The same 
 | `--register` | `parsed` | Presence flag; no value is consumed. |
 | `--repeated-issue-count` | `parsed` | Numeric review field; flag-like following tokens should mean the value is missing. |
 | `--repo` | `verbatim` | Operator-supplied repository path; keep the literal argv token. |
-| `--request-id` | `parsed` | Structured relay-intake identifier; flag-like following tokens should mean the value is missing. |
+| `--request-id` | `parsed` | Structured relay-ready identifier; flag-like following tokens should mean the value is missing. |
 | `--review-file` | `verbatim` | Operator-supplied verdict path; keep the literal argv token. |
 | `--reviewer` | `parsed` | Reviewer adapter selector; flag-like following tokens should mean the value is missing. |
 | `--reviewer-model` | `parsed` | Reviewer model selector; flag-like following tokens should mean the value is missing. |
@@ -134,7 +134,7 @@ Generated from `formatFlagAuditMarkdown()` in `scripts/cli-schema.js`. The same 
 | `--issue` | `parsed` | Numeric selector; flag-like following tokens should mean the value is missing. |
 | `--json` | `parsed` | Presence flag; no value is consumed. |
 | `--last-reviewed-sha` | `parsed` | Structured SHA field; flag-like following tokens should mean the value is missing. |
-| `--leaf-id` | `parsed` | Structured relay-intake identifier; flag-like following tokens should mean the value is missing. |
+| `--leaf-id` | `parsed` | Structured relay-ready identifier; flag-like following tokens should mean the value is missing. |
 | `--manifest` | `verbatim` | Operator-supplied manifest path; keep the literal argv token. |
 | `--max-rounds` | `parsed` | Numeric policy field; flag-like following tokens should mean the value is missing. |
 | `--merge-method` | `parsed` | Closed merge selector; flag-like following tokens should mean the value is missing. |
@@ -158,7 +158,7 @@ Generated from `formatFlagAuditMarkdown()` in `scripts/cli-schema.js`. The same 
 | `--register` | `parsed` | Presence flag; no value is consumed. |
 | `--repeated-issue-count` | `parsed` | Numeric review field; flag-like following tokens should mean the value is missing. |
 | `--repo` | `verbatim` | Operator-supplied repository path; keep the literal argv token. |
-| `--request-id` | `parsed` | Structured relay-intake identifier; flag-like following tokens should mean the value is missing. |
+| `--request-id` | `parsed` | Structured relay-ready identifier; flag-like following tokens should mean the value is missing. |
 | `--review-file` | `verbatim` | Operator-supplied verdict path; keep the literal argv token. |
 | `--reviewer` | `parsed` | Reviewer adapter selector; flag-like following tokens should mean the value is missing. |
 | `--reviewer-model` | `parsed` | Reviewer model selector; flag-like following tokens should mean the value is missing. |

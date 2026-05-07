@@ -52,7 +52,7 @@ an operator CLI, adapter entry point, or archived measurement tool.
 
 | Script | Category | Evidence | Cleanup guidance |
 |--------|----------|----------|------------------|
-| `scripts/persist-request.js` | Runtime entry point | `/relay-intake` persistence entry point. | Keep. |
+| `scripts/persist-request.js` | Runtime entry point | `/relay-ready` persistence entry point. | Keep. |
 | `scripts/relay-request.js` | Shared helper | Request artifact CRUD and events. | Keep. |
 
 ### Relay Plan

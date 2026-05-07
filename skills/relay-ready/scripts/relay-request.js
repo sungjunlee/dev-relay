@@ -55,7 +55,7 @@ function getRequestEventsPath(repoRoot, requestId) {
 
 function ensureRequestLayout(repoRoot, requestId) {
   if (!requestId) {
-    throw new Error("request_id is required to create relay-intake layout");
+    throw new Error("request_id is required to create relay-ready layout");
   }
 
   const requestsDir = getRequestsDir(repoRoot);
@@ -521,10 +521,10 @@ function updateRequestArtifact(repoRoot, requestId, patch, requestRecord = getRe
 
 function appendRequestEvent(repoRoot, requestId, eventData) {
   if (!requestId) {
-    throw new Error("request_id is required to append a relay-intake event");
+    throw new Error("request_id is required to append a relay-ready event");
   }
   if (!String(eventData?.event || "").trim()) {
-    throw new Error("event is required to append a relay-intake event");
+    throw new Error("event is required to append a relay-ready event");
   }
 
   const { eventsPath } = ensureRequestLayout(repoRoot, requestId);

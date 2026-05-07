@@ -2,15 +2,15 @@
 
 Deep-dive into the manifest contract, state machine, and extension points. For overview, see [CLAUDE.md](../CLAUDE.md).
 
-This reference centers on the manifest-backed run lifecycle, plus the intake boundary that may sit ahead of `relay-plan`. For the full intake control-flow contract, see [docs/relay-intake-routing-and-handoff-design.md](../docs/relay-intake-routing-and-handoff-design.md).
+This reference centers on the manifest-backed run lifecycle, plus the readiness boundary that may sit ahead of `relay-plan`. For the full relay-ready control-flow contract, see [docs/relay-ready-routing-and-handoff-design.md](../docs/relay-ready-routing-and-handoff-design.md).
 
-## Intake Boundary
+## Readiness Boundary
 
-Before a run manifest exists, raw work may live in relay-intake artifacts under `~/.relay/requests/<repo-slug>/`.
+Before a run manifest exists, raw work may live in relay-ready artifacts under `~/.relay/requests/<repo-slug>/`.
 
 ```text
 raw request
-  -> relay-intake request artifact + events
+  -> relay-ready request artifact + events
   -> relay-ready handoff brief(s) + frozen Done Criteria snapshot(s)
   -> relay-plan
   -> relay-dispatch run manifest
@@ -21,9 +21,9 @@ raw request
 Boundary rules:
 
 - `/relay` remains the public front door for full-cycle execution
-- `/relay` bypasses intake only for issue-first or task-first inputs that are already relay-sized and already have a trustworthy review anchor
-- `/relay` invokes intake for ambiguous, oversized, or anchorless requests, then continues the normal downstream chain once a relay-ready leaf exists
-- intake interactions are append-only request events: `proposal_presented`, `question_asked`, `question_answered`, `proposal_accepted`, `proposal_edited`
+- `/relay` bypasses relay-ready only for issue-first or task-first inputs that are already relay-sized and already have a trustworthy review anchor
+- `/relay` invokes relay-ready for ambiguous, oversized, or anchorless requests, then continues the normal downstream chain once a relay-ready leaf exists
+- readiness interactions are append-only request events: `proposal_presented`, `question_asked`, `question_answered`, `proposal_accepted`, `proposal_edited`
 - request-level `next_action` is lightweight routing metadata, not a manifest lifecycle state
 
 ## State Machine
@@ -203,7 +203,7 @@ Each run keeps an append-only event log at `~/.relay/runs/<repo-slug>/<run-id>/e
 | `advisory_review` | `relay-review/scripts/review-runner/advisory.js` |
 | `review_apply` | `relay-review/scripts/review-runner.js`, `reviewer-invoke.js` |
 | `pr_number_stamped`, `merge_blocked`, `skip_review`, `force_finalize`, `merge_finalize`, `cleanup_result` | `relay-merge/scripts/finalize-run.js`, `relay-reconcile-artifact.js`, `gate-check.js` |
-| `request_persisted`, `proposal_presented`, `question_asked`, `question_answered`, `proposal_accepted`, `proposal_edited`, `relay_ready_handoff_persisted` | `relay-intake/scripts/relay-request.js` |
+| `request_persisted`, `proposal_presented`, `question_asked`, `question_answered`, `proposal_accepted`, `proposal_edited`, `relay_ready_handoff_persisted` | `relay-ready/scripts/relay-request.js` |
 
 There is no standalone `state_transition` event — state changes ride on the lifecycle event that caused them (`state_from`/`state_to` fields on `dispatch_start`, `dispatch_result`, `review_apply`, `merge_finalize`, etc.).
 
@@ -243,7 +243,7 @@ Current cross-skill imports:
 |----------|--------------|
 | `skills/relay-merge/scripts/gate-check.js` | `relay-review/scripts/review-runner/{context,redispatch}.js`, `relay-dispatch/scripts/manifest/lifecycle.js` |
 | `skills/relay-review/scripts/review-runner.js` | `relay-dispatch/scripts/manifest/{lifecycle,paths,store}.js`, `relay-dispatch/scripts/relay-events.js` |
-| `skills/relay-intake/scripts/relay-request.js` | `relay-dispatch/scripts/relay-manifest.js` (facade — see below) |
+| `skills/relay-ready/scripts/relay-request.js` | `relay-dispatch/scripts/relay-manifest.js` (facade — see below) |
 | Consumers of `cli-args.js` and `reviewer-helpers.js` | see [Shared utilities (cross-skill)](#shared-utilities-cross-skill) |
 
 Placement rule for new shared helpers: the skill most often invoked as a dependency hosts the module. Today `relay-dispatch` hosts `cli-args.js`; `relay-review` hosts `reviewer-helpers.js`. Do not introduce a neutral top-level directory — it would contradict the packaging-not-runtime rule above.
@@ -259,7 +259,7 @@ module.exports = { ...paths, ...store, ...lifecycle, ...rubric, ...cleanup, ...a
 Convention (from [#188 manifest boundary split](../docs/issue-188-manifest-boundary-split.md)):
 
 - **Runtime code** imports direct submodules: `require("./manifest/lifecycle")`. The docs list every runtime caller and its narrow submodule set.
-- **Compatibility tests** (e.g. `relay-manifest.test.js`, `dispatch.test.js`, `close-run.test.js`) and **out-of-scope runtime callers** (today: `relay-intake/scripts/relay-request.js`) continue to import via the facade. Each retained consumer is catalogued in the boundary-split doc with the reason it stayed.
+- **Compatibility tests** (e.g. `relay-manifest.test.js`, `dispatch.test.js`, `close-run.test.js`) and **out-of-scope runtime callers** (today: `relay-ready/scripts/relay-request.js`) continue to import via the facade. Each retained consumer is catalogued in the boundary-split doc with the reason it stayed.
 
 Enforcement: [`manifest-direct-imports.test.js`](../tests/relay-dispatch/scripts/manifest-direct-imports.test.js) asserts the facade stays ≤40 lines with zero function declarations and transitively runs every `manifest/*.test.js`. If the facade regains logic — or if submodules fall out of test — that file fails.
 

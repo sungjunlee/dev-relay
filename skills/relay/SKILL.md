@@ -4,7 +4,7 @@ argument-hint: "[issue-number or task description]"
 description: Execute the full relay cycle — plan, dispatch, review, merge. Use when implementing a GitHub issue or task through autonomous executor dispatch. Integrates with dev-backlog sprint files.
 compatibility: Requires Claude Code or Codex, gh CLI, git, Node.js 18+.
 metadata:
-  related-skills: "relay-intake, relay-plan, relay-dispatch, relay-review, relay-merge, dev-backlog"
+  related-skills: "relay-ready, relay-plan, relay-dispatch, relay-review, relay-merge, dev-backlog"
 ---
 
 # Dev Relay
@@ -39,18 +39,18 @@ Gather task details and sprint context:
    - GitHub: `gh issue view <N>`
    - User-provided description (from argument or conversation)
 2. **Sprint context** (optional): If `backlog/sprints/` has an active sprint file, read Running Context and batch info. If no sprint file, proceed without — sprint tracking is skipped.
-3. **Fast path vs intake path**:
-   - Bypass intake only when the input is already one relay-ready task, has a stable review anchor, and needs no clarification or decomposition.
-   - Otherwise run `relay-intake` first, persist a request artifact, and use the generated `relay-ready/<leaf-id>.md` as the downstream source of truth.
+3. **Fast path vs readiness path**:
+   - Bypass relay-ready only when the input is already one relay-ready task, has a stable review anchor, and needs no clarification or decomposition.
+   - Otherwise run `relay-ready` first, persist a request artifact, and use the generated `relay-ready/<leaf-id>.md` as the downstream source of truth.
 
 If no issue number, use a descriptive branch name (e.g., `feat/<slug>`) and skip issue-close in Step 6.
 
-### Intake path
+### Readiness path
 
-If intake is required, persist a single-leaf contract first:
+If readiness is required, persist a single-leaf contract first:
 
 ```bash
-${CLAUDE_SKILL_DIR}/../relay-intake/scripts/persist-request.js --repo . --contract-file /tmp/relay-intake-contract.json --json
+${CLAUDE_SKILL_DIR}/../relay-ready/scripts/persist-request.js --repo . --contract-file /tmp/relay-ready-contract.json --json
 ```
 
 Carry these artifacts forward:
@@ -61,8 +61,8 @@ Carry these artifacts forward:
 ## Readiness probe + chain prompt
 Before Step 2, run the deterministic readiness probe unless bypassed by: prior relay-ready artifact with `readiness_score` plus frozen review anchor; explicit `--bypass-readiness`; or sprint-batch entry already linked to a relay-ready handoff. Bypass/pass proceeds unchanged.
 On failure in an interactive TTY, ask once: `Readiness gaps detected: <summary>. Invoke relay-ready first? [y/n/abort]`
-`y` chains to relay-intake/relay-ready Q&A, persists the handoff, then resumes `/relay`; `n` proceeds and logs `readiness_chain_declined`; `abort` closes with `readiness_check_failed`.
-With `--non-interactive` or non-TTY, failure closes with `readiness_check_failed`; no prompt. Details: `relay-intake/references/design-v1.md`.
+`y` chains to relay-ready Q&A, persists the handoff, then resumes `/relay`; `n` proceeds and logs `readiness_chain_declined`; `abort` closes with `readiness_check_failed`.
+With `--non-interactive` or non-TTY, failure closes with `readiness_check_failed`; no prompt. Details: `relay-ready/references/design-v1.md`.
 
 ## Step 1.5: Check for in-flight work
 
@@ -79,7 +79,7 @@ PR_NUM=$(gh pr list --head issue-<N> --json number -q '.[0].number')
 **Always build a rubric.** Follow relay-plan's planning process (read task → recover Done Criteria → build rubric → generate prompt). Do NOT dispatch from relay-plan — Step 3 below handles dispatch. See `relay-plan` SKILL.md for rubric depth by task size (S/M/L/XL).
 
 Write the dispatch prompt to a temp file (e.g., `/tmp/dispatch-<N>.md`).
-If intake ran, the relay-ready handoff brief becomes the task source of truth for planning.
+If relay-ready ran, the relay-ready handoff brief becomes the task source of truth for planning.
 Write the rubric YAML to a temp file (e.g., `/tmp/rubric-<N>.yaml`).
 
 ## Step 3: Dispatch (relay-dispatch)
@@ -87,7 +87,7 @@ Write the rubric YAML to a temp file (e.g., `/tmp/rubric-<N>.yaml`).
 ```bash
 ${CLAUDE_SKILL_DIR}/../relay-dispatch/scripts/dispatch.js . \
   -b issue-<N> --prompt-file /tmp/dispatch-<N>.md --rubric-file /tmp/rubric-<N>.yaml --timeout 3600
-# If intake ran, append: --request-id <id> --leaf-id <id> --done-criteria-file <done-criteria-path>
+# If relay-ready ran, append: --request-id <id> --leaf-id <id> --done-criteria-file <done-criteria-path>
 ```
 
 While dispatch runs in the background, optionally monitor progress:
@@ -111,7 +111,7 @@ Get PR number:
 PR_NUM=$(gh pr list --head issue-<N> --json number -q '.[0].number')
 ```
 
-The manifest is written under `~/.relay/runs/<repo-slug>/`. This is the shared state surface for later review/merge lifecycle work. Intake linkage is recorded there, but the run lifecycle remains execution-only.
+The manifest is written under `~/.relay/runs/<repo-slug>/`. This is the shared state surface for later review/merge lifecycle work. Readiness linkage is recorded there, but the run lifecycle remains execution-only.
 
 Current scope: dispatch writes the manifest. Review and merge still follow their existing PR-comment and gate-check flow.
 
