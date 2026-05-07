@@ -19,20 +19,20 @@ const {
   persistRequestContract,
   readRequestArtifact,
   structure,
-} = require("../../../skills/relay-intake/scripts/relay-request");
+} = require("../../../skills/relay-ready/scripts/relay-request");
 
-const PERSIST_SCRIPT = path.join(__dirname, "..", "..", "..", "skills", "relay-intake", "scripts", "persist-request.js");
+const PERSIST_SCRIPT = path.join(__dirname, "..", "..", "..", "skills", "relay-ready", "scripts", "persist-request.js");
 const DISPATCH_SCRIPT = path.join(__dirname, "..", "..", "..", "skills", "relay-dispatch", "scripts", "dispatch.js");
 const REVIEW_RUNNER_SCRIPT = path.join(__dirname, "..", "..", "..", "skills", "relay-review", "scripts", "review-runner.js");
 
 function setupRepo() {
-  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-intake-"));
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-ready-"));
   const relayHome = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
-  const remoteRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-intake-origin-"));
+  const remoteRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-ready-origin-"));
   execFileSync("git", ["init", "-b", "main"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
   execFileSync("git", ["init", "--bare", remoteRoot], { encoding: "utf-8", stdio: "pipe" });
   execFileSync("git", ["config", "user.name", "Relay Intake Test"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
-  execFileSync("git", ["config", "user.email", "relay-intake@example.com"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
+  execFileSync("git", ["config", "user.email", "relay-ready@example.com"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
   fs.writeFileSync(path.join(repoRoot, "README.md"), "base\n", "utf-8");
   execFileSync("git", ["add", "README.md"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
   execFileSync("git", ["commit", "-m", "init"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
@@ -138,7 +138,7 @@ function invokeRelayFrontDoor(repoRoot, {
     requiresDecomposition,
   });
   const downstreamChain = route === "invoke_intake"
-    ? ["relay-intake", "relay-plan", "relay-dispatch"]
+    ? ["relay-ready", "relay-plan", "relay-dispatch"]
     : ["relay-plan", "relay-dispatch"];
 
   if (route === "bypass_intake") {
@@ -970,7 +970,7 @@ test("scenario: /relay auto-routes raw text through intake, then continues to di
 
   const dispatchResult = JSON.parse(dispatchStdout);
   assert.equal(intake.route, "invoke_intake");
-  assert.deepEqual(intake.downstreamChain, ["relay-intake", "relay-plan", "relay-dispatch"]);
+  assert.deepEqual(intake.downstreamChain, ["relay-ready", "relay-plan", "relay-dispatch"]);
   assert.deepEqual(
     readEventNames(repoRoot, intake.requestId),
     ["request_persisted", "relay_ready_handoff_persisted"]

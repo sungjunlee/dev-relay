@@ -5,7 +5,7 @@ This directory keeps repo-local design notes, issue evidence, operator workflow 
 ## Stable References
 
 - `relay-lifecycle-manifest-design.md` — manifest lifecycle and same-run control-loop design history.
-- `relay-intake-routing-and-handoff-design.md` — intake routing and handoff model.
+- `relay-ready-routing-and-handoff-design.md` — readiness routing and handoff model.
 - `relay-scenario-tests.md` — scenario-test coverage plan.
 - `workflow-lanes.md` — when to use relay, direct implementation, or planning lanes.
 - `external-tool-workflow.md` — external review and learning-capture workflow.

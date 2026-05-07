@@ -28,8 +28,8 @@
  *   --rubric-file <path>   REQUIRED: copy rubric YAML to run dir (persists for review)
  *   --test-command <cmd>   Record the executor-side test command in execution evidence
  *   --rubric-grandfathered Retired alias; dispatch rejects it
- *   --request-id <id>      Link the run back to a relay-intake request
- *   --leaf-id <id>         Link the run back to a relay-intake leaf handoff
+ *   --request-id <id>      Link the run back to a relay-ready request
+ *   --leaf-id <id>         Link the run back to a relay-ready leaf handoff
  *   --done-criteria-file   Persist a frozen Done Criteria anchor path
  *   --register             Register session in executor's app (keeps worktree)
  *   --no-cleanup           Compatibility alias; worktree is retained by default
@@ -152,8 +152,8 @@ if (!args.length || hasCliFlag(["--help", "-h"])) {
   console.log(`  --rubric-file      ${modeLabel("--rubric-file")} REQUIRED: copy rubric YAML to run dir (persists for review)`);
   console.log(`  --test-command     ${modeLabel("--test-command")} Record the executor-side test command in execution evidence`);
   console.log(`  --rubric-grandfathered  ${modeLabel("--rubric-grandfathered")} Retired alias; remove anchor.rubric_grandfathered manually`);
-  console.log(`  --request-id       ${modeLabel("--request-id")} Link the run back to a relay-intake request`);
-  console.log(`  --leaf-id          ${modeLabel("--leaf-id")} Link the run back to a relay-intake leaf handoff`);
+  console.log(`  --request-id       ${modeLabel("--request-id")} Link the run back to a relay-ready request`);
+  console.log(`  --leaf-id          ${modeLabel("--leaf-id")} Link the run back to a relay-ready leaf handoff`);
   console.log(`  --done-criteria-file  ${modeLabel("--done-criteria-file")} Persist a frozen Done Criteria anchor path`);
   console.log(`  --register         ${modeLabel("--register")} Register session in executor's app (keeps worktree)`);
   console.log(`  --no-cleanup       ${modeLabel("--no-cleanup")} Compatibility alias; worktree is retained by default`);

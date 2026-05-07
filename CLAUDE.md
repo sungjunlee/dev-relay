@@ -14,7 +14,7 @@ draft → dispatched → review_pending → ready_to_merge → merged
 
 See [references/architecture.md](references/architecture.md) for the full manifest schema, state transitions, event journal format, and adapter extension points.
 
-Before a run exists, relay-intake may persist standalone request artifacts under `~/.relay/requests/<repo-slug>/`. `/relay` bypasses that preflight step only for already relay-ready issue/task inputs with a trustworthy review anchor; otherwise it invokes intake and then continues with `relay-plan -> relay-dispatch -> relay-review -> relay-merge`.
+Before a run exists, relay-ready may persist standalone request artifacts under `~/.relay/requests/<repo-slug>/`. `/relay` bypasses that preflight step only for already relay-ready issue/task inputs with a trustworthy review anchor; otherwise it invokes relay-ready and then continues with `relay-plan -> relay-dispatch -> relay-review -> relay-merge`.
 
 ## Project Structure
 
@@ -22,7 +22,7 @@ Before a run exists, relay-intake may persist standalone request artifacts under
 skills/
   relay/                   ← Full-cycle orchestration (plan → dispatch → review → stop)
     references/prompt-template.md
-  relay-intake/            ← Standalone raw-request front door + relay-ready handoff persistence
+  relay-ready/            ← Readiness gate + relay-ready handoff persistence
     scripts/
       relay-request.js       ← Request artifact CRUD + request events
       persist-request.js     ← Single-leaf persistence entry point
@@ -62,13 +62,13 @@ tests/
     fixtures/
 ```
 
-Multi-skill design: each phase is independently invocable. `npx skills add sungjunlee/dev-relay` installs all 6 skills: `relay`, `relay-intake`, `relay-plan`, `relay-dispatch`, `relay-review`, `relay-merge`.
+Multi-skill design: each phase is independently invocable. `npx skills add sungjunlee/dev-relay` installs all 6 skills: `relay`, `relay-ready`, `relay-plan`, `relay-dispatch`, `relay-review`, `relay-merge`.
 
 ## Common Commands
 
 ```bash
 # Run tests (Node.js built-in test runner, no install needed)
-node --test tests/relay-intake/scripts/*.test.js
+node --test tests/relay-ready/scripts/*.test.js
 node --test tests/relay-plan/scripts/*.test.js
 node --test tests/relay-dispatch/scripts/*.test.js
 node --test tests/relay-review/scripts/*.test.js
@@ -121,6 +121,7 @@ node skills/relay-merge/scripts/finalize-run.js --run-id <id> --force-finalize-n
 - Executor-specific internal paths (e.g., Codex SQLite, global state) are fragile — document which version they target
 - Keep each SKILL.md under 150 lines; use `references/` for details
 - Operator utilities and recovery playbooks live in `skills/<skill>/references/`, not SKILL.md. Sunset deprecated flags within one release.
+- `relay-intake` was renamed to `relay-ready`; the legacy `skills/relay-intake/` path is an advisory deprecation shim only and will be removed in the next release after this one.
 - Test files and test fixtures live under `tests/<skill>/`, never under `skills/<skill>/`, so `npx skills add` does not install them.
 - Manifest state transitions must go through `validateTransition()` — direct state assignment is a bug
 - New executors: drop a file in `skills/relay-dispatch/scripts/executors/` exporting the 6-field adapter contract, register in `executors/index.js`. See `skills/relay-dispatch/scripts/executors/README.md` for the contract and add a row to `tests/relay-dispatch/scripts/executors.test.js`.

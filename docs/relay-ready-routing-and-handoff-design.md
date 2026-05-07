@@ -6,7 +6,7 @@
 
 `/relay` remains the user-facing orchestrator.
 
-`/relay-intake` is the standalone shaping front door for raw, ambiguous, or oversized requests, and it is also the internal preflight step that `/relay` may invoke before planning.
+`/relay-ready` is the standalone shaping front door for raw, ambiguous, or oversized requests, and it is also the internal preflight step that `/relay` may invoke before planning.
 
 `/relay` decides whether to bypass intake or invoke it, then always continues the normal downstream chain for relay-ready work.
 
@@ -14,7 +14,7 @@ End-to-end flow:
 
 ```text
 raw request
-  -> relay-intake
+  -> relay-ready
   -> relay-ready leaf contract(s)
   -> relay-plan
   -> relay-dispatch
@@ -24,9 +24,9 @@ raw request
 
 ## Decision
 
-1. `relay-intake` is a standalone skill, not hidden state inside the run manifest lifecycle.
+1. `relay-ready` is a standalone skill, not hidden state inside the run manifest lifecycle.
 2. `/relay` stays the front door for full-cycle execution.
-3. `/relay` may call `relay-intake`, but once a relay-ready contract exists the flow returns to the normal downstream path:
+3. `/relay` may call `relay-ready`, but once a relay-ready contract exists the flow returns to the normal downstream path:
 
 ```text
 relay-plan -> relay-dispatch -> relay-review -> relay-merge
@@ -47,7 +47,7 @@ input to /relay
    |                   -> relay-review
    |                   -> relay-merge (explicit only)
    |
-   +-- no --> relay-intake
+   +-- no --> relay-ready
                -> classify / clarify / propose / structure
                -> write request artifact + event log
                -> produce one or more relay-ready leaf contracts
@@ -62,7 +62,7 @@ Standalone intake entry is also valid:
 
 ```text
 raw request
-   -> relay-intake
+   -> relay-ready
    -> request artifact + append-only intake events
    -> relay-ready leaf contract(s)
    -> relay-plan
@@ -71,13 +71,13 @@ raw request
 
 ## Routing Rules
 
-`/relay` may bypass `relay-intake` only when all of the following are true:
+`/relay` may bypass `relay-ready` only when all of the following are true:
 
 1. The input already describes one relay-sized task.
 2. The task has a stable review anchor already available.
 3. No clarification, proposal, or decomposition work is needed.
 
-If any of those conditions are false, `/relay` must invoke `relay-intake`.
+If any of those conditions are false, `/relay` must invoke `relay-ready`.
 
 Issue-first fast path means an issue-like source already has trustworthy, reviewable acceptance criteria and does not need intake shaping. In practice that is the "single task + stable review anchor + no shaping needed" case, not "every GitHub issue".
 
@@ -95,7 +95,7 @@ These are hints, not overrides:
 
 An issue number is not an automatic bypass. If the issue is broad, mixed-scope, or missing a trustworthy review anchor, `/relay` should still route through intake.
 
-`/relay` may therefore internally invoke `relay-intake`, wait for a relay-ready contract, and then continue the standard downstream chain without exposing two separate workflows to the operator.
+`/relay` may therefore internally invoke `relay-ready`, wait for a relay-ready contract, and then continue the standard downstream chain without exposing two separate workflows to the operator.
 
 ## Relay-Ready Contract
 
@@ -142,7 +142,7 @@ The exact file naming can evolve, but intake must persist:
 
 ## Downstream Handoff
 
-### `relay-intake`
+### `relay-ready`
 
 Owns:
 
@@ -190,7 +190,7 @@ Reviews against the frozen Done Criteria snapshot, not against executor-authored
 
 ## Multiple Leaf Tasks
 
-`relay-intake` may return multiple relay-ready leaf tasks from one parent request.
+`relay-ready` may return multiple relay-ready leaf tasks from one parent request.
 
 That does not create a second execution system. It creates multiple normal relay runs.
 
@@ -236,6 +236,6 @@ Portable intake events:
 
 ### Mitigation
 
-- Keep the public model simple: `/relay` is the front door, `/relay-intake` is the shaping tool
+- Keep the public model simple: `/relay` is the front door, `/relay-ready` is the shaping tool
 - Keep the routing rule explicit and documented
 - Keep intake output normalized so downstream skills do not need special cases

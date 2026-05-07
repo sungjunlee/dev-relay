@@ -167,7 +167,7 @@ Not triggered. This task does not cross an auth boundary:
 
 - #189 review-runner decomposition follow-ups.
 - Test-file migration from `relay-manifest.js` facade (deferred from #188).
-- `relay-intake/scripts/relay-request.js` migration from facade.
+- `relay-ready/scripts/relay-request.js` migration from facade.
 
 ## Build sequence
 

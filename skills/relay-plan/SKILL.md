@@ -4,7 +4,7 @@ argument-hint: "[issue-number]"
 description: Synthesize task intent, explicit AC when present, repo signals, and task risk into a scored rubric for autonomous iteration. Always used before relay-dispatch — rubric depth scales with task size.
 compatibility: Requires gh CLI.
 metadata:
-  related-skills: "relay, relay-intake, relay-dispatch, relay-review, dev-backlog"
+  related-skills: "relay, relay-ready, relay-dispatch, relay-review, dev-backlog"
 ---
 
 # Relay Plan
@@ -16,12 +16,12 @@ Build a scoring rubric from the task's intended outcome: explicit Acceptance Cri
 ### 1. Read the task
 
 Read the normalized task source (try in order, use first that succeeds):
-- Relay-ready handoff brief from relay-intake: `~/.relay/requests/<repo-slug>/<request-id>/relay-ready/<leaf-id>.md`
+- Relay-ready handoff brief from the relay-ready skill: `~/.relay/requests/<repo-slug>/<request-id>/relay-ready/<leaf-id>.md`
 - Local task file: `backlog/tasks/{PREFIX}-{N} - {Title}.md`
 - GitHub: `gh issue view <N>`
 - User-provided description
 
-If relay-intake already produced a handoff brief, treat that file as the source of truth instead of re-reading the raw request.
+If the relay-ready skill already produced a handoff brief, treat that file as the source of truth instead of re-reading the raw request.
 
 ### 2. Read historical signal
 
@@ -47,7 +47,7 @@ Use `probe_signal.test_infra`, `lint_format`, `type_check`, `ci`, and `scripts` 
 
 Before drafting factors, identify the evaluation source model:
 - Explicit AC from the task source, when present
-- Inferred Done Criteria from user intent, issue body, relay-intake handoff, and nearby repo conventions
+- Inferred Done Criteria from user intent, issue body, relay-ready handoff, and nearby repo conventions
 - Repo quality signal from probes and available commands
 - Historical relay signal from stuck factors and score divergence
 - Task-specific risk from touched domains, trust boundaries, data loss, migrations, UX flows, or operational failure modes; derive `task_profile` per `references/task-profile.md`
@@ -122,7 +122,7 @@ node ${CLAUDE_SKILL_DIR}/scripts/persist-done-criteria.js --repo . \
   --run-id "$RUN_ID" --file /tmp/done-criteria-<N>.md --json
 ```
 
-Dispatch with the same `RUN_ID` and `--done-criteria-file ~/.relay/runs/<repo-slug>/$RUN_ID/done-criteria.md`. Skip this step only when the issue or intake handoff already provides the final Done Criteria without planner changes.
+Dispatch with the same `RUN_ID` and `--done-criteria-file ~/.relay/runs/<repo-slug>/$RUN_ID/done-criteria.md`. Skip this step only when the issue or relay-ready handoff already provides the final Done Criteria without planner changes.
 
 ### 9. Review the rubric (triggered by ambiguity/risk)
 

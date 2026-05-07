@@ -8,7 +8,7 @@ const {
 
 // EVENTS covers write-time names that land in ~/.relay/runs/<slug>/<run-id>/events.jsonl
 // through appendRunEvent, recover-commit's appendRecoveryEvent wrapper, or the three
-// helper writers in this module. Out of scope: relay-intake/scripts/relay-request.js
+// helper writers in this module. Out of scope: relay-ready/scripts/relay-request.js
 // writes a separate ~/.relay/requests/ artifact log, and worktree-runtime.js emits
 // pluggable logger metadata rather than journal entries. Historical-only journal names
 // (manual_recovery, manual_state_correction, manual_state_override) are intentionally

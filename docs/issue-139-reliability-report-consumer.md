@@ -89,7 +89,7 @@ $ grep -n "historical_signal\." skills/relay-plan/SKILL.md
 218:historical_signal.divergence_hotspots: no historical data available
 219:historical_signal.avg_rounds: no historical data available
 
-$ grep -rn "reliability-report" skills/relay-dispatch/SKILL.md skills/relay-review/SKILL.md skills/relay-merge/SKILL.md skills/relay-intake/SKILL.md skills/relay/SKILL.md
+$ grep -rn "reliability-report" skills/relay-dispatch/SKILL.md skills/relay-review/SKILL.md skills/relay-merge/SKILL.md skills/relay-ready/SKILL.md skills/relay/SKILL.md
 skills/relay-dispatch/SKILL.md:148:${CLAUDE_SKILL_DIR}/scripts/reliability-report.js --repo . --json
 
 $ grep -n "Rubric Quality Card" skills/relay-plan/SKILL.md

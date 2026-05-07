@@ -5,7 +5,7 @@ description: Independent PR review against Done Criteria in a fresh context, fre
 context: fork
 compatibility: Requires gh CLI.
 metadata:
-  related-skills: "relay, relay-intake, relay-plan, relay-dispatch, relay-merge"
+  related-skills: "relay, relay-ready, relay-plan, relay-dispatch, relay-merge"
 ---
 
 # Relay Review

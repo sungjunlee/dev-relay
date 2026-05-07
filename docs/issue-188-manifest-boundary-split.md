@@ -126,8 +126,8 @@ Every remaining `relay-manifest` import is either a deliberate public-surface co
 | [reliability-report.test.js](../tests/relay-dispatch/scripts/reliability-report.test.js) | Compatibility test for reporting behavior built around the public manifest surface. |
 | [test-support.js](../skills/relay-dispatch/scripts/test-support.js) | Shared test fixture helper; keeping one facade import avoids duplicating slice wiring across legacy tests. |
 | [update-manifest-state.test.js](../tests/relay-dispatch/scripts/update-manifest-state.test.js) | Compatibility test for the state-update CLI contract. |
-| [relay-request.js](../skills/relay-intake/scripts/relay-request.js) | Intake is out of scope for #188; it stays on the stable facade until a separate boundary pass lands. |
-| [request-store.test.js](../tests/relay-intake/scripts/request-store.test.js) | Intake compatibility test; it follows the deferred intake runtime consumer. |
+| [relay-request.js](../skills/relay-ready/scripts/relay-request.js) | Intake is out of scope for #188; it stays on the stable facade until a separate boundary pass lands. |
+| [request-store.test.js](../tests/relay-ready/scripts/request-store.test.js) | Intake compatibility test; it follows the deferred intake runtime consumer. |
 | [finalize-run.test.js](../tests/relay-merge/scripts/finalize-run.test.js) | Compatibility test for merge finalization behavior that still targets the public manifest API. |
 | [gate-check.test.js](../tests/relay-merge/scripts/gate-check.test.js) | Compatibility test for merge-gate behavior that historically used the facade. |
 | [reliability-report-consumer.test.js](../tests/relay-plan/scripts/reliability-report-consumer.test.js) | Plan-side consumer is explicitly deferred by the issue fence; the test pins that deferred compatibility contract. |
@@ -158,8 +158,8 @@ tests/relay-dispatch/scripts/relay-resolver.test.js
 tests/relay-dispatch/scripts/reliability-report.test.js
 skills/relay-dispatch/scripts/test-support.js
 tests/relay-dispatch/scripts/update-manifest-state.test.js
-skills/relay-intake/scripts/relay-request.js
-tests/relay-intake/scripts/request-store.test.js
+skills/relay-ready/scripts/relay-request.js
+tests/relay-ready/scripts/request-store.test.js
 tests/relay-merge/scripts/finalize-run.test.js
 tests/relay-merge/scripts/gate-check.test.js
 tests/relay-plan/scripts/reliability-report-consumer.test.js
@@ -187,7 +187,7 @@ tests/relay-dispatch/scripts/relay-manifest.test.js
 
 ## Tests
 
-- Final suite: `node --test tests/relay-intake/scripts/*.test.js tests/relay-plan/scripts/*.test.js tests/relay-dispatch/scripts/*.test.js tests/relay-review/scripts/*.test.js tests/relay-merge/scripts/*.test.js`
+- Final suite: `node --test tests/relay-ready/scripts/*.test.js tests/relay-plan/scripts/*.test.js tests/relay-dispatch/scripts/*.test.js tests/relay-review/scripts/*.test.js tests/relay-merge/scripts/*.test.js`
 - Final result: `465/465` passing.
 - New direct-import slice coverage lives in [`manifest-direct-imports.test.js`](../tests/relay-dispatch/scripts/manifest-direct-imports.test.js) plus the seven `scripts/manifest/*.test.js` files it requires.
 
