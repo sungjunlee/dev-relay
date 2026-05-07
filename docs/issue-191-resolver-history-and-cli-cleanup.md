@@ -66,7 +66,7 @@ The raw `*.js` grep includes `cli-args.test.js`. Excluding tests leaves the seve
 20
 ```
 
-`grep -rn "require.*/\\cli-args\\|require.*cli-args" skills/relay-intake skills/relay-plan skills/relay-review skills/relay-merge`
+`grep -rn "require.*/\\cli-args\\|require.*cli-args" skills/relay-ready skills/relay-plan skills/relay-review skills/relay-merge`
 
 ```text
 ```
@@ -84,4 +84,4 @@ The command produced no output and exited `1`, which is the expected zero-match 
 ## Scope Boundaries
 
 - In scope: `skills/relay-dispatch/scripts/cli-args.js`, its new test file, the seven relay-dispatch CLI entry points above, `skills/relay-dispatch/scripts/relay-resolver.js`, `docs/relay-resolver-audit-history.md`, and pinned resolver line-number refreshes in `docs/`.
-- Out of scope: cross-skill helper dedupe in `skills/relay-intake/scripts/persist-request.js`, `skills/relay-plan/scripts/probe-executor-env.js`, `skills/relay-review/scripts/invoke-reviewer-codex.js`, `skills/relay-review/scripts/invoke-reviewer-claude.js`, `skills/relay-review/scripts/review-runner.js`, and `skills/relay-merge/scripts/finalize-run.js`.
+- Out of scope: cross-skill helper dedupe in `skills/relay-ready/scripts/persist-request.js`, `skills/relay-plan/scripts/probe-executor-env.js`, `skills/relay-review/scripts/invoke-reviewer-codex.js`, `skills/relay-review/scripts/invoke-reviewer-claude.js`, `skills/relay-review/scripts/review-runner.js`, and `skills/relay-merge/scripts/finalize-run.js`.

@@ -19,7 +19,7 @@ const cliArgs = bindCliArgs(args, {
 if (!args.length || cliArgs.hasFlag(["--help", "-h"])) {
   console.log("Usage: persist-request.js --repo <path> --contract-file <path> [--json]");
   console.log("");
-  console.log("Persist a relay-intake request artifact and one-or-more leaf handoff bundles.");
+  console.log("Persist a relay-ready request artifact and one-or-more leaf handoff bundles.");
   console.log("");
   console.log("Options:");
   console.log(`  --repo <path>          ${modeLabel("--repo")} Repository root`);

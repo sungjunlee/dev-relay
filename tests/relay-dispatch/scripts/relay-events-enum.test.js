@@ -8,7 +8,7 @@ const { EVENTS } = require("../../../skills/relay-dispatch/scripts/relay-events"
 const REPO_ROOT = path.resolve(__dirname, "..", "..", "..");
 const SKILLS_DIR = path.join(REPO_ROOT, "skills");
 const OUT_OF_SCOPE_EVENT_SINKS = new Set([
-  "skills/relay-intake/scripts/relay-request.js",
+  "skills/relay-ready/scripts/relay-request.js",
   "skills/relay-dispatch/scripts/worktree-runtime.js",
 ]);
 

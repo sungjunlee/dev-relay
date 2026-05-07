@@ -33,7 +33,7 @@ $ grep -nE '"worktree",[[:space:]]*"(add|remove)"' skills/relay-dispatch/scripts
 ## Tests
 
 - `node --test tests/relay-dispatch/scripts/*.test.js` → 248 passing
-- `node --test tests/relay-intake/scripts/*.test.js` → 21 passing
+- `node --test tests/relay-ready/scripts/*.test.js` → 21 passing
 - `node --test tests/relay-plan/scripts/*.test.js` → 19 passing
 - `node --test tests/relay-review/scripts/*.test.js` → 77 passing
 - `node --test tests/relay-merge/scripts/*.test.js` → 78 passing

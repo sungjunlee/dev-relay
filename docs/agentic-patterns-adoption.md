@@ -35,7 +35,7 @@ Simon Willison의 가이드와 HN 실무 코멘트에서 추출한 패턴들을 
 | Verification loop | Rubric-based scoring + convergence/stuck detection |
 | No unreviewed code to collaborators | relay-review as mandatory merge gate |
 | Subagent role separation | orchestrator / executor / reviewer role binding |
-| Appropriate PR scope | relay-intake multi-leaf splitting |
+| Appropriate PR scope | relay-ready multi-leaf splitting |
 | Drift/churn detection | 3-round same-issue → auto-escalation |
 | Test infrastructure detection | `probe-executor-env.js` (20+ signals) |
 | Run analytics | `reliability-report.js` (tier effectiveness, divergence, factor met_rate) |

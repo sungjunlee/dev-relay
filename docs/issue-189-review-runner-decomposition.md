@@ -143,7 +143,7 @@ skills/relay-merge/scripts/gate-check.js:504:  // review.reviewer_login_required
 
 - Direct-import review-stage suite: `node --test tests/relay-review/scripts/*.test.js`
 - Result: `162/162` passing.
-- Full suite: `node --test tests/relay-intake/scripts/*.test.js tests/relay-plan/scripts/*.test.js tests/relay-dispatch/scripts/*.test.js tests/relay-review/scripts/*.test.js tests/relay-merge/scripts/*.test.js`
+- Full suite: `node --test tests/relay-ready/scripts/*.test.js tests/relay-plan/scripts/*.test.js tests/relay-dispatch/scripts/*.test.js tests/relay-review/scripts/*.test.js tests/relay-merge/scripts/*.test.js`
 - Result: `552/552` passing.
 
 ## Deferred Inventory

@@ -17,7 +17,7 @@ This doc captures where each tool naturally fits relative to relay's lifecycle (
 | Phase | gstack skill | What it does | Relay interaction |
 |-------|--------------|--------------|-------------------|
 | Pre-plan | `office-hours` | Stress-tests demand and scope before you commit to building. | Run before opening an issue. Prevents over-scoped issues that later balloon mid-relay. |
-| Pre-plan | `plan-ceo-review` | Founder-mode plan review: rethink the problem, expand scope when it makes a better product. | Run on the *issue body* or the *Done Criteria draft*. Output feeds relay-intake or relay-plan. |
+| Pre-plan | `plan-ceo-review` | Founder-mode plan review: rethink the problem, expand scope when it makes a better product. | Run on the *issue body* or the *Done Criteria draft*. Output feeds relay-ready or relay-plan. |
 | Pre-plan | `plan-eng-review` | Eng-manager-mode plan review: architecture, data flow, edge cases, test coverage. | Run on the dispatch prompt draft, especially for L/XL relay tasks. Output sharpens the rubric. |
 | Pre-plan | `plan-design-review` | Designer's eye plan review. | Run on UI-bearing issues before relay-plan. Frontend rubric factors get tighter. |
 | Inside dispatch | `qa`, `qa-only`, `browse` | Browser-driven QA for web changes. | Use **inside the dispatch worktree** if the executor needs to verify UI claims. Treat the QA report as evidence the executor cites in its Score Log; the relay reviewer still re-evaluates. |
@@ -25,7 +25,7 @@ This doc captures where each tool naturally fits relative to relay's lifecycle (
 | Pre-merge | `ship`, `land-and-deploy`, `canary`, `benchmark` | Ship + deploy + post-deploy verification. | Runs **after** relay-merge, on main. Relay does not know about deploy lanes; gstack does. |
 | Post-merge | `retro`, `learn`, `document-release` | Weekly retro, learning capture, release docs. | Use after sprint close. Promotes durable findings into project memory or `docs/`. |
 
-**Boundary**: gstack `plan-*-review` skills can produce *recommendations*; they cannot freeze Done Criteria. Only relay-intake / relay-plan freeze the anchor that the relay reviewer scores against. If gstack changes the plan after dispatch, you have to re-plan in relay (and re-persist the anchor).
+**Boundary**: gstack `plan-*-review` skills can produce *recommendations*; they cannot freeze Done Criteria. Only relay-ready / relay-plan freeze the anchor that the relay reviewer scores against. If gstack changes the plan after dispatch, you have to re-plan in relay (and re-persist the anchor).
 
 ### superpowers
 

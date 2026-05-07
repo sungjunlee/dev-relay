@@ -61,7 +61,7 @@ Walk through these questions to design a task-specific rubric. Stop when the rub
 List the evidence that defines success for this task:
 
 - Explicit AC, if present
-- Inferred Done Criteria from the user request, issue body, relay-intake handoff, and nearby repo conventions
+- Inferred Done Criteria from the user request, issue body, relay-ready handoff, and nearby repo conventions
 - Repo quality signals from available tests, lint, typecheck, CI, and scripts
 - Historical relay signals such as stuck factors, score divergence, and average rounds
 - Task risk such as trust boundaries, data loss, migrations, user-visible flows, performance, or operational failure modes
