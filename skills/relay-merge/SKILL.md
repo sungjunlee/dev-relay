@@ -4,7 +4,7 @@ argument-hint: "[run-id or PR-number]"
 description: Merge a reviewed PR, clean up worktree/branch, and close GitHub issues. Use after relay-review returns LGTM.
 compatibility: Requires gh CLI and git.
 metadata:
-  related-skills: "relay, relay-plan, relay-dispatch, relay-review, dev-backlog"
+  related-skills: "relay, relay-ready, relay-plan, relay-dispatch, relay-review, dev-backlog"
 ---
 
 # Relay Merge
