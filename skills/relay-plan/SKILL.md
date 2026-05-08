@@ -48,7 +48,7 @@ Optionally ask for a deterministic starter template:
 ```bash
 node ${CLAUDE_SKILL_DIR}/scripts/match-template.js --probe-file /tmp/probe.json --json
 ```
-The result is a SUGGESTION the planner accepts, modifies, or rejects. NEVER auto-apply. Templates live in `references/rubric-templates/`; signal field meanings stay in `references/signals.md`.
+The result is a SUGGESTION the planner accepts, modifies, or rejects. NEVER auto-apply. Templates are SCAFFOLDS; planners must fill placeholder fields. Templates live in `references/rubric-templates/`; signal field meanings stay in `references/signals.md`.
 
 ### 4. Recover Done Criteria
 

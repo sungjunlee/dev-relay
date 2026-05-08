@@ -56,6 +56,33 @@ test("matches jest-tsc-strict from synthesized probe signals", () => {
   assert.ok(result.score > 0);
 });
 
+test("matches raw project-only probe file shape", () => {
+  const probeFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "relay-plan-raw-probe-")), "probe.json");
+  fs.writeFileSync(probeFile, JSON.stringify({
+    executor: null,
+    repo: "/tmp/example",
+    agent_tools_raw: null,
+    agent_probe_error: null,
+    test_infra: [{ name: "jest", source: "package.json" }],
+    project_tools: {
+      frameworks: [
+        { name: "typescript", source: "package.json" },
+        { name: "eslint", source: "package.json" },
+      ],
+      scripts: [
+        { name: "npm run test", command: "jest", source: "package.json" },
+        { name: "npm run typecheck", command: "tsc --noEmit", source: "package.json" },
+      ],
+      ci: [],
+    },
+  }), "utf-8");
+
+  const result = parseMatcher(["--probe-file", probeFile, "--json"]);
+
+  assert.equal(result.matched_template, "jest-tsc-strict.yaml");
+  assert.ok(result.score > 0);
+});
+
 test("matches pytest-mypy-strict from synthesized probe signals", () => {
   const result = bestMatch({
     test_infra: ["pytest"],
@@ -85,13 +112,14 @@ test("matches go-test from empty probe when repo contains go.mod", () => {
 
 test("returns null when no template has a positive score", () => {
   const result = bestMatch({
-    test_infra: ["vitest"],
-    type_check: ["flow"],
-    lint_format: ["biome"],
+    test_infra: ["junit"],
+    type_check: [],
+    lint_format: [],
   }, loadCatalog());
 
   assert.equal(result.matched_template, null);
   assert.equal(result.score, 0);
+  assert.equal(result.reason, "no clear match");
 });
 
 test("uses _index.json order to break tied scores deterministically", () => {

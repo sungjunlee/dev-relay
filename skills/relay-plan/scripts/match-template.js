@@ -7,6 +7,27 @@ const {
 } = require("../../relay-dispatch/scripts/manifest/rubric");
 
 const SIGNAL_KEYS = ["test_infra", "type_check", "lint_format"];
+const TEST_RUNNERS = new Set([
+  "jest",
+  "vitest",
+  "mocha",
+  "playwright",
+  "@playwright/test",
+  "cypress",
+  "pytest",
+]);
+const LINT_FORMAT_TOOLS = new Set([
+  "eslint",
+  "prettier",
+  "ruff",
+  "black",
+  "isort",
+  "pylint",
+]);
+const TYPE_CHECK_TOOLS = new Set([
+  "typescript",
+  "mypy",
+]);
 const CATALOG_DIR = path.join(__dirname, "..", "references", "rubric-templates");
 const CATALOG_PATH = path.join(CATALOG_DIR, "_index.json");
 
@@ -89,6 +110,10 @@ function loadCatalog(catalogPath = CATALOG_PATH) {
 }
 
 function normalizeSignalValues(values) {
+  if (typeof values === "string") {
+    if (values === "no quality infra detected") return [];
+    return values.split(",").map((value) => value.trim()).filter(Boolean);
+  }
   if (!Array.isArray(values)) {
     return [];
   }
@@ -101,10 +126,69 @@ function normalizeSignalValues(values) {
     .filter(Boolean);
 }
 
-function scoreTemplate(probe, entry, repoDir) {
+function unique(values) {
+  return [...new Set(values.filter(Boolean))];
+}
+
+function normalizeScriptEntries(scripts) {
+  if (!Array.isArray(scripts)) return [];
+  return scripts.filter((entry) => entry && typeof entry === "object");
+}
+
+function addScriptToolSignals(signals, scripts) {
+  for (const script of normalizeScriptEntries(scripts)) {
+    const command = typeof script.command === "string" ? script.command : "";
+    const name = typeof script.name === "string" ? script.name : "";
+    const searchable = `${name}\n${command}`;
+
+    for (const runner of TEST_RUNNERS) {
+      if (new RegExp(`(^|\\b)${runner.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(\\b|$)`).test(searchable)) {
+        signals.test_infra.push(runner);
+      }
+    }
+    for (const tool of LINT_FORMAT_TOOLS) {
+      if (new RegExp(`(^|\\b)${tool.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(\\b|$)`).test(searchable)) {
+        signals.lint_format.push(tool);
+      }
+    }
+    if (/tsc\s+--noEmit/.test(searchable)) {
+      signals.type_check.push("typescript", "tsc --noEmit");
+    }
+    if (/\bmypy\b/.test(searchable)) {
+      signals.type_check.push("mypy");
+    }
+  }
+}
+
+function normalizeProbeSignals(probe) {
+  const signals = {
+    test_infra: [],
+    type_check: [],
+    lint_format: [],
+  };
+
+  for (const key of SIGNAL_KEYS) {
+    signals[key].push(...normalizeSignalValues(probe?.[key]));
+    signals[key].push(...normalizeSignalValues(probe?.probe_signal?.[key]));
+  }
+
+  const frameworkNames = normalizeSignalValues(probe?.project_tools?.frameworks);
+  signals.test_infra.push(...frameworkNames.filter((name) => TEST_RUNNERS.has(name)));
+  signals.lint_format.push(...frameworkNames.filter((name) => LINT_FORMAT_TOOLS.has(name)));
+  signals.type_check.push(...frameworkNames.filter((name) => TYPE_CHECK_TOOLS.has(name)));
+  addScriptToolSignals(signals, probe?.project_tools?.scripts);
+
+  return {
+    test_infra: unique(signals.test_infra),
+    type_check: unique(signals.type_check),
+    lint_format: unique(signals.lint_format),
+  };
+}
+
+function scoreTemplate(probeSignals, entry, repoDir) {
   let score = 0;
   for (const key of SIGNAL_KEYS) {
-    const probeValues = new Set(normalizeSignalValues(probe?.[key]));
+    const probeValues = new Set(probeSignals[key] || []);
     const expectedValues = normalizeSignalValues(entry?.signals?.[key]);
     for (const expected of expectedValues) {
       if (probeValues.has(expected)) {
@@ -161,8 +245,9 @@ function hasGoFiles(repoDir, maxDepth = 3) {
 }
 
 function bestMatch(probe, catalog, repoDir = null) {
+  const probeSignals = normalizeProbeSignals(probe);
   const allMatches = catalog.map((entry) => {
-    const score = scoreTemplate(probe, entry, repoDir);
+    const score = scoreTemplate(probeSignals, entry, repoDir);
     return {
       file: entry.file,
       score,
@@ -181,7 +266,7 @@ function bestMatch(probe, catalog, repoDir = null) {
       matched_template: null,
       score: 0,
       all_matches: allMatches,
-      reason: "no template scored above 0",
+      reason: "no clear match",
     };
   }
 
@@ -223,6 +308,7 @@ module.exports = {
   parseArgs,
   readProbe,
   loadCatalog,
+  normalizeProbeSignals,
   scoreTemplate,
   bestMatch,
   hasGoFiles,
