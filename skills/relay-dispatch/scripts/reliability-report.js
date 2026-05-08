@@ -3,6 +3,8 @@
 const fs = require("fs");
 const path = require("path");
 const { STATES } = require("./manifest/lifecycle");
+const { getRunDir, getSidecarOutputDir } = require("./manifest/paths");
+const { readTextFileWithoutFollowingSymlinks } = require("./manifest/rubric");
 const { listManifestRecords } = require("./manifest/store");
 const { modeLabel, readArg, schemaHasFlag } = require("./cli-args");
 const { EVENTS, readAllRunEvents } = require("./relay-events");
@@ -563,6 +565,187 @@ function buildGuidancePackInsights(manifests, events) {
   };
 }
 
+function normalizeBucketValue(value) {
+  return typeof value === "string" && value.trim() ? value.trim() : "unknown";
+}
+
+function sidecarEventKey(event) {
+  const runId = normalizeBucketValue(event?.run_id);
+  const sidecarId = normalizeBucketValue(event?.sidecar_id);
+  return `${runId}\u0000${sidecarId}`;
+}
+
+function incrementInvocationBucket(buckets, key) {
+  if (!buckets.has(key)) {
+    buckets.set(key, { invocations: 0, successes: 0, failures: 0 });
+  }
+  buckets.get(key).invocations += 1;
+}
+
+function incrementOutcomeBucket(buckets, key, outcome) {
+  if (!buckets.has(key)) {
+    buckets.set(key, { invocations: 0, successes: 0, failures: 0 });
+  }
+  buckets.get(key)[outcome] += 1;
+}
+
+function sortSummaryObject(entries) {
+  return Object.fromEntries([...entries].sort(([left], [right]) => left.localeCompare(right)));
+}
+
+function buildSidecarOutcomeBuckets(starts, results, failures, fieldName) {
+  const buckets = new Map();
+  const startBucketsBySidecar = new Map();
+
+  for (const event of starts) {
+    const bucketKey = normalizeBucketValue(event?.[fieldName]);
+    startBucketsBySidecar.set(sidecarEventKey(event), bucketKey);
+    incrementInvocationBucket(buckets, bucketKey);
+  }
+
+  for (const event of results) {
+    const bucketKey = startBucketsBySidecar.get(sidecarEventKey(event)) || normalizeBucketValue(event?.[fieldName]);
+    incrementOutcomeBucket(buckets, bucketKey, "successes");
+  }
+
+  for (const event of failures) {
+    const bucketKey = startBucketsBySidecar.get(sidecarEventKey(event)) || normalizeBucketValue(event?.[fieldName]);
+    incrementOutcomeBucket(buckets, bucketKey, "failures");
+  }
+
+  return sortSummaryObject(buckets.entries());
+}
+
+function buildSidecarCountBuckets(starts, fieldName) {
+  const buckets = new Map();
+  for (const event of starts) {
+    const bucketKey = normalizeBucketValue(event?.[fieldName]);
+    if (!buckets.has(bucketKey)) {
+      buckets.set(bucketKey, { invocations: 0 });
+    }
+    buckets.get(bucketKey).invocations += 1;
+  }
+  return sortSummaryObject(buckets.entries());
+}
+
+function readReviewIssueTitles(runDir) {
+  let entries;
+  try {
+    entries = fs.readdirSync(runDir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+
+  const titles = [];
+  for (const entry of entries) {
+    if (!entry.isFile() || !/^review-round-\d+-verdict\.json$/.test(entry.name)) continue;
+    try {
+      const verdictText = readTextFileWithoutFollowingSymlinks(path.join(runDir, entry.name));
+      const verdict = JSON.parse(verdictText);
+      if (!Array.isArray(verdict?.issues) || verdict.issues.length === 0) continue;
+      for (const issue of verdict.issues) {
+        const title = typeof issue?.title === "string" ? issue.title.trim() : "";
+        if (title) titles.push(title);
+      }
+    } catch {
+      // Best-effort analytics must not block the rest of the report.
+    }
+  }
+  return titles;
+}
+
+function readSidecarOutput(repoRoot, runId, sidecarId) {
+  const outputPath = path.join(getSidecarOutputDir(repoRoot, runId, sidecarId), "output.md");
+  const output = readTextFileWithoutFollowingSymlinks(outputPath);
+  if (!output || /\u0000/.test(output)) {
+    return null;
+  }
+  return output;
+}
+
+function computeSidecarPredictionRate({ events, repoRoot }) {
+  const resultEventsByRun = new Map();
+  for (const event of events) {
+    if (event?.event !== EVENTS.SIDECAR_RESULT || !event.run_id || !event.sidecar_id) continue;
+    if (!resultEventsByRun.has(event.run_id)) {
+      resultEventsByRun.set(event.run_id, []);
+    }
+    resultEventsByRun.get(event.run_id).push(event);
+  }
+
+  let predicted = 0;
+  let missed = 0;
+  let runsExamined = 0;
+
+  for (const [runId, resultEvents] of resultEventsByRun.entries()) {
+    let runDir;
+    try {
+      runDir = getRunDir(repoRoot, runId);
+    } catch {
+      continue;
+    }
+
+    const issueTitles = readReviewIssueTitles(runDir);
+    if (issueTitles.length === 0) continue;
+
+    const outputTexts = [];
+    for (const event of resultEvents) {
+      try {
+        const outputText = readSidecarOutput(repoRoot, runId, event.sidecar_id);
+        if (outputText !== null) {
+          outputTexts.push(outputText.toLowerCase());
+        }
+      } catch {
+        // Missing, symlinked, directory, or otherwise unreadable output is skipped.
+      }
+    }
+    if (outputTexts.length === 0) continue;
+
+    runsExamined += 1;
+    const combinedOutput = outputTexts.join("\n");
+    for (const title of issueTitles) {
+      if (combinedOutput.includes(title.toLowerCase())) {
+        predicted += 1;
+      } else {
+        missed += 1;
+      }
+    }
+  }
+
+  return {
+    predicted_findings_match_rate: ratio(predicted, predicted + missed),
+    predicted_findings_runs_examined: runsExamined,
+  };
+}
+
+function buildSidecarInsights({ events, repoRoot }) {
+  const starts = events.filter((event) => event.event === EVENTS.SIDECAR_START);
+  const results = events.filter((event) => event.event === EVENTS.SIDECAR_RESULT);
+  const failures = events.filter((event) => event.event === EVENTS.SIDECAR_FAILED);
+  const prediction = computeSidecarPredictionRate({ events, repoRoot });
+
+  return {
+    total_invocations: starts.length,
+    by_kind: buildSidecarOutcomeBuckets(starts, results, failures, "kind"),
+    by_executor: buildSidecarOutcomeBuckets(starts, results, failures, "executor"),
+    by_model: buildSidecarCountBuckets(starts, "model"),
+    by_provider: buildSidecarCountBuckets(starts, "provider"),
+    failure_rate: starts.length > 0 ? ratio(failures.length, starts.length) : null,
+    predicted_findings_match_rate: prediction.predicted_findings_match_rate,
+    predicted_findings_runs_examined: prediction.predicted_findings_runs_examined,
+  };
+}
+
+function formatSidecarCountSummary(buckets) {
+  return Object.entries(buckets || {})
+    .sort(([leftKey, left], [rightKey, right]) => (
+      (right.invocations || 0) - (left.invocations || 0)
+      || leftKey.localeCompare(rightKey)
+    ))
+    .map(([key, summary]) => `${key}=${summary.invocations || 0}`)
+    .join(", ");
+}
+
 function resolveManifestRubricPath(manifest) {
   const rubricPath = manifest?.data?.anchor?.rubric_path;
   const runId = manifest?.data?.run_id;
@@ -723,7 +906,7 @@ function buildModelPerPhase(events) {
   );
 }
 
-function buildReport({ repoRoot, staleHours, now, manifests, events }) {
+function buildReport({ repoRoot, staleHours, now, manifests, events, includeSidecarInsights = false }) {
   const resumeStarts = events.filter((event) => (
     event.event === EVENTS.DISPATCH_START && event.state_from === STATES.CHANGES_REQUESTED
   ));
@@ -774,7 +957,7 @@ function buildReport({ repoRoot, staleHours, now, manifests, events }) {
       .map((event) => event.run_id)
   );
 
-  return {
+  const report = {
     repoRoot,
     staleHours,
     bootstrap_exempt_runs: manifests.filter(({ data }) => data?.bootstrap_exempt?.enabled === true).length,
@@ -802,6 +985,12 @@ function buildReport({ repoRoot, staleHours, now, manifests, events }) {
     qualitative_signals: buildQualitativeSignals(manifests, events),
     guidance_pack_insights: buildGuidancePackInsights(manifests, events),
   };
+
+  if (includeSidecarInsights) {
+    report.sidecar_insights = buildSidecarInsights({ events, repoRoot });
+  }
+
+  return report;
 }
 
 function buildActorReports({ repoRoot, staleHours, now, manifests, events }) {
@@ -980,7 +1169,7 @@ function main() {
   const now = Date.now();
   const manifests = listManifestRecords(repoRoot);
   const events = readAllRunEvents(repoRoot);
-  const report = buildReport({ repoRoot, staleHours, now, manifests, events });
+  const report = buildReport({ repoRoot, staleHours, now, manifests, events, includeSidecarInsights: true });
 
   if (hasCliFlag("--by-actor")) {
     report.by_actor = buildActorReports({ repoRoot, staleHours, now, manifests, events });
@@ -1037,6 +1226,19 @@ function main() {
         `top_stuck_factor=${topStuckFactor} ` +
         `divergence_avg_delta=${summary.executor_reviewer_divergence?.avg_delta ?? "n/a"}`
       );
+    }
+  }
+  if (report.sidecar_insights?.total_invocations === 0) {
+    console.log("  sidecar_insights: no sidecar runs available");
+  } else {
+    console.log("  sidecar_insights:");
+    console.log(`    total_invocations: ${report.sidecar_insights.total_invocations}`);
+    console.log(`    failure_rate: ${report.sidecar_insights.failure_rate ?? "n/a"}`);
+    console.log(`    by_kind: ${formatSidecarCountSummary(report.sidecar_insights.by_kind) || "n/a"}`);
+    console.log(`    by_executor: ${formatSidecarCountSummary(report.sidecar_insights.by_executor) || "n/a"}`);
+    if (report.sidecar_insights.predicted_findings_match_rate !== null) {
+      console.log(`    predicted_findings_match_rate: ${report.sidecar_insights.predicted_findings_match_rate}`);
+      console.log(`    predicted_findings_runs_examined: ${report.sidecar_insights.predicted_findings_runs_examined}`);
     }
   }
   if (hasCliFlag("--by-actor")) {

@@ -185,6 +185,65 @@ function setManifestDispatch(repoRoot, runId, dispatch) {
   writeManifest(manifestPath, manifest);
 }
 
+function appendSidecarStart(repoRoot, runId, {
+  sidecarId,
+  kind = "context-recap",
+  executor = "codex",
+  model = undefined,
+  provider = undefined,
+} = {}) {
+  const event = {
+    event: "sidecar_start",
+    sidecar_id: sidecarId,
+    kind,
+    executor,
+  };
+  if (model !== undefined) event.model = model;
+  if (provider !== undefined) event.provider = provider;
+  appendRunEvent(repoRoot, runId, event);
+}
+
+function appendSidecarResult(repoRoot, runId, {
+  sidecarId,
+  kind = "context-recap",
+} = {}) {
+  appendRunEvent(repoRoot, runId, {
+    event: "sidecar_result",
+    sidecar_id: sidecarId,
+    kind,
+    output_path: `sidecars/${sidecarId}/output.md`,
+    trust_level: "advisory",
+  });
+}
+
+function appendSidecarFailed(repoRoot, runId, {
+  sidecarId,
+  kind = "context-recap",
+} = {}) {
+  appendRunEvent(repoRoot, runId, {
+    event: "sidecar_failed",
+    sidecar_id: sidecarId,
+    kind,
+    failure_reason: "sidecar exited non-zero",
+  });
+}
+
+function writeSidecarOutput(repoRoot, runId, sidecarId, content) {
+  const { runDir } = ensureRunLayout(repoRoot, runId);
+  const outputDir = path.join(runDir, "sidecars", sidecarId);
+  fs.mkdirSync(outputDir, { recursive: true });
+  fs.writeFileSync(path.join(outputDir, "output.md"), content, "utf-8");
+}
+
+function writeReviewVerdict(repoRoot, runId, round, issues) {
+  const { runDir } = ensureRunLayout(repoRoot, runId);
+  fs.writeFileSync(
+    path.join(runDir, `review-round-${round}-verdict.json`),
+    JSON.stringify({ verdict: "changes_requested", issues }, null, 2),
+    "utf-8"
+  );
+}
+
 test("reliability-report derives the core scorecard from manifests and events", () => {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-report-"));
   process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
@@ -718,6 +777,195 @@ test("reliability-report renders no guidance data available for empty and legacy
     packs: {},
   });
   assert.match(legacyText, /guidance_pack_insights: no guidance data available/);
+});
+
+test("reliability-report emits canonical empty sidecar insights for legacy repos", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-report-sidecar-empty-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  initGitRepo(repoRoot);
+
+  const report = JSON.parse(execFileSync("node", [SCRIPT, "--repo", repoRoot, "--json"], { encoding: "utf-8" }));
+  const text = execFileSync("node", [SCRIPT, "--repo", repoRoot], { encoding: "utf-8" });
+
+  assert.deepEqual(report.sidecar_insights, {
+    total_invocations: 0,
+    by_kind: {},
+    by_executor: {},
+    by_model: {},
+    by_provider: {},
+    failure_rate: null,
+    predicted_findings_match_rate: null,
+    predicted_findings_runs_examined: 0,
+  });
+  assert.match(text, /sidecar_insights: no sidecar runs available/);
+});
+
+test("reliability-report counts sidecar usage and outcomes by kind and executor", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-report-sidecar-counts-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  const recentTs = new Date(Date.now() - 1 * 60 * 60 * 1000).toISOString();
+  const runA = createRunId({ branch: "run-sidecar-a", timestamp: new Date("2026-04-12T02:07:00.000Z") });
+  const runB = createRunId({ branch: "run-sidecar-b", timestamp: new Date("2026-04-12T02:07:01.000Z") });
+
+  writeRun(repoRoot, { runId: runA, state: STATES.REVIEW_PENDING, rounds: 1, updatedAt: recentTs });
+  writeRun(repoRoot, { runId: runB, state: STATES.REVIEW_PENDING, rounds: 1, updatedAt: recentTs });
+
+  appendSidecarStart(repoRoot, runA, { sidecarId: "sc-1", kind: "context-recap", executor: "codex", model: "gpt-5", provider: "openai" });
+  appendSidecarResult(repoRoot, runA, { sidecarId: "sc-1", kind: "context-recap" });
+  appendSidecarStart(repoRoot, runA, { sidecarId: "sc-2", kind: "context-recap", executor: "codex", model: "gpt-5", provider: "openai" });
+  appendSidecarFailed(repoRoot, runA, { sidecarId: "sc-2", kind: "context-recap" });
+  appendSidecarStart(repoRoot, runB, { sidecarId: "sc-3", kind: "review-hints", executor: "claude", model: "sonnet", provider: "anthropic" });
+  appendSidecarResult(repoRoot, runB, { sidecarId: "sc-3", kind: "review-hints" });
+
+  const report = JSON.parse(execFileSync("node", [SCRIPT, "--repo", repoRoot, "--json"], { encoding: "utf-8" }));
+  const text = execFileSync("node", [SCRIPT, "--repo", repoRoot], { encoding: "utf-8" });
+
+  assert.equal(report.sidecar_insights.total_invocations, 3);
+  assert.deepEqual(report.sidecar_insights.by_kind, {
+    "context-recap": { invocations: 2, successes: 1, failures: 1 },
+    "review-hints": { invocations: 1, successes: 1, failures: 0 },
+  });
+  assert.deepEqual(report.sidecar_insights.by_executor, {
+    claude: { invocations: 1, successes: 1, failures: 0 },
+    codex: { invocations: 2, successes: 1, failures: 1 },
+  });
+  assert.deepEqual(report.sidecar_insights.by_model, {
+    "gpt-5": { invocations: 2 },
+    sonnet: { invocations: 1 },
+  });
+  assert.deepEqual(report.sidecar_insights.by_provider, {
+    anthropic: { invocations: 1 },
+    openai: { invocations: 2 },
+  });
+  assert.equal(report.sidecar_insights.failure_rate, 0.3333);
+  assert.match(text, /sidecar_insights:/);
+  assert.match(text, /total_invocations: 3/);
+  assert.match(text, /by_kind: context-recap=2/);
+  assert.doesNotMatch(text, /predicted_findings_match_rate:/);
+});
+
+test("reliability-report keeps sidecar insights only on the top-level report", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-report-sidecar-top-level-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  const recentTs = new Date(Date.now() - 1 * 60 * 60 * 1000).toISOString();
+  const runId = createRunId({ branch: "run-sidecar-top-level", timestamp: new Date("2026-04-12T02:07:30.000Z") });
+
+  writeRun(repoRoot, { runId, state: STATES.REVIEW_PENDING, rounds: 1, updatedAt: recentTs });
+  appendSidecarStart(repoRoot, runId, { sidecarId: "sc-top", kind: "context-recap", executor: "codex" });
+
+  const report = JSON.parse(execFileSync("node", [
+    SCRIPT,
+    "--repo",
+    repoRoot,
+    "--json",
+    "--by-actor",
+    "--by-role",
+    "--by-dispatch",
+    "--by-acting-reviewer",
+  ], { encoding: "utf-8" }));
+
+  assert.equal(report.sidecar_insights.total_invocations, 1);
+  for (const scopedReport of Object.values(report.by_actor)) {
+    assert.equal("sidecar_insights" in scopedReport, false);
+  }
+  for (const roleReport of Object.values(report.by_role)) {
+    for (const scopedReport of Object.values(roleReport)) {
+      assert.equal("sidecar_insights" in scopedReport, false);
+    }
+  }
+  for (const dimensionReport of Object.values(report.by_dispatch)) {
+    for (const scopedReport of Object.values(dimensionReport)) {
+      assert.equal("sidecar_insights" in scopedReport, false);
+    }
+  }
+});
+
+test("reliability-report buckets sidecar starts without model or provider as unknown", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-report-sidecar-unknown-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  const recentTs = new Date(Date.now() - 1 * 60 * 60 * 1000).toISOString();
+  const runId = createRunId({ branch: "run-sidecar-unknown", timestamp: new Date("2026-04-12T02:08:00.000Z") });
+
+  writeRun(repoRoot, { runId, state: STATES.REVIEW_PENDING, rounds: 1, updatedAt: recentTs });
+  appendSidecarStart(repoRoot, runId, {
+    sidecarId: "sc-unknown",
+    kind: "context-recap",
+    executor: "codex",
+    model: undefined,
+    provider: undefined,
+  });
+
+  const report = JSON.parse(execFileSync("node", [SCRIPT, "--repo", repoRoot, "--json"], { encoding: "utf-8" }));
+
+  assert.deepEqual(report.sidecar_insights.by_model, { unknown: { invocations: 1 } });
+  assert.deepEqual(report.sidecar_insights.by_provider, { unknown: { invocations: 1 } });
+});
+
+test("reliability-report estimates sidecar prediction matches from output and review verdict titles", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-report-sidecar-prediction-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  const recentTs = new Date(Date.now() - 1 * 60 * 60 * 1000).toISOString();
+  const runId = createRunId({ branch: "run-sidecar-prediction", timestamp: new Date("2026-04-12T02:09:00.000Z") });
+
+  writeRun(repoRoot, { runId, state: STATES.CHANGES_REQUESTED, rounds: 1, updatedAt: recentTs });
+  appendSidecarStart(repoRoot, runId, { sidecarId: "sc-predict", kind: "context-recap", executor: "codex" });
+  appendSidecarResult(repoRoot, runId, { sidecarId: "sc-predict", kind: "context-recap" });
+  writeSidecarOutput(repoRoot, runId, "sc-predict", "The recap warned about missing retry budget coverage before review.");
+  writeReviewVerdict(repoRoot, runId, 1, [
+    { title: "Missing retry budget coverage", body: "Add tests.", file: "test.js", line: 12, category: "contract", severity: "high" },
+    { title: "Document timeout behavior", body: "Document it.", file: "README.md", line: 4, category: "contract", severity: "medium" },
+  ]);
+
+  const report = JSON.parse(execFileSync("node", [SCRIPT, "--repo", repoRoot, "--json"], { encoding: "utf-8" }));
+
+  assert.equal(report.sidecar_insights.predicted_findings_runs_examined, 1);
+  assert.ok(report.sidecar_insights.predicted_findings_match_rate >= 0.5);
+});
+
+test("reliability-report keeps sidecar prediction null when results have no review verdicts", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-report-sidecar-prediction-null-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  const recentTs = new Date(Date.now() - 1 * 60 * 60 * 1000).toISOString();
+  const runId = createRunId({ branch: "run-sidecar-prediction-null", timestamp: new Date("2026-04-12T02:10:00.000Z") });
+
+  writeRun(repoRoot, { runId, state: STATES.REVIEW_PENDING, rounds: 1, updatedAt: recentTs });
+  appendSidecarStart(repoRoot, runId, { sidecarId: "sc-result", kind: "context-recap", executor: "codex" });
+  appendSidecarResult(repoRoot, runId, { sidecarId: "sc-result", kind: "context-recap" });
+  writeSidecarOutput(repoRoot, runId, "sc-result", "This output has no verdict to compare against.");
+
+  const report = JSON.parse(execFileSync("node", [SCRIPT, "--repo", repoRoot, "--json"], { encoding: "utf-8" }));
+
+  assert.equal(report.sidecar_insights.predicted_findings_match_rate, null);
+  assert.equal(report.sidecar_insights.predicted_findings_runs_examined, 0);
+});
+
+test("reliability-report skips unreadable or corrupted sidecar outputs during prediction", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-report-sidecar-corrupt-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  const recentTs = new Date(Date.now() - 1 * 60 * 60 * 1000).toISOString();
+  const runDirOutput = createRunId({ branch: "run-sidecar-dir-output", timestamp: new Date("2026-04-12T02:11:00.000Z") });
+  const runNullOutput = createRunId({ branch: "run-sidecar-null-output", timestamp: new Date("2026-04-12T02:11:01.000Z") });
+
+  writeRun(repoRoot, { runId: runDirOutput, state: STATES.CHANGES_REQUESTED, rounds: 1, updatedAt: recentTs });
+  appendSidecarStart(repoRoot, runDirOutput, { sidecarId: "sc-dir", kind: "context-recap", executor: "codex" });
+  appendSidecarResult(repoRoot, runDirOutput, { sidecarId: "sc-dir", kind: "context-recap" });
+  fs.mkdirSync(path.join(ensureRunLayout(repoRoot, runDirOutput).runDir, "sidecars", "sc-dir", "output.md"), { recursive: true });
+  writeReviewVerdict(repoRoot, runDirOutput, 1, [
+    { title: "Directory output skipped", body: "Skip.", file: "x.js", line: 1, category: "contract", severity: "high" },
+  ]);
+
+  writeRun(repoRoot, { runId: runNullOutput, state: STATES.CHANGES_REQUESTED, rounds: 1, updatedAt: recentTs });
+  appendSidecarStart(repoRoot, runNullOutput, { sidecarId: "sc-null", kind: "context-recap", executor: "codex" });
+  appendSidecarResult(repoRoot, runNullOutput, { sidecarId: "sc-null", kind: "context-recap" });
+  writeSidecarOutput(repoRoot, runNullOutput, "sc-null", "\u0000\u0000\u0000");
+  writeReviewVerdict(repoRoot, runNullOutput, 1, [
+    { title: "Null output skipped", body: "Skip.", file: "x.js", line: 1, category: "contract", severity: "high" },
+  ]);
+
+  const report = JSON.parse(execFileSync("node", [SCRIPT, "--repo", repoRoot, "--json"], { encoding: "utf-8" }));
+
+  assert.equal(report.sidecar_insights.predicted_findings_match_rate, null);
+  assert.equal(report.sidecar_insights.predicted_findings_runs_examined, 0);
 });
 
 test("reliability-report keeps qualitative_signals null below the minimum readable-rubric threshold", () => {
