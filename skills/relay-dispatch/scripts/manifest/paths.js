@@ -220,6 +220,38 @@ function getEventsPath(repoRoot, runId) {
   return path.join(getRunDir(repoRoot, runId), "events.jsonl");
 }
 
+function validateSidecarId(sidecarId) {
+  const normalizedSidecarId = typeof sidecarId === "string" ? sidecarId.trim() : "";
+  if (!normalizedSidecarId) {
+    throw new Error(`sidecar_id must be a non-empty path segment, got: ${JSON.stringify(sidecarId)}`);
+  }
+  if (normalizedSidecarId === "." || normalizedSidecarId === "..") {
+    throw new Error(`sidecar_id may not be "." or ".." (got ${JSON.stringify(normalizedSidecarId)}).`);
+  }
+  if (normalizedSidecarId.includes("/") || normalizedSidecarId.includes("\\")) {
+    throw new Error(`sidecar_id must be a single path segment (got ${JSON.stringify(normalizedSidecarId)}).`);
+  }
+  if (
+    path.basename(normalizedSidecarId) !== normalizedSidecarId
+    || path.win32.basename(normalizedSidecarId) !== normalizedSidecarId
+  ) {
+    throw new Error(`sidecar_id must resolve to a single path segment (got ${JSON.stringify(normalizedSidecarId)}).`);
+  }
+  return normalizedSidecarId;
+}
+
+function getSidecarsDir(repoRoot, runId) {
+  return path.join(getRunDir(repoRoot, runId), "sidecars");
+}
+
+function getSidecarsIndexPath(repoRoot, runId) {
+  return path.join(getSidecarsDir(repoRoot, runId), "index.json");
+}
+
+function getSidecarOutputDir(repoRoot, runId, sidecarId) {
+  return path.join(getSidecarsDir(repoRoot, runId), validateSidecarId(sidecarId));
+}
+
 function listManifestPaths(repoRoot) {
   const runsDir = getRunsDir(repoRoot);
   if (!fs.existsSync(runsDir)) return [];
@@ -449,6 +481,9 @@ module.exports = {
   getRunDir,
   getRunsBase,
   getRunsDir,
+  getSidecarOutputDir,
+  getSidecarsDir,
+  getSidecarsIndexPath,
   getWorktreeGitCommonDir,
   inferIssueNumber,
   isPathContainedWithin,
