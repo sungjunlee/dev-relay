@@ -64,6 +64,26 @@ function extractChangedSourcePaths(diffText) {
   return [...paths];
 }
 
+function basename(filePath) {
+  return String(filePath || "").replace(/\\/g, "/").split("/").filter(Boolean).at(-1) || "";
+}
+
+function findMatchedPathReferences(changedPaths, docText) {
+  const text = String(docText || "");
+  const matched = new Set();
+  for (const changedPath of changedPaths) {
+    if (text.includes(changedPath)) {
+      matched.add(changedPath);
+      continue;
+    }
+    const base = basename(changedPath);
+    if (base && base !== changedPath && text.includes(base)) {
+      matched.add(base);
+    }
+  }
+  return [...matched];
+}
+
 function extractChangedSymbols(diffText) {
   const symbols = new Set();
   const symbolPattern = /^[+-]\s*(?:export\s+)?(?:async\s+)?(?:function|const|class|let|var)\s+([A-Za-z_$][\w$]*)/;
@@ -89,7 +109,7 @@ function detectStaleDocs(runContext) {
 
   for (const [docPath, docText] of Object.entries(getDocCandidates(runContext)).sort(([left], [right]) => left.localeCompare(right))) {
     const text = String(docText || "");
-    const matchedPaths = changedPaths.filter((changedPath) => text.includes(changedPath));
+    const matchedPaths = findMatchedPathReferences(changedPaths, text);
     const matchedSymbols = changedSymbols.filter((symbol) => text.includes(symbol));
     if (matchedPaths.length === 0 && matchedSymbols.length === 0) continue;
     staleDocs.push({ docPath, matchedPaths, matchedSymbols });

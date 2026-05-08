@@ -271,7 +271,7 @@ test("--kind docs-sync --executor none writes deterministic output and records r
   fs.writeFileSync(path.join(fixture.worktreePath, "README.md"), [
     "# Fixture",
     "",
-    "The relay foo script lives at skills/relay-foo/scripts/baz.js.",
+    "The relay foo script lives in baz.js.",
     "",
   ].join("\n"), "utf-8");
   fs.writeFileSync(path.join(runDir, "review-round-1-diff.patch"), [
@@ -300,7 +300,7 @@ test("--kind docs-sync --executor none writes deterministic output and records r
   const output = fs.readFileSync(readOutputPath(fixture, sidecarId), "utf-8");
   assert.match(output, /^# Docs sync report: /);
   assert.match(output, /README\.md/);
-  assert.match(output, /skills\/relay-foo\/scripts\/baz\.js/);
+  assert.match(output, /baz\.js/);
   for (const heading of DOCS_SYNC_HEADINGS) {
     assert.match(output, new RegExp(`^${heading.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "m"));
   }

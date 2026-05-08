@@ -68,7 +68,7 @@ test("buildRecap includes all required headings on minimal input", () => {
   assert.match(section(recap, "## Optional patch hints"), /No patch hints available\./);
 });
 
-test("buildRecap lists docs that mention changed source paths", () => {
+test("buildRecap lists docs that mention changed source path basenames", () => {
   const recap = buildRecap({
     runContext: makeRunContext({
       diff: [
@@ -77,14 +77,14 @@ test("buildRecap lists docs that mention changed source paths", () => {
         "+function changedBaz() {}",
       ].join("\n"),
       docCandidates: {
-        "README.md": "Use skills/relay-foo/scripts/baz.js for relay foo behavior.\n",
+        "README.md": "Use baz.js for relay foo behavior.\n",
       },
     }),
   });
 
   assertRecapShape(recap);
   assert.match(section(recap, "## Likely stale docs"), /README\.md/);
-  assert.match(section(recap, "## Likely stale docs"), /skills\/relay-foo\/scripts\/baz\.js/);
+  assert.match(section(recap, "## Likely stale docs"), /baz\.js/);
 });
 
 test("buildRecap reports no stale docs when docs do not overlap the diff", () => {
