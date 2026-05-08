@@ -4,6 +4,7 @@ const path = require("path");
 const {
   ensureRunLayout,
   getRunDir,
+  getSidecarOutputDir,
   getSidecarsDir,
   getSidecarsIndexPath,
   isPathContainedWithin,
@@ -35,7 +36,7 @@ function normalizeNullableString(value, field) {
   return value;
 }
 
-function validateOutputPath(repoRoot, runId, outputPath) {
+function validateOutputPath(repoRoot, runId, sidecarId, outputPath) {
   const normalizedOutputPath = requireNonEmptyString(outputPath, "output_path");
   const segments = normalizedOutputPath.split(/[\\/]+/).filter(Boolean);
   if (path.isAbsolute(normalizedOutputPath) || segments.includes("..")) {
@@ -46,6 +47,13 @@ function validateOutputPath(repoRoot, runId, outputPath) {
   const resolvedOutputPath = path.resolve(runDir, normalizedOutputPath);
   if (!isPathContainedWithin(runDir, resolvedOutputPath)) {
     throw new Error(`output_path must resolve inside the run directory: ${JSON.stringify(outputPath)}`);
+  }
+
+  const sidecarOutputDir = getSidecarOutputDir(repoRoot, runId, sidecarId);
+  if (!isPathContainedWithin(sidecarOutputDir, resolvedOutputPath)) {
+    throw new Error(
+      `output_path must be under sidecars/${sidecarId}/ for the matching sidecar id: ${JSON.stringify(outputPath)}`
+    );
   }
   return normalizedOutputPath;
 }
@@ -61,14 +69,16 @@ function validateSidecarEntry(repoRoot, runId, entry) {
     throw new Error(`trust_level must be ${JSON.stringify(SIDECAR_TRUST_LEVEL)}`);
   }
 
+  const id = requireNonEmptyString(entry.id, "id");
+
   return {
-    id: requireNonEmptyString(entry.id, "id"),
+    id,
     kind: requireNonEmptyString(entry.kind, "kind"),
     executor: requireNonEmptyString(entry.executor, "executor"),
     model: normalizeNullableString(entry.model, "model"),
     provider: normalizeNullableString(entry.provider, "provider"),
     status: entry.status,
-    output_path: validateOutputPath(repoRoot, runId, entry.output_path),
+    output_path: validateOutputPath(repoRoot, runId, id, entry.output_path),
     trust_level: SIDECAR_TRUST_LEVEL,
   };
 }
@@ -146,11 +156,12 @@ function appendSidecarStart(repoRoot, runId, { id, kind, executor, model, provid
 }
 
 function appendSidecarResult(repoRoot, runId, { id, kind, output_path, elapsed_ms } = {}) {
+  const sidecarId = requireNonEmptyString(id, "id");
   return appendRunEvent(repoRoot, runId, {
     event: EVENTS.SIDECAR_RESULT,
-    sidecar_id: requireNonEmptyString(id, "id"),
+    sidecar_id: sidecarId,
     kind: requireNonEmptyString(kind, "kind"),
-    output_path: validateOutputPath(repoRoot, runId, output_path),
+    output_path: validateOutputPath(repoRoot, runId, sidecarId, output_path),
     trust_level: SIDECAR_TRUST_LEVEL,
     ...(elapsed_ms !== undefined ? { elapsed_ms } : {}),
   });

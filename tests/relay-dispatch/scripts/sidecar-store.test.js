@@ -48,7 +48,7 @@ function createEntry(overrides = {}) {
     model: "gpt-5",
     provider: "openai",
     status: "pending",
-    output_path: "sidecars/lint-report",
+    output_path: "sidecars/lint-report/result.json",
     trust_level: SIDECAR_TRUST_LEVEL,
     ...overrides,
   };
@@ -79,7 +79,7 @@ test("upsertSidecarEntry lazily creates index.json and replaces entries by id", 
     model: null,
     provider: null,
     status: "pending",
-    output_path: "sidecars/lint-report",
+    output_path: "sidecars/lint-report/result.json",
     trust_level: SIDECAR_TRUST_LEVEL,
   });
   assert.equal(fs.existsSync(getSidecarsIndexPath(repoRoot, runId)), true);
@@ -87,7 +87,7 @@ test("upsertSidecarEntry lazily creates index.json and replaces entries by id", 
   assert.equal(readSidecarIndex(repoRoot, runId).sidecars.length, 1);
 });
 
-test("upsertSidecarEntry validates status, trust level, and run-relative output paths", () => {
+test("upsertSidecarEntry validates status, trust level, and id-scoped output paths", () => {
   const { repoRoot, runId } = createContext();
 
   assert.throws(
@@ -105,6 +105,25 @@ test("upsertSidecarEntry validates status, trust level, and run-relative output 
   assert.throws(
     () => upsertSidecarEntry(repoRoot, runId, createEntry({ output_path: path.join(os.tmpdir(), "escape") })),
     /output_path must be run-dir-relative/
+  );
+  assert.throws(
+    () => upsertSidecarEntry(repoRoot, runId, createEntry({ output_path: "rubric.json" })),
+    /output_path must be under sidecars\/lint-report\//
+  );
+  assert.throws(
+    () => upsertSidecarEntry(repoRoot, runId, createEntry({ output_path: "sidecars/other/result.json" })),
+    /output_path must be under sidecars\/lint-report\//
+  );
+  assert.throws(
+    () => upsertSidecarEntry(repoRoot, runId, createEntry({ output_path: "sidecars/lint-report" })),
+    /output_path must be under sidecars\/lint-report\//
+  );
+  assert.throws(
+    () => upsertSidecarEntry(repoRoot, runId, createEntry({
+      id: "other",
+      output_path: "sidecars/lint-report/result.json",
+    })),
+    /output_path must be under sidecars\/other\//
   );
 });
 
@@ -200,4 +219,17 @@ test("sidecar events coexist with legacy-shaped non-sidecar events", () => {
     assert.equal(Object.prototype.hasOwnProperty.call(events[0], key), false);
   }
   assert.equal(events[1].trust_level, SIDECAR_TRUST_LEVEL);
+});
+
+test("appendSidecarResult rejects output paths outside the matching sidecar directory", () => {
+  const { repoRoot, runId } = createContext();
+
+  assert.throws(
+    () => appendSidecarResult(repoRoot, runId, {
+      id: "lint-report",
+      kind: "static-analysis",
+      output_path: "sidecars/other/result.json",
+    }),
+    /output_path must be under sidecars\/lint-report\//
+  );
 });
