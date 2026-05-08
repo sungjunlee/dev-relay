@@ -31,6 +31,7 @@ const {
   upsertSidecarEntry,
 } = require("../../relay-dispatch/scripts/sidecar-store");
 const contextRecapKind = require("./kinds/context-recap");
+const docsSyncKind = require("./kinds/docs-sync");
 const testGapKind = require("./kinds/test-gap");
 
 const KNOWN_FLAGS = [
@@ -40,6 +41,7 @@ const CLI_ARG_OPTIONS = { commandName: "relay-sidecar", reservedFlags: KNOWN_FLA
 const DEFAULT_TIMEOUT_MS = 30 * 60 * 1000;
 const KIND_REGISTRY = Object.freeze({
   [contextRecapKind.KIND_NAME]: contextRecapKind,
+  [docsSyncKind.KIND_NAME]: docsSyncKind,
   [testGapKind.KIND_NAME]: testGapKind,
 });
 
@@ -216,6 +218,53 @@ function loadTestGapExtras(runDir, { prDiff = "" } = {}) {
   };
 }
 
+function isDocsSyncCandidatePath(relativePath) {
+  const normalized = String(relativePath || "").replace(/\\/g, "/");
+  return (/^README.*\.md$/i.test(normalized) && !normalized.includes("/"))
+    || (/^CHANGELOG.*\.md$/i.test(normalized) && !normalized.includes("/"))
+    || (/^ARCHITECTURE.*\.md$/i.test(normalized) && !normalized.includes("/"))
+    || (
+      normalized.startsWith("docs/")
+      && normalized.endsWith(".md")
+      && !/^docs\/issue-[^/]*\.md$/i.test(normalized)
+      && !/^docs\/[^/]*-(?:2025|2026)-[^/]*\.md$/i.test(normalized)
+    )
+    || /^skills\/[^/]+\/SKILL\.md$/i.test(normalized);
+}
+
+function walkDocCandidatePaths(worktree, dir = worktree, output = []) {
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    if (entry.name === ".git" || entry.name === "node_modules") continue;
+    const fullPath = path.join(dir, entry.name);
+    const relativePath = path.relative(worktree, fullPath).replace(/\\/g, "/");
+    if (entry.isDirectory()) {
+      walkDocCandidatePaths(worktree, fullPath, output);
+      continue;
+    }
+    if (entry.isFile() && isDocsSyncCandidatePath(relativePath)) {
+      output.push(relativePath);
+    }
+  }
+  return output;
+}
+
+function loadDocsSyncExtras({ runDir, worktree, prDiff = "" }) {
+  const docCandidates = {};
+  for (const relativePath of walkDocCandidatePaths(worktree).sort()) {
+    const fullPath = path.join(worktree, relativePath);
+    try {
+      docCandidates[relativePath] = readTextFileWithoutFollowingSymlinks(fullPath);
+    } catch (error) {
+      if (error.code === "ENOENT") continue;
+      throw error;
+    }
+  }
+  return {
+    diff: getLatestReviewDiff(runDir) || prDiff || null,
+    docCandidates,
+  };
+}
+
 function resolveRunContext({ runId, cwd = process.cwd(), getPrDiff = runGhPrDiff, fetchPrDiff = true, kind = null }) {
   const repoRoot = getCanonicalRepoRoot(cwd);
   const manifestPath = getManifestPath(repoRoot, runId);
@@ -227,9 +276,12 @@ function resolveRunContext({ runId, cwd = process.cwd(), getPrDiff = runGhPrDiff
     requireWorktree: true,
     caller: "relay-sidecar",
   });
+  const kindModule = resolveKind(kind);
   const prNumber = manifest.pr_number ?? manifest.git?.pr_number ?? null;
   const hasLocalTestGapDiff = kind === testGapKind.KIND_NAME && getLatestReviewDiff(runDir) !== null;
-  const prDiff = !fetchPrDiff || hasLocalTestGapDiff || prNumber === null || prNumber === undefined
+  const hasLocalDocsSyncDiff = (kind === docsSyncKind.KIND_NAME || kindModule?.requiresDocCandidates === true)
+    && getLatestReviewDiff(runDir) !== null;
+  const prDiff = !fetchPrDiff || hasLocalTestGapDiff || hasLocalDocsSyncDiff || prNumber === null || prNumber === undefined
     ? ""
     : getPrDiff(prNumber, { cwd: repoRoot });
 
@@ -242,6 +294,13 @@ function resolveRunContext({ runId, cwd = process.cwd(), getPrDiff = runGhPrDiff
   });
   if (kind === testGapKind.KIND_NAME) {
     Object.assign(runContext, loadTestGapExtras(runDir, { prDiff }));
+  }
+  if (kind === docsSyncKind.KIND_NAME || kindModule?.requiresDocCandidates === true) {
+    Object.assign(runContext, loadDocsSyncExtras({
+      runDir,
+      worktree: validatedPaths.worktree,
+      prDiff,
+    }));
   }
 
   return {
@@ -435,6 +494,8 @@ function main(options = {}) {
       cwd,
       getPrDiff: options.getPrDiff || runGhPrDiff,
       fetchPrDiff: args.kind === testGapKind.KIND_NAME
+        || args.kind === docsSyncKind.KIND_NAME
+        || kindModule?.requiresDocCandidates === true
         || (args.executor === "opencode" && args.kind !== contextRecapKind.KIND_NAME),
       kind: args.kind,
     });
