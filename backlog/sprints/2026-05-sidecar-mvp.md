@@ -25,7 +25,8 @@ Implementation order from Epic #367:
 
 - [x] **#372 Add sidecar artifact schema and lifecycle events** — PR #448 / `b358e93` merged 2026-05-08 (codex+codex; 1 dispatch + R1 changes_requested + R2 PASS clean; 4 files +472/-0; 48 new tests; tests 1117 → 1192).
   - Deliverables: `EVENTS.SIDECAR_START/RESULT/FAILED`, `getSidecarsDir/getSidecarsIndexPath/getSidecarOutputDir` in `manifest/paths.js`, new `sidecar-store.js` (CRUD + `appendSidecarStart/Result/Failed` producers + `validateOutputPath` enforcing `sidecars/<id>/` scope), `tests/relay-dispatch/scripts/sidecar-store.test.js` (48 tests covering schema, status enum, trust_level literal, path traversal, symlink rejection, legacy-shape coexistence).
-- [ ] #381 Add relay-sidecar runner CLI for artifact-only sidecars (consumes #372 helpers; opens new skill `skills/relay-sidecar/`).
+- [x] **#381 Add relay-sidecar runner CLI for artifact-only sidecars** — PR #449 / `37615114` merged 2026-05-08 (codex+codex; 1 dispatch + R1 changes_requested + R2 PASS clean; 3 files +717/-0; 7 new runner tests).
+  - Deliverables: new skill `skills/relay-sidecar/` with `SKILL.md` + `scripts/relay-sidecar.js` (CLI, `bindCliArgs` schema, injectable opencode factory, fail-closed advisory enforcement via `git status --porcelain` pre/post snapshot, `output.md` always — R1 fix decoupled runner `--json` from sidecar output filename per DC5 independence requirement), `tests/relay-sidecar/scripts/relay-sidecar.test.js` (7 tests: --help, --dry-run, happy path, opencode non-zero exit, advisory violation, unknown executor, sidecar id shape).
 
 ### Phase B — First sidecar kind
 
@@ -58,7 +59,20 @@ Implementation order from Epic #367:
 - R2 review (codex): `pass` clean. All 5 DC verified, contract+quality+execution all pass, 0 remaining issues.
 - `finalize-run.js --merge-method squash` succeeded; issue #372 auto-closed, worktree pruned, branch deleted, no force-finalize needed.
 
+### 2026-05-08 — #381 runner CLI shipped (Phase A complete)
+
+- Probe of #381: `qa_needed` (granularity=low, "not single-leaf"). Orchestrator overrode after manual single-leaf judgment — issue describes one CLI with internal sub-components, not multiple deliverables. Probe's signal reflects body verbosity, not actual scope multiplicity. Drafted explicit DC enumerating 9 sub-criteria to compensate.
+- Dispatch with codex executor, M-size rubric, 4 factors (2 contract + 2 quality). `forbidden_zones` extended to enumerate every existing skill/test directory as off-limits (allowed-zone = `skills/relay-sidecar/**` + `tests/relay-sidecar/**` only).
+- R1 status `completed-uncommitted` → `recover-commit.js` → commit `56ee463`, PR #449 created.
+- R1 review: `changes_requested`. One issue — runner `--json` was incorrectly coupled to sidecar output filename selection (`output.json`), but DC5 explicitly required these be independent concerns.
+- R2 dispatch via `dispatch.js --manifest`; codex committed `5a279c6` "Fix relay-sidecar JSON output artifact path" (decoupled the two — sidecar output is always `output.md` for now; future kinds can introduce alternate formats).
+- R2 review: `pass` clean. All 8 DC verified, contract+quality+execution all pass, 0 issues.
+- `finalize-run.js --merge-method squash`; issue #381 auto-closed, no force-finalize.
+- **Phase A foundation complete**. #373/#374/#375 (specific sidecar kinds) are now unblocked.
+
 ## Outstanding watch items
 
-- Schema PR did NOT touch any forbidden zone (no backlog/, no .cache/, no docs/issue-*, no .github/workflows/) — clean first-try result confirms `forbidden_zones` rubric pattern works for additive feature work too (n=5 cumulative now: #435/#436/#437 from Epic #431 + #372 here).
-- `model_per_phase` continues to log codex reviewer correctly (verifying `feedback_unblock_via_infra_pr` fix from PR #442 / #441 is durable).
+- Both PRs (#372, #381) had clean `forbidden_zones` adherence. Pattern n=6 cumulative now (Epic #431: #435/#436/#437/#444; Sidecar: #372/#381). Pattern is robust across mechanical renames, schema additions, and full new-skill builds.
+- Both PRs landed `completed-uncommitted` → `recover-commit` flow on first dispatch. recover_commit_rate ticked up from 0.117 to 0.125 (over 1 baseline run) and is expected to keep rising while codex CLI's commit-skip behavior persists. Not a blocker; the recovery path is fully automated.
+- R1 catches both PRs were spec-precision issues (output_path scope on #372, runner `--json` independence on #381) — not implementation defects. The DC's explicit enumeration of edge cases is doing real work; R1 reviewer correctly held the line. No reviewer-side defects observed.
+- `model_per_phase` continues to log codex reviewer correctly (verifying `feedback_unblock_via_infra_pr` fix from PR #442 / #441 is durable across both PRs).
