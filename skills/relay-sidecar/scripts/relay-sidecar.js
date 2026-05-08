@@ -26,12 +26,16 @@ const {
   SIDECAR_TRUST_LEVEL,
   upsertSidecarEntry,
 } = require("../../relay-dispatch/scripts/sidecar-store");
+const contextRecapKind = require("./kinds/context-recap");
 
 const KNOWN_FLAGS = [
   "--run-id", "--kind", "--executor", "--model", "--variant", "--dry-run", "--json", "--help", "-h",
 ];
 const CLI_ARG_OPTIONS = { commandName: "relay-sidecar", reservedFlags: KNOWN_FLAGS };
 const DEFAULT_TIMEOUT_MS = 30 * 60 * 1000;
+const KIND_REGISTRY = Object.freeze({
+  [contextRecapKind.KIND_NAME]: contextRecapKind,
+});
 
 class SidecarFailure extends Error {
   constructor(message, { exitCode = 1, failureReason = message } = {}) {
@@ -124,7 +128,73 @@ function runGhPrDiff(prNumber, { cwd, spawnSyncImpl = spawnSync } = {}) {
   return result.stdout || "";
 }
 
-function resolveRunContext({ runId, cwd = process.cwd(), getPrDiff = runGhPrDiff }) {
+function readTextIfExists(filePath) {
+  try {
+    return fs.readFileSync(filePath, "utf-8");
+  } catch (error) {
+    if (error.code === "ENOENT") return "";
+    throw error;
+  }
+}
+
+function readJsonIfExists(filePath) {
+  const text = readTextIfExists(filePath);
+  if (!text) return null;
+  return JSON.parse(text);
+}
+
+function readEventsFromRunDir(runDir) {
+  const text = readTextIfExists(path.join(runDir, "events.jsonl"));
+  if (!text.trim()) return [];
+  return text
+    .split(/\r?\n/)
+    .filter((line) => line.trim())
+    .map((line) => JSON.parse(line));
+}
+
+function readRoundArtifacts(runDir, suffix, reader) {
+  if (!fs.existsSync(runDir)) return [];
+  return fs.readdirSync(runDir)
+    .map((name) => {
+      const match = name.match(new RegExp(`^review-round-(\\d+)-${suffix}$`));
+      if (!match) return null;
+      const filePath = path.join(runDir, name);
+      const round = Number(match[1]);
+      const content = reader(filePath);
+      if (content === null) return null;
+      return { round, path: filePath, content };
+    })
+    .filter(Boolean)
+    .sort((left, right) => left.round - right.round);
+}
+
+function loadRunArtifacts({ runDir, manifest, runId, prNumber, prDiff = "" }) {
+  const verdicts = readRoundArtifacts(runDir, "verdict\\.json", readJsonIfExists)
+    .map((artifact) => ({ round: artifact.round, path: artifact.path, ...artifact.content }));
+  const redispatchPrompts = readRoundArtifacts(runDir, "redispatch\\.md", readTextIfExists)
+    .map((artifact) => ({ round: artifact.round, path: artifact.path, text: artifact.content }));
+  const doneCriteriaSnapshots = readRoundArtifacts(runDir, "done-criteria\\.md", readTextIfExists)
+    .map((artifact) => ({ round: artifact.round, path: artifact.path, text: artifact.content }));
+  const diffs = readRoundArtifacts(runDir, "diff\\.patch", readTextIfExists)
+    .map((artifact) => ({ round: artifact.round, path: artifact.path, text: artifact.content }));
+  const latestDiff = diffs.length ? diffs.at(-1).text : prDiff;
+
+  return {
+    manifest,
+    events: readEventsFromRunDir(runDir),
+    verdicts,
+    redispatchPrompts,
+    dispatchResult: readTextIfExists(path.join(runDir, "dispatch-result.txt")),
+    doneCriteriaSnapshots,
+    diffs,
+    lastDiff: latestDiff,
+    runDir,
+    runId,
+    prNumber,
+  };
+}
+
+function resolveRunContext({ runId, cwd = process.cwd(), getPrDiff = runGhPrDiff, fetchPrDiff = true }) {
   const repoRoot = getCanonicalRepoRoot(cwd);
   const manifestPath = getManifestPath(repoRoot, runId);
   const runDir = getRunDir(repoRoot, runId);
@@ -136,7 +206,7 @@ function resolveRunContext({ runId, cwd = process.cwd(), getPrDiff = runGhPrDiff
     caller: "relay-sidecar",
   });
   const prNumber = manifest.pr_number ?? manifest.git?.pr_number ?? null;
-  const prDiff = prNumber === null || prNumber === undefined
+  const prDiff = !fetchPrDiff || prNumber === null || prNumber === undefined
     ? ""
     : getPrDiff(prNumber, { cwd: repoRoot });
 
@@ -145,6 +215,13 @@ function resolveRunContext({ runId, cwd = process.cwd(), getPrDiff = runGhPrDiff
     manifestPath,
     runDir,
     manifest,
+    runContext: loadRunArtifacts({
+      runDir,
+      manifest,
+      runId,
+      prNumber,
+      prDiff,
+    }),
     worktree: validatedPaths.worktree,
     prNumber,
     prDiff,
@@ -181,6 +258,31 @@ function buildOpencodeCommand({ prompt, model, cwd }) {
   if (model) args.push("-m", model);
   args.push(prompt);
   return { cmd: "opencode", args, cwd };
+}
+
+function resolveKind(kind) {
+  return KIND_REGISTRY[kind] || null;
+}
+
+function hasDeterministicBuilder(kindModule) {
+  return typeof kindModule?.buildRecap === "function";
+}
+
+function buildSidecarPrompt({ args, sidecarId, context, kindModule, baselineRecap }) {
+  if (args.kind === contextRecapKind.KIND_NAME) {
+    return kindModule.buildOpencodeAugmentationPrompt({
+      runContext: context.runContext,
+      baselineRecap,
+    });
+  }
+  return buildPrompt({ args, sidecarId, context });
+}
+
+function runSidecarExecutor({ args, command, runOpencode }) {
+  if (args.executor === "none") {
+    return { code: 0, stdout: command.output, stderr: "" };
+  }
+  return runOpencode(command);
 }
 
 function createOpencodeRunner({ spawnSyncImpl = spawnSync } = {}) {
@@ -280,9 +382,17 @@ function main(options = {}) {
     args.runId = requireNonEmpty(args.runId, "--run-id");
     args.kind = requireNonEmpty(args.kind, "--kind");
     args.executor = requireNonEmpty(args.executor, "--executor");
-    if (args.executor !== "opencode") {
+    const kindModule = resolveKind(args.kind);
+    const deterministicKind = hasDeterministicBuilder(kindModule);
+    if (args.executor === "none" && !deterministicKind) {
       throw new SidecarFailure(
-        `unsupported sidecar executor ${JSON.stringify(args.executor)}; only opencode is wired in this release`,
+        `unsupported sidecar executor "none" for kind ${JSON.stringify(args.kind)}; deterministic sidecar builder is not available`,
+        { exitCode: 2 }
+      );
+    }
+    if (args.executor !== "opencode" && args.executor !== "none") {
+      throw new SidecarFailure(
+        `unsupported sidecar executor ${JSON.stringify(args.executor)}; supported executors are opencode and none`,
         { exitCode: 2 }
       );
     }
@@ -296,13 +406,21 @@ function main(options = {}) {
       runId: args.runId,
       cwd,
       getPrDiff: options.getPrDiff || runGhPrDiff,
+      fetchPrDiff: args.kind !== contextRecapKind.KIND_NAME,
     });
     const outputName = "output.md";
     const outputPath = `sidecars/${sidecarId}/${outputName}`;
     const outputDir = getSidecarOutputDir(context.repoRoot, args.runId, sidecarId);
     const outputFullPath = path.join(outputDir, outputName);
-    const prompt = buildPrompt({ args, sidecarId, context });
-    const command = buildOpencodeCommand({ prompt, model: args.model, cwd: context.worktree });
+    const baselineRecap = deterministicKind
+      ? kindModule.buildRecap({ runContext: context.runContext })
+      : null;
+    const prompt = args.executor === "opencode"
+      ? buildSidecarPrompt({ args, sidecarId, context, kindModule, baselineRecap })
+      : null;
+    const command = args.executor === "opencode"
+      ? buildOpencodeCommand({ prompt, model: args.model, cwd: context.worktree })
+      : { cmd: "none", args: [], cwd: context.worktree, output: baselineRecap };
 
     const baseEnvelope = {
       ok: true,
@@ -342,9 +460,9 @@ function main(options = {}) {
         status: "running",
         outputPath,
       }));
-      const before = snapshotWorktree(context.worktree);
+      const before = args.executor === "none" ? "" : snapshotWorktree(context.worktree);
       try {
-        result = normalizeRunnerResult(runOpencode(command));
+        result = normalizeRunnerResult(runSidecarExecutor({ args, command, runOpencode }));
       } catch (error) {
         result = normalizeRunnerResult({
           code: Number.isInteger(error.status) ? error.status : 1,
@@ -354,7 +472,7 @@ function main(options = {}) {
           timedOut: error.code === "ETIMEDOUT",
         });
       }
-      const after = snapshotWorktree(context.worktree);
+      const after = args.executor === "none" ? "" : snapshotWorktree(context.worktree);
 
       fs.mkdirSync(outputDir, { recursive: true });
       writeTextFileWithoutFollowingSymlinks(outputFullPath, result.stdout);
