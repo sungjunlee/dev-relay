@@ -22,6 +22,7 @@ const {
   readTextFileWithoutFollowingSymlinks,
   writeTextFileWithoutFollowingSymlinks,
 } = require("../../relay-dispatch/scripts/manifest/rubric");
+const { appendRunEvent, EVENTS } = require("../../relay-dispatch/scripts/relay-events");
 const {
   appendSidecarFailed,
   appendSidecarResult,
@@ -473,13 +474,25 @@ function main(options = {}) {
     }
 
     const startedAt = Date.now();
-    appendSidecarStart(context.repoRoot, args.runId, {
-      id: sidecarId,
-      kind: args.kind,
-      executor: args.executor,
-      model: args.model || null,
-      provider: parseProvider(args.model),
-    });
+    if (args.kind === testGapKind.KIND_NAME) {
+      appendRunEvent(context.repoRoot, args.runId, {
+        event: EVENTS.SIDECAR_START,
+        sidecar_id: sidecarId,
+        kind: args.kind,
+        executor: args.executor,
+        model: args.model || null,
+        provider: parseProvider(args.model),
+        trust_level: SIDECAR_TRUST_LEVEL,
+      });
+    } else {
+      appendSidecarStart(context.repoRoot, args.runId, {
+        id: sidecarId,
+        kind: args.kind,
+        executor: args.executor,
+        model: args.model || null,
+        provider: parseProvider(args.model),
+      });
+    }
 
     let result;
     try {
