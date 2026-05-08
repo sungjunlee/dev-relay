@@ -27,6 +27,7 @@ const {
   upsertSidecarEntry,
 } = require("../../relay-dispatch/scripts/sidecar-store");
 const contextRecapKind = require("./kinds/context-recap");
+const testGapKind = require("./kinds/test-gap");
 
 const KNOWN_FLAGS = [
   "--run-id", "--kind", "--executor", "--model", "--variant", "--dry-run", "--json", "--help", "-h",
@@ -35,6 +36,7 @@ const CLI_ARG_OPTIONS = { commandName: "relay-sidecar", reservedFlags: KNOWN_FLA
 const DEFAULT_TIMEOUT_MS = 30 * 60 * 1000;
 const KIND_REGISTRY = Object.freeze({
   [contextRecapKind.KIND_NAME]: contextRecapKind,
+  [testGapKind.KIND_NAME]: testGapKind,
 });
 
 class SidecarFailure extends Error {
@@ -194,7 +196,19 @@ function loadRunArtifacts({ runDir, manifest, runId, prNumber, prDiff = "" }) {
   };
 }
 
-function resolveRunContext({ runId, cwd = process.cwd(), getPrDiff = runGhPrDiff, fetchPrDiff = true }) {
+function loadTestGapExtras(runDir) {
+  const reviewDiffs = readRoundArtifacts(runDir, "diff\\.patch", readTextIfExists)
+    .map((artifact) => ({ round: artifact.round, text: artifact.content }));
+  const dispatchPrompt = readTextIfExists(path.join(runDir, "dispatch-prompt.md"));
+  const roundOneDoneCriteria = readTextIfExists(path.join(runDir, "review-round-1-done-criteria.md"));
+  return {
+    rubric: readTextIfExists(path.join(runDir, "rubric.yaml")) || undefined,
+    doneCriteria: dispatchPrompt || roundOneDoneCriteria || undefined,
+    diff: reviewDiffs.length ? reviewDiffs.at(-1).text : null,
+  };
+}
+
+function resolveRunContext({ runId, cwd = process.cwd(), getPrDiff = runGhPrDiff, fetchPrDiff = true, kind = null }) {
   const repoRoot = getCanonicalRepoRoot(cwd);
   const manifestPath = getManifestPath(repoRoot, runId);
   const runDir = getRunDir(repoRoot, runId);
@@ -210,18 +224,23 @@ function resolveRunContext({ runId, cwd = process.cwd(), getPrDiff = runGhPrDiff
     ? ""
     : getPrDiff(prNumber, { cwd: repoRoot });
 
+  const runContext = loadRunArtifacts({
+    runDir,
+    manifest,
+    runId,
+    prNumber,
+    prDiff,
+  });
+  if (kind === testGapKind.KIND_NAME) {
+    Object.assign(runContext, loadTestGapExtras(runDir));
+  }
+
   return {
     repoRoot,
     manifestPath,
     runDir,
     manifest,
-    runContext: loadRunArtifacts({
-      runDir,
-      manifest,
-      runId,
-      prNumber,
-      prDiff,
-    }),
+    runContext,
     worktree: validatedPaths.worktree,
     prNumber,
     prDiff,
@@ -269,7 +288,7 @@ function hasDeterministicBuilder(kindModule) {
 }
 
 function buildSidecarPrompt({ args, sidecarId, context, kindModule, baselineRecap }) {
-  if (args.kind === contextRecapKind.KIND_NAME) {
+  if (typeof kindModule?.buildOpencodeAugmentationPrompt === "function" && baselineRecap !== null) {
     return kindModule.buildOpencodeAugmentationPrompt({
       runContext: context.runContext,
       baselineRecap,
@@ -406,7 +425,8 @@ function main(options = {}) {
       runId: args.runId,
       cwd,
       getPrDiff: options.getPrDiff || runGhPrDiff,
-      fetchPrDiff: args.kind !== contextRecapKind.KIND_NAME,
+      fetchPrDiff: args.executor === "opencode" && args.kind !== contextRecapKind.KIND_NAME,
+      kind: args.kind,
     });
     const outputName = "output.md";
     const outputPath = `sidecars/${sidecarId}/${outputName}`;

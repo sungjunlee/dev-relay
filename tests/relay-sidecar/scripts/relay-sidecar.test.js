@@ -195,6 +195,86 @@ test("--kind context-recap --executor none writes deterministic output and recor
   assert.equal(readSidecarIndex(fixture.repoRoot, fixture.runId).sidecars[0].status, "completed");
 });
 
+test("--kind test-gap --executor none writes deterministic output and records result", (t) => {
+  const fixture = createFixture(t);
+  const runDir = getRunDir(fixture.repoRoot, fixture.runId);
+  fs.mkdirSync(runDir, { recursive: true });
+  fs.writeFileSync(path.join(runDir, "rubric.yaml"), [
+    "factors:",
+    "  - name: Unit tests",
+    "    command: node --test tests/foo.test.js",
+    "    target: pass",
+    "",
+  ].join("\n"), "utf-8");
+  fs.writeFileSync(path.join(runDir, "dispatch-prompt.md"), "- Add test-gap sidecar\n", "utf-8");
+  fs.writeFileSync(path.join(runDir, "review-round-2-diff.patch"), [
+    "diff --git a/skills/foo/scripts/foo.js b/skills/foo/scripts/foo.js",
+    "+++ b/skills/foo/scripts/foo.js",
+    "",
+  ].join("\n"), "utf-8");
+
+  const beforeCache = new Set(Object.keys(require.cache));
+  const result = invoke([
+    "--run-id", fixture.runId,
+    "--kind", "test-gap",
+    "--executor", "none",
+  ], {
+    cwd: fixture.repoRoot,
+    getPrDiff: () => {
+      throw new Error("test-gap deterministic mode must use run-dir diff artifacts");
+    },
+  });
+  const loadedDuringRun = Object.keys(require.cache).filter((key) => !beforeCache.has(key));
+
+  assert.equal(result.exitCode, 0);
+  assert.deepEqual(loadedDuringRun.filter((key) => /opencode/i.test(key)), []);
+  const sidecarId = "test-gap-1234abcd";
+  const output = fs.readFileSync(readOutputPath(fixture, sidecarId), "utf-8");
+  assert.match(output, /^# Test gap report: /);
+  assert.match(output, /tests\/foo\.test\.js/);
+
+  const events = readRunEvents(fixture.repoRoot, fixture.runId);
+  assert.equal(events.length, 2);
+  assert.equal(events[0].event, "sidecar_start");
+  assert.equal(events[0].executor, "none");
+  assert.equal(events[1].event, "sidecar_result");
+  assert.equal(events[1].output_path, `sidecars/${sidecarId}/output.md`);
+  assert.equal(readSidecarIndex(fixture.repoRoot, fixture.runId).sidecars[0].status, "completed");
+});
+
+test("--kind test-gap --executor opencode uses test-gap augmentation prompt", (t) => {
+  const fixture = createFixture(t);
+  const runDir = getRunDir(fixture.repoRoot, fixture.runId);
+  fs.mkdirSync(runDir, { recursive: true });
+  fs.writeFileSync(path.join(runDir, "rubric.yaml"), "command: node --test tests/foo.test.js\n", "utf-8");
+  fs.writeFileSync(path.join(runDir, "dispatch-prompt.md"), "- Add test-gap sidecar\n", "utf-8");
+  fs.writeFileSync(path.join(runDir, "review-round-1-diff.patch"), [
+    "diff --git a/tests/foo.test.js b/tests/foo.test.js",
+    "+++ b/tests/foo.test.js",
+    "",
+  ].join("\n"), "utf-8");
+  let promptText = "";
+
+  const result = invoke([
+    "--run-id", fixture.runId,
+    "--kind", "test-gap",
+    "--executor", "opencode",
+  ], {
+    cwd: fixture.repoRoot,
+    getPrDiff: () => "diff --git a/README.md b/README.md\n",
+    runOpencode: ({ args }) => {
+      promptText = args.at(-1);
+      assert.match(promptText, /TEST_GAP_AUGMENTATION_REQUEST/);
+      assert.match(promptText, /BASELINE REPORT/);
+      return { code: 0, stdout: "opencode augmented test-gap report\n", stderr: "" };
+    },
+  });
+
+  assert.equal(result.exitCode, 0);
+  assert.equal(fs.readFileSync(readOutputPath(fixture, "test-gap-1234abcd"), "utf-8"), "opencode augmented test-gap report\n");
+  assert.match(promptText, /# Test gap report: /);
+});
+
 test("--json keeps runner stdout structured without changing sidecar output path", (t) => {
   const fixture = createFixture(t);
   const record = readManifest(fixture.manifestPath);
@@ -273,14 +353,14 @@ test("--executor none is rejected for kinds without deterministic builders", (t)
   const fixture = createFixture(t);
   const result = invoke([
     "--run-id", fixture.runId,
-    "--kind", "test-gap",
+    "--kind", "docs-sync",
     "--executor", "none",
   ], {
     cwd: fixture.repoRoot,
   });
 
   assert.notEqual(result.exitCode, 0);
-  assert.match(result.stderr, /executor "none".*test-gap|deterministic sidecar builder/);
+  assert.match(result.stderr, /executor "none".*docs-sync|deterministic sidecar builder/);
   assert.deepEqual(readRunEvents(fixture.repoRoot, fixture.runId), []);
   assert.equal(fs.existsSync(getSidecarsIndexPath(fixture.repoRoot, fixture.runId)), false);
 });
