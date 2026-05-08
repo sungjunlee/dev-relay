@@ -840,6 +840,7 @@ test("reliability-report counts sidecar usage and outcomes by kind and executor"
   assert.equal(report.sidecar_insights.failure_rate, 0.3333);
   assert.match(text, /sidecar_insights:/);
   assert.match(text, /total_invocations: 3/);
+  assert.match(text, /failure_rate: 0\.3333/);
   assert.match(text, /by_kind: context-recap=2/);
   assert.doesNotMatch(text, /predicted_findings_match_rate:/);
 });
@@ -922,6 +923,27 @@ test("reliability-report estimates sidecar prediction matches from output and re
   assert.ok(report.sidecar_insights.predicted_findings_match_rate >= 0.5);
 });
 
+test("reliability-report counts sidecar output substrings of review titles as predictions", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-report-sidecar-title-substring-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  const recentTs = new Date(Date.now() - 1 * 60 * 60 * 1000).toISOString();
+  const runId = createRunId({ branch: "run-sidecar-title-substring", timestamp: new Date("2026-04-12T02:09:30.000Z") });
+
+  writeRun(repoRoot, { runId, state: STATES.CHANGES_REQUESTED, rounds: 1, updatedAt: recentTs });
+  appendSidecarStart(repoRoot, runId, { sidecarId: "sc-substring", kind: "context-recap", executor: "codex" });
+  appendSidecarResult(repoRoot, runId, { sidecarId: "sc-substring", kind: "context-recap" });
+  writeSidecarOutput(repoRoot, runId, "sc-substring", "The sidecar flagged output_path before review.");
+  writeReviewVerdict(repoRoot, runId, 1, [
+    { title: "Review verdict omits output_path validation", body: "Track output_path.", file: "report.js", line: 7, category: "contract", severity: "high" },
+    { title: "Require branch cleanup audit", body: "Audit cleanup.", file: "cleanup.js", line: 3, category: "quality", severity: "medium" },
+  ]);
+
+  const report = JSON.parse(execFileSync("node", [SCRIPT, "--repo", repoRoot, "--json"], { encoding: "utf-8" }));
+
+  assert.equal(report.sidecar_insights.predicted_findings_runs_examined, 1);
+  assert.equal(report.sidecar_insights.predicted_findings_match_rate, 0.5);
+});
+
 test("reliability-report keeps sidecar prediction null when results have no review verdicts", () => {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-report-sidecar-prediction-null-"));
   process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
@@ -943,8 +965,16 @@ test("reliability-report skips unreadable or corrupted sidecar outputs during pr
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-report-sidecar-corrupt-"));
   process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
   const recentTs = new Date(Date.now() - 1 * 60 * 60 * 1000).toISOString();
+  const runMissingOutput = createRunId({ branch: "run-sidecar-missing-output", timestamp: new Date("2026-04-12T02:10:59.000Z") });
   const runDirOutput = createRunId({ branch: "run-sidecar-dir-output", timestamp: new Date("2026-04-12T02:11:00.000Z") });
   const runNullOutput = createRunId({ branch: "run-sidecar-null-output", timestamp: new Date("2026-04-12T02:11:01.000Z") });
+
+  writeRun(repoRoot, { runId: runMissingOutput, state: STATES.CHANGES_REQUESTED, rounds: 1, updatedAt: recentTs });
+  appendSidecarStart(repoRoot, runMissingOutput, { sidecarId: "sc-missing", kind: "context-recap", executor: "codex" });
+  appendSidecarResult(repoRoot, runMissingOutput, { sidecarId: "sc-missing", kind: "context-recap" });
+  writeReviewVerdict(repoRoot, runMissingOutput, 1, [
+    { title: "Missing output is skipped", body: "Skip.", file: "x.js", line: 1, category: "contract", severity: "high" },
+  ]);
 
   writeRun(repoRoot, { runId: runDirOutput, state: STATES.CHANGES_REQUESTED, rounds: 1, updatedAt: recentTs });
   appendSidecarStart(repoRoot, runDirOutput, { sidecarId: "sc-dir", kind: "context-recap", executor: "codex" });
@@ -964,6 +994,7 @@ test("reliability-report skips unreadable or corrupted sidecar outputs during pr
 
   const report = JSON.parse(execFileSync("node", [SCRIPT, "--repo", repoRoot, "--json"], { encoding: "utf-8" }));
 
+  assert.equal(report.sidecar_insights.total_invocations, 3);
   assert.equal(report.sidecar_insights.predicted_findings_match_rate, null);
   assert.equal(report.sidecar_insights.predicted_findings_runs_examined, 0);
 });

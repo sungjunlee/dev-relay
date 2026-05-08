@@ -663,6 +663,33 @@ function readSidecarOutput(repoRoot, runId, sidecarId) {
   return output;
 }
 
+const SIDECAR_TITLE_TOKEN_STOPWORDS = new Set([
+  "about",
+  "after",
+  "before",
+  "from",
+  "into",
+  "missing",
+  "should",
+  "that",
+  "then",
+  "this",
+  "with",
+]);
+
+function issueTitleMatchesSidecarOutput(combinedOutput, title) {
+  const normalizedTitle = title.toLowerCase().trim();
+  if (!normalizedTitle) return false;
+  if (combinedOutput.includes(normalizedTitle)) return true;
+
+  const tokens = normalizedTitle.match(/[a-z0-9_][a-z0-9_.:/-]{2,}/g) || [];
+  return tokens.some((token) => (
+    !SIDECAR_TITLE_TOKEN_STOPWORDS.has(token)
+    && (token.length >= 4 || token.includes("_"))
+    && combinedOutput.includes(token)
+  ));
+}
+
 function computeSidecarPredictionRate({ events, repoRoot }) {
   const resultEventsByRun = new Map();
   for (const event of events) {
@@ -704,7 +731,7 @@ function computeSidecarPredictionRate({ events, repoRoot }) {
     runsExamined += 1;
     const combinedOutput = outputTexts.join("\n");
     for (const title of issueTitles) {
-      if (combinedOutput.includes(title.toLowerCase())) {
+      if (issueTitleMatchesSidecarOutput(combinedOutput, title)) {
         predicted += 1;
       } else {
         missed += 1;
