@@ -1,4 +1,5 @@
 const fs = require("fs");
+const path = require("path");
 const { getActorName } = require("./manifest/store");
 const { ensureRunLayout, getEventsPath, getRunsDir } = require("./manifest/paths");
 const {
@@ -16,6 +17,8 @@ const {
 // because validation is write-only.
 const EVENTS = Object.freeze({
   ADVISORY_REVIEW: "advisory_review",
+  // Consumer: /relay records the user's explicit proceed-anyway choice after a failed readiness probe.
+  BYPASS_OVERRIDE_BY_USER: "bypass_override_by_user",
   CLEANUP_RESULT: "cleanup_result",
   CLOSE: "close",
   CONFLICTING_RUN_OVERRIDE: "conflicting_run_override",
@@ -32,6 +35,12 @@ const EVENTS = Object.freeze({
   MODEL_HINTS_UPDATED: "model_hints_updated",
   PR_BODY_SNAPSHOT_FAILED: "pr_body_snapshot_failed",
   PR_NUMBER_STAMPED: "pr_number_stamped",
+  // Consumer: /relay records an interactive abort when readiness gaps should stop the run.
+  READINESS_CHECK_FAILED: "readiness_check_failed",
+  // Consumer: /relay records a non-interactive readiness failure that cannot ask the chain prompt.
+  READINESS_CHECK_FAILED_NONTTY: "readiness_check_failed_nontty",
+  // Consumer: /relay-ready probe CLI records deterministic readiness scores before /relay routing.
+  READINESS_PROBE: "readiness_probe",
   RECOVER_COMMIT: "recover_commit",
   RECOVER_COMMIT_FAILED: "recover_commit_failed",
   REVIEW_APPLY: "review_apply",
@@ -54,14 +63,24 @@ function validateKnownEventName(eventName) {
 }
 
 function appendEventLine(repoRoot, runId, record) {
-  validateKnownEventName(record?.event);
   const eventsPath = getEventsPath(repoRoot, runId);
+  appendEventLineToPath(eventsPath, record);
+}
+
+function appendEventLineToPath(eventsPath, record) {
+  if (typeof eventsPath !== "string" || !eventsPath.trim()) {
+    throw new Error("eventsPath is required to append a relay event");
+  }
+
+  validateKnownEventName(record?.event);
+  const resolvedEventsPath = path.resolve(eventsPath);
   try {
-    appendTextFileWithoutFollowingSymlinks(eventsPath, `${JSON.stringify(record)}\n`);
+    fs.mkdirSync(path.dirname(resolvedEventsPath), { recursive: true });
+    appendTextFileWithoutFollowingSymlinks(resolvedEventsPath, `${JSON.stringify(record)}\n`);
   } catch (error) {
     if (error.code === "ELOOP") {
       throw new Error(
-        `Refusing to append to symlinked events.jsonl at ${eventsPath}: ${error.message}`
+        `Refusing to append to symlinked events.jsonl at ${resolvedEventsPath}: ${error.message}`
       );
     }
     throw error;
@@ -410,6 +429,7 @@ function readAllRunEvents(repoRoot) {
 }
 
 module.exports = {
+  appendEventLineToPath,
   appendIterationScore,
   appendRubricQuality,
   appendRunEvent,
