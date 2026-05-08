@@ -30,7 +30,8 @@ Implementation order from Epic #367:
 
 ### Phase B — First sidecar kind
 
-- [ ] #373 Implement opencode context recap sidecar (first `kind` adopter).
+- [x] **#373 Implement opencode context recap sidecar** — PR #450 / `8c822f9d` merged 2026-05-08 (codex+codex; 1 dispatch + R1 changes_requested + R2 PASS clean; 4 files +697/-15).
+  - Deliverables: new `skills/relay-sidecar/scripts/kinds/context-recap.js` (pure `buildRecap` with 5 required `##` sections, `buildOpencodeAugmentationPrompt`, no IO/async/opencode requires), runner gained kind dispatch + `--executor none` path for kinds with deterministic builders, no-claims-of-completion guard tested against all 5 forbidden phrases, `tests/relay-sidecar/scripts/kinds/context-recap.test.js` + extensions to runner test (26 sidecar+kind tests total). Independence-from-opencode AC met: tests for `--executor none` import zero opencode-related modules.
 
 ### Phase C — Measurement
 
@@ -72,7 +73,20 @@ Implementation order from Epic #367:
 
 ## Outstanding watch items
 
-- Both PRs (#372, #381) had clean `forbidden_zones` adherence. Pattern n=6 cumulative now (Epic #431: #435/#436/#437/#444; Sidecar: #372/#381). Pattern is robust across mechanical renames, schema additions, and full new-skill builds.
+### 2026-05-08 — #373 context-recap kind shipped (Phase B kickoff)
+
+- Probe of #373: clarity=low, granularity=low, verifiability=low, "not single-leaf" — body genuinely vague ("highlights repeated findings", "likely misses"). Compensated by drafting an explicit 7-item DC enumerating recap content, no-claims-of-completion guard, and `--executor none` independence from opencode.
+- Dispatch (codex executor, M-size, 4-factor rubric — 2 contract + 2 quality with explicit forbidden_zones).
+- R1 status `completed-uncommitted` → `recover-commit.js` → commit `0ec7351`, PR #450 created.
+- R1 review: `changes_requested` with 2 issues — (1) repeated-findings detector matched only `title`, AC required "title or body"; (2) Likely-misses forbidden-zone heuristic hardcoded only the universal subset (backlog/cache/docs/issue/.github), missing the rubric's full forbidden_zones list (read-only skill dirs).
+- R2 dispatch via `dispatch.js --manifest`; codex committed `2bdbf5b` "Fix context recap review heuristics" — added body fallback + read forbidden_zones from rubric.yaml + tests for both fixes.
+- R2 review: `pass` clean. All DC verified, contract+quality+execution all pass, 0 issues.
+- `finalize-run.js --merge-method squash`; issue #373 auto-closed; no force-finalize.
+- **Phase B kickoff complete**. #374 (test-gap) and #375 (docs-sync) sidecars are next.
+
+## Outstanding watch items
+
+- Both Phase A PRs (#372, #381) AND #373 had clean `forbidden_zones` adherence. Pattern n=7 cumulative now (Epic #431: #435/#436/#437/#444; Sidecar: #372/#381/#373). Pattern is robust across mechanical renames, schema additions, full new-skill builds, AND kind-module additions.
 - Both PRs landed `completed-uncommitted` → `recover-commit` flow on first dispatch. recover_commit_rate ticked up from 0.117 to 0.125 (over 1 baseline run) and is expected to keep rising while codex CLI's commit-skip behavior persists. Not a blocker; the recovery path is fully automated.
 - R1 catches both PRs were spec-precision issues (output_path scope on #372, runner `--json` independence on #381) — not implementation defects. The DC's explicit enumeration of edge cases is doing real work; R1 reviewer correctly held the line. No reviewer-side defects observed.
 - `model_per_phase` continues to log codex reviewer correctly (verifying `feedback_unblock_via_infra_pr` fix from PR #442 / #441 is durable across both PRs).
