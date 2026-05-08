@@ -43,6 +43,13 @@ node ${CLAUDE_SKILL_DIR}/scripts/probe-executor-env.js . --project-only --json
 
 Use `probe_signal.test_infra`, `lint_format`, `type_check`, `ci`, and `scripts` to inform rubric design, prerequisites, and Available Tools. The signal exposes data; it does not pick. No-signal/failure cases render as `no quality infra detected`; details: `references/signals.md`. The `test_infra` field is consumed by `references/rubric-pattern-tdd-flavor.md` and `scripts/tdd-suggestion.js`.
 
+### 3.5 Match a template from probe signals (optional starting point)
+Optionally ask for a deterministic starter template:
+```bash
+node ${CLAUDE_SKILL_DIR}/scripts/match-template.js --probe-file /tmp/probe.json --json
+```
+The result is a SUGGESTION the planner accepts, modifies, or rejects. NEVER auto-apply. Templates are SCAFFOLDS; planners must fill placeholder fields. Templates live in `references/rubric-templates/`; signal field meanings stay in `references/signals.md`.
+
 ### 4. Recover Done Criteria
 
 Before drafting factors, identify the evaluation source model:
@@ -96,16 +103,9 @@ If the task touches relay gates, resolver selectors, recovery paths, audit stamp
 
 ### 6. Validate the rubric
 
-Quick gate before dispatch:
+Quick gate before dispatch: prerequisites hold repo-wide hygiene only; factors stay substantive; contract/quality tier minimums match task size; S-size mechanical tasks may use 1 contract factor and no quality factor; ≥ 1 automated check exists; every evaluated factor has low/mid/high `scoring_guide`; criteria and targets are concrete.
 
-- Prerequisites hold repo-wide hygiene only; factors stay substantive (tier test)
-- Contract/Quality tier minimums met for task size (S/M/L/XL)
-- S-size mechanical tasks may use 1 contract factor and no quality factor; do not invent quality factors just to fill a quota
-- ≥ 1 automated check across prerequisites + factors
-- Every evaluated factor has `scoring_guide` with low/mid/high anchors
-- Criteria are specific and reference discoverable artifacts; targets are concrete
-
-Full checklist, factor counts, grading, and risk signals: `references/rubric-validation.md`. Grade D = revise; Grade C = warn and state the tradeoff.
+Full checklist, counts, grading, and risk signals: `references/rubric-validation.md`. Grade D = revise; Grade C = warn and state the tradeoff.
 
 ### 7. Simplify the rubric
 
@@ -145,10 +145,6 @@ node ${CLAUDE_SKILL_DIR}/../relay-dispatch/scripts/dispatch.js . \
 
 ## When to use
 
-All tasks dispatched via relay. Rubric depth scales with task size (determined by orchestrator judgment on recovered Done Criteria, file scope, ambiguity, and risk, not raw issue AC count):
-- **S** (simple fix, typo, 1-liner): 1 contract factor; add a quality factor only when the task has real design judgment; skip stress-test
-- **M** (standard feature): 3-5 factors, skip stress-test
-- **L** (cross-cutting, multi-file): 4-6 factors; stress-test only when evaluated factors plus ambiguity/risk signal exist
-- **XL** (architecture change): 5-8 factors; stress-test only when evaluated factors plus ambiguity/risk signal exist; add calibration only when useful
+All tasks dispatched via relay. Rubric depth scales with orchestrator judgment on recovered Done Criteria, file scope, ambiguity, and risk, not raw issue AC count: **S** simple tasks use 1 contract factor and skip stress-test; **M** uses 3-5 factors and skips stress-test; **L** uses 4-6 factors and stress-tests only with evaluated factors plus ambiguity/risk; **XL** uses 5-8 factors and adds calibration only when useful.
 
-Re-dispatches automatically prepend previous Score Log + reviewer feedback to the prompt (see `relay-dispatch` docs). Full rubric guide: `references/rubric-design-guide.md`.
+Re-dispatches automatically prepend previous Score Log + reviewer feedback. Full rubric guide: `references/rubric-design-guide.md`.
