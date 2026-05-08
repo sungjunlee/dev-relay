@@ -1,8 +1,8 @@
 ---
 milestone: Sprint 2026-05 — Sidecar MVP
-status: active
+status: complete
 started: 2026-05-08
-due: TBD
+completed: 2026-05-08
 epic: 367
 ---
 
@@ -42,6 +42,8 @@ Implementation order from Epic #367:
 
 - [x] **#374 Implement test-gap scout sidecar** — PR #452 / `89b60191` merged 2026-05-08 (codex+codex; 1 dispatch + R1 changes_requested + R2 changes_requested + R3 changes_requested + R4 PASS clean; 4 files +736/-22; +10 new tests = 26→36 total).
   - Deliverables: new `skills/relay-sidecar/scripts/kinds/test-gap.js` (5 required `##` sections; rubric block-scalar parser; required-vs-optional mutual-exclusion; 4-bullet confidence/limitations disclaimer including the absence-of-signal limitation), runner gained `test-gap` registration + opt-in `runContext` extras (`rubric`/`doneCriteria`/`diff` via symlink-refusing reads + PR-diff fallback), bypass `appendSidecarStart` with direct `appendRunEvent` call from runner to attach `trust_level: "advisory"` to start events without modifying frozen sidecar-store.js. Status `completed` on first dispatch — first time this batch codex committed + opened PR itself (no recover-commit). Required FOUR rounds total — R2 caught a YAML block-scalar miss + scope-drift modification of `sidecar-store.js`; R3 still flagged `sidecar_start trust_level` requiring an in-scope direct-event-write workaround; R4 clean.
+- [x] **#375 Implement docs-sync sidecar** — PR #453 / `7feddc03` merged 2026-05-08 (codex+codex; 1 dispatch + R1 changes_requested + R2 PASS clean; 4 files +651/-3; +7 new tests = 36→43 total).
+  - Deliverables: new `skills/relay-sidecar/scripts/kinds/docs-sync.js` (5 required `##` sections; full-path AND basename matching against doc text per R1 fix; section-aware patch hints; 5-bullet confidence/limitations disclaimer including the no-apply-patches limitation). Runner gained `docs-sync` registration + opt-in `docCandidates` loader (gated by kind, scans `README*.md`/`CHANGELOG*.md`/`ARCHITECTURE*.md`/`docs/**/*.md`/`skills/*/SKILL.md` via symlink-refusing helper). Universal `output.md` filename preserved. **`sidecar_start trust_level` correctly NOT specified in DC** (lesson applied from #374's `feedback_dc_overspec_frozen_helper`) — clean 2-round resolution. **Final Sidecar kind. Epic #367 fully shipped.**
 
 ## Running Context
 
@@ -115,9 +117,21 @@ Implementation order from Epic #367:
 - `finalize-run.js --merge-method squash`; issue #374 auto-closed; no force-finalize.
 - **Phase D first kind shipped, but at 4 rounds is the outlier** of this Sidecar batch (n=4 prior were all 2 rounds). Cause analysis: AC6 over-specification + reviewer-anchors-to-frozen-DC interaction. Future kind PRs should NOT specify `trust_level` on `sidecar_start` in DC.
 
+### 2026-05-08 — #375 docs-sync kind shipped (Phase D + Sidecar Epic #367 COMPLETE)
+
+- Probe of #375: clarity=low, granularity=medium, verifiability=low — body sparse on heuristic specifics.
+- Dispatch (codex executor, M-size, 4-factor rubric). DC pre-flight check: explicitly avoided `trust_level on sidecar_start` per `feedback_dc_overspec_frozen_helper` (lesson from #374).
+- R1 status `completed-uncommitted` → `recover-commit.js` → commit `01cd78b`, PR #453.
+- R1 review: changes_requested with 1 issue — match logic only checked full source paths, missing basename references (e.g., `README.md` mentioning `baz.js`). DC AC9(a) explicitly required basename matching.
+- R2 dispatch via `dispatch.js --manifest`; codex committed `5cd6818` "Fix docs-sync basename path matching" — added basename extraction + updated test fixture.
+- R2 review: PASS clean. All 9 DC verified, contract+quality both pass, 0 issues.
+- `finalize-run.js --merge-method squash`; issue #375 auto-closed; no force-finalize.
+- **2-round resolution** — back to baseline pace. Lesson from #374 applied successfully (no `trust_level on sidecar_start` over-specification).
+- **Sidecar Epic #367 fully shipped**: 6 child issues (#372/#381/#373/#376/#374/#375), 6 PRs (#448/#449/#450/#451/#452/#453), 1 sprint, 1 day end-to-end (2026-05-08).
+
 ## Outstanding watch items
 
-- Pattern n=9 cumulative now (Epic #431: #435/#436/#437/#444; Sidecar: #372/#381/#373/#376/#374). `forbidden_zones` adherence ROBUST across mechanical renames, schema additions, new-skill builds, kind-module additions, surgical extensions, AND second-kind additions (with one false start in #374 R2 caught and corrected).
+- Pattern n=10 cumulative now (Epic #431: #435/#436/#437/#444; Sidecar: #372/#381/#373/#376/#374/#375). `forbidden_zones` adherence ROBUST across mechanical renames, schema additions, new-skill builds, kind-module additions, surgical extensions, second-kind additions (with one false start in #374 R2 caught and corrected), and third-kind additions.
 - **Reviewer-anchored-to-frozen-DC pattern** (#374 only): when DC over-specifies a field and the implementation legitimately can't satisfy it without scope drift, the redispatch addendum can direct the bypass — but the reviewer keeps anchoring to the frozen DC each round, requiring orchestrator to ensure the in-scope satisfaction path is BOTH directed AND code-implementable. Lesson: pre-flight DC review for unintended over-specification (particularly cross-PR contract claims like "X event also has Y field" where X's helper is in a frozen scope).
 - Both PRs landed `completed-uncommitted` → `recover-commit` flow on first dispatch. recover_commit_rate ticked up from 0.117 to 0.125 (over 1 baseline run) and is expected to keep rising while codex CLI's commit-skip behavior persists. Not a blocker; the recovery path is fully automated.
 - R1 catches both PRs were spec-precision issues (output_path scope on #372, runner `--json` independence on #381) — not implementation defects. The DC's explicit enumeration of edge cases is doing real work; R1 reviewer correctly held the line. No reviewer-side defects observed.
