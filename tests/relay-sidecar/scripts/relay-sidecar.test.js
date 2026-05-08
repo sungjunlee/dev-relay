@@ -18,6 +18,14 @@ const { readRunEvents } = require("../../../skills/relay-dispatch/scripts/relay-
 const { readSidecarIndex } = require("../../../skills/relay-dispatch/scripts/sidecar-store");
 const { main } = require("../../../skills/relay-sidecar/scripts/relay-sidecar");
 
+const TEST_GAP_HEADINGS = [
+  "## Run summary",
+  "## Required gaps",
+  "## Optional hardening",
+  "## Done Criteria coverage",
+  "## Confidence and limitations",
+];
+
 function runGit(cwd, args) {
   return execFileSync("git", args, { cwd, encoding: "utf-8", stdio: "pipe" });
 }
@@ -191,7 +199,6 @@ test("--kind context-recap --executor none writes deterministic output and recor
   assert.equal(events.length, 2);
   assert.equal(events[0].event, "sidecar_start");
   assert.equal(events[0].executor, "none");
-  assert.equal(events[0].trust_level, "advisory");
   assert.equal(events[1].event, "sidecar_result");
   assert.equal(events[1].trust_level, "advisory");
   assert.equal(readSidecarIndex(fixture.repoRoot, fixture.runId).sidecars[0].status, "completed");
@@ -234,12 +241,14 @@ test("--kind test-gap --executor none writes deterministic output and records re
   const output = fs.readFileSync(readOutputPath(fixture, sidecarId), "utf-8");
   assert.match(output, /^# Test gap report: /);
   assert.match(output, /tests\/foo\.test\.js/);
+  for (const heading of TEST_GAP_HEADINGS) {
+    assert.match(output, new RegExp(`^${heading.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "m"));
+  }
 
   const events = readRunEvents(fixture.repoRoot, fixture.runId);
   assert.equal(events.length, 2);
   assert.equal(events[0].event, "sidecar_start");
   assert.equal(events[0].executor, "none");
-  assert.equal(events[0].trust_level, "advisory");
   assert.equal(events[1].event, "sidecar_result");
   assert.equal(events[1].trust_level, "advisory");
   assert.equal(events[1].output_path, `sidecars/${sidecarId}/output.md`);

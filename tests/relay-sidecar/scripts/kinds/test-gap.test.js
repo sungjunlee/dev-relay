@@ -85,6 +85,27 @@ test("buildRecap lists rubric node --test paths missing from the diff as require
   assert.match(section(recap, "## Required gaps"), /tests\/foo\.test\.js/);
 });
 
+test("buildRecap lists block-scalar rubric node --test paths missing from the diff as required gaps", () => {
+  const recap = buildRecap({
+    runContext: makeRunContext({
+      rubric: [
+        "factors:",
+        "  - name: Sidecar integration tests",
+        "    command: |",
+        "      node --test tests/relay-sidecar/scripts/kinds/block-scalar.test.js",
+        "    target: pass",
+      ].join("\n"),
+      diff: [
+        "diff --git a/skills/relay-sidecar/scripts/kinds/test-gap.js b/skills/relay-sidecar/scripts/kinds/test-gap.js",
+        "+++ b/skills/relay-sidecar/scripts/kinds/test-gap.js",
+      ].join("\n"),
+    }),
+  });
+
+  assertRecapShape(recap);
+  assert.match(section(recap, "## Required gaps"), /tests\/relay-sidecar\/scripts\/kinds\/block-scalar\.test\.js/);
+});
+
 test("buildRecap reports empty required gaps when rubric has no test-invoking factors", () => {
   const recap = buildRecap({
     runContext: makeRunContext({

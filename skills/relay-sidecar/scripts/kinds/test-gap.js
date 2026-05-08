@@ -1,3 +1,4 @@
+// Sidecar output uses the universal `output.md` filename owned by the runner.
 const KIND_NAME = "test-gap";
 
 function valueOrNone(value) {
@@ -26,13 +27,47 @@ function tokenizeCommand(command) {
     || [];
 }
 
+function stripYamlScalarQuotes(value) {
+  return String(value || "").trim().replace(/^['"]|['"]$/g, "");
+}
+
+function extractCommandsFromRubricText(rubricText) {
+  const lines = String(rubricText || "").replace(/\r\n/g, "\n").split("\n");
+  const commands = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    const blockMatch = lines[index].match(/^(\s*)command\s*:\s*([|>])[+-]?\s*$/);
+    if (blockMatch) {
+      const baseIndent = blockMatch[1].length;
+      const blockLines = [];
+      let cursor = index + 1;
+      for (; cursor < lines.length; cursor += 1) {
+        const line = lines[cursor];
+        const lineIndent = line.search(/\S/);
+        if (lineIndent === -1) {
+          blockLines.push("");
+          continue;
+        }
+        if (lineIndent <= baseIndent) break;
+        blockLines.push(line.slice(Math.min(line.length, baseIndent + 2)));
+      }
+      commands.push(blockLines.join("\n").trim());
+      index = cursor - 1;
+      continue;
+    }
+
+    const inlineMatch = lines[index].match(/^\s*command\s*:\s*(.+?)\s*$/);
+    if (inlineMatch) {
+      const command = stripYamlScalarQuotes(inlineMatch[1]);
+      if (command !== "|" && command !== ">") commands.push(command);
+    }
+  }
+  return commands.filter(Boolean);
+}
+
 function collectCommandStrings(value, output = []) {
   if (value === undefined || value === null) return output;
   if (typeof value === "string") {
-    for (const line of value.split(/\r?\n/)) {
-      const match = line.match(/^\s*command\s*:\s*(.+?)\s*$/);
-      if (match) output.push(match[1].replace(/^['"]|['"]$/g, ""));
-    }
+    output.push(...extractCommandsFromRubricText(value));
     return output;
   }
   if (Array.isArray(value)) {
