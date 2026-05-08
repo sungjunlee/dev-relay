@@ -156,7 +156,7 @@ test("happy path stores stdout and records advisory result", (t) => {
   assert.equal(index.sidecars[0].status, "completed");
 });
 
-test("--json stores executor stdout as output.json and resolves top-level pr_number diff", (t) => {
+test("--json keeps runner stdout structured without changing sidecar output path", (t) => {
   const fixture = createFixture(t);
   const record = readManifest(fixture.manifestPath);
   writeManifest(fixture.manifestPath, { ...record.data, pr_number: 448 }, record.body);
@@ -181,8 +181,9 @@ test("--json stores executor stdout as output.json and resolves top-level pr_num
   assert.equal(result.exitCode, 0);
   assert.equal(diffPrNumber, 448);
   const sidecarId = "context-recap-1234abcd";
-  assert.equal(fs.readFileSync(readOutputPath(fixture, sidecarId, "output.json"), "utf-8"), "{\"summary\":\"ok\"}\n");
-  assert.equal(JSON.parse(result.stdout).output_path, `sidecars/${sidecarId}/output.json`);
+  assert.equal(fs.readFileSync(readOutputPath(fixture, sidecarId), "utf-8"), "{\"summary\":\"ok\"}\n");
+  assert.equal(fs.existsSync(readOutputPath(fixture, sidecarId, "output.json")), false);
+  assert.equal(JSON.parse(result.stdout).output_path, `sidecars/${sidecarId}/output.md`);
 });
 
 test("opencode non-zero emits sidecar_failed and marks index failed", (t) => {

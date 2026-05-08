@@ -53,7 +53,7 @@ function usage() {
     `  --model <provider/model>  ${modeLabel("--model")} Optional model override passed through`,
     "  --variant <name>   Optional sidecar variant included in the sidecar id",
     `  --dry-run          ${modeLabel("--dry-run")} Print envelope without invoking executor or emitting events`,
-    `  --json             ${modeLabel("--json")} Print structured output and store stdout as output.json`,
+    `  --json             ${modeLabel("--json")} Print structured runner output`,
     `  --help, -h         ${modeLabel("--help")} Show this help`,
   ].join("\n");
 }
@@ -297,7 +297,7 @@ function main(options = {}) {
       cwd,
       getPrDiff: options.getPrDiff || runGhPrDiff,
     });
-    const outputName = args.json ? "output.json" : "output.md";
+    const outputName = "output.md";
     const outputPath = `sidecars/${sidecarId}/${outputName}`;
     const outputDir = getSidecarOutputDir(context.repoRoot, args.runId, sidecarId);
     const outputFullPath = path.join(outputDir, outputName);

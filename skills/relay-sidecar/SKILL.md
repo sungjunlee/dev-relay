@@ -25,7 +25,7 @@ node skills/relay-sidecar/scripts/relay-sidecar.js --run-id <id> --kind <name> [
 - `--model <provider/model>`: optional model override passed through to the executor.
 - `--variant <name>`: optional sidecar variant; included in the generated sidecar id.
 - `--dry-run`: resolve and print the planned envelope without invoking the executor or emitting sidecar events.
-- `--json`: print a structured JSON envelope and store executor stdout as `output.json`.
+- `--json`: print a structured JSON envelope for the runner response. Executor stdout is still stored as `output.md`.
 - `--help`, `-h`: print usage.
 
 ## Trust Boundary
