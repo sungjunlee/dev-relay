@@ -127,6 +127,7 @@ test("--dry-run skips opencode and emits no events", (t) => {
 
 test("happy path stores stdout and records advisory result", (t) => {
   const fixture = createFixture(t);
+  let promptText = "";
   const result = invoke([
     "--run-id", fixture.runId,
     "--kind", "context-recap",
@@ -135,14 +136,16 @@ test("happy path stores stdout and records advisory result", (t) => {
     runOpencode: ({ cwd, args }) => {
       assert.equal(cwd, fixture.worktreePath);
       assert.equal(args[0], "run");
-      assert.match(args.at(-1), /kind: context-recap/);
-      return { code: 0, stdout: "recap output\n", stderr: "" };
+      promptText = args.at(-1);
+      assert.match(promptText, /CONTEXT_RECAP_AUGMENTATION_REQUEST/);
+      return { code: 0, stdout: "augmented recap output\n", stderr: "" };
     },
   });
 
   assert.equal(result.exitCode, 0);
   const sidecarId = "context-recap-1234abcd";
-  assert.equal(fs.readFileSync(readOutputPath(fixture, sidecarId), "utf-8"), "recap output\n");
+  assert.equal(fs.readFileSync(readOutputPath(fixture, sidecarId), "utf-8"), "augmented recap output\n");
+  assert.match(promptText, /BASELINE RECAP:/);
 
   const events = readRunEvents(fixture.repoRoot, fixture.runId);
   assert.equal(events.length, 2);
@@ -156,6 +159,42 @@ test("happy path stores stdout and records advisory result", (t) => {
   assert.equal(index.sidecars[0].status, "completed");
 });
 
+test("--kind context-recap --executor none writes deterministic output and records result", (t) => {
+  const fixture = createFixture(t);
+  const record = readManifest(fixture.manifestPath);
+  writeManifest(fixture.manifestPath, { ...record.data, pr_number: 448 }, record.body);
+  const result = invoke([
+    "--run-id", fixture.runId,
+    "--kind", "context-recap",
+    "--executor", "none",
+  ], {
+    cwd: fixture.repoRoot,
+    getPrDiff: () => {
+      throw new Error("context-recap deterministic mode must not fetch PR diff");
+    },
+  });
+
+  assert.equal(result.exitCode, 0);
+  const sidecarId = "context-recap-1234abcd";
+  const output = fs.readFileSync(readOutputPath(fixture, sidecarId), "utf-8");
+  for (const heading of [
+    "## Run summary",
+    "## Round history",
+    "## Repeated reviewer findings",
+    "## Unresolved requirements",
+    "## Likely misses",
+  ]) {
+    assert.match(output, new RegExp(`^${heading.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "m"));
+  }
+
+  const events = readRunEvents(fixture.repoRoot, fixture.runId);
+  assert.equal(events.length, 2);
+  assert.equal(events[0].event, "sidecar_start");
+  assert.equal(events[0].executor, "none");
+  assert.equal(events[1].event, "sidecar_result");
+  assert.equal(readSidecarIndex(fixture.repoRoot, fixture.runId).sidecars[0].status, "completed");
+});
+
 test("--json keeps runner stdout structured without changing sidecar output path", (t) => {
   const fixture = createFixture(t);
   const record = readManifest(fixture.manifestPath);
@@ -164,7 +203,7 @@ test("--json keeps runner stdout structured without changing sidecar output path
 
   const result = invoke([
     "--run-id", fixture.runId,
-    "--kind", "context-recap",
+    "--kind", "test-gap",
     "--json",
   ], {
     cwd: fixture.repoRoot,
@@ -180,7 +219,7 @@ test("--json keeps runner stdout structured without changing sidecar output path
 
   assert.equal(result.exitCode, 0);
   assert.equal(diffPrNumber, 448);
-  const sidecarId = "context-recap-1234abcd";
+  const sidecarId = "test-gap-1234abcd";
   assert.equal(fs.readFileSync(readOutputPath(fixture, sidecarId), "utf-8"), "{\"summary\":\"ok\"}\n");
   assert.equal(fs.existsSync(readOutputPath(fixture, sidecarId, "output.json")), false);
   assert.equal(JSON.parse(result.stdout).output_path, `sidecars/${sidecarId}/output.md`);
@@ -230,6 +269,22 @@ test("advisory violation detects worktree drift and fails closed", (t) => {
   assert.equal(readSidecarIndex(fixture.repoRoot, fixture.runId).sidecars[0].status, "failed");
 });
 
+test("--executor none is rejected for kinds without deterministic builders", (t) => {
+  const fixture = createFixture(t);
+  const result = invoke([
+    "--run-id", fixture.runId,
+    "--kind", "test-gap",
+    "--executor", "none",
+  ], {
+    cwd: fixture.repoRoot,
+  });
+
+  assert.notEqual(result.exitCode, 0);
+  assert.match(result.stderr, /executor "none".*test-gap|deterministic sidecar builder/);
+  assert.deepEqual(readRunEvents(fixture.repoRoot, fixture.runId), []);
+  assert.equal(fs.existsSync(getSidecarsIndexPath(fixture.repoRoot, fixture.runId)), false);
+});
+
 test("unknown executor exits non-zero without sidecar events or index changes", (t) => {
   const fixture = createFixture(t);
   const result = invoke([
@@ -244,7 +299,7 @@ test("unknown executor exits non-zero without sidecar events or index changes", 
   });
 
   assert.notEqual(result.exitCode, 0);
-  assert.match(result.stderr, /only opencode is wired|unsupported sidecar executor/);
+  assert.match(result.stderr, /supported executors are opencode and none|unsupported sidecar executor/);
   assert.deepEqual(readRunEvents(fixture.repoRoot, fixture.runId), []);
   assert.equal(fs.existsSync(getSidecarsIndexPath(fixture.repoRoot, fixture.runId)), false);
 });
