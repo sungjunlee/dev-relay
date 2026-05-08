@@ -1,0 +1,31 @@
+# Template: jest-tsc-strict
+# Match signals: test_infra=jest, type_check=typescript
+# Use when: TypeScript repos already expose Jest tests and tsc --noEmit.
+# Customize: factor names, commands, targets, criteria, and scoring guide anchors.
+# Fill in task-specific Done Criteria before dispatch.
+# NOTE: This is a STARTING POINT, not a finished rubric. Do not ship-as-is.
+size: M
+prerequisites:
+  - command: "npm test"
+    target: "exit 0"
+  - command: "tsc --noEmit"
+    target: "exit 0"
+factors:
+  - name: "[fill in: specific Done Criteria outcome]"
+    tier: contract
+    type: automated
+    command: "[fill in: task-specific Jest or Node check command]"
+    target: "[fill in: expected output or exit condition]"
+    weight: required
+  - name: "[fill in: implementation quality area]"
+    tier: quality
+    type: evaluated
+    criteria: |
+      - [fill in: specific quality criterion 1]
+      - [fill in: specific quality criterion 2]
+    scoring_guide:
+      low: "[fill in: what barely works looks like]"
+      mid: "[fill in: what partially succeeds]"
+      high: "[fill in: what genuinely meets the bar]"
+    target: ">= 8/10"
+    weight: required

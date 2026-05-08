@@ -1,0 +1,29 @@
+[
+  {
+    "file": "jest-tsc-strict.yaml",
+    "signals": {
+      "test_infra": ["jest"],
+      "type_check": ["typescript"],
+      "lint_format": []
+    },
+    "description": "TypeScript + Jest + tsc --noEmit"
+  },
+  {
+    "file": "pytest-mypy-strict.yaml",
+    "signals": {
+      "test_infra": ["pytest"],
+      "type_check": ["mypy"],
+      "lint_format": []
+    },
+    "description": "Python + pytest + mypy strict"
+  },
+  {
+    "file": "go-test.yaml",
+    "signals": {
+      "test_infra": [],
+      "type_check": [],
+      "lint_format": []
+    },
+    "description": "Go + go test + gofmt/go vet"
+  }
+]
