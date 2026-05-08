@@ -239,7 +239,7 @@ function buildConfidenceAndLimitationsSection() {
   return [
     "## Confidence and limitations",
     "",
-    "This report is advisory. It uses simple heuristics over rubric commands, Done Criteria text, and diff paths; the reviewer remains the final gate for test adequacy.",
+    "This report is advisory. It uses simple substring and path-glob heuristics over rubric commands, Done Criteria text, and diff paths; the reviewer remains the final gate for test adequacy, and absence of a gap signal does not mean coverage is complete.",
   ].join("\n");
 }
 

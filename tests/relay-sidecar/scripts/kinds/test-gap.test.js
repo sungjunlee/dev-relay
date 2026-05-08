@@ -148,6 +148,16 @@ test("buildRecap avoids standalone completion claims", () => {
   }
 });
 
+test("buildRecap confidence disclaimer states all required limitations", () => {
+  const recap = buildRecap({ runContext: makeRunContext() });
+  const confidence = section(recap, "## Confidence and limitations");
+
+  assert.match(confidence, /advisory/i);
+  assert.match(confidence, /simple substring and path-glob heuristics/i);
+  assert.match(confidence, /reviewer remains the final gate/i);
+  assert.match(confidence, /absence of a gap signal does not mean coverage is complete/i);
+});
+
 test("buildOpencodeAugmentationPrompt includes marker and baseline report", () => {
   const baselineRecap = "# Test gap report: run\n\n## Run summary\n";
   const prompt = buildOpencodeAugmentationPrompt({

@@ -191,7 +191,9 @@ test("--kind context-recap --executor none writes deterministic output and recor
   assert.equal(events.length, 2);
   assert.equal(events[0].event, "sidecar_start");
   assert.equal(events[0].executor, "none");
+  assert.equal(events[0].trust_level, "advisory");
   assert.equal(events[1].event, "sidecar_result");
+  assert.equal(events[1].trust_level, "advisory");
   assert.equal(readSidecarIndex(fixture.repoRoot, fixture.runId).sidecars[0].status, "completed");
 });
 
@@ -237,9 +239,71 @@ test("--kind test-gap --executor none writes deterministic output and records re
   assert.equal(events.length, 2);
   assert.equal(events[0].event, "sidecar_start");
   assert.equal(events[0].executor, "none");
+  assert.equal(events[0].trust_level, "advisory");
   assert.equal(events[1].event, "sidecar_result");
+  assert.equal(events[1].trust_level, "advisory");
   assert.equal(events[1].output_path, `sidecars/${sidecarId}/output.md`);
   assert.equal(readSidecarIndex(fixture.repoRoot, fixture.runId).sidecars[0].status, "completed");
+});
+
+test("--kind test-gap --executor none falls back to PR diff when no review diff exists", (t) => {
+  const fixture = createFixture(t);
+  const record = readManifest(fixture.manifestPath);
+  writeManifest(fixture.manifestPath, { ...record.data, pr_number: 448 }, record.body);
+  const runDir = getRunDir(fixture.repoRoot, fixture.runId);
+  fs.mkdirSync(runDir, { recursive: true });
+  fs.writeFileSync(path.join(runDir, "rubric.yaml"), [
+    "factors:",
+    "  - name: Unit tests",
+    "    command: node --test tests/pr/scripts/pr.test.js",
+    "    target: pass",
+    "",
+  ].join("\n"), "utf-8");
+  fs.writeFileSync(path.join(runDir, "dispatch-prompt.md"), "- Add test-gap sidecar\n", "utf-8");
+  let diffPrNumber = null;
+
+  const result = invoke([
+    "--run-id", fixture.runId,
+    "--kind", "test-gap",
+    "--executor", "none",
+  ], {
+    cwd: fixture.repoRoot,
+    getPrDiff: (prNumber) => {
+      diffPrNumber = prNumber;
+      return [
+        "diff --git a/skills/extra/scripts/extra.js b/skills/extra/scripts/extra.js",
+        "+++ b/skills/extra/scripts/extra.js",
+        "",
+      ].join("\n");
+    },
+  });
+
+  assert.equal(result.exitCode, 0);
+  assert.equal(diffPrNumber, 448);
+  const output = fs.readFileSync(readOutputPath(fixture, "test-gap-1234abcd"), "utf-8");
+  assert.match(output, /tests\/pr\/scripts\/pr\.test\.js/);
+  assert.match(output, /skills\/extra\/scripts\/extra\.js/);
+});
+
+test("--kind test-gap refuses symlinked run-context inputs", (t) => {
+  const fixture = createFixture(t);
+  const runDir = getRunDir(fixture.repoRoot, fixture.runId);
+  fs.mkdirSync(runDir, { recursive: true });
+  const targetPath = path.join(runDir, "rubric-real.yaml");
+  fs.writeFileSync(targetPath, "command: node --test tests/foo.test.js\n", "utf-8");
+  fs.symlinkSync(targetPath, path.join(runDir, "rubric.yaml"));
+
+  const result = invoke([
+    "--run-id", fixture.runId,
+    "--kind", "test-gap",
+    "--executor", "none",
+  ], {
+    cwd: fixture.repoRoot,
+  });
+
+  assert.notEqual(result.exitCode, 0);
+  assert.match(result.stderr, /symlinked path|ELOOP|rubric\.yaml/);
+  assert.deepEqual(readRunEvents(fixture.repoRoot, fixture.runId), []);
 });
 
 test("--kind test-gap --executor opencode uses test-gap augmentation prompt", (t) => {

@@ -18,7 +18,10 @@ const {
   validateManifestPaths,
 } = require("../../relay-dispatch/scripts/manifest/paths");
 const { readManifest } = require("../../relay-dispatch/scripts/manifest/store");
-const { writeTextFileWithoutFollowingSymlinks } = require("../../relay-dispatch/scripts/manifest/rubric");
+const {
+  readTextFileWithoutFollowingSymlinks,
+  writeTextFileWithoutFollowingSymlinks,
+} = require("../../relay-dispatch/scripts/manifest/rubric");
 const {
   appendSidecarFailed,
   appendSidecarResult,
@@ -132,7 +135,7 @@ function runGhPrDiff(prNumber, { cwd, spawnSyncImpl = spawnSync } = {}) {
 
 function readTextIfExists(filePath) {
   try {
-    return fs.readFileSync(filePath, "utf-8");
+    return readTextFileWithoutFollowingSymlinks(filePath);
   } catch (error) {
     if (error.code === "ENOENT") return "";
     throw error;
@@ -196,15 +199,19 @@ function loadRunArtifacts({ runDir, manifest, runId, prNumber, prDiff = "" }) {
   };
 }
 
-function loadTestGapExtras(runDir) {
+function getLatestReviewDiff(runDir) {
   const reviewDiffs = readRoundArtifacts(runDir, "diff\\.patch", readTextIfExists)
     .map((artifact) => ({ round: artifact.round, text: artifact.content }));
+  return reviewDiffs.length ? reviewDiffs.at(-1).text : null;
+}
+
+function loadTestGapExtras(runDir, { prDiff = "" } = {}) {
   const dispatchPrompt = readTextIfExists(path.join(runDir, "dispatch-prompt.md"));
   const roundOneDoneCriteria = readTextIfExists(path.join(runDir, "review-round-1-done-criteria.md"));
   return {
     rubric: readTextIfExists(path.join(runDir, "rubric.yaml")) || undefined,
-    doneCriteria: dispatchPrompt || roundOneDoneCriteria || undefined,
-    diff: reviewDiffs.length ? reviewDiffs.at(-1).text : null,
+    doneCriteria: roundOneDoneCriteria || dispatchPrompt || undefined,
+    diff: getLatestReviewDiff(runDir) || prDiff || null,
   };
 }
 
@@ -220,7 +227,8 @@ function resolveRunContext({ runId, cwd = process.cwd(), getPrDiff = runGhPrDiff
     caller: "relay-sidecar",
   });
   const prNumber = manifest.pr_number ?? manifest.git?.pr_number ?? null;
-  const prDiff = !fetchPrDiff || prNumber === null || prNumber === undefined
+  const hasLocalTestGapDiff = kind === testGapKind.KIND_NAME && getLatestReviewDiff(runDir) !== null;
+  const prDiff = !fetchPrDiff || hasLocalTestGapDiff || prNumber === null || prNumber === undefined
     ? ""
     : getPrDiff(prNumber, { cwd: repoRoot });
 
@@ -232,7 +240,7 @@ function resolveRunContext({ runId, cwd = process.cwd(), getPrDiff = runGhPrDiff
     prDiff,
   });
   if (kind === testGapKind.KIND_NAME) {
-    Object.assign(runContext, loadTestGapExtras(runDir));
+    Object.assign(runContext, loadTestGapExtras(runDir, { prDiff }));
   }
 
   return {
@@ -425,7 +433,8 @@ function main(options = {}) {
       runId: args.runId,
       cwd,
       getPrDiff: options.getPrDiff || runGhPrDiff,
-      fetchPrDiff: args.executor === "opencode" && args.kind !== contextRecapKind.KIND_NAME,
+      fetchPrDiff: args.kind === testGapKind.KIND_NAME
+        || (args.executor === "opencode" && args.kind !== contextRecapKind.KIND_NAME),
       kind: args.kind,
     });
     const outputName = "output.md";
