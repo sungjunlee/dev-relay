@@ -35,7 +35,8 @@ Implementation order from Epic #367:
 
 ### Phase C — Measurement
 
-- [ ] #376 Report sidecar value in reliability-report (turn on only after at least one sidecar exists).
+- [x] **#376 Report sidecar value in reliability-report** — PR #451 / `06d1d461` merged 2026-05-08 (codex+codex; 1 dispatch + R1 changes_requested + R2 PASS clean; 2 files +511/-3; +7 new tests).
+  - Deliverables: new `buildSidecarInsights({ events, manifests, repoRoot })` function; top-level `report.sidecar_insights` JSON field with `total_invocations`, `by_kind`/`by_executor`/`by_model`/`by_provider` buckets (with `successes`/`failures` outcome split for kind+executor), `failure_rate`, `predicted_findings_match_rate` (best-effort substring heuristic; word-level matching after R1 fix), `predicted_findings_runs_examined`. Human-readable surface mirrors guidance-pack style (`sidecar_insights: no sidecar runs available` for empty case; full block when populated; prediction lines suppressed when `null`). All 28 existing reliability-report tests preserved unchanged. Empty-state shape verified live: `{total_invocations: 0, ..., predicted_findings_match_rate: null}` no crash.
 
 ### Phase D — Additional kinds
 
@@ -86,7 +87,20 @@ Implementation order from Epic #367:
 
 ## Outstanding watch items
 
-- Both Phase A PRs (#372, #381) AND #373 had clean `forbidden_zones` adherence. Pattern n=7 cumulative now (Epic #431: #435/#436/#437/#444; Sidecar: #372/#381/#373). Pattern is robust across mechanical renames, schema additions, full new-skill builds, AND kind-module additions.
+### 2026-05-08 — #376 sidecar metrics shipped (Phase C complete)
+
+- Probe of #376: clarity=low, granularity=medium, verifiability=low — body sparse on prediction-heuristic specifics. Compensated with explicit 7-item DC including precise empty-state JSON shape and shared-substring heuristic semantics.
+- Dispatch (codex executor, M-size, 4-factor rubric — 2 contract + 2 quality). Forbidden_zones expanded to enumerate every relay-dispatch internal file EXCEPT `reliability-report.js`, plus all other skills.
+- R1 status `completed-uncommitted` → `recover-commit.js` → commit `b5e63ba`, PR #451.
+- R1 review: `changes_requested` with 1 issue — prediction heuristic implemented as `output.includes(fullTitle)` rather than shared-partial-substring. Reviewer correctly identified ambiguity in DC4 wording: "literal substring of [the] title" was implemented as full-title match but the reviewer's reading (and the `output_path` example test case) required word-level/partial substring matching. Spec-precision issue, not implementation defect.
+- R2 dispatch via `dispatch.js --manifest`; codex committed `724716d` "Fix sidecar prediction substring matching" — switched to word-level matching after tokenizing title.
+- R2 review: `pass` clean. All 7 DC verified, contract+quality both pass, 0 issues.
+- `finalize-run.js --merge-method squash`; issue #376 auto-closed; no force-finalize.
+- **Phase C complete**. `sidecar_insights` is now live on `main` (verified empty-state output post-merge).
+
+## Outstanding watch items
+
+- Pattern n=8 cumulative now (Epic #431: #435/#436/#437/#444; Sidecar: #372/#381/#373/#376). `forbidden_zones` adherence robust across mechanical renames, schema additions, new-skill builds, kind-module additions, AND surgical extensions of an existing module while protecting siblings.
 - Both PRs landed `completed-uncommitted` → `recover-commit` flow on first dispatch. recover_commit_rate ticked up from 0.117 to 0.125 (over 1 baseline run) and is expected to keep rising while codex CLI's commit-skip behavior persists. Not a blocker; the recovery path is fully automated.
 - R1 catches both PRs were spec-precision issues (output_path scope on #372, runner `--json` independence on #381) — not implementation defects. The DC's explicit enumeration of edge cases is doing real work; R1 reviewer correctly held the line. No reviewer-side defects observed.
 - `model_per_phase` continues to log codex reviewer correctly (verifying `feedback_unblock_via_infra_pr` fix from PR #442 / #441 is durable across both PRs).
