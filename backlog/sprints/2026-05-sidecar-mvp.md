@@ -40,8 +40,8 @@ Implementation order from Epic #367:
 
 ### Phase D — Additional kinds
 
-- [ ] #374 Implement test-gap scout sidecar.
-- [ ] #375 Implement docs-sync sidecar.
+- [x] **#374 Implement test-gap scout sidecar** — PR #452 / `89b60191` merged 2026-05-08 (codex+codex; 1 dispatch + R1 changes_requested + R2 changes_requested + R3 changes_requested + R4 PASS clean; 4 files +736/-22; +10 new tests = 26→36 total).
+  - Deliverables: new `skills/relay-sidecar/scripts/kinds/test-gap.js` (5 required `##` sections; rubric block-scalar parser; required-vs-optional mutual-exclusion; 4-bullet confidence/limitations disclaimer including the absence-of-signal limitation), runner gained `test-gap` registration + opt-in `runContext` extras (`rubric`/`doneCriteria`/`diff` via symlink-refusing reads + PR-diff fallback), bypass `appendSidecarStart` with direct `appendRunEvent` call from runner to attach `trust_level: "advisory"` to start events without modifying frozen sidecar-store.js. Status `completed` on first dispatch — first time this batch codex committed + opened PR itself (no recover-commit). Required FOUR rounds total — R2 caught a YAML block-scalar miss + scope-drift modification of `sidecar-store.js`; R3 still flagged `sidecar_start trust_level` requiring an in-scope direct-event-write workaround; R4 clean.
 
 ## Running Context
 
@@ -100,7 +100,25 @@ Implementation order from Epic #367:
 
 ## Outstanding watch items
 
-- Pattern n=8 cumulative now (Epic #431: #435/#436/#437/#444; Sidecar: #372/#381/#373/#376). `forbidden_zones` adherence robust across mechanical renames, schema additions, new-skill builds, kind-module additions, AND surgical extensions of an existing module while protecting siblings.
+### 2026-05-08 — #374 test-gap kind shipped (Phase D first kind, 4-round outlier)
+
+- Probe: clarity=low, granularity=medium, verifiability=low — body sparse on heuristic specifics.
+- Dispatch (codex executor, M-size, 4-factor rubric).
+- Status `completed` on R1 — first time this Sidecar batch codex committed + opened PR itself (commit `1b9ded1`, no recover-commit needed).
+- R1 review: 3 issues — `loadTestGapExtras` used raw `fs.readFileSync` not symlink-refusing helper + dropped PR-diff fallback; confidence disclaimer missed the "absence of gap signal" limitation; `sidecar_start` lacked `trust_level: "advisory"` (DC AC6 over-specification by orchestrator).
+- R2 dispatch (commit `2eea0f4`): codex addressed all 3 R1 issues but introduced two new problems — (a) rubric command extractor only handled inline scalars, missing YAML block-scalar `command: |` form (which is the more common shape — including this very rubric); (b) to add `trust_level` to start events, codex modified the FROZEN `skills/relay-dispatch/scripts/sidecar-store.js` and its test, breaking forbidden_zones.
+- R2 review: changes_requested with 2 deepening findings (block-scalar miss + scope drift). R2 redispatch prompt augmented by orchestrator addendum directing revert of relay-dispatch changes + acknowledging AC6's `trust_level on start` was over-specified (should drop the assertion).
+- R3 dispatch (commit `96075c2`): codex reverted relay-dispatch changes + fixed block-scalar handling. But R3 reviewer still flagged `sidecar_start trust_level` since it reads the FROZEN DC anchor (not the redispatch addendum), keeping AC6's literal wording.
+- R3 redispatch prompt augmented by SECOND orchestrator addendum: satisfy AC6 in-scope by bypassing `appendSidecarStart` and calling `appendRunEvent` directly from `relay-sidecar.js` with `trust_level: SIDECAR_TRUST_LEVEL` passed through (`appendRunEvent`'s eventData passthrough block already supports the field per #372).
+- R4 dispatch (commit `d8baf7f`): codex implemented the bypass cleanly. Diff stayed within 4 expected files.
+- R4 review: PASS clean. All 9 DC items VERIFIED, 0 issues.
+- `finalize-run.js --merge-method squash`; issue #374 auto-closed; no force-finalize.
+- **Phase D first kind shipped, but at 4 rounds is the outlier** of this Sidecar batch (n=4 prior were all 2 rounds). Cause analysis: AC6 over-specification + reviewer-anchors-to-frozen-DC interaction. Future kind PRs should NOT specify `trust_level` on `sidecar_start` in DC.
+
+## Outstanding watch items
+
+- Pattern n=9 cumulative now (Epic #431: #435/#436/#437/#444; Sidecar: #372/#381/#373/#376/#374). `forbidden_zones` adherence ROBUST across mechanical renames, schema additions, new-skill builds, kind-module additions, surgical extensions, AND second-kind additions (with one false start in #374 R2 caught and corrected).
+- **Reviewer-anchored-to-frozen-DC pattern** (#374 only): when DC over-specifies a field and the implementation legitimately can't satisfy it without scope drift, the redispatch addendum can direct the bypass — but the reviewer keeps anchoring to the frozen DC each round, requiring orchestrator to ensure the in-scope satisfaction path is BOTH directed AND code-implementable. Lesson: pre-flight DC review for unintended over-specification (particularly cross-PR contract claims like "X event also has Y field" where X's helper is in a frozen scope).
 - Both PRs landed `completed-uncommitted` → `recover-commit` flow on first dispatch. recover_commit_rate ticked up from 0.117 to 0.125 (over 1 baseline run) and is expected to keep rising while codex CLI's commit-skip behavior persists. Not a blocker; the recovery path is fully automated.
 - R1 catches both PRs were spec-precision issues (output_path scope on #372, runner `--json` independence on #381) — not implementation defects. The DC's explicit enumeration of edge cases is doing real work; R1 reviewer correctly held the line. No reviewer-side defects observed.
 - `model_per_phase` continues to log codex reviewer correctly (verifying `feedback_unblock_via_infra_pr` fix from PR #442 / #441 is durable across both PRs).
