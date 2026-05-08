@@ -24,7 +24,9 @@ function runQaLoop(input = {}) {
   let score = scoreCurrent(normalized, effectiveBody, changedBody);
   let pendingAsk = null;
 
-  for (const rawAnswer of answers) {
+  for (let index = 0; index < answers.length; index += 1) {
+    const rawAnswer = answers[index];
+    const emitAnswerEvents = index === answers.length - 1;
     pendingAsk = pendingAsk || nextAsk({
       score,
       budgetUsed,
@@ -37,16 +39,16 @@ function runQaLoop(input = {}) {
       break;
     }
 
-    events.push(questionAskedEvent(pendingAsk));
-
     const answer = normalizeAnswer(rawAnswer, pendingAsk.dimension);
     const classification = classifyAnswer(answer.answer, pendingAsk.default);
 
-    events.push(questionAnsweredEvent({
-      ask: pendingAsk,
-      answer: answer.answer,
-      acceptedDefault: classification.kind === "accepted_default",
-    }));
+    if (emitAnswerEvents) {
+      events.push(questionAnsweredEvent({
+        ask: pendingAsk,
+        answer: answer.answer,
+        acceptedDefault: classification.kind === "accepted_default",
+      }));
+    }
 
     if (pendingAsk.dimension === "_reentry") {
       reentryAnswered = true;
@@ -80,10 +82,12 @@ function runQaLoop(input = {}) {
     }
 
     if (classification.kind === "accepted_default") {
-      events.push(proposalAcceptedEvent({
-        ask: pendingAsk,
-        defaultValue: pendingAsk.default,
-      }));
+      if (emitAnswerEvents) {
+        events.push(proposalAcceptedEvent({
+          ask: pendingAsk,
+          defaultValue: pendingAsk.default,
+        }));
+      }
       effectiveBody = appendDimensionAnswer(effectiveBody, pendingAsk.dimension, pendingAsk.default);
       changedBody = true;
       budgetUsed += 1;
@@ -92,10 +96,12 @@ function runQaLoop(input = {}) {
       continue;
     }
 
-    events.push(proposalEditedEvent({
-      ask: pendingAsk,
-      override: answer.answer,
-    }));
+    if (emitAnswerEvents) {
+      events.push(proposalEditedEvent({
+        ask: pendingAsk,
+        override: answer.answer,
+      }));
+    }
 
     const trialBody = appendDimensionAnswer(effectiveBody, pendingAsk.dimension, answer.answer);
     const trialScore = scoreReadiness(trialBody);
@@ -110,14 +116,12 @@ function runQaLoop(input = {}) {
 
     const retry = recordRetry(retryCounts, pendingAsk.dimension);
     if (retry.exhausted) {
-      return escalateResult({
-        reason: "clarification_retry_exhausted",
-        score: trialScore,
-        budgetUsed,
-        events,
-        leafId: normalized.leafId,
-        dimensionsLow: [pendingAsk.dimension],
-      });
+      effectiveBody = trialBody;
+      changedBody = true;
+      budgetUsed += 1;
+      score = trialScore;
+      pendingAsk = null;
+      continue;
     }
     pendingAsk = buildClarificationAsk({
       dimension: pendingAsk.dimension,

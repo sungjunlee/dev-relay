@@ -30,23 +30,63 @@ function eventNames(result) {
   return result.events.map((event) => event.event);
 }
 
+function eventNamesFor(events) {
+  return events.map((event) => event.event);
+}
+
 function askedDimensions(result) {
   return result.events
     .filter((event) => event.event === "question_asked")
     .map((event) => event.payload.dimension);
 }
 
+function runScript(input, scriptedAnswers) {
+  const history = [];
+  const events = [];
+  const results = [];
+  const asked = [];
+  let result = runQaLoop({ ...input, answers: history });
+
+  results.push(result);
+  events.push(...result.events);
+  if (result.action === "ask") asked.push(result.dimension);
+
+  for (const scriptedAnswer of scriptedAnswers) {
+    if (result.action !== "ask") break;
+    const answer = typeof scriptedAnswer === "function"
+      ? scriptedAnswer(result)
+      : scriptedAnswer;
+    history.push({
+      dimension: result.dimension,
+      answer,
+    });
+
+    result = runQaLoop({ ...input, answers: history });
+    results.push(result);
+    events.push(...result.events);
+    if (result.action === "ask") asked.push(result.dimension);
+  }
+
+  return {
+    final: result,
+    results,
+    events,
+    askedDimensions: asked,
+    history,
+  };
+}
+
 test("all_yes accepts extracted defaults and proceeds when the default closes the low score", () => {
-  const result = runQaLoop({
+  const script = runScript({
     body: VERIFIABILITY_LOW_BODY,
     leaf_id: "leaf-yes",
-    answers: [{ dimension: "verifiability", answer: "yes" }],
-  });
+  }, ["yes"]);
 
+  const result = script.final;
   assert.equal(result.action, "proceed");
   assert.equal(result.budget_used, 1);
-  assert.deepEqual(askedDimensions(result), ["verifiability"]);
-  assert.deepEqual(eventNames(result), [
+  assert.deepEqual(script.askedDimensions, ["verifiability"]);
+  assert.deepEqual(eventNamesFor(script.events), [
     "question_asked",
     "question_answered",
     "proposal_accepted",
@@ -56,7 +96,7 @@ test("all_yes accepts extracted defaults and proceeds when the default closes th
   emitQaEvents({
     repoRoot: "/tmp/repo",
     requestId: "req-1",
-    events: result.events,
+    events: script.events,
     helpers: {
       clarify(_repoRoot, _requestId, data) {
         helperCalls.push(["clarify", data.dimension, data.default]);
@@ -82,20 +122,17 @@ test("all_yes accepts extracted defaults and proceeds when the default closes th
 });
 
 test("all_no_or_silent does not charge budget and escalates after one retry", () => {
-  const result = runQaLoop({
+  const script = runScript({
     body: VERIFIABILITY_LOW_BODY,
-    answers: [
-      { dimension: "verifiability", answer: "skip" },
-      { dimension: "verifiability", answer: "  " },
-    ],
-  });
+  }, ["skip", "  "]);
 
+  const result = script.final;
   assert.equal(result.action, "escalate");
   assert.equal(result.reason, "clarification_retry_exhausted");
   assert.equal(result.budget_used, 0);
   assert.deepEqual(result.dimensions_low, ["verifiability"]);
-  assert.deepEqual(askedDimensions(result), ["verifiability", "verifiability"]);
-  assert.deepEqual(eventNames(result), [
+  assert.deepEqual(script.askedDimensions, ["verifiability", "verifiability"]);
+  assert.deepEqual(eventNamesFor(script.events), [
     "question_asked",
     "question_answered",
     "question_asked",
@@ -104,18 +141,15 @@ test("all_no_or_silent does not charge budget and escalates after one retry", ()
 });
 
 test("override_with_specific_text advances to proceed when the override re-scores high", () => {
-  const result = runQaLoop({
+  const script = runScript({
     body: VERIFIABILITY_LOW_BODY,
-    answers: [{
-      dimension: "verifiability",
-      answer: "`tests/relay-ready/scripts/run-qa-loop.test.js` passes and the event ledger lists Q&A events in order.",
-    }],
-  });
+  }, ["`tests/relay-ready/scripts/run-qa-loop.test.js` passes and the event ledger lists Q&A events in order."]);
 
+  const result = script.final;
   assert.equal(result.action, "proceed");
   assert.equal(result.budget_used, 1);
-  assert.deepEqual(askedDimensions(result), ["verifiability"]);
-  assert.deepEqual(eventNames(result), [
+  assert.deepEqual(script.askedDimensions, ["verifiability"]);
+  assert.deepEqual(eventNamesFor(script.events), [
     "question_asked",
     "question_answered",
     "proposal_edited",
@@ -125,7 +159,7 @@ test("override_with_specific_text advances to proceed when the override re-score
   emitQaEvents({
     repoRoot: "/tmp/repo",
     requestId: "req-override",
-    events: result.events,
+    events: script.events,
     helpers: {
       clarify(_repoRoot, _requestId, data) {
         helperCalls.push(["clarify", data.dimension]);
@@ -151,17 +185,18 @@ test("override_with_specific_text advances to proceed when the override re-score
 });
 
 test("override_with_vague_text is re-asked without laundering the budget", () => {
-  const result = runQaLoop({
+  const script = runScript({
     body: VERIFIABILITY_LOW_BODY,
-    answers: [{ dimension: "verifiability", answer: "improve it" }],
-  });
+  }, ["improve it"]);
 
+  const result = script.final;
   assert.equal(result.action, "ask");
   assert.equal(result.dimension, "verifiability");
   assert.equal(result.budget_used, 0);
+  assert.notEqual(result.readiness_score.verifiability, "high");
   assert.match(result.question, /"improve it"/);
-  assert.deepEqual(askedDimensions(result), ["verifiability", "verifiability"]);
-  assert.deepEqual(eventNames(result), [
+  assert.deepEqual(script.askedDimensions, ["verifiability", "verifiability"]);
+  assert.deepEqual(eventNamesFor(script.events), [
     "question_asked",
     "question_answered",
     "proposal_edited",
@@ -169,49 +204,96 @@ test("override_with_vague_text is re-asked without laundering the budget", () =>
   ]);
 });
 
-test("escalation_path triggers instead of asking a fourth budgeted question", () => {
-  const result = runQaLoop({
-    body: GRANULARITY_LOW_BODY,
-    answers: [
-      { dimension: "granularity", answer: "yes" },
-      { dimension: "granularity", answer: "yes" },
-      { dimension: "granularity", answer: "yes" },
-    ],
+test("second vague override consumes budget instead of immediate retry exhaustion", () => {
+  const script = runScript({
+    body: VERIFIABILITY_LOW_BODY,
+  }, ["improve it", "make it better"]);
+
+  const result = script.final;
+  assert.equal(result.action, "ask");
+  assert.equal(result.dimension, "verifiability");
+  assert.equal(result.budget_used, 1);
+  assert.notEqual(result.readiness_score.verifiability, "high");
+  assert.deepEqual(script.askedDimensions, ["verifiability", "verifiability", "verifiability"]);
+  assert.deepEqual(eventNamesFor(script.events), [
+    "question_asked",
+    "question_answered",
+    "proposal_edited",
+    "question_asked",
+    "question_answered",
+    "proposal_edited",
+    "question_asked",
+  ]);
+});
+
+test("answered-history calls do not replay prior question_asked events", () => {
+  const first = runQaLoop({ body: VERIFIABILITY_LOW_BODY });
+  assert.equal(first.action, "ask");
+  assert.deepEqual(eventNames(first), ["question_asked"]);
+
+  const resumed = runQaLoop({
+    body: VERIFIABILITY_LOW_BODY,
+    answers: [{ dimension: "verifiability", answer: "yes" }],
   });
 
+  assert.equal(resumed.action, "proceed");
+  assert.deepEqual(eventNames(resumed), [
+    "question_answered",
+    "proposal_accepted",
+  ]);
+  assert.deepEqual(askedDimensions(resumed), []);
+});
+
+test("normal sequential use can emit all four Q&A event types", () => {
+  const accepted = runScript({
+    body: VERIFIABILITY_LOW_BODY,
+  }, ["yes"]);
+  const edited = runScript({
+    body: VERIFIABILITY_LOW_BODY,
+  }, ["`tests/relay-ready/scripts/run-qa-loop.test.js` passes after the override is applied."]);
+  const eventTypes = new Set([
+    ...eventNamesFor(accepted.events),
+    ...eventNamesFor(edited.events),
+  ]);
+
+  assert.deepEqual([...eventTypes].sort(), [
+    "proposal_accepted",
+    "proposal_edited",
+    "question_answered",
+    "question_asked",
+  ]);
+});
+
+test("escalation_path triggers instead of asking a fourth budgeted question", () => {
+  const script = runScript({
+    body: GRANULARITY_LOW_BODY,
+  }, ["yes", "yes", "yes"]);
+
+  const result = script.final;
   assert.equal(result.action, "escalate");
   assert.equal(result.reason, "question_budget_exhausted");
   assert.equal(result.budget_used, 3);
   assert.deepEqual(result.dimensions_low, ["granularity"]);
-  assert.deepEqual(askedDimensions(result), ["granularity", "granularity", "granularity"]);
+  assert.deepEqual(script.askedDimensions, ["granularity", "granularity", "granularity"]);
 });
 
 test("reentry_with_prior_escalation asks the recovery question first without charging budget", () => {
-  const first = runQaLoop({
+  const script = runScript({
     body: VERIFIABILITY_LOW_BODY,
     reentry: true,
     leaf_id: "leaf-reentry",
-  });
+  }, ["update", "yes"]);
 
+  const first = script.results[0];
   assert.equal(first.action, "ask");
   assert.equal(first.dimension, "_reentry");
   assert.equal(first.question, "Discard prior or update?");
   assert.equal(first.budget_used, 0);
   assert.deepEqual(askedDimensions(first), ["_reentry"]);
 
-  const resumed = runQaLoop({
-    body: VERIFIABILITY_LOW_BODY,
-    reentry: true,
-    leaf_id: "leaf-reentry",
-    answers: [
-      { dimension: "_reentry", answer: "update" },
-      { dimension: "verifiability", answer: "yes" },
-    ],
-  });
-
-  assert.equal(resumed.action, "proceed");
-  assert.equal(resumed.budget_used, 1);
-  assert.deepEqual(askedDimensions(resumed), ["_reentry", "verifiability"]);
+  assert.equal(script.final.action, "proceed");
+  assert.equal(script.final.budget_used, 1);
+  assert.deepEqual(script.askedDimensions, ["_reentry", "verifiability"]);
 });
 
 test("bypass_input proceeds immediately and suppresses all Q&A events", () => {
@@ -243,30 +325,25 @@ test("initial call returns an ask action for the highest-priority low dimension"
 });
 
 test("question priority is deterministic across score combinations", () => {
-  const cases = [
-    [{
-      verifiability: "low",
-      clarity: "low",
-      granularity: "low",
-    }, "verifiability"],
-    [{
-      verifiability: "medium",
-      clarity: "low",
-      granularity: "low",
-    }, "clarity"],
-    [{
-      verifiability: "high",
-      clarity: "medium",
-      granularity: "low",
-    }, "granularity"],
-    [{
-      verifiability: "medium",
-      clarity: "medium",
-      granularity: "medium",
-    }, null],
-  ];
+  const levels = ["low", "medium", "high"];
+  let lowCombinationCount = 0;
 
-  for (const [readiness, expected] of cases) {
-    assert.equal(selectQuestionDimension(readiness), expected);
+  for (const verifiability of levels) {
+    for (const clarity of levels) {
+      for (const granularity of levels) {
+        const readiness = { verifiability, clarity, granularity };
+        const expected = ["verifiability", "clarity", "granularity"]
+          .find((dimension) => readiness[dimension] === "low") || null;
+        if (expected) lowCombinationCount += 1;
+
+        assert.equal(
+          selectQuestionDimension(readiness),
+          expected,
+          JSON.stringify(readiness)
+        );
+      }
+    }
   }
+
+  assert.equal(lowCombinationCount, 19);
 });
