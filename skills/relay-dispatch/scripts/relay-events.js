@@ -48,6 +48,9 @@ const EVENTS = Object.freeze({
   REVIEWER_SWAP: "reviewer_swap",
   RUBRIC_QUALITY: "rubric_quality",
   SCORE_DIVERGENCE: "score_divergence",
+  SIDECAR_FAILED: "sidecar_failed",
+  SIDECAR_RESULT: "sidecar_result",
+  SIDECAR_START: "sidecar_start",
   SKIP_REVIEW: "skip_review",
   STATE_RECOVERY: "state_recovery",
 });
@@ -151,6 +154,9 @@ function appendRunEvent(repoRoot, runId, eventData) {
     ...(eventData.executor !== undefined
       ? { executor: normalizeEventValue(eventData.executor) }
       : {}),
+    ...(eventData.kind !== undefined
+      ? { kind: normalizeEventValue(eventData.kind) }
+      : {}),
     ...(eventData.model !== undefined
       ? { model: normalizeEventValue(eventData.model) }
       : {}),
@@ -214,6 +220,9 @@ function appendRunEvent(repoRoot, runId, eventData) {
     ...(eventData.artifact_path !== undefined
       ? { artifact_path: normalizeEventValue(eventData.artifact_path) }
       : {}),
+    ...(eventData.output_path !== undefined
+      ? { output_path: normalizeEventValue(eventData.output_path) }
+      : {}),
     ...(eventData.raw_response_path !== undefined
       ? { raw_response_path: normalizeEventValue(eventData.raw_response_path) }
       : {}),
@@ -231,6 +240,12 @@ function appendRunEvent(repoRoot, runId, eventData) {
       : {}),
     ...(eventData.failure_reason !== undefined
       ? { failure_reason: normalizeEventValue(eventData.failure_reason) }
+      : {}),
+    ...(eventData.sidecar_id !== undefined
+      ? { sidecar_id: normalizeEventValue(eventData.sidecar_id) }
+      : {}),
+    ...(eventData.trust_level !== undefined
+      ? { trust_level: normalizeEventValue(eventData.trust_level) }
       : {}),
   };
 
