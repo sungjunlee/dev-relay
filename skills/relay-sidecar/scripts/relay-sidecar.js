@@ -18,7 +18,11 @@ const {
   validateManifestPaths,
 } = require("../../relay-dispatch/scripts/manifest/paths");
 const { readManifest } = require("../../relay-dispatch/scripts/manifest/store");
-const { writeTextFileWithoutFollowingSymlinks } = require("../../relay-dispatch/scripts/manifest/rubric");
+const {
+  readTextFileWithoutFollowingSymlinks,
+  writeTextFileWithoutFollowingSymlinks,
+} = require("../../relay-dispatch/scripts/manifest/rubric");
+const { appendRunEvent, EVENTS } = require("../../relay-dispatch/scripts/relay-events");
 const {
   appendSidecarFailed,
   appendSidecarResult,
@@ -27,6 +31,7 @@ const {
   upsertSidecarEntry,
 } = require("../../relay-dispatch/scripts/sidecar-store");
 const contextRecapKind = require("./kinds/context-recap");
+const testGapKind = require("./kinds/test-gap");
 
 const KNOWN_FLAGS = [
   "--run-id", "--kind", "--executor", "--model", "--variant", "--dry-run", "--json", "--help", "-h",
@@ -35,6 +40,7 @@ const CLI_ARG_OPTIONS = { commandName: "relay-sidecar", reservedFlags: KNOWN_FLA
 const DEFAULT_TIMEOUT_MS = 30 * 60 * 1000;
 const KIND_REGISTRY = Object.freeze({
   [contextRecapKind.KIND_NAME]: contextRecapKind,
+  [testGapKind.KIND_NAME]: testGapKind,
 });
 
 class SidecarFailure extends Error {
@@ -130,7 +136,7 @@ function runGhPrDiff(prNumber, { cwd, spawnSyncImpl = spawnSync } = {}) {
 
 function readTextIfExists(filePath) {
   try {
-    return fs.readFileSync(filePath, "utf-8");
+    return readTextFileWithoutFollowingSymlinks(filePath);
   } catch (error) {
     if (error.code === "ENOENT") return "";
     throw error;
@@ -194,7 +200,23 @@ function loadRunArtifacts({ runDir, manifest, runId, prNumber, prDiff = "" }) {
   };
 }
 
-function resolveRunContext({ runId, cwd = process.cwd(), getPrDiff = runGhPrDiff, fetchPrDiff = true }) {
+function getLatestReviewDiff(runDir) {
+  const reviewDiffs = readRoundArtifacts(runDir, "diff\\.patch", readTextIfExists)
+    .map((artifact) => ({ round: artifact.round, text: artifact.content }));
+  return reviewDiffs.length ? reviewDiffs.at(-1).text : null;
+}
+
+function loadTestGapExtras(runDir, { prDiff = "" } = {}) {
+  const dispatchPrompt = readTextIfExists(path.join(runDir, "dispatch-prompt.md"));
+  const roundOneDoneCriteria = readTextIfExists(path.join(runDir, "review-round-1-done-criteria.md"));
+  return {
+    rubric: readTextIfExists(path.join(runDir, "rubric.yaml")) || undefined,
+    doneCriteria: roundOneDoneCriteria || dispatchPrompt || undefined,
+    diff: getLatestReviewDiff(runDir) || prDiff || null,
+  };
+}
+
+function resolveRunContext({ runId, cwd = process.cwd(), getPrDiff = runGhPrDiff, fetchPrDiff = true, kind = null }) {
   const repoRoot = getCanonicalRepoRoot(cwd);
   const manifestPath = getManifestPath(repoRoot, runId);
   const runDir = getRunDir(repoRoot, runId);
@@ -206,22 +228,28 @@ function resolveRunContext({ runId, cwd = process.cwd(), getPrDiff = runGhPrDiff
     caller: "relay-sidecar",
   });
   const prNumber = manifest.pr_number ?? manifest.git?.pr_number ?? null;
-  const prDiff = !fetchPrDiff || prNumber === null || prNumber === undefined
+  const hasLocalTestGapDiff = kind === testGapKind.KIND_NAME && getLatestReviewDiff(runDir) !== null;
+  const prDiff = !fetchPrDiff || hasLocalTestGapDiff || prNumber === null || prNumber === undefined
     ? ""
     : getPrDiff(prNumber, { cwd: repoRoot });
+
+  const runContext = loadRunArtifacts({
+    runDir,
+    manifest,
+    runId,
+    prNumber,
+    prDiff,
+  });
+  if (kind === testGapKind.KIND_NAME) {
+    Object.assign(runContext, loadTestGapExtras(runDir, { prDiff }));
+  }
 
   return {
     repoRoot,
     manifestPath,
     runDir,
     manifest,
-    runContext: loadRunArtifacts({
-      runDir,
-      manifest,
-      runId,
-      prNumber,
-      prDiff,
-    }),
+    runContext,
     worktree: validatedPaths.worktree,
     prNumber,
     prDiff,
@@ -269,7 +297,7 @@ function hasDeterministicBuilder(kindModule) {
 }
 
 function buildSidecarPrompt({ args, sidecarId, context, kindModule, baselineRecap }) {
-  if (args.kind === contextRecapKind.KIND_NAME) {
+  if (typeof kindModule?.buildOpencodeAugmentationPrompt === "function" && baselineRecap !== null) {
     return kindModule.buildOpencodeAugmentationPrompt({
       runContext: context.runContext,
       baselineRecap,
@@ -406,7 +434,9 @@ function main(options = {}) {
       runId: args.runId,
       cwd,
       getPrDiff: options.getPrDiff || runGhPrDiff,
-      fetchPrDiff: args.kind !== contextRecapKind.KIND_NAME,
+      fetchPrDiff: args.kind === testGapKind.KIND_NAME
+        || (args.executor === "opencode" && args.kind !== contextRecapKind.KIND_NAME),
+      kind: args.kind,
     });
     const outputName = "output.md";
     const outputPath = `sidecars/${sidecarId}/${outputName}`;
@@ -444,13 +474,25 @@ function main(options = {}) {
     }
 
     const startedAt = Date.now();
-    appendSidecarStart(context.repoRoot, args.runId, {
-      id: sidecarId,
-      kind: args.kind,
-      executor: args.executor,
-      model: args.model || null,
-      provider: parseProvider(args.model),
-    });
+    if (args.kind === testGapKind.KIND_NAME) {
+      appendRunEvent(context.repoRoot, args.runId, {
+        event: EVENTS.SIDECAR_START,
+        sidecar_id: sidecarId,
+        kind: args.kind,
+        executor: args.executor,
+        model: args.model || null,
+        provider: parseProvider(args.model),
+        trust_level: SIDECAR_TRUST_LEVEL,
+      });
+    } else {
+      appendSidecarStart(context.repoRoot, args.runId, {
+        id: sidecarId,
+        kind: args.kind,
+        executor: args.executor,
+        model: args.model || null,
+        provider: parseProvider(args.model),
+      });
+    }
 
     let result;
     try {
