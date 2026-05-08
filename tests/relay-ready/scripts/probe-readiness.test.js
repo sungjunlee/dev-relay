@@ -156,6 +156,13 @@ test("static audit confirms probe CLI has no subprocess prompting imports", () =
   }
 });
 
+test("static audit confirms probe CLI uses relay-events helper for event writes", () => {
+  const source = fs.readFileSync(SCRIPT, "utf-8");
+
+  assert.match(source, /appendEventLineToPath/);
+  assert.doesNotMatch(source, /appendTextFileWithoutFollowingSymlinks/);
+});
+
 test("malformed input fails open with exit 0 and a degraded proceed envelope", () => {
   const missingPath = path.join(os.tmpdir(), `relay-437-missing-${process.pid}-${Date.now()}.md`);
   const result = runProbe(["--json", "--body-file", missingPath]);

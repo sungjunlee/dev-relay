@@ -6,8 +6,7 @@ const path = require("path");
 
 const scoreReadiness = require("./score-readiness");
 const { READINESS_CONDITIONS } = require("./score-readiness");
-const { EVENTS } = require("../../relay-dispatch/scripts/relay-events");
-const { appendTextFileWithoutFollowingSymlinks } = require("../../relay-dispatch/scripts/manifest/rubric");
+const { appendEventLineToPath, EVENTS } = require("../../relay-dispatch/scripts/relay-events");
 const { bindCliArgs } = require("../../relay-dispatch/scripts/cli-args");
 
 const KNOWN_FLAGS = [
@@ -126,7 +125,6 @@ function resolveEventsPath(manifestPath) {
 
 function appendReadinessProbeEvent(manifestPath, envelope, issueNumber) {
   const eventsPath = resolveEventsPath(manifestPath);
-  fs.mkdirSync(path.dirname(eventsPath), { recursive: true });
   const record = {
     ts: new Date().toISOString(),
     event: EVENTS.READINESS_PROBE,
@@ -137,7 +135,7 @@ function appendReadinessProbeEvent(manifestPath, envelope, issueNumber) {
     next_action: envelope.next_action,
     elapsed_ms: envelope.elapsed_ms,
   };
-  appendTextFileWithoutFollowingSymlinks(eventsPath, `${JSON.stringify(record)}\n`);
+  appendEventLineToPath(eventsPath, record);
 }
 
 function formatHuman(envelope) {

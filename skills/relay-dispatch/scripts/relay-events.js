@@ -1,4 +1,5 @@
 const fs = require("fs");
+const path = require("path");
 const { getActorName } = require("./manifest/store");
 const { ensureRunLayout, getEventsPath, getRunsDir } = require("./manifest/paths");
 const {
@@ -62,14 +63,24 @@ function validateKnownEventName(eventName) {
 }
 
 function appendEventLine(repoRoot, runId, record) {
-  validateKnownEventName(record?.event);
   const eventsPath = getEventsPath(repoRoot, runId);
+  appendEventLineToPath(eventsPath, record);
+}
+
+function appendEventLineToPath(eventsPath, record) {
+  if (typeof eventsPath !== "string" || !eventsPath.trim()) {
+    throw new Error("eventsPath is required to append a relay event");
+  }
+
+  validateKnownEventName(record?.event);
+  const resolvedEventsPath = path.resolve(eventsPath);
   try {
-    appendTextFileWithoutFollowingSymlinks(eventsPath, `${JSON.stringify(record)}\n`);
+    fs.mkdirSync(path.dirname(resolvedEventsPath), { recursive: true });
+    appendTextFileWithoutFollowingSymlinks(resolvedEventsPath, `${JSON.stringify(record)}\n`);
   } catch (error) {
     if (error.code === "ELOOP") {
       throw new Error(
-        `Refusing to append to symlinked events.jsonl at ${eventsPath}: ${error.message}`
+        `Refusing to append to symlinked events.jsonl at ${resolvedEventsPath}: ${error.message}`
       );
     }
     throw error;
@@ -418,6 +429,7 @@ function readAllRunEvents(repoRoot) {
 }
 
 module.exports = {
+  appendEventLineToPath,
   appendIterationScore,
   appendRubricQuality,
   appendRunEvent,
