@@ -26,6 +26,14 @@ const TEST_GAP_HEADINGS = [
   "## Confidence and limitations",
 ];
 
+const DOCS_SYNC_HEADINGS = [
+  "## Run summary",
+  "## Likely stale docs",
+  "## Recommended updates",
+  "## Optional patch hints",
+  "## Confidence and limitations",
+];
+
 function runGit(cwd, args) {
   return execFileSync("git", args, { cwd, encoding: "utf-8", stdio: "pipe" });
 }
@@ -256,6 +264,58 @@ test("--kind test-gap --executor none writes deterministic output and records re
   assert.equal(readSidecarIndex(fixture.repoRoot, fixture.runId).sidecars[0].status, "completed");
 });
 
+test("--kind docs-sync --executor none writes deterministic output and records result", (t) => {
+  const fixture = createFixture(t);
+  const runDir = getRunDir(fixture.repoRoot, fixture.runId);
+  fs.mkdirSync(runDir, { recursive: true });
+  fs.writeFileSync(path.join(fixture.worktreePath, "README.md"), [
+    "# Fixture",
+    "",
+    "The relay foo script lives in baz.js.",
+    "",
+  ].join("\n"), "utf-8");
+  fs.writeFileSync(path.join(runDir, "review-round-1-diff.patch"), [
+    "diff --git a/skills/relay-foo/scripts/baz.js b/skills/relay-foo/scripts/baz.js",
+    "+++ b/skills/relay-foo/scripts/baz.js",
+    "+function changedBaz() {}",
+    "",
+  ].join("\n"), "utf-8");
+
+  const beforeCache = new Set(Object.keys(require.cache));
+  const result = invoke([
+    "--run-id", fixture.runId,
+    "--kind", "docs-sync",
+    "--executor", "none",
+  ], {
+    cwd: fixture.repoRoot,
+    getPrDiff: () => {
+      throw new Error("docs-sync deterministic mode must use run-dir diff artifacts");
+    },
+  });
+  const loadedDuringRun = Object.keys(require.cache).filter((key) => !beforeCache.has(key));
+
+  assert.equal(result.exitCode, 0);
+  assert.deepEqual(loadedDuringRun.filter((key) => /opencode/i.test(key)), []);
+  const sidecarId = "docs-sync-1234abcd";
+  const output = fs.readFileSync(readOutputPath(fixture, sidecarId), "utf-8");
+  assert.match(output, /^# Docs sync report: /);
+  assert.match(output, /README\.md/);
+  assert.match(output, /baz\.js/);
+  for (const heading of DOCS_SYNC_HEADINGS) {
+    assert.match(output, new RegExp(`^${heading.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "m"));
+  }
+
+  const events = readRunEvents(fixture.repoRoot, fixture.runId);
+  assert.equal(events.length, 2);
+  assert.equal(events[0].event, "sidecar_start");
+  assert.equal(events[0].executor, "none");
+  assert.equal(Object.hasOwn(events[0], "trust_level"), false);
+  assert.equal(events[1].event, "sidecar_result");
+  assert.equal(events[1].trust_level, "advisory");
+  assert.equal(events[1].output_path, `sidecars/${sidecarId}/output.md`);
+  assert.equal(readSidecarIndex(fixture.repoRoot, fixture.runId).sidecars[0].status, "completed");
+});
+
 test("--kind test-gap --executor none falls back to PR diff when no review diff exists", (t) => {
   const fixture = createFixture(t);
   const record = readManifest(fixture.manifestPath);
@@ -349,6 +409,47 @@ test("--kind test-gap --executor opencode uses test-gap augmentation prompt", (t
   assert.match(promptText, /# Test gap report: /);
 });
 
+test("--kind docs-sync --executor opencode uses docs-sync augmentation prompt", (t) => {
+  const fixture = createFixture(t);
+  const runDir = getRunDir(fixture.repoRoot, fixture.runId);
+  fs.mkdirSync(runDir, { recursive: true });
+  fs.writeFileSync(path.join(fixture.worktreePath, "README.md"), [
+    "# Fixture",
+    "",
+    "The relay foo script lives at skills/relay-foo/scripts/baz.js.",
+    "",
+  ].join("\n"), "utf-8");
+  fs.writeFileSync(path.join(runDir, "review-round-1-diff.patch"), [
+    "diff --git a/skills/relay-foo/scripts/baz.js b/skills/relay-foo/scripts/baz.js",
+    "+++ b/skills/relay-foo/scripts/baz.js",
+    "+function changedBaz() {}",
+    "",
+  ].join("\n"), "utf-8");
+  let promptText = "";
+
+  const result = invoke([
+    "--run-id", fixture.runId,
+    "--kind", "docs-sync",
+    "--executor", "opencode",
+  ], {
+    cwd: fixture.repoRoot,
+    getPrDiff: () => {
+      throw new Error("docs-sync opencode mode must use run-dir diff artifacts when present");
+    },
+    runOpencode: ({ args }) => {
+      promptText = args.at(-1);
+      assert.match(promptText, /DOCS_SYNC_AUGMENTATION_REQUEST/);
+      assert.match(promptText, /BASELINE REPORT/);
+      assert.match(promptText, /DOCS_SYNC_BASELINE_UNIQUE_SUBSTRING/);
+      return { code: 0, stdout: "opencode augmented docs-sync report\n", stderr: "" };
+    },
+  });
+
+  assert.equal(result.exitCode, 0);
+  assert.equal(fs.readFileSync(readOutputPath(fixture, "docs-sync-1234abcd"), "utf-8"), "opencode augmented docs-sync report\n");
+  assert.match(promptText, /# Docs sync report: /);
+});
+
 test("--json keeps runner stdout structured without changing sidecar output path", (t) => {
   const fixture = createFixture(t);
   const record = readManifest(fixture.manifestPath);
@@ -427,14 +528,14 @@ test("--executor none is rejected for kinds without deterministic builders", (t)
   const fixture = createFixture(t);
   const result = invoke([
     "--run-id", fixture.runId,
-    "--kind", "docs-sync",
+    "--kind", "unregistered-kind",
     "--executor", "none",
   ], {
     cwd: fixture.repoRoot,
   });
 
   assert.notEqual(result.exitCode, 0);
-  assert.match(result.stderr, /executor "none".*docs-sync|deterministic sidecar builder/);
+  assert.match(result.stderr, /executor "none".*unregistered-kind|deterministic sidecar builder/);
   assert.deepEqual(readRunEvents(fixture.repoRoot, fixture.runId), []);
   assert.equal(fs.existsSync(getSidecarsIndexPath(fixture.repoRoot, fixture.runId)), false);
 });
