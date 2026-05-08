@@ -71,14 +71,20 @@ test("happy_path_bypass emits proceed envelope under 200ms for a 5KB issue body"
 });
 
 test("non_bypass_emits_summary returns a bounded human summary for low scores", () => {
-  const result = runProbe(["--json", "--body", "Polish the thing."]);
+  const body = "Polish the thing.";
+  const result = runProbe(["--json", "--body", body]);
+  const repeatedResult = runProbe(["--json", "--body", body]);
 
   assert.equal(result.status, 0, result.stderr);
+  assert.equal(repeatedResult.status, 0, repeatedResult.stderr);
   const envelope = parseJson(result.stdout);
+  const repeatedEnvelope = parseJson(repeatedResult.stdout);
   assertEnvelopeShape(envelope);
+  assertEnvelopeShape(repeatedEnvelope);
   assert.equal(envelope.bypass, false);
   assert.ok(envelope.signals_summary.length > 0);
   assert.ok(envelope.signals_summary.length <= 140);
+  assert.equal(envelope.signals_summary, repeatedEnvelope.signals_summary);
 });
 
 test("manifest_event_appended writes one readiness_probe line with probe payload", (t) => {
