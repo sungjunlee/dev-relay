@@ -7,6 +7,7 @@ const path = require("path");
 
 const { getEventsPath } = require("../../../skills/relay-dispatch/scripts/relay-manifest");
 const {
+  appendEventLineToPath,
   appendIterationScore,
   appendRubricQuality,
   appendRunEvent,
@@ -297,6 +298,31 @@ test("appendRunEvent throws on event name not in EVENTS", () => {
       state_from: "draft",
       state_to: "draft",
     }),
+    /Unknown relay event name "not_a_relay_event"/
+  );
+});
+
+test("appendEventLineToPath writes explicit events paths through relay event validation", () => {
+  const eventsPath = path.join(
+    fs.mkdtempSync(path.join(os.tmpdir(), "relay-events-explicit-")),
+    "events.jsonl"
+  );
+  const record = {
+    ts: "2026-05-08T00:00:00.000Z",
+    event: EVENTS.READINESS_PROBE,
+    actor: "relay-ready",
+    issue_number: 437,
+    readiness_score: { clarity: "high", granularity: "high", verifiability: "high" },
+    bypass: true,
+    next_action: "proceed",
+    elapsed_ms: 1.5,
+  };
+
+  appendEventLineToPath(eventsPath, record);
+
+  assert.deepEqual(JSON.parse(fs.readFileSync(eventsPath, "utf-8").trim()), record);
+  assert.throws(
+    () => appendEventLineToPath(eventsPath, { event: "not_a_relay_event" }),
     /Unknown relay event name "not_a_relay_event"/
   );
 });

@@ -11,6 +11,11 @@ const OUT_OF_SCOPE_EVENT_SINKS = new Set([
   "skills/relay-ready/scripts/relay-request.js",
   "skills/relay-dispatch/scripts/worktree-runtime.js",
 ]);
+const DOCUMENTED_ORCHESTRATOR_EVENT_KEYS = new Set([
+  "BYPASS_OVERRIDE_BY_USER",
+  "READINESS_CHECK_FAILED",
+  "READINESS_CHECK_FAILED_NONTTY",
+]);
 
 function toRepoRelative(filePath) {
   return path.relative(REPO_ROOT, filePath).split(path.sep).join("/");
@@ -161,6 +166,10 @@ test("EVENTS is a frozen object map for current run journal event names", () => 
   assert.equal(Object.values(EVENTS).includes("request_persisted"), false);
   assert.equal(Object.values(EVENTS).includes("register"), false);
   assert.equal(EVENTS.GUIDANCE_SELECTED, "guidance_selected");
+  assert.equal(EVENTS.BYPASS_OVERRIDE_BY_USER, "bypass_override_by_user");
+  assert.equal(EVENTS.READINESS_CHECK_FAILED, "readiness_check_failed");
+  assert.equal(EVENTS.READINESS_CHECK_FAILED_NONTTY, "readiness_check_failed_nontty");
+  assert.equal(EVENTS.READINESS_PROBE, "readiness_probe");
 });
 
 test("EVENTS values match the event names emitted by producer call sites under skills", () => {
@@ -170,7 +179,11 @@ test("EVENTS values match the event names emitted by producer call sites under s
   assert.deepEqual(unknownKeys, []);
 
   const emittedEventNames = sorted([...producerKeys].map((key) => EVENTS[key]));
-  const enumEventNames = sorted(Object.values(EVENTS));
+  const enumEventNames = sorted(
+    Object.entries(EVENTS)
+      .filter(([key]) => !DOCUMENTED_ORCHESTRATOR_EVENT_KEYS.has(key))
+      .map(([, value]) => value)
+  );
   assert.deepEqual(emittedEventNames, enumEventNames);
 });
 

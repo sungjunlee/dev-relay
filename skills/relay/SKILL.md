@@ -23,25 +23,13 @@ Standard Codex path: stamp `RELAY_ORCHESTRATOR=codex` and run review through `re
 
 ## Step 0: Re-Anchor
 
-Always run before every task — standalone or batch. Ensures current state, not stale context.
-
-1. `git fetch origin` — check for divergence from remote
-2. If sprint file exists: re-read it. Check Running Context for new entries from previous tasks. Note completed/in-flight task status changes.
-3. If previous task added Running Context that affects this task, adjust your approach before proceeding.
-
-No sprint file? Just do the `git fetch`. Takes <5 seconds; never skip this step.
+Before every standalone or batch task, run `git fetch origin`; if a sprint file exists, re-read Running Context and completed/in-flight status changes. Apply any previous-task context before proceeding.
 
 ## Step 1: Route and Read Context
 
-Gather task details and sprint context:
-1. **Task evidence** (try in order, use first that succeeds):
-   - Local task file: `backlog/tasks/{PREFIX}-{N} - {Title}.md`
-   - GitHub: `gh issue view <N>`
-   - User-provided description (from argument or conversation)
-2. **Sprint context** (optional): If `backlog/sprints/` has an active sprint file, read Running Context and batch info. If no sprint file, proceed without — sprint tracking is skipped.
-3. **Fast path vs readiness path**:
-   - Bypass relay-ready only when the input is already one relay-ready task, has a stable review anchor, and needs no clarification or decomposition.
-   - Otherwise run `relay-ready` first, persist a request artifact, and use the generated `relay-ready/<leaf-id>.md` as the downstream source of truth.
+Task evidence: use the first available source: local task file `backlog/tasks/{PREFIX}-{N} - {Title}.md`, `gh issue view <N>`, or the user-provided description. If `backlog/sprints/` has an active sprint, read Running Context and batch info; otherwise skip sprint tracking.
+
+Fast path: bypass relay-ready only when the input is already one relay-ready task with a stable review anchor and no clarification/decomposition needed. Otherwise run `relay-ready`, persist a request artifact, and use `relay-ready/<leaf-id>.md` as the downstream source of truth.
 
 If no issue number, use a descriptive branch name (e.g., `feat/<slug>`) and skip issue-close in Step 6.
 
@@ -53,16 +41,27 @@ If readiness is required, persist a single-leaf contract first:
 ${CLAUDE_SKILL_DIR}/../relay-ready/scripts/persist-request.js --repo . --contract-file /tmp/relay-ready-contract.json --json
 ```
 
-Carry these artifacts forward:
-- handoff brief: `~/.relay/requests/<repo-slug>/<request-id>/relay-ready/<leaf-id>.md`
-- frozen Done Criteria: `~/.relay/requests/<repo-slug>/<request-id>/done-criteria/<leaf-id>.md`
-- linkage: `request_id`, `leaf_id`
+Carry forward the handoff brief, frozen Done Criteria snapshot, and linkage: `request_id`, `leaf_id`.
 
 ## Readiness probe + chain prompt
-Before Step 2, run the deterministic readiness probe unless bypassed by: prior relay-ready artifact with `readiness_score` plus frozen review anchor; explicit `--bypass-readiness`; or sprint-batch entry already linked to a relay-ready handoff. Bypass/pass proceeds unchanged.
-On failure in an interactive TTY, ask once: `Readiness gaps detected: <summary>. Invoke relay-ready first? [y/n/abort]`
-`y` chains to relay-ready Q&A, persists the handoff, then resumes `/relay`; `n` proceeds and logs `readiness_chain_declined`; `abort` closes with `readiness_check_failed`.
-With `--non-interactive` or non-TTY, failure closes with `readiness_check_failed`; no prompt. Details: `relay-ready/references/design-v1.md`.
+Before Step 2, run this unless bypassed by a prior relay-ready artifact with `readiness_score` and frozen review anchor, explicit `--bypass-readiness`, or a sprint-batch entry already linked to a relay-ready handoff:
+
+```bash
+PROBE=$(node ${CLAUDE_SKILL_DIR}/../relay-ready/scripts/probe-readiness.js \
+  --json --body-file "$ISSUE_BODY_FILE" --manifest "$RUN_MANIFEST" --issue-number "$ISSUE_NUMBER")
+BYPASS=$(printf '%s' "$PROBE" | jq -r '.bypass')
+SUMMARY=$(printf '%s' "$PROBE" | jq -r '.signals_summary')
+NEXT_ACTION=$(printf '%s' "$PROBE" | jq -r '.next_action')
+```
+
+The CLI emits `readiness_probe`. If `BYPASS=true`, proceed to Step 2. If `BYPASS=false` and interactive (TTY and no `--non-interactive`), issue exactly:
+`AskUserQuestion("Readiness gaps detected: ${SUMMARY}. Invoke relay-ready first? [y/n/abort]")`
+
+Branch labels and events:
+- `chain-y` / `readiness_probe`: invoke relay-ready Q&A, wait, persist the handoff, set `manifest.anchor.readiness`, then resume Step 2.
+- `chain-n` / `bypass_override_by_user`: emit with current scores and proceed to Step 2.
+- `chain-abort` / `readiness_check_failed`: emit with current scores, close the run.
+- `noninteractive-fail` / `readiness_check_failed_nontty`: emit when `BYPASS=false` and no prompt is allowed, then close the run.
 
 ## Step 1.5: Check for in-flight work
 
