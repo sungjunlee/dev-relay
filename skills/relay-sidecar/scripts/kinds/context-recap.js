@@ -36,6 +36,14 @@ function getIssueTitle(issue) {
   return normalizeText(issue?.title || issue?.summary || issue?.message || "");
 }
 
+function getIssueBody(issue) {
+  return normalizeText(issue?.body || "");
+}
+
+function getIssueFindingSources(issue) {
+  return [getIssueTitle(issue), getIssueBody(issue)].filter(Boolean);
+}
+
 function getMissingItems(verdict) {
   return Array.isArray(verdict?.scope_drift?.missing) ? verdict.scope_drift.missing : [];
 }
@@ -89,30 +97,43 @@ function titlesMatch(left, right) {
   return normalizedLeft.includes(normalizedRight) || normalizedRight.includes(normalizedLeft);
 }
 
+function findMatchingFindingSource(left, right) {
+  for (const leftSource of left.sources) {
+    for (const rightSource of right.sources) {
+      if (titlesMatch(leftSource, rightSource)) return leftSource;
+    }
+  }
+  return "";
+}
+
 function buildRepeatedFindingsSection(runContext) {
   const findings = [];
   const seenKeys = new Set();
   const issueRecords = [];
   for (const verdict of getVerdicts(runContext)) {
     for (const issue of Array.isArray(verdict.issues) ? verdict.issues : []) {
-      const title = getIssueTitle(issue);
-      if (title) issueRecords.push({ round: Number(verdict.round || 0), title });
+      const sources = getIssueFindingSources(issue);
+      if (sources.length > 0) issueRecords.push({ round: Number(verdict.round || 0), sources });
     }
   }
 
   for (const issue of issueRecords) {
-    const matchingRounds = new Set(
-      issueRecords
-        .filter((candidate) => candidate.round !== issue.round && titlesMatch(candidate.title, issue.title))
-        .map((candidate) => candidate.round)
-    );
+    let repeatedSource = "";
+    const matchingRounds = new Set();
+    for (const candidate of issueRecords) {
+      if (candidate.round === issue.round) continue;
+      const matchingSource = findMatchingFindingSource(issue, candidate);
+      if (!matchingSource) continue;
+      if (!repeatedSource) repeatedSource = matchingSource;
+      matchingRounds.add(candidate.round);
+    }
     if (matchingRounds.size === 0) continue;
     matchingRounds.add(issue.round);
     const rounds = [...matchingRounds].sort((left, right) => left - right);
-    const key = normalizeComparable(issue.title);
+    const key = normalizeComparable(repeatedSource);
     if (seenKeys.has(key)) continue;
     seenKeys.add(key);
-    findings.push(`- ${issue.title} (rounds ${rounds.join(", ")})`);
+    findings.push(`- ${repeatedSource} (rounds ${rounds.join(", ")})`);
   }
 
   return [
@@ -201,12 +222,22 @@ function extractDiffPaths(diffText) {
 
 function isForbiddenZonePath(filePath) {
   const normalized = String(filePath || "").replace(/\\/g, "/");
+  const forbiddenSkillNames = [
+    "relay-dispatch",
+    "relay-ready",
+    "relay-plan",
+    "relay-review",
+    "relay-merge",
+    "relay",
+  ];
   return normalized.startsWith("backlog/")
     || normalized.includes(".cache/")
     || /^docs\/issue-[^/]*\.md$/.test(normalized)
     || /^docs\/[^/]*-2026-[^/]*\.md$/.test(normalized)
     || /^docs\/[^/]*-2025-[^/]*\.md$/.test(normalized)
-    || normalized.startsWith(".github/workflows/");
+    || normalized.startsWith(".github/workflows/")
+    || forbiddenSkillNames.some((name) => normalized.startsWith(`skills/${name}/`))
+    || forbiddenSkillNames.some((name) => normalized.startsWith(`tests/${name}/`));
 }
 
 function detectForbiddenZoneTouches(runContext) {

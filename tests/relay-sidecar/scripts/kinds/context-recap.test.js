@@ -81,6 +81,28 @@ test("buildRecap names repeated findings across rounds", () => {
   assert.match(recap, /Preserve advisory snapshot \(rounds 1, 2\)/);
 });
 
+test("buildRecap detects repeated findings from issue bodies when titles do not match", () => {
+  const recap = buildRecap({
+    runContext: makeRunContext({
+      verdicts: [
+        {
+          round: 1,
+          verdict: "changes_requested",
+          issues: [{ title: "First title", body: "Forbidden zone touched outside sidecar scope." }],
+        },
+        {
+          round: 2,
+          verdict: "changes_requested",
+          issues: [{ title: "Different title", body: "Forbidden zone touched outside sidecar scope." }],
+        },
+      ],
+    }),
+  });
+
+  assertRecapShape(recap);
+  assert.match(recap, /Forbidden zone touched outside sidecar scope\. \(rounds 1, 2\)/);
+});
+
 test("buildRecap names latest partial Done Criteria items", () => {
   const recap = buildRecap({
     runContext: makeRunContext({
@@ -122,7 +144,15 @@ test("buildRecap reports orphan Done Criteria lines and forbidden-zone diff path
         { round: 1, text: "- Add deterministic recap output\n- Preserve sidecar index events\n" },
       ],
       diffs: [
-        { round: 1, text: "diff --git a/docs/issue-373.md b/docs/issue-373.md\n" },
+        {
+          round: 1,
+          text: [
+            "diff --git a/docs/issue-373.md b/docs/issue-373.md",
+            "diff --git a/skills/relay-dispatch/scripts/dispatch.js b/skills/relay-dispatch/scripts/dispatch.js",
+            "diff --git a/tests/relay-plan/scripts/probe.test.js b/tests/relay-plan/scripts/probe.test.js",
+            "",
+          ].join("\n"),
+        },
       ],
     }),
   });
@@ -130,6 +160,8 @@ test("buildRecap reports orphan Done Criteria lines and forbidden-zone diff path
   assertRecapShape(recap);
   assert.match(recap, /Orphan Done Criteria line.*Preserve sidecar index events/);
   assert.match(recap, /Forbidden-zone path appears in latest diff: docs\/issue-373\.md/);
+  assert.match(recap, /Forbidden-zone path appears in latest diff: skills\/relay-dispatch\/scripts\/dispatch\.js/);
+  assert.match(recap, /Forbidden-zone path appears in latest diff: tests\/relay-plan\/scripts\/probe\.test\.js/);
 });
 
 test("buildRecap avoids standalone completion claims on a clean pass input", () => {
