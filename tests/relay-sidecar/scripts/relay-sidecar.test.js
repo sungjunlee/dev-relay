@@ -309,7 +309,7 @@ test("--kind docs-sync --executor none writes deterministic output and records r
   assert.equal(events.length, 2);
   assert.equal(events[0].event, "sidecar_start");
   assert.equal(events[0].executor, "none");
-  assert.equal(Object.hasOwn(events[0], "trust_level"), false);
+  assert.equal(events[0].trust_level, "advisory");
   assert.equal(events[1].event, "sidecar_result");
   assert.equal(events[1].trust_level, "advisory");
   assert.equal(events[1].output_path, `sidecars/${sidecarId}/output.md`);
