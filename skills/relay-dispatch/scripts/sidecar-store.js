@@ -149,6 +149,7 @@ function appendSidecarStart(repoRoot, runId, { id, kind, executor, model, provid
     sidecar_id: requireNonEmptyString(id, "id"),
     kind: requireNonEmptyString(kind, "kind"),
     executor: requireNonEmptyString(executor, "executor"),
+    trust_level: SIDECAR_TRUST_LEVEL,
     ...(model !== undefined ? { model: normalizeNullableString(model, "model") } : {}),
     ...(provider !== undefined ? { provider: normalizeNullableString(provider, "provider") } : {}),
   };

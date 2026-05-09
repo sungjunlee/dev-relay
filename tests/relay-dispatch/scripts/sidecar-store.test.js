@@ -184,6 +184,7 @@ test("sidecar lifecycle helpers append advisory events without manifest state tr
   assert.equal(started.executor, "codex");
   assert.equal(started.model, "gpt-5");
   assert.equal(started.provider, "openai");
+  assert.equal(started.trust_level, SIDECAR_TRUST_LEVEL);
   assert.equal(completed.event, EVENTS.SIDECAR_RESULT);
   assert.equal(completed.output_path, "sidecars/lint-report/result.json");
   assert.equal(completed.trust_level, SIDECAR_TRUST_LEVEL);
