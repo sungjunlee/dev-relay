@@ -87,7 +87,7 @@ rubric:
       weight: required
 ```
 
-Tier classification, `type`, `weight`, `setup`/`baseline`, `criteria`, `scoring_guide`, and optional per-factor `tdd_anchor` / `tdd_runner`: see `references/rubric-design-guide.md`. For event-schema evolution, use the [event-shape rubric pattern](references/rubric-pattern-event-shape.md). For red-first factor opt-in, use the [TDD factor flavor pattern](references/rubric-pattern-tdd-flavor.md). For factors that name file paths, test names, or grep tokens, use the [grep-token precision pattern](references/rubric-pattern-grep-token-precision.md).
+Tier classification, `type`, `weight`, `setup`/`baseline`, `criteria`, `scoring_guide`, and optional per-factor `tdd_anchor` / `tdd_runner`: see `references/rubric-design-guide.md`. For event-schema evolution, use the [event-shape rubric pattern](references/rubric-pattern-event-shape.md). For red-first factor opt-in, use the [TDD factor flavor pattern](references/rubric-pattern-tdd-flavor.md). For factors that name file paths, test names, or grep tokens, use the [grep-token precision pattern](references/rubric-pattern-grep-token-precision.md). For dispatches whose edit scope is narrower than the whole repo, use the [forbidden-zones pattern](references/rubric-pattern-forbidden-zones.md) to enumerate read-only paths.
 
 ### Domain references
 
