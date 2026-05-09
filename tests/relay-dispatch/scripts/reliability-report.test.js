@@ -235,6 +235,13 @@ function writeSidecarOutput(repoRoot, runId, sidecarId, content) {
   fs.writeFileSync(path.join(outputDir, "output.md"), content, "utf-8");
 }
 
+function writeSidecarOutputAt(repoRoot, runId, outputPathRelative, content) {
+  const { runDir } = ensureRunLayout(repoRoot, runId);
+  const outputPath = path.join(runDir, outputPathRelative);
+  fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+  fs.writeFileSync(outputPath, content, "utf-8");
+}
+
 function writeReviewVerdict(repoRoot, runId, round, issues) {
   const { runDir } = ensureRunLayout(repoRoot, runId);
   fs.writeFileSync(
@@ -942,6 +949,34 @@ test("reliability-report counts sidecar output substrings of review titles as pr
 
   assert.equal(report.sidecar_insights.predicted_findings_runs_examined, 1);
   assert.equal(report.sidecar_insights.predicted_findings_match_rate, 0.5);
+});
+
+test("reliability-report reads sidecar output via event.output_path indirection", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-report-sidecar-output-path-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  const recentTs = new Date(Date.now() - 1 * 60 * 60 * 1000).toISOString();
+  const runId = createRunId({ branch: "run-sidecar-output-path", timestamp: new Date("2026-04-12T02:09:45.000Z") });
+  const sidecarId = "sc-custom-output";
+  const outputPath = `sidecars/${sidecarId}/custom-output.md`;
+
+  writeRun(repoRoot, { runId, state: STATES.CHANGES_REQUESTED, rounds: 1, updatedAt: recentTs });
+  appendSidecarStart(repoRoot, runId, { sidecarId, kind: "context-recap", executor: "codex" });
+  appendRunEvent(repoRoot, runId, {
+    event: "sidecar_result",
+    sidecar_id: sidecarId,
+    kind: "context-recap",
+    output_path: outputPath,
+    trust_level: "advisory",
+  });
+  writeSidecarOutputAt(repoRoot, runId, outputPath, "The sidecar predicted missing custom output path coverage.");
+  writeReviewVerdict(repoRoot, runId, 1, [
+    { title: "Missing custom output path coverage", body: "Read event output_path.", file: "report.js", line: 7, category: "contract", severity: "high" },
+  ]);
+
+  const report = JSON.parse(execFileSync("node", [SCRIPT, "--repo", repoRoot, "--json"], { encoding: "utf-8" }));
+
+  assert.equal(report.sidecar_insights.predicted_findings_runs_examined, 1);
+  assert.ok(report.sidecar_insights.predicted_findings_match_rate > 0);
 });
 
 test("reliability-report keeps sidecar prediction null when results have no review verdicts", () => {
