@@ -23,3 +23,7 @@ memory/
 
 # AI-generated planning artifacts
 docs/superpowers/
+
+# Backlog triage derived artifacts (snapshots + reports)
+# GitHub Issues remain source of truth; reports regenerate from `gh` fetch.
+backlog/triage/
