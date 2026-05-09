@@ -1,8 +1,9 @@
 ---
 milestone: Agentic Patterns Phase 0 — Wire What Exists
-status: active
+status: completed
 started: 2026-04-12
-due: TBD
+completed: 2026-04-18
+note: All action items shipped. #154 (gstack-codex adversarial benchmark) deferred to open backlog as awaiting-consumer.
 ---
 
 # agentic-patterns-phase-0

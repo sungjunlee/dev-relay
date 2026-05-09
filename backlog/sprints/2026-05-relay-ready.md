@@ -1,9 +1,10 @@
 ---
 milestone: Relay Intake / Preflight
-status: active
+status: completed
 started: 2026-05-07
-due: TBD
+completed: 2026-05-08
 epic: 431
+note: Phase 1+2 shipped (#432–#437). Phase 3 (#438/#439) tracked as open backlog under same milestone, blocked on ≥20 readiness_probe events accumulating naturally.
 ---
 
 # relay-ready (Epic #431)
