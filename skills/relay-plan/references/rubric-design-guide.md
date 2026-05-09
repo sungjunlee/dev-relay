@@ -66,7 +66,7 @@ List the evidence that defines success for this task:
 - Historical relay signals such as stuck factors, score divergence, and average rounds
 - Task risk such as trust boundaries, data loss, migrations, user-visible flows, performance, or operational failure modes
 
-If explicit AC and inferred Done Criteria disagree, resolve the conflict before drafting factors. Persist planner-authored Done Criteria when the final anchor differs from the issue body or intake handoff.
+If explicit AC and inferred Done Criteria disagree, resolve the conflict before drafting factors. Run the [pre-flight ambiguity audit](dc-preflight-audit.md) before freezing the Done Criteria, then persist planner-authored Done Criteria when the final anchor differs from the issue body or intake handoff.
 
 ### Q2: What actually matters for this task?
 
