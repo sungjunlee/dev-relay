@@ -3,7 +3,7 @@
 const fs = require("fs");
 const path = require("path");
 const { STATES } = require("./manifest/lifecycle");
-const { getRunDir, getSidecarOutputDir } = require("./manifest/paths");
+const { getRunDir } = require("./manifest/paths");
 const { readTextFileWithoutFollowingSymlinks } = require("./manifest/rubric");
 const { listManifestRecords } = require("./manifest/store");
 const { modeLabel, readArg, schemaHasFlag } = require("./cli-args");
@@ -654,8 +654,8 @@ function readReviewIssueTitles(runDir) {
   return titles;
 }
 
-function readSidecarOutput(repoRoot, runId, sidecarId) {
-  const outputPath = path.join(getSidecarOutputDir(repoRoot, runId, sidecarId), "output.md");
+function readSidecarOutput(repoRoot, runId, outputPathRelative) {
+  const outputPath = path.join(getRunDir(repoRoot, runId), outputPathRelative);
   const output = readTextFileWithoutFollowingSymlinks(outputPath);
   if (!output || /\u0000/.test(output)) {
     return null;
@@ -718,7 +718,7 @@ function computeSidecarPredictionRate({ events, repoRoot }) {
     const outputTexts = [];
     for (const event of resultEvents) {
       try {
-        const outputText = readSidecarOutput(repoRoot, runId, event.sidecar_id);
+        const outputText = readSidecarOutput(repoRoot, runId, event.output_path);
         if (outputText !== null) {
           outputTexts.push(outputText.toLowerCase());
         }
