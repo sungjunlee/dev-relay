@@ -1,6 +1,6 @@
 ---
 milestone: Sprint 2026-05 — Sidecar MVP
-status: complete
+status: completed
 started: 2026-05-08
 completed: 2026-05-08
 epic: 367
