@@ -60,7 +60,7 @@ Before drafting factors, identify the evaluation source model:
 - Task-specific risk from touched domains, trust boundaries, data loss, migrations, UX flows, or operational failure modes; derive `task_profile` per `references/task-profile.md`
 - Selected guidance pack names from `task_profile.guidance_packs`, using `references/guidance-packs.md` as the compact advisory pack library
 
-If AC are missing, vague, or incomplete, write observable Done Criteria first. Treat explicit AC as high-priority evidence, not the only source. If the final review anchor is planner-authored or differs from the task source, persist it in step 8 so the reviewer has the same anchor.
+If AC are missing, vague, or incomplete, write observable Done Criteria first. Treat explicit AC as high-priority evidence, not the only source. Before freezing, run the [pre-flight ambiguity audit](references/dc-preflight-audit.md) — it catches the spec-precision wording issues responsible for nearly every R1 changes_requested round. If the final review anchor is planner-authored or differs from the task source, persist it in step 8 so the reviewer has the same anchor.
 
 ### 5. Build the rubric
 
