@@ -121,7 +121,6 @@ node skills/relay-merge/scripts/finalize-run.js --run-id <id> --force-finalize-n
 - Executor-specific internal paths (e.g., Codex SQLite, global state) are fragile — document which version they target
 - Keep each SKILL.md under 150 lines; use `references/` for details
 - Operator utilities and recovery playbooks live in `skills/<skill>/references/`, not SKILL.md. Sunset deprecated flags within one release.
-- `relay-intake` was renamed to `relay-ready`; the legacy `skills/relay-intake/` path is an advisory deprecation shim only and will be removed in the next release after this one.
 - Test files and test fixtures live under `tests/<skill>/`, never under `skills/<skill>/`, so `npx skills add` does not install them.
 - Manifest state transitions must go through `validateTransition()` — direct state assignment is a bug
 - New executors: drop a file in `skills/relay-dispatch/scripts/executors/` exporting the 6-field adapter contract, register in `executors/index.js`. See `skills/relay-dispatch/scripts/executors/README.md` for the contract and add a row to `tests/relay-dispatch/scripts/executors.test.js`.
