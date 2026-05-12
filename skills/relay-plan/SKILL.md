@@ -1,10 +1,10 @@
 ---
 name: relay-plan
-argument-hint: "[issue-number]"
 description: Synthesize task intent, explicit AC when present, repo signals, and task risk into a scored rubric for autonomous iteration. Always used before relay-dispatch — rubric depth scales with task size.
 compatibility: Requires gh CLI.
 metadata:
   related-skills: "relay, relay-ready, relay-dispatch, relay-review, dev-backlog"
+  keywords: "계획, 루브릭, planning, rubric, dispatch prompt"
 ---
 
 # Relay Plan

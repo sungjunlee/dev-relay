@@ -164,14 +164,34 @@ function parseFrontmatter(content) {
   return data;
 }
 
-function assertFrontmatterUniversalSubset({ label, content }) {
+function assertSkillFrontmatterSchema({ label, content }) {
   const frontmatter = parseFrontmatter(content);
-  for (const key of ["name", "description", "metadata"]) {
+  for (const key of ["name", "description", "compatibility", "metadata"]) {
     assert.ok(Object.hasOwn(frontmatter, key), `${label} frontmatter missing required key: ${key}`);
   }
+  assert.equal(typeof frontmatter.name, "string", `${label} frontmatter name must be a string`);
+  assert.match(frontmatter.name, /^[a-z0-9]+(?:-[a-z0-9]+)*$/, `${label} frontmatter name must be kebab-case`);
+  assert.equal(frontmatter.name, path.basename(path.dirname(label)), `${label} frontmatter name must match its directory`);
+  assert.equal(typeof frontmatter.description, "string", `${label} frontmatter description must be a string`);
+  assert.notEqual(frontmatter.description.trim(), "", `${label} frontmatter description must not be empty`);
+  assert.equal(typeof frontmatter.compatibility, "string", `${label} frontmatter compatibility must be a string`);
+  assert.notEqual(frontmatter.compatibility.trim(), "", `${label} frontmatter compatibility must not be empty`);
   assert.equal(typeof frontmatter.metadata, "object", `${label} frontmatter metadata must be a map`);
   assert.notEqual(frontmatter.metadata, null, `${label} frontmatter metadata must be a map`);
-  // relay-sidecar intentionally lacks metadata.related-skills and uses nested compatibility; #469 will widen this schema later.
+  assert.ok(
+    Object.hasOwn(frontmatter.metadata, "related-skills"),
+    `${label} frontmatter metadata missing required key: related-skills`,
+  );
+  assert.equal(
+    typeof frontmatter.metadata["related-skills"],
+    "string",
+    `${label} frontmatter metadata.related-skills must be a string`,
+  );
+  assert.notEqual(
+    frontmatter.metadata["related-skills"].trim(),
+    "",
+    `${label} frontmatter metadata.related-skills must not be empty`,
+  );
 }
 
 function readSkillFiles() {
@@ -195,7 +215,7 @@ test("all skills/SKILL.md files satisfy the lint contract", () => {
     assertLineCount(skillFile);
     assertBashBlocksParse(skillFile);
     assertCrossSkillPathsExist(skillFile);
-    assertFrontmatterUniversalSubset(skillFile);
+    assertSkillFrontmatterSchema(skillFile);
   });
 });
 
@@ -267,9 +287,9 @@ test("assertCrossSkillPathsExist rejects missing cross-skill script references",
   );
 });
 
-test("assertFrontmatterUniversalSubset rejects missing or malformed frontmatter", () => {
+test("assertSkillFrontmatterSchema rejects missing or malformed frontmatter", () => {
   assert.throws(
-    () => assertFrontmatterUniversalSubset({
+    () => assertSkillFrontmatterSchema({
       label: "missing/SKILL.md",
       content: "# Missing frontmatter\n",
     }),
@@ -277,21 +297,40 @@ test("assertFrontmatterUniversalSubset rejects missing or malformed frontmatter"
   );
 
   assert.throws(
-    () => assertFrontmatterUniversalSubset({
-      label: "missing-metadata/SKILL.md",
+    () => assertSkillFrontmatterSchema({
+      label: "missing-compatibility/SKILL.md",
       content: [
         "---",
-        "name: fixture",
+        "name: missing-compatibility",
         "description: fixture",
+        "metadata:",
+        "  related-skills: relay",
         "---",
         "",
       ].join("\n"),
     }),
-    /missing required key: metadata/,
+    /missing required key: compatibility/,
   );
 
   assert.throws(
-    () => assertFrontmatterUniversalSubset({
+    () => assertSkillFrontmatterSchema({
+      label: "missing-related-skills/SKILL.md",
+      content: [
+        "---",
+        "name: missing-related-skills",
+        "description: fixture",
+        "compatibility: Requires Node.js 18+.",
+        "metadata:",
+        "  entry: scripts/example.js",
+        "---",
+        "",
+      ].join("\n"),
+    }),
+    /metadata missing required key: related-skills/,
+  );
+
+  assert.throws(
+    () => assertSkillFrontmatterSchema({
       label: "malformed/SKILL.md",
       content: [
         "---",

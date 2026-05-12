@@ -5,7 +5,7 @@ description: Verify a task is ready to relay — score readiness on clarity, gra
 compatibility: Requires git and Node.js 18+.
 metadata:
   related-skills: "relay, relay-plan, relay-dispatch, relay-review"
-  keywords: "relay-ready, ready to relay, readiness gate, task readiness, 준비도, 검증, 분해, 완료 기준"
+  keywords: "relay-ready, ready to relay, readiness gate, task readiness, 릴레이 준비, 준비도, 검증, 완료 기준"
 ---
 
 # Relay Ready

@@ -5,6 +5,7 @@ description: Execute the full relay cycle — plan, dispatch, review, merge. Use
 compatibility: Requires Claude Code or Codex, gh CLI, git, Node.js 18+.
 metadata:
   related-skills: "relay-ready, relay-plan, relay-dispatch, relay-review, relay-merge, dev-backlog"
+  keywords: "릴레이, 자동 실행, plan, dispatch, review, merge, relay cycle"
 ---
 
 # Dev Relay
