@@ -24,38 +24,11 @@ Bypass only for a single relay-ready task with a trustworthy review anchor alrea
 
 ## Output Contract
 
-Persist all of the following under `~/.relay/requests/<repo-slug>/<request-id>/`:
-- request artifact: `../<request-id>.md`
-- raw request: `raw-request.md`
-- relay-ready handoffs: `relay-ready/<leaf-id>.md`
-- frozen Done Criteria snapshots: `done-criteria/<leaf-id>.md`
-- append-only events: `events.jsonl`
-
-The request artifact frontmatter may also carry:
-- `readiness.clarity`
-- `readiness.granularity`
-- `readiness.dependency`
-- `readiness.verifiability`
-- `readiness.risk`
-- `next_action`
-- `leaf_count`
-- `paths.handoff` + `paths.done_criteria` for single-leaf requests
-- `paths.handoffs` + `paths.done_criteria` for multi-leaf requests
-- `decomposition.leaf_order`
-- `decomposition.dependencies`
-
-Each normalized handoff must contain:
-- `request_id`
-- `leaf_id`
-- `title`
-- `goal`
-- `order`
-- `depends_on`
-- `in_scope`
-- `out_of_scope`
-- `assumptions`
-- `done_criteria_path`
-- `escalation_conditions`
+Persist artifacts under `~/.relay/requests/<repo-slug>/<request-id>/` (request frontmatter, raw request,
+handoff(s), done-criteria snapshot(s), append-only events.jsonl). Field-by-field schema with required/
+optional markings, value enums, and descriptions: see
+[`scripts/request-contract.schema.json`](scripts/request-contract.schema.json). `persist-request.js`
+validates against it on every persistence call.
 
 ## Persistence Step
 
@@ -74,12 +47,7 @@ Persist it with:
 ${CLAUDE_SKILL_DIR}/scripts/persist-request.js --repo . --contract-file /tmp/relay-ready-contract.json --json
 ```
 
-Optional contract fields:
-- `readiness.clarity`: `high | medium | low`
-- `readiness.granularity`: `single_task | multi_task | unclear`
-- `readiness.dependency`: `none | internal | external`
-- `readiness.verifiability`: `high | medium | low`
-- `readiness.risk`: `low | medium | high`
+Optional readiness fields: see schema enum domains.
 
 Preflight shaping stays append-only in `events.jsonl`. Use the portable readiness event types:
 - `proposal_presented`

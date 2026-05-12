@@ -8,6 +8,13 @@ const path = require("node:path");
 const REPO_ROOT = path.resolve(__dirname, "..", "..", "..");
 const SKILLS_DIR = path.join(REPO_ROOT, "skills");
 const MAX_SKILL_MD_LINES = 150;
+const RELAY_READY_REQUEST_CONTRACT_SCHEMA = path.join(
+  REPO_ROOT,
+  "skills",
+  "relay-ready",
+  "scripts",
+  "request-contract.schema.json",
+);
 
 function splitLines(text) {
   return text.split(/\r\n|\n|\r/);
@@ -190,6 +197,14 @@ test("all skills/SKILL.md files satisfy the lint contract", () => {
     assertCrossSkillPathsExist(skillFile);
     assertFrontmatterUniversalSubset(skillFile);
   });
+});
+
+test("relay-ready request contract schema exists and is parseable JSON", () => {
+  assert.ok(fs.existsSync(RELAY_READY_REQUEST_CONTRACT_SCHEMA), "relay-ready request contract schema is missing");
+
+  const schema = JSON.parse(fs.readFileSync(RELAY_READY_REQUEST_CONTRACT_SCHEMA, "utf-8"));
+  assert.equal(typeof schema.$schema, "string", "request contract schema must declare $schema");
+  assert.match(JSON.stringify(schema), /"enum"/, "request contract schema must define enum domains");
 });
 
 test("assertLineCount rejects SKILL.md files over 150 lines", () => {
