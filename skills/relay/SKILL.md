@@ -33,17 +33,7 @@ Fast path: bypass relay-ready only when the input is already one relay-ready tas
 
 If no issue number, use a descriptive branch name (e.g., `feat/<slug>`) and skip issue-close in Step 6.
 
-### Readiness path
-
-If readiness is required, persist a single-leaf contract first:
-
-```bash
-${CLAUDE_SKILL_DIR}/../relay-ready/scripts/persist-request.js --repo . --contract-file /tmp/relay-ready-contract.json --json
-```
-
-Carry forward the handoff brief, frozen Done Criteria snapshot, and linkage: `request_id`, `leaf_id`.
-
-## Readiness probe + chain prompt
+## Step 1.7: Readiness probe + chain prompt
 Before Step 2, run this unless bypassed by a prior relay-ready artifact with `readiness_score` and frozen review anchor, explicit `--bypass-readiness`, or a sprint-batch entry already linked to a relay-ready handoff:
 
 ```bash
