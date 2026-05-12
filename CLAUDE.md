@@ -63,6 +63,7 @@ tests/
 ```
 
 Multi-skill design: each phase is independently invocable. `npx skills add sungjunlee/dev-relay` installs all 6 skills: `relay`, `relay-ready`, `relay-plan`, `relay-dispatch`, `relay-review`, `relay-merge`.
+Cross-skill install dependencies are documented in [references/install-graph.md](references/install-graph.md).
 
 ## Common Commands
 
