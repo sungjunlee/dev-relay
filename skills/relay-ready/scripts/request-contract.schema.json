@@ -258,18 +258,14 @@
     },
     "HandoffArtifact": {
       "type": "object",
-      "description": "Persisted relay-ready/<leaf-id>.md frontmatter generated for relay-plan and dispatch handoff consumers.",
+      "description": "YAML frontmatter of the persisted relay-ready/<leaf-id>.md handoff artifact. The markdown body of the handoff additionally contains rendered sections for in_scope, out_of_scope, assumptions, done_criteria_markdown, and escalation_conditions — those are body content, not frontmatter, and are covered by the input handoff schema during persistence.",
       "required": [
         "request_id",
         "leaf_id",
         "title",
         "goal",
         "order",
-        "in_scope",
-        "out_of_scope",
-        "assumptions",
-        "done_criteria_path",
-        "escalation_conditions"
+        "done_criteria_path"
       ],
       "additionalProperties": true,
       "properties": {
@@ -302,26 +298,10 @@
           "$ref": "#/$defs/stringArray",
           "description": "Optional list of earlier leaf_id values that must be completed before this leaf."
         },
-        "in_scope": {
-          "$ref": "#/$defs/stringArray",
-          "description": "Work explicitly included in this leaf."
-        },
-        "out_of_scope": {
-          "$ref": "#/$defs/stringArray",
-          "description": "Work explicitly excluded from this leaf."
-        },
-        "assumptions": {
-          "$ref": "#/$defs/stringArray",
-          "description": "Assumptions that make the handoff relay-ready."
-        },
         "done_criteria_path": {
           "type": "string",
           "minLength": 1,
           "description": "Frozen Done Criteria snapshot path for this leaf."
-        },
-        "escalation_conditions": {
-          "$ref": "#/$defs/stringArray",
-          "description": "Conditions that should stop execution and escalate back to the orchestrator."
         }
       }
     },
