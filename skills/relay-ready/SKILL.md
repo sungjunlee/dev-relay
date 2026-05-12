@@ -25,10 +25,11 @@ Bypass only for a single relay-ready task with a trustworthy review anchor alrea
 ## Output Contract
 
 Persist artifacts under `~/.relay/requests/<repo-slug>/<request-id>/` (request frontmatter, raw request,
-handoff(s), done-criteria snapshot(s), append-only events.jsonl). Field-by-field schema with required/
-optional markings, value enums, and descriptions: see
+handoff(s), done-criteria snapshot(s), append-only events.jsonl). Field-by-field schema with input
+requirements plus persisted request and handoff artifact definitions: see
 [`scripts/request-contract.schema.json`](scripts/request-contract.schema.json). `persist-request.js`
-validates against it on every persistence call.
+validates the input contract on every persistence call; `$defs.RequestArtifact` and
+`$defs.HandoffArtifact` document generated frontmatter for downstream consumers.
 
 ## Persistence Step
 
@@ -47,7 +48,7 @@ Persist it with:
 ${CLAUDE_SKILL_DIR}/scripts/persist-request.js --repo . --contract-file /tmp/relay-ready-contract.json --json
 ```
 
-Optional readiness fields: see schema enum domains.
+Readiness is optional, but if supplied, all readiness dimensions are required; see schema enum domains.
 
 Preflight shaping stays append-only in `events.jsonl`. Use the portable readiness event types:
 - `proposal_presented`

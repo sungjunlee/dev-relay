@@ -43,6 +43,12 @@ function validateReadiness(readiness, field, schema, errors) {
   }
 
   const readinessFields = schema?.$defs?.readiness?.properties || {};
+  const requiredReadinessFields = schema?.$defs?.readiness?.required || [];
+  for (const name of requiredReadinessFields) {
+    if (!hasOwn(readiness, name)) {
+      errors.push(`${field}.${name}: is required`);
+    }
+  }
   for (const [name, definition] of Object.entries(readinessFields)) {
     if (!hasOwn(readiness, name)) continue;
     const allowed = definition.enum || [];

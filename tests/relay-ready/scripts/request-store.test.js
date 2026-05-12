@@ -317,6 +317,30 @@ test("persist-request CLI returns multi-leaf paths in execution order", () => {
   assert.equal(result.doneCriteriaPaths.length, 2);
 });
 
+test("persist-request CLI rejects readiness objects missing a required field before persistence", () => {
+  const { repoRoot } = setupRepo();
+  const contractPath = path.join(repoRoot, "contract-missing-readiness.json");
+  const { risk, ...incompleteReadiness } = createReadiness();
+  fs.writeFileSync(
+    contractPath,
+    `${JSON.stringify(createContract({ readiness: incompleteReadiness }), null, 2)}\n`,
+    "utf-8",
+  );
+
+  assert.throws(
+    () => execFileSync("node", [
+      PERSIST_SCRIPT,
+      "--repo", repoRoot,
+      "--contract-file", contractPath,
+      "--json",
+    ], { encoding: "utf-8", stdio: "pipe" }),
+    (error) => {
+      assert.match(String(error.stderr), /contract validation failed: readiness\.risk: is required/);
+      return true;
+    },
+  );
+});
+
 test("persistRequestContract stores readiness dimensions in request frontmatter when provided", () => {
   const { repoRoot } = setupRepo();
   const readiness = createReadiness({ risk: "low" });
