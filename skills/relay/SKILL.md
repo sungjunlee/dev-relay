@@ -41,7 +41,7 @@ PR_NUM=$(gh pr list --head issue-<N> --json number -q '.[0].number')
 ```
 - PR exists and open → **skip Steps 2-3**, go directly to Step 4 (review)
 - PR exists and merged → update sprint file to `[x]` (if exists), done
-- PR not found → continue to Step 2
+- PR not found → continue to Step 1.7
 
 ## Step 1.7: Readiness probe + chain prompt
 Before Step 2, run this unless bypassed by a prior relay-ready artifact with `readiness_score` and frozen review anchor, explicit `--bypass-readiness`, or a sprint-batch entry already linked to a relay-ready handoff:
