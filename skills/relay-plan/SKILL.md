@@ -43,8 +43,7 @@ node ${CLAUDE_SKILL_DIR}/scripts/probe-executor-env.js . --project-only --json
 
 Use `probe_signal.test_infra`, `lint_format`, `type_check`, `ci`, and `scripts` to inform rubric design, prerequisites, and Available Tools. The signal exposes data; it does not pick. No-signal/failure cases render as `no quality infra detected`; details: `references/signals.md`. The `test_infra` field is consumed by `references/rubric-pattern-tdd-flavor.md` and `scripts/tdd-suggestion.js`.
 
-### 3.5 Match a template from probe signals (optional starting point)
-Optionally ask for a deterministic starter template:
+Optionally, ask `match-template.js` for a deterministic starter template based on the probe signal:
 ```bash
 node ${CLAUDE_SKILL_DIR}/scripts/match-template.js --probe-file /tmp/probe.json --json
 ```
@@ -115,6 +114,7 @@ Apply to all task sizes: rewrite HOW into observable WHAT, merge overlaps, remov
 
 ### 8. Persist planner-authored Done Criteria
 
+Persist now so the optional review in §9 sees the same anchor as the reviewer will; persistence is not a commitment, just an anchor write.
 If operator planning writes the final Done Criteria, persist that decision before dispatch so fresh-context review uses the same anchor. This includes AC-missing inputs, user-provided descriptions, and any case where planning expands, rejects, or narrows issue-body AC:
 
 ```bash
