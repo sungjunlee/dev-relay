@@ -164,8 +164,9 @@ function parseFrontmatter(content) {
   return data;
 }
 
-function assertSkillFrontmatterSchema({ label, content }) {
+function assertSkillFrontmatterSchema({ label, content, path: skillPath = label }) {
   const frontmatter = parseFrontmatter(content);
+  const skillDir = path.basename(path.dirname(skillPath));
   for (const key of ["name", "description", "compatibility", "metadata"]) {
     assert.ok(Object.hasOwn(frontmatter, key), `${label} frontmatter missing required key: ${key}`);
   }
@@ -192,6 +193,28 @@ function assertSkillFrontmatterSchema({ label, content }) {
     "",
     `${label} frontmatter metadata.related-skills must not be empty`,
   );
+  if ("argument-hint" in frontmatter) {
+    assert.ok(
+      typeof frontmatter["argument-hint"] === "string" && frontmatter["argument-hint"].trim().length > 0,
+      `${label}: argument-hint must be a non-empty string`,
+    );
+  }
+  if (frontmatter.metadata && "keywords" in frontmatter.metadata) {
+    assert.ok(
+      typeof frontmatter.metadata.keywords === "string" && frontmatter.metadata.keywords.trim().length > 0,
+      `${label}: metadata.keywords must be a non-empty string`,
+    );
+  }
+  if ("context" in frontmatter && skillDir !== "relay-review") {
+    assert.fail(`${label}: 'context' frontmatter is only allowed on relay-review/SKILL.md`);
+  }
+  if ("context" in frontmatter) {
+    assert.equal(
+      frontmatter.context,
+      "fork",
+      `${label}: 'context' currently must be exactly "fork" (only relay-review uses it)`,
+    );
+  }
 }
 
 function readSkillFiles() {
@@ -343,5 +366,79 @@ test("assertSkillFrontmatterSchema rejects missing or malformed frontmatter", ()
       ].join("\n"),
     }),
     /invalid frontmatter line/,
+  );
+});
+
+test("assertSkillFrontmatterSchema rejects malformed optional frontmatter fields", () => {
+  assert.throws(
+    () => assertSkillFrontmatterSchema({
+      label: "relay-plan/SKILL.md",
+      content: [
+        "---",
+        "name: relay-plan",
+        "argument-hint: ",
+        "description: fixture",
+        "compatibility: Requires Node.js 18+.",
+        "metadata:",
+        "  related-skills: relay",
+        "---",
+        "",
+      ].join("\n"),
+    }),
+    /argument-hint must be a non-empty string/,
+  );
+
+  assert.throws(
+    () => assertSkillFrontmatterSchema({
+      label: "relay-plan/SKILL.md",
+      content: [
+        "---",
+        "name: relay-plan",
+        "description: fixture",
+        "compatibility: Requires Node.js 18+.",
+        "metadata:",
+        "  related-skills: relay",
+        "  keywords: ",
+        "---",
+        "",
+      ].join("\n"),
+    }),
+    /metadata\.keywords must be a non-empty string/,
+  );
+
+  assert.throws(
+    () => assertSkillFrontmatterSchema({
+      label: "relay-plan/SKILL.md",
+      content: [
+        "---",
+        "name: relay-plan",
+        "description: fixture",
+        "compatibility: Requires Node.js 18+.",
+        "context: fork",
+        "metadata:",
+        "  related-skills: relay",
+        "---",
+        "",
+      ].join("\n"),
+    }),
+    /context' frontmatter is only allowed on relay-review\/SKILL\.md/,
+  );
+
+  assert.throws(
+    () => assertSkillFrontmatterSchema({
+      label: "relay-review/SKILL.md",
+      content: [
+        "---",
+        "name: relay-review",
+        "description: fixture",
+        "compatibility: Requires Node.js 18+.",
+        "context: fresh",
+        "metadata:",
+        "  related-skills: relay",
+        "---",
+        "",
+      ].join("\n"),
+    }),
+    /context' currently must be exactly "fork"/,
   );
 });
