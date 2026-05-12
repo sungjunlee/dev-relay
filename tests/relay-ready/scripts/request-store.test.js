@@ -296,6 +296,65 @@ test("persist-request CLI persists the single-leaf request bundle", () => {
   assert.ok(fs.existsSync(result.doneCriteriaPath));
 });
 
+test("persist-request CLI accepts missing optional per-leaf arrays", () => {
+  const { repoRoot } = setupRepo();
+  const contractPath = path.join(repoRoot, "contract-without-optional-arrays.json");
+  const {
+    in_scope,
+    out_of_scope,
+    assumptions,
+    escalation_conditions,
+    ...handoff
+  } = createContract().handoff;
+
+  fs.writeFileSync(
+    contractPath,
+    `${JSON.stringify(createContract({ handoff }), null, 2)}\n`,
+    "utf-8",
+  );
+
+  const stdout = execFileSync("node", [
+    PERSIST_SCRIPT,
+    "--repo", repoRoot,
+    "--contract-file", contractPath,
+    "--json",
+  ], { encoding: "utf-8" });
+
+  const result = JSON.parse(stdout);
+  assert.equal(result.leafId, "leaf-01");
+  assert.ok(fs.existsSync(result.handoffPath));
+});
+
+test("persist-request CLI rejects optional per-leaf arrays when present with a non-array value", () => {
+  for (const field of ["in_scope", "out_of_scope", "assumptions", "escalation_conditions"]) {
+    const { repoRoot } = setupRepo();
+    const contractPath = path.join(repoRoot, `contract-invalid-${field}.json`);
+    fs.writeFileSync(
+      contractPath,
+      `${JSON.stringify(createContract({
+        handoff: {
+          ...createContract().handoff,
+          [field]: "not an array",
+        },
+      }), null, 2)}\n`,
+      "utf-8",
+    );
+
+    assert.throws(
+      () => execFileSync("node", [
+        PERSIST_SCRIPT,
+        "--repo", repoRoot,
+        "--contract-file", contractPath,
+        "--json",
+      ], { encoding: "utf-8", stdio: "pipe" }),
+      (error) => {
+        assert.match(String(error.stderr), new RegExp(`contract validation failed: handoff\\.${field}: must be an array`));
+        return true;
+      },
+    );
+  }
+});
+
 test("persist-request CLI returns multi-leaf paths in execution order", () => {
   const { repoRoot } = setupRepo();
   const contractPath = path.join(repoRoot, "multi-contract.json");

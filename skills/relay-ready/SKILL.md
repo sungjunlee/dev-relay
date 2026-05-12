@@ -38,9 +38,8 @@ Write a JSON contract file with:
 - `request_text`
 - either `handoff` for single-leaf or `handoffs[]` for multi-leaf
 - per leaf: `leaf_id`, `title`, `goal`, `order`
-- optional per leaf: `depends_on`
-- per leaf: `in_scope`, `out_of_scope`, `assumptions`
-- per leaf: `done_criteria_markdown`, `escalation_conditions`
+- per leaf: `done_criteria_markdown`
+- optional per leaf: `depends_on`, `in_scope`, `out_of_scope`, `assumptions`, `escalation_conditions`
 
 Persist it with:
 

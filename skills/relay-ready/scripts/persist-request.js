@@ -35,6 +35,11 @@ function validateStringArray(value, field, errors) {
   });
 }
 
+function validateOptionalStringArray(value, field, errors) {
+  if (value === undefined) return;
+  validateStringArray(value, field, errors);
+}
+
 function validateReadiness(readiness, field, schema, errors) {
   if (readiness === undefined) return;
   if (!isObject(readiness)) {
@@ -68,7 +73,7 @@ function validateLeafHandoff(handoff, field, schema, errors, defaultOrder) {
     validateString(handoff[name], `${field}.${name}`, errors);
   }
   for (const name of ["in_scope", "out_of_scope", "assumptions", "escalation_conditions"]) {
-    validateStringArray(handoff[name], `${field}.${name}`, errors);
+    validateOptionalStringArray(handoff[name], `${field}.${name}`, errors);
   }
   if (hasOwn(handoff, "depends_on")) {
     validateStringArray(handoff.depends_on, `${field}.depends_on`, errors);

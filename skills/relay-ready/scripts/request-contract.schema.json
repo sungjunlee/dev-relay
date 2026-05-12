@@ -312,11 +312,7 @@
         "leaf_id",
         "title",
         "goal",
-        "in_scope",
-        "out_of_scope",
-        "assumptions",
-        "done_criteria_markdown",
-        "escalation_conditions"
+        "done_criteria_markdown"
       ],
       "additionalProperties": true,
       "properties": {
@@ -343,19 +339,23 @@
         },
         "depends_on": {
           "$ref": "#/$defs/stringArray",
-          "description": "Optional list of earlier leaf_id values that must be completed before this leaf."
+          "description": "Optional list of earlier leaf_id values that must be completed before this leaf.",
+          "default": []
         },
         "in_scope": {
           "$ref": "#/$defs/stringArray",
-          "description": "Work explicitly included in this leaf."
+          "description": "Optional work explicitly included in this leaf. Defaults to an empty list when omitted.",
+          "default": []
         },
         "out_of_scope": {
           "$ref": "#/$defs/stringArray",
-          "description": "Work explicitly excluded from this leaf."
+          "description": "Optional work explicitly excluded from this leaf. Defaults to an empty list when omitted.",
+          "default": []
         },
         "assumptions": {
           "$ref": "#/$defs/stringArray",
-          "description": "Assumptions that make the handoff relay-ready."
+          "description": "Optional assumptions that make the handoff relay-ready. Defaults to an empty list when omitted.",
+          "default": []
         },
         "done_criteria_markdown": {
           "type": "string",
@@ -364,7 +364,8 @@
         },
         "escalation_conditions": {
           "$ref": "#/$defs/stringArray",
-          "description": "Conditions that should stop execution and escalate back to the orchestrator."
+          "description": "Optional conditions that should stop execution and escalate back to the orchestrator. Defaults to an empty list when omitted.",
+          "default": []
         },
         "readiness": {
           "$ref": "#/$defs/readiness",
