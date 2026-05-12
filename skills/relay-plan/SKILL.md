@@ -5,8 +5,8 @@ description: Synthesize task intent, explicit AC when present, repo signals, and
 compatibility: Requires gh CLI.
 metadata:
   related-skills: "relay, relay-ready, relay-dispatch, relay-review, dev-backlog"
+  keywords: "계획, 루브릭, planning, rubric, dispatch prompt"
 ---
-
 # Relay Plan
 
 Build a scoring rubric from the task's intended outcome: explicit Acceptance Criteria (AC) when available, inferred Done Criteria when missing or incomplete, repo quality signals, historical relay signal, and task-specific risk. Then generate a dispatch prompt that drives autonomous iteration until convergence.

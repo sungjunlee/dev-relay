@@ -5,6 +5,7 @@ description: Dispatch implementation tasks via worktree isolation. Use when dele
 compatibility: Requires executor CLI (e.g., codex), git, and Node.js 18+.
 metadata:
   related-skills: "relay, relay-ready, relay-plan, relay-review, relay-merge"
+  keywords: "디스패치, 실행, dispatch, executor, worktree"
 ---
 
 # Relay Dispatch

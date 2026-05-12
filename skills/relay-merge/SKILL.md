@@ -5,6 +5,7 @@ description: Merge a reviewed PR, clean up worktree/branch, and close GitHub iss
 compatibility: Requires gh CLI and git.
 metadata:
   related-skills: "relay, relay-ready, relay-plan, relay-dispatch, relay-review, dev-backlog"
+  keywords: "머지, 병합, merge, finalize, cleanup"
 ---
 
 # Relay Merge

@@ -126,3 +126,22 @@ node skills/relay-merge/scripts/finalize-run.js --run-id <id> --force-finalize-n
 - Manifest state transitions must go through `validateTransition()` — direct state assignment is a bug
 - New executors: drop a file in `skills/relay-dispatch/scripts/executors/` exporting the 6-field adapter contract, register in `executors/index.js`. See `skills/relay-dispatch/scripts/executors/README.md` for the contract and add a row to `tests/relay-dispatch/scripts/executors.test.js`.
 - New reviewers: create `invoke-reviewer-<name>.js` in `relay-review/scripts/`
+
+### SKILL.md frontmatter schema
+
+Every `skills/<skill>/SKILL.md` frontmatter must start with the same required shape:
+
+| Key | Requirement |
+| --- | --- |
+| `name` | Kebab-case skill identifier matching the directory name. |
+| `description` | Single-line trigger description for the skill router. |
+| `compatibility` | Single-line string stating runtime requirements, such as `Requires gh CLI, git, Node.js 18+.` |
+| `metadata.related-skills` | Comma-separated string of sibling skill names. |
+
+Standard optional keys:
+
+| Key | Requirement |
+| --- | --- |
+| `argument-hint` | Prefer natural-language forms such as `[issue-number]` or `[run-id or PR-number]`. `relay-dispatch` intentionally keeps its CLI-spec form because it documents mutually exclusive dispatch modes. |
+| `metadata.keywords` | Comma-separated trigger keywords. Operator-facing skills should include tight bilingual Korean and English tokens. |
+| `context` | Only for skills that need fresh-context isolation; currently `relay-review` uses `context: fork`. |

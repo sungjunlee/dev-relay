@@ -1,10 +1,11 @@
 ---
 name: relay-sidecar
 description: Run artifact-only advisory sidecars for an existing relay run.
+compatibility: Requires relay-dispatch (Epic #367) and Node.js 18+.
 metadata:
+  related-skills: "relay-dispatch"
+  keywords: "사이드카, 보조 검토, sidecar, advisory, artifacts"
   entry: scripts/relay-sidecar.js
-compatibility:
-  relay_epic: "#367"
 ---
 
 # Relay Sidecar
