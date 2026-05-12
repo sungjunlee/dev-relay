@@ -33,6 +33,16 @@ Fast path: bypass relay-ready only when the input is already one relay-ready tas
 
 If no issue number, use a descriptive branch name (e.g., `feat/<slug>`) and skip issue-close in Step 6.
 
+## Step 1.5: Check for in-flight work
+
+Check if this issue already has a PR in progress:
+```bash
+PR_NUM=$(gh pr list --head issue-<N> --json number -q '.[0].number')
+```
+- PR exists and open → **skip Steps 2-3**, go directly to Step 4 (review)
+- PR exists and merged → update sprint file to `[x]` (if exists), done
+- PR not found → continue to Step 2
+
 ## Step 1.7: Readiness probe + chain prompt
 Before Step 2, run this unless bypassed by a prior relay-ready artifact with `readiness_score` and frozen review anchor, explicit `--bypass-readiness`, or a sprint-batch entry already linked to a relay-ready handoff:
 
@@ -52,16 +62,6 @@ Branch labels and events:
 - `chain-n` / `bypass_override_by_user`: emit with current scores and proceed to Step 2.
 - `chain-abort` / `readiness_check_failed`: emit with current scores, close the run.
 - `noninteractive-fail` / `readiness_check_failed_nontty`: emit when `BYPASS=false` and no prompt is allowed, then close the run.
-
-## Step 1.5: Check for in-flight work
-
-Check if this issue already has a PR in progress:
-```bash
-PR_NUM=$(gh pr list --head issue-<N> --json number -q '.[0].number')
-```
-- PR exists and open → **skip Steps 2-3**, go directly to Step 4 (review)
-- PR exists and merged → update sprint file to `[x]` (if exists), done
-- PR not found → continue to Step 2
 
 ## Step 2: Plan
 
