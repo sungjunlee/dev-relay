@@ -6,6 +6,7 @@ context: fork
 compatibility: Requires gh CLI.
 metadata:
   related-skills: "relay, relay-ready, relay-plan, relay-dispatch, relay-merge"
+  keywords: "리뷰, 검토, review, gate, fresh context"
 ---
 
 # Relay Review
