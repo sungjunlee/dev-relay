@@ -1,0 +1,398 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/sungjunlee/dev-relay/schemas/relay-ready/request-contract.schema.json",
+  "title": "Relay Ready Request Persistence Contract",
+  "description": "Canonical additive-tolerant full relay-ready request persistence contract. The top-level schema defines the input accepted by skills/relay-ready/scripts/persist-request.js. $defs.RequestArtifact and $defs.HandoffArtifact document the persisted frontmatter artifacts generated for downstream relay-plan and relay-dispatch consumers. The CLI validates only the input shape before relay-request.js performs semantic normalization and artifact persistence.",
+  "type": "object",
+  "required": [
+    "source",
+    "request_text"
+  ],
+  "oneOf": [
+    {
+      "description": "Single-leaf relay-ready request.",
+      "required": [
+        "handoff"
+      ],
+      "not": {
+        "required": [
+          "handoffs"
+        ]
+      }
+    },
+    {
+      "description": "Multi-leaf relay-ready request.",
+      "required": [
+        "handoffs"
+      ],
+      "not": {
+        "required": [
+          "handoff"
+        ]
+      }
+    }
+  ],
+  "properties": {
+    "source": {
+      "type": "object",
+      "description": "Origin metadata for the request. Unknown source metadata is preserved as producer-specific context.",
+      "required": [
+        "kind"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "kind": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Source type for the request, such as raw_text or github_issue."
+        }
+      }
+    },
+    "request_text": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Raw user request text to persist as raw-request.md and use as the request artifact body anchor."
+    },
+    "handoff": {
+      "$ref": "#/$defs/singleLeafHandoff",
+      "description": "Single relay-ready leaf handoff. Exactly one of handoff or handoffs must be provided."
+    },
+    "handoffs": {
+      "type": "array",
+      "minItems": 1,
+      "description": "Ordered multi-leaf relay-ready handoffs. Exactly one of handoff or handoffs must be provided.",
+      "items": {
+        "$ref": "#/$defs/multiLeafHandoff"
+      }
+    },
+    "readiness": {
+      "$ref": "#/$defs/readiness",
+      "description": "Request-level readiness scores copied to the request artifact frontmatter."
+    },
+    "next_action": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Optional producer hint for the immediate next relay step. persist-request.js currently persists relay_plan after a successful handoff freeze."
+    }
+  },
+  "additionalProperties": true,
+  "$defs": {
+    "stringArray": {
+      "type": "array",
+      "description": "Array of strings. Empty arrays are allowed when there is nothing to list.",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "readiness": {
+      "type": "object",
+      "description": "Readiness dimensions used by relay-ready to explain whether the request is clear, leaf-sized, dependency-aware, verifiable, and risk-bounded.",
+      "additionalProperties": true,
+      "required": [
+        "clarity",
+        "granularity",
+        "dependency",
+        "verifiability",
+        "risk"
+      ],
+      "properties": {
+        "clarity": {
+          "type": "string",
+          "description": "How clearly the request states the desired behavior and constraints.",
+          "enum": [
+            "high",
+            "medium",
+            "low"
+          ]
+        },
+        "granularity": {
+          "type": "string",
+          "description": "Whether the request is already one relay-sized task, multiple tasks, or unclear.",
+          "enum": [
+            "single_task",
+            "multi_task",
+            "unclear"
+          ]
+        },
+        "dependency": {
+          "type": "string",
+          "description": "Whether the request has no dependencies, internal dependencies, or external dependencies.",
+          "enum": [
+            "none",
+            "internal",
+            "external"
+          ]
+        },
+        "verifiability": {
+          "type": "string",
+          "description": "How directly a reviewer can verify completion from the Done Criteria and handoff.",
+          "enum": [
+            "high",
+            "medium",
+            "low"
+          ]
+        },
+        "risk": {
+          "type": "string",
+          "description": "Implementation and review risk for the request.",
+          "enum": [
+            "low",
+            "medium",
+            "high"
+          ]
+        }
+      }
+    },
+    "RequestArtifact": {
+      "type": "object",
+      "description": "Persisted request artifact frontmatter written to ~/.relay/requests/<repo-slug>/<request-id>.md. All fields are optional in this definition because preflight and relay-ready artifacts may be partially populated over time.",
+      "additionalProperties": true,
+      "properties": {
+        "request_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Request identifier set by the persister."
+        },
+        "state": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Current request artifact state, such as relay_ready."
+        },
+        "leaf_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Single-leaf identifier when the request resolves to one relay-ready leaf."
+        },
+        "leaf_count": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of relay-ready leaf handoffs persisted for this request."
+        },
+        "next_action": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Immediate next relay action for the orchestrator."
+        },
+        "source": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "kind": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Original request source kind."
+            }
+          }
+        },
+        "readiness": {
+          "$ref": "#/$defs/readiness",
+          "description": "Request-level readiness scores copied from the accepted relay-ready contract."
+        },
+        "paths": {
+          "type": "object",
+          "description": "Persisted artifact paths. Single-leaf requests use paths.handoff and a string paths.done_criteria; multi-leaf requests use paths.handoffs and an array paths.done_criteria.",
+          "additionalProperties": true,
+          "properties": {
+            "raw_request": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Path to raw-request.md."
+            },
+            "handoff": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Single-leaf relay-ready handoff path."
+            },
+            "handoffs": {
+              "$ref": "#/$defs/stringArray",
+              "description": "Ordered multi-leaf relay-ready handoff paths."
+            },
+            "done_criteria": {
+              "description": "Frozen Done Criteria path for a single-leaf request, or ordered Done Criteria paths for a multi-leaf request.",
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1
+                },
+                {
+                  "$ref": "#/$defs/stringArray"
+                }
+              ]
+            }
+          }
+        },
+        "decomposition": {
+          "type": "object",
+          "description": "Multi-leaf ordering and dependency graph consumed by downstream relay phases.",
+          "additionalProperties": true,
+          "properties": {
+            "leaf_order": {
+              "$ref": "#/$defs/stringArray",
+              "description": "Ordered leaf_id values."
+            },
+            "dependencies": {
+              "type": "object",
+              "description": "Map of leaf_id to the leaf_id values it depends on.",
+              "additionalProperties": {
+                "$ref": "#/$defs/stringArray"
+              }
+            }
+          }
+        },
+        "timestamps": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "created_at": {
+              "type": "string",
+              "minLength": 1
+            },
+            "updated_at": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      }
+    },
+    "HandoffArtifact": {
+      "type": "object",
+      "description": "YAML frontmatter of the persisted relay-ready/<leaf-id>.md handoff artifact. The markdown body of the handoff additionally contains rendered sections for in_scope, out_of_scope, assumptions, done_criteria_markdown, and escalation_conditions — those are body content, not frontmatter, and are covered by the input handoff schema during persistence.",
+      "required": [
+        "request_id",
+        "leaf_id",
+        "title",
+        "goal",
+        "order",
+        "done_criteria_path"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "request_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Parent relay-ready request identifier."
+        },
+        "leaf_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Stable leaf identifier used by relay-plan, relay-dispatch, and review anchors."
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Short human-readable leaf title."
+        },
+        "goal": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Concrete outcome this leaf must achieve."
+        },
+        "order": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Positive execution order for this leaf."
+        },
+        "depends_on": {
+          "$ref": "#/$defs/stringArray",
+          "description": "Optional list of earlier leaf_id values that must be completed before this leaf."
+        },
+        "done_criteria_path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Frozen Done Criteria snapshot path for this leaf."
+        }
+      }
+    },
+    "leafHandoffBase": {
+      "type": "object",
+      "description": "Fields shared by a relay-ready leaf handoff. Unknown leaf metadata is allowed so producers can add forward-compatible annotations.",
+      "required": [
+        "leaf_id",
+        "title",
+        "goal",
+        "done_criteria_markdown"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "leaf_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Stable leaf identifier used by relay-plan, relay-dispatch, and review anchors."
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Short human-readable leaf title."
+        },
+        "goal": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Concrete outcome this leaf must achieve."
+        },
+        "order": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Positive execution order. Required for multi-leaf handoffs; single-leaf handoffs default to 1 when omitted for existing producer compatibility.",
+          "default": 1
+        },
+        "depends_on": {
+          "$ref": "#/$defs/stringArray",
+          "description": "Optional list of earlier leaf_id values that must be completed before this leaf.",
+          "default": []
+        },
+        "in_scope": {
+          "$ref": "#/$defs/stringArray",
+          "description": "Optional work explicitly included in this leaf. Defaults to an empty list when omitted.",
+          "default": []
+        },
+        "out_of_scope": {
+          "$ref": "#/$defs/stringArray",
+          "description": "Optional work explicitly excluded from this leaf. Defaults to an empty list when omitted.",
+          "default": []
+        },
+        "assumptions": {
+          "$ref": "#/$defs/stringArray",
+          "description": "Optional assumptions that make the handoff relay-ready. Defaults to an empty list when omitted.",
+          "default": []
+        },
+        "done_criteria_markdown": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Frozen Done Criteria markdown that will be written to done-criteria/<leaf-id>.md."
+        },
+        "escalation_conditions": {
+          "$ref": "#/$defs/stringArray",
+          "description": "Optional conditions that should stop execution and escalate back to the orchestrator. Defaults to an empty list when omitted.",
+          "default": []
+        },
+        "readiness": {
+          "$ref": "#/$defs/readiness",
+          "description": "Optional leaf-level readiness scores. When present, they must not conflict with other leaf or request readiness values."
+        }
+      }
+    },
+    "singleLeafHandoff": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/leafHandoffBase"
+        }
+      ],
+      "description": "Single-leaf handoff. Producers should provide order explicitly, but persistRequestContract normalizes a missing order to 1 for this form."
+    },
+    "multiLeafHandoff": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/leafHandoffBase"
+        },
+        {
+          "required": [
+            "order"
+          ]
+        }
+      ],
+      "description": "Multi-leaf handoff item. order is required so decomposition.leaf_order and dependency validation are deterministic."
+    }
+  }
+}
