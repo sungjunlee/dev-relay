@@ -644,7 +644,20 @@ function formatStatusText(summary, operatorAttention) {
     `Children: ${summary.total_children}`,
     `Dispatch status: ${JSON.stringify(summary.by_dispatch_status)}`,
     `Run state: ${JSON.stringify(summary.by_run_state)}`,
+    "Child states:",
   ];
+  if (summary.children.length) {
+    for (const child of summary.children) {
+      lines.push([
+        `  - ${child.leaf_ref}`,
+        `run_id=${child.run_id || "null"}`,
+        `dispatch_status=${child.dispatch_status}`,
+        `run_state=${child.run_state || "unknown"}`,
+      ].join(" | "));
+    }
+  } else {
+    lines.push("  (none)");
+  }
   if (operatorAttention.length) {
     lines.push("Needs operator attention:");
     for (const item of operatorAttention) {

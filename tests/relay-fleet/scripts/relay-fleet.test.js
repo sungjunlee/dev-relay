@@ -608,5 +608,26 @@ test("relay-fleet --status prints derived summary without writing the fleet mani
   assert.equal(payload.summary.by_run_state[RUN_STATES.DISPATCHED], 1);
   assert.equal(payload.summary.by_run_state[RUN_STATES.ESCALATED], 1);
   assert.equal(payload.summary.by_run_state.no_run_manifest, 1);
+
+  const textResult = runFleet([
+    "--repo", repoRoot,
+    "--fleet-id", "fleet-status",
+    "--status",
+  ], { relayHome });
+
+  assert.equal(textResult.status, 0, textResult.stderr);
+  assert.match(textResult.stdout, /Child states:/);
+  assert.match(
+    textResult.stdout,
+    new RegExp(`leaf-dispatched \\| run_id=${dispatchedRun} \\| dispatch_status=dispatched \\| run_state=dispatched`),
+  );
+  assert.match(
+    textResult.stdout,
+    new RegExp(`leaf-escalated \\| run_id=${escalatedRun} \\| dispatch_status=dispatched \\| run_state=escalated`),
+  );
+  assert.match(
+    textResult.stdout,
+    /leaf-failed \| run_id=null \| dispatch_status=dispatch_failed_pre_manifest \| run_state=no_run_manifest/,
+  );
   assert.equal(fs.readFileSync(created.manifestPath, "utf-8"), before);
 });
