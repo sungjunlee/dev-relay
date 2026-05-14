@@ -12,6 +12,8 @@ metadata:
 
 Run Phase 1 multi-leaf orchestration after `relay-ready` and `relay-plan` have already produced leaf artifacts. This skill does not plan raw issues. It only fans out prepared leaf contracts to `relay-dispatch`, records crash-safe fleet progress, and reports aggregate status.
 
+Design rationale, rejected alternatives, non-goals, and the Phase 2/3 roadmap: [references/design.md](references/design.md).
+
 ## Input Contract
 
 Use a JSON file containing a non-empty `leaves[]` array. Each leaf must include:
