@@ -34,6 +34,7 @@ function formatDispatchDryRun({
   rubricFile = null,
   requestId = null,
   leafId = null,
+  fleetId = null,
   doneCriteriaFile = null,
   worktreePlan,
 }) {
@@ -63,6 +64,9 @@ function formatDispatchDryRun({
   }
   if (leafId) {
     lines.push(`  Leaf:     ${leafId}`);
+  }
+  if (fleetId) {
+    lines.push(`  Fleet:    ${fleetId}`);
   }
   if (doneCriteriaFile) {
     lines.push(`  Done AC:  ${doneCriteriaFile}`);

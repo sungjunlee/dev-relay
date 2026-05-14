@@ -6,6 +6,7 @@ const {
   ensureRunLayout,
   listManifestPaths,
   nowIso,
+  requireValidFleetId,
   requireValidRunId,
 } = require("./paths");
 
@@ -175,6 +176,7 @@ function createManifestSkeleton({
   doneCriteriaPath = null,
   doneCriteriaSource = null,
   modelHints = undefined,
+  fleetId = undefined,
 }) {
   const { STATES } = require("./lifecycle");
   const { createCleanupSkeleton } = require("./cleanup");
@@ -249,6 +251,10 @@ function createManifestSkeleton({
 
   if (modelHints !== undefined) {
     manifest.model_hints = modelHints;
+  }
+
+  if (fleetId !== undefined) {
+    manifest.fleet_id = fleetId ? requireValidFleetId(fleetId) : null;
   }
 
   return manifest;
