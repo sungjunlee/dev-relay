@@ -88,9 +88,14 @@ const {
   getRunDir,
   inferIssueNumber,
   looksLikeGitRepo,
+  requireValidFleetId,
   sameFilesystemLocation,
   validateManifestPaths,
 } = require("./manifest/paths");
+const {
+  acquireIssueLock,
+  releaseIssueLock,
+} = require("./manifest/fleet");
 const {
   findInflightRunsForIssue,
   formatInflightCollisionError,
@@ -124,7 +129,7 @@ const args = process.argv.slice(2);
 const KNOWN_FLAGS = [
   "--branch", "-b", "--run-id", "--manifest", "--prompt", "-p", "--prompt-file", "--executor", "-e",
   "--model", "-m", "--model-hints", "--sandbox", "--network-access", "--copy", "--timeout", "--reasoning", "--rubric-file", "--test-command", "--rubric-grandfathered",
-  "--request-id", "--leaf-id", "--done-criteria-file",
+  "--request-id", "--leaf-id", "--fleet-id", "--done-criteria-file",
   "--register", "--no-cleanup", "--auto-recover-commit", "--allow-conflicting-run", "--dry-run", "--json", "--help", "-h",
 ];
 const CLI_ARG_OPTIONS = { commandName: "dispatch", reservedFlags: KNOWN_FLAGS };
@@ -154,6 +159,7 @@ if (!args.length || hasCliFlag(["--help", "-h"])) {
   console.log(`  --rubric-grandfathered  ${modeLabel("--rubric-grandfathered")} Retired alias; remove anchor.rubric_grandfathered manually`);
   console.log(`  --request-id       ${modeLabel("--request-id")} Link the run back to a relay-ready request`);
   console.log(`  --leaf-id          ${modeLabel("--leaf-id")} Link the run back to a relay-ready leaf handoff`);
+  console.log(`  --fleet-id         ${modeLabel("--fleet-id")} Link the run back to a relay fleet`);
   console.log(`  --done-criteria-file  ${modeLabel("--done-criteria-file")} Persist a frozen Done Criteria anchor path`);
   console.log(`  --register         ${modeLabel("--register")} Register session in executor's app (keeps worktree)`);
   console.log(`  --no-cleanup       ${modeLabel("--no-cleanup")} Compatibility alias; worktree is retained by default`);
@@ -199,6 +205,7 @@ const TEST_COMMAND = readArg(args, "--test-command", undefined, CLI_ARG_OPTIONS)
 const RUBRIC_GRANDFATHERED = hasCliFlag("--rubric-grandfathered");
 const REQUEST_ID = readArg(args, "--request-id", undefined, CLI_ARG_OPTIONS);
 const LEAF_ID = readArg(args, "--leaf-id", undefined, CLI_ARG_OPTIONS);
+const FLEET_ID = readArg(args, "--fleet-id", undefined, CLI_ARG_OPTIONS);
 const DONE_CRITERIA_FILE = readArg(args, "--done-criteria-file", undefined, CLI_ARG_OPTIONS);
 const TIMEOUT = parseInt(readArg(args, "--timeout", defaultTimeout, CLI_ARG_OPTIONS), 10);
 if (isNaN(TIMEOUT) || TIMEOUT <= 0) {
@@ -254,6 +261,15 @@ const ALLOW_CONFLICTING_RUN = hasCliFlag("--allow-conflicting-run");
 const DRY_RUN = hasCliFlag("--dry-run");
 const JSON_OUT = hasCliFlag("--json");
 const RESUME_MODE = !!MANIFEST_INPUT || (!!RUN_ID && !BRANCH);
+
+if (FLEET_ID) {
+  try {
+    requireValidFleetId(FLEET_ID);
+  } catch (error) {
+    console.error(`Error: ${error.message}`);
+    process.exit(1);
+  }
+}
 // ---------------------------------------------------------------------------
 // Validation
 // ---------------------------------------------------------------------------
@@ -374,7 +390,7 @@ function terminateProcessTree(pid) {
   } catch {}
 }
 
-function validateResumeRequestLinkage(manifest, { requestId, leafId, doneCriteriaPath }) {
+function validateResumeRequestLinkage(manifest, { requestId, leafId, fleetId, doneCriteriaPath }) {
   const checks = [
     {
       field: "source.request_id",
@@ -385,6 +401,11 @@ function validateResumeRequestLinkage(manifest, { requestId, leafId, doneCriteri
       field: "source.leaf_id",
       existing: manifest?.source?.leaf_id || null,
       incoming: leafId || null,
+    },
+    {
+      field: "fleet_id",
+      existing: manifest?.fleet_id || null,
+      incoming: fleetId || null,
     },
     {
       field: "anchor.done_criteria_path",
@@ -631,6 +652,27 @@ async function main() {
   let manifest;
   let copiedFiles = [];
   let createdWorktree = false;
+  let executorPid = null;
+  let fleetIssueLock = null;
+
+  function releaseFleetIssueLock() {
+    if (!fleetIssueLock) return;
+    releaseIssueLock(fleetIssueLock);
+    fleetIssueLock = null;
+  }
+
+  function cleanup() {
+    terminateProcessTree(executorPid);
+    releaseFleetIssueLock();
+    if (createdWorktree) {
+      removeWorktree({ repoRoot, worktreePath: wtPath });
+    }
+    process.exit(1);
+  }
+
+  process.once("exit", releaseFleetIssueLock);
+  process.on("SIGINT", cleanup);
+  process.on("SIGTERM", cleanup);
 
   if (RESUME_MODE) {
     const manifestRecord = resolveManifestRecord({
@@ -716,6 +758,19 @@ async function main() {
       process.exit(1);
     }
     runId = runId || createRunId({ issueNumber, branch });
+    if (FLEET_ID && issueForCollisionCheck && !DRY_RUN) {
+      try {
+        fleetIssueLock = acquireIssueLock({
+          repoRoot,
+          issueNumber: issueForCollisionCheck,
+          fleetId: FLEET_ID,
+          runId,
+        });
+      } catch (error) {
+        console.error(`Error: ${error.message}`);
+        process.exit(1);
+      }
+    }
     manifestPath = getManifestPath(repoRoot, runId);
     const runDir = getRunDir(repoRoot, runId);
     if (fs.existsSync(manifestPath) || (fs.existsSync(runDir) && !isPlannerAnchorOnlyRunDir(runDir))) {
@@ -741,6 +796,7 @@ async function main() {
       validateResumeRequestLinkage(manifest, {
         requestId: REQUEST_ID,
         leafId: LEAF_ID,
+        fleetId: FLEET_ID,
         doneCriteriaPath: resolvedDoneCriteriaPath,
       });
     } catch (error) {
@@ -800,6 +856,7 @@ async function main() {
 
   // --- Dry run ---
   if (DRY_RUN) {
+    const planFleetId = FLEET_ID || manifest?.fleet_id || null;
     const worktreePlan = createWorktree({
       repoRoot,
       worktreePath: wtPath,
@@ -826,6 +883,9 @@ async function main() {
       runState: manifest?.state || null,
       dispatchSkipped: false,
     };
+    if (planFleetId) {
+      plan.fleetId = planFleetId;
+    }
     if (MODEL_HINTS !== undefined || manifest?.model_hints !== undefined) {
       plan.model_hints = MODEL_HINTS ?? manifest?.model_hints ?? null;
     }
@@ -852,24 +912,13 @@ async function main() {
         rubricFile: RUBRIC_FILE || null,
         requestId: REQUEST_ID || manifest?.source?.request_id || null,
         leafId: LEAF_ID || manifest?.source?.leaf_id || null,
+        fleetId: planFleetId,
         doneCriteriaFile: resolvedDoneCriteriaPath || manifest?.anchor?.done_criteria_path || null,
         worktreePlan,
       }));
     }
     return;
   }
-
-  // --- Cleanup on unexpected exit ---
-  let executorPid = null;
-  function cleanup() {
-    terminateProcessTree(executorPid);
-    if (createdWorktree) {
-      removeWorktree({ repoRoot, worktreePath: wtPath });
-    }
-    process.exit(1);
-  }
-  process.on("SIGINT", cleanup);
-  process.on("SIGTERM", cleanup);
 
   if (!RESUME_MODE) {
     try {
@@ -938,6 +987,7 @@ async function main() {
         leafId: LEAF_ID,
       }),
       modelHints: MODEL_HINTS,
+      fleetId: FLEET_ID,
     });
     manifest = {
       ...manifest,
@@ -1396,6 +1446,9 @@ async function main() {
     diffStat,
     resultPreview: resultText.slice(0, 500),
   };
+  if (manifest.fleet_id) {
+    result.fleetId = manifest.fleet_id;
+  }
 
   if (JSON_OUT) {
     console.log(JSON.stringify(result, null, 2));

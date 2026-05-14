@@ -36,6 +36,7 @@ const FLAGS = [
   { flag: "--dry-run", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Presence flag; no value is consumed." },
   { flag: "--executor", aliases: ["-e"], kind: VALUE, mode: MODE_PARSED, valueName: "<name>", rationale: "Closed selector; flag-like following tokens should mean the value is missing." },
   { flag: "--file", kind: VALUE, mode: MODE_VERBATIM, valueName: "<path>", rationale: "Operator-supplied input file path; keep the literal argv token." },
+  { flag: "--fleet-id", kind: VALUE, mode: MODE_PARSED, valueName: "<id>", rationale: "Structured relay fleet identifier; flag-like following tokens should mean the value is missing." },
   { flag: "--force", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Presence flag; no value is consumed." },
   { flag: "--force-finalize-nonready", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Presence flag; no value is consumed." },
   { flag: "--head-sha", kind: VALUE, mode: MODE_PARSED, valueName: "<sha>", rationale: "Structured SHA field; flag-like following tokens should mean the value is missing." },
@@ -121,7 +122,7 @@ const COMMAND_FLAGS = {
     "--branch", "--run-id", "--manifest", "--prompt", "--prompt-file", "--executor",
     "--model", "--model-hints", "--sandbox", "--network-access", "--copy", "--timeout", "--reasoning", "--rubric-file",
     "--test-command", "--rubric-grandfathered", "--request-id", "--leaf-id",
-    "--done-criteria-file", "--register", "--no-cleanup", "--auto-recover-commit",
+    "--fleet-id", "--done-criteria-file", "--register", "--no-cleanup", "--auto-recover-commit",
     "--allow-conflicting-run", "--dry-run", "--json", "--help",
   ],
   "finalize-run": [
