@@ -185,6 +185,9 @@ function updateFleetManifest(repoRoot, fleetId, updater) {
   if (updated.fleet_id !== record.data.fleet_id) {
     throw new Error("updateFleetManifest cannot change fleet_id");
   }
+  if (updated.fleet_state !== record.data.fleet_state) {
+    validateTransition(record.data.fleet_state, updated.fleet_state);
+  }
   return writeFleetManifest(repoRoot, updated, record.body);
 }
 

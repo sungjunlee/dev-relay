@@ -27,3 +27,4 @@ require("./manifest/rubric.test");
 require("./manifest/cleanup.test");
 require("./manifest/attempts.test");
 require("./manifest/environment.test");
+require("./manifest/fleet.test");
