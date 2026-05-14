@@ -119,6 +119,12 @@ The rubric from relay-plan anchors each iteration — prevents context drift acr
 
 Do NOT review inline — relay-review must run in an isolated context to prevent planning bias.
 
+Before invoking relay-review, record manifest `review.rounds` as `previousRounds` and `review.latest_verdict` as `previousVerdict`. After it returns, re-read the manifest and compare against that snapshot: `review.rounds` must be greater than `previousRounds` or `review.latest_verdict` must differ from `previousVerdict`. A stale non-pending verdict from an earlier round does not count as advancement. If neither recorded value changed, treat review as stalled and recover by running the runner directly in the foreground:
+```bash
+node ${CLAUDE_SKILL_DIR}/../relay-review/scripts/review-runner.js --repo . --run-id "$RUN_ID" --pr "$PR_NUM" --reviewer codex --json
+```
+Wait for exit, then re-read the manifest and repeat the same snapshot comparison against `previousRounds` and `previousVerdict` before Step 5.
+
 ## Step 5: Ready to Merge
 
 If relay-review returns LGTM, the review runner should already have recorded the run as `ready_to_merge`. Do not mark the sprint task complete yet. Only run relay-merge when the user explicitly wants to land the PR.

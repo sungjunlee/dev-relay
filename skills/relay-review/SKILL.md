@@ -49,6 +49,8 @@ RUN_ID=<run-id-from-dispatch>
 node ${CLAUDE_SKILL_DIR}/scripts/review-runner.js --repo . --run-id "$RUN_ID" --pr "$PR_NUM" --reviewer codex --json
 ```
 
+Run the runner in the foreground. Do NOT background it, detach it, or return with "I'll wait for the background runner." The relay-review result is the runner's verdict; do not return until the runner exits and the new `review-round-N-verdict.json` exists.
+
 Supported built-in adapters:
 - `--reviewer codex`
 - `--reviewer claude`
