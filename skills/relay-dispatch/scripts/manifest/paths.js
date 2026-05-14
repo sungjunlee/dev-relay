@@ -25,6 +25,10 @@ function getRunsBase() {
   return process.env.RELAY_RUNS_BASE || path.join(getRelayHome(), "runs");
 }
 
+function getFleetsBase() {
+  return path.join(getRelayHome(), "fleets");
+}
+
 function getRelayWorktreeBase() {
   const base = process.env.RELAY_WORKTREE_BASE || path.join(getRelayHome(), "worktrees");
   if (!path.isAbsolute(base)) {
@@ -197,6 +201,34 @@ function requireValidRunId(runId) {
   return validation.runId;
 }
 
+const FLEET_ID_PATTERN = /^[a-z0-9]+(?:[._-][a-z0-9]+)*$/;
+
+function requireValidFleetId(fleetId) {
+  const normalizedFleetId = typeof fleetId === "string" ? fleetId.trim() : "";
+  if (!normalizedFleetId) {
+    throw new Error(`fleet_id must be a non-empty path segment, got: ${JSON.stringify(fleetId)}`);
+  }
+  if (normalizedFleetId === "." || normalizedFleetId === "..") {
+    throw new Error(`fleet_id may not be "." or ".." (got ${JSON.stringify(normalizedFleetId)}).`);
+  }
+  if (normalizedFleetId.includes("/") || normalizedFleetId.includes("\\")) {
+    throw new Error(`fleet_id must be a single path segment (got ${JSON.stringify(normalizedFleetId)}).`);
+  }
+  if (
+    path.basename(normalizedFleetId) !== normalizedFleetId
+    || path.win32.basename(normalizedFleetId) !== normalizedFleetId
+  ) {
+    throw new Error(`fleet_id must resolve to a single path segment (got ${JSON.stringify(normalizedFleetId)}).`);
+  }
+  if (!FLEET_ID_PATTERN.test(normalizedFleetId)) {
+    throw new Error(
+      `fleet_id must contain lowercase letters, numbers, dots, underscores, or dashes ` +
+      `without leading/trailing separators (got ${JSON.stringify(normalizedFleetId)}).`
+    );
+  }
+  return normalizedFleetId;
+}
+
 function createRunId({ issueNumber, branch, timestamp = new Date() } = {}) {
   const prefix = issueNumber ? `issue-${issueNumber}` : slugify(branch || "run");
   const iso = timestamp.toISOString().replace(/[-:TZ.]/g, "").slice(0, 17);
@@ -206,6 +238,26 @@ function createRunId({ issueNumber, branch, timestamp = new Date() } = {}) {
 
 function getRunsDir(repoRoot) {
   return path.join(getRunsBase(), getRepoSlug(repoRoot));
+}
+
+function getFleetsDir(repoRoot) {
+  return path.join(getFleetsBase(), getRepoSlug(repoRoot));
+}
+
+function getFleetManifestPath(repoRoot, fleetId) {
+  return path.join(getFleetsDir(repoRoot), `${requireValidFleetId(fleetId)}.md`);
+}
+
+function getFleetLocksDir(repoRoot) {
+  return path.join(getFleetsDir(repoRoot), "locks");
+}
+
+function getFleetIssueLockPath(repoRoot, issueNumber) {
+  const parsedIssue = Number(issueNumber);
+  if (!Number.isInteger(parsedIssue) || parsedIssue <= 0) {
+    throw new Error(`issueNumber must be a positive integer, got: ${JSON.stringify(issueNumber)}`);
+  }
+  return path.join(getFleetLocksDir(repoRoot), `issue-${parsedIssue}.lock`);
 }
 
 function getRunDir(repoRoot, runId) {
@@ -258,6 +310,14 @@ function listManifestPaths(repoRoot) {
   return fs.readdirSync(runsDir)
     .filter((name) => name.endsWith(".md"))
     .map((name) => path.join(runsDir, name));
+}
+
+function listFleetManifestPaths(repoRoot) {
+  const fleetsDir = getFleetsDir(repoRoot);
+  if (!fs.existsSync(fleetsDir)) return [];
+  return fs.readdirSync(fleetsDir)
+    .filter((name) => name.endsWith(".md"))
+    .map((name) => path.join(fleetsDir, name));
 }
 
 function ensureRunLayout(repoRoot, runId) {
@@ -474,6 +534,11 @@ module.exports = {
   getCanonicalRepoRoot,
   getEventsPath,
   getExpectedManifestRepoRoot,
+  getFleetIssueLockPath,
+  getFleetLocksDir,
+  getFleetManifestPath,
+  getFleetsBase,
+  getFleetsDir,
   getManifestPath,
   getRelayHome,
   getRelayWorktreeBase,
@@ -487,10 +552,12 @@ module.exports = {
   getWorktreeGitCommonDir,
   inferIssueNumber,
   isPathContainedWithin,
+  listFleetManifestPaths,
   listManifestPaths,
   looksLikeGitRepo,
   nowIso,
   parsePositiveInt,
+  requireValidFleetId,
   requireValidRunId,
   sameFilesystemLocation,
   summarizeFailure,
