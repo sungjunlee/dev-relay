@@ -1,10 +1,11 @@
 # relay-fleet design
 
-> **Status (2026-05-14):** Phase 1 shipped — Sub-PR A (#477, PR #482) and Sub-PR B
-> (#478, PR #483) are merged. Phase 2 (#479) and Phase 3 (#480) remain deferred.
-> This document is the design record behind Epic #481: the rationale, rejected
-> alternatives, non-goals, and phase boundaries. The authoritative per-phase
-> contract lives in the GitHub issues; this doc explains *why*.
+> **Status (2026-05-15):** Phase 1 shipped — Sub-PR A (#477, PR #482) and Sub-PR
+> B (#478, PR #483) merged 2026-05-14. Phase 2 (#479) scoped 2026-05-15; Phase 3
+> (#480) still deferred. This document is the design record behind Epic #481:
+> the rationale, rejected alternatives, non-goals, and phase boundaries. The
+> authoritative per-phase contract lives in the GitHub issues; this doc explains
+> *why*.
 
 ## Problem
 
@@ -134,15 +135,23 @@ attention. Read-only. This is the Phase 1 substitute for review/merge
 orchestration — the operator sees the picture and drives review/merge by hand
 with existing per-run tools until Phase 2/3 land.
 
-## Phase 2: review orchestration loop (deferred)
+## Phase 2: review orchestration loop (scoped 2026-05-15)
 
 Run `relay-review` per child until each reaches `ready_to_merge` or escalates.
-Adds `reviewing` to `fleet_state`. Scoped from Phase 1 dogfood.
+Adds `reviewing` to `fleet_state`.
+
+> **Status (2026-05-15):** Phase 2 (#479) scoped without waiting for a Phase 1
+> dogfood gate. The original "scoped from Phase 1 dogfood" framing assumed
+> intermittent fleet usage would surface review-side edge cases before any spec
+> was pinned; the user opted to scope directly off this design record and the
+> hard prerequisite (#484 / PR #485 — relay-review fork-stall guidance, foreground
+> invocation only). Authoritative spec is now in the #479 issue body.
 
 > Phase 2 prerequisite surfaced by the Phase 1 dogfood: #484 — `relay-review`'s
 > forked execution can return before the review actually completes, leaving a
 > child silently stalled at `review_pending`. A parallel fan-out of forked
-> reviews must not be built on a review step that can no-op silently.
+> reviews must not be built on a review step that can no-op silently. (Cleared
+> by PR #485.)
 
 ## Phase 3: serialized merge queue (deferred)
 
