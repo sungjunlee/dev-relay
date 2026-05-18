@@ -85,7 +85,7 @@ Contract is "is it there?" Quality is "is it good?" Move repo-wide checks to `pr
 Inventory project tools before deciding what is measurable:
 
 ```bash
-${CLAUDE_SKILL_DIR}/scripts/probe-executor-env.js <repo-path> --project-only --json
+node skills/relay-plan/scripts/probe-executor-env.js <repo-path> --project-only --json
 ```
 
 For each Done Criteria item, ask whether a shell command can verify the outcome with available tools.

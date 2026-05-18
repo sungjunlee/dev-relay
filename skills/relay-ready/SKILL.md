@@ -44,7 +44,7 @@ Write a JSON contract file with:
 Persist it with:
 
 ```bash
-${CLAUDE_SKILL_DIR}/scripts/persist-request.js --repo . --contract-file /tmp/relay-ready-contract.json --json
+node skills/relay-ready/scripts/persist-request.js --repo . --contract-file /tmp/relay-ready-contract.json --json
 ```
 
 Readiness is optional, but if supplied, all readiness dimensions are required; see schema enum domains.
@@ -65,7 +65,7 @@ After persistence succeeds:
 2. dispatch with:
 
 ```bash
-${CLAUDE_SKILL_DIR}/../relay-dispatch/scripts/dispatch.js . \
+node skills/relay-dispatch/scripts/dispatch.js . \
   -b <branch> \
   --prompt-file <dispatch-prompt-path> \
   --rubric-file <rubric-path-from-relay-plan> \

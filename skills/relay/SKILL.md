@@ -48,7 +48,7 @@ PR_NUM=$(gh pr list --head issue-<N> --json number -q '.[0].number')
 Before Step 2, run this unless bypassed by a prior relay-ready artifact with `readiness_score` and frozen review anchor, explicit `--bypass-readiness`, or a sprint-batch entry already linked to a relay-ready handoff:
 
 ```bash
-PROBE=$(node ${CLAUDE_SKILL_DIR}/../relay-ready/scripts/probe-readiness.js \
+PROBE=$(node skills/relay-ready/scripts/probe-readiness.js \
   --json --body-file "$ISSUE_BODY_FILE" --manifest "$RUN_MANIFEST" --issue-number "$ISSUE_NUMBER")
 BYPASS=$(printf '%s' "$PROBE" | jq -r '.bypass')
 SUMMARY=$(printf '%s' "$PROBE" | jq -r '.signals_summary')
@@ -66,7 +66,7 @@ Branch labels and events:
 
 ## Step 2: Plan
 
-**Always build a rubric.** Follow relay-plan's planning process (read task → recover Done Criteria → build rubric → generate prompt). Do NOT dispatch from relay-plan — Step 3 below handles dispatch. See `relay-plan` SKILL.md for rubric depth by task size (S/M/L/XL).
+**Always build a rubric.** Follow relay-plan's planning process (read task → recover Done Criteria → build rubric → emit handoff artifacts). Do NOT dispatch from relay-plan — Step 3 below handles dispatch. See `relay-plan` SKILL.md for rubric depth by task size (S/M/L/XL).
 
 Write the dispatch prompt to a temp file (e.g., `/tmp/dispatch-<N>.md`).
 If relay-ready ran, the relay-ready handoff brief becomes the task source of truth for planning.
@@ -75,7 +75,7 @@ Write the rubric YAML to a temp file (e.g., `/tmp/rubric-<N>.yaml`).
 ## Step 3: Dispatch (relay-dispatch)
 
 ```bash
-${CLAUDE_SKILL_DIR}/../relay-dispatch/scripts/dispatch.js . \
+node skills/relay-dispatch/scripts/dispatch.js . \
   -b issue-<N> --prompt-file /tmp/dispatch-<N>.md --rubric-file /tmp/rubric-<N>.yaml --timeout 3600
 # If relay-ready ran, append: --request-id <id> --leaf-id <id> --done-criteria-file <done-criteria-path>
 ```

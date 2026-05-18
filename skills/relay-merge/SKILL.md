@@ -17,7 +17,7 @@ Explicitly merge a ready-to-merge PR and close the loop. **Requires relay-review
 ### 0. Gate check — verify relay-review completed
 
 ```bash
-${CLAUDE_SKILL_DIR}/scripts/gate-check.js $PR_NUM
+node skills/relay-merge/scripts/gate-check.js $PR_NUM
 ```
 
 - Exit 0 (LGTM) → PR is ready to merge; proceed only if the user wants to land it now
@@ -28,7 +28,7 @@ ${CLAUDE_SKILL_DIR}/scripts/gate-check.js $PR_NUM
 
 **Intentional skip** (hotfix, manual PR, trivial change):
 ```bash
-${CLAUDE_SKILL_DIR}/scripts/gate-check.js $PR_NUM --skip "reason here"
+node skills/relay-merge/scripts/gate-check.js $PR_NUM --skip "reason here"
 ```
 This writes a `<!-- relay-review-skip -->` comment to the PR — maintaining audit trail even when review is bypassed. The skip reason is recorded on the PR for future reference.
 `gate-check.js --skip` does not invoke any executor or reviewer, so it does not consume manifest `model_hints`.
@@ -39,7 +39,7 @@ This writes a `<!-- relay-review-skip -->` comment to the PR — maintaining aud
 
 ```bash
 RUN_ID=<run-id-from-dispatch>
-node ${CLAUDE_SKILL_DIR}/scripts/finalize-run.js --repo . --run-id "$RUN_ID" --merge-method squash --json
+node skills/relay-merge/scripts/finalize-run.js --repo . --run-id "$RUN_ID" --merge-method squash --json
 ```
 
 This script:

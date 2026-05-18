@@ -5,7 +5,7 @@ These are operator-only emergency paths for relay-merge. The standard merge path
 Emergency escape hatch:
 
 ```bash
-node ${CLAUDE_SKILL_DIR}/scripts/finalize-run.js --repo . --run-id "$RUN_ID" --skip-review "hotfix" --json
+node skills/relay-merge/scripts/finalize-run.js --repo . --run-id "$RUN_ID" --skip-review "hotfix" --json
 ```
 
 `finalize-run.js --skip-review` bypasses reviewer invocation, so `model_hints.review` is a non-consumer on that path.
@@ -13,7 +13,7 @@ node ${CLAUDE_SKILL_DIR}/scripts/finalize-run.js --repo . --run-id "$RUN_ID" --s
 #### Operator-only force finalize for non-ready runs
 
 ```bash
-node ${CLAUDE_SKILL_DIR}/scripts/finalize-run.js --repo . --run-id "$RUN_ID" \
+node skills/relay-merge/scripts/finalize-run.js --repo . --run-id "$RUN_ID" \
   --force-finalize-nonready --reason "reviewer-swap exhausted, diff clean per manual inspection" --json
 ```
 
@@ -38,7 +38,7 @@ jq 'select(.event == "force_finalize")' ~/.relay/runs/<repo-slug>/<run-id>/event
 When a run predates an artifact writer that the run itself introduced, use the structured reconciliation command instead of encoding that fact in a force-finalize reason:
 
 ```bash
-node ${CLAUDE_SKILL_DIR}/scripts/relay-reconcile-artifact.js --repo . --run-id "$RUN_ID" \
+node skills/relay-merge/scripts/relay-reconcile-artifact.js --repo . --run-id "$RUN_ID" \
   --artifact-path "~/.relay/runs/<repo-slug>/<run-id>/execution-evidence.json" \
   --writer-pr 267 --reason "run predates the artifact writer" --json
 ```

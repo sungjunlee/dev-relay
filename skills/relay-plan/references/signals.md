@@ -7,7 +7,7 @@ Two informational signals feed into rubric design during `relay-plan` steps 2 an
 Command:
 
 ```bash
-node ${CLAUDE_SKILL_DIR}/../relay-dispatch/scripts/reliability-report.js --repo . --json
+node skills/relay-dispatch/scripts/reliability-report.js --repo . --json
 ```
 
 Field mapping (current producers):
@@ -34,7 +34,7 @@ Case handling:
 Command:
 
 ```bash
-node ${CLAUDE_SKILL_DIR}/scripts/probe-executor-env.js . --project-only --json
+node skills/relay-plan/scripts/probe-executor-env.js . --project-only --json
 ```
 
 The planner picks what fits the task; the signal does not pick for them. No autonomy scoring, no auto-calibration of rubric depth — data exposure only.

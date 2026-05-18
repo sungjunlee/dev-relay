@@ -8,10 +8,10 @@ Create a worktree without dispatching, or register an existing worktree in Codex
 
 ```bash
 # Create worktree in ~/.relay/worktrees/
-${CLAUDE_SKILL_DIR}/scripts/create-worktree.js <repo> -b <branch>
+node skills/relay-dispatch/scripts/create-worktree.js <repo> -b <branch>
 
 # Register an existing worktree in Codex App (optional)
-${CLAUDE_SKILL_DIR}/scripts/create-worktree.js <repo> --worktree-path <path> -b <branch> -t "Title" --register
+node skills/relay-dispatch/scripts/create-worktree.js <repo> --worktree-path <path> -b <branch> -t "Title" --register
 ```
 
 ## Worktree Cleanup
@@ -22,9 +22,9 @@ Successful dispatches keep their worktree by default. Cleanup moves later in the
 
 To prune stale retained worktrees safely from this repo:
 ```bash
-${CLAUDE_SKILL_DIR}/scripts/cleanup-worktrees.js --repo .              # clean terminal runs > 24h old
-${CLAUDE_SKILL_DIR}/scripts/cleanup-worktrees.js --repo . --all         # ignore age threshold
-${CLAUDE_SKILL_DIR}/scripts/cleanup-worktrees.js --repo . --dry-run     # show what would be removed
-${CLAUDE_SKILL_DIR}/scripts/close-run.js --repo . --run-id <run-id> --reason "stale_non_terminal_run"
-${CLAUDE_SKILL_DIR}/scripts/reliability-report.js --repo . --json
+node skills/relay-dispatch/scripts/cleanup-worktrees.js --repo .              # clean terminal runs > 24h old
+node skills/relay-dispatch/scripts/cleanup-worktrees.js --repo . --all         # ignore age threshold
+node skills/relay-dispatch/scripts/cleanup-worktrees.js --repo . --dry-run     # show what would be removed
+node skills/relay-dispatch/scripts/close-run.js --repo . --run-id <run-id> --reason "stale_non_terminal_run"
+node skills/relay-dispatch/scripts/reliability-report.js --repo . --json
 ```

@@ -34,7 +34,7 @@ Standard path: run `review-runner.js --reviewer codex` or `--reviewer claude`. I
 PR_NUM=$(gh pr list --head <branch> --json number -q '.[0].number')
 BRANCH=$(gh pr view $PR_NUM --json headRefName -q '.headRefName')
 gh pr diff $PR_NUM > /tmp/pr-diff.txt
-ISSUE_NUM=$(${CLAUDE_SKILL_DIR}/scripts/resolve-issue-number.sh "$PR_NUM" "$BRANCH")  # legacy manual helper; runner resolution is canonical
+ISSUE_NUM=$(bash skills/relay-review/scripts/resolve-issue-number.sh "$PR_NUM" "$BRANCH")  # legacy manual helper; runner resolution is canonical
 gh issue view $ISSUE_NUM  # Done Criteria / Acceptance Criteria source
 ```
 
@@ -46,7 +46,7 @@ gh issue view $ISSUE_NUM  # Done Criteria / Acceptance Criteria source
 3. Preferred path: let the review runner invoke an isolated reviewer directly:
 ```bash
 RUN_ID=<run-id-from-dispatch>
-node ${CLAUDE_SKILL_DIR}/scripts/review-runner.js --repo . --run-id "$RUN_ID" --pr "$PR_NUM" --reviewer codex --json
+node skills/relay-review/scripts/review-runner.js --repo . --run-id "$RUN_ID" --pr "$PR_NUM" --reviewer codex --json
 ```
 
 Supported built-in adapters:
@@ -61,7 +61,7 @@ Notes:
 
 Optional advisory path: add an opencode-powered blind-spot lane alongside the primary reviewer:
 ```bash
-node ${CLAUDE_SKILL_DIR}/scripts/review-runner.js --repo . --run-id "$RUN_ID" --pr "$PR_NUM" \
+node skills/relay-review/scripts/review-runner.js --repo . --run-id "$RUN_ID" --pr "$PR_NUM" \
   --reviewer codex \
   --advisory-reviewer opencode \
   --advisory-profile blindspot \
@@ -75,7 +75,7 @@ Current advisory profiles:
 
 4. Fallback path for unsupported environments or debugging:
 ```bash
-node ${CLAUDE_SKILL_DIR}/scripts/review-runner.js --repo . --branch "$BRANCH" --pr "$PR_NUM" --prepare-only --json
+node skills/relay-review/scripts/review-runner.js --repo . --branch "$BRANCH" --pr "$PR_NUM" --prepare-only --json
 ```
 
 This writes round artifacts under `~/.relay/runs/<repo-slug>/<run-id>/`. See `references/runner-notes.md` for artifact names, retained-checkout behavior, stale-SHA handling, and repeated-issue escalation.
@@ -128,7 +128,7 @@ Before any re-dispatch, check:
 
 12. If you used the fallback path, apply the structured verdict with the review runner:
 ```bash
-node ${CLAUDE_SKILL_DIR}/scripts/review-runner.js --repo . --run-id "$RUN_ID" --pr "$PR_NUM" --review-file /tmp/review-verdict.json
+node skills/relay-review/scripts/review-runner.js --repo . --run-id "$RUN_ID" --pr "$PR_NUM" --review-file /tmp/review-verdict.json
 ```
 
 The runner validates the verdict, writes the PR audit comment, updates manifest state, and records round artifacts. See `references/runner-notes.md` for the full audit-trail and backward-compatibility behavior.
