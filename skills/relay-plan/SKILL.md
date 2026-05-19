@@ -110,7 +110,15 @@ Return a handoff summary with:
 - dispatch prompt path, e.g. `/tmp/dispatch-<N>.md`
 - rubric YAML path, e.g. `/tmp/rubric-<N>.yaml`
 - Done Criteria anchor path, when persisted
-- recommended `relay-dispatch` command for the orchestrator/operator to run, including `--run-id "$RUN_ID"` when Step 7 persisted Done Criteria
+- recommended `relay-dispatch` command for the orchestrator/operator to run, including `--run-id "$RUN_ID"` and `--done-criteria-file <done-criteria-path>` when Step 7 persisted Done Criteria
+
+When Step 7 persisted Done Criteria, the dispatch handoff must preserve both anchors:
+
+```bash
+node "${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/dispatch.js" . \
+  --run-id "$RUN_ID" --prompt-file /tmp/dispatch-<N>.md --rubric-file /tmp/rubric-<N>.yaml \
+  --done-criteria-file <done-criteria-path>
+```
 
 Do not run `relay-dispatch` from `relay-plan`.
 
