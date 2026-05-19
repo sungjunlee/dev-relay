@@ -89,7 +89,9 @@ Before persisting, apply `references/rubric-simplification.md`: rewrite HOW into
 
 ### 7. Persist planner-authored Done Criteria when needed
 
-Persist only when planning writes the final Done Criteria, or expands, rejects, or narrows issue-body AC. This includes AC-missing inputs, user-provided descriptions, and any case where planning changes the issue-body AC:
+Persist only when planning writes the final Done Criteria, or expands, rejects, or narrows issue-body AC. This includes AC-missing inputs, user-provided descriptions, and any case where planning changes the issue-body AC.
+
+Before Step 7, the orchestrator/planner must allocate the `RUN_ID` that dispatch will later reuse. Use the same valid run id in this persistence command and in Step 8's `relay-dispatch --run-id "$RUN_ID"` handoff; if no Done Criteria persistence is needed, dispatch may allocate the run id itself.
 
 ```bash
 node skills/relay-plan/scripts/persist-done-criteria.js --repo . \
@@ -106,7 +108,7 @@ Return a handoff summary with:
 - dispatch prompt path, e.g. `/tmp/dispatch-<N>.md`
 - rubric YAML path, e.g. `/tmp/rubric-<N>.yaml`
 - Done Criteria anchor path, when persisted
-- recommended `relay-dispatch` command for the orchestrator/operator to run
+- recommended `relay-dispatch` command for the orchestrator/operator to run, including `--run-id "$RUN_ID"` when Step 7 persisted Done Criteria
 
 Do not run `relay-dispatch` from `relay-plan`.
 
