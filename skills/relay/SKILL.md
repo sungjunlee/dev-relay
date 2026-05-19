@@ -12,6 +12,8 @@ metadata:
 
 Execute the plan → dispatch → review cycle. Stop at `ready_to_merge` unless the user explicitly asks to merge. Follow ALL steps below in order.
 
+Command examples use `${RELAY_SKILL_ROOT:-skills}`; set `RELAY_SKILL_ROOT` to the directory containing sibling relay skills when running from an installed bundle outside this repo.
+
 ## Role Defaults
 
 | Role | Default | Override |
@@ -48,7 +50,7 @@ PR_NUM=$(gh pr list --head issue-<N> --json number -q '.[0].number')
 Before Step 2, run this unless bypassed by a prior relay-ready artifact with `readiness_score` and frozen review anchor, explicit `--bypass-readiness`, or a sprint-batch entry already linked to a relay-ready handoff:
 
 ```bash
-PROBE=$(node skills/relay-ready/scripts/probe-readiness.js \
+PROBE=$(node "${RELAY_SKILL_ROOT:-skills}/relay-ready/scripts/probe-readiness.js" \
   --json --body-file "$ISSUE_BODY_FILE" --manifest "$RUN_MANIFEST" --issue-number "$ISSUE_NUMBER")
 BYPASS=$(printf '%s' "$PROBE" | jq -r '.bypass')
 SUMMARY=$(printf '%s' "$PROBE" | jq -r '.signals_summary')
@@ -75,7 +77,7 @@ Write the rubric YAML to a temp file (e.g., `/tmp/rubric-<N>.yaml`).
 ## Step 3: Dispatch (relay-dispatch)
 
 ```bash
-node skills/relay-dispatch/scripts/dispatch.js . \
+node "${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/dispatch.js" . \
   -b issue-<N> --prompt-file /tmp/dispatch-<N>.md --rubric-file /tmp/rubric-<N>.yaml --timeout 3600
 # If relay-ready ran, append: --request-id <id> --leaf-id <id> --done-criteria-file <done-criteria-path>
 ```

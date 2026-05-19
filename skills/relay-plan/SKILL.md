@@ -11,6 +11,8 @@ metadata:
 
 Build the review anchor, scoring rubric, and dispatch prompt for a relay run. `relay-plan` emits handoff artifacts only; `relay` or an operator runs `relay-dispatch`.
 
+Command examples use `${RELAY_SKILL_ROOT:-skills}`; set `RELAY_SKILL_ROOT` to the directory containing sibling relay skills when running from an installed bundle outside this repo.
+
 ## Default Path
 
 ### 1. Read the task
@@ -28,13 +30,13 @@ If `relay-ready` produced a handoff brief, treat it as the source of truth inste
 Read historical relay signal:
 
 ```bash
-node skills/relay-dispatch/scripts/reliability-report.js --repo . --json
+node "${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/reliability-report.js" --repo . --json
 ```
 
 Read repo-local quality signal:
 
 ```bash
-node skills/relay-plan/scripts/probe-executor-env.js . --project-only --json
+node "${RELAY_SKILL_ROOT:-skills}/relay-plan/scripts/probe-executor-env.js" . --project-only --json
 ```
 
 Use these as weak inputs only. They inform wording, prerequisites, and available commands; they do not gate dispatch or override the task. Empty/failure cases render as `no historical data available` or `no quality infra detected`; field meanings: `references/signals.md`.
@@ -94,7 +96,7 @@ Persist only when planning writes the final Done Criteria, or expands, rejects, 
 Before Step 7, the orchestrator/planner must allocate the `RUN_ID` that dispatch will later reuse. Use the same valid run id in this persistence command and in Step 8's `relay-dispatch --run-id "$RUN_ID"` handoff; if no Done Criteria persistence is needed, dispatch may allocate the run id itself.
 
 ```bash
-node skills/relay-plan/scripts/persist-done-criteria.js --repo . \
+node "${RELAY_SKILL_ROOT:-skills}/relay-plan/scripts/persist-done-criteria.js" --repo . \
   --run-id "$RUN_ID" --file /tmp/done-criteria-<N>.md --json
 ```
 
