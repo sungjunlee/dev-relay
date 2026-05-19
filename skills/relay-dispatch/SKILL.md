@@ -10,6 +10,8 @@ metadata:
 
 # Relay Dispatch
 
+Command examples use `${RELAY_SKILL_ROOT:-skills}`; set `RELAY_SKILL_ROOT` to the directory containing sibling relay skills when running from an installed bundle outside this repo.
+
 ## Use when
 
 - Delegating implementation to an executor (`codex`, `claude`, `opencode`) via worktree isolation
@@ -26,19 +28,19 @@ metadata:
 
 ```bash
 # Foreground (blocking — simple tasks, default executor: codex)
-${CLAUDE_SKILL_DIR}/scripts/dispatch.js . -b feature-auth -p "..." --rubric-file rubric.yaml
+node "${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/dispatch.js" . -b feature-auth -p "..." --rubric-file rubric.yaml
 
 # Same-run resume after a changes-requested review
-${CLAUDE_SKILL_DIR}/scripts/dispatch.js . --run-id issue-42-20260403120000000 --prompt-file review-round-2-redispatch.md
+node "${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/dispatch.js" . --run-id issue-42-20260403120000000 --prompt-file review-round-2-redispatch.md
 
 # With explicit executor
-${CLAUDE_SKILL_DIR}/scripts/dispatch.js . -e codex -b feature-auth -p "..." --rubric-file rubric.yaml
+node "${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/dispatch.js" . -e codex -b feature-auth -p "..." --rubric-file rubric.yaml
 
 # Claude Code as executor (no Codex required)
-${CLAUDE_SKILL_DIR}/scripts/dispatch.js . -e claude -b feature-auth -p "..." --rubric-file rubric.yaml
+node "${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/dispatch.js" . -e claude -b feature-auth -p "..." --rubric-file rubric.yaml
 
 # Experimental opencode executor (uses bundled/default model config unless --model is set)
-${CLAUDE_SKILL_DIR}/scripts/dispatch.js . -e opencode -b feature-auth -p "..." --rubric-file rubric.yaml
+node "${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/dispatch.js" . -e opencode -b feature-auth -p "..." --rubric-file rubric.yaml
 ```
 
 For background and parallel dispatch, see `../relay/SKILL.md` § Batch Mode (single source of truth for the parallel-fork flow).

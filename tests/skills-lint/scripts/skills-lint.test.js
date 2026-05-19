@@ -91,10 +91,11 @@ function extractCrossSkillScriptPaths(content) {
   const blocks = extractBashBlocks(content);
   const references = [];
   const envPattern = /\$\{CLAUDE_SKILL_DIR\}\/\.\.\/([A-Za-z0-9._-]+)\/scripts\/([A-Za-z0-9._/-]+)/g;
+  const relayRootPattern = /\$\{RELAY_SKILL_ROOT:-skills\}\/([A-Za-z0-9._-]+)\/scripts\/([A-Za-z0-9._/-]+)/g;
   const literalPattern = /(?<![A-Za-z0-9._/-])skills\/([A-Za-z0-9._-]+)\/scripts\/([A-Za-z0-9._/-]+)/g;
 
   blocks.forEach((block) => {
-    for (const pattern of [envPattern, literalPattern]) {
+    for (const pattern of [envPattern, relayRootPattern, literalPattern]) {
       pattern.lastIndex = 0;
       let match;
       while ((match = pattern.exec(block.content)) !== null) {
@@ -299,6 +300,7 @@ test("assertCrossSkillPathsExist rejects missing cross-skill script references",
   const content = [
     "```bash",
     "node ${CLAUDE_SKILL_DIR}/../relay-dispatch/scripts/does-not-exist.js",
+    'node "${RELAY_SKILL_ROOT:-skills}/relay-plan/scripts/also-missing.js"',
     "node skills/relay-review/scripts/also-missing.js",
     "```",
     "",

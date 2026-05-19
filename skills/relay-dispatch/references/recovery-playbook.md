@@ -8,15 +8,15 @@ Operator-facing recovery commands for `relay-dispatch`. These cover the two cano
 
 ```bash
 # Standard recovery — dispatch returned commits="" + uncommitted!=""
-${CLAUDE_SKILL_DIR}/scripts/recover-commit.js --run-id <id> \
+node skills/relay-dispatch/scripts/recover-commit.js --run-id <id> \
   --reason "executor timeout at 1800s on 18-file refactor"
 
 # Preview without touching anything
-${CLAUDE_SKILL_DIR}/scripts/recover-commit.js --run-id <id> \
+node skills/relay-dispatch/scripts/recover-commit.js --run-id <id> \
   --reason "..." --dry-run
 
 # Override PR title / body (default title prefers linked issue title, then branch + run-id)
-${CLAUDE_SKILL_DIR}/scripts/recover-commit.js --run-id <id> \
+node skills/relay-dispatch/scripts/recover-commit.js --run-id <id> \
   --reason "..." --pr-title "..." --pr-body-file /tmp/pr-body.md
 ```
 
@@ -30,20 +30,20 @@ If a PR already exists for the branch, the command no-ops the create step and st
 
 ```bash
 # Fix pushed directly to the PR branch → return to review without re-dispatch
-${CLAUDE_SKILL_DIR}/scripts/recover-state.js --repo . --run-id <id> \
+node skills/relay-dispatch/scripts/recover-state.js --repo . --run-id <id> \
   --to review_pending --reason "external commit pushed; see <sha>"
 
 # PR body fixed with gh pr edit, code HEAD unchanged → return to review without re-dispatch
-${CLAUDE_SKILL_DIR}/scripts/recover-state.js --repo . --run-id <id> \
+node skills/relay-dispatch/scripts/recover-state.js --repo . --run-id <id> \
   --to review_pending --allow-same-head --require-pr-body-change \
   --reason "PR body metadata fixed with gh pr edit"
 
 # No-op re-dispatch escalated the run → bring it back for a fresh review
-${CLAUDE_SKILL_DIR}/scripts/recover-state.js --repo . --run-id <id> \
+node skills/relay-dispatch/scripts/recover-state.js --repo . --run-id <id> \
   --to review_pending --force --reason "no-op-dispatch-recovery"
 
 # Hung dispatch → unstick manifest so dispatch --run-id can resume
-${CLAUDE_SKILL_DIR}/scripts/recover-state.js --repo . --run-id <id> \
+node skills/relay-dispatch/scripts/recover-state.js --repo . --run-id <id> \
   --to changes_requested --force --reason "dispatch hung; operator-killed"
 ```
 
