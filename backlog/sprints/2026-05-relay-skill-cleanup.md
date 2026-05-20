@@ -19,11 +19,10 @@ Strategic frame (from #486):
 
 ## Plan
 
-### Batch 1 — Path convention + Inputs (combined #488 + #492)
-- [~] #488 + #492 docs: orchestrator-portable command paths + `## Inputs` block across all SKILL.md → PR #497 (reviewing)
-  - Lane: **relay** (8 SKILL.md edit + new drift test + install-graph.md update)
-  - Decision (2026-05-20): `RELAY_ROOT=${RELAY_ROOT:-${CLAUDE_SKILL_DIR}/..}` indirection adopted.
-  - Combined rationale: both issues rewrite command paths across all 8 SKILL.md — separate PRs would conflict. One run / one PR closes both.
+### Batch 1 — `## Inputs` blocks + drift test (#492, re-scoped)
+- [ ] #492 docs: add `## Inputs` block to all 8 SKILL.md + `skill-inputs-drift.test.js` (~2hr)
+  - Lane: **relay** (8 SKILL.md edit + new drift test)
+  - Re-scoped 2026-05-20: #488 was closed by parallel PR #496 (`${RELAY_SKILL_ROOT:-skills}` convention). #492 drops its own `RELAY_ROOT` proposal — `## Inputs` blocks now build on top of the merged `${RELAY_SKILL_ROOT}` convention. Re-dispatch against current main.
 
 ### Batch 2 — Mainline cleanup (can start once Batch 1 dispatched)
 - [ ] #494 relay: extract Step 1.5/1.7/Step 4 guards into `preflight-guards.md` + `run-preflight.js` (~3hr)
@@ -50,4 +49,4 @@ Strategic frame (from #486):
 
 - 2026-05-19: Sprint opened. Source: craft-critique + craft-survey passes on 2026-05-18; epic #486 child list extended (#492-#495); boost comments left on #488/#489.
 - 2026-05-20: #488 decision locked — `RELAY_ROOT` indirection adopted. Batches 1+2 merged: #488 + #492 combined into one relay run (shared 8-SKILL.md surface). Dispatching combined scope.
-- 2026-05-20: Dispatched to codex → PR #497 (`a4fe7fa`), 10 files, all in-scope. Review R1 = changes_requested — DC1-DC8 all verified PASS, single scope-drift catch (this sprint file appeared in the PR diff because its commit `317784a` was unpushed). Orchestrator-side fix: push sprint commit to origin/main so PR base catches up; no codex re-dispatch.
+- 2026-05-20: Dispatched #488+#492 to codex → PR #497. Review R1 = changes_requested. While fixing, discovered parallel PR #496 (`57dcdc0`, "Simplify relay skill handoffs") already merged — it closed #487/#488/#489 and shipped the `${RELAY_SKILL_ROOT:-skills}` path convention. PR #497 was half-superseded (relay-plan/SKILL.md rewritten ~120 lines by both; convention clash). Decision: closed PR #497, accepted `${RELAY_SKILL_ROOT}` as incumbent, re-scoped #492 to `## Inputs` blocks + drift test only. Run issue-492-...f8b3c4ba closed.
