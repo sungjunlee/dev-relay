@@ -111,9 +111,9 @@ Two phases, run in order. Each round re-measures against the **original anchor**
 
 ### Phase 2: Code Quality (only after Phase 1 PASS)
 
-8. Run a code review skill on changed files — check code quality, patterns, conventions, structural issues (use the platform's best-matching skill, e.g., Claude Code: `/review`; if no skill is available, perform the quality review inline inside the structured reviewer round)
-9. Run a code simplification skill on changed files — unnecessary complexity, dead code, verbose patterns (use the platform's best-matching skill, e.g., Claude Code: `/simplify`; if no skill is available, review for simplification inline before returning `verdict=pass`)
-10. Issues found → return `verdict=changes_requested`, then follow the `phase2_fail` back-edge: re-dispatch and restart at Phase 1 because quality fixes can regress spec compliance.
+8. Inspect changed files inline for code quality, patterns, conventions, and structural issues. Adapter-managed reviewers (Codex, Claude, opencode advisory) return findings in the structured verdict; fallback/manual reviewers follow the same contract. Manual or supported environments MAY use helpers such as Claude Code `/review`, but helper availability is optional.
+9. Inspect changed files inline for simplification opportunities: unnecessary complexity, dead code, verbose patterns, and hard-to-review structure. Manual or supported environments MAY use helpers such as `/simplify`; simplification findings are merge-blocking only when they affect maintainability, correctness risk, or reviewability, not style nits.
+10. The structured verdict is the single Phase 2 gating output. No reviewer blocks or fails merely because an external skill command is unavailable. Issues found → return `verdict=changes_requested`, then follow the `phase2_fail` back-edge: re-dispatch and restart at Phase 1 because quality fixes can regress spec compliance.
 
 ### Drift and stuck detection (both phases)
 
