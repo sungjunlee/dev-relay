@@ -11,6 +11,10 @@ const CLEANUP_STATUSES = Object.freeze({
   SKIPPED: "skipped",
 });
 
+const RELAY_OWNED_STRAY_WORKTREE_STATUS_LINES = Object.freeze([
+  "?? rubric.yaml",
+]);
+
 function createCleanupSkeleton() {
   return {
     status: CLEANUP_STATUSES.PENDING,
@@ -70,6 +74,11 @@ function readWorktreeStatus(worktreePath) {
   }
 }
 
+function hasOnlyRelayOwnedStrayStatus(text) {
+  const lines = String(text || "").split(/\r?\n/).filter(Boolean);
+  return lines.length === 1 && RELAY_OWNED_STRAY_WORKTREE_STATUS_LINES.includes(lines[0]);
+}
+
 function isRealpathContainedWithin(basePath, candidatePath) {
   try {
     const realBase = fs.realpathSync.native(basePath);
@@ -123,6 +132,9 @@ function runCleanup({
   const allowPrunedRelayWorktreeRemoval = acceptPrunedRelayOwned
     && validatedPaths.prunedRelayOwnedForCleanup
     && validatedPaths.worktreeLocation === "relay_worktree";
+  const allowRelayOwnedStrayRemoval = worktreeStatus.exists
+    && !worktreeStatus.clean
+    && hasOnlyRelayOwnedStrayStatus(worktreeStatus.text);
   const branchExistsBefore = localBranchExists(repoRoot, branch);
   const errors = [];
 
@@ -130,7 +142,12 @@ function runCleanup({
   let branchDeleted = !deleteMergedBranch || !branch || !branchExistsBefore;
   let pruneRan = false;
 
-  if (worktreeStatus.exists && !worktreeStatus.clean && !allowPrunedRelayWorktreeRemoval) {
+  if (
+    worktreeStatus.exists
+    && !worktreeStatus.clean
+    && !allowPrunedRelayWorktreeRemoval
+    && !allowRelayOwnedStrayRemoval
+  ) {
     errors.push(`dirty worktree: ${worktreeStatus.text}`);
   }
 
@@ -212,7 +229,10 @@ function runCleanup({
       worktreePath,
       worktreeExistsBefore: worktreeStatus.exists,
       worktreeRemoved,
-      worktreeDirty: worktreeStatus.exists && !worktreeStatus.clean && !allowPrunedRelayWorktreeRemoval,
+      worktreeDirty: worktreeStatus.exists
+        && !worktreeStatus.clean
+        && !allowPrunedRelayWorktreeRemoval
+        && !allowRelayOwnedStrayRemoval,
       worktreeStatus: worktreeStatus.text || null,
       branch,
       branchExistedBefore: branchExistsBefore,
