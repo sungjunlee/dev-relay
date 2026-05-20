@@ -7,6 +7,10 @@ metadata:
   related-skills: relay-ready, relay-plan, relay-dispatch, relay-review, relay-merge
   keywords: relay-fleet, fleet, fan-out, parallel dispatch, resume, status, 병렬, 재개, 상태
 ---
+## Inputs
+- Env: optional `RELAY_SKILL_ROOT` defaults to `skills`.
+- Files: leaves JSON passed by `--leaves-file`, child prompt/rubric/Done Criteria files, and fleet/child run manifests under `~/.relay/runs/`.
+- Sibling scripts: `${RELAY_SKILL_ROOT:-skills}/relay-fleet/scripts/relay-fleet.js`, `${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/dispatch.js`.
 
 # relay-fleet
 
@@ -30,7 +34,7 @@ Optional per-leaf fields are passed through to `dispatch.js`: `request_id`, `lea
 ## Commands
 
 ```bash
-node ${CLAUDE_SKILL_DIR}/scripts/relay-fleet.js \
+node "${RELAY_SKILL_ROOT:-skills}/relay-fleet/scripts/relay-fleet.js" \
   --repo . \
   --fleet-id fleet-481 \
   --leaves-file /tmp/fleet-481-leaves.json \
@@ -40,7 +44,7 @@ node ${CLAUDE_SKILL_DIR}/scripts/relay-fleet.js \
 Resume after a terminal/session crash:
 
 ```bash
-node ${CLAUDE_SKILL_DIR}/scripts/relay-fleet.js \
+node "${RELAY_SKILL_ROOT:-skills}/relay-fleet/scripts/relay-fleet.js" \
   --repo . \
   --fleet-id fleet-481 \
   --resume
@@ -49,7 +53,7 @@ node ${CLAUDE_SKILL_DIR}/scripts/relay-fleet.js \
 Read-only aggregate status:
 
 ```bash
-node ${CLAUDE_SKILL_DIR}/scripts/relay-fleet.js \
+node "${RELAY_SKILL_ROOT:-skills}/relay-fleet/scripts/relay-fleet.js" \
   --repo . \
   --fleet-id fleet-481 \
   --status
@@ -58,7 +62,7 @@ node ${CLAUDE_SKILL_DIR}/scripts/relay-fleet.js \
 Dry-run validates the leaf file and invokes child `dispatch.js --dry-run` for each leaf without writing a fleet manifest:
 
 ```bash
-node ${CLAUDE_SKILL_DIR}/scripts/relay-fleet.js \
+node "${RELAY_SKILL_ROOT:-skills}/relay-fleet/scripts/relay-fleet.js" \
   --repo . \
   --fleet-id fleet-481 \
   --leaves-file /tmp/fleet-481-leaves.json \

@@ -7,12 +7,14 @@ metadata:
   related-skills: "relay, relay-plan, relay-dispatch, relay-review"
   keywords: "relay-ready, ready to relay, readiness gate, task readiness, 릴레이 준비, 준비도, 검증, 완료 기준"
 ---
+## Inputs
+- Env: optional `RELAY_SKILL_ROOT` defaults to `skills`.
+- Files: `/tmp/relay-ready-contract.json` with request, handoff, leaf, and Done Criteria fields; generated request artifacts under `~/.relay/requests/<repo-slug>/`.
+- Sibling scripts: `${RELAY_SKILL_ROOT:-skills}/relay-ready/scripts/persist-request.js`, `${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/dispatch.js`.
 
 # Relay Ready
 
 Use this skill when `/relay` cannot safely bypass straight to planning.
-
-Command examples use `${RELAY_SKILL_ROOT:-skills}`; set `RELAY_SKILL_ROOT` to the directory containing sibling relay skills when running from an installed bundle outside this repo.
 
 ## When Readiness Is Required
 
