@@ -7,11 +7,14 @@ metadata:
   related-skills: "relay, relay-ready, relay-dispatch, relay-review, dev-backlog"
   keywords: "계획, 루브릭, planning, rubric, dispatch prompt"
 ---
+## Inputs
+- Env: optional `RELAY_SKILL_ROOT` defaults to `skills`; Step 7/8 examples use `RUN_ID`.
+- Files: relay-ready handoff, task file, issue/user text, optional `/tmp/done-criteria-<N>.md`, `/tmp/dispatch-<N>.md`, and `/tmp/rubric-<N>.yaml`.
+- Sibling scripts: `${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/reliability-report.js`, `${RELAY_SKILL_ROOT:-skills}/relay-plan/scripts/probe-executor-env.js`, `${RELAY_SKILL_ROOT:-skills}/relay-plan/scripts/persist-done-criteria.js`, `${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/dispatch.js`.
+
 # Relay Plan
 
 Build the review anchor, scoring rubric, and dispatch prompt for a relay run. `relay-plan` emits handoff artifacts only; `relay` or an operator runs `relay-dispatch`.
-
-Command examples use `${RELAY_SKILL_ROOT:-skills}`; set `RELAY_SKILL_ROOT` to the directory containing sibling relay skills when running from an installed bundle outside this repo.
 
 ## Default Path
 

@@ -7,12 +7,14 @@ metadata:
   keywords: "사이드카, 보조 검토, sidecar, advisory, artifacts"
   entry: scripts/relay-sidecar.js
 ---
+## Inputs
+- Env: optional `RELAY_SKILL_ROOT` defaults to `skills`.
+- Files: existing relay run manifest, resolved run context, PR diff text, and generated sidecar output under `sidecars/<id>/`.
+- Sibling scripts: `${RELAY_SKILL_ROOT:-skills}/relay-sidecar/scripts/relay-sidecar.js`.
 
 # Relay Sidecar
 
 Use `scripts/relay-sidecar.js` to run an advisory sidecar against an existing relay run. The runner resolves the run manifest, sends run context and PR diff text to the configured sidecar executor, and stores the captured stdout under the run's `sidecars/<id>/` directory.
-
-Command examples use `${RELAY_SKILL_ROOT:-skills}`; set `RELAY_SKILL_ROOT` to the directory containing sibling relay skills when running from an installed bundle outside this repo.
 
 ## Entry
 

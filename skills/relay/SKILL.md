@@ -7,12 +7,14 @@ metadata:
   related-skills: "relay-ready, relay-plan, relay-dispatch, relay-review, relay-merge, dev-backlog"
   keywords: "릴레이, 자동 실행, plan, dispatch, review, merge, relay cycle"
 ---
+## Inputs
+- Env: optional `RELAY_SKILL_ROOT` defaults to `skills`; role overrides use `RELAY_ORCHESTRATOR`/`RELAY_REVIEWER`; examples use `ISSUE_BODY_FILE`, `RUN_MANIFEST`, `ISSUE_NUMBER`, `PROBE`, `BYPASS`, `SUMMARY`, `NEXT_ACTION`, `RUN_ID`, and `PR_NUM`.
+- Files: task/issue text, optional sprint file, readiness probe inputs, `/tmp/dispatch-<N>.md`, and `/tmp/rubric-<N>.yaml`.
+- Sibling scripts: `${RELAY_SKILL_ROOT:-skills}/relay-ready/scripts/probe-readiness.js`, `${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/dispatch.js`, `${RELAY_SKILL_ROOT:-skills}/relay-review/scripts/review-runner.js`.
 
 # Dev Relay
 
 Execute the plan → dispatch → review cycle. Stop at `ready_to_merge` unless the user explicitly asks to merge. Follow ALL steps below in order.
-
-Command examples use `${RELAY_SKILL_ROOT:-skills}`; set `RELAY_SKILL_ROOT` to the directory containing sibling relay skills when running from an installed bundle outside this repo.
 
 ## Role Defaults
 
@@ -42,9 +44,7 @@ Check if this issue already has a PR in progress:
 ```bash
 PR_NUM=$(gh pr list --head issue-<N> --json number -q '.[0].number')
 ```
-- PR exists and open → **skip Steps 2-3**, go directly to Step 4 (review)
-- PR exists and merged → update sprint file to `[x]` (if exists), done
-- PR not found → continue to Step 1.7
+PR status: open → skip Steps 2-3 and review; merged → update sprint file to `[x]` if present; not found → continue to Step 1.7.
 
 ## Step 1.7: Readiness probe + chain prompt
 Before Step 2, run this unless bypassed by a prior relay-ready artifact with `readiness_score` and frozen review anchor, explicit `--bypass-readiness`, or a sprint-batch entry already linked to a relay-ready handoff:
@@ -123,7 +123,7 @@ Do NOT review inline — relay-review must run in an isolated context to prevent
 
 Before invoking relay-review, record manifest `review.rounds` as `previousRounds` and `review.latest_verdict` as `previousVerdict`. After it returns, re-read the manifest and compare against that snapshot: `review.rounds` must be greater than `previousRounds` or `review.latest_verdict` must differ from `previousVerdict`. A stale non-pending verdict from an earlier round does not count as advancement. If neither recorded value changed, treat review as stalled and recover by running the runner directly in the foreground:
 ```bash
-node ${CLAUDE_SKILL_DIR}/../relay-review/scripts/review-runner.js --repo . --run-id "$RUN_ID" --pr "$PR_NUM" --reviewer codex --json
+node "${RELAY_SKILL_ROOT:-skills}/relay-review/scripts/review-runner.js" --repo . --run-id "$RUN_ID" --pr "$PR_NUM" --reviewer codex --json
 ```
 Wait for exit, then re-read the manifest and repeat the same snapshot comparison against `previousRounds` and `previousVerdict` before Step 5.
 
