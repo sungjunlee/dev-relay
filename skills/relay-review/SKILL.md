@@ -70,7 +70,7 @@ Optional advisory path: add an opencode-powered blind-spot lane alongside the pr
 node "${RELAY_SKILL_ROOT:-skills}/relay-review/scripts/review-runner.js" --repo . --run-id "$RUN_ID" --pr "$PR_NUM" --reviewer codex --advisory-reviewer opencode --advisory-profile blindspot --json
 ```
 
-Advisory review is non-gating: it starts concurrently, records `advisory_review` plus artifacts, never changes the trusted verdict or redispatch prompt in v1, and records failures/timeouts/invalid JSON/write-policy violations without changing the primary outcome. Use `--advisory-reviewer-model` to override; otherwise opencode uses dispatch executor model defaults. Current profile: `blindspot` checks likely primary-review misses such as test gaps, bypass paths, edge cases, integration boundaries, stale docs, and operational failure modes.
+Advisory review is non-gating: it starts concurrently, records `advisory_review` plus `review-round-N-advisory-<reviewer>-*` artifacts, never changes the trusted verdict or redispatch prompt in v1, and records failures/timeouts/invalid JSON/write-policy violations without changing the primary outcome. Use `--advisory-reviewer-model` to override; otherwise opencode uses dispatch executor model defaults from `skills/relay-dispatch/references/executor-models.json` plus optional `~/.relay/executors.json`. Current profile: `blindspot` checks likely primary-review misses such as test gaps, bypass paths, edge cases, integration boundaries, stale docs, and operational failure modes.
 
 4. Fallback path for unsupported environments or debugging:
 ```bash
