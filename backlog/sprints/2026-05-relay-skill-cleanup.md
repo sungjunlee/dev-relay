@@ -25,15 +25,14 @@ Strategic frame (from #486):
   - Re-scoped 2026-05-20: #488 was closed by parallel PR #496 (`${RELAY_SKILL_ROOT:-skills}` convention). #492 drops its own `RELAY_ROOT` proposal — `## Inputs` blocks now build on top of the merged `${RELAY_SKILL_ROOT}` convention. Re-dispatch against current main.
 
 ### Batch 2 — Mainline cleanup (can start once Batch 1 dispatched)
-- [ ] #494 relay: extract Step 1.5/1.7/Step 4 guards into `preflight-guards.md` + `run-preflight.js` (~3hr)
-  - Lane: **relay** (new script + reference doc + relay/SKILL.md rewrite — moderate scope, deserves reviewer)
-  - Parallelizable with Batch 4 (#494 only touches `relay/SKILL.md` + new files; #493/#495 touch other SKILL.md files)
+- [x] #494 relay: extract Step 1.5/1.7/Step 4 guards into `preflight-guards.md` + `run-preflight.js` → PR #500 (merged)
+  - Lane: **relay** (new script + reference doc + relay/SKILL.md rewrite)
 
 ### Batch 3 — Documentation polish (parallel with Batch 2)
 - [x] #493 relay-review: add (phase, outcome) transition table + named events → PR #499 (merged)
   - Lane: **relay** (single SKILL.md + named-event drift check against runner output)
-- [ ] #495 docs: unify Use-this-when / Do-not-use-when sections across 6 relay skills (~1hr)
-  - Lane: **direct** (mechanical, 6-file edit, low risk)
+- [x] #495 docs: unify Use-this-when / Do-not-use-when sections across 6 relay skills → PR #501 (merged)
+  - Lane: **relay** (6-file edit)
 
 ### Batch 4 — Sprint close audit
 - [ ] Run `sprint-close.sh --dry-run`, promote Running Context entries to `_context.md` if any cross-sprint patterns surfaced.
@@ -52,4 +51,7 @@ Strategic frame (from #486):
 - 2026-05-20: Dispatched #488+#492 to codex → PR #497. Review R1 = changes_requested. While fixing, discovered parallel PR #496 (`57dcdc0`, "Simplify relay skill handoffs") already merged — it closed #487/#488/#489 and shipped the `${RELAY_SKILL_ROOT:-skills}` path convention. PR #497 was half-superseded (relay-plan/SKILL.md rewritten ~120 lines by both; convention clash). Decision: closed PR #497, accepted `${RELAY_SKILL_ROOT}` as incumbent, re-scoped #492 to `## Inputs` blocks + drift test only. Run issue-492-...f8b3c4ba closed.
 - 2026-05-20: Re-dispatched re-scoped #492 to codex → PR #498 (`4fe24e7`), 9 files (8 SKILL.md + new `skill-inputs-drift.test.js`). First re-dispatch failed (stale `issue-492` branch from PR #497 still at `a4fe7fa` → origin/main merge conflict); deleted the branch, re-dispatched clean. Review R1 = LGTM clean — all 5 DCs verified, quality 9/10, no new path var.
 - 2026-05-20: PR #498 squash-merged (`07a651e`), #492 closed. Batch 1 done.
-- 2026-05-20: Dispatched #493 + #494 to codex in parallel (independent files: relay-review vs relay). #493 → PR #499: R1 changes_requested (compression dropped 2 advisory identifiers) → R2 PASS clean → squash-merged (`38cf694`), #493 closed. #494 dispatch in progress.
+- 2026-05-20: Dispatched #493 + #494 to codex in parallel (independent files: relay-review vs relay). #493 → PR #499: R1 changes_requested (compression dropped 2 advisory identifiers) → R2 PASS → squash-merged (`38cf694`), #493 closed.
+- 2026-05-20: #494 → PR #500: dispatch returned completed-uncommitted → recover-commit.js → R1 changes_requested (prompt_allowed TTY-gating bug) → R2 changes_requested (in-flight route no longer short-circuited readiness probe) → R3 PASS → squash-merged (`2cb8571`), #494 closed.
+- 2026-05-20: #495 → PR #501: dispatched after #493 merged (relay-review overlap cleared). R1 changes_requested (relay-ready duplicate routing section) → R2 PASS → squash-merged (`d8de514`), #495 closed. Cleanup needed manual worktree removal (review-runner left a stray rubric.yaml making the worktree dirty).
+- 2026-05-20: Sprint complete — all 5 batched issues (#488 via #496, #492, #493, #494, #495) done. Epic #486 has #490/#491 still open (out of this sprint's scope).
