@@ -1,7 +1,7 @@
 ---
 name: relay-sidecar
 description: Run artifact-only advisory sidecars for an existing relay run.
-compatibility: Requires relay-dispatch (Epic #367) and Node.js 18+.
+compatibility: Requires relay-dispatch and Node.js 18+.
 metadata:
   related-skills: "relay-dispatch"
   keywords: "사이드카, 보조 검토, sidecar, advisory, artifacts"
@@ -13,6 +13,8 @@ metadata:
 - Sibling scripts: `${RELAY_SKILL_ROOT:-skills}/relay-sidecar/scripts/relay-sidecar.js`.
 
 # Relay Sidecar
+
+`relay-sidecar` is an ADVISORY AUXILIARY skill for existing relay runs. It is NOT part of the mandatory plan → dispatch → review → merge lifecycle, and `/relay` does not require a sidecar step.
 
 ## Use when
 
@@ -48,4 +50,4 @@ node "${RELAY_SKILL_ROOT:-skills}/relay-sidecar/scripts/relay-sidecar.js" --run-
 
 ## Trust Boundary
 
-Sidecar output is advisory only and does not count as execution evidence or reviewer proof. This follows the Epic #367 trust model and the opencode policy in `docs/reviewer-policy-opencode.md`.
+Sidecar output is advisory only and does not count as execution evidence or reviewer proof. Use relay-review for gate decisions; sidecar artifacts can inform operators, but they never satisfy implementation, review, or merge proof requirements. This follows the opencode policy in `docs/reviewer-policy-opencode.md`.
