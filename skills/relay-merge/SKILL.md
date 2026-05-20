@@ -7,12 +7,14 @@ metadata:
   related-skills: "relay, relay-ready, relay-plan, relay-dispatch, relay-review, dev-backlog"
   keywords: "머지, 병합, merge, finalize, cleanup"
 ---
+## Inputs
+- Env: optional `RELAY_SKILL_ROOT` defaults to `skills`; examples use `PR_NUM` and `RUN_ID`.
+- Files: reviewed PR, retained run manifest/worktree, optional sprint file, and follow-up issue text.
+- Sibling scripts: `${RELAY_SKILL_ROOT:-skills}/relay-merge/scripts/gate-check.js`, `${RELAY_SKILL_ROOT:-skills}/relay-merge/scripts/finalize-run.js`.
 
 # Relay Merge
 
 Explicitly merge a ready-to-merge PR and close the loop. **Requires relay-review PR comment.**
-
-Command examples use `${RELAY_SKILL_ROOT:-skills}`; set `RELAY_SKILL_ROOT` to the directory containing sibling relay skills when running from an installed bundle outside this repo.
 
 ## Process
 

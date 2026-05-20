@@ -7,10 +7,12 @@ metadata:
   related-skills: "relay, relay-ready, relay-plan, relay-review, relay-merge"
   keywords: "디스패치, 실행, dispatch, executor, worktree"
 ---
+## Inputs
+- Env: optional `RELAY_SKILL_ROOT` defaults to `skills`.
+- Files: dispatch prompt (`--prompt-file` or `--prompt`), required rubric file, optional Done Criteria file, request/leaf ids, copied files, and retained run manifest.
+- Sibling scripts: `${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/dispatch.js`.
 
 # Relay Dispatch
-
-Command examples use `${RELAY_SKILL_ROOT:-skills}`; set `RELAY_SKILL_ROOT` to the directory containing sibling relay skills when running from an installed bundle outside this repo.
 
 ## Use when
 
