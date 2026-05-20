@@ -30,7 +30,7 @@ Strategic frame (from #486):
   - Parallelizable with Batch 4 (#494 only touches `relay/SKILL.md` + new files; #493/#495 touch other SKILL.md files)
 
 ### Batch 3 — Documentation polish (parallel with Batch 2)
-- [ ] #493 relay-review: add (phase, outcome) transition table + named events (~1hr)
+- [x] #493 relay-review: add (phase, outcome) transition table + named events → PR #499 (merged)
   - Lane: **relay** (single SKILL.md + named-event drift check against runner output)
 - [ ] #495 docs: unify Use-this-when / Do-not-use-when sections across 6 relay skills (~1hr)
   - Lane: **direct** (mechanical, 6-file edit, low risk)
@@ -51,4 +51,5 @@ Strategic frame (from #486):
 - 2026-05-20: #488 decision locked — `RELAY_ROOT` indirection adopted. Batches 1+2 merged: #488 + #492 combined into one relay run (shared 8-SKILL.md surface). Dispatching combined scope.
 - 2026-05-20: Dispatched #488+#492 to codex → PR #497. Review R1 = changes_requested. While fixing, discovered parallel PR #496 (`57dcdc0`, "Simplify relay skill handoffs") already merged — it closed #487/#488/#489 and shipped the `${RELAY_SKILL_ROOT:-skills}` path convention. PR #497 was half-superseded (relay-plan/SKILL.md rewritten ~120 lines by both; convention clash). Decision: closed PR #497, accepted `${RELAY_SKILL_ROOT}` as incumbent, re-scoped #492 to `## Inputs` blocks + drift test only. Run issue-492-...f8b3c4ba closed.
 - 2026-05-20: Re-dispatched re-scoped #492 to codex → PR #498 (`4fe24e7`), 9 files (8 SKILL.md + new `skill-inputs-drift.test.js`). First re-dispatch failed (stale `issue-492` branch from PR #497 still at `a4fe7fa` → origin/main merge conflict); deleted the branch, re-dispatched clean. Review R1 = LGTM clean — all 5 DCs verified, quality 9/10, no new path var.
-- 2026-05-20: PR #498 squash-merged (`07a651e`), #492 closed. Batch 1 done. Next: #494 (preflight extraction — rebase on current main, #496 touched relay/SKILL.md), #493 (review transition table), #495 (use-when sections).
+- 2026-05-20: PR #498 squash-merged (`07a651e`), #492 closed. Batch 1 done.
+- 2026-05-20: Dispatched #493 + #494 to codex in parallel (independent files: relay-review vs relay). #493 → PR #499: R1 changes_requested (compression dropped 2 advisory identifiers) → R2 PASS clean → squash-merged (`38cf694`), #493 closed. #494 dispatch in progress.
