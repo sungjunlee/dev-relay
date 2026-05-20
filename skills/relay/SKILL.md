@@ -8,9 +8,9 @@ metadata:
   keywords: "릴레이, 자동 실행, plan, dispatch, review, merge, relay cycle"
 ---
 ## Inputs
-- Env: optional `RELAY_SKILL_ROOT` defaults to `skills`; role overrides use `RELAY_ORCHESTRATOR`/`RELAY_REVIEWER`; examples use `ISSUE_BODY_FILE`, `RUN_MANIFEST`, `ISSUE_NUMBER`, `PROBE`, `BYPASS`, `SUMMARY`, `NEXT_ACTION`, `RUN_ID`, and `PR_NUM`.
+- Env: optional `RELAY_SKILL_ROOT` defaults to `skills`; role overrides use `RELAY_ORCHESTRATOR`/`RELAY_REVIEWER`; examples use `ISSUE_BODY_FILE`, `RUN_MANIFEST`, `ISSUE_NUMBER`, `BRANCH`, `PREFLIGHT`, `SUMMARY`, `RUN_ID`, and `PR_NUM`.
 - Files: task/issue text, optional sprint file, readiness probe inputs, `/tmp/dispatch-<N>.md`, and `/tmp/rubric-<N>.yaml`.
-- Sibling scripts: `${RELAY_SKILL_ROOT:-skills}/relay-ready/scripts/probe-readiness.js`, `${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/dispatch.js`, `${RELAY_SKILL_ROOT:-skills}/relay-review/scripts/review-runner.js`.
+- Sibling scripts: `${RELAY_SKILL_ROOT:-skills}/relay/scripts/run-preflight.js`, `${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/dispatch.js`, `${RELAY_SKILL_ROOT:-skills}/relay-review/scripts/review-runner.js`.
 
 # Dev Relay
 
@@ -26,45 +26,32 @@ Execute the plan → dispatch → review cycle. Stop at `ready_to_merge` unless 
 
 Standard Codex path: stamp `RELAY_ORCHESTRATOR=codex` and run review through `review-runner --reviewer codex`. Assigned manifest roles stay immutable; the acting reviewer for a round is recorded separately under `review.last_reviewer` and the `review_apply` event.
 
-## Step 0: Re-Anchor
+## Step 1: Re-Anchor and Route
 
-Before every standalone or batch task, run `git fetch origin`; if a sprint file exists, re-read Running Context and completed/in-flight status changes. Apply any previous-task context before proceeding.
+Run `git fetch origin`; if a sprint file exists, re-read Running Context and completed/in-flight status changes. Apply any previous-task context before proceeding.
 
-## Step 1: Route and Read Context
+Task evidence: use the first available source: local task file `backlog/tasks/{PREFIX}-{N} - {Title}.md`, `gh issue view <N>`, or the user-provided description. If `backlog/sprints/` has an active sprint, read Running Context and batch info; otherwise skip sprint tracking. If no issue number, use a descriptive branch name (e.g., `feat/<slug>`) and skip issue-close in the merge phase.
 
-Task evidence: use the first available source: local task file `backlog/tasks/{PREFIX}-{N} - {Title}.md`, `gh issue view <N>`, or the user-provided description. If `backlog/sprints/` has an active sprint, read Running Context and batch info; otherwise skip sprint tracking.
+Run the deterministic route preflight; if readiness is already covered by a prior relay-ready artifact, explicit `--bypass-readiness`, or sprint-batch handoff, add `--bypass-readiness --skip-readiness-reason <reason>`.
+
+```bash
+PREFLIGHT=$(node "${RELAY_SKILL_ROOT:-skills}/relay/scripts/run-preflight.js" \
+  --stage route --repo . --issue-number "$ISSUE_NUMBER" --branch "$BRANCH" \
+  --body-file "$ISSUE_BODY_FILE" --manifest "$RUN_MANIFEST" --json)
+```
+
+Branch on the JSON using [preflight-guards.md](references/preflight-guards.md); only evaluate readiness when `inflight.route == "continue"`.
+- `inflight.route == "existing-open-pr"` → set `PR_NUM`, skip Steps 2-3, and review the existing PR.
+- `inflight.route == "existing-merged-pr"` → update the sprint file to `[x]` if present and stop.
+- `inflight.route == "inflight-run"` → resume or inspect that run; continue at its manifest state.
+- `readiness.bypass == true` → proceed to Step 2.
+- `readiness.bypass == false` and `.decision.prompt_allowed == true` → set `SUMMARY=.readiness.signals_summary` and issue exactly `AskUserQuestion("Readiness gaps detected: ${SUMMARY}. Invoke relay-ready first? [y/n/abort]")`.
+- `chain-y` → invoke relay-ready Q&A, wait, persist the handoff, set `manifest.anchor.readiness`, then resume Step 2.
+- `chain-n` → emit `bypass_override_by_user` from `.decision.branch_labels["chain-n"].event_payload`, then proceed to Step 2.
+- `chain-abort` → emit `readiness_check_failed` from `.decision.branch_labels["chain-abort"].event_payload`, then close the run.
+- `noninteractive-fail` → emit `readiness_check_failed_nontty` from `.decision.branch_labels["noninteractive-fail"].event_payload`, then close the run.
 
 Fast path: bypass relay-ready only when the input is already one relay-ready task with a stable review anchor and no clarification/decomposition needed. Otherwise run `relay-ready`, persist a request artifact, and use `relay-ready/<leaf-id>.md` as the downstream source of truth.
-
-If no issue number, use a descriptive branch name (e.g., `feat/<slug>`) and skip issue-close in Step 6.
-
-## Step 1.5: Check for in-flight work
-
-Check if this issue already has a PR in progress:
-```bash
-PR_NUM=$(gh pr list --head issue-<N> --json number -q '.[0].number')
-```
-PR status: open → skip Steps 2-3 and review; merged → update sprint file to `[x]` if present; not found → continue to Step 1.7.
-
-## Step 1.7: Readiness probe + chain prompt
-Before Step 2, run this unless bypassed by a prior relay-ready artifact with `readiness_score` and frozen review anchor, explicit `--bypass-readiness`, or a sprint-batch entry already linked to a relay-ready handoff:
-
-```bash
-PROBE=$(node "${RELAY_SKILL_ROOT:-skills}/relay-ready/scripts/probe-readiness.js" \
-  --json --body-file "$ISSUE_BODY_FILE" --manifest "$RUN_MANIFEST" --issue-number "$ISSUE_NUMBER")
-BYPASS=$(printf '%s' "$PROBE" | jq -r '.bypass')
-SUMMARY=$(printf '%s' "$PROBE" | jq -r '.signals_summary')
-NEXT_ACTION=$(printf '%s' "$PROBE" | jq -r '.next_action')
-```
-
-The CLI emits `readiness_probe`. If `BYPASS=true`, proceed to Step 2. If `BYPASS=false` and interactive (TTY and no `--non-interactive`), issue exactly:
-`AskUserQuestion("Readiness gaps detected: ${SUMMARY}. Invoke relay-ready first? [y/n/abort]")`
-
-Branch labels and events:
-- `chain-y` / `readiness_probe`: invoke relay-ready Q&A, wait, persist the handoff, set `manifest.anchor.readiness`, then resume Step 2.
-- `chain-n` / `bypass_override_by_user`: emit with current scores and proceed to Step 2.
-- `chain-abort` / `readiness_check_failed`: emit with current scores, close the run.
-- `noninteractive-fail` / `readiness_check_failed_nontty`: emit when `BYPASS=false` and no prompt is allowed, then close the run.
 
 ## Step 2: Plan
 
@@ -84,8 +71,8 @@ node "${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/dispatch.js" . \
 
 While dispatch runs in the background, optionally monitor progress:
 ```bash
-git -C <worktree> log --oneline        # new commits
-wc -l <stdoutLog>                       # output growth
+git -C <worktree> log --oneline
+wc -l <stdoutLog>
 ```
 
 Wait for completion. Check result:
@@ -93,39 +80,41 @@ Wait for completion. Check result:
 - `status: "completed-with-warning"` and `runState: "review_pending"` → executor timed out but made progress; check worktree, proceed to Step 4
 - `status: "failed"` and `runState: "escalated"` → inspect the dispatch error / manifest, fix and re-dispatch
 
-Capture the run metadata from dispatch output:
-- `runId`
-- `manifestPath`
-- `runState`
-
-Get PR number:
+Capture `runId`, `manifestPath`, and `runState` from dispatch output. Get PR number:
 ```bash
 PR_NUM=$(gh pr list --head issue-<N> --json number -q '.[0].number')
 ```
 
-The manifest is written under `~/.relay/runs/<repo-slug>/`. This is the shared state surface for later review/merge lifecycle work. Readiness linkage is recorded there, but the run lifecycle remains execution-only.
-
-Current scope: dispatch writes the manifest. Review and merge still follow their existing PR-comment and gate-check flow.
-
-If sprint file exists, mark Plan item as in-flight: `[~] #42 OAuth2 flow → PR #89 (reviewing)`
+The manifest is written under `~/.relay/runs/<repo-slug>/`. Readiness linkage is recorded there, but the run lifecycle remains execution-only. If a sprint file exists, mark Plan item as in-flight: `[~] #42 OAuth2 flow → PR #89 (reviewing)`.
 
 ## Step 4: Review (relay-review)
 
 **MANDATORY. Do NOT skip this step.**
 
-Verify PR exists: `gh pr list --head issue-<N>`
+Verify PR exists: `gh pr list --head issue-<N>`.
 
-Invoke **relay-review** in an isolated context (no planning bias). It runs two phases (Spec Compliance → Code Quality), re-dispatches on issues, and updates manifest state. See `relay-review` SKILL.md for the Phase 1/2 procedure, Context Isolation per platform, and runner details.
+Snapshot review state before invoking relay-review:
+```bash
+REVIEW_BEFORE=$(node "${RELAY_SKILL_ROOT:-skills}/relay/scripts/run-preflight.js" \
+  --stage review --repo . --run-id "$RUN_ID" --pr "$PR_NUM" --json)
+```
 
-The rubric from relay-plan anchors each iteration — prevents context drift across rounds. Safety cap: 20 rounds (most PRs converge in 1-3).
+Invoke **relay-review** in an isolated context (no planning bias). It runs two phases (Spec Compliance → Code Quality), re-dispatches on issues, and updates manifest state. The rubric from relay-plan anchors each iteration. Safety cap: 20 rounds (most PRs converge in 1-3). Do NOT review inline.
 
-Do NOT review inline — relay-review must run in an isolated context to prevent planning bias.
+After review returns, compare against the snapshot:
+```bash
+PREVIOUS_ROUNDS=<rounds>
+PREVIOUS_VERDICT=<verdict>
+REVIEW_AFTER=$(node "${RELAY_SKILL_ROOT:-skills}/relay/scripts/run-preflight.js" \
+  --stage review --repo . --run-id "$RUN_ID" --pr "$PR_NUM" \
+  --previous-rounds "$PREVIOUS_ROUNDS" --previous-verdict "$PREVIOUS_VERDICT" --json)
+```
 
-Before invoking relay-review, record manifest `review.rounds` as `previousRounds` and `review.latest_verdict` as `previousVerdict`. After it returns, re-read the manifest and compare against that snapshot: `review.rounds` must be greater than `previousRounds` or `review.latest_verdict` must differ from `previousVerdict`. A stale non-pending verdict from an earlier round does not count as advancement. If neither recorded value changed, treat review as stalled and recover by running the runner directly in the foreground:
+If `.comparison.stale == true`, treat review as stalled and recover by running the runner directly in the foreground:
 ```bash
 node "${RELAY_SKILL_ROOT:-skills}/relay-review/scripts/review-runner.js" --repo . --run-id "$RUN_ID" --pr "$PR_NUM" --reviewer codex --json
 ```
-Wait for exit, then re-read the manifest and repeat the same snapshot comparison against `previousRounds` and `previousVerdict` before Step 5.
+Wait for exit, then repeat the same preflight comparison before Step 5. See [preflight-guards.md](references/preflight-guards.md) for the stale-review SHA fields.
 
 ## Step 5: Ready to Merge
 
