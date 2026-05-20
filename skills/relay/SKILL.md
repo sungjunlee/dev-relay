@@ -4,7 +4,7 @@ argument-hint: "[issue-number or task description]"
 description: Execute the full relay cycle — plan, dispatch, review, merge. Use when implementing a GitHub issue or task through autonomous executor dispatch. Integrates with dev-backlog sprint files.
 compatibility: Requires Claude Code or Codex, gh CLI, git, Node.js 18+.
 metadata:
-  related-skills: "relay-ready, relay-plan, relay-dispatch, relay-review, relay-merge, dev-backlog"
+  related-skills: "relay-ready, relay-plan, relay-dispatch, relay-review, relay-merge, relay-sidecar, dev-backlog"
   keywords: "릴레이, 자동 실행, plan, dispatch, review, merge, relay cycle"
 ---
 ## Inputs
