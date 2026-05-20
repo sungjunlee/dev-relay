@@ -312,6 +312,11 @@ function buildSkippedReadiness(reason, promptAllowed) {
   };
 }
 
+function promptAllowedForCurrentProcess({ nonInteractive }) {
+  // stdout is often captured by SKILL.md command substitution to read JSON.
+  return !nonInteractive && process.stdin.isTTY === true && process.stderr.isTTY === true;
+}
+
 function runRouteStage(cliArgs) {
   const repoRoot = path.resolve(cliArgs.getArg("--repo") || ".");
   const issueNumber = parsePositiveInteger(cliArgs.getArg("--issue-number"), "--issue-number");
@@ -320,7 +325,7 @@ function runRouteStage(cliArgs) {
   const bodyFile = normalizeBlank(cliArgs.getArg("--body-file"));
   const manifestPath = normalizeBlank(cliArgs.getArg("--manifest"));
   const nonInteractive = cliArgs.hasFlag("--non-interactive");
-  const promptAllowed = !nonInteractive && process.stdin.isTTY === true && process.stdout.isTTY === true;
+  const promptAllowed = promptAllowedForCurrentProcess({ nonInteractive });
 
   const prCheck = checkPullRequest(repoRoot, branch);
   const runCheck = checkInflightRuns(repoRoot, issueNumber);
