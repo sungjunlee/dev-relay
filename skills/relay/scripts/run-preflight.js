@@ -312,6 +312,26 @@ function buildSkippedReadiness(reason, promptAllowed) {
   };
 }
 
+function buildUnevaluatedReadinessForInflightRoute(inflight) {
+  const route = inflight?.route || "unknown";
+  return {
+    skipped: true,
+    skip_reason: `inflight_route_${route}`,
+    probe: null,
+    readiness_score: null,
+    bypass: null,
+    next_action: "defer_to_inflight_route",
+    signals_summary: `Readiness probe skipped because inflight.route is ${route}.`,
+    elapsed_ms: 0,
+    decision: {
+      recommended_branch: "not-evaluated",
+      prompt_allowed: false,
+      prompt_summary: null,
+      branch_labels: {},
+    },
+  };
+}
+
 function promptAllowedForCurrentProcess({ nonInteractive }) {
   // stdout is often captured by SKILL.md command substitution to read JSON.
   return !nonInteractive && process.stdin.isTTY === true && process.stderr.isTTY === true;
@@ -338,7 +358,9 @@ function runRouteStage(cliArgs) {
   };
 
   let readiness;
-  if (cliArgs.hasFlag("--skip-readiness") || cliArgs.hasFlag("--bypass-readiness")) {
+  if (inflight.route !== "continue") {
+    readiness = buildUnevaluatedReadinessForInflightRoute(inflight);
+  } else if (cliArgs.hasFlag("--skip-readiness") || cliArgs.hasFlag("--bypass-readiness")) {
     readiness = buildSkippedReadiness(
       normalizeBlank(cliArgs.getArg("--skip-readiness-reason")) || "explicit_skip",
       promptAllowed
