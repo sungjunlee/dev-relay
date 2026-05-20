@@ -19,6 +19,8 @@ When it must infer a GitHub issue, it tries:
 
 It ignores `Refs`, `Related`, and incidental issue prose. Multiple inferred closing refs fail instead of silently selecting one.
 
+Rubric resolution is run-dir-native. `review-runner.js` calls `loadRubricFromRunDir(runDir, data)`, which resolves `anchor.rubric_path` relative to the run directory and reads the rubric directly from there. Reviewers must not copy `rubric.yaml` or any other run artifact into the worktree; if `rubricStatus` looks unsatisfied, investigate run-directory path resolution instead of working around it with a worktree copy.
+
 ## Generated Artifacts
 
 Prepared or invoked rounds write artifacts under `~/.relay/runs/<repo-slug>/<run-id>/`:
