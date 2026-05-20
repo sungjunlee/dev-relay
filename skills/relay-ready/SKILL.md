@@ -27,13 +27,6 @@ metadata:
 - Reviewing executor output — use `relay-review`
 - Merging a reviewed PR — use `relay-merge`
 
-## When Readiness Is Required
-
-Run the readiness gate when any of these are true:
-- the request is free-form or ambiguous
-- the task may contain multiple steps or multiple leaves
-- the issue/task text is too broad to review safely as-is
-
 ## Output Contract
 
 Persist artifacts under `~/.relay/requests/<repo-slug>/<request-id>/` (request frontmatter, raw request,
