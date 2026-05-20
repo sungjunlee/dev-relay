@@ -15,21 +15,28 @@ metadata:
 
 # Relay Review
 
-Independent PR review against the Done Criteria contract and scoring rubric. Use `scripts/review-runner.js` so round count, reviewer invocation, PR comments, and manifest transitions stay script-managed.
+## Use when
+
+- Reviewing an executor PR against frozen Done Criteria and rubric anchors
+- Running `review-runner.js` for isolated reviewer invocation, PR comments, and manifest transitions
+- Producing a pass, changes-requested, or escalated relay review verdict
+
+## Do not use when
+
+- Shaping an ambiguous task before planning — use `relay-ready`
+- Authoring rubrics or dispatch prompts — use `relay-plan`
+- Delegating initial implementation or requested fixes — use `relay-dispatch`
+- Merging a reviewed PR — use `relay-merge`
 
 ## Context Isolation
 
-Reviews MUST run in a fresh context — no prior planning, dispatch, or conversation history. This prevents planning bias from influencing the verdict.
+Reviews MUST run in a fresh context — no prior planning, dispatch, or conversation history. Standard path: `review-runner.js --reviewer codex` or `--reviewer claude`; adapter scripts enforce isolation.
 
-| Platform | Mechanism | How |
-|----------|-----------|-----|
-| Claude Code | `context: fork` frontmatter | Automatic — this SKILL.md's frontmatter triggers it |
-| Codex (reviewer adapter) | `--ephemeral --sandbox read-only` | Automatic — `invoke-reviewer-codex.js` passes these flags |
-| Claude (reviewer adapter) | `--bare --no-session-persistence` | Automatic — `invoke-reviewer-claude.js` passes these flags |
-| Codex (manual inline review) | Start a new session | Manual — do not continue from the dispatch session |
-| Other / Fallback | Prefix prompt | Prepend: "You are reviewing code you did NOT write. You have no context about why it was written this way." |
-
-Standard path: run `review-runner.js --reviewer codex` or `--reviewer claude`. In that path, isolation is already enforced by the adapter scripts. The manual "start a new session" rule applies only to inline reviews outside `review-runner`.
+- Claude Code: `context: fork` frontmatter triggers isolation.
+- Codex adapter: `invoke-reviewer-codex.js` passes `--ephemeral --sandbox read-only`.
+- Claude adapter: `invoke-reviewer-claude.js` passes `--bare --no-session-persistence`.
+- Manual inline review: start a new session; do not continue from dispatch.
+- Other fallback: prefix the prompt with "You are reviewing code you did NOT write. You have no context about why it was written this way."
 
 ## Setup: Establish the anchor
 
@@ -55,22 +62,17 @@ node "${RELAY_SKILL_ROOT:-skills}/relay-review/scripts/review-runner.js" --repo 
 
 Run the runner in the foreground. Do NOT background it, detach it, or return with "I'll wait for the background runner." The relay-review result is the runner's verdict; do not return until the runner exits and the new `review-round-N-verdict.json` exists.
 
-Supported built-in adapters:
-- `--reviewer codex`
-- `--reviewer claude`
+Supported built-in adapters: `--reviewer codex`, `--reviewer claude`.
 
-Notes:
-- `codex` uses a read-only structured-output adapter and must return a full two-phase verdict.
-- `claude --bare` uses a separate token from the interactive Claude OAuth session; for `--reviewer claude` (direct or reviewer-swap), set `ANTHROPIC_API_KEY` or run `claude login --api-key`.
-- Model precedence for reviewer invocation is `--reviewer-model` -> `manifest.model_hints.review` -> reviewer default.
-- When the runner invokes the reviewer itself, it records a `review_invoke` event with the effective `model` value (or `null` when unset).
+Notes: `codex` uses a read-only structured-output adapter and must return a full two-phase verdict. `claude --bare` uses a separate token from interactive Claude OAuth; for `--reviewer claude`, set `ANTHROPIC_API_KEY` or run `claude login --api-key`.
+Model precedence is `--reviewer-model` -> `manifest.model_hints.review` -> reviewer default. Runner invocation records a `review_invoke` event with the effective `model` value (or `null`).
 
-Optional advisory path: add an opencode-powered blind-spot lane alongside the primary reviewer:
+Optional advisory path: add an opencode blind-spot lane alongside the primary reviewer:
 ```bash
 node "${RELAY_SKILL_ROOT:-skills}/relay-review/scripts/review-runner.js" --repo . --run-id "$RUN_ID" --pr "$PR_NUM" --reviewer codex --advisory-reviewer opencode --advisory-profile blindspot --json
 ```
 
-Advisory review is non-gating: it starts concurrently, records `advisory_review` plus `review-round-N-advisory-<reviewer>-*` artifacts, never changes the trusted verdict or redispatch prompt in v1, and records failures/timeouts/invalid JSON/write-policy violations without changing the primary outcome. Use `--advisory-reviewer-model` to override; otherwise opencode uses dispatch executor model defaults from `skills/relay-dispatch/references/executor-models.json` plus optional `~/.relay/executors.json`. Current profile: `blindspot` checks likely primary-review misses such as test gaps, bypass paths, edge cases, integration boundaries, stale docs, and operational failure modes.
+Advisory review is non-gating: it starts concurrently, records `advisory_review` plus `review-round-N-advisory-<reviewer>-*`, never changes the trusted verdict or redispatch prompt, and records failures/timeouts/invalid JSON/write-policy violations without changing the primary outcome. Use `--advisory-reviewer-model` to override; otherwise opencode uses dispatch executor defaults plus optional `~/.relay/executors.json`. Current profile: `blindspot` checks likely misses such as test gaps, bypass paths, edge cases, stale docs, and operational failure modes.
 
 4. Fallback path for unsupported environments or debugging:
 ```bash
@@ -88,7 +90,6 @@ This writes round artifacts under `~/.relay/runs/<repo-slug>/<run-id>/`. See `re
 | Converged | ready verdict emitted | `converged` | `ready_to_merge` |
 | Phase 2 | fail | `phase2_fail` | Re-dispatch, then Phase 1 |
 | Any phase | same issue 3+ rounds or safety cap hit | `escalated` | Escalated |
-This table is the canonical control-flow spec; the prose below is exposition.
 
 Two phases, run in order. Each round re-measures against the **original anchor**, not the previous round's state.
 
@@ -125,10 +126,7 @@ Before any re-dispatch, check:
 
 ### Converge
 
-11. Both phases pass → produce a structured verdict with:
-    - `verdict=pass`
-    - `next_action=ready_to_merge`
-    - `issues=[]`
+11. Both phases pass → produce a structured verdict with `verdict=pass`, `next_action=ready_to_merge`, and `issues=[]`.
 
 **Safety cap: 20 rounds total.** Ceiling, not target — most PRs converge in 1-3 rounds. Hitting the cap means something is structurally wrong; escalate.
 
