@@ -14,7 +14,20 @@ metadata:
 
 # Relay Plan
 
-Build the review anchor, scoring rubric, and dispatch prompt for a relay run. `relay-plan` emits handoff artifacts only; `relay` or an operator runs `relay-dispatch`.
+## Use when
+
+- Building the review anchor, scored rubric, and dispatch prompt for a relay run
+- Converting task intent, explicit AC, repo signals, and risk into reviewable Done Criteria
+- Persisting planner-authored Done Criteria before dispatch
+
+## Do not use when
+
+- Shaping an ambiguous task before planning — use `relay-ready`
+- Delegating implementation to an executor — use `relay-dispatch`
+- Reviewing executor output — use `relay-review`
+- Merging a reviewed PR — use `relay-merge`
+
+`relay-plan` emits handoff artifacts only; `relay` or an operator runs `relay-dispatch`.
 
 ## Default Path
 
@@ -30,19 +43,15 @@ If `relay-ready` produced a handoff brief, treat it as the source of truth inste
 
 ### 2. Gather planning signals
 
-Read historical relay signal:
-
 ```bash
 node "${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/reliability-report.js" --repo . --json
 ```
-
-Read repo-local quality signal:
 
 ```bash
 node "${RELAY_SKILL_ROOT:-skills}/relay-plan/scripts/probe-executor-env.js" . --project-only --json
 ```
 
-Use these as weak inputs only. They inform wording, prerequisites, and available commands; they do not gate dispatch or override the task. Empty/failure cases render as `no historical data available` or `no quality infra detected`; field meanings: `references/signals.md`.
+Read historical relay signal and repo-local quality signal as weak inputs only. They inform wording, prerequisites, and commands; they do not gate dispatch or override the task. Empty/failure cases render as `no historical data available` or `no quality infra detected`; field meanings: `references/signals.md`.
 
 ### 3. Normalize planning inputs
 
@@ -53,8 +62,7 @@ Keep explicit AC, inferred Done Criteria, repo signal, historical signal, and ta
 Identify the evaluation source model:
 - Explicit AC from the task source, when present
 - Inferred Done Criteria from user intent, issue body, relay-ready handoff, and nearby repo conventions
-- Repo quality signal from probes and available commands
-- Historical relay signal from stuck factors and score divergence
+- Repo/historical signals from probes, available commands, stuck factors, and score divergence
 - Task-specific risk from touched domains, trust boundaries, data loss, migrations, UX flows, or operational failure modes
 
 If AC are missing, vague, or incomplete, write observable Done Criteria first. Treat explicit AC as high-priority evidence, not the only source. Before freezing, run the [pre-flight ambiguity audit](references/dc-preflight-audit.md). If the final review anchor is planner-authored or differs from the task source, persist it in step 7.
@@ -109,11 +117,7 @@ Skip this step when the issue or relay-ready handoff already provides the final 
 
 Write the dispatch prompt and rubric YAML to temp files. The prompt uses `../relay/references/prompt-template.md` and appends Setup, optional Working Guidance, Scoring Rubric, Iteration Protocol, and Score Log sections. Full iteration protocol and Score Log format: `references/iteration-protocol.md`.
 
-Return a handoff summary with:
-- dispatch prompt path, e.g. `/tmp/dispatch-<N>.md`
-- rubric YAML path, e.g. `/tmp/rubric-<N>.yaml`
-- Done Criteria anchor path, when persisted
-- recommended `relay-dispatch` command for the orchestrator/operator to run, including `--run-id "$RUN_ID"` and `--done-criteria-file <done-criteria-path>` when Step 7 persisted Done Criteria
+Return a handoff summary with dispatch prompt path, rubric YAML path, Done Criteria anchor path when persisted, and the recommended `relay-dispatch` command, including `--run-id "$RUN_ID"` and `--done-criteria-file <done-criteria-path>` when Step 7 persisted Done Criteria.
 
 When Step 7 persisted Done Criteria, the dispatch handoff must preserve both anchors:
 

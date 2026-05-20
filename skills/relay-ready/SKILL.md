@@ -14,17 +14,18 @@ metadata:
 
 # Relay Ready
 
-Use this skill when `/relay` cannot safely bypass straight to planning.
+## Use when
 
-## When Readiness Is Required
+- `/relay` cannot safely bypass straight to planning
+- The request is ambiguous, too broad, or may need multiple ordered leaves
+- No stable Done Criteria or review anchor exists yet
 
-Run the readiness gate when any of these are true:
-- the request is free-form or ambiguous
-- the task may contain multiple steps or multiple leaves
-- no stable Done Criteria anchor exists yet
-- the issue/task text is too broad to review safely as-is
+## Do not use when
 
-Bypass only for a single relay-ready task with a trustworthy review anchor already available.
+- Authoring rubrics or dispatch prompts — use `relay-plan`
+- Delegating implementation work — use `relay-dispatch`
+- Reviewing executor output — use `relay-review`
+- Merging a reviewed PR — use `relay-merge`
 
 ## Output Contract
 
