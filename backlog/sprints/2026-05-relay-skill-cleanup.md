@@ -1,6 +1,6 @@
 ---
 milestone: ""
-status: active
+status: completed
 started: 2026-05-19
 due: 2026-05-26
 epic: 486
@@ -55,3 +55,4 @@ Strategic frame (from #486):
 - 2026-05-20: #494 → PR #500: dispatch returned completed-uncommitted → recover-commit.js → R1 changes_requested (prompt_allowed TTY-gating bug) → R2 changes_requested (in-flight route no longer short-circuited readiness probe) → R3 PASS → squash-merged (`2cb8571`), #494 closed.
 - 2026-05-20: #495 → PR #501: dispatched after #493 merged (relay-review overlap cleared). R1 changes_requested (relay-ready duplicate routing section) → R2 PASS → squash-merged (`d8de514`), #495 closed. Cleanup needed manual worktree removal (review-runner left a stray rubric.yaml making the worktree dirty).
 - 2026-05-20: Sprint complete — all 5 batched issues (#488 via #496, #492, #493, #494, #495) done. Epic #486 has #490/#491 still open (out of this sprint's scope).
+- 2026-05-20: Sprint closed. 4/4 tasks completed.
