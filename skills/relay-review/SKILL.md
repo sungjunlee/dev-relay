@@ -67,17 +67,10 @@ Notes:
 
 Optional advisory path: add an opencode-powered blind-spot lane alongside the primary reviewer:
 ```bash
-node "${RELAY_SKILL_ROOT:-skills}/relay-review/scripts/review-runner.js" --repo . --run-id "$RUN_ID" --pr "$PR_NUM" \
-  --reviewer codex \
-  --advisory-reviewer opencode \
-  --advisory-profile blindspot \
-  --json
+node "${RELAY_SKILL_ROOT:-skills}/relay-review/scripts/review-runner.js" --repo . --run-id "$RUN_ID" --pr "$PR_NUM" --reviewer codex --advisory-reviewer opencode --advisory-profile blindspot --json
 ```
 
-Advisory review is non-gating. Runner-managed advisory invocation starts concurrently with the primary reviewer and records `advisory_review` plus `review-round-N-advisory-<reviewer>-*` artifacts. Advisory findings are not merged into the trusted verdict or redispatch prompt in v1. Advisory failure, timeout, invalid JSON, or write-policy violation is recorded without changing the primary review outcome. Use `--advisory-reviewer-model` to override the model; otherwise opencode uses the same executor model defaults as dispatch (`skills/relay-dispatch/references/executor-models.json` plus optional `~/.relay/executors.json`).
-
-Current advisory profiles:
-- `blindspot`: look for likely misses from the primary review such as test gaps, bypass paths, edge cases, integration boundaries, stale docs, and operational failure modes.
+Advisory review is non-gating: it starts concurrently, records `advisory_review` plus `review-round-N-advisory-<reviewer>-*` artifacts, never changes the trusted verdict or redispatch prompt in v1, and records failures/timeouts/invalid JSON/write-policy violations without changing the primary outcome. Use `--advisory-reviewer-model` to override; otherwise opencode uses dispatch executor model defaults from `skills/relay-dispatch/references/executor-models.json` plus optional `~/.relay/executors.json`. Current profile: `blindspot` checks likely primary-review misses such as test gaps, bypass paths, edge cases, integration boundaries, stale docs, and operational failure modes.
 
 4. Fallback path for unsupported environments or debugging:
 ```bash
@@ -87,6 +80,15 @@ node "${RELAY_SKILL_ROOT:-skills}/relay-review/scripts/review-runner.js" --repo 
 This writes round artifacts under `~/.relay/runs/<repo-slug>/<run-id>/`. See `references/runner-notes.md` for artifact names, retained-checkout behavior, stale-SHA handling, and repeated-issue escalation.
 
 ## Review Loop
+| current_phase | outcome | event | next_phase |
+|---------------|---------|-------|------------|
+| Phase 1 | pass | `phase1_pass` | Phase 2 |
+| Phase 1 | fail | `phase1_fail` | Re-dispatch, then Phase 1 |
+| Phase 2 | pass | `phase2_pass` | Converged |
+| Converged | ready verdict emitted | `converged` | `ready_to_merge` |
+| Phase 2 | fail | `phase2_fail` | Re-dispatch, then Phase 1 |
+| Any phase | same issue 3+ rounds or safety cap hit | `escalated` | Escalated |
+This table is the canonical control-flow spec; the prose below is exposition.
 
 Two phases, run in order. Each round re-measures against the **original anchor**, not the previous round's state.
 
@@ -110,7 +112,7 @@ Two phases, run in order. Each round re-measures against the **original anchor**
 
 8. Run a code review skill on changed files — check code quality, patterns, conventions, structural issues (use the platform's best-matching skill, e.g., Claude Code: `/review`; if no skill is available, perform the quality review inline inside the structured reviewer round)
 9. Run a code simplification skill on changed files — unnecessary complexity, dead code, verbose patterns (use the platform's best-matching skill, e.g., Claude Code: `/simplify`; if no skill is available, review for simplification inline before returning `verdict=pass`)
-10. Issues found → return `verdict=changes_requested`, then re-dispatch and **repeat from step 5** (Phase 1 — quality fixes can regress spec compliance)
+10. Issues found → return `verdict=changes_requested`, then follow the `phase2_fail` back-edge: re-dispatch and restart at Phase 1 because quality fixes can regress spec compliance.
 
 ### Drift and stuck detection (both phases)
 
