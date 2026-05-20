@@ -7,6 +7,11 @@ metadata:
   related-skills: relay-ready, relay-plan, relay-dispatch, relay-review, relay-merge
   keywords: relay-fleet, fleet, fan-out, parallel dispatch, resume, status, 병렬, 재개, 상태
 ---
+## Inputs
+- Env: `RELAY_ROOT`.
+- Input files: leaves JSON passed via `--leaves-file`.
+- Scripts: `$RELAY_ROOT/relay-fleet/scripts/relay-fleet.js`, `$RELAY_ROOT/relay-dispatch/scripts/dispatch.js`.
+RELAY_ROOT=${RELAY_ROOT:-${CLAUDE_SKILL_DIR}/..}
 
 # relay-fleet
 
@@ -30,7 +35,7 @@ Optional per-leaf fields are passed through to `dispatch.js`: `request_id`, `lea
 ## Commands
 
 ```bash
-node ${CLAUDE_SKILL_DIR}/scripts/relay-fleet.js \
+node "$RELAY_ROOT/relay-fleet/scripts/relay-fleet.js" \
   --repo . \
   --fleet-id fleet-481 \
   --leaves-file /tmp/fleet-481-leaves.json \
@@ -40,7 +45,7 @@ node ${CLAUDE_SKILL_DIR}/scripts/relay-fleet.js \
 Resume after a terminal/session crash:
 
 ```bash
-node ${CLAUDE_SKILL_DIR}/scripts/relay-fleet.js \
+node "$RELAY_ROOT/relay-fleet/scripts/relay-fleet.js" \
   --repo . \
   --fleet-id fleet-481 \
   --resume
@@ -49,7 +54,7 @@ node ${CLAUDE_SKILL_DIR}/scripts/relay-fleet.js \
 Read-only aggregate status:
 
 ```bash
-node ${CLAUDE_SKILL_DIR}/scripts/relay-fleet.js \
+node "$RELAY_ROOT/relay-fleet/scripts/relay-fleet.js" \
   --repo . \
   --fleet-id fleet-481 \
   --status
@@ -58,7 +63,7 @@ node ${CLAUDE_SKILL_DIR}/scripts/relay-fleet.js \
 Dry-run validates the leaf file and invokes child `dispatch.js --dry-run` for each leaf without writing a fleet manifest:
 
 ```bash
-node ${CLAUDE_SKILL_DIR}/scripts/relay-fleet.js \
+node "$RELAY_ROOT/relay-fleet/scripts/relay-fleet.js" \
   --repo . \
   --fleet-id fleet-481 \
   --leaves-file /tmp/fleet-481-leaves.json \
@@ -68,7 +73,7 @@ node ${CLAUDE_SKILL_DIR}/scripts/relay-fleet.js \
 
 ## Behavior
 
-- The fleet script invokes `skills/relay-dispatch/scripts/dispatch.js` as a subprocess once per leaf and always passes `--fleet-id`.
+- The fleet script invokes `$RELAY_ROOT/relay-dispatch/scripts/dispatch.js` as a subprocess once per leaf and always passes `--fleet-id`.
 - Each child dispatch owns worktree creation, in-flight run checks, executor invocation, and child run manifest writes.
 - Fleet issue locks are checked before each child spawn; `dispatch.js --fleet-id` performs the durable lock during the actual child run.
 - `--resume` reconciles both directions: it re-adopts child run manifests whose `fleet_id` points back to this fleet, and it marks no-manifest interrupted children as `dispatch_failed_pre_manifest` so they can be retried from the persisted leaf store.

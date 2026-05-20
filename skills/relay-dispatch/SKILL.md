@@ -7,10 +7,13 @@ metadata:
   related-skills: "relay, relay-ready, relay-plan, relay-review, relay-merge"
   keywords: "디스패치, 실행, dispatch, executor, worktree"
 ---
+## Inputs
+- Env: `RELAY_ROOT`.
+- Input files: prompt text or `--prompt-file`, required `--rubric-file`, optional `--done-criteria-file`, copied files from `--copy`.
+- Scripts: `$RELAY_ROOT/relay-dispatch/scripts/dispatch.js`; no sibling script is invoked directly from examples.
+RELAY_ROOT=${RELAY_ROOT:-${CLAUDE_SKILL_DIR}/..}
 
 # Relay Dispatch
-
-Command examples use `${RELAY_SKILL_ROOT:-skills}`; set `RELAY_SKILL_ROOT` to the directory containing sibling relay skills when running from an installed bundle outside this repo.
 
 ## Use when
 
@@ -28,19 +31,19 @@ Command examples use `${RELAY_SKILL_ROOT:-skills}`; set `RELAY_SKILL_ROOT` to th
 
 ```bash
 # Foreground (blocking — simple tasks, default executor: codex)
-node "${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/dispatch.js" . -b feature-auth -p "..." --rubric-file rubric.yaml
+node "$RELAY_ROOT/relay-dispatch/scripts/dispatch.js" . -b feature-auth -p "..." --rubric-file rubric.yaml
 
 # Same-run resume after a changes-requested review
-node "${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/dispatch.js" . --run-id issue-42-20260403120000000 --prompt-file review-round-2-redispatch.md
+node "$RELAY_ROOT/relay-dispatch/scripts/dispatch.js" . --run-id issue-42-20260403120000000 --prompt-file review-round-2-redispatch.md
 
 # With explicit executor
-node "${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/dispatch.js" . -e codex -b feature-auth -p "..." --rubric-file rubric.yaml
+node "$RELAY_ROOT/relay-dispatch/scripts/dispatch.js" . -e codex -b feature-auth -p "..." --rubric-file rubric.yaml
 
 # Claude Code as executor (no Codex required)
-node "${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/dispatch.js" . -e claude -b feature-auth -p "..." --rubric-file rubric.yaml
+node "$RELAY_ROOT/relay-dispatch/scripts/dispatch.js" . -e claude -b feature-auth -p "..." --rubric-file rubric.yaml
 
 # Experimental opencode executor (uses bundled/default model config unless --model is set)
-node "${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/dispatch.js" . -e opencode -b feature-auth -p "..." --rubric-file rubric.yaml
+node "$RELAY_ROOT/relay-dispatch/scripts/dispatch.js" . -e opencode -b feature-auth -p "..." --rubric-file rubric.yaml
 ```
 
 For background and parallel dispatch, see `../relay/SKILL.md` § Batch Mode (single source of truth for the parallel-fork flow).

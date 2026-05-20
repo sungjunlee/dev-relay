@@ -7,19 +7,22 @@ metadata:
   related-skills: "relay, relay-ready, relay-plan, relay-dispatch, relay-review, dev-backlog"
   keywords: "머지, 병합, merge, finalize, cleanup"
 ---
+## Inputs
+- Env: `RELAY_ROOT`; command examples also use `PR_NUM`, `RUN_ID`.
+- Input files: run manifest, PR audit comments, optional active sprint file.
+- Scripts: `$RELAY_ROOT/relay-merge/scripts/gate-check.js`, `$RELAY_ROOT/relay-merge/scripts/finalize-run.js`.
+RELAY_ROOT=${RELAY_ROOT:-${CLAUDE_SKILL_DIR}/..}
 
 # Relay Merge
 
 Explicitly merge a ready-to-merge PR and close the loop. **Requires relay-review PR comment.**
-
-Command examples use `${RELAY_SKILL_ROOT:-skills}`; set `RELAY_SKILL_ROOT` to the directory containing sibling relay skills when running from an installed bundle outside this repo.
 
 ## Process
 
 ### 0. Gate check — verify relay-review completed
 
 ```bash
-node "${RELAY_SKILL_ROOT:-skills}/relay-merge/scripts/gate-check.js" $PR_NUM
+node "$RELAY_ROOT/relay-merge/scripts/gate-check.js" $PR_NUM
 ```
 
 - Exit 0 (LGTM) → PR is ready to merge; proceed only if the user wants to land it now
@@ -30,7 +33,7 @@ node "${RELAY_SKILL_ROOT:-skills}/relay-merge/scripts/gate-check.js" $PR_NUM
 
 **Intentional skip** (hotfix, manual PR, trivial change):
 ```bash
-node "${RELAY_SKILL_ROOT:-skills}/relay-merge/scripts/gate-check.js" $PR_NUM --skip "reason here"
+node "$RELAY_ROOT/relay-merge/scripts/gate-check.js" $PR_NUM --skip "reason here"
 ```
 This writes a `<!-- relay-review-skip -->` comment to the PR — maintaining audit trail even when review is bypassed. The skip reason is recorded on the PR for future reference.
 `gate-check.js --skip` does not invoke any executor or reviewer, so it does not consume manifest `model_hints`.
@@ -41,7 +44,7 @@ This writes a `<!-- relay-review-skip -->` comment to the PR — maintaining aud
 
 ```bash
 RUN_ID=<run-id-from-dispatch>
-node "${RELAY_SKILL_ROOT:-skills}/relay-merge/scripts/finalize-run.js" --repo . --run-id "$RUN_ID" --merge-method squash --json
+node "$RELAY_ROOT/relay-merge/scripts/finalize-run.js" --repo . --run-id "$RUN_ID" --merge-method squash --json
 ```
 
 This script:

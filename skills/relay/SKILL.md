@@ -7,12 +7,15 @@ metadata:
   related-skills: "relay-ready, relay-plan, relay-dispatch, relay-review, relay-merge, dev-backlog"
   keywords: "릴레이, 자동 실행, plan, dispatch, review, merge, relay cycle"
 ---
+## Inputs
+- Env: `RELAY_ROOT`; command examples also use `PR_NUM`, `PROBE`, `ISSUE_BODY_FILE`, `RUN_MANIFEST`, `ISSUE_NUMBER`, `BYPASS`, `SUMMARY`, `NEXT_ACTION`, `RUN_ID`.
+- Input files: task issue/body or relay-ready handoff, optional `$ISSUE_BODY_FILE` and `$RUN_MANIFEST`, `/tmp/dispatch-<N>.md`, `/tmp/rubric-<N>.yaml`.
+- Scripts: `$RELAY_ROOT/relay-ready/scripts/probe-readiness.js`, `$RELAY_ROOT/relay-dispatch/scripts/dispatch.js`, `$RELAY_ROOT/relay-review/scripts/review-runner.js`.
+RELAY_ROOT=${RELAY_ROOT:-${CLAUDE_SKILL_DIR}/..}
 
 # Dev Relay
 
 Execute the plan → dispatch → review cycle. Stop at `ready_to_merge` unless the user explicitly asks to merge. Follow ALL steps below in order.
-
-Command examples use `${RELAY_SKILL_ROOT:-skills}`; set `RELAY_SKILL_ROOT` to the directory containing sibling relay skills when running from an installed bundle outside this repo.
 
 ## Role Defaults
 
@@ -50,7 +53,7 @@ PR_NUM=$(gh pr list --head issue-<N> --json number -q '.[0].number')
 Before Step 2, run this unless bypassed by a prior relay-ready artifact with `readiness_score` and frozen review anchor, explicit `--bypass-readiness`, or a sprint-batch entry already linked to a relay-ready handoff:
 
 ```bash
-PROBE=$(node "${RELAY_SKILL_ROOT:-skills}/relay-ready/scripts/probe-readiness.js" \
+PROBE=$(node "$RELAY_ROOT/relay-ready/scripts/probe-readiness.js" \
   --json --body-file "$ISSUE_BODY_FILE" --manifest "$RUN_MANIFEST" --issue-number "$ISSUE_NUMBER")
 BYPASS=$(printf '%s' "$PROBE" | jq -r '.bypass')
 SUMMARY=$(printf '%s' "$PROBE" | jq -r '.signals_summary')
@@ -70,14 +73,13 @@ Branch labels and events:
 
 **Always build a rubric.** Follow relay-plan's planning process (read task → recover Done Criteria → build rubric → emit handoff artifacts). Do NOT dispatch from relay-plan — Step 3 below handles dispatch. See `relay-plan` SKILL.md for rubric depth by task size (S/M/L/XL).
 
-Write the dispatch prompt to a temp file (e.g., `/tmp/dispatch-<N>.md`).
 If relay-ready ran, the relay-ready handoff brief becomes the task source of truth for planning.
-Write the rubric YAML to a temp file (e.g., `/tmp/rubric-<N>.yaml`).
+Write the dispatch prompt and rubric YAML to temp files (e.g., `/tmp/dispatch-<N>.md`, `/tmp/rubric-<N>.yaml`).
 
 ## Step 3: Dispatch (relay-dispatch)
 
 ```bash
-node "${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/dispatch.js" . \
+node "$RELAY_ROOT/relay-dispatch/scripts/dispatch.js" . \
   -b issue-<N> --prompt-file /tmp/dispatch-<N>.md --rubric-file /tmp/rubric-<N>.yaml --timeout 3600
 # If relay-ready ran, append: --request-id <id> --leaf-id <id> --done-criteria-file <done-criteria-path>
 ```
@@ -103,9 +105,7 @@ Get PR number:
 PR_NUM=$(gh pr list --head issue-<N> --json number -q '.[0].number')
 ```
 
-The manifest is written under `~/.relay/runs/<repo-slug>/`. This is the shared state surface for later review/merge lifecycle work. Readiness linkage is recorded there, but the run lifecycle remains execution-only.
-
-Current scope: dispatch writes the manifest. Review and merge still follow their existing PR-comment and gate-check flow.
+The manifest under `~/.relay/runs/<repo-slug>/` is the shared state surface; readiness linkage is recorded there while the run lifecycle remains execution-only.
 
 If sprint file exists, mark Plan item as in-flight: `[~] #42 OAuth2 flow → PR #89 (reviewing)`
 
@@ -123,7 +123,7 @@ Do NOT review inline — relay-review must run in an isolated context to prevent
 
 Before invoking relay-review, record manifest `review.rounds` as `previousRounds` and `review.latest_verdict` as `previousVerdict`. After it returns, re-read the manifest and compare against that snapshot: `review.rounds` must be greater than `previousRounds` or `review.latest_verdict` must differ from `previousVerdict`. A stale non-pending verdict from an earlier round does not count as advancement. If neither recorded value changed, treat review as stalled and recover by running the runner directly in the foreground:
 ```bash
-node ${CLAUDE_SKILL_DIR}/../relay-review/scripts/review-runner.js --repo . --run-id "$RUN_ID" --pr "$PR_NUM" --reviewer codex --json
+node "$RELAY_ROOT/relay-review/scripts/review-runner.js" --repo . --run-id "$RUN_ID" --pr "$PR_NUM" --reviewer codex --json
 ```
 Wait for exit, then re-read the manifest and repeat the same snapshot comparison against `previousRounds` and `previousVerdict` before Step 5.
 

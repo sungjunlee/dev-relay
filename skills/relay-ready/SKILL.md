@@ -7,12 +7,15 @@ metadata:
   related-skills: "relay, relay-plan, relay-dispatch, relay-review"
   keywords: "relay-ready, ready to relay, readiness gate, task readiness, 릴레이 준비, 준비도, 검증, 완료 기준"
 ---
+## Inputs
+- Env: `RELAY_ROOT`.
+- Input files: `/tmp/relay-ready-contract.json`, prepared dispatch prompt/rubric files, frozen Done Criteria path.
+- Scripts: `$RELAY_ROOT/relay-ready/scripts/persist-request.js`, `$RELAY_ROOT/relay-dispatch/scripts/dispatch.js`.
+RELAY_ROOT=${RELAY_ROOT:-${CLAUDE_SKILL_DIR}/..}
 
 # Relay Ready
 
 Use this skill when `/relay` cannot safely bypass straight to planning.
-
-Command examples use `${RELAY_SKILL_ROOT:-skills}`; set `RELAY_SKILL_ROOT` to the directory containing sibling relay skills when running from an installed bundle outside this repo.
 
 ## When Readiness Is Required
 
@@ -46,7 +49,7 @@ Write a JSON contract file with:
 Persist it with:
 
 ```bash
-node "${RELAY_SKILL_ROOT:-skills}/relay-ready/scripts/persist-request.js" --repo . --contract-file /tmp/relay-ready-contract.json --json
+node "$RELAY_ROOT/relay-ready/scripts/persist-request.js" --repo . --contract-file /tmp/relay-ready-contract.json --json
 ```
 
 Readiness is optional, but if supplied, all readiness dimensions are required; see schema enum domains.
@@ -67,7 +70,7 @@ After persistence succeeds:
 2. dispatch with:
 
 ```bash
-node "${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/dispatch.js" . \
+node "$RELAY_ROOT/relay-dispatch/scripts/dispatch.js" . \
   -b <branch> \
   --prompt-file <dispatch-prompt-path> \
   --rubric-file <rubric-path-from-relay-plan> \

@@ -8,20 +8,24 @@ metadata:
   related-skills: "relay, relay-ready, relay-plan, relay-dispatch, relay-merge"
   keywords: "리뷰, 검토, review, gate, fresh context"
 ---
+## Inputs
+- Env: `RELAY_ROOT`; command examples also use `PR_NUM`, `BRANCH`, `ISSUE_NUM`, `RUN_ID`; `ANTHROPIC_API_KEY` is required only for `--reviewer claude` API-key mode.
+- Input files: PR diff, run manifest/rubric artifacts, optional `/tmp/review-verdict.json`.
+- Scripts: `$RELAY_ROOT/relay-review/scripts/resolve-issue-number.sh`, `$RELAY_ROOT/relay-review/scripts/review-runner.js`.
+RELAY_ROOT=${RELAY_ROOT:-${CLAUDE_SKILL_DIR}/..}
 
 # Relay Review
 
 Independent PR review against the Done Criteria contract and scoring rubric. Use `scripts/review-runner.js` so round count, reviewer invocation, PR comments, and manifest transitions stay script-managed.
 
-Command examples use `${RELAY_SKILL_ROOT:-skills}`; set `RELAY_SKILL_ROOT` to the directory containing sibling relay skills when running from an installed bundle outside this repo.
-
 ## Context Isolation
 
 Reviews MUST run in a fresh context — no prior planning, dispatch, or conversation history. This prevents planning bias from influencing the verdict.
+The `context: fork` frontmatter is a Claude Code compatibility mechanism only; other platforms use their row below.
 
 | Platform | Mechanism | How |
 |----------|-----------|-----|
-| Claude Code | `context: fork` frontmatter | Automatic — this SKILL.md's frontmatter triggers it |
+| Claude Code | `context: fork` frontmatter compatibility | Automatic in Claude Code only |
 | Codex (reviewer adapter) | `--ephemeral --sandbox read-only` | Automatic — `invoke-reviewer-codex.js` passes these flags |
 | Claude (reviewer adapter) | `--bare --no-session-persistence` | Automatic — `invoke-reviewer-claude.js` passes these flags |
 | Codex (manual inline review) | Start a new session | Manual — do not continue from the dispatch session |
@@ -36,7 +40,7 @@ Standard path: run `review-runner.js --reviewer codex` or `--reviewer claude`. I
 PR_NUM=$(gh pr list --head <branch> --json number -q '.[0].number')
 BRANCH=$(gh pr view $PR_NUM --json headRefName -q '.headRefName')
 gh pr diff $PR_NUM > /tmp/pr-diff.txt
-ISSUE_NUM=$(bash "${RELAY_SKILL_ROOT:-skills}/relay-review/scripts/resolve-issue-number.sh" "$PR_NUM" "$BRANCH")  # legacy manual helper; runner resolution is canonical
+ISSUE_NUM=$(bash "$RELAY_ROOT/relay-review/scripts/resolve-issue-number.sh" "$PR_NUM" "$BRANCH")  # legacy manual helper; runner resolution is canonical
 gh issue view $ISSUE_NUM  # Done Criteria / Acceptance Criteria source
 ```
 
@@ -48,7 +52,7 @@ gh issue view $ISSUE_NUM  # Done Criteria / Acceptance Criteria source
 3. Preferred path: let the review runner invoke an isolated reviewer directly:
 ```bash
 RUN_ID=<run-id-from-dispatch>
-node "${RELAY_SKILL_ROOT:-skills}/relay-review/scripts/review-runner.js" --repo . --run-id "$RUN_ID" --pr "$PR_NUM" --reviewer codex --json
+node "$RELAY_ROOT/relay-review/scripts/review-runner.js" --repo . --run-id "$RUN_ID" --pr "$PR_NUM" --reviewer codex --json
 ```
 
 Run the runner in the foreground. Do NOT background it, detach it, or return with "I'll wait for the background runner." The relay-review result is the runner's verdict; do not return until the runner exits and the new `review-round-N-verdict.json` exists.
@@ -65,7 +69,7 @@ Notes:
 
 Optional advisory path: add an opencode-powered blind-spot lane alongside the primary reviewer:
 ```bash
-node "${RELAY_SKILL_ROOT:-skills}/relay-review/scripts/review-runner.js" --repo . --run-id "$RUN_ID" --pr "$PR_NUM" \
+node "$RELAY_ROOT/relay-review/scripts/review-runner.js" --repo . --run-id "$RUN_ID" --pr "$PR_NUM" \
   --reviewer codex \
   --advisory-reviewer opencode \
   --advisory-profile blindspot \
@@ -79,7 +83,7 @@ Current advisory profiles:
 
 4. Fallback path for unsupported environments or debugging:
 ```bash
-node "${RELAY_SKILL_ROOT:-skills}/relay-review/scripts/review-runner.js" --repo . --branch "$BRANCH" --pr "$PR_NUM" --prepare-only --json
+node "$RELAY_ROOT/relay-review/scripts/review-runner.js" --repo . --branch "$BRANCH" --pr "$PR_NUM" --prepare-only --json
 ```
 
 This writes round artifacts under `~/.relay/runs/<repo-slug>/<run-id>/`. See `references/runner-notes.md` for artifact names, retained-checkout behavior, stale-SHA handling, and repeated-issue escalation.
@@ -132,7 +136,7 @@ Before any re-dispatch, check:
 
 12. If you used the fallback path, apply the structured verdict with the review runner:
 ```bash
-node "${RELAY_SKILL_ROOT:-skills}/relay-review/scripts/review-runner.js" --repo . --run-id "$RUN_ID" --pr "$PR_NUM" --review-file /tmp/review-verdict.json
+node "$RELAY_ROOT/relay-review/scripts/review-runner.js" --repo . --run-id "$RUN_ID" --pr "$PR_NUM" --review-file /tmp/review-verdict.json
 ```
 
 The runner validates the verdict, writes the PR audit comment, updates manifest state, and records round artifacts. See `references/runner-notes.md` for the full audit-trail and backward-compatibility behavior.
