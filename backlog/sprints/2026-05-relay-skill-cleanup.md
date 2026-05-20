@@ -20,7 +20,7 @@ Strategic frame (from #486):
 ## Plan
 
 ### Batch 1 — `## Inputs` blocks + drift test (#492, re-scoped)
-- [~] #492 docs: add `## Inputs` block to all 8 SKILL.md + `skill-inputs-drift.test.js` → PR #498 (ready to merge, R1 LGTM clean)
+- [x] #492 docs: add `## Inputs` block to all 8 SKILL.md + `skill-inputs-drift.test.js` → PR #498 (merged)
   - Lane: **relay** (8 SKILL.md edit + new drift test)
   - Re-scoped 2026-05-20: #488 was closed by parallel PR #496 (`${RELAY_SKILL_ROOT:-skills}` convention). #492 drops its own `RELAY_ROOT` proposal — `## Inputs` blocks now build on top of the merged `${RELAY_SKILL_ROOT}` convention. Re-dispatch against current main.
 
@@ -50,4 +50,5 @@ Strategic frame (from #486):
 - 2026-05-19: Sprint opened. Source: craft-critique + craft-survey passes on 2026-05-18; epic #486 child list extended (#492-#495); boost comments left on #488/#489.
 - 2026-05-20: #488 decision locked — `RELAY_ROOT` indirection adopted. Batches 1+2 merged: #488 + #492 combined into one relay run (shared 8-SKILL.md surface). Dispatching combined scope.
 - 2026-05-20: Dispatched #488+#492 to codex → PR #497. Review R1 = changes_requested. While fixing, discovered parallel PR #496 (`57dcdc0`, "Simplify relay skill handoffs") already merged — it closed #487/#488/#489 and shipped the `${RELAY_SKILL_ROOT:-skills}` path convention. PR #497 was half-superseded (relay-plan/SKILL.md rewritten ~120 lines by both; convention clash). Decision: closed PR #497, accepted `${RELAY_SKILL_ROOT}` as incumbent, re-scoped #492 to `## Inputs` blocks + drift test only. Run issue-492-...f8b3c4ba closed.
-- 2026-05-20: Re-dispatched re-scoped #492 to codex → PR #498 (`4fe24e7`), 9 files (8 SKILL.md + new `skill-inputs-drift.test.js`). First re-dispatch failed (stale `issue-492` branch from PR #497 still at `a4fe7fa` → origin/main merge conflict); deleted the branch, re-dispatched clean. Review R1 = LGTM clean — all 5 DCs verified, quality 9/10, no new path var. State: ready_to_merge. Awaiting explicit merge approval.
+- 2026-05-20: Re-dispatched re-scoped #492 to codex → PR #498 (`4fe24e7`), 9 files (8 SKILL.md + new `skill-inputs-drift.test.js`). First re-dispatch failed (stale `issue-492` branch from PR #497 still at `a4fe7fa` → origin/main merge conflict); deleted the branch, re-dispatched clean. Review R1 = LGTM clean — all 5 DCs verified, quality 9/10, no new path var.
+- 2026-05-20: PR #498 squash-merged (`07a651e`), #492 closed. Batch 1 done. Next: #494 (preflight extraction — rebase on current main, #496 touched relay/SKILL.md), #493 (review transition table), #495 (use-when sections).
