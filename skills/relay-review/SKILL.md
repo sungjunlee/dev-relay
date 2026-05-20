@@ -102,6 +102,7 @@ Two phases, run in order. Each round re-measures against the **original anchor**
    - **Security**: Auth/token handling, input validation, injection risks?
 
 6. **Rubric verification** (when Score Log present):
+   - Do not copy `rubric.yaml` or run artifacts into the worktree; runner rubric resolution is run-dir-relative by design (see `references/runner-notes.md`)
    - The reviewer evaluates `quality_review_status` by inspection; the runner independently verifies `quality_execution_status` via a SHA-bound execution-evidence artifact. The reviewer cannot execute code, so quality evidence comes from two trust roots.
    - Re-score ALL evaluated quality factors with fresh eyes (0-10) and include numeric `score` / `target_score`; contract factors stay pass/fail and may use `null` numeric fields
    - Any required factor below target → issue
