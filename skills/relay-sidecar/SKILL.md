@@ -14,7 +14,20 @@ metadata:
 
 # Relay Sidecar
 
-Use `scripts/relay-sidecar.js` to run an advisory sidecar against an existing relay run. The runner resolves the run manifest, sends run context and PR diff text to the configured sidecar executor, and stores the captured stdout under the run's `sidecars/<id>/` directory.
+## Use when
+
+- Running an artifact-only advisory sidecar for an existing relay run
+- Capturing supplemental context recap, test-gap, docs-sync, or similar output
+- Producing non-gating sidecar artifacts under a run's `sidecars/<id>/` directory
+
+## Do not use when
+
+- Reviewing a PR for the relay gate — use `relay-review`
+- Dispatching implementation work — use `relay-dispatch`
+- Authoring rubrics or dispatch prompts — use `relay-plan`
+- Merging or finalizing a PR — use `relay-merge`
+
+The runner resolves the run manifest, sends run context and PR diff text to the configured sidecar executor, and stores captured stdout under the run's `sidecars/<id>/` directory.
 
 ## Entry
 

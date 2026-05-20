@@ -14,7 +14,20 @@ metadata:
 
 # relay-fleet
 
-Run Phase 1 multi-leaf orchestration after `relay-ready` and `relay-plan` have already produced leaf artifacts. This skill does not plan raw issues. It only fans out prepared leaf contracts to `relay-dispatch`, records crash-safe fleet progress, and reports aggregate status.
+## Use when
+
+- Fanning out already planned relay leaves into parallel child dispatches
+- Resuming a crashed fleet dispatch from persisted child/fleet state
+- Printing read-only aggregate status for a fleet
+
+## Do not use when
+
+- Decomposing raw or ambiguous requests into leaves — use `relay-ready`
+- Authoring per-leaf rubrics or dispatch prompts — use `relay-plan`
+- Dispatching a single task or run — use `relay-dispatch`
+- Reviewing child PRs — use `relay-review`
+
+Run Phase 1 multi-leaf orchestration after `relay-ready` and `relay-plan` have already produced leaf artifacts. It only fans out prepared leaf contracts to `relay-dispatch`, records crash-safe fleet progress, and reports aggregate status.
 
 Design rationale, rejected alternatives, non-goals, and the Phase 2/3 roadmap: [references/design.md](references/design.md).
 

@@ -14,6 +14,19 @@ metadata:
 
 # Relay Merge
 
+## Use when
+
+- Merging a PR after `relay-review` returns LGTM/pass
+- Finalizing the retained run manifest, worktree, and branch cleanup
+- Recording sprint-file and follow-up issue updates after merge
+
+## Do not use when
+
+- Reviewing executor output — use `relay-review`
+- Delegating implementation or review fixes — use `relay-dispatch`
+- Authoring rubrics or dispatch prompts — use `relay-plan`
+- Shaping an ambiguous task before planning — use `relay-ready`
+
 Explicitly merge a ready-to-merge PR and close the loop. **Requires relay-review PR comment.**
 
 ## Process
