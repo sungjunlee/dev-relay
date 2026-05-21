@@ -10,7 +10,7 @@ Trigger this checklist during rubric design (relay-plan step 5) if any of the fo
 - The issue or its AC mentions any of: **trust root**, **anchor**, **invariant**, **grandfather**, **validate**, **forge/forgery**, **bypass**, **gate-check**, **auth(-boundary)**, or any `validateTransition*` / `validateManifest*` / `evaluateReviewGate` callsite.
 - The rubric author flags the task as "touches an auth boundary" (e.g., manifest fields that feed filesystem / GitHub / state-transition operations).
 
-If none of the above holds, use `rubric-security.md` alone. This reference sharpens, not replaces, that file.
+If none of the above holds, use `rubric-domain-axes.md#rubric--security` alone. This reference sharpens, not replaces, that file.
 
 ## The three questions (each yes → one named factor)
 
@@ -128,5 +128,5 @@ A PR that answered this reference's trigger but left any of the three questions 
 
 ## Related
 
-- `references/rubric-security.md` — broad security rubric guidance. Use alongside this reference; do not collapse.
+- `references/rubric-domain-axes.md#rubric--security` — broad security rubric guidance. Use alongside this reference; do not collapse.
 - `references/rubric-fail-closed-patterns.md` — deeper fail-closed pattern library (visible vs fail-closed vs recoverable vs authenticated).

@@ -42,21 +42,23 @@ function extractGuidancePackSections(text) {
 }
 
 test("domain rubric references declare candidate-axis usage", () => {
-  const domainFiles = [
-    "rubric-backend.md",
-    "rubric-design.md",
-    "rubric-documentation.md",
-    "rubric-frontend.md",
-    "rubric-refactoring.md",
-    "rubric-security.md",
+  const text = readReference("rubric-domain-axes.md");
+  const domainSections = [
+    "Rubric — Backend",
+    "Rubric — Design & UX",
+    "Rubric — Documentation",
+    "Rubric — Frontend",
+    "Rubric — Refactoring",
+    "Rubric — Security",
   ];
 
-  for (const file of domainFiles) {
-    const text = readReference(file);
-    assert.match(text, /## Candidate Axis Library/, file);
-    assert.match(text, /not as a template to paste wholesale/i, file);
-    assert.match(text, /S-size mechanical/i, file);
+  for (const section of domainSections) {
+    assert.match(text, new RegExp(`^## ${section}$`, "m"), section);
   }
+  assert.equal((text.match(/^## /gm) || []).length, 6);
+  assert.equal((text.match(/^### Candidate Axis Library$/gm) || []).length, 6);
+  assert.equal((text.match(/not as a template to paste wholesale/gi) || []).length, 6);
+  assert.equal((text.match(/S-size mechanical/g) || []).length, 6);
 });
 
 test("rubric design guide states the reference use contract", () => {
