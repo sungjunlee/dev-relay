@@ -350,6 +350,28 @@ fs.writeFileSync(output, "work completed without commit\\n", "utf-8");
   return codexPath;
 }
 
+function writeUncommittedClaude(binDir) {
+  ensureDefaultFakeGh(binDir);
+  const claudePath = path.join(binDir, "claude");
+  fs.writeFileSync(claudePath, `#!/usr/bin/env node
+const fs = require("fs");
+const args = process.argv.slice(2);
+if (args[0] === "--version") {
+  process.stdout.write("claude-fake\\n");
+  process.exit(0);
+}
+if (args[0] !== "-p") {
+  process.stderr.write("unsupported fake claude invocation");
+  process.exit(1);
+}
+const cwd = process.cwd();
+fs.appendFileSync(cwd + "/README.md", "dirty\\n", "utf-8");
+process.stdout.write("work completed without commit\\n");
+`, "utf-8");
+  fs.chmodSync(claudePath, 0o755);
+  return claudePath;
+}
+
 function writePartialNoResultCodex(binDir) {
   ensureDefaultFakeGh(binDir);
   const codexPath = path.join(binDir, "codex");
@@ -503,10 +525,14 @@ function createExecFileMock({
   return { execFile, calls };
 }
 
-function createPushPrTestEnv({ relayHome, ghState = {}, failGitPush = false, codexMode = "commit" }) {
+function createPushPrTestEnv({ relayHome, ghState = {}, failGitPush = false, codexMode = "commit", executor = "codex" }) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "relay-dispatch-push-pr-"));
   const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-dispatch-push-pr-bin-"));
-  if (codexMode === "noop") {
+  if (executor === "claude" && codexMode === "uncommitted") {
+    writeUncommittedClaude(binDir);
+  } else if (executor === "claude") {
+    writeFakeClaude(binDir);
+  } else if (codexMode === "noop") {
     writeNoOpCodex(binDir);
   } else if (codexMode === "silent") {
     writeSilentCodex(binDir);
@@ -3040,19 +3066,58 @@ test("dispatch marks verified no-op runs as completed-no-op and skips orchestrat
   assert.equal(Number(fs.readFileSync(pushPrCountPath, "utf-8")), 0);
 });
 
-test("dispatch marks uncommitted result runs as completed-uncommitted and skips orchestrator publication", () => {
+test("dispatch auto-recovers uncommitted codex runs by default", () => {
   const { repoRoot, relayHome } = setupRepoWithOrigin();
+  process.env.RELAY_HOME = relayHome;
   const { env, ghLogPath, execLogPath, pushPrCountPath } = createPushPrTestEnv({
     relayHome,
     ghState: {
-      prCreateUrl: "https://github.com/acme/dev-relay/pull/326",
+      prCreateUrl: "https://github.com/acme/dev-relay/pull/508",
     },
     codexMode: "uncommitted",
   });
 
   const result = JSON.parse(runDispatch(repoRoot, [
-    "-b", "issue-263-uncommitted",
+    "-b", "issue-508-codex-default-auto-recover",
     "--prompt", "work without commit",
+    "--json",
+  ], env));
+
+  assert.equal(result.status, "completed-uncommitted");
+  assert.equal(result.commitMode, "auto-recovered");
+  assert.equal(result.runState, STATES.REVIEW_PENDING);
+  assert.equal(result.prNumber, 508);
+  assert.match(result.commits, /Recover relay run/);
+  assert.equal(result.uncommitted, null);
+  const manifest = readManifest(result.manifestPath).data;
+  assert.equal(manifest.state, STATES.REVIEW_PENDING);
+  assert.equal(manifest.git.pr_number, 508);
+  assert.equal(manifest.git.head_sha, result.headSha);
+  const ghCalls = readJsonLines(ghLogPath);
+  assert(ghCalls.some((args) => args[0] === "pr" && args[1] === "create"));
+  assert(readJsonLines(execLogPath).some(({ command, args }) => command === "git" && args.includes("push")));
+  assert.equal(Number(fs.readFileSync(pushPrCountPath, "utf-8")), 0);
+  const events = readJsonLines(getEventsPath(repoRoot, result.runId));
+  const recoveryEvent = events.find((event) => event.event === "recover_commit");
+  assert(recoveryEvent, JSON.stringify(events, null, 2));
+  assert.match(recoveryEvent.reason, /auto-recover-commit enabled/);
+});
+
+test("dispatch leaves uncommitted non-codex runs unrecovered by default", () => {
+  const { repoRoot, relayHome } = setupRepoWithOrigin();
+  const { env, ghLogPath, execLogPath, pushPrCountPath } = createPushPrTestEnv({
+    relayHome,
+    ghState: {
+      prCreateUrl: "https://github.com/acme/dev-relay/pull/509",
+    },
+    codexMode: "uncommitted",
+    executor: "claude",
+  });
+
+  const result = JSON.parse(runDispatch(repoRoot, [
+    "-b", "issue-508-claude-default-no-recover",
+    "--prompt", "work without commit",
+    "--executor", "claude",
     "--json",
   ], env));
 
@@ -3068,7 +3133,7 @@ test("dispatch marks uncommitted result runs as completed-uncommitted and skips 
   assert.equal(Number(fs.readFileSync(pushPrCountPath, "utf-8")), 0);
 });
 
-test("dispatch --auto-recover-commit reports auto-recovered commitMode for completed-uncommitted runs (#393)", () => {
+test("dispatch --auto-recover-commit enables recovery for non-codex completed-uncommitted runs (#393)", () => {
   const { repoRoot, relayHome } = setupRepoWithOrigin();
   process.env.RELAY_HOME = relayHome;
   const { env, ghLogPath, execLogPath, pushPrCountPath } = createPushPrTestEnv({
@@ -3077,11 +3142,13 @@ test("dispatch --auto-recover-commit reports auto-recovered commitMode for compl
       prCreateUrl: "https://github.com/acme/dev-relay/pull/393",
     },
     codexMode: "uncommitted",
+    executor: "claude",
   });
 
   const result = JSON.parse(runDispatch(repoRoot, [
-    "-b", "issue-393-auto-recover",
+    "-b", "issue-393-non-codex-auto-recover",
     "--prompt", "work without commit, then auto recover",
+    "--executor", "claude",
     "--auto-recover-commit",
     "--json",
   ], env));
@@ -3103,7 +3170,36 @@ test("dispatch --auto-recover-commit reports auto-recovered commitMode for compl
   const events = readJsonLines(getEventsPath(repoRoot, result.runId));
   const recoveryEvent = events.find((event) => event.event === "recover_commit");
   assert(recoveryEvent, JSON.stringify(events, null, 2));
-  assert.match(recoveryEvent.reason, /--auto-recover-commit set/);
+  assert.match(recoveryEvent.reason, /auto-recover-commit enabled/);
+});
+
+test("dispatch --no-auto-recover-commit disables codex default recovery", () => {
+  const { repoRoot, relayHome } = setupRepoWithOrigin();
+  const { env, ghLogPath, execLogPath, pushPrCountPath } = createPushPrTestEnv({
+    relayHome,
+    ghState: {
+      prCreateUrl: "https://github.com/acme/dev-relay/pull/510",
+    },
+    codexMode: "uncommitted",
+  });
+
+  const result = JSON.parse(runDispatch(repoRoot, [
+    "-b", "issue-508-codex-no-auto-recover",
+    "--prompt", "work without commit",
+    "--no-auto-recover-commit",
+    "--json",
+  ], env));
+
+  assert.equal(result.status, "completed-uncommitted");
+  assert.equal(result.commitMode, "completed-uncommitted, recover-commit required");
+  assert.equal(result.runState, STATES.REVIEW_PENDING);
+  assert.equal(result.commits, "");
+  assert.match(result.uncommitted, /README\.md/);
+  const manifest = readManifest(result.manifestPath).data;
+  assert.equal(manifest.state, STATES.REVIEW_PENDING);
+  assert.deepEqual(readJsonLines(ghLogPath), []);
+  assert.deepEqual(readJsonLines(execLogPath), []);
+  assert.equal(Number(fs.readFileSync(pushPrCountPath, "utf-8")), 0);
 });
 
 test("dispatch uses result-file presence to distinguish silent failure from verified no-op", () => {
