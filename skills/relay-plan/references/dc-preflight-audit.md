@@ -90,6 +90,6 @@ For everything else (M+, anything that adds events/schemas/kinds, anything that 
 
 - `rubric-design-guide.md` — overall rubric design guidance; this audit precedes step Q1's source-model recovery.
 - `rubric-validation.md` § "Validate Done Criteria" — structural DC checks (observable, bounded, reviewable). Composes with this audit.
-- `rubric-pattern-forbidden-zones.md` — for enumerating read-only paths, sibling pattern to item 1.
-- `rubric-pattern-grep-token-precision.md` — for path/test-name/grep-token literals, sibling pattern to item 6.
+- `rubric-patterns.md#rubric-pattern--explicit-forbidden-zones` — for enumerating read-only paths, sibling pattern to item 1.
+- `rubric-patterns.md#rubric-pattern--file-path-and-grep-token-precision` — for path/test-name/grep-token literals, sibling pattern to item 6.
 - `~/.claude/projects/<repo-slug>/memory/feedback_dc_overspec_frozen_helper.md` — origin memory for item 1.
