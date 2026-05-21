@@ -54,6 +54,7 @@ const FLAGS = [
   { flag: "--next-action", kind: VALUE, mode: MODE_VERBATIM, valueName: "<name>", rationale: "Operator-supplied manifest text; keep the literal argv token." },
   { flag: "--no-cleanup", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Presence flag; no value is consumed." },
   { flag: "--no-comment", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Presence flag; no value is consumed." },
+  { flag: "--no-auto-recover-commit", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Explicit dispatch opt-out from codex default recover-commit after completed-uncommitted; no value is consumed." },
   { flag: "--no-issue-close", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Presence flag; no value is consumed." },
   { flag: "--older-than", kind: VALUE, mode: MODE_PARSED, valueName: "<hours>", rationale: "Numeric threshold; flag-like following tokens should mean the value is missing." },
   { flag: "--out-dir", kind: VALUE, mode: MODE_VERBATIM, valueName: "<path>", rationale: "Operator-supplied output directory path; keep the literal argv token." },
@@ -122,7 +123,7 @@ const COMMAND_FLAGS = {
     "--branch", "--run-id", "--manifest", "--prompt", "--prompt-file", "--executor",
     "--model", "--model-hints", "--sandbox", "--network-access", "--copy", "--timeout", "--reasoning", "--rubric-file",
     "--test-command", "--rubric-grandfathered", "--request-id", "--leaf-id",
-    "--fleet-id", "--done-criteria-file", "--register", "--no-cleanup", "--auto-recover-commit",
+    "--fleet-id", "--done-criteria-file", "--register", "--no-cleanup", "--auto-recover-commit", "--no-auto-recover-commit",
     "--allow-conflicting-run", "--dry-run", "--json", "--help",
   ],
   "finalize-run": [

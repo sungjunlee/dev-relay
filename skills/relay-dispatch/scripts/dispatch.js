@@ -33,7 +33,8 @@
  *   --done-criteria-file   Persist a frozen Done Criteria anchor path
  *   --register             Register session in executor's app (keeps worktree)
  *   --no-cleanup           Compatibility alias; worktree is retained by default
- *   --auto-recover-commit  Opt-in: run recover-commit after completed-uncommitted (default: off)
+ *   --auto-recover-commit  Run recover-commit after completed-uncommitted (default: on for codex, off otherwise)
+ *   --no-auto-recover-commit  Opt out of codex default auto recover-commit
  *   --dry-run              Show plan without executing
  *   --json                 Output as JSON
  *
@@ -130,7 +131,7 @@ const KNOWN_FLAGS = [
   "--branch", "-b", "--run-id", "--manifest", "--prompt", "-p", "--prompt-file", "--executor", "-e",
   "--model", "-m", "--model-hints", "--sandbox", "--network-access", "--copy", "--timeout", "--reasoning", "--rubric-file", "--test-command", "--rubric-grandfathered",
   "--request-id", "--leaf-id", "--fleet-id", "--done-criteria-file",
-  "--register", "--no-cleanup", "--auto-recover-commit", "--allow-conflicting-run", "--dry-run", "--json", "--help", "-h",
+  "--register", "--no-cleanup", "--auto-recover-commit", "--no-auto-recover-commit", "--allow-conflicting-run", "--dry-run", "--json", "--help", "-h",
 ];
 const CLI_ARG_OPTIONS = { commandName: "dispatch", reservedFlags: KNOWN_FLAGS };
 const hasCliFlag = (flag) => schemaHasFlag(args, flag, CLI_ARG_OPTIONS);
@@ -163,7 +164,8 @@ if (!args.length || hasCliFlag(["--help", "-h"])) {
   console.log(`  --done-criteria-file  ${modeLabel("--done-criteria-file")} Persist a frozen Done Criteria anchor path`);
   console.log(`  --register         ${modeLabel("--register")} Register session in executor's app (keeps worktree)`);
   console.log(`  --no-cleanup       ${modeLabel("--no-cleanup")} Compatibility alias; worktree is retained by default`);
-  console.log(`  --auto-recover-commit  ${modeLabel("--auto-recover-commit")} Opt-in: run recover-commit after completed-uncommitted (default: off)`);
+  console.log(`  --auto-recover-commit  ${modeLabel("--auto-recover-commit")} Run recover-commit after completed-uncommitted (default: on for codex, off otherwise)`);
+  console.log(`  --no-auto-recover-commit  ${modeLabel("--no-auto-recover-commit")} Opt out of codex default auto recover-commit`);
   console.log(`  --allow-conflicting-run  ${modeLabel("--allow-conflicting-run")} Bypass the in-flight run check (logs conflicting_run_override event)`);
   console.log(`  --dry-run          ${modeLabel("--dry-run")} Show plan without executing`);
   console.log(`  --json             ${modeLabel("--json")} Output as JSON`);
@@ -256,11 +258,22 @@ try {
 
 const REGISTER = hasCliFlag("--register");
 const NO_CLEANUP = hasCliFlag("--no-cleanup");
-const AUTO_RECOVER_COMMIT = hasCliFlag("--auto-recover-commit");
+const AUTO_RECOVER_COMMIT_REQUESTED = hasCliFlag("--auto-recover-commit");
+const NO_AUTO_RECOVER_COMMIT = hasCliFlag("--no-auto-recover-commit");
+const AUTO_RECOVER_COMMIT = AUTO_RECOVER_COMMIT_REQUESTED
+  ? true
+  : NO_AUTO_RECOVER_COMMIT
+    ? false
+    : EXECUTOR === "codex";
 const ALLOW_CONFLICTING_RUN = hasCliFlag("--allow-conflicting-run");
 const DRY_RUN = hasCliFlag("--dry-run");
 const JSON_OUT = hasCliFlag("--json");
 const RESUME_MODE = !!MANIFEST_INPUT || (!!RUN_ID && !BRANCH);
+
+if (AUTO_RECOVER_COMMIT_REQUESTED && NO_AUTO_RECOVER_COMMIT) {
+  console.error("Error: use either --auto-recover-commit or --no-auto-recover-commit, not both");
+  process.exit(1);
+}
 
 if (FLEET_ID) {
   try {
@@ -1352,7 +1365,7 @@ async function main() {
 
   if (AUTO_RECOVER_COMMIT && status === "completed-uncommitted" && !DRY_RUN) {
     const recoverCommitPath = path.join(__dirname, "recover-commit.js");
-    const reason = `auto-recovered after dispatch returned completed-uncommitted with --auto-recover-commit set (run ${runId})`;
+    const reason = `auto-recovered after dispatch returned completed-uncommitted with auto-recover-commit enabled (run ${runId})`;
     try {
       const recoveryOutput = execFileSync(process.execPath, [
         recoverCommitPath,
