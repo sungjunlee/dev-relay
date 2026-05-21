@@ -137,12 +137,12 @@ Use these only when their trigger applies:
 |---|---|
 | Probe signal matches a template | Ask `scripts/match-template.js` for a scaffold; never auto-apply. Templates live in `references/rubric-templates/`. |
 | Task profile suggests specialized working guidance | Derive `task_profile` per `references/task-profile.md`; selected pack names and prompt-ready guidance bullets come from `references/guidance-packs.md`. |
-| Need domain-specific rubric ideas | Consult only the relevant `references/rubric-*.md` file for frontend, backend, security, refactoring, documentation, or design thinking. |
+| Need domain-specific rubric ideas | Consult the relevant section in `references/rubric-domain-axes.md` for frontend, backend, security, refactoring, documentation, or design thinking. |
 | Task crosses auth or state-machine trust boundaries | Follow `references/rubric-trust-model.md`; each answered risk question becomes a named factor. |
 | Task touches gates, resolvers, recovery, audit stamps, locks, or deadlines | Apply `references/rubric-fail-closed-patterns.md`. |
-| Factor names file paths, test names, or grep tokens | Apply `references/rubric-pattern-grep-token-precision.md`. |
-| Edit scope is narrower than the repo | Apply `references/rubric-pattern-forbidden-zones.md`. |
-| Event schema evolves | Apply `references/rubric-pattern-event-shape.md`. |
-| Red-first factor is useful | Apply `references/rubric-pattern-tdd-flavor.md`; emit the optional Step 0a only when a factor has `tdd_anchor`. |
+| Factor names file paths, test names, or grep tokens | Apply `references/rubric-patterns.md#rubric-pattern--file-path-and-grep-token-precision`. |
+| Edit scope is narrower than the repo | Apply `references/rubric-patterns.md#rubric-pattern--explicit-forbidden-zones`. |
+| Event schema evolves | Apply `references/rubric-patterns.md#rubric-pattern--event-shape-changes`. |
+| Red-first factor is useful | Apply `references/rubric-patterns.md#rubric-pattern--tdd-factor-flavor`; emit the optional Step 0a only when a factor has `tdd_anchor`. |
 | Done Criteria are novel, vague, high-risk, or easy to game | Run one stress-test round per `references/rubric-stress-test.md`; S/M usually skip, but ambiguity or risk can opt any size into stress-test. |
 | Re-dispatch after review feedback | Previous Score Log and reviewer feedback are automatically prepended; keep the original anchor fixed. |
