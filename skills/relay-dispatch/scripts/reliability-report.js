@@ -903,36 +903,6 @@ function buildQualitativeSignals(manifests, events) {
   };
 }
 
-function buildModelPerPhase(events) {
-  const phaseBuckets = {
-    dispatch: new Map(),
-    review: new Map(),
-  };
-
-  for (const event of events) {
-    let phase = null;
-    if (event.event === EVENTS.DISPATCH_START) {
-      phase = "dispatch";
-    } else if (event.event === EVENTS.REVIEW_INVOKE) {
-      phase = "review";
-    }
-    if (!phase || !Object.prototype.hasOwnProperty.call(event, "model")) continue;
-
-    const key = event.model === null ? "null" : String(event.model);
-    phaseBuckets[phase].set(key, (phaseBuckets[phase].get(key) || 0) + 1);
-  }
-
-  const hasData = [...phaseBuckets.dispatch.values(), ...phaseBuckets.review.values()].length > 0;
-  if (!hasData) return null;
-
-  return Object.fromEntries(
-    Object.entries(phaseBuckets).map(([phase, counts]) => [
-      phase,
-      Object.fromEntries([...counts.entries()].sort(([left], [right]) => left.localeCompare(right))),
-    ])
-  );
-}
-
 function buildReport({ repoRoot, staleHours, now, manifests, events, includeSidecarInsights = false }) {
   const resumeStarts = events.filter((event) => (
     event.event === EVENTS.DISPATCH_START && event.state_from === STATES.CHANGES_REQUESTED
@@ -1006,7 +976,6 @@ function buildReport({ repoRoot, staleHours, now, manifests, events, includeSide
       dispatch_failure_rate: ratio(dispatchFailures.length, dispatchResults.length),
       recover_commit_rate: ratio(recoveredRunIds.size, manifests.length),
     },
-    model_per_phase: buildModelPerPhase(events),
     factor_analysis: buildFactorAnalysis(events),
     rubric_insights: buildRubricInsights(events, manifests),
     qualitative_signals: buildQualitativeSignals(manifests, events),
@@ -1226,9 +1195,6 @@ function main() {
   console.log(`  dispatch_timeout_rate: ${report.metrics.dispatch_timeout_rate ?? "n/a"}`);
   console.log(`  dispatch_failure_rate: ${report.metrics.dispatch_failure_rate ?? "n/a"}`);
   console.log(`  recover_commit_rate: ${report.metrics.recover_commit_rate ?? "n/a"}`);
-  if (report.model_per_phase) {
-    console.log(`  model_per_phase: ${JSON.stringify(report.model_per_phase)}`);
-  }
   console.log(`  most_stuck_factor: ${report.factor_analysis.most_stuck_factor ?? "n/a"}`);
   if (hasRubricInsights(report.rubric_insights)) {
     const gradeDistribution = report.rubric_insights.quality_grade_distribution;
