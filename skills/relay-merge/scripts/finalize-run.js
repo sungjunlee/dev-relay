@@ -61,6 +61,7 @@ const {
   evaluateReviewGate,
   summarizeRubricAuditForSkip,
 } = require("./review-gate");
+const { appendLearnings } = require("./append-learnings");
 
 const args = process.argv.slice(2);
 const KNOWN_FLAGS = [
@@ -542,6 +543,20 @@ function main() {
     }
   }
 
+  let learningsResult = null;
+  if (updated.state === STATES.MERGED && !dryRun) {
+    try {
+      learningsResult = appendLearnings({
+        repo: repoPath,
+        runId: updated.run_id,
+        pr: String(prNumber),
+        synthesis: updated.issue?.title || null,
+      });
+    } catch (error) {
+      learningsResult = { status: "failed", reason: "exception", message: summarizeFailure(error) };
+    }
+  }
+
   const cleanupResult = runCleanup({
     repoRoot: repoPath,
     data: updated,
@@ -586,6 +601,7 @@ function main() {
     issueClosed,
     issueCloseWarning,
     cleanup: cleanupResult.summary,
+    learnings: learningsResult,
     dryRun,
     forceFinalized: forceFinalizeNonready,
     forceFinalizeReason: forceFinalizeNonready ? forceFinalizeReason : null,
