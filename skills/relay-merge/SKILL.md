@@ -10,7 +10,7 @@ metadata:
 ## Inputs
 - Env: optional `RELAY_SKILL_ROOT` defaults to `skills`; examples use `PR_NUM` and `RUN_ID`.
 - Files: reviewed PR, retained run manifest/worktree, optional sprint file, and follow-up issue text.
-- Sibling scripts: `${RELAY_SKILL_ROOT:-skills}/relay-merge/scripts/gate-check.js`, `${RELAY_SKILL_ROOT:-skills}/relay-merge/scripts/finalize-run.js`.
+- Sibling scripts: `${RELAY_SKILL_ROOT:-skills}/relay-merge/scripts/gate-check.js`, `${RELAY_SKILL_ROOT:-skills}/relay-merge/scripts/finalize-run.js`, `${RELAY_SKILL_ROOT:-skills}/relay-merge/scripts/append-learnings.js` (invoked from finalize-run post-merge; structurally bounded writer for target repo's `spec/capabilities.md`).
 
 # Relay Merge
 
@@ -69,6 +69,8 @@ This script:
 - records `cleanup.status` in the manifest
 
 If the retained worktree is dirty, merge still succeeds but cleanup is recorded as `failed` and the manifest moves to `next_action=manual_cleanup_required`.
+
+After the merge state advances to `MERGED` (and before cleanup runs), `finalize-run.js` invokes `append-learnings.js` to write a one-line entry into the matching capability's `## Learnings` block in the target repo's `spec/capabilities.md`. The script is the only writer for that section (anti-adversarial-Goodhart structural defense — see dev-backlog spec-system v0.1 design doc). It no-ops gracefully when `spec/capabilities.md` is absent, the active sprint has no `component:`, or the component does not resolve. Any failure is recorded under `result.learnings` and does not block cleanup.
 
 Emergency, force-finalize, and bootstrap reconciliation paths: see [`references/operator-emergencies.md`](references/operator-emergencies.md).
 
