@@ -72,7 +72,7 @@ Optional advisory path: add an opencode blind-spot lane alongside the primary re
 node "${RELAY_SKILL_ROOT:-skills}/relay-review/scripts/review-runner.js" --repo . --run-id "$RUN_ID" --pr "$PR_NUM" --reviewer codex --advisory-reviewer opencode --advisory-profile blindspot --json
 ```
 
-Advisory review is non-gating for `policy.review_assurance=standard`: it starts concurrently, records `advisory_review` plus `review-round-N-advisory-<reviewer>-*`, never changes the trusted verdict or redispatch prompt, and records failures/timeouts/invalid JSON/write-policy violations without changing the primary outcome. For `policy.review_assurance=hardened`, advisory evidence is required and failures or required findings block a passing primary verdict; execution evidence must be strict. When `execution-evidence.json` includes `verification_runs[]`, hardened gates prefer those actual command-run records; otherwise they fall back to legacy `test_exit_code=0` plus a SHA-bound result hash. Use `--advisory-reviewer-model` to override; otherwise opencode uses dispatch executor defaults plus optional `~/.relay/executors.json`. Current profile: `blindspot` checks likely misses such as test gaps, bypass paths, edge cases, stale docs, and operational failure modes.
+Advisory review is non-gating for `policy.review_assurance=standard`: it starts concurrently, records `advisory_review` plus `review-round-N-advisory-<reviewer>-*`, never changes the trusted verdict or redispatch prompt, and records failures/timeouts/invalid JSON/write-policy violations without changing the primary outcome. For `policy.review_assurance=hardened`, the runner fails fast unless the command includes `--advisory-reviewer <name>`; advisory failures or required findings block a passing primary verdict, and execution evidence must be strict. When `execution-evidence.json` includes `verification_runs[]`, hardened gates prefer those actual command-run records; otherwise they fall back to legacy `test_exit_code=0` plus a SHA-bound result hash. Use `--advisory-reviewer-model` to override; otherwise opencode uses dispatch executor defaults plus optional `~/.relay/executors.json`. Current profile: `blindspot` checks likely misses such as test gaps, bypass paths, edge cases, stale docs, and operational failure modes.
 
 4. Fallback path for unsupported environments or debugging:
 ```bash
@@ -139,6 +139,8 @@ node "${RELAY_SKILL_ROOT:-skills}/relay-review/scripts/review-runner.js" --repo 
 ```
 
 The runner validates the verdict, writes the PR audit comment, updates manifest state, and records round artifacts. For hardened runs, a passing manual verdict requires an explicit `--manual-review-reason` audit reason. See `references/runner-notes.md` for the full audit-trail and backward-compatibility behavior.
+
+When an escalated run needs another review attempt, pass a different `--reviewer` when available. If the same adapter is intentionally reused, include `--independent-review-reason <text>` to document why the attempt is independent enough to spend the single reviewer-swap quota.
 
 ## Re-dispatch (when issues found)
 

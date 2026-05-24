@@ -41,10 +41,15 @@ When applying a verdict, the runner:
 
 - validates the JSON verdict
 - optionally invokes the reviewer adapter itself when `--reviewer <name>` is used
+- fails fast for `policy.review_assurance=hardened` unless `--advisory-reviewer <name>` is present, except in `--prepare-only` mode
 - computes and overrides `quality_execution_status` from `execution-evidence.json`; strict gates prefer `verification_runs[]` when present and otherwise use the legacy `test_*` fields
 - rejects the round if the reviewer mutates the repo and escalates the manifest
 - writes the PR audit comment
 - updates the relay manifest to `ready_to_merge`, `changes_requested`, or `escalated`
+
+## Independent Review Attempts
+
+Escalated runs may be reopened for one independent review attempt. A different `--reviewer` records a `reviewer_swap` event with `reason=different_reviewer:<from>-><to>`. Reusing the same adapter requires `--independent-review-reason <text>` so the audit trail explains how the attempt is independent, such as a fresh ephemeral context, different model hint, or materially different prompt bundle.
 
 ## Backward Compatibility
 

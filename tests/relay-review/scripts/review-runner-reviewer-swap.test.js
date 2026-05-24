@@ -83,6 +83,7 @@ test("reviewer-swap/transitions escalated -> review_pending with different revie
   assert.ok(swapEvent, "reviewer_swap event should be appended");
   assert.equal(swapEvent.from_reviewer, "codex");
   assert.equal(swapEvent.to_reviewer, "claude");
+  assert.equal(swapEvent.reason, "different_reviewer:codex->claude");
   assert.equal(swapEvent.state_from, STATES.ESCALATED);
   assert.equal(swapEvent.state_to, STATES.REVIEW_PENDING);
 });
@@ -91,14 +92,36 @@ test("reviewer-swap/rejects same-reviewer retry", () => {
   const { data, manifestPath, repoRoot } = setupEscalatedRun({ lastReviewer: "codex" });
   assert.throws(
     () => maybeSwapReviewer(data, "codex", "", manifestPath, repoRoot),
-    /matches review\.last_reviewer/
+    /requires evidence/
   );
+});
+
+test("reviewer-swap/allows same reviewer with independent review reason", () => {
+  const { data, manifestPath, repoRoot, runId } = setupEscalatedRun({ lastReviewer: "codex" });
+  const reason = "same adapter but fresh ephemeral context and different model hint";
+  const swapped = maybeSwapReviewer(data, "codex", "", manifestPath, repoRoot, {
+    independentReviewReason: reason,
+  });
+
+  assert.equal(swapped.state, STATES.REVIEW_PENDING);
+  assert.equal(swapped.review.reviewer_swap_count, 1);
+
+  const events = fs.readFileSync(getEventsPath(repoRoot, runId), "utf-8")
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line));
+  const swapEvent = events.find((event) => event.event === "reviewer_swap");
+  assert.equal(swapEvent.from_reviewer, "codex");
+  assert.equal(swapEvent.to_reviewer, "codex");
+  assert.equal(swapEvent.reason, reason);
 });
 
 test("reviewer-swap/rejects a second swap after the quota is used", () => {
   const { data, manifestPath, repoRoot } = setupEscalatedRun({ lastReviewer: "codex", swapCount: 1 });
   assert.throws(
-    () => maybeSwapReviewer(data, "claude", "", manifestPath, repoRoot),
+    () => maybeSwapReviewer(data, "claude", "", manifestPath, repoRoot, {
+      independentReviewReason: "fresh context",
+    }),
     /reviewer_swap_count=1 \(max 1 per run\)/
   );
 });
