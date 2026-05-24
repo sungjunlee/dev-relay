@@ -14,6 +14,7 @@ const {
   readManifest,
   writeManifest,
 } = require("../../../skills/relay-dispatch/scripts/relay-manifest");
+const { buildDefaultRelayPolicy } = require("../../../skills/relay-dispatch/scripts/relay-policy");
 const { readRunEvents } = require("../../../skills/relay-dispatch/scripts/relay-events");
 const { readSidecarIndex } = require("../../../skills/relay-dispatch/scripts/sidecar-store");
 const { main } = require("../../../skills/relay-sidecar/scripts/relay-sidecar");
@@ -56,12 +57,23 @@ function createRelayOwnedWorktree(repoRoot, relayHome, branch = "sidecar-worktre
   return worktreePath;
 }
 
-function createFixture(t) {
+function createFixture(t, { modelPolicy = "allow-opencode-sidecar" } = {}) {
   const previousRelayHome = process.env.RELAY_HOME;
   const previousRelayWorktreeBase = process.env.RELAY_WORKTREE_BASE;
   const relayHome = fs.mkdtempSync(path.join(os.tmpdir(), "relay-sidecar-home-"));
   process.env.RELAY_HOME = relayHome;
   process.env.RELAY_WORKTREE_BASE = path.join(relayHome, "worktrees");
+  if (modelPolicy === "allow-opencode-sidecar") {
+    fs.writeFileSync(path.join(relayHome, "policy.json"), JSON.stringify({
+      ...buildDefaultRelayPolicy(),
+      profile: "allow-opencode-sidecar",
+      allowed_model_routes: [{
+        route: "opencode-go/*",
+        phases: ["sidecar"],
+        executors: ["opencode"],
+      }],
+    }, null, 2), "utf-8");
+  }
 
   t.after(() => {
     if (previousRelayHome === undefined) delete process.env.RELAY_HOME;
@@ -137,6 +149,36 @@ test("--dry-run skips opencode and emits no events", (t) => {
 
   assert.equal(result.exitCode, 0);
   assert.equal(JSON.parse(result.stdout).status, "dry_run");
+  assert.deepEqual(readRunEvents(fixture.repoRoot, fixture.runId), []);
+  assert.equal(fs.existsSync(getSidecarsIndexPath(fixture.repoRoot, fixture.runId)), false);
+});
+
+test("policy denial prevents opencode sidecar runner invocation and emits JSON envelope", (t) => {
+  const fixture = createFixture(t, { modelPolicy: "default" });
+  let invoked = false;
+  const result = invoke([
+    "--run-id", fixture.runId,
+    "--kind", "context-recap",
+    "--json",
+  ], {
+    cwd: fixture.repoRoot,
+    runOpencode: () => {
+      invoked = true;
+      return { code: 0, stdout: "must not run\n", stderr: "" };
+    },
+  });
+
+  assert.notEqual(result.exitCode, 0);
+  assert.equal(invoked, false);
+  const envelope = JSON.parse(result.stdout);
+  assert.equal(envelope.ok, false);
+  assert.equal(envelope.status, "failed");
+  assert.equal(envelope.policy_decision.allowed, false);
+  assert.equal(envelope.policy_decision.phase, "sidecar");
+  assert.equal(envelope.policy_decision.actor_field, "executor");
+  assert.equal(envelope.policy_decision.executor, "opencode");
+  assert.equal(envelope.policy_decision.model, "opencode-go/deepseek-v4-pro");
+  assert.equal(envelope.policy_decision.reason, "unknown_model_route");
   assert.deepEqual(readRunEvents(fixture.repoRoot, fixture.runId), []);
   assert.equal(fs.existsSync(getSidecarsIndexPath(fixture.repoRoot, fixture.runId)), false);
 });

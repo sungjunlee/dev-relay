@@ -218,3 +218,39 @@ test("CLI handles missing executor gracefully", () => {
   assert.ok(output.agent_probe_error);
   assert.equal(output.agent_tools_raw, null);
 });
+
+test("CLI reports policy-disallowed opencode without invoking adapter probe", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "probe-policy-denied-"));
+  const relayHome = fs.mkdtempSync(path.join(os.tmpdir(), "probe-policy-home-"));
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "probe-policy-bin-"));
+  const markerPath = path.join(binDir, "opencode-invoked.txt");
+  const opencodePath = path.join(binDir, "opencode");
+  fs.writeFileSync(opencodePath, `#!/usr/bin/env node
+const fs = require("fs");
+fs.writeFileSync(${JSON.stringify(markerPath)}, process.argv.slice(2).join(" "), "utf-8");
+process.stdout.write("opencode-fake\\n");
+`, "utf-8");
+  fs.chmodSync(opencodePath, 0o755);
+
+  const result = spawnSync("node", [SCRIPT, repoRoot, "-e", "opencode", "--json"], {
+    encoding: "utf-8",
+    stdio: "pipe",
+    env: {
+      ...process.env,
+      PATH: `${binDir}:${process.env.PATH}`,
+      RELAY_HOME: relayHome,
+    },
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(fs.existsSync(markerPath), false);
+  const output = JSON.parse(result.stdout);
+  assert.equal(output.agent_tools_raw, null);
+  assert.match(output.agent_probe_error, /policy disallowed/);
+  assert.equal(output.policy_decision.allowed, false);
+  assert.equal(output.policy_decision.phase, "probe");
+  assert.equal(output.policy_decision.actor_field, "executor");
+  assert.equal(output.policy_decision.executor, "opencode");
+  assert.equal(output.policy_decision.model, "opencode-go/deepseek-v4-pro");
+  assert.equal(output.policy_decision.reason, "unknown_model_route");
+});

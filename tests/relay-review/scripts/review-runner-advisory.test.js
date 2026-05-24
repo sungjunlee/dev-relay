@@ -14,6 +14,7 @@ const {
   writeManifest,
   readManifest,
 } = require("../../../skills/relay-dispatch/scripts/relay-manifest");
+const { buildDefaultRelayPolicy } = require("../../../skills/relay-dispatch/scripts/relay-policy");
 const { readRunEvents } = require("../../../skills/relay-dispatch/scripts/relay-events");
 const {
   DEFAULT_ENFORCEMENT_RUBRIC,
@@ -74,10 +75,27 @@ function setupRepo({
   reviewAssurance = "standard",
   strictEvidence = false,
   roles = { orchestrator: "codex", executor: "codex", reviewer: "codex" },
+  modelPolicy = "allow-opencode-advisory",
 } = {}) {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-advisory-"));
   const remoteRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-advisory-origin-"));
   process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  if (modelPolicy === "allow-opencode-advisory") {
+    fs.writeFileSync(path.join(process.env.RELAY_HOME, "policy.json"), JSON.stringify({
+      ...buildDefaultRelayPolicy(),
+      profile: "allow-opencode-advisory",
+      managed_cli: ["codex", "claude", "mirror"],
+      allowed_model_routes: [{
+        route: "opencode-go/*",
+        phases: ["advisory_review"],
+        reviewers: ["opencode"],
+      }, {
+        route: "mirror/*",
+        phases: ["review"],
+        reviewers: ["mirror"],
+      }],
+    }, null, 2), "utf-8");
+  }
   execFileSync("git", ["init", "-b", "main"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
   execFileSync("git", ["init", "--bare", remoteRoot], { encoding: "utf-8", stdio: "pipe" });
   execFileSync("git", ["config", "user.name", "Relay Review Advisory Test"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
@@ -229,6 +247,19 @@ test("review-runner records successful opencode advisory review without gating p
   assert.equal(event.advisory_artifact_hash, hashFile(path.join(runDir, "review-round-1-advisory-opencode.json")));
 });
 
+test("review-runner denies disallowed advisory model before spawning advisory reviewer", () => {
+  const { repoRoot, runId, doneCriteriaPath, diffPath } = setupRepo({ modelPolicy: "default" });
+  const logPath = path.join(repoRoot, "advisory-policy.log");
+  const primaryScript = writePrimaryReviewer(repoRoot, passVerdict());
+  const opencodeScript = writeFakeOpencode(repoRoot, { logPath });
+
+  assert.throws(
+    () => runReview({ repoRoot, runId, doneCriteriaPath, diffPath, primaryScript, opencodeScript }),
+    /phase=advisory_review.*reviewer=opencode|reviewer=opencode.*phase=advisory_review/
+  );
+  assert.equal(fs.existsSync(logPath), false);
+});
+
 test("prepare-only with advisory flags writes only the primary prompt bundle", () => {
   const { repoRoot, runDir, runId, doneCriteriaPath, diffPath } = setupRepo();
 
@@ -347,6 +378,7 @@ test("hardened assurance is generic for Codex-only and non-Codex role bindings",
       label: "non-codex-fixture",
       roles: { orchestrator: "atlas", executor: "forge", reviewer: "mirror" },
       reviewer: "mirror",
+      extraArgs: ["--reviewer-model", "mirror/local-reviewer"],
     },
   ]) {
     await t.test(entry.label, () => {
@@ -366,6 +398,7 @@ test("hardened assurance is generic for Codex-only and non-Codex role bindings",
         primaryScript,
         opencodeScript,
         reviewer: entry.reviewer,
+        extraArgs: entry.extraArgs || [],
       });
       const manifest = readManifest(manifestPath).data;
 

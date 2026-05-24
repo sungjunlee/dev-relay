@@ -21,6 +21,8 @@ const {
   modeLabel,
 } = require("../../relay-dispatch/scripts/cli-args");
 const { getExecutor, listExecutors } = require("../../relay-dispatch/scripts/executors");
+const { resolveExecutorDefaultModel } = require("../../relay-dispatch/scripts/executor-model-config");
+const { evaluateRelayPolicyGate, formatRelayPolicyGateMessage } = require("../../relay-dispatch/scripts/relay-policy-gate");
 
 // ---------------------------------------------------------------------------
 // CLI (only when run directly)
@@ -202,8 +204,25 @@ function run({ repoPath, executor, timeout, projectOnly, jsonOut }) {
   const projectTools = scanProjectTools(repoPath);
 
   let agentProbe = { error: null, raw: null };
+  let policyDecision = null;
   if (!projectOnly) {
-    agentProbe = probeAgent(executor, timeout);
+    const effectiveProbeModel = ["codex", "claude"].includes(executor)
+      ? null
+      : resolveExecutorDefaultModel(executor, { relayHome: process.env.RELAY_HOME });
+    policyDecision = evaluateRelayPolicyGate({
+      repoRoot: repoPath,
+      phase: "probe",
+      executor,
+      model: effectiveProbeModel,
+    });
+    if (policyDecision.allowed) {
+      agentProbe = probeAgent(executor, timeout);
+    } else {
+      agentProbe = {
+        error: `policy disallowed: ${formatRelayPolicyGateMessage(policyDecision)}`,
+        raw: null,
+      };
+    }
   }
 
   const result = {
@@ -214,6 +233,9 @@ function run({ repoPath, executor, timeout, projectOnly, jsonOut }) {
     test_infra: deriveTestInfra(projectTools),
     project_tools: projectTools,
   };
+  if (!projectOnly) {
+    result.policy_decision = policyDecision;
+  }
 
   if (jsonOut) {
     console.log(JSON.stringify(result, null, 2));
