@@ -10,6 +10,7 @@ This directory keeps repo-local design notes, issue evidence, operator workflow 
 - `workflow-lanes.md` — when to use relay, direct implementation, or planning lanes.
 - `external-tool-workflow.md` — external review and learning-capture workflow.
 - `direct-read-relay-operator-note.md` — operator note for direct relay reads.
+- `model-route-policy.md` — provider/model route policy setup for company defaults, personal opt-in, routing rules, advisory reviewers, and sidecars.
 
 ## Rubric And Review History
 

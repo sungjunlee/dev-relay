@@ -1,0 +1,220 @@
+# Model Route Policy
+
+Route policy answers one operational question: which provider/model route is allowed to run in each relay phase?
+
+Executor and reviewer names such as `codex`, `claude`, `opencode`, and `pi` are harness names. They select a CLI adapter and execution contract. They are not the compliance boundary. The compliance boundary is the provider/model route string, for example `kakao/opencode-glm-5-fp8`, `opencode-go/deepseek-v4-pro`, `deepseek/r1`, or `ollama/qwen3`.
+
+Codex and Claude are the managed CLI defaults. In the default managed profile, a model-less Codex or Claude invocation is allowed because the CLI account and its managed default model are the boundary. Generated company defaults should not pin Codex or Claude model names just to make policy explicit. OpenCode and Pi are routing harnesses, so managed/company profiles must require an explicit provider/model route and an allow rule before they can run.
+
+## Default Posture
+
+When no policy config exists, relay loads a fail-closed default policy:
+
+```json
+{
+  "profile": "managed-cli-default",
+  "defaults": {
+    "dispatch": { "executor": "codex" },
+    "review": { "reviewer": "codex" },
+    "advisory_review": null,
+    "sidecar": null
+  },
+  "managed_cli": ["codex", "claude"],
+  "allowed_model_routes": [],
+  "denied_model_routes": [],
+  "routing_rules": [],
+  "deny_unknown_model_routes": true
+}
+```
+
+That means missing policy config defaults to Codex/Claude managed CLI only. `codex` and `claude` pass the gate without a pinned model route. `opencode`, `pi`, and any other unmanaged harness fail unless the effective invocation includes a provider/model route and that route matches `allowed_model_routes`.
+
+## Precedence
+
+Use this final precedence order when reasoning about an invocation:
+
+`CLI flags -> routing rules -> defaults -> existing relay defaults -> policy gate`
+
+The policy gate is last and fail-closed. A route selected by a CLI flag, a routing rule, a model hint, an executor default, or an existing relay fallback still has to pass the policy gate. Deny rules win over allow rules, and unknown provider/model routes are denied when `deny_unknown_model_routes` is true.
+
+## Phase Interaction
+
+| Phase | Route selection before the gate | Policy gate tuple |
+| --- | --- | --- |
+| `dispatch` | `--executor` selects the harness. `--model` wins over `manifest.model_hints.dispatch`, then `--model-hints dispatch=...`, then executor model config such as `~/.relay/executors.json` or bundled OpenCode defaults. Primary dispatch routing rules are not used today; `--tags` only affects advisory and sidecar routing selected by dispatch. If no actor is supplied, the existing relay default is `codex`. | `phase=dispatch`, `executor=<name>`, `model=<effective route or null>` |
+| `review` | `--reviewer` wins over `RELAY_REVIEWER`, then `roles.reviewer`, then the existing relay default `codex`. `--reviewer-model` wins over `manifest.model_hints.review`; otherwise Codex/Claude normally run as managed CLI with no model route. | `phase=review`, `reviewer=<name>`, `model=<effective route or null>` |
+| `advisory_review` | `--advisory-reviewer` and `--advisory-reviewer-model` win. If absent, `routing.selected.advisory_review` from dispatch routing can supply the reviewer, profile, and model. If a reviewer is selected but no model is supplied, `manifest.model_hints.advisory_review` and then executor model config can supply the route. No advisory reviewer runs by default. | `phase=advisory_review`, `reviewer=<name>`, `model=<effective route or null>` |
+| `sidecar` | A direct `relay-sidecar` command uses `--executor` and `--model`; routed sidecars use `routing.selected.sidecar` persisted by dispatch. The direct sidecar runner defaults to `opencode`, which means it still needs an allowed OpenCode route unless `--executor none` is used for deterministic sidecars. | `phase=sidecar`, `executor=<name>`, `model=<effective route or null>` |
+
+Policy `defaults` describe configured actor defaults for auditing and future-safe profile shape. Where a current call site does not consume a policy default directly, the existing relay default in the table applies next. The policy gate still evaluates the final effective tuple.
+
+`model_hints` are route hints, not route approval. They can carry provider/model routes for unmanaged harnesses, especially advisory review. They should not be used to pin Codex or Claude defaults in generated company config.
+
+## Company/Internal Setup
+
+Initialize a company policy:
+
+```bash
+node skills/relay-dispatch/scripts/relay-config.js init --profile company
+```
+
+The generated company policy intentionally keeps Codex and Claude as managed CLI defaults with no pinned model names. Add internal OpenCode or Pi routes explicitly:
+
+```bash
+node skills/relay-dispatch/scripts/relay-config.js allow-route 'kakao/opencode-glm-*' \
+  --phase dispatch,advisory_review,sidecar \
+  --executor opencode
+
+node skills/relay-dispatch/scripts/relay-config.js allow-route 'kakao/pi-*' \
+  --phase dispatch,review,advisory_review,sidecar \
+  --executor pi \
+  --reviewer pi
+```
+
+For routed advisory reviewers or sidecars, add routing rules to the policy JSON so the selected route is internal:
+
+```json
+{
+  "version": 1,
+  "profile": "company",
+  "defaults": {
+    "dispatch": { "executor": "codex" },
+    "review": { "reviewer": "codex" },
+    "advisory_review": null,
+    "sidecar": null
+  },
+  "managed_cli": ["codex", "claude"],
+  "allowed_model_routes": [
+    {
+      "route": "kakao/opencode-glm-*",
+      "phases": ["dispatch", "advisory_review", "sidecar"],
+      "executors": ["opencode"],
+      "reviewers": ["opencode"]
+    }
+  ],
+  "denied_model_routes": [],
+  "routing_rules": [
+    {
+      "name": "docs-internal-sidecar",
+      "match": { "any_tags": ["docs", "docs-only"] },
+      "advisory_review": {
+        "reviewer": "opencode",
+        "profile": "blindspot",
+        "model": "kakao/opencode-glm-5-fp8"
+      },
+      "sidecar": {
+        "kind": "docs-sync",
+        "executor": "opencode",
+        "model": "kakao/opencode-glm-5-fp8"
+      }
+    }
+  ],
+  "deny_unknown_model_routes": true
+}
+```
+
+Repo-local `.relay/policy.json` files may narrow the global policy but may not widen it. For example, a repo policy can reduce `allowed_model_routes` from `kakao/*` to `kakao/opencode-glm-*`; it cannot add a new external provider that the global policy did not allow.
+
+## Personal Opt-In Setup
+
+Initialize a personal policy:
+
+```bash
+node skills/relay-dispatch/scripts/relay-config.js init --profile personal
+```
+
+Then opt in to the routes you personally allow:
+
+```bash
+node skills/relay-dispatch/scripts/relay-config.js allow-route 'opencode-go/*' \
+  --phase dispatch,advisory_review,sidecar \
+  --executor opencode
+
+node skills/relay-dispatch/scripts/relay-config.js allow-route 'deepseek/*' \
+  --phase dispatch,advisory_review,sidecar \
+  --executor opencode
+
+node skills/relay-dispatch/scripts/relay-config.js allow-route 'ollama/*' \
+  --phase dispatch,advisory_review,sidecar \
+  --executor opencode
+```
+
+If you want OpenCode to default to a personal route, set the executor model config and allow the matching route:
+
+```json
+{
+  "executors": {
+    "opencode": {
+      "default_model": "opencode-go/deepseek-v4-pro",
+      "candidate_models": [
+        "opencode-go/deepseek-v4-pro",
+        "deepseek/r1",
+        "ollama/qwen3"
+      ]
+    }
+  }
+}
+```
+
+This file changes model selection only. It does not grant policy approval. The selected provider/model route must still match `allowed_model_routes`.
+
+## Doctor And Check
+
+Run `relay-config doctor` after policy changes and before enabling advisory reviewers or sidecars:
+
+```bash
+node skills/relay-dispatch/scripts/relay-config.js doctor
+```
+
+Doctor reports whether known CLIs are installed and how policy treats each harness. For OpenCode or Pi, `route-configured (provider_model_route_required)` is expected when an allow rule exists but a specific model was not supplied to doctor. That is a reminder that the harness name alone is not compliant.
+
+Run `relay-config check` for each actual tuple you plan to enable:
+
+```bash
+node skills/relay-dispatch/scripts/relay-config.js check \
+  --phase dispatch \
+  --executor opencode \
+  --model kakao/opencode-glm-5-fp8
+
+node skills/relay-dispatch/scripts/relay-config.js check \
+  --phase advisory_review \
+  --executor opencode \
+  --reviewer opencode \
+  --model kakao/opencode-glm-5-fp8
+
+node skills/relay-dispatch/scripts/relay-config.js check \
+  --phase sidecar \
+  --executor opencode \
+  --model kakao/opencode-glm-5-fp8
+```
+
+Check exits non-zero when the tuple would be denied at runtime. Run it before turning on routed advisory review or sidecar rules because those phases can start automatically after dispatch.
+
+## Denial Example
+
+With the company policy above, an external OpenAI route through OpenCode is not allowed:
+
+```bash
+$ node skills/relay-dispatch/scripts/relay-config.js check \
+  --phase dispatch \
+  --executor opencode \
+  --model openai/gpt-5
+denied: unknown_model_route
+```
+
+If the route is explicitly denied, the reason is stronger and the matched deny route is shown:
+
+```bash
+$ node skills/relay-dispatch/scripts/relay-config.js deny-route 'openai/*' \
+  --phase dispatch \
+  --executor opencode
+
+$ node skills/relay-dispatch/scripts/relay-config.js check \
+  --phase dispatch \
+  --executor opencode \
+  --model openai/gpt-5
+denied: denied_model_route
+matched route: openai/*
+```
+
+Both failures happen before the harness runs. That is the intended safety property: the provider/model route must be approved before relay invokes an unmanaged CLI.

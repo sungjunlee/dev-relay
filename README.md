@@ -71,6 +71,12 @@ For repo-local design notes, issue evidence, and documentation retention rules, 
 - Git 2.20+
 - Node.js 18+
 
+### Route Policy Setup
+
+Relay policy treats executor and reviewer names as CLI harnesses. The compliance boundary is the provider/model route. Missing policy config defaults to Codex/Claude managed CLI only; OpenCode, Pi, advisory reviewers, and sidecars need explicit route approval such as `kakao/opencode-glm-*` before they run.
+
+Use `relay-config doctor` and `relay-config check` to verify policy before enabling advisory reviewers or sidecars. See [docs/model-route-policy.md](docs/model-route-policy.md) for company/internal defaults, personal opt-in examples, and the final precedence order: `CLI flags -> routing rules -> defaults -> existing relay defaults -> policy gate`.
+
 ## Quick Start
 
 ### One command, full cycle
