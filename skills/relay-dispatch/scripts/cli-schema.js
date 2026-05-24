@@ -21,6 +21,7 @@ const FLAGS = [
   { flag: "--advisory-profile", kind: VALUE, mode: MODE_PARSED, valueName: "<name>", rationale: "Closed advisory review profile selector; flag-like following tokens should mean the value is missing." },
   { flag: "--advisory-reviewer", kind: VALUE, mode: MODE_PARSED, valueName: "<name>", rationale: "Optional advisory reviewer adapter selector; flag-like following tokens should mean the value is missing." },
   { flag: "--advisory-reviewer-model", kind: VALUE, mode: MODE_PARSED, valueName: "<name>", rationale: "Advisory reviewer model selector; flag-like following tokens should mean the value is missing." },
+  { flag: "--advisory-grace", kind: VALUE, mode: MODE_PARSED, valueName: "<seconds>", rationale: "Standard assurance advisory grace window; flag-like following tokens should mean the value is missing." },
   { flag: "--advisory-timeout", kind: VALUE, mode: MODE_PARSED, valueName: "<seconds>", rationale: "Advisory reviewer timeout; flag-like following tokens should mean the value is missing." },
   { flag: "--auto-recover-commit", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Explicit dispatch opt-in to run recover-commit after completed-uncommitted; no value is consumed." },
   { flag: "--artifact-path", kind: VALUE, mode: MODE_VERBATIM, valueName: "<path>", rationale: "Operator-supplied artifact path being reconciled; keep the literal argv token." },
@@ -186,7 +187,7 @@ const COMMAND_FLAGS = {
     "--repo", "--run-id", "--branch", "--pr", "--manifest", "--done-criteria-file",
     "--diff-file", "--review-file", "--reviewer", "--reviewer-script",
     "--reviewer-model", "--advisory-reviewer", "--advisory-profile",
-    "--advisory-reviewer-model", "--advisory-timeout", "--prepare-only",
+    "--advisory-reviewer-model", "--advisory-timeout", "--advisory-grace", "--prepare-only",
     "--manual-review-reason", "--independent-review-reason", "--no-comment", "--json", "--help",
   ],
   "update-manifest-state": [

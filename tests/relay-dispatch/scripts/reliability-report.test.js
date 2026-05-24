@@ -891,6 +891,75 @@ test("reliability-report counts sidecar usage and outcomes by kind and executor"
   assert.doesNotMatch(text, /predicted_findings_match_rate:/);
 });
 
+test("reliability-report aggregates advisory and sidecar critical-path impact", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-report-critical-path-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  const recentTs = new Date(Date.now() - 1 * 60 * 60 * 1000).toISOString();
+  const runA = createRunId({ branch: "run-critical-a", timestamp: new Date("2026-04-12T02:12:00.000Z") });
+  const runB = createRunId({ branch: "run-critical-b", timestamp: new Date("2026-04-12T02:12:01.000Z") });
+
+  writeRun(repoRoot, { runId: runA, state: STATES.READY_TO_MERGE, rounds: 1, updatedAt: recentTs });
+  writeRun(repoRoot, { runId: runB, state: STATES.CHANGES_REQUESTED, rounds: 1, updatedAt: recentTs });
+
+  appendRunEvent(repoRoot, runA, {
+    event: "advisory_review",
+    state_from: "review_pending",
+    state_to: "review_pending",
+    head_sha: "a".repeat(40),
+    round: 1,
+    reviewer: "opencode",
+    status: "success",
+    elapsed_ms: 120,
+    advisory_elapsed_ms: 120,
+    critical_path_wait_ms: 40,
+    consumed_by_phase: "review",
+    phase_decision_waited: true,
+    frontier_step_replaced: false,
+  });
+  appendRunEvent(repoRoot, runA, {
+    event: "sidecar_result",
+    sidecar_id: "sc-late",
+    kind: "docs-sync",
+    output_path: "sidecars/sc-late/output.md",
+    trust_level: "advisory",
+    elapsed_ms: 300,
+    sidecar_elapsed_ms: 300,
+    critical_path_wait_ms: 50,
+    consumed_by_phase: "metrics",
+    phase_decision_waited: true,
+    frontier_step_replaced: false,
+  });
+  appendRunEvent(repoRoot, runB, {
+    event: "advisory_review",
+    state_from: "review_pending",
+    state_to: "review_pending",
+    head_sha: "b".repeat(40),
+    round: 1,
+    reviewer: "opencode",
+    status: "success",
+    elapsed_ms: 80,
+    advisory_elapsed_ms: 80,
+    critical_path_wait_ms: 0,
+    consumed_by_phase: "redispatch",
+    phase_decision_waited: false,
+    frontier_step_replaced: false,
+  });
+
+  const report = JSON.parse(execFileSync("node", [SCRIPT, "--repo", repoRoot, "--json"], { encoding: "utf-8" }));
+
+  assert.deepEqual(report.advisory_sidecar_timing.by_consumed_phase, {
+    metrics: 1,
+    redispatch: 1,
+    review: 1,
+  });
+  assert.equal(report.advisory_sidecar_timing.consumed_before_decision, 1);
+  assert.equal(report.advisory_sidecar_timing.metrics_only_late_artifacts, 1);
+  assert.equal(report.advisory_sidecar_timing.redispatch_artifacts, 1);
+  assert.equal(report.advisory_sidecar_timing.median_critical_path_wait_ms, 40);
+  assert.equal(report.advisory_sidecar_timing.phase_decision_waited, 2);
+  assert.equal(report.advisory_sidecar_timing.frontier_step_replaced, 0);
+});
+
 test("reliability-report keeps sidecar insights only on the top-level report", () => {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-report-sidecar-top-level-"));
   process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));

@@ -21,6 +21,7 @@ function printUsage() {
   console.log(`  --advisory-profile <name>    ${modeLabel("--advisory-profile")} Advisory focus profile (default: blindspot)`);
   console.log(`  --advisory-reviewer-model <name> ${modeLabel("--advisory-reviewer-model")} Advisory model override`);
   console.log(`  --advisory-timeout <seconds> ${modeLabel("--advisory-timeout")} Advisory timeout`);
+  console.log(`  --advisory-grace <seconds>   ${modeLabel("--advisory-grace")} Standard-mode critical-path wait window`);
   console.log(`  --prepare-only               ${modeLabel("--prepare-only")} Emit prompt bundle only; do not apply verdict`);
   console.log(`  --no-comment                 ${modeLabel("--no-comment")} Do not post a PR comment`);
   console.log(`  --json                       ${modeLabel("--json")} Output JSON`);
