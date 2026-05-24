@@ -189,6 +189,11 @@ test("sidecar lifecycle helpers append advisory events without manifest state tr
   assert.equal(completed.output_path, "sidecars/lint-report/result.json");
   assert.equal(completed.trust_level, SIDECAR_TRUST_LEVEL);
   assert.equal(completed.elapsed_ms, 123);
+  assert.equal(completed.sidecar_elapsed_ms, 123);
+  assert.equal(completed.critical_path_wait_ms, 0);
+  assert.equal(completed.consumed_by_phase, "metrics");
+  assert.equal(completed.phase_decision_waited, false);
+  assert.equal(completed.frontier_step_replaced, false);
   assert.equal(failed.event, EVENTS.SIDECAR_FAILED);
   assert.equal(failed.failure_reason, "tool exited 1");
 

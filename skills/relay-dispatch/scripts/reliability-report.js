@@ -856,6 +856,61 @@ function buildSidecarInsights({ events, repoRoot }) {
   };
 }
 
+const ADVISORY_SIDECAR_TIMING_EVENTS = new Set([
+  EVENTS.ADVISORY_REVIEW,
+  EVENTS.SIDECAR_RESULT,
+  EVENTS.SIDECAR_FAILED,
+]);
+
+function eventHasAdvisorySidecarTiming(event) {
+  return ADVISORY_SIDECAR_TIMING_EVENTS.has(event?.event)
+    && (
+      event.consumed_by_phase !== undefined
+      || event.critical_path_wait_ms !== undefined
+      || event.advisory_elapsed_ms !== undefined
+      || event.sidecar_elapsed_ms !== undefined
+    );
+}
+
+function numericEventField(event, fieldName, fallback = 0) {
+  const value = Number(event?.[fieldName]);
+  return Number.isFinite(value) && value >= 0 ? value : fallback;
+}
+
+function buildAdvisorySidecarTiming(events) {
+  const timedEvents = events.filter(eventHasAdvisorySidecarTiming);
+  const byConsumedPhase = new Map();
+  const byArtifactKind = new Map();
+  const criticalPathWaits = [];
+  let phaseDecisionWaited = 0;
+  let frontierStepReplaced = 0;
+
+  for (const event of timedEvents) {
+    const consumedPhase = normalizeBucketValue(event.consumed_by_phase);
+    incrementCountBucket(byConsumedPhase, consumedPhase);
+    incrementCountBucket(byArtifactKind, event.event === EVENTS.ADVISORY_REVIEW ? "advisory_review" : "sidecar");
+    criticalPathWaits.push(numericEventField(event, "critical_path_wait_ms"));
+    if (event.phase_decision_waited === true) phaseDecisionWaited += 1;
+    if (event.frontier_step_replaced === true) frontierStepReplaced += 1;
+  }
+
+  const beforeDecision = timedEvents.filter((event) => (
+    event.consumed_by_phase === "dispatch" || event.consumed_by_phase === "review"
+  )).length;
+
+  return {
+    total_artifacts: timedEvents.length,
+    by_consumed_phase: sortCountBuckets(byConsumedPhase),
+    by_artifact_kind: sortCountBuckets(byArtifactKind),
+    consumed_before_decision: beforeDecision,
+    metrics_only_late_artifacts: timedEvents.filter((event) => event.consumed_by_phase === "metrics").length,
+    redispatch_artifacts: timedEvents.filter((event) => event.consumed_by_phase === "redispatch").length,
+    median_critical_path_wait_ms: median(criticalPathWaits),
+    phase_decision_waited: phaseDecisionWaited,
+    frontier_step_replaced: frontierStepReplaced,
+  };
+}
+
 function formatSidecarCountSummary(buckets) {
   return Object.entries(buckets || {})
     .sort(([leftKey, left], [rightKey, right]) => (
@@ -1073,6 +1128,7 @@ function buildReport({ repoRoot, staleHours, now, manifests, events, includeSide
     rubric_insights: buildRubricInsights(events, manifests),
     qualitative_signals: buildQualitativeSignals(manifests, events),
     guidance_pack_insights: buildGuidancePackInsights(manifests, events),
+    advisory_sidecar_timing: buildAdvisorySidecarTiming(events),
     override_audit: buildOverrideAuditSummary(events),
   };
 
@@ -1337,6 +1393,14 @@ function main() {
       console.log(`    predicted_findings_match_rate: ${report.sidecar_insights.predicted_findings_match_rate}`);
       console.log(`    predicted_findings_runs_examined: ${report.sidecar_insights.predicted_findings_runs_examined}`);
     }
+  }
+  if (report.advisory_sidecar_timing?.total_artifacts > 0) {
+    console.log("  advisory_sidecar_timing:");
+    console.log(`    total_artifacts: ${report.advisory_sidecar_timing.total_artifacts}`);
+    console.log(`    median_critical_path_wait_ms: ${report.advisory_sidecar_timing.median_critical_path_wait_ms ?? "n/a"}`);
+    console.log(`    consumed_before_decision: ${report.advisory_sidecar_timing.consumed_before_decision}`);
+    console.log(`    metrics_only_late_artifacts: ${report.advisory_sidecar_timing.metrics_only_late_artifacts}`);
+    console.log(`    redispatch_artifacts: ${report.advisory_sidecar_timing.redispatch_artifacts}`);
   }
   if (report.override_audit?.total_events > 0) {
     const audit = report.override_audit;

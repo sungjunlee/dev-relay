@@ -2,6 +2,7 @@ const fs = require("fs");
 const path = require("path");
 const { getActorName } = require("./manifest/store");
 const { ensureRunLayout, getEventsPath, getRunsDir } = require("./manifest/paths");
+const { timingFieldsFromEventData } = require("./advisory-timing");
 const {
   appendTextFileWithoutFollowingSymlinks,
   readTextFileWithoutFollowingSymlinks,
@@ -282,6 +283,7 @@ function appendRunEvent(repoRoot, runId, eventData) {
     ...(eventData.elapsed_ms !== undefined
       ? { elapsed_ms: normalizeEventValue(eventData.elapsed_ms) }
       : {}),
+    ...timingFieldsFromEventData(eventData),
     ...(eventData.failure_reason !== undefined
       ? { failure_reason: normalizeEventValue(eventData.failure_reason) }
       : {}),

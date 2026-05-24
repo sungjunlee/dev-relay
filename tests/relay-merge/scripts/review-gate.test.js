@@ -293,6 +293,54 @@ test("evaluateReviewGate enforces hardened advisory and strict execution evidenc
   }
 });
 
+test("evaluateReviewGate does not accept sidecar output as hardened advisory evidence", () => {
+  const { headSha, runDir, manifestData } = createHardenedGateFixture({ advisory: "missing" });
+  const sidecarId = "docs-sync-late";
+  const outputPath = path.join(runDir, "sidecars", sidecarId, "output.md");
+  fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+  fs.writeFileSync(outputPath, JSON.stringify({
+    profile: "blindspot",
+    summary: "sidecar is advisory only",
+    required_findings: [],
+    advisory_findings: [],
+    duplicate_or_low_confidence: [],
+  }), "utf-8");
+  appendEvent(runDir, {
+    event: "sidecar_result",
+    sidecar_id: sidecarId,
+    kind: "docs-sync",
+    output_path: `sidecars/${sidecarId}/output.md`,
+    trust_level: "advisory",
+    elapsed_ms: 100,
+    sidecar_elapsed_ms: 100,
+    critical_path_wait_ms: 0,
+    consumed_by_phase: "metrics",
+    phase_decision_waited: false,
+    frontier_step_replaced: false,
+  });
+
+  const result = evaluateReviewGate({
+    prNumber: 40,
+    comments: [
+      {
+        body: "<!-- relay-review -->\n## Relay Review\nVerdict: PASS\nRounds: 1",
+        createdAt: "2026-04-03T08:00:00Z",
+      },
+    ],
+    commits: [
+      {
+        oid: headSha,
+        committedDate: "2026-04-03T07:00:00Z",
+      },
+    ],
+    manifestData,
+    runDir,
+  });
+
+  assert.equal(result.status, "missing_hardened_advisory");
+  assert.equal(result.readyToMerge, false);
+});
+
 test("evaluateReviewGate accepts hardened PASS when advisory and strict evidence are present", () => {
   const { headSha, runDir, manifestData } = createHardenedGateFixture();
   const result = evaluateReviewGate({
