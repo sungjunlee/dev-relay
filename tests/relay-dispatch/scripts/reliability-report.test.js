@@ -228,6 +228,21 @@ function appendSidecarFailed(repoRoot, runId, {
   });
 }
 
+function appendRawRunEvent(repoRoot, runId, eventData) {
+  const { runDir } = ensureRunLayout(repoRoot, runId);
+  fs.appendFileSync(path.join(runDir, "events.jsonl"), `${JSON.stringify({
+    ts: "2026-05-24T00:00:00.000Z",
+    actor: "Relay Test",
+    run_id: runId,
+    state_from: null,
+    state_to: null,
+    head_sha: null,
+    round: null,
+    reason: null,
+    ...eventData,
+  })}\n`, "utf-8");
+}
+
 function writeSidecarOutput(repoRoot, runId, sidecarId, content) {
   const { runDir } = ensureRunLayout(repoRoot, runId);
   const outputDir = path.join(runDir, "sidecars", sidecarId);
@@ -335,6 +350,100 @@ test("reliability-report derives the core scorecard from manifests and events", 
   assert.equal(report.metrics.median_rounds_to_ready, 3);
   assert.equal(report.metrics.stale_open_runs_72h, 1);
   assert.equal(report.bootstrap_exempt_runs, 1);
+});
+
+test("reliability-report summarizes override audit events without treating legacy shapes as corrupt", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-report-override-audit-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  const recentTs = new Date(Date.now() - 1 * 60 * 60 * 1000).toISOString();
+  const forceRun = createRunId({ branch: "force-finalize", timestamp: new Date("2026-05-24T00:00:00.000Z") });
+  const rebrandRun = createRunId({ branch: "rebrand-evidence", timestamp: new Date("2026-05-24T00:00:01.000Z") });
+  const legacyRun = createRunId({ branch: "legacy-override", timestamp: new Date("2026-05-24T00:00:02.000Z") });
+  const malformedRun = createRunId({ branch: "malformed-override", timestamp: new Date("2026-05-24T00:00:03.000Z") });
+
+  for (const runId of [forceRun, rebrandRun, legacyRun, malformedRun]) {
+    writeRun(repoRoot, {
+      runId,
+      state: STATES.REVIEW_PENDING,
+      rounds: 1,
+      updatedAt: recentTs,
+    });
+  }
+
+  appendRunEvent(repoRoot, forceRun, {
+    event: "force_finalize",
+    state_from: STATES.REVIEW_PENDING,
+    state_to: STATES.MERGED,
+    override_class: "force_finalize_nonready",
+    affected_head_sha: "a".repeat(40),
+    prior_state: STATES.REVIEW_PENDING,
+    required_reason: "operator verified by hand",
+    operator_initiated: true,
+  });
+  appendRunEvent(repoRoot, rebrandRun, {
+    event: "execution_evidence_rebranded",
+    state_from: STATES.REVIEW_PENDING,
+    state_to: STATES.REVIEW_PENDING,
+    override_class: "execution_evidence_rebrand",
+    affected_head_sha: "b".repeat(40),
+    prior_state: STATES.REVIEW_PENDING,
+    required_reason: "evidence needed new head sha",
+    operator_initiated: true,
+  });
+  appendRawRunEvent(repoRoot, legacyRun, {
+    event: "force_finalize",
+    state_from: STATES.READY_TO_MERGE,
+    state_to: STATES.MERGED,
+    reason: "legacy force finalize before override audit fields",
+  });
+  appendRawRunEvent(repoRoot, malformedRun, {
+    event: "force_finalize",
+    state_from: STATES.REVIEW_PENDING,
+    state_to: STATES.MERGED,
+    override_class: "force_finalize_nonready",
+    affected_head_sha: "",
+    required_reason: null,
+    operator_initiated: false,
+  });
+
+  const report = JSON.parse(execFileSync("node", [SCRIPT, "--repo", repoRoot, "--json"], { encoding: "utf-8" }));
+  const text = execFileSync("node", [SCRIPT, "--repo", repoRoot], { encoding: "utf-8" });
+
+  assert.deepEqual(report.override_audit, {
+    total_events: 4,
+    current_shape_events: 3,
+    legacy_shape_events: 1,
+    malformed_current_shape_events: 1,
+    by_override_class: {
+      execution_evidence_rebrand: 1,
+      force_finalize_nonready: 2,
+      unknown: 1,
+    },
+    by_operator_initiated: {
+      false: 1,
+      true: 2,
+      unknown: 1,
+    },
+    field_presence: {
+      affected_head_sha: { present: 2, missing: 2 },
+      required_reason: { present: 2, missing: 2 },
+    },
+    affected_transitions: {
+      "ready_to_merge->merged": 1,
+      "review_pending->merged": 2,
+      "review_pending->review_pending": 1,
+    },
+    findings: [{
+      run_id: malformedRun,
+      event: "force_finalize",
+      override_class: "force_finalize_nonready",
+      missing_fields: ["affected_head_sha", "required_reason"],
+    }],
+  });
+  assert.match(text, /override_audit:/);
+  assert.match(text, /total_events=4 current_shape=3 legacy_shape=1 malformed=1/);
+  assert.match(text, /by_override_class: force_finalize_nonready=2, execution_evidence_rebrand=1, unknown=1/);
+  assert.match(text, /findings: 1 malformed current-shape event/);
 });
 
 test("reliability-report aggregates factor analysis across runs and rounds", () => {
