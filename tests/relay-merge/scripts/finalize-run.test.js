@@ -577,6 +577,11 @@ for (const sourceState of [
     assert.equal(forceEvent?.state_from, sourceState);
     assert.equal(forceEvent?.state_to, STATES.MERGED);
     assert.equal(forceEvent?.head_sha, fixture.headSha);
+    assert.equal(forceEvent?.override_class, "force_finalize_nonready");
+    assert.equal(forceEvent?.affected_head_sha, fixture.headSha);
+    assert.equal(forceEvent?.prior_state, sourceState);
+    assert.equal(forceEvent?.required_reason, `operator override from ${sourceState}`);
+    assert.equal(forceEvent?.operator_initiated, true);
     assert.equal(manifest.state, STATES.MERGED);
     assert.equal(manifest.last_force.from_state, sourceState);
     assert.equal(manifest.last_force.to_state, STATES.MERGED);

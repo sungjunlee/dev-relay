@@ -238,7 +238,7 @@ function main() {
   const repoArg = getCliArg("--repo");
   const runId = getCliArg("--run-id");
   const manifestArg = getCliArg("--manifest");
-  const reason = getCliArg("--reason");
+  const reason = String(getCliArg("--reason") || "").trim();
   const prTitleArg = getCliArg("--pr-title");
   const prBodyFile = getCliArg("--pr-body-file");
   const dryRun = hasCliFlag("--dry-run");
@@ -379,6 +379,11 @@ function main() {
         previous_head_sha: rebrandResult.previousSha,
         new_head_sha: commitSha,
         reason,
+        override_class: "execution_evidence_rebrand",
+        affected_head_sha: commitSha,
+        prior_state: data.state,
+        required_reason: reason,
+        operator_initiated: true,
         execution_evidence_path: rebrandResult.evidencePath,
         execution_evidence_hash: rebrandResult.evidenceHash,
       });
