@@ -169,6 +169,12 @@ function appendRunEvent(repoRoot, runId, eventData) {
     ...(eventData.failure_class !== undefined
       ? { failure_class: normalizeEventValue(eventData.failure_class) }
       : {}),
+    ...(eventData.execution_evidence_path !== undefined
+      ? { execution_evidence_path: normalizeEventValue(eventData.execution_evidence_path) }
+      : {}),
+    ...(eventData.execution_evidence_hash !== undefined
+      ? { execution_evidence_hash: normalizeEventValue(eventData.execution_evidence_hash) }
+      : {}),
     ...(eventData.before !== undefined
       ? { before: normalizeEventValue(eventData.before) }
       : {}),
@@ -219,6 +225,9 @@ function appendRunEvent(repoRoot, runId, eventData) {
       : {}),
     ...(eventData.artifact_path !== undefined
       ? { artifact_path: normalizeEventValue(eventData.artifact_path) }
+      : {}),
+    ...(eventData.advisory_artifact_hash !== undefined
+      ? { advisory_artifact_hash: normalizeEventValue(eventData.advisory_artifact_hash) }
       : {}),
     ...(eventData.output_path !== undefined
       ? { output_path: normalizeEventValue(eventData.output_path) }

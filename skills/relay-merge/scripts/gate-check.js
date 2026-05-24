@@ -250,6 +250,22 @@ const STATUS_RENDERERS = {
     console.log("  Origin resolved to a non-default GitHub host but gh api user --hostname <host> failed during relay-review.");
     console.log("  Fix the host auth (export GH_HOST=<host> or gh auth switch --hostname <host>), rerun relay-review, then retry.");
   },
+  missing_hardened_advisory(result, prNumber) {
+    console.log(`✗ PR #${prNumber}: hardened review assurance requires advisory evidence — merge blocked`);
+    if (result.reason) console.log(`  ${result.reason}`);
+  },
+  invalid_hardened_advisory(result, prNumber) {
+    console.log(`✗ PR #${prNumber}: hardened advisory artifact is invalid — merge blocked`);
+    if (result.reason) console.log(`  ${result.reason}`);
+  },
+  hardened_advisory_required_findings(result, prNumber) {
+    console.log(`✗ PR #${prNumber}: hardened advisory review reported required findings — merge blocked`);
+    if (result.reason) console.log(`  ${result.reason}`);
+  },
+  hardened_execution_evidence_failed(result, prNumber) {
+    console.log(`✗ PR #${prNumber}: hardened execution evidence failed — merge blocked`);
+    if (result.reason) console.log(`  ${result.reason}`);
+  },
   unauthorized_reviewer(result, prNumber) {
     console.log(`✗ PR #${prNumber}: relay-review comment found but from unauthorized author (expected: ${result.expectedReviewerLogin})`);
   },

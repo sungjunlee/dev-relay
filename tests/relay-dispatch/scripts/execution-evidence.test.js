@@ -121,11 +121,11 @@ test("rebrandEvidence rewrites existing evidence to the new head and preserves a
   });
   const written = JSON.parse(fs.readFileSync(evidencePath, "utf-8"));
 
-  assert.deepEqual(result, {
-    rewritten: true,
-    previousSha: "a".repeat(40),
-    newHeadSha: "b".repeat(40),
-  });
+  assert.equal(result.rewritten, true);
+  assert.equal(result.previousSha, "a".repeat(40));
+  assert.equal(result.newHeadSha, "b".repeat(40));
+  assert.equal(result.evidencePath, evidencePath);
+  assert.equal(result.evidenceHash, hashFileSha256(evidencePath));
   assert.equal(written.head_sha, "b".repeat(40));
   assert.equal(written.recorded_by, "recover-commit-rebrand");
   assert.equal(written.rebrand.previous_head_sha, "a".repeat(40));

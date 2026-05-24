@@ -95,6 +95,7 @@ policy:
   merge: manual_after_lgtm      # merge strategy
   cleanup: on_close              # when to remove worktree
   reviewer_write: forbid         # reviewer must not mutate code
+  review_assurance: standard      # standard | hardened
   executor_network:
     access: disabled             # disabled | enabled
     mechanism: default           # default | sandbox_workspace_write.network_access
@@ -149,6 +150,7 @@ bootstrap_exempt:
 | `dispatch.last_model` / executor config | Dispatch records the effective model. If no explicit model hint is present, executor defaults come from the skill-bundled `skills/relay-dispatch/references/executor-models.json` plus optional `~/.relay/executors.json` overrides |
 | `policy.merge` | `manual_after_lgtm` — orchestrator must explicitly merge |
 | `policy.reviewer_write` | `forbid` — review runner rejects rounds where reviewer mutated files |
+| `policy.review_assurance` | `standard` keeps current behavior; `hardened` requires stronger review/evidence gates without using agent identity heuristics, including successful advisory artifacts and strict execution evidence with `test_exit_code=0` |
 | `anchor.*` | Immutable review scope — prevents drift across rounds |
 | `review.last_reviewed_sha` | Gate-check blocks merge if HEAD has advanced past this |
 | `review.last_reviewer` | Tracks the acting reviewer for the latest round without mutating `roles.reviewer`; analytics must still use `review_apply.reviewer` as the round-level source of truth |

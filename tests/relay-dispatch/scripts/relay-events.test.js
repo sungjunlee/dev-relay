@@ -230,6 +230,23 @@ const RUN_EVENT_FIELD_CASES = [
     expected: { commit_sha: "deadbeef", branch: "issue-281" },
   },
   {
+    label: "advisory artifact hash",
+    fields: {
+      event: EVENTS.ADVISORY_REVIEW,
+      state_from: "review_pending",
+      state_to: "review_pending",
+      head_sha: "deadbeef",
+      round: 2,
+      status: "success",
+      artifact_path: "/tmp/review-round-2-advisory-opencode.json",
+      advisory_artifact_hash: "a".repeat(64),
+    },
+    expected: {
+      artifact_path: "/tmp/review-round-2-advisory-opencode.json",
+      advisory_artifact_hash: "a".repeat(64),
+    },
+  },
+  {
     label: "guidance metadata",
     fields: {
       event: EVENTS.GUIDANCE_SELECTED,
