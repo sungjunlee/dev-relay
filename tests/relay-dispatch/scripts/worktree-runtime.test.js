@@ -55,6 +55,7 @@ test("formatDispatchDryRun matches the frozen dispatch text fixture", () => {
     cleanupPolicy: "on_close",
     timeout: 2400,
     rubricFile: "/tmp/issue187-fixtures/rubric.yaml",
+    reviewAssurance: "standard",
     worktreePlan: {
       worktree: "/tmp/issue187-fixtures/relay-home/worktrees/11111111/repo",
       branch: "test-branch",

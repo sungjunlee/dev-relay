@@ -178,6 +178,11 @@ test("relay-reconcile-artifact stamps bootstrap exemption, emits force event, an
   assert.equal(forceEvent?.state_from, STATES.REVIEW_PENDING);
   assert.equal(forceEvent?.state_to, STATES.MERGED);
   assert.equal(forceEvent?.pr_number, 267);
+  assert.equal(forceEvent?.override_class, "bootstrap_artifact_reconcile");
+  assert.equal(forceEvent?.affected_head_sha, "abc123def456");
+  assert.equal(forceEvent?.prior_state, STATES.REVIEW_PENDING);
+  assert.equal(forceEvent?.required_reason, "run predates the artifact writer");
+  assert.equal(forceEvent?.operator_initiated, true);
   assert.equal(report.bootstrap_exempt_runs, 1);
 });
 

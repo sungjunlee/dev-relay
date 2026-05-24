@@ -244,6 +244,11 @@ function main() {
       previous_head_sha: rebrandResult.previousSha,
       new_head_sha: newHeadSha,
       reason,
+      override_class: "execution_evidence_rebrand",
+      affected_head_sha: newHeadSha,
+      prior_state: data.state,
+      required_reason: reason,
+      operator_initiated: true,
       execution_evidence_path: rebrandResult.evidencePath,
       execution_evidence_hash: rebrandResult.evidenceHash,
     });

@@ -608,6 +608,11 @@ function main() {
         head_sha: currentHeadSha,
         round: safeData.review?.rounds || null,
         reason: forceFinalizeReason,
+        override_class: "force_finalize_nonready",
+        affected_head_sha: currentHeadSha,
+        prior_state: safeData.state,
+        required_reason: forceFinalizeReason,
+        operator_initiated: true,
         pr_number: prNumber,
         last_reviewed_sha: safeData.review?.last_reviewed_sha,
       });

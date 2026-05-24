@@ -132,6 +132,11 @@ test("happy path rewrites stale evidence to current HEAD and emits one audit eve
   assert.equal(rebrandEvents[0].previous_head_sha, fixture.originalSha);
   assert.equal(rebrandEvents[0].new_head_sha, fixture.currentSha);
   assert.equal(rebrandEvents[0].reason, "orchestrator fixed typo");
+  assert.equal(rebrandEvents[0].override_class, "execution_evidence_rebrand");
+  assert.equal(rebrandEvents[0].affected_head_sha, fixture.currentSha);
+  assert.equal(rebrandEvents[0].prior_state, STATES.REVIEW_PENDING);
+  assert.equal(rebrandEvents[0].required_reason, "orchestrator fixed typo");
+  assert.equal(rebrandEvents[0].operator_initiated, true);
 });
 
 test("sha_unchanged exits zero and does not append an event", () => {

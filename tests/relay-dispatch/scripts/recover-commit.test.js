@@ -354,6 +354,11 @@ test("dirty worktree recovery rebrands execution evidence to the created commit 
   assert.equal(rebrandEvent.previous_head_sha, beforeEvidence.head_sha);
   assert.equal(rebrandEvent.new_head_sha, parsed.commitSha);
   assert.equal(rebrandEvent.reason, "executor completed before commit");
+  assert.equal(rebrandEvent.override_class, "execution_evidence_rebrand");
+  assert.equal(rebrandEvent.affected_head_sha, parsed.commitSha);
+  assert.equal(rebrandEvent.prior_state, STATES.REVIEW_PENDING);
+  assert.equal(rebrandEvent.required_reason, "executor completed before commit");
+  assert.equal(rebrandEvent.operator_initiated, true);
 });
 
 test("already-committed recovery leaves execution evidence byte-identical", () => {

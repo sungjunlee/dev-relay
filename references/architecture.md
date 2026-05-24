@@ -181,7 +181,7 @@ Semantics:
 
 ## Event Journal
 
-Each run keeps an append-only event log at `~/.relay/runs/<repo-slug>/<run-id>/events.jsonl`. Records are emitted by `appendRunEvent()` in `skills/relay-dispatch/scripts/relay-events.js` and share a common envelope (`ts`, `event`, `actor`, `run_id`, `state_from`, `state_to`, `head_sha`, `round`, `reason`) plus optional fields (`reviewer`, `rubric_status`, `last_reviewed_sha`, `pr_number`, `bootstrap_exempt`, `model`, `executor_network`, `failure_class`, `before`, `after`, `profile`, `status`, `artifact_path`, `raw_response_path`, `elapsed_ms`, `failure_reason`):
+Each run keeps an append-only event log at `~/.relay/runs/<repo-slug>/<run-id>/events.jsonl`. Records are emitted by `appendRunEvent()` in `skills/relay-dispatch/scripts/relay-events.js` and share a common envelope (`ts`, `event`, `actor`, `run_id`, `state_from`, `state_to`, `head_sha`, `round`, `reason`) plus optional fields (`reviewer`, `rubric_status`, `last_reviewed_sha`, `pr_number`, `bootstrap_exempt`, `model`, `executor_network`, `failure_class`, `before`, `after`, `profile`, `status`, `artifact_path`, `raw_response_path`, `elapsed_ms`, `failure_reason`, override audit fields):
 
 ```jsonl
 {"ts":"2026-04-18T12:00:00.000Z","event":"dispatch_start","actor":"codex","run_id":"issue-42-20260418120000000","state_from":"draft","state_to":"dispatched","head_sha":"abc123","round":null,"reason":"new_dispatch","model":"gpt-5-codex","executor_network":{"access":"enabled","mechanism":"sandbox_workspace_write.network_access","domains":null}}
@@ -198,6 +198,7 @@ Each run keeps an append-only event log at `~/.relay/runs/<repo-slug>/<run-id>/e
 | Event | Emitted by |
 |-------|------------|
 | `dispatch_start`, `dispatch_result`, `environment_drift`, `model_hints_updated` | `relay-dispatch/scripts/dispatch.js` |
+| `recover_commit`, `recover_commit_failed`, `execution_evidence_rebranded` | `relay-dispatch/scripts/recover-commit.js`, `rebrand-evidence.js` |
 | `iteration_score`, `rubric_quality`, `score_divergence` | `relay-dispatch/scripts/relay-events.js` (helpers) |
 | `close`, `cleanup_result` | `relay-dispatch/scripts/close-run.js`, `cleanup-worktrees.js` |
 | `state_recovery` | `relay-dispatch/scripts/recover-state.js` |
@@ -210,6 +211,21 @@ Each run keeps an append-only event log at `~/.relay/runs/<repo-slug>/<run-id>/e
 There is no standalone `state_transition` event — state changes ride on the lifecycle event that caused them (`state_from`/`state_to` fields on `dispatch_start`, `dispatch_result`, `review_apply`, `merge_finalize`, etc.).
 
 For reviewer analytics, `roles.reviewer` answers "who was assigned to review this run?" while `review_apply.reviewer` answers "who actually executed this review round?". Keep them separate. If a run shows review activity in the manifest but lacks `review_apply` reviewer data, report that gap explicitly rather than backfilling from the assigned role binding.
+
+### Override audit shape
+
+Operator escape hatches remain available, but high-risk override events add a shared audit shape without removing legacy fields:
+
+| Field | Meaning |
+|-------|---------|
+| `override_class` | Stable class such as `force_finalize_nonready` or `execution_evidence_rebrand` |
+| `affected_head_sha` | Commit SHA the override affects or attests after the override |
+| `prior_state` | Manifest state observed before the override side effect |
+| `required_reason` | Non-empty operator-provided reason, duplicated from `reason` for override-specific queries |
+| `operator_initiated` | `true` for deliberate operator escape hatches |
+| `independent_attestation` | Optional supplemental attestation when a path has a separate review or verification source |
+
+Current producers are `force_finalize` from `finalize-run --force-finalize-nonready` and `execution_evidence_rebranded` from `rebrand-evidence` / `recover-commit`. Consumers must treat these fields as additive because older events only have the legacy envelope.
 
 ## Review Round Artifacts
 

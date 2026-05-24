@@ -121,6 +121,24 @@ function appendRunEvent(repoRoot, runId, eventData) {
     ...(eventData.origin !== undefined
       ? { origin: normalizeEventValue(eventData.origin) }
       : {}),
+    ...(eventData.override_class !== undefined
+      ? { override_class: normalizeEventValue(eventData.override_class) }
+      : {}),
+    ...(eventData.affected_head_sha !== undefined
+      ? { affected_head_sha: normalizeEventValue(eventData.affected_head_sha) }
+      : {}),
+    ...(eventData.prior_state !== undefined
+      ? { prior_state: normalizeEventValue(eventData.prior_state) }
+      : {}),
+    ...(eventData.required_reason !== undefined
+      ? { required_reason: normalizeEventValue(eventData.required_reason) }
+      : {}),
+    ...(eventData.operator_initiated !== undefined
+      ? { operator_initiated: eventData.operator_initiated === true }
+      : {}),
+    ...(eventData.independent_attestation !== undefined
+      ? { independent_attestation: normalizeEventValue(eventData.independent_attestation) }
+      : {}),
     ...(eventData.reviewer !== undefined
       ? { reviewer: normalizeEventValue(eventData.reviewer) }
       : {}),
