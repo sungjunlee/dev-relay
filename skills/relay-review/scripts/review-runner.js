@@ -26,7 +26,7 @@ const { printResult, printUsage } = require("./review-runner/output");
 const { bindCliArgs, findUnknownFlags } = require("../../relay-dispatch/scripts/cli-args");
 
 const args = process.argv.slice(2);
-const KNOWN_FLAGS = ["--repo", "--run-id", "--branch", "--pr", "--manifest", "--done-criteria-file", "--diff-file", "--review-file", "--manual-review-reason", "--reviewer", "--reviewer-script", "--reviewer-model", "--advisory-reviewer", "--advisory-profile", "--advisory-reviewer-model", "--advisory-timeout", "--prepare-only", "--no-comment", "--json", "--help", "-h"];
+const KNOWN_FLAGS = ["--repo", "--run-id", "--branch", "--pr", "--manifest", "--done-criteria-file", "--diff-file", "--review-file", "--manual-review-reason", "--reviewer", "--reviewer-script", "--reviewer-model", "--independent-review-reason", "--advisory-reviewer", "--advisory-profile", "--advisory-reviewer-model", "--advisory-timeout", "--prepare-only", "--no-comment", "--json", "--help", "-h"];
 const cliArgs = bindCliArgs(args, {
   commandName: "review-runner",
   reservedFlags: KNOWN_FLAGS,
@@ -56,6 +56,7 @@ async function run() {
   const reviewerArg = cliArgs.getArg("--reviewer");
   const reviewerScriptArg = cliArgs.getArg("--reviewer-script");
   const reviewerModel = cliArgs.getArg("--reviewer-model");
+  const independentReviewReason = cliArgs.getArg("--independent-review-reason");
   const advisoryReviewerArg = cliArgs.getArg("--advisory-reviewer");
   const advisoryProfileArg = cliArgs.getArg("--advisory-profile");
   const advisoryReviewerModel = cliArgs.getArg("--advisory-reviewer-model");
@@ -84,7 +85,14 @@ async function run() {
   const { body, manifestPath } = manifest;
   let { data } = manifest;
 
-  data = maybeSwapReviewer(data, reviewerArg, body, manifestPath, runRepoPath);
+  if (isHardenedReviewAssurance(data) && !prepareOnly && !advisoryReviewerArg) {
+    throw new Error(
+      "policy.review_assurance=hardened requires --advisory-reviewer <name> so the round produces advisory evidence. " +
+      "Run with a configured advisory reviewer, or lower the manifest policy before review."
+    );
+  }
+
+  data = maybeSwapReviewer(data, reviewerArg, body, manifestPath, runRepoPath, { independentReviewReason });
 
   if (data.state !== STATES.REVIEW_PENDING) {
     throw new Error(`Review runner requires state=review_pending, got '${data.state}'`);

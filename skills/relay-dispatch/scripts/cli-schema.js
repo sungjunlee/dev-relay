@@ -41,6 +41,7 @@ const FLAGS = [
   { flag: "--force-finalize-nonready", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Presence flag; no value is consumed." },
   { flag: "--head-sha", kind: VALUE, mode: MODE_PARSED, valueName: "<sha>", rationale: "Structured SHA field; flag-like following tokens should mean the value is missing." },
   { flag: "--help", aliases: ["-h"], kind: BOOLEAN, mode: MODE_PARSED, rationale: "Presence flag; no value is consumed." },
+  { flag: "--independent-review-reason", kind: VALUE, mode: MODE_VERBATIM, valueName: "<reason>", rationale: "Audit reason for a same-adapter independent review attempt; preserve the operator-supplied text." },
   { flag: "--issue", kind: VALUE, mode: MODE_PARSED, valueName: "<N>", rationale: "Numeric selector; flag-like following tokens should mean the value is missing." },
   { flag: "--json", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Presence flag; no value is consumed." },
   { flag: "--last-reviewed-sha", kind: VALUE, mode: MODE_PARSED, valueName: "<sha>", rationale: "Structured SHA field; flag-like following tokens should mean the value is missing." },
@@ -178,7 +179,7 @@ const COMMAND_FLAGS = {
     "--diff-file", "--review-file", "--reviewer", "--reviewer-script",
     "--reviewer-model", "--advisory-reviewer", "--advisory-profile",
     "--advisory-reviewer-model", "--advisory-timeout", "--prepare-only",
-    "--manual-review-reason", "--no-comment", "--json", "--help",
+    "--manual-review-reason", "--independent-review-reason", "--no-comment", "--json", "--help",
   ],
   "update-manifest-state": [
     "--manifest", "--repo", "--run-id", "--branch", "--state", "--next-action",
