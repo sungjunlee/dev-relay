@@ -12,6 +12,7 @@ const {
   parseComponents,
   isValidCapabilityName,
   parseCapabilityHeading,
+  isCapabilityBoundary,
   resolveActiveSprint,
   findActiveSprint,
   findCapabilityBlock,
@@ -148,6 +149,7 @@ describe("capability heading grammar", () => {
     assert.equal(isValidCapabilityName("merge finalize"), false);
     assert.equal(parseCapabilityHeading("## Capability: merge finalize"), null);
     assert.equal(parseCapabilityHeading("## Capability: Merge-Finalize"), null);
+    assert.equal(isCapabilityBoundary("## Capability: merge finalize"), true);
   });
 });
 
@@ -218,6 +220,33 @@ describe("findCapabilityBlock", () => {
   it("does not partially match invalid headings with spaces", () => {
     const content = SAMPLE_CAPABILITIES.replace("## Capability: auth", "## Capability: auth api");
     assert.equal(findCapabilityBlock(content, "auth"), null);
+  });
+
+  it("treats malformed capability headings as block boundaries", () => {
+    const content = [
+      "## Capability: auth",
+      "",
+      "### Learnings",
+      "## Capability: billing api",
+      "",
+      "### Learnings",
+      "<!-- LEARN:BEGIN -->",
+      "<!-- LEARN:END -->",
+    ].join("\n");
+    const block = findCapabilityBlock(content, "auth");
+    const text = block.lines.slice(block.start, block.end).join("\n");
+    assert.ok(!text.includes("billing api"));
+
+    const result = appendLearningsCore({
+      capabilitiesContent: content,
+      primaryComponent: "auth",
+      runId: "rBoundary",
+      pr: "608",
+      synthesis: "boundary check",
+      date: "2026-05-23",
+    });
+    assert.equal(result.status, STATUS.FAILED);
+    assert.equal(result.reason, "markers_missing");
   });
 });
 
