@@ -54,6 +54,9 @@ function buildDefaultRelayPolicy() {
 }
 
 function resolveRelayPolicyPath({ relayHome } = {}) {
+  if (nonEmptyString(process.env.RELAY_POLICY_PATH)) {
+    return process.env.RELAY_POLICY_PATH.trim();
+  }
   const home = relayHome || process.env.RELAY_HOME || path.join(os.homedir(), ".relay");
   return path.join(home, DEFAULT_POLICY_FILE);
 }

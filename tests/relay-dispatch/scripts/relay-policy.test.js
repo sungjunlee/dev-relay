@@ -149,6 +149,35 @@ test("global-only policy allows matching model routes and denies unknown routes"
   );
 });
 
+test("RELAY_POLICY_PATH overrides the default global policy path", () => {
+  const relayHome = tempDir();
+  const policyPath = writeJson(
+    path.join(tempDir(), "custom-policy.json"),
+    policy({
+      profile: "env-global",
+      managed_cli: ["codex"],
+    })
+  );
+  const previousPolicyPath = process.env.RELAY_POLICY_PATH;
+
+  process.env.RELAY_POLICY_PATH = policyPath;
+  try {
+    const result = loadRelayPolicy({ relayHome });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.status, "ok");
+    assert.equal(result.policy.profile, "env-global");
+    assert.equal(result.sources.global, policyPath);
+    assert.deepEqual(result.policy.managed_cli, ["codex"]);
+  } finally {
+    if (previousPolicyPath === undefined) {
+      delete process.env.RELAY_POLICY_PATH;
+    } else {
+      process.env.RELAY_POLICY_PATH = previousPolicyPath;
+    }
+  }
+});
+
 test("repo-local policy can narrow managed CLIs, allowed routes, and unknown-route behavior", () => {
   const relayHome = tempDir();
   const repoRoot = tempDir();
