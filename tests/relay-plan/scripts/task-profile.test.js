@@ -152,6 +152,19 @@ test("task risk can explicitly select standard review assurance", () => {
   assert.equal(profile.review_assurance, "standard");
 });
 
+test("invalid explicit review assurance fails closed", () => {
+  assert.throws(
+    () => deriveTaskProfile({
+      doneCriteria: "Update review policy metadata.",
+      probeSignal: PROBE_SIGNAL,
+      historicalSignal: HISTORICAL_SIGNAL,
+      taskRisk: { review_assurance: "hardend" },
+      size: "S",
+    }),
+    /invalid review assurance 'hardend'/
+  );
+});
+
 test("selected task_profile renders metadata and working guidance in dispatch prompts", () => {
   const baseline = fs.readFileSync(BASELINE_PROMPT_PATH, "utf-8");
   const profile = deriveTaskProfile({
@@ -171,7 +184,7 @@ test("selected task_profile renders metadata and working guidance in dispatch pr
   assert.match(rendered, /guidance_packs:/);
   assert.match(rendered, /surgical-change/);
   assert.match(rendered, /derivation_inputs:/);
-  assert.match(rendered, /advisory planner metadata/);
+  assert.match(rendered, /dispatcher may adopt review_assurance into the run manifest policy/);
   assert.match(rendered, /## Working Guidance/);
   assert.match(rendered, /These instructions guide execution style\. They do not override Done Criteria, rubric commands, or scope boundaries\./);
   assert.match(rendered, /### surgical-change/);

@@ -73,7 +73,13 @@ function rebrandEvidence(runDir, { newHeadSha, recordedBy = "recover-commit-rebr
     },
   });
 
-  return { rewritten: true, previousSha, newHeadSha };
+  return {
+    rewritten: true,
+    previousSha,
+    newHeadSha,
+    evidencePath,
+    evidenceHash: hashFileSha256(evidencePath),
+  };
 }
 
 module.exports = {

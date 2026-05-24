@@ -1,5 +1,6 @@
 const fs = require("fs");
 const path = require("path");
+const { hashFileSha256 } = require("../../relay-dispatch/scripts/execution-evidence");
 const { getRubricAnchorStatus } = require("../../relay-dispatch/scripts/manifest/rubric");
 const { isHardenedReviewAssurance } = require("../../relay-dispatch/scripts/manifest/review-assurance");
 const { parseAdvisoryReview } = require("../../relay-review/scripts/advisory-review-schema");
@@ -199,6 +200,62 @@ function findAdvisoryArtifacts(runDir, round) {
     .map((entry) => path.join(runDir, entry));
 }
 
+function readRunDirEvents(runDir) {
+  const eventsPath = path.join(runDir, "events.jsonl");
+  try {
+    const stat = fs.lstatSync(eventsPath);
+    if (!stat.isFile() || stat.isSymbolicLink()) {
+      throw new Error("events.jsonl must be a regular file inside the run directory");
+    }
+    return fs.readFileSync(eventsPath, "utf-8")
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line) => JSON.parse(line));
+  } catch (error) {
+    if (error.code === "ENOENT") return [];
+    throw error;
+  }
+}
+
+function samePath(left, right) {
+  if (!left || !right) return false;
+  return path.resolve(left) === path.resolve(right);
+}
+
+function findSuccessfulAdvisoryEvent(events, { artifactHash, artifactPath, reviewedHead, round }) {
+  if (!artifactHash) return null;
+  return events.find((event) => (
+    event.event === "advisory_review" &&
+    event.status === "success" &&
+    Number(event.round || 0) === Number(round || 0) &&
+    event.head_sha === reviewedHead &&
+    Number(event.required_count || 0) === 0 &&
+    samePath(event.artifact_path, artifactPath) &&
+    event.advisory_artifact_hash === artifactHash
+  ));
+}
+
+function hasTrustedExecutionEvidenceEvent(events, { runDir, reviewedHead }) {
+  const evidencePath = path.join(runDir, "execution-evidence.json");
+  const evidenceHash = hashFileSha256(evidencePath);
+  if (!evidenceHash) return false;
+  return events.some((event) => (
+    (
+      event.event === "dispatch_result" &&
+      event.head_sha === reviewedHead &&
+      samePath(event.execution_evidence_path, evidencePath) &&
+      event.execution_evidence_hash === evidenceHash
+    ) ||
+    (
+      event.event === "execution_evidence_rebranded" &&
+      event.new_head_sha === reviewedHead &&
+      samePath(event.execution_evidence_path, evidencePath) &&
+      event.execution_evidence_hash === evidenceHash
+    )
+  ));
+}
+
 function readHardenedAdvisoryArtifact(artifactPath) {
   const stat = fs.lstatSync(artifactPath);
   if (!stat.isFile() || stat.isSymbolicLink()) {
@@ -210,6 +267,18 @@ function readHardenedAdvisoryArtifact(artifactPath) {
 function buildReviewAssuranceGateFailure({ prNumber, manifestData, runDir }) {
   if (!manifestData || !isHardenedReviewAssurance(manifestData)) return null;
   const round = Number(manifestData.review?.rounds || 0);
+  const reviewedHead = manifestData.review?.last_reviewed_sha || null;
+  let events;
+  try {
+    events = readRunDirEvents(runDir);
+  } catch (error) {
+    return {
+      status: "invalid_hardened_advisory",
+      pr: prNumber,
+      readyToMerge: false,
+      reason: `events.jsonl is not readable hardened provenance: ${error.message}`,
+    };
+  }
   const advisoryArtifacts = findAdvisoryArtifacts(runDir, round);
   if (advisoryArtifacts.length === 0) {
     return {
@@ -230,6 +299,15 @@ function buildReviewAssuranceGateFailure({ prNumber, manifestData, runDir }) {
           reason: `${path.basename(artifactPath)} contains ${advisory.required_findings.length} required finding(s).`,
         };
       }
+      const artifactHash = hashFileSha256(artifactPath);
+      if (!findSuccessfulAdvisoryEvent(events, { artifactHash, artifactPath, reviewedHead, round })) {
+        return {
+          status: "invalid_hardened_advisory",
+          pr: prNumber,
+          readyToMerge: false,
+          reason: `${path.basename(artifactPath)} is not bound to a successful advisory_review event and artifact hash for the reviewed HEAD.`,
+        };
+      }
     } catch (error) {
       return {
         status: "invalid_hardened_advisory",
@@ -242,7 +320,7 @@ function buildReviewAssuranceGateFailure({ prNumber, manifestData, runDir }) {
 
   const executionStatus = computeQualityExecutionStatus({
     runDir,
-    reviewedHead: manifestData.review?.last_reviewed_sha || null,
+    reviewedHead,
     strict: true,
   });
   if (executionStatus.status !== "pass") {
@@ -251,6 +329,14 @@ function buildReviewAssuranceGateFailure({ prNumber, manifestData, runDir }) {
       pr: prNumber,
       readyToMerge: false,
       reason: executionStatus.reason || "strict execution evidence did not pass",
+    };
+  }
+  if (!hasTrustedExecutionEvidenceEvent(events, { runDir, reviewedHead })) {
+    return {
+      status: "hardened_execution_evidence_failed",
+      pr: prNumber,
+      readyToMerge: false,
+      reason: "strict execution evidence is not bound to a dispatch_result or execution_evidence_rebranded event for the reviewed HEAD.",
     };
   }
   return null;
@@ -265,11 +351,6 @@ function evaluateReviewGate({ prNumber, comments, commits, manifestData, expecte
 
   if (manifestData && !rubricAnchor.satisfied) {
     return buildRubricGateFailure(prNumber, rubricAnchor);
-  }
-
-  const assuranceFailure = buildReviewAssuranceGateFailure({ prNumber, manifestData, runDir });
-  if (assuranceFailure) {
-    return withRubricNote(assuranceFailure, rubricAnchor);
   }
 
   let lastReviewComment = null;
@@ -359,6 +440,11 @@ function evaluateReviewGate({ prNumber, comments, commits, manifestData, expecte
       reviewedAt: lastReviewComment.createdAt,
       readyToMerge: false,
     }, rubricAnchor);
+  }
+
+  const assuranceFailure = buildReviewAssuranceGateFailure({ prNumber, manifestData, runDir });
+  if (assuranceFailure) {
+    return withRubricNote(assuranceFailure, rubricAnchor);
   }
 
   const roundMatch = lastReviewComment.body.match(/Rounds?:\s*(\d+)/);

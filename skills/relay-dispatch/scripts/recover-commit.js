@@ -379,6 +379,8 @@ function main() {
         previous_head_sha: rebrandResult.previousSha,
         new_head_sha: commitSha,
         reason,
+        execution_evidence_path: rebrandResult.evidencePath,
+        execution_evidence_hash: rebrandResult.evidenceHash,
       });
     }
   }

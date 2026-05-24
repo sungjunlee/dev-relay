@@ -3,6 +3,7 @@ const { execFileSync } = require("child_process");
 const fs = require("fs");
 const path = require("path");
 const { resolveExecutorDefaultModel } = require("../../../relay-dispatch/scripts/executor-model-config");
+const { hashFileSha256 } = require("../../../relay-dispatch/scripts/execution-evidence");
 const { appendRunEvent, EVENTS } = require("../../../relay-dispatch/scripts/relay-events");
 const { parseAdvisoryReview, validateAdvisoryProfile } = require("../advisory-review-schema");
 const { captureGitStatus, resolveReviewerScript } = require("./reviewer-invoke");
@@ -154,7 +155,8 @@ async function finishAdvisoryReview({
     failureReason = error.message;
   }
 
-  const result = { artifactPath, elapsedMs: elapsed(), failureReason, profile, rawResponsePath, reviewer: advisoryRun.reviewerName, status, ...counts };
+  const artifactHash = artifactPath ? hashFileSha256(artifactPath) : null;
+  const result = { artifactHash, artifactPath, elapsedMs: elapsed(), failureReason, profile, rawResponsePath, reviewer: advisoryRun.reviewerName, status, ...counts };
   try {
     appendRunEvent(runRepoPath, data.run_id, {
       event: EVENTS.ADVISORY_REVIEW,
@@ -167,6 +169,7 @@ async function finishAdvisoryReview({
       profile,
       status,
       artifact_path: artifactPath,
+      advisory_artifact_hash: artifactHash,
       raw_response_path: rawResponsePath,
       elapsed_ms: result.elapsedMs,
       failure_reason: failureReason,

@@ -1,9 +1,9 @@
 const fs = require("fs");
 const path = require("path");
+const { normalizeReviewAssurance } = require("../../relay-dispatch/scripts/manifest/review-assurance");
 
 const CHANGE_TYPES = new Set(["bugfix", "feature", "refactor", "docs", "test", "infra", "visual", "prompt"]);
 const EXECUTION_MODES = new Set(["quick", "standard", "fresh-context", "batch-wave"]);
-const REVIEW_ASSURANCE_LEVELS = new Set(["standard", "hardened"]);
 const SIZES = new Set(["S", "M", "L", "XL"]);
 const TRUST_BOUNDARY_PATTERN = /\b(?:trust[- ]boundary|auth[- ]boundary|trust root|forge|forged|bypass|fail closed|gate-check|validate[- ]?(?:manifest|transition)|state transition|state-machine)\b/;
 const STATE_MACHINE_PATTERN = /\b(?:state transition|state-machine|validate[- ]?transition|manifest state)\b/;
@@ -110,11 +110,6 @@ function inferExecutionMode({ size, risk_tags, text }) {
   return "standard";
 }
 
-function normalizeReviewAssurance(value) {
-  const normalized = String(value || "standard").trim().toLowerCase();
-  return REVIEW_ASSURANCE_LEVELS.has(normalized) ? normalized : "standard";
-}
-
 function inferReviewAssurance({ risk_tags, text, taskRisk }) {
   const explicit = taskRisk?.review_assurance || taskRisk?.reviewAssurance;
   if (explicit) return normalizeReviewAssurance(explicit);
@@ -218,7 +213,7 @@ function renderTaskProfileBlock(taskProfile) {
   const lines = [
     "## Task Profile",
     "",
-    "This is advisory planner metadata for executor working style. It is not a reviewer verdict field, manifest role binding, or merge gate.",
+    "This is planner metadata for executor working style. The dispatcher may adopt review_assurance into the run manifest policy; other fields are not reviewer verdict fields, role bindings, or merge gates.",
     "",
     "```yaml",
     "task_profile:",

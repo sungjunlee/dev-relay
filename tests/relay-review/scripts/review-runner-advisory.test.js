@@ -1,6 +1,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const { execFileSync } = require("child_process");
+const crypto = require("crypto");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
@@ -21,6 +22,10 @@ const {
 const { EXECUTION_EVIDENCE_FILENAME } = require("../../../skills/relay-review/scripts/review-runner/execution-evidence");
 
 const SCRIPT = path.join(__dirname, "..", "..", "..", "skills", "relay-review", "scripts", "review-runner.js");
+
+function hashFile(filePath) {
+  return crypto.createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
+}
 
 function defaultRubricScores() {
   return [{
@@ -208,6 +213,7 @@ test("review-runner records successful opencode advisory review without gating p
   assert.ok(fs.existsSync(path.join(runDir, "review-round-1-advisory-opencode.json")));
   assert.equal(event.status, "success");
   assert.equal(event.profile, "blindspot");
+  assert.equal(event.advisory_artifact_hash, hashFile(path.join(runDir, "review-round-1-advisory-opencode.json")));
 });
 
 test("prepare-only with advisory flags writes only the primary prompt bundle", () => {

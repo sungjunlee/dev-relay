@@ -64,6 +64,7 @@ const os = require("os");
 const { pushAndOpenPR } = require("./dispatch-publish");
 const {
   buildExecutionEvidence,
+  hashFileSha256,
   writeExecutionEvidence,
 } = require("./execution-evidence");
 const {
@@ -1400,6 +1401,8 @@ async function main() {
       : `${RESUME_MODE ? "same_run_resume" : "new_dispatch"}:${status}`,
     executor_network: executorNetworkPolicy,
     failure_class: networkFailure,
+    execution_evidence_path: executionEvidencePath,
+    execution_evidence_hash: executionEvidencePath ? hashFileSha256(executionEvidencePath) : null,
   });
 
   if (AUTO_RECOVER_COMMIT && status === "completed-uncommitted" && !DRY_RUN) {
