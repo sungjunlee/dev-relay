@@ -34,6 +34,7 @@ const FLAGS = [
   { flag: "--diff-file", kind: VALUE, mode: MODE_VERBATIM, valueName: "<path>", rationale: "Operator-supplied fixture path; keep the literal argv token." },
   { flag: "--done-criteria-file", kind: VALUE, mode: MODE_VERBATIM, valueName: "<path>", rationale: "Operator-supplied anchor path; keep the literal argv token." },
   { flag: "--dry-run", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Presence flag; no value is consumed." },
+  { flag: "--effective", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Presence flag; no value is consumed." },
   { flag: "--executor", aliases: ["-e"], kind: VALUE, mode: MODE_PARSED, valueName: "<name>", rationale: "Closed selector; flag-like following tokens should mean the value is missing." },
   { flag: "--file", kind: VALUE, mode: MODE_VERBATIM, valueName: "<path>", rationale: "Operator-supplied input file path; keep the literal argv token." },
   { flag: "--fleet-id", kind: VALUE, mode: MODE_PARSED, valueName: "<id>", rationale: "Structured relay fleet identifier; flag-like following tokens should mean the value is missing." },
@@ -60,6 +61,7 @@ const FLAGS = [
   { flag: "--older-than", kind: VALUE, mode: MODE_PARSED, valueName: "<hours>", rationale: "Numeric threshold; flag-like following tokens should mean the value is missing." },
   { flag: "--out-dir", kind: VALUE, mode: MODE_VERBATIM, valueName: "<path>", rationale: "Operator-supplied output directory path; keep the literal argv token." },
   { flag: "--pin", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Presence flag; no value is consumed." },
+  { flag: "--phase", kind: VALUE, mode: MODE_PARSED, valueName: "<phase[,phase...]>", rationale: "Closed phase selector; flag-like following tokens should mean the value is missing." },
   { flag: "--post-comment", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Presence flag; no value is consumed." },
   { flag: "--pr", kind: VALUE, mode: MODE_PARSED, valueName: "<number>", rationale: "Numeric PR selector; flag-like following tokens should mean the value is missing." },
   { flag: "--pr-body-file", kind: VALUE, mode: MODE_VERBATIM, valueName: "<path>", rationale: "Operator-supplied PR body path; keep the literal argv token." },
@@ -67,6 +69,7 @@ const FLAGS = [
   { flag: "--pr-title", kind: VALUE, mode: MODE_VERBATIM, valueName: "<text>", rationale: "Operator-supplied PR title; preserve free text and embedded flag-like tokens." },
   { flag: "--prepare-only", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Presence flag; no value is consumed." },
   { flag: "--print", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Presence flag; no value is consumed." },
+  { flag: "--profile", kind: VALUE, mode: MODE_PARSED, valueName: "<company|personal>", allowedValues: ["company", "personal"], rationale: "Closed relay policy setup profile; flag-like following tokens should mean the value is missing." },
   { flag: "--project-only", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Presence flag; no value is consumed." },
   { flag: "--prompt", aliases: ["-p"], kind: VALUE, mode: MODE_VERBATIM, valueName: "<text>", rationale: "Operator-supplied prompt text; keep the literal argv token." },
   { flag: "--prompt-file", kind: VALUE, mode: MODE_VERBATIM, valueName: "<path>", rationale: "Operator-supplied prompt path; keep the literal argv token." },
@@ -162,6 +165,10 @@ const COMMAND_FLAGS = {
   "recover-commit": [
     "--repo", "--run-id", "--manifest", "--reason", "--pr-title", "--pr-body-file",
     "--dry-run", "--json", "--help",
+  ],
+  "relay-config": [
+    "--profile", "--effective", "--phase", "--executor", "--reviewer", "--model",
+    "--json", "--help",
   ],
   "rebrand-evidence": [
     "--repo", "--run-id", "--manifest", "--reason", "--dry-run", "--json", "--help",
