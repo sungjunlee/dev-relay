@@ -255,7 +255,6 @@ describe("appendLearningsCore — fixture-driven", () => {
     const result = appendLearningsCore({
       capabilitiesContent: SAMPLE_CAPABILITIES,
       primaryComponent: "auth",
-      secondaryComponents: [],
       runId: "r2",
       pr: "99",
       synthesis: "added retry policy",
@@ -273,7 +272,6 @@ describe("appendLearningsCore — fixture-driven", () => {
     const result = appendLearningsCore({
       capabilitiesContent: SAMPLE_CAPABILITIES,
       primaryComponent: "billing",
-      secondaryComponents: [],
       runId: "001", // already seeded under billing
       pr: "1",
       synthesis: "duplicate attempt",
@@ -287,7 +285,6 @@ describe("appendLearningsCore — fixture-driven", () => {
     const result = appendLearningsCore({
       capabilitiesContent: SAMPLE_CAPABILITIES,
       primaryComponent: "ghost",
-      secondaryComponents: [],
       runId: "r3",
       pr: "10",
       synthesis: null,
@@ -301,7 +298,6 @@ describe("appendLearningsCore — fixture-driven", () => {
     const result = appendLearningsCore({
       capabilitiesContent: SAMPLE_CAPABILITIES,
       primaryComponent: "Auth API",
-      secondaryComponents: [],
       runId: "rInvalid",
       pr: "10",
       synthesis: null,
@@ -311,28 +307,11 @@ describe("appendLearningsCore — fixture-driven", () => {
     assert.equal(result.reason, "invalid_component_name");
   });
 
-  it("multi-component records a D4 warning for secondary entries", () => {
-    const result = appendLearningsCore({
-      capabilitiesContent: SAMPLE_CAPABILITIES,
-      primaryComponent: "auth",
-      secondaryComponents: ["billing"],
-      runId: "r4",
-      pr: "11",
-      synthesis: "multi",
-      date: "2026-05-23",
-    });
-    assert.equal(result.status, STATUS.APPENDED);
-    assert.equal(result.warnings.length, 1);
-    assert.equal(result.warnings[0].kind, "secondary_components_ignored");
-    assert.match(result.warnings[0].detail, /billing/);
-  });
-
   it("tampered: BEGIN marker missing → failure (not silent)", () => {
     const tampered = SAMPLE_CAPABILITIES.replace("<!-- LEARN:BEGIN -->\n", "");
     const result = appendLearningsCore({
       capabilitiesContent: tampered,
       primaryComponent: "auth",
-      secondaryComponents: [],
       runId: "r5",
       pr: "12",
       synthesis: null,
@@ -350,7 +329,6 @@ describe("appendLearningsCore — fixture-driven", () => {
     const result = appendLearningsCore({
       capabilitiesContent: swapped,
       primaryComponent: "auth",
-      secondaryComponents: [],
       runId: "r6",
       pr: "13",
       synthesis: null,
@@ -433,6 +411,22 @@ describe("appendLearnings — end-to-end with fs", () => {
     }
   });
 
+  it("multi-component component: fails because the field is one primary routing handle", () => {
+    const repo = makeRepo();
+    try {
+      seedFixture(repo, { activeComponent: "auth, billing" });
+      const before = fs.readFileSync(path.join(repo, "spec", "capabilities.md"), "utf-8");
+      const result = appendLearnings({ repo, runId: "rMulti", pr: "504", synthesis: "multi", date: "2026-05-23" });
+      const after = fs.readFileSync(path.join(repo, "spec", "capabilities.md"), "utf-8");
+      assert.equal(result.status, STATUS.FAILED);
+      assert.equal(result.reason, "multiple_components");
+      assert.deepEqual(result.components, ["auth", "billing"]);
+      assert.equal(after, before);
+    } finally {
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
   it("multiple active sprints → failed before writing", () => {
     const repo = makeRepo();
     try {
@@ -480,7 +474,6 @@ describe("formatHumanReport", () => {
       capabilitiesPath: "/x/spec/capabilities.md",
       primaryComponent: "auth",
       entry: "- 2026-05-23 (run #r1): did it [PR #42]",
-      warnings: [],
     });
     assert.match(out, /Appended/);
     assert.match(out, /did it/);
