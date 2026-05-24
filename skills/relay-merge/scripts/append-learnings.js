@@ -143,6 +143,10 @@ function parseCapabilityHeading(line) {
   return isValidCapabilityName(name) ? name : null;
 }
 
+function isCapabilityBoundary(line) {
+  return /^## Capability:\s+/.test(line);
+}
+
 function resolveActiveSprint(sprintsDir, { readdir = fs.readdirSync, readFile = fs.readFileSync, fileExists = fs.existsSync } = {}) {
   if (!fileExists(sprintsDir)) return null;
   const files = readdir(sprintsDir)
@@ -179,7 +183,7 @@ function findCapabilityBlock(capabilitiesContent, name) {
 
   let end = lines.length;
   for (let i = start + 1; i < lines.length; i += 1) {
-    if (parseCapabilityHeading(lines[i])) { end = i; break; }
+    if (isCapabilityBoundary(lines[i])) { end = i; break; }
   }
   return { start, end, lines };
 }
@@ -358,6 +362,7 @@ module.exports = {
   parseComponents,
   isValidCapabilityName,
   parseCapabilityHeading,
+  isCapabilityBoundary,
   resolveActiveSprint,
   findActiveSprint,
   findCapabilityBlock,
