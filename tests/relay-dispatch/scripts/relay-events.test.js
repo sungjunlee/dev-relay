@@ -203,6 +203,28 @@ const RUN_EVENT_FIELD_CASES = [
     expected: { pr_number: 123 },
   },
   {
+    label: "override audit fields",
+    fields: {
+      event: EVENTS.FORCE_FINALIZE,
+      state_from: "review_pending",
+      state_to: "merged",
+      head_sha: "deadbeef",
+      reason: "operator override",
+      override_class: "force_finalize_nonready",
+      affected_head_sha: "deadbeef",
+      prior_state: "review_pending",
+      required_reason: "operator override",
+      operator_initiated: true,
+    },
+    expected: {
+      override_class: "force_finalize_nonready",
+      affected_head_sha: "deadbeef",
+      prior_state: "review_pending",
+      required_reason: "operator override",
+      operator_initiated: true,
+    },
+  },
+  {
     label: "pr_body_only",
     fields: {
       event: EVENTS.STATE_RECOVERY,
@@ -302,6 +324,30 @@ test("appendRunEvent omits last_reviewed_sha when absent", () => {
   });
 
   assert.equal(Object.prototype.hasOwnProperty.call(record, "last_reviewed_sha"), false);
+});
+
+test("appendRunEvent rejects incomplete override audit records", () => {
+  for (const [field, value] of [
+    ["override_class", ""],
+    ["affected_head_sha", ""],
+    ["required_reason", ""],
+  ]) {
+    const { repoRoot, runId } = createContext();
+    assert.throws(
+      () => appendRunEvent(repoRoot, runId, {
+        event: EVENTS.FORCE_FINALIZE,
+        state_from: "review_pending",
+        state_to: "merged",
+        head_sha: "deadbeef",
+        reason: "operator override",
+        override_class: "force_finalize_nonready",
+        affected_head_sha: "deadbeef",
+        required_reason: "operator override",
+        [field]: value,
+      }),
+      new RegExp(`override audit field ${field} is required`)
+    );
+  }
 });
 
 // Test-side bare event strings below are intentional canaries: one proves write-time
