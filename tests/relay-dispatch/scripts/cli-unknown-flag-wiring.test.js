@@ -21,6 +21,8 @@ const CLI_TARGETS = [
     ["--repo", ".", "--run-id", "fake", "--reason", "test", "--no-merge"], "--no-merge"],
   ["relay-dispatch", "skills/relay-dispatch/scripts/cleanup-worktrees.js",
     ["--repo", ".", "--no-merge"], "--no-merge"],
+  ["relay-dispatch", "skills/relay-dispatch/scripts/relay-config.js",
+    ["init", "--profile", "company", "--no-merge"], "--no-merge"],
   ["relay-dispatch", "skills/relay-dispatch/scripts/recover-state.js",
     ["--repo", ".", "--run-id", "fake", "--to", "review_pending",
      "--reason", "test", "--no-merge"], "--no-merge"],
