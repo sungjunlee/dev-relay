@@ -2,11 +2,12 @@ const path = require("path");
 
 const { nowIso } = require("./paths");
 const { writeTextFileWithoutFollowingSymlinks } = require("./rubric");
+const { normalizeReviewAssurance } = require("./review-assurance");
 
 const GUIDANCE_METADATA_FILENAME = "guidance-metadata.json";
 const DISPATCH_PROMPT_FILENAME = "dispatch-prompt.md";
 
-const SCALAR_FIELDS = new Set(["size", "change_type", "execution_mode"]);
+const SCALAR_FIELDS = new Set(["size", "change_type", "execution_mode", "review_assurance"]);
 const ARRAY_FIELDS = new Set(["domains", "risk_tags", "guidance_packs", "derivation_inputs"]);
 
 function stripYamlScalar(value) {
@@ -88,7 +89,7 @@ function extractTaskProfileBlock(promptText) {
 }
 
 function buildTaskProfileSummary(profile) {
-  return {
+  const summary = {
     size: profile.size || null,
     change_type: profile.change_type || null,
     domains: uniqueStrings(profile.domains),
@@ -98,6 +99,18 @@ function buildTaskProfileSummary(profile) {
       ? { derivation_inputs: uniqueStrings(profile.derivation_inputs) }
       : {}),
   };
+  if (profile.review_assurance) {
+    summary.review_assurance = normalizeReviewAssurance(profile.review_assurance);
+  }
+  return summary;
+}
+
+function extractReviewAssuranceFromPrompt(promptText) {
+  const block = extractTaskProfileBlock(promptText);
+  if (!block) return null;
+  const profile = parseTaskProfileYaml(block);
+  if (!profile?.review_assurance) return null;
+  return normalizeReviewAssurance(profile.review_assurance);
 }
 
 function extractGuidanceFromPrompt(promptText) {
@@ -177,6 +190,7 @@ module.exports = {
   buildGuidanceMetadata,
   DISPATCH_PROMPT_FILENAME,
   extractGuidanceFromPrompt,
+  extractReviewAssuranceFromPrompt,
   GUIDANCE_METADATA_FILENAME,
   persistGuidanceMetadata,
 };

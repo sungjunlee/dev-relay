@@ -94,6 +94,12 @@ function parseExecutionEvidenceArtifact(text) {
   if (artifact.test_result_hash !== "unspecified" && !SHA256_PATTERN.test(artifact.test_result_hash)) {
     throw new Error("execution evidence test_result_hash must be 'unspecified' or a sha256 hex digest");
   }
+  if (
+    artifact.test_exit_code !== undefined &&
+    (!Number.isInteger(artifact.test_exit_code) || artifact.test_exit_code < 0)
+  ) {
+    throw new Error("execution evidence test_exit_code must be a non-negative integer when present");
+  }
 
   return artifact;
 }
@@ -110,6 +116,10 @@ function readExecutionEvidenceArtifact(runDir) {
   }
 
   try {
+    const stat = fs.lstatSync(artifactPath);
+    if (!stat.isFile() || stat.isSymbolicLink()) {
+      throw new Error("execution evidence must be a regular file inside the run directory");
+    }
     return {
       state: "loaded",
       artifactPath,
@@ -126,7 +136,7 @@ function readExecutionEvidenceArtifact(runDir) {
   }
 }
 
-function computeQualityExecutionStatus({ runDir, reviewedHead }) {
+function computeQualityExecutionStatus({ runDir, reviewedHead, strict = false }) {
   const artifactLoad = readExecutionEvidenceArtifact(runDir);
   if (artifactLoad.state === "missing") {
     return {
@@ -151,6 +161,32 @@ function computeQualityExecutionStatus({ runDir, reviewedHead }) {
       status: "fail",
       reason: `stale artifact: recorded at ${artifactLoad.artifact.head_sha}, reviewed at ${reviewedHead}`,
     };
+  }
+  if (strict) {
+    if (!isNonEmptyString(artifactLoad.artifact.test_command) || artifactLoad.artifact.test_command === "unspecified") {
+      return {
+        status: "fail",
+        reason: "strict execution evidence requires a non-empty test_command",
+      };
+    }
+    if (artifactLoad.artifact.test_result_hash === "unspecified") {
+      return {
+        status: "fail",
+        reason: "strict execution evidence requires a sha256 test_result_hash",
+      };
+    }
+    if (artifactLoad.artifact.test_exit_code === undefined) {
+      return {
+        status: "fail",
+        reason: "strict execution evidence requires test_exit_code=0",
+      };
+    }
+    if (artifactLoad.artifact.test_exit_code !== 0) {
+      return {
+        status: "fail",
+        reason: `strict execution evidence recorded nonzero test_exit_code=${artifactLoad.artifact.test_exit_code}`,
+      };
+    }
   }
   return {
     status: "pass",

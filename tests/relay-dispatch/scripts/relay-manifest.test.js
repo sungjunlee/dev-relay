@@ -8,6 +8,8 @@ const path = require("path");
 
 const {
   CLEANUP_STATUSES,
+  DEFAULT_REVIEW_ASSURANCE,
+  REVIEW_ASSURANCE,
   STATES,
   captureAttempt,
   collectEnvironmentSnapshot,
@@ -114,6 +116,46 @@ test("inferIssueNumber extracts issue numbers from issue branches", () => {
   assert.equal(inferIssueNumber("issue-42"), 42);
   assert.equal(inferIssueNumber("feature/issue-99-auth"), 99);
   assert.equal(inferIssueNumber("feature/auth"), null);
+});
+
+test("createManifestSkeleton defaults and validates review assurance policy", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-assurance-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  initGitRepo(repoRoot);
+
+  const standard = createManifestSkeleton({
+    repoRoot,
+    runId: "issue-528-20260524120000000",
+    branch: "issue-528",
+    baseBranch: "main",
+    issueNumber: 528,
+    worktreePath: path.join(repoRoot, "wt"),
+  });
+  assert.equal(standard.policy.review_assurance, DEFAULT_REVIEW_ASSURANCE);
+
+  const hardened = createManifestSkeleton({
+    repoRoot,
+    runId: "issue-528-20260524120100000",
+    branch: "issue-528-hardened",
+    baseBranch: "main",
+    issueNumber: 528,
+    worktreePath: path.join(repoRoot, "wt2"),
+    reviewAssurance: REVIEW_ASSURANCE.HARDENED,
+  });
+  assert.equal(hardened.policy.review_assurance, "hardened");
+
+  assert.throws(
+    () => createManifestSkeleton({
+      repoRoot,
+      runId: "issue-528-20260524120200000",
+      branch: "issue-528-invalid",
+      baseBranch: "main",
+      issueNumber: 528,
+      worktreePath: path.join(repoRoot, "wt3"),
+      reviewAssurance: "codex-only",
+    }),
+    /invalid review assurance/
+  );
 });
 
 test("createRunId is branch-stable and filesystem-safe", () => {

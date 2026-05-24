@@ -50,6 +50,7 @@ test("code task profile selects source-code guidance and records derivation inpu
   assert.ok(profile.domains.includes("ci"));
   assert.ok(profile.risk_tags.includes("public-api"));
   assert.ok(profile.risk_tags.includes("backward-compatibility"));
+  assert.equal(profile.review_assurance, "hardened");
   assert.ok(profile.guidance_packs.includes("surgical-change"));
   assert.ok(profile.guidance_packs.includes("verification-evidence"));
   assert.ok(profile.guidance_packs.includes("simplify-pass"));
@@ -71,6 +72,7 @@ test("docs task profile selects docs reader-success guidance", () => {
   });
 
   assert.equal(profile.change_type, "docs");
+  assert.equal(profile.review_assurance, "standard");
   assert.ok(profile.domains.includes("docs"));
   assert.ok(profile.guidance_packs.includes("docs-reader-success"));
 });
@@ -118,6 +120,7 @@ test("trust-boundary task profile selects trust-boundary guidance", () => {
   assert.ok(profile.risk_tags.includes("trust-boundary"));
   assert.ok(profile.risk_tags.includes("state-machine"));
   assert.equal(profile.execution_mode, "fresh-context");
+  assert.equal(profile.review_assurance, "hardened");
   assert.ok(profile.guidance_packs.includes("trust-boundary"));
 });
 
@@ -133,6 +136,20 @@ test("validate manifest wording selects trust-boundary guidance", () => {
   assert.ok(profile.risk_tags.includes("trust-boundary"));
   assert.ok(profile.risk_tags.includes("state-machine"));
   assert.equal(profile.execution_mode, "fresh-context");
+  assert.equal(profile.review_assurance, "hardened");
+});
+
+test("task risk can explicitly select standard review assurance", () => {
+  const profile = deriveTaskProfile({
+    doneCriteria: "Update a prompt contract comment without behavior changes.",
+    probeSignal: PROBE_SIGNAL,
+    historicalSignal: HISTORICAL_SIGNAL,
+    taskRisk: { review_assurance: "standard" },
+    size: "S",
+  });
+
+  assert.ok(profile.risk_tags.includes("prompt-contract"));
+  assert.equal(profile.review_assurance, "standard");
 });
 
 test("selected task_profile renders metadata and working guidance in dispatch prompts", () => {
@@ -150,6 +167,7 @@ test("selected task_profile renders metadata and working guidance in dispatch pr
   assert.match(rendered, /## Task Profile/);
   assert.match(rendered, /task_profile:/);
   assert.match(rendered, /change_type: feature/);
+  assert.match(rendered, /review_assurance: standard/);
   assert.match(rendered, /guidance_packs:/);
   assert.match(rendered, /surgical-change/);
   assert.match(rendered, /derivation_inputs:/);
@@ -186,6 +204,7 @@ test("relay-plan documents task_profile shape, derivation, and planner-only boun
   assert.match(reference, /domains/);
   assert.match(reference, /risk_tags/);
   assert.match(reference, /execution_mode/);
+  assert.match(reference, /review_assurance/);
   assert.match(reference, /guidance_packs/);
   assert.match(reference, /Done Criteria/);
   assert.match(reference, /probe signal/);

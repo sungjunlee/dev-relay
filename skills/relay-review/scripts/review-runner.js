@@ -2,53 +2,31 @@
 const fs = require("fs");
 const path = require("path");
 const { STATES } = require("../../relay-dispatch/scripts/manifest/lifecycle");
+const { isHardenedReviewAssurance } = require("../../relay-dispatch/scripts/manifest/review-assurance");
 const { ensureRunLayout, getRunDir } = require("../../relay-dispatch/scripts/manifest/paths");
-const {
-  buildReviewRunnerRubricGateFailure,
-  loadRubricFromRunDir,
-} = require("../../relay-dispatch/scripts/manifest/rubric");
+const { buildReviewRunnerRubricGateFailure, loadRubricFromRunDir } = require("../../relay-dispatch/scripts/manifest/rubric");
 const { writeManifest } = require("../../relay-dispatch/scripts/manifest/store");
 const { appendIterationScore, appendRunEvent, appendScoreDivergence, EVENTS } = require("../../relay-dispatch/scripts/relay-events");
 const { git, writeText } = require("./review-runner/common");
-const {
-  applyReviewerIdentity,
-  getGhLogin,
-  loadDiff,
-  loadDoneCriteria,
-  parseRemoteHost,
-  resolveContext,
-  resolveIssueNumber,
-  resolveRemoteHost,
-} = require("./review-runner/context");
+const { applyReviewerIdentity, getGhLogin, loadDiff, loadDoneCriteria, parseRemoteHost, resolveContext, resolveIssueNumber, resolveRemoteHost } = require("./review-runner/context");
 const { buildPrompt, formatPriorVerdictSummary } = require("./review-runner/prompt");
 const { buildAdvisoryPrompt } = require("./review-runner/advisory-prompt");
 const { parseReviewVerdict, validateReviewVerdict, validateScopeDrift } = require("./review-runner/verdict");
 const { buildCommentBody, formatIssueList, formatScopeDrift, postComment } = require("./review-runner/comment");
 const { buildScoreDivergenceAnalysis, loadPrBody, parseScoreLog, toIterationScoreEventEntry } = require("./review-runner/divergence");
 const { applyQualityExecutionStatus, buildExecutionEvidenceFailureVerdict, buildMissingExecutionEvidenceVerdict, computeQualityExecutionStatus } = require("./review-runner/execution-evidence");
-const {
-  buildRedispatchPrompt,
-  buildRubricGateRedispatchPrompt,
-  computeFactorStatusFlips,
-  computeRepeatedIssueCount,
-  decideFlipFlopEscalation,
-  detectChurnGrowth,
-  summarizeLineage,
-  toEscalatedVerdict,
-} = require("./review-runner/redispatch");
+const { applyReviewAssurancePolicy } = require("./review-runner/assurance");
+const { buildRedispatchPrompt, buildRubricGateRedispatchPrompt, computeFactorStatusFlips, computeRepeatedIssueCount, decideFlipFlopEscalation, detectChurnGrowth, summarizeLineage, toEscalatedVerdict } = require("./review-runner/redispatch");
 const { applyPolicyViolationToManifest, applyVerdictToManifest } = require("./review-runner/manifest-apply");
 const { writePrBodySnapshot } = require("./review-runner/pr-body-snapshot");
 const { loadReviewText, resolveReviewerName, resolveReviewerScript } = require("./review-runner/reviewer-invoke");
 const { maybeSwapReviewer } = require("./review-runner/reviewer-swap");
 const { finishAdvisoryReview, parsePositiveSeconds, resolveAdvisoryModel, startAdvisoryReview, validateAdvisoryProfile } = require("./review-runner/advisory");
 const { printResult, printUsage } = require("./review-runner/output");
-const {
-  bindCliArgs,
-  findUnknownFlags,
-} = require("../../relay-dispatch/scripts/cli-args");
+const { bindCliArgs, findUnknownFlags } = require("../../relay-dispatch/scripts/cli-args");
 
 const args = process.argv.slice(2);
-const KNOWN_FLAGS = ["--repo", "--run-id", "--branch", "--pr", "--manifest", "--done-criteria-file", "--diff-file", "--review-file", "--reviewer", "--reviewer-script", "--reviewer-model", "--advisory-reviewer", "--advisory-profile", "--advisory-reviewer-model", "--advisory-timeout", "--prepare-only", "--no-comment", "--json", "--help", "-h"];
+const KNOWN_FLAGS = ["--repo", "--run-id", "--branch", "--pr", "--manifest", "--done-criteria-file", "--diff-file", "--review-file", "--manual-review-reason", "--reviewer", "--reviewer-script", "--reviewer-model", "--advisory-reviewer", "--advisory-profile", "--advisory-reviewer-model", "--advisory-timeout", "--prepare-only", "--no-comment", "--json", "--help", "-h"];
 const cliArgs = bindCliArgs(args, {
   commandName: "review-runner",
   reservedFlags: KNOWN_FLAGS,
@@ -74,6 +52,7 @@ async function run() {
   const doneCriteriaFile = cliArgs.getArg("--done-criteria-file");
   const diffFile = cliArgs.getArg("--diff-file");
   const reviewFile = cliArgs.getArg("--review-file");
+  const manualReviewReason = cliArgs.getArg("--manual-review-reason");
   const reviewerArg = cliArgs.getArg("--reviewer");
   const reviewerScriptArg = cliArgs.getArg("--reviewer-script");
   const reviewerModel = cliArgs.getArg("--reviewer-model");
@@ -86,6 +65,9 @@ async function run() {
   const jsonOut = cliArgs.hasFlag("--json");
   if (!advisoryReviewerArg && (advisoryProfileArg || advisoryReviewerModel || advisoryTimeoutArg)) {
     throw new Error("--advisory-reviewer is required when advisory options are supplied");
+  }
+  if (manualReviewReason && !reviewFile) {
+    throw new Error("--manual-review-reason requires --review-file");
   }
   const advisoryProfile = advisoryReviewerArg ? validateAdvisoryProfile(advisoryProfileArg || "blindspot") : null;
   const advisoryTimeoutSeconds = advisoryReviewerArg ? parsePositiveSeconds(advisoryTimeoutArg) : null;
@@ -187,6 +169,8 @@ async function run() {
     reviewFile: reviewFile || null,
     reviewHeadSha: reviewedHeadSha,
     reviewRepoPath,
+    reviewAssurance: data.policy?.review_assurance || "standard",
+    manualReviewReason: manualReviewReason || null,
     reviewer: reviewerName,
     reviewerScript,
     round,
@@ -252,8 +236,20 @@ async function run() {
       "The reviewer must score every rubric factor."
     );
   }
-  const executionStatus = computeQualityExecutionStatus({ runDir, reviewedHead: reviewedHeadSha });
+  const hardenedAssurance = isHardenedReviewAssurance(data);
+  const executionStatus = computeQualityExecutionStatus({
+    runDir,
+    reviewedHead: reviewedHeadSha,
+    strict: hardenedAssurance,
+  });
   verdict = applyQualityExecutionStatus(verdict, executionStatus);
+  await finishAdvisoryOnce();
+  verdict = applyReviewAssurancePolicy(verdict, {
+    advisoryResult,
+    hardenedAssurance,
+    manualReviewReason,
+    reviewFile,
+  });
   if (verdict.verdict === "pass" && executionStatus.status !== "pass") {
     verdict = executionStatus.status === "missing"
       ? buildMissingExecutionEvidenceVerdict(verdict)
@@ -334,6 +330,7 @@ async function run() {
     review: {
       ...(updatedManifest.review || {}),
       last_reviewer: reviewerName,
+      ...(manualReviewReason ? { manual_review_reason: manualReviewReason } : {}),
     },
   };
   updatedManifest = applyReviewerIdentity(updatedManifest, noComment, runRepoPath);
@@ -378,7 +375,6 @@ async function run() {
   result.state = updatedManifest.state;
   result.verdictPath = verdictPath;
 
-  await finishAdvisoryOnce();
   printResult({ doneCriteriaPath, diffPath, jsonOut, manifestPath, originalState: data.state, prepareOnly, prNumber, promptPath, redispatchPath, result, updatedManifest, verdictPath });
   } catch (error) {
     await finishAdvisoryOnce();

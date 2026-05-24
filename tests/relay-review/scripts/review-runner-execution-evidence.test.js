@@ -56,6 +56,85 @@ test("execution-evidence returns pass when artifact head matches reviewed head",
   );
 });
 
+test("execution-evidence strict mode requires command and result hash", () => {
+  const runDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-execution-strict-"));
+  writeArtifact(runDir, makeArtifact("a".repeat(40), {
+    test_command: "unspecified",
+    test_result_hash: "unspecified",
+  }));
+
+  const result = computeQualityExecutionStatus({
+    runDir,
+    reviewedHead: "a".repeat(40),
+    strict: true,
+  });
+  assert.equal(result.status, "fail");
+  assert.match(result.reason, /non-empty test_command/);
+
+  writeArtifact(runDir, makeArtifact("a".repeat(40), {
+    test_command: "node --test",
+    test_result_hash: "unspecified",
+  }));
+  const missingHash = computeQualityExecutionStatus({
+    runDir,
+    reviewedHead: "a".repeat(40),
+    strict: true,
+  });
+  assert.equal(missingHash.status, "fail");
+  assert.match(missingHash.reason, /sha256 test_result_hash/);
+});
+
+test("execution-evidence strict mode fails nonzero test_exit_code and accepts zero", () => {
+  const runDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-execution-exit-"));
+  writeArtifact(runDir, makeArtifact("a".repeat(40), {
+    test_command: "node --test",
+    test_result_hash: "b".repeat(64),
+  }));
+
+  const missing = computeQualityExecutionStatus({
+    runDir,
+    reviewedHead: "a".repeat(40),
+    strict: true,
+  });
+  assert.equal(missing.status, "fail");
+  assert.match(missing.reason, /requires test_exit_code=0/);
+
+  writeArtifact(runDir, makeArtifact("a".repeat(40), {
+    test_command: "node --test",
+    test_result_hash: "b".repeat(64),
+    test_exit_code: 1,
+  }));
+
+  const failed = computeQualityExecutionStatus({
+    runDir,
+    reviewedHead: "a".repeat(40),
+    strict: true,
+  });
+  assert.equal(failed.status, "fail");
+  assert.match(failed.reason, /nonzero test_exit_code=1/);
+
+  writeArtifact(runDir, makeArtifact("a".repeat(40), {
+    test_command: "node --test",
+    test_result_hash: "b".repeat(64),
+    test_exit_code: 0,
+  }));
+  assert.deepEqual(
+    computeQualityExecutionStatus({ runDir, reviewedHead: "a".repeat(40), strict: true }),
+    { status: "pass", reason: null }
+  );
+});
+
+test("execution-evidence rejects symlink artifacts", () => {
+  const runDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-execution-symlink-"));
+  const outside = path.join(os.tmpdir(), `relay-review-execution-${process.pid}-${Date.now()}.json`);
+  fs.writeFileSync(outside, JSON.stringify(makeArtifact("a".repeat(40))), "utf-8");
+  fs.symlinkSync(outside, path.join(runDir, EXECUTION_EVIDENCE_FILENAME));
+
+  const loaded = readExecutionEvidenceArtifact(runDir);
+  assert.equal(loaded.state, "invalid");
+  assert.match(loaded.error, /regular file/);
+});
+
 test("execution-evidence returns fail with stale reason when artifact head mismatches reviewed head", () => {
   const runDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-execution-stale-"));
   writeArtifact(runDir, makeArtifact("a".repeat(40)));

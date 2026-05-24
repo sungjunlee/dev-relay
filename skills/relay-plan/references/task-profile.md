@@ -17,6 +17,7 @@ task_profile:
     - public-api
     - backward-compatibility
   execution_mode: quick | standard | fresh-context | batch-wave
+  review_assurance: standard | hardened
   guidance_packs:
     - surgical-change
     - verification-evidence
@@ -43,5 +44,6 @@ When `guidance_packs` is non-empty, dispatch prompts render both the profile met
 - Documentation tasks select `docs-reader-success`.
 - Refactors and quality-risk M+ code tasks select `simplify-pass`.
 - Trust-boundary tasks select `trust-boundary` and usually use `execution_mode: fresh-context`.
+- Tasks that touch trust boundaries, state machines, merge/review gates, manifest anchors, recovery paths, data loss, public APIs, migrations, prompt contracts, or backward compatibility should recommend `review_assurance: hardened`.
 
 When `guidance_packs` is empty, relay-plan must leave non-guidance dispatch prompt behavior unchanged.

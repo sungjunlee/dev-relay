@@ -65,7 +65,7 @@ function changesRequestedVerdict() {
   };
 }
 
-function setupRepo() {
+function setupRepo({ reviewAssurance = "standard", strictEvidence = false } = {}) {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-advisory-"));
   const remoteRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-advisory-origin-"));
   process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
@@ -95,6 +95,7 @@ function setupRepo() {
     orchestrator: "codex",
     executor: "codex",
     reviewer: "codex",
+    reviewAssurance,
   });
   manifest = updateManifestState(manifest, STATES.DISPATCHED, "await_dispatch_result");
   manifest.anchor = createEnforcementFixture({
@@ -110,8 +111,9 @@ function setupRepo() {
     schema_version: 1,
     head_sha: headSha,
     test_command: "node --test",
-    test_result_hash: "unspecified",
+    test_result_hash: strictEvidence ? "a".repeat(64) : "unspecified",
     test_result_summary: "pass",
+    ...(strictEvidence ? { test_exit_code: 0 } : {}),
     recorded_at: "2026-05-05T00:00:00.000Z",
     recorded_by: "dispatch-orchestrator-v1",
   }, null, 2)}\n`, "utf-8");
@@ -137,7 +139,7 @@ setTimeout(() => {
   return filePath;
 }
 
-function writeFakeOpencode(repoRoot, { logPath = null, invalidJson = false, mutate = false } = {}) {
+function writeFakeOpencode(repoRoot, { logPath = null, invalidJson = false, mutate = false, requiredFinding = false } = {}) {
   const filePath = path.join(repoRoot, "fake-opencode.js");
   fs.writeFileSync(filePath, `#!/usr/bin/env node
 const fs = require("fs");
@@ -151,7 +153,7 @@ if (${invalidJson ? "true" : "false"}) {
   process.stdout.write(JSON.stringify({
     profile: "blindspot",
     summary: "One advisory blind spot.",
-    required_findings: [],
+    required_findings: ${requiredFinding ? `[{ title: "Required hardened fix", body: "Must fix before merge.", file: "README.md", line: 1, severity: "P2", category: "bypass", confidence: 0.9 }]` : "[]"},
     advisory_findings: [{
       title: "Advisory-only test gap",
       body: "This should be recorded but not merged into primary redispatch.",
@@ -287,4 +289,76 @@ test("advisory findings do not alter primary redispatch output", () => {
   assert.equal(result.nextState, STATES.CHANGES_REQUESTED);
   assert.match(redispatch, /Primary required fix/);
   assert.doesNotMatch(redispatch, /Advisory-only test gap/);
+});
+
+test("hardened review assurance blocks a primary pass without advisory evidence", () => {
+  const { repoRoot, manifestPath, runId, doneCriteriaPath, diffPath } = setupRepo({
+    reviewAssurance: "hardened",
+    strictEvidence: true,
+  });
+  const primaryScript = writePrimaryReviewer(repoRoot, passVerdict());
+
+  const result = JSON.parse(execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--run-id", runId,
+    "--pr", "429",
+    "--done-criteria-file", doneCriteriaPath,
+    "--diff-file", diffPath,
+    "--reviewer", "codex",
+    "--reviewer-script", primaryScript,
+    "--no-comment",
+    "--json",
+  ], { encoding: "utf-8" }));
+
+  assert.equal(result.nextState, STATES.CHANGES_REQUESTED);
+  assert.equal(readManifest(manifestPath).data.state, STATES.CHANGES_REQUESTED);
+  assert.match(fs.readFileSync(result.verdictPath, "utf-8"), /Missing hardened advisory review/);
+});
+
+test("hardened review assurance blocks advisory failures and required findings", async (t) => {
+  for (const entry of [
+    { label: "invalid json", options: { invalidJson: true }, expected: /Hardened advisory review did not complete successfully/ },
+    { label: "required finding", options: { requiredFinding: true }, expected: /Hardened advisory review reported required findings/ },
+  ]) {
+    await t.test(entry.label, () => {
+      const { repoRoot, manifestPath, runId, doneCriteriaPath, diffPath } = setupRepo({
+        reviewAssurance: "hardened",
+        strictEvidence: true,
+      });
+      const primaryScript = writePrimaryReviewer(repoRoot, passVerdict());
+      const opencodeScript = writeFakeOpencode(repoRoot, entry.options);
+
+      const result = runReview({ repoRoot, runId, doneCriteriaPath, diffPath, primaryScript, opencodeScript });
+
+      assert.equal(result.nextState, STATES.CHANGES_REQUESTED);
+      assert.equal(readManifest(manifestPath).data.state, STATES.CHANGES_REQUESTED);
+      assert.match(fs.readFileSync(result.verdictPath, "utf-8"), entry.expected);
+    });
+  }
+});
+
+test("hardened manual review pass requires an audit reason", () => {
+  const { repoRoot, manifestPath, runId, doneCriteriaPath, diffPath } = setupRepo({
+    reviewAssurance: "hardened",
+    strictEvidence: true,
+  });
+  const reviewFile = path.join(repoRoot, "manual-verdict.json");
+  fs.writeFileSync(reviewFile, JSON.stringify(passVerdict()), "utf-8");
+
+  const result = JSON.parse(execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--run-id", runId,
+    "--pr", "429",
+    "--done-criteria-file", doneCriteriaPath,
+    "--diff-file", diffPath,
+    "--review-file", reviewFile,
+    "--no-comment",
+    "--json",
+  ], { encoding: "utf-8" }));
+
+  assert.equal(result.nextState, STATES.CHANGES_REQUESTED);
+  assert.equal(readManifest(manifestPath).data.state, STATES.CHANGES_REQUESTED);
+  assert.match(fs.readFileSync(result.verdictPath, "utf-8"), /Manual review verdict requires an audit reason/);
 });

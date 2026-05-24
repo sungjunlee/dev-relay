@@ -61,6 +61,56 @@ function createRubricStateFixture(state) {
   return { runDir, manifestData };
 }
 
+function createHardenedGateFixture({ advisory = "valid", strictEvidence = true } = {}) {
+  const { runDir, manifestData } = createRubricStateFixture("loaded");
+  const headSha = "a".repeat(40);
+  manifestData.policy = { review_assurance: "hardened" };
+  manifestData.review.rounds = 1;
+  manifestData.review.last_reviewed_sha = headSha;
+  if (advisory === "valid" || advisory === "required") {
+    fs.writeFileSync(path.join(runDir, "review-round-1-advisory-opencode.json"), JSON.stringify({
+      profile: "blindspot",
+      summary: "advisory",
+      required_findings: advisory === "required" ? [{
+        title: "Required",
+        body: "Must fix",
+        file: "README.md",
+        line: 1,
+        severity: "P2",
+        category: "bypass",
+        confidence: 0.9,
+      }] : [],
+      advisory_findings: [],
+      duplicate_or_low_confidence: [],
+    }, null, 2), "utf-8");
+  } else if (advisory === "invalid") {
+    fs.writeFileSync(path.join(runDir, "review-round-1-advisory-opencode.json"), "not json\n", "utf-8");
+  } else if (advisory === "forged") {
+    fs.writeFileSync(path.join(runDir, "review-round-1-advisory-opencode.json"), "{}\n", "utf-8");
+  } else if (advisory === "symlink") {
+    const outside = path.join(os.tmpdir(), `relay-review-advisory-${process.pid}-${Date.now()}.json`);
+    fs.writeFileSync(outside, JSON.stringify({
+      profile: "blindspot",
+      summary: "advisory",
+      required_findings: [],
+      advisory_findings: [],
+      duplicate_or_low_confidence: [],
+    }), "utf-8");
+    fs.symlinkSync(outside, path.join(runDir, "review-round-1-advisory-opencode.json"));
+  }
+  fs.writeFileSync(path.join(runDir, "execution-evidence.json"), JSON.stringify({
+    schema_version: 1,
+    head_sha: headSha,
+    test_command: strictEvidence ? "node --test" : "unspecified",
+    test_result_hash: strictEvidence ? "a".repeat(64) : "unspecified",
+    test_result_summary: "pass",
+    ...(strictEvidence ? { test_exit_code: 0 } : {}),
+    recorded_at: "2026-05-05T00:00:00.000Z",
+    recorded_by: "dispatch-orchestrator-v1",
+  }, null, 2), "utf-8");
+  return { headSha, runDir, manifestData };
+}
+
 function evaluatePassWithRubricState(state) {
   const { runDir, manifestData } = createRubricStateFixture(state);
   return evaluateReviewGate({
@@ -133,6 +183,67 @@ test("evaluateReviewGate still accepts PASS when rubric state is loaded", () => 
 
   assert.equal(result.status, "lgtm");
   assert.equal(result.rubricStatus, "satisfied");
+  assert.equal(result.readyToMerge, true);
+});
+
+test("evaluateReviewGate enforces hardened advisory and strict execution evidence", async (t) => {
+  const cases = [
+    { label: "missing advisory", options: { advisory: "missing" }, status: "missing_hardened_advisory" },
+    { label: "invalid advisory", options: { advisory: "invalid" }, status: "invalid_hardened_advisory" },
+    { label: "forged advisory", options: { advisory: "forged" }, status: "invalid_hardened_advisory" },
+    { label: "symlink advisory", options: { advisory: "symlink" }, status: "invalid_hardened_advisory" },
+    { label: "required advisory finding", options: { advisory: "required" }, status: "hardened_advisory_required_findings" },
+    { label: "weak execution evidence", options: { strictEvidence: false }, status: "hardened_execution_evidence_failed" },
+  ];
+
+  for (const entry of cases) {
+    await t.test(entry.label, () => {
+      const { headSha, runDir, manifestData } = createHardenedGateFixture(entry.options);
+      const result = evaluateReviewGate({
+        prNumber: 40,
+        comments: [
+          {
+            body: "<!-- relay-review -->\n## Relay Review\nVerdict: PASS\nRounds: 1",
+            createdAt: "2026-04-03T08:00:00Z",
+          },
+        ],
+        commits: [
+          {
+            oid: headSha,
+            committedDate: "2026-04-03T07:00:00Z",
+          },
+        ],
+        manifestData,
+        runDir,
+      });
+
+      assert.equal(result.status, entry.status);
+      assert.equal(result.readyToMerge, false);
+    });
+  }
+});
+
+test("evaluateReviewGate accepts hardened PASS when advisory and strict evidence are present", () => {
+  const { headSha, runDir, manifestData } = createHardenedGateFixture();
+  const result = evaluateReviewGate({
+    prNumber: 40,
+    comments: [
+      {
+        body: "<!-- relay-review -->\n## Relay Review\nVerdict: PASS\nRounds: 1",
+        createdAt: "2026-04-03T08:00:00Z",
+      },
+    ],
+    commits: [
+      {
+        oid: headSha,
+        committedDate: "2026-04-03T07:00:00Z",
+      },
+    ],
+    manifestData,
+    runDir,
+  });
+
+  assert.equal(result.status, "lgtm");
   assert.equal(result.readyToMerge, true);
 });
 

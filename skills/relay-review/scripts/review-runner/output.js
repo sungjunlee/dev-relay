@@ -12,6 +12,7 @@ function printUsage() {
   console.log(`  --done-criteria-file <path>  ${modeLabel("--done-criteria-file")} Use fixture file instead of gh issue fetch`);
   console.log(`  --diff-file <path>           ${modeLabel("--diff-file")} Use fixture file instead of gh pr diff`);
   console.log(`  --review-file <path>         ${modeLabel("--review-file")} Structured reviewer JSON verdict to apply`);
+  console.log(`  --manual-review-reason <text> ${modeLabel("--manual-review-reason")} Audit reason for manual verdicts under hardened assurance`);
   console.log(`  --reviewer <name>            ${modeLabel("--reviewer")} Reviewer adapter to invoke (codex|claude|...)`);
   console.log(`  --reviewer-script <path>     ${modeLabel("--reviewer-script")} Override adapter script path`);
   console.log(`  --reviewer-model <name>      ${modeLabel("--reviewer-model")} Reviewer model override`);

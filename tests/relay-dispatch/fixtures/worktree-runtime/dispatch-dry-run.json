@@ -19,6 +19,7 @@
   "requestId": null,
   "leafId": null,
   "doneCriteriaFile": null,
+  "reviewAssurance": "standard",
   "environment": "collected-at-dispatch",
   "runState": null,
   "dispatchSkipped": false
