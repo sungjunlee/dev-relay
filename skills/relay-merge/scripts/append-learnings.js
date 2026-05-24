@@ -13,10 +13,12 @@
  *
  * Resolution flow:
  *   1. Find the active sprint file (status: active) under <repo>/backlog/sprints/
- *   2. Read its `component:` frontmatter; multi-component is comma-separated;
- *      first declared wins per design doc D4 (and a warn is emitted).
+ *   2. Require exactly one active sprint, then read its `component:` frontmatter.
+ *      Multi-component is comma-separated; first declared wins per design doc D4
+ *      and a warning is emitted.
  *   3. Locate <repo>/spec/capabilities.md and the matching `## Capability: <name>`
- *      block; require its LEARN:BEGIN/LEARN:END marker pair to be intact.
+ *      block. Capability names are kebab-case (`[a-z0-9][a-z0-9-]*`). Require
+ *      the block's LEARN:BEGIN/LEARN:END marker pair to be intact.
  *   4. If no entry already exists for run-id (`run #<id>` substring), append a
  *      new line in schema-bound format inside the markers.
  *
@@ -27,6 +29,7 @@
  *   - entry for this run-id already present (idempotent)
  *
  * Loud failures (status: failed, exit 1):
+ *   - multiple active sprint files (ambiguous component target)
  *   - markers missing or out of order in the matching block (tampering)
  *   - malformed inputs
  *
@@ -45,6 +48,7 @@ const STATUS = Object.freeze({
 
 const MARKER_BEGIN = "<!-- LEARN:BEGIN -->";
 const MARKER_END = "<!-- LEARN:END -->";
+const CAPABILITY_NAME_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
 
 function usage() {
   return "Usage: append-learnings.js --repo <path> --run-id <id> --pr <number> [--synthesis TEXT] [--date YYYY-MM-DD] [--dry-run] [--json]";
@@ -127,32 +131,54 @@ function parseComponents(fmValue) {
   return fmValue.split(",").map((s) => s.trim()).filter(Boolean);
 }
 
-function findActiveSprint(sprintsDir, { readdir = fs.readdirSync, readFile = fs.readFileSync, fileExists = fs.existsSync } = {}) {
+function isValidCapabilityName(name) {
+  return CAPABILITY_NAME_PATTERN.test(name);
+}
+
+function parseCapabilityHeading(line) {
+  const match = line.match(/^## Capability:\s+(.+?)\s*$/);
+  if (!match) return null;
+  const name = match[1].trim();
+  return isValidCapabilityName(name) ? name : null;
+}
+
+function resolveActiveSprint(sprintsDir, { readdir = fs.readdirSync, readFile = fs.readFileSync, fileExists = fs.existsSync } = {}) {
   if (!fileExists(sprintsDir)) return null;
   const files = readdir(sprintsDir)
     .filter((f) => f.endsWith(".md") && !f.startsWith("_"))
-    .map((f) => path.join(sprintsDir, f));
+    .map((f) => path.join(sprintsDir, f))
+    .sort();
+  const active = [];
   for (const file of files) {
     const content = readFile(file, "utf-8");
     const fm = parseFrontmatter(content);
     if (!fm) continue;
-    if (/^status:\s*active\s*$/m.test(fm)) return { file, content };
+    if (/^status:\s*active\s*$/m.test(fm)) active.push({ file, content });
   }
+  if (active.length > 1) {
+    return buildFailure("multiple_active_sprints", {
+      sprintFiles: active.map((entry) => entry.file),
+    });
+  }
+  if (active.length === 1) return active[0];
   return null;
 }
 
+const findActiveSprint = resolveActiveSprint;
+
 function findCapabilityBlock(capabilitiesContent, name) {
+  if (!isValidCapabilityName(name)) return null;
   const lines = capabilitiesContent.split("\n");
   let start = -1;
   for (let i = 0; i < lines.length; i += 1) {
-    const match = lines[i].match(/^## Capability:\s+(\S+)/);
-    if (match && match[1] === name) { start = i; break; }
+    const heading = parseCapabilityHeading(lines[i]);
+    if (heading === name) { start = i; break; }
   }
   if (start === -1) return null;
 
   let end = lines.length;
   for (let i = start + 1; i < lines.length; i += 1) {
-    if (/^## Capability:\s+/.test(lines[i])) { end = i; break; }
+    if (parseCapabilityHeading(lines[i])) { end = i; break; }
   }
   return { start, end, lines };
 }
@@ -191,6 +217,10 @@ function appendLearningsCore({
   synthesis,
   date,
 }) {
+  if (!isValidCapabilityName(primaryComponent)) {
+    return buildSkip("invalid_component_name", { primaryComponent });
+  }
+
   const block = findCapabilityBlock(capabilitiesContent, primaryComponent);
   if (!block) {
     return buildSkip("component_not_found", { primaryComponent });
@@ -256,6 +286,7 @@ function appendLearnings({
 
   const sprintsDir = path.join(repo, "backlog", "sprints");
   const sprint = findActiveSprint(sprintsDir, fsDeps);
+  if (sprint?.status === STATUS.FAILED) return { ...sprint, sprintsDir };
   if (!sprint) return buildSkip("active_sprint_absent", { sprintsDir });
 
   const fm = parseFrontmatter(sprint.content);
@@ -329,6 +360,9 @@ module.exports = {
   parseFrontmatter,
   readFrontmatterField,
   parseComponents,
+  isValidCapabilityName,
+  parseCapabilityHeading,
+  resolveActiveSprint,
   findActiveSprint,
   findCapabilityBlock,
   locateMarkers,
