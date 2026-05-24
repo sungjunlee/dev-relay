@@ -63,6 +63,8 @@ const {
 } = require("./review-gate");
 const { STATUS: LEARNING_STATUS, appendLearnings } = require("./append-learnings");
 
+const ALLOWED_CHECK_CONCLUSIONS = new Set(["SUCCESS", "NEUTRAL", "SKIPPED"]);
+
 const args = process.argv.slice(2);
 const KNOWN_FLAGS = [
   "--repo", "--run-id", "--manifest", "--branch", "--pr", "--merge-method", "--skip-review",
@@ -132,8 +134,43 @@ function fetchPreMergeContext(repoPath, prNumber) {
     commits: parsed.commits || [],
     mergeable: parsed.mergeable || null,
     checks,
-    failing: checks.filter((c) => c.conclusion === "FAILURE"),
+    unsafeChecks: checks.filter(isUnsafeStatusCheck),
   };
+}
+
+function normalizeStatusCheckValue(value) {
+  return String(value || "").trim().toUpperCase();
+}
+
+function statusCheckName(check) {
+  return check?.name || check?.context || "unknown";
+}
+
+function describeStatusCheck(check) {
+  const status = normalizeStatusCheckValue(check?.status);
+  const conclusion = normalizeStatusCheckValue(check?.conclusion);
+  const state = normalizeStatusCheckValue(check?.state);
+  const details = [];
+  if (status) details.push(`status=${status}`);
+  if (conclusion) details.push(`conclusion=${conclusion}`);
+  if (state) details.push(`state=${state}`);
+  if (!details.length) details.push("state=UNKNOWN");
+  return `${statusCheckName(check)} (${details.join(", ")})`;
+}
+
+function isUnsafeStatusCheck(check) {
+  const status = normalizeStatusCheckValue(check?.status);
+  if (status && status !== "COMPLETED") return true;
+
+  const conclusion = normalizeStatusCheckValue(check?.conclusion);
+  if (conclusion) {
+    return !ALLOWED_CHECK_CONCLUSIONS.has(conclusion);
+  }
+
+  const state = normalizeStatusCheckValue(check?.state);
+  if (state) return state !== "SUCCESS";
+
+  return true;
 }
 
 function fetchPrMergeState(repoPath, prNumber) {
@@ -151,10 +188,10 @@ function assertPreMergeSafety(preMerge, prNumber) {
       `PR #${prNumber} has merge conflicts with the base branch. Resolve conflicts and push, then retry.`
     );
   }
-  if (preMerge.failing.length > 0) {
-    const names = preMerge.failing.map((c) => c.name || c.context || "unknown").join(", ");
+  if (preMerge.unsafeChecks.length > 0) {
+    const names = preMerge.unsafeChecks.map(describeStatusCheck).join(", ");
     throw new Error(
-      `PR #${prNumber} has failing CI checks: ${names}. Fix these before merging.`
+      `PR #${prNumber} has non-success CI checks: ${names}. Fix these before merging.`
     );
   }
 }
