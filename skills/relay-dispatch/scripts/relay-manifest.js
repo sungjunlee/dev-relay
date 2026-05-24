@@ -9,6 +9,7 @@ const cleanup = require("./manifest/cleanup");
 const attempts = require("./manifest/attempts");
 const environment = require("./manifest/environment");
 const guidance = require("./manifest/guidance");
+const reviewAssurance = require("./manifest/review-assurance");
 
 module.exports = {
   ...paths,
@@ -19,4 +20,5 @@ module.exports = {
   ...attempts,
   ...environment,
   ...guidance,
+  ...reviewAssurance,
 };

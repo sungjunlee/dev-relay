@@ -1,5 +1,6 @@
 const fs = require("fs");
 const path = require("path");
+const { normalizeReviewAssurance } = require("../../relay-dispatch/scripts/manifest/review-assurance");
 
 const CHANGE_TYPES = new Set(["bugfix", "feature", "refactor", "docs", "test", "infra", "visual", "prompt"]);
 const EXECUTION_MODES = new Set(["quick", "standard", "fresh-context", "batch-wave"]);
@@ -109,6 +110,24 @@ function inferExecutionMode({ size, risk_tags, text }) {
   return "standard";
 }
 
+function inferReviewAssurance({ risk_tags, text, taskRisk }) {
+  const explicit = taskRisk?.review_assurance || taskRisk?.reviewAssurance;
+  if (explicit) return normalizeReviewAssurance(explicit);
+  const hardenedRiskTags = new Set([
+    "trust-boundary",
+    "state-machine",
+    "public-api",
+    "backward-compatibility",
+    "prompt-contract",
+    "migration",
+  ]);
+  if (risk_tags.some((tag) => hardenedRiskTags.has(tag))) return "hardened";
+  if (/\b(?:merge gate|review gate|manifest anchor|recovery path|data loss|force-finalize|execution evidence)\b/.test(text)) {
+    return "hardened";
+  }
+  return "standard";
+}
+
 function selectGuidancePacks({ change_type, risk_tags, size, historical }) {
   const packs = [];
   if (change_type === "docs") {
@@ -127,12 +146,14 @@ function selectGuidancePacks({ change_type, risk_tags, size, historical }) {
 function normalizeTaskProfile(profile) {
   const change_type = CHANGE_TYPES.has(profile?.change_type) ? profile.change_type : "feature";
   const execution_mode = EXECUTION_MODES.has(profile?.execution_mode) ? profile.execution_mode : "standard";
+  const review_assurance = normalizeReviewAssurance(profile?.review_assurance);
   return {
     size: normalizeSize(profile?.size),
     change_type,
     domains: asStringArray(profile?.domains),
     risk_tags: asStringArray(profile?.risk_tags),
     execution_mode,
+    review_assurance,
     guidance_packs: asStringArray(profile?.guidance_packs),
     derivation_inputs: asStringArray(profile?.derivation_inputs),
   };
@@ -155,6 +176,7 @@ function deriveTaskProfile({
   const domains = inferDomains(signalText, probe);
   const risk_tags = inferRiskTags(intentText, risk);
   const execution_mode = inferExecutionMode({ size: normalizedSize, risk_tags, text: signalText });
+  const review_assurance = inferReviewAssurance({ risk_tags, text: signalText, taskRisk: risk });
   const guidance_packs = selectGuidancePacks({
     change_type,
     risk_tags,
@@ -168,6 +190,7 @@ function deriveTaskProfile({
     domains,
     risk_tags,
     execution_mode,
+    review_assurance,
     guidance_packs,
     derivation_inputs: ["done_criteria", "probe_signal", "historical_signal", "task_risk"],
   };
@@ -190,7 +213,7 @@ function renderTaskProfileBlock(taskProfile) {
   const lines = [
     "## Task Profile",
     "",
-    "This is advisory planner metadata for executor working style. It is not a reviewer verdict field, manifest role binding, or merge gate.",
+    "This is planner metadata for executor working style. The dispatcher may adopt review_assurance into the run manifest policy; other fields are not reviewer verdict fields, role bindings, or merge gates.",
     "",
     "```yaml",
     "task_profile:",
@@ -199,6 +222,7 @@ function renderTaskProfileBlock(taskProfile) {
     renderYamlArray("domains", profile.domains, 2),
     renderYamlArray("risk_tags", profile.risk_tags, 2),
     `  execution_mode: ${yamlScalar(profile.execution_mode)}`,
+    `  review_assurance: ${yamlScalar(profile.review_assurance)}`,
     renderYamlArray("guidance_packs", profile.guidance_packs, 2),
   ];
   if (profile.derivation_inputs.length > 0) {

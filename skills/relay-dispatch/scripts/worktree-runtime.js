@@ -36,6 +36,7 @@ function formatDispatchDryRun({
   leafId = null,
   fleetId = null,
   doneCriteriaFile = null,
+  reviewAssurance = null,
   worktreePlan,
 }) {
   const lines = [
@@ -70,6 +71,9 @@ function formatDispatchDryRun({
   }
   if (doneCriteriaFile) {
     lines.push(`  Done AC:  ${doneCriteriaFile}`);
+  }
+  if (reviewAssurance) {
+    lines.push(`  Assurance: ${reviewAssurance}`);
   }
   if (worktreePlan.worktreeinclude.length) {
     lines.push(`  .worktreeinclude: ${worktreePlan.worktreeinclude.join(", ")}`);

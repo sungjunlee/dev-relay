@@ -117,7 +117,7 @@ Skip this step when the issue or relay-ready handoff already provides the final 
 
 Write the dispatch prompt and rubric YAML to temp files. The prompt uses `../relay/references/prompt-template.md` and appends Setup, optional Working Guidance, Scoring Rubric, Iteration Protocol, and Score Log sections. Full iteration protocol and Score Log format: `references/iteration-protocol.md`.
 
-Return a handoff summary with dispatch prompt path, rubric YAML path, Done Criteria anchor path when persisted, and the recommended `relay-dispatch` command, including `--run-id "$RUN_ID"` and `--done-criteria-file <done-criteria-path>` when Step 7 persisted Done Criteria.
+Return a handoff summary with dispatch prompt path, rubric YAML path, Done Criteria anchor path when persisted, review assurance level, and the recommended `relay-dispatch` command, including `--run-id "$RUN_ID"` and `--done-criteria-file <done-criteria-path>` when Step 7 persisted Done Criteria. Use `--review-assurance hardened` only when task/rubric risk requires stronger verification; never derive it from executor or reviewer identity.
 
 When Step 7 persisted Done Criteria, the dispatch handoff must preserve both anchors:
 

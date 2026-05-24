@@ -9,6 +9,7 @@ const {
   requireValidFleetId,
   requireValidRunId,
 } = require("./paths");
+const { normalizeReviewAssurance } = require("./review-assurance");
 
 const RELAY_VERSION = 2;
 const NOTES_TEMPLATE = "# Notes\n\n## Context\n\n## Review History\n";
@@ -170,6 +171,7 @@ function createManifestSkeleton({
   mergePolicy = "manual_after_lgtm",
   cleanupPolicy = "on_close",
   reviewerWritePolicy = "forbid",
+  reviewAssurance = "standard",
   environment = null,
   requestId = null,
   leafId = null,
@@ -215,6 +217,7 @@ function createManifestSkeleton({
       merge: mergePolicy,
       cleanup: cleanupPolicy,
       reviewer_write: reviewerWritePolicy,
+      review_assurance: normalizeReviewAssurance(reviewAssurance),
     },
     anchor: {
       done_criteria_source: doneCriteriaSource || (issueNumber ? "issue" : "unknown"),

@@ -27,6 +27,7 @@
  *   --reasoning <level>    Codex reasoning effort override (default by rubric size: S=medium, M=high, L/XL=xhigh)
  *   --rubric-file <path>   REQUIRED: copy rubric YAML to run dir (persists for review)
  *   --test-command <cmd>   Record the executor-side test command in execution evidence
+ *   --review-assurance <level> standard | hardened (default: standard)
  *   --rubric-grandfathered Retired alias; dispatch rejects it
  *   --request-id <id>      Link the run back to a relay-ready request
  *   --leaf-id <id>         Link the run back to a relay-ready leaf handoff
@@ -63,6 +64,7 @@ const os = require("os");
 const { pushAndOpenPR } = require("./dispatch-publish");
 const {
   buildExecutionEvidence,
+  hashFileSha256,
   writeExecutionEvidence,
 } = require("./execution-evidence");
 const {
@@ -82,6 +84,7 @@ const {
 } = require("./manifest/store");
 const { parseModelHints } = require("./model-hints");
 const { resolveExecutorDefaultModel } = require("./executor-model-config");
+const { normalizeReviewAssurance } = require("./manifest/review-assurance");
 const {
   createRunId,
   ensureRunLayout,
@@ -112,6 +115,7 @@ const { findUnknownFlags, getPositionals, modeLabel, readArg, schemaHasFlag } = 
 const { formatAttemptsForPrompt, readPreviousAttempts } = require("./manifest/attempts");
 const {
   buildGuidanceMetadata,
+  extractReviewAssuranceFromPrompt,
   GUIDANCE_METADATA_FILENAME,
   persistGuidanceMetadata,
 } = require("./manifest/guidance");
@@ -130,7 +134,7 @@ const args = process.argv.slice(2);
 const KNOWN_FLAGS = [
   "--branch", "-b", "--run-id", "--manifest", "--prompt", "-p", "--prompt-file", "--executor", "-e",
   "--model", "-m", "--model-hints", "--sandbox", "--network-access", "--copy", "--timeout", "--reasoning", "--rubric-file", "--test-command", "--rubric-grandfathered",
-  "--request-id", "--leaf-id", "--fleet-id", "--done-criteria-file",
+  "--request-id", "--leaf-id", "--fleet-id", "--done-criteria-file", "--review-assurance",
   "--register", "--no-cleanup", "--auto-recover-commit", "--no-auto-recover-commit", "--allow-conflicting-run", "--dry-run", "--json", "--help", "-h",
 ];
 const CLI_ARG_OPTIONS = { commandName: "dispatch", reservedFlags: KNOWN_FLAGS };
@@ -157,6 +161,7 @@ if (!args.length || hasCliFlag(["--help", "-h"])) {
   console.log(`  --reasoning        ${modeLabel("--reasoning")} Codex reasoning effort (default by rubric size: S=medium, M=high, L/XL=xhigh)`);
   console.log(`  --rubric-file      ${modeLabel("--rubric-file")} REQUIRED: copy rubric YAML to run dir (persists for review)`);
   console.log(`  --test-command     ${modeLabel("--test-command")} Record the executor-side test command in execution evidence`);
+  console.log(`  --review-assurance ${modeLabel("--review-assurance")} Review assurance: standard | hardened (default: standard)`);
   console.log(`  --rubric-grandfathered  ${modeLabel("--rubric-grandfathered")} Retired alias; remove anchor.rubric_grandfathered manually`);
   console.log(`  --request-id       ${modeLabel("--request-id")} Link the run back to a relay-ready request`);
   console.log(`  --leaf-id          ${modeLabel("--leaf-id")} Link the run back to a relay-ready leaf handoff`);
@@ -209,6 +214,14 @@ const REQUEST_ID = readArg(args, "--request-id", undefined, CLI_ARG_OPTIONS);
 const LEAF_ID = readArg(args, "--leaf-id", undefined, CLI_ARG_OPTIONS);
 const FLEET_ID = readArg(args, "--fleet-id", undefined, CLI_ARG_OPTIONS);
 const DONE_CRITERIA_FILE = readArg(args, "--done-criteria-file", undefined, CLI_ARG_OPTIONS);
+const REVIEW_ASSURANCE_RAW = readArg(args, "--review-assurance", undefined, CLI_ARG_OPTIONS);
+let REVIEW_ASSURANCE;
+try {
+  REVIEW_ASSURANCE = normalizeReviewAssurance(REVIEW_ASSURANCE_RAW || "standard");
+} catch (error) {
+  console.error(`Error: ${error.message}`);
+  process.exit(1);
+}
 const TIMEOUT = parseInt(readArg(args, "--timeout", defaultTimeout, CLI_ARG_OPTIONS), 10);
 if (isNaN(TIMEOUT) || TIMEOUT <= 0) {
   console.error("Error: --timeout must be a positive integer");
@@ -443,6 +456,16 @@ function validateResumeRequestLinkage(manifest, { requestId, leafId, fleetId, do
         `same-run resume cannot change immutable ${check.field} (existing: ${check.existing}, incoming: ${check.incoming})`
       );
     }
+  }
+}
+
+function validateResumeReviewAssurance(manifest, incoming) {
+  const existing = normalizeReviewAssurance(manifest?.policy?.review_assurance);
+  const requested = normalizeReviewAssurance(incoming);
+  if (existing !== requested) {
+    throw new Error(
+      `same-run resume cannot change immutable policy.review_assurance (existing: ${existing}, incoming: ${requested})`
+    );
   }
 }
 
@@ -812,6 +835,11 @@ async function main() {
         fleetId: FLEET_ID,
         doneCriteriaPath: resolvedDoneCriteriaPath,
       });
+      if (REVIEW_ASSURANCE_RAW !== undefined) {
+        validateResumeReviewAssurance(manifest, REVIEW_ASSURANCE);
+      } else {
+        REVIEW_ASSURANCE = normalizeReviewAssurance(manifest?.policy?.review_assurance);
+      }
     } catch (error) {
       console.error(`Error: ${error.message}`);
       process.exit(1);
@@ -824,6 +852,14 @@ async function main() {
   validateExecutorCli();
   const taskPromptResult = readTaskPrompt({ runDir: manifestRunDir, resumeMode: RESUME_MODE });
   let taskPrompt = taskPromptResult.prompt;
+  if (!RESUME_MODE && REVIEW_ASSURANCE_RAW === undefined) {
+    try {
+      REVIEW_ASSURANCE = extractReviewAssuranceFromPrompt(taskPrompt) || REVIEW_ASSURANCE;
+    } catch (error) {
+      console.error(`Error: ${error.message}`);
+      process.exit(1);
+    }
+  }
   if (taskPromptResult.source === "auto-discovered-redispatch" && !JSON_OUT) {
     console.log(`Auto-discovered redispatch prompt (round ${taskPromptResult.round}): ${taskPromptResult.path}`);
   }
@@ -892,6 +928,7 @@ async function main() {
       requestId: REQUEST_ID || manifest?.source?.request_id || null,
       leafId: LEAF_ID || manifest?.source?.leaf_id || null,
       doneCriteriaFile: resolvedDoneCriteriaPath || manifest?.anchor?.done_criteria_path || null,
+      reviewAssurance: REVIEW_ASSURANCE,
       environment: RESUME_MODE ? (manifest?.environment || null) : "collected-at-dispatch",
       runState: manifest?.state || null,
       dispatchSkipped: false,
@@ -927,6 +964,7 @@ async function main() {
         leafId: LEAF_ID || manifest?.source?.leaf_id || null,
         fleetId: planFleetId,
         doneCriteriaFile: resolvedDoneCriteriaPath || manifest?.anchor?.done_criteria_path || null,
+        reviewAssurance: REVIEW_ASSURANCE,
         worktreePlan,
       }));
     }
@@ -999,6 +1037,7 @@ async function main() {
         requestId: REQUEST_ID,
         leafId: LEAF_ID,
       }),
+      reviewAssurance: REVIEW_ASSURANCE,
       modelHints: MODEL_HINTS,
       fleetId: FLEET_ID,
     });
@@ -1323,6 +1362,7 @@ async function main() {
       testCommand: TEST_COMMAND,
       resultFilePath: fs.existsSync(resultFile) ? resultFile : null,
       executor: EXECUTOR,
+      testExitCode: exitCode,
     }));
   } catch (executionEvidenceError) {
     status = "failed";
@@ -1361,6 +1401,8 @@ async function main() {
       : `${RESUME_MODE ? "same_run_resume" : "new_dispatch"}:${status}`,
     executor_network: executorNetworkPolicy,
     failure_class: networkFailure,
+    execution_evidence_path: executionEvidencePath,
+    execution_evidence_hash: executionEvidencePath ? hashFileSha256(executionEvidencePath) : null,
   });
 
   if (AUTO_RECOVER_COMMIT && status === "completed-uncommitted" && !DRY_RUN) {

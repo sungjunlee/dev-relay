@@ -686,7 +686,8 @@ function readExecutionEvidence(runDir) {
   return JSON.parse(fs.readFileSync(path.join(runDir, EXECUTION_EVIDENCE_FILENAME), "utf-8"));
 }
 
-function guidancePrompt({ task = "guidance test task" } = {}) {
+function guidancePrompt({ task = "guidance test task", reviewAssurance = null } = {}) {
+  const reviewAssuranceLines = reviewAssurance ? [`  review_assurance: ${reviewAssurance}`] : [];
   return [
     "# Dispatch: Guidance persistence",
     "",
@@ -707,6 +708,7 @@ function guidancePrompt({ task = "guidance test task" } = {}) {
     "    - trust-boundary",
     "    - prompt-contract",
     "  execution_mode: fresh-context",
+    ...reviewAssuranceLines,
     "  guidance_packs:",
     "    - surgical-change",
     "    - verification-evidence",
@@ -2362,6 +2364,25 @@ test("dispatch persists selected guidance metadata in run artifacts and events",
   assert.deepEqual(guidanceEvent.task_profile_summary, artifact.task_profile_summary);
 });
 
+test("dispatch derives review assurance from task_profile when CLI policy is unset", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  writeFakeCodex(binDir);
+  const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}` };
+
+  const result = JSON.parse(runDispatch(repoRoot, [
+    "-b", "issue-profile-assurance",
+    "--prompt", guidancePrompt({ reviewAssurance: "hardened" }),
+    "--json",
+  ], env));
+
+  assert.equal(result.status, "completed");
+  const manifest = readManifest(result.manifestPath).data;
+  assert.equal(manifest.policy.review_assurance, "hardened");
+  assert.equal(manifest.advisory.guidance.task_profile_summary.review_assurance, "hardened");
+});
+
 test("dispatch resume preserves guidance metadata without injecting stale Working Guidance blocks", () => {
   const { repoRoot, relayHome } = setupRepo();
   process.env.RELAY_HOME = relayHome;
@@ -2808,6 +2829,7 @@ test("dispatch lets explicit role env vars override the unknown defaults", () =>
   const result = JSON.parse(runDispatch(repoRoot, [
     "-b", "issue-198-role-override",
     "--prompt", "respect explicit role bindings",
+    "--review-assurance", "hardened",
     "--json",
   ], {
     ...env,
@@ -2818,6 +2840,7 @@ test("dispatch lets explicit role env vars override the unknown defaults", () =>
   const manifest = readManifest(result.manifestPath).data;
   assert.equal(manifest.roles.orchestrator, "claude");
   assert.equal(manifest.roles.reviewer, "claude");
+  assert.equal(manifest.policy.review_assurance, "hardened");
 });
 
 test("dispatch dry-run never invokes orchestrator push or PR creation", () => {
@@ -3267,6 +3290,7 @@ test("dispatch writes execution evidence with the post-dispatch HEAD and the cal
   assert.equal(evidence.test_command, "node --test tests/relay-review/scripts/*.test.js");
   assert.match(evidence.test_result_hash, /^[0-9a-f]{64}$/);
   assert.equal(evidence.test_result_summary, "codex result.txt hashed");
+  assert.equal(evidence.test_exit_code, 0);
   assert.equal(evidence.recorded_by, "dispatch-orchestrator-v1");
 });
 

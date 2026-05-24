@@ -79,6 +79,8 @@ const FLAGS = [
   { flag: "--request-id", kind: VALUE, mode: MODE_PARSED, valueName: "<id>", rationale: "Structured relay-ready identifier; flag-like following tokens should mean the value is missing." },
   { flag: "--require-pr-body-change", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Require audited PR body evidence for same-HEAD recovery; no value is consumed." },
   { flag: "--review-file", kind: VALUE, mode: MODE_VERBATIM, valueName: "<path>", rationale: "Operator-supplied verdict path; keep the literal argv token." },
+  { flag: "--review-assurance", kind: VALUE, mode: MODE_PARSED, valueName: "<level>", allowedValues: ["standard", "hardened"], rationale: "Run-level review assurance policy; closed selector independent of agent identity." },
+  { flag: "--manual-review-reason", kind: VALUE, mode: MODE_VERBATIM, valueName: "<reason>", rationale: "Audit reason for applying a manual review verdict under hardened assurance." },
   { flag: "--reviewer", kind: VALUE, mode: MODE_PARSED, valueName: "<name>", rationale: "Reviewer adapter selector; flag-like following tokens should mean the value is missing." },
   { flag: "--reviewer-model", kind: VALUE, mode: MODE_PARSED, valueName: "<name>", rationale: "Reviewer model selector; flag-like following tokens should mean the value is missing." },
   { flag: "--reviewer-script", kind: VALUE, mode: MODE_VERBATIM, valueName: "<path>", rationale: "Operator-supplied adapter path; keep the literal argv token." },
@@ -123,7 +125,7 @@ const COMMAND_FLAGS = {
     "--branch", "--run-id", "--manifest", "--prompt", "--prompt-file", "--executor",
     "--model", "--model-hints", "--sandbox", "--network-access", "--copy", "--timeout", "--reasoning", "--rubric-file",
     "--test-command", "--rubric-grandfathered", "--request-id", "--leaf-id",
-    "--fleet-id", "--done-criteria-file", "--register", "--no-cleanup", "--auto-recover-commit", "--no-auto-recover-commit",
+    "--fleet-id", "--done-criteria-file", "--review-assurance", "--register", "--no-cleanup", "--auto-recover-commit", "--no-auto-recover-commit",
     "--allow-conflicting-run", "--dry-run", "--json", "--help",
   ],
   "finalize-run": [
@@ -176,7 +178,7 @@ const COMMAND_FLAGS = {
     "--diff-file", "--review-file", "--reviewer", "--reviewer-script",
     "--reviewer-model", "--advisory-reviewer", "--advisory-profile",
     "--advisory-reviewer-model", "--advisory-timeout", "--prepare-only",
-    "--no-comment", "--json", "--help",
+    "--manual-review-reason", "--no-comment", "--json", "--help",
   ],
   "update-manifest-state": [
     "--manifest", "--repo", "--run-id", "--branch", "--state", "--next-action",
