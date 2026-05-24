@@ -167,12 +167,12 @@ On re-dispatch, iteration history (prior scores + reviewer feedback) is automati
 | `--sandbox` | `workspace-write` or `read-only` | `workspace-write` |
 | `--network-access` | `disabled` or `enabled`; `enabled` passes Codex `sandbox_workspace_write.network_access=true` and is only supported with `--executor codex --sandbox workspace-write` | `disabled` |
 | `--copy` | Additional files to copy (comma-separated) | ... |
-| `--timeout` | Timeout in seconds | `1800` |
+| `--timeout` | Timeout in seconds | `codex: 2400; claude/opencode: 1800` |
 | `--register` | Additionally register in the selected executor context (Codex app thread or Claude relay-side receipt; worktrees are retained by default) | `false` |
 | `--dry-run` | Print plan, don't execute | `false` |
 | `--json` | Structured JSON output | `false` |
 
-**Timeout guidance:** 1800s for simple tasks, 3600s with self-review, 5400s for complex multi-file work.
+**Timeout guidance:** Codex defaults to 2400s; Claude and opencode default to 1800s. Use 3600s with self-review and 5400s for complex multi-file work.
 
 Manifests are stored at `~/.relay/runs/<repo-slug>/<run-id>.md` with an append-only event journal at `~/.relay/runs/<repo-slug>/<run-id>/events.jsonl`.
 
