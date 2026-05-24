@@ -61,7 +61,7 @@ const {
   evaluateReviewGate,
   summarizeRubricAuditForSkip,
 } = require("./review-gate");
-const { appendLearnings } = require("./append-learnings");
+const { STATUS: LEARNING_STATUS, appendLearnings } = require("./append-learnings");
 
 const args = process.argv.slice(2);
 const KNOWN_FLAGS = [
@@ -220,6 +220,153 @@ function deleteRemoteBranch(repoPath, branch) {
       attempted: true,
       deleted: false,
       warning: summarizeFailure(error),
+    };
+  }
+}
+
+function resolveCurrentBranch(repoPath) {
+  try {
+    return execGit(repoPath, ["symbolic-ref", "--short", "HEAD"]);
+  } catch (error) {
+    return null;
+  }
+}
+
+function trackedStatus(repoPath) {
+  return execGit(repoPath, ["status", "--porcelain", "--untracked-files=no"]);
+}
+
+function isTrackedPath(repoPath, relativePath) {
+  try {
+    execGit(repoPath, ["ls-files", "--error-unmatch", "--", relativePath]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function learningCommitMessage(runId, prNumber) {
+  return `Record relay learning for PR #${prNumber}\n\nRun: ${runId}`;
+}
+
+function appendDurableLearnings({
+  repoPath,
+  runId,
+  prNumber,
+  synthesis,
+  expectedBranch,
+}) {
+  const dryRunResult = appendLearnings({
+    repo: repoPath,
+    runId,
+    pr: String(prNumber),
+    synthesis,
+    dryRun: true,
+  });
+  if (dryRunResult.status !== LEARNING_STATUS.APPENDED) return dryRunResult;
+
+  const currentBranch = resolveCurrentBranch(repoPath);
+  if (!currentBranch) {
+    return {
+      status: LEARNING_STATUS.FAILED,
+      reason: "detached_head",
+      durability: { status: "not_written" },
+      capabilitiesPath: dryRunResult.capabilitiesPath,
+      sprintFile: dryRunResult.sprintFile,
+    };
+  }
+  if (expectedBranch && currentBranch !== expectedBranch) {
+    return {
+      status: LEARNING_STATUS.FAILED,
+      reason: "unexpected_branch",
+      expectedBranch,
+      currentBranch,
+      durability: { status: "not_written" },
+      capabilitiesPath: dryRunResult.capabilitiesPath,
+      sprintFile: dryRunResult.sprintFile,
+    };
+  }
+  if (!isTrackedPath(repoPath, path.join("spec", "capabilities.md"))) {
+    return {
+      status: LEARNING_STATUS.FAILED,
+      reason: "capabilities_untracked",
+      durability: { status: "not_written" },
+      capabilitiesPath: dryRunResult.capabilitiesPath,
+      sprintFile: dryRunResult.sprintFile,
+    };
+  }
+
+  const beforeStatus = trackedStatus(repoPath);
+  if (beforeStatus) {
+    return {
+      status: LEARNING_STATUS.FAILED,
+      reason: "dirty_worktree",
+      durability: { status: "not_written" },
+      dirtyStatus: beforeStatus,
+      capabilitiesPath: dryRunResult.capabilitiesPath,
+      sprintFile: dryRunResult.sprintFile,
+    };
+  }
+
+  const appendResult = appendLearnings({
+    repo: repoPath,
+    runId,
+    pr: String(prNumber),
+    synthesis,
+  });
+  if (appendResult.status !== LEARNING_STATUS.APPENDED) return appendResult;
+
+  try {
+    execGit(repoPath, ["add", "--", path.join("spec", "capabilities.md")]);
+    execGit(repoPath, ["commit", "-m", learningCommitMessage(runId, prNumber)]);
+  } catch (error) {
+    return {
+      ...appendResult,
+      durability: {
+        status: "manual_action_required",
+        reason: "commit_failed",
+        message: summarizeFailure(error),
+      },
+    };
+  }
+
+  const commitSha = execGit(repoPath, ["rev-parse", "HEAD"]);
+  const remoteName = resolveRemoteName(repoPath, currentBranch);
+  if (!remoteName || !hasRemote(repoPath, remoteName)) {
+    return {
+      ...appendResult,
+      commitSha,
+      currentBranch,
+      remoteName,
+      durability: {
+        status: "manual_action_required",
+        reason: "remote_missing",
+      },
+    };
+  }
+
+  try {
+    execGit(repoPath, ["push", remoteName, currentBranch]);
+    return {
+      ...appendResult,
+      commitSha,
+      currentBranch,
+      remoteName,
+      durability: {
+        status: "pushed",
+      },
+    };
+  } catch (error) {
+    return {
+      ...appendResult,
+      commitSha,
+      currentBranch,
+      remoteName,
+      durability: {
+        status: "manual_action_required",
+        reason: "push_failed",
+        message: summarizeFailure(error),
+      },
     };
   }
 }
@@ -546,11 +693,12 @@ function main() {
   let learningsResult = null;
   if (updated.state === STATES.MERGED && !dryRun) {
     try {
-      learningsResult = appendLearnings({
-        repo: repoPath,
+      learningsResult = appendDurableLearnings({
+        repoPath,
         runId: updated.run_id,
-        pr: String(prNumber),
+        prNumber: String(prNumber),
         synthesis: updated.issue?.title || null,
+        expectedBranch: updated.git?.base_branch || null,
       });
     } catch (error) {
       learningsResult = { status: "failed", reason: "exception", message: summarizeFailure(error) };

@@ -10,6 +10,9 @@ const {
   parseFrontmatter,
   readFrontmatterField,
   parseComponents,
+  isValidCapabilityName,
+  parseCapabilityHeading,
+  resolveActiveSprint,
   findActiveSprint,
   findCapabilityBlock,
   locateMarkers,
@@ -135,7 +138,20 @@ describe("parseComponents", () => {
   });
 });
 
-describe("findActiveSprint", () => {
+describe("capability heading grammar", () => {
+  it("accepts kebab-case capability names", () => {
+    assert.equal(isValidCapabilityName("merge-finalize"), true);
+    assert.equal(parseCapabilityHeading("## Capability: merge-finalize"), "merge-finalize");
+  });
+
+  it("rejects ambiguous capability headings", () => {
+    assert.equal(isValidCapabilityName("merge finalize"), false);
+    assert.equal(parseCapabilityHeading("## Capability: merge finalize"), null);
+    assert.equal(parseCapabilityHeading("## Capability: Merge-Finalize"), null);
+  });
+});
+
+describe("resolveActiveSprint / findActiveSprint", () => {
   it("returns the one sprint with status: active", () => {
     const repo = makeRepo();
     try {
@@ -143,7 +159,7 @@ describe("findActiveSprint", () => {
       fs.mkdirSync(dir, { recursive: true });
       fs.writeFileSync(path.join(dir, "a.md"), "---\nstatus: completed\n---\n");
       fs.writeFileSync(path.join(dir, "b.md"), "---\nstatus: active\n---\n");
-      const result = findActiveSprint(dir);
+      const result = resolveActiveSprint(dir);
       assert.ok(result);
       assert.ok(result.file.endsWith("b.md"));
     } finally {
@@ -157,7 +173,7 @@ describe("findActiveSprint", () => {
       const dir = path.join(repo, "backlog", "sprints");
       fs.mkdirSync(dir, { recursive: true });
       fs.writeFileSync(path.join(dir, "a.md"), "---\nstatus: completed\n---\n");
-      assert.equal(findActiveSprint(dir), null);
+      assert.equal(resolveActiveSprint(dir), null);
     } finally {
       fs.rmSync(repo, { recursive: true, force: true });
     }
@@ -165,6 +181,22 @@ describe("findActiveSprint", () => {
 
   it("returns null when sprints dir is missing", () => {
     assert.equal(findActiveSprint("/no/such/dir"), null);
+  });
+
+  it("fails loud when multiple active sprint files exist", () => {
+    const repo = makeRepo();
+    try {
+      const dir = path.join(repo, "backlog", "sprints");
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, "a.md"), "---\nstatus: active\n---\n");
+      fs.writeFileSync(path.join(dir, "b.md"), "---\nstatus: active\n---\n");
+      const result = resolveActiveSprint(dir);
+      assert.equal(result.status, STATUS.FAILED);
+      assert.equal(result.reason, "multiple_active_sprints");
+      assert.deepEqual(result.sprintFiles.map((file) => path.basename(file)), ["a.md", "b.md"]);
+    } finally {
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
   });
 });
 
@@ -181,6 +213,11 @@ describe("findCapabilityBlock", () => {
 
   it("returns null for unknown capability", () => {
     assert.equal(findCapabilityBlock(SAMPLE_CAPABILITIES, "ghost"), null);
+  });
+
+  it("does not partially match invalid headings with spaces", () => {
+    const content = SAMPLE_CAPABILITIES.replace("## Capability: auth", "## Capability: auth api");
+    assert.equal(findCapabilityBlock(content, "auth"), null);
   });
 });
 
@@ -218,7 +255,6 @@ describe("appendLearningsCore — fixture-driven", () => {
     const result = appendLearningsCore({
       capabilitiesContent: SAMPLE_CAPABILITIES,
       primaryComponent: "auth",
-      secondaryComponents: [],
       runId: "r2",
       pr: "99",
       synthesis: "added retry policy",
@@ -236,7 +272,6 @@ describe("appendLearningsCore — fixture-driven", () => {
     const result = appendLearningsCore({
       capabilitiesContent: SAMPLE_CAPABILITIES,
       primaryComponent: "billing",
-      secondaryComponents: [],
       runId: "001", // already seeded under billing
       pr: "1",
       synthesis: "duplicate attempt",
@@ -250,7 +285,6 @@ describe("appendLearningsCore — fixture-driven", () => {
     const result = appendLearningsCore({
       capabilitiesContent: SAMPLE_CAPABILITIES,
       primaryComponent: "ghost",
-      secondaryComponents: [],
       runId: "r3",
       pr: "10",
       synthesis: null,
@@ -260,20 +294,17 @@ describe("appendLearningsCore — fixture-driven", () => {
     assert.equal(result.reason, "component_not_found");
   });
 
-  it("multi-component records a D4 warning for secondary entries", () => {
+  it("invalid component names are skipped with a clear reason", () => {
     const result = appendLearningsCore({
       capabilitiesContent: SAMPLE_CAPABILITIES,
-      primaryComponent: "auth",
-      secondaryComponents: ["billing"],
-      runId: "r4",
-      pr: "11",
-      synthesis: "multi",
+      primaryComponent: "Auth API",
+      runId: "rInvalid",
+      pr: "10",
+      synthesis: null,
       date: "2026-05-23",
     });
-    assert.equal(result.status, STATUS.APPENDED);
-    assert.equal(result.warnings.length, 1);
-    assert.equal(result.warnings[0].kind, "secondary_components_ignored");
-    assert.match(result.warnings[0].detail, /billing/);
+    assert.equal(result.status, STATUS.SKIPPED);
+    assert.equal(result.reason, "invalid_component_name");
   });
 
   it("tampered: BEGIN marker missing → failure (not silent)", () => {
@@ -281,7 +312,6 @@ describe("appendLearningsCore — fixture-driven", () => {
     const result = appendLearningsCore({
       capabilitiesContent: tampered,
       primaryComponent: "auth",
-      secondaryComponents: [],
       runId: "r5",
       pr: "12",
       synthesis: null,
@@ -299,7 +329,6 @@ describe("appendLearningsCore — fixture-driven", () => {
     const result = appendLearningsCore({
       capabilitiesContent: swapped,
       primaryComponent: "auth",
-      secondaryComponents: [],
       runId: "r6",
       pr: "13",
       synthesis: null,
@@ -382,6 +411,44 @@ describe("appendLearnings — end-to-end with fs", () => {
     }
   });
 
+  it("multi-component component: fails because the field is one primary routing handle", () => {
+    const repo = makeRepo();
+    try {
+      seedFixture(repo, { activeComponent: "auth, billing" });
+      const before = fs.readFileSync(path.join(repo, "spec", "capabilities.md"), "utf-8");
+      const result = appendLearnings({ repo, runId: "rMulti", pr: "504", synthesis: "multi", date: "2026-05-23" });
+      const after = fs.readFileSync(path.join(repo, "spec", "capabilities.md"), "utf-8");
+      assert.equal(result.status, STATUS.FAILED);
+      assert.equal(result.reason, "multiple_components");
+      assert.deepEqual(result.components, ["auth", "billing"]);
+      assert.equal(after, before);
+    } finally {
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it("multiple active sprints → failed before writing", () => {
+    const repo = makeRepo();
+    try {
+      seedFixture(repo, { activeComponent: "auth" });
+      fs.writeFileSync(path.join(repo, "backlog", "sprints", "2026-05-y.md"), `---
+status: active
+component: "billing"
+---
+
+# Sprint
+`);
+      const before = fs.readFileSync(path.join(repo, "spec", "capabilities.md"), "utf-8");
+      const result = appendLearnings({ repo, runId: "rMulti", pr: "606" });
+      const after = fs.readFileSync(path.join(repo, "spec", "capabilities.md"), "utf-8");
+      assert.equal(result.status, STATUS.FAILED);
+      assert.equal(result.reason, "multiple_active_sprints");
+      assert.equal(after, before);
+    } finally {
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
   it("idempotent across invocations: re-running adds nothing", () => {
     const repo = makeRepo();
     try {
@@ -407,7 +474,6 @@ describe("formatHumanReport", () => {
       capabilitiesPath: "/x/spec/capabilities.md",
       primaryComponent: "auth",
       entry: "- 2026-05-23 (run #r1): did it [PR #42]",
-      warnings: [],
     });
     assert.match(out, /Appended/);
     assert.match(out, /did it/);
