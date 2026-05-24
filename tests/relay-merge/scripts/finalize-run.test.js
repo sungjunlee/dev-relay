@@ -165,6 +165,31 @@ function setupRepo({
   return { repoRoot, manifestPath, branch, worktreePath, headSha, runId };
 }
 
+function seedCapabilitiesForLearning(repoRoot, component = "merge-finalize") {
+  fs.mkdirSync(path.join(repoRoot, "spec"), { recursive: true });
+  fs.mkdirSync(path.join(repoRoot, "backlog", "sprints"), { recursive: true });
+  fs.writeFileSync(path.join(repoRoot, "spec", "capabilities.md"), `# Test Capabilities
+
+## Capability: ${component}
+
+**Goal:** test learning writes
+
+### Learnings
+<!-- LEARN:BEGIN -->
+<!-- LEARN:END -->
+`, "utf-8");
+  fs.writeFileSync(path.join(repoRoot, "backlog", "sprints", "2026-05-test.md"), `---
+status: active
+component: "${component}"
+---
+
+# Test Sprint
+`, "utf-8");
+  execFileSync("git", ["add", "spec/capabilities.md", "backlog/sprints/2026-05-test.md"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
+  execFileSync("git", ["commit", "-m", "Seed capabilities"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
+  execFileSync("git", ["push", "origin", "main"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
+}
+
 function createUnrelatedGitRepo(prefix = "relay-finalize-manifest-cwd-") {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
   execFileSync("git", ["init", "-b", "main"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
@@ -767,6 +792,213 @@ test("finalize-run merges and cleans a ready run", () => {
   assert.match(ghLog, /pr view 123 --json comments,commits/);
   assert.match(ghLog, /pr merge 123 --squash/);
   assert.match(ghLog, /issue close 42 --comment Resolved in PR #123/);
+});
+
+test("finalize-run appends, commits, and pushes capability learnings", () => {
+  const { repoRoot, manifestPath, branch, headSha, runId } = setupRepo();
+  seedCapabilitiesForLearning(repoRoot);
+  const logPath = path.join(repoRoot, "gh.log");
+  const fakeGh = writeFakeGh(logPath, {
+    comments: [
+      {
+        body: "<!-- relay-review -->\n## Relay Review\nVerdict: LGTM\nRounds: 1",
+        createdAt: "2026-04-03T08:00:00Z",
+      },
+    ],
+    commits: [
+      {
+        oid: headSha,
+        committedDate: "2026-04-03T08:00:00Z",
+      },
+    ],
+  });
+
+  const stdout = execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--branch", branch,
+    "--pr", "123",
+    "--json",
+  ], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+    env: { ...process.env, RELAY_GH_BIN: fakeGh },
+  });
+
+  const result = JSON.parse(stdout);
+  assert.equal(result.learnings.status, "appended");
+  assert.equal(result.learnings.durability.status, "pushed");
+  assert.match(result.learnings.entry, new RegExp(`run #${runId}`));
+  const lastSubject = execFileSync("git", ["-C", repoRoot, "log", "-1", "--pretty=%s"], { encoding: "utf-8", stdio: "pipe" }).trim();
+  assert.equal(lastSubject, "Record relay learning for PR #123");
+  const remoteMainSubject = execFileSync("git", ["-C", repoRoot, "log", "-1", "--pretty=%s", "origin/main"], { encoding: "utf-8", stdio: "pipe" }).trim();
+  assert.equal(remoteMainSubject, "Record relay learning for PR #123");
+
+  const manifest = readManifest(manifestPath).data;
+  assert.equal(manifest.state, STATES.MERGED);
+});
+
+test("finalize-run records manual action when learning push has no remote", () => {
+  const { repoRoot, branch, headSha } = setupRepo();
+  seedCapabilitiesForLearning(repoRoot);
+  execFileSync("git", ["remote", "remove", "origin"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
+  const logPath = path.join(repoRoot, "gh.log");
+  const fakeGh = writeFakeGh(logPath, {
+    comments: [
+      {
+        body: "<!-- relay-review -->\n## Relay Review\nVerdict: LGTM\nRounds: 1",
+        createdAt: "2026-04-03T08:00:00Z",
+      },
+    ],
+    commits: [
+      {
+        oid: headSha,
+        committedDate: "2026-04-03T08:00:00Z",
+      },
+    ],
+  });
+
+  const stdout = execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--branch", branch,
+    "--pr", "123",
+    "--json",
+  ], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+    env: { ...process.env, RELAY_GH_BIN: fakeGh },
+  });
+
+  const result = JSON.parse(stdout);
+  assert.equal(result.learnings.status, "appended");
+  assert.equal(result.learnings.durability.status, "manual_action_required");
+  assert.equal(result.learnings.durability.reason, "remote_missing");
+  const lastSubject = execFileSync("git", ["-C", repoRoot, "log", "-1", "--pretty=%s"], { encoding: "utf-8", stdio: "pipe" }).trim();
+  assert.equal(lastSubject, "Record relay learning for PR #123");
+});
+
+test("finalize-run refuses to write learnings when repo root has tracked dirt", () => {
+  const { repoRoot, branch, headSha } = setupRepo();
+  seedCapabilitiesForLearning(repoRoot);
+  fs.appendFileSync(path.join(repoRoot, "README.md"), "local dirt\n", "utf-8");
+  const before = fs.readFileSync(path.join(repoRoot, "spec", "capabilities.md"), "utf-8");
+  const logPath = path.join(repoRoot, "gh.log");
+  const fakeGh = writeFakeGh(logPath, {
+    comments: [
+      {
+        body: "<!-- relay-review -->\n## Relay Review\nVerdict: LGTM\nRounds: 1",
+        createdAt: "2026-04-03T08:00:00Z",
+      },
+    ],
+    commits: [
+      {
+        oid: headSha,
+        committedDate: "2026-04-03T08:00:00Z",
+      },
+    ],
+  });
+
+  const stdout = execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--branch", branch,
+    "--pr", "123",
+    "--json",
+  ], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+    env: { ...process.env, RELAY_GH_BIN: fakeGh },
+  });
+
+  const result = JSON.parse(stdout);
+  const after = fs.readFileSync(path.join(repoRoot, "spec", "capabilities.md"), "utf-8");
+  assert.equal(result.learnings.status, "failed");
+  assert.equal(result.learnings.reason, "dirty_worktree");
+  assert.equal(result.learnings.durability.status, "not_written");
+  assert.equal(after, before);
+});
+
+test("finalize-run preserves durable learning result when cleanup fails", () => {
+  const { repoRoot, branch, headSha } = setupRepo({ dirtyWorktree: true });
+  seedCapabilitiesForLearning(repoRoot);
+  const logPath = path.join(repoRoot, "gh.log");
+  const fakeGh = writeFakeGh(logPath, {
+    comments: [
+      {
+        body: "<!-- relay-review -->\n## Relay Review\nVerdict: LGTM\nRounds: 1",
+        createdAt: "2026-04-03T08:00:00Z",
+      },
+    ],
+    commits: [
+      {
+        oid: headSha,
+        committedDate: "2026-04-03T08:00:00Z",
+      },
+    ],
+  });
+
+  const stdout = execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--branch", branch,
+    "--pr", "123",
+    "--json",
+  ], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+    env: { ...process.env, RELAY_GH_BIN: fakeGh },
+  });
+
+  const result = JSON.parse(stdout);
+  assert.equal(result.learnings.status, "appended");
+  assert.equal(result.learnings.durability.status, "pushed");
+  assert.equal(result.cleanup.cleanupStatus, "failed");
+  assert.equal(result.nextAction, "manual_cleanup_required");
+});
+
+test("finalize-run dry-run does not write learnings", () => {
+  const { repoRoot, branch, headSha } = setupRepo();
+  seedCapabilitiesForLearning(repoRoot);
+  const before = fs.readFileSync(path.join(repoRoot, "spec", "capabilities.md"), "utf-8");
+  const logPath = path.join(repoRoot, "gh.log");
+  const fakeGh = writeFakeGh(logPath, {
+    comments: [
+      {
+        body: "<!-- relay-review -->\n## Relay Review\nVerdict: LGTM\nRounds: 1",
+        createdAt: "2026-04-03T08:00:00Z",
+      },
+    ],
+    commits: [
+      {
+        oid: headSha,
+        committedDate: "2026-04-03T08:00:00Z",
+      },
+    ],
+  });
+
+  const stdout = execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--branch", branch,
+    "--pr", "123",
+    "--dry-run",
+    "--json",
+  ], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+    env: { ...process.env, RELAY_GH_BIN: fakeGh },
+  });
+
+  const result = JSON.parse(stdout);
+  const after = fs.readFileSync(path.join(repoRoot, "spec", "capabilities.md"), "utf-8");
+  assert.equal(result.learnings, null);
+  assert.equal(after, before);
 });
 
 test("finalize-run validateManifestPaths wire rejects crafted manifest repo roots", () => {

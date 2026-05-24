@@ -10,6 +10,9 @@ const {
   parseFrontmatter,
   readFrontmatterField,
   parseComponents,
+  isValidCapabilityName,
+  parseCapabilityHeading,
+  resolveActiveSprint,
   findActiveSprint,
   findCapabilityBlock,
   locateMarkers,
@@ -135,7 +138,20 @@ describe("parseComponents", () => {
   });
 });
 
-describe("findActiveSprint", () => {
+describe("capability heading grammar", () => {
+  it("accepts kebab-case capability names", () => {
+    assert.equal(isValidCapabilityName("merge-finalize"), true);
+    assert.equal(parseCapabilityHeading("## Capability: merge-finalize"), "merge-finalize");
+  });
+
+  it("rejects ambiguous capability headings", () => {
+    assert.equal(isValidCapabilityName("merge finalize"), false);
+    assert.equal(parseCapabilityHeading("## Capability: merge finalize"), null);
+    assert.equal(parseCapabilityHeading("## Capability: Merge-Finalize"), null);
+  });
+});
+
+describe("resolveActiveSprint / findActiveSprint", () => {
   it("returns the one sprint with status: active", () => {
     const repo = makeRepo();
     try {
@@ -143,7 +159,7 @@ describe("findActiveSprint", () => {
       fs.mkdirSync(dir, { recursive: true });
       fs.writeFileSync(path.join(dir, "a.md"), "---\nstatus: completed\n---\n");
       fs.writeFileSync(path.join(dir, "b.md"), "---\nstatus: active\n---\n");
-      const result = findActiveSprint(dir);
+      const result = resolveActiveSprint(dir);
       assert.ok(result);
       assert.ok(result.file.endsWith("b.md"));
     } finally {
@@ -157,7 +173,7 @@ describe("findActiveSprint", () => {
       const dir = path.join(repo, "backlog", "sprints");
       fs.mkdirSync(dir, { recursive: true });
       fs.writeFileSync(path.join(dir, "a.md"), "---\nstatus: completed\n---\n");
-      assert.equal(findActiveSprint(dir), null);
+      assert.equal(resolveActiveSprint(dir), null);
     } finally {
       fs.rmSync(repo, { recursive: true, force: true });
     }
@@ -165,6 +181,22 @@ describe("findActiveSprint", () => {
 
   it("returns null when sprints dir is missing", () => {
     assert.equal(findActiveSprint("/no/such/dir"), null);
+  });
+
+  it("fails loud when multiple active sprint files exist", () => {
+    const repo = makeRepo();
+    try {
+      const dir = path.join(repo, "backlog", "sprints");
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, "a.md"), "---\nstatus: active\n---\n");
+      fs.writeFileSync(path.join(dir, "b.md"), "---\nstatus: active\n---\n");
+      const result = resolveActiveSprint(dir);
+      assert.equal(result.status, STATUS.FAILED);
+      assert.equal(result.reason, "multiple_active_sprints");
+      assert.deepEqual(result.sprintFiles.map((file) => path.basename(file)), ["a.md", "b.md"]);
+    } finally {
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
   });
 });
 
@@ -181,6 +213,11 @@ describe("findCapabilityBlock", () => {
 
   it("returns null for unknown capability", () => {
     assert.equal(findCapabilityBlock(SAMPLE_CAPABILITIES, "ghost"), null);
+  });
+
+  it("does not partially match invalid headings with spaces", () => {
+    const content = SAMPLE_CAPABILITIES.replace("## Capability: auth", "## Capability: auth api");
+    assert.equal(findCapabilityBlock(content, "auth"), null);
   });
 });
 
@@ -258,6 +295,20 @@ describe("appendLearningsCore — fixture-driven", () => {
     });
     assert.equal(result.status, STATUS.SKIPPED);
     assert.equal(result.reason, "component_not_found");
+  });
+
+  it("invalid component names are skipped with a clear reason", () => {
+    const result = appendLearningsCore({
+      capabilitiesContent: SAMPLE_CAPABILITIES,
+      primaryComponent: "Auth API",
+      secondaryComponents: [],
+      runId: "rInvalid",
+      pr: "10",
+      synthesis: null,
+      date: "2026-05-23",
+    });
+    assert.equal(result.status, STATUS.SKIPPED);
+    assert.equal(result.reason, "invalid_component_name");
   });
 
   it("multi-component records a D4 warning for secondary entries", () => {
@@ -377,6 +428,28 @@ describe("appendLearnings — end-to-end with fs", () => {
       const result = appendLearnings({ repo, runId: "rE5", pr: "505" });
       assert.equal(result.status, STATUS.SKIPPED);
       assert.equal(result.reason, "component_empty");
+    } finally {
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it("multiple active sprints → failed before writing", () => {
+    const repo = makeRepo();
+    try {
+      seedFixture(repo, { activeComponent: "auth" });
+      fs.writeFileSync(path.join(repo, "backlog", "sprints", "2026-05-y.md"), `---
+status: active
+component: "billing"
+---
+
+# Sprint
+`);
+      const before = fs.readFileSync(path.join(repo, "spec", "capabilities.md"), "utf-8");
+      const result = appendLearnings({ repo, runId: "rMulti", pr: "606" });
+      const after = fs.readFileSync(path.join(repo, "spec", "capabilities.md"), "utf-8");
+      assert.equal(result.status, STATUS.FAILED);
+      assert.equal(result.reason, "multiple_active_sprints");
+      assert.equal(after, before);
     } finally {
       fs.rmSync(repo, { recursive: true, force: true });
     }
