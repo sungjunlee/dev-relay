@@ -1998,6 +1998,69 @@ test("dispatch dry-run includes managed default policy decision details", () => 
   });
 });
 
+test("dispatch routing dry-run JSON explains CLI tags and selected advisory sidecar defaults", () => {
+  const { repoRoot, relayHome, rubricFile, env } = setupDryRunFixtureRepo();
+  writeRelayPolicy(relayHome, {
+    profile: "routing-dry-run",
+    routing_rules: [
+      {
+        name: "docs",
+        match: { tags: ["docs"] },
+        advisory_review: { reviewer: "claude", profile: "blindspot" },
+        sidecar: { kind: "docs-sync", executor: "opencode" },
+      },
+    ],
+  });
+
+  const stdout = runDispatch(repoRoot, [
+    "-b", "issue-routing-dry-run",
+    "--prompt", "dry run routing decision",
+    "--rubric-file", rubricFile,
+    "--tags", "docs",
+    "--dry-run",
+    "--json",
+  ], env);
+  const result = JSON.parse(stdout);
+
+  assert.equal(result.routing_decision.effective_source, "cli");
+  assert.deepEqual(result.routing_decision.source_tags.cli, ["docs"]);
+  assert.equal(result.routing_decision.matched_rule.name, "docs");
+  assert.deepEqual(result.routing_decision.selected.advisory_review, {
+    reviewer: "claude",
+    profile: "blindspot",
+  });
+  assert.deepEqual(result.routing_decision.selected.sidecar, {
+    kind: "docs-sync",
+    executor: "opencode",
+  });
+});
+
+test("dispatch routing dry-run text explains no-match decisions", () => {
+  const { repoRoot, relayHome, rubricFile, env } = setupDryRunFixtureRepo();
+  writeRelayPolicy(relayHome, {
+    profile: "routing-no-match",
+    routing_rules: [
+      {
+        name: "docs",
+        match: { tags: ["docs"] },
+        sidecar: { kind: "docs-sync", executor: "opencode" },
+      },
+    ],
+  });
+
+  const stdout = runDispatch(repoRoot, [
+    "-b", "issue-routing-no-match",
+    "--prompt", "dry run routing no match",
+    "--rubric-file", rubricFile,
+    "--tags", "security",
+    "--dry-run",
+  ], env);
+
+  assert.match(stdout, /Routing:\s+no match/);
+  assert.match(stdout, /Tags:\s+cli=security .*effective=security/);
+  assert.match(stdout, /Selected:\s+advisory_review=\(none\) sidecar=\(none\)/);
+});
+
 test("dispatch resume --dry-run with new --model-hints reports the new hint in effective_dispatch_model and does NOT write the manifest or emit events", () => {
   const { repoRoot, relayHome } = setupRepo();
   process.env.RELAY_HOME = relayHome;
