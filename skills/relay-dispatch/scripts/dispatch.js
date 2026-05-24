@@ -124,6 +124,10 @@ const { resolveManifestRecord } = require("./relay-resolver");
 const { appendRunEvent, EVENTS } = require("./relay-events");
 const { execGit } = require("./exec");
 const { resolveReasoningEffort } = require("./rubric-size");
+const {
+  assertRelayPolicyGate,
+  buildPolicyGateFailureEnvelope,
+} = require("./relay-policy-gate");
 
 // ---------------------------------------------------------------------------
 // Args
@@ -849,7 +853,6 @@ async function main() {
   const manifestRunDir = getRunDir(repoRoot, runId);
   enforceRubricPersistence(manifest, manifestRunDir);
 
-  validateExecutorCli();
   const taskPromptResult = readTaskPrompt({ runDir: manifestRunDir, resumeMode: RESUME_MODE });
   let taskPrompt = taskPromptResult.prompt;
   if (!RESUME_MODE && REVIEW_ASSURANCE_RAW === undefined) {
@@ -902,6 +905,30 @@ async function main() {
   const provider = typeof adapter.parseProvider === "function"
     ? (adapter.parseProvider(effectiveDispatchModel) ?? adapter.providerDefault ?? null)
     : (adapter.providerDefault || null);
+  let policyDecision;
+  try {
+    policyDecision = assertRelayPolicyGate({
+      repoRoot,
+      relayHome: RELAY_HOME,
+      phase: "dispatch",
+      executor: EXECUTOR,
+      model: effectiveDispatchModel,
+    });
+  } catch (error) {
+    const envelope = buildPolicyGateFailureEnvelope(error, {
+      runId,
+      manifestPath,
+      executor: EXECUTOR,
+      model: effectiveDispatchModel,
+      phase: "dispatch",
+    });
+    if (JSON_OUT) {
+      console.log(JSON.stringify(envelope, null, 2));
+    } else {
+      console.error(`Error: ${envelope.error}`);
+    }
+    process.exit(1);
+  }
 
   // --- Dry run ---
   if (DRY_RUN) {
@@ -932,6 +959,7 @@ async function main() {
       environment: RESUME_MODE ? (manifest?.environment || null) : "collected-at-dispatch",
       runState: manifest?.state || null,
       dispatchSkipped: false,
+      policy_decision: policyDecision,
     };
     if (planFleetId) {
       plan.fleetId = planFleetId;
@@ -965,11 +993,14 @@ async function main() {
         fleetId: planFleetId,
         doneCriteriaFile: resolvedDoneCriteriaPath || manifest?.anchor?.done_criteria_path || null,
         reviewAssurance: REVIEW_ASSURANCE,
+        policyDecision,
         worktreePlan,
       }));
     }
     return;
   }
+
+  validateExecutorCli();
 
   if (!RESUME_MODE) {
     try {
@@ -1479,6 +1510,7 @@ async function main() {
     commitMode,
     executor: EXECUTOR,
     executorNetwork: executorNetworkPolicy,
+    policyDecision,
     codexGitCommonDir,
     worktree: wtPath,
     branch,

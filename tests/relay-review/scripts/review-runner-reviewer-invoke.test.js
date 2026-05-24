@@ -8,6 +8,7 @@ const path = require("path");
 const { STATES, updateManifestState } = require("../../../skills/relay-dispatch/scripts/manifest/lifecycle");
 const { ensureRunLayout, getEventsPath } = require("../../../skills/relay-dispatch/scripts/manifest/paths");
 const { createManifestSkeleton, readManifest, writeManifest } = require("../../../skills/relay-dispatch/scripts/manifest/store");
+const { buildDefaultRelayPolicy } = require("../../../skills/relay-dispatch/scripts/relay-policy");
 const {
   captureGitStatus,
   loadReviewText,
@@ -89,6 +90,13 @@ process.stdout.write(JSON.stringify({
 `);
 }
 
+function writeRelayPolicy(relayHome, overrides = {}) {
+  fs.writeFileSync(path.join(relayHome, "policy.json"), JSON.stringify({
+    ...buildDefaultRelayPolicy(),
+    ...overrides,
+  }, null, 2), "utf-8");
+}
+
 test("reviewer-invoke/resolveReviewerName preserves arg, manifest, env precedence", (t) => {
   const originalReviewer = process.env.RELAY_REVIEWER;
   t.after(() => {
@@ -124,6 +132,10 @@ test("reviewer-invoke/loadReviewText forwards promptPath to the adapter and pers
     process.env.RELAY_HOME = originalRelayHome;
   });
   process.env.RELAY_HOME = relayHome;
+  writeRelayPolicy(relayHome, {
+    profile: "allow-review-models",
+    allowed_model_routes: [{ route: "opus", phases: ["review"], reviewers: ["codex"] }],
+  });
 
   const helperDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-helper-"));
   const reviewerScript = writeExecutable(helperDir, "reviewer-reads-prompt.js", `#!/usr/bin/env node
@@ -177,6 +189,10 @@ test("reviewer-invoke precedence R1 regression: CLI reviewerModel beats manifest
     process.env.RELAY_HOME = originalRelayHome;
   });
   process.env.RELAY_HOME = relayHome;
+  writeRelayPolicy(relayHome, {
+    profile: "allow-review-models",
+    allowed_model_routes: [{ route: "opus", phases: ["review"], reviewers: ["codex"] }],
+  });
 
   const helperDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-helper-"));
   const reviewerScript = writeReviewerArgEchoScript(helperDir, "reviewer-r1.js");
@@ -222,6 +238,10 @@ test("reviewer-invoke precedence R2 regression: CLI reviewerModel works when man
     process.env.RELAY_HOME = originalRelayHome;
   });
   process.env.RELAY_HOME = relayHome;
+  writeRelayPolicy(relayHome, {
+    profile: "allow-review-models",
+    allowed_model_routes: [{ route: "opus", phases: ["review"], reviewers: ["codex"] }],
+  });
 
   const helperDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-helper-"));
   const reviewerScript = writeReviewerArgEchoScript(helperDir, "reviewer-r2.js");
@@ -262,6 +282,10 @@ test("reviewer-invoke precedence R3 regression: manifest hint supplies the effec
     process.env.RELAY_HOME = originalRelayHome;
   });
   process.env.RELAY_HOME = relayHome;
+  writeRelayPolicy(relayHome, {
+    profile: "allow-review-models",
+    allowed_model_routes: [{ route: "haiku", phases: ["review"], reviewers: ["codex"] }],
+  });
 
   const helperDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-helper-"));
   const reviewerScript = writeReviewerArgEchoScript(helperDir, "reviewer-r3.js");
@@ -299,6 +323,61 @@ test("reviewer-invoke precedence R3 regression: manifest hint supplies the effec
   const reviewInvokeEvent = JSON.parse(eventLines.at(-1));
   assert.equal(reviewInvokeEvent.event, "review_invoke");
   assert.equal(reviewInvokeEvent.model, "haiku");
+});
+
+test("reviewer-invoke/loadReviewText denies disallowed reviewer model before adapter invocation", (t) => {
+  const originalRelayHome = process.env.RELAY_HOME;
+  const { relayHome, repoRoot, runDir, manifestPath, manifest, promptPath, runId } = setupReviewRun();
+  t.after(() => {
+    if (originalRelayHome === undefined) {
+      delete process.env.RELAY_HOME;
+      return;
+    }
+    process.env.RELAY_HOME = originalRelayHome;
+  });
+  process.env.RELAY_HOME = relayHome;
+
+  const helperDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-helper-"));
+  const markerPath = path.join(helperDir, "invoked.txt");
+  const reviewerScript = writeExecutable(helperDir, "reviewer-must-not-run.js", `#!/usr/bin/env node
+const fs = require("fs");
+fs.writeFileSync(${JSON.stringify(markerPath)}, "invoked\\n", "utf-8");
+process.stdout.write("{\\"verdict\\":\\"pass\\"}\\n");
+`);
+
+  assert.throws(() => loadReviewText({
+    body: "# Notes\n",
+    data: manifest,
+    manifestPath,
+    prNumber: 11,
+    promptPath,
+    reviewFile: null,
+    reviewRepoPath: repoRoot,
+    reviewedHeadSha: "abc123",
+    reviewerModel: "openai/gpt-5",
+    reviewerName: "codex",
+    reviewerScript,
+    round: 1,
+    runDir,
+    runRepoPath: repoRoot,
+  }), (error) => {
+    assert.equal(error.decision.allowed, false);
+    assert.equal(error.decision.phase, "review");
+    assert.equal(error.decision.actor_field, "reviewer");
+    assert.equal(error.decision.reviewer, "codex");
+    assert.equal(error.decision.model, "openai/gpt-5");
+    assert.equal(error.decision.reason, "unknown_model_route");
+    assert.match(error.message, /phase=review/);
+    assert.match(error.message, /reviewer=codex/);
+    return true;
+  });
+
+  assert.equal(fs.existsSync(markerPath), false);
+  assert.equal(readManifest(manifestPath).data.state, STATES.REVIEW_PENDING);
+  const events = fs.existsSync(getEventsPath(repoRoot, runId))
+    ? fs.readFileSync(getEventsPath(repoRoot, runId), "utf-8")
+    : "";
+  assert.doesNotMatch(events, /review_invoke/);
 });
 
 test("reviewer-invoke precedence R4 regression: reviewer argv stays byte-identical when CLI and manifest hint are both absent", (t) => {

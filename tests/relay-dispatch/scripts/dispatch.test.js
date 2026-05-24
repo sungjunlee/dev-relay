@@ -27,6 +27,7 @@ const {
   RUBRIC_SIZE_MISSING,
   RUBRIC_SIZE_UNPARSEABLE,
 } = require("../../../skills/relay-dispatch/scripts/rubric-size");
+const { buildDefaultRelayPolicy } = require("../../../skills/relay-dispatch/scripts/relay-policy");
 const { evaluateReviewGate } = require("../../../skills/relay-merge/scripts/review-gate");
 const { createEnforcementFixture } = require("../../../skills/relay-dispatch/scripts/test-support");
 
@@ -784,7 +785,7 @@ process.env.TMPDIR = ${JSON.stringify(tmpDir)};
     TMPDIR: tmpDir,
   }, preloadPath);
 
-  return { root, repoRoot, rubricFile, env };
+  return { root, repoRoot, relayHome, rubricFile, env };
 }
 
 function normalizeDispatchDryRunOutput(output, { root }) {
@@ -1007,6 +1008,7 @@ test("dispatch resume without redispatch artifact still errors with auto-discove
 test("dispatch stores model_hints for all four phases verbatim", () => {
   const { repoRoot, relayHome } = setupRepo();
   process.env.RELAY_HOME = relayHome;
+  allowCodexDispatchModels(relayHome);
   const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
   writeFakeCodex(binDir);
   const env = {
@@ -1033,6 +1035,7 @@ test("dispatch stores model_hints for all four phases verbatim", () => {
 test("dispatch resume replaces model_hints and records model_hints_updated before redispatch", () => {
   const { repoRoot, relayHome } = setupRepo();
   process.env.RELAY_HOME = relayHome;
+  allowCodexDispatchModels(relayHome);
   const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
   writeFakeCodex(binDir);
   const env = {
@@ -1080,6 +1083,7 @@ test("dispatch resume replaces model_hints and records model_hints_updated befor
 test("dispatch resume without --model-hints preserves stored hints and emits no model_hints_updated event", () => {
   const { repoRoot, relayHome } = setupRepo();
   process.env.RELAY_HOME = relayHome;
+  allowCodexDispatchModels(relayHome);
   const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
   writeFakeCodex(binDir);
   const env = {
@@ -1152,6 +1156,7 @@ test("dispatch model-hints parse error skips manifest write", () => {
 
 test("dispatch precedence D1 regression: CLI override beats manifest hint in executor argv", () => {
   const { repoRoot, relayHome } = setupRepo();
+  allowCodexDispatchModels(relayHome);
   const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
   const capturePath = path.join(os.tmpdir(), `relay-dispatch-argv-${Date.now()}-d1.json`);
   writeArgCaptureCodex(binDir, capturePath);
@@ -1187,6 +1192,7 @@ test("dispatch precedence D1 regression: CLI override beats manifest hint in exe
 
 test("dispatch precedence D2 regression: CLI override works when manifest hint is absent", () => {
   const { repoRoot, relayHome } = setupRepo();
+  allowCodexDispatchModels(relayHome);
   const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
   const capturePath = path.join(os.tmpdir(), `relay-dispatch-argv-${Date.now()}-d2.json`);
   writeArgCaptureCodex(binDir, capturePath);
@@ -1222,6 +1228,7 @@ test("dispatch precedence D2 regression: CLI override works when manifest hint i
 test("dispatch precedence D3 regression: manifest hint supplies the effective model when CLI is unset", () => {
   const { repoRoot, relayHome } = setupRepo();
   process.env.RELAY_HOME = relayHome;
+  allowCodexDispatchModels(relayHome);
   const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
   const capturePath = path.join(os.tmpdir(), `relay-dispatch-argv-${Date.now()}-d3.json`);
   writeArgCaptureCodex(binDir, capturePath);
@@ -1458,9 +1465,28 @@ function writeTempRubric(contents) {
   return rubricFile;
 }
 
+function writeRelayPolicy(relayHome, overrides = {}) {
+  fs.mkdirSync(relayHome, { recursive: true });
+  fs.writeFileSync(path.join(relayHome, "policy.json"), JSON.stringify({
+    ...buildDefaultRelayPolicy(),
+    ...overrides,
+  }, null, 2), "utf-8");
+}
+
+function allowCodexDispatchModels(relayHome) {
+  writeRelayPolicy(relayHome, {
+    profile: "allow-codex-dispatch-models",
+    allowed_model_routes: [{ route: "*", phases: ["dispatch"], executors: ["codex"] }],
+  });
+}
+
 test("dispatch opencode executor records provider metadata", () => {
   const { repoRoot, relayHome } = setupRepo();
   process.env.RELAY_HOME = relayHome;
+  writeRelayPolicy(relayHome, {
+    profile: "allow-opencode-dispatch",
+    allowed_model_routes: [{ route: "openai/*", phases: ["dispatch"], executors: ["opencode"] }],
+  });
   const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-opencode-bin-"));
   const capturePath = path.join(os.tmpdir(), `relay-dispatch-argv-${Date.now()}-opencode.json`);
   writeArgCaptureOpencode(binDir, capturePath);
@@ -1508,9 +1534,51 @@ test("dispatch opencode executor records provider metadata", () => {
   assert.equal(manifest.dispatch.last_provider, "openai");
 });
 
+test("dispatch denies disallowed executor route before spawning the executor", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-opencode-bin-"));
+  const capturePath = path.join(os.tmpdir(), `relay-dispatch-policy-denied-${Date.now()}.json`);
+  writeArgCaptureOpencode(binDir, capturePath);
+  const rubricFile = writeTempRubric("size: \"S\"\nrubric:\n  factors: []\n");
+
+  const proc = spawnSync("node", [SCRIPT, repoRoot, ...withRequiredRubric([
+    "-b", "issue-policy-denied",
+    "-p", "must not spawn opencode",
+    "-e", "opencode",
+    "-m", "opencode-go/deepseek-v4-pro",
+    "--rubric-file", rubricFile,
+    "--json",
+  ])], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    env: {
+      ...process.env,
+      PATH: `${binDir}:${process.env.PATH}`,
+      RELAY_HOME: relayHome,
+    },
+  });
+
+  assert.notEqual(proc.status, 0);
+  assert.equal(fs.existsSync(capturePath), false);
+  const result = JSON.parse(proc.stdout);
+  assert.equal(result.status, "failed");
+  assert.equal(result.policy_decision.allowed, false);
+  assert.equal(result.policy_decision.phase, "dispatch");
+  assert.equal(result.policy_decision.actor_field, "executor");
+  assert.equal(result.policy_decision.executor, "opencode");
+  assert.equal(result.policy_decision.model, "opencode-go/deepseek-v4-pro");
+  assert.equal(result.policy_decision.reason, "unknown_model_route");
+  assert.match(result.error, /reason=unknown_model_route/);
+});
+
 test("dispatch opencode executor uses bundled default model when no override is supplied", () => {
   const { repoRoot, relayHome } = setupRepo();
   process.env.RELAY_HOME = relayHome;
+  writeRelayPolicy(relayHome, {
+    profile: "allow-opencode-dispatch",
+    allowed_model_routes: [{ route: "opencode-go/*", phases: ["dispatch"], executors: ["opencode"] }],
+  });
   const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-opencode-bin-"));
   const capturePath = path.join(os.tmpdir(), `relay-dispatch-argv-${Date.now()}-opencode-bundled-default.json`);
   writeArgCaptureOpencode(binDir, capturePath);
@@ -1543,6 +1611,10 @@ test("dispatch opencode executor uses bundled default model when no override is 
 test("dispatch opencode executor lets RELAY_HOME executors config override bundled model", () => {
   const { repoRoot, relayHome } = setupRepo();
   process.env.RELAY_HOME = relayHome;
+  writeRelayPolicy(relayHome, {
+    profile: "allow-opencode-dispatch",
+    allowed_model_routes: [{ route: "opencode-go/*", phases: ["dispatch"], executors: ["opencode"] }],
+  });
   fs.writeFileSync(path.join(relayHome, "executors.json"), JSON.stringify({
     executors: {
       opencode: {
@@ -1582,6 +1654,7 @@ test("dispatch opencode executor lets RELAY_HOME executors config override bundl
 test("dispatch lets local executor config define defaults for executors absent from bundled config", () => {
   const { repoRoot, relayHome } = setupRepo();
   process.env.RELAY_HOME = relayHome;
+  allowCodexDispatchModels(relayHome);
   fs.writeFileSync(path.join(relayHome, "executors.json"), JSON.stringify({
     executors: {
       codex: {
@@ -1637,6 +1710,10 @@ test("dispatch codex executor ignores malformed local executor model config", ()
 test("dispatch opencode default model falls back to bundled config when local config schema is invalid", () => {
   const { repoRoot, relayHome } = setupRepo();
   process.env.RELAY_HOME = relayHome;
+  writeRelayPolicy(relayHome, {
+    profile: "allow-opencode-dispatch",
+    allowed_model_routes: [{ route: "opencode-go/*", phases: ["dispatch"], executors: ["opencode"] }],
+  });
   fs.writeFileSync(path.join(relayHome, "executors.json"), JSON.stringify({
     executors: {
       opencode: {
@@ -1678,6 +1755,10 @@ test("dispatch opencode default model falls back to bundled config when local co
 test("dispatch opencode explicit --model skips malformed local executor model config", () => {
   const { repoRoot, relayHome } = setupRepo();
   process.env.RELAY_HOME = relayHome;
+  writeRelayPolicy(relayHome, {
+    profile: "allow-opencode-dispatch",
+    allowed_model_routes: [{ route: "opencode-go/*", phases: ["dispatch"], executors: ["opencode"] }],
+  });
   fs.writeFileSync(path.join(relayHome, "executors.json"), "{not-json", "utf-8");
   const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-opencode-bin-"));
   const capturePath = path.join(os.tmpdir(), `relay-dispatch-argv-${Date.now()}-opencode-explicit-malformed-local.json`);
@@ -1708,6 +1789,10 @@ test("dispatch opencode explicit --model skips malformed local executor model co
 test("dispatch opencode default model falls back to bundled config when local config is malformed", () => {
   const { repoRoot, relayHome } = setupRepo();
   process.env.RELAY_HOME = relayHome;
+  writeRelayPolicy(relayHome, {
+    profile: "allow-opencode-dispatch",
+    allowed_model_routes: [{ route: "opencode-go/*", phases: ["dispatch"], executors: ["opencode"] }],
+  });
   fs.writeFileSync(path.join(relayHome, "executors.json"), "{not-json", "utf-8");
   const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-opencode-bin-"));
   const capturePath = path.join(os.tmpdir(), `relay-dispatch-argv-${Date.now()}-opencode-malformed-local-default.json`);
@@ -1837,6 +1922,10 @@ test("dispatch leaves claude executor argv untouched by rubric-size reasoning", 
 
 test("dispatch dry-run resolves effective_dispatch_model from model hints and emits zero events", () => {
   const { repoRoot, relayHome, rubricFile } = setupDryRunFixtureRepo();
+  writeRelayPolicy(relayHome, {
+    profile: "allow-codex-hint",
+    allowed_model_routes: [{ route: "opus", phases: ["dispatch"], executors: ["codex"] }],
+  });
   const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-dispatch-dry-run-bin-"));
   writeFakeCodex(binDir);
   const env = {
@@ -1861,12 +1950,58 @@ test("dispatch dry-run resolves effective_dispatch_model from model hints and em
   const result = JSON.parse(stdout);
 
   assert.equal(result.effective_dispatch_model, "opus");
+  assert.equal(result.policy_decision.allowed, true);
+  assert.equal(result.policy_decision.reason, "allowed_model_route");
+  assert.equal(result.policy_decision.matched_route, "opus");
   assert.equal(listManifestPaths(repoRoot).length, 0);
+});
+
+test("dispatch dry-run includes managed default policy decision details", () => {
+  const { repoRoot, relayHome, rubricFile } = setupDryRunFixtureRepo();
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-dispatch-dry-run-bin-"));
+  writeFakeCodex(binDir);
+  const stdout = execFileSync("node", [SCRIPT, repoRoot,
+    "-b", "issue-policy-dry-run",
+    "--prompt", "dry run policy decision",
+    "--rubric-file", rubricFile,
+    "--dry-run",
+    "--json",
+  ], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+    env: {
+      ...process.env,
+      PATH: `${binDir}:${process.env.PATH}`,
+      RELAY_HOME: relayHome,
+    },
+  });
+  const result = JSON.parse(stdout);
+
+  assert.deepEqual(result.policy_decision, {
+    allowed: true,
+    reason: "managed_cli",
+    phase: "dispatch",
+    actor_field: "executor",
+    actor: "codex",
+    executor: "codex",
+    reviewer: null,
+    model: null,
+    matched_route: null,
+    policy: {
+      status: "defaulted",
+      sources: {
+        global: path.join(relayHome, "policy.json"),
+        repo: path.join(repoRoot, ".relay", "policy.json"),
+      },
+    },
+  });
 });
 
 test("dispatch resume --dry-run with new --model-hints reports the new hint in effective_dispatch_model and does NOT write the manifest or emit events", () => {
   const { repoRoot, relayHome } = setupRepo();
   process.env.RELAY_HOME = relayHome;
+  allowCodexDispatchModels(relayHome);
   const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
   writeFakeCodex(binDir);
   const env = {

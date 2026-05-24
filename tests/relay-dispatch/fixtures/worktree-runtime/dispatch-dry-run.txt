@@ -16,3 +16,4 @@ Dry run:
   Timeout:  2400s
   Rubric:   /tmp/issue187-fixtures/rubric.yaml
   Assurance: standard
+  Policy:   allowed phase=dispatch executor=codex model=(none) reason=managed_cli

@@ -29,6 +29,11 @@ const {
   SIDECAR_TRUST_LEVEL,
   upsertSidecarEntry,
 } = require("../../relay-dispatch/scripts/sidecar-store");
+const { resolveExecutorDefaultModel } = require("../../relay-dispatch/scripts/executor-model-config");
+const {
+  assertRelayPolicyGate,
+  buildPolicyGateFailureEnvelope,
+} = require("../../relay-dispatch/scripts/relay-policy-gate");
 const contextRecapKind = require("./kinds/context-recap");
 const docsSyncKind = require("./kinds/docs-sync");
 const testGapKind = require("./kinds/test-gap");
@@ -502,14 +507,47 @@ function main(options = {}) {
     const outputPath = `sidecars/${sidecarId}/${outputName}`;
     const outputDir = getSidecarOutputDir(context.repoRoot, args.runId, sidecarId);
     const outputFullPath = path.join(outputDir, outputName);
+    let effectiveModel = args.model || null;
+    let policyDecision = null;
+    if (args.executor === "opencode") {
+      effectiveModel = effectiveModel || resolveExecutorDefaultModel(args.executor, { relayHome: process.env.RELAY_HOME });
+      try {
+        policyDecision = assertRelayPolicyGate({
+          repoRoot: context.repoRoot,
+          phase: "sidecar",
+          executor: args.executor,
+          model: effectiveModel,
+        });
+      } catch (error) {
+        const failure = buildPolicyGateFailureEnvelope(error, {
+          ok: false,
+          run_id: args.runId,
+          sidecar_id: sidecarId,
+          kind: args.kind,
+          variant: args.variant || null,
+          executor: args.executor,
+          model: effectiveModel,
+          manifest_path: context.manifestPath,
+          run_dir: context.runDir,
+          worktree: context.worktree,
+          pr_number: context.prNumber,
+          output_path: outputPath,
+          failure_reason: error.message,
+        });
+        if (args.json) emitEnvelope(failure, { json: true, stdout });
+        else stderr(`Error: ${error.message}\n`);
+        return { exitCode: 1, envelope: failure };
+      }
+    }
+    const effectiveArgs = { ...args, model: effectiveModel };
     const baselineRecap = deterministicKind
       ? kindModule.buildRecap({ runContext: context.runContext })
       : null;
     const prompt = args.executor === "opencode"
-      ? buildSidecarPrompt({ args, sidecarId, context, kindModule, baselineRecap })
+      ? buildSidecarPrompt({ args: effectiveArgs, sidecarId, context, kindModule, baselineRecap })
       : null;
     const command = args.executor === "opencode"
-      ? buildOpencodeCommand({ prompt, model: args.model, cwd: context.worktree })
+      ? buildOpencodeCommand({ prompt, model: effectiveModel, cwd: context.worktree })
       : { cmd: "none", args: [], cwd: context.worktree, output: baselineRecap };
 
     const baseEnvelope = {
@@ -519,7 +557,8 @@ function main(options = {}) {
       kind: args.kind,
       variant: args.variant || null,
       executor: args.executor,
-      model: args.model || null,
+      model: effectiveModel,
+      policy_decision: policyDecision,
       manifest_path: context.manifestPath,
       run_dir: context.runDir,
       worktree: context.worktree,
@@ -538,21 +577,21 @@ function main(options = {}) {
       id: sidecarId,
       kind: args.kind,
       executor: args.executor,
-      model: args.model || null,
-      provider: parseProvider(args.model),
+      model: effectiveModel,
+      provider: parseProvider(effectiveModel),
     });
 
     let result;
     try {
       upsertSidecarEntry(context.repoRoot, args.runId, makeEntry({
         sidecarId,
-        args,
+        args: effectiveArgs,
         status: "running",
         outputPath,
       }));
       const before = args.executor === "none" ? "" : snapshotWorktree(context.worktree);
       try {
-        result = normalizeRunnerResult(runSidecarExecutor({ args, command, runOpencode }));
+        result = normalizeRunnerResult(runSidecarExecutor({ args: effectiveArgs, command, runOpencode }));
       } catch (error) {
         result = normalizeRunnerResult({
           code: Number.isInteger(error.status) ? error.status : 1,
@@ -589,7 +628,7 @@ function main(options = {}) {
       });
       upsertSidecarEntry(context.repoRoot, args.runId, makeEntry({
         sidecarId,
-        args,
+        args: effectiveArgs,
         status: "completed",
         outputPath,
       }));
@@ -607,7 +646,7 @@ function main(options = {}) {
       });
       upsertSidecarEntry(context.repoRoot, args.runId, makeEntry({
         sidecarId,
-        args,
+        args: effectiveArgs,
         status: "failed",
         outputPath,
       }));
