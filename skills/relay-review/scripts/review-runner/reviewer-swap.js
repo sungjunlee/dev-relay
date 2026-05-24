@@ -3,18 +3,20 @@ const { writeManifest } = require("../../../relay-dispatch/scripts/manifest/stor
 const { appendRunEvent, EVENTS } = require("../../../relay-dispatch/scripts/relay-events");
 const { resolveReviewerName } = require("./reviewer-invoke");
 
-function maybeSwapReviewer(data, reviewerArg, body, manifestPath, runRepoPath) {
+function maybeSwapReviewer(data, reviewerArg, body, manifestPath, runRepoPath, options = {}) {
   if (data.state !== STATES.ESCALATED) return data;
   if (!reviewerArg) return data;
 
   const newReviewerName = resolveReviewerName(data, reviewerArg);
   const lastReviewer = data.review?.last_reviewer || null;
-  if (newReviewerName === lastReviewer) {
+  const independentReviewReason = String(options.independentReviewReason || "").trim();
+  if (newReviewerName === lastReviewer && !independentReviewReason) {
     throw new Error(
-      `Reviewer-swap requires a different reviewer; --reviewer '${newReviewerName}' matches review.last_reviewer. ` +
-      "Pass a different adapter (e.g., --reviewer claude) or close the run."
+      `Independent review attempt requires evidence; --reviewer '${newReviewerName}' matches review.last_reviewer. ` +
+      "Pass a different adapter, or provide --independent-review-reason <text> for a same-adapter fresh-context attempt."
     );
   }
+  const reason = independentReviewReason || `different_reviewer:${lastReviewer || "unknown"}->${newReviewerName}`;
 
   const swappedManifest = forceTransitionState(data, STATES.REVIEW_PENDING, "run_review");
   swappedManifest.review = {
@@ -28,6 +30,7 @@ function maybeSwapReviewer(data, reviewerArg, body, manifestPath, runRepoPath) {
     state_to: STATES.REVIEW_PENDING,
     from_reviewer: lastReviewer,
     to_reviewer: newReviewerName,
+    reason,
     reviewer_swap_count: swappedManifest.review.reviewer_swap_count,
   });
   return swappedManifest;

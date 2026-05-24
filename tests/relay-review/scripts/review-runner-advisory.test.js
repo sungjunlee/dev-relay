@@ -304,22 +304,23 @@ test("hardened review assurance blocks a primary pass without advisory evidence"
   });
   const primaryScript = writePrimaryReviewer(repoRoot, passVerdict());
 
-  const result = JSON.parse(execFileSync("node", [
-    SCRIPT,
-    "--repo", repoRoot,
-    "--run-id", runId,
-    "--pr", "429",
-    "--done-criteria-file", doneCriteriaPath,
-    "--diff-file", diffPath,
-    "--reviewer", "codex",
-    "--reviewer-script", primaryScript,
-    "--no-comment",
-    "--json",
-  ], { encoding: "utf-8" }));
+  assert.throws(
+    () => execFileSync("node", [
+      SCRIPT,
+      "--repo", repoRoot,
+      "--run-id", runId,
+      "--pr", "429",
+      "--done-criteria-file", doneCriteriaPath,
+      "--diff-file", diffPath,
+      "--reviewer", "codex",
+      "--reviewer-script", primaryScript,
+      "--no-comment",
+      "--json",
+    ], { encoding: "utf-8" }),
+    /policy\.review_assurance=hardened requires --advisory-reviewer/
+  );
 
-  assert.equal(result.nextState, STATES.CHANGES_REQUESTED);
-  assert.equal(readManifest(manifestPath).data.state, STATES.CHANGES_REQUESTED);
-  assert.match(fs.readFileSync(result.verdictPath, "utf-8"), /Missing hardened advisory review/);
+  assert.equal(readManifest(manifestPath).data.state, STATES.REVIEW_PENDING);
 });
 
 test("hardened review assurance blocks advisory failures and required findings", async (t) => {
@@ -351,6 +352,7 @@ test("hardened manual review pass requires an audit reason", () => {
   });
   const reviewFile = path.join(repoRoot, "manual-verdict.json");
   fs.writeFileSync(reviewFile, JSON.stringify(passVerdict()), "utf-8");
+  const opencodeScript = writeFakeOpencode(repoRoot);
 
   const result = JSON.parse(execFileSync("node", [
     SCRIPT,
@@ -360,9 +362,13 @@ test("hardened manual review pass requires an audit reason", () => {
     "--done-criteria-file", doneCriteriaPath,
     "--diff-file", diffPath,
     "--review-file", reviewFile,
+    "--advisory-reviewer", "opencode",
     "--no-comment",
     "--json",
-  ], { encoding: "utf-8" }));
+  ], {
+    encoding: "utf-8",
+    env: { ...process.env, RELAY_OPENCODE_BIN: opencodeScript },
+  }));
 
   assert.equal(result.nextState, STATES.CHANGES_REQUESTED);
   assert.equal(readManifest(manifestPath).data.state, STATES.CHANGES_REQUESTED);

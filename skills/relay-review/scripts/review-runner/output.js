@@ -16,6 +16,7 @@ function printUsage() {
   console.log(`  --reviewer <name>            ${modeLabel("--reviewer")} Reviewer adapter to invoke (codex|claude|...)`);
   console.log(`  --reviewer-script <path>     ${modeLabel("--reviewer-script")} Override adapter script path`);
   console.log(`  --reviewer-model <name>      ${modeLabel("--reviewer-model")} Reviewer model override`);
+  console.log(`  --independent-review-reason <text> ${modeLabel("--independent-review-reason")} Evidence for same-reviewer escalated retry`);
   console.log(`  --advisory-reviewer <name>   ${modeLabel("--advisory-reviewer")} Optional non-gating reviewer adapter`);
   console.log(`  --advisory-profile <name>    ${modeLabel("--advisory-profile")} Advisory focus profile (default: blindspot)`);
   console.log(`  --advisory-reviewer-model <name> ${modeLabel("--advisory-reviewer-model")} Advisory model override`);
