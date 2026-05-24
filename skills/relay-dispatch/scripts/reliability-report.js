@@ -593,6 +593,15 @@ function sortSummaryObject(entries) {
   return Object.fromEntries([...entries].sort(([left], [right]) => left.localeCompare(right)));
 }
 
+function incrementCountBucket(buckets, key) {
+  const bucketKey = normalizeBucketValue(key);
+  buckets.set(bucketKey, (buckets.get(bucketKey) || 0) + 1);
+}
+
+function sortCountBuckets(buckets) {
+  return sortSummaryObject(buckets.entries());
+}
+
 function buildSidecarOutcomeBuckets(starts, results, failures, fieldName) {
   const buckets = new Map();
   const startBucketsBySidecar = new Map();
@@ -614,6 +623,90 @@ function buildSidecarOutcomeBuckets(starts, results, failures, fieldName) {
   }
 
   return sortSummaryObject(buckets.entries());
+}
+
+const OVERRIDE_AUDIT_EVENT_NAMES = new Set([
+  EVENTS.EXECUTION_EVIDENCE_REBRANDED,
+  EVENTS.FORCE_FINALIZE,
+]);
+
+function hasOwnField(value, fieldName) {
+  return Object.prototype.hasOwnProperty.call(value || {}, fieldName);
+}
+
+function hasNonEmptyField(value, fieldName) {
+  return hasOwnField(value, fieldName) && String(value[fieldName] ?? "").trim() !== "";
+}
+
+function isOverrideAuditEvent(event) {
+  return Boolean(event?.override_class !== undefined || OVERRIDE_AUDIT_EVENT_NAMES.has(event?.event));
+}
+
+function overrideTransitionKey(event) {
+  return `${normalizeBucketValue(event?.prior_state || event?.state_from)}->${normalizeBucketValue(event?.state_to)}`;
+}
+
+function buildOverrideAuditSummary(events) {
+  const auditEvents = events.filter(isOverrideAuditEvent);
+  const byOverrideClass = new Map();
+  const byOperatorInitiated = new Map();
+  const affectedTransitions = new Map();
+  const fieldPresence = {
+    affected_head_sha: { present: 0, missing: 0 },
+    required_reason: { present: 0, missing: 0 },
+  };
+  const findings = [];
+  let currentShapeEvents = 0;
+  let legacyShapeEvents = 0;
+
+  for (const event of auditEvents) {
+    const currentShape = hasOwnField(event, "override_class");
+    if (currentShape) {
+      currentShapeEvents += 1;
+    } else {
+      legacyShapeEvents += 1;
+    }
+
+    incrementCountBucket(
+      byOverrideClass,
+      hasNonEmptyField(event, "override_class") ? event.override_class : "unknown"
+    );
+    incrementCountBucket(
+      byOperatorInitiated,
+      typeof event.operator_initiated === "boolean" ? String(event.operator_initiated) : "unknown"
+    );
+    incrementCountBucket(affectedTransitions, overrideTransitionKey(event));
+
+    const missingFields = [];
+    for (const fieldName of Object.keys(fieldPresence)) {
+      const presenceKey = hasNonEmptyField(event, fieldName) ? "present" : "missing";
+      fieldPresence[fieldName][presenceKey] += 1;
+      if (currentShape && presenceKey === "missing") {
+        missingFields.push(fieldName);
+      }
+    }
+
+    if (missingFields.length > 0) {
+      findings.push({
+        run_id: event.run_id || "unknown",
+        event: event.event || "unknown",
+        override_class: hasNonEmptyField(event, "override_class") ? event.override_class : "unknown",
+        missing_fields: missingFields,
+      });
+    }
+  }
+
+  return {
+    total_events: auditEvents.length,
+    current_shape_events: currentShapeEvents,
+    legacy_shape_events: legacyShapeEvents,
+    malformed_current_shape_events: findings.length,
+    by_override_class: sortCountBuckets(byOverrideClass),
+    by_operator_initiated: sortCountBuckets(byOperatorInitiated),
+    field_presence: fieldPresence,
+    affected_transitions: sortCountBuckets(affectedTransitions),
+    findings,
+  };
 }
 
 function buildSidecarCountBuckets(starts, fieldName) {
@@ -980,6 +1073,7 @@ function buildReport({ repoRoot, staleHours, now, manifests, events, includeSide
     rubric_insights: buildRubricInsights(events, manifests),
     qualitative_signals: buildQualitativeSignals(manifests, events),
     guidance_pack_insights: buildGuidancePackInsights(manifests, events),
+    override_audit: buildOverrideAuditSummary(events),
   };
 
   if (includeSidecarInsights) {
@@ -1071,6 +1165,16 @@ function buildDispatchReports(opts) {
     model: buildDispatchDimensionReport(opts, "model"),
     provider: buildDispatchDimensionReport(opts, "provider"),
   };
+}
+
+function formatCountSummary(buckets) {
+  return Object.entries(buckets || {})
+    .sort(([leftKey, leftValue], [rightKey, rightValue]) => (
+      Number(rightValue || 0) - Number(leftValue || 0)
+      || leftKey.localeCompare(rightKey)
+    ))
+    .map(([key, value]) => `${key}=${value}`)
+    .join(", ");
 }
 
 // `review_apply` can be emitted for a system-forced escalation before any
@@ -1232,6 +1336,26 @@ function main() {
     if (report.sidecar_insights.predicted_findings_match_rate !== null) {
       console.log(`    predicted_findings_match_rate: ${report.sidecar_insights.predicted_findings_match_rate}`);
       console.log(`    predicted_findings_runs_examined: ${report.sidecar_insights.predicted_findings_runs_examined}`);
+    }
+  }
+  if (report.override_audit?.total_events > 0) {
+    const audit = report.override_audit;
+    console.log("  override_audit:");
+    console.log(
+      `    total_events=${audit.total_events} ` +
+      `current_shape=${audit.current_shape_events} ` +
+      `legacy_shape=${audit.legacy_shape_events} ` +
+      `malformed=${audit.malformed_current_shape_events}`
+    );
+    console.log(`    by_override_class: ${formatCountSummary(audit.by_override_class) || "n/a"}`);
+    console.log(`    operator_initiated: ${formatCountSummary(audit.by_operator_initiated) || "n/a"}`);
+    console.log(
+      `    missing_required_fields: affected_head_sha=${audit.field_presence.affected_head_sha.missing} ` +
+      `required_reason=${audit.field_presence.required_reason.missing}`
+    );
+    console.log(`    affected_transitions: ${formatCountSummary(audit.affected_transitions) || "n/a"}`);
+    if (audit.findings.length > 0) {
+      console.log(`    findings: ${audit.findings.length} malformed current-shape event(s)`);
     }
   }
   if (hasCliFlag("--by-actor")) {
