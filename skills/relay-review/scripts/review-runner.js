@@ -88,7 +88,7 @@ async function run() {
   if (isHardenedReviewAssurance(data) && !prepareOnly && !advisoryReviewerArg) {
     throw new Error(
       "policy.review_assurance=hardened requires --advisory-reviewer <name> so the round produces advisory evidence. " +
-      "Run with --advisory-reviewer opencode --advisory-profile blindspot, or lower the manifest policy before review."
+      "Run with a configured advisory reviewer, or lower the manifest policy before review."
     );
   }
 
