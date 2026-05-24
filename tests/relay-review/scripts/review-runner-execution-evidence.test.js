@@ -124,6 +124,95 @@ test("execution-evidence strict mode fails nonzero test_exit_code and accepts ze
   );
 });
 
+test("execution-evidence strict mode prefers verification_runs when present", () => {
+  const runDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-execution-runs-pass-"));
+  writeArtifact(runDir, makeArtifact("a".repeat(40), {
+    test_command: "unspecified",
+    test_result_hash: "unspecified",
+    verification_runs: [{
+      command: "node --test",
+      cwd: "/repo",
+      head_sha: "a".repeat(40),
+      exit_code: 0,
+      output_hash: "b".repeat(64),
+      recorded_by: "orchestrator",
+      recorded_at: "2026-04-22T00:00:00.000Z",
+    }],
+  }));
+
+  assert.deepEqual(
+    computeQualityExecutionStatus({ runDir, reviewedHead: "a".repeat(40), strict: true }),
+    { status: "pass", reason: null }
+  );
+});
+
+test("execution-evidence strict verification_runs fail on nonzero exit and stale head", () => {
+  const runDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-execution-runs-fail-"));
+  writeArtifact(runDir, makeArtifact("a".repeat(40), {
+    verification_runs: [{
+      command: "node --test",
+      cwd: "/repo",
+      head_sha: "a".repeat(40),
+      exit_code: 1,
+      output_hash: "b".repeat(64),
+      recorded_by: "orchestrator",
+      recorded_at: "2026-04-22T00:00:00.000Z",
+    }],
+  }));
+
+  const failed = computeQualityExecutionStatus({ runDir, reviewedHead: "a".repeat(40), strict: true });
+  assert.equal(failed.status, "fail");
+  assert.match(failed.reason, /nonzero exit_code=1/);
+
+  writeArtifact(runDir, makeArtifact("a".repeat(40), {
+    verification_runs: [{
+      command: "node --test",
+      cwd: "/repo",
+      head_sha: "c".repeat(40),
+      exit_code: 0,
+      output_hash: "b".repeat(64),
+      recorded_by: "orchestrator",
+      recorded_at: "2026-04-22T00:00:00.000Z",
+    }],
+  }));
+
+  const stale = computeQualityExecutionStatus({ runDir, reviewedHead: "a".repeat(40), strict: true });
+  assert.equal(stale.status, "fail");
+  assert.match(stale.reason, /verification_runs evidence is stale/);
+});
+
+test("execution-evidence verification_runs require hashed output evidence", () => {
+  const runDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-execution-runs-hash-"));
+  writeArtifact(runDir, makeArtifact("a".repeat(40), {
+    verification_runs: [{
+      command: "node --test",
+      cwd: "/repo",
+      head_sha: "a".repeat(40),
+      exit_code: 0,
+      recorded_by: "orchestrator",
+      recorded_at: "2026-04-22T00:00:00.000Z",
+    }],
+  }));
+
+  const result = computeQualityExecutionStatus({ runDir, reviewedHead: "a".repeat(40), strict: true });
+  assert.equal(result.status, "fail");
+  assert.match(result.reason, /requires at least one of output_hash, stdout_hash, stderr_hash/);
+});
+
+test("execution-evidence strict mode preserves legacy fallback when verification_runs is absent", () => {
+  const runDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-execution-runs-legacy-"));
+  writeArtifact(runDir, makeArtifact("a".repeat(40), {
+    test_command: "node --test",
+    test_result_hash: "b".repeat(64),
+    test_exit_code: 0,
+  }));
+
+  assert.deepEqual(
+    computeQualityExecutionStatus({ runDir, reviewedHead: "a".repeat(40), strict: true }),
+    { status: "pass", reason: null }
+  );
+});
+
 test("execution-evidence rejects symlink artifacts", () => {
   const runDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-execution-symlink-"));
   const outside = path.join(os.tmpdir(), `relay-review-execution-${process.pid}-${Date.now()}.json`);

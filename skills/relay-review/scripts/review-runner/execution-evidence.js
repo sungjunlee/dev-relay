@@ -14,6 +14,7 @@ const REQUIRED_EXECUTION_EVIDENCE_FIELDS = [
 const SHA40_PATTERN = /^[0-9a-f]{40}$/i;
 const SHA256_PATTERN = /^[0-9a-f]{64}$/i;
 const FORCE_FINALIZE_GUIDANCE = 'finalize-run --force-finalize-nonready --reason "pre-261 run, no artifact"';
+const VERIFICATION_HASH_FIELDS = ["output_hash", "stdout_hash", "stderr_hash"];
 
 function isNonEmptyString(value) {
   return typeof value === "string" && value.trim() !== "";
@@ -21,6 +22,44 @@ function isNonEmptyString(value) {
 
 function buildMissingExecutionEvidenceReason() {
   return `execution-evidence.json missing; if this is a pre-261 run, use ${FORCE_FINALIZE_GUIDANCE}`;
+}
+
+function validateVerificationHash(value, fieldName) {
+  if (value !== undefined && (!isNonEmptyString(value) || !SHA256_PATTERN.test(value))) {
+    throw new Error(`execution evidence verification_runs[].${fieldName} must be a sha256 hex digest when present`);
+  }
+}
+
+function validateVerificationRun(run, index) {
+  if (!run || typeof run !== "object" || Array.isArray(run)) {
+    throw new Error(`execution evidence verification_runs[${index}] must be a JSON object`);
+  }
+  if (!isNonEmptyString(run.command)) {
+    throw new Error(`execution evidence verification_runs[${index}].command must be a non-empty string`);
+  }
+  if (!isNonEmptyString(run.cwd)) {
+    throw new Error(`execution evidence verification_runs[${index}].cwd must be a non-empty string`);
+  }
+  if (!isNonEmptyString(run.head_sha) || !SHA40_PATTERN.test(run.head_sha)) {
+    throw new Error(`execution evidence verification_runs[${index}].head_sha must be a 40-character hex SHA`);
+  }
+  if (!Number.isInteger(run.exit_code) || run.exit_code < 0) {
+    throw new Error(`execution evidence verification_runs[${index}].exit_code must be a non-negative integer`);
+  }
+  if (!isNonEmptyString(run.recorded_by)) {
+    throw new Error(`execution evidence verification_runs[${index}].recorded_by must be a non-empty string`);
+  }
+  if (!isNonEmptyString(run.recorded_at) || Number.isNaN(Date.parse(run.recorded_at))) {
+    throw new Error(`execution evidence verification_runs[${index}].recorded_at must be a valid ISO timestamp`);
+  }
+  for (const fieldName of VERIFICATION_HASH_FIELDS) {
+    validateVerificationHash(run[fieldName], fieldName);
+  }
+  if (!VERIFICATION_HASH_FIELDS.some((fieldName) => isNonEmptyString(run[fieldName]))) {
+    throw new Error(
+      `execution evidence verification_runs[${index}] requires at least one of ${VERIFICATION_HASH_FIELDS.join(", ")}`
+    );
+  }
 }
 
 function buildMissingExecutionEvidenceVerdict(verdict) {
@@ -100,6 +139,15 @@ function parseExecutionEvidenceArtifact(text) {
   ) {
     throw new Error("execution evidence test_exit_code must be a non-negative integer when present");
   }
+  if (artifact.verification_runs !== undefined) {
+    if (!Array.isArray(artifact.verification_runs)) {
+      throw new Error("execution evidence verification_runs must be an array when present");
+    }
+    if (artifact.verification_runs.length === 0) {
+      throw new Error("execution evidence verification_runs must not be empty when present");
+    }
+    artifact.verification_runs.forEach(validateVerificationRun);
+  }
 
   return artifact;
 }
@@ -163,6 +211,26 @@ function computeQualityExecutionStatus({ runDir, reviewedHead, strict = false })
     };
   }
   if (strict) {
+    if (artifactLoad.artifact.verification_runs !== undefined) {
+      const staleRun = artifactLoad.artifact.verification_runs.find((run) => run.head_sha !== reviewedHead);
+      if (staleRun) {
+        return {
+          status: "fail",
+          reason: `strict verification_runs evidence is stale: recorded at ${staleRun.head_sha}, reviewed at ${reviewedHead}`,
+        };
+      }
+      const failedRun = artifactLoad.artifact.verification_runs.find((run) => run.exit_code !== 0);
+      if (failedRun) {
+        return {
+          status: "fail",
+          reason: `strict verification_runs evidence recorded nonzero exit_code=${failedRun.exit_code} for '${failedRun.command}'`,
+        };
+      }
+      return {
+        status: "pass",
+        reason: null,
+      };
+    }
     if (!isNonEmptyString(artifactLoad.artifact.test_command) || artifactLoad.artifact.test_command === "unspecified") {
       return {
         status: "fail",

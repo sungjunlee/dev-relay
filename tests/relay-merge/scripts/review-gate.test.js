@@ -84,6 +84,7 @@ function createHardenedGateFixture({
   tamperAdvisoryAfterEvent = false,
   evidenceProvenance = true,
   strictEvidence = true,
+  verificationRuns = false,
 } = {}) {
   const { runDir, manifestData } = createRubricStateFixture("loaded");
   const headSha = "a".repeat(40);
@@ -146,10 +147,21 @@ function createHardenedGateFixture({
   fs.writeFileSync(evidencePath, JSON.stringify({
     schema_version: 1,
     head_sha: headSha,
-    test_command: strictEvidence ? "node --test" : "unspecified",
-    test_result_hash: strictEvidence ? "a".repeat(64) : "unspecified",
+    test_command: verificationRuns ? "unspecified" : (strictEvidence ? "node --test" : "unspecified"),
+    test_result_hash: verificationRuns ? "unspecified" : (strictEvidence ? "a".repeat(64) : "unspecified"),
     test_result_summary: "pass",
-    ...(strictEvidence ? { test_exit_code: 0 } : {}),
+    ...(strictEvidence && !verificationRuns ? { test_exit_code: 0 } : {}),
+    ...(verificationRuns ? {
+      verification_runs: [{
+        command: "node --test",
+        cwd: "/repo",
+        head_sha: headSha,
+        exit_code: 0,
+        output_hash: "b".repeat(64),
+        recorded_by: "orchestrator",
+        recorded_at: "2026-05-05T00:00:00.000Z",
+      }],
+    } : {}),
     recorded_at: "2026-05-05T00:00:00.000Z",
     recorded_by: "dispatch-orchestrator-v1",
   }, null, 2), "utf-8");
@@ -283,6 +295,30 @@ test("evaluateReviewGate enforces hardened advisory and strict execution evidenc
 
 test("evaluateReviewGate accepts hardened PASS when advisory and strict evidence are present", () => {
   const { headSha, runDir, manifestData } = createHardenedGateFixture();
+  const result = evaluateReviewGate({
+    prNumber: 40,
+    comments: [
+      {
+        body: "<!-- relay-review -->\n## Relay Review\nVerdict: PASS\nRounds: 1",
+        createdAt: "2026-04-03T08:00:00Z",
+      },
+    ],
+    commits: [
+      {
+        oid: headSha,
+        committedDate: "2026-04-03T07:00:00Z",
+      },
+    ],
+    manifestData,
+    runDir,
+  });
+
+  assert.equal(result.status, "lgtm");
+  assert.equal(result.readyToMerge, true);
+});
+
+test("evaluateReviewGate accepts hardened PASS with verification_runs evidence", () => {
+  const { headSha, runDir, manifestData } = createHardenedGateFixture({ verificationRuns: true });
   const result = evaluateReviewGate({
     prNumber: 40,
     comments: [

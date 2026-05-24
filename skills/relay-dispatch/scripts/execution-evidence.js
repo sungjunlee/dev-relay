@@ -12,7 +12,15 @@ function hashFileSha256(filePath) {
   return crypto.createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
 }
 
-function buildExecutionEvidence({ headSha, testCommand, resultFilePath, executor, recordedAt, testExitCode }) {
+function buildExecutionEvidence({
+  headSha,
+  testCommand,
+  resultFilePath,
+  executor,
+  recordedAt,
+  testExitCode,
+  verificationRuns,
+}) {
   if (!headSha) {
     throw new Error("post-dispatch HEAD SHA is required for execution evidence");
   }
@@ -25,6 +33,7 @@ function buildExecutionEvidence({ headSha, testCommand, resultFilePath, executor
     test_result_hash: resultHash || "unspecified",
     test_result_summary: resultHash ? `${executor || "executor"} result.txt hashed` : "unspecified",
     ...(testExitCode !== undefined ? { test_exit_code: testExitCode } : {}),
+    ...(verificationRuns !== undefined ? { verification_runs: verificationRuns } : {}),
     recorded_at: recordedAt || new Date().toISOString(),
     recorded_by: "dispatch-orchestrator-v1",
   };
