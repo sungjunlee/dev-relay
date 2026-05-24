@@ -4,7 +4,7 @@ const path = require("path");
 const { buildArtifactTimingFields } = require("../../../relay-dispatch/scripts/advisory-timing");
 const { resolveExecutorDefaultModel } = require("../../../relay-dispatch/scripts/executor-model-config");
 const { hashFileSha256 } = require("../../../relay-dispatch/scripts/execution-evidence");
-const { appendRunEvent, EVENTS } = require("../../../relay-dispatch/scripts/relay-events");
+const { appendRunEvent, EVENTS, readRunEvents } = require("../../../relay-dispatch/scripts/relay-events");
 const { parseAdvisoryReview, validateAdvisoryProfile } = require("../advisory-review-schema");
 const { captureGitStatus, resolveReviewerScript } = require("./reviewer-invoke");
 const { writeText } = require("./common");
@@ -178,21 +178,89 @@ function buildDeferredResult(advisoryRun, { criticalPathWaitMs = 0, consumedByPh
   };
 }
 
+function samePath(left, right) {
+  if (!left || !right) return false;
+  return path.resolve(left) === path.resolve(right);
+}
+
+function advisorySuccessBindingFailure(advisoryRun, result) {
+  if (!result.artifactPath || !result.artifactHash) {
+    return "successful advisory result is missing artifact path or hash provenance";
+  }
+  const artifactHash = hashFileSha256(result.artifactPath);
+  if (artifactHash !== result.artifactHash) {
+    return "successful advisory result artifact hash does not match the current artifact";
+  }
+
+  let events;
+  try {
+    events = readRunEvents(advisoryRun.runRepoPath, advisoryRun.runId);
+  } catch (error) {
+    return `successful advisory result cannot be bound to events.jsonl: ${error.message}`;
+  }
+
+  const hasBoundEvent = events.some((event) => (
+    event.event === EVENTS.ADVISORY_REVIEW &&
+    event.status === "success" &&
+    Number(event.round || 0) === Number(advisoryRun.round || 0) &&
+    event.head_sha === advisoryRun.headSha &&
+    event.reviewer === advisoryRun.reviewerName &&
+    samePath(event.artifact_path, result.artifactPath) &&
+    event.advisory_artifact_hash === result.artifactHash &&
+    Number(event.required_count || 0) === Number(result.required_count || 0) &&
+    Number(event.advisory_count || 0) === Number(result.advisory_count || 0) &&
+    Number(event.duplicate_low_confidence_count || 0) === Number(result.duplicate_low_confidence_count || 0)
+  ));
+  return hasBoundEvent
+    ? null
+    : "successful advisory result is not bound to a successful advisory_review event for the reviewed HEAD";
+}
+
+function buildUnboundSuccessResult(advisoryRun, result, failureReason, {
+  consumedByPhase = "review",
+  criticalPathWaitMs = 0,
+} = {}) {
+  return {
+    ...result,
+    consumedByPhase,
+    criticalPathWaitMs,
+    elapsedMs: Date.now() - advisoryRun.startedAt,
+    failureReason,
+    phaseDecisionWaited: criticalPathWaitMs > 0,
+    status: "failed",
+  };
+}
+
 async function finishAdvisoryReview({
   advisoryRun,
   criticalPathWaitMs = 0,
+  requireEventBoundSuccess = false,
   waitMs,
   consumedByPhase = "review",
 }) {
   const deadline = Date.now() + Math.max(0, Number(waitMs || 0));
+  let unboundSuccess = null;
   while (Date.now() <= deadline) {
     const result = readJsonIfExists(advisoryRun.resultPath);
-    if (result) return result;
+    if (result) {
+      if (!requireEventBoundSuccess || result.status !== "success") return result;
+      const failureReason = advisorySuccessBindingFailure(advisoryRun, result);
+      if (!failureReason) return result;
+      unboundSuccess = { result, failureReason };
+    }
     if (Date.now() === deadline) break;
     await sleep(Math.min(25, Math.max(1, deadline - Date.now())));
   }
   const result = readJsonIfExists(advisoryRun.resultPath);
-  if (result) return result;
+  if (result) {
+    if (!requireEventBoundSuccess || result.status !== "success") return result;
+    const failureReason = advisorySuccessBindingFailure(advisoryRun, result);
+    if (!failureReason) return result;
+    return buildUnboundSuccessResult(advisoryRun, result, failureReason, { criticalPathWaitMs, consumedByPhase });
+  }
+  if (unboundSuccess) {
+    return buildUnboundSuccessResult(advisoryRun, unboundSuccess.result, unboundSuccess.failureReason, { criticalPathWaitMs, consumedByPhase });
+  }
   return buildDeferredResult(advisoryRun, { criticalPathWaitMs, consumedByPhase });
 }
 

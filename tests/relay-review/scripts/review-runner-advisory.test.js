@@ -15,12 +15,13 @@ const {
   readManifest,
 } = require("../../../skills/relay-dispatch/scripts/relay-manifest");
 const { buildDefaultRelayPolicy } = require("../../../skills/relay-dispatch/scripts/relay-policy");
-const { readRunEvents } = require("../../../skills/relay-dispatch/scripts/relay-events");
+const { appendRunEvent, EVENTS, readRunEvents } = require("../../../skills/relay-dispatch/scripts/relay-events");
 const {
   DEFAULT_ENFORCEMENT_RUBRIC,
   createEnforcementFixture,
 } = require("../../../skills/relay-dispatch/scripts/test-support");
 const { EXECUTION_EVIDENCE_FILENAME } = require("../../../skills/relay-review/scripts/review-runner/execution-evidence");
+const { finishAdvisoryReview } = require("../../../skills/relay-review/scripts/review-runner/advisory");
 
 const SCRIPT = path.join(__dirname, "..", "..", "..", "skills", "relay-review", "scripts", "review-runner.js");
 
@@ -405,6 +406,88 @@ test("standard review applies the primary verdict when advisory times out during
   assert.match(result.advisoryReview.failureReason, /exceeded 1s timeout/);
   assert.equal(event.status, "timeout");
   assert.equal(event.consumed_by_phase, "review");
+});
+
+test("hardened advisory finish does not expose success before event provenance is written", async () => {
+  const { repoRoot, manifestPath, runDir, runId } = setupRepo({
+    reviewAssurance: "hardened",
+    strictEvidence: true,
+  });
+  const manifest = readManifest(manifestPath).data;
+  const artifactPath = path.join(runDir, "review-round-1-advisory-opencode.json");
+  const resultPath = path.join(runDir, "review-round-1-advisory-opencode-result.json");
+  fs.writeFileSync(artifactPath, `${JSON.stringify({
+    profile: "blindspot",
+    summary: "No required findings.",
+    required_findings: [],
+    advisory_findings: [{
+      title: "Advisory note",
+      body: "Recorded after the primary path.",
+      file: "README.md",
+      line: 1,
+      severity: "P3",
+      category: "test-gap",
+      confidence: 0.8,
+    }],
+    duplicate_or_low_confidence: [],
+  }, null, 2)}\n`, "utf-8");
+  const result = {
+    artifactHash: hashFile(artifactPath),
+    artifactPath,
+    advisory_count: 1,
+    duplicate_low_confidence_count: 0,
+    failureReason: null,
+    profile: "blindspot",
+    rawResponsePath: null,
+    required_count: 0,
+    reviewer: "opencode",
+    status: "success",
+  };
+  fs.writeFileSync(resultPath, `${JSON.stringify(result, null, 2)}\n`, "utf-8");
+
+  const advisoryRun = {
+    headSha: manifest.git.head_sha,
+    profile: "blindspot",
+    resultPath,
+    reviewerName: "opencode",
+    round: 1,
+    runId,
+    runRepoPath: repoRoot,
+    startedAt: Date.now(),
+  };
+  const unbound = await finishAdvisoryReview({
+    advisoryRun,
+    requireEventBoundSuccess: true,
+    waitMs: 0,
+  });
+
+  assert.equal(unbound.status, "failed");
+  assert.match(unbound.failureReason, /not bound to a successful advisory_review event/);
+
+  appendRunEvent(repoRoot, runId, {
+    event: EVENTS.ADVISORY_REVIEW,
+    state_from: STATES.REVIEW_PENDING,
+    state_to: STATES.REVIEW_PENDING,
+    head_sha: manifest.git.head_sha,
+    round: 1,
+    reviewer: "opencode",
+    profile: "blindspot",
+    status: "success",
+    artifact_path: artifactPath,
+    advisory_artifact_hash: result.artifactHash,
+    raw_response_path: null,
+    failure_reason: null,
+    required_count: 0,
+    advisory_count: 1,
+    duplicate_low_confidence_count: 0,
+  });
+  const bound = await finishAdvisoryReview({
+    advisoryRun,
+    requireEventBoundSuccess: true,
+    waitMs: 0,
+  });
+
+  assert.equal(bound.status, "success");
 });
 
 test("invalid advisory JSON is recorded as advisory failure while primary pass still applies", () => {

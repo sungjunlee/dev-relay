@@ -12,6 +12,8 @@ const {
   writeAdvisoryDecision,
 } = require("./advisory");
 
+const HARDENED_EVENT_BINDING_WAIT_MS = 1000;
+
 function resolveAdvisoryConfig({
   advisoryGraceArg,
   advisoryProfileArg,
@@ -130,6 +132,21 @@ async function settleAdvisoryForVerdict({ advisoryRun, config, hardenedAssurance
       criticalPathWaitMs,
       nextState: decisionState,
       phaseDecisionWaited: criticalPathWaitMs > 0,
+    });
+    advisoryResult = {
+      ...advisoryResult,
+      consumedByPhase: "review",
+      criticalPathWaitMs,
+      phaseDecisionWaited: criticalPathWaitMs > 0,
+    };
+  }
+  if (hardenedAssurance && advisoryResult?.status === "success") {
+    advisoryResult = await finishAdvisoryReview({
+      advisoryRun,
+      consumedByPhase: "review",
+      criticalPathWaitMs,
+      requireEventBoundSuccess: true,
+      waitMs: HARDENED_EVENT_BINDING_WAIT_MS,
     });
     advisoryResult = {
       ...advisoryResult,
