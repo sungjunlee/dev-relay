@@ -30,6 +30,20 @@ const DEFAULT_PATHS = new Set([
   "sidecar.executor",
 ]);
 const DOCTOR_TOOLS = ["codex", "claude", "opencode", "pi"];
+const SUBCOMMAND_FLAGS = {
+  init: new Set(["--profile", "--json", "--help"]),
+  show: new Set(["--effective", "--json", "--help"]),
+  doctor: new Set(["--json", "--help"]),
+  check: new Set(["--phase", "--executor", "--reviewer", "--model", "--json", "--help"]),
+  "set-default": new Set(["--json", "--help"]),
+  "allow-route": new Set(["--phase", "--executor", "--reviewer", "--json", "--help"]),
+  "deny-route": new Set(["--phase", "--executor", "--reviewer", "--json", "--help"]),
+};
+const RELAY_CONFIG_FLAG_ALIASES = new Map([
+  ["-h", "--help"],
+  ["-e", "--executor"],
+  ["-m", "--model"],
+]);
 
 function hasCliFlag(flag) {
   return schemaHasFlag(args, flag, CLI_ARG_OPTIONS);
@@ -61,6 +75,26 @@ function printHelp() {
   console.log("  dispatch.executor, review.reviewer, advisory_review.reviewer, sidecar.executor");
   console.log("");
   console.log(`Options: --help ${modeLabel("--help")}`);
+}
+
+function flagName(token) {
+  const text = String(token);
+  const separator = text.indexOf("=");
+  const raw = separator === -1 ? text : text.slice(0, separator);
+  return RELAY_CONFIG_FLAG_ALIASES.get(raw) || raw;
+}
+
+function unsupportedFlagsForCommand(command, argv) {
+  const allowed = SUBCOMMAND_FLAGS[command];
+  if (!allowed) return [];
+
+  const unsupported = [];
+  for (const token of argv) {
+    if (!String(token).startsWith("-")) continue;
+    const flag = flagName(token);
+    if (!allowed.has(flag)) unsupported.push(flag);
+  }
+  return [...new Set(unsupported)];
 }
 
 function relayPolicyPath() {
@@ -410,6 +444,14 @@ function main() {
   if (!command) {
     throw new Error("command is required");
   }
+  if (!Object.prototype.hasOwnProperty.call(SUBCOMMAND_FLAGS, command)) {
+    throw new Error(`unknown command: ${command}`);
+  }
+
+  const unsupportedFlags = unsupportedFlagsForCommand(command, args);
+  if (unsupportedFlags.length) {
+    throw new Error(`unsupported flags for ${command}: ${unsupportedFlags.join(", ")}`);
+  }
 
   switch (command) {
     case "init":
@@ -441,8 +483,6 @@ function main() {
         requirePhase: false,
       });
       break;
-    default:
-      throw new Error(`unknown command: ${command}`);
   }
 }
 

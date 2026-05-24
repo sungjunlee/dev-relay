@@ -301,6 +301,23 @@ test("invalid args fail closed with non-zero exits", () => {
   assert.match(pathResult.combined, /unsupported default path: dispatch\.model/);
 });
 
+test("subcommands reject known relay-config flags outside their supported grammar", () => {
+  const relayHome = tempDir();
+  assert.equal(runConfig(["init", "--profile", "company", "--json"], { relayHome }).status, 0);
+
+  const init = runConfig(["init", "--profile", "company", "--model", "foo"], { relayHome });
+  assert.notEqual(init.status, 0, init.combined);
+  assert.match(init.combined, /unsupported flags for init: --model/);
+
+  const doctor = runConfig(["doctor", "--profile", "company"], { relayHome });
+  assert.notEqual(doctor.status, 0, doctor.combined);
+  assert.match(doctor.combined, /unsupported flags for doctor: --profile/);
+
+  const show = runConfig(["show", "--effective", "--executor", "codex"], { relayHome });
+  assert.notEqual(show.status, 0, show.combined);
+  assert.match(show.combined, /unsupported flags for show: --executor/);
+});
+
 test("help explains harness actors and provider/model route boundaries", () => {
   const result = runConfig(["--help"]);
 
