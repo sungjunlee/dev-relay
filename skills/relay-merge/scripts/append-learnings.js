@@ -13,9 +13,9 @@
  *
  * Resolution flow:
  *   1. Find the active sprint file (status: active) under <repo>/backlog/sprints/
- *   2. Require exactly one active sprint, then read its `component:` frontmatter.
- *      Multi-component is comma-separated; first declared wins per design doc D4
- *      and a warning is emitted.
+ *   2. Require exactly one active sprint, then read its single primary
+ *      `component:` frontmatter handle. Comma-separated multi-component values
+ *      fail because the field is a routing address, not prose.
  *   3. Locate <repo>/spec/capabilities.md and the matching `## Capability: <name>`
  *      block. Capability names are kebab-case (`[a-z0-9][a-z0-9-]*`). Require
  *      the block's LEARN:BEGIN/LEARN:END marker pair to be intact.
@@ -30,6 +30,7 @@
  *
  * Loud failures (status: failed, exit 1):
  *   - multiple active sprint files (ambiguous component target)
+ *   - multiple component values in sprint frontmatter
  *   - markers missing or out of order in the matching block (tampering)
  *   - malformed inputs
  *
@@ -211,7 +212,6 @@ function buildFailure(reason, extras = {}) {
 function appendLearningsCore({
   capabilitiesContent,
   primaryComponent,
-  secondaryComponents,
   runId,
   pr,
   synthesis,
@@ -248,20 +248,11 @@ function appendLearningsCore({
   const after = block.lines.slice(endIdx);
   const updatedLines = [...before, newEntry, ...after];
 
-  const warnings = [];
-  if (secondaryComponents.length > 0) {
-    warnings.push({
-      kind: "secondary_components_ignored",
-      detail: `D4 first-wins: secondary components ${secondaryComponents.join(", ")} were ignored.`,
-    });
-  }
-
   return {
     status: STATUS.APPENDED,
     primaryComponent,
     entry: newEntry,
     updatedContent: updatedLines.join("\n"),
-    warnings,
   };
 }
 
@@ -295,14 +286,20 @@ function appendLearnings({
   if (components.length === 0) {
     return buildSkip("component_empty", { sprintFile: sprint.file });
   }
+  if (components.length > 1) {
+    return buildFailure("multiple_components", {
+      sprintFile: sprint.file,
+      components,
+      detail: "component: accepts one primary capability slug; put secondary touches in sprint prose",
+    });
+  }
 
-  const [primaryComponent, ...secondaryComponents] = components;
+  const [primaryComponent] = components;
   const capabilitiesContent = readFile(capabilitiesPath, "utf-8");
 
   const coreResult = appendLearningsCore({
     capabilitiesContent,
     primaryComponent,
-    secondaryComponents,
     runId,
     pr,
     synthesis,
@@ -325,7 +322,6 @@ function formatHumanReport(result) {
       `Appended to ${result.capabilitiesPath} (capability: ${result.primaryComponent}):`,
       `  ${result.entry}`,
     ];
-    for (const w of result.warnings || []) lines.push(`  warning: ${w.detail}`);
     return lines.join("\n");
   }
   if (result.status === STATUS.SKIPPED) {
