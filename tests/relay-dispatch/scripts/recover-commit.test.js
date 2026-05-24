@@ -354,6 +354,11 @@ test("dirty worktree recovery rebrands execution evidence to the created commit 
   assert.equal(rebrandEvent.previous_head_sha, beforeEvidence.head_sha);
   assert.equal(rebrandEvent.new_head_sha, parsed.commitSha);
   assert.equal(rebrandEvent.reason, "executor completed before commit");
+  assert.equal(rebrandEvent.override_class, "execution_evidence_rebrand");
+  assert.equal(rebrandEvent.affected_head_sha, parsed.commitSha);
+  assert.equal(rebrandEvent.prior_state, STATES.REVIEW_PENDING);
+  assert.equal(rebrandEvent.required_reason, "executor completed before commit");
+  assert.equal(rebrandEvent.operator_initiated, true);
 });
 
 test("already-committed recovery leaves execution evidence byte-identical", () => {
@@ -426,6 +431,21 @@ test("missing --reason rejects before mutation", () => {
 
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /--reason <text> is required/);
+  assert.equal(readJsonLines(fixture.ghLogPath).length, 0);
+  assert.equal(readRunEvents(fixture.repoRoot, fixture.runId).length, 0);
+});
+
+test("blank --reason rejects before commit or evidence rebrand", () => {
+  const fixture = setupRepo({ dirty: true, evidence: true });
+  const beforeHead = execFileSync("git", ["-C", fixture.worktreePath, "rev-parse", "HEAD"], { encoding: "utf-8" }).trim();
+  const beforeEvidence = fs.readFileSync(path.join(fixture.runDir, EXECUTION_EVIDENCE_FILENAME), "utf-8");
+  const result = runRecover(fixture, ["--reason", "   ", "--json"]);
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /--reason (?:<text> is required|requires a non-empty value)/);
+  assert.equal(execFileSync("git", ["-C", fixture.worktreePath, "rev-parse", "HEAD"], { encoding: "utf-8" }).trim(), beforeHead);
+  assert.equal(execFileSync("git", ["-C", fixture.worktreePath, "status", "--porcelain"], { encoding: "utf-8" }).trim(), "?? recovered.txt");
+  assert.equal(fs.readFileSync(path.join(fixture.runDir, EXECUTION_EVIDENCE_FILENAME), "utf-8"), beforeEvidence);
   assert.equal(readJsonLines(fixture.ghLogPath).length, 0);
   assert.equal(readRunEvents(fixture.repoRoot, fixture.runId).length, 0);
 });

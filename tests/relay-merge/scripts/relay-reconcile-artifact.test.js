@@ -76,6 +76,7 @@ function buildManifestForState(manifest, targetState) {
 function setupRun({
   manifestState = STATES.REVIEW_PENDING,
   bootstrapExempt = null,
+  headSha = "abc123def456",
 } = {}) {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-reconcile-"));
   process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
@@ -105,7 +106,7 @@ function setupRun({
     state: "loaded",
   }).anchor;
   manifest.git.pr_number = 1269;
-  manifest.git.head_sha = "abc123def456";
+  manifest.git.head_sha = headSha;
   manifest = buildManifestForState(manifest, manifestState);
   if (bootstrapExempt) {
     manifest.bootstrap_exempt = bootstrapExempt;
@@ -178,6 +179,11 @@ test("relay-reconcile-artifact stamps bootstrap exemption, emits force event, an
   assert.equal(forceEvent?.state_from, STATES.REVIEW_PENDING);
   assert.equal(forceEvent?.state_to, STATES.MERGED);
   assert.equal(forceEvent?.pr_number, 267);
+  assert.equal(forceEvent?.override_class, "bootstrap_artifact_reconcile");
+  assert.equal(forceEvent?.affected_head_sha, "abc123def456");
+  assert.equal(forceEvent?.prior_state, STATES.REVIEW_PENDING);
+  assert.equal(forceEvent?.required_reason, "run predates the artifact writer");
+  assert.equal(forceEvent?.operator_initiated, true);
   assert.equal(report.bootstrap_exempt_runs, 1);
 });
 
@@ -213,6 +219,23 @@ for (const terminalState of [STATES.MERGED, STATES.CLOSED]) {
     assert.deepEqual(readRunEvents(fixture.repoRoot, fixture.runId), []);
   });
 }
+
+test("relay-reconcile-artifact rejects missing head sha before skip-review or force events", () => {
+  const fixture = setupRun({ headSha: null });
+  const result = spawnReconcile(fixture, [
+    "--artifact-path", "execution-evidence.json",
+    "--writer-pr", "267",
+    "--reason", "operator checked artifact writer",
+    "--skip-review", "manual artifact audit",
+  ]);
+
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /manifest is missing git\.head_sha required for override audit/);
+  const manifest = readManifest(fixture.manifestPath).data;
+  assert.equal(manifest.state, STATES.REVIEW_PENDING);
+  assert.equal("bootstrap_exempt" in manifest, false);
+  assert.deepEqual(readRunEvents(fixture.repoRoot, fixture.runId), []);
+});
 
 for (const { name, args, pattern } of [
   {
