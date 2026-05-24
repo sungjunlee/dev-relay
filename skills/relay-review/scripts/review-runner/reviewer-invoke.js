@@ -4,6 +4,7 @@ const path = require("path");
 const { STATES } = require("../../../relay-dispatch/scripts/manifest/lifecycle");
 const { writeManifest } = require("../../../relay-dispatch/scripts/manifest/store");
 const { appendRunEvent, EVENTS } = require("../../../relay-dispatch/scripts/relay-events");
+const { assertRelayPolicyGate } = require("../../../relay-dispatch/scripts/relay-policy-gate");
 const { applyPolicyViolationToManifest } = require("./manifest-apply");
 const { git, readText, writeText } = require("./common");
 
@@ -80,6 +81,12 @@ function loadReviewText({ body, data, manifestPath, prNumber, promptPath, review
   }
 
   const effectiveReviewerModel = resolveReviewerModel(data, reviewerModel);
+  assertRelayPolicyGate({
+    repoRoot: runRepoPath,
+    phase: "review",
+    reviewer: reviewerName,
+    model: effectiveReviewerModel,
+  });
   appendRunEvent(runRepoPath, data.run_id, {
     event: EVENTS.REVIEW_INVOKE,
     state_from: data.state,

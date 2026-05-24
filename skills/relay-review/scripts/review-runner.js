@@ -19,11 +19,12 @@ const { applyReviewAssurancePolicy } = require("./review-runner/assurance");
 const { buildRedispatchPrompt, buildRubricGateRedispatchPrompt, computeFactorStatusFlips, computeRepeatedIssueCount, decideFlipFlopEscalation, detectChurnGrowth, summarizeLineage, toEscalatedVerdict } = require("./review-runner/redispatch");
 const { applyPolicyViolationToManifest, applyVerdictToManifest } = require("./review-runner/manifest-apply");
 const { writePrBodySnapshot } = require("./review-runner/pr-body-snapshot");
-const { loadReviewText, resolveReviewerName, resolveReviewerScript } = require("./review-runner/reviewer-invoke");
+const { loadReviewText, resolveReviewerModel, resolveReviewerName, resolveReviewerScript } = require("./review-runner/reviewer-invoke");
 const { maybeSwapReviewer } = require("./review-runner/reviewer-swap");
 const { finishAdvisoryReview, parsePositiveSeconds, resolveAdvisoryModel, startAdvisoryReview, validateAdvisoryProfile } = require("./review-runner/advisory");
 const { printResult, printUsage } = require("./review-runner/output");
 const { bindCliArgs, findUnknownFlags } = require("../../relay-dispatch/scripts/cli-args");
+const { assertRelayPolicyGate, buildPolicyGateFailureEnvelope, isRelayPolicyGateError } = require("../../relay-dispatch/scripts/relay-policy-gate");
 
 const args = process.argv.slice(2);
 const KNOWN_FLAGS = ["--repo", "--run-id", "--branch", "--pr", "--manifest", "--done-criteria-file", "--diff-file", "--review-file", "--manual-review-reason", "--reviewer", "--reviewer-script", "--reviewer-model", "--independent-review-reason", "--advisory-reviewer", "--advisory-profile", "--advisory-reviewer-model", "--advisory-timeout", "--prepare-only", "--no-comment", "--json", "--help", "-h"];
@@ -211,11 +212,25 @@ async function run() {
     printResult({ doneCriteriaPath, diffPath, jsonOut, manifestPath, originalState: data.state, prepareOnly, prNumber, promptPath, redispatchPath: null, result, updatedManifest: null, verdictPath: null });
     return;
   }
+  if (!reviewFile) {
+    assertRelayPolicyGate({
+      repoRoot: runRepoPath,
+      phase: "review",
+      reviewer: reviewerName,
+      model: resolveReviewerModel(data, reviewerModel),
+    });
+  }
   if (advisoryReviewerArg) {
     const advisoryModel = resolveAdvisoryModel(data, advisoryReviewerArg, advisoryReviewerModel);
+    const advisoryPolicyDecision = assertRelayPolicyGate({
+      repoRoot: runRepoPath,
+      phase: "advisory_review",
+      reviewer: advisoryReviewerArg,
+      model: advisoryModel,
+    });
     const advisoryPromptText = buildAdvisoryPrompt({ branch, diffText, doneCriteria, doneCriteriaSource, issueNumber, prNumber, profile: advisoryProfile, round, rubricLoad });
     advisoryRun = startAdvisoryReview({ promptText: advisoryPromptText, reviewerModel: advisoryModel, reviewerName: advisoryReviewerArg, reviewRepoPath, round, runDir });
-    result.advisoryReview = { profile: advisoryProfile, reviewer: advisoryReviewerArg, status: "running" };
+    result.advisoryReview = { profile: advisoryProfile, reviewer: advisoryReviewerArg, status: "running", policy_decision: advisoryPolicyDecision };
   }
 
   try {
@@ -392,6 +407,9 @@ async function run() {
 
 if (require.main === module) {
   Promise.resolve(run()).catch((error) => {
+    if (cliArgs.hasFlag("--json") && isRelayPolicyGateError(error)) {
+      console.log(JSON.stringify(buildPolicyGateFailureEnvelope(error, { ok: false }), null, 2));
+    }
     console.error(`Error: ${error.message}`);
     process.exit(1);
   });

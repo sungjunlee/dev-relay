@@ -37,6 +37,7 @@ function formatDispatchDryRun({
   fleetId = null,
   doneCriteriaFile = null,
   reviewAssurance = null,
+  policyDecision = null,
   worktreePlan,
 }) {
   const lines = [
@@ -74,6 +75,16 @@ function formatDispatchDryRun({
   }
   if (reviewAssurance) {
     lines.push(`  Assurance: ${reviewAssurance}`);
+  }
+  if (policyDecision) {
+    const actorField = policyDecision.actor_field || "actor";
+    const actorValue = policyDecision[actorField] || policyDecision.actor || "(unset)";
+    const route = policyDecision.matched_route ? ` matched=${policyDecision.matched_route}` : "";
+    lines.push(
+      `  Policy:   ${policyDecision.allowed ? "allowed" : "denied"} ` +
+      `phase=${policyDecision.phase} ${actorField}=${actorValue} ` +
+      `model=${policyDecision.model || "(none)"} reason=${policyDecision.reason}${route}`
+    );
   }
   if (worktreePlan.worktreeinclude.length) {
     lines.push(`  .worktreeinclude: ${worktreePlan.worktreeinclude.join(", ")}`);

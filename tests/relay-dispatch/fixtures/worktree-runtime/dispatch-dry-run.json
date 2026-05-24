@@ -22,5 +22,23 @@
   "reviewAssurance": "standard",
   "environment": "collected-at-dispatch",
   "runState": null,
-  "dispatchSkipped": false
+  "dispatchSkipped": false,
+  "policy_decision": {
+    "allowed": true,
+    "reason": "managed_cli",
+    "phase": "dispatch",
+    "actor_field": "executor",
+    "actor": "codex",
+    "executor": "codex",
+    "reviewer": null,
+    "model": null,
+    "matched_route": null,
+    "policy": {
+      "status": "defaulted",
+      "sources": {
+        "global": "/tmp/issue187-fixtures/relay-home/policy.json",
+        "repo": "/tmp/issue187-fixtures/repo/.relay/policy.json"
+      }
+    }
+  }
 }
