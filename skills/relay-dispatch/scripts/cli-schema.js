@@ -99,6 +99,7 @@ const FLAGS = [
   { flag: "--skip-review", kind: VALUE, mode: MODE_VERBATIM, valueName: "<reason>", rationale: "Audit skip reason must be recorded exactly and must not be blank." },
   { flag: "--stale-hours", kind: VALUE, mode: MODE_PARSED, valueName: "<hours>", rationale: "Numeric threshold; flag-like following tokens should mean the value is missing." },
   { flag: "--state", kind: VALUE, mode: MODE_PARSED, valueName: "<state>", rationale: "Closed manifest state selector; flag-like following tokens should mean the value is missing." },
+  { flag: "--tags", kind: VALUE, mode: MODE_PARSED, valueName: "<csv>", rationale: "Explicit routing tags; flag-like following tokens should mean the value is missing." },
   { flag: "--test-command", kind: VALUE, mode: MODE_VERBATIM, valueName: "<cmd>", rationale: "Execution evidence must preserve the operator-supplied command token exactly." },
   { flag: "--text", kind: VALUE, mode: MODE_VERBATIM, valueName: "<text>", rationale: "Operator-supplied Done Criteria text body; keep the literal argv token." },
   { flag: "--timeout", kind: VALUE, mode: MODE_PARSED, valueName: "<seconds>", rationale: "Numeric timeout; flag-like following tokens should mean the value is missing." },
@@ -130,7 +131,7 @@ const COMMAND_FLAGS = {
     "--model", "--model-hints", "--sandbox", "--network-access", "--copy", "--timeout", "--reasoning", "--rubric-file",
     "--test-command", "--rubric-grandfathered", "--request-id", "--leaf-id",
     "--fleet-id", "--done-criteria-file", "--review-assurance", "--register", "--no-cleanup", "--auto-recover-commit", "--no-auto-recover-commit",
-    "--allow-conflicting-run", "--dry-run", "--json", "--help",
+    "--tags", "--allow-conflicting-run", "--dry-run", "--json", "--help",
   ],
   "finalize-run": [
     "--repo", "--run-id", "--manifest", "--branch", "--pr", "--merge-method",

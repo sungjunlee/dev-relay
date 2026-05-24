@@ -38,6 +38,7 @@ function formatDispatchDryRun({
   doneCriteriaFile = null,
   reviewAssurance = null,
   policyDecision = null,
+  routingDecision = null,
   worktreePlan,
 }) {
   const lines = [
@@ -85,6 +86,28 @@ function formatDispatchDryRun({
       `phase=${policyDecision.phase} ${actorField}=${actorValue} ` +
       `model=${policyDecision.model || "(none)"} reason=${policyDecision.reason}${route}`
     );
+  }
+  if (routingDecision) {
+    const matched = routingDecision.matched_rule
+      ? `matched ${routingDecision.matched_rule.name} (#${routingDecision.matched_rule.index})`
+      : `no match${routingDecision.no_match_reason ? ` (${routingDecision.no_match_reason})` : ""}`;
+    const sourceTags = routingDecision.source_tags || {};
+    const sourceParts = Object.entries(sourceTags)
+      .filter(([, tags]) => Array.isArray(tags) && tags.length)
+      .map(([source, tags]) => `${source.replace(/_/g, "-")}=${tags.join(",")}`);
+    const effective = (routingDecision.effective_tags || []).join(",") || "(none)";
+    const advisory = routingDecision.selected?.advisory_review
+      ? Object.values(routingDecision.selected.advisory_review).join("/")
+      : "(none)";
+    const sidecar = routingDecision.selected?.sidecar
+      ? Object.values(routingDecision.selected.sidecar).join("/")
+      : "(none)";
+    lines.push(`  Routing: ${matched}`);
+    lines.push(`  Tags:    ${[...sourceParts, `effective=${effective}`].join(" ")}`);
+    lines.push(`  Selected: advisory_review=${advisory} sidecar=${sidecar}`);
+    if (routingDecision.warnings?.length) {
+      lines.push(`  Routing warnings: ${routingDecision.warnings.map((warning) => warning.code).join(", ")}`);
+    }
   }
   if (worktreePlan.worktreeinclude.length) {
     lines.push(`  .worktreeinclude: ${worktreePlan.worktreeinclude.join(", ")}`);

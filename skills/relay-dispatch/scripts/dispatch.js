@@ -28,6 +28,7 @@
  *   --rubric-file <path>   REQUIRED: copy rubric YAML to run dir (persists for review)
  *   --test-command <cmd>   Record the executor-side test command in execution evidence
  *   --review-assurance <level> standard | hardened (default: standard)
+ *   --tags <csv>          Explicit routing tags; override inferred routing tags
  *   --rubric-grandfathered Retired alias; dispatch rejects it
  *   --request-id <id>      Link the run back to a relay-ready request
  *   --leaf-id <id>         Link the run back to a relay-ready leaf handoff
@@ -128,6 +129,8 @@ const {
   assertRelayPolicyGate,
   buildPolicyGateFailureEnvelope,
 } = require("./relay-policy-gate");
+const { loadRelayPolicy } = require("./relay-policy");
+const { resolveRoutingDecision } = require("./relay-routing");
 
 // ---------------------------------------------------------------------------
 // Args
@@ -138,7 +141,7 @@ const args = process.argv.slice(2);
 const KNOWN_FLAGS = [
   "--branch", "-b", "--run-id", "--manifest", "--prompt", "-p", "--prompt-file", "--executor", "-e",
   "--model", "-m", "--model-hints", "--sandbox", "--network-access", "--copy", "--timeout", "--reasoning", "--rubric-file", "--test-command", "--rubric-grandfathered",
-  "--request-id", "--leaf-id", "--fleet-id", "--done-criteria-file", "--review-assurance",
+  "--request-id", "--leaf-id", "--fleet-id", "--done-criteria-file", "--review-assurance", "--tags",
   "--register", "--no-cleanup", "--auto-recover-commit", "--no-auto-recover-commit", "--allow-conflicting-run", "--dry-run", "--json", "--help", "-h",
 ];
 const CLI_ARG_OPTIONS = { commandName: "dispatch", reservedFlags: KNOWN_FLAGS };
@@ -166,6 +169,7 @@ if (!args.length || hasCliFlag(["--help", "-h"])) {
   console.log(`  --rubric-file      ${modeLabel("--rubric-file")} REQUIRED: copy rubric YAML to run dir (persists for review)`);
   console.log(`  --test-command     ${modeLabel("--test-command")} Record the executor-side test command in execution evidence`);
   console.log(`  --review-assurance ${modeLabel("--review-assurance")} Review assurance: standard | hardened (default: standard)`);
+  console.log(`  --tags             ${modeLabel("--tags")} Explicit routing tags; override inferred routing tags`);
   console.log(`  --rubric-grandfathered  ${modeLabel("--rubric-grandfathered")} Retired alias; remove anchor.rubric_grandfathered manually`);
   console.log(`  --request-id       ${modeLabel("--request-id")} Link the run back to a relay-ready request`);
   console.log(`  --leaf-id          ${modeLabel("--leaf-id")} Link the run back to a relay-ready leaf handoff`);
@@ -219,6 +223,7 @@ const LEAF_ID = readArg(args, "--leaf-id", undefined, CLI_ARG_OPTIONS);
 const FLEET_ID = readArg(args, "--fleet-id", undefined, CLI_ARG_OPTIONS);
 const DONE_CRITERIA_FILE = readArg(args, "--done-criteria-file", undefined, CLI_ARG_OPTIONS);
 const REVIEW_ASSURANCE_RAW = readArg(args, "--review-assurance", undefined, CLI_ARG_OPTIONS);
+const ROUTING_TAGS = readArg(args, "--tags", "", CLI_ARG_OPTIONS);
 let REVIEW_ASSURANCE;
 try {
   REVIEW_ASSURANCE = normalizeReviewAssurance(REVIEW_ASSURANCE_RAW || "standard");
@@ -666,6 +671,48 @@ function summarizeCommitMode({ status, gitLog, uncommitted }) {
   return status;
 }
 
+function readFileIfExists(filePath) {
+  if (!filePath) return null;
+  try {
+    return fs.existsSync(filePath) ? fs.readFileSync(filePath, "utf-8") : null;
+  } catch {
+    return null;
+  }
+}
+
+function resolveRoutingRubricText({ rubricFile, manifest, runDir }) {
+  if (rubricFile) return readFileIfExists(path.resolve(rubricFile));
+  const rubricPath = manifest?.anchor?.rubric_path;
+  if (!rubricPath || !runDir) return null;
+  return readFileIfExists(path.join(runDir, rubricPath));
+}
+
+function collectChangedFilesForRouting(repoDir, baseBranch) {
+  const candidates = [];
+  if (baseBranch) {
+    candidates.push([`${baseBranch}...HEAD`]);
+    candidates.push([`origin/${baseBranch}...HEAD`]);
+  }
+  candidates.push(["--cached"]);
+
+  for (const argsForDiff of candidates) {
+    try {
+      const output = execGit(repoDir, ["diff", "--name-only", ...argsForDiff]);
+      if (output) return output.split("\n").filter(Boolean);
+    } catch {}
+  }
+
+  try {
+    return execGit(repoDir, ["status", "--porcelain"])
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => line.slice(3).trim())
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
@@ -930,6 +977,21 @@ async function main() {
     process.exit(1);
   }
 
+  const effectivePolicy = loadRelayPolicy({ repoRoot, relayHome: RELAY_HOME });
+  const routingDecision = resolveRoutingDecision({
+    policy: effectivePolicy.policy || {},
+    cliTags: ROUTING_TAGS,
+    taskProfile: manifest?.advisory?.guidance?.task_profile_summary || null,
+    promptText: taskPrompt,
+    rubricText: resolveRoutingRubricText({
+      rubricFile: RUBRIC_FILE,
+      manifest,
+      runDir: manifestRunDir,
+    }),
+    changedFiles: collectChangedFilesForRouting(RESUME_MODE ? wtPath : repoRoot, baseBranch),
+    testCommands: TEST_COMMAND ? [TEST_COMMAND] : [],
+  });
+
   // --- Dry run ---
   if (DRY_RUN) {
     const planFleetId = FLEET_ID || manifest?.fleet_id || null;
@@ -960,6 +1022,7 @@ async function main() {
       runState: manifest?.state || null,
       dispatchSkipped: false,
       policy_decision: policyDecision,
+      routing_decision: routingDecision,
     };
     if (planFleetId) {
       plan.fleetId = planFleetId;
@@ -994,6 +1057,7 @@ async function main() {
         doneCriteriaFile: resolvedDoneCriteriaPath || manifest?.anchor?.done_criteria_path || null,
         reviewAssurance: REVIEW_ASSURANCE,
         policyDecision,
+        routingDecision,
         worktreePlan,
       }));
     }
@@ -1078,6 +1142,7 @@ async function main() {
         ...(manifest.policy || {}),
         executor_network: executorNetworkPolicy,
       },
+      routing: routingDecision,
     };
     ensureRunLayout(repoRoot, runId);
     writeManifest(manifestPath, manifest);
@@ -1088,6 +1153,7 @@ async function main() {
         ...(manifest.policy || {}),
         executor_network: executorNetworkPolicy,
       },
+      routing: routingDecision,
     };
     writeManifest(manifestPath, manifest);
   }
@@ -1511,6 +1577,7 @@ async function main() {
     executor: EXECUTOR,
     executorNetwork: executorNetworkPolicy,
     policyDecision,
+    routingDecision,
     codexGitCommonDir,
     worktree: wtPath,
     branch,
