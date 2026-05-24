@@ -70,7 +70,11 @@ function changesRequestedVerdict() {
   };
 }
 
-function setupRepo({ reviewAssurance = "standard", strictEvidence = false } = {}) {
+function setupRepo({
+  reviewAssurance = "standard",
+  strictEvidence = false,
+  roles = { orchestrator: "codex", executor: "codex", reviewer: "codex" },
+} = {}) {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-advisory-"));
   const remoteRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-advisory-origin-"));
   process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
@@ -97,9 +101,9 @@ function setupRepo({ reviewAssurance = "standard", strictEvidence = false } = {}
     baseBranch: "main",
     issueNumber: 429,
     worktreePath,
-    orchestrator: "codex",
-    executor: "codex",
-    reviewer: "codex",
+    orchestrator: roles.orchestrator,
+    executor: roles.executor,
+    reviewer: roles.reviewer,
     reviewAssurance,
   });
   manifest = updateManifestState(manifest, STATES.DISPATCHED, "await_dispatch_result");
@@ -177,7 +181,16 @@ if (logPath) fs.appendFileSync(logPath, "advisory-end " + Date.now() + "\\n");
   return filePath;
 }
 
-function runReview({ repoRoot, runId, doneCriteriaPath, diffPath, primaryScript, opencodeScript, extraArgs = [] }) {
+function runReview({
+  repoRoot,
+  runId,
+  doneCriteriaPath,
+  diffPath,
+  primaryScript,
+  opencodeScript,
+  reviewer = "codex",
+  extraArgs = [],
+}) {
   return JSON.parse(execFileSync("node", [
     SCRIPT,
     "--repo", repoRoot,
@@ -185,7 +198,7 @@ function runReview({ repoRoot, runId, doneCriteriaPath, diffPath, primaryScript,
     "--pr", "429",
     "--done-criteria-file", doneCriteriaPath,
     "--diff-file", diffPath,
-    "--reviewer", "codex",
+    "--reviewer", reviewer,
     "--reviewer-script", primaryScript,
     "--advisory-reviewer", "opencode",
     "--no-comment",
@@ -321,6 +334,84 @@ test("hardened review assurance blocks a primary pass without advisory evidence"
   );
 
   assert.equal(readManifest(manifestPath).data.state, STATES.REVIEW_PENDING);
+});
+
+test("hardened assurance is generic for Codex-only and non-Codex role bindings", async (t) => {
+  for (const entry of [
+    {
+      label: "codex-only",
+      roles: { orchestrator: "codex", executor: "codex", reviewer: "codex" },
+      reviewer: "codex",
+    },
+    {
+      label: "non-codex-fixture",
+      roles: { orchestrator: "atlas", executor: "forge", reviewer: "mirror" },
+      reviewer: "mirror",
+    },
+  ]) {
+    await t.test(entry.label, () => {
+      const { repoRoot, manifestPath, runId, doneCriteriaPath, diffPath } = setupRepo({
+        reviewAssurance: "hardened",
+        strictEvidence: true,
+        roles: entry.roles,
+      });
+      const primaryScript = writePrimaryReviewer(repoRoot, passVerdict());
+      const opencodeScript = writeFakeOpencode(repoRoot);
+
+      const result = runReview({
+        repoRoot,
+        runId,
+        doneCriteriaPath,
+        diffPath,
+        primaryScript,
+        opencodeScript,
+        reviewer: entry.reviewer,
+      });
+      const manifest = readManifest(manifestPath).data;
+
+      assert.equal(result.nextState, STATES.READY_TO_MERGE);
+      assert.equal(manifest.state, STATES.READY_TO_MERGE);
+      assert.deepEqual(manifest.roles, entry.roles);
+      assert.equal(manifest.policy.review_assurance, "hardened");
+      assert.equal(manifest.review.last_reviewer, entry.reviewer);
+    });
+  }
+});
+
+test("Codex-only assurance regression is documented as generic policy coverage", () => {
+  const notes = fs.readFileSync(
+    path.join(__dirname, "..", "..", "..", "skills", "relay-review", "references", "runner-notes.md"),
+    "utf-8"
+  );
+
+  assert.match(notes, /Codex-only operation regression/i);
+  assert.match(notes, /policy\.review_assurance=hardened/i);
+  assert.match(notes, /not a Codex-only policy special case/i);
+});
+
+test("production assurance code does not branch on Codex executor and reviewer identity", () => {
+  const productionFiles = [
+    "skills/relay-review/scripts/review-runner.js",
+    "skills/relay-review/scripts/review-runner/assurance.js",
+    "skills/relay-merge/scripts/review-gate.js",
+    "skills/relay-merge/scripts/gate-check.js",
+    "skills/relay-merge/scripts/finalize-run.js",
+    "skills/relay-dispatch/scripts/relay-manifest.js",
+    "skills/relay-dispatch/scripts/manifest/store.js",
+  ];
+
+  const forbiddenBranch = new RegExp([
+    String.raw`(?:executor|roles\.executor)[\s\S]{0,80}(?:["']codex["'])`,
+    String.raw`[\s\S]{0,160}(?:reviewer|roles\.reviewer)[\s\S]{0,80}(?:["']codex["'])`,
+    "|",
+    String.raw`(?:reviewer|roles\.reviewer)[\s\S]{0,80}(?:["']codex["'])`,
+    String.raw`[\s\S]{0,160}(?:executor|roles\.executor)[\s\S]{0,80}(?:["']codex["'])`,
+  ].join(""), "i");
+
+  for (const relativePath of productionFiles) {
+    const source = fs.readFileSync(path.join(__dirname, "..", "..", "..", relativePath), "utf-8");
+    assert.doesNotMatch(source, forbiddenBranch, relativePath);
+  }
 });
 
 test("hardened review assurance blocks advisory failures and required findings", async (t) => {
