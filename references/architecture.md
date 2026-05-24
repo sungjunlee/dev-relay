@@ -150,7 +150,7 @@ bootstrap_exempt:
 | `dispatch.last_model` / executor config | Dispatch records the effective model. If no explicit model hint is present, executor defaults come from the skill-bundled `skills/relay-dispatch/references/executor-models.json` plus optional `~/.relay/executors.json` overrides |
 | `policy.merge` | `manual_after_lgtm` — orchestrator must explicitly merge |
 | `policy.reviewer_write` | `forbid` — review runner rejects rounds where reviewer mutated files |
-| `policy.review_assurance` | `standard` keeps current behavior; `hardened` requires stronger review/evidence gates without using agent identity heuristics, including successful advisory artifacts and strict execution evidence with `test_exit_code=0` |
+| `policy.review_assurance` | `standard` keeps current behavior; `hardened` requires stronger review/evidence gates without using agent identity heuristics, including successful advisory artifacts and strict execution evidence. When `execution-evidence.json` includes `verification_runs[]`, hardened gates prefer those actual command-run records; legacy evidence without that array still falls back to `test_exit_code=0` plus a SHA-bound result hash |
 | `anchor.*` | Immutable review scope — prevents drift across rounds |
 | `review.last_reviewed_sha` | Gate-check blocks merge if HEAD has advanced past this |
 | `review.last_reviewer` | Tracks the acting reviewer for the latest round without mutating `roles.reviewer`; analytics must still use `review_apply.reviewer` as the round-level source of truth |

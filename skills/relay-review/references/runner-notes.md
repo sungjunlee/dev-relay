@@ -41,7 +41,7 @@ When applying a verdict, the runner:
 
 - validates the JSON verdict
 - optionally invokes the reviewer adapter itself when `--reviewer <name>` is used
-- computes and overrides `quality_execution_status` from `execution-evidence.json`
+- computes and overrides `quality_execution_status` from `execution-evidence.json`; strict gates prefer `verification_runs[]` when present and otherwise use the legacy `test_*` fields
 - rejects the round if the reviewer mutates the repo and escalates the manifest
 - writes the PR audit comment
 - updates the relay manifest to `ready_to_merge`, `changes_requested`, or `escalated`

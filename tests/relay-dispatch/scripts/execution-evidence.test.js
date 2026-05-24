@@ -64,6 +64,30 @@ test("dispatch execution evidence preserves the caller test-command verbatim", (
   assert.equal(result.test_result_summary, "unspecified");
 });
 
+test("dispatch execution evidence can include verification_runs without rewriting them", () => {
+  const verificationRuns = [{
+    command: "node --test tests/relay-dispatch/scripts/execution-evidence.test.js",
+    cwd: "/repo",
+    head_sha: "b".repeat(40),
+    exit_code: 0,
+    output_hash: "c".repeat(64),
+    recorded_by: "operator",
+    recorded_at: "2026-04-22T00:01:00.000Z",
+  }];
+
+  const result = buildExecutionEvidence({
+    headSha: "b".repeat(40),
+    testCommand: "node --test",
+    resultFilePath: null,
+    executor: "codex",
+    recordedAt: "2026-04-22T00:00:00.000Z",
+    testExitCode: 0,
+    verificationRuns,
+  });
+
+  assert.deepEqual(result.verification_runs, verificationRuns);
+});
+
 test("dispatch execution evidence distinguishes an absent test-command from an explicit empty string", () => {
   const omitted = buildExecutionEvidence({
     headSha: "c".repeat(40),
