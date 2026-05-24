@@ -1238,7 +1238,7 @@ test("finalize-run blocks merge when PR has merge conflicts", () => {
   assert.equal(manifest.state, STATES.READY_TO_MERGE);
 });
 
-test("finalize-run blocks merge when CI checks are failing", () => {
+test("finalize-run blocks merge when CI checks are not successful", () => {
   const { repoRoot, manifestPath, branch } = setupRepo();
   const logPath = path.join(repoRoot, "gh.log");
   const fakeGh = writeFakeGh(logPath, {
@@ -1271,10 +1271,79 @@ test("finalize-run blocks merge when CI checks are failing", () => {
     encoding: "utf-8",
     stdio: "pipe",
     env: { ...process.env, RELAY_GH_BIN: fakeGh },
-  }), /failing CI checks: test-unit/);
+  }), /non-success CI checks: test-unit \(conclusion=FAILURE\)/);
 
   const manifest = readManifest(manifestPath).data;
   assert.equal(manifest.state, STATES.READY_TO_MERGE);
+});
+
+[
+  { label: "cancelled", check: { name: "test-cancelled", conclusion: "CANCELLED" }, expected: /test-cancelled \(conclusion=CANCELLED\)/ },
+  { label: "timed out", check: { name: "test-timeout", conclusion: "TIMED_OUT" }, expected: /test-timeout \(conclusion=TIMED_OUT\)/ },
+  { label: "action required", check: { name: "deploy-approval", conclusion: "ACTION_REQUIRED" }, expected: /deploy-approval \(conclusion=ACTION_REQUIRED\)/ },
+  { label: "error", check: { name: "test-error", conclusion: "ERROR" }, expected: /test-error \(conclusion=ERROR\)/ },
+  { label: "pending check run", check: { name: "test-pending", status: "IN_PROGRESS", conclusion: null }, expected: /test-pending \(status=IN_PROGRESS\)/ },
+  { label: "queued check run", check: { name: "test-queued", status: "QUEUED", conclusion: null }, expected: /test-queued \(status=QUEUED\)/ },
+  { label: "unknown check", check: { name: "test-unknown", conclusion: null }, expected: /test-unknown \(state=UNKNOWN\)/ },
+  { label: "pending status context", check: { context: "ci/status", state: "PENDING" }, expected: /ci\/status \(state=PENDING\)/ },
+].forEach(({ label, check, expected }) => {
+  test(`finalize-run blocks ${label} CI check state`, () => {
+    const { repoRoot, manifestPath, branch } = setupRepo();
+    const logPath = path.join(repoRoot, "gh.log");
+    const fakeGh = writeFakeGh(logPath, {
+      comments: [DEFAULT_REVIEW_COMMENT],
+      commits: [
+        {
+          oid: execFileSync("git", ["-C", repoRoot, "rev-parse", branch], { encoding: "utf-8", stdio: "pipe" }).trim(),
+          committedDate: DEFAULT_COMMIT_DATE,
+        },
+      ],
+      statusCheckRollup: [
+        { name: "lint", conclusion: "SUCCESS" },
+        check,
+      ],
+    });
+
+    assert.throws(() => execFileSync("node", [
+      SCRIPT,
+      "--repo", repoRoot,
+      "--branch", branch,
+      "--pr", "123",
+      "--json",
+    ], {
+      cwd: repoRoot,
+      encoding: "utf-8",
+      stdio: "pipe",
+      env: { ...process.env, RELAY_GH_BIN: fakeGh },
+    }), expected);
+
+    const manifest = readManifest(manifestPath).data;
+    assert.equal(manifest.state, STATES.READY_TO_MERGE);
+  });
+});
+
+test("finalize-run allows successful neutral and skipped CI check states", () => {
+  const fixture = setupRepo();
+
+  const result = execFinalize(fixture, {
+    ghOptions: {
+      comments: [DEFAULT_REVIEW_COMMENT],
+      commits: [
+        {
+          oid: fixture.headSha,
+          committedDate: DEFAULT_COMMIT_DATE,
+        },
+      ],
+      statusCheckRollup: [
+        { name: "lint", conclusion: "SUCCESS" },
+        { name: "optional", conclusion: "NEUTRAL" },
+        { name: "docs-only", conclusion: "SKIPPED" },
+        { context: "legacy-status", state: "SUCCESS" },
+      ],
+    },
+  });
+
+  assert.equal(result.result.state, STATES.MERGED);
 });
 
 test("finalize-run preserves terminal state when gh merge does not complete immediately", () => {
