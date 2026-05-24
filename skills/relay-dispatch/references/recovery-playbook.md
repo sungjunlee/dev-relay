@@ -9,7 +9,7 @@ Operator-facing recovery commands for `relay-dispatch`. These cover the two cano
 ```bash
 # Standard recovery — dispatch returned commits="" + uncommitted!=""
 node skills/relay-dispatch/scripts/recover-commit.js --run-id <id> \
-  --reason "executor timeout at 1800s on 18-file refactor"
+  --reason "executor timeout after extended multi-file refactor"
 
 # Preview without touching anything
 node skills/relay-dispatch/scripts/recover-commit.js --run-id <id> \
@@ -78,13 +78,13 @@ For relay worktrees, the worktree `.git` file points at the real Git admin direc
 
 Investigation note for #389: `codex --version` reported `codex-cli 0.128.0`, and `codex exec --help` exposed `--add-dir <DIR>`. A temp worktree repro in this dispatch environment could not complete the model step because nested Codex DNS failed against `chatgpt.com`, so the local failure remains intermittent here. The startup logs did confirm the sandbox allowlist mutates with `--add-dir`: it expanded from `workspace-write [workdir, /tmp, $TMPDIR, <codex-home>/memories]` to include the passed path. Treat the original #332 retained evidence as the canonical observed failure: `dispatch_result` recorded `new_dispatch:completed-uncommitted`, and recovery used reason `codex finished implementation but sandbox blocked git add/commit step`; the canonical stderr shape is `fatal: Unable to create '<main-repo>/.git/worktrees/<name>/index.lock': Operation not permitted`. Round-2 reviewer flagged that admin-dir-only widening would leave objects/refs writes outside the sandbox; the fix therefore widened to the full common git dir.
 
-Decision-tree paths from #389, kept verbatim:
+Decision-tree paths from #389, updated after #393 landed:
 
-If `--add-dir` IS supported and works: ship Path 1. Path 2 (`--auto-recover-commit`) becomes optional defense-in-depth — either bundle it or defer to a follow-up issue.
+If `--add-dir` IS supported and works: Path 1 keeps Codex's git writes inside the sandbox. Path 2 (`--auto-recover-commit`) is now bundled defense-in-depth: Codex enables it by default, and other executors can opt in explicitly.
 
 If `--add-dir` is NOT supported or doesn't fix the failure: ship Path 2 and document Path 1's failure mode in recovery-playbook.md.
 
-#389 picked Path 1 (sandbox widening via `--add-dir`). Path 2 (`--auto-recover-commit` opt-in flag) is **deferred** to follow-up issue #393 — it remains optional defense-in-depth for residual cases (codex CLI crashes mid-commit, transient sandbox edge cases, codex versions that change `--add-dir` semantics). Until #393 lands, the existing `recover-commit.js` operator command remains the canonical recovery for those residual cases.
+#389 picked Path 1 (sandbox widening via `--add-dir`). #393 added Path 2: `dispatch.js` runs `recover-commit.js` automatically for Codex `completed-uncommitted` results unless `--no-auto-recover-commit` is passed. For Claude and opencode, `--auto-recover-commit` remains an explicit opt-in. The standalone `recover-commit.js` command remains the canonical manual recovery when automatic recovery is disabled, unavailable, or interrupted.
 
 Use normal `dispatch.js --run-id <id>` when reviewer feedback requires code changes. That path re-dispatches implementation work and must produce a fresh code handoff before review.
 
