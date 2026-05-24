@@ -185,7 +185,7 @@ function main() {
   const repoArg = getCliArg("--repo");
   const runId = getCliArg("--run-id");
   const manifestArg = getCliArg("--manifest");
-  const reason = getCliArg("--reason");
+  const reason = String(getCliArg("--reason") || "").trim();
   const dryRun = hasCliFlag("--dry-run");
   const jsonOut = hasCliFlag("--json");
 

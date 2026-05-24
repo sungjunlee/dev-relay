@@ -435,6 +435,21 @@ test("missing --reason rejects before mutation", () => {
   assert.equal(readRunEvents(fixture.repoRoot, fixture.runId).length, 0);
 });
 
+test("blank --reason rejects before commit or evidence rebrand", () => {
+  const fixture = setupRepo({ dirty: true, evidence: true });
+  const beforeHead = execFileSync("git", ["-C", fixture.worktreePath, "rev-parse", "HEAD"], { encoding: "utf-8" }).trim();
+  const beforeEvidence = fs.readFileSync(path.join(fixture.runDir, EXECUTION_EVIDENCE_FILENAME), "utf-8");
+  const result = runRecover(fixture, ["--reason", "   ", "--json"]);
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /--reason (?:<text> is required|requires a non-empty value)/);
+  assert.equal(execFileSync("git", ["-C", fixture.worktreePath, "rev-parse", "HEAD"], { encoding: "utf-8" }).trim(), beforeHead);
+  assert.equal(execFileSync("git", ["-C", fixture.worktreePath, "status", "--porcelain"], { encoding: "utf-8" }).trim(), "?? recovered.txt");
+  assert.equal(fs.readFileSync(path.join(fixture.runDir, EXECUTION_EVIDENCE_FILENAME), "utf-8"), beforeEvidence);
+  assert.equal(readJsonLines(fixture.ghLogPath).length, 0);
+  assert.equal(readRunEvents(fixture.repoRoot, fixture.runId).length, 0);
+});
+
 test("merged terminal state rejection matches finalize-run force-finalize shape", () => {
   const fixture = setupRepo({ dirty: true, manifestState: STATES.MERGED });
   const result = runRecover(fixture, ["--reason", "terminal", "--json"]);

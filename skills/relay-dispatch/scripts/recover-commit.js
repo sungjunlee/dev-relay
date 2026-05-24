@@ -238,7 +238,7 @@ function main() {
   const repoArg = getCliArg("--repo");
   const runId = getCliArg("--run-id");
   const manifestArg = getCliArg("--manifest");
-  const reason = getCliArg("--reason");
+  const reason = String(getCliArg("--reason") || "").trim();
   const prTitleArg = getCliArg("--pr-title");
   const prBodyFile = getCliArg("--pr-body-file");
   const dryRun = hasCliFlag("--dry-run");

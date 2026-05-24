@@ -172,6 +172,17 @@ test("missing --reason exits non-zero with a usage hint", () => {
   assert.equal(readRunEvents(fixture.repoRoot, fixture.runId).length, 0);
 });
 
+test("blank --reason exits before rewriting evidence", () => {
+  const fixture = setupRepo({ evidence: true, advanceHead: true });
+  const beforeEvidence = readEvidence(fixture);
+  const result = runRebrand(fixture, ["--reason", "   ", "--json"]);
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /--reason (?:<text> is required|requires a non-empty value)/);
+  assert.deepEqual(readEvidence(fixture), beforeEvidence);
+  assert.equal(readRunEvents(fixture.repoRoot, fixture.runId).length, 0);
+});
+
 test("missing both --run-id and --manifest exits non-zero", () => {
   const fixture = setupRepo({ evidence: true, advanceHead: true });
   const result = spawnSync(process.execPath, [SCRIPT, "--repo", fixture.repoRoot, "--reason", "missing selector", "--json"], {

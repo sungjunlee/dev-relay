@@ -218,14 +218,14 @@ Operator escape hatches remain available, but high-risk override events add a sh
 
 | Field | Meaning |
 |-------|---------|
-| `override_class` | Stable class such as `force_finalize_nonready` or `execution_evidence_rebrand` |
+| `override_class` | Stable class such as `force_finalize_nonready`, `execution_evidence_rebrand`, or `bootstrap_artifact_reconcile` |
 | `affected_head_sha` | Commit SHA the override affects or attests after the override |
 | `prior_state` | Manifest state observed before the override side effect |
 | `required_reason` | Non-empty operator-provided reason, duplicated from `reason` for override-specific queries |
 | `operator_initiated` | `true` for deliberate operator escape hatches |
 | `independent_attestation` | Optional supplemental attestation when a path has a separate review or verification source |
 
-Current producers are `force_finalize` from `finalize-run --force-finalize-nonready` and `execution_evidence_rebranded` from `rebrand-evidence` / `recover-commit`. Consumers must treat these fields as additive because older events only have the legacy envelope.
+Current producers are `force_finalize` from `finalize-run --force-finalize-nonready`, bootstrap `force_finalize` from `relay-reconcile-artifact`, and `execution_evidence_rebranded` from `rebrand-evidence` / `recover-commit`. Consumers must treat these fields as additive because older events only have the legacy envelope.
 
 ## Review Round Artifacts
 

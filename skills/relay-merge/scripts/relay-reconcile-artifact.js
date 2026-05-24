@@ -181,6 +181,10 @@ function main() {
     }
     throw new Error(`force-finalize cannot be used from terminal state ${safeData.state}`);
   }
+  const affectedHeadSha = String(safeData.git?.head_sha || "").trim();
+  if (!affectedHeadSha) {
+    throw new Error("manifest is missing git.head_sha required for override audit");
+  }
 
   const operatorName = getActorName(repoPath);
   const updated = forceUpdateManifestState({
@@ -196,7 +200,7 @@ function main() {
       event: EVENTS.SKIP_REVIEW,
       state_from: safeData.state,
       state_to: safeData.state,
-      head_sha: safeData.git?.head_sha || null,
+      head_sha: affectedHeadSha,
       round: safeData.review?.rounds || null,
       reason: skipReviewReason,
       pr_number: writerPr,
@@ -206,11 +210,11 @@ function main() {
     event: EVENTS.FORCE_FINALIZE,
     state_from: safeData.state,
     state_to: STATES.MERGED,
-    head_sha: safeData.git?.head_sha || null,
+    head_sha: affectedHeadSha,
     round: safeData.review?.rounds || null,
     reason,
     override_class: "bootstrap_artifact_reconcile",
-    affected_head_sha: safeData.git?.head_sha || null,
+    affected_head_sha: affectedHeadSha,
     prior_state: safeData.state,
     required_reason: reason,
     operator_initiated: true,
