@@ -1,7 +1,7 @@
-const { spawn } = require("child_process");
 const { execFileSync } = require("child_process");
 const fs = require("fs");
 const path = require("path");
+const { buildArtifactTimingFields } = require("../../../relay-dispatch/scripts/advisory-timing");
 const { resolveExecutorDefaultModel } = require("../../../relay-dispatch/scripts/executor-model-config");
 const { hashFileSha256 } = require("../../../relay-dispatch/scripts/execution-evidence");
 const { appendRunEvent, EVENTS } = require("../../../relay-dispatch/scripts/relay-events");
@@ -10,12 +10,22 @@ const { captureGitStatus, resolveReviewerScript } = require("./reviewer-invoke")
 const { writeText } = require("./common");
 
 const DEFAULT_ADVISORY_TIMEOUT_SECONDS = 900;
+const DEFAULT_ADVISORY_GRACE_SECONDS = 10;
 
 function parsePositiveSeconds(value, fallback = DEFAULT_ADVISORY_TIMEOUT_SECONDS) {
   if (value === undefined || value === null || value === "") return fallback;
   const parsed = Number(value);
   if (!Number.isInteger(parsed) || parsed <= 0) {
     throw new Error("--advisory-timeout must be a positive integer number of seconds");
+  }
+  return parsed;
+}
+
+function parseNonNegativeSeconds(value, fallback = DEFAULT_ADVISORY_GRACE_SECONDS) {
+  if (value === undefined || value === null || value === "") return fallback;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    throw new Error("--advisory-grace must be a non-negative number of seconds");
   }
   return parsed;
 }
@@ -49,33 +59,95 @@ function cleanupAdvisoryWorktree(baseRepoPath, worktreePath) {
   } catch {}
 }
 
+function advisoryFileBase(runDir, round, reviewerName) {
+  return path.join(runDir, `review-round-${round}-advisory-${reviewerName}`);
+}
+
+function advisoryPaths(runDir, round, reviewerName) {
+  const base = advisoryFileBase(runDir, round, reviewerName);
+  return {
+    decisionPath: `${base}-decision.json`,
+    promptPath: `${base}-prompt.md`,
+    requestPath: `${base}-request.json`,
+    resultPath: `${base}-result.json`,
+  };
+}
+
+function writeJson(filePath, value) {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf-8");
+}
+
+function readJsonIfExists(filePath) {
+  try {
+    return JSON.parse(fs.readFileSync(filePath, "utf-8"));
+  } catch (error) {
+    if (error.code === "ENOENT") return null;
+    throw error;
+  }
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function sleepSync(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
 function startAdvisoryReview({
+  headSha,
+  profile,
   promptText,
   reviewerModel,
   reviewerName,
   reviewRepoPath,
   round,
   runDir,
+  runId,
+  runRepoPath,
+  state,
+  timeoutSeconds,
 }) {
+  const paths = advisoryPaths(runDir, round, reviewerName);
   const promptPath = path.join(runDir, `review-round-${round}-advisory-${reviewerName}-prompt.md`);
   writeText(promptPath, `${promptText}\n`);
   const reviewerScript = resolveReviewerScript(reviewerName, null);
-  const advisoryRepoPath = createAdvisoryWorktree(reviewRepoPath, runDir, reviewerName);
-  const statusBefore = captureGitStatus(advisoryRepoPath);
-  const execArgs = [reviewerScript, "--repo", reviewRepoPath, "--prompt-file", promptPath, "--json"];
-  if (reviewerModel) execArgs.push("--model", reviewerModel);
   const startedAt = Date.now();
-  execArgs[execArgs.indexOf("--repo") + 1] = advisoryRepoPath;
-  const child = spawn(process.execPath, execArgs, { cwd: advisoryRepoPath, stdio: ["ignore", "pipe", "pipe"] });
-  let stdout = "";
-  let stderr = "";
-  child.stdout.on("data", (chunk) => { stdout += chunk.toString("utf-8"); });
-  child.stderr.on("data", (chunk) => { stderr += chunk.toString("utf-8"); });
-  const completion = new Promise((resolve) => {
-    child.on("error", (error) => resolve({ code: null, error }));
-    child.on("close", (code, signal) => resolve({ code, signal }));
+  const request = {
+    decisionPath: paths.decisionPath,
+    headSha,
+    profile,
+    promptPath,
+    requestPath: paths.requestPath,
+    resultPath: paths.resultPath,
+    reviewerModel,
+    reviewerName,
+    reviewerScript,
+    reviewRepoPath,
+    round,
+    runDir,
+    runId,
+    runRepoPath,
+    startedAt,
+    state,
+    timeoutSeconds: parsePositiveSeconds(timeoutSeconds),
+  };
+  writeJson(paths.requestPath, request);
+
+  const workerPath = path.join(__dirname, "..", "advisory-worker.js");
+  const child = require("child_process").spawn(process.execPath, [workerPath, paths.requestPath], {
+    cwd: reviewRepoPath,
+    detached: true,
+    env: { ...process.env },
+    stdio: "ignore",
   });
-  return { advisoryRepoPath, baseRepoPath: reviewRepoPath, child, completion, promptPath, reviewerModel, reviewerName, reviewerScript, startedAt, statusBefore, stderr: () => stderr, stdout: () => stdout };
+  child.unref();
+
+  return {
+    ...request,
+    child,
+  };
 }
 
 function writeRawResponse(runDir, round, reviewerName, stdout, stderr) {
@@ -87,49 +159,142 @@ function writeRawResponse(runDir, round, reviewerName, stdout, stderr) {
   return rawResponsePath;
 }
 
+function buildDeferredResult(advisoryRun, { criticalPathWaitMs = 0, consumedByPhase = "metrics" } = {}) {
+  return {
+    artifactHash: null,
+    artifactPath: null,
+    advisory_count: 0,
+    consumedByPhase,
+    criticalPathWaitMs,
+    duplicate_low_confidence_count: 0,
+    elapsedMs: Date.now() - advisoryRun.startedAt,
+    failureReason: null,
+    phaseDecisionWaited: criticalPathWaitMs > 0,
+    profile: advisoryRun.profile,
+    rawResponsePath: null,
+    required_count: 0,
+    reviewer: advisoryRun.reviewerName,
+    status: "deferred",
+  };
+}
+
 async function finishAdvisoryReview({
   advisoryRun,
-  data,
-  headSha,
-  profile,
-  round,
-  runDir,
-  runRepoPath,
-  timeoutSeconds,
+  criticalPathWaitMs = 0,
+  waitMs,
+  consumedByPhase = "review",
 }) {
-  const timeoutMs = parsePositiveSeconds(timeoutSeconds) * 1000;
-  const elapsed = () => Date.now() - advisoryRun.startedAt;
+  const deadline = Date.now() + Math.max(0, Number(waitMs || 0));
+  while (Date.now() <= deadline) {
+    const result = readJsonIfExists(advisoryRun.resultPath);
+    if (result) return result;
+    if (Date.now() === deadline) break;
+    await sleep(Math.min(25, Math.max(1, deadline - Date.now())));
+  }
+  const result = readJsonIfExists(advisoryRun.resultPath);
+  if (result) return result;
+  return buildDeferredResult(advisoryRun, { criticalPathWaitMs, consumedByPhase });
+}
+
+function writeAdvisoryDecision(advisoryRun, {
+  consumedByPhase,
+  criticalPathWaitMs = 0,
+  frontierStepReplaced = false,
+  nextState,
+  phaseDecisionWaited = false,
+} = {}) {
+  writeJson(advisoryRun.decisionPath, {
+    consumed_by_phase: consumedByPhase,
+    critical_path_wait_ms: Math.max(0, Math.round(Number(criticalPathWaitMs || 0))),
+    frontier_step_replaced: frontierStepReplaced === true,
+    next_state: nextState || null,
+    phase_decision_waited: phaseDecisionWaited === true,
+    recorded_at: new Date().toISOString(),
+  });
+}
+
+function readDecisionTiming(request) {
+  const decision = readJsonIfExists(request.decisionPath);
+  if (!decision) {
+    return buildArtifactTimingFields({
+      artifactKind: "advisory",
+      elapsedMs: Date.now() - request.startedAt,
+      criticalPathWaitMs: 0,
+      consumedByPhase: "review",
+      phaseDecisionWaited: false,
+      frontierStepReplaced: false,
+    });
+  }
+  return buildArtifactTimingFields({
+    artifactKind: "advisory",
+    elapsedMs: Date.now() - request.startedAt,
+    criticalPathWaitMs: decision.critical_path_wait_ms || 0,
+    consumedByPhase: decision.consumed_by_phase || "metrics",
+    phaseDecisionWaited: decision.phase_decision_waited === true,
+    frontierStepReplaced: decision.frontier_step_replaced === true,
+  });
+}
+
+function waitForDecisionTiming(request, waitMs = 300) {
+  const deadline = Date.now() + waitMs;
+  while (Date.now() < deadline) {
+    if (fs.existsSync(request.decisionPath)) break;
+    sleepSync(Math.min(25, Math.max(1, deadline - Date.now())));
+  }
+  return readDecisionTiming(request);
+}
+
+function executeAdvisoryRequest(request) {
   let artifactPath = null;
   let failureReason = null;
   let rawResponsePath = null;
   let status = "success";
   let counts = { required_count: 0, advisory_count: 0, duplicate_low_confidence_count: 0 };
+  let advisoryRepoPath = null;
 
   try {
-    const timeout = new Promise((resolve) => {
-      const timer = setTimeout(() => {
-        advisoryRun.child.kill("SIGTERM");
-        resolve({ code: null, signal: "SIGTERM", timeout: true });
-      }, timeoutMs);
-      advisoryRun.completion.then(() => clearTimeout(timer));
-    });
-    const outcome = await Promise.race([advisoryRun.completion, timeout]);
-    const stdout = advisoryRun.stdout();
-    const stderr = advisoryRun.stderr();
-    rawResponsePath = writeRawResponse(runDir, round, advisoryRun.reviewerName, stdout, stderr);
-    const statusAfter = captureGitStatus(advisoryRun.advisoryRepoPath);
-    if (advisoryRun.statusBefore !== statusAfter) {
+    const timeoutMs = parsePositiveSeconds(request.timeoutSeconds) * 1000;
+    advisoryRepoPath = createAdvisoryWorktree(request.reviewRepoPath, request.runDir, request.reviewerName);
+    const statusBefore = captureGitStatus(advisoryRepoPath);
+    const execArgs = [request.reviewerScript, "--repo", advisoryRepoPath, "--prompt-file", request.promptPath, "--json"];
+    if (request.reviewerModel) execArgs.push("--model", request.reviewerModel);
+
+    let stdout = "";
+    let stderr = "";
+    let outcome = { code: 0 };
+    try {
+      stdout = execFileSync(process.execPath, execArgs, {
+        cwd: advisoryRepoPath,
+        encoding: "utf-8",
+        maxBuffer: 10 * 1024 * 1024,
+        stdio: "pipe",
+        timeout: timeoutMs,
+      }).trim();
+    } catch (error) {
+      stdout = String(error.stdout || "").trim();
+      stderr = String(error.stderr || "").trim();
+      outcome = {
+        code: Number.isInteger(error.status) ? error.status : null,
+        error,
+        signal: error.signal,
+        timeout: error.code === "ETIMEDOUT" || error.signal === "SIGTERM",
+      };
+    }
+
+    rawResponsePath = writeRawResponse(request.runDir, request.round, request.reviewerName, stdout, stderr);
+    const statusAfter = captureGitStatus(advisoryRepoPath);
+    if (statusBefore !== statusAfter) {
       status = "policy_violation";
       failureReason = "advisory_reviewer_modified_worktree";
-      artifactPath = path.join(runDir, `review-round-${round}-advisory-${advisoryRun.reviewerName}-policy-violation.txt`);
+      artifactPath = path.join(request.runDir, `review-round-${request.round}-advisory-${request.reviewerName}-policy-violation.txt`);
       writeText(artifactPath, [
         "Advisory reviewer write policy violation detected.",
         "",
-        `Reviewer: ${advisoryRun.reviewerName}`,
-        `Script: ${advisoryRun.reviewerScript}`,
+        `Reviewer: ${request.reviewerName}`,
+        `Script: ${request.reviewerScript}`,
         "",
         "Status before advisory reviewer:",
-        advisoryRun.statusBefore || "(clean)",
+        statusBefore || "(clean)",
         "",
         "Status after advisory reviewer:",
         statusAfter || "(clean)",
@@ -141,8 +306,8 @@ async function finishAdvisoryReview({
       status = "failed";
       failureReason = outcome.error ? outcome.error.message : `advisory reviewer exited with code ${outcome.code}`;
     } else {
-      const parsed = parseAdvisoryReview(stdout, { profile });
-      artifactPath = path.join(runDir, `review-round-${round}-advisory-${advisoryRun.reviewerName}.json`);
+      const parsed = parseAdvisoryReview(stdout, { profile: request.profile });
+      artifactPath = path.join(request.runDir, `review-round-${request.round}-advisory-${request.reviewerName}.json`);
       writeText(artifactPath, `${JSON.stringify(parsed, null, 2)}\n`);
       counts = {
         required_count: parsed.required_findings.length,
@@ -156,38 +321,63 @@ async function finishAdvisoryReview({
   }
 
   const artifactHash = artifactPath ? hashFileSha256(artifactPath) : null;
-  const result = { artifactHash, artifactPath, elapsedMs: elapsed(), failureReason, profile, rawResponsePath, reviewer: advisoryRun.reviewerName, status, ...counts };
+  const result = {
+    artifactHash,
+    artifactPath,
+    failureReason,
+    profile: request.profile,
+    rawResponsePath,
+    reviewer: request.reviewerName,
+    status,
+    ...counts,
+  };
+  writeJson(request.resultPath, result);
+  const timingFields = waitForDecisionTiming(request);
+  Object.assign(result, {
+    consumedByPhase: timingFields.consumed_by_phase,
+    criticalPathWaitMs: timingFields.critical_path_wait_ms,
+    elapsedMs: timingFields.elapsed_ms,
+    phaseDecisionWaited: timingFields.phase_decision_waited,
+  });
   try {
-    appendRunEvent(runRepoPath, data.run_id, {
+    appendRunEvent(request.runRepoPath, request.runId, {
       event: EVENTS.ADVISORY_REVIEW,
-      state_from: data.state,
-      state_to: data.state,
-      head_sha: headSha,
-      round,
-      reviewer: advisoryRun.reviewerName,
-      model: advisoryRun.reviewerModel,
-      profile,
+      state_from: request.state,
+      state_to: request.state,
+      head_sha: request.headSha,
+      round: request.round,
+      reviewer: request.reviewerName,
+      model: request.reviewerModel,
+      profile: request.profile,
       status,
       artifact_path: artifactPath,
       advisory_artifact_hash: artifactHash,
       raw_response_path: rawResponsePath,
-      elapsed_ms: result.elapsedMs,
       failure_reason: failureReason,
       ...counts,
+      ...timingFields,
     });
   } catch (error) {
+    status = "failed";
     result.status = "failed";
     result.failureReason = `advisory event write failed: ${error.message}`;
   } finally {
-    cleanupAdvisoryWorktree(advisoryRun.baseRepoPath, advisoryRun.advisoryRepoPath);
+    if (advisoryRepoPath) {
+      cleanupAdvisoryWorktree(request.reviewRepoPath, advisoryRepoPath);
+    }
   }
+  writeJson(request.resultPath, result);
   return result;
 }
 
 module.exports = {
+  DEFAULT_ADVISORY_GRACE_SECONDS,
+  executeAdvisoryRequest,
   finishAdvisoryReview,
+  parseNonNegativeSeconds,
   parsePositiveSeconds,
   resolveAdvisoryModel,
   startAdvisoryReview,
   validateAdvisoryProfile,
+  writeAdvisoryDecision,
 };

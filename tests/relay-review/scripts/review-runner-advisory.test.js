@@ -166,7 +166,7 @@ setTimeout(() => {
   return filePath;
 }
 
-function writeFakeOpencode(repoRoot, { logPath = null, invalidJson = false, mutate = false, requiredFinding = false } = {}) {
+function writeFakeOpencode(repoRoot, { delayMs = 0, logPath = null, invalidJson = false, mutate = false, requiredFinding = false } = {}) {
   const filePath = path.join(repoRoot, "fake-opencode.js");
   fs.writeFileSync(filePath, `#!/usr/bin/env node
 const fs = require("fs");
@@ -174,29 +174,41 @@ const path = require("path");
 const logPath = ${JSON.stringify(logPath)};
 if (logPath) fs.appendFileSync(logPath, "advisory-start " + Date.now() + "\\n");
 if (${mutate ? "true" : "false"}) fs.writeFileSync(path.join(process.cwd(), "advisory-mutated.txt"), "bad\\n", "utf-8");
-if (${invalidJson ? "true" : "false"}) {
-  process.stdout.write("not json");
-} else {
-  process.stdout.write(JSON.stringify({
-    profile: "blindspot",
-    summary: "One advisory blind spot.",
-    required_findings: ${requiredFinding ? `[{ title: "Required hardened fix", body: "Must fix before merge.", file: "README.md", line: 1, severity: "P2", category: "bypass", confidence: 0.9 }]` : "[]"},
-    advisory_findings: [{
-      title: "Advisory-only test gap",
-      body: "This should be recorded but not merged into primary redispatch.",
-      file: "README.md",
-      line: 1,
-      severity: "P3",
-      category: "test-gap",
-      confidence: 0.8
-    }],
-    duplicate_or_low_confidence: []
-  }));
-}
-if (logPath) fs.appendFileSync(logPath, "advisory-end " + Date.now() + "\\n");
+setTimeout(() => {
+  if (${invalidJson ? "true" : "false"}) {
+    process.stdout.write("not json");
+  } else {
+    process.stdout.write(JSON.stringify({
+      profile: "blindspot",
+      summary: "One advisory blind spot.",
+      required_findings: ${requiredFinding ? `[{ title: "Required hardened fix", body: "Must fix before merge.", file: "README.md", line: 1, severity: "P2", category: "bypass", confidence: 0.9 }]` : "[]"},
+      advisory_findings: [{
+        title: "Advisory-only test gap",
+        body: "This should be recorded but not merged into primary redispatch.",
+        file: "README.md",
+        line: 1,
+        severity: "P3",
+        category: "test-gap",
+        confidence: 0.8
+      }],
+      duplicate_or_low_confidence: []
+    }));
+  }
+  if (logPath) fs.appendFileSync(logPath, "advisory-end " + Date.now() + "\\n");
+}, ${Number(delayMs)});
 `, "utf-8");
   fs.chmodSync(filePath, 0o755);
   return filePath;
+}
+
+function waitForEvent(repoRoot, runId, predicate, { timeoutMs = 2000 } = {}) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const event = readRunEvents(repoRoot, runId).find(predicate);
+    if (event) return event;
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
+  }
+  return null;
 }
 
 function runReview({
@@ -206,6 +218,7 @@ function runReview({
   diffPath,
   primaryScript,
   opencodeScript,
+  advisoryReviewer = "opencode",
   reviewer = "codex",
   extraArgs = [],
 }) {
@@ -218,7 +231,7 @@ function runReview({
     "--diff-file", diffPath,
     "--reviewer", reviewer,
     "--reviewer-script", primaryScript,
-    "--advisory-reviewer", "opencode",
+    ...(advisoryReviewer ? ["--advisory-reviewer", advisoryReviewer] : []),
     "--no-comment",
     "--json",
     ...extraArgs,
@@ -245,6 +258,41 @@ test("review-runner records successful opencode advisory review without gating p
   assert.equal(event.status, "success");
   assert.equal(event.profile, "blindspot");
   assert.equal(event.advisory_artifact_hash, hashFile(path.join(runDir, "review-round-1-advisory-opencode.json")));
+});
+
+test("review-runner uses manifest routing advisory defaults without changing the primary reviewer", () => {
+  const { repoRoot, manifestPath, runId, doneCriteriaPath, diffPath } = setupRepo();
+  const record = readManifest(manifestPath);
+  writeManifest(manifestPath, {
+    ...record.data,
+    routing: {
+      version: 1,
+      selected: {
+        advisory_review: { reviewer: "opencode", profile: "blindspot" },
+        sidecar: { kind: "docs-sync", executor: "opencode" },
+      },
+    },
+  }, record.body);
+  const primaryScript = writePrimaryReviewer(repoRoot, passVerdict());
+  const opencodeScript = writeFakeOpencode(repoRoot);
+
+  const result = runReview({
+    repoRoot,
+    runId,
+    doneCriteriaPath,
+    diffPath,
+    primaryScript,
+    opencodeScript,
+    advisoryReviewer: null,
+  });
+  const manifest = readManifest(manifestPath).data;
+
+  assert.equal(result.nextState, STATES.READY_TO_MERGE);
+  assert.equal(result.reviewer, "codex");
+  assert.equal(result.advisoryReview.reviewer, "opencode");
+  assert.equal(result.advisoryReview.source, "routing");
+  assert.equal(manifest.review.last_reviewer, "codex");
+  assert.deepEqual(manifest.roles, { orchestrator: "codex", executor: "codex", reviewer: "codex" });
 });
 
 test("review-runner denies disallowed advisory model before spawning advisory reviewer", () => {
@@ -285,18 +333,78 @@ test("prepare-only with advisory flags writes only the primary prompt bundle", (
   assert.equal(readRunEvents(repoRoot, runId).some((record) => record.event === "advisory_review"), false);
 });
 
-test("advisory review starts before the primary reviewer completes", () => {
-  const { repoRoot, runId, doneCriteriaPath, diffPath } = setupRepo();
+test("advisory review is scheduled before the primary reviewer completes", () => {
+  const { repoRoot, runDir, runId, doneCriteriaPath, diffPath } = setupRepo();
   const logPath = path.join(repoRoot, "review-order.log");
   const primaryScript = writePrimaryReviewer(repoRoot, passVerdict(), { logPath, delayMs: 1500 });
   const opencodeScript = writeFakeOpencode(repoRoot, { logPath });
 
   runReview({ repoRoot, runId, doneCriteriaPath, diffPath, primaryScript, opencodeScript });
-  const lines = fs.readFileSync(logPath, "utf-8").trim().split(/\n/).map((line) => line.split(" ")[0]);
+  const lines = fs.readFileSync(logPath, "utf-8").trim().split(/\n/);
+  const primaryEnd = Number(lines.find((line) => line.startsWith("primary-end")).split(" ")[1]);
+  const request = JSON.parse(fs.readFileSync(
+    path.join(runDir, "review-round-1-advisory-opencode-request.json"),
+    "utf-8"
+  ));
 
-  assert.ok(lines.indexOf("advisory-start") !== -1);
-  assert.ok(lines.indexOf("primary-end") !== -1);
-  assert.ok(lines.indexOf("advisory-start") < lines.indexOf("primary-end"));
+  assert.ok(lines.some((line) => line.startsWith("primary-end")));
+  assert.ok(request.startedAt < primaryEnd);
+});
+
+test("standard review applies the primary verdict after advisory grace and records late advisory as metrics-only", () => {
+  const { repoRoot, manifestPath, runId, doneCriteriaPath, diffPath } = setupRepo();
+  const primaryScript = writePrimaryReviewer(repoRoot, passVerdict());
+  const opencodeScript = writeFakeOpencode(repoRoot, { delayMs: 3000 });
+
+  const startedAt = Date.now();
+  const result = runReview({
+    repoRoot,
+    runId,
+    doneCriteriaPath,
+    diffPath,
+    primaryScript,
+    opencodeScript,
+    extraArgs: ["--advisory-grace", "0.05"],
+  });
+  const reviewElapsedMs = Date.now() - startedAt;
+
+  assert.equal(result.nextState, STATES.READY_TO_MERGE);
+  assert.equal(readManifest(manifestPath).data.state, STATES.READY_TO_MERGE);
+  assert.equal(result.advisoryReview.status, "deferred");
+  assert.ok(reviewElapsedMs < 4500, `review should return before late advisory completes, elapsed=${reviewElapsedMs}ms`);
+
+  const event = waitForEvent(repoRoot, runId, (record) => record.event === "advisory_review", { timeoutMs: 7000 });
+  assert.ok(event, "late advisory event should be attached to the run");
+  assert.equal(event.status, "success");
+  assert.equal(event.consumed_by_phase, "metrics");
+  assert.equal(event.phase_decision_waited, true);
+  assert.equal(event.frontier_step_replaced, false);
+  assert.ok(event.elapsed_ms >= 3000);
+  assert.ok(event.critical_path_wait_ms <= 75);
+});
+
+test("standard review applies the primary verdict when advisory times out during grace", () => {
+  const { repoRoot, manifestPath, runId, doneCriteriaPath, diffPath } = setupRepo();
+  const primaryScript = writePrimaryReviewer(repoRoot, passVerdict());
+  const opencodeScript = writeFakeOpencode(repoRoot, { delayMs: 1500 });
+
+  const result = runReview({
+    repoRoot,
+    runId,
+    doneCriteriaPath,
+    diffPath,
+    primaryScript,
+    opencodeScript,
+    extraArgs: ["--advisory-timeout", "1", "--advisory-grace", "2"],
+  });
+  const event = readRunEvents(repoRoot, runId).find((record) => record.event === "advisory_review");
+
+  assert.equal(result.nextState, STATES.READY_TO_MERGE);
+  assert.equal(readManifest(manifestPath).data.state, STATES.READY_TO_MERGE);
+  assert.equal(result.advisoryReview.status, "timeout");
+  assert.match(result.advisoryReview.failureReason, /exceeded 1s timeout/);
+  assert.equal(event.status, "timeout");
+  assert.equal(event.consumed_by_phase, "review");
 });
 
 test("invalid advisory JSON is recorded as advisory failure while primary pass still applies", () => {

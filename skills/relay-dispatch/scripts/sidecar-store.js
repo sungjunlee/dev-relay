@@ -13,6 +13,7 @@ const {
   readTextFileWithoutFollowingSymlinks,
   writeTextFileWithoutFollowingSymlinks,
 } = require("./manifest/rubric");
+const { buildArtifactTimingFields } = require("./advisory-timing");
 const { appendRunEvent, EVENTS } = require("./relay-events");
 
 const SIDECAR_STATUSES = Object.freeze(["pending", "running", "completed", "failed"]);
@@ -156,7 +157,16 @@ function appendSidecarStart(repoRoot, runId, { id, kind, executor, model, provid
   return appendRunEvent(repoRoot, runId, eventData);
 }
 
-function appendSidecarResult(repoRoot, runId, { id, kind, output_path, elapsed_ms } = {}) {
+function appendSidecarResult(repoRoot, runId, {
+  id,
+  kind,
+  output_path,
+  elapsed_ms,
+  critical_path_wait_ms = 0,
+  consumed_by_phase = "metrics",
+  phase_decision_waited = false,
+  frontier_step_replaced = false,
+} = {}) {
   const sidecarId = requireNonEmptyString(id, "id");
   return appendRunEvent(repoRoot, runId, {
     event: EVENTS.SIDECAR_RESULT,
@@ -164,16 +174,42 @@ function appendSidecarResult(repoRoot, runId, { id, kind, output_path, elapsed_m
     kind: requireNonEmptyString(kind, "kind"),
     output_path: validateOutputPath(repoRoot, runId, sidecarId, output_path),
     trust_level: SIDECAR_TRUST_LEVEL,
-    ...(elapsed_ms !== undefined ? { elapsed_ms } : {}),
+    ...buildArtifactTimingFields({
+      artifactKind: "sidecar",
+      elapsedMs: elapsed_ms || 0,
+      criticalPathWaitMs: critical_path_wait_ms,
+      consumedByPhase: consumed_by_phase,
+      phaseDecisionWaited: phase_decision_waited,
+      frontierStepReplaced: frontier_step_replaced,
+    }),
   });
 }
 
-function appendSidecarFailed(repoRoot, runId, { id, kind, failure_reason } = {}) {
+function appendSidecarFailed(repoRoot, runId, {
+  id,
+  kind,
+  failure_reason,
+  elapsed_ms,
+  critical_path_wait_ms = 0,
+  consumed_by_phase = "metrics",
+  phase_decision_waited = false,
+  frontier_step_replaced = false,
+} = {}) {
   return appendRunEvent(repoRoot, runId, {
     event: EVENTS.SIDECAR_FAILED,
     sidecar_id: requireNonEmptyString(id, "id"),
     kind: requireNonEmptyString(kind, "kind"),
     failure_reason: requireNonEmptyString(failure_reason, "failure_reason"),
+    ...(elapsed_ms !== undefined
+      ? buildArtifactTimingFields({
+          artifactKind: "sidecar",
+          elapsedMs: elapsed_ms,
+          criticalPathWaitMs: critical_path_wait_ms,
+          consumedByPhase: consumed_by_phase,
+          phaseDecisionWaited: phase_decision_waited,
+          frontierStepReplaced: frontier_step_replaced,
+        })
+      : {}),
   });
 }
 

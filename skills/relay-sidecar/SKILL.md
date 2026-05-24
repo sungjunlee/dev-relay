@@ -50,4 +50,4 @@ node "${RELAY_SKILL_ROOT:-skills}/relay-sidecar/scripts/relay-sidecar.js" --run-
 
 ## Trust Boundary
 
-Sidecar output is advisory only and does not count as execution evidence or reviewer proof. Use relay-review for gate decisions; sidecar artifacts can inform operators, but they never satisfy implementation, review, or merge proof requirements. This follows the opencode policy in `docs/reviewer-policy-opencode.md`.
+Sidecar output is advisory only and does not count as execution evidence or reviewer proof. Use relay-review for gate decisions; sidecar artifacts can inform operators, but they never satisfy implementation, review, or merge proof requirements. Sidecar result events include elapsed/critical-path timing fields and default to `consumed_by_phase=metrics` unless a future orchestrator supplies a narrower phase classification. This follows the opencode policy in `docs/reviewer-policy-opencode.md`.

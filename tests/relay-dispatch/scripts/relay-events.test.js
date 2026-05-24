@@ -269,6 +269,31 @@ const RUN_EVENT_FIELD_CASES = [
     },
   },
   {
+    label: "advisory and sidecar timing fields",
+    fields: {
+      event: EVENTS.ADVISORY_REVIEW,
+      state_from: "review_pending",
+      state_to: "review_pending",
+      head_sha: "deadbeef",
+      round: 2,
+      status: "success",
+      elapsed_ms: 250,
+      advisory_elapsed_ms: 250,
+      critical_path_wait_ms: 50,
+      consumed_by_phase: "metrics",
+      phase_decision_waited: true,
+      frontier_step_replaced: false,
+    },
+    expected: {
+      elapsed_ms: 250,
+      advisory_elapsed_ms: 250,
+      critical_path_wait_ms: 50,
+      consumed_by_phase: "metrics",
+      phase_decision_waited: true,
+      frontier_step_replaced: false,
+    },
+  },
+  {
     label: "guidance metadata",
     fields: {
       event: EVENTS.GUIDANCE_SELECTED,

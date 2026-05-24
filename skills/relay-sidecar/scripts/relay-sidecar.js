@@ -643,6 +643,7 @@ function main(options = {}) {
         id: sidecarId,
         kind: args.kind,
         failure_reason: failureReason,
+        elapsed_ms: Date.now() - startedAt,
       });
       upsertSidecarEntry(context.repoRoot, args.runId, makeEntry({
         sidecarId,

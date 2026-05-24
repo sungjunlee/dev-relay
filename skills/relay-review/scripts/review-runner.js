@@ -10,7 +10,6 @@ const { appendIterationScore, appendRunEvent, appendScoreDivergence, EVENTS } = 
 const { git, writeText } = require("./review-runner/common");
 const { applyReviewerIdentity, getGhLogin, loadDiff, loadDoneCriteria, parseRemoteHost, resolveContext, resolveIssueNumber, resolveRemoteHost } = require("./review-runner/context");
 const { buildPrompt, formatPriorVerdictSummary } = require("./review-runner/prompt");
-const { buildAdvisoryPrompt } = require("./review-runner/advisory-prompt");
 const { parseReviewVerdict, validateReviewVerdict, validateScopeDrift } = require("./review-runner/verdict");
 const { buildCommentBody, formatIssueList, formatScopeDrift, postComment } = require("./review-runner/comment");
 const { buildScoreDivergenceAnalysis, loadPrBody, parseScoreLog, toIterationScoreEventEntry } = require("./review-runner/divergence");
@@ -21,13 +20,13 @@ const { applyPolicyViolationToManifest, applyVerdictToManifest } = require("./re
 const { writePrBodySnapshot } = require("./review-runner/pr-body-snapshot");
 const { loadReviewText, resolveReviewerModel, resolveReviewerName, resolveReviewerScript } = require("./review-runner/reviewer-invoke");
 const { maybeSwapReviewer } = require("./review-runner/reviewer-swap");
-const { finishAdvisoryReview, parsePositiveSeconds, resolveAdvisoryModel, startAdvisoryReview, validateAdvisoryProfile } = require("./review-runner/advisory");
+const { resolveAdvisoryConfig, settleAdvisoryForVerdict, startConfiguredAdvisory } = require("./review-runner/advisory-orchestration");
 const { printResult, printUsage } = require("./review-runner/output");
 const { bindCliArgs, findUnknownFlags } = require("../../relay-dispatch/scripts/cli-args");
 const { assertRelayPolicyGate, buildPolicyGateFailureEnvelope, isRelayPolicyGateError } = require("../../relay-dispatch/scripts/relay-policy-gate");
 
 const args = process.argv.slice(2);
-const KNOWN_FLAGS = ["--repo", "--run-id", "--branch", "--pr", "--manifest", "--done-criteria-file", "--diff-file", "--review-file", "--manual-review-reason", "--reviewer", "--reviewer-script", "--reviewer-model", "--independent-review-reason", "--advisory-reviewer", "--advisory-profile", "--advisory-reviewer-model", "--advisory-timeout", "--prepare-only", "--no-comment", "--json", "--help", "-h"];
+const KNOWN_FLAGS = ["--repo", "--run-id", "--branch", "--pr", "--manifest", "--done-criteria-file", "--diff-file", "--review-file", "--manual-review-reason", "--reviewer", "--reviewer-script", "--reviewer-model", "--independent-review-reason", "--advisory-reviewer", "--advisory-profile", "--advisory-reviewer-model", "--advisory-timeout", "--advisory-grace", "--prepare-only", "--no-comment", "--json", "--help", "-h"];
 const cliArgs = bindCliArgs(args, {
   commandName: "review-runner",
   reservedFlags: KNOWN_FLAGS,
@@ -61,18 +60,13 @@ async function run() {
   const advisoryReviewerArg = cliArgs.getArg("--advisory-reviewer");
   const advisoryProfileArg = cliArgs.getArg("--advisory-profile");
   const advisoryReviewerModel = cliArgs.getArg("--advisory-reviewer-model");
-  const advisoryTimeoutArg = cliArgs.getArg("--advisory-timeout");
+  const advisoryTimeoutArg = cliArgs.getArg("--advisory-timeout"), advisoryGraceArg = cliArgs.getArg("--advisory-grace");
   const prepareOnly = cliArgs.hasFlag("--prepare-only");
   const noComment = cliArgs.hasFlag("--no-comment");
   const jsonOut = cliArgs.hasFlag("--json");
-  if (!advisoryReviewerArg && (advisoryProfileArg || advisoryReviewerModel || advisoryTimeoutArg)) {
-    throw new Error("--advisory-reviewer is required when advisory options are supplied");
-  }
   if (manualReviewReason && !reviewFile) {
     throw new Error("--manual-review-reason requires --review-file");
   }
-  const advisoryProfile = advisoryReviewerArg ? validateAdvisoryProfile(advisoryProfileArg || "blindspot") : null;
-  const advisoryTimeoutSeconds = advisoryReviewerArg ? parsePositiveSeconds(advisoryTimeoutArg) : null;
 
   const { branch, issueNumber, manifest, prNumber, reviewRepoPath, runRepoPath } = resolveContext(
     repoPath,
@@ -85,11 +79,19 @@ async function run() {
   );
   const { body, manifestPath } = manifest;
   let { data } = manifest;
+  const advisoryConfig = resolveAdvisoryConfig({
+    advisoryGraceArg,
+    advisoryProfileArg,
+    advisoryReviewerArg,
+    advisoryReviewerModel,
+    advisoryTimeoutArg,
+    data,
+  });
 
-  if (isHardenedReviewAssurance(data) && !prepareOnly && !advisoryReviewerArg) {
+  if (isHardenedReviewAssurance(data) && !prepareOnly && !advisoryConfig.reviewer) {
     throw new Error(
-      "policy.review_assurance=hardened requires --advisory-reviewer <name> so the round produces advisory evidence. " +
-      "Run with a configured advisory reviewer, or lower the manifest policy before review."
+      "policy.review_assurance=hardened requires --advisory-reviewer <name> or manifest routing.selected.advisory_review.reviewer so the round produces advisory evidence. " +
+      "Run with a configured advisory reviewer, configure routing, or lower the manifest policy before review."
     );
   }
 
@@ -192,21 +194,6 @@ async function run() {
   };
   let advisoryRun = null;
   let advisoryResult = null;
-  const finishAdvisoryOnce = async () => {
-    if (!advisoryRun || advisoryResult) return advisoryResult;
-    advisoryResult = await finishAdvisoryReview({
-      advisoryRun,
-      data,
-      headSha: reviewedHeadSha,
-      profile: advisoryProfile,
-      round,
-      runDir,
-      runRepoPath,
-      timeoutSeconds: advisoryTimeoutSeconds,
-    });
-    result.advisoryReview = advisoryResult;
-    return advisoryResult;
-  };
 
   if (prepareOnly) {
     printResult({ doneCriteriaPath, diffPath, jsonOut, manifestPath, originalState: data.state, prepareOnly, prNumber, promptPath, redispatchPath: null, result, updatedManifest: null, verdictPath: null });
@@ -220,18 +207,10 @@ async function run() {
       model: resolveReviewerModel(data, reviewerModel),
     });
   }
-  if (advisoryReviewerArg) {
-    const advisoryModel = resolveAdvisoryModel(data, advisoryReviewerArg, advisoryReviewerModel);
-    const advisoryPolicyDecision = assertRelayPolicyGate({
-      repoRoot: runRepoPath,
-      phase: "advisory_review",
-      reviewer: advisoryReviewerArg,
-      model: advisoryModel,
-    });
-    const advisoryPromptText = buildAdvisoryPrompt({ branch, diffText, doneCriteria, doneCriteriaSource, issueNumber, prNumber, profile: advisoryProfile, round, rubricLoad });
-    advisoryRun = startAdvisoryReview({ promptText: advisoryPromptText, reviewerModel: advisoryModel, reviewerName: advisoryReviewerArg, reviewRepoPath, round, runDir });
-    result.advisoryReview = { profile: advisoryProfile, reviewer: advisoryReviewerArg, status: "running", policy_decision: advisoryPolicyDecision };
-  }
+  ({ advisoryRun, resultAdvisory: result.advisoryReview } = startConfiguredAdvisory({
+    branch, config: advisoryConfig, data, diffText, doneCriteria, doneCriteriaSource,
+    issueNumber, prNumber, reviewedHeadSha, reviewRepoPath, round, rubricLoad, runDir, runRepoPath,
+  }));
 
   try {
   const { rawResponsePath, reviewText } = loadReviewText({
@@ -266,7 +245,12 @@ async function run() {
     strict: hardenedAssurance,
   });
   verdict = applyQualityExecutionStatus(verdict, executionStatus);
-  await finishAdvisoryOnce();
+  ({ advisoryResult, resultAdvisory: result.advisoryReview } = await settleAdvisoryForVerdict({
+    advisoryRun,
+    config: advisoryConfig,
+    hardenedAssurance,
+    verdict,
+  }));
   verdict = applyReviewAssurancePolicy(verdict, {
     advisoryResult,
     hardenedAssurance,
@@ -400,7 +384,6 @@ async function run() {
 
   printResult({ doneCriteriaPath, diffPath, jsonOut, manifestPath, originalState: data.state, prepareOnly, prNumber, promptPath, redispatchPath, result, updatedManifest, verdictPath });
   } catch (error) {
-    await finishAdvisoryOnce();
     throw error;
   }
 }

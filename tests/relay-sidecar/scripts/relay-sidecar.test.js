@@ -211,6 +211,11 @@ test("happy path stores stdout and records advisory result", (t) => {
   assert.equal(events[1].event, "sidecar_result");
   assert.equal(events[1].trust_level, "advisory");
   assert.equal(events[1].output_path, `sidecars/${sidecarId}/output.md`);
+  assert.equal(events[1].consumed_by_phase, "metrics");
+  assert.equal(events[1].phase_decision_waited, false);
+  assert.equal(events[1].frontier_step_replaced, false);
+  assert.ok(Number.isFinite(events[1].critical_path_wait_ms));
+  assert.ok(Number.isFinite(events[1].sidecar_elapsed_ms));
 
   const index = readSidecarIndex(fixture.repoRoot, fixture.runId);
   assert.equal(index.sidecars[0].id, sidecarId);
