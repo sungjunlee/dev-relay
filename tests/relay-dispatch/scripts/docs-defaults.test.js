@@ -91,6 +91,7 @@ test("adapter platform docs publish the single 7-field executor contract", () =>
   const docs = [
     readRepoFile("AGENTS.md"),
     readRepoFile("CLAUDE.md"),
+    readRepoFile("docs/relay-operator-guide.md"),
     readRepoFile("references/architecture.md"),
     readRepoFile("skills/relay-dispatch/scripts/executors/README.md"),
     readRepoFile(ADAPTER_PLATFORM_DOC),
