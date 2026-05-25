@@ -164,7 +164,7 @@ const COMMAND_FLAGS = {
     "--repo", "--contract-file", "--json", "--help",
   ],
   "probe-executor-env": [
-    "--executor", "--timeout", "--project-only", "--json", "--help",
+    "--executor", "--model", "--timeout", "--project-only", "--json", "--help",
   ],
   "recover-state": [
     "--repo", "--run-id", "--manifest", "--to", "--reason", "--force", "--dry-run", "--json", "--help",
