@@ -4,7 +4,7 @@ Route policy answers one operational question: which provider/model route is all
 
 Executor and reviewer names such as `codex`, `claude`, `opencode`, and `pi` are harness names. They select a CLI adapter and execution contract. They are not the compliance boundary. The compliance boundary is the provider/model route string, for example `example/opencode-model-fast`, `opencode-go/deepseek-v4-pro`, `deepseek/r1`, or `ollama/qwen3`.
 
-Codex and Claude are the managed CLI defaults. In the default managed profile, a model-less Codex or Claude invocation is allowed because the CLI account and its managed default model are the boundary. Generated company defaults should not pin Codex or Claude model names just to make policy explicit. OpenCode and Pi are routing harnesses, so managed/company profiles must require an explicit provider/model route and an allow rule before they can run.
+Codex and Claude are the managed CLI defaults. In the default managed profile, a model-less Codex or Claude invocation is allowed because the CLI account and its managed default model are the boundary. Generated company defaults should not pin Codex or Claude model names just to make policy explicit. OpenCode, Pi, and Antigravity are routing harnesses, so managed/company profiles must require an explicit provider/model route and an allow rule before they can run.
 
 ## Default Posture
 
@@ -27,7 +27,7 @@ When no policy config exists, relay loads a fail-closed default policy:
 }
 ```
 
-That means missing policy config defaults to Codex/Claude managed CLI only. `codex` and `claude` pass the gate without a pinned model route. `opencode`, `pi`, and any other unmanaged harness fail unless the effective invocation includes a provider/model route and that route matches `allowed_model_routes`.
+That means missing policy config defaults to Codex/Claude managed CLI only. `codex` and `claude` pass the gate without a pinned model route. `opencode`, `pi`, `antigravity`, and any other unmanaged harness fail unless the effective invocation includes a provider/model route and that route matches `allowed_model_routes`.
 
 ## Precedence
 
@@ -36,6 +36,10 @@ Use this final precedence order when reasoning about an invocation:
 `CLI flags -> routing rules -> defaults -> existing relay defaults -> policy gate`
 
 The policy gate is last and fail-closed. A route selected by a CLI flag, a routing rule, a model hint, an executor default, or an existing relay fallback still has to pass the policy gate. Deny rules win over allow rules, and unknown provider/model routes are denied when `deny_unknown_model_routes` is true.
+
+Adapter capability checks happen before the model-route policy gate. The adapter layer answers whether the selected CLI can safely perform the requested phase and containment mode, such as dispatch vs primary review vs advisory review, read-only requirements, sandbox metadata, and network metadata. The route-policy layer answers only whether the already-capable effective provider/model route is allowed for the active profile.
+
+For example, `--reviewer opencode` fails as an adapter-capability denial because OpenCode is advisory-only for review, even if a policy would otherwise allow an `opencode-go/*` route. Conversely, `--advisory-reviewer opencode --advisory-reviewer-model openai/gpt-5` reaches the route-policy gate because OpenCode can run advisory review, then fails as a model-route denial unless that route is allowed. JSON failures expose these layers separately as `adapter_capability` and `policy_decision`.
 
 ## Phase Interaction
 

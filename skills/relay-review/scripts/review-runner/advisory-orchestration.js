@@ -4,6 +4,7 @@ const { assertRelayPolicyGate } = require("../../../relay-dispatch/scripts/relay
 const { buildAdvisoryPrompt } = require("./advisory-prompt");
 const {
   finishAdvisoryReview,
+  buildAdvisoryReviewerPolicy,
   parseNonNegativeSeconds,
   parsePositiveSeconds,
   resolveAdvisoryModel,
@@ -57,12 +58,19 @@ function startConfiguredAdvisory({
 }) {
   if (!config.reviewer) return { advisoryRun: null, resultAdvisory: undefined };
   const advisoryModel = resolveAdvisoryModel(data, config.reviewer, config.model);
-  const policyDecision = assertRelayPolicyGate({
-    repoRoot: runRepoPath,
-    phase: "advisory_review",
-    reviewer: config.reviewer,
-    model: advisoryModel,
-  });
+  const reviewerPolicy = buildAdvisoryReviewerPolicy(config.reviewer);
+  let policyDecision;
+  try {
+    policyDecision = assertRelayPolicyGate({
+      repoRoot: runRepoPath,
+      phase: "advisory_review",
+      reviewer: config.reviewer,
+      model: advisoryModel,
+    });
+  } catch (error) {
+    error.adapterCapability = reviewerPolicy;
+    throw error;
+  }
   const promptText = buildAdvisoryPrompt({
     branch,
     diffText,
@@ -80,6 +88,8 @@ function startConfiguredAdvisory({
     promptText,
     reviewerModel: advisoryModel,
     reviewerName: config.reviewer,
+    reviewerPolicy,
+    policyDecision,
     reviewRepoPath,
     round,
     runDir,

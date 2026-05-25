@@ -9,6 +9,17 @@ const ENFORCEMENT_LEVELS = Object.freeze([
 
 const ENFORCEMENT_LEVEL_SET = new Set(ENFORCEMENT_LEVELS);
 
+class AdapterCapabilityError extends Error {
+  constructor(audit, message = null) {
+    super(message || formatAdapterCapabilityMessage(audit));
+    this.name = "AdapterCapabilityError";
+    this.audit = audit;
+    this.envelope = buildAdapterCapabilityFailureEnvelope(audit, {
+      error: this.message,
+    });
+  }
+}
+
 function normalizeString(value, fallback = null) {
   if (typeof value !== "string") return fallback;
   const trimmed = value.trim();
@@ -141,13 +152,45 @@ function buildAgentPolicyAudit({ descriptor, phase, requested }) {
 
 function assertPolicyRepresentable(audit) {
   if (!audit?.safe) {
-    throw new Error(`agent policy is not safely representable: ${(audit?.fail_closed_reasons || []).join("; ")}`);
+    throw new AdapterCapabilityError(audit);
   }
   return audit;
 }
 
+function formatAdapterCapabilityMessage(audit) {
+  const reasons = (audit?.fail_closed_reasons || []).filter(Boolean);
+  return [
+    "adapter capability denied",
+    `adapter=${audit?.adapter || "unknown"}`,
+    `phase=${audit?.phase || "unknown"}`,
+    `reason=${reasons.join("; ") || "unsupported_capability"}`,
+  ].join(" ");
+}
+
+function isAdapterCapabilityError(error) {
+  return error instanceof AdapterCapabilityError
+    || (error?.name === "AdapterCapabilityError" && error?.audit);
+}
+
+function buildAdapterCapabilityFailureEnvelope(errorOrAudit, extra = {}) {
+  const audit = errorOrAudit?.audit || errorOrAudit;
+  const message = errorOrAudit instanceof Error
+    ? errorOrAudit.message
+    : (extra.error || formatAdapterCapabilityMessage(audit));
+  return {
+    ...extra,
+    status: extra.status || "failed",
+    error: message,
+    adapter_capability: audit,
+  };
+}
+
 module.exports = {
+  AdapterCapabilityError,
   ENFORCEMENT_LEVELS,
   assertPolicyRepresentable,
+  buildAdapterCapabilityFailureEnvelope,
   buildAgentPolicyAudit,
+  formatAdapterCapabilityMessage,
+  isAdapterCapabilityError,
 };

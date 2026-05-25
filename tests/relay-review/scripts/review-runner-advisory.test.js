@@ -258,6 +258,8 @@ test("review-runner records successful opencode advisory review without gating p
   assert.ok(fs.existsSync(path.join(runDir, "review-round-1-advisory-opencode.json")));
   assert.equal(event.status, "success");
   assert.equal(event.profile, "blindspot");
+  assert.equal(event.policy_decision.allowed, true);
+  assert.equal(event.policy_decision.reason, "allowed_model_route");
   assert.equal(event.advisory_artifact_hash, hashFile(path.join(runDir, "review-round-1-advisory-opencode.json")));
   assert.equal(event.reviewer_policy.read_only.enforcement_level, "prompt-only");
   assert.match(event.reviewer_policy.read_only.warnings.join("\n"), /not prevent writes/i);
@@ -284,6 +286,12 @@ test("review-runner fails closed when opencode is selected as the primary review
   assert.match(proc.stderr, /supports advisory_review but not primary_review/);
   assert.match(proc.stderr, /--advisory-reviewer opencode/);
   assert.match(proc.stderr, /--reviewer opencode/);
+  const result = JSON.parse(proc.stdout);
+  assert.equal(result.status, "failed");
+  assert.equal(result.adapter_capability.adapter, "opencode");
+  assert.equal(result.adapter_capability.phase, "primary_review");
+  assert.equal(result.adapter_capability.safe, false);
+  assert.equal(result.policy_decision, undefined);
   assert.equal(readManifest(manifestPath).data.state, STATES.REVIEW_PENDING);
 });
 
@@ -333,6 +341,40 @@ test("review-runner denies disallowed advisory model before spawning advisory re
     /phase=advisory_review.*reviewer=opencode|reviewer=opencode.*phase=advisory_review/
   );
   assert.equal(fs.existsSync(logPath), false);
+});
+
+test("review-runner reports advisory adapter-capability denial before route policy", () => {
+  const { repoRoot, runId, doneCriteriaPath, diffPath } = setupRepo({ modelPolicy: "default" });
+  const logPath = path.join(repoRoot, "advisory-capability.log");
+  const primaryScript = writePrimaryReviewer(repoRoot, passVerdict());
+  const opencodeScript = writeFakeOpencode(repoRoot, { logPath });
+
+  const proc = spawnSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--run-id", runId,
+    "--pr", "429",
+    "--done-criteria-file", doneCriteriaPath,
+    "--diff-file", diffPath,
+    "--reviewer", "codex",
+    "--reviewer-script", primaryScript,
+    "--advisory-reviewer", "pi",
+    "--no-comment",
+    "--json",
+  ], {
+    encoding: "utf-8",
+    env: { ...process.env, RELAY_OPENCODE_BIN: opencodeScript },
+  });
+
+  assert.notEqual(proc.status, 0);
+  assert.equal(fs.existsSync(logPath), false);
+  const result = JSON.parse(proc.stdout);
+  assert.equal(result.status, "failed");
+  assert.equal(result.adapter_capability.adapter, "pi");
+  assert.equal(result.adapter_capability.phase, "advisory_review");
+  assert.equal(result.adapter_capability.safe, false);
+  assert.match(result.adapter_capability.fail_closed_reasons.join("\n"), /pi cannot represent advisory_review/);
+  assert.equal(result.policy_decision, undefined);
 });
 
 test("prepare-only with advisory flags writes only the primary prompt bundle", () => {

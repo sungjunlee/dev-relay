@@ -6,7 +6,9 @@ const {
   getAgentAdapterDescriptor,
 } = require("../../../skills/relay-dispatch/scripts/agent-adapters");
 const {
+  AdapterCapabilityError,
   assertPolicyRepresentable,
+  buildAdapterCapabilityFailureEnvelope,
   buildAgentPolicyAudit,
 } = require("../../../skills/relay-dispatch/scripts/agent-adapters/policy");
 
@@ -183,6 +185,17 @@ test("policy audit fails closed when a requested policy cannot be represented sa
   ]);
   assert.throws(
     () => assertPolicyRepresentable(audit),
-    /future-agent cannot represent read-only sandbox safely.*future-agent has no read-only execution mode/s
+    (error) => {
+      assert.ok(error instanceof AdapterCapabilityError);
+      assert.equal(error.audit.adapter, "future-agent");
+      assert.equal(error.audit.phase, ADAPTER_PHASES.DISPATCH);
+      assert.match(error.message, /future-agent cannot represent read-only sandbox safely.*future-agent has no read-only execution mode/s);
+      const envelope = buildAdapterCapabilityFailureEnvelope(error, { executor: "future-agent" });
+      assert.equal(envelope.status, "failed");
+      assert.equal(envelope.executor, "future-agent");
+      assert.equal(envelope.adapter_capability.adapter, "future-agent");
+      assert.equal(envelope.adapter_capability.safe, false);
+      return true;
+    }
   );
 });

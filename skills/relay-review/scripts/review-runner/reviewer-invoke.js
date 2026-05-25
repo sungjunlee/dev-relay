@@ -10,6 +10,7 @@ const {
   supportsAgentAdapterPhase,
 } = require("../../../relay-dispatch/scripts/agent-adapters");
 const {
+  AdapterCapabilityError,
   assertPolicyRepresentable,
   buildAgentPolicyAudit,
 } = require("../../../relay-dispatch/scripts/agent-adapters/policy");
@@ -79,7 +80,16 @@ function resolveReviewerScript(reviewerName, reviewerScriptArg, { phase = ADAPTE
     );
   }
   if (!supportsAgentAdapterPhase(reviewerName, phase)) {
-    throw new Error(formatUnsupportedReviewerPhaseError(reviewerName, phase));
+    const message = formatUnsupportedReviewerPhaseError(reviewerName, phase);
+    throw new AdapterCapabilityError({
+      adapter: reviewerName,
+      phase,
+      requested: { phase },
+      safe: false,
+      supported_phases: supportedAdapterPhases(reviewerName),
+      fail_closed_reasons: [message],
+      warnings: [],
+    }, message);
   }
 
   const scriptName = phase === ADAPTER_PHASES.ADVISORY_REVIEW
@@ -216,23 +226,53 @@ function buildReviewerPolicy({ reviewerName, reviewerScript }) {
   return buildCustomReviewerScriptPolicy({ reviewerName, reviewerScript });
 }
 
+function buildPrimaryReviewerPreflight({
+  data,
+  reviewerModel,
+  reviewerName,
+  reviewerScript,
+  runRepoPath,
+}) {
+  const effectiveReviewerModel = resolveReviewerModel(data, reviewerModel);
+  const reviewerPolicy = buildReviewerPolicy({ reviewerName, reviewerScript });
+  try {
+    const policyDecision = assertRelayPolicyGate({
+      repoRoot: runRepoPath,
+      phase: "review",
+      reviewer: reviewerName,
+      model: effectiveReviewerModel,
+    });
+    return {
+      effectiveReviewerModel,
+      policyDecision,
+      reviewerPolicy,
+    };
+  } catch (error) {
+    error.adapterCapability = reviewerPolicy;
+    throw error;
+  }
+}
+
 function captureGitStatus(repoPath) {
   return git(repoPath, "status", "--short", "--untracked-files=all").trim();
 }
 
-function loadReviewText({ body, data, manifestPath, prNumber, promptPath, reviewFile, reviewRepoPath, reviewedHeadSha, reviewerModel, reviewerName, reviewerScript, round, runDir, runRepoPath }) {
+function loadReviewText({ body, data, manifestPath, prNumber, promptPath, reviewFile, reviewRepoPath, reviewedHeadSha, reviewerModel, reviewerName, reviewerScript, round, runDir, runRepoPath, reviewerPreflight = null }) {
   if (reviewFile) {
     return { rawResponsePath: null, reviewText: readText(reviewFile) };
   }
 
-  const effectiveReviewerModel = resolveReviewerModel(data, reviewerModel);
-  assertRelayPolicyGate({
-    repoRoot: runRepoPath,
-    phase: "review",
-    reviewer: reviewerName,
-    model: effectiveReviewerModel,
+  const {
+    effectiveReviewerModel,
+    policyDecision,
+    reviewerPolicy,
+  } = reviewerPreflight || buildPrimaryReviewerPreflight({
+    data,
+    reviewerModel,
+    reviewerName,
+    reviewerScript,
+    runRepoPath,
   });
-  const reviewerPolicy = buildReviewerPolicy({ reviewerName, reviewerScript });
   appendRunEvent(runRepoPath, data.run_id, {
     event: EVENTS.REVIEW_INVOKE,
     state_from: data.state,
@@ -241,6 +281,7 @@ function loadReviewText({ body, data, manifestPath, prNumber, promptPath, review
     round,
     reason: reviewerName,
     model: effectiveReviewerModel,
+    policy_decision: policyDecision,
     reviewer_policy: reviewerPolicy,
   });
 
@@ -306,6 +347,7 @@ module.exports = {
   invokeReviewer,
   loadReviewText,
   buildPrimaryReviewerPolicy,
+  buildPrimaryReviewerPreflight,
   buildReviewerPolicy,
   resolveReviewerName,
   resolveReviewerModel,
