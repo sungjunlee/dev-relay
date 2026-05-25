@@ -1,3 +1,5 @@
+const { parseJsonObject } = require("../../relay-dispatch/scripts/agent-adapters/transport");
+
 const ADVISORY_PROFILES = Object.freeze(["blindspot"]);
 const ADVISORY_SEVERITIES = new Set(["P1", "P2", "P3"]);
 const ADVISORY_CATEGORIES = new Set([
@@ -8,19 +10,6 @@ const ADVISORY_CATEGORIES = new Set([
   "docs",
   "other",
 ]);
-
-function parseJsonObject(text, context) {
-  let parsed;
-  try {
-    parsed = JSON.parse(String(text || "").trim());
-  } catch (error) {
-    throw new Error(`${context} did not return valid JSON: ${error.message}`);
-  }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error(`${context} must return a JSON object`);
-  }
-  return parsed;
-}
 
 function requireString(value, location) {
   if (typeof value !== "string" || !value.trim()) {
@@ -78,9 +67,17 @@ function validateAdvisoryProfile(profile) {
   return normalized;
 }
 
-function parseAdvisoryReview(text, { profile = "blindspot" } = {}) {
+function parseAdvisoryReview(text, {
+  adapter = "advisory",
+  phase = "advisory_review",
+  profile = "blindspot",
+} = {}) {
   const expectedProfile = validateAdvisoryProfile(profile);
-  const parsed = parseJsonObject(text, "Advisory reviewer");
+  const parsed = parseJsonObject(text, {
+    adapter,
+    phase,
+    description: "advisory review",
+  });
   const actualProfile = requireString(parsed.profile, "profile");
   if (actualProfile !== expectedProfile) {
     throw new Error(`profile must be '${expectedProfile}', got '${actualProfile}'`);

@@ -11,7 +11,11 @@ const {
   bindCliArgs,
   modeLabel,
 } = require("../../relay-dispatch/scripts/cli-args");
-const { summarizeFailure, ensureJsonText } = require("./reviewer-helpers");
+const {
+  parseReviewerJsonObject,
+  recoverExecStdout,
+  summarizeFailure,
+} = require("./reviewer-helpers");
 
 const args = process.argv.slice(2);
 const KNOWN_FLAGS = ["--repo", "--prompt-file", "--model", "--json", "--help", "-h"];
@@ -112,7 +116,7 @@ function main() {
       maxBuffer: 10 * 1024 * 1024,
     }).trim();
   } catch (error) {
-    const recovered = String(error.stdout || "").trim();
+    const recovered = recoverExecStdout(error);
     if (!recovered) {
       throw new Error(`Claude reviewer failed: ${summarizeFailure(error)}`);
     }
@@ -122,7 +126,11 @@ function main() {
   if (!result) {
     throw new Error("Claude reviewer did not produce a structured result");
   }
-  ensureJsonText(result, "Claude reviewer");
+  parseReviewerJsonObject(result, {
+    adapter: "claude",
+    phase: "primary_review",
+    description: "review verdict",
+  });
 
   if (cliArgs.hasFlag("--json")) {
     console.log(result);

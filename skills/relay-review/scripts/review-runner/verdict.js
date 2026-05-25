@@ -1,4 +1,5 @@
 const { REVIEW_VERDICT_JSON_SCHEMA } = require("../review-schema");
+const { parseJsonObject } = require("../../../relay-dispatch/scripts/agent-adapters/transport");
 const {
   getRubricScoreNumber,
   getRubricTargetNumber,
@@ -19,10 +20,18 @@ const ALLOWED_DRIFT_STATUSES = new Set(
 
 function parseReviewVerdict(text, options = {}) {
   let parsed;
-  try {
-    parsed = JSON.parse(text);
-  } catch (error) {
-    throw new Error(`Review verdict must be valid JSON: ${error.message}`);
+  if (options.adapter || options.phase) {
+    parsed = parseJsonObject(text, {
+      adapter: options.adapter,
+      phase: options.phase,
+      description: "review verdict",
+    });
+  } else {
+    try {
+      parsed = JSON.parse(text);
+    } catch (error) {
+      throw new Error(`Review verdict must be valid JSON: ${error.message}`);
+    }
   }
   return validateReviewVerdict(parsed, options);
 }
