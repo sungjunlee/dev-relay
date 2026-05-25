@@ -8,6 +8,7 @@
  *
  * Options:
  *   --executor, -e <name>  Executor to probe (required)
+ *   --model, -m <route>    Provider/model route for unmanaged executor policy
  *   --timeout <seconds>    Probe timeout (default: 30)
  *   --project-only         Skip agent probe, only scan project tools
  *   --json                 Output as JSON (default: human-readable)
@@ -24,6 +25,9 @@ const { getExecutor, listExecutors } = require("../../relay-dispatch/scripts/exe
 const { resolveExecutorDefaultModel } = require("../../relay-dispatch/scripts/executor-model-config");
 const { evaluateRelayPolicyGate, formatRelayPolicyGateMessage } = require("../../relay-dispatch/scripts/relay-policy-gate");
 
+const MANAGED_MODELLESS_EXECUTORS = new Set(["codex", "claude"]);
+const PROBE_POLICY_PHASE = "dispatch";
+
 // ---------------------------------------------------------------------------
 // CLI (only when run directly)
 // ---------------------------------------------------------------------------
@@ -31,7 +35,7 @@ const { evaluateRelayPolicyGate, formatRelayPolicyGateMessage } = require("../..
 function parseCli(argv) {
   const args = argv.slice(2);
   const KNOWN_FLAGS = [
-    "--executor", "-e", "--timeout", "--project-only", "--json", "--help", "-h",
+    "--executor", "-e", "--model", "-m", "--timeout", "--project-only", "--json", "--help", "-h",
   ];
   const cliArgs = bindCliArgs(args, {
     commandName: "probe-executor-env",
@@ -42,6 +46,7 @@ function parseCli(argv) {
     console.log(`Usage: probe-executor-env.js <repo-path> --executor <${listExecutors().join("|")}> [options]`);
     console.log("\nOptions:");
     console.log(`  --executor, -e   ${modeLabel("--executor")} Executor to probe (${listExecutors().join(", ")})`);
+    console.log(`  --model, -m      ${modeLabel("--model")} Provider/model route for unmanaged executors; ignored for codex/claude`);
     console.log(`  --timeout        ${modeLabel("--timeout")} Probe timeout in seconds (default: 30)`);
     console.log(`  --project-only   ${modeLabel("--project-only")} Skip agent probe, only scan project tools`);
     console.log(`  --json           ${modeLabel("--json")} Output as JSON`);
@@ -53,6 +58,7 @@ function parseCli(argv) {
   return {
     repoPath: path.resolve(repoPathRaw || "."),
     executor: cliArgs.getArg(["--executor", "-e"], undefined),
+    model: cliArgs.getArg(["--model", "-m"], undefined),
     timeout: parseInt(cliArgs.getArg("--timeout", "30"), 10),
     projectOnly: cliArgs.hasFlag("--project-only"),
     jsonOut: cliArgs.hasFlag("--json"),
@@ -196,22 +202,32 @@ function probeAgent(executor, timeout) {
   return adapter.probe({ timeout });
 }
 
+function nonEmptyString(value) {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function resolveEffectiveProbeModel(executor, model, { relayHome = process.env.RELAY_HOME } = {}) {
+  if (MANAGED_MODELLESS_EXECUTORS.has(executor)) return null;
+  return nonEmptyString(model) || resolveExecutorDefaultModel(executor, { relayHome });
+}
+
 // ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 
-function run({ repoPath, executor, timeout, projectOnly, jsonOut }) {
+function run({ repoPath, executor, model, timeout, projectOnly, jsonOut }) {
   const projectTools = scanProjectTools(repoPath);
 
   let agentProbe = { error: null, raw: null };
   let policyDecision = null;
   if (!projectOnly) {
-    const effectiveProbeModel = ["codex", "claude"].includes(executor)
-      ? null
-      : resolveExecutorDefaultModel(executor, { relayHome: process.env.RELAY_HOME });
+    const effectiveProbeModel = resolveEffectiveProbeModel(executor, model);
+    // The probe checks whether the selected executor route is acceptable for
+    // dispatch. relay-config exposes dispatch/review policy phases, not a
+    // separate operator-facing probe phase.
     policyDecision = evaluateRelayPolicyGate({
       repoRoot: repoPath,
-      phase: "probe",
+      phase: PROBE_POLICY_PHASE,
       executor,
       model: effectiveProbeModel,
     });

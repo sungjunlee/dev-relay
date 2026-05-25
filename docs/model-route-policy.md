@@ -198,6 +198,19 @@ node skills/relay-config/scripts/relay-config.js check sidecar opencode example/
 
 Check exits non-zero when the tuple would be denied at runtime. Run it before turning on routed advisory review or sidecar rules because those phases can start automatically after dispatch.
 
+For pre-planning dispatch probes, run the matching `probe-executor-env` command with the same unmanaged route. The probe evaluates `--executor` plus `--model` as a dispatch policy tuple before invoking the adapter:
+
+```bash
+node skills/relay-config/scripts/relay-config.js check dispatch pi opencode-go/deepseek-v4-pro
+
+node skills/relay-plan/scripts/probe-executor-env.js . \
+  --executor pi \
+  --model opencode-go/deepseek-v4-pro \
+  --json
+```
+
+If the route is allowed, the probe policy decision reports `reason=allowed_model_route`, `model=opencode-go/deepseek-v4-pro`, and then invokes the Pi adapter probe. If `--model` is omitted and no executor default supplies a provider/model route, unmanaged executors fail closed before adapter invocation: JSON output reports `policy_decision.reason=missing_model_route`, `policy_decision.model=null`, and `agent_tools_raw=null`. This is different from an explicit but unapproved route, which reports `unknown_model_route` with the rejected route in `policy_decision.model`.
+
 ## Denial Example
 
 With the company policy above, an external OpenAI route through OpenCode is not allowed:
