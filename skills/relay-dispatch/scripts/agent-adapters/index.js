@@ -2,6 +2,7 @@ const codex = require("../executors/codex");
 const claude = require("../executors/claude");
 const opencode = require("../executors/opencode");
 const pi = require("../executors/pi");
+const antigravity = require("../executors/antigravity");
 const bundledModels = require("../../references/executor-models.json");
 
 const ADAPTER_PHASES = Object.freeze({
@@ -608,6 +609,146 @@ const DESCRIPTORS = Object.freeze({
     },
     reviewer: {
       primaryReviewScript: "invoke-reviewer-pi.js",
+      advisoryReviewScript: null,
+    },
+  }),
+  antigravity: buildDescriptor({
+    name: "antigravity",
+    displayName: "Google Antigravity CLI",
+    executor: antigravity,
+    phases: {
+      [ADAPTER_PHASES.DISPATCH]: {
+        supported: true,
+        trust: "executor",
+      },
+      [ADAPTER_PHASES.PRIMARY_REVIEW]: {
+        supported: true,
+        trust: "trusted",
+      },
+      [ADAPTER_PHASES.ADVISORY_REVIEW]: {
+        supported: false,
+        trust: "unsupported",
+      },
+    },
+    capabilities: {
+      sandbox: {
+        dispatch: {
+          modes: ["workspace-write"],
+          enforced: true,
+        },
+        primaryReview: {
+          mode: "read-only",
+          enforced: false,
+          guard: "worktree-status",
+        },
+        advisoryReview: null,
+      },
+      network: {
+        dispatch: {
+          configurable: false,
+          enabledMode: "ambient",
+        },
+        primaryReview: {
+          configurable: false,
+          default: "disabled",
+        },
+        advisoryReview: null,
+      },
+      readOnly: {
+        dispatch: false,
+        primaryReview: true,
+        advisoryReview: false,
+      },
+      policy: {
+        dispatch: {
+          sandbox: {
+            "workspace-write": {
+              enforcement_level: "native",
+              mechanism: "agy-sandbox-flag",
+              flags: ["--sandbox", "--add-dir <git-common-dir>"],
+              warnings: ["Antigravity dispatch uses agy CLI sandboxing; relay records the exact CLI version from agy --version at dispatch time."],
+            },
+          },
+          network: {
+            disabled: {
+              enforcement_level: "informational",
+              mechanism: "ambient-network",
+              warnings: ["Antigravity dispatch does not expose relay network gating."],
+            },
+            enabled: {
+              enforcement_level: "informational",
+              mechanism: "ambient-network",
+              warnings: ["Antigravity dispatch does not expose relay network gating."],
+            },
+          },
+          read_only: {
+            true: {
+              enforcement_level: "unsupported",
+              mechanism: null,
+              fail_closed_reason: "antigravity dispatch does not expose a relay read-only execution mode",
+            },
+            false: {
+              enforcement_level: "unsupported",
+              mechanism: "write-capable-dispatch",
+            },
+          },
+        },
+        primary_review: {
+          sandbox: {
+            "read-only": {
+              enforcement_level: "native",
+              mechanism: "agy-sandbox-flag",
+              flags: ["--sandbox"],
+              warnings: ["Antigravity reviewer sandboxing is not treated as read-only proof; relay still checks dirty worktree status after invocation."],
+            },
+          },
+          network: {
+            disabled: {
+              enforcement_level: "informational",
+              mechanism: "ambient-network",
+              warnings: ["Antigravity reviewer does not expose relay network gating."],
+            },
+          },
+          read_only: {
+            true: {
+              enforcement_level: "prompt-only",
+              mechanism: "prompt-instruction-with-worktree-status-guard",
+              flags: ["--sandbox", "prompt:do-not-modify-files", "git-status-before-after"],
+              warnings: ["Antigravity reviewer read-only intent relies on prompt instructions plus review-runner dirty-worktree detection."],
+            },
+          },
+        },
+        advisory_review: null,
+      },
+      transport: {
+        dispatch: "agy-cli",
+        primaryReview: "agy-cli",
+        advisoryReview: null,
+      },
+      structuredOutput: {
+        dispatch: "stdout-copied-result-file",
+        primaryReview: "json-text",
+        advisoryReview: null,
+      },
+      appRegistration: {
+        supported: false,
+        transport: null,
+      },
+      modelDefaults: {
+        provider: antigravity.providerDefault,
+        dispatch: {
+          configKey: "antigravity",
+          defaultModel: bundledDefaultModel("antigravity"),
+        },
+        primaryReview: {
+          configKey: "antigravity",
+          defaultModel: bundledDefaultModel("antigravity"),
+        },
+        advisoryReview: null,
+      },
+    },
+    reviewer: {
+      primaryReviewScript: "invoke-reviewer-antigravity.js",
       advisoryReviewScript: null,
     },
   }),

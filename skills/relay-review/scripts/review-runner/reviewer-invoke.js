@@ -140,7 +140,7 @@ function buildPrimaryReviewerPolicy(reviewerName) {
     return null;
   }
   const networkAccess = reviewerName === "claude" ? "ambient" : "disabled";
-  return assertPolicyRepresentable(buildAgentPolicyAudit({
+  const audit = assertPolicyRepresentable(buildAgentPolicyAudit({
     descriptor,
     phase: ADAPTER_PHASES.PRIMARY_REVIEW,
     requested: {
@@ -149,6 +149,27 @@ function buildPrimaryReviewerPolicy(reviewerName) {
       readOnly: true,
     },
   }));
+  if (reviewerName !== "antigravity") {
+    return audit;
+  }
+
+  const cliBinary = process.env.RELAY_ANTIGRAVITY_BIN || descriptor.executor?.cliBinary || "agy";
+  let version = null;
+  let error = null;
+  try {
+    version = execFileSync(cliBinary, ["--version"], { encoding: "utf-8", stdio: "pipe" }).trim();
+  } catch (caught) {
+    error = String(caught?.message || caught).split("\n")[0];
+  }
+  return {
+    ...audit,
+    cli: {
+      binary: cliBinary,
+      version,
+      version_probe: "agy --version",
+      error,
+    },
+  };
 }
 
 function isAdapterManagedReviewerScript(reviewerName, reviewerScript) {

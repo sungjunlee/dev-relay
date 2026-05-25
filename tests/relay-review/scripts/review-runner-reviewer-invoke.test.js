@@ -159,6 +159,38 @@ test("reviewer-invoke/buildPrimaryReviewerPolicy records Pi tool allowlist metad
   assert.deepEqual(policy.read_only.flags, ["--tools read,grep,find,ls"]);
 });
 
+test("reviewer-invoke/buildPrimaryReviewerPolicy records Antigravity CLI version metadata", (t) => {
+  const original = process.env.RELAY_ANTIGRAVITY_BIN;
+  t.after(() => {
+    if (original === undefined) {
+      delete process.env.RELAY_ANTIGRAVITY_BIN;
+      return;
+    }
+    process.env.RELAY_ANTIGRAVITY_BIN = original;
+  });
+
+  const fakeDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-policy-antigravity-"));
+  const fakeAgy = writeExecutable(fakeDir, "fake-agy.js", `#!/usr/bin/env node
+if (process.argv[2] === "--version") {
+  process.stdout.write("agy 1.0.2\\n");
+  process.exit(0);
+}
+process.exit(2);
+`);
+  process.env.RELAY_ANTIGRAVITY_BIN = fakeAgy;
+
+  const policy = buildPrimaryReviewerPolicy("antigravity");
+  assert.equal(policy.adapter, "antigravity");
+  assert.equal(policy.phase, ADAPTER_PHASES.PRIMARY_REVIEW);
+  assert.equal(policy.safe, true);
+  assert.equal(policy.cli.binary, fakeAgy);
+  assert.equal(policy.cli.version, "agy 1.0.2");
+  assert.equal(policy.cli.version_probe, "agy --version");
+  assert.equal(policy.cli.error, null);
+  assert.equal(policy.sandbox.enforcement_level, "native");
+  assert.equal(policy.read_only.enforcement_level, "prompt-only");
+});
+
 test("reviewer-invoke/resolveReviewerScript preserves manual reviewer-script overrides", () => {
   const customScript = path.join(os.tmpdir(), "custom-reviewer.js");
   assert.equal(resolveReviewerScript("opencode", customScript), customScript);

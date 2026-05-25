@@ -148,6 +148,9 @@ const COMMAND_FLAGS = {
   "invoke-reviewer-codex": [
     "--repo", "--prompt-file", "--model", "--json", "--help",
   ],
+  "invoke-reviewer-antigravity": [
+    "--repo", "--prompt-file", "--model", "--json", "--help",
+  ],
   "invoke-reviewer-opencode": [
     "--repo", "--prompt-file", "--model", "--json", "--help",
   ],
