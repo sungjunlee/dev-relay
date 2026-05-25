@@ -31,6 +31,7 @@ after(() => {
 });
 
 test("registry exposes codex, claude, and opencode", () => {
+  assert.deepEqual(listExecutors(), ["codex", "claude", "opencode"]);
   assert.deepEqual(listExecutors().sort(), ["claude", "codex", "opencode"]);
   assert.throws(() => getExecutor("nonexistent"), /unknown executor/);
 });
