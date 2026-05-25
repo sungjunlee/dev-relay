@@ -23,6 +23,8 @@ const cliArgs = bindCliArgs(args, {
   commandName: "invoke-reviewer-pi",
   reservedFlags: KNOWN_FLAGS,
 });
+const REVIEW_TIMEOUT_ENV = "RELAY_PI_REVIEW_TIMEOUT";
+const DEFAULT_REVIEW_TIMEOUT = "1800s";
 
 if (!args.length || cliArgs.hasFlag(["--help", "-h"])) {
   console.log("Usage: invoke-reviewer-pi.js --repo <path> --prompt-file <path> [--model <name>] [--json]");
@@ -34,11 +36,38 @@ if (!args.length || cliArgs.hasFlag(["--help", "-h"])) {
   process.exit(cliArgs.hasFlag(["--help", "-h"]) ? 0 : 1);
 }
 
+function parseReviewTimeoutMs(value) {
+  const raw = String(value || "").trim();
+  const match = raw.match(/^([1-9]\d*)(ms|s|m|h)$/);
+  if (!match) {
+    throw new Error(
+      `${REVIEW_TIMEOUT_ENV} must be a positive duration like 120s, got ${JSON.stringify(value)}`
+    );
+  }
+
+  const amount = Number(match[1]);
+  const unit = match[2];
+  const multipliers = { ms: 1, s: 1000, m: 60 * 1000, h: 60 * 60 * 1000 };
+  const timeoutMs = amount * multipliers[unit];
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) {
+    throw new Error(
+      `${REVIEW_TIMEOUT_ENV} must resolve to a safe positive millisecond timeout, got ${JSON.stringify(value)}`
+    );
+  }
+  return timeoutMs;
+}
+
+function isExecTimeout(error) {
+  return error?.code === "ETIMEDOUT" || (error?.signal === "SIGKILL" && error?.killed);
+}
+
 function main() {
   const repoPath = path.resolve(cliArgs.getArg("--repo") || ".");
   const promptFile = cliArgs.getArg("--prompt-file");
   const model = cliArgs.getArg("--model");
   const piBin = process.env.RELAY_PI_BIN || "pi";
+  const reviewTimeout = String(process.env[REVIEW_TIMEOUT_ENV] || DEFAULT_REVIEW_TIMEOUT).trim();
+  const parentTimeoutMs = parseReviewTimeoutMs(reviewTimeout);
 
   if (!promptFile) {
     throw new Error("--prompt-file is required");
@@ -72,9 +101,17 @@ function main() {
       cwd: repoPath,
       encoding: "utf-8",
       stdio: "pipe",
+      timeout: parentTimeoutMs,
+      killSignal: "SIGKILL",
       maxBuffer: 10 * 1024 * 1024,
     }).trim();
   } catch (error) {
+    if (isExecTimeout(error)) {
+      throw new Error(
+        `Pi reviewer primary_review timed out after ${reviewTimeout} (${REVIEW_TIMEOUT_ENV}). ` +
+        "The pi --print invocation did not return before the parent-process timeout; retry with a larger timeout or split the review scope."
+      );
+    }
     const recovered = recoverExecStdout(error);
     if (!recovered) {
       throw new Error(`Pi reviewer failed: ${summarizeFailure(error)}`);
