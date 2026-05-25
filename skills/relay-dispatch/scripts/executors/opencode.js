@@ -2,6 +2,10 @@ const { execFileSync, spawnSync } = require("child_process");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
+const {
+  copyStdoutToResultFile,
+  summarizeSpawnResult,
+} = require("../agent-adapters/transport");
 
 const PROBE_PROMPT =
   "List ALL your available tools, MCP servers, and installed skills. " +
@@ -40,10 +44,7 @@ function buildExecCommand({ wtPath, prompt, model }) {
 }
 
 function finalizeResult({ stdoutLog, resultFile }) {
-  // opencode writes its result to stdout; copy to resultFile so downstream collection works.
-  if (fs.existsSync(stdoutLog)) {
-    try { fs.copyFileSync(stdoutLog, resultFile); } catch {}
-  }
+  copyStdoutToResultFile({ adapter: "opencode", phase: "dispatch", stdoutLog, resultFile });
 }
 
 function register() {
@@ -172,12 +173,13 @@ function probe({ timeout }) {
       stdio: "pipe",
       timeout: timeout * 1000,
     });
-    if (result.error) {
-      probeError = result.error.code === "ETIMEDOUT"
-        ? `probe timed out after ${timeout}s`
-        : result.error.message;
-    } else if (result.status !== 0) {
-      probeError = `executor exited with code ${result.status}`;
+    const summary = summarizeSpawnResult(result, {
+      adapter: "opencode",
+      phase: "dispatch_probe",
+      timeoutSeconds: timeout,
+    });
+    if (summary) {
+      probeError = summary;
     } else {
       probeOutput = (result.stdout || "").trim() || null;
     }

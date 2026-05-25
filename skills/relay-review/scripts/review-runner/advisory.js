@@ -374,7 +374,11 @@ function executeAdvisoryRequest(request) {
       status = "failed";
       failureReason = outcome.error ? outcome.error.message : `advisory reviewer exited with code ${outcome.code}`;
     } else {
-      const parsed = parseAdvisoryReview(stdout, { profile: request.profile });
+      const parsed = parseAdvisoryReview(stdout, {
+        adapter: request.reviewerName,
+        phase: "advisory_review",
+        profile: request.profile,
+      });
       artifactPath = path.join(request.runDir, `review-round-${request.round}-advisory-${request.reviewerName}.json`);
       writeText(artifactPath, `${JSON.stringify(parsed, null, 2)}\n`);
       counts = {

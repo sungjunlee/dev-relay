@@ -3,6 +3,7 @@ const fs = require("fs");
 const path = require("path");
 const { execGit } = require("../exec");
 const { registerCodexApp } = require("../codex-app-register");
+const { summarizeSpawnResult } = require("../agent-adapters/transport");
 
 const PROBE_PROMPT =
   "List ALL your available tools, MCP servers, and installed skills. " +
@@ -78,11 +79,12 @@ function probe({ timeout }) {
     stdio: "pipe",
     timeout: timeout * 1000,
   });
-  if (result.error) {
-    const msg = result.error.code === "ETIMEDOUT" ? `probe timed out after ${timeout}s` : result.error.message;
-    return { error: msg, raw: null };
-  }
-  if (result.status !== 0) return { error: `executor exited with code ${result.status}`, raw: null };
+  const probeError = summarizeSpawnResult(result, {
+    adapter: "codex",
+    phase: "dispatch_probe",
+    timeoutSeconds: timeout,
+  });
+  if (probeError) return { error: probeError, raw: null };
   return { error: null, raw: (result.stdout || "").trim() || null };
 }
 
