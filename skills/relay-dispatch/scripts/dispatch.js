@@ -123,6 +123,14 @@ const {
 const { STATES, updateManifestState } = require("./manifest/lifecycle");
 const { resolveManifestRecord } = require("./relay-resolver");
 const { appendRunEvent, EVENTS } = require("./relay-events");
+const {
+  ADAPTER_PHASES,
+  getAgentAdapterDescriptor,
+} = require("./agent-adapters");
+const {
+  assertPolicyRepresentable,
+  buildAgentPolicyAudit,
+} = require("./agent-adapters/policy");
 const { execGit } = require("./exec");
 const { resolveReasoningEffort } = require("./rubric-size");
 const {
@@ -202,8 +210,10 @@ const PROMPT = readArg(args, ["--prompt", "-p"], undefined, CLI_ARG_OPTIONS);
 const PROMPT_FILE = readArg(args, "--prompt-file", undefined, CLI_ARG_OPTIONS);
 const EXECUTOR = readArg(args, ["--executor", "-e"], "codex", CLI_ARG_OPTIONS);
 let adapter;
+let adapterDescriptor;
 try {
   adapter = getExecutor(EXECUTOR);
+  adapterDescriptor = getAgentAdapterDescriptor(EXECUTOR);
 } catch (error) {
   console.error(`Error: ${error.message}`);
   process.exit(1);
@@ -246,6 +256,25 @@ if (!modeValidation.ok) {
   process.exit(1);
 }
 for (const warn of (modeValidation.warnings || [])) {
+  console.error(`Warning: ${warn}`);
+}
+
+let executorPolicy;
+try {
+  executorPolicy = assertPolicyRepresentable(buildAgentPolicyAudit({
+    descriptor: adapterDescriptor,
+    phase: ADAPTER_PHASES.DISPATCH,
+    requested: {
+      sandbox: SANDBOX,
+      networkAccess: NETWORK_ACCESS,
+      readOnly: SANDBOX === "read-only",
+    },
+  }));
+} catch (error) {
+  console.error(`Error: ${error.message}`);
+  process.exit(1);
+}
+for (const warn of executorPolicy.warnings || []) {
   console.error(`Warning: ${warn}`);
 }
 
@@ -1167,6 +1196,7 @@ async function main() {
       policy: {
         ...(manifest.policy || {}),
         executor_network: executorNetworkPolicy,
+        executor_policy: executorPolicy,
       },
       routing: routingDecision,
     };
@@ -1178,6 +1208,7 @@ async function main() {
       policy: {
         ...(manifest.policy || {}),
         executor_network: executorNetworkPolicy,
+        executor_policy: executorPolicy,
       },
       routing: routingDecision,
     };
@@ -1322,6 +1353,7 @@ async function main() {
     model: effectiveDispatchModel,
     provider,
     executor_network: executorNetworkPolicy,
+    executor_policy: executorPolicy,
   });
 
   // Redirect stdout/stderr to files. Using spawn with detached: true gives us
@@ -1523,6 +1555,7 @@ async function main() {
       ? `${RESUME_MODE ? "same_run_resume" : "new_dispatch"}:${error || "dispatch_failed"}`
       : `${RESUME_MODE ? "same_run_resume" : "new_dispatch"}:${status}`,
     executor_network: executorNetworkPolicy,
+    executor_policy: executorPolicy,
     failure_class: networkFailure,
     execution_evidence_path: executionEvidencePath,
     execution_evidence_hash: executionEvidencePath ? hashFileSha256(executionEvidencePath) : null,
@@ -1606,6 +1639,7 @@ async function main() {
     commitMode,
     executor: EXECUTOR,
     executorNetwork: executorNetworkPolicy,
+    executorPolicy,
     policyDecision,
     routingDecision,
     routedSidecar,

@@ -90,6 +90,67 @@ const DESCRIPTORS = Object.freeze({
         primaryReview: true,
         advisoryReview: false,
       },
+      policy: {
+        dispatch: {
+          sandbox: {
+            "workspace-write": {
+              enforcement_level: "permission-mode",
+              mechanism: "claude-dangerously-skip-permissions",
+              flags: ["--dangerously-skip-permissions"],
+              warnings: ["Claude dispatch does not provide OS-level sandbox containment."],
+            },
+          },
+          network: {
+            ambient: {
+              enforcement_level: "informational",
+              mechanism: "ambient-network",
+              warnings: ["Claude dispatch does not gate network access at the executor level."],
+            },
+            disabled: {
+              enforcement_level: "informational",
+              mechanism: "ambient-network",
+              warnings: ["Claude dispatch does not gate network access at the executor level."],
+            },
+            enabled: {
+              enforcement_level: "unsupported",
+              mechanism: null,
+              fail_closed_reason: "Claude dispatch cannot represent requested network-access=enabled safely.",
+            },
+          },
+          read_only: {
+            false: {
+              enforcement_level: "unsupported",
+              mechanism: "write-capable-dispatch",
+            },
+          },
+        },
+        primary_review: {
+          sandbox: {
+            "read-only": {
+              enforcement_level: "tool-allowlist",
+              mechanism: "claude-allowed-tools",
+              flags: ["--allowedTools=Read"],
+              warnings: ["Claude reviewer read-only is a tool allowlist, not OS-level containment."],
+            },
+          },
+          network: {
+            ambient: {
+              enforcement_level: "informational",
+              mechanism: "ambient-network",
+              warnings: ["Claude reviewer does not gate network access at the CLI level."],
+            },
+          },
+          read_only: {
+            true: {
+              enforcement_level: "tool-allowlist",
+              mechanism: "claude-allowed-tools",
+              flags: ["--allowedTools=Read"],
+              warnings: ["Claude reviewer read-only is a tool allowlist, not OS-level containment."],
+            },
+          },
+        },
+        advisory_review: null,
+      },
       transport: {
         dispatch: "claude-cli",
         primaryReview: "claude-cli",
@@ -167,6 +228,67 @@ const DESCRIPTORS = Object.freeze({
         dispatch: false,
         primaryReview: true,
         advisoryReview: false,
+      },
+      policy: {
+        dispatch: {
+          sandbox: {
+            "read-only": {
+              enforcement_level: "native",
+              mechanism: "codex-cli-sandbox",
+              flags: ["--sandbox read-only"],
+            },
+            "workspace-write": {
+              enforcement_level: "native",
+              mechanism: "codex-cli-sandbox",
+              flags: ["--sandbox workspace-write"],
+            },
+          },
+          network: {
+            disabled: {
+              enforcement_level: "native",
+              mechanism: "codex-default-network-disabled",
+            },
+            enabled: {
+              enforcement_level: "native",
+              mechanism: "codex-workspace-network-config",
+              flags: ["-c sandbox_workspace_write.network_access=true"],
+            },
+          },
+          read_only: {
+            true: {
+              enforcement_level: "native",
+              mechanism: "codex-cli-sandbox",
+              flags: ["--sandbox read-only"],
+            },
+            false: {
+              enforcement_level: "unsupported",
+              mechanism: "write-capable-dispatch",
+            },
+          },
+        },
+        primary_review: {
+          sandbox: {
+            "read-only": {
+              enforcement_level: "native",
+              mechanism: "codex-cli-sandbox",
+              flags: ["--sandbox read-only"],
+            },
+          },
+          network: {
+            disabled: {
+              enforcement_level: "native",
+              mechanism: "codex-default-network-disabled",
+            },
+          },
+          read_only: {
+            true: {
+              enforcement_level: "native",
+              mechanism: "codex-cli-sandbox",
+              flags: ["--sandbox read-only"],
+            },
+          },
+        },
+        advisory_review: null,
       },
       transport: {
         dispatch: "codex-cli",
@@ -246,6 +368,70 @@ const DESCRIPTORS = Object.freeze({
         dispatch: false,
         primaryReview: false,
         advisoryReview: true,
+      },
+      policy: {
+        dispatch: {
+          sandbox: {
+            "workspace-write": {
+              enforcement_level: "informational",
+              mechanism: "opencode-cli",
+              warnings: ["OpenCode does not provide native sandbox containment."],
+            },
+            "read-only": {
+              enforcement_level: "informational",
+              mechanism: "opencode-cli",
+              warnings: ["OpenCode does not provide native sandbox containment; read-only is not enforced for dispatch."],
+            },
+          },
+          network: {
+            disabled: {
+              enforcement_level: "informational",
+              mechanism: "ambient-network",
+              warnings: ["OpenCode does not gate network access at the executor level."],
+            },
+            enabled: {
+              enforcement_level: "informational",
+              mechanism: "ambient-network",
+              warnings: ["OpenCode does not gate network access at the executor level."],
+            },
+          },
+          read_only: {
+            true: {
+              enforcement_level: "informational",
+              mechanism: "opencode-cli",
+              warnings: ["OpenCode dispatch read-only intent is informational only and does not prevent writes."],
+            },
+            false: {
+              enforcement_level: "unsupported",
+              mechanism: "write-capable-dispatch",
+            },
+          },
+        },
+        primary_review: null,
+        advisory_review: {
+          sandbox: {
+            "read-only": {
+              enforcement_level: "informational",
+              mechanism: "detached-worktree-status-guard",
+              warnings: ["OpenCode advisory review runs in a detached worktree with post-run status checks; this is not OS-level containment."],
+            },
+          },
+          network: {
+            ambient: {
+              enforcement_level: "informational",
+              mechanism: "ambient-network",
+              warnings: ["OpenCode advisory review does not gate network access at the CLI level."],
+            },
+          },
+          read_only: {
+            true: {
+              enforcement_level: "prompt-only",
+              mechanism: "prompt-instruction-with-worktree-status-guard",
+              flags: ["prompt:do-not-modify-files", "git-status-before-after"],
+              warnings: ["OpenCode advisory read-only instructions do not prevent writes; relay records post-run worktree mutation as a policy violation."],
+            },
+          },
+        },
       },
       transport: {
         dispatch: "opencode-cli",

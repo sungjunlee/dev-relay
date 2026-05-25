@@ -323,6 +323,8 @@ test("reviewer-invoke precedence R3 regression: manifest hint supplies the effec
   const reviewInvokeEvent = JSON.parse(eventLines.at(-1));
   assert.equal(reviewInvokeEvent.event, "review_invoke");
   assert.equal(reviewInvokeEvent.model, "haiku");
+  assert.equal(reviewInvokeEvent.reviewer_policy.read_only.enforcement_level, "native");
+  assert.deepEqual(reviewInvokeEvent.reviewer_policy.read_only.flags, ["--sandbox read-only"]);
 });
 
 test("reviewer-invoke/loadReviewText denies disallowed reviewer model before adapter invocation", (t) => {
