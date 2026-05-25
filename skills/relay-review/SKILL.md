@@ -9,7 +9,7 @@ metadata:
   keywords: "리뷰, 검토, review, gate, fresh context"
 ---
 ## Inputs
-- Env: optional `RELAY_SKILL_ROOT` defaults to `skills`; examples use `PR_NUM`, `BRANCH`, `ISSUE_NUM`, and `RUN_ID`; `ANTHROPIC_API_KEY` is required only for `--reviewer claude`.
+- Env: optional `RELAY_SKILL_ROOT` defaults to `skills`; examples use `PR_NUM`, `BRANCH`, `ISSUE_NUM`, and `RUN_ID`; `ANTHROPIC_API_KEY` is required only for `--reviewer claude`; `RELAY_PI_BIN` can override the Pi binary path.
 - Files: PR diff (`/tmp/pr-diff.txt`), Done Criteria anchor, Score Log/rubric artifacts, run manifest, and optional `/tmp/review-verdict.json`.
 - Sibling scripts: `${RELAY_SKILL_ROOT:-skills}/relay-review/scripts/resolve-issue-number.sh`, `${RELAY_SKILL_ROOT:-skills}/relay-review/scripts/review-runner.js`.
 
@@ -34,7 +34,7 @@ Reviews MUST run in a fresh context — no prior planning, dispatch, or conversa
 
 - Claude Code: `context: fork` frontmatter triggers isolation.
 - Codex adapter: `invoke-reviewer-codex.js` passes `--ephemeral --sandbox read-only`.
-- Claude adapter: `invoke-reviewer-claude.js` passes `--bare --no-session-persistence`.
+- Claude adapter: `invoke-reviewer-claude.js` passes `--bare --no-session-persistence`; Pi adapter passes `--no-session --tools read,grep,find,ls`.
 - Manual inline review: start a new session; do not continue from dispatch.
 - Other fallback: prefix the prompt with "You are reviewing code you did NOT write. You have no context about why it was written this way."
 
@@ -62,9 +62,9 @@ node "${RELAY_SKILL_ROOT:-skills}/relay-review/scripts/review-runner.js" --repo 
 
 Run the runner in the foreground. Do NOT background it, detach it, or return with "I'll wait for the background runner." The relay-review result is the runner's verdict; do not return until the runner exits and the new `review-round-N-verdict.json` exists.
 
-Supported built-in adapters: `--reviewer codex`, `--reviewer claude`.
+Supported built-in adapters: `--reviewer codex`, `--reviewer claude`, `--reviewer pi`.
 
-Notes: `codex` uses a read-only structured-output adapter and must return a full two-phase verdict. `claude --bare` uses a separate token from interactive Claude OAuth; for `--reviewer claude`, set `ANTHROPIC_API_KEY` or run `claude login --api-key`.
+Notes: `codex` uses a read-only structured-output adapter and must return a full two-phase verdict. `pi` uses a read/grep/find/ls tool allowlist and the runner still checks dirty worktree status. `claude --bare` uses a separate token from interactive Claude OAuth; for `--reviewer claude`, set `ANTHROPIC_API_KEY` or run `claude login --api-key`.
 Model precedence is `--reviewer-model` -> `manifest.model_hints.review` -> reviewer default. Runner invocation records a `review_invoke` event with the effective `model` value (or `null`).
 
 Optional advisory path: add an opencode blind-spot lane alongside the primary reviewer:

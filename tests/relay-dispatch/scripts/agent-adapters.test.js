@@ -10,8 +10,8 @@ const {
 } = require("../../../skills/relay-dispatch/scripts/agent-adapters");
 
 test("agent adapter registry exposes the current built-in adapters", () => {
-  assert.deepEqual(listAgentAdapterNames(), ["claude", "codex", "opencode"]);
-  assert.deepEqual(listAgentAdapters().map((descriptor) => descriptor.name), ["claude", "codex", "opencode"]);
+  assert.deepEqual(listAgentAdapterNames(), ["claude", "codex", "opencode", "pi"]);
+  assert.deepEqual(listAgentAdapters().map((descriptor) => descriptor.name), ["claude", "codex", "opencode", "pi"]);
 });
 
 test("agent adapter registry reports dispatch, primary review, and advisory review independently", () => {
@@ -26,6 +26,10 @@ test("agent adapter registry reports dispatch, primary review, and advisory revi
   assert.equal(supportsAgentAdapterPhase("opencode", ADAPTER_PHASES.DISPATCH), true);
   assert.equal(supportsAgentAdapterPhase("opencode", ADAPTER_PHASES.PRIMARY_REVIEW), false);
   assert.equal(supportsAgentAdapterPhase("opencode", ADAPTER_PHASES.ADVISORY_REVIEW), true);
+
+  assert.equal(supportsAgentAdapterPhase("pi", ADAPTER_PHASES.DISPATCH), true);
+  assert.equal(supportsAgentAdapterPhase("pi", ADAPTER_PHASES.PRIMARY_REVIEW), true);
+  assert.equal(supportsAgentAdapterPhase("pi", ADAPTER_PHASES.ADVISORY_REVIEW), false);
 });
 
 test("agent adapter descriptors expose structured capabilities and the executor contract", () => {
@@ -61,16 +65,28 @@ test("agent adapter descriptors expose structured capabilities and the executor 
   assert.equal(opencode.capabilities.readOnly.advisoryReview, true);
   assert.equal(opencode.capabilities.transport.advisoryReview, "opencode-cli");
   assert.equal(opencode.capabilities.structuredOutput.advisoryReview, "json-text");
+
+  const pi = getAgentAdapterDescriptor("pi");
+  assert.equal(pi.executor.cliBinary, "pi");
+  assert.equal(pi.capabilities.appRegistration.supported, false);
+  assert.equal(pi.capabilities.modelDefaults.provider, "pi");
+  assert.deepEqual(pi.capabilities.sandbox.dispatch.modes, ["workspace-write"]);
+  assert.equal(pi.capabilities.sandbox.dispatch.enforced, false);
+  assert.equal(pi.capabilities.network.dispatch.configurable, false);
+  assert.equal(pi.capabilities.readOnly.primaryReview, true);
+  assert.equal(pi.capabilities.transport.primaryReview, "pi-cli");
+  assert.equal(pi.capabilities.structuredOutput.primaryReview, "json-text");
+  assert.deepEqual(pi.capabilities.policy.primary_review.read_only.true.flags, ["--tools read,grep,find,ls"]);
 });
 
 test("agent adapter registry fails closed for unknown adapters and phases", () => {
   assert.throws(
-    () => getAgentAdapterDescriptor("pi"),
-    /unknown agent adapter 'pi'\. Supported: claude, codex, opencode/
+    () => getAgentAdapterDescriptor("antigravity"),
+    /unknown agent adapter 'antigravity'\. Supported: claude, codex, opencode, pi/
   );
   assert.throws(
-    () => supportsAgentAdapterPhase("pi", ADAPTER_PHASES.DISPATCH),
-    /unknown agent adapter 'pi'\. Supported: claude, codex, opencode/
+    () => supportsAgentAdapterPhase("antigravity", ADAPTER_PHASES.DISPATCH),
+    /unknown agent adapter 'antigravity'\. Supported: claude, codex, opencode, pi/
   );
   assert.throws(
     () => supportsAgentAdapterPhase("codex", "sidecar"),

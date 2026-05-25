@@ -244,6 +244,27 @@ process.stdout.write("ok\\n");
   return oc;
 }
 
+function writeArgCapturePi(binDir, capturePath) {
+  ensureDefaultFakeGh(binDir);
+  const piPath = path.join(binDir, "pi");
+  fs.writeFileSync(piPath, `#!/usr/bin/env node
+const fs = require("fs");
+const { execFileSync } = require("child_process");
+const args = process.argv.slice(2);
+if (args[0] === "--version") { process.stdout.write("pi 0.72.1\\n"); process.exit(0); }
+if (!args.includes("--print")) { process.stderr.write("unsupported fake pi invocation"); process.exit(1); }
+fs.writeFileSync(${JSON.stringify(capturePath)}, JSON.stringify(args), "utf-8");
+const cwd = process.cwd();
+const fileName = "captured-pi.txt";
+fs.writeFileSync(cwd + "/" + fileName, fileName + "\\n", "utf-8");
+execFileSync("git", ["-C", cwd, "add", fileName], { stdio: "pipe" });
+execFileSync("git", ["-C", cwd, "commit", "-m", "fake " + fileName], { stdio: "pipe" });
+process.stdout.write("pi completed\\n");
+`, "utf-8");
+  fs.chmodSync(piPath, 0o755);
+  return piPath;
+}
+
 function writeNoOpCodex(binDir) {
   ensureDefaultFakeGh(binDir);
   const codexPath = path.join(binDir, "codex");
@@ -2499,6 +2520,45 @@ test("dispatch with --executor claude creates worktree and collects result", () 
   assert.ok(fs.existsSync(result.resultFile));
   const resultText = fs.readFileSync(result.resultFile, "utf-8");
   assert.match(resultText, /ok/);
+});
+
+test("dispatch with --executor pi invokes Pi and copies stdout into the result file", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  writeRelayPolicy(relayHome, {
+    profile: "allow-pi-dispatch",
+    allowed_model_routes: [{ route: "openai/*", phases: ["dispatch"], executors: ["pi"] }],
+  });
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-pi-bin-"));
+  const capturePath = path.join(os.tmpdir(), `relay-dispatch-argv-${Date.now()}-pi.json`);
+  writeArgCapturePi(binDir, capturePath);
+  const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}`, RELAY_HOME: relayHome };
+  const taskPrompt = "test pi task";
+
+  const result = JSON.parse(runDispatch(repoRoot, [
+    "-b", "pi-test",
+    "-e", "pi",
+    "--model", "openai/gpt-5",
+    "--prompt", taskPrompt,
+    "--json",
+  ], env));
+
+  assert.equal(result.status, "completed");
+  assert.equal(result.executor, "pi");
+  assert.equal(result.runState, STATES.REVIEW_PENDING);
+  assert.ok(result.commits);
+  assert.equal(fs.readFileSync(result.resultFile, "utf-8"), "pi completed\n");
+  assert.deepEqual(JSON.parse(fs.readFileSync(capturePath, "utf-8")), [
+    "--no-session",
+    "--model", "openai/gpt-5",
+    "--thinking", "high",
+    "--print", buildDispatchExecPrompt(taskPrompt),
+  ]);
+
+  const manifest = readManifest(result.manifestPath).data;
+  assert.equal(manifest.dispatch.last_executor, "pi");
+  assert.equal(manifest.dispatch.last_model, "openai/gpt-5");
+  assert.equal(manifest.dispatch.last_provider, "openai");
 });
 
 test("dispatch artifacts are persisted in the run directory", () => {

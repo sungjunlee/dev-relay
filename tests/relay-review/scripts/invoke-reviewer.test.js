@@ -8,6 +8,7 @@ const path = require("path");
 const CODEX_SCRIPT = path.join(__dirname, "..", "..", "..", "skills", "relay-review", "scripts", "invoke-reviewer-codex.js");
 const CLAUDE_SCRIPT = path.join(__dirname, "..", "..", "..", "skills", "relay-review", "scripts", "invoke-reviewer-claude.js");
 const OPENCODE_SCRIPT = path.join(__dirname, "..", "..", "..", "skills", "relay-review", "scripts", "invoke-reviewer-opencode.js");
+const PI_SCRIPT = path.join(__dirname, "..", "..", "..", "skills", "relay-review", "scripts", "invoke-reviewer-pi.js");
 
 function setupRepo() {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-adapter-"));
@@ -322,4 +323,77 @@ process.stdout.write(JSON.stringify({
   assert.match(loggedArgs, /^run\n-m\nopencode-go\/deepseek-v4-pro\n/);
   assert.match(loggedArgs, /NON-INTERACTIVE ADVISORY REVIEW/);
   assert.match(loggedArgs, /Return a passing review\./);
+});
+
+test("pi adapter forwards read-only tools, model, and preserves primary review prompt", () => {
+  const { repoRoot, promptPath } = setupRepo();
+  const fakeDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-fake-pi-"));
+  const logPath = path.join(fakeDir, "pi-args.log");
+  const fakePi = writeExecutable(fakeDir, "fake-pi.js", `#!/usr/bin/env node
+const fs = require("fs");
+const args = process.argv.slice(2);
+fs.writeFileSync(${JSON.stringify(logPath)}, args.join("\\n") + "\\n", "utf-8");
+process.stdout.write(JSON.stringify({
+  verdict: "pass",
+  summary: "Looks good.",
+  contract_status: "pass",
+  quality_review_status: "pass",
+  next_action: "ready_to_merge",
+  issues: [],
+  rubric_scores: [],
+  scope_drift: { creep: [], missing: [] },
+}));
+`);
+
+  const stdout = execFileSync("node", [
+    PI_SCRIPT,
+    "--repo", repoRoot,
+    "--prompt-file", promptPath,
+    "--model", "openai/gpt-5",
+    "--json",
+  ], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+    env: { ...process.env, RELAY_PI_BIN: fakePi },
+  });
+
+  const result = JSON.parse(stdout);
+  const loggedArgs = fs.readFileSync(logPath, "utf-8");
+  assert.equal(result.verdict, "pass");
+  assert.match(loggedArgs, /^--no-session\n--tools\nread,grep,find,ls\n--model\nopenai\/gpt-5\n--print\n/);
+  assert.match(loggedArgs, /NON-INTERACTIVE REVIEW/);
+  assert.match(loggedArgs, /Return a passing review\./);
+});
+
+test("pi adapter reports adapter and phase when stdout is invalid JSON", () => {
+  const { repoRoot, promptPath } = setupRepo();
+  const fakeDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-fake-pi-invalid-"));
+  const fakePi = writeExecutable(fakeDir, "fake-pi.js", `#!/usr/bin/env node
+process.stdout.write("not-json\\n");
+`);
+
+  let error;
+  try {
+    execFileSync("node", [
+      PI_SCRIPT,
+      "--repo", repoRoot,
+      "--prompt-file", promptPath,
+      "--json",
+    ], {
+      cwd: repoRoot,
+      encoding: "utf-8",
+      stdio: "pipe",
+      env: { ...process.env, RELAY_PI_BIN: fakePi },
+    });
+    assert.fail("expected invoke-reviewer-pi.js to fail");
+  } catch (caught) {
+    error = caught;
+  }
+
+  assert.ok(error);
+  assert.notEqual(error.status, 0);
+  const stderr = String(error.stderr || "");
+  assert.match(stderr, /adapter=pi phase=primary_review/);
+  assert.match(stderr, /review verdict must be valid JSON/);
 });

@@ -56,40 +56,9 @@ test("policy audit keeps OpenCode sandbox and network informational", () => {
   assert.deepEqual(audit.fail_closed_reasons, []);
 });
 
-test("policy audit supports synthetic Pi read-only tool allowlist mapping", () => {
-  const piDescriptor = {
-    name: "pi",
-    capabilities: {
-      policy: {
-        primary_review: {
-          sandbox: {
-            "read-only": {
-              enforcement_level: "tool-allowlist",
-              mechanism: "pi-tool-policy",
-              flags: ["allow:read", "deny:write"],
-            },
-          },
-          network: {
-            disabled: {
-              enforcement_level: "tool-allowlist",
-              mechanism: "pi-tool-policy",
-              flags: ["deny:network"],
-            },
-          },
-          read_only: {
-            true: {
-              enforcement_level: "tool-allowlist",
-              mechanism: "pi-tool-policy",
-              flags: ["allow:Read", "deny:Write"],
-            },
-          },
-        },
-      },
-    },
-  };
-
+test("policy audit records Pi primary review read-only tool allowlist metadata", () => {
   const audit = buildAgentPolicyAudit({
-    descriptor: piDescriptor,
+    descriptor: getAgentAdapterDescriptor("pi"),
     phase: ADAPTER_PHASES.PRIMARY_REVIEW,
     requested: {
       sandbox: "read-only",
@@ -99,8 +68,11 @@ test("policy audit supports synthetic Pi read-only tool allowlist mapping", () =
   });
 
   assert.equal(audit.safe, true);
+  assert.equal(audit.sandbox.enforcement_level, "tool-allowlist");
+  assert.equal(audit.network.enforcement_level, "tool-allowlist");
   assert.equal(audit.read_only.enforcement_level, "tool-allowlist");
-  assert.deepEqual(audit.read_only.flags, ["allow:Read", "deny:Write"]);
+  assert.deepEqual(audit.read_only.flags, ["--tools read,grep,find,ls"]);
+  assert.match(audit.warnings.join("\n"), /dirty worktree/i);
 });
 
 test("policy audit supports synthetic Antigravity native sandbox mapping", () => {

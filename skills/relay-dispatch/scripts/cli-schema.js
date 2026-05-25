@@ -151,6 +151,9 @@ const COMMAND_FLAGS = {
   "invoke-reviewer-opencode": [
     "--repo", "--prompt-file", "--model", "--json", "--help",
   ],
+  "invoke-reviewer-pi": [
+    "--repo", "--prompt-file", "--model", "--json", "--help",
+  ],
   "persist-done-criteria": [
     "--repo", "--run-id", "--text", "--file", "--json", "--help",
   ],

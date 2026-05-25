@@ -30,9 +30,9 @@ after(() => {
   if (TMP_ROOT) fs.rmSync(TMP_ROOT, { recursive: true, force: true });
 });
 
-test("registry exposes codex, claude, and opencode", () => {
-  assert.deepEqual(listExecutors(), ["codex", "claude", "opencode"]);
-  assert.deepEqual(listExecutors().sort(), ["claude", "codex", "opencode"]);
+test("registry exposes codex, claude, opencode, and pi", () => {
+  assert.deepEqual(listExecutors(), ["codex", "claude", "opencode", "pi"]);
+  assert.deepEqual(listExecutors().sort(), ["claude", "codex", "opencode", "pi"]);
   assert.throws(() => getExecutor("nonexistent"), /unknown executor/);
 });
 
@@ -42,6 +42,14 @@ test("opencode adapter exposes the same 7 fields", () => {
     assert.ok(typeof o[k] !== "undefined", `missing field: ${k}`);
   }
   assert.equal(o.cliBinary, "opencode");
+});
+
+test("pi adapter exposes the same 7 fields", () => {
+  const pi = getExecutor("pi");
+  for (const k of ["cliBinary", "defaultTimeout", "validateExecutionMode", "buildExecCommand", "finalizeResult", "register", "probe"]) {
+    assert.ok(typeof pi[k] !== "undefined", `missing field: ${k}`);
+  }
+  assert.equal(pi.cliBinary, "pi");
 });
 
 test("opencode validateExecutionMode accepts workspace-write+disabled with experimental warning", () => {
@@ -90,6 +98,48 @@ test("opencode buildExecCommand: model passthrough via -m", () => {
   assert.deepEqual(r.args, ["run", "-m", "openai/gpt-5", "P"]);
 });
 
+test("pi buildExecCommand: explicit non-interactive argv with thinking", () => {
+  const pi = getExecutor("pi");
+  const r = pi.buildExecCommand({
+    wtPath: "/tmp/wt",
+    resultFile: "/tmp/r",
+    prompt: "P",
+    model: null,
+    sandbox: "workspace-write",
+    networkAccess: "disabled",
+    reasoning: "high",
+  });
+  assert.equal(r.cmd, "pi");
+  assert.deepEqual(r.args, ["--no-session", "--thinking", "high", "--print", "P"]);
+  assert.equal(r.cwd, "/tmp/wt");
+  assert.equal(r.codexGitCommonDir, null);
+});
+
+test("pi buildExecCommand: model passthrough via --model", () => {
+  const pi = getExecutor("pi");
+  const r = pi.buildExecCommand({
+    wtPath: "/tmp/wt",
+    resultFile: "/tmp/r",
+    prompt: "P",
+    model: "openai/gpt-5",
+    sandbox: "workspace-write",
+    networkAccess: "disabled",
+    reasoning: "xhigh",
+  });
+  assert.deepEqual(r.args, ["--no-session", "--model", "openai/gpt-5", "--thinking", "high", "--print", "P"]);
+});
+
+test("pi finalizeResult copies stdout into the relay result file", () => {
+  const pi = getExecutor("pi");
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "relay-pi-finalize-"));
+  const stdoutLog = path.join(tmp, "stdout.log");
+  const resultFile = path.join(tmp, "result.txt");
+  fs.writeFileSync(stdoutLog, "pi result\n", "utf-8");
+  const copied = pi.finalizeResult({ stdoutLog, resultFile });
+  assert.deepEqual(copied, { copied: true, status: "copied", bytes: "pi result\n".length });
+  assert.equal(fs.readFileSync(resultFile, "utf-8"), "pi result\n");
+});
+
 test("opencode register stub returns null thread id", () => {
   const o = getExecutor("opencode");
   const r = o.register({ wtPath: "/tmp/wt", repoPath: "/repo", branch: "b", title: "T" });
@@ -132,6 +182,57 @@ test("opencode probe returns {error: 'opencode CLI not found', raw: null} when b
     const result = o.probe({ timeout: 5 });
     assert.equal(result.raw, null);
     assert.match(result.error, /opencode CLI not found/);
+  } finally {
+    process.env.PATH = originalPath;
+  }
+});
+
+test("pi probe returns {error: 'pi CLI not found', raw: null} when binary missing", () => {
+  const emptyBin = path.join(TMP_ROOT, "empty-pi-bin");
+  fs.mkdirSync(emptyBin, { recursive: true });
+  const originalPath = process.env.PATH;
+  process.env.PATH = emptyBin;
+  try {
+    const pi = getExecutor("pi");
+    const result = pi.probe({ timeout: 5 });
+    assert.equal(result.raw, null);
+    assert.match(result.error, /pi CLI not found/);
+  } finally {
+    process.env.PATH = originalPath;
+  }
+});
+
+test("pi probe payload exposes version and supported flags without live API call", () => {
+  const fakeBin = path.join(TMP_ROOT, "fake-pi-bin");
+  const fakePi = path.join(fakeBin, "pi");
+  fs.mkdirSync(fakeBin);
+  fs.writeFileSync(fakePi, `#!/bin/sh
+case "$1" in
+  --version) echo "pi 0.72.1" ;;
+  --help) echo "Usage: pi --print --no-session --mode text|json|rpc --tools read,grep,find,ls --model --provider --thinking --no-context-files" ;;
+  *) exit 2 ;;
+esac
+`);
+  fs.chmodSync(fakePi, 0o755);
+
+  const originalPath = process.env.PATH;
+  process.env.PATH = `${fakeBin}${path.delimiter}${originalPath || ""}`;
+  try {
+    const pi = getExecutor("pi");
+    const result = pi.probe({ timeout: 5 });
+    assert.equal(result.error, null);
+    const parsed = JSON.parse(result.raw);
+    assert.equal(parsed.version, "pi 0.72.1");
+    assert.deepEqual(parsed.supported_flags, [
+      "--print",
+      "--no-session",
+      "--mode",
+      "--tools",
+      "--model",
+      "--provider",
+      "--thinking",
+      "--no-context-files",
+    ]);
   } finally {
     process.env.PATH = originalPath;
   }
@@ -329,4 +430,5 @@ test("validateExecutionMode: claude warns on non-workspace-write sandbox", () =>
 test("default timeouts match pre-refactor values", () => {
   assert.equal(getExecutor("codex").defaultTimeout, 2400);
   assert.equal(getExecutor("claude").defaultTimeout, 1800);
+  assert.equal(getExecutor("pi").defaultTimeout, 1800);
 });
