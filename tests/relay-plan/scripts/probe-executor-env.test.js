@@ -312,6 +312,48 @@ test("CLI probes pi when explicit model route is allowed for dispatch policy", (
   assert.equal(output.policy_decision.matched_route, "opencode-go/*");
 });
 
+test("CLI denied pi probe without model route fails closed before adapter probe", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "probe-pi-missing-model-"));
+  const relayHome = fs.mkdtempSync(path.join(os.tmpdir(), "probe-pi-missing-model-home-"));
+  writeRelayPolicy(relayHome, {
+    profile: "allow-pi-dispatch-probe-requires-route",
+    allowed_model_routes: [{
+      route: "opencode-go/*",
+      phases: ["dispatch"],
+      executors: ["pi"],
+    }],
+  });
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "probe-pi-missing-model-bin-"));
+  const markerPath = path.join(binDir, "pi-invoked.txt");
+  writeFakePi(binDir, markerPath);
+
+  const result = spawnSync("node", [
+    SCRIPT,
+    repoRoot,
+    "--executor", "pi",
+    "--json",
+  ], {
+    encoding: "utf-8",
+    stdio: "pipe",
+    env: envForRelayHome(relayHome, {
+      PATH: `${binDir}:${process.env.PATH}`,
+    }),
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(fs.existsSync(markerPath), false);
+  const output = JSON.parse(result.stdout);
+  assert.equal(output.agent_tools_raw, null);
+  assert.match(output.agent_probe_error, /policy disallowed/);
+  assert.match(output.agent_probe_error, /model=\(none\)/);
+  assert.equal(output.policy_decision.allowed, false);
+  assert.equal(output.policy_decision.phase, "dispatch");
+  assert.equal(output.policy_decision.actor_field, "executor");
+  assert.equal(output.policy_decision.executor, "pi");
+  assert.equal(output.policy_decision.model, null);
+  assert.equal(output.policy_decision.reason, "missing_model_route");
+});
+
 test("CLI denied pi probe reports the explicit unknown model route", () => {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "probe-pi-denied-"));
   const relayHome = fs.mkdtempSync(path.join(os.tmpdir(), "probe-pi-denied-home-"));
