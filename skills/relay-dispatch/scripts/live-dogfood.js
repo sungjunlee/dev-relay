@@ -18,9 +18,10 @@ const DEFAULTS = Object.freeze({
   piModel: "opencode-go/deepseek-v4-pro",
   opencodeModel: "opencode-go/deepseek-v4-pro",
   antigravityModel: "google/antigravity-cli",
-  commandTimeoutMs: 60_000,
-  piReviewTimeout: "30s",
-  antigravityReviewTimeout: "5s",
+  commandTimeoutMs: 300_000,
+  piReviewTimeout: "120s",
+  antigravityReviewTimeout: "120s",
+  antigravityFailSafeReviewTimeout: "5s",
   antigravityDispatchTimeoutSeconds: 45,
 });
 
@@ -39,6 +40,7 @@ function parseArgs(argv) {
     commandTimeoutMs: DEFAULTS.commandTimeoutMs,
     piReviewTimeout: DEFAULTS.piReviewTimeout,
     antigravityReviewTimeout: DEFAULTS.antigravityReviewTimeout,
+    antigravityFailSafeReviewTimeout: DEFAULTS.antigravityFailSafeReviewTimeout,
     antigravityDispatchTimeoutSeconds: DEFAULTS.antigravityDispatchTimeoutSeconds,
   };
 
@@ -62,6 +64,7 @@ function parseArgs(argv) {
     else if (arg === "--command-timeout-ms") parsed.commandTimeoutMs = Number(next());
     else if (arg === "--pi-review-timeout") parsed.piReviewTimeout = next();
     else if (arg === "--antigravity-review-timeout") parsed.antigravityReviewTimeout = next();
+    else if (arg === "--antigravity-fail-safe-timeout") parsed.antigravityFailSafeReviewTimeout = next();
     else if (arg === "--antigravity-dispatch-timeout") parsed.antigravityDispatchTimeoutSeconds = Number(next());
     else if (arg === "--help" || arg === "-h") parsed.help = true;
     else throw new Error(`unknown argument: ${arg}`);
@@ -214,9 +217,20 @@ function classifyProbeJson(result) {
 }
 
 function classifyAntigravityPrimary(result) {
+  return classifyStandardJson(result);
+}
+
+function classifyAntigravityFailSafeTimeout(result) {
   const standard = classifyStandardJson(result);
   if (standard.outcome === OUTCOMES.TIMEOUT && /Antigravity reviewer primary_review timed out/i.test(standard.notes)) {
     return { ...standard, outcome: OUTCOMES.FAIL_SAFE_PASS };
+  }
+  if (standard.outcome === OUTCOMES.PASS) {
+    return {
+      ...standard,
+      outcome: OUTCOMES.FAIL,
+      notes: "fail-safe timeout canary returned structured JSON instead of exercising the timeout path",
+    };
   }
   return standard;
 }
@@ -265,10 +279,16 @@ function buildSteps({ repo, relayHome, prompts, options }) {
       classify: classifyStandardJson,
     },
     {
-      name: "antigravity-primary-timeout",
+      name: "antigravity-primary",
       command: [node, "skills/relay-review/scripts/invoke-reviewer-antigravity.js", "--repo", repo, "--prompt-file", prompts.primaryPrompt, "--model", options.antigravityModel, "--json"],
       env: { RELAY_ANTIGRAVITY_REVIEW_TIMEOUT: options.antigravityReviewTimeout },
       classify: classifyAntigravityPrimary,
+    },
+    {
+      name: "antigravity-primary-fail-safe-timeout",
+      command: [node, "skills/relay-review/scripts/invoke-reviewer-antigravity.js", "--repo", repo, "--prompt-file", prompts.primaryPrompt, "--model", options.antigravityModel, "--json"],
+      env: { RELAY_ANTIGRAVITY_REVIEW_TIMEOUT: options.antigravityFailSafeReviewTimeout },
+      classify: classifyAntigravityFailSafeTimeout,
     },
     {
       name: "antigravity-dispatch",
@@ -348,7 +368,7 @@ function renderMarkdown(result) {
     lines.push(`| \`${step.name}\` | \`${step.outcome}\` | ${String(step.notes || "").replace(/\n/g, "<br>")} |`);
   }
   lines.push("");
-  lines.push("Outcome meanings: `pass` proves that live canary path returned the expected structured output; `fail-safe-pass` means the adapter failed safely without producing a reviewable false success; `timeout` is inconclusive; `not-run` is planning/dry-run only.");
+  lines.push("Outcome meanings: `pass` proves that a healthy live canary path returned the expected structured output; `fail-safe-pass` means an intentionally bounded fail-safe canary avoided a reviewable false success and is not healthy success; `timeout` is inconclusive; `fail` is actionable failure; `not-run` is planning/dry-run only.");
   return `${lines.join("\n")}\n`;
 }
 
@@ -367,10 +387,11 @@ function printHelp() {
   console.log("  --pi-model <route>                    Pi route (default: opencode-go/deepseek-v4-pro)");
   console.log("  --opencode-model <route>              OpenCode route (default: opencode-go/deepseek-v4-pro)");
   console.log("  --antigravity-model <route>           Antigravity route (default: google/antigravity-cli)");
-  console.log("  --pi-review-timeout <duration>        RELAY_PI_REVIEW_TIMEOUT for the Pi canary (default: 30s)");
-  console.log("  --antigravity-review-timeout <duration>  RELAY_ANTIGRAVITY_REVIEW_TIMEOUT (default: 5s)");
+  console.log("  --pi-review-timeout <duration>        RELAY_PI_REVIEW_TIMEOUT for the Pi canary (default: 120s)");
+  console.log("  --antigravity-review-timeout <duration>  RELAY_ANTIGRAVITY_REVIEW_TIMEOUT for the healthy Antigravity review canary (default: 120s)");
+  console.log("  --antigravity-fail-safe-timeout <duration>  RELAY_ANTIGRAVITY_REVIEW_TIMEOUT for the intentional fail-safe timeout canary (default: 5s)");
   console.log("  --antigravity-dispatch-timeout <sec>  Dispatch timeout seconds (default: 45)");
-  console.log("  --command-timeout-ms <ms>             Harness per-command timeout (default: 60000)");
+  console.log("  --command-timeout-ms <ms>             Harness per-command timeout (default: 300000)");
 }
 
 function main() {
@@ -402,6 +423,7 @@ module.exports = {
   buildPolicy,
   buildAllowedModelRoutes,
   classifyAntigravityDispatch,
+  classifyAntigravityFailSafeTimeout,
   classifyAntigravityPrimary,
   classifyProbeJson,
   classifyStandardJson,

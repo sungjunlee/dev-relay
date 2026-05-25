@@ -738,14 +738,14 @@ process.exit(1);
   assert.equal(result.summary, "Recovered stdout.");
 });
 
-test("antigravity adapter forwards sandbox, print timeout, and preserves primary review prompt", () => {
+test("antigravity adapter forwards prompt, print timeout, sandbox, and preserves primary review prompt", () => {
   const { repoRoot, promptPath } = setupRepo();
   const fakeDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-fake-antigravity-"));
   const logPath = path.join(fakeDir, "agy-args.log");
   const fakeAgy = writeExecutable(fakeDir, "fake-agy.js", `#!/usr/bin/env node
 const fs = require("fs");
 const args = process.argv.slice(2);
-fs.writeFileSync(${JSON.stringify(logPath)}, args.join("\\n") + "\\n", "utf-8");
+fs.writeFileSync(${JSON.stringify(logPath)}, JSON.stringify(args), "utf-8");
 process.stdout.write(JSON.stringify({
   verdict: "pass",
   summary: "Looks good.",
@@ -772,11 +772,13 @@ process.stdout.write(JSON.stringify({
   });
 
   const result = JSON.parse(stdout);
-  const loggedArgs = fs.readFileSync(logPath, "utf-8");
+  const loggedArgs = JSON.parse(fs.readFileSync(logPath, "utf-8"));
   assert.equal(result.verdict, "pass");
-  assert.match(loggedArgs, /^--print\n--print-timeout\n45s\n--sandbox\n/);
-  assert.match(loggedArgs, /NON-INTERACTIVE REVIEW/);
-  assert.match(loggedArgs, /Return a passing review\./);
+  assert.equal(loggedArgs[0], "--prompt");
+  assert.deepEqual(loggedArgs.slice(2), ["--print-timeout", "45s", "--sandbox"]);
+  assert.match(loggedArgs[1], /NON-INTERACTIVE REVIEW/);
+  assert.match(loggedArgs[1], /Return a passing review\./);
+  assert.equal(loggedArgs.includes("--print"), false);
 });
 
 test("antigravity adapter supports advisory review JSON when phase is advisory_review", () => {
@@ -786,7 +788,7 @@ test("antigravity adapter supports advisory review JSON when phase is advisory_r
   const fakeAgy = writeExecutable(fakeDir, "fake-agy.js", `#!/usr/bin/env node
 const fs = require("fs");
 const args = process.argv.slice(2);
-fs.writeFileSync(${JSON.stringify(logPath)}, args.join("\\n") + "\\n", "utf-8");
+fs.writeFileSync(${JSON.stringify(logPath)}, JSON.stringify(args), "utf-8");
 process.stdout.write(JSON.stringify({
   profile: "blindspot",
   summary: "No blocking blind spots.",
@@ -811,10 +813,12 @@ process.stdout.write(JSON.stringify({
   });
 
   const result = JSON.parse(stdout);
-  const loggedArgs = fs.readFileSync(logPath, "utf-8");
+  const loggedArgs = JSON.parse(fs.readFileSync(logPath, "utf-8"));
   assert.equal(result.profile, "blindspot");
-  assert.match(loggedArgs, /^--print\n--print-timeout\n45s\n--sandbox\n/);
-  assert.match(loggedArgs, /NON-INTERACTIVE ADVISORY REVIEW/);
+  assert.equal(loggedArgs[0], "--prompt");
+  assert.deepEqual(loggedArgs.slice(2), ["--print-timeout", "45s", "--sandbox"]);
+  assert.match(loggedArgs[1], /NON-INTERACTIVE ADVISORY REVIEW/);
+  assert.equal(loggedArgs.includes("--print"), false);
 });
 
 test("antigravity adapter enforces parent timeout and reports timeout context", () => {
@@ -861,6 +865,7 @@ setTimeout(() => {
   const stderr = String(error.stderr || "");
   assert.match(stderr, /Antigravity reviewer primary_review timed out after 1s/);
   assert.match(stderr, /RELAY_ANTIGRAVITY_REVIEW_TIMEOUT/);
+  assert.match(stderr, /agy --prompt invocation/);
 });
 
 test("antigravity adapter rejects invalid review timeout without invoking agy", () => {

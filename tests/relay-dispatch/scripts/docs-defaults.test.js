@@ -190,6 +190,7 @@ test("operator-facing Antigravity docs keep live support marked fail-safe experi
   assert.match(operatorDocs, /strict verdict JSON within timeout/i);
   assert.match(operatorDocs, /minimal repository change[^.\n]*recoverable\/reviewable state/i);
   assert.match(operatorDocs, /documented CLI limitation/i);
+  assert.match(operatorDocs, /fail-safe timeout canary[^.\n]*(?:not|never)[^.\n]*healthy/i);
   assert.match(operatorDocs, /fake-bin tests alone/i);
   assert.match(operatorDocs, /review-runner\.js[^`]*--reviewer antigravity/i);
   assert.match(operatorDocs, /dispatch\.js[^`]*--executor antigravity/i);
@@ -207,6 +208,7 @@ test("operator docs publish the live dogfood harness and outcome meanings", () =
   assert.match(docs, /live-dogfood\.js --repo \. --json --markdown/);
   assert.match(docs, /temporary `RELAY_HOME`/);
   assert.match(docs, /scoped route policy/);
+  assert.match(docs, /fail-safe timeout canary[^.\n]*(?:not|never)[^.\n]*healthy/i);
   for (const outcome of ["pass", "fail-safe-pass", "timeout", "fail", "not-run"]) {
     assert.match(docs, new RegExp(`\`${outcome}\``));
   }

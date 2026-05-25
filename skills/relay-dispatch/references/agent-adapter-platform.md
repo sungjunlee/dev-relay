@@ -46,7 +46,7 @@ The healthy-path criteria are exact:
 - Dispatch: minimal repository change to recoverable/reviewable state.
 - Limitation path: documented CLI limitation, recorded as a limitation rather than success.
 
-Use the operator canaries in `docs/relay-operator-guide.md#antigravity-live-canary`. A `failed/escalated` result means relay failed safely or encountered a live CLI limitation; keep the adapter marked experimental. `ready_to_merge` is healthy only when the dispatch canary produced the minimal PR and the Antigravity primary reviewer returned strict verdict JSON inside the configured timeout.
+Use the operator canaries in `docs/relay-operator-guide.md#antigravity-live-canary`. A `failed/escalated` result means relay failed safely or encountered a live CLI limitation; keep the adapter marked experimental. `ready_to_merge` is healthy only when the dispatch canary produced the minimal PR and the Antigravity primary reviewer returned strict verdict JSON inside the configured timeout. The fail-safe timeout canary is not healthy success; it verifies that a bounded timeout does not become a reviewable false positive.
 
 ## New Adapter Checklist
 
