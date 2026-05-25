@@ -305,7 +305,7 @@ Do not "simplify" the facade by collapsing submodules back into it or by force-m
 4. `review-runner.js` auto-discovers adapters via `resolveReviewerScript()` by naming convention: `invoke-reviewer-<name>.js`. The `<name>` must match `/^[a-z0-9-]+$/`.
 5. Existing adapters share small utilities (`getArg`, `hasFlag`, `summarizeFailure`, `ensureJsonText`) but NOT full execution logic — each adapter encodes its own execution contract (e.g. Claude uses `--json-schema` + stdout recovery; Codex uses temp-file exchange + `--ephemeral` + sandbox). New adapters should extract only the small utilities.
 
-`invoke-reviewer-opencode.js` is currently advisory-only: `review-runner --advisory-reviewer opencode` invokes it with a separate blind-spot prompt and validates output through `advisory-review-schema.js`, not the trusted verdict schema. Do not use opencode as the primary `--reviewer` until a trusted verdict adapter exists for it.
+`invoke-reviewer-opencode.js` is currently advisory-only: `review-runner --advisory-reviewer opencode` invokes it with a separate blind-spot prompt and validates output through `advisory-review-schema.js`, not the trusted verdict schema. Do not use opencode as the primary `--reviewer` until a trusted verdict adapter exists for it. `invoke-reviewer-pi.js` is a trusted primary reviewer adapter; it invokes `pi --no-session --tools read,grep,find,ls --print <prompt>` and relies on review-runner's before/after dirty-worktree check for write detection.
 
 ### Shared utilities (cross-skill)
 
@@ -320,8 +320,8 @@ Current shared helpers:
 
 | Module | Owner | Consumers |
 |--------|-------|-----------|
-| `skills/relay-dispatch/scripts/cli-args.js` | relay-dispatch | `review-runner.js`, `invoke-reviewer-claude.js`, `invoke-reviewer-codex.js`, `invoke-reviewer-opencode.js`, `finalize-run.js`, `persist-request.js`, `probe-executor-env.js` |
-| `skills/relay-review/scripts/reviewer-helpers.js` | relay-review | `invoke-reviewer-claude.js`, `invoke-reviewer-codex.js`, `invoke-reviewer-opencode.js` |
+| `skills/relay-dispatch/scripts/cli-args.js` | relay-dispatch | `review-runner.js`, `invoke-reviewer-claude.js`, `invoke-reviewer-codex.js`, `invoke-reviewer-opencode.js`, `invoke-reviewer-pi.js`, `finalize-run.js`, `persist-request.js`, `probe-executor-env.js` |
+| `skills/relay-review/scripts/reviewer-helpers.js` | relay-review | `invoke-reviewer-claude.js`, `invoke-reviewer-codex.js`, `invoke-reviewer-opencode.js`, `invoke-reviewer-pi.js` |
 
 `reviewer-helpers.js` is scoped to `summarizeFailure` and `ensureJsonText`. Reviewer adapters intentionally keep divergent execution contracts (Claude uses `--json-schema` + stdout recovery; Codex uses temp schema/result files + `--ephemeral` + sandbox; opencode is advisory-only with prompt-enforced read-only behavior), so a full adapter factory would hide meaningful differences. See item 5 under "Adding a new reviewer adapter" above.
 

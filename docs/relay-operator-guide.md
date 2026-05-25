@@ -89,8 +89,8 @@ Useful dispatch flags:
 
 | Flag | Purpose |
 | --- | --- |
-| `--executor` | Select `codex`, `claude`, or `opencode` |
-| `--model` | Pass a model override when the harness supports it |
+| `--executor` | Select `codex`, `claude`, `opencode`, or `pi` |
+| `--model` | Pass a model override when the harness supports it; Pi should use an explicit provider/model route |
 | `--network-access enabled` | Enable Codex workspace-write network access for supported runs |
 | `--copy` | Copy extra gitignored files into the worktree |
 | `--register` | Register a Codex app thread or Claude relay-side receipt |
@@ -104,6 +104,16 @@ Manual review command:
 
 ```bash
 node skills/relay-review/scripts/review-runner.js --repo . --run-id <id> --pr <number> --reviewer codex --json
+```
+
+Pi can be used as dispatch executor or trusted primary reviewer when `pi` is on `PATH` (or `RELAY_PI_BIN` is set for review), authenticated for the selected provider, and route policy allows the model route:
+
+```bash
+node skills/relay-dispatch/scripts/dispatch.js . -e pi -m openai/gpt-5 \
+  -b issue-42 --prompt-file /tmp/dispatch-42.md --rubric-file /tmp/rubric-42.yaml
+
+node skills/relay-review/scripts/review-runner.js --repo . --run-id <id> --pr <number> \
+  --reviewer pi --reviewer-model openai/gpt-5 --json
 ```
 
 Advisory review can run alongside the primary reviewer when route policy allows it:
