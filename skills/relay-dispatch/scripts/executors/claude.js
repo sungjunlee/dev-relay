@@ -1,6 +1,9 @@
 const { execFileSync, spawnSync } = require("child_process");
-const fs = require("fs");
 const { registerClaudeApp } = require("../claude-app-register");
+const {
+  copyStdoutToResultFile,
+  summarizeSpawnResult,
+} = require("../agent-adapters/transport");
 
 const PROBE_PROMPT =
   "List ALL your available tools, MCP servers, and installed skills. " +
@@ -27,10 +30,7 @@ function buildExecCommand({ wtPath, prompt, model }) {
 }
 
 function finalizeResult({ stdoutLog, resultFile }) {
-  // claude writes its result to stdout; copy to resultFile so downstream collection works.
-  if (fs.existsSync(stdoutLog)) {
-    try { fs.copyFileSync(stdoutLog, resultFile); } catch {}
-  }
+  copyStdoutToResultFile({ adapter: "claude", phase: "dispatch", stdoutLog, resultFile });
 }
 
 function register({ wtPath, repoPath, branch, title }) {
@@ -51,11 +51,12 @@ function probe({ timeout }) {
     stdio: "pipe",
     timeout: timeout * 1000,
   });
-  if (result.error) {
-    const msg = result.error.code === "ETIMEDOUT" ? `probe timed out after ${timeout}s` : result.error.message;
-    return { error: msg, raw: null };
-  }
-  if (result.status !== 0) return { error: `executor exited with code ${result.status}`, raw: null };
+  const probeError = summarizeSpawnResult(result, {
+    adapter: "claude",
+    phase: "dispatch_probe",
+    timeoutSeconds: timeout,
+  });
+  if (probeError) return { error: probeError, raw: null };
   return { error: null, raw: (result.stdout || "").trim() || null };
 }
 

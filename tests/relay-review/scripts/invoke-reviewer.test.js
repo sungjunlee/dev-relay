@@ -134,6 +134,83 @@ process.exit(1);
   assert.equal(result.summary, "Recovered.");
 });
 
+test("claude adapter can recover from a non-zero exit when stdout contains JSON", () => {
+  const { repoRoot, promptPath } = setupRepo();
+  const fakeDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-fake-claude-recover-"));
+  const fakeClaude = writeExecutable(fakeDir, "fake-claude.js", `#!/usr/bin/env node
+const args = process.argv.slice(2);
+if (args.includes("ping")) {
+  process.stdout.write("pong\\n");
+  process.exit(0);
+}
+process.stdout.write(JSON.stringify({
+  verdict: "pass",
+  summary: "Recovered stdout.",
+  contract_status: "pass",
+  quality_review_status: "pass",
+  next_action: "ready_to_merge",
+  issues: [],
+  rubric_scores: [],
+  scope_drift: { creep: [], missing: [] },
+}) + "\\n");
+process.stderr.write("simulated late failure\\n");
+process.exit(1);
+`);
+
+  const stdout = execFileSync("node", [
+    CLAUDE_SCRIPT,
+    "--repo", repoRoot,
+    "--prompt-file", promptPath,
+    "--json",
+  ], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+    env: { ...process.env, RELAY_CLAUDE_BIN: fakeClaude },
+  });
+
+  const result = JSON.parse(stdout);
+  assert.equal(result.summary, "Recovered stdout.");
+});
+
+test("claude adapter reports adapter and phase when recovered stdout is invalid JSON", () => {
+  const { repoRoot, promptPath } = setupRepo();
+  const fakeDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-fake-claude-invalid-"));
+  const fakeClaude = writeExecutable(fakeDir, "fake-claude.js", `#!/usr/bin/env node
+const args = process.argv.slice(2);
+if (args.includes("ping")) {
+  process.stdout.write("pong\\n");
+  process.exit(0);
+}
+process.stdout.write("not-json\\n");
+process.exit(1);
+`);
+
+  let error;
+  try {
+    execFileSync("node", [
+      CLAUDE_SCRIPT,
+      "--repo", repoRoot,
+      "--prompt-file", promptPath,
+      "--json",
+    ], {
+      cwd: repoRoot,
+      encoding: "utf-8",
+      stdio: "pipe",
+      env: { ...process.env, RELAY_CLAUDE_BIN: fakeClaude },
+    });
+    assert.fail("expected invoke-reviewer-claude.js to fail");
+  } catch (caught) {
+    error = caught;
+  }
+
+  assert.ok(error);
+  assert.notEqual(error.status, 0);
+  const stderr = String(error.stderr || "");
+  assert.match(stderr, /adapter=claude phase=primary_review/);
+  assert.match(stderr, /review verdict must be valid JSON/);
+});
+
 test("claude adapter keeps the prompt separate from allowed tools", () => {
   const { repoRoot, promptPath } = setupRepo();
   const fakeDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-fake-claude-"));

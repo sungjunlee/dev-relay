@@ -231,7 +231,7 @@ async function run() {
   });
   result.rawResponsePath = rawResponsePath;
 
-  let verdict = parseReviewVerdict(reviewText, { requireExecutionStatus: false });
+  let verdict = parseReviewVerdict(reviewText, { adapter: reviewerName, phase: "primary_review", requireExecutionStatus: false });
   if (rubricLoad.state === "loaded" && (!Array.isArray(verdict.rubric_scores) || verdict.rubric_scores.length === 0)) {
     throw new Error(
       "Review verdict has empty rubric_scores but a rubric was provided. " +
