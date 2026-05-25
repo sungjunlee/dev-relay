@@ -609,12 +609,14 @@ function validateExecutorCli() {
     process.exit(1);
   }
   const cli = adapter.cliBinary || EXECUTOR;
+  let version;
   try {
-    execFileSync(cli, ["--version"], { encoding: "utf-8", stdio: "pipe" });
+    version = execFileSync(cli, ["--version"], { encoding: "utf-8", stdio: "pipe" }).trim();
   } catch {
     console.error(`Error: ${cli} CLI not found.`);
     process.exit(1);
   }
+  return { binary: cli, version };
 }
 
 function findLatestRedispatchPrompt(runDir) {
@@ -1119,7 +1121,11 @@ async function main() {
     return;
   }
 
-  validateExecutorCli();
+  const executorCli = validateExecutorCli();
+  executorPolicy = {
+    ...executorPolicy,
+    cli: executorCli,
+  };
 
   if (!RESUME_MODE) {
     try {
@@ -1295,6 +1301,7 @@ async function main() {
     sandbox: SANDBOX,
     networkAccess: NETWORK_ACCESS,
     reasoning: resolvedReasoningEffort,
+    timeoutSeconds: TIMEOUT,
   });
   cmd = buildResult.cmd;
   execArgs = buildResult.args;

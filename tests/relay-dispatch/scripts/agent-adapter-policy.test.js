@@ -75,39 +75,9 @@ test("policy audit records Pi primary review read-only tool allowlist metadata",
   assert.match(audit.warnings.join("\n"), /dirty worktree/i);
 });
 
-test("policy audit supports synthetic Antigravity native sandbox mapping", () => {
-  const antigravityDescriptor = {
-    name: "antigravity",
-    capabilities: {
-      policy: {
-        dispatch: {
-          sandbox: {
-            "workspace-write": {
-              enforcement_level: "native",
-              mechanism: "antigravity-sandbox-profile",
-              flags: ["--sandbox-profile workspace-write"],
-            },
-          },
-          network: {
-            disabled: {
-              enforcement_level: "native",
-              mechanism: "antigravity-network-policy",
-              flags: ["--network disabled"],
-            },
-          },
-          read_only: {
-            false: {
-              enforcement_level: "unsupported",
-              mechanism: "write-capable-dispatch",
-            },
-          },
-        },
-      },
-    },
-  };
-
+test("policy audit records Antigravity dispatch sandbox and add-dir metadata", () => {
   const audit = buildAgentPolicyAudit({
-    descriptor: antigravityDescriptor,
+    descriptor: getAgentAdapterDescriptor("antigravity"),
     phase: ADAPTER_PHASES.DISPATCH,
     requested: {
       sandbox: "workspace-write",
@@ -118,8 +88,28 @@ test("policy audit supports synthetic Antigravity native sandbox mapping", () =>
 
   assert.equal(audit.safe, true);
   assert.equal(audit.sandbox.enforcement_level, "native");
-  assert.equal(audit.sandbox.mechanism, "antigravity-sandbox-profile");
-  assert.deepEqual(audit.sandbox.flags, ["--sandbox-profile workspace-write"]);
+  assert.equal(audit.sandbox.mechanism, "agy-sandbox-flag");
+  assert.deepEqual(audit.sandbox.flags, ["--sandbox", "--add-dir <git-common-dir>"]);
+  assert.match(audit.warnings.join("\n"), /agy --version|network gating/i);
+});
+
+test("policy audit records Antigravity primary review dirty-worktree read-only guard", () => {
+  const audit = buildAgentPolicyAudit({
+    descriptor: getAgentAdapterDescriptor("antigravity"),
+    phase: ADAPTER_PHASES.PRIMARY_REVIEW,
+    requested: {
+      sandbox: "read-only",
+      networkAccess: "disabled",
+      readOnly: true,
+    },
+  });
+
+  assert.equal(audit.safe, true);
+  assert.equal(audit.sandbox.enforcement_level, "native");
+  assert.equal(audit.read_only.enforcement_level, "prompt-only");
+  assert.deepEqual(audit.sandbox.flags, ["--sandbox"]);
+  assert.deepEqual(audit.read_only.flags, ["--sandbox", "prompt:do-not-modify-files", "git-status-before-after"]);
+  assert.match(audit.warnings.join("\n"), /dirty-worktree|dirty worktree/i);
 });
 
 test("policy audit fails closed when a requested policy cannot be represented safely", () => {

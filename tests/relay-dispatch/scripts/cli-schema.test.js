@@ -150,6 +150,7 @@ const HELP_COMMANDS = [
   ["dispatch", path.join(__dirname, "..", "..", "..", "skills", "relay-dispatch", "scripts", "dispatch.js")],
   ["finalize-run", path.join(__dirname, "..", "..", "..", "skills", "relay-merge", "scripts", "finalize-run.js")],
   ["gate-check", path.join(__dirname, "..", "..", "..", "skills", "relay-merge", "scripts", "gate-check.js")],
+  ["invoke-reviewer-antigravity", path.join(__dirname, "..", "..", "..", "skills", "relay-review", "scripts", "invoke-reviewer-antigravity.js")],
   ["invoke-reviewer-claude", path.join(__dirname, "..", "..", "..", "skills", "relay-review", "scripts", "invoke-reviewer-claude.js")],
   ["invoke-reviewer-codex", path.join(__dirname, "..", "..", "..", "skills", "relay-review", "scripts", "invoke-reviewer-codex.js")],
   ["invoke-reviewer-pi", path.join(__dirname, "..", "..", "..", "skills", "relay-review", "scripts", "invoke-reviewer-pi.js")],

@@ -30,9 +30,9 @@ after(() => {
   if (TMP_ROOT) fs.rmSync(TMP_ROOT, { recursive: true, force: true });
 });
 
-test("registry exposes codex, claude, opencode, and pi", () => {
-  assert.deepEqual(listExecutors(), ["codex", "claude", "opencode", "pi"]);
-  assert.deepEqual(listExecutors().sort(), ["claude", "codex", "opencode", "pi"]);
+test("registry exposes codex, claude, opencode, pi, and antigravity", () => {
+  assert.deepEqual(listExecutors(), ["codex", "claude", "opencode", "pi", "antigravity"]);
+  assert.deepEqual(listExecutors().sort(), ["antigravity", "claude", "codex", "opencode", "pi"]);
   assert.throws(() => getExecutor("nonexistent"), /unknown executor/);
 });
 
@@ -50,6 +50,14 @@ test("pi adapter exposes the same 7 fields", () => {
     assert.ok(typeof pi[k] !== "undefined", `missing field: ${k}`);
   }
   assert.equal(pi.cliBinary, "pi");
+});
+
+test("antigravity adapter exposes the same 7 fields", () => {
+  const antigravity = getExecutor("antigravity");
+  for (const k of ["cliBinary", "defaultTimeout", "validateExecutionMode", "buildExecCommand", "finalizeResult", "register", "probe"]) {
+    assert.ok(typeof antigravity[k] !== "undefined", `missing field: ${k}`);
+  }
+  assert.equal(antigravity.cliBinary, "agy");
 });
 
 test("opencode validateExecutionMode accepts workspace-write+disabled with experimental warning", () => {
@@ -129,6 +137,37 @@ test("pi buildExecCommand: model passthrough via --model", () => {
   assert.deepEqual(r.args, ["--no-session", "--model", "openai/gpt-5", "--thinking", "high", "--print", "P"]);
 });
 
+test("antigravity buildExecCommand: explicit print argv, timeout, sandbox, and git common dir", () => {
+  const antigravity = getExecutor("antigravity");
+  const r = antigravity.buildExecCommand({
+    wtPath: WT,
+    resultFile: "/tmp/r",
+    prompt: "P",
+    model: "google/antigravity-cli",
+    sandbox: "workspace-write",
+    networkAccess: "disabled",
+    reasoning: "high",
+    timeoutSeconds: 123,
+  });
+  assert.equal(r.cmd, "agy");
+  assert.deepEqual(r.args, [
+    "--print",
+    "--print-timeout", "123s",
+    "--sandbox",
+    "--add-dir", COMMON_DIR,
+    "P",
+  ]);
+  assert.equal(r.cwd, WT);
+  assert.equal(r.codexGitCommonDir, COMMON_DIR);
+});
+
+test("antigravity validateExecutionMode fails closed for read-only dispatch", () => {
+  const antigravity = getExecutor("antigravity");
+  const r = antigravity.validateExecutionMode({ sandbox: "read-only", networkAccess: "disabled" });
+  assert.equal(r.ok, false);
+  assert.match(r.error, /read-only dispatch is not safely representable/);
+});
+
 test("pi finalizeResult copies stdout into the relay result file", () => {
   const pi = getExecutor("pi");
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "relay-pi-finalize-"));
@@ -138,6 +177,17 @@ test("pi finalizeResult copies stdout into the relay result file", () => {
   const copied = pi.finalizeResult({ stdoutLog, resultFile });
   assert.deepEqual(copied, { copied: true, status: "copied", bytes: "pi result\n".length });
   assert.equal(fs.readFileSync(resultFile, "utf-8"), "pi result\n");
+});
+
+test("antigravity finalizeResult copies stdout into the relay result file", () => {
+  const antigravity = getExecutor("antigravity");
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "relay-antigravity-finalize-"));
+  const stdoutLog = path.join(tmp, "stdout.log");
+  const resultFile = path.join(tmp, "result.txt");
+  fs.writeFileSync(stdoutLog, "antigravity result\n", "utf-8");
+  const copied = antigravity.finalizeResult({ stdoutLog, resultFile });
+  assert.deepEqual(copied, { copied: true, status: "copied", bytes: "antigravity result\n".length });
+  assert.equal(fs.readFileSync(resultFile, "utf-8"), "antigravity result\n");
 });
 
 test("opencode register stub returns null thread id", () => {
@@ -202,6 +252,21 @@ test("pi probe returns {error: 'pi CLI not found', raw: null} when binary missin
   }
 });
 
+test("antigravity probe returns {error: 'agy CLI not found', raw: null} when binary missing", () => {
+  const emptyBin = path.join(TMP_ROOT, "empty-agy-bin");
+  fs.mkdirSync(emptyBin, { recursive: true });
+  const originalPath = process.env.PATH;
+  process.env.PATH = emptyBin;
+  try {
+    const antigravity = getExecutor("antigravity");
+    const result = antigravity.probe({ timeout: 5 });
+    assert.equal(result.raw, null);
+    assert.match(result.error, /agy CLI not found/);
+  } finally {
+    process.env.PATH = originalPath;
+  }
+});
+
 test("pi probe payload exposes version and supported flags without live API call", () => {
   const fakeBin = path.join(TMP_ROOT, "fake-pi-bin");
   const fakePi = path.join(fakeBin, "pi");
@@ -232,6 +297,41 @@ esac
       "--provider",
       "--thinking",
       "--no-context-files",
+    ]);
+  } finally {
+    process.env.PATH = originalPath;
+  }
+});
+
+test("antigravity probe payload exposes version and supported flags without live API call", () => {
+  const fakeBin = path.join(TMP_ROOT, "fake-agy-bin");
+  const fakeAgy = path.join(fakeBin, "agy");
+  fs.mkdirSync(fakeBin);
+  fs.writeFileSync(fakeAgy, `#!/bin/sh
+case "$1" in
+  --version) echo "agy 1.0.2" ;;
+  --help) echo "Usage: agy --print --prompt --print-timeout --sandbox --dangerously-skip-permissions --add-dir" ;;
+  *) exit 2 ;;
+esac
+`);
+  fs.chmodSync(fakeAgy, 0o755);
+
+  const originalPath = process.env.PATH;
+  process.env.PATH = `${fakeBin}${path.delimiter}${originalPath || ""}`;
+  try {
+    const antigravity = getExecutor("antigravity");
+    const result = antigravity.probe({ timeout: 5 });
+    assert.equal(result.error, null);
+    const parsed = JSON.parse(result.raw);
+    assert.equal(parsed.version, "agy 1.0.2");
+    assert.equal(parsed.cli_path, fakeAgy);
+    assert.deepEqual(parsed.supported_flags, [
+      "--print",
+      "--prompt",
+      "--print-timeout",
+      "--sandbox",
+      "--dangerously-skip-permissions",
+      "--add-dir",
     ]);
   } finally {
     process.env.PATH = originalPath;
