@@ -9,6 +9,7 @@ const { STATES, updateManifestState } = require("../../../skills/relay-dispatch/
 const { ensureRunLayout, getEventsPath } = require("../../../skills/relay-dispatch/scripts/manifest/paths");
 const { createManifestSkeleton, readManifest, writeManifest } = require("../../../skills/relay-dispatch/scripts/manifest/store");
 const { buildDefaultRelayPolicy } = require("../../../skills/relay-dispatch/scripts/relay-policy");
+const { ADAPTER_PHASES } = require("../../../skills/relay-dispatch/scripts/agent-adapters");
 const {
   captureGitStatus,
   loadReviewText,
@@ -119,6 +120,37 @@ test("reviewer-invoke/resolveReviewerScript resolves built-in adapters and rejec
   const script = resolveReviewerScript("codex");
   assert.match(script, /invoke-reviewer-codex\.js$/);
   assert.throws(() => resolveReviewerScript("../bad"), /Invalid reviewer name/);
+});
+
+test("reviewer-invoke/resolveReviewerScript fails closed for advisory-only adapters in primary review", () => {
+  assert.throws(
+    () => resolveReviewerScript("opencode"),
+    (error) => {
+      assert.match(error.message, /supports advisory_review but not primary_review/);
+      assert.match(error.message, /--advisory-reviewer opencode/);
+      assert.match(error.message, /--reviewer opencode/);
+      assert.match(error.message, /--reviewer-script/);
+      return true;
+    }
+  );
+});
+
+test("reviewer-invoke/resolveReviewerScript allows advisory-only adapters for advisory review", () => {
+  const script = resolveReviewerScript("opencode", null, { phase: ADAPTER_PHASES.ADVISORY_REVIEW });
+  assert.match(script, /invoke-reviewer-opencode\.js$/);
+});
+
+test("reviewer-invoke/resolveReviewerScript rejects unknown adapter names without falling back to files", () => {
+  assert.throws(
+    () => resolveReviewerScript("not-an-adapter"),
+    /Unknown reviewer adapter 'not-an-adapter'.*Supported adapters:.*codex.*opencode.*--reviewer-script/s
+  );
+});
+
+test("reviewer-invoke/resolveReviewerScript preserves manual reviewer-script overrides", () => {
+  const customScript = path.join(os.tmpdir(), "custom-reviewer.js");
+  assert.equal(resolveReviewerScript("opencode", customScript), customScript);
+  assert.equal(resolveReviewerScript("unknown", customScript, { phase: ADAPTER_PHASES.ADVISORY_REVIEW }), customScript);
 });
 
 test("reviewer-invoke/loadReviewText forwards promptPath to the adapter and persists the raw response", (t) => {
