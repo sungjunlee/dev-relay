@@ -3,6 +3,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const { evaluateRelayRoute } = require("../../../skills/relay-dispatch/scripts/relay-policy");
 
 const {
   OUTCOMES,
@@ -45,8 +46,11 @@ test("live dogfood uses temp RELAY_HOME by default and writes scoped policy", ()
   assert.equal(policy.profile, "live-adapter-dogfood");
   assert.deepEqual(policy.allowed_model_routes.map((entry) => entry.route), [
     "opencode-go/deepseek-v4-pro",
+    "opencode-go/deepseek-v4-pro",
     "google/antigravity-cli",
   ]);
+  assert.deepEqual(policy.allowed_model_routes[0].reviewers, ["pi"]);
+  assert.deepEqual(policy.allowed_model_routes[1].reviewers, ["opencode"]);
   assert.ok(!result.relay_home.startsWith(path.dirname(homeBefore)) || result.relay_home !== path.dirname(homeBefore));
 });
 
@@ -112,6 +116,30 @@ test("live dogfood policy reflects requested model route overrides", () => {
   assert.deepEqual(policy.allowed_model_routes[0].reviewers, ["pi"]);
   assert.deepEqual(policy.allowed_model_routes[1].phases, ["dispatch", "advisory_review"]);
   assert.deepEqual(policy.allowed_model_routes[2].executors, ["antigravity"]);
+});
+
+test("live dogfood default policy does not widen same-route actor phase scope", () => {
+  const policy = buildPolicy();
+  assert.equal(evaluateRelayRoute(policy, {
+    phase: "review",
+    reviewer: "pi",
+    model: "opencode-go/deepseek-v4-pro",
+  }).allowed, true);
+  assert.equal(evaluateRelayRoute(policy, {
+    phase: "advisory_review",
+    reviewer: "opencode",
+    model: "opencode-go/deepseek-v4-pro",
+  }).allowed, true);
+  assert.equal(evaluateRelayRoute(policy, {
+    phase: "review",
+    reviewer: "opencode",
+    model: "opencode-go/deepseek-v4-pro",
+  }).allowed, false);
+  assert.equal(evaluateRelayRoute(policy, {
+    phase: "advisory_review",
+    reviewer: "pi",
+    model: "opencode-go/deepseek-v4-pro",
+  }).allowed, false);
 });
 
 test("classification helpers separate harness timeout from safe adapter timeout", () => {

@@ -76,39 +76,31 @@ function parseArgs(argv) {
   return parsed;
 }
 
-function mergeRouteEntry(entries, { route, phases, executors = [], reviewers = [] }) {
-  const existing = entries.get(route) || { route, phases: [], executors: [], reviewers: [] };
-  for (const phase of phases) if (!existing.phases.includes(phase)) existing.phases.push(phase);
-  for (const executor of executors) if (!existing.executors.includes(executor)) existing.executors.push(executor);
-  for (const reviewer of reviewers) if (!existing.reviewers.includes(reviewer)) existing.reviewers.push(reviewer);
-  entries.set(route, existing);
-}
-
 function buildAllowedModelRoutes(options = {}) {
-  const routes = new Map();
   const piModel = options.piModel || DEFAULTS.piModel;
   const opencodeModel = options.opencodeModel || DEFAULTS.opencodeModel;
   const antigravityModel = options.antigravityModel || DEFAULTS.antigravityModel;
 
-  mergeRouteEntry(routes, {
-    route: piModel,
-    phases: ["dispatch", "review"],
-    executors: ["pi"],
-    reviewers: ["pi"],
-  });
-  mergeRouteEntry(routes, {
-    route: opencodeModel,
-    phases: ["dispatch", "advisory_review"],
-    executors: ["opencode"],
-    reviewers: ["opencode"],
-  });
-  mergeRouteEntry(routes, {
-    route: antigravityModel,
-    phases: ["dispatch", "review"],
-    executors: ["antigravity"],
-    reviewers: ["antigravity"],
-  });
-  return Array.from(routes.values());
+  return [
+    {
+      route: piModel,
+      phases: ["dispatch", "review"],
+      executors: ["pi"],
+      reviewers: ["pi"],
+    },
+    {
+      route: opencodeModel,
+      phases: ["dispatch", "advisory_review"],
+      executors: ["opencode"],
+      reviewers: ["opencode"],
+    },
+    {
+      route: antigravityModel,
+      phases: ["dispatch", "review"],
+      executors: ["antigravity"],
+      reviewers: ["antigravity"],
+    },
+  ];
 }
 
 function buildPolicy(options = {}) {
