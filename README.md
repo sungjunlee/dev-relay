@@ -73,7 +73,9 @@ For repo-local design notes, issue evidence, and documentation retention rules, 
 
 ### Route Policy Setup
 
-Relay policy treats executor and reviewer names as CLI harnesses. The compliance boundary is the provider/model route. Missing policy config defaults to Codex/Claude managed CLI only; OpenCode, Pi, advisory reviewers, and sidecars need explicit route approval such as `kakao/opencode-glm-*` before they run.
+Relay policy controls which agents and model routes relay may use. Executor and reviewer names such as `codex`, `claude`, `opencode`, and `pi` are CLI harnesses. The compliance boundary is the provider/model route, for example `kakao/opencode-glm-5-fp8` or `opencode-go/deepseek-v4-pro`.
+
+Missing policy config is intentionally conservative: Codex and Claude managed CLIs work by default, while OpenCode, Pi, advisory reviewers, and sidecars require explicit provider/model route approval before they run.
 
 After installing skills, ask for setup in plain language:
 
@@ -82,7 +84,18 @@ After installing skills, ask for setup in plain language:
 $relay-config 집에서는 opencode-go/deepseek-v4-pro를 sidecar/advisory에 쓰게 설정해줘.
 ```
 
-`relay-config` inspects the current policy and installed harnesses, asks only for missing decisions, shows the proposed policy before writing, then runs `doctor` and representative `check` commands. From a direct checkout, use `node skills/relay-config/scripts/relay-config.js inspect` or the lower-level `node skills/relay-dispatch/scripts/relay-config.js ...` fallback. See [docs/model-route-policy.md](docs/model-route-policy.md) for company/internal defaults, personal opt-in examples, and the final precedence order: `CLI flags -> routing rules -> defaults -> existing relay defaults -> policy gate`.
+`relay-config` inspects the current policy and installed harnesses, asks only for missing decisions, shows the proposed policy before writing, then runs `doctor` and representative `check` commands.
+
+Common starting points:
+
+| Setup | Recommended request |
+| --- | --- |
+| Company default | `/relay-config 회사 환경으로 relay 설정해줘` |
+| Company internal OpenCode | `/relay-config 회사에서는 opencode를 kakao/opencode-glm-* route로만 허용해줘` |
+| Personal sidecars | `$relay-config 집에서는 opencode-go/deepseek-v4-pro를 sidecar/advisory에 쓰게 설정해줘` |
+| Managed only | `/relay-config codex/claude만 쓰는 기본 설정으로 확인해줘` |
+
+From a direct checkout, use `node skills/relay-config/scripts/relay-config.js inspect` or the lower-level `node skills/relay-dispatch/scripts/relay-config.js ...` fallback. See [docs/model-route-policy.md](docs/model-route-policy.md) for company/internal defaults, personal opt-in examples, and the final precedence order: `CLI flags -> routing rules -> defaults -> existing relay defaults -> policy gate`.
 
 ## Quick Start
 
@@ -175,7 +188,7 @@ On re-dispatch, iteration history (prior scores + reviewer feedback) is automati
 | `--manifest` | Resume an existing retained relay run by manifest path | ... |
 | `--prompt, -p` | Task prompt | *required (or --prompt-file)* |
 | `--prompt-file` | Read prompt from file | ... |
-| `--executor, -e` | Executor type (`codex` or `claude`) | `codex` |
+| `--executor, -e` | Executor type (`codex`, `claude`, or `opencode`) | `codex` |
 | `--model, -m` | Model override | ... |
 | `--sandbox` | `workspace-write` or `read-only` | `workspace-write` |
 | `--network-access` | `disabled` or `enabled`; `enabled` passes Codex `sandbox_workspace_write.network_access=true` and is only supported with `--executor codex --sandbox workspace-write` | `disabled` |
@@ -233,12 +246,15 @@ For hotfixes, `finalize-run.js --skip-review "reason"` bypasses the review gate 
 
 | Command | Phase | Description |
 |---------|-------|-------------|
+| `/relay-config` | Setup | Configure route policy for company/personal use, OpenCode/Pi routes, advisory review, and sidecars |
 | `/relay [issue]` | All | Full cycle through `ready_to_merge` |
 | `/relay-ready [request]` | Readiness | Verify readiness and persist a single relay-ready handoff + frozen Done Criteria |
 | `/relay-plan [issue]` | Plan | Build scoring rubric from acceptance criteria |
 | `/relay-dispatch` | Execute | Dispatch to executor via git worktree isolation |
 | `/relay-review [branch]` | Review | Independent PR review with convergence loop |
 | `/relay-merge [PR]` | Ship | Explicit merge after LGTM, cleanup worktree, update sprint |
+| `/relay-sidecar` | Advisory | Run artifact-only supplemental sidecars for an existing run |
+| `/relay-fleet` | Batch | Fan out prepared relay leaves into parallel child dispatches |
 
 ## Real-World Scenarios
 
@@ -456,11 +472,14 @@ No. It adds an independent AI review layer. The reviewer catches rubric failures
 **Can I use Claude Code without Codex, or vice versa?**
 Yes. Either works as both executor and reviewer. Set the executor with `--executor codex` or `--executor claude`. Set the reviewer with `--reviewer codex` or `--reviewer claude`. Mix and match.
 
+**How should I set this up at work versus home?**
+Use `/relay-config`. At work, keep the default managed Codex/Claude posture unless your company provides an approved internal provider/model route such as `kakao/opencode-glm-*`. At home, opt in to personal OpenCode/Pi routes explicitly. In both cases, relay checks provider/model routes before invoking unmanaged harnesses.
+
 **What if the AI hallucinates or writes broken code?**
 The rubric scoring and convergence loop catch it. Automated checks (tests, type checks) must pass. Evaluated factors are scored against defined anchors. If the code doesn't converge after the configured maximum rounds (default 20), the run escalates instead of merging broken code.
 
 **Does this work with other LLMs beyond Claude and Codex?**
-The executor and reviewer are adapters. Adding a new one means creating one file (`invoke-reviewer-<name>.js` or a dispatch branch) that wires up the CLI. See [Extending](#extending).
+Yes, when an adapter and an allowed provider/model route exist. OpenCode is supported as an executor path today, and Pi-style harnesses are represented in route policy. Adding a new reviewer means creating `invoke-reviewer-<name>.js`; adding a new executor means adding an executor adapter. See [Extending](#extending).
 
 **Do I need GitHub?**
 Yes. GitHub PRs are the handoff boundary between executor and reviewer. The gate check, audit trail, and merge flow all use GitHub's API. GitLab and other forges are not currently supported.
@@ -484,6 +503,7 @@ node --test tests/relay-plan/scripts/*.test.js
 node --test tests/relay-dispatch/scripts/*.test.js
 node --test tests/relay-review/scripts/*.test.js
 node --test tests/relay-merge/scripts/*.test.js
+node --test tests/relay-config/scripts/*.test.js
 ```
 
 ## License
