@@ -31,7 +31,7 @@ function validateExecutionMode({ sandbox, networkAccess }) {
       "opencode executor: --network-access 'enabled' is informational only; opencode does not gate network access at the executor level."
     );
   }
-  warnings.push("opencode executor is experimental; review boundary defined in docs/reviewer-policy-opencode.md.");
+  warnings.push("opencode executor is experimental; review boundary defined in relay-dispatch/references/reviewer-policy-opencode.md.");
   return { ok: true, warnings };
 }
 
@@ -204,6 +204,7 @@ function probe({ timeout }) {
 
 module.exports = {
   cliBinary: "opencode",
+  providerDefault: "opencode-go",
   defaultTimeout: 1800,
   validateExecutionMode,
   buildExecCommand,
