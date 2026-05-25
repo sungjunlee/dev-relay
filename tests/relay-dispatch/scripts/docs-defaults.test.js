@@ -12,6 +12,14 @@ const {
 const ROOT = path.join(__dirname, "..", "..", "..");
 const DISPATCH_SCRIPT = path.join(ROOT, "skills", "relay-dispatch", "scripts", "dispatch.js");
 const ADAPTER_PLATFORM_DOC = "skills/relay-dispatch/references/agent-adapter-platform.md";
+const OPERATOR_GUIDE_DOC = "docs/relay-operator-guide.md";
+const READINESS_STATUSES = Object.freeze([
+  "stable",
+  "limited",
+  "fail-safe-experimental",
+  "blocked",
+  "not-supported",
+]);
 
 function readRepoFile(relativePath) {
   return fs.readFileSync(path.join(ROOT, relativePath), "utf-8");
@@ -37,6 +45,34 @@ function adapterMatrixRows() {
     const name = cells[0].replace(/^`|`$/g, "");
     return [name, cells];
   }));
+}
+
+function operatorReadinessMatrix() {
+  const doc = readRepoFile(OPERATOR_GUIDE_DOC);
+  const start = doc.indexOf("## Adapter Readiness Matrix");
+  assert.notEqual(start, -1, "operator guide must publish an adapter readiness matrix");
+  const nextHeading = doc.indexOf("\n## ", start + 1);
+  const section = doc.slice(start, nextHeading === -1 ? undefined : nextHeading);
+  const adapterNames = new Set(listAgentAdapters().map((adapter) => adapter.name));
+  return {
+    section,
+    rows: new Map(markdownTableRows(section)
+      .map((cells) => {
+        const name = cells[0].replace(/^`|`$/g, "");
+        return [name, cells];
+      })
+      .filter(([name]) => adapterNames.has(name))),
+  };
+}
+
+function readinessPair(cell) {
+  const implementation = cell.match(/Implementation:\s*`([^`]+)`/i)?.[1];
+  const live = cell.match(/Live:\s*`([^`]+)`/i)?.[1];
+  return { implementation, live };
+}
+
+function rowsToText(cells) {
+  return (cells || []).join(" ");
 }
 
 test("dispatch docs mirror executor timeout defaults", () => {
@@ -176,6 +212,59 @@ test("operator docs mention every supported dispatch and review adapter", () => 
   assert.match(reviewDocs, /--reviewer pi/);
   assert.match(reviewDocs, /--reviewer antigravity/);
   assert.match(readRepoFile(ADAPTER_PLATFORM_DOC), /agy`? CLI only/);
+});
+
+test("operator guide publishes adapter readiness matrix for every adapter and role", () => {
+  const { section, rows } = operatorReadinessMatrix();
+  const adapters = listAgentAdapters();
+
+  for (const heading of ["Dispatch", "Primary review", "Advisory review"]) {
+    assert.match(section, new RegExp(`\\| ${heading} `), `${heading} readiness column`);
+  }
+
+  assert.deepEqual([...rows.keys()].sort(), adapters.map((adapter) => adapter.name).sort());
+
+  for (const adapter of adapters) {
+    const row = rows.get(adapter.name);
+    assert.ok(row, `${adapter.name} readiness row`);
+    assert.equal(row.length, 4, `${adapter.name} readiness row has adapter plus three role cells`);
+
+    for (const [index, role] of [
+      [1, "dispatch"],
+      [2, "primary review"],
+      [3, "advisory review"],
+    ]) {
+      const pair = readinessPair(row[index]);
+      assert.ok(pair.implementation, `${adapter.name} ${role} implementation status`);
+      assert.ok(pair.live, `${adapter.name} ${role} live status`);
+      assert.ok(READINESS_STATUSES.includes(pair.implementation), `${adapter.name} ${role} implementation status is allowed`);
+      assert.ok(READINESS_STATUSES.includes(pair.live), `${adapter.name} ${role} live status is allowed`);
+    }
+  }
+
+  for (const status of READINESS_STATUSES) {
+    assert.match(section, new RegExp(`\`${status}\``), `${status} status is documented`);
+  }
+});
+
+test("operator guide separates implementation parity from live promotion criteria", () => {
+  const { section } = operatorReadinessMatrix();
+
+  for (const issue of ["#609", "#610", "#611"]) {
+    assert.match(section, new RegExp(issue), `${issue} source issue`);
+  }
+
+  assert.match(section, /Implementation[^.\n]*adapter surface/i);
+  assert.match(section, /Live[^.\n]*dogfood evidence/i);
+  assert.match(section, /fake-bin[^.\n]*unit tests[^.\n]*(?:insufficient|not sufficient|do not prove)/i);
+  assert.match(section, /healthy live dogfood evidence[^.\n]*(?:required|promotion)/i);
+  assert.match(section, /timeout[^.\n]*inconclusive/i);
+  assert.match(section, /intentionally bounded fail-safe timeout canary/i);
+
+  for (const adapter of ["pi", "opencode", "antigravity"]) {
+    const row = rowsToText(operatorReadinessMatrix().rows.get(adapter));
+    assert.match(row, /Live:\s*`(?!stable`)/i, `${adapter} live readiness is not published as stable without promotion evidence`);
+  }
 });
 
 test("operator-facing Antigravity docs keep live support marked fail-safe experimental", () => {
