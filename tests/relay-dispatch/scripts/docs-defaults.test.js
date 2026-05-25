@@ -206,8 +206,12 @@ test("operator docs publish the live dogfood harness and outcome meanings", () =
   ].join("\n");
 
   assert.match(docs, /live-dogfood\.js --repo \. --json --markdown/);
+  assert.match(docs, /live-dogfood\.js --repo \. --dispatch-canary --json/);
   assert.match(docs, /temporary `RELAY_HOME`/);
   assert.match(docs, /scoped route policy/);
+  assert.match(docs, /healthy dispatch canar(?:y|ies)[^.\n]*Pi[^.\n]*OpenCode[^.\n]*Antigravity/i);
+  assert.match(docs, /clean worktree/i);
+  assert.match(docs, /no-op[^.\n]*PR[^.\n]*(?:fail|failure|false success)/i);
   assert.match(docs, /fail-safe timeout canary[^.\n]*(?:not|never)[^.\n]*healthy/i);
   for (const outcome of ["pass", "fail-safe-pass", "timeout", "fail", "not-run"]) {
     assert.match(docs, new RegExp(`\`${outcome}\``));

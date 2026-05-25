@@ -35,8 +35,13 @@ Use `live-dogfood.js` when you need repeatable evidence for Pi, OpenCode, and An
 
 ```bash
 node skills/relay-dispatch/scripts/live-dogfood.js --repo . --json --markdown
+node skills/relay-dispatch/scripts/live-dogfood.js --repo . --dispatch-canary --json
 node skills/relay-dispatch/scripts/live-dogfood.js --repo . --probe-only --json
 node skills/relay-dispatch/scripts/live-dogfood.js --repo . --dry-run --markdown
 ```
 
-The harness creates a temporary `RELAY_HOME` by default and writes a scoped route policy there instead of mutating the operator's default `~/.relay/policy.json`. Healthy reviewer canaries use realistic default timeouts, while the Antigravity fail-safe timeout canary has its own intentionally short `--antigravity-fail-safe-timeout` setting. Output separates `pass`, `fail-safe-pass`, `timeout`, `fail`, and `not-run` so fake-bin regressions and live canary evidence are not conflated; the fail-safe timeout canary is not healthy success.
+The harness creates a temporary `RELAY_HOME` by default and writes a scoped route policy there instead of mutating the operator's default `~/.relay/policy.json`. Healthy reviewer canaries use realistic default timeouts, while the Antigravity fail-safe timeout canary has its own intentionally short `--antigravity-fail-safe-timeout` setting.
+
+Use `--dispatch-canary` from a clean worktree for healthy dispatch canaries across Pi, OpenCode, and Antigravity. Those steps request unique minimal repository changes and pass only when dispatch returns `review_pending` with a PR number. `--dispatch-timeout` defaults to 180 seconds, and `--dispatch-branch-prefix` defaults to `dogfood-dispatch`.
+
+The Antigravity no-op/fail-safe dispatch canary remains separate: a no-op PR is failure/false success, not healthy dispatch evidence. Output separates `pass`, `fail-safe-pass`, `timeout`, `fail`, and `not-run` so fake-bin regressions and live canary evidence are not conflated; the fail-safe timeout canary is not healthy success.

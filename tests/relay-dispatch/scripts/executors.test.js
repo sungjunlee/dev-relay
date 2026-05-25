@@ -137,7 +137,7 @@ test("pi buildExecCommand: model passthrough via --model", () => {
   assert.deepEqual(r.args, ["--no-session", "--model", "openai/gpt-5", "--thinking", "high", "--print", "P"]);
 });
 
-test("antigravity buildExecCommand: explicit print argv, timeout, sandbox, and git common dir", () => {
+test("antigravity buildExecCommand: prompt argv, timeout, sandbox, and git common dir", () => {
   const antigravity = getExecutor("antigravity");
   const r = antigravity.buildExecCommand({
     wtPath: WT,
@@ -151,11 +151,10 @@ test("antigravity buildExecCommand: explicit print argv, timeout, sandbox, and g
   });
   assert.equal(r.cmd, "agy");
   assert.deepEqual(r.args, [
-    "--print",
+    "--prompt", "P",
     "--print-timeout", "123s",
     "--sandbox",
     "--add-dir", COMMON_DIR,
-    "P",
   ]);
   assert.equal(r.cwd, WT);
   assert.equal(r.codexGitCommonDir, COMMON_DIR);
@@ -326,7 +325,6 @@ esac
     assert.equal(parsed.version, "agy 1.0.2");
     assert.equal(parsed.cli_path, fakeAgy);
     assert.deepEqual(parsed.supported_flags, [
-      "--print",
       "--prompt",
       "--print-timeout",
       "--sandbox",
