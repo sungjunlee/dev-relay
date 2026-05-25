@@ -64,8 +64,9 @@ Run the runner in the foreground. Do NOT background it, detach it, or return wit
 
 Supported built-in adapters: `--reviewer codex`, `--reviewer claude`, `--reviewer pi`, `--reviewer antigravity`.
 
-Notes: `codex` uses a read-only structured-output adapter and must return a full two-phase verdict. `pi` uses a read/grep/find/ls tool allowlist and the runner still checks dirty worktree status. `antigravity` targets the `agy` CLI version track, not Antigravity IDE/Desktop state, and relies on `--sandbox` plus the runner's dirty-worktree check for read-only policy enforcement. `claude --bare` uses a separate token from interactive Claude OAuth; for `--reviewer claude`, set `ANTHROPIC_API_KEY` or run `claude login --api-key`.
-Model precedence is `--reviewer-model` -> `manifest.model_hints.review` -> reviewer default. Runner invocation records a `review_invoke` event with the effective `model` value (or `null`).
+Notes: `codex` uses read-only structured output; `pi` uses a read/grep/find/ls allowlist plus dirty-worktree checks; `antigravity` targets the `agy` CLI, not GUI/IDE/Desktop flows, and relies on `--sandbox` plus dirty-worktree checks. `claude --bare` needs `ANTHROPIC_API_KEY` or `claude login --api-key`.
+Model precedence is `--reviewer-model` -> `manifest.model_hints.review` -> reviewer default. Examples: `review-runner.js --repo . --run-id "$RUN_ID" --pr "$PR_NUM" --reviewer pi --reviewer-model openai/gpt-5 --json`; `review-runner.js --repo . --run-id "$RUN_ID" --pr "$PR_NUM" --reviewer antigravity --reviewer-model google/antigravity-cli --json`.
+The adapter capability matrix and checklist are in `../relay-dispatch/references/agent-adapter-platform.md`.
 
 Optional advisory path: add an opencode blind-spot lane alongside the primary reviewer:
 ```bash
@@ -112,7 +113,7 @@ Two phases, run in order. Each round re-measures against the **original anchor**
 
 ### Phase 2: Code Quality (only after Phase 1 PASS)
 
-8. Inspect changed files inline for code quality, patterns, conventions, and structural issues. Adapter-managed reviewers (Codex, Claude, opencode advisory) return findings in the structured verdict; fallback/manual reviewers follow the same contract. Manual or supported environments MAY use helpers such as Claude Code `/review`, but helper availability is optional.
+8. Inspect changed files inline for code quality, patterns, conventions, and structural issues. Adapter-managed reviewers (Codex, Claude, Pi, Antigravity, and opencode advisory) return findings in the structured verdict; fallback/manual reviewers follow the same contract. Manual or supported environments MAY use helpers such as Claude Code `/review`, but helper availability is optional.
 9. Inspect changed files inline for simplification opportunities: unnecessary complexity, dead code, verbose patterns, and hard-to-review structure. Manual or supported environments MAY use helpers such as `/simplify`; simplification findings are merge-blocking only when they affect maintainability, correctness risk, or reviewability, not style nits.
 10. The structured verdict is the single Phase 2 gating output. No reviewer blocks or fails merely because an external skill command is unavailable. Issues found → return `verdict=changes_requested`, then follow the `phase2_fail` back-edge: re-dispatch and restart at Phase 1 because quality fixes can regress spec compliance.
 

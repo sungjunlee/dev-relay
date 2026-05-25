@@ -166,6 +166,8 @@ Relay evaluates two separate safety layers in this order:
 
 Managed Codex/Claude invocations may intentionally have `model: null`; the default route policy treats those model-less managed CLI calls as allowed. Unmanaged routes such as Pi, OpenCode, and Antigravity remain policy-configurable through `allowed_model_routes` and `denied_model_routes`; changing those allow/deny rules must not require adapter code changes.
 
+The supported adapter capability matrix and new-adapter checklist are published in [`skills/relay-dispatch/references/agent-adapter-platform.md`](../skills/relay-dispatch/references/agent-adapter-platform.md). That reference is the source of truth for dispatch, primary-review, advisory-review, sandbox, read-only, network, structured-output, transport, and app-registration support.
+
 ### Bootstrap exemptions
 
 `bootstrap_exempt` is absent for normal runs. It is populated only by `relay-reconcile-artifact`, which exists for bootstrap cases where a run cannot satisfy a newly introduced artifact requirement because the run itself produced that writer.
@@ -297,10 +299,11 @@ Do not "simplify" the facade by collapsing submodules back into it or by force-m
 
 ### Adding a new executor
 
-1. Add `skills/relay-dispatch/scripts/executors/<name>.js` exporting the 6-field adapter contract.
-2. Register it in `skills/relay-dispatch/scripts/executors/index.js`.
-3. Add behavior-matrix coverage in `tests/relay-dispatch/scripts/executors.test.js`.
-4. Optional: implement adapter `register(...)` for dispatch-time app registration.
+1. Add `skills/relay-dispatch/scripts/executors/<name>.js` exporting the 7-field adapter contract documented in [`agent-adapter-platform.md`](../skills/relay-dispatch/references/agent-adapter-platform.md): `cliBinary`, `defaultTimeout`, `validateExecutionMode`, `buildExecCommand`, `finalizeResult`, `register`, and `probe`.
+2. Register the harness descriptor in `skills/relay-dispatch/scripts/agent-adapters/index.js`; update `skills/relay-dispatch/scripts/executors/index.js` only if display order needs a stable compatibility slot.
+3. Add behavior-matrix and probe coverage in `tests/relay-dispatch/scripts/executors.test.js`.
+4. Add adapter capability policy coverage in `tests/relay-dispatch/scripts/agent-adapter-policy.test.js` and docs consistency coverage in `tests/relay-dispatch/scripts/docs-defaults.test.js`.
+5. Optional: implement adapter `register(...)` for dispatch-time app registration; unsupported adapters should return `{threadId: null, raw}`.
 
 ### Adding a new reviewer adapter
 
@@ -314,7 +317,7 @@ Do not "simplify" the facade by collapsing submodules back into it or by force-m
 4. `review-runner.js` auto-discovers adapters via `resolveReviewerScript()` by naming convention: `invoke-reviewer-<name>.js`. The `<name>` must match `/^[a-z0-9-]+$/`.
 5. Existing adapters share small utilities (`getArg`, `hasFlag`, `summarizeFailure`, `ensureJsonText`) but NOT full execution logic — each adapter encodes its own execution contract (e.g. Claude uses `--json-schema` + stdout recovery; Codex uses temp-file exchange + `--ephemeral` + sandbox). New adapters should extract only the small utilities.
 
-`invoke-reviewer-opencode.js` is currently advisory-only: `review-runner --advisory-reviewer opencode` invokes it with a separate blind-spot prompt and validates output through `advisory-review-schema.js`, not the trusted verdict schema. Do not use opencode as the primary `--reviewer` until a trusted verdict adapter exists for it. `invoke-reviewer-pi.js` is a trusted primary reviewer adapter; it invokes `pi --no-session --tools read,grep,find,ls --print <prompt>` and relies on review-runner's before/after dirty-worktree check for write detection. `invoke-reviewer-antigravity.js` is a trusted primary reviewer adapter for the `agy` CLI only; it invokes `agy --print --print-timeout <duration> --sandbox <prompt>` and relies on the same dirty-worktree check rather than Antigravity IDE/Desktop state.
+`invoke-reviewer-opencode.js` is currently advisory-only: `review-runner --advisory-reviewer opencode` invokes it with a separate blind-spot prompt and validates output through `advisory-review-schema.js`, not the trusted verdict schema. Do not use opencode as the primary `--reviewer` until a trusted verdict adapter exists for it. `invoke-reviewer-pi.js` is a trusted primary reviewer adapter; it invokes `pi --no-session --tools read,grep,find,ls --print <prompt>` and relies on review-runner's before/after dirty-worktree check for write detection. `invoke-reviewer-antigravity.js` is a trusted primary reviewer adapter for the `agy` CLI only; it invokes `agy --print --print-timeout <duration> --sandbox <prompt>` and relies on the same dirty-worktree check rather than Antigravity GUI, IDE, Desktop, plugin runtime, or PTY state.
 
 ### Shared utilities (cross-skill)
 
@@ -329,8 +332,8 @@ Current shared helpers:
 
 | Module | Owner | Consumers |
 |--------|-------|-----------|
-| `skills/relay-dispatch/scripts/cli-args.js` | relay-dispatch | `review-runner.js`, `invoke-reviewer-claude.js`, `invoke-reviewer-codex.js`, `invoke-reviewer-opencode.js`, `invoke-reviewer-pi.js`, `finalize-run.js`, `persist-request.js`, `probe-executor-env.js` |
-| `skills/relay-review/scripts/reviewer-helpers.js` | relay-review | `invoke-reviewer-claude.js`, `invoke-reviewer-codex.js`, `invoke-reviewer-opencode.js`, `invoke-reviewer-pi.js` |
+| `skills/relay-dispatch/scripts/cli-args.js` | relay-dispatch | `review-runner.js`, `invoke-reviewer-antigravity.js`, `invoke-reviewer-claude.js`, `invoke-reviewer-codex.js`, `invoke-reviewer-opencode.js`, `invoke-reviewer-pi.js`, `finalize-run.js`, `persist-request.js`, `probe-executor-env.js` |
+| `skills/relay-review/scripts/reviewer-helpers.js` | relay-review | `invoke-reviewer-antigravity.js`, `invoke-reviewer-claude.js`, `invoke-reviewer-codex.js`, `invoke-reviewer-opencode.js`, `invoke-reviewer-pi.js` |
 
 `reviewer-helpers.js` is scoped to `summarizeFailure` and `ensureJsonText`. Reviewer adapters intentionally keep divergent execution contracts (Claude uses `--json-schema` + stdout recovery; Codex uses temp schema/result files + `--ephemeral` + sandbox; opencode is advisory-only with prompt-enforced read-only behavior), so a full adapter factory would hide meaningful differences. See item 5 under "Adding a new reviewer adapter" above.
 

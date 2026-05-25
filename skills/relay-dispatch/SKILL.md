@@ -45,13 +45,15 @@ node "${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/dispatch.js" . -e claud
 node "${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/dispatch.js" . -e opencode -b feature-auth -p "..." --rubric-file rubric.yaml
 
 # Pi executor (requires pi CLI and an explicit allowed provider/model route)
-node "${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/dispatch.js" . -e pi -m openai/gpt-5 -b feature-auth -p "..." --rubric-file rubric.yaml
+node "${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/dispatch.js" . --executor pi --model openai/gpt-5 -b feature-auth -p "..." --rubric-file rubric.yaml
 
 # Google Antigravity CLI executor (requires agy CLI and an explicit allowed provider/model route)
-node "${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/dispatch.js" . -e antigravity -m google/antigravity-cli -b feature-auth -p "..." --rubric-file rubric.yaml
+node "${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/dispatch.js" . --executor antigravity --model google/antigravity-cli -b feature-auth -p "..." --rubric-file rubric.yaml
 ```
 
 For background and parallel dispatch, see `../relay/SKILL.md` § Batch Mode (single source of truth for the parallel-fork flow).
+
+The 7-field executor contract, capability matrix, and new-adapter checklist are documented in `references/agent-adapter-platform.md`.
 
 ## Options
 
