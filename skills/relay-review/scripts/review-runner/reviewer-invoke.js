@@ -146,7 +146,9 @@ function resolveReviewerModel(data, reviewerModel, reviewerName = null) {
   if (reviewerModel) return reviewerModel;
   const hintedModel = data?.model_hints?.review;
   if (typeof hintedModel === "string" && hintedModel.trim()) return hintedModel.trim();
-  if (reviewerName) return resolveExecutorDefaultModel(reviewerName, { relayHome: process.env.RELAY_HOME });
+  if (["opencode", "pi", "antigravity"].includes(reviewerName)) {
+    return resolveExecutorDefaultModel(reviewerName, { relayHome: process.env.RELAY_HOME });
+  }
   return null;
 }
 

@@ -577,6 +577,57 @@ test("reviewer-invoke precedence R4 regression: reviewer argv stays byte-identic
   assert.equal(reviewInvokeEvent.model, null);
 });
 
+test("reviewer-invoke keeps managed Codex reviewer modeless despite local executor defaults", (t) => {
+  const originalRelayHome = process.env.RELAY_HOME;
+  const { relayHome, repoRoot, runDir, manifestPath, manifest, promptPath, runId } = setupReviewRun();
+  t.after(() => {
+    if (originalRelayHome === undefined) {
+      delete process.env.RELAY_HOME;
+      return;
+    }
+    process.env.RELAY_HOME = originalRelayHome;
+  });
+  process.env.RELAY_HOME = relayHome;
+  fs.writeFileSync(path.join(relayHome, "executors.json"), JSON.stringify({
+    executors: {
+      codex: { default_model: "openai/gpt-5" },
+    },
+  }, null, 2), "utf-8");
+
+  const helperDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-helper-"));
+  const reviewerScript = writeReviewerArgEchoScript(helperDir, "reviewer-codex-modeless.js");
+
+  const { reviewText } = loadReviewText({
+    body: "# Notes\n",
+    data: manifest,
+    manifestPath,
+    prNumber: 11,
+    promptPath,
+    reviewFile: null,
+    reviewRepoPath: repoRoot,
+    reviewedHeadSha: "abc123",
+    reviewerModel: null,
+    reviewerName: "codex",
+    reviewerScript,
+    round: 1,
+    runDir,
+    runRepoPath: repoRoot,
+  });
+
+  assert.deepEqual(JSON.parse(reviewText).argv, [
+    "--repo", repoRoot,
+    "--prompt-file", promptPath,
+    "--json",
+  ]);
+
+  const eventLines = fs.readFileSync(getEventsPath(repoRoot, runId), "utf-8").trim().split("\n").filter(Boolean);
+  const reviewInvokeEvent = JSON.parse(eventLines.at(-1));
+  assert.equal(reviewInvokeEvent.event, "review_invoke");
+  assert.equal(reviewInvokeEvent.model, null);
+  assert.equal(reviewInvokeEvent.policy_decision.allowed, true);
+  assert.equal(reviewInvokeEvent.policy_decision.reason, "managed_cli");
+});
+
 test("reviewer-invoke/loadReviewText escalates when the reviewer mutates the worktree", (t) => {
   const originalRelayHome = process.env.RELAY_HOME;
   const { relayHome, repoRoot, runDir, manifestPath, manifest, promptPath, runId } = setupReviewRun();
