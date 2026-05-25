@@ -22,6 +22,11 @@ const {
   schemaHasFlag,
 } = require("./cli-args");
 const { execGit, execGh } = require("./exec");
+const {
+  classifyRepositoryDirt,
+  formatRuntimeMetadataDirt,
+  gitAddReviewableArgs,
+} = require("./runtime-dirt");
 
 const args = process.argv.slice(2);
 const CLI_ARG_OPTIONS = { commandName: "recover-commit", reservedFlags: ["-h"] };
@@ -290,7 +295,8 @@ function main() {
   }
 
   const statusText = execGit(worktreePath, ["status", "--porcelain"]);
-  const hasUncommittedChanges = statusText.trim() !== "";
+  const dirt = classifyRepositoryDirt(statusText);
+  const hasUncommittedChanges = dirt.hasReviewableDirt;
   const unpushedCommits = countUnpushedCommits(worktreePath, branch, data.git?.base_branch);
   const prBody = readPrBodyFile(prBodyFile) || buildPrBody({
     runId: data.run_id,
@@ -310,6 +316,14 @@ function main() {
     } catch (error) {
       throw new Error(`pr_list_failed: ${formatExecError(error)}`);
     }
+  }
+  if (dirt.hasOnlyRuntimeMetadataDirt && unpushedCommits === 0 && existingPrNumber === null) {
+    const detail = (
+      "worktree contains only runtime metadata dirt " +
+      `(${formatRuntimeMetadataDirt(statusText)}); executor produced no reviewable repository changes`
+    );
+    appendFailureEvent(validatedPaths.repoRoot, data, "nothing_to_recover", detail, data.git?.head_sha || null, branch);
+    throw new Error(`nothing_to_recover: ${detail}`);
   }
   if (!hasUncommittedChanges && unpushedCommits === 0 && existingPrNumber === null) {
     throw new Error("nothing_to_recover: worktree has no uncommitted changes, no unpushed commits, and no existing PR");
@@ -357,7 +371,7 @@ function main() {
   let commitCreated = false;
   if (hasUncommittedChanges) {
     try {
-      execGit(worktreePath, ["add", "-A"]);
+      execGit(worktreePath, gitAddReviewableArgs(statusText));
       execGit(worktreePath, ["commit", "-m", commitTitle, "-m", commitBody]);
       commitSha = execGit(worktreePath, ["rev-parse", "HEAD"]);
       commitCreated = true;

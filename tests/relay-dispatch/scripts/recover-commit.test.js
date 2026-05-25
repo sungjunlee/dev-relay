@@ -144,6 +144,7 @@ function buildManifestForState(manifest, state, repoRoot, runId) {
 
 function setupRepo({
   dirty = false,
+  runtimeOnlyDirty = false,
   unpushed = false,
   evidence = false,
   manifestState = STATES.REVIEW_PENDING,
@@ -175,6 +176,11 @@ function setupRepo({
   execFileSync("git", ["worktree", "add", worktreePath, "-b", branch], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
   if (dirty) {
     fs.writeFileSync(path.join(worktreePath, "recovered.txt"), "completed but uncommitted\n", "utf-8");
+  }
+  if (runtimeOnlyDirty) {
+    const runtimeDir = path.join(worktreePath, ".antigravitycli");
+    fs.mkdirSync(runtimeDir, { recursive: true });
+    fs.writeFileSync(path.join(runtimeDir, "session.json"), "{}\n", "utf-8");
   }
   if (unpushed) {
     fs.writeFileSync(path.join(worktreePath, "unpushed.txt"), "committed but not pushed\n", "utf-8");
@@ -383,6 +389,20 @@ test("clean worktree with no unpushed commits rejects as nothing to recover", ()
 
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /nothing_to_recover/);
+  assert.equal(readManifest(fixture.manifestPath).data.git.pr_number, null);
+  assert.equal(readJsonLines(fixture.ghLogPath).filter((argv) => argv[0] === "pr" && argv[1] === "create").length, 0);
+});
+
+test("runtime-only Antigravity dirt rejects as nothing reviewable to recover", () => {
+  const fixture = setupRepo({ runtimeOnlyDirty: true });
+  const beforeHead = execFileSync("git", ["-C", fixture.worktreePath, "rev-parse", "HEAD"], { encoding: "utf-8" }).trim();
+  const result = runRecover(fixture, ["--reason", "runtime metadata only", "--json"]);
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /nothing_to_recover/);
+  assert.match(result.stderr, /runtime metadata dirt/);
+  assert.match(result.stderr, /\.antigravitycli\//);
+  assert.equal(execFileSync("git", ["-C", fixture.worktreePath, "rev-parse", "HEAD"], { encoding: "utf-8" }).trim(), beforeHead);
   assert.equal(readManifest(fixture.manifestPath).data.git.pr_number, null);
   assert.equal(readJsonLines(fixture.ghLogPath).filter((argv) => argv[0] === "pr" && argv[1] === "create").length, 0);
 });

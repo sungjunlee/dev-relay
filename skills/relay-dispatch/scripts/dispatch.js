@@ -140,6 +140,7 @@ const {
 } = require("./relay-policy-gate");
 const { loadRelayPolicy } = require("./relay-policy");
 const { resolveRoutingDecision } = require("./relay-routing");
+const { classifyRepositoryDirt, formatRuntimeMetadataDirt } = require("./runtime-dirt");
 
 // ---------------------------------------------------------------------------
 // Args
@@ -715,14 +716,11 @@ function resolveEffectiveDispatchModel({ cliModel, manifestModelHints, cliModelH
 }
 
 function summarizeCommitMode({ status, gitLog, uncommitted }) {
-  if (!gitLog && uncommitted) {
+  if (status === "completed-uncommitted") {
     return "completed-uncommitted, recover-commit required";
   }
   if (status === "completed" || status === "completed-with-warning") {
     return gitLog ? "committed in-sandbox" : status;
-  }
-  if (status === "completed-uncommitted") {
-    return "completed-uncommitted, recover-commit required";
   }
   return status;
 }
@@ -1477,11 +1475,14 @@ async function main() {
     uncommittedDiff = [wd, staged].filter(Boolean).join("\n");
   } catch {}
 
-  // Check for uncommitted work (executor may have worked but not committed)
-  let uncommitted = "";
+  // Check for uncommitted work (executor may have worked but not committed).
+  // Executor runtime metadata is not reviewable repository work.
+  let rawUncommitted = "";
   try {
-    uncommitted = execGit(wtPath, ["status", "--porcelain"]);
+    rawUncommitted = execGit(wtPath, ["status", "--porcelain"]);
   } catch {}
+  const dirt = classifyRepositoryDirt(rawUncommitted);
+  let uncommitted = dirt.reviewableStatus;
 
   const hasResult = resultText !== "";
 
@@ -1504,6 +1505,13 @@ async function main() {
     error = error || "executor produced no structured result file or summary (silent failure)";
   } else if (execResult.timedOut && hasWork) {
     status = "completed-with-warning";
+  } else if (exitCode === 0 && !gitLog && dirt.hasOnlyRuntimeMetadataDirt && EXECUTOR !== "codex") {
+    status = "failed";
+    error = error || (
+      "executor produced no reviewable repository changes; only runtime metadata dirt was detected: " +
+      `${formatRuntimeMetadataDirt(rawUncommitted)}. ` +
+      "Rerun dispatch after producing source changes, or close the run as a no-op."
+    );
   } else if (exitCode === 0 && !gitLog && !uncommitted) {
     status = "completed-no-op";
   } else if (exitCode === 0 && !gitLog && uncommitted) {
@@ -1617,7 +1625,7 @@ async function main() {
       currentHead = recovery.commitSha || currentHead;
       try {
         gitLog = execGit(wtPath, ["log", "--oneline", `${startHead}..HEAD`]);
-        uncommitted = execGit(wtPath, ["status", "--porcelain"]);
+        uncommitted = classifyRepositoryDirt(execGit(wtPath, ["status", "--porcelain"])).reviewableStatus;
         if (!uncommitted) uncommittedDiff = "";
       } catch {}
       try {
