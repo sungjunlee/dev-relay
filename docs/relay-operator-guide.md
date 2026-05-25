@@ -177,7 +177,7 @@ node skills/relay-dispatch/scripts/reliability-report.js --repo . --by-acting-re
 
 ## Extending Relay
 
-New executors live under `skills/relay-dispatch/scripts/executors/` and are registered in `executors/index.js`. The adapter contract is documented in `skills/relay-dispatch/scripts/executors/README.md`.
+New executors live under `skills/relay-dispatch/scripts/executors/` and export the 7-field adapter contract documented in `skills/relay-dispatch/references/agent-adapter-platform.md`. Register the harness descriptor in `skills/relay-dispatch/scripts/agent-adapters/index.js`; update `skills/relay-dispatch/scripts/executors/index.js` only when stable compatibility display order needs it.
 
 New reviewers use `skills/relay-review/scripts/invoke-reviewer-<name>.js`. The review runner resolves reviewers by name and expects a JSON verdict matching the local review schema.
 
