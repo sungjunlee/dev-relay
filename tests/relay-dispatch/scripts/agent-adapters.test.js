@@ -60,14 +60,27 @@ test("agent adapter descriptors expose structured capabilities and the executor 
 
   const opencode = getAgentAdapterDescriptor("opencode");
   assert.equal(opencode.executor.cliBinary, "opencode");
+  assert.equal(opencode.phases[ADAPTER_PHASES.DISPATCH].trust, "executor");
+  assert.equal(opencode.phases[ADAPTER_PHASES.PRIMARY_REVIEW].supported, false);
+  assert.equal(opencode.phases[ADAPTER_PHASES.PRIMARY_REVIEW].trust, "unsupported");
+  assert.match(opencode.phases[ADAPTER_PHASES.PRIMARY_REVIEW].reason, /advisory-only/i);
+  assert.equal(opencode.phases[ADAPTER_PHASES.ADVISORY_REVIEW].trust, "advisory");
   assert.equal(opencode.capabilities.appRegistration.supported, false);
   assert.equal(opencode.capabilities.modelDefaults.provider, "opencode-go");
   assert.equal(opencode.capabilities.modelDefaults.dispatch.defaultModel, "opencode-go/deepseek-v4-pro");
+  assert.equal(opencode.capabilities.modelDefaults.advisoryReview.defaultModel, "opencode-go/deepseek-v4-pro");
   assert.deepEqual(opencode.capabilities.sandbox.dispatch.modes, ["workspace-write"]);
   assert.equal(opencode.capabilities.sandbox.dispatch.enforced, false);
+  assert.equal(opencode.capabilities.sandbox.primaryReview.supported, false);
+  assert.match(opencode.capabilities.sandbox.primaryReview.failClosedReason, /--advisory-reviewer opencode/i);
   assert.equal(opencode.capabilities.network.dispatch.configurable, false);
+  assert.equal(opencode.capabilities.network.primaryReview.supported, false);
   assert.equal(opencode.capabilities.readOnly.advisoryReview, true);
+  assert.equal(opencode.capabilities.readOnly.primaryReview, false);
+  assert.equal(opencode.capabilities.policy.primary_review.sandbox["read-only"].enforcement_level, "unsupported");
+  assert.match(opencode.capabilities.policy.primary_review.sandbox["read-only"].fail_closed_reason, /primary review/i);
   assert.equal(opencode.capabilities.transport.advisoryReview, "opencode-cli");
+  assert.equal(opencode.capabilities.transport.primaryReview, null);
   assert.equal(opencode.capabilities.structuredOutput.advisoryReview, "json-text");
 
   const pi = getAgentAdapterDescriptor("pi");

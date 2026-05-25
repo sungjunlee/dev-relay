@@ -56,6 +56,29 @@ test("policy audit keeps OpenCode sandbox and network informational", () => {
   assert.deepEqual(audit.fail_closed_reasons, []);
 });
 
+test("policy audit fails closed for OpenCode primary review because it is advisory-only", () => {
+  const audit = buildAgentPolicyAudit({
+    descriptor: getAgentAdapterDescriptor("opencode"),
+    phase: ADAPTER_PHASES.PRIMARY_REVIEW,
+    requested: {
+      sandbox: "read-only",
+      networkAccess: "ambient",
+      readOnly: true,
+    },
+  });
+
+  assert.equal(audit.safe, false);
+  assert.equal(audit.sandbox.enforcement_level, "unsupported");
+  assert.equal(audit.network.enforcement_level, "unsupported");
+  assert.equal(audit.read_only.enforcement_level, "unsupported");
+  assert.match(audit.fail_closed_reasons.join("\n"), /--advisory-reviewer opencode/i);
+  assert.match(audit.fail_closed_reasons.join("\n"), /--reviewer opencode/i);
+  assert.throws(
+    () => assertPolicyRepresentable(audit),
+    /OpenCode primary review is not implemented/
+  );
+});
+
 test("policy audit records Pi primary review read-only tool allowlist metadata", () => {
   const audit = buildAgentPolicyAudit({
     descriptor: getAgentAdapterDescriptor("pi"),

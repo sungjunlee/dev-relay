@@ -1309,7 +1309,7 @@ async function main() {
   codexGitCommonDir = buildResult.codexGitCommonDir || null;
 
   if (EXECUTOR === "opencode") {
-    console.error("Warning: opencode executor is experimental; see docs/reviewer-policy-opencode.md for trust boundary and reviewer policy.");
+    console.error("Warning: opencode executor is experimental; see relay-dispatch/references/reviewer-policy-opencode.md for trust boundary and reviewer policy.");
   }
 
   if (!JSON_OUT) {
