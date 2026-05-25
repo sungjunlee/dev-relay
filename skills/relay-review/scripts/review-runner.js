@@ -411,22 +411,9 @@ if (require.main === module) {
 }
 
 module.exports = {
-  applyVerdictToManifest,
-  buildCommentBody,
-  buildPrompt,
-  buildRedispatchPrompt,
-  buildReviewRunnerRubricGateFailure,
-  detectChurnGrowth,
-  formatIssueList,
-  formatPriorVerdictSummary,
-  formatScopeDrift,
-  getGhLogin,
-  loadRubricFromRunDir,
-  parseRemoteHost,
-  parseReviewVerdict,
-  parseScoreLog,
-  resolveIssueNumber,
-  resolveRemoteHost,
-  validateReviewVerdict,
-  validateScopeDrift,
+  applyVerdictToManifest, buildCommentBody, buildPrompt, buildRedispatchPrompt,
+  buildReviewRunnerRubricGateFailure, detectChurnGrowth, formatIssueList,
+  formatPriorVerdictSummary, formatScopeDrift, getGhLogin, loadRubricFromRunDir,
+  parseRemoteHost, parseReviewVerdict, parseScoreLog, resolveIssueNumber,
+  resolveRemoteHost, validateReviewVerdict, validateScopeDrift,
 };
