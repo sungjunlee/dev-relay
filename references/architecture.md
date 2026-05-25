@@ -2,7 +2,7 @@
 
 Deep-dive into the manifest contract, state machine, and extension points. For overview, see [CLAUDE.md](../CLAUDE.md).
 
-This reference centers on the manifest-backed run lifecycle, plus the readiness boundary that may sit ahead of `relay-plan`. For the full relay-ready control-flow contract, see [docs/relay-ready-routing-and-handoff-design.md](../docs/relay-ready-routing-and-handoff-design.md).
+This reference centers on the manifest-backed run lifecycle, plus the readiness boundary that may sit ahead of `relay-plan`. For the full relay-ready control-flow contract, see [docs/relay-ready-routing-and-handoff-design.md](../docs/relay-ready-routing-and-handoff-design.md). For provider/model route policy setup and operator examples, see [docs/model-route-policy.md](../docs/model-route-policy.md).
 
 ## Readiness Boundary
 
@@ -83,8 +83,8 @@ roles:
   reviewer: claude              # who reviews (isolated)
 
 model_hints:
-  dispatch: opus                # optional per-phase advisory model preference
-  review: haiku                 # optional per-phase advisory model preference
+  dispatch: null                # omit for Codex/Claude managed CLI defaults
+  review: null                  # omit for Codex/Claude managed CLI defaults
   advisory_review: opencode-go/deepseek-v4-pro  # optional non-gating advisory reviewer model
 
 paths:
@@ -146,8 +146,9 @@ bootstrap_exempt:
 | Field | Purpose |
 |-------|---------|
 | `roles.*` | Immutable per-run binding. Decouples who decides, who implements, who validates |
-| `model_hints.*` | Optional advisory per-phase model preference. Current runtime consumers: `dispatch`, `review`, `advisory_review` |
-| `dispatch.last_model` / executor config | Dispatch records the effective model. If no explicit model hint is present, executor defaults come from the skill-bundled `skills/relay-dispatch/references/executor-models.json` plus optional `~/.relay/executors.json` overrides |
+| `model_hints.*` | Optional per-phase model preference. Current runtime consumers: `dispatch`, `review`, `advisory_review`. For unmanaged harnesses, values must resolve to approved provider/model routes. Do not add Codex/Claude model hints in generated company defaults just to pin their managed CLI model. |
+| `dispatch.last_model` / executor config | Dispatch records the effective model route when one exists. For unmanaged executors such as OpenCode, defaults come from the skill-bundled `skills/relay-dispatch/references/executor-models.json` plus optional `~/.relay/executors.json` overrides and still pass through the route policy gate. Codex/Claude managed CLI defaults normally record a null model route. |
+| Route policy | Stored outside the manifest in `~/.relay/policy.json` plus optional repo-local `.relay/policy.json`. Executor/reviewer names are harnesses; provider/model route strings are the policy boundary. Final operator precedence is `CLI flags -> routing rules -> defaults -> existing relay defaults -> policy gate`. |
 | `policy.merge` | `manual_after_lgtm` — orchestrator must explicitly merge |
 | `policy.reviewer_write` | `forbid` — review runner rejects rounds where reviewer mutated files |
 | `policy.review_assurance` | `standard` keeps current behavior; `hardened` requires stronger review/evidence gates without using agent identity heuristics. Hardened review commands must include an advisory reviewer, and passing verdicts require successful advisory artifacts plus strict execution evidence. When `execution-evidence.json` includes `verification_runs[]`, hardened gates prefer those actual command-run records; legacy evidence without that array still falls back to `test_exit_code=0` plus a SHA-bound result hash |
@@ -184,9 +185,9 @@ Semantics:
 Each run keeps an append-only event log at `~/.relay/runs/<repo-slug>/<run-id>/events.jsonl`. Records are emitted by `appendRunEvent()` in `skills/relay-dispatch/scripts/relay-events.js` and share a common envelope (`ts`, `event`, `actor`, `run_id`, `state_from`, `state_to`, `head_sha`, `round`, `reason`) plus optional fields (`reviewer`, `rubric_status`, `last_reviewed_sha`, `pr_number`, `bootstrap_exempt`, `model`, `executor_network`, `failure_class`, `before`, `after`, `profile`, `status`, `artifact_path`, `raw_response_path`, `elapsed_ms`, `critical_path_wait_ms`, `consumed_by_phase`, `phase_decision_waited`, `frontier_step_replaced`, `failure_reason`, override audit fields):
 
 ```jsonl
-{"ts":"2026-04-18T12:00:00.000Z","event":"dispatch_start","actor":"codex","run_id":"issue-42-20260418120000000","state_from":"draft","state_to":"dispatched","head_sha":"abc123","round":null,"reason":"new_dispatch","model":"gpt-5-codex","executor_network":{"access":"enabled","mechanism":"sandbox_workspace_write.network_access","domains":null}}
+{"ts":"2026-04-18T12:00:00.000Z","event":"dispatch_start","actor":"codex","run_id":"issue-42-20260418120000000","state_from":"draft","state_to":"dispatched","head_sha":"abc123","round":null,"reason":"new_dispatch","model":null,"executor_network":{"access":"enabled","mechanism":"sandbox_workspace_write.network_access","domains":null}}
 {"ts":"2026-04-18T12:05:00.000Z","event":"dispatch_result","actor":"codex","run_id":"issue-42-20260418120000000","state_from":"dispatched","state_to":"review_pending","head_sha":"def456","round":null,"reason":"new_dispatch:completed","executor_network":{"access":"enabled","mechanism":"sandbox_workspace_write.network_access","domains":null},"failure_class":null}
-{"ts":"2026-04-18T12:10:00.000Z","event":"review_invoke","actor":"claude","run_id":"issue-42-20260418120000000","state_from":"review_pending","state_to":"review_pending","head_sha":"def456","round":1,"reason":"codex","model":"haiku"}
+{"ts":"2026-04-18T12:10:00.000Z","event":"review_invoke","actor":"claude","run_id":"issue-42-20260418120000000","state_from":"review_pending","state_to":"review_pending","head_sha":"def456","round":1,"reason":"codex","model":null}
 {"ts":"2026-04-18T12:11:00.000Z","event":"advisory_review","actor":"claude","run_id":"issue-42-20260418120000000","state_from":"review_pending","state_to":"review_pending","head_sha":"def456","round":1,"reason":null,"reviewer":"opencode","model":"opencode-go/deepseek-v4-pro","profile":"blindspot","status":"success","artifact_path":"~/.relay/runs/project-abcd1234/issue-42-20260418120000000/review-round-1-advisory-opencode.json","raw_response_path":"~/.relay/runs/project-abcd1234/issue-42-20260418120000000/review-round-1-advisory-opencode-raw-response.txt","required_count":0,"advisory_count":1,"duplicate_low_confidence_count":0,"elapsed_ms":42000,"advisory_elapsed_ms":42000,"critical_path_wait_ms":5000,"consumed_by_phase":"metrics","phase_decision_waited":true,"frontier_step_replaced":false,"failure_reason":null}
 {"ts":"2026-04-18T12:12:00.000Z","event":"review_apply","actor":"claude","run_id":"issue-42-20260418120000000","state_from":"review_pending","state_to":"changes_requested","head_sha":"def456","round":1,"reviewer":"codex","reason":"changes_requested"}
 {"ts":"2026-04-18T12:40:00.000Z","event":"review_apply","actor":"claude","run_id":"issue-42-20260418120000000","state_from":"review_pending","state_to":"ready_to_merge","head_sha":"ghi789","round":2,"reviewer":"codex","reason":"pass"}
