@@ -39,7 +39,7 @@ The policy gate is last and fail-closed. A route selected by a CLI flag, a routi
 
 Adapter capability checks happen before the model-route policy gate. The adapter layer answers whether the selected CLI can safely perform the requested phase and containment mode, such as dispatch vs primary review vs advisory review, read-only requirements, sandbox metadata, and network metadata. The route-policy layer answers only whether the already-capable effective provider/model route is allowed for the active profile.
 
-For example, `--reviewer opencode` fails as an adapter-capability denial because OpenCode is advisory-only for review, even if a policy would otherwise allow an `opencode-go/*` route. Conversely, `--advisory-reviewer opencode --advisory-reviewer-model openai/gpt-5` reaches the route-policy gate because OpenCode can run advisory review, then fails as a model-route denial unless that route is allowed. JSON failures expose these layers separately as `adapter_capability` and `policy_decision`.
+For example, `--reviewer opencode --reviewer-model openai/gpt-5` reaches the route-policy gate because OpenCode can now represent primary review, then fails as a model-route denial unless that route is allowed for `phase=review`. Likewise, `--advisory-reviewer pi --advisory-reviewer-model openai/gpt-5` reaches the advisory route-policy gate because Pi can represent advisory review. JSON failures expose these layers separately as `adapter_capability` and `policy_decision`.
 
 ## Phase Interaction
 

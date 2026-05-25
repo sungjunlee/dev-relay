@@ -355,7 +355,13 @@ function executeAdvisoryRequest(request) {
     const timeoutMs = parsePositiveSeconds(request.timeoutSeconds) * 1000;
     advisoryRepoPath = createAdvisoryWorktree(request.reviewRepoPath, request.runDir, request.reviewerName);
     const statusBefore = captureGitStatus(advisoryRepoPath);
-    const execArgs = [request.reviewerScript, "--repo", advisoryRepoPath, "--prompt-file", request.promptPath, "--json"];
+    const execArgs = [
+      request.reviewerScript,
+      "--repo", advisoryRepoPath,
+      "--prompt-file", request.promptPath,
+      "--json",
+      "--phase", ADAPTER_PHASES.ADVISORY_REVIEW,
+    ];
     if (request.reviewerModel) execArgs.push("--model", request.reviewerModel);
 
     let stdout = "";

@@ -14,6 +14,7 @@ const {
   assertPolicyRepresentable,
   buildAgentPolicyAudit,
 } = require("../../../relay-dispatch/scripts/agent-adapters/policy");
+const { resolveExecutorDefaultModel } = require("../../../relay-dispatch/scripts/executor-model-config");
 const { appendRunEvent, EVENTS } = require("../../../relay-dispatch/scripts/relay-events");
 const { assertRelayPolicyGate } = require("../../../relay-dispatch/scripts/relay-policy-gate");
 const { applyPolicyViolationToManifest } = require("./manifest-apply");
@@ -106,6 +107,8 @@ function resolveReviewerScript(reviewerName, reviewerScriptArg, { phase = ADAPTE
 }
 
 function invokeReviewer({
+  phase = ADAPTER_PHASES.PRIMARY_REVIEW,
+  passPhase = false,
   repoPath,
   promptPath,
   reviewerName,
@@ -118,6 +121,9 @@ function invokeReviewer({
     "--prompt-file", promptPath,
     "--json",
   ];
+  if (passPhase) {
+    execArgs.push("--phase", phase);
+  }
   if (reviewerModel) {
     execArgs.push("--model", reviewerModel);
   }
@@ -136,10 +142,12 @@ function invokeReviewer({
   };
 }
 
-function resolveReviewerModel(data, reviewerModel) {
+function resolveReviewerModel(data, reviewerModel, reviewerName = null) {
   if (reviewerModel) return reviewerModel;
   const hintedModel = data?.model_hints?.review;
-  return typeof hintedModel === "string" && hintedModel.trim() ? hintedModel : null;
+  if (typeof hintedModel === "string" && hintedModel.trim()) return hintedModel.trim();
+  if (reviewerName) return resolveExecutorDefaultModel(reviewerName, { relayHome: process.env.RELAY_HOME });
+  return null;
 }
 
 function buildPrimaryReviewerPolicy(reviewerName) {
@@ -182,9 +190,9 @@ function buildPrimaryReviewerPolicy(reviewerName) {
   };
 }
 
-function isAdapterManagedReviewerScript(reviewerName, reviewerScript) {
+function isAdapterManagedReviewerScript(reviewerName, reviewerScript, { phase = ADAPTER_PHASES.PRIMARY_REVIEW } = {}) {
   try {
-    return path.resolve(reviewerScript) === path.resolve(resolveReviewerScript(reviewerName, null));
+    return path.resolve(reviewerScript) === path.resolve(resolveReviewerScript(reviewerName, null, { phase }));
   } catch {
     return false;
   }
@@ -220,7 +228,7 @@ function buildCustomReviewerScriptPolicy({ reviewerName, reviewerScript }) {
 }
 
 function buildReviewerPolicy({ reviewerName, reviewerScript }) {
-  if (isAdapterManagedReviewerScript(reviewerName, reviewerScript)) {
+  if (isAdapterManagedReviewerScript(reviewerName, reviewerScript, { phase: ADAPTER_PHASES.PRIMARY_REVIEW })) {
     return buildPrimaryReviewerPolicy(reviewerName);
   }
   return buildCustomReviewerScriptPolicy({ reviewerName, reviewerScript });
@@ -233,7 +241,7 @@ function buildPrimaryReviewerPreflight({
   reviewerScript,
   runRepoPath,
 }) {
-  const effectiveReviewerModel = resolveReviewerModel(data, reviewerModel);
+  const effectiveReviewerModel = resolveReviewerModel(data, reviewerModel, reviewerName);
   const reviewerPolicy = buildReviewerPolicy({ reviewerName, reviewerScript });
   try {
     const policyDecision = assertRelayPolicyGate({
@@ -287,6 +295,8 @@ function loadReviewText({ body, data, manifestPath, prNumber, promptPath, review
 
   const statusBeforeReviewer = captureGitStatus(reviewRepoPath);
   const invoked = invokeReviewer({
+    phase: ADAPTER_PHASES.PRIMARY_REVIEW,
+    passPhase: isAdapterManagedReviewerScript(reviewerName, reviewerScript, { phase: ADAPTER_PHASES.PRIMARY_REVIEW }),
     repoPath: reviewRepoPath,
     promptPath,
     reviewerModel: effectiveReviewerModel,

@@ -3,10 +3,10 @@
 OpenCode is currently supported as:
 
 - a dispatch executor;
+- a primary reviewer through `--reviewer opencode` when route policy allows the selected model route;
 - an advisory reviewer through `--advisory-reviewer opencode`;
-- not a trusted primary reviewer.
 
-`--reviewer opencode` must fail closed through the adapter registry until a trusted primary-review adapter exists and is tested. Advisory OpenCode output can inform an operator or a trusted primary reviewer, but it never replaces the merge-gating verdict.
+OpenCode primary review is a merge-gating role, so it must return the normal review verdict JSON. Advisory OpenCode output can inform an operator or a trusted primary reviewer, but it never replaces the merge-gating verdict in standard review.
 
 ## Dispatch
 
@@ -20,10 +20,10 @@ OpenCode advisory review runs with a prompt-level read-only instruction and a de
 
 ## Primary Review Boundary
 
-OpenCode primary review is unsupported for now. The registry marks `primary_review` as unsupported with an explicit advisory-only reason, and policy audit metadata represents primary review requests as unsupported. Operators should use:
+OpenCode primary review uses the same CLI transport with a phase-specific prompt and parser. Relay validates the result as primary verdict JSON, records adapter capability metadata as prompt-only/read-only with a post-run git status guard, and still requires route-policy approval before spawning `opencode`.
 
 ```bash
---reviewer codex --advisory-reviewer opencode
+--reviewer opencode --reviewer-model opencode-go/deepseek-v4-pro
 ```
 
-or another trusted primary reviewer. A custom `--reviewer-script` remains an operator override and is audited separately from adapter-managed OpenCode primary review.
+This does not claim live stable success for every OpenCode/model combination. Operators should treat policy approval as permission to try the route, then rely on review events, raw responses, and canary evidence before calling a live route healthy. A custom `--reviewer-script` remains an operator override and is audited separately from adapter-managed OpenCode primary review.

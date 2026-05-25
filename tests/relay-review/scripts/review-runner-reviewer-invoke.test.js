@@ -120,27 +120,18 @@ test("reviewer-invoke/resolveReviewerName preserves arg, manifest, env precedenc
 test("reviewer-invoke/resolveReviewerScript resolves built-in adapters and rejects invalid names", () => {
   const script = resolveReviewerScript("codex");
   assert.match(script, /invoke-reviewer-codex\.js$/);
+  const opencodeScript = resolveReviewerScript("opencode");
+  assert.match(opencodeScript, /invoke-reviewer-opencode\.js$/);
   const piScript = resolveReviewerScript("pi");
   assert.match(piScript, /invoke-reviewer-pi\.js$/);
   assert.throws(() => resolveReviewerScript("../bad"), /Invalid reviewer name/);
 });
 
-test("reviewer-invoke/resolveReviewerScript fails closed for advisory-only adapters in primary review", () => {
-  assert.throws(
-    () => resolveReviewerScript("opencode"),
-    (error) => {
-      assert.match(error.message, /supports advisory_review but not primary_review/);
-      assert.match(error.message, /--advisory-reviewer opencode/);
-      assert.match(error.message, /--reviewer opencode/);
-      assert.match(error.message, /--reviewer-script/);
-      return true;
-    }
-  );
-});
-
-test("reviewer-invoke/resolveReviewerScript allows advisory-only adapters for advisory review", () => {
+test("reviewer-invoke/resolveReviewerScript allows parity adapters for advisory review", () => {
   const script = resolveReviewerScript("opencode", null, { phase: ADAPTER_PHASES.ADVISORY_REVIEW });
   assert.match(script, /invoke-reviewer-opencode\.js$/);
+  assert.match(resolveReviewerScript("pi", null, { phase: ADAPTER_PHASES.ADVISORY_REVIEW }), /invoke-reviewer-pi\.js$/);
+  assert.match(resolveReviewerScript("antigravity", null, { phase: ADAPTER_PHASES.ADVISORY_REVIEW }), /invoke-reviewer-antigravity\.js$/);
 });
 
 test("reviewer-invoke/resolveReviewerScript rejects unknown adapter names without falling back to files", () => {
@@ -157,6 +148,16 @@ test("reviewer-invoke/buildPrimaryReviewerPolicy records Pi tool allowlist metad
   assert.equal(policy.safe, true);
   assert.equal(policy.read_only.enforcement_level, "tool-allowlist");
   assert.deepEqual(policy.read_only.flags, ["--tools read,grep,find,ls"]);
+});
+
+test("reviewer-invoke/buildPrimaryReviewerPolicy records OpenCode primary review status guard metadata", () => {
+  const policy = buildPrimaryReviewerPolicy("opencode");
+  assert.equal(policy.adapter, "opencode");
+  assert.equal(policy.phase, ADAPTER_PHASES.PRIMARY_REVIEW);
+  assert.equal(policy.safe, true);
+  assert.equal(policy.sandbox.enforcement_level, "informational");
+  assert.equal(policy.read_only.enforcement_level, "prompt-only");
+  assert.match(policy.read_only.warnings.join("\n"), /does not prevent writes/i);
 });
 
 test("reviewer-invoke/buildPrimaryReviewerPolicy records Antigravity CLI version metadata", (t) => {

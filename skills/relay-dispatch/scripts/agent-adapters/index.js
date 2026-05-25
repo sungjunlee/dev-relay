@@ -12,8 +12,6 @@ const ADAPTER_PHASES = Object.freeze({
 });
 
 const PHASES = Object.freeze(Object.values(ADAPTER_PHASES));
-const OPENCODE_PRIMARY_REVIEW_UNSUPPORTED_REASON =
-  "OpenCode primary review is not implemented. OpenCode is advisory-only for review; use --advisory-reviewer opencode instead of --reviewer opencode until a trusted primary verdict adapter is implemented.";
 
 function bundledDefaultModel(name) {
   const value = bundledModels.executors?.[name]?.default_model;
@@ -336,9 +334,8 @@ const DESCRIPTORS = Object.freeze({
         trust: "executor",
       },
       [ADAPTER_PHASES.PRIMARY_REVIEW]: {
-        supported: false,
-        trust: "unsupported",
-        reason: "advisory-only; primary review fail-closed until a trusted verdict adapter is implemented",
+        supported: true,
+        trust: "trusted",
       },
       [ADAPTER_PHASES.ADVISORY_REVIEW]: {
         supported: true,
@@ -352,8 +349,9 @@ const DESCRIPTORS = Object.freeze({
           enforced: false,
         },
         primaryReview: {
-          supported: false,
-          failClosedReason: OPENCODE_PRIMARY_REVIEW_UNSUPPORTED_REASON,
+          mode: "read-only",
+          enforced: false,
+          guard: "worktree-status",
         },
         advisoryReview: {
           mode: "read-only",
@@ -367,8 +365,8 @@ const DESCRIPTORS = Object.freeze({
           enabledMode: "ambient",
         },
         primaryReview: {
-          supported: false,
-          failClosedReason: OPENCODE_PRIMARY_REVIEW_UNSUPPORTED_REASON,
+          configurable: false,
+          enabledMode: "ambient",
         },
         advisoryReview: {
           configurable: false,
@@ -377,7 +375,7 @@ const DESCRIPTORS = Object.freeze({
       },
       readOnly: {
         dispatch: false,
-        primaryReview: false,
+        primaryReview: true,
         advisoryReview: true,
       },
       policy: {
@@ -421,33 +419,35 @@ const DESCRIPTORS = Object.freeze({
         primary_review: {
           sandbox: {
             "read-only": {
-              enforcement_level: "unsupported",
-              mechanism: null,
-              fail_closed_reason: OPENCODE_PRIMARY_REVIEW_UNSUPPORTED_REASON,
+              enforcement_level: "informational",
+              mechanism: "review-runner-status-guard",
+              flags: ["prompt:do-not-modify-files", "git-status-before-after"],
+              warnings: ["OpenCode primary review has no native relay sandbox; relay records post-run worktree mutation as a policy violation."],
             },
           },
           network: {
             ambient: {
-              enforcement_level: "unsupported",
-              mechanism: null,
-              fail_closed_reason: OPENCODE_PRIMARY_REVIEW_UNSUPPORTED_REASON,
+              enforcement_level: "informational",
+              mechanism: "ambient-network",
+              warnings: ["OpenCode primary review does not gate network access at the CLI level."],
             },
             disabled: {
-              enforcement_level: "unsupported",
-              mechanism: null,
-              fail_closed_reason: OPENCODE_PRIMARY_REVIEW_UNSUPPORTED_REASON,
+              enforcement_level: "informational",
+              mechanism: "ambient-network",
+              warnings: ["OpenCode primary review does not gate network access at the CLI level."],
             },
             enabled: {
-              enforcement_level: "unsupported",
-              mechanism: null,
-              fail_closed_reason: OPENCODE_PRIMARY_REVIEW_UNSUPPORTED_REASON,
+              enforcement_level: "informational",
+              mechanism: "ambient-network",
+              warnings: ["OpenCode primary review does not gate network access at the CLI level."],
             },
           },
           read_only: {
             true: {
-              enforcement_level: "unsupported",
-              mechanism: null,
-              fail_closed_reason: OPENCODE_PRIMARY_REVIEW_UNSUPPORTED_REASON,
+              enforcement_level: "prompt-only",
+              mechanism: "prompt-instruction-with-worktree-status-guard",
+              flags: ["prompt:do-not-modify-files", "git-status-before-after"],
+              warnings: ["OpenCode primary review prompt-only read-only mode does not prevent writes; relay escalates post-run worktree mutation as a policy violation."],
             },
           },
         },
@@ -478,12 +478,12 @@ const DESCRIPTORS = Object.freeze({
       },
       transport: {
         dispatch: "opencode-cli",
-        primaryReview: null,
+        primaryReview: "opencode-cli",
         advisoryReview: "opencode-cli",
       },
       structuredOutput: {
         dispatch: "stdout-copied-result-file",
-        primaryReview: null,
+        primaryReview: "json-text",
         advisoryReview: "json-text",
       },
       appRegistration: {
@@ -496,7 +496,10 @@ const DESCRIPTORS = Object.freeze({
           configKey: "opencode",
           defaultModel: bundledDefaultModel("opencode"),
         },
-        primaryReview: null,
+        primaryReview: {
+          configKey: "opencode",
+          defaultModel: bundledDefaultModel("opencode"),
+        },
         advisoryReview: {
           configKey: "opencode",
           defaultModel: bundledDefaultModel("opencode"),
@@ -504,7 +507,7 @@ const DESCRIPTORS = Object.freeze({
       },
     },
     reviewer: {
-      primaryReviewScript: null,
+      primaryReviewScript: "invoke-reviewer-opencode.js",
       advisoryReviewScript: "invoke-reviewer-opencode.js",
     },
   }),
@@ -522,8 +525,8 @@ const DESCRIPTORS = Object.freeze({
         trust: "trusted",
       },
       [ADAPTER_PHASES.ADVISORY_REVIEW]: {
-        supported: false,
-        trust: "unsupported",
+        supported: true,
+        trust: "advisory",
       },
     },
     capabilities: {
@@ -537,7 +540,11 @@ const DESCRIPTORS = Object.freeze({
           enforced: false,
           guard: "worktree-status",
         },
-        advisoryReview: null,
+        advisoryReview: {
+          mode: "read-only",
+          enforced: false,
+          guard: "detached-worktree-status",
+        },
       },
       network: {
         dispatch: {
@@ -548,12 +555,15 @@ const DESCRIPTORS = Object.freeze({
           configurable: false,
           default: "disabled",
         },
-        advisoryReview: null,
+        advisoryReview: {
+          configurable: false,
+          default: "disabled",
+        },
       },
       readOnly: {
         dispatch: false,
         primaryReview: true,
-        advisoryReview: false,
+        advisoryReview: true,
       },
       policy: {
         dispatch: {
@@ -619,17 +629,48 @@ const DESCRIPTORS = Object.freeze({
             },
           },
         },
-        advisory_review: null,
+        advisory_review: {
+          sandbox: {
+            "read-only": {
+              enforcement_level: "tool-allowlist",
+              mechanism: "pi-tools-allowlist-with-detached-worktree-status-guard",
+              flags: ["--tools read,grep,find,ls"],
+              warnings: ["Pi advisory reviewer read-only is a tool allowlist, not OS-level containment; relay still checks dirty worktree status after invocation."],
+            },
+          },
+          network: {
+            ambient: {
+              enforcement_level: "tool-allowlist",
+              mechanism: "pi-tools-allowlist",
+              flags: ["--tools read,grep,find,ls"],
+              warnings: ["Pi advisory reviewer has no network tool in the relay allowlist; dirty worktree detection remains active."],
+            },
+            disabled: {
+              enforcement_level: "tool-allowlist",
+              mechanism: "pi-tools-allowlist",
+              flags: ["--tools read,grep,find,ls"],
+              warnings: ["Pi advisory reviewer has no network tool in the relay allowlist; dirty worktree detection remains active."],
+            },
+          },
+          read_only: {
+            true: {
+              enforcement_level: "tool-allowlist",
+              mechanism: "pi-tools-allowlist-with-detached-worktree-status-guard",
+              flags: ["--tools read,grep,find,ls"],
+              warnings: ["Pi advisory reviewer read-only is a tool allowlist, not OS-level containment; dirty worktree detection remains active."],
+            },
+          },
+        },
       },
       transport: {
         dispatch: "pi-cli",
         primaryReview: "pi-cli",
-        advisoryReview: null,
+        advisoryReview: "pi-cli",
       },
       structuredOutput: {
         dispatch: "stdout-copied-result-file",
         primaryReview: "json-text",
-        advisoryReview: null,
+        advisoryReview: "json-text",
       },
       appRegistration: {
         supported: false,
@@ -645,12 +686,15 @@ const DESCRIPTORS = Object.freeze({
           configKey: "pi",
           defaultModel: bundledDefaultModel("pi"),
         },
-        advisoryReview: null,
+        advisoryReview: {
+          configKey: "pi",
+          defaultModel: bundledDefaultModel("pi"),
+        },
       },
     },
     reviewer: {
       primaryReviewScript: "invoke-reviewer-pi.js",
-      advisoryReviewScript: null,
+      advisoryReviewScript: "invoke-reviewer-pi.js",
     },
   }),
   antigravity: buildDescriptor({
@@ -667,8 +711,8 @@ const DESCRIPTORS = Object.freeze({
         trust: "trusted",
       },
       [ADAPTER_PHASES.ADVISORY_REVIEW]: {
-        supported: false,
-        trust: "unsupported",
+        supported: true,
+        trust: "advisory",
       },
     },
     capabilities: {
@@ -682,7 +726,11 @@ const DESCRIPTORS = Object.freeze({
           enforced: false,
           guard: "worktree-status",
         },
-        advisoryReview: null,
+        advisoryReview: {
+          mode: "read-only",
+          enforced: false,
+          guard: "detached-worktree-status",
+        },
       },
       network: {
         dispatch: {
@@ -693,12 +741,15 @@ const DESCRIPTORS = Object.freeze({
           configurable: false,
           default: "disabled",
         },
-        advisoryReview: null,
+        advisoryReview: {
+          configurable: false,
+          enabledMode: "ambient",
+        },
       },
       readOnly: {
         dispatch: false,
         primaryReview: true,
-        advisoryReview: false,
+        advisoryReview: true,
       },
       policy: {
         dispatch: {
@@ -759,17 +810,46 @@ const DESCRIPTORS = Object.freeze({
             },
           },
         },
-        advisory_review: null,
+        advisory_review: {
+          sandbox: {
+            "read-only": {
+              enforcement_level: "native",
+              mechanism: "agy-sandbox-flag-with-detached-worktree-status-guard",
+              flags: ["--sandbox"],
+              warnings: ["Antigravity advisory reviewer sandboxing is not treated as read-only proof; relay still checks dirty worktree status after invocation."],
+            },
+          },
+          network: {
+            ambient: {
+              enforcement_level: "informational",
+              mechanism: "ambient-network",
+              warnings: ["Antigravity advisory reviewer does not expose relay network gating."],
+            },
+            disabled: {
+              enforcement_level: "informational",
+              mechanism: "ambient-network",
+              warnings: ["Antigravity advisory reviewer does not expose relay network gating."],
+            },
+          },
+          read_only: {
+            true: {
+              enforcement_level: "prompt-only",
+              mechanism: "prompt-instruction-with-detached-worktree-status-guard",
+              flags: ["--sandbox", "prompt:do-not-modify-files", "git-status-before-after"],
+              warnings: ["Antigravity advisory reviewer read-only intent relies on prompt instructions plus review-runner dirty-worktree detection."],
+            },
+          },
+        },
       },
       transport: {
         dispatch: "agy-cli",
         primaryReview: "agy-cli",
-        advisoryReview: null,
+        advisoryReview: "agy-cli",
       },
       structuredOutput: {
         dispatch: "stdout-copied-result-file",
         primaryReview: "json-text",
-        advisoryReview: null,
+        advisoryReview: "json-text",
       },
       liveSupport: {
         status: "fail-safe-experimental",
@@ -795,12 +875,15 @@ const DESCRIPTORS = Object.freeze({
           configKey: "antigravity",
           defaultModel: bundledDefaultModel("antigravity"),
         },
-        advisoryReview: null,
+        advisoryReview: {
+          configKey: "antigravity",
+          defaultModel: bundledDefaultModel("antigravity"),
+        },
       },
     },
     reviewer: {
       primaryReviewScript: "invoke-reviewer-antigravity.js",
-      advisoryReviewScript: null,
+      advisoryReviewScript: "invoke-reviewer-antigravity.js",
     },
   }),
 });
