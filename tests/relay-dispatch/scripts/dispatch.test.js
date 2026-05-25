@@ -1336,6 +1336,9 @@ test("dispatch network-access enabled adds codex workspace-write network overrid
   assert.equal(result.codexGitCommonDir, commonGitDir);
   assert.equal(result.executorNetwork.access, "enabled");
   assert.equal(result.executorNetwork.mechanism, "sandbox_workspace_write.network_access");
+  assert.equal(result.executorPolicy.sandbox.enforcement_level, "native");
+  assert.equal(result.executorPolicy.network.enforcement_level, "native");
+  assert.deepEqual(result.executorPolicy.network.flags, ["-c sandbox_workspace_write.network_access=true"]);
 
   const manifest = readManifest(result.manifestPath).data;
   assert.deepEqual(manifest.policy.executor_network, {
@@ -1343,12 +1346,18 @@ test("dispatch network-access enabled adds codex workspace-write network overrid
     mechanism: "sandbox_workspace_write.network_access",
     domains: null,
   });
+  assert.equal(manifest.policy.executor_policy.sandbox.enforcement_level, "native");
+  assert.equal(manifest.policy.executor_policy.network.enforcement_level, "native");
 
   const events = readJsonLines(getEventsPath(repoRoot, result.runId));
   const dispatchStart = events.find((event) => event.event === "dispatch_start");
   const dispatchResult = events.find((event) => event.event === "dispatch_result");
   assert.equal(dispatchStart.executor_network.access, "enabled");
   assert.equal(dispatchResult.executor_network.access, "enabled");
+  assert.equal(dispatchStart.executor_policy.sandbox.enforcement_level, "native");
+  assert.equal(dispatchStart.executor_policy.network.enforcement_level, "native");
+  assert.equal(dispatchResult.executor_policy.sandbox.enforcement_level, "native");
+  assert.equal(dispatchResult.executor_policy.network.enforcement_level, "native");
 });
 
 test("dispatch widens codex sandbox via --add-dir <common-git-dir> for worktree (#389 sandbox-widening)", () => {
