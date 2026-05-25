@@ -138,7 +138,7 @@ function startAdvisoryReview({
   const paths = advisoryPaths(runDir, round, reviewerName);
   const promptPath = path.join(runDir, `review-round-${round}-advisory-${reviewerName}-prompt.md`);
   writeText(promptPath, `${promptText}\n`);
-  const reviewerScript = resolveReviewerScript(reviewerName, null);
+  const reviewerScript = resolveReviewerScript(reviewerName, null, { phase: ADAPTER_PHASES.ADVISORY_REVIEW });
   const startedAt = Date.now();
   const reviewerPolicy = buildAdvisoryReviewerPolicy(reviewerName);
   const request = {
