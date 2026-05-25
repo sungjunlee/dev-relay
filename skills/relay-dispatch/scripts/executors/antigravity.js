@@ -7,7 +7,6 @@ const {
 } = require("../agent-adapters/transport");
 
 const PROBE_FLAGS = [
-  "--print",
   "--prompt",
   "--print-timeout",
   "--sandbox",
@@ -69,14 +68,13 @@ function validateExecutionMode({ sandbox, networkAccess }) {
 
 function buildExecCommand({ wtPath, prompt, sandbox, timeoutSeconds }) {
   const cmd = "agy";
-  const args = ["--print", "--print-timeout", formatPrintTimeout(timeoutSeconds)];
+  const args = ["--prompt", prompt, "--print-timeout", formatPrintTimeout(timeoutSeconds)];
   let codexGitCommonDir = null;
   if (sandbox === "workspace-write") {
     args.push("--sandbox");
     codexGitCommonDir = resolveWorktreeCommonGitDir(wtPath);
     args.push("--add-dir", codexGitCommonDir);
   }
-  args.push(prompt);
   return { cmd, args, cwd: wtPath, codexGitCommonDir };
 }
 

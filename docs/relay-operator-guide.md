@@ -143,9 +143,14 @@ For repeatable multi-executor dogfood, use the harness:
 
 ```bash
 node skills/relay-dispatch/scripts/live-dogfood.js --repo . --json --markdown
+node skills/relay-dispatch/scripts/live-dogfood.js --repo . --dispatch-canary --json
 ```
 
 By default the harness creates a temporary `RELAY_HOME`, writes a scoped route policy there, and runs Pi, OpenCode, and Antigravity probes plus bounded live canaries. Antigravity primary review uses a realistic healthy timeout by default, while `--antigravity-fail-safe-timeout` controls the intentionally short fail-safe timeout canary. Use `--dry-run` to print `not-run` planned steps without invoking live CLIs, or `--probe-only` to skip review/dispatch canaries.
+
+Add `--dispatch-canary` from a clean worktree to run healthy dispatch canaries for Pi, OpenCode, and Antigravity. Each canary asks for a unique minimal repository change and passes only when dispatch returns `review_pending` with a PR number. The default healthy dispatch timeout is bounded at 180 seconds via `--dispatch-timeout`, and branches use `--dispatch-branch-prefix` with the default `dogfood-dispatch`.
+
+The harness still keeps a separate Antigravity no-op/fail-safe dispatch canary. That no-op path is successful only when it avoids a reviewable false success; a PR from the no-op path is a failure, not proof of live dispatch health.
 
 Run the dispatch timeout canary only after route policy allows `google/antigravity-cli` for Antigravity dispatch:
 
