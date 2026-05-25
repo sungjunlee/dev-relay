@@ -177,3 +177,23 @@ test("operator docs mention every supported dispatch and review adapter", () => 
   assert.match(reviewDocs, /--reviewer antigravity/);
   assert.match(readRepoFile(ADAPTER_PLATFORM_DOC), /agy`? CLI only/);
 });
+
+test("operator-facing Antigravity docs keep live support marked fail-safe experimental", () => {
+  const operatorDocs = [
+    readRepoFile("README.md"),
+    readRepoFile("docs/relay-operator-guide.md"),
+    readRepoFile(ADAPTER_PLATFORM_DOC),
+  ].join("\n");
+
+  assert.match(operatorDocs, /Antigravity[^.\n]*(?:fail-safe|fail safe)[^.\n]*experimental/i);
+  assert.match(operatorDocs, /healthy live canary passes/i);
+  assert.match(operatorDocs, /strict verdict JSON within timeout/i);
+  assert.match(operatorDocs, /minimal repository change[^.\n]*recoverable\/reviewable state/i);
+  assert.match(operatorDocs, /documented CLI limitation/i);
+  assert.match(operatorDocs, /fake-bin tests alone/i);
+  assert.match(operatorDocs, /review-runner\.js[^`]*--reviewer antigravity/i);
+  assert.match(operatorDocs, /dispatch\.js[^`]*--executor antigravity/i);
+  assert.match(operatorDocs, /failed\/escalated/i);
+  assert.match(operatorDocs, /ready_to_merge/i);
+  assert.doesNotMatch(operatorDocs, /Antigravity[^.\n]*(?:fully healthy|live healthy|live executor success|live reviewer success)[^.\n]*fake-bin/i);
+});

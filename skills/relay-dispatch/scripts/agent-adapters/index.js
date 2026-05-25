@@ -771,6 +771,16 @@ const DESCRIPTORS = Object.freeze({
         primaryReview: "json-text",
         advisoryReview: null,
       },
+      liveSupport: {
+        status: "fail-safe-experimental",
+        until: "until a healthy live canary passes",
+        healthyCriteria: {
+          primaryReview: "primary review strict verdict JSON within timeout",
+          dispatch: "dispatch minimal repository change to recoverable/reviewable state",
+          cliLimitation: "documented CLI limitation",
+        },
+        fakeBinCaveat: "fake-bin tests alone do not prove live executor or reviewer success",
+      },
       appRegistration: {
         supported: false,
         transport: null,

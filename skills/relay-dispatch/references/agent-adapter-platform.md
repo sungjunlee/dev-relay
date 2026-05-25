@@ -32,9 +32,21 @@ node invoke-reviewer-<name>.js --repo <repoPath> --prompt-file <promptPath> --js
 | `claude` | Yes | Yes | No | Dispatch uses permission mode; primary review uses tool allowlist, not OS sandboxing. | Primary review via `--allowedTools=Read`. | Ambient/informational; dispatch `network-access=enabled` fails closed. | Dispatch stdout copied to result file; primary review JSON schema argv. | `claude` CLI. | Yes, Claude app session registration. |
 | `opencode` | Yes, experimental | No, fail-closed | Yes | Informational only; no native relay sandbox. Advisory runs in a detached worktree with status guard. | Advisory prompt plus git status guard; dispatch read-only is informational only. | Ambient/informational; no relay network gate. | Dispatch stdout copied to result file; advisory JSON text. | `opencode` CLI. | No. |
 | `pi` | Yes | Yes | No | Dispatch has no native relay sandbox; primary review uses read/grep/find/ls tool allowlist plus status guard. | Primary review via `--tools read,grep,find,ls` plus dirty-worktree check. | Dispatch ambient/informational; primary review has no network tool in the relay allowlist. | Dispatch stdout copied to result file; primary review JSON text. | `pi` CLI. | No. |
-| `antigravity` | Yes | Yes | No | `agy --sandbox`; dispatch also adds the git common dir with `--add-dir`. | Dispatch read-only is unsupported; primary review relies on prompt instruction plus dirty-worktree check. | Ambient/informational; `agy` exposes no relay network gate. | Dispatch stdout copied to result file; primary review JSON text. | `agy` CLI only. | No. |
+| `antigravity` | Yes, fail-safe experimental until healthy live canary passes | Yes, fail-safe experimental until healthy live canary passes | No | `agy --sandbox`; dispatch also adds the git common dir with `--add-dir`. | Dispatch read-only is unsupported; primary review relies on prompt instruction plus dirty-worktree check. | Ambient/informational; `agy` exposes no relay network gate. | Dispatch stdout copied to result file; primary review JSON text. | `agy` CLI only. | No. |
 
 Antigravity support targets the Google Antigravity `agy` CLI only. Relay does not support Antigravity GUI, IDE, Desktop, plugin runtime, or interactive PTY state as a dispatch or review surface.
+
+## Antigravity Live Support Status
+
+Antigravity live support is fail-safe experimental until a healthy live canary passes. Fake-bin tests alone do not prove live executor or reviewer success, and relay must keep that limitation visible in operator-facing status.
+
+The healthy-path criteria are exact:
+
+- Primary review: strict verdict JSON within timeout.
+- Dispatch: minimal repository change to recoverable/reviewable state.
+- Limitation path: documented CLI limitation, recorded as a limitation rather than success.
+
+Use the operator canaries in `docs/relay-operator-guide.md#antigravity-live-canary`. A `failed/escalated` result means relay failed safely or encountered a live CLI limitation; keep the adapter marked experimental. `ready_to_merge` is healthy only when the dispatch canary produced the minimal PR and the Antigravity primary reviewer returned strict verdict JSON inside the configured timeout.
 
 ## New Adapter Checklist
 
