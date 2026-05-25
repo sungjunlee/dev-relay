@@ -9,6 +9,7 @@ const CODEX_SCRIPT = path.join(__dirname, "..", "..", "..", "skills", "relay-rev
 const CLAUDE_SCRIPT = path.join(__dirname, "..", "..", "..", "skills", "relay-review", "scripts", "invoke-reviewer-claude.js");
 const OPENCODE_SCRIPT = path.join(__dirname, "..", "..", "..", "skills", "relay-review", "scripts", "invoke-reviewer-opencode.js");
 const PI_SCRIPT = path.join(__dirname, "..", "..", "..", "skills", "relay-review", "scripts", "invoke-reviewer-pi.js");
+const ANTIGRAVITY_SCRIPT = path.join(__dirname, "..", "..", "..", "skills", "relay-review", "scripts", "invoke-reviewer-antigravity.js");
 
 function setupRepo() {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-adapter-"));
@@ -395,5 +396,78 @@ process.stdout.write("not-json\\n");
   assert.notEqual(error.status, 0);
   const stderr = String(error.stderr || "");
   assert.match(stderr, /adapter=pi phase=primary_review/);
+  assert.match(stderr, /review verdict must be valid JSON/);
+});
+
+test("antigravity adapter forwards sandbox, print timeout, and preserves primary review prompt", () => {
+  const { repoRoot, promptPath } = setupRepo();
+  const fakeDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-fake-antigravity-"));
+  const logPath = path.join(fakeDir, "agy-args.log");
+  const fakeAgy = writeExecutable(fakeDir, "fake-agy.js", `#!/usr/bin/env node
+const fs = require("fs");
+const args = process.argv.slice(2);
+fs.writeFileSync(${JSON.stringify(logPath)}, args.join("\\n") + "\\n", "utf-8");
+process.stdout.write(JSON.stringify({
+  verdict: "pass",
+  summary: "Looks good.",
+  contract_status: "pass",
+  quality_review_status: "pass",
+  next_action: "ready_to_merge",
+  issues: [],
+  rubric_scores: [],
+  scope_drift: { creep: [], missing: [] },
+}));
+`);
+
+  const stdout = execFileSync("node", [
+    ANTIGRAVITY_SCRIPT,
+    "--repo", repoRoot,
+    "--prompt-file", promptPath,
+    "--model", "google/antigravity-cli",
+    "--json",
+  ], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+    env: { ...process.env, RELAY_ANTIGRAVITY_BIN: fakeAgy, RELAY_ANTIGRAVITY_REVIEW_TIMEOUT: "45s" },
+  });
+
+  const result = JSON.parse(stdout);
+  const loggedArgs = fs.readFileSync(logPath, "utf-8");
+  assert.equal(result.verdict, "pass");
+  assert.match(loggedArgs, /^--print\n--print-timeout\n45s\n--sandbox\n/);
+  assert.match(loggedArgs, /NON-INTERACTIVE REVIEW/);
+  assert.match(loggedArgs, /Return a passing review\./);
+});
+
+test("antigravity adapter reports adapter and phase when stdout is invalid JSON", () => {
+  const { repoRoot, promptPath } = setupRepo();
+  const fakeDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-fake-antigravity-invalid-"));
+  const fakeAgy = writeExecutable(fakeDir, "fake-agy.js", `#!/usr/bin/env node
+process.stdout.write("not-json\\n");
+`);
+
+  let error;
+  try {
+    execFileSync("node", [
+      ANTIGRAVITY_SCRIPT,
+      "--repo", repoRoot,
+      "--prompt-file", promptPath,
+      "--json",
+    ], {
+      cwd: repoRoot,
+      encoding: "utf-8",
+      stdio: "pipe",
+      env: { ...process.env, RELAY_ANTIGRAVITY_BIN: fakeAgy },
+    });
+    assert.fail("expected invoke-reviewer-antigravity.js to fail");
+  } catch (caught) {
+    error = caught;
+  }
+
+  assert.ok(error);
+  assert.notEqual(error.status, 0);
+  const stderr = String(error.stderr || "");
+  assert.match(stderr, /adapter=antigravity phase=primary_review/);
   assert.match(stderr, /review verdict must be valid JSON/);
 });

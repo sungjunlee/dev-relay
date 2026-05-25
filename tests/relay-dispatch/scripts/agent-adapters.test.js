@@ -10,8 +10,8 @@ const {
 } = require("../../../skills/relay-dispatch/scripts/agent-adapters");
 
 test("agent adapter registry exposes the current built-in adapters", () => {
-  assert.deepEqual(listAgentAdapterNames(), ["claude", "codex", "opencode", "pi"]);
-  assert.deepEqual(listAgentAdapters().map((descriptor) => descriptor.name), ["claude", "codex", "opencode", "pi"]);
+  assert.deepEqual(listAgentAdapterNames(), ["claude", "codex", "opencode", "pi", "antigravity"]);
+  assert.deepEqual(listAgentAdapters().map((descriptor) => descriptor.name), ["claude", "codex", "opencode", "pi", "antigravity"]);
 });
 
 test("agent adapter registry reports dispatch, primary review, and advisory review independently", () => {
@@ -30,6 +30,10 @@ test("agent adapter registry reports dispatch, primary review, and advisory revi
   assert.equal(supportsAgentAdapterPhase("pi", ADAPTER_PHASES.DISPATCH), true);
   assert.equal(supportsAgentAdapterPhase("pi", ADAPTER_PHASES.PRIMARY_REVIEW), true);
   assert.equal(supportsAgentAdapterPhase("pi", ADAPTER_PHASES.ADVISORY_REVIEW), false);
+
+  assert.equal(supportsAgentAdapterPhase("antigravity", ADAPTER_PHASES.DISPATCH), true);
+  assert.equal(supportsAgentAdapterPhase("antigravity", ADAPTER_PHASES.PRIMARY_REVIEW), true);
+  assert.equal(supportsAgentAdapterPhase("antigravity", ADAPTER_PHASES.ADVISORY_REVIEW), false);
 });
 
 test("agent adapter descriptors expose structured capabilities and the executor contract", () => {
@@ -77,16 +81,30 @@ test("agent adapter descriptors expose structured capabilities and the executor 
   assert.equal(pi.capabilities.transport.primaryReview, "pi-cli");
   assert.equal(pi.capabilities.structuredOutput.primaryReview, "json-text");
   assert.deepEqual(pi.capabilities.policy.primary_review.read_only.true.flags, ["--tools read,grep,find,ls"]);
+
+  const antigravity = getAgentAdapterDescriptor("antigravity");
+  assert.equal(antigravity.executor.cliBinary, "agy");
+  assert.equal(antigravity.capabilities.appRegistration.supported, false);
+  assert.equal(antigravity.capabilities.modelDefaults.provider, "google");
+  assert.deepEqual(antigravity.capabilities.sandbox.dispatch.modes, ["workspace-write"]);
+  assert.equal(antigravity.capabilities.sandbox.dispatch.enforced, true);
+  assert.equal(antigravity.capabilities.network.dispatch.configurable, false);
+  assert.equal(antigravity.capabilities.readOnly.primaryReview, true);
+  assert.equal(antigravity.capabilities.transport.primaryReview, "agy-cli");
+  assert.equal(antigravity.capabilities.structuredOutput.dispatch, "stdout-copied-result-file");
+  assert.equal(antigravity.capabilities.structuredOutput.primaryReview, "json-text");
+  assert.deepEqual(antigravity.capabilities.policy.dispatch.sandbox["workspace-write"].flags, ["--sandbox", "--add-dir <git-common-dir>"]);
+  assert.deepEqual(antigravity.capabilities.policy.primary_review.read_only.true.flags, ["--sandbox", "prompt:do-not-modify-files", "git-status-before-after"]);
 });
 
 test("agent adapter registry fails closed for unknown adapters and phases", () => {
   assert.throws(
-    () => getAgentAdapterDescriptor("antigravity"),
-    /unknown agent adapter 'antigravity'\. Supported: claude, codex, opencode, pi/
+    () => getAgentAdapterDescriptor("nonexistent"),
+    /unknown agent adapter 'nonexistent'\. Supported: claude, codex, opencode, pi, antigravity/
   );
   assert.throws(
-    () => supportsAgentAdapterPhase("antigravity", ADAPTER_PHASES.DISPATCH),
-    /unknown agent adapter 'antigravity'\. Supported: claude, codex, opencode, pi/
+    () => supportsAgentAdapterPhase("nonexistent", ADAPTER_PHASES.DISPATCH),
+    /unknown agent adapter 'nonexistent'\. Supported: claude, codex, opencode, pi, antigravity/
   );
   assert.throws(
     () => supportsAgentAdapterPhase("codex", "sidecar"),

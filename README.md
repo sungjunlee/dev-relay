@@ -64,15 +64,16 @@ npx skills add . -g -y
 
 - [Claude Code](https://claude.ai/code) or [Codex](https://chatgpt.com/codex)
 - Optional: Pi CLI 0.72.1+ for `--executor pi` or `--reviewer pi` (`RELAY_PI_BIN` may point review to a non-PATH binary)
+- Optional: Google Antigravity CLI `agy` 1.0.2+ for `--executor antigravity` or `--reviewer antigravity`. Relay targets the `agy` CLI version track separately from any Antigravity IDE/Desktop app version; reviewer tests may use `RELAY_ANTIGRAVITY_BIN` to point at a non-PATH binary.
 - [`gh` CLI](https://cli.github.com/) authenticated with `gh auth login`
 - Git 2.20+
 - Node.js 18+
 
 ## Configure Routes
 
-Relay distinguishes CLI harnesses from provider/model routes. Names such as `codex`, `claude`, `opencode`, and `pi` describe how relay invokes an agent. The compliance boundary is the provider/model route, for example `example/opencode-model-fast` or `opencode-go/deepseek-v4-pro`.
+Relay distinguishes CLI harnesses from provider/model routes. Names such as `codex`, `claude`, `opencode`, `pi`, and `antigravity` describe how relay invokes an agent. The compliance boundary is the provider/model route, for example `example/opencode-model-fast`, `opencode-go/deepseek-v4-pro`, or `google/antigravity-cli`.
 
-Without a policy file, relay stays conservative: managed Codex and Claude CLIs are allowed by default, while OpenCode, Pi, advisory reviewers, and sidecars require explicit route approval.
+Without a policy file, relay stays conservative: managed Codex and Claude CLIs are allowed by default, while OpenCode, Pi, Antigravity, advisory reviewers, and sidecars require explicit route approval.
 
 After installing skills, ask for setup in plain language:
 
