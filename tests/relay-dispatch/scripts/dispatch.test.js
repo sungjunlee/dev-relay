@@ -1621,6 +1621,52 @@ test("dispatch denies disallowed executor route before spawning the executor", (
   assert.equal(result.policy_decision.model, "opencode-go/deepseek-v4-pro");
   assert.equal(result.policy_decision.reason, "unknown_model_route");
   assert.match(result.error, /reason=unknown_model_route/);
+  assert.equal(result.adapter_capability.adapter, "opencode");
+  assert.equal(result.adapter_capability.phase, "dispatch");
+  assert.equal(result.adapter_capability.safe, true);
+  assert.equal(result.executor_policy.adapter, "opencode");
+});
+
+test("dispatch reports adapter-capability denial before model-route policy", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  writeRelayPolicy(relayHome, {
+    profile: "allow-antigravity-dispatch",
+    allowed_model_routes: [{ route: "google/*", phases: ["dispatch"], executors: ["antigravity"] }],
+  });
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-antigravity-bin-"));
+  const capturePath = path.join(os.tmpdir(), `relay-dispatch-capability-denied-${Date.now()}.json`);
+  writeArgCaptureAntigravity(binDir, capturePath);
+  const rubricFile = writeTempRubric("size: \"S\"\nrubric:\n  factors: []\n");
+
+  const proc = spawnSync("node", [SCRIPT, repoRoot, ...withRequiredRubric([
+    "-b", "issue-capability-denied",
+    "-p", "must not spawn antigravity",
+    "-e", "antigravity",
+    "-m", "google/gemini-cli",
+    "--sandbox", "read-only",
+    "--rubric-file", rubricFile,
+    "--json",
+  ])], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    env: {
+      ...process.env,
+      PATH: `${binDir}:${process.env.PATH}`,
+      RELAY_HOME: relayHome,
+    },
+  });
+
+  assert.notEqual(proc.status, 0);
+  assert.equal(fs.existsSync(capturePath), false);
+  const result = JSON.parse(proc.stdout);
+  assert.equal(result.status, "failed");
+  assert.equal(result.executor, "antigravity");
+  assert.equal(result.adapter_capability.adapter, "antigravity");
+  assert.equal(result.adapter_capability.phase, "dispatch");
+  assert.equal(result.adapter_capability.safe, false);
+  assert.match(result.adapter_capability.fail_closed_reasons.join("\n"), /read-only dispatch is not safely representable/);
+  assert.equal(result.policy_decision, undefined);
 });
 
 test("dispatch opencode executor uses bundled default model when no override is supplied", () => {

@@ -399,6 +399,8 @@ test("reviewer-invoke precedence R3 regression: manifest hint supplies the effec
   const reviewInvokeEvent = JSON.parse(eventLines.at(-1));
   assert.equal(reviewInvokeEvent.event, "review_invoke");
   assert.equal(reviewInvokeEvent.model, "haiku");
+  assert.equal(reviewInvokeEvent.policy_decision.allowed, true);
+  assert.equal(reviewInvokeEvent.policy_decision.reason, "allowed_model_route");
   assert.equal(reviewInvokeEvent.reviewer_policy.adapter, "custom-reviewer-script");
   assert.equal(reviewInvokeEvent.reviewer_policy.read_only.enforcement_level, "informational");
   assert.deepEqual(reviewInvokeEvent.reviewer_policy.read_only.flags, []);
@@ -515,6 +517,8 @@ process.stdout.write("{\\"verdict\\":\\"pass\\"}\\n");
     assert.equal(error.decision.reviewer, "codex");
     assert.equal(error.decision.model, "openai/gpt-5");
     assert.equal(error.decision.reason, "unknown_model_route");
+    assert.equal(error.adapterCapability.adapter, "custom-reviewer-script");
+    assert.equal(error.adapterCapability.safe, true);
     assert.match(error.message, /phase=review/);
     assert.match(error.message, /reviewer=codex/);
     return true;
