@@ -76,7 +76,42 @@ function parseArgs(argv) {
   return parsed;
 }
 
-function buildPolicy() {
+function mergeRouteEntry(entries, { route, phases, executors = [], reviewers = [] }) {
+  const existing = entries.get(route) || { route, phases: [], executors: [], reviewers: [] };
+  for (const phase of phases) if (!existing.phases.includes(phase)) existing.phases.push(phase);
+  for (const executor of executors) if (!existing.executors.includes(executor)) existing.executors.push(executor);
+  for (const reviewer of reviewers) if (!existing.reviewers.includes(reviewer)) existing.reviewers.push(reviewer);
+  entries.set(route, existing);
+}
+
+function buildAllowedModelRoutes(options = {}) {
+  const routes = new Map();
+  const piModel = options.piModel || DEFAULTS.piModel;
+  const opencodeModel = options.opencodeModel || DEFAULTS.opencodeModel;
+  const antigravityModel = options.antigravityModel || DEFAULTS.antigravityModel;
+
+  mergeRouteEntry(routes, {
+    route: piModel,
+    phases: ["dispatch", "review"],
+    executors: ["pi"],
+    reviewers: ["pi"],
+  });
+  mergeRouteEntry(routes, {
+    route: opencodeModel,
+    phases: ["dispatch", "advisory_review"],
+    executors: ["opencode"],
+    reviewers: ["opencode"],
+  });
+  mergeRouteEntry(routes, {
+    route: antigravityModel,
+    phases: ["dispatch", "review"],
+    executors: ["antigravity"],
+    reviewers: ["antigravity"],
+  });
+  return Array.from(routes.values());
+}
+
+function buildPolicy(options = {}) {
   return {
     version: 1,
     profile: "live-adapter-dogfood",
@@ -87,32 +122,19 @@ function buildPolicy() {
       sidecar: null,
     },
     managed_cli: ["codex", "claude"],
-    allowed_model_routes: [
-      {
-        route: "opencode-go/*",
-        phases: ["dispatch", "review", "advisory_review"],
-        executors: ["pi", "opencode"],
-        reviewers: ["pi", "opencode"],
-      },
-      {
-        route: "google/*",
-        phases: ["dispatch", "review", "advisory_review"],
-        executors: ["antigravity"],
-        reviewers: ["antigravity"],
-      },
-    ],
+    allowed_model_routes: buildAllowedModelRoutes(options),
     denied_model_routes: [],
     routing_rules: [],
     deny_unknown_model_routes: true,
   };
 }
 
-function ensureRelayHome(relayHome) {
+function ensureRelayHome(relayHome, options = {}) {
   const resolved = relayHome
     ? path.resolve(relayHome)
     : fs.mkdtempSync(path.join(os.tmpdir(), "relay-live-dogfood-"));
   fs.mkdirSync(resolved, { recursive: true });
-  fs.writeFileSync(path.join(resolved, "policy.json"), `${JSON.stringify(buildPolicy(), null, 2)}\n`, "utf-8");
+  fs.writeFileSync(path.join(resolved, "policy.json"), `${JSON.stringify(buildPolicy(options), null, 2)}\n`, "utf-8");
   return resolved;
 }
 
@@ -183,6 +205,22 @@ function classifyStandardJson(result) {
   return { outcome: OUTCOMES.FAIL, notes: text || "command failed without parseable JSON" };
 }
 
+function classifyProbeJson(result) {
+  const standard = classifyStandardJson(result);
+  if (standard.outcome !== OUTCOMES.PASS) return standard;
+  const parsed = standard.parsed;
+  if (parsed.agent_probe_error) {
+    return { outcome: OUTCOMES.FAIL, parsed, notes: `agent_probe_error: ${parsed.agent_probe_error}` };
+  }
+  if (parsed.policy_decision?.allowed !== true) {
+    return { outcome: OUTCOMES.FAIL, parsed, notes: `policy denied route: ${parsed.policy_decision?.reason || "unknown"}` };
+  }
+  if (!String(parsed.agent_tools_raw || "").trim()) {
+    return { outcome: OUTCOMES.FAIL, parsed, notes: "probe returned no agent_tools_raw evidence" };
+  }
+  return standard;
+}
+
 function classifyAntigravityPrimary(result) {
   const standard = classifyStandardJson(result);
   if (standard.outcome === OUTCOMES.TIMEOUT && /Antigravity reviewer primary_review timed out/i.test(standard.notes)) {
@@ -211,17 +249,17 @@ function buildSteps({ repo, relayHome, prompts, options }) {
     {
       name: "probe-pi",
       command: [node, "skills/relay-plan/scripts/probe-executor-env.js", repo, "--executor", "pi", "--model", options.piModel, "--json"],
-      classify: classifyStandardJson,
+      classify: classifyProbeJson,
     },
     {
       name: "probe-opencode",
       command: [node, "skills/relay-plan/scripts/probe-executor-env.js", repo, "--executor", "opencode", "--model", options.opencodeModel, "--json"],
-      classify: classifyStandardJson,
+      classify: classifyProbeJson,
     },
     {
       name: "probe-antigravity",
       command: [node, "skills/relay-plan/scripts/probe-executor-env.js", repo, "--executor", "antigravity", "--model", options.antigravityModel, "--json"],
-      classify: classifyStandardJson,
+      classify: classifyProbeJson,
     },
     {
       name: "opencode-advisory",
@@ -263,10 +301,11 @@ function buildSteps({ repo, relayHome, prompts, options }) {
 function runDogfood(options = {}, deps = {}) {
   const spawnImpl = deps.spawnSync || spawnSync;
   const repo = path.resolve(options.repo || ".");
-  const relayHome = ensureRelayHome(options.relayHome);
+  const effectiveOptions = { ...DEFAULTS, ...options };
+  const relayHome = ensureRelayHome(options.relayHome, effectiveOptions);
   const prompts = writePromptFiles(relayHome);
   const envBase = { ...process.env, RELAY_HOME: relayHome };
-  const steps = buildSteps({ repo, relayHome, prompts, options: { ...DEFAULTS, ...options } });
+  const steps = buildSteps({ repo, relayHome, prompts, options: effectiveOptions });
 
   const results = steps.map((step) => {
     const commandText = step.command.map((part) => String(part)).join(" ");
@@ -365,8 +404,10 @@ if (require.main === module) {
 module.exports = {
   OUTCOMES,
   buildPolicy,
+  buildAllowedModelRoutes,
   classifyAntigravityDispatch,
   classifyAntigravityPrimary,
+  classifyProbeJson,
   classifyStandardJson,
   ensureRelayHome,
   parseArgs,

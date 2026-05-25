@@ -6,8 +6,10 @@ const path = require("node:path");
 
 const {
   OUTCOMES,
+  buildPolicy,
   classifyAntigravityDispatch,
   classifyAntigravityPrimary,
+  classifyProbeJson,
   renderMarkdown,
   runDogfood,
 } = require("../../../skills/relay-dispatch/scripts/live-dogfood");
@@ -41,7 +43,10 @@ test("live dogfood uses temp RELAY_HOME by default and writes scoped policy", ()
   assert.ok(fs.existsSync(path.join(result.relay_home, "policy.json")));
   const policy = JSON.parse(fs.readFileSync(path.join(result.relay_home, "policy.json"), "utf-8"));
   assert.equal(policy.profile, "live-adapter-dogfood");
-  assert.deepEqual(policy.allowed_model_routes.map((entry) => entry.route), ["opencode-go/*", "google/*"]);
+  assert.deepEqual(policy.allowed_model_routes.map((entry) => entry.route), [
+    "opencode-go/deepseek-v4-pro",
+    "google/antigravity-cli",
+  ]);
   assert.ok(!result.relay_home.startsWith(path.dirname(homeBefore)) || result.relay_home !== path.dirname(homeBefore));
 });
 
@@ -49,9 +54,9 @@ test("live dogfood classifies mocked command outcomes and preserves markdown dis
   const repo = tempDir("relay-live-dogfood-repo-");
   const relayHome = tempDir("relay-live-dogfood-home-");
   const responses = [
-    jsonResult({ policy_decision: { allowed: true } }),
-    jsonResult({ policy_decision: { allowed: true } }),
-    jsonResult({ policy_decision: { allowed: true } }),
+    jsonResult({ policy_decision: { allowed: true }, agent_tools_raw: "{\"version\":\"pi\"}" }),
+    jsonResult({ policy_decision: { allowed: true }, agent_tools_raw: "{\"version\":\"opencode\"}" }),
+    jsonResult({ policy_decision: { allowed: true }, agent_tools_raw: "{\"version\":\"agy\"}" }),
     jsonResult({ profile: "blindspot", advisory_findings: [] }),
     { status: 1, stdout: "", stderr: "Pi reviewer primary_review timed out after 1s (RELAY_PI_REVIEW_TIMEOUT)." },
     { status: 1, stdout: "", stderr: "Antigravity reviewer primary_review timed out after 5s (RELAY_ANTIGRAVITY_REVIEW_TIMEOUT)." },
@@ -91,7 +96,38 @@ test("live dogfood classifies mocked command outcomes and preserves markdown dis
   assert.match(markdown, /\| `antigravity-dispatch` \| `fail-safe-pass` \|/);
 });
 
+test("live dogfood policy reflects requested model route overrides", () => {
+  const policy = buildPolicy({
+    piModel: "custom-pi/model-a",
+    opencodeModel: "custom-opencode/model-b",
+    antigravityModel: "custom-google/agy",
+  });
+
+  assert.deepEqual(policy.allowed_model_routes.map((entry) => entry.route), [
+    "custom-pi/model-a",
+    "custom-opencode/model-b",
+    "custom-google/agy",
+  ]);
+  assert.deepEqual(policy.allowed_model_routes[0].executors, ["pi"]);
+  assert.deepEqual(policy.allowed_model_routes[0].reviewers, ["pi"]);
+  assert.deepEqual(policy.allowed_model_routes[1].phases, ["dispatch", "advisory_review"]);
+  assert.deepEqual(policy.allowed_model_routes[2].executors, ["antigravity"]);
+});
+
 test("classification helpers separate harness timeout from safe adapter timeout", () => {
+  assert.equal(classifyProbeJson(jsonResult({
+    policy_decision: { allowed: true },
+    agent_probe_error: "pi CLI not found",
+    agent_tools_raw: "{}",
+  })).outcome, OUTCOMES.FAIL);
+  assert.equal(classifyProbeJson(jsonResult({
+    policy_decision: { allowed: false, reason: "unknown_model_route" },
+    agent_tools_raw: "{}",
+  })).outcome, OUTCOMES.FAIL);
+  assert.equal(classifyProbeJson(jsonResult({
+    policy_decision: { allowed: true },
+    agent_tools_raw: "{\"version\":\"1\"}",
+  })).outcome, OUTCOMES.PASS);
   assert.equal(classifyAntigravityPrimary({ error: { code: "ETIMEDOUT" }, stdout: "", stderr: "" }).outcome, OUTCOMES.TIMEOUT);
   assert.equal(classifyAntigravityPrimary({
     status: 1,
