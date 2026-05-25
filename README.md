@@ -102,10 +102,18 @@ From a direct checkout, use `node skills/relay-config/scripts/relay-config.js in
 ### One command, full cycle
 
 ```
-/relay 42
+/relay 위 이슈들 처리해줘
+/relay README 설정 문서 보강 이슈를 처리해줘
 ```
 
-Reads issue #42, builds a scoring rubric if the task is complex, dispatches to the executor in a worktree, reviews the resulting PR, and stops at `ready_to_merge`. It runs all four phases (plan, dispatch, review, gate check) but does not auto-merge. Use `/relay-merge` to land it explicitly.
+Use `/relay` like a natural-language handoff. It can read issue references, sprint context, backlog notes, or the task description you give it; then it builds a scoring rubric if the task is complex, dispatches to the executor in a worktree, reviews the resulting PR, and stops at `ready_to_merge`. It runs all four phases (plan, dispatch, review, gate check) but does not auto-merge. Use `/relay-merge` to land it explicitly.
+
+Short handles still work when they are convenient:
+
+```bash
+/relay 42
+/relay issue #42
+```
 
 For raw or ambiguous requests, `/relay` now routes through `/relay-ready` first, persists a request artifact under `~/.relay/requests/<repo-slug>/`, freezes Done Criteria for review, then resumes the normal `relay-plan -> relay-dispatch -> relay-review` chain.
 
@@ -244,15 +252,15 @@ For hotfixes, `finalize-run.js --skip-review "reason"` bypasses the review gate 
 
 ## Skills
 
-| Command | Phase | Description |
+| Skill | Phase | Natural use |
 |---------|-------|-------------|
 | `/relay-config` | Setup | Configure route policy for company/personal use, OpenCode/Pi routes, advisory review, and sidecars |
-| `/relay [issue]` | All | Full cycle through `ready_to_merge` |
-| `/relay-ready [request]` | Readiness | Verify readiness and persist a single relay-ready handoff + frozen Done Criteria |
-| `/relay-plan [issue]` | Plan | Build scoring rubric from acceptance criteria |
+| `/relay` | All | Hand off an issue, task, sprint item, or natural-language request; runs through `ready_to_merge` |
+| `/relay-ready` | Readiness | Clarify ambiguous work and persist a single relay-ready handoff + frozen Done Criteria |
+| `/relay-plan` | Plan | Build scoring rubric from acceptance criteria, issue context, or a ready handoff |
 | `/relay-dispatch` | Execute | Dispatch to executor via git worktree isolation |
-| `/relay-review [branch]` | Review | Independent PR review with convergence loop |
-| `/relay-merge [PR]` | Ship | Explicit merge after LGTM, cleanup worktree, update sprint |
+| `/relay-review` | Review | Independent PR review with convergence loop |
+| `/relay-merge` | Ship | Explicit merge after LGTM, cleanup worktree, update sprint |
 | `/relay-sidecar` | Advisory | Run artifact-only supplemental sidecars for an existing run |
 | `/relay-fleet` | Batch | Fan out prepared relay leaves into parallel child dispatches |
 
