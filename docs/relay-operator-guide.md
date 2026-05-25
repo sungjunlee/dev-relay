@@ -123,6 +123,46 @@ node skills/relay-review/scripts/review-runner.js --repo . --run-id <id> --pr <n
   --reviewer codex --advisory-reviewer opencode --advisory-profile blindspot --json
 ```
 
+### Antigravity Live Canary
+
+Antigravity live support is fail-safe experimental until a healthy live canary passes. Fake-bin tests alone do not prove live executor or reviewer success.
+
+Healthy-path criteria are exact: primary review must return strict verdict JSON within timeout, dispatch must create a minimal repository change and reach a recoverable/reviewable state, or the operator must record a documented CLI limitation instead of claiming live success.
+
+Run the dispatch timeout canary only after route policy allows `google/antigravity-cli` for Antigravity dispatch:
+
+```bash
+cat > /tmp/relay-antigravity-live-prompt.md <<'EOF'
+Create or update relay-antigravity-live-canary.txt with exactly one line:
+antigravity live canary
+Commit that file and do not change anything else.
+EOF
+
+cat > /tmp/relay-antigravity-live-rubric.yaml <<'YAML'
+criteria:
+  - id: minimal-change
+    description: Creates or updates only relay-antigravity-live-canary.txt with the requested line.
+    weight: 1
+YAML
+
+node skills/relay-dispatch/scripts/dispatch.js . \
+  --executor antigravity --model google/antigravity-cli \
+  --branch "antigravity-live-canary-$(date +%Y%m%d%H%M%S)" \
+  --prompt-file /tmp/relay-antigravity-live-prompt.md \
+  --rubric-file /tmp/relay-antigravity-live-rubric.yaml \
+  --timeout 120 --json
+```
+
+If dispatch produces a PR, run the primary-review timeout canary against that run:
+
+```bash
+RELAY_ANTIGRAVITY_REVIEW_TIMEOUT=120s \
+node skills/relay-review/scripts/review-runner.js --repo . --run-id "$RUN_ID" --pr "$PR_NUM" \
+  --reviewer antigravity --reviewer-model google/antigravity-cli --json
+```
+
+Interpretation: `failed/escalated` means relay failed safely or hit a live CLI limitation, so keep Antigravity marked experimental. `ready_to_merge` is the healthy signal only when the dispatch PR contains the minimal requested change and the primary reviewer accepted strict verdict JSON within the configured timeout.
+
 ### Merge
 
 Merge is explicit. The gate verifies review evidence, checks that the reviewed SHA matches the current PR head, and then finalizes the run.

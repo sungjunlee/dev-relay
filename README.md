@@ -135,6 +135,7 @@ For the full architecture, see [references/architecture.md](references/architect
 
 - GitHub is currently required for PR handoff, review comments, gate checks, and merge flow.
 - Nested Codex executor runs may need `--network-access enabled` for networked quality gates or PR/API calls.
+- Antigravity live support is fail-safe experimental until a healthy live canary passes; fake-bin tests alone do not prove live executor or reviewer success. See [docs/relay-operator-guide.md#antigravity-live-canary](docs/relay-operator-guide.md#antigravity-live-canary).
 - Sprint-file automation works, but some sprint status updates can still require manual intervention.
 
 ## Contributing
