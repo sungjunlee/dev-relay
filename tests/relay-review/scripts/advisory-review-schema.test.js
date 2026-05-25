@@ -28,6 +28,41 @@ test("advisory schema accepts normalized blindspot payloads", () => {
   assert.equal(parsed.advisory_findings[0].category, "test-gap");
 });
 
+test("advisory schema accepts a single json fenced payload with surrounding whitespace", () => {
+  const text = `\n\n  \`\`\`json\n${JSON.stringify(advisoryPayload())}\n\`\`\`\n\n`;
+
+  const parsed = parseAdvisoryReview(text, {
+    adapter: "opencode",
+    phase: "advisory_review",
+    profile: "blindspot",
+  });
+
+  assert.equal(parsed.profile, "blindspot");
+  assert.equal(parsed.advisory_findings[0].title, "Exercise timeout path");
+});
+
+test("advisory schema fails closed for ambiguous fenced or prose-wrapped output", () => {
+  const payload = JSON.stringify(advisoryPayload());
+  const context = {
+    adapter: "opencode",
+    phase: "advisory_review",
+    profile: "blindspot",
+  };
+
+  for (const text of [
+    `Here is the JSON:\n${payload}`,
+    `\`\`\`json\n${payload}\n\`\`\`\nThanks.`,
+    `\`\`\`json\n${payload}\n\`\`\`\n\n\`\`\`json\n${payload}\n\`\`\``,
+    `\`\`\`json\n${payload}\n${payload}\n\`\`\``,
+    `\`\`\`json\n{"profile":\n\`\`\``,
+  ]) {
+    assert.throws(
+      () => parseAdvisoryReview(text, context),
+      /adapter=opencode phase=advisory_review advisory review must be valid JSON:/
+    );
+  }
+});
+
 test("advisory schema rejects unsupported profiles and invalid confidences", () => {
   assert.throws(() => validateAdvisoryProfile("cost"), /Unknown advisory profile/);
   assert.throws(

@@ -326,6 +326,36 @@ process.stdout.write(JSON.stringify({
   assert.match(loggedArgs, /Return a passing review\./);
 });
 
+test("opencode adapter accepts live-style json fenced advisory output", () => {
+  const { repoRoot, promptPath } = setupRepo();
+  const fakeDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-fake-opencode-fenced-"));
+  const fakeOpencode = writeExecutable(fakeDir, "fake-opencode.js", `#!/usr/bin/env node
+process.stdout.write("\`\`\`json\\n" + JSON.stringify({
+  profile: "blindspot",
+  summary: "No blocking blind spots.",
+  required_findings: [],
+  advisory_findings: [],
+  duplicate_or_low_confidence: [],
+}) + "\\n\`\`\`\\n");
+`);
+
+  const stdout = execFileSync("node", [
+    OPENCODE_SCRIPT,
+    "--repo", repoRoot,
+    "--prompt-file", promptPath,
+    "--json",
+  ], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+    env: { ...process.env, RELAY_OPENCODE_BIN: fakeOpencode },
+  });
+
+  const result = JSON.parse(stdout);
+  assert.equal(result.profile, "blindspot");
+  assert.equal(result.summary, "No blocking blind spots.");
+});
+
 test("pi adapter forwards read-only tools, model, and preserves primary review prompt", () => {
   const { repoRoot, promptPath } = setupRepo();
   const fakeDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-fake-pi-"));
