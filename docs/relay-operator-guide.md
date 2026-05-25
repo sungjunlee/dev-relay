@@ -137,7 +137,7 @@ node skills/relay-review/scripts/review-runner.js --repo . --run-id <id> --pr <n
 
 Antigravity live support is fail-safe experimental until a healthy live canary passes. Fake-bin tests alone do not prove live executor or reviewer success.
 
-Healthy-path criteria are exact: primary review must return strict verdict JSON within timeout, dispatch must create a minimal repository change and reach a recoverable/reviewable state, or the operator must record a documented CLI limitation instead of claiming live success.
+Healthy-path criteria are exact: primary review must return strict verdict JSON within timeout, dispatch must create a minimal repository change and reach a recoverable/reviewable state, or the operator must record a documented CLI limitation instead of claiming live success. The fail-safe timeout canary is not healthy success; it only proves relay avoids turning a bounded timeout into a reviewable false positive.
 
 For repeatable multi-executor dogfood, use the harness:
 
@@ -145,7 +145,7 @@ For repeatable multi-executor dogfood, use the harness:
 node skills/relay-dispatch/scripts/live-dogfood.js --repo . --json --markdown
 ```
 
-By default the harness creates a temporary `RELAY_HOME`, writes a scoped route policy there, and runs Pi, OpenCode, and Antigravity probes plus bounded live canaries. Use `--dry-run` to print `not-run` planned steps without invoking live CLIs, or `--probe-only` to skip review/dispatch canaries.
+By default the harness creates a temporary `RELAY_HOME`, writes a scoped route policy there, and runs Pi, OpenCode, and Antigravity probes plus bounded live canaries. Antigravity primary review uses a realistic healthy timeout by default, while `--antigravity-fail-safe-timeout` controls the intentionally short fail-safe timeout canary. Use `--dry-run` to print `not-run` planned steps without invoking live CLIs, or `--probe-only` to skip review/dispatch canaries.
 
 Run the dispatch timeout canary only after route policy allows `google/antigravity-cli` for Antigravity dispatch:
 
@@ -171,7 +171,7 @@ node skills/relay-dispatch/scripts/dispatch.js . \
   --timeout 120 --json
 ```
 
-If dispatch produces a PR, run the primary-review timeout canary against that run:
+If dispatch produces a PR, run the primary-review healthy canary against that run:
 
 ```bash
 RELAY_ANTIGRAVITY_REVIEW_TIMEOUT=120s \
@@ -181,7 +181,7 @@ node skills/relay-review/scripts/review-runner.js --repo . --run-id "$RUN_ID" --
 
 Interpretation: `failed/escalated` means relay failed safely or hit a live CLI limitation, so keep Antigravity marked experimental. `ready_to_merge` is the healthy signal only when the dispatch PR contains the minimal requested change and the primary reviewer accepted strict verdict JSON within the configured timeout.
 
-Harness outcomes are intentionally distinct: `pass` proves a live canary returned the expected structured output, `fail-safe-pass` means relay avoided a reviewable false success, `timeout` is inconclusive, and `not-run` is dry-run or skipped coverage.
+Harness outcomes are intentionally distinct: `pass` proves a healthy live canary returned the expected structured output, `fail-safe-pass` means relay avoided a reviewable false success and is not healthy success, `timeout` is inconclusive, `fail` is actionable failure, and `not-run` is dry-run or skipped coverage.
 
 ### Merge
 

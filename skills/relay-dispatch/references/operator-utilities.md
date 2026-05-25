@@ -39,4 +39,4 @@ node skills/relay-dispatch/scripts/live-dogfood.js --repo . --probe-only --json
 node skills/relay-dispatch/scripts/live-dogfood.js --repo . --dry-run --markdown
 ```
 
-The harness creates a temporary `RELAY_HOME` by default and writes a scoped route policy there instead of mutating the operator's default `~/.relay/policy.json`. Output separates `pass`, `fail-safe-pass`, `timeout`, `fail`, and `not-run` so fake-bin regressions and live canary evidence are not conflated.
+The harness creates a temporary `RELAY_HOME` by default and writes a scoped route policy there instead of mutating the operator's default `~/.relay/policy.json`. Healthy reviewer canaries use realistic default timeouts, while the Antigravity fail-safe timeout canary has its own intentionally short `--antigravity-fail-safe-timeout` setting. Output separates `pass`, `fail-safe-pass`, `timeout`, `fail`, and `not-run` so fake-bin regressions and live canary evidence are not conflated; the fail-safe timeout canary is not healthy success.

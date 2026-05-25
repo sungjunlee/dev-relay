@@ -34,7 +34,7 @@ Reviews MUST run in a fresh context — no prior planning, dispatch, or conversa
 
 - Claude Code: `context: fork` frontmatter triggers isolation.
 - Codex adapter: `invoke-reviewer-codex.js` passes `--ephemeral --sandbox read-only`.
-- Claude adapter: `invoke-reviewer-claude.js` passes `--bare --no-session-persistence`; Pi adapter passes `--no-session --tools read,grep,find,ls`; Antigravity adapter invokes the `agy` CLI with `--print --print-timeout ... --sandbox`.
+- Claude adapter: `invoke-reviewer-claude.js` passes `--bare --no-session-persistence`; Pi adapter passes `--no-session --tools read,grep,find,ls`; Antigravity adapter invokes the `agy` CLI with `--prompt ... --print-timeout ... --sandbox`.
 - Manual inline review: start a new session; do not continue from dispatch.
 - Other fallback: prefix the prompt with "You are reviewing code you did NOT write. You have no context about why it was written this way."
 
