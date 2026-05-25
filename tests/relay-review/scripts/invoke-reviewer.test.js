@@ -511,6 +511,118 @@ test("pi adapter validates recovered verdict objects", () => {
   );
 });
 
+test("pi adapter enforces parent timeout and reports timeout context", () => {
+  const { repoRoot, promptPath } = setupRepo();
+  const fakeDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-fake-pi-timeout-"));
+  const fakePi = writeExecutable(fakeDir, "fake-pi.js", `#!/usr/bin/env node
+setTimeout(() => {
+  process.stdout.write(JSON.stringify({
+    verdict: "pass",
+    summary: "Too late.",
+    contract_status: "pass",
+    quality_review_status: "pass",
+    next_action: "ready_to_merge",
+    issues: [],
+    rubric_scores: [],
+    scope_drift: { creep: [], missing: [] },
+  }));
+}, 2500);
+`);
+
+  const started = Date.now();
+  let error;
+  try {
+    execFileSync("node", [
+      PI_SCRIPT,
+      "--repo", repoRoot,
+      "--prompt-file", promptPath,
+      "--json",
+    ], {
+      cwd: repoRoot,
+      encoding: "utf-8",
+      stdio: "pipe",
+      timeout: 5000,
+      env: { ...process.env, RELAY_PI_BIN: fakePi, RELAY_PI_REVIEW_TIMEOUT: "1s" },
+    });
+  } catch (caught) {
+    error = caught;
+  }
+  const elapsedMs = Date.now() - started;
+
+  assert.ok(error, "expected invoke-reviewer-pi.js to fail on parent timeout");
+  assert.notEqual(error.status, 0);
+  assert.ok(elapsedMs < 2000, `expected adapter timeout before fake pi completed, elapsed=${elapsedMs}ms`);
+  const stderr = String(error.stderr || "");
+  assert.match(stderr, /Pi reviewer primary_review timed out after 1s/);
+  assert.match(stderr, /RELAY_PI_REVIEW_TIMEOUT/);
+});
+
+test("pi adapter rejects invalid review timeout without invoking pi", () => {
+  const { repoRoot, promptPath } = setupRepo();
+  const fakeDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-fake-pi-bad-timeout-"));
+  const logPath = path.join(fakeDir, "pi-args.log");
+  const fakePi = writeExecutable(fakeDir, "fake-pi.js", `#!/usr/bin/env node
+const fs = require("fs");
+fs.writeFileSync(${JSON.stringify(logPath)}, "invoked\\n", "utf-8");
+`);
+
+  let error;
+  try {
+    execFileSync("node", [
+      PI_SCRIPT,
+      "--repo", repoRoot,
+      "--prompt-file", promptPath,
+      "--json",
+    ], {
+      cwd: repoRoot,
+      encoding: "utf-8",
+      stdio: "pipe",
+      env: { ...process.env, RELAY_PI_BIN: fakePi, RELAY_PI_REVIEW_TIMEOUT: "soon" },
+    });
+  } catch (caught) {
+    error = caught;
+  }
+
+  assert.ok(error, "expected invalid timeout to fail closed");
+  assert.notEqual(error.status, 0);
+  assert.equal(fs.existsSync(logPath), false);
+  assert.match(String(error.stderr || ""), /RELAY_PI_REVIEW_TIMEOUT must be a positive duration like 120s/);
+});
+
+test("pi adapter recovers valid stdout from non-timeout failures", () => {
+  const { repoRoot, promptPath } = setupRepo();
+  const fakeDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-fake-pi-recover-"));
+  const fakePi = writeExecutable(fakeDir, "fake-pi.js", `#!/usr/bin/env node
+process.stdout.write(JSON.stringify({
+  verdict: "pass",
+  summary: "Recovered stdout.",
+  contract_status: "pass",
+  quality_review_status: "pass",
+  next_action: "ready_to_merge",
+  issues: [],
+  rubric_scores: [],
+  scope_drift: { creep: [], missing: [] },
+}));
+process.stderr.write("simulated late failure\\n");
+process.exit(1);
+`);
+
+  const stdout = execFileSync("node", [
+    PI_SCRIPT,
+    "--repo", repoRoot,
+    "--prompt-file", promptPath,
+    "--json",
+  ], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+    env: { ...process.env, RELAY_PI_BIN: fakePi, RELAY_PI_REVIEW_TIMEOUT: "5s" },
+  });
+
+  const result = JSON.parse(stdout);
+  assert.equal(result.summary, "Recovered stdout.");
+});
+
 test("antigravity adapter forwards sandbox, print timeout, and preserves primary review prompt", () => {
   const { repoRoot, promptPath } = setupRepo();
   const fakeDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-fake-antigravity-"));

@@ -116,6 +116,8 @@ node skills/relay-review/scripts/review-runner.js --repo . --run-id <id> --pr <n
   --reviewer pi --reviewer-model openai/gpt-5 --json
 ```
 
+Pi primary review uses a bounded parent-process timeout. Set `RELAY_PI_REVIEW_TIMEOUT` to a positive duration such as `120s`, `10m`, or `1h`; the default is `1800s`.
+
 Advisory review can run alongside the primary reviewer when route policy allows it:
 
 ```bash
