@@ -11,10 +11,10 @@ const {
   modeLabel,
 } = require("../../relay-dispatch/scripts/cli-args");
 const {
-  parseReviewerJsonObject,
   recoverExecStdout,
   summarizeFailure,
 } = require("./reviewer-helpers");
+const { parseAdvisoryReview } = require("./advisory-review-schema");
 
 const args = process.argv.slice(2);
 const KNOWN_FLAGS = ["--repo", "--prompt-file", "--model", "--json", "--help", "-h"];
@@ -76,16 +76,17 @@ function main() {
   if (!result) {
     throw new Error("opencode advisory reviewer did not produce a structured result");
   }
-  parseReviewerJsonObject(result, {
+  const parsed = parseAdvisoryReview(result, {
     adapter: "opencode",
     phase: "advisory_review",
-    description: "advisory review",
+    profile: "blindspot",
   });
+  const output = JSON.stringify(parsed);
 
   if (cliArgs.hasFlag("--json")) {
-    console.log(result);
+    console.log(output);
   } else {
-    process.stdout.write(result);
+    process.stdout.write(output);
   }
 }
 
