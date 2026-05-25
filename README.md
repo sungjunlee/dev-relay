@@ -80,8 +80,8 @@ Missing policy config is intentionally conservative: Codex and Claude managed CL
 After installing skills, ask for setup in plain language:
 
 ```text
-/relay-config 회사 환경으로 relay 설정해줘. opencode는 kakao/opencode-glm-*만 허용해줘.
-$relay-config 집에서는 opencode-go/deepseek-v4-pro를 sidecar/advisory에 쓰게 설정해줘.
+/relay-config Set up relay for my company environment. Only allow OpenCode through kakao/opencode-glm-*.
+$relay-config For my personal setup, use opencode-go/deepseek-v4-pro for sidecar and advisory review.
 ```
 
 `relay-config` inspects the current policy and installed harnesses, asks only for missing decisions, shows the proposed policy before writing, then runs `doctor` and representative `check` commands.
@@ -90,10 +90,10 @@ Common starting points:
 
 | Setup | Recommended request |
 | --- | --- |
-| Company default | `/relay-config 회사 환경으로 relay 설정해줘` |
-| Company internal OpenCode | `/relay-config 회사에서는 opencode를 kakao/opencode-glm-* route로만 허용해줘` |
-| Personal sidecars | `$relay-config 집에서는 opencode-go/deepseek-v4-pro를 sidecar/advisory에 쓰게 설정해줘` |
-| Managed only | `/relay-config codex/claude만 쓰는 기본 설정으로 확인해줘` |
+| Company default | `/relay-config Set up relay for my company environment` |
+| Company internal OpenCode | `/relay-config Only allow OpenCode through the kakao/opencode-glm-* route at work` |
+| Personal sidecars | `$relay-config Use opencode-go/deepseek-v4-pro for personal sidecar and advisory review` |
+| Managed only | `/relay-config Keep the default Codex/Claude-only setup` |
 
 From a direct checkout, use `node skills/relay-config/scripts/relay-config.js inspect` or the lower-level `node skills/relay-dispatch/scripts/relay-config.js ...` fallback. See [docs/model-route-policy.md](docs/model-route-policy.md) for company/internal defaults, personal opt-in examples, and the final precedence order: `CLI flags -> routing rules -> defaults -> existing relay defaults -> policy gate`.
 
@@ -102,8 +102,8 @@ From a direct checkout, use `node skills/relay-config/scripts/relay-config.js in
 ### One command, full cycle
 
 ```
-/relay 위 이슈들 처리해줘
-/relay README 설정 문서 보강 이슈를 처리해줘
+/relay Work through the issues above
+/relay Handle the README setup documentation issue
 ```
 
 Use `/relay` like a natural-language handoff. It can read issue references, sprint context, backlog notes, or the task description you give it; then it builds a scoring rubric if the task is complex, dispatches to the executor in a worktree, reviews the resulting PR, and stops at `ready_to_merge`. It runs all four phases (plan, dispatch, review, gate check) but does not auto-merge. Use `/relay-merge` to land it explicitly.
