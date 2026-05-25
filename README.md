@@ -5,39 +5,38 @@
 
 **Delegate implementation to AI agents. Keep planning and review in your hands.**
 
-## The Problem
-
-You paste a task into an AI coding agent. It writes the code. You review the PR... but you wrote the prompt, so you're checking your own assumptions.
-
-dev-relay runs the review in a **forked context**. The reviewer has no memory of the plan. It scores the diff against acceptance criteria, not the prompt. If the code doesn't pass the rubric, it gets sent back. Same issue three rounds in a row, the run escalates.
+dev-relay turns a task handoff into a repeatable plan -> dispatch -> review loop. An executor agent implements the work in an isolated worktree, then an independent reviewer agent checks the PR in a fresh context against the frozen acceptance criteria. If the implementation misses the mark, relay sends it back with targeted review feedback. When the review passes, the PR stops at `ready_to_merge` until you explicitly land it.
 
 ## Who Is This For
 
-Built for **solo developers using AI agents** who need a second pair of eyes that isn't themselves. That's where it's battle-tested today.
-
-The design should also fit team leads delegating work to AI agents (audit trail per merge) and open-source maintainers evaluating AI-generated PRs (rubric-based scoring instead of vibes). Those are plausible next steps, not proven yet.
+dev-relay is built for developers who already use AI coding agents and want a stronger handoff boundary than "I prompted it, then I reviewed my own prompt." It is most battle-tested for solo developers, but the same audit trail and review isolation also fit small teams and maintainers evaluating AI-generated PRs.
 
 ## How It Flows
 
-```
-Orchestrator             Executor                    GitHub
- |                        |                            |
- +-- plan + rubric ------>[Codex | Claude]             |
- |                        +-- implement ------------->[ PR ]
- |                        |                            |
- +-- review (fresh ctx) <-+   [Codex | Claude]         |
- |   +- contract checks   |                            |
- |   +- rubric scoring    |                            |
- |   +- scope drift check |                            |
- |   +- quality sweep     |                            |
- |   +- issues found? --->+-- re-dispatch ----------->[ PR updated ]
- |                        |                            |
- +-- LGTM ------------------------------------------>[ ready_to_merge ]
- +-- explicit merge ----------------------------------[ merged ]
- +-- cleanup + sprint update                           |
+```text
+You / orchestrator
+  |
+  +-- /relay natural-language handoff
+        |
+        +-- plan + rubric
+        +-- executor implements in a worktree
+        +-- PR opens on GitHub
+        +-- reviewer checks in a fresh context
+        +-- re-dispatch until LGTM or escalation
+        +-- ready_to_merge
+  |
+  +-- /relay-merge when you decide to land it
 ```
 
-Roles are bound at manifest creation time and remain the run's assigned role bindings. Any supported agent can plan, execute, or review. Standard Codex operation is `RELAY_ORCHESTRATOR=codex` plus `review-runner --reviewer codex`. If review-time overrides are used, the acting reviewer is recorded under `review.last_reviewer` and in the `review_apply` event payload instead of mutating `roles.reviewer`.
+The normal user-facing commands are:
+
+| Skill | Use it for |
+| --- | --- |
+| `/relay-config` | Configure company/personal route policy, OpenCode/Pi opt-ins, sidecars, and advisory review defaults |
+| `/relay` | Hand off an issue, sprint item, or natural-language task and run through review |
+| `/relay-merge` | Explicitly merge a reviewed PR and clean up relay state |
+
+The lower-level phase skills still exist for advanced operations and debugging, but most day-to-day use should start with `/relay`. See [docs/relay-operator-guide.md](docs/relay-operator-guide.md) for manual phase control, batch dispatch, sidecars, extension points, and recovery tools.
 
 ## Install
 
@@ -45,7 +44,7 @@ Roles are bound at manifest creation time and remain the run's assigned role bin
 npx skills add sungjunlee/dev-relay
 ```
 
-Installs the relay skills as [Claude Code skills](https://docs.anthropic.com/en/docs/claude-code/skills). Add `-g -y` for global install without prompts:
+Add `-g -y` for global install without prompts:
 
 ```bash
 npx skills add sungjunlee/dev-relay -g -y
@@ -61,422 +60,93 @@ npx skills add . -g -y
 ```
 </details>
 
-Working from a repo checkout without installing skills? See [docs/direct-read-relay-operator-note.md](docs/direct-read-relay-operator-note.md).
-For repo-local design notes, issue evidence, and documentation retention rules, see [docs/README.md](docs/README.md).
-
 ### Prerequisites
 
 - [Claude Code](https://claude.ai/code) or [Codex](https://chatgpt.com/codex)
-- [`gh` CLI](https://cli.github.com/) ... authenticated (`gh auth login`)
+- [`gh` CLI](https://cli.github.com/) authenticated with `gh auth login`
 - Git 2.20+
 - Node.js 18+
 
-### Route Policy Setup
+## Configure Routes
 
-Relay policy treats executor and reviewer names as CLI harnesses. The compliance boundary is the provider/model route. Missing policy config defaults to Codex/Claude managed CLI only; OpenCode, Pi, advisory reviewers, and sidecars need explicit route approval such as `kakao/opencode-glm-*` before they run.
+Relay distinguishes CLI harnesses from provider/model routes. Names such as `codex`, `claude`, `opencode`, and `pi` describe how relay invokes an agent. The compliance boundary is the provider/model route, for example `kakao/opencode-glm-5-fp8` or `opencode-go/deepseek-v4-pro`.
+
+Without a policy file, relay stays conservative: managed Codex and Claude CLIs are allowed by default, while OpenCode, Pi, advisory reviewers, and sidecars require explicit route approval.
 
 After installing skills, ask for setup in plain language:
 
 ```text
-/relay-config 회사 환경으로 relay 설정해줘. opencode는 kakao/opencode-glm-*만 허용해줘.
-$relay-config 집에서는 opencode-go/deepseek-v4-pro를 sidecar/advisory에 쓰게 설정해줘.
+/relay-config Set up relay for my company environment. Only allow OpenCode through kakao/opencode-glm-*.
+$relay-config For my personal setup, use opencode-go/deepseek-v4-pro for sidecar and advisory review.
 ```
 
-`relay-config` inspects the current policy and installed harnesses, asks only for missing decisions, shows the proposed policy before writing, then runs `doctor` and representative `check` commands. From a direct checkout, use `node skills/relay-config/scripts/relay-config.js inspect` or the lower-level `node skills/relay-dispatch/scripts/relay-config.js ...` fallback. See [docs/model-route-policy.md](docs/model-route-policy.md) for company/internal defaults, personal opt-in examples, and the final precedence order: `CLI flags -> routing rules -> defaults -> existing relay defaults -> policy gate`.
+Common starting points:
+
+| Setup | Recommended request |
+| --- | --- |
+| Company default | `/relay-config Set up relay for my company environment` |
+| Company internal OpenCode | `/relay-config Only allow OpenCode through the kakao/opencode-glm-* route at work` |
+| Personal sidecars | `$relay-config Use opencode-go/deepseek-v4-pro for personal sidecar and advisory review` |
+| Managed only | `/relay-config Keep the default Codex/Claude-only setup` |
+
+For the full policy model and precedence order, see [docs/model-route-policy.md](docs/model-route-policy.md).
 
 ## Quick Start
 
-### One command, full cycle
+Use `/relay` like a natural-language handoff:
 
+```text
+/relay Work through the issues above
+/relay Handle the README setup documentation issue
+/relay Fix the login redirect bug and open a reviewed PR
 ```
+
+Short handles also work when they are convenient:
+
+```text
 /relay 42
+/relay issue #42
 ```
 
-Reads issue #42, builds a scoring rubric if the task is complex, dispatches to the executor in a worktree, reviews the resulting PR, and stops at `ready_to_merge`. It runs all four phases (plan, dispatch, review, gate check) but does not auto-merge. Use `/relay-merge` to land it explicitly.
+Relay reads issue references, sprint context, backlog notes, or the task description you give it. It clarifies ambiguous work when needed, builds a rubric, dispatches an executor in a worktree, reviews the resulting PR, and stops at `ready_to_merge`. Use `/relay-merge` only when you explicitly want to land the reviewed PR.
 
-For raw or ambiguous requests, `/relay` now routes through `/relay-ready` first, persists a request artifact under `~/.relay/requests/<repo-slug>/`, freezes Done Criteria for review, then resumes the normal `relay-plan -> relay-dispatch -> relay-review` chain.
+## What You Get
 
-### Step by step
+| Concern | Without relay | With relay |
+| --- | --- | --- |
+| Review independence | Same context as the prompt | Reviewer has no memory of the plan |
+| Audit trail | Chat history, maybe | Manifest, event journal, and PR comments |
+| Scope drift | Easy to miss | Checked each review round |
+| Iteration | Manual back-and-forth | Re-dispatch with prior review feedback |
+| Working tree safety | Agent edits your checkout | Isolated git worktree |
+| Merge safety | Trust and merge | Stale-review gate before merge |
 
-Use individual skills when you want control over each phase:
+## Design Notes
 
-```bash
-/relay-ready "fix the auth redirect mess"   # Verify readiness and persist one relay-ready leaf + frozen Done Criteria
-/relay-plan 42          # Convert issue AC into a scoring rubric
-/relay-dispatch         # Dispatch to executor (worktree -> implement -> PR)
-/relay-review fix/42    # Review PR in a fresh context
-/relay-merge 123        # Gate-check -> explicit merge -> cleanup
-```
+Relay is manifest-backed. Each run is stored under `~/.relay/runs/<repo-slug>/` with assigned role bindings, policy fields, review anchors, and an append-only event journal. Review-time overrides record the acting reviewer separately instead of mutating the assigned role binding.
 
-## What Changes
+GitHub PRs are the handoff boundary between executor and reviewer. The reviewer scores the diff against acceptance criteria and the rubric, not against the original prompt. Terminal runs are either merged or explicitly closed.
 
-| | Without relay | With relay |
-|---|---|---|
-| **Review independence** | Same context as the prompt | Reviewer has no memory of the plan |
-| **Audit trail** | Chat history, maybe | Every round in manifest + PR comments |
-| **Scope drift** | Not tracked | Detected per-round, flagged in verdict |
-| **Convergence** | Manual back-and-forth | Loop until rubric passes or escalate |
-| **Worktree isolation** | AI edits your working directory | Isolated worktree, your files untouched |
-| **Re-dispatch context** | Start over or copy-paste feedback | Prior scores + feedback auto-prepended |
-| **Merge safety** | Trust and merge | Gate check: stale review blocks merge |
-| **Cleanup** | Manual | Worktree + branch + metadata cleaned automatically |
+For the full architecture, see [references/architecture.md](references/architecture.md). For operator usage and advanced workflows, see [docs/relay-operator-guide.md](docs/relay-operator-guide.md).
 
-## How It Works
+## Limitations
 
-### Plan ... `/relay-plan`
-
-Converts acceptance criteria into a **scoring rubric** that guides both the executor and the reviewer. If `/relay-ready` already produced `relay-ready/<leaf-id>.md`, that handoff brief becomes the planning source of truth:
-
-| Rubric element | Example |
-|---------------|---------|
-| **Automated checks** | `npm test` exits 0, `tsc --noEmit` passes |
-| **Evaluated factors** | Code quality 8+, naming consistency 7+, edge cases covered |
-| **3-anchor scoring** | Each factor defines low/mid/high anchors for consistent grading |
-| **Weights** | Required (must pass) vs best-effort (nice to have) |
-
-The rubric travels with the task. The executor uses it to self-evaluate, and the reviewer re-scores independently.
-
-Before building the rubric, `probe-executor-env.js` scans the project for available tools (npm scripts, Makefiles, pytest, etc.) so automated checks target real capabilities, not assumptions.
-
-For L/XL tasks (5+ acceptance criteria), an optional stress-test catches gaming vectors and coverage gaps before dispatch.
-
-> **When to skip rubrics:** Typos, one-liner fixes, simple bugs. Use rubrics for 3+ acceptance criteria or quality-sensitive work.
-
-### Dispatch ... `/relay-dispatch`
-
-Creates an isolated git worktree, merges the base branch for freshness, writes a relay run manifest, runs the executor with the task prompt, and collects results. Readiness-produced runs can also carry `source.request_id`, `source.leaf_id`, and `anchor.done_criteria_path` so review stays anchored to the frozen snapshot instead of drifting to PR prose.
-
-```bash
-# Minimal
-/relay-dispatch --branch fix/login-bug --prompt "Fix the null check in auth.ts"
-
-# With rubric and extended timeout
-/relay-dispatch --branch feat/search --prompt-file rubric.md --timeout 3600
-
-# Readiness-linked dispatch after relay-plan produced the executor prompt
-/relay-dispatch --branch fix/login-loop --prompt-file /tmp/dispatch-login-loop.md --request-id <request-id> --leaf-id leaf-01 --done-criteria-file ~/.relay/requests/<slug>/<request-id>/done-criteria/leaf-01.md
-
-# Resume after review requested changes (reuses retained worktree)
-/relay-dispatch --run-id issue-42-20260403120000000 --prompt-file review-round-2-redispatch.md
-
-# Dry run
-/relay-dispatch --branch feat/search --prompt "Add search" --dry-run
-```
-
-On re-dispatch, iteration history (prior scores + reviewer feedback) is automatically prepended to the executor prompt so it has full context on what to fix.
-
-<details>
-<summary>All dispatch options</summary>
-
-| Flag | Description | Default |
-|------|-------------|---------|
-| `--branch, -b` | Branch name | *required* |
-| `--run-id` | Resume an existing retained relay run | ... |
-| `--manifest` | Resume an existing retained relay run by manifest path | ... |
-| `--prompt, -p` | Task prompt | *required (or --prompt-file)* |
-| `--prompt-file` | Read prompt from file | ... |
-| `--executor, -e` | Executor type (`codex` or `claude`) | `codex` |
-| `--model, -m` | Model override | ... |
-| `--sandbox` | `workspace-write` or `read-only` | `workspace-write` |
-| `--network-access` | `disabled` or `enabled`; `enabled` passes Codex `sandbox_workspace_write.network_access=true` and is only supported with `--executor codex --sandbox workspace-write` | `disabled` |
-| `--copy` | Additional files to copy (comma-separated) | ... |
-| `--timeout` | Timeout in seconds | `codex: 2400; claude/opencode: 1800` |
-| `--register` | Additionally register in the selected executor context (Codex app thread or Claude relay-side receipt; worktrees are retained by default) | `false` |
-| `--dry-run` | Print plan, don't execute | `false` |
-| `--json` | Structured JSON output | `false` |
-
-**Timeout guidance:** Codex defaults to 2400s; Claude and opencode default to 1800s. Use 3600s with self-review and 5400s for complex multi-file work.
-
-Manifests are stored at `~/.relay/runs/<repo-slug>/<run-id>.md` with an append-only event journal at `~/.relay/runs/<repo-slug>/<run-id>/events.jsonl`.
-
-Successful dispatches retain their worktree by default so review, follow-up fixes, and manual inspection can continue in the same run context.
-</details>
-
-### Review ... `/relay-review`
-
-Runs in a **forked context**. The reviewer has no memory of the planning phase, ensuring unbiased evaluation.
-
-The review loops until convergence (most PRs: 1-3 rounds, configurable cap, default 20):
-
-1. **Contract checks** ... Is the implementation faithful to the AC? Any stubs or placeholders?
-2. **Rubric verification** ... Re-run automated checks, re-score evaluated factors independently
-3. **Scope drift detection** ... Flag out-of-scope changes (creep) and incomplete acceptance criteria (missing)
-4. **Quality sweep** ... Structural review, code simplification, churn metric tracking across rounds
-5. **Structured verdict** ... JSON verdict with per-issue `file:line`, category, severity
-
-The verdict is posted as a PR comment with a machine-readable marker:
-
-```
-Verdict: LGTM           # or
-Verdict: ESCALATED      # with specific issues and file:line references
-```
-
-If changes are requested, the runner writes a targeted `review-round-N-redispatch.md` for the next executor pass. Repeated issues are fingerprinted across rounds. The same issue recurring 3 consecutive rounds triggers escalation.
-
-### Merge ... `/relay-merge`
-
-Before merging, a **gate check** verifies:
-- The relay-review audit trail exists on the PR
-- `review.last_reviewed_sha` matches the current PR head (stale review = merge blocked)
-- CI checks pass and merge queue is clear
-
-After gate check passes:
-1. Merge the PR and mark the manifest `merged`
-2. Best-effort close the linked GitHub issue
-3. Remove the retained worktree, delete the merged local branch, prune git metadata
-4. Record `cleanup.status` in the manifest (failures become explicit follow-up)
-5. Update sprint state and create follow-up issues if needed
-
-For hotfixes, `finalize-run.js --skip-review "reason"` bypasses the review gate while recording the skip reason in both the manifest and the PR. There's always a paper trail.
-
-## Skills
-
-| Command | Phase | Description |
-|---------|-------|-------------|
-| `/relay [issue]` | All | Full cycle through `ready_to_merge` |
-| `/relay-ready [request]` | Readiness | Verify readiness and persist a single relay-ready handoff + frozen Done Criteria |
-| `/relay-plan [issue]` | Plan | Build scoring rubric from acceptance criteria |
-| `/relay-dispatch` | Execute | Dispatch to executor via git worktree isolation |
-| `/relay-review [branch]` | Review | Independent PR review with convergence loop |
-| `/relay-merge [PR]` | Ship | Explicit merge after LGTM, cleanup worktree, update sprint |
-
-## Real-World Scenarios
-
-### Hotfix: production is down
-
-```bash
-/relay-dispatch -b hotfix/null-check -p "Fix NPE in auth.ts:47, null session token" --timeout 600
-# Review comes back clean in 1 round
-/relay-merge 128   # finalize-run.js --skip-review "hotfix: production 500s"
-```
-
-Skip review is recorded in the audit trail. You'll see it later.
-
-### Complex feature: 6 acceptance criteria
-
-```bash
-/relay-plan 42                    # Builds rubric with 3-anchor scoring, stress-tests for gaps
-/relay-dispatch -b feat/search    # Executor self-evaluates against rubric
-/relay-review feat/search         # Reviewer re-scores independently, scope drift check
-# Round 1: changes_requested (missing edge case)
-/relay-dispatch --run-id ...      # Iteration history auto-prepended
-/relay-review feat/search         # Round 2: LGTM
-/relay-merge 130
-```
-
-### Batch dispatch: 3 independent tasks
-
-```bash
-# Dispatch all three in parallel
-/relay-dispatch -b fix/typo-1 -p "Fix typo in header"
-/relay-dispatch -b fix/typo-2 -p "Fix typo in footer"  
-/relay-dispatch -b feat/badge -p "Add status badge to README"
-
-# Review and merge as they complete
-/relay-review fix/typo-1 && /relay-merge 131
-/relay-review fix/typo-2 && /relay-merge 132
-/relay-review feat/badge && /relay-merge 133
-```
-
-Worktree isolation makes parallel dispatch safe. Each executor works in its own directory.
-
-## Design Philosophy
-
-**Context isolation.** The reviewer runs in a forked context with no access to the planning prompt. It sees the diff and the acceptance criteria. This is the core design choice. Everything else follows from it.
-
-**Rubric-based scoring.** A rubric defines what "good" means before the code is written. The executor self-evaluates during implementation. The reviewer re-scores independently. Three-anchor scoring (low/mid/high examples per factor) keeps grading consistent across rounds.
-
-**Manifests over prompts.** Every run produces a manifest at `~/.relay/runs/<repo-slug>/<run-id>.md`. It records who planned, who executed, who reviewed, what the policy was, and what happened. No database, no daemon. Markdown files with YAML frontmatter and an append-only event journal.
-
-**State machine.** Eight states with enforced transitions. You can't merge without a review. You can't re-dispatch without a changes_requested verdict. Direct state assignment is a bug.
-
-## State Machine
-
-Each relay run follows a manifest-backed state machine stored at `~/.relay/runs/<repo-slug>/<run-id>.md`:
-
-```mermaid
-stateDiagram-v2
-    [*] --> draft
-    draft --> dispatched
-    draft --> closed
-    dispatched --> review_pending
-    dispatched --> escalated
-    dispatched --> closed
-    review_pending --> changes_requested
-    review_pending --> ready_to_merge
-    review_pending --> escalated
-    review_pending --> closed
-    changes_requested --> dispatched : re-dispatch
-    changes_requested --> closed
-    ready_to_merge --> merged
-    ready_to_merge --> closed
-    escalated --> closed
-    merged --> [*]
-    closed --> [*]
-```
-
-<details>
-<summary>ASCII fallback (for non-GitHub viewers)</summary>
-
-```
-  +----------+
-  |  draft   |-----------------------------------------+
-  +----+-----+                                         |
-       v                                               v
-  +-----------+                                  +---------+
-  | dispatched|------------------------+         | closed  |
-  +-----+-----+                        |         +---------+
-        v                              v              ^
-  +-----------------+            +-----------+        |
-  | review_pending  |----------->| escalated |--------+
-  +--+-----------+--+            +-----------+
-     |           |
-     v           v
-+-------------------+     +----------------+
-| changes_requested |     | ready_to_merge |
-+---------+---------+     +-------+--------+
-          |                       |
-          v (re-dispatch)         v
-     dispatched              +--------+
-                             | merged |
-                             +--------+
-```
-</details>
-
-Terminal states: `merged`, `closed`. Transitions are enforced in code. Direct state assignment is a bug. An append-only event journal at `~/.relay/runs/<repo-slug>/<run-id>/events.jsonl` records every transition.
-
-## Extending
-
-dev-relay is designed to support new agents. No framework changes needed.
-
-### Adding a new executor
-
-1. Add `skills/relay-dispatch/scripts/executors/<name>.js` exporting the adapter contract documented in `skills/relay-dispatch/scripts/executors/README.md`.
-
-2. Register it in `skills/relay-dispatch/scripts/executors/index.js`.
-
-3. Add behavior-matrix coverage in `tests/relay-dispatch/scripts/executors.test.js`.
-
-4. Optional: implement adapter `register(...)`. Dispatch-time app registration supports both current executors. Codex writes a real Codex App thread; Claude writes a relay-side registration receipt under `~/.relay/worktrees/<wt-hash>/claude-registration.json`. `create-worktree.js --register` remains Codex-only.
-
-### Adding a new reviewer
-
-1. Create `skills/relay-review/scripts/invoke-reviewer-<name>.js`
-2. The script receives: `--repo <path> --prompt-file <path> [--model <name>] [--json]`
-3. It must write a JSON verdict to stdout matching the schema in `review-schema.js`
-4. `review-runner.js` resolves adapters by constructing `invoke-reviewer-<name>.js` from the `--reviewer` flag or manifest role binding
-
-### Role binding
-
-Roles are set at manifest creation time as the run's assigned bindings:
-
-```yaml
-roles:
-  orchestrator: codex     # who drives the lifecycle
-  executor: codex         # who implements
-  reviewer: claude        # who reviews (isolated context)
-```
-
-Override the reviewer at review time with `--reviewer` or the `RELAY_REVIEWER` environment variable. That changes the acting reviewer for that round, which is recorded in `review.last_reviewer` and the `review_apply` event payload.
-
-Assigned reviewer analytics stay under `roles.reviewer`. Actual reviewer execution analytics should use `review_apply.reviewer`; `review.last_reviewer` is only the latest-round stamp, not a replacement for the event log.
-
-## `.worktreeinclude`
-
-Git worktrees don't include gitignored files (`.env`, config, keys). Add a `.worktreeinclude` file to your project root to auto-copy them into worktrees:
-
-```
-# .worktreeinclude
-.env
-.env.local
-config/*.key
-```
-
-**Safety:** Only files matching BOTH `.worktreeinclude` AND `.gitignore` are copied. This prevents accidentally including tracked files. Glob patterns are supported. Missing files are silently skipped.
-
-The `--copy` dispatch flag works as an explicit override for one-off cases. To copy `.env` files, add them to `.worktreeinclude` instead — this ensures the gitignore safety check applies.
-
-## Reliability and Cleanup
-
-### Stale cleanup
-
-Merged and explicitly closed runs are cleaned by `/relay-merge`. For safety, a repo-local janitor is also available:
-
-```bash
-node skills/relay-dispatch/scripts/cleanup-worktrees.js --repo . --dry-run
-node skills/relay-dispatch/scripts/cleanup-worktrees.js --repo . --older-than 72 --json
-```
-
-Close stale non-terminal runs explicitly:
-
-```bash
-node skills/relay-dispatch/scripts/close-run.js --repo . --run-id <run-id> --reason "stale"
-```
-
-### Reliability scorecard
-
-Aggregate metrics from run history:
-
-```bash
-node skills/relay-dispatch/scripts/reliability-report.js --repo .
-node skills/relay-dispatch/scripts/reliability-report.js --repo . --json
-node skills/relay-dispatch/scripts/reliability-report.js --repo . --by-role --json
-node skills/relay-dispatch/scripts/reliability-report.js --repo . --by-acting-reviewer --json
-```
-
-Tracks: resume success rate, median review rounds, stale run count, terminal state distribution.
-
-- `--by-role` groups by assigned manifest bindings such as `roles.reviewer`
-- `--by-acting-reviewer` groups actual review execution from `review_apply.reviewer`
-- runs with recorded review state but missing `review_apply` data are reported explicitly instead of being attributed to the assigned reviewer
-
-## Works With dev-backlog
-
-dev-relay works standalone. It reads acceptance criteria from GitHub issues or direct input.
-
-For sprint-level orchestration, pair it with [dev-backlog](https://github.com/sungjunlee/dev-backlog):
-
-- **GitHub Issues** define the work (AC, labels, milestones)
-- **Sprint files** organize execution (batching, ordering, context, progress)
-- **relay** reads from both, updates sprint files at each phase
-
-## Known Limitations
-
-- **Nested Codex GitHub API calls**: When Codex runs as executor inside a nested session, `gh pr create` and some `gh` API calls can fail with `error connecting to api.github.com`, even when `git push` succeeds. For Codex CLI executor runs that need networked quality gates or PR/API calls, use `--network-access enabled`; otherwise create the PR manually against the already-pushed branch or run a host-side quality gate.
-- **Sandbox sensitivity**: `codex exec --full-auto` and stricter sandbox modes behave differently for GitHub reachability. Relay only enables network inside Codex `workspace-write` via `[sandbox_workspace_write].network_access`; domain allowlists from managed permission profiles are not yet wired into dispatch.
-- **Sprint-file automation is partial**: The relay loop works end-to-end, but plan status transitions (`[ ] -> [~] -> [x]`) and merge-time Running Context updates in sprint files still require manual intervention.
-
-See [docs/codex-orchestrator-e2e-validation-2026-04-03.md](docs/codex-orchestrator-e2e-validation-2026-04-03.md) for the full validation report.
-
-## FAQ
-
-**Does this replace human code review?**
-No. It adds an independent AI review layer. The reviewer catches rubric failures, scope drift, and structural issues. Human review still makes sense for product decisions, UX judgment, and domain-specific concerns.
-
-**Can I use Claude Code without Codex, or vice versa?**
-Yes. Either works as both executor and reviewer. Set the executor with `--executor codex` or `--executor claude`. Set the reviewer with `--reviewer codex` or `--reviewer claude`. Mix and match.
-
-**What if the AI hallucinates or writes broken code?**
-The rubric scoring and convergence loop catch it. Automated checks (tests, type checks) must pass. Evaluated factors are scored against defined anchors. If the code doesn't converge after the configured maximum rounds (default 20), the run escalates instead of merging broken code.
-
-**Does this work with other LLMs beyond Claude and Codex?**
-The executor and reviewer are adapters. Adding a new one means creating one file (`invoke-reviewer-<name>.js` or a dispatch branch) that wires up the CLI. See [Extending](#extending).
-
-**Do I need GitHub?**
-Yes. GitHub PRs are the handoff boundary between executor and reviewer. The gate check, audit trail, and merge flow all use GitHub's API. GitLab and other forges are not currently supported.
+- GitHub is currently required for PR handoff, review comments, gate checks, and merge flow.
+- Nested Codex executor runs may need `--network-access enabled` for networked quality gates or PR/API calls.
+- Sprint-file automation works, but some sprint status updates can still require manual intervention.
 
 ## Contributing
 
 Issues and PRs welcome. Please open an issue first for non-trivial changes.
 
-### Where to start
+Useful references:
 
-- **Good first issues**: Look for the [`good first issue`](https://github.com/sungjunlee/dev-relay/labels/good%20first%20issue) label
-- **Add a new executor or reviewer**: See [Extending](#extending) for the adapter pattern
-- **Architecture overview**: See [CLAUDE.md](CLAUDE.md) for the project structure and design decisions
-- **Reference docs**: See [references/architecture.md](references/architecture.md) for the manifest schema, state transitions, and extension points
+- [docs/relay-operator-guide.md](docs/relay-operator-guide.md) — operator workflow, manual phase control, sidecars, batch mode, and recovery tools
+- [docs/README.md](docs/README.md) — documentation index
+- [references/architecture.md](references/architecture.md) — manifest schema, state transitions, and extension points
+- [CLAUDE.md](CLAUDE.md) — project structure and working conventions
 
-### Running tests
+Run the test suites:
 
 ```bash
 node --test tests/relay-ready/scripts/*.test.js
@@ -484,6 +154,7 @@ node --test tests/relay-plan/scripts/*.test.js
 node --test tests/relay-dispatch/scripts/*.test.js
 node --test tests/relay-review/scripts/*.test.js
 node --test tests/relay-merge/scripts/*.test.js
+node --test tests/relay-config/scripts/*.test.js
 ```
 
 ## License

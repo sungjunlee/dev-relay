@@ -1,7 +1,7 @@
 ---
 name: relay
-argument-hint: "[issue-number or task description]"
-description: Execute the full relay cycle — plan, dispatch, review, merge. Use when implementing a GitHub issue or task through autonomous executor dispatch. Integrates with dev-backlog sprint files.
+argument-hint: "[task, issue, or natural-language handoff]"
+description: Execute the full relay cycle — plan, dispatch, review, merge. Use when implementing a GitHub issue, sprint item, task description, or natural-language handoff through autonomous executor dispatch. Integrates with dev-backlog sprint files.
 compatibility: Requires Claude Code or Codex, gh CLI, git, Node.js 18+.
 metadata:
   related-skills: "relay-ready, relay-plan, relay-dispatch, relay-review, relay-merge, relay-sidecar, dev-backlog"
