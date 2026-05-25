@@ -106,6 +106,11 @@ test("agent adapter descriptors expose structured capabilities and the executor 
   assert.equal(antigravity.capabilities.transport.primaryReview, "agy-cli");
   assert.equal(antigravity.capabilities.structuredOutput.dispatch, "stdout-copied-result-file");
   assert.equal(antigravity.capabilities.structuredOutput.primaryReview, "json-text");
+  assert.equal(antigravity.capabilities.liveSupport.status, "fail-safe-experimental");
+  assert.match(antigravity.capabilities.liveSupport.until, /healthy live canary/i);
+  assert.match(antigravity.capabilities.liveSupport.healthyCriteria.primaryReview, /strict verdict JSON/i);
+  assert.match(antigravity.capabilities.liveSupport.healthyCriteria.dispatch, /recoverable\/reviewable state/i);
+  assert.match(antigravity.capabilities.liveSupport.healthyCriteria.cliLimitation, /documented CLI limitation/i);
   assert.deepEqual(antigravity.capabilities.policy.dispatch.sandbox["workspace-write"].flags, ["--sandbox", "--add-dir <git-common-dir>"]);
   assert.deepEqual(antigravity.capabilities.policy.primary_review.read_only.true.flags, ["--sandbox", "prompt:do-not-modify-files", "git-status-before-after"]);
 });
