@@ -98,6 +98,50 @@ function buildPrimaryReviewerPolicy(reviewerName) {
   }));
 }
 
+function isAdapterManagedReviewerScript(reviewerName, reviewerScript) {
+  try {
+    return path.resolve(reviewerScript) === path.resolve(resolveReviewerScript(reviewerName, null));
+  } catch {
+    return false;
+  }
+}
+
+function buildCustomReviewerScriptPolicy({ reviewerName, reviewerScript }) {
+  const warning = "Custom reviewer scripts are invoked outside adapter-managed containment; read-only is checked after invocation with git status.";
+  const informational = (requested) => ({
+    requested,
+    enforcement_level: "informational",
+    mechanism: "git-status-after-invocation",
+    flags: [],
+    warnings: [warning],
+    fail_closed_reason: null,
+  });
+  return {
+    adapter: "custom-reviewer-script",
+    phase: ADAPTER_PHASES.PRIMARY_REVIEW,
+    reviewer: reviewerName,
+    script: reviewerScript,
+    requested: {
+      sandbox: "read-only",
+      network: "disabled",
+      read_only: true,
+    },
+    sandbox: informational("read-only"),
+    network: informational("disabled"),
+    read_only: informational(true),
+    warnings: [warning],
+    fail_closed_reasons: [],
+    safe: true,
+  };
+}
+
+function buildReviewerPolicy({ reviewerName, reviewerScript }) {
+  if (isAdapterManagedReviewerScript(reviewerName, reviewerScript)) {
+    return buildPrimaryReviewerPolicy(reviewerName);
+  }
+  return buildCustomReviewerScriptPolicy({ reviewerName, reviewerScript });
+}
+
 function captureGitStatus(repoPath) {
   return git(repoPath, "status", "--short", "--untracked-files=all").trim();
 }
@@ -114,7 +158,7 @@ function loadReviewText({ body, data, manifestPath, prNumber, promptPath, review
     reviewer: reviewerName,
     model: effectiveReviewerModel,
   });
-  const reviewerPolicy = buildPrimaryReviewerPolicy(reviewerName);
+  const reviewerPolicy = buildReviewerPolicy({ reviewerName, reviewerScript });
   appendRunEvent(runRepoPath, data.run_id, {
     event: EVENTS.REVIEW_INVOKE,
     state_from: data.state,
@@ -188,6 +232,7 @@ module.exports = {
   invokeReviewer,
   loadReviewText,
   buildPrimaryReviewerPolicy,
+  buildReviewerPolicy,
   resolveReviewerName,
   resolveReviewerModel,
   resolveReviewerScript,
