@@ -5,7 +5,9 @@ const { STATES } = require("../../../relay-dispatch/scripts/manifest/lifecycle")
 const { writeManifest } = require("../../../relay-dispatch/scripts/manifest/store");
 const {
   ADAPTER_PHASES,
+  listAgentAdapterNames,
   getAgentAdapterDescriptor,
+  supportsAgentAdapterPhase,
 } = require("../../../relay-dispatch/scripts/agent-adapters");
 const {
   assertPolicyRepresentable,
@@ -27,7 +29,39 @@ function resolveReviewerName(data, reviewerArg) {
   return "codex";
 }
 
-function resolveReviewerScript(reviewerName, reviewerScriptArg) {
+function supportedAdapterPhases(reviewerName) {
+  return Object.values(ADAPTER_PHASES)
+    .filter((phase) => supportsAgentAdapterPhase(reviewerName, phase));
+}
+
+function formatUnsupportedReviewerPhaseError(reviewerName, phase) {
+  const supported = supportedAdapterPhases(reviewerName);
+  if (
+    phase === ADAPTER_PHASES.PRIMARY_REVIEW &&
+    supported.includes(ADAPTER_PHASES.ADVISORY_REVIEW)
+  ) {
+    return (
+      `Reviewer adapter '${reviewerName}' supports advisory_review but not primary_review; ` +
+      `use --advisory-reviewer ${reviewerName} instead of --reviewer ${reviewerName} until primary review support is implemented. ` +
+      "Use --reviewer-script for an operator override."
+    );
+  }
+  if (
+    phase === ADAPTER_PHASES.ADVISORY_REVIEW &&
+    supported.includes(ADAPTER_PHASES.PRIMARY_REVIEW)
+  ) {
+    return (
+      `Reviewer adapter '${reviewerName}' supports primary_review but not advisory_review; ` +
+      `use --reviewer ${reviewerName} instead of --advisory-reviewer ${reviewerName}.`
+    );
+  }
+  return (
+    `Reviewer adapter '${reviewerName}' does not support ${phase}. ` +
+    `Supported phases: ${supported.join(", ") || "(none)"}. Use --reviewer-script for an operator override.`
+  );
+}
+
+function resolveReviewerScript(reviewerName, reviewerScriptArg, { phase = ADAPTER_PHASES.PRIMARY_REVIEW } = {}) {
   if (reviewerScriptArg) {
     return path.resolve(reviewerScriptArg);
   }
@@ -35,9 +69,28 @@ function resolveReviewerScript(reviewerName, reviewerScriptArg) {
   if (!/^[a-z0-9-]+$/.test(reviewerName)) {
     throw new Error(`Invalid reviewer name '${reviewerName}': must be lowercase alphanumeric/hyphens only. Use --reviewer-script for custom paths.`);
   }
-  const candidate = path.join(__dirname, "..", `invoke-reviewer-${reviewerName}.js`);
+  let descriptor;
+  try {
+    descriptor = getAgentAdapterDescriptor(reviewerName);
+  } catch {
+    throw new Error(
+      `Unknown reviewer adapter '${reviewerName}'. Supported adapters: ${listAgentAdapterNames().join(", ")}. ` +
+      "Use --reviewer-script for custom paths."
+    );
+  }
+  if (!supportsAgentAdapterPhase(reviewerName, phase)) {
+    throw new Error(formatUnsupportedReviewerPhaseError(reviewerName, phase));
+  }
+
+  const scriptName = phase === ADAPTER_PHASES.ADVISORY_REVIEW
+    ? descriptor.reviewer?.advisoryReviewScript
+    : descriptor.reviewer?.primaryReviewScript;
+  if (!scriptName) {
+    throw new Error(`Reviewer adapter '${reviewerName}' supports ${phase} but has no registered reviewer script.`);
+  }
+  const candidate = path.join(__dirname, "..", scriptName);
   if (!fs.existsSync(candidate)) {
-    throw new Error(`No reviewer adapter found for '${reviewerName}'. Provide --reviewer-script or --review-file.`);
+    throw new Error(`No reviewer adapter script found for '${reviewerName}' phase ${phase}. Provide --reviewer-script or --review-file.`);
   }
   return candidate;
 }
