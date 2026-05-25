@@ -16,7 +16,7 @@ metadata:
 
 ## Use when
 
-- Delegating implementation to an executor (`codex`, `claude`, `opencode`) via worktree isolation
+- Delegating implementation to an executor (`codex`, `claude`, `opencode`, `pi`) via worktree isolation
 - Resuming a same-run after a `changes_requested` review
 - Running background or parallel dispatches for independent tasks
 
@@ -43,6 +43,9 @@ node "${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/dispatch.js" . -e claud
 
 # Experimental opencode executor (uses bundled/default model config unless --model is set)
 node "${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/dispatch.js" . -e opencode -b feature-auth -p "..." --rubric-file rubric.yaml
+
+# Pi executor (requires pi CLI and an explicit allowed provider/model route)
+node "${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/dispatch.js" . -e pi -m openai/gpt-5 -b feature-auth -p "..." --rubric-file rubric.yaml
 ```
 
 For background and parallel dispatch, see `../relay/SKILL.md` § Batch Mode (single source of truth for the parallel-fork flow).
@@ -58,8 +61,8 @@ All CLI flags are registered with an explicit `parsed` or `verbatim` read mode. 
 | `--manifest` | Resume an existing retained relay run by manifest path |
 | `--prompt, -p` | Task prompt (include Context + Done Criteria + self-review) |
 | `--prompt-file` | Read prompt from file (for large prompts) |
-| `--executor, -e` | Executor: `codex` (default), `claude`, `opencode` |
-| `--model, -m` | Model override; for `opencode`, falls back to bundled `references/executor-models.json`, then optional `~/.relay/executors.json` override |
+| `--executor, -e` | Executor: `codex` (default), `claude`, `opencode`, `pi` |
+| `--model, -m` | Model override; for `opencode`, falls back to bundled `references/executor-models.json`, then optional `~/.relay/executors.json` override; Pi should pass an explicit route such as `openai/gpt-5` |
 | `--model-hints` | Persist per-phase model hints as `phase=model[,phase=model...]` |
 | `--sandbox` | `workspace-write` (default) or `read-only` |
 | `--copy <files>` | Additional files to copy |
@@ -97,7 +100,7 @@ Precedence for dispatch model selection is: `--model` → manifest `model_hints.
 
 | Task type | Timeout | Rationale |
 |---|---|---|
-| Simple implementation | Default (`codex: 2400`, `claude/opencode: 1800`) | No self-review needed |
+| Simple implementation | Default (`codex: 2400`, `claude/opencode/pi: 1800`) | No self-review needed |
 | With self-review loop | `3600` | Executor iterates 2-3 times |
 | Complex / multi-file | `5400` | Deep implementation + thorough self-review |
 

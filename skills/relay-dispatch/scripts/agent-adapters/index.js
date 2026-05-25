@@ -1,6 +1,7 @@
 const codex = require("../executors/codex");
 const claude = require("../executors/claude");
 const opencode = require("../executors/opencode");
+const pi = require("../executors/pi");
 const bundledModels = require("../../references/executor-models.json");
 
 const ADAPTER_PHASES = Object.freeze({
@@ -463,6 +464,151 @@ const DESCRIPTORS = Object.freeze({
     reviewer: {
       primaryReviewScript: null,
       advisoryReviewScript: "invoke-reviewer-opencode.js",
+    },
+  }),
+  pi: buildDescriptor({
+    name: "pi",
+    displayName: "Pi CLI",
+    executor: pi,
+    phases: {
+      [ADAPTER_PHASES.DISPATCH]: {
+        supported: true,
+        trust: "executor",
+      },
+      [ADAPTER_PHASES.PRIMARY_REVIEW]: {
+        supported: true,
+        trust: "trusted",
+      },
+      [ADAPTER_PHASES.ADVISORY_REVIEW]: {
+        supported: false,
+        trust: "unsupported",
+      },
+    },
+    capabilities: {
+      sandbox: {
+        dispatch: {
+          modes: ["workspace-write"],
+          enforced: false,
+        },
+        primaryReview: {
+          mode: "read-only",
+          enforced: false,
+          guard: "worktree-status",
+        },
+        advisoryReview: null,
+      },
+      network: {
+        dispatch: {
+          configurable: false,
+          enabledMode: "ambient",
+        },
+        primaryReview: {
+          configurable: false,
+          default: "disabled",
+        },
+        advisoryReview: null,
+      },
+      readOnly: {
+        dispatch: false,
+        primaryReview: true,
+        advisoryReview: false,
+      },
+      policy: {
+        dispatch: {
+          sandbox: {
+            "workspace-write": {
+              enforcement_level: "informational",
+              mechanism: "pi-cli",
+              warnings: ["Pi dispatch does not provide native sandbox containment."],
+            },
+            "read-only": {
+              enforcement_level: "informational",
+              mechanism: "pi-cli",
+              warnings: ["Pi dispatch read-only intent is informational only and does not prevent writes."],
+            },
+          },
+          network: {
+            disabled: {
+              enforcement_level: "informational",
+              mechanism: "ambient-network",
+              warnings: ["Pi dispatch does not gate network access at the executor level."],
+            },
+            enabled: {
+              enforcement_level: "informational",
+              mechanism: "ambient-network",
+              warnings: ["Pi dispatch does not gate network access at the executor level."],
+            },
+          },
+          read_only: {
+            true: {
+              enforcement_level: "informational",
+              mechanism: "pi-cli",
+              warnings: ["Pi dispatch read-only intent is informational only and does not prevent writes."],
+            },
+            false: {
+              enforcement_level: "unsupported",
+              mechanism: "write-capable-dispatch",
+            },
+          },
+        },
+        primary_review: {
+          sandbox: {
+            "read-only": {
+              enforcement_level: "tool-allowlist",
+              mechanism: "pi-tools-allowlist",
+              flags: ["--tools read,grep,find,ls"],
+              warnings: ["Pi reviewer read-only is a tool allowlist, not OS-level containment; relay still checks dirty worktree status after invocation."],
+            },
+          },
+          network: {
+            disabled: {
+              enforcement_level: "tool-allowlist",
+              mechanism: "pi-tools-allowlist",
+              flags: ["--tools read,grep,find,ls"],
+              warnings: ["Pi reviewer has no network tool in the relay allowlist; dirty worktree detection remains active."],
+            },
+          },
+          read_only: {
+            true: {
+              enforcement_level: "tool-allowlist",
+              mechanism: "pi-tools-allowlist",
+              flags: ["--tools read,grep,find,ls"],
+              warnings: ["Pi reviewer read-only is a tool allowlist, not OS-level containment; dirty worktree detection remains active."],
+            },
+          },
+        },
+        advisory_review: null,
+      },
+      transport: {
+        dispatch: "pi-cli",
+        primaryReview: "pi-cli",
+        advisoryReview: null,
+      },
+      structuredOutput: {
+        dispatch: "stdout-copied-result-file",
+        primaryReview: "json-text",
+        advisoryReview: null,
+      },
+      appRegistration: {
+        supported: false,
+        transport: null,
+      },
+      modelDefaults: {
+        provider: pi.providerDefault,
+        dispatch: {
+          configKey: "pi",
+          defaultModel: bundledDefaultModel("pi"),
+        },
+        primaryReview: {
+          configKey: "pi",
+          defaultModel: bundledDefaultModel("pi"),
+        },
+        advisoryReview: null,
+      },
+    },
+    reviewer: {
+      primaryReviewScript: "invoke-reviewer-pi.js",
+      advisoryReviewScript: null,
     },
   }),
 });

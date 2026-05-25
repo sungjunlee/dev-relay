@@ -63,6 +63,7 @@ npx skills add . -g -y
 ### Prerequisites
 
 - [Claude Code](https://claude.ai/code) or [Codex](https://chatgpt.com/codex)
+- Optional: Pi CLI 0.72.1+ for `--executor pi` or `--reviewer pi` (`RELAY_PI_BIN` may point review to a non-PATH binary)
 - [`gh` CLI](https://cli.github.com/) authenticated with `gh auth login`
 - Git 2.20+
 - Node.js 18+

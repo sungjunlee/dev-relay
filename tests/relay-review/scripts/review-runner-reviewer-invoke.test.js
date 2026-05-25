@@ -11,6 +11,7 @@ const { createManifestSkeleton, readManifest, writeManifest } = require("../../.
 const { buildDefaultRelayPolicy } = require("../../../skills/relay-dispatch/scripts/relay-policy");
 const { ADAPTER_PHASES } = require("../../../skills/relay-dispatch/scripts/agent-adapters");
 const {
+  buildPrimaryReviewerPolicy,
   captureGitStatus,
   loadReviewText,
   resolveReviewerName,
@@ -119,6 +120,8 @@ test("reviewer-invoke/resolveReviewerName preserves arg, manifest, env precedenc
 test("reviewer-invoke/resolveReviewerScript resolves built-in adapters and rejects invalid names", () => {
   const script = resolveReviewerScript("codex");
   assert.match(script, /invoke-reviewer-codex\.js$/);
+  const piScript = resolveReviewerScript("pi");
+  assert.match(piScript, /invoke-reviewer-pi\.js$/);
   assert.throws(() => resolveReviewerScript("../bad"), /Invalid reviewer name/);
 });
 
@@ -143,8 +146,17 @@ test("reviewer-invoke/resolveReviewerScript allows advisory-only adapters for ad
 test("reviewer-invoke/resolveReviewerScript rejects unknown adapter names without falling back to files", () => {
   assert.throws(
     () => resolveReviewerScript("not-an-adapter"),
-    /Unknown reviewer adapter 'not-an-adapter'.*Supported adapters:.*codex.*opencode.*--reviewer-script/s
+    /Unknown reviewer adapter 'not-an-adapter'.*Supported adapters:.*codex.*opencode.*pi.*--reviewer-script/s
   );
+});
+
+test("reviewer-invoke/buildPrimaryReviewerPolicy records Pi tool allowlist metadata", () => {
+  const policy = buildPrimaryReviewerPolicy("pi");
+  assert.equal(policy.adapter, "pi");
+  assert.equal(policy.phase, ADAPTER_PHASES.PRIMARY_REVIEW);
+  assert.equal(policy.safe, true);
+  assert.equal(policy.read_only.enforcement_level, "tool-allowlist");
+  assert.deepEqual(policy.read_only.flags, ["--tools read,grep,find,ls"]);
 });
 
 test("reviewer-invoke/resolveReviewerScript preserves manual reviewer-script overrides", () => {
