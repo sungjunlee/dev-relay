@@ -9,7 +9,7 @@ metadata:
   keywords: "리뷰, 검토, review, gate, fresh context"
 ---
 ## Inputs
-- Env: optional `RELAY_SKILL_ROOT` defaults to `skills`; examples use `PR_NUM`, `BRANCH`, `ISSUE_NUM`, and `RUN_ID`; `ANTHROPIC_API_KEY` is required only for `--reviewer claude`; `RELAY_PI_BIN` can override the Pi binary path.
+- Env: optional `RELAY_SKILL_ROOT` defaults to `skills`; examples use `PR_NUM`, `BRANCH`, `ISSUE_NUM`, and `RUN_ID`; `ANTHROPIC_API_KEY` is required only for `--reviewer claude`; `RELAY_PI_BIN` can override the Pi binary path; `RELAY_PI_REVIEW_TIMEOUT` sets the Pi primary review parent timeout.
 - Files: PR diff (`/tmp/pr-diff.txt`), Done Criteria anchor, Score Log/rubric artifacts, run manifest, and optional `/tmp/review-verdict.json`; `RELAY_ANTIGRAVITY_BIN` can override the Antigravity reviewer binary path.
 - Sibling scripts: `${RELAY_SKILL_ROOT:-skills}/relay-review/scripts/resolve-issue-number.sh`, `${RELAY_SKILL_ROOT:-skills}/relay-review/scripts/review-runner.js`.
 
