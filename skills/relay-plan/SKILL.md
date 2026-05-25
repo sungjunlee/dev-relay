@@ -1,6 +1,6 @@
 ---
 name: relay-plan
-argument-hint: "[issue-number]"
+argument-hint: "[task, issue, or ready handoff]"
 description: Synthesize task intent, explicit AC when present, repo signals, and task risk into a scored rubric for autonomous iteration. Always used before relay-dispatch — rubric depth scales with task size.
 compatibility: Requires gh CLI.
 metadata:
