@@ -129,6 +129,7 @@ const {
 } = require("./agent-adapters");
 const {
   assertPolicyRepresentable,
+  buildAdapterCapabilityFailureEnvelope,
   buildAgentPolicyAudit,
 } = require("./agent-adapters/policy");
 const { execGit } = require("./exec");
@@ -154,6 +155,7 @@ const KNOWN_FLAGS = [
 ];
 const CLI_ARG_OPTIONS = { commandName: "dispatch", reservedFlags: KNOWN_FLAGS };
 const hasCliFlag = (flag) => schemaHasFlag(args, flag, CLI_ARG_OPTIONS);
+const JSON_OUT_REQUESTED = hasCliFlag("--json");
 
 if (!args.length || hasCliFlag(["--help", "-h"])) {
   console.log("Usage: dispatch.js <repo-path> --branch <name> --prompt <task> [options]");
@@ -252,6 +254,23 @@ if (!["disabled", "enabled"].includes(NETWORK_ACCESS)) {
 }
 const modeValidation = adapter.validateExecutionMode({ sandbox: SANDBOX, networkAccess: NETWORK_ACCESS });
 if (!modeValidation.ok) {
+  if (JSON_OUT_REQUESTED) {
+    console.log(JSON.stringify(buildAdapterCapabilityFailureEnvelope({
+      adapter: EXECUTOR,
+      phase: ADAPTER_PHASES.DISPATCH,
+      requested: {
+        sandbox: SANDBOX,
+        network: NETWORK_ACCESS,
+        read_only: SANDBOX === "read-only",
+      },
+      safe: false,
+      warnings: modeValidation.warnings || [],
+      fail_closed_reasons: [modeValidation.error],
+    }, {
+      executor: EXECUTOR,
+      phase: "dispatch",
+    }), null, 2));
+  }
   console.error(`Error: ${modeValidation.error}`);
   process.exit(1);
 }
@@ -271,6 +290,12 @@ try {
     },
   }));
 } catch (error) {
+  if (JSON_OUT_REQUESTED) {
+    console.log(JSON.stringify(buildAdapterCapabilityFailureEnvelope(error, {
+      executor: EXECUTOR,
+      phase: "dispatch",
+    }), null, 2));
+  }
   console.error(`Error: ${error.message}`);
   process.exit(1);
 }
@@ -318,7 +343,7 @@ const AUTO_RECOVER_COMMIT = AUTO_RECOVER_COMMIT_REQUESTED
     : EXECUTOR === "codex";
 const ALLOW_CONFLICTING_RUN = hasCliFlag("--allow-conflicting-run");
 const DRY_RUN = hasCliFlag("--dry-run");
-const JSON_OUT = hasCliFlag("--json");
+const JSON_OUT = JSON_OUT_REQUESTED;
 const RESUME_MODE = !!MANIFEST_INPUT || (!!RUN_ID && !BRANCH);
 
 if (AUTO_RECOVER_COMMIT_REQUESTED && NO_AUTO_RECOVER_COMMIT) {
@@ -1025,6 +1050,8 @@ async function main() {
       executor: EXECUTOR,
       model: effectiveDispatchModel,
       phase: "dispatch",
+      adapter_capability: executorPolicy,
+      executor_policy: executorPolicy,
     });
     if (JSON_OUT) {
       console.log(JSON.stringify(envelope, null, 2));
@@ -1361,6 +1388,7 @@ async function main() {
     provider,
     executor_network: executorNetworkPolicy,
     executor_policy: executorPolicy,
+    policy_decision: policyDecision,
   });
 
   // Redirect stdout/stderr to files. Using spawn with detached: true gives us
@@ -1563,6 +1591,7 @@ async function main() {
       : `${RESUME_MODE ? "same_run_resume" : "new_dispatch"}:${status}`,
     executor_network: executorNetworkPolicy,
     executor_policy: executorPolicy,
+    policy_decision: policyDecision,
     failure_class: networkFailure,
     execution_evidence_path: executionEvidencePath,
     execution_evidence_hash: executionEvidencePath ? hashFileSha256(executionEvidencePath) : null,

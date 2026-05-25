@@ -38,6 +38,24 @@ test("policy gate allows managed Codex without model under missing config", () =
   assert.equal(decision.policy.status, "defaulted");
 });
 
+test("policy gate keeps Codex and Claude model-less managed CLI routes compatible", () => {
+  for (const tuple of [
+    { phase: "dispatch", executor: "codex", actorField: "executor" },
+    { phase: "dispatch", executor: "claude", actorField: "executor" },
+    { phase: "review", reviewer: "codex", actorField: "reviewer" },
+    { phase: "review", reviewer: "claude", actorField: "reviewer" },
+  ]) {
+    const decision = evaluateRelayPolicyGate({
+      relayHome: tempDir(),
+      ...tuple,
+    });
+    assert.equal(decision.allowed, true, `${tuple.phase} ${tuple.executor || tuple.reviewer}`);
+    assert.equal(decision.reason, "managed_cli");
+    assert.equal(decision.actor_field, tuple.actorField);
+    assert.equal(decision.model, null);
+  }
+});
+
 test("policy gate denies unmanaged executor model routes unless explicitly allowed", () => {
   assert.throws(
     () => assertRelayPolicyGate({
@@ -60,6 +78,67 @@ test("policy gate denies unmanaged executor model routes unless explicitly allow
       assert.match(error.message, /reason=unknown_model_route/);
       return true;
     }
+  );
+});
+
+test("policy gate can allow and deny Pi, OpenCode, and Antigravity routes by configuration", () => {
+  const relayHome = tempDir();
+  writePolicy(relayHome, {
+    ...buildDefaultRelayPolicy(),
+    profile: "non-managed-routes",
+    allowed_model_routes: [
+      { route: "opencode-go/*", phases: ["dispatch", "advisory_review"], executors: ["opencode"], reviewers: ["opencode"] },
+      { route: "pi/*", phases: ["dispatch", "review"], executors: ["pi"], reviewers: ["pi"] },
+      { route: "google/*", phases: ["dispatch", "review"], executors: ["antigravity"], reviewers: ["antigravity"] },
+    ],
+    denied_model_routes: [
+      { route: "pi/blocked", phases: ["review"], reviewers: ["pi"] },
+      { route: "google/blocked", phases: ["dispatch"], executors: ["antigravity"] },
+    ],
+  });
+
+  assert.equal(assertRelayPolicyGate({
+    relayHome,
+    phase: "dispatch",
+    executor: "opencode",
+    model: "opencode-go/deepseek-v4-pro",
+  }).reason, "allowed_model_route");
+  assert.equal(assertRelayPolicyGate({
+    relayHome,
+    phase: "advisory_review",
+    reviewer: "opencode",
+    model: "opencode-go/deepseek-v4-pro",
+  }).reason, "allowed_model_route");
+  assert.equal(assertRelayPolicyGate({
+    relayHome,
+    phase: "review",
+    reviewer: "pi",
+    model: "pi/local-review",
+  }).reason, "allowed_model_route");
+  assert.equal(assertRelayPolicyGate({
+    relayHome,
+    phase: "dispatch",
+    executor: "antigravity",
+    model: "google/gemini-cli",
+  }).reason, "allowed_model_route");
+
+  assert.throws(
+    () => assertRelayPolicyGate({
+      relayHome,
+      phase: "review",
+      reviewer: "pi",
+      model: "pi/blocked",
+    }),
+    /reason=denied_model_route/
+  );
+  assert.throws(
+    () => assertRelayPolicyGate({
+      relayHome,
+      phase: "dispatch",
+      executor: "antigravity",
+      model: "google/blocked",
+    }),
+    /reason=denied_model_route/
   );
 });
 
