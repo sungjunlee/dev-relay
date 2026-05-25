@@ -40,5 +40,27 @@
         "repo": "/tmp/issue187-fixtures/repo/.relay/policy.json"
       }
     }
+  },
+  "routing_decision": {
+    "version": 1,
+    "source_tags": {
+      "cli": [],
+      "issue_labels": [],
+      "task_profile": [],
+      "rubric": [],
+      "changed_files": [],
+      "test_commands": []
+    },
+    "effective_source": "none",
+    "effective_tags": [],
+    "warnings": [],
+    "selected": {
+      "advisory_review": null,
+      "sidecar": null
+    },
+    "ignored_primary_review": null,
+    "matched": false,
+    "matched_rule": null,
+    "no_match_reason": "no_routing_rule_matched"
   }
 }

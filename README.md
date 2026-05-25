@@ -45,7 +45,7 @@ Roles are bound at manifest creation time and remain the run's assigned role bin
 npx skills add sungjunlee/dev-relay
 ```
 
-Installs all 6 skills as [Claude Code custom slash commands](https://docs.anthropic.com/en/docs/claude-code/skills). Add `-g -y` for global install without prompts:
+Installs the relay skills as [Claude Code skills](https://docs.anthropic.com/en/docs/claude-code/skills). Add `-g -y` for global install without prompts:
 
 ```bash
 npx skills add sungjunlee/dev-relay -g -y
@@ -75,7 +75,14 @@ For repo-local design notes, issue evidence, and documentation retention rules, 
 
 Relay policy treats executor and reviewer names as CLI harnesses. The compliance boundary is the provider/model route. Missing policy config defaults to Codex/Claude managed CLI only; OpenCode, Pi, advisory reviewers, and sidecars need explicit route approval such as `kakao/opencode-glm-*` before they run.
 
-Use `relay-config doctor` and `relay-config check` to verify policy before enabling advisory reviewers or sidecars. See [docs/model-route-policy.md](docs/model-route-policy.md) for company/internal defaults, personal opt-in examples, and the final precedence order: `CLI flags -> routing rules -> defaults -> existing relay defaults -> policy gate`.
+After installing skills, ask for setup in plain language:
+
+```text
+/relay-config 회사 환경으로 relay 설정해줘. opencode는 kakao/opencode-glm-*만 허용해줘.
+$relay-config 집에서는 opencode-go/deepseek-v4-pro를 sidecar/advisory에 쓰게 설정해줘.
+```
+
+`relay-config` inspects the current policy and installed harnesses, asks only for missing decisions, shows the proposed policy before writing, then runs `doctor` and representative `check` commands. From a direct checkout, use `node skills/relay-config/scripts/relay-config.js inspect` or the lower-level `node skills/relay-dispatch/scripts/relay-config.js ...` fallback. See [docs/model-route-policy.md](docs/model-route-policy.md) for company/internal defaults, personal opt-in examples, and the final precedence order: `CLI flags -> routing rules -> defaults -> existing relay defaults -> policy gate`.
 
 ## Quick Start
 
