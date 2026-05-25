@@ -197,3 +197,18 @@ test("operator-facing Antigravity docs keep live support marked fail-safe experi
   assert.match(operatorDocs, /ready_to_merge/i);
   assert.doesNotMatch(operatorDocs, /Antigravity[^.\n]*(?:fully healthy|live healthy|live executor success|live reviewer success)[^.\n]*fake-bin/i);
 });
+
+test("operator docs publish the live dogfood harness and outcome meanings", () => {
+  const docs = [
+    readRepoFile("docs/relay-operator-guide.md"),
+    readRepoFile("skills/relay-dispatch/references/operator-utilities.md"),
+  ].join("\n");
+
+  assert.match(docs, /live-dogfood\.js --repo \. --json --markdown/);
+  assert.match(docs, /temporary `RELAY_HOME`/);
+  assert.match(docs, /scoped route policy/);
+  for (const outcome of ["pass", "fail-safe-pass", "timeout", "fail", "not-run"]) {
+    assert.match(docs, new RegExp(`\`${outcome}\``));
+  }
+  assert.match(docs, /fake-bin regressions and live canary evidence are not conflated/);
+});
