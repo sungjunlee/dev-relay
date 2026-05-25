@@ -52,20 +52,28 @@ Policy `defaults` describe configured actor defaults for auditing and future-saf
 
 ## Company/Internal Setup
 
-Initialize a company policy:
+After installing skills, prefer the interactive setup skill. Ask in natural language and let it inspect the current policy before writing:
+
+```text
+/relay-config 회사 환경으로 relay 설정해줘. opencode는 example/opencode-model-*만 허용해줘.
+```
+
+The skill should show the proposed policy, ask for confirmation, apply it, then run `doctor` and representative `check` commands.
+
+From a direct checkout, initialize a company policy with the wrapper:
 
 ```bash
-node skills/relay-dispatch/scripts/relay-config.js init --profile company
+node skills/relay-config/scripts/relay-config.js init company
 ```
 
 The generated company policy intentionally keeps Codex and Claude as managed CLI defaults with no pinned model names. Add internal OpenCode or Pi routes explicitly:
 
 ```bash
-node skills/relay-dispatch/scripts/relay-config.js allow-route 'example/opencode-model-*' \
+node skills/relay-config/scripts/relay-config.js allow-route 'example/opencode-model-*' \
   --phase dispatch,advisory_review,sidecar \
   --executor opencode
 
-node skills/relay-dispatch/scripts/relay-config.js allow-route 'example/pi-*' \
+node skills/relay-config/scripts/relay-config.js allow-route 'example/pi-*' \
   --phase dispatch,review,advisory_review,sidecar \
   --executor pi \
   --reviewer pi
@@ -117,24 +125,30 @@ Repo-local `.relay/policy.json` files may narrow the global policy but may not w
 
 ## Personal Opt-In Setup
 
-Initialize a personal policy:
+After installing skills, prefer natural-language setup:
+
+```text
+$relay-config 집에서는 opencode-go/deepseek-v4-pro를 sidecar/advisory에 쓰게 설정해줘.
+```
+
+From a direct checkout, initialize a personal policy:
 
 ```bash
-node skills/relay-dispatch/scripts/relay-config.js init --profile personal
+node skills/relay-config/scripts/relay-config.js init personal
 ```
 
 Then opt in to the routes you personally allow:
 
 ```bash
-node skills/relay-dispatch/scripts/relay-config.js allow-route 'opencode-go/*' \
+node skills/relay-config/scripts/relay-config.js allow-route 'opencode-go/*' \
   --phase dispatch,advisory_review,sidecar \
   --executor opencode
 
-node skills/relay-dispatch/scripts/relay-config.js allow-route 'deepseek/*' \
+node skills/relay-config/scripts/relay-config.js allow-route 'deepseek/*' \
   --phase dispatch,advisory_review,sidecar \
   --executor opencode
 
-node skills/relay-dispatch/scripts/relay-config.js allow-route 'ollama/*' \
+node skills/relay-config/scripts/relay-config.js allow-route 'ollama/*' \
   --phase dispatch,advisory_review,sidecar \
   --executor opencode
 ```
@@ -160,10 +174,10 @@ This file changes model selection only. It does not grant policy approval. The s
 
 ## Doctor And Check
 
-Run `relay-config doctor` after policy changes and before enabling advisory reviewers or sidecars:
+Run `relay-config doctor` after policy changes and before enabling advisory reviewers or sidecars. Installed operators should use the skill; direct-checkout users can run:
 
 ```bash
-node skills/relay-dispatch/scripts/relay-config.js doctor
+node skills/relay-config/scripts/relay-config.js doctor
 ```
 
 Doctor reports whether known CLIs are installed and how policy treats each harness. For OpenCode or Pi, `route-configured (provider_model_route_required)` is expected when an allow rule exists but a specific model was not supplied to doctor. That is a reminder that the harness name alone is not compliant.
@@ -171,21 +185,11 @@ Doctor reports whether known CLIs are installed and how policy treats each harne
 Run `relay-config check` for each actual tuple you plan to enable:
 
 ```bash
-node skills/relay-dispatch/scripts/relay-config.js check \
-  --phase dispatch \
-  --executor opencode \
-  --model example/opencode-model-fast
+node skills/relay-config/scripts/relay-config.js check dispatch opencode example/opencode-model-fast
 
-node skills/relay-dispatch/scripts/relay-config.js check \
-  --phase advisory_review \
-  --executor opencode \
-  --reviewer opencode \
-  --model example/opencode-model-fast
+node skills/relay-config/scripts/relay-config.js check advisory_review opencode example/opencode-model-fast
 
-node skills/relay-dispatch/scripts/relay-config.js check \
-  --phase sidecar \
-  --executor opencode \
-  --model example/opencode-model-fast
+node skills/relay-config/scripts/relay-config.js check sidecar opencode example/opencode-model-fast
 ```
 
 Check exits non-zero when the tuple would be denied at runtime. Run it before turning on routed advisory review or sidecar rules because those phases can start automatically after dispatch.
@@ -195,24 +199,18 @@ Check exits non-zero when the tuple would be denied at runtime. Run it before tu
 With the company policy above, an external OpenAI route through OpenCode is not allowed:
 
 ```bash
-$ node skills/relay-dispatch/scripts/relay-config.js check \
-  --phase dispatch \
-  --executor opencode \
-  --model openai/gpt-5
+$ node skills/relay-config/scripts/relay-config.js check dispatch opencode openai/gpt-5
 denied: unknown_model_route
 ```
 
 If the route is explicitly denied, the reason is stronger and the matched deny route is shown:
 
 ```bash
-$ node skills/relay-dispatch/scripts/relay-config.js deny-route 'openai/*' \
+$ node skills/relay-config/scripts/relay-config.js deny-route 'openai/*' \
   --phase dispatch \
   --executor opencode
 
-$ node skills/relay-dispatch/scripts/relay-config.js check \
-  --phase dispatch \
-  --executor opencode \
-  --model openai/gpt-5
+$ node skills/relay-config/scripts/relay-config.js check dispatch opencode openai/gpt-5
 denied: denied_model_route
 matched route: openai/*
 ```
