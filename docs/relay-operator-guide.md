@@ -106,6 +106,8 @@ Manual review command:
 node skills/relay-review/scripts/review-runner.js --repo . --run-id <id> --pr <number> --reviewer codex --json
 ```
 
+OpenCode, Pi, and Antigravity can be used as reviewer roles only when the adapter can represent the phase and route policy allows the model route. OpenCode primary review uses prompt-only read-only plus a dirty-worktree guard; Pi uses a read/grep/find/ls allowlist; Antigravity targets the `agy` CLI and remains fail-safe experimental until healthy live canary evidence exists.
+
 Pi can be used as dispatch executor or trusted primary reviewer when `pi` is on `PATH` (or `RELAY_PI_BIN` is set for review), authenticated for the selected provider, and route policy allows the model route:
 
 ```bash
@@ -123,6 +125,12 @@ Advisory review can run alongside the primary reviewer when route policy allows 
 ```bash
 node skills/relay-review/scripts/review-runner.js --repo . --run-id <id> --pr <number> \
   --reviewer codex --advisory-reviewer opencode --advisory-profile blindspot --json
+
+node skills/relay-review/scripts/review-runner.js --repo . --run-id <id> --pr <number> \
+  --reviewer codex --advisory-reviewer pi --advisory-reviewer-model openai/gpt-5 --advisory-profile blindspot --json
+
+node skills/relay-review/scripts/review-runner.js --repo . --run-id <id> --pr <number> \
+  --reviewer codex --advisory-reviewer antigravity --advisory-reviewer-model google/antigravity-cli --advisory-profile blindspot --json
 ```
 
 ### Antigravity Live Canary

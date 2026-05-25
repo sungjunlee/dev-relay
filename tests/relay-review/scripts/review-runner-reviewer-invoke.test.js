@@ -120,27 +120,18 @@ test("reviewer-invoke/resolveReviewerName preserves arg, manifest, env precedenc
 test("reviewer-invoke/resolveReviewerScript resolves built-in adapters and rejects invalid names", () => {
   const script = resolveReviewerScript("codex");
   assert.match(script, /invoke-reviewer-codex\.js$/);
+  const opencodeScript = resolveReviewerScript("opencode");
+  assert.match(opencodeScript, /invoke-reviewer-opencode\.js$/);
   const piScript = resolveReviewerScript("pi");
   assert.match(piScript, /invoke-reviewer-pi\.js$/);
   assert.throws(() => resolveReviewerScript("../bad"), /Invalid reviewer name/);
 });
 
-test("reviewer-invoke/resolveReviewerScript fails closed for advisory-only adapters in primary review", () => {
-  assert.throws(
-    () => resolveReviewerScript("opencode"),
-    (error) => {
-      assert.match(error.message, /supports advisory_review but not primary_review/);
-      assert.match(error.message, /--advisory-reviewer opencode/);
-      assert.match(error.message, /--reviewer opencode/);
-      assert.match(error.message, /--reviewer-script/);
-      return true;
-    }
-  );
-});
-
-test("reviewer-invoke/resolveReviewerScript allows advisory-only adapters for advisory review", () => {
+test("reviewer-invoke/resolveReviewerScript allows parity adapters for advisory review", () => {
   const script = resolveReviewerScript("opencode", null, { phase: ADAPTER_PHASES.ADVISORY_REVIEW });
   assert.match(script, /invoke-reviewer-opencode\.js$/);
+  assert.match(resolveReviewerScript("pi", null, { phase: ADAPTER_PHASES.ADVISORY_REVIEW }), /invoke-reviewer-pi\.js$/);
+  assert.match(resolveReviewerScript("antigravity", null, { phase: ADAPTER_PHASES.ADVISORY_REVIEW }), /invoke-reviewer-antigravity\.js$/);
 });
 
 test("reviewer-invoke/resolveReviewerScript rejects unknown adapter names without falling back to files", () => {
@@ -157,6 +148,16 @@ test("reviewer-invoke/buildPrimaryReviewerPolicy records Pi tool allowlist metad
   assert.equal(policy.safe, true);
   assert.equal(policy.read_only.enforcement_level, "tool-allowlist");
   assert.deepEqual(policy.read_only.flags, ["--tools read,grep,find,ls"]);
+});
+
+test("reviewer-invoke/buildPrimaryReviewerPolicy records OpenCode primary review status guard metadata", () => {
+  const policy = buildPrimaryReviewerPolicy("opencode");
+  assert.equal(policy.adapter, "opencode");
+  assert.equal(policy.phase, ADAPTER_PHASES.PRIMARY_REVIEW);
+  assert.equal(policy.safe, true);
+  assert.equal(policy.sandbox.enforcement_level, "informational");
+  assert.equal(policy.read_only.enforcement_level, "prompt-only");
+  assert.match(policy.read_only.warnings.join("\n"), /does not prevent writes/i);
 });
 
 test("reviewer-invoke/buildPrimaryReviewerPolicy records Antigravity CLI version metadata", (t) => {
@@ -574,6 +575,57 @@ test("reviewer-invoke precedence R4 regression: reviewer argv stays byte-identic
   const reviewInvokeEvent = JSON.parse(eventLines.at(-1));
   assert.equal(reviewInvokeEvent.event, "review_invoke");
   assert.equal(reviewInvokeEvent.model, null);
+});
+
+test("reviewer-invoke keeps managed Codex reviewer modeless despite local executor defaults", (t) => {
+  const originalRelayHome = process.env.RELAY_HOME;
+  const { relayHome, repoRoot, runDir, manifestPath, manifest, promptPath, runId } = setupReviewRun();
+  t.after(() => {
+    if (originalRelayHome === undefined) {
+      delete process.env.RELAY_HOME;
+      return;
+    }
+    process.env.RELAY_HOME = originalRelayHome;
+  });
+  process.env.RELAY_HOME = relayHome;
+  fs.writeFileSync(path.join(relayHome, "executors.json"), JSON.stringify({
+    executors: {
+      codex: { default_model: "openai/gpt-5" },
+    },
+  }, null, 2), "utf-8");
+
+  const helperDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-helper-"));
+  const reviewerScript = writeReviewerArgEchoScript(helperDir, "reviewer-codex-modeless.js");
+
+  const { reviewText } = loadReviewText({
+    body: "# Notes\n",
+    data: manifest,
+    manifestPath,
+    prNumber: 11,
+    promptPath,
+    reviewFile: null,
+    reviewRepoPath: repoRoot,
+    reviewedHeadSha: "abc123",
+    reviewerModel: null,
+    reviewerName: "codex",
+    reviewerScript,
+    round: 1,
+    runDir,
+    runRepoPath: repoRoot,
+  });
+
+  assert.deepEqual(JSON.parse(reviewText).argv, [
+    "--repo", repoRoot,
+    "--prompt-file", promptPath,
+    "--json",
+  ]);
+
+  const eventLines = fs.readFileSync(getEventsPath(repoRoot, runId), "utf-8").trim().split("\n").filter(Boolean);
+  const reviewInvokeEvent = JSON.parse(eventLines.at(-1));
+  assert.equal(reviewInvokeEvent.event, "review_invoke");
+  assert.equal(reviewInvokeEvent.model, null);
+  assert.equal(reviewInvokeEvent.policy_decision.allowed, true);
+  assert.equal(reviewInvokeEvent.policy_decision.reason, "managed_cli");
 });
 
 test("reviewer-invoke/loadReviewText escalates when the reviewer mutates the worktree", (t) => {

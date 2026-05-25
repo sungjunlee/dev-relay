@@ -390,6 +390,83 @@ process.stdout.write("\`\`\`json\\n" + JSON.stringify({
   assert.equal(result.summary, "No blocking blind spots.");
 });
 
+test("opencode adapter supports primary review verdict parsing when phase is primary_review", () => {
+  const { repoRoot, promptPath } = setupRepo();
+  const fakeDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-fake-opencode-primary-"));
+  const logPath = path.join(fakeDir, "opencode-args.log");
+  const fakeOpencode = writeExecutable(fakeDir, "fake-opencode.js", `#!/usr/bin/env node
+const fs = require("fs");
+const args = process.argv.slice(2);
+fs.writeFileSync(${JSON.stringify(logPath)}, args.join("\\n") + "\\n", "utf-8");
+process.stdout.write(JSON.stringify({
+  verdict: "pass",
+  summary: "Looks good.",
+  contract_status: "pass",
+  quality_review_status: "pass",
+  next_action: "ready_to_merge",
+  issues: [],
+  rubric_scores: [],
+  scope_drift: { creep: [], missing: [] },
+}));
+`);
+
+  const stdout = execFileSync("node", [
+    OPENCODE_SCRIPT,
+    "--repo", repoRoot,
+    "--prompt-file", promptPath,
+    "--model", "opencode-go/deepseek-v4-pro",
+    "--phase", "primary_review",
+    "--json",
+  ], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+    env: { ...process.env, RELAY_OPENCODE_BIN: fakeOpencode },
+  });
+
+  const result = JSON.parse(stdout);
+  const loggedArgs = fs.readFileSync(logPath, "utf-8");
+  assert.equal(result.verdict, "pass");
+  assert.match(loggedArgs, /^run\n-m\nopencode-go\/deepseek-v4-pro\n/);
+  assert.match(loggedArgs, /NON-INTERACTIVE REVIEW/);
+  assert.doesNotMatch(loggedArgs, /NON-INTERACTIVE ADVISORY REVIEW/);
+});
+
+test("opencode primary review rejects advisory-shaped JSON", () => {
+  const { repoRoot, promptPath } = setupRepo();
+  const fakeDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-fake-opencode-primary-invalid-"));
+  const fakeOpencode = writeExecutable(fakeDir, "fake-opencode.js", `#!/usr/bin/env node
+process.stdout.write(JSON.stringify({
+  profile: "blindspot",
+  summary: "Wrong schema.",
+  required_findings: [],
+  advisory_findings: [],
+  duplicate_or_low_confidence: [],
+}));
+`);
+
+  assert.throws(
+    () => execFileSync("node", [
+      OPENCODE_SCRIPT,
+      "--repo", repoRoot,
+      "--prompt-file", promptPath,
+      "--phase", "primary_review",
+      "--json",
+    ], {
+      cwd: repoRoot,
+      encoding: "utf-8",
+      stdio: "pipe",
+      env: { ...process.env, RELAY_OPENCODE_BIN: fakeOpencode },
+    }),
+    (error) => {
+      const stderr = String(error.stderr || "");
+      assert.match(stderr, /adapter=opencode phase=primary_review/);
+      assert.match(stderr, /Invalid review verdict: undefined/);
+      return true;
+    }
+  );
+});
+
 test("pi adapter forwards read-only tools, model, and preserves primary review prompt", () => {
   const { repoRoot, promptPath } = setupRepo();
   const fakeDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-fake-pi-"));
@@ -429,6 +506,44 @@ process.stdout.write(JSON.stringify({
   assert.match(loggedArgs, /^--no-session\n--tools\nread,grep,find,ls\n--model\nopenai\/gpt-5\n--print\n/);
   assert.match(loggedArgs, /NON-INTERACTIVE REVIEW/);
   assert.match(loggedArgs, /Return a passing review\./);
+});
+
+test("pi adapter supports advisory review JSON when phase is advisory_review", () => {
+  const { repoRoot, promptPath } = setupRepo();
+  const fakeDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-fake-pi-advisory-"));
+  const logPath = path.join(fakeDir, "pi-args.log");
+  const fakePi = writeExecutable(fakeDir, "fake-pi.js", `#!/usr/bin/env node
+const fs = require("fs");
+const args = process.argv.slice(2);
+fs.writeFileSync(${JSON.stringify(logPath)}, args.join("\\n") + "\\n", "utf-8");
+process.stdout.write(JSON.stringify({
+  profile: "blindspot",
+  summary: "No blocking blind spots.",
+  required_findings: [],
+  advisory_findings: [],
+  duplicate_or_low_confidence: [],
+}));
+`);
+
+  const stdout = execFileSync("node", [
+    PI_SCRIPT,
+    "--repo", repoRoot,
+    "--prompt-file", promptPath,
+    "--model", "openai/gpt-5",
+    "--phase", "advisory_review",
+    "--json",
+  ], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+    env: { ...process.env, RELAY_PI_BIN: fakePi },
+  });
+
+  const result = JSON.parse(stdout);
+  const loggedArgs = fs.readFileSync(logPath, "utf-8");
+  assert.equal(result.profile, "blindspot");
+  assert.match(loggedArgs, /^--no-session\n--tools\nread,grep,find,ls\n--model\nopenai\/gpt-5\n--print\n/);
+  assert.match(loggedArgs, /NON-INTERACTIVE ADVISORY REVIEW/);
 });
 
 test("pi adapter reports adapter and phase when stdout is invalid JSON", () => {
@@ -662,6 +777,44 @@ process.stdout.write(JSON.stringify({
   assert.match(loggedArgs, /^--print\n--print-timeout\n45s\n--sandbox\n/);
   assert.match(loggedArgs, /NON-INTERACTIVE REVIEW/);
   assert.match(loggedArgs, /Return a passing review\./);
+});
+
+test("antigravity adapter supports advisory review JSON when phase is advisory_review", () => {
+  const { repoRoot, promptPath } = setupRepo();
+  const fakeDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-fake-antigravity-advisory-"));
+  const logPath = path.join(fakeDir, "agy-args.log");
+  const fakeAgy = writeExecutable(fakeDir, "fake-agy.js", `#!/usr/bin/env node
+const fs = require("fs");
+const args = process.argv.slice(2);
+fs.writeFileSync(${JSON.stringify(logPath)}, args.join("\\n") + "\\n", "utf-8");
+process.stdout.write(JSON.stringify({
+  profile: "blindspot",
+  summary: "No blocking blind spots.",
+  required_findings: [],
+  advisory_findings: [],
+  duplicate_or_low_confidence: [],
+}));
+`);
+
+  const stdout = execFileSync("node", [
+    ANTIGRAVITY_SCRIPT,
+    "--repo", repoRoot,
+    "--prompt-file", promptPath,
+    "--model", "google/antigravity-cli",
+    "--phase", "advisory_review",
+    "--json",
+  ], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+    env: { ...process.env, RELAY_ANTIGRAVITY_BIN: fakeAgy, RELAY_ANTIGRAVITY_REVIEW_TIMEOUT: "45s" },
+  });
+
+  const result = JSON.parse(stdout);
+  const loggedArgs = fs.readFileSync(logPath, "utf-8");
+  assert.equal(result.profile, "blindspot");
+  assert.match(loggedArgs, /^--print\n--print-timeout\n45s\n--sandbox\n/);
+  assert.match(loggedArgs, /NON-INTERACTIVE ADVISORY REVIEW/);
 });
 
 test("antigravity adapter enforces parent timeout and reports timeout context", () => {
