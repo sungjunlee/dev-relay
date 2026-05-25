@@ -9,8 +9,10 @@ const {
   OUTCOMES,
   buildPolicy,
   classifyAntigravityDispatch,
+  classifyAntigravityFailSafeTimeout,
   classifyAntigravityPrimary,
   classifyProbeJson,
+  parseArgs,
   renderMarkdown,
   runDogfood,
 } = require("../../../skills/relay-dispatch/scripts/live-dogfood");
@@ -62,8 +64,9 @@ test("live dogfood classifies mocked command outcomes and preserves markdown dis
     jsonResult({ policy_decision: { allowed: true }, agent_tools_raw: "{\"version\":\"opencode\"}" }),
     jsonResult({ policy_decision: { allowed: true }, agent_tools_raw: "{\"version\":\"agy\"}" }),
     jsonResult({ profile: "blindspot", advisory_findings: [] }),
-    { status: 1, stdout: "", stderr: "Pi reviewer primary_review timed out after 1s (RELAY_PI_REVIEW_TIMEOUT)." },
-    { status: 1, stdout: "", stderr: "Antigravity reviewer primary_review timed out after 5s (RELAY_ANTIGRAVITY_REVIEW_TIMEOUT)." },
+    jsonResult({ verdict: "pass", summary: "Pi ok." }),
+    jsonResult({ verdict: "pass", summary: "Antigravity ok." }),
+    { status: 1, stdout: "", stderr: "Antigravity reviewer primary_review timed out after 2s (RELAY_ANTIGRAVITY_REVIEW_TIMEOUT)." },
     jsonResult({ status: "failed", runState: "escalated", prNumber: null, error: "executor timed out after 45s" }, 1),
   ];
   const calls = [];
@@ -76,6 +79,8 @@ test("live dogfood classifies mocked command outcomes and preserves markdown dis
       relayHome,
       commandTimeoutMs: 1000,
       piReviewTimeout: "1s",
+      antigravityReviewTimeout: "90s",
+      antigravityFailSafeReviewTimeout: "2s",
     }, {
       spawnSync: (command, args, options) => {
         calls.push({ command, args, env: options.env });
@@ -87,16 +92,29 @@ test("live dogfood classifies mocked command outcomes and preserves markdown dis
     else process.env.RELAY_POLICY_PATH = previousPolicyPath;
   }
 
-  assert.equal(calls.length, 7);
+  assert.equal(calls.length, 8);
+  assert.deepEqual(result.outcomes.map((step) => step.name), [
+    "probe-pi",
+    "probe-opencode",
+    "probe-antigravity",
+    "opencode-advisory",
+    "pi-primary",
+    "antigravity-primary",
+    "antigravity-primary-fail-safe-timeout",
+    "antigravity-dispatch",
+  ]);
   assert.equal(calls[0].env.RELAY_HOME, relayHome);
   assert.equal(calls[0].env.RELAY_POLICY_PATH, path.join(relayHome, "policy.json"));
   assert.equal(calls[4].env.RELAY_PI_REVIEW_TIMEOUT, "1s");
+  assert.equal(calls[5].env.RELAY_ANTIGRAVITY_REVIEW_TIMEOUT, "90s");
+  assert.equal(calls[6].env.RELAY_ANTIGRAVITY_REVIEW_TIMEOUT, "2s");
   assert.deepEqual(result.outcomes.map((step) => step.outcome), [
     OUTCOMES.PASS,
     OUTCOMES.PASS,
     OUTCOMES.PASS,
     OUTCOMES.PASS,
-    OUTCOMES.TIMEOUT,
+    OUTCOMES.PASS,
+    OUTCOMES.PASS,
     OUTCOMES.FAIL_SAFE_PASS,
     OUTCOMES.FAIL_SAFE_PASS,
   ]);
@@ -105,8 +123,26 @@ test("live dogfood classifies mocked command outcomes and preserves markdown dis
   assert.match(markdown, /`pass` proves/);
   assert.match(markdown, /`fail-safe-pass` means/);
   assert.match(markdown, /`timeout` is inconclusive/);
-  assert.match(markdown, /\| `pi-primary` \| `timeout` \|/);
+  assert.match(markdown, /not healthy success/);
+  assert.match(markdown, /\| `antigravity-primary` \| `pass` \|/);
+  assert.match(markdown, /\| `antigravity-primary-fail-safe-timeout` \| `fail-safe-pass` \|/);
   assert.match(markdown, /\| `antigravity-dispatch` \| `fail-safe-pass` \|/);
+});
+
+test("live dogfood defaults use realistic healthy reviewer timeouts and a separate fail-safe timeout", () => {
+  const defaults = parseArgs([]);
+
+  assert.equal(defaults.commandTimeoutMs, 300_000);
+  assert.equal(defaults.piReviewTimeout, "120s");
+  assert.equal(defaults.antigravityReviewTimeout, "120s");
+  assert.equal(defaults.antigravityFailSafeReviewTimeout, "5s");
+
+  const parsed = parseArgs([
+    "--antigravity-review-timeout", "180s",
+    "--antigravity-fail-safe-timeout", "3s",
+  ]);
+  assert.equal(parsed.antigravityReviewTimeout, "180s");
+  assert.equal(parsed.antigravityFailSafeReviewTimeout, "3s");
 });
 
 test("live dogfood policy reflects requested model route overrides", () => {
@@ -170,7 +206,13 @@ test("classification helpers separate harness timeout from safe adapter timeout"
     status: 1,
     stdout: "",
     stderr: "Antigravity reviewer primary_review timed out after 5s (RELAY_ANTIGRAVITY_REVIEW_TIMEOUT).",
+  }).outcome, OUTCOMES.TIMEOUT);
+  assert.equal(classifyAntigravityFailSafeTimeout({
+    status: 1,
+    stdout: "",
+    stderr: "Antigravity reviewer primary_review timed out after 5s (RELAY_ANTIGRAVITY_REVIEW_TIMEOUT).",
   }).outcome, OUTCOMES.FAIL_SAFE_PASS);
+  assert.equal(classifyAntigravityFailSafeTimeout(jsonResult({ verdict: "pass" })).outcome, OUTCOMES.FAIL);
   assert.equal(classifyAntigravityDispatch(jsonResult({
     status: "failed",
     runState: "escalated",

@@ -125,10 +125,9 @@ function main() {
   const fullPrompt = buildPrompt(promptText, phase);
 
   const execArgs = [
-    "--print",
+    "--prompt", fullPrompt,
     "--print-timeout", printTimeout,
     "--sandbox",
-    fullPrompt,
   ];
 
   let result;
@@ -145,7 +144,7 @@ function main() {
     if (isExecTimeout(error)) {
       throw new Error(
         `Antigravity reviewer ${phase} timed out after ${printTimeout} (RELAY_ANTIGRAVITY_REVIEW_TIMEOUT). ` +
-        "The agy --print invocation did not return before the parent-process timeout; retry with a larger timeout or split the review scope."
+        "The agy --prompt invocation did not return before the parent-process timeout; retry with a larger timeout or split the review scope."
       );
     }
     const recovered = recoverExecStdout(error);
