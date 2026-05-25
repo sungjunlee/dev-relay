@@ -31,6 +31,40 @@ function writeExecutable(dir, name, body) {
   return filePath;
 }
 
+function reviewerVerdict(overrides = {}) {
+  return {
+    verdict: "pass",
+    summary: "Looks good.",
+    contract_status: "pass",
+    quality_review_status: "pass",
+    next_action: "ready_to_merge",
+    issues: [],
+    rubric_scores: [],
+    scope_drift: { creep: [], missing: [] },
+    ...overrides,
+  };
+}
+
+function runPiAdapterWithStdout(stdoutText) {
+  const { repoRoot, promptPath } = setupRepo();
+  const fakeDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-fake-pi-output-"));
+  const fakePi = writeExecutable(fakeDir, "fake-pi.js", `#!/usr/bin/env node
+process.stdout.write(${JSON.stringify(stdoutText)});
+`);
+
+  return execFileSync("node", [
+    PI_SCRIPT,
+    "--repo", repoRoot,
+    "--prompt-file", promptPath,
+    "--json",
+  ], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+    env: { ...process.env, RELAY_PI_BIN: fakePi },
+  });
+}
+
 test("codex adapter uses result file output and forwards isolation flags", () => {
   const { repoRoot, promptPath } = setupRepo();
   const fakeDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-fake-codex-"));
@@ -427,6 +461,54 @@ process.stdout.write("not-json\\n");
   const stderr = String(error.stderr || "");
   assert.match(stderr, /adapter=pi phase=primary_review/);
   assert.match(stderr, /review verdict must be valid JSON/);
+});
+
+test("pi adapter accepts prose-wrapped output with one valid verdict object", () => {
+  const payload = JSON.stringify(reviewerVerdict({
+    summary: "Recovered from wrapped Pi output.",
+  }));
+
+  const stdout = runPiAdapterWithStdout(`Now I have reviewed the changes.\n\n${payload}\n`);
+
+  const result = JSON.parse(stdout);
+  assert.equal(result.verdict, "pass");
+  assert.equal(result.summary, "Recovered from wrapped Pi output.");
+});
+
+test("pi adapter rejects ambiguous output with multiple JSON objects", () => {
+  const payload = JSON.stringify(reviewerVerdict());
+  const cases = [
+    `Now I have reviewed the changes.\n${payload}\n${payload}\n`,
+    `Now I have reviewed the changes.\n${JSON.stringify({ note: "analysis wrapper" })}\n${payload}\n`,
+  ];
+
+  for (const output of cases) {
+    assert.throws(
+      () => runPiAdapterWithStdout(output),
+      (error) => {
+        const stderr = String(error.stderr || "");
+        assert.match(stderr, /adapter=pi phase=primary_review/);
+        assert.match(stderr, /review verdict must be valid JSON/);
+        assert.match(stderr, /multiple JSON objects/);
+        return true;
+      }
+    );
+  }
+});
+
+test("pi adapter validates recovered verdict objects", () => {
+  const invalidVerdict = reviewerVerdict();
+  delete invalidVerdict.summary;
+
+  assert.throws(
+    () => runPiAdapterWithStdout(`Here is the verdict:\n${JSON.stringify(invalidVerdict)}\n`),
+    (error) => {
+      const stderr = String(error.stderr || "");
+      assert.match(stderr, /adapter=pi phase=primary_review/);
+      assert.match(stderr, /Review verdict summary is required/);
+      return true;
+    }
+  );
 });
 
 test("antigravity adapter forwards sandbox, print timeout, and preserves primary review prompt", () => {
