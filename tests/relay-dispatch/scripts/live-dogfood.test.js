@@ -67,20 +67,29 @@ test("live dogfood classifies mocked command outcomes and preserves markdown dis
     jsonResult({ status: "failed", runState: "escalated", prNumber: null, error: "executor timed out after 45s" }, 1),
   ];
   const calls = [];
-  const result = runDogfood({
-    repo,
-    relayHome,
-    commandTimeoutMs: 1000,
-    piReviewTimeout: "1s",
-  }, {
-    spawnSync: (command, args, options) => {
-      calls.push({ command, args, env: options.env });
-      return responses.shift();
-    },
-  });
+  const previousPolicyPath = process.env.RELAY_POLICY_PATH;
+  process.env.RELAY_POLICY_PATH = path.join(tempDir("relay-live-dogfood-external-"), "policy.json");
+  let result;
+  try {
+    result = runDogfood({
+      repo,
+      relayHome,
+      commandTimeoutMs: 1000,
+      piReviewTimeout: "1s",
+    }, {
+      spawnSync: (command, args, options) => {
+        calls.push({ command, args, env: options.env });
+        return responses.shift();
+      },
+    });
+  } finally {
+    if (previousPolicyPath === undefined) delete process.env.RELAY_POLICY_PATH;
+    else process.env.RELAY_POLICY_PATH = previousPolicyPath;
+  }
 
   assert.equal(calls.length, 7);
   assert.equal(calls[0].env.RELAY_HOME, relayHome);
+  assert.equal(calls[0].env.RELAY_POLICY_PATH, path.join(relayHome, "policy.json"));
   assert.equal(calls[4].env.RELAY_PI_REVIEW_TIMEOUT, "1s");
   assert.deepEqual(result.outcomes.map((step) => step.outcome), [
     OUTCOMES.PASS,

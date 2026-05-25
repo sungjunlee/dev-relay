@@ -296,7 +296,11 @@ function runDogfood(options = {}, deps = {}) {
   const effectiveOptions = { ...DEFAULTS, ...options };
   const relayHome = ensureRelayHome(options.relayHome, effectiveOptions);
   const prompts = writePromptFiles(relayHome);
-  const envBase = { ...process.env, RELAY_HOME: relayHome };
+  const envBase = {
+    ...process.env,
+    RELAY_HOME: relayHome,
+    RELAY_POLICY_PATH: path.join(relayHome, "policy.json"),
+  };
   const steps = buildSteps({ repo, relayHome, prompts, options: effectiveOptions });
 
   const results = steps.map((step) => {
