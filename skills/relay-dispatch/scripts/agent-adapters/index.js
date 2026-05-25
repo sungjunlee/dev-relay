@@ -12,6 +12,8 @@ const ADAPTER_PHASES = Object.freeze({
 });
 
 const PHASES = Object.freeze(Object.values(ADAPTER_PHASES));
+const OPENCODE_PRIMARY_REVIEW_UNSUPPORTED_REASON =
+  "OpenCode primary review is not implemented. OpenCode is advisory-only for review; use --advisory-reviewer opencode instead of --reviewer opencode until a trusted primary verdict adapter is implemented.";
 
 function bundledDefaultModel(name) {
   const value = bundledModels.executors?.[name]?.default_model;
@@ -336,6 +338,7 @@ const DESCRIPTORS = Object.freeze({
       [ADAPTER_PHASES.PRIMARY_REVIEW]: {
         supported: false,
         trust: "unsupported",
+        reason: "advisory-only; primary review fail-closed until a trusted verdict adapter is implemented",
       },
       [ADAPTER_PHASES.ADVISORY_REVIEW]: {
         supported: true,
@@ -348,7 +351,10 @@ const DESCRIPTORS = Object.freeze({
           modes: ["workspace-write"],
           enforced: false,
         },
-        primaryReview: null,
+        primaryReview: {
+          supported: false,
+          failClosedReason: OPENCODE_PRIMARY_REVIEW_UNSUPPORTED_REASON,
+        },
         advisoryReview: {
           mode: "read-only",
           enforced: false,
@@ -360,7 +366,10 @@ const DESCRIPTORS = Object.freeze({
           configurable: false,
           enabledMode: "ambient",
         },
-        primaryReview: null,
+        primaryReview: {
+          supported: false,
+          failClosedReason: OPENCODE_PRIMARY_REVIEW_UNSUPPORTED_REASON,
+        },
         advisoryReview: {
           configurable: false,
           enabledMode: "ambient",
@@ -409,7 +418,39 @@ const DESCRIPTORS = Object.freeze({
             },
           },
         },
-        primary_review: null,
+        primary_review: {
+          sandbox: {
+            "read-only": {
+              enforcement_level: "unsupported",
+              mechanism: null,
+              fail_closed_reason: OPENCODE_PRIMARY_REVIEW_UNSUPPORTED_REASON,
+            },
+          },
+          network: {
+            ambient: {
+              enforcement_level: "unsupported",
+              mechanism: null,
+              fail_closed_reason: OPENCODE_PRIMARY_REVIEW_UNSUPPORTED_REASON,
+            },
+            disabled: {
+              enforcement_level: "unsupported",
+              mechanism: null,
+              fail_closed_reason: OPENCODE_PRIMARY_REVIEW_UNSUPPORTED_REASON,
+            },
+            enabled: {
+              enforcement_level: "unsupported",
+              mechanism: null,
+              fail_closed_reason: OPENCODE_PRIMARY_REVIEW_UNSUPPORTED_REASON,
+            },
+          },
+          read_only: {
+            true: {
+              enforcement_level: "unsupported",
+              mechanism: null,
+              fail_closed_reason: OPENCODE_PRIMARY_REVIEW_UNSUPPORTED_REASON,
+            },
+          },
+        },
         advisory_review: {
           sandbox: {
             "read-only": {

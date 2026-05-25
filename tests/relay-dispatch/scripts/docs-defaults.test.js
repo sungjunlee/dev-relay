@@ -46,3 +46,16 @@ test("recovery playbook documents landed auto-recover behavior, not stale deferr
   assert.doesNotMatch(playbook, /#393[^.\n]*(?:deferred|Until #393 lands)/i);
   assert.doesNotMatch(playbook, /defer to a follow-up issue/i);
 });
+
+test("operator-facing OpenCode docs reference install-carried policy docs", () => {
+  const docs = [
+    readRepoFile("skills/relay-dispatch/SKILL.md"),
+    readRepoFile("skills/relay-dispatch/scripts/executors/README.md"),
+    readRepoFile("skills/relay-dispatch/scripts/executors/opencode.js"),
+    readRepoFile("skills/relay-dispatch/scripts/dispatch.js"),
+    readRepoFile("skills/relay-sidecar/SKILL.md"),
+  ].join("\n");
+
+  assert.doesNotMatch(docs, /docs\/reviewer-policy-opencode\.md/);
+  assert.match(docs, /skills\/relay-dispatch\/references\/reviewer-policy-opencode\.md|relay-dispatch\/references\/reviewer-policy-opencode\.md/);
+});

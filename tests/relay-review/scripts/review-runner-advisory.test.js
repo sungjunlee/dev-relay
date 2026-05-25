@@ -1,6 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { execFileSync } = require("child_process");
+const { execFileSync, spawnSync } = require("child_process");
 const crypto = require("crypto");
 const fs = require("fs");
 const os = require("os");
@@ -261,6 +261,30 @@ test("review-runner records successful opencode advisory review without gating p
   assert.equal(event.advisory_artifact_hash, hashFile(path.join(runDir, "review-round-1-advisory-opencode.json")));
   assert.equal(event.reviewer_policy.read_only.enforcement_level, "prompt-only");
   assert.match(event.reviewer_policy.read_only.warnings.join("\n"), /not prevent writes/i);
+});
+
+test("review-runner fails closed when opencode is selected as the primary reviewer", () => {
+  const { repoRoot, manifestPath, runId, doneCriteriaPath, diffPath } = setupRepo();
+  const proc = spawnSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--run-id", runId,
+    "--pr", "429",
+    "--done-criteria-file", doneCriteriaPath,
+    "--diff-file", diffPath,
+    "--reviewer", "opencode",
+    "--no-comment",
+    "--json",
+  ], {
+    encoding: "utf-8",
+    env: { ...process.env },
+  });
+
+  assert.notEqual(proc.status, 0);
+  assert.match(proc.stderr, /supports advisory_review but not primary_review/);
+  assert.match(proc.stderr, /--advisory-reviewer opencode/);
+  assert.match(proc.stderr, /--reviewer opencode/);
+  assert.equal(readManifest(manifestPath).data.state, STATES.REVIEW_PENDING);
 });
 
 test("review-runner uses manifest routing advisory defaults without changing the primary reviewer", () => {
