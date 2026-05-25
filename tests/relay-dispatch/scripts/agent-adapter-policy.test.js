@@ -58,7 +58,7 @@ test("policy audit keeps OpenCode sandbox and network informational", () => {
   assert.deepEqual(audit.fail_closed_reasons, []);
 });
 
-test("policy audit fails closed for OpenCode primary review because it is advisory-only", () => {
+test("policy audit records OpenCode primary review prompt-only read-only guards", () => {
   const audit = buildAgentPolicyAudit({
     descriptor: getAgentAdapterDescriptor("opencode"),
     phase: ADAPTER_PHASES.PRIMARY_REVIEW,
@@ -69,16 +69,18 @@ test("policy audit fails closed for OpenCode primary review because it is adviso
     },
   });
 
-  assert.equal(audit.safe, false);
-  assert.equal(audit.sandbox.enforcement_level, "unsupported");
-  assert.equal(audit.network.enforcement_level, "unsupported");
-  assert.equal(audit.read_only.enforcement_level, "unsupported");
-  assert.match(audit.fail_closed_reasons.join("\n"), /--advisory-reviewer opencode/i);
-  assert.match(audit.fail_closed_reasons.join("\n"), /--reviewer opencode/i);
-  assert.throws(
-    () => assertPolicyRepresentable(audit),
-    /OpenCode primary review is not implemented/
-  );
+  assert.equal(audit.safe, true);
+  assert.equal(audit.sandbox.enforcement_level, "informational");
+  assert.equal(audit.network.enforcement_level, "informational");
+  assert.equal(audit.read_only.enforcement_level, "prompt-only");
+  assert.deepEqual(audit.read_only.flags, [
+    "prompt:do-not-modify-files",
+    "git-status-before-after",
+  ]);
+  assert.match(audit.warnings.join("\n"), /post-run worktree mutation/i);
+  assert.match(audit.warnings.join("\n"), /does not gate network access/i);
+  assert.deepEqual(audit.fail_closed_reasons, []);
+  assert.doesNotThrow(() => assertPolicyRepresentable(audit));
 });
 
 test("policy audit records Pi primary review read-only tool allowlist metadata", () => {

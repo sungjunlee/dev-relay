@@ -273,7 +273,7 @@ const fs = require("fs");
 const { execFileSync } = require("child_process");
 const args = process.argv.slice(2);
 if (args[0] === "--version") { process.stdout.write("agy 1.0.2\\n"); process.exit(0); }
-if (!args.includes("--print")) { process.stderr.write("unsupported fake agy invocation"); process.exit(1); }
+if (args[0] !== "--prompt") { process.stderr.write("unsupported fake agy invocation"); process.exit(1); }
 fs.writeFileSync(${JSON.stringify(capturePath)}, JSON.stringify(args), "utf-8");
 const cwd = process.cwd();
 const fileName = "captured-antigravity.txt";
@@ -425,7 +425,7 @@ if (args[0] === "--version") {
   process.stdout.write("agy 1.0.2\\n");
   process.exit(0);
 }
-if (!args.includes("--print")) {
+if (args[0] !== "--prompt") {
   process.stderr.write("unsupported fake agy invocation");
   process.exit(1);
 }
@@ -448,7 +448,7 @@ if (args[0] === "--version") {
   process.stdout.write("agy 1.0.2\\n");
   process.exit(0);
 }
-if (!args.includes("--print")) {
+if (args[0] !== "--prompt") {
   process.stderr.write("unsupported fake agy invocation");
   process.exit(1);
 }
@@ -2708,13 +2708,11 @@ test("dispatch with --executor antigravity invokes agy and copies stdout into th
   assert.equal(fs.readFileSync(result.resultFile, "utf-8"), "antigravity completed\n");
   const capturedArgs = JSON.parse(fs.readFileSync(capturePath, "utf-8"));
   assert.deepEqual(capturedArgs.slice(0, 5), [
-    "--print",
+    "--prompt", buildDispatchExecPrompt(taskPrompt),
     "--print-timeout", "31s",
     "--sandbox",
-    "--add-dir",
   ]);
-  assert.equal(capturedArgs[5], worktreeCommonGitDir(result.worktree));
-  assert.equal(capturedArgs[6], buildDispatchExecPrompt(taskPrompt));
+  assert.deepEqual(capturedArgs.slice(5, 7), ["--add-dir", worktreeCommonGitDir(result.worktree)]);
 
   const manifest = readManifest(result.manifestPath).data;
   assert.equal(manifest.dispatch.last_executor, "antigravity");

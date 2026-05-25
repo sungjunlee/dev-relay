@@ -10,7 +10,9 @@ const {
   buildPolicy,
   classifyAntigravityDispatch,
   classifyAntigravityFailSafeTimeout,
+  classifyAntigravityNoOpDispatch,
   classifyAntigravityPrimary,
+  classifyHealthyDispatch,
   classifyProbeJson,
   parseArgs,
   renderMarkdown,
@@ -67,7 +69,7 @@ test("live dogfood classifies mocked command outcomes and preserves markdown dis
     jsonResult({ verdict: "pass", summary: "Pi ok." }),
     jsonResult({ verdict: "pass", summary: "Antigravity ok." }),
     { status: 1, stdout: "", stderr: "Antigravity reviewer primary_review timed out after 2s (RELAY_ANTIGRAVITY_REVIEW_TIMEOUT)." },
-    jsonResult({ status: "failed", runState: "escalated", prNumber: null, error: "executor timed out after 45s" }, 1),
+    jsonResult({ status: "completed-no-op", runState: "review_pending", prNumber: null }),
   ];
   const calls = [];
   const previousPolicyPath = process.env.RELAY_POLICY_PATH;
@@ -101,7 +103,7 @@ test("live dogfood classifies mocked command outcomes and preserves markdown dis
     "pi-primary",
     "antigravity-primary",
     "antigravity-primary-fail-safe-timeout",
-    "antigravity-dispatch",
+    "antigravity-dispatch-fail-safe-noop",
   ]);
   assert.equal(calls[0].env.RELAY_HOME, relayHome);
   assert.equal(calls[0].env.RELAY_POLICY_PATH, path.join(relayHome, "policy.json"));
@@ -126,21 +128,114 @@ test("live dogfood classifies mocked command outcomes and preserves markdown dis
   assert.match(markdown, /not healthy success/);
   assert.match(markdown, /\| `antigravity-primary` \| `pass` \|/);
   assert.match(markdown, /\| `antigravity-primary-fail-safe-timeout` \| `fail-safe-pass` \|/);
-  assert.match(markdown, /\| `antigravity-dispatch` \| `fail-safe-pass` \|/);
+  assert.match(markdown, /\| `antigravity-dispatch-fail-safe-noop` \| `fail-safe-pass` \|/);
 });
 
-test("live dogfood defaults use realistic healthy reviewer timeouts and a separate fail-safe timeout", () => {
+test("live dogfood dispatch canary adds healthy Pi, OpenCode, and Antigravity dispatch steps", () => {
+  const repo = tempDir("relay-live-dogfood-repo-");
+  const relayHome = tempDir("relay-live-dogfood-home-");
+  const responses = [
+    { status: 0, stdout: "", stderr: "" },
+    jsonResult({ policy_decision: { allowed: true }, agent_tools_raw: "{\"version\":\"pi\"}" }),
+    jsonResult({ policy_decision: { allowed: true }, agent_tools_raw: "{\"version\":\"opencode\"}" }),
+    jsonResult({ policy_decision: { allowed: true }, agent_tools_raw: "{\"version\":\"agy\"}" }),
+    jsonResult({ profile: "blindspot", advisory_findings: [] }),
+    jsonResult({ verdict: "pass", summary: "Pi ok." }),
+    jsonResult({ verdict: "pass", summary: "Antigravity ok." }),
+    { status: 1, stdout: "", stderr: "Antigravity reviewer primary_review timed out after 2s (RELAY_ANTIGRAVITY_REVIEW_TIMEOUT)." },
+    jsonResult({ status: "completed-no-op", runState: "review_pending", prNumber: null }),
+    jsonResult({ status: "completed", runState: "review_pending", prNumber: 601 }),
+    jsonResult({ status: "completed", runState: "review_pending", prNumber: 602 }),
+    jsonResult({ status: "completed", runState: "review_pending", prNumber: 603 }),
+  ];
+  const calls = [];
+
+  const result = runDogfood({
+    repo,
+    relayHome,
+    dispatchCanary: true,
+    dispatchTimeoutSeconds: 222,
+    dispatchBranchPrefix: "healthy-dogfood",
+    commandTimeoutMs: 1000,
+  }, {
+    spawnSync: (command, args, options) => {
+      calls.push({ command, args, env: options.env });
+      return responses.shift();
+    },
+  });
+
+  assert.equal(calls.length, 12);
+  assert.equal(calls[0].command, "git");
+  assert.deepEqual(calls[0].args, ["status", "--porcelain"]);
+  assert.deepEqual(result.outcomes.map((step) => step.name), [
+    "probe-pi",
+    "probe-opencode",
+    "probe-antigravity",
+    "opencode-advisory",
+    "pi-primary",
+    "antigravity-primary",
+    "antigravity-primary-fail-safe-timeout",
+    "antigravity-dispatch-fail-safe-noop",
+    "pi-dispatch-canary",
+    "opencode-dispatch-canary",
+    "antigravity-dispatch-canary",
+  ]);
+  assert.deepEqual(result.outcomes.slice(8).map((step) => step.outcome), [
+    OUTCOMES.PASS,
+    OUTCOMES.PASS,
+    OUTCOMES.PASS,
+  ]);
+  assert.equal(calls[9].args[calls[9].args.indexOf("--executor") + 1], "pi");
+  assert.equal(calls[10].args[calls[10].args.indexOf("--executor") + 1], "opencode");
+  assert.equal(calls[11].args[calls[11].args.indexOf("--executor") + 1], "antigravity");
+  for (const call of calls.slice(9)) {
+    assert.match(call.args[call.args.indexOf("-b") + 1], /^healthy-dogfood-(pi|opencode|antigravity)-\d+$/);
+    assert.equal(call.args[call.args.indexOf("--timeout") + 1], "222");
+    assert.ok(call.args.includes("--prompt-file"));
+    assert.ok(call.args.includes("--rubric-file"));
+  }
+});
+
+test("live dogfood dispatch canary refuses dirty repositories before creating live branches", () => {
+  const repo = tempDir("relay-live-dogfood-repo-");
+  const calls = [];
+
+  assert.throws(() => runDogfood({
+    repo,
+    dispatchCanary: true,
+  }, {
+    spawnSync: (command, args) => {
+      calls.push({ command, args });
+      return { status: 0, stdout: " M docs/relay-operator-guide.md\n", stderr: "" };
+    },
+  }), /--dispatch-canary requires a clean worktree/);
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].command, "git");
+  assert.deepEqual(calls[0].args, ["status", "--porcelain"]);
+});
+
+test("live dogfood defaults use realistic healthy reviewer timeouts and bounded dispatch canary settings", () => {
   const defaults = parseArgs([]);
 
   assert.equal(defaults.commandTimeoutMs, 300_000);
   assert.equal(defaults.piReviewTimeout, "120s");
   assert.equal(defaults.antigravityReviewTimeout, "120s");
   assert.equal(defaults.antigravityFailSafeReviewTimeout, "5s");
+  assert.equal(defaults.dispatchCanary, false);
+  assert.equal(defaults.dispatchTimeoutSeconds, 180);
+  assert.equal(defaults.dispatchBranchPrefix, "dogfood-dispatch");
 
   const parsed = parseArgs([
+    "--dispatch-canary",
+    "--dispatch-timeout", "240",
+    "--dispatch-branch-prefix", "relay-healthy",
     "--antigravity-review-timeout", "180s",
     "--antigravity-fail-safe-timeout", "3s",
   ]);
+  assert.equal(parsed.dispatchCanary, true);
+  assert.equal(parsed.dispatchTimeoutSeconds, 240);
+  assert.equal(parsed.dispatchBranchPrefix, "relay-healthy");
   assert.equal(parsed.antigravityReviewTimeout, "180s");
   assert.equal(parsed.antigravityFailSafeReviewTimeout, "3s");
 });
@@ -213,12 +308,31 @@ test("classification helpers separate harness timeout from safe adapter timeout"
     stderr: "Antigravity reviewer primary_review timed out after 5s (RELAY_ANTIGRAVITY_REVIEW_TIMEOUT).",
   }).outcome, OUTCOMES.FAIL_SAFE_PASS);
   assert.equal(classifyAntigravityFailSafeTimeout(jsonResult({ verdict: "pass" })).outcome, OUTCOMES.FAIL);
-  assert.equal(classifyAntigravityDispatch(jsonResult({
+  assert.equal(classifyAntigravityNoOpDispatch(jsonResult({
     status: "failed",
     runState: "escalated",
     prNumber: null,
     error: "executor produced no reviewable repository changes",
   }, 1)).outcome, OUTCOMES.FAIL_SAFE_PASS);
+  assert.equal(classifyAntigravityNoOpDispatch(jsonResult({
+    status: "completed-no-op",
+    runState: "review_pending",
+    prNumber: null,
+  })).outcome, OUTCOMES.FAIL_SAFE_PASS);
+  assert.equal(classifyAntigravityNoOpDispatch(jsonResult({
+    runState: "review_pending",
+    prNumber: 123,
+  })).outcome, OUTCOMES.FAIL);
+  assert.equal(classifyHealthyDispatch(jsonResult({
+    runState: "review_pending",
+    prNumber: 123,
+  })).outcome, OUTCOMES.PASS);
+  assert.equal(classifyHealthyDispatch(jsonResult({
+    status: "failed",
+    runState: "escalated",
+    prNumber: null,
+    error: "executor timed out after 180s",
+  }, 1)).outcome, OUTCOMES.TIMEOUT);
   assert.equal(classifyAntigravityDispatch(jsonResult({
     runState: "review_pending",
     prNumber: 123,
