@@ -552,6 +552,118 @@ process.stdout.write(JSON.stringify({
   assert.match(loggedArgs, /Return a passing review\./);
 });
 
+test("antigravity adapter enforces parent timeout and reports timeout context", () => {
+  const { repoRoot, promptPath } = setupRepo();
+  const fakeDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-fake-antigravity-timeout-"));
+  const fakeAgy = writeExecutable(fakeDir, "fake-agy.js", `#!/usr/bin/env node
+setTimeout(() => {
+  process.stdout.write(JSON.stringify({
+    verdict: "pass",
+    summary: "Too late.",
+    contract_status: "pass",
+    quality_review_status: "pass",
+    next_action: "ready_to_merge",
+    issues: [],
+    rubric_scores: [],
+    scope_drift: { creep: [], missing: [] },
+  }));
+}, 2500);
+`);
+
+  const started = Date.now();
+  let error;
+  try {
+    execFileSync("node", [
+      ANTIGRAVITY_SCRIPT,
+      "--repo", repoRoot,
+      "--prompt-file", promptPath,
+      "--json",
+    ], {
+      cwd: repoRoot,
+      encoding: "utf-8",
+      stdio: "pipe",
+      timeout: 5000,
+      env: { ...process.env, RELAY_ANTIGRAVITY_BIN: fakeAgy, RELAY_ANTIGRAVITY_REVIEW_TIMEOUT: "1s" },
+    });
+  } catch (caught) {
+    error = caught;
+  }
+  const elapsedMs = Date.now() - started;
+
+  assert.ok(error, "expected invoke-reviewer-antigravity.js to fail on parent timeout");
+  assert.notEqual(error.status, 0);
+  assert.ok(elapsedMs < 2000, `expected adapter timeout before fake agy completed, elapsed=${elapsedMs}ms`);
+  const stderr = String(error.stderr || "");
+  assert.match(stderr, /Antigravity reviewer primary_review timed out after 1s/);
+  assert.match(stderr, /RELAY_ANTIGRAVITY_REVIEW_TIMEOUT/);
+});
+
+test("antigravity adapter rejects invalid review timeout without invoking agy", () => {
+  const { repoRoot, promptPath } = setupRepo();
+  const fakeDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-fake-antigravity-bad-timeout-"));
+  const logPath = path.join(fakeDir, "agy-args.log");
+  const fakeAgy = writeExecutable(fakeDir, "fake-agy.js", `#!/usr/bin/env node
+const fs = require("fs");
+fs.writeFileSync(${JSON.stringify(logPath)}, "invoked\\n", "utf-8");
+`);
+
+  let error;
+  try {
+    execFileSync("node", [
+      ANTIGRAVITY_SCRIPT,
+      "--repo", repoRoot,
+      "--prompt-file", promptPath,
+      "--json",
+    ], {
+      cwd: repoRoot,
+      encoding: "utf-8",
+      stdio: "pipe",
+      env: { ...process.env, RELAY_ANTIGRAVITY_BIN: fakeAgy, RELAY_ANTIGRAVITY_REVIEW_TIMEOUT: "soon" },
+    });
+  } catch (caught) {
+    error = caught;
+  }
+
+  assert.ok(error, "expected invalid timeout to fail closed");
+  assert.notEqual(error.status, 0);
+  assert.equal(fs.existsSync(logPath), false);
+  assert.match(String(error.stderr || ""), /RELAY_ANTIGRAVITY_REVIEW_TIMEOUT must be a positive duration like 120s/);
+});
+
+test("antigravity adapter recovers valid stdout from non-timeout failures", () => {
+  const { repoRoot, promptPath } = setupRepo();
+  const fakeDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-fake-antigravity-recover-"));
+  const fakeAgy = writeExecutable(fakeDir, "fake-agy.js", `#!/usr/bin/env node
+process.stdout.write(JSON.stringify({
+  verdict: "pass",
+  summary: "Recovered stdout.",
+  contract_status: "pass",
+  quality_review_status: "pass",
+  next_action: "ready_to_merge",
+  issues: [],
+  rubric_scores: [],
+  scope_drift: { creep: [], missing: [] },
+}));
+process.stderr.write("simulated late failure\\n");
+process.exit(1);
+`);
+
+  const stdout = execFileSync("node", [
+    ANTIGRAVITY_SCRIPT,
+    "--repo", repoRoot,
+    "--prompt-file", promptPath,
+    "--json",
+  ], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+    env: { ...process.env, RELAY_ANTIGRAVITY_BIN: fakeAgy, RELAY_ANTIGRAVITY_REVIEW_TIMEOUT: "5s" },
+  });
+
+  const result = JSON.parse(stdout);
+  assert.equal(result.summary, "Recovered stdout.");
+});
+
 test("antigravity adapter reports adapter and phase when stdout is invalid JSON", () => {
   const { repoRoot, promptPath } = setupRepo();
   const fakeDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-fake-antigravity-invalid-"));
