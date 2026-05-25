@@ -63,8 +63,9 @@ npx skills add . -g -y
 ### Prerequisites
 
 - [Claude Code](https://claude.ai/code) or [Codex](https://chatgpt.com/codex)
-- Optional: Pi CLI 0.72.1+ for `--executor pi` or `--reviewer pi` (`RELAY_PI_BIN` may point review to a non-PATH binary; `RELAY_PI_REVIEW_TIMEOUT` sets the primary review parent timeout, default `1800s`)
-- Optional: Google Antigravity CLI `agy` 1.0.2+ for `--executor antigravity` or `--reviewer antigravity`. Relay targets the `agy` CLI version track separately from any Antigravity IDE/Desktop app version; reviewer tests may use `RELAY_ANTIGRAVITY_BIN` to point at a non-PATH binary.
+- Optional: OpenCode CLI for `--executor opencode`, `--reviewer opencode`, or `--advisory-reviewer opencode`; route policy must allow the selected provider/model route.
+- Optional: Pi CLI 0.72.1+ for `--executor pi`, `--reviewer pi`, or `--advisory-reviewer pi` (`RELAY_PI_BIN` may point review to a non-PATH binary; `RELAY_PI_REVIEW_TIMEOUT` sets the primary review parent timeout, default `1800s`)
+- Optional: Google Antigravity CLI `agy` 1.0.2+ for `--executor antigravity`, `--reviewer antigravity`, or `--advisory-reviewer antigravity`. Relay targets the `agy` CLI version track separately from any Antigravity IDE/Desktop app version; reviewer tests may use `RELAY_ANTIGRAVITY_BIN` to point at a non-PATH binary.
 - [`gh` CLI](https://cli.github.com/) authenticated with `gh auth login`
 - Git 2.20+
 - Node.js 18+
