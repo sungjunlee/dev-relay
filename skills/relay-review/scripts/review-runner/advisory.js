@@ -2,6 +2,14 @@ const { execFileSync } = require("child_process");
 const fs = require("fs");
 const path = require("path");
 const { buildArtifactTimingFields } = require("../../../relay-dispatch/scripts/advisory-timing");
+const {
+  ADAPTER_PHASES,
+  getAgentAdapterDescriptor,
+} = require("../../../relay-dispatch/scripts/agent-adapters");
+const {
+  assertPolicyRepresentable,
+  buildAgentPolicyAudit,
+} = require("../../../relay-dispatch/scripts/agent-adapters/policy");
 const { resolveExecutorDefaultModel } = require("../../../relay-dispatch/scripts/executor-model-config");
 const { hashFileSha256 } = require("../../../relay-dispatch/scripts/execution-evidence");
 const { appendRunEvent, EVENTS, readRunEvents } = require("../../../relay-dispatch/scripts/relay-events");
@@ -73,6 +81,24 @@ function advisoryPaths(runDir, round, reviewerName) {
   };
 }
 
+function buildAdvisoryReviewerPolicy(reviewerName) {
+  let descriptor;
+  try {
+    descriptor = getAgentAdapterDescriptor(reviewerName);
+  } catch {
+    return null;
+  }
+  return assertPolicyRepresentable(buildAgentPolicyAudit({
+    descriptor,
+    phase: ADAPTER_PHASES.ADVISORY_REVIEW,
+    requested: {
+      sandbox: "read-only",
+      networkAccess: "ambient",
+      readOnly: true,
+    },
+  }));
+}
+
 function writeJson(filePath, value) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   fs.writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf-8");
@@ -114,6 +140,7 @@ function startAdvisoryReview({
   writeText(promptPath, `${promptText}\n`);
   const reviewerScript = resolveReviewerScript(reviewerName, null);
   const startedAt = Date.now();
+  const reviewerPolicy = buildAdvisoryReviewerPolicy(reviewerName);
   const request = {
     decisionPath: paths.decisionPath,
     headSha,
@@ -123,6 +150,7 @@ function startAdvisoryReview({
     resultPath: paths.resultPath,
     reviewerModel,
     reviewerName,
+    reviewerPolicy,
     reviewerScript,
     reviewRepoPath,
     round,
@@ -420,6 +448,7 @@ function executeAdvisoryRequest(request) {
       round: request.round,
       reviewer: request.reviewerName,
       model: request.reviewerModel,
+      reviewer_policy: request.reviewerPolicy,
       profile: request.profile,
       status,
       artifact_path: artifactPath,
@@ -446,6 +475,7 @@ module.exports = {
   DEFAULT_ADVISORY_GRACE_SECONDS,
   executeAdvisoryRequest,
   finishAdvisoryReview,
+  buildAdvisoryReviewerPolicy,
   parseNonNegativeSeconds,
   parsePositiveSeconds,
   resolveAdvisoryModel,

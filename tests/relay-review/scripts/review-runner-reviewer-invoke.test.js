@@ -323,6 +323,78 @@ test("reviewer-invoke precedence R3 regression: manifest hint supplies the effec
   const reviewInvokeEvent = JSON.parse(eventLines.at(-1));
   assert.equal(reviewInvokeEvent.event, "review_invoke");
   assert.equal(reviewInvokeEvent.model, "haiku");
+  assert.equal(reviewInvokeEvent.reviewer_policy.adapter, "custom-reviewer-script");
+  assert.equal(reviewInvokeEvent.reviewer_policy.read_only.enforcement_level, "informational");
+  assert.deepEqual(reviewInvokeEvent.reviewer_policy.read_only.flags, []);
+  assert.match(reviewInvokeEvent.reviewer_policy.read_only.warnings.join("\n"), /outside adapter-managed containment/i);
+});
+
+test("reviewer-invoke/loadReviewText records adapter-managed primary reviewer read-only policy", (t) => {
+  const originalRelayHome = process.env.RELAY_HOME;
+  const originalCodexBin = process.env.RELAY_CODEX_BIN;
+  const { relayHome, repoRoot, runDir, manifestPath, manifest, promptPath, runId } = setupReviewRun();
+  t.after(() => {
+    if (originalRelayHome === undefined) {
+      delete process.env.RELAY_HOME;
+    } else {
+      process.env.RELAY_HOME = originalRelayHome;
+    }
+    if (originalCodexBin === undefined) {
+      delete process.env.RELAY_CODEX_BIN;
+    } else {
+      process.env.RELAY_CODEX_BIN = originalCodexBin;
+    }
+  });
+  process.env.RELAY_HOME = relayHome;
+
+  const helperDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-helper-"));
+  process.env.RELAY_CODEX_BIN = writeExecutable(helperDir, "fake-codex.js", `#!/usr/bin/env node
+const fs = require("fs");
+const args = process.argv.slice(2);
+const outputIndex = args.indexOf("-o");
+if (outputIndex === -1 || !args[outputIndex + 1]) {
+  process.stderr.write("missing -o result path\\n");
+  process.exit(2);
+}
+fs.writeFileSync(args[outputIndex + 1], JSON.stringify({
+  verdict: "pass",
+  summary: "ok",
+  contract_status: "pass",
+  quality_review_status: "pass",
+  next_action: "ready_to_merge",
+  issues: [],
+  rubric_scores: [],
+  scope_drift: { creep: [], missing: [] }
+}) + "\\n", "utf-8");
+`);
+
+  const reviewerScript = resolveReviewerScript("codex");
+  const { reviewText } = loadReviewText({
+    body: "# Notes\n",
+    data: manifest,
+    manifestPath,
+    prNumber: 11,
+    promptPath,
+    reviewFile: null,
+    reviewRepoPath: repoRoot,
+    reviewedHeadSha: "abc123",
+    reviewerModel: null,
+    reviewerName: "codex",
+    reviewerScript,
+    round: 1,
+    runDir,
+    runRepoPath: repoRoot,
+  });
+
+  assert.equal(JSON.parse(reviewText).verdict, "pass");
+  const eventLines = fs.readFileSync(getEventsPath(repoRoot, runId), "utf-8").trim().split("\n").filter(Boolean);
+  const reviewInvokeEvent = JSON.parse(eventLines.at(-1));
+  assert.equal(reviewInvokeEvent.event, "review_invoke");
+  assert.equal(reviewInvokeEvent.reviewer_policy.adapter, "codex");
+  assert.equal(reviewInvokeEvent.reviewer_policy.phase, "primary_review");
+  assert.equal(reviewInvokeEvent.reviewer_policy.read_only.enforcement_level, "native");
+  assert.deepEqual(reviewInvokeEvent.reviewer_policy.read_only.flags, ["--sandbox read-only"]);
+  assert.equal(reviewInvokeEvent.reviewer_policy.safe, true);
 });
 
 test("reviewer-invoke/loadReviewText denies disallowed reviewer model before adapter invocation", (t) => {

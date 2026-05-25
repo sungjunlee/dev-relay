@@ -259,6 +259,8 @@ test("review-runner records successful opencode advisory review without gating p
   assert.equal(event.status, "success");
   assert.equal(event.profile, "blindspot");
   assert.equal(event.advisory_artifact_hash, hashFile(path.join(runDir, "review-round-1-advisory-opencode.json")));
+  assert.equal(event.reviewer_policy.read_only.enforcement_level, "prompt-only");
+  assert.match(event.reviewer_policy.read_only.warnings.join("\n"), /not prevent writes/i);
 });
 
 test("review-runner uses manifest routing advisory defaults without changing the primary reviewer", () => {
