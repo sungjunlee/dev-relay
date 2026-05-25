@@ -1,18 +1,31 @@
-const codex = require("./codex");
-const claude = require("./claude");
-const opencode = require("./opencode");
+const {
+  ADAPTER_PHASES,
+  getAgentAdapterDescriptor,
+  listAgentAdapterNames,
+  supportsAgentAdapterPhase,
+} = require("../agent-adapters");
 
-const EXECUTORS = { codex, claude, opencode };
-
-function getExecutor(name) {
-  if (!Object.prototype.hasOwnProperty.call(EXECUTORS, name)) {
-    throw new Error(`unknown executor '${name}'. Supported: ${Object.keys(EXECUTORS).join(", ")}`);
-  }
-  return EXECUTORS[name];
-}
+const EXECUTOR_COMPAT_ORDER = ["codex", "claude", "opencode"];
 
 function listExecutors() {
-  return Object.keys(EXECUTORS);
+  const names = listAgentAdapterNames();
+  return [
+    ...EXECUTOR_COMPAT_ORDER.filter((name) => (
+      names.includes(name) && supportsAgentAdapterPhase(name, ADAPTER_PHASES.DISPATCH)
+    )),
+    ...names.filter((name) => (
+      !EXECUTOR_COMPAT_ORDER.includes(name)
+      && supportsAgentAdapterPhase(name, ADAPTER_PHASES.DISPATCH)
+    )),
+  ];
+}
+
+function getExecutor(name) {
+  const executors = listExecutors();
+  if (!executors.includes(name)) {
+    throw new Error(`unknown executor '${name}'. Supported: ${executors.join(", ")}`);
+  }
+  return getAgentAdapterDescriptor(name).executor;
 }
 
 module.exports = { getExecutor, listExecutors };
