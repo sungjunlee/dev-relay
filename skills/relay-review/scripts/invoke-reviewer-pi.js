@@ -12,7 +12,7 @@ const {
   modeLabel,
 } = require("../../relay-dispatch/scripts/cli-args");
 const {
-  parseReviewerJsonObject,
+  parseReviewerVerdictObject,
   recoverExecStdout,
   summarizeFailure,
 } = require("./reviewer-helpers");
@@ -47,9 +47,11 @@ function main() {
   const promptText = fs.readFileSync(promptFile, "utf-8").trim();
   const fullPrompt = [
     "[NON-INTERACTIVE REVIEW]",
-    "Review the provided bundle and return only JSON matching this schema:",
+    "Review the provided bundle and return only raw JSON matching this schema:",
     JSON.stringify(REVIEWER_VERDICT_JSON_SCHEMA),
+    "The first byte of your response must be `{` and the last byte must be `}`.",
     "Do not wrap the response in markdown fences.",
+    "Do not include prose, analysis, acknowledgements, or explanations outside the JSON object.",
     "Start with the diff for overview. Then read callers/imports of changed functions to verify integration.",
     "You have read-only access to the full codebase via read, grep, find, and ls tools.",
     "Do not modify files, create commits, or write comments. Treat the checkout as read-only.",
@@ -83,16 +85,17 @@ function main() {
   if (!result) {
     throw new Error("Pi reviewer did not produce a structured result");
   }
-  parseReviewerJsonObject(result, {
+  const parsed = parseReviewerVerdictObject(result, {
     adapter: "pi",
     phase: "primary_review",
     description: "review verdict",
   });
+  const output = JSON.stringify(parsed);
 
   if (cliArgs.hasFlag("--json")) {
-    console.log(result);
+    console.log(output);
   } else {
-    process.stdout.write(result);
+    process.stdout.write(output);
   }
 }
 
