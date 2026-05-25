@@ -23,6 +23,9 @@ const DEFAULTS = Object.freeze({
   antigravityReviewTimeout: "120s",
   antigravityFailSafeReviewTimeout: "5s",
   antigravityDispatchTimeoutSeconds: 45,
+  dispatchCanary: false,
+  dispatchTimeoutSeconds: 180,
+  dispatchBranchPrefix: "dogfood-dispatch",
 });
 
 function parseArgs(argv) {
@@ -42,6 +45,9 @@ function parseArgs(argv) {
     antigravityReviewTimeout: DEFAULTS.antigravityReviewTimeout,
     antigravityFailSafeReviewTimeout: DEFAULTS.antigravityFailSafeReviewTimeout,
     antigravityDispatchTimeoutSeconds: DEFAULTS.antigravityDispatchTimeoutSeconds,
+    dispatchCanary: DEFAULTS.dispatchCanary,
+    dispatchTimeoutSeconds: DEFAULTS.dispatchTimeoutSeconds,
+    dispatchBranchPrefix: DEFAULTS.dispatchBranchPrefix,
   };
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -55,6 +61,7 @@ function parseArgs(argv) {
     else if (arg === "--relay-home") parsed.relayHome = next();
     else if (arg === "--keep-relay-home") parsed.keepRelayHome = true;
     else if (arg === "--probe-only") parsed.probeOnly = true;
+    else if (arg === "--dispatch-canary") parsed.dispatchCanary = true;
     else if (arg === "--dry-run") parsed.dryRun = true;
     else if (arg === "--json") parsed.json = true;
     else if (arg === "--markdown") parsed.markdown = true;
@@ -66,6 +73,8 @@ function parseArgs(argv) {
     else if (arg === "--antigravity-review-timeout") parsed.antigravityReviewTimeout = next();
     else if (arg === "--antigravity-fail-safe-timeout") parsed.antigravityFailSafeReviewTimeout = next();
     else if (arg === "--antigravity-dispatch-timeout") parsed.antigravityDispatchTimeoutSeconds = Number(next());
+    else if (arg === "--dispatch-timeout") parsed.dispatchTimeoutSeconds = Number(next());
+    else if (arg === "--dispatch-branch-prefix") parsed.dispatchBranchPrefix = next();
     else if (arg === "--help" || arg === "-h") parsed.help = true;
     else throw new Error(`unknown argument: ${arg}`);
   }
@@ -75,6 +84,12 @@ function parseArgs(argv) {
   }
   if (!Number.isSafeInteger(parsed.antigravityDispatchTimeoutSeconds) || parsed.antigravityDispatchTimeoutSeconds <= 0) {
     throw new Error("--antigravity-dispatch-timeout must be a positive integer");
+  }
+  if (!Number.isSafeInteger(parsed.dispatchTimeoutSeconds) || parsed.dispatchTimeoutSeconds <= 0) {
+    throw new Error("--dispatch-timeout must be a positive integer");
+  }
+  if (!String(parsed.dispatchBranchPrefix || "").trim()) {
+    throw new Error("--dispatch-branch-prefix must be a non-empty string");
   }
   return parsed;
 }
@@ -133,12 +148,12 @@ function ensureRelayHome(relayHome, options = {}) {
   return resolved;
 }
 
-function writePromptFiles(relayHome) {
+function writePromptFiles(relayHome, options = {}) {
   const promptDir = path.join(relayHome, "dogfood-prompts");
   fs.mkdirSync(promptDir, { recursive: true });
   const advisoryPrompt = path.join(promptDir, "advisory-prompt.md");
   const primaryPrompt = path.join(promptDir, "primary-prompt.md");
-  const rubric = path.join(promptDir, "antigravity-dispatch-rubric.yaml");
+  const rubric = path.join(promptDir, "antigravity-dispatch-noop-rubric.yaml");
   fs.writeFileSync(advisoryPrompt, [
     "Return exactly one advisory JSON object for a relay live dogfood canary.",
     "The object must contain profile, summary, required_findings, advisory_findings, and duplicate_or_low_confidence.",
@@ -154,11 +169,35 @@ function writePromptFiles(relayHome) {
     "  - name: live_dogfood_noop",
     "    target: 3",
     "    criteria:",
-    "      3: Live dogfood canary returns a safe no-op classification.",
-    "      0: Live dogfood canary incorrectly creates reviewable output.",
+    "      3: Live dogfood no-op canary returns a safe no-op or failed/escalated classification without a PR.",
+    "      0: Live dogfood no-op canary incorrectly creates reviewable output or a PR.",
     "",
   ].join("\n"), "utf-8");
-  return { advisoryPrompt, primaryPrompt, rubric };
+
+  const dispatchStamp = String(options.dispatchStamp || Date.now());
+  const dispatchCanaries = {};
+  for (const executor of ["pi", "opencode", "antigravity"]) {
+    const canaryFile = `relay-live-dogfood-${executor}-${dispatchStamp}.txt`;
+    const canaryLine = `relay live dogfood dispatch canary ${executor} ${dispatchStamp}`;
+    const promptFile = path.join(promptDir, `${executor}-dispatch-canary-prompt.md`);
+    const rubricFile = path.join(promptDir, `${executor}-dispatch-canary-rubric.yaml`);
+    fs.writeFileSync(promptFile, [
+      `Create or update ${canaryFile} with exactly one line:`,
+      canaryLine,
+      "Commit that file and do not change anything else.",
+      "",
+    ].join("\n"), "utf-8");
+    fs.writeFileSync(rubricFile, [
+      "criteria:",
+      "  - id: minimal-intentional-change",
+      `    description: Creates or updates only ${canaryFile} with the requested single line.`,
+      "    weight: 1",
+      "",
+    ].join("\n"), "utf-8");
+    dispatchCanaries[executor] = { promptFile, rubricFile, canaryFile, canaryLine };
+  }
+
+  return { advisoryPrompt, primaryPrompt, rubric, dispatchCanaries, dispatchStamp };
 }
 
 function plannedStep(name, command, notes = "") {
@@ -174,6 +213,29 @@ function spawnCommand({ spawnImpl, cwd, env, command, args, timeoutMs }) {
     timeout: timeoutMs,
     maxBuffer: 10 * 1024 * 1024,
   });
+}
+
+function assertCleanDispatchCanaryRepo(repo, spawnImpl = spawnSync) {
+  const result = spawnImpl("git", ["status", "--porcelain"], {
+    cwd: repo,
+    encoding: "utf-8",
+    stdio: "pipe",
+    timeout: 30_000,
+  });
+  if (result.error) {
+    throw new Error(`--dispatch-canary requires git status to succeed: ${result.error.message}`);
+  }
+  if (result.status !== 0) {
+    const details = summarizeOutput(result) || `git status exited ${result.status}`;
+    throw new Error(`--dispatch-canary requires git status to succeed: ${details}`);
+  }
+  const dirty = String(result.stdout || "").trim();
+  if (dirty) {
+    throw new Error(
+      "--dispatch-canary requires a clean worktree because live dispatch canaries create branches, commits, and PRs. " +
+      `Current dirty status:\n${dirty}`
+    );
+  }
 }
 
 function parseJson(text) {
@@ -235,23 +297,68 @@ function classifyAntigravityFailSafeTimeout(result) {
   return standard;
 }
 
-function classifyAntigravityDispatch(result) {
+function hasPrNumber(parsed) {
+  return parsed?.prNumber !== null && typeof parsed?.prNumber !== "undefined";
+}
+
+function classifyHealthyDispatch(result) {
   if (result.error?.code === "ETIMEDOUT") return { outcome: OUTCOMES.TIMEOUT, notes: "harness command timeout" };
   const parsed = parseJson(result.stdout);
   if (!parsed) return { outcome: OUTCOMES.FAIL, notes: summarizeOutput(result) || "dispatch did not return JSON" };
-  if (result.status === 0 && parsed.runState === "review_pending" && parsed.prNumber) {
+  if (result.status === 0 && parsed.runState === "review_pending" && hasPrNumber(parsed)) {
     return { outcome: OUTCOMES.PASS, parsed, notes: "dispatch produced reviewable PR" };
   }
-  if (parsed.runState === "escalated" && parsed.status === "failed" && parsed.prNumber === null) {
-    return { outcome: OUTCOMES.FAIL_SAFE_PASS, parsed, notes: parsed.error || "dispatch failed safely without PR" };
+  const notes = parsed.error || summarizeOutput(result) || `unexpected dispatch state ${parsed.runState || "(unknown)"}`;
+  if (/timed out|timeout/i.test(notes)) return { outcome: OUTCOMES.TIMEOUT, parsed, notes };
+  return { outcome: OUTCOMES.FAIL, parsed, notes };
+}
+
+function classifyAntigravityNoOpDispatch(result) {
+  if (result.error?.code === "ETIMEDOUT") return { outcome: OUTCOMES.TIMEOUT, notes: "harness command timeout" };
+  const parsed = parseJson(result.stdout);
+  if (!parsed) return { outcome: OUTCOMES.FAIL, notes: summarizeOutput(result) || "dispatch did not return JSON" };
+  if (hasPrNumber(parsed)) {
+    return {
+      outcome: OUTCOMES.FAIL,
+      parsed,
+      notes: "no-op fail-safe canary produced a PR; treating as false success",
+    };
   }
-  return { outcome: OUTCOMES.FAIL, parsed, notes: parsed.error || `unexpected dispatch state ${parsed.runState || "(unknown)"}` };
+  if (parsed.status === "completed-no-op") {
+    return { outcome: OUTCOMES.FAIL_SAFE_PASS, parsed, notes: "no-op canary produced no PR" };
+  }
+  if (parsed.runState === "escalated" && parsed.status === "failed" && parsed.prNumber === null) {
+    const notes = parsed.error || "dispatch failed safely without PR";
+    if (/timed out|timeout|no reviewable repository changes|runtime metadata|silent failure|blocked on approval/i.test(notes)) {
+      return { outcome: OUTCOMES.FAIL_SAFE_PASS, parsed, notes };
+    }
+  }
+  return { outcome: OUTCOMES.FAIL, parsed, notes: parsed.error || `unexpected no-op dispatch state ${parsed.runState || "(unknown)"}` };
+}
+
+function classifyAntigravityDispatch(result) {
+  return classifyHealthyDispatch(result);
+}
+
+function buildDispatchCommand({ node, repo, branch, executor, model, promptFile, rubricFile, timeoutSeconds }) {
+  return [
+    node,
+    "skills/relay-dispatch/scripts/dispatch.js",
+    repo,
+    "-b", branch,
+    "--prompt-file", promptFile,
+    "--executor", executor,
+    "--model", model,
+    "--rubric-file", rubricFile,
+    "--timeout", String(timeoutSeconds),
+    "--json",
+  ];
 }
 
 function buildSteps({ repo, relayHome, prompts, options }) {
   const node = process.execPath;
   const dispatchBranch = `dogfood-antigravity-${Date.now()}`;
-  return [
+  const steps = [
     {
       name: "probe-pi",
       command: [node, "skills/relay-plan/scripts/probe-executor-env.js", repo, "--executor", "pi", "--model", options.piModel, "--json"],
@@ -291,22 +398,49 @@ function buildSteps({ repo, relayHome, prompts, options }) {
       classify: classifyAntigravityFailSafeTimeout,
     },
     {
-      name: "antigravity-dispatch",
+      name: "antigravity-dispatch-fail-safe-noop",
       command: [
         node,
         "skills/relay-dispatch/scripts/dispatch.js",
         repo,
         "-b", dispatchBranch,
-        "--prompt", "Live dogfood canary: do not modify repository files unless explicitly testing minimal dispatch output.",
+        "--prompt", "Live dogfood fail-safe no-op canary: do not modify repository files, do not commit, and do not create a PR-ready change.",
         "--executor", "antigravity",
         "--model", options.antigravityModel,
         "--rubric-file", prompts.rubric,
         "--timeout", String(options.antigravityDispatchTimeoutSeconds),
         "--json",
       ],
-      classify: classifyAntigravityDispatch,
+      classify: classifyAntigravityNoOpDispatch,
     },
-  ].filter((step) => !options.probeOnly || step.name.startsWith("probe-"))
+  ];
+
+  if (options.dispatchCanary) {
+    for (const executor of ["pi", "opencode", "antigravity"]) {
+      const model = executor === "pi"
+        ? options.piModel
+        : executor === "opencode"
+          ? options.opencodeModel
+          : options.antigravityModel;
+      const canary = prompts.dispatchCanaries[executor];
+      steps.push({
+        name: `${executor}-dispatch-canary`,
+        command: buildDispatchCommand({
+          node,
+          repo,
+          branch: `${options.dispatchBranchPrefix}-${executor}-${prompts.dispatchStamp}`,
+          executor,
+          model,
+          promptFile: canary.promptFile,
+          rubricFile: canary.rubricFile,
+          timeoutSeconds: options.dispatchTimeoutSeconds,
+        }),
+        classify: classifyHealthyDispatch,
+      });
+    }
+  }
+
+  return steps.filter((step) => !options.probeOnly || step.name.startsWith("probe-"))
     .map((step) => ({ ...step, relayHome }));
 }
 
@@ -314,8 +448,11 @@ function runDogfood(options = {}, deps = {}) {
   const spawnImpl = deps.spawnSync || spawnSync;
   const repo = path.resolve(options.repo || ".");
   const effectiveOptions = { ...DEFAULTS, ...options };
+  if (effectiveOptions.dispatchCanary && !effectiveOptions.dryRun) {
+    assertCleanDispatchCanaryRepo(repo, spawnImpl);
+  }
   const relayHome = ensureRelayHome(options.relayHome, effectiveOptions);
-  const prompts = writePromptFiles(relayHome);
+  const prompts = writePromptFiles(relayHome, effectiveOptions);
   const envBase = {
     ...process.env,
     RELAY_HOME: relayHome,
@@ -381,6 +518,7 @@ function printHelp() {
   console.log("  --repo <path>                         Repository root (default: .)");
   console.log("  --relay-home <path>                   Use an explicit RELAY_HOME instead of a temp directory");
   console.log("  --probe-only                          Run only Pi/OpenCode/Antigravity probes");
+  console.log("  --dispatch-canary                     Add healthy Pi/OpenCode/Antigravity dispatch canaries that must produce review_pending PRs");
   console.log("  --dry-run                             Print planned steps without invoking live CLIs");
   console.log("  --json                                Emit structured JSON");
   console.log("  --markdown                            Emit GitHub-comment-ready Markdown");
@@ -390,7 +528,9 @@ function printHelp() {
   console.log("  --pi-review-timeout <duration>        RELAY_PI_REVIEW_TIMEOUT for the Pi canary (default: 120s)");
   console.log("  --antigravity-review-timeout <duration>  RELAY_ANTIGRAVITY_REVIEW_TIMEOUT for the healthy Antigravity review canary (default: 120s)");
   console.log("  --antigravity-fail-safe-timeout <duration>  RELAY_ANTIGRAVITY_REVIEW_TIMEOUT for the intentional fail-safe timeout canary (default: 5s)");
-  console.log("  --antigravity-dispatch-timeout <sec>  Dispatch timeout seconds (default: 45)");
+  console.log("  --antigravity-dispatch-timeout <sec>  Antigravity no-op/fail-safe dispatch timeout seconds (default: 45)");
+  console.log("  --dispatch-timeout <sec>              Healthy dispatch canary timeout seconds (default: 180)");
+  console.log("  --dispatch-branch-prefix <prefix>     Healthy dispatch canary branch prefix (default: dogfood-dispatch)");
   console.log("  --command-timeout-ms <ms>             Harness per-command timeout (default: 300000)");
 }
 
@@ -424,7 +564,9 @@ module.exports = {
   buildAllowedModelRoutes,
   classifyAntigravityDispatch,
   classifyAntigravityFailSafeTimeout,
+  classifyAntigravityNoOpDispatch,
   classifyAntigravityPrimary,
+  classifyHealthyDispatch,
   classifyProbeJson,
   classifyStandardJson,
   ensureRelayHome,
