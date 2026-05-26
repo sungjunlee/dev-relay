@@ -27,6 +27,7 @@ metadata:
 - Reviewing a PR for the relay gate — use `relay-review`
 - Dispatching implementation work — use `relay-dispatch`
 - Authoring rubrics or dispatch prompts — use `relay-plan`
+- Scouting a subsystem before a run exists or before Done Criteria are frozen — use `relay-plan`'s optional subsystem scout guidance
 - Merging or finalizing a PR — use `relay-merge`
 
 The runner resolves the run manifest, sends run context and PR diff text to the configured sidecar executor, and stores captured stdout under the run's `sidecars/<id>/` directory.
