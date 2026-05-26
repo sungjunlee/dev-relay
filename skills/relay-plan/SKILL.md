@@ -9,7 +9,7 @@ metadata:
 ---
 ## Inputs
 - Env: optional `RELAY_SKILL_ROOT` defaults to `skills`; Step 7/8 examples use `RUN_ID`.
-- Files: relay-ready handoff, task file, issue/user text, optional `/tmp/done-criteria-<N>.md`, `/tmp/dispatch-<N>.md`, and `/tmp/rubric-<N>.yaml`.
+- Files: relay-ready handoff, task file, issue/user text, optional local harness context (`AGENTS.md`, `CLAUDE.md`, `CHARTER.md`, `spec/capabilities.md`, active sprint notes), optional `/tmp/done-criteria-<N>.md`, `/tmp/dispatch-<N>.md`, and `/tmp/rubric-<N>.yaml`.
 - Sibling scripts: `${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/reliability-report.js`, `${RELAY_SKILL_ROOT:-skills}/relay-plan/scripts/probe-executor-env.js`, `${RELAY_SKILL_ROOT:-skills}/relay-plan/scripts/persist-done-criteria.js`, `${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/dispatch.js`.
 
 # Relay Plan
@@ -51,11 +51,11 @@ node "${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/reliability-report.js" 
 node "${RELAY_SKILL_ROOT:-skills}/relay-plan/scripts/probe-executor-env.js" . --project-only --json
 ```
 
-Read historical relay signal and repo-local quality signal as weak inputs only. They inform wording, prerequisites, and commands; they do not gate dispatch or override the task. Empty/failure cases render as `no historical data available` or `no quality infra detected`; field meanings: `references/signals.md`.
+Read historical relay signal, repo-local quality signal, and task-relevant local harness context as weak inputs only. They inform wording, prerequisites, commands, and where to look; they do not gate dispatch or override the task. Empty/failure cases render as `no historical data available` or `no quality infra detected`; field meanings and authority hierarchy: `references/signals.md`.
 
 ### 3. Normalize planning inputs
 
-Keep explicit AC, inferred Done Criteria, repo signal, historical signal, and task risk as separate evidence channels until the review anchor is written.
+Keep explicit AC, inferred Done Criteria, relay-ready handoff, project harness context, repo signal, historical signal, optional subsystem scout notes, and task risk as separate evidence channels until the review anchor is written.
 
 ### 4. Recover Done Criteria
 
@@ -144,5 +144,6 @@ Use these only when their trigger applies:
 | Edit scope is narrower than the repo | Apply `references/rubric-patterns.md#rubric-pattern--explicit-forbidden-zones`. |
 | Event schema evolves | Apply `references/rubric-patterns.md#rubric-pattern--event-shape-changes`. |
 | Red-first factor is useful | Apply `references/rubric-patterns.md#rubric-pattern--tdd-factor-flavor`; emit the optional Step 0a only when a factor has `tdd_anchor`. |
+| Task is L/XL, high ambiguity, or subsystem boundaries are unclear before Done Criteria recovery | Consider a read-only subsystem scout per `references/subsystem-scout.md`; skip for S/M tasks with clear scope. |
 | Done Criteria are novel, vague, high-risk, or easy to game | Run one stress-test round per `references/rubric-stress-test.md`; S/M usually skip, but ambiguity or risk can opt any size into stress-test. |
 | Re-dispatch after review feedback | Previous Score Log and reviewer feedback are automatically prepended; keep the original anchor fixed. |
