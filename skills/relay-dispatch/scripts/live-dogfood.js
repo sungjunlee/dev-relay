@@ -28,6 +28,153 @@ const DEFAULTS = Object.freeze({
   dispatchBranchPrefix: "dogfood-dispatch",
 });
 
+const MODEL_OPTION_BY_ADAPTER = Object.freeze({
+  pi: "piModel",
+  opencode: "opencodeModel",
+  antigravity: "antigravityModel",
+});
+
+const REVIEWER_SCRIPT_BY_ADAPTER = Object.freeze({
+  pi: "invoke-reviewer-pi.js",
+  opencode: "invoke-reviewer-opencode.js",
+  antigravity: "invoke-reviewer-antigravity.js",
+});
+
+const DEFAULT_REVIEW_PHASE_BY_ADAPTER = Object.freeze({
+  pi: "primary_review",
+  opencode: "advisory_review",
+  antigravity: "primary_review",
+});
+
+const LIVE_DOGFOOD_SCENARIOS = Object.freeze([
+  {
+    name: "probe-pi",
+    adapter: "pi",
+    phase: "probe",
+    category: "probe",
+    classifier: "probe-json",
+    defaultEnabled: true,
+    healthyPromotion: false,
+  },
+  {
+    name: "probe-opencode",
+    adapter: "opencode",
+    phase: "probe",
+    category: "probe",
+    classifier: "probe-json",
+    defaultEnabled: true,
+    healthyPromotion: false,
+  },
+  {
+    name: "probe-antigravity",
+    adapter: "antigravity",
+    phase: "probe",
+    category: "probe",
+    classifier: "probe-json",
+    defaultEnabled: true,
+    healthyPromotion: false,
+  },
+  {
+    name: "opencode-advisory",
+    adapter: "opencode",
+    phase: "advisory_review",
+    category: "healthy-review",
+    classifier: "standard-json",
+    defaultEnabled: true,
+    healthyPromotion: true,
+  },
+  {
+    name: "pi-primary",
+    adapter: "pi",
+    phase: "primary_review",
+    category: "healthy-review",
+    classifier: "standard-json",
+    defaultEnabled: true,
+    healthyPromotion: true,
+    env: { name: "RELAY_PI_REVIEW_TIMEOUT", option: "piReviewTimeout" },
+  },
+  {
+    name: "antigravity-primary",
+    adapter: "antigravity",
+    phase: "primary_review",
+    category: "healthy-review",
+    classifier: "antigravity-primary",
+    defaultEnabled: true,
+    healthyPromotion: true,
+    env: { name: "RELAY_ANTIGRAVITY_REVIEW_TIMEOUT", option: "antigravityReviewTimeout" },
+  },
+  {
+    name: "antigravity-primary-fail-safe-timeout",
+    adapter: "antigravity",
+    phase: "primary_review",
+    category: "fail-safe",
+    classifier: "antigravity-fail-safe-timeout",
+    defaultEnabled: true,
+    healthyPromotion: false,
+    env: { name: "RELAY_ANTIGRAVITY_REVIEW_TIMEOUT", option: "antigravityFailSafeReviewTimeout" },
+  },
+  {
+    name: "antigravity-dispatch-fail-safe-noop",
+    adapter: "antigravity",
+    phase: "dispatch",
+    category: "fail-safe",
+    classifier: "antigravity-noop-dispatch",
+    defaultEnabled: true,
+    healthyPromotion: false,
+  },
+  {
+    name: "pi-dispatch-canary",
+    adapter: "pi",
+    phase: "dispatch",
+    category: "healthy-dispatch",
+    classifier: "healthy-dispatch",
+    defaultEnabled: false,
+    requiresDispatchCanary: true,
+    healthyPromotion: true,
+  },
+  {
+    name: "opencode-dispatch-canary",
+    adapter: "opencode",
+    phase: "dispatch",
+    category: "healthy-dispatch",
+    classifier: "healthy-dispatch",
+    defaultEnabled: false,
+    requiresDispatchCanary: true,
+    healthyPromotion: true,
+  },
+  {
+    name: "antigravity-dispatch-canary",
+    adapter: "antigravity",
+    phase: "dispatch",
+    category: "healthy-dispatch",
+    classifier: "healthy-dispatch",
+    defaultEnabled: false,
+    requiresDispatchCanary: true,
+    healthyPromotion: true,
+  },
+]);
+
+const LIVE_DOGFOOD_READINESS_EXEMPTIONS = Object.freeze([
+  {
+    adapter: "opencode",
+    phase: "primary_review",
+    reason: "OpenCode primary review readiness is route-policy limited; the current harness keeps OpenCode live review dogfood on the advisory row.",
+    readinessTextPattern: /Live:\s*`limited`\s*by route policy and live reviewer evidence/i,
+  },
+  {
+    adapter: "pi",
+    phase: "advisory_review",
+    reason: "Pi advisory review readiness remains route-specific until dedicated advisory canaries are added.",
+    readinessTextPattern: /Live:\s*`limited`\s*by route-specific advisory canaries/i,
+  },
+  {
+    adapter: "antigravity",
+    phase: "advisory_review",
+    reason: "Antigravity advisory review is blocked until a healthy advisory dogfood scenario exists.",
+    readinessTextPattern: /Live:\s*`blocked`\s*until healthy advisory dogfood exists/i,
+  },
+]);
+
 function parseArgs(argv) {
   const parsed = {
     repo: ".",
@@ -355,93 +502,163 @@ function buildDispatchCommand({ node, repo, branch, executor, model, promptFile,
   ];
 }
 
+const CLASSIFIER_BY_ID = Object.freeze({
+  "probe-json": classifyProbeJson,
+  "standard-json": classifyStandardJson,
+  "antigravity-primary": classifyAntigravityPrimary,
+  "antigravity-fail-safe-timeout": classifyAntigravityFailSafeTimeout,
+  "antigravity-noop-dispatch": classifyAntigravityNoOpDispatch,
+  "healthy-dispatch": classifyHealthyDispatch,
+});
+
+function modelForAdapter(options, adapter) {
+  const optionName = MODEL_OPTION_BY_ADAPTER[adapter];
+  if (!optionName) throw new Error(`unknown dogfood adapter: ${adapter}`);
+  return options[optionName];
+}
+
+function isScenarioEnabled(scenario, options) {
+  if (options.probeOnly) return scenario.category === "probe";
+  if (scenario.requiresDispatchCanary) return options.dispatchCanary === true;
+  return scenario.defaultEnabled === true;
+}
+
+function buildScenarioEnv(scenario, options) {
+  if (!scenario.env) return {};
+  return { [scenario.env.name]: options[scenario.env.option] };
+}
+
+function buildProbeScenarioCommand({ node, repo, options, scenario }) {
+  return [
+    node,
+    "skills/relay-plan/scripts/probe-executor-env.js",
+    repo,
+    "--executor", scenario.adapter,
+    "--model", modelForAdapter(options, scenario.adapter),
+    "--json",
+  ];
+}
+
+function buildReviewScenarioCommand({ node, repo, prompts, options, scenario }) {
+  const script = REVIEWER_SCRIPT_BY_ADAPTER[scenario.adapter];
+  if (!script) throw new Error(`unknown reviewer dogfood adapter: ${scenario.adapter}`);
+
+  const promptFile = scenario.phase === "advisory_review"
+    ? prompts.advisoryPrompt
+    : prompts.primaryPrompt;
+  const command = [
+    node,
+    `skills/relay-review/scripts/${script}`,
+    "--repo", repo,
+    "--prompt-file", promptFile,
+    "--model", modelForAdapter(options, scenario.adapter),
+    "--json",
+  ];
+  if (scenario.phase !== DEFAULT_REVIEW_PHASE_BY_ADAPTER[scenario.adapter]) {
+    command.splice(command.length - 1, 0, "--phase", scenario.phase);
+  }
+  return command;
+}
+
+function buildFailSafeDispatchCommand({ node, repo, prompts, options, branch }) {
+  return [
+    node,
+    "skills/relay-dispatch/scripts/dispatch.js",
+    repo,
+    "-b", branch,
+    "--prompt", "Live dogfood fail-safe no-op canary: do not modify repository files, do not commit, and do not create a PR-ready change.",
+    "--executor", "antigravity",
+    "--model", options.antigravityModel,
+    "--rubric-file", prompts.rubric,
+    "--timeout", String(options.antigravityDispatchTimeoutSeconds),
+    "--json",
+  ];
+}
+
+function buildHealthyDispatchScenarioCommand({ node, repo, prompts, options, scenario }) {
+  const canary = prompts.dispatchCanaries[scenario.adapter];
+  return buildDispatchCommand({
+    node,
+    repo,
+    branch: `${options.dispatchBranchPrefix}-${scenario.adapter}-${prompts.dispatchStamp}`,
+    executor: scenario.adapter,
+    model: modelForAdapter(options, scenario.adapter),
+    promptFile: canary.promptFile,
+    rubricFile: canary.rubricFile,
+    timeoutSeconds: options.dispatchTimeoutSeconds,
+  });
+}
+
+function buildScenarioCommand(context, scenario) {
+  if (scenario.category === "probe") {
+    return buildProbeScenarioCommand({ ...context, scenario });
+  }
+  if (scenario.category === "healthy-review" || (scenario.category === "fail-safe" && scenario.phase !== "dispatch")) {
+    return buildReviewScenarioCommand({ ...context, scenario });
+  }
+  if (scenario.name === "antigravity-dispatch-fail-safe-noop") {
+    return buildFailSafeDispatchCommand({
+      ...context,
+      branch: context.failSafeDispatchBranch,
+    });
+  }
+  if (scenario.category === "healthy-dispatch") {
+    return buildHealthyDispatchScenarioCommand({ ...context, scenario });
+  }
+  throw new Error(`unknown dogfood scenario category: ${scenario.category}`);
+}
+
 function buildSteps({ repo, relayHome, prompts, options }) {
   const node = process.execPath;
-  const dispatchBranch = `dogfood-antigravity-${Date.now()}`;
-  const steps = [
-    {
-      name: "probe-pi",
-      command: [node, "skills/relay-plan/scripts/probe-executor-env.js", repo, "--executor", "pi", "--model", options.piModel, "--json"],
-      classify: classifyProbeJson,
-    },
-    {
-      name: "probe-opencode",
-      command: [node, "skills/relay-plan/scripts/probe-executor-env.js", repo, "--executor", "opencode", "--model", options.opencodeModel, "--json"],
-      classify: classifyProbeJson,
-    },
-    {
-      name: "probe-antigravity",
-      command: [node, "skills/relay-plan/scripts/probe-executor-env.js", repo, "--executor", "antigravity", "--model", options.antigravityModel, "--json"],
-      classify: classifyProbeJson,
-    },
-    {
-      name: "opencode-advisory",
-      command: [node, "skills/relay-review/scripts/invoke-reviewer-opencode.js", "--repo", repo, "--prompt-file", prompts.advisoryPrompt, "--model", options.opencodeModel, "--json"],
-      classify: classifyStandardJson,
-    },
-    {
-      name: "pi-primary",
-      command: [node, "skills/relay-review/scripts/invoke-reviewer-pi.js", "--repo", repo, "--prompt-file", prompts.primaryPrompt, "--model", options.piModel, "--json"],
-      env: { RELAY_PI_REVIEW_TIMEOUT: options.piReviewTimeout },
-      classify: classifyStandardJson,
-    },
-    {
-      name: "antigravity-primary",
-      command: [node, "skills/relay-review/scripts/invoke-reviewer-antigravity.js", "--repo", repo, "--prompt-file", prompts.primaryPrompt, "--model", options.antigravityModel, "--json"],
-      env: { RELAY_ANTIGRAVITY_REVIEW_TIMEOUT: options.antigravityReviewTimeout },
-      classify: classifyAntigravityPrimary,
-    },
-    {
-      name: "antigravity-primary-fail-safe-timeout",
-      command: [node, "skills/relay-review/scripts/invoke-reviewer-antigravity.js", "--repo", repo, "--prompt-file", prompts.primaryPrompt, "--model", options.antigravityModel, "--json"],
-      env: { RELAY_ANTIGRAVITY_REVIEW_TIMEOUT: options.antigravityFailSafeReviewTimeout },
-      classify: classifyAntigravityFailSafeTimeout,
-    },
-    {
-      name: "antigravity-dispatch-fail-safe-noop",
-      command: [
-        node,
-        "skills/relay-dispatch/scripts/dispatch.js",
-        repo,
-        "-b", dispatchBranch,
-        "--prompt", "Live dogfood fail-safe no-op canary: do not modify repository files, do not commit, and do not create a PR-ready change.",
-        "--executor", "antigravity",
-        "--model", options.antigravityModel,
-        "--rubric-file", prompts.rubric,
-        "--timeout", String(options.antigravityDispatchTimeoutSeconds),
-        "--json",
-      ],
-      classify: classifyAntigravityNoOpDispatch,
-    },
-  ];
+  const context = {
+    node,
+    repo,
+    relayHome,
+    prompts,
+    options,
+    failSafeDispatchBranch: `dogfood-antigravity-${Date.now()}`,
+  };
 
-  if (options.dispatchCanary) {
-    for (const executor of ["pi", "opencode", "antigravity"]) {
-      const model = executor === "pi"
-        ? options.piModel
-        : executor === "opencode"
-          ? options.opencodeModel
-          : options.antigravityModel;
-      const canary = prompts.dispatchCanaries[executor];
-      steps.push({
-        name: `${executor}-dispatch-canary`,
-        command: buildDispatchCommand({
-          node,
-          repo,
-          branch: `${options.dispatchBranchPrefix}-${executor}-${prompts.dispatchStamp}`,
-          executor,
-          model,
-          promptFile: canary.promptFile,
-          rubricFile: canary.rubricFile,
-          timeoutSeconds: options.dispatchTimeoutSeconds,
-        }),
-        classify: classifyHealthyDispatch,
-      });
-    }
-  }
+  return LIVE_DOGFOOD_SCENARIOS
+    .filter((scenario) => isScenarioEnabled(scenario, options))
+    .map((scenario) => {
+      const classify = CLASSIFIER_BY_ID[scenario.classifier];
+      if (!classify) throw new Error(`unknown dogfood classifier: ${scenario.classifier}`);
+      return {
+        ...scenario,
+        command: buildScenarioCommand(context, scenario),
+        env: buildScenarioEnv(scenario, options),
+        classify,
+        relayHome,
+      };
+    });
+}
 
-  return steps.filter((step) => !options.probeOnly || step.name.startsWith("probe-"))
-    .map((step) => ({ ...step, relayHome }));
+function scenarioMetadata(scenario) {
+  return {
+    name: scenario.name,
+    adapter: scenario.adapter,
+    phase: scenario.phase,
+    category: scenario.category,
+    defaultEnabled: scenario.defaultEnabled === true,
+    requiresDispatchCanary: scenario.requiresDispatchCanary === true,
+    healthyPromotion: scenario.healthyPromotion === true,
+  };
+}
+
+function readinessExemptionMetadata(exemption) {
+  return {
+    adapter: exemption.adapter,
+    phase: exemption.phase,
+    reason: exemption.reason,
+  };
+}
+
+function buildCoverageMetadata() {
+  return {
+    scenarios: LIVE_DOGFOOD_SCENARIOS.map(scenarioMetadata),
+    readiness_exemptions: LIVE_DOGFOOD_READINESS_EXEMPTIONS.map(readinessExemptionMetadata),
+  };
 }
 
 function runDogfood(options = {}, deps = {}) {
@@ -482,13 +699,17 @@ function runDogfood(options = {}, deps = {}) {
     };
   });
 
-  return {
+  const result = {
     schema_version: 1,
     relay_home: relayHome,
     repo,
     temp_relay_home: !options.relayHome,
     outcomes: results,
   };
+  if (effectiveOptions.dryRun) {
+    result.coverage = buildCoverageMetadata();
+  }
+  return result;
 }
 
 function renderMarkdown(result) {
@@ -570,6 +791,8 @@ module.exports = {
   classifyProbeJson,
   classifyStandardJson,
   ensureRelayHome,
+  LIVE_DOGFOOD_READINESS_EXEMPTIONS,
+  LIVE_DOGFOOD_SCENARIOS,
   parseArgs,
   renderMarkdown,
   runDogfood,
