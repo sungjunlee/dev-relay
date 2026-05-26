@@ -522,7 +522,7 @@ function validateManifestPaths(paths, {
   const prunedRelayOwnedWorktreeForCleanup = acceptPrunedRelayOwned
     && !relayOwnedWorktree
     && (!worktreeGitCommonDir || !fs.existsSync(worktreeGitCommonDir))
-    && isRelayOwnedWorktreeShapeForCleanup({ relayWorktreeBase, worktree, repoRoot });
+    && isRelayOwnedWorktreeShapeForCleanup({ relayWorktreeBase, worktree, repoRoot: effectiveRepoRoot });
 
   if (!repoContainedWorktree && !relayOwnedWorktree && !prunedRelayOwnedWorktreeForCleanup) {
     throw new Error(
