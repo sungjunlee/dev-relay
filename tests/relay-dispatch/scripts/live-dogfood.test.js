@@ -14,6 +14,7 @@ const {
   classifyAntigravityPrimary,
   classifyHealthyDispatch,
   classifyProbeJson,
+  LIVE_DOGFOOD_SCENARIOS,
   parseArgs,
   renderMarkdown,
   runDogfood,
@@ -56,6 +57,59 @@ test("live dogfood uses temp RELAY_HOME by default and writes scoped policy", ()
   assert.deepEqual(policy.allowed_model_routes[0].reviewers, ["pi"]);
   assert.deepEqual(policy.allowed_model_routes[1].reviewers, ["opencode"]);
   assert.ok(!result.relay_home.startsWith(path.dirname(homeBefore)) || result.relay_home !== path.dirname(homeBefore));
+});
+
+test("live dogfood exposes explicit scenario metadata rows", () => {
+  assert.ok(Array.isArray(LIVE_DOGFOOD_SCENARIOS));
+  const rows = new Map(LIVE_DOGFOOD_SCENARIOS.map((scenario) => [scenario.name, scenario]));
+
+  for (const [name, adapter, phase, category] of [
+    ["probe-pi", "pi", "probe", "probe"],
+    ["probe-opencode", "opencode", "probe", "probe"],
+    ["probe-antigravity", "antigravity", "probe", "probe"],
+    ["opencode-advisory", "opencode", "advisory_review", "healthy-review"],
+    ["pi-primary", "pi", "primary_review", "healthy-review"],
+    ["antigravity-primary", "antigravity", "primary_review", "healthy-review"],
+    ["antigravity-primary-fail-safe-timeout", "antigravity", "primary_review", "fail-safe"],
+    ["antigravity-dispatch-fail-safe-noop", "antigravity", "dispatch", "fail-safe"],
+    ["pi-dispatch-canary", "pi", "dispatch", "healthy-dispatch"],
+    ["opencode-dispatch-canary", "opencode", "dispatch", "healthy-dispatch"],
+    ["antigravity-dispatch-canary", "antigravity", "dispatch", "healthy-dispatch"],
+  ]) {
+    const scenario = rows.get(name);
+    assert.ok(scenario, `${name} scenario row`);
+    assert.equal(scenario.adapter, adapter);
+    assert.equal(scenario.phase, phase);
+    assert.equal(scenario.category, category);
+  }
+
+  assert.equal(rows.get("antigravity-primary-fail-safe-timeout").healthyPromotion, false);
+  assert.equal(rows.get("antigravity-dispatch-fail-safe-noop").healthyPromotion, false);
+  assert.equal(rows.get("pi-dispatch-canary").healthyPromotion, true);
+  assert.equal(rows.get("opencode-dispatch-canary").healthyPromotion, true);
+  assert.equal(rows.get("antigravity-dispatch-canary").healthyPromotion, true);
+});
+
+test("live dogfood dry-run plans default non-dispatch scenarios without invoking CLIs", () => {
+  const repo = tempDir("relay-live-dogfood-repo-");
+  const calls = [];
+  const result = runDogfood({
+    repo,
+    dryRun: true,
+  }, {
+    spawnSync: (...args) => {
+      calls.push(args);
+      return jsonResult({});
+    },
+  });
+
+  assert.equal(calls.length, 0);
+  assert.deepEqual(result.outcomes.map((step) => step.name), LIVE_DOGFOOD_SCENARIOS
+    .filter((scenario) => scenario.defaultEnabled)
+    .map((scenario) => scenario.name));
+  assert.ok(result.outcomes.some((step) => step.name === "antigravity-primary-fail-safe-timeout"));
+  assert.ok(result.outcomes.some((step) => step.name === "antigravity-dispatch-fail-safe-noop"));
+  assert.ok(result.outcomes.every((step) => step.outcome === OUTCOMES.NOT_RUN));
 });
 
 test("live dogfood classifies mocked command outcomes and preserves markdown distinctions", () => {

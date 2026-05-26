@@ -8,6 +8,10 @@ const {
   ADAPTER_PHASES,
   listAgentAdapters,
 } = require("../../../skills/relay-dispatch/scripts/agent-adapters");
+const {
+  LIVE_DOGFOOD_READINESS_EXEMPTIONS,
+  LIVE_DOGFOOD_SCENARIOS,
+} = require("../../../skills/relay-dispatch/scripts/live-dogfood");
 
 const ROOT = path.join(__dirname, "..", "..", "..");
 const DISPATCH_SCRIPT = path.join(ROOT, "skills", "relay-dispatch", "scripts", "dispatch.js");
@@ -19,6 +23,12 @@ const READINESS_STATUSES = Object.freeze([
   "fail-safe-experimental",
   "blocked",
   "not-supported",
+]);
+const LIVE_DOGFOOD_ADAPTERS = Object.freeze(["opencode", "pi", "antigravity"]);
+const READINESS_ROLE_COLUMNS = Object.freeze([
+  [1, "dispatch", "dispatch"],
+  [2, "primary_review", "primary review"],
+  [3, "advisory_review", "advisory review"],
 ]);
 
 function readRepoFile(relativePath) {
@@ -264,6 +274,39 @@ test("operator guide separates implementation parity from live promotion criteri
   for (const adapter of ["pi", "opencode", "antigravity"]) {
     const row = rowsToText(operatorReadinessMatrix().rows.get(adapter));
     assert.match(row, /Live:\s*`(?!stable`)/i, `${adapter} live readiness is not published as stable without promotion evidence`);
+  }
+});
+
+test("live dogfood metadata covers readiness matrix roles or explains exemptions", () => {
+  const { rows } = operatorReadinessMatrix();
+  const healthyScenarios = new Set(LIVE_DOGFOOD_SCENARIOS
+    .filter((scenario) => scenario.healthyPromotion)
+    .map((scenario) => `${scenario.adapter}:${scenario.phase}`));
+  const exemptions = new Map(LIVE_DOGFOOD_READINESS_EXEMPTIONS
+    .map((exemption) => [`${exemption.adapter}:${exemption.phase}`, exemption]));
+
+  for (const adapter of LIVE_DOGFOOD_ADAPTERS) {
+    const row = rows.get(adapter);
+    assert.ok(row, `${adapter} readiness row`);
+
+    for (const [index, phase, label] of READINESS_ROLE_COLUMNS) {
+      const pair = readinessPair(row[index]);
+      if (pair.implementation === "not-supported" && pair.live === "not-supported") {
+        continue;
+      }
+
+      const key = `${adapter}:${phase}`;
+      if (healthyScenarios.has(key)) {
+        continue;
+      }
+
+      const exemption = exemptions.get(key);
+      assert.ok(exemption, `${key} must have a healthy dogfood scenario or explicit exemption`);
+      assert.equal(exemption.adapter, adapter);
+      assert.equal(exemption.phase, phase);
+      assert.ok(exemption.reason, `${key} exemption reason`);
+      assert.match(rowsToText(row), exemption.readinessTextPattern, `${key} exemption tied to readiness wording for ${label}`);
+    }
   }
 });
 
