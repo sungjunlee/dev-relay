@@ -634,6 +634,33 @@ function buildSteps({ repo, relayHome, prompts, options }) {
     });
 }
 
+function scenarioMetadata(scenario) {
+  return {
+    name: scenario.name,
+    adapter: scenario.adapter,
+    phase: scenario.phase,
+    category: scenario.category,
+    defaultEnabled: scenario.defaultEnabled === true,
+    requiresDispatchCanary: scenario.requiresDispatchCanary === true,
+    healthyPromotion: scenario.healthyPromotion === true,
+  };
+}
+
+function readinessExemptionMetadata(exemption) {
+  return {
+    adapter: exemption.adapter,
+    phase: exemption.phase,
+    reason: exemption.reason,
+  };
+}
+
+function buildCoverageMetadata() {
+  return {
+    scenarios: LIVE_DOGFOOD_SCENARIOS.map(scenarioMetadata),
+    readiness_exemptions: LIVE_DOGFOOD_READINESS_EXEMPTIONS.map(readinessExemptionMetadata),
+  };
+}
+
 function runDogfood(options = {}, deps = {}) {
   const spawnImpl = deps.spawnSync || spawnSync;
   const repo = path.resolve(options.repo || ".");
@@ -672,13 +699,17 @@ function runDogfood(options = {}, deps = {}) {
     };
   });
 
-  return {
+  const result = {
     schema_version: 1,
     relay_home: relayHome,
     repo,
     temp_relay_home: !options.relayHome,
     outcomes: results,
   };
+  if (effectiveOptions.dryRun) {
+    result.coverage = buildCoverageMetadata();
+  }
+  return result;
 }
 
 function renderMarkdown(result) {

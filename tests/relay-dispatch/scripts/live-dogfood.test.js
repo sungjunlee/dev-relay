@@ -110,6 +110,11 @@ test("live dogfood dry-run plans default non-dispatch scenarios without invoking
   assert.ok(result.outcomes.some((step) => step.name === "antigravity-primary-fail-safe-timeout"));
   assert.ok(result.outcomes.some((step) => step.name === "antigravity-dispatch-fail-safe-noop"));
   assert.ok(result.outcomes.every((step) => step.outcome === OUTCOMES.NOT_RUN));
+  assert.deepEqual(result.coverage.scenarios.map((scenario) => scenario.name), LIVE_DOGFOOD_SCENARIOS.map((scenario) => scenario.name));
+  assert.ok(result.coverage.readiness_exemptions.some((exemption) => (
+    exemption.adapter === "opencode" && exemption.phase === "primary_review"
+  )));
+  assert.ok(result.coverage.scenarios.every((scenario) => typeof scenario.healthyPromotion === "boolean"));
 });
 
 test("live dogfood classifies mocked command outcomes and preserves markdown distinctions", () => {
