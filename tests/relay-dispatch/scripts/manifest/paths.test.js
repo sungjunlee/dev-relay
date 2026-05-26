@@ -48,6 +48,36 @@ test("manifest/paths validateManifestPaths rejects manifest-path mismatches", ()
   assert.match(getManifestPath(repoRoot, runId), /issue-188-20260418091011123-a1b2c3d4\.md$/);
 });
 
+test("manifest/paths validateManifestPaths canonicalizes same-git-common-dir repo roots", () => {
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-paths-canonical-repo-"));
+  initGitRepo(repoRoot);
+  fs.writeFileSync(path.join(repoRoot, "README.md"), "base\n", "utf-8");
+  execFileSync("git", ["add", "README.md"], { cwd: repoRoot, stdio: "pipe" });
+  execFileSync("git", ["commit", "-m", "init"], { cwd: repoRoot, stdio: "pipe" });
+
+  const linkedRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-paths-linked-root-"));
+  execFileSync("git", ["worktree", "add", linkedRoot, "-b", "linked-root"], {
+    cwd: repoRoot,
+    stdio: "pipe",
+  });
+  const runId = "issue-626-20260526131500000-a1b2c3d4";
+  const manifestPath = getManifestPath(repoRoot, runId);
+
+  const result = validateManifestPaths({
+    repo_root: linkedRoot,
+    worktree: path.join(repoRoot, "wt", "issue-626"),
+  }, {
+    expectedRepoRoot: repoRoot,
+    manifestPath,
+    runId,
+    caller: "manifest/paths.test same common dir",
+  });
+
+  assert.equal(result.repoRoot, path.resolve(repoRoot));
+  assert.equal(result.worktreeLocation, "repo_root");
+});
+
 test("manifest/paths cleanup mode accepts pruned and missing relay-owned worktrees", () => {
   process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-paths-cleanup-repo-"));

@@ -287,6 +287,37 @@ test("happy path commits dirty worktree, pushes, opens PR, stamps manifest, and 
   assert.equal(readJsonLines(fixture.ghLogPath).filter((argv) => argv[0] === "pr" && argv[1] === "create").length, 1);
 });
 
+test("recover-commit canonicalizes manifest repo_root when it shares the expected git common dir", () => {
+  const fixture = setupRepo({ dirty: true });
+  const linkedRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-recover-linked-root-"));
+  execFileSync("git", ["worktree", "add", linkedRoot, "-b", "equivalent-root-626"], {
+    cwd: fixture.repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+  });
+  const beforeManifest = readManifest(fixture.manifestPath);
+  writeManifest(fixture.manifestPath, {
+    ...beforeManifest.data,
+    paths: {
+      ...beforeManifest.data.paths,
+      repo_root: linkedRoot,
+    },
+  }, beforeManifest.body);
+
+  const result = runRecover(fixture, ["--reason", "executor completed before commit", "--json"]);
+
+  assert.equal(result.status, 0, result.stderr);
+  const parsed = JSON.parse(result.stdout);
+  assert.equal(parsed.status, "recovered");
+  assert.equal(parsed.prNumber, 281);
+
+  const manifest = readManifest(fixture.manifestPath).data;
+  assert.equal(manifest.paths.repo_root, fixture.repoRoot);
+  assert.equal(manifest.paths.worktree, fixture.worktreePath);
+  assert.equal(manifest.git.pr_number, 281);
+  assert.ok(readRunEvents(fixture.repoRoot, fixture.runId).some((entry) => entry.event === "recover_commit"));
+});
+
 test("default PR title uses manifest issue title when available", () => {
   const fixture = setupRepo({ dirty: true });
   const result = runRecover(fixture, ["--reason", "executor completed before commit", "--json"]);

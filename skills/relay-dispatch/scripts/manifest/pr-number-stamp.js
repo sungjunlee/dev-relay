@@ -119,12 +119,24 @@ function stampPrNumberUnderLock(manifestRecord, numericPrNumber, options = {}) {
       return freshRecord;
     }
 
+    const freshValidatedPaths = validateManifestPaths(freshRecord.data?.paths, {
+      expectedRepoRoot: repoRoot,
+      manifestPath: manifestRecord.manifestPath,
+      runId: freshRecord.data?.run_id,
+      caller,
+    });
+
     if (freshRecord.data?.git?.pr_number !== undefined && freshRecord.data?.git?.pr_number !== null) {
       return freshRecord;
     }
 
     const updatedData = {
       ...freshRecord.data,
+      paths: {
+        ...(freshRecord.data?.paths || {}),
+        repo_root: freshValidatedPaths.repoRoot,
+        worktree: freshValidatedPaths.worktree,
+      },
       git: {
         ...(freshRecord.data?.git || {}),
         pr_number: numericPrNumber,

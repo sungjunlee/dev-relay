@@ -418,6 +418,13 @@ function getWorktreeGitCommonDir(worktreePath) {
   }
 }
 
+function sameGitCommonDir(leftPath, rightPath) {
+  const leftCommonDir = getWorktreeGitCommonDir(leftPath);
+  const rightCommonDir = getWorktreeGitCommonDir(rightPath);
+  if (!leftCommonDir || !rightCommonDir) return false;
+  return leftCommonDir === rightCommonDir || sameFilesystemLocation(leftCommonDir, rightCommonDir);
+}
+
 function validateManifestPaths(paths, {
   expectedRepoRoot,
   manifestPath,
@@ -439,6 +446,11 @@ function validateManifestPaths(paths, {
   const normalizedExpectedRepoRoot = typeof expectedRepoRoot === "string" && expectedRepoRoot.trim() !== ""
     ? path.resolve(expectedRepoRoot)
     : null;
+  const repoRootEquivalentToExpected = normalizedExpectedRepoRoot
+    && repoRoot !== normalizedExpectedRepoRoot
+    && !sameFilesystemLocation(repoRoot, normalizedExpectedRepoRoot)
+    && sameGitCommonDir(repoRoot, normalizedExpectedRepoRoot);
+  const effectiveRepoRoot = repoRootEquivalentToExpected ? normalizedExpectedRepoRoot : repoRoot;
   const normalizedManifestPath = typeof manifestPath === "string" && manifestPath.trim() !== ""
     ? path.resolve(manifestPath)
     : null;
@@ -452,6 +464,7 @@ function validateManifestPaths(paths, {
     normalizedExpectedRepoRoot
     && repoRoot !== normalizedExpectedRepoRoot
     && !sameFilesystemLocation(repoRoot, normalizedExpectedRepoRoot)
+    && !repoRootEquivalentToExpected
   ) {
     throw new Error(
       `${caller}: manifest paths.repo_root ${JSON.stringify(repoRoot)} does not match the expected repo root ` +
@@ -460,10 +473,10 @@ function validateManifestPaths(paths, {
   }
 
   if (normalizedManifestPath) {
-    const expectedManifestPath = getManifestPath(repoRoot, normalizedRunId);
+    const expectedManifestPath = getManifestPath(effectiveRepoRoot, normalizedRunId);
     if (normalizedManifestPath !== expectedManifestPath) {
       throw new Error(
-        `${caller}: manifest paths.repo_root ${JSON.stringify(repoRoot)} does not match the manifest storage path ` +
+        `${caller}: manifest paths.repo_root ${JSON.stringify(effectiveRepoRoot)} does not match the manifest storage path ` +
         `${JSON.stringify(normalizedManifestPath)} for run ${JSON.stringify(normalizedRunId)}. ` +
         `Expected ${JSON.stringify(expectedManifestPath)}.`
       );
@@ -481,7 +494,7 @@ function validateManifestPaths(paths, {
       throw new Error(`${caller}: manifest paths.worktree must be set`);
     }
     return {
-      repoRoot,
+      repoRoot: effectiveRepoRoot,
       worktree: null,
       worktreeLocation: "missing",
       relayWorktreeBase: getRelayWorktreeBase(),
@@ -490,10 +503,10 @@ function validateManifestPaths(paths, {
 
   const worktree = path.resolve(worktreeRaw);
   const relayWorktreeBase = getRelayWorktreeBase();
-  const repoContainedWorktree = isPathContainedWithin(repoRoot, worktree);
+  const repoContainedWorktree = isPathContainedWithin(effectiveRepoRoot, worktree);
   const relayOwnedWorktreeCandidate = isPathContainedWithin(relayWorktreeBase, worktree)
-    && path.basename(worktree) === path.basename(repoRoot);
-  const expectedGitCommonDir = getWorktreeGitCommonDir(repoRoot) || path.join(repoRoot, ".git");
+    && path.basename(worktree) === path.basename(effectiveRepoRoot);
+  const expectedGitCommonDir = getWorktreeGitCommonDir(effectiveRepoRoot) || path.join(effectiveRepoRoot, ".git");
   const worktreeGitCommonDir = fs.existsSync(worktree)
     ? getWorktreeGitCommonDir(worktree)
     : null;
@@ -514,13 +527,13 @@ function validateManifestPaths(paths, {
   if (!repoContainedWorktree && !relayOwnedWorktree && !prunedRelayOwnedWorktreeForCleanup) {
     throw new Error(
       `${caller}: manifest paths.worktree ${JSON.stringify(worktree)} is not contained under the expected repo root ` +
-      `${JSON.stringify(repoRoot)} and is not a relay-owned worktree under ${JSON.stringify(relayWorktreeBase)} ` +
-      `that is bound to ${JSON.stringify(expectedGitCommonDir)} for repo ${JSON.stringify(path.basename(repoRoot))}.`
+      `${JSON.stringify(effectiveRepoRoot)} and is not a relay-owned worktree under ${JSON.stringify(relayWorktreeBase)} ` +
+      `that is bound to ${JSON.stringify(expectedGitCommonDir)} for repo ${JSON.stringify(path.basename(effectiveRepoRoot))}.`
     );
   }
 
   return {
-    repoRoot,
+    repoRoot: effectiveRepoRoot,
     worktree,
     worktreeLocation: repoContainedWorktree ? "repo_root" : "relay_worktree",
     prunedRelayOwnedForCleanup: prunedRelayOwnedWorktreeForCleanup,
