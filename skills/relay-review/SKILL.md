@@ -37,7 +37,6 @@ Reviews MUST run in a fresh context — no prior planning, dispatch, or conversa
 - Claude adapter: `invoke-reviewer-claude.js` passes `--bare --no-session-persistence`; Pi adapter passes `--no-session --tools read,grep,find,ls`; Antigravity adapter invokes the `agy` CLI with `--prompt ... --print-timeout ... --sandbox`.
 - Manual inline review: start a new session; do not continue from dispatch.
 - Other fallback: prefix the prompt with "You are reviewing code you did NOT write. You have no context about why it was written this way."
-
 ## Setup: Establish the anchor
 
 1. Get the PR diff and Done Criteria (this runs in a fresh context — fetch everything needed). Runner resolution order and issue inference details are in `references/runner-notes.md`.
@@ -67,7 +66,6 @@ Supported built-in adapters: `--reviewer codex`, `--reviewer claude`, `--reviewe
 Notes: `codex` uses read-only structured output; `opencode` uses prompt-only read-only plus dirty-worktree checks; `pi` uses a read/grep/find/ls allowlist plus dirty-worktree checks; `antigravity` targets the `agy` CLI, not GUI/IDE/Desktop flows, and relies on `--sandbox` plus dirty-worktree checks. `claude --bare` needs `ANTHROPIC_API_KEY` or `claude login --api-key`.
 Model precedence is `--reviewer-model` -> `manifest.model_hints.review` -> reviewer default. Examples: `review-runner.js --repo . --run-id "$RUN_ID" --pr "$PR_NUM" --reviewer opencode --reviewer-model opencode-go/deepseek-v4-pro --json`; `review-runner.js --repo . --run-id "$RUN_ID" --pr "$PR_NUM" --reviewer pi --reviewer-model openai/gpt-5 --json`; `review-runner.js --repo . --run-id "$RUN_ID" --pr "$PR_NUM" --reviewer antigravity --reviewer-model google/antigravity-cli --json`.
 The adapter capability matrix and checklist are in `../relay-dispatch/references/agent-adapter-platform.md`.
-
 Optional advisory path: add an opencode, Pi, or Antigravity blind-spot lane alongside the primary reviewer:
 ```bash
 node "${RELAY_SKILL_ROOT:-skills}/relay-review/scripts/review-runner.js" --repo . --run-id "$RUN_ID" --pr "$PR_NUM" --reviewer codex --advisory-reviewer opencode --advisory-profile blindspot --json

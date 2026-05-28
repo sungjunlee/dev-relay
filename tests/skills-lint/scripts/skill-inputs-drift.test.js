@@ -53,3 +53,20 @@ test("RELAY_SKILL_ROOT script references resolve to files", () => {
     }
   });
 });
+
+test("installed skill files do not link to non-distributed root docs", () => {
+  const disallowedPatterns = [
+    { pattern: /\bdocs\//, label: "docs/" },
+    { pattern: /\.\.\/\.\.\/references\//, label: "../../references/" },
+  ];
+
+  readTargetSkillFiles().forEach(({ relativePath, content }) => {
+    disallowedPatterns.forEach(({ pattern, label }) => {
+      assert.equal(
+        pattern.test(content),
+        false,
+        `${relativePath} must not reference non-distributed ${label} paths from installed SKILL.md`,
+      );
+    });
+  });
+});
