@@ -82,24 +82,11 @@ All CLI flags are registered with an explicit `parsed` or `verbatim` read mode. 
 | `--dry-run` | Show plan without executing |
 | `--json` | Structured JSON output (for background dispatch) |
 
-Manifest layout (`~/.relay/runs/<repo-slug>/<run-id>.md` + `events.jsonl`), `model_hints` precedence, and readiness-source linkage (`source.request_id`, `source.leaf_id`, `anchor.done_criteria_path`) are documented in `../../references/architecture.md`.
+Manifest layout is `~/.relay/runs/<repo-slug>/<run-id>.md` plus `events.jsonl`; readiness linkage is persisted as `source.request_id`, `source.leaf_id`, and `anchor.done_criteria_path`. Model precedence and route-policy behavior are documented in `references/model-routing.md`.
 
-### Executor model config
+### Executor model routing
 
-Bundled executor model recommendations live in `references/executor-models.json` so skill installs carry a usable default. Operators can override without editing the skill by writing `~/.relay/executors.json`:
-
-```json
-{
-  "executors": {
-    "opencode": {
-      "default_model": "opencode-go/deepseek-v4-pro",
-      "candidate_models": ["opencode-go/deepseek-v4-pro"]
-    }
-  }
-}
-```
-
-Precedence for dispatch model selection is: `--model` → manifest `model_hints.dispatch` → `--model-hints dispatch=...` → executor model config.
+For precedence, managed CLI defaults, unmanaged route requirements, bundled defaults, and optional `~/.relay/executors.json` overrides, see `references/model-routing.md`. Short version: explicit `--model` wins; `model_hints` are hints, not approval; unmanaged executors need allowed provider/model routes.
 
 ### Timeout guidance
 
