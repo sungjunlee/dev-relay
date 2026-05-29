@@ -1,5 +1,7 @@
 # Relay Lifecycle Manifest Design
 
+> **Status:** historical design draft (2026-04). For the current contract — manifest paths under `~/.relay/runs/<repo-slug>/`, state machine, events — use [references/architecture.md](../references/architecture.md). This doc predates the home-directory layout and is kept for design lineage only.
+>
 > Drafted 2026-04-02 as the foundation for #34, #35, #36, #37, #38, and #39.
 >
 > Updated 2026-04-03 for the same-run control loop wave (#41-#46): `run_id` is now the canonical identity, every run gets an append-only `events.jsonl`, review records `last_reviewed_sha`, merge requires a fresh review at current HEAD, and stale non-terminal runs have an explicit close path.

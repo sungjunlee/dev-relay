@@ -79,7 +79,7 @@ The command produced no output and exited `1`, which is the expected zero-match 
 
 ## Line-Number Drift Discipline
 
-> All pinned line numbers in this doc and in sibling `docs/issue-*.md` files were regenerated from the post-r3 tree as the last edit of the session. Sibling docs touched for line-number refresh: `docs/issue-174-resolver-hardening.md`, `docs/issue-177-fail-closed-state-validation.md`, `docs/issue-166-gate-check-stamping-concurrency.md`, `docs/issue-176-cleanup-worktrees-raw-runid.md`.
+> All pinned line numbers in this doc and in sibling `docs/archive/issues/issue-*.md` files were regenerated from the post-r3 tree as the last edit of the session. Sibling docs touched for line-number refresh: `issue-174-resolver-hardening.md`, `issue-177-fail-closed-state-validation.md`, `issue-176-cleanup-worktrees-raw-runid.md`. Issues `#166`–`#198` Epic A/B mirrors were later distilled into `docs/decisions/` and removed.
 
 ## Scope Boundaries
 

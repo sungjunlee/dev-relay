@@ -1,6 +1,6 @@
 # Relay Resolver Audit History
 
-This file carries the resolver's iteration history, selector audit table, and issue/meta-rule ledger so `skills/relay-dispatch/scripts/relay-resolver.js` can keep only the load-bearing invariants inline.
+This file carries the resolver's iteration history, selector audit table, and issue/meta-rule ledger so `skills/relay-dispatch/scripts/relay-resolver.js` can keep only the load-bearing invariants inline. Related fail-closed meta-rules: [rubric-fail-closed-history.md](./rubric-fail-closed-history.md). Other distilled ADRs: [decisions/README.md](./decisions/README.md).
 
 ## Selector x Call-Site Audit Table
 
@@ -26,7 +26,7 @@ Fail-closed state-validation meta-rule 7 (`docs/rubric-fail-closed-history.md`):
 | `filterByBranchPrFallback` | `resolveManifestRecord:375 retry fallback` | fail-closed via derived non-terminal whitelist (meta-rule 7) + dispatched-only whitelist | #168/#177 |
 | `findManifestByRunId` | `resolveManifestRecord:304 explicit --run-id` | state-blind by design | n/a |
 
-See `docs/issue-177-fail-closed-state-validation.md` for consumer audit, grep proof, and the iteration-6 pattern-break rationale.
+See `docs/archive/issues/issue-177-fail-closed-state-validation.md` for consumer audit, grep proof, and the iteration-6 pattern-break rationale.
 
 ## Per-Function Meta-Rule History
 

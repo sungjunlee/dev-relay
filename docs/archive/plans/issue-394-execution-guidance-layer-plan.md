@@ -1,3 +1,5 @@
+> **Status:** archived dispatch plan (Epic #394 closed 2026-05). Runtime guidance: [skills/relay-plan/references/guidance-packs.md](../../../skills/relay-plan/references/guidance-packs.md).
+
 # Issue #394 - Execution Guidance Layer for Relay Dispatch
 
 Planning note for Epic #394 and child issues #395-#400. This document captures the design reasoning so each implementation issue can reference the same source instead of reconstructing the prompt/workflow research from scratch.

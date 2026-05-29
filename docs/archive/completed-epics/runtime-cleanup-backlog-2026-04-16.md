@@ -1,5 +1,7 @@
 # Post-Phase-0 Runtime Cleanup Backlog
 
+> **Status:** completed 2026-04/05. Prerequisite bucket (#185, #163, #160, #161, #151) and Epics #192 / #193 (#187–#191) are closed. Kept as execution snapshot only; do not treat open items below as current backlog.
+
 This document compresses the repo-audit output from the `simplify` and `plan-eng-review` passes into a small next-wave backlog. The goal is not "refactor everything." The goal is to remove non-core complexity after the current safety tail closes, without weakening relay's lifecycle guarantees.
 
 ## Shape

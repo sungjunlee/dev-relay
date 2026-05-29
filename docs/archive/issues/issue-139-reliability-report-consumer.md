@@ -2,7 +2,7 @@
 
 ## Summary
 
-#139 closes Phase 0.2 of `/Users/sjlee/workspace/active/harness-stack/dev-relay/docs/agentic-patterns-adoption.md` by making [`skills/relay-plan/SKILL.md`](../skills/relay-plan/SKILL.md) consume `reliability-report.js --json` before rubric design, surface historical signal inside the Rubric Quality Card, and document a named fallback when the producer is unavailable. The change is informational only per AC5: the rubric structure, grade rules, and dispatch eligibility remain unchanged.
+#139 closes Phase 0.2 of `/Users/sjlee/workspace/active/harness-stack/dev-relay/docs/agentic-patterns-adoption.md` by making [`skills/relay-plan/SKILL.md`](../../../skills/relay-plan/SKILL.md) consume `reliability-report.js --json` before rubric design, surface historical signal inside the Rubric Quality Card, and document a named fallback when the producer is unavailable. The change is informational only per AC5: the rubric structure, grade rules, and dispatch eligibility remain unchanged.
 
 ## Pattern-Break Rationale
 

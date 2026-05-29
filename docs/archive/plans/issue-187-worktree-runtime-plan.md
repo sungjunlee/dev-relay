@@ -1,5 +1,7 @@
 # Issue #187 — Consolidate worktree lifecycle under one shared runtime
 
+> **Status:** archived dispatch plan (#187 closed 2026-04). Distilled: [ADR-0003 worktree runtime](../../decisions/0003-worktree-runtime-single-owner.md).
+
 Draft plan for the first item of Epic #192 (Runtime Boundary Cleanup). Unblocked as of 2026-04-18: all five prerequisite-bucket issues (#185, #163, #160, #161, #151) have merged.
 
 This document exists so the next-session dispatch has a concrete starting rubric instead of being re-planned from scratch.
@@ -91,7 +93,7 @@ Size M, 6 factors (4 contract + 2 quality), matching Batch 1.6 discipline.
 **6. Out-of-scope discipline + docs mirror**
 - PR body explicitly defers: `relay-manifest.js` split (#188), `review-runner.js` decomposition (#189), grandfather retirement (#190), resolver/docs hygiene (#191).
 - PR body explicitly does NOT touch `cleanup-worktrees.js` (separate lifecycle; tracked by #191's CLI hygiene scope when that starts).
-- Docs mirror at `docs/issue-187-worktree-runtime.md` with: summary, 10-row audit table (every affected call site before/after), verbatim self-review `grep -n` output pinned to the FINAL post-fix tree, and deferred-issue inventory matching this plan's out-of-scope list.
+- Post-merge distill: [ADR-0003](../../decisions/0003-worktree-runtime-single-owner.md) (mirror removed).
 - `Line-number drift discipline` section states the executor must regenerate the audit-table line numbers from source as the last edit of each round (per #174 r4 / #177 r3 meta-rule).
 
 ## Trust-model audit (per #210 rubric-trust-model.md)
