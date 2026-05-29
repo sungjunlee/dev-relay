@@ -74,12 +74,11 @@ issue:
 git:
   base_branch: main
   working_branch: issue-42
-  pr_number: 128                 # mirrored from github.pr_number for review/merge consumers
+  pr_number: 128                 # dispatch-owned publication anchor (#198); review/merge consumers read this today
   head_sha: abc123def
 
 github:
-  pr_number: 128                 # dispatch-owned publication anchor (#198)
-  pr_created_by_orchestrator: true
+  pr_created_by_orchestrator: true   # set when dispatch.js opened or reused the PR
 
 roles:
   orchestrator: codex           # who drives the lifecycle
@@ -159,7 +158,7 @@ bootstrap_exempt:
 | `anchor.*` | Immutable review scope — prevents drift across rounds |
 | `review.last_reviewed_sha` | Gate-check blocks merge if HEAD has advanced past this |
 | `review.last_reviewer` | Tracks the acting reviewer for the latest round without mutating `roles.reviewer`; escalated same-adapter retry requires an `--independent-review-reason`; analytics must still use `review_apply.reviewer` as the round-level source of truth |
-| `github.pr_number` / `git.pr_number` | Orchestrator-owned push + PR creation writes `github.*` first; `git.pr_number` mirrors for legacy consumers. See [ADR-0001](../docs/decisions/0001-orchestrator-owns-publication.md) |
+| `git.pr_number` / `github.pr_created_by_orchestrator` | Orchestrator-owned push + PR creation persists `git.pr_number` for review/merge consumers; `github.pr_created_by_orchestrator` records whether dispatch opened the PR. See [ADR-0001](../docs/decisions/0001-orchestrator-owns-publication.md) |
 | `bootstrap_exempt.*` | Optional operator-declared reconciliation for runs that predate an artifact writer but are closed after that writer lands |
 
 ### Adapter Capability vs Route Policy
@@ -267,7 +266,7 @@ Each round produces files under `~/.relay/runs/<repo-slug>/<run-id>/`:
 The PR is the handoff boundary between executor and review. After #198, publication is orchestrator-owned, not executor-owned:
 
 - **Executor:** edit and commit inside the retained worktree only.
-- **Orchestrator (`dispatch.js`):** push branch with operator shell credentials, open or reuse PR, persist `github.pr_number` (and mirror to `git.pr_number`), then transition toward review.
+- **Orchestrator (`dispatch.js`):** push branch with operator shell credentials, open or reuse PR, persist `git.pr_number` (and `github.pr_created_by_orchestrator` when applicable), then transition toward review.
 - **Failure:** publication errors escalate the run with `push_or_pr_failed:` — no silent continuation without a PR.
 
 Worktree lifecycle is centralized in `worktree-runtime.js` ([ADR-0003](../docs/decisions/0003-worktree-runtime-single-owner.md)). Manifest logic uses slice modules behind a thin facade ([ADR-0002](../docs/decisions/0002-manifest-slice-ownership.md)). Durable refactor decisions live under [docs/decisions/](../docs/decisions/README.md).
