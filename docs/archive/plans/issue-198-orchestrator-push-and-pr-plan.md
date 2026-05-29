@@ -1,5 +1,7 @@
 # Issue #198 — Move branch push + PR creation from executor to orchestrator
 
+> **Status:** archived dispatch plan (#198 closed 2026-04). Distilled: [ADR-0001 orchestrator publication](../../decisions/0001-orchestrator-owns-publication.md).
+
 Feature addition (not a refactor). `dispatch.js` currently relies on the executor's sandbox to run `git push` + `gh pr create`, which fails on GHE / self-hosted GitHub. Move those two calls into the outer orchestrator shell where the operator's `gh` auth already works.
 
 This also retires the "executor did not open PR" failure class we observed on #188 round 1 — that observation went into `memory/feedback_executor_did_not_open_pr.md`, but the right long-term fix is to stop depending on the executor for this step.
@@ -139,7 +141,7 @@ This is a feature addition, not a gate refactor. No auth boundary crosses. No by
 
 **7. Docs mirror + changelog**
 
-- `docs/issue-198-orchestrator-push-and-pr.md` updated post-merge with:
+- Post-merge distill: [ADR-0001 orchestrator publication](../../decisions/0001-orchestrator-owns-publication.md) (mirror removed).
   - What moved (executor → orchestrator).
   - How the `resultPreview` → PR body mapping works.
   - Migration note for non-default-host operators (no more manual push recovery).
@@ -178,7 +180,7 @@ Not triggered. This task does not cross an auth boundary:
 5. Remove executor-facing PR creation prompts from `SKILL.md` / any template files.
 6. Add 6+ new tests in `dispatch.test.js` for the four edge cases.
 7. Full suite green.
-8. Docs mirror `docs/issue-198-orchestrator-push-and-pr.md`.
+8. Docs distill [ADR-0001](../../decisions/0001-orchestrator-owns-publication.md).
 9. Commit + push + open PR (the orchestrator — that's us, since this PR is the one that introduces the new behavior).
 
 ## Expected difficulties

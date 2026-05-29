@@ -37,7 +37,7 @@ Pattern works across mechanical renames, schema additions, new-skill builds, kin
 
 A `forbidden_zones` block lists glob patterns that are off-limits. Be explicit. Don't trust codex to infer. Categories that recur across dispatches:
 
-- **Universal hands-off**: `backlog/**`, `**/*.cache/**`, `docs/issue-*.md`, `docs/*-2026-*.md`, `docs/*-2025-*.md`, `.github/workflows/**` — operational artifacts, point-in-time snapshots, CI/CD pipelines.
+- **Universal hands-off**: `backlog/**`, `**/*.cache/**`, `docs/archive/issues/issue-*.md`, `docs/*-2026-*.md`, `docs/*-2025-*.md`, `.github/workflows/**` — operational artifacts, point-in-time snapshots, CI/CD pipelines.
 - **Frozen prior-PR contracts**: every helper file shipped by a prior PR that this dispatch only consumes (e.g., `skills/relay-dispatch/scripts/sidecar-store.js` after #372 ships its 5-field schema).
 - **Sibling files in the same skill that aren't this PR's target**: when extending one module of a skill, list every other production file in the skill explicitly. Globs like `skills/<skill>/**` over-restrict; enumerate what stays read-only.
 - **Test files in non-target areas**: tests for other skills should be off-limits even when production code changes ripple.
@@ -72,7 +72,7 @@ When the task extended `reliability-report.js` to add a `sidecar_insights` block
 forbidden_zones:
   - "backlog/**"
   - "**/*.cache/**"
-  - "docs/issue-*.md"
+  - "docs/archive/issues/issue-*.md"
   - "docs/*-2026-*.md"
   - "docs/*-2025-*.md"
   - ".github/workflows/**"
@@ -105,7 +105,7 @@ See `~/.claude/projects/<repo-slug>/memory/feedback_dc_overspec_frozen_helper.md
 
 ### When to skip
 
-Forbidden zones add overhead. For the smallest mechanical renames (one-file edits, no historical artifacts) where every production file in the repo is plausibly in the allowed scope, the universal hands-off list (`backlog/`, `*.cache/`, `docs/issue-*.md`, `.github/workflows/`) suffices. For anything larger or anything spanning more than two skills, enumerate explicitly.
+Forbidden zones add overhead. For the smallest mechanical renames (one-file edits, no historical artifacts) where every production file in the repo is plausibly in the allowed scope, the universal hands-off list (`backlog/`, `*.cache/`, `docs/archive/issues/issue-*.md`, `.github/workflows/`) suffices. For anything larger or anything spanning more than two skills, enumerate explicitly.
 
 ### See also
 
@@ -124,7 +124,7 @@ Three dogfood data points (rule of three met), one root cause at three different
 
 | Date | Issue | Layer | Failure |
 |---|---|---|---|
-| 2026-04 | #109 | Doc filename | Rubric: `docs/issue-109-per-agent-model-hints.md`. Codex wrote `…manifest-model-hints.md`. R2 quality FAIL; R3 1-line rename. |
+| 2026-04 | #109 | Doc filename | Rubric: `docs/archive/issues/issue-109-per-agent-model-hints.md`. Codex wrote `…manifest-model-hints.md`. R2 quality FAIL; R3 1-line rename. |
 | 2026-04-26 | #142 (PR #308) | Test file paths | Rubric prescribed 4 exact `tdd-*.test.js` paths; codex consolidated into topic files. All 4 automated factors FAILed "Could not find …". R3 added 4 shim files (8 lines). |
 | 2026-05-02 | #393 (PR #403) | Grep verb inflection | Rubric: `\| grep -E '#393\|auto-recover-commit\|auto-recovered'`. Codex named test `auto-recovers …` — none of the three tokens match. R1 FAIL; rename. |
 
@@ -139,7 +139,7 @@ For factors that name a file (docs target, test path, generated artifact), write
   tier: quality
   type: evaluated
   criteria: >
-    Required path: docs/issue-109-per-agent-model-hints.md.
+    Required path: docs/archive/issues/issue-109-per-agent-model-hints.md.
     Sections: "Why", "Manifest field", "Adapter mapping".
   weight: required
 ```
@@ -182,7 +182,7 @@ When the deliverable is a markdown doc, list mandated sections as an explicit bu
 
 ```yaml
 criteria: >
-  docs/issue-N-feature.md MUST contain:
+  docs/archive/issues/issue-N-feature.md MUST contain:
   - H1 "Feature: <name>"
   - Section "## Why" naming the triggering incident or memory
   - Section "## Behavior" enumerating each new flag/event

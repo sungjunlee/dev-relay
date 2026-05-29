@@ -1,5 +1,7 @@
 # Rubric-Builder Skill — Research & Analysis
 
+> **Status:** archived research (2026-03-30). Standalone rubric-builder skill was not adopted; rubric design remains in `relay-plan`.
+
 > Research conducted 2026-03-30. Explores evolving relay-plan into a standalone rubric-builder skill.
 
 ## Background
