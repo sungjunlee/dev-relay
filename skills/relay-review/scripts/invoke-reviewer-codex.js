@@ -12,7 +12,7 @@ const {
   bindCliArgs,
   modeLabel,
 } = require("../../relay-dispatch/scripts/cli-args");
-const { summarizeFailure, ensureJsonText } = require("./reviewer-helpers");
+const { parseReviewerJsonObject, summarizeFailure } = require("./reviewer-helpers");
 
 const args = process.argv.slice(2);
 const KNOWN_FLAGS = ["--repo", "--prompt-file", "--model", "--json", "--help", "-h"];
@@ -94,7 +94,11 @@ function main() {
     if (!result) {
       throw new Error("Codex reviewer did not produce a structured result");
     }
-    ensureJsonText(result, "Codex reviewer");
+    parseReviewerJsonObject(result, {
+      adapter: "codex",
+      phase: "primary_review",
+      description: "review verdict",
+    });
     if (cliArgs.hasFlag("--json")) {
       console.log(result);
     } else {

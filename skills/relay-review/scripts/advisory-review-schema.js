@@ -1,3 +1,8 @@
+const {
+  formatAdapterPhase,
+  parseJsonObject,
+} = require("../../relay-dispatch/scripts/agent-adapters/transport");
+
 const ADVISORY_PROFILES = Object.freeze(["blindspot"]);
 const ADVISORY_SEVERITIES = new Set(["P1", "P2", "P3"]);
 const ADVISORY_CATEGORIES = new Set([
@@ -8,19 +13,6 @@ const ADVISORY_CATEGORIES = new Set([
   "docs",
   "other",
 ]);
-
-function parseJsonObject(text, context) {
-  let parsed;
-  try {
-    parsed = JSON.parse(String(text || "").trim());
-  } catch (error) {
-    throw new Error(`${context} did not return valid JSON: ${error.message}`);
-  }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error(`${context} must return a JSON object`);
-  }
-  return parsed;
-}
 
 function requireString(value, location) {
   if (typeof value !== "string" || !value.trim()) {
@@ -78,24 +70,53 @@ function validateAdvisoryProfile(profile) {
   return normalized;
 }
 
-function parseAdvisoryReview(text, { profile = "blindspot" } = {}) {
-  const expectedProfile = validateAdvisoryProfile(profile);
-  const parsed = parseJsonObject(text, "Advisory reviewer");
-  const actualProfile = requireString(parsed.profile, "profile");
-  if (actualProfile !== expectedProfile) {
-    throw new Error(`profile must be '${expectedProfile}', got '${actualProfile}'`);
+function normalizeAdvisoryJsonText(text) {
+  const raw = String(text);
+  const trimmed = raw.trim();
+  const fenced = trimmed.match(/^```[ \t]*json[ \t]*\r?\n([\s\S]*)\r?\n```[ \t]*$/i);
+  return fenced ? fenced[1].trim() : raw;
+}
+
+function rethrowWithContext(error, context) {
+  const message = error?.message || String(error);
+  if (message.startsWith(`${context} `)) {
+    throw error;
   }
-  return {
-    profile: actualProfile,
-    summary: requireString(parsed.summary, "summary"),
-    required_findings: normalizeFindingArray(parsed.required_findings, "required_findings"),
-    advisory_findings: normalizeFindingArray(parsed.advisory_findings, "advisory_findings"),
-    duplicate_or_low_confidence: normalizeFindingArray(parsed.duplicate_or_low_confidence, "duplicate_or_low_confidence"),
-  };
+  throw new Error(`${context} ${message}`);
+}
+
+function parseAdvisoryReview(text, {
+  adapter = "advisory",
+  phase = "advisory_review",
+  profile = "blindspot",
+} = {}) {
+  const expectedProfile = validateAdvisoryProfile(profile);
+  const context = formatAdapterPhase({ adapter, phase });
+  try {
+    const parsed = parseJsonObject(normalizeAdvisoryJsonText(text), {
+      adapter,
+      phase,
+      description: "advisory review",
+    });
+    const actualProfile = requireString(parsed.profile, "profile");
+    if (actualProfile !== expectedProfile) {
+      throw new Error(`profile must be '${expectedProfile}', got '${actualProfile}'`);
+    }
+    return {
+      profile: actualProfile,
+      summary: requireString(parsed.summary, "summary"),
+      required_findings: normalizeFindingArray(parsed.required_findings, "required_findings"),
+      advisory_findings: normalizeFindingArray(parsed.advisory_findings, "advisory_findings"),
+      duplicate_or_low_confidence: normalizeFindingArray(parsed.duplicate_or_low_confidence, "duplicate_or_low_confidence"),
+    };
+  } catch (error) {
+    rethrowWithContext(error, context);
+  }
 }
 
 module.exports = {
   ADVISORY_PROFILES,
+  normalizeAdvisoryJsonText,
   parseAdvisoryReview,
   validateAdvisoryProfile,
 };

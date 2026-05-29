@@ -202,6 +202,15 @@ function appendRunEvent(repoRoot, runId, eventData) {
     ...(eventData.executor_network !== undefined
       ? { executor_network: normalizeEventValue(eventData.executor_network) }
       : {}),
+    ...(eventData.executor_policy !== undefined
+      ? { executor_policy: normalizeEventValue(eventData.executor_policy) }
+      : {}),
+    ...(eventData.reviewer_policy !== undefined
+      ? { reviewer_policy: normalizeEventValue(eventData.reviewer_policy) }
+      : {}),
+    ...(eventData.policy_decision !== undefined
+      ? { policy_decision: normalizeEventValue(eventData.policy_decision) }
+      : {}),
     ...(eventData.failure_class !== undefined
       ? { failure_class: normalizeEventValue(eventData.failure_class) }
       : {}),

@@ -41,6 +41,7 @@ test("formatPlan matches the frozen create-worktree text fixture", () => {
 });
 
 test("formatDispatchDryRun matches the frozen dispatch text fixture", () => {
+  const frozenJson = JSON.parse(fs.readFileSync(path.join(FIXTURE_DIR, "dispatch-dry-run.json"), "utf-8"));
   const actual = formatDispatchDryRun({
     runId: "test-branch-20260418005000000-22222222",
     mode: "new",
@@ -56,6 +57,8 @@ test("formatDispatchDryRun matches the frozen dispatch text fixture", () => {
     timeout: 2400,
     rubricFile: "/tmp/issue187-fixtures/rubric.yaml",
     reviewAssurance: "standard",
+    policyDecision: frozenJson.policy_decision,
+    routingDecision: frozenJson.routing_decision,
     worktreePlan: {
       worktree: "/tmp/issue187-fixtures/relay-home/worktrees/11111111/repo",
       branch: "test-branch",

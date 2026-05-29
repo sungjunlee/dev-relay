@@ -6,6 +6,7 @@ Operator playbook for parallel relay dispatch. Consult only when batching multip
 
 1. **Plan all tasks** — follow Steps 0 through 2 (including 1.5) for each task. Write each dispatch prompt to its own temp file.
 2. **Dispatch all** — run dispatch.js for each task asynchronously (in the background). Mark all as `[~]` in sprint file.
+   Use the same dispatch option boundary as single-task relay: pass `--executor`, `--model`, or `--model-hints` explicitly for each child when a batch needs fixed routing. Detailed precedence lives in `../../relay-dispatch/references/model-routing.md`.
 3. **Review as completed** — as each dispatch finishes, run Step 4 (relay-review). No need to wait for all.
 4. **Merge one-by-one** — merge each ready PR sequentially only after explicit approval. After each merge, check remaining PRs for conflicts.
 5. **Re-anchor** — after the batch completes, run Step 0 before starting the next batch.

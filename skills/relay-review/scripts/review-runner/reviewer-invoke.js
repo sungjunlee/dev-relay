@@ -3,6 +3,18 @@ const fs = require("fs");
 const path = require("path");
 const { STATES } = require("../../../relay-dispatch/scripts/manifest/lifecycle");
 const { writeManifest } = require("../../../relay-dispatch/scripts/manifest/store");
+const {
+  ADAPTER_PHASES,
+  listAgentAdapterNames,
+  getAgentAdapterDescriptor,
+  supportsAgentAdapterPhase,
+} = require("../../../relay-dispatch/scripts/agent-adapters");
+const {
+  AdapterCapabilityError,
+  assertPolicyRepresentable,
+  buildAgentPolicyAudit,
+} = require("../../../relay-dispatch/scripts/agent-adapters/policy");
+const { resolveExecutorDefaultModel } = require("../../../relay-dispatch/scripts/executor-model-config");
 const { appendRunEvent, EVENTS } = require("../../../relay-dispatch/scripts/relay-events");
 const { assertRelayPolicyGate } = require("../../../relay-dispatch/scripts/relay-policy-gate");
 const { applyPolicyViolationToManifest } = require("./manifest-apply");
@@ -19,7 +31,39 @@ function resolveReviewerName(data, reviewerArg) {
   return "codex";
 }
 
-function resolveReviewerScript(reviewerName, reviewerScriptArg) {
+function supportedAdapterPhases(reviewerName) {
+  return Object.values(ADAPTER_PHASES)
+    .filter((phase) => supportsAgentAdapterPhase(reviewerName, phase));
+}
+
+function formatUnsupportedReviewerPhaseError(reviewerName, phase) {
+  const supported = supportedAdapterPhases(reviewerName);
+  if (
+    phase === ADAPTER_PHASES.PRIMARY_REVIEW &&
+    supported.includes(ADAPTER_PHASES.ADVISORY_REVIEW)
+  ) {
+    return (
+      `Reviewer adapter '${reviewerName}' supports advisory_review but not primary_review; ` +
+      `use --advisory-reviewer ${reviewerName} instead of --reviewer ${reviewerName} until primary review support is implemented. ` +
+      "Use --reviewer-script for an operator override."
+    );
+  }
+  if (
+    phase === ADAPTER_PHASES.ADVISORY_REVIEW &&
+    supported.includes(ADAPTER_PHASES.PRIMARY_REVIEW)
+  ) {
+    return (
+      `Reviewer adapter '${reviewerName}' supports primary_review but not advisory_review; ` +
+      `use --reviewer ${reviewerName} instead of --advisory-reviewer ${reviewerName}.`
+    );
+  }
+  return (
+    `Reviewer adapter '${reviewerName}' does not support ${phase}. ` +
+    `Supported phases: ${supported.join(", ") || "(none)"}. Use --reviewer-script for an operator override.`
+  );
+}
+
+function resolveReviewerScript(reviewerName, reviewerScriptArg, { phase = ADAPTER_PHASES.PRIMARY_REVIEW } = {}) {
   if (reviewerScriptArg) {
     return path.resolve(reviewerScriptArg);
   }
@@ -27,14 +71,44 @@ function resolveReviewerScript(reviewerName, reviewerScriptArg) {
   if (!/^[a-z0-9-]+$/.test(reviewerName)) {
     throw new Error(`Invalid reviewer name '${reviewerName}': must be lowercase alphanumeric/hyphens only. Use --reviewer-script for custom paths.`);
   }
-  const candidate = path.join(__dirname, "..", `invoke-reviewer-${reviewerName}.js`);
+  let descriptor;
+  try {
+    descriptor = getAgentAdapterDescriptor(reviewerName);
+  } catch {
+    throw new Error(
+      `Unknown reviewer adapter '${reviewerName}'. Supported adapters: ${listAgentAdapterNames().join(", ")}. ` +
+      "Use --reviewer-script for custom paths."
+    );
+  }
+  if (!supportsAgentAdapterPhase(reviewerName, phase)) {
+    const message = formatUnsupportedReviewerPhaseError(reviewerName, phase);
+    throw new AdapterCapabilityError({
+      adapter: reviewerName,
+      phase,
+      requested: { phase },
+      safe: false,
+      supported_phases: supportedAdapterPhases(reviewerName),
+      fail_closed_reasons: [message],
+      warnings: [],
+    }, message);
+  }
+
+  const scriptName = phase === ADAPTER_PHASES.ADVISORY_REVIEW
+    ? descriptor.reviewer?.advisoryReviewScript
+    : descriptor.reviewer?.primaryReviewScript;
+  if (!scriptName) {
+    throw new Error(`Reviewer adapter '${reviewerName}' supports ${phase} but has no registered reviewer script.`);
+  }
+  const candidate = path.join(__dirname, "..", scriptName);
   if (!fs.existsSync(candidate)) {
-    throw new Error(`No reviewer adapter found for '${reviewerName}'. Provide --reviewer-script or --review-file.`);
+    throw new Error(`No reviewer adapter script found for '${reviewerName}' phase ${phase}. Provide --reviewer-script or --review-file.`);
   }
   return candidate;
 }
 
 function invokeReviewer({
+  phase = ADAPTER_PHASES.PRIMARY_REVIEW,
+  passPhase = false,
   repoPath,
   promptPath,
   reviewerName,
@@ -47,6 +121,9 @@ function invokeReviewer({
     "--prompt-file", promptPath,
     "--json",
   ];
+  if (passPhase) {
+    execArgs.push("--phase", phase);
+  }
   if (reviewerModel) {
     execArgs.push("--model", reviewerModel);
   }
@@ -65,27 +142,146 @@ function invokeReviewer({
   };
 }
 
-function resolveReviewerModel(data, reviewerModel) {
+function resolveReviewerModel(data, reviewerModel, reviewerName = null) {
   if (reviewerModel) return reviewerModel;
   const hintedModel = data?.model_hints?.review;
-  return typeof hintedModel === "string" && hintedModel.trim() ? hintedModel : null;
+  if (typeof hintedModel === "string" && hintedModel.trim()) return hintedModel.trim();
+  if (["opencode", "pi", "antigravity"].includes(reviewerName)) {
+    return resolveExecutorDefaultModel(reviewerName, { relayHome: process.env.RELAY_HOME });
+  }
+  return null;
+}
+
+function buildPrimaryReviewerPolicy(reviewerName) {
+  let descriptor;
+  try {
+    descriptor = getAgentAdapterDescriptor(reviewerName);
+  } catch {
+    return null;
+  }
+  const networkAccess = reviewerName === "claude" ? "ambient" : "disabled";
+  const audit = assertPolicyRepresentable(buildAgentPolicyAudit({
+    descriptor,
+    phase: ADAPTER_PHASES.PRIMARY_REVIEW,
+    requested: {
+      sandbox: "read-only",
+      networkAccess,
+      readOnly: true,
+    },
+  }));
+  if (reviewerName !== "antigravity") {
+    return audit;
+  }
+
+  const cliBinary = process.env.RELAY_ANTIGRAVITY_BIN || descriptor.executor?.cliBinary || "agy";
+  let version = null;
+  let error = null;
+  try {
+    version = execFileSync(cliBinary, ["--version"], { encoding: "utf-8", stdio: "pipe" }).trim();
+  } catch (caught) {
+    error = String(caught?.message || caught).split("\n")[0];
+  }
+  return {
+    ...audit,
+    cli: {
+      binary: cliBinary,
+      version,
+      version_probe: "agy --version",
+      error,
+    },
+  };
+}
+
+function isAdapterManagedReviewerScript(reviewerName, reviewerScript, { phase = ADAPTER_PHASES.PRIMARY_REVIEW } = {}) {
+  try {
+    return path.resolve(reviewerScript) === path.resolve(resolveReviewerScript(reviewerName, null, { phase }));
+  } catch {
+    return false;
+  }
+}
+
+function buildCustomReviewerScriptPolicy({ reviewerName, reviewerScript }) {
+  const warning = "Custom reviewer scripts are invoked outside adapter-managed containment; read-only is checked after invocation with git status.";
+  const informational = (requested) => ({
+    requested,
+    enforcement_level: "informational",
+    mechanism: "git-status-after-invocation",
+    flags: [],
+    warnings: [warning],
+    fail_closed_reason: null,
+  });
+  return {
+    adapter: "custom-reviewer-script",
+    phase: ADAPTER_PHASES.PRIMARY_REVIEW,
+    reviewer: reviewerName,
+    script: reviewerScript,
+    requested: {
+      sandbox: "read-only",
+      network: "disabled",
+      read_only: true,
+    },
+    sandbox: informational("read-only"),
+    network: informational("disabled"),
+    read_only: informational(true),
+    warnings: [warning],
+    fail_closed_reasons: [],
+    safe: true,
+  };
+}
+
+function buildReviewerPolicy({ reviewerName, reviewerScript }) {
+  if (isAdapterManagedReviewerScript(reviewerName, reviewerScript, { phase: ADAPTER_PHASES.PRIMARY_REVIEW })) {
+    return buildPrimaryReviewerPolicy(reviewerName);
+  }
+  return buildCustomReviewerScriptPolicy({ reviewerName, reviewerScript });
+}
+
+function buildPrimaryReviewerPreflight({
+  data,
+  reviewerModel,
+  reviewerName,
+  reviewerScript,
+  runRepoPath,
+}) {
+  const effectiveReviewerModel = resolveReviewerModel(data, reviewerModel, reviewerName);
+  const reviewerPolicy = buildReviewerPolicy({ reviewerName, reviewerScript });
+  try {
+    const policyDecision = assertRelayPolicyGate({
+      repoRoot: runRepoPath,
+      phase: "review",
+      reviewer: reviewerName,
+      model: effectiveReviewerModel,
+    });
+    return {
+      effectiveReviewerModel,
+      policyDecision,
+      reviewerPolicy,
+    };
+  } catch (error) {
+    error.adapterCapability = reviewerPolicy;
+    throw error;
+  }
 }
 
 function captureGitStatus(repoPath) {
   return git(repoPath, "status", "--short", "--untracked-files=all").trim();
 }
 
-function loadReviewText({ body, data, manifestPath, prNumber, promptPath, reviewFile, reviewRepoPath, reviewedHeadSha, reviewerModel, reviewerName, reviewerScript, round, runDir, runRepoPath }) {
+function loadReviewText({ body, data, manifestPath, prNumber, promptPath, reviewFile, reviewRepoPath, reviewedHeadSha, reviewerModel, reviewerName, reviewerScript, round, runDir, runRepoPath, reviewerPreflight = null }) {
   if (reviewFile) {
     return { rawResponsePath: null, reviewText: readText(reviewFile) };
   }
 
-  const effectiveReviewerModel = resolveReviewerModel(data, reviewerModel);
-  assertRelayPolicyGate({
-    repoRoot: runRepoPath,
-    phase: "review",
-    reviewer: reviewerName,
-    model: effectiveReviewerModel,
+  const {
+    effectiveReviewerModel,
+    policyDecision,
+    reviewerPolicy,
+  } = reviewerPreflight || buildPrimaryReviewerPreflight({
+    data,
+    reviewerModel,
+    reviewerName,
+    reviewerScript,
+    runRepoPath,
   });
   appendRunEvent(runRepoPath, data.run_id, {
     event: EVENTS.REVIEW_INVOKE,
@@ -95,10 +291,14 @@ function loadReviewText({ body, data, manifestPath, prNumber, promptPath, review
     round,
     reason: reviewerName,
     model: effectiveReviewerModel,
+    policy_decision: policyDecision,
+    reviewer_policy: reviewerPolicy,
   });
 
   const statusBeforeReviewer = captureGitStatus(reviewRepoPath);
   const invoked = invokeReviewer({
+    phase: ADAPTER_PHASES.PRIMARY_REVIEW,
+    passPhase: isAdapterManagedReviewerScript(reviewerName, reviewerScript, { phase: ADAPTER_PHASES.PRIMARY_REVIEW }),
     repoPath: reviewRepoPath,
     promptPath,
     reviewerModel: effectiveReviewerModel,
@@ -158,6 +358,9 @@ module.exports = {
   captureGitStatus,
   invokeReviewer,
   loadReviewText,
+  buildPrimaryReviewerPolicy,
+  buildPrimaryReviewerPreflight,
+  buildReviewerPolicy,
   resolveReviewerName,
   resolveReviewerModel,
   resolveReviewerScript,

@@ -152,7 +152,7 @@ bootstrap_exempt:
 | `roles.*` | Immutable per-run binding. Decouples who decides, who implements, who validates |
 | `model_hints.*` | Optional per-phase model preference. Current runtime consumers: `dispatch`, `review`, `advisory_review`. For unmanaged harnesses, values must resolve to approved provider/model routes. Do not add Codex/Claude model hints in generated company defaults just to pin their managed CLI model. |
 | `dispatch.last_model` / executor config | Dispatch records the effective model route when one exists. For unmanaged executors such as OpenCode, defaults come from the skill-bundled `skills/relay-dispatch/references/executor-models.json` plus optional `~/.relay/executors.json` overrides and still pass through the route policy gate. Codex/Claude managed CLI defaults normally record a null model route. |
-| Route policy | Stored outside the manifest in `~/.relay/policy.json` plus optional repo-local `.relay/policy.json`. Executor/reviewer names are harnesses; provider/model route strings are the policy boundary. Final operator precedence is `CLI flags -> routing rules -> defaults -> existing relay defaults -> policy gate`. |
+| Route policy | Stored outside the manifest in `~/.relay/policy.json` plus optional repo-local `.relay/policy.json`. Executor/reviewer names are harnesses; provider/model route strings are the policy boundary. Final operator precedence is `CLI flags -> routing rules -> defaults -> existing relay defaults -> policy gate`. Adapter capability gates run before this policy gate. |
 | `policy.merge` | `manual_after_lgtm` — orchestrator must explicitly merge |
 | `policy.reviewer_write` | `forbid` — review runner rejects rounds where reviewer mutated files |
 | `policy.review_assurance` | `standard` keeps current behavior; `hardened` requires stronger review/evidence gates without using agent identity heuristics. Hardened review commands must include an advisory reviewer, and passing verdicts require successful advisory artifacts plus strict execution evidence. When `execution-evidence.json` includes `verification_runs[]`, hardened gates prefer those actual command-run records; legacy evidence without that array still falls back to `test_exit_code=0` plus a SHA-bound result hash |
@@ -161,6 +161,17 @@ bootstrap_exempt:
 | `review.last_reviewer` | Tracks the acting reviewer for the latest round without mutating `roles.reviewer`; escalated same-adapter retry requires an `--independent-review-reason`; analytics must still use `review_apply.reviewer` as the round-level source of truth |
 | `github.pr_number` / `git.pr_number` | Orchestrator-owned push + PR creation writes `github.*` first; `git.pr_number` mirrors for legacy consumers. See [ADR-0001](../docs/decisions/0001-orchestrator-owns-publication.md) |
 | `bootstrap_exempt.*` | Optional operator-declared reconciliation for runs that predate an artifact writer but are closed after that writer lands |
+
+### Adapter Capability vs Route Policy
+
+Relay evaluates two separate safety layers in this order:
+
+1. Adapter capability gate: validates that the selected CLI adapter can safely perform the requested phase and containment shape. This includes dispatch vs primary review vs advisory review support, read-only semantics, sandbox metadata, and network metadata. Failures are reported as `adapter_capability` and do not imply anything about provider/model approval.
+2. Model-route policy gate: validates the effective provider/model route against `~/.relay/policy.json` plus repo-local `.relay/policy.json`. Failures are reported as `policy_decision` and mean the adapter could perform the phase, but the active profile did not allow the route.
+
+Managed Codex/Claude invocations may intentionally have `model: null`; the default route policy treats those model-less managed CLI calls as allowed. Unmanaged routes such as Pi, OpenCode, and Antigravity remain policy-configurable through `allowed_model_routes` and `denied_model_routes`; changing those allow/deny rules must not require adapter code changes.
+
+The supported adapter capability matrix and new-adapter checklist are published in [`skills/relay-dispatch/references/agent-adapter-platform.md`](../skills/relay-dispatch/references/agent-adapter-platform.md). That reference is the source of truth for dispatch, primary-review, advisory-review, sandbox, read-only, network, structured-output, transport, and app-registration support.
 
 ### Bootstrap exemptions
 
@@ -190,7 +201,7 @@ Semantics:
 Each run keeps an append-only event log at `~/.relay/runs/<repo-slug>/<run-id>/events.jsonl`. Records are emitted by `appendRunEvent()` in `skills/relay-dispatch/scripts/relay-events.js` and share a common envelope (`ts`, `event`, `actor`, `run_id`, `state_from`, `state_to`, `head_sha`, `round`, `reason`) plus optional fields (`reviewer`, `rubric_status`, `last_reviewed_sha`, `pr_number`, `bootstrap_exempt`, `model`, `executor_network`, `failure_class`, `before`, `after`, `profile`, `status`, `artifact_path`, `raw_response_path`, `elapsed_ms`, `critical_path_wait_ms`, `consumed_by_phase`, `phase_decision_waited`, `frontier_step_replaced`, `failure_reason`, override audit fields):
 
 ```jsonl
-{"ts":"2026-04-18T12:00:00.000Z","event":"dispatch_start","actor":"codex","run_id":"issue-42-20260418120000000","state_from":"draft","state_to":"dispatched","head_sha":"abc123","round":null,"reason":"new_dispatch","model":null,"executor_network":{"access":"enabled","mechanism":"sandbox_workspace_write.network_access","domains":null}}
+{"ts":"2026-04-18T12:00:00.000Z","event":"dispatch_start","actor":"codex","run_id":"issue-42-20260418120000000","state_from":"draft","state_to":"dispatched","head_sha":"abc123","round":null,"reason":"new_dispatch","model":null,"executor_network":{"access":"enabled","mechanism":"sandbox_workspace_write.network_access","domains":null},"policy_decision":{"allowed":true,"reason":"managed_cli","phase":"dispatch","actor":"codex","model":null}}
 {"ts":"2026-04-18T12:05:00.000Z","event":"dispatch_result","actor":"codex","run_id":"issue-42-20260418120000000","state_from":"dispatched","state_to":"review_pending","head_sha":"def456","round":null,"reason":"new_dispatch:completed","executor_network":{"access":"enabled","mechanism":"sandbox_workspace_write.network_access","domains":null},"failure_class":null}
 {"ts":"2026-04-18T12:10:00.000Z","event":"review_invoke","actor":"claude","run_id":"issue-42-20260418120000000","state_from":"review_pending","state_to":"review_pending","head_sha":"def456","round":1,"reason":"codex","model":null}
 {"ts":"2026-04-18T12:11:00.000Z","event":"advisory_review","actor":"claude","run_id":"issue-42-20260418120000000","state_from":"review_pending","state_to":"review_pending","head_sha":"def456","round":1,"reason":null,"reviewer":"opencode","model":"opencode-go/deepseek-v4-pro","profile":"blindspot","status":"success","artifact_path":"~/.relay/runs/project-abcd1234/issue-42-20260418120000000/review-round-1-advisory-opencode.json","raw_response_path":"~/.relay/runs/project-abcd1234/issue-42-20260418120000000/review-round-1-advisory-opencode-raw-response.txt","required_count":0,"advisory_count":1,"duplicate_low_confidence_count":0,"elapsed_ms":42000,"advisory_elapsed_ms":42000,"critical_path_wait_ms":5000,"consumed_by_phase":"metrics","phase_decision_waited":true,"frontier_step_replaced":false,"failure_reason":null}
@@ -303,10 +314,11 @@ Do not "simplify" the facade by collapsing submodules back into it or by force-m
 
 ### Adding a new executor
 
-1. Add `skills/relay-dispatch/scripts/executors/<name>.js` exporting the 6-field adapter contract.
-2. Register it in `skills/relay-dispatch/scripts/executors/index.js`.
-3. Add behavior-matrix coverage in `tests/relay-dispatch/scripts/executors.test.js`.
-4. Optional: implement adapter `register(...)` for dispatch-time app registration.
+1. Add `skills/relay-dispatch/scripts/executors/<name>.js` exporting the 7-field adapter contract documented in [`agent-adapter-platform.md`](../skills/relay-dispatch/references/agent-adapter-platform.md): `cliBinary`, `defaultTimeout`, `validateExecutionMode`, `buildExecCommand`, `finalizeResult`, `register`, and `probe`.
+2. Register the harness descriptor in `skills/relay-dispatch/scripts/agent-adapters/index.js`; update `skills/relay-dispatch/scripts/executors/index.js` only if display order needs a stable compatibility slot.
+3. Add behavior-matrix and probe coverage in `tests/relay-dispatch/scripts/executors.test.js`.
+4. Add adapter capability policy coverage in `tests/relay-dispatch/scripts/agent-adapter-policy.test.js` and docs consistency coverage in `tests/relay-dispatch/scripts/docs-defaults.test.js`.
+5. Optional: implement adapter `register(...)` for dispatch-time app registration; unsupported adapters should return `{threadId: null, raw}`.
 
 ### Adding a new reviewer adapter
 
@@ -320,7 +332,7 @@ Do not "simplify" the facade by collapsing submodules back into it or by force-m
 4. `review-runner.js` auto-discovers adapters via `resolveReviewerScript()` by naming convention: `invoke-reviewer-<name>.js`. The `<name>` must match `/^[a-z0-9-]+$/`.
 5. Existing adapters share small utilities (`getArg`, `hasFlag`, `summarizeFailure`, `ensureJsonText`) but NOT full execution logic — each adapter encodes its own execution contract (e.g. Claude uses `--json-schema` + stdout recovery; Codex uses temp-file exchange + `--ephemeral` + sandbox). New adapters should extract only the small utilities.
 
-`invoke-reviewer-opencode.js` is currently advisory-only: `review-runner --advisory-reviewer opencode` invokes it with a separate blind-spot prompt and validates output through `advisory-review-schema.js`, not the trusted verdict schema. Do not use opencode as the primary `--reviewer` until a trusted verdict adapter exists for it.
+`invoke-reviewer-opencode.js`, `invoke-reviewer-pi.js`, and `invoke-reviewer-antigravity.js` are phase-aware: `--phase primary_review` validates normal review verdict JSON, while `--phase advisory_review` validates advisory JSON through `advisory-review-schema.js`. OpenCode primary review is route-policy gated and prompt-only read-only with a post-run dirty-worktree guard. Pi invokes `pi --no-session --tools read,grep,find,ls --print <prompt>`, enforces a parent-process timeout via `RELAY_PI_REVIEW_TIMEOUT` (default `1800s`), and uses the same tool allowlist for primary and advisory review. Antigravity targets the `agy` CLI only; it invokes `agy --prompt <prompt> --print-timeout <duration> --sandbox` and relies on dirty-worktree checks rather than Antigravity GUI, IDE, Desktop, plugin runtime, or PTY state. Antigravity live support remains fail-safe experimental until a healthy live canary passes; fake-bin tests alone do not prove live executor or reviewer success, and the fail-safe timeout canary is not healthy success.
 
 ### Shared utilities (cross-skill)
 
@@ -335,10 +347,10 @@ Current shared helpers:
 
 | Module | Owner | Consumers |
 |--------|-------|-----------|
-| `skills/relay-dispatch/scripts/cli-args.js` | relay-dispatch | `review-runner.js`, `invoke-reviewer-claude.js`, `invoke-reviewer-codex.js`, `invoke-reviewer-opencode.js`, `finalize-run.js`, `persist-request.js`, `probe-executor-env.js` |
-| `skills/relay-review/scripts/reviewer-helpers.js` | relay-review | `invoke-reviewer-claude.js`, `invoke-reviewer-codex.js`, `invoke-reviewer-opencode.js` |
+| `skills/relay-dispatch/scripts/cli-args.js` | relay-dispatch | `review-runner.js`, `invoke-reviewer-antigravity.js`, `invoke-reviewer-claude.js`, `invoke-reviewer-codex.js`, `invoke-reviewer-opencode.js`, `invoke-reviewer-pi.js`, `finalize-run.js`, `persist-request.js`, `probe-executor-env.js` |
+| `skills/relay-review/scripts/reviewer-helpers.js` | relay-review | `invoke-reviewer-antigravity.js`, `invoke-reviewer-claude.js`, `invoke-reviewer-codex.js`, `invoke-reviewer-opencode.js`, `invoke-reviewer-pi.js` |
 
-`reviewer-helpers.js` is scoped to `summarizeFailure` and `ensureJsonText`. Reviewer adapters intentionally keep divergent execution contracts (Claude uses `--json-schema` + stdout recovery; Codex uses temp schema/result files + `--ephemeral` + sandbox; opencode is advisory-only with prompt-enforced read-only behavior), so a full adapter factory would hide meaningful differences. See item 5 under "Adding a new reviewer adapter" above.
+`reviewer-helpers.js` is scoped to JSON recovery/parsing helpers and `summarizeFailure`. Reviewer adapters intentionally keep divergent execution contracts (Claude uses `--json-schema` + stdout recovery; Codex uses temp schema/result files + `--ephemeral` + sandbox; OpenCode uses prompt-enforced read-only behavior), so a full adapter factory would hide meaningful differences. See item 5 under "Adding a new reviewer adapter" above.
 
 Call sites take a local-wrapper pattern so inline flag lists (`KNOWN_FLAGS`) keep acting as fail-closed `reservedFlags`:
 

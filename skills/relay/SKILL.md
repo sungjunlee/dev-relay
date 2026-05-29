@@ -1,7 +1,7 @@
 ---
 name: relay
-argument-hint: "[issue-number or task description]"
-description: Execute the full relay cycle — plan, dispatch, review, merge. Use when implementing a GitHub issue or task through autonomous executor dispatch. Integrates with dev-backlog sprint files.
+argument-hint: "[task, issue, or natural-language handoff]"
+description: Execute the full relay cycle — plan, dispatch, review, merge. Use when implementing a GitHub issue, sprint item, task description, or natural-language handoff through autonomous executor dispatch. Integrates with dev-backlog sprint files.
 compatibility: Requires Claude Code or Codex, gh CLI, git, Node.js 18+.
 metadata:
   related-skills: "relay-ready, relay-plan, relay-dispatch, relay-review, relay-merge, relay-sidecar, dev-backlog"
@@ -63,10 +63,13 @@ Write the rubric YAML to a temp file (e.g., `/tmp/rubric-<N>.yaml`).
 
 ## Step 3: Dispatch (relay-dispatch)
 
+`relay` owns lifecycle orchestration; `relay-dispatch` owns dispatch CLI semantics. When an operator needs a fixed executor or model, pass the dispatch options explicitly in this command. Common pass-through knobs are `--executor`, `--model`, and `--model-hints`; see sibling `relay-dispatch` and `../relay-dispatch/references/model-routing.md` for the full option and route-policy behavior.
+
 ```bash
 node "${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/dispatch.js" . \
   -b issue-<N> --prompt-file /tmp/dispatch-<N>.md --rubric-file /tmp/rubric-<N>.yaml --timeout 3600
 # If relay-ready ran, append: --request-id <id> --leaf-id <id> --done-criteria-file <done-criteria-path>
+# To pin a dispatch route, append: --executor <name> --model <provider/model> or --model-hints dispatch=<provider/model>
 ```
 
 While dispatch runs in the background, optionally monitor progress:

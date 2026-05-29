@@ -244,6 +244,48 @@ process.stdout.write("ok\\n");
   return oc;
 }
 
+function writeArgCapturePi(binDir, capturePath) {
+  ensureDefaultFakeGh(binDir);
+  const piPath = path.join(binDir, "pi");
+  fs.writeFileSync(piPath, `#!/usr/bin/env node
+const fs = require("fs");
+const { execFileSync } = require("child_process");
+const args = process.argv.slice(2);
+if (args[0] === "--version") { process.stdout.write("pi 0.72.1\\n"); process.exit(0); }
+if (!args.includes("--print")) { process.stderr.write("unsupported fake pi invocation"); process.exit(1); }
+fs.writeFileSync(${JSON.stringify(capturePath)}, JSON.stringify(args), "utf-8");
+const cwd = process.cwd();
+const fileName = "captured-pi.txt";
+fs.writeFileSync(cwd + "/" + fileName, fileName + "\\n", "utf-8");
+execFileSync("git", ["-C", cwd, "add", fileName], { stdio: "pipe" });
+execFileSync("git", ["-C", cwd, "commit", "-m", "fake " + fileName], { stdio: "pipe" });
+process.stdout.write("pi completed\\n");
+`, "utf-8");
+  fs.chmodSync(piPath, 0o755);
+  return piPath;
+}
+
+function writeArgCaptureAntigravity(binDir, capturePath) {
+  ensureDefaultFakeGh(binDir);
+  const agyPath = path.join(binDir, "agy");
+  fs.writeFileSync(agyPath, `#!/usr/bin/env node
+const fs = require("fs");
+const { execFileSync } = require("child_process");
+const args = process.argv.slice(2);
+if (args[0] === "--version") { process.stdout.write("agy 1.0.2\\n"); process.exit(0); }
+if (args[0] !== "--prompt") { process.stderr.write("unsupported fake agy invocation"); process.exit(1); }
+fs.writeFileSync(${JSON.stringify(capturePath)}, JSON.stringify(args), "utf-8");
+const cwd = process.cwd();
+const fileName = "captured-antigravity.txt";
+fs.writeFileSync(cwd + "/" + fileName, fileName + "\\n", "utf-8");
+execFileSync("git", ["-C", cwd, "add", fileName], { stdio: "pipe" });
+execFileSync("git", ["-C", cwd, "commit", "-m", "fake " + fileName], { stdio: "pipe" });
+process.stdout.write("antigravity completed\\n");
+`, "utf-8");
+  fs.chmodSync(agyPath, 0o755);
+  return agyPath;
+}
+
 function writeNoOpCodex(binDir) {
   ensureDefaultFakeGh(binDir);
   const codexPath = path.join(binDir, "codex");
@@ -371,6 +413,53 @@ process.stdout.write("work completed without commit\\n");
 `, "utf-8");
   fs.chmodSync(claudePath, 0o755);
   return claudePath;
+}
+
+function writeUncommittedAntigravity(binDir) {
+  ensureDefaultFakeGh(binDir);
+  const agyPath = path.join(binDir, "agy");
+  fs.writeFileSync(agyPath, `#!/usr/bin/env node
+const fs = require("fs");
+const args = process.argv.slice(2);
+if (args[0] === "--version") {
+  process.stdout.write("agy 1.0.2\\n");
+  process.exit(0);
+}
+if (args[0] !== "--prompt") {
+  process.stderr.write("unsupported fake agy invocation");
+  process.exit(1);
+}
+const cwd = process.cwd();
+fs.appendFileSync(cwd + "/README.md", "dirty from antigravity\\n", "utf-8");
+process.stdout.write("antigravity completed without commit\\n");
+`, "utf-8");
+  fs.chmodSync(agyPath, 0o755);
+  return agyPath;
+}
+
+function writeRuntimeOnlyAntigravity(binDir) {
+  ensureDefaultFakeGh(binDir);
+  const agyPath = path.join(binDir, "agy");
+  fs.writeFileSync(agyPath, `#!/usr/bin/env node
+const fs = require("fs");
+const path = require("path");
+const args = process.argv.slice(2);
+if (args[0] === "--version") {
+  process.stdout.write("agy 1.0.2\\n");
+  process.exit(0);
+}
+if (args[0] !== "--prompt") {
+  process.stderr.write("unsupported fake agy invocation");
+  process.exit(1);
+}
+const cwd = process.cwd();
+const runtimeDir = path.join(cwd, ".antigravitycli");
+fs.mkdirSync(runtimeDir, { recursive: true });
+fs.writeFileSync(path.join(runtimeDir, "session.json"), "{}\\n", "utf-8");
+process.stdout.write("antigravity completed with runtime metadata only\\n");
+`, "utf-8");
+  fs.chmodSync(agyPath, 0o755);
+  return agyPath;
 }
 
 function writePartialNoResultCodex(binDir) {
@@ -529,7 +618,11 @@ function createExecFileMock({
 function createPushPrTestEnv({ relayHome, ghState = {}, failGitPush = false, codexMode = "commit", executor = "codex" }) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "relay-dispatch-push-pr-"));
   const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-dispatch-push-pr-bin-"));
-  if (executor === "claude" && codexMode === "uncommitted") {
+  if (executor === "antigravity" && codexMode === "runtime-only") {
+    writeRuntimeOnlyAntigravity(binDir);
+  } else if (executor === "antigravity" && codexMode === "uncommitted") {
+    writeUncommittedAntigravity(binDir);
+  } else if (executor === "claude" && codexMode === "uncommitted") {
     writeUncommittedClaude(binDir);
   } else if (executor === "claude") {
     writeFakeClaude(binDir);
@@ -1336,6 +1429,9 @@ test("dispatch network-access enabled adds codex workspace-write network overrid
   assert.equal(result.codexGitCommonDir, commonGitDir);
   assert.equal(result.executorNetwork.access, "enabled");
   assert.equal(result.executorNetwork.mechanism, "sandbox_workspace_write.network_access");
+  assert.equal(result.executorPolicy.sandbox.enforcement_level, "native");
+  assert.equal(result.executorPolicy.network.enforcement_level, "native");
+  assert.deepEqual(result.executorPolicy.network.flags, ["-c sandbox_workspace_write.network_access=true"]);
 
   const manifest = readManifest(result.manifestPath).data;
   assert.deepEqual(manifest.policy.executor_network, {
@@ -1343,12 +1439,18 @@ test("dispatch network-access enabled adds codex workspace-write network overrid
     mechanism: "sandbox_workspace_write.network_access",
     domains: null,
   });
+  assert.equal(manifest.policy.executor_policy.sandbox.enforcement_level, "native");
+  assert.equal(manifest.policy.executor_policy.network.enforcement_level, "native");
 
   const events = readJsonLines(getEventsPath(repoRoot, result.runId));
   const dispatchStart = events.find((event) => event.event === "dispatch_start");
   const dispatchResult = events.find((event) => event.event === "dispatch_result");
   assert.equal(dispatchStart.executor_network.access, "enabled");
   assert.equal(dispatchResult.executor_network.access, "enabled");
+  assert.equal(dispatchStart.executor_policy.sandbox.enforcement_level, "native");
+  assert.equal(dispatchStart.executor_policy.network.enforcement_level, "native");
+  assert.equal(dispatchResult.executor_policy.sandbox.enforcement_level, "native");
+  assert.equal(dispatchResult.executor_policy.network.enforcement_level, "native");
 });
 
 test("dispatch widens codex sandbox via --add-dir <common-git-dir> for worktree (#389 sandbox-widening)", () => {
@@ -1570,6 +1672,52 @@ test("dispatch denies disallowed executor route before spawning the executor", (
   assert.equal(result.policy_decision.model, "opencode-go/deepseek-v4-pro");
   assert.equal(result.policy_decision.reason, "unknown_model_route");
   assert.match(result.error, /reason=unknown_model_route/);
+  assert.equal(result.adapter_capability.adapter, "opencode");
+  assert.equal(result.adapter_capability.phase, "dispatch");
+  assert.equal(result.adapter_capability.safe, true);
+  assert.equal(result.executor_policy.adapter, "opencode");
+});
+
+test("dispatch reports adapter-capability denial before model-route policy", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  writeRelayPolicy(relayHome, {
+    profile: "allow-antigravity-dispatch",
+    allowed_model_routes: [{ route: "google/*", phases: ["dispatch"], executors: ["antigravity"] }],
+  });
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-antigravity-bin-"));
+  const capturePath = path.join(os.tmpdir(), `relay-dispatch-capability-denied-${Date.now()}.json`);
+  writeArgCaptureAntigravity(binDir, capturePath);
+  const rubricFile = writeTempRubric("size: \"S\"\nrubric:\n  factors: []\n");
+
+  const proc = spawnSync("node", [SCRIPT, repoRoot, ...withRequiredRubric([
+    "-b", "issue-capability-denied",
+    "-p", "must not spawn antigravity",
+    "-e", "antigravity",
+    "-m", "google/gemini-cli",
+    "--sandbox", "read-only",
+    "--rubric-file", rubricFile,
+    "--json",
+  ])], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    env: {
+      ...process.env,
+      PATH: `${binDir}:${process.env.PATH}`,
+      RELAY_HOME: relayHome,
+    },
+  });
+
+  assert.notEqual(proc.status, 0);
+  assert.equal(fs.existsSync(capturePath), false);
+  const result = JSON.parse(proc.stdout);
+  assert.equal(result.status, "failed");
+  assert.equal(result.executor, "antigravity");
+  assert.equal(result.adapter_capability.adapter, "antigravity");
+  assert.equal(result.adapter_capability.phase, "dispatch");
+  assert.equal(result.adapter_capability.safe, false);
+  assert.match(result.adapter_capability.fail_closed_reasons.join("\n"), /read-only dispatch is not safely representable/);
+  assert.equal(result.policy_decision, undefined);
 });
 
 test("dispatch opencode executor uses bundled default model when no override is supplied", () => {
@@ -2492,6 +2640,89 @@ test("dispatch with --executor claude creates worktree and collects result", () 
   assert.match(resultText, /ok/);
 });
 
+test("dispatch with --executor pi invokes Pi and copies stdout into the result file", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  writeRelayPolicy(relayHome, {
+    profile: "allow-pi-dispatch",
+    allowed_model_routes: [{ route: "openai/*", phases: ["dispatch"], executors: ["pi"] }],
+  });
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-pi-bin-"));
+  const capturePath = path.join(os.tmpdir(), `relay-dispatch-argv-${Date.now()}-pi.json`);
+  writeArgCapturePi(binDir, capturePath);
+  const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}`, RELAY_HOME: relayHome };
+  const taskPrompt = "test pi task";
+
+  const result = JSON.parse(runDispatch(repoRoot, [
+    "-b", "pi-test",
+    "-e", "pi",
+    "--model", "openai/gpt-5",
+    "--prompt", taskPrompt,
+    "--json",
+  ], env));
+
+  assert.equal(result.status, "completed");
+  assert.equal(result.executor, "pi");
+  assert.equal(result.runState, STATES.REVIEW_PENDING);
+  assert.ok(result.commits);
+  assert.equal(fs.readFileSync(result.resultFile, "utf-8"), "pi completed\n");
+  assert.deepEqual(JSON.parse(fs.readFileSync(capturePath, "utf-8")), [
+    "--no-session",
+    "--model", "openai/gpt-5",
+    "--thinking", "high",
+    "--print", buildDispatchExecPrompt(taskPrompt),
+  ]);
+
+  const manifest = readManifest(result.manifestPath).data;
+  assert.equal(manifest.dispatch.last_executor, "pi");
+  assert.equal(manifest.dispatch.last_model, "openai/gpt-5");
+  assert.equal(manifest.dispatch.last_provider, "openai");
+});
+
+test("dispatch with --executor antigravity invokes agy and copies stdout into the result file", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  writeRelayPolicy(relayHome, {
+    profile: "allow-antigravity-dispatch",
+    allowed_model_routes: [{ route: "google/*", phases: ["dispatch"], executors: ["antigravity"] }],
+  });
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-antigravity-bin-"));
+  const capturePath = path.join(os.tmpdir(), `relay-dispatch-argv-${Date.now()}-antigravity.json`);
+  writeArgCaptureAntigravity(binDir, capturePath);
+  const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}`, RELAY_HOME: relayHome };
+  const taskPrompt = "test antigravity task";
+
+  const result = JSON.parse(runDispatch(repoRoot, [
+    "-b", "antigravity-test",
+    "-e", "antigravity",
+    "--model", "google/antigravity-cli",
+    "--timeout", "31",
+    "--prompt", taskPrompt,
+    "--json",
+  ], env));
+
+  assert.equal(result.status, "completed");
+  assert.equal(result.executor, "antigravity");
+  assert.equal(result.runState, STATES.REVIEW_PENDING);
+  assert.ok(result.commits);
+  assert.equal(fs.readFileSync(result.resultFile, "utf-8"), "antigravity completed\n");
+  const capturedArgs = JSON.parse(fs.readFileSync(capturePath, "utf-8"));
+  assert.deepEqual(capturedArgs.slice(0, 5), [
+    "--prompt", buildDispatchExecPrompt(taskPrompt),
+    "--print-timeout", "31s",
+    "--sandbox",
+  ]);
+  assert.deepEqual(capturedArgs.slice(5, 7), ["--add-dir", worktreeCommonGitDir(result.worktree)]);
+
+  const manifest = readManifest(result.manifestPath).data;
+  assert.equal(manifest.dispatch.last_executor, "antigravity");
+  assert.equal(manifest.dispatch.last_model, "google/antigravity-cli");
+  assert.equal(manifest.dispatch.last_provider, "google");
+  assert.equal(manifest.policy.executor_policy.cli.binary, "agy");
+  assert.equal(manifest.policy.executor_policy.cli.version, "agy 1.0.2");
+  assert.deepEqual(manifest.policy.executor_policy.sandbox.flags, ["--sandbox", "--add-dir <git-common-dir>"]);
+});
+
 test("dispatch artifacts are persisted in the run directory", () => {
   const { repoRoot, relayHome } = setupRepo();
   process.env.RELAY_HOME = relayHome;
@@ -3349,6 +3580,88 @@ test("dispatch leaves uncommitted non-codex runs unrecovered by default", () => 
   assert.match(result.uncommitted, /README\.md/);
   const manifest = readManifest(result.manifestPath).data;
   assert.equal(manifest.state, STATES.REVIEW_PENDING);
+  assert.deepEqual(readJsonLines(ghLogPath), []);
+  assert.deepEqual(readJsonLines(execLogPath), []);
+  assert.equal(Number(fs.readFileSync(pushPrCountPath, "utf-8")), 0);
+});
+
+test("dispatch escalates Antigravity zero-exit runs with only runtime metadata dirt", () => {
+  const { repoRoot, relayHome } = setupRepoWithOrigin();
+  process.env.RELAY_HOME = relayHome;
+  writeRelayPolicy(relayHome, {
+    profile: "allow-antigravity-dispatch",
+    allowed_model_routes: [{ route: "google/*", phases: ["dispatch"], executors: ["antigravity"] }],
+  });
+  const { env, ghLogPath, execLogPath, pushPrCountPath } = createPushPrTestEnv({
+    relayHome,
+    ghState: {
+      prCreateUrl: "https://github.com/acme/dev-relay/pull/593",
+    },
+    codexMode: "runtime-only",
+    executor: "antigravity",
+  });
+
+  const proc = spawnSync("node", [SCRIPT, repoRoot, ...withRequiredRubric([
+    "-b", "issue-593-antigravity-runtime-only",
+    "--prompt", "leave only antigravity runtime metadata",
+    "--executor", "antigravity",
+    "--model", "google/antigravity-cli",
+    "--json",
+  ])], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    env,
+  });
+
+  assert.notEqual(proc.status, 0);
+  const result = JSON.parse(proc.stdout);
+  assert.equal(result.status, "failed");
+  assert.equal(result.commitMode, "failed");
+  assert.equal(result.runState, STATES.ESCALATED);
+  assert.match(result.error, /no reviewable repository changes/i);
+  assert.match(result.error, /\.antigravitycli\//);
+  assert.equal(result.commits, "");
+  assert.equal(result.uncommitted, null);
+  const manifest = readManifest(result.manifestPath).data;
+  assert.equal(manifest.state, STATES.ESCALATED);
+  assert.equal(manifest.git.pr_number, null);
+  assert.deepEqual(readJsonLines(ghLogPath), []);
+  assert.deepEqual(readJsonLines(execLogPath), []);
+  assert.equal(Number(fs.readFileSync(pushPrCountPath, "utf-8")), 0);
+});
+
+test("dispatch preserves Antigravity completed-uncommitted for non-runtime repository dirt", () => {
+  const { repoRoot, relayHome } = setupRepoWithOrigin();
+  process.env.RELAY_HOME = relayHome;
+  writeRelayPolicy(relayHome, {
+    profile: "allow-antigravity-dispatch",
+    allowed_model_routes: [{ route: "google/*", phases: ["dispatch"], executors: ["antigravity"] }],
+  });
+  const { env, ghLogPath, execLogPath, pushPrCountPath } = createPushPrTestEnv({
+    relayHome,
+    ghState: {
+      prCreateUrl: "https://github.com/acme/dev-relay/pull/594",
+    },
+    codexMode: "uncommitted",
+    executor: "antigravity",
+  });
+
+  const result = JSON.parse(runDispatch(repoRoot, [
+    "-b", "issue-593-antigravity-real-dirt",
+    "--prompt", "leave real repository dirt",
+    "--executor", "antigravity",
+    "--model", "google/antigravity-cli",
+    "--json",
+  ], env));
+
+  assert.equal(result.status, "completed-uncommitted");
+  assert.equal(result.commitMode, "completed-uncommitted, recover-commit required");
+  assert.equal(result.runState, STATES.REVIEW_PENDING);
+  assert.equal(result.commits, "");
+  assert.match(result.uncommitted, /README\.md/);
+  const manifest = readManifest(result.manifestPath).data;
+  assert.equal(manifest.state, STATES.REVIEW_PENDING);
+  assert.equal(manifest.git.pr_number, null);
   assert.deepEqual(readJsonLines(ghLogPath), []);
   assert.deepEqual(readJsonLines(execLogPath), []);
   assert.equal(Number(fs.readFileSync(pushPrCountPath, "utf-8")), 0);

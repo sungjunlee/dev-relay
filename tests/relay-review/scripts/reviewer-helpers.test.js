@@ -1,7 +1,11 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 
-const { summarizeFailure, ensureJsonText } = require("../../../skills/relay-review/scripts/reviewer-helpers");
+const {
+  ensureJsonText,
+  parseReviewerJsonObject,
+  summarizeFailure,
+} = require("../../../skills/relay-review/scripts/reviewer-helpers");
 
 test("summarizeFailure prefers stderr when both streams are populated", () => {
   // Anti-theater: rejects a naive `error.stdout || error.message` helper because callers surface
@@ -64,5 +68,16 @@ test("ensureJsonText rejects empty-string input", () => {
   assert.throws(
     () => ensureJsonText("", "Claude reviewer"),
     /did not return valid JSON/
+  );
+});
+
+test("parseReviewerJsonObject reports adapter and phase for invalid JSON", () => {
+  assert.throws(
+    () => parseReviewerJsonObject("not-json", {
+      adapter: "claude",
+      phase: "primary_review",
+      description: "review verdict",
+    }),
+    /adapter=claude phase=primary_review review verdict must be valid JSON:/
   );
 });

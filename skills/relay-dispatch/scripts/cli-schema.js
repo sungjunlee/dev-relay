@@ -148,8 +148,14 @@ const COMMAND_FLAGS = {
   "invoke-reviewer-codex": [
     "--repo", "--prompt-file", "--model", "--json", "--help",
   ],
+  "invoke-reviewer-antigravity": [
+    "--repo", "--prompt-file", "--model", "--phase", "--json", "--help",
+  ],
   "invoke-reviewer-opencode": [
-    "--repo", "--prompt-file", "--model", "--json", "--help",
+    "--repo", "--prompt-file", "--model", "--phase", "--json", "--help",
+  ],
+  "invoke-reviewer-pi": [
+    "--repo", "--prompt-file", "--model", "--phase", "--json", "--help",
   ],
   "persist-done-criteria": [
     "--repo", "--run-id", "--text", "--file", "--json", "--help",
@@ -158,7 +164,7 @@ const COMMAND_FLAGS = {
     "--repo", "--contract-file", "--json", "--help",
   ],
   "probe-executor-env": [
-    "--executor", "--timeout", "--project-only", "--json", "--help",
+    "--executor", "--model", "--timeout", "--project-only", "--json", "--help",
   ],
   "recover-state": [
     "--repo", "--run-id", "--manifest", "--to", "--reason", "--force", "--dry-run", "--json", "--help",

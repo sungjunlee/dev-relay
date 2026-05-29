@@ -1,4 +1,4 @@
-> **Status:** archived dispatch plan (Epic #394 closed 2026-05). Runtime guidance: [skills/relay-plan/references/guidance-packs.md](../../skills/relay-plan/references/guidance-packs.md).
+> **Status:** archived dispatch plan (Epic #394 closed 2026-05). Runtime guidance: [skills/relay-plan/references/guidance-packs.md](../../../skills/relay-plan/references/guidance-packs.md).
 
 # Issue #394 - Execution Guidance Layer for Relay Dispatch
 

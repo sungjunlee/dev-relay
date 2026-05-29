@@ -1,6 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { execFileSync } = require("child_process");
+const { execFileSync, spawnSync } = require("child_process");
 const crypto = require("crypto");
 const fs = require("fs");
 const os = require("os");
@@ -81,11 +81,9 @@ function setupRepo({
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-advisory-"));
   const remoteRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-advisory-origin-"));
   process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
-  if (modelPolicy === "allow-opencode-advisory") {
-    fs.writeFileSync(path.join(process.env.RELAY_HOME, "policy.json"), JSON.stringify({
-      ...buildDefaultRelayPolicy(),
+  const policyByName = {
+    "allow-opencode-advisory": {
       profile: "allow-opencode-advisory",
-      managed_cli: ["codex", "claude", "mirror"],
       allowed_model_routes: [{
         route: "opencode-go/*",
         phases: ["advisory_review"],
@@ -95,6 +93,47 @@ function setupRepo({
         phases: ["review"],
         reviewers: ["mirror"],
       }],
+    },
+    "allow-opencode-primary": {
+      profile: "allow-opencode-primary",
+      allowed_model_routes: [{
+        route: "opencode-go/*",
+        phases: ["review"],
+        reviewers: ["opencode"],
+      }],
+    },
+    "allow-pi-advisory": {
+      profile: "allow-pi-advisory",
+      allowed_model_routes: [{
+        route: "openai/*",
+        phases: ["advisory_review"],
+        reviewers: ["pi"],
+      }, {
+        route: "mirror/*",
+        phases: ["review"],
+        reviewers: ["mirror"],
+      }],
+    },
+    "allow-antigravity-advisory": {
+      profile: "allow-antigravity-advisory",
+      allowed_model_routes: [{
+        route: "google/*",
+        phases: ["advisory_review"],
+        reviewers: ["antigravity"],
+      }, {
+        route: "mirror/*",
+        phases: ["review"],
+        reviewers: ["mirror"],
+      }],
+    },
+  };
+  const selectedPolicy = policyByName[modelPolicy];
+  if (selectedPolicy) {
+    fs.writeFileSync(path.join(process.env.RELAY_HOME, "policy.json"), JSON.stringify({
+      ...buildDefaultRelayPolicy(),
+      profile: selectedPolicy.profile,
+      managed_cli: ["codex", "claude", "mirror"],
+      allowed_model_routes: selectedPolicy.allowed_model_routes,
     }, null, 2), "utf-8");
   }
   execFileSync("git", ["init", "-b", "main"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
@@ -167,8 +206,45 @@ setTimeout(() => {
   return filePath;
 }
 
-function writeFakeOpencode(repoRoot, { delayMs = 0, logPath = null, invalidJson = false, mutate = false, requiredFinding = false } = {}) {
+function writeFakeOpencode(repoRoot, { delayMs = 0, logPath = null, invalidJson = false, mutate = false, requiredFinding = false, primaryVerdict = null } = {}) {
   const filePath = path.join(repoRoot, "fake-opencode.js");
+  fs.writeFileSync(filePath, `#!/usr/bin/env node
+const fs = require("fs");
+const path = require("path");
+const logPath = ${JSON.stringify(logPath)};
+if (logPath) fs.appendFileSync(logPath, "advisory-start " + Date.now() + "\\n");
+if (${mutate ? "true" : "false"}) fs.writeFileSync(path.join(process.cwd(), "advisory-mutated.txt"), "bad\\n", "utf-8");
+setTimeout(() => {
+  if (${invalidJson ? "true" : "false"}) {
+    process.stdout.write("not json");
+  } else if (${JSON.stringify(primaryVerdict)} !== null) {
+    process.stdout.write(JSON.stringify(${JSON.stringify(primaryVerdict)}));
+  } else {
+    process.stdout.write(JSON.stringify({
+      profile: "blindspot",
+      summary: "One advisory blind spot.",
+      required_findings: ${requiredFinding ? `[{ title: "Required hardened fix", body: "Must fix before merge.", file: "README.md", line: 1, severity: "P2", category: "bypass", confidence: 0.9 }]` : "[]"},
+      advisory_findings: [{
+        title: "Advisory-only test gap",
+        body: "This should be recorded but not merged into primary redispatch.",
+        file: "README.md",
+        line: 1,
+        severity: "P3",
+        category: "test-gap",
+        confidence: 0.8
+      }],
+      duplicate_or_low_confidence: []
+    }));
+  }
+  if (logPath) fs.appendFileSync(logPath, "advisory-end " + Date.now() + "\\n");
+}, ${Number(delayMs)});
+`, "utf-8");
+  fs.chmodSync(filePath, 0o755);
+  return filePath;
+}
+
+function writeFakeAdvisoryCli(repoRoot, name, { delayMs = 0, logPath = null, invalidJson = false, mutate = false } = {}) {
+  const filePath = path.join(repoRoot, `fake-${name}.js`);
   fs.writeFileSync(filePath, `#!/usr/bin/env node
 const fs = require("fs");
 const path = require("path");
@@ -181,10 +257,10 @@ setTimeout(() => {
   } else {
     process.stdout.write(JSON.stringify({
       profile: "blindspot",
-      summary: "One advisory blind spot.",
-      required_findings: ${requiredFinding ? `[{ title: "Required hardened fix", body: "Must fix before merge.", file: "README.md", line: 1, severity: "P2", category: "bypass", confidence: 0.9 }]` : "[]"},
+      summary: ${JSON.stringify(`${name} advisory blind spot.`)},
+      required_findings: [],
       advisory_findings: [{
-        title: "Advisory-only test gap",
+        title: ${JSON.stringify(`${name} advisory-only test gap`)},
         body: "This should be recorded but not merged into primary redispatch.",
         file: "README.md",
         line: 1,
@@ -219,10 +295,16 @@ function runReview({
   diffPath,
   primaryScript,
   opencodeScript,
+  piScript = null,
+  antigravityScript = null,
   advisoryReviewer = "opencode",
   reviewer = "codex",
   extraArgs = [],
 }) {
+  const env = { ...process.env };
+  if (opencodeScript) env.RELAY_OPENCODE_BIN = opencodeScript;
+  if (piScript) env.RELAY_PI_BIN = piScript;
+  if (antigravityScript) env.RELAY_ANTIGRAVITY_BIN = antigravityScript;
   return JSON.parse(execFileSync("node", [
     SCRIPT,
     "--repo", repoRoot,
@@ -238,7 +320,7 @@ function runReview({
     ...extraArgs,
   ], {
     encoding: "utf-8",
-    env: { ...process.env, RELAY_OPENCODE_BIN: opencodeScript },
+    env,
   }));
 }
 
@@ -258,7 +340,88 @@ test("review-runner records successful opencode advisory review without gating p
   assert.ok(fs.existsSync(path.join(runDir, "review-round-1-advisory-opencode.json")));
   assert.equal(event.status, "success");
   assert.equal(event.profile, "blindspot");
+  assert.equal(event.policy_decision.allowed, true);
+  assert.equal(event.policy_decision.reason, "allowed_model_route");
   assert.equal(event.advisory_artifact_hash, hashFile(path.join(runDir, "review-round-1-advisory-opencode.json")));
+  assert.equal(event.reviewer_policy.read_only.enforcement_level, "prompt-only");
+  assert.match(event.reviewer_policy.read_only.warnings.join("\n"), /not prevent writes/i);
+});
+
+test("review-runner accepts opencode primary review when route policy allows the reviewer model", () => {
+  const { repoRoot, manifestPath, runDir, runId, doneCriteriaPath, diffPath } = setupRepo({
+    modelPolicy: "allow-opencode-primary",
+    roles: { orchestrator: "codex", executor: "codex", reviewer: "opencode" },
+  });
+  const opencodeScript = writeFakeOpencode(repoRoot, {
+    primaryVerdict: passVerdict(),
+  });
+
+  const result = JSON.parse(execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--run-id", runId,
+    "--pr", "429",
+    "--done-criteria-file", doneCriteriaPath,
+    "--diff-file", diffPath,
+    "--reviewer", "opencode",
+    "--no-comment",
+    "--json",
+  ], {
+    encoding: "utf-8",
+    env: { ...process.env, RELAY_OPENCODE_BIN: opencodeScript },
+  }));
+  const manifest = readManifest(manifestPath).data;
+  const event = readRunEvents(repoRoot, runId).find((record) => record.event === "review_invoke");
+
+  assert.equal(result.nextState, STATES.READY_TO_MERGE);
+  assert.equal(result.reviewer, "opencode");
+  assert.equal(result.appliedVerdict, "pass");
+  assert.equal(manifest.state, STATES.READY_TO_MERGE);
+  assert.deepEqual(manifest.roles, { orchestrator: "codex", executor: "codex", reviewer: "opencode" });
+  assert.equal(manifest.review.last_reviewer, "opencode");
+  assert.ok(fs.existsSync(path.join(runDir, "review-round-1-verdict.json")));
+  assert.equal(event.reviewer_policy.adapter, "opencode");
+  assert.equal(event.reviewer_policy.phase, "primary_review");
+  assert.equal(event.reviewer_policy.safe, true);
+  assert.equal(event.policy_decision.allowed, true);
+  assert.equal(event.policy_decision.model, "opencode-go/deepseek-v4-pro");
+});
+
+test("review-runner denies opencode primary review before spawning when route policy blocks the model", () => {
+  const { repoRoot, manifestPath, runId, doneCriteriaPath, diffPath } = setupRepo({ modelPolicy: "default" });
+  const logPath = path.join(repoRoot, "opencode-primary-policy.log");
+  const opencodeScript = writeFakeOpencode(repoRoot, {
+    logPath,
+    primaryVerdict: passVerdict(),
+  });
+  const proc = spawnSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--run-id", runId,
+    "--pr", "429",
+    "--done-criteria-file", doneCriteriaPath,
+    "--diff-file", diffPath,
+    "--reviewer", "opencode",
+    "--reviewer-model", "opencode-go/deepseek-v4-pro",
+    "--no-comment",
+    "--json",
+  ], {
+    encoding: "utf-8",
+    env: { ...process.env, RELAY_OPENCODE_BIN: opencodeScript },
+  });
+
+  assert.notEqual(proc.status, 0);
+  assert.equal(fs.existsSync(logPath), false);
+  const result = JSON.parse(proc.stdout);
+  assert.equal(result.status, "failed");
+  assert.equal(result.adapter_capability.adapter, "opencode");
+  assert.equal(result.adapter_capability.phase, "primary_review");
+  assert.equal(result.adapter_capability.safe, true);
+  assert.equal(result.policy_decision.allowed, false);
+  assert.equal(result.policy_decision.phase, "review");
+  assert.equal(result.policy_decision.reviewer, "opencode");
+  assert.equal(result.policy_decision.model, "opencode-go/deepseek-v4-pro");
+  assert.equal(readManifest(manifestPath).data.state, STATES.REVIEW_PENDING);
 });
 
 test("review-runner uses manifest routing advisory defaults without changing the primary reviewer", () => {
@@ -307,6 +470,140 @@ test("review-runner denies disallowed advisory model before spawning advisory re
     /phase=advisory_review.*reviewer=opencode|reviewer=opencode.*phase=advisory_review/
   );
   assert.equal(fs.existsSync(logPath), false);
+});
+
+test("review-runner accepts pi advisory review when route policy allows the reviewer model", () => {
+  const { repoRoot, runDir, runId, doneCriteriaPath, diffPath } = setupRepo({ modelPolicy: "allow-pi-advisory" });
+  const primaryScript = writePrimaryReviewer(repoRoot, passVerdict());
+  const piScript = writeFakeAdvisoryCli(repoRoot, "pi");
+
+  const result = runReview({
+    repoRoot,
+    runId,
+    doneCriteriaPath,
+    diffPath,
+    primaryScript,
+    opencodeScript: null,
+    piScript,
+    advisoryReviewer: "pi",
+    extraArgs: ["--advisory-reviewer-model", "openai/gpt-5"],
+  });
+  const event = readRunEvents(repoRoot, runId).find((record) => record.event === "advisory_review");
+
+  assert.equal(result.nextState, STATES.READY_TO_MERGE);
+  assert.equal(result.advisoryReview.status, "success");
+  assert.equal(result.advisoryReview.reviewer, "pi");
+  assert.ok(fs.existsSync(path.join(runDir, "review-round-1-advisory-pi.json")));
+  assert.equal(event.reviewer, "pi");
+  assert.equal(event.policy_decision.allowed, true);
+  assert.equal(event.policy_decision.model, "openai/gpt-5");
+  assert.equal(event.reviewer_policy.adapter, "pi");
+  assert.equal(event.reviewer_policy.phase, "advisory_review");
+  assert.equal(event.reviewer_policy.safe, true);
+});
+
+test("review-runner accepts antigravity advisory review when route policy allows the reviewer model", () => {
+  const { repoRoot, runDir, runId, doneCriteriaPath, diffPath } = setupRepo({ modelPolicy: "allow-antigravity-advisory" });
+  const primaryScript = writePrimaryReviewer(repoRoot, passVerdict());
+  const antigravityScript = writeFakeAdvisoryCli(repoRoot, "antigravity");
+
+  const result = runReview({
+    repoRoot,
+    runId,
+    doneCriteriaPath,
+    diffPath,
+    primaryScript,
+    opencodeScript: null,
+    antigravityScript,
+    advisoryReviewer: "antigravity",
+    extraArgs: ["--advisory-reviewer-model", "google/antigravity-cli"],
+  });
+  const event = readRunEvents(repoRoot, runId).find((record) => record.event === "advisory_review");
+
+  assert.equal(result.nextState, STATES.READY_TO_MERGE);
+  assert.equal(result.advisoryReview.status, "success");
+  assert.equal(result.advisoryReview.reviewer, "antigravity");
+  assert.ok(fs.existsSync(path.join(runDir, "review-round-1-advisory-antigravity.json")));
+  assert.equal(event.reviewer, "antigravity");
+  assert.equal(event.policy_decision.allowed, true);
+  assert.equal(event.policy_decision.model, "google/antigravity-cli");
+  assert.equal(event.reviewer_policy.adapter, "antigravity");
+  assert.equal(event.reviewer_policy.phase, "advisory_review");
+  assert.equal(event.reviewer_policy.safe, true);
+});
+
+test("review-runner denies pi advisory model before spawning advisory reviewer", () => {
+  const { repoRoot, runId, doneCriteriaPath, diffPath } = setupRepo({ modelPolicy: "default" });
+  const logPath = path.join(repoRoot, "pi-advisory-policy.log");
+  const primaryScript = writePrimaryReviewer(repoRoot, passVerdict());
+  const piScript = writeFakeAdvisoryCli(repoRoot, "pi", { logPath });
+
+  const proc = spawnSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--run-id", runId,
+    "--pr", "429",
+    "--done-criteria-file", doneCriteriaPath,
+    "--diff-file", diffPath,
+    "--reviewer", "codex",
+    "--reviewer-script", primaryScript,
+    "--advisory-reviewer", "pi",
+    "--advisory-reviewer-model", "openai/gpt-5",
+    "--no-comment",
+    "--json",
+  ], {
+    encoding: "utf-8",
+    env: { ...process.env, RELAY_PI_BIN: piScript },
+  });
+
+  assert.notEqual(proc.status, 0);
+  assert.equal(fs.existsSync(logPath), false);
+  const result = JSON.parse(proc.stdout);
+  assert.equal(result.status, "failed");
+  assert.equal(result.adapter_capability.adapter, "pi");
+  assert.equal(result.adapter_capability.phase, "advisory_review");
+  assert.equal(result.adapter_capability.safe, true);
+  assert.equal(result.policy_decision.allowed, false);
+  assert.equal(result.policy_decision.phase, "advisory_review");
+  assert.equal(result.policy_decision.reviewer, "pi");
+  assert.equal(result.policy_decision.model, "openai/gpt-5");
+});
+
+test("review-runner denies antigravity advisory model before spawning advisory reviewer", () => {
+  const { repoRoot, runId, doneCriteriaPath, diffPath } = setupRepo({ modelPolicy: "default" });
+  const logPath = path.join(repoRoot, "antigravity-advisory-policy.log");
+  const primaryScript = writePrimaryReviewer(repoRoot, passVerdict());
+  const antigravityScript = writeFakeAdvisoryCli(repoRoot, "antigravity", { logPath });
+
+  const proc = spawnSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--run-id", runId,
+    "--pr", "429",
+    "--done-criteria-file", doneCriteriaPath,
+    "--diff-file", diffPath,
+    "--reviewer", "codex",
+    "--reviewer-script", primaryScript,
+    "--advisory-reviewer", "antigravity",
+    "--advisory-reviewer-model", "google/antigravity-cli",
+    "--no-comment",
+    "--json",
+  ], {
+    encoding: "utf-8",
+    env: { ...process.env, RELAY_ANTIGRAVITY_BIN: antigravityScript },
+  });
+
+  assert.notEqual(proc.status, 0);
+  assert.equal(fs.existsSync(logPath), false);
+  const result = JSON.parse(proc.stdout);
+  assert.equal(result.status, "failed");
+  assert.equal(result.adapter_capability.adapter, "antigravity");
+  assert.equal(result.adapter_capability.phase, "advisory_review");
+  assert.equal(result.adapter_capability.safe, true);
+  assert.equal(result.policy_decision.allowed, false);
+  assert.equal(result.policy_decision.phase, "advisory_review");
+  assert.equal(result.policy_decision.reviewer, "antigravity");
+  assert.equal(result.policy_decision.model, "google/antigravity-cli");
 });
 
 test("prepare-only with advisory flags writes only the primary prompt bundle", () => {

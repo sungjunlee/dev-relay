@@ -4,7 +4,7 @@ Route policy answers one operational question: which provider/model route is all
 
 Executor and reviewer names such as `codex`, `claude`, `opencode`, and `pi` are harness names. They select a CLI adapter and execution contract. They are not the compliance boundary. The compliance boundary is the provider/model route string, for example `kakao/opencode-glm-5-fp8`, `opencode-go/deepseek-v4-pro`, `deepseek/r1`, or `ollama/qwen3`.
 
-Codex and Claude are the managed CLI defaults. In the default managed profile, a model-less Codex or Claude invocation is allowed because the CLI account and its managed default model are the boundary. Generated company defaults should not pin Codex or Claude model names just to make policy explicit. OpenCode and Pi are routing harnesses, so managed/company profiles must require an explicit provider/model route and an allow rule before they can run.
+Codex and Claude are the managed CLI defaults. In the default managed profile, a model-less Codex or Claude invocation is allowed because the CLI account and its managed default model are the boundary. Generated company defaults should not pin Codex or Claude model names just to make policy explicit. OpenCode, Pi, and Antigravity are routing harnesses, so managed/company profiles must require an explicit provider/model route and an allow rule before they can run.
 
 ## Default Posture
 
@@ -27,7 +27,7 @@ When no policy config exists, relay loads a fail-closed default policy:
 }
 ```
 
-That means missing policy config defaults to Codex/Claude managed CLI only. `codex` and `claude` pass the gate without a pinned model route. `opencode`, `pi`, and any other unmanaged harness fail unless the effective invocation includes a provider/model route and that route matches `allowed_model_routes`.
+That means missing policy config defaults to Codex/Claude managed CLI only. `codex` and `claude` pass the gate without a pinned model route. `opencode`, `pi`, `antigravity`, and any other unmanaged harness fail unless the effective invocation includes a provider/model route and that route matches `allowed_model_routes`.
 
 ## Precedence
 
@@ -36,6 +36,10 @@ Use this final precedence order when reasoning about an invocation:
 `CLI flags -> routing rules -> defaults -> existing relay defaults -> policy gate`
 
 The policy gate is last and fail-closed. A route selected by a CLI flag, a routing rule, a model hint, an executor default, or an existing relay fallback still has to pass the policy gate. Deny rules win over allow rules, and unknown provider/model routes are denied when `deny_unknown_model_routes` is true.
+
+Adapter capability checks happen before the model-route policy gate. The adapter layer answers whether the selected CLI can safely perform the requested phase and containment mode, such as dispatch vs primary review vs advisory review, read-only requirements, sandbox metadata, and network metadata. The route-policy layer answers only whether the already-capable effective provider/model route is allowed for the active profile.
+
+For example, `--reviewer opencode --reviewer-model openai/gpt-5` reaches the route-policy gate because OpenCode can now represent primary review, then fails as a model-route denial unless that route is allowed for `phase=review`. Likewise, `--advisory-reviewer pi --advisory-reviewer-model openai/gpt-5` reaches the advisory route-policy gate because Pi can represent advisory review. JSON failures expose these layers separately as `adapter_capability` and `policy_decision`.
 
 ## Phase Interaction
 
@@ -52,20 +56,28 @@ Policy `defaults` describe configured actor defaults for auditing and future-saf
 
 ## Company/Internal Setup
 
-Initialize a company policy:
+After installing skills, prefer the interactive setup skill. Ask in natural language and let it inspect the current policy before writing:
+
+```text
+/relay-config 회사 환경으로 relay 설정해줘. opencode는 kakao/opencode-glm-*만 허용해줘.
+```
+
+The skill should show the proposed policy, ask for confirmation, apply it, then run `doctor` and representative `check` commands.
+
+From a direct checkout, initialize a company policy with the wrapper:
 
 ```bash
-node skills/relay-dispatch/scripts/relay-config.js init --profile company
+node skills/relay-config/scripts/relay-config.js init company
 ```
 
 The generated company policy intentionally keeps Codex and Claude as managed CLI defaults with no pinned model names. Add internal OpenCode or Pi routes explicitly:
 
 ```bash
-node skills/relay-dispatch/scripts/relay-config.js allow-route 'kakao/opencode-glm-*' \
+node skills/relay-config/scripts/relay-config.js allow-route 'kakao/opencode-glm-*' \
   --phase dispatch,advisory_review,sidecar \
   --executor opencode
 
-node skills/relay-dispatch/scripts/relay-config.js allow-route 'kakao/pi-*' \
+node skills/relay-config/scripts/relay-config.js allow-route 'kakao/pi-*' \
   --phase dispatch,review,advisory_review,sidecar \
   --executor pi \
   --reviewer pi
@@ -117,24 +129,30 @@ Repo-local `.relay/policy.json` files may narrow the global policy but may not w
 
 ## Personal Opt-In Setup
 
-Initialize a personal policy:
+After installing skills, prefer natural-language setup:
+
+```text
+$relay-config 집에서는 opencode-go/deepseek-v4-pro를 sidecar/advisory에 쓰게 설정해줘.
+```
+
+From a direct checkout, initialize a personal policy:
 
 ```bash
-node skills/relay-dispatch/scripts/relay-config.js init --profile personal
+node skills/relay-config/scripts/relay-config.js init personal
 ```
 
 Then opt in to the routes you personally allow:
 
 ```bash
-node skills/relay-dispatch/scripts/relay-config.js allow-route 'opencode-go/*' \
+node skills/relay-config/scripts/relay-config.js allow-route 'opencode-go/*' \
   --phase dispatch,advisory_review,sidecar \
   --executor opencode
 
-node skills/relay-dispatch/scripts/relay-config.js allow-route 'deepseek/*' \
+node skills/relay-config/scripts/relay-config.js allow-route 'deepseek/*' \
   --phase dispatch,advisory_review,sidecar \
   --executor opencode
 
-node skills/relay-dispatch/scripts/relay-config.js allow-route 'ollama/*' \
+node skills/relay-config/scripts/relay-config.js allow-route 'ollama/*' \
   --phase dispatch,advisory_review,sidecar \
   --executor opencode
 ```
@@ -160,10 +178,10 @@ This file changes model selection only. It does not grant policy approval. The s
 
 ## Doctor And Check
 
-Run `relay-config doctor` after policy changes and before enabling advisory reviewers or sidecars:
+Run `relay-config doctor` after policy changes and before enabling advisory reviewers or sidecars. Installed operators should use the skill; direct-checkout users can run:
 
 ```bash
-node skills/relay-dispatch/scripts/relay-config.js doctor
+node skills/relay-config/scripts/relay-config.js doctor
 ```
 
 Doctor reports whether known CLIs are installed and how policy treats each harness. For OpenCode or Pi, `route-configured (provider_model_route_required)` is expected when an allow rule exists but a specific model was not supplied to doctor. That is a reminder that the harness name alone is not compliant.
@@ -171,48 +189,45 @@ Doctor reports whether known CLIs are installed and how policy treats each harne
 Run `relay-config check` for each actual tuple you plan to enable:
 
 ```bash
-node skills/relay-dispatch/scripts/relay-config.js check \
-  --phase dispatch \
-  --executor opencode \
-  --model kakao/opencode-glm-5-fp8
+node skills/relay-config/scripts/relay-config.js check dispatch opencode kakao/opencode-glm-5-fp8
 
-node skills/relay-dispatch/scripts/relay-config.js check \
-  --phase advisory_review \
-  --executor opencode \
-  --reviewer opencode \
-  --model kakao/opencode-glm-5-fp8
+node skills/relay-config/scripts/relay-config.js check advisory_review opencode kakao/opencode-glm-5-fp8
 
-node skills/relay-dispatch/scripts/relay-config.js check \
-  --phase sidecar \
-  --executor opencode \
-  --model kakao/opencode-glm-5-fp8
+node skills/relay-config/scripts/relay-config.js check sidecar opencode kakao/opencode-glm-5-fp8
 ```
 
 Check exits non-zero when the tuple would be denied at runtime. Run it before turning on routed advisory review or sidecar rules because those phases can start automatically after dispatch.
+
+For pre-planning dispatch probes, run the matching `probe-executor-env` command with the same unmanaged route. The probe evaluates `--executor` plus `--model` as a dispatch policy tuple before invoking the adapter:
+
+```bash
+node skills/relay-config/scripts/relay-config.js check dispatch pi opencode-go/deepseek-v4-pro
+
+node skills/relay-plan/scripts/probe-executor-env.js . \
+  --executor pi \
+  --model opencode-go/deepseek-v4-pro \
+  --json
+```
+
+If the route is allowed, the probe policy decision reports `reason=allowed_model_route`, `model=opencode-go/deepseek-v4-pro`, and then invokes the Pi adapter probe. If `--model` is omitted and no executor default supplies a provider/model route, unmanaged executors fail closed before adapter invocation: JSON output reports `policy_decision.reason=missing_model_route`, `policy_decision.model=null`, and `agent_tools_raw=null`. This is different from an explicit but unapproved route, which reports `unknown_model_route` with the rejected route in `policy_decision.model`.
 
 ## Denial Example
 
 With the company policy above, an external OpenAI route through OpenCode is not allowed:
 
 ```bash
-$ node skills/relay-dispatch/scripts/relay-config.js check \
-  --phase dispatch \
-  --executor opencode \
-  --model openai/gpt-5
+$ node skills/relay-config/scripts/relay-config.js check dispatch opencode openai/gpt-5
 denied: unknown_model_route
 ```
 
 If the route is explicitly denied, the reason is stronger and the matched deny route is shown:
 
 ```bash
-$ node skills/relay-dispatch/scripts/relay-config.js deny-route 'openai/*' \
+$ node skills/relay-config/scripts/relay-config.js deny-route 'openai/*' \
   --phase dispatch \
   --executor opencode
 
-$ node skills/relay-dispatch/scripts/relay-config.js check \
-  --phase dispatch \
-  --executor opencode \
-  --model openai/gpt-5
+$ node skills/relay-config/scripts/relay-config.js check dispatch opencode openai/gpt-5
 denied: denied_model_route
 matched route: openai/*
 ```

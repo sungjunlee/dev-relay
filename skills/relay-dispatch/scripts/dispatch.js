@@ -123,6 +123,15 @@ const {
 const { STATES, updateManifestState } = require("./manifest/lifecycle");
 const { resolveManifestRecord } = require("./relay-resolver");
 const { appendRunEvent, EVENTS } = require("./relay-events");
+const {
+  ADAPTER_PHASES,
+  getAgentAdapterDescriptor,
+} = require("./agent-adapters");
+const {
+  assertPolicyRepresentable,
+  buildAdapterCapabilityFailureEnvelope,
+  buildAgentPolicyAudit,
+} = require("./agent-adapters/policy");
 const { execGit } = require("./exec");
 const { resolveReasoningEffort } = require("./rubric-size");
 const {
@@ -131,6 +140,7 @@ const {
 } = require("./relay-policy-gate");
 const { loadRelayPolicy } = require("./relay-policy");
 const { resolveRoutingDecision } = require("./relay-routing");
+const { classifyRepositoryDirt, formatRuntimeMetadataDirt } = require("./runtime-dirt");
 
 // ---------------------------------------------------------------------------
 // Args
@@ -146,6 +156,7 @@ const KNOWN_FLAGS = [
 ];
 const CLI_ARG_OPTIONS = { commandName: "dispatch", reservedFlags: KNOWN_FLAGS };
 const hasCliFlag = (flag) => schemaHasFlag(args, flag, CLI_ARG_OPTIONS);
+const JSON_OUT_REQUESTED = hasCliFlag("--json");
 
 if (!args.length || hasCliFlag(["--help", "-h"])) {
   console.log("Usage: dispatch.js <repo-path> --branch <name> --prompt <task> [options]");
@@ -202,8 +213,10 @@ const PROMPT = readArg(args, ["--prompt", "-p"], undefined, CLI_ARG_OPTIONS);
 const PROMPT_FILE = readArg(args, "--prompt-file", undefined, CLI_ARG_OPTIONS);
 const EXECUTOR = readArg(args, ["--executor", "-e"], "codex", CLI_ARG_OPTIONS);
 let adapter;
+let adapterDescriptor;
 try {
   adapter = getExecutor(EXECUTOR);
+  adapterDescriptor = getAgentAdapterDescriptor(EXECUTOR);
 } catch (error) {
   console.error(`Error: ${error.message}`);
   process.exit(1);
@@ -242,10 +255,52 @@ if (!["disabled", "enabled"].includes(NETWORK_ACCESS)) {
 }
 const modeValidation = adapter.validateExecutionMode({ sandbox: SANDBOX, networkAccess: NETWORK_ACCESS });
 if (!modeValidation.ok) {
+  if (JSON_OUT_REQUESTED) {
+    console.log(JSON.stringify(buildAdapterCapabilityFailureEnvelope({
+      adapter: EXECUTOR,
+      phase: ADAPTER_PHASES.DISPATCH,
+      requested: {
+        sandbox: SANDBOX,
+        network: NETWORK_ACCESS,
+        read_only: SANDBOX === "read-only",
+      },
+      safe: false,
+      warnings: modeValidation.warnings || [],
+      fail_closed_reasons: [modeValidation.error],
+    }, {
+      executor: EXECUTOR,
+      phase: "dispatch",
+    }), null, 2));
+  }
   console.error(`Error: ${modeValidation.error}`);
   process.exit(1);
 }
 for (const warn of (modeValidation.warnings || [])) {
+  console.error(`Warning: ${warn}`);
+}
+
+let executorPolicy;
+try {
+  executorPolicy = assertPolicyRepresentable(buildAgentPolicyAudit({
+    descriptor: adapterDescriptor,
+    phase: ADAPTER_PHASES.DISPATCH,
+    requested: {
+      sandbox: SANDBOX,
+      networkAccess: NETWORK_ACCESS,
+      readOnly: SANDBOX === "read-only",
+    },
+  }));
+} catch (error) {
+  if (JSON_OUT_REQUESTED) {
+    console.log(JSON.stringify(buildAdapterCapabilityFailureEnvelope(error, {
+      executor: EXECUTOR,
+      phase: "dispatch",
+    }), null, 2));
+  }
+  console.error(`Error: ${error.message}`);
+  process.exit(1);
+}
+for (const warn of executorPolicy.warnings || []) {
   console.error(`Warning: ${warn}`);
 }
 
@@ -289,7 +344,7 @@ const AUTO_RECOVER_COMMIT = AUTO_RECOVER_COMMIT_REQUESTED
     : EXECUTOR === "codex";
 const ALLOW_CONFLICTING_RUN = hasCliFlag("--allow-conflicting-run");
 const DRY_RUN = hasCliFlag("--dry-run");
-const JSON_OUT = hasCliFlag("--json");
+const JSON_OUT = JSON_OUT_REQUESTED;
 const RESUME_MODE = !!MANIFEST_INPUT || (!!RUN_ID && !BRANCH);
 
 if (AUTO_RECOVER_COMMIT_REQUESTED && NO_AUTO_RECOVER_COMMIT) {
@@ -580,12 +635,14 @@ function validateExecutorCli() {
     process.exit(1);
   }
   const cli = adapter.cliBinary || EXECUTOR;
+  let version;
   try {
-    execFileSync(cli, ["--version"], { encoding: "utf-8", stdio: "pipe" });
+    version = execFileSync(cli, ["--version"], { encoding: "utf-8", stdio: "pipe" }).trim();
   } catch {
     console.error(`Error: ${cli} CLI not found.`);
     process.exit(1);
   }
+  return { binary: cli, version };
 }
 
 function findLatestRedispatchPrompt(runDir) {
@@ -659,14 +716,11 @@ function resolveEffectiveDispatchModel({ cliModel, manifestModelHints, cliModelH
 }
 
 function summarizeCommitMode({ status, gitLog, uncommitted }) {
-  if (!gitLog && uncommitted) {
+  if (status === "completed-uncommitted") {
     return "completed-uncommitted, recover-commit required";
   }
   if (status === "completed" || status === "completed-with-warning") {
     return gitLog ? "committed in-sandbox" : status;
-  }
-  if (status === "completed-uncommitted") {
-    return "completed-uncommitted, recover-commit required";
   }
   return status;
 }
@@ -994,6 +1048,8 @@ async function main() {
       executor: EXECUTOR,
       model: effectiveDispatchModel,
       phase: "dispatch",
+      adapter_capability: executorPolicy,
+      executor_policy: executorPolicy,
     });
     if (JSON_OUT) {
       console.log(JSON.stringify(envelope, null, 2));
@@ -1090,7 +1146,11 @@ async function main() {
     return;
   }
 
-  validateExecutorCli();
+  const executorCli = validateExecutorCli();
+  executorPolicy = {
+    ...executorPolicy,
+    cli: executorCli,
+  };
 
   if (!RESUME_MODE) {
     try {
@@ -1167,6 +1227,7 @@ async function main() {
       policy: {
         ...(manifest.policy || {}),
         executor_network: executorNetworkPolicy,
+        executor_policy: executorPolicy,
       },
       routing: routingDecision,
     };
@@ -1178,6 +1239,7 @@ async function main() {
       policy: {
         ...(manifest.policy || {}),
         executor_network: executorNetworkPolicy,
+        executor_policy: executorPolicy,
       },
       routing: routingDecision,
     };
@@ -1264,6 +1326,7 @@ async function main() {
     sandbox: SANDBOX,
     networkAccess: NETWORK_ACCESS,
     reasoning: resolvedReasoningEffort,
+    timeoutSeconds: TIMEOUT,
   });
   cmd = buildResult.cmd;
   execArgs = buildResult.args;
@@ -1271,7 +1334,7 @@ async function main() {
   codexGitCommonDir = buildResult.codexGitCommonDir || null;
 
   if (EXECUTOR === "opencode") {
-    console.error("Warning: opencode executor is experimental; see docs/reviewer-policy-opencode.md for trust boundary and reviewer policy.");
+    console.error("Warning: opencode executor is experimental; see relay-dispatch/references/reviewer-policy-opencode.md for trust boundary and reviewer policy.");
   }
 
   if (!JSON_OUT) {
@@ -1322,6 +1385,8 @@ async function main() {
     model: effectiveDispatchModel,
     provider,
     executor_network: executorNetworkPolicy,
+    executor_policy: executorPolicy,
+    policy_decision: policyDecision,
   });
 
   // Redirect stdout/stderr to files. Using spawn with detached: true gives us
@@ -1410,11 +1475,14 @@ async function main() {
     uncommittedDiff = [wd, staged].filter(Boolean).join("\n");
   } catch {}
 
-  // Check for uncommitted work (executor may have worked but not committed)
-  let uncommitted = "";
+  // Check for uncommitted work (executor may have worked but not committed).
+  // Executor runtime metadata is not reviewable repository work.
+  let rawUncommitted = "";
   try {
-    uncommitted = execGit(wtPath, ["status", "--porcelain"]);
+    rawUncommitted = execGit(wtPath, ["status", "--porcelain"]);
   } catch {}
+  const dirt = classifyRepositoryDirt(rawUncommitted);
+  let uncommitted = dirt.reviewableStatus;
 
   const hasResult = resultText !== "";
 
@@ -1437,6 +1505,13 @@ async function main() {
     error = error || "executor produced no structured result file or summary (silent failure)";
   } else if (execResult.timedOut && hasWork) {
     status = "completed-with-warning";
+  } else if (exitCode === 0 && !gitLog && dirt.hasOnlyRuntimeMetadataDirt && EXECUTOR !== "codex") {
+    status = "failed";
+    error = error || (
+      "executor produced no reviewable repository changes; only runtime metadata dirt was detected: " +
+      `${formatRuntimeMetadataDirt(rawUncommitted)}. ` +
+      "Rerun dispatch after producing source changes, or close the run as a no-op."
+    );
   } else if (exitCode === 0 && !gitLog && !uncommitted) {
     status = "completed-no-op";
   } else if (exitCode === 0 && !gitLog && uncommitted) {
@@ -1523,6 +1598,8 @@ async function main() {
       ? `${RESUME_MODE ? "same_run_resume" : "new_dispatch"}:${error || "dispatch_failed"}`
       : `${RESUME_MODE ? "same_run_resume" : "new_dispatch"}:${status}`,
     executor_network: executorNetworkPolicy,
+    executor_policy: executorPolicy,
+    policy_decision: policyDecision,
     failure_class: networkFailure,
     execution_evidence_path: executionEvidencePath,
     execution_evidence_hash: executionEvidencePath ? hashFileSha256(executionEvidencePath) : null,
@@ -1548,7 +1625,7 @@ async function main() {
       currentHead = recovery.commitSha || currentHead;
       try {
         gitLog = execGit(wtPath, ["log", "--oneline", `${startHead}..HEAD`]);
-        uncommitted = execGit(wtPath, ["status", "--porcelain"]);
+        uncommitted = classifyRepositoryDirt(execGit(wtPath, ["status", "--porcelain"])).reviewableStatus;
         if (!uncommitted) uncommittedDiff = "";
       } catch {}
       try {
@@ -1606,6 +1683,7 @@ async function main() {
     commitMode,
     executor: EXECUTOR,
     executorNetwork: executorNetworkPolicy,
+    executorPolicy,
     policyDecision,
     routingDecision,
     routedSidecar,

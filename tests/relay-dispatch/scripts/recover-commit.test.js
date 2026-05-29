@@ -144,6 +144,7 @@ function buildManifestForState(manifest, state, repoRoot, runId) {
 
 function setupRepo({
   dirty = false,
+  runtimeOnlyDirty = false,
   unpushed = false,
   evidence = false,
   manifestState = STATES.REVIEW_PENDING,
@@ -175,6 +176,11 @@ function setupRepo({
   execFileSync("git", ["worktree", "add", worktreePath, "-b", branch], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
   if (dirty) {
     fs.writeFileSync(path.join(worktreePath, "recovered.txt"), "completed but uncommitted\n", "utf-8");
+  }
+  if (runtimeOnlyDirty) {
+    const runtimeDir = path.join(worktreePath, ".antigravitycli");
+    fs.mkdirSync(runtimeDir, { recursive: true });
+    fs.writeFileSync(path.join(runtimeDir, "session.json"), "{}\n", "utf-8");
   }
   if (unpushed) {
     fs.writeFileSync(path.join(worktreePath, "unpushed.txt"), "committed but not pushed\n", "utf-8");
@@ -281,6 +287,37 @@ test("happy path commits dirty worktree, pushes, opens PR, stamps manifest, and 
   assert.equal(readJsonLines(fixture.ghLogPath).filter((argv) => argv[0] === "pr" && argv[1] === "create").length, 1);
 });
 
+test("recover-commit canonicalizes manifest repo_root when it shares the expected git common dir", () => {
+  const fixture = setupRepo({ dirty: true });
+  const linkedRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-recover-linked-root-"));
+  execFileSync("git", ["worktree", "add", linkedRoot, "-b", "equivalent-root-626"], {
+    cwd: fixture.repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+  });
+  const beforeManifest = readManifest(fixture.manifestPath);
+  writeManifest(fixture.manifestPath, {
+    ...beforeManifest.data,
+    paths: {
+      ...beforeManifest.data.paths,
+      repo_root: linkedRoot,
+    },
+  }, beforeManifest.body);
+
+  const result = runRecover(fixture, ["--reason", "executor completed before commit", "--json"]);
+
+  assert.equal(result.status, 0, result.stderr);
+  const parsed = JSON.parse(result.stdout);
+  assert.equal(parsed.status, "recovered");
+  assert.equal(parsed.prNumber, 281);
+
+  const manifest = readManifest(fixture.manifestPath).data;
+  assert.equal(manifest.paths.repo_root, fixture.repoRoot);
+  assert.equal(manifest.paths.worktree, fixture.worktreePath);
+  assert.equal(manifest.git.pr_number, 281);
+  assert.ok(readRunEvents(fixture.repoRoot, fixture.runId).some((entry) => entry.event === "recover_commit"));
+});
+
 test("default PR title uses manifest issue title when available", () => {
   const fixture = setupRepo({ dirty: true });
   const result = runRecover(fixture, ["--reason", "executor completed before commit", "--json"]);
@@ -383,6 +420,20 @@ test("clean worktree with no unpushed commits rejects as nothing to recover", ()
 
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /nothing_to_recover/);
+  assert.equal(readManifest(fixture.manifestPath).data.git.pr_number, null);
+  assert.equal(readJsonLines(fixture.ghLogPath).filter((argv) => argv[0] === "pr" && argv[1] === "create").length, 0);
+});
+
+test("runtime-only Antigravity dirt rejects as nothing reviewable to recover", () => {
+  const fixture = setupRepo({ runtimeOnlyDirty: true });
+  const beforeHead = execFileSync("git", ["-C", fixture.worktreePath, "rev-parse", "HEAD"], { encoding: "utf-8" }).trim();
+  const result = runRecover(fixture, ["--reason", "runtime metadata only", "--json"]);
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /nothing_to_recover/);
+  assert.match(result.stderr, /runtime metadata dirt/);
+  assert.match(result.stderr, /\.antigravitycli\//);
+  assert.equal(execFileSync("git", ["-C", fixture.worktreePath, "rev-parse", "HEAD"], { encoding: "utf-8" }).trim(), beforeHead);
   assert.equal(readManifest(fixture.manifestPath).data.git.pr_number, null);
   assert.equal(readJsonLines(fixture.ghLogPath).filter((argv) => argv[0] === "pr" && argv[1] === "create").length, 0);
 });

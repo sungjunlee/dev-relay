@@ -18,12 +18,16 @@ const { applyReviewAssurancePolicy } = require("./review-runner/assurance");
 const { buildRedispatchPrompt, buildRubricGateRedispatchPrompt, computeFactorStatusFlips, computeRepeatedIssueCount, decideFlipFlopEscalation, detectChurnGrowth, summarizeLineage, toEscalatedVerdict } = require("./review-runner/redispatch");
 const { applyPolicyViolationToManifest, applyVerdictToManifest } = require("./review-runner/manifest-apply");
 const { writePrBodySnapshot } = require("./review-runner/pr-body-snapshot");
-const { loadReviewText, resolveReviewerModel, resolveReviewerName, resolveReviewerScript } = require("./review-runner/reviewer-invoke");
+const { buildPrimaryReviewerPreflight, loadReviewText, resolveReviewerName, resolveReviewerScript } = require("./review-runner/reviewer-invoke");
 const { maybeSwapReviewer } = require("./review-runner/reviewer-swap");
 const { resolveAdvisoryConfig, settleAdvisoryForVerdict, startConfiguredAdvisory } = require("./review-runner/advisory-orchestration");
 const { printResult, printUsage } = require("./review-runner/output");
 const { bindCliArgs, findUnknownFlags } = require("../../relay-dispatch/scripts/cli-args");
-const { assertRelayPolicyGate, buildPolicyGateFailureEnvelope, isRelayPolicyGateError } = require("../../relay-dispatch/scripts/relay-policy-gate");
+const { buildPolicyGateFailureEnvelope, isRelayPolicyGateError } = require("../../relay-dispatch/scripts/relay-policy-gate");
+const {
+  buildAdapterCapabilityFailureEnvelope,
+  isAdapterCapabilityError,
+} = require("../../relay-dispatch/scripts/agent-adapters/policy");
 
 const args = process.argv.slice(2);
 const KNOWN_FLAGS = ["--repo", "--run-id", "--branch", "--pr", "--manifest", "--done-criteria-file", "--diff-file", "--review-file", "--manual-review-reason", "--reviewer", "--reviewer-script", "--reviewer-model", "--independent-review-reason", "--advisory-reviewer", "--advisory-profile", "--advisory-reviewer-model", "--advisory-timeout", "--advisory-grace", "--prepare-only", "--no-comment", "--json", "--help", "-h"];
@@ -194,17 +198,19 @@ async function run() {
   };
   let advisoryRun = null;
   let advisoryResult = null;
+  let primaryReviewerPreflight = null;
 
   if (prepareOnly) {
     printResult({ doneCriteriaPath, diffPath, jsonOut, manifestPath, originalState: data.state, prepareOnly, prNumber, promptPath, redispatchPath: null, result, updatedManifest: null, verdictPath: null });
     return;
   }
   if (!reviewFile) {
-    assertRelayPolicyGate({
-      repoRoot: runRepoPath,
-      phase: "review",
-      reviewer: reviewerName,
-      model: resolveReviewerModel(data, reviewerModel),
+    primaryReviewerPreflight = buildPrimaryReviewerPreflight({
+      data,
+      reviewerModel,
+      reviewerName,
+      reviewerScript,
+      runRepoPath,
     });
   }
   ({ advisoryRun, resultAdvisory: result.advisoryReview } = startConfiguredAdvisory({
@@ -228,10 +234,11 @@ async function run() {
     round,
     runDir,
     runRepoPath,
+    reviewerPreflight: primaryReviewerPreflight,
   });
   result.rawResponsePath = rawResponsePath;
 
-  let verdict = parseReviewVerdict(reviewText, { requireExecutionStatus: false });
+  let verdict = parseReviewVerdict(reviewText, { adapter: reviewerName, phase: "primary_review", requireExecutionStatus: false });
   if (rubricLoad.state === "loaded" && (!Array.isArray(verdict.rubric_scores) || verdict.rubric_scores.length === 0)) {
     throw new Error(
       "Review verdict has empty rubric_scores but a rubric was provided. " +
@@ -391,7 +398,12 @@ async function run() {
 if (require.main === module) {
   Promise.resolve(run()).catch((error) => {
     if (cliArgs.hasFlag("--json") && isRelayPolicyGateError(error)) {
-      console.log(JSON.stringify(buildPolicyGateFailureEnvelope(error, { ok: false }), null, 2));
+      console.log(JSON.stringify(buildPolicyGateFailureEnvelope(error, {
+        ok: false,
+        ...(error.adapterCapability ? { adapter_capability: error.adapterCapability } : {}),
+      }), null, 2));
+    } else if (cliArgs.hasFlag("--json") && isAdapterCapabilityError(error)) {
+      console.log(JSON.stringify(buildAdapterCapabilityFailureEnvelope(error, { ok: false }), null, 2));
     }
     console.error(`Error: ${error.message}`);
     process.exit(1);
@@ -399,22 +411,9 @@ if (require.main === module) {
 }
 
 module.exports = {
-  applyVerdictToManifest,
-  buildCommentBody,
-  buildPrompt,
-  buildRedispatchPrompt,
-  buildReviewRunnerRubricGateFailure,
-  detectChurnGrowth,
-  formatIssueList,
-  formatPriorVerdictSummary,
-  formatScopeDrift,
-  getGhLogin,
-  loadRubricFromRunDir,
-  parseRemoteHost,
-  parseReviewVerdict,
-  parseScoreLog,
-  resolveIssueNumber,
-  resolveRemoteHost,
-  validateReviewVerdict,
-  validateScopeDrift,
+  applyVerdictToManifest, buildCommentBody, buildPrompt, buildRedispatchPrompt,
+  buildReviewRunnerRubricGateFailure, detectChurnGrowth, formatIssueList,
+  formatPriorVerdictSummary, formatScopeDrift, getGhLogin, loadRubricFromRunDir,
+  parseRemoteHost, parseReviewVerdict, parseScoreLog, resolveIssueNumber,
+  resolveRemoteHost, validateReviewVerdict, validateScopeDrift,
 };

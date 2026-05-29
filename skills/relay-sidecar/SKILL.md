@@ -27,6 +27,7 @@ metadata:
 - Reviewing a PR for the relay gate — use `relay-review`
 - Dispatching implementation work — use `relay-dispatch`
 - Authoring rubrics or dispatch prompts — use `relay-plan`
+- Scouting a subsystem before a run exists or before Done Criteria are frozen — use `relay-plan`'s optional subsystem scout guidance
 - Merging or finalizing a PR — use `relay-merge`
 
 The runner resolves the run manifest, sends run context and PR diff text to the configured sidecar executor, and stores captured stdout under the run's `sidecars/<id>/` directory.
@@ -50,4 +51,4 @@ node "${RELAY_SKILL_ROOT:-skills}/relay-sidecar/scripts/relay-sidecar.js" --run-
 
 ## Trust Boundary
 
-Sidecar output is advisory only and does not count as execution evidence or reviewer proof. Use relay-review for gate decisions; sidecar artifacts can inform operators, but they never satisfy implementation, review, or merge proof requirements. Sidecar result events include elapsed/critical-path timing fields and default to `consumed_by_phase=metrics` unless a future orchestrator supplies a narrower phase classification. This follows the opencode policy in `docs/reviewer-policy-opencode.md`.
+Sidecar output is advisory only and does not count as execution evidence or reviewer proof. Use relay-review for gate decisions; sidecar artifacts can inform operators, but they never satisfy implementation, review, or merge proof requirements. Sidecar result events include elapsed/critical-path timing fields and default to `consumed_by_phase=metrics` unless a future orchestrator supplies a narrower phase classification. This follows the opencode policy in `relay-dispatch/references/reviewer-policy-opencode.md`.
