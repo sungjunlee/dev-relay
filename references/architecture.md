@@ -74,8 +74,11 @@ issue:
 git:
   base_branch: main
   working_branch: issue-42
-  pr_number: 128
+  pr_number: 128                 # dispatch-owned publication anchor (#198); review/merge consumers read this today
   head_sha: abc123def
+
+github:
+  pr_created_by_orchestrator: true   # set when dispatch.js opened or reused the PR
 
 roles:
   orchestrator: codex           # who drives the lifecycle
@@ -155,6 +158,7 @@ bootstrap_exempt:
 | `anchor.*` | Immutable review scope — prevents drift across rounds |
 | `review.last_reviewed_sha` | Gate-check blocks merge if HEAD has advanced past this |
 | `review.last_reviewer` | Tracks the acting reviewer for the latest round without mutating `roles.reviewer`; escalated same-adapter retry requires an `--independent-review-reason`; analytics must still use `review_apply.reviewer` as the round-level source of truth |
+| `git.pr_number` / `github.pr_created_by_orchestrator` | Orchestrator-owned push + PR creation persists `git.pr_number` for review/merge consumers; `github.pr_created_by_orchestrator` records whether dispatch opened the PR. See [ADR-0001](../docs/decisions/0001-orchestrator-owns-publication.md) |
 | `bootstrap_exempt.*` | Optional operator-declared reconciliation for runs that predate an artifact writer but are closed after that writer lands |
 
 ### Adapter Capability vs Route Policy
@@ -257,6 +261,16 @@ Each round produces files under `~/.relay/runs/<repo-slug>/<run-id>/`:
 | `review-round-N-advisory-<reviewer>.json` | Optional validated advisory findings |
 | `review-round-N-advisory-<reviewer>-policy-violation.txt` | If advisory reviewer mutated code; recorded without manifest escalation in v1 |
 
+## Dispatch Handoff (PR Boundary)
+
+The PR is the handoff boundary between executor and review. After #198, publication is orchestrator-owned, not executor-owned:
+
+- **Executor:** edit and commit inside the retained worktree only.
+- **Orchestrator (`dispatch.js`):** push branch with operator shell credentials, open or reuse PR, persist `git.pr_number` (and `github.pr_created_by_orchestrator` when applicable), then transition toward review.
+- **Failure:** publication errors escalate the run with `push_or_pr_failed:` — no silent continuation without a PR.
+
+Worktree lifecycle is centralized in `worktree-runtime.js` ([ADR-0003](../docs/decisions/0003-worktree-runtime-single-owner.md)). Manifest logic uses slice modules behind a thin facade ([ADR-0002](../docs/decisions/0002-manifest-slice-ownership.md)). Durable refactor decisions live under [docs/decisions/](../docs/decisions/README.md).
+
 ## Module Boundaries (and what they are NOT)
 
 Two patterns look like inconsistencies but are intentional. Both are pinned by tests; mechanical "unification" would break working design.
@@ -286,7 +300,7 @@ Placement rule for new shared helpers: the skill most often invoked as a depende
 module.exports = { ...paths, ...store, ...lifecycle, ...rubric, ...cleanup, ...attempts, ...environment };
 ```
 
-Convention (from [#188 manifest boundary split](../docs/issue-188-manifest-boundary-split.md)):
+Convention (from [ADR-0002 manifest slice ownership](../docs/decisions/0002-manifest-slice-ownership.md), issue #188):
 
 - **Runtime code** imports direct submodules: `require("./manifest/lifecycle")`. The docs list every runtime caller and its narrow submodule set.
 - **Compatibility tests** (e.g. `relay-manifest.test.js`, `dispatch.test.js`, `close-run.test.js`) and **out-of-scope runtime callers** (today: `relay-ready/scripts/relay-request.js`) continue to import via the facade. Each retained consumer is catalogued in the boundary-split doc with the reason it stayed.

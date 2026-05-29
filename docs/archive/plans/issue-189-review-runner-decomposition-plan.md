@@ -1,5 +1,7 @@
 # Issue #189 — Decompose `review-runner.js` into staged pipeline helpers
 
+> **Status:** archived dispatch plan (#189 closed 2026-04). Distilled: [ADR-0004 review-runner facade](../../decisions/0004-review-runner-staged-facade.md).
+
 Third item of Epic #192 (Runtime Boundary Cleanup). Unblocked by #187 + #188 landing (both merged 2026-04-18). This refactor is the last Epic A item before `#198` (orchestrator push+PR creation) can unblock.
 
 ## Problem statement
@@ -155,7 +157,7 @@ Post-split these live in `review-runner/context.js` and `review-runner/redispatc
 
 **8. Out-of-scope discipline + docs mirror + PR-creation mechanics**
 
-- `docs/issue-189-review-runner-decomposition.md` (docs mirror, updated post-merge) contains:
+- Post-merge distill: [ADR-0004 review-runner facade](../../decisions/0004-review-runner-staged-facade.md) (mirror removed).
   1. One-paragraph summary.
   2. Function-level audit table (per-stage): columns = function, pre-split `review-runner.js:line`, post-split `review-runner/<stage>.js:line`.
   3. Verbatim grep evidence pinned to final tree.
@@ -205,7 +207,7 @@ This task **does cross an auth boundary**. The verdict validation + manifest-app
 
 ## Prior-art references
 
-- `docs/issue-187-worktree-runtime-plan.md` + `docs/issue-188-manifest-boundary-split.md` — plan format precedent for Epic #192.
+- `docs/archive/plans/issue-187-worktree-runtime-plan.md` + [ADR-0002 manifest slices](../../decisions/0002-manifest-slice-ownership.md) — plan format precedent for Epic #192.
 - `memory/feedback_refactor_byte_identical_matrix.md` — rubric must enumerate matrix explicitly; counts aren't enough.
 - `memory/feedback_executor_did_not_open_pr.md` — recovery path if executor skips PR creation.
 - `references/rubric-trust-model.md` — three-question audit template.

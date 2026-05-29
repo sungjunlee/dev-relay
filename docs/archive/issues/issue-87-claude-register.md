@@ -19,11 +19,11 @@
 
 ## Per-File Delta
 
-- [`skills/relay-dispatch/scripts/dispatch.js`](../skills/relay-dispatch/scripts/dispatch.js) now treats `--register --executor claude` as a normal best-effort registration path instead of printing the old Codex-only warning. The Claude branch calls `registerClaudeApp(...)`, maps `sessionId -> threadId`, and keeps failure handling non-fatal.
-- [`skills/relay-dispatch/scripts/claude-app-register.js`](../skills/relay-dispatch/scripts/claude-app-register.js) is the Claude-specific helper added for this issue. It writes only `~/.relay/worktrees/<wt-hash>/claude-registration.json`, captures branch/title/pin plus best-effort CLI/git metadata, and returns `{ sessionId, metadataPath }`.
-- [`tests/relay-dispatch/scripts/claude-app-register.test.js`](../tests/relay-dispatch/scripts/claude-app-register.test.js) covers the receipt contract: happy path, overwrite behavior, `RELAY_HOME` isolation, and missing-git tolerance.
-- [`tests/relay-dispatch/scripts/dispatch.test.js`](../tests/relay-dispatch/scripts/dispatch.test.js) adds the regression proof that text-mode Claude registration no longer emits the old Codex-only warning while still surfacing the new relay receipt-backed `threadId`.
-- [`README.md`](../README.md) now documents the executor split explicitly: dispatch-time registration supports both executors, but Codex creates a real app thread while Claude writes a relay-owned receipt. It also keeps `create-worktree.js --register` scoped to Codex.
+- [`skills/relay-dispatch/scripts/dispatch.js`](../../../skills/relay-dispatch/scripts/dispatch.js) now treats `--register --executor claude` as a normal best-effort registration path instead of printing the old Codex-only warning. The Claude branch calls `registerClaudeApp(...)`, maps `sessionId -> threadId`, and keeps failure handling non-fatal.
+- [`skills/relay-dispatch/scripts/claude-app-register.js`](../../../skills/relay-dispatch/scripts/claude-app-register.js) is the Claude-specific helper added for this issue. It writes only `~/.relay/worktrees/<wt-hash>/claude-registration.json`, captures branch/title/pin plus best-effort CLI/git metadata, and returns `{ sessionId, metadataPath }`.
+- [`tests/relay-dispatch/scripts/claude-app-register.test.js`](../../../tests/relay-dispatch/scripts/claude-app-register.test.js) covers the receipt contract: happy path, overwrite behavior, `RELAY_HOME` isolation, and missing-git tolerance.
+- [`tests/relay-dispatch/scripts/dispatch.test.js`](../../../tests/relay-dispatch/scripts/dispatch.test.js) adds the regression proof that text-mode Claude registration no longer emits the old Codex-only warning while still surfacing the new relay receipt-backed `threadId`.
+- [`README.md`](../../../README.md) now documents the executor split explicitly: dispatch-time registration supports both executors, but Codex creates a real app thread while Claude writes a relay-owned receipt. It also keeps `create-worktree.js --register` scoped to Codex.
 
 ## Design Note: Why Relay Does Not Pre-Create `~/.claude/projects/`
 

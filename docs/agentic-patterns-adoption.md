@@ -1,9 +1,9 @@
 # Agentic Engineering Patterns Adoption — Discussion Document
 
 **Source**: [Simon Willison — Agentic Engineering Patterns](https://simonwillison.net/guides/agentic-engineering-patterns/) + HN discussion ([GeekNews](https://news.hada.io/topic?id=27206))
-**Date**: 2026-04-12
+**Date**: 2026-04-12 (updated 2026-05-29)
 **Scope**: dev-relay + dev-backlog
-**Status**: Revised after eng-review + Codex outside voice
+**Status**: Phase 0 complete (2026-04). Phase 1+ deferred pending observation-window data; see Priority Sequence below.
 
 ---
 
@@ -203,8 +203,8 @@ Once Phase 0+1 produce consistent artifact flow, add consumers.
 
 | Phase | Items | Effort | Ships when |
 |-------|-------|--------|------------|
-| **0** | 0.1 rubric persistence, 0.2 reliability-report consumption, 0.3 probe consumption | S + S + S | Next |
-| **1** | 1.1 rejection log, 1.2 TDD mode | S + M | After Phase 0 lands + 2 weeks data |
+| **0** | 0.1 rubric persistence, 0.2 reliability-report consumption, 0.3 probe consumption | S + S + S | **Done** (2026-04) |
+| **1** | 1.1 rejection log, 1.2 TDD mode | S + M | After Phase 0 + observation window (#141, #142) |
 | **2** | 2.1 retro integration, 2.2 signal templates, 2.3 TDD auto-suggest | M + M + S | After Phase 1 data validates |
 | **3** | 3.1 sprint-close candidate patterns | S | After Phase 2 shows sprint retros have signal |
 
@@ -221,20 +221,21 @@ Once Phase 0+1 produce consistent artifact flow, add consumers.
 
 ---
 
-## What Already Exists (honest accounting)
+## What Already Exists (updated 2026-05-29)
 
 | Capability | Location | Status |
 |------------|----------|--------|
-| Rubric persistence | `dispatch.js:557-571` | Implemented, not mandatory |
-| Rubric reading in review | `review-runner.js:266-274` | Implemented, depends on anchor.rubric_path |
-| Prior verdict reading | `review-runner.js` (`readPriorVerdicts`, `formatPriorVerdictSummary`) | Implemented, unstructured format |
-| Test framework detection | `probe-executor-env.js:93-143` | Implemented, output unused |
-| Type strictness detection | Partial (package.json only) | Extendable |
-| Factor analytics | `reliability-report.js:288-368` | Implemented, no consumer |
-| Rubric grade distribution | `reliability-report.js:257-282` | Implemented, no consumer |
-| Cross-run factor aggregation | None | Would need for Phase 3.1 |
-| Sprint file checkbox updates | `finalize-run.js` + `relay-merge/SKILL.md:60-102` | Implemented |
-| Running Context append | `relay-merge/SKILL.md:74-76` (documented) | Documented, no code |
+| Rubric persistence (mandatory path) | `dispatch.js`, manifest `anchor.rubric_path`, `gate-check.js` | **Phase 0.1 shipped** (#148) |
+| Rubric reading in review | `review-runner` context load | **Shipped**; requires `anchor.rubric_path` |
+| Prior verdict reading | `readPriorVerdicts`, `formatPriorVerdictSummary` | Implemented; unstructured (Phase 1.1 target) |
+| Historical signal in planning | `relay-plan/SKILL.md` + `reliability-report.js --json` | **Phase 0.2 shipped** (#139); inline SKILL consumption |
+| Probe quality signals in planning | `relay-plan/SKILL.md` + `probe-executor-env.js --project-only --json` | **Phase 0.3 shipped** (#140); inline SKILL consumption |
+| Planner consumer helpers | `reliability-report-consumer.js`, `probe-executor-env-consumer.js` | Tested helpers; **not wired** into default SKILL flow |
+| Execution guidance layer | `task_profile`, `guidance_packs`, dispatch metadata | **Shipped** (#394–#400); see `skills/relay-plan/references/guidance-packs.md` |
+| Factor analytics | `reliability-report.js` | Implemented; planner reads JSON directly |
+| Cross-run factor aggregation | `reliability-report.js` | Available; Phase 2.1 qualitative layer still open (#143) |
+| Sprint file checkbox updates | `finalize-run.js` + `relay-merge/SKILL.md` | Implemented |
+| Running Context append | `relay-merge/SKILL.md` | Documented; no code |
 
 ---
 

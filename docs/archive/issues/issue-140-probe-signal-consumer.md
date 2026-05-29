@@ -2,7 +2,7 @@
 
 ## Summary
 
-#140 closes Phase 0.3 of `/Users/sjlee/workspace/active/harness-stack/dev-relay/docs/agentic-patterns-adoption.md` by making [`skills/relay-plan/SKILL.md`](../skills/relay-plan/SKILL.md) consume `probe-executor-env.js --project-only --json` before rubric design, surface detected quality signals inside the Rubric Quality Card, and document named empty/fallback handling without changing rubric grading or dispatch behavior. Data exposure only per AC4. This PR closes Phase 0 ("Wire What Exists") — after merge, all three Phase 0 issues (`#148/#139/#140`) have landed.
+#140 closes Phase 0.3 of `/Users/sjlee/workspace/active/harness-stack/dev-relay/docs/agentic-patterns-adoption.md` by making [`skills/relay-plan/SKILL.md`](../../../skills/relay-plan/SKILL.md) consume `probe-executor-env.js --project-only --json` before rubric design, surface detected quality signals inside the Rubric Quality Card, and document named empty/fallback handling without changing rubric grading or dispatch behavior. Data exposure only per AC4. This PR closes Phase 0 ("Wire What Exists") — after merge, all three Phase 0 issues (`#148/#139/#140`) have landed.
 
 ## Pattern-Break Rationale
 
