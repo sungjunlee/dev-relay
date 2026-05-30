@@ -33,6 +33,7 @@ node invoke-reviewer-<name>.js --repo <repoPath> --prompt-file <promptPath> --js
 | `opencode` | Yes, experimental | Yes, route-policy gated | Yes | Informational only; no native relay sandbox. Review uses prompt instructions plus status guards; advisory runs in a detached worktree. | Primary/advisory prompt plus git status guard; dispatch read-only is informational only. | Ambient/informational; no relay network gate. | Dispatch stdout copied to result file; primary verdict JSON text; advisory JSON text. | `opencode` CLI. | No. |
 | `pi` | Yes | Yes | Yes | Dispatch has no native relay sandbox; review uses read/grep/find/ls tool allowlist plus status guard. | Primary/advisory via `--tools read,grep,find,ls` plus dirty-worktree check. | Dispatch ambient/informational; review has no network tool in the relay allowlist. | Dispatch stdout copied to result file; primary verdict JSON text; advisory JSON text. | `pi` CLI. | No. |
 | `antigravity` | Yes, fail-safe experimental until healthy live canary passes | Yes, fail-safe experimental until healthy live canary passes | Yes, fail-safe experimental until healthy live canary passes | `agy --sandbox`; dispatch also adds the git common dir with `--add-dir`. | Dispatch read-only is unsupported; review relies on prompt instruction plus dirty-worktree check. | Ambient/informational; `agy` exposes no relay network gate. | Dispatch stdout copied to result file; primary verdict JSON text; advisory JSON text. | `agy` CLI only. | No. |
+| `cursor` | Yes, optional experimental | Yes, optional experimental | No | Dispatch uses `agent --sandbox enabled` when workspace-write is requested; relay passes `--workspace` only (never `agent --worktree`). | Primary review uses `agent --mode ask`; dispatch read-only is unsupported (fail-closed). | Ambient/informational; no relay network gate. | Dispatch stdout copied to result file; primary review parses JSON wrapper `result` field. | `agent` CLI. | Yes, `agent create-chat` when `--register` is used. |
 
 Antigravity support targets the Google Antigravity `agy` CLI only. Relay does not support Antigravity GUI, IDE, Desktop, plugin runtime, or interactive PTY state as a dispatch or review surface.
 
@@ -74,4 +75,8 @@ node skills/relay-review/scripts/review-runner.js --repo . --run-id "$RUN_ID" --
 node skills/relay-dispatch/scripts/dispatch.js . --executor antigravity --model google/antigravity-cli -b issue-42 -p "..." --rubric-file rubric.yaml
 node skills/relay-review/scripts/review-runner.js --repo . --run-id "$RUN_ID" --reviewer antigravity --reviewer-model google/antigravity-cli --json
 node skills/relay-review/scripts/review-runner.js --repo . --run-id "$RUN_ID" --reviewer codex --advisory-reviewer antigravity --advisory-reviewer-model google/antigravity-cli --json
+
+# Cursor Agent CLI dispatch and primary review (optional harness; add cursor to managed_cli for slug-only models)
+node skills/relay-dispatch/scripts/dispatch.js . --executor cursor --model composer-2.5 -b issue-42 -p "..." --rubric-file rubric.yaml
+node skills/relay-review/scripts/review-runner.js --repo . --run-id "$RUN_ID" --reviewer cursor --reviewer-model composer-2.5 --json
 ```

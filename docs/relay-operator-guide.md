@@ -44,6 +44,7 @@ Implementation status describes the adapter surface shipped in relay. Live statu
 | `opencode` | Implementation: `limited`<br>Live: `blocked` until healthy dispatch evidence exists for the chosen route | Implementation: `limited`<br>Live: `limited` by route policy and live reviewer evidence | Implementation: `limited`<br>Live: `limited` by route policy and advisory evidence |
 | `pi` | Implementation: `stable`<br>Live: `limited` by route-specific healthy dispatch canaries | Implementation: `stable`<br>Live: `limited` by route-specific reviewer canaries | Implementation: `stable`<br>Live: `limited` by route-specific advisory canaries |
 | `antigravity` | Implementation: `fail-safe-experimental`<br>Live: `blocked` until healthy dispatch dogfood passes | Implementation: `fail-safe-experimental`<br>Live: `blocked` until strict verdict JSON is accepted in a healthy live reviewer canary | Implementation: `fail-safe-experimental`<br>Live: `blocked` until healthy advisory dogfood exists |
+| `cursor` | Implementation: `limited`<br>Live: `blocked` until route-specific healthy dispatch canaries exist | Implementation: `limited`<br>Live: `blocked` until strict verdict JSON is accepted in a healthy live reviewer canary | Implementation: `not-supported`<br>Live: `not-supported` |
 
 Status meanings:
 
@@ -145,6 +146,18 @@ node skills/relay-review/scripts/review-runner.js --repo . --run-id <id> --pr <n
 ```
 
 Pi primary review uses a bounded parent-process timeout. Set `RELAY_PI_REVIEW_TIMEOUT` to a positive duration such as `120s`, `10m`, or `1h`; the default is `1800s`.
+
+Cursor can be used as dispatch executor or trusted primary reviewer when `agent` is on `PATH` (or `RELAY_CURSOR_AGENT_BIN` is set for review), authenticated via `agent login` or `CURSOR_API_KEY`, and route policy allows the model route (add `cursor` to `managed_cli` for slug-only models such as `composer-2.5`):
+
+```bash
+node skills/relay-dispatch/scripts/dispatch.js . -e cursor -m composer-2.5 \
+  -b issue-42 --prompt-file /tmp/dispatch-42.md --rubric-file /tmp/rubric-42.yaml
+
+node skills/relay-review/scripts/review-runner.js --repo . --run-id <id> --pr <number> \
+  --reviewer cursor --reviewer-model composer-2.5 --json
+```
+
+Cursor primary review uses a bounded parent-process timeout. Set `RELAY_CURSOR_REVIEW_TIMEOUT` to a positive duration such as `120s`, `10m`, or `1h`; the default is `1800s`. Relay passes `--workspace` only and never `agent --worktree`.
 
 Advisory review can run alongside the primary reviewer when route policy allows it:
 
