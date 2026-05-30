@@ -155,6 +155,9 @@ const COMMAND_FLAGS = {
   "invoke-reviewer-antigravity": [
     "--repo", "--prompt-file", "--model", "--phase", "--json", "--help",
   ],
+  "invoke-reviewer-cursor": [
+    "--repo", "--prompt-file", "--model", "--phase", "--json", "--help",
+  ],
   "invoke-reviewer-opencode": [
     "--repo", "--prompt-file", "--model", "--phase", "--json", "--help",
   ],

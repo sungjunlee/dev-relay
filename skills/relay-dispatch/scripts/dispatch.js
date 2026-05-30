@@ -1336,6 +1336,9 @@ async function main() {
   if (EXECUTOR === "opencode") {
     console.error("Warning: opencode executor is experimental; see relay-dispatch/references/reviewer-policy-opencode.md for trust boundary and reviewer policy.");
   }
+  if (EXECUTOR === "cursor") {
+    console.error("Warning: cursor executor uses the optional Cursor Agent CLI (agent); add cursor to route policy managed_cli when using slug-only models. See relay-dispatch/references/agent-adapter-platform.md.");
+  }
 
   if (!JSON_OUT) {
     console.log(`Dispatching to ${EXECUTOR}...`);

@@ -3,6 +3,7 @@ const claude = require("../executors/claude");
 const opencode = require("../executors/opencode");
 const pi = require("../executors/pi");
 const antigravity = require("../executors/antigravity");
+const cursor = require("../executors/cursor");
 const bundledModels = require("../../references/executor-models.json");
 
 const ADAPTER_PHASES = Object.freeze({
@@ -884,6 +885,156 @@ const DESCRIPTORS = Object.freeze({
     reviewer: {
       primaryReviewScript: "invoke-reviewer-antigravity.js",
       advisoryReviewScript: "invoke-reviewer-antigravity.js",
+    },
+  }),
+  cursor: buildDescriptor({
+    name: "cursor",
+    displayName: "Cursor Agent CLI",
+    executor: cursor,
+    phases: {
+      [ADAPTER_PHASES.DISPATCH]: {
+        supported: true,
+        trust: "executor",
+      },
+      [ADAPTER_PHASES.PRIMARY_REVIEW]: {
+        supported: true,
+        trust: "trusted",
+      },
+      [ADAPTER_PHASES.ADVISORY_REVIEW]: {
+        supported: false,
+        trust: "unsupported",
+      },
+    },
+    capabilities: {
+      sandbox: {
+        dispatch: {
+          modes: ["workspace-write"],
+          enforced: false,
+        },
+        primaryReview: {
+          mode: "read-only",
+          enforced: false,
+          guard: "worktree-status",
+        },
+        advisoryReview: null,
+      },
+      network: {
+        dispatch: {
+          configurable: false,
+          enabledMode: "ambient",
+        },
+        primaryReview: {
+          configurable: false,
+          enabledMode: "ambient",
+        },
+        advisoryReview: null,
+      },
+      readOnly: {
+        dispatch: false,
+        primaryReview: true,
+        advisoryReview: false,
+      },
+      policy: {
+        dispatch: {
+          sandbox: {
+            "workspace-write": {
+              enforcement_level: "informational",
+              mechanism: "agent-sandbox-flag",
+              flags: ["--sandbox", "enabled", "--workspace"],
+              warnings: ["Cursor dispatch uses agent --workspace; relay never passes agent --worktree."],
+            },
+            "read-only": {
+              enforcement_level: "unsupported",
+              mechanism: null,
+              fail_closed_reason: "cursor dispatch does not expose a relay read-only execution mode",
+            },
+          },
+          network: {
+            disabled: {
+              enforcement_level: "informational",
+              mechanism: "ambient-network",
+              warnings: ["Cursor dispatch does not expose relay network gating."],
+            },
+            enabled: {
+              enforcement_level: "informational",
+              mechanism: "ambient-network",
+              warnings: ["Cursor dispatch does not expose relay network gating."],
+            },
+          },
+          read_only: {
+            true: {
+              enforcement_level: "unsupported",
+              mechanism: null,
+              fail_closed_reason: "cursor dispatch does not expose a relay read-only execution mode",
+            },
+            false: {
+              enforcement_level: "unsupported",
+              mechanism: "write-capable-dispatch",
+            },
+          },
+        },
+        primary_review: {
+          sandbox: {
+            "read-only": {
+              enforcement_level: "informational",
+              mechanism: "agent-mode-ask",
+              flags: ["--mode", "ask", "--trust", "--workspace"],
+              warnings: ["Cursor primary review uses agent --mode ask; relay still checks dirty worktree status after invocation."],
+            },
+          },
+          network: {
+            ambient: {
+              enforcement_level: "informational",
+              mechanism: "ambient-network",
+              warnings: ["Cursor primary review does not expose relay network gating."],
+            },
+            disabled: {
+              enforcement_level: "informational",
+              mechanism: "ambient-network",
+              warnings: ["Cursor primary review does not expose relay network gating."],
+            },
+          },
+          read_only: {
+            true: {
+              enforcement_level: "prompt-only",
+              mechanism: "agent-mode-ask-with-worktree-status-guard",
+              flags: ["--mode", "ask", "--trust", "prompt:do-not-modify-files", "git-status-before-after"],
+              warnings: ["Cursor primary review read-only intent relies on ask mode plus review-runner dirty-worktree detection."],
+            },
+          },
+        },
+        advisory_review: null,
+      },
+      transport: {
+        dispatch: "agent-cli",
+        primaryReview: "agent-cli",
+        advisoryReview: null,
+      },
+      structuredOutput: {
+        dispatch: "stdout-copied-result-file",
+        primaryReview: "json-wrapper-result-field",
+        advisoryReview: null,
+      },
+      appRegistration: {
+        supported: true,
+        transport: "agent-create-chat",
+      },
+      modelDefaults: {
+        provider: cursor.providerDefault,
+        dispatch: {
+          configKey: "cursor",
+          defaultModel: null,
+        },
+        primaryReview: {
+          configKey: "cursor",
+          defaultModel: null,
+        },
+        advisoryReview: null,
+      },
+    },
+    reviewer: {
+      primaryReviewScript: "invoke-reviewer-cursor.js",
+      advisoryReviewScript: null,
     },
   }),
 });
