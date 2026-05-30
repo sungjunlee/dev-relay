@@ -44,6 +44,7 @@ const FLAGS = [
   { flag: "--head-sha", kind: VALUE, mode: MODE_PARSED, valueName: "<sha>", rationale: "Structured SHA field; flag-like following tokens should mean the value is missing." },
   { flag: "--help", aliases: ["-h"], kind: BOOLEAN, mode: MODE_PARSED, rationale: "Presence flag; no value is consumed." },
   { flag: "--independent-review-reason", kind: VALUE, mode: MODE_VERBATIM, valueName: "<reason>", rationale: "Audit reason for a same-adapter independent review attempt; preserve the operator-supplied text." },
+  { flag: "--inspect", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Health inventory only; no cleanup or shell sweep." },
   { flag: "--issue", kind: VALUE, mode: MODE_PARSED, valueName: "<N>", rationale: "Numeric selector; flag-like following tokens should mean the value is missing." },
   { flag: "--json", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Presence flag; no value is consumed." },
   { flag: "--last-reviewed-sha", kind: VALUE, mode: MODE_PARSED, valueName: "<sha>", rationale: "Structured SHA field; flag-like following tokens should mean the value is missing." },
@@ -78,6 +79,7 @@ const FLAGS = [
   { flag: "--reasoning", kind: VALUE, mode: MODE_PARSED, valueName: "<level>",
     allowedValues: ["none", "minimal", "low", "medium", "high", "xhigh"],
     rationale: "Codex reasoning_effort override; closed selector over codex CLI levels." },
+  { flag: "--reconcile-merged", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Reconcile merged drift for eligible non-terminal runs." },
   { flag: "--register", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Presence flag; no value is consumed." },
   { flag: "--repeated-issue-count", kind: VALUE, mode: MODE_PARSED, valueName: "<n>", rationale: "Numeric review field; flag-like following tokens should mean the value is missing." },
   { flag: "--repo", kind: VALUE, mode: MODE_VERBATIM, valueName: "<path>", rationale: "Operator-supplied repository path; keep the literal argv token." },
@@ -99,6 +101,7 @@ const FLAGS = [
   { flag: "--skip-merge", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Presence flag; no value is consumed." },
   { flag: "--skip-review", kind: VALUE, mode: MODE_VERBATIM, valueName: "<reason>", rationale: "Audit skip reason must be recorded exactly and must not be blank." },
   { flag: "--stale-hours", kind: VALUE, mode: MODE_PARSED, valueName: "<hours>", rationale: "Numeric threshold; flag-like following tokens should mean the value is missing." },
+  { flag: "--stale-days", kind: VALUE, mode: MODE_PARSED, valueName: "<days>", rationale: "Stale classification threshold for worktree health." },
   { flag: "--state", kind: VALUE, mode: MODE_PARSED, valueName: "<state>", rationale: "Closed manifest state selector; flag-like following tokens should mean the value is missing." },
   { flag: "--tags", kind: VALUE, mode: MODE_PARSED, valueName: "<csv>", rationale: "Explicit routing tags; flag-like following tokens should mean the value is missing." },
   { flag: "--test-command", kind: VALUE, mode: MODE_VERBATIM, valueName: "<cmd>", rationale: "Execution evidence must preserve the operator-supplied command token exactly." },
@@ -118,7 +121,8 @@ const COMMAND_FLAGS = {
     "--print", "--post-comment", "--issue", "--window-days", "--runs-dir", "--help",
   ],
   "cleanup-worktrees": [
-    "--repo", "--older-than", "--all", "--dry-run", "--json", "--help",
+    "--repo", "--older-than", "--all", "--dry-run", "--json",
+    "--inspect", "--reconcile-merged", "--stale-days", "--help",
   ],
   "close-run": [
     "--repo", "--run-id", "--reason", "--dry-run", "--json", "--help",

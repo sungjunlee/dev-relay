@@ -222,11 +222,95 @@ test("cleanup-worktrees reports stale open runs without deleting them", () => {
   assert.equal(result.failed.length, 0);
   assert.equal(result.staleOpen.length, 1);
   assert.equal(result.staleOpen[0].branch, "issue-77");
+  assert.ok(result.staleOpen[0].health);
+  assert.equal(result.staleOpen[0].health.finishPath, "retain_active");
+  assert.equal(result.staleOpen[0].reason, "non-terminal");
   assert.equal(fs.existsSync(worktreePath), true);
 
   const manifest = readManifest(manifestPath).data;
   assert.equal(manifest.cleanup.status, "pending");
   assert.equal(manifest.next_action, "run_review");
+});
+
+test("cleanup-worktrees inspect mode returns inventory without side effects", () => {
+  const repoRoot = setupRepo();
+  const updatedAt = "2026-04-01T00:00:00.000Z";
+  writeRun(repoRoot, {
+    branch: "issue-inspect",
+    state: STATES.MERGED,
+    updatedAt,
+  });
+
+  const stdout = execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--inspect",
+    "--json",
+  ], { encoding: "utf-8" });
+
+  const result = JSON.parse(stdout);
+  assert.equal(result.inspectOnly, true);
+  assert.equal(result.inventory.length, 1);
+  assert.equal(result.cleaned.length, 0);
+  assert.equal(result.reconciled.length, 0);
+  assert.equal(result.reapedShells.length, 0);
+  assert.ok(result.inventory[0].health);
+});
+
+test("cleanup-worktrees reconciles merged drift for ready_to_merge runs", () => {
+  const repoRoot = setupRepo();
+  const updatedAt = "2026-04-01T00:00:00.000Z";
+  const branch = "issue-reconcile-janitor";
+  const worktreePath = path.join(repoRoot, "wt", branch);
+  fs.mkdirSync(path.dirname(worktreePath), { recursive: true });
+  execFileSync("git", ["worktree", "add", worktreePath, "-b", branch], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
+  fs.writeFileSync(path.join(worktreePath, `${branch}.txt`), `${branch}\n`, "utf-8");
+  execFileSync("git", ["-C", worktreePath, "add", `${branch}.txt`], { encoding: "utf-8", stdio: "pipe" });
+  execFileSync("git", ["-C", worktreePath, "commit", "-m", `Add ${branch}`], { encoding: "utf-8", stdio: "pipe" });
+  execFileSync("git", ["merge", branch, "-m", "merge reconcile janitor"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
+
+  const runId = createRunId({ branch, timestamp: new Date(updatedAt) });
+  const layout = ensureRunLayout(repoRoot, runId);
+  const manifestPath = layout.manifestPath;
+  let manifest = createManifestSkeleton({
+    repoRoot,
+    runId,
+    branch,
+    baseBranch: "main",
+    issueNumber: 42,
+    worktreePath,
+    orchestrator: "codex",
+    executor: "codex",
+    reviewer: "codex",
+  });
+  manifest = updateManifestState(manifest, STATES.DISPATCHED, "await_dispatch_result");
+  manifest.anchor.rubric_path = "rubric.yaml";
+  fs.writeFileSync(path.join(layout.runDir, "rubric.yaml"), "rubric:\n  factors:\n    - name: reconcile\n", "utf-8");
+  manifest = updateManifestState(manifest, STATES.REVIEW_PENDING, "run_review");
+  manifest = updateManifestState(manifest, STATES.READY_TO_MERGE, "await_explicit_merge");
+  manifest.timestamps.created_at = updatedAt;
+  manifest.timestamps.updated_at = updatedAt;
+  writeManifest(manifestPath, manifest);
+
+  const stdout = execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--reconcile-merged",
+    "--all",
+    "--json",
+  ], { encoding: "utf-8" });
+
+  const result = JSON.parse(stdout);
+  assert.equal(result.reconciled.length, 1);
+  assert.equal(result.failed.length, 0);
+  assert.equal(fs.existsSync(worktreePath), false);
+  assert.equal(branchExists(repoRoot, branch), false);
+
+  const updated = readManifest(manifestPath).data;
+  assert.equal(updated.state, "merged");
+  assert.equal(updated.cleanup.status, "succeeded");
+  assert.equal(updated.next_action, "done");
+  assert.equal(updated.last_force.reason, "janitor_reconcile_merged");
 });
 
 test("cleanup-worktrees does not echo tampered run_id into operator output (#176)", () => {
