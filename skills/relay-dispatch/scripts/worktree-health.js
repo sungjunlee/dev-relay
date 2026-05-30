@@ -147,16 +147,16 @@ function inferFinishPath({ state, prNumber, health }) {
     return FINISH_PATHS.RECONCILE_MERGED;
   }
 
+  if (health.dirty && !health.relayOwnedStrayOnly) {
+    return FINISH_PATHS.MANUAL_REQUIRED;
+  }
+
   if (state === "ready_to_merge" && prNumber) {
     return FINISH_PATHS.RETAIN_PR_HANDOFF;
   }
 
   if (health.stale) {
     return FINISH_PATHS.STALE_OPEN;
-  }
-
-  if (health.dirty && !health.relayOwnedStrayOnly) {
-    return FINISH_PATHS.MANUAL_REQUIRED;
   }
 
   return FINISH_PATHS.RETAIN_ACTIVE;

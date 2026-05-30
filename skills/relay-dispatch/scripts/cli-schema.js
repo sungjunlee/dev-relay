@@ -79,7 +79,7 @@ const FLAGS = [
   { flag: "--reasoning", kind: VALUE, mode: MODE_PARSED, valueName: "<level>",
     allowedValues: ["none", "minimal", "low", "medium", "high", "xhigh"],
     rationale: "Codex reasoning_effort override; closed selector over codex CLI levels." },
-  { flag: "--reconcile-merged", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Reconcile merged drift for eligible non-terminal runs." },
+  { flag: "--reconcile-merged", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Reconcile merged drift for ready_to_merge runs with merge evidence." },
   { flag: "--register", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Presence flag; no value is consumed." },
   { flag: "--repeated-issue-count", kind: VALUE, mode: MODE_PARSED, valueName: "<n>", rationale: "Numeric review field; flag-like following tokens should mean the value is missing." },
   { flag: "--repo", kind: VALUE, mode: MODE_VERBATIM, valueName: "<path>", rationale: "Operator-supplied repository path; keep the literal argv token." },

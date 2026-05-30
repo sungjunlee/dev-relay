@@ -121,6 +121,20 @@ test("assessRunWorktreeHealth treats relay-owned rubric.yaml stray as effectivel
   assert.equal(health.safeToRemove, true);
 });
 
+test("assessRunWorktreeHealth marks dirty ready_to_merge PR handoff as manual_required", () => {
+  const repoRoot = setupRepo();
+  const updatedAt = "2026-04-01T00:00:00.000Z";
+  const branch = "issue-dirty-handoff";
+  const { manifest, worktreePath } = writeReadyRun(repoRoot, { branch, updatedAt });
+  fs.writeFileSync(path.join(worktreePath, "wip.txt"), "wip\n", "utf-8");
+
+  const health = assessRunWorktreeHealth({ repoRoot, data: manifest, staleDays: 14 });
+  assert.equal(health.dirty, true);
+  assert.equal(health.reconcileEligible, false);
+  assert.equal(health.finishPath, FINISH_PATHS.MANUAL_REQUIRED);
+  assert.notEqual(health.finishPath, FINISH_PATHS.RETAIN_PR_HANDOFF);
+});
+
 test("assessRunWorktreeHealth does not reconcile review_pending even when branch merged", () => {
   const repoRoot = setupRepo();
   const updatedAt = "2026-04-01T00:00:00.000Z";

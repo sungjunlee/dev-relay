@@ -73,7 +73,7 @@ node skills/relay-dispatch/scripts/cleanup-worktrees.js --repo . --inspect --sta
 | Flag | Default | Effect |
 | --- | --- | --- |
 | `--inspect` | off | Health inventory only; no cleanup, no shell sweep |
-| `--reconcile-merged` | off | For eligible non-terminal runs: transition to `merged`, then cleanup |
+| `--reconcile-merged` | off | For `ready_to_merge` merged drift: transition to `merged`, then cleanup |
 | `--stale-days` | 14 | Stale classification for health + stale-open reporting (days; reporting only) |
 | `--older-than` | 24 | Age gate for terminal cleanup only (hours) |
 | `--all` | off | Ignore age gate |
