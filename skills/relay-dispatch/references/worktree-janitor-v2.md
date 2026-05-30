@@ -36,7 +36,7 @@ v1 janitor (`cleanup-worktrees.js`) only deletes **terminal** runs past an age g
 | `lastCommitAgeDays` | branch tip age |
 | `stale` | not merged and age ≥ `--stale-days` (default 14) |
 | `safeToRemove` | merged + effectively clean |
-| `reconcileEligible` | non-terminal + merged + clean + eligible state |
+| `reconcileEligible` | `ready_to_merge` + merged + effectively clean |
 
 ## Finish paths (Superpowers mapping)
 
@@ -74,8 +74,8 @@ node skills/relay-dispatch/scripts/cleanup-worktrees.js --repo . --inspect --sta
 | --- | --- | --- |
 | `--inspect` | off | Health inventory only; no cleanup, no shell sweep |
 | `--reconcile-merged` | off | For eligible non-terminal runs: transition to `merged`, then cleanup |
-| `--stale-days` | 14 | Stale classification for health + stale-open reporting |
-| `--older-than` | 24 | Age gate for terminal cleanup and reconcile (hours) |
+| `--stale-days` | 14 | Stale classification for health + stale-open reporting (days; reporting only) |
+| `--older-than` | 24 | Age gate for terminal cleanup only (hours) |
 | `--all` | off | Ignore age gate |
 | `--dry-run` | off | No manifest/git writes |
 
@@ -83,15 +83,18 @@ node skills/relay-dispatch/scripts/cleanup-worktrees.js --repo . --inspect --sta
 
 `--reconcile-merged` applies only when **all** hold:
 
-- manifest state ∈ `{ ready_to_merge, review_pending, changes_requested, escalated }`
+- manifest state is `ready_to_merge`
 - `mergedIntoBaseOrPr` is true
 - worktree effectively clean (or relay-owned stray only)
-- age gate satisfied (unless `--all`)
 - path validation succeeds
+
+Reconcile **does not** use `--older-than`; merge/PR evidence is the safety gate. Terminal cleanup still uses `--older-than` (or `--all`).
 
 Transition: `forceUpdateManifestState(..., merged, manual_cleanup_required)` with audit reason `janitor_reconcile_merged`, then `runCleanup()` with `deleteMergedBranch: true`.
 
-Prefer `finalize-run --skip-merge` when review audit trail matters; janitor reconcile is a **disk recovery** path, not a merge substitute.
+**Preferred path:** `finalize-run --repo <path> --run-id <id>` when the run is `ready_to_merge` and the review gate can pass (issues close, `MERGE_FINALIZE` event, learnings). Use `finalize-run --skip-merge` only when the manifest is already `merged` and you need cleanup-only.
+
+Janitor reconcile is a **disk recovery** escape hatch when finalize is blocked or skipped — not a substitute for merge finalization.
 
 ## Out of scope (v2.1 candidates)
 

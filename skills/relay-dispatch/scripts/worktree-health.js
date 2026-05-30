@@ -170,7 +170,7 @@ function buildRecommendedAction({ finishPath, runId, repoRoot }) {
     case FINISH_PATHS.CLEANUP_TERMINAL:
       return "cleanup-worktrees (terminal run)";
     case FINISH_PATHS.RECONCILE_MERGED:
-      return `cleanup-worktrees --reconcile-merged --repo ${repoArg} (or finalize-run --skip-merge --run-id ${runArg})`;
+      return `finalize-run --repo ${repoArg} --run-id ${runArg} (preferred); or cleanup-worktrees --reconcile-merged --repo ${repoArg} --dry-run first (disk recovery only)`;
     case FINISH_PATHS.RETAIN_PR_HANDOFF:
       return `retain worktree until merge/finalize; then finalize-run --run-id ${runArg}`;
     case FINISH_PATHS.STALE_OPEN:
@@ -201,10 +201,9 @@ function assessRunWorktreeHealth({
     && lastCommitAgeDays >= staleDays;
   const effectivelyClean = !dirtyStatus.dirty || dirtyStatus.relayOwnedStrayOnly;
   const safeToRemove = mergedIntoBaseOrPr && effectivelyClean;
-  const reconcileEligible = !isTerminalState(data?.state)
+  const reconcileEligible = data?.state === "ready_to_merge"
     && mergedIntoBaseOrPr
-    && effectivelyClean
-    && ["ready_to_merge", "review_pending", "changes_requested", "escalated"].includes(data?.state);
+    && effectivelyClean;
 
   const health = {
     mergedIntoBase,

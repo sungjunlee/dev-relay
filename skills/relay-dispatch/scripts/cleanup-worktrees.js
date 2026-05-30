@@ -53,6 +53,14 @@ function parseHours(value, label) {
   return parsed;
 }
 
+function parsePositiveNumber(value, label) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    throw new Error(`${label} must be a non-negative number`);
+  }
+  return parsed;
+}
+
 function relayWorktreeChildPath(base, name) {
   const candidate = path.join(base, name);
   if (!isPathContainedWithin(base, candidate)) {
@@ -133,7 +141,7 @@ function run() {
   const jsonOut = hasCliFlag("--json");
   const inspectOnly = hasCliFlag("--inspect");
   const reconcileMerged = hasCliFlag("--reconcile-merged");
-  const staleDays = parseHours(readArg(args, "--stale-days", String(DEFAULT_STALE_DAYS), CLI_ARG_OPTIONS), "--stale-days");
+  const staleDays = parsePositiveNumber(readArg(args, "--stale-days", String(DEFAULT_STALE_DAYS), CLI_ARG_OPTIONS), "--stale-days");
   const olderThanHours = all ? 0 : parseHours(readArg(args, "--older-than", "24", CLI_ARG_OPTIONS), "--older-than");
   const now = Date.now();
   const cutoff = now - olderThanHours * 60 * 60 * 1000;
@@ -228,14 +236,8 @@ function run() {
       continue;
     }
 
-    if (!all && updatedAt && updatedAt > cutoff) {
-      result.skipped.push({ ...enrichedBaseInfo, reason: "recent" });
-      continue;
-    }
-
     if (
       reconcileMerged
-      && !isTerminalState(normalizedData.state)
       && health.reconcileEligible
     ) {
       let reconcileData = normalizedData;
@@ -299,6 +301,11 @@ function run() {
       } else {
         result.failed.push(item);
       }
+      continue;
+    }
+
+    if (!all && updatedAt && updatedAt > cutoff) {
+      result.skipped.push({ ...enrichedBaseInfo, reason: "recent" });
       continue;
     }
 

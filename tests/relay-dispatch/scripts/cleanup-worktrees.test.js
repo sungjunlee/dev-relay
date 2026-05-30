@@ -313,6 +313,55 @@ test("cleanup-worktrees reconciles merged drift for ready_to_merge runs", () => 
   assert.equal(updated.last_force.reason, "janitor_reconcile_merged");
 });
 
+test("cleanup-worktrees reconciles merged drift without --all when manifest is recent", () => {
+  const repoRoot = setupRepo();
+  const updatedAt = new Date().toISOString();
+  const branch = "issue-reconcile-recent";
+  const worktreePath = path.join(repoRoot, "wt", branch);
+  fs.mkdirSync(path.dirname(worktreePath), { recursive: true });
+  execFileSync("git", ["worktree", "add", worktreePath, "-b", branch], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
+  fs.writeFileSync(path.join(worktreePath, `${branch}.txt`), `${branch}\n`, "utf-8");
+  execFileSync("git", ["-C", worktreePath, "add", `${branch}.txt`], { encoding: "utf-8", stdio: "pipe" });
+  execFileSync("git", ["-C", worktreePath, "commit", "-m", `Add ${branch}`], { encoding: "utf-8", stdio: "pipe" });
+  execFileSync("git", ["merge", branch, "-m", "merge reconcile recent"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
+
+  const runId = createRunId({ branch, timestamp: new Date(updatedAt) });
+  const layout = ensureRunLayout(repoRoot, runId);
+  const manifestPath = layout.manifestPath;
+  let manifest = createManifestSkeleton({
+    repoRoot,
+    runId,
+    branch,
+    baseBranch: "main",
+    issueNumber: 42,
+    worktreePath,
+    orchestrator: "codex",
+    executor: "codex",
+    reviewer: "codex",
+  });
+  manifest = updateManifestState(manifest, STATES.DISPATCHED, "await_dispatch_result");
+  manifest.anchor.rubric_path = "rubric.yaml";
+  fs.writeFileSync(path.join(layout.runDir, "rubric.yaml"), "rubric:\n  factors:\n    - name: reconcile-recent\n", "utf-8");
+  manifest = updateManifestState(manifest, STATES.REVIEW_PENDING, "run_review");
+  manifest = updateManifestState(manifest, STATES.READY_TO_MERGE, "await_explicit_merge");
+  manifest.timestamps.created_at = updatedAt;
+  manifest.timestamps.updated_at = updatedAt;
+  writeManifest(manifestPath, manifest);
+
+  const stdout = execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--reconcile-merged",
+    "--older-than", "24",
+    "--json",
+  ], { encoding: "utf-8" });
+
+  const result = JSON.parse(stdout);
+  assert.equal(result.reconciled.length, 1);
+  assert.equal(result.skipped.length, 0);
+  assert.equal(fs.existsSync(worktreePath), false);
+});
+
 test("cleanup-worktrees does not echo tampered run_id into operator output (#176)", () => {
   // Anti-theater: without the #176 safeFormatRunId reuse at cleanup-worktrees.js:88/:94,
   // the tampered run_id leaks into result.staleOpen[*].runId and the closeCommand --run-id.
