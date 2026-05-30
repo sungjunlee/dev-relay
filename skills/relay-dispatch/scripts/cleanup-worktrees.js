@@ -10,11 +10,14 @@
  *   --all                  Ignore age threshold
  *   --dry-run              Show what would be cleaned without writing
  *   --json                 Output as JSON
+ *   --inspect              Health inventory only (no cleanup or shell sweep)
+ *   --reconcile-merged     Reconcile merged drift for eligible non-terminal runs
+ *   --stale-days <days>    Stale classification threshold (default: 14)
  */
 
 const path = require("path");
 const fs = require("fs");
-const { isTerminalState } = require("./manifest/lifecycle");
+const { forceUpdateManifestState, isTerminalState } = require("./manifest/lifecycle");
 const {
   CLEANUP_STATUSES,
   runCleanup,
@@ -32,6 +35,10 @@ const {
 const { findUnknownFlags, modeLabel, readArg, schemaHasFlag } = require("./cli-args");
 const { appendRunEvent, EVENTS } = require("./relay-events");
 const { safeFormatRunId } = require("./relay-resolver");
+const {
+  DEFAULT_STALE_DAYS,
+  assessRunWorktreeHealth,
+} = require("./worktree-health");
 
 const args = process.argv.slice(2);
 const CLI_ARG_OPTIONS = { commandName: "cleanup-worktrees" };
@@ -39,6 +46,14 @@ const hasCliFlag = (flag) => schemaHasFlag(args, flag, CLI_ARG_OPTIONS);
 const OS_DETRITUS = new Set([".DS_Store", "Thumbs.db"]);
 
 function parseHours(value, label) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    throw new Error(`${label} must be a non-negative number`);
+  }
+  return parsed;
+}
+
+function parsePositiveNumber(value, label) {
   const parsed = Number(value);
   if (!Number.isFinite(parsed) || parsed < 0) {
     throw new Error(`${label} must be a non-negative number`);
@@ -108,6 +123,9 @@ if (hasCliFlag(["--help", "-h"])) {
   console.log(`  --all                  ${modeLabel("--all")} Ignore age threshold`);
   console.log(`  --dry-run              ${modeLabel("--dry-run")} Show what would be cleaned without writing`);
   console.log(`  --json                 ${modeLabel("--json")} Output as JSON`);
+  console.log(`  --inspect              ${modeLabel("--inspect")} Health inventory only (no cleanup or shell sweep)`);
+  console.log(`  --reconcile-merged     ${modeLabel("--reconcile-merged")} Reconcile merged drift for eligible non-terminal runs`);
+  console.log(`  --stale-days <days>    ${modeLabel("--stale-days")} Stale classification threshold (default: ${DEFAULT_STALE_DAYS})`);
   process.exit(0);
 }
 
@@ -121,6 +139,9 @@ function run() {
   const dryRun = hasCliFlag("--dry-run");
   const all = hasCliFlag("--all");
   const jsonOut = hasCliFlag("--json");
+  const inspectOnly = hasCliFlag("--inspect");
+  const reconcileMerged = hasCliFlag("--reconcile-merged");
+  const staleDays = parsePositiveNumber(readArg(args, "--stale-days", String(DEFAULT_STALE_DAYS), CLI_ARG_OPTIONS), "--stale-days");
   const olderThanHours = all ? 0 : parseHours(readArg(args, "--older-than", "24", CLI_ARG_OPTIONS), "--older-than");
   const now = Date.now();
   const cutoff = now - olderThanHours * 60 * 60 * 1000;
@@ -128,12 +149,17 @@ function run() {
   const result = {
     repoRoot,
     olderThanHours,
+    staleDays,
     dryRun,
     all,
+    inspectOnly,
+    reconcileMerged,
     cleaned: [],
+    reconciled: [],
     failed: [],
     staleOpen: [],
     skipped: [],
+    inventory: [],
     reapedShells: [],
     skippedShells: [],
   };
@@ -153,6 +179,7 @@ function run() {
       state: data.state,
       branch: data.git?.working_branch || null,
       worktree: data.paths?.worktree || null,
+      prNumber: data.git?.pr_number || null,
       ageHours,
       cleanupStatus,
       closeCommand: `node skills/relay-dispatch/scripts/close-run.js --repo ${JSON.stringify(repoRoot)} --run-id ${JSON.stringify(runId)} --reason ${JSON.stringify("stale_non_terminal_run")}`,
@@ -190,18 +217,109 @@ function run() {
       continue;
     }
 
+    const health = assessRunWorktreeHealth({
+      repoRoot,
+      data: normalizedData,
+      worktreePath: normalizedData.paths?.worktree || null,
+      staleDays,
+    });
+    const enrichedBaseInfo = {
+      ...baseInfo,
+      health,
+    };
+
+    if (inspectOnly) {
+      result.inventory.push({
+        ...enrichedBaseInfo,
+        reason: health.finishPath,
+      });
+      continue;
+    }
+
+    if (
+      reconcileMerged
+      && health.reconcileEligible
+    ) {
+      let reconcileData = normalizedData;
+      if (!dryRun) {
+        reconcileData = forceUpdateManifestState(
+          normalizedData,
+          "merged",
+          "manual_cleanup_required",
+          {
+            reason: "janitor_reconcile_merged",
+            operator: "cleanup-worktrees",
+          }
+        );
+        writeManifest(manifestPath, reconcileData, body);
+        appendRunEvent(repoRoot, reconcileData.run_id, {
+          event: EVENTS.STATE_RECOVERY,
+          state_from: normalizedData.state,
+          state_to: reconcileData.state,
+          head_sha: reconcileData.git?.head_sha || null,
+          round: reconcileData.review?.rounds || null,
+          reason: "janitor_reconcile_merged",
+        });
+      }
+
+      const cleanupResult = runCleanup({
+        repoRoot,
+        data: reconcileData,
+        dryRun,
+        deleteMergedBranch: true,
+        acceptPrunedRelayOwned: true,
+      });
+
+      const item = {
+        ...enrichedBaseInfo,
+        state: dryRun ? normalizedData.state : reconcileData.state,
+        cleanupStatus: cleanupResult.summary.cleanupStatus,
+        nextAction: cleanupResult.summary.nextAction,
+        worktreeRemoved: cleanupResult.summary.worktreeRemoved,
+        branchDeleted: cleanupResult.summary.branchDeleted,
+        pruneRan: cleanupResult.summary.pruneRan,
+        error: cleanupResult.summary.error,
+        reason: "reconcile_merged",
+      };
+
+      if (!dryRun) {
+        writeManifest(manifestPath, cleanupResult.updatedData, body);
+        appendRunEvent(repoRoot, cleanupResult.updatedData.run_id, {
+          event: EVENTS.CLEANUP_RESULT,
+          state_from: cleanupResult.updatedData.state,
+          state_to: cleanupResult.updatedData.state,
+          head_sha: cleanupResult.updatedData.git?.head_sha || null,
+          round: cleanupResult.updatedData.review?.rounds || null,
+          reason: cleanupResult.summary.cleanupStatus === CLEANUP_STATUSES.SUCCEEDED
+            ? "reconcile_cleanup_succeeded"
+            : cleanupResult.summary.error,
+        });
+      }
+
+      if (cleanupResult.summary.cleanupStatus === CLEANUP_STATUSES.SUCCEEDED) {
+        result.reconciled.push(item);
+      } else {
+        result.failed.push(item);
+      }
+      continue;
+    }
+
     if (!all && updatedAt && updatedAt > cutoff) {
-      result.skipped.push({ ...baseInfo, reason: "recent" });
+      result.skipped.push({ ...enrichedBaseInfo, reason: "recent" });
       continue;
     }
 
     if (!isTerminalState(normalizedData.state)) {
-      result.staleOpen.push({ ...baseInfo, reason: "non-terminal" });
+      const staleReason = health.stale ? "stale_non_terminal" : "non-terminal";
+      result.staleOpen.push({
+        ...enrichedBaseInfo,
+        reason: staleReason,
+      });
       continue;
     }
 
     if (cleanupStatus === CLEANUP_STATUSES.SUCCEEDED) {
-      result.skipped.push({ ...baseInfo, reason: "already_cleaned" });
+      result.skipped.push({ ...enrichedBaseInfo, reason: "already_cleaned" });
       continue;
     }
 
@@ -214,7 +332,7 @@ function run() {
     });
 
     const item = {
-      ...baseInfo,
+      ...enrichedBaseInfo,
       cleanupStatus: cleanupResult.summary.cleanupStatus,
       nextAction: cleanupResult.summary.nextAction,
       worktreeRemoved: cleanupResult.summary.worktreeRemoved,
@@ -244,15 +362,21 @@ function run() {
     }
   }
 
-  const shellSweep = sweepOrphanedWorktreeShells({ dryRun });
-  result.reapedShells = shellSweep.reaped;
-  result.skippedShells = shellSweep.skipped;
+  if (!inspectOnly) {
+    const shellSweep = sweepOrphanedWorktreeShells({ dryRun });
+    result.reapedShells = shellSweep.reaped;
+    result.skippedShells = shellSweep.skipped;
+  }
 
   if (jsonOut) {
     console.log(JSON.stringify(result, null, 2));
   } else {
     console.log(`Relay janitor: ${repoRoot}`);
+    if (inspectOnly) {
+      console.log(`  inspect:    ${result.inventory.length} runs`);
+    }
     console.log(`  cleaned:    ${result.cleaned.length}`);
+    console.log(`  reconciled: ${result.reconciled.length}`);
     console.log(`  failed:     ${result.failed.length}`);
     console.log(`  stale open: ${result.staleOpen.length}`);
     console.log(`  skipped:    ${result.skipped.length}`);
@@ -262,7 +386,16 @@ function run() {
     }
     if (result.staleOpen.length) {
       console.log("  stale open runs:");
-      result.staleOpen.forEach((entry) => console.log(`    ${entry.runId} (${entry.state}, ${entry.ageHours ?? "?"}h old) -> ${entry.closeCommand}`));
+      result.staleOpen.forEach((entry) => {
+        const finishPath = entry.health?.finishPath || "unknown";
+        console.log(`    ${entry.runId} (${entry.state}, ${entry.ageHours ?? "?"}h old, ${finishPath}) -> ${entry.health?.recommendedAction || entry.closeCommand}`);
+      });
+    }
+    if (inspectOnly && result.inventory.length) {
+      console.log("  inventory:");
+      result.inventory.forEach((entry) => {
+        console.log(`    ${entry.runId} (${entry.state}, ${entry.health.finishPath}) -> ${entry.health.recommendedAction}`);
+      });
     }
     if (dryRun) {
       console.log("  dry-run: no changes written");
