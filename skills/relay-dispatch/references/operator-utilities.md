@@ -20,8 +20,12 @@ Successful dispatches keep their worktree by default. Cleanup moves later in the
 
 `--no-cleanup` remains accepted as a compatibility alias. `--register` still matters because it also opens the retained worktree in the executor app.
 
-To prune stale retained worktrees safely from this repo:
+Janitor v2 adds git/PR health scoring and optional merged-drift reconciliation (`ready_to_merge` only). See [worktree-janitor-v2.md](./worktree-janitor-v2.md).
+
 ```bash
+node skills/relay-dispatch/scripts/cleanup-worktrees.js --repo . --inspect --json
+node skills/relay-dispatch/scripts/cleanup-worktrees.js --repo . --reconcile-merged --dry-run --json
+# Prefer finalize-run when review gate passes; reconcile is disk recovery for merged drift
 node skills/relay-dispatch/scripts/cleanup-worktrees.js --repo .              # clean terminal runs > 24h old
 node skills/relay-dispatch/scripts/cleanup-worktrees.js --repo . --all         # ignore age threshold
 node skills/relay-dispatch/scripts/cleanup-worktrees.js --repo . --dry-run     # show what would be removed
