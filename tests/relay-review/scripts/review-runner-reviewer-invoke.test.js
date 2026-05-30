@@ -124,6 +124,8 @@ test("reviewer-invoke/resolveReviewerScript resolves built-in adapters and rejec
   assert.match(opencodeScript, /invoke-reviewer-opencode\.js$/);
   const piScript = resolveReviewerScript("pi");
   assert.match(piScript, /invoke-reviewer-pi\.js$/);
+  const cursorScript = resolveReviewerScript("cursor");
+  assert.match(cursorScript, /invoke-reviewer-cursor\.js$/);
   assert.throws(() => resolveReviewerScript("../bad"), /Invalid reviewer name/);
 });
 
@@ -132,6 +134,10 @@ test("reviewer-invoke/resolveReviewerScript allows parity adapters for advisory 
   assert.match(script, /invoke-reviewer-opencode\.js$/);
   assert.match(resolveReviewerScript("pi", null, { phase: ADAPTER_PHASES.ADVISORY_REVIEW }), /invoke-reviewer-pi\.js$/);
   assert.match(resolveReviewerScript("antigravity", null, { phase: ADAPTER_PHASES.ADVISORY_REVIEW }), /invoke-reviewer-antigravity\.js$/);
+  assert.throws(
+    () => resolveReviewerScript("cursor", null, { phase: ADAPTER_PHASES.ADVISORY_REVIEW }),
+    /not advisory_review/
+  );
 });
 
 test("reviewer-invoke/resolveReviewerScript rejects unknown adapter names without falling back to files", () => {
@@ -158,6 +164,16 @@ test("reviewer-invoke/buildPrimaryReviewerPolicy records OpenCode primary review
   assert.equal(policy.sandbox.enforcement_level, "informational");
   assert.equal(policy.read_only.enforcement_level, "prompt-only");
   assert.match(policy.read_only.warnings.join("\n"), /does not prevent writes/i);
+});
+
+test("reviewer-invoke/buildPrimaryReviewerPolicy records Cursor ask-mode metadata", () => {
+  const policy = buildPrimaryReviewerPolicy("cursor");
+  assert.equal(policy.adapter, "cursor");
+  assert.equal(policy.phase, ADAPTER_PHASES.PRIMARY_REVIEW);
+  assert.equal(policy.safe, true);
+  assert.equal(policy.sandbox.enforcement_level, "informational");
+  assert.deepEqual(policy.sandbox.flags, ["--mode", "ask", "--trust", "--workspace"]);
+  assert.equal(policy.read_only.enforcement_level, "prompt-only");
 });
 
 test("reviewer-invoke/buildPrimaryReviewerPolicy records Antigravity CLI version metadata", (t) => {

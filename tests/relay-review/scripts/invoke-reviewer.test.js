@@ -10,6 +10,7 @@ const CLAUDE_SCRIPT = path.join(__dirname, "..", "..", "..", "skills", "relay-re
 const OPENCODE_SCRIPT = path.join(__dirname, "..", "..", "..", "skills", "relay-review", "scripts", "invoke-reviewer-opencode.js");
 const PI_SCRIPT = path.join(__dirname, "..", "..", "..", "skills", "relay-review", "scripts", "invoke-reviewer-pi.js");
 const ANTIGRAVITY_SCRIPT = path.join(__dirname, "..", "..", "..", "skills", "relay-review", "scripts", "invoke-reviewer-antigravity.js");
+const CURSOR_SCRIPT = path.join(__dirname, "..", "..", "..", "skills", "relay-review", "scripts", "invoke-reviewer-cursor.js");
 
 function setupRepo() {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-adapter-"));
@@ -964,4 +965,118 @@ process.stdout.write("not-json\\n");
   const stderr = String(error.stderr || "");
   assert.match(stderr, /adapter=antigravity phase=primary_review/);
   assert.match(stderr, /review verdict must be valid JSON/);
+});
+
+test("cursor adapter forwards ask mode, workspace, json wrapper parsing, and preserves primary review prompt", () => {
+  const { repoRoot, promptPath } = setupRepo();
+  const fakeDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-fake-cursor-"));
+  const logPath = path.join(fakeDir, "agent-args.log");
+  const verdict = reviewerVerdict();
+  const fakeAgent = writeExecutable(fakeDir, "fake-agent.js", `#!/usr/bin/env node
+const fs = require("fs");
+const args = process.argv.slice(2);
+if (args[0] === "status") {
+  process.stdout.write("Logged in as test@example.com\\n");
+  process.exit(0);
+}
+fs.writeFileSync(${JSON.stringify(logPath)}, JSON.stringify(args), "utf-8");
+process.stdout.write(JSON.stringify({
+  result: JSON.stringify(${JSON.stringify(verdict)}),
+}));
+`);
+
+  const stdout = execFileSync("node", [
+    CURSOR_SCRIPT,
+    "--repo", repoRoot,
+    "--prompt-file", promptPath,
+    "--model", "composer-2.5",
+    "--json",
+  ], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+    env: {
+      ...process.env,
+      RELAY_CURSOR_AGENT_BIN: fakeAgent,
+      RELAY_CURSOR_REVIEW_TIMEOUT: "45s",
+      CURSOR_API_KEY: "",
+    },
+  });
+
+  const result = JSON.parse(stdout);
+  const loggedArgs = JSON.parse(fs.readFileSync(logPath, "utf-8"));
+  assert.equal(result.verdict, "pass");
+  assert.deepEqual(loggedArgs.slice(0, 8), [
+    "--print",
+    "--trust",
+    "--mode", "ask",
+    "--workspace", repoRoot,
+    "--output-format", "json",
+  ]);
+  assert.equal(loggedArgs[8], "--model");
+  assert.equal(loggedArgs[9], "composer-2.5");
+  assert.match(loggedArgs[10], /NON-INTERACTIVE REVIEW/);
+  assert.match(loggedArgs[10], /Return a passing review\./);
+});
+
+test("cursor adapter rejects advisory review phase", () => {
+  const { repoRoot, promptPath } = setupRepo();
+  let error;
+  try {
+    execFileSync("node", [
+      CURSOR_SCRIPT,
+      "--repo", repoRoot,
+      "--prompt-file", promptPath,
+      "--phase", "advisory_review",
+      "--json",
+    ], {
+      cwd: repoRoot,
+      encoding: "utf-8",
+      stdio: "pipe",
+      env: { ...process.env, CURSOR_API_KEY: "test-key" },
+    });
+    assert.fail("expected invoke-reviewer-cursor.js to fail");
+  } catch (caught) {
+    error = caught;
+  }
+
+  assert.ok(error);
+  assert.match(String(error.stderr || ""), /primary_review only/);
+});
+
+test("cursor adapter fails closed when auth probe reports not logged in", () => {
+  const { repoRoot, promptPath } = setupRepo();
+  const fakeDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-fake-cursor-auth-"));
+  const fakeAgent = writeExecutable(fakeDir, "fake-agent.js", `#!/usr/bin/env node
+if (process.argv[2] === "status") {
+  process.stdout.write("Not logged in. Please run \`agent login\`.\\n");
+  process.exit(1);
+}
+process.stdout.write("{}");
+`);
+
+  let error;
+  try {
+    execFileSync("node", [
+      CURSOR_SCRIPT,
+      "--repo", repoRoot,
+      "--prompt-file", promptPath,
+      "--json",
+    ], {
+      cwd: repoRoot,
+      encoding: "utf-8",
+      stdio: "pipe",
+      env: {
+        ...process.env,
+        RELAY_CURSOR_AGENT_BIN: fakeAgent,
+        CURSOR_API_KEY: "",
+      },
+    });
+    assert.fail("expected invoke-reviewer-cursor.js to fail");
+  } catch (caught) {
+    error = caught;
+  }
+
+  assert.ok(error);
+  assert.match(String(error.stderr || ""), /not authenticated/i);
 });
