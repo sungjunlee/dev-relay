@@ -391,6 +391,110 @@ process.stdout.write("\`\`\`json\\n" + JSON.stringify({
   assert.equal(result.summary, "No blocking blind spots.");
 });
 
+test("opencode adapter recovers live-style prose-wrapped advisory JSON", () => {
+  const { repoRoot, promptPath } = setupRepo();
+  const fakeDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-fake-opencode-prose-"));
+  const fakeOpencode = writeExecutable(fakeDir, "fake-opencode.js", `#!/usr/bin/env node
+process.stdout.write("Sure, here is the advisory result:\\n" + JSON.stringify({
+  profile: "blindspot",
+  summary: "Recovered from verbose live output.",
+  required_findings: [],
+  advisory_findings: [],
+  duplicate_or_low_confidence: [],
+}) + "\\n");
+`);
+
+  const stdout = execFileSync("node", [
+    OPENCODE_SCRIPT,
+    "--repo", repoRoot,
+    "--prompt-file", promptPath,
+    "--json",
+  ], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+    env: { ...process.env, RELAY_OPENCODE_BIN: fakeOpencode },
+  });
+
+  const result = JSON.parse(stdout);
+  assert.equal(result.profile, "blindspot");
+  assert.equal(result.summary, "Recovered from verbose live output.");
+});
+
+test("opencode adapter reports actionable diagnostics for empty stdout", () => {
+  const { repoRoot, promptPath } = setupRepo();
+  const fakeDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-fake-opencode-empty-"));
+  const fakeOpencode = writeExecutable(fakeDir, "fake-opencode.js", `#!/usr/bin/env node
+process.exit(0);
+`);
+
+  let error;
+  try {
+    execFileSync("node", [
+      OPENCODE_SCRIPT,
+      "--repo", repoRoot,
+      "--prompt-file", promptPath,
+      "--model", "opencode-go/deepseek-v4-pro",
+      "--json",
+    ], {
+      cwd: repoRoot,
+      encoding: "utf-8",
+      stdio: "pipe",
+      env: { ...process.env, RELAY_OPENCODE_BIN: fakeOpencode },
+    });
+  } catch (caught) {
+    error = caught;
+  }
+
+  assert.ok(error, "expected empty stdout to fail closed");
+  const stderr = String(error.stderr || "");
+  assert.match(stderr, /opencode advisory_review reviewer produced empty stdout/);
+  assert.match(stderr, /cannot treat this as healthy review evidence/);
+  assert.match(stderr, /verify OpenCode non-interactive model\/provider output/);
+  assert.match(stderr, /OpenCode CLI\/provider non-interactive blocker/);
+});
+
+test("opencode adapter enforces parent timeout and reports timeout context", () => {
+  const { repoRoot, promptPath } = setupRepo();
+  const fakeDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-fake-opencode-timeout-"));
+  const fakeOpencode = writeExecutable(fakeDir, "fake-opencode.js", `#!/usr/bin/env node
+setTimeout(() => {
+  process.stdout.write(JSON.stringify({
+    profile: "blindspot",
+    summary: "Too late.",
+    required_findings: [],
+    advisory_findings: [],
+    duplicate_or_low_confidence: [],
+  }));
+}, 2500);
+`);
+
+  let error;
+  try {
+    execFileSync("node", [
+      OPENCODE_SCRIPT,
+      "--repo", repoRoot,
+      "--prompt-file", promptPath,
+      "--json",
+    ], {
+      cwd: repoRoot,
+      encoding: "utf-8",
+      stdio: "pipe",
+      timeout: 5000,
+      env: { ...process.env, RELAY_OPENCODE_BIN: fakeOpencode, RELAY_OPENCODE_REVIEW_TIMEOUT: "1s" },
+    });
+  } catch (caught) {
+    error = caught;
+  }
+
+  assert.ok(error, "expected invoke-reviewer-opencode.js to fail on parent timeout");
+  const stderr = String(error.stderr || "");
+  assert.match(stderr, /opencode advisory_review reviewer timed out after 1s/);
+  assert.match(stderr, /RELAY_OPENCODE_REVIEW_TIMEOUT/);
+  assert.match(stderr, /cannot treat this as healthy review evidence/);
+  assert.doesNotMatch(String(error.stdout || ""), /Too late/);
+});
+
 test("opencode adapter supports primary review verdict parsing when phase is primary_review", () => {
   const { repoRoot, promptPath } = setupRepo();
   const fakeDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-fake-opencode-primary-"));

@@ -20,6 +20,7 @@ const DEFAULTS = Object.freeze({
   antigravityModel: "google/antigravity-cli",
   commandTimeoutMs: 300_000,
   piReviewTimeout: "120s",
+  opencodeReviewTimeout: "120s",
   antigravityReviewTimeout: "120s",
   antigravityFailSafeReviewTimeout: "5s",
   antigravityDispatchTimeoutSeconds: 45,
@@ -82,6 +83,17 @@ const LIVE_DOGFOOD_SCENARIOS = Object.freeze([
     classifier: "standard-json",
     defaultEnabled: true,
     healthyPromotion: true,
+    env: { name: "RELAY_OPENCODE_REVIEW_TIMEOUT", option: "opencodeReviewTimeout" },
+  },
+  {
+    name: "opencode-primary",
+    adapter: "opencode",
+    phase: "primary_review",
+    category: "healthy-review",
+    classifier: "standard-json",
+    defaultEnabled: false,
+    healthyPromotion: true,
+    env: { name: "RELAY_OPENCODE_REVIEW_TIMEOUT", option: "opencodeReviewTimeout" },
   },
   {
     name: "pi-advisory",
@@ -166,12 +178,6 @@ const LIVE_DOGFOOD_SCENARIOS = Object.freeze([
 
 const LIVE_DOGFOOD_READINESS_EXEMPTIONS = Object.freeze([
   {
-    adapter: "opencode",
-    phase: "primary_review",
-    reason: "OpenCode primary review readiness is route-policy limited; the current harness keeps OpenCode live review dogfood on the advisory row.",
-    readinessTextPattern: /Live:\s*`limited`\s*by route policy and live reviewer evidence/i,
-  },
-  {
     adapter: "antigravity",
     phase: "advisory_review",
     reason: "Antigravity advisory review is blocked until a healthy advisory dogfood scenario exists.",
@@ -194,6 +200,7 @@ function parseArgs(argv) {
     antigravityModel: DEFAULTS.antigravityModel,
     commandTimeoutMs: DEFAULTS.commandTimeoutMs,
     piReviewTimeout: DEFAULTS.piReviewTimeout,
+    opencodeReviewTimeout: DEFAULTS.opencodeReviewTimeout,
     antigravityReviewTimeout: DEFAULTS.antigravityReviewTimeout,
     antigravityFailSafeReviewTimeout: DEFAULTS.antigravityFailSafeReviewTimeout,
     antigravityDispatchTimeoutSeconds: DEFAULTS.antigravityDispatchTimeoutSeconds,
@@ -223,6 +230,7 @@ function parseArgs(argv) {
     else if (arg === "--antigravity-model") parsed.antigravityModel = next();
     else if (arg === "--command-timeout-ms") parsed.commandTimeoutMs = Number(next());
     else if (arg === "--pi-review-timeout") parsed.piReviewTimeout = next();
+    else if (arg === "--opencode-review-timeout") parsed.opencodeReviewTimeout = next();
     else if (arg === "--antigravity-review-timeout") parsed.antigravityReviewTimeout = next();
     else if (arg === "--antigravity-fail-safe-timeout") parsed.antigravityFailSafeReviewTimeout = next();
     else if (arg === "--antigravity-dispatch-timeout") parsed.antigravityDispatchTimeoutSeconds = Number(next());
@@ -782,6 +790,7 @@ function printHelp() {
   console.log("  --opencode-model <route>              OpenCode route (default: opencode-go/deepseek-v4-pro)");
   console.log("  --antigravity-model <route>           Antigravity route (default: google/antigravity-cli)");
   console.log("  --pi-review-timeout <duration>        RELAY_PI_REVIEW_TIMEOUT for the Pi canary (default: 120s)");
+  console.log("  --opencode-review-timeout <duration>  RELAY_OPENCODE_REVIEW_TIMEOUT for OpenCode review canaries (default: 120s)");
   console.log("  --antigravity-review-timeout <duration>  RELAY_ANTIGRAVITY_REVIEW_TIMEOUT for the healthy Antigravity review canary (default: 120s)");
   console.log("  --antigravity-fail-safe-timeout <duration>  RELAY_ANTIGRAVITY_REVIEW_TIMEOUT for the intentional fail-safe timeout canary (default: 5s)");
   console.log("  --antigravity-dispatch-timeout <sec>  Antigravity no-op/fail-safe dispatch timeout seconds (default: 45)");
