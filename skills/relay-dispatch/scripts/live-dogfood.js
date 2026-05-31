@@ -126,6 +126,16 @@ const LIVE_DOGFOOD_SCENARIOS = Object.freeze([
     env: { name: "RELAY_ANTIGRAVITY_REVIEW_TIMEOUT", option: "antigravityReviewTimeout" },
   },
   {
+    name: "antigravity-advisory",
+    adapter: "antigravity",
+    phase: "advisory_review",
+    category: "healthy-review",
+    classifier: "standard-json",
+    defaultEnabled: true,
+    healthyPromotion: true,
+    env: { name: "RELAY_ANTIGRAVITY_REVIEW_TIMEOUT", option: "antigravityReviewTimeout" },
+  },
+  {
     name: "antigravity-primary-fail-safe-timeout",
     adapter: "antigravity",
     phase: "primary_review",
@@ -176,14 +186,7 @@ const LIVE_DOGFOOD_SCENARIOS = Object.freeze([
   },
 ]);
 
-const LIVE_DOGFOOD_READINESS_EXEMPTIONS = Object.freeze([
-  {
-    adapter: "antigravity",
-    phase: "advisory_review",
-    reason: "Antigravity advisory review is blocked until a healthy advisory dogfood scenario exists.",
-    readinessTextPattern: /Live:\s*`blocked`\s*until healthy advisory dogfood exists/i,
-  },
-]);
+const LIVE_DOGFOOD_READINESS_EXEMPTIONS = Object.freeze([]);
 
 function parseArgs(argv) {
   const parsed = {
@@ -283,7 +286,7 @@ function buildAllowedModelRoutes(options = {}) {
     },
     {
       route: antigravityModel,
-      phases: ["dispatch", "review"],
+      phases: ["dispatch", "review", "advisory_review"],
       executors: ["antigravity"],
       reviewers: ["antigravity"],
     },
@@ -432,6 +435,7 @@ function classifyStandardJson(result) {
   const parsed = parseJson(result.stdout);
   if (result.status === 0 && parsed) return { outcome: OUTCOMES.PASS, parsed, notes: "valid JSON returned" };
   const text = summarizeOutput(result);
+  if (/mutated the worktree/i.test(text)) return { outcome: OUTCOMES.FAIL, notes: text };
   if (/timed out/i.test(text)) return { outcome: OUTCOMES.TIMEOUT, notes: text };
   return { outcome: OUTCOMES.FAIL, notes: text || "command failed without parseable JSON" };
 }

@@ -69,6 +69,30 @@ function isExecTimeout(error) {
   return error?.code === "ETIMEDOUT" || (error?.signal === "SIGKILL" && error?.killed);
 }
 
+function readWorktreeStatus(repoPath) {
+  return execFileSync("git", ["status", "--porcelain"], {
+    cwd: repoPath,
+    encoding: "utf-8",
+    stdio: "pipe",
+    timeout: 30_000,
+  }).trim();
+}
+
+function summarizeStatus(status) {
+  const text = String(status || "").trim();
+  return text ? text.split(/\r?\n/).slice(0, 8).join("; ") : "(clean)";
+}
+
+function worktreeMutationMessage(repoPath, beforeStatus, phase) {
+  const afterStatus = readWorktreeStatus(repoPath);
+  if (afterStatus === beforeStatus) return "";
+  return (
+    `Antigravity reviewer ${phase} mutated the worktree while running in read-only review mode. ` +
+    `Before git status: ${summarizeStatus(beforeStatus)}. ` +
+    `After git status: ${summarizeStatus(afterStatus)}.`
+  );
+}
+
 function buildPrompt(promptText, phase) {
   if (phase === "advisory_review") {
     return [
@@ -123,6 +147,7 @@ function main() {
 
   const promptText = fs.readFileSync(promptFile, "utf-8").trim();
   const fullPrompt = buildPrompt(promptText, phase);
+  const beforeStatus = readWorktreeStatus(repoPath);
 
   const execArgs = [
     "--prompt", fullPrompt,
@@ -141,11 +166,16 @@ function main() {
       maxBuffer: 10 * 1024 * 1024,
     }).trim();
   } catch (error) {
+    const mutationMessage = worktreeMutationMessage(repoPath, beforeStatus, phase);
     if (isExecTimeout(error)) {
       throw new Error(
         `Antigravity reviewer ${phase} timed out after ${printTimeout} (RELAY_ANTIGRAVITY_REVIEW_TIMEOUT). ` +
-        "The agy --prompt invocation did not return before the parent-process timeout; retry with a larger timeout or split the review scope."
+        "The agy --prompt invocation did not return before the parent-process timeout; retry with a larger timeout or split the review scope." +
+        (mutationMessage ? ` ${mutationMessage}` : "")
       );
+    }
+    if (mutationMessage) {
+      throw new Error(mutationMessage);
     }
     const recovered = recoverExecStdout(error);
     if (!recovered) {
@@ -156,6 +186,10 @@ function main() {
 
   if (!result) {
     throw new Error(`Antigravity reviewer ${phase} did not produce a structured result`);
+  }
+  const mutationMessage = worktreeMutationMessage(repoPath, beforeStatus, phase);
+  if (mutationMessage) {
+    throw new Error(mutationMessage);
   }
   const parsed = parseResult(result, phase);
   const output = JSON.stringify(parsed);
