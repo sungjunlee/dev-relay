@@ -283,6 +283,7 @@ test("live dogfood dispatch canary adds healthy Pi, OpenCode, and Antigravity di
   const relayHome = tempDir("relay-live-dogfood-home-");
   const responses = [
     { status: 0, stdout: "", stderr: "" },
+    { status: 0, stdout: "", stderr: "" },
     jsonResult({ policy_decision: { allowed: true }, agent_tools_raw: "{\"version\":\"pi\"}" }),
     jsonResult({ policy_decision: { allowed: true }, agent_tools_raw: "{\"version\":\"opencode\"}" }),
     jsonResult({ policy_decision: { allowed: true }, agent_tools_raw: "{\"version\":\"agy\"}" }),
@@ -313,9 +314,14 @@ test("live dogfood dispatch canary adds healthy Pi, OpenCode, and Antigravity di
     },
   });
 
-  assert.equal(calls.length, 14);
+  assert.equal(calls.length, 16);
   assert.equal(calls[0].command, "git");
-  assert.deepEqual(calls[0].args, ["status", "--porcelain"]);
+  assert.deepEqual(calls[0].args.slice(0, 3), ["worktree", "add", "--detach"]);
+  assert.equal(calls[0].args[4], "origin/main");
+  assert.equal(calls[1].command, "git");
+  assert.deepEqual(calls[1].args, ["status", "--porcelain"]);
+  assert.match(result.dispatch_base_repo, /dispatch-base-.+\/repo$/);
+  assert.equal(result.dispatch_base_ref, "origin/main");
   assert.deepEqual(result.outcomes.map((step) => step.name), [
     "probe-pi",
     "probe-opencode",
@@ -336,7 +342,7 @@ test("live dogfood dispatch canary adds healthy Pi, OpenCode, and Antigravity di
     OUTCOMES.PASS,
     OUTCOMES.PASS,
   ]);
-  for (const [call, executor] of calls.slice(11).map((call, index) => [call, ["pi", "opencode", "antigravity"][index]])) {
+  for (const [call, executor] of calls.slice(12, 15).map((call, index) => [call, ["pi", "opencode", "antigravity"][index]])) {
     assert.match(call.args[call.args.indexOf("-b") + 1], /^healthy-dogfood-(pi|opencode|antigravity)-\d+$/);
     assert.equal(call.args[call.args.indexOf("--timeout") + 1], "222");
     assert.ok(call.args.includes("--prompt-file"));
@@ -347,11 +353,16 @@ test("live dogfood dispatch canary adds healthy Pi, OpenCode, and Antigravity di
     const routeIntent = JSON.parse(fs.readFileSync(call.args[call.args.indexOf("--route-intent-file") + 1], "utf-8"));
     assert.equal(routeIntent.dispatch.executor, executor);
   }
+  assert.deepEqual(calls[15].args.slice(0, 3), ["worktree", "remove", "--force"]);
 });
 
-test("live dogfood dispatch canary refuses dirty repositories before creating live branches", () => {
+test("live dogfood dispatch canary refuses dirty clean-base worktrees before creating live branches", () => {
   const repo = tempDir("relay-live-dogfood-repo-");
   const calls = [];
+  const responses = [
+    { status: 0, stdout: "", stderr: "" },
+    { status: 0, stdout: " M docs/relay-operator-guide.md\n", stderr: "" },
+  ];
 
   assert.throws(() => runDogfood({
     repo,
@@ -359,18 +370,24 @@ test("live dogfood dispatch canary refuses dirty repositories before creating li
   }, {
     spawnSync: (command, args) => {
       calls.push({ command, args });
-      return { status: 0, stdout: " M docs/relay-operator-guide.md\n", stderr: "" };
+      return responses.shift();
     },
   }), /--dispatch-canary requires a clean worktree/);
 
-  assert.equal(calls.length, 1);
+  assert.equal(calls.length, 3);
   assert.equal(calls[0].command, "git");
-  assert.deepEqual(calls[0].args, ["status", "--porcelain"]);
+  assert.deepEqual(calls[0].args.slice(0, 3), ["worktree", "add", "--detach"]);
+  assert.deepEqual(calls[1].args, ["status", "--porcelain"]);
+  assert.deepEqual(calls[2].args.slice(0, 3), ["worktree", "remove", "--force"]);
 });
 
-test("live dogfood targeted dispatch canary also refuses dirty repositories", () => {
+test("live dogfood targeted dispatch canary also refuses dirty clean-base worktrees", () => {
   const repo = tempDir("relay-live-dogfood-repo-");
   const calls = [];
+  const responses = [
+    { status: 0, stdout: "", stderr: "" },
+    { status: 0, stdout: " M README.md\n", stderr: "" },
+  ];
 
   assert.throws(() => runDogfood({
     repo,
@@ -378,13 +395,15 @@ test("live dogfood targeted dispatch canary also refuses dirty repositories", ()
   }, {
     spawnSync: (command, args) => {
       calls.push({ command, args });
-      return { status: 0, stdout: " M README.md\n", stderr: "" };
+      return responses.shift();
     },
   }), /--dispatch-canary requires a clean worktree/);
 
-  assert.equal(calls.length, 1);
+  assert.equal(calls.length, 3);
   assert.equal(calls[0].command, "git");
-  assert.deepEqual(calls[0].args, ["status", "--porcelain"]);
+  assert.deepEqual(calls[0].args.slice(0, 3), ["worktree", "add", "--detach"]);
+  assert.deepEqual(calls[1].args, ["status", "--porcelain"]);
+  assert.deepEqual(calls[2].args.slice(0, 3), ["worktree", "remove", "--force"]);
 });
 
 test("live dogfood defaults use realistic healthy reviewer timeouts and bounded dispatch canary settings", () => {
@@ -396,11 +415,13 @@ test("live dogfood defaults use realistic healthy reviewer timeouts and bounded 
   assert.equal(defaults.antigravityReviewTimeout, "120s");
   assert.equal(defaults.antigravityFailSafeReviewTimeout, "5s");
   assert.equal(defaults.dispatchCanary, false);
+  assert.equal(defaults.dispatchBaseRef, "origin/main");
   assert.equal(defaults.dispatchTimeoutSeconds, 180);
   assert.equal(defaults.dispatchBranchPrefix, "dogfood-dispatch");
 
   const parsed = parseArgs([
     "--dispatch-canary",
+    "--dispatch-base-ref", "origin/release",
     "--dispatch-timeout", "240",
     "--dispatch-branch-prefix", "relay-healthy",
     "--opencode-review-timeout", "150s",
@@ -408,6 +429,7 @@ test("live dogfood defaults use realistic healthy reviewer timeouts and bounded 
     "--antigravity-fail-safe-timeout", "3s",
   ]);
   assert.equal(parsed.dispatchCanary, true);
+  assert.equal(parsed.dispatchBaseRef, "origin/release");
   assert.equal(parsed.dispatchTimeoutSeconds, 240);
   assert.equal(parsed.dispatchBranchPrefix, "relay-healthy");
   assert.equal(parsed.opencodeReviewTimeout, "150s");
