@@ -46,15 +46,21 @@ Eight states with enforced transitions (`relay-manifest.js:ALLOWED_TRANSITIONS`)
      ↓           ↓
 ┌────────────────────┐    ┌──────────────────┐
 │ changes_requested   │    │  ready_to_merge   │
-└────────┬───────────┘    └────────┬──────────┘
-         │                         │
-         ↓ (re-dispatch)           ↓
-    dispatched                 ┌────────┐
-                               │ merged  │
-                               └─────────┘
+└────────┬───────────┘    └────┬────────┬──────┘
+         │                     │        │
+         ↓ (re-dispatch)       │        ↓
+    dispatched                 │   ┌────────┐
+                               │   │ merged  │
+                               │   └─────────┘
+                               ↓
+                         ┌───────────────┐
+                         │ merge_blocked │
+                         └───────┬───────┘
+                                 ↓
+                           ready_to_merge
 ```
 
-Terminal states: `merged`, `closed`. Once entered, no further transitions.
+Terminal states: `merged`, `closed`. Once entered, no further transitions. `merge_blocked` is non-terminal: Phase 3 fleet merge queues use it to preserve a failed merge attempt without forcing an invalid review-cycle transition.
 
 ## Manifest Schema
 
