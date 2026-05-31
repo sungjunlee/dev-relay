@@ -143,6 +143,39 @@ test("live dogfood dry-run plans default non-dispatch scenarios without invoking
   assert.ok(result.coverage.scenarios.every((scenario) => typeof scenario.healthyPromotion === "boolean"));
 });
 
+test("live dogfood can target named scenarios for isolated adapter evidence", () => {
+  const repo = tempDir("relay-live-dogfood-repo-");
+  const calls = [];
+  const result = runDogfood({
+    repo,
+    dryRun: true,
+    scenarios: ["pi-primary"],
+  }, {
+    spawnSync: (...args) => {
+      calls.push(args);
+      return jsonResult({});
+    },
+  });
+
+  assert.equal(calls.length, 0);
+  assert.deepEqual(result.outcomes.map((step) => step.name), ["pi-primary"]);
+  assert.match(result.outcomes[0].command, /invoke-reviewer-pi\.js/);
+  assert.doesNotMatch(result.outcomes[0].command, /invoke-reviewer-opencode\.js/);
+});
+
+test("live dogfood rejects unknown scenario filters", () => {
+  assert.throws(
+    () => parseArgs(["--scenario", "missing-scenario"]),
+    /unknown --scenario "missing-scenario"/
+  );
+});
+
+test("live dogfood parses repeated scenario filters", () => {
+  const parsed = parseArgs(["--scenario", "probe-pi", "--scenario", "pi-primary"]);
+
+  assert.deepEqual(parsed.scenarios, ["probe-pi", "pi-primary"]);
+});
+
 test("live dogfood classifies mocked command outcomes and preserves markdown distinctions", () => {
   const repo = tempDir("relay-live-dogfood-repo-");
   const relayHome = tempDir("relay-live-dogfood-home-");
@@ -302,6 +335,25 @@ test("live dogfood dispatch canary refuses dirty repositories before creating li
   assert.deepEqual(calls[0].args, ["status", "--porcelain"]);
 });
 
+test("live dogfood targeted dispatch canary also refuses dirty repositories", () => {
+  const repo = tempDir("relay-live-dogfood-repo-");
+  const calls = [];
+
+  assert.throws(() => runDogfood({
+    repo,
+    scenarios: ["pi-dispatch-canary"],
+  }, {
+    spawnSync: (command, args) => {
+      calls.push({ command, args });
+      return { status: 0, stdout: " M README.md\n", stderr: "" };
+    },
+  }), /--dispatch-canary requires a clean worktree/);
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].command, "git");
+  assert.deepEqual(calls[0].args, ["status", "--porcelain"]);
+});
+
 test("live dogfood defaults use realistic healthy reviewer timeouts and bounded dispatch canary settings", () => {
   const defaults = parseArgs([]);
 
@@ -384,6 +436,18 @@ test("classification helpers separate harness timeout from safe adapter timeout"
     agent_tools_raw: "{\"version\":\"1\"}",
   })).outcome, OUTCOMES.PASS);
   assert.equal(classifyAntigravityPrimary({ error: { code: "ETIMEDOUT" }, stdout: "", stderr: "" }).outcome, OUTCOMES.TIMEOUT);
+  const piTimeout = classifyProbeJson({
+    status: 1,
+    stdout: "",
+    stderr: [
+      "Pi reviewer primary_review timed out after 20s (RELAY_PI_REVIEW_TIMEOUT).",
+      "The pi --print invocation did not return before the parent-process timeout, so relay cannot treat this as healthy review evidence.",
+      "First verify Pi non-interactive auth/provider health with: timeout 20s pi --no-session --no-context-files --no-tools --print 'Return exactly {\"ok\":true} and nothing else.'.",
+    ].join(" "),
+  });
+  assert.equal(piTimeout.outcome, OUTCOMES.TIMEOUT);
+  assert.match(piTimeout.notes, /cannot treat this as healthy review evidence/);
+  assert.match(piTimeout.notes, /verify Pi non-interactive auth\/provider health/);
   assert.equal(classifyAntigravityPrimary({
     status: 1,
     stdout: "",
