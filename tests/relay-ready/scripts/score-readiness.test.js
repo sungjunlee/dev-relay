@@ -183,6 +183,66 @@ test("bypass_true requires all four bypass checks to pass", () => {
   assertSignalShape(result);
 });
 
+test("maintenance refactor issue with explicit observable assertions is a single ready leaf", () => {
+  const body = `Refactor relay-ready maintenance scoring for \`skills/relay-ready/scripts/score-readiness.js\`.
+
+## Single Leaf Scope
+
+- Update only \`skills/relay-ready/scripts/score-readiness.js\` so maintenance refactor issues with explicit observable assertions are recognized as one relay-ready leaf.
+
+## Non-goals
+
+- Do not change relay-plan scoring.
+- Do not add new runtime dependencies.
+
+## Observable Assertions
+
+- \`skills/relay-ready/scripts/score-readiness.js\` reports granularity above low for this issue shape.
+- \`tests/relay-ready/scripts/score-readiness.test.js\` passes.
+
+## Done Criteria
+
+- \`skills/relay-ready/scripts/score-readiness.js\` keeps genuinely broad, ambiguous, or multi-leaf requests below bypass.
+- \`tests/relay-ready/scripts/score-readiness.test.js\` passes.
+
+## Suggested Tests
+
+- \`node --test tests/relay-ready/scripts/*.test.js\`
+- \`node --test tests/relay-plan/scripts/*.test.js\`
+`;
+
+  const result = scoreReadiness(body);
+
+  assert.notEqual(result.readiness.granularity, "low");
+  assert.equal(result.bypass, true);
+  assert.equal(result.next_action, "proceed");
+  assert.match(signalEvidence(result, "bypass", READINESS_CONDITIONS.SINGLE_LEAF), /^pass:/);
+  assertSignalShape(result);
+});
+
+test("single leaf labels do not override cross-module done criteria", () => {
+  const body = `Refactor relay-ready and relay-plan maintenance behavior.
+
+## Single Leaf Scope
+
+- Keep this as one maintenance pass across relay-ready and relay-plan.
+
+## Done Criteria
+
+- \`skills/relay-ready/scripts/score-readiness.js\` changes readiness scoring.
+- \`skills/relay-plan/scripts/task-profile.js\` changes planning profile scoring.
+- \`tests/relay-plan/scripts/task-profile.test.js\` passes.
+`;
+
+  const result = scoreReadiness(body);
+
+  assert.equal(result.readiness.granularity, "low");
+  assert.equal(result.bypass, false);
+  assert.match(signalEvidence(result, "bypass", READINESS_CONDITIONS.SINGLE_LEAF), /^fail:/);
+  assert.ok(hasSignal(result, "granularity", READINESS_CONDITIONS.BULLETS_ACROSS_MODULES));
+  assertSignalShape(result);
+});
+
 test("minimal input marks clarity low and asks for QA", () => {
   const result = scoreReadiness("Polish the thing.");
 
