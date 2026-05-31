@@ -356,7 +356,7 @@ function detectTopLevelAnd(opener) {
 }
 
 function detectBulletsAcrossModules(text) {
-  const bulletLines = text.split("\n").filter((line) => /^\s*[-*]\s+/.test(line));
+  const bulletLines = extractGranularityBulletLines(text);
   if (bulletLines.length < 3) {
     return null;
   }
@@ -370,6 +370,20 @@ function detectBulletsAcrossModules(text) {
   }
 
   return modules.size >= 2 ? `${bulletLines.length} bullets across ${modules.size} modules` : null;
+}
+
+function extractGranularityBulletLines(text) {
+  const excludedHeadings = /^(?:non[-\s]?goals?|out of scope|suggested tests?|tests?|notes?)$/i;
+  let excludedSection = false;
+
+  return text.split("\n").filter((line) => {
+    const heading = line.match(/^##\s+(.+?)\s*$/);
+    if (heading) {
+      excludedSection = excludedHeadings.test(heading[1].trim());
+      return false;
+    }
+    return !excludedSection && /^\s*[-*]\s+/.test(line);
+  });
 }
 
 function extractSubsystems(text) {
