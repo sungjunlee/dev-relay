@@ -15,18 +15,44 @@ const {
   buildAgentPolicyAudit,
 } = require("../../../relay-dispatch/scripts/agent-adapters/policy");
 const { resolveExecutorDefaultModel } = require("../../../relay-dispatch/scripts/executor-model-config");
+const { getRoutePlanPath } = require("../../../relay-dispatch/scripts/manifest/paths");
 const { appendRunEvent, EVENTS } = require("../../../relay-dispatch/scripts/relay-events");
 const { assertRelayPolicyGate } = require("../../../relay-dispatch/scripts/relay-policy-gate");
 const { applyPolicyViolationToManifest } = require("./manifest-apply");
 const { git, readText, writeText } = require("./common");
 
-function resolveReviewerName(data, reviewerArg) {
+function loadRunRoutePlan(repoRoot, runId) {
+  if (!repoRoot || !runId) return { path: null, plan: null, status: "missing" };
+  const routePlanPath = getRoutePlanPath(repoRoot, runId);
+  if (!fs.existsSync(routePlanPath)) {
+    return { path: routePlanPath, plan: null, status: "absent" };
+  }
+  try {
+    return {
+      path: routePlanPath,
+      plan: JSON.parse(fs.readFileSync(routePlanPath, "utf-8")),
+      status: "ok",
+    };
+  } catch (error) {
+    throw new Error(`failed to read route plan at ${routePlanPath}: ${error.message}`);
+  }
+}
+
+function routePlanReviewPhase(routePlan) {
+  return routePlan?.phases?.review && typeof routePlan.phases.review === "object"
+    ? routePlan.phases.review
+    : null;
+}
+
+function resolveReviewerName(data, reviewerArg, { routePlan = null } = {}) {
   const manifestReviewer = data.roles?.reviewer;
   const envReviewer = typeof process.env.RELAY_REVIEWER === "string"
     ? process.env.RELAY_REVIEWER.trim()
     : "";
   if (reviewerArg) return reviewerArg;
   if (envReviewer) return envReviewer;
+  const routeReviewer = routePlanReviewPhase(routePlan)?.reviewer;
+  if (routeReviewer) return routeReviewer;
   if (manifestReviewer && manifestReviewer !== "unknown") return manifestReviewer;
   return "codex";
 }
@@ -142,14 +168,21 @@ function invokeReviewer({
   };
 }
 
-function resolveReviewerModel(data, reviewerModel, reviewerName = null) {
-  if (reviewerModel) return reviewerModel;
-  const hintedModel = data?.model_hints?.review;
-  if (typeof hintedModel === "string" && hintedModel.trim()) return hintedModel.trim();
-  if (["opencode", "pi", "antigravity"].includes(reviewerName)) {
-    return resolveExecutorDefaultModel(reviewerName, { relayHome: process.env.RELAY_HOME });
+function resolveReviewerModel(data, reviewerModel, reviewerName = null, { routePlan = null } = {}) {
+  if (reviewerModel) return { model: reviewerModel, source: "cli" };
+  const routeReview = routePlanReviewPhase(routePlan);
+  if (routeReview?.model && (!routeReview.reviewer || routeReview.reviewer === reviewerName)) {
+    return { model: routeReview.model, source: "route_plan" };
   }
-  return null;
+  const hintedModel = data?.model_hints?.review;
+  if (typeof hintedModel === "string" && hintedModel.trim()) return { model: hintedModel.trim(), source: "model_hints" };
+  if (["opencode", "pi", "antigravity"].includes(reviewerName)) {
+    return {
+      model: resolveExecutorDefaultModel(reviewerName, { relayHome: process.env.RELAY_HOME }),
+      source: "executor_defaults",
+    };
+  }
+  return { model: null, source: "unresolved" };
 }
 
 function buildPrimaryReviewerPolicy(reviewerName) {
@@ -242,8 +275,10 @@ function buildPrimaryReviewerPreflight({
   reviewerName,
   reviewerScript,
   runRepoPath,
+  routePlan = null,
 }) {
-  const effectiveReviewerModel = resolveReviewerModel(data, reviewerModel, reviewerName);
+  const resolvedReviewerModel = resolveReviewerModel(data, reviewerModel, reviewerName, { routePlan });
+  const effectiveReviewerModel = resolvedReviewerModel.model;
   const reviewerPolicy = buildReviewerPolicy({ reviewerName, reviewerScript });
   try {
     const policyDecision = assertRelayPolicyGate({
@@ -255,6 +290,7 @@ function buildPrimaryReviewerPreflight({
     return {
       effectiveReviewerModel,
       policyDecision,
+      routeSource: resolvedReviewerModel.source,
       reviewerPolicy,
     };
   } catch (error) {
@@ -267,7 +303,7 @@ function captureGitStatus(repoPath) {
   return git(repoPath, "status", "--short", "--untracked-files=all").trim();
 }
 
-function loadReviewText({ body, data, manifestPath, prNumber, promptPath, reviewFile, reviewRepoPath, reviewedHeadSha, reviewerModel, reviewerName, reviewerScript, round, runDir, runRepoPath, reviewerPreflight = null }) {
+function loadReviewText({ body, data, manifestPath, prNumber, promptPath, reviewFile, reviewRepoPath, reviewedHeadSha, reviewerModel, reviewerName, reviewerScript, round, runDir, runRepoPath, reviewerPreflight = null, routePlan = null }) {
   if (reviewFile) {
     return { rawResponsePath: null, reviewText: readText(reviewFile) };
   }
@@ -275,6 +311,7 @@ function loadReviewText({ body, data, manifestPath, prNumber, promptPath, review
   const {
     effectiveReviewerModel,
     policyDecision,
+    routeSource,
     reviewerPolicy,
   } = reviewerPreflight || buildPrimaryReviewerPreflight({
     data,
@@ -282,6 +319,7 @@ function loadReviewText({ body, data, manifestPath, prNumber, promptPath, review
     reviewerName,
     reviewerScript,
     runRepoPath,
+    routePlan,
   });
   appendRunEvent(runRepoPath, data.run_id, {
     event: EVENTS.REVIEW_INVOKE,
@@ -292,6 +330,7 @@ function loadReviewText({ body, data, manifestPath, prNumber, promptPath, review
     reason: reviewerName,
     model: effectiveReviewerModel,
     policy_decision: policyDecision,
+    route_source: routeSource,
     reviewer_policy: reviewerPolicy,
   });
 
@@ -357,6 +396,7 @@ function loadReviewText({ body, data, manifestPath, prNumber, promptPath, review
 module.exports = {
   captureGitStatus,
   invokeReviewer,
+  loadRunRoutePlan,
   loadReviewText,
   buildPrimaryReviewerPolicy,
   buildPrimaryReviewerPreflight,

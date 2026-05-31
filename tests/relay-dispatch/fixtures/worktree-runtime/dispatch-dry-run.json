@@ -37,8 +37,75 @@
       "status": "defaulted",
       "sources": {
         "global": "/tmp/issue187-fixtures/relay-home/policy.json",
-        "repo": "/tmp/issue187-fixtures/repo/.relay/policy.json"
+        "repo": "/tmp/issue187-fixtures/repo/.relay/policy.json",
+        "project": "/tmp/issue187-fixtures/relay-home/projects/repo-c079affd/policy.json"
       }
+    }
+  },
+  "route_plan": {
+    "version": 1,
+    "phases": {
+      "dispatch": {
+        "phase": "dispatch",
+        "executor": "codex",
+        "model": null,
+        "source": "policy_defaults",
+        "sources": {
+          "executor": "policy_defaults",
+          "model": "unresolved"
+        },
+        "policy_decision": {
+          "allowed": true,
+          "reason": "managed_cli",
+          "phase": "dispatch",
+          "actor_field": "executor",
+          "actor": "codex",
+          "executor": "codex",
+          "reviewer": null,
+          "model": null,
+          "matched_route": null,
+          "policy": {
+            "status": "defaulted",
+            "sources": {
+              "global": "/tmp/issue187-fixtures/relay-home/policy.json",
+              "repo": "/tmp/issue187-fixtures/repo/.relay/policy.json",
+              "project": "/tmp/issue187-fixtures/relay-home/projects/repo-c079affd/policy.json"
+            }
+          }
+        }
+      },
+      "review": {
+        "phase": "review",
+        "reviewer": "codex",
+        "model": null,
+        "source": "policy_defaults",
+        "sources": {
+          "reviewer": "policy_defaults",
+          "model": "unresolved"
+        },
+        "policy_decision": {
+          "allowed": true,
+          "reason": "managed_cli",
+          "phase": "review",
+          "actor": "codex",
+          "model": null,
+          "matchedRoute": null
+        }
+      },
+      "advisory_review": null,
+      "sidecar": null
+    },
+    "policy": {
+      "status": "defaulted",
+      "sources": {
+        "global": "/tmp/issue187-fixtures/relay-home/policy.json",
+        "repo": "/tmp/issue187-fixtures/repo/.relay/policy.json",
+        "project": "/tmp/issue187-fixtures/relay-home/projects/repo-c079affd/policy.json"
+      }
+    },
+    "project_routes": {
+      "status": "absent",
+      "path": "/tmp/issue187-fixtures/relay-home/projects/repo-c079affd/routes.json"
     }
   },
   "routing_decision": {

@@ -90,6 +90,32 @@ test("live dogfood exposes explicit scenario metadata rows", () => {
   assert.equal(rows.get("antigravity-dispatch-canary").healthyPromotion, true);
 });
 
+test("live dogfood healthy dispatch canaries use run-level route intent files", () => {
+  const repo = tempDir("relay-live-dogfood-repo-");
+  const result = runDogfood({
+    repo,
+    dryRun: true,
+    dispatchCanary: true,
+    dispatchStamp: "routeux",
+  });
+
+  for (const name of ["pi-dispatch-canary", "opencode-dispatch-canary", "antigravity-dispatch-canary"]) {
+    const step = result.outcomes.find((entry) => entry.name === name);
+    assert.ok(step, `${name} planned`);
+    assert.match(step.command, /--route-intent-file /);
+    assert.doesNotMatch(step.command, / --executor /);
+    assert.doesNotMatch(step.command, / --model /);
+    const routeIntentPath = step.command.match(/--route-intent-file ([^ ]+)/)?.[1];
+    assert.ok(routeIntentPath, `${name} route intent path`);
+    const routeIntent = JSON.parse(fs.readFileSync(routeIntentPath, "utf-8"));
+    assert.equal(routeIntent.dispatch.executor, name.replace("-dispatch-canary", ""));
+    assert.equal(routeIntent.review.reviewer, "codex");
+    if (routeIntent.dispatch.executor === "antigravity") {
+      assert.equal(routeIntent.dispatch.model, "google/antigravity-cli");
+    }
+  }
+});
+
 test("live dogfood dry-run plans default non-dispatch scenarios without invoking CLIs", () => {
   const repo = tempDir("relay-live-dogfood-repo-");
   const calls = [];
@@ -244,14 +270,16 @@ test("live dogfood dispatch canary adds healthy Pi, OpenCode, and Antigravity di
     OUTCOMES.PASS,
     OUTCOMES.PASS,
   ]);
-  assert.equal(calls[9].args[calls[9].args.indexOf("--executor") + 1], "pi");
-  assert.equal(calls[10].args[calls[10].args.indexOf("--executor") + 1], "opencode");
-  assert.equal(calls[11].args[calls[11].args.indexOf("--executor") + 1], "antigravity");
-  for (const call of calls.slice(9)) {
+  for (const [call, executor] of calls.slice(9).map((call, index) => [call, ["pi", "opencode", "antigravity"][index]])) {
     assert.match(call.args[call.args.indexOf("-b") + 1], /^healthy-dogfood-(pi|opencode|antigravity)-\d+$/);
     assert.equal(call.args[call.args.indexOf("--timeout") + 1], "222");
     assert.ok(call.args.includes("--prompt-file"));
     assert.ok(call.args.includes("--rubric-file"));
+    assert.ok(call.args.includes("--route-intent-file"));
+    assert.equal(call.args.includes("--executor"), false);
+    assert.equal(call.args.includes("--model"), false);
+    const routeIntent = JSON.parse(fs.readFileSync(call.args[call.args.indexOf("--route-intent-file") + 1], "utf-8"));
+    assert.equal(routeIntent.dispatch.executor, executor);
   }
 });
 

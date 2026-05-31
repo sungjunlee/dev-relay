@@ -13,6 +13,7 @@ const { ADAPTER_PHASES } = require("../../../skills/relay-dispatch/scripts/agent
 const {
   buildPrimaryReviewerPolicy,
   captureGitStatus,
+  loadRunRoutePlan,
   loadReviewText,
   resolveReviewerName,
   resolveReviewerScript,
@@ -117,6 +118,45 @@ test("reviewer-invoke/resolveReviewerName preserves arg, manifest, env precedenc
   assert.equal(resolveReviewerName({ roles: { reviewer: "manifest-reviewer" } }), "manifest-reviewer");
 });
 
+test("reviewer-invoke/resolveReviewerName uses route-plan reviewer before manifest role", (t) => {
+  const originalReviewer = process.env.RELAY_REVIEWER;
+  t.after(() => {
+    if (originalReviewer === undefined) {
+      delete process.env.RELAY_REVIEWER;
+      return;
+    }
+    process.env.RELAY_REVIEWER = originalReviewer;
+  });
+
+  delete process.env.RELAY_REVIEWER;
+  const routePlan = {
+    phases: {
+      review: { reviewer: "opencode", model: "opencode-go/deepseek-v4-pro" },
+    },
+  };
+
+  assert.equal(resolveReviewerName({ roles: { reviewer: "codex" } }, null, { routePlan }), "opencode");
+  process.env.RELAY_REVIEWER = "claude";
+  assert.equal(resolveReviewerName({ roles: { reviewer: "codex" } }, null, { routePlan }), "claude");
+  assert.equal(resolveReviewerName({ roles: { reviewer: "codex" } }, "pi", { routePlan }), "pi");
+});
+
+test("reviewer-invoke/loadRunRoutePlan reads route-plan.json when present", () => {
+  const { repoRoot, runId, runDir } = setupReviewRun();
+  const planPath = path.join(runDir, "route-plan.json");
+  fs.writeFileSync(planPath, JSON.stringify({
+    version: 1,
+    phases: {
+      review: { reviewer: "codex", model: null },
+    },
+  }, null, 2), "utf-8");
+
+  const loaded = loadRunRoutePlan(repoRoot, runId);
+
+  assert.equal(loaded.path, planPath);
+  assert.equal(loaded.plan.phases.review.reviewer, "codex");
+});
+
 test("reviewer-invoke/resolveReviewerScript resolves built-in adapters and rejects invalid names", () => {
   const script = resolveReviewerScript("codex");
   assert.match(script, /invoke-reviewer-codex\.js$/);
@@ -172,7 +212,7 @@ test("reviewer-invoke/buildPrimaryReviewerPolicy records Cursor ask-mode metadat
   assert.equal(policy.phase, ADAPTER_PHASES.PRIMARY_REVIEW);
   assert.equal(policy.safe, true);
   assert.equal(policy.sandbox.enforcement_level, "informational");
-  assert.deepEqual(policy.sandbox.flags, ["--mode", "ask", "--trust", "--workspace"]);
+  assert.deepEqual(policy.sandbox.flags, ["--mode", "ask", "--trust", "--force", "--workspace"]);
   assert.equal(policy.read_only.enforcement_level, "prompt-only");
 });
 
@@ -422,6 +462,67 @@ test("reviewer-invoke precedence R3 regression: manifest hint supplies the effec
   assert.equal(reviewInvokeEvent.reviewer_policy.read_only.enforcement_level, "informational");
   assert.deepEqual(reviewInvokeEvent.reviewer_policy.read_only.flags, []);
   assert.match(reviewInvokeEvent.reviewer_policy.read_only.warnings.join("\n"), /outside adapter-managed containment/i);
+});
+
+test("reviewer-invoke route-plan review model wins over manifest model hint", (t) => {
+  const originalRelayHome = process.env.RELAY_HOME;
+  const { relayHome, repoRoot, runDir, manifestPath, manifest, promptPath, runId } = setupReviewRun();
+  t.after(() => {
+    if (originalRelayHome === undefined) {
+      delete process.env.RELAY_HOME;
+      return;
+    }
+    process.env.RELAY_HOME = originalRelayHome;
+  });
+  process.env.RELAY_HOME = relayHome;
+  writeRelayPolicy(relayHome, {
+    profile: "allow-review-route-plan",
+    allowed_model_routes: [{ route: "opus", phases: ["review"], reviewers: ["codex"] }],
+  });
+
+  const routePlan = {
+    phases: {
+      review: { reviewer: "codex", model: "opus", sources: { reviewer: "route_plan", model: "route_plan" } },
+    },
+  };
+  const helperDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-helper-"));
+  const reviewerScript = writeReviewerArgEchoScript(helperDir, "reviewer-route-plan-model.js");
+
+  const { reviewText } = loadReviewText({
+    body: "# Notes\n",
+    data: {
+      ...manifest,
+      model_hints: {
+        review: "haiku",
+      },
+    },
+    manifestPath,
+    prNumber: 11,
+    promptPath,
+    reviewFile: null,
+    reviewRepoPath: repoRoot,
+    reviewedHeadSha: "abc123",
+    reviewerModel: null,
+    reviewerName: "codex",
+    reviewerScript,
+    round: 1,
+    runDir,
+    runRepoPath: repoRoot,
+    routePlan,
+  });
+
+  assert.deepEqual(JSON.parse(reviewText).argv, [
+    "--repo", repoRoot,
+    "--prompt-file", promptPath,
+    "--json",
+    "--model", "opus",
+  ]);
+
+  const eventLines = fs.readFileSync(getEventsPath(repoRoot, runId), "utf-8").trim().split("\n").filter(Boolean);
+  const reviewInvokeEvent = JSON.parse(eventLines.at(-1));
+  assert.equal(reviewInvokeEvent.event, "review_invoke");
+  assert.equal(reviewInvokeEvent.model, "opus");
+  assert.equal(reviewInvokeEvent.route_source, "route_plan");
 });
 
 test("reviewer-invoke/loadReviewText records adapter-managed primary reviewer read-only policy", (t) => {

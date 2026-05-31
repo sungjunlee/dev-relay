@@ -133,6 +133,32 @@ test("operator-facing OpenCode docs reference install-carried policy docs", () =
   assert.match(docs, /skills\/relay-dispatch\/references\/reviewer-policy-opencode\.md|relay-dispatch\/references\/reviewer-policy-opencode\.md/);
 });
 
+test("model route docs cover project and run route UX without unsupported agy model passthrough", () => {
+  const docs = [
+    readRepoFile("docs/model-route-policy.md"),
+    readRepoFile("docs/relay-operator-guide.md"),
+    readRepoFile("references/architecture.md"),
+  ].join("\n");
+
+  for (const phrase of [
+    "~/.relay/projects/<repo-slug>/project.json",
+    "~/.relay/projects/<repo-slug>/policy.json",
+    "~/.relay/projects/<repo-slug>/routes.json",
+    "route-plan.json",
+    "relay-config plan-run",
+    "--route-intent-file",
+    "opencode-go/deepseek-v4-pro",
+    "deepseek/deepseek-v4-flash",
+    "google/antigravity-cli",
+  ]) {
+    assert.match(docs, new RegExp(phrase.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  }
+  assert.match(docs, /policy is authorization/i);
+  assert.match(docs, /routes\.json.*preferences/i);
+  assert.match(docs, /not passed to `agy`|not passed to agy/i);
+  assert.doesNotMatch(docs, /agy --model/);
+});
+
 test("adapter platform docs publish the single 7-field executor contract", () => {
   const docs = [
     readRepoFile("AGENTS.md"),
