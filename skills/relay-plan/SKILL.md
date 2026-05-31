@@ -51,7 +51,7 @@ node "${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/reliability-report.js" 
 node "${RELAY_SKILL_ROOT:-skills}/relay-plan/scripts/probe-executor-env.js" . --project-only --json
 ```
 
-Read historical relay signal, repo-local quality signal, and task-relevant local harness context as weak inputs only. They inform wording, prerequisites, commands, and where to look; they do not gate dispatch or override the task. Empty/failure cases render as `no historical data available` or `no quality infra detected`; field meanings and authority hierarchy: `references/signals.md`.
+Read historical relay signal, repo-local quality signal, and task-relevant local harness context as weak inputs only. They inform wording, prerequisites, commands, and where to look; they do not gate dispatch or override the task. Field meanings and authority hierarchy: `references/signals.md`.
 
 ### 3. Normalize planning inputs
 
@@ -69,7 +69,7 @@ If AC are missing, vague, or incomplete, write observable Done Criteria first. T
 
 ### 5. Build the rubric
 
-Use the guided interview (`references/rubric-design-guide.md`) to synthesize factors from the recovered Done Criteria, or convert directly:
+Use the guided interview in `references/rubric-design-guide.md` to synthesize factors from the recovered Done Criteria. Minimal shape:
 
 ```yaml
 rubric:
@@ -77,26 +77,19 @@ rubric:
     - command: "npm test"
       target: "exit 0"
   factors:
-    - name: API returns cursor-paginated response
+    - name: Observable task contract
       tier: contract
       type: automated
-      command: "curl -s localhost:3000/api/items?limit=10 | jq '.next_cursor'"
-      target: "non-null cursor string"
-      weight: required
-    - name: Pagination robustness
-      tier: quality
-      type: evaluated
-      criteria: "Last page works; cursor is opaque and stable under writes."
-      scoring_guide: { low: "happy path only", mid: "last page handled", high: "opaque stable cursor" }
-      target: ">= 8/10"
+      command: "<task-specific command>"
+      target: "<observable pass condition>"
       weight: required
 ```
 
-Size the rubric by task risk and ambiguity, not raw issue AC count: **S** uses 1 contract factor and may skip quality factors; **M** uses 3-5 factors; **L** uses 4-6 factors; **XL** uses 5-8 factors. Tier classification, `type`, `weight`, `setup`/`baseline`, `criteria`, `scoring_guide`, and optional `tdd_anchor` / `tdd_runner`: `references/rubric-design-guide.md`.
+Size the rubric by task risk and ambiguity, not raw issue AC count. Tier classification, `type`, `weight`, `setup`/`baseline`, `criteria`, `scoring_guide`, size guidance, and optional `tdd_anchor` / `tdd_runner`: `references/rubric-design-guide.md`.
 
 ### 6. Validate and simplify the rubric
 
-Quick gate before handoff: prerequisites hold repo-wide hygiene only; factors stay substantive; contract/quality tier minimums match task size; at least one automated check exists; every evaluated factor has low/mid/high `scoring_guide`; criteria and targets are concrete. Full checklist: `references/rubric-validation.md`.
+Quick gate before handoff: prerequisites hold repo-wide hygiene only; factors stay substantive; task-size minimums are satisfied; at least one automated check exists; evaluated factors have low/mid/high `scoring_guide`; criteria and targets are concrete. Full checklist: `references/rubric-validation.md`.
 
 Before persisting, apply `references/rubric-simplification.md`: rewrite HOW into observable WHAT, merge overlaps, remove unsupported defensive clauses, and verify weights.
 
@@ -117,7 +110,7 @@ Skip this step when the issue or relay-ready handoff already provides the final 
 
 Write the dispatch prompt and rubric YAML to temp files. The prompt uses `../relay/references/prompt-template.md` and appends Setup, optional Working Guidance, Scoring Rubric, Iteration Protocol, and Score Log sections. Full iteration protocol and Score Log format: `references/iteration-protocol.md`.
 
-Return a handoff summary with dispatch prompt path, rubric YAML path, Done Criteria anchor path when persisted, review assurance level, and the recommended `relay-dispatch` command, including `--run-id "$RUN_ID"` and `--done-criteria-file <done-criteria-path>` when Step 7 persisted Done Criteria. Use `--review-assurance hardened` only when task/rubric risk requires stronger verification; never derive it from executor or reviewer identity.
+Return a handoff summary with dispatch prompt path, rubric YAML path, Done Criteria anchor path when persisted, review assurance level, and the recommended `relay-dispatch` command. Use `--review-assurance hardened` only when task/rubric risk requires stronger verification; never derive it from executor or reviewer identity.
 
 When Step 7 persisted Done Criteria, the dispatch handoff must preserve both anchors:
 
@@ -131,19 +124,13 @@ Do not run `relay-dispatch` from `relay-plan`.
 
 ## Risk-Triggered Add-Ons
 
-Use these only when their trigger applies:
+Use add-ons only when task evidence earns them; do not copy reference checklists into the prompt.
 
-| Trigger | Add-on |
-|---|---|
-| Probe signal matches a template | Ask `scripts/match-template.js` for a scaffold; never auto-apply. Templates live in `references/rubric-templates/`. |
-| Task profile suggests specialized working guidance | Derive `task_profile` per `references/task-profile.md`; selected pack names and prompt-ready guidance bullets come from `references/guidance-packs.md`. |
-| Need domain-specific rubric ideas | Consult the relevant section in `references/rubric-domain-axes.md` for frontend, backend, security, refactoring, documentation, or design thinking. |
-| Task crosses auth or state-machine trust boundaries | Follow `references/rubric-trust-model.md`; each answered risk question becomes a named factor. |
-| Task touches gates, resolvers, recovery, audit stamps, locks, or deadlines | Apply `references/rubric-fail-closed-patterns.md`. |
-| Factor names file paths, test names, or grep tokens | Apply `references/rubric-patterns.md#rubric-pattern--file-path-and-grep-token-precision`. |
-| Edit scope is narrower than the repo | Apply `references/rubric-patterns.md#rubric-pattern--explicit-forbidden-zones`. |
-| Event schema evolves | Apply `references/rubric-patterns.md#rubric-pattern--event-shape-changes`. |
-| Red-first factor is useful | Apply `references/rubric-patterns.md#rubric-pattern--tdd-factor-flavor`; emit the optional Step 0a only when a factor has `tdd_anchor`. |
-| Task is L/XL, high ambiguity, or subsystem boundaries are unclear before Done Criteria recovery | Consider a read-only subsystem scout per `references/subsystem-scout.md`; skip for S/M tasks with clear scope. |
-| Done Criteria are novel, vague, high-risk, or easy to game | Run one stress-test round per `references/rubric-stress-test.md`; S/M usually skip, but ambiguity or risk can opt any size into stress-test. |
-| Re-dispatch after review feedback | Previous Score Log and reviewer feedback are automatically prepended; keep the original anchor fixed. |
+- Probe template: `scripts/match-template.js` can suggest a scaffold; never auto-apply.
+- `task_profile` or working guidance: `references/task-profile.md` and `references/guidance-packs.md`.
+- Domain rubric ideas: `references/rubric-domain-axes.md`.
+- Trust boundaries and fail-closed behavior: `references/rubric-trust-model.md` and `references/rubric-fail-closed-patterns.md`.
+- File/path precision, forbidden zones, event-shape changes, or TDD-flavored factors: `references/rubric-patterns.md`.
+- L/XL ambiguity or unclear subsystem boundaries: consider a read-only scout via `references/subsystem-scout.md`; skip for S/M tasks with clear scope.
+- Novel, vague, high-risk, or easy-to-game Done Criteria: run one stress-test round via `references/rubric-stress-test.md`; ambiguity or risk can opt any size into stress-test.
+- Re-dispatch after review feedback: keep the original anchor fixed; previous Score Log and reviewer feedback are automatically prepended.

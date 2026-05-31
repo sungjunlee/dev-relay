@@ -3,9 +3,9 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Node.js](https://img.shields.io/badge/Node.js-18%2B-green.svg)](https://nodejs.org/)
 
-**Delegate implementation to AI agents. Keep planning and review in your hands.**
+**Delegate implementation to AI agents. Keep planning, review, and merge decisions in your hands.**
 
-dev-relay turns a task handoff into a repeatable plan -> dispatch -> review loop. An executor agent implements the work in an isolated worktree, then an independent reviewer agent checks the PR in a fresh context against the frozen acceptance criteria. If the implementation misses the mark, relay sends it back with targeted review feedback. When the review passes, the PR stops at `ready_to_merge` until you explicitly land it.
+dev-relay is a bundle-installed relay runtime exposed through thin skill command surfaces. It turns a task handoff into a repeatable plan -> dispatch -> review loop. An executor agent implements the work in an isolated worktree, then an independent reviewer agent checks the PR in a fresh context against the frozen acceptance criteria. If the implementation misses the mark, relay sends it back with targeted review feedback. When the review passes, the PR stops at `ready_to_merge` until you explicitly land it.
 
 ## Who Is This For
 
@@ -28,7 +28,7 @@ You / orchestrator
   +-- /relay-merge when you decide to land it
 ```
 
-The normal user-facing commands are:
+The normal public operator surface is:
 
 | Skill | Use it for |
 | --- | --- |
@@ -36,7 +36,7 @@ The normal user-facing commands are:
 | `/relay` | Hand off an issue, sprint item, or natural-language task and run through review |
 | `/relay-merge` | Explicitly merge a reviewed PR and clean up relay state |
 
-The lower-level phase skills still exist for advanced operations and debugging, but most day-to-day use should start with `/relay`. See [docs/relay-operator-guide.md](docs/relay-operator-guide.md) for manual phase control, batch dispatch, sidecars, extension points, and recovery tools.
+The lower-level phase skills still exist for advanced operations and debugging, but most day-to-day use should start with `/relay`. See [references/operator-surface.md](references/operator-surface.md) for the public/internal/optional surface tiers and [docs/relay-operator-guide.md](docs/relay-operator-guide.md) for manual phase control, batch dispatch, sidecars, extension points, and recovery tools.
 
 ## Install
 

@@ -15,6 +15,13 @@ const RELAY_READY_REQUEST_CONTRACT_SCHEMA = path.join(
   "scripts",
   "request-contract.schema.json",
 );
+const OPERATOR_SURFACE_REFERENCE = path.join(REPO_ROOT, "references", "operator-surface.md");
+
+const SURFACE_TIERS = {
+  "public operator surface": ["relay-config", "relay", "relay-merge"],
+  "internal phase surface": ["relay-ready", "relay-plan", "relay-dispatch", "relay-review"],
+  "optional/advanced surface": ["relay-sidecar", "relay-fleet"],
+};
 
 function splitLines(text) {
   return text.split(/\r\n|\n|\r/);
@@ -231,6 +238,67 @@ function readSkillFiles() {
     }));
 }
 
+function assertOperatorSurfacePolicy(content) {
+  assert.match(
+    content,
+    /bundle-installed relay runtime/i,
+    "operator surface reference must name the bundle-installed runtime shape",
+  );
+  assert.match(
+    content,
+    /SKILL\.md[\s\S]*references\/[\s\S]*scripts/i,
+    "operator surface reference must define SKILL.md vs references/ vs scripts placement",
+  );
+
+  Object.entries(SURFACE_TIERS).forEach(([tier, skills]) => {
+    assert.match(content.toLowerCase(), new RegExp(tier), `operator surface reference must define ${tier}`);
+    skills.forEach((skill) => {
+      assert.match(content, new RegExp(`\`${skill}\``), `operator surface reference must classify ${skill}`);
+    });
+  });
+}
+
+function assertRelayStopsAtReadyToMerge(content) {
+  const frontmatter = parseFrontmatter(content);
+  assert.match(
+    frontmatter.description,
+    /ready_to_merge/i,
+    "relay frontmatter description must name the ready_to_merge stop boundary",
+  );
+  assert.doesNotMatch(
+    frontmatter.description,
+    /plan,\s*dispatch,\s*review,\s*merge/i,
+    "relay frontmatter description must not imply automatic merge by default",
+  );
+}
+
+function assertRelayReviewAdapterDetailsStayReferenced(content) {
+  const adapterSpecificPatterns = [
+    /invoke-reviewer-codex\.js/,
+    /invoke-reviewer-claude\.js/,
+    /--reviewer-model\s+(?:opencode-go|openai\/|google\/|composer-)/,
+    /--advisory-reviewer-model\s+(?:openai\/|google\/)/,
+    /RELAY_(?:PI|CURSOR|ANTIGRAVITY)_[A-Z_]+/,
+    /agent --mode ask/,
+    /agy CLI/,
+    /Pi adapter passes/,
+  ];
+
+  adapterSpecificPatterns.forEach((pattern) => {
+    assert.doesNotMatch(
+      content,
+      pattern,
+      `relay-review/SKILL.md should reference adapter docs instead of carrying provider-specific detail: ${pattern}`,
+    );
+  });
+
+  assert.match(
+    content,
+    /\.\.\/relay-dispatch\/references\/agent-adapter-platform\.md/,
+    "relay-review/SKILL.md must point provider-specific adapter details to the adapter platform reference",
+  );
+}
+
 test("all skills/SKILL.md files satisfy the lint contract", () => {
   const skillFiles = readSkillFiles();
   assert.ok(skillFiles.length > 0, "expected at least one skills/*/SKILL.md file");
@@ -265,6 +333,22 @@ test("relay-ready request contract schema exists and is parseable JSON", () => {
     schema.$defs.HandoffArtifact.required.includes("done_criteria_path"),
     "handoff artifact schema must require done_criteria_path",
   );
+});
+
+test("operator surface policy classifies skill command tiers", () => {
+  assert.ok(fs.existsSync(OPERATOR_SURFACE_REFERENCE), "references/operator-surface.md is missing");
+  const content = fs.readFileSync(OPERATOR_SURFACE_REFERENCE, "utf-8");
+  assertOperatorSurfacePolicy(content);
+});
+
+test("relay skill description preserves explicit ready_to_merge stop boundary", () => {
+  const relaySkill = fs.readFileSync(path.join(SKILLS_DIR, "relay", "SKILL.md"), "utf-8");
+  assertRelayStopsAtReadyToMerge(relaySkill);
+});
+
+test("relay-review spine delegates provider-specific adapter details", () => {
+  const relayReviewSkill = fs.readFileSync(path.join(SKILLS_DIR, "relay-review", "SKILL.md"), "utf-8");
+  assertRelayReviewAdapterDetailsStayReferenced(relayReviewSkill);
 });
 
 test("assertLineCount rejects SKILL.md files over 150 lines", () => {
