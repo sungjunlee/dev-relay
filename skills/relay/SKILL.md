@@ -1,7 +1,7 @@
 ---
 name: relay
 argument-hint: "[task, issue, or natural-language handoff]"
-description: Execute the full relay cycle — plan, dispatch, review, merge. Use when implementing a GitHub issue, sprint item, task description, or natural-language handoff through autonomous executor dispatch. Integrates with dev-backlog sprint files.
+description: Execute the relay plan -> dispatch -> review cycle and stop at ready_to_merge unless merge is explicitly requested. Use for GitHub issues, sprint items, task descriptions, or natural-language handoffs.
 compatibility: Requires Claude Code or Codex, gh CLI, git, Node.js 18+.
 metadata:
   related-skills: "relay-ready, relay-plan, relay-dispatch, relay-review, relay-merge, relay-sidecar, dev-backlog"
@@ -14,23 +14,21 @@ metadata:
 
 # Dev Relay
 
-Execute the plan → dispatch → review cycle. Stop at `ready_to_merge` unless the user explicitly asks to merge. Follow ALL steps below in order.
+Execute the plan -> dispatch -> review cycle. Stop at `ready_to_merge` unless the user explicitly asks to merge. The public/internal/optional skill tiers are defined in `../../references/operator-surface.md`.
 
 ## Role Defaults
 
-| Role | Default | Override |
-|------|---------|----------|
-| Orchestrator | `unknown` until explicitly stamped | `RELAY_ORCHESTRATOR` env |
-| Executor | Codex | `--executor` flag |
-| Reviewer | `unknown` until explicitly stamped | `--reviewer` flag, `RELAY_REVIEWER` env |
+- Orchestrator: `unknown` until explicitly stamped; override with `RELAY_ORCHESTRATOR`.
+- Executor: Codex by default; override with dispatch `--executor`.
+- Reviewer: `unknown` until explicitly stamped; override with `--reviewer` or `RELAY_REVIEWER`.
 
-Standard Codex path: stamp `RELAY_ORCHESTRATOR=codex` and run review through `review-runner --reviewer codex`. Assigned manifest roles stay immutable; the acting reviewer for a round is recorded separately under `review.last_reviewer` and the `review_apply` event.
+Standard Codex path: stamp `RELAY_ORCHESTRATOR=codex` and review through `review-runner --reviewer codex`. Assigned manifest roles stay immutable; acting reviewer data is recorded separately.
 
 ## Step 1: Re-Anchor and Route
 
 Run `git fetch origin`; if a sprint file exists, re-read Running Context and completed/in-flight status changes. Apply any previous-task context before proceeding.
 
-Task evidence: use the first available source: local task file `backlog/tasks/{PREFIX}-{N} - {Title}.md`, `gh issue view <N>`, or the user-provided description. If `backlog/sprints/` has an active sprint, read Running Context and batch info; otherwise skip sprint tracking. If no issue number, use a descriptive branch name (e.g., `feat/<slug>`) and skip issue-close in the merge phase.
+Task evidence: use the first available source: local task file, `gh issue view <N>`, or user description. If `backlog/sprints/` has an active sprint, read Running Context and batch info; otherwise skip sprint tracking. If no issue number, use a descriptive branch name and skip issue-close in merge.
 
 Run the deterministic route preflight; if readiness is already covered by a prior relay-ready artifact, explicit `--bypass-readiness`, or sprint-batch handoff, add `--bypass-readiness --skip-readiness-reason <reason>`.
 
@@ -40,7 +38,7 @@ PREFLIGHT=$(node "${RELAY_SKILL_ROOT:-skills}/relay/scripts/run-preflight.js" \
   --body-file "$ISSUE_BODY_FILE" --manifest "$RUN_MANIFEST" --json)
 ```
 
-Branch on the JSON using [preflight-guards.md](references/preflight-guards.md); only evaluate readiness when `inflight.route == "continue"`.
+Branch on the JSON using [preflight-guards.md](references/preflight-guards.md); only evaluate readiness when `inflight.route == "continue"`:
 - `inflight.route == "existing-open-pr"` → set `PR_NUM`, skip Steps 2-3, and review the existing PR.
 - `inflight.route == "existing-merged-pr"` → update the sprint file to `[x]` if present and stop.
 - `inflight.route == "inflight-run"` → resume or inspect that run; continue at its manifest state.
@@ -51,19 +49,17 @@ Branch on the JSON using [preflight-guards.md](references/preflight-guards.md); 
 - `chain-abort` → emit `readiness_check_failed` from `.decision.branch_labels["chain-abort"].event_payload`, then close the run.
 - `noninteractive-fail` → emit `readiness_check_failed_nontty` from `.decision.branch_labels["noninteractive-fail"].event_payload`, then close the run.
 
-Fast path: bypass relay-ready only when the input is already one relay-ready task with a stable review anchor and no clarification/decomposition needed. Otherwise run `relay-ready`, persist a request artifact, and use `relay-ready/<leaf-id>.md` as the downstream source of truth.
+Fast path: bypass relay-ready only for one relay-ready task with a stable review anchor and no clarification/decomposition needed. Otherwise run `relay-ready`; its handoff brief becomes the downstream source of truth.
 
 ## Step 2: Plan
 
-**Always build a rubric.** Follow relay-plan's planning process (read task → recover Done Criteria → build rubric → emit handoff artifacts). Do NOT dispatch from relay-plan — Step 3 below handles dispatch. See `relay-plan` SKILL.md for rubric depth by task size (S/M/L/XL).
+**Always build a rubric.** Follow relay-plan's process: read task, recover Done Criteria, build rubric, emit handoff artifacts. Do NOT dispatch from relay-plan; Step 3 handles dispatch.
 
-Write the dispatch prompt to a temp file (e.g., `/tmp/dispatch-<N>.md`).
-If relay-ready ran, the relay-ready handoff brief becomes the task source of truth for planning.
-Write the rubric YAML to a temp file (e.g., `/tmp/rubric-<N>.yaml`).
+Write the dispatch prompt and rubric YAML to temp files such as `/tmp/dispatch-<N>.md` and `/tmp/rubric-<N>.yaml`.
 
 ## Step 3: Dispatch (relay-dispatch)
 
-`relay` owns lifecycle orchestration; `relay-dispatch` owns dispatch CLI semantics. When an operator needs a fixed executor or model, pass the dispatch options explicitly in this command. Common pass-through knobs are `--executor`, `--model`, and `--model-hints`; see sibling `relay-dispatch` and `../relay-dispatch/references/model-routing.md` for the full option and route-policy behavior.
+`relay` owns lifecycle orchestration; `relay-dispatch` owns dispatch CLI semantics. When an operator needs a fixed executor or model, pass the dispatch options explicitly in this command. Common pass-through knobs are `--executor`, `--model`, and `--model-hints`; see `../relay-dispatch/references/model-routing.md` and `../relay-dispatch/references/cli-schema.md` for full route and option semantics.
 
 ```bash
 node "${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/dispatch.js" . \
@@ -72,7 +68,7 @@ node "${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/dispatch.js" . \
 # To pin a dispatch route, append: --executor <name> --model <provider/model> or --model-hints dispatch=<provider/model>
 ```
 
-While dispatch runs in the background, optionally monitor progress:
+If dispatch is still running, optionally monitor progress:
 ```bash
 git -C <worktree> log --oneline
 wc -l <stdoutLog>
@@ -83,12 +79,12 @@ Wait for completion. Check result:
 - `status: "completed-with-warning"` and `runState: "review_pending"` → executor timed out but made progress; check worktree, proceed to Step 4
 - `status: "failed"` and `runState: "escalated"` → inspect the dispatch error / manifest, fix and re-dispatch
 
-Capture `runId`, `manifestPath`, and `runState` from dispatch output. Get PR number:
+Capture `runId`, `manifestPath`, and `runState` from dispatch output. Get the PR number:
 ```bash
 PR_NUM=$(gh pr list --head issue-<N> --json number -q '.[0].number')
 ```
 
-The manifest is written under `~/.relay/runs/<repo-slug>/`. Readiness linkage is recorded there, but the run lifecycle remains execution-only. If a sprint file exists, mark Plan item as in-flight: `[~] #42 OAuth2 flow → PR #89 (reviewing)`.
+The manifest is written under `~/.relay/runs/<repo-slug>/`. Readiness linkage is recorded there, but the run lifecycle remains execution-only. If a sprint file exists, mark the plan item in-flight.
 
 ## Step 4: Review (relay-review)
 
@@ -102,7 +98,7 @@ REVIEW_BEFORE=$(node "${RELAY_SKILL_ROOT:-skills}/relay/scripts/run-preflight.js
   --stage review --repo . --run-id "$RUN_ID" --pr "$PR_NUM" --json)
 ```
 
-Invoke **relay-review** in an isolated context (no planning bias). It runs two phases (Spec Compliance → Code Quality), re-dispatches on issues, and updates manifest state. The rubric from relay-plan anchors each iteration. Safety cap: 20 rounds (most PRs converge in 1-3). Do NOT review inline.
+Invoke **relay-review** in an isolated context. It runs Spec Compliance then Code Quality, re-dispatches on issues, updates manifest state, and keeps the relay-plan rubric fixed as the review anchor. Safety cap: 20 rounds. Do NOT review inline.
 
 After review returns, compare against the snapshot:
 ```bash
@@ -117,13 +113,11 @@ If `.comparison.stale == true`, treat review as stalled and recover by running t
 ```bash
 node "${RELAY_SKILL_ROOT:-skills}/relay-review/scripts/review-runner.js" --repo . --run-id "$RUN_ID" --pr "$PR_NUM" --reviewer codex --json
 ```
-Wait for exit, then repeat the same preflight comparison before Step 5. See [preflight-guards.md](references/preflight-guards.md) for the stale-review SHA fields.
+Wait for exit, then repeat the same preflight comparison before Step 5.
 
 ## Step 5: Ready to Merge
 
-If relay-review returns LGTM, the review runner should already have recorded the run as `ready_to_merge`. Do not mark the sprint task complete yet. Only run relay-merge when the user explicitly wants to land the PR.
-
-Create follow-up issues if discovered during review.
+If relay-review returns LGTM, the review runner should already have recorded `ready_to_merge`. Do not mark the sprint task complete yet. Only run relay-merge when the user explicitly wants to land the PR. Create follow-up issues if discovered during review.
 
 ## Batch Mode
 
@@ -135,5 +129,5 @@ After completing the relay cycle, verify:
 - [ ] Done Criteria fully implemented (relay-review confirmed)
 - [ ] PR has `<!-- relay-review -->` LGTM comment (or `<!-- relay-review-skip -->` with reason)
 - [ ] PR marked `ready_to_merge`, or merged and closed if relay-merge was explicitly requested
-- [ ] Sprint file updated — if exists (Plan `[x]`, Progress entry with review round count)
+- [ ] Sprint file updated if present
 - [ ] Follow-up issues created (if applicable)

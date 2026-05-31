@@ -24,6 +24,25 @@ Reviewer adapters use `skills/relay-review/scripts/invoke-reviewer-<name>.js`. P
 node invoke-reviewer-<name>.js --repo <repoPath> --prompt-file <promptPath> --json [--phase <primary_review|advisory_review>] [--model <route>]
 ```
 
+## Review Adapter Invocation Notes
+
+`relay-review` normally invokes reviewers through `review-runner.js`; operators should not call `invoke-reviewer-<name>.js` directly except when debugging an adapter. Review model precedence is `--reviewer-model` -> `manifest.model_hints.review` -> reviewer default. Advisory model precedence follows the advisory CLI flags, manifest routing, and adapter defaults documented in `model-routing.md`.
+
+Isolation details by built-in reviewer:
+
+| Reviewer | Invocation and isolation notes |
+| --- | --- |
+| `codex` | `invoke-reviewer-codex.js` passes ephemeral read-only review settings and expects structured verdict JSON. |
+| `claude` | `invoke-reviewer-claude.js` uses bare/no-session-persistence review mode; `ANTHROPIC_API_KEY` or an authenticated Claude CLI session may be required. |
+| `opencode` | Uses prompt-only read-only review plus dirty-worktree checks. Primary and advisory review are route-policy gated. |
+| `pi` | `RELAY_PI_BIN` can override the binary path; `RELAY_PI_REVIEW_TIMEOUT` sets the primary-review parent timeout. Review uses a read/grep/find/ls allowlist plus dirty-worktree checks. |
+| `antigravity` | `RELAY_ANTIGRAVITY_BIN` can override the binary path. Relay targets the `agy` command-line interface only; GUI, IDE, Desktop, plugin runtime, and interactive PTY flows are not supported. |
+| `cursor` | `RELAY_CURSOR_AGENT_BIN` can override the binary path; `RELAY_CURSOR_REVIEW_TIMEOUT` sets the primary-review parent timeout. Primary review uses ask mode and parses the wrapper `result` field. |
+
+Advisory review is non-gating for `policy.review_assurance=standard`: it starts concurrently, waits only the configured grace window on the critical path, records `advisory_review` plus `review-round-N-advisory-<reviewer>-*`, and never changes the trusted verdict or redispatch prompt. Failures, timeouts, invalid JSON, and write-policy violations are recorded without changing the primary outcome. Late artifacts are classified as metrics after a passing primary decision or redispatch evidence after changes requested.
+
+For `policy.review_assurance=hardened`, the runner fails fast unless the command or manifest routing supplies an advisory reviewer. Advisory failures or required findings block a passing primary verdict, and execution evidence must be strict. When `execution-evidence.json` includes `verification_runs[]`, hardened gates prefer those actual command-run records; otherwise they fall back to legacy `test_exit_code=0` plus a SHA-bound result hash.
+
 ## Capability Matrix
 
 | Adapter | Dispatch | Primary review | Advisory review | Sandbox | Read-only | Network | Structured output | Transport | App registration |
