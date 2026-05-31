@@ -95,7 +95,11 @@ test("opencode buildExecCommand: happy path", () => {
     reasoning: "high",
   });
   assert.equal(r.cmd, "opencode");
-  assert.deepEqual(r.args, ["run", "P"]);
+  assert.deepEqual(r.args.slice(0, 3), ["run", "--dir", "/tmp/wt"]);
+  assert.match(r.args[3], /RELAY WORKTREE BOUNDARY/);
+  assert.match(r.args[3], /Repository worktree: \/tmp\/wt/);
+  assert.match(r.args[3], /Run every shell command from that repository worktree/);
+  assert.match(r.args[3], /\nP$/);
   assert.equal(r.cwd, "/tmp/wt");
   assert.equal(r.codexGitCommonDir, null);
 });
@@ -111,7 +115,9 @@ test("opencode buildExecCommand: model passthrough via -m", () => {
     networkAccess: "disabled",
     reasoning: "high",
   });
-  assert.deepEqual(r.args, ["run", "-m", "openai/gpt-5", "P"]);
+  assert.equal(r.args[0], "run");
+  assert.deepEqual(r.args.slice(1, 5), ["--dir", "/tmp/wt", "-m", "openai/gpt-5"]);
+  assert.match(r.args[5], /\nP$/);
 });
 
 test("pi buildExecCommand: explicit non-interactive argv with thinking", () => {

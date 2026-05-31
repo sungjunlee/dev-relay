@@ -896,6 +896,22 @@ function buildDispatchExecPrompt(taskPrompt) {
     + taskPrompt;
 }
 
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function assertOpencodeDispatchCommand(capturedArgs, { model, taskPrompt }) {
+  assert.deepEqual(capturedArgs.slice(0, 2), ["run", "--dir"]);
+  assert.ok(path.isAbsolute(capturedArgs[2]), `expected absolute worktree path, got ${capturedArgs[2]}`);
+  assert.deepEqual(capturedArgs.slice(3, 5), ["-m", model]);
+  assert.equal(capturedArgs.length, 6);
+  assert.match(capturedArgs[5], /^\[RELAY WORKTREE BOUNDARY\]\n/);
+  assert.match(capturedArgs[5], new RegExp(`Repository worktree: ${escapeRegExp(capturedArgs[2])}`));
+  assert.match(capturedArgs[5], /Run every shell command from that repository worktree\./);
+  assert.match(capturedArgs[5], /Do not read, write, git add, git commit, or create files outside that repository worktree\./);
+  assert.ok(capturedArgs[5].endsWith(buildDispatchExecPrompt(taskPrompt)));
+}
+
 function worktreeCommonGitDir(worktree) {
   const raw = execFileSync("git", ["-C", worktree, "rev-parse", "--git-common-dir"], {
     encoding: "utf-8",
@@ -1621,11 +1637,10 @@ test("dispatch opencode executor records provider metadata", () => {
   assert.match(proc.stderr, /reviewer-policy-opencode\.md/);
   const result = JSON.parse(proc.stdout);
 
-  assert.deepEqual(JSON.parse(fs.readFileSync(capturePath, "utf-8")), [
-    "run",
-    "-m", "openai/gpt-5",
-    buildDispatchExecPrompt(taskPrompt),
-  ]);
+  assertOpencodeDispatchCommand(JSON.parse(fs.readFileSync(capturePath, "utf-8")), {
+    model: "openai/gpt-5",
+    taskPrompt,
+  });
 
   const events = readJsonLines(path.join(result.runDir, "events.jsonl"));
   const dispatchStart = events.find((event) => event.event === "dispatch_start");
@@ -1747,11 +1762,10 @@ test("dispatch opencode executor uses bundled default model when no override is 
     "--json",
   ], env));
 
-  assert.deepEqual(JSON.parse(fs.readFileSync(capturePath, "utf-8")), [
-    "run",
-    "-m", "opencode-go/deepseek-v4-pro",
-    buildDispatchExecPrompt(taskPrompt),
-  ]);
+  assertOpencodeDispatchCommand(JSON.parse(fs.readFileSync(capturePath, "utf-8")), {
+    model: "opencode-go/deepseek-v4-pro",
+    taskPrompt,
+  });
 
   const dispatchStart = readJsonLines(path.join(result.runDir, "events.jsonl"))
     .find((event) => event.event === "dispatch_start");
@@ -1791,11 +1805,10 @@ test("dispatch opencode executor lets RELAY_HOME executors config override bundl
     "--json",
   ], env));
 
-  assert.deepEqual(JSON.parse(fs.readFileSync(capturePath, "utf-8")), [
-    "run",
-    "-m", "opencode-go/qwen3.6-plus",
-    buildDispatchExecPrompt(taskPrompt),
-  ]);
+  assertOpencodeDispatchCommand(JSON.parse(fs.readFileSync(capturePath, "utf-8")), {
+    model: "opencode-go/qwen3.6-plus",
+    taskPrompt,
+  });
 
   const manifest = readManifest(result.manifestPath).data;
   assert.equal(manifest.dispatch.last_model, "opencode-go/qwen3.6-plus");
@@ -1896,11 +1909,10 @@ test("dispatch opencode default model falls back to bundled config when local co
   assert.equal(proc.status, 0, proc.stderr);
   assert.match(proc.stderr, /Warning: ignoring optional executor model config/);
   assert.match(proc.stderr, /default_model must be a non-empty string/);
-  assert.deepEqual(JSON.parse(fs.readFileSync(capturePath, "utf-8")), [
-    "run",
-    "-m", "opencode-go/deepseek-v4-pro",
-    buildDispatchExecPrompt(taskPrompt),
-  ]);
+  assertOpencodeDispatchCommand(JSON.parse(fs.readFileSync(capturePath, "utf-8")), {
+    model: "opencode-go/deepseek-v4-pro",
+    taskPrompt,
+  });
 });
 
 test("dispatch opencode explicit --model skips malformed local executor model config", () => {
@@ -1930,11 +1942,10 @@ test("dispatch opencode explicit --model skips malformed local executor model co
   ], env));
 
   assert.equal(result.status, "completed");
-  assert.deepEqual(JSON.parse(fs.readFileSync(capturePath, "utf-8")), [
-    "run",
-    "-m", "opencode-go/qwen3.6-plus",
-    buildDispatchExecPrompt(taskPrompt),
-  ]);
+  assertOpencodeDispatchCommand(JSON.parse(fs.readFileSync(capturePath, "utf-8")), {
+    model: "opencode-go/qwen3.6-plus",
+    taskPrompt,
+  });
 });
 
 test("dispatch opencode default model falls back to bundled config when local config is malformed", () => {
@@ -1968,11 +1979,10 @@ test("dispatch opencode default model falls back to bundled config when local co
 
   assert.equal(proc.status, 0, proc.stderr);
   assert.match(proc.stderr, /Warning: ignoring optional executor model config/);
-  assert.deepEqual(JSON.parse(fs.readFileSync(capturePath, "utf-8")), [
-    "run",
-    "-m", "opencode-go/deepseek-v4-pro",
-    buildDispatchExecPrompt(taskPrompt),
-  ]);
+  assertOpencodeDispatchCommand(JSON.parse(fs.readFileSync(capturePath, "utf-8")), {
+    model: "opencode-go/deepseek-v4-pro",
+    taskPrompt,
+  });
 });
 
 function reasoningArgValue(args) {
