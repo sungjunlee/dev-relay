@@ -24,6 +24,8 @@ const cliArgs = bindCliArgs(args, {
   commandName: "invoke-reviewer-opencode",
   reservedFlags: KNOWN_FLAGS,
 });
+const REVIEW_TIMEOUT_ENV = "RELAY_OPENCODE_REVIEW_TIMEOUT";
+const DEFAULT_REVIEW_TIMEOUT = "1800s";
 
 if (!args.length || cliArgs.hasFlag(["--help", "-h"])) {
   console.log("Usage: invoke-reviewer-opencode.js --repo <path> --prompt-file <path> [--phase <name>] [--model <name>] [--json]");
@@ -42,6 +44,31 @@ function resolvePhase(value) {
     throw new Error(`--phase must be primary_review or advisory_review, got ${JSON.stringify(value)}`);
   }
   return phase;
+}
+
+function parseReviewTimeoutMs(value) {
+  const raw = String(value || "").trim();
+  const match = raw.match(/^([1-9]\d*)(ms|s|m|h)$/);
+  if (!match) {
+    throw new Error(
+      `${REVIEW_TIMEOUT_ENV} must be a positive duration like 120s, got ${JSON.stringify(value)}`
+    );
+  }
+
+  const amount = Number(match[1]);
+  const unit = match[2];
+  const multipliers = { ms: 1, s: 1000, m: 60 * 1000, h: 60 * 60 * 1000 };
+  const timeoutMs = amount * multipliers[unit];
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) {
+    throw new Error(
+      `${REVIEW_TIMEOUT_ENV} must resolve to a safe positive millisecond timeout, got ${JSON.stringify(value)}`
+    );
+  }
+  return timeoutMs;
+}
+
+function isExecTimeout(error) {
+  return error?.code === "ETIMEDOUT" || (error?.signal === "SIGKILL" && error?.killed);
 }
 
 function buildPrompt(promptText, phase) {
@@ -85,12 +112,24 @@ function parseResult(result, phase) {
   });
 }
 
+function buildEmptyOutputDiagnosticCommand({ opencodeBin, model, phase }) {
+  const prompt = phase === "primary_review"
+    ? "Return exactly {\"verdict\":\"pass\",\"summary\":\"ok\",\"contract_status\":\"pass\",\"quality_review_status\":\"pass\",\"next_action\":\"ready_to_merge\",\"issues\":[],\"rubric_scores\":[],\"scope_drift\":{\"creep\":[],\"missing\":[]}} and nothing else."
+    : "Return exactly {\"profile\":\"blindspot\",\"summary\":\"ok\",\"required_findings\":[],\"advisory_findings\":[],\"duplicate_or_low_confidence\":[]} and nothing else.";
+  const command = [opencodeBin || "opencode", "run"];
+  if (model) command.push("-m", model);
+  command.push(JSON.stringify(prompt));
+  return command.join(" ");
+}
+
 function main() {
   const repoPath = path.resolve(cliArgs.getArg("--repo") || ".");
   const promptFile = cliArgs.getArg("--prompt-file");
   const model = cliArgs.getArg("--model");
   const phase = resolvePhase(cliArgs.getArg("--phase", "advisory_review"));
   const opencodeBin = process.env.RELAY_OPENCODE_BIN || "opencode";
+  const reviewTimeout = String(process.env[REVIEW_TIMEOUT_ENV] || DEFAULT_REVIEW_TIMEOUT).trim();
+  const parentTimeoutMs = parseReviewTimeoutMs(reviewTimeout);
 
   if (!promptFile) {
     throw new Error("--prompt-file is required");
@@ -109,9 +148,20 @@ function main() {
       cwd: repoPath,
       encoding: "utf-8",
       stdio: "pipe",
+      timeout: parentTimeoutMs,
+      killSignal: "SIGKILL",
       maxBuffer: 10 * 1024 * 1024,
     }).trim();
   } catch (error) {
+    if (isExecTimeout(error)) {
+      const diagnosticCommand = buildEmptyOutputDiagnosticCommand({ opencodeBin, model, phase });
+      throw new Error(
+        `opencode ${phase} reviewer timed out after ${reviewTimeout} (${REVIEW_TIMEOUT_ENV}). ` +
+        "The opencode run invocation did not return before the parent-process timeout, so relay cannot treat this as healthy review evidence. " +
+        `First verify OpenCode non-interactive model/provider output with: ${diagnosticCommand}. ` +
+        "If that minimal command also times out, record this as an OpenCode CLI/provider non-interactive blocker; otherwise retry with a larger review timeout or split the review scope."
+      );
+    }
     const recovered = recoverExecStdout(error);
     if (!recovered) {
       throw new Error(`opencode ${phase} reviewer failed: ${summarizeFailure(error)}`);
@@ -120,7 +170,12 @@ function main() {
   }
 
   if (!result) {
-    throw new Error(`opencode ${phase} reviewer did not produce a structured result`);
+    const diagnosticCommand = buildEmptyOutputDiagnosticCommand({ opencodeBin, model, phase });
+    throw new Error(
+      `opencode ${phase} reviewer produced empty stdout, so relay cannot treat this as healthy review evidence. ` +
+      `First verify OpenCode non-interactive model/provider output with: ${diagnosticCommand}. ` +
+      "If that minimal command is also empty, record this as an OpenCode CLI/provider non-interactive blocker; otherwise tighten the review prompt or increase the live dogfood command timeout."
+    );
   }
   const parsed = parseResult(result, phase);
   const output = JSON.stringify(parsed);
