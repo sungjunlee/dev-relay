@@ -20,3 +20,5 @@ The full contract, capability matrix, and adapter checklist live in `skills/rela
 opencode is an experimental dispatch executor. Reviewer policy is defined in `relay-dispatch/references/reviewer-policy-opencode.md`. opencode does not provide native sandbox enforcement; warnings surface this fact at dispatch time.
 
 antigravity targets the Google Antigravity `agy` CLI only. The relay adapter does not read Antigravity IDE/Desktop state, GUI sessions, plugin runtime, or PTY state. `agy --version` is recorded as CLI-version evidence separately from any desktop app version.
+
+cursor targets the Cursor Agent `agent` CLI only. Dispatch uses `--workspace` and never `agent --worktree` so relay worktree isolation stays authoritative. Primary review uses `--mode ask --output-format json` and parses the wrapper `result` field into strict verdict JSON.

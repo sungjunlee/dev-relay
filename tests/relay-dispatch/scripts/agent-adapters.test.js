@@ -10,8 +10,8 @@ const {
 } = require("../../../skills/relay-dispatch/scripts/agent-adapters");
 
 test("agent adapter registry exposes the current built-in adapters", () => {
-  assert.deepEqual(listAgentAdapterNames(), ["claude", "codex", "opencode", "pi", "antigravity"]);
-  assert.deepEqual(listAgentAdapters().map((descriptor) => descriptor.name), ["claude", "codex", "opencode", "pi", "antigravity"]);
+  assert.deepEqual(listAgentAdapterNames(), ["claude", "codex", "opencode", "pi", "antigravity", "cursor"]);
+  assert.deepEqual(listAgentAdapters().map((descriptor) => descriptor.name), ["claude", "codex", "opencode", "pi", "antigravity", "cursor"]);
 });
 
 test("agent adapter registry reports dispatch, primary review, and advisory review independently", () => {
@@ -122,16 +122,30 @@ test("agent adapter descriptors expose structured capabilities and the executor 
   assert.deepEqual(antigravity.capabilities.policy.dispatch.sandbox["workspace-write"].flags, ["--sandbox", "--add-dir <git-common-dir>"]);
   assert.deepEqual(antigravity.capabilities.policy.primary_review.read_only.true.flags, ["--sandbox", "prompt:do-not-modify-files", "git-status-before-after"]);
   assert.deepEqual(antigravity.capabilities.policy.advisory_review.read_only.true.flags, ["--sandbox", "prompt:do-not-modify-files", "git-status-before-after"]);
+
+  const cursor = getAgentAdapterDescriptor("cursor");
+  assert.equal(cursor.executor.cliBinary, "agent");
+  assert.equal(cursor.capabilities.appRegistration.supported, true);
+  assert.equal(cursor.capabilities.modelDefaults.provider, "cursor");
+  assert.deepEqual(cursor.capabilities.sandbox.dispatch.modes, ["workspace-write"]);
+  assert.equal(cursor.capabilities.sandbox.dispatch.enforced, false);
+  assert.equal(cursor.phases[ADAPTER_PHASES.ADVISORY_REVIEW].supported, false);
+  assert.equal(cursor.capabilities.readOnly.primaryReview, true);
+  assert.equal(cursor.capabilities.readOnly.advisoryReview, false);
+  assert.equal(cursor.capabilities.transport.primaryReview, "agent-cli");
+  assert.equal(cursor.capabilities.structuredOutput.primaryReview, "json-wrapper-result-field");
+  assert.equal(cursor.reviewer.primaryReviewScript, "invoke-reviewer-cursor.js");
+  assert.equal(cursor.reviewer.advisoryReviewScript, null);
 });
 
 test("agent adapter registry fails closed for unknown adapters and phases", () => {
   assert.throws(
     () => getAgentAdapterDescriptor("nonexistent"),
-    /unknown agent adapter 'nonexistent'\. Supported: claude, codex, opencode, pi, antigravity/
+    /unknown agent adapter 'nonexistent'\. Supported: claude, codex, opencode, pi, antigravity, cursor/
   );
   assert.throws(
     () => supportsAgentAdapterPhase("nonexistent", ADAPTER_PHASES.DISPATCH),
-    /unknown agent adapter 'nonexistent'\. Supported: claude, codex, opencode, pi, antigravity/
+    /unknown agent adapter 'nonexistent'\. Supported: claude, codex, opencode, pi, antigravity, cursor/
   );
   assert.throws(
     () => supportsAgentAdapterPhase("codex", "sidecar"),
