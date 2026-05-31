@@ -17,8 +17,8 @@ metadata:
 ## Use when
 
 - Fanning out already planned relay leaves into parallel child dispatches
-- Running one foreground review pass per review-ready child in a dispatched fleet
-- Resuming a crashed fleet dispatch from persisted child/fleet state
+- Driving foreground review/redispatch loops for review-ready children in a dispatched fleet
+- Resuming a crashed fleet dispatch or review loop from persisted child/fleet state
 - Printing read-only aggregate status for a fleet
 
 ## Do not use when
@@ -64,7 +64,7 @@ node "${RELAY_SKILL_ROOT:-skills}/relay-fleet/scripts/relay-fleet.js" \
   --resume
 ```
 
-Run one review pass for each child currently in `review_pending`:
+Drive review for each child currently in `review_pending` or `changes_requested` until it reaches `ready_to_merge` or `escalated`:
 
 ```bash
 node "${RELAY_SKILL_ROOT:-skills}/relay-fleet/scripts/relay-fleet.js" \
@@ -96,10 +96,10 @@ node "${RELAY_SKILL_ROOT:-skills}/relay-fleet/scripts/relay-fleet.js" \
 ## Behavior
 
 - The fleet script invokes `skills/relay-dispatch/scripts/dispatch.js` as a subprocess once per leaf and always passes `--fleet-id`.
-- `--review` invokes `skills/relay-review/scripts/review-runner.js` as foreground subprocesses for children already in `review_pending`; terminal children are skipped.
+- `--review` invokes `skills/relay-review/scripts/review-runner.js` as foreground subprocesses for children in `review_pending`; when review returns `changes_requested`, it invokes `dispatch.js --manifest <child-manifest>` and re-enters review until the child reaches `ready_to_merge` or `escalated`.
 - Each child dispatch owns worktree creation, in-flight run checks, executor invocation, and child run manifest writes.
 - Fleet issue locks are checked before each child spawn; `dispatch.js --fleet-id` performs the durable lock during the actual child run.
-- `--resume` reconciles both directions: it re-adopts child run manifests whose `fleet_id` points back to this fleet, and it marks no-manifest interrupted children as `dispatch_failed_pre_manifest` so they can be retried from the persisted leaf store.
+- `--resume` reconciles both directions: it re-adopts child run manifests whose `fleet_id` points back to this fleet, marks no-manifest interrupted children as `dispatch_failed_pre_manifest`, skips still-running child subprocesses, and re-enters the review/redispatch loop for children in `review_pending` or `changes_requested`.
 - `--status` is read-only and uses the relay-dispatch fleet summary derivation rules.
 
 ## SPOF
