@@ -30,9 +30,9 @@ after(() => {
   if (TMP_ROOT) fs.rmSync(TMP_ROOT, { recursive: true, force: true });
 });
 
-test("registry exposes codex, claude, opencode, pi, and antigravity", () => {
-  assert.deepEqual(listExecutors(), ["codex", "claude", "opencode", "pi", "antigravity"]);
-  assert.deepEqual(listExecutors().sort(), ["antigravity", "claude", "codex", "opencode", "pi"]);
+test("registry exposes codex, claude, opencode, pi, antigravity, and cursor", () => {
+  assert.deepEqual(listExecutors(), ["codex", "claude", "opencode", "pi", "antigravity", "cursor"]);
+  assert.deepEqual(listExecutors().sort(), ["antigravity", "claude", "codex", "cursor", "opencode", "pi"]);
   assert.throws(() => getExecutor("nonexistent"), /unknown executor/);
 });
 
@@ -58,6 +58,14 @@ test("antigravity adapter exposes the same 7 fields", () => {
     assert.ok(typeof antigravity[k] !== "undefined", `missing field: ${k}`);
   }
   assert.equal(antigravity.cliBinary, "agy");
+});
+
+test("cursor adapter exposes the same 7 fields", () => {
+  const cursor = getExecutor("cursor");
+  for (const k of ["cliBinary", "defaultTimeout", "validateExecutionMode", "buildExecCommand", "finalizeResult", "register", "probe"]) {
+    assert.ok(typeof cursor[k] !== "undefined", `missing field: ${k}`);
+  }
+  assert.equal(cursor.cliBinary, "agent");
 });
 
 test("opencode validateExecutionMode accepts workspace-write+disabled with experimental warning", () => {
@@ -165,6 +173,48 @@ test("antigravity validateExecutionMode fails closed for read-only dispatch", ()
   const r = antigravity.validateExecutionMode({ sandbox: "read-only", networkAccess: "disabled" });
   assert.equal(r.ok, false);
   assert.match(r.error, /read-only dispatch is not safely representable/);
+});
+
+test("cursor buildExecCommand: workspace, sandbox, model, and prompt argv", () => {
+  const cursor = getExecutor("cursor");
+  const r = cursor.buildExecCommand({
+    wtPath: WT,
+    prompt: "do the thing",
+    model: "composer-2.5",
+    sandbox: "workspace-write",
+  });
+  assert.equal(r.cmd, "agent");
+  assert.deepEqual(r.args, [
+    "--print",
+    "--trust",
+    "--force",
+    "--workspace", WT,
+    "--output-format", "text",
+    "--sandbox", "enabled",
+    "--model", "composer-2.5",
+    "do the thing",
+  ]);
+  assert.equal(r.cwd, WT);
+  assert.equal(r.codexGitCommonDir, null);
+  assert.equal(r.args.includes("--worktree"), false);
+});
+
+test("cursor validateExecutionMode fails closed for read-only dispatch", () => {
+  const cursor = getExecutor("cursor");
+  const r = cursor.validateExecutionMode({ sandbox: "read-only", networkAccess: "disabled" });
+  assert.equal(r.ok, false);
+  assert.match(r.error, /read-only dispatch mode/);
+});
+
+test("cursor finalizeResult copies stdout into the relay result file", () => {
+  const cursor = getExecutor("cursor");
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "relay-cursor-finalize-"));
+  const stdoutLog = path.join(tmp, "stdout.log");
+  const resultFile = path.join(tmp, "result.txt");
+  fs.writeFileSync(stdoutLog, "cursor result\n", "utf-8");
+  const copied = cursor.finalizeResult({ stdoutLog, resultFile });
+  assert.deepEqual(copied, { copied: true, status: "copied", bytes: "cursor result\n".length });
+  assert.equal(fs.readFileSync(resultFile, "utf-8"), "cursor result\n");
 });
 
 test("pi finalizeResult copies stdout into the relay result file", () => {
@@ -333,6 +383,56 @@ esac
     ]);
   } finally {
     process.env.PATH = originalPath;
+  }
+});
+
+test("cursor probe returns {error: 'agent CLI not found', raw: null} when binary missing", () => {
+  const emptyBin = path.join(TMP_ROOT, "empty-cursor-bin");
+  fs.mkdirSync(emptyBin, { recursive: true });
+  const originalPath = process.env.PATH;
+  const originalBin = process.env.RELAY_CURSOR_AGENT_BIN;
+  process.env.PATH = emptyBin;
+  delete process.env.RELAY_CURSOR_AGENT_BIN;
+  try {
+    const cursor = getExecutor("cursor");
+    const result = cursor.probe({ timeout: 5 });
+    assert.match(result.error, /agent CLI not found/);
+    assert.equal(result.raw, null);
+  } finally {
+    process.env.PATH = originalPath;
+    if (originalBin) process.env.RELAY_CURSOR_AGENT_BIN = originalBin;
+    else delete process.env.RELAY_CURSOR_AGENT_BIN;
+  }
+});
+
+test("cursor probe payload exposes version and supported flags without live API call", () => {
+  const fakeBin = path.join(TMP_ROOT, "fake-agent-bin");
+  const fakeAgent = path.join(fakeBin, "agent");
+  fs.mkdirSync(fakeBin, { recursive: true });
+  fs.writeFileSync(fakeAgent, `#!/bin/sh
+case "$1" in
+  --version) echo "2026.05.28-test" ;;
+  --help) echo "Usage: agent --print --trust --force --mode --sandbox --workspace --output-format --model --api-key --worktree" ;;
+  *) exit 2 ;;
+esac
+`);
+  fs.chmodSync(fakeAgent, 0o755);
+
+  const originalPath = process.env.PATH;
+  const originalBin = process.env.RELAY_CURSOR_AGENT_BIN;
+  process.env.PATH = `${fakeBin}${path.delimiter}${originalPath || ""}`;
+  delete process.env.RELAY_CURSOR_AGENT_BIN;
+  try {
+    const cursor = getExecutor("cursor");
+    const result = cursor.probe({ timeout: 5 });
+    assert.equal(result.error, null);
+    const parsed = JSON.parse(result.raw);
+    assert.equal(parsed.version, "2026.05.28-test");
+    assert.ok(parsed.warnings.some((warning) => /worktree/i.test(warning)));
+  } finally {
+    process.env.PATH = originalPath;
+    if (originalBin) process.env.RELAY_CURSOR_AGENT_BIN = originalBin;
+    else delete process.env.RELAY_CURSOR_AGENT_BIN;
   }
 });
 
@@ -529,4 +629,5 @@ test("default timeouts match pre-refactor values", () => {
   assert.equal(getExecutor("codex").defaultTimeout, 2400);
   assert.equal(getExecutor("claude").defaultTimeout, 1800);
   assert.equal(getExecutor("pi").defaultTimeout, 1800);
+  assert.equal(getExecutor("cursor").defaultTimeout, 1800);
 });

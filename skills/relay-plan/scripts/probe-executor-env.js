@@ -25,7 +25,7 @@ const { getExecutor, listExecutors } = require("../../relay-dispatch/scripts/exe
 const { resolveExecutorDefaultModel } = require("../../relay-dispatch/scripts/executor-model-config");
 const { evaluateRelayPolicyGate, formatRelayPolicyGateMessage } = require("../../relay-dispatch/scripts/relay-policy-gate");
 
-const MANAGED_MODELLESS_EXECUTORS = new Set(["codex", "claude"]);
+const MANAGED_MODELLESS_EXECUTORS = new Set(["codex", "claude", "cursor"]);
 const PROBE_POLICY_PHASE = "dispatch";
 
 // ---------------------------------------------------------------------------

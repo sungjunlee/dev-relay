@@ -9,7 +9,7 @@ metadata:
   keywords: "리뷰, 검토, review, gate, fresh context"
 ---
 ## Inputs
-- Env: optional `RELAY_SKILL_ROOT` defaults to `skills`; examples use `PR_NUM`, `BRANCH`, `ISSUE_NUM`, and `RUN_ID`; `ANTHROPIC_API_KEY` is required only for `--reviewer claude`; `RELAY_PI_BIN` can override the Pi binary path; `RELAY_PI_REVIEW_TIMEOUT` sets the Pi primary review parent timeout.
+- Env: optional `RELAY_SKILL_ROOT` defaults to `skills`; examples use `PR_NUM`, `BRANCH`, `ISSUE_NUM`, and `RUN_ID`; `ANTHROPIC_API_KEY` is required only for `--reviewer claude`; `RELAY_PI_BIN` can override the Pi binary path; `RELAY_PI_REVIEW_TIMEOUT` sets the Pi primary review parent timeout; `RELAY_CURSOR_AGENT_BIN` can override the Cursor Agent binary path; `RELAY_CURSOR_REVIEW_TIMEOUT` sets the Cursor primary review parent timeout.
 - Files: PR diff (`/tmp/pr-diff.txt`), Done Criteria anchor, Score Log/rubric artifacts, run manifest, and optional `/tmp/review-verdict.json`; `RELAY_ANTIGRAVITY_BIN` can override the Antigravity reviewer binary path.
 - Sibling scripts: `${RELAY_SKILL_ROOT:-skills}/relay-review/scripts/resolve-issue-number.sh`, `${RELAY_SKILL_ROOT:-skills}/relay-review/scripts/review-runner.js`.
 
@@ -34,7 +34,7 @@ Reviews MUST run in a fresh context — no prior planning, dispatch, or conversa
 
 - Claude Code: `context: fork` frontmatter triggers isolation.
 - Codex adapter: `invoke-reviewer-codex.js` passes `--ephemeral --sandbox read-only`.
-- Claude adapter: `invoke-reviewer-claude.js` passes `--bare --no-session-persistence`; Pi adapter passes `--no-session --tools read,grep,find,ls`; Antigravity adapter invokes the `agy` CLI with `--prompt ... --print-timeout ... --sandbox`.
+- Claude adapter: `invoke-reviewer-claude.js` passes `--bare --no-session-persistence`; Pi adapter passes `--no-session --tools read,grep,find,ls`; Antigravity adapter invokes the `agy` CLI with `--prompt ... --print-timeout ... --sandbox`; Cursor adapter invokes `agent --mode ask --output-format json` and parses the wrapper `result` field.
 - Manual inline review: start a new session; do not continue from dispatch.
 - Other fallback: prefix the prompt with "You are reviewing code you did NOT write. You have no context about why it was written this way."
 ## Setup: Establish the anchor
@@ -61,10 +61,10 @@ node "${RELAY_SKILL_ROOT:-skills}/relay-review/scripts/review-runner.js" --repo 
 
 Run the runner in the foreground. Do NOT background it, detach it, or return with "I'll wait for the background runner." The relay-review result is the runner's verdict; do not return until the runner exits and the new `review-round-N-verdict.json` exists.
 
-Supported built-in adapters: `--reviewer codex`, `--reviewer claude`, `--reviewer opencode`, `--reviewer pi`, `--reviewer antigravity`.
+Supported built-in adapters: `--reviewer codex`, `--reviewer claude`, `--reviewer opencode`, `--reviewer pi`, `--reviewer antigravity`, `--reviewer cursor`.
 
 Notes: `codex` uses read-only structured output; `opencode` uses prompt-only read-only plus dirty-worktree checks; `pi` uses a read/grep/find/ls allowlist plus dirty-worktree checks; `antigravity` targets the `agy` CLI, not GUI/IDE/Desktop flows, and relies on `--sandbox` plus dirty-worktree checks. `claude --bare` needs `ANTHROPIC_API_KEY` or `claude login --api-key`.
-Model precedence is `--reviewer-model` -> `manifest.model_hints.review` -> reviewer default. Examples: `review-runner.js --repo . --run-id "$RUN_ID" --pr "$PR_NUM" --reviewer opencode --reviewer-model opencode-go/deepseek-v4-pro --json`; `review-runner.js --repo . --run-id "$RUN_ID" --pr "$PR_NUM" --reviewer pi --reviewer-model openai/gpt-5 --json`; `review-runner.js --repo . --run-id "$RUN_ID" --pr "$PR_NUM" --reviewer antigravity --reviewer-model google/antigravity-cli --json`.
+Model precedence is `--reviewer-model` -> `manifest.model_hints.review` -> reviewer default. Examples: `review-runner.js --repo . --run-id "$RUN_ID" --pr "$PR_NUM" --reviewer opencode --reviewer-model opencode-go/deepseek-v4-pro --json`; `review-runner.js --repo . --run-id "$RUN_ID" --pr "$PR_NUM" --reviewer pi --reviewer-model openai/gpt-5 --json`; `review-runner.js --repo . --run-id "$RUN_ID" --pr "$PR_NUM" --reviewer antigravity --reviewer-model google/antigravity-cli --json`; `review-runner.js --repo . --run-id "$RUN_ID" --pr "$PR_NUM" --reviewer cursor --reviewer-model composer-2.5 --json`.
 The adapter capability matrix and checklist are in `../relay-dispatch/references/agent-adapter-platform.md`.
 Optional advisory path: add an opencode, Pi, or Antigravity blind-spot lane alongside the primary reviewer:
 ```bash

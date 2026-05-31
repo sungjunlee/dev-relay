@@ -5,7 +5,7 @@ const {
   supportsAgentAdapterPhase,
 } = require("../agent-adapters");
 
-const EXECUTOR_COMPAT_ORDER = ["codex", "claude", "opencode", "pi", "antigravity"];
+const EXECUTOR_COMPAT_ORDER = ["codex", "claude", "opencode", "pi", "antigravity", "cursor"];
 
 function listExecutors() {
   const names = listAgentAdapterNames();

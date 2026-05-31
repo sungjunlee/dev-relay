@@ -4,7 +4,7 @@ const path = require("path");
 
 const DEFAULT_POLICY_FILE = "policy.json";
 const REPO_POLICY_FILE = path.join(".relay", "policy.json");
-const MANAGED_MODELLESS_CLI = new Set(["codex", "claude"]);
+const MANAGED_MODELLESS_CLI = new Set(["codex", "claude", "cursor"]);
 
 class RelayPolicyError extends Error {
   constructor(reason, message) {
