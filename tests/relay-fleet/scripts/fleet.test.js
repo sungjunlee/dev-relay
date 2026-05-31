@@ -158,7 +158,7 @@ test("fleet state machine accepts every valid pair and rejects every invalid pai
   assert.throws(() => validateTransition(STATES.DRAFT, "bad"), /Unknown relay fleet state/);
 });
 
-test("updateFleetState applies the draft-dispatching-dispatched-reviewing-closed chain", () => {
+test("updateFleetState applies the draft-dispatching-dispatched-reviewing-merging-closed chain", () => {
   let fleet = createFleetManifestSkeleton({ fleetId: "fleet-state-chain" });
   fleet = updateFleetState(fleet, STATES.DISPATCHING);
   assert.equal(fleet.fleet_state, STATES.DISPATCHING);
@@ -168,6 +168,10 @@ test("updateFleetState applies the draft-dispatching-dispatched-reviewing-closed
   assert.equal(fleet.fleet_state, STATES.REVIEWING);
   fleet = updateFleetState(fleet, STATES.REVIEWING);
   assert.equal(fleet.fleet_state, STATES.REVIEWING);
+  fleet = updateFleetState(fleet, STATES.MERGING);
+  assert.equal(fleet.fleet_state, STATES.MERGING);
+  fleet = updateFleetState(fleet, STATES.MERGING);
+  assert.equal(fleet.fleet_state, STATES.MERGING);
   fleet = updateFleetState(fleet, STATES.CLOSED);
   assert.equal(fleet.fleet_state, STATES.CLOSED);
   assert.throws(() => updateFleetState(fleet, STATES.DRAFT), /Invalid relay fleet state transition/);

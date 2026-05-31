@@ -86,9 +86,9 @@ invisible to both `children[]` and any back-pointer scan. (Codex #5.)
 Every per-child *runtime* fact (state, review status) is still read through the
 child run manifest in `~/.relay/runs/` — the fleet manifest never duplicates it.
 
-- `fleet_state`: `draft → dispatching → dispatched → reviewing → closed`.
-  Phase 1 shipped through `dispatched`; Phase 2 Sub-PR A adds `reviewing`.
-  `merging` remains deferred to Phase 3.
+- `fleet_state`: `draft → dispatching → dispatched → reviewing → merging → closed`.
+  Phase 1 shipped through `dispatched`; Phase 2 added `reviewing`; Phase 3
+  adds the `merging` substrate before queue orchestration.
 - **Fleet summary is computed, not stored.** `fleet_state` is a coarse lifecycle
   marker; the real picture (3 children dispatched, 1 escalated, 1
   pre-manifest-failed) is a *derived summary* over `children[]` + child manifests.
@@ -163,14 +163,14 @@ PID guards.
 > reviews must not be built on a review step that can no-op silently. (Cleared
 > by PR #485.)
 
-## Phase 3: serialized merge queue (deferred)
+## Phase 3: serialized merge queue
 
 Merge children one at a time via `finalize-run.js`. Two hard prerequisites the
 original plan missed:
-- **New per-run transition `ready_to_merge → merge_blocked`** (or a `merge_blocked`
-  event model). `lifecycle.js` currently allows only `ready_to_merge → {merged,
-  closed}` — "kick the child back to changes_requested" is an INVALID transition
-  as the state machine stands. (Codex #3.)
+- **New per-run transition `ready_to_merge → merge_blocked`**. This state is
+  non-terminal and can return to `ready_to_merge` after operator or automated
+  recovery. "Kick the child back to changes_requested" remains an INVALID
+  transition because merge failures are not review feedback. (Codex #3.)
 - **Stale-base recovery design.** After child N merges, child N+1's base is stale.
   `finalize-run.js` checks the review gate + failing CI but does NOT auto-rebase
   or re-dispatch. The serialized queue *detects* the failed merge but Phase 3
