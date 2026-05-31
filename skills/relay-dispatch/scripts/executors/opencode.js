@@ -37,9 +37,17 @@ function validateExecutionMode({ sandbox, networkAccess }) {
 
 function buildExecCommand({ wtPath, prompt, model }) {
   const cmd = "opencode";
-  const args = ["run"];
+  const args = ["run", "--dir", wtPath];
   if (model) args.push("-m", model);
-  args.push(prompt);
+  args.push([
+    "[RELAY WORKTREE BOUNDARY]",
+    `Repository worktree: ${wtPath}`,
+    "Run every shell command from that repository worktree.",
+    "Do not read, write, git add, git commit, or create files outside that repository worktree.",
+    "If a tool starts elsewhere, first change directory to the repository worktree before touching files.",
+    "",
+    prompt,
+  ].join("\n"));
   return { cmd, args, cwd: wtPath, codexGitCommonDir: null };
 }
 
