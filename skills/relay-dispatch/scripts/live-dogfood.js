@@ -24,6 +24,7 @@ const DEFAULTS = Object.freeze({
   antigravityReviewTimeout: "120s",
   antigravityFailSafeReviewTimeout: "5s",
   antigravityDispatchTimeoutSeconds: 45,
+  dispatchBaseRef: "origin/main",
   dispatchCanary: false,
   dispatchTimeoutSeconds: 180,
   dispatchBranchPrefix: "dogfood-dispatch",
@@ -207,6 +208,7 @@ function parseArgs(argv) {
     antigravityReviewTimeout: DEFAULTS.antigravityReviewTimeout,
     antigravityFailSafeReviewTimeout: DEFAULTS.antigravityFailSafeReviewTimeout,
     antigravityDispatchTimeoutSeconds: DEFAULTS.antigravityDispatchTimeoutSeconds,
+    dispatchBaseRef: DEFAULTS.dispatchBaseRef,
     dispatchCanary: DEFAULTS.dispatchCanary,
     dispatchTimeoutSeconds: DEFAULTS.dispatchTimeoutSeconds,
     dispatchBranchPrefix: DEFAULTS.dispatchBranchPrefix,
@@ -237,6 +239,7 @@ function parseArgs(argv) {
     else if (arg === "--antigravity-review-timeout") parsed.antigravityReviewTimeout = next();
     else if (arg === "--antigravity-fail-safe-timeout") parsed.antigravityFailSafeReviewTimeout = next();
     else if (arg === "--antigravity-dispatch-timeout") parsed.antigravityDispatchTimeoutSeconds = Number(next());
+    else if (arg === "--dispatch-base-ref") parsed.dispatchBaseRef = next();
     else if (arg === "--dispatch-timeout") parsed.dispatchTimeoutSeconds = Number(next());
     else if (arg === "--dispatch-branch-prefix") parsed.dispatchBranchPrefix = next();
     else if (arg === "--help" || arg === "-h") parsed.help = true;
@@ -413,6 +416,42 @@ function assertCleanDispatchCanaryRepo(repo, spawnImpl = spawnSync) {
       `Current dirty status:\n${dirty}`
     );
   }
+}
+
+function prepareDispatchBaseRepo({ repo, relayHome, options, spawnImpl }) {
+  const baseRef = String(options.dispatchBaseRef || DEFAULTS.dispatchBaseRef).trim();
+  if (!baseRef) throw new Error("--dispatch-base-ref must not be empty");
+  const baseDir = path.join(relayHome, `dispatch-base-${process.pid}-${Date.now()}`);
+  const baseRepo = path.join(baseDir, "repo");
+  fs.mkdirSync(baseDir, { recursive: true });
+  const result = spawnImpl("git", ["worktree", "add", "--detach", baseRepo, baseRef], {
+    cwd: repo,
+    encoding: "utf-8",
+    stdio: "pipe",
+    timeout: 60_000,
+  });
+  if (result.error) {
+    throw new Error(`--dispatch-canary failed to create clean base worktree from ${baseRef}: ${result.error.message}`);
+  }
+  if (result.status !== 0) {
+    const details = summarizeOutput(result) || `git worktree add exited ${result.status}`;
+    throw new Error(`--dispatch-canary failed to create clean base worktree from ${baseRef}: ${details}`);
+  }
+  const cleanup = () => {
+    spawnImpl("git", ["worktree", "remove", "--force", baseRepo], {
+      cwd: repo,
+      encoding: "utf-8",
+      stdio: "pipe",
+      timeout: 60_000,
+    });
+  };
+  try {
+    assertCleanDispatchCanaryRepo(baseRepo, spawnImpl);
+  } catch (error) {
+    cleanup();
+    throw error;
+  }
+  return { repo: baseRepo, baseRef, cleanup };
 }
 
 function parseJson(text) {
@@ -711,44 +750,52 @@ function runDogfood(options = {}, deps = {}) {
   const spawnImpl = deps.spawnSync || spawnSync;
   const repo = path.resolve(options.repo || ".");
   const effectiveOptions = { ...DEFAULTS, ...options };
-  if (includesDispatchCanaryScenario(effectiveOptions) && !effectiveOptions.dryRun) {
-    assertCleanDispatchCanaryRepo(repo, spawnImpl);
-  }
   const relayHome = ensureRelayHome(options.relayHome, effectiveOptions);
+  let dispatchBase = null;
+  if (includesDispatchCanaryScenario(effectiveOptions) && !effectiveOptions.dryRun) {
+    dispatchBase = prepareDispatchBaseRepo({ repo, relayHome, options: effectiveOptions, spawnImpl });
+  }
+  const executionRepo = dispatchBase?.repo || repo;
   const prompts = writePromptFiles(relayHome, effectiveOptions);
   const envBase = {
     ...process.env,
     RELAY_HOME: relayHome,
     RELAY_POLICY_PATH: path.join(relayHome, "policy.json"),
   };
-  const steps = buildSteps({ repo, relayHome, prompts, options: effectiveOptions });
+  const steps = buildSteps({ repo: executionRepo, relayHome, prompts, options: effectiveOptions });
 
-  const results = steps.map((step) => {
-    const commandText = step.command.map((part) => String(part)).join(" ");
-    if (options.dryRun) return plannedStep(step.name, commandText, "dry-run");
-    const [command, ...args] = step.command;
-    const raw = spawnCommand({
-      spawnImpl,
-      cwd: repo,
-      env: { ...envBase, ...(step.env || {}) },
-      command,
-      args,
-      timeoutMs: options.commandTimeoutMs || DEFAULTS.commandTimeoutMs,
+  let results;
+  try {
+    results = steps.map((step) => {
+      const commandText = step.command.map((part) => String(part)).join(" ");
+      if (options.dryRun) return plannedStep(step.name, commandText, "dry-run");
+      const [command, ...args] = step.command;
+      const raw = spawnCommand({
+        spawnImpl,
+        cwd: executionRepo,
+        env: { ...envBase, ...(step.env || {}) },
+        command,
+        args,
+        timeoutMs: options.commandTimeoutMs || DEFAULTS.commandTimeoutMs,
+      });
+      const classified = step.classify(raw);
+      return {
+        name: step.name,
+        outcome: classified.outcome,
+        command: commandText,
+        notes: classified.notes || "",
+        parsed: classified.parsed || null,
+      };
     });
-    const classified = step.classify(raw);
-    return {
-      name: step.name,
-      outcome: classified.outcome,
-      command: commandText,
-      notes: classified.notes || "",
-      parsed: classified.parsed || null,
-    };
-  });
+  } finally {
+    if (dispatchBase) dispatchBase.cleanup();
+  }
 
   const result = {
     schema_version: 1,
     relay_home: relayHome,
     repo,
+    ...(dispatchBase ? { dispatch_base_repo: dispatchBase.repo, dispatch_base_ref: dispatchBase.baseRef } : {}),
     temp_relay_home: !options.relayHome,
     outcomes: results,
   };
@@ -798,6 +845,7 @@ function printHelp() {
   console.log("  --antigravity-review-timeout <duration>  RELAY_ANTIGRAVITY_REVIEW_TIMEOUT for the healthy Antigravity review canary (default: 120s)");
   console.log("  --antigravity-fail-safe-timeout <duration>  RELAY_ANTIGRAVITY_REVIEW_TIMEOUT for the intentional fail-safe timeout canary (default: 5s)");
   console.log("  --antigravity-dispatch-timeout <sec>  Antigravity no-op/fail-safe dispatch timeout seconds (default: 45)");
+  console.log("  --dispatch-base-ref <ref>             Clean git ref used to anchor dispatch canaries (default: origin/main)");
   console.log("  --dispatch-timeout <sec>              Healthy dispatch canary timeout seconds (default: 180)");
   console.log("  --dispatch-branch-prefix <prefix>     Healthy dispatch canary branch prefix (default: dogfood-dispatch)");
   console.log("  --command-timeout-ms <ms>             Harness per-command timeout (default: 300000)");
