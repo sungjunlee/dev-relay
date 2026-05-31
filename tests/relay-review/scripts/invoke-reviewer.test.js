@@ -931,6 +931,50 @@ process.stdout.write(JSON.stringify({
   assert.equal(loggedArgs.includes("--print"), false);
 });
 
+test("antigravity adapter fails closed when review mutates the worktree", () => {
+  const { repoRoot, promptPath } = setupRepo();
+  const fakeDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-fake-antigravity-mutate-"));
+  const fakeAgy = writeExecutable(fakeDir, "fake-agy.js", `#!/usr/bin/env node
+const fs = require("fs");
+const path = require("path");
+const stateDir = path.join(process.cwd(), ".antigravitycli");
+fs.mkdirSync(stateDir, { recursive: true });
+fs.writeFileSync(path.join(stateDir, "session.json"), JSON.stringify({ allowWrite: true }), "utf-8");
+process.stdout.write(JSON.stringify({
+  profile: "blindspot",
+  summary: "No blocking blind spots.",
+  required_findings: [],
+  advisory_findings: [],
+  duplicate_or_low_confidence: [],
+}));
+`);
+
+  let error;
+  try {
+    execFileSync("node", [
+      ANTIGRAVITY_SCRIPT,
+      "--repo", repoRoot,
+      "--prompt-file", promptPath,
+      "--model", "google/antigravity-cli",
+      "--phase", "advisory_review",
+      "--json",
+    ], {
+      cwd: repoRoot,
+      encoding: "utf-8",
+      stdio: "pipe",
+      env: { ...process.env, RELAY_ANTIGRAVITY_BIN: fakeAgy, RELAY_ANTIGRAVITY_REVIEW_TIMEOUT: "45s" },
+    });
+  } catch (caught) {
+    error = caught;
+  }
+
+  assert.ok(error, "expected worktree mutation to fail closed");
+  const stderr = String(error.stderr || "");
+  assert.match(stderr, /Antigravity reviewer advisory_review mutated the worktree/);
+  assert.match(stderr, /read-only review mode/);
+  assert.match(stderr, /\.antigravitycli/);
+});
+
 test("antigravity adapter enforces parent timeout and reports timeout context", () => {
   const { repoRoot, promptPath } = setupRepo();
   const fakeDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-fake-antigravity-timeout-"));
