@@ -72,6 +72,7 @@ test("live dogfood exposes explicit scenario metadata rows", () => {
     ["pi-advisory", "pi", "advisory_review", "healthy-review"],
     ["pi-primary", "pi", "primary_review", "healthy-review"],
     ["antigravity-primary", "antigravity", "primary_review", "healthy-review"],
+    ["antigravity-advisory", "antigravity", "advisory_review", "healthy-review"],
     ["antigravity-primary-fail-safe-timeout", "antigravity", "primary_review", "fail-safe"],
     ["antigravity-dispatch-fail-safe-noop", "antigravity", "dispatch", "fail-safe"],
     ["pi-dispatch-canary", "pi", "dispatch", "healthy-dispatch"],
@@ -90,6 +91,7 @@ test("live dogfood exposes explicit scenario metadata rows", () => {
   assert.equal(rows.get("opencode-primary").defaultEnabled, false);
   assert.equal(rows.get("opencode-primary").healthyPromotion, true);
   assert.equal(rows.get("pi-advisory").healthyPromotion, true);
+  assert.equal(rows.get("antigravity-advisory").healthyPromotion, true);
   assert.equal(rows.get("pi-dispatch-canary").healthyPromotion, true);
   assert.equal(rows.get("opencode-dispatch-canary").healthyPromotion, true);
   assert.equal(rows.get("antigravity-dispatch-canary").healthyPromotion, true);
@@ -142,9 +144,7 @@ test("live dogfood dry-run plans default non-dispatch scenarios without invoking
   assert.ok(result.outcomes.some((step) => step.name === "antigravity-dispatch-fail-safe-noop"));
   assert.ok(result.outcomes.every((step) => step.outcome === OUTCOMES.NOT_RUN));
   assert.deepEqual(result.coverage.scenarios.map((scenario) => scenario.name), LIVE_DOGFOOD_SCENARIOS.map((scenario) => scenario.name));
-  assert.ok(result.coverage.readiness_exemptions.some((exemption) => (
-    exemption.adapter === "antigravity" && exemption.phase === "advisory_review"
-  )));
+  assert.deepEqual(result.coverage.readiness_exemptions, []);
   assert.ok(result.coverage.scenarios.every((scenario) => typeof scenario.healthyPromotion === "boolean"));
 });
 
@@ -204,6 +204,7 @@ test("live dogfood classifies mocked command outcomes and preserves markdown dis
     jsonResult({ profile: "blindspot", advisory_findings: [] }),
     jsonResult({ profile: "blindspot", advisory_findings: [] }),
     jsonResult({ verdict: "pass", summary: "Pi ok." }),
+    jsonResult({ profile: "blindspot", advisory_findings: [] }),
     jsonResult({ verdict: "pass", summary: "Antigravity ok." }),
     { status: 1, stdout: "", stderr: "Antigravity reviewer primary_review timed out after 2s (RELAY_ANTIGRAVITY_REVIEW_TIMEOUT)." },
     jsonResult({ status: "completed-no-op", runState: "review_pending", prNumber: null }),
@@ -232,7 +233,7 @@ test("live dogfood classifies mocked command outcomes and preserves markdown dis
     else process.env.RELAY_POLICY_PATH = previousPolicyPath;
   }
 
-  assert.equal(calls.length, 9);
+  assert.equal(calls.length, 10);
   assert.deepEqual(result.outcomes.map((step) => step.name), [
     "probe-pi",
     "probe-opencode",
@@ -241,6 +242,7 @@ test("live dogfood classifies mocked command outcomes and preserves markdown dis
     "pi-advisory",
     "pi-primary",
     "antigravity-primary",
+    "antigravity-advisory",
     "antigravity-primary-fail-safe-timeout",
     "antigravity-dispatch-fail-safe-noop",
   ]);
@@ -250,8 +252,10 @@ test("live dogfood classifies mocked command outcomes and preserves markdown dis
   assert.equal(calls[4].env.RELAY_PI_REVIEW_TIMEOUT, "1s");
   assert.equal(calls[5].env.RELAY_PI_REVIEW_TIMEOUT, "1s");
   assert.equal(calls[6].env.RELAY_ANTIGRAVITY_REVIEW_TIMEOUT, "90s");
-  assert.equal(calls[7].env.RELAY_ANTIGRAVITY_REVIEW_TIMEOUT, "2s");
+  assert.equal(calls[7].env.RELAY_ANTIGRAVITY_REVIEW_TIMEOUT, "90s");
+  assert.equal(calls[8].env.RELAY_ANTIGRAVITY_REVIEW_TIMEOUT, "2s");
   assert.deepEqual(result.outcomes.map((step) => step.outcome), [
+    OUTCOMES.PASS,
     OUTCOMES.PASS,
     OUTCOMES.PASS,
     OUTCOMES.PASS,
@@ -269,6 +273,7 @@ test("live dogfood classifies mocked command outcomes and preserves markdown dis
   assert.match(markdown, /`timeout` is inconclusive/);
   assert.match(markdown, /not healthy success/);
   assert.match(markdown, /\| `antigravity-primary` \| `pass` \|/);
+  assert.match(markdown, /\| `antigravity-advisory` \| `pass` \|/);
   assert.match(markdown, /\| `antigravity-primary-fail-safe-timeout` \| `fail-safe-pass` \|/);
   assert.match(markdown, /\| `antigravity-dispatch-fail-safe-noop` \| `fail-safe-pass` \|/);
 });
@@ -284,6 +289,7 @@ test("live dogfood dispatch canary adds healthy Pi, OpenCode, and Antigravity di
     jsonResult({ profile: "blindspot", advisory_findings: [] }),
     jsonResult({ profile: "blindspot", advisory_findings: [] }),
     jsonResult({ verdict: "pass", summary: "Pi ok." }),
+    jsonResult({ profile: "blindspot", advisory_findings: [] }),
     jsonResult({ verdict: "pass", summary: "Antigravity ok." }),
     { status: 1, stdout: "", stderr: "Antigravity reviewer primary_review timed out after 2s (RELAY_ANTIGRAVITY_REVIEW_TIMEOUT)." },
     jsonResult({ status: "completed-no-op", runState: "review_pending", prNumber: null }),
@@ -307,7 +313,7 @@ test("live dogfood dispatch canary adds healthy Pi, OpenCode, and Antigravity di
     },
   });
 
-  assert.equal(calls.length, 13);
+  assert.equal(calls.length, 14);
   assert.equal(calls[0].command, "git");
   assert.deepEqual(calls[0].args, ["status", "--porcelain"]);
   assert.deepEqual(result.outcomes.map((step) => step.name), [
@@ -318,18 +324,19 @@ test("live dogfood dispatch canary adds healthy Pi, OpenCode, and Antigravity di
     "pi-advisory",
     "pi-primary",
     "antigravity-primary",
+    "antigravity-advisory",
     "antigravity-primary-fail-safe-timeout",
     "antigravity-dispatch-fail-safe-noop",
     "pi-dispatch-canary",
     "opencode-dispatch-canary",
     "antigravity-dispatch-canary",
   ]);
-  assert.deepEqual(result.outcomes.slice(9).map((step) => step.outcome), [
+  assert.deepEqual(result.outcomes.slice(10).map((step) => step.outcome), [
     OUTCOMES.PASS,
     OUTCOMES.PASS,
     OUTCOMES.PASS,
   ]);
-  for (const [call, executor] of calls.slice(10).map((call, index) => [call, ["pi", "opencode", "antigravity"][index]])) {
+  for (const [call, executor] of calls.slice(11).map((call, index) => [call, ["pi", "opencode", "antigravity"][index]])) {
     assert.match(call.args[call.args.indexOf("-b") + 1], /^healthy-dogfood-(pi|opencode|antigravity)-\d+$/);
     assert.equal(call.args[call.args.indexOf("--timeout") + 1], "222");
     assert.ok(call.args.includes("--prompt-file"));
@@ -424,6 +431,7 @@ test("live dogfood policy reflects requested model route overrides", () => {
   assert.deepEqual(policy.allowed_model_routes[0].reviewers, ["pi"]);
   assert.deepEqual(policy.allowed_model_routes[1].phases, ["dispatch", "advisory_review"]);
   assert.deepEqual(policy.allowed_model_routes[2].executors, ["antigravity"]);
+  assert.deepEqual(policy.allowed_model_routes[2].phases, ["dispatch", "review", "advisory_review"]);
 });
 
 test("live dogfood default policy does not widen same-route actor phase scope", () => {
@@ -448,6 +456,11 @@ test("live dogfood default policy does not widen same-route actor phase scope", 
     reviewer: "pi",
     model: "opencode-go/deepseek-v4-pro",
   }).allowed, false);
+  assert.equal(evaluateRelayRoute(policy, {
+    phase: "advisory_review",
+    reviewer: "antigravity",
+    model: "google/antigravity-cli",
+  }).allowed, true);
 });
 
 test("classification helpers separate harness timeout from safe adapter timeout", () => {
@@ -482,6 +495,15 @@ test("classification helpers separate harness timeout from safe adapter timeout"
     stdout: "",
     stderr: "Antigravity reviewer primary_review timed out after 5s (RELAY_ANTIGRAVITY_REVIEW_TIMEOUT).",
   }).outcome, OUTCOMES.TIMEOUT);
+  assert.equal(classifyAntigravityPrimary({
+    status: 1,
+    stdout: "",
+    stderr: [
+      "Antigravity reviewer advisory_review timed out after 120s (RELAY_ANTIGRAVITY_REVIEW_TIMEOUT).",
+      "Antigravity reviewer advisory_review mutated the worktree while running in read-only review mode.",
+      "After git status: ?? .antigravitycli/.",
+    ].join(" "),
+  }).outcome, OUTCOMES.FAIL);
   assert.equal(classifyAntigravityFailSafeTimeout({
     status: 1,
     stdout: "",
