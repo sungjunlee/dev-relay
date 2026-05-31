@@ -84,6 +84,16 @@ const LIVE_DOGFOOD_SCENARIOS = Object.freeze([
     healthyPromotion: true,
   },
   {
+    name: "pi-advisory",
+    adapter: "pi",
+    phase: "advisory_review",
+    category: "healthy-review",
+    classifier: "standard-json",
+    defaultEnabled: true,
+    healthyPromotion: true,
+    env: { name: "RELAY_PI_REVIEW_TIMEOUT", option: "piReviewTimeout" },
+  },
+  {
     name: "pi-primary",
     adapter: "pi",
     phase: "primary_review",
@@ -160,12 +170,6 @@ const LIVE_DOGFOOD_READINESS_EXEMPTIONS = Object.freeze([
     phase: "primary_review",
     reason: "OpenCode primary review readiness is route-policy limited; the current harness keeps OpenCode live review dogfood on the advisory row.",
     readinessTextPattern: /Live:\s*`limited`\s*by route policy and live reviewer evidence/i,
-  },
-  {
-    adapter: "pi",
-    phase: "advisory_review",
-    reason: "Pi advisory review readiness remains route-specific until dedicated advisory canaries are added.",
-    readinessTextPattern: /Live:\s*`limited`\s*by route-specific advisory canaries/i,
   },
   {
     adapter: "antigravity",
