@@ -164,8 +164,13 @@ test("antigravity buildExecCommand: prompt argv, timeout, sandbox, and git commo
     timeoutSeconds: 123,
   });
   assert.equal(r.cmd, "agy");
-  assert.deepEqual(r.args, [
-    "--prompt", "P",
+  assert.equal(r.args[0], "--prompt");
+  assert.match(r.args[1], /RELAY WORKTREE BOUNDARY/);
+  assert.match(r.args[1], new RegExp(`Repository worktree: ${WT.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
+  assert.match(r.args[1], /Before doing anything, run: cd /);
+  assert.match(r.args[1], /Do not create, edit, git add, git commit, or report source files under ~\/\.gemini/);
+  assert.match(r.args[1], /\nP$/);
+  assert.deepEqual(r.args.slice(2), [
     "--print-timeout", "123s",
     "--sandbox",
     "--add-dir", COMMON_DIR,
