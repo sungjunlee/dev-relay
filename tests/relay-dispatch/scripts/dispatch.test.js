@@ -883,7 +883,10 @@ process.env.TMPDIR = ${JSON.stringify(tmpDir)};
 
 function normalizeDispatchDryRunOutput(output, { root }) {
   const normalizedRoot = output.split(root).join(CANONICAL_DRY_RUN_ROOT);
-  return normalizedRoot.replace(/\/runs\/[^/]+\//g, `/runs/${CANONICAL_DRY_RUN_SLUG}/`).trimEnd();
+  return normalizedRoot
+    .replace(/\/runs\/[^/]+\//g, `/runs/${CANONICAL_DRY_RUN_SLUG}/`)
+    .replace(/\/projects\/[^/]+\//g, `/projects/${CANONICAL_DRY_RUN_SLUG}/`)
+    .trimEnd();
 }
 
 function buildDispatchExecPrompt(taskPrompt) {
@@ -2126,7 +2129,16 @@ test("dispatch dry-run includes managed default policy decision details", () => 
   });
   const result = JSON.parse(stdout);
 
-  assert.deepEqual(result.policy_decision, {
+  assert.deepEqual({
+    ...result.policy_decision,
+    policy: {
+      ...result.policy_decision.policy,
+      sources: {
+        ...result.policy_decision.policy.sources,
+        project: "<project-policy>",
+      },
+    },
+  }, {
     allowed: true,
     reason: "managed_cli",
     phase: "dispatch",
@@ -2141,9 +2153,12 @@ test("dispatch dry-run includes managed default policy decision details", () => 
       sources: {
         global: path.join(relayHome, "policy.json"),
         repo: path.join(repoRoot, ".relay", "policy.json"),
+        project: "<project-policy>",
       },
     },
   });
+  assert.ok(result.policy_decision.policy.sources.project.startsWith(path.join(relayHome, "projects")));
+  assert.equal(path.basename(result.policy_decision.policy.sources.project), "policy.json");
 });
 
 test("dispatch routing dry-run JSON explains CLI tags and selected advisory sidecar defaults", () => {

@@ -11,9 +11,14 @@ const {
   matchRoutePattern,
   validateRelayPolicy,
 } = require("../../../skills/relay-dispatch/scripts/relay-policy");
+const { getProjectPolicyPath } = require("../../../skills/relay-dispatch/scripts/manifest/paths");
 
 function tempDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), "relay-policy-"));
+}
+
+function initGitRepo(repoRoot) {
+  require("child_process").execFileSync("git", ["init", "-b", "main"], { cwd: repoRoot, stdio: "pipe" });
 }
 
 function writeJson(filePath, value) {
@@ -265,6 +270,73 @@ test("repo-local policy that widens global policy is rejected", () => {
   assert.equal(result.ok, false);
   assert.equal(result.policy, null);
   assert.equal(result.errors[0].reason, "repo_policy_widens_global_policy");
+});
+
+test("project-local policy narrows globally allowed provider routes", () => {
+  const relayHome = tempDir();
+  const repoRoot = tempDir();
+  initGitRepo(repoRoot);
+  writeJson(
+    path.join(relayHome, "policy.json"),
+    policy({
+      profile: "global",
+      allowed_model_routes: [{ route: "opencode-go/*", phases: ["dispatch"], executors: ["opencode"] }],
+    })
+  );
+  writeJson(
+    getProjectPolicyPath(repoRoot, { relayHome }),
+    policy({
+      profile: "project",
+      allowed_model_routes: [{ route: "opencode-go/deepseek-*", phases: ["dispatch"], executors: ["opencode"] }],
+    })
+  );
+
+  const result = loadRelayPolicy({ relayHome, repoRoot });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.policy.profile, "project");
+  assert.equal(result.sources.project, getProjectPolicyPath(repoRoot, { relayHome }));
+  assert.equal(evaluateRelayRoute(result, {
+    phase: "dispatch",
+    executor: "opencode",
+    model: "opencode-go/deepseek-v4-pro",
+  }).reason, "allowed_model_route");
+  assert.equal(evaluateRelayRoute(result, {
+    phase: "dispatch",
+    executor: "opencode",
+    model: "opencode-go/qwen3",
+  }).reason, "unknown_model_route");
+});
+
+test("project-local policy cannot widen or remove inherited deny routes", () => {
+  const relayHome = tempDir();
+  const repoRoot = tempDir();
+  initGitRepo(repoRoot);
+  writeJson(
+    path.join(relayHome, "policy.json"),
+    policy({
+      profile: "global",
+      managed_cli: ["codex"],
+      allowed_model_routes: [{ route: "example/opencode-model-*", phases: ["dispatch"], executors: ["opencode"] }],
+      denied_model_routes: [{ route: "example/opencode-model-bad", phases: ["dispatch"], executors: ["opencode"] }],
+    })
+  );
+
+  writeJson(
+    getProjectPolicyPath(repoRoot, { relayHome }),
+    policy({
+      profile: "project",
+      managed_cli: ["codex", "claude"],
+      allowed_model_routes: [{ route: "example/*", phases: ["dispatch"], executors: ["opencode"] }],
+      denied_model_routes: [],
+    })
+  );
+
+  const result = loadRelayPolicy({ relayHome, repoRoot });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.errors[0].reason, "project_policy_widens_effective_policy");
+  assert.equal(result.errors[0].source, getProjectPolicyPath(repoRoot, { relayHome }));
 });
 
 test("denied model routes win over allowed model routes", () => {

@@ -1,13 +1,22 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const { execFileSync } = require("child_process");
+const fs = require("fs");
+const os = require("os");
+const path = require("path");
 
 const {
   classifyChangedFiles,
   collectRoutingTagSources,
+  loadProjectRoutes,
   normalizeTags,
+  resolveRouteIntent,
   resolveRoutingDecision,
+  validateProjectRoutes,
   validateRoutingRules,
 } = require("../../../skills/relay-dispatch/scripts/relay-routing");
+const { buildDefaultRelayPolicy } = require("../../../skills/relay-dispatch/scripts/relay-policy");
+const { getProjectRoutesPath } = require("../../../skills/relay-dispatch/scripts/manifest/paths");
 
 function policy(routingRules = []) {
   return {
@@ -18,6 +27,29 @@ function policy(routingRules = []) {
     },
     routing_rules: routingRules,
   };
+}
+
+function routePolicy(overrides = {}) {
+  return {
+    ...buildDefaultRelayPolicy(),
+    ...overrides,
+  };
+}
+
+function initGitRepo(repoRoot) {
+  execFileSync("git", ["init", "-b", "main"], { cwd: repoRoot, stdio: "pipe" });
+}
+
+function tempRepo() {
+  const relayHome = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-routing-repo-"));
+  initGitRepo(repoRoot);
+  return { relayHome, repoRoot };
+}
+
+function writeJson(filePath, value) {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, JSON.stringify(value, null, 2), "utf-8");
 }
 
 test("routing normalizes tags from CSV and arrays deterministically", () => {
@@ -181,4 +213,101 @@ test("routing duplicate rule names warn but preserve first-match order", () => {
       duplicate_index: 1,
     },
   ]);
+});
+
+test("project routes reader reports absent and malformed routes.json deterministically", () => {
+  const { relayHome, repoRoot } = tempRepo();
+  const absent = loadProjectRoutes({ repoRoot, relayHome });
+  assert.equal(absent.ok, true);
+  assert.equal(absent.status, "absent");
+  assert.equal(absent.routes, null);
+  assert.equal(absent.path, getProjectRoutesPath(repoRoot, { relayHome }));
+
+  fs.mkdirSync(path.dirname(absent.path), { recursive: true });
+  fs.writeFileSync(absent.path, "{not-json\n", "utf-8");
+  const malformed = loadProjectRoutes({ repoRoot, relayHome });
+  assert.equal(malformed.ok, false);
+  assert.equal(malformed.status, "error");
+  assert.match(malformed.error, /failed to parse project routes/);
+});
+
+test("project routes schema accepts phase defaults and rejects malformed actors", () => {
+  assert.deepEqual(validateProjectRoutes({
+    version: 1,
+    defaults: {
+      dispatch: { executor: "pi", model: "deepseek/deepseek-v4-flash" },
+      review: { reviewer: "codex" },
+      advisory_review: { reviewer: "opencode", model: "opencode-go/deepseek-v4-flash", profile: "blindspot" },
+      sidecar: null,
+    },
+  }, "routes.json").defaults.review, { reviewer: "codex" });
+
+  assert.throws(
+    () => validateProjectRoutes({
+      version: 1,
+      defaults: { dispatch: { reviewer: "codex" } },
+    }, "routes.json"),
+    /defaults\.dispatch\.executor must be a non-empty string/
+  );
+});
+
+test("route intent resolver gives run intent precedence over project defaults", () => {
+  const result = resolveRouteIntent({
+    runIntent: {
+      dispatch: { executor: "pi", model: "deepseek/deepseek-v4-flash" },
+      review: { reviewer: "claude" },
+    },
+    projectRoutes: {
+      version: 1,
+      defaults: {
+        dispatch: { executor: "opencode", model: "opencode-go/deepseek-v4-pro" },
+        review: { reviewer: "codex" },
+      },
+    },
+    policy: routePolicy({
+      allowed_model_routes: [{ route: "deepseek/*", phases: ["dispatch"], executors: ["pi"] }],
+    }),
+  });
+
+  assert.equal(result.phases.dispatch.executor, "pi");
+  assert.equal(result.phases.dispatch.model, "deepseek/deepseek-v4-flash");
+  assert.equal(result.phases.dispatch.sources.executor, "run_intent");
+  assert.equal(result.phases.dispatch.policy_decision.reason, "allowed_model_route");
+  assert.equal(result.phases.review.reviewer, "claude");
+  assert.equal(result.phases.review.policy_decision.reason, "managed_cli");
+});
+
+test("route intent resolver uses project defaults before built-in managed defaults", () => {
+  const result = resolveRouteIntent({
+    projectRoutes: {
+      version: 1,
+      defaults: {
+        dispatch: { executor: "pi", model: "deepseek/deepseek-v4-flash" },
+        review: { reviewer: "codex" },
+      },
+    },
+    policy: routePolicy({
+      allowed_model_routes: [{ route: "deepseek/*", phases: ["dispatch"], executors: ["pi"] }],
+    }),
+  });
+
+  assert.equal(result.phases.dispatch.executor, "pi");
+  assert.equal(result.phases.dispatch.sources.executor, "project_routes");
+  assert.equal(result.phases.review.reviewer, "codex");
+  assert.equal(result.phases.review.model, null);
+  assert.equal(result.phases.review.policy_decision.reason, "managed_cli");
+});
+
+test("route intent resolver preserves missing unmanaged model as policy denial", () => {
+  const result = resolveRouteIntent({
+    runIntent: { dispatch: { executor: "pi" } },
+    policy: routePolicy({
+      allowed_model_routes: [{ route: "deepseek/*", phases: ["dispatch"], executors: ["pi"] }],
+    }),
+  });
+
+  assert.equal(result.phases.dispatch.executor, "pi");
+  assert.equal(result.phases.dispatch.model, null);
+  assert.equal(result.phases.dispatch.policy_decision.allowed, false);
+  assert.equal(result.phases.dispatch.policy_decision.reason, "missing_model_route");
 });

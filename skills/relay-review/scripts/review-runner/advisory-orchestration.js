@@ -22,20 +22,24 @@ function resolveAdvisoryConfig({
   advisoryReviewerModel,
   advisoryTimeoutArg,
   data,
+  routePlan = null,
 }) {
+  const planned = routePlan?.phases?.advisory_review && typeof routePlan.phases.advisory_review === "object"
+    ? routePlan.phases.advisory_review
+    : {};
   const routed = data?.routing?.selected?.advisory_review && typeof data.routing.selected.advisory_review === "object"
     ? data.routing.selected.advisory_review
     : {};
-  const reviewer = advisoryReviewerArg || routed.reviewer || null;
+  const reviewer = advisoryReviewerArg || planned.reviewer || routed.reviewer || null;
   if (!reviewer && (advisoryProfileArg || advisoryReviewerModel || advisoryTimeoutArg || advisoryGraceArg)) {
     throw new Error("--advisory-reviewer is required when advisory options are supplied and no manifest routing advisory reviewer is selected");
   }
   return {
     graceSeconds: reviewer ? parseNonNegativeSeconds(advisoryGraceArg) : null,
-    model: reviewer ? (advisoryReviewerModel || routed.model || routed.reviewer_model || null) : null,
-    profile: reviewer ? validateAdvisoryProfile(advisoryProfileArg || routed.profile || "blindspot") : null,
+    model: reviewer ? (advisoryReviewerModel || planned.model || routed.model || routed.reviewer_model || null) : null,
+    profile: reviewer ? validateAdvisoryProfile(advisoryProfileArg || planned.profile || routed.profile || "blindspot") : null,
     reviewer,
-    source: reviewer ? (advisoryReviewerArg ? "cli" : "routing") : null,
+    source: reviewer ? (advisoryReviewerArg ? "cli" : planned.reviewer ? "route_plan" : "routing") : null,
     timeoutSeconds: reviewer ? parsePositiveSeconds(advisoryTimeoutArg) : null,
   };
 }

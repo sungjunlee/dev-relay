@@ -119,6 +119,8 @@ test("inspect reports effective policy, doctor output, and executors config stat
   assert.equal(output.policy.status, "defaulted");
   assert.equal(output.executorsConfig.path, executorsPath);
   assert.equal(output.executorsConfig.exists, true);
+  assert.equal(output.projectConfig.status, "absent");
+  assert.match(output.projectConfig.path, /\/projects\/dev-relay-[a-f0-9]{8}\/project\.json$/);
   assert.ok(output.doctor.tools.some((tool) => tool.name === "codex"));
 });
 

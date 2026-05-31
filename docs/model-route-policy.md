@@ -33,7 +33,7 @@ That means missing policy config defaults to Codex/Claude managed CLI only. `cod
 
 Use this final precedence order when reasoning about an invocation:
 
-`CLI flags -> routing rules -> defaults -> existing relay defaults -> policy gate`
+`CLI flags / --route-intent-file -> project routes.json -> routing rules -> defaults -> existing relay defaults -> policy gate`
 
 The policy gate is last and fail-closed. A route selected by a CLI flag, a routing rule, a model hint, an executor default, or an existing relay fallback still has to pass the policy gate. Deny rules win over allow rules, and unknown provider/model routes are denied when `deny_unknown_model_routes` is true.
 
@@ -127,6 +127,39 @@ For routed advisory reviewers or sidecars, add routing rules to the policy JSON 
 
 Repo-local `.relay/policy.json` files may narrow the global policy but may not widen it. For example, a repo policy can reduce `allowed_model_routes` from `example/*` to `example/opencode-model-*`; it cannot add a new external provider that the global policy did not allow.
 
+Project-local `~/.relay/projects/<repo-slug>/policy.json` is an additional local narrow-only layer after global and repo policy. It is for company or personal machine restrictions that should not be committed. Policy is authorization; `~/.relay/projects/<repo-slug>/routes.json` is only preferences and cannot grant a route.
+
+```text
+~/.relay/projects/<repo-slug>/project.json
+~/.relay/projects/<repo-slug>/policy.json
+~/.relay/projects/<repo-slug>/routes.json
+```
+
+Example project preference file:
+
+```json
+{
+  "version": 1,
+  "defaults": {
+    "dispatch": { "executor": "pi", "model": "deepseek/deepseek-v4-flash" },
+    "review": { "reviewer": "codex" },
+    "advisory_review": { "reviewer": "opencode", "model": "opencode-go/deepseek-v4-pro" },
+    "sidecar": null
+  }
+}
+```
+
+Preview before dispatch:
+
+```bash
+node skills/relay-config/scripts/relay-config.js plan-run --repo . \
+  --dispatch pi:deepseek/deepseek-v4-flash \
+  --review codex \
+  --json
+```
+
+For one-off runs, write a route intent JSON and pass `--route-intent-file` to dispatch. Dispatch persists the final audit snapshot as `route-plan.json` next to the run manifest.
+
 ## Personal Opt-In Setup
 
 After installing skills, prefer natural-language setup:
@@ -175,6 +208,8 @@ If you want OpenCode to default to a personal route, set the executor model conf
 ```
 
 This file changes model selection only. It does not grant policy approval. The selected provider/model route must still match `allowed_model_routes`.
+
+Antigravity uses `google/antigravity-cli` as a policy label in V1. Relay does not pass provider/model labels to `agy`; do not assume Gemini variant selection until the CLI exposes a real model-selection flag.
 
 ## Doctor And Check
 

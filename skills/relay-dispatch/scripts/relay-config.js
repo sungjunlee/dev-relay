@@ -2,6 +2,7 @@
 
 const fs = require("fs");
 const path = require("path");
+const { execFileSync } = require("child_process");
 const {
   buildDefaultRelayPolicy,
   evaluateRelayRoute,
@@ -9,6 +10,9 @@ const {
   resolveRelayPolicyPath,
   validateRelayPolicy,
 } = require("./relay-policy");
+const { loadProjectConfig } = require("./project-config");
+const { getProjectConfigPath, getProjectPolicyPath, getProjectRoutesPath, getRepoSlug } = require("./manifest/paths");
+const { loadProjectRoutes, resolveRouteIntent } = require("./relay-routing");
 const {
   findUnknownFlags,
   getPositionals,
@@ -35,6 +39,7 @@ const SUBCOMMAND_FLAGS = {
   show: new Set(["--effective", "--json", "--help"]),
   doctor: new Set(["--json", "--help"]),
   check: new Set(["--phase", "--executor", "--reviewer", "--model", "--json", "--help"]),
+  "plan-run": new Set(["--repo", "--dispatch", "--review", "--advisory-review", "--sidecar", "--route-intent-file", "--json", "--help"]),
   "set-default": new Set(["--json", "--help"]),
   "allow-route": new Set(["--phase", "--executor", "--reviewer", "--json", "--help"]),
   "deny-route": new Set(["--phase", "--executor", "--reviewer", "--json", "--help"]),
@@ -67,6 +72,7 @@ function printHelp() {
   console.log(`  show --effective ${modeLabel("--effective")} [--json ${modeLabel("--json")}]`);
   console.log(`  doctor [--json ${modeLabel("--json")}]`);
   console.log(`  check --phase <phase> ${modeLabel("--phase")} --executor <name> ${modeLabel("--executor")} [--reviewer <name> ${modeLabel("--reviewer")}] [--model <provider/model> ${modeLabel("--model")}] [--json ${modeLabel("--json")}]`);
+  console.log(`  plan-run [--repo <path> ${modeLabel("--repo")}] [--dispatch <actor[:provider/model]> ${modeLabel("--dispatch")}] [--review <actor[:provider/model]> ${modeLabel("--review")}] [--advisory-review <actor[:provider/model]> ${modeLabel("--advisory-review")}] [--sidecar <actor[:provider/model]> ${modeLabel("--sidecar")}] [--route-intent-file <path> ${modeLabel("--route-intent-file")}] [--json ${modeLabel("--json")}]`);
   console.log("  set-default <path> <value> [--json]");
   console.log(`  allow-route <pattern> --phase <csv> ${modeLabel("--phase")} [--executor <name> ${modeLabel("--executor")}] [--reviewer <name> ${modeLabel("--reviewer")}] [--json ${modeLabel("--json")}]`);
   console.log(`  deny-route <pattern> [--phase <csv> ${modeLabel("--phase")}] [--executor <name> ${modeLabel("--executor")}] [--reviewer <name> ${modeLabel("--reviewer")}] [--json ${modeLabel("--json")}]`);
@@ -299,6 +305,32 @@ function actorHasConfiguredAllowedRoute(policy, actor) {
   });
 }
 
+function probeModels(name, executable) {
+  if (!executable || !["opencode", "pi"].includes(name)) {
+    return { status: "not_applicable", models: [], warning: null };
+  }
+  const args = name === "opencode" ? ["models"] : ["--list-models"];
+  try {
+    const output = execFileSync(executable, args, {
+      encoding: "utf-8",
+      stdio: "pipe",
+      timeout: 5000,
+    });
+    const models = output
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .filter((value, index, values) => values.indexOf(value) === index);
+    return { status: "ok", models, warning: null };
+  } catch (error) {
+    return {
+      status: "warning",
+      models: [],
+      warning: String(error.stderr || error.message || error).split("\n")[0],
+    };
+  }
+}
+
 function doctorTool(policy, name) {
   const executable = findOnPath(name);
   const dispatchDecision = evaluateRelayRoute(policy, { phase: "dispatch", executor: name });
@@ -316,6 +348,8 @@ function doctorTool(policy, name) {
     path: executable,
     policy: policyStatus,
     reason,
+    model_probe: probeModels(name, executable),
+    ...(name === "antigravity" ? { model_note: "Antigravity model values are policy labels only; relay does not pass them to agy." } : {}),
   };
 }
 
@@ -341,10 +375,14 @@ function commandDoctor(positionals, jsonOut) {
     ...routeActors(result.policy),
   ])].sort();
   const tools = toolNames.map((name) => doctorTool(result.policy, name));
+  const projectConfig = loadProjectConfig({ repoRoot: process.cwd() });
+  const projectRoutes = loadProjectRoutes({ repoRoot: process.cwd() });
   const output = {
     ok: true,
     status: result.status,
     sources: result.sources,
+    project_config: projectConfig,
+    project_routes: projectRoutes,
     tools,
   };
 
@@ -389,6 +427,146 @@ function commandCheck(positionals, jsonOut) {
   }
 
   if (!decision.allowed) process.exitCode = 1;
+}
+
+function parseRouteSpec(spec, phase) {
+  const raw = nonEmptyString(spec);
+  if (!raw) return null;
+  const separator = raw.indexOf(":");
+  const actor = separator === -1 ? raw : raw.slice(0, separator).trim();
+  const model = separator === -1 ? null : raw.slice(separator + 1).trim();
+  if (!actor) throw new Error(`${phase} route must start with an actor name`);
+  if (separator !== -1 && !model) throw new Error(`${phase} route model must be non-empty when ':' is used`);
+  const actorField = REVIEWER_PHASES.has(phase) ? "reviewer" : "executor";
+  return {
+    [actorField]: actor,
+    ...(model ? { model } : {}),
+  };
+}
+
+function readRouteIntentFile(filePath) {
+  if (!filePath) return {};
+  const resolved = path.resolve(filePath);
+  let parsed;
+  try {
+    parsed = JSON.parse(fs.readFileSync(resolved, "utf-8"));
+  } catch (error) {
+    throw new Error(`failed to read route intent file at ${resolved}: ${error.message}`);
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error(`route intent file at ${resolved} must contain a JSON object`);
+  }
+  return parsed;
+}
+
+function commandPlanRun(positionals, jsonOut) {
+  if (positionals.length !== 1) {
+    throw new Error("plan-run does not accept positional arguments");
+  }
+  const repoRoot = path.resolve(readArg(args, "--repo", process.cwd(), CLI_ARG_OPTIONS));
+  const routeIntentFile = readArg(args, "--route-intent-file", undefined, CLI_ARG_OPTIONS);
+  const runIntent = {
+    ...readRouteIntentFile(routeIntentFile),
+  };
+  const dispatchSpec = parseRouteSpec(readArg(args, "--dispatch", undefined, CLI_ARG_OPTIONS), "dispatch");
+  const reviewSpec = parseRouteSpec(readArg(args, "--review", undefined, CLI_ARG_OPTIONS), "review");
+  const advisorySpec = parseRouteSpec(readArg(args, "--advisory-review", undefined, CLI_ARG_OPTIONS), "advisory_review");
+  const sidecarSpec = parseRouteSpec(readArg(args, "--sidecar", undefined, CLI_ARG_OPTIONS), "sidecar");
+  if (dispatchSpec) runIntent.dispatch = dispatchSpec;
+  if (reviewSpec) runIntent.review = reviewSpec;
+  if (advisorySpec) runIntent.advisory_review = advisorySpec;
+  if (sidecarSpec) runIntent.sidecar = sidecarSpec;
+
+  const policyResult = loadRelayPolicy({ repoRoot });
+  const projectConfig = loadProjectConfig({ repoRoot });
+  const projectRoutes = loadProjectRoutes({ repoRoot });
+  if (!policyResult.ok) {
+    const output = {
+      ok: false,
+      status: "policy_error",
+      repo: {
+        root: repoRoot,
+        slug: null,
+      },
+      policy: policyResult,
+      project_config: projectConfig,
+      project_routes: projectRoutes,
+      route_plan: null,
+      warnings: [],
+    };
+    if (jsonOut) printJson(output);
+    else console.error(`relay-config plan-run: policy failed: ${policyResult.errors?.[0]?.message || "unknown policy error"}`);
+    process.exitCode = 1;
+    return;
+  }
+  if (!projectRoutes.ok) {
+    const output = {
+      ok: false,
+      status: "routes_error",
+      repo: {
+        root: repoRoot,
+        slug: getRepoSlug(repoRoot),
+      },
+      policy: policyResult,
+      project_config: projectConfig,
+      project_routes: projectRoutes,
+      route_plan: null,
+      warnings: [],
+    };
+    if (jsonOut) printJson(output);
+    else console.error(`relay-config plan-run: routes failed: ${projectRoutes.error}`);
+    process.exitCode = 1;
+    return;
+  }
+
+  const routePlan = resolveRouteIntent({
+    runIntent,
+    projectRoutes: projectRoutes.routes,
+    policy: policyResult.policy,
+  });
+  const phaseValues = Object.values(routePlan.phases).filter(Boolean);
+  const denied = phaseValues.filter((phase) => phase.policy_decision?.allowed !== true);
+  const warnings = [];
+  for (const phase of phaseValues) {
+    const actor = phase.executor || phase.reviewer;
+    if (actor === "antigravity" && phase.model) {
+      warnings.push(`antigravity ${phase.phase} model ${phase.model} is a policy label; not passed to agy until the CLI exposes model selection`);
+    }
+  }
+  const output = {
+    ok: denied.length === 0,
+    status: denied.length === 0 ? "allowed" : "denied",
+    repo: {
+      root: repoRoot,
+      slug: getRepoSlug(repoRoot),
+    },
+    project_paths: {
+      project_json: getProjectConfigPath(repoRoot),
+      policy_json: getProjectPolicyPath(repoRoot),
+      routes_json: getProjectRoutesPath(repoRoot),
+    },
+    policy: {
+      status: policyResult.status,
+      sources: policyResult.sources,
+    },
+    project_config: projectConfig,
+    project_routes: projectRoutes,
+    route_plan: routePlan,
+    denied_phases: denied.map((phase) => phase.phase),
+    warnings,
+  };
+
+  if (jsonOut) {
+    printJson(output);
+  } else {
+    console.log(`relay-config plan-run: ${output.status}`);
+    for (const phase of phaseValues) {
+      const actor = phase.executor || phase.reviewer || "(none)";
+      console.log(`${phase.phase}: ${actor} model=${phase.model || "(none)"} policy=${phase.policy_decision.reason}`);
+    }
+    for (const warning of warnings) console.log(`warning: ${warning}`);
+  }
+  if (!output.ok) process.exitCode = 1;
 }
 
 function commandSetDefault(positionals, jsonOut) {
@@ -465,6 +643,9 @@ function main() {
       break;
     case "check":
       commandCheck(positionals, jsonOut);
+      break;
+    case "plan-run":
+      commandPlanRun(positionals, jsonOut);
       break;
     case "set-default":
       commandSetDefault(positionals, jsonOut);

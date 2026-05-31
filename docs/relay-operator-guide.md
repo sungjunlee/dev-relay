@@ -33,6 +33,8 @@ $relay-config Use opencode-go/deepseek-v4-pro for personal sidecar review
 
 Route policy is based on provider/model routes, not only harness names. Managed Codex and Claude CLIs work by default when no policy exists. OpenCode, Pi, advisory reviewers, and sidecars require explicit route approval. See [model-route-policy.md](model-route-policy.md) for the full policy shape and precedence order.
 
+Project-local route UX lives outside the repo under `~/.relay/projects/<repo-slug>/project.json`, `~/.relay/projects/<repo-slug>/policy.json`, and `~/.relay/projects/<repo-slug>/routes.json`. Policy is authorization; `routes.json` stores preferences only and cannot grant routes. Use `relay-config plan-run --json` to preview the effective dispatch/review/advisory routing before dispatch, and use `--route-intent-file` for one-off run overrides. Dispatch persists the audited decision as `route-plan.json` in the run directory.
+
 ## Adapter Readiness Matrix
 
 Implementation status describes the adapter surface shipped in relay. Live status describes dogfood evidence from real CLI runs. Do not treat implementation parity as production readiness: #609 added reviewer-role parity surfaces, #610 recorded live reviewer evidence and blockers, and #611 added healthy dispatch canary mode with live dispatch evidence and blockers.
@@ -143,6 +145,9 @@ node skills/relay-dispatch/scripts/dispatch.js . -e pi -m openai/gpt-5 \
 
 node skills/relay-review/scripts/review-runner.js --repo . --run-id <id> --pr <number> \
   --reviewer pi --reviewer-model openai/gpt-5 --json
+
+node skills/relay-config/scripts/relay-config.js plan-run --repo . \
+  --dispatch pi:deepseek/deepseek-v4-flash --review codex --json
 ```
 
 Pi primary review uses a bounded parent-process timeout. Set `RELAY_PI_REVIEW_TIMEOUT` to a positive duration such as `120s`, `10m`, or `1h`; the default is `1800s`.
@@ -177,6 +182,8 @@ node skills/relay-review/scripts/review-runner.js --repo . --run-id <id> --pr <n
 Antigravity live support is fail-safe experimental until a healthy live canary passes. Fake-bin tests alone do not prove live executor or reviewer success.
 
 Healthy-path criteria are exact: primary review must return strict verdict JSON within timeout, dispatch must create a minimal repository change and reach a recoverable/reviewable state, or the operator must record a documented CLI limitation instead of claiming live success. The fail-safe timeout canary is not healthy success; it only proves relay avoids turning a bounded timeout into a reviewable false positive.
+
+For Antigravity, use `google/antigravity-cli` as the current policy label. Relay records that label for policy and audit, but it is not passed to `agy`; do not claim Gemini model variant selection until `agy` exposes a real model-selection flag.
 
 For repeatable multi-executor dogfood, use the harness:
 

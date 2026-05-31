@@ -10,6 +10,7 @@ const {
   evaluateRelayPolicyGate,
 } = require("../../../skills/relay-dispatch/scripts/relay-policy-gate");
 const { buildDefaultRelayPolicy } = require("../../../skills/relay-dispatch/scripts/relay-policy");
+const { getProjectPolicyPath } = require("../../../skills/relay-dispatch/scripts/manifest/paths");
 
 function tempDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), "relay-policy-gate-"));
@@ -18,6 +19,15 @@ function tempDir() {
 function writePolicy(relayHome, policy) {
   fs.mkdirSync(relayHome, { recursive: true });
   fs.writeFileSync(path.join(relayHome, "policy.json"), JSON.stringify(policy, null, 2), "utf-8");
+}
+
+function writeJson(filePath, value) {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, JSON.stringify(value, null, 2), "utf-8");
+}
+
+function initGitRepo(repoRoot) {
+  require("child_process").execFileSync("git", ["init", "-b", "main"], { cwd: repoRoot, stdio: "pipe" });
 }
 
 test("policy gate allows managed Codex without model under missing config", () => {
@@ -164,4 +174,33 @@ test("policy gate surfaces matched allow route details", () => {
   assert.equal(decision.allowed, true);
   assert.equal(decision.reason, "allowed_model_route");
   assert.equal(decision.matched_route, "opencode-go/*");
+});
+
+test("policy gate reports project policy sources when project layer denies a route", () => {
+  const relayHome = tempDir();
+  const repoRoot = tempDir();
+  initGitRepo(repoRoot);
+  writePolicy(relayHome, {
+    ...buildDefaultRelayPolicy(),
+    profile: "global",
+    allowed_model_routes: [{ route: "opencode-go/*", phases: ["dispatch"], executors: ["opencode"] }],
+  });
+  writeJson(getProjectPolicyPath(repoRoot, { relayHome }), {
+    ...buildDefaultRelayPolicy(),
+    profile: "project",
+    allowed_model_routes: [{ route: "opencode-go/deepseek-*", phases: ["dispatch"], executors: ["opencode"] }],
+  });
+
+  const decision = evaluateRelayPolicyGate({
+    relayHome,
+    repoRoot,
+    phase: "dispatch",
+    executor: "opencode",
+    model: "opencode-go/qwen3",
+  });
+
+  assert.equal(decision.allowed, false);
+  assert.equal(decision.reason, "unknown_model_route");
+  assert.equal(decision.policy.sources.global, path.join(relayHome, "policy.json"));
+  assert.equal(decision.policy.sources.project, getProjectPolicyPath(repoRoot, { relayHome }));
 });

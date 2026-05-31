@@ -18,7 +18,7 @@ const { applyReviewAssurancePolicy } = require("./review-runner/assurance");
 const { buildRedispatchPrompt, buildRubricGateRedispatchPrompt, computeFactorStatusFlips, computeRepeatedIssueCount, decideFlipFlopEscalation, detectChurnGrowth, summarizeLineage, toEscalatedVerdict } = require("./review-runner/redispatch");
 const { applyPolicyViolationToManifest, applyVerdictToManifest } = require("./review-runner/manifest-apply");
 const { writePrBodySnapshot } = require("./review-runner/pr-body-snapshot");
-const { buildPrimaryReviewerPreflight, loadReviewText, resolveReviewerName, resolveReviewerScript } = require("./review-runner/reviewer-invoke");
+const { buildPrimaryReviewerPreflight, loadReviewText, loadRunRoutePlan, resolveReviewerName, resolveReviewerScript } = require("./review-runner/reviewer-invoke");
 const { maybeSwapReviewer } = require("./review-runner/reviewer-swap");
 const { resolveAdvisoryConfig, settleAdvisoryForVerdict, startConfiguredAdvisory } = require("./review-runner/advisory-orchestration");
 const { printResult, printUsage } = require("./review-runner/output");
@@ -83,22 +83,6 @@ async function run() {
   );
   const { body, manifestPath } = manifest;
   let { data } = manifest;
-  const advisoryConfig = resolveAdvisoryConfig({
-    advisoryGraceArg,
-    advisoryProfileArg,
-    advisoryReviewerArg,
-    advisoryReviewerModel,
-    advisoryTimeoutArg,
-    data,
-  });
-
-  if (isHardenedReviewAssurance(data) && !prepareOnly && !advisoryConfig.reviewer) {
-    throw new Error(
-      "policy.review_assurance=hardened requires --advisory-reviewer <name> or manifest routing.selected.advisory_review.reviewer so the round produces advisory evidence. " +
-      "Run with a configured advisory reviewer, configure routing, or lower the manifest policy before review."
-    );
-  }
-
   data = maybeSwapReviewer(data, reviewerArg, body, manifestPath, runRepoPath, { independentReviewReason });
 
   if (data.state !== STATES.REVIEW_PENDING) {
@@ -112,6 +96,24 @@ async function run() {
   const maxRounds = Number(data.review?.max_rounds || 20);
   const runDir = getRunDir(runRepoPath, data.run_id);
   ensureRunLayout(runRepoPath, data.run_id);
+  const runRoutePlan = loadRunRoutePlan(runRepoPath, data.run_id).plan;
+  const resolvedAdvisoryConfig = resolveAdvisoryConfig({
+    advisoryGraceArg,
+    advisoryProfileArg,
+    advisoryReviewerArg,
+    advisoryReviewerModel,
+    advisoryTimeoutArg,
+    data,
+    routePlan: runRoutePlan,
+  });
+  const advisoryConfig = resolvedAdvisoryConfig;
+
+  if (isHardenedReviewAssurance(data) && !prepareOnly && !advisoryConfig.reviewer) {
+    throw new Error(
+      "policy.review_assurance=hardened requires --advisory-reviewer <name>, route-plan advisory_review.reviewer, or manifest routing.selected.advisory_review.reviewer so the round produces advisory evidence. " +
+      "Run with a configured advisory reviewer, configure routing, or lower the manifest policy before review."
+    );
+  }
   let reviewedHeadSha = null;
   try {
     reviewedHeadSha = git(reviewRepoPath, "rev-parse", "HEAD").trim();
@@ -164,7 +166,7 @@ async function run() {
     console.log(`  Warning: diff growing without convergence (${churnGrowth.prevPrevLines} → ${churnGrowth.prevLines} → ${churnGrowth.curLines} lines, +${growth}%)`);
   }
 
-  const reviewerName = resolveReviewerName(data, reviewerArg);
+  const reviewerName = resolveReviewerName(data, reviewerArg, { routePlan: runRoutePlan });
   const reviewerScript = reviewFile ? null : resolveReviewerScript(reviewerName, reviewerScriptArg);
   const result = {
     branch,
@@ -211,6 +213,7 @@ async function run() {
       reviewerName,
       reviewerScript,
       runRepoPath,
+      routePlan: runRoutePlan,
     });
   }
   ({ advisoryRun, resultAdvisory: result.advisoryReview } = startConfiguredAdvisory({
@@ -235,6 +238,7 @@ async function run() {
     runDir,
     runRepoPath,
     reviewerPreflight: primaryReviewerPreflight,
+    routePlan: runRoutePlan,
   });
   result.rawResponsePath = rawResponsePath;
 

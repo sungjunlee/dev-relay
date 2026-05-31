@@ -1,5 +1,11 @@
 "use strict";
 
+const fs = require("fs");
+const path = require("path");
+const { resolveExecutorDefaultModel } = require("./executor-model-config");
+const { getProjectRoutesPath } = require("./manifest/paths");
+const { buildDefaultRelayPolicy, evaluateRelayRoute } = require("./relay-policy");
+
 function isPlainObject(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
@@ -236,6 +242,234 @@ function normalizeSelection(value, fieldName, index, warnings) {
   return Object.keys(normalized).length ? normalized : null;
 }
 
+function requirePhaseObject(value, fieldName, sourceLabel) {
+  if (value === undefined || value === null) return null;
+  if (!isPlainObject(value)) {
+    throw new Error(`invalid project routes at ${sourceLabel}: defaults.${fieldName} must be an object or null`);
+  }
+  return value;
+}
+
+function normalizeOptionalField(object, fieldName, sourceLabel, { required = false, label = fieldName } = {}) {
+  if (object[fieldName] === undefined || object[fieldName] === null) {
+    if (required) {
+      throw new Error(`invalid project routes at ${sourceLabel}: ${label} must be a non-empty string`);
+    }
+    return undefined;
+  }
+  const value = nonEmptyString(object[fieldName]);
+  if (!value) {
+    throw new Error(`invalid project routes at ${sourceLabel}: ${label} must be a non-empty string`);
+  }
+  return value;
+}
+
+function normalizeRouteDefault(value, phase, sourceLabel) {
+  const routeDefault = requirePhaseObject(value, phase, sourceLabel);
+  if (routeDefault === null) return null;
+
+  if (phase === "dispatch") {
+    return {
+      executor: normalizeOptionalField(routeDefault, "executor", sourceLabel, { required: true, label: "defaults.dispatch.executor" }),
+      ...(routeDefault.model !== undefined ? { model: normalizeOptionalField(routeDefault, "model", sourceLabel, { label: "defaults.dispatch.model" }) } : {}),
+    };
+  }
+  if (phase === "review" || phase === "advisory_review") {
+    const normalized = {
+      reviewer: normalizeOptionalField(routeDefault, "reviewer", sourceLabel, { required: true, label: `defaults.${phase}.reviewer` }),
+    };
+    if (routeDefault.model !== undefined) normalized.model = normalizeOptionalField(routeDefault, "model", sourceLabel, { label: `defaults.${phase}.model` });
+    if (phase === "advisory_review" && routeDefault.profile !== undefined) {
+      normalized.profile = normalizeOptionalField(routeDefault, "profile", sourceLabel, { label: "defaults.advisory_review.profile" });
+    }
+    return normalized;
+  }
+  if (phase === "sidecar") {
+    const normalized = {};
+    if (routeDefault.kind !== undefined) normalized.kind = normalizeOptionalField(routeDefault, "kind", sourceLabel, { label: "defaults.sidecar.kind" });
+    if (routeDefault.executor !== undefined) normalized.executor = normalizeOptionalField(routeDefault, "executor", sourceLabel, { label: "defaults.sidecar.executor" });
+    if (routeDefault.model !== undefined) normalized.model = normalizeOptionalField(routeDefault, "model", sourceLabel, { label: "defaults.sidecar.model" });
+    if (!normalized.kind && !normalized.executor) {
+      throw new Error(`invalid project routes at ${sourceLabel}: defaults.sidecar.kind or defaults.sidecar.executor must be set`);
+    }
+    return normalized;
+  }
+  throw new Error(`unsupported route phase: ${phase}`);
+}
+
+function validateProjectRoutes(routes, sourceLabel = "project routes") {
+  if (!isPlainObject(routes)) {
+    throw new Error(`invalid project routes at ${sourceLabel}: expected object`);
+  }
+  if (routes.version !== 1) {
+    throw new Error(`invalid project routes at ${sourceLabel}: version must be 1`);
+  }
+  if (routes.defaults !== undefined && !isPlainObject(routes.defaults)) {
+    throw new Error(`invalid project routes at ${sourceLabel}: defaults must be an object`);
+  }
+  const defaults = routes.defaults || {};
+  return {
+    ...cloneJson(routes),
+    version: 1,
+    defaults: {
+      ...(defaults.dispatch !== undefined ? { dispatch: normalizeRouteDefault(defaults.dispatch, "dispatch", sourceLabel) } : {}),
+      ...(defaults.review !== undefined ? { review: normalizeRouteDefault(defaults.review, "review", sourceLabel) } : {}),
+      ...(defaults.advisory_review !== undefined ? { advisory_review: normalizeRouteDefault(defaults.advisory_review, "advisory_review", sourceLabel) } : {}),
+      ...(defaults.sidecar !== undefined ? { sidecar: normalizeRouteDefault(defaults.sidecar, "sidecar", sourceLabel) } : {}),
+    },
+  };
+}
+
+function readProjectRoutesFile(filePath) {
+  let raw;
+  try {
+    raw = fs.readFileSync(filePath, "utf-8");
+  } catch (error) {
+    throw new Error(`failed to read project routes at ${filePath}: ${error.message}`);
+  }
+  try {
+    return JSON.parse(raw);
+  } catch (error) {
+    throw new Error(`failed to parse project routes at ${filePath}: ${error.message}`);
+  }
+}
+
+function loadProjectRoutes({ repoRoot, relayHome } = {}) {
+  let filePath;
+  try {
+    filePath = getProjectRoutesPath(repoRoot, { relayHome });
+  } catch (error) {
+    return { ok: false, status: "error", path: null, routes: null, error: error.message };
+  }
+  if (!fs.existsSync(filePath)) {
+    return { ok: true, status: "absent", path: filePath, routes: null, error: null };
+  }
+  try {
+    return {
+      ok: true,
+      status: "ok",
+      path: filePath,
+      routes: validateProjectRoutes(readProjectRoutesFile(filePath), filePath),
+      error: null,
+    };
+  } catch (error) {
+    return { ok: false, status: "error", path: filePath, routes: null, error: error.message };
+  }
+}
+
+const ROUTE_PHASES = ["dispatch", "review", "advisory_review", "sidecar"];
+
+function actorFieldForPhase(phase) {
+  return phase === "review" || phase === "advisory_review" ? "reviewer" : "executor";
+}
+
+function defaultForPhase(policy, phase) {
+  const policyDefault = policy?.defaults?.[phase];
+  if (policyDefault !== undefined) return cloneJson(policyDefault);
+  return cloneJson(buildDefaultRelayPolicy().defaults[phase]);
+}
+
+function pickField({ phase, field, runIntent, projectRoutes, policy }) {
+  const runPhase = runIntent?.[phase];
+  if (isPlainObject(runPhase) && Object.prototype.hasOwnProperty.call(runPhase, field)) {
+    return { value: nonEmptyString(runPhase[field]), source: "run_intent" };
+  }
+  const projectPhase = projectRoutes?.defaults?.[phase];
+  if (isPlainObject(projectPhase) && Object.prototype.hasOwnProperty.call(projectPhase, field)) {
+    return { value: nonEmptyString(projectPhase[field]), source: "project_routes" };
+  }
+  const policyDefault = defaultForPhase(policy, phase);
+  if (isPlainObject(policyDefault) && Object.prototype.hasOwnProperty.call(policyDefault, field)) {
+    return { value: nonEmptyString(policyDefault[field]), source: "policy_defaults" };
+  }
+  return { value: null, source: "unresolved" };
+}
+
+function resolveModelForActor({ phase, actor, runIntent, projectRoutes, policy, relayHome, executorModelResolver }) {
+  const explicit = pickField({ phase, field: "model", runIntent, projectRoutes, policy });
+  if (explicit.source !== "unresolved") return explicit;
+  if (actor) {
+    const resolver = executorModelResolver || resolveExecutorDefaultModel;
+    const model = resolver(actor, { relayHome });
+    if (model) return { value: model, source: "executor_defaults" };
+  }
+  return { value: null, source: "unresolved" };
+}
+
+function resolvePhaseRoute({ phase, runIntent, projectRoutes, policy, relayHome, executorModelResolver }) {
+  const actorField = actorFieldForPhase(phase);
+  const selected = pickField({ phase, field: actorField, runIntent, projectRoutes, policy });
+  if (!selected.value && (phase === "advisory_review" || phase === "sidecar")) {
+    return null;
+  }
+
+  const model = resolveModelForActor({
+    phase,
+    actor: selected.value,
+    runIntent,
+    projectRoutes,
+    policy,
+    relayHome,
+    executorModelResolver,
+  });
+  const resolved = {
+    phase,
+    [actorField]: selected.value,
+    model: model.value,
+    source: selected.source,
+    sources: {
+      [actorField]: selected.source,
+      model: model.source,
+    },
+  };
+
+  if (phase === "sidecar") {
+    const kind = pickField({ phase, field: "kind", runIntent, projectRoutes, policy });
+    if (kind.value) {
+      resolved.kind = kind.value;
+      resolved.sources.kind = kind.source;
+    }
+  }
+  if (phase === "advisory_review") {
+    const profile = pickField({ phase, field: "profile", runIntent, projectRoutes, policy });
+    if (profile.value) {
+      resolved.profile = profile.value;
+      resolved.sources.profile = profile.source;
+    }
+  }
+
+  const policyTuple = actorField === "reviewer"
+    ? { phase, reviewer: selected.value, model: model.value }
+    : { phase, executor: selected.value, model: model.value };
+  resolved.policy_decision = evaluateRelayRoute(policy, policyTuple);
+  return resolved;
+}
+
+function resolveRouteIntent({
+  runIntent = null,
+  projectRoutes = null,
+  policy = buildDefaultRelayPolicy(),
+  relayHome = process.env.RELAY_HOME,
+  executorModelResolver = null,
+} = {}) {
+  const normalizedProjectRoutes = projectRoutes ? validateProjectRoutes(projectRoutes, "project routes") : null;
+  const phases = {};
+  for (const phase of ROUTE_PHASES) {
+    phases[phase] = resolvePhaseRoute({
+      phase,
+      runIntent,
+      projectRoutes: normalizedProjectRoutes,
+      policy,
+      relayHome,
+      executorModelResolver,
+    });
+  }
+  return {
+    version: 1,
+    phases,
+  };
+}
+
 function validateRoutingRules(routingRules = []) {
   const warnings = [];
   const normalizedRules = [];
@@ -364,7 +598,10 @@ function resolveRoutingDecision({
 module.exports = {
   classifyChangedFiles,
   collectRoutingTagSources,
+  loadProjectRoutes,
   normalizeTags,
+  resolveRouteIntent,
   resolveRoutingDecision,
+  validateProjectRoutes,
   validateRoutingRules,
 };
