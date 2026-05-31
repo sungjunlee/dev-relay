@@ -504,7 +504,7 @@ process.stdout.write(JSON.stringify({
   const result = JSON.parse(stdout);
   const loggedArgs = fs.readFileSync(logPath, "utf-8");
   assert.equal(result.verdict, "pass");
-  assert.match(loggedArgs, /^--no-session\n--tools\nread,grep,find,ls\n--model\nopenai\/gpt-5\n--print\n/);
+  assert.match(loggedArgs, /^--no-session\n--no-context-files\n--no-extensions\n--no-skills\n--no-prompt-templates\n--no-themes\n--tools\nread,grep,find,ls\n--model\nopenai\/gpt-5\n--print\n/);
   assert.match(loggedArgs, /NON-INTERACTIVE REVIEW/);
   assert.match(loggedArgs, /Return a passing review\./);
 });
@@ -543,7 +543,7 @@ process.stdout.write(JSON.stringify({
   const result = JSON.parse(stdout);
   const loggedArgs = fs.readFileSync(logPath, "utf-8");
   assert.equal(result.profile, "blindspot");
-  assert.match(loggedArgs, /^--no-session\n--tools\nread,grep,find,ls\n--model\nopenai\/gpt-5\n--print\n/);
+  assert.match(loggedArgs, /^--no-session\n--no-context-files\n--no-extensions\n--no-skills\n--no-prompt-templates\n--no-themes\n--tools\nread,grep,find,ls\n--model\nopenai\/gpt-5\n--print\n/);
   assert.match(loggedArgs, /NON-INTERACTIVE ADVISORY REVIEW/);
 });
 
@@ -667,10 +667,15 @@ setTimeout(() => {
 
   assert.ok(error, "expected invoke-reviewer-pi.js to fail on parent timeout");
   assert.notEqual(error.status, 0);
-  assert.ok(elapsedMs < 2000, `expected adapter timeout before fake pi completed, elapsed=${elapsedMs}ms`);
   const stderr = String(error.stderr || "");
   assert.match(stderr, /Pi reviewer primary_review timed out after 1s/);
   assert.match(stderr, /RELAY_PI_REVIEW_TIMEOUT/);
+  assert.doesNotMatch(String(error.stdout || ""), /Too late/);
+  assert.match(stderr, /cannot treat this as healthy review evidence/);
+  assert.match(stderr, /verify Pi non-interactive auth\/provider health/);
+  assert.match(stderr, /--no-context-files --no-tools --no-extensions --no-skills --no-prompt-templates --no-themes --print/);
+  assert.match(stderr, /Pi CLI\/provider non-interactive blocker/);
+  assert.ok(elapsedMs < 5000, `expected adapter to fail before the outer test timeout, elapsed=${elapsedMs}ms`);
 });
 
 test("pi adapter rejects invalid review timeout without invoking pi", () => {
@@ -862,11 +867,12 @@ setTimeout(() => {
 
   assert.ok(error, "expected invoke-reviewer-antigravity.js to fail on parent timeout");
   assert.notEqual(error.status, 0);
-  assert.ok(elapsedMs < 2000, `expected adapter timeout before fake agy completed, elapsed=${elapsedMs}ms`);
   const stderr = String(error.stderr || "");
   assert.match(stderr, /Antigravity reviewer primary_review timed out after 1s/);
   assert.match(stderr, /RELAY_ANTIGRAVITY_REVIEW_TIMEOUT/);
   assert.match(stderr, /agy --prompt invocation/);
+  assert.doesNotMatch(String(error.stdout || ""), /Too late/);
+  assert.ok(elapsedMs < 5000, `expected adapter to fail before the outer test timeout, elapsed=${elapsedMs}ms`);
 });
 
 test("antigravity adapter rejects invalid review timeout without invoking agy", () => {
