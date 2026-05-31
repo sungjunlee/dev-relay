@@ -14,9 +14,11 @@ const {
   getCanonicalRepoRoot,
   getFleetManifestPath,
   getFleetsDir,
+  getManifestPath,
   listManifestPaths,
   requireValidFleetId,
 } = require("../../relay-dispatch/scripts/manifest/paths");
+const { STATES: RUN_STATES } = require("../../relay-dispatch/scripts/manifest/lifecycle");
 const { readManifest } = require("../../relay-dispatch/scripts/manifest/store");
 const {
   DISPATCH_STATUS,
@@ -34,11 +36,12 @@ const {
 
 const DEFAULT_PARALLEL = 4;
 const DEFAULT_DISPATCH_SCRIPT = path.join(__dirname, "..", "..", "relay-dispatch", "scripts", "dispatch.js");
+const DEFAULT_REVIEW_SCRIPT = path.join(__dirname, "..", "..", "relay-review", "scripts", "review-runner.js");
 const KNOWN_FLAGS = [
-  "--repo", "--fleet-id", "--leaves-file", "--resume", "--status", "--parallel",
-  "--dispatch-script", "--executor", "--model", "--model-hints", "--sandbox",
+  "--repo", "--fleet-id", "--leaves-file", "--resume", "--status", "--review", "--parallel",
+  "--dispatch-script", "--review-script", "--executor", "--model", "--model-hints", "--sandbox",
   "--network-access", "--timeout", "--reasoning", "--copy", "--test-command",
-  "--register", "--dry-run", "--json", "--help", "-h",
+  "--register", "--reviewer", "--reviewer-model", "--dry-run", "--json", "--help", "-h",
 ];
 const CLI_ARG_OPTIONS = { commandName: "relay-fleet", reservedFlags: KNOWN_FLAGS };
 const MODE_PARSED_LABEL = "[parsed]";
@@ -55,6 +58,7 @@ function usage() {
   return [
     "Usage: relay-fleet.js --repo <path> --fleet-id <id> --leaves-file <path> [options]",
     "       relay-fleet.js --repo <path> --fleet-id <id> --resume [options]",
+    "       relay-fleet.js --repo <path> --fleet-id <id> --review [options]",
     "       relay-fleet.js --repo <path> --fleet-id <id> --status [--json]",
     "",
     "Options:",
@@ -62,9 +66,11 @@ function usage() {
     `  --fleet-id <id>       ${modeLabel("--fleet-id")} Fleet manifest id (required)`,
     `  --leaves-file <path>  ${MODE_VERBATIM_LABEL} JSON file with already-planned leaf contracts`,
     `  --resume             ${MODE_PARSED_LABEL} Reconcile and continue pending/pre-manifest children`,
+    `  --review             ${MODE_PARSED_LABEL} Fan out one foreground review-runner.js pass per review_pending child`,
     `  --status             ${MODE_PARSED_LABEL} Print derived fleet summary without writing`,
     `  --parallel <n>       ${MODE_PARSED_LABEL} Maximum concurrent child dispatches (default: ${DEFAULT_PARALLEL})`,
     `  --dispatch-script <path>  ${MODE_VERBATIM_LABEL} Dispatch entrypoint (default: relay-dispatch/scripts/dispatch.js)`,
+    `  --review-script <path>    ${MODE_VERBATIM_LABEL} Review entrypoint (default: relay-review/scripts/review-runner.js)`,
     `  --executor <name>     ${modeLabel("--executor")} Child executor passed to dispatch.js`,
     `  --model <name>        ${modeLabel("--model")} Child model override passed to dispatch.js`,
     `  --model-hints <spec>  ${modeLabel("--model-hints")} Child model hints passed to dispatch.js`,
@@ -75,6 +81,8 @@ function usage() {
     `  --copy <files>        ${modeLabel("--copy")} Child copy list passed to dispatch.js`,
     `  --test-command <cmd>  ${modeLabel("--test-command")} Child test command evidence passed to dispatch.js`,
     `  --register           ${modeLabel("--register")} Pass --register to child dispatches`,
+    `  --reviewer <name>    ${modeLabel("--reviewer")} Reviewer override passed to review-runner.js`,
+    `  --reviewer-model <model>  ${modeLabel("--reviewer-model")} Reviewer model override passed to review-runner.js`,
     `  --dry-run            ${modeLabel("--dry-run")} Fan out dispatch.js --dry-run without writing fleet state`,
     `  --json               ${modeLabel("--json")} Print JSON output`,
     `  --help, -h           ${modeLabel("--help")} Show this help`,
@@ -101,9 +109,11 @@ function parseArgs(argv) {
     fleetId: getArg("--fleet-id"),
     leavesFile: getArg("--leaves-file"),
     resume: hasFlag("--resume"),
+    review: hasFlag("--review"),
     status: hasFlag("--status"),
     parallel,
     dispatchScript: path.resolve(getArg("--dispatch-script", DEFAULT_DISPATCH_SCRIPT)),
+    reviewScript: path.resolve(getArg("--review-script", DEFAULT_REVIEW_SCRIPT)),
     executor: getArg("--executor"),
     model: getArg("--model"),
     modelHints: getArg("--model-hints"),
@@ -114,6 +124,8 @@ function parseArgs(argv) {
     copy: getArg("--copy"),
     testCommand: getArg("--test-command"),
     register: hasFlag("--register"),
+    reviewer: getArg("--reviewer"),
+    reviewerModel: getArg("--reviewer-model"),
     dryRun: hasFlag("--dry-run"),
     json: hasFlag("--json"),
     help: hasFlag(["--help", "-h"]),
@@ -334,6 +346,12 @@ function maybeFinalizeFleet(repoRoot, fleetId) {
   return updateFleetManifest(repoRoot, fleetId, (fleet) => updateFleetState(fleet, STATES.DISPATCHED)).data;
 }
 
+function transitionFleetToReviewing(repoRoot, fleetId) {
+  const current = readFleetManifest(repoRoot, fleetId).data;
+  if (current.fleet_state === STATES.REVIEWING) return current;
+  return updateFleetManifest(repoRoot, fleetId, (fleet) => updateFleetState(fleet, STATES.REVIEWING)).data;
+}
+
 function listFleetRunRecords(repoRoot, fleetId) {
   return listManifestPaths(repoRoot)
     .map((manifestPath) => {
@@ -454,6 +472,157 @@ function parseDispatchJson(stdout) {
     } catch {}
   }
   return null;
+}
+
+function buildReviewArgs({ repoRoot, runId, options }) {
+  const args = [
+    options.reviewScript,
+    "--repo", repoRoot,
+    "--run-id", runId,
+    "--json",
+  ];
+  const valueFlags = [
+    ["--reviewer", options.reviewer],
+    ["--reviewer-model", options.reviewerModel],
+  ];
+  for (const [flag, value] of valueFlags) {
+    if (value !== undefined && value !== null && String(value).trim() !== "") {
+      args.push(flag, String(value));
+    }
+  }
+  return args;
+}
+
+function childReviewSnapshot(repoRoot, runId) {
+  const record = readManifest(getManifestPath(repoRoot, runId));
+  return {
+    state: record.data?.state || null,
+    rounds: Number(record.data?.review?.rounds || 0),
+    latest_verdict: record.data?.review?.latest_verdict || null,
+  };
+}
+
+function reviewSnapshotAdvanced(before, after) {
+  return after.state !== before.state
+    || Number(after.rounds || 0) > Number(before.rounds || 0)
+    || after.latest_verdict !== before.latest_verdict;
+}
+
+function terminalForFleetReview(state) {
+  return [
+    RUN_STATES.READY_TO_MERGE,
+    RUN_STATES.ESCALATED,
+    RUN_STATES.MERGED,
+    RUN_STATES.CLOSED,
+  ].includes(state);
+}
+
+function childNeedsReview(summaryChild) {
+  return summaryChild.dispatch_status === DISPATCH_STATUS.DISPATCHED
+    && summaryChild.run_id
+    && summaryChild.run_state === RUN_STATES.REVIEW_PENDING;
+}
+
+function spawnReviewForChild({ repoRoot, child, options, activeChildren, isInterrupted }) {
+  return new Promise((resolve) => {
+    if (isInterrupted()) {
+      resolve({ leaf_ref: child.leaf_ref, run_id: child.run_id, status: "skipped_interrupted" });
+      return;
+    }
+    if (!child.run_id || terminalForFleetReview(child.run_state) || !childNeedsReview(child)) {
+      resolve({
+        leaf_ref: child.leaf_ref,
+        run_id: child.run_id,
+        status: "skipped",
+        run_state: child.run_state,
+      });
+      return;
+    }
+
+    let before;
+    try {
+      before = childReviewSnapshot(repoRoot, child.run_id);
+    } catch (error) {
+      resolve({
+        leaf_ref: child.leaf_ref,
+        run_id: child.run_id,
+        status: "review_failed",
+        error: `failed to read child manifest before review: ${error.message}`,
+      });
+      return;
+    }
+
+    const args = buildReviewArgs({ repoRoot, runId: child.run_id, options });
+    const review = spawn(process.execPath, args, {
+      cwd: repoRoot,
+      env: process.env,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+
+    let stdout = "";
+    let stderr = "";
+    let settled = false;
+    activeChildren.set(child.leaf_ref, review);
+    review.stdout.on("data", (chunk) => { stdout += chunk.toString("utf-8"); });
+    review.stderr.on("data", (chunk) => { stderr += chunk.toString("utf-8"); });
+    review.once("error", (error) => {
+      if (settled) return;
+      settled = true;
+      activeChildren.delete(child.leaf_ref);
+      resolve({
+        leaf_ref: child.leaf_ref,
+        run_id: child.run_id,
+        status: "review_failed",
+        error: error.message,
+      });
+    });
+    review.once("close", (code, signal) => {
+      if (settled) return;
+      settled = true;
+      activeChildren.delete(child.leaf_ref);
+
+      let after = null;
+      try {
+        after = childReviewSnapshot(repoRoot, child.run_id);
+      } catch (error) {
+        resolve({
+          leaf_ref: child.leaf_ref,
+          run_id: child.run_id,
+          status: "review_failed",
+          exit_code: code,
+          signal,
+          stderr,
+          error: `failed to read child manifest after review: ${error.message}`,
+        });
+        return;
+      }
+
+      if (!reviewSnapshotAdvanced(before, after)) {
+        resolve({
+          leaf_ref: child.leaf_ref,
+          run_id: child.run_id,
+          status: "review_stalled",
+          exit_code: code,
+          signal,
+          stderr,
+          before,
+          after,
+        });
+        return;
+      }
+
+      resolve({
+        leaf_ref: child.leaf_ref,
+        run_id: child.run_id,
+        status: code === 0 ? "reviewed" : "reviewed_with_child_failure",
+        exit_code: code,
+        signal,
+        stderr,
+        before,
+        after,
+      });
+    });
+  });
 }
 
 function terminateChild(child) {
@@ -673,6 +842,42 @@ async function statusFleet({ repoRoot, fleetId }) {
   return { summary, operator_attention: buildOperatorAttention(summary) };
 }
 
+async function reviewFleet({ repoRoot, fleetId, options, activeChildren = new Map(), isInterrupted = () => false }) {
+  transitionFleetToReviewing(repoRoot, fleetId);
+  const starting = deriveFleetSummary(repoRoot, readFleetManifest(repoRoot, fleetId).data);
+  const reviewableChildren = starting.children.filter(childNeedsReview);
+  const children = await runPool(reviewableChildren, options.parallel, (child) => {
+    return spawnReviewForChild({
+      repoRoot,
+      child,
+      options,
+      activeChildren,
+      isInterrupted,
+    });
+  });
+  const summary = deriveFleetSummary(repoRoot, readFleetManifest(repoRoot, fleetId).data);
+  const operatorAttention = buildOperatorAttention(summary);
+  const failures = children.some((child) => {
+    return child.status !== "reviewed" && child.status !== "skipped";
+  });
+  return {
+    ok: !isInterrupted() && !failures,
+    interrupted: isInterrupted(),
+    fleet_id: fleetId,
+    reviewed_children: children,
+    skipped_children: starting.children
+      .filter((child) => !childNeedsReview(child))
+      .map((child) => ({
+        leaf_ref: child.leaf_ref,
+        run_id: child.run_id,
+        status: "skipped",
+        run_state: child.run_state,
+      })),
+    summary,
+    operator_attention: operatorAttention,
+  };
+}
+
 async function runFleet(options) {
   const repoRoot = getCanonicalRepoRoot(options.repo || ".");
   const fleetId = requireValidFleetId(options.fleetId);
@@ -685,6 +890,39 @@ async function runFleet(options) {
       fleetManifestPath: manifestPath,
       ...(await statusFleet({ repoRoot, fleetId })),
     };
+  }
+
+  if (options.review) {
+    if (!fs.existsSync(manifestPath)) {
+      throw new FleetInputError(`fleet manifest does not exist: ${manifestPath}`);
+    }
+    let interrupted = false;
+    const activeChildren = new Map();
+    const interrupt = () => {
+      interrupted = true;
+      for (const child of activeChildren.values()) terminateChild(child);
+    };
+    if (options.installSignalHandlers) {
+      process.once("SIGINT", interrupt);
+      process.once("SIGTERM", interrupt);
+    }
+    try {
+      return {
+        fleetManifestPath: manifestPath,
+        ...(await reviewFleet({
+          repoRoot,
+          fleetId,
+          options,
+          activeChildren,
+          isInterrupted: () => interrupted,
+        })),
+      };
+    } finally {
+      if (options.installSignalHandlers) {
+        process.removeListener("SIGINT", interrupt);
+        process.removeListener("SIGTERM", interrupt);
+      }
+    }
   }
 
   const leaves = options.leavesFile
@@ -800,6 +1038,9 @@ async function main(argv = process.argv.slice(2)) {
     if (options.status && (options.resume || options.leavesFile || options.dryRun)) {
       throw new FleetInputError("--status is read-only and cannot be combined with --resume, --leaves-file, or --dry-run");
     }
+    if (options.review && (options.resume || options.leavesFile || options.dryRun || options.status)) {
+      throw new FleetInputError("--review cannot be combined with --resume, --leaves-file, --dry-run, or --status");
+    }
     const result = await runFleet({ ...options, installSignalHandlers: true });
     if (options.json) {
       console.log(JSON.stringify(result, null, 2));
@@ -833,6 +1074,7 @@ module.exports = {
   FleetInputError,
   buildDispatchArgs,
   buildOperatorAttention,
+  buildReviewArgs,
   formatStatusText,
   getFleetLeavesStorePath,
   getFleetRuntimePath,
@@ -840,6 +1082,7 @@ module.exports = {
   main,
   parseArgs,
   reconcileFleet,
+  reviewFleet,
   runFleet,
   statusFleet,
 };

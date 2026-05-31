@@ -86,8 +86,9 @@ invisible to both `children[]` and any back-pointer scan. (Codex #5.)
 Every per-child *runtime* fact (state, review status) is still read through the
 child run manifest in `~/.relay/runs/` — the fleet manifest never duplicates it.
 
-- `fleet_state`: `draft → dispatching → dispatched → closed`. Deliberately simple.
-  Phase 1 has no `reviewing`/`merging` because Phase 1 does not review or merge.
+- `fleet_state`: `draft → dispatching → dispatched → reviewing → closed`.
+  Phase 1 shipped through `dispatched`; Phase 2 Sub-PR A adds `reviewing`.
+  `merging` remains deferred to Phase 3.
 - **Fleet summary is computed, not stored.** `fleet_state` is a coarse lifecycle
   marker; the real picture (3 children dispatched, 1 escalated, 1
   pre-manifest-failed) is a *derived summary* over `children[]` + child manifests.
@@ -139,6 +140,12 @@ with existing per-run tools until Phase 2/3 land.
 
 Run `relay-review` per child until each reaches `ready_to_merge` or escalates.
 Adds `reviewing` to `fleet_state`.
+
+Sub-PR A implements `relay-fleet --review` as a single foreground review pass
+over children currently in `review_pending`. It invokes `review-runner.js` as
+subprocesses, skips terminal children, and fails closed if a review subprocess
+exits without advancing the child manifest. Redispatch from
+`changes_requested` remains Sub-PR B.
 
 > **Status (2026-05-15):** Phase 2 (#479) scoped without waiting for a Phase 1
 > dogfood gate. The original "scoped from Phase 1 dogfood" framing assumed
