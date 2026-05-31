@@ -68,6 +68,7 @@ test("live dogfood exposes explicit scenario metadata rows", () => {
     ["probe-opencode", "opencode", "probe", "probe"],
     ["probe-antigravity", "antigravity", "probe", "probe"],
     ["opencode-advisory", "opencode", "advisory_review", "healthy-review"],
+    ["opencode-primary", "opencode", "primary_review", "healthy-review"],
     ["pi-advisory", "pi", "advisory_review", "healthy-review"],
     ["pi-primary", "pi", "primary_review", "healthy-review"],
     ["antigravity-primary", "antigravity", "primary_review", "healthy-review"],
@@ -86,6 +87,8 @@ test("live dogfood exposes explicit scenario metadata rows", () => {
 
   assert.equal(rows.get("antigravity-primary-fail-safe-timeout").healthyPromotion, false);
   assert.equal(rows.get("antigravity-dispatch-fail-safe-noop").healthyPromotion, false);
+  assert.equal(rows.get("opencode-primary").defaultEnabled, false);
+  assert.equal(rows.get("opencode-primary").healthyPromotion, true);
   assert.equal(rows.get("pi-advisory").healthyPromotion, true);
   assert.equal(rows.get("pi-dispatch-canary").healthyPromotion, true);
   assert.equal(rows.get("opencode-dispatch-canary").healthyPromotion, true);
@@ -140,7 +143,7 @@ test("live dogfood dry-run plans default non-dispatch scenarios without invoking
   assert.ok(result.outcomes.every((step) => step.outcome === OUTCOMES.NOT_RUN));
   assert.deepEqual(result.coverage.scenarios.map((scenario) => scenario.name), LIVE_DOGFOOD_SCENARIOS.map((scenario) => scenario.name));
   assert.ok(result.coverage.readiness_exemptions.some((exemption) => (
-    exemption.adapter === "opencode" && exemption.phase === "primary_review"
+    exemption.adapter === "antigravity" && exemption.phase === "advisory_review"
   )));
   assert.ok(result.coverage.scenarios.every((scenario) => typeof scenario.healthyPromotion === "boolean"));
 });
@@ -178,6 +181,19 @@ test("live dogfood parses repeated scenario filters", () => {
   assert.deepEqual(parsed.scenarios, ["probe-pi", "pi-primary"]);
 });
 
+test("live dogfood can target OpenCode primary review without enabling it by default", () => {
+  const repo = tempDir("relay-live-dogfood-repo-");
+  const result = runDogfood({
+    repo,
+    dryRun: true,
+    scenarios: ["opencode-primary"],
+  });
+
+  assert.deepEqual(result.outcomes.map((step) => step.name), ["opencode-primary"]);
+  assert.match(result.outcomes[0].command, /invoke-reviewer-opencode\.js/);
+  assert.match(result.outcomes[0].command, /--phase primary_review/);
+});
+
 test("live dogfood classifies mocked command outcomes and preserves markdown distinctions", () => {
   const repo = tempDir("relay-live-dogfood-repo-");
   const relayHome = tempDir("relay-live-dogfood-home-");
@@ -202,6 +218,7 @@ test("live dogfood classifies mocked command outcomes and preserves markdown dis
       relayHome,
       commandTimeoutMs: 1000,
       piReviewTimeout: "1s",
+      opencodeReviewTimeout: "1s",
       antigravityReviewTimeout: "90s",
       antigravityFailSafeReviewTimeout: "2s",
     }, {
@@ -229,6 +246,7 @@ test("live dogfood classifies mocked command outcomes and preserves markdown dis
   ]);
   assert.equal(calls[0].env.RELAY_HOME, relayHome);
   assert.equal(calls[0].env.RELAY_POLICY_PATH, path.join(relayHome, "policy.json"));
+  assert.equal(calls[3].env.RELAY_OPENCODE_REVIEW_TIMEOUT, "1s");
   assert.equal(calls[4].env.RELAY_PI_REVIEW_TIMEOUT, "1s");
   assert.equal(calls[5].env.RELAY_PI_REVIEW_TIMEOUT, "1s");
   assert.equal(calls[6].env.RELAY_ANTIGRAVITY_REVIEW_TIMEOUT, "90s");
@@ -367,6 +385,7 @@ test("live dogfood defaults use realistic healthy reviewer timeouts and bounded 
 
   assert.equal(defaults.commandTimeoutMs, 300_000);
   assert.equal(defaults.piReviewTimeout, "120s");
+  assert.equal(defaults.opencodeReviewTimeout, "120s");
   assert.equal(defaults.antigravityReviewTimeout, "120s");
   assert.equal(defaults.antigravityFailSafeReviewTimeout, "5s");
   assert.equal(defaults.dispatchCanary, false);
@@ -377,12 +396,14 @@ test("live dogfood defaults use realistic healthy reviewer timeouts and bounded 
     "--dispatch-canary",
     "--dispatch-timeout", "240",
     "--dispatch-branch-prefix", "relay-healthy",
+    "--opencode-review-timeout", "150s",
     "--antigravity-review-timeout", "180s",
     "--antigravity-fail-safe-timeout", "3s",
   ]);
   assert.equal(parsed.dispatchCanary, true);
   assert.equal(parsed.dispatchTimeoutSeconds, 240);
   assert.equal(parsed.dispatchBranchPrefix, "relay-healthy");
+  assert.equal(parsed.opencodeReviewTimeout, "150s");
   assert.equal(parsed.antigravityReviewTimeout, "180s");
   assert.equal(parsed.antigravityFailSafeReviewTimeout, "3s");
 });

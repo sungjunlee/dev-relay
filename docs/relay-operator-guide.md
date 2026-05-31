@@ -137,6 +137,8 @@ node skills/relay-review/scripts/review-runner.js --repo . --run-id <id> --pr <n
 
 OpenCode, Pi, and Antigravity can be used as reviewer roles only when the adapter can represent the phase and route policy allows the model route. OpenCode primary review uses prompt-only read-only plus a dirty-worktree guard; Pi uses a read/grep/find/ls allowlist; Antigravity targets the `agy` CLI and remains fail-safe experimental until healthy live canary evidence exists.
 
+OpenCode review uses a bounded parent-process timeout. Set `RELAY_OPENCODE_REVIEW_TIMEOUT` to a positive duration such as `120s`, `10m`, or `1h`; the default is `1800s`. If an OpenCode review returns empty stdout or times out, first validate the CLI/provider path with a minimal `opencode run -m <model> '<json prompt>'` command before treating the route as healthy.
+
 Pi can be used as dispatch executor or trusted primary reviewer when `pi` is on `PATH` (or `RELAY_PI_BIN` is set for review), authenticated for the selected provider, and route policy allows the model route:
 
 ```bash
@@ -192,7 +194,7 @@ node skills/relay-dispatch/scripts/live-dogfood.js --repo . --json --markdown
 node skills/relay-dispatch/scripts/live-dogfood.js --repo . --dispatch-canary --json
 ```
 
-By default the harness creates a temporary `RELAY_HOME`, writes a scoped route policy there, and runs Pi, OpenCode, and Antigravity probes plus bounded live canaries. Antigravity primary review uses a realistic healthy timeout by default, while `--antigravity-fail-safe-timeout` controls the intentionally short fail-safe timeout canary. Use `--dry-run` to print `not-run` planned steps without invoking live CLIs, `--probe-only` to skip review/dispatch canaries, or repeated `--scenario <name>` filters such as `--scenario pi-primary` or `--scenario pi-advisory` when one adapter needs isolated evidence without waiting on unrelated live canaries.
+By default the harness creates a temporary `RELAY_HOME`, writes a scoped route policy there, and runs Pi, OpenCode, and Antigravity probes plus bounded live canaries. OpenCode and Pi review canaries use realistic healthy timeouts by default; Antigravity primary review does too, while `--antigravity-fail-safe-timeout` controls the intentionally short fail-safe timeout canary. Use `--dry-run` to print `not-run` planned steps without invoking live CLIs, `--probe-only` to skip review/dispatch canaries, or repeated `--scenario <name>` filters such as `--scenario opencode-primary`, `--scenario pi-primary`, or `--scenario pi-advisory` when one adapter needs isolated evidence without waiting on unrelated live canaries.
 
 Add `--dispatch-canary` from a clean worktree to run healthy dispatch canaries for Pi, OpenCode, and Antigravity. Each canary asks for a unique minimal repository change and passes only when dispatch returns `review_pending` with a PR number. The default healthy dispatch timeout is bounded at 180 seconds via `--dispatch-timeout`, and branches use `--dispatch-branch-prefix` with the default `dogfood-dispatch`.
 
