@@ -63,13 +63,12 @@ npx skills add . -g -y
 ### Prerequisites
 
 - [Claude Code](https://claude.ai/code) or [Codex](https://chatgpt.com/codex)
-- Optional: OpenCode CLI for `--executor opencode`, `--reviewer opencode`, or `--advisory-reviewer opencode`; route policy must allow the selected provider/model route.
-- Optional: Pi CLI 0.72.1+ for `--executor pi`, `--reviewer pi`, or `--advisory-reviewer pi` (`RELAY_PI_BIN` may point review to a non-PATH binary; `RELAY_PI_REVIEW_TIMEOUT` sets the primary review parent timeout, default `1800s`)
-- Optional: Google Antigravity CLI `agy` 1.0.2+ for `--executor antigravity`, `--reviewer antigravity`, or `--advisory-reviewer antigravity`. Relay targets the `agy` CLI version track separately from any Antigravity IDE/Desktop app version; reviewer tests may use `RELAY_ANTIGRAVITY_BIN` to point at a non-PATH binary.
-- Optional: Cursor Agent CLI `agent` for `--executor cursor` or `--reviewer cursor` (`RELAY_CURSOR_AGENT_BIN` may point to a non-PATH binary; `RELAY_CURSOR_REVIEW_TIMEOUT` sets the primary review parent timeout, default `1800s`). Add `cursor` to route policy `managed_cli` for slug-only models such as `composer-2.5`.
+- Optional agent harness CLIs for `opencode`, `pi`, `antigravity`, or `cursor` when selecting those adapters; route policy must allow the selected provider/model route.
 - [`gh` CLI](https://cli.github.com/) authenticated with `gh auth login`
 - Git 2.20+
 - Node.js 18+
+
+Adapter minimum versions, binary overrides, timeouts, capability gates, and provider-specific limits live in [skills/relay-dispatch/references/agent-adapter-platform.md](skills/relay-dispatch/references/agent-adapter-platform.md).
 
 ## Configure Routes
 
