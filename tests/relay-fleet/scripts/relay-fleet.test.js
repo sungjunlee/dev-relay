@@ -90,6 +90,49 @@ function readJsonLines(filePath) {
     .map((line) => JSON.parse(line));
 }
 
+function writeChildRun(repoRoot, {
+  runId,
+  branch,
+  issueNumber,
+  leafId,
+  fleetId,
+  state = RUN_STATES.REVIEW_PENDING,
+}) {
+  fs.mkdirSync(getRunDir(repoRoot, runId), { recursive: true });
+  let manifest = createManifestSkeleton({
+    repoRoot,
+    runId,
+    branch,
+    baseBranch: "main",
+    issueNumber,
+    worktreePath: path.join(repoRoot, "wt", runId),
+    fleetId,
+    leafId,
+  });
+  const rubricPath = path.join(getRunDir(repoRoot, runId), "rubric.yaml");
+  fs.writeFileSync(rubricPath, "rubric:\n  size_class: S\n", "utf-8");
+  manifest = {
+    ...manifest,
+    anchor: {
+      ...(manifest.anchor || {}),
+      rubric_path: "rubric.yaml",
+    },
+  };
+  manifest = updateManifestState(manifest, RUN_STATES.DISPATCHED, "await_dispatch_result");
+  if (state === RUN_STATES.REVIEW_PENDING) {
+    manifest = updateManifestState(manifest, RUN_STATES.REVIEW_PENDING, "await_review");
+  } else if (state === RUN_STATES.READY_TO_MERGE) {
+    manifest = updateManifestState(manifest, RUN_STATES.REVIEW_PENDING, "await_review");
+    manifest = updateManifestState(manifest, RUN_STATES.READY_TO_MERGE, "ready");
+  } else if (state === RUN_STATES.ESCALATED) {
+    manifest = updateManifestState(manifest, RUN_STATES.ESCALATED, "escalated");
+  } else if (state === RUN_STATES.CLOSED) {
+    manifest = updateManifestState(manifest, RUN_STATES.CLOSED, "closed");
+  }
+  writeManifest(getManifestPath(repoRoot, runId), manifest);
+  return runId;
+}
+
 function waitFor(predicate, { timeoutMs = 3000, intervalMs = 25 } = {}) {
   const started = Date.now();
   return new Promise((resolve, reject) => {
@@ -240,6 +283,72 @@ main().catch((error) => {
   process.stderr.write(String(error.stack || error.message || error) + "\\n");
   process.exit(1);
 });
+`, "utf-8");
+  fs.chmodSync(scriptPath, 0o755);
+  return scriptPath;
+}
+
+function writeFakeReviewScript(tmpDir) {
+  const scriptPath = path.join(tmpDir, "fake-review.js");
+  fs.writeFileSync(scriptPath, `#!/usr/bin/env node
+const fs = require("node:fs");
+const path = require("node:path");
+
+const sourceRoot = process.env.RELAY_SOURCE_ROOT;
+const {
+  getManifestPath,
+} = require(path.join(sourceRoot, "skills", "relay-dispatch", "scripts", "manifest", "paths"));
+const {
+  readManifest,
+  writeManifest,
+} = require(path.join(sourceRoot, "skills", "relay-dispatch", "scripts", "manifest", "store"));
+const {
+  STATES,
+  updateManifestState,
+} = require(path.join(sourceRoot, "skills", "relay-dispatch", "scripts", "manifest", "lifecycle"));
+
+const args = process.argv.slice(2);
+function get(flag, fallback = null) {
+  const index = args.indexOf(flag);
+  return index === -1 ? fallback : (args[index + 1] || fallback);
+}
+function appendLog(record) {
+  if (!process.env.FAKE_REVIEW_LOG) return;
+  fs.appendFileSync(process.env.FAKE_REVIEW_LOG, JSON.stringify(record) + "\\n", "utf-8");
+}
+const repoRoot = get("--repo");
+const runId = get("--run-id");
+const config = process.env.FAKE_REVIEW_CONFIG
+  ? JSON.parse(fs.readFileSync(process.env.FAKE_REVIEW_CONFIG, "utf-8"))
+  : {};
+const plan = config[runId] || {};
+appendLog({ event: "spawn", runId, args });
+const manifestPath = getManifestPath(repoRoot, runId);
+const record = readManifest(manifestPath);
+let manifest = record.data;
+if (!plan.stall) {
+  const verdict = plan.verdict || "lgtm";
+  if (!plan.omit_review_fields) {
+    manifest = {
+      ...manifest,
+      review: {
+        ...(manifest.review || {}),
+        rounds: Number(manifest.review?.rounds || 0) + 1,
+        latest_verdict: verdict,
+      },
+    };
+  }
+  if (plan.to_state === "ready_to_merge") {
+    manifest = updateManifestState(manifest, STATES.READY_TO_MERGE, "fleet_fake_review_pass");
+  } else if (plan.to_state === "escalated") {
+    manifest = updateManifestState(manifest, STATES.ESCALATED, "fleet_fake_review_escalated");
+  } else if (plan.to_state === "changes_requested") {
+    manifest = updateManifestState(manifest, STATES.CHANGES_REQUESTED, "fleet_fake_review_changes_requested");
+  }
+  writeManifest(manifestPath, manifest, record.body);
+}
+process.stdout.write(JSON.stringify({ ok: true, runId, stalled: Boolean(plan.stall) }) + "\\n");
+process.exit(plan.exit_code || 0);
 `, "utf-8");
   fs.chmodSync(scriptPath, 0o755);
   return scriptPath;
@@ -417,7 +526,7 @@ test("relay-fleet resume re-adopts orphan child via fleet_id back-pointer", () =
     "--json",
   ], { relayHome });
 
-  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.status, 0, `${result.stderr}\n${result.stdout}`);
   const child = readFleetManifest(repoRoot, "fleet-orphan").data.children[0];
   assert.equal(child.run_id, runId);
   assert.equal(child.dispatch_status, DISPATCH_STATUS.DISPATCHED);
@@ -553,12 +662,152 @@ test("relay-fleet --dry-run fans out to dispatch dry-run without writing a fleet
     env: { FAKE_DISPATCH_LOG: logPath },
   });
 
-  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.status, 0, `${result.stderr}\n${result.stdout}`);
   const payload = JSON.parse(result.stdout);
   assert.equal(payload.dryRun, true);
   assert.equal(payload.children.length, 2);
   assert.equal(fs.existsSync(getFleetManifestPath(repoRoot, "fleet-dry")), false);
   assert.equal(readJsonLines(logPath).every((entry) => entry.dryRun && entry.fleetId === "fleet-dry"), true);
+});
+
+test("relay-fleet --review fans out foreground review-runner once per review_pending child", () => {
+  const { relayHome, repoRoot } = setupRepo("relay-fleet-review-");
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "fleet-review-fake-"));
+  const reviewScript = writeFakeReviewScript(tmpDir);
+  const logPath = path.join(tmpDir, "review.log");
+  const configPath = path.join(tmpDir, "review-config.json");
+  const runA = "issue-520-20260515010101000-a1b2c3d4";
+  const runB = "issue-521-20260515010101000-a1b2c3d4";
+  writeChildRun(repoRoot, {
+    runId: runA,
+    branch: "issue-520-leaf-a",
+    issueNumber: 520,
+    leafId: "leaf-a",
+    fleetId: "fleet-review",
+    state: RUN_STATES.REVIEW_PENDING,
+  });
+  writeChildRun(repoRoot, {
+    runId: runB,
+    branch: "issue-521-leaf-b",
+    issueNumber: 521,
+    leafId: "leaf-b",
+    fleetId: "fleet-review",
+    state: RUN_STATES.READY_TO_MERGE,
+  });
+  writeJson(configPath, { [runA]: { to_state: "ready_to_merge" } });
+  createFleetManifest(repoRoot, {
+    fleetId: "fleet-review",
+    children: [
+      { leaf_ref: "leaf-a", run_id: runA, dispatch_status: DISPATCH_STATUS.DISPATCHED },
+      { leaf_ref: "leaf-b", run_id: runB, dispatch_status: DISPATCH_STATUS.DISPATCHED },
+    ],
+  });
+  let fleet = readFleetManifest(repoRoot, "fleet-review").data;
+  fleet.fleet_state = FLEET_STATES.DISPATCHED;
+  writeFleetManifest(repoRoot, fleet);
+
+  const result = runFleet([
+    "--repo", repoRoot,
+    "--fleet-id", "fleet-review",
+    "--review",
+    "--review-script", reviewScript,
+    "--json",
+  ], {
+    relayHome,
+    env: {
+      FAKE_REVIEW_CONFIG: configPath,
+      FAKE_REVIEW_LOG: logPath,
+    },
+  });
+
+  assert.equal(result.status, 0, `${result.stderr}\n${result.stdout}`);
+  const payload = JSON.parse(result.stdout);
+  assert.equal(payload.summary.fleet_state, FLEET_STATES.REVIEWING);
+  assert.equal(payload.reviewed_children.length, 1);
+  assert.equal(payload.reviewed_children[0].run_id, runA);
+  assert.equal(payload.skipped_children.some((child) => child.run_id === runB && child.run_state === RUN_STATES.READY_TO_MERGE), true);
+  assert.equal(readJsonLines(logPath).length, 1);
+  assert.equal(readManifest(getManifestPath(repoRoot, runA)).data.state, RUN_STATES.READY_TO_MERGE);
+});
+
+test("relay-fleet --review fails closed when review-runner exits without advancing manifest", () => {
+  const { relayHome, repoRoot } = setupRepo("relay-fleet-review-stall-");
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "fleet-review-stall-fake-"));
+  const reviewScript = writeFakeReviewScript(tmpDir);
+  const configPath = path.join(tmpDir, "review-config.json");
+  const runId = "issue-522-20260515010101000-a1b2c3d4";
+  writeChildRun(repoRoot, {
+    runId,
+    branch: "issue-522-leaf-a",
+    issueNumber: 522,
+    leafId: "leaf-a",
+    fleetId: "fleet-review-stall",
+    state: RUN_STATES.REVIEW_PENDING,
+  });
+  writeJson(configPath, { [runId]: { stall: true } });
+  createFleetManifest(repoRoot, {
+    fleetId: "fleet-review-stall",
+    children: [{ leaf_ref: "leaf-a", run_id: runId, dispatch_status: DISPATCH_STATUS.DISPATCHED }],
+  });
+  let fleet = readFleetManifest(repoRoot, "fleet-review-stall").data;
+  fleet.fleet_state = FLEET_STATES.DISPATCHED;
+  writeFleetManifest(repoRoot, fleet);
+
+  const result = runFleet([
+    "--repo", repoRoot,
+    "--fleet-id", "fleet-review-stall",
+    "--review",
+    "--review-script", reviewScript,
+    "--json",
+  ], {
+    relayHome,
+    env: { FAKE_REVIEW_CONFIG: configPath },
+  });
+
+  assert.notEqual(result.status, 0);
+  const payload = JSON.parse(result.stdout);
+  assert.equal(payload.reviewed_children[0].status, "review_stalled");
+  assert.equal(readManifest(getManifestPath(repoRoot, runId)).data.state, RUN_STATES.REVIEW_PENDING);
+});
+
+test("relay-fleet --review treats child state transitions as manifest progress", () => {
+  const { relayHome, repoRoot } = setupRepo("relay-fleet-review-state-");
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "fleet-review-state-fake-"));
+  const reviewScript = writeFakeReviewScript(tmpDir);
+  const configPath = path.join(tmpDir, "review-config.json");
+  const runId = "issue-523-20260515010101000-a1b2c3d4";
+  writeChildRun(repoRoot, {
+    runId,
+    branch: "issue-523-leaf-a",
+    issueNumber: 523,
+    leafId: "leaf-a",
+    fleetId: "fleet-review-state",
+    state: RUN_STATES.REVIEW_PENDING,
+  });
+  writeJson(configPath, { [runId]: { to_state: "ready_to_merge", omit_review_fields: true } });
+  createFleetManifest(repoRoot, {
+    fleetId: "fleet-review-state",
+    children: [{ leaf_ref: "leaf-a", run_id: runId, dispatch_status: DISPATCH_STATUS.DISPATCHED }],
+  });
+  let fleet = readFleetManifest(repoRoot, "fleet-review-state").data;
+  fleet.fleet_state = FLEET_STATES.DISPATCHED;
+  writeFleetManifest(repoRoot, fleet);
+
+  const result = runFleet([
+    "--repo", repoRoot,
+    "--fleet-id", "fleet-review-state",
+    "--review",
+    "--review-script", reviewScript,
+    "--json",
+  ], {
+    relayHome,
+    env: { FAKE_REVIEW_CONFIG: configPath },
+  });
+
+  assert.equal(result.status, 0, `${result.stderr}\n${result.stdout}`);
+  const payload = JSON.parse(result.stdout);
+  assert.equal(payload.reviewed_children[0].status, "reviewed");
+  assert.equal(readManifest(getManifestPath(repoRoot, runId)).data.state, RUN_STATES.READY_TO_MERGE);
 });
 
 test("relay-fleet --status prints derived summary without writing the fleet manifest", () => {
