@@ -50,6 +50,19 @@ function parseProvider(model) {
   return model.slice(0, idx);
 }
 
+function buildWorktreeBoundaryPrompt(wtPath, prompt) {
+  return [
+    "[RELAY WORKTREE BOUNDARY]",
+    `Repository worktree: ${wtPath}`,
+    `Before doing anything, run: cd ${wtPath}`,
+    "Create, edit, git add, git commit, and run git status only from that repository worktree.",
+    "Do not create, edit, git add, git commit, or report source files under ~/.gemini, scratch directories, or any path outside the repository worktree.",
+    "If a tool starts elsewhere, first change directory to the repository worktree before touching files.",
+    "",
+    prompt,
+  ].join("\n");
+}
+
 function validateExecutionMode({ sandbox, networkAccess }) {
   const warnings = [];
   if (sandbox !== "workspace-write") {
@@ -68,7 +81,7 @@ function validateExecutionMode({ sandbox, networkAccess }) {
 
 function buildExecCommand({ wtPath, prompt, sandbox, timeoutSeconds }) {
   const cmd = "agy";
-  const args = ["--prompt", prompt, "--print-timeout", formatPrintTimeout(timeoutSeconds)];
+  const args = ["--prompt", buildWorktreeBoundaryPrompt(wtPath, prompt), "--print-timeout", formatPrintTimeout(timeoutSeconds)];
   let codexGitCommonDir = null;
   if (sandbox === "workspace-write") {
     args.push("--sandbox");
@@ -149,5 +162,6 @@ module.exports = {
   register,
   probe,
   parseProvider,
+  buildWorktreeBoundaryPrompt,
   formatPrintTimeout,
 };

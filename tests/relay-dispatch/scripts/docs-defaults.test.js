@@ -338,7 +338,7 @@ test("live dogfood metadata covers readiness matrix roles or explains exemptions
   }
 });
 
-test("operator-facing Antigravity docs keep live support marked fail-safe experimental", () => {
+test("operator-facing Antigravity docs separate dispatch evidence from reviewer blockers", () => {
   const operatorDocs = [
     readRepoFile("README.md"),
     readRepoFile("docs/relay-operator-guide.md"),
@@ -346,7 +346,9 @@ test("operator-facing Antigravity docs keep live support marked fail-safe experi
   ].join("\n");
 
   assert.match(operatorDocs, /Antigravity[^.\n]*(?:fail-safe|fail safe)[^.\n]*experimental/i);
-  assert.match(operatorDocs, /healthy live canary passes/i);
+  assert.match(operatorDocs, /Antigravity dispatch[^.\n]*route-specific healthy live canary evidence/i);
+  assert.match(operatorDocs, /Antigravity primary and advisory review remain fail-safe experimental/i);
+  assert.match(operatorDocs, /healthy live reviewer canaries pass/i);
   assert.match(operatorDocs, /strict verdict JSON within timeout/i);
   assert.match(operatorDocs, /minimal repository change[^.\n]*recoverable\/reviewable state/i);
   assert.match(operatorDocs, /documented CLI limitation/i);

@@ -114,8 +114,11 @@ test("agent adapter descriptors expose structured capabilities and the executor 
   assert.equal(antigravity.capabilities.structuredOutput.dispatch, "stdout-copied-result-file");
   assert.equal(antigravity.capabilities.structuredOutput.primaryReview, "json-text");
   assert.equal(antigravity.capabilities.structuredOutput.advisoryReview, "json-text");
-  assert.equal(antigravity.capabilities.liveSupport.status, "fail-safe-experimental");
-  assert.match(antigravity.capabilities.liveSupport.until, /healthy live canary/i);
+  assert.equal(antigravity.capabilities.liveSupport.status, "role-specific");
+  assert.match(antigravity.capabilities.liveSupport.dispatch, /healthy dispatch canary evidence/i);
+  assert.match(antigravity.capabilities.liveSupport.primaryReview, /fail-safe-experimental/i);
+  assert.match(antigravity.capabilities.liveSupport.advisoryReview, /fail-safe-experimental/i);
+  assert.match(antigravity.capabilities.liveSupport.until, /healthy live reviewer canaries/i);
   assert.match(antigravity.capabilities.liveSupport.healthyCriteria.primaryReview, /strict verdict JSON/i);
   assert.match(antigravity.capabilities.liveSupport.healthyCriteria.dispatch, /recoverable\/reviewable state/i);
   assert.match(antigravity.capabilities.liveSupport.healthyCriteria.cliLimitation, /documented CLI limitation/i);
