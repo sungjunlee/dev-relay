@@ -1,6 +1,6 @@
 ---
 name: relay-fleet
-description: Fan out already-planned relay leaves into parallel child dispatches, resume crashed fleet dispatch, and print fleet status.
+description: Fan out already-planned relay leaves into parallel child dispatches, review child runs, resume crashed fleet dispatch, and print fleet status.
 compatibility: Requires git, Node.js 18+, and the sibling relay-dispatch skill.
 argument-hint: --fleet-id <id> --leaves-file <path>
 metadata:
@@ -10,13 +10,14 @@ metadata:
 ## Inputs
 - Env: optional `RELAY_SKILL_ROOT` defaults to `skills`.
 - Files: leaves JSON passed by `--leaves-file`, child prompt/rubric/Done Criteria files, and fleet/child run manifests under `~/.relay/runs/`.
-- Sibling scripts: `${RELAY_SKILL_ROOT:-skills}/relay-fleet/scripts/relay-fleet.js`, `${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/dispatch.js`.
+- Sibling scripts: `${RELAY_SKILL_ROOT:-skills}/relay-fleet/scripts/relay-fleet.js`, `${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/dispatch.js`, `${RELAY_SKILL_ROOT:-skills}/relay-review/scripts/review-runner.js`.
 
 # relay-fleet
 
 ## Use when
 
 - Fanning out already planned relay leaves into parallel child dispatches
+- Running one foreground review pass per review-ready child in a dispatched fleet
 - Resuming a crashed fleet dispatch from persisted child/fleet state
 - Printing read-only aggregate status for a fleet
 
@@ -25,7 +26,7 @@ metadata:
 - Decomposing raw or ambiguous requests into leaves — use `relay-ready`
 - Authoring per-leaf rubrics or dispatch prompts — use `relay-plan`
 - Dispatching a single task or run — use `relay-dispatch`
-- Reviewing child PRs — use `relay-review`
+- Reviewing one standalone child PR — use `relay-review`
 
 Run Phase 1 multi-leaf orchestration after `relay-ready` and `relay-plan` have already produced leaf artifacts. It only fans out prepared leaf contracts to `relay-dispatch`, records crash-safe fleet progress, and reports aggregate status.
 
@@ -63,6 +64,15 @@ node "${RELAY_SKILL_ROOT:-skills}/relay-fleet/scripts/relay-fleet.js" \
   --resume
 ```
 
+Run one review pass for each child currently in `review_pending`:
+
+```bash
+node "${RELAY_SKILL_ROOT:-skills}/relay-fleet/scripts/relay-fleet.js" \
+  --repo . \
+  --fleet-id fleet-481 \
+  --review
+```
+
 Read-only aggregate status:
 
 ```bash
@@ -86,6 +96,7 @@ node "${RELAY_SKILL_ROOT:-skills}/relay-fleet/scripts/relay-fleet.js" \
 ## Behavior
 
 - The fleet script invokes `skills/relay-dispatch/scripts/dispatch.js` as a subprocess once per leaf and always passes `--fleet-id`.
+- `--review` invokes `skills/relay-review/scripts/review-runner.js` as foreground subprocesses for children already in `review_pending`; terminal children are skipped.
 - Each child dispatch owns worktree creation, in-flight run checks, executor invocation, and child run manifest writes.
 - Fleet issue locks are checked before each child spawn; `dispatch.js --fleet-id` performs the durable lock during the actual child run.
 - `--resume` reconciles both directions: it re-adopts child run manifests whose `fleet_id` points back to this fleet, and it marks no-manifest interrupted children as `dispatch_failed_pre_manifest` so they can be retried from the persisted leaf store.

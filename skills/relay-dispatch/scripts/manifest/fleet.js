@@ -21,13 +21,15 @@ const STATES = Object.freeze({
   DRAFT: "draft",
   DISPATCHING: "dispatching",
   DISPATCHED: "dispatched",
+  REVIEWING: "reviewing",
   CLOSED: "closed",
 });
 
 const ALLOWED_TRANSITIONS = Object.freeze({
   [STATES.DRAFT]: new Set([STATES.DISPATCHING]),
   [STATES.DISPATCHING]: new Set([STATES.DISPATCHED]),
-  [STATES.DISPATCHED]: new Set([STATES.CLOSED]),
+  [STATES.DISPATCHED]: new Set([STATES.REVIEWING, STATES.CLOSED]),
+  [STATES.REVIEWING]: new Set([STATES.REVIEWING, STATES.CLOSED]),
   [STATES.CLOSED]: new Set(),
 });
 
