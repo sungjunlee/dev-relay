@@ -1,6 +1,7 @@
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
+const { getProjectPolicyPath, looksLikeGitRepo } = require("./manifest/paths");
 
 const DEFAULT_POLICY_FILE = "policy.json";
 const REPO_POLICY_FILE = path.join(".relay", "policy.json");
@@ -281,29 +282,33 @@ function routeEntryCovers(baseEntry, candidateEntry) {
   );
 }
 
-function ensureRepoPolicyNarrows(base, override) {
+function ensurePolicyNarrows(base, override, {
+  reason = "repo_policy_widens_global_policy",
+  subject = "repo relay policy",
+  baseName = "global policy",
+} = {}) {
   const baseManaged = new Set(base.managed_cli);
   for (const actor of override.managed_cli) {
     if (!baseManaged.has(actor)) {
       throw new RelayPolicyError(
-        "repo_policy_widens_global_policy",
-        `repo relay policy widens global policy: managed_cli adds ${actor}`
+        reason,
+        `${subject} widens ${baseName}: managed_cli adds ${actor}`
       );
     }
   }
 
   if (base.deny_unknown_model_routes && !override.deny_unknown_model_routes) {
     throw new RelayPolicyError(
-      "repo_policy_widens_global_policy",
-      "repo relay policy widens global policy: deny_unknown_model_routes cannot change from true to false"
+      reason,
+      `${subject} widens ${baseName}: deny_unknown_model_routes cannot change from true to false`
     );
   }
 
   for (const candidate of override.allowed_model_routes) {
     if (!base.allowed_model_routes.some((entry) => routeEntryCovers(entry, candidate))) {
       throw new RelayPolicyError(
-        "repo_policy_widens_global_policy",
-        `repo relay policy widens global policy: allowed_model_routes adds or widens ${candidate.route}`
+        reason,
+        `${subject} widens ${baseName}: allowed_model_routes adds or widens ${candidate.route}`
       );
     }
   }
@@ -311,17 +316,35 @@ function ensureRepoPolicyNarrows(base, override) {
   for (const requiredDeny of base.denied_model_routes) {
     if (!override.denied_model_routes.some((entry) => routeEntryCovers(entry, requiredDeny))) {
       throw new RelayPolicyError(
-        "repo_policy_widens_global_policy",
-        `repo relay policy widens global policy: denied_model_routes removes ${requiredDeny.route}`
+        reason,
+        `${subject} widens ${baseName}: denied_model_routes removes ${requiredDeny.route}`
       );
     }
   }
 }
 
-function mergeRelayPolicies(base, override, { baseLabel = "global policy", overrideLabel = "repo policy" } = {}) {
+function ensureRepoPolicyNarrows(base, override) {
+  ensurePolicyNarrows(base, override, {
+    reason: "repo_policy_widens_global_policy",
+    subject: "repo relay policy",
+    baseName: "global policy",
+  });
+}
+
+function mergeRelayPolicies(base, override, {
+  baseLabel = "global policy",
+  overrideLabel = "repo policy",
+  wideningReason = "repo_policy_widens_global_policy",
+  wideningSubject = "repo relay policy",
+  wideningBaseName = "global policy",
+} = {}) {
   const normalizedBase = validateRelayPolicy(base, baseLabel);
   const normalizedOverride = validateRelayPolicy(override, overrideLabel);
-  ensureRepoPolicyNarrows(normalizedBase, normalizedOverride);
+  ensurePolicyNarrows(normalizedBase, normalizedOverride, {
+    reason: wideningReason,
+    subject: wideningSubject,
+    baseName: wideningBaseName,
+  });
   return normalizedOverride;
 }
 
@@ -329,12 +352,23 @@ function resolveRepoPolicyPath(repoRoot) {
   return repoRoot ? path.join(repoRoot, REPO_POLICY_FILE) : null;
 }
 
+function resolveProjectPolicyPath(repoRoot, relayHome) {
+  if (!repoRoot || !looksLikeGitRepo(repoRoot)) return null;
+  try {
+    return getProjectPolicyPath(repoRoot, { relayHome });
+  } catch {
+    return null;
+  }
+}
+
 function loadRelayPolicy(options = {}) {
   const globalPath = options.globalPath || resolveRelayPolicyPath({ relayHome: options.relayHome });
   const repoPath = options.repoPolicyPath || resolveRepoPolicyPath(options.repoRoot);
+  const projectPath = options.projectPolicyPath || resolveProjectPolicyPath(options.repoRoot, options.relayHome);
   const sources = {
     global: globalPath,
     repo: repoPath,
+    project: projectPath,
   };
 
   let policy;
@@ -380,6 +414,34 @@ function loadRelayPolicy(options = {}) {
       status: "error",
       policy: null,
       errors: [policyError(repoPath || "injected repo policy", error)],
+      sources,
+    };
+  }
+
+  try {
+    let projectPolicy = null;
+    if (options.projectPolicy !== undefined) {
+      projectPolicy = options.projectPolicy;
+    } else if (projectPath && fs.existsSync(projectPath)) {
+      projectPolicy = readJsonFile(projectPath);
+    }
+
+    if (projectPolicy !== null) {
+      policy = mergeRelayPolicies(policy, projectPolicy, {
+        baseLabel: "effective policy before project policy",
+        overrideLabel: options.projectSourceLabel || projectPath || "injected project policy",
+        wideningReason: "project_policy_widens_effective_policy",
+        wideningSubject: "project relay policy",
+        wideningBaseName: "effective policy",
+      });
+      status = "ok";
+    }
+  } catch (error) {
+    return {
+      ok: false,
+      status: "error",
+      policy: null,
+      errors: [policyError(projectPath || "injected project policy", error)],
       sources,
     };
   }

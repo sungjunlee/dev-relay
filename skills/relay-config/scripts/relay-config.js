@@ -6,6 +6,7 @@ const path = require("path");
 const { spawnSync } = require("child_process");
 
 const CORE_SCRIPT = path.resolve(__dirname, "..", "..", "relay-dispatch", "scripts", "relay-config.js");
+const { loadProjectConfig } = require("../../relay-dispatch/scripts/project-config");
 const VALID_PROFILES = new Set(["company", "personal"]);
 const VALID_PHASES = new Set(["dispatch", "review", "advisory_review", "sidecar"]);
 const REVIEWER_PHASES = new Set(["review", "advisory_review"]);
@@ -83,12 +84,14 @@ function inspect(jsonOut) {
   const policy = parseJsonOutput(showResult, "show");
   const doctor = parseJsonOutput(doctorResult, "doctor");
   const configPath = executorsConfigPath();
+  const projectConfig = loadProjectConfig({ repoRoot: process.cwd(), relayHome: relayHome() });
   const ok = showResult.status === 0 && doctorResult.status === 0;
 
   const output = {
     ok,
     policy,
     doctor,
+    projectConfig,
     executorsConfig: {
       path: configPath,
       exists: fs.existsSync(configPath),
@@ -104,6 +107,7 @@ function inspect(jsonOut) {
   console.log(`policy status: ${policy.status || "unknown"}`);
   if (policy.sources?.global) console.log(`global policy: ${policy.sources.global}`);
   if (policy.sources?.repo) console.log(`repo policy: ${policy.sources.repo}`);
+  console.log(`project config: ${projectConfig.status} at ${projectConfig.path || "(unresolved)"}`);
   console.log(`executors config: ${output.executorsConfig.exists ? "present" : "missing"} at ${configPath}`);
   if (Array.isArray(doctor.tools)) {
     for (const tool of doctor.tools) {

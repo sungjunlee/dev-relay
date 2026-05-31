@@ -328,6 +328,7 @@ function writePromptFiles(relayHome, options = {}) {
     const canaryLine = `relay live dogfood dispatch canary ${executor} ${dispatchStamp}`;
     const promptFile = path.join(promptDir, `${executor}-dispatch-canary-prompt.md`);
     const rubricFile = path.join(promptDir, `${executor}-dispatch-canary-rubric.yaml`);
+    const routeIntentFile = path.join(promptDir, `${executor}-dispatch-canary-route-intent.json`);
     fs.writeFileSync(promptFile, [
       `Create or update ${canaryFile} with exactly one line:`,
       canaryLine,
@@ -341,7 +342,11 @@ function writePromptFiles(relayHome, options = {}) {
       "    weight: 1",
       "",
     ].join("\n"), "utf-8");
-    dispatchCanaries[executor] = { promptFile, rubricFile, canaryFile, canaryLine };
+    fs.writeFileSync(routeIntentFile, `${JSON.stringify({
+      dispatch: { executor, model: modelForAdapter(options, executor) },
+      review: { reviewer: "codex" },
+    }, null, 2)}\n`, "utf-8");
+    dispatchCanaries[executor] = { promptFile, rubricFile, routeIntentFile, canaryFile, canaryLine };
   }
 
   return { advisoryPrompt, primaryPrompt, rubric, dispatchCanaries, dispatchStamp };
@@ -487,19 +492,23 @@ function classifyAntigravityDispatch(result) {
   return classifyHealthyDispatch(result);
 }
 
-function buildDispatchCommand({ node, repo, branch, executor, model, promptFile, rubricFile, timeoutSeconds }) {
-  return [
+function buildDispatchCommand({ node, repo, branch, executor, model, routeIntentFile, promptFile, rubricFile, timeoutSeconds }) {
+  const command = [
     node,
     "skills/relay-dispatch/scripts/dispatch.js",
     repo,
     "-b", branch,
     "--prompt-file", promptFile,
-    "--executor", executor,
-    "--model", model,
     "--rubric-file", rubricFile,
     "--timeout", String(timeoutSeconds),
     "--json",
   ];
+  if (routeIntentFile) {
+    command.splice(command.length - 1, 0, "--route-intent-file", routeIntentFile);
+  } else {
+    command.splice(command.length - 1, 0, "--executor", executor, "--model", model);
+  }
+  return command;
 }
 
 const CLASSIFIER_BY_ID = Object.freeze({
@@ -583,6 +592,7 @@ function buildHealthyDispatchScenarioCommand({ node, repo, prompts, options, sce
     branch: `${options.dispatchBranchPrefix}-${scenario.adapter}-${prompts.dispatchStamp}`,
     executor: scenario.adapter,
     model: modelForAdapter(options, scenario.adapter),
+    routeIntentFile: canary.routeIntentFile,
     promptFile: canary.promptFile,
     rubricFile: canary.rubricFile,
     timeoutSeconds: options.dispatchTimeoutSeconds,

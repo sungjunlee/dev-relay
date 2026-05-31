@@ -8,6 +8,9 @@ const path = require("path");
 const {
   createRunId,
   getManifestPath,
+  getProjectConfigPath,
+  getProjectDir,
+  getProjectsBase,
   validateManifestPaths,
   validateRunId,
 } = require("../../../../skills/relay-dispatch/scripts/manifest/paths");
@@ -26,6 +29,26 @@ test("manifest/paths validateRunId accepts createRunId output", () => {
   const result = validateRunId(runId);
   assert.equal(result.valid, true);
   assert.equal(result.runId, runId);
+});
+
+test("manifest/paths resolves project config under RELAY_HOME projects by repo slug", () => {
+  const previousRelayHome = process.env.RELAY_HOME;
+  const relayHome = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-project-paths-repo-"));
+  initGitRepo(repoRoot);
+  try {
+    process.env.RELAY_HOME = relayHome;
+
+    assert.equal(getProjectsBase(), path.join(relayHome, "projects"));
+    assert.match(getProjectDir(repoRoot), new RegExp(`^${relayHome.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/projects/${path.basename(repoRoot).toLowerCase()}-[a-f0-9]{8}$`));
+    assert.equal(getProjectConfigPath(repoRoot), path.join(getProjectDir(repoRoot), "project.json"));
+  } finally {
+    if (previousRelayHome === undefined) {
+      delete process.env.RELAY_HOME;
+    } else {
+      process.env.RELAY_HOME = previousRelayHome;
+    }
+  }
 });
 
 test("manifest/paths validateManifestPaths rejects manifest-path mismatches", () => {

@@ -90,6 +90,7 @@ const {
   createRunId,
   ensureRunLayout,
   getManifestPath,
+  getRoutePlanPath,
   getRunDir,
   inferIssueNumber,
   looksLikeGitRepo,
@@ -139,7 +140,7 @@ const {
   buildPolicyGateFailureEnvelope,
 } = require("./relay-policy-gate");
 const { loadRelayPolicy } = require("./relay-policy");
-const { resolveRoutingDecision } = require("./relay-routing");
+const { loadProjectRoutes, resolveRouteIntent, resolveRoutingDecision } = require("./relay-routing");
 const { classifyRepositoryDirt, formatRuntimeMetadataDirt } = require("./runtime-dirt");
 
 // ---------------------------------------------------------------------------
@@ -150,7 +151,7 @@ const args = process.argv.slice(2);
 
 const KNOWN_FLAGS = [
   "--branch", "-b", "--run-id", "--manifest", "--prompt", "-p", "--prompt-file", "--executor", "-e",
-  "--model", "-m", "--model-hints", "--sandbox", "--network-access", "--copy", "--timeout", "--reasoning", "--rubric-file", "--test-command", "--rubric-grandfathered",
+  "--model", "-m", "--model-hints", "--route-intent-file", "--sandbox", "--network-access", "--copy", "--timeout", "--reasoning", "--rubric-file", "--test-command", "--rubric-grandfathered",
   "--request-id", "--leaf-id", "--fleet-id", "--done-criteria-file", "--review-assurance", "--tags",
   "--register", "--no-cleanup", "--auto-recover-commit", "--no-auto-recover-commit", "--allow-conflicting-run", "--dry-run", "--json", "--help", "-h",
 ];
@@ -172,6 +173,7 @@ if (!args.length || hasCliFlag(["--help", "-h"])) {
   console.log(`  --executor, -e     ${modeLabel("--executor")} Executor: ${listExecutors().join(", ")} (default: codex)`);
   console.log(`  --model, -m        ${modeLabel("--model")} Model override`);
   console.log(`  --model-hints      ${modeLabel("--model-hints")} Persist per-phase model hints (phase=model,...)`);
+  console.log(`  --route-intent-file ${modeLabel("--route-intent-file")} Read one-off run route intent JSON`);
   console.log(`  --sandbox          ${modeLabel("--sandbox")} workspace-write | read-only (default: workspace-write)`);
   console.log(`  --network-access   ${modeLabel("--network-access")} disabled | enabled (default: disabled; codex workspace-write only)`);
   console.log(`  --copy <files>     ${modeLabel("--copy")} Additional files to copy (comma-separated)`);
@@ -211,18 +213,82 @@ const RUN_ID = readArg(args, "--run-id", undefined, CLI_ARG_OPTIONS);
 const MANIFEST_INPUT = readArg(args, "--manifest", undefined, CLI_ARG_OPTIONS);
 const PROMPT = readArg(args, ["--prompt", "-p"], undefined, CLI_ARG_OPTIONS);
 const PROMPT_FILE = readArg(args, "--prompt-file", undefined, CLI_ARG_OPTIONS);
-const EXECUTOR = readArg(args, ["--executor", "-e"], "codex", CLI_ARG_OPTIONS);
-let adapter;
-let adapterDescriptor;
-try {
-  adapter = getExecutor(EXECUTOR);
-  adapterDescriptor = getAgentAdapterDescriptor(EXECUTOR);
-} catch (error) {
-  console.error(`Error: ${error.message}`);
+const EXECUTOR_ARG = readArg(args, ["--executor", "-e"], undefined, CLI_ARG_OPTIONS);
+const MODEL = readArg(args, ["--model", "-m"], undefined, CLI_ARG_OPTIONS);
+const ROUTE_INTENT_FILE = readArg(args, "--route-intent-file", undefined, CLI_ARG_OPTIONS);
+const RELAY_HOME_FOR_ROUTES = process.env.RELAY_HOME || path.join(os.homedir(), ".relay");
+
+function failEarly(message, extra = {}) {
+  if (JSON_OUT_REQUESTED) {
+    console.log(JSON.stringify({
+      status: "failed",
+      error: message,
+      ...extra,
+    }, null, 2));
+  } else {
+    console.error(`Error: ${message}`);
+  }
   process.exit(1);
 }
-const defaultTimeout = String(adapter.defaultTimeout ?? 1800);
-const MODEL = readArg(args, ["--model", "-m"], undefined, CLI_ARG_OPTIONS);
+
+function readRouteIntentFile(filePath) {
+  if (!filePath) return {};
+  const resolved = path.resolve(filePath);
+  try {
+    const parsed = JSON.parse(fs.readFileSync(resolved, "utf-8"));
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new Error("expected JSON object");
+    }
+    return parsed;
+  } catch (error) {
+    failEarly(`failed to read route intent file at ${resolved}: ${error.message}`);
+  }
+}
+
+function mergeDispatchCliIntoRunIntent(baseIntent, { executor, model }) {
+  const dispatch = {
+    ...(baseIntent.dispatch && typeof baseIntent.dispatch === "object" && !Array.isArray(baseIntent.dispatch)
+      ? baseIntent.dispatch
+      : {}),
+  };
+  if (executor) dispatch.executor = executor;
+  if (model) dispatch.model = model;
+  return {
+    ...baseIntent,
+    ...(Object.keys(dispatch).length ? { dispatch } : {}),
+  };
+}
+
+function loadInitialRoutePlan(repoRoot) {
+  const policyResult = loadRelayPolicy({ repoRoot, relayHome: RELAY_HOME_FOR_ROUTES });
+  const projectRoutes = loadProjectRoutes({ repoRoot, relayHome: RELAY_HOME_FOR_ROUTES });
+  if (!policyResult.ok) {
+    failEarly(policyResult.errors?.[0]?.message || "failed to load relay policy", {
+      policy: policyResult,
+    });
+  }
+  if (!projectRoutes.ok) {
+    failEarly(projectRoutes.error || "failed to load project routes", {
+      project_routes: projectRoutes,
+    });
+  }
+  const routeIntent = mergeDispatchCliIntoRunIntent(readRouteIntentFile(ROUTE_INTENT_FILE), {
+    executor: EXECUTOR_ARG,
+    model: MODEL,
+  });
+  return {
+    routeIntent,
+    projectRoutes,
+    policyResult,
+    routePlan: resolveRouteIntent({
+      runIntent: routeIntent,
+      projectRoutes: projectRoutes.routes,
+      policy: policyResult.policy,
+      relayHome: RELAY_HOME_FOR_ROUTES,
+    }),
+  };
+}
+
 const MODEL_HINTS_RAW = readArg(args, "--model-hints", undefined, CLI_ARG_OPTIONS);
 const REASONING_OVERRIDE = readArg(args, "--reasoning", undefined, CLI_ARG_OPTIONS);
 const SANDBOX = readArg(args, "--sandbox", "workspace-write", CLI_ARG_OPTIONS);
@@ -244,71 +310,108 @@ try {
   console.error(`Error: ${error.message}`);
   process.exit(1);
 }
-const TIMEOUT = parseInt(readArg(args, "--timeout", defaultTimeout, CLI_ARG_OPTIONS), 10);
-if (isNaN(TIMEOUT) || TIMEOUT <= 0) {
-  console.error("Error: --timeout must be a positive integer");
-  process.exit(1);
-}
-if (!["disabled", "enabled"].includes(NETWORK_ACCESS)) {
-  console.error("Error: --network-access must be disabled or enabled");
-  process.exit(1);
-}
-const modeValidation = adapter.validateExecutionMode({ sandbox: SANDBOX, networkAccess: NETWORK_ACCESS });
-if (!modeValidation.ok) {
-  if (JSON_OUT_REQUESTED) {
-    console.log(JSON.stringify(buildAdapterCapabilityFailureEnvelope({
-      adapter: EXECUTOR,
+let EXECUTOR = null;
+let adapter = null;
+let adapterDescriptor = null;
+let TIMEOUT = null;
+let executorPolicy = null;
+let executorNetworkPolicy = null;
+let INITIAL_ROUTE_RESOLUTION = null;
+let AUTO_RECOVER_COMMIT = null;
+
+function resolveDispatchRuntime(repoRoot) {
+  const routeResolution = loadInitialRoutePlan(repoRoot);
+  const executor = EXECUTOR_ARG || routeResolution.routePlan.phases.dispatch?.executor || "codex";
+  let resolvedAdapter;
+  let resolvedAdapterDescriptor;
+  try {
+    resolvedAdapter = getExecutor(executor);
+    resolvedAdapterDescriptor = getAgentAdapterDescriptor(executor);
+  } catch (error) {
+    console.error(`Error: ${error.message}`);
+    process.exit(1);
+  }
+
+  const defaultTimeout = String(resolvedAdapter.defaultTimeout ?? 1800);
+  const timeout = parseInt(readArg(args, "--timeout", defaultTimeout, CLI_ARG_OPTIONS), 10);
+  if (isNaN(timeout) || timeout <= 0) {
+    console.error("Error: --timeout must be a positive integer");
+    process.exit(1);
+  }
+  if (!["disabled", "enabled"].includes(NETWORK_ACCESS)) {
+    console.error("Error: --network-access must be disabled or enabled");
+    process.exit(1);
+  }
+  const modeValidation = resolvedAdapter.validateExecutionMode({ sandbox: SANDBOX, networkAccess: NETWORK_ACCESS });
+  if (!modeValidation.ok) {
+    if (JSON_OUT_REQUESTED) {
+      console.log(JSON.stringify(buildAdapterCapabilityFailureEnvelope({
+        adapter: executor,
+        phase: ADAPTER_PHASES.DISPATCH,
+        requested: {
+          sandbox: SANDBOX,
+          network: NETWORK_ACCESS,
+          read_only: SANDBOX === "read-only",
+        },
+        safe: false,
+        warnings: modeValidation.warnings || [],
+        fail_closed_reasons: [modeValidation.error],
+      }, {
+        executor,
+        phase: "dispatch",
+      }), null, 2));
+    }
+    console.error(`Error: ${modeValidation.error}`);
+    process.exit(1);
+  }
+  for (const warn of (modeValidation.warnings || [])) {
+    console.error(`Warning: ${warn}`);
+  }
+
+  let resolvedExecutorPolicy;
+  try {
+    resolvedExecutorPolicy = assertPolicyRepresentable(buildAgentPolicyAudit({
+      descriptor: resolvedAdapterDescriptor,
       phase: ADAPTER_PHASES.DISPATCH,
       requested: {
         sandbox: SANDBOX,
-        network: NETWORK_ACCESS,
-        read_only: SANDBOX === "read-only",
+        networkAccess: NETWORK_ACCESS,
+        readOnly: SANDBOX === "read-only",
       },
-      safe: false,
-      warnings: modeValidation.warnings || [],
-      fail_closed_reasons: [modeValidation.error],
-    }, {
-      executor: EXECUTOR,
-      phase: "dispatch",
-    }), null, 2));
+    }));
+  } catch (error) {
+    if (JSON_OUT_REQUESTED) {
+      console.log(JSON.stringify(buildAdapterCapabilityFailureEnvelope(error, {
+        executor,
+        phase: "dispatch",
+      }), null, 2));
+    }
+    console.error(`Error: ${error.message}`);
+    process.exit(1);
   }
-  console.error(`Error: ${modeValidation.error}`);
-  process.exit(1);
-}
-for (const warn of (modeValidation.warnings || [])) {
-  console.error(`Warning: ${warn}`);
-}
+  for (const warn of resolvedExecutorPolicy.warnings || []) {
+    console.error(`Warning: ${warn}`);
+  }
 
-let executorPolicy;
-try {
-  executorPolicy = assertPolicyRepresentable(buildAgentPolicyAudit({
-    descriptor: adapterDescriptor,
-    phase: ADAPTER_PHASES.DISPATCH,
-    requested: {
-      sandbox: SANDBOX,
-      networkAccess: NETWORK_ACCESS,
-      readOnly: SANDBOX === "read-only",
+  return {
+    adapter: resolvedAdapter,
+    adapterDescriptor: resolvedAdapterDescriptor,
+    autoRecoverCommit: AUTO_RECOVER_COMMIT_REQUESTED
+      ? true
+      : NO_AUTO_RECOVER_COMMIT
+        ? false
+        : executor === "codex",
+    executor,
+    executorNetworkPolicy: {
+      access: NETWORK_ACCESS,
+      mechanism: NETWORK_ACCESS === "enabled" ? "sandbox_workspace_write.network_access" : "default",
+      domains: null,
     },
-  }));
-} catch (error) {
-  if (JSON_OUT_REQUESTED) {
-    console.log(JSON.stringify(buildAdapterCapabilityFailureEnvelope(error, {
-      executor: EXECUTOR,
-      phase: "dispatch",
-    }), null, 2));
-  }
-  console.error(`Error: ${error.message}`);
-  process.exit(1);
+    executorPolicy: resolvedExecutorPolicy,
+    routeResolution,
+    timeout,
+  };
 }
-for (const warn of executorPolicy.warnings || []) {
-  console.error(`Warning: ${warn}`);
-}
-
-const executorNetworkPolicy = {
-  access: NETWORK_ACCESS,
-  mechanism: NETWORK_ACCESS === "enabled" ? "sandbox_workspace_write.network_access" : "default",
-  domains: null,
-};
 
 function classifyNetworkFailure(text) {
   if (!text) return null;
@@ -337,11 +440,6 @@ const REGISTER = hasCliFlag("--register");
 const NO_CLEANUP = hasCliFlag("--no-cleanup");
 const AUTO_RECOVER_COMMIT_REQUESTED = hasCliFlag("--auto-recover-commit");
 const NO_AUTO_RECOVER_COMMIT = hasCliFlag("--no-auto-recover-commit");
-const AUTO_RECOVER_COMMIT = AUTO_RECOVER_COMMIT_REQUESTED
-  ? true
-  : NO_AUTO_RECOVER_COMMIT
-    ? false
-    : EXECUTOR === "codex";
 const ALLOW_CONFLICTING_RUN = hasCliFlag("--allow-conflicting-run");
 const DRY_RUN = hasCliFlag("--dry-run");
 const JSON_OUT = JSON_OUT_REQUESTED;
@@ -700,8 +798,9 @@ function resolveRoleBinding(envName, fallback) {
   return typeof explicit === "string" && explicit.trim() ? explicit.trim() : fallback;
 }
 
-function resolveEffectiveDispatchModel({ cliModel, manifestModelHints, cliModelHints, executorDefaultModel }) {
+function resolveEffectiveDispatchModel({ cliModel, routePlanModel, manifestModelHints, cliModelHints, executorDefaultModel }) {
   if (cliModel) return cliModel;
+  if (routePlanModel) return routePlanModel;
   if (manifestModelHints && typeof manifestModelHints.dispatch === "string" && manifestModelHints.dispatch.trim()) {
     return manifestModelHints.dispatch;
   }
@@ -767,6 +866,43 @@ function startRoutedSidecar({ repoRoot, routingDecision, runId }) {
   };
 }
 
+function summarizeRoutePlan(routePlan) {
+  const summary = {};
+  for (const [phase, value] of Object.entries(routePlan?.phases || {})) {
+    if (!value) continue;
+    summary[phase] = {
+      actor: value.executor || value.reviewer || null,
+      actor_field: value.executor ? "executor" : "reviewer",
+      model: value.model || null,
+      policy_reason: value.policy_decision?.reason || null,
+    };
+  }
+  return summary;
+}
+
+function writeRoutePlanSnapshot({ repoRoot, runId, routePlan, policyResult, projectRoutes, resolvedAt = new Date().toISOString() }) {
+  const routePlanPath = getRoutePlanPath(repoRoot, runId);
+  const snapshot = {
+    version: 1,
+    resolved_at: resolvedAt,
+    policy: {
+      status: policyResult?.status || null,
+      sources: policyResult?.sources || null,
+    },
+    project_routes: {
+      status: projectRoutes?.status || null,
+      path: projectRoutes?.path || null,
+    },
+    phases: routePlan.phases,
+  };
+  fs.mkdirSync(path.dirname(routePlanPath), { recursive: true });
+  fs.writeFileSync(routePlanPath, `${JSON.stringify(snapshot, null, 2)}\n`, "utf-8");
+  return {
+    path: routePlanPath,
+    snapshot,
+  };
+}
+
 function collectChangedFilesForRouting(repoDir, baseBranch) {
   const candidates = [];
   if (baseBranch) {
@@ -806,9 +942,9 @@ async function main() {
   let repoRoot = REPO_PATH;
   let projectName = PROJECT_NAME;
   let wtPath = path.join(wtBase, wtId, PROJECT_NAME);
-  const resultFile = path.join(os.tmpdir(), `dispatch-${EXECUTOR}-${wtId}.txt`);
-  const stdoutLog = path.join(os.tmpdir(), `dispatch-${EXECUTOR}-${wtId}.log`);
-  const stderrLog = path.join(os.tmpdir(), `dispatch-${EXECUTOR}-${wtId}.err`);
+  let resultFile = null;
+  let stdoutLog = null;
+  let stderrLog = null;
   const resolvedDoneCriteriaPath = DONE_CRITERIA_FILE ? path.resolve(DONE_CRITERIA_FILE) : null;
   let branch = BRANCH;
   let runId = RUN_ID;
@@ -958,6 +1094,19 @@ async function main() {
     }
   }
 
+  const runtime = resolveDispatchRuntime(repoRoot);
+  EXECUTOR = runtime.executor;
+  adapter = runtime.adapter;
+  adapterDescriptor = runtime.adapterDescriptor;
+  TIMEOUT = runtime.timeout;
+  executorPolicy = runtime.executorPolicy;
+  executorNetworkPolicy = runtime.executorNetworkPolicy;
+  INITIAL_ROUTE_RESOLUTION = runtime.routeResolution;
+  AUTO_RECOVER_COMMIT = runtime.autoRecoverCommit;
+  resultFile = path.join(os.tmpdir(), `dispatch-${EXECUTOR}-${wtId}.txt`);
+  stdoutLog = path.join(os.tmpdir(), `dispatch-${EXECUTOR}-${wtId}.log`);
+  stderrLog = path.join(os.tmpdir(), `dispatch-${EXECUTOR}-${wtId}.err`);
+
   if (RESUME_MODE) {
     try {
       validateResumeRequestLinkage(manifest, {
@@ -979,6 +1128,7 @@ async function main() {
 
   const manifestRunDir = getRunDir(repoRoot, runId);
   enforceRubricPersistence(manifest, manifestRunDir);
+  let routePlanSnapshot = null;
 
   const taskPromptResult = readTaskPrompt({ runDir: manifestRunDir, resumeMode: RESUME_MODE });
   let taskPrompt = taskPromptResult.prompt;
@@ -1025,6 +1175,7 @@ async function main() {
 
   const effectiveDispatchModel = resolveEffectiveDispatchModel({
     cliModel: MODEL,
+    routePlanModel: INITIAL_ROUTE_RESOLUTION.routePlan.phases.dispatch?.model || null,
     manifestModelHints: manifest?.model_hints,
     cliModelHints: MODEL_HINTS,
     executorDefaultModel: () => resolveExecutorDefaultModel(EXECUTOR, { relayHome: RELAY_HOME }),
@@ -1050,6 +1201,14 @@ async function main() {
       phase: "dispatch",
       adapter_capability: executorPolicy,
       executor_policy: executorPolicy,
+      route_plan: {
+        version: 1,
+        phases: INITIAL_ROUTE_RESOLUTION.routePlan.phases,
+        project_routes: {
+          status: INITIAL_ROUTE_RESOLUTION.projectRoutes.status,
+          path: INITIAL_ROUTE_RESOLUTION.projectRoutes.path,
+        },
+      },
     });
     if (JSON_OUT) {
       console.log(JSON.stringify(envelope, null, 2));
@@ -1060,6 +1219,29 @@ async function main() {
   }
 
   const effectivePolicy = loadRelayPolicy({ repoRoot, relayHome: RELAY_HOME });
+  const routePlan = {
+    ...INITIAL_ROUTE_RESOLUTION.routePlan,
+    phases: {
+      ...(INITIAL_ROUTE_RESOLUTION.routePlan.phases || {}),
+      dispatch: {
+        ...((INITIAL_ROUTE_RESOLUTION.routePlan.phases || {}).dispatch || {}),
+        phase: "dispatch",
+        executor: EXECUTOR,
+        model: effectiveDispatchModel,
+        source: EXECUTOR_ARG ? "run_intent" : ((INITIAL_ROUTE_RESOLUTION.routePlan.phases || {}).dispatch?.source || "policy_defaults"),
+        sources: {
+          ...(((INITIAL_ROUTE_RESOLUTION.routePlan.phases || {}).dispatch || {}).sources || {}),
+          executor: EXECUTOR_ARG ? "run_intent" : (((INITIAL_ROUTE_RESOLUTION.routePlan.phases || {}).dispatch || {}).sources?.executor || "policy_defaults"),
+          model: MODEL
+            ? "run_intent"
+            : effectiveDispatchModel
+              ? ((((INITIAL_ROUTE_RESOLUTION.routePlan.phases || {}).dispatch || {}).sources?.model) || "executor_defaults")
+              : "unresolved",
+        },
+        policy_decision: policyDecision,
+      },
+    },
+  };
   const routingDecision = resolveRoutingDecision({
     policy: effectivePolicy.policy || {},
     cliTags: ROUTING_TAGS,
@@ -1104,6 +1286,18 @@ async function main() {
       runState: manifest?.state || null,
       dispatchSkipped: false,
       policy_decision: policyDecision,
+      route_plan: {
+        version: 1,
+        phases: routePlan.phases,
+        policy: {
+          status: effectivePolicy.status,
+          sources: effectivePolicy.sources,
+        },
+        project_routes: {
+          status: INITIAL_ROUTE_RESOLUTION.projectRoutes.status,
+          path: INITIAL_ROUTE_RESOLUTION.projectRoutes.path,
+        },
+      },
       routing_decision: routingDecision,
     };
     if (planFleetId) {
@@ -1230,8 +1424,19 @@ async function main() {
         executor_policy: executorPolicy,
       },
       routing: routingDecision,
+      routes: {
+        plan_path: "route-plan.json",
+        summary: summarizeRoutePlan(routePlan),
+      },
     };
     ensureRunLayout(repoRoot, runId);
+    routePlanSnapshot = writeRoutePlanSnapshot({
+      repoRoot,
+      runId,
+      routePlan,
+      policyResult: effectivePolicy,
+      projectRoutes: INITIAL_ROUTE_RESOLUTION.projectRoutes,
+    });
     writeManifest(manifestPath, manifest);
   } else if (manifest) {
     manifest = {
@@ -1242,7 +1447,19 @@ async function main() {
         executor_policy: executorPolicy,
       },
       routing: routingDecision,
+      routes: {
+        ...(manifest.routes || {}),
+        plan_path: "route-plan.json",
+        summary: summarizeRoutePlan(routePlan),
+      },
     };
+    routePlanSnapshot = writeRoutePlanSnapshot({
+      repoRoot,
+      runId,
+      routePlan,
+      policyResult: effectivePolicy,
+      projectRoutes: INITIAL_ROUTE_RESOLUTION.projectRoutes,
+    });
     writeManifest(manifestPath, manifest);
   }
 
@@ -1265,6 +1482,21 @@ async function main() {
       failRubricPersistence(rubricAnchor.error);
     }
     writeManifest(manifestPath, manifest);
+  }
+
+  if (routePlanSnapshot) {
+    appendRunEvent(repoRoot, runId, {
+      event: EVENTS.ROUTE_RESOLUTION,
+      state_from: manifest.state,
+      state_to: manifest.state,
+      head_sha: manifest.git?.head_sha || null,
+      reason: ROUTE_INTENT_FILE ? "route_intent_file" : "resolved_defaults",
+      executor: EXECUTOR,
+      model: effectiveDispatchModel,
+      policy_decision: policyDecision,
+      route_plan_path: routePlanSnapshot.path,
+      route_plan_summary: summarizeRoutePlan(routePlan),
+    });
   }
 
   const guidanceMetadata = buildGuidanceMetadata({
@@ -1688,6 +1920,8 @@ async function main() {
     executorNetwork: executorNetworkPolicy,
     executorPolicy,
     policyDecision,
+    routePlanPath: routePlanSnapshot?.path || null,
+    routePlan: routePlanSnapshot?.snapshot || null,
     routingDecision,
     routedSidecar,
     codexGitCommonDir,

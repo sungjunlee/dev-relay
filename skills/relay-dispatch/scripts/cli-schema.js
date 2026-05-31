@@ -33,6 +33,7 @@ const FLAGS = [
   { flag: "--contract-file", kind: VALUE, mode: MODE_VERBATIM, valueName: "<path>", rationale: "Operator-supplied artifact path; keep the literal argv token." },
   { flag: "--copy", kind: VALUE, mode: MODE_VERBATIM, valueName: "<file,...>", rationale: "Operator-supplied file list; keep the literal argv token." },
   { flag: "--diff-file", kind: VALUE, mode: MODE_VERBATIM, valueName: "<path>", rationale: "Operator-supplied fixture path; keep the literal argv token." },
+  { flag: "--dispatch", kind: VALUE, mode: MODE_PARSED, valueName: "<actor[:provider/model]>", rationale: "Run route preview selector; flag-like following tokens should mean the value is missing." },
   { flag: "--done-criteria-file", kind: VALUE, mode: MODE_VERBATIM, valueName: "<path>", rationale: "Operator-supplied anchor path; keep the literal argv token." },
   { flag: "--dry-run", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Presence flag; no value is consumed." },
   { flag: "--effective", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Presence flag; no value is consumed." },
@@ -87,6 +88,9 @@ const FLAGS = [
   { flag: "--require-pr-body-change", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Require audited PR body evidence for same-HEAD recovery; no value is consumed." },
   { flag: "--review-file", kind: VALUE, mode: MODE_VERBATIM, valueName: "<path>", rationale: "Operator-supplied verdict path; keep the literal argv token." },
   { flag: "--review-assurance", kind: VALUE, mode: MODE_PARSED, valueName: "<level>", allowedValues: ["standard", "hardened"], rationale: "Run-level review assurance policy; closed selector independent of agent identity." },
+  { flag: "--review", kind: VALUE, mode: MODE_PARSED, valueName: "<actor[:provider/model]>", rationale: "Run route preview selector; flag-like following tokens should mean the value is missing." },
+  { flag: "--advisory-review", kind: VALUE, mode: MODE_PARSED, valueName: "<actor[:provider/model]>", rationale: "Run route preview selector; flag-like following tokens should mean the value is missing." },
+  { flag: "--route-intent-file", kind: VALUE, mode: MODE_VERBATIM, valueName: "<path>", rationale: "Operator-supplied run route intent JSON path; keep the literal argv token." },
   { flag: "--manual-review-reason", kind: VALUE, mode: MODE_VERBATIM, valueName: "<reason>", rationale: "Audit reason for applying a manual review verdict under hardened assurance." },
   { flag: "--reviewer", kind: VALUE, mode: MODE_PARSED, valueName: "<name>", rationale: "Reviewer adapter selector; flag-like following tokens should mean the value is missing." },
   { flag: "--reviewer-model", kind: VALUE, mode: MODE_PARSED, valueName: "<name>", rationale: "Reviewer model selector; flag-like following tokens should mean the value is missing." },
@@ -98,6 +102,7 @@ const FLAGS = [
   { flag: "--run-id", kind: VALUE, mode: MODE_PARSED, valueName: "<id>", rationale: "Structured relay run identifier; flag-like following tokens should mean the value is missing." },
   { flag: "--sandbox", kind: VALUE, mode: MODE_PARSED, valueName: "<mode>", rationale: "Closed sandbox selector; flag-like following tokens should mean the value is missing." },
   { flag: "--skip", kind: VALUE, mode: MODE_VERBATIM, valueName: "<reason>", rationale: "Audit skip reason must be recorded exactly and must not be blank." },
+  { flag: "--sidecar", kind: VALUE, mode: MODE_PARSED, valueName: "<actor[:provider/model]>", rationale: "Run route preview selector; flag-like following tokens should mean the value is missing." },
   { flag: "--skip-merge", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Presence flag; no value is consumed." },
   { flag: "--skip-review", kind: VALUE, mode: MODE_VERBATIM, valueName: "<reason>", rationale: "Audit skip reason must be recorded exactly and must not be blank." },
   { flag: "--stale-hours", kind: VALUE, mode: MODE_PARSED, valueName: "<hours>", rationale: "Numeric threshold; flag-like following tokens should mean the value is missing." },
@@ -133,7 +138,7 @@ const COMMAND_FLAGS = {
   ],
   dispatch: [
     "--branch", "--run-id", "--manifest", "--prompt", "--prompt-file", "--executor",
-    "--model", "--model-hints", "--sandbox", "--network-access", "--copy", "--timeout", "--reasoning", "--rubric-file",
+    "--model", "--model-hints", "--route-intent-file", "--sandbox", "--network-access", "--copy", "--timeout", "--reasoning", "--rubric-file",
     "--test-command", "--rubric-grandfathered", "--request-id", "--leaf-id",
     "--fleet-id", "--done-criteria-file", "--review-assurance", "--register", "--no-cleanup", "--auto-recover-commit", "--no-auto-recover-commit",
     "--tags", "--allow-conflicting-run", "--dry-run", "--json", "--help",
@@ -183,6 +188,7 @@ const COMMAND_FLAGS = {
   ],
   "relay-config": [
     "--profile", "--effective", "--phase", "--executor", "--reviewer", "--model",
+    "--repo", "--dispatch", "--review", "--advisory-review", "--sidecar", "--route-intent-file",
     "--json", "--help",
   ],
   "rebrand-evidence": [

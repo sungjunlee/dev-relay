@@ -29,6 +29,17 @@ function getFleetsBase() {
   return path.join(getRelayHome(), "fleets");
 }
 
+function getProjectsBase({ relayHome } = {}) {
+  const home = relayHome || getRelayHome();
+  if (!path.isAbsolute(home)) {
+    throw new Error(
+      `RELAY_HOME must be an absolute path, got: ${JSON.stringify(home)}. ` +
+      `Either set RELAY_HOME explicitly or ensure RELAY_HOME resolves to an absolute path.`
+    );
+  }
+  return path.join(home, "projects");
+}
+
 function getRelayWorktreeBase() {
   const base = process.env.RELAY_WORKTREE_BASE || path.join(getRelayHome(), "worktrees");
   if (!path.isAbsolute(base)) {
@@ -244,6 +255,22 @@ function getFleetsDir(repoRoot) {
   return path.join(getFleetsBase(), getRepoSlug(repoRoot));
 }
 
+function getProjectDir(repoRoot, options = {}) {
+  return path.join(getProjectsBase(options), getRepoSlug(repoRoot));
+}
+
+function getProjectConfigPath(repoRoot, options = {}) {
+  return path.join(getProjectDir(repoRoot, options), "project.json");
+}
+
+function getProjectPolicyPath(repoRoot, options = {}) {
+  return path.join(getProjectDir(repoRoot, options), "policy.json");
+}
+
+function getProjectRoutesPath(repoRoot, options = {}) {
+  return path.join(getProjectDir(repoRoot, options), "routes.json");
+}
+
 function getFleetManifestPath(repoRoot, fleetId) {
   return path.join(getFleetsDir(repoRoot), `${requireValidFleetId(fleetId)}.md`);
 }
@@ -270,6 +297,10 @@ function getManifestPath(repoRoot, runId) {
 
 function getEventsPath(repoRoot, runId) {
   return path.join(getRunDir(repoRoot, runId), "events.jsonl");
+}
+
+function getRoutePlanPath(repoRoot, runId) {
+  return path.join(getRunDir(repoRoot, runId), "route-plan.json");
 }
 
 function validateSidecarId(sidecarId) {
@@ -553,9 +584,15 @@ module.exports = {
   getFleetsBase,
   getFleetsDir,
   getManifestPath,
+  getProjectConfigPath,
+  getProjectDir,
+  getProjectPolicyPath,
+  getProjectRoutesPath,
+  getProjectsBase,
   getRelayHome,
   getRelayWorktreeBase,
   getRepoSlug,
+  getRoutePlanPath,
   getRunDir,
   getRunsBase,
   getRunsDir,
