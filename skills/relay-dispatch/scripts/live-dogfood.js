@@ -6,6 +6,8 @@ const os = require("os");
 const path = require("path");
 const { spawnSync } = require("child_process");
 
+const SCRIPT_REPO_ROOT = path.resolve(__dirname, "..", "..", "..");
+
 const OUTCOMES = Object.freeze({
   PASS: "pass",
   FAIL_SAFE_PASS: "fail-safe-pass",
@@ -560,7 +562,7 @@ function classifyAntigravityDispatch(result) {
 function buildDispatchCommand({ node, repo, branch, executor, model, routeIntentFile, promptFile, rubricFile, timeoutSeconds }) {
   const command = [
     node,
-    "skills/relay-dispatch/scripts/dispatch.js",
+    path.join(SCRIPT_REPO_ROOT, "skills/relay-dispatch/scripts/dispatch.js"),
     repo,
     "-b", branch,
     "--prompt-file", promptFile,
@@ -615,7 +617,7 @@ function buildScenarioEnv(scenario, options) {
 function buildProbeScenarioCommand({ node, repo, options, scenario }) {
   return [
     node,
-    "skills/relay-plan/scripts/probe-executor-env.js",
+    path.join(SCRIPT_REPO_ROOT, "skills/relay-plan/scripts/probe-executor-env.js"),
     repo,
     "--executor", scenario.adapter,
     "--model", modelForAdapter(options, scenario.adapter),
@@ -632,7 +634,7 @@ function buildReviewScenarioCommand({ node, repo, prompts, options, scenario }) 
     : prompts.primaryPrompt;
   const command = [
     node,
-    `skills/relay-review/scripts/${script}`,
+    path.join(SCRIPT_REPO_ROOT, "skills/relay-review/scripts", script),
     "--repo", repo,
     "--prompt-file", promptFile,
     "--model", modelForAdapter(options, scenario.adapter),
@@ -647,7 +649,7 @@ function buildReviewScenarioCommand({ node, repo, prompts, options, scenario }) 
 function buildFailSafeDispatchCommand({ node, repo, prompts, options, branch }) {
   return [
     node,
-    "skills/relay-dispatch/scripts/dispatch.js",
+    path.join(SCRIPT_REPO_ROOT, "skills/relay-dispatch/scripts/dispatch.js"),
     repo,
     "-b", branch,
     "--prompt", "Live dogfood fail-safe no-op canary: do not modify repository files, do not commit, and do not create a PR-ready change.",
