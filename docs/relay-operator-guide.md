@@ -45,7 +45,7 @@ Implementation status describes the adapter surface shipped in relay. Live statu
 | `codex` | Implementation: `stable`<br>Live: `stable` | Implementation: `stable`<br>Live: `stable` | Implementation: `not-supported`<br>Live: `not-supported` |
 | `opencode` | Implementation: `limited`<br>Live: `blocked` until healthy dispatch evidence exists for the chosen route | Implementation: `limited`<br>Live: `limited` by route policy and live reviewer evidence | Implementation: `limited`<br>Live: `limited` by route policy and advisory evidence |
 | `pi` | Implementation: `stable`<br>Live: `limited` by route-specific healthy dispatch canaries | Implementation: `stable`<br>Live: `limited` by route-specific reviewer canaries | Implementation: `stable`<br>Live: `limited` by route-specific advisory evidence |
-| `antigravity` | Implementation: `fail-safe-experimental`<br>Live: `blocked` until healthy dispatch dogfood passes | Implementation: `fail-safe-experimental`<br>Live: `blocked` until strict verdict JSON is accepted in a healthy live reviewer canary | Implementation: `fail-safe-experimental`<br>Live: `blocked` by current timeout/worktree-mutation blocker |
+| `antigravity` | Implementation: `limited`<br>Live: `limited` by `google/antigravity-cli` healthy dispatch canary evidence | Implementation: `fail-safe-experimental`<br>Live: `blocked` until strict verdict JSON is accepted in a healthy live reviewer canary | Implementation: `fail-safe-experimental`<br>Live: `blocked` by current timeout/worktree-mutation blocker |
 | `cursor` | Implementation: `limited`<br>Live: `blocked` until route-specific healthy dispatch canaries exist | Implementation: `limited`<br>Live: `blocked` until strict verdict JSON is accepted in a healthy live reviewer canary | Implementation: `not-supported`<br>Live: `not-supported` |
 
 Status meanings:
@@ -135,7 +135,7 @@ Manual review command:
 node skills/relay-review/scripts/review-runner.js --repo . --run-id <id> --pr <number> --reviewer codex --json
 ```
 
-OpenCode, Pi, and Antigravity can be used as reviewer roles only when the adapter can represent the phase and route policy allows the model route. OpenCode primary review uses prompt-only read-only plus a dirty-worktree guard; Pi uses a read/grep/find/ls allowlist; Antigravity targets the `agy` CLI and remains fail-safe experimental until healthy live canary evidence exists.
+OpenCode, Pi, and Antigravity can be used as reviewer roles only when the adapter can represent the phase and route policy allows the model route. OpenCode primary review uses prompt-only read-only plus a dirty-worktree guard; Pi uses a read/grep/find/ls allowlist; Antigravity targets the `agy` CLI. Antigravity dispatch has route-specific healthy live canary evidence for `google/antigravity-cli`; Antigravity primary and advisory review remain fail-safe experimental until healthy reviewer evidence exists.
 
 OpenCode review uses a bounded parent-process timeout. Set `RELAY_OPENCODE_REVIEW_TIMEOUT` to a positive duration such as `120s`, `10m`, or `1h`; the default is `1800s`. If an OpenCode review returns empty stdout or times out, first validate the CLI/provider path with a minimal `opencode run -m <model> '<json prompt>'` command before treating the route as healthy.
 
@@ -181,7 +181,7 @@ node skills/relay-review/scripts/review-runner.js --repo . --run-id <id> --pr <n
 
 ### Antigravity Live Canary
 
-Antigravity live support is fail-safe experimental until a healthy live canary passes. Fake-bin tests alone do not prove live executor or reviewer success.
+Antigravity dispatch has route-specific healthy live canary evidence for `google/antigravity-cli` when the relay prompt binds work to the relay worktree. Antigravity primary and advisory review remain fail-safe experimental until healthy live reviewer canaries pass. Fake-bin tests alone do not prove live executor or reviewer success.
 
 Healthy-path criteria are exact: primary review must return strict verdict JSON within timeout, dispatch must create a minimal repository change and reach a recoverable/reviewable state, or the operator must record a documented CLI limitation instead of claiming live success. The fail-safe timeout canary is not healthy success; it only proves relay avoids turning a bounded timeout into a reviewable false positive.
 
@@ -200,7 +200,7 @@ Add `--dispatch-canary` to run healthy dispatch canaries for Pi, OpenCode, and A
 
 The harness still keeps a separate Antigravity no-op/fail-safe dispatch canary. That no-op path is successful only when it avoids a reviewable false success; a PR from the no-op path is a failure, not proof of live dispatch health.
 
-Run the dispatch timeout canary only after route policy allows `google/antigravity-cli` for Antigravity dispatch:
+Run the dispatch canary only after route policy allows `google/antigravity-cli` for Antigravity dispatch:
 
 ```bash
 cat > /tmp/relay-antigravity-live-prompt.md <<'EOF'

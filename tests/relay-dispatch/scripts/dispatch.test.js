@@ -2732,11 +2732,13 @@ test("dispatch with --executor antigravity invokes agy and copies stdout into th
   assert.ok(result.commits);
   assert.equal(fs.readFileSync(result.resultFile, "utf-8"), "antigravity completed\n");
   const capturedArgs = JSON.parse(fs.readFileSync(capturePath, "utf-8"));
-  assert.deepEqual(capturedArgs.slice(0, 5), [
-    "--prompt", buildDispatchExecPrompt(taskPrompt),
-    "--print-timeout", "31s",
-    "--sandbox",
-  ]);
+  assert.equal(capturedArgs[0], "--prompt");
+  assert.match(capturedArgs[1], /^\[RELAY WORKTREE BOUNDARY\]\n/);
+  assert.match(capturedArgs[1], new RegExp(`Repository worktree: ${escapeRegExp(result.worktree)}`));
+  assert.match(capturedArgs[1], new RegExp(`Before doing anything, run: cd ${escapeRegExp(result.worktree)}`));
+  assert.match(capturedArgs[1], /Do not create, edit, git add, git commit, or report source files under ~\/\.gemini/);
+  assert.ok(capturedArgs[1].endsWith(buildDispatchExecPrompt(taskPrompt)));
+  assert.deepEqual(capturedArgs.slice(2, 5), ["--print-timeout", "31s", "--sandbox"]);
   assert.deepEqual(capturedArgs.slice(5, 7), ["--add-dir", worktreeCommonGitDir(result.worktree)]);
 
   const manifest = readManifest(result.manifestPath).data;

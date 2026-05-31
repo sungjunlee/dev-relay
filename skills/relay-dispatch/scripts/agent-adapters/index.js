@@ -853,8 +853,11 @@ const DESCRIPTORS = Object.freeze({
         advisoryReview: "json-text",
       },
       liveSupport: {
-        status: "fail-safe-experimental",
-        until: "until a healthy live canary passes",
+        status: "role-specific",
+        dispatch: "limited with route-specific healthy dispatch canary evidence for google/antigravity-cli",
+        primaryReview: "fail-safe-experimental until healthy live reviewer canary passes",
+        advisoryReview: "fail-safe-experimental until healthy live advisory canary passes",
+        until: "review roles until healthy live reviewer canaries pass",
         healthyCriteria: {
           primaryReview: "primary review strict verdict JSON within timeout",
           dispatch: "dispatch minimal repository change to recoverable/reviewable state",
