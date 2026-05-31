@@ -1,7 +1,7 @@
 ---
 name: relay-fleet
-description: Fan out already-planned relay leaves into parallel child dispatches, review child runs, resume crashed fleet dispatch, and print fleet status.
-compatibility: Requires git, Node.js 18+, and the sibling relay-dispatch skill.
+description: Fan out already-planned relay leaves into parallel child dispatches, review child runs, merge ready children serially, resume crashed fleet dispatch, and print fleet status.
+compatibility: Requires git, gh CLI, Node.js 18+, and sibling relay-dispatch/relay-merge skills.
 argument-hint: --fleet-id <id> --leaves-file <path>
 metadata:
   related-skills: relay-ready, relay-plan, relay-dispatch, relay-review, relay-merge
@@ -10,7 +10,7 @@ metadata:
 ## Inputs
 - Env: optional `RELAY_SKILL_ROOT` defaults to `skills`.
 - Files: leaves JSON passed by `--leaves-file`, child prompt/rubric/Done Criteria files, and fleet/child run manifests under `~/.relay/runs/`.
-- Sibling scripts: `${RELAY_SKILL_ROOT:-skills}/relay-fleet/scripts/relay-fleet.js`, `${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/dispatch.js`, `${RELAY_SKILL_ROOT:-skills}/relay-review/scripts/review-runner.js`.
+- Sibling scripts: `${RELAY_SKILL_ROOT:-skills}/relay-fleet/scripts/relay-fleet.js`, `${RELAY_SKILL_ROOT:-skills}/relay-fleet/scripts/merge-queue.js`, `${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/dispatch.js`, `${RELAY_SKILL_ROOT:-skills}/relay-review/scripts/review-runner.js`, `${RELAY_SKILL_ROOT:-skills}/relay-merge/scripts/finalize-run.js`.
 
 # relay-fleet
 
@@ -18,6 +18,7 @@ metadata:
 
 - Fanning out already planned relay leaves into parallel child dispatches
 - Driving foreground review/redispatch loops for review-ready children in a dispatched fleet
+- Merging `ready_to_merge` fleet children one at a time after review orchestration
 - Resuming a crashed fleet dispatch or review loop from persisted child/fleet state
 - Printing read-only aggregate status for a fleet
 
@@ -73,6 +74,14 @@ node "${RELAY_SKILL_ROOT:-skills}/relay-fleet/scripts/relay-fleet.js" \
   --review
 ```
 
+Merge ready children serially:
+
+```bash
+node "${RELAY_SKILL_ROOT:-skills}/relay-fleet/scripts/merge-queue.js" \
+  --repo . \
+  --fleet-id fleet-481
+```
+
 Read-only aggregate status:
 
 ```bash
@@ -97,6 +106,7 @@ node "${RELAY_SKILL_ROOT:-skills}/relay-fleet/scripts/relay-fleet.js" \
 
 - The fleet script invokes `skills/relay-dispatch/scripts/dispatch.js` as a subprocess once per leaf and always passes `--fleet-id`.
 - `--review` invokes `skills/relay-review/scripts/review-runner.js` as foreground subprocesses for children in `review_pending`; when review returns `changes_requested`, it invokes `dispatch.js --manifest <child-manifest>` and re-enters review until the child reaches `ready_to_merge` or `escalated`.
+- `merge-queue.js` invokes `skills/relay-merge/scripts/finalize-run.js` as a subprocess for one `ready_to_merge` child at a time. It stops at the first merge failure and marks that child `merge_blocked`.
 - Each child dispatch owns worktree creation, in-flight run checks, executor invocation, and child run manifest writes.
 - Fleet issue locks are checked before each child spawn; `dispatch.js --fleet-id` performs the durable lock during the actual child run.
 - `--resume` reconciles both directions: it re-adopts child run manifests whose `fleet_id` points back to this fleet, marks no-manifest interrupted children as `dispatch_failed_pre_manifest`, skips still-running child subprocesses, and re-enters the review/redispatch loop for children in `review_pending` or `changes_requested`.
