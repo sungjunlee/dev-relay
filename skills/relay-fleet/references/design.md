@@ -141,11 +141,14 @@ with existing per-run tools until Phase 2/3 land.
 Run `relay-review` per child until each reaches `ready_to_merge` or escalates.
 Adds `reviewing` to `fleet_state`.
 
-Sub-PR A implements `relay-fleet --review` as a single foreground review pass
+Sub-PR A implemented `relay-fleet --review` as a single foreground review pass
 over children currently in `review_pending`. It invokes `review-runner.js` as
 subprocesses, skips terminal children, and fails closed if a review subprocess
-exits without advancing the child manifest. Redispatch from
-`changes_requested` remains Sub-PR B.
+exits without advancing the child manifest. Sub-PR B extends that path into the
+full Phase 2 loop: `changes_requested` triggers `dispatch.js --manifest`, then
+review re-runs until the child reaches `ready_to_merge` or `escalated`. `--resume`
+uses the same loop after reconciling child manifests and still-running subprocess
+PID guards.
 
 > **Status (2026-05-15):** Phase 2 (#479) scoped without waiting for a Phase 1
 > dogfood gate. The original "scoped from Phase 1 dogfood" framing assumed

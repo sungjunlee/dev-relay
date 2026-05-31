@@ -291,11 +291,18 @@ function writeRuntime(repoRoot, fleetId, runtime) {
 }
 
 function upsertRuntimeChild(repoRoot, fleetId, leaf, child) {
-  const runtime = readRuntime(repoRoot, fleetId);
-  runtime.children[leaf.leaf_ref] = {
-    pid: child.pid || null,
+  upsertRuntimeProcess(repoRoot, fleetId, leaf.leaf_ref, child, {
+    phase: "dispatch",
     branch: leaf.branch,
     issue_number: leaf.issue_number,
+  });
+}
+
+function upsertRuntimeProcess(repoRoot, fleetId, leafRef, child, metadata = {}) {
+  const runtime = readRuntime(repoRoot, fleetId);
+  runtime.children[leafRef] = {
+    pid: child.pid || null,
+    ...metadata,
     started_at: new Date().toISOString(),
   };
   writeRuntime(repoRoot, fleetId, runtime);
@@ -340,7 +347,12 @@ function maybeFinalizeFleet(repoRoot, fleetId) {
   const current = readFleetManifest(repoRoot, fleetId).data;
   const allDispatched = current.children.length > 0
     && current.children.every((child) => child.dispatch_status === DISPATCH_STATUS.DISPATCHED && child.run_id);
-  if (!allDispatched || current.fleet_state === STATES.DISPATCHED || current.fleet_state === STATES.CLOSED) {
+  if (
+    !allDispatched
+    || current.fleet_state === STATES.DISPATCHED
+    || current.fleet_state === STATES.REVIEWING
+    || current.fleet_state === STATES.CLOSED
+  ) {
     return current;
   }
   return updateFleetManifest(repoRoot, fleetId, (fleet) => updateFleetState(fleet, STATES.DISPATCHED)).data;
@@ -493,6 +505,33 @@ function buildReviewArgs({ repoRoot, runId, options }) {
   return args;
 }
 
+function buildRedispatchArgs({ repoRoot, runId, options }) {
+  const args = [
+    options.dispatchScript,
+    repoRoot,
+    "--manifest", getManifestPath(repoRoot, runId),
+    "--json",
+  ];
+  const valueFlags = [
+    ["--executor", options.executor],
+    ["--model", options.model],
+    ["--model-hints", options.modelHints],
+    ["--sandbox", options.sandbox],
+    ["--network-access", options.networkAccess],
+    ["--timeout", options.timeout],
+    ["--reasoning", options.reasoning],
+    ["--copy", options.copy],
+    ["--test-command", options.testCommand],
+  ];
+  for (const [flag, value] of valueFlags) {
+    if (value !== undefined && value !== null && String(value).trim() !== "") {
+      args.push(flag, String(value));
+    }
+  }
+  if (options.register) args.push("--register");
+  return args;
+}
+
 function childReviewSnapshot(repoRoot, runId) {
   const record = readManifest(getManifestPath(repoRoot, runId));
   return {
@@ -523,10 +562,23 @@ function childNeedsReview(summaryChild) {
     && summaryChild.run_state === RUN_STATES.REVIEW_PENDING;
 }
 
-function spawnReviewForChild({ repoRoot, child, options, activeChildren, isInterrupted }) {
+function childNeedsReviewLoop(summaryChild) {
+  return summaryChild.dispatch_status === DISPATCH_STATUS.DISPATCHED
+    && summaryChild.run_id
+    && [
+      RUN_STATES.REVIEW_PENDING,
+      RUN_STATES.CHANGES_REQUESTED,
+    ].includes(summaryChild.run_state);
+}
+
+function spawnReviewForChild({ repoRoot, fleetId, child, options, activeChildren, isInterrupted }) {
   return new Promise((resolve) => {
     if (isInterrupted()) {
       resolve({ leaf_ref: child.leaf_ref, run_id: child.run_id, status: "skipped_interrupted" });
+      return;
+    }
+    if (runtimeChildIsAlive(repoRoot, fleetId, child.leaf_ref)) {
+      resolve({ leaf_ref: child.leaf_ref, run_id: child.run_id, status: "skipped_running", run_state: child.run_state });
       return;
     }
     if (!child.run_id || terminalForFleetReview(child.run_state) || !childNeedsReview(child)) {
@@ -563,12 +615,14 @@ function spawnReviewForChild({ repoRoot, child, options, activeChildren, isInter
     let stderr = "";
     let settled = false;
     activeChildren.set(child.leaf_ref, review);
+    upsertRuntimeProcess(repoRoot, fleetId, child.leaf_ref, review, { phase: "review", run_id: child.run_id });
     review.stdout.on("data", (chunk) => { stdout += chunk.toString("utf-8"); });
     review.stderr.on("data", (chunk) => { stderr += chunk.toString("utf-8"); });
     review.once("error", (error) => {
       if (settled) return;
       settled = true;
       activeChildren.delete(child.leaf_ref);
+      removeRuntimeChild(repoRoot, fleetId, child.leaf_ref);
       resolve({
         leaf_ref: child.leaf_ref,
         run_id: child.run_id,
@@ -580,6 +634,7 @@ function spawnReviewForChild({ repoRoot, child, options, activeChildren, isInter
       if (settled) return;
       settled = true;
       activeChildren.delete(child.leaf_ref);
+      removeRuntimeChild(repoRoot, fleetId, child.leaf_ref);
 
       let after = null;
       try {
@@ -617,6 +672,91 @@ function spawnReviewForChild({ repoRoot, child, options, activeChildren, isInter
         status: code === 0 ? "reviewed" : "reviewed_with_child_failure",
         exit_code: code,
         signal,
+        stderr,
+        before,
+        after,
+      });
+    });
+  });
+}
+
+function spawnRedispatchForChild({ repoRoot, fleetId, child, options, activeChildren, isInterrupted }) {
+  return new Promise((resolve) => {
+    if (isInterrupted()) {
+      resolve({ leaf_ref: child.leaf_ref, run_id: child.run_id, status: "skipped_interrupted" });
+      return;
+    }
+    if (runtimeChildIsAlive(repoRoot, fleetId, child.leaf_ref)) {
+      resolve({ leaf_ref: child.leaf_ref, run_id: child.run_id, status: "skipped_running", run_state: child.run_state });
+      return;
+    }
+
+    const before = childReviewSnapshot(repoRoot, child.run_id);
+    const args = buildRedispatchArgs({ repoRoot, runId: child.run_id, options });
+    const dispatch = spawn(process.execPath, args, {
+      cwd: repoRoot,
+      env: process.env,
+      detached: process.platform !== "win32",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+
+    let stdout = "";
+    let stderr = "";
+    let settled = false;
+    activeChildren.set(child.leaf_ref, dispatch);
+    upsertRuntimeProcess(repoRoot, fleetId, child.leaf_ref, dispatch, { phase: "redispatch", run_id: child.run_id });
+    dispatch.stdout.on("data", (chunk) => { stdout += chunk.toString("utf-8"); });
+    dispatch.stderr.on("data", (chunk) => { stderr += chunk.toString("utf-8"); });
+    dispatch.once("error", (error) => {
+      if (settled) return;
+      settled = true;
+      activeChildren.delete(child.leaf_ref);
+      removeRuntimeChild(repoRoot, fleetId, child.leaf_ref);
+      resolve({ leaf_ref: child.leaf_ref, run_id: child.run_id, status: "redispatch_failed", error: error.message });
+    });
+    dispatch.once("close", (code, signal) => {
+      if (settled) return;
+      settled = true;
+      activeChildren.delete(child.leaf_ref);
+      removeRuntimeChild(repoRoot, fleetId, child.leaf_ref);
+
+      let after = null;
+      try {
+        after = childReviewSnapshot(repoRoot, child.run_id);
+      } catch (error) {
+        resolve({
+          leaf_ref: child.leaf_ref,
+          run_id: child.run_id,
+          status: "redispatch_failed",
+          exit_code: code,
+          signal,
+          stderr,
+          error: `failed to read child manifest after redispatch: ${error.message}`,
+        });
+        return;
+      }
+
+      if (after.state === before.state) {
+        resolve({
+          leaf_ref: child.leaf_ref,
+          run_id: child.run_id,
+          status: "redispatch_stalled",
+          exit_code: code,
+          signal,
+          stderr,
+          before,
+          after,
+        });
+        return;
+      }
+
+      resolve({
+        leaf_ref: child.leaf_ref,
+        run_id: child.run_id,
+        status: code === 0 ? "redispatched" : "redispatched_with_child_failure",
+        exit_code: code,
+        signal,
+        payload: parseDispatchJson(stdout),
         stderr,
         before,
         after,
@@ -842,13 +982,99 @@ async function statusFleet({ repoRoot, fleetId }) {
   return { summary, operator_attention: buildOperatorAttention(summary) };
 }
 
+function findSummaryChild(repoRoot, fleetId, leafRef) {
+  const summary = deriveFleetSummary(repoRoot, readFleetManifest(repoRoot, fleetId).data);
+  return summary.children.find((child) => child.leaf_ref === leafRef) || null;
+}
+
+function loopStepFailed(step) {
+  return [
+    "review_failed",
+    "review_stalled",
+    "reviewed_with_child_failure",
+    "redispatch_failed",
+    "redispatch_stalled",
+    "redispatched_with_child_failure",
+    "skipped_interrupted",
+  ].includes(step?.status);
+}
+
+async function driveChildReviewLoop({ repoRoot, fleetId, child, options, activeChildren, isInterrupted }) {
+  const steps = [];
+  let current = child;
+
+  while (!isInterrupted()) {
+    if (!current || !childNeedsReviewLoop(current)) {
+      return {
+        leaf_ref: child.leaf_ref,
+        run_id: child.run_id,
+        status: terminalForFleetReview(current?.run_state) ? "complete" : "skipped",
+        run_state: current?.run_state || null,
+        steps,
+      };
+    }
+
+    if (current.run_state === RUN_STATES.REVIEW_PENDING) {
+      const review = await spawnReviewForChild({
+        repoRoot,
+        fleetId,
+        child: current,
+        options,
+        activeChildren,
+        isInterrupted,
+      });
+      steps.push({ phase: "review", ...review });
+      if (loopStepFailed(review) || review.status === "skipped_running") {
+        return {
+          leaf_ref: child.leaf_ref,
+          run_id: child.run_id,
+          status: review.status,
+          run_state: review.after?.state || current.run_state,
+          steps,
+        };
+      }
+    } else if (current.run_state === RUN_STATES.CHANGES_REQUESTED) {
+      const redispatch = await spawnRedispatchForChild({
+        repoRoot,
+        fleetId,
+        child: current,
+        options,
+        activeChildren,
+        isInterrupted,
+      });
+      steps.push({ phase: "redispatch", ...redispatch });
+      if (loopStepFailed(redispatch) || redispatch.status === "skipped_running") {
+        return {
+          leaf_ref: child.leaf_ref,
+          run_id: child.run_id,
+          status: redispatch.status,
+          run_state: redispatch.after?.state || current.run_state,
+          steps,
+        };
+      }
+    }
+
+    current = findSummaryChild(repoRoot, fleetId, child.leaf_ref);
+  }
+
+  return {
+    leaf_ref: child.leaf_ref,
+    run_id: child.run_id,
+    status: "skipped_interrupted",
+    run_state: current?.run_state || child.run_state,
+    steps,
+  };
+}
+
 async function reviewFleet({ repoRoot, fleetId, options, activeChildren = new Map(), isInterrupted = () => false }) {
   transitionFleetToReviewing(repoRoot, fleetId);
+  cleanupDeadRuntimeChildren(repoRoot, fleetId);
   const starting = deriveFleetSummary(repoRoot, readFleetManifest(repoRoot, fleetId).data);
-  const reviewableChildren = starting.children.filter(childNeedsReview);
+  const reviewableChildren = starting.children.filter(childNeedsReviewLoop);
   const children = await runPool(reviewableChildren, options.parallel, (child) => {
-    return spawnReviewForChild({
+    return driveChildReviewLoop({
       repoRoot,
+      fleetId,
       child,
       options,
       activeChildren,
@@ -858,7 +1084,7 @@ async function reviewFleet({ repoRoot, fleetId, options, activeChildren = new Ma
   const summary = deriveFleetSummary(repoRoot, readFleetManifest(repoRoot, fleetId).data);
   const operatorAttention = buildOperatorAttention(summary);
   const failures = children.some((child) => {
-    return child.status !== "reviewed" && child.status !== "skipped";
+    return !["complete", "skipped"].includes(child.status);
   });
   return {
     ok: !isInterrupted() && !failures,
@@ -866,7 +1092,7 @@ async function reviewFleet({ repoRoot, fleetId, options, activeChildren = new Ma
     fleet_id: fleetId,
     reviewed_children: children,
     skipped_children: starting.children
-      .filter((child) => !childNeedsReview(child))
+      .filter((child) => !childNeedsReviewLoop(child))
       .map((child) => ({
         leaf_ref: child.leaf_ref,
         run_id: child.run_id,
@@ -1007,6 +1233,23 @@ async function runFleet(options) {
     const operatorAttention = buildOperatorAttention(summary);
     const preManifestFailures = summary.children
       .some((child) => child.dispatch_status === DISPATCH_STATUS.DISPATCH_FAILED_PRE_MANIFEST);
+    if (options.resume && summary.children.some(childNeedsReviewLoop)) {
+      const reviewResult = await reviewFleet({
+        repoRoot,
+        fleetId,
+        options,
+        activeChildren,
+        isInterrupted: () => interrupted,
+      });
+      const reviewPreManifestFailures = reviewResult.summary.children
+        .some((child) => child.dispatch_status === DISPATCH_STATUS.DISPATCH_FAILED_PRE_MANIFEST);
+      return {
+        ...reviewResult,
+        ok: reviewResult.ok && !reviewPreManifestFailures,
+        fleetManifestPath: manifestPath,
+        dispatch_children: children,
+      };
+    }
     return {
       ok: !interrupted && !preManifestFailures,
       interrupted,
@@ -1074,6 +1317,7 @@ module.exports = {
   FleetInputError,
   buildDispatchArgs,
   buildOperatorAttention,
+  buildRedispatchArgs,
   buildReviewArgs,
   formatStatusText,
   getFleetLeavesStorePath,
