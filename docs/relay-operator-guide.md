@@ -150,7 +150,7 @@ node skills/relay-config/scripts/relay-config.js plan-run --repo . \
   --dispatch pi:deepseek/deepseek-v4-flash --review codex --json
 ```
 
-Pi primary review uses a bounded parent-process timeout. Set `RELAY_PI_REVIEW_TIMEOUT` to a positive duration such as `120s`, `10m`, or `1h`; the default is `1800s`.
+Pi primary review uses a bounded parent-process timeout. Set `RELAY_PI_REVIEW_TIMEOUT` to a positive duration such as `120s`, `10m`, or `1h`; the default is `1800s`. Relay invokes Pi with prompt-template, skill, theme, extension, and context-file discovery disabled so non-interactive review does not hang on optional startup integrations. If a Pi review still times out, first validate the CLI/provider path with a minimal `pi --no-session --no-context-files --no-tools --no-extensions --no-skills --no-prompt-templates --no-themes --print` command before treating the route as healthy. If that minimal command succeeds while `pi-primary` still times out, record the result as a prompt/scope or route-latency blocker rather than parser failure or healthy evidence.
 
 Cursor can be used as dispatch executor or trusted primary reviewer when `agent` is on `PATH` (or `RELAY_CURSOR_AGENT_BIN` overrides the binary for dispatch and review), authenticated via `agent login` or `CURSOR_API_KEY`, and route policy allows the model route (add `cursor` to `managed_cli` for slug-only models such as `composer-2.5`):
 
@@ -192,7 +192,7 @@ node skills/relay-dispatch/scripts/live-dogfood.js --repo . --json --markdown
 node skills/relay-dispatch/scripts/live-dogfood.js --repo . --dispatch-canary --json
 ```
 
-By default the harness creates a temporary `RELAY_HOME`, writes a scoped route policy there, and runs Pi, OpenCode, and Antigravity probes plus bounded live canaries. Antigravity primary review uses a realistic healthy timeout by default, while `--antigravity-fail-safe-timeout` controls the intentionally short fail-safe timeout canary. Use `--dry-run` to print `not-run` planned steps without invoking live CLIs, or `--probe-only` to skip review/dispatch canaries.
+By default the harness creates a temporary `RELAY_HOME`, writes a scoped route policy there, and runs Pi, OpenCode, and Antigravity probes plus bounded live canaries. Antigravity primary review uses a realistic healthy timeout by default, while `--antigravity-fail-safe-timeout` controls the intentionally short fail-safe timeout canary. Use `--dry-run` to print `not-run` planned steps without invoking live CLIs, `--probe-only` to skip review/dispatch canaries, or repeated `--scenario <name>` filters such as `--scenario pi-primary` when one adapter needs isolated evidence without waiting on unrelated live canaries.
 
 Add `--dispatch-canary` from a clean worktree to run healthy dispatch canaries for Pi, OpenCode, and Antigravity. Each canary asks for a unique minimal repository change and passes only when dispatch returns `review_pending` with a PR number. The default healthy dispatch timeout is bounded at 180 seconds via `--dispatch-timeout`, and branches use `--dispatch-branch-prefix` with the default `dogfood-dispatch`.
 

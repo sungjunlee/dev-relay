@@ -71,6 +71,24 @@ function isExecTimeout(error) {
   return error?.code === "ETIMEDOUT" || (error?.signal === "SIGKILL" && error?.killed);
 }
 
+function buildTimeoutDiagnosticCommand({ piBin, reviewTimeout }) {
+  const duration = String(reviewTimeout || DEFAULT_REVIEW_TIMEOUT).trim() || DEFAULT_REVIEW_TIMEOUT;
+  return [
+    "timeout",
+    duration,
+    piBin || "pi",
+    "--no-session",
+    "--no-context-files",
+    "--no-tools",
+    "--no-extensions",
+    "--no-skills",
+    "--no-prompt-templates",
+    "--no-themes",
+    "--print",
+    "'Return exactly {\"ok\":true} and nothing else.'",
+  ].join(" ");
+}
+
 function buildPrompt(promptText, phase) {
   if (phase === "advisory_review") {
     return [
@@ -130,6 +148,11 @@ function main() {
 
   const execArgs = [
     "--no-session",
+    "--no-context-files",
+    "--no-extensions",
+    "--no-skills",
+    "--no-prompt-templates",
+    "--no-themes",
     "--tools", "read,grep,find,ls",
   ];
   if (model) execArgs.push("--model", model);
@@ -147,9 +170,12 @@ function main() {
     }).trim();
   } catch (error) {
     if (isExecTimeout(error)) {
+      const diagnosticCommand = buildTimeoutDiagnosticCommand({ piBin, reviewTimeout });
       throw new Error(
         `Pi reviewer ${phase} timed out after ${reviewTimeout} (${REVIEW_TIMEOUT_ENV}). ` +
-        "The pi --print invocation did not return before the parent-process timeout; retry with a larger timeout or split the review scope."
+        "The pi --print invocation did not return before the parent-process timeout, so relay cannot treat this as healthy review evidence. " +
+        `First verify Pi non-interactive auth/provider health with: ${diagnosticCommand}. ` +
+        "If that minimal command also times out, record this as a Pi CLI/provider non-interactive blocker; otherwise retry with a larger review timeout or split the review scope."
       );
     }
     const recovered = recoverExecStdout(error);

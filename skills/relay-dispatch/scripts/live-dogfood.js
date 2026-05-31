@@ -184,6 +184,7 @@ function parseArgs(argv) {
     dryRun: false,
     json: false,
     markdown: false,
+    scenarios: [],
     piModel: DEFAULTS.piModel,
     opencodeModel: DEFAULTS.opencodeModel,
     antigravityModel: DEFAULTS.antigravityModel,
@@ -208,6 +209,7 @@ function parseArgs(argv) {
     else if (arg === "--relay-home") parsed.relayHome = next();
     else if (arg === "--keep-relay-home") parsed.keepRelayHome = true;
     else if (arg === "--probe-only") parsed.probeOnly = true;
+    else if (arg === "--scenario") parsed.scenarios.push(next());
     else if (arg === "--dispatch-canary") parsed.dispatchCanary = true;
     else if (arg === "--dry-run") parsed.dryRun = true;
     else if (arg === "--json") parsed.json = true;
@@ -237,6 +239,14 @@ function parseArgs(argv) {
   }
   if (!String(parsed.dispatchBranchPrefix || "").trim()) {
     throw new Error("--dispatch-branch-prefix must be a non-empty string");
+  }
+  if (parsed.scenarios.length) {
+    const knownScenarios = new Set(LIVE_DOGFOOD_SCENARIOS.map((scenario) => scenario.name));
+    for (const scenario of parsed.scenarios) {
+      if (!knownScenarios.has(scenario)) {
+        throw new Error(`unknown --scenario ${JSON.stringify(scenario)}; expected one of: ${[...knownScenarios].join(", ")}`);
+      }
+    }
   }
   return parsed;
 }
@@ -527,9 +537,19 @@ function modelForAdapter(options, adapter) {
 }
 
 function isScenarioEnabled(scenario, options) {
+  if (options.scenarios?.length) return options.scenarios.includes(scenario.name);
   if (options.probeOnly) return scenario.category === "probe";
   if (scenario.requiresDispatchCanary) return options.dispatchCanary === true;
   return scenario.defaultEnabled === true;
+}
+
+function includesDispatchCanaryScenario(options = {}) {
+  if (options.dispatchCanary) return true;
+  if (!options.scenarios?.length) return false;
+  const selected = new Set(options.scenarios);
+  return LIVE_DOGFOOD_SCENARIOS.some((scenario) => (
+    scenario.requiresDispatchCanary === true && selected.has(scenario.name)
+  ));
 }
 
 function buildScenarioEnv(scenario, options) {
@@ -675,7 +695,7 @@ function runDogfood(options = {}, deps = {}) {
   const spawnImpl = deps.spawnSync || spawnSync;
   const repo = path.resolve(options.repo || ".");
   const effectiveOptions = { ...DEFAULTS, ...options };
-  if (effectiveOptions.dispatchCanary && !effectiveOptions.dryRun) {
+  if (includesDispatchCanaryScenario(effectiveOptions) && !effectiveOptions.dryRun) {
     assertCleanDispatchCanaryRepo(repo, spawnImpl);
   }
   const relayHome = ensureRelayHome(options.relayHome, effectiveOptions);
@@ -749,6 +769,7 @@ function printHelp() {
   console.log("  --repo <path>                         Repository root (default: .)");
   console.log("  --relay-home <path>                   Use an explicit RELAY_HOME instead of a temp directory");
   console.log("  --probe-only                          Run only Pi/OpenCode/Antigravity probes");
+  console.log("  --scenario <name>                     Run only a named scenario; repeat for multiple scenarios");
   console.log("  --dispatch-canary                     Add healthy Pi/OpenCode/Antigravity dispatch canaries that must produce review_pending PRs");
   console.log("  --dry-run                             Print planned steps without invoking live CLIs");
   console.log("  --json                                Emit structured JSON");
