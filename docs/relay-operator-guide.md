@@ -147,7 +147,7 @@ node skills/relay-review/scripts/review-runner.js --repo . --run-id <id> --pr <n
 
 Pi primary review uses a bounded parent-process timeout. Set `RELAY_PI_REVIEW_TIMEOUT` to a positive duration such as `120s`, `10m`, or `1h`; the default is `1800s`.
 
-Cursor can be used as dispatch executor or trusted primary reviewer when `agent` is on `PATH` (or `RELAY_CURSOR_AGENT_BIN` is set for review), authenticated via `agent login` or `CURSOR_API_KEY`, and route policy allows the model route (add `cursor` to `managed_cli` for slug-only models such as `composer-2.5`):
+Cursor can be used as dispatch executor or trusted primary reviewer when `agent` is on `PATH` (or `RELAY_CURSOR_AGENT_BIN` overrides the binary for dispatch and review), authenticated via `agent login` or `CURSOR_API_KEY`, and route policy allows the model route (add `cursor` to `managed_cli` for slug-only models such as `composer-2.5`):
 
 ```bash
 node skills/relay-dispatch/scripts/dispatch.js . -e cursor -m composer-2.5 \

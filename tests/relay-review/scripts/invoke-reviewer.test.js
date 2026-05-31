@@ -1006,17 +1006,18 @@ process.stdout.write(JSON.stringify({
   const result = JSON.parse(stdout);
   const loggedArgs = JSON.parse(fs.readFileSync(logPath, "utf-8"));
   assert.equal(result.verdict, "pass");
-  assert.deepEqual(loggedArgs.slice(0, 8), [
+  assert.deepEqual(loggedArgs.slice(0, 9), [
     "--print",
     "--trust",
+    "--force",
     "--mode", "ask",
     "--workspace", repoRoot,
     "--output-format", "json",
   ]);
-  assert.equal(loggedArgs[8], "--model");
-  assert.equal(loggedArgs[9], "composer-2.5");
-  assert.match(loggedArgs[10], /NON-INTERACTIVE REVIEW/);
-  assert.match(loggedArgs[10], /Return a passing review\./);
+  assert.equal(loggedArgs[9], "--model");
+  assert.equal(loggedArgs[10], "composer-2.5");
+  assert.match(loggedArgs[11], /NON-INTERACTIVE REVIEW/);
+  assert.match(loggedArgs[11], /Return a passing review\./);
 });
 
 test("cursor adapter rejects advisory review phase", () => {

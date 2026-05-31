@@ -171,6 +171,7 @@ function main() {
   const execArgs = [
     "--print",
     "--trust",
+    "--force",
     "--mode", "ask",
     "--workspace", repoPath,
     "--output-format", "json",

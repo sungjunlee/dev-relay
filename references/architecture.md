@@ -331,6 +331,8 @@ Do not "simplify" the facade by collapsing submodules back into it or by force-m
 4. `review-runner.js` auto-discovers adapters via `resolveReviewerScript()` by naming convention: `invoke-reviewer-<name>.js`. The `<name>` must match `/^[a-z0-9-]+$/`.
 5. Existing adapters share small utilities (`getArg`, `hasFlag`, `summarizeFailure`, `ensureJsonText`) but NOT full execution logic — each adapter encodes its own execution contract (e.g. Claude uses `--json-schema` + stdout recovery; Codex uses temp-file exchange + `--ephemeral` + sandbox). New adapters should extract only the small utilities.
 
+`invoke-reviewer-cursor.js` supports primary review only: it invokes `agent --print --trust --force --mode ask --workspace <repo> --output-format json`, parses the wrapper `result` field into strict verdict JSON, probes auth via `agent status` or `CURSOR_API_KEY`, and enforces a parent-process timeout via `RELAY_CURSOR_REVIEW_TIMEOUT` (default `1800s`). Relay passes `--workspace` only and never `agent --worktree`.
+
 `invoke-reviewer-opencode.js`, `invoke-reviewer-pi.js`, and `invoke-reviewer-antigravity.js` are phase-aware: `--phase primary_review` validates normal review verdict JSON, while `--phase advisory_review` validates advisory JSON through `advisory-review-schema.js`. OpenCode primary review is route-policy gated and prompt-only read-only with a post-run dirty-worktree guard. Pi invokes `pi --no-session --tools read,grep,find,ls --print <prompt>`, enforces a parent-process timeout via `RELAY_PI_REVIEW_TIMEOUT` (default `1800s`), and uses the same tool allowlist for primary and advisory review. Antigravity targets the `agy` CLI only; it invokes `agy --prompt <prompt> --print-timeout <duration> --sandbox` and relies on dirty-worktree checks rather than Antigravity GUI, IDE, Desktop, plugin runtime, or PTY state. Antigravity live support remains fail-safe experimental until a healthy live canary passes; fake-bin tests alone do not prove live executor or reviewer success, and the fail-safe timeout canary is not healthy success.
 
 ### Shared utilities (cross-skill)
@@ -346,8 +348,8 @@ Current shared helpers:
 
 | Module | Owner | Consumers |
 |--------|-------|-----------|
-| `skills/relay-dispatch/scripts/cli-args.js` | relay-dispatch | `review-runner.js`, `invoke-reviewer-antigravity.js`, `invoke-reviewer-claude.js`, `invoke-reviewer-codex.js`, `invoke-reviewer-opencode.js`, `invoke-reviewer-pi.js`, `finalize-run.js`, `persist-request.js`, `probe-executor-env.js` |
-| `skills/relay-review/scripts/reviewer-helpers.js` | relay-review | `invoke-reviewer-antigravity.js`, `invoke-reviewer-claude.js`, `invoke-reviewer-codex.js`, `invoke-reviewer-opencode.js`, `invoke-reviewer-pi.js` |
+| `skills/relay-dispatch/scripts/cli-args.js` | relay-dispatch | `review-runner.js`, `invoke-reviewer-antigravity.js`, `invoke-reviewer-claude.js`, `invoke-reviewer-codex.js`, `invoke-reviewer-cursor.js`, `invoke-reviewer-opencode.js`, `invoke-reviewer-pi.js`, `finalize-run.js`, `persist-request.js`, `probe-executor-env.js` |
+| `skills/relay-review/scripts/reviewer-helpers.js` | relay-review | `invoke-reviewer-antigravity.js`, `invoke-reviewer-claude.js`, `invoke-reviewer-codex.js`, `invoke-reviewer-cursor.js`, `invoke-reviewer-opencode.js`, `invoke-reviewer-pi.js` |
 
 `reviewer-helpers.js` is scoped to JSON recovery/parsing helpers and `summarizeFailure`. Reviewer adapters intentionally keep divergent execution contracts (Claude uses `--json-schema` + stdout recovery; Codex uses temp schema/result files + `--ephemeral` + sandbox; OpenCode uses prompt-enforced read-only behavior), so a full adapter factory would hide meaningful differences. See item 5 under "Adding a new reviewer adapter" above.
 

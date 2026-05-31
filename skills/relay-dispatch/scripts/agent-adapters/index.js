@@ -978,7 +978,7 @@ const DESCRIPTORS = Object.freeze({
             "read-only": {
               enforcement_level: "informational",
               mechanism: "agent-mode-ask",
-              flags: ["--mode", "ask", "--trust", "--workspace"],
+              flags: ["--mode", "ask", "--trust", "--force", "--workspace"],
               warnings: ["Cursor primary review uses agent --mode ask; relay still checks dirty worktree status after invocation."],
             },
           },
@@ -998,7 +998,7 @@ const DESCRIPTORS = Object.freeze({
             true: {
               enforcement_level: "prompt-only",
               mechanism: "agent-mode-ask-with-worktree-status-guard",
-              flags: ["--mode", "ask", "--trust", "prompt:do-not-modify-files", "git-status-before-after"],
+              flags: ["--mode", "ask", "--trust", "--force", "prompt:do-not-modify-files", "git-status-before-after"],
               warnings: ["Cursor primary review read-only intent relies on ask mode plus review-runner dirty-worktree detection."],
             },
           },
