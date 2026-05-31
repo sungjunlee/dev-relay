@@ -24,10 +24,7 @@ const { resolveAdvisoryConfig, settleAdvisoryForVerdict, startConfiguredAdvisory
 const { printResult, printUsage } = require("./review-runner/output");
 const { bindCliArgs, findUnknownFlags } = require("../../relay-dispatch/scripts/cli-args");
 const { buildPolicyGateFailureEnvelope, isRelayPolicyGateError } = require("../../relay-dispatch/scripts/relay-policy-gate");
-const {
-  buildAdapterCapabilityFailureEnvelope,
-  isAdapterCapabilityError,
-} = require("../../relay-dispatch/scripts/agent-adapters/policy");
+const { buildAdapterCapabilityFailureEnvelope, isAdapterCapabilityError } = require("../../relay-dispatch/scripts/agent-adapters/policy");
 
 const args = process.argv.slice(2);
 const KNOWN_FLAGS = ["--repo", "--run-id", "--branch", "--pr", "--manifest", "--done-criteria-file", "--diff-file", "--review-file", "--manual-review-reason", "--reviewer", "--reviewer-script", "--reviewer-model", "--independent-review-reason", "--advisory-reviewer", "--advisory-profile", "--advisory-reviewer-model", "--advisory-timeout", "--advisory-grace", "--prepare-only", "--no-comment", "--json", "--help", "-h"];

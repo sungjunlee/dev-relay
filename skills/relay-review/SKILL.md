@@ -9,8 +9,8 @@ metadata:
   keywords: "리뷰, 검토, review, gate, fresh context"
 ---
 ## Inputs
-- Env: optional `RELAY_SKILL_ROOT` defaults to `skills`; examples use `PR_NUM`, `BRANCH`, `ISSUE_NUM`, and `RUN_ID`; `ANTHROPIC_API_KEY` is required only for `--reviewer claude`; `RELAY_PI_BIN` can override the Pi binary path; `RELAY_PI_REVIEW_TIMEOUT` sets the Pi primary review parent timeout; `RELAY_CURSOR_AGENT_BIN` can override the Cursor Agent binary path; `RELAY_CURSOR_REVIEW_TIMEOUT` sets the Cursor primary review parent timeout.
-- Files: PR diff (`/tmp/pr-diff.txt`), Done Criteria anchor, Score Log/rubric artifacts, run manifest, and optional `/tmp/review-verdict.json`; `RELAY_ANTIGRAVITY_BIN` can override the Antigravity reviewer binary path.
+- Env: optional `RELAY_SKILL_ROOT` defaults to `skills`; examples use `PR_NUM`, `BRANCH`, `ISSUE_NUM`, and `RUN_ID`.
+- Files: PR diff (`/tmp/pr-diff.txt`), Done Criteria anchor, Score Log/rubric artifacts, run manifest, and optional `/tmp/review-verdict.json`.
 - Sibling scripts: `${RELAY_SKILL_ROOT:-skills}/relay-review/scripts/resolve-issue-number.sh`, `${RELAY_SKILL_ROOT:-skills}/relay-review/scripts/review-runner.js`.
 
 # Relay Review
@@ -30,16 +30,13 @@ metadata:
 
 ## Context Isolation
 
-Reviews MUST run in a fresh context — no prior planning, dispatch, or conversation history. Standard path: `review-runner.js --reviewer codex` or `--reviewer claude`; adapter scripts enforce isolation.
+Reviews MUST run in a fresh context: no prior planning, dispatch, or conversation history. Standard path: let `review-runner.js` invoke a supported reviewer; adapter isolation and provider-specific invocation details live in `../relay-dispatch/references/agent-adapter-platform.md`.
 
-- Claude Code: `context: fork` frontmatter triggers isolation.
-- Codex adapter: `invoke-reviewer-codex.js` passes `--ephemeral --sandbox read-only`.
-- Claude adapter: `invoke-reviewer-claude.js` passes `--bare --no-session-persistence`; Pi adapter passes `--no-session --tools read,grep,find,ls`; Antigravity adapter invokes the `agy` CLI with `--prompt ... --print-timeout ... --sandbox`; Cursor adapter invokes `agent --mode ask --output-format json` and parses the wrapper `result` field.
-- Manual inline review: start a new session; do not continue from dispatch.
-- Other fallback: prefix the prompt with "You are reviewing code you did NOT write. You have no context about why it was written this way."
+Manual fallback also needs a new session. Do not continue from dispatch, and do not review inline in the orchestrator context.
+
 ## Setup: Establish the anchor
 
-1. Get the PR diff and Done Criteria (this runs in a fresh context — fetch everything needed). Runner resolution order and issue inference details are in `references/runner-notes.md`.
+1. Get the PR diff and Done Criteria when preparing a manual/fallback review. Runner resolution order and issue inference details are in `references/runner-notes.md`.
 ```bash
 PR_NUM=$(gh pr list --head <branch> --json number -q '.[0].number')
 BRANCH=$(gh pr view $PR_NUM --json headRefName -q '.headRefName')
@@ -61,19 +58,15 @@ node "${RELAY_SKILL_ROOT:-skills}/relay-review/scripts/review-runner.js" --repo 
 
 Run the runner in the foreground. Do NOT background it, detach it, or return with "I'll wait for the background runner." The relay-review result is the runner's verdict; do not return until the runner exits and the new `review-round-N-verdict.json` exists.
 
-Supported built-in adapters: `--reviewer codex`, `--reviewer claude`, `--reviewer opencode`, `--reviewer pi`, `--reviewer antigravity`, `--reviewer cursor`.
+Supported primary reviewers: `--reviewer codex`, `--reviewer claude`, `--reviewer opencode`, `--reviewer pi`, `--reviewer antigravity`, and `--reviewer cursor`. Adapter precedence, environment knobs, capability gates, and model examples live in `../relay-dispatch/references/agent-adapter-platform.md`.
 
-Notes: `codex` uses read-only structured output; `opencode` uses prompt-only read-only plus dirty-worktree checks; `pi` uses a read/grep/find/ls allowlist plus dirty-worktree checks; `antigravity` targets the `agy` CLI, not GUI/IDE/Desktop flows, and relies on `--sandbox` plus dirty-worktree checks. `claude --bare` needs `ANTHROPIC_API_KEY` or `claude login --api-key`.
-Model precedence is `--reviewer-model` -> `manifest.model_hints.review` -> reviewer default. Examples: `review-runner.js --repo . --run-id "$RUN_ID" --pr "$PR_NUM" --reviewer opencode --reviewer-model opencode-go/deepseek-v4-pro --json`; `review-runner.js --repo . --run-id "$RUN_ID" --pr "$PR_NUM" --reviewer pi --reviewer-model openai/gpt-5 --json`; `review-runner.js --repo . --run-id "$RUN_ID" --pr "$PR_NUM" --reviewer antigravity --reviewer-model google/antigravity-cli --json`; `review-runner.js --repo . --run-id "$RUN_ID" --pr "$PR_NUM" --reviewer cursor --reviewer-model composer-2.5 --json`.
-The adapter capability matrix and checklist are in `../relay-dispatch/references/agent-adapter-platform.md`.
-Optional advisory path: add an opencode, Pi, or Antigravity blind-spot lane alongside the primary reviewer:
+Optional advisory path: add a non-gating blind-spot lane alongside the primary reviewer:
 ```bash
-node "${RELAY_SKILL_ROOT:-skills}/relay-review/scripts/review-runner.js" --repo . --run-id "$RUN_ID" --pr "$PR_NUM" --reviewer codex --advisory-reviewer opencode --advisory-profile blindspot --json
-node "${RELAY_SKILL_ROOT:-skills}/relay-review/scripts/review-runner.js" --repo . --run-id "$RUN_ID" --pr "$PR_NUM" --reviewer codex --advisory-reviewer pi --advisory-reviewer-model openai/gpt-5 --advisory-profile blindspot --json
-node "${RELAY_SKILL_ROOT:-skills}/relay-review/scripts/review-runner.js" --repo . --run-id "$RUN_ID" --pr "$PR_NUM" --reviewer codex --advisory-reviewer antigravity --advisory-reviewer-model google/antigravity-cli --advisory-profile blindspot --json
+node "${RELAY_SKILL_ROOT:-skills}/relay-review/scripts/review-runner.js" --repo . --run-id "$RUN_ID" --pr "$PR_NUM" --reviewer codex --advisory-reviewer <name> --advisory-profile blindspot --json
 ```
+Supported advisory reviewers: `--advisory-reviewer opencode`, `--advisory-reviewer pi`, and `--advisory-reviewer antigravity`.
 
-Advisory review is non-gating for `policy.review_assurance=standard`: it starts concurrently, waits only `--advisory-grace` seconds on the critical path, records `advisory_review` plus `review-round-N-advisory-<reviewer>-*`, never changes the trusted verdict or redispatch prompt, and records failures/timeouts/invalid JSON/write-policy violations without changing the primary outcome. Late artifacts are classified as `metrics` after a passing primary decision or `redispatch` after changes requested. If dispatch routing selected `routing.selected.advisory_review.reviewer`, review-runner uses it as the default unless CLI advisory flags override it. For `policy.review_assurance=hardened`, the runner fails fast unless the command or manifest routing supplies an advisory reviewer; advisory failures or required findings block a passing primary verdict, and execution evidence must be strict. When `execution-evidence.json` includes `verification_runs[]`, hardened gates prefer those actual command-run records; otherwise they fall back to legacy `test_exit_code=0` plus a SHA-bound result hash. Use `--advisory-reviewer-model` to override; otherwise opencode uses dispatch executor defaults plus optional `~/.relay/executors.json`; Pi and Antigravity should use explicit route-policy-approved model routes. Current profile: `blindspot` checks likely misses such as test gaps, bypass paths, edge cases, stale docs, and operational failure modes.
+Advisory review is non-gating for `policy.review_assurance=standard`: it records artifacts and never replaces the primary verdict. For `policy.review_assurance=hardened`, advisory review and strict execution evidence become required gates. Full advisory timing, failure, and route semantics are in `references/runner-notes.md` and the adapter platform reference.
 
 4. Fallback path for unsupported environments or debugging:
 ```bash
