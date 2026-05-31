@@ -16,6 +16,7 @@ const RELAY_READY_REQUEST_CONTRACT_SCHEMA = path.join(
   "request-contract.schema.json",
 );
 const OPERATOR_SURFACE_REFERENCE = path.join(REPO_ROOT, "references", "operator-surface.md");
+const README_PATH = path.join(REPO_ROOT, "README.md");
 
 const SURFACE_TIERS = {
   "public operator surface": ["relay-config", "relay", "relay-merge"],
@@ -238,6 +239,26 @@ function readSkillFiles() {
     }));
 }
 
+function extractOperatorSurfaceTierSkills(content) {
+  const tierNames = new Set(Object.keys(SURFACE_TIERS));
+  const entries = [];
+
+  splitLines(content).forEach((line) => {
+    const row = line.match(/^\|\s*([^|]+?)\s*\|\s*([^|]+?)\s*\|/);
+    if (!row) return;
+
+    const tier = row[1].trim().toLowerCase();
+    if (!tierNames.has(tier)) return;
+
+    const skillsCell = row[2];
+    for (const match of skillsCell.matchAll(/`([^`]+)`/g)) {
+      entries.push({ tier, skill: match[1] });
+    }
+  });
+
+  return entries;
+}
+
 function assertOperatorSurfacePolicy(content) {
   assert.match(
     content,
@@ -256,6 +277,21 @@ function assertOperatorSurfacePolicy(content) {
       assert.match(content, new RegExp(`\`${skill}\``), `operator surface reference must classify ${skill}`);
     });
   });
+
+  const installedSkills = readSkillFiles().map((skillFile) => path.basename(path.dirname(skillFile.path))).sort();
+  const classifiedSkills = extractOperatorSurfaceTierSkills(content);
+  const counts = new Map();
+  classifiedSkills.forEach(({ skill }) => counts.set(skill, (counts.get(skill) || 0) + 1));
+  const duplicates = [...counts.entries()]
+    .filter(([, count]) => count > 1)
+    .map(([skill]) => skill)
+    .sort();
+  assert.deepEqual(duplicates, [], "operator surface reference must not classify a skill in multiple tiers");
+  assert.deepEqual(
+    [...counts.keys()].sort(),
+    installedSkills,
+    "operator surface reference must classify every installed skill exactly once",
+  );
 }
 
 function assertRelayStopsAtReadyToMerge(content) {
@@ -297,6 +333,26 @@ function assertRelayReviewAdapterDetailsStayReferenced(content) {
     /\.\.\/relay-dispatch\/references\/agent-adapter-platform\.md/,
     "relay-review/SKILL.md must point provider-specific adapter details to the adapter platform reference",
   );
+}
+
+function assertReadmeAdapterPrereqDetailsStayReferenced(content) {
+  assert.match(
+    content,
+    /skills\/relay-dispatch\/references\/agent-adapter-platform\.md/,
+    "README must point adapter-specific prerequisites to the adapter platform reference",
+  );
+  for (const pattern of [
+    /RELAY_(?:PI|CURSOR|ANTIGRAVITY)_[A-Z_]+/,
+    /Pi CLI \d/i,
+    /Antigravity CLI `agy` \d/i,
+    /Cursor Agent CLI `agent`/i,
+  ]) {
+    assert.doesNotMatch(
+      content,
+      pattern,
+      `README should not carry high-churn adapter prerequisite detail: ${pattern}`,
+    );
+  }
 }
 
 test("all skills/SKILL.md files satisfy the lint contract", () => {
@@ -341,6 +397,18 @@ test("operator surface policy classifies skill command tiers", () => {
   assertOperatorSurfacePolicy(content);
 });
 
+test("operator surface policy rejects missing or duplicate skill coverage", () => {
+  const content = fs.readFileSync(OPERATOR_SURFACE_REFERENCE, "utf-8");
+  assert.throws(
+    () => assertOperatorSurfacePolicy(content.replace("`relay-fleet`", "")),
+    /classify relay-fleet|classify every installed skill exactly once/,
+  );
+  assert.throws(
+    () => assertOperatorSurfacePolicy(content.replace("`relay-fleet`", "`relay`, `relay-fleet`")),
+    /must not classify a skill in multiple tiers/,
+  );
+});
+
 test("relay skill description preserves explicit ready_to_merge stop boundary", () => {
   const relaySkill = fs.readFileSync(path.join(SKILLS_DIR, "relay", "SKILL.md"), "utf-8");
   assertRelayStopsAtReadyToMerge(relaySkill);
@@ -349,6 +417,11 @@ test("relay skill description preserves explicit ready_to_merge stop boundary", 
 test("relay-review spine delegates provider-specific adapter details", () => {
   const relayReviewSkill = fs.readFileSync(path.join(SKILLS_DIR, "relay-review", "SKILL.md"), "utf-8");
   assertRelayReviewAdapterDetailsStayReferenced(relayReviewSkill);
+});
+
+test("README delegates adapter prerequisite churn to adapter references", () => {
+  const readme = fs.readFileSync(README_PATH, "utf-8");
+  assertReadmeAdapterPrereqDetailsStayReferenced(readme);
 });
 
 test("assertLineCount rejects SKILL.md files over 150 lines", () => {

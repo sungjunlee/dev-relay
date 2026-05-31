@@ -2,7 +2,7 @@
 
 Deep-dive into the manifest contract, state machine, and extension points. For overview, see [CLAUDE.md](../CLAUDE.md).
 
-This reference centers on the manifest-backed run lifecycle, plus the readiness boundary that may sit ahead of `relay-plan`. For the full relay-ready control-flow contract, see [docs/relay-ready-routing-and-handoff-design.md](../docs/relay-ready-routing-and-handoff-design.md). For provider/model route policy setup and operator examples, see [docs/model-route-policy.md](../docs/model-route-policy.md).
+This reference centers on the manifest-backed run lifecycle, plus the readiness boundary that may sit ahead of `relay-plan`. For the full relay-ready control-flow contract, see [docs/relay-ready-routing-and-handoff-design.md](../docs/relay-ready-routing-and-handoff-design.md). For provider/model route policy setup and operator examples, see [docs/model-route-policy.md](../docs/model-route-policy.md). For the public/internal/optional skill tiers, see [operator-surface.md](operator-surface.md).
 
 ## Readiness Boundary
 
