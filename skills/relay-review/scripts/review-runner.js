@@ -22,16 +22,11 @@ const { buildPrimaryReviewerPreflight, loadReviewText, loadRunRoutePlan, resolve
 const { maybeSwapReviewer } = require("./review-runner/reviewer-swap");
 const { resolveAdvisoryConfig, settleAdvisoryForVerdict, startConfiguredAdvisory } = require("./review-runner/advisory-orchestration");
 const { printResult, printUsage } = require("./review-runner/output");
-const { bindCliArgs, findUnknownFlags } = require("../../relay-dispatch/scripts/cli-args");
+const { assertKnownReviewRunnerFlags, parseReviewRunnerCliArgs } = require("./review-runner/cli");
 const { buildPolicyGateFailureEnvelope, isRelayPolicyGateError } = require("../../relay-dispatch/scripts/relay-policy-gate");
 const { buildAdapterCapabilityFailureEnvelope, isAdapterCapabilityError } = require("../../relay-dispatch/scripts/agent-adapters/policy");
 
-const args = process.argv.slice(2);
-const KNOWN_FLAGS = ["--repo", "--run-id", "--branch", "--pr", "--manifest", "--done-criteria-file", "--diff-file", "--review-file", "--manual-review-reason", "--reviewer", "--reviewer-script", "--reviewer-model", "--independent-review-reason", "--advisory-reviewer", "--advisory-profile", "--advisory-reviewer-model", "--advisory-timeout", "--advisory-grace", "--prepare-only", "--no-comment", "--json", "--help", "-h"];
-const cliArgs = bindCliArgs(args, {
-  commandName: "review-runner",
-  reservedFlags: KNOWN_FLAGS,
-});
+const { args, cliArgs, options } = parseReviewRunnerCliArgs(process.argv.slice(2));
 
 if (require.main === module && (!args.length || cliArgs.hasFlag(["--help", "-h"]))) {
   printUsage();
@@ -39,32 +34,13 @@ if (require.main === module && (!args.length || cliArgs.hasFlag(["--help", "-h"]
 }
 
 async function run() {
-  const unknownFlags = findUnknownFlags(args, "review-runner");
-  if (unknownFlags.length) {
-    throw new Error(`unknown flags: ${unknownFlags.join(", ")}`);
-  }
-
-  const repoArg = cliArgs.getArg("--repo");
-  const repoPath = path.resolve(repoArg || ".");
-  const manifestPathArg = cliArgs.getArg("--manifest");
-  const runIdArg = cliArgs.getArg("--run-id");
-  const branchArg = cliArgs.getArg("--branch");
-  const prArg = cliArgs.getArg("--pr");
-  const doneCriteriaFile = cliArgs.getArg("--done-criteria-file");
-  const diffFile = cliArgs.getArg("--diff-file");
-  const reviewFile = cliArgs.getArg("--review-file");
-  const manualReviewReason = cliArgs.getArg("--manual-review-reason");
-  const reviewerArg = cliArgs.getArg("--reviewer");
-  const reviewerScriptArg = cliArgs.getArg("--reviewer-script");
-  const reviewerModel = cliArgs.getArg("--reviewer-model");
-  const independentReviewReason = cliArgs.getArg("--independent-review-reason");
-  const advisoryReviewerArg = cliArgs.getArg("--advisory-reviewer");
-  const advisoryProfileArg = cliArgs.getArg("--advisory-profile");
-  const advisoryReviewerModel = cliArgs.getArg("--advisory-reviewer-model");
-  const advisoryTimeoutArg = cliArgs.getArg("--advisory-timeout"), advisoryGraceArg = cliArgs.getArg("--advisory-grace");
-  const prepareOnly = cliArgs.hasFlag("--prepare-only");
-  const noComment = cliArgs.hasFlag("--no-comment");
-  const jsonOut = cliArgs.hasFlag("--json");
+  assertKnownReviewRunnerFlags(args);
+  const {
+    advisoryGraceArg, advisoryProfileArg, advisoryReviewerArg, advisoryReviewerModel,
+    advisoryTimeoutArg, branchArg, diffFile, doneCriteriaFile, independentReviewReason,
+    jsonOut, manifestPathArg, manualReviewReason, noComment, prArg, prepareOnly, repoArg,
+    repoPath, reviewFile, reviewerArg, reviewerModel, reviewerScriptArg, runIdArg,
+  } = options;
   if (manualReviewReason && !reviewFile) {
     throw new Error("--manual-review-reason requires --review-file");
   }
@@ -217,8 +193,6 @@ async function run() {
     branch, config: advisoryConfig, data, diffText, doneCriteria, doneCriteriaSource,
     issueNumber, prNumber, reviewedHeadSha, reviewRepoPath, round, rubricLoad, runDir, runRepoPath,
   }));
-
-  try {
   const { rawResponsePath, reviewText } = loadReviewText({
     body,
     data,
@@ -391,9 +365,6 @@ async function run() {
   result.verdictPath = verdictPath;
 
   printResult({ doneCriteriaPath, diffPath, jsonOut, manifestPath, originalState: data.state, prepareOnly, prNumber, promptPath, redispatchPath, result, updatedManifest, verdictPath });
-  } catch (error) {
-    throw error;
-  }
 }
 
 if (require.main === module) {
@@ -411,10 +382,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = {
-  applyVerdictToManifest, buildCommentBody, buildPrompt, buildRedispatchPrompt,
-  buildReviewRunnerRubricGateFailure, detectChurnGrowth, formatIssueList,
-  formatPriorVerdictSummary, formatScopeDrift, getGhLogin, loadRubricFromRunDir,
-  parseRemoteHost, parseReviewVerdict, parseScoreLog, resolveIssueNumber,
-  resolveRemoteHost, validateReviewVerdict, validateScopeDrift,
-};
+module.exports = { applyVerdictToManifest, buildCommentBody, buildPrompt, buildRedispatchPrompt, buildReviewRunnerRubricGateFailure, detectChurnGrowth, formatIssueList, formatPriorVerdictSummary, formatScopeDrift, getGhLogin, loadRubricFromRunDir, parseRemoteHost, parseReviewVerdict, parseScoreLog, resolveIssueNumber, resolveRemoteHost, validateReviewVerdict, validateScopeDrift };
