@@ -86,7 +86,7 @@ test("check shorthand maps reviewer phases to reviewer and executor scopes", () 
   assert.equal(runConfig(["init", "company", "--json"], { relayHome }).status, 0);
   assert.equal(runConfig([
     "allow-route",
-    "kakao/opencode-glm-*",
+    "example/opencode-model-*",
     "--phase",
     "dispatch,advisory_review,sidecar",
     "--executor",
@@ -98,7 +98,7 @@ test("check shorthand maps reviewer phases to reviewer and executor scopes", () 
     "check",
     "advisory_review",
     "opencode",
-    "kakao/opencode-glm-5-fp8",
+    "example/opencode-model-fast",
     "--json",
   ], { relayHome });
 

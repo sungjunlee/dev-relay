@@ -103,7 +103,7 @@ test("validateRelayPolicy rejects invalid v1 schema shapes", () => {
       validateRelayPolicy(
         {
           ...buildDefaultRelayPolicy(),
-          allowed_model_routes: [{ route: "kakao/*", phases: "dispatch" }],
+          allowed_model_routes: [{ route: "example/*", phases: "dispatch" }],
         },
         "bad.json"
       ),
@@ -120,7 +120,7 @@ test("global-only policy allows matching model routes and denies unknown routes"
       managed_cli: ["codex"],
       allowed_model_routes: [
         {
-          route: "kakao/*",
+          route: "example/*",
           phases: ["dispatch"],
           executors: ["opencode"],
         },
@@ -136,7 +136,7 @@ test("global-only policy allows matching model routes and denies unknown routes"
     evaluateRelayRoute(result.policy, {
       phase: "dispatch",
       executor: "opencode",
-      model: "kakao/opencode-glm-5",
+      model: "example/opencode-model-5",
     }).reason,
     "allowed_model_route"
   );
@@ -193,7 +193,7 @@ test("repo-local policy can narrow managed CLIs, allowed routes, and unknown-rou
       deny_unknown_model_routes: false,
       allowed_model_routes: [
         {
-          route: "kakao/*",
+          route: "example/*",
           phases: ["dispatch", "review"],
           executors: ["opencode"],
           reviewers: ["opencode"],
@@ -209,12 +209,12 @@ test("repo-local policy can narrow managed CLIs, allowed routes, and unknown-rou
       deny_unknown_model_routes: true,
       allowed_model_routes: [
         {
-          route: "kakao/opencode-glm-*",
+          route: "example/opencode-model-*",
           phases: ["dispatch"],
           executors: ["opencode"],
         },
       ],
-      denied_model_routes: ["kakao/opencode-glm-bad"],
+      denied_model_routes: ["example/opencode-model-bad"],
     })
   );
 
@@ -227,7 +227,7 @@ test("repo-local policy can narrow managed CLIs, allowed routes, and unknown-rou
     evaluateRelayRoute(result.policy, {
       phase: "dispatch",
       executor: "opencode",
-      model: "kakao/opencode-glm-5",
+      model: "example/opencode-model-5",
     }).reason,
     "allowed_model_route"
   );
@@ -235,7 +235,7 @@ test("repo-local policy can narrow managed CLIs, allowed routes, and unknown-rou
     evaluateRelayRoute(result.policy, {
       phase: "review",
       reviewer: "opencode",
-      model: "kakao/opencode-glm-5",
+      model: "example/opencode-model-5",
     }).reason,
     "unknown_model_route"
   );
@@ -253,7 +253,7 @@ test("repo-local policy that widens global policy is rejected", () => {
     policy({
       profile: "global",
       managed_cli: ["codex"],
-      allowed_model_routes: [{ route: "kakao/opencode-glm-*", phases: ["dispatch"], executors: ["opencode"] }],
+      allowed_model_routes: [{ route: "example/opencode-model-*", phases: ["dispatch"], executors: ["opencode"] }],
     })
   );
   writeJson(
@@ -261,7 +261,7 @@ test("repo-local policy that widens global policy is rejected", () => {
     policy({
       profile: "repo",
       managed_cli: ["codex", "claude"],
-      allowed_model_routes: [{ route: "kakao/*", phases: ["dispatch"], executors: ["opencode"] }],
+      allowed_model_routes: [{ route: "example/*", phases: ["dispatch"], executors: ["opencode"] }],
     })
   );
 
@@ -317,8 +317,8 @@ test("project-local policy cannot widen or remove inherited deny routes", () => 
     policy({
       profile: "global",
       managed_cli: ["codex"],
-      allowed_model_routes: [{ route: "kakao/opencode-glm-*", phases: ["dispatch"], executors: ["opencode"] }],
-      denied_model_routes: [{ route: "kakao/opencode-glm-bad", phases: ["dispatch"], executors: ["opencode"] }],
+      allowed_model_routes: [{ route: "example/opencode-model-*", phases: ["dispatch"], executors: ["opencode"] }],
+      denied_model_routes: [{ route: "example/opencode-model-bad", phases: ["dispatch"], executors: ["opencode"] }],
     })
   );
 
@@ -327,7 +327,7 @@ test("project-local policy cannot widen or remove inherited deny routes", () => 
     policy({
       profile: "project",
       managed_cli: ["codex", "claude"],
-      allowed_model_routes: [{ route: "kakao/*", phases: ["dispatch"], executors: ["opencode"] }],
+      allowed_model_routes: [{ route: "example/*", phases: ["dispatch"], executors: ["opencode"] }],
       denied_model_routes: [],
     })
   );
@@ -341,31 +341,31 @@ test("project-local policy cannot widen or remove inherited deny routes", () => 
 
 test("denied model routes win over allowed model routes", () => {
   const currentPolicy = policy({
-    allowed_model_routes: ["kakao/*"],
-    denied_model_routes: ["kakao/opencode-glm-bad"],
+    allowed_model_routes: ["example/*"],
+    denied_model_routes: ["example/opencode-model-bad"],
   });
 
   const decision = evaluateRelayRoute(currentPolicy, {
     phase: "dispatch",
     executor: "opencode",
-    model: "kakao/opencode-glm-bad",
+    model: "example/opencode-model-bad",
   });
 
   assert.equal(decision.allowed, false);
   assert.equal(decision.reason, "denied_model_route");
-  assert.equal(decision.matchedRoute, "kakao/opencode-glm-bad");
+  assert.equal(decision.matchedRoute, "example/opencode-model-bad");
 });
 
 test("route actor scopes are bound to the evaluated phase", () => {
   const currentPolicy = policy({
     allowed_model_routes: [
       {
-        route: "kakao/*",
+        route: "example/*",
         phases: ["review"],
         executors: ["opencode"],
       },
       {
-        route: "kakao/*",
+        route: "example/*",
         phases: ["review"],
         reviewers: ["codex"],
       },
@@ -377,7 +377,7 @@ test("route actor scopes are bound to the evaluated phase", () => {
       phase: "review",
       executor: "opencode",
       reviewer: "opencode",
-      model: "kakao/opencode-glm-5",
+      model: "example/opencode-model-5",
     }).reason,
     "unknown_model_route"
   );
@@ -386,7 +386,7 @@ test("route actor scopes are bound to the evaluated phase", () => {
       phase: "review",
       executor: "opencode",
       reviewer: "codex",
-      model: "kakao/opencode-glm-5",
+      model: "example/opencode-model-5",
     }).reason,
     "allowed_model_route"
   );
@@ -412,7 +412,7 @@ test("unknown route denial can be explicitly disabled for non-managed executors"
 });
 
 test("matchRoutePattern supports simple star globs", () => {
-  assert.equal(matchRoutePattern("kakao/*", "kakao/opencode-glm-5"), true);
-  assert.equal(matchRoutePattern("kakao/opencode-glm-*", "kakao/opencode-glm-5"), true);
-  assert.equal(matchRoutePattern("kakao/opencode-glm-*", "kakao/opencode-qwen-3"), false);
+  assert.equal(matchRoutePattern("example/*", "example/opencode-model-5"), true);
+  assert.equal(matchRoutePattern("example/opencode-model-*", "example/opencode-model-5"), true);
+  assert.equal(matchRoutePattern("example/opencode-model-*", "example/opencode-qwen-3"), false);
 });

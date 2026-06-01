@@ -72,14 +72,14 @@ Adapter minimum versions, binary overrides, timeouts, capability gates, and prov
 
 ## Configure Routes
 
-Relay distinguishes CLI harnesses from provider/model routes. Names such as `codex`, `claude`, `opencode`, `pi`, and `antigravity` describe how relay invokes an agent. The compliance boundary is the provider/model route, for example `kakao/opencode-glm-5-fp8`, `opencode-go/deepseek-v4-pro`, or `google/antigravity-cli`.
+Relay distinguishes CLI harnesses from provider/model routes. Names such as `codex`, `claude`, `opencode`, `pi`, and `antigravity` describe how relay invokes an agent. The compliance boundary is the provider/model route, for example `example/opencode-model-fast`, `opencode-go/deepseek-v4-pro`, or `google/antigravity-cli`.
 
 Without a policy file, relay stays conservative: managed Codex and Claude CLIs are allowed by default, while OpenCode, Pi, Antigravity, advisory reviewers, and sidecars require explicit route approval.
 
 After installing skills, ask for setup in plain language:
 
 ```text
-/relay-config Set up relay for my company environment. Only allow OpenCode through kakao/opencode-glm-*.
+/relay-config Set up relay for my company environment. Only allow OpenCode through example/opencode-model-*.
 $relay-config For my personal setup, use opencode-go/deepseek-v4-pro for sidecar and advisory review.
 ```
 
@@ -88,7 +88,7 @@ Common starting points:
 | Setup | Recommended request |
 | --- | --- |
 | Company default | `/relay-config Set up relay for my company environment` |
-| Company internal OpenCode | `/relay-config Only allow OpenCode through the kakao/opencode-glm-* route at work` |
+| Approved OpenCode route | `/relay-config Only allow OpenCode through the example/opencode-model-* route at work` |
 | Personal sidecars | `$relay-config Use opencode-go/deepseek-v4-pro for personal sidecar and advisory review` |
 | Managed only | `/relay-config Keep the default Codex/Claude-only setup` |
 

@@ -27,7 +27,7 @@ Use `/relay-config` to set route policy rather than editing JSON by hand:
 
 ```text
 /relay-config Set up relay for my company environment
-/relay-config Only allow OpenCode through kakao/opencode-glm-* at work
+/relay-config Only allow OpenCode through example/opencode-model-* at work
 $relay-config Use opencode-go/deepseek-v4-pro for personal sidecar review
 ```
 

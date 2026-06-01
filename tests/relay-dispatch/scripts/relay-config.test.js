@@ -220,7 +220,7 @@ test("check exits non-zero for missing and unknown OpenCode/Pi provider routes",
     "--executor",
     "opencode",
     "--model",
-    "kakao/opencode-glm-5-fp8",
+    "example/opencode-model-fast",
     "--json",
   ], { relayHome });
   assert.notEqual(unknown.status, 0, unknown.combined);
@@ -247,7 +247,7 @@ test("allow-route maps mixed executor phases to executors and reviewer phases to
 
   const mutation = runConfig([
     "allow-route",
-    "kakao/opencode-glm-*",
+    "example/opencode-model-*",
     "--executor",
     "opencode",
     "--phase",
@@ -257,7 +257,7 @@ test("allow-route maps mixed executor phases to executors and reviewer phases to
   assert.equal(mutation.status, 0, mutation.combined);
 
   const [entry] = readPolicy(relayHome).allowed_model_routes;
-  assert.equal(entry.route, "kakao/opencode-glm-*");
+  assert.equal(entry.route, "example/opencode-model-*");
   assert.deepEqual(new Set(entry.phases), new Set(["sidecar", "advisory_review", "dispatch"]));
   assert.deepEqual(entry.executors, ["opencode"]);
   assert.deepEqual(entry.reviewers, ["opencode"]);
@@ -269,7 +269,7 @@ test("allow-route maps mixed executor phases to executors and reviewer phases to
     "--executor",
     "opencode",
     "--model",
-    "kakao/opencode-glm-5-fp8",
+    "example/opencode-model-fast",
     "--json",
   ], { relayHome });
   assert.equal(dispatch.status, 0, dispatch.combined);
@@ -284,7 +284,7 @@ test("allow-route maps mixed executor phases to executors and reviewer phases to
     "--reviewer",
     "opencode",
     "--model",
-    "kakao/opencode-glm-5-fp8",
+    "example/opencode-model-fast",
     "--json",
   ], { relayHome });
   assert.equal(advisory.status, 0, advisory.combined);
@@ -296,7 +296,7 @@ test("deny-route preserves route scopes and denied routes win during check", () 
   assert.equal(runConfig(["init", "--profile", "company", "--json"], { relayHome }).status, 0);
   assert.equal(runConfig([
     "allow-route",
-    "kakao/opencode-glm-*",
+    "example/opencode-model-*",
     "--executor",
     "opencode",
     "--phase",
@@ -306,7 +306,7 @@ test("deny-route preserves route scopes and denied routes win during check", () 
 
   const mutation = runConfig([
     "deny-route",
-    "kakao/opencode-glm-bad",
+    "example/opencode-model-bad",
     "--executor",
     "opencode",
     "--phase",
@@ -317,7 +317,7 @@ test("deny-route preserves route scopes and denied routes win during check", () 
 
   const [entry] = readPolicy(relayHome).denied_model_routes;
   assert.deepEqual(entry, {
-    route: "kakao/opencode-glm-bad",
+    route: "example/opencode-model-bad",
     phases: ["dispatch"],
     executors: ["opencode"],
   });
@@ -329,7 +329,7 @@ test("deny-route preserves route scopes and denied routes win during check", () 
     "--executor",
     "opencode",
     "--model",
-    "kakao/opencode-glm-bad",
+    "example/opencode-model-bad",
     "--json",
   ], { relayHome });
   assert.notEqual(denied.status, 0, denied.combined);

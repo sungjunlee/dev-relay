@@ -21,7 +21,7 @@ Set up relay route policy interactively. The user should not have to memorize co
 
 - The user asks to set up or configure relay
 - The user wants company-safe defaults, personal OpenCode/Pi opt-in, or sidecar/advisory-review routing
-- The user asks whether a provider/model route such as `kakao/opencode-glm-*` is allowed
+- The user asks whether a provider/model route such as `example/opencode-model-*` is allowed
 - The user asks to run relay policy doctor/check
 
 ## Do not use when
@@ -49,7 +49,7 @@ Infer from the user's words before asking questions:
 - `company`, `work`, `회사` → company profile
 - `personal`, `home`, `집`, `개인` → personal profile
 - `managed only`, `codex/claude only` → no unmanaged route opt-in
-- routes containing `/`, such as `kakao/opencode-glm-*`, `opencode-go/*`, `deepseek/*`, or `ollama/*` → provider/model route patterns
+- routes containing `/`, such as `example/opencode-model-*`, `opencode-go/*`, `deepseek/*`, or `ollama/*` → provider/model route patterns
 - `sidecar`, `advisory`, `reviewer`, `documentation`, `docs` → likely advisory-review or sidecar phases
 
 Ask only for missing decisions, one at a time. Use plain language and wait for the user's answer. Do not use host-specific question primitives as the only path; this skill must work in both Claude Code and Codex.
@@ -72,7 +72,7 @@ Use the wrapper for shorthand, or pass through full flags:
 
 ```bash
 node "${RELAY_SKILL_ROOT:-skills}/relay-config/scripts/relay-config.js" init company
-node "${RELAY_SKILL_ROOT:-skills}/relay-config/scripts/relay-config.js" allow-route 'kakao/opencode-glm-*' --phase dispatch,advisory_review,sidecar --executor opencode
+node "${RELAY_SKILL_ROOT:-skills}/relay-config/scripts/relay-config.js" allow-route 'example/opencode-model-*' --phase dispatch,advisory_review,sidecar --executor opencode
 node "${RELAY_SKILL_ROOT:-skills}/relay-config/scripts/relay-config.js" set-default advisory_review.reviewer opencode
 ```
 
@@ -84,7 +84,7 @@ After changes, run:
 
 ```bash
 node "${RELAY_SKILL_ROOT:-skills}/relay-config/scripts/relay-config.js" doctor
-node "${RELAY_SKILL_ROOT:-skills}/relay-config/scripts/relay-config.js" check dispatch opencode kakao/opencode-glm-5-fp8
+node "${RELAY_SKILL_ROOT:-skills}/relay-config/scripts/relay-config.js" check dispatch opencode example/opencode-model-fast
 ```
 
 Adjust the `check` tuple to match the actual actor, phase, and route that was enabled. Report denied tuples clearly and do not treat a denied OpenCode/Pi route as configured.
@@ -99,6 +99,6 @@ The wrapper accepts common shorthand and delegates to `relay-dispatch/scripts/re
 | `init personal` | `init --profile personal` |
 | `show` | `show --effective` |
 | `doctor` | `doctor` |
-| `check dispatch opencode kakao/opencode-glm-5-fp8` | `check --phase dispatch --executor opencode --model kakao/opencode-glm-5-fp8` |
+| `check dispatch opencode example/opencode-model-fast` | `check --phase dispatch --executor opencode --model example/opencode-model-fast` |
 
 Full flag forms continue to pass through. Policy semantics live in the sibling `relay-dispatch` script, not this wrapper.

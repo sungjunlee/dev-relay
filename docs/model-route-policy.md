@@ -2,7 +2,7 @@
 
 Route policy answers one operational question: which provider/model route is allowed to run in each relay phase?
 
-Executor and reviewer names such as `codex`, `claude`, `opencode`, and `pi` are harness names. They select a CLI adapter and execution contract. They are not the compliance boundary. The compliance boundary is the provider/model route string, for example `kakao/opencode-glm-5-fp8`, `opencode-go/deepseek-v4-pro`, `deepseek/r1`, or `ollama/qwen3`.
+Executor and reviewer names such as `codex`, `claude`, `opencode`, and `pi` are harness names. They select a CLI adapter and execution contract. They are not the compliance boundary. The compliance boundary is the provider/model route string, for example `example/opencode-model-fast`, `opencode-go/deepseek-v4-pro`, `deepseek/r1`, or `ollama/qwen3`.
 
 Codex and Claude are the managed CLI defaults. In the default managed profile, a model-less Codex or Claude invocation is allowed because the CLI account and its managed default model are the boundary. Generated company defaults should not pin Codex or Claude model names just to make policy explicit. OpenCode, Pi, and Antigravity are routing harnesses, so managed/company profiles must require an explicit provider/model route and an allow rule before they can run.
 
@@ -54,12 +54,12 @@ Policy `defaults` describe configured actor defaults for auditing and future-saf
 
 `model_hints` are route hints, not route approval. They can carry provider/model routes for unmanaged harnesses, especially advisory review. They should not be used to pin Codex or Claude defaults in generated company config.
 
-## Company/Internal Setup
+## Organization Setup
 
 After installing skills, prefer the interactive setup skill. Ask in natural language and let it inspect the current policy before writing:
 
 ```text
-/relay-config 회사 환경으로 relay 설정해줘. opencode는 kakao/opencode-glm-*만 허용해줘.
+/relay-config 회사 환경으로 relay 설정해줘. opencode는 example/opencode-model-*만 허용해줘.
 ```
 
 The skill should show the proposed policy, ask for confirmation, apply it, then run `doctor` and representative `check` commands.
@@ -70,20 +70,20 @@ From a direct checkout, initialize a company policy with the wrapper:
 node skills/relay-config/scripts/relay-config.js init company
 ```
 
-The generated company policy intentionally keeps Codex and Claude as managed CLI defaults with no pinned model names. Add internal OpenCode or Pi routes explicitly:
+The generated company policy intentionally keeps Codex and Claude as managed CLI defaults with no pinned model names. Add organization-approved OpenCode or Pi routes explicitly:
 
 ```bash
-node skills/relay-config/scripts/relay-config.js allow-route 'kakao/opencode-glm-*' \
+node skills/relay-config/scripts/relay-config.js allow-route 'example/opencode-model-*' \
   --phase dispatch,advisory_review,sidecar \
   --executor opencode
 
-node skills/relay-config/scripts/relay-config.js allow-route 'kakao/pi-*' \
+node skills/relay-config/scripts/relay-config.js allow-route 'example/pi-*' \
   --phase dispatch,review,advisory_review,sidecar \
   --executor pi \
   --reviewer pi
 ```
 
-For routed advisory reviewers or sidecars, add routing rules to the policy JSON so the selected route is internal:
+For routed advisory reviewers or sidecars, add routing rules to the policy JSON so the selected route is policy-approved:
 
 ```json
 {
@@ -98,7 +98,7 @@ For routed advisory reviewers or sidecars, add routing rules to the policy JSON 
   "managed_cli": ["codex", "claude"],
   "allowed_model_routes": [
     {
-      "route": "kakao/opencode-glm-*",
+      "route": "example/opencode-model-*",
       "phases": ["dispatch", "advisory_review", "sidecar"],
       "executors": ["opencode"],
       "reviewers": ["opencode"]
@@ -107,17 +107,17 @@ For routed advisory reviewers or sidecars, add routing rules to the policy JSON 
   "denied_model_routes": [],
   "routing_rules": [
     {
-      "name": "docs-internal-sidecar",
+      "name": "docs-approved-sidecar",
       "match": { "any_tags": ["docs", "docs-only"] },
       "advisory_review": {
         "reviewer": "opencode",
         "profile": "blindspot",
-        "model": "kakao/opencode-glm-5-fp8"
+        "model": "example/opencode-model-fast"
       },
       "sidecar": {
         "kind": "docs-sync",
         "executor": "opencode",
-        "model": "kakao/opencode-glm-5-fp8"
+        "model": "example/opencode-model-fast"
       }
     }
   ],
@@ -125,7 +125,7 @@ For routed advisory reviewers or sidecars, add routing rules to the policy JSON 
 }
 ```
 
-Repo-local `.relay/policy.json` files may narrow the global policy but may not widen it. For example, a repo policy can reduce `allowed_model_routes` from `kakao/*` to `kakao/opencode-glm-*`; it cannot add a new external provider that the global policy did not allow.
+Repo-local `.relay/policy.json` files may narrow the global policy but may not widen it. For example, a repo policy can reduce `allowed_model_routes` from `example/*` to `example/opencode-model-*`; it cannot add a new external provider that the global policy did not allow.
 
 Project-local `~/.relay/projects/<repo-slug>/policy.json` is an additional local narrow-only layer after global and repo policy. It is for company or personal machine restrictions that should not be committed. Policy is authorization; `~/.relay/projects/<repo-slug>/routes.json` is only preferences and cannot grant a route.
 
@@ -224,11 +224,11 @@ Doctor reports whether known CLIs are installed and how policy treats each harne
 Run `relay-config check` for each actual tuple you plan to enable:
 
 ```bash
-node skills/relay-config/scripts/relay-config.js check dispatch opencode kakao/opencode-glm-5-fp8
+node skills/relay-config/scripts/relay-config.js check dispatch opencode example/opencode-model-fast
 
-node skills/relay-config/scripts/relay-config.js check advisory_review opencode kakao/opencode-glm-5-fp8
+node skills/relay-config/scripts/relay-config.js check advisory_review opencode example/opencode-model-fast
 
-node skills/relay-config/scripts/relay-config.js check sidecar opencode kakao/opencode-glm-5-fp8
+node skills/relay-config/scripts/relay-config.js check sidecar opencode example/opencode-model-fast
 ```
 
 Check exits non-zero when the tuple would be denied at runtime. Run it before turning on routed advisory review or sidecar rules because those phases can start automatically after dispatch.
