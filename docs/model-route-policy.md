@@ -54,7 +54,7 @@ Policy `defaults` describe configured actor defaults for auditing and future-saf
 
 `model_hints` are route hints, not route approval. They can carry provider/model routes for unmanaged harnesses, especially advisory review. They should not be used to pin Codex or Claude defaults in generated company config.
 
-## Company/Internal Setup
+## Organization Setup
 
 After installing skills, prefer the interactive setup skill. Ask in natural language and let it inspect the current policy before writing:
 
@@ -70,7 +70,7 @@ From a direct checkout, initialize a company policy with the wrapper:
 node skills/relay-config/scripts/relay-config.js init company
 ```
 
-The generated company policy intentionally keeps Codex and Claude as managed CLI defaults with no pinned model names. Add internal OpenCode or Pi routes explicitly:
+The generated company policy intentionally keeps Codex and Claude as managed CLI defaults with no pinned model names. Add organization-approved OpenCode or Pi routes explicitly:
 
 ```bash
 node skills/relay-config/scripts/relay-config.js allow-route 'example/opencode-model-*' \
@@ -83,7 +83,7 @@ node skills/relay-config/scripts/relay-config.js allow-route 'example/pi-*' \
   --reviewer pi
 ```
 
-For routed advisory reviewers or sidecars, add routing rules to the policy JSON so the selected route is internal:
+For routed advisory reviewers or sidecars, add routing rules to the policy JSON so the selected route is policy-approved:
 
 ```json
 {
@@ -107,7 +107,7 @@ For routed advisory reviewers or sidecars, add routing rules to the policy JSON 
   "denied_model_routes": [],
   "routing_rules": [
     {
-      "name": "docs-internal-sidecar",
+      "name": "docs-approved-sidecar",
       "match": { "any_tags": ["docs", "docs-only"] },
       "advisory_review": {
         "reviewer": "opencode",

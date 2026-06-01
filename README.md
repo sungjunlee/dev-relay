@@ -88,7 +88,7 @@ Common starting points:
 | Setup | Recommended request |
 | --- | --- |
 | Company default | `/relay-config Set up relay for my company environment` |
-| Company internal OpenCode | `/relay-config Only allow OpenCode through the example/opencode-model-* route at work` |
+| Approved OpenCode route | `/relay-config Only allow OpenCode through the example/opencode-model-* route at work` |
 | Personal sidecars | `$relay-config Use opencode-go/deepseek-v4-pro for personal sidecar and advisory review` |
 | Managed only | `/relay-config Keep the default Codex/Claude-only setup` |
 
