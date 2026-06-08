@@ -57,6 +57,28 @@ This reference is the pack library. Relay-plan renders the selected `#### Guidan
 
 - Required commands, targets, failure thresholds, and evidence fields must remain in Done Criteria or rubric factors. This pack is advisory and cannot replace automated checks.
 
+### `user-replay-evidence`
+
+#### Use when
+
+- User-visible product flows, user journeys, onboarding, checkout, or similar screen-by-screen paths change.
+- A reviewer benefits from concise replay notes showing what a user can now do.
+
+#### Do not use when
+
+- The work is generic backend, docs, tests, prompt, or infrastructure with no changed product journey.
+- Replay requirements are already explicit pass/fail items in Done Criteria or rubric factors.
+
+#### Guidance
+
+- Leave concise replay evidence: entry point, real input used, main user path, negative case checked, state transition observed, final visible state, and evidence artifact captured where practical.
+- Prefer concrete observations over broad claims about product quality.
+- Do not create new pass/fail requirements unless they already live in Done Criteria or rubric factors.
+
+#### Rubric still carries
+
+- Required journeys, target states, evidence format, browser/device coverage, and failure thresholds must remain in Done Criteria or rubric factors. This pack is advisory replay guidance only.
+
 ### `simplify-pass`
 
 #### Use when

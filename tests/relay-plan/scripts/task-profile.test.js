@@ -9,6 +9,7 @@ const {
 } = require("../../../skills/relay-plan/scripts/task-profile");
 
 const BASELINE_PROMPT_PATH = path.join(__dirname, "..", "fixtures", "dispatch-prompt-baseline", "non-tdd.md");
+const PRODUCT_FLOW_DONE_CRITERIA_PATH = path.join(__dirname, "..", "fixtures", "task-profile", "product-flow-done-criteria.md");
 const SKILL_PATH = path.join(__dirname, "..", "..", "..", "skills", "relay-plan", "SKILL.md");
 const PROFILE_REFERENCE_PATH = path.join(__dirname, "..", "..", "..", "skills", "relay-plan", "references", "task-profile.md");
 const REVIEW_SCHEMA_PATH = path.join(__dirname, "..", "..", "..", "skills", "relay-review", "scripts", "review-schema.js");
@@ -54,6 +55,7 @@ test("code task profile selects source-code guidance and records derivation inpu
   assert.ok(profile.guidance_packs.includes("surgical-change"));
   assert.ok(profile.guidance_packs.includes("verification-evidence"));
   assert.ok(profile.guidance_packs.includes("simplify-pass"));
+  assert.ok(!profile.guidance_packs.includes("user-replay-evidence"));
   assert.deepEqual(profile.derivation_inputs, [
     "done_criteria",
     "probe_signal",
@@ -75,6 +77,93 @@ test("docs task profile selects docs reader-success guidance", () => {
   assert.equal(profile.review_assurance, "standard");
   assert.ok(profile.domains.includes("docs"));
   assert.ok(profile.guidance_packs.includes("docs-reader-success"));
+  assert.ok(!profile.guidance_packs.includes("user-replay-evidence"));
+});
+
+test("generic code and docs tasks do not select user replay evidence guidance", () => {
+  const codeProfile = deriveTaskProfile({
+    doneCriteria: "Add a relay-plan parser helper with unit tests and keep the public API backward compatible.",
+    probeSignal: PROBE_SIGNAL,
+    historicalSignal: HISTORICAL_SIGNAL,
+    taskRisk: {},
+    size: "M",
+  });
+  const docsProfile = deriveTaskProfile({
+    doneCriteria: "Update docs/operator-guide.md with clearer setup examples for the CLI command.",
+    probeSignal: PROBE_SIGNAL,
+    historicalSignal: HISTORICAL_SIGNAL,
+    taskRisk: {},
+    size: "S",
+  });
+
+  assert.ok(!codeProfile.guidance_packs.includes("user-replay-evidence"));
+  assert.ok(!docsProfile.guidance_packs.includes("user-replay-evidence"));
+});
+
+test("backend signal words do not select user replay evidence without product surface context", () => {
+  const profile = deriveTaskProfile({
+    doneCriteria: "Add retry handling for provider input state in the relay-plan parser helper with unit tests.",
+    probeSignal: PROBE_SIGNAL,
+    historicalSignal: HISTORICAL_SIGNAL,
+    taskRisk: {},
+    size: "M",
+  });
+
+  assert.ok(!profile.guidance_packs.includes("user-replay-evidence"));
+});
+
+test("provider state-transition backend validation does not select user replay evidence", () => {
+  const profile = deriveTaskProfile({
+    doneCriteria: "Add provider state transition validation in the relay-plan parser helper.",
+    probeSignal: PROBE_SIGNAL,
+    historicalSignal: HISTORICAL_SIGNAL,
+    taskRisk: {},
+    size: "M",
+  });
+
+  assert.ok(!profile.guidance_packs.includes("user-replay-evidence"));
+});
+
+test("user-visible product-flow signal classes select user replay evidence", () => {
+  const cases = [
+    "Update the upload flow so a user can submit a file input and see the preview state transition.",
+    "Align the UI harness provider so the visible error state can retry the failed provider response.",
+    "Update the browser view so demo data risk is replayed with a negative case before export.",
+  ];
+
+  for (const doneCriteria of cases) {
+    const profile = deriveTaskProfile({
+      doneCriteria,
+      probeSignal: PROBE_SIGNAL,
+      historicalSignal: HISTORICAL_SIGNAL,
+      taskRisk: {},
+      size: "M",
+    });
+
+    assert.ok(profile.guidance_packs.includes("user-replay-evidence"), doneCriteria);
+  }
+});
+
+test("product-flow task profile renders user replay evidence guidance without changing authority", () => {
+  const baseline = fs.readFileSync(BASELINE_PROMPT_PATH, "utf-8");
+  const doneCriteria = fs.readFileSync(PRODUCT_FLOW_DONE_CRITERIA_PATH, "utf-8");
+  const profile = deriveTaskProfile({
+    doneCriteria,
+    probeSignal: PROBE_SIGNAL,
+    historicalSignal: HISTORICAL_SIGNAL,
+    taskRisk: {},
+    size: "M",
+  });
+
+  assert.ok(profile.guidance_packs.includes("user-replay-evidence"));
+
+  const rendered = applyTaskProfileToDispatchPrompt({ dispatchPrompt: baseline, taskProfile: profile });
+
+  assert.match(rendered, /### user-replay-evidence/);
+  assert.match(rendered, /- Leave concise replay evidence: entry point, real input used, main user path, negative case checked, state transition observed, final visible state, and evidence artifact captured where practical\./);
+  assert.match(rendered, /These instructions guide execution style\. They do not override Done Criteria, rubric commands, or scope boundaries\./);
+  assert.match(rendered, /Do not create new pass\/fail requirements unless they already live in Done Criteria or rubric factors\./);
+  assert.ok(rendered.indexOf("## Working Guidance") < rendered.indexOf("## Scoring Rubric"));
 });
 
 test("generic validate wording does not imply trust-boundary guidance", () => {

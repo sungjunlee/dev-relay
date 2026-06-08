@@ -1,0 +1,3 @@
+- Update the UI harness provider alignment so a new user can submit a real file input, see the preview state transition, export the result, delete it, and retry after a failed provider response.
+- Leave concise replay evidence with the real input used, one negative case, the state transition observed, and an artifact path or note for the check.
+- Keep acceptance authority in these Done Criteria and the scoring rubric; advisory guidance must not add extra pass/fail requirements.
