@@ -54,6 +54,10 @@ node "${RELAY_SKILL_ROOT:-skills}/relay-ready/scripts/persist-request.js" --repo
 
 Readiness is optional, but if supplied, all readiness dimensions are required; see schema enum domains.
 
+## Decomposition Boundary
+
+Readiness scripts emit deterministic signals and persist validated handoffs; they do not infer semantic leaf boundaries. When strong decomposition signals appear, use AI proposal-first shaping to decide whether the request is one high-risk leaf or multiple ordered leaves, then persist the accepted shape. Detailed operator contract and oversized product-foundation example: [`references/decomposition-contract.md`](references/decomposition-contract.md).
+
 Preflight shaping stays append-only in `events.jsonl`. Use the portable readiness event types:
 - `proposal_presented`
 - `question_asked`

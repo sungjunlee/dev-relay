@@ -40,6 +40,9 @@ Read the normalized task source (try in order, use first that succeeds):
 - User-provided description
 
 If `relay-ready` produced a handoff brief, treat it as the source of truth instead of re-reading the raw request.
+For a shaped leaf, consume that persisted `relay-ready/<leaf-id>.md` plus its frozen Done Criteria path; the
+raw request is historical context only and must not be silently reinterpreted into a different task.
+If the relay-ready anchor is incomplete, surface the ambiguity or persist planner-authored Done Criteria under Step 7.
 
 ### 2. Gather planning signals
 
