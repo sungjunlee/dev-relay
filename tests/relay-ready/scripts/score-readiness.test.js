@@ -22,10 +22,22 @@ function signalEvidence(result, dimension, condition) {
 function assertSignalShape(result) {
   assert.ok(Array.isArray(result.signals));
   for (const signal of result.signals) {
-    assert.ok(["clarity", "granularity", "verifiability", "bypass"].includes(signal.dimension));
+    assert.ok(["clarity", "granularity", "verifiability", "bypass", "task_shape"].includes(signal.dimension));
     assert.equal(typeof signal.condition, "string");
     assert.equal(typeof signal.evidence, "string");
     assert.ok(signal.evidence.length <= 80, `oversized evidence: ${signal.evidence}`);
+  }
+}
+
+function assertTaskShapeShape(result) {
+  assert.equal(typeof result.task_shape, "object");
+  assert.ok(["none", "soft", "strong"].includes(result.task_shape.strength));
+  assert.equal(typeof result.task_shape.strong, "boolean");
+  assert.ok(Array.isArray(result.task_shape.signals));
+  for (const signal of result.task_shape.signals) {
+    assert.equal(typeof signal.condition, "string");
+    assert.equal(typeof signal.evidence, "string");
+    assert.ok(signal.evidence.length <= 80, `oversized task-shape evidence: ${signal.evidence}`);
   }
 }
 
@@ -157,7 +169,7 @@ test("bypass rejects opener with top-level and before non-verb target", () => {
   assertSignalShape(result);
 });
 
-test("bypass_true requires all four bypass checks to pass", () => {
+test("bypass_true requires bypass checks to pass", () => {
   const body = `Fix \`skills/relay-ready/scripts/relay-request.js\` request ID normalization.
 
 ## Done Criteria
@@ -176,11 +188,88 @@ test("bypass_true requires all four bypass checks to pass", () => {
     READINESS_CONDITIONS.OBSERVABLE_ASSERTION,
     READINESS_CONDITIONS.HIGH_RISK_KEYWORD,
     READINESS_CONDITIONS.SINGLE_LEAF,
+    READINESS_CONDITIONS.STRONG_TASK_SHAPE,
   ]) {
     assert.ok(hasSignal(result, "bypass", condition), `missing bypass signal: ${condition}`);
     assert.match(signalEvidence(result, "bypass", condition), /^pass:/);
   }
   assertSignalShape(result);
+  assertTaskShapeShape(result);
+});
+
+test("broad product foundation request emits task-shape signals and does not bypass", () => {
+  const body = `Build the first usable foundation for a scene collaboration product across onboarding, editor, sharing, and operations.
+
+The work should cover the user-facing flow from first project setup through review handoff while also laying the platform foundation for persistence, API boundaries, background jobs, and deployment observability.
+
+## Acceptance Criteria
+
+### Onboarding
+- New users can create a workspace and see an empty project in \`apps/web/onboarding.tsx\`.
+
+### Editor
+- The editor shell in \`apps/web/editor.tsx\` can save a draft scene.
+
+### Sharing
+- Review links use \`services/api/share-links.js\` and expose audit-friendly logs.
+
+### Data Model
+- \`services/database/models.js\` records projects, scenes, and review links.
+
+### Workers
+- \`workers/render-queue.js\` emits \`render queued\` for background jobs.
+
+### Observability
+- \`infra/deploy/observability.yml\` captures p95 < 500ms checks.
+
+### Documentation
+- \`docs/operator-runbook.md\` explains the release and rollback path.
+
+## Done Criteria
+
+- \`tests/web/onboarding.test.js\` passes.
+- \`tests/api/share-links.test.js\` passes.
+- \`tests/workers/render-queue.test.js\` passes.
+`;
+
+  const result = scoreReadiness(body);
+
+  assert.equal(result.task_shape.strength, "strong");
+  assert.equal(result.task_shape.strong, true);
+  assert.equal(result.bypass, false);
+  assert.equal(result.next_action, "qa_needed");
+  assert.ok(hasSignal(result, "task_shape", READINESS_CONDITIONS.MANY_CRITERIA_GROUPS));
+  assert.ok(hasSignal(result, "task_shape", READINESS_CONDITIONS.BROAD_SCOPE_LANGUAGE));
+  assert.ok(hasSignal(result, "task_shape", READINESS_CONDITIONS.MULTI_SUBSYSTEM_REFERENCES));
+  assert.ok(hasSignal(result, "task_shape", READINESS_CONDITIONS.PRODUCT_FOUNDATION_MIX));
+  assert.ok(hasSignal(result, "bypass", READINESS_CONDITIONS.STRONG_TASK_SHAPE));
+  assert.match(signalEvidence(result, "bypass", READINESS_CONDITIONS.STRONG_TASK_SHAPE), /^fail:/);
+  assertSignalShape(result);
+  assertTaskShapeShape(result);
+});
+
+test("narrow multi-verb single-subsystem request does not emit decomposition task-shape signals", () => {
+  const body = `Refactor and document \`skills/relay-ready/scripts/score-readiness.js\` task scoring helpers.
+
+Keep the change inside the relay-ready scorer. The work may rename local helper functions, add inline comments only where the task-shape regex rules are non-obvious, and update nearby tests that already exercise \`scoreReadiness()\`.
+
+## Done Criteria
+
+- \`skills/relay-ready/scripts/score-readiness.js\` keeps \`scoreReadiness()\` deterministic.
+- \`tests/relay-ready/scripts/score-readiness.test.js\` passes.
+- p95 < 50ms over 100 runs.
+`;
+
+  const result = scoreReadiness(body);
+
+  assert.equal(result.task_shape.strength, "none");
+  assert.equal(result.task_shape.strong, false);
+  assert.deepEqual(result.task_shape.signals, []);
+  assert.equal(result.readiness.granularity, "medium");
+  assert.equal(result.bypass, false);
+  assert.ok(!hasSignal(result, "task_shape", READINESS_CONDITIONS.MULTI_SUBSYSTEM_REFERENCES));
+  assertSignalShape(result);
+  assertTaskShapeShape(result);
 });
 
 test("maintenance refactor issue with explicit observable assertions is a single ready leaf", () => {

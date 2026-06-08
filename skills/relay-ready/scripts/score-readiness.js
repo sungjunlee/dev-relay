@@ -21,6 +21,12 @@ const READINESS_CONDITIONS = Object.freeze({
   OBSERVABLE_ASSERTION: "observable_assertion",
   HIGH_RISK_KEYWORD: "high_risk_keyword",
   SINGLE_LEAF: "single_leaf",
+  MANY_CRITERIA_GROUPS: "many_criteria_groups",
+  BROAD_SCOPE_LANGUAGE: "broad_scope_language",
+  MULTI_SUBSYSTEM_REFERENCES: "multi_subsystem_references",
+  MULTI_STAGE_JOURNEY: "multi_stage_journey",
+  PRODUCT_FOUNDATION_MIX: "product_foundation_mix",
+  STRONG_TASK_SHAPE: "strong_task_shape",
 });
 
 const VAGUE_VERB_RE = /\b(?:improve|enhance|clean up|polish)\b/i;
@@ -32,6 +38,13 @@ const TEST_PATH_RE = /`?(?:\.{0,2}\/)?(?:[A-Za-z0-9_.-]+\/)+[A-Za-z0-9_.-]+(?:te
 const FUNCTION_RE = /`?[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)?\(\)`?/;
 const NUMERIC_THRESHOLD_RE = /\b(?:p\d{2}|latency|duration|coverage|count|runs?|size)?\s*(?:<=|>=|<|>|=|\u2264|\u2265)\s*\d+(?:\.\d+)?\s*(?:ms|s|kb|mb|gb|%|runs?)?\b/i;
 const LOG_LINE_RE = /\b(?:prints?|logs?|emits?|outputs?|stderr|stdout|console)\b.{0,50}`[^`\n]+`/i;
+const TASK_SCOPE_LANGUAGE_RE = /\b(?:sprints?|epics?|milestones?|foundations?|foundational|roadmaps?|initiatives?|platform\s+foundation)\b/i;
+const PRODUCT_SURFACE_RE = /\b(?:user[-\s]?facing|users?|ui|ux|onboarding|dashboard|editor|admin|mobile|web\s+app|product|sharing|review\s+handoff|account|workspace)\b/i;
+const FOUNDATION_SURFACE_RE = /\b(?:schema|database|api|backend|storage|queue|worker|observability|deployment|infra|platform|architecture|persistence|jobs?|runbook)\b/i;
+const JOURNEY_MARKER_RE = /\b(?:flow|journey|end[-\s]?to[-\s]?end|from\b[\s\S]{0,80}\bthrough\b|through\b[\s\S]{0,80}\bwhile\b)\b/i;
+const JOURNEY_STAGE_RE = /\b(?:signup|sign[-\s]?up|onboarding|setup|create|configure|draft|save|share|review|approve|handoff|export|notify|rollback)\b/ig;
+const CRITERIA_GROUP_HEADING_RE = /^#{3,6}\s+\S.+$/gm;
+const CRITERIA_BULLET_RE = /^\s*[-*]\s+(?!Do not\b|Don't\b)/gim;
 
 const ACTION_VERBS = Object.freeze([
   "add",
@@ -73,6 +86,7 @@ function scoreReadiness(input, metadata = {}) {
   const criteriaObservable = criteria.section ? findObservable(criteria.section) : null;
   const highRisk = findFirst(scanText, HIGH_RISK_RE);
   const granularitySignals = inspectGranularity(scanText);
+  const taskShape = inspectTaskShape(scanText, criteria);
   const signals = [];
 
   addBypassSignals(signals, {
@@ -80,10 +94,12 @@ function scoreReadiness(input, metadata = {}) {
     criteriaObservable,
     highRisk,
     granularitySignals,
+    taskShape,
   });
+  addTaskShapeSignals(signals, taskShape);
 
   const clarity = scoreClarity(signals, combinedText, scanText);
-  const granularity = scoreGranularity(signals, granularitySignals);
+  const granularity = scoreGranularity(signals, granularitySignals, taskShape);
   const verifiability = scoreVerifiability(signals, combinedText, scanText, criteria, criteriaObservable);
   const readiness = { clarity, granularity, verifiability };
   const bypass = Boolean(
@@ -91,12 +107,14 @@ function scoreReadiness(input, metadata = {}) {
       && criteriaObservable
       && !highRisk
       && granularitySignals.singleLeaf
+      && !taskShape.strong
   );
 
   return {
     readiness,
     bypass,
     signals,
+    task_shape: taskShape,
     next_action: determineNextAction(readiness, bypass, Boolean(highRisk)),
   };
 }
@@ -153,7 +171,7 @@ function extractCriteriaSection(body) {
   };
 }
 
-function addBypassSignals(signals, { criteria, criteriaObservable, highRisk, granularitySignals }) {
+function addBypassSignals(signals, { criteria, criteriaObservable, highRisk, granularitySignals, taskShape }) {
   pushSignal(
     signals,
     "bypass",
@@ -186,6 +204,20 @@ function addBypassSignals(signals, { criteria, criteriaObservable, highRisk, gra
       ? "pass: no top-level and, multi-verb opener, or cross-module bullets"
       : `fail: ${granularitySignals.singleLeafFailures.join(", ")}`
   );
+  pushSignal(
+    signals,
+    "bypass",
+    READINESS_CONDITIONS.STRONG_TASK_SHAPE,
+    taskShape.strong
+      ? `fail: ${taskShape.signals.map((signal) => signal.condition).join(", ")}`
+      : "pass: no strong task-shape signal"
+  );
+}
+
+function addTaskShapeSignals(signals, taskShape) {
+  for (const signal of taskShape.signals) {
+    pushSignal(signals, "task_shape", signal.condition, signal.evidence);
+  }
 }
 
 function scoreClarity(signals, combinedText, scanText) {
@@ -221,7 +253,7 @@ function scoreClarity(signals, combinedText, scanText) {
   return "medium";
 }
 
-function scoreGranularity(signals, granularitySignals) {
+function scoreGranularity(signals, granularitySignals, taskShape) {
   if (granularitySignals.topLevelAnd) {
     pushSignal(signals, "granularity", READINESS_CONDITIONS.TOP_LEVEL_AND, granularitySignals.topLevelAnd);
   }
@@ -243,6 +275,9 @@ function scoreGranularity(signals, granularitySignals) {
     pushSignal(signals, "granularity", READINESS_CONDITIONS.SINGLE_SUBSYSTEM, granularitySignals.singleSubsystem);
   }
 
+  if (taskShape.strong) {
+    return "low";
+  }
   if (
     granularitySignals.topLevelAnd
       || granularitySignals.bulletsAcrossModules
@@ -254,6 +289,109 @@ function scoreGranularity(signals, granularitySignals) {
     return "high";
   }
   return "medium";
+}
+
+function inspectTaskShape(text, criteria) {
+  const signals = [];
+  const manyCriteria = detectManyCriteriaGroups(criteria.section);
+  const broadScope = findFirst(text, TASK_SCOPE_LANGUAGE_RE);
+  const subsystems = extractTaskShapeSubsystems(text);
+  const multiStageJourney = detectMultiStageJourney(text);
+  const productFoundationMix = detectProductFoundationMix(text, {
+    broadScope,
+    manyCriteria,
+    subsystemCount: subsystems.length,
+  });
+
+  if (manyCriteria) {
+    pushTaskShapeSignal(signals, READINESS_CONDITIONS.MANY_CRITERIA_GROUPS, manyCriteria.evidence);
+  }
+  if (broadScope) {
+    pushTaskShapeSignal(signals, READINESS_CONDITIONS.BROAD_SCOPE_LANGUAGE, broadScope);
+  }
+  if (subsystems.length >= 3) {
+    pushTaskShapeSignal(
+      signals,
+      READINESS_CONDITIONS.MULTI_SUBSYSTEM_REFERENCES,
+      `${subsystems.length} subsystems: ${subsystems.slice(0, 5).join(", ")}`
+    );
+  }
+  if (multiStageJourney) {
+    pushTaskShapeSignal(signals, READINESS_CONDITIONS.MULTI_STAGE_JOURNEY, multiStageJourney);
+  }
+  if (productFoundationMix) {
+    pushTaskShapeSignal(signals, READINESS_CONDITIONS.PRODUCT_FOUNDATION_MIX, productFoundationMix);
+  }
+
+  const strong = signals.length >= 2
+    || Boolean(manyCriteria && manyCriteria.strong)
+    || subsystems.length >= 4;
+  return {
+    strength: signals.length === 0 ? "none" : (strong ? "strong" : "soft"),
+    strong,
+    signals,
+  };
+}
+
+function detectManyCriteriaGroups(criteriaSection) {
+  if (!criteriaSection) {
+    return null;
+  }
+
+  const groupCount = (criteriaSection.match(CRITERIA_GROUP_HEADING_RE) || []).length;
+  if (groupCount >= 4) {
+    return {
+      evidence: `${groupCount} criteria groups`,
+      strong: groupCount >= 6,
+    };
+  }
+
+  const bulletCount = (criteriaSection.match(CRITERIA_BULLET_RE) || []).length;
+  if (bulletCount >= 8) {
+    return {
+      evidence: `${bulletCount} criteria bullets`,
+      strong: true,
+    };
+  }
+  return null;
+}
+
+function extractTaskShapeSubsystems(text) {
+  const subsystems = new Set();
+  const pathMatches = text.match(new RegExp(FILE_PATH_RE.source, "ig")) || [];
+  for (const pathMatch of pathMatches) {
+    const subsystem = subsystemFromPath(pathMatch);
+    if (subsystem) {
+      subsystems.add(subsystem);
+    }
+  }
+
+  const domainMatches = text.match(/\b(?:frontend|backend|api|database|auth|billing|docs|cli|review|dispatch|ready|plan|worker|scheduler|renderer|storage|sync|notifications|onboarding|settings|admin|analytics|infra)\b/ig) || [];
+  for (const domainMatch of domainMatches) {
+    subsystems.add(domainMatch.toLowerCase());
+  }
+
+  return [...subsystems].sort();
+}
+
+function detectMultiStageJourney(text) {
+  if (!JOURNEY_MARKER_RE.test(text)) {
+    return null;
+  }
+
+  const matches = text.match(JOURNEY_STAGE_RE) || [];
+  const stages = [...new Set(matches.map((match) => match.toLowerCase().replace(/\s+/g, " ")))];
+  return stages.length >= 3 ? `journey stages: ${stages.slice(0, 5).join(", ")}` : null;
+}
+
+function detectProductFoundationMix(text, context) {
+  if (!PRODUCT_SURFACE_RE.test(text) || !FOUNDATION_SURFACE_RE.test(text)) {
+    return null;
+  }
+  if (!context.broadScope && !context.manyCriteria && context.subsystemCount < 3) {
+    return null;
+  }
+  return "product surface plus platform foundation terms";
 }
 
 function scoreVerifiability(signals, combinedText, scanText, criteria, criteriaObservable) {
@@ -454,6 +592,13 @@ function findFirst(text, regex) {
 function pushSignal(signals, dimension, condition, evidence) {
   signals.push({
     dimension,
+    condition,
+    evidence: clipEvidence(evidence),
+  });
+}
+
+function pushTaskShapeSignal(signals, condition, evidence) {
+  signals.push({
     condition,
     evidence: clipEvidence(evidence),
   });

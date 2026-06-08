@@ -34,6 +34,10 @@ function assertEnvelopeShape(envelope) {
   assert.ok(["proceed", "qa_needed", "escalate"].includes(envelope.next_action));
   assert.equal(typeof envelope.signals_summary, "string");
   assert.ok(envelope.signals_summary.length <= 140, envelope.signals_summary);
+  assert.equal(typeof envelope.task_shape, "object");
+  assert.ok(["none", "soft", "strong"].includes(envelope.task_shape.strength));
+  assert.equal(typeof envelope.task_shape.strong, "boolean");
+  assert.ok(Array.isArray(envelope.task_shape.signals));
   assert.equal(typeof envelope.elapsed_ms, "number");
 }
 
@@ -85,6 +89,54 @@ test("non_bypass_emits_summary returns a bounded human summary for low scores", 
   assert.ok(envelope.signals_summary.length > 0);
   assert.ok(envelope.signals_summary.length <= 140);
   assert.equal(envelope.signals_summary, repeatedEnvelope.signals_summary);
+});
+
+test("task_shape_signals are emitted in JSON and human output without breaking envelope fields", () => {
+  const body = `Deliver a milestone foundation across onboarding, admin review, analytics, API, database, and worker operations.
+
+The request combines user-facing product flows with platform foundation work from signup through review approval and export.
+
+## Acceptance Criteria
+
+### Onboarding
+- \`apps/web/onboarding.tsx\` creates an account.
+
+### Admin Review
+- \`apps/admin/review.tsx\` approves submitted work.
+
+### Analytics
+- \`apps/analytics/dashboard.tsx\` reports usage.
+
+### API
+- \`services/api/routes.js\` exposes review endpoints.
+
+### Database
+- \`services/database/models.js\` stores account, review, and export records.
+
+### Worker
+- \`workers/export-worker.js\` emits \`export queued\`.
+
+## Done Criteria
+
+- \`tests/web/onboarding.test.js\` passes.
+- \`tests/admin/review.test.js\` passes.
+- p95 < 500ms over 50 runs.
+`;
+
+  const jsonResult = runProbe(["--json", "--body", body]);
+  const humanResult = runProbe(["--body", body]);
+
+  assert.equal(jsonResult.status, 0, jsonResult.stderr);
+  assert.equal(humanResult.status, 0, humanResult.stderr);
+  const envelope = parseJson(jsonResult.stdout);
+  assertEnvelopeShape(envelope);
+  assert.equal(envelope.task_shape.strength, "strong");
+  assert.equal(envelope.task_shape.strong, true);
+  assert.equal(envelope.bypass, false);
+  assert.equal(envelope.next_action, "qa_needed");
+  assert.match(envelope.signals_summary, /task-shape/i);
+  assert.match(humanResult.stdout, /task_shape=/);
+  assert.match(humanResult.stdout, /"strength":"strong"/);
 });
 
 test("manifest_event_appended writes one readiness_probe line with probe payload", (t) => {

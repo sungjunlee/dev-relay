@@ -32,6 +32,7 @@ const CONDITION_LABELS = Object.freeze({
   [READINESS_CONDITIONS.OBSERVABLE_ASSERTION]: "missing observable assertion",
   [READINESS_CONDITIONS.HIGH_RISK_KEYWORD]: "high-risk keyword",
   [READINESS_CONDITIONS.SINGLE_LEAF]: "not single-leaf",
+  [READINESS_CONDITIONS.STRONG_TASK_SHAPE]: "task-shape decomposition",
 });
 
 function elapsedMsSince(startedAt) {
@@ -83,6 +84,28 @@ function summarizeSignals(scoreResult) {
   return clipLine(`Gaps: ${[...new Set(parts)].join(", ")}.`);
 }
 
+function emptyTaskShape() {
+  return {
+    strength: "none",
+    strong: false,
+    signals: [],
+  };
+}
+
+function taskShapeEnvelope(taskShape) {
+  if (!taskShape || typeof taskShape !== "object") {
+    return emptyTaskShape();
+  }
+  return {
+    strength: taskShape.strength || "none",
+    strong: Boolean(taskShape.strong),
+    signals: Array.isArray(taskShape.signals) ? taskShape.signals.map((signal) => ({
+      condition: String(signal.condition || ""),
+      evidence: clipLine(signal.evidence, 80),
+    })) : [],
+  };
+}
+
 function buildEnvelope(scoreResult, elapsedMs) {
   return {
     readiness_score: {
@@ -93,6 +116,7 @@ function buildEnvelope(scoreResult, elapsedMs) {
     bypass: scoreResult.bypass,
     next_action: scoreResult.next_action,
     signals_summary: summarizeSignals(scoreResult),
+    task_shape: taskShapeEnvelope(scoreResult.task_shape),
     elapsed_ms: elapsedMs,
   };
 }
@@ -107,6 +131,7 @@ function buildDegradedEnvelope(error, elapsedMs) {
     bypass: true,
     next_action: "proceed",
     signals_summary: clipLine(`Readiness probe degraded; proceeding fail-open: ${error.message}`),
+    task_shape: emptyTaskShape(),
     elapsed_ms: elapsedMs,
   };
 }
@@ -133,6 +158,7 @@ function appendReadinessProbeEvent(manifestPath, envelope, issueNumber) {
     readiness_score: envelope.readiness_score,
     bypass: envelope.bypass,
     next_action: envelope.next_action,
+    task_shape: envelope.task_shape,
     elapsed_ms: envelope.elapsed_ms,
   };
   appendEventLineToPath(eventsPath, record);
@@ -144,6 +170,7 @@ function formatHuman(envelope) {
     `bypass=${envelope.bypass}`,
     `next_action=${envelope.next_action}`,
     `signals_summary="${envelope.signals_summary}"`,
+    `task_shape=${JSON.stringify(envelope.task_shape)}`,
     `elapsed_ms=${envelope.elapsed_ms.toFixed(3)}`,
   ].join(" ");
 }
