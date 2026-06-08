@@ -14,6 +14,12 @@ Decision: B - coexist with new `readiness_score` field: keep legacy `readiness.*
 
 Decision: A - regex+heuristic. Rationale: #437 needs a sub-200ms deterministic probe, and #435/#436 need repeatable scoring/defaults. Heuristics may be dumb, so they fail open: if no confident default exists, ask the Q&A question without a recommended answer rather than spending an LLM call or laundering guesswork.
 
+## Task-shape signals
+
+`score-readiness.js` and `probe-readiness.js` may emit additive `task_shape` metadata for obvious oversized request shapes: many criteria groups, sprint/epic/milestone/foundation language, many subsystem references, multi-stage user journeys, or broad product-foundation mixtures. These are deterministic soft signals for routing into relay-ready/planner shaping. They do not create leaf handoffs, infer semantic task boundaries, or replace AI judgment about decomposition.
+
+Strong task-shape signals prevent direct readiness bypass, but they are not a blanket ban on XL work. Operators should treat them as evidence that relay-ready needs to shape the request before dispatch.
+
 ## Schema migration plan
 
 Steps:
