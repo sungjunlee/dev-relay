@@ -11,6 +11,7 @@ const GUIDANCE_PACK_REFERENCE = "guidance-packs.md";
 const REQUIRED_GUIDANCE_PACKS = [
   "surgical-change",
   "verification-evidence",
+  "user-replay-evidence",
   "simplify-pass",
   "docs-reader-success",
   "trust-boundary",
@@ -192,7 +193,7 @@ test("relay dispatch template and wrapper use Done Criteria outcome language", (
   assert.doesNotMatch(relaySkill, /Issue AC fully implemented/);
 });
 
-test("guidance pack reference declares exactly the initial five packs", () => {
+test("guidance pack reference declares the expected pack library", () => {
   const text = readReference(GUIDANCE_PACK_REFERENCE);
   const skill = readSkill();
   const taskProfile = readReference("task-profile.md");

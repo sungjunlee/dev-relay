@@ -21,6 +21,7 @@ task_profile:
   guidance_packs:
     - surgical-change
     - verification-evidence
+    - user-replay-evidence
 ```
 
 ## Derivation Inputs
@@ -42,6 +43,7 @@ When `guidance_packs` is non-empty, dispatch prompts render both the profile met
 
 - Code tasks normally select `surgical-change` and `verification-evidence`.
 - Documentation tasks select `docs-reader-success`.
+- User-visible product-flow tasks can select `user-replay-evidence` for concise replay notes.
 - Refactors and quality-risk M+ code tasks select `simplify-pass`.
 - Trust-boundary tasks select `trust-boundary` and usually use `execution_mode: fresh-context`.
 - Tasks that touch trust boundaries, state machines, merge/review gates, manifest anchors, recovery paths, data loss, public APIs, migrations, prompt contracts, or backward compatibility should recommend `review_assurance: hardened`.

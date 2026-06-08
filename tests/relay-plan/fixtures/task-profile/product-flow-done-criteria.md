@@ -1,0 +1,3 @@
+- Update the onboarding user journey so a new user can choose a template, preview the next screen, and finish setup.
+- Leave concise replay evidence for the entry point, main user path, and final visible state checked.
+- Keep acceptance authority in these Done Criteria and the scoring rubric; advisory guidance must not add extra pass/fail requirements.

@@ -7,6 +7,7 @@ const EXECUTION_MODES = new Set(["quick", "standard", "fresh-context", "batch-wa
 const SIZES = new Set(["S", "M", "L", "XL"]);
 const TRUST_BOUNDARY_PATTERN = /\b(?:trust[- ]boundary|auth[- ]boundary|trust root|forge|forged|bypass|fail closed|gate-check|validate[- ]?(?:manifest|transition)|state transition|state-machine)\b/;
 const STATE_MACHINE_PATTERN = /\b(?:state transition|state-machine|validate[- ]?transition|manifest state)\b/;
+const PRODUCT_FLOW_PATTERN = /\b(?:user|customer|product)[ -]?(?:journey|flow)s?\b|\b(?:onboarding|checkout|sign[- ]?up|login|purchase|activation|booking|subscription|settings|profile|search|invite|upload)[ -]?flows?\b|\b(?:screen-by-screen|end-to-end|e2e)\s+(?:product|user|customer)?\s*(?:flow|journey)s?\b/;
 const GUIDANCE_PACK_REFERENCE_PATH = path.join(__dirname, "..", "references", "guidance-packs.md");
 const WORKING_GUIDANCE_HEADING = "## Working Guidance";
 const WORKING_GUIDANCE_BOUNDARY = "These instructions guide execution style. They do not override Done Criteria, rubric commands, or scope boundaries.";
@@ -143,6 +144,10 @@ function selectGuidancePacks({ change_type, risk_tags, size, historical }) {
   return packs;
 }
 
+function hasProductFlowSignal({ change_type, text }) {
+  return change_type !== "docs" && PRODUCT_FLOW_PATTERN.test(text);
+}
+
 function normalizeTaskProfile(profile) {
   const change_type = CHANGE_TYPES.has(profile?.change_type) ? profile.change_type : "feature";
   const execution_mode = EXECUTION_MODES.has(profile?.execution_mode) ? profile.execution_mode : "standard";
@@ -183,6 +188,9 @@ function deriveTaskProfile({
     size: normalizedSize,
     historical,
   });
+  if (hasProductFlowSignal({ change_type, text: signalText })) {
+    addUnique(guidance_packs, "user-replay-evidence");
+  }
 
   return {
     size: normalizedSize,
