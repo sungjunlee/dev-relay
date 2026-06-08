@@ -1336,6 +1336,14 @@ test("finalize-run allows stacked base hazard only with an explicit override rea
   assert.equal(result.result.stackedBaseGuard.status, "overridden");
   assert.equal(result.result.stackedBaseGuard.reason, "base_pr_unmerged");
   assert.equal(result.result.stackedBaseGuard.overrideReason, "base PR was manually merged into the target branch");
+  const mergeEvent = result.events.find((event) => event.event === "merge_finalize");
+  assert.equal(mergeEvent?.override_class, "stacked_base_hazard");
+  assert.equal(mergeEvent?.affected_head_sha, fixture.headSha);
+  assert.equal(mergeEvent?.prior_state, STATES.READY_TO_MERGE);
+  assert.equal(mergeEvent?.required_reason, "base PR was manually merged into the target branch");
+  assert.equal(mergeEvent?.operator_initiated, true);
+  assert.equal(mergeEvent?.pr_number, 123);
+  assert.match(mergeEvent?.reason || "", /^stacked_base_override:base_pr_unmerged;/);
   assert.match(fs.readFileSync(result.logPath, "utf-8"), /pr list --head issue-688 --state all/);
 });
 

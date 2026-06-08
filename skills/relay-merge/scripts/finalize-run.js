@@ -128,6 +128,38 @@ function mergeFlag(method) {
   }
 }
 
+function buildMergeFinalizeReason({
+  mergeMethod,
+  mergeRecovered,
+  skipReviewReason,
+  stackedBaseGuard,
+}) {
+  const mergeReason = skipReviewReason
+    ? `skip_review:${skipReviewReason}`
+    : (mergeRecovered ? "already_merged" : mergeMethod);
+
+  if (stackedBaseGuard?.status !== "overridden") {
+    return mergeReason;
+  }
+
+  return `stacked_base_override:${stackedBaseGuard.reason};${mergeReason}`;
+}
+
+function buildStackedBaseOverrideAuditFields(stackedBaseGuard, prNumber, headSha, priorState) {
+  if (stackedBaseGuard?.status !== "overridden") {
+    return {};
+  }
+
+  return {
+    override_class: "stacked_base_hazard",
+    affected_head_sha: headSha,
+    prior_state: priorState,
+    required_reason: stackedBaseGuard.overrideReason,
+    operator_initiated: true,
+    pr_number: prNumber,
+  };
+}
+
 function fetchPreMergeContext(repoPath, prNumber) {
   const raw = execGh(repoPath, ["pr", "view", String(prNumber),
     "--json", "baseRefName,comments,commits,mergeable,statusCheckRollup"]);
@@ -896,9 +928,18 @@ function main() {
         state_to: STATES.MERGED,
         head_sha: updated.git?.head_sha || null,
         round: updated.review?.rounds || null,
-        reason: skipReviewReason
-          ? `skip_review:${skipReviewReason}`
-          : (mergeRecovered ? "already_merged" : mergeMethod),
+        reason: buildMergeFinalizeReason({
+          mergeMethod,
+          mergeRecovered,
+          skipReviewReason,
+          stackedBaseGuard,
+        }),
+        ...buildStackedBaseOverrideAuditFields(
+          stackedBaseGuard,
+          prNumber,
+          updated.git?.head_sha || currentHeadSha,
+          safeData.state
+        ),
       });
     }
   }
