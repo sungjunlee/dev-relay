@@ -8,6 +8,8 @@ const SIZES = new Set(["S", "M", "L", "XL"]);
 const TRUST_BOUNDARY_PATTERN = /\b(?:trust[- ]boundary|auth[- ]boundary|trust root|forge|forged|bypass|fail closed|gate-check|validate[- ]?(?:manifest|transition)|state transition|state-machine)\b/;
 const STATE_MACHINE_PATTERN = /\b(?:state transition|state-machine|validate[- ]?transition|manifest state)\b/;
 const PRODUCT_FLOW_PATTERN = /\b(?:user|customer|product)[ -]?(?:journey|flow)s?\b|\b(?:onboarding|checkout|sign[- ]?up|login|purchase|activation|booking|subscription|settings|profile|search|invite|upload)[ -]?flows?\b|\b(?:screen-by-screen|end-to-end|e2e)\s+(?:product|user|customer)?\s*(?:flow|journey)s?\b/;
+const PRODUCT_SURFACE_PATTERN = /\b(?:user|customer|product|ui|ux|screen|page|view|modal|form|button|visible|browser|frontend|component|harness|demo|synthetic|mock|provider|replay)\b/;
+const PRODUCT_FLOW_SIGNAL_PATTERN = /\b(?:file input|file upload|upload input|user input|form input|input provider|provider alignment|harness provider|ui provider|real provider|demo provider|synthetic provider|state transition|empty state|loading state|error state|success state|final state|visible state|demo data|synthetic data|demo risk|synthetic risk)\b|\b(?:export|delete|retry)\s+(?:button|action|path|case|state|flow|screen|view|result|file|data|report|download|failure|error)\b|\b(?:button|action|path|case|state|flow|screen|view)\s+(?:to\s+)?(?:export|delete|retry)\b/;
 const GUIDANCE_PACK_REFERENCE_PATH = path.join(__dirname, "..", "references", "guidance-packs.md");
 const WORKING_GUIDANCE_HEADING = "## Working Guidance";
 const WORKING_GUIDANCE_BOUNDARY = "These instructions guide execution style. They do not override Done Criteria, rubric commands, or scope boundaries.";
@@ -145,7 +147,9 @@ function selectGuidancePacks({ change_type, risk_tags, size, historical }) {
 }
 
 function hasProductFlowSignal({ change_type, text }) {
-  return change_type !== "docs" && PRODUCT_FLOW_PATTERN.test(text);
+  if (change_type === "docs") return false;
+  if (PRODUCT_FLOW_PATTERN.test(text)) return true;
+  return PRODUCT_SURFACE_PATTERN.test(text) && PRODUCT_FLOW_SIGNAL_PATTERN.test(text);
 }
 
 function normalizeTaskProfile(profile) {

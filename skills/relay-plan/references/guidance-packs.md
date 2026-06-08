@@ -71,7 +71,7 @@ This reference is the pack library. Relay-plan renders the selected `#### Guidan
 
 #### Guidance
 
-- Leave concise replay evidence: entry point, main user path, final state, and any visible edge case checked.
+- Leave concise replay evidence: entry point, real input used, main user path, negative case checked, state transition observed, final visible state, and evidence artifact captured where practical.
 - Prefer concrete observations over broad claims about product quality.
 - Do not create new pass/fail requirements unless they already live in Done Criteria or rubric factors.
 

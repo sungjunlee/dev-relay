@@ -100,6 +100,18 @@ test("generic code and docs tasks do not select user replay evidence guidance", 
   assert.ok(!docsProfile.guidance_packs.includes("user-replay-evidence"));
 });
 
+test("backend signal words do not select user replay evidence without product surface context", () => {
+  const profile = deriveTaskProfile({
+    doneCriteria: "Add retry handling for provider input state in the relay-plan parser helper with unit tests.",
+    probeSignal: PROBE_SIGNAL,
+    historicalSignal: HISTORICAL_SIGNAL,
+    taskRisk: {},
+    size: "M",
+  });
+
+  assert.ok(!profile.guidance_packs.includes("user-replay-evidence"));
+});
+
 test("product-flow task profile renders user replay evidence guidance without changing authority", () => {
   const baseline = fs.readFileSync(BASELINE_PROMPT_PATH, "utf-8");
   const doneCriteria = fs.readFileSync(PRODUCT_FLOW_DONE_CRITERIA_PATH, "utf-8");
@@ -116,7 +128,7 @@ test("product-flow task profile renders user replay evidence guidance without ch
   const rendered = applyTaskProfileToDispatchPrompt({ dispatchPrompt: baseline, taskProfile: profile });
 
   assert.match(rendered, /### user-replay-evidence/);
-  assert.match(rendered, /- Leave concise replay evidence: entry point, main user path, final state, and any visible edge case checked\./);
+  assert.match(rendered, /- Leave concise replay evidence: entry point, real input used, main user path, negative case checked, state transition observed, final visible state, and evidence artifact captured where practical\./);
   assert.match(rendered, /These instructions guide execution style\. They do not override Done Criteria, rubric commands, or scope boundaries\./);
   assert.match(rendered, /Do not create new pass\/fail requirements unless they already live in Done Criteria or rubric factors\./);
   assert.ok(rendered.indexOf("## Working Guidance") < rendered.indexOf("## Scoring Rubric"));
