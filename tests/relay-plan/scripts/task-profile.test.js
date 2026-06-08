@@ -112,6 +112,38 @@ test("backend signal words do not select user replay evidence without product su
   assert.ok(!profile.guidance_packs.includes("user-replay-evidence"));
 });
 
+test("provider state-transition backend validation does not select user replay evidence", () => {
+  const profile = deriveTaskProfile({
+    doneCriteria: "Add provider state transition validation in the relay-plan parser helper.",
+    probeSignal: PROBE_SIGNAL,
+    historicalSignal: HISTORICAL_SIGNAL,
+    taskRisk: {},
+    size: "M",
+  });
+
+  assert.ok(!profile.guidance_packs.includes("user-replay-evidence"));
+});
+
+test("user-visible product-flow signal classes select user replay evidence", () => {
+  const cases = [
+    "Update the upload flow so a user can submit a file input and see the preview state transition.",
+    "Align the UI harness provider so the visible error state can retry the failed provider response.",
+    "Update the browser view so demo data risk is replayed with a negative case before export.",
+  ];
+
+  for (const doneCriteria of cases) {
+    const profile = deriveTaskProfile({
+      doneCriteria,
+      probeSignal: PROBE_SIGNAL,
+      historicalSignal: HISTORICAL_SIGNAL,
+      taskRisk: {},
+      size: "M",
+    });
+
+    assert.ok(profile.guidance_packs.includes("user-replay-evidence"), doneCriteria);
+  }
+});
+
 test("product-flow task profile renders user replay evidence guidance without changing authority", () => {
   const baseline = fs.readFileSync(BASELINE_PROMPT_PATH, "utf-8");
   const doneCriteria = fs.readFileSync(PRODUCT_FLOW_DONE_CRITERIA_PATH, "utf-8");
