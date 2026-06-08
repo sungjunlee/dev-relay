@@ -226,6 +226,9 @@ function remoteBranchExists(repoRoot, branch) {
 }
 
 function writeFakeGh(logPath, {
+  basePrCandidates = [],
+  baseRefName = "main",
+  defaultBranchName = "main",
   headRefName = "issue-42",
   comments = [],
   commits = [],
@@ -242,6 +245,9 @@ function writeFakeGh(logPath, {
   const statePath = path.join(path.dirname(logPath), "fake-gh-state.json");
   fs.writeFileSync(statePath, JSON.stringify({
     headRefName,
+    baseRefName,
+    defaultBranchName,
+    basePrCandidates,
     comments,
     commits,
     state,
@@ -279,6 +285,7 @@ if (args[0] === "pr" && args[1] === "view") {
   const state = loadState();
   process.stdout.write(JSON.stringify({
     headRefName: state.headRefName,
+    baseRefName: state.baseRefName,
     state: state.state,
     mergeCommit: state.mergeCommit,
     comments: state.comments,
@@ -286,6 +293,20 @@ if (args[0] === "pr" && args[1] === "view") {
     mergeable: state.mergeable,
     statusCheckRollup: state.statusCheckRollup
   }));
+}
+if (args[0] === "pr" && args[1] === "list") {
+  const state = loadState();
+  process.stdout.write(JSON.stringify(state.basePrCandidates || []));
+  process.exit(0);
+}
+if (args[0] === "repo" && args[1] === "view") {
+  const state = loadState();
+  process.stdout.write(JSON.stringify({
+    defaultBranchRef: {
+      name: state.defaultBranchName
+    }
+  }));
+  process.exit(0);
 }
 `, "utf-8");
   fs.chmodSync(ghPath, 0o755);
@@ -794,7 +815,7 @@ test("finalize-run merges and cleans a ready run", () => {
   assert.equal(manifest.cleanup.branch_deleted, true);
 
   const ghLog = fs.readFileSync(logPath, "utf-8");
-  assert.match(ghLog, /pr view 123 --json comments,commits/);
+  assert.match(ghLog, /pr view 123 --json baseRefName,comments,commits,mergeable,statusCheckRollup/);
   assert.match(ghLog, /pr merge 123 --squash/);
   assert.match(ghLog, /issue close 42 --comment Resolved in PR #123/);
 });
@@ -1241,6 +1262,114 @@ test("finalize-run blocks merge when PR has merge conflicts", () => {
 
   const manifest = readManifest(manifestPath).data;
   assert.equal(manifest.state, STATES.READY_TO_MERGE);
+});
+
+test("finalize-run blocks obvious stacked PR base hazards before merge", () => {
+  const fixture = setupRepo();
+  const logPath = path.join(fixture.repoRoot, "gh.log");
+  const fakeGh = writeFakeGh(logPath, {
+    baseRefName: "issue-688",
+    comments: [DEFAULT_REVIEW_COMMENT],
+    commits: [
+      {
+        oid: fixture.headSha,
+        committedDate: DEFAULT_COMMIT_DATE,
+      },
+    ],
+    basePrCandidates: [
+      {
+        number: 688,
+        state: "CLOSED",
+        mergedAt: null,
+        headRefName: "issue-688",
+        url: "https://example.test/pulls/688",
+      },
+    ],
+  });
+
+  assert.throws(() => execFileSync("node", [
+    SCRIPT,
+    "--repo", fixture.repoRoot,
+    "--branch", fixture.branch,
+    "--pr", "123",
+    "--json",
+  ], {
+    cwd: fixture.repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+    env: { ...process.env, RELAY_GH_BIN: fakeGh },
+  }), /Stacked PR base hazard: PR #123 targets non-default base 'issue-688'/);
+
+  const manifest = readManifest(fixture.manifestPath).data;
+  assert.equal(manifest.state, STATES.READY_TO_MERGE);
+  const events = readRunEvents(fixture.repoRoot, fixture.runId);
+  assert.equal(events.find((event) => event.event === "merge_finalize"), undefined);
+  assert.equal(events.find((event) => event.event === "merge_blocked")?.reason, "stacked_base_hazard:base_pr_closed");
+});
+
+test("finalize-run allows stacked base hazard only with an explicit override reason", () => {
+  const fixture = setupRepo();
+  const result = execFinalize(fixture, {
+    extraArgs: ["--allow-stacked-base-hazard", "base PR was manually merged into the target branch"],
+    ghOptions: {
+      baseRefName: "issue-688",
+      comments: [DEFAULT_REVIEW_COMMENT],
+      commits: [
+        {
+          oid: fixture.headSha,
+          committedDate: DEFAULT_COMMIT_DATE,
+        },
+      ],
+      basePrCandidates: [
+        {
+          number: 688,
+          state: "OPEN",
+          mergedAt: null,
+          headRefName: "issue-688",
+          url: "https://example.test/pulls/688",
+        },
+      ],
+    },
+  });
+
+  assert.equal(result.result.state, STATES.MERGED);
+  assert.equal(result.result.stackedBaseGuard.status, "overridden");
+  assert.equal(result.result.stackedBaseGuard.reason, "base_pr_unmerged");
+  assert.equal(result.result.stackedBaseGuard.overrideReason, "base PR was manually merged into the target branch");
+  assert.match(fs.readFileSync(result.logPath, "utf-8"), /pr list --head issue-688 --state all/);
+});
+
+test("finalize-run skip-review still blocks stacked base hazards", () => {
+  const fixture = setupRepo();
+  const logPath = path.join(fixture.repoRoot, "gh.log");
+  const fakeGh = writeFakeGh(logPath, {
+    baseRefName: "issue-688",
+    commits: [
+      {
+        oid: fixture.headSha,
+        committedDate: DEFAULT_COMMIT_DATE,
+      },
+    ],
+    basePrCandidates: [],
+  });
+
+  assert.throws(() => execFileSync("node", [
+    SCRIPT,
+    "--repo", fixture.repoRoot,
+    "--branch", fixture.branch,
+    "--pr", "123",
+    "--skip-review", "operator skip still checks base",
+    "--json",
+  ], {
+    cwd: fixture.repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+    env: { ...process.env, RELAY_GH_BIN: fakeGh },
+  }), /Stacked PR base hazard: PR #123 targets non-default base 'issue-688'/);
+
+  const events = readRunEvents(fixture.repoRoot, fixture.runId);
+  assert.equal(events.find((event) => event.event === "skip_review"), undefined);
+  assert.equal(events.find((event) => event.event === "merge_blocked")?.reason, "stacked_base_hazard:base_pr_missing");
 });
 
 test("finalize-run blocks merge when CI checks are not successful", () => {

@@ -71,6 +71,9 @@ function setupRepo({ state = STATES.CHANGES_REQUESTED, branch = "issue-211", prN
     manifest = updateManifestState(manifest, STATES.CHANGES_REQUESTED, "await_redispatch");
   } else if (state === STATES.ESCALATED) {
     manifest = updateManifestState(manifest, STATES.ESCALATED, "inspect_review_failure");
+  } else if (state === STATES.READY_TO_MERGE) {
+    manifest.review = { ...manifest.review, latest_verdict: "lgtm" };
+    manifest = updateManifestState(manifest, STATES.READY_TO_MERGE, "await_explicit_merge");
   } else if (state === STATES.DISPATCHED) {
     manifest = { ...manifest, state: STATES.DISPATCHED, next_action: "await_dispatch_result" };
   }
@@ -120,6 +123,28 @@ process.exit(2);
   };
 }
 
+function writeGhPrHeadScript(headRefOid, { number = 334, headRefName = "issue-211" } = {}) {
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-gh-head-"));
+  const ghPath = path.join(binDir, "gh");
+  fs.writeFileSync(ghPath, `#!/usr/bin/env node
+const args = process.argv.slice(2);
+if (args[0] === "pr" && args[1] === "view") {
+  process.stdout.write(JSON.stringify({
+    number: ${JSON.stringify(number)},
+    headRefName: ${JSON.stringify(headRefName)},
+    headRefOid: ${JSON.stringify(headRefOid)}
+  }));
+  process.exit(0);
+}
+console.error("unexpected gh args: " + args.join(" "));
+process.exit(2);
+`, "utf-8");
+  fs.chmodSync(ghPath, 0o755);
+  return {
+    PATH: `${binDir}${path.delimiter}${process.env.PATH || ""}`,
+  };
+}
+
 test("changes_requested -> review_pending succeeds after a fresh commit", () => {
   const { repoRoot, manifestPath, runId, worktreePath, branch, initialHead } = setupRepo({ state: STATES.CHANGES_REQUESTED });
   const newHead = addCommitOnBranch(worktreePath, branch);
@@ -151,6 +176,69 @@ test("changes_requested -> review_pending succeeds after a fresh commit", () => 
   assert.match(events, new RegExp(`"state_to":"${STATES.REVIEW_PENDING}"`));
   assert.match(events, new RegExp(`"head_sha":"${newHead}"`));
   assert.match(events, new RegExp(`"last_reviewed_sha":"${initialHead}"`));
+});
+
+test("ready_to_merge -> review_pending succeeds when live PR HEAD drift is objective evidence", () => {
+  const { repoRoot, manifestPath, runId, initialHead } = setupRepo({
+    state: STATES.READY_TO_MERGE,
+    prNumber: 334,
+  });
+  const liveHead = "def4567890abcdef";
+  const env = { ...process.env, ...writeGhPrHeadScript(liveHead, { number: 334 }) };
+
+  const stdout = execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--run-id", runId,
+    "--to", STATES.REVIEW_PENDING,
+    "--reason", "PR head advanced after passing review",
+    "--json",
+  ], { encoding: "utf-8", env });
+
+  const result = JSON.parse(stdout);
+  assert.equal(result.previousState, STATES.READY_TO_MERGE);
+  assert.equal(result.state, STATES.REVIEW_PENDING);
+  assert.equal(result.nextAction, "run_review");
+  assert.equal(result.readyHeadDrift.prNumber, 334);
+  assert.equal(result.readyHeadDrift.oldSha, initialHead);
+  assert.equal(result.readyHeadDrift.newSha, liveHead);
+
+  const manifest = readManifest(manifestPath).data;
+  assert.equal(manifest.state, STATES.REVIEW_PENDING);
+  assert.equal(manifest.next_action, "run_review");
+  assert.equal(manifest.git.head_sha, liveHead);
+  assert.equal(manifest.review.last_reviewed_sha, initialHead);
+
+  const event = readRunEvents(repoRoot, runId).find((entry) => entry.event === "state_recovery");
+  assert.equal(event?.state_from, STATES.READY_TO_MERGE);
+  assert.equal(event?.state_to, STATES.REVIEW_PENDING);
+  assert.equal(event?.pr_number, 334);
+  assert.equal(event?.previous_head_sha, initialHead);
+  assert.equal(event?.new_head_sha, liveHead);
+  assert.equal(event?.head_sha, liveHead);
+  assert.equal(event?.last_reviewed_sha, initialHead);
+  assert.equal(event?.reason, "PR head advanced after passing review");
+});
+
+test("ready_to_merge -> review_pending fails when live PR HEAD has not drifted", () => {
+  const { repoRoot, runId, initialHead } = setupRepo({
+    state: STATES.READY_TO_MERGE,
+    prNumber: 334,
+  });
+  const env = { ...process.env, ...writeGhPrHeadScript(initialHead, { number: 334 }) };
+
+  const result = spawnSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--run-id", runId,
+    "--to", STATES.REVIEW_PENDING,
+    "--reason", "retry review without objective drift",
+    "--json",
+  ], { encoding: "utf-8", env });
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /Refusing stale-ready recovery/);
+  assert.match(result.stderr, /equals review\.last_reviewed_sha/);
 });
 
 test("changes_requested -> review_pending fails when HEAD equals last_reviewed_sha", () => {
@@ -376,8 +464,9 @@ test("unlisted transition (dispatched -> merged) rejected with allowed set liste
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, new RegExp(`Recovery transition '${STATES.DISPATCHED} -> ${STATES.MERGED}' is not whitelisted`));
   assert.match(result.stderr, /Allowed: /);
-  // All four whitelisted transitions must appear in the allowed list.
+  // All whitelisted transitions must appear in the allowed list.
   assert.match(result.stderr, new RegExp(`${STATES.CHANGES_REQUESTED} -> ${STATES.REVIEW_PENDING}`));
+  assert.match(result.stderr, new RegExp(`${STATES.READY_TO_MERGE} -> ${STATES.REVIEW_PENDING}`));
   assert.match(result.stderr, new RegExp(`${STATES.ESCALATED} -> ${STATES.REVIEW_PENDING}`));
   assert.match(result.stderr, new RegExp(`${STATES.ESCALATED} -> ${STATES.CHANGES_REQUESTED}`));
   assert.match(result.stderr, new RegExp(`${STATES.DISPATCHED} -> ${STATES.CHANGES_REQUESTED}`));

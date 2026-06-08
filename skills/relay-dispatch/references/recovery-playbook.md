@@ -38,6 +38,10 @@ node skills/relay-dispatch/scripts/recover-state.js --repo . --run-id <id> \
   --to review_pending --allow-same-head --require-pr-body-change \
   --reason "PR body metadata fixed with gh pr edit"
 
+# PR advanced after ready_to_merge → return to review for the new live PR HEAD
+node skills/relay-dispatch/scripts/recover-state.js --repo . --run-id <id> \
+  --to review_pending --reason "PR head advanced after passing review"
+
 # No-op re-dispatch escalated the run → bring it back for a fresh review
 node skills/relay-dispatch/scripts/recover-state.js --repo . --run-id <id> \
   --to review_pending --force --reason "no-op-dispatch-recovery"
@@ -53,6 +57,7 @@ Whitelisted transitions (unlisted pairs are rejected — use the normal dispatch
 |---|---|---|---|
 | `changes_requested` | `review_pending` | no | fresh commit on branch (HEAD ≠ `review.last_reviewed_sha`) |
 | `changes_requested` | `review_pending` | no | same HEAD allowed only with `--allow-same-head --require-pr-body-change`, a manifest PR number (`git.pr_number` or `github.pr_number`), a prior `review-round-N-pr-body.md` snapshot, and a current GitHub PR body that differs from the latest numbered snapshot |
+| `ready_to_merge` | `review_pending` | no | live GitHub PR HEAD differs from `review.last_reviewed_sha` or `git.head_sha`; emits old/new SHA and PR number in `state_recovery` |
 | `escalated` | `review_pending` | yes | — |
 | `escalated` | `changes_requested` | no | — |
 | `dispatched` | `changes_requested` | yes | — |
@@ -88,6 +93,6 @@ If `--add-dir` is NOT supported or doesn't fix the failure: ship Path 2 and docu
 
 Use normal `dispatch.js --run-id <id>` when reviewer feedback requires code changes. That path re-dispatches implementation work and must produce a fresh code handoff before review.
 
-Use `recover-state.js --to review_pending` for external events that make a new review valid without redispatch. The normal path still requires `HEAD != review.last_reviewed_sha`. The same-HEAD exception is only for PR-body-only evidence changes and emits a `state_recovery` event with `pr_body_only: true`, `head_sha`, `last_reviewed_sha`, `pr_number`, and the operator `reason`.
+Use `recover-state.js --to review_pending` for external events that make a new review valid without redispatch. The normal changes-requested path still requires `HEAD != review.last_reviewed_sha`. The same-HEAD exception is only for PR-body-only evidence changes and emits a `state_recovery` event with `pr_body_only: true`, `head_sha`, `last_reviewed_sha`, `pr_number`, and the operator `reason`. The ready-to-merge stale path is stricter: it only opens when GitHub's live PR HEAD differs from the reviewed/manifest SHA, updates `git.head_sha` to the live SHA, and emits `previous_head_sha`, `new_head_sha`, and `pr_number`.
 
 Use `finalize-run.js --force-finalize-nonready --reason ...` only as a merge/finalization override for non-ready terminal cleanup. It is not a substitute for fresh review evidence and does not repair missing PR body metadata.

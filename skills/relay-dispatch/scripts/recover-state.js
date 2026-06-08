@@ -45,6 +45,16 @@ const RECOVERY_TRANSITIONS = Object.freeze([
     description: "Operator pushed a fix commit directly to the branch instead of re-dispatching.",
   },
   {
+    from: STATES.READY_TO_MERGE,
+    to: STATES.REVIEW_PENDING,
+    nextAction: "run_review",
+    requireForce: false,
+    requireFreshCommit: false,
+    requireReadyHeadDrift: true,
+    resetLastReviewedSha: false,
+    description: "PR HEAD advanced after a passing review; recover to review_pending for a fresh review.",
+  },
+  {
     from: STATES.ESCALATED,
     to: STATES.REVIEW_PENDING,
     nextAction: "run_review",
@@ -95,7 +105,10 @@ function printUsage(stream = console.log) {
       const freshFlag = t.requireFreshCommit
         ? " (fresh commit required on branch; same-HEAD PR-body-only recovery requires both same-HEAD flags)"
         : "";
-      return `  ${t.from} -> ${t.to}${forceFlag}${freshFlag}`;
+      const driftFlag = t.requireReadyHeadDrift
+        ? " (live PR HEAD drift required)"
+        : "";
+      return `  ${t.from} -> ${t.to}${forceFlag}${freshFlag}${driftFlag}`;
     }).join("\n")
   );
 }
@@ -221,6 +234,80 @@ function fetchCurrentPrBody(repoRoot, prNumber) {
   }
 }
 
+function fetchLivePrHead(repoRoot, prNumber) {
+  try {
+    const ghBin = process.env.RELAY_GH_BIN || "gh";
+    const raw = execFileSync(
+      ghBin,
+      ["pr", "view", String(prNumber), "--json", "number,headRefName,headRefOid"],
+      {
+        cwd: repoRoot,
+        encoding: "utf-8",
+        stdio: "pipe",
+        timeout: PR_BODY_FETCH_TIMEOUT_MS,
+      }
+    );
+    const parsed = JSON.parse(raw || "{}");
+    return {
+      prNumber: Number(parsed.number || prNumber),
+      headRefName: parsed.headRefName || null,
+      headSha: parsed.headRefOid || null,
+    };
+  } catch (error) {
+    throw new Error(
+      `Cannot fetch live PR HEAD for PR #${prNumber}: ${summarizeCommandFailure(error)}`
+    );
+  }
+}
+
+function requireReadyHeadDriftEvidence({ repoRoot, manifestData }) {
+  const prNumber = getManifestPrNumber(manifestData);
+  if (!prNumber) {
+    throw new Error(
+      "Refusing stale-ready recovery: manifest has no PR number " +
+      "(expected git.pr_number or github.pr_number)."
+    );
+  }
+
+  const live = fetchLivePrHead(repoRoot, prNumber);
+  if (!live.headSha) {
+    throw new Error(`Refusing stale-ready recovery: PR #${prNumber} live HEAD is missing.`);
+  }
+
+  const lastReviewedSha = manifestData?.review?.last_reviewed_sha || null;
+  const manifestHeadSha = manifestData?.git?.head_sha || null;
+  if (!lastReviewedSha && !manifestHeadSha) {
+    throw new Error(
+      "Refusing stale-ready recovery: manifest has neither review.last_reviewed_sha nor git.head_sha " +
+      "to compare against the live PR HEAD."
+    );
+  }
+
+  const differsFromReviewed = Boolean(lastReviewedSha && live.headSha !== lastReviewedSha);
+  const differsFromManifestHead = Boolean(manifestHeadSha && live.headSha !== manifestHeadSha);
+  if (!differsFromReviewed && !differsFromManifestHead) {
+    const equalTargets = [];
+    if (lastReviewedSha) equalTargets.push("review.last_reviewed_sha");
+    if (manifestHeadSha) equalTargets.push("git.head_sha");
+    throw new Error(
+      `Refusing stale-ready recovery: live PR HEAD for PR #${prNumber} (${live.headSha}) ` +
+      `equals ${equalTargets.join(" and ")}. Objective drift evidence requires the live PR HEAD ` +
+      "to differ from review.last_reviewed_sha or git.head_sha."
+    );
+  }
+
+  return {
+    prNumber: live.prNumber || prNumber,
+    headRefName: live.headRefName,
+    oldSha: differsFromReviewed ? lastReviewedSha : manifestHeadSha,
+    newSha: live.headSha,
+    lastReviewedSha,
+    manifestHeadSha,
+    differsFromReviewed,
+    differsFromManifestHead,
+  };
+}
+
 function requirePrBodyOnlyEvidence({ repoRoot, manifestData, currentHead, lastReviewedSha }) {
   const prNumber = getManifestPrNumber(manifestData);
   if (!prNumber) {
@@ -336,6 +423,7 @@ function main() {
 
   let commitContext = null;
   let prBodyOnlyContext = null;
+  let readyHeadDriftContext = null;
   if (recovery.requireFreshCommit) {
     const headContext = getBranchHeadContext({
       repoRoot: validatedPaths.repoRoot,
@@ -356,11 +444,27 @@ function main() {
       });
     }
   }
+  if (recovery.requireReadyHeadDrift) {
+    readyHeadDriftContext = requireReadyHeadDriftEvidence({
+      repoRoot: validatedPaths.repoRoot,
+      manifestData: safeData,
+    });
+  }
 
-  const updated = forceTransitionState(safeData, toState, recovery.nextAction);
+  let updated = forceTransitionState(safeData, toState, recovery.nextAction);
 
   if (recovery.resetLastReviewedSha) {
     updated.review = { ...(updated.review || {}), last_reviewed_sha: null };
+  }
+  if (readyHeadDriftContext) {
+    updated = {
+      ...updated,
+      git: {
+        ...(updated.git || {}),
+        pr_number: readyHeadDriftContext.prNumber,
+        head_sha: readyHeadDriftContext.newSha,
+      },
+    };
   }
 
   if (!dryRun) {
@@ -369,12 +473,24 @@ function main() {
       event: EVENTS.STATE_RECOVERY,
       state_from: fromState,
       state_to: toState,
-      head_sha: commitContext?.currentHead || prBodyOnlyContext?.currentHead || updated.git?.head_sha || null,
+      head_sha: readyHeadDriftContext?.newSha
+        || commitContext?.currentHead
+        || prBodyOnlyContext?.currentHead
+        || updated.git?.head_sha
+        || null,
       round: prBodyOnlyContext?.previousSnapshotRound || updated.review?.rounds || null,
       reason,
       last_reviewed_sha: commitContext?.lastReviewedSha
         ?? prBodyOnlyContext?.lastReviewedSha
+        ?? readyHeadDriftContext?.lastReviewedSha
         ?? (safeData.review?.last_reviewed_sha || null),
+      ...(readyHeadDriftContext
+        ? {
+            pr_number: readyHeadDriftContext.prNumber,
+            previous_head_sha: readyHeadDriftContext.oldSha,
+            new_head_sha: readyHeadDriftContext.newSha,
+          }
+        : {}),
       ...(prBodyOnlyContext
         ? {
             pr_body_only: true,
@@ -394,6 +510,7 @@ function main() {
     force,
     freshCommit: commitContext,
     prBodyOnly: prBodyOnlyContext,
+    readyHeadDrift: readyHeadDriftContext,
     dryRun,
   };
 
@@ -414,6 +531,12 @@ function main() {
       console.log(`  Prev reviewed: ${prBodyOnlyContext.lastReviewedSha || "(none)"}`);
       console.log(`  PR number:    ${prBodyOnlyContext.prNumber}`);
       console.log(`  Snapshot:     ${prBodyOnlyContext.previousSnapshotPath}`);
+    }
+    if (readyHeadDriftContext) {
+      console.log("  Ready drift:  true");
+      console.log(`  PR number:    ${readyHeadDriftContext.prNumber}`);
+      console.log(`  Prev HEAD:    ${readyHeadDriftContext.oldSha}`);
+      console.log(`  New HEAD:     ${readyHeadDriftContext.newSha}`);
     }
     if (dryRun) console.log("  dry-run:      no changes written");
   }
