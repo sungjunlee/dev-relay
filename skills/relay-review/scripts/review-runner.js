@@ -249,7 +249,8 @@ async function run() {
   const repeatedIssueCount = verdict.verdict === "changes_requested"
     ? computeRepeatedIssueCount(runDir, round, verdict.issues)
     : 0;
-  let escalationDecision = { round, trigger: "none", factors: [], traces: [], lineage_summary: summarizeLineage(verdict.issues), decision: "continue", reason: "no_trigger" };
+  const lineageSummary = summarizeLineage(verdict.issues);
+  let escalationDecision = { round, trigger: "none", factors: [], traces: [], lineage_summary: lineageSummary, decision: "continue", reason: "no_trigger" };
   if (verdict.verdict === "changes_requested" && repeatedIssueCount >= 3) {
     verdict = toEscalatedVerdict(
       verdict,
@@ -296,7 +297,7 @@ async function run() {
       : path.join(runDir, `review-round-${round}-redispatch.md`);
     const redispatchPrompt = rubricGateFailure
       ? buildRubricGateRedispatchPrompt(rubricGateFailure, doneCriteria, doneCriteriaSource)
-      : buildRedispatchPrompt(verdict, doneCriteria, runDir, round, churnGrowth, doneCriteriaSource);
+      : buildRedispatchPrompt(verdict, doneCriteria, runDir, round, churnGrowth, doneCriteriaSource, reviewedHeadSha);
     writeText(redispatchPath, `${redispatchPrompt}\n`);
   }
 
@@ -313,7 +314,7 @@ async function run() {
     result.commentPosted = true;
   }
 
-  let updatedManifest = applyVerdictToManifest(data, verdict, round, prNumber, reviewedHeadSha, repeatedIssueCount, { rubricGateFailure, escalationDecision });
+  let updatedManifest = applyVerdictToManifest(data, verdict, round, prNumber, reviewedHeadSha, repeatedIssueCount, { rubricGateFailure, escalationDecision, lineageSummary: escalationDecision.lineage_summary || lineageSummary });
   updatedManifest = {
     ...updatedManifest,
     review: {
@@ -333,6 +334,7 @@ async function run() {
     round,
     reviewer: reviewerName,
     reason: rubricGateFailure ? rubricGateFailure.status : verdict.verdict,
+    lineage_summary: escalationDecision.lineage_summary || lineageSummary,
   });
 
   if (Array.isArray(verdict.rubric_scores) && verdict.rubric_scores.length > 0) {
@@ -352,6 +354,7 @@ async function run() {
   result.nextState = updatedManifest.state;
   result.redispatchPath = redispatchPath;
   result.repeatedIssueCount = repeatedIssueCount;
+  result.lineageSummary = escalationDecision.lineage_summary || lineageSummary;
   result.reviewGate = rubricGateFailure ? {
     layer: rubricGateFailure.layer,
     reason: rubricGateFailure.reason,

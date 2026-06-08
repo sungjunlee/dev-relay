@@ -972,10 +972,12 @@ test("review-runner appends escalation_decision event on a clean no-trigger roun
     trigger: "none",
     factors: [],
     traces: [],
-    lineage_summary: { deepening: 0, repeat: 0, new: 0, newly_scoreable: 0, unknown: 0 },
+    lineage_summary: { deepening: 0, repeat: 0, stale: 0, new: 0, newly_scoreable: 0, unknown: 0 },
     decision: "continue",
     reason: "no_trigger",
   });
+  assert.deepEqual(manifest.review.last_lineage_summary, { deepening: 0, repeat: 0, stale: 0, new: 0, newly_scoreable: 0, unknown: 0 });
+  assert.deepEqual(escalationEvent?.lineage_summary, { deepening: 0, repeat: 0, stale: 0, new: 0, newly_scoreable: 0, unknown: 0 });
   assert.equal(escalationEvent?.head_sha, manifest.git.head_sha);
   assert.equal(escalationEvent?.state_from, STATES.REVIEW_PENDING);
   assert.equal(escalationEvent?.state_to, STATES.READY_TO_MERGE);
@@ -1394,6 +1396,7 @@ test("changes_requested verdict creates a re-dispatch artifact", () => {
   assert.equal(manifest.review.rounds, 1);
   assert.equal(manifest.review.latest_verdict, "changes_requested");
   assert.equal(manifest.review.repeated_issue_count, 1);
+  assert.deepEqual(manifest.review.last_lineage_summary, { deepening: 0, repeat: 0, stale: 0, new: 0, newly_scoreable: 0, unknown: 1 });
 });
 
 test("review-runner records rubric_scores as iteration_score events", () => {
@@ -2147,6 +2150,42 @@ test("rubric factor flip-flops preserve pass verdicts when there are zero repeat
   assert.equal(manifest.review.last_escalation_decision.reason, "progressive_deepening");
 });
 
+test("rubric factor flip-flops fail closed for stale lineage without waiting for three repeats", () => {
+  const { repoRoot, manifestPath, runId, doneCriteriaPath, diffPath } = setupRepo();
+  const runDir = ensureRunLayout(repoRoot, runId).runDir;
+  fs.writeFileSync(path.join(runDir, "review-round-1-verdict.json"), JSON.stringify({ verdict: "changes_requested", rubric_scores: [{ factor: "Behavior", status: "pass" }] }), "utf-8");
+  fs.writeFileSync(path.join(runDir, "review-round-2-verdict.json"), JSON.stringify({ verdict: "changes_requested", rubric_scores: [{ factor: "behavior", status: "fail" }] }), "utf-8");
+  updateManifestRecord(manifestPath, (data) => ({ ...data, review: { ...(data.review || {}), rounds: 2 } }));
+  const reviewFile = writeVerdict(repoRoot, "flip-stale.json", {
+    verdict: "changes_requested",
+    summary: "Behavior stale finding repeats.",
+    contract_status: "fail",
+    quality_review_status: "pass",
+    quality_execution_status: "pass",
+    next_action: "changes_requested",
+    issues: [{
+      title: "Behavior stale finding",
+      body: "The same HEAD is being reviewed again.",
+      file: "src/index.js",
+      line: 12,
+      category: "Behavior",
+      severity: "high",
+      lineage: "stale",
+      relates_to: "Round 2 Behavior",
+    }],
+    rubric_scores: [{ factor: "Behavior", target: ">= 1/1", observed: "0/1", status: "pass", tier: "contract", notes: "Flip trace closes." }],
+    scope_drift: { creep: [], missing: [] },
+  });
+
+  const result = JSON.parse(execFileSync("node", [SCRIPT, "--repo", repoRoot, "--run-id", runId, "--pr", "123", "--done-criteria-file", doneCriteriaPath, "--diff-file", diffPath, "--review-file", reviewFile, "--no-comment", "--json"], { encoding: "utf-8" }));
+  const manifest = readManifest(manifestPath).data;
+
+  assert.equal(result.state, STATES.ESCALATED);
+  assert.equal(result.repeatedIssueCount, 1);
+  assert.equal(manifest.review.last_escalation_decision.reason, "flip_flop_thrash");
+  assert.deepEqual(manifest.review.last_lineage_summary, { deepening: 0, repeat: 0, stale: 1, new: 0, newly_scoreable: 0, unknown: 0 });
+});
+
 test("formatPriorVerdictSummary produces correct round numbers and rubric summaries", () => {
   // Module-level argv parsing prevents direct require(), so use a helper script
   // that sets process.argv before requiring the module.
@@ -2183,8 +2222,8 @@ test("formatPriorVerdictSummary produces correct round numbers and rubric summar
   const out = JSON.parse(execFileSync("node", [helperPath], { encoding: "utf-8" }));
 
   assert.match(out.result, /^Prior review rounds:/);
-  assert.match(out.result, /- Round 2: changes_requested — Missing tests \[1 issue\(s\), Coverage: 5 \(target >= 8, fail\)\]/);
-  assert.match(out.result, /- Round 1: changes_requested — No auth guard \[2 issue\(s\), no rubric scores\]/);
+  assert.match(out.result, /- Round 2: changes_requested — Missing tests \[1 issue\(s\), lineage: deepening=0, repeat=0, stale=0, new=0, newly_scoreable=0, unknown=1; Coverage: 5 \(target >= 8, fail\)\]/);
+  assert.match(out.result, /- Round 1: changes_requested — No auth guard \[2 issue\(s\), lineage: deepening=0, repeat=0, stale=0, new=0, newly_scoreable=0, unknown=2; no rubric scores\]/);
   assert.equal(out.empty, "");
 });
 
@@ -2360,6 +2399,8 @@ test("round 2 redispatch artifact contains prior round summary", () => {
   assert.match(redispatchText, /This is round 3/);
   assert.match(redispatchText, /Prior review rounds:/);
   assert.match(redispatchText, /Round 1: changes_requested — Missing smoke file\./);
+  assert.match(redispatchText, /Current review lineage: deepening=0, repeat=0, stale=0, new=0, newly_scoreable=0, unknown=1/);
+  assert.match(redispatchText, /Same-HEAD stale candidates:/);
 });
 
 // --- detectChurnGrowth unit tests ---

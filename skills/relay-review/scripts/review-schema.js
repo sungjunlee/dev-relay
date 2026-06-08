@@ -57,7 +57,7 @@ const REVIEW_VERDICT_PROPERTIES = {
         ...REJECTION_METADATA_PROPERTIES,
         lineage: {
           type: "string",
-          enum: ["new", "deepening", "repeat", "newly_scoreable", "unknown"],
+          enum: ["new", "deepening", "repeat", "stale", "newly_scoreable", "unknown"],
         },
         relates_to: { type: ["string", "null"] },
       },
