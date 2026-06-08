@@ -33,6 +33,14 @@ node skills/relay-dispatch/scripts/close-run.js --repo . --run-id <run-id> --rea
 node skills/relay-dispatch/scripts/reliability-report.js --repo . --json
 ```
 
+### Reliability Round-Cost Observations
+
+`reliability-report.js --json` includes `round_cost` as an observation-only section for comparing relay shaping changes. It summarizes review rounds, request/leaf linkage, relay-ready leaf counts when the request artifact is available, task-profile guidance size when recorded, execution-evidence preflight failures, review lineage totals, escalation/continue decisions, factor flip counts, and explicitly inferable reviewer rounds avoided by preflight.
+
+For epic #678, compare a baseline window before the task-shaping, evidence-preflight, and review-lineage changes with a later window that includes those runs. The useful operator checks are whether median/average review rounds fall, whether `evidence_preflight_failures.by_type` shifts failures before reviewer invocation, whether `reviewer_rounds_avoided_by_preflight.total` appears only from explicit preflight signals, and whether `lineage_totals.repeat`/`stale` shrink relative to `deepening`/`newly_scoreable`.
+
+These metrics do not change readiness calibration for #439 and are not merge, review, dispatch, or readiness gates. Treat them as trend evidence for planning and routing decisions; a single run with high round cost can still be valid work if its frozen Done Criteria required it.
+
 ## Live Adapter Dogfood
 
 Use `live-dogfood.js` when you need repeatable evidence for Pi, OpenCode, and Antigravity live adapter paths:
