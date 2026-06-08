@@ -258,6 +258,29 @@ process.stdout.write(${JSON.stringify(JSON.stringify(verdict))});
   return filePath;
 }
 
+function writeMarkerReviewerScript(repoRoot, name, markerPath) {
+  const filePath = path.join(repoRoot, name);
+  const verdict = {
+    verdict: "pass",
+    summary: "Automated reviewer passed the change.",
+    contract_status: "pass",
+    quality_review_status: "pass",
+    quality_execution_status: "pass",
+    next_action: "ready_to_merge",
+    issues: [],
+    rubric_scores: defaultRubricScores(),
+    scope_drift: { creep: [], missing: [] },
+  };
+  const body = `#!/usr/bin/env node
+const fs = require("fs");
+fs.writeFileSync(${JSON.stringify(markerPath)}, "invoked\\n", "utf-8");
+process.stdout.write(${JSON.stringify(JSON.stringify(verdict))});
+`;
+  fs.writeFileSync(filePath, body, "utf-8");
+  fs.chmodSync(filePath, 0o755);
+  return filePath;
+}
+
 function writeMutatingReviewerScript(repoRoot, name, verdict) {
   const filePath = path.join(repoRoot, name);
   const body = `#!/usr/bin/env node
@@ -1721,6 +1744,108 @@ test("reviewer-script invocation can drive a round without --review-file", () =>
   assert.equal(manifest.state, STATES.READY_TO_MERGE);
   assert.equal(manifest.review.latest_verdict, "lgtm");
   assert.ok(manifest.review.last_reviewed_sha);
+});
+
+test("review-runner execution evidence preflight blocks primary reviewer invocation", async (t) => {
+  const cases = [
+    {
+      name: "missing",
+      mutate({ runDir }) {
+        fs.unlinkSync(path.join(runDir, EXECUTION_EVIDENCE_FILENAME));
+      },
+      reason: /pre-261 run, no artifact/,
+      qualityExecutionStatus: "missing",
+      evidenceHeadSha: null,
+    },
+    {
+      name: "stale",
+      mutate({ runDir }) {
+        writeExecutionEvidence(runDir, "0".repeat(40));
+      },
+      reason: /stale artifact/,
+      qualityExecutionStatus: "fail",
+      evidenceHeadSha: "0".repeat(40),
+    },
+    {
+      name: "schema-invalid",
+      mutate({ runDir, reviewedHead }) {
+        writeExecutionEvidence(runDir, reviewedHead, { schema_version: 2 });
+      },
+      reason: /unsupported execution evidence schema_version=2/,
+      qualityExecutionStatus: "fail",
+      evidenceHeadSha: null,
+    },
+    {
+      name: "symlink",
+      mutate({ runDir, reviewedHead }) {
+        fs.unlinkSync(path.join(runDir, EXECUTION_EVIDENCE_FILENAME));
+        const outside = path.join(os.tmpdir(), `relay-review-preflight-${process.pid}-${Date.now()}.json`);
+        fs.writeFileSync(outside, `${JSON.stringify(buildExecutionEvidence(reviewedHead))}\n`, "utf-8");
+        fs.symlinkSync(outside, path.join(runDir, EXECUTION_EVIDENCE_FILENAME));
+      },
+      reason: /regular file/,
+      qualityExecutionStatus: "fail",
+      evidenceHeadSha: null,
+    },
+    {
+      name: "strict-failing",
+      mutate({ manifestPath }) {
+        updateManifestRecord(manifestPath, (data) => ({
+          ...data,
+          policy: {
+            ...(data.policy || {}),
+            review_assurance: "hardened",
+          },
+        }));
+      },
+      reason: /strict execution evidence requires a non-empty test_command/,
+      qualityExecutionStatus: "fail",
+      evidenceHeadSha: ({ reviewedHead }) => reviewedHead,
+    },
+  ];
+
+  for (const entry of cases) {
+    await t.test(entry.name, () => {
+      const { repoRoot, manifestPath, runId, doneCriteriaPath, diffPath } = setupRepo();
+      const runDir = ensureRunLayout(repoRoot, runId).runDir;
+      const reviewedHead = readManifest(manifestPath).data.git.head_sha;
+      entry.mutate({ manifestPath, reviewedHead, runDir });
+      const markerPath = path.join(repoRoot, `${entry.name}-reviewer-invoked.txt`);
+      const reviewerScript = writeMarkerReviewerScript(repoRoot, `${entry.name}-reviewer.js`, markerPath);
+
+      const result = spawnSync("node", [
+        SCRIPT,
+        "--repo", repoRoot,
+        "--run-id", runId,
+        "--pr", "123",
+        "--done-criteria-file", doneCriteriaPath,
+        "--diff-file", diffPath,
+        "--reviewer-script", reviewerScript,
+        "--no-comment",
+        "--json",
+      ], { encoding: "utf-8" });
+
+      assert.equal(result.status, 2, result.stderr || result.stdout);
+      assert.equal(fs.existsSync(markerPath), false, `${entry.name} preflight should not invoke reviewer`);
+      const output = JSON.parse(result.stdout);
+      assert.equal(output.executionEvidencePreflight.status, "blocked");
+      assert.equal(output.executionEvidencePreflight.qualityExecutionStatus, entry.qualityExecutionStatus);
+      assert.match(output.executionEvidencePreflight.reason, entry.reason);
+      assert.equal(output.executionEvidencePreflight.reviewedHeadSha, reviewedHead);
+      const expectedEvidenceHeadSha = typeof entry.evidenceHeadSha === "function"
+        ? entry.evidenceHeadSha({ reviewedHead })
+        : entry.evidenceHeadSha;
+      assert.equal(output.executionEvidencePreflight.evidenceHeadSha, expectedEvidenceHeadSha);
+      assert.equal(output.executionEvidencePreflight.nextAction, "repair_execution_evidence");
+      assert.equal(output.state, STATES.REVIEW_PENDING);
+      assert.equal(output.nextState, STATES.REVIEW_PENDING);
+      assert.equal(output.rawResponsePath, null);
+
+      const manifest = readManifest(manifestPath).data;
+      assert.equal(manifest.state, STATES.REVIEW_PENDING);
+      assert.equal(manifest.review.rounds, 0);
+    });
+  }
 });
 
 test("invalid pass verdict is rejected", () => {

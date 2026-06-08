@@ -18,6 +18,7 @@ const { applyReviewAssurancePolicy } = require("./review-runner/assurance");
 const { buildRedispatchPrompt, buildRubricGateRedispatchPrompt, computeFactorStatusFlips, computeRepeatedIssueCount, decideFlipFlopEscalation, detectChurnGrowth, summarizeLineage, toEscalatedVerdict } = require("./review-runner/redispatch");
 const { applyPolicyViolationToManifest, applyVerdictToManifest } = require("./review-runner/manifest-apply");
 const { writePrBodySnapshot } = require("./review-runner/pr-body-snapshot");
+const { maybeBlockForExecutionEvidencePreflight } = require("./review-runner/preflight");
 const { buildPrimaryReviewerPreflight, loadReviewText, loadRunRoutePlan, resolveReviewerName, resolveReviewerScript } = require("./review-runner/reviewer-invoke");
 const { maybeSwapReviewer } = require("./review-runner/reviewer-swap");
 const { resolveAdvisoryConfig, settleAdvisoryForVerdict, startConfiguredAdvisory } = require("./review-runner/advisory-orchestration");
@@ -80,13 +81,8 @@ async function run() {
     routePlan: runRoutePlan,
   });
   const advisoryConfig = resolvedAdvisoryConfig;
+  const hardenedAssurance = isHardenedReviewAssurance(data);
 
-  if (isHardenedReviewAssurance(data) && !prepareOnly && !advisoryConfig.reviewer) {
-    throw new Error(
-      "policy.review_assurance=hardened requires --advisory-reviewer <name>, route-plan advisory_review.reviewer, or manifest routing.selected.advisory_review.reviewer so the round produces advisory evidence. " +
-      "Run with a configured advisory reviewer, configure routing, or lower the manifest policy before review."
-    );
-  }
   let reviewedHeadSha = null;
   try {
     reviewedHeadSha = git(reviewRepoPath, "rev-parse", "HEAD").trim();
@@ -179,6 +175,13 @@ async function run() {
     printResult({ doneCriteriaPath, diffPath, jsonOut, manifestPath, originalState: data.state, prepareOnly, prNumber, promptPath, redispatchPath: null, result, updatedManifest: null, verdictPath: null });
     return;
   }
+  if (maybeBlockForExecutionEvidencePreflight({ data, jsonOut, result, reviewFile, reviewedHeadSha, round, runDir, strict: hardenedAssurance })) return;
+  if (hardenedAssurance && !advisoryConfig.reviewer) {
+    throw new Error(
+      "policy.review_assurance=hardened requires --advisory-reviewer <name>, route-plan advisory_review.reviewer, or manifest routing.selected.advisory_review.reviewer so the round produces advisory evidence. " +
+      "Run with a configured advisory reviewer, configure routing, or lower the manifest policy before review."
+    );
+  }
   if (!reviewFile) {
     primaryReviewerPreflight = buildPrimaryReviewerPreflight({
       data,
@@ -220,7 +223,6 @@ async function run() {
       "The reviewer must score every rubric factor."
     );
   }
-  const hardenedAssurance = isHardenedReviewAssurance(data);
   const executionStatus = computeQualityExecutionStatus({
     runDir,
     reviewedHead: reviewedHeadSha,

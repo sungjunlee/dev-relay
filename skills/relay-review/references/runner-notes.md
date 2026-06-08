@@ -41,6 +41,7 @@ When applying a verdict, the runner:
 
 - validates the JSON verdict
 - optionally invokes the reviewer adapter itself when `--reviewer <name>` is used
+- preflights `execution-evidence.json` before invoking a primary reviewer; missing, stale, invalid, symlinked, or strict-failing evidence exits with JSON status and leaves the manifest in `review_pending`
 - fails fast for `policy.review_assurance=hardened` unless `--advisory-reviewer <name>` is present, except in `--prepare-only` mode
 - computes and overrides `quality_execution_status` from `execution-evidence.json`; strict gates prefer `verification_runs[]` when present and otherwise use the legacy `test_*` fields
 - rejects the round if the reviewer mutates the repo and escalates the manifest
@@ -48,6 +49,12 @@ When applying a verdict, the runner:
 - updates the relay manifest to `ready_to_merge`, `changes_requested`, or `escalated`
 
 Reviewer adapter capabilities are shared with dispatch adapter metadata. See `../../relay-dispatch/references/agent-adapter-platform.md` for the supported adapter matrix, including primary vs advisory review support, read-only enforcement, structured-output shape, and the new-adapter checklist. Antigravity review support is for the `agy` CLI only, not GUI/IDE/Desktop flows.
+
+## Execution Evidence Preflight
+
+Execution evidence preflight is script territory, not AI reviewer judgment. The script can verify file type, JSON schema, reviewed HEAD vs evidence HEAD, strict command/hash/exit fields, and `verification_runs[]` records deterministically before spending a reviewer round. The reviewer still handles semantic code review against Done Criteria and rubric anchors after that mechanical proof is valid.
+
+When preflight blocks, JSON output includes `executionEvidencePreflight.status`, `reason`, `reviewedHeadSha`, `evidenceHeadSha` when a valid artifact exposed one, and `nextAction=repair_execution_evidence`. Repair or regenerate `execution-evidence.json` for the reviewed HEAD, then rerun the same review command. Manual `--review-file` fallback paths intentionally bypass the preflight and keep the older fail-closed verdict override so operators can apply an already-produced verdict without weakening the execution evidence gate.
 
 ## Codex-only Operation Regression
 

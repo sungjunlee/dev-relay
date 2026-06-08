@@ -9,6 +9,7 @@ const {
   applyQualityExecutionStatus,
   buildExecutionEvidenceFailureVerdict,
   buildMissingExecutionEvidenceVerdict,
+  buildExecutionEvidencePreflight,
   computeQualityExecutionStatus,
   parseExecutionEvidenceArtifact,
   readExecutionEvidenceArtifact,
@@ -239,6 +240,32 @@ test("execution-evidence returns missing when artifact file is absent", () => {
   const result = computeQualityExecutionStatus({ runDir, reviewedHead: "a".repeat(40) });
   assert.equal(result.status, "missing");
   assert.match(result.reason, /pre-261 run, no artifact/);
+});
+
+test("execution-evidence preflight reports actionable head-bound status", () => {
+  const runDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-execution-preflight-"));
+  writeArtifact(runDir, makeArtifact("a".repeat(40)));
+
+  assert.deepEqual(
+    buildExecutionEvidencePreflight({ runDir, reviewedHead: "a".repeat(40) }),
+    {
+      status: "pass",
+      qualityExecutionStatus: "pass",
+      reason: null,
+      reviewedHeadSha: "a".repeat(40),
+      evidenceHeadSha: "a".repeat(40),
+      artifactPath: path.join(runDir, EXECUTION_EVIDENCE_FILENAME),
+      nextAction: "invoke_primary_reviewer",
+    }
+  );
+
+  const stale = buildExecutionEvidencePreflight({ runDir, reviewedHead: "b".repeat(40) });
+  assert.equal(stale.status, "blocked");
+  assert.equal(stale.qualityExecutionStatus, "fail");
+  assert.match(stale.reason, /stale artifact/);
+  assert.equal(stale.reviewedHeadSha, "b".repeat(40));
+  assert.equal(stale.evidenceHeadSha, "a".repeat(40));
+  assert.equal(stale.nextAction, "repair_execution_evidence");
 });
 
 test("execution-evidence rejects replay attack artifact from another head as stale", () => {
