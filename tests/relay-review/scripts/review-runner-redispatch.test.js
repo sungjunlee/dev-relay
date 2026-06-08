@@ -328,7 +328,7 @@ test("redispatch/decideFlipFlopEscalation suppresses progressive deepening flip-
     reason: "progressive_deepening",
     factors: ["Behavior"],
     traces: [{ factor: "Behavior", trace: ["pass", "fail", "pass"] }],
-    lineage_summary: { deepening: 1, repeat: 0, new: 0, newly_scoreable: 0, unknown: 0 },
+    lineage_summary: { deepening: 1, repeat: 0, stale: 0, new: 0, newly_scoreable: 0, unknown: 0 },
   });
 });
 
@@ -338,7 +338,7 @@ test("redispatch/decideFlipFlopEscalation preserves clean pass verdicts on flip-
     reason: "progressive_deepening",
     factors: ["Behavior"],
     traces: [{ factor: "Behavior", trace: ["pass", "fail", "pass"] }],
-    lineage_summary: { deepening: 0, repeat: 0, new: 0, newly_scoreable: 0, unknown: 0 },
+    lineage_summary: { deepening: 0, repeat: 0, stale: 0, new: 0, newly_scoreable: 0, unknown: 0 },
   });
 });
 
@@ -348,7 +348,7 @@ test("redispatch/decideFlipFlopEscalation escalates mixed lineage flip-flops", (
   });
   assert.equal(decision.decision, "escalate");
   assert.equal(decision.reason, "flip_flop_thrash");
-  assert.deepEqual(decision.lineage_summary, { deepening: 1, repeat: 1, new: 0, newly_scoreable: 0, unknown: 0 });
+  assert.deepEqual(decision.lineage_summary, { deepening: 1, repeat: 1, stale: 0, new: 0, newly_scoreable: 0, unknown: 0 });
 });
 
 test("redispatch/decideFlipFlopEscalation escalates repeated-issue thrash even with deepening lineage", () => {
@@ -361,16 +361,52 @@ test("redispatch/decideFlipFlopEscalation escalates missing lineage on flipped-f
   const decision = makeFlipDecision({ verdict: { issues: [makeFlipIssue({ lineage: undefined })] } });
   assert.equal(decision.decision, "escalate");
   assert.equal(decision.reason, "flip_flop_thrash");
-  assert.deepEqual(decision.lineage_summary, { deepening: 0, repeat: 0, new: 0, newly_scoreable: 0, unknown: 1 });
+  assert.deepEqual(decision.lineage_summary, { deepening: 0, repeat: 0, stale: 0, new: 0, newly_scoreable: 0, unknown: 1 });
+});
+
+test("redispatch/decideFlipFlopEscalation escalates stale lineage on flipped-factor issues", () => {
+  const decision = makeFlipDecision({ verdict: { issues: [makeFlipIssue({ lineage: "stale" })] } });
+  assert.equal(decision.decision, "escalate");
+  assert.equal(decision.reason, "flip_flop_thrash");
+  assert.deepEqual(decision.lineage_summary, { deepening: 0, repeat: 0, stale: 1, new: 0, newly_scoreable: 0, unknown: 0 });
 });
 
 test("redispatch/summarizeLineage distinguishes unknown from repeat", () => {
   assert.deepEqual(summarizeLineage([
     { lineage: "repeat" },
+    { lineage: "stale" },
     { lineage: "unknown" },
     {},
     { lineage: "made_up" },
-  ]), { deepening: 0, repeat: 1, new: 0, newly_scoreable: 0, unknown: 3 });
+  ]), { deepening: 0, repeat: 1, stale: 1, new: 0, newly_scoreable: 0, unknown: 3 });
+});
+
+test("redispatch/buildRedispatchPrompt shows lineage counts and same-HEAD stale candidates", () => {
+  const runDir = tempRunDir();
+  fs.writeFileSync(path.join(runDir, "events.jsonl"), `${JSON.stringify({
+    event: "review_apply",
+    round: 1,
+    head_sha: "abc123",
+  })}\n`, "utf-8");
+
+  const prompt = buildRedispatchPrompt({
+    issues: [
+      { ...makeReviewIssue(), title: "Repeat issue", lineage: "repeat", relates_to: "Round 1 repeat" },
+      { ...makeReviewIssue(), title: "Stale issue", lineage: "stale", relates_to: "Round 1 stale" },
+      { ...makeReviewIssue(), title: "Deeper issue", lineage: "deepening", relates_to: "Behavior" },
+    ],
+    scope_drift: { creep: [], missing: [] },
+    rubric_scores: [],
+  }, "# Done Criteria\n\n- Keep lineage visible.", runDir, 2, null, "planner_decision", "abc123");
+
+  assert.match(prompt, /Current review lineage: deepening=1, repeat=1, stale=1, new=0, newly_scoreable=0, unknown=0/);
+  assert.match(prompt, /Current issue lineage labels:/);
+  assert.match(prompt, /Repeat issue: lineage=repeat, relates_to=Round 1 repeat/);
+  assert.match(prompt, /Stale issue: lineage=stale, relates_to=Round 1 stale/);
+  assert.match(prompt, /Deeper issue: lineage=deepening, relates_to=Behavior/);
+  assert.match(prompt, /Same-HEAD stale candidates:/);
+  assert.match(prompt, /matches prior review round 1 \(abc123\)/);
+  assert.match(prompt, /Deterministic signal only/);
 });
 
 test("redispatch/buildReviewRunnerRubricGateFailure preserves the fail-closed recovery matrix", async (t) => {

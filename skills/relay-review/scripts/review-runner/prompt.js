@@ -7,6 +7,7 @@ const REVIEWER_PROMPT_PATH = path.join(__dirname, "..", "..", "references", "rev
 const TDD_ANCHOR_LINE_REGEX = /^\s*tdd_anchor:\s*\S+/m;
 const TDD_REVIEWER_SECTION_REGEX = /\n### TDD factor flavor[\s\S]*?(?=\n### Scope Drift Detection \(run first\))/;
 const MAX_REJECTED_APPROACHES_PER_FACTOR = 2;
+const LINEAGE_VALUES = ["deepening", "repeat", "stale", "new", "newly_scoreable", "unknown"];
 
 function renderProjectConventions(template, conventions) {
   if (conventions) return template.replace("[PASTE PROJECT CONVENTIONS HERE]", conventions);
@@ -175,14 +176,28 @@ function formatPriorVerdictSummary(verdicts) {
   const lines = verdicts.map((verdict, index) => {
     const roundNum = verdicts.length - index;
     const issueCount = Array.isArray(verdict.issues) ? verdict.issues.length : 0;
+    const lineageSummary = summarizeLineage(verdict.issues);
     const rubricSummary = Array.isArray(verdict.rubric_scores) && verdict.rubric_scores.length
       ? verdict.rubric_scores.map((score) => `${score.factor}: ${score.observed} (target ${score.target}, ${score.status})`).join("; ")
       : "no rubric scores";
-    return `- Round ${roundNum}: ${verdict.verdict} — ${verdict.summary} [${issueCount} issue(s), ${rubricSummary}]`;
+    return `- Round ${roundNum}: ${verdict.verdict} — ${verdict.summary} [${issueCount} issue(s), lineage: ${formatLineageCounts(lineageSummary)}; ${rubricSummary}]`;
   });
   const rejectedApproaches = formatRejectedApproaches(verdicts);
   if (!rejectedApproaches) return ["Prior review rounds:", ...lines].join("\n");
   return ["Prior review rounds:", ...lines, "", rejectedApproaches].join("\n");
+}
+
+function summarizeLineage(issues = []) {
+  const summary = Object.fromEntries(LINEAGE_VALUES.map((value) => [value, 0]));
+  for (const issue of Array.isArray(issues) ? issues : []) {
+    const lineage = LINEAGE_VALUES.includes(issue?.lineage) ? issue.lineage : "unknown";
+    summary[lineage] += 1;
+  }
+  return summary;
+}
+
+function formatLineageCounts(summary) {
+  return LINEAGE_VALUES.map((value) => `${value}=${Number(summary?.[value] || 0)}`).join(", ");
 }
 
 module.exports = {

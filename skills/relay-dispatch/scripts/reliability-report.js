@@ -14,6 +14,7 @@ const args = process.argv.slice(2);
 const CLI_ARG_OPTIONS = { commandName: "reliability-report", reservedFlags: ["-h"] };
 const hasCliFlag = (flag) => schemaHasFlag(args, flag, CLI_ARG_OPTIONS);
 const NO_GUIDANCE_DATA_TEXT = "no guidance data available";
+const LINEAGE_VALUES = ["deepening", "repeat", "stale", "new", "newly_scoreable", "unknown"];
 
 if (hasCliFlag(["--help", "-h"])) {
   console.log(
@@ -602,6 +603,74 @@ function sortCountBuckets(buckets) {
   return sortSummaryObject(buckets.entries());
 }
 
+function emptyLineageCounts() {
+  return Object.fromEntries(LINEAGE_VALUES.map((value) => [value, 0]));
+}
+
+function addLineageCounts(target, source) {
+  for (const value of LINEAGE_VALUES) {
+    target[value] = Number(target[value] || 0) + Number(source?.[value] || 0);
+  }
+}
+
+function summarizeIssueLineage(issues) {
+  const summary = emptyLineageCounts();
+  for (const issue of Array.isArray(issues) ? issues : []) {
+    const lineage = LINEAGE_VALUES.includes(issue?.lineage) ? issue.lineage : "unknown";
+    summary[lineage] += 1;
+  }
+  return summary;
+}
+
+function reviewRoundNumber(fileName) {
+  const match = /^review-round-(\d+)-verdict\.json$/.exec(fileName);
+  return match ? Number(match[1]) : null;
+}
+
+function readReviewLineageRounds(repoRoot, runId) {
+  let entries;
+  let runDir;
+  try {
+    runDir = getRunDir(repoRoot, runId);
+    entries = fs.readdirSync(runDir, { withFileTypes: true });
+  } catch {
+    return {};
+  }
+  const rounds = {};
+  for (const entry of entries) {
+    const round = entry.isFile() ? reviewRoundNumber(entry.name) : null;
+    if (round === null) continue;
+    try {
+      const verdict = JSON.parse(readTextFileWithoutFollowingSymlinks(path.join(runDir, entry.name)));
+      rounds[String(round)] = summarizeIssueLineage(verdict?.issues);
+    } catch {
+      // Best-effort analytics must not block the rest of the report.
+    }
+  }
+  return Object.fromEntries(Object.entries(rounds).sort(([left], [right]) => Number(left) - Number(right)));
+}
+
+function buildReviewLineageSummary({ repoRoot, manifests }) {
+  const totals = emptyLineageCounts();
+  const byRun = {};
+  const byRound = {};
+  for (const manifest of manifests) {
+    const runId = manifest?.data?.run_id;
+    if (!runId) continue;
+    const rounds = readReviewLineageRounds(repoRoot, runId);
+    if (Object.keys(rounds).length === 0) continue;
+    const runTotals = emptyLineageCounts();
+    for (const [round, summary] of Object.entries(rounds)) {
+      addLineageCounts(runTotals, summary);
+      addLineageCounts(totals, summary);
+      if (!byRound[round]) byRound[round] = emptyLineageCounts();
+      addLineageCounts(byRound[round], summary);
+    }
+    byRun[runId] = { totals: runTotals, rounds };
+  }
+  return { totals, by_run: byRun, by_round: byRound };
+}
+
 function buildSidecarOutcomeBuckets(starts, results, failures, fieldName) {
   const buckets = new Map();
   const startBucketsBySidecar = new Map();
@@ -1128,6 +1197,7 @@ function buildReport({ repoRoot, staleHours, now, manifests, events, includeSide
     rubric_insights: buildRubricInsights(events, manifests),
     qualitative_signals: buildQualitativeSignals(manifests, events),
     guidance_pack_insights: buildGuidancePackInsights(manifests, events),
+    review_lineage: buildReviewLineageSummary({ repoRoot, manifests }),
     advisory_sidecar_timing: buildAdvisorySidecarTiming(events),
     override_audit: buildOverrideAuditSummary(events),
   };
@@ -1355,6 +1425,7 @@ function main() {
   console.log(`  dispatch_timeout_rate: ${report.metrics.dispatch_timeout_rate ?? "n/a"}`);
   console.log(`  dispatch_failure_rate: ${report.metrics.dispatch_failure_rate ?? "n/a"}`);
   console.log(`  recover_commit_rate: ${report.metrics.recover_commit_rate ?? "n/a"}`);
+  console.log(`  review_lineage: ${LINEAGE_VALUES.map((value) => `${value}=${report.review_lineage.totals[value]}`).join(", ")}`);
   console.log(`  most_stuck_factor: ${report.factor_analysis.most_stuck_factor ?? "n/a"}`);
   if (hasRubricInsights(report.rubric_insights)) {
     const gradeDistribution = report.rubric_insights.quality_grade_distribution;

@@ -57,3 +57,21 @@ test("schema/verdict issue required matrix lists all 11 properties (strict-mode 
     });
   }
 });
+
+test("schema/verdict issue lineage enum includes stale", async (t) => {
+  for (const [label, schema] of [
+    ["runner", REVIEW_VERDICT_JSON_SCHEMA],
+    ["reviewer", REVIEWER_VERDICT_JSON_SCHEMA],
+  ]) {
+    await t.test(label, () => {
+      assert.deepEqual(issueSchema(schema).properties.lineage.enum, [
+        "new",
+        "deepening",
+        "repeat",
+        "stale",
+        "newly_scoreable",
+        "unknown",
+      ]);
+    });
+  }
+});

@@ -12,7 +12,7 @@ const ALLOWED_NEXT_ACTIONS = new Set(["ready_to_merge", "changes_requested", "es
 const ALLOWED_REVIEW_STATUSES = new Set(["pass", "fail", "not_run"]);
 const ALLOWED_EXECUTION_STATUSES = new Set(["pass", "fail", "not_run", "missing"]);
 const ALLOWED_SCORE_TIERS = new Set(["contract", "quality"]);
-const ALLOWED_LINEAGE_VALUES = new Set(["new", "deepening", "repeat", "newly_scoreable", "unknown"]);
+const ALLOWED_LINEAGE_VALUES = new Set(["new", "deepening", "repeat", "stale", "newly_scoreable", "unknown"]);
 const OPTIONAL_ISSUE_REJECTION_METADATA = ["factor", "attempted_approach", "fix_direction"];
 const ALLOWED_DRIFT_STATUSES = new Set(
   REVIEW_VERDICT_JSON_SCHEMA.properties.scope_drift.properties.missing.items.properties.status.enum

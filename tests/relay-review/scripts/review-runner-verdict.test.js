@@ -78,7 +78,7 @@ test("verdict/validateReviewVerdict allows reviewer payloads to omit quality_exe
 });
 
 test("verdict/validateReviewVerdict accepts every lineage enum value", async (t) => {
-  for (const lineage of ["new", "deepening", "repeat", "newly_scoreable", "unknown"]) {
+  for (const lineage of ["new", "deepening", "repeat", "stale", "newly_scoreable", "unknown"]) {
     await t.test(lineage, () => {
       const verdict = validateReviewVerdict(makeChangesRequestedVerdict({ lineage, relates_to: "round-1 issue" }));
       assert.equal(verdict.issues[0].lineage, lineage);
@@ -94,7 +94,7 @@ test("verdict/validateReviewVerdict accepts missing lineage for back-compat", ()
 test("verdict/validateReviewVerdict rejects unrecognized lineage values", () => {
   assert.throws(
     () => validateReviewVerdict(makeChangesRequestedVerdict({ lineage: "made_up" })),
-    /issues\[0\]\.lineage must be one of: new, deepening, repeat, newly_scoreable, unknown/
+    /issues\[0\]\.lineage must be one of: new, deepening, repeat, stale, newly_scoreable, unknown/
   );
 });
 

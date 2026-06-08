@@ -352,6 +352,58 @@ test("reliability-report derives the core scorecard from manifests and events", 
   assert.equal(report.bootstrap_exempt_runs, 1);
 });
 
+test("reliability-report aggregates review lineage by run and round", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-report-lineage-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  const recentTs = new Date(Date.now() - 1 * 60 * 60 * 1000).toISOString();
+  const runId = createRunId({ branch: "run-lineage", timestamp: new Date("2026-04-12T00:01:00.000Z") });
+
+  writeRun(repoRoot, {
+    runId,
+    state: STATES.CHANGES_REQUESTED,
+    rounds: 2,
+    updatedAt: recentTs,
+  });
+  writeReviewVerdict(repoRoot, runId, 1, [
+    { title: "Repeat", body: "Repeat.", file: "a.js", line: 1, category: "contract", severity: "high", lineage: "repeat" },
+    { title: "Stale", body: "Stale.", file: "b.js", line: 2, category: "contract", severity: "high", lineage: "stale" },
+    { title: "Legacy", body: "Legacy.", file: "c.js", line: 3, category: "contract", severity: "high" },
+  ]);
+  writeReviewVerdict(repoRoot, runId, 2, [
+    { title: "Deepening", body: "Deepening.", file: "d.js", line: 4, category: "quality", severity: "medium", lineage: "deepening" },
+    { title: "New", body: "New.", file: "e.js", line: 5, category: "quality", severity: "medium", lineage: "new" },
+    { title: "Scoreable", body: "Scoreable.", file: "f.js", line: 6, category: "quality", severity: "medium", lineage: "newly_scoreable" },
+  ]);
+
+  const report = JSON.parse(execFileSync("node", [SCRIPT, "--repo", repoRoot, "--json"], { encoding: "utf-8" }));
+
+  assert.deepEqual(report.review_lineage.totals, {
+    deepening: 1,
+    repeat: 1,
+    stale: 1,
+    new: 1,
+    newly_scoreable: 1,
+    unknown: 1,
+  });
+  assert.deepEqual(report.review_lineage.by_run[runId].totals, report.review_lineage.totals);
+  assert.deepEqual(report.review_lineage.by_run[runId].rounds["1"], {
+    deepening: 0,
+    repeat: 1,
+    stale: 1,
+    new: 0,
+    newly_scoreable: 0,
+    unknown: 1,
+  });
+  assert.deepEqual(report.review_lineage.by_round["2"], {
+    deepening: 1,
+    repeat: 0,
+    stale: 0,
+    new: 1,
+    newly_scoreable: 1,
+    unknown: 0,
+  });
+});
+
 test("reliability-report summarizes override audit events without treating legacy shapes as corrupt", () => {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-report-override-audit-"));
   process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));

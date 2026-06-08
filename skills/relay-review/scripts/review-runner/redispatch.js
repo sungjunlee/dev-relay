@@ -5,15 +5,19 @@ const { formatPriorVerdictSummary } = require("./prompt");
 const { getRubricScoreNumber, getRubricTargetNumber } = require("./score-utils");
 
 const FLIP_STATES = new Set(["pass", "fail"]);
-const LINEAGE_VALUES = ["deepening", "repeat", "new", "newly_scoreable", "unknown"];
+const LINEAGE_VALUES = ["deepening", "repeat", "stale", "new", "newly_scoreable", "unknown"];
 
-function buildRedispatchPrompt(verdict, doneCriteria, runDir, round, churnGrowth, doneCriteriaSource) {
+function buildRedispatchPrompt(verdict, doneCriteria, runDir, round, churnGrowth, doneCriteriaSource, currentHeadSha) {
   const sections = [
     `This is round ${round + 1}. Fix these review issues in the PR. Do not change anything else. Push to the same branch.`,
     "",
     "Issues to fix:",
     formatIssueList(verdict.issues),
   ];
+  const lineageSection = formatRedispatchLineageSection(verdict?.issues || []);
+  if (lineageSection) sections.push("", lineageSection);
+  const staleCandidateSection = formatSameHeadStaleCandidateSection(runDir, round, currentHeadSha);
+  if (staleCandidateSection) sections.push("", staleCandidateSection);
 
   const driftText = formatScopeDrift(verdict.scope_drift);
   if (driftText) {
@@ -202,6 +206,27 @@ function scanPriorVerdicts(runDir, currentRound, onVerdict) {
   }
 }
 
+function readReviewApplyEvents(runDir) {
+  if (!runDir) return [];
+  const eventsPath = path.join(runDir, "events.jsonl");
+  try {
+    const events = [];
+    for (const line of fs.readFileSync(eventsPath, "utf-8").split("\n")) {
+      if (!line.trim()) continue;
+      try {
+        const event = JSON.parse(line);
+        if (event?.event === "review_apply") events.push(event);
+      } catch {
+        // Best-effort stale-candidate metadata must not block re-dispatch.
+      }
+    }
+    return events;
+  } catch (error) {
+    if (error.code === "ENOENT") return [];
+    throw error;
+  }
+}
+
 function computeRepeatedIssueCount(runDir, round, issues) {
   if (!issues.length) return 0;
 
@@ -255,6 +280,43 @@ function summarizeLineage(issues = []) {
     summary[lineage] += 1;
   }
   return summary;
+}
+
+function formatLineageCounts(summary) {
+  return LINEAGE_VALUES.map((value) => `${value}=${Number(summary?.[value] || 0)}`).join(", ");
+}
+
+function formatRedispatchLineageSection(issues) {
+  if (!Array.isArray(issues) || issues.length === 0) return "";
+  const lines = [
+    `Current review lineage: ${formatLineageCounts(summarizeLineage(issues))}`,
+    "Current issue lineage labels:",
+  ];
+  for (const issue of issues) {
+    const lineage = LINEAGE_VALUES.includes(issue?.lineage) ? issue.lineage : "unknown";
+    const relation = issue?.relates_to ? `, relates_to=${issue.relates_to}` : "";
+    lines.push(`- ${issue.file}:${issue.line} — ${issue.title}: lineage=${lineage}${relation}`);
+  }
+  return lines.join("\n");
+}
+
+function findPriorSameHeadReview(runDir, round, currentHeadSha) {
+  const current = String(currentHeadSha || "").trim();
+  if (!current) return null;
+  return readReviewApplyEvents(runDir)
+    .filter((event) => Number(event.round) < round && String(event.head_sha || "").trim() === current)
+    .sort((left, right) => Number(right.round || 0) - Number(left.round || 0))[0] || null;
+}
+
+function formatSameHeadStaleCandidateSection(runDir, round, currentHeadSha) {
+  const prior = findPriorSameHeadReview(runDir, round, currentHeadSha);
+  if (!prior) return "";
+  return [
+    "Same-HEAD stale candidates:",
+    `- Current reviewed HEAD matches prior review round ${prior.round} (${currentHeadSha}).`,
+    "- Deterministic signal only: the runner did not infer semantic stale lineage.",
+    "- Treat reviewer-labeled `repeat` or `stale` issues as stale candidates until the branch advances; inspect `deepening`, `new`, and `newly_scoreable` findings against the diff.",
+  ].join("\n");
 }
 
 function issueMatchesFactor(issue, factor) {

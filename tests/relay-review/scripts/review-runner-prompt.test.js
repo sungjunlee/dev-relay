@@ -213,7 +213,7 @@ test("prompt/buildPrompt omits TDD reviewer section for non-TDD rubrics", () => 
   assert.match(prompt, /## Scoring Rubric/);
 });
 
-test("prompt/formatPriorVerdictSummary preserves legacy output without rejection metadata", () => {
+test("prompt/formatPriorVerdictSummary includes lineage counts without rejection metadata", () => {
   const summary = formatPriorVerdictSummary([{
     verdict: "changes_requested",
     summary: "Missing test coverage",
@@ -225,7 +225,7 @@ test("prompt/formatPriorVerdictSummary preserves legacy output without rejection
 
   assert.equal(summary, [
     "Prior review rounds:",
-    "- Round 1: changes_requested — Missing test coverage [1 issue(s), Coverage: 6/10 (target >= 8/10, fail)]",
+    "- Round 1: changes_requested — Missing test coverage [1 issue(s), lineage: deepening=0, repeat=0, stale=0, new=0, newly_scoreable=0, unknown=1; Coverage: 6/10 (target >= 8/10, fail)]",
   ].join("\n"));
   assert.doesNotMatch(summary, /Previously rejected approaches/);
 });
