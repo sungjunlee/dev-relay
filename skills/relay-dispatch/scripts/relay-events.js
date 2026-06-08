@@ -44,6 +44,7 @@ const EVENTS = Object.freeze({
   READINESS_PROBE: "readiness_probe",
   RECOVER_COMMIT: "recover_commit",
   RECOVER_COMMIT_FAILED: "recover_commit_failed",
+  REVIEW_PREFLIGHT_FAILED: "review_preflight_failed",
   ROUTE_RESOLUTION: "route_resolution",
   REVIEW_APPLY: "review_apply",
   REVIEW_INVOKE: "review_invoke",
@@ -223,6 +224,18 @@ function appendRunEvent(repoRoot, runId, eventData) {
       : {}),
     ...(eventData.failure_class !== undefined
       ? { failure_class: normalizeEventValue(eventData.failure_class) }
+      : {}),
+    ...(eventData.preflight_type !== undefined
+      ? { preflight_type: normalizeEventValue(eventData.preflight_type) }
+      : {}),
+    ...(eventData.quality_execution_status !== undefined
+      ? { quality_execution_status: normalizeEventValue(eventData.quality_execution_status) }
+      : {}),
+    ...(eventData.reviewer_rounds_avoided !== undefined
+      ? { reviewer_rounds_avoided: normalizeEventValue(eventData.reviewer_rounds_avoided) }
+      : {}),
+    ...(eventData.evidence_head_sha !== undefined
+      ? { evidence_head_sha: normalizeEventValue(eventData.evidence_head_sha) }
       : {}),
     ...(eventData.execution_evidence_path !== undefined
       ? { execution_evidence_path: normalizeEventValue(eventData.execution_evidence_path) }

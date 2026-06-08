@@ -262,6 +262,21 @@ function computeQualityExecutionStatus({ runDir, reviewedHead, strict = false })
   };
 }
 
+function buildExecutionEvidencePreflight({ runDir, reviewedHead, strict = false }) {
+  const artifactLoad = readExecutionEvidenceArtifact(runDir);
+  const executionStatus = computeQualityExecutionStatus({ runDir, reviewedHead, strict });
+  const status = executionStatus.status === "pass" ? "pass" : "blocked";
+  return {
+    status,
+    qualityExecutionStatus: executionStatus.status,
+    reason: executionStatus.reason || null,
+    reviewedHeadSha: reviewedHead || null,
+    evidenceHeadSha: artifactLoad.state === "loaded" ? artifactLoad.artifact.head_sha : null,
+    artifactPath: artifactLoad.artifactPath,
+    nextAction: status === "pass" ? "invoke_primary_reviewer" : "repair_execution_evidence",
+  };
+}
+
 function applyQualityExecutionStatus(verdict, executionStatus) {
   return {
     ...verdict,
@@ -276,6 +291,7 @@ module.exports = {
   REQUIRED_EXECUTION_EVIDENCE_FIELDS,
   applyQualityExecutionStatus,
   buildExecutionEvidenceFailureVerdict,
+  buildExecutionEvidencePreflight,
   buildMissingExecutionEvidenceVerdict,
   buildMissingExecutionEvidenceReason,
   computeQualityExecutionStatus,
