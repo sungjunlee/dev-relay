@@ -1844,6 +1844,19 @@ test("review-runner execution evidence preflight blocks primary reviewer invocat
       const manifest = readManifest(manifestPath).data;
       assert.equal(manifest.state, STATES.REVIEW_PENDING);
       assert.equal(manifest.review.rounds, 0);
+      const events = readRunEvents(repoRoot, runId);
+      const preflightEvent = events.find((event) => event.event === "review_preflight_failed");
+      assert.ok(preflightEvent, `${entry.name} should append a review_preflight_failed event`);
+      assert.equal(preflightEvent.state_from, STATES.REVIEW_PENDING);
+      assert.equal(preflightEvent.state_to, STATES.REVIEW_PENDING);
+      assert.equal(preflightEvent.head_sha, reviewedHead);
+      assert.equal(preflightEvent.round, 1);
+      assert.equal(preflightEvent.quality_execution_status, entry.qualityExecutionStatus);
+      assert.equal(preflightEvent.failure_class, entry.qualityExecutionStatus);
+      assert.equal(preflightEvent.preflight_type, `execution_evidence_${entry.qualityExecutionStatus}`);
+      assert.equal(preflightEvent.reviewer_rounds_avoided, 1);
+      assert.equal(preflightEvent.evidence_head_sha, expectedEvidenceHeadSha);
+      assert.equal(preflightEvent.execution_evidence_path, path.join(runDir, EXECUTION_EVIDENCE_FILENAME));
     });
   }
 });

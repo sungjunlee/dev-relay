@@ -175,7 +175,7 @@ async function run() {
     printResult({ doneCriteriaPath, diffPath, jsonOut, manifestPath, originalState: data.state, prepareOnly, prNumber, promptPath, redispatchPath: null, result, updatedManifest: null, verdictPath: null });
     return;
   }
-  if (maybeBlockForExecutionEvidencePreflight({ data, jsonOut, result, reviewFile, reviewedHeadSha, round, runDir, strict: hardenedAssurance })) return;
+  if (maybeBlockForExecutionEvidencePreflight({ data, jsonOut, result, reviewFile, runRepoPath, reviewedHeadSha, round, runDir, strict: hardenedAssurance })) return;
   if (hardenedAssurance && !advisoryConfig.reviewer) {
     throw new Error(
       "policy.review_assurance=hardened requires --advisory-reviewer <name>, route-plan advisory_review.reviewer, or manifest routing.selected.advisory_review.reviewer so the round produces advisory evidence. " +
