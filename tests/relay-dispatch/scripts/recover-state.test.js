@@ -179,11 +179,11 @@ test("changes_requested -> review_pending succeeds after a fresh commit", () => 
 });
 
 test("ready_to_merge -> review_pending succeeds when live PR HEAD drift is objective evidence", () => {
-  const { repoRoot, manifestPath, runId, initialHead } = setupRepo({
+  const { repoRoot, manifestPath, runId, worktreePath, branch, initialHead } = setupRepo({
     state: STATES.READY_TO_MERGE,
     prNumber: 334,
   });
-  const liveHead = "def4567890abcdef";
+  const liveHead = addCommitOnBranch(worktreePath, branch, "ready-drift.txt");
   const env = { ...process.env, ...writeGhPrHeadScript(liveHead, { number: 334 }) };
 
   const stdout = execFileSync("node", [
@@ -218,6 +218,31 @@ test("ready_to_merge -> review_pending succeeds when live PR HEAD drift is objec
   assert.equal(event?.head_sha, liveHead);
   assert.equal(event?.last_reviewed_sha, initialHead);
   assert.equal(event?.reason, "PR head advanced after passing review");
+});
+
+test("ready_to_merge -> review_pending fails when retained worktree is not at live PR HEAD", () => {
+  const { repoRoot, runId, initialHead } = setupRepo({
+    state: STATES.READY_TO_MERGE,
+    prNumber: 334,
+  });
+  const liveHead = "def4567890abcdefdef4567890abcdefdef45678";
+  const env = { ...process.env, ...writeGhPrHeadScript(liveHead, { number: 334 }) };
+
+  const result = spawnSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--run-id", runId,
+    "--to", STATES.REVIEW_PENDING,
+    "--reason", "PR head advanced remotely after passing review",
+    "--json",
+  ], { encoding: "utf-8", env });
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /retained worktree HEAD/);
+  assert.match(result.stderr, new RegExp(initialHead));
+  assert.match(result.stderr, new RegExp(liveHead));
+  assert.match(result.stderr, /fetch origin issue-211/);
+  assert.match(result.stderr, /reset --hard/);
 });
 
 test("ready_to_merge -> review_pending fails when live PR HEAD has not drifted", () => {

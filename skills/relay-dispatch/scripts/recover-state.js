@@ -308,6 +308,47 @@ function requireReadyHeadDriftEvidence({ repoRoot, manifestData }) {
   };
 }
 
+function requireRetainedWorktreeAtLiveHead({ repoRoot, manifestData, readyHeadDrift }) {
+  const worktreePath = manifestData?.paths?.worktree;
+  const branch = manifestData?.git?.working_branch || readyHeadDrift?.headRefName || null;
+  if (!worktreePath) {
+    throw new Error(
+      "Refusing stale-ready recovery: manifest has no paths.worktree. " +
+      "Cannot verify the retained review checkout before returning to review_pending."
+    );
+  }
+  if (!branch) {
+    throw new Error(
+      "Refusing stale-ready recovery: manifest has no git.working_branch and the PR head branch is unknown. " +
+      "Cannot verify the retained review checkout before returning to review_pending."
+    );
+  }
+
+  let worktreeHead;
+  try {
+    worktreeHead = execFileSync("git", ["-C", worktreePath, "rev-parse", "HEAD"], {
+      encoding: "utf-8",
+      stdio: "pipe",
+    }).trim();
+  } catch (error) {
+    throw new Error(
+      `Refusing stale-ready recovery: cannot read retained worktree HEAD at ${worktreePath}: ` +
+      `${summarizeCommandFailure(error)}`
+    );
+  }
+
+  if (worktreeHead !== readyHeadDrift.newSha) {
+    throw new Error(
+      `Refusing stale-ready recovery: retained worktree HEAD for '${branch}' is ${worktreeHead}, ` +
+      `but live PR HEAD is ${readyHeadDrift.newSha}. ` +
+      `Update the retained worktree first, for example: git -C ${worktreePath} fetch origin ${branch} && ` +
+      `git -C ${worktreePath} reset --hard ${readyHeadDrift.newSha}`
+    );
+  }
+
+  return { worktreePath, branch, worktreeHead };
+}
+
 function requirePrBodyOnlyEvidence({ repoRoot, manifestData, currentHead, lastReviewedSha }) {
   const prNumber = getManifestPrNumber(manifestData);
   if (!prNumber) {
@@ -448,6 +489,11 @@ function main() {
     readyHeadDriftContext = requireReadyHeadDriftEvidence({
       repoRoot: validatedPaths.repoRoot,
       manifestData: safeData,
+    });
+    requireRetainedWorktreeAtLiveHead({
+      repoRoot: validatedPaths.repoRoot,
+      manifestData: safeData,
+      readyHeadDrift: readyHeadDriftContext,
     });
   }
 
