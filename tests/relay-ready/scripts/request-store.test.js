@@ -24,6 +24,16 @@ const {
 const PERSIST_SCRIPT = path.join(__dirname, "..", "..", "..", "skills", "relay-ready", "scripts", "persist-request.js");
 const DISPATCH_SCRIPT = path.join(__dirname, "..", "..", "..", "skills", "relay-dispatch", "scripts", "dispatch.js");
 const REVIEW_RUNNER_SCRIPT = path.join(__dirname, "..", "..", "..", "skills", "relay-review", "scripts", "review-runner.js");
+const DECOMPOSITION_CONTRACT_DOC = path.join(
+  __dirname,
+  "..",
+  "..",
+  "..",
+  "skills",
+  "relay-ready",
+  "references",
+  "decomposition-contract.md",
+);
 
 function setupRepo() {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-ready-"));
@@ -87,6 +97,70 @@ function createMultiLeafContract(overrides = {}) {
         order: 1,
         depends_on: [],
         done_criteria_markdown: "# Done Criteria\n\n- Authenticated users stay off /login\n- Guests still reach /login\n",
+      },
+    ],
+    ...overrides,
+  };
+}
+
+function createProductFoundationContract(overrides = {}) {
+  return {
+    source: { kind: "raw_text" },
+    request_text: [
+      "Build the initial product foundation: tenant onboarding, billing gates,",
+      "admin analytics, and operator documentation.",
+    ].join(" "),
+    handoffs: [
+      {
+        leaf_id: "foundation-auth-shell",
+        title: "Create tenant onboarding shell",
+        goal: "Add the minimum tenant onboarding flow needed before gated features can exist",
+        order: 1,
+        depends_on: [],
+        in_scope: ["Create tenant onboarding entry points", "Persist tenant setup status"],
+        out_of_scope: ["Billing enforcement", "Analytics dashboards"],
+        assumptions: ["Existing account records can own tenant setup state"],
+        done_criteria_markdown: [
+          "# Done Criteria",
+          "",
+          "- Tenant onboarding status is stored and visible to the app shell",
+          "- Existing unauthenticated access behavior remains unchanged",
+        ].join("\n"),
+        escalation_conditions: ["Tenant ownership is not represented in the data model"],
+      },
+      {
+        leaf_id: "foundation-billing-gate",
+        title: "Add billing gate skeleton",
+        goal: "Introduce a billing gate that can block premium tenant actions after onboarding exists",
+        order: 2,
+        depends_on: ["foundation-auth-shell"],
+        in_scope: ["Add the billing gate decision point", "Cover allowed and blocked tenant states"],
+        out_of_scope: ["Payment provider integration", "Admin analytics"],
+        assumptions: ["Billing state can be stubbed for tests"],
+        done_criteria_markdown: [
+          "# Done Criteria",
+          "",
+          "- Premium tenant actions consult a billing gate",
+          "- Tests cover allowed and blocked billing states",
+        ].join("\n"),
+        escalation_conditions: ["No stable premium-action boundary exists"],
+      },
+      {
+        leaf_id: "foundation-operator-docs",
+        title: "Document product foundation operation",
+        goal: "Document the operator workflow after onboarding and billing gate contracts are frozen",
+        order: 3,
+        depends_on: ["foundation-auth-shell", "foundation-billing-gate"],
+        in_scope: ["Document onboarding and billing gate operational checks"],
+        out_of_scope: ["Changing product behavior", "Analytics dashboard implementation"],
+        assumptions: ["The first two leaves define the stable operator contract"],
+        done_criteria_markdown: [
+          "# Done Criteria",
+          "",
+          "- Operator docs describe onboarding status checks",
+          "- Operator docs describe billing gate troubleshooting",
+        ].join("\n"),
+        escalation_conditions: ["Earlier foundation leaves change their public contract"],
       },
     ],
     ...overrides,
@@ -643,6 +717,119 @@ test("scenario: larger request decomposes into ordered child handoffs", () => {
       "relay_ready_handoff_persisted",
     ]
   );
+});
+
+test("scenario: oversized product-foundation request uses AI-authored leaf proposals before persistence", () => {
+  const { repoRoot } = setupRepo();
+  const requestId = "req-20260608010101000";
+  const contract = createProductFoundationContract();
+  const proposalText = [
+    "Leaf 1: Create tenant onboarding shell",
+    "Goal: Add the minimum tenant onboarding flow needed before gated features can exist",
+    "Dependencies: none",
+    "In scope: Create tenant onboarding entry points; Persist tenant setup status",
+    "Out of scope: Billing enforcement; Analytics dashboards",
+    "Done Criteria: Tenant onboarding status is stored and visible to the app shell; Existing unauthenticated access behavior remains unchanged",
+    "",
+    "Leaf 2: Add billing gate skeleton",
+    "Goal: Introduce a billing gate that can block premium tenant actions after onboarding exists",
+    "Dependencies: depends on Leaf 1",
+    "In scope: Add the billing gate decision point; Cover allowed and blocked tenant states",
+    "Out of scope: Payment provider integration; Admin analytics",
+    "Done Criteria: Premium tenant actions consult a billing gate; Tests cover allowed and blocked billing states",
+    "",
+    "Leaf 3: Document product foundation operation",
+    "Goal: Document the operator workflow after onboarding and billing gate contracts are frozen",
+    "Dependencies: depends on Leaves 1 and 2",
+    "In scope: Document onboarding and billing gate operational checks",
+    "Out of scope: Changing product behavior; Analytics dashboard implementation",
+    "Done Criteria: Operator docs describe onboarding status checks; Operator docs describe billing gate troubleshooting",
+  ].join("\n");
+
+  structure(repoRoot, requestId, {
+    source_kind: "raw_text",
+    request_text: contract.request_text,
+    readiness: createReadiness({
+      clarity: "medium",
+      granularity: "multi_task",
+      dependency: "internal",
+      verifiability: "medium",
+      risk: "high",
+    }),
+    proposal_summary: "Strong decomposition signals: product foundation spans onboarding, billing, and docs.",
+    proposal_kind: "structure",
+    proposal_text: proposalText,
+    response_options: [
+      "A. Accept proposed leaves",
+      "B. Keep one high-risk leaf",
+      "C. Edit boundaries + free text",
+    ],
+    structure_kind: "decompose",
+    reason: "Deterministic signals show multi-task scope; AI proposes semantic leaf boundaries.",
+  });
+  acceptProposal(repoRoot, requestId, {
+    proposal_summary: "Persist the three AI-authored product foundation leaves.",
+    acceptance_note: "Use the proposed dependency order.",
+  });
+
+  const result = persistRequestContract(repoRoot, contract, { requestId });
+  const requestArtifact = readRequestArtifact(result.requestPath);
+  const leafArtifacts = result.handoffPaths.map((artifactPath) => readRequestArtifact(artifactPath));
+
+  assert.equal(result.leafCount, 3);
+  assert.deepEqual(result.leafIds, [
+    "foundation-auth-shell",
+    "foundation-billing-gate",
+    "foundation-operator-docs",
+  ]);
+  assert.deepEqual(requestArtifact.data.decomposition.leaf_order, result.leafIds);
+  assert.deepEqual(requestArtifact.data.decomposition.dependencies, {
+    "foundation-billing-gate": ["foundation-auth-shell"],
+    "foundation-operator-docs": ["foundation-auth-shell", "foundation-billing-gate"],
+  });
+  assert.deepEqual(
+    leafArtifacts.map((artifact) => artifact.data.depends_on),
+    [
+      [],
+      ["foundation-auth-shell"],
+      ["foundation-auth-shell", "foundation-billing-gate"],
+    ]
+  );
+  assert.match(requestArtifact.body, /foundation-operator-docs \[order 3\]/);
+  assert.match(requestArtifact.body, /depends_on: foundation-auth-shell, foundation-billing-gate/);
+  const proposalEvent = readRequestEvents(repoRoot, requestId).find((event) => event.event === "proposal_presented");
+  assert.equal(proposalEvent.proposal_text, proposalText);
+  assert.match(proposalEvent.proposal_text, /Goal: Add the minimum tenant onboarding flow/);
+  assert.match(proposalEvent.proposal_text, /Dependencies: depends on Leaves 1 and 2/);
+  assert.match(proposalEvent.proposal_text, /In scope: Document onboarding and billing gate operational checks/);
+  assert.match(proposalEvent.proposal_text, /Out of scope: Changing product behavior; Analytics dashboard implementation/);
+  assert.match(proposalEvent.proposal_text, /Done Criteria: Operator docs describe onboarding status checks/);
+  assert.deepEqual(
+    readEventNames(repoRoot, requestId),
+    [
+      "request_persisted",
+      "proposal_presented",
+      "proposal_accepted",
+      "relay_ready_handoff_persisted",
+      "relay_ready_handoff_persisted",
+      "relay_ready_handoff_persisted",
+    ]
+  );
+});
+
+test("decomposition contract docs pin the script-vs-AI and planner handoff boundary", () => {
+  const doc = fs.readFileSync(DECOMPOSITION_CONTRACT_DOC, "utf-8");
+
+  assert.match(doc, /Scripts emit deterministic signals and persist validated artifacts/);
+  assert.match(doc, /Scripts must not infer semantic leaf boundaries/);
+  assert.match(doc, /proposal-first shaping/);
+  assert.match(doc, /leaf title, goal, dependency intent, in-scope items, out-of-scope items, and leaf-level Done Criteria/);
+  assert.match(doc, /one bounded clarification question/);
+  assert.match(doc, /Sprint-batch bypass/);
+  assert.match(doc, /leaf-level Done Criteria, dispatch prompt, rubric, and smoke\/replay scenario/);
+  assert.match(doc, /relay-ready\/<leaf-id>\.md/);
+  assert.match(doc, /frozen Done Criteria/);
+  assert.match(doc, /#431/);
 });
 
 test("scenario: non-issue request freezes done criteria from the handoff rather than GitHub", () => {
