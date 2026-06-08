@@ -9,6 +9,7 @@ const { listManifestRecords } = require("./manifest/store");
 const { modeLabel, readArg, schemaHasFlag } = require("./cli-args");
 const { EVENTS, readAllRunEvents } = require("./relay-events");
 const { extractAllFactors } = require("../../relay-plan/scripts/tdd-flavor");
+const { getRequestPath, readRequestArtifact } = require("../../relay-ready/scripts/relay-request");
 
 const args = process.argv.slice(2);
 const CLI_ARG_OPTIONS = { commandName: "reliability-report", reservedFlags: ["-h"] };
@@ -627,25 +628,33 @@ function reviewRoundNumber(fileName) {
   return match ? Number(match[1]) : null;
 }
 
-function readReviewLineageRounds(repoRoot, runId) {
+function readReviewVerdictRecords(repoRoot, runId) {
   let entries;
   let runDir;
   try {
     runDir = getRunDir(repoRoot, runId);
     entries = fs.readdirSync(runDir, { withFileTypes: true });
   } catch {
-    return {};
+    return [];
   }
-  const rounds = {};
+  const records = [];
   for (const entry of entries) {
     const round = entry.isFile() ? reviewRoundNumber(entry.name) : null;
     if (round === null) continue;
     try {
       const verdict = JSON.parse(readTextFileWithoutFollowingSymlinks(path.join(runDir, entry.name)));
-      rounds[String(round)] = summarizeIssueLineage(verdict?.issues);
+      records.push({ round, verdict });
     } catch {
       // Best-effort analytics must not block the rest of the report.
     }
+  }
+  return records.sort((left, right) => left.round - right.round);
+}
+
+function readReviewLineageRounds(repoRoot, runId) {
+  const rounds = {};
+  for (const { round, verdict } of readReviewVerdictRecords(repoRoot, runId)) {
+    rounds[String(round)] = summarizeIssueLineage(verdict?.issues);
   }
   return Object.fromEntries(Object.entries(rounds).sort(([left], [right]) => Number(left) - Number(right)));
 }
@@ -669,6 +678,413 @@ function buildReviewLineageSummary({ repoRoot, manifests }) {
     byRun[runId] = { totals: runTotals, rounds };
   }
   return { totals, by_run: byRun, by_round: byRound };
+}
+
+function sortedObject(object) {
+  return Object.fromEntries(Object.entries(object || {}).sort(([left], [right]) => left.localeCompare(right)));
+}
+
+function positiveIntegerOrNull(value) {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
+function nonNegativeNumberOrNull(value) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+}
+
+function normalizeOptionalText(value) {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function buildReviewRoundCost(manifests) {
+  const byRun = {};
+  const roundCounts = [];
+
+  for (const manifest of manifests) {
+    const runId = manifest?.data?.run_id;
+    if (!runId) continue;
+    const rounds = nonNegativeNumberOrNull(manifest?.data?.review?.rounds);
+    if (rounds === null) continue;
+    byRun[runId] = rounds;
+    roundCounts.push(rounds);
+  }
+
+  return {
+    sample_size: roundCounts.length,
+    average: average(roundCounts),
+    median: median(roundCounts),
+    max: roundCounts.length ? Math.max(...roundCounts) : null,
+    by_run: sortedObject(byRun),
+  };
+}
+
+function requestLeafCountFromArtifact(repoRoot, requestId) {
+  try {
+    const requestPath = getRequestPath(repoRoot, requestId);
+    const artifact = readRequestArtifact(requestPath);
+    const explicitCount = positiveIntegerOrNull(artifact?.data?.leaf_count);
+    if (explicitCount !== null) return explicitCount;
+    if (Array.isArray(artifact?.data?.decomposition?.leaf_order)) {
+      return artifact.data.decomposition.leaf_order.length;
+    }
+    if (Array.isArray(artifact?.data?.paths?.handoffs)) {
+      return artifact.data.paths.handoffs.length;
+    }
+    if (normalizeOptionalText(artifact?.data?.leaf_id)) {
+      return 1;
+    }
+  } catch {
+    // Request artifacts are optional analytics inputs.
+  }
+  return null;
+}
+
+function buildRequestLinkageSummary({ repoRoot, manifests }) {
+  const byRun = {};
+  const byRequest = new Map();
+  const leafCountCache = new Map();
+  let linkedRuns = 0;
+  let unlinkedRuns = 0;
+
+  function leafCountFor(requestId, source) {
+    const sourceLeafCount = positiveIntegerOrNull(source?.leaf_count);
+    if (sourceLeafCount !== null) return sourceLeafCount;
+    if (!requestId) return null;
+    if (!leafCountCache.has(requestId)) {
+      leafCountCache.set(requestId, requestLeafCountFromArtifact(repoRoot, requestId));
+    }
+    return leafCountCache.get(requestId);
+  }
+
+  for (const manifest of manifests) {
+    const runId = manifest?.data?.run_id;
+    if (!runId) continue;
+
+    const source = manifest?.data?.source || {};
+    const requestId = normalizeOptionalText(source.request_id);
+    const leafId = normalizeOptionalText(source.leaf_id);
+    const leafCount = leafCountFor(requestId, source);
+    byRun[runId] = {
+      request_id: requestId,
+      leaf_id: leafId,
+      leaf_count: leafCount,
+    };
+
+    if (!requestId && !leafId) {
+      unlinkedRuns += 1;
+      continue;
+    }
+    linkedRuns += 1;
+
+    if (!requestId) continue;
+    if (!byRequest.has(requestId)) {
+      byRequest.set(requestId, {
+        leaf_count: leafCount,
+        linked_runs: 0,
+        linkedLeaves: new Set(),
+      });
+    }
+    const requestSummary = byRequest.get(requestId);
+    requestSummary.linked_runs += 1;
+    if (requestSummary.leaf_count === null && leafCount !== null) {
+      requestSummary.leaf_count = leafCount;
+    }
+    if (leafId) {
+      requestSummary.linkedLeaves.add(leafId);
+    }
+  }
+
+  return {
+    linked_runs: linkedRuns,
+    unlinked_runs: unlinkedRuns,
+    by_request: Object.fromEntries([...byRequest.entries()]
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([requestId, summary]) => [requestId, {
+        leaf_count: summary.leaf_count,
+        linked_runs: summary.linked_runs,
+        linked_leaf_count: summary.linkedLeaves.size,
+        linked_leaves: [...summary.linkedLeaves].sort((left, right) => left.localeCompare(right)),
+      }])),
+    by_run: sortedObject(byRun),
+  };
+}
+
+function buildGuidanceEventIndex(events) {
+  const byRun = new Map();
+  for (const event of events) {
+    if (event?.event !== EVENTS.GUIDANCE_SELECTED || !event.run_id) continue;
+    if (!byRun.has(event.run_id)) {
+      byRun.set(event.run_id, {
+        guidancePacks: new Set(),
+        taskProfileSummary: null,
+      });
+    }
+    const current = byRun.get(event.run_id);
+    for (const pack of normalizeGuidancePacks(event.guidance_packs)) {
+      current.guidancePacks.add(pack);
+    }
+    if (event.task_profile_summary && typeof event.task_profile_summary === "object") {
+      current.taskProfileSummary = event.task_profile_summary;
+    }
+  }
+  return byRun;
+}
+
+function buildTaskGuidanceSummary(manifests, events) {
+  const guidanceEvents = buildGuidanceEventIndex(events);
+  const byRun = {};
+  const bySize = new Map();
+  const byExecutionMode = new Map();
+  const guidancePacks = new Map();
+
+  for (const manifest of manifests) {
+    const runId = manifest?.data?.run_id;
+    if (!runId) continue;
+    const manifestGuidance = manifest?.data?.advisory?.guidance || {};
+    const eventGuidance = guidanceEvents.get(runId) || null;
+    const packs = normalizeGuidancePacks([
+      ...(Array.isArray(manifestGuidance.guidance_packs) ? manifestGuidance.guidance_packs : []),
+      ...(eventGuidance ? [...eventGuidance.guidancePacks] : []),
+    ]);
+    const taskProfileSummary = manifestGuidance.task_profile_summary || eventGuidance?.taskProfileSummary || null;
+
+    if (!taskProfileSummary && packs.length === 0) continue;
+
+    byRun[runId] = {
+      task_profile_summary: taskProfileSummary,
+      guidance_packs: packs,
+    };
+
+    const size = normalizeOptionalText(taskProfileSummary?.size);
+    if (size) incrementCountBucket(bySize, size);
+    const executionMode = normalizeOptionalText(taskProfileSummary?.execution_mode);
+    if (executionMode) incrementCountBucket(byExecutionMode, executionMode);
+    for (const pack of packs) {
+      incrementCountBucket(guidancePacks, pack);
+    }
+  }
+
+  return {
+    available_runs: Object.keys(byRun).length,
+    by_size: sortCountBuckets(bySize),
+    by_execution_mode: sortCountBuckets(byExecutionMode),
+    guidance_packs: sortCountBuckets(guidancePacks),
+    by_run: sortedObject(byRun),
+  };
+}
+
+function normalizeFailureTypeText(value) {
+  const text = normalizeOptionalText(value);
+  if (!text) return null;
+  return text.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "") || null;
+}
+
+function explicitEvidenceFailureType(event) {
+  const preflightType = normalizeFailureTypeText(event?.preflight_type);
+  const failureType = normalizeFailureTypeText(event?.failure_type || event?.failure_class);
+  if (preflightType && failureType) {
+    return preflightType.includes(failureType) ? preflightType : `${preflightType}_${failureType}`;
+  }
+  return preflightType || failureType;
+}
+
+function classifyEvidenceFailureType({ explicitType, status, reason }) {
+  const normalizedType = normalizeFailureTypeText(explicitType);
+  if (normalizedType) return normalizedType;
+  const normalizedStatus = normalizeOptionalText(status)?.toLowerCase() || null;
+  const normalizedReason = String(reason || "").toLowerCase();
+  if (normalizedStatus === "missing" || normalizedReason.includes("missing")) {
+    return "execution_evidence_missing";
+  }
+  if (normalizedReason.includes("stale")) {
+    return "execution_evidence_stale";
+  }
+  if (normalizedReason.includes("invalid")) {
+    return "execution_evidence_invalid";
+  }
+  if (normalizedStatus === "fail") {
+    return "execution_evidence_fail";
+  }
+  return normalizedStatus ? `quality_execution_${normalizedStatus}` : "unknown";
+}
+
+function incrementEvidenceFailure(summary, runId, { type, status }) {
+  summary.total += 1;
+  incrementCountBucket(summary.byType, type);
+  incrementCountBucket(summary.byStatus, status || "unknown");
+  if (runId) {
+    if (!summary.byRun.has(runId)) {
+      summary.byRun.set(runId, {
+        total: 0,
+        byType: new Map(),
+        byStatus: new Map(),
+      });
+    }
+    const runSummary = summary.byRun.get(runId);
+    runSummary.total += 1;
+    incrementCountBucket(runSummary.byType, type);
+    incrementCountBucket(runSummary.byStatus, status || "unknown");
+  }
+}
+
+const PREFLIGHT_FAILURE_EVENT_NAMES = new Set([
+  "review_preflight_failed",
+  "reviewer_preflight_failed",
+  "evidence_preflight_failed",
+  "execution_evidence_preflight_failed",
+]);
+
+function isEvidencePreflightFailureEvent(event) {
+  if (!event || !PREFLIGHT_FAILURE_EVENT_NAMES.has(event.event)) return false;
+  const text = [
+    event.preflight_type,
+    event.failure_type,
+    event.failure_class,
+    event.quality_execution_status,
+    event.reason,
+  ].map((value) => String(value || "").toLowerCase()).join(" ");
+  return text.includes("evidence") || text.includes("execution") || text.includes("quality_execution");
+}
+
+function buildEvidencePreflightFailures({ repoRoot, manifests, events }) {
+  const summary = {
+    total: 0,
+    byType: new Map(),
+    byStatus: new Map(),
+    byRun: new Map(),
+  };
+
+  for (const manifest of manifests) {
+    const runId = manifest?.data?.run_id;
+    if (!runId) continue;
+    for (const { verdict } of readReviewVerdictRecords(repoRoot, runId)) {
+      const status = normalizeOptionalText(verdict?.quality_execution_status)?.toLowerCase() || null;
+      if (!status || status === "pass") continue;
+      const type = classifyEvidenceFailureType({
+        status,
+        reason: verdict?.quality_execution_reason || verdict?.summary,
+      });
+      incrementEvidenceFailure(summary, runId, { type, status });
+    }
+  }
+
+  for (const event of events) {
+    if (!isEvidencePreflightFailureEvent(event)) continue;
+    const status = normalizeOptionalText(event.quality_execution_status || event.status)?.toLowerCase() || null;
+    const type = classifyEvidenceFailureType({
+      explicitType: explicitEvidenceFailureType(event),
+      status,
+      reason: event.reason || event.failure_reason,
+    });
+    incrementEvidenceFailure(summary, event.run_id || null, { type, status });
+  }
+
+  return {
+    total: summary.total,
+    by_type: sortCountBuckets(summary.byType),
+    by_status: sortCountBuckets(summary.byStatus),
+    by_run: Object.fromEntries([...summary.byRun.entries()]
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([runId, runSummary]) => [runId, {
+        total: runSummary.total,
+        by_type: sortCountBuckets(runSummary.byType),
+        by_status: sortCountBuckets(runSummary.byStatus),
+      }])),
+  };
+}
+
+function parseReviewerRoundsAvoided(event) {
+  const explicitCount = nonNegativeNumberOrNull(
+    event?.reviewer_rounds_avoided ?? event?.reviewer_rounds_avoided_by_preflight
+  );
+  if (explicitCount !== null && explicitCount > 0) return explicitCount;
+  if (
+    event?.reviewer_round_avoided === true
+    || event?.avoided_reviewer_round === true
+    || event?.preflight_prevented_review === true
+  ) {
+    return 1;
+  }
+  return 0;
+}
+
+function buildReviewerRoundsAvoidedByPreflight(events) {
+  const byType = new Map();
+  const byRun = new Map();
+  let total = 0;
+
+  for (const event of events) {
+    if (!isEvidencePreflightFailureEvent(event)) continue;
+    const avoided = parseReviewerRoundsAvoided(event);
+    if (!avoided) continue;
+    const status = normalizeOptionalText(event.quality_execution_status || event.status)?.toLowerCase() || null;
+    const type = classifyEvidenceFailureType({
+      explicitType: explicitEvidenceFailureType(event),
+      status,
+      reason: event.reason || event.failure_reason,
+    });
+    total += avoided;
+    byType.set(type, (byType.get(type) || 0) + avoided);
+    if (event.run_id) {
+      byRun.set(event.run_id, (byRun.get(event.run_id) || 0) + avoided);
+    }
+  }
+
+  if (total === 0) return null;
+  return {
+    total,
+    by_type: sortCountBuckets(byType),
+    by_run: sortedObject(Object.fromEntries(byRun.entries())),
+  };
+}
+
+function buildEscalationDecisionSummary(events) {
+  const byDecision = new Map();
+  const byTrigger = new Map();
+  const factorFlip = {
+    total: 0,
+    continue: 0,
+    escalate: 0,
+  };
+  let total = 0;
+
+  for (const event of events) {
+    if (event?.event !== EVENTS.ESCALATION_DECISION) continue;
+    total += 1;
+    const decision = normalizeOptionalText(event.decision) || "unknown";
+    const trigger = normalizeOptionalText(event.trigger) || "unknown";
+    incrementCountBucket(byDecision, decision);
+    incrementCountBucket(byTrigger, trigger);
+    if (trigger === "flip_flop") {
+      factorFlip.total += 1;
+      if (decision === "continue") {
+        factorFlip.continue += 1;
+      } else if (decision === "escalate") {
+        factorFlip.escalate += 1;
+      }
+    }
+  }
+
+  return {
+    total,
+    by_decision: sortCountBuckets(byDecision),
+    by_trigger: sortCountBuckets(byTrigger),
+    factor_flip: factorFlip,
+  };
+}
+
+function buildRoundCostSummary({ repoRoot, manifests, events, reviewLineage }) {
+  return {
+    review_rounds: buildReviewRoundCost(manifests),
+    request_linkage: buildRequestLinkageSummary({ repoRoot, manifests }),
+    task_guidance: buildTaskGuidanceSummary(manifests, events),
+    evidence_preflight_failures: buildEvidencePreflightFailures({ repoRoot, manifests, events }),
+    lineage_totals: { ...(reviewLineage?.totals || emptyLineageCounts()) },
+    escalation_decisions: buildEscalationDecisionSummary(events),
+    reviewer_rounds_avoided_by_preflight: buildReviewerRoundsAvoidedByPreflight(events),
+  };
 }
 
 function buildSidecarOutcomeBuckets(starts, results, failures, fieldName) {
@@ -1170,6 +1586,7 @@ function buildReport({ repoRoot, staleHours, now, manifests, events, includeSide
       .filter((event) => event.event === EVENTS.RECOVER_COMMIT && event.run_id)
       .map((event) => event.run_id)
   );
+  const reviewLineage = buildReviewLineageSummary({ repoRoot, manifests });
 
   const report = {
     repoRoot,
@@ -1197,7 +1614,8 @@ function buildReport({ repoRoot, staleHours, now, manifests, events, includeSide
     rubric_insights: buildRubricInsights(events, manifests),
     qualitative_signals: buildQualitativeSignals(manifests, events),
     guidance_pack_insights: buildGuidancePackInsights(manifests, events),
-    review_lineage: buildReviewLineageSummary({ repoRoot, manifests }),
+    review_lineage: reviewLineage,
+    round_cost: buildRoundCostSummary({ repoRoot, manifests, events, reviewLineage }),
     advisory_sidecar_timing: buildAdvisorySidecarTiming(events),
     override_audit: buildOverrideAuditSummary(events),
   };
@@ -1426,6 +1844,27 @@ function main() {
   console.log(`  dispatch_failure_rate: ${report.metrics.dispatch_failure_rate ?? "n/a"}`);
   console.log(`  recover_commit_rate: ${report.metrics.recover_commit_rate ?? "n/a"}`);
   console.log(`  review_lineage: ${LINEAGE_VALUES.map((value) => `${value}=${report.review_lineage.totals[value]}`).join(", ")}`);
+  if (report.round_cost) {
+    const roundCost = report.round_cost;
+    const avoidedRounds = roundCost.reviewer_rounds_avoided_by_preflight?.total ?? "n/a";
+    const factorFlip = roundCost.escalation_decisions?.factor_flip || { total: 0, continue: 0, escalate: 0 };
+    console.log("  round_cost:");
+    console.log(
+      `    avg_review_rounds=${roundCost.review_rounds.average ?? "n/a"} ` +
+      `median_review_rounds=${roundCost.review_rounds.median ?? "n/a"} ` +
+      `max_review_rounds=${roundCost.review_rounds.max ?? "n/a"} ` +
+      `linked_runs=${roundCost.request_linkage.linked_runs}`
+    );
+    console.log(
+      `    evidence_preflight_failures=${roundCost.evidence_preflight_failures.total} ` +
+      `reviewer_rounds_avoided_by_preflight=${avoidedRounds}`
+    );
+    console.log(
+      `    factor_flip: total=${factorFlip.total} ` +
+      `continue=${factorFlip.continue} ` +
+      `escalate=${factorFlip.escalate}`
+    );
+  }
   console.log(`  most_stuck_factor: ${report.factor_analysis.most_stuck_factor ?? "n/a"}`);
   if (hasRubricInsights(report.rubric_insights)) {
     const gradeDistribution = report.rubric_insights.quality_grade_distribution;

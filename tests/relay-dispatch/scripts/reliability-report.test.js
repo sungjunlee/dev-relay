@@ -15,6 +15,7 @@ const {
   updateManifestState,
   writeManifest,
 } = require("../../../skills/relay-dispatch/scripts/relay-manifest");
+const { getRequestPath } = require("../../../skills/relay-ready/scripts/relay-request");
 const {
   appendIterationScore,
   appendRubricQuality,
@@ -174,6 +175,17 @@ function setManifestGuidance(repoRoot, runId, guidancePacks) {
   writeManifest(manifestPath, manifest);
 }
 
+function setManifestSource(repoRoot, runId, source) {
+  const { manifestPath } = ensureRunLayout(repoRoot, runId);
+  const manifest = readManifest(manifestPath).data;
+  if (source === undefined) {
+    delete manifest.source;
+  } else {
+    manifest.source = source;
+  }
+  writeManifest(manifestPath, manifest);
+}
+
 function setManifestDispatch(repoRoot, runId, dispatch) {
   const { manifestPath } = ensureRunLayout(repoRoot, runId);
   const manifest = readManifest(manifestPath).data;
@@ -250,6 +262,26 @@ function writeSidecarOutput(repoRoot, runId, sidecarId, content) {
   fs.writeFileSync(path.join(outputDir, "output.md"), content, "utf-8");
 }
 
+function writeRequestArtifact(repoRoot, requestId, { leafCount, leafOrder }) {
+  initGitRepo(repoRoot);
+  const requestPath = getRequestPath(repoRoot, requestId);
+  fs.mkdirSync(path.dirname(requestPath), { recursive: true });
+  writeManifest(requestPath, {
+    request_id: requestId,
+    state: "relay_ready",
+    leaf_count: leafCount,
+    decomposition: {
+      leaf_order: leafOrder,
+      dependencies: {},
+    },
+    timestamps: {
+      created_at: "2026-04-12T00:00:00.000Z",
+      updated_at: "2026-04-12T00:00:00.000Z",
+    },
+  }, "# Relay Intake Request\n");
+  return requestPath;
+}
+
 function writeSidecarOutputAt(repoRoot, runId, outputPathRelative, content) {
   const { runDir } = ensureRunLayout(repoRoot, runId);
   const outputPath = path.join(runDir, outputPathRelative);
@@ -257,11 +289,11 @@ function writeSidecarOutputAt(repoRoot, runId, outputPathRelative, content) {
   fs.writeFileSync(outputPath, content, "utf-8");
 }
 
-function writeReviewVerdict(repoRoot, runId, round, issues) {
+function writeReviewVerdict(repoRoot, runId, round, issues, overrides = {}) {
   const { runDir } = ensureRunLayout(repoRoot, runId);
   fs.writeFileSync(
     path.join(runDir, `review-round-${round}-verdict.json`),
-    JSON.stringify({ verdict: "changes_requested", issues }, null, 2),
+    JSON.stringify({ verdict: "changes_requested", issues, ...overrides }, null, 2),
     "utf-8"
   );
 }
@@ -402,6 +434,235 @@ test("reliability-report aggregates review lineage by run and round", () => {
     newly_scoreable: 1,
     unknown: 0,
   });
+});
+
+test("reliability-report keeps round_cost stable for legacy runs without optional artifacts", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-report-round-cost-legacy-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  const recentTs = new Date(Date.now() - 1 * 60 * 60 * 1000).toISOString();
+  const runId = createRunId({ branch: "run-legacy-round-cost", timestamp: new Date("2026-04-12T00:02:00.000Z") });
+
+  writeRun(repoRoot, {
+    runId,
+    state: STATES.READY_TO_MERGE,
+    rounds: 2,
+    updatedAt: recentTs,
+  });
+
+  const report = JSON.parse(execFileSync("node", [SCRIPT, "--repo", repoRoot, "--json"], { encoding: "utf-8" }));
+  const text = execFileSync("node", [SCRIPT, "--repo", repoRoot], { encoding: "utf-8" });
+
+  assert.deepEqual(report.round_cost.review_rounds, {
+    sample_size: 1,
+    average: 2,
+    median: 2,
+    max: 2,
+    by_run: {
+      [runId]: 2,
+    },
+  });
+  assert.deepEqual(report.round_cost.request_linkage, {
+    linked_runs: 0,
+    unlinked_runs: 1,
+    by_request: {},
+    by_run: {
+      [runId]: {
+        request_id: null,
+        leaf_id: null,
+        leaf_count: null,
+      },
+    },
+  });
+  assert.deepEqual(report.round_cost.evidence_preflight_failures, {
+    total: 0,
+    by_type: {},
+    by_status: {},
+    by_run: {},
+  });
+  assert.equal(report.round_cost.reviewer_rounds_avoided_by_preflight, null);
+  assert.match(text, /round_cost:/);
+  assert.match(text, /avg_review_rounds=2 median_review_rounds=2/);
+  assert.match(text, /reviewer_rounds_avoided_by_preflight=n\/a/);
+});
+
+test("reliability-report aggregates round_cost linkage, preflight, lineage, and escalation signals", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-report-round-cost-linked-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  const recentTs = new Date(Date.now() - 1 * 60 * 60 * 1000).toISOString();
+  const runId = createRunId({ branch: "run-round-cost", timestamp: new Date("2026-04-12T00:03:00.000Z") });
+  const requestId = "req-20260412000300000";
+
+  writeRequestArtifact(repoRoot, requestId, {
+    leafCount: 2,
+    leafOrder: ["leaf-a", "leaf-b"],
+  });
+  writeRun(repoRoot, {
+    runId,
+    state: STATES.CHANGES_REQUESTED,
+    rounds: 3,
+    updatedAt: recentTs,
+  });
+  setManifestSource(repoRoot, runId, {
+    request_id: requestId,
+    leaf_id: "leaf-a",
+  });
+  setManifestGuidance(repoRoot, runId, ["surgical-change", "verification-evidence"]);
+
+  writeReviewVerdict(repoRoot, runId, 1, [
+    { title: "Repeat", body: "Repeat.", file: "a.js", line: 1, category: "contract", severity: "high", lineage: "repeat" },
+  ], {
+    quality_execution_status: "missing",
+    quality_execution_reason: "execution-evidence.json missing",
+  });
+  writeReviewVerdict(repoRoot, runId, 2, [
+    { title: "Deepening", body: "Deepening.", file: "b.js", line: 2, category: "quality", severity: "medium", lineage: "deepening" },
+  ], {
+    quality_execution_status: "fail",
+    quality_execution_reason: "stale artifact: recorded at a, reviewed at b",
+  });
+  writeReviewVerdict(repoRoot, runId, 3, [
+    { title: "New", body: "New.", file: "c.js", line: 3, category: "quality", severity: "medium", lineage: "new" },
+  ], {
+    quality_execution_status: "pass",
+  });
+
+  appendRawRunEvent(repoRoot, runId, {
+    event: "review_preflight_failed",
+    round: 4,
+    preflight_type: "execution_evidence_missing",
+    quality_execution_status: "missing",
+    reviewer_rounds_avoided: 1,
+  });
+  appendRunEvent(repoRoot, runId, {
+    event: "escalation_decision",
+    state_from: STATES.REVIEW_PENDING,
+    state_to: STATES.CHANGES_REQUESTED,
+    round: 2,
+    trigger: "flip_flop",
+    decision: "escalate",
+    factors: ["Evidence"],
+    traces: [{ factor: "Evidence", trace: ["pass", "fail", "pass"] }],
+    lineage_summary: { deepening: 0, repeat: 1, stale: 0, new: 0, newly_scoreable: 0, unknown: 0 },
+  });
+  appendRunEvent(repoRoot, runId, {
+    event: "escalation_decision",
+    state_from: STATES.REVIEW_PENDING,
+    state_to: STATES.CHANGES_REQUESTED,
+    round: 3,
+    trigger: "flip_flop",
+    decision: "continue",
+    factors: ["Evidence"],
+    traces: [{ factor: "Evidence", trace: ["fail", "pass", "fail"] }],
+    lineage_summary: { deepening: 1, repeat: 0, stale: 0, new: 0, newly_scoreable: 0, unknown: 0 },
+  });
+
+  const report = JSON.parse(execFileSync("node", [SCRIPT, "--repo", repoRoot, "--json"], { encoding: "utf-8" }));
+  const text = execFileSync("node", [SCRIPT, "--repo", repoRoot], { encoding: "utf-8" });
+
+  assert.deepEqual(report.round_cost.review_rounds, {
+    sample_size: 1,
+    average: 3,
+    median: 3,
+    max: 3,
+    by_run: {
+      [runId]: 3,
+    },
+  });
+  assert.deepEqual(report.round_cost.request_linkage.by_request, {
+    [requestId]: {
+      leaf_count: 2,
+      linked_runs: 1,
+      linked_leaf_count: 1,
+      linked_leaves: ["leaf-a"],
+    },
+  });
+  assert.deepEqual(report.round_cost.request_linkage.by_run[runId], {
+    request_id: requestId,
+    leaf_id: "leaf-a",
+    leaf_count: 2,
+  });
+  assert.deepEqual(report.round_cost.task_guidance, {
+    available_runs: 1,
+    by_size: { M: 1 },
+    by_execution_mode: { standard: 1 },
+    guidance_packs: {
+      "surgical-change": 1,
+      "verification-evidence": 1,
+    },
+    by_run: {
+      [runId]: {
+        task_profile_summary: {
+          size: "M",
+          change_type: "feature",
+          domains: ["relay-dispatch"],
+          risk_tags: [],
+          execution_mode: "standard",
+        },
+        guidance_packs: ["surgical-change", "verification-evidence"],
+      },
+    },
+  });
+  assert.deepEqual(report.round_cost.evidence_preflight_failures, {
+    total: 3,
+    by_type: {
+      execution_evidence_missing: 2,
+      execution_evidence_stale: 1,
+    },
+    by_status: {
+      fail: 1,
+      missing: 2,
+    },
+    by_run: {
+      [runId]: {
+        total: 3,
+        by_type: {
+          execution_evidence_missing: 2,
+          execution_evidence_stale: 1,
+        },
+        by_status: {
+          fail: 1,
+          missing: 2,
+        },
+      },
+    },
+  });
+  assert.deepEqual(report.round_cost.lineage_totals, {
+    deepening: 1,
+    repeat: 1,
+    stale: 0,
+    new: 1,
+    newly_scoreable: 0,
+    unknown: 0,
+  });
+  assert.deepEqual(report.round_cost.escalation_decisions, {
+    total: 2,
+    by_decision: {
+      continue: 1,
+      escalate: 1,
+    },
+    by_trigger: {
+      flip_flop: 2,
+    },
+    factor_flip: {
+      total: 2,
+      continue: 1,
+      escalate: 1,
+    },
+  });
+  assert.deepEqual(report.round_cost.reviewer_rounds_avoided_by_preflight, {
+    total: 1,
+    by_type: {
+      execution_evidence_missing: 1,
+    },
+    by_run: {
+      [runId]: 1,
+    },
+  });
+  assert.match(text, /round_cost:/);
+  assert.match(text, /avg_review_rounds=3 median_review_rounds=3/);
+  assert.match(text, /evidence_preflight_failures=3/);
+  assert.match(text, /reviewer_rounds_avoided_by_preflight=1/);
+  assert.match(text, /factor_flip: total=2 continue=1 escalate=1/);
 });
 
 test("reliability-report summarizes override audit events without treating legacy shapes as corrupt", () => {
