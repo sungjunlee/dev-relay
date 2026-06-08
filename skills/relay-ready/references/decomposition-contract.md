@@ -17,11 +17,13 @@ The deterministic scripts may say "this looks multi-task" from text-shape signal
 When strong decomposition signals appear, relay-ready uses proposal-first shaping: first propose a bounded shape instead of persisting immediately.
 
 1. Present whether the request should remain one high-risk leaf or split into named leaves.
-2. Include short AI-authored leaf proposals with order and dependency intent.
+2. Include short AI-authored leaf proposals with enough reviewable contract shape for the operator to accept boundaries: leaf title, goal, dependency intent, in-scope items, out-of-scope items, and leaf-level Done Criteria.
 3. Offer bounded response options: accept the proposal, keep one leaf, or edit boundaries with free text.
 4. Persist only after the proposal is accepted or edited into a stable handoff contract.
 
 Ask one bounded clarification question only when the proposed leaf boundary cannot be made reviewable from the request text. The question should choose between concrete alternatives, include a free-text escape hatch, and target the minimum ambiguity blocking a frozen Done Criteria snapshot. Do not ask an open-ended discovery interview.
+
+Sprint-batch bypass: if the requester already supplies a batch with leaf-level Done Criteria, dispatch prompt, rubric, and smoke/replay scenario for each leaf, do not repeat proposal-first shaping. Treat the batch as already shaped, validate and persist the existing leaf contracts, and surface schema or dependency gaps instead of reinterpreting the raw batch.
 
 ## Persistence Contract
 
@@ -54,9 +56,24 @@ Deterministic signals:
 
 AI-authored proposal:
 
-- Leaf 1: create tenant onboarding shell.
-- Leaf 2: add billing gate skeleton, `depends_on: [tenant onboarding shell]`.
-- Leaf 3: document product foundation operation, `depends_on: [tenant onboarding shell, billing gate skeleton]`.
+- Leaf 1: Create tenant onboarding shell.
+  - Goal: add the minimum tenant onboarding flow needed before gated features can exist.
+  - Dependencies: none.
+  - In scope: tenant onboarding entry points; persisted tenant setup status.
+  - Out of scope: billing enforcement; analytics dashboards.
+  - Done Criteria: tenant onboarding status is stored and visible to the app shell; existing unauthenticated access behavior remains unchanged.
+- Leaf 2: Add billing gate skeleton.
+  - Goal: introduce a billing gate that can block premium tenant actions after onboarding exists.
+  - Dependencies: depends on Leaf 1.
+  - In scope: billing gate decision point; coverage for allowed and blocked tenant states.
+  - Out of scope: payment provider integration; admin analytics.
+  - Done Criteria: premium tenant actions consult a billing gate; tests cover allowed and blocked billing states.
+- Leaf 3: Document product foundation operation.
+  - Goal: document the operator workflow after onboarding and billing gate contracts are frozen.
+  - Dependencies: depends on Leaves 1 and 2.
+  - In scope: onboarding and billing gate operational checks.
+  - Out of scope: changing product behavior; analytics dashboard implementation.
+  - Done Criteria: operator docs describe onboarding status checks; operator docs describe billing gate troubleshooting.
 
 If the request does not identify whether admin analytics or billing is the first production dependency, ask one bounded clarification question such as:
 

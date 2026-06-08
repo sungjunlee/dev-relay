@@ -723,6 +723,28 @@ test("scenario: oversized product-foundation request uses AI-authored leaf propo
   const { repoRoot } = setupRepo();
   const requestId = "req-20260608010101000";
   const contract = createProductFoundationContract();
+  const proposalText = [
+    "Leaf 1: Create tenant onboarding shell",
+    "Goal: Add the minimum tenant onboarding flow needed before gated features can exist",
+    "Dependencies: none",
+    "In scope: Create tenant onboarding entry points; Persist tenant setup status",
+    "Out of scope: Billing enforcement; Analytics dashboards",
+    "Done Criteria: Tenant onboarding status is stored and visible to the app shell; Existing unauthenticated access behavior remains unchanged",
+    "",
+    "Leaf 2: Add billing gate skeleton",
+    "Goal: Introduce a billing gate that can block premium tenant actions after onboarding exists",
+    "Dependencies: depends on Leaf 1",
+    "In scope: Add the billing gate decision point; Cover allowed and blocked tenant states",
+    "Out of scope: Payment provider integration; Admin analytics",
+    "Done Criteria: Premium tenant actions consult a billing gate; Tests cover allowed and blocked billing states",
+    "",
+    "Leaf 3: Document product foundation operation",
+    "Goal: Document the operator workflow after onboarding and billing gate contracts are frozen",
+    "Dependencies: depends on Leaves 1 and 2",
+    "In scope: Document onboarding and billing gate operational checks",
+    "Out of scope: Changing product behavior; Analytics dashboard implementation",
+    "Done Criteria: Operator docs describe onboarding status checks; Operator docs describe billing gate troubleshooting",
+  ].join("\n");
 
   structure(repoRoot, requestId, {
     source_kind: "raw_text",
@@ -736,11 +758,7 @@ test("scenario: oversized product-foundation request uses AI-authored leaf propo
     }),
     proposal_summary: "Strong decomposition signals: product foundation spans onboarding, billing, and docs.",
     proposal_kind: "structure",
-    proposal_text: [
-      "Leaf 1: tenant onboarding shell.",
-      "Leaf 2: billing gate skeleton, depends on Leaf 1.",
-      "Leaf 3: operator docs, depends on Leaves 1 and 2.",
-    ].join("\n"),
+    proposal_text: proposalText,
     response_options: [
       "A. Accept proposed leaves",
       "B. Keep one high-risk leaf",
@@ -779,6 +797,13 @@ test("scenario: oversized product-foundation request uses AI-authored leaf propo
   );
   assert.match(requestArtifact.body, /foundation-operator-docs \[order 3\]/);
   assert.match(requestArtifact.body, /depends_on: foundation-auth-shell, foundation-billing-gate/);
+  const proposalEvent = readRequestEvents(repoRoot, requestId).find((event) => event.event === "proposal_presented");
+  assert.equal(proposalEvent.proposal_text, proposalText);
+  assert.match(proposalEvent.proposal_text, /Goal: Add the minimum tenant onboarding flow/);
+  assert.match(proposalEvent.proposal_text, /Dependencies: depends on Leaves 1 and 2/);
+  assert.match(proposalEvent.proposal_text, /In scope: Document onboarding and billing gate operational checks/);
+  assert.match(proposalEvent.proposal_text, /Out of scope: Changing product behavior; Analytics dashboard implementation/);
+  assert.match(proposalEvent.proposal_text, /Done Criteria: Operator docs describe onboarding status checks/);
   assert.deepEqual(
     readEventNames(repoRoot, requestId),
     [
@@ -798,7 +823,10 @@ test("decomposition contract docs pin the script-vs-AI and planner handoff bound
   assert.match(doc, /Scripts emit deterministic signals and persist validated artifacts/);
   assert.match(doc, /Scripts must not infer semantic leaf boundaries/);
   assert.match(doc, /proposal-first shaping/);
+  assert.match(doc, /leaf title, goal, dependency intent, in-scope items, out-of-scope items, and leaf-level Done Criteria/);
   assert.match(doc, /one bounded clarification question/);
+  assert.match(doc, /Sprint-batch bypass/);
+  assert.match(doc, /leaf-level Done Criteria, dispatch prompt, rubric, and smoke\/replay scenario/);
   assert.match(doc, /relay-ready\/<leaf-id>\.md/);
   assert.match(doc, /frozen Done Criteria/);
   assert.match(doc, /#431/);
