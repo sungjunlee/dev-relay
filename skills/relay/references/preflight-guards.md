@@ -59,14 +59,20 @@ node "${RELAY_SKILL_ROOT:-skills}/relay/scripts/run-preflight.js" --stage review
 ### Stale-review guard
 
 - Firing condition: Step 4 is about to invoke relay-review, then again immediately after relay-review returns.
-- Signals read: target manifest `review.rounds`, `review.latest_verdict`, `git.head_sha`, and `review.last_reviewed_sha`.
+- Signals read: target manifest `review.rounds`, `review.latest_verdict`, `git.head_sha`, and `review.last_reviewed_sha`; for `ready_to_merge` runs, live PR `headRefOid` from GitHub.
 - Events emitted: none by this guard; relay-review emits its normal review events.
 - Branch labels:
   - `snapshot`: before review, store `.snapshot.rounds` and `.snapshot.latest_verdict`.
   - `advanced`: after review, `.comparison.rounds_advanced` or `.comparison.verdict_changed` is true; proceed to Step 5.
   - `stale`: after review, neither value changed; treat the review as stalled and run `review-runner.js` directly in the foreground, then repeat the same comparison.
+  - `stale_ready`: when `.snapshot.state == "ready_to_merge"` and `.ready_status.status == "stale_ready"`, the PR advanced after the passing review; run `recover-state.js --to review_pending --reason <why>` and then run relay-review again.
+  - `merge_ready`: when `.snapshot.state == "ready_to_merge"` and `.ready_status.status == "merge_ready"`, the live PR HEAD still matches the reviewed/manifest SHA.
 
 The JSON also reports `.snapshot.sha_state` / `.comparison.sha_state` as
 `reviewed_current_head`, `stale_reviewed_sha`, `not_reviewed`, or
 `missing_head_sha` so operators can see whether the manifest's review SHA is
 current without changing the round/verdict advancement rule.
+
+For ready runs, `.ready_status` includes `pr_number`, `old_sha`, `new_sha`,
+`reviewed_sha`, `manifest_head_sha`, and `next_action` so recovery can be
+audited without manually editing the manifest.

@@ -16,6 +16,7 @@ const VALUE = "value";
 
 const FLAGS = [
   { flag: "--all", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Presence flag; no value is consumed." },
+  { flag: "--allow-stacked-base-hazard", kind: VALUE, mode: MODE_VERBATIM, valueName: "<reason>", rationale: "Audit reason for overriding a non-default stacked PR base hazard." },
   { flag: "--allow-conflicting-run", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Operator override for the in-flight-run check; logs a conflicting_run_override event." },
   { flag: "--allow-same-head", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Explicit same-HEAD recovery opt-in; no value is consumed." },
   { flag: "--advisory-profile", kind: VALUE, mode: MODE_PARSED, valueName: "<name>", rationale: "Closed advisory review profile selector; flag-like following tokens should mean the value is missing." },
@@ -146,7 +147,7 @@ const COMMAND_FLAGS = {
   "finalize-run": [
     "--repo", "--run-id", "--manifest", "--branch", "--pr", "--merge-method",
     "--skip-review", "--force-finalize-nonready", "--reason", "--skip-merge",
-    "--no-issue-close", "--dry-run", "--json", "--help",
+    "--allow-stacked-base-hazard", "--no-issue-close", "--dry-run", "--json", "--help",
   ],
   "gate-check": [
     "--skip", "--dry-run", "--json", "--help",

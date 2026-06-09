@@ -22,6 +22,8 @@
  *   --force-finalize-nonready
  *                          Operator-only: bypass non-ready state gate
  *   --reason <text>        Required with --force-finalize-nonready
+ *   --allow-stacked-base-hazard <reason>
+ *                          Override non-default stacked PR base hazard block
  *   --skip-merge           Skip the PR merge step and run cleanup only
  *   --no-issue-close       Skip linked issue close
  *   --dry-run              Print what would happen without writing
@@ -69,6 +71,7 @@ const args = process.argv.slice(2);
 const KNOWN_FLAGS = [
   "--repo", "--run-id", "--manifest", "--branch", "--pr", "--merge-method", "--skip-review",
   "--force-finalize-nonready", "--reason",
+  "--allow-stacked-base-hazard",
   "--skip-merge", "--no-issue-close", "--dry-run", "--json", "--help", "-h",
 ];
 const cliArgs = bindCliArgs(args, {
@@ -91,6 +94,7 @@ if (!args.length || helpRequested) {
   console.log(`  --force-finalize-nonready ${modeLabel("--force-finalize-nonready")}`);
   console.log("                         Operator-only: bypass non-ready state gate");
   console.log(`  --reason <text>        ${modeLabel("--reason")} Required with --force-finalize-nonready`);
+  console.log(`  --allow-stacked-base-hazard <reason> ${modeLabel("--allow-stacked-base-hazard")} Override non-default stacked PR base hazard block`);
   console.log(`  --skip-merge           ${modeLabel("--skip-merge")} Skip the PR merge step and run cleanup only`);
   console.log(`  --no-issue-close       ${modeLabel("--no-issue-close")} Skip linked issue close`);
   console.log(`  --dry-run              ${modeLabel("--dry-run")} Print what would happen without writing`);
@@ -124,12 +128,45 @@ function mergeFlag(method) {
   }
 }
 
+function buildMergeFinalizeReason({
+  mergeMethod,
+  mergeRecovered,
+  skipReviewReason,
+  stackedBaseGuard,
+}) {
+  const mergeReason = skipReviewReason
+    ? `skip_review:${skipReviewReason}`
+    : (mergeRecovered ? "already_merged" : mergeMethod);
+
+  if (stackedBaseGuard?.status !== "overridden") {
+    return mergeReason;
+  }
+
+  return `stacked_base_override:${stackedBaseGuard.reason};${mergeReason}`;
+}
+
+function buildStackedBaseOverrideAuditFields(stackedBaseGuard, prNumber, headSha, priorState) {
+  if (stackedBaseGuard?.status !== "overridden") {
+    return {};
+  }
+
+  return {
+    override_class: "stacked_base_hazard",
+    affected_head_sha: headSha,
+    prior_state: priorState,
+    required_reason: stackedBaseGuard.overrideReason,
+    operator_initiated: true,
+    pr_number: prNumber,
+  };
+}
+
 function fetchPreMergeContext(repoPath, prNumber) {
   const raw = execGh(repoPath, ["pr", "view", String(prNumber),
-    "--json", "comments,commits,mergeable,statusCheckRollup"]);
+    "--json", "baseRefName,comments,commits,mergeable,statusCheckRollup"]);
   const parsed = JSON.parse(raw);
   const checks = parsed.statusCheckRollup || [];
   return {
+    baseRefName: parsed.baseRefName || null,
     comments: parsed.comments || [],
     commits: parsed.commits || [],
     mergeable: parsed.mergeable || null,
@@ -180,6 +217,124 @@ function fetchPrMergeState(repoPath, prNumber) {
     state: parsed.state || null,
     mergeCommitSha: parsed.mergeCommit?.oid || null,
   };
+}
+
+function fetchDefaultBranchName(repoPath) {
+  try {
+    const raw = execGh(repoPath, ["repo", "view", "--json", "defaultBranchRef"]);
+    const parsed = JSON.parse(raw);
+    return parsed.defaultBranchRef?.name || null;
+  } catch {
+    return null;
+  }
+}
+
+function fetchPrsForHeadBranch(repoPath, branchName) {
+  try {
+    const raw = execGh(repoPath, [
+      "pr",
+      "list",
+      "--head",
+      String(branchName),
+      "--state",
+      "all",
+      "--json",
+      "number,state,mergedAt,headRefName,url",
+    ]);
+    return JSON.parse(raw || "[]");
+  } catch {
+    return [];
+  }
+}
+
+function normalizePrState(value) {
+  return String(value || "").trim().toUpperCase();
+}
+
+function buildStackedBaseGuard(repoPath, prNumber, baseRefName, overrideReason = null) {
+  if (!baseRefName) {
+    return {
+      status: "skipped",
+      reason: "missing_base_ref",
+      prNumber,
+      baseRefName: null,
+      defaultBranchName: null,
+      basePr: null,
+      overrideReason: null,
+    };
+  }
+
+  const defaultBranchName = fetchDefaultBranchName(repoPath);
+  if (!defaultBranchName || baseRefName === defaultBranchName) {
+    return {
+      status: "clear",
+      reason: defaultBranchName ? "default_branch_base" : "default_branch_unknown",
+      prNumber,
+      baseRefName,
+      defaultBranchName,
+      basePr: null,
+      overrideReason: null,
+    };
+  }
+
+  const candidates = fetchPrsForHeadBranch(repoPath, baseRefName)
+    .filter((entry) => !entry.headRefName || entry.headRefName === baseRefName);
+  const merged = candidates.find((entry) => normalizePrState(entry.state) === "MERGED" || Boolean(entry.mergedAt));
+  if (merged) {
+    return {
+      status: "clear",
+      reason: "base_pr_merged",
+      prNumber,
+      baseRefName,
+      defaultBranchName,
+      basePr: {
+        number: Number(merged.number),
+        state: merged.state || null,
+        mergedAt: merged.mergedAt || null,
+        url: merged.url || null,
+      },
+      overrideReason: null,
+    };
+  }
+
+  const selected = candidates.find((entry) => normalizePrState(entry.state) === "OPEN")
+    || candidates.find((entry) => normalizePrState(entry.state) === "CLOSED")
+    || candidates[0]
+    || null;
+  const selectedState = normalizePrState(selected?.state);
+  const reason = !selected
+    ? "base_pr_missing"
+    : selectedState === "CLOSED"
+      ? "base_pr_closed"
+      : "base_pr_unmerged";
+  return {
+    status: overrideReason ? "overridden" : "blocked",
+    reason,
+    prNumber,
+    baseRefName,
+    defaultBranchName,
+    basePr: selected
+      ? {
+          number: Number(selected.number),
+          state: selected.state || null,
+          mergedAt: selected.mergedAt || null,
+          url: selected.url || null,
+        }
+      : null,
+    overrideReason: overrideReason || null,
+  };
+}
+
+function assertStackedBaseGuard(guard, prNumber) {
+  if (!guard || guard.status !== "blocked") return;
+  const basePrText = guard.basePr?.number
+    ? `; base PR #${guard.basePr.number} is ${guard.basePr.state || "unmerged"}`
+    : "; no base PR was found";
+  throw new Error(
+    `Stacked PR base hazard: PR #${prNumber} targets non-default base '${guard.baseRefName}' ` +
+    `(default: '${guard.defaultBranchName || "unknown"}')${basePrText}. ` +
+    "Merge the base PR first or rerun with --allow-stacked-base-hazard <reason>."
+  );
 }
 
 function assertPreMergeSafety(preMerge, prNumber) {
@@ -422,6 +577,10 @@ function main() {
   const mergeMethod = cliArgs.getArg("--merge-method") || "squash";
   const skipReviewReason = cliArgs.getArg("--skip-review");
   const forceFinalizeNonready = cliArgs.hasFlag("--force-finalize-nonready");
+  const allowStackedBaseHazard = cliArgs.hasFlag("--allow-stacked-base-hazard");
+  const stackedBaseOverrideReason = allowStackedBaseHazard
+    ? cliArgs.getArg("--allow-stacked-base-hazard")
+    : null;
   let forceFinalizeReason;
   try {
     forceFinalizeReason = cliArgs.getArg("--reason");
@@ -438,6 +597,9 @@ function main() {
   const jsonOut = cliArgs.hasFlag("--json");
   if (forceFinalizeNonready && !String(forceFinalizeReason || "").trim()) {
     throw new Error("--force-finalize-nonready requires --reason <non-empty-text>");
+  }
+  if (allowStackedBaseHazard && !String(stackedBaseOverrideReason || "").trim()) {
+    throw new Error("--allow-stacked-base-hazard requires a non-empty reason");
   }
 
   let branch = cliArgs.getArg("--branch");
@@ -526,6 +688,7 @@ function main() {
   let issueClosed = false;
   let issueCloseWarning = null;
   let reviewGate = null;
+  let stackedBaseGuard = { status: "not_checked", reason: null };
   let currentHeadSha = safeData.git?.head_sha || null;
   const skipReviewRubricAudit = summarizeRubricAuditForSkip(safeData, {
     runDir: getRunDir(validatedPaths.repoRoot, safeData.run_id),
@@ -549,6 +712,24 @@ function main() {
         }
         throw new Error(`Fresh review gate failed: ${skipReviewFailure.status}`);
       }
+      const preMerge = fetchPreMergeContext(repoPath, prNumber);
+      stackedBaseGuard = buildStackedBaseGuard(
+        repoPath,
+        prNumber,
+        preMerge.baseRefName,
+        stackedBaseOverrideReason
+      );
+      if (stackedBaseGuard.status === "blocked" && !dryRun) {
+        appendRunEvent(repoPath, safeData.run_id, {
+          event: EVENTS.MERGE_BLOCKED,
+          state_from: safeData.state,
+          state_to: safeData.state,
+          head_sha: currentHeadSha,
+          round: safeData.review?.rounds || null,
+          reason: `stacked_base_hazard:${stackedBaseGuard.reason}`,
+        });
+      }
+      assertStackedBaseGuard(stackedBaseGuard, prNumber);
       reviewGate = {
         status: "skipped",
         pr: prNumber,
@@ -592,9 +773,43 @@ function main() {
         }
         throw new Error(`Fresh review gate failed: ${reviewGate.status}`);
       }
+      stackedBaseGuard = buildStackedBaseGuard(
+        repoPath,
+        prNumber,
+        preMerge.baseRefName,
+        stackedBaseOverrideReason
+      );
+      if (stackedBaseGuard.status === "blocked" && !dryRun) {
+        appendRunEvent(repoPath, safeData.run_id, {
+          event: EVENTS.MERGE_BLOCKED,
+          state_from: safeData.state,
+          state_to: safeData.state,
+          head_sha: reviewGate.latestCommit || currentHeadSha,
+          round: safeData.review?.rounds || null,
+          reason: `stacked_base_hazard:${stackedBaseGuard.reason}`,
+        });
+      }
+      assertStackedBaseGuard(stackedBaseGuard, prNumber);
       assertPreMergeSafety(preMerge, prNumber);
     } else if (forceFinalizeNonready) {
       const preMerge = fetchPreMergeContext(repoPath, prNumber);
+      stackedBaseGuard = buildStackedBaseGuard(
+        repoPath,
+        prNumber,
+        preMerge.baseRefName,
+        stackedBaseOverrideReason
+      );
+      if (stackedBaseGuard.status === "blocked" && !dryRun) {
+        appendRunEvent(repoPath, safeData.run_id, {
+          event: EVENTS.MERGE_BLOCKED,
+          state_from: safeData.state,
+          state_to: safeData.state,
+          head_sha: currentHeadSha,
+          round: safeData.review?.rounds || null,
+          reason: `stacked_base_hazard:${stackedBaseGuard.reason}`,
+        });
+      }
+      assertStackedBaseGuard(stackedBaseGuard, prNumber);
       assertPreMergeSafety(preMerge, prNumber);
     }
   }
@@ -713,9 +928,18 @@ function main() {
         state_to: STATES.MERGED,
         head_sha: updated.git?.head_sha || null,
         round: updated.review?.rounds || null,
-        reason: skipReviewReason
-          ? `skip_review:${skipReviewReason}`
-          : (mergeRecovered ? "already_merged" : mergeMethod),
+        reason: buildMergeFinalizeReason({
+          mergeMethod,
+          mergeRecovered,
+          skipReviewReason,
+          stackedBaseGuard,
+        }),
+        ...buildStackedBaseOverrideAuditFields(
+          stackedBaseGuard,
+          prNumber,
+          updated.git?.head_sha || currentHeadSha,
+          safeData.state
+        ),
       });
     }
   }
@@ -788,6 +1012,7 @@ function main() {
     remoteBranchDeleted,
     remoteBranchDeleteWarning,
     reviewGate,
+    stackedBaseGuard,
     issueClosed,
     issueCloseWarning,
     cleanup: cleanupResult.summary,

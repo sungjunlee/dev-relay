@@ -88,7 +88,8 @@ function summarizeExecError(error) {
 }
 
 function execGhJson(repoRoot, args) {
-  const raw = execFileSync("gh", args, {
+  const ghBin = process.env.RELAY_GH_BIN || "gh";
+  const raw = execFileSync(ghBin, args, {
     cwd: repoRoot,
     encoding: "utf-8",
     stdio: ["ignore", "pipe", "pipe"],
@@ -431,6 +432,101 @@ function snapshotReview(record) {
   };
 }
 
+function fetchLivePrHead(repoRoot, prNumber) {
+  if (!prNumber) {
+    return {
+      status: "skipped",
+      reason: "missing_pr_number",
+      pr_number: null,
+      head_ref_name: null,
+      head_sha: null,
+      command: null,
+    };
+  }
+
+  const args = [
+    "pr",
+    "view",
+    String(prNumber),
+    "--json",
+    "number,headRefName,headRefOid",
+  ];
+  try {
+    const parsed = execGhJson(repoRoot, args);
+    return {
+      status: "found",
+      reason: null,
+      pr_number: Number(parsed?.number || prNumber),
+      head_ref_name: parsed?.headRefName || null,
+      head_sha: parsed?.headRefOid || null,
+      command: ["gh", ...args],
+    };
+  } catch (error) {
+    return {
+      status: "unknown",
+      reason: summarizeExecError(error),
+      pr_number: prNumber,
+      head_ref_name: null,
+      head_sha: null,
+      command: ["gh", ...args],
+    };
+  }
+}
+
+function buildReadyStatus(snapshot, repoRoot) {
+  if (snapshot.state !== "ready_to_merge") {
+    return {
+      status: "not_ready",
+      reason: `state_${snapshot.state || "unknown"}`,
+      pr_number: snapshot.pr_number || null,
+      old_sha: snapshot.last_reviewed_sha || snapshot.head_sha || null,
+      new_sha: null,
+      reviewed_sha: snapshot.last_reviewed_sha || null,
+      manifest_head_sha: snapshot.head_sha || null,
+      next_action: "continue_review_flow",
+    };
+  }
+
+  const oldSha = snapshot.last_reviewed_sha || snapshot.head_sha || null;
+  const live = fetchLivePrHead(repoRoot, snapshot.pr_number);
+  if (live.status !== "found" || !live.head_sha) {
+    return {
+      status: "unknown",
+      reason: live.reason || live.status,
+      pr_number: live.pr_number || snapshot.pr_number || null,
+      old_sha: oldSha,
+      new_sha: live.head_sha || null,
+      reviewed_sha: snapshot.last_reviewed_sha || null,
+      manifest_head_sha: snapshot.head_sha || null,
+      head_ref_name: live.head_ref_name || snapshot.branch || null,
+      next_action: "inspect_pr_head_before_merge",
+    };
+  }
+
+  const differsFromReviewed = Boolean(snapshot.last_reviewed_sha && live.head_sha !== snapshot.last_reviewed_sha);
+  const differsFromManifestHead = Boolean(snapshot.head_sha && live.head_sha !== snapshot.head_sha);
+  const stale = differsFromReviewed || differsFromManifestHead;
+  const staleOldSha = differsFromReviewed
+    ? snapshot.last_reviewed_sha
+    : differsFromManifestHead
+      ? snapshot.head_sha
+      : oldSha;
+
+  return {
+    status: stale ? "stale_ready" : "merge_ready",
+    reason: stale ? "live_pr_head_drift" : null,
+    pr_number: live.pr_number || snapshot.pr_number || null,
+    old_sha: staleOldSha || null,
+    new_sha: live.head_sha,
+    reviewed_sha: snapshot.last_reviewed_sha || null,
+    manifest_head_sha: snapshot.head_sha || null,
+    head_ref_name: live.head_ref_name || snapshot.branch || null,
+    next_action: stale
+      ? "recover_ready_to_review_pending_then_rerun_review"
+      : "proceed_to_merge",
+  };
+}
+
 function compareReviewSnapshot(current, cliArgs) {
   const previousRounds = parsePositiveInteger(
     cliArgs.getArg("--previous-rounds"),
@@ -475,6 +571,7 @@ function runReviewStage(cliArgs) {
     stage: "review",
     repo: repoRoot,
     snapshot,
+    ready_status: buildReadyStatus(snapshot, repoRoot),
     comparison: compareReviewSnapshot(snapshot, cliArgs),
   };
 }

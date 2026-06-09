@@ -98,6 +98,16 @@ REVIEW_BEFORE=$(node "${RELAY_SKILL_ROOT:-skills}/relay/scripts/run-preflight.js
   --stage review --repo . --run-id "$RUN_ID" --pr "$PR_NUM" --json)
 ```
 
+If `REVIEW_BEFORE.ready_status.status == "stale_ready"`, do not invoke relay-review yet. Recover the audited stale-ready transition first, then review the recovered run:
+```bash
+node "${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/recover-state.js" \
+  --repo . --run-id "$RUN_ID" --to review_pending \
+  --reason "PR HEAD advanced after ready_to_merge; rerun review for the live head" --json
+node "${RELAY_SKILL_ROOT:-skills}/relay-review/scripts/review-runner.js" \
+  --repo . --run-id "$RUN_ID" --pr "$PR_NUM" --reviewer codex --json
+```
+If `REVIEW_BEFORE.ready_status.status == "merge_ready"`, skip the review invocation and continue to Step 5.
+
 Invoke **relay-review** in an isolated context. It runs Spec Compliance then Code Quality, re-dispatches on issues, updates manifest state, and keeps the relay-plan rubric fixed as the review anchor. Safety cap: 20 rounds. Do NOT review inline.
 
 After review returns, compare against the snapshot:

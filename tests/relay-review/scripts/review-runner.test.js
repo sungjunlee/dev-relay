@@ -28,6 +28,7 @@ const {
 
 const SCRIPT = path.join(__dirname, "..", "..", "..", "skills", "relay-review", "scripts", "review-runner.js");
 const DISPATCH_SCRIPT = path.join(__dirname, "..", "..", "..", "skills", "relay-dispatch", "scripts", "dispatch.js");
+const RECOVER_STATE_SCRIPT = path.join(__dirname, "..", "..", "..", "skills", "relay-dispatch", "scripts", "recover-state.js");
 const REVIEW_RUNNER_LINE_CAP = 390;
 const REVIEW_RUNNER_FUNCTION_CAP = 12;
 
@@ -330,6 +331,25 @@ if (args[0] === "pr" && args[1] === "comment") {
   const bodyIndex = args.indexOf("--body");
   const body = bodyIndex !== -1 ? args[bodyIndex + 1] : "";
   fs.writeFileSync(${JSON.stringify(capturePath)}, body, "utf-8");
+  process.exit(0);
+}
+process.stderr.write("Unsupported gh invocation: " + args.join(" "));
+process.exit(1);
+`, "utf-8");
+  fs.chmodSync(filePath, 0o755);
+  return filePath;
+}
+
+function writePrHeadGhScript(repoRoot, { headRefOid, number = 123, headRefName = "issue-42" }) {
+  const filePath = path.join(repoRoot, "gh-pr-head");
+  fs.writeFileSync(filePath, `#!/usr/bin/env node
+const args = process.argv.slice(2);
+if (args[0] === "pr" && args[1] === "view") {
+  process.stdout.write(JSON.stringify({
+    number: ${JSON.stringify(number)},
+    headRefName: ${JSON.stringify(headRefName)},
+    headRefOid: ${JSON.stringify(headRefOid)}
+  }));
   process.exit(0);
 }
 process.stderr.write("Unsupported gh invocation: " + args.join(" "));
@@ -852,6 +872,75 @@ test("pass verdict moves review_pending to ready_to_merge", () => {
   assert.equal(manifest.review.last_quality_review_status, "pass");
   assert.equal(manifest.review.last_quality_execution_status, "pass");
   assert.equal(manifest.review.last_quality_execution_reason, null);
+});
+
+test("review-runner proceeds after audited ready_to_merge HEAD-drift recovery", () => {
+  const { repoRoot, worktreePath, manifestPath, runId, doneCriteriaPath, diffPath } = setupRepo();
+  const oldHead = execFileSync("git", ["-C", worktreePath, "rev-parse", "HEAD"], {
+    encoding: "utf-8",
+    stdio: "pipe",
+  }).trim();
+
+  updateManifestRecord(manifestPath, (manifest) => {
+    const reviewed = {
+      ...manifest,
+      review: {
+        ...(manifest.review || {}),
+        rounds: 1,
+        latest_verdict: "lgtm",
+        last_reviewed_sha: oldHead,
+      },
+      git: {
+        ...(manifest.git || {}),
+        head_sha: oldHead,
+      },
+    };
+    return updateManifestState(reviewed, STATES.READY_TO_MERGE, "await_explicit_merge");
+  });
+
+  fs.writeFileSync(path.join(worktreePath, "after-ready.txt"), "advanced\n", "utf-8");
+  execFileSync("git", ["-C", worktreePath, "add", "after-ready.txt"], { encoding: "utf-8", stdio: "pipe" });
+  execFileSync("git", ["-C", worktreePath, "commit", "-m", "Advance after ready review"], {
+    encoding: "utf-8",
+    stdio: "pipe",
+  });
+  const newHead = execFileSync("git", ["-C", worktreePath, "rev-parse", "HEAD"], {
+    encoding: "utf-8",
+    stdio: "pipe",
+  }).trim();
+  writeExecutionEvidence(ensureRunLayout(repoRoot, runId).runDir, newHead);
+  const ghPath = writePrHeadGhScript(repoRoot, { headRefOid: newHead });
+
+  const recovered = JSON.parse(execFileSync("node", [
+    RECOVER_STATE_SCRIPT,
+    "--repo", repoRoot,
+    "--run-id", runId,
+    "--to", STATES.REVIEW_PENDING,
+    "--reason", "PR head advanced after ready review",
+    "--json",
+  ], {
+    encoding: "utf-8",
+    env: { ...process.env, RELAY_GH_BIN: ghPath },
+  }));
+  assert.equal(recovered.previousState, STATES.READY_TO_MERGE);
+  assert.equal(recovered.state, STATES.REVIEW_PENDING);
+
+  const reviewFile = writePassVerdict(repoRoot, "pass-after-ready-drift.json");
+  const result = runPassReview({ repoRoot, runId, doneCriteriaPath, diffPath, reviewFile });
+  const manifest = readManifest(manifestPath).data;
+  const events = readRunEvents(repoRoot, runId);
+  const recoveryEvent = events.find((event) => event.event === "state_recovery");
+
+  assert.equal(result.state, STATES.READY_TO_MERGE);
+  assert.equal(result.round, 2);
+  assert.equal(result.reviewHeadSha, newHead);
+  assert.equal(manifest.state, STATES.READY_TO_MERGE);
+  assert.equal(manifest.review.last_reviewed_sha, newHead);
+  assert.equal(manifest.git.head_sha, newHead);
+  assert.equal(recoveryEvent?.state_from, STATES.READY_TO_MERGE);
+  assert.equal(recoveryEvent?.state_to, STATES.REVIEW_PENDING);
+  assert.equal(recoveryEvent?.previous_head_sha, oldHead);
+  assert.equal(recoveryEvent?.new_head_sha, newHead);
 });
 
 test("mixed TDD rubric pass keeps non-TDD factor scoring unchanged", () => {
