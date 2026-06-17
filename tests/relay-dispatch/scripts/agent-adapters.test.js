@@ -151,7 +151,7 @@ test("agent adapter registry fails closed for unknown adapters and phases", () =
     /unknown agent adapter 'nonexistent'\. Supported: claude, codex, opencode, pi, antigravity, cursor/
   );
   assert.throws(
-    () => supportsAgentAdapterPhase("codex", "sidecar"),
-    /unknown agent adapter phase 'sidecar'\. Supported: dispatch, primary_review, advisory_review/
+    () => supportsAgentAdapterPhase("codex", "unknown_phase"),
+    /unknown agent adapter phase 'unknown_phase'\. Supported: dispatch, primary_review, advisory_review/
   );
 });

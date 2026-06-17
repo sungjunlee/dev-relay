@@ -12,7 +12,6 @@ const SKILL_PATHS = [
   "skills/relay-review/SKILL.md",
   "skills/relay-merge/SKILL.md",
   "skills/relay-fleet/SKILL.md",
-  "skills/relay-sidecar/SKILL.md",
 ];
 
 function readTargetSkillFiles() {

@@ -1117,7 +1117,7 @@ test("dispatch resume without redispatch artifact still errors with auto-discove
   assert.match(result.stderr, /Auto-discovery looked for review-round-<N>-redispatch\.md/);
 });
 
-test("dispatch stores model_hints for all four phases verbatim", () => {
+test("dispatch stores model_hints for configured phases verbatim", () => {
   const { repoRoot, relayHome } = setupRepo();
   process.env.RELAY_HOME = relayHome;
   allowCodexDispatchModels(relayHome);
@@ -2171,7 +2171,7 @@ test("dispatch dry-run includes managed default policy decision details", () => 
   assert.equal(path.basename(result.policy_decision.policy.sources.project), "policy.json");
 });
 
-test("dispatch routing dry-run JSON explains CLI tags and selected advisory sidecar defaults", () => {
+test("dispatch routing dry-run JSON explains CLI tags and selected advisory defaults", () => {
   const { repoRoot, relayHome, rubricFile, env } = setupDryRunFixtureRepo();
   writeRelayPolicy(relayHome, {
     profile: "routing-dry-run",
@@ -2180,7 +2180,6 @@ test("dispatch routing dry-run JSON explains CLI tags and selected advisory side
         name: "docs",
         match: { tags: ["docs"] },
         advisory_review: { reviewer: "claude", profile: "blindspot" },
-        sidecar: { kind: "docs-sync", executor: "opencode" },
       },
     ],
   });
@@ -2202,10 +2201,6 @@ test("dispatch routing dry-run JSON explains CLI tags and selected advisory side
     reviewer: "claude",
     profile: "blindspot",
   });
-  assert.deepEqual(result.routing_decision.selected.sidecar, {
-    kind: "docs-sync",
-    executor: "opencode",
-  });
 });
 
 test("dispatch routing dry-run text explains no-match decisions", () => {
@@ -2216,7 +2211,7 @@ test("dispatch routing dry-run text explains no-match decisions", () => {
       {
         name: "docs",
         match: { tags: ["docs"] },
-        sidecar: { kind: "docs-sync", executor: "opencode" },
+        advisory_review: { reviewer: "opencode" },
       },
     ],
   });
@@ -2231,7 +2226,7 @@ test("dispatch routing dry-run text explains no-match decisions", () => {
 
   assert.match(stdout, /Routing:\s+no match/);
   assert.match(stdout, /Tags:\s+cli=security .*effective=security/);
-  assert.match(stdout, /Selected:\s+advisory_review=\(none\) sidecar=\(none\)/);
+  assert.match(stdout, /Selected:\s+advisory_review=\(none\)/);
 });
 
 test("dispatch resume --dry-run with new --model-hints reports the new hint in effective_dispatch_model and does NOT write the manifest or emit events", () => {

@@ -433,7 +433,6 @@ test("review-runner uses manifest routing advisory defaults without changing the
       version: 1,
       selected: {
         advisory_review: { reviewer: "opencode", profile: "blindspot" },
-        sidecar: { kind: "docs-sync", executor: "opencode" },
       },
     },
   }, record.body);

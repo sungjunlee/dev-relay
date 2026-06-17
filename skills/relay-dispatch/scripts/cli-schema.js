@@ -103,7 +103,6 @@ const FLAGS = [
   { flag: "--run-id", kind: VALUE, mode: MODE_PARSED, valueName: "<id>", rationale: "Structured relay run identifier; flag-like following tokens should mean the value is missing." },
   { flag: "--sandbox", kind: VALUE, mode: MODE_PARSED, valueName: "<mode>", rationale: "Closed sandbox selector; flag-like following tokens should mean the value is missing." },
   { flag: "--skip", kind: VALUE, mode: MODE_VERBATIM, valueName: "<reason>", rationale: "Audit skip reason must be recorded exactly and must not be blank." },
-  { flag: "--sidecar", kind: VALUE, mode: MODE_PARSED, valueName: "<actor[:provider/model]>", rationale: "Run route preview selector; flag-like following tokens should mean the value is missing." },
   { flag: "--skip-merge", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Presence flag; no value is consumed." },
   { flag: "--skip-review", kind: VALUE, mode: MODE_VERBATIM, valueName: "<reason>", rationale: "Audit skip reason must be recorded exactly and must not be blank." },
   { flag: "--stale-hours", kind: VALUE, mode: MODE_PARSED, valueName: "<hours>", rationale: "Numeric threshold; flag-like following tokens should mean the value is missing." },
@@ -189,7 +188,7 @@ const COMMAND_FLAGS = {
   ],
   "relay-config": [
     "--profile", "--effective", "--phase", "--executor", "--reviewer", "--model",
-    "--repo", "--dispatch", "--review", "--advisory-review", "--sidecar", "--route-intent-file",
+    "--repo", "--dispatch", "--review", "--advisory-review", "--route-intent-file",
     "--json", "--help",
   ],
   "rebrand-evidence": [

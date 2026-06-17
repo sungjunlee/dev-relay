@@ -126,7 +126,6 @@ test("operator-facing OpenCode docs reference install-carried policy docs", () =
     readRepoFile("skills/relay-dispatch/scripts/executors/README.md"),
     readRepoFile("skills/relay-dispatch/scripts/executors/opencode.js"),
     readRepoFile("skills/relay-dispatch/scripts/dispatch.js"),
-    readRepoFile("skills/relay-sidecar/SKILL.md"),
   ].join("\n");
 
   assert.doesNotMatch(docs, /docs\/reviewer-policy-opencode\.md/);

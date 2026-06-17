@@ -306,7 +306,6 @@ function buildPolicy(options = {}) {
       dispatch: { executor: "codex" },
       review: { reviewer: "codex" },
       advisory_review: null,
-      sidecar: null,
     },
     managed_cli: ["codex", "claude"],
     allowed_model_routes: buildAllowedModelRoutes(options),

@@ -1,5 +1,7 @@
 # Pre-Flight DC Ambiguity Audit
 
+Historical note: examples in this file describe prior relay runs and removed runtime surfaces; they are retained as wording-failure case studies, not current operator guidance.
+
 Run this checklist after recovering Done Criteria (step 4 of `SKILL.md`) and before freezing the anchor for dispatch. It is narrower than `rubric-validation.md` § "Validate Done Criteria": that checklist asks whether each item is observable, bounded, reviewable, risk-aware, and verifiable. This one asks whether the wording leaves room for codex to ship a correct-looking implementation that still fails review on spec-precision.
 
 The two checks compose: structural validation gates on the SHAPE of the DC; this audit gates on the WORDING.

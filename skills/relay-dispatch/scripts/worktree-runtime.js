@@ -99,12 +99,9 @@ function formatDispatchDryRun({
     const advisory = routingDecision.selected?.advisory_review
       ? Object.values(routingDecision.selected.advisory_review).join("/")
       : "(none)";
-    const sidecar = routingDecision.selected?.sidecar
-      ? Object.values(routingDecision.selected.sidecar).join("/")
-      : "(none)";
     lines.push(`  Routing: ${matched}`);
     lines.push(`  Tags:    ${[...sourceParts, `effective=${effective}`].join(" ")}`);
-    lines.push(`  Selected: advisory_review=${advisory} sidecar=${sidecar}`);
+    lines.push(`  Selected: advisory_review=${advisory}`);
     if (routingDecision.warnings?.length) {
       lines.push(`  Routing warnings: ${routingDecision.warnings.map((warning) => warning.code).join(", ")}`);
     }

@@ -24,14 +24,13 @@ const {
 const args = process.argv.slice(2);
 const COMMAND_NAME = "relay-config";
 const CLI_ARG_OPTIONS = { commandName: COMMAND_NAME };
-const VALID_PHASES = ["dispatch", "review", "advisory_review", "sidecar"];
-const EXECUTOR_PHASES = new Set(["dispatch", "sidecar"]);
+const VALID_PHASES = ["dispatch", "review", "advisory_review"];
+const EXECUTOR_PHASES = new Set(["dispatch"]);
 const REVIEWER_PHASES = new Set(["review", "advisory_review"]);
 const DEFAULT_PATHS = new Set([
   "dispatch.executor",
   "review.reviewer",
   "advisory_review.reviewer",
-  "sidecar.executor",
 ]);
 const DOCTOR_TOOLS = ["codex", "claude", "opencode", "pi"];
 const SUBCOMMAND_FLAGS = {
@@ -39,7 +38,7 @@ const SUBCOMMAND_FLAGS = {
   show: new Set(["--effective", "--json", "--help"]),
   doctor: new Set(["--json", "--help"]),
   check: new Set(["--phase", "--executor", "--reviewer", "--model", "--json", "--help"]),
-  "plan-run": new Set(["--repo", "--dispatch", "--review", "--advisory-review", "--sidecar", "--route-intent-file", "--json", "--help"]),
+  "plan-run": new Set(["--repo", "--dispatch", "--review", "--advisory-review", "--route-intent-file", "--json", "--help"]),
   "set-default": new Set(["--json", "--help"]),
   "allow-route": new Set(["--phase", "--executor", "--reviewer", "--json", "--help"]),
   "deny-route": new Set(["--phase", "--executor", "--reviewer", "--json", "--help"]),
@@ -72,13 +71,13 @@ function printHelp() {
   console.log(`  show --effective ${modeLabel("--effective")} [--json ${modeLabel("--json")}]`);
   console.log(`  doctor [--json ${modeLabel("--json")}]`);
   console.log(`  check --phase <phase> ${modeLabel("--phase")} --executor <name> ${modeLabel("--executor")} [--reviewer <name> ${modeLabel("--reviewer")}] [--model <provider/model> ${modeLabel("--model")}] [--json ${modeLabel("--json")}]`);
-  console.log(`  plan-run [--repo <path> ${modeLabel("--repo")}] [--dispatch <actor[:provider/model]> ${modeLabel("--dispatch")}] [--review <actor[:provider/model]> ${modeLabel("--review")}] [--advisory-review <actor[:provider/model]> ${modeLabel("--advisory-review")}] [--sidecar <actor[:provider/model]> ${modeLabel("--sidecar")}] [--route-intent-file <path> ${modeLabel("--route-intent-file")}] [--json ${modeLabel("--json")}]`);
+  console.log(`  plan-run [--repo <path> ${modeLabel("--repo")}] [--dispatch <actor[:provider/model]> ${modeLabel("--dispatch")}] [--review <actor[:provider/model]> ${modeLabel("--review")}] [--advisory-review <actor[:provider/model]> ${modeLabel("--advisory-review")}] [--route-intent-file <path> ${modeLabel("--route-intent-file")}] [--json ${modeLabel("--json")}]`);
   console.log("  set-default <path> <value> [--json]");
   console.log(`  allow-route <pattern> --phase <csv> ${modeLabel("--phase")} [--executor <name> ${modeLabel("--executor")}] [--reviewer <name> ${modeLabel("--reviewer")}] [--json ${modeLabel("--json")}]`);
   console.log(`  deny-route <pattern> [--phase <csv> ${modeLabel("--phase")}] [--executor <name> ${modeLabel("--executor")}] [--reviewer <name> ${modeLabel("--reviewer")}] [--json ${modeLabel("--json")}]`);
   console.log("");
   console.log("Supported default paths:");
-  console.log("  dispatch.executor, review.reviewer, advisory_review.reviewer, sidecar.executor");
+  console.log("  dispatch.executor, review.reviewer, advisory_review.reviewer");
   console.log("");
   console.log(`Options: --help ${modeLabel("--help")}`);
 }
@@ -283,7 +282,6 @@ function defaultActors(policy) {
     policy.defaults.dispatch?.executor,
     policy.defaults.review?.reviewer,
     policy.defaults.advisory_review?.reviewer,
-    policy.defaults.sidecar?.executor,
   ].filter(Boolean);
 }
 
@@ -471,11 +469,9 @@ function commandPlanRun(positionals, jsonOut) {
   const dispatchSpec = parseRouteSpec(readArg(args, "--dispatch", undefined, CLI_ARG_OPTIONS), "dispatch");
   const reviewSpec = parseRouteSpec(readArg(args, "--review", undefined, CLI_ARG_OPTIONS), "review");
   const advisorySpec = parseRouteSpec(readArg(args, "--advisory-review", undefined, CLI_ARG_OPTIONS), "advisory_review");
-  const sidecarSpec = parseRouteSpec(readArg(args, "--sidecar", undefined, CLI_ARG_OPTIONS), "sidecar");
   if (dispatchSpec) runIntent.dispatch = dispatchSpec;
   if (reviewSpec) runIntent.review = reviewSpec;
   if (advisorySpec) runIntent.advisory_review = advisorySpec;
-  if (sidecarSpec) runIntent.sidecar = sidecarSpec;
 
   const policyResult = loadRelayPolicy({ repoRoot });
   const projectConfig = loadProjectConfig({ repoRoot });

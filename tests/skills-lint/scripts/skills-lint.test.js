@@ -21,7 +21,7 @@ const README_PATH = path.join(REPO_ROOT, "README.md");
 const SURFACE_TIERS = {
   "public operator surface": ["relay-config", "relay", "relay-merge"],
   "internal phase surface": ["relay-ready", "relay-plan", "relay-dispatch", "relay-review"],
-  "optional/advanced surface": ["relay-sidecar", "relay-fleet"],
+  "optional/advanced surface": ["relay-fleet"],
 };
 
 function splitLines(text) {

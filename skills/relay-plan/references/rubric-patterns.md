@@ -1,5 +1,7 @@
 ## Rubric Pattern — Explicit Forbidden Zones
 
+Historical note: issue examples in this file include prior relay runs and removed runtime surfaces; use them as rubric-scoping case studies, not as current runtime inventory.
+
 Use this pattern for any dispatch whose edit scope is narrower than "anywhere in the repo." Codex, given silence on what NOT to touch, will read silence as permission and apply broad changes — global string replacement, sed-style search-replace across cached snapshots, modifications of frozen sibling files. Every rubric must enumerate the paths that MUST NOT change.
 
 ### Failure mode

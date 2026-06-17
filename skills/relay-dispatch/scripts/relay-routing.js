@@ -284,16 +284,6 @@ function normalizeRouteDefault(value, phase, sourceLabel) {
     }
     return normalized;
   }
-  if (phase === "sidecar") {
-    const normalized = {};
-    if (routeDefault.kind !== undefined) normalized.kind = normalizeOptionalField(routeDefault, "kind", sourceLabel, { label: "defaults.sidecar.kind" });
-    if (routeDefault.executor !== undefined) normalized.executor = normalizeOptionalField(routeDefault, "executor", sourceLabel, { label: "defaults.sidecar.executor" });
-    if (routeDefault.model !== undefined) normalized.model = normalizeOptionalField(routeDefault, "model", sourceLabel, { label: "defaults.sidecar.model" });
-    if (!normalized.kind && !normalized.executor) {
-      throw new Error(`invalid project routes at ${sourceLabel}: defaults.sidecar.kind or defaults.sidecar.executor must be set`);
-    }
-    return normalized;
-  }
   throw new Error(`unsupported route phase: ${phase}`);
 }
 
@@ -315,7 +305,6 @@ function validateProjectRoutes(routes, sourceLabel = "project routes") {
       ...(defaults.dispatch !== undefined ? { dispatch: normalizeRouteDefault(defaults.dispatch, "dispatch", sourceLabel) } : {}),
       ...(defaults.review !== undefined ? { review: normalizeRouteDefault(defaults.review, "review", sourceLabel) } : {}),
       ...(defaults.advisory_review !== undefined ? { advisory_review: normalizeRouteDefault(defaults.advisory_review, "advisory_review", sourceLabel) } : {}),
-      ...(defaults.sidecar !== undefined ? { sidecar: normalizeRouteDefault(defaults.sidecar, "sidecar", sourceLabel) } : {}),
     },
   };
 }
@@ -357,7 +346,7 @@ function loadProjectRoutes({ repoRoot, relayHome } = {}) {
   }
 }
 
-const ROUTE_PHASES = ["dispatch", "review", "advisory_review", "sidecar"];
+const ROUTE_PHASES = ["dispatch", "review", "advisory_review"];
 
 function actorFieldForPhase(phase) {
   return phase === "review" || phase === "advisory_review" ? "reviewer" : "executor";
@@ -399,7 +388,7 @@ function resolveModelForActor({ phase, actor, runIntent, projectRoutes, policy, 
 function resolvePhaseRoute({ phase, runIntent, projectRoutes, policy, relayHome, executorModelResolver }) {
   const actorField = actorFieldForPhase(phase);
   const selected = pickField({ phase, field: actorField, runIntent, projectRoutes, policy });
-  if (!selected.value && (phase === "advisory_review" || phase === "sidecar")) {
+  if (!selected.value && phase === "advisory_review") {
     return null;
   }
 
@@ -423,13 +412,6 @@ function resolvePhaseRoute({ phase, runIntent, projectRoutes, policy, relayHome,
     },
   };
 
-  if (phase === "sidecar") {
-    const kind = pickField({ phase, field: "kind", runIntent, projectRoutes, policy });
-    if (kind.value) {
-      resolved.kind = kind.value;
-      resolved.sources.kind = kind.source;
-    }
-  }
   if (phase === "advisory_review") {
     const profile = pickField({ phase, field: "profile", runIntent, projectRoutes, policy });
     if (profile.value) {
@@ -511,7 +493,6 @@ function validateRoutingRules(routingRules = []) {
       index,
       match,
       advisory_review: normalizeSelection(rule.advisory_review ?? defaults.advisory_review, "advisory_review", index, warnings),
-      sidecar: normalizeSelection(rule.sidecar ?? defaults.sidecar, "sidecar", index, warnings),
       ignored_primary_review: normalizeSelection(rule.review ?? defaults.review, "review", index, warnings),
     });
   });
@@ -564,7 +545,6 @@ function resolveRoutingDecision({
     warnings,
     selected: {
       advisory_review: null,
-      sidecar: null,
     },
     ignored_primary_review: null,
   };
@@ -588,7 +568,6 @@ function resolveRoutingDecision({
     },
     selected: {
       advisory_review: cloneJson(matchedRule.advisory_review) || null,
-      sidecar: cloneJson(matchedRule.sidecar) || null,
     },
     ignored_primary_review: cloneJson(matchedRule.ignored_primary_review) || null,
     no_match_reason: null,

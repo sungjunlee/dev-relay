@@ -88,7 +88,7 @@ test("check shorthand maps reviewer phases to reviewer and executor scopes", () 
     "allow-route",
     "example/opencode-model-*",
     "--phase",
-    "dispatch,advisory_review,sidecar",
+    "dispatch,advisory_review",
     "--executor",
     "opencode",
     "--json",
