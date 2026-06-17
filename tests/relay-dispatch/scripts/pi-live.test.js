@@ -17,7 +17,7 @@ function writeJson(filePath, value) {
 test("pi live route canary is opt-in and distinguishes policy/probe state", {
   skip: process.env.PI_INTEGRATION === "1" ? false : "set PI_INTEGRATION=1 and PI_MODEL to run",
 }, () => {
-  const model = process.env.PI_MODEL || "deepseek/deepseek-v4-flash";
+  const model = process.env.PI_MODEL || "example/pi-model-fast";
   const relayHome = fs.mkdtempSync(path.join(os.tmpdir(), "relay-pi-live-"));
   writeJson(path.join(relayHome, "policy.json"), {
     version: 1,

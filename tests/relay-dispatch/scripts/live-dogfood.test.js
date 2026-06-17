@@ -24,6 +24,13 @@ function tempDir(prefix) {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
 }
 
+function dogfoodModelOptions() {
+  return {
+    piModel: "example/pi-model-fast",
+    opencodeModel: "example/opencode-model-fast",
+  };
+}
+
 function jsonResult(payload, status = 0) {
   return { status, stdout: `${JSON.stringify(payload)}\n`, stderr: "" };
 }
@@ -36,6 +43,8 @@ test("live dogfood uses temp RELAY_HOME by default and writes scoped policy", ()
     repo,
     dryRun: true,
     probeOnly: true,
+    piModel: "example/pi-model-fast",
+    opencodeModel: "example/opencode-model-fast",
   }, {
     spawnSync: (...args) => {
       calls.push(args);
@@ -50,8 +59,8 @@ test("live dogfood uses temp RELAY_HOME by default and writes scoped policy", ()
   const policy = JSON.parse(fs.readFileSync(path.join(result.relay_home, "policy.json"), "utf-8"));
   assert.equal(policy.profile, "live-adapter-dogfood");
   assert.deepEqual(policy.allowed_model_routes.map((entry) => entry.route), [
-    "opencode-go/deepseek-v4-pro",
-    "opencode-go/deepseek-v4-pro",
+    "example/pi-model-fast",
+    "example/opencode-model-fast",
     "google/antigravity-cli",
   ]);
   assert.deepEqual(policy.allowed_model_routes[0].reviewers, ["pi"]);
@@ -104,6 +113,7 @@ test("live dogfood healthy dispatch canaries use run-level route intent files", 
     dryRun: true,
     dispatchCanary: true,
     dispatchStamp: "routeux",
+    ...dogfoodModelOptions(),
   });
 
   for (const name of ["pi-dispatch-canary", "opencode-dispatch-canary", "antigravity-dispatch-canary"]) {
@@ -129,6 +139,7 @@ test("live dogfood dry-run plans default non-dispatch scenarios without invoking
   const result = runDogfood({
     repo,
     dryRun: true,
+    ...dogfoodModelOptions(),
   }, {
     spawnSync: (...args) => {
       calls.push(args);
@@ -155,6 +166,7 @@ test("live dogfood can target named scenarios for isolated adapter evidence", ()
     repo,
     dryRun: true,
     scenarios: ["pi-primary"],
+    ...dogfoodModelOptions(),
   }, {
     spawnSync: (...args) => {
       calls.push(args);
@@ -187,6 +199,7 @@ test("live dogfood can target OpenCode primary review without enabling it by def
     repo,
     dryRun: true,
     scenarios: ["opencode-primary"],
+    ...dogfoodModelOptions(),
   });
 
   assert.deepEqual(result.outcomes.map((step) => step.name), ["opencode-primary"]);
@@ -222,6 +235,7 @@ test("live dogfood classifies mocked command outcomes and preserves markdown dis
       opencodeReviewTimeout: "1s",
       antigravityReviewTimeout: "90s",
       antigravityFailSafeReviewTimeout: "2s",
+      ...dogfoodModelOptions(),
     }, {
       spawnSync: (command, args, options) => {
         calls.push({ command, args, env: options.env });
@@ -307,6 +321,7 @@ test("live dogfood dispatch canary adds healthy Pi, OpenCode, and Antigravity di
     dispatchTimeoutSeconds: 222,
     dispatchBranchPrefix: "healthy-dogfood",
     commandTimeoutMs: 1000,
+    ...dogfoodModelOptions(),
   }, {
     spawnSync: (command, args, options) => {
       calls.push({ command, args, env: options.env });
@@ -456,27 +471,30 @@ test("live dogfood policy reflects requested model route overrides", () => {
   assert.deepEqual(policy.allowed_model_routes[2].phases, ["dispatch", "review", "advisory_review"]);
 });
 
-test("live dogfood default policy does not widen same-route actor phase scope", () => {
-  const policy = buildPolicy();
+test("live dogfood policy does not widen same-route actor phase scope", () => {
+  const policy = buildPolicy({
+    piModel: "example/pi-model-fast",
+    opencodeModel: "example/opencode-model-fast",
+  });
   assert.equal(evaluateRelayRoute(policy, {
     phase: "review",
     reviewer: "pi",
-    model: "opencode-go/deepseek-v4-pro",
+    model: "example/pi-model-fast",
   }).allowed, true);
   assert.equal(evaluateRelayRoute(policy, {
     phase: "advisory_review",
     reviewer: "opencode",
-    model: "opencode-go/deepseek-v4-pro",
+    model: "example/opencode-model-fast",
   }).allowed, true);
   assert.equal(evaluateRelayRoute(policy, {
     phase: "review",
     reviewer: "opencode",
-    model: "opencode-go/deepseek-v4-pro",
+    model: "example/opencode-model-fast",
   }).allowed, false);
   assert.equal(evaluateRelayRoute(policy, {
     phase: "advisory_review",
     reviewer: "pi",
-    model: "opencode-go/deepseek-v4-pro",
+    model: "example/pi-model-fast",
   }).allowed, false);
   assert.equal(evaluateRelayRoute(policy, {
     phase: "advisory_review",

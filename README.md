@@ -72,7 +72,7 @@ Adapter minimum versions, binary overrides, timeouts, capability gates, and prov
 
 ## Configure Routes
 
-Relay distinguishes CLI harnesses from provider/model routes. Names such as `codex`, `claude`, `opencode`, `pi`, and `antigravity` describe how relay invokes an agent. The compliance boundary is the provider/model route, for example `example/opencode-model-fast`, `opencode-go/deepseek-v4-pro`, or `google/antigravity-cli`.
+Relay distinguishes CLI harnesses from provider/model routes. Names such as `codex`, `claude`, `opencode`, `pi`, and `antigravity` describe how relay invokes an agent. The compliance boundary is the provider/model route, for example `example/opencode-model-fast`, `example/pi-model-fast`, or `google/antigravity-cli`.
 
 Without a policy file, relay stays conservative: managed Codex and Claude CLIs are allowed by default, while OpenCode, Pi, Antigravity, and advisory reviewers require explicit route approval.
 
@@ -80,7 +80,7 @@ After installing skills, ask for setup in plain language:
 
 ```text
 /relay-config Set up relay for my company environment. Only allow OpenCode through example/opencode-model-*.
-$relay-config For my personal setup, use opencode-go/deepseek-v4-pro for advisory review.
+$relay-config For my personal setup, use example/opencode-model-fast for advisory review.
 ```
 
 Common starting points:
@@ -89,7 +89,7 @@ Common starting points:
 | --- | --- |
 | Company default | `/relay-config Set up relay for my company environment` |
 | Approved OpenCode route | `/relay-config Only allow OpenCode through the example/opencode-model-* route at work` |
-| Personal advisory review | `$relay-config Use opencode-go/deepseek-v4-pro for personal advisory review` |
+| Personal advisory review | `$relay-config Use example/opencode-model-fast for personal advisory review` |
 | Managed only | `/relay-config Keep the default Codex/Claude-only setup` |
 
 For the full policy model and precedence order, see [docs/model-route-policy.md](docs/model-route-policy.md).

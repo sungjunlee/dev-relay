@@ -85,7 +85,7 @@ function setupRepo({
     "allow-opencode-advisory": {
       profile: "allow-opencode-advisory",
       allowed_model_routes: [{
-        route: "opencode-go/*",
+        route: "example/opencode-model-*",
         phases: ["advisory_review"],
         reviewers: ["opencode"],
       }, {
@@ -97,7 +97,7 @@ function setupRepo({
     "allow-opencode-primary": {
       profile: "allow-opencode-primary",
       allowed_model_routes: [{
-        route: "opencode-go/*",
+        route: "example/opencode-model-*",
         phases: ["review"],
         reviewers: ["opencode"],
       }],
@@ -305,6 +305,10 @@ function runReview({
   if (opencodeScript) env.RELAY_OPENCODE_BIN = opencodeScript;
   if (piScript) env.RELAY_PI_BIN = piScript;
   if (antigravityScript) env.RELAY_ANTIGRAVITY_BIN = antigravityScript;
+  const advisoryModelArgs = (
+    advisoryReviewer === "opencode" &&
+    !extraArgs.includes("--advisory-reviewer-model")
+  ) ? ["--advisory-reviewer-model", "example/opencode-model-fast"] : [];
   return JSON.parse(execFileSync("node", [
     SCRIPT,
     "--repo", repoRoot,
@@ -317,6 +321,7 @@ function runReview({
     ...(advisoryReviewer ? ["--advisory-reviewer", advisoryReviewer] : []),
     "--no-comment",
     "--json",
+    ...advisoryModelArgs,
     ...extraArgs,
   ], {
     encoding: "utf-8",
@@ -364,6 +369,7 @@ test("review-runner accepts opencode primary review when route policy allows the
     "--done-criteria-file", doneCriteriaPath,
     "--diff-file", diffPath,
     "--reviewer", "opencode",
+    "--reviewer-model", "example/opencode-model-fast",
     "--no-comment",
     "--json",
   ], {
@@ -384,7 +390,7 @@ test("review-runner accepts opencode primary review when route policy allows the
   assert.equal(event.reviewer_policy.phase, "primary_review");
   assert.equal(event.reviewer_policy.safe, true);
   assert.equal(event.policy_decision.allowed, true);
-  assert.equal(event.policy_decision.model, "opencode-go/deepseek-v4-pro");
+  assert.equal(event.policy_decision.model, "example/opencode-model-fast");
 });
 
 test("review-runner denies opencode primary review before spawning when route policy blocks the model", () => {
@@ -402,7 +408,7 @@ test("review-runner denies opencode primary review before spawning when route po
     "--done-criteria-file", doneCriteriaPath,
     "--diff-file", diffPath,
     "--reviewer", "opencode",
-    "--reviewer-model", "opencode-go/deepseek-v4-pro",
+    "--reviewer-model", "example/opencode-model-fast",
     "--no-comment",
     "--json",
   ], {
@@ -420,7 +426,7 @@ test("review-runner denies opencode primary review before spawning when route po
   assert.equal(result.policy_decision.allowed, false);
   assert.equal(result.policy_decision.phase, "review");
   assert.equal(result.policy_decision.reviewer, "opencode");
-  assert.equal(result.policy_decision.model, "opencode-go/deepseek-v4-pro");
+  assert.equal(result.policy_decision.model, "example/opencode-model-fast");
   assert.equal(readManifest(manifestPath).data.state, STATES.REVIEW_PENDING);
 });
 
@@ -432,7 +438,7 @@ test("review-runner uses manifest routing advisory defaults without changing the
     routing: {
       version: 1,
       selected: {
-        advisory_review: { reviewer: "opencode", profile: "blindspot" },
+        advisory_review: { reviewer: "opencode", model: "example/opencode-model-fast", profile: "blindspot" },
       },
     },
   }, record.body);
@@ -974,6 +980,7 @@ test("hardened manual review pass requires an audit reason", () => {
     "--diff-file", diffPath,
     "--review-file", reviewFile,
     "--advisory-reviewer", "opencode",
+    "--advisory-reviewer-model", "example/opencode-model-fast",
     "--no-comment",
     "--json",
   ], {

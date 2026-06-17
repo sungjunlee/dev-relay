@@ -49,7 +49,7 @@ Infer from the user's words before asking questions:
 - `company`, `work`, `회사` → company profile
 - `personal`, `home`, `집`, `개인` → personal profile
 - `managed only`, `codex/claude only` → no unmanaged route opt-in
-- routes containing `/`, such as `example/opencode-model-*`, `opencode-go/*`, `deepseek/*`, or `ollama/*` → provider/model route patterns
+- routes containing `/`, such as `example/opencode-model-*`, `example/pi-*`, `openai/*`, or `ollama/*` → provider/model route patterns
 - `advisory`, `reviewer`, `documentation`, `docs` → likely advisory-review phases
 
 Ask only for missing decisions, one at a time. Use plain language and wait for the user's answer. Do not use host-specific question primitives as the only path; this skill must work in both Claude Code and Codex.

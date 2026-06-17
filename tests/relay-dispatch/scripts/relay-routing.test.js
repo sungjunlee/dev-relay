@@ -231,9 +231,9 @@ test("project routes schema accepts phase defaults and rejects malformed actors"
   assert.deepEqual(validateProjectRoutes({
     version: 1,
     defaults: {
-      dispatch: { executor: "pi", model: "deepseek/deepseek-v4-flash" },
+      dispatch: { executor: "pi", model: "example/pi-model-fast" },
       review: { reviewer: "codex" },
-      advisory_review: { reviewer: "opencode", model: "opencode-go/deepseek-v4-flash", profile: "blindspot" },
+      advisory_review: { reviewer: "opencode", model: "example/opencode-model-cheap", profile: "blindspot" },
     },
   }, "routes.json").defaults.review, { reviewer: "codex" });
 
@@ -249,23 +249,23 @@ test("project routes schema accepts phase defaults and rejects malformed actors"
 test("route intent resolver gives run intent precedence over project defaults", () => {
   const result = resolveRouteIntent({
     runIntent: {
-      dispatch: { executor: "pi", model: "deepseek/deepseek-v4-flash" },
+      dispatch: { executor: "pi", model: "example/pi-model-fast" },
       review: { reviewer: "claude" },
     },
     projectRoutes: {
       version: 1,
       defaults: {
-        dispatch: { executor: "opencode", model: "opencode-go/deepseek-v4-pro" },
+        dispatch: { executor: "opencode", model: "example/opencode-model-fast" },
         review: { reviewer: "codex" },
       },
     },
     policy: routePolicy({
-      allowed_model_routes: [{ route: "deepseek/*", phases: ["dispatch"], executors: ["pi"] }],
+      allowed_model_routes: [{ route: "example/pi-*", phases: ["dispatch"], executors: ["pi"] }],
     }),
   });
 
   assert.equal(result.phases.dispatch.executor, "pi");
-  assert.equal(result.phases.dispatch.model, "deepseek/deepseek-v4-flash");
+  assert.equal(result.phases.dispatch.model, "example/pi-model-fast");
   assert.equal(result.phases.dispatch.sources.executor, "run_intent");
   assert.equal(result.phases.dispatch.policy_decision.reason, "allowed_model_route");
   assert.equal(result.phases.review.reviewer, "claude");
@@ -277,12 +277,12 @@ test("route intent resolver uses project defaults before built-in managed defaul
     projectRoutes: {
       version: 1,
       defaults: {
-        dispatch: { executor: "pi", model: "deepseek/deepseek-v4-flash" },
+        dispatch: { executor: "pi", model: "example/pi-model-fast" },
         review: { reviewer: "codex" },
       },
     },
     policy: routePolicy({
-      allowed_model_routes: [{ route: "deepseek/*", phases: ["dispatch"], executors: ["pi"] }],
+      allowed_model_routes: [{ route: "example/pi-*", phases: ["dispatch"], executors: ["pi"] }],
     }),
   });
 
@@ -297,7 +297,7 @@ test("route intent resolver preserves missing unmanaged model as policy denial",
   const result = resolveRouteIntent({
     runIntent: { dispatch: { executor: "pi" } },
     policy: routePolicy({
-      allowed_model_routes: [{ route: "deepseek/*", phases: ["dispatch"], executors: ["pi"] }],
+      allowed_model_routes: [{ route: "example/pi-*", phases: ["dispatch"], executors: ["pi"] }],
     }),
   });
 

@@ -275,7 +275,7 @@ test("CLI probes pi when explicit model route is allowed for dispatch policy", (
   writeRelayPolicy(relayHome, {
     profile: "allow-pi-dispatch-probe",
     allowed_model_routes: [{
-      route: "opencode-go/*",
+      route: "example/opencode-model-*",
       phases: ["dispatch"],
       executors: ["pi"],
     }],
@@ -288,7 +288,7 @@ test("CLI probes pi when explicit model route is allowed for dispatch policy", (
     SCRIPT,
     repoRoot,
     "-e", "pi",
-    "--model", "opencode-go/deepseek-v4-pro",
+    "--model", "example/opencode-model-fast",
     "--json",
   ], {
     encoding: "utf-8",
@@ -307,9 +307,9 @@ test("CLI probes pi when explicit model route is allowed for dispatch policy", (
   assert.equal(output.policy_decision.phase, "dispatch");
   assert.equal(output.policy_decision.actor_field, "executor");
   assert.equal(output.policy_decision.executor, "pi");
-  assert.equal(output.policy_decision.model, "opencode-go/deepseek-v4-pro");
+  assert.equal(output.policy_decision.model, "example/opencode-model-fast");
   assert.equal(output.policy_decision.reason, "allowed_model_route");
-  assert.equal(output.policy_decision.matched_route, "opencode-go/*");
+  assert.equal(output.policy_decision.matched_route, "example/opencode-model-*");
 });
 
 test("CLI denied pi probe without model route fails closed before adapter probe", () => {
@@ -318,7 +318,7 @@ test("CLI denied pi probe without model route fails closed before adapter probe"
   writeRelayPolicy(relayHome, {
     profile: "allow-pi-dispatch-probe-requires-route",
     allowed_model_routes: [{
-      route: "opencode-go/*",
+      route: "example/opencode-model-*",
       phases: ["dispatch"],
       executors: ["pi"],
     }],
@@ -373,7 +373,7 @@ test("CLI denied pi probe reports the explicit unknown model route", () => {
     SCRIPT,
     repoRoot,
     "--executor", "pi",
-    "--model", "opencode-go/unknown",
+    "--model", "example/opencode-unknown",
     "--json",
   ], {
     encoding: "utf-8",
@@ -388,16 +388,16 @@ test("CLI denied pi probe reports the explicit unknown model route", () => {
   const output = JSON.parse(result.stdout);
   assert.equal(output.agent_tools_raw, null);
   assert.match(output.agent_probe_error, /policy disallowed/);
-  assert.match(output.agent_probe_error, /model=opencode-go\/unknown/);
+  assert.match(output.agent_probe_error, /model=example\/opencode-unknown/);
   assert.equal(output.policy_decision.allowed, false);
   assert.equal(output.policy_decision.phase, "dispatch");
   assert.equal(output.policy_decision.actor_field, "executor");
   assert.equal(output.policy_decision.executor, "pi");
-  assert.equal(output.policy_decision.model, "opencode-go/unknown");
+  assert.equal(output.policy_decision.model, "example/opencode-unknown");
   assert.equal(output.policy_decision.reason, "unknown_model_route");
 });
 
-test("CLI reports policy-disallowed opencode default model without invoking adapter probe", () => {
+test("CLI reports missing opencode model without invoking adapter probe", () => {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "probe-policy-denied-"));
   const relayHome = fs.mkdtempSync(path.join(os.tmpdir(), "probe-policy-home-"));
   const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "probe-policy-bin-"));
@@ -427,6 +427,6 @@ process.stdout.write("opencode-fake\\n");
   assert.equal(output.policy_decision.phase, "dispatch");
   assert.equal(output.policy_decision.actor_field, "executor");
   assert.equal(output.policy_decision.executor, "opencode");
-  assert.equal(output.policy_decision.model, "opencode-go/deepseek-v4-pro");
-  assert.equal(output.policy_decision.reason, "unknown_model_route");
+  assert.equal(output.policy_decision.model, null);
+  assert.equal(output.policy_decision.reason, "missing_model_route");
 });

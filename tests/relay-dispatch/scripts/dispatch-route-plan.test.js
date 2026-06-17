@@ -60,11 +60,11 @@ test("dispatch dry-run consumes route intent and previews route plan", () => {
   const { root, repoRoot, relayHome, rubricFile } = setupRepo();
   writePolicy(relayHome, {
     profile: "allow-pi",
-    allowed_model_routes: [{ route: "deepseek/*", phases: ["dispatch"], executors: ["pi"] }],
+    allowed_model_routes: [{ route: "example/pi-*", phases: ["dispatch"], executors: ["pi"] }],
   });
   const intentPath = path.join(root, "route-intent.json");
   writeJson(intentPath, {
-    dispatch: { executor: "pi", model: "deepseek/deepseek-v4-flash" },
+    dispatch: { executor: "pi", model: "example/pi-model-fast" },
     review: { reviewer: "codex" },
   });
 
@@ -86,7 +86,7 @@ test("dispatch dry-run consumes route intent and previews route plan", () => {
   const output = JSON.parse(proc.stdout);
   assert.equal(output.executor, "pi");
   assert.equal(output.route_plan.phases.dispatch.executor, "pi");
-  assert.equal(output.route_plan.phases.dispatch.model, "deepseek/deepseek-v4-flash");
+  assert.equal(output.route_plan.phases.dispatch.model, "example/pi-model-fast");
   assert.equal(output.route_plan.phases.dispatch.policy_decision.reason, "allowed_model_route");
 });
 
@@ -94,7 +94,7 @@ test("dispatch denied route intent fails before executor invocation", () => {
   const { root, repoRoot, relayHome, rubricFile } = setupRepo();
   const intentPath = path.join(root, "route-intent-denied.json");
   writeJson(intentPath, {
-    dispatch: { executor: "pi", model: "deepseek/deepseek-v4-flash" },
+    dispatch: { executor: "pi", model: "example/pi-model-fast" },
   });
 
   const proc = spawnSync(process.execPath, [
@@ -119,22 +119,22 @@ test("dispatch denied route intent fails before executor invocation", () => {
 test("dispatch project policy deny overrides personal route before unmanaged CLI invocation", () => {
   const { root, repoRoot, relayHome, rubricFile } = setupRepo();
   writePolicy(relayHome, {
-    profile: "personal-allow-opencode-go",
+    profile: "personal-allow-opencode",
     allowed_model_routes: [
-      { route: "opencode-go/*", phases: ["dispatch"], executors: ["opencode"] },
+      { route: "example/opencode-model-*", phases: ["dispatch"], executors: ["opencode"] },
     ],
   });
   writeJson(getProjectPolicyPath(repoRoot, { relayHome }), {
     ...buildDefaultRelayPolicy(),
     version: 1,
-    profile: "company-deny-personal-opencode-go",
+    profile: "company-deny-personal-opencode",
     denied_model_routes: [
-      { route: "opencode-go/*", phases: ["dispatch"], executors: ["opencode"] },
+      { route: "example/opencode-model-*", phases: ["dispatch"], executors: ["opencode"] },
     ],
   });
   const intentPath = path.join(root, "route-intent-company-denied.json");
   writeJson(intentPath, {
-    dispatch: { executor: "opencode", model: "opencode-go/deepseek-v4-pro" },
+    dispatch: { executor: "opencode", model: "example/opencode-model-fast" },
   });
   const fakeBin = fs.mkdtempSync(path.join(os.tmpdir(), "relay-route-deny-bin-"));
   fs.writeFileSync(path.join(fakeBin, "opencode"), "#!/bin/sh\necho unmanaged CLI should not run >&2\nexit 42\n", "utf-8");
@@ -165,7 +165,7 @@ test("dispatch resume resolves project routes from manifest repo, not invocation
   const { root, repoRoot, relayHome, rubricFile } = setupRepo();
   writePolicy(relayHome, {
     profile: "allow-pi-but-target-defaults-codex",
-    allowed_model_routes: [{ route: "deepseek/*", phases: ["dispatch"], executors: ["pi"] }],
+    allowed_model_routes: [{ route: "example/pi-*", phases: ["dispatch"], executors: ["pi"] }],
   });
   writeJson(getProjectRoutesPath(repoRoot, { relayHome }), {
     version: 1,
@@ -206,7 +206,7 @@ test("dispatch resume resolves project routes from manifest repo, not invocation
   writeJson(getProjectRoutesPath(unrelatedRepo, { relayHome }), {
     version: 1,
     defaults: {
-      dispatch: { executor: "pi", model: "deepseek/deepseek-v4-flash" },
+      dispatch: { executor: "pi", model: "example/pi-model-fast" },
       review: { reviewer: "codex" },
     },
   });

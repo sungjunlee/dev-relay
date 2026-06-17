@@ -312,7 +312,7 @@ function assertRelayReviewAdapterDetailsStayReferenced(content) {
   const adapterSpecificPatterns = [
     /invoke-reviewer-codex\.js/,
     /invoke-reviewer-claude\.js/,
-    /--reviewer-model\s+(?:opencode-go|openai\/|google\/|composer-)/,
+    /--reviewer-model\s+(?:example\/|openai\/|google\/|composer-)/,
     /--advisory-reviewer-model\s+(?:openai\/|google\/)/,
     /RELAY_(?:PI|CURSOR|ANTIGRAVITY)_[A-Z_]+/,
     /agent --mode ask/,

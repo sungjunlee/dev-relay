@@ -53,7 +53,7 @@ test("validateExecutorModelConfig rejects invalid schema shapes", () => {
   );
 });
 
-test("optional local schema errors are ignored with bundled fallback", () => {
+test("optional local schema errors are ignored without inventing a fallback", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-executor-model-config-"));
   const localPath = writeJson(path.join(dir, "executors.json"), {
     executors: {
@@ -65,7 +65,7 @@ test("optional local schema errors are ignored with bundled fallback", () => {
 
   const { result, messages } = withCapturedStderr(() => resolveExecutorDefaultModel("opencode", { localPath }));
 
-  assert.equal(result, "opencode-go/deepseek-v4-pro");
+  assert.equal(result, null);
   assert.equal(messages.length, 1);
   assert.match(messages[0], /Warning: ignoring optional executor model config/);
   assert.match(messages[0], /default_model must be a non-empty string/);
@@ -84,12 +84,13 @@ test("local config can introduce defaults for executors absent from the bundled 
   assert.equal(resolveExecutorDefaultModel("codex", { localPath }), "gpt-5.5");
 });
 
-test("loadExecutorModelConfig merges bundled and local executor entries", () => {
+test("loadExecutorModelConfig preserves local executor entries", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-executor-model-config-"));
   const localPath = writeJson(path.join(dir, "executors.json"), {
     executors: {
       opencode: {
-        default_model: "opencode-go/qwen3.6-plus",
+        default_model: "example/opencode-model-local",
+        candidate_models: ["example/opencode-model-local"],
       },
       codex: {
         default_model: "gpt-5.5",
@@ -99,14 +100,7 @@ test("loadExecutorModelConfig merges bundled and local executor entries", () => 
 
   const config = loadExecutorModelConfig({ localPath });
 
-  assert.equal(config.executors.opencode.default_model, "opencode-go/qwen3.6-plus");
-  assert.deepEqual(config.executors.opencode.candidate_models, [
-    "opencode-go/deepseek-v4-pro",
-    "opencode-go/deepseek-v4-flash",
-    "opencode-go/qwen3.6-plus",
-    "opencode-go/qwen3.5-plus",
-    "opencode-go/kimi-k2.6",
-    "opencode-go/glm-5.1",
-  ]);
+  assert.equal(config.executors.opencode.default_model, "example/opencode-model-local");
+  assert.deepEqual(config.executors.opencode.candidate_models, ["example/opencode-model-local"]);
   assert.equal(config.executors.codex.default_model, "gpt-5.5");
 });

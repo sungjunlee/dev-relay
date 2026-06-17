@@ -158,8 +158,8 @@ test("doctor includes project route provenance and best-effort model probes", ()
   const repoRoot = tempDir("relay-config-doctor-repo-");
   initGitRepo(repoRoot);
   const binDir = tempDir("relay-config-doctor-bin-");
-  writeExecutable(path.join(binDir, "opencode"), "#!/bin/sh\nif [ \"$1\" = models ]; then printf 'opencode-go/deepseek-v4-pro\\nopenai/gpt-5\\n'; exit 0; fi\nexit 0\n");
-  writeExecutable(path.join(binDir, "pi"), "#!/bin/sh\nif [ \"$1\" = --list-models ]; then printf 'deepseek/deepseek-v4-flash\\n'; exit 0; fi\nexit 0\n");
+  writeExecutable(path.join(binDir, "opencode"), "#!/bin/sh\nif [ \"$1\" = models ]; then printf 'example/opencode-model-fast\\nopenai/gpt-5\\n'; exit 0; fi\nexit 0\n");
+  writeExecutable(path.join(binDir, "pi"), "#!/bin/sh\nif [ \"$1\" = --list-models ]; then printf 'example/pi-model-fast\\n'; exit 0; fi\nexit 0\n");
   writeJson(getProjectPolicyPath(repoRoot, { relayHome }), {
     ...buildDefaultRelayPolicy(),
     profile: "project",
@@ -186,9 +186,9 @@ test("doctor includes project route provenance and best-effort model probes", ()
   assert.equal(output.project_routes.status, "ok");
   const opencode = output.tools.find((tool) => tool.name === "opencode");
   assert.equal(opencode.model_probe.status, "ok");
-  assert.deepEqual(opencode.model_probe.models, ["opencode-go/deepseek-v4-pro", "openai/gpt-5"]);
+  assert.deepEqual(opencode.model_probe.models, ["example/opencode-model-fast", "openai/gpt-5"]);
   const pi = output.tools.find((tool) => tool.name === "pi");
-  assert.deepEqual(pi.model_probe.models, ["deepseek/deepseek-v4-flash"]);
+  assert.deepEqual(pi.model_probe.models, ["example/pi-model-fast"]);
 });
 
 test("check exits zero for allowed managed CLI routes and reports the decision reason", () => {
@@ -398,7 +398,7 @@ test("plan-run previews allowed Pi route with policy source trace", () => {
       advisory_review: null,
     },
     managed_cli: ["codex", "claude"],
-    allowed_model_routes: [{ route: "deepseek/*", phases: ["dispatch"], executors: ["pi"] }],
+    allowed_model_routes: [{ route: "example/pi-*", phases: ["dispatch"], executors: ["pi"] }],
     denied_model_routes: [],
     routing_rules: [],
     deny_unknown_model_routes: true,
@@ -406,7 +406,7 @@ test("plan-run previews allowed Pi route with policy source trace", () => {
 
   const result = runConfig([
     "plan-run",
-    "--dispatch", "pi:deepseek/deepseek-v4-flash",
+    "--dispatch", "pi:example/pi-model-fast",
     "--review", "codex",
     "--json",
   ], { relayHome });
@@ -433,7 +433,7 @@ test("plan-run denies routes narrowed by project policy before dispatch", () => 
       advisory_review: null,
     },
     managed_cli: ["codex", "claude"],
-    allowed_model_routes: [{ route: "opencode-go/*", phases: ["dispatch"], executors: ["opencode"] }],
+    allowed_model_routes: [{ route: "example/opencode-model-*", phases: ["dispatch"], executors: ["opencode"] }],
     denied_model_routes: [],
     routing_rules: [],
     deny_unknown_model_routes: true,
@@ -447,7 +447,7 @@ test("plan-run denies routes narrowed by project policy before dispatch", () => 
       advisory_review: null,
     },
     managed_cli: ["codex", "claude"],
-    allowed_model_routes: [{ route: "opencode-go/deepseek-*", phases: ["dispatch"], executors: ["opencode"] }],
+    allowed_model_routes: [{ route: "example/opencode-model-safe", phases: ["dispatch"], executors: ["opencode"] }],
     denied_model_routes: [],
     routing_rules: [],
     deny_unknown_model_routes: true,
@@ -456,7 +456,7 @@ test("plan-run denies routes narrowed by project policy before dispatch", () => 
   const result = runConfig([
     "plan-run",
     "--repo", repoRoot,
-    "--dispatch", "opencode:opencode-go/qwen3",
+    "--dispatch", "opencode:example/opencode-model-fast",
     "--json",
   ], { relayHome, cwd: repoRoot });
 

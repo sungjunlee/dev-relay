@@ -120,7 +120,7 @@ Mutation discipline follows the spec-system contract from `sungjunlee/dev-backlo
 **In-scope:**
 - `skills/relay-review/` review runner, reviewer adapters, prompt construction, PR comments, re-dispatch prompts, and verdict application.
 - Fresh-context review using `context: fork` semantics from the skill contract.
-- Advisory sidecar reports that do not gate merge.
+- Advisory review reports that do not gate merge.
 
 **Out-of-scope:**
 - Writing implementation code, which remains the executor's job.
@@ -134,7 +134,7 @@ Mutation discipline follows the spec-system contract from `sungjunlee/dev-backlo
 
 ### Hard Constraints
 - Never invoke the reviewer with planner session memory; review must run in a fresh process/context anchored to persisted artifacts.
-- Never let advisory sidecar output change the merge-gating verdict field.
+- Never let advisory review output change the merge-gating verdict field.
 
 ### Learnings
 <!-- LEARN:BEGIN -->

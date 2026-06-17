@@ -2,7 +2,7 @@
 
 Route policy answers one operational question: which provider/model route is allowed to run in each relay phase?
 
-Executor and reviewer names such as `codex`, `claude`, `opencode`, and `pi` are harness names. They select a CLI adapter and execution contract. They are not the compliance boundary. The compliance boundary is the provider/model route string, for example `example/opencode-model-fast`, `opencode-go/deepseek-v4-pro`, `deepseek/r1`, or `ollama/qwen3`.
+Executor and reviewer names such as `codex`, `claude`, `opencode`, and `pi` are harness names. They select a CLI adapter and execution contract. They are not the compliance boundary. The compliance boundary is the provider/model route string, for example `example/opencode-model-fast`, `example/pi-model-fast`, `example/pi-model-deep`, or `ollama/qwen3`.
 
 Codex and Claude are the managed CLI defaults. In the default managed profile, a model-less Codex or Claude invocation is allowed because the CLI account and its managed default model are the boundary. Generated company defaults should not pin Codex or Claude model names just to make policy explicit. OpenCode, Pi, and Antigravity are routing harnesses, so managed/company profiles must require an explicit provider/model route and an allow rule before they can run.
 
@@ -133,9 +133,9 @@ Example project preference file:
 {
   "version": 1,
   "defaults": {
-    "dispatch": { "executor": "pi", "model": "deepseek/deepseek-v4-flash" },
+    "dispatch": { "executor": "pi", "model": "example/pi-model-fast" },
     "review": { "reviewer": "codex" },
-    "advisory_review": { "reviewer": "opencode", "model": "opencode-go/deepseek-v4-pro" }
+    "advisory_review": { "reviewer": "opencode", "model": "example/opencode-model-fast" }
   }
 }
 ```
@@ -144,7 +144,7 @@ Preview before dispatch:
 
 ```bash
 node skills/relay-config/scripts/relay-config.js plan-run --repo . \
-  --dispatch pi:deepseek/deepseek-v4-flash \
+  --dispatch pi:example/pi-model-fast \
   --review codex \
   --json
 ```
@@ -156,7 +156,7 @@ For one-off runs, write a route intent JSON and pass `--route-intent-file` to di
 After installing skills, prefer natural-language setup:
 
 ```text
-$relay-config 집에서는 opencode-go/deepseek-v4-pro를 advisory review에 쓰게 설정해줘.
+$relay-config 집에서는 example/opencode-model-fast를 advisory review에 쓰게 설정해줘.
 ```
 
 From a direct checkout, initialize a personal policy:
@@ -168,11 +168,11 @@ node skills/relay-config/scripts/relay-config.js init personal
 Then opt in to the routes you personally allow:
 
 ```bash
-node skills/relay-config/scripts/relay-config.js allow-route 'opencode-go/*' \
+node skills/relay-config/scripts/relay-config.js allow-route 'example/opencode-model-*' \
   --phase dispatch,advisory_review \
   --executor opencode
 
-node skills/relay-config/scripts/relay-config.js allow-route 'deepseek/*' \
+node skills/relay-config/scripts/relay-config.js allow-route 'example/pi-*' \
   --phase dispatch,advisory_review \
   --executor opencode
 
@@ -187,10 +187,10 @@ If you want OpenCode to default to a personal route, set the executor model conf
 {
   "executors": {
     "opencode": {
-      "default_model": "opencode-go/deepseek-v4-pro",
+      "default_model": "example/opencode-model-fast",
       "candidate_models": [
-        "opencode-go/deepseek-v4-pro",
-        "deepseek/r1",
+        "example/opencode-model-fast",
+        "example/pi-model-deep",
         "ollama/qwen3"
       ]
     }
@@ -217,7 +217,7 @@ Run `relay-config check` for each actual tuple you plan to enable:
 ```bash
 node skills/relay-config/scripts/relay-config.js check dispatch opencode example/opencode-model-fast
 
-node skills/relay-config/scripts/relay-config.js check advisory_review opencode example/opencode-model-fast
+node skills/relay-config/scripts/relay-config.js check dispatch pi example/pi-model-fast
 
 node skills/relay-config/scripts/relay-config.js check advisory_review opencode example/opencode-model-fast
 ```
@@ -227,15 +227,15 @@ Check exits non-zero when the tuple would be denied at runtime. Run it before tu
 For pre-planning dispatch probes, run the matching `probe-executor-env` command with the same unmanaged route. The probe evaluates `--executor` plus `--model` as a dispatch policy tuple before invoking the adapter:
 
 ```bash
-node skills/relay-config/scripts/relay-config.js check dispatch pi opencode-go/deepseek-v4-pro
+node skills/relay-config/scripts/relay-config.js check dispatch pi example/pi-model-fast
 
 node skills/relay-plan/scripts/probe-executor-env.js . \
   --executor pi \
-  --model opencode-go/deepseek-v4-pro \
+  --model example/pi-model-fast \
   --json
 ```
 
-If the route is allowed, the probe policy decision reports `reason=allowed_model_route`, `model=opencode-go/deepseek-v4-pro`, and then invokes the Pi adapter probe. If `--model` is omitted and no executor default supplies a provider/model route, unmanaged executors fail closed before adapter invocation: JSON output reports `policy_decision.reason=missing_model_route`, `policy_decision.model=null`, and `agent_tools_raw=null`. This is different from an explicit but unapproved route, which reports `unknown_model_route` with the rejected route in `policy_decision.model`.
+If the route is allowed, the probe policy decision reports `reason=allowed_model_route`, `model=example/pi-model-fast`, and then invokes the Pi adapter probe. If `--model` is omitted and no executor default supplies a provider/model route, unmanaged executors fail closed before adapter invocation: JSON output reports `policy_decision.reason=missing_model_route`, `policy_decision.model=null`, and `agent_tools_raw=null`. This is different from an explicit but unapproved route, which reports `unknown_model_route` with the rejected route in `policy_decision.model`.
 
 ## Denial Example
 

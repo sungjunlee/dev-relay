@@ -17,9 +17,9 @@ const OUTCOMES = Object.freeze({
 });
 
 const DEFAULTS = Object.freeze({
-  piModel: "opencode-go/deepseek-v4-pro",
-  opencodeModel: "opencode-go/deepseek-v4-pro",
-  antigravityModel: "google/antigravity-cli",
+  piModel: process.env.RELAY_LIVE_DOGFOOD_PI_MODEL || null,
+  opencodeModel: process.env.RELAY_LIVE_DOGFOOD_OPENCODE_MODEL || null,
+  antigravityModel: process.env.RELAY_LIVE_DOGFOOD_ANTIGRAVITY_MODEL || "google/antigravity-cli",
   commandTimeoutMs: 300_000,
   piReviewTimeout: "120s",
   opencodeReviewTimeout: "120s",
@@ -277,25 +277,25 @@ function buildAllowedModelRoutes(options = {}) {
   const antigravityModel = options.antigravityModel || DEFAULTS.antigravityModel;
 
   return [
-    {
+    piModel ? {
       route: piModel,
       phases: ["dispatch", "review"],
       executors: ["pi"],
       reviewers: ["pi"],
-    },
-    {
+    } : null,
+    opencodeModel ? {
       route: opencodeModel,
       phases: ["dispatch", "advisory_review"],
       executors: ["opencode"],
       reviewers: ["opencode"],
-    },
-    {
+    } : null,
+    antigravityModel ? {
       route: antigravityModel,
       phases: ["dispatch", "review", "advisory_review"],
       executors: ["antigravity"],
       reviewers: ["antigravity"],
-    },
-  ];
+    } : null,
+  ].filter(Boolean);
 }
 
 function buildPolicy(options = {}) {
@@ -589,7 +589,19 @@ const CLASSIFIER_BY_ID = Object.freeze({
 function modelForAdapter(options, adapter) {
   const optionName = MODEL_OPTION_BY_ADAPTER[adapter];
   if (!optionName) throw new Error(`unknown dogfood adapter: ${adapter}`);
-  return options[optionName];
+  const model = options[optionName];
+  if (!String(model || "").trim()) {
+    const flag = optionName
+      .replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`)
+      .replace(/-model$/, "-model");
+    const envName = {
+      piModel: "RELAY_LIVE_DOGFOOD_PI_MODEL",
+      opencodeModel: "RELAY_LIVE_DOGFOOD_OPENCODE_MODEL",
+      antigravityModel: "RELAY_LIVE_DOGFOOD_ANTIGRAVITY_MODEL",
+    }[optionName];
+    throw new Error(`${adapter} live dogfood requires --${flag} or ${envName}`);
+  }
+  return model;
 }
 
 function isScenarioEnabled(scenario, options) {
@@ -838,9 +850,9 @@ function printHelp() {
   console.log("  --dry-run                             Print planned steps without invoking live CLIs");
   console.log("  --json                                Emit structured JSON");
   console.log("  --markdown                            Emit GitHub-comment-ready Markdown");
-  console.log("  --pi-model <route>                    Pi route (default: opencode-go/deepseek-v4-pro)");
-  console.log("  --opencode-model <route>              OpenCode route (default: opencode-go/deepseek-v4-pro)");
-  console.log("  --antigravity-model <route>           Antigravity route (default: google/antigravity-cli)");
+  console.log("  --pi-model <route>                    Pi route (or RELAY_LIVE_DOGFOOD_PI_MODEL)");
+  console.log("  --opencode-model <route>              OpenCode route (or RELAY_LIVE_DOGFOOD_OPENCODE_MODEL)");
+  console.log("  --antigravity-model <route>           Antigravity route (default: RELAY_LIVE_DOGFOOD_ANTIGRAVITY_MODEL or google/antigravity-cli)");
   console.log("  --pi-review-timeout <duration>        RELAY_PI_REVIEW_TIMEOUT for the Pi canary (default: 120s)");
   console.log("  --opencode-review-timeout <duration>  RELAY_OPENCODE_REVIEW_TIMEOUT for OpenCode review canaries (default: 120s)");
   console.log("  --antigravity-review-timeout <duration>  RELAY_ANTIGRAVITY_REVIEW_TIMEOUT for the healthy Antigravity review canary (default: 120s)");

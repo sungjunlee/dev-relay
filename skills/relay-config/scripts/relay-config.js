@@ -35,7 +35,7 @@ function printHelp() {
   console.log("Common setup requests:");
   console.log('  "relay setup 해줘"');
   console.log('  "회사 환경으로 relay 설정해줘"');
-  console.log('  "집에서는 opencode-go/deepseek-v4-pro를 advisory review에 쓰게 해줘"');
+  console.log('  "집에서는 example/opencode-model-fast를 advisory review에 쓰게 해줘"');
   console.log("");
   console.log("Commands:");
   console.log("  inspect [--json]");

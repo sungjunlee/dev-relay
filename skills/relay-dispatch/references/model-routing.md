@@ -5,7 +5,7 @@ Dispatch model routing answers two separate questions:
 - Which executor harness should run the task?
 - Which provider/model route, if any, should that harness use?
 
-Executor names such as `codex`, `claude`, `opencode`, `pi`, and `antigravity` select a CLI adapter. Provider/model route strings such as `opencode-go/deepseek-v4-pro`, `openai/gpt-5`, or `google/antigravity-cli` are the model-policy boundary.
+Executor names such as `codex`, `claude`, `opencode`, `pi`, and `antigravity` select a CLI adapter. Provider/model route strings such as `example/opencode-model-fast`, `openai/gpt-5`, or `google/antigravity-cli` are the model-policy boundary.
 
 ## Dispatch Selection
 
@@ -27,14 +27,14 @@ OpenCode, Pi, Antigravity, and other unmanaged harnesses should use explicit pro
 
 ## Executor Model Config
 
-Bundled executor model recommendations live in `references/executor-models.json` so skill installs carry usable defaults. Operators can override selection without editing the skill by writing `~/.relay/executors.json`:
+Bundled executor model config intentionally ships empty so installs do not select a provider/model route on an operator's behalf. Operators can add local defaults without editing the skill by writing `~/.relay/executors.json`:
 
 ```json
 {
   "executors": {
     "opencode": {
-      "default_model": "opencode-go/deepseek-v4-pro",
-      "candidate_models": ["opencode-go/deepseek-v4-pro"]
+      "default_model": "example/opencode-model-fast",
+      "candidate_models": ["example/opencode-model-fast"]
     }
   }
 }
@@ -48,7 +48,7 @@ The top-level `relay` skill does not invoke `relay-dispatch` as a nested skill. 
 
 ```bash
 node "${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/dispatch.js" . \
-  --executor opencode --model opencode-go/deepseek-v4-pro \
+  --executor opencode --model example/opencode-model-fast \
   -b issue-42 --prompt-file /tmp/dispatch-42.md --rubric-file /tmp/rubric-42.yaml
 ```
 
@@ -56,6 +56,6 @@ For multi-phase hints:
 
 ```bash
 node "${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/dispatch.js" . \
-  --model-hints dispatch=opencode-go/deepseek-v4-pro,review=opencode-go/deepseek-v4-pro \
+  --model-hints dispatch=example/opencode-model-fast,review=example/opencode-model-fast \
   -b issue-42 --prompt-file /tmp/dispatch-42.md --rubric-file /tmp/rubric-42.yaml
 ```

@@ -28,7 +28,7 @@ Use `/relay-config` to set route policy rather than editing JSON by hand:
 ```text
 /relay-config Set up relay for my company environment
 /relay-config Only allow OpenCode through example/opencode-model-* at work
-$relay-config Use opencode-go/deepseek-v4-pro for personal advisory review
+$relay-config Use example/opencode-model-fast for personal advisory review
 ```
 
 Route policy is based on provider/model routes, not only harness names. Managed Codex and Claude CLIs work by default when no policy exists. OpenCode, Pi, and advisory reviewers require explicit route approval. See [model-route-policy.md](model-route-policy.md) for the full policy shape and precedence order.
@@ -148,7 +148,7 @@ node skills/relay-review/scripts/review-runner.js --repo . --run-id <id> --pr <n
   --reviewer pi --reviewer-model openai/gpt-5 --json
 
 node skills/relay-config/scripts/relay-config.js plan-run --repo . \
-  --dispatch pi:deepseek/deepseek-v4-flash --review codex --json
+  --dispatch pi:example/pi-model-fast --review codex --json
 ```
 
 Pi primary review uses a bounded parent-process timeout. Set `RELAY_PI_REVIEW_TIMEOUT` to a positive duration such as `120s`, `10m`, or `1h`; the default is `1800s`. Relay invokes Pi with prompt-template, skill, theme, extension, and context-file discovery disabled so non-interactive review does not hang on optional startup integrations. If a Pi review still times out, first validate the CLI/provider path with a minimal `pi --no-session --no-context-files --no-tools --no-extensions --no-skills --no-prompt-templates --no-themes --print` command before treating the route as healthy. If that minimal command succeeds while `pi-primary` still times out, record the result as a prompt/scope or route-latency blocker rather than parser failure or healthy evidence.
