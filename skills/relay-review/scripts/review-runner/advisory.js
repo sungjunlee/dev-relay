@@ -316,7 +316,6 @@ function readDecisionTiming(request) {
   const decision = readJsonIfExists(request.decisionPath);
   if (!decision) {
     return buildArtifactTimingFields({
-      artifactKind: "advisory",
       elapsedMs: Date.now() - request.startedAt,
       criticalPathWaitMs: 0,
       consumedByPhase: "review",
@@ -325,7 +324,6 @@ function readDecisionTiming(request) {
     });
   }
   return buildArtifactTimingFields({
-    artifactKind: "advisory",
     elapsedMs: Date.now() - request.startedAt,
     criticalPathWaitMs: decision.critical_path_wait_ms || 0,
     consumedByPhase: decision.consumed_by_phase || "metrics",
