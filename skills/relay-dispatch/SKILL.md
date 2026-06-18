@@ -62,7 +62,7 @@ Manifest layout is `~/.relay/runs/<repo-slug>/<run-id>.md` plus `events.jsonl`; 
 
 ### Executor model routing
 
-For precedence, managed CLI defaults, unmanaged route requirements, bundled defaults, and optional `~/.relay/executors.json` overrides, see `references/model-routing.md`. Short version: explicit `--model` wins; `model_hints` are hints, not approval; unmanaged executors need allowed provider/model routes.
+For precedence, managed CLI defaults, unmanaged route requirements, and optional `~/.relay/executors.json` overrides, see `references/model-routing.md`. Short version: explicit `--model` wins; `model_hints` are hints, not approval; unmanaged executors need allowed provider/model routes.
 
 ### Timeout guidance
 

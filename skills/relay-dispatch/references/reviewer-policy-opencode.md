@@ -10,7 +10,7 @@ OpenCode primary review is a merge-gating role, so it must return the normal rev
 
 ## Dispatch
 
-OpenCode dispatch is experimental and write-capable. The adapter preserves the existing `opencode run` output path and passes model overrides through to the CLI. When no dispatch model is supplied, relay uses the bundled `references/executor-models.json` default and then optional `~/.relay/executors.json` overrides.
+OpenCode dispatch is experimental and write-capable. The adapter preserves the existing `opencode run` output path and passes model overrides through to the CLI. When no dispatch model is supplied, relay only uses a local `~/.relay/executors.json` default if one is configured; otherwise unmanaged dispatch fails closed with `missing_model_route`.
 
 OpenCode does not provide relay-native sandbox or network containment. Dispatch policy metadata records this as informational rather than trusted enforcement.
 

@@ -44,7 +44,7 @@ For example, `--reviewer opencode --reviewer-model openai/gpt-5` reaches the rou
 
 | Phase | Route selection before the gate | Policy gate tuple |
 | --- | --- | --- |
-| `dispatch` | `--executor` selects the harness. `--model` wins over `manifest.model_hints.dispatch`, then `--model-hints dispatch=...`, then executor model config such as `~/.relay/executors.json` or bundled OpenCode defaults. Primary dispatch routing rules are not used today; `--tags` only affects advisory review routing selected by dispatch. If no actor is supplied, the existing relay default is `codex`. | `phase=dispatch`, `executor=<name>`, `model=<effective route or null>` |
+| `dispatch` | `--executor` selects the harness. `--model` wins over `manifest.model_hints.dispatch`, then `--model-hints dispatch=...`, then local executor model config such as `~/.relay/executors.json`. The bundled executor model config intentionally ships empty, so unmanaged dispatch fails closed when no provider/model route is supplied. Primary dispatch routing rules are not used today; `--tags` only affects advisory review routing selected by dispatch. If no actor is supplied, the existing relay default is `codex`. | `phase=dispatch`, `executor=<name>`, `model=<effective route or null>` |
 | `review` | `--reviewer` wins over `RELAY_REVIEWER`, then `roles.reviewer`, then the existing relay default `codex`. `--reviewer-model` wins over `manifest.model_hints.review`; otherwise Codex/Claude normally run as managed CLI with no model route. | `phase=review`, `reviewer=<name>`, `model=<effective route or null>` |
 | `advisory_review` | `--advisory-reviewer` and `--advisory-reviewer-model` win. If absent, `routing.selected.advisory_review` from dispatch routing can supply the reviewer, profile, and model. If a reviewer is selected but no model is supplied, `manifest.model_hints.advisory_review` and then executor model config can supply the route. No advisory reviewer runs by default. | `phase=advisory_review`, `reviewer=<name>`, `model=<effective route or null>` |
 
@@ -174,11 +174,13 @@ node skills/relay-config/scripts/relay-config.js allow-route 'example/opencode-m
 
 node skills/relay-config/scripts/relay-config.js allow-route 'example/pi-*' \
   --phase dispatch,advisory_review \
-  --executor opencode
+  --executor pi \
+  --reviewer pi
 
 node skills/relay-config/scripts/relay-config.js allow-route 'ollama/*' \
   --phase dispatch,advisory_review \
-  --executor opencode
+  --executor opencode \
+  --reviewer opencode
 ```
 
 If you want OpenCode to default to a personal route, set the executor model config and allow the matching route:

@@ -1753,7 +1753,7 @@ test("dispatch opencode executor fails closed when no model route is supplied", 
     PATH: `${binDir}:${process.env.PATH}`,
     RELAY_HOME: relayHome,
   };
-  const taskPrompt = "test bundled opencode default";
+  const taskPrompt = "test missing opencode model route";
 
   const proc = spawnSync("node", [SCRIPT, repoRoot, ...withRequiredRubric([
     "-b", "issue-opencode-bundled-default",
