@@ -571,26 +571,6 @@ function normalizeBucketValue(value) {
   return typeof value === "string" && value.trim() ? value.trim() : "unknown";
 }
 
-function sidecarEventKey(event) {
-  const runId = normalizeBucketValue(event?.run_id);
-  const sidecarId = normalizeBucketValue(event?.sidecar_id);
-  return `${runId}\u0000${sidecarId}`;
-}
-
-function incrementInvocationBucket(buckets, key) {
-  if (!buckets.has(key)) {
-    buckets.set(key, { invocations: 0, successes: 0, failures: 0 });
-  }
-  buckets.get(key).invocations += 1;
-}
-
-function incrementOutcomeBucket(buckets, key, outcome) {
-  if (!buckets.has(key)) {
-    buckets.set(key, { invocations: 0, successes: 0, failures: 0 });
-  }
-  buckets.get(key)[outcome] += 1;
-}
-
 function sortSummaryObject(entries) {
   return Object.fromEntries([...entries].sort(([left], [right]) => left.localeCompare(right)));
 }
@@ -1087,29 +1067,6 @@ function buildRoundCostSummary({ repoRoot, manifests, events, reviewLineage }) {
   };
 }
 
-function buildSidecarOutcomeBuckets(starts, results, failures, fieldName) {
-  const buckets = new Map();
-  const startBucketsBySidecar = new Map();
-
-  for (const event of starts) {
-    const bucketKey = normalizeBucketValue(event?.[fieldName]);
-    startBucketsBySidecar.set(sidecarEventKey(event), bucketKey);
-    incrementInvocationBucket(buckets, bucketKey);
-  }
-
-  for (const event of results) {
-    const bucketKey = startBucketsBySidecar.get(sidecarEventKey(event)) || normalizeBucketValue(event?.[fieldName]);
-    incrementOutcomeBucket(buckets, bucketKey, "successes");
-  }
-
-  for (const event of failures) {
-    const bucketKey = startBucketsBySidecar.get(sidecarEventKey(event)) || normalizeBucketValue(event?.[fieldName]);
-    incrementOutcomeBucket(buckets, bucketKey, "failures");
-  }
-
-  return sortSummaryObject(buckets.entries());
-}
-
 const OVERRIDE_AUDIT_EVENT_NAMES = new Set([
   EVENTS.EXECUTION_EVIDENCE_REBRANDED,
   EVENTS.FORCE_FINALIZE,
@@ -1194,166 +1151,12 @@ function buildOverrideAuditSummary(events) {
   };
 }
 
-function buildSidecarCountBuckets(starts, fieldName) {
-  const buckets = new Map();
-  for (const event of starts) {
-    const bucketKey = normalizeBucketValue(event?.[fieldName]);
-    if (!buckets.has(bucketKey)) {
-      buckets.set(bucketKey, { invocations: 0 });
-    }
-    buckets.get(bucketKey).invocations += 1;
-  }
-  return sortSummaryObject(buckets.entries());
-}
-
-function readReviewIssueTitles(runDir) {
-  let entries;
-  try {
-    entries = fs.readdirSync(runDir, { withFileTypes: true });
-  } catch {
-    return [];
-  }
-
-  const titles = [];
-  for (const entry of entries) {
-    if (!entry.isFile() || !/^review-round-\d+-verdict\.json$/.test(entry.name)) continue;
-    try {
-      const verdictText = readTextFileWithoutFollowingSymlinks(path.join(runDir, entry.name));
-      const verdict = JSON.parse(verdictText);
-      if (!Array.isArray(verdict?.issues) || verdict.issues.length === 0) continue;
-      for (const issue of verdict.issues) {
-        const title = typeof issue?.title === "string" ? issue.title.trim() : "";
-        if (title) titles.push(title);
-      }
-    } catch {
-      // Best-effort analytics must not block the rest of the report.
-    }
-  }
-  return titles;
-}
-
-function readSidecarOutput(repoRoot, runId, outputPathRelative) {
-  const outputPath = path.join(getRunDir(repoRoot, runId), outputPathRelative);
-  const output = readTextFileWithoutFollowingSymlinks(outputPath);
-  if (!output || /\u0000/.test(output)) {
-    return null;
-  }
-  return output;
-}
-
-const SIDECAR_TITLE_TOKEN_STOPWORDS = new Set([
-  "about",
-  "after",
-  "before",
-  "from",
-  "into",
-  "missing",
-  "should",
-  "that",
-  "then",
-  "this",
-  "with",
-]);
-
-function issueTitleMatchesSidecarOutput(combinedOutput, title) {
-  const normalizedTitle = title.toLowerCase().trim();
-  if (!normalizedTitle) return false;
-  if (combinedOutput.includes(normalizedTitle)) return true;
-
-  const tokens = normalizedTitle.match(/[a-z0-9_][a-z0-9_.:/-]{2,}/g) || [];
-  return tokens.some((token) => (
-    !SIDECAR_TITLE_TOKEN_STOPWORDS.has(token)
-    && (token.length >= 4 || token.includes("_"))
-    && combinedOutput.includes(token)
-  ));
-}
-
-function computeSidecarPredictionRate({ events, repoRoot }) {
-  const resultEventsByRun = new Map();
-  for (const event of events) {
-    if (event?.event !== EVENTS.SIDECAR_RESULT || !event.run_id || !event.sidecar_id) continue;
-    if (!resultEventsByRun.has(event.run_id)) {
-      resultEventsByRun.set(event.run_id, []);
-    }
-    resultEventsByRun.get(event.run_id).push(event);
-  }
-
-  let predicted = 0;
-  let missed = 0;
-  let runsExamined = 0;
-
-  for (const [runId, resultEvents] of resultEventsByRun.entries()) {
-    let runDir;
-    try {
-      runDir = getRunDir(repoRoot, runId);
-    } catch {
-      continue;
-    }
-
-    const issueTitles = readReviewIssueTitles(runDir);
-    if (issueTitles.length === 0) continue;
-
-    const outputTexts = [];
-    for (const event of resultEvents) {
-      try {
-        const outputText = readSidecarOutput(repoRoot, runId, event.output_path);
-        if (outputText !== null) {
-          outputTexts.push(outputText.toLowerCase());
-        }
-      } catch {
-        // Missing, symlinked, directory, or otherwise unreadable output is skipped.
-      }
-    }
-    if (outputTexts.length === 0) continue;
-
-    runsExamined += 1;
-    const combinedOutput = outputTexts.join("\n");
-    for (const title of issueTitles) {
-      if (issueTitleMatchesSidecarOutput(combinedOutput, title)) {
-        predicted += 1;
-      } else {
-        missed += 1;
-      }
-    }
-  }
-
-  return {
-    predicted_findings_match_rate: ratio(predicted, predicted + missed),
-    predicted_findings_runs_examined: runsExamined,
-  };
-}
-
-function buildSidecarInsights({ events, repoRoot }) {
-  const starts = events.filter((event) => event.event === EVENTS.SIDECAR_START);
-  const results = events.filter((event) => event.event === EVENTS.SIDECAR_RESULT);
-  const failures = events.filter((event) => event.event === EVENTS.SIDECAR_FAILED);
-  const prediction = computeSidecarPredictionRate({ events, repoRoot });
-
-  return {
-    total_invocations: starts.length,
-    by_kind: buildSidecarOutcomeBuckets(starts, results, failures, "kind"),
-    by_executor: buildSidecarOutcomeBuckets(starts, results, failures, "executor"),
-    by_model: buildSidecarCountBuckets(starts, "model"),
-    by_provider: buildSidecarCountBuckets(starts, "provider"),
-    failure_rate: starts.length > 0 ? ratio(failures.length, starts.length) : null,
-    predicted_findings_match_rate: prediction.predicted_findings_match_rate,
-    predicted_findings_runs_examined: prediction.predicted_findings_runs_examined,
-  };
-}
-
-const ADVISORY_SIDECAR_TIMING_EVENTS = new Set([
-  EVENTS.ADVISORY_REVIEW,
-  EVENTS.SIDECAR_RESULT,
-  EVENTS.SIDECAR_FAILED,
-]);
-
-function eventHasAdvisorySidecarTiming(event) {
-  return ADVISORY_SIDECAR_TIMING_EVENTS.has(event?.event)
+function eventHasAdvisoryTiming(event) {
+  return event?.event === EVENTS.ADVISORY_REVIEW
     && (
       event.consumed_by_phase !== undefined
       || event.critical_path_wait_ms !== undefined
       || event.advisory_elapsed_ms !== undefined
-      || event.sidecar_elapsed_ms !== undefined
     );
 }
 
@@ -1362,8 +1165,8 @@ function numericEventField(event, fieldName, fallback = 0) {
   return Number.isFinite(value) && value >= 0 ? value : fallback;
 }
 
-function buildAdvisorySidecarTiming(events) {
-  const timedEvents = events.filter(eventHasAdvisorySidecarTiming);
+function buildAdvisoryTiming(events) {
+  const timedEvents = events.filter(eventHasAdvisoryTiming);
   const byConsumedPhase = new Map();
   const byArtifactKind = new Map();
   const criticalPathWaits = [];
@@ -1373,7 +1176,7 @@ function buildAdvisorySidecarTiming(events) {
   for (const event of timedEvents) {
     const consumedPhase = normalizeBucketValue(event.consumed_by_phase);
     incrementCountBucket(byConsumedPhase, consumedPhase);
-    incrementCountBucket(byArtifactKind, event.event === EVENTS.ADVISORY_REVIEW ? "advisory_review" : "sidecar");
+    incrementCountBucket(byArtifactKind, "advisory_review");
     criticalPathWaits.push(numericEventField(event, "critical_path_wait_ms"));
     if (event.phase_decision_waited === true) phaseDecisionWaited += 1;
     if (event.frontier_step_replaced === true) frontierStepReplaced += 1;
@@ -1394,16 +1197,6 @@ function buildAdvisorySidecarTiming(events) {
     phase_decision_waited: phaseDecisionWaited,
     frontier_step_replaced: frontierStepReplaced,
   };
-}
-
-function formatSidecarCountSummary(buckets) {
-  return Object.entries(buckets || {})
-    .sort(([leftKey, left], [rightKey, right]) => (
-      (right.invocations || 0) - (left.invocations || 0)
-      || leftKey.localeCompare(rightKey)
-    ))
-    .map(([key, summary]) => `${key}=${summary.invocations || 0}`)
-    .join(", ");
 }
 
 function resolveManifestRubricPath(manifest) {
@@ -1536,7 +1329,7 @@ function buildQualitativeSignals(manifests, events) {
   };
 }
 
-function buildReport({ repoRoot, staleHours, now, manifests, events, includeSidecarInsights = false }) {
+function buildReport({ repoRoot, staleHours, now, manifests, events }) {
   const resumeStarts = events.filter((event) => (
     event.event === EVENTS.DISPATCH_START && event.state_from === STATES.CHANGES_REQUESTED
   ));
@@ -1616,13 +1409,9 @@ function buildReport({ repoRoot, staleHours, now, manifests, events, includeSide
     guidance_pack_insights: buildGuidancePackInsights(manifests, events),
     review_lineage: reviewLineage,
     round_cost: buildRoundCostSummary({ repoRoot, manifests, events, reviewLineage }),
-    advisory_sidecar_timing: buildAdvisorySidecarTiming(events),
+    advisory_timing: buildAdvisoryTiming(events),
     override_audit: buildOverrideAuditSummary(events),
   };
-
-  if (includeSidecarInsights) {
-    report.sidecar_insights = buildSidecarInsights({ events, repoRoot });
-  }
 
   return report;
 }
@@ -1813,7 +1602,7 @@ function main() {
   const now = Date.now();
   const manifests = listManifestRecords(repoRoot);
   const events = readAllRunEvents(repoRoot);
-  const report = buildReport({ repoRoot, staleHours, now, manifests, events, includeSidecarInsights: true });
+  const report = buildReport({ repoRoot, staleHours, now, manifests, events });
 
   if (hasCliFlag("--by-actor")) {
     report.by_actor = buildActorReports({ repoRoot, staleHours, now, manifests, events });
@@ -1891,26 +1680,13 @@ function main() {
       );
     }
   }
-  if (report.sidecar_insights?.total_invocations === 0) {
-    console.log("  sidecar_insights: no sidecar runs available");
-  } else {
-    console.log("  sidecar_insights:");
-    console.log(`    total_invocations: ${report.sidecar_insights.total_invocations}`);
-    console.log(`    failure_rate: ${report.sidecar_insights.failure_rate ?? "n/a"}`);
-    console.log(`    by_kind: ${formatSidecarCountSummary(report.sidecar_insights.by_kind) || "n/a"}`);
-    console.log(`    by_executor: ${formatSidecarCountSummary(report.sidecar_insights.by_executor) || "n/a"}`);
-    if (report.sidecar_insights.predicted_findings_match_rate !== null) {
-      console.log(`    predicted_findings_match_rate: ${report.sidecar_insights.predicted_findings_match_rate}`);
-      console.log(`    predicted_findings_runs_examined: ${report.sidecar_insights.predicted_findings_runs_examined}`);
-    }
-  }
-  if (report.advisory_sidecar_timing?.total_artifacts > 0) {
-    console.log("  advisory_sidecar_timing:");
-    console.log(`    total_artifacts: ${report.advisory_sidecar_timing.total_artifacts}`);
-    console.log(`    median_critical_path_wait_ms: ${report.advisory_sidecar_timing.median_critical_path_wait_ms ?? "n/a"}`);
-    console.log(`    consumed_before_decision: ${report.advisory_sidecar_timing.consumed_before_decision}`);
-    console.log(`    metrics_only_late_artifacts: ${report.advisory_sidecar_timing.metrics_only_late_artifacts}`);
-    console.log(`    redispatch_artifacts: ${report.advisory_sidecar_timing.redispatch_artifacts}`);
+  if (report.advisory_timing?.total_artifacts > 0) {
+    console.log("  advisory_timing:");
+    console.log(`    total_artifacts: ${report.advisory_timing.total_artifacts}`);
+    console.log(`    median_critical_path_wait_ms: ${report.advisory_timing.median_critical_path_wait_ms ?? "n/a"}`);
+    console.log(`    consumed_before_decision: ${report.advisory_timing.consumed_before_decision}`);
+    console.log(`    metrics_only_late_artifacts: ${report.advisory_timing.metrics_only_late_artifacts}`);
+    console.log(`    redispatch_artifacts: ${report.advisory_timing.redispatch_artifacts}`);
   }
   if (report.override_audit?.total_events > 0) {
     const audit = report.override_audit;

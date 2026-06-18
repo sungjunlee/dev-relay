@@ -1,6 +1,6 @@
 # Optional Subsystem Scout
 
-The subsystem scout is an optional read-only planning aid for L/XL or high-ambiguity tasks. It belongs in `relay-plan` as a risk-triggered add-on, not in the existing `relay-sidecar` runner. Existing `relay-sidecar` artifacts are for an already-created relay run and PR/diff context; the scout runs before Done Criteria are frozen and must not create a new lifecycle state.
+The subsystem scout is an optional read-only planning aid for L/XL or high-ambiguity tasks. It belongs in `relay-plan` as a risk-triggered add-on. The scout runs before Done Criteria are frozen and must not create a new lifecycle state.
 
 ## Trigger criteria
 

@@ -344,7 +344,7 @@ process.stdout.write(JSON.stringify({
     OPENCODE_SCRIPT,
     "--repo", repoRoot,
     "--prompt-file", promptPath,
-    "--model", "opencode-go/deepseek-v4-pro",
+    "--model", "example/opencode-model-fast",
     "--json",
   ], {
     cwd: repoRoot,
@@ -356,7 +356,7 @@ process.stdout.write(JSON.stringify({
   const result = JSON.parse(stdout);
   const loggedArgs = fs.readFileSync(logPath, "utf-8");
   assert.equal(result.profile, "blindspot");
-  assert.match(loggedArgs, /^run\n-m\nopencode-go\/deepseek-v4-pro\n/);
+  assert.match(loggedArgs, /^run\n-m\nexample\/opencode-model-fast\n/);
   assert.match(loggedArgs, /NON-INTERACTIVE ADVISORY REVIEW/);
   assert.match(loggedArgs, /Return a passing review\./);
 });
@@ -434,7 +434,7 @@ process.exit(0);
       OPENCODE_SCRIPT,
       "--repo", repoRoot,
       "--prompt-file", promptPath,
-      "--model", "opencode-go/deepseek-v4-pro",
+      "--model", "example/opencode-model-fast",
       "--json",
     ], {
       cwd: repoRoot,
@@ -519,7 +519,7 @@ process.stdout.write(JSON.stringify({
     OPENCODE_SCRIPT,
     "--repo", repoRoot,
     "--prompt-file", promptPath,
-    "--model", "opencode-go/deepseek-v4-pro",
+    "--model", "example/opencode-model-fast",
     "--phase", "primary_review",
     "--json",
   ], {
@@ -532,7 +532,7 @@ process.stdout.write(JSON.stringify({
   const result = JSON.parse(stdout);
   const loggedArgs = fs.readFileSync(logPath, "utf-8");
   assert.equal(result.verdict, "pass");
-  assert.match(loggedArgs, /^run\n-m\nopencode-go\/deepseek-v4-pro\n/);
+  assert.match(loggedArgs, /^run\n-m\nexample\/opencode-model-fast\n/);
   assert.match(loggedArgs, /NON-INTERACTIVE REVIEW/);
   assert.doesNotMatch(loggedArgs, /NON-INTERACTIVE ADVISORY REVIEW/);
 });

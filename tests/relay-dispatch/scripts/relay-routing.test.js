@@ -23,7 +23,6 @@ function policy(routingRules = []) {
     defaults: {
       review: { reviewer: "codex" },
       advisory_review: null,
-      sidecar: null,
     },
     routing_rules: routingRules,
   };
@@ -66,7 +65,7 @@ test("routing CLI tags override inferred labels, profile, rubric, and file tags"
       {
         name: "docs",
         match: { tags: ["docs-only"] },
-        sidecar: { kind: "docs-sync", executor: "opencode" },
+        advisory_review: { reviewer: "opencode", profile: "docs" },
       },
       {
         name: "security",
@@ -86,7 +85,6 @@ test("routing CLI tags override inferred labels, profile, rubric, and file tags"
   assert.equal(decision.matched, true);
   assert.equal(decision.matched_rule.name, "security");
   assert.deepEqual(decision.selected.advisory_review, { reviewer: "claude", profile: "blindspot" });
-  assert.equal(decision.selected.sidecar, null);
 });
 
 test("routing collects label, task_profile, rubric, and test-command tags when CLI tags are absent", () => {
@@ -129,14 +127,13 @@ test("routing changed-file classifier recognizes docs-only and test-gap candidat
   assert.deepEqual(classifyChangedFiles(["skills/relay-dispatch/scripts/dispatch.js"]), []);
 });
 
-test("routing first matching rule selects advisory and sidecar defaults only", () => {
+test("routing first matching rule selects advisory defaults only", () => {
   const originalPolicy = policy([
     {
       name: "first",
       match: { tags: ["docs"] },
       review: { reviewer: "opencode" },
       advisory_review: { reviewer: "claude", profile: "blindspot" },
-      sidecar: { kind: "docs-sync", executor: "opencode" },
     },
     {
       name: "second",
@@ -154,19 +151,18 @@ test("routing first matching rule selects advisory and sidecar defaults only", (
   assert.equal(decision.matched_rule.name, "first");
   assert.deepEqual(decision.selected, {
     advisory_review: { reviewer: "claude", profile: "blindspot" },
-    sidecar: { kind: "docs-sync", executor: "opencode" },
   });
   assert.deepEqual(originalPolicy.defaults.review, { reviewer: "codex" });
   assert.deepEqual(decision.ignored_primary_review, { reviewer: "opencode" });
 });
 
-test("routing reports no match with null advisory and sidecar selections", () => {
+test("routing reports no match with null advisory selection", () => {
   const decision = resolveRoutingDecision({
     policy: policy([
       {
         name: "docs",
         match: { tags: ["docs"] },
-        sidecar: { kind: "docs-sync" },
+        advisory_review: { reviewer: "opencode" },
       },
     ]),
     issueLabels: ["security"],
@@ -174,7 +170,7 @@ test("routing reports no match with null advisory and sidecar selections", () =>
 
   assert.equal(decision.matched, false);
   assert.equal(decision.matched_rule, null);
-  assert.deepEqual(decision.selected, { advisory_review: null, sidecar: null });
+  assert.deepEqual(decision.selected, { advisory_review: null });
   assert.equal(decision.no_match_reason, "no_routing_rule_matched");
 });
 
@@ -183,12 +179,12 @@ test("routing duplicate rule names warn but preserve first-match order", () => {
     {
       name: "dup",
       match: { tags: ["docs"] },
-      sidecar: { kind: "docs-sync" },
+      advisory_review: { reviewer: "claude" },
     },
     {
       name: "dup",
       match: { tags: ["docs"] },
-      sidecar: { kind: "test-gap" },
+      advisory_review: { reviewer: "opencode" },
     },
   ];
 
@@ -204,7 +200,7 @@ test("routing duplicate rule names warn but preserve first-match order", () => {
   const decision = resolveRoutingDecision({ policy: policy(rules), issueLabels: ["docs"] });
   assert.equal(decision.matched_rule.name, "dup");
   assert.equal(decision.matched_rule.index, 0);
-  assert.deepEqual(decision.selected.sidecar, { kind: "docs-sync" });
+  assert.deepEqual(decision.selected.advisory_review, { reviewer: "claude" });
   assert.deepEqual(decision.warnings, [
     {
       code: "duplicate_rule_name",
@@ -235,10 +231,9 @@ test("project routes schema accepts phase defaults and rejects malformed actors"
   assert.deepEqual(validateProjectRoutes({
     version: 1,
     defaults: {
-      dispatch: { executor: "pi", model: "deepseek/deepseek-v4-flash" },
+      dispatch: { executor: "pi", model: "example/pi-model-fast" },
       review: { reviewer: "codex" },
-      advisory_review: { reviewer: "opencode", model: "opencode-go/deepseek-v4-flash", profile: "blindspot" },
-      sidecar: null,
+      advisory_review: { reviewer: "opencode", model: "example/opencode-model-cheap", profile: "blindspot" },
     },
   }, "routes.json").defaults.review, { reviewer: "codex" });
 
@@ -254,23 +249,23 @@ test("project routes schema accepts phase defaults and rejects malformed actors"
 test("route intent resolver gives run intent precedence over project defaults", () => {
   const result = resolveRouteIntent({
     runIntent: {
-      dispatch: { executor: "pi", model: "deepseek/deepseek-v4-flash" },
+      dispatch: { executor: "pi", model: "example/pi-model-fast" },
       review: { reviewer: "claude" },
     },
     projectRoutes: {
       version: 1,
       defaults: {
-        dispatch: { executor: "opencode", model: "opencode-go/deepseek-v4-pro" },
+        dispatch: { executor: "opencode", model: "example/opencode-model-fast" },
         review: { reviewer: "codex" },
       },
     },
     policy: routePolicy({
-      allowed_model_routes: [{ route: "deepseek/*", phases: ["dispatch"], executors: ["pi"] }],
+      allowed_model_routes: [{ route: "example/pi-*", phases: ["dispatch"], executors: ["pi"] }],
     }),
   });
 
   assert.equal(result.phases.dispatch.executor, "pi");
-  assert.equal(result.phases.dispatch.model, "deepseek/deepseek-v4-flash");
+  assert.equal(result.phases.dispatch.model, "example/pi-model-fast");
   assert.equal(result.phases.dispatch.sources.executor, "run_intent");
   assert.equal(result.phases.dispatch.policy_decision.reason, "allowed_model_route");
   assert.equal(result.phases.review.reviewer, "claude");
@@ -282,12 +277,12 @@ test("route intent resolver uses project defaults before built-in managed defaul
     projectRoutes: {
       version: 1,
       defaults: {
-        dispatch: { executor: "pi", model: "deepseek/deepseek-v4-flash" },
+        dispatch: { executor: "pi", model: "example/pi-model-fast" },
         review: { reviewer: "codex" },
       },
     },
     policy: routePolicy({
-      allowed_model_routes: [{ route: "deepseek/*", phases: ["dispatch"], executors: ["pi"] }],
+      allowed_model_routes: [{ route: "example/pi-*", phases: ["dispatch"], executors: ["pi"] }],
     }),
   });
 
@@ -302,7 +297,7 @@ test("route intent resolver preserves missing unmanaged model as policy denial",
   const result = resolveRouteIntent({
     runIntent: { dispatch: { executor: "pi" } },
     policy: routePolicy({
-      allowed_model_routes: [{ route: "deepseek/*", phases: ["dispatch"], executors: ["pi"] }],
+      allowed_model_routes: [{ route: "example/pi-*", phases: ["dispatch"], executors: ["pi"] }],
     }),
   });
 

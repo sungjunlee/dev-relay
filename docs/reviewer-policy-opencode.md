@@ -1,6 +1,6 @@
 # Reviewer Policy — opencode-produced Work
 
-This document defines the trust policy for opencode executor output before using it broadly. It applies to relay runs where the executor role is bound to opencode (#377), and to advisory artifacts produced by opencode sidecars (#367 epic).
+This document defines the trust policy for opencode executor output before using it broadly. It applies to relay runs where the executor or advisory reviewer role is bound to opencode (#377).
 
 It is policy-as-text. The first pass does not enforce it as a hard merge gate; reviewers and operators apply it manually. Hardening into runtime checks comes later (#379 measurement first, then targeted enforcement).
 
@@ -9,7 +9,7 @@ It is policy-as-text. The first pass does not enforce it as a hard merge gate; r
 When the executor is opencode, the default reviewer is **codex** or **claude** — never opencode. This applies to:
 
 - Relay runs (`relay-dispatch -e opencode → relay-review --reviewer codex|claude`).
-- Sidecar artifacts (opencode produces advisory output; the human or codex/claude reviewer checks it during the same review pass).
+- Advisory review artifacts (opencode produces supplemental reviewer output; the human or codex/claude reviewer treats it as supporting evidence, not proof).
 
 Why codex/claude reviewer is the default:
 
@@ -54,7 +54,7 @@ The following are **proxy signals**, not evidence of correctness, regardless of 
 
 - **opencode self-reports** (e.g., the `resultPreview` field, the model's narrated summary of what it did).
 - **PR descriptions** (LLMs write PR bodies that confidently describe code that does not exist).
-- **Sidecar outputs** (test-gap scout, context recap, docs-sync drafts). Sidecars are *advisory artifacts* that a reviewer reads as hints; they never replace verdict signals.
+- **Advisory review outputs** are supporting artifacts that a reviewer reads as hints; they never replace verdict signals.
 - **`tests pass` claims in chat or PR body** without a corresponding execution-evidence stamp.
 - **Commit messages** ("Fixed all 3 issues") in isolation.
 
@@ -87,10 +87,10 @@ If a reviewer's verdict is overridden by the orchestrator (force-finalize, recov
 - **Prompt template changes** (e.g., `relay/references/prompt-template.md`). Per `feedback_prompt_template_orchestrator_language`. The text shapes future executor behavior; same-family reviewers may be biased toward accepting prompt drift that matches their own internal patterns.
 - **Trust-boundary documentation** (this file, for example). Self-evaluation by the same trust system being defined creates a circular validation.
 
-For unsafe categories, default executor is codex or claude. opencode is allowed only as a sidecar (read-only advisory, no commit), reviewed by codex/claude.
+For unsafe categories, default executor is codex or claude. opencode should be used only as a read-only advisory reviewer, reviewed by the human operator or by codex/claude primary review.
 
 ## Forward references
 
 - #377: opencode executor adapter (replaces this doc's "first pass" language with concrete enforcement once shipped).
 - #379: per-executor reliability — once we have group-by-executor pass-rate / round-count data, the warnings above can be tuned (e.g., raise warning to error if cross-family disagreement is high).
-- #367 epic: opencode sidecars — sidecar advisory output is governed by this doc's "what does not count as proof" section.
+- Advisory review output is governed by this doc's "what does not count as proof" section.

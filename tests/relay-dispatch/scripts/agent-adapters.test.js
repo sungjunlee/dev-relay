@@ -66,9 +66,9 @@ test("agent adapter descriptors expose structured capabilities and the executor 
   assert.equal(opencode.phases[ADAPTER_PHASES.ADVISORY_REVIEW].trust, "advisory");
   assert.equal(opencode.capabilities.appRegistration.supported, false);
   assert.equal(opencode.capabilities.modelDefaults.provider, "opencode-go");
-  assert.equal(opencode.capabilities.modelDefaults.dispatch.defaultModel, "opencode-go/deepseek-v4-pro");
-  assert.equal(opencode.capabilities.modelDefaults.primaryReview.defaultModel, "opencode-go/deepseek-v4-pro");
-  assert.equal(opencode.capabilities.modelDefaults.advisoryReview.defaultModel, "opencode-go/deepseek-v4-pro");
+  assert.equal(opencode.capabilities.modelDefaults.dispatch.defaultModel, null);
+  assert.equal(opencode.capabilities.modelDefaults.primaryReview.defaultModel, null);
+  assert.equal(opencode.capabilities.modelDefaults.advisoryReview.defaultModel, null);
   assert.deepEqual(opencode.capabilities.sandbox.dispatch.modes, ["workspace-write"]);
   assert.equal(opencode.capabilities.sandbox.dispatch.enforced, false);
   assert.equal(opencode.capabilities.sandbox.primaryReview.mode, "read-only");
@@ -151,7 +151,7 @@ test("agent adapter registry fails closed for unknown adapters and phases", () =
     /unknown agent adapter 'nonexistent'\. Supported: claude, codex, opencode, pi, antigravity, cursor/
   );
   assert.throws(
-    () => supportsAgentAdapterPhase("codex", "sidecar"),
-    /unknown agent adapter phase 'sidecar'\. Supported: dispatch, primary_review, advisory_review/
+    () => supportsAgentAdapterPhase("codex", "unknown_phase"),
+    /unknown agent adapter phase 'unknown_phase'\. Supported: dispatch, primary_review, advisory_review/
   );
 });

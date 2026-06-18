@@ -87,8 +87,8 @@ node skills/relay-review/scripts/review-runner.js --repo . --run-id "$RUN_ID" --
 node skills/relay-review/scripts/review-runner.js --repo . --run-id "$RUN_ID" --reviewer codex --advisory-reviewer pi --advisory-reviewer-model openai/gpt-5 --json
 
 # OpenCode primary or advisory review
-node skills/relay-review/scripts/review-runner.js --repo . --run-id "$RUN_ID" --reviewer opencode --reviewer-model opencode-go/deepseek-v4-pro --json
-node skills/relay-review/scripts/review-runner.js --repo . --run-id "$RUN_ID" --reviewer codex --advisory-reviewer opencode --advisory-reviewer-model opencode-go/deepseek-v4-pro --json
+node skills/relay-review/scripts/review-runner.js --repo . --run-id "$RUN_ID" --reviewer opencode --reviewer-model example/opencode-model-fast --json
+node skills/relay-review/scripts/review-runner.js --repo . --run-id "$RUN_ID" --reviewer codex --advisory-reviewer opencode --advisory-reviewer-model example/opencode-model-fast --json
 
 # Antigravity CLI dispatch and primary review
 node skills/relay-dispatch/scripts/dispatch.js . --executor antigravity --model google/antigravity-cli -b issue-42 -p "..." --rubric-file rubric.yaml

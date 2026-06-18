@@ -293,26 +293,22 @@ test("evaluateReviewGate enforces hardened advisory and strict execution evidenc
   }
 });
 
-test("evaluateReviewGate does not accept sidecar output as hardened advisory evidence", () => {
+test("evaluateReviewGate does not accept arbitrary output as hardened advisory evidence", () => {
   const { headSha, runDir, manifestData } = createHardenedGateFixture({ advisory: "missing" });
-  const sidecarId = "docs-sync-late";
-  const outputPath = path.join(runDir, "sidecars", sidecarId, "output.md");
+  const outputPath = path.join(runDir, "advisory-output", "output.md");
   fs.mkdirSync(path.dirname(outputPath), { recursive: true });
   fs.writeFileSync(outputPath, JSON.stringify({
     profile: "blindspot",
-    summary: "sidecar is advisory only",
+    summary: "standalone output is advisory only",
     required_findings: [],
     advisory_findings: [],
     duplicate_or_low_confidence: [],
   }), "utf-8");
   appendEvent(runDir, {
-    event: "sidecar_result",
-    sidecar_id: sidecarId,
-    kind: "docs-sync",
-    output_path: `sidecars/${sidecarId}/output.md`,
+    event: "dispatch_result",
+    output_path: "advisory-output/output.md",
     trust_level: "advisory",
     elapsed_ms: 100,
-    sidecar_elapsed_ms: 100,
     critical_path_wait_ms: 0,
     consumed_by_phase: "metrics",
     phase_decision_waited: false,

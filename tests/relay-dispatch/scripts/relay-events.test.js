@@ -269,7 +269,7 @@ const RUN_EVENT_FIELD_CASES = [
     },
   },
   {
-    label: "advisory and sidecar timing fields",
+    label: "advisory timing fields",
     fields: {
       event: EVENTS.ADVISORY_REVIEW,
       state_from: "review_pending",

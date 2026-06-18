@@ -51,9 +51,6 @@ const EVENTS = Object.freeze({
   REVIEWER_SWAP: "reviewer_swap",
   RUBRIC_QUALITY: "rubric_quality",
   SCORE_DIVERGENCE: "score_divergence",
-  SIDECAR_FAILED: "sidecar_failed",
-  SIDECAR_RESULT: "sidecar_result",
-  SIDECAR_START: "sidecar_start",
   SKIP_REVIEW: "skip_review",
   STATE_RECOVERY: "state_recovery",
 });
@@ -318,9 +315,6 @@ function appendRunEvent(repoRoot, runId, eventData) {
     ...timingFieldsFromEventData(eventData),
     ...(eventData.failure_reason !== undefined
       ? { failure_reason: normalizeEventValue(eventData.failure_reason) }
-      : {}),
-    ...(eventData.sidecar_id !== undefined
-      ? { sidecar_id: normalizeEventValue(eventData.sidecar_id) }
       : {}),
     ...(eventData.trust_level !== undefined
       ? { trust_level: normalizeEventValue(eventData.trust_level) }

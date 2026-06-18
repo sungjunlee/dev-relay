@@ -1,5 +1,7 @@
 ## Rubric Pattern — Explicit Forbidden Zones
 
+Historical note: issue examples in this file include prior relay runs and removed runtime surfaces; use them as rubric-scoping case studies, not as current runtime inventory.
+
 Use this pattern for any dispatch whose edit scope is narrower than "anywhere in the repo." Codex, given silence on what NOT to touch, will read silence as permission and apply broad changes — global string replacement, sed-style search-replace across cached snapshots, modifications of frozen sibling files. Every rubric must enumerate the paths that MUST NOT change.
 
 ### Failure mode
@@ -25,8 +27,8 @@ The pattern was originally derived from #434's mechanical-rename dispatch (`rela
 | 2026-05-07 | #445 | #435 | new deterministic scorer | clean |
 | 2026-05-08 | #447 | #436 | new module + state machine wiring | clean |
 | 2026-05-08 | #446 | #437 | new probe CLI + chain offer | clean |
-| 2026-05-08 | #448 | #372 | sidecar schema additions | clean |
-| 2026-05-08 | #449 | #381 | new skill (`relay-sidecar`) | clean |
+| 2026-05-08 | #448 | #372 | artifact schema additions | clean |
+| 2026-05-08 | #449 | #381 | new advisory artifact skill | clean |
 | 2026-05-08 | #450 / #451 | #373 / #376 | kind module / surgical extension | clean (one false start at #374 R2, caught by reviewer and reverted) |
 | 2026-05-08 | #452 / #453 | #374 / #375 | kind modules | #374 had one R2 forbidden-zone touch → reverted in R3 |
 | 2026-05-08 | #454 | #144 | new feature dir + matcher in existing skill | clean |
@@ -38,7 +40,7 @@ Pattern works across mechanical renames, schema additions, new-skill builds, kin
 A `forbidden_zones` block lists glob patterns that are off-limits. Be explicit. Don't trust codex to infer. Categories that recur across dispatches:
 
 - **Universal hands-off**: `backlog/**`, `**/*.cache/**`, `docs/archive/issues/issue-*.md`, `docs/*-2026-*.md`, `docs/*-2025-*.md`, `.github/workflows/**` — operational artifacts, point-in-time snapshots, CI/CD pipelines.
-- **Frozen prior-PR contracts**: every helper file shipped by a prior PR that this dispatch only consumes (e.g., `skills/relay-dispatch/scripts/sidecar-store.js` after #372 ships its 5-field schema).
+- **Frozen prior-PR contracts**: every helper file shipped by a prior PR that this dispatch only consumes (e.g., a persisted-artifact helper after a prior PR ships its schema).
 - **Sibling files in the same skill that aren't this PR's target**: when extending one module of a skill, list every other production file in the skill explicitly. Globs like `skills/<skill>/**` over-restrict; enumerate what stays read-only.
 - **Test files in non-target areas**: tests for other skills should be off-limits even when production code changes ripple.
 - **Cross-skill helpers imported as read-only**: when a script in skill A imports a helper from skill B, skill B's file is read-only for this dispatch unless the helper's API is the named target.
@@ -52,7 +54,7 @@ Forbidden zones name what's off-limits. The dispatch prompt should ALSO name the
 ```yaml
 forbidden_zones:
   - "skills/relay-dispatch/scripts/dispatch.js"
-  - "skills/relay-dispatch/scripts/sidecar-store.js"
+  - "skills/relay-dispatch/scripts/frozen-artifact-helper.js"
   - "skills/relay-dispatch/scripts/relay-events.js"
   # ... every other relay-dispatch script enumerated
   - "skills/relay-ready/**"
@@ -66,7 +68,7 @@ The comment-style allowed-zones note at the bottom is a planning aid; the dispat
 
 ### Worked example — surgical extension of an existing module (#376)
 
-When the task extended `reliability-report.js` to add a `sidecar_insights` block but every other relay-dispatch file was frozen by prior PRs:
+When the task extended `reliability-report.js` to add an `advisory_insights` block but every other relay-dispatch file was frozen by prior PRs:
 
 ```yaml
 forbidden_zones:
@@ -78,7 +80,7 @@ forbidden_zones:
   - ".github/workflows/**"
   # Read-only relay-dispatch internals (the ONE allowed edit is reliability-report.js itself):
   - "skills/relay-dispatch/scripts/dispatch.js"
-  - "skills/relay-dispatch/scripts/sidecar-store.js"
+  - "skills/relay-dispatch/scripts/frozen-artifact-helper.js"
   - "skills/relay-dispatch/scripts/relay-events.js"
   - "skills/relay-dispatch/scripts/recover-commit.js"
   - "skills/relay-dispatch/scripts/manifest/**"

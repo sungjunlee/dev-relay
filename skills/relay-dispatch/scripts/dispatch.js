@@ -840,32 +840,6 @@ function resolveRoutingRubricText({ rubricFile, manifest, runDir }) {
   return readFileIfExists(path.join(runDir, rubricPath));
 }
 
-function startRoutedSidecar({ repoRoot, routingDecision, runId }) {
-  const selected = routingDecision?.selected?.sidecar;
-  if (!selected || typeof selected !== "object" || !selected.kind) {
-    return null;
-  }
-  const sidecarScript = path.join(__dirname, "..", "..", "relay-sidecar", "scripts", "relay-sidecar.js");
-  const args = [sidecarScript, "--run-id", runId, "--kind", selected.kind];
-  if (selected.executor) args.push("--executor", selected.executor);
-  if (selected.model) args.push("--model", selected.model);
-  if (selected.variant) args.push("--variant", selected.variant);
-  const child = nodeSpawn(process.execPath, args, {
-    cwd: repoRoot,
-    detached: true,
-    env: { ...process.env },
-    stdio: "ignore",
-  });
-  child.unref();
-  return {
-    kind: selected.kind,
-    executor: selected.executor || "opencode",
-    model: selected.model || null,
-    variant: selected.variant || null,
-    status: "started",
-  };
-}
-
 function summarizeRoutePlan(routePlan) {
   const summary = {};
   for (const [phase, value] of Object.entries(routePlan?.phases || {})) {
@@ -1899,10 +1873,6 @@ async function main() {
     }
   }
 
-  const routedSidecar = manifest.state === STATES.REVIEW_PENDING
-    ? startRoutedSidecar({ repoRoot, routingDecision, runId })
-    : null;
-
   const rubricAnchor = getRubricAnchorStatus(manifest, { runDir });
   const result = {
     runId,
@@ -1923,7 +1893,6 @@ async function main() {
     routePlanPath: routePlanSnapshot?.path || null,
     routePlan: routePlanSnapshot?.snapshot || null,
     routingDecision,
-    routedSidecar,
     codexGitCommonDir,
     worktree: wtPath,
     branch,

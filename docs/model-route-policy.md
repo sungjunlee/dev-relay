@@ -2,7 +2,7 @@
 
 Route policy answers one operational question: which provider/model route is allowed to run in each relay phase?
 
-Executor and reviewer names such as `codex`, `claude`, `opencode`, and `pi` are harness names. They select a CLI adapter and execution contract. They are not the compliance boundary. The compliance boundary is the provider/model route string, for example `example/opencode-model-fast`, `opencode-go/deepseek-v4-pro`, `deepseek/r1`, or `ollama/qwen3`.
+Executor and reviewer names such as `codex`, `claude`, `opencode`, and `pi` are harness names. They select a CLI adapter and execution contract. They are not the compliance boundary. The compliance boundary is the provider/model route string, for example `example/opencode-model-fast`, `example/pi-model-fast`, `example/pi-model-deep`, or `ollama/qwen3`.
 
 Codex and Claude are the managed CLI defaults. In the default managed profile, a model-less Codex or Claude invocation is allowed because the CLI account and its managed default model are the boundary. Generated company defaults should not pin Codex or Claude model names just to make policy explicit. OpenCode, Pi, and Antigravity are routing harnesses, so managed/company profiles must require an explicit provider/model route and an allow rule before they can run.
 
@@ -16,8 +16,7 @@ When no policy config exists, relay loads a fail-closed default policy:
   "defaults": {
     "dispatch": { "executor": "codex" },
     "review": { "reviewer": "codex" },
-    "advisory_review": null,
-    "sidecar": null
+    "advisory_review": null
   },
   "managed_cli": ["codex", "claude"],
   "allowed_model_routes": [],
@@ -45,10 +44,9 @@ For example, `--reviewer opencode --reviewer-model openai/gpt-5` reaches the rou
 
 | Phase | Route selection before the gate | Policy gate tuple |
 | --- | --- | --- |
-| `dispatch` | `--executor` selects the harness. `--model` wins over `manifest.model_hints.dispatch`, then `--model-hints dispatch=...`, then executor model config such as `~/.relay/executors.json` or bundled OpenCode defaults. Primary dispatch routing rules are not used today; `--tags` only affects advisory and sidecar routing selected by dispatch. If no actor is supplied, the existing relay default is `codex`. | `phase=dispatch`, `executor=<name>`, `model=<effective route or null>` |
+| `dispatch` | `--executor` selects the harness. `--model` wins over `manifest.model_hints.dispatch`, then `--model-hints dispatch=...`, then local executor model config such as `~/.relay/executors.json`. The bundled executor model config intentionally ships empty, so unmanaged dispatch fails closed when no provider/model route is supplied. Primary dispatch routing rules are not used today; `--tags` only affects advisory review routing selected by dispatch. If no actor is supplied, the existing relay default is `codex`. | `phase=dispatch`, `executor=<name>`, `model=<effective route or null>` |
 | `review` | `--reviewer` wins over `RELAY_REVIEWER`, then `roles.reviewer`, then the existing relay default `codex`. `--reviewer-model` wins over `manifest.model_hints.review`; otherwise Codex/Claude normally run as managed CLI with no model route. | `phase=review`, `reviewer=<name>`, `model=<effective route or null>` |
 | `advisory_review` | `--advisory-reviewer` and `--advisory-reviewer-model` win. If absent, `routing.selected.advisory_review` from dispatch routing can supply the reviewer, profile, and model. If a reviewer is selected but no model is supplied, `manifest.model_hints.advisory_review` and then executor model config can supply the route. No advisory reviewer runs by default. | `phase=advisory_review`, `reviewer=<name>`, `model=<effective route or null>` |
-| `sidecar` | A direct `relay-sidecar` command uses `--executor` and `--model`; routed sidecars use `routing.selected.sidecar` persisted by dispatch. The direct sidecar runner defaults to `opencode`, which means it still needs an allowed OpenCode route unless `--executor none` is used for deterministic sidecars. | `phase=sidecar`, `executor=<name>`, `model=<effective route or null>` |
 
 Policy `defaults` describe configured actor defaults for auditing and future-safe profile shape. Where a current call site does not consume a policy default directly, the existing relay default in the table applies next. The policy gate still evaluates the final effective tuple.
 
@@ -74,16 +72,16 @@ The generated company policy intentionally keeps Codex and Claude as managed CLI
 
 ```bash
 node skills/relay-config/scripts/relay-config.js allow-route 'example/opencode-model-*' \
-  --phase dispatch,advisory_review,sidecar \
+  --phase dispatch,advisory_review \
   --executor opencode
 
 node skills/relay-config/scripts/relay-config.js allow-route 'example/pi-*' \
-  --phase dispatch,review,advisory_review,sidecar \
+  --phase dispatch,review,advisory_review \
   --executor pi \
   --reviewer pi
 ```
 
-For routed advisory reviewers or sidecars, add routing rules to the policy JSON so the selected route is policy-approved:
+For routed advisory reviewers, add routing rules to the policy JSON so the selected route is policy-approved:
 
 ```json
 {
@@ -92,14 +90,13 @@ For routed advisory reviewers or sidecars, add routing rules to the policy JSON 
   "defaults": {
     "dispatch": { "executor": "codex" },
     "review": { "reviewer": "codex" },
-    "advisory_review": null,
-    "sidecar": null
+    "advisory_review": null
   },
   "managed_cli": ["codex", "claude"],
   "allowed_model_routes": [
     {
       "route": "example/opencode-model-*",
-      "phases": ["dispatch", "advisory_review", "sidecar"],
+      "phases": ["dispatch", "advisory_review"],
       "executors": ["opencode"],
       "reviewers": ["opencode"]
     }
@@ -107,16 +104,11 @@ For routed advisory reviewers or sidecars, add routing rules to the policy JSON 
   "denied_model_routes": [],
   "routing_rules": [
     {
-      "name": "docs-approved-sidecar",
+      "name": "docs-approved-advisory",
       "match": { "any_tags": ["docs", "docs-only"] },
       "advisory_review": {
         "reviewer": "opencode",
         "profile": "blindspot",
-        "model": "example/opencode-model-fast"
-      },
-      "sidecar": {
-        "kind": "docs-sync",
-        "executor": "opencode",
         "model": "example/opencode-model-fast"
       }
     }
@@ -141,10 +133,9 @@ Example project preference file:
 {
   "version": 1,
   "defaults": {
-    "dispatch": { "executor": "pi", "model": "deepseek/deepseek-v4-flash" },
+    "dispatch": { "executor": "pi", "model": "example/pi-model-fast" },
     "review": { "reviewer": "codex" },
-    "advisory_review": { "reviewer": "opencode", "model": "opencode-go/deepseek-v4-pro" },
-    "sidecar": null
+    "advisory_review": { "reviewer": "opencode", "model": "example/opencode-model-fast" }
   }
 }
 ```
@@ -153,7 +144,7 @@ Preview before dispatch:
 
 ```bash
 node skills/relay-config/scripts/relay-config.js plan-run --repo . \
-  --dispatch pi:deepseek/deepseek-v4-flash \
+  --dispatch pi:example/pi-model-fast \
   --review codex \
   --json
 ```
@@ -165,7 +156,7 @@ For one-off runs, write a route intent JSON and pass `--route-intent-file` to di
 After installing skills, prefer natural-language setup:
 
 ```text
-$relay-config 집에서는 opencode-go/deepseek-v4-pro를 sidecar/advisory에 쓰게 설정해줘.
+$relay-config 집에서는 example/opencode-model-fast를 advisory review에 쓰게 설정해줘.
 ```
 
 From a direct checkout, initialize a personal policy:
@@ -177,17 +168,19 @@ node skills/relay-config/scripts/relay-config.js init personal
 Then opt in to the routes you personally allow:
 
 ```bash
-node skills/relay-config/scripts/relay-config.js allow-route 'opencode-go/*' \
-  --phase dispatch,advisory_review,sidecar \
+node skills/relay-config/scripts/relay-config.js allow-route 'example/opencode-model-*' \
+  --phase dispatch,advisory_review \
   --executor opencode
 
-node skills/relay-config/scripts/relay-config.js allow-route 'deepseek/*' \
-  --phase dispatch,advisory_review,sidecar \
-  --executor opencode
+node skills/relay-config/scripts/relay-config.js allow-route 'example/pi-*' \
+  --phase dispatch,advisory_review \
+  --executor pi \
+  --reviewer pi
 
 node skills/relay-config/scripts/relay-config.js allow-route 'ollama/*' \
-  --phase dispatch,advisory_review,sidecar \
-  --executor opencode
+  --phase dispatch,advisory_review \
+  --executor opencode \
+  --reviewer opencode
 ```
 
 If you want OpenCode to default to a personal route, set the executor model config and allow the matching route:
@@ -196,10 +189,10 @@ If you want OpenCode to default to a personal route, set the executor model conf
 {
   "executors": {
     "opencode": {
-      "default_model": "opencode-go/deepseek-v4-pro",
+      "default_model": "example/opencode-model-fast",
       "candidate_models": [
-        "opencode-go/deepseek-v4-pro",
-        "deepseek/r1",
+        "example/opencode-model-fast",
+        "example/pi-model-deep",
         "ollama/qwen3"
       ]
     }
@@ -213,7 +206,7 @@ Antigravity uses `google/antigravity-cli` as a policy label in V1. Relay does no
 
 ## Doctor And Check
 
-Run `relay-config doctor` after policy changes and before enabling advisory reviewers or sidecars. Installed operators should use the skill; direct-checkout users can run:
+Run `relay-config doctor` after policy changes and before enabling advisory reviewers. Installed operators should use the skill; direct-checkout users can run:
 
 ```bash
 node skills/relay-config/scripts/relay-config.js doctor
@@ -226,25 +219,25 @@ Run `relay-config check` for each actual tuple you plan to enable:
 ```bash
 node skills/relay-config/scripts/relay-config.js check dispatch opencode example/opencode-model-fast
 
-node skills/relay-config/scripts/relay-config.js check advisory_review opencode example/opencode-model-fast
+node skills/relay-config/scripts/relay-config.js check dispatch pi example/pi-model-fast
 
-node skills/relay-config/scripts/relay-config.js check sidecar opencode example/opencode-model-fast
+node skills/relay-config/scripts/relay-config.js check advisory_review opencode example/opencode-model-fast
 ```
 
-Check exits non-zero when the tuple would be denied at runtime. Run it before turning on routed advisory review or sidecar rules because those phases can start automatically after dispatch.
+Check exits non-zero when the tuple would be denied at runtime. Run it before turning on routed advisory review rules because advisory review can start automatically after dispatch.
 
 For pre-planning dispatch probes, run the matching `probe-executor-env` command with the same unmanaged route. The probe evaluates `--executor` plus `--model` as a dispatch policy tuple before invoking the adapter:
 
 ```bash
-node skills/relay-config/scripts/relay-config.js check dispatch pi opencode-go/deepseek-v4-pro
+node skills/relay-config/scripts/relay-config.js check dispatch pi example/pi-model-fast
 
 node skills/relay-plan/scripts/probe-executor-env.js . \
   --executor pi \
-  --model opencode-go/deepseek-v4-pro \
+  --model example/pi-model-fast \
   --json
 ```
 
-If the route is allowed, the probe policy decision reports `reason=allowed_model_route`, `model=opencode-go/deepseek-v4-pro`, and then invokes the Pi adapter probe. If `--model` is omitted and no executor default supplies a provider/model route, unmanaged executors fail closed before adapter invocation: JSON output reports `policy_decision.reason=missing_model_route`, `policy_decision.model=null`, and `agent_tools_raw=null`. This is different from an explicit but unapproved route, which reports `unknown_model_route` with the rejected route in `policy_decision.model`.
+If the route is allowed, the probe policy decision reports `reason=allowed_model_route`, `model=example/pi-model-fast`, and then invokes the Pi adapter probe. If `--model` is omitted and no executor default supplies a provider/model route, unmanaged executors fail closed before adapter invocation: JSON output reports `policy_decision.reason=missing_model_route`, `policy_decision.model=null`, and `agent_tools_raw=null`. This is different from an explicit but unapproved route, which reports `unknown_model_route` with the rejected route in `policy_decision.model`.
 
 ## Denial Example
 

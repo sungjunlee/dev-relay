@@ -126,7 +126,6 @@ test("operator-facing OpenCode docs reference install-carried policy docs", () =
     readRepoFile("skills/relay-dispatch/scripts/executors/README.md"),
     readRepoFile("skills/relay-dispatch/scripts/executors/opencode.js"),
     readRepoFile("skills/relay-dispatch/scripts/dispatch.js"),
-    readRepoFile("skills/relay-sidecar/SKILL.md"),
   ].join("\n");
 
   assert.doesNotMatch(docs, /docs\/reviewer-policy-opencode\.md/);
@@ -147,8 +146,8 @@ test("model route docs cover project and run route UX without unsupported agy mo
     "route-plan.json",
     "relay-config plan-run",
     "--route-intent-file",
-    "opencode-go/deepseek-v4-pro",
-    "deepseek/deepseek-v4-flash",
+    "example/opencode-model-fast",
+    "example/pi-model-fast",
     "google/antigravity-cli",
   ]) {
     assert.match(docs, new RegExp(phrase.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));

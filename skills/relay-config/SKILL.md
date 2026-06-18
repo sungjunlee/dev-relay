@@ -1,11 +1,11 @@
 ---
 name: relay-config
 argument-hint: "[setup request or command]"
-description: Interactive setup for relay route policy. Use when the user asks to set up relay, configure company/personal relay policy, enable OpenCode or Pi, allow provider/model routes, check sidecar/advisory-review policy, or run relay-config doctor/check.
+description: Interactive setup for relay route policy. Use when the user asks to set up relay, configure company/personal relay policy, enable OpenCode or Pi, allow provider/model routes, check advisory-review policy, or run relay-config doctor/check.
 compatibility: Requires Node.js 18+ and the sibling relay-dispatch skill.
 metadata:
-  related-skills: "relay, relay-dispatch, relay-review, relay-sidecar"
-  keywords: "relay setup, relay config, route policy, model route, opencode, pi, sidecar, advisory review, 릴레이 설정, 회사 설정, 개인 설정"
+  related-skills: "relay, relay-dispatch, relay-review"
+  keywords: "relay setup, relay config, route policy, model route, opencode, pi, advisory review, 릴레이 설정, 회사 설정, 개인 설정"
   entry: scripts/relay-config.js
 ---
 ## Inputs
@@ -20,7 +20,7 @@ Set up relay route policy interactively. The user should not have to memorize co
 ## Use when
 
 - The user asks to set up or configure relay
-- The user wants company-safe defaults, personal OpenCode/Pi opt-in, or sidecar/advisory-review routing
+- The user wants company-safe defaults, personal OpenCode/Pi opt-in, or advisory-review routing
 - The user asks whether a provider/model route such as `example/opencode-model-*` is allowed
 - The user asks to run relay policy doctor/check
 
@@ -28,7 +28,7 @@ Set up relay route policy interactively. The user should not have to memorize co
 
 - Dispatching implementation work — use `relay-dispatch`
 - Reviewing PRs — use `relay-review`
-- Running a sidecar for an existing run — use `relay-sidecar`
+- Coordinating parallel implementation leaves — use `relay-fleet`
 
 ## Workflow
 
@@ -49,8 +49,8 @@ Infer from the user's words before asking questions:
 - `company`, `work`, `회사` → company profile
 - `personal`, `home`, `집`, `개인` → personal profile
 - `managed only`, `codex/claude only` → no unmanaged route opt-in
-- routes containing `/`, such as `example/opencode-model-*`, `opencode-go/*`, `deepseek/*`, or `ollama/*` → provider/model route patterns
-- `sidecar`, `advisory`, `reviewer`, `documentation`, `docs` → likely advisory-review or sidecar phases
+- routes containing `/`, such as `example/opencode-model-*`, `example/pi-*`, `openai/*`, or `ollama/*` → provider/model route patterns
+- `advisory`, `reviewer`, `documentation`, `docs` → likely advisory-review phases
 
 Ask only for missing decisions, one at a time. Use plain language and wait for the user's answer. Do not use host-specific question primitives as the only path; this skill must work in both Claude Code and Codex.
 
@@ -72,7 +72,7 @@ Use the wrapper for shorthand, or pass through full flags:
 
 ```bash
 node "${RELAY_SKILL_ROOT:-skills}/relay-config/scripts/relay-config.js" init company
-node "${RELAY_SKILL_ROOT:-skills}/relay-config/scripts/relay-config.js" allow-route 'example/opencode-model-*' --phase dispatch,advisory_review,sidecar --executor opencode
+node "${RELAY_SKILL_ROOT:-skills}/relay-config/scripts/relay-config.js" allow-route 'example/opencode-model-*' --phase dispatch,advisory_review --executor opencode
 node "${RELAY_SKILL_ROOT:-skills}/relay-config/scripts/relay-config.js" set-default advisory_review.reviewer opencode
 ```
 

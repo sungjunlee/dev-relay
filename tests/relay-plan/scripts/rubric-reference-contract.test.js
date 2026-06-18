@@ -136,22 +136,19 @@ test("planner input signals document harness context as weak planning context", 
   assert.match(signals, /cannot add product requirements, narrow explicit AC, or replace Done Criteria/);
 });
 
-test("optional subsystem scout is a relay-plan add-on, not a sidecar lifecycle step", () => {
+test("optional subsystem scout is a relay-plan add-on, not a lifecycle step", () => {
   const skill = readSkill();
   const scout = readReference("subsystem-scout.md");
-  const sidecarSkill = fs.readFileSync(path.join(__dirname, "..", "..", "..", "skills", "relay-sidecar", "SKILL.md"), "utf-8");
 
   assert.match(skill, /references\/subsystem-scout\.md/);
   assert.match(skill, /skip for S\/M tasks with clear scope/);
   assert.match(scout, /belongs in `relay-plan` as a risk-triggered add-on/);
-  assert.match(scout, /not in the existing `relay-sidecar` runner/);
   assert.match(scout, /must not create a new lifecycle state/);
   assert.match(scout, /## Trigger criteria/);
   assert.match(scout, /## Consumption boundary/);
   assert.match(scout, /weak planning signal/);
   assert.match(scout, /Do not write scout artifacts into `~\/\.relay\/runs\/` before dispatch allocates a run/);
   assert.match(scout, /test both the skip path and artifact path/);
-  assert.match(sidecarSkill, /Scouting a subsystem before a run exists/);
 });
 
 test("rubric validation gates Done Criteria quality before dispatch", () => {

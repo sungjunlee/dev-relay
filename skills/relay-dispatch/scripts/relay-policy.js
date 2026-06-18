@@ -44,7 +44,6 @@ function buildDefaultRelayPolicy() {
       dispatch: { executor: "codex" },
       review: { reviewer: "codex" },
       advisory_review: null,
-      sidecar: null,
     },
     managed_cli: ["codex", "claude"],
     allowed_model_routes: [],
@@ -98,8 +97,8 @@ function normalizeDefaults(defaults, sourceLabel) {
     throw new RelayPolicyError("invalid_policy", `invalid relay policy at ${sourceLabel}: defaults must be an object`);
   }
 
-  const required = ["dispatch", "review", "advisory_review", "sidecar"];
-  const normalized = { ...defaults };
+  const required = ["dispatch", "review", "advisory_review"];
+  const normalized = {};
   for (const key of required) {
     if (!Object.prototype.hasOwnProperty.call(defaults, key)) {
       throw new RelayPolicyError("invalid_policy", `invalid relay policy at ${sourceLabel}: defaults.${key} is required`);
@@ -110,6 +109,9 @@ function normalizeDefaults(defaults, sourceLabel) {
         "invalid_policy",
         `invalid relay policy at ${sourceLabel}: defaults.${key} must be an object or null`
       );
+    }
+    if (value === null) {
+      normalized[key] = null;
     }
     if (isPlainObject(value)) {
       normalized[key] = cloneJson(value);
@@ -262,7 +264,7 @@ function actorScopeCovers(baseEntry, candidateEntry) {
   if (!baseHasActorScope) return true;
 
   const phases = candidateEntry.phases;
-  const mayUseExecutors = phases === undefined || phases.includes("dispatch") || phases.includes("sidecar");
+  const mayUseExecutors = phases === undefined || phases.includes("dispatch");
   const mayUseReviewers = phases === undefined || phases.includes("review") || phases.includes("advisory_review");
 
   if ((mayUseExecutors || candidateEntry.executors !== undefined) && !arrayScopeCovers(baseEntry.executors, candidateEntry.executors)) {
@@ -483,7 +485,7 @@ function routeEntryApplies(entry, { phase, executor, reviewer, actor, model }) {
   if (phase === "review" || phase === "advisory_review") {
     return Boolean(entry.reviewers?.includes(reviewer || actor));
   }
-  if (phase === "dispatch" || phase === "sidecar") {
+  if (phase === "dispatch") {
     return Boolean(entry.executors?.includes(executor || actor));
   }
   return Boolean(entry.executors?.includes(actor) || entry.reviewers?.includes(actor));

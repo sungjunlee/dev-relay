@@ -92,8 +92,7 @@
           "matchedRoute": null
         }
       },
-      "advisory_review": null,
-      "sidecar": null
+      "advisory_review": null
     },
     "policy": {
       "status": "defaulted",
@@ -122,8 +121,7 @@
     "effective_tags": [],
     "warnings": [],
     "selected": {
-      "advisory_review": null,
-      "sidecar": null
+      "advisory_review": null
     },
     "ignored_primary_review": null,
     "matched": false,

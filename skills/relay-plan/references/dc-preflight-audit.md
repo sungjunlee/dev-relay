@@ -1,5 +1,7 @@
 # Pre-Flight DC Ambiguity Audit
 
+Historical note: examples in this file describe prior relay runs and removed runtime surfaces; they are retained as wording-failure case studies, not current operator guidance.
+
 Run this checklist after recovering Done Criteria (step 4 of `SKILL.md`) and before freezing the anchor for dispatch. It is narrower than `rubric-validation.md` § "Validate Done Criteria": that checklist asks whether each item is observable, bounded, reviewable, risk-aware, and verifiable. This one asks whether the wording leaves room for codex to ship a correct-looking implementation that still fails review on spec-precision.
 
 The two checks compose: structural validation gates on the SHAPE of the DC; this audit gates on the WORDING.
@@ -16,11 +18,11 @@ Pre-flight DC review for hidden ambiguity has higher leverage than improving cod
 
 | PR | Issue | R1 catch | Audit item |
 |---|---|---|---|
-| #448 | #372 | `output_path` scope under `sidecars/<id>/` (DC implied, didn't state) | 3 (implicit scope) |
-| #449 | #381 | runner `--json` coupled to sidecar output filename (DC said independent) | 4 (coupling default) |
+| #448 | #372 | `output_path` scope under `artifacts/<id>/` (DC implied, didn't state) | 3 (implicit scope) |
+| #449 | #381 | runner `--json` coupled to advisory output filename (DC said independent) | 4 (coupling default) |
 | #450 | #373 | repeat-finding detector matched only `title` (AC said "title or body") | 2 (AND/OR boundary) |
 | #451 | #376 | prediction heuristic full-title vs shared-substring (DC ambiguous) | 5 (heuristic precision) |
-| #452 | #374 | `sidecar_start trust_level` on frozen helper (AC6 over-spec) | 1 (frozen-helper field) |
+| #452 | #374 | `artifact_start trust_level` on frozen helper (AC6 over-spec) | 1 (frozen-helper field) |
 | #453 | #375 | basename matching (AC test (a) used basename, codex full-path-only) | 5 (heuristic precision) |
 | #454 | #144 | shipped `"no template scored above 0"` instead of literal `"no clear match"` | 6 (literal sentinels) |
 
@@ -32,7 +34,7 @@ Pre-flight DC review for hidden ambiguity has higher leverage than improving cod
 
 For each "Event X must include field Y" claim, verify X's producer helper is in this PR's allowed-edit zone. If the helper is in a forbidden zone (frozen contract from a prior PR), either drop the field requirement, OR specify a runner-side bypass path (e.g., "runner may call `appendRunEvent` directly with the field"), OR file the helper extension as a separate follow-up issue. The reviewer anchors to the FROZEN DC and will keep flagging the gap each round even when the orchestrator's redispatch addendum says "drop the assertion." Detail: `~/.claude/projects/<repo-slug>/memory/feedback_dc_overspec_frozen_helper.md`.
 
-Worked: #374 AC6 said `sidecar_start` includes `trust_level`. `appendSidecarStart` was frozen by #372. R1+R2+R3 all flagged the gap. R4 landed via runner-side `appendRunEvent` bypass. Total cost: 2 extra cycles. #375 explicitly stated "DO NOT specify trust_level on sidecar_start" — clean R2 PASS.
+Worked: #374 AC6 said `artifact_start` includes `trust_level`. The producer helper was frozen by #372. R1+R2+R3 all flagged the gap. R4 landed via runner-side `appendRunEvent` bypass. Total cost: 2 extra cycles. #375 explicitly stated "DO NOT specify `trust_level` on the frozen start event" — clean R2 PASS.
 
 ### Item 2 — AND/OR boundary tightness
 
@@ -42,15 +44,15 @@ Worked: #373 AC said the repeat-finding detector should match "title or body" bu
 
 ### Item 3 — Implicit scope vs literal statement
 
-For each scope claim implied by file paths or storage locations, write the literal directory/path. If outputs go under `sidecars/<run-id>/`, say so verbatim. If a generated artifact goes in `docs/`, name the directory. Codex defaults to top-level locations when scope is implicit.
+For each scope claim implied by file paths or storage locations, write the literal directory/path. If outputs go under `artifacts/<run-id>/`, say so verbatim. If a generated artifact goes in `docs/`, name the directory. Codex defaults to top-level locations when scope is implicit.
 
-Worked: #372 DC said "sidecar lifecycle events store outputs at `output_path`" and showed the schema field, but did not literally say "all outputs MUST land under `sidecars/<run-id>/`". Codex picked a plausible top-level path. R1 catch.
+Worked: #372 DC said "artifact lifecycle events store outputs at `output_path`" and showed the schema field, but did not literally say "all outputs MUST land under `artifacts/<run-id>/`". Codex picked a plausible top-level path. R1 catch.
 
 ### Item 4 — Coupling default
 
 For each "independent vs coupled" axis (CLI flag + side effect, function arg + state mutation, schema field + invariant), state the default literally. Codex defaults to COUPLED when coupling reduces parameter count or simplifies the call shape. If the AC requires independence, say "X must remain independent of Y" and add the test that fails when they're coupled.
 
-Worked: #381 AC said "runner `--json` flag controls report format only" and showed the sidecar output filename as a separate field. Codex coupled them: `--json` switched both the report and the output filename. R1 catch.
+Worked: #381 AC said "runner `--json` flag controls report format only" and showed the advisory output filename as a separate field. Codex coupled them: `--json` switched both the report and the output filename. R1 catch.
 
 ### Item 5 — Heuristic precision
 
@@ -64,13 +66,13 @@ For forbidden phrases, empty-state output literals, and reviewer-anchor strings,
 
 Worked: #144 DC said the matcher should emit "no clear match" reason when no template scored. Codex shipped `"no template scored above 0"`. Same fail mode as #144's other catches around scaffold-guidance phrasing. R1 catch.
 
-This pattern is also visible in #318/#319/#330's empty-state JSON shapes (`{ total_invocations: 0, ... }` spelled out verbatim) and in the forbidden-phrase enumeration used by #316 / #346 / sidecar PRs (`"ready to merge"`, `"complete"`, `"all clear"`, `"LGTM"`, `"passed"`).
+This pattern is also visible in #318/#319/#330's empty-state JSON shapes (`{ total_invocations: 0, ... }` spelled out verbatim) and in forbidden-phrase enumeration used by review-gate PRs (`"ready to merge"`, `"complete"`, `"all clear"`, `"LGTM"`, `"passed"`).
 
 ## Worked example — applying the audit pre-freeze
 
 For #375 docs-sync, the planner ran items 1+5+6 explicitly during DC drafting:
 
-- **Item 1**: `sidecar_start` trust_level was dropped from the AC entirely (frozen helper from #372 → no extension). Result: no R3+ rounds.
+- **Item 1**: `artifact_start` trust_level was dropped from the AC entirely (frozen helper from #372 -> no extension). Result: no R3+ rounds.
 - **Item 5**: AC test (a) and (b) both spelled out the comparison axis ("test (a) compares by `path.basename`; test (b) compares by full path"). Result: no heuristic-precision R1.
 - **Item 6**: Empty-state output spelled `"No likely stale docs detected."` verbatim with the period.
 

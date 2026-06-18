@@ -87,7 +87,6 @@ test("init --profile company writes a company-safe global policy", () => {
     dispatch: { executor: "codex" },
     review: { reviewer: "codex" },
     advisory_review: null,
-    sidecar: null,
   });
   assert.deepEqual(policy.managed_cli, ["codex", "claude"]);
   assert.deepEqual(policy.allowed_model_routes, []);
@@ -159,8 +158,8 @@ test("doctor includes project route provenance and best-effort model probes", ()
   const repoRoot = tempDir("relay-config-doctor-repo-");
   initGitRepo(repoRoot);
   const binDir = tempDir("relay-config-doctor-bin-");
-  writeExecutable(path.join(binDir, "opencode"), "#!/bin/sh\nif [ \"$1\" = models ]; then printf 'opencode-go/deepseek-v4-pro\\nopenai/gpt-5\\n'; exit 0; fi\nexit 0\n");
-  writeExecutable(path.join(binDir, "pi"), "#!/bin/sh\nif [ \"$1\" = --list-models ]; then printf 'deepseek/deepseek-v4-flash\\n'; exit 0; fi\nexit 0\n");
+  writeExecutable(path.join(binDir, "opencode"), "#!/bin/sh\nif [ \"$1\" = models ]; then printf 'example/opencode-model-fast\\nopenai/gpt-5\\n'; exit 0; fi\nexit 0\n");
+  writeExecutable(path.join(binDir, "pi"), "#!/bin/sh\nif [ \"$1\" = --list-models ]; then printf 'example/pi-model-fast\\n'; exit 0; fi\nexit 0\n");
   writeJson(getProjectPolicyPath(repoRoot, { relayHome }), {
     ...buildDefaultRelayPolicy(),
     profile: "project",
@@ -187,9 +186,9 @@ test("doctor includes project route provenance and best-effort model probes", ()
   assert.equal(output.project_routes.status, "ok");
   const opencode = output.tools.find((tool) => tool.name === "opencode");
   assert.equal(opencode.model_probe.status, "ok");
-  assert.deepEqual(opencode.model_probe.models, ["opencode-go/deepseek-v4-pro", "openai/gpt-5"]);
+  assert.deepEqual(opencode.model_probe.models, ["example/opencode-model-fast", "openai/gpt-5"]);
   const pi = output.tools.find((tool) => tool.name === "pi");
-  assert.deepEqual(pi.model_probe.models, ["deepseek/deepseek-v4-flash"]);
+  assert.deepEqual(pi.model_probe.models, ["example/pi-model-fast"]);
 });
 
 test("check exits zero for allowed managed CLI routes and reports the decision reason", () => {
@@ -231,13 +230,10 @@ test("set-default mutates supported default actor paths and preserves v1 policy 
   const relayHome = tempDir();
   assert.equal(runConfig(["init", "--profile", "company", "--json"], { relayHome }).status, 0);
 
-  const sidecar = runConfig(["set-default", "sidecar.executor", "opencode", "--json"], { relayHome });
-  assert.equal(sidecar.status, 0, sidecar.combined);
   const advisory = runConfig(["set-default", "advisory_review.reviewer", "claude", "--json"], { relayHome });
   assert.equal(advisory.status, 0, advisory.combined);
 
   const policy = readPolicy(relayHome);
-  assert.deepEqual(policy.defaults.sidecar, { executor: "opencode" });
   assert.deepEqual(policy.defaults.advisory_review, { reviewer: "claude" });
 });
 
@@ -251,14 +247,14 @@ test("allow-route maps mixed executor phases to executors and reviewer phases to
     "--executor",
     "opencode",
     "--phase",
-    "sidecar,advisory_review,dispatch",
+    "advisory_review,dispatch",
     "--json",
   ], { relayHome });
   assert.equal(mutation.status, 0, mutation.combined);
 
   const [entry] = readPolicy(relayHome).allowed_model_routes;
   assert.equal(entry.route, "example/opencode-model-*");
-  assert.deepEqual(new Set(entry.phases), new Set(["sidecar", "advisory_review", "dispatch"]));
+  assert.deepEqual(new Set(entry.phases), new Set(["advisory_review", "dispatch"]));
   assert.deepEqual(entry.executors, ["opencode"]);
   assert.deepEqual(entry.reviewers, ["opencode"]);
 
@@ -400,10 +396,9 @@ test("plan-run previews allowed Pi route with policy source trace", () => {
       dispatch: { executor: "codex" },
       review: { reviewer: "codex" },
       advisory_review: null,
-      sidecar: null,
     },
     managed_cli: ["codex", "claude"],
-    allowed_model_routes: [{ route: "deepseek/*", phases: ["dispatch"], executors: ["pi"] }],
+    allowed_model_routes: [{ route: "example/pi-*", phases: ["dispatch"], executors: ["pi"] }],
     denied_model_routes: [],
     routing_rules: [],
     deny_unknown_model_routes: true,
@@ -411,7 +406,7 @@ test("plan-run previews allowed Pi route with policy source trace", () => {
 
   const result = runConfig([
     "plan-run",
-    "--dispatch", "pi:deepseek/deepseek-v4-flash",
+    "--dispatch", "pi:example/pi-model-fast",
     "--review", "codex",
     "--json",
   ], { relayHome });
@@ -436,10 +431,9 @@ test("plan-run denies routes narrowed by project policy before dispatch", () => 
       dispatch: { executor: "codex" },
       review: { reviewer: "codex" },
       advisory_review: null,
-      sidecar: null,
     },
     managed_cli: ["codex", "claude"],
-    allowed_model_routes: [{ route: "opencode-go/*", phases: ["dispatch"], executors: ["opencode"] }],
+    allowed_model_routes: [{ route: "example/opencode-model-*", phases: ["dispatch"], executors: ["opencode"] }],
     denied_model_routes: [],
     routing_rules: [],
     deny_unknown_model_routes: true,
@@ -451,10 +445,9 @@ test("plan-run denies routes narrowed by project policy before dispatch", () => 
       dispatch: { executor: "codex" },
       review: { reviewer: "codex" },
       advisory_review: null,
-      sidecar: null,
     },
     managed_cli: ["codex", "claude"],
-    allowed_model_routes: [{ route: "opencode-go/deepseek-*", phases: ["dispatch"], executors: ["opencode"] }],
+    allowed_model_routes: [{ route: "example/opencode-model-safe", phases: ["dispatch"], executors: ["opencode"] }],
     denied_model_routes: [],
     routing_rules: [],
     deny_unknown_model_routes: true,
@@ -463,7 +456,7 @@ test("plan-run denies routes narrowed by project policy before dispatch", () => 
   const result = runConfig([
     "plan-run",
     "--repo", repoRoot,
-    "--dispatch", "opencode:opencode-go/qwen3",
+    "--dispatch", "opencode:example/opencode-model-fast",
     "--json",
   ], { relayHome, cwd: repoRoot });
 
@@ -483,7 +476,6 @@ test("plan-run labels Antigravity model route without implying agy model passthr
       dispatch: { executor: "codex" },
       review: { reviewer: "codex" },
       advisory_review: null,
-      sidecar: null,
     },
     managed_cli: ["codex", "claude"],
     allowed_model_routes: [{ route: "google/*", phases: ["dispatch"], executors: ["antigravity"] }],

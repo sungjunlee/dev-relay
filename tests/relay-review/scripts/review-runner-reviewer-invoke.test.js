@@ -131,7 +131,7 @@ test("reviewer-invoke/resolveReviewerName uses route-plan reviewer before manife
   delete process.env.RELAY_REVIEWER;
   const routePlan = {
     phases: {
-      review: { reviewer: "opencode", model: "opencode-go/deepseek-v4-pro" },
+      review: { reviewer: "opencode", model: "example/opencode-model-fast" },
     },
   };
 

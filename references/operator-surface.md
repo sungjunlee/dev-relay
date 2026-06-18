@@ -8,7 +8,7 @@ dev-relay is a bundle-installed relay runtime exposed through thin skill command
 | --- | --- | --- |
 | Public operator surface | `relay-config`, `relay`, `relay-merge` | Normal day-to-day commands. These should read as stable product entrypoints and hide most phase internals. |
 | Internal phase surface | `relay-ready`, `relay-plan`, `relay-dispatch`, `relay-review` | Direct controls for advanced operation, debugging, recovery, and explicit manual phase work. They stay callable, but they are not the primary product surface. |
-| Optional/advanced surface | `relay-sidecar`, `relay-fleet` | Specialized workflows for advisory lanes and fan-out. They should point to narrow references rather than expanding the core command surface. |
+| Optional/advanced surface | `relay-fleet` | Specialized fan-out for already-planned independent leaves. It should point to narrow references rather than expanding the core command surface. |
 
 ## Placement Rules
 

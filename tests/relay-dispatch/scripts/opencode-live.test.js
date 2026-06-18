@@ -17,7 +17,7 @@ function writeJson(filePath, value) {
 test("opencode live route canary is opt-in and uses run route intent", {
   skip: process.env.OPENCODE_INTEGRATION === "1" ? false : "set OPENCODE_INTEGRATION=1 and OPENCODE_MODEL to run",
 }, () => {
-  const model = process.env.OPENCODE_MODEL || "opencode-go/deepseek-v4-pro";
+  const model = process.env.OPENCODE_MODEL || "example/opencode-model-fast";
   const relayHome = fs.mkdtempSync(path.join(os.tmpdir(), "relay-opencode-live-"));
   writeJson(path.join(relayHome, "policy.json"), {
     version: 1,

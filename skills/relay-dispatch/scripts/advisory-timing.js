@@ -20,7 +20,6 @@ function normalizeConsumedByPhase(value, fallback = "none") {
 }
 
 function buildArtifactTimingFields({
-  artifactKind = "advisory",
   elapsedMs = 0,
   criticalPathWaitMs = 0,
   consumedByPhase = "none",
@@ -34,12 +33,8 @@ function buildArtifactTimingFields({
     consumed_by_phase: normalizeConsumedByPhase(consumedByPhase),
     phase_decision_waited: phaseDecisionWaited === true,
     frontier_step_replaced: frontierStepReplaced === true,
+    advisory_elapsed_ms: elapsed,
   };
-  if (artifactKind === "sidecar") {
-    fields.sidecar_elapsed_ms = elapsed;
-  } else if (artifactKind === "advisory") {
-    fields.advisory_elapsed_ms = elapsed;
-  }
   return fields;
 }
 
@@ -57,7 +52,6 @@ function timingFieldsFromEventData(eventData = {}) {
   const fields = {};
   for (const key of [
     "advisory_elapsed_ms",
-    "sidecar_elapsed_ms",
     "critical_path_wait_ms",
     "consumed_by_phase",
     "phase_decision_waited",

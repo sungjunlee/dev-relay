@@ -10,7 +10,7 @@ OpenCode primary review is a merge-gating role, so it must return the normal rev
 
 ## Dispatch
 
-OpenCode dispatch is experimental and write-capable. The adapter preserves the existing `opencode run` output path and passes model overrides through to the CLI. When no dispatch model is supplied, relay uses the bundled `references/executor-models.json` default and then optional `~/.relay/executors.json` overrides.
+OpenCode dispatch is experimental and write-capable. The adapter preserves the existing `opencode run` output path and passes model overrides through to the CLI. When no dispatch model is supplied, relay only uses a local `~/.relay/executors.json` default if one is configured; otherwise unmanaged dispatch fails closed with `missing_model_route`.
 
 OpenCode does not provide relay-native sandbox or network containment. Dispatch policy metadata records this as informational rather than trusted enforcement.
 
@@ -23,7 +23,7 @@ OpenCode advisory review runs with a prompt-level read-only instruction and a de
 OpenCode primary review uses the same CLI transport with a phase-specific prompt and parser. Relay validates the result as primary verdict JSON, records adapter capability metadata as prompt-only/read-only with a post-run git status guard, and still requires route-policy approval before spawning `opencode`.
 
 ```bash
---reviewer opencode --reviewer-model opencode-go/deepseek-v4-pro
+--reviewer opencode --reviewer-model example/opencode-model-fast
 ```
 
 This does not claim live stable success for every OpenCode/model combination. Operators should treat policy approval as permission to try the route, then rely on review events, raw responses, and canary evidence before calling a live route healthy. A custom `--reviewer-script` remains an operator override and is audited separately from adapter-managed OpenCode primary review.

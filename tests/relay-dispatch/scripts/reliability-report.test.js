@@ -197,49 +197,6 @@ function setManifestDispatch(repoRoot, runId, dispatch) {
   writeManifest(manifestPath, manifest);
 }
 
-function appendSidecarStart(repoRoot, runId, {
-  sidecarId,
-  kind = "context-recap",
-  executor = "codex",
-  model = undefined,
-  provider = undefined,
-} = {}) {
-  const event = {
-    event: "sidecar_start",
-    sidecar_id: sidecarId,
-    kind,
-    executor,
-  };
-  if (model !== undefined) event.model = model;
-  if (provider !== undefined) event.provider = provider;
-  appendRunEvent(repoRoot, runId, event);
-}
-
-function appendSidecarResult(repoRoot, runId, {
-  sidecarId,
-  kind = "context-recap",
-} = {}) {
-  appendRunEvent(repoRoot, runId, {
-    event: "sidecar_result",
-    sidecar_id: sidecarId,
-    kind,
-    output_path: `sidecars/${sidecarId}/output.md`,
-    trust_level: "advisory",
-  });
-}
-
-function appendSidecarFailed(repoRoot, runId, {
-  sidecarId,
-  kind = "context-recap",
-} = {}) {
-  appendRunEvent(repoRoot, runId, {
-    event: "sidecar_failed",
-    sidecar_id: sidecarId,
-    kind,
-    failure_reason: "sidecar exited non-zero",
-  });
-}
-
 function appendRawRunEvent(repoRoot, runId, eventData) {
   const { runDir } = ensureRunLayout(repoRoot, runId);
   fs.appendFileSync(path.join(runDir, "events.jsonl"), `${JSON.stringify({
@@ -253,13 +210,6 @@ function appendRawRunEvent(repoRoot, runId, eventData) {
     reason: null,
     ...eventData,
   })}\n`, "utf-8");
-}
-
-function writeSidecarOutput(repoRoot, runId, sidecarId, content) {
-  const { runDir } = ensureRunLayout(repoRoot, runId);
-  const outputDir = path.join(runDir, "sidecars", sidecarId);
-  fs.mkdirSync(outputDir, { recursive: true });
-  fs.writeFileSync(path.join(outputDir, "output.md"), content, "utf-8");
 }
 
 function writeRequestArtifact(repoRoot, requestId, { leafCount, leafOrder }) {
@@ -280,13 +230,6 @@ function writeRequestArtifact(repoRoot, requestId, { leafCount, leafOrder }) {
     },
   }, "# Relay Intake Request\n");
   return requestPath;
-}
-
-function writeSidecarOutputAt(repoRoot, runId, outputPathRelative, content) {
-  const { runDir } = ensureRunLayout(repoRoot, runId);
-  const outputPath = path.join(runDir, outputPathRelative);
-  fs.mkdirSync(path.dirname(outputPath), { recursive: true });
-  fs.writeFileSync(outputPath, content, "utf-8");
 }
 
 function writeReviewVerdict(repoRoot, runId, round, issues, overrides = {}) {
@@ -1138,73 +1081,7 @@ test("reliability-report renders no guidance data available for empty and legacy
   assert.match(legacyText, /guidance_pack_insights: no guidance data available/);
 });
 
-test("reliability-report emits canonical empty sidecar insights for legacy repos", () => {
-  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-report-sidecar-empty-"));
-  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
-  initGitRepo(repoRoot);
-
-  const report = JSON.parse(execFileSync("node", [SCRIPT, "--repo", repoRoot, "--json"], { encoding: "utf-8" }));
-  const text = execFileSync("node", [SCRIPT, "--repo", repoRoot], { encoding: "utf-8" });
-
-  assert.deepEqual(report.sidecar_insights, {
-    total_invocations: 0,
-    by_kind: {},
-    by_executor: {},
-    by_model: {},
-    by_provider: {},
-    failure_rate: null,
-    predicted_findings_match_rate: null,
-    predicted_findings_runs_examined: 0,
-  });
-  assert.match(text, /sidecar_insights: no sidecar runs available/);
-});
-
-test("reliability-report counts sidecar usage and outcomes by kind and executor", () => {
-  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-report-sidecar-counts-"));
-  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
-  const recentTs = new Date(Date.now() - 1 * 60 * 60 * 1000).toISOString();
-  const runA = createRunId({ branch: "run-sidecar-a", timestamp: new Date("2026-04-12T02:07:00.000Z") });
-  const runB = createRunId({ branch: "run-sidecar-b", timestamp: new Date("2026-04-12T02:07:01.000Z") });
-
-  writeRun(repoRoot, { runId: runA, state: STATES.REVIEW_PENDING, rounds: 1, updatedAt: recentTs });
-  writeRun(repoRoot, { runId: runB, state: STATES.REVIEW_PENDING, rounds: 1, updatedAt: recentTs });
-
-  appendSidecarStart(repoRoot, runA, { sidecarId: "sc-1", kind: "context-recap", executor: "codex", model: "gpt-5", provider: "openai" });
-  appendSidecarResult(repoRoot, runA, { sidecarId: "sc-1", kind: "context-recap" });
-  appendSidecarStart(repoRoot, runA, { sidecarId: "sc-2", kind: "context-recap", executor: "codex", model: "gpt-5", provider: "openai" });
-  appendSidecarFailed(repoRoot, runA, { sidecarId: "sc-2", kind: "context-recap" });
-  appendSidecarStart(repoRoot, runB, { sidecarId: "sc-3", kind: "review-hints", executor: "claude", model: "sonnet", provider: "anthropic" });
-  appendSidecarResult(repoRoot, runB, { sidecarId: "sc-3", kind: "review-hints" });
-
-  const report = JSON.parse(execFileSync("node", [SCRIPT, "--repo", repoRoot, "--json"], { encoding: "utf-8" }));
-  const text = execFileSync("node", [SCRIPT, "--repo", repoRoot], { encoding: "utf-8" });
-
-  assert.equal(report.sidecar_insights.total_invocations, 3);
-  assert.deepEqual(report.sidecar_insights.by_kind, {
-    "context-recap": { invocations: 2, successes: 1, failures: 1 },
-    "review-hints": { invocations: 1, successes: 1, failures: 0 },
-  });
-  assert.deepEqual(report.sidecar_insights.by_executor, {
-    claude: { invocations: 1, successes: 1, failures: 0 },
-    codex: { invocations: 2, successes: 1, failures: 1 },
-  });
-  assert.deepEqual(report.sidecar_insights.by_model, {
-    "gpt-5": { invocations: 2 },
-    sonnet: { invocations: 1 },
-  });
-  assert.deepEqual(report.sidecar_insights.by_provider, {
-    anthropic: { invocations: 1 },
-    openai: { invocations: 2 },
-  });
-  assert.equal(report.sidecar_insights.failure_rate, 0.3333);
-  assert.match(text, /sidecar_insights:/);
-  assert.match(text, /total_invocations: 3/);
-  assert.match(text, /failure_rate: 0\.3333/);
-  assert.match(text, /by_kind: context-recap=2/);
-  assert.doesNotMatch(text, /predicted_findings_match_rate:/);
-});
-
-test("reliability-report aggregates advisory and sidecar critical-path impact", () => {
+test("reliability-report aggregates advisory critical-path impact", () => {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-report-critical-path-"));
   process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
   const recentTs = new Date(Date.now() - 1 * 60 * 60 * 1000).toISOString();
@@ -1229,19 +1106,6 @@ test("reliability-report aggregates advisory and sidecar critical-path impact", 
     phase_decision_waited: true,
     frontier_step_replaced: false,
   });
-  appendRunEvent(repoRoot, runA, {
-    event: "sidecar_result",
-    sidecar_id: "sc-late",
-    kind: "docs-sync",
-    output_path: "sidecars/sc-late/output.md",
-    trust_level: "advisory",
-    elapsed_ms: 300,
-    sidecar_elapsed_ms: 300,
-    critical_path_wait_ms: 50,
-    consumed_by_phase: "metrics",
-    phase_decision_waited: true,
-    frontier_step_replaced: false,
-  });
   appendRunEvent(repoRoot, runB, {
     event: "advisory_review",
     state_from: "review_pending",
@@ -1260,199 +1124,16 @@ test("reliability-report aggregates advisory and sidecar critical-path impact", 
 
   const report = JSON.parse(execFileSync("node", [SCRIPT, "--repo", repoRoot, "--json"], { encoding: "utf-8" }));
 
-  assert.deepEqual(report.advisory_sidecar_timing.by_consumed_phase, {
-    metrics: 1,
+  assert.deepEqual(report.advisory_timing.by_consumed_phase, {
     redispatch: 1,
     review: 1,
   });
-  assert.equal(report.advisory_sidecar_timing.consumed_before_decision, 1);
-  assert.equal(report.advisory_sidecar_timing.metrics_only_late_artifacts, 1);
-  assert.equal(report.advisory_sidecar_timing.redispatch_artifacts, 1);
-  assert.equal(report.advisory_sidecar_timing.median_critical_path_wait_ms, 40);
-  assert.equal(report.advisory_sidecar_timing.phase_decision_waited, 2);
-  assert.equal(report.advisory_sidecar_timing.frontier_step_replaced, 0);
-});
-
-test("reliability-report keeps sidecar insights only on the top-level report", () => {
-  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-report-sidecar-top-level-"));
-  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
-  const recentTs = new Date(Date.now() - 1 * 60 * 60 * 1000).toISOString();
-  const runId = createRunId({ branch: "run-sidecar-top-level", timestamp: new Date("2026-04-12T02:07:30.000Z") });
-
-  writeRun(repoRoot, { runId, state: STATES.REVIEW_PENDING, rounds: 1, updatedAt: recentTs });
-  appendSidecarStart(repoRoot, runId, { sidecarId: "sc-top", kind: "context-recap", executor: "codex" });
-
-  const report = JSON.parse(execFileSync("node", [
-    SCRIPT,
-    "--repo",
-    repoRoot,
-    "--json",
-    "--by-actor",
-    "--by-role",
-    "--by-dispatch",
-    "--by-acting-reviewer",
-  ], { encoding: "utf-8" }));
-
-  assert.equal(report.sidecar_insights.total_invocations, 1);
-  for (const scopedReport of Object.values(report.by_actor)) {
-    assert.equal("sidecar_insights" in scopedReport, false);
-  }
-  for (const roleReport of Object.values(report.by_role)) {
-    for (const scopedReport of Object.values(roleReport)) {
-      assert.equal("sidecar_insights" in scopedReport, false);
-    }
-  }
-  for (const dimensionReport of Object.values(report.by_dispatch)) {
-    for (const scopedReport of Object.values(dimensionReport)) {
-      assert.equal("sidecar_insights" in scopedReport, false);
-    }
-  }
-});
-
-test("reliability-report buckets sidecar starts without model or provider as unknown", () => {
-  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-report-sidecar-unknown-"));
-  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
-  const recentTs = new Date(Date.now() - 1 * 60 * 60 * 1000).toISOString();
-  const runId = createRunId({ branch: "run-sidecar-unknown", timestamp: new Date("2026-04-12T02:08:00.000Z") });
-
-  writeRun(repoRoot, { runId, state: STATES.REVIEW_PENDING, rounds: 1, updatedAt: recentTs });
-  appendSidecarStart(repoRoot, runId, {
-    sidecarId: "sc-unknown",
-    kind: "context-recap",
-    executor: "codex",
-    model: undefined,
-    provider: undefined,
-  });
-
-  const report = JSON.parse(execFileSync("node", [SCRIPT, "--repo", repoRoot, "--json"], { encoding: "utf-8" }));
-
-  assert.deepEqual(report.sidecar_insights.by_model, { unknown: { invocations: 1 } });
-  assert.deepEqual(report.sidecar_insights.by_provider, { unknown: { invocations: 1 } });
-});
-
-test("reliability-report estimates sidecar prediction matches from output and review verdict titles", () => {
-  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-report-sidecar-prediction-"));
-  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
-  const recentTs = new Date(Date.now() - 1 * 60 * 60 * 1000).toISOString();
-  const runId = createRunId({ branch: "run-sidecar-prediction", timestamp: new Date("2026-04-12T02:09:00.000Z") });
-
-  writeRun(repoRoot, { runId, state: STATES.CHANGES_REQUESTED, rounds: 1, updatedAt: recentTs });
-  appendSidecarStart(repoRoot, runId, { sidecarId: "sc-predict", kind: "context-recap", executor: "codex" });
-  appendSidecarResult(repoRoot, runId, { sidecarId: "sc-predict", kind: "context-recap" });
-  writeSidecarOutput(repoRoot, runId, "sc-predict", "The recap warned about missing retry budget coverage before review.");
-  writeReviewVerdict(repoRoot, runId, 1, [
-    { title: "Missing retry budget coverage", body: "Add tests.", file: "test.js", line: 12, category: "contract", severity: "high" },
-    { title: "Document timeout behavior", body: "Document it.", file: "README.md", line: 4, category: "contract", severity: "medium" },
-  ]);
-
-  const report = JSON.parse(execFileSync("node", [SCRIPT, "--repo", repoRoot, "--json"], { encoding: "utf-8" }));
-
-  assert.equal(report.sidecar_insights.predicted_findings_runs_examined, 1);
-  assert.ok(report.sidecar_insights.predicted_findings_match_rate >= 0.5);
-});
-
-test("reliability-report counts sidecar output substrings of review titles as predictions", () => {
-  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-report-sidecar-title-substring-"));
-  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
-  const recentTs = new Date(Date.now() - 1 * 60 * 60 * 1000).toISOString();
-  const runId = createRunId({ branch: "run-sidecar-title-substring", timestamp: new Date("2026-04-12T02:09:30.000Z") });
-
-  writeRun(repoRoot, { runId, state: STATES.CHANGES_REQUESTED, rounds: 1, updatedAt: recentTs });
-  appendSidecarStart(repoRoot, runId, { sidecarId: "sc-substring", kind: "context-recap", executor: "codex" });
-  appendSidecarResult(repoRoot, runId, { sidecarId: "sc-substring", kind: "context-recap" });
-  writeSidecarOutput(repoRoot, runId, "sc-substring", "The sidecar flagged output_path before review.");
-  writeReviewVerdict(repoRoot, runId, 1, [
-    { title: "Review verdict omits output_path validation", body: "Track output_path.", file: "report.js", line: 7, category: "contract", severity: "high" },
-    { title: "Require branch cleanup audit", body: "Audit cleanup.", file: "cleanup.js", line: 3, category: "quality", severity: "medium" },
-  ]);
-
-  const report = JSON.parse(execFileSync("node", [SCRIPT, "--repo", repoRoot, "--json"], { encoding: "utf-8" }));
-
-  assert.equal(report.sidecar_insights.predicted_findings_runs_examined, 1);
-  assert.equal(report.sidecar_insights.predicted_findings_match_rate, 0.5);
-});
-
-test("reliability-report reads sidecar output via event.output_path indirection", () => {
-  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-report-sidecar-output-path-"));
-  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
-  const recentTs = new Date(Date.now() - 1 * 60 * 60 * 1000).toISOString();
-  const runId = createRunId({ branch: "run-sidecar-output-path", timestamp: new Date("2026-04-12T02:09:45.000Z") });
-  const sidecarId = "sc-custom-output";
-  const outputPath = `sidecars/${sidecarId}/custom-output.md`;
-
-  writeRun(repoRoot, { runId, state: STATES.CHANGES_REQUESTED, rounds: 1, updatedAt: recentTs });
-  appendSidecarStart(repoRoot, runId, { sidecarId, kind: "context-recap", executor: "codex" });
-  appendRunEvent(repoRoot, runId, {
-    event: "sidecar_result",
-    sidecar_id: sidecarId,
-    kind: "context-recap",
-    output_path: outputPath,
-    trust_level: "advisory",
-  });
-  writeSidecarOutputAt(repoRoot, runId, outputPath, "The sidecar predicted missing custom output path coverage.");
-  writeReviewVerdict(repoRoot, runId, 1, [
-    { title: "Missing custom output path coverage", body: "Read event output_path.", file: "report.js", line: 7, category: "contract", severity: "high" },
-  ]);
-
-  const report = JSON.parse(execFileSync("node", [SCRIPT, "--repo", repoRoot, "--json"], { encoding: "utf-8" }));
-
-  assert.equal(report.sidecar_insights.predicted_findings_runs_examined, 1);
-  assert.ok(report.sidecar_insights.predicted_findings_match_rate > 0);
-});
-
-test("reliability-report keeps sidecar prediction null when results have no review verdicts", () => {
-  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-report-sidecar-prediction-null-"));
-  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
-  const recentTs = new Date(Date.now() - 1 * 60 * 60 * 1000).toISOString();
-  const runId = createRunId({ branch: "run-sidecar-prediction-null", timestamp: new Date("2026-04-12T02:10:00.000Z") });
-
-  writeRun(repoRoot, { runId, state: STATES.REVIEW_PENDING, rounds: 1, updatedAt: recentTs });
-  appendSidecarStart(repoRoot, runId, { sidecarId: "sc-result", kind: "context-recap", executor: "codex" });
-  appendSidecarResult(repoRoot, runId, { sidecarId: "sc-result", kind: "context-recap" });
-  writeSidecarOutput(repoRoot, runId, "sc-result", "This output has no verdict to compare against.");
-
-  const report = JSON.parse(execFileSync("node", [SCRIPT, "--repo", repoRoot, "--json"], { encoding: "utf-8" }));
-
-  assert.equal(report.sidecar_insights.predicted_findings_match_rate, null);
-  assert.equal(report.sidecar_insights.predicted_findings_runs_examined, 0);
-});
-
-test("reliability-report skips unreadable or corrupted sidecar outputs during prediction", () => {
-  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-report-sidecar-corrupt-"));
-  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
-  const recentTs = new Date(Date.now() - 1 * 60 * 60 * 1000).toISOString();
-  const runMissingOutput = createRunId({ branch: "run-sidecar-missing-output", timestamp: new Date("2026-04-12T02:10:59.000Z") });
-  const runDirOutput = createRunId({ branch: "run-sidecar-dir-output", timestamp: new Date("2026-04-12T02:11:00.000Z") });
-  const runNullOutput = createRunId({ branch: "run-sidecar-null-output", timestamp: new Date("2026-04-12T02:11:01.000Z") });
-
-  writeRun(repoRoot, { runId: runMissingOutput, state: STATES.CHANGES_REQUESTED, rounds: 1, updatedAt: recentTs });
-  appendSidecarStart(repoRoot, runMissingOutput, { sidecarId: "sc-missing", kind: "context-recap", executor: "codex" });
-  appendSidecarResult(repoRoot, runMissingOutput, { sidecarId: "sc-missing", kind: "context-recap" });
-  writeReviewVerdict(repoRoot, runMissingOutput, 1, [
-    { title: "Missing output is skipped", body: "Skip.", file: "x.js", line: 1, category: "contract", severity: "high" },
-  ]);
-
-  writeRun(repoRoot, { runId: runDirOutput, state: STATES.CHANGES_REQUESTED, rounds: 1, updatedAt: recentTs });
-  appendSidecarStart(repoRoot, runDirOutput, { sidecarId: "sc-dir", kind: "context-recap", executor: "codex" });
-  appendSidecarResult(repoRoot, runDirOutput, { sidecarId: "sc-dir", kind: "context-recap" });
-  fs.mkdirSync(path.join(ensureRunLayout(repoRoot, runDirOutput).runDir, "sidecars", "sc-dir", "output.md"), { recursive: true });
-  writeReviewVerdict(repoRoot, runDirOutput, 1, [
-    { title: "Directory output skipped", body: "Skip.", file: "x.js", line: 1, category: "contract", severity: "high" },
-  ]);
-
-  writeRun(repoRoot, { runId: runNullOutput, state: STATES.CHANGES_REQUESTED, rounds: 1, updatedAt: recentTs });
-  appendSidecarStart(repoRoot, runNullOutput, { sidecarId: "sc-null", kind: "context-recap", executor: "codex" });
-  appendSidecarResult(repoRoot, runNullOutput, { sidecarId: "sc-null", kind: "context-recap" });
-  writeSidecarOutput(repoRoot, runNullOutput, "sc-null", "\u0000\u0000\u0000");
-  writeReviewVerdict(repoRoot, runNullOutput, 1, [
-    { title: "Null output skipped", body: "Skip.", file: "x.js", line: 1, category: "contract", severity: "high" },
-  ]);
-
-  const report = JSON.parse(execFileSync("node", [SCRIPT, "--repo", repoRoot, "--json"], { encoding: "utf-8" }));
-
-  assert.equal(report.sidecar_insights.total_invocations, 3);
-  assert.equal(report.sidecar_insights.predicted_findings_match_rate, null);
-  assert.equal(report.sidecar_insights.predicted_findings_runs_examined, 0);
+  assert.equal(report.advisory_timing.consumed_before_decision, 1);
+  assert.equal(report.advisory_timing.metrics_only_late_artifacts, 0);
+  assert.equal(report.advisory_timing.redispatch_artifacts, 1);
+  assert.equal(report.advisory_timing.median_critical_path_wait_ms, 20);
+  assert.equal(report.advisory_timing.phase_decision_waited, 1);
+  assert.equal(report.advisory_timing.frontier_step_replaced, 0);
 });
 
 test("reliability-report keeps qualitative_signals null below the minimum readable-rubric threshold", () => {

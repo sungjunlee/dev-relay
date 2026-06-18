@@ -28,10 +28,10 @@ Use `/relay-config` to set route policy rather than editing JSON by hand:
 ```text
 /relay-config Set up relay for my company environment
 /relay-config Only allow OpenCode through example/opencode-model-* at work
-$relay-config Use opencode-go/deepseek-v4-pro for personal sidecar review
+$relay-config Use example/opencode-model-fast for personal advisory review
 ```
 
-Route policy is based on provider/model routes, not only harness names. Managed Codex and Claude CLIs work by default when no policy exists. OpenCode, Pi, advisory reviewers, and sidecars require explicit route approval. See [model-route-policy.md](model-route-policy.md) for the full policy shape and precedence order.
+Route policy is based on provider/model routes, not only harness names. Managed Codex and Claude CLIs work by default when no policy exists. OpenCode, Pi, and advisory reviewers require explicit route approval. See [model-route-policy.md](model-route-policy.md) for the full policy shape and precedence order.
 
 Project-local route UX lives outside the repo under `~/.relay/projects/<repo-slug>/project.json`, `~/.relay/projects/<repo-slug>/policy.json`, and `~/.relay/projects/<repo-slug>/routes.json`. Policy is authorization; `routes.json` stores preferences only and cannot grant routes. Use `relay-config plan-run --json` to preview the effective dispatch/review/advisory routing before dispatch, and use `--route-intent-file` for one-off run overrides. Dispatch persists the audited decision as `route-plan.json` in the run directory.
 
@@ -66,14 +66,13 @@ Timeouts are inconclusive unless the step is an intentionally bounded fail-safe 
 
 | Skill | When to use |
 | --- | --- |
-| `/relay-config` | Configure route policy, allowed routes, defaults, sidecars, and advisory review |
+| `/relay-config` | Configure route policy, allowed routes, defaults, and advisory review |
 | `/relay` | Normal full-cycle handoff through review |
 | `/relay-ready` | Clarify broad or ambiguous work before planning |
 | `/relay-plan` | Build or inspect a rubric without dispatching |
 | `/relay-dispatch` | Manually dispatch or re-dispatch an executor run |
 | `/relay-review` | Manually review an existing relay PR |
 | `/relay-merge` | Gate-check, merge, cleanup, and update sprint state |
-| `/relay-sidecar` | Run advisory artifact-only sidecars for an existing run |
 | `/relay-fleet` | Fan out prepared independent leaves in parallel |
 
 ## Manual Phase Control
@@ -149,7 +148,7 @@ node skills/relay-review/scripts/review-runner.js --repo . --run-id <id> --pr <n
   --reviewer pi --reviewer-model openai/gpt-5 --json
 
 node skills/relay-config/scripts/relay-config.js plan-run --repo . \
-  --dispatch pi:deepseek/deepseek-v4-flash --review codex --json
+  --dispatch pi:example/pi-model-fast --review codex --json
 ```
 
 Pi primary review uses a bounded parent-process timeout. Set `RELAY_PI_REVIEW_TIMEOUT` to a positive duration such as `120s`, `10m`, or `1h`; the default is `1800s`. Relay invokes Pi with prompt-template, skill, theme, extension, and context-file discovery disabled so non-interactive review does not hang on optional startup integrations. If a Pi review still times out, first validate the CLI/provider path with a minimal `pi --no-session --no-context-files --no-tools --no-extensions --no-skills --no-prompt-templates --no-themes --print` command before treating the route as healthy. If that minimal command succeeds while `pi-primary` still times out, record the result as a prompt/scope or route-latency blocker rather than parser failure or healthy evidence.
@@ -250,11 +249,11 @@ For exceptional hotfixes, skip-review requires a recorded reason:
 node skills/relay-merge/scripts/finalize-run.js --run-id <id> --skip-review "hotfix: production outage" --json
 ```
 
-## Batch And Sidecars
+## Batch And Advisory Work
 
 Use `/relay-fleet` when multiple independent leaves are already planned and can run in parallel. Prefer sequential `/relay` when tasks share files, ordering is unclear, or merge conflicts are likely.
 
-Use `/relay-sidecar` for artifact-only advisory checks on an existing run. Sidecars should not block the normal lifecycle by default; they add supplemental evidence for the orchestrator or reviewer.
+Use `/relay-review` advisory review when you need supplemental reviewer evidence for an existing run. Keep comparison implementation work in `/relay-fleet` or independent `/relay` leaves instead of adding a new lifecycle branch.
 
 ## Worktree Includes
 

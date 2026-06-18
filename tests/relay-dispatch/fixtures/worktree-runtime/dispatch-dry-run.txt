@@ -19,4 +19,4 @@ Dry run:
   Policy:   allowed phase=dispatch executor=codex model=(none) reason=managed_cli
   Routing: no match (no_routing_rule_matched)
   Tags:    effective=(none)
-  Selected: advisory_review=(none) sidecar=(none)
+  Selected: advisory_review=(none)

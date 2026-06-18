@@ -280,14 +280,14 @@ test("project-local policy narrows globally allowed provider routes", () => {
     path.join(relayHome, "policy.json"),
     policy({
       profile: "global",
-      allowed_model_routes: [{ route: "opencode-go/*", phases: ["dispatch"], executors: ["opencode"] }],
+      allowed_model_routes: [{ route: "example/opencode-model-*", phases: ["dispatch"], executors: ["opencode"] }],
     })
   );
   writeJson(
     getProjectPolicyPath(repoRoot, { relayHome }),
     policy({
       profile: "project",
-      allowed_model_routes: [{ route: "opencode-go/deepseek-*", phases: ["dispatch"], executors: ["opencode"] }],
+      allowed_model_routes: [{ route: "example/opencode-model-*", phases: ["dispatch"], executors: ["opencode"] }],
     })
   );
 
@@ -299,12 +299,12 @@ test("project-local policy narrows globally allowed provider routes", () => {
   assert.equal(evaluateRelayRoute(result, {
     phase: "dispatch",
     executor: "opencode",
-    model: "opencode-go/deepseek-v4-pro",
+    model: "example/opencode-model-fast",
   }).reason, "allowed_model_route");
   assert.equal(evaluateRelayRoute(result, {
     phase: "dispatch",
     executor: "opencode",
-    model: "opencode-go/qwen3",
+    model: "example/opencode-other",
   }).reason, "unknown_model_route");
 });
 

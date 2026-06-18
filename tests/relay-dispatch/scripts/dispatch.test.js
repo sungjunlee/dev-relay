@@ -1117,7 +1117,7 @@ test("dispatch resume without redispatch artifact still errors with auto-discove
   assert.match(result.stderr, /Auto-discovery looked for review-round-<N>-redispatch\.md/);
 });
 
-test("dispatch stores model_hints for all four phases verbatim", () => {
+test("dispatch stores model_hints for configured phases verbatim", () => {
   const { repoRoot, relayHome } = setupRepo();
   process.env.RELAY_HOME = relayHome;
   allowCodexDispatchModels(relayHome);
@@ -1666,7 +1666,7 @@ test("dispatch denies disallowed executor route before spawning the executor", (
     "-b", "issue-policy-denied",
     "-p", "must not spawn opencode",
     "-e", "opencode",
-    "-m", "opencode-go/deepseek-v4-pro",
+    "-m", "example/opencode-model-fast",
     "--rubric-file", rubricFile,
     "--json",
   ])], {
@@ -1687,7 +1687,7 @@ test("dispatch denies disallowed executor route before spawning the executor", (
   assert.equal(result.policy_decision.phase, "dispatch");
   assert.equal(result.policy_decision.actor_field, "executor");
   assert.equal(result.policy_decision.executor, "opencode");
-  assert.equal(result.policy_decision.model, "opencode-go/deepseek-v4-pro");
+  assert.equal(result.policy_decision.model, "example/opencode-model-fast");
   assert.equal(result.policy_decision.reason, "unknown_model_route");
   assert.match(result.error, /reason=unknown_model_route/);
   assert.equal(result.adapter_capability.adapter, "opencode");
@@ -1738,12 +1738,12 @@ test("dispatch reports adapter-capability denial before model-route policy", () 
   assert.equal(result.policy_decision, undefined);
 });
 
-test("dispatch opencode executor uses bundled default model when no override is supplied", () => {
+test("dispatch opencode executor fails closed when no model route is supplied", () => {
   const { repoRoot, relayHome } = setupRepo();
   process.env.RELAY_HOME = relayHome;
   writeRelayPolicy(relayHome, {
     profile: "allow-opencode-dispatch",
-    allowed_model_routes: [{ route: "opencode-go/*", phases: ["dispatch"], executors: ["opencode"] }],
+    allowed_model_routes: [{ route: "example/opencode-model-*", phases: ["dispatch"], executors: ["opencode"] }],
   });
   const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-opencode-bin-"));
   const capturePath = path.join(os.tmpdir(), `relay-dispatch-argv-${Date.now()}-opencode-bundled-default.json`);
@@ -1753,24 +1753,25 @@ test("dispatch opencode executor uses bundled default model when no override is 
     PATH: `${binDir}:${process.env.PATH}`,
     RELAY_HOME: relayHome,
   };
-  const taskPrompt = "test bundled opencode default";
+  const taskPrompt = "test missing opencode model route";
 
-  const result = JSON.parse(runDispatch(repoRoot, [
+  const proc = spawnSync("node", [SCRIPT, repoRoot, ...withRequiredRubric([
     "-b", "issue-opencode-bundled-default",
     "-p", taskPrompt,
     "-e", "opencode",
     "--json",
-  ], env));
-
-  assertOpencodeDispatchCommand(JSON.parse(fs.readFileSync(capturePath, "utf-8")), {
-    model: "opencode-go/deepseek-v4-pro",
-    taskPrompt,
+  ])], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    env,
   });
 
-  const dispatchStart = readJsonLines(path.join(result.runDir, "events.jsonl"))
-    .find((event) => event.event === "dispatch_start");
-  assert.equal(dispatchStart.model, "opencode-go/deepseek-v4-pro");
-  assert.equal(dispatchStart.provider, "opencode-go");
+  assert.notEqual(proc.status, 0);
+  assert.equal(fs.existsSync(capturePath), false);
+  const result = JSON.parse(proc.stdout);
+  assert.equal(result.status, "failed");
+  assert.equal(result.policy_decision.reason, "missing_model_route");
+  assert.equal(result.policy_decision.model, null);
 });
 
 test("dispatch opencode executor lets RELAY_HOME executors config override bundled model", () => {
@@ -1778,13 +1779,13 @@ test("dispatch opencode executor lets RELAY_HOME executors config override bundl
   process.env.RELAY_HOME = relayHome;
   writeRelayPolicy(relayHome, {
     profile: "allow-opencode-dispatch",
-    allowed_model_routes: [{ route: "opencode-go/*", phases: ["dispatch"], executors: ["opencode"] }],
+    allowed_model_routes: [{ route: "example/opencode-model-*", phases: ["dispatch"], executors: ["opencode"] }],
   });
   fs.writeFileSync(path.join(relayHome, "executors.json"), JSON.stringify({
     executors: {
       opencode: {
-        default_model: "opencode-go/qwen3.6-plus",
-        candidate_models: ["opencode-go/qwen3.6-plus"],
+        default_model: "example/opencode-model-local",
+        candidate_models: ["example/opencode-model-local"],
       },
     },
   }, null, 2), "utf-8");
@@ -1806,13 +1807,13 @@ test("dispatch opencode executor lets RELAY_HOME executors config override bundl
   ], env));
 
   assertOpencodeDispatchCommand(JSON.parse(fs.readFileSync(capturePath, "utf-8")), {
-    model: "opencode-go/qwen3.6-plus",
+    model: "example/opencode-model-local",
     taskPrompt,
   });
 
   const manifest = readManifest(result.manifestPath).data;
-  assert.equal(manifest.dispatch.last_model, "opencode-go/qwen3.6-plus");
-  assert.equal(manifest.dispatch.last_provider, "opencode-go");
+  assert.equal(manifest.dispatch.last_model, "example/opencode-model-local");
+  assert.equal(manifest.dispatch.last_provider, "example");
 });
 
 test("dispatch lets local executor config define defaults for executors absent from bundled config", () => {
@@ -1871,12 +1872,12 @@ test("dispatch codex executor ignores malformed local executor model config", ()
   assert.equal(args.includes("-m"), false);
 });
 
-test("dispatch opencode default model falls back to bundled config when local config schema is invalid", () => {
+test("dispatch opencode invalid local default fails closed without bundled fallback", () => {
   const { repoRoot, relayHome } = setupRepo();
   process.env.RELAY_HOME = relayHome;
   writeRelayPolicy(relayHome, {
     profile: "allow-opencode-dispatch",
-    allowed_model_routes: [{ route: "opencode-go/*", phases: ["dispatch"], executors: ["opencode"] }],
+    allowed_model_routes: [{ route: "example/opencode-model-*", phases: ["dispatch"], executors: ["opencode"] }],
   });
   fs.writeFileSync(path.join(relayHome, "executors.json"), JSON.stringify({
     executors: {
@@ -1893,7 +1894,7 @@ test("dispatch opencode default model falls back to bundled config when local co
     PATH: `${binDir}:${process.env.PATH}`,
     RELAY_HOME: relayHome,
   };
-  const taskPrompt = "invalid local config should fall back to bundled opencode default";
+  const taskPrompt = "invalid local config should not invent an opencode default";
 
   const proc = spawnSync("node", [SCRIPT, repoRoot, ...withRequiredRubric([
     "-b", "issue-opencode-invalid-local-default",
@@ -1906,13 +1907,13 @@ test("dispatch opencode default model falls back to bundled config when local co
     env,
   });
 
-  assert.equal(proc.status, 0, proc.stderr);
+  assert.notEqual(proc.status, 0);
   assert.match(proc.stderr, /Warning: ignoring optional executor model config/);
   assert.match(proc.stderr, /default_model must be a non-empty string/);
-  assertOpencodeDispatchCommand(JSON.parse(fs.readFileSync(capturePath, "utf-8")), {
-    model: "opencode-go/deepseek-v4-pro",
-    taskPrompt,
-  });
+  assert.equal(fs.existsSync(capturePath), false);
+  const result = JSON.parse(proc.stdout);
+  assert.equal(result.policy_decision.reason, "missing_model_route");
+  assert.equal(result.policy_decision.model, null);
 });
 
 test("dispatch opencode explicit --model skips malformed local executor model config", () => {
@@ -1920,7 +1921,7 @@ test("dispatch opencode explicit --model skips malformed local executor model co
   process.env.RELAY_HOME = relayHome;
   writeRelayPolicy(relayHome, {
     profile: "allow-opencode-dispatch",
-    allowed_model_routes: [{ route: "opencode-go/*", phases: ["dispatch"], executors: ["opencode"] }],
+    allowed_model_routes: [{ route: "example/opencode-model-*", phases: ["dispatch"], executors: ["opencode"] }],
   });
   fs.writeFileSync(path.join(relayHome, "executors.json"), "{not-json", "utf-8");
   const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-opencode-bin-"));
@@ -1937,23 +1938,23 @@ test("dispatch opencode explicit --model skips malformed local executor model co
     "-b", "issue-opencode-explicit-ignore-malformed-model-config",
     "-p", taskPrompt,
     "-e", "opencode",
-    "-m", "opencode-go/qwen3.6-plus",
+    "-m", "example/opencode-model-local",
     "--json",
   ], env));
 
   assert.equal(result.status, "completed");
   assertOpencodeDispatchCommand(JSON.parse(fs.readFileSync(capturePath, "utf-8")), {
-    model: "opencode-go/qwen3.6-plus",
+    model: "example/opencode-model-local",
     taskPrompt,
   });
 });
 
-test("dispatch opencode default model falls back to bundled config when local config is malformed", () => {
+test("dispatch opencode malformed local default fails closed without bundled fallback", () => {
   const { repoRoot, relayHome } = setupRepo();
   process.env.RELAY_HOME = relayHome;
   writeRelayPolicy(relayHome, {
     profile: "allow-opencode-dispatch",
-    allowed_model_routes: [{ route: "opencode-go/*", phases: ["dispatch"], executors: ["opencode"] }],
+    allowed_model_routes: [{ route: "example/opencode-model-*", phases: ["dispatch"], executors: ["opencode"] }],
   });
   fs.writeFileSync(path.join(relayHome, "executors.json"), "{not-json", "utf-8");
   const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-opencode-bin-"));
@@ -1964,7 +1965,7 @@ test("dispatch opencode default model falls back to bundled config when local co
     PATH: `${binDir}:${process.env.PATH}`,
     RELAY_HOME: relayHome,
   };
-  const taskPrompt = "malformed local config should fall back to bundled opencode default";
+  const taskPrompt = "malformed local config should not invent an opencode default";
 
   const proc = spawnSync("node", [SCRIPT, repoRoot, ...withRequiredRubric([
     "-b", "issue-opencode-malformed-local-default",
@@ -1977,12 +1978,12 @@ test("dispatch opencode default model falls back to bundled config when local co
     env,
   });
 
-  assert.equal(proc.status, 0, proc.stderr);
+  assert.notEqual(proc.status, 0);
   assert.match(proc.stderr, /Warning: ignoring optional executor model config/);
-  assertOpencodeDispatchCommand(JSON.parse(fs.readFileSync(capturePath, "utf-8")), {
-    model: "opencode-go/deepseek-v4-pro",
-    taskPrompt,
-  });
+  assert.equal(fs.existsSync(capturePath), false);
+  const result = JSON.parse(proc.stdout);
+  assert.equal(result.policy_decision.reason, "missing_model_route");
+  assert.equal(result.policy_decision.model, null);
 });
 
 function reasoningArgValue(args) {
@@ -2171,7 +2172,7 @@ test("dispatch dry-run includes managed default policy decision details", () => 
   assert.equal(path.basename(result.policy_decision.policy.sources.project), "policy.json");
 });
 
-test("dispatch routing dry-run JSON explains CLI tags and selected advisory sidecar defaults", () => {
+test("dispatch routing dry-run JSON explains CLI tags and selected advisory defaults", () => {
   const { repoRoot, relayHome, rubricFile, env } = setupDryRunFixtureRepo();
   writeRelayPolicy(relayHome, {
     profile: "routing-dry-run",
@@ -2180,7 +2181,6 @@ test("dispatch routing dry-run JSON explains CLI tags and selected advisory side
         name: "docs",
         match: { tags: ["docs"] },
         advisory_review: { reviewer: "claude", profile: "blindspot" },
-        sidecar: { kind: "docs-sync", executor: "opencode" },
       },
     ],
   });
@@ -2202,10 +2202,6 @@ test("dispatch routing dry-run JSON explains CLI tags and selected advisory side
     reviewer: "claude",
     profile: "blindspot",
   });
-  assert.deepEqual(result.routing_decision.selected.sidecar, {
-    kind: "docs-sync",
-    executor: "opencode",
-  });
 });
 
 test("dispatch routing dry-run text explains no-match decisions", () => {
@@ -2216,7 +2212,7 @@ test("dispatch routing dry-run text explains no-match decisions", () => {
       {
         name: "docs",
         match: { tags: ["docs"] },
-        sidecar: { kind: "docs-sync", executor: "opencode" },
+        advisory_review: { reviewer: "opencode" },
       },
     ],
   });
@@ -2231,7 +2227,7 @@ test("dispatch routing dry-run text explains no-match decisions", () => {
 
   assert.match(stdout, /Routing:\s+no match/);
   assert.match(stdout, /Tags:\s+cli=security .*effective=security/);
-  assert.match(stdout, /Selected:\s+advisory_review=\(none\) sidecar=\(none\)/);
+  assert.match(stdout, /Selected:\s+advisory_review=\(none\)/);
 });
 
 test("dispatch resume --dry-run with new --model-hints reports the new hint in effective_dispatch_model and does NOT write the manifest or emit events", () => {
