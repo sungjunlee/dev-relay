@@ -21,6 +21,8 @@ function tempDir(prefix = "relay-config-") {
 function envFor(relayHome, extra = {}) {
   const env = {
     ...process.env,
+    PATH: "/usr/bin:/bin",
+    RELAY_CONFIG_MODEL_PROBE_TIMEOUT_MS: "50",
     ...extra,
     RELAY_HOME: relayHome,
   };
@@ -132,7 +134,7 @@ test("doctor uses local PATH only and labels installed disallowed harnesses as p
 
   const result = runConfig(["doctor", "--json"], {
     relayHome,
-    env: { PATH: `${binDir}${path.delimiter}${process.env.PATH || ""}` },
+    env: { PATH: `${binDir}${path.delimiter}/usr/bin:/bin` },
   });
 
   assert.equal(result.status, 0, result.combined);
@@ -177,7 +179,10 @@ test("doctor includes project route provenance and best-effort model probes", ()
   const result = runConfig(["doctor", "--json"], {
     relayHome,
     cwd: repoRoot,
-    env: { PATH: `${binDir}${path.delimiter}${process.env.PATH || ""}` },
+    env: {
+      PATH: `${binDir}${path.delimiter}/usr/bin:/bin`,
+      RELAY_CONFIG_MODEL_PROBE_TIMEOUT_MS: "1000",
+    },
   });
 
   assert.equal(result.status, 0, result.combined);
@@ -189,6 +194,34 @@ test("doctor includes project route provenance and best-effort model probes", ()
   assert.deepEqual(opencode.model_probe.models, ["example/opencode-model-fast", "openai/gpt-5"]);
   const pi = output.tools.find((tool) => tool.name === "pi");
   assert.deepEqual(pi.model_probe.models, ["example/pi-model-fast"]);
+});
+
+test("doctor reports optional Pi model-list probe timeouts without masking install or policy status", () => {
+  const relayHome = tempDir();
+  const binDir = tempDir("relay-config-doctor-timeout-bin-");
+  writeExecutable(path.join(binDir, "pi"), "#!/bin/sh\nif [ \"$1\" = --list-models ]; then sleep 2; fi\nexit 0\n");
+  writeJson(path.join(relayHome, "policy.json"), {
+    ...buildDefaultRelayPolicy(),
+    profile: "allow-pi-review",
+    allowed_model_routes: [{ route: "example/pi-*", phases: ["review"], reviewers: ["pi"] }],
+  });
+
+  const result = runConfig(["doctor", "--json"], {
+    relayHome,
+    env: {
+      PATH: `${binDir}${path.delimiter}/usr/bin:/bin`,
+      RELAY_CONFIG_MODEL_PROBE_TIMEOUT_MS: "50",
+    },
+  });
+
+  assert.equal(result.status, 0, result.combined);
+  const pi = parseJson(result).tools.find((tool) => tool.name === "pi");
+  assert.equal(pi.installed, true);
+  assert.equal(pi.policy, "route-configured");
+  assert.equal(pi.reason, "provider_model_route_required");
+  assert.equal(pi.model_probe.status, "warning");
+  assert.match(pi.model_probe.warning, /optional model-list probe failed for pi/i);
+  assert.match(pi.model_probe.warning, /after 50ms/);
 });
 
 test("check exits zero for allowed managed CLI routes and reports the decision reason", () => {
@@ -285,6 +318,72 @@ test("allow-route maps mixed executor phases to executors and reviewer phases to
   ], { relayHome });
   assert.equal(advisory.status, 0, advisory.combined);
   assert.equal(parseJson(advisory).decision.reason, "allowed_model_route");
+});
+
+test("check requires only the actor role required by the selected phase", () => {
+  const relayHome = tempDir();
+  assert.equal(runConfig(["init", "--profile", "company", "--json"], { relayHome }).status, 0);
+  assert.equal(runConfig([
+    "allow-route",
+    "example/opencode-model-*",
+    "--reviewer",
+    "opencode",
+    "--phase",
+    "review,advisory_review",
+    "--json",
+  ], { relayHome }).status, 0);
+
+  const review = runConfig([
+    "check",
+    "--phase",
+    "review",
+    "--reviewer",
+    "opencode",
+    "--model",
+    "example/opencode-model-fast",
+    "--json",
+  ], { relayHome });
+  assert.equal(review.status, 0, review.combined);
+  assert.equal(parseJson(review).decision.reason, "allowed_model_route");
+
+  const advisory = runConfig([
+    "check",
+    "--phase",
+    "advisory_review",
+    "--reviewer",
+    "opencode",
+    "--model",
+    "example/opencode-model-fast",
+    "--json",
+  ], { relayHome });
+  assert.equal(advisory.status, 0, advisory.combined);
+  assert.equal(parseJson(advisory).decision.reason, "allowed_model_route");
+
+  const missingExecutor = runConfig([
+    "check",
+    "--phase",
+    "dispatch",
+    "--reviewer",
+    "opencode",
+    "--model",
+    "example/opencode-model-fast",
+    "--json",
+  ], { relayHome });
+  assert.notEqual(missingExecutor.status, 0, missingExecutor.combined);
+  assert.match(missingExecutor.combined, /--executor is required/);
+
+  const missingReviewer = runConfig([
+    "check",
+    "--phase",
+    "advisory_review",
+    "--executor",
+    "opencode",
+    "--model",
+    "example/opencode-model-fast",
+    "--json",
+  ], { relayHome });
+  assert.notEqual(missingReviewer.status, 0, missingReviewer.combined);
+  assert.match(missingReviewer.combined, /--reviewer is required/);
 });
 
 test("deny-route preserves route scopes and denied routes win during check", () => {

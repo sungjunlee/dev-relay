@@ -21,7 +21,7 @@ Set up relay route policy interactively. The user should not have to memorize co
 
 - The user asks to set up or configure relay
 - The user wants company-safe defaults, personal OpenCode/Pi opt-in, or advisory-review routing
-- The user asks whether a provider/model route such as `example/opencode-model-*` is allowed
+- The user asks whether a provider/model route such as `example/opencode-model-*` or `opencode-go/glm-5.2` is allowed
 - The user asks to run relay policy doctor/check
 
 ## Do not use when
@@ -49,7 +49,7 @@ Infer from the user's words before asking questions:
 - `company`, `work`, `회사` → company profile
 - `personal`, `home`, `집`, `개인` → personal profile
 - `managed only`, `codex/claude only` → no unmanaged route opt-in
-- routes containing `/`, such as `example/opencode-model-*`, `example/pi-*`, `openai/*`, or `ollama/*` → provider/model route patterns
+- routes containing `/`, such as `example/opencode-model-*`, `opencode-go/glm-5.2`, `example/pi-*`, `openai/*`, or `ollama/*` → provider/model route patterns
 - `advisory`, `reviewer`, `documentation`, `docs` → likely advisory-review phases
 
 Ask only for missing decisions, one at a time. Use plain language and wait for the user's answer. Do not use host-specific question primitives as the only path; this skill must work in both Claude Code and Codex.
@@ -85,6 +85,7 @@ After changes, run:
 ```bash
 node "${RELAY_SKILL_ROOT:-skills}/relay-config/scripts/relay-config.js" doctor
 node "${RELAY_SKILL_ROOT:-skills}/relay-config/scripts/relay-config.js" check dispatch opencode example/opencode-model-fast
+node "${RELAY_SKILL_ROOT:-skills}/relay-config/scripts/relay-config.js" check review opencode opencode-go/glm-5.2
 ```
 
 Adjust the `check` tuple to match the actual actor, phase, and route that was enabled. Report denied tuples clearly and do not treat a denied OpenCode/Pi route as configured.
@@ -100,5 +101,7 @@ The wrapper accepts common shorthand and delegates to `relay-dispatch/scripts/re
 | `show` | `show --effective` |
 | `doctor` | `doctor` |
 | `check dispatch opencode example/opencode-model-fast` | `check --phase dispatch --executor opencode --model example/opencode-model-fast` |
+| `check review opencode opencode-go/glm-5.2` | `check --phase review --reviewer opencode --model opencode-go/glm-5.2` |
+| `check advisory_review pi example/pi-model-fast` | `check --phase advisory_review --reviewer pi --model example/pi-model-fast` |
 
 Full flag forms continue to pass through. Policy semantics live in the sibling `relay-dispatch` script, not this wrapper.

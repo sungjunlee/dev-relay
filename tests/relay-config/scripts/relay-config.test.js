@@ -19,6 +19,8 @@ function tempDir(prefix = "relay-config-wrapper-") {
 function envFor(relayHome, extra = {}) {
   const env = {
     ...process.env,
+    PATH: "/usr/bin:/bin",
+    RELAY_CONFIG_MODEL_PROBE_TIMEOUT_MS: "50",
     ...extra,
     RELAY_HOME: relayHome,
   };
@@ -81,15 +83,15 @@ test("show shorthand adds --effective", () => {
   assert.equal(output.policy.profile, "personal");
 });
 
-test("check shorthand maps reviewer phases to reviewer and executor scopes", () => {
+test("check shorthand maps reviewer phases to reviewer-only core checks", () => {
   const relayHome = tempDir();
   assert.equal(runConfig(["init", "company", "--json"], { relayHome }).status, 0);
   assert.equal(runConfig([
     "allow-route",
     "example/opencode-model-*",
     "--phase",
-    "dispatch,advisory_review",
-    "--executor",
+    "advisory_review",
+    "--reviewer",
     "opencode",
     "--json",
   ], { relayHome }).status, 0);

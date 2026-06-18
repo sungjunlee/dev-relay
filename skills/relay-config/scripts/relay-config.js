@@ -123,8 +123,9 @@ function normalizeCheck(rest) {
   const [phase, actor, maybeModel, ...tail] = rest;
   if (!VALID_PHASES.has(phase)) return ["check", ...rest];
 
-  const normalized = ["check", "--phase", phase, "--executor", actor];
+  const normalized = ["check", "--phase", phase];
   if (REVIEWER_PHASES.has(phase)) normalized.push("--reviewer", actor);
+  else normalized.push("--executor", actor);
 
   if (maybeModel && !maybeModel.startsWith("-")) {
     normalized.push("--model", maybeModel);
