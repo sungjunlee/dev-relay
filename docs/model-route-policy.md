@@ -2,7 +2,7 @@
 
 Route policy answers one operational question: which provider/model route is allowed to run in each relay phase?
 
-Executor and reviewer names such as `codex`, `claude`, `opencode`, and `pi` are harness names. They select a CLI adapter and execution contract. They are not the compliance boundary. The compliance boundary is the provider/model route string, for example `example/opencode-model-fast`, `example/pi-model-fast`, `example/pi-model-deep`, or `ollama/qwen3`.
+Executor and reviewer names such as `codex`, `claude`, `opencode`, and `pi` are harness names. They select a CLI adapter and execution contract. They are not the compliance boundary. The compliance boundary is the provider/model route string, for example `example/opencode-model-fast`, `opencode-go/glm-5.2`, `example/pi-model-fast`, `example/pi-model-deep`, or `ollama/qwen3`.
 
 Codex and Claude are the managed CLI defaults. In the default managed profile, a model-less Codex or Claude invocation is allowed because the CLI account and its managed default model are the boundary. Generated company defaults should not pin Codex or Claude model names just to make policy explicit. OpenCode, Pi, and Antigravity are routing harnesses, so managed/company profiles must require an explicit provider/model route and an allow rule before they can run.
 
@@ -183,6 +183,30 @@ node skills/relay-config/scripts/relay-config.js allow-route 'ollama/*' \
   --reviewer opencode
 ```
 
+For a current personal OpenCode Go GLM-5.2 trial, keep the route explicit and scoped to the phases you intend to dogfood:
+
+```bash
+node skills/relay-config/scripts/relay-config.js allow-route 'opencode-go/glm-5.2' \
+  --phase dispatch,review,advisory_review \
+  --executor opencode \
+  --reviewer opencode
+
+node skills/relay-config/scripts/relay-config.js check dispatch opencode opencode-go/glm-5.2
+node skills/relay-config/scripts/relay-config.js check review opencode opencode-go/glm-5.2
+node skills/relay-config/scripts/relay-config.js check advisory_review opencode opencode-go/glm-5.2
+```
+
+For Pi, use the provider/model route your installed Pi CLI account exposes. Relay does not bundle a Pi route default:
+
+```bash
+node skills/relay-config/scripts/relay-config.js allow-route '<pi-provider>/<pi-model>' \
+  --phase dispatch,review,advisory_review \
+  --executor pi \
+  --reviewer pi
+
+node skills/relay-config/scripts/relay-config.js check review pi '<pi-provider>/<pi-model>'
+```
+
 If you want OpenCode to default to a personal route, set the executor model config and allow the matching route:
 
 ```json
@@ -221,10 +245,12 @@ node skills/relay-config/scripts/relay-config.js check dispatch opencode example
 
 node skills/relay-config/scripts/relay-config.js check dispatch pi example/pi-model-fast
 
+node skills/relay-config/scripts/relay-config.js check review opencode opencode-go/glm-5.2
+
 node skills/relay-config/scripts/relay-config.js check advisory_review opencode example/opencode-model-fast
 ```
 
-Check exits non-zero when the tuple would be denied at runtime. Run it before turning on routed advisory review rules because advisory review can start automatically after dispatch.
+For `dispatch`, the checked actor is an executor. For `review` and `advisory_review`, the checked actor is a reviewer; reviewer-only checks do not require an executor. Check exits non-zero when the tuple would be denied at runtime. Run it before turning on routed advisory review rules because advisory review can start automatically after dispatch.
 
 For pre-planning dispatch probes, run the matching `probe-executor-env` command with the same unmanaged route. The probe evaluates `--executor` plus `--model` as a dispatch policy tuple before invoking the adapter:
 

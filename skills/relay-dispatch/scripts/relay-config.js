@@ -70,7 +70,7 @@ function printHelp() {
   console.log(`  init --profile <company|personal> ${modeLabel("--profile")} [--json ${modeLabel("--json")}]`);
   console.log(`  show --effective ${modeLabel("--effective")} [--json ${modeLabel("--json")}]`);
   console.log(`  doctor [--json ${modeLabel("--json")}]`);
-  console.log(`  check --phase <phase> ${modeLabel("--phase")} --executor <name> ${modeLabel("--executor")} [--reviewer <name> ${modeLabel("--reviewer")}] [--model <provider/model> ${modeLabel("--model")}] [--json ${modeLabel("--json")}]`);
+  console.log(`  check --phase <phase> ${modeLabel("--phase")} [--executor <name> ${modeLabel("--executor")}] [--reviewer <name> ${modeLabel("--reviewer")}] [--model <provider/model> ${modeLabel("--model")}] [--json ${modeLabel("--json")}]`);
   console.log(`  plan-run [--repo <path> ${modeLabel("--repo")}] [--dispatch <actor[:provider/model]> ${modeLabel("--dispatch")}] [--review <actor[:provider/model]> ${modeLabel("--review")}] [--advisory-review <actor[:provider/model]> ${modeLabel("--advisory-review")}] [--route-intent-file <path> ${modeLabel("--route-intent-file")}] [--json ${modeLabel("--json")}]`);
   console.log("  set-default <path> <value> [--json]");
   console.log(`  allow-route <pattern> --phase <csv> ${modeLabel("--phase")} [--executor <name> ${modeLabel("--executor")}] [--reviewer <name> ${modeLabel("--reviewer")}] [--json ${modeLabel("--json")}]`);
@@ -303,16 +303,22 @@ function actorHasConfiguredAllowedRoute(policy, actor) {
   });
 }
 
+function modelProbeTimeoutMs() {
+  const raw = Number(process.env.RELAY_CONFIG_MODEL_PROBE_TIMEOUT_MS || 5000);
+  return Number.isSafeInteger(raw) && raw > 0 ? raw : 5000;
+}
+
 function probeModels(name, executable) {
   if (!executable || !["opencode", "pi"].includes(name)) {
     return { status: "not_applicable", models: [], warning: null };
   }
   const args = name === "opencode" ? ["models"] : ["--list-models"];
+  const timeoutMs = modelProbeTimeoutMs();
   try {
     const output = execFileSync(executable, args, {
       encoding: "utf-8",
       stdio: "pipe",
-      timeout: 5000,
+      timeout: timeoutMs,
     });
     const models = output
       .split("\n")
@@ -321,10 +327,12 @@ function probeModels(name, executable) {
       .filter((value, index, values) => values.indexOf(value) === index);
     return { status: "ok", models, warning: null };
   } catch (error) {
+    const detail = String(error.stderr || error.message || error).split("\n")[0];
+    const command = `${path.basename(executable)} ${args.join(" ")}`;
     return {
       status: "warning",
       models: [],
-      warning: String(error.stderr || error.message || error).split("\n")[0],
+      warning: `optional model-list probe failed for ${name} (${command}) after ${timeoutMs}ms: ${detail}`,
     };
   }
 }
@@ -404,8 +412,10 @@ function commandCheck(positionals, jsonOut) {
   if (!VALID_PHASES.includes(phase)) {
     throw new Error(`unsupported phase: ${phase}; expected one of: ${VALID_PHASES.join(", ")}`);
   }
-  const executor = requireValue(readArg(args, "--executor", undefined, CLI_ARG_OPTIONS), "--executor");
-  const reviewer = readArg(args, "--reviewer", undefined, CLI_ARG_OPTIONS);
+  let executor = nonEmptyString(readArg(args, "--executor", undefined, CLI_ARG_OPTIONS));
+  let reviewer = nonEmptyString(readArg(args, "--reviewer", undefined, CLI_ARG_OPTIONS));
+  if (EXECUTOR_PHASES.has(phase)) executor = requireValue(executor, "--executor");
+  if (REVIEWER_PHASES.has(phase)) reviewer = requireValue(reviewer, "--reviewer");
   const model = readArg(args, "--model", undefined, CLI_ARG_OPTIONS);
   const result = loadRelayPolicy({ repoRoot: process.cwd() });
   const decision = evaluateRelayRoute(result, { phase, executor, reviewer, model });

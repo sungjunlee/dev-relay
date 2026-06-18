@@ -29,6 +29,7 @@ Use `/relay-config` to set route policy rather than editing JSON by hand:
 /relay-config Set up relay for my company environment
 /relay-config Only allow OpenCode through example/opencode-model-* at work
 $relay-config Use example/opencode-model-fast for personal advisory review
+$relay-config Use opencode-go/glm-5.2 for personal OpenCode dispatch and review dogfood
 ```
 
 Route policy is based on provider/model routes, not only harness names. Managed Codex and Claude CLIs work by default when no policy exists. OpenCode, Pi, and advisory reviewers require explicit route approval. See [model-route-policy.md](model-route-policy.md) for the full policy shape and precedence order.
@@ -43,7 +44,7 @@ Implementation status describes the adapter surface shipped in relay. Live statu
 | --- | --- | --- | --- |
 | `claude` | Implementation: `stable`<br>Live: `stable` | Implementation: `stable`<br>Live: `stable` | Implementation: `not-supported`<br>Live: `not-supported` |
 | `codex` | Implementation: `stable`<br>Live: `stable` | Implementation: `stable`<br>Live: `stable` | Implementation: `not-supported`<br>Live: `not-supported` |
-| `opencode` | Implementation: `limited`<br>Live: `blocked` until healthy dispatch evidence exists for the chosen route | Implementation: `limited`<br>Live: `limited` by route policy and live reviewer evidence | Implementation: `limited`<br>Live: `limited` by route policy and advisory evidence |
+| `opencode` | Implementation: `limited`<br>Live: `limited` after route-specific healthy dispatch evidence; otherwise blocked for that route | Implementation: `limited`<br>Live: `limited` by route policy and live reviewer evidence | Implementation: `limited`<br>Live: `limited` by route policy and advisory evidence |
 | `pi` | Implementation: `stable`<br>Live: `limited` by route-specific healthy dispatch canaries | Implementation: `stable`<br>Live: `limited` by route-specific reviewer canaries | Implementation: `stable`<br>Live: `limited` by route-specific advisory evidence |
 | `antigravity` | Implementation: `limited`<br>Live: `limited` by `google/antigravity-cli` healthy dispatch canary evidence | Implementation: `fail-safe-experimental`<br>Live: `blocked` until strict verdict JSON is accepted in a healthy live reviewer canary | Implementation: `fail-safe-experimental`<br>Live: `blocked` by current timeout/worktree-mutation blocker |
 | `cursor` | Implementation: `limited`<br>Live: `blocked` until route-specific healthy dispatch canaries exist | Implementation: `limited`<br>Live: `blocked` until strict verdict JSON is accepted in a healthy live reviewer canary | Implementation: `not-supported`<br>Live: `not-supported` |
@@ -138,6 +139,22 @@ OpenCode, Pi, and Antigravity can be used as reviewer roles only when the adapte
 
 OpenCode review uses a bounded parent-process timeout. Set `RELAY_OPENCODE_REVIEW_TIMEOUT` to a positive duration such as `120s`, `10m`, or `1h`; the default is `1800s`. If an OpenCode review returns empty stdout or times out, first validate the CLI/provider path with a minimal `opencode run -m <model> '<json prompt>'` command before treating the route as healthy.
 
+For a current personal OpenCode Go GLM-5.2 route, authorize and check each role explicitly:
+
+```bash
+node skills/relay-config/scripts/relay-config.js allow-route 'opencode-go/glm-5.2' \
+  --phase dispatch,review,advisory_review \
+  --executor opencode \
+  --reviewer opencode
+
+node skills/relay-config/scripts/relay-config.js check dispatch opencode opencode-go/glm-5.2
+node skills/relay-config/scripts/relay-config.js check review opencode opencode-go/glm-5.2
+node skills/relay-config/scripts/relay-config.js check advisory_review opencode opencode-go/glm-5.2
+
+opencode run -m opencode-go/glm-5.2 \
+  'Do not edit files. Reply exactly OPENCODE_GLM52_OK and nothing else.'
+```
+
 Pi can be used as dispatch executor or trusted primary reviewer when `pi` is on `PATH` (or `RELAY_PI_BIN` is set for review), authenticated for the selected provider, and route policy allows the model route:
 
 ```bash
@@ -152,6 +169,21 @@ node skills/relay-config/scripts/relay-config.js plan-run --repo . \
 ```
 
 Pi primary review uses a bounded parent-process timeout. Set `RELAY_PI_REVIEW_TIMEOUT` to a positive duration such as `120s`, `10m`, or `1h`; the default is `1800s`. Relay invokes Pi with prompt-template, skill, theme, extension, and context-file discovery disabled so non-interactive review does not hang on optional startup integrations. If a Pi review still times out, first validate the CLI/provider path with a minimal `pi --no-session --no-context-files --no-tools --no-extensions --no-skills --no-prompt-templates --no-themes --print` command before treating the route as healthy. If that minimal command succeeds while `pi-primary` still times out, record the result as a prompt/scope or route-latency blocker rather than parser failure or healthy evidence.
+
+When Pi's model-list probe times out in `relay-config doctor`, treat it as an optional discovery warning unless the exact route check or minimal Pi command also fails. Authorize the selected Pi route explicitly, then prove the non-interactive CLI path:
+
+```bash
+node skills/relay-config/scripts/relay-config.js allow-route '<pi-provider>/<pi-model>' \
+  --phase dispatch,review,advisory_review \
+  --executor pi \
+  --reviewer pi
+
+node skills/relay-config/scripts/relay-config.js check review pi '<pi-provider>/<pi-model>'
+
+pi --no-session --no-context-files --no-extensions --no-skills --no-prompt-templates --no-themes \
+  --tools read,grep,find,ls --print \
+  'Do not edit files. Reply exactly PI_READONLY_OK and nothing else.'
+```
 
 Cursor can be used as dispatch executor or trusted primary reviewer when `agent` is on `PATH` (or `RELAY_CURSOR_AGENT_BIN` overrides the binary for dispatch and review), authenticated via `agent login` or `CURSOR_API_KEY`, and route policy allows the model route (add `cursor` to `managed_cli` for slug-only models such as `composer-2.5`):
 
@@ -191,6 +223,12 @@ For repeatable multi-executor dogfood, use the harness:
 ```bash
 node skills/relay-dispatch/scripts/live-dogfood.js --repo . --json --markdown
 node skills/relay-dispatch/scripts/live-dogfood.js --repo . --dispatch-canary --json
+node skills/relay-dispatch/scripts/live-dogfood.js --repo . \
+  --opencode-model opencode-go/glm-5.2 \
+  --pi-model '<pi-provider>/<pi-model>' \
+  --scenario opencode-advisory \
+  --scenario pi-primary \
+  --json --markdown
 ```
 
 By default the harness creates a temporary `RELAY_HOME`, writes a scoped route policy there, and runs Pi, OpenCode, and Antigravity probes plus bounded live canaries. OpenCode and Pi review canaries use realistic healthy timeouts by default; Antigravity primary and advisory review do too, while `--antigravity-fail-safe-timeout` controls the intentionally short fail-safe timeout canary. Use `--dry-run` to print `not-run` planned steps without invoking live CLIs, `--probe-only` to skip review/dispatch canaries, or repeated `--scenario <name>` filters such as `--scenario opencode-primary`, `--scenario pi-primary`, `--scenario pi-advisory`, or `--scenario antigravity-advisory` when one adapter needs isolated evidence without waiting on unrelated live canaries.
