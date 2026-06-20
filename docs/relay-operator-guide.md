@@ -29,7 +29,7 @@ Use `/relay-config` to set route policy rather than editing JSON by hand:
 /relay-config Set up relay for my company environment
 /relay-config Only allow OpenCode through example/opencode-model-* at work
 $relay-config Use example/opencode-model-fast for personal advisory review
-$relay-config Use opencode-go/glm-5.2 for personal OpenCode dispatch and review dogfood
+$relay-config Use my selected OpenCode provider/model route for personal dispatch and review dogfood
 ```
 
 Route policy is based on provider/model routes, not only harness names. Managed Codex and Claude CLIs work by default when no policy exists. OpenCode, Pi, and advisory reviewers require explicit route approval. See [model-route-policy.md](model-route-policy.md) for the full policy shape and precedence order.
@@ -139,20 +139,20 @@ OpenCode, Pi, and Antigravity can be used as reviewer roles only when the adapte
 
 OpenCode review uses a bounded parent-process timeout. Set `RELAY_OPENCODE_REVIEW_TIMEOUT` to a positive duration such as `120s`, `10m`, or `1h`; the default is `1800s`. If an OpenCode review returns empty stdout or times out, first validate the CLI/provider path with a minimal `opencode run -m <model> '<json prompt>'` command before treating the route as healthy.
 
-For a current personal OpenCode Go GLM-5.2 route, authorize and check each role explicitly:
+For an OpenCode provider/model route you want to dogfood, authorize and check each role explicitly. Relay does not special-case or bundle any OpenCode model route:
 
 ```bash
-node skills/relay-config/scripts/relay-config.js allow-route 'opencode-go/glm-5.2' \
+node skills/relay-config/scripts/relay-config.js allow-route '<opencode-provider>/<opencode-model>' \
   --phase dispatch,review,advisory_review \
   --executor opencode \
   --reviewer opencode
 
-node skills/relay-config/scripts/relay-config.js check dispatch opencode opencode-go/glm-5.2
-node skills/relay-config/scripts/relay-config.js check review opencode opencode-go/glm-5.2
-node skills/relay-config/scripts/relay-config.js check advisory_review opencode opencode-go/glm-5.2
+node skills/relay-config/scripts/relay-config.js check dispatch opencode '<opencode-provider>/<opencode-model>'
+node skills/relay-config/scripts/relay-config.js check review opencode '<opencode-provider>/<opencode-model>'
+node skills/relay-config/scripts/relay-config.js check advisory_review opencode '<opencode-provider>/<opencode-model>'
 
-opencode run -m opencode-go/glm-5.2 \
-  'Do not edit files. Reply exactly OPENCODE_GLM52_OK and nothing else.'
+opencode run -m '<opencode-provider>/<opencode-model>' \
+  'Do not edit files. Reply exactly OPENCODE_ROUTE_OK and nothing else.'
 ```
 
 Pi can be used as dispatch executor or trusted primary reviewer when `pi` is on `PATH` (or `RELAY_PI_BIN` is set for review), authenticated for the selected provider, and route policy allows the model route:
@@ -224,7 +224,7 @@ For repeatable multi-executor dogfood, use the harness:
 node skills/relay-dispatch/scripts/live-dogfood.js --repo . --json --markdown
 node skills/relay-dispatch/scripts/live-dogfood.js --repo . --dispatch-canary --json
 node skills/relay-dispatch/scripts/live-dogfood.js --repo . \
-  --opencode-model opencode-go/glm-5.2 \
+  --opencode-model '<opencode-provider>/<opencode-model>' \
   --pi-model '<pi-provider>/<pi-model>' \
   --scenario opencode-advisory \
   --scenario pi-primary \

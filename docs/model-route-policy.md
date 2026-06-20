@@ -2,7 +2,7 @@
 
 Route policy answers one operational question: which provider/model route is allowed to run in each relay phase?
 
-Executor and reviewer names such as `codex`, `claude`, `opencode`, and `pi` are harness names. They select a CLI adapter and execution contract. They are not the compliance boundary. The compliance boundary is the provider/model route string, for example `example/opencode-model-fast`, `opencode-go/glm-5.2`, `example/pi-model-fast`, `example/pi-model-deep`, or `ollama/qwen3`.
+Executor and reviewer names such as `codex`, `claude`, `opencode`, and `pi` are harness names. They select a CLI adapter and execution contract. They are not the compliance boundary. The compliance boundary is the provider/model route string, for example `example/opencode-model-fast`, `example/pi-model-fast`, `example/pi-model-deep`, or `ollama/qwen3`.
 
 Codex and Claude are the managed CLI defaults. In the default managed profile, a model-less Codex or Claude invocation is allowed because the CLI account and its managed default model are the boundary. Generated company defaults should not pin Codex or Claude model names just to make policy explicit. OpenCode, Pi, and Antigravity are routing harnesses, so managed/company profiles must require an explicit provider/model route and an allow rule before they can run.
 
@@ -183,17 +183,17 @@ node skills/relay-config/scripts/relay-config.js allow-route 'ollama/*' \
   --reviewer opencode
 ```
 
-For a current personal OpenCode Go GLM-5.2 trial, keep the route explicit and scoped to the phases you intend to dogfood:
+For any current OpenCode route you want to dogfood, keep the provider/model string explicit and scoped to the phases you intend to enable:
 
 ```bash
-node skills/relay-config/scripts/relay-config.js allow-route 'opencode-go/glm-5.2' \
+node skills/relay-config/scripts/relay-config.js allow-route '<opencode-provider>/<opencode-model>' \
   --phase dispatch,review,advisory_review \
   --executor opencode \
   --reviewer opencode
 
-node skills/relay-config/scripts/relay-config.js check dispatch opencode opencode-go/glm-5.2
-node skills/relay-config/scripts/relay-config.js check review opencode opencode-go/glm-5.2
-node skills/relay-config/scripts/relay-config.js check advisory_review opencode opencode-go/glm-5.2
+node skills/relay-config/scripts/relay-config.js check dispatch opencode '<opencode-provider>/<opencode-model>'
+node skills/relay-config/scripts/relay-config.js check review opencode '<opencode-provider>/<opencode-model>'
+node skills/relay-config/scripts/relay-config.js check advisory_review opencode '<opencode-provider>/<opencode-model>'
 ```
 
 For Pi, use the provider/model route your installed Pi CLI account exposes. Relay does not bundle a Pi route default:
@@ -245,7 +245,7 @@ node skills/relay-config/scripts/relay-config.js check dispatch opencode example
 
 node skills/relay-config/scripts/relay-config.js check dispatch pi example/pi-model-fast
 
-node skills/relay-config/scripts/relay-config.js check review opencode opencode-go/glm-5.2
+node skills/relay-config/scripts/relay-config.js check review opencode example/opencode-model-fast
 
 node skills/relay-config/scripts/relay-config.js check advisory_review opencode example/opencode-model-fast
 ```
