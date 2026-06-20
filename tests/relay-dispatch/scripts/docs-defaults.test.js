@@ -75,11 +75,14 @@ function operatorReadinessMatrix() {
   };
 }
 
-function sectionBetweenHeadings(doc, heading, nextHeadingLevel = "## ") {
+function sectionUntilNextPeerOrParentHeading(doc, heading) {
   const start = doc.indexOf(heading);
   assert.notEqual(start, -1, `${heading} must exist`);
-  const next = doc.indexOf(`\n${nextHeadingLevel}`, start + heading.length);
-  return doc.slice(start, next === -1 ? undefined : next);
+  const level = heading.match(/^#+/)?.[0].length || 2;
+  const nextHeading = new RegExp(`\\n#{1,${level}}\\s`, "g");
+  nextHeading.lastIndex = start + heading.length;
+  const next = nextHeading.exec(doc);
+  return doc.slice(start, next ? next.index : undefined);
 }
 
 function readinessPair(cell) {
@@ -311,8 +314,9 @@ test("operator guide teaches default and manual workflows before adapter readine
 
 test("operator guide delegates adapter-specific review details to references", () => {
   const doc = readRepoFile(OPERATOR_GUIDE_DOC);
-  const reviewSection = sectionBetweenHeadings(doc, "### Review", "### ");
-  const liveCanarySection = sectionBetweenHeadings(doc, "### Antigravity Live Canary", "### ");
+  const adapterPlatformDoc = readRepoFile(ADAPTER_PLATFORM_DOC);
+  const reviewSection = sectionUntilNextPeerOrParentHeading(doc, "### Review");
+  const liveCanarySection = sectionUntilNextPeerOrParentHeading(doc, "### Antigravity Live Canary");
 
   assert.match(reviewSection, /agent-adapter-platform\.md/);
   assert.match(reviewSection, /model-route-policy\.md/);
@@ -321,6 +325,7 @@ test("operator guide delegates adapter-specific review details to references", (
   assert.match(liveCanarySection, /operator-utilities\.md/);
   assert.match(liveCanarySection, /agent-adapter-platform\.md/);
   assert.doesNotMatch(liveCanarySection, /relay-antigravity-live-(?:prompt|rubric)/);
+  assert.match(adapterPlatformDoc, /RELAY_OPENCODE_REVIEW_TIMEOUT/);
 });
 
 test("operator guide separates implementation parity from live promotion criteria", () => {
