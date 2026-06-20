@@ -8,30 +8,13 @@
 
 `/relay-ready` is the standalone shaping front door for raw, ambiguous, or oversized requests, and it is also the internal preflight step that `/relay` may invoke before planning.
 
-`/relay` decides whether to bypass intake or invoke it, then always continues the normal downstream chain for relay-ready work.
-
-End-to-end flow:
-
-```text
-raw request
-  -> relay-ready
-  -> relay-ready leaf contract(s)
-  -> relay-plan
-  -> relay-dispatch
-  -> relay-review
-  -> relay-merge
-```
+Once a relay-ready leaf exists, `/relay` returns to the canonical lifecycle in [references/architecture.md](../references/architecture.md): plan, dispatch, review, stop at `ready_to_merge`; merge only on explicit request.
 
 ## Decision
 
 1. `relay-ready` is a standalone skill, not hidden state inside the run manifest lifecycle.
 2. `/relay` stays the front door for full-cycle execution.
-3. `/relay` may call `relay-ready`, but once a relay-ready contract exists the flow returns to the normal downstream path:
-
-```text
-relay-plan -> relay-dispatch -> relay-review -> relay-merge
-```
-
+3. `/relay` may call `relay-ready`, but the downstream lifecycle remains the one defined in `references/architecture.md`.
 4. The existing run manifest state machine remains execution-only. Intake owns preflight state and artifacts.
 5. The issue-first fast path stays intact. Already relay-ready tasks should not pay extra intake overhead.
 
@@ -42,10 +25,8 @@ input to /relay
    |
    +-- relay-ready already?
    |      |
-   |      +-- yes --> relay-plan
-   |                   -> relay-dispatch
-   |                   -> relay-review
-   |                   -> relay-merge (explicit only)
+   |      +-- yes --> canonical relay lifecycle
+   |                   (plan -> dispatch -> review -> ready_to_merge; merge explicit)
    |
    +-- no --> relay-ready
                -> classify / clarify / propose / structure

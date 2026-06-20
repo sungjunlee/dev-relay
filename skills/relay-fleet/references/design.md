@@ -9,7 +9,7 @@
 
 ## Problem
 
-`/relay` today processes exactly one PR per cycle (plan → dispatch → review → merge).
+`/relay` today processes exactly one PR per cycle: plan, dispatch, review, stop at `ready_to_merge`; merge is explicit.
 When a user has N independent issues, they must invoke `/relay` N times serially,
 even though dispatch is the long pole and the work is independent.
 

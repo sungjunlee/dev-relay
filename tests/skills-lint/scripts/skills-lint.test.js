@@ -17,6 +17,10 @@ const RELAY_READY_REQUEST_CONTRACT_SCHEMA = path.join(
 );
 const OPERATOR_SURFACE_REFERENCE = path.join(REPO_ROOT, "references", "operator-surface.md");
 const README_PATH = path.join(REPO_ROOT, "README.md");
+const CLAUDE_GUIDE_PATH = path.join(REPO_ROOT, "CLAUDE.md");
+const ARCHITECTURE_REFERENCE_PATH = path.join(REPO_ROOT, "references", "architecture.md");
+const RELAY_READY_DESIGN_PATH = path.join(REPO_ROOT, "docs", "relay-ready-routing-and-handoff-design.md");
+const WORKFLOW_LANES_PATH = path.join(REPO_ROOT, "docs", "workflow-lanes.md");
 
 const SURFACE_TIERS = {
   "public operator surface": ["relay-config", "relay", "relay-merge"],
@@ -355,6 +359,46 @@ function assertReadmeAdapterPrereqDetailsStayReferenced(content) {
   }
 }
 
+function assertProjectDocsPreserveExplicitMergeBoundary(docs) {
+  const requiredPatterns = [
+    {
+      label: "README",
+      content: docs.readme,
+      pattern: /stops at `ready_to_merge` until you explicitly land it[\s\S]*Use `\/relay-merge` only when you explicitly want to land/i,
+    },
+    {
+      label: "CLAUDE.md",
+      content: docs.claudeGuide,
+      pattern: /workflows with explicit merge[\s\S]*stopping at `ready_to_merge` unless the user explicitly invokes `relay-merge`/i,
+    },
+    {
+      label: "workflow lane policy",
+      content: docs.workflowLanes,
+      pattern: /ready_to_merge gate → explicit merge/i,
+    },
+    {
+      label: "architecture readiness flow",
+      content: docs.architectureReference,
+      pattern: /relay-review\s*\n\s*-> ready_to_merge\s*\n\s*-> relay-merge \(explicit only\)/i,
+    },
+    {
+      label: "relay-ready handoff design",
+      content: docs.relayReadyDesign,
+      pattern: /plan -> dispatch -> review -> ready_to_merge; merge explicit/i,
+    },
+  ];
+
+  requiredPatterns.forEach(({ label, content, pattern }) => {
+    assert.match(content, pattern, `${label} must preserve the explicit ready_to_merge merge boundary`);
+  });
+
+  assert.doesNotMatch(
+    docs.claudeGuide,
+    /relay-plan\s*->\s*relay-dispatch\s*->\s*relay-review\s*->\s*relay-merge/i,
+    "CLAUDE.md must not describe /relay as automatically continuing through relay-merge",
+  );
+}
+
 test("all skills/SKILL.md files satisfy the lint contract", () => {
   const skillFiles = readSkillFiles();
   assert.ok(skillFiles.length > 0, "expected at least one skills/*/SKILL.md file");
@@ -422,6 +466,16 @@ test("relay-review spine delegates provider-specific adapter details", () => {
 test("README delegates adapter prerequisite churn to adapter references", () => {
   const readme = fs.readFileSync(README_PATH, "utf-8");
   assertReadmeAdapterPrereqDetailsStayReferenced(readme);
+});
+
+test("project docs preserve explicit relay merge boundary", () => {
+  assertProjectDocsPreserveExplicitMergeBoundary({
+    readme: fs.readFileSync(README_PATH, "utf-8"),
+    claudeGuide: fs.readFileSync(CLAUDE_GUIDE_PATH, "utf-8"),
+    architectureReference: fs.readFileSync(ARCHITECTURE_REFERENCE_PATH, "utf-8"),
+    relayReadyDesign: fs.readFileSync(RELAY_READY_DESIGN_PATH, "utf-8"),
+    workflowLanes: fs.readFileSync(WORKFLOW_LANES_PATH, "utf-8"),
+  });
 });
 
 test("assertLineCount rejects SKILL.md files over 150 lines", () => {
