@@ -34,7 +34,7 @@ Isolation details by built-in reviewer:
 | --- | --- |
 | `codex` | `invoke-reviewer-codex.js` passes ephemeral read-only review settings and expects structured verdict JSON. |
 | `claude` | `invoke-reviewer-claude.js` uses bare/no-session-persistence review mode; `ANTHROPIC_API_KEY` or an authenticated Claude CLI session may be required. |
-| `opencode` | `RELAY_OPENCODE_REVIEW_TIMEOUT` sets the primary-review parent timeout. Uses prompt-only read-only review plus dirty-worktree checks. Primary and advisory review are route-policy gated. |
+| `opencode` | `RELAY_OPENCODE_REVIEW_TIMEOUT` sets the primary-review parent timeout as a positive duration such as `120s`, `10m`, or `1h`; the default is `1800s`. Uses prompt-only read-only review plus dirty-worktree checks. Primary and advisory review are route-policy gated. |
 | `pi` | `RELAY_PI_BIN` can override the binary path; `RELAY_PI_REVIEW_TIMEOUT` sets the primary-review parent timeout. Review uses a read/grep/find/ls allowlist plus dirty-worktree checks. |
 | `antigravity` | `RELAY_ANTIGRAVITY_BIN` can override the binary path. Relay targets the `agy` command-line interface only; GUI, IDE, Desktop, plugin runtime, and interactive PTY flows are not supported. |
 | `cursor` | `RELAY_CURSOR_AGENT_BIN` can override the binary path; `RELAY_CURSOR_REVIEW_TIMEOUT` sets the primary-review parent timeout. Primary review uses ask mode and parses the wrapper `result` field. |
