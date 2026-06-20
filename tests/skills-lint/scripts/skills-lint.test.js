@@ -359,46 +359,43 @@ function assertReadmeAdapterPrereqDetailsStayReferenced(content) {
   }
 }
 
-function assertProjectDocsPreserveExplicitMergeBoundary({ readme, claudeGuide, architectureReference, relayReadyDesign, workflowLanes }) {
-  assert.match(
-    readme,
-    /stops at `ready_to_merge` until you explicitly land it/i,
-    "README must present ready_to_merge as the default stop before explicit merge",
-  );
-  assert.match(
-    readme,
-    /Use `\/relay-merge` only when you explicitly want to land/i,
-    "README must keep relay-merge as the explicit landing path",
-  );
-  assert.match(
-    claudeGuide,
-    /explicit-merge workflows/i,
-    "CLAUDE.md must describe merge as explicit in the high-level workflow",
-  );
-  assert.match(
-    claudeGuide,
-    /stopping at `ready_to_merge` unless the user explicitly invokes `relay-merge`/i,
-    "CLAUDE.md must keep relay-ready handoff flow from implying automatic merge",
-  );
+function assertProjectDocsPreserveExplicitMergeBoundary(docs) {
+  const requiredPatterns = [
+    {
+      label: "README",
+      content: docs.readme,
+      pattern: /stops at `ready_to_merge` until you explicitly land it[\s\S]*Use `\/relay-merge` only when you explicitly want to land/i,
+    },
+    {
+      label: "CLAUDE.md",
+      content: docs.claudeGuide,
+      pattern: /workflows with explicit merge[\s\S]*stopping at `ready_to_merge` unless the user explicitly invokes `relay-merge`/i,
+    },
+    {
+      label: "workflow lane policy",
+      content: docs.workflowLanes,
+      pattern: /ready_to_merge gate → explicit merge/i,
+    },
+    {
+      label: "architecture readiness flow",
+      content: docs.architectureReference,
+      pattern: /relay-review\s*\n\s*-> ready_to_merge\s*\n\s*-> relay-merge \(explicit only\)/i,
+    },
+    {
+      label: "relay-ready handoff design",
+      content: docs.relayReadyDesign,
+      pattern: /plan -> dispatch -> review -> ready_to_merge; merge explicit/i,
+    },
+  ];
+
+  requiredPatterns.forEach(({ label, content, pattern }) => {
+    assert.match(content, pattern, `${label} must preserve the explicit ready_to_merge merge boundary`);
+  });
+
   assert.doesNotMatch(
-    claudeGuide,
+    docs.claudeGuide,
     /relay-plan\s*->\s*relay-dispatch\s*->\s*relay-review\s*->\s*relay-merge/i,
     "CLAUDE.md must not describe /relay as automatically continuing through relay-merge",
-  );
-  assert.match(
-    workflowLanes,
-    /ready_to_merge gate → explicit merge/i,
-    "workflow lane policy must describe relay merge as explicit after ready_to_merge",
-  );
-  assert.match(
-    architectureReference,
-    /relay-review\s*\n\s*-> ready_to_merge\s*\n\s*-> relay-merge \(explicit only\)/i,
-    "architecture readiness flow must stop at ready_to_merge before explicit relay-merge",
-  );
-  assert.match(
-    relayReadyDesign,
-    /-> relay-review\s*\n\s*\|\s*-> ready_to_merge\s*\n\s*\|\s*-> relay-merge \(explicit only\)/i,
-    "relay-ready fast-path diagram must stop at ready_to_merge before explicit relay-merge",
   );
 }
 

@@ -1,6 +1,6 @@
 # dev-relay
 
-Orchestrator-agnostic relay system for plan → dispatch → review → explicit-merge workflows. Any supported agent can serve as orchestrator, worker, or reviewer — roles are bound per-run via the relay manifest, not hardcoded.
+Orchestrator-agnostic relay system for plan → dispatch → review workflows with explicit merge. Any supported agent can serve as orchestrator, worker, or reviewer — roles are bound per-run via the relay manifest, not hardcoded.
 
 ## Architecture
 

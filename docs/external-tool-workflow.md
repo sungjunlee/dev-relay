@@ -2,7 +2,7 @@
 
 Status: documentation. dev-relay does **not** hard-depend on gstack, superpowers, or Compound Engineering (CE). They are workflow shapes that operators sometimes use around relay; if they disappear tomorrow, dev-relay still ships PRs end-to-end.
 
-This doc captures where each tool naturally fits relative to relay's lifecycle (plan → dispatch → review → ready_to_merge → explicit merge → retro). Companion to [`workflow-lanes.md`](./workflow-lanes.md): that one decides *which lane to use*; this one decides *which tools to invoke inside that lane*.
+This doc maps adjacent tools onto relay's lifecycle as defined in [`references/architecture.md`](../references/architecture.md). Companion to [`workflow-lanes.md`](./workflow-lanes.md): that one decides *which lane to use*; this one decides *which tools to invoke inside that lane*.
 
 ## TL;DR
 
@@ -46,7 +46,7 @@ CE is most useful here as **specialist review** and **structured learning captur
 
 2. **Structured retro / learning capture.** When a relay run produces a surprising lesson — a rubric pattern that worked, a planner mistake that recurred, a reviewer false-positive class — CE's structured-doc shape (problem → evidence → decision → memory) is good for promoting that lesson into either `_context.md`, a memory entry, or a new `references/rubric-pattern-*.md` file.
 
-**Boundary**: do **not** treat CE as a fourth orchestration step (plan → dispatch → review → CE-review → ready_to_merge → explicit merge). That double-counts the review surface, doubles operator cost, and makes the merge gate ambiguous about whose verdict counts. The relay reviewer is the merge gate; CE is supplementary.
+**Boundary**: do **not** treat CE as a fourth orchestration step between relay-review and explicit merge. That double-counts the review surface, doubles operator cost, and makes the merge gate ambiguous about whose verdict counts. The relay reviewer is the merge gate; CE is supplementary.
 
 ## Anti-Patterns to Avoid
 
