@@ -18,6 +18,8 @@ const RELAY_READY_REQUEST_CONTRACT_SCHEMA = path.join(
 const OPERATOR_SURFACE_REFERENCE = path.join(REPO_ROOT, "references", "operator-surface.md");
 const README_PATH = path.join(REPO_ROOT, "README.md");
 const CLAUDE_GUIDE_PATH = path.join(REPO_ROOT, "CLAUDE.md");
+const ARCHITECTURE_REFERENCE_PATH = path.join(REPO_ROOT, "references", "architecture.md");
+const RELAY_READY_DESIGN_PATH = path.join(REPO_ROOT, "docs", "relay-ready-routing-and-handoff-design.md");
 const WORKFLOW_LANES_PATH = path.join(REPO_ROOT, "docs", "workflow-lanes.md");
 
 const SURFACE_TIERS = {
@@ -357,7 +359,7 @@ function assertReadmeAdapterPrereqDetailsStayReferenced(content) {
   }
 }
 
-function assertProjectDocsPreserveExplicitMergeBoundary({ readme, claudeGuide, workflowLanes }) {
+function assertProjectDocsPreserveExplicitMergeBoundary({ readme, claudeGuide, architectureReference, relayReadyDesign, workflowLanes }) {
   assert.match(
     readme,
     /stops at `ready_to_merge` until you explicitly land it/i,
@@ -387,6 +389,16 @@ function assertProjectDocsPreserveExplicitMergeBoundary({ readme, claudeGuide, w
     workflowLanes,
     /ready_to_merge gate → explicit merge/i,
     "workflow lane policy must describe relay merge as explicit after ready_to_merge",
+  );
+  assert.match(
+    architectureReference,
+    /relay-review\s*\n\s*-> ready_to_merge\s*\n\s*-> relay-merge \(explicit only\)/i,
+    "architecture readiness flow must stop at ready_to_merge before explicit relay-merge",
+  );
+  assert.match(
+    relayReadyDesign,
+    /-> relay-review\s*\n\s*\|\s*-> ready_to_merge\s*\n\s*\|\s*-> relay-merge \(explicit only\)/i,
+    "relay-ready fast-path diagram must stop at ready_to_merge before explicit relay-merge",
   );
 }
 
@@ -463,6 +475,8 @@ test("project docs preserve explicit relay merge boundary", () => {
   assertProjectDocsPreserveExplicitMergeBoundary({
     readme: fs.readFileSync(README_PATH, "utf-8"),
     claudeGuide: fs.readFileSync(CLAUDE_GUIDE_PATH, "utf-8"),
+    architectureReference: fs.readFileSync(ARCHITECTURE_REFERENCE_PATH, "utf-8"),
+    relayReadyDesign: fs.readFileSync(RELAY_READY_DESIGN_PATH, "utf-8"),
     workflowLanes: fs.readFileSync(WORKFLOW_LANES_PATH, "utf-8"),
   });
 });

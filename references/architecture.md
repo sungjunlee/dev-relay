@@ -15,7 +15,8 @@ raw request
   -> relay-plan
   -> relay-dispatch run manifest
   -> relay-review
-  -> relay-merge
+  -> ready_to_merge
+  -> relay-merge (explicit only)
 ```
 
 Boundary rules:

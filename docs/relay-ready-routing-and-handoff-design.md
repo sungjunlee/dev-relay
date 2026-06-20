@@ -46,6 +46,7 @@ input to /relay
    |      +-- yes --> relay-plan
    |                   -> relay-dispatch
    |                   -> relay-review
+   |                   -> ready_to_merge
    |                   -> relay-merge (explicit only)
    |
    +-- no --> relay-ready

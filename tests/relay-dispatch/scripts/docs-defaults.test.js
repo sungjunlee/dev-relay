@@ -296,7 +296,9 @@ test("operator guide teaches default and manual workflows before adapter readine
   assert.notEqual(manualPhaseIndex, -1, "operator guide must document manual phase control before advanced adapter readiness");
   assert.notEqual(matrixIndex, -1, "operator guide must publish adapter readiness after the default path");
   assert.ok(defaultWorkflowIndex < matrixIndex, "default workflow must appear before adapter readiness");
+  assert.ok(defaultWorkflowIndex < skillsIndex, "default workflow must appear before the skill surface");
   assert.ok(skillsIndex < matrixIndex, "skill surface must appear before adapter readiness");
+  assert.ok(skillsIndex < manualPhaseIndex, "skill surface must appear before manual phase control");
   assert.ok(manualPhaseIndex < matrixIndex, "manual phase control must appear before adapter readiness");
 });
 
