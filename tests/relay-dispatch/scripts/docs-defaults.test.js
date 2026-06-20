@@ -284,6 +284,22 @@ test("operator guide publishes adapter readiness matrix for every adapter and ro
   }
 });
 
+test("operator guide teaches default and manual workflows before adapter readiness", () => {
+  const doc = readRepoFile(OPERATOR_GUIDE_DOC);
+  const defaultWorkflowIndex = doc.indexOf("## Default Workflow");
+  const skillsIndex = doc.indexOf("## Skills");
+  const manualPhaseIndex = doc.indexOf("## Manual Phase Control");
+  const matrixIndex = doc.indexOf("## Adapter Readiness Matrix");
+
+  assert.notEqual(defaultWorkflowIndex, -1, "operator guide must document the default workflow");
+  assert.notEqual(skillsIndex, -1, "operator guide must document the skill surface before advanced adapter readiness");
+  assert.notEqual(manualPhaseIndex, -1, "operator guide must document manual phase control before advanced adapter readiness");
+  assert.notEqual(matrixIndex, -1, "operator guide must publish adapter readiness after the default path");
+  assert.ok(defaultWorkflowIndex < matrixIndex, "default workflow must appear before adapter readiness");
+  assert.ok(skillsIndex < matrixIndex, "skill surface must appear before adapter readiness");
+  assert.ok(manualPhaseIndex < matrixIndex, "manual phase control must appear before adapter readiness");
+});
+
 test("operator guide separates implementation parity from live promotion criteria", () => {
   const { section } = operatorReadinessMatrix();
 

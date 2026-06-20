@@ -1,6 +1,6 @@
 # dev-relay
 
-Orchestrator-agnostic relay system for plan → dispatch → review → merge workflows. Any supported agent can serve as orchestrator, worker, or reviewer — roles are bound per-run via the relay manifest, not hardcoded.
+Orchestrator-agnostic relay system for plan → dispatch → review → explicit-merge workflows. Any supported agent can serve as orchestrator, worker, or reviewer — roles are bound per-run via the relay manifest, not hardcoded.
 
 ## Architecture
 
@@ -14,7 +14,7 @@ draft → dispatched → review_pending → ready_to_merge → merged
 
 See [references/architecture.md](references/architecture.md) for the full manifest schema, state transitions, event journal format, and adapter extension points.
 
-Before a run exists, relay-ready may persist standalone request artifacts under `~/.relay/requests/<repo-slug>/`. `/relay` bypasses that preflight step only for already relay-ready issue/task inputs with a trustworthy review anchor; otherwise it invokes relay-ready and then continues with `relay-plan -> relay-dispatch -> relay-review -> relay-merge`.
+Before a run exists, relay-ready may persist standalone request artifacts under `~/.relay/requests/<repo-slug>/`. `/relay` bypasses that preflight step only for already relay-ready issue/task inputs with a trustworthy review anchor; otherwise it invokes relay-ready and then continues with `relay-plan -> relay-dispatch -> relay-review`, stopping at `ready_to_merge` unless the user explicitly invokes `relay-merge`.
 
 ## Project Structure
 

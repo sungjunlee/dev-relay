@@ -19,7 +19,8 @@ raw request
   -> relay-plan
   -> relay-dispatch
   -> relay-review
-  -> relay-merge
+  -> ready_to_merge
+  -> relay-merge (explicit only)
 ```
 
 ## Decision
@@ -29,7 +30,7 @@ raw request
 3. `/relay` may call `relay-ready`, but once a relay-ready contract exists the flow returns to the normal downstream path:
 
 ```text
-relay-plan -> relay-dispatch -> relay-review -> relay-merge
+relay-plan -> relay-dispatch -> relay-review -> ready_to_merge -> relay-merge (explicit only)
 ```
 
 4. The existing run manifest state machine remains execution-only. Intake owns preflight state and artifacts.

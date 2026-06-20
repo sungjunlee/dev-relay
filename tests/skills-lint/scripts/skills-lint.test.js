@@ -17,6 +17,8 @@ const RELAY_READY_REQUEST_CONTRACT_SCHEMA = path.join(
 );
 const OPERATOR_SURFACE_REFERENCE = path.join(REPO_ROOT, "references", "operator-surface.md");
 const README_PATH = path.join(REPO_ROOT, "README.md");
+const CLAUDE_GUIDE_PATH = path.join(REPO_ROOT, "CLAUDE.md");
+const WORKFLOW_LANES_PATH = path.join(REPO_ROOT, "docs", "workflow-lanes.md");
 
 const SURFACE_TIERS = {
   "public operator surface": ["relay-config", "relay", "relay-merge"],
@@ -355,6 +357,39 @@ function assertReadmeAdapterPrereqDetailsStayReferenced(content) {
   }
 }
 
+function assertProjectDocsPreserveExplicitMergeBoundary({ readme, claudeGuide, workflowLanes }) {
+  assert.match(
+    readme,
+    /stops at `ready_to_merge` until you explicitly land it/i,
+    "README must present ready_to_merge as the default stop before explicit merge",
+  );
+  assert.match(
+    readme,
+    /Use `\/relay-merge` only when you explicitly want to land/i,
+    "README must keep relay-merge as the explicit landing path",
+  );
+  assert.match(
+    claudeGuide,
+    /explicit-merge workflows/i,
+    "CLAUDE.md must describe merge as explicit in the high-level workflow",
+  );
+  assert.match(
+    claudeGuide,
+    /stopping at `ready_to_merge` unless the user explicitly invokes `relay-merge`/i,
+    "CLAUDE.md must keep relay-ready handoff flow from implying automatic merge",
+  );
+  assert.doesNotMatch(
+    claudeGuide,
+    /relay-plan\s*->\s*relay-dispatch\s*->\s*relay-review\s*->\s*relay-merge/i,
+    "CLAUDE.md must not describe /relay as automatically continuing through relay-merge",
+  );
+  assert.match(
+    workflowLanes,
+    /ready_to_merge gate → explicit merge/i,
+    "workflow lane policy must describe relay merge as explicit after ready_to_merge",
+  );
+}
+
 test("all skills/SKILL.md files satisfy the lint contract", () => {
   const skillFiles = readSkillFiles();
   assert.ok(skillFiles.length > 0, "expected at least one skills/*/SKILL.md file");
@@ -422,6 +457,14 @@ test("relay-review spine delegates provider-specific adapter details", () => {
 test("README delegates adapter prerequisite churn to adapter references", () => {
   const readme = fs.readFileSync(README_PATH, "utf-8");
   assertReadmeAdapterPrereqDetailsStayReferenced(readme);
+});
+
+test("project docs preserve explicit relay merge boundary", () => {
+  assertProjectDocsPreserveExplicitMergeBoundary({
+    readme: fs.readFileSync(README_PATH, "utf-8"),
+    claudeGuide: fs.readFileSync(CLAUDE_GUIDE_PATH, "utf-8"),
+    workflowLanes: fs.readFileSync(WORKFLOW_LANES_PATH, "utf-8"),
+  });
 });
 
 test("assertLineCount rejects SKILL.md files over 150 lines", () => {

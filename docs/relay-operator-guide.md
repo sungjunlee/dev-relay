@@ -36,33 +36,6 @@ Route policy is based on provider/model routes, not only harness names. Managed 
 
 Project-local route UX lives outside the repo under `~/.relay/projects/<repo-slug>/project.json`, `~/.relay/projects/<repo-slug>/policy.json`, and `~/.relay/projects/<repo-slug>/routes.json`. Policy is authorization; `routes.json` stores preferences only and cannot grant routes. Use `relay-config plan-run --json` to preview the effective dispatch/review/advisory routing before dispatch, and use `--route-intent-file` for one-off run overrides. Dispatch persists the audited decision as `route-plan.json` in the run directory.
 
-## Adapter Readiness Matrix
-
-Implementation status describes the adapter surface shipped in relay. Live status describes dogfood evidence from real CLI runs. Do not treat implementation parity as production readiness: #609 added reviewer-role parity surfaces, #610 recorded live reviewer evidence and blockers, and #611 added healthy dispatch canary mode with live dispatch evidence and blockers.
-
-| Adapter | Dispatch | Primary review | Advisory review |
-| --- | --- | --- | --- |
-| `claude` | Implementation: `stable`<br>Live: `stable` | Implementation: `stable`<br>Live: `stable` | Implementation: `not-supported`<br>Live: `not-supported` |
-| `codex` | Implementation: `stable`<br>Live: `stable` | Implementation: `stable`<br>Live: `stable` | Implementation: `not-supported`<br>Live: `not-supported` |
-| `opencode` | Implementation: `limited`<br>Live: `limited` after route-specific healthy dispatch evidence; otherwise blocked for that route | Implementation: `limited`<br>Live: `limited` by route policy and live reviewer evidence | Implementation: `limited`<br>Live: `limited` by route policy and advisory evidence |
-| `pi` | Implementation: `stable`<br>Live: `limited` by route-specific healthy dispatch canaries | Implementation: `stable`<br>Live: `limited` by route-specific reviewer canaries | Implementation: `stable`<br>Live: `limited` by route-specific advisory evidence |
-| `antigravity` | Implementation: `limited`<br>Live: `limited` by `google/antigravity-cli` healthy dispatch canary evidence | Implementation: `fail-safe-experimental`<br>Live: `blocked` until strict verdict JSON is accepted in a healthy live reviewer canary | Implementation: `fail-safe-experimental`<br>Live: `blocked` by current timeout/worktree-mutation blocker |
-| `cursor` | Implementation: `limited`<br>Live: `blocked` until route-specific healthy dispatch canaries exist | Implementation: `limited`<br>Live: `blocked` until strict verdict JSON is accepted in a healthy live reviewer canary | Implementation: `not-supported`<br>Live: `not-supported` |
-
-Status meanings:
-
-| Status | Meaning |
-| --- | --- |
-| `stable` | Supported for normal operator use with healthy live evidence in the documented role. |
-| `limited` | Implemented but constrained by route policy, containment limits, or route-specific evidence. Require current dogfood for the exact provider/model route before broad use. |
-| `fail-safe-experimental` | Implemented only with fail-safe expectations; failures or malformed output must stop the run instead of producing reviewable success. |
-| `blocked` | Do not promote the role yet. A known blocker or missing healthy dogfood evidence prevents production readiness. |
-| `not-supported` | The adapter does not implement that role. |
-
-Promotion criteria: fake-bin and unit tests are insufficient and do not prove live readiness. Healthy live dogfood evidence is required before promotion from `blocked`, `limited`, or `fail-safe-experimental` for the exact role, adapter, and route: dispatch must create the requested minimal PR and reach `review_pending`, primary review must return strict verdict JSON and reach the expected review state, and advisory review must return structured advisory output without mutating the reviewed worktree.
-
-Timeouts are inconclusive unless the step is an intentionally bounded fail-safe timeout canary. A normal live timeout is not healthy evidence and should be recorded as a blocker or limitation; the fail-safe timeout canary only proves relay avoids converting a bounded timeout into reviewable false success.
-
 ## Skills
 
 | Skill | When to use |
@@ -209,6 +182,33 @@ node skills/relay-review/scripts/review-runner.js --repo . --run-id <id> --pr <n
 node skills/relay-review/scripts/review-runner.js --repo . --run-id <id> --pr <number> \
   --reviewer codex --advisory-reviewer antigravity --advisory-reviewer-model google/antigravity-cli --advisory-profile blindspot --json
 ```
+
+## Adapter Readiness Matrix
+
+Implementation status describes the adapter surface shipped in relay. Live status describes dogfood evidence from real CLI runs. Do not treat implementation parity as production readiness: #609 added reviewer-role parity surfaces, #610 recorded live reviewer evidence and blockers, and #611 added healthy dispatch canary mode with live dispatch evidence and blockers.
+
+| Adapter | Dispatch | Primary review | Advisory review |
+| --- | --- | --- | --- |
+| `claude` | Implementation: `stable`<br>Live: `stable` | Implementation: `stable`<br>Live: `stable` | Implementation: `not-supported`<br>Live: `not-supported` |
+| `codex` | Implementation: `stable`<br>Live: `stable` | Implementation: `stable`<br>Live: `stable` | Implementation: `not-supported`<br>Live: `not-supported` |
+| `opencode` | Implementation: `limited`<br>Live: `limited` after route-specific healthy dispatch evidence; otherwise blocked for that route | Implementation: `limited`<br>Live: `limited` by route policy and live reviewer evidence | Implementation: `limited`<br>Live: `limited` by route policy and advisory evidence |
+| `pi` | Implementation: `stable`<br>Live: `limited` by route-specific healthy dispatch canaries | Implementation: `stable`<br>Live: `limited` by route-specific reviewer canaries | Implementation: `stable`<br>Live: `limited` by route-specific advisory evidence |
+| `antigravity` | Implementation: `limited`<br>Live: `limited` by `google/antigravity-cli` healthy dispatch canary evidence | Implementation: `fail-safe-experimental`<br>Live: `blocked` until strict verdict JSON is accepted in a healthy live reviewer canary | Implementation: `fail-safe-experimental`<br>Live: `blocked` by current timeout/worktree-mutation blocker |
+| `cursor` | Implementation: `limited`<br>Live: `blocked` until route-specific healthy dispatch canaries exist | Implementation: `limited`<br>Live: `blocked` until strict verdict JSON is accepted in a healthy live reviewer canary | Implementation: `not-supported`<br>Live: `not-supported` |
+
+Status meanings:
+
+| Status | Meaning |
+| --- | --- |
+| `stable` | Supported for normal operator use with healthy live evidence in the documented role. |
+| `limited` | Implemented but constrained by route policy, containment limits, or route-specific evidence. Require current dogfood for the exact provider/model route before broad use. |
+| `fail-safe-experimental` | Implemented only with fail-safe expectations; failures or malformed output must stop the run instead of producing reviewable success. |
+| `blocked` | Do not promote the role yet. A known blocker or missing healthy dogfood evidence prevents production readiness. |
+| `not-supported` | The adapter does not implement that role. |
+
+Promotion criteria: fake-bin and unit tests are insufficient and do not prove live readiness. Healthy live dogfood evidence is required before promotion from `blocked`, `limited`, or `fail-safe-experimental` for the exact role, adapter, and route: dispatch must create the requested minimal PR and reach `review_pending`, primary review must return strict verdict JSON and reach the expected review state, and advisory review must return structured advisory output without mutating the reviewed worktree.
+
+Timeouts are inconclusive unless the step is an intentionally bounded fail-safe timeout canary. A normal live timeout is not healthy evidence and should be recorded as a blocker or limitation; the fail-safe timeout canary only proves relay avoids converting a bounded timeout into reviewable false success.
 
 ### Antigravity Live Canary
 
