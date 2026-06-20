@@ -108,79 +108,13 @@ Manual review command:
 node skills/relay-review/scripts/review-runner.js --repo . --run-id <id> --pr <number> --reviewer codex --json
 ```
 
-OpenCode, Pi, and Antigravity can be used as reviewer roles only when the adapter can represent the phase and route policy allows the model route. OpenCode primary review uses prompt-only read-only plus a dirty-worktree guard; Pi uses a read/grep/find/ls allowlist; Antigravity targets the `agy` CLI. Antigravity dispatch has route-specific healthy live canary evidence for `google/antigravity-cli`; Antigravity primary and advisory review remain fail-safe experimental until healthy reviewer evidence exists.
+Non-default reviewers and advisory lanes are advanced paths. Capability gates, model routes, timeouts, and adapter-specific isolation details live in `skills/relay-dispatch/references/agent-adapter-platform.md`; route policy syntax lives in [model-route-policy.md](model-route-policy.md).
 
-OpenCode review uses a bounded parent-process timeout. Set `RELAY_OPENCODE_REVIEW_TIMEOUT` to a positive duration such as `120s`, `10m`, or `1h`; the default is `1800s`. If an OpenCode review returns empty stdout or times out, first validate the CLI/provider path with a minimal `opencode run -m <model> '<json prompt>'` command before treating the route as healthy.
-
-For an OpenCode provider/model route you want to dogfood, authorize and check each role explicitly. Relay does not special-case or bundle any OpenCode model route:
-
-```bash
-node skills/relay-config/scripts/relay-config.js allow-route '<opencode-provider>/<opencode-model>' \
-  --phase dispatch,review,advisory_review \
-  --executor opencode \
-  --reviewer opencode
-
-node skills/relay-config/scripts/relay-config.js check dispatch opencode '<opencode-provider>/<opencode-model>'
-node skills/relay-config/scripts/relay-config.js check review opencode '<opencode-provider>/<opencode-model>'
-node skills/relay-config/scripts/relay-config.js check advisory_review opencode '<opencode-provider>/<opencode-model>'
-
-opencode run -m '<opencode-provider>/<opencode-model>' \
-  'Do not edit files. Reply exactly OPENCODE_ROUTE_OK and nothing else.'
-```
-
-Pi can be used as dispatch executor or trusted primary reviewer when `pi` is on `PATH` (or `RELAY_PI_BIN` is set for review), authenticated for the selected provider, and route policy allows the model route:
-
-```bash
-node skills/relay-dispatch/scripts/dispatch.js . -e pi -m openai/gpt-5 \
-  -b issue-42 --prompt-file /tmp/dispatch-42.md --rubric-file /tmp/rubric-42.yaml
-
-node skills/relay-review/scripts/review-runner.js --repo . --run-id <id> --pr <number> \
-  --reviewer pi --reviewer-model openai/gpt-5 --json
-
-node skills/relay-config/scripts/relay-config.js plan-run --repo . \
-  --dispatch pi:example/pi-model-fast --review codex --json
-```
-
-Pi primary review uses a bounded parent-process timeout. Set `RELAY_PI_REVIEW_TIMEOUT` to a positive duration such as `120s`, `10m`, or `1h`; the default is `1800s`. Relay invokes Pi with prompt-template, skill, theme, extension, and context-file discovery disabled so non-interactive review does not hang on optional startup integrations. If a Pi review still times out, first validate the CLI/provider path with a minimal `pi --no-session --no-context-files --no-tools --no-extensions --no-skills --no-prompt-templates --no-themes --print` command before treating the route as healthy. If that minimal command succeeds while `pi-primary` still times out, record the result as a prompt/scope or route-latency blocker rather than parser failure or healthy evidence.
-
-When Pi's model-list probe times out in `relay-config doctor`, treat it as an optional discovery warning unless the exact route check or minimal Pi command also fails. Authorize the selected Pi route explicitly, then prove the non-interactive CLI path:
-
-```bash
-node skills/relay-config/scripts/relay-config.js allow-route '<pi-provider>/<pi-model>' \
-  --phase dispatch,review,advisory_review \
-  --executor pi \
-  --reviewer pi
-
-node skills/relay-config/scripts/relay-config.js check review pi '<pi-provider>/<pi-model>'
-
-pi --no-session --no-context-files --no-extensions --no-skills --no-prompt-templates --no-themes \
-  --tools read,grep,find,ls --print \
-  'Do not edit files. Reply exactly PI_READONLY_OK and nothing else.'
-```
-
-Cursor can be used as dispatch executor or trusted primary reviewer when `agent` is on `PATH` (or `RELAY_CURSOR_AGENT_BIN` overrides the binary for dispatch and review), authenticated via `agent login` or `CURSOR_API_KEY`, and route policy allows the model route (add `cursor` to `managed_cli` for slug-only models such as `composer-2.5`):
-
-```bash
-node skills/relay-dispatch/scripts/dispatch.js . -e cursor -m composer-2.5 \
-  -b issue-42 --prompt-file /tmp/dispatch-42.md --rubric-file /tmp/rubric-42.yaml
-
-node skills/relay-review/scripts/review-runner.js --repo . --run-id <id> --pr <number> \
-  --reviewer cursor --reviewer-model composer-2.5 --json
-```
-
-Cursor primary review uses a bounded parent-process timeout. Set `RELAY_CURSOR_REVIEW_TIMEOUT` to a positive duration such as `120s`, `10m`, or `1h`; the default is `1800s`. Relay passes `--workspace` only and never `agent --worktree`.
-
-Advisory review can run alongside the primary reviewer when route policy allows it:
+Advisory review can run alongside the primary reviewer when route policy allows it. It records supplemental evidence but does not replace the primary verdict under standard assurance:
 
 ```bash
 node skills/relay-review/scripts/review-runner.js --repo . --run-id <id> --pr <number> \
-  --reviewer codex --advisory-reviewer opencode --advisory-profile blindspot --json
-
-node skills/relay-review/scripts/review-runner.js --repo . --run-id <id> --pr <number> \
-  --reviewer codex --advisory-reviewer pi --advisory-reviewer-model openai/gpt-5 --advisory-profile blindspot --json
-
-node skills/relay-review/scripts/review-runner.js --repo . --run-id <id> --pr <number> \
-  --reviewer codex --advisory-reviewer antigravity --advisory-reviewer-model google/antigravity-cli --advisory-profile blindspot --json
+  --reviewer codex --advisory-reviewer <name> --advisory-profile blindspot --json
 ```
 
 ## Adapter Readiness Matrix
@@ -212,66 +146,18 @@ Timeouts are inconclusive unless the step is an intentionally bounded fail-safe 
 
 ### Antigravity Live Canary
 
-Antigravity dispatch has route-specific healthy live canary evidence for `google/antigravity-cli` when the relay prompt binds work to the relay worktree. Antigravity primary and advisory review remain fail-safe experimental until healthy live reviewer canaries pass. Fake-bin tests alone do not prove live executor or reviewer success.
+Antigravity dispatch has route-specific healthy live canary evidence for `google/antigravity-cli`; primary and advisory review remain fail-safe experimental until healthy reviewer canaries pass. Fake-bin tests alone do not prove live executor or reviewer success.
 
-Healthy-path criteria are exact: primary review must return strict verdict JSON within timeout, dispatch must create a minimal repository change and reach a recoverable/reviewable state, or the operator must record a documented CLI limitation instead of claiming live success. The fail-safe timeout canary is not healthy success; it only proves relay avoids turning a bounded timeout into a reviewable false positive.
+Use the live dogfood harness for repeatable Pi, OpenCode, and Antigravity evidence. Full harness semantics and outcome meanings live in `skills/relay-dispatch/references/operator-utilities.md`; adapter status and healthy-path criteria live in `skills/relay-dispatch/references/agent-adapter-platform.md`.
 
-For Antigravity, use `google/antigravity-cli` as the current policy label. Relay records that label for policy and audit, but it is not passed to `agy`; do not claim Gemini model variant selection until `agy` exposes a real model-selection flag.
-
-For repeatable multi-executor dogfood, use the harness:
+`google/antigravity-cli` is the policy label for Antigravity; it is recorded for audit and not passed to `agy` as a model flag.
 
 ```bash
 node skills/relay-dispatch/scripts/live-dogfood.js --repo . --json --markdown
 node skills/relay-dispatch/scripts/live-dogfood.js --repo . --dispatch-canary --json
-node skills/relay-dispatch/scripts/live-dogfood.js --repo . \
-  --opencode-model '<opencode-provider>/<opencode-model>' \
-  --pi-model '<pi-provider>/<pi-model>' \
-  --scenario opencode-advisory \
-  --scenario pi-primary \
-  --json --markdown
 ```
 
-By default the harness creates a temporary `RELAY_HOME`, writes a scoped route policy there, and runs Pi, OpenCode, and Antigravity probes plus bounded live canaries. OpenCode and Pi review canaries use realistic healthy timeouts by default; Antigravity primary and advisory review do too, while `--antigravity-fail-safe-timeout` controls the intentionally short fail-safe timeout canary. Use `--dry-run` to print `not-run` planned steps without invoking live CLIs, `--probe-only` to skip review/dispatch canaries, or repeated `--scenario <name>` filters such as `--scenario opencode-primary`, `--scenario pi-primary`, `--scenario pi-advisory`, or `--scenario antigravity-advisory` when one adapter needs isolated evidence without waiting on unrelated live canaries.
-
-Add `--dispatch-canary` to run healthy dispatch canaries for Pi, OpenCode, and Antigravity. The harness anchors those dispatches in a temporary clean worktree from `--dispatch-base-ref` (default `origin/main`) so implementation branches do not become the PR base. Each canary asks for a unique minimal repository change and passes only when dispatch returns `review_pending` with a PR number. The default healthy dispatch timeout is bounded at 180 seconds via `--dispatch-timeout`, and branches use `--dispatch-branch-prefix` with the default `dogfood-dispatch`.
-
-The harness still keeps a separate Antigravity no-op/fail-safe dispatch canary. That no-op path is successful only when it avoids a reviewable false success; a PR from the no-op path is a failure, not proof of live dispatch health.
-
-Run the dispatch canary only after route policy allows `google/antigravity-cli` for Antigravity dispatch:
-
-```bash
-cat > /tmp/relay-antigravity-live-prompt.md <<'EOF'
-Create or update relay-antigravity-live-canary.txt with exactly one line:
-antigravity live canary
-Commit that file and do not change anything else.
-EOF
-
-cat > /tmp/relay-antigravity-live-rubric.yaml <<'YAML'
-criteria:
-  - id: minimal-change
-    description: Creates or updates only relay-antigravity-live-canary.txt with the requested line.
-    weight: 1
-YAML
-
-node skills/relay-dispatch/scripts/dispatch.js . \
-  --executor antigravity --model google/antigravity-cli \
-  --branch "antigravity-live-canary-$(date +%Y%m%d%H%M%S)" \
-  --prompt-file /tmp/relay-antigravity-live-prompt.md \
-  --rubric-file /tmp/relay-antigravity-live-rubric.yaml \
-  --timeout 120 --json
-```
-
-If dispatch produces a PR, run the primary-review healthy canary against that run:
-
-```bash
-RELAY_ANTIGRAVITY_REVIEW_TIMEOUT=120s \
-node skills/relay-review/scripts/review-runner.js --repo . --run-id "$RUN_ID" --pr "$PR_NUM" \
-  --reviewer antigravity --reviewer-model google/antigravity-cli --json
-```
-
-Interpretation: `failed/escalated` means relay failed safely or hit a live CLI limitation, so keep Antigravity marked experimental. `ready_to_merge` is the healthy signal only when the dispatch PR contains the minimal requested change and the primary reviewer accepted strict verdict JSON within the configured timeout.
-
-Harness outcomes are intentionally distinct: `pass` proves a healthy live canary returned the expected structured output, `fail-safe-pass` means relay avoided a reviewable false success and is not healthy success, `timeout` is inconclusive, `fail` is actionable failure, and `not-run` is dry-run or skipped coverage.
+Interpretation: `failed/escalated` means relay failed safely or hit a live CLI limitation. `ready_to_merge` is healthy only when the dispatch PR contains the minimal requested change and the primary reviewer accepted strict verdict JSON within the configured timeout.
 
 ### Merge
 

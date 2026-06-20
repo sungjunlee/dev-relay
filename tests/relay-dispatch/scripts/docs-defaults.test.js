@@ -75,6 +75,13 @@ function operatorReadinessMatrix() {
   };
 }
 
+function sectionBetweenHeadings(doc, heading, nextHeadingLevel = "## ") {
+  const start = doc.indexOf(heading);
+  assert.notEqual(start, -1, `${heading} must exist`);
+  const next = doc.indexOf(`\n${nextHeadingLevel}`, start + heading.length);
+  return doc.slice(start, next === -1 ? undefined : next);
+}
+
 function readinessPair(cell) {
   const implementation = cell.match(/Implementation:\s*`([^`]+)`/i)?.[1];
   const live = cell.match(/Live:\s*`([^`]+)`/i)?.[1];
@@ -300,6 +307,20 @@ test("operator guide teaches default and manual workflows before adapter readine
   assert.ok(skillsIndex < matrixIndex, "skill surface must appear before adapter readiness");
   assert.ok(skillsIndex < manualPhaseIndex, "skill surface must appear before manual phase control");
   assert.ok(manualPhaseIndex < matrixIndex, "manual phase control must appear before adapter readiness");
+});
+
+test("operator guide delegates adapter-specific review details to references", () => {
+  const doc = readRepoFile(OPERATOR_GUIDE_DOC);
+  const reviewSection = sectionBetweenHeadings(doc, "### Review", "### ");
+  const liveCanarySection = sectionBetweenHeadings(doc, "### Antigravity Live Canary", "### ");
+
+  assert.match(reviewSection, /agent-adapter-platform\.md/);
+  assert.match(reviewSection, /model-route-policy\.md/);
+  assert.doesNotMatch(reviewSection, /--reviewer (?:opencode|pi|cursor|antigravity)\b/);
+  assert.doesNotMatch(reviewSection, /RELAY_(?:OPENCODE|PI|CURSOR|ANTIGRAVITY)_[A-Z_]+/);
+  assert.match(liveCanarySection, /operator-utilities\.md/);
+  assert.match(liveCanarySection, /agent-adapter-platform\.md/);
+  assert.doesNotMatch(liveCanarySection, /relay-antigravity-live-(?:prompt|rubric)/);
 });
 
 test("operator guide separates implementation parity from live promotion criteria", () => {
