@@ -5,7 +5,7 @@ Dispatch model routing answers two separate questions:
 - Which executor harness should run the task?
 - Which provider/model route, if any, should that harness use?
 
-Executor names such as `codex`, `claude`, `opencode`, `pi`, and `antigravity` select a CLI adapter. Provider/model route strings such as `example/opencode-model-fast`, `opencode-go/glm-5.2`, `openai/gpt-5`, or `google/antigravity-cli` are the model-policy boundary.
+Executor names such as `codex`, `claude`, `opencode`, `pi`, and `antigravity` select a CLI adapter. Provider/model route strings such as `example/opencode-model-fast`, `openai/gpt-5`, or `google/antigravity-cli` are the model-policy boundary.
 
 ## Dispatch Selection
 
@@ -27,7 +27,7 @@ OpenCode, Pi, Antigravity, and other unmanaged harnesses should use explicit pro
 
 ## Executor Model Config
 
-Bundled executor model config intentionally ships empty so installs do not select a provider/model route on an operator's behalf. Even current dogfood routes such as `opencode-go/glm-5.2` must be added by the operator or organization. Operators can add local defaults without editing the skill by writing `~/.relay/executors.json`:
+Bundled executor model config intentionally ships empty so installs do not select a provider/model route on an operator's behalf. Operators can add local defaults without editing the skill by writing `~/.relay/executors.json`:
 
 ```json
 {
@@ -50,10 +50,6 @@ The top-level `relay` skill does not invoke `relay-dispatch` as a nested skill. 
 node "${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/dispatch.js" . \
   --executor opencode --model example/opencode-model-fast \
   -b issue-42 --prompt-file /tmp/dispatch-42.md --rubric-file /tmp/rubric-42.yaml
-
-node "${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/dispatch.js" . \
-  --executor opencode --model opencode-go/glm-5.2 \
-  -b glm52-canary --prompt-file /tmp/dispatch.md --rubric-file /tmp/rubric.yaml
 ```
 
 For multi-phase hints:

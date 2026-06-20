@@ -864,7 +864,7 @@ function printHelp() {
   console.log("  --command-timeout-ms <ms>             Harness per-command timeout (default: 300000)");
   console.log("");
   console.log("Examples:");
-  console.log("  live-dogfood.js --repo . --opencode-model opencode-go/glm-5.2 --scenario opencode-advisory --json");
+  console.log("  live-dogfood.js --repo . --opencode-model <opencode-provider>/<opencode-model> --scenario opencode-advisory --json");
   console.log("  live-dogfood.js --repo . --pi-model <pi-provider>/<pi-model> --scenario pi-primary --json");
 }
 

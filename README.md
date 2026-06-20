@@ -72,7 +72,7 @@ Adapter minimum versions, binary overrides, timeouts, capability gates, and prov
 
 ## Configure Routes
 
-Relay distinguishes CLI harnesses from provider/model routes. Names such as `codex`, `claude`, `opencode`, `pi`, and `antigravity` describe how relay invokes an agent. The compliance boundary is the provider/model route, for example `example/opencode-model-fast`, `opencode-go/glm-5.2`, `example/pi-model-fast`, or `google/antigravity-cli`.
+Relay distinguishes CLI harnesses from provider/model routes. Names such as `codex`, `claude`, `opencode`, `pi`, and `antigravity` describe how relay invokes an agent. The compliance boundary is the provider/model route, for example `example/opencode-model-fast`, `example/pi-model-fast`, or `google/antigravity-cli`.
 
 Without a policy file, relay stays conservative: managed Codex and Claude CLIs are allowed by default, while OpenCode, Pi, Antigravity, and advisory reviewers require explicit route approval.
 
@@ -91,18 +91,6 @@ Common starting points:
 | Approved OpenCode route | `/relay-config Only allow OpenCode through the example/opencode-model-* route at work` |
 | Personal advisory review | `$relay-config Use example/opencode-model-fast for personal advisory review` |
 | Managed only | `/relay-config Keep the default Codex/Claude-only setup` |
-
-For a current personal OpenCode Go GLM-5.2 trial, opt in explicitly instead of relying on bundled defaults:
-
-```bash
-node skills/relay-config/scripts/relay-config.js allow-route 'opencode-go/glm-5.2' \
-  --phase dispatch,review,advisory_review \
-  --executor opencode \
-  --reviewer opencode
-
-node skills/relay-config/scripts/relay-config.js check review opencode opencode-go/glm-5.2
-node skills/relay-config/scripts/relay-config.js check advisory_review opencode opencode-go/glm-5.2
-```
 
 For the full policy model and precedence order, see [docs/model-route-policy.md](docs/model-route-policy.md).
 
