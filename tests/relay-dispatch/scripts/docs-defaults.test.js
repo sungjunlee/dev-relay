@@ -326,6 +326,7 @@ test("operator guide delegates adapter-specific review details to references", (
   assert.match(liveCanarySection, /agent-adapter-platform\.md/);
   assert.doesNotMatch(liveCanarySection, /relay-antigravity-live-(?:prompt|rubric)/);
   assert.match(adapterPlatformDoc, /RELAY_OPENCODE_REVIEW_TIMEOUT/);
+  assert.match(adapterPlatformDoc, /RELAY_ANTIGRAVITY_REVIEW_TIMEOUT/);
 });
 
 test("operator guide separates implementation parity from live promotion criteria", () => {
