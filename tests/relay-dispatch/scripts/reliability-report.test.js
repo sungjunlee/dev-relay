@@ -327,6 +327,66 @@ test("reliability-report derives the core scorecard from manifests and events", 
   assert.equal(report.bootstrap_exempt_runs, 1);
 });
 
+test("reliability-report splits clean and recovery-assisted pass metrics", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-report-recovery-pass-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  const recentTs = new Date(Date.now() - 1 * 60 * 60 * 1000).toISOString();
+  const cleanPass = createRunId({ branch: "clean-pass", timestamp: new Date("2026-04-12T00:00:10.000Z") });
+  const recoveredPass = createRunId({ branch: "recovered-pass", timestamp: new Date("2026-04-12T00:00:11.000Z") });
+  const recoveredFail = createRunId({ branch: "recovered-fail", timestamp: new Date("2026-04-12T00:00:12.000Z") });
+
+  writeRun(repoRoot, {
+    runId: cleanPass,
+    state: STATES.READY_TO_MERGE,
+    rounds: 1,
+    updatedAt: recentTs,
+  });
+  writeRun(repoRoot, {
+    runId: recoveredPass,
+    state: STATES.MERGED,
+    rounds: 2,
+    updatedAt: recentTs,
+  });
+  writeRun(repoRoot, {
+    runId: recoveredFail,
+    state: STATES.REVIEW_PENDING,
+    rounds: 1,
+    updatedAt: recentTs,
+  });
+
+  appendRunEvent(repoRoot, recoveredPass, {
+    event: "recover_commit",
+    state_from: STATES.DISPATCHED,
+    state_to: STATES.REVIEW_PENDING,
+    round: 1,
+    reason: "completed-uncommitted",
+  });
+  appendRunEvent(repoRoot, recoveredPass, {
+    event: "execution_evidence_rebranded",
+    state_from: STATES.REVIEW_PENDING,
+    state_to: STATES.REVIEW_PENDING,
+    round: 1,
+    reason: "evidence rebound to recovery commit",
+  });
+  appendRunEvent(repoRoot, recoveredFail, {
+    event: "state_recovery",
+    state_from: STATES.READY_TO_MERGE,
+    state_to: STATES.REVIEW_PENDING,
+    round: 1,
+    reason: "stale reviewed head",
+  });
+
+  const report = JSON.parse(execFileSync("node", [SCRIPT, "--repo", repoRoot, "--json"], { encoding: "utf-8" }));
+  const text = execFileSync("node", [SCRIPT, "--repo", repoRoot], { encoding: "utf-8" });
+
+  assert.equal(report.metrics.pass_rate, 0.6667);
+  assert.equal(report.metrics.clean_pass_rate, 0.3333);
+  assert.equal(report.metrics.handoff_recovery_rate, 0.6667);
+  assert.equal(report.metrics.recovery_assisted_pass_rate, 0.3333);
+  assert.equal(report.metrics.recover_commit_rate, 0.3333);
+  assert.match(text, /pass_breakdown: clean=0\.3333 recovery_assisted=0\.3333 handoff_recovery=0\.6667/);
+});
+
 test("reliability-report aggregates review lineage by run and round", () => {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-report-lineage-"));
   process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));

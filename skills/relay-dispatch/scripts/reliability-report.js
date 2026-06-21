@@ -16,6 +16,11 @@ const CLI_ARG_OPTIONS = { commandName: "reliability-report", reservedFlags: ["-h
 const hasCliFlag = (flag) => schemaHasFlag(args, flag, CLI_ARG_OPTIONS);
 const NO_GUIDANCE_DATA_TEXT = "no guidance data available";
 const LINEAGE_VALUES = ["deepening", "repeat", "stale", "new", "newly_scoreable", "unknown"];
+const HANDOFF_RECOVERY_EVENTS = new Set([
+  EVENTS.RECOVER_COMMIT,
+  EVENTS.EXECUTION_EVIDENCE_REBRANDED,
+  EVENTS.STATE_RECOVERY,
+]);
 
 if (hasCliFlag(["--help", "-h"])) {
   console.log(
@@ -71,6 +76,10 @@ function normalizeRoleName(value) {
 }
 
 const normalizeDispatchKey = normalizeRoleName;
+
+function isHandoffRecoveryEvent(event) {
+  return HANDOFF_RECOVERY_EVENTS.has(event?.event);
+}
 
 function normalizeGuidancePacks(value) {
   if (!Array.isArray(value)) return [];
@@ -1374,10 +1383,22 @@ function buildReport({ repoRoot, staleHours, now, manifests, events }) {
     event.failure_class === "timeout" || /timeout/i.test(String(event.reason || ""))
   ));
   const dispatchFailures = dispatchResults.filter((event) => event.state_to === STATES.ESCALATED);
-  const recoveredRunIds = new Set(
+  const recoverCommitRunIds = new Set(
     events
       .filter((event) => event.event === EVENTS.RECOVER_COMMIT && event.run_id)
       .map((event) => event.run_id)
+  );
+  const recoveredRunIds = new Set(
+    events
+      .filter((event) => isHandoffRecoveryEvent(event) && event.run_id)
+      .map((event) => event.run_id)
+  );
+  const passedRunIds = new Set(passedRuns.map(({ data }) => data.run_id).filter(Boolean));
+  const cleanPassedRunIds = new Set(
+    [...passedRunIds].filter((runId) => !recoveredRunIds.has(runId))
+  );
+  const recoveryAssistedPassedRunIds = new Set(
+    [...passedRunIds].filter((runId) => recoveredRunIds.has(runId))
   );
   const reviewLineage = buildReviewLineageSummary({ repoRoot, manifests });
 
@@ -1399,9 +1420,12 @@ function buildReport({ repoRoot, staleHours, now, manifests, events }) {
       median_rounds_to_ready: median(readyRounds),
       stale_open_runs_72h: staleOpenRuns.length,
       pass_rate: ratio(passedRuns.length, manifests.length),
+      clean_pass_rate: ratio(cleanPassedRunIds.size, manifests.length),
+      handoff_recovery_rate: ratio(recoveredRunIds.size, manifests.length),
+      recovery_assisted_pass_rate: ratio(recoveryAssistedPassedRunIds.size, manifests.length),
       dispatch_timeout_rate: ratio(dispatchTimeouts.length, dispatchResults.length),
       dispatch_failure_rate: ratio(dispatchFailures.length, dispatchResults.length),
-      recover_commit_rate: ratio(recoveredRunIds.size, manifests.length),
+      recover_commit_rate: ratio(recoverCommitRunIds.size, manifests.length),
     },
     factor_analysis: buildFactorAnalysis(events),
     rubric_insights: buildRubricInsights(events, manifests),
@@ -1629,6 +1653,11 @@ function main() {
   console.log(`  median_rounds_to_ready: ${report.metrics.median_rounds_to_ready ?? "n/a"}`);
   console.log(`  stale_open_runs_72h: ${report.metrics.stale_open_runs_72h}`);
   console.log(`  pass_rate: ${report.metrics.pass_rate ?? "n/a"}`);
+  console.log(
+    `  pass_breakdown: clean=${report.metrics.clean_pass_rate ?? "n/a"} ` +
+    `recovery_assisted=${report.metrics.recovery_assisted_pass_rate ?? "n/a"} ` +
+    `handoff_recovery=${report.metrics.handoff_recovery_rate ?? "n/a"}`
+  );
   console.log(`  dispatch_timeout_rate: ${report.metrics.dispatch_timeout_rate ?? "n/a"}`);
   console.log(`  dispatch_failure_rate: ${report.metrics.dispatch_failure_rate ?? "n/a"}`);
   console.log(`  recover_commit_rate: ${report.metrics.recover_commit_rate ?? "n/a"}`);
