@@ -34,9 +34,9 @@ Isolation details by built-in reviewer:
 | --- | --- |
 | `codex` | `invoke-reviewer-codex.js` passes ephemeral read-only review settings and expects structured verdict JSON. |
 | `claude` | `invoke-reviewer-claude.js` uses bare/no-session-persistence review mode; `ANTHROPIC_API_KEY` or an authenticated Claude CLI session may be required. |
-| `opencode` | Uses prompt-only read-only review plus dirty-worktree checks. Primary and advisory review are route-policy gated. |
+| `opencode` | `RELAY_OPENCODE_REVIEW_TIMEOUT` sets the primary-review parent timeout as a positive duration such as `120s`, `10m`, or `1h`; the default is `1800s`. Uses prompt-only read-only review plus dirty-worktree checks. Primary and advisory review are route-policy gated. |
 | `pi` | `RELAY_PI_BIN` can override the binary path; `RELAY_PI_REVIEW_TIMEOUT` sets the primary-review parent timeout. Review uses a read/grep/find/ls allowlist plus dirty-worktree checks. |
-| `antigravity` | `RELAY_ANTIGRAVITY_BIN` can override the binary path. Relay targets the `agy` command-line interface only; GUI, IDE, Desktop, plugin runtime, and interactive PTY flows are not supported. |
+| `antigravity` | `RELAY_ANTIGRAVITY_BIN` can override the binary path; `RELAY_ANTIGRAVITY_REVIEW_TIMEOUT` sets the review/canary parent timeout as a positive duration such as `120s`, `10m`, or `1h`; the default is `1800s`. Relay targets the `agy` command-line interface only; GUI, IDE, Desktop, plugin runtime, and interactive PTY flows are not supported. |
 | `cursor` | `RELAY_CURSOR_AGENT_BIN` can override the binary path; `RELAY_CURSOR_REVIEW_TIMEOUT` sets the primary-review parent timeout. Primary review uses ask mode and parses the wrapper `result` field. |
 
 Advisory review is non-gating for `policy.review_assurance=standard`: it starts concurrently, waits only the configured grace window on the critical path, records `advisory_review` plus `review-round-N-advisory-<reviewer>-*`, and never changes the trusted verdict or redispatch prompt. Failures, timeouts, invalid JSON, and write-policy violations are recorded without changing the primary outcome. Late artifacts are classified as metrics after a passing primary decision or redispatch evidence after changes requested.
@@ -66,7 +66,7 @@ The healthy-path criteria are exact:
 - Dispatch: minimal repository change to recoverable/reviewable state.
 - Limitation path: documented CLI limitation, recorded as a limitation rather than success.
 
-Use the operator canaries in `docs/relay-operator-guide.md#antigravity-live-canary`, including `live-dogfood.js --dispatch-canary` for controlled healthy dispatch evidence. A `failed/escalated` result means relay failed safely or encountered a live CLI limitation; keep that role marked experimental or blocked. Healthy dispatch canaries pass only when they produce the minimal PR, and `ready_to_merge` is healthy only after the Antigravity primary reviewer returns strict verdict JSON inside the configured timeout. The Antigravity no-op/fail-safe dispatch canary is separate; a PR from that no-op path is failure, not healthy dispatch success. The fail-safe timeout canary is not healthy success; it verifies that a bounded timeout does not become a reviewable false positive.
+Use the operator canaries in `operator-utilities.md`, including `live-dogfood.js --dispatch-canary` for controlled healthy dispatch evidence. A `failed/escalated` result means relay failed safely or encountered a live CLI limitation; keep that role marked experimental or blocked. Healthy dispatch canaries pass only when they produce the minimal PR, and `ready_to_merge` is healthy only after the Antigravity primary reviewer returns strict verdict JSON inside the configured timeout. The Antigravity no-op/fail-safe dispatch canary is separate; a PR from that no-op path is failure, not healthy dispatch success. The fail-safe timeout canary is not healthy success; it verifies that a bounded timeout does not become a reviewable false positive.
 
 ## New Adapter Checklist
 

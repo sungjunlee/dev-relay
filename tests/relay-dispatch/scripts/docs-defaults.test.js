@@ -75,6 +75,16 @@ function operatorReadinessMatrix() {
   };
 }
 
+function sectionUntilNextPeerOrParentHeading(doc, heading) {
+  const start = doc.indexOf(heading);
+  assert.notEqual(start, -1, `${heading} must exist`);
+  const level = heading.match(/^#+/)?.[0].length || 2;
+  const nextHeading = new RegExp(`\\n#{1,${level}}\\s`, "g");
+  nextHeading.lastIndex = start + heading.length;
+  const next = nextHeading.exec(doc);
+  return doc.slice(start, next ? next.index : undefined);
+}
+
 function readinessPair(cell) {
   const implementation = cell.match(/Implementation:\s*`([^`]+)`/i)?.[1];
   const live = cell.match(/Live:\s*`([^`]+)`/i)?.[1];
@@ -302,6 +312,23 @@ test("operator guide teaches default and manual workflows before adapter readine
   assert.ok(manualPhaseIndex < matrixIndex, "manual phase control must appear before adapter readiness");
 });
 
+test("operator guide delegates adapter-specific review details to references", () => {
+  const doc = readRepoFile(OPERATOR_GUIDE_DOC);
+  const adapterPlatformDoc = readRepoFile(ADAPTER_PLATFORM_DOC);
+  const reviewSection = sectionUntilNextPeerOrParentHeading(doc, "### Review");
+  const liveCanarySection = sectionUntilNextPeerOrParentHeading(doc, "### Antigravity Live Canary");
+
+  assert.match(reviewSection, /agent-adapter-platform\.md/);
+  assert.match(reviewSection, /model-route-policy\.md/);
+  assert.doesNotMatch(reviewSection, /--reviewer (?:opencode|pi|cursor|antigravity)\b/);
+  assert.doesNotMatch(reviewSection, /RELAY_(?:OPENCODE|PI|CURSOR|ANTIGRAVITY)_[A-Z_]+/);
+  assert.match(liveCanarySection, /operator-utilities\.md/);
+  assert.match(liveCanarySection, /agent-adapter-platform\.md/);
+  assert.doesNotMatch(liveCanarySection, /relay-antigravity-live-(?:prompt|rubric)/);
+  assert.match(adapterPlatformDoc, /RELAY_OPENCODE_REVIEW_TIMEOUT/);
+  assert.match(adapterPlatformDoc, /RELAY_ANTIGRAVITY_REVIEW_TIMEOUT/);
+});
+
 test("operator guide separates implementation parity from live promotion criteria", () => {
   const { section } = operatorReadinessMatrix();
 
@@ -384,8 +411,11 @@ test("operator docs publish the live dogfood harness and outcome meanings", () =
     readRepoFile("skills/relay-dispatch/references/operator-utilities.md"),
   ].join("\n");
 
-  assert.match(docs, /live-dogfood\.js --repo \. --json --markdown/);
-  assert.match(docs, /live-dogfood\.js --repo \. --dispatch-canary --json/);
+  assert.match(docs, /live-dogfood\.js --repo \.[\s\S]*--pi-model '<pi-provider>\/<pi-model>'[\s\S]*--opencode-model '<opencode-provider>\/<opencode-model>'[\s\S]*--json --markdown/);
+  assert.match(docs, /live-dogfood\.js --repo \.[\s\S]*--pi-model '<pi-provider>\/<pi-model>'[\s\S]*--opencode-model '<opencode-provider>\/<opencode-model>'[\s\S]*--dispatch-canary --json/);
+  assert.match(docs, /RELAY_LIVE_DOGFOOD_PI_MODEL/);
+  assert.match(docs, /RELAY_LIVE_DOGFOOD_OPENCODE_MODEL/);
+  assert.match(docs, /--scenario <name>/);
   assert.match(docs, /temporary `RELAY_HOME`/);
   assert.match(docs, /scoped route policy/);
   assert.match(docs, /healthy dispatch canar(?:y|ies)[^.\n]*Pi[^.\n]*OpenCode[^.\n]*Antigravity/i);
