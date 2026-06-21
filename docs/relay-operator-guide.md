@@ -153,8 +153,12 @@ Use the live dogfood harness for repeatable Pi, OpenCode, and Antigravity eviden
 `google/antigravity-cli` is the policy label for Antigravity; it is recorded for audit and not passed to `agy` as a model flag.
 
 ```bash
-node skills/relay-dispatch/scripts/live-dogfood.js --repo . --json --markdown
-node skills/relay-dispatch/scripts/live-dogfood.js --repo . --dispatch-canary --json
+node skills/relay-dispatch/scripts/live-dogfood.js --repo . \
+  --pi-model '<pi-provider>/<pi-model>' --opencode-model '<opencode-provider>/<opencode-model>' \
+  --json --markdown
+node skills/relay-dispatch/scripts/live-dogfood.js --repo . \
+  --pi-model '<pi-provider>/<pi-model>' --opencode-model '<opencode-provider>/<opencode-model>' \
+  --dispatch-canary --json
 ```
 
 Interpretation: `failed/escalated` means relay failed safely or hit a live CLI limitation. `ready_to_merge` is healthy only when the dispatch PR contains the minimal requested change and the primary reviewer accepted strict verdict JSON within the configured timeout.

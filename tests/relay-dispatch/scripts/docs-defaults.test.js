@@ -411,8 +411,11 @@ test("operator docs publish the live dogfood harness and outcome meanings", () =
     readRepoFile("skills/relay-dispatch/references/operator-utilities.md"),
   ].join("\n");
 
-  assert.match(docs, /live-dogfood\.js --repo \. --json --markdown/);
-  assert.match(docs, /live-dogfood\.js --repo \. --dispatch-canary --json/);
+  assert.match(docs, /live-dogfood\.js --repo \.[\s\S]*--pi-model '<pi-provider>\/<pi-model>'[\s\S]*--opencode-model '<opencode-provider>\/<opencode-model>'[\s\S]*--json --markdown/);
+  assert.match(docs, /live-dogfood\.js --repo \.[\s\S]*--pi-model '<pi-provider>\/<pi-model>'[\s\S]*--opencode-model '<opencode-provider>\/<opencode-model>'[\s\S]*--dispatch-canary --json/);
+  assert.match(docs, /RELAY_LIVE_DOGFOOD_PI_MODEL/);
+  assert.match(docs, /RELAY_LIVE_DOGFOOD_OPENCODE_MODEL/);
+  assert.match(docs, /--scenario <name>/);
   assert.match(docs, /temporary `RELAY_HOME`/);
   assert.match(docs, /scoped route policy/);
   assert.match(docs, /healthy dispatch canar(?:y|ies)[^.\n]*Pi[^.\n]*OpenCode[^.\n]*Antigravity/i);

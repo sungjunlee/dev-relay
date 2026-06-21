@@ -46,13 +46,23 @@ These metrics do not change readiness calibration for #439 and are not merge, re
 Use `live-dogfood.js` when you need repeatable evidence for Pi, OpenCode, and Antigravity live adapter paths:
 
 ```bash
-node skills/relay-dispatch/scripts/live-dogfood.js --repo . --json --markdown
-node skills/relay-dispatch/scripts/live-dogfood.js --repo . --dispatch-canary --json
+node skills/relay-dispatch/scripts/live-dogfood.js --repo . \
+  --pi-model '<pi-provider>/<pi-model>' --opencode-model '<opencode-provider>/<opencode-model>' \
+  --json --markdown
+node skills/relay-dispatch/scripts/live-dogfood.js --repo . \
+  --pi-model '<pi-provider>/<pi-model>' --opencode-model '<opencode-provider>/<opencode-model>' \
+  --dispatch-canary --json
 node skills/relay-dispatch/scripts/live-dogfood.js --repo . --probe-only --json
 node skills/relay-dispatch/scripts/live-dogfood.js --repo . --dry-run --markdown
+node skills/relay-dispatch/scripts/live-dogfood.js --repo . \
+  --opencode-model '<opencode-provider>/<opencode-model>' --scenario opencode-advisory --json
+node skills/relay-dispatch/scripts/live-dogfood.js --repo . \
+  --pi-model '<pi-provider>/<pi-model>' --scenario pi-primary --json
 ```
 
 The harness creates a temporary `RELAY_HOME` by default and writes a scoped route policy there instead of mutating the operator's default `~/.relay/policy.json`. Healthy reviewer canaries use realistic default timeouts, while the Antigravity fail-safe timeout canary has its own intentionally short `--antigravity-fail-safe-timeout` setting.
+
+Pi and OpenCode live dogfood require explicit provider/model routes through `--pi-model` and `--opencode-model`, or `RELAY_LIVE_DOGFOOD_PI_MODEL` and `RELAY_LIVE_DOGFOOD_OPENCODE_MODEL`. Antigravity defaults to `google/antigravity-cli` unless `--antigravity-model` or `RELAY_LIVE_DOGFOOD_ANTIGRAVITY_MODEL` overrides it. Use repeated `--scenario <name>` filters such as `opencode-primary`, `opencode-advisory`, `pi-primary`, `pi-advisory`, `antigravity-primary`, or `antigravity-advisory` when you need isolated evidence for one adapter path.
 
 Use `--dispatch-canary` from a clean worktree for healthy dispatch canaries across Pi, OpenCode, and Antigravity. Those steps request unique minimal repository changes and pass only when dispatch returns `review_pending` with a PR number. `--dispatch-timeout` defaults to 180 seconds, and `--dispatch-branch-prefix` defaults to `dogfood-dispatch`.
 
