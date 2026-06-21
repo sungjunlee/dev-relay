@@ -2,7 +2,7 @@
 
 `npx skills add sungjunlee/dev-relay` is the only operator-supported install path because it places every sibling skill in one directory. Every skill currently reaches across sibling directories through either SKILL.md command paths, JS `require()` calls, or both. Per-skill installs are not supported for operators because they can leave those sibling paths missing and cause module resolution failures.
 
-SKILL.md command examples use `${RELAY_SKILL_ROOT:-skills}`. The default works from this repository; installed operators should set `RELAY_SKILL_ROOT` to the directory containing the sibling relay skill directories.
+SKILL.md command examples use `${RELAY_SKILL_ROOT:-skills}`. The default works from this repository. Installed operators should set `RELAY_SKILL_ROOT` to the installed sibling directory that contains `relay`, `relay-config`, `relay-dispatch`, `relay-review`, and the other relay skill directories, for example `~/.agents/skills` or the equivalent skills install root on their machine.
 
 ```
 relay ----------> relay-ready
