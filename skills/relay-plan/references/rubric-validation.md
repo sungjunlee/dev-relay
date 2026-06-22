@@ -34,6 +34,8 @@ If any Done Criteria check fails, revise or persist clearer planner-authored Don
 
 Prerequisites (hygiene): as many as needed, uncounted. Factors (contract + quality): no hard cap, warning at 8+.
 
+Ready-light is stricter because its purpose is keeping small tasks small. Ready-light S mechanical rubrics default to 1-2 substantive factors. More than 2 substantive factors must warn or block unless an explicit risk or design-bearing rationale is present. Repo-wide lint, typecheck, and test commands stay in prerequisites and do not count as task-specific factors. Unsupported helper, dependency, config, or abstraction requirements are over-engineering risk unless the Done Criteria explicitly require them.
+
 | Size | Contract min | Quality min | Substantive total | Recommended |
 |------|--------------|-------------|-------------------|-------------|
 | S (narrow mechanical outcome, low ambiguity/risk) | ≥ 1 | 0 | 1+ | 1-2 |
@@ -71,8 +73,8 @@ probe_signal.scripts: no quality infra detected
 Grade: B
 Action: dispatch allowed
 
-Ready-light compact example
----------------------------
+Ready-light S mechanical compact example
+----------------------------------------
 Planning profile: ready_light
 Prerequisites count: 1
 Contract factors: 1
@@ -83,7 +85,23 @@ Auto coverage: 1 / 2 checks automated across prerequisites + factors
 Calibration status: skipped (ready-light)
 Risk signals: none
 Rationale: Readiness already returned proceed, but no bypass anchor exists; use one observable contract factor plus the smallest verification path.
-Over-engineering check: Unsupported helper, dependency, or config requirements are over-engineering risk.
+Over-engineering check: Unsupported helper, dependency, config, or abstraction requirements are over-engineering risk.
+Grade: B
+Action: dispatch allowed
+
+Ready-light S design-bearing example
+------------------------------------
+Planning profile: ready_light
+Prerequisites count: 1
+Contract factors: 1
+Quality factors: 1
+Substantive total: 2
+Quality ratio: 50%
+Auto coverage: 1 / 3 checks automated across prerequisites + factors
+Calibration status: compact (ready-light design-bearing)
+Risk signals: design-bearing
+Design-bearing rationale: The task is still S-size, but user-visible copy or prompt wording can be correct in shape while poor in judgment, so one quality factor is justified.
+Over-engineering check: no unsupported helper, dependency, config, or abstraction requirements.
 Grade: B
 Action: dispatch allowed
 
@@ -183,6 +201,9 @@ Grade D means stop and revise the rubric first. Grade C means warn before dispat
 | `vague_criteria` | Criteria contain "good", "proper", "clean", or "appropriate" |
 | `proxy_metric` | Automated checks measure effort or process instead of outcome |
 | `high_factor_count` | 8+ substantive factors |
+| `ready_light_factor_count` | Ready-light S rubric has more than 2 substantive factors without explicit risk or design-bearing rationale |
+| `repo_hygiene_in_factor` | Repo-wide lint, typecheck, or test command is placed in `factors` instead of `prerequisites` |
+| `over_engineering_risk` | Ready-light factor asks for unsupported helper, dependency, config, or abstraction work |
 | `all_contract` | Zero quality coverage on a design-bearing task |
 | `weak_done_criteria` | Done Criteria are not observable, bounded, reviewable, risk-aware, or verifiable |
 

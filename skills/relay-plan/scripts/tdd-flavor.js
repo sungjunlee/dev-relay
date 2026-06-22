@@ -30,11 +30,26 @@ function createFactor() {
     name: null,
     tier: null,
     type: null,
+    command: null,
+    criteria: null,
+    target: null,
     tdd_anchor: null,
     tdd_runner: null,
     fix_hint: null,
   };
 }
+
+const FACTOR_FIELDS = new Set([
+  "name",
+  "tier",
+  "type",
+  "command",
+  "criteria",
+  "target",
+  "tdd_anchor",
+  "tdd_runner",
+  "fix_hint",
+]);
 
 function extractAllFactors(rubricYaml) {
   const factors = [];
@@ -74,14 +89,14 @@ function extractAllFactors(rubricYaml) {
       pushCurrent();
       current = createFactor();
       currentIndent = factorStart[1].length;
-      if (["name", "tier", "type", "tdd_anchor", "tdd_runner", "fix_hint"].includes(factorStart[2])) {
+      if (FACTOR_FIELDS.has(factorStart[2])) {
         current[factorStart[2]] = unquoteYamlScalar(factorStart[3]);
       }
       continue;
     }
 
     if (!current || indent <= currentIndent) continue;
-    const field = line.match(/^\s*(name|tier|type|tdd_anchor|tdd_runner|fix_hint):\s*(.*?)\s*$/);
+    const field = line.match(/^\s*(name|tier|type|command|criteria|target|tdd_anchor|tdd_runner|fix_hint):\s*(.*?)\s*$/);
     if (field) {
       current[field[1]] = unquoteYamlScalar(field[2]);
     }
