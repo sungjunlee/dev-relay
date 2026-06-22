@@ -49,6 +49,21 @@ test("route decision treats proceed without bypass as ready_light in non-interac
   assert.equal(decision.branch_labels["ready-light"].action, "proceed_to_step_2_light_planning");
 });
 
+test("route decision keeps high-risk proceed without bypass on readiness prompt path", () => {
+  const decision = buildReadinessDecision({
+    readiness_score: { clarity: "high", granularity: "high", verifiability: "high" },
+    bypass: false,
+    next_action: "proceed",
+    signals_summary: "Gaps: high-risk keyword.",
+    task_shape: { strength: "none", strong: false, signals: [] },
+    risk: { high: true, signals: ["high_risk_keyword"] },
+  }, { promptAllowed: false });
+
+  assert.equal(decision.route_decision, "readiness_prompt");
+  assert.equal(decision.recommended_branch, "noninteractive-fail");
+  assert.equal(decision.branch_labels["noninteractive-fail"].event_payload.risk.high, true);
+});
+
 test("route decision keeps qa_needed on the existing prompt or noninteractive-fail path", () => {
   const interactive = buildReadinessDecision({
     readiness_score: { clarity: "medium", granularity: "medium", verifiability: "low" },

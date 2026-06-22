@@ -235,8 +235,14 @@ function routeDecisionFromReadiness(envelope) {
   if (!envelope) return "readiness_prompt";
   if (envelope.bypass === true) return "ready_single";
   if (envelope.task_shape?.strong === true) return "needs_split";
-  if (envelope.next_action === "proceed") return "ready_light";
+  if (envelope.next_action === "proceed" && !hasHighRiskReadinessSignal(envelope)) return "ready_light";
   return "readiness_prompt";
+}
+
+function hasHighRiskReadinessSignal(envelope) {
+  if (envelope?.risk?.high === true) return true;
+  if (Array.isArray(envelope?.risk?.signals) && envelope.risk.signals.includes("high_risk_keyword")) return true;
+  return /\bhigh-risk keyword\b/i.test(String(envelope?.signals_summary || ""));
 }
 
 function buildReadinessDecision(envelope, { promptAllowed }) {
@@ -248,6 +254,7 @@ function buildReadinessDecision(envelope, { promptAllowed }) {
     next_action: envelope?.next_action || null,
     route_decision: routeDecision,
     task_shape: envelope?.task_shape || null,
+    risk: envelope?.risk || null,
     signals_summary: envelope?.signals_summary || null,
   };
 
@@ -645,6 +652,7 @@ module.exports = {
   checkInflightRuns,
   checkPullRequest,
   compareReviewSnapshot,
+  hasHighRiskReadinessSignal,
   main,
   routeDecisionFromReadiness,
   routeFromInflight,

@@ -43,7 +43,7 @@ node "${RELAY_SKILL_ROOT:-skills}/relay/scripts/run-preflight.js" --stage route 
 Route decisions are advisory labels, not lifecycle states:
 
 - `ready_single`: preserve the existing bypass fast path.
-- `ready_light`: keep the task on relay, but plan it as a small quick task with compact rubric guidance.
+- `ready_light`: keep the task on relay, but plan it as a small quick task with compact rubric guidance. This is only for non-bypass `next_action=proceed` results with no high-risk readiness signal.
 - `readiness_prompt`: preserve the existing `qa_needed` prompt or non-interactive failure behavior.
 - `needs_split`: strong task-shape signals indicate decomposition should be considered before dispatch; use the same prompt/non-interactive failure mechanics as readiness gaps.
 
