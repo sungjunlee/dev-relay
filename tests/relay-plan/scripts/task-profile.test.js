@@ -96,6 +96,19 @@ test("ready-light task profile defaults to S-size quick execution", () => {
   assert.ok(profile.guidance_packs.includes("verification-evidence"));
 });
 
+test("ready-light task profile accepts planning_profile alias", () => {
+  const profile = deriveTaskProfile({
+    doneCriteria: "Update skills/relay/scripts/run-preflight.js so proceed readiness skips Q&A.",
+    probeSignal: PROBE_SIGNAL,
+    historicalSignal: HISTORICAL_SIGNAL,
+    taskRisk: { planning_profile: "ready_light" },
+  });
+
+  assert.equal(profile.size, "S");
+  assert.equal(profile.route_decision, "ready_light");
+  assert.equal(profile.execution_mode, "quick");
+});
+
 test("ready-light task profile does not downshift risk-bearing tasks", () => {
   const profile = deriveTaskProfile({
     doneCriteria: "Validate manifest state before applying review gate decisions.",

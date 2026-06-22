@@ -852,6 +852,28 @@ function readyLightPrompt({ task = "ready-light dispatch validation" } = {}) {
   ].join("\n");
 }
 
+function invalidReviewAssuranceTaskProfilePrompt() {
+  return [
+    "# Dispatch: Invalid task profile metadata",
+    "",
+    "## Task Profile",
+    "",
+    "```yaml",
+    "task_profile:",
+    "  planning_profile: ready_light",
+    "  size: S",
+    "  change_type: feature",
+    "  domains:",
+    "    - relay-plan",
+    "  risk_tags: []",
+    "  execution_mode: quick",
+    "  review_assurance: hardend",
+    "  guidance_packs:",
+    "    - surgical-change",
+    "```",
+  ].join("\n");
+}
+
 function plannerReadyLightPromptWithoutExplicitMarker() {
   return [
     "# Dispatch: Planner ready-light validation",
@@ -4235,6 +4257,36 @@ test("dispatch rejects invalid ready-light rubric before accepting rubric file",
   assert.equal(result.status, "failed");
   assert.equal(result.error_code, "ready_light_factor_count");
   assert.match(result.error, /Ready-light S rubrics require 1-2 substantive factors/);
+
+  fs.unlinkSync(rubricFile);
+});
+
+test("dispatch reports invalid task_profile metadata through failEarly", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  writeFakeCodex(binDir);
+  const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}` };
+
+  const rubricFile = path.join(os.tmpdir(), `rubric-invalid-task-profile-${Date.now()}.yaml`);
+  fs.writeFileSync(rubricFile, readyLightRubricYaml(), "utf-8");
+
+  const proc = spawnSync("node", [SCRIPT, repoRoot, ...withRequiredRubric([
+    "-b", "issue-invalid-task-profile",
+    "--prompt", invalidReviewAssuranceTaskProfilePrompt(),
+    "--rubric-file", rubricFile,
+    "--dry-run", "--json",
+  ])], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    env,
+  });
+
+  assert.notEqual(proc.status, 0);
+  const result = JSON.parse(proc.stdout);
+  assert.equal(result.status, "failed");
+  assert.equal(result.error_code, "task_profile_parse_failed");
+  assert.match(result.error, /Invalid task_profile metadata/);
 
   fs.unlinkSync(rubricFile);
 });

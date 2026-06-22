@@ -135,10 +135,17 @@ test("blocks bare repo-wide test runners in ready-light factors", () => {
     "pytest -q",
     "pytest -k smoke",
     "pytest --maxfail 1",
+    "pytest .",
+    "python -m pytest .",
     "pytest tests/",
     "python -m pytest tests/",
     "go test ./...",
     "go test ./... -race",
+    "go test -race ./...",
+    "go test -count=1 ./...",
+    "eslint .",
+    "prettier --check .",
+    "tsc --noEmit --pretty false",
   ];
 
   for (const command of commands) {
@@ -170,6 +177,9 @@ test("allows path-scoped pytest commands in ready-light factors", () => {
     "pytest tests/foo_test.py -k smoke",
     "pytest tests/foo_test.py --maxfail 1",
     "python -m pytest tests/foo_test.py::test_case",
+    "eslint src/foo.js",
+    "prettier --check src/foo.js",
+    "tsc --noEmit src/foo.ts",
   ];
 
   for (const command of commands) {

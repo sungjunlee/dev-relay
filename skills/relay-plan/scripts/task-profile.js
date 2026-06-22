@@ -180,7 +180,7 @@ function deriveTaskProfile({
   const probe = parseJsonish(probeSignal);
   const historical = parseJsonish(historicalSignal);
   const risk = parseJsonish(taskRisk);
-  const routeDecision = risk.route_decision || risk.routeDecision;
+  const routeDecision = risk.route_decision || risk.routeDecision || risk.planning_profile;
   const normalizedSize = normalizeSize(size || (routeDecision === "ready_light" ? "S" : "M"));
   const intentText = normalizeText(doneCriteria, taskRisk);
   const signalText = normalizeText(doneCriteria, probeSignal, historicalSignal, taskRisk);

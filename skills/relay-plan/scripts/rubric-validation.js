@@ -27,6 +27,24 @@ const PYTEST_OPTIONS_WITH_VALUE = new Set([
   "--tb",
 ]);
 const PYTEST_SHORT_OPTIONS_WITH_VALUE = new Set(["-c", "-k", "-m", "-o", "-p", "-W"]);
+const TSC_OPTIONS_WITH_VALUE = new Set(["--build", "--module", "--outDir", "--pretty", "--project", "--target"]);
+const TSC_SHORT_OPTIONS_WITH_VALUE = new Set(["-b", "-m", "-p", "-t"]);
+const ESLINT_OPTIONS_WITH_VALUE = new Set([
+  "--config",
+  "--ext",
+  "--format",
+  "--ignore-pattern",
+  "--max-warnings",
+  "--parser",
+  "--parser-options",
+]);
+const ESLINT_SHORT_OPTIONS_WITH_VALUE = new Set(["-c", "-f"]);
+const PRETTIER_OPTIONS_WITH_VALUE = new Set([
+  "--config",
+  "--ignore-path",
+  "--parser",
+  "--plugin",
+]);
 
 function commandTokens(command) {
   return String(command || "").trim().split(/\s+/).filter(Boolean);
@@ -34,7 +52,7 @@ function commandTokens(command) {
 
 function isRepoWideTarget(token) {
   const normalized = String(token || "").replace(/\/+$/, "");
-  return normalized === "tests" || normalized.includes("*");
+  return normalized === "." || normalized === "tests" || normalized.includes("*");
 }
 
 function positionalTargets(tokens, {
@@ -87,7 +105,38 @@ function isRepoWidePytest(command) {
 
 function isRepoWideGoTest(command) {
   const tokens = commandTokens(command);
-  return tokens[0] === "go" && tokens[1] === "test" && tokens[2] === "./...";
+  if (tokens[0] !== "go" || tokens[1] !== "test") return false;
+  const targets = positionalTargets(tokens.slice(2));
+  return targets.length === 0 || targets.some((target) => target === "./..." || isRepoWideTarget(target));
+}
+
+function isRepoWideTypecheck(command) {
+  const tokens = commandTokens(command);
+  if (tokens[0] !== "tsc" || !tokens.some((token) => token === "--noEmit" || token.startsWith("--noEmit="))) return false;
+  const targets = positionalTargets(tokens.slice(1), {
+    longOptionsWithValue: TSC_OPTIONS_WITH_VALUE,
+    shortOptionsWithValue: TSC_SHORT_OPTIONS_WITH_VALUE,
+  });
+  return targets.length === 0 || targets.some(isRepoWideTarget);
+}
+
+function isRepoWideEslint(command) {
+  const tokens = commandTokens(command);
+  if (tokens[0] !== "eslint") return false;
+  const targets = positionalTargets(tokens.slice(1), {
+    longOptionsWithValue: ESLINT_OPTIONS_WITH_VALUE,
+    shortOptionsWithValue: ESLINT_SHORT_OPTIONS_WITH_VALUE,
+  });
+  return targets.length === 0 || targets.some(isRepoWideTarget);
+}
+
+function isRepoWidePrettier(command) {
+  const tokens = commandTokens(command);
+  if (tokens[0] !== "prettier") return false;
+  const targets = positionalTargets(tokens.slice(1), {
+    longOptionsWithValue: PRETTIER_OPTIONS_WITH_VALUE,
+  });
+  return targets.length === 0 || targets.some(isRepoWideTarget);
 }
 
 function normalizeTaskProfile(taskProfile = {}) {
@@ -127,6 +176,9 @@ function isRepoHygieneFactor(factor) {
   const command = String(factor.command || "");
   return PACKAGE_HYGIENE_COMMAND.test(command)
     || SIMPLE_HYGIENE_COMMAND.test(command)
+    || isRepoWideTypecheck(command)
+    || isRepoWideEslint(command)
+    || isRepoWidePrettier(command)
     || isRepoWideNodeTest(command)
     || isRepoWidePytest(command)
     || isRepoWideGoTest(command);

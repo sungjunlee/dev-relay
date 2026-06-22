@@ -731,8 +731,16 @@ function enforceRubricPersistence(manifest, runDir) {
 
 function readyLightTaskProfileForDispatch({ promptText, manifest }) {
   // Trust only structured task_profile metadata, not arbitrary examples embedded in the prompt body.
-  const promptProfile = extractTaskProfileSummaryFromPrompt(promptText);
-  const extractedGuidance = promptProfile ? null : extractGuidanceFromPrompt(promptText);
+  let promptProfile = null;
+  let extractedGuidance = null;
+  try {
+    promptProfile = extractTaskProfileSummaryFromPrompt(promptText);
+    extractedGuidance = promptProfile ? null : extractGuidanceFromPrompt(promptText);
+  } catch (error) {
+    failEarly(`Invalid task_profile metadata in prompt: ${error.message}`, {
+      error_code: "task_profile_parse_failed",
+    });
+  }
   const manifestProfile = manifest?.advisory?.guidance?.task_profile_summary || null;
   const taskProfile = promptProfile
     || extractedGuidance?.task_profile_summary
@@ -1170,8 +1178,9 @@ async function main() {
     try {
       REVIEW_ASSURANCE = extractReviewAssuranceFromPrompt(taskPrompt) || REVIEW_ASSURANCE;
     } catch (error) {
-      console.error(`Error: ${error.message}`);
-      process.exit(1);
+      failEarly(`Invalid task_profile metadata in prompt: ${error.message}`, {
+        error_code: "task_profile_parse_failed",
+      });
     }
   }
   if (taskPromptResult.source === "auto-discovered-redispatch" && !JSON_OUT) {
