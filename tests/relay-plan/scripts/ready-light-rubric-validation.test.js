@@ -124,6 +124,32 @@ test("blocks repo-wide hygiene block scalars when command starts the factor item
   assert.ok(result.errors.some((error) => error.code === "repo_hygiene_in_factor"));
 });
 
+test("blocks bare repo-wide test runners in ready-light factors", () => {
+  const commands = [
+    "node --test",
+    "pytest",
+    "go test ./...",
+  ];
+
+  for (const command of commands) {
+    const result = validateReadyLightRubric({
+      rubricYaml: rubricWithFactors([
+        {
+          name: "Repo suite remains green",
+          command,
+        },
+      ]),
+      taskProfile: { planning_profile: "ready_light", size: "S" },
+    });
+
+    assert.equal(result.action, "block", command);
+    assert.ok(
+      result.errors.some((error) => error.code === "repo_hygiene_in_factor"),
+      command
+    );
+  }
+});
+
 test("allows a three-factor ready-light rubric as a warning when explicit design rationale exists", () => {
   const result = validateReadyLightRubric({
     rubricYaml: rubricWithFactors([
