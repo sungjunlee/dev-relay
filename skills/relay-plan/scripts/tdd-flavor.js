@@ -64,9 +64,14 @@ function extractAllFactors(rubricYaml) {
       blockScalar = null;
       return;
     }
+    const nonEmpty = blockScalar.lines.filter((line) => line.trim() !== "");
+    const minIndent = nonEmpty.length
+      ? Math.min(...nonEmpty.map((line) => line.match(/^\s*/)[0].length))
+      : 0;
+    const normalized = blockScalar.lines.map((line) => line.slice(minIndent));
     current[blockScalar.field] = blockScalar.style === "|"
-      ? blockScalar.lines.join("\n").trim()
-      : blockScalar.lines.map((line) => line.trim()).join(" ").trim();
+      ? normalized.join("\n").trimEnd()
+      : normalized.map((line) => line.trim()).join(" ").trim();
     blockScalar = null;
   }
 
@@ -89,14 +94,17 @@ function extractAllFactors(rubricYaml) {
   for (const line of String(rubricYaml || "").split(/\r?\n/)) {
     if (blockScalar) {
       const indent = line.match(/^\s*/)[0].length;
+      // Blank lines are part of the scalar body and should not end the block.
       if (/^\s*$/.test(line)) {
         blockScalar.lines.push("");
         continue;
       }
+      // YAML block scalar content is indented deeper than the field that opened it.
       if (indent > blockScalar.indent) {
         blockScalar.lines.push(line);
         continue;
       }
+      // Returning to the field indentation closes the scalar before normal parsing resumes.
       finishBlockScalar();
     }
 

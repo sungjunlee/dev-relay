@@ -1,8 +1,10 @@
 const { extractAllFactors } = require("./tdd-flavor");
 
 const SUBSTANTIVE_TIERS = new Set(["contract", "quality"]);
-const REPO_HYGIENE_COMMAND = /\b(?:npm|pnpm|yarn)\s+(?:run\s+)?(?:test|lint|typecheck|check)\b|\btsc\s+--noEmit\b|\beslint\b|\bprettier\b|(?:^|\s)node\s+--test\s*$|\bnode\s+--test\s+(?:tests(?:\s|$)|tests\/\S*\*)|(?:^|\s)(?:python\s+-m\s+)?pytest\s*$|\bgo\s+test\s+\.\/\.\.\./i;
-const OVER_ENGINEERING_TEXT = /\b(?:unsupported\s+)?(?:helper|dependency|config|configuration|abstraction)\b/i;
+// Ready-light factors should prove the narrow task contract; broad repo hygiene belongs in prerequisites.
+const REPO_HYGIENE_COMMAND = /^(?:\s*(?:npm|pnpm|yarn)\s+(?:run\s+)?(?:test|lint|typecheck|check)\s*|\s*tsc\s+--noEmit\s*|\s*eslint\s*|\s*prettier\s*|\s*node\s+--test\s*|\s*node\s+--test\s+tests(?:\s*$|\/\S*\*\S*)|\s*(?:python\s+-m\s+)?pytest\s*|\s*go\s+test\s+\.\/\.\.\.\s*)$/i;
+// Only warn on explicitly unsupported extra structure, not ordinary mentions of helpers/config.
+const OVER_ENGINEERING_TEXT = /\bunsupported\s+(?:helper|dependency|config|configuration|abstraction)\b/i;
 
 function normalizeTaskProfile(taskProfile = {}) {
   return {
@@ -79,6 +81,7 @@ function validateReadyLightRubric({ rubricYaml, taskProfile = {} } = {}) {
     ));
   }
 
+  // A compact ready-light rubric needs at least one reviewable contract and should stay at two by default.
   if (substantiveFactors.length < 1 || substantiveFactors.length > 2) {
     const countIssue = issue(
       "ready_light_factor_count",

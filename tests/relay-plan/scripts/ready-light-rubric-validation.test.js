@@ -66,9 +66,9 @@ test("blocks a three-factor ready-light S mechanical rubric without explicit ris
         command: "node --test tests/relay/scripts/run-preflight.test.js",
       },
       {
-        name: "New helper abstraction covers route shape",
+        name: "New unsupported helper abstraction covers route shape",
         type: "evaluated",
-        criteria: "Requires a new helper abstraction for route shape even though Done Criteria do not ask for it.",
+        criteria: "Requires a new unsupported helper abstraction for route shape even though Done Criteria do not ask for it.",
         target: ">= 8/10",
       },
       {
@@ -152,6 +152,9 @@ test("blocks bare repo-wide test runners in ready-light factors", () => {
 
 test("allows path-scoped pytest commands in ready-light factors", () => {
   const commands = [
+    "npm test tests/foo.test.js",
+    "pnpm test tests/foo.test.js",
+    "yarn test tests/foo.test.js",
     "pytest tests/foo_test.py",
     "python -m pytest tests/foo_test.py::test_case",
   ];
@@ -170,6 +173,41 @@ test("allows path-scoped pytest commands in ready-light factors", () => {
     assert.equal(result.action, "allow", command);
     assert.deepEqual(result.errors, [], command);
   }
+});
+
+test("does not flag ordinary helper text as over-engineering", () => {
+  const result = validateReadyLightRubric({
+    rubricYaml: rubricWithFactors([
+      {
+        name: "Helper output stays stable",
+        type: "evaluated",
+        criteria: "Inspect the changed helper output and confirm the existing behavior is preserved.",
+        target: ">= 8/10",
+      },
+    ]),
+    taskProfile: { planning_profile: "ready_light", size: "S" },
+  });
+
+  assert.equal(result.action, "allow");
+  assert.deepEqual(result.errors, []);
+  assert.deepEqual(result.warnings, []);
+});
+
+test("warns on explicitly unsupported helper requirements", () => {
+  const result = validateReadyLightRubric({
+    rubricYaml: rubricWithFactors([
+      {
+        name: "Unsupported helper requirement is visible",
+        type: "evaluated",
+        criteria: "Requires an unsupported helper abstraction beyond the Done Criteria.",
+        target: ">= 8/10",
+      },
+    ]),
+    taskProfile: { planning_profile: "ready_light", size: "S" },
+  });
+
+  assert.equal(result.action, "allow");
+  assert.ok(result.warnings.some((warning) => warning.code === "over_engineering_risk"));
 });
 
 test("allows a three-factor ready-light rubric as a warning when explicit design rationale exists", () => {

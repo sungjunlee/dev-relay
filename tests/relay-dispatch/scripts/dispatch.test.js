@@ -852,6 +852,54 @@ function readyLightPrompt({ task = "ready-light dispatch validation" } = {}) {
   ].join("\n");
 }
 
+function standardPromptWithReadyLightExample() {
+  return [
+    "# Dispatch: Standard docs task",
+    "",
+    "Update docs that include this example metadata:",
+    "",
+    "```yaml",
+    "planning_profile: ready_light",
+    "route_decision: ready_light",
+    "```",
+    "",
+    "This example is content, not the active task profile.",
+  ].join("\n");
+}
+
+function readyLightRubricYaml() {
+  return [
+    "rubric:",
+    "  factors:",
+    "    - name: Task-specific check passes",
+    "      tier: contract",
+    "      type: automated",
+    "      command: \"node --test tests/task-specific.test.js\"",
+    "      target: \"exit 0\"",
+  ].join("\n");
+}
+
+function threeFactorRubricYaml() {
+  return [
+    "rubric:",
+    "  factors:",
+    "    - name: Parser path passes",
+    "      tier: contract",
+    "      type: automated",
+    "      command: \"node --test tests/parser.test.js\"",
+    "      target: \"exit 0\"",
+    "    - name: CLI path passes",
+    "      tier: contract",
+    "      type: automated",
+    "      command: \"node --test tests/cli.test.js\"",
+    "      target: \"exit 0\"",
+    "    - name: Error copy remains actionable",
+    "      tier: quality",
+    "      type: evaluated",
+    "      target: \">= 8/10\"",
+  ].join("\n");
+}
+
 function setupDryRunFixtureRepo() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "relay-dispatch-dry-run-"));
   const repoRoot = path.join(root, "repo");
@@ -4129,6 +4177,74 @@ test("dispatch rejects invalid ready-light rubric before accepting rubric file",
   assert.equal(result.status, "failed");
   assert.equal(result.error_code, "ready_light_factor_count");
   assert.match(result.error, /Ready-light S rubrics require 1-2 substantive factors/);
+
+  fs.unlinkSync(rubricFile);
+});
+
+test("dispatch ignores ready-light examples outside structured task profile metadata", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  writeFakeCodex(binDir);
+  const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}` };
+
+  const rubricFile = path.join(os.tmpdir(), `rubric-standard-example-${Date.now()}.yaml`);
+  fs.writeFileSync(rubricFile, threeFactorRubricYaml(), "utf-8");
+
+  const proc = spawnSync("node", [SCRIPT, repoRoot, ...withRequiredRubric([
+    "-b", "issue-standard-ready-light-example",
+    "--prompt", standardPromptWithReadyLightExample(),
+    "--rubric-file", rubricFile,
+    "--dry-run", "--json",
+  ])], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    env,
+  });
+
+  assert.equal(proc.status, 0, proc.stderr || proc.stdout);
+  const result = JSON.parse(proc.stdout);
+  assert.equal(result.mode, "new");
+
+  fs.unlinkSync(rubricFile);
+});
+
+test("dispatch validates retained ready-light rubric on resume", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  writeFakeCodex(binDir);
+  const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}` };
+
+  const rubricFile = path.join(os.tmpdir(), `rubric-ready-light-valid-${Date.now()}.yaml`);
+  fs.writeFileSync(rubricFile, readyLightRubricYaml(), "utf-8");
+
+  const first = JSON.parse(runDispatch(repoRoot, [
+    "-b", "issue-ready-light-resume-invalid-retained",
+    "--prompt", readyLightPrompt(),
+    "--rubric-file", rubricFile,
+    "--json",
+  ], env));
+
+  const record = readManifest(first.manifestPath);
+  const updated = updateManifestState(record.data, STATES.CHANGES_REQUESTED, "re_dispatch_requested_changes");
+  writeManifest(first.manifestPath, updated, record.body);
+  fs.writeFileSync(path.join(getRunDir(repoRoot, first.runId), "rubric.yaml"), "rubric:\n  factors: []\n", "utf-8");
+
+  const proc = spawnSync("node", [SCRIPT, repoRoot,
+    "--run-id", first.runId,
+    "--prompt", readyLightPrompt({ task: "resume ready-light validation" }),
+    "--dry-run", "--json",
+  ], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    env,
+  });
+
+  assert.notEqual(proc.status, 0);
+  const result = JSON.parse(proc.stdout);
+  assert.equal(result.status, "failed");
+  assert.equal(result.error_code, "ready_light_factor_count");
 
   fs.unlinkSync(rubricFile);
 });

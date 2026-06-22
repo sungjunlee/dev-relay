@@ -119,6 +119,7 @@ const {
   buildGuidanceMetadata,
   extractGuidanceFromPrompt,
   extractReviewAssuranceFromPrompt,
+  extractTaskProfileSummaryFromPrompt,
   GUIDANCE_METADATA_FILENAME,
   persistGuidanceMetadata,
 } = require("./manifest/guidance");
@@ -729,24 +730,42 @@ function enforceRubricPersistence(manifest, runDir) {
 }
 
 function readyLightTaskProfileForDispatch({ promptText, manifest }) {
-  const extractedGuidance = extractGuidanceFromPrompt(promptText);
-  const taskProfile = extractedGuidance?.task_profile_summary
+  // Trust only structured task_profile metadata, not arbitrary examples embedded in the prompt body.
+  const promptProfile = extractTaskProfileSummaryFromPrompt(promptText);
+  const extractedGuidance = promptProfile ? null : extractGuidanceFromPrompt(promptText);
+  return promptProfile
+    || extractedGuidance?.task_profile_summary
     || manifest?.advisory?.guidance?.task_profile_summary
     || null;
-  const promptDeclaresReadyLight = /\b(?:planning_profile|route_decision):\s*["']?ready_light\b/i.test(String(promptText || ""));
-  if (!taskProfile && !promptDeclaresReadyLight) return null;
-  return {
-    ...(taskProfile || {}),
-    ...(promptDeclaresReadyLight ? { planning_profile: "ready_light" } : {}),
-  };
 }
 
-function enforceReadyLightRubricValidation({ rubricFile, promptText, manifest }) {
-  if (!rubricFile) return;
+function readRubricForReadyLightValidation({ rubricFile, manifest, runDir }) {
+  if (rubricFile) {
+    try {
+      return fs.readFileSync(path.resolve(rubricFile), "utf-8");
+    } catch (error) {
+      failEarly(`Failed to read rubric file: ${error.message}`, {
+        error_code: "rubric_file_read_failed",
+        rubric_file: rubricFile,
+      });
+    }
+  }
+
+  if (!hasRubricPath(manifest)) return null;
+  const rubricAnchor = getRubricAnchorStatus(manifest, { runDir, includeContent: true });
+  if (!rubricAnchor.satisfied) {
+    failRubricPersistence(rubricAnchor.error);
+  }
+  return rubricAnchor.content;
+}
+
+function enforceReadyLightRubricValidation({ rubricFile, promptText, manifest, runDir }) {
   const taskProfile = readyLightTaskProfileForDispatch({ promptText, manifest });
   if (!taskProfile) return;
+  const rubricYaml = readRubricForReadyLightValidation({ rubricFile, manifest, runDir });
+  if (!rubricYaml) return;
   const result = validateReadyLightRubric({
-    rubricYaml: fs.readFileSync(path.resolve(rubricFile), "utf-8"),
+    rubricYaml,
     taskProfile,
   });
   if (result.action !== "block") return;
@@ -1184,6 +1203,7 @@ async function main() {
     rubricFile: RUBRIC_FILE,
     promptText: taskPrompt,
     manifest,
+    runDir: manifestRunDir,
   });
 
   const effectiveDispatchModel = resolveEffectiveDispatchModel({
