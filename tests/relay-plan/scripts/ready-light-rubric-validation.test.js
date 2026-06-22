@@ -131,6 +131,8 @@ test("blocks bare repo-wide test runners in ready-light factors", () => {
     "node --test tests/**/*.test.js --test-reporter=spec",
     "pytest",
     "pytest -q",
+    "pytest tests/",
+    "python -m pytest tests/",
     "go test ./...",
     "go test ./... -race",
   ];

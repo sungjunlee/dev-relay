@@ -12,7 +12,8 @@ function commandTokens(command) {
 }
 
 function isRepoWideTarget(token) {
-  return token === "tests" || token.includes("*");
+  const normalized = String(token || "").replace(/\/+$/, "");
+  return normalized === "tests" || normalized.includes("*");
 }
 
 function isRepoWideNodeTest(command) {
