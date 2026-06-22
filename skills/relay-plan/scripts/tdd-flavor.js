@@ -70,6 +70,15 @@ function extractAllFactors(rubricYaml) {
     blockScalar = null;
   }
 
+  function startBlockScalar(field, style, indent) {
+    blockScalar = {
+      field,
+      style,
+      indent,
+      lines: [],
+    };
+  }
+
   function pushCurrent() {
     finishBlockScalar();
     if (current) factors.push(current);
@@ -116,7 +125,12 @@ function extractAllFactors(rubricYaml) {
       current = createFactor();
       currentIndent = factorStart[1].length;
       if (FACTOR_FIELDS.has(factorStart[2])) {
-        current[factorStart[2]] = unquoteYamlScalar(factorStart[3]);
+        const value = unquoteYamlScalar(factorStart[3]);
+        if (value === ">" || value === "|") {
+          startBlockScalar(factorStart[2], value, currentIndent + 2);
+        } else {
+          current[factorStart[2]] = value;
+        }
       }
       continue;
     }
@@ -126,12 +140,7 @@ function extractAllFactors(rubricYaml) {
     if (field) {
       const value = unquoteYamlScalar(field[2]);
       if (value === ">" || value === "|") {
-        blockScalar = {
-          field: field[1],
-          style: value,
-          indent,
-          lines: [],
-        };
+        startBlockScalar(field[1], value, indent);
       } else {
         current[field[1]] = value;
       }

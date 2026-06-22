@@ -105,6 +105,25 @@ test("blocks repo-wide hygiene commands written as block scalars in ready-light 
   assert.ok(result.errors.some((error) => error.code === "repo_hygiene_in_factor"));
 });
 
+test("blocks repo-wide hygiene block scalars when command starts the factor item", () => {
+  const result = validateReadyLightRubric({
+    rubricYaml: [
+      "rubric:",
+      "  factors:",
+      "    - command: >",
+      "        node --test tests/relay-plan/scripts/*.test.js",
+      "      name: Repo suite remains green",
+      "      tier: contract",
+      "      type: automated",
+      "      target: \"exit 0\"",
+    ].join("\n"),
+    taskProfile: { planning_profile: "ready_light", size: "S" },
+  });
+
+  assert.equal(result.action, "block");
+  assert.ok(result.errors.some((error) => error.code === "repo_hygiene_in_factor"));
+});
+
 test("allows a three-factor ready-light rubric as a warning when explicit design rationale exists", () => {
   const result = validateReadyLightRubric({
     rubricYaml: rubricWithFactors([
