@@ -6,6 +6,10 @@ const os = require("os");
 const path = require("path");
 
 const {
+  buildReadinessDecision,
+} = require("../../../skills/relay/scripts/run-preflight");
+
+const {
   STATES,
   createManifestSkeleton,
   createRunId,
@@ -15,6 +19,76 @@ const {
 } = require("../../../skills/relay-dispatch/scripts/relay-manifest");
 
 const SCRIPT = path.join(__dirname, "..", "..", "..", "skills", "relay", "scripts", "run-preflight.js");
+
+test("route decision treats bypass as ready_single without changing the bypass branch", () => {
+  const decision = buildReadinessDecision({
+    readiness_score: { clarity: "high", granularity: "high", verifiability: "high" },
+    bypass: true,
+    next_action: "proceed",
+    signals_summary: "Ready: bypass conditions passed.",
+    task_shape: { strength: "none", strong: false, signals: [] },
+  }, { promptAllowed: false });
+
+  assert.equal(decision.route_decision, "ready_single");
+  assert.equal(decision.recommended_branch, "bypass");
+  assert.equal(decision.branch_labels.bypass.action, "proceed_to_step_2");
+});
+
+test("route decision treats proceed without bypass as ready_light in non-interactive mode", () => {
+  const decision = buildReadinessDecision({
+    readiness_score: { clarity: "high", granularity: "high", verifiability: "high" },
+    bypass: false,
+    next_action: "proceed",
+    signals_summary: "Not bypassed: next action proceed.",
+    task_shape: { strength: "none", strong: false, signals: [] },
+  }, { promptAllowed: false });
+
+  assert.equal(decision.route_decision, "ready_light");
+  assert.equal(decision.recommended_branch, "ready-light");
+  assert.equal(decision.prompt_summary, null);
+  assert.equal(decision.branch_labels["ready-light"].action, "proceed_to_step_2_light_planning");
+});
+
+test("route decision keeps qa_needed on the existing prompt or noninteractive-fail path", () => {
+  const interactive = buildReadinessDecision({
+    readiness_score: { clarity: "medium", granularity: "medium", verifiability: "low" },
+    bypass: false,
+    next_action: "qa_needed",
+    signals_summary: "Gaps: verifiability=low.",
+    task_shape: { strength: "none", strong: false, signals: [] },
+  }, { promptAllowed: true });
+  const noninteractive = buildReadinessDecision({
+    readiness_score: { clarity: "medium", granularity: "medium", verifiability: "low" },
+    bypass: false,
+    next_action: "qa_needed",
+    signals_summary: "Gaps: verifiability=low.",
+    task_shape: { strength: "none", strong: false, signals: [] },
+  }, { promptAllowed: false });
+
+  assert.equal(interactive.route_decision, "readiness_prompt");
+  assert.equal(interactive.recommended_branch, "prompt");
+  assert.equal(interactive.prompt_summary, "Gaps: verifiability=low.");
+  assert.equal(noninteractive.route_decision, "readiness_prompt");
+  assert.equal(noninteractive.recommended_branch, "noninteractive-fail");
+});
+
+test("route decision exposes needs_split for strong task-shape signals", () => {
+  const decision = buildReadinessDecision({
+    readiness_score: { clarity: "medium", granularity: "low", verifiability: "high" },
+    bypass: false,
+    next_action: "qa_needed",
+    signals_summary: "Gaps: granularity=low, task-shape decomposition.",
+    task_shape: {
+      strength: "strong",
+      strong: true,
+      signals: [{ condition: "broad_scope_language", evidence: "foundation" }],
+    },
+  }, { promptAllowed: false });
+
+  assert.equal(decision.route_decision, "needs_split");
+  assert.equal(decision.recommended_branch, "noninteractive-fail");
+  assert.equal(decision.branch_labels["noninteractive-fail"].event_payload.route_decision, "needs_split");
+});
 
 function setupReadyRun({ liveHead = "abc123", reviewedSha = "abc123", manifestHead = "abc123" } = {}) {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-preflight-"));

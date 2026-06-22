@@ -231,31 +231,55 @@ function runReadinessProbe({ issueNumber, body, bodyFile, manifestPath }) {
   };
 }
 
+function routeDecisionFromReadiness(envelope) {
+  if (!envelope) return "readiness_prompt";
+  if (envelope.bypass === true) return "ready_single";
+  if (envelope.task_shape?.strong === true) return "needs_split";
+  if (envelope.next_action === "proceed") return "ready_light";
+  return "readiness_prompt";
+}
+
 function buildReadinessDecision(envelope, { promptAllowed }) {
+  const routeDecision = routeDecisionFromReadiness(envelope);
   const score = envelope?.readiness_score || null;
   const commonPayload = {
     readiness_score: score,
     bypass: envelope?.bypass ?? null,
     next_action: envelope?.next_action || null,
+    route_decision: routeDecision,
+    task_shape: envelope?.task_shape || null,
     signals_summary: envelope?.signals_summary || null,
   };
 
   let recommendedBranch = "bypass";
-  if (envelope && envelope.bypass !== true) {
+  if (routeDecision === "ready_light") {
+    recommendedBranch = "ready-light";
+  } else if (routeDecision !== "ready_single") {
     recommendedBranch = promptAllowed ? "prompt" : "noninteractive-fail";
   }
 
   return {
+    route_decision: routeDecision,
     recommended_branch: recommendedBranch,
     prompt_allowed: promptAllowed,
-    prompt_summary: envelope && envelope.bypass !== true && promptAllowed
-      ? envelope.signals_summary
+    prompt_summary: ["readiness_prompt", "needs_split"].includes(routeDecision) && promptAllowed
+      ? envelope?.signals_summary || null
       : null,
     branch_labels: {
       bypass: {
         label: "bypass",
         [EVENT_FIELD]: EVENTS.READINESS_PROBE,
         action: "proceed_to_step_2",
+      },
+      "ready-light": {
+        label: "ready-light",
+        [EVENT_FIELD]: EVENTS.READINESS_PROBE,
+        action: "proceed_to_step_2_light_planning",
+        planning_profile: "ready_light",
+        event_payload: {
+          [EVENT_FIELD]: EVENTS.READINESS_PROBE,
+          ...commonPayload,
+        },
       },
       "chain-y": {
         label: "chain-y",
@@ -622,6 +646,7 @@ module.exports = {
   checkPullRequest,
   compareReviewSnapshot,
   main,
+  routeDecisionFromReadiness,
   routeFromInflight,
   snapshotReview,
 };

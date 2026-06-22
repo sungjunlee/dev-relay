@@ -80,6 +80,39 @@ test("docs task profile selects docs reader-success guidance", () => {
   assert.ok(!profile.guidance_packs.includes("user-replay-evidence"));
 });
 
+test("ready-light task profile defaults to S-size quick execution", () => {
+  const profile = deriveTaskProfile({
+    doneCriteria: "Update skills/relay/scripts/run-preflight.js so proceed readiness skips Q&A.",
+    probeSignal: PROBE_SIGNAL,
+    historicalSignal: HISTORICAL_SIGNAL,
+    taskRisk: { route_decision: "ready_light" },
+  });
+
+  assert.equal(profile.size, "S");
+  assert.equal(profile.execution_mode, "quick");
+  assert.equal(profile.review_assurance, "standard");
+  assert.ok(profile.guidance_packs.includes("surgical-change"));
+  assert.ok(profile.guidance_packs.includes("verification-evidence"));
+});
+
+test("ready-light task profile does not downshift risk-bearing tasks", () => {
+  const profile = deriveTaskProfile({
+    doneCriteria: "Validate manifest state before applying review gate decisions.",
+    probeSignal: PROBE_SIGNAL,
+    historicalSignal: HISTORICAL_SIGNAL,
+    taskRisk: {
+      route_decision: "ready_light",
+      risk_tags: ["state-machine"],
+    },
+  });
+
+  assert.equal(profile.size, "S");
+  assert.ok(profile.risk_tags.includes("state-machine"));
+  assert.equal(profile.execution_mode, "fresh-context");
+  assert.equal(profile.review_assurance, "hardened");
+  assert.ok(profile.guidance_packs.includes("trust-boundary"));
+});
+
 test("generic code and docs tasks do not select user replay evidence guidance", () => {
   const codeProfile = deriveTaskProfile({
     doneCriteria: "Add a relay-plan parser helper with unit tests and keep the public API backward compatible.",

@@ -33,11 +33,19 @@ node "${RELAY_SKILL_ROOT:-skills}/relay/scripts/run-preflight.js" --stage route 
   - `readiness_check_failed`: emitted by the skill decision layer for `chain-abort`.
   - `readiness_check_failed_nontty`: emitted by the skill decision layer for `noninteractive-fail`.
 - Branch labels:
-  - `bypass`: probe returns `bypass=true`; proceed to Step 2.
+  - `bypass`: route decision is `ready_single`; probe returns `bypass=true`; proceed to Step 2.
+  - `ready-light`: route decision is `ready_light`; readiness returned `next_action=proceed` without a bypass anchor; proceed to Step 2 using S-size quick planning and compact rubric guidance.
   - `chain-y`: probe returns `bypass=false`, prompt is allowed, user answers `y`; invoke relay-ready Q&A, persist the handoff, set `manifest.anchor.readiness`, then resume Step 2.
   - `chain-n`: probe returns `bypass=false`, prompt is allowed, user answers `n`; emit `bypass_override_by_user` with the script's event payload and proceed to Step 2.
   - `chain-abort`: probe returns `bypass=false`, prompt is allowed, user answers `abort`; emit `readiness_check_failed` with the script's event payload and close the run.
-  - `noninteractive-fail`: probe returns `bypass=false` and no prompt is allowed; emit `readiness_check_failed_nontty` with the script's event payload and close the run.
+  - `noninteractive-fail`: route decision is `readiness_prompt` or `needs_split` and no prompt is allowed; emit `readiness_check_failed_nontty` with the script's event payload and close the run.
+
+Route decisions are advisory labels, not lifecycle states:
+
+- `ready_single`: preserve the existing bypass fast path.
+- `ready_light`: keep the task on relay, but plan it as a small quick task with compact rubric guidance.
+- `readiness_prompt`: preserve the existing `qa_needed` prompt or non-interactive failure behavior.
+- `needs_split`: strong task-shape signals indicate decomposition should be considered before dispatch; use the same prompt/non-interactive failure mechanics as readiness gaps.
 
 Do not move the readiness prompt into the script. The exact prompt remains:
 `AskUserQuestion("Readiness gaps detected: ${SUMMARY}. Invoke relay-ready first? [y/n/abort]")`.
