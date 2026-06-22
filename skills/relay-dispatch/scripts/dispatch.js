@@ -117,6 +117,7 @@ const { findUnknownFlags, getPositionals, modeLabel, readArg, schemaHasFlag } = 
 const { formatAttemptsForPrompt, readPreviousAttempts } = require("./manifest/attempts");
 const {
   buildGuidanceMetadata,
+  extractGuidanceFromPrompt,
   extractReviewAssuranceFromPrompt,
   GUIDANCE_METADATA_FILENAME,
   persistGuidanceMetadata,
@@ -135,6 +136,9 @@ const {
 } = require("./agent-adapters/policy");
 const { execGit } = require("./exec");
 const { resolveReasoningEffort } = require("./rubric-size");
+const {
+  validateReadyLightRubric,
+} = require("../../relay-plan/scripts/rubric-validation");
 const {
   assertRelayPolicyGate,
   buildPolicyGateFailureEnvelope,
@@ -724,6 +728,35 @@ function enforceRubricPersistence(manifest, runDir) {
   }
 }
 
+function readyLightTaskProfileForDispatch({ promptText, manifest }) {
+  const extractedGuidance = extractGuidanceFromPrompt(promptText);
+  const taskProfile = extractedGuidance?.task_profile_summary
+    || manifest?.advisory?.guidance?.task_profile_summary
+    || null;
+  const promptDeclaresReadyLight = /\b(?:planning_profile|route_decision):\s*["']?ready_light\b/i.test(String(promptText || ""));
+  if (!taskProfile && !promptDeclaresReadyLight) return null;
+  return {
+    ...(taskProfile || {}),
+    ...(promptDeclaresReadyLight ? { planning_profile: "ready_light" } : {}),
+  };
+}
+
+function enforceReadyLightRubricValidation({ rubricFile, promptText, manifest }) {
+  if (!rubricFile) return;
+  const taskProfile = readyLightTaskProfileForDispatch({ promptText, manifest });
+  if (!taskProfile) return;
+  const result = validateReadyLightRubric({
+    rubricYaml: fs.readFileSync(path.resolve(rubricFile), "utf-8"),
+    taskProfile,
+  });
+  if (result.action !== "block") return;
+  const firstError = result.errors[0] || { code: "ready_light_rubric_invalid", message: "Ready-light rubric validation failed." };
+  failEarly(firstError.message, {
+    error_code: firstError.code,
+    ready_light_rubric_validation: result,
+  });
+}
+
 function validateExecutorCli() {
   let adapter;
   try {
@@ -1146,6 +1179,12 @@ async function main() {
       });
     }
   }
+
+  enforceReadyLightRubricValidation({
+    rubricFile: RUBRIC_FILE,
+    promptText: taskPrompt,
+    manifest,
+  });
 
   const effectiveDispatchModel = resolveEffectiveDispatchModel({
     cliModel: MODEL,

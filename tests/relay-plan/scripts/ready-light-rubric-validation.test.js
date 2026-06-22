@@ -150,6 +150,28 @@ test("blocks bare repo-wide test runners in ready-light factors", () => {
   }
 });
 
+test("allows path-scoped pytest commands in ready-light factors", () => {
+  const commands = [
+    "pytest tests/foo_test.py",
+    "python -m pytest tests/foo_test.py::test_case",
+  ];
+
+  for (const command of commands) {
+    const result = validateReadyLightRubric({
+      rubricYaml: rubricWithFactors([
+        {
+          name: "Task-specific pytest coverage passes",
+          command,
+        },
+      ]),
+      taskProfile: { planning_profile: "ready_light", size: "S" },
+    });
+
+    assert.equal(result.action, "allow", command);
+    assert.deepEqual(result.errors, [], command);
+  }
+});
+
 test("allows a three-factor ready-light rubric as a warning when explicit design rationale exists", () => {
   const result = validateReadyLightRubric({
     rubricYaml: rubricWithFactors([

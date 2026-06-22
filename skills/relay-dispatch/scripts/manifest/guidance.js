@@ -7,7 +7,7 @@ const { normalizeReviewAssurance } = require("./review-assurance");
 const GUIDANCE_METADATA_FILENAME = "guidance-metadata.json";
 const DISPATCH_PROMPT_FILENAME = "dispatch-prompt.md";
 
-const SCALAR_FIELDS = new Set(["size", "change_type", "execution_mode", "review_assurance"]);
+const SCALAR_FIELDS = new Set(["size", "change_type", "execution_mode", "review_assurance", "planning_profile"]);
 const ARRAY_FIELDS = new Set(["domains", "risk_tags", "guidance_packs", "derivation_inputs"]);
 
 function stripYamlScalar(value) {
@@ -99,6 +99,9 @@ function buildTaskProfileSummary(profile) {
       ? { derivation_inputs: uniqueStrings(profile.derivation_inputs) }
       : {}),
   };
+  if (profile.planning_profile) {
+    summary.planning_profile = profile.planning_profile;
+  }
   if (profile.review_assurance) {
     summary.review_assurance = normalizeReviewAssurance(profile.review_assurance);
   }

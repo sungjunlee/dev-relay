@@ -1,7 +1,7 @@
 const { extractAllFactors } = require("./tdd-flavor");
 
 const SUBSTANTIVE_TIERS = new Set(["contract", "quality"]);
-const REPO_HYGIENE_COMMAND = /\b(?:npm|pnpm|yarn)\s+(?:run\s+)?(?:test|lint|typecheck|check)\b|\btsc\s+--noEmit\b|\beslint\b|\bprettier\b|(?:^|\s)node\s+--test\s*$|\bnode\s+--test\s+(?:tests(?:\s|$)|tests\/\S*\*)|\b(?:python\s+-m\s+)?pytest\b|\bgo\s+test\s+\.\/\.\.\./i;
+const REPO_HYGIENE_COMMAND = /\b(?:npm|pnpm|yarn)\s+(?:run\s+)?(?:test|lint|typecheck|check)\b|\btsc\s+--noEmit\b|\beslint\b|\bprettier\b|(?:^|\s)node\s+--test\s*$|\bnode\s+--test\s+(?:tests(?:\s|$)|tests\/\S*\*)|(?:^|\s)(?:python\s+-m\s+)?pytest\s*$|\bgo\s+test\s+\.\/\.\.\./i;
 const OVER_ENGINEERING_TEXT = /\b(?:unsupported\s+)?(?:helper|dependency|config|configuration|abstraction)\b/i;
 
 function normalizeTaskProfile(taskProfile = {}) {

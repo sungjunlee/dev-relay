@@ -827,6 +827,31 @@ function guidancePrompt({ task = "guidance test task", reviewAssurance = null } 
   ].join("\n");
 }
 
+function readyLightPrompt({ task = "ready-light dispatch validation" } = {}) {
+  return [
+    "# Dispatch: Ready-light validation",
+    "",
+    task,
+    "",
+    "## Task Profile",
+    "",
+    "```yaml",
+    "task_profile:",
+    "  planning_profile: ready_light",
+    "  size: S",
+    "  change_type: feature",
+    "  domains:",
+    "    - relay-plan",
+    "  risk_tags: []",
+    "  execution_mode: quick",
+    "  review_assurance: standard",
+    "  guidance_packs:",
+    "    - surgical-change",
+    "    - verification-evidence",
+    "```",
+  ].join("\n");
+}
+
 function setupDryRunFixtureRepo() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "relay-dispatch-dry-run-"));
   const repoRoot = path.join(root, "repo");
@@ -4074,6 +4099,36 @@ test("dispatch dry-run includes rubric file info", () => {
   ], env));
 
   assert.equal(result.rubricFile, rubricFile);
+
+  fs.unlinkSync(rubricFile);
+});
+
+test("dispatch rejects invalid ready-light rubric before accepting rubric file", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  writeFakeCodex(binDir);
+  const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}` };
+
+  const rubricFile = path.join(os.tmpdir(), `rubric-ready-light-invalid-${Date.now()}.yaml`);
+  fs.writeFileSync(rubricFile, "rubric:\n  factors: []\n", "utf-8");
+
+  const proc = spawnSync("node", [SCRIPT, repoRoot, ...withRequiredRubric([
+    "-b", "issue-ready-light-invalid-rubric",
+    "--prompt", readyLightPrompt(),
+    "--rubric-file", rubricFile,
+    "--dry-run", "--json",
+  ])], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    env,
+  });
+
+  assert.notEqual(proc.status, 0);
+  const result = JSON.parse(proc.stdout);
+  assert.equal(result.status, "failed");
+  assert.equal(result.error_code, "ready_light_factor_count");
+  assert.match(result.error, /Ready-light S rubrics require 1-2 substantive factors/);
 
   fs.unlinkSync(rubricFile);
 });
