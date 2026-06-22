@@ -57,14 +57,40 @@ function extractAllFactors(rubricYaml) {
   let factorsIndent = null;
   let current = null;
   let currentIndent = null;
+  let blockScalar = null;
+
+  function finishBlockScalar() {
+    if (!blockScalar || !current) {
+      blockScalar = null;
+      return;
+    }
+    current[blockScalar.field] = blockScalar.style === "|"
+      ? blockScalar.lines.join("\n").trim()
+      : blockScalar.lines.map((line) => line.trim()).join(" ").trim();
+    blockScalar = null;
+  }
 
   function pushCurrent() {
+    finishBlockScalar();
     if (current) factors.push(current);
     current = null;
     currentIndent = null;
   }
 
   for (const line of String(rubricYaml || "").split(/\r?\n/)) {
+    if (blockScalar) {
+      const indent = line.match(/^\s*/)[0].length;
+      if (/^\s*$/.test(line)) {
+        blockScalar.lines.push("");
+        continue;
+      }
+      if (indent > blockScalar.indent) {
+        blockScalar.lines.push(line);
+        continue;
+      }
+      finishBlockScalar();
+    }
+
     if (/^\s*(#.*)?$/.test(line)) continue;
 
     const section = line.match(/^(\s*)([A-Za-z_][\w.-]*):\s*(.*?)\s*$/);
@@ -98,7 +124,17 @@ function extractAllFactors(rubricYaml) {
     if (!current || indent <= currentIndent) continue;
     const field = line.match(/^\s*(name|tier|type|command|criteria|target|tdd_anchor|tdd_runner|fix_hint):\s*(.*?)\s*$/);
     if (field) {
-      current[field[1]] = unquoteYamlScalar(field[2]);
+      const value = unquoteYamlScalar(field[2]);
+      if (value === ">" || value === "|") {
+        blockScalar = {
+          field: field[1],
+          style: value,
+          indent,
+          lines: [],
+        };
+      } else {
+        current[field[1]] = value;
+      }
     }
   }
 

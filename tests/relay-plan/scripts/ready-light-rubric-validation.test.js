@@ -39,6 +39,25 @@ test("allows a one-factor ready-light S mechanical rubric", () => {
   assert.deepEqual(result.errors, []);
 });
 
+test("blocks a ready-light S rubric with no substantive factors", () => {
+  const result = validateReadyLightRubric({
+    rubricYaml: [
+      "rubric:",
+      "  factors:",
+      "    - name: Repo suite remains green",
+      "      tier: hygiene",
+      "      type: automated",
+      "      command: \"node --test tests/relay-plan/scripts/*.test.js\"",
+      "      target: \"exit 0\"",
+    ].join("\n"),
+    taskProfile: { planning_profile: "ready_light", size: "S" },
+  });
+
+  assert.equal(result.action, "block");
+  assert.equal(result.substantive_total, 0);
+  assert.ok(result.errors.some((error) => error.code === "ready_light_factor_count"));
+});
+
 test("blocks a three-factor ready-light S mechanical rubric without explicit risk rationale", () => {
   const result = validateReadyLightRubric({
     rubricYaml: rubricWithFactors([
@@ -65,6 +84,25 @@ test("blocks a three-factor ready-light S mechanical rubric without explicit ris
   assert.ok(result.errors.some((error) => error.code === "ready_light_factor_count"));
   assert.ok(result.errors.some((error) => error.code === "repo_hygiene_in_factor"));
   assert.ok(result.warnings.some((warning) => warning.code === "over_engineering_risk"));
+});
+
+test("blocks repo-wide hygiene commands written as block scalars in ready-light factors", () => {
+  const result = validateReadyLightRubric({
+    rubricYaml: [
+      "rubric:",
+      "  factors:",
+      "    - name: Repo suite remains green",
+      "      tier: contract",
+      "      type: automated",
+      "      command: >",
+      "        node --test tests/relay-plan/scripts/*.test.js",
+      "      target: \"exit 0\"",
+    ].join("\n"),
+    taskProfile: { planning_profile: "ready_light", size: "S" },
+  });
+
+  assert.equal(result.action, "block");
+  assert.ok(result.errors.some((error) => error.code === "repo_hygiene_in_factor"));
 });
 
 test("allows a three-factor ready-light rubric as a warning when explicit design rationale exists", () => {

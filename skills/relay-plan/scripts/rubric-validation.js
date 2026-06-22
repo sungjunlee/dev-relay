@@ -79,12 +79,12 @@ function validateReadyLightRubric({ rubricYaml, taskProfile = {} } = {}) {
     ));
   }
 
-  if (substantiveFactors.length > 2) {
+  if (substantiveFactors.length < 1 || substantiveFactors.length > 2) {
     const countIssue = issue(
       "ready_light_factor_count",
-      "Ready-light S rubrics default to 1-2 substantive factors; more requires explicit risk or design-bearing rationale."
+      "Ready-light S rubrics require 1-2 substantive factors by default; more requires explicit risk or design-bearing rationale."
     );
-    if (hasExplicitRiskOrDesignRationale(taskProfile)) {
+    if (substantiveFactors.length > 2 && hasExplicitRiskOrDesignRationale(taskProfile)) {
       warnings.push(countIssue);
     } else {
       errors.push(countIssue);
