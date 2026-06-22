@@ -79,8 +79,16 @@ function parseTaskProfileYaml(blockText) {
 
 function extractTaskProfileBlock(promptText) {
   const text = String(promptText || "").replace(/\r\n/g, "\n");
+  const sectionMatch = /^## Task Profile\s*$/m.exec(text);
+  if (!sectionMatch) return null;
+
+  const sectionStart = sectionMatch.index + sectionMatch[0].length;
+  const nextHeadingMatch = /^##\s+/m.exec(text.slice(sectionStart));
+  const sectionText = nextHeadingMatch
+    ? text.slice(sectionStart, sectionStart + nextHeadingMatch.index)
+    : text.slice(sectionStart);
   const fencePattern = /```(?:yaml|yml)?\s*\n([\s\S]*?)```/g;
-  for (const match of text.matchAll(fencePattern)) {
+  for (const match of sectionText.matchAll(fencePattern)) {
     if (/^task_profile:\s*$/m.test(match[1])) {
       return match[1];
     }

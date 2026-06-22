@@ -6,6 +6,27 @@ const PACKAGE_HYGIENE_COMMAND = /^\s*(?:npm|pnpm|yarn)\s+(?:run\s+)?(?:test|lint
 const SIMPLE_HYGIENE_COMMAND = /^\s*(?:tsc\s+--noEmit|eslint|prettier)\s*$/i;
 // Only warn on explicitly unsupported extra structure, not ordinary mentions of helpers/config.
 const OVER_ENGINEERING_TEXT = /\bunsupported\s+(?:helper|dependency|config|configuration|abstraction)\b/i;
+const NODE_TEST_OPTIONS_WITH_VALUE = new Set([
+  "--test-concurrency",
+  "--test-name-pattern",
+  "--test-reporter",
+  "--test-reporter-destination",
+  "--test-shard",
+  "--test-timeout",
+]);
+const PYTEST_OPTIONS_WITH_VALUE = new Set([
+  "--capture",
+  "--confcutdir",
+  "--cov",
+  "--cov-report",
+  "--import-mode",
+  "--junit-xml",
+  "--junitxml",
+  "--maxfail",
+  "--rootdir",
+  "--tb",
+]);
+const PYTEST_SHORT_OPTIONS_WITH_VALUE = new Set(["-c", "-k", "-m", "-o", "-p", "-W"]);
 
 function commandTokens(command) {
   return String(command || "").trim().split(/\s+/).filter(Boolean);
@@ -16,11 +37,38 @@ function isRepoWideTarget(token) {
   return normalized === "tests" || normalized.includes("*");
 }
 
+function positionalTargets(tokens, {
+  longOptionsWithValue = new Set(),
+  shortOptionsWithValue = new Set(),
+} = {}) {
+  const targets = [];
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index];
+    if (token.startsWith("--")) {
+      const [optionName] = token.split("=", 1);
+      if (!token.includes("=") && longOptionsWithValue.has(optionName)) {
+        index += 1;
+      }
+      continue;
+    }
+    if (/^-[A-Za-z]+$/.test(token)) {
+      if (shortOptionsWithValue.has(token)) {
+        index += 1;
+      }
+      continue;
+    }
+    targets.push(token);
+  }
+  return targets;
+}
+
 function isRepoWideNodeTest(command) {
   const tokens = commandTokens(command);
   const testIndex = tokens.findIndex((token, index) => token === "--test" && index > 0 && tokens[index - 1] === "node");
   if (testIndex === -1) return false;
-  const targets = tokens.slice(testIndex + 1).filter((token) => !token.startsWith("-"));
+  const targets = positionalTargets(tokens.slice(testIndex + 1), {
+    longOptionsWithValue: NODE_TEST_OPTIONS_WITH_VALUE,
+  });
   return targets.length === 0 || targets.some(isRepoWideTarget);
 }
 
@@ -30,7 +78,10 @@ function isRepoWidePytest(command) {
     ? 0
     : (tokens[0] === "python" && tokens[1] === "-m" && tokens[2] === "pytest" ? 2 : -1);
   if (pytestIndex === -1) return false;
-  const targets = tokens.slice(pytestIndex + 1).filter((token) => !token.startsWith("-"));
+  const targets = positionalTargets(tokens.slice(pytestIndex + 1), {
+    longOptionsWithValue: PYTEST_OPTIONS_WITH_VALUE,
+    shortOptionsWithValue: PYTEST_SHORT_OPTIONS_WITH_VALUE,
+  });
   return targets.length === 0 || targets.some(isRepoWideTarget);
 }
 

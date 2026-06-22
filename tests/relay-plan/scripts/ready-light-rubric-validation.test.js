@@ -128,9 +128,13 @@ test("blocks bare repo-wide test runners in ready-light factors", () => {
   const commands = [
     "node --test",
     "node --test --test-reporter=spec",
+    "node --test --test-reporter spec",
     "node --test tests/**/*.test.js --test-reporter=spec",
+    "node --test tests/**/*.test.js --test-reporter spec",
     "pytest",
     "pytest -q",
+    "pytest -k smoke",
+    "pytest --maxfail 1",
     "pytest tests/",
     "python -m pytest tests/",
     "go test ./...",
@@ -161,7 +165,10 @@ test("allows path-scoped pytest commands in ready-light factors", () => {
     "npm test tests/foo.test.js",
     "pnpm test tests/foo.test.js",
     "yarn test tests/foo.test.js",
+    "node --test tests/foo.test.js --test-reporter spec",
     "pytest tests/foo_test.py",
+    "pytest tests/foo_test.py -k smoke",
+    "pytest tests/foo_test.py --maxfail 1",
     "python -m pytest tests/foo_test.py::test_case",
   ];
 

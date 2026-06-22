@@ -891,6 +891,40 @@ function standardPromptWithReadyLightExample() {
   ].join("\n");
 }
 
+function standardPromptWithTaskProfileExampleBeforeActiveProfile() {
+  return [
+    "# Dispatch: Standard docs task",
+    "",
+    "Update docs that include this example metadata:",
+    "",
+    "```yaml",
+    "task_profile:",
+    "  planning_profile: ready_light",
+    "  size: S",
+    "  guidance_packs:",
+    "    - surgical-change",
+    "```",
+    "",
+    "The example above is content, not the active task profile.",
+    "",
+    "## Task Profile",
+    "",
+    "```yaml",
+    "task_profile:",
+    "  planning_profile: standard",
+    "  size: M",
+    "  change_type: docs",
+    "  domains:",
+    "    - docs",
+    "  risk_tags: []",
+    "  execution_mode: standard",
+    "  review_assurance: standard",
+    "  guidance_packs:",
+    "    - docs-reader-success",
+    "```",
+  ].join("\n");
+}
+
 function readyLightRubricYaml() {
   return [
     "rubric:",
@@ -4218,6 +4252,34 @@ test("dispatch ignores ready-light examples outside structured task profile meta
   const proc = spawnSync("node", [SCRIPT, repoRoot, ...withRequiredRubric([
     "-b", "issue-standard-ready-light-example",
     "--prompt", standardPromptWithReadyLightExample(),
+    "--rubric-file", rubricFile,
+    "--dry-run", "--json",
+  ])], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    env,
+  });
+
+  assert.equal(proc.status, 0, proc.stderr || proc.stdout);
+  const result = JSON.parse(proc.stdout);
+  assert.equal(result.mode, "new");
+
+  fs.unlinkSync(rubricFile);
+});
+
+test("dispatch ignores task_profile examples before active Task Profile metadata", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  writeFakeCodex(binDir);
+  const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}` };
+
+  const rubricFile = path.join(os.tmpdir(), `rubric-standard-task-profile-example-${Date.now()}.yaml`);
+  fs.writeFileSync(rubricFile, threeFactorRubricYaml(), "utf-8");
+
+  const proc = spawnSync("node", [SCRIPT, repoRoot, ...withRequiredRubric([
+    "-b", "issue-standard-task-profile-example",
+    "--prompt", standardPromptWithTaskProfileExampleBeforeActiveProfile(),
     "--rubric-file", rubricFile,
     "--dry-run", "--json",
   ])], {
