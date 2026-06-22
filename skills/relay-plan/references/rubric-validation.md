@@ -71,6 +71,22 @@ probe_signal.scripts: no quality infra detected
 Grade: B
 Action: dispatch allowed
 
+Ready-light compact example
+---------------------------
+Planning profile: ready_light
+Prerequisites count: 1
+Contract factors: 1
+Quality factors: 0
+Substantive total: 1
+Quality ratio: N/A (ready-light S-size task)
+Auto coverage: 1 / 2 checks automated across prerequisites + factors
+Calibration status: skipped (ready-light)
+Risk signals: none
+Rationale: Readiness already returned proceed, but no bypass anchor exists; use one observable contract factor plus the smallest verification path.
+Over-engineering check: Unsupported helper, dependency, or config requirements are over-engineering risk.
+Grade: B
+Action: dispatch allowed
+
 Synthetic populated signal example
 ---------------------------------
 Prerequisites count: 2

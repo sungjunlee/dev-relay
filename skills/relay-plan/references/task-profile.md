@@ -32,6 +32,7 @@ Build the profile from the same planning evidence used for the rubric:
 - probe signal: use available tests, CI, scripts, and detected project tools as evidence for domains and runnable verification, not as automatic commands.
 - historical signal: use stuck factors, divergence hotspots, and average rounds to choose stronger working-style guidance when quality convergence has historically taken more rounds.
 - task risk: surface trust boundaries, state machines, public APIs, migrations, data loss, prompt contracts, or backward-compatibility concerns as `risk_tags`.
+- readiness route: when task risk includes `route_decision: ready_light`, default to `size: S` and `execution_mode: quick` unless risk tags require stronger review or fresh context.
 
 ## Planner Boundary
 
@@ -42,6 +43,7 @@ When `guidance_packs` is non-empty, dispatch prompts render both the profile met
 ## Selection Hints
 
 - Code tasks normally select `surgical-change` and `verification-evidence`.
+- Ready-light code tasks should stay S-size, use one observable contract factor when possible, and avoid unsupported helper, dependency, or config requirements.
 - Documentation tasks select `docs-reader-success`.
 - User-visible product-flow tasks can select `user-replay-evidence` for concise replay notes.
 - Refactors and quality-risk M+ code tasks select `simplify-pass`.

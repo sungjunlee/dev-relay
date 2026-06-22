@@ -84,6 +84,17 @@ test("rubric validation preserves the S mechanical quality-card example", () => 
   assert.match(text, /Rationale: Recovered Done Criteria require one observable behavior change/);
 });
 
+test("rubric validation documents the ready-light compact rubric boundary", () => {
+  const text = readReference("rubric-validation.md");
+
+  assert.match(text, /Ready-light compact example/);
+  assert.match(text, /Planning profile: ready_light/);
+  assert.match(text, /Contract factors: 1/);
+  assert.match(text, /Quality factors: 0/);
+  assert.match(text, /Unsupported helper, dependency, or config requirements are over-engineering risk/);
+  assert.match(text, /Action: dispatch allowed/);
+});
+
 test("rubric stress-test is gated by ambiguity or risk signal", () => {
   const text = readReference("rubric-stress-test.md");
   const skill = readSkill();

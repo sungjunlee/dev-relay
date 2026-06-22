@@ -38,6 +38,9 @@ function assertEnvelopeShape(envelope) {
   assert.ok(["none", "soft", "strong"].includes(envelope.task_shape.strength));
   assert.equal(typeof envelope.task_shape.strong, "boolean");
   assert.ok(Array.isArray(envelope.task_shape.signals));
+  assert.equal(typeof envelope.risk, "object");
+  assert.equal(typeof envelope.risk.high, "boolean");
+  assert.ok(Array.isArray(envelope.risk.signals));
   assert.equal(typeof envelope.elapsed_ms, "number");
 }
 
@@ -175,6 +178,8 @@ test("non_interactive_abort_signal exposes bypass and escalate action for orches
   assertEnvelopeShape(envelope);
   assert.equal(envelope.bypass, false);
   assert.equal(envelope.next_action, "escalate");
+  assert.equal(envelope.risk.high, true);
+  assert.deepEqual(envelope.risk.signals, ["high_risk_keyword"]);
 });
 
 test("performance_microbenchmark keeps p95 elapsed_ms below 200ms over 50 CLI invocations", (t) => {

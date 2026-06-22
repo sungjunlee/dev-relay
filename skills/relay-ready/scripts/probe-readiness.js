@@ -106,6 +106,18 @@ function taskShapeEnvelope(taskShape) {
   };
 }
 
+function riskEnvelope(scoreResult) {
+  const highRisk = Array.isArray(scoreResult?.signals)
+    && scoreResult.signals.some((signal) => (
+      signal?.condition === READINESS_CONDITIONS.HIGH_RISK_KEYWORD
+        && /^fail:/i.test(String(signal.evidence || ""))
+    ));
+  return {
+    high: highRisk,
+    signals: highRisk ? [READINESS_CONDITIONS.HIGH_RISK_KEYWORD] : [],
+  };
+}
+
 function buildEnvelope(scoreResult, elapsedMs) {
   return {
     readiness_score: {
@@ -117,6 +129,7 @@ function buildEnvelope(scoreResult, elapsedMs) {
     next_action: scoreResult.next_action,
     signals_summary: summarizeSignals(scoreResult),
     task_shape: taskShapeEnvelope(scoreResult.task_shape),
+    risk: riskEnvelope(scoreResult),
     elapsed_ms: elapsedMs,
   };
 }
@@ -132,6 +145,7 @@ function buildDegradedEnvelope(error, elapsedMs) {
     next_action: "proceed",
     signals_summary: clipLine(`Readiness probe degraded; proceeding fail-open: ${error.message}`),
     task_shape: emptyTaskShape(),
+    risk: { high: false, signals: [] },
     elapsed_ms: elapsedMs,
   };
 }

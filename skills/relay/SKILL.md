@@ -42,8 +42,9 @@ Branch on the JSON using [preflight-guards.md](references/preflight-guards.md); 
 - `inflight.route == "existing-open-pr"` → set `PR_NUM`, skip Steps 2-3, and review the existing PR.
 - `inflight.route == "existing-merged-pr"` → update the sprint file to `[x]` if present and stop.
 - `inflight.route == "inflight-run"` → resume or inspect that run; continue at its manifest state.
-- `readiness.bypass == true` → proceed to Step 2.
-- `readiness.bypass == false` and `.decision.prompt_allowed == true` → set `SUMMARY=.readiness.signals_summary` and issue exactly `AskUserQuestion("Readiness gaps detected: ${SUMMARY}. Invoke relay-ready first? [y/n/abort]")`.
+- `readiness.decision.route_decision == "ready_single"` → proceed to Step 2.
+- `readiness.decision.route_decision == "ready_light"` → proceed to Step 2 with S-size quick planning and compact rubric guidance.
+- `readiness.decision.route_decision in ["readiness_prompt", "needs_split"]` and `.decision.prompt_allowed == true` → set `SUMMARY=.readiness.signals_summary` and issue exactly `AskUserQuestion("Readiness gaps detected: ${SUMMARY}. Invoke relay-ready first? [y/n/abort]")`.
 - `chain-y` → invoke relay-ready Q&A, wait, persist the handoff, set `manifest.anchor.readiness`, then resume Step 2.
 - `chain-n` → emit `bypass_override_by_user` from `.decision.branch_labels["chain-n"].event_payload`, then proceed to Step 2.
 - `chain-abort` → emit `readiness_check_failed` from `.decision.branch_labels["chain-abort"].event_payload`, then close the run.
