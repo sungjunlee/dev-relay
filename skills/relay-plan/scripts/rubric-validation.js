@@ -2,9 +2,41 @@ const { extractAllFactors } = require("./tdd-flavor");
 
 const SUBSTANTIVE_TIERS = new Set(["contract", "quality"]);
 // Ready-light factors should prove the narrow task contract; broad repo hygiene belongs in prerequisites.
-const REPO_HYGIENE_COMMAND = /^(?:\s*(?:npm|pnpm|yarn)\s+(?:run\s+)?(?:test|lint|typecheck|check)\s*|\s*tsc\s+--noEmit\s*|\s*eslint\s*|\s*prettier\s*|\s*node\s+--test\s*|\s*node\s+--test\s+tests(?:\s*$|\/\S*\*\S*)|\s*(?:python\s+-m\s+)?pytest\s*|\s*go\s+test\s+\.\/\.\.\.\s*)$/i;
+const PACKAGE_HYGIENE_COMMAND = /^\s*(?:npm|pnpm|yarn)\s+(?:run\s+)?(?:test|lint|typecheck|check)(?:\s+-{1,2}\S+)*\s*$/i;
+const SIMPLE_HYGIENE_COMMAND = /^\s*(?:tsc\s+--noEmit|eslint|prettier)\s*$/i;
 // Only warn on explicitly unsupported extra structure, not ordinary mentions of helpers/config.
 const OVER_ENGINEERING_TEXT = /\bunsupported\s+(?:helper|dependency|config|configuration|abstraction)\b/i;
+
+function commandTokens(command) {
+  return String(command || "").trim().split(/\s+/).filter(Boolean);
+}
+
+function isRepoWideTarget(token) {
+  return token === "tests" || token.includes("*");
+}
+
+function isRepoWideNodeTest(command) {
+  const tokens = commandTokens(command);
+  const testIndex = tokens.findIndex((token, index) => token === "--test" && index > 0 && tokens[index - 1] === "node");
+  if (testIndex === -1) return false;
+  const targets = tokens.slice(testIndex + 1).filter((token) => !token.startsWith("-"));
+  return targets.length === 0 || targets.some(isRepoWideTarget);
+}
+
+function isRepoWidePytest(command) {
+  const tokens = commandTokens(command);
+  const pytestIndex = tokens[0] === "pytest"
+    ? 0
+    : (tokens[0] === "python" && tokens[1] === "-m" && tokens[2] === "pytest" ? 2 : -1);
+  if (pytestIndex === -1) return false;
+  const targets = tokens.slice(pytestIndex + 1).filter((token) => !token.startsWith("-"));
+  return targets.length === 0 || targets.some(isRepoWideTarget);
+}
+
+function isRepoWideGoTest(command) {
+  const tokens = commandTokens(command);
+  return tokens[0] === "go" && tokens[1] === "test" && tokens[2] === "./...";
+}
 
 function normalizeTaskProfile(taskProfile = {}) {
   return {
@@ -40,7 +72,12 @@ function factorText(factor) {
 }
 
 function isRepoHygieneFactor(factor) {
-  return REPO_HYGIENE_COMMAND.test(String(factor.command || ""));
+  const command = String(factor.command || "");
+  return PACKAGE_HYGIENE_COMMAND.test(command)
+    || SIMPLE_HYGIENE_COMMAND.test(command)
+    || isRepoWideNodeTest(command)
+    || isRepoWidePytest(command)
+    || isRepoWideGoTest(command);
 }
 
 function isOverEngineeringRisk(factor) {

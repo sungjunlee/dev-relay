@@ -127,8 +127,12 @@ test("blocks repo-wide hygiene block scalars when command starts the factor item
 test("blocks bare repo-wide test runners in ready-light factors", () => {
   const commands = [
     "node --test",
+    "node --test --test-reporter=spec",
+    "node --test tests/**/*.test.js --test-reporter=spec",
     "pytest",
+    "pytest -q",
     "go test ./...",
+    "go test ./... -race",
   ];
 
   for (const command of commands) {

@@ -852,6 +852,30 @@ function readyLightPrompt({ task = "ready-light dispatch validation" } = {}) {
   ].join("\n");
 }
 
+function plannerReadyLightPromptWithoutExplicitMarker() {
+  return [
+    "# Dispatch: Planner ready-light validation",
+    "",
+    "Planner-rendered prompt from an existing ready-light route.",
+    "",
+    "## Task Profile",
+    "",
+    "```yaml",
+    "task_profile:",
+    "  size: S",
+    "  change_type: feature",
+    "  domains:",
+    "    - relay-plan",
+    "  risk_tags: []",
+    "  execution_mode: quick",
+    "  review_assurance: standard",
+    "  guidance_packs:",
+    "    - surgical-change",
+    "    - verification-evidence",
+    "```",
+  ].join("\n");
+}
+
 function standardPromptWithReadyLightExample() {
   return [
     "# Dispatch: Standard docs task",
@@ -4244,6 +4268,58 @@ test("dispatch validates retained ready-light rubric on resume", () => {
   assert.notEqual(proc.status, 0);
   const result = JSON.parse(proc.stdout);
   assert.equal(result.status, "failed");
+  assert.equal(result.error_code, "ready_light_factor_count");
+
+  fs.unlinkSync(rubricFile);
+});
+
+test("dispatch preserves manifest ready-light marker when prompt profile omits it", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  writeFakeCodex(binDir);
+  const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}` };
+
+  const rubricFile = path.join(os.tmpdir(), `rubric-ready-light-manifest-marker-${Date.now()}.yaml`);
+  fs.writeFileSync(rubricFile, readyLightRubricYaml(), "utf-8");
+
+  const first = JSON.parse(runDispatch(repoRoot, [
+    "-b", "issue-ready-light-manifest-marker",
+    "--prompt", readyLightPrompt(),
+    "--rubric-file", rubricFile,
+    "--json",
+  ], env));
+  const record = readManifest(first.manifestPath);
+  const manifest = {
+    ...record.data,
+    advisory: {
+      ...(record.data.advisory || {}),
+      guidance: {
+        guidance_packs: ["surgical-change", "verification-evidence"],
+        task_profile_summary: {
+          route_decision: "ready_light",
+          size: "S",
+          guidance_packs: ["surgical-change", "verification-evidence"],
+        },
+      },
+    },
+  };
+  writeManifest(first.manifestPath, updateManifestState(manifest, STATES.CHANGES_REQUESTED, "re_dispatch_requested_changes"), record.body);
+  fs.writeFileSync(rubricFile, "rubric:\n  factors: []\n", "utf-8");
+
+  const proc = spawnSync("node", [SCRIPT, repoRoot,
+    "--run-id", first.runId,
+    "--prompt", plannerReadyLightPromptWithoutExplicitMarker(),
+    "--rubric-file", rubricFile,
+    "--dry-run", "--json",
+  ], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    env,
+  });
+
+  assert.notEqual(proc.status, 0);
+  const result = JSON.parse(proc.stdout);
   assert.equal(result.error_code, "ready_light_factor_count");
 
   fs.unlinkSync(rubricFile);

@@ -89,6 +89,7 @@ test("ready-light task profile defaults to S-size quick execution", () => {
   });
 
   assert.equal(profile.size, "S");
+  assert.equal(profile.route_decision, "ready_light");
   assert.equal(profile.execution_mode, "quick");
   assert.equal(profile.review_assurance, "standard");
   assert.ok(profile.guidance_packs.includes("surgical-change"));
@@ -107,6 +108,7 @@ test("ready-light task profile does not downshift risk-bearing tasks", () => {
   });
 
   assert.equal(profile.size, "S");
+  assert.equal(profile.route_decision, "ready_light");
   assert.ok(profile.risk_tags.includes("state-machine"));
   assert.equal(profile.execution_mode, "fresh-context");
   assert.equal(profile.review_assurance, "hardened");
@@ -311,6 +313,21 @@ test("selected task_profile renders metadata and working guidance in dispatch pr
   assert.match(rendered, /These instructions guide execution style\. They do not override Done Criteria, rubric commands, or scope boundaries\./);
   assert.match(rendered, /### surgical-change/);
   assert.doesNotMatch(fs.readFileSync(REVIEW_SCHEMA_PATH, "utf-8"), /task_profile|guidance_packs|execution_mode/);
+});
+
+test("ready-light task_profile renders route decision for dispatch validation", () => {
+  const baseline = fs.readFileSync(BASELINE_PROMPT_PATH, "utf-8");
+  const profile = deriveTaskProfile({
+    doneCriteria: "Update run-preflight so proceed readiness skips Q&A.",
+    probeSignal: PROBE_SIGNAL,
+    historicalSignal: HISTORICAL_SIGNAL,
+    taskRisk: { route_decision: "ready_light" },
+  });
+
+  const rendered = applyTaskProfileToDispatchPrompt({ dispatchPrompt: baseline, taskProfile: profile });
+
+  assert.match(rendered, /task_profile:/);
+  assert.match(rendered, /route_decision: ready_light/);
 });
 
 test("empty guidance_packs leaves existing non-guidance prompt byte-identical", () => {

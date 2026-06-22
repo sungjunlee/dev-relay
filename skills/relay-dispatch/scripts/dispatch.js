@@ -733,10 +733,18 @@ function readyLightTaskProfileForDispatch({ promptText, manifest }) {
   // Trust only structured task_profile metadata, not arbitrary examples embedded in the prompt body.
   const promptProfile = extractTaskProfileSummaryFromPrompt(promptText);
   const extractedGuidance = promptProfile ? null : extractGuidanceFromPrompt(promptText);
-  return promptProfile
+  const manifestProfile = manifest?.advisory?.guidance?.task_profile_summary || null;
+  const taskProfile = promptProfile
     || extractedGuidance?.task_profile_summary
-    || manifest?.advisory?.guidance?.task_profile_summary
+    || manifestProfile
     || null;
+  if (!taskProfile) return null;
+
+  const manifestMarker = manifestProfile?.planning_profile || manifestProfile?.route_decision || manifestProfile?.routeDecision || null;
+  if (manifestMarker && !taskProfile.planning_profile && !taskProfile.route_decision && !taskProfile.routeDecision) {
+    return { ...taskProfile, route_decision: manifestMarker };
+  }
+  return taskProfile;
 }
 
 function readRubricForReadyLightValidation({ rubricFile, manifest, runDir }) {
