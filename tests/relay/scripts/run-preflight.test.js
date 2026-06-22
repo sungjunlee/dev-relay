@@ -64,6 +64,19 @@ test("route decision keeps high-risk proceed without bypass on readiness prompt 
   assert.equal(decision.branch_labels["noninteractive-fail"].event_payload.risk.high, true);
 });
 
+test("route decision fails closed when bypass is missing from proceed envelope", () => {
+  const decision = buildReadinessDecision({
+    readiness_score: { clarity: "high", granularity: "high", verifiability: "high" },
+    next_action: "proceed",
+    signals_summary: "Not bypassed: next action proceed.",
+    task_shape: { strength: "none", strong: false, signals: [] },
+    risk: { high: false, signals: [] },
+  }, { promptAllowed: false });
+
+  assert.equal(decision.route_decision, "readiness_prompt");
+  assert.equal(decision.recommended_branch, "noninteractive-fail");
+});
+
 test("route decision keeps qa_needed on the existing prompt or noninteractive-fail path", () => {
   const interactive = buildReadinessDecision({
     readiness_score: { clarity: "medium", granularity: "medium", verifiability: "low" },

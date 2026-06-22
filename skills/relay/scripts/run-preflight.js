@@ -235,7 +235,7 @@ function routeDecisionFromReadiness(envelope) {
   if (!envelope) return "readiness_prompt";
   if (envelope.bypass === true) return "ready_single";
   if (envelope.task_shape?.strong === true) return "needs_split";
-  if (envelope.next_action === "proceed" && !hasHighRiskReadinessSignal(envelope)) return "ready_light";
+  if (envelope.bypass === false && envelope.next_action === "proceed" && !hasHighRiskReadinessSignal(envelope)) return "ready_light";
   return "readiness_prompt";
 }
 
