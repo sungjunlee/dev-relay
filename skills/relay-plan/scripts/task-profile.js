@@ -156,8 +156,10 @@ function normalizeTaskProfile(profile) {
   const change_type = CHANGE_TYPES.has(profile?.change_type) ? profile.change_type : "feature";
   const execution_mode = EXECUTION_MODES.has(profile?.execution_mode) ? profile.execution_mode : "standard";
   const review_assurance = normalizeReviewAssurance(profile?.review_assurance);
+  const route_decision = profile?.route_decision || profile?.routeDecision || profile?.planning_profile || null;
   return {
     size: normalizeSize(profile?.size),
+    ...(route_decision ? { route_decision: String(route_decision) } : {}),
     change_type,
     domains: asStringArray(profile?.domains),
     risk_tags: asStringArray(profile?.risk_tags),
@@ -178,7 +180,7 @@ function deriveTaskProfile({
   const probe = parseJsonish(probeSignal);
   const historical = parseJsonish(historicalSignal);
   const risk = parseJsonish(taskRisk);
-  const routeDecision = risk.route_decision || risk.routeDecision;
+  const routeDecision = risk.route_decision || risk.routeDecision || risk.planning_profile;
   const normalizedSize = normalizeSize(size || (routeDecision === "ready_light" ? "S" : "M"));
   const intentText = normalizeText(doneCriteria, taskRisk);
   const signalText = normalizeText(doneCriteria, probeSignal, historicalSignal, taskRisk);
@@ -199,6 +201,7 @@ function deriveTaskProfile({
 
   return {
     size: normalizedSize,
+    ...(routeDecision ? { route_decision: String(routeDecision) } : {}),
     change_type,
     domains,
     risk_tags,
@@ -231,6 +234,7 @@ function renderTaskProfileBlock(taskProfile) {
     "```yaml",
     "task_profile:",
     `  size: ${yamlScalar(profile.size)}`,
+    ...(profile.route_decision ? [`  route_decision: ${yamlScalar(profile.route_decision)}`] : []),
     `  change_type: ${yamlScalar(profile.change_type)}`,
     renderYamlArray("domains", profile.domains, 2),
     renderYamlArray("risk_tags", profile.risk_tags, 2),

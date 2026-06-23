@@ -87,11 +87,25 @@ test("rubric validation preserves the S mechanical quality-card example", () => 
 test("rubric validation documents the ready-light compact rubric boundary", () => {
   const text = readReference("rubric-validation.md");
 
-  assert.match(text, /Ready-light compact example/);
+  assert.match(text, /Ready-light S mechanical compact example/);
   assert.match(text, /Planning profile: ready_light/);
   assert.match(text, /Contract factors: 1/);
   assert.match(text, /Quality factors: 0/);
-  assert.match(text, /Unsupported helper, dependency, or config requirements are over-engineering risk/);
+  assert.match(text, /Ready-light S mechanical rubrics default to 1-2 substantive factors/);
+  assert.match(text, /Repo-wide lint, typecheck, and test commands stay in prerequisites/);
+  assert.match(text, /Unsupported helper, dependency, config, or abstraction requirements are over-engineering risk/);
+  assert.match(text, /Action: dispatch allowed/);
+});
+
+test("rubric validation documents the ready-light design-bearing exception", () => {
+  const text = readReference("rubric-validation.md");
+
+  assert.match(text, /Ready-light S design-bearing example/);
+  assert.match(text, /Planning profile: ready_light/);
+  assert.match(text, /Contract factors: 1/);
+  assert.match(text, /Quality factors: 1/);
+  assert.match(text, /Substantive total: 2/);
+  assert.match(text, /Design-bearing rationale:/);
   assert.match(text, /Action: dispatch allowed/);
 });
 

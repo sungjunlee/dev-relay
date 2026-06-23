@@ -211,6 +211,28 @@ test("extractAllFactors carries fix_hint additively without changing TDD project
   ]);
 });
 
+test("extractAllFactors normalizes common indentation in literal block scalars", () => {
+  const rubric = [
+    "rubric:",
+    "  factors:",
+    "    - name: Multiline criteria",
+    "      tier: quality",
+    "      type: evaluated",
+    "      criteria: |",
+    "        Verify:",
+    "          - nested detail remains indented",
+    "        Done.",
+  ].join("\n");
+
+  const [factor] = extractAllFactors(rubric);
+
+  assert.equal(factor.criteria, [
+    "Verify:",
+    "  - nested detail remains indented",
+    "Done.",
+  ].join("\n"));
+});
+
 test("tdd_runner falls back to first probe test_infra entry", () => {
   const rubric = TDD_RUBRIC.replace("      tdd_runner: \"node:test\"\n", "");
 

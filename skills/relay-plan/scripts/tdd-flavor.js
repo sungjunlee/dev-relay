@@ -30,11 +30,26 @@ function createFactor() {
     name: null,
     tier: null,
     type: null,
+    command: null,
+    criteria: null,
+    target: null,
     tdd_anchor: null,
     tdd_runner: null,
     fix_hint: null,
   };
 }
+
+const FACTOR_FIELDS = new Set([
+  "name",
+  "tier",
+  "type",
+  "command",
+  "criteria",
+  "target",
+  "tdd_anchor",
+  "tdd_runner",
+  "fix_hint",
+]);
 
 function extractAllFactors(rubricYaml) {
   const factors = [];
@@ -42,14 +57,57 @@ function extractAllFactors(rubricYaml) {
   let factorsIndent = null;
   let current = null;
   let currentIndent = null;
+  let blockScalar = null;
+
+  function finishBlockScalar() {
+    if (!blockScalar || !current) {
+      blockScalar = null;
+      return;
+    }
+    const nonEmpty = blockScalar.lines.filter((line) => line.trim() !== "");
+    const minIndent = nonEmpty.length
+      ? Math.min(...nonEmpty.map((line) => line.match(/^\s*/)[0].length))
+      : 0;
+    const normalized = blockScalar.lines.map((line) => line.slice(minIndent));
+    current[blockScalar.field] = blockScalar.style === "|"
+      ? normalized.join("\n").trimEnd()
+      : normalized.map((line) => line.trim()).join(" ").trim();
+    blockScalar = null;
+  }
+
+  function startBlockScalar(field, style, indent) {
+    blockScalar = {
+      field,
+      style,
+      indent,
+      lines: [],
+    };
+  }
 
   function pushCurrent() {
+    finishBlockScalar();
     if (current) factors.push(current);
     current = null;
     currentIndent = null;
   }
 
   for (const line of String(rubricYaml || "").split(/\r?\n/)) {
+    if (blockScalar) {
+      const indent = line.match(/^\s*/)[0].length;
+      // Blank lines are part of the scalar body and should not end the block.
+      if (/^\s*$/.test(line)) {
+        blockScalar.lines.push("");
+        continue;
+      }
+      // YAML block scalar content is indented deeper than the field that opened it.
+      if (indent > blockScalar.indent) {
+        blockScalar.lines.push(line);
+        continue;
+      }
+      // Returning to the field indentation closes the scalar before normal parsing resumes.
+      finishBlockScalar();
+    }
+
     if (/^\s*(#.*)?$/.test(line)) continue;
 
     const section = line.match(/^(\s*)([A-Za-z_][\w.-]*):\s*(.*?)\s*$/);
@@ -74,16 +132,26 @@ function extractAllFactors(rubricYaml) {
       pushCurrent();
       current = createFactor();
       currentIndent = factorStart[1].length;
-      if (["name", "tier", "type", "tdd_anchor", "tdd_runner", "fix_hint"].includes(factorStart[2])) {
-        current[factorStart[2]] = unquoteYamlScalar(factorStart[3]);
+      if (FACTOR_FIELDS.has(factorStart[2])) {
+        const value = unquoteYamlScalar(factorStart[3]);
+        if (value === ">" || value === "|") {
+          startBlockScalar(factorStart[2], value, currentIndent + 2);
+        } else {
+          current[factorStart[2]] = value;
+        }
       }
       continue;
     }
 
     if (!current || indent <= currentIndent) continue;
-    const field = line.match(/^\s*(name|tier|type|tdd_anchor|tdd_runner|fix_hint):\s*(.*?)\s*$/);
+    const field = line.match(/^\s*(name|tier|type|command|criteria|target|tdd_anchor|tdd_runner|fix_hint):\s*(.*?)\s*$/);
     if (field) {
-      current[field[1]] = unquoteYamlScalar(field[2]);
+      const value = unquoteYamlScalar(field[2]);
+      if (value === ">" || value === "|") {
+        startBlockScalar(field[1], value, indent);
+      } else {
+        current[field[1]] = value;
+      }
     }
   }
 

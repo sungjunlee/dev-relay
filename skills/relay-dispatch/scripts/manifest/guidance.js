@@ -7,7 +7,7 @@ const { normalizeReviewAssurance } = require("./review-assurance");
 const GUIDANCE_METADATA_FILENAME = "guidance-metadata.json";
 const DISPATCH_PROMPT_FILENAME = "dispatch-prompt.md";
 
-const SCALAR_FIELDS = new Set(["size", "change_type", "execution_mode", "review_assurance"]);
+const SCALAR_FIELDS = new Set(["size", "change_type", "execution_mode", "review_assurance", "planning_profile", "route_decision"]);
 const ARRAY_FIELDS = new Set(["domains", "risk_tags", "guidance_packs", "derivation_inputs"]);
 
 function stripYamlScalar(value) {
@@ -79,8 +79,16 @@ function parseTaskProfileYaml(blockText) {
 
 function extractTaskProfileBlock(promptText) {
   const text = String(promptText || "").replace(/\r\n/g, "\n");
+  const sectionMatch = /^## Task Profile\s*$/m.exec(text);
+  if (!sectionMatch) return null;
+
+  const sectionStart = sectionMatch.index + sectionMatch[0].length;
+  const nextHeadingMatch = /^##\s+/m.exec(text.slice(sectionStart));
+  const sectionText = nextHeadingMatch
+    ? text.slice(sectionStart, sectionStart + nextHeadingMatch.index)
+    : text.slice(sectionStart);
   const fencePattern = /```(?:yaml|yml)?\s*\n([\s\S]*?)```/g;
-  for (const match of text.matchAll(fencePattern)) {
+  for (const match of sectionText.matchAll(fencePattern)) {
     if (/^task_profile:\s*$/m.test(match[1])) {
       return match[1];
     }
@@ -99,10 +107,24 @@ function buildTaskProfileSummary(profile) {
       ? { derivation_inputs: uniqueStrings(profile.derivation_inputs) }
       : {}),
   };
+  if (profile.planning_profile) {
+    summary.planning_profile = profile.planning_profile;
+  }
+  if (profile.route_decision) {
+    summary.route_decision = profile.route_decision;
+  }
   if (profile.review_assurance) {
     summary.review_assurance = normalizeReviewAssurance(profile.review_assurance);
   }
   return summary;
+}
+
+function extractTaskProfileSummaryFromPrompt(promptText) {
+  const block = extractTaskProfileBlock(promptText);
+  if (!block) return null;
+  const profile = parseTaskProfileYaml(block);
+  if (!profile) return null;
+  return buildTaskProfileSummary(profile);
 }
 
 function extractReviewAssuranceFromPrompt(promptText) {
@@ -190,6 +212,7 @@ module.exports = {
   buildGuidanceMetadata,
   DISPATCH_PROMPT_FILENAME,
   extractGuidanceFromPrompt,
+  extractTaskProfileSummaryFromPrompt,
   extractReviewAssuranceFromPrompt,
   GUIDANCE_METADATA_FILENAME,
   persistGuidanceMetadata,

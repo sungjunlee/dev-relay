@@ -117,7 +117,9 @@ const { findUnknownFlags, getPositionals, modeLabel, readArg, schemaHasFlag } = 
 const { formatAttemptsForPrompt, readPreviousAttempts } = require("./manifest/attempts");
 const {
   buildGuidanceMetadata,
+  extractGuidanceFromPrompt,
   extractReviewAssuranceFromPrompt,
+  extractTaskProfileSummaryFromPrompt,
   GUIDANCE_METADATA_FILENAME,
   persistGuidanceMetadata,
 } = require("./manifest/guidance");
@@ -135,6 +137,9 @@ const {
 } = require("./agent-adapters/policy");
 const { execGit } = require("./exec");
 const { resolveReasoningEffort } = require("./rubric-size");
+const {
+  validateReadyLightRubric,
+} = require("../../relay-plan/scripts/rubric-validation");
 const {
   assertRelayPolicyGate,
   buildPolicyGateFailureEnvelope,
@@ -724,6 +729,69 @@ function enforceRubricPersistence(manifest, runDir) {
   }
 }
 
+function readyLightTaskProfileForDispatch({ promptText, manifest }) {
+  // Trust only structured task_profile metadata, not arbitrary examples embedded in the prompt body.
+  let promptProfile = null;
+  let extractedGuidance = null;
+  try {
+    promptProfile = extractTaskProfileSummaryFromPrompt(promptText);
+    extractedGuidance = promptProfile ? null : extractGuidanceFromPrompt(promptText);
+  } catch (error) {
+    failEarly(`Invalid task_profile metadata in prompt: ${error.message}`, {
+      error_code: "task_profile_parse_failed",
+    });
+  }
+  const manifestProfile = manifest?.advisory?.guidance?.task_profile_summary || null;
+  const taskProfile = promptProfile
+    || extractedGuidance?.task_profile_summary
+    || manifestProfile
+    || null;
+  if (!taskProfile) return null;
+
+  const manifestMarker = manifestProfile?.planning_profile || manifestProfile?.route_decision || manifestProfile?.routeDecision || null;
+  if (manifestMarker && !taskProfile.planning_profile && !taskProfile.route_decision && !taskProfile.routeDecision) {
+    return { ...taskProfile, route_decision: manifestMarker };
+  }
+  return taskProfile;
+}
+
+function readRubricForReadyLightValidation({ rubricFile, manifest, runDir }) {
+  if (rubricFile) {
+    try {
+      return fs.readFileSync(path.resolve(rubricFile), "utf-8");
+    } catch (error) {
+      failEarly(`Failed to read rubric file: ${error.message}`, {
+        error_code: "rubric_file_read_failed",
+        rubric_file: rubricFile,
+      });
+    }
+  }
+
+  if (!hasRubricPath(manifest)) return null;
+  const rubricAnchor = getRubricAnchorStatus(manifest, { runDir, includeContent: true });
+  if (!rubricAnchor.satisfied) {
+    failRubricPersistence(rubricAnchor.error);
+  }
+  return rubricAnchor.content;
+}
+
+function enforceReadyLightRubricValidation({ rubricFile, promptText, manifest, runDir }) {
+  const taskProfile = readyLightTaskProfileForDispatch({ promptText, manifest });
+  if (!taskProfile) return;
+  const rubricYaml = readRubricForReadyLightValidation({ rubricFile, manifest, runDir });
+  if (!rubricYaml) return;
+  const result = validateReadyLightRubric({
+    rubricYaml,
+    taskProfile,
+  });
+  if (result.action !== "block") return;
+  const firstError = result.errors[0] || { code: "ready_light_rubric_invalid", message: "Ready-light rubric validation failed." };
+  failEarly(firstError.message, {
+    error_code: firstError.code,
+    ready_light_rubric_validation: result,
+  });
+}
+
 function validateExecutorCli() {
   let adapter;
   try {
@@ -1110,8 +1178,9 @@ async function main() {
     try {
       REVIEW_ASSURANCE = extractReviewAssuranceFromPrompt(taskPrompt) || REVIEW_ASSURANCE;
     } catch (error) {
-      console.error(`Error: ${error.message}`);
-      process.exit(1);
+      failEarly(`Invalid task_profile metadata in prompt: ${error.message}`, {
+        error_code: "task_profile_parse_failed",
+      });
     }
   }
   if (taskPromptResult.source === "auto-discovered-redispatch" && !JSON_OUT) {
@@ -1146,6 +1215,13 @@ async function main() {
       });
     }
   }
+
+  enforceReadyLightRubricValidation({
+    rubricFile: RUBRIC_FILE,
+    promptText: taskPrompt,
+    manifest,
+    runDir: manifestRunDir,
+  });
 
   const effectiveDispatchModel = resolveEffectiveDispatchModel({
     cliModel: MODEL,
