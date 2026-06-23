@@ -10,6 +10,8 @@
 
 Once a relay-ready leaf exists, `/relay` returns to the canonical lifecycle in [references/architecture.md](../references/architecture.md): plan, dispatch, review, stop at `ready_to_merge`; merge only on explicit request.
 
+Route preflight detects task-shape risk only; semantic leaf boundaries require operator-approved relay-ready handoffs before `/relay` may continue to planning or dispatch.
+
 ## Decision
 
 1. `relay-ready` is a standalone skill, not hidden state inside the run manifest lifecycle.

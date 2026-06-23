@@ -44,7 +44,8 @@ Branch on the JSON using [preflight-guards.md](references/preflight-guards.md); 
 - `inflight.route == "inflight-run"` → resume or inspect that run; continue at its manifest state.
 - `readiness.decision.route_decision == "ready_single"` → proceed to Step 2.
 - `readiness.decision.route_decision == "ready_light"` → proceed to Step 2 with S-size quick planning and compact rubric guidance.
-- `readiness.decision.route_decision in ["readiness_prompt", "needs_split"]` and `.decision.prompt_allowed == true` → set `SUMMARY=.readiness.signals_summary` and issue exactly `AskUserQuestion("Readiness gaps detected: ${SUMMARY}. Invoke relay-ready first? [y/n/abort]")`.
+- `readiness.decision.route_decision == "readiness_prompt"` and `.decision.prompt_allowed == true` → set `SUMMARY=.readiness.signals_summary` and issue exactly `AskUserQuestion("Readiness gaps detected: ${SUMMARY}. Invoke relay-ready first? [y/n/abort]")`.
+- `readiness.decision.route_decision == "needs_split"` and `.decision.prompt_allowed == true` → run proposal-first relay-ready shaping; accepted handoffs become the relay-plan source of truth before any dispatch.
 - `chain-y` → invoke relay-ready Q&A, wait, persist the handoff, set `manifest.anchor.readiness`, then resume Step 2.
 - `chain-n` → emit `bypass_override_by_user` from `.decision.branch_labels["chain-n"].event_payload`, then proceed to Step 2.
 - `chain-abort` → emit `readiness_check_failed` from `.decision.branch_labels["chain-abort"].event_payload`, then close the run.

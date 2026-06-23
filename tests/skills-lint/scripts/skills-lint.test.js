@@ -399,6 +399,24 @@ function assertProjectDocsPreserveExplicitMergeBoundary(docs) {
   );
 }
 
+function assertNeedsSplitProposalFirstBoundary(docs) {
+  assert.match(
+    docs.relaySkill,
+    /route_decision == "needs_split"[\s\S]*proposal-first relay-ready shaping/i,
+    "relay skill must route needs_split to proposal-first relay-ready shaping",
+  );
+  assert.match(
+    docs.preflightGuards,
+    /`proposal-first`[\s\S]*requires_accepted_handoff[\s\S]*`chain-n`[\s\S]*explicit operator override/i,
+    "preflight guard docs must expose the accepted-handoff default and explicit operator override for needs_split",
+  );
+  assert.match(
+    docs.relayReadyDesign,
+    /route preflight detects task-shape risk only[\s\S]*semantic leaf boundaries require operator-approved relay-ready handoffs/i,
+    "handoff design must separate task-shape detection from semantic leaf approval",
+  );
+}
+
 test("all skills/SKILL.md files satisfy the lint contract", () => {
   const skillFiles = readSkillFiles();
   assert.ok(skillFiles.length > 0, "expected at least one skills/*/SKILL.md file");
@@ -456,6 +474,14 @@ test("operator surface policy rejects missing or duplicate skill coverage", () =
 test("relay skill description preserves explicit ready_to_merge stop boundary", () => {
   const relaySkill = fs.readFileSync(path.join(SKILLS_DIR, "relay", "SKILL.md"), "utf-8");
   assertRelayStopsAtReadyToMerge(relaySkill);
+});
+
+test("needs_split route documents proposal-first relay-ready shaping boundary", () => {
+  assertNeedsSplitProposalFirstBoundary({
+    relaySkill: fs.readFileSync(path.join(SKILLS_DIR, "relay", "SKILL.md"), "utf-8"),
+    preflightGuards: fs.readFileSync(path.join(SKILLS_DIR, "relay", "references", "preflight-guards.md"), "utf-8"),
+    relayReadyDesign: fs.readFileSync(RELAY_READY_DESIGN_PATH, "utf-8"),
+  });
 });
 
 test("relay-review spine delegates provider-specific adapter details", () => {
