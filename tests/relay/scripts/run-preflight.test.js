@@ -118,6 +118,37 @@ test("route decision exposes needs_split for strong task-shape signals", () => {
   assert.equal(decision.branch_labels["noninteractive-fail"].event_payload.route_decision, "needs_split");
 });
 
+test("route decision directs prompt-allowed needs_split to proposal-first shaping", () => {
+  const decision = buildReadinessDecision({
+    readiness_score: { clarity: "medium", granularity: "low", verifiability: "high" },
+    bypass: false,
+    next_action: "qa_needed",
+    signals_summary: "Gaps: granularity=low, task-shape decomposition.",
+    task_shape: {
+      strength: "strong",
+      strong: true,
+      signals: [{ condition: "broad_scope_language", evidence: "foundation" }],
+    },
+  }, { promptAllowed: true });
+
+  assert.equal(decision.route_decision, "needs_split");
+  assert.equal(decision.recommended_branch, "proposal-first");
+  assert.equal(decision.prompt_summary, "Gaps: granularity=low, task-shape decomposition.");
+  assert.equal(
+    decision.branch_labels["proposal-first"].action,
+    "invoke_relay_ready_proposal_first_then_resume_step_2"
+  );
+  assert.equal(decision.branch_labels["proposal-first"].relay_ready_mode, "proposal_first");
+  assert.equal(decision.branch_labels["proposal-first"].requires_accepted_handoff, true);
+  assert.equal(decision.branch_labels["proposal-first"].source_of_truth, "accepted_relay_ready_handoff");
+  assert.equal(decision.branch_labels["chain-n"].event, "bypass_override_by_user");
+  assert.equal(decision.branch_labels["chain-n"].event_payload.route_decision, "needs_split");
+  assert.equal(
+    decision.branch_labels["chain-n"].event_payload.reason,
+    "operator_bypass_after_readiness_prompt"
+  );
+});
+
 function setupReadyRun({ liveHead = "abc123", reviewedSha = "abc123", manifestHead = "abc123" } = {}) {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-preflight-"));
   process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));

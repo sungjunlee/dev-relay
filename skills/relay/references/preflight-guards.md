@@ -36,7 +36,8 @@ node "${RELAY_SKILL_ROOT:-skills}/relay/scripts/run-preflight.js" --stage route 
   - `bypass`: route decision is `ready_single`; probe returns `bypass=true`; proceed to Step 2.
   - `ready-light`: route decision is `ready_light`; readiness returned `next_action=proceed` without a bypass anchor; proceed to Step 2 using S-size quick planning and compact rubric guidance.
   - `chain-y`: probe returns `bypass=false`, prompt is allowed, user answers `y`; invoke relay-ready Q&A, persist the handoff, set `manifest.anchor.readiness`, then resume Step 2.
-  - `chain-n`: probe returns `bypass=false`, prompt is allowed, user answers `n`; emit `bypass_override_by_user` with the script's event payload and proceed to Step 2.
+  - `proposal-first`: route decision is `needs_split`, prompt is allowed, and the request must go through relay-ready proposal-first shaping before Step 2. The JSON branch label includes `relay_ready_mode=proposal_first`, `requires_accepted_handoff=true`, and `source_of_truth=accepted_relay_ready_handoff`.
+  - `chain-n`: probe returns `bypass=false`, prompt is allowed, user explicitly bypasses relay-ready; emit `bypass_override_by_user` with the script's event payload and proceed to Step 2. For `needs_split`, this remains an explicit operator override, not the default route.
   - `chain-abort`: probe returns `bypass=false`, prompt is allowed, user answers `abort`; emit `readiness_check_failed` with the script's event payload and close the run.
   - `noninteractive-fail`: route decision is `readiness_prompt` or `needs_split` and no prompt is allowed; emit `readiness_check_failed_nontty` with the script's event payload and close the run.
 
@@ -45,7 +46,7 @@ Route decisions are advisory labels, not lifecycle states:
 - `ready_single`: preserve the existing bypass fast path.
 - `ready_light`: keep the task on relay, but plan it as a small quick task with compact rubric guidance. This is only for non-bypass `next_action=proceed` results with no high-risk readiness signal.
 - `readiness_prompt`: preserve the existing `qa_needed` prompt or non-interactive failure behavior.
-- `needs_split`: strong task-shape signals indicate decomposition should be considered before dispatch; use the same prompt/non-interactive failure mechanics as readiness gaps.
+- `needs_split`: strong task-shape signals indicate decomposition should be considered before dispatch. Prompt-allowed runs use `proposal-first`; non-interactive runs still fail closed before dispatch.
 
 Do not move the readiness prompt into the script. The exact prompt remains:
 `AskUserQuestion("Readiness gaps detected: ${SUMMARY}. Invoke relay-ready first? [y/n/abort]")`.

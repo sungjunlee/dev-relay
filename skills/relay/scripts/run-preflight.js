@@ -261,6 +261,8 @@ function buildReadinessDecision(envelope, { promptAllowed }) {
   let recommendedBranch = "bypass";
   if (routeDecision === "ready_light") {
     recommendedBranch = "ready-light";
+  } else if (routeDecision === "needs_split" && promptAllowed) {
+    recommendedBranch = "proposal-first";
   } else if (routeDecision !== "ready_single") {
     recommendedBranch = promptAllowed ? "prompt" : "noninteractive-fail";
   }
@@ -292,6 +294,14 @@ function buildReadinessDecision(envelope, { promptAllowed }) {
         label: "chain-y",
         [EVENT_FIELD]: EVENTS.READINESS_PROBE,
         action: "invoke_relay_ready_then_resume_step_2",
+      },
+      "proposal-first": {
+        label: "proposal-first",
+        [EVENT_FIELD]: EVENTS.READINESS_PROBE,
+        action: "invoke_relay_ready_proposal_first_then_resume_step_2",
+        relay_ready_mode: "proposal_first",
+        requires_accepted_handoff: true,
+        source_of_truth: "accepted_relay_ready_handoff",
       },
       "chain-n": {
         label: "chain-n",
