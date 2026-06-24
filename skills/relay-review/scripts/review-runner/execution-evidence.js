@@ -123,10 +123,22 @@ function validateBrowserEvidencePaths(artifact, runDir) {
   screenshots.forEach((entry, index) => {
     const screenshotPath = typeof entry === "string" ? entry : entry.path;
     const hasHash = isObject(entry) && isNonEmptyString(entry.sha256) && SHA256_PATTERN.test(entry.sha256);
+    // Plain paths prove a persisted run artifact; hash-backed entries may reference external storage.
     if (!hasHash && !pathStaysInsideRunDir(runDir, screenshotPath)) {
       throw new Error(
         `execution evidence browser_evidence screenshots[${index}] path must stay inside the run directory or include sha256`
       );
+    }
+    if (!hasHash) {
+      const resolvedPath = path.isAbsolute(screenshotPath)
+        ? path.resolve(screenshotPath)
+        : path.resolve(runDir, screenshotPath);
+      const stat = fs.existsSync(resolvedPath) ? fs.lstatSync(resolvedPath) : null;
+      if (!stat || !stat.isFile() || stat.isSymbolicLink()) {
+        throw new Error(
+          `execution evidence browser_evidence screenshots[${index}] path must resolve to an existing regular file`
+        );
+      }
     }
   });
 }

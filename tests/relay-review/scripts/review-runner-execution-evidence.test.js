@@ -327,8 +327,36 @@ test("execution-evidence rejects un-hashed browser paths outside the run directo
   assert.match(result.reason, /browser_evidence screenshots\[0\] path must stay inside the run directory or include sha256/);
 });
 
+test("execution-evidence rejects missing or non-file in-run browser screenshot paths", () => {
+  const runDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-browser-evidence-missing-"));
+  writeArtifact(runDir, makeArtifact("a".repeat(40), {
+    browser_evidence: {
+      screenshots: ["browser/missing.png"],
+    },
+  }));
+
+  const missing = computeQualityExecutionStatus({ runDir, reviewedHead: "a".repeat(40) });
+  assert.equal(missing.status, "fail");
+  assert.match(missing.reason, /browser_evidence screenshots\[0\] path must resolve to an existing regular file/);
+
+  const screenshotDir = path.join(runDir, "browser", "directory.png");
+  fs.mkdirSync(screenshotDir, { recursive: true });
+  writeArtifact(runDir, makeArtifact("a".repeat(40), {
+    browser_evidence: {
+      screenshots: ["browser/directory.png"],
+    },
+  }));
+
+  const directory = computeQualityExecutionStatus({ runDir, reviewedHead: "a".repeat(40) });
+  assert.equal(directory.status, "fail");
+  assert.match(directory.reason, /browser_evidence screenshots\[0\] path must resolve to an existing regular file/);
+});
+
 test("execution-evidence reports browser evidence presence even when artifact head is stale", () => {
   const runDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-browser-evidence-stale-"));
+  const screenshotPath = path.join(runDir, "browser", "home-1440.png");
+  fs.mkdirSync(path.dirname(screenshotPath), { recursive: true });
+  fs.writeFileSync(screenshotPath, "png bytes\n", "utf-8");
   writeArtifact(runDir, makeArtifact("a".repeat(40), {
     browser_evidence: {
       screenshots: ["browser/home-1440.png"],
