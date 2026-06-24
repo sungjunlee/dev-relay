@@ -88,6 +88,28 @@ test("dispatch execution evidence can include verification_runs without rewritin
   assert.deepEqual(result.verification_runs, verificationRuns);
 });
 
+test("dispatch execution evidence can include browser_evidence without rewriting it", () => {
+  const browserEvidence = {
+    command: "pnpm exec playwright test tests/demo-flow.spec.ts --project=chromium",
+    viewports: ["1440x900"],
+    screenshots: ["browser/home-1440.png"],
+    console_errors: 0,
+    inspected_states: ["baseline visible"],
+  };
+
+  const result = buildExecutionEvidence({
+    headSha: "b".repeat(40),
+    testCommand: "node --test",
+    resultFilePath: null,
+    executor: "codex",
+    recordedAt: "2026-04-22T00:00:00.000Z",
+    testExitCode: 0,
+    browserEvidence,
+  });
+
+  assert.deepEqual(result.browser_evidence, browserEvidence);
+});
+
 test("dispatch execution evidence distinguishes an absent test-command from an explicit empty string", () => {
   const omitted = buildExecutionEvidence({
     headSha: "c".repeat(40),

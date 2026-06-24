@@ -255,6 +255,7 @@ test("execution-evidence preflight reports actionable head-bound status", () => 
       reviewedHeadSha: "a".repeat(40),
       evidenceHeadSha: "a".repeat(40),
       artifactPath: path.join(runDir, EXECUTION_EVIDENCE_FILENAME),
+      browserEvidence: { present: false },
       nextAction: "invoke_primary_reviewer",
     }
   );
@@ -265,7 +266,81 @@ test("execution-evidence preflight reports actionable head-bound status", () => 
   assert.match(stale.reason, /stale artifact/);
   assert.equal(stale.reviewedHeadSha, "b".repeat(40));
   assert.equal(stale.evidenceHeadSha, "a".repeat(40));
+  assert.deepEqual(stale.browserEvidence, { present: false });
   assert.equal(stale.nextAction, "repair_execution_evidence");
+});
+
+test("execution-evidence accepts optional browser evidence inside the run directory", () => {
+  const runDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-browser-evidence-"));
+  const screenshotPath = path.join(runDir, "browser", "home-1440.png");
+  fs.mkdirSync(path.dirname(screenshotPath), { recursive: true });
+  fs.writeFileSync(screenshotPath, "png bytes\n", "utf-8");
+  writeArtifact(runDir, makeArtifact("a".repeat(40), {
+    browser_evidence: {
+      command: "pnpm exec playwright test tests/demo-flow.spec.ts --project=chromium",
+      viewports: ["1440x900", "390x844"],
+      screenshots: ["browser/home-1440.png"],
+      console_errors: 0,
+      inspected_states: ["baseline result visible", "evidence panel expanded"],
+    },
+  }));
+
+  const preflight = buildExecutionEvidencePreflight({ runDir, reviewedHead: "a".repeat(40) });
+  assert.equal(preflight.status, "pass");
+  assert.deepEqual(preflight.browserEvidence, {
+    present: true,
+    command: "pnpm exec playwright test tests/demo-flow.spec.ts --project=chromium",
+    viewportCount: 2,
+    screenshotCount: 1,
+    consoleErrors: 0,
+    inspectedStateCount: 2,
+  });
+});
+
+test("execution-evidence allows hashed browser evidence outside the run directory", () => {
+  const runDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-browser-evidence-hashed-"));
+  writeArtifact(runDir, makeArtifact("a".repeat(40), {
+    browser_evidence: {
+      screenshots: [{
+        path: path.join(os.tmpdir(), "relay-browser-outside.png"),
+        sha256: "b".repeat(64),
+      }],
+    },
+  }));
+
+  const preflight = buildExecutionEvidencePreflight({ runDir, reviewedHead: "a".repeat(40) });
+  assert.equal(preflight.status, "pass");
+  assert.equal(preflight.browserEvidence.present, true);
+  assert.equal(preflight.browserEvidence.screenshotCount, 1);
+});
+
+test("execution-evidence rejects un-hashed browser paths outside the run directory", () => {
+  const runDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-browser-evidence-outside-"));
+  writeArtifact(runDir, makeArtifact("a".repeat(40), {
+    browser_evidence: {
+      screenshots: [path.join(os.tmpdir(), "relay-browser-outside.png")],
+    },
+  }));
+
+  const result = computeQualityExecutionStatus({ runDir, reviewedHead: "a".repeat(40) });
+  assert.equal(result.status, "fail");
+  assert.match(result.reason, /browser_evidence screenshots\[0\] path must stay inside the run directory or include sha256/);
+});
+
+test("execution-evidence reports browser evidence presence even when artifact head is stale", () => {
+  const runDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-browser-evidence-stale-"));
+  writeArtifact(runDir, makeArtifact("a".repeat(40), {
+    browser_evidence: {
+      screenshots: ["browser/home-1440.png"],
+    },
+  }));
+
+  const preflight = buildExecutionEvidencePreflight({ runDir, reviewedHead: "b".repeat(40) });
+  assert.equal(preflight.status, "blocked");
+  assert.equal(preflight.qualityExecutionStatus, "fail");
+  assert.match(preflight.reason, /stale artifact/);
+  assert.equal(preflight.browserEvidence.present, true);
+  assert.equal(preflight.browserEvidence.screenshotCount, 1);
 });
 
 test("execution-evidence rejects replay attack artifact from another head as stale", () => {

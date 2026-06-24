@@ -20,6 +20,10 @@ function isNonEmptyString(value) {
   return typeof value === "string" && value.trim() !== "";
 }
 
+function isObject(value) {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
 function buildMissingExecutionEvidenceReason() {
   return `execution-evidence.json missing; if this is a pre-261 run, use ${FORCE_FINALIZE_GUIDANCE}`;
 }
@@ -60,6 +64,84 @@ function validateVerificationRun(run, index) {
       `execution evidence verification_runs[${index}] requires at least one of ${VERIFICATION_HASH_FIELDS.join(", ")}`
     );
   }
+}
+
+function validateStringArray(value, fieldName) {
+  if (value !== undefined && (!Array.isArray(value) || value.some((entry) => !isNonEmptyString(entry)))) {
+    throw new Error(`execution evidence browser_evidence.${fieldName} must be an array of non-empty strings when present`);
+  }
+}
+
+function validateBrowserEvidenceShape(browserEvidence) {
+  if (browserEvidence === undefined) return;
+  if (!isObject(browserEvidence)) {
+    throw new Error("execution evidence browser_evidence must be a JSON object when present");
+  }
+  if (browserEvidence.command !== undefined && typeof browserEvidence.command !== "string") {
+    throw new Error("execution evidence browser_evidence.command must be a string when present");
+  }
+  validateStringArray(browserEvidence.viewports, "viewports");
+  validateStringArray(browserEvidence.inspected_states, "inspected_states");
+  if (
+    browserEvidence.console_errors !== undefined &&
+    (!Number.isInteger(browserEvidence.console_errors) || browserEvidence.console_errors < 0)
+  ) {
+    throw new Error("execution evidence browser_evidence.console_errors must be a non-negative integer when present");
+  }
+  if (browserEvidence.screenshots !== undefined) {
+    if (!Array.isArray(browserEvidence.screenshots)) {
+      throw new Error("execution evidence browser_evidence.screenshots must be an array when present");
+    }
+    browserEvidence.screenshots.forEach((entry, index) => {
+      if (isNonEmptyString(entry)) return;
+      if (
+        isObject(entry) &&
+        isNonEmptyString(entry.path) &&
+        isNonEmptyString(entry.sha256) &&
+        SHA256_PATTERN.test(entry.sha256)
+      ) {
+        return;
+      }
+      throw new Error(
+        `execution evidence browser_evidence.screenshots[${index}] must be a path string or { path, sha256 }`
+      );
+    });
+  }
+}
+
+function pathStaysInsideRunDir(runDir, filePath) {
+  const resolvedRunDir = path.resolve(runDir);
+  const resolvedPath = path.isAbsolute(filePath)
+    ? path.resolve(filePath)
+    : path.resolve(resolvedRunDir, filePath);
+  const relative = path.relative(resolvedRunDir, resolvedPath);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+function validateBrowserEvidencePaths(artifact, runDir) {
+  const screenshots = artifact.browser_evidence?.screenshots || [];
+  screenshots.forEach((entry, index) => {
+    const screenshotPath = typeof entry === "string" ? entry : entry.path;
+    const hasHash = isObject(entry) && isNonEmptyString(entry.sha256) && SHA256_PATTERN.test(entry.sha256);
+    if (!hasHash && !pathStaysInsideRunDir(runDir, screenshotPath)) {
+      throw new Error(
+        `execution evidence browser_evidence screenshots[${index}] path must stay inside the run directory or include sha256`
+      );
+    }
+  });
+}
+
+function summarizeBrowserEvidence(artifact) {
+  const browserEvidence = artifact?.browser_evidence;
+  if (!browserEvidence) return { present: false };
+  return {
+    present: true,
+    ...(browserEvidence.command !== undefined ? { command: browserEvidence.command } : {}),
+    viewportCount: Array.isArray(browserEvidence.viewports) ? browserEvidence.viewports.length : 0,
+    screenshotCount: Array.isArray(browserEvidence.screenshots) ? browserEvidence.screenshots.length : 0,
+    ...(browserEvidence.console_errors !== undefined ? { consoleErrors: browserEvidence.console_errors } : {}),
+    inspectedStateCount: Array.isArray(browserEvidence.inspected_states) ? browserEvidence.inspected_states.length : 0,
+  };
 }
 
 function buildMissingExecutionEvidenceVerdict(verdict) {
@@ -148,6 +230,7 @@ function parseExecutionEvidenceArtifact(text) {
     }
     artifact.verification_runs.forEach(validateVerificationRun);
   }
+  validateBrowserEvidenceShape(artifact.browser_evidence);
 
   return artifact;
 }
@@ -168,10 +251,12 @@ function readExecutionEvidenceArtifact(runDir) {
     if (!stat.isFile() || stat.isSymbolicLink()) {
       throw new Error("execution evidence must be a regular file inside the run directory");
     }
+    const artifact = parseExecutionEvidenceArtifact(fs.readFileSync(artifactPath, "utf-8"));
+    validateBrowserEvidencePaths(artifact, runDir);
     return {
       state: "loaded",
       artifactPath,
-      artifact: parseExecutionEvidenceArtifact(fs.readFileSync(artifactPath, "utf-8")),
+      artifact,
       error: null,
     };
   } catch (error) {
@@ -273,6 +358,9 @@ function buildExecutionEvidencePreflight({ runDir, reviewedHead, strict = false 
     reviewedHeadSha: reviewedHead || null,
     evidenceHeadSha: artifactLoad.state === "loaded" ? artifactLoad.artifact.head_sha : null,
     artifactPath: artifactLoad.artifactPath,
+    browserEvidence: artifactLoad.state === "loaded"
+      ? summarizeBrowserEvidence(artifactLoad.artifact)
+      : { present: false },
     nextAction: status === "pass" ? "invoke_primary_reviewer" : "repair_execution_evidence",
   };
 }

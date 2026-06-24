@@ -20,6 +20,7 @@ function buildExecutionEvidence({
   recordedAt,
   testExitCode,
   verificationRuns,
+  browserEvidence,
 }) {
   if (!headSha) {
     throw new Error("post-dispatch HEAD SHA is required for execution evidence");
@@ -34,6 +35,7 @@ function buildExecutionEvidence({
     test_result_summary: resultHash ? `${executor || "executor"} result.txt hashed` : "unspecified",
     ...(testExitCode !== undefined ? { test_exit_code: testExitCode } : {}),
     ...(verificationRuns !== undefined ? { verification_runs: verificationRuns } : {}),
+    ...(browserEvidence !== undefined ? { browser_evidence: browserEvidence } : {}),
     recorded_at: recordedAt || new Date().toISOString(),
     recorded_by: "dispatch-orchestrator-v1",
   };
