@@ -4,7 +4,9 @@ Operator-facing recovery commands for `relay-dispatch`. These cover the two cano
 
 ## Executor completed but did not commit
 
-`recover-commit.js` handles the canonical "executor finished implementation but timed out before committing" path. Replaces the ad-hoc `git add -A && git commit && git push -u && gh pr create` shell sequence with a single command that preflights, commits via template, pushes (no force), creates the PR (idempotent on re-run), stamps `git.pr_number` via the shared lock helper, and emits a `recover_commit` event. Manifest STATE stays `review_pending` — the next step is the normal review.
+`recover-commit.js` handles the canonical "executor finished implementation but timed out before committing" path. For `review_pending` runs it replaces the ad-hoc `git add -A && git commit && git push -u && gh pr create` shell sequence with a single command that preflights, commits via template, pushes (no force), creates the PR (idempotent on re-run), stamps `git.pr_number` via the shared lock helper, and emits a `recover_commit` event. Manifest state stays `review_pending` — the next step is the normal post-publication review.
+
+For `internal_review_pending` delayed-publication runs, the same command commits locally, rebinds execution evidence, updates `git.head_sha`, and does not push, open a PR, or stamp `git.pr_number`. Publication remains owned by `publish-run.js` after internal review passes.
 
 ```bash
 # Standard recovery — dispatch returned commits="" + uncommitted!=""
@@ -70,7 +72,7 @@ Decision tree: if the executor finished implementation but did not commit, use `
 
 When R2 fails F2 (atomic-revert / commit count) only because the R1 fix added a +1 commit AND F3 substantive PASS AND CI is green, force-finalize-nonready is the right response — see `skills/relay-plan/references/rubric-design-guide.md` § "Atomic-revert factor wording" for the recommended factor wording (which prevents the failure entirely on new rubrics) and the four-bullet provenance template (which cites the case for force-finalize on rubrics that still use the strict wording).
 
-Use `recover-commit.js` when the executor changed files but did not commit, push, or create/stamp a PR. It creates the missing commit/PR handoff and leaves the manifest in `review_pending`.
+Use `recover-commit.js` when the executor changed files but did not commit. In `review_pending` it also creates/stamps the missing PR handoff. In `internal_review_pending` it stops after the local commit so the run can still pass through internal review before publication.
 
 ### Codex worktree admin-dir sandbox
 

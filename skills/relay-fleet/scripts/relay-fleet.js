@@ -36,11 +36,12 @@ const {
 
 const DEFAULT_PARALLEL = 4;
 const DEFAULT_DISPATCH_SCRIPT = path.join(__dirname, "..", "..", "relay-dispatch", "scripts", "dispatch.js");
+const DEFAULT_PUBLISH_SCRIPT = path.join(__dirname, "..", "..", "relay-dispatch", "scripts", "publish-run.js");
 const DEFAULT_REVIEW_SCRIPT = path.join(__dirname, "..", "..", "relay-review", "scripts", "review-runner.js");
 const KNOWN_FLAGS = [
   "--repo", "--fleet-id", "--leaves-file", "--resume", "--status", "--review", "--parallel",
-  "--dispatch-script", "--review-script", "--executor", "--model", "--model-hints", "--sandbox",
-  "--network-access", "--timeout", "--reasoning", "--copy", "--test-command",
+  "--dispatch-script", "--publish-script", "--review-script", "--executor", "--model", "--model-hints", "--sandbox",
+  "--network-access", "--timeout", "--reasoning", "--copy", "--test-command", "--publish-policy",
   "--register", "--reviewer", "--reviewer-model", "--dry-run", "--json", "--help", "-h",
 ];
 const CLI_ARG_OPTIONS = { commandName: "relay-fleet", reservedFlags: KNOWN_FLAGS };
@@ -66,10 +67,11 @@ function usage() {
     `  --fleet-id <id>       ${modeLabel("--fleet-id")} Fleet manifest id (required)`,
     `  --leaves-file <path>  ${MODE_VERBATIM_LABEL} JSON file with already-planned leaf contracts`,
     `  --resume             ${MODE_PARSED_LABEL} Reconcile and continue pending/pre-manifest children`,
-    `  --review             ${MODE_PARSED_LABEL} Fan out one foreground review-runner.js pass per review_pending child`,
+    `  --review             ${MODE_PARSED_LABEL} Drive child review/publication loops until ready_to_merge or escalated`,
     `  --status             ${MODE_PARSED_LABEL} Print derived fleet summary without writing`,
     `  --parallel <n>       ${MODE_PARSED_LABEL} Maximum concurrent child dispatches (default: ${DEFAULT_PARALLEL})`,
     `  --dispatch-script <path>  ${MODE_VERBATIM_LABEL} Dispatch entrypoint (default: relay-dispatch/scripts/dispatch.js)`,
+    `  --publish-script <path>   ${MODE_VERBATIM_LABEL} Publish entrypoint (default: relay-dispatch/scripts/publish-run.js)`,
     `  --review-script <path>    ${MODE_VERBATIM_LABEL} Review entrypoint (default: relay-review/scripts/review-runner.js)`,
     `  --executor <name>     ${modeLabel("--executor")} Child executor passed to dispatch.js`,
     `  --model <name>        ${modeLabel("--model")} Child model override passed to dispatch.js`,
@@ -80,6 +82,7 @@ function usage() {
     `  --reasoning <level>   ${modeLabel("--reasoning")} Child reasoning override passed to dispatch.js`,
     `  --copy <files>        ${modeLabel("--copy")} Child copy list passed to dispatch.js`,
     `  --test-command <cmd>  ${modeLabel("--test-command")} Child test command evidence passed to dispatch.js`,
+    `  --publish-policy <mode>  ${modeLabel("--publish-policy")} Child publish policy passed to dispatch.js`,
     `  --register           ${modeLabel("--register")} Pass --register to child dispatches`,
     `  --reviewer <name>    ${modeLabel("--reviewer")} Reviewer override passed to review-runner.js`,
     `  --reviewer-model <model>  ${modeLabel("--reviewer-model")} Reviewer model override passed to review-runner.js`,
@@ -113,6 +116,7 @@ function parseArgs(argv) {
     status: hasFlag("--status"),
     parallel,
     dispatchScript: path.resolve(getArg("--dispatch-script", DEFAULT_DISPATCH_SCRIPT)),
+    publishScript: path.resolve(getArg("--publish-script", DEFAULT_PUBLISH_SCRIPT)),
     reviewScript: path.resolve(getArg("--review-script", DEFAULT_REVIEW_SCRIPT)),
     executor: getArg("--executor"),
     model: getArg("--model"),
@@ -123,6 +127,7 @@ function parseArgs(argv) {
     reasoning: getArg("--reasoning"),
     copy: getArg("--copy"),
     testCommand: getArg("--test-command"),
+    publishPolicy: getArg("--publish-policy"),
     register: hasFlag("--register"),
     reviewer: getArg("--reviewer"),
     reviewerModel: getArg("--reviewer-model"),
@@ -460,6 +465,7 @@ function buildDispatchArgs({ repoRoot, fleetId, leaf, options }) {
     ["--reasoning", leaf.reasoning || options.reasoning],
     ["--copy", leaf.copy || options.copy],
     ["--test-command", leaf.test_command || options.testCommand],
+    ["--publish-policy", leaf.publish_policy || options.publishPolicy],
   ];
   for (const [flag, value] of valueFlags) {
     if (value !== undefined && value !== null && String(value).trim() !== "") {
@@ -503,6 +509,15 @@ function buildReviewArgs({ repoRoot, runId, options }) {
     }
   }
   return args;
+}
+
+function buildPublishArgs({ repoRoot, runId, options }) {
+  return [
+    options.publishScript,
+    "--repo", repoRoot,
+    "--run-id", runId,
+    "--json",
+  ];
 }
 
 function buildRedispatchArgs({ repoRoot, runId, options }) {
@@ -559,13 +574,18 @@ function terminalForFleetReview(state) {
 function childNeedsReview(summaryChild) {
   return summaryChild.dispatch_status === DISPATCH_STATUS.DISPATCHED
     && summaryChild.run_id
-    && summaryChild.run_state === RUN_STATES.REVIEW_PENDING;
+    && [
+      RUN_STATES.INTERNAL_REVIEW_PENDING,
+      RUN_STATES.REVIEW_PENDING,
+    ].includes(summaryChild.run_state);
 }
 
 function childNeedsReviewLoop(summaryChild) {
   return summaryChild.dispatch_status === DISPATCH_STATUS.DISPATCHED
     && summaryChild.run_id
     && [
+      RUN_STATES.INTERNAL_REVIEW_PENDING,
+      RUN_STATES.PUBLISH_PENDING,
       RUN_STATES.REVIEW_PENDING,
       RUN_STATES.CHANGES_REQUESTED,
     ].includes(summaryChild.run_state);
@@ -672,6 +692,91 @@ function spawnReviewForChild({ repoRoot, fleetId, child, options, activeChildren
         status: code === 0 ? "reviewed" : "reviewed_with_child_failure",
         exit_code: code,
         signal,
+        stderr,
+        before,
+        after,
+      });
+    });
+  });
+}
+
+function spawnPublishForChild({ repoRoot, fleetId, child, options, activeChildren, isInterrupted }) {
+  return new Promise((resolve) => {
+    if (isInterrupted()) {
+      resolve({ leaf_ref: child.leaf_ref, run_id: child.run_id, status: "skipped_interrupted" });
+      return;
+    }
+    if (runtimeChildIsAlive(repoRoot, fleetId, child.leaf_ref)) {
+      resolve({ leaf_ref: child.leaf_ref, run_id: child.run_id, status: "skipped_running", run_state: child.run_state });
+      return;
+    }
+
+    const before = childReviewSnapshot(repoRoot, child.run_id);
+    const args = buildPublishArgs({ repoRoot, runId: child.run_id, options });
+    const publish = spawn(process.execPath, args, {
+      cwd: repoRoot,
+      env: process.env,
+      detached: process.platform !== "win32",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+
+    let stdout = "";
+    let stderr = "";
+    let settled = false;
+    activeChildren.set(child.leaf_ref, publish);
+    upsertRuntimeProcess(repoRoot, fleetId, child.leaf_ref, publish, { phase: "publish", run_id: child.run_id });
+    publish.stdout.on("data", (chunk) => { stdout += chunk.toString("utf-8"); });
+    publish.stderr.on("data", (chunk) => { stderr += chunk.toString("utf-8"); });
+    publish.once("error", (error) => {
+      if (settled) return;
+      settled = true;
+      activeChildren.delete(child.leaf_ref);
+      removeRuntimeChild(repoRoot, fleetId, child.leaf_ref);
+      resolve({ leaf_ref: child.leaf_ref, run_id: child.run_id, status: "publish_failed", error: error.message });
+    });
+    publish.once("close", (code, signal) => {
+      if (settled) return;
+      settled = true;
+      activeChildren.delete(child.leaf_ref);
+      removeRuntimeChild(repoRoot, fleetId, child.leaf_ref);
+
+      let after = null;
+      try {
+        after = childReviewSnapshot(repoRoot, child.run_id);
+      } catch (error) {
+        resolve({
+          leaf_ref: child.leaf_ref,
+          run_id: child.run_id,
+          status: "publish_failed",
+          exit_code: code,
+          signal,
+          stderr,
+          error: `failed to read child manifest after publish: ${error.message}`,
+        });
+        return;
+      }
+
+      if (after.state === before.state) {
+        resolve({
+          leaf_ref: child.leaf_ref,
+          run_id: child.run_id,
+          status: "publish_stalled",
+          exit_code: code,
+          signal,
+          stderr,
+          before,
+          after,
+        });
+        return;
+      }
+
+      resolve({
+        leaf_ref: child.leaf_ref,
+        run_id: child.run_id,
+        status: code === 0 ? "published" : "published_with_child_failure",
+        exit_code: code,
+        signal,
+        payload: parseDispatchJson(stdout),
         stderr,
         before,
         after,
@@ -992,6 +1097,9 @@ function loopStepFailed(step) {
     "review_failed",
     "review_stalled",
     "reviewed_with_child_failure",
+    "publish_failed",
+    "publish_stalled",
+    "published_with_child_failure",
     "redispatch_failed",
     "redispatch_stalled",
     "redispatched_with_child_failure",
@@ -1014,7 +1122,7 @@ async function driveChildReviewLoop({ repoRoot, fleetId, child, options, activeC
       };
     }
 
-    if (current.run_state === RUN_STATES.REVIEW_PENDING) {
+    if ([RUN_STATES.INTERNAL_REVIEW_PENDING, RUN_STATES.REVIEW_PENDING].includes(current.run_state)) {
       const review = await spawnReviewForChild({
         repoRoot,
         fleetId,
@@ -1030,6 +1138,25 @@ async function driveChildReviewLoop({ repoRoot, fleetId, child, options, activeC
           run_id: child.run_id,
           status: review.status,
           run_state: review.after?.state || current.run_state,
+          steps,
+        };
+      }
+    } else if (current.run_state === RUN_STATES.PUBLISH_PENDING) {
+      const publish = await spawnPublishForChild({
+        repoRoot,
+        fleetId,
+        child: current,
+        options,
+        activeChildren,
+        isInterrupted,
+      });
+      steps.push({ phase: "publish", ...publish });
+      if (loopStepFailed(publish) || publish.status === "skipped_running") {
+        return {
+          leaf_ref: child.leaf_ref,
+          run_id: child.run_id,
+          status: publish.status,
+          run_state: publish.after?.state || current.run_state,
           steps,
         };
       }
@@ -1317,6 +1444,7 @@ module.exports = {
   FleetInputError,
   buildDispatchArgs,
   buildOperatorAttention,
+  buildPublishArgs,
   buildRedispatchArgs,
   buildReviewArgs,
   formatStatusText,

@@ -65,26 +65,18 @@ Write the dispatch prompt and rubric YAML to temp files such as `/tmp/dispatch-<
 
 ```bash
 node "${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/dispatch.js" . \
-  -b issue-<N> --prompt-file /tmp/dispatch-<N>.md --rubric-file /tmp/rubric-<N>.yaml --timeout 3600
+  -b issue-<N> --prompt-file /tmp/dispatch-<N>.md --rubric-file /tmp/rubric-<N>.yaml \
+  --publish-policy after-internal-review --timeout 3600
 # If relay-ready ran, append: --request-id <id> --leaf-id <id> --done-criteria-file <done-criteria-path>
 # To pin a dispatch route, append: --executor <name> --model <provider/model> or --model-hints dispatch=<provider/model>
 ```
 
-If dispatch is still running, optionally monitor progress:
-```bash
-git -C <worktree> log --oneline
-wc -l <stdoutLog>
-```
-
 Wait for completion. Check result:
-- `status: "completed"` and `runState: "review_pending"` → proceed to Step 4
-- `status: "completed-with-warning"` and `runState: "review_pending"` → executor timed out but made progress; check worktree, proceed to Step 4
+- `status: "completed"` and `runState: "internal_review_pending"` → proceed to Step 4
+- `status: "completed-with-warning"` and `runState: "internal_review_pending"` → executor timed out but made progress; check worktree, proceed to Step 4
 - `status: "failed"` and `runState: "escalated"` → inspect the dispatch error / manifest, fix and re-dispatch
 
-Capture `runId`, `manifestPath`, and `runState` from dispatch output. Get the PR number:
-```bash
-PR_NUM=$(gh pr list --head issue-<N> --json number -q '.[0].number')
-```
+Capture `runId`, `manifestPath`, and `runState` from dispatch output. Do not create or look up a PR yet; publication happens only after internal review LGTM.
 
 The manifest is written under `~/.relay/runs/<repo-slug>/`. Readiness linkage is recorded there, but the run lifecycle remains execution-only. If a sprint file exists, mark the plan item in-flight.
 
@@ -92,7 +84,22 @@ The manifest is written under `~/.relay/runs/<repo-slug>/`. Readiness linkage is
 
 **MANDATORY. Do NOT skip this step.**
 
-Verify PR exists: `gh pr list --head issue-<N>`.
+If the run is `internal_review_pending`, invoke relay-review without `--pr`. A PASS verdict advances only to `publish_pending`, not `ready_to_merge`:
+
+```bash
+node "${RELAY_SKILL_ROOT:-skills}/relay-review/scripts/review-runner.js" \
+  --repo . --run-id "$RUN_ID" --reviewer codex --json
+```
+
+If review requests changes, re-dispatch and repeat Step 4. If review returns `publish_pending`, publish the branch:
+
+```bash
+node "${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/publish-run.js" \
+  --repo . --run-id "$RUN_ID" --json
+PR_NUM=$(gh pr list --head issue-<N> --json number -q '.[0].number')
+```
+
+Now run the post-publication review. This is the round that can advance to `ready_to_merge`; it includes PR CI/actions, GitHub review, and comment signals in the review prompt.
 
 Snapshot review state before invoking relay-review:
 ```bash
@@ -138,8 +145,6 @@ When multiple independent tasks are ready, dispatch in parallel instead of runni
 ## Summary Checklist
 
 After completing the relay cycle, verify:
-- [ ] Done Criteria fully implemented (relay-review confirmed)
-- [ ] PR has `<!-- relay-review -->` LGTM comment (or `<!-- relay-review-skip -->` with reason)
-- [ ] PR marked `ready_to_merge`, or merged and closed if relay-merge was explicitly requested
-- [ ] Sprint file updated if present
-- [ ] Follow-up issues created (if applicable)
+- [ ] Done Criteria fully implemented; relay-review confirms LGTM and PR has the audit comment
+- [ ] PR is `ready_to_merge`, or merged/closed only when relay-merge was explicitly requested
+- [ ] Sprint files and follow-up issues are updated when applicable

@@ -27,6 +27,7 @@
  *   --reasoning <level>    Codex reasoning effort override (default by rubric size: S=medium, M=high, L/XL=xhigh)
  *   --rubric-file <path>   REQUIRED: copy rubric YAML to run dir (persists for review)
  *   --test-command <cmd>   Record the executor-side test command in execution evidence
+ *   --publish-policy <mode> immediate | after-internal-review (default: immediate)
  *   --review-assurance <level> standard | hardened (default: standard)
  *   --tags <csv>          Explicit routing tags; override inferred routing tags
  *   --rubric-grandfathered Retired alias; dispatch rejects it
@@ -157,7 +158,7 @@ const args = process.argv.slice(2);
 const KNOWN_FLAGS = [
   "--branch", "-b", "--run-id", "--manifest", "--prompt", "-p", "--prompt-file", "--executor", "-e",
   "--model", "-m", "--model-hints", "--route-intent-file", "--sandbox", "--network-access", "--copy", "--timeout", "--reasoning", "--rubric-file", "--test-command", "--rubric-grandfathered",
-  "--request-id", "--leaf-id", "--fleet-id", "--done-criteria-file", "--review-assurance", "--tags",
+  "--request-id", "--leaf-id", "--fleet-id", "--done-criteria-file", "--publish-policy", "--review-assurance", "--tags",
   "--register", "--no-cleanup", "--auto-recover-commit", "--no-auto-recover-commit", "--allow-conflicting-run", "--dry-run", "--json", "--help", "-h",
 ];
 const CLI_ARG_OPTIONS = { commandName: "dispatch", reservedFlags: KNOWN_FLAGS };
@@ -186,6 +187,7 @@ if (!args.length || hasCliFlag(["--help", "-h"])) {
   console.log(`  --reasoning        ${modeLabel("--reasoning")} Codex reasoning effort (default by rubric size: S=medium, M=high, L/XL=xhigh)`);
   console.log(`  --rubric-file      ${modeLabel("--rubric-file")} REQUIRED: copy rubric YAML to run dir (persists for review)`);
   console.log(`  --test-command     ${modeLabel("--test-command")} Record the executor-side test command in execution evidence`);
+  console.log(`  --publish-policy   ${modeLabel("--publish-policy")} PR publication policy: immediate | after-internal-review (default: immediate)`);
   console.log(`  --review-assurance ${modeLabel("--review-assurance")} Review assurance: standard | hardened (default: standard)`);
   console.log(`  --tags             ${modeLabel("--tags")} Explicit routing tags; override inferred routing tags`);
   console.log(`  --rubric-grandfathered  ${modeLabel("--rubric-grandfathered")} Retired alias; remove anchor.rubric_grandfathered manually`);
@@ -301,6 +303,7 @@ const NETWORK_ACCESS = readArg(args, "--network-access", "disabled", CLI_ARG_OPT
 const COPY_FILES = readArg(args, "--copy", "", CLI_ARG_OPTIONS).split(",").filter(Boolean);
 const RUBRIC_FILE = readArg(args, "--rubric-file", undefined, CLI_ARG_OPTIONS);
 const TEST_COMMAND = readArg(args, "--test-command", undefined, CLI_ARG_OPTIONS);
+const PUBLISH_POLICY = readArg(args, "--publish-policy", "immediate", CLI_ARG_OPTIONS);
 const RUBRIC_GRANDFATHERED = hasCliFlag("--rubric-grandfathered");
 const REQUEST_ID = readArg(args, "--request-id", undefined, CLI_ARG_OPTIONS);
 const LEAF_ID = readArg(args, "--leaf-id", undefined, CLI_ARG_OPTIONS);
@@ -504,6 +507,11 @@ if (DONE_CRITERIA_FILE) {
     console.error(`Error: done criteria file not found: ${doneCriteriaPath}`);
     process.exit(1);
   }
+}
+
+if (!["immediate", "after-internal-review"].includes(PUBLISH_POLICY)) {
+  console.error("Error: --publish-policy must be immediate or after-internal-review");
+  process.exit(1);
 }
 
 if (!MANIFEST_INPUT && !fs.existsSync(path.join(REPO_PATH, ".git"))) {
@@ -1810,7 +1818,13 @@ async function main() {
 
   let prNumber = manifest.git?.pr_number ?? null;
   let prCreatedByUs = null;
-  if ((status === "completed" || status === "completed-with-warning") && !DRY_RUN && gitLog) {
+  const shouldPublishImmediately = PUBLISH_POLICY === "immediate";
+  if (
+    shouldPublishImmediately
+    && (status === "completed" || status === "completed-with-warning")
+    && !DRY_RUN
+    && gitLog
+  ) {
     try {
       const prResult = await pushAndOpenPR({
         repoRoot,
@@ -1853,10 +1867,16 @@ async function main() {
     error = `execution_evidence_write_failed: ${String(executionEvidenceError.message || executionEvidenceError)}`;
   }
 
+  const dispatchSuccessState = PUBLISH_POLICY === "after-internal-review"
+    ? STATES.INTERNAL_REVIEW_PENDING
+    : STATES.REVIEW_PENDING;
+  const dispatchSuccessNextAction = PUBLISH_POLICY === "after-internal-review"
+    ? "run_internal_review"
+    : "run_review";
   manifest = updateManifestState(
     manifest,
-    status === "failed" ? STATES.ESCALATED : STATES.REVIEW_PENDING,
-    status === "failed" ? "inspect_dispatch_failure" : "run_review"
+    status === "failed" ? STATES.ESCALATED : dispatchSuccessState,
+    status === "failed" ? "inspect_dispatch_failure" : dispatchSuccessNextAction
   );
   const { github: _legacyGithub, ...manifestSansGithub } = manifest;
   const { pr_number: _legacyGithubPrNumber, ...githubFields } = _legacyGithub || {};
@@ -1882,6 +1902,7 @@ async function main() {
     reason: status === "failed"
       ? `${RESUME_MODE ? "same_run_resume" : "new_dispatch"}:${error || "dispatch_failed"}`
       : `${RESUME_MODE ? "same_run_resume" : "new_dispatch"}:${status}`,
+    publish_policy: PUBLISH_POLICY,
     executor_network: executorNetworkPolicy,
     executor_policy: executorPolicy,
     policy_decision: policyDecision,
@@ -1965,6 +1986,7 @@ async function main() {
     executor: EXECUTOR,
     executorNetwork: executorNetworkPolicy,
     executorPolicy,
+    publishPolicy: PUBLISH_POLICY,
     policyDecision,
     routePlanPath: routePlanSnapshot?.path || null,
     routePlan: routePlanSnapshot?.snapshot || null,

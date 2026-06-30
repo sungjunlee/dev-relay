@@ -77,6 +77,7 @@ const FLAGS = [
   { flag: "--project-only", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Presence flag; no value is consumed." },
   { flag: "--prompt", aliases: ["-p"], kind: VALUE, mode: MODE_VERBATIM, valueName: "<text>", rationale: "Operator-supplied prompt text; keep the literal argv token." },
   { flag: "--prompt-file", kind: VALUE, mode: MODE_VERBATIM, valueName: "<path>", rationale: "Operator-supplied prompt path; keep the literal argv token." },
+  { flag: "--publish-policy", kind: VALUE, mode: MODE_PARSED, valueName: "<mode>", allowedValues: ["immediate", "after-internal-review"], rationale: "Closed PR publication policy for dispatch; flag-like following tokens should mean the value is missing." },
   { flag: "--reason", kind: VALUE, mode: MODE_VERBATIM, valueName: "<text>", rationale: "Audit reason text must be recorded exactly and must not be blank." },
   { flag: "--reasoning", kind: VALUE, mode: MODE_PARSED, valueName: "<level>",
     allowedValues: ["none", "minimal", "low", "medium", "high", "xhigh"],
@@ -140,7 +141,7 @@ const COMMAND_FLAGS = {
     "--branch", "--run-id", "--manifest", "--prompt", "--prompt-file", "--executor",
     "--model", "--model-hints", "--route-intent-file", "--sandbox", "--network-access", "--copy", "--timeout", "--reasoning", "--rubric-file",
     "--test-command", "--rubric-grandfathered", "--request-id", "--leaf-id",
-    "--fleet-id", "--done-criteria-file", "--review-assurance", "--register", "--no-cleanup", "--auto-recover-commit", "--no-auto-recover-commit",
+    "--fleet-id", "--done-criteria-file", "--publish-policy", "--review-assurance", "--register", "--no-cleanup", "--auto-recover-commit", "--no-auto-recover-commit",
     "--tags", "--allow-conflicting-run", "--dry-run", "--json", "--help",
   ],
   "finalize-run": [
@@ -174,6 +175,9 @@ const COMMAND_FLAGS = {
   ],
   "persist-request": [
     "--repo", "--contract-file", "--json", "--help",
+  ],
+  "publish-run": [
+    "--repo", "--run-id", "--branch", "--manifest", "--dry-run", "--json", "--help",
   ],
   "probe-executor-env": [
     "--executor", "--model", "--timeout", "--project-only", "--json", "--help",

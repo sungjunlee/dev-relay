@@ -65,6 +65,20 @@ function createManifestInState(state = STATES.REVIEW_PENDING) {
       "run_review"
     );
   }
+  if (state === STATES.INTERNAL_REVIEW_PENDING) {
+    return updateManifestState(
+      updateManifestState(manifest, STATES.DISPATCHED, "await_dispatch_result"),
+      STATES.INTERNAL_REVIEW_PENDING,
+      "run_internal_review"
+    );
+  }
+  if (state === STATES.PUBLISH_PENDING) {
+    return updateManifestState(
+      createManifestInState(STATES.INTERNAL_REVIEW_PENDING),
+      STATES.PUBLISH_PENDING,
+      "publish_pr"
+    );
+  }
   if (state === STATES.CHANGES_REQUESTED) {
     return updateManifestState(
       createManifestInState(STATES.REVIEW_PENDING),
@@ -163,6 +177,36 @@ test("manifest-apply/applyVerdictToManifest preserves the PASS field-write contr
       ...manifest.review,
       rounds: 1,
       latest_verdict: "lgtm",
+      repeated_issue_count: 0,
+      last_reviewed_sha: "abc123",
+      last_gate: null,
+    },
+  });
+});
+
+test("manifest-apply/applyVerdictToManifest maps internal PASS to publish_pending", () => {
+  const manifest = createManifestInState(STATES.INTERNAL_REVIEW_PENDING);
+  const result = applyVerdictToManifest(
+    manifest,
+    makeVerdict("pass", "publish_pending"),
+    1,
+    null,
+    "abc123",
+    0
+  );
+
+  assertManifestWriteParity(result, manifest, {
+    ...manifest,
+    state: STATES.PUBLISH_PENDING,
+    next_action: "publish_pr",
+    git: {
+      ...manifest.git,
+      head_sha: "abc123",
+    },
+    review: {
+      ...manifest.review,
+      rounds: 1,
+      latest_verdict: "internal_lgtm",
       repeated_issue_count: 0,
       last_reviewed_sha: "abc123",
       last_gate: null,

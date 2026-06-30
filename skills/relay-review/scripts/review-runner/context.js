@@ -7,8 +7,9 @@ const {
   parsePositiveInt,
   validateManifestPaths,
 } = require("../../../relay-dispatch/scripts/manifest/paths");
+const { STATES } = require("../../../relay-dispatch/scripts/manifest/lifecycle");
 const { resolveManifestRecord } = require("../../../relay-dispatch/scripts/relay-resolver");
-const { gh, readText } = require("./common");
+const { gh, git, readText } = require("./common");
 
 // DNS hostname validation — conservative label allowlist. Rejects leading
 // dashes (which could be interpreted as flags by some CLI tools), whitespace,
@@ -288,7 +289,7 @@ function resolveContext(repoPath, repoArg, manifestPathArg, runIdArg, branchArg,
   branch = branch || manifest.data?.git?.working_branch || null;
   prNumber = prNumber || manifest.data?.git?.pr_number || null;
   const runRepoPath = validatedPaths.repoRoot;
-  if (!prNumber && branch) {
+  if (!prNumber && branch && manifest.data?.state !== STATES.INTERNAL_REVIEW_PENDING) {
     prNumber = resolvePrForBranch(runRepoPath, branch);
   }
   const issueNumber = resolveIssueNumber(runRepoPath, prNumber, branch, manifest.data, {
@@ -408,12 +409,93 @@ function loadDoneCriteria(repoPath, issueNumber, prNumber, doneCriteriaFile, man
   );
 }
 
-function loadDiff(repoPath, prNumber, diffFile) {
+function resolveDiffBase(reviewRepoPath, manifestData) {
+  const baseBranch = manifestData?.git?.base_branch || "main";
+  const candidates = [
+    `origin/${baseBranch}`,
+    baseBranch,
+  ];
+  for (const candidate of candidates) {
+    try {
+      return git(reviewRepoPath, "merge-base", "HEAD", candidate).trim();
+    } catch {}
+  }
+  return null;
+}
+
+function loadRetainedWorktreeDiff(reviewRepoPath, manifestData) {
+  if (!reviewRepoPath) {
+    throw new Error("Retained review checkout is required to build an internal review diff.");
+  }
+  const base = resolveDiffBase(reviewRepoPath, manifestData);
+  if (base) {
+    const committed = git(reviewRepoPath, "diff", `${base}..HEAD`).trim();
+    const unstaged = git(reviewRepoPath, "diff").trim();
+    const staged = git(reviewRepoPath, "diff", "--cached").trim();
+    return [committed, unstaged, staged].filter(Boolean).join("\n");
+  }
+  const startHead = manifestData?.dispatch?.start_head || manifestData?.git?.base_sha || null;
+  if (startHead) {
+    return git(reviewRepoPath, "diff", `${startHead}..HEAD`).trim();
+  }
+  throw new Error(
+    "Cannot resolve a base for retained worktree diff. Provide --diff-file or ensure git.base_branch is available locally."
+  );
+}
+
+function loadDiff(repoPath, prNumber, diffFile, options = {}) {
   if (diffFile) return readText(diffFile).trim();
+  if (options.internalReview) {
+    return loadRetainedWorktreeDiff(options.reviewRepoPath, options.manifestData);
+  }
   if (!prNumber) {
     throw new Error("PR number is required to fetch a diff. Provide --diff-file for fixture-based runs.");
   }
   return gh(repoPath, "pr", "diff", String(prNumber)).trim();
+}
+
+function summarizeStatusCheck(check) {
+  const name = check?.name || check?.context || check?.workflowName || check?.app?.name || "unnamed check";
+  const state = check?.conclusion || check?.status || check?.state || "unknown";
+  return `- ${name}: ${state}`;
+}
+
+function summarizeReview(review) {
+  const author = review?.author?.login || review?.user?.login || "unknown";
+  const state = review?.state || "unknown";
+  const body = String(review?.body || "").trim().replace(/\s+/g, " ").slice(0, 240);
+  return `- ${author}: ${state}${body ? ` — ${body}` : ""}`;
+}
+
+function summarizeComment(comment) {
+  const author = comment?.author?.login || comment?.user?.login || "unknown";
+  const body = String(comment?.body || "").trim().replace(/\s+/g, " ").slice(0, 240);
+  return body ? `- ${author}: ${body}` : null;
+}
+
+function loadPrReviewSignals(repoPath, prNumber) {
+  if (!prNumber) {
+    return { status: "not_available", reason: "no_pr" };
+  }
+  try {
+    const raw = gh(
+      repoPath,
+      "pr", "view", String(prNumber),
+      "--json", "statusCheckRollup,reviews,comments"
+    );
+    const parsed = JSON.parse(raw);
+    return {
+      status: "loaded",
+      checks: Array.isArray(parsed.statusCheckRollup) ? parsed.statusCheckRollup.map(summarizeStatusCheck) : [],
+      reviews: Array.isArray(parsed.reviews) ? parsed.reviews.map(summarizeReview) : [],
+      comments: Array.isArray(parsed.comments) ? parsed.comments.map(summarizeComment).filter(Boolean) : [],
+    };
+  } catch (error) {
+    return {
+      status: "failed",
+      reason: String(error.message || error).split("\n")[0],
+    };
+  }
 }
 
 function loadProjectConventions(reviewRepoPath) {
@@ -465,6 +547,8 @@ module.exports = {
   isValidHostname,
   loadDiff,
   loadDoneCriteria,
+  loadPrReviewSignals,
+  loadRetainedWorktreeDiff,
   loadProjectConventions,
   parseRemoteHost,
   resolveContext,

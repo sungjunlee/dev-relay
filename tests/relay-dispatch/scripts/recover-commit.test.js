@@ -120,6 +120,9 @@ function buildManifestForState(manifest, state, repoRoot, runId) {
   const runDir = ensureRunLayout(repoRoot, runId).runDir;
   fs.writeFileSync(path.join(runDir, "rubric.yaml"), "rubric:\n  factors:\n    - name: recover-commit\n", "utf-8");
   manifest.anchor.rubric_path = "rubric.yaml";
+  if (state === STATES.INTERNAL_REVIEW_PENDING) {
+    return updateManifestState(manifest, STATES.INTERNAL_REVIEW_PENDING, "run_internal_review");
+  }
   manifest = updateManifestState(manifest, STATES.REVIEW_PENDING, "run_review");
   if (state === STATES.REVIEW_PENDING) return manifest;
   if (state === STATES.READY_TO_MERGE) {
@@ -285,6 +288,45 @@ test("happy path commits dirty worktree, pushes, opens PR, stamps manifest, and 
   assert.equal(events.filter((entry) => entry.event === "execution_evidence_rebranded").length, 0);
   assert.ok(readJsonLines(fixture.eventLogPath).some((entry) => entry.eventData.event === "recover_commit"));
   assert.equal(readJsonLines(fixture.ghLogPath).filter((argv) => argv[0] === "pr" && argv[1] === "create").length, 1);
+});
+
+test("internal_review_pending recovery commits locally without pushing or opening a PR", () => {
+  const fixture = setupRepo({ dirty: true, manifestState: STATES.INTERNAL_REVIEW_PENDING });
+  const result = runRecover(fixture, ["--reason", "executor completed before internal review", "--json"]);
+
+  assert.equal(result.status, 0, result.stderr);
+  const parsed = JSON.parse(result.stdout);
+  assert.equal(parsed.status, "recovered");
+  assert.equal(parsed.state, STATES.INTERNAL_REVIEW_PENDING);
+  assert.equal(parsed.commitCreated, true);
+  assert.equal(parsed.prNumber, null);
+  assert.equal(parsed.prCreated, false);
+
+  const manifest = readManifest(fixture.manifestPath).data;
+  assert.equal(manifest.state, STATES.INTERNAL_REVIEW_PENDING);
+  assert.equal(manifest.git.pr_number, null);
+  assert.equal(manifest.git.head_sha, parsed.commitSha);
+
+  assert.deepEqual(readJsonLines(fixture.ghLogPath), []);
+  const events = readRunEvents(fixture.repoRoot, fixture.runId);
+  const recoverEvent = events.find((entry) => entry.event === "recover_commit");
+  assert.equal(recoverEvent.pr_number, null);
+  assert.equal(events.filter((entry) => entry.event === "pr_number_stamped").length, 0);
+});
+
+test("internal_review_pending dry-run does not call GitHub or preview PR commands", () => {
+  const fixture = setupRepo({ dirty: true, manifestState: STATES.INTERNAL_REVIEW_PENDING });
+  const result = runRecover(fixture, ["--reason", "preview internal recovery", "--dry-run", "--json"]);
+
+  assert.equal(result.status, 0, result.stderr);
+  const parsed = JSON.parse(result.stdout);
+  assert.equal(parsed.status, "dry_run");
+  assert.equal(parsed.prTitle, null);
+  assert.equal(parsed.manifestMutation.git_pr_number, null);
+  assert.ok(parsed.commands.some((cmd) => cmd.argv.includes("commit")));
+  assert.ok(!parsed.commands.some((cmd) => cmd.argv.includes("push")));
+  assert.ok(!parsed.commands.some((cmd) => cmd.argv.includes("create")));
+  assert.deepEqual(readJsonLines(fixture.ghLogPath), []);
 });
 
 test("recover-commit canonicalizes manifest repo_root when it shares the expected git common dir", () => {

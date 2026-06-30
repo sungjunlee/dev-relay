@@ -114,11 +114,15 @@ function startConfiguredAdvisory({
   };
 }
 
-async function settleAdvisoryForVerdict({ advisoryRun, config, hardenedAssurance, verdict }) {
+async function settleAdvisoryForVerdict({ advisoryRun, config, currentState, hardenedAssurance, verdict }) {
   if (!advisoryRun) return { advisoryResult: null, resultAdvisory: undefined };
   const waitStartedAt = Date.now();
   const waitMs = hardenedAssurance ? config.timeoutSeconds * 1000 : config.graceSeconds * 1000;
-  const decisionState = verdict.verdict === "changes_requested" ? STATES.CHANGES_REQUESTED : STATES.READY_TO_MERGE;
+  const decisionState = verdict.verdict === "changes_requested"
+    ? STATES.CHANGES_REQUESTED
+    : currentState === STATES.INTERNAL_REVIEW_PENDING
+      ? STATES.PUBLISH_PENDING
+      : STATES.READY_TO_MERGE;
   let advisoryResult = await finishAdvisoryReview({
     advisoryRun,
     consumedByPhase: "review",

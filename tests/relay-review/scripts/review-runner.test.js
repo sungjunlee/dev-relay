@@ -10,6 +10,7 @@ const {
   STATES,
   createManifestSkeleton,
   ensureRunLayout,
+  forceTransitionState,
   getRunsDir,
   updateManifestState,
   writeManifest,
@@ -872,6 +873,52 @@ test("pass verdict moves review_pending to ready_to_merge", () => {
   assert.equal(manifest.review.last_quality_review_status, "pass");
   assert.equal(manifest.review.last_quality_execution_status, "pass");
   assert.equal(manifest.review.last_quality_execution_reason, null);
+});
+
+test("internal pass verdict moves internal_review_pending to publish_pending without PR comment", () => {
+  const { repoRoot, manifestPath, runId, doneCriteriaPath } = setupRepo();
+  const record = readManifest(manifestPath);
+  const internal = forceTransitionState({
+    ...record.data,
+    git: {
+      ...(record.data.git || {}),
+      pr_number: null,
+    },
+  }, STATES.INTERNAL_REVIEW_PENDING, "run_internal_review");
+  writeManifest(manifestPath, internal, record.body);
+  const reviewFile = writeVerdict(repoRoot, "internal-pass.json", {
+    verdict: "pass",
+    summary: "Internal review is ready to publish.",
+    contract_status: "pass",
+    quality_review_status: "pass",
+    quality_execution_status: "pass",
+    next_action: "publish_pending",
+    issues: [],
+    rubric_scores: defaultRubricScores(),
+    scope_drift: { creep: [], missing: [] },
+  });
+
+  const stdout = execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--run-id", runId,
+    "--done-criteria-file", doneCriteriaPath,
+    "--review-file", reviewFile,
+    "--json",
+  ], { encoding: "utf-8" });
+
+  const result = JSON.parse(stdout);
+  assert.equal(result.state, STATES.PUBLISH_PENDING);
+  assert.equal(result.nextState, STATES.PUBLISH_PENDING);
+  assert.equal(result.commentPosted, false);
+  assert.equal(result.prNumber, null);
+  assert.equal(result.reviewPhase, "internal");
+
+  const manifest = readManifest(manifestPath).data;
+  assert.equal(manifest.state, STATES.PUBLISH_PENDING);
+  assert.equal(manifest.next_action, "publish_pr");
+  assert.equal(manifest.git.pr_number, null);
+  assert.equal(manifest.review.latest_verdict, "internal_lgtm");
 });
 
 test("review-runner proceeds after audited ready_to_merge HEAD-drift recovery", () => {

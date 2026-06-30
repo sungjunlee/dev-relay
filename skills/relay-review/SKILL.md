@@ -81,7 +81,8 @@ This writes round artifacts under `~/.relay/runs/<repo-slug>/<run-id>/`. See `re
 | Phase 1 | pass | `phase1_pass` | Phase 2 |
 | Phase 1 | fail | `phase1_fail` | Re-dispatch, then Phase 1 |
 | Phase 2 | pass | `phase2_pass` | Converged |
-| Converged | ready verdict emitted | `converged` | `ready_to_merge` |
+| Converged (internal) | ready-to-publish verdict emitted | `converged` | `publish_pending` |
+| Converged (post-publication) | ready verdict emitted | `converged` | `ready_to_merge` |
 | Phase 2 | fail | `phase2_fail` | Re-dispatch, then Phase 1 |
 | Any phase | same issue 3+ rounds or safety cap hit | `escalated` | Escalated |
 
@@ -121,7 +122,7 @@ Before any re-dispatch, check:
 
 ### Converge
 
-11. Both phases pass → produce a structured verdict with `verdict=pass`, `next_action=ready_to_merge`, and `issues=[]`.
+11. Both phases pass → produce a structured verdict with `verdict=pass` and `issues=[]`. Use `next_action=publish_pending` when the manifest state is `internal_review_pending`; use `next_action=ready_to_merge` when the manifest state is `review_pending`.
 
 **Safety cap: 20 rounds total.** Ceiling, not target — most PRs converge in 1-3 rounds. Hitting the cap means something is structurally wrong; escalate.
 
@@ -132,7 +133,7 @@ Before any re-dispatch, check:
 node "${RELAY_SKILL_ROOT:-skills}/relay-review/scripts/review-runner.js" --repo . --run-id "$RUN_ID" --pr "$PR_NUM" --review-file /tmp/review-verdict.json
 ```
 
-The runner validates the verdict, writes the PR audit comment, updates manifest state, and records round artifacts. For hardened runs, a passing manual verdict requires an explicit `--manual-review-reason` audit reason. See `references/runner-notes.md` for the full audit-trail and backward-compatibility behavior.
+The runner validates the verdict, writes the PR audit comment only for post-publication rounds, updates manifest state, and records round artifacts. Internal rounds use the retained worktree diff and never comment on a PR. For hardened runs, a passing manual verdict requires an explicit `--manual-review-reason` audit reason. See `references/runner-notes.md` for the full audit-trail and backward-compatibility behavior.
 
 When an escalated run needs another review attempt, pass a different `--reviewer` when available. If the same adapter is intentionally reused, include `--independent-review-reason <text>` to document why the attempt is independent enough to spend the single reviewer-swap quota.
 

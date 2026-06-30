@@ -8,7 +8,7 @@ const { buildReviewRunnerRubricGateFailure, loadRubricFromRunDir } = require("..
 const { writeManifest } = require("../../relay-dispatch/scripts/manifest/store");
 const { appendIterationScore, appendRunEvent, appendScoreDivergence, EVENTS } = require("../../relay-dispatch/scripts/relay-events");
 const { git, writeText } = require("./review-runner/common");
-const { applyReviewerIdentity, getGhLogin, loadDiff, loadDoneCriteria, parseRemoteHost, resolveContext, resolveIssueNumber, resolveRemoteHost } = require("./review-runner/context");
+const { applyReviewerIdentity, getGhLogin, parseRemoteHost, resolveContext, resolveIssueNumber, resolveRemoteHost } = require("./review-runner/context");
 const { buildPrompt, formatPriorVerdictSummary } = require("./review-runner/prompt");
 const { parseReviewVerdict, validateReviewVerdict, validateScopeDrift } = require("./review-runner/verdict");
 const { buildCommentBody, formatIssueList, formatScopeDrift, postComment } = require("./review-runner/comment");
@@ -16,8 +16,9 @@ const { buildScoreDivergenceAnalysis, loadPrBody, parseScoreLog, toIterationScor
 const { applyQualityExecutionStatus, buildExecutionEvidenceFailureVerdict, buildMissingExecutionEvidenceVerdict, computeQualityExecutionStatus } = require("./review-runner/execution-evidence");
 const { applyReviewAssurancePolicy } = require("./review-runner/assurance");
 const { buildRedispatchPrompt, buildRubricGateRedispatchPrompt, computeFactorStatusFlips, computeRepeatedIssueCount, decideFlipFlopEscalation, detectChurnGrowth, summarizeLineage, toEscalatedVerdict } = require("./review-runner/redispatch");
-const { applyPolicyViolationToManifest, applyVerdictToManifest } = require("./review-runner/manifest-apply");
-const { writePrBodySnapshot } = require("./review-runner/pr-body-snapshot");
+const { applyVerdictToManifest } = require("./review-runner/manifest-apply");
+const { enforceRoundCap } = require("./review-runner/round-cap");
+const { passNextActionsFor, writeRoundArtifacts } = require("./review-runner/round-artifacts");
 const { maybeBlockForExecutionEvidencePreflight } = require("./review-runner/preflight");
 const { buildPrimaryReviewerPreflight, loadReviewText, loadRunRoutePlan, resolveReviewerName, resolveReviewerScript } = require("./review-runner/reviewer-invoke");
 const { maybeSwapReviewer } = require("./review-runner/reviewer-swap");
@@ -59,15 +60,15 @@ async function run() {
   let { data } = manifest;
   data = maybeSwapReviewer(data, reviewerArg, body, manifestPath, runRepoPath, { independentReviewReason });
 
-  if (data.state !== STATES.REVIEW_PENDING) {
-    throw new Error(`Review runner requires state=review_pending, got '${data.state}'`);
+  const internalReview = data.state === STATES.INTERNAL_REVIEW_PENDING;
+  if (![STATES.INTERNAL_REVIEW_PENDING, STATES.REVIEW_PENDING].includes(data.state)) {
+    throw new Error(`Review runner requires state=internal_review_pending or review_pending, got '${data.state}'`);
   }
   if (!fs.existsSync(reviewRepoPath)) {
     throw new Error(`Retained review checkout does not exist: ${reviewRepoPath}`);
   }
 
   const round = Number(data.review?.rounds || 0) + 1;
-  const maxRounds = Number(data.review?.max_rounds || 20);
   const runDir = getRunDir(runRepoPath, data.run_id);
   ensureRunLayout(runRepoPath, data.run_id);
   const runRoutePlan = loadRunRoutePlan(runRepoPath, data.run_id).plan;
@@ -88,46 +89,33 @@ async function run() {
     reviewedHeadSha = git(reviewRepoPath, "rev-parse", "HEAD").trim();
   } catch {}
 
-  if (round > maxRounds) {
-    const escalationDecision = {
-      round: Number(data.review?.rounds || 0), trigger: "max_rounds", factors: [], traces: [],
-      lineage_summary: summarizeLineage([]), decision: "escalate", reason: "max_rounds_exceeded",
-    };
-    const escalatedManifest = applyPolicyViolationToManifest(data, Number(data.review?.rounds || 0), prNumber, reviewedHeadSha, "max_rounds_exceeded", { escalationDecision });
-    writeManifest(manifestPath, escalatedManifest, body);
-    appendRunEvent(runRepoPath, data.run_id, { event: EVENTS.ESCALATION_DECISION, state_from: data.state, state_to: STATES.ESCALATED, head_sha: reviewedHeadSha, ...escalationDecision });
-    appendRunEvent(runRepoPath, data.run_id, {
-      event: EVENTS.REVIEW_APPLY,
-      state_from: data.state,
-      state_to: STATES.ESCALATED,
-      head_sha: reviewedHeadSha,
-      round: Number(data.review?.rounds || 0),
-      reason: "max_rounds_exceeded",
-      // No reviewer round executed here; mark the system-forced transition explicitly.
-      origin: "system",
-    });
-    throw new Error(`Review round cap exceeded: next round ${round} would exceed max_rounds=${maxRounds}`);
-  }
+  enforceRoundCap({ body, data, manifestPath, prNumber, reviewedHeadSha, round, runRepoPath });
 
-  const { source: doneCriteriaSource, text: doneCriteria } = loadDoneCriteria(
-    runRepoPath,
+  const {
+    diffPath,
+    diffText,
+    doneCriteria,
+    doneCriteriaPath,
+    doneCriteriaSource,
+    prBodyPath,
+    prBodySnapshot,
+    prReviewSignals,
+    promptPath,
+    reviewPhase,
+    rubricLoad,
+  } = writeRoundArtifacts({
+    branch,
+    data,
+    diffFile,
+    doneCriteriaFile,
+    internalReview,
     issueNumber,
     prNumber,
-    doneCriteriaFile,
-    data
-  );
-  const diffText = loadDiff(runRepoPath, prNumber, diffFile);
-  const rubricLoad = loadRubricFromRunDir(runDir, data);
-
-  const doneCriteriaPath = path.join(runDir, `review-round-${round}-done-criteria.md`);
-  const diffPath = path.join(runDir, `review-round-${round}-diff.patch`);
-  const prBodyPath = path.join(runDir, `review-round-${round}-pr-body.md`);
-  const promptPath = path.join(runDir, `review-round-${round}-prompt.md`);
-  const prBodySnapshot = writePrBodySnapshot({ repoPath: runRepoPath, runId: data.run_id, round, prNumber, prBodyPath });
-  const promptText = buildPrompt({ round, prNumber, branch, issueNumber, doneCriteria, doneCriteriaSource, diffText, reviewRepoPath, runDir, rubricLoad, prBodyPath, prBodySnapshot });
-  writeText(doneCriteriaPath, `${doneCriteria}\n`);
-  writeText(diffPath, `${diffText}\n`);
-  writeText(promptPath, `${promptText}\n`);
+    reviewRepoPath,
+    round,
+    runDir,
+    runRepoPath,
+  });
 
   const churnGrowth = detectChurnGrowth(runDir, round);
   if (churnGrowth && !jsonOut) {
@@ -156,6 +144,8 @@ async function run() {
     reviewHeadSha: reviewedHeadSha,
     reviewRepoPath,
     reviewAssurance: data.policy?.review_assurance || "standard",
+    reviewPhase,
+    prReviewSignals,
     manualReviewReason: manualReviewReason || null,
     reviewer: reviewerName,
     reviewerScript,
@@ -216,7 +206,12 @@ async function run() {
   });
   result.rawResponsePath = rawResponsePath;
 
-  let verdict = parseReviewVerdict(reviewText, { adapter: reviewerName, phase: "primary_review", requireExecutionStatus: false });
+  let verdict = parseReviewVerdict(reviewText, {
+    adapter: reviewerName,
+    phase: "primary_review",
+    passNextActions: passNextActionsFor(internalReview),
+    requireExecutionStatus: false,
+  });
   if (rubricLoad.state === "loaded" && (!Array.isArray(verdict.rubric_scores) || verdict.rubric_scores.length === 0)) {
     throw new Error(
       "Review verdict has empty rubric_scores but a rubric was provided. " +
@@ -232,6 +227,7 @@ async function run() {
   ({ advisoryResult, resultAdvisory: result.advisoryReview } = await settleAdvisoryForVerdict({
     advisoryRun,
     config: advisoryConfig,
+    currentState: data.state,
     hardenedAssurance,
     verdict,
   }));
@@ -246,7 +242,7 @@ async function run() {
       ? buildMissingExecutionEvidenceVerdict(verdict)
       : buildExecutionEvidenceFailureVerdict(verdict);
   }
-  validateReviewVerdict(verdict);
+  validateReviewVerdict(verdict, { passNextActions: passNextActionsFor(internalReview) });
 
   const repeatedIssueCount = verdict.verdict === "changes_requested"
     ? computeRepeatedIssueCount(runDir, round, verdict.issues)
@@ -311,7 +307,7 @@ async function run() {
     gateFailure: rubricGateFailure,
     warnings: divergenceWarnings,
   });
-  if (!noComment) {
+  if (!noComment && !internalReview) {
     postComment(runRepoPath, prNumber, commentBody);
     result.commentPosted = true;
   }
@@ -325,7 +321,7 @@ async function run() {
       ...(manualReviewReason ? { manual_review_reason: manualReviewReason } : {}),
     },
   };
-  updatedManifest = applyReviewerIdentity(updatedManifest, noComment, runRepoPath);
+  updatedManifest = applyReviewerIdentity(updatedManifest, noComment || internalReview, runRepoPath);
   writeManifest(manifestPath, updatedManifest, body);
   appendRunEvent(runRepoPath, data.run_id, { event: EVENTS.ESCALATION_DECISION, state_from: data.state, state_to: updatedManifest.state, head_sha: reviewedHeadSha, ...escalationDecision });
   appendRunEvent(runRepoPath, data.run_id, {

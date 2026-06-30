@@ -34,6 +34,7 @@ const EVENTS = Object.freeze({
   MERGE_BLOCKED: "merge_blocked",
   MERGE_FINALIZE: "merge_finalize",
   MODEL_HINTS_UPDATED: "model_hints_updated",
+  PUBLISH_RESULT: "publish_result",
   PR_BODY_SNAPSHOT_FAILED: "pr_body_snapshot_failed",
   PR_NUMBER_STAMPED: "pr_number_stamped",
   // Consumer: /relay records an interactive abort when readiness gaps should stop the run.
@@ -176,6 +177,12 @@ function appendRunEvent(repoRoot, runId, eventData) {
       : {}),
     ...(eventData.pr_body_only !== undefined
       ? { pr_body_only: eventData.pr_body_only === true }
+      : {}),
+    ...(eventData.publish_policy !== undefined
+      ? { publish_policy: normalizeEventValue(eventData.publish_policy) }
+      : {}),
+    ...(eventData.pr_created_by_orchestrator !== undefined
+      ? { pr_created_by_orchestrator: eventData.pr_created_by_orchestrator === true }
       : {}),
     ...(eventData.commit_sha !== undefined
       ? { commit_sha: normalizeEventValue(eventData.commit_sha) }

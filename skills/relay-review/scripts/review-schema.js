@@ -27,7 +27,7 @@ const REVIEW_VERDICT_PROPERTIES = {
   },
   next_action: {
     type: "string",
-    enum: ["ready_to_merge", "changes_requested", "escalated"],
+    enum: ["publish_pending", "ready_to_merge", "changes_requested", "escalated"],
   },
   issues: {
     type: "array",

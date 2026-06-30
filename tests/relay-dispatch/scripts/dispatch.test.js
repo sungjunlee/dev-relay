@@ -741,7 +741,7 @@ function createGitOnlyPath() {
   const gitPath = execFileSync("which", ["git"], { encoding: "utf-8", stdio: "pipe" }).trim();
   fs.writeFileSync(gitShim, `#!/bin/sh\nexec ${JSON.stringify(gitPath)} \"$@\"\n`, "utf-8");
   fs.chmodSync(gitShim, 0o755);
-  return binDir;
+  return `${binDir}:/usr/bin:/bin`;
 }
 
 function withRequiredRubric(args) {
@@ -3420,6 +3420,37 @@ test("dispatch pushes the branch and opens a PR from the orchestrator on success
   assert.deepEqual(ghCalls.map((args) => args.slice(0, 2)), [["pr", "list"], ["pr", "create"]]);
   const execCalls = readJsonLines(execLogPath);
   assert.ok(execCalls.some((entry) => entry.command === "git" && entry.args.includes("push")));
+});
+
+test("dispatch can defer PR publication until internal review passes", () => {
+  const { repoRoot, relayHome } = setupRepoWithOrigin();
+  const { env, ghLogPath, execLogPath } = createPushPrTestEnv({
+    relayHome,
+    ghState: {
+      prCreateUrl: "https://github.com/acme/dev-relay/pull/421",
+    },
+  });
+
+  const result = JSON.parse(runDispatch(repoRoot, [
+    "-b", "issue-421-delayed-publication",
+    "--prompt", "implement delayed publication",
+    "--publish-policy", "after-internal-review",
+    "--json",
+  ], env));
+
+  assert.equal(result.status, "completed");
+  assert.equal(result.runState, STATES.INTERNAL_REVIEW_PENDING);
+  assert.equal(result.publishPolicy, "after-internal-review");
+  assert.equal(result.prNumber, null);
+  assert.equal(result.prCreatedByUs, null);
+
+  const manifest = readManifest(result.manifestPath).data;
+  assert.equal(manifest.state, STATES.INTERNAL_REVIEW_PENDING);
+  assert.equal(manifest.next_action, "run_internal_review");
+  assert.equal(manifest.git.pr_number, null);
+
+  assert.deepEqual(readJsonLines(ghLogPath), []);
+  assert.ok(!readJsonLines(execLogPath).some((entry) => entry.command === "git" && entry.args.includes("push")));
 });
 
 test("dispatch lets explicit role env vars override the unknown defaults", () => {

@@ -52,7 +52,51 @@ function gateTddReviewerSection(template, rubricLoad) {
   return template.replace(TDD_REVIEWER_SECTION_REGEX, "");
 }
 
-function buildPrompt({ round, prNumber, branch, issueNumber, doneCriteria, doneCriteriaSource, diffText, reviewRepoPath, runDir, rubricLoad, prBodyPath, prBodySnapshot }) {
+function formatPrReviewSignalsSection(prReviewSignals) {
+  if (!prReviewSignals) return null;
+  if (prReviewSignals.status === "not_available") {
+    return null;
+  }
+  if (prReviewSignals.status === "failed") {
+    return [
+      "## Post-Publication Signals",
+      "",
+      `GitHub PR signals are unavailable for this round: ${prReviewSignals.reason || "unknown error"}.`,
+      "Do not infer CI or external reviewer approval from missing data.",
+    ].join("\n");
+  }
+  return [
+    "## Post-Publication Signals",
+    "",
+    "Treat these as external evidence. Failing checks, requested changes, or unresolved blocking comments must prevent a PASS verdict.",
+    "",
+    "### CI / Checks",
+    ...(prReviewSignals.checks?.length ? prReviewSignals.checks : ["- none reported"]),
+    "",
+    "### Reviews",
+    ...(prReviewSignals.reviews?.length ? prReviewSignals.reviews : ["- none reported"]),
+    "",
+    "### Comments",
+    ...(prReviewSignals.comments?.length ? prReviewSignals.comments : ["- none reported"]),
+  ].join("\n");
+}
+
+function buildPrompt({
+  round,
+  prNumber,
+  branch,
+  issueNumber,
+  doneCriteria,
+  doneCriteriaSource,
+  diffText,
+  reviewRepoPath,
+  runDir,
+  rubricLoad,
+  prBodyPath,
+  prBodySnapshot,
+  reviewPhase = "post_publication",
+  prReviewSignals = null,
+}) {
   const template = gateTddReviewerSection(renderProjectConventions(readText(REVIEWER_PROMPT_PATH)
     .replace("source=\"done-criteria\"", `source="${doneCriteriaSource || "done-criteria"}"`)
     .replace("[PASTE DONE CRITERIA HERE]", doneCriteria)
@@ -65,6 +109,7 @@ function buildPrompt({ round, prNumber, branch, issueNumber, doneCriteria, doneC
     `Branch: ${branch || "unknown"}`,
     `Issue: ${issueNumber || "unknown"}`,
     `Done Criteria source: ${formatDoneCriteriaSource(doneCriteriaSource)}`,
+    `Review phase: ${reviewPhase}`,
   ];
   const prBodySnapshotSection = formatPrBodySnapshotSection(prBodyPath, prBodySnapshot);
   if (prBodySnapshotSection) sections.push("", prBodySnapshotSection);
@@ -93,7 +138,12 @@ function buildPrompt({ round, prNumber, branch, issueNumber, doneCriteria, doneC
   if (priorContext) {
     sections.push("", priorContext);
   }
+  const prReviewSignalsSection = formatPrReviewSignalsSection(prReviewSignals);
+  if (prReviewSignalsSection) {
+    sections.push("", prReviewSignalsSection);
+  }
 
+  const passNextAction = reviewPhase === "internal" ? "publish_pending" : "ready_to_merge";
   sections.push(
     "",
     "## Structured Output",
@@ -102,7 +152,10 @@ function buildPrompt({ round, prNumber, branch, issueNumber, doneCriteria, doneC
     JSON.stringify(REVIEWER_VERDICT_JSON_SCHEMA, null, 2),
     "",
     "Validation rules:",
-    "- If `verdict` is `pass`, then `issues` must be `[]` and `next_action` must be `ready_to_merge`.",
+    `- If \`verdict\` is \`pass\`, then \`issues\` must be \`[]\` and \`next_action\` must be \`${passNextAction}\`.`,
+    reviewPhase === "internal"
+      ? "- Internal review PASS means the branch is eligible for PR publication only; it must not mark the run ready_to_merge."
+      : "- Post-publication PASS means CI/actions and external review signals have no unresolved blockers.",
     "- If `verdict` is `pass`, set both `contract_status` and `quality_review_status` to `pass`.",
     "- Set ONLY `quality_review_status`. Do NOT set `quality_execution_status`; the review runner computes it from execution-evidence.json.",
     "- If `verdict` is `changes_requested`, include actionable issues with `file` and `line`, and set `next_action` to `changes_requested`.",
@@ -202,6 +255,7 @@ function formatLineageCounts(summary) {
 
 module.exports = {
   buildPrompt,
+  formatPrReviewSignalsSection,
   formatPrBodySnapshotSection,
   formatPriorVerdictSummary,
   formatDoneCriteriaSource,

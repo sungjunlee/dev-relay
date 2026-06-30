@@ -12,6 +12,7 @@ const {
 } = require("../../../skills/relay-dispatch/scripts/test-support");
 const {
   loadProjectConventions,
+  loadRetainedWorktreeDiff,
   parseRemoteHost,
   resolveIssueNumber,
 } = require("../../../skills/relay-review/scripts/review-runner/context");
@@ -320,6 +321,22 @@ test("context/loadProjectConventions content is injected into buildPrompt", () =
   assert.match(prompt, /## Project Conventions/);
   assert.match(prompt, /Do not flag violations of these as issues/);
   assert.match(prompt, /\*\.g\.dart\nbuild\//);
+});
+
+test("context/loadRetainedWorktreeDiff builds an internal diff from retained worktree", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-internal-diff-"));
+  execFileSync("git", ["init", "-b", "main"], { cwd: repoRoot, stdio: "pipe" });
+  execFileSync("git", ["config", "user.name", "Relay Review"], { cwd: repoRoot, stdio: "pipe" });
+  execFileSync("git", ["config", "user.email", "relay-review@example.com"], { cwd: repoRoot, stdio: "pipe" });
+  fs.writeFileSync(path.join(repoRoot, "README.md"), "base\n", "utf-8");
+  execFileSync("git", ["add", "README.md"], { cwd: repoRoot, stdio: "pipe" });
+  execFileSync("git", ["commit", "-m", "init"], { cwd: repoRoot, stdio: "pipe" });
+  execFileSync("git", ["checkout", "-b", "issue-42"], { cwd: repoRoot, stdio: "pipe" });
+  fs.writeFileSync(path.join(repoRoot, "README.md"), "base\nchanged\n", "utf-8");
+  execFileSync("git", ["commit", "-am", "change"], { cwd: repoRoot, stdio: "pipe" });
+
+  const diff = loadRetainedWorktreeDiff(repoRoot, { git: { base_branch: "main" } });
+  assert.match(diff, /\+changed/);
 });
 
 test("context/parseRemoteHost preserves the origin parsing matrix", async (t) => {
