@@ -3453,6 +3453,45 @@ test("dispatch can defer PR publication until internal review passes", () => {
   assert.ok(!readJsonLines(execLogPath).some((entry) => entry.command === "git" && entry.args.includes("push")));
 });
 
+test("dispatch preserves delayed publication policy across same-run redispatch", () => {
+  const { repoRoot, relayHome } = setupRepoWithOrigin();
+  const { env, ghLogPath, execLogPath } = createPushPrTestEnv({
+    relayHome,
+    ghState: {
+      prCreateUrl: "https://github.com/acme/dev-relay/pull/422",
+    },
+  });
+
+  const first = JSON.parse(runDispatch(repoRoot, [
+    "-b", "issue-422-delayed-redispatch",
+    "--prompt", "first delayed attempt",
+    "--publish-policy", "after-internal-review",
+    "--json",
+  ], env));
+  assert.equal(first.runState, STATES.INTERNAL_REVIEW_PENDING);
+
+  const record = readManifest(first.manifestPath);
+  const updated = updateManifestState(record.data, STATES.CHANGES_REQUESTED, "re_dispatch_requested_changes");
+  writeManifest(first.manifestPath, updated, record.body);
+
+  const second = JSON.parse(runDispatch(repoRoot, [
+    "--run-id", first.runId,
+    "--prompt", "resume delayed attempt",
+    "--json",
+  ], env));
+
+  assert.equal(second.mode, "resume");
+  assert.equal(second.publishPolicy, "after-internal-review");
+  assert.equal(second.runState, STATES.INTERNAL_REVIEW_PENDING);
+  assert.equal(second.prNumber, null);
+
+  const manifest = readManifest(first.manifestPath).data;
+  assert.equal(manifest.dispatch.publish_policy, "after-internal-review");
+  assert.equal(manifest.git.pr_number, null);
+  assert.deepEqual(readJsonLines(ghLogPath), []);
+  assert.ok(!readJsonLines(execLogPath).some((entry) => entry.command === "git" && entry.args.includes("push")));
+});
+
 test("dispatch lets explicit role env vars override the unknown defaults", () => {
   const { repoRoot, relayHome } = setupRepoWithOrigin();
   const { env } = createPushPrTestEnv({
@@ -3787,6 +3826,47 @@ test("dispatch leaves uncommitted non-codex runs unrecovered by default", () => 
   assert.match(result.uncommitted, /README\.md/);
   const manifest = readManifest(result.manifestPath).data;
   assert.equal(manifest.state, STATES.REVIEW_PENDING);
+  assert.deepEqual(readJsonLines(ghLogPath), []);
+  assert.deepEqual(readJsonLines(execLogPath), []);
+  assert.equal(Number(fs.readFileSync(pushPrCountPath, "utf-8")), 0);
+});
+
+test("dispatch blocks delayed publication internal review when work is uncommitted", () => {
+  const { repoRoot, relayHome } = setupRepoWithOrigin();
+  const { env, ghLogPath, execLogPath, pushPrCountPath } = createPushPrTestEnv({
+    relayHome,
+    ghState: {
+      prCreateUrl: "https://github.com/acme/dev-relay/pull/510",
+    },
+    codexMode: "uncommitted",
+    executor: "claude",
+  });
+
+  let dispatchError;
+  try {
+    runDispatch(repoRoot, [
+      "-b", "issue-510-delayed-uncommitted",
+      "--prompt", "work without commit",
+      "--publish-policy", "after-internal-review",
+      "--executor", "claude",
+      "--json",
+    ], env);
+  } catch (caught) {
+    dispatchError = caught;
+  }
+  assert.ok(dispatchError, "expected delayed uncommitted dispatch to exit nonzero");
+  const result = JSON.parse(String(dispatchError.stdout || ""));
+
+  assert.equal(result.status, "failed");
+  assert.match(result.error, /recover-commit required before internal review/);
+  assert.equal(result.commitMode, "completed-uncommitted, recover-commit required");
+  assert.equal(result.runState, STATES.ESCALATED);
+  assert.equal(result.prNumber, null);
+  assert.match(result.uncommitted, /README\.md/);
+  const manifest = readManifest(result.manifestPath).data;
+  assert.equal(manifest.state, STATES.ESCALATED);
+  assert.equal(manifest.next_action, "inspect_dispatch_failure");
+  assert.equal(manifest.git.pr_number, null);
   assert.deepEqual(readJsonLines(ghLogPath), []);
   assert.deepEqual(readJsonLines(execLogPath), []);
   assert.equal(Number(fs.readFileSync(pushPrCountPath, "utf-8")), 0);

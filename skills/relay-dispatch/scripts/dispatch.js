@@ -303,7 +303,8 @@ const NETWORK_ACCESS = readArg(args, "--network-access", "disabled", CLI_ARG_OPT
 const COPY_FILES = readArg(args, "--copy", "", CLI_ARG_OPTIONS).split(",").filter(Boolean);
 const RUBRIC_FILE = readArg(args, "--rubric-file", undefined, CLI_ARG_OPTIONS);
 const TEST_COMMAND = readArg(args, "--test-command", undefined, CLI_ARG_OPTIONS);
-const PUBLISH_POLICY = readArg(args, "--publish-policy", "immediate", CLI_ARG_OPTIONS);
+const PUBLISH_POLICY_ARG = readArg(args, "--publish-policy", undefined, CLI_ARG_OPTIONS);
+let PUBLISH_POLICY = PUBLISH_POLICY_ARG || "immediate";
 const RUBRIC_GRANDFATHERED = hasCliFlag("--rubric-grandfathered");
 const REQUEST_ID = readArg(args, "--request-id", undefined, CLI_ARG_OPTIONS);
 const LEAF_ID = readArg(args, "--leaf-id", undefined, CLI_ARG_OPTIONS);
@@ -1054,6 +1055,11 @@ async function main() {
         worktree: validatedPaths.worktree,
       },
     };
+    PUBLISH_POLICY = PUBLISH_POLICY_ARG || manifest.dispatch?.publish_policy || "immediate";
+    if (!["immediate", "after-internal-review"].includes(PUBLISH_POLICY)) {
+      console.error(`Error: manifest dispatch.publish_policy must be immediate or after-internal-review, got ${JSON.stringify(PUBLISH_POLICY)}`);
+      process.exit(1);
+    }
     cleanupPolicy = manifest.policy?.cleanup || cleanupPolicy;
     baseBranch = manifest.git?.base_branch || baseBranch;
     issueNumber = manifest.issue?.number || inferIssueNumber(branch);
@@ -1665,6 +1671,7 @@ async function main() {
       last_executor: EXECUTOR,
       last_model: effectiveDispatchModel,
       last_provider: provider,
+      publish_policy: PUBLISH_POLICY,
     },
   };
   writeManifest(manifestPath, manifest);
@@ -1815,6 +1822,15 @@ async function main() {
     status = exitCode === 0 ? "completed" : "failed";
   }
   let commitMode = summarizeCommitMode({ status, gitLog, uncommitted });
+  if (
+    PUBLISH_POLICY === "after-internal-review" &&
+    status === "completed-uncommitted" &&
+    !AUTO_RECOVER_COMMIT
+  ) {
+    status = "failed";
+    exitCode = exitCode || 1;
+    error = "recover-commit required before internal review: executor left reviewable uncommitted changes";
+  }
 
   let prNumber = manifest.git?.pr_number ?? null;
   let prCreatedByUs = null;
