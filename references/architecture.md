@@ -14,7 +14,9 @@ raw request
   -> relay-ready handoff brief(s) + frozen Done Criteria snapshot(s)
   -> relay-plan
   -> relay-dispatch run manifest
-  -> relay-review
+  -> relay-review (internal, before PR publication)
+  -> publish PR
+  -> relay-review (post-publication, with CI/actions and external review signals)
   -> ready_to_merge
   -> relay-merge (explicit only)
 ```
@@ -29,22 +31,29 @@ Boundary rules:
 
 ## State Machine
 
-Eight states with enforced transitions (`relay-manifest.js:ALLOWED_TRANSITIONS`):
+Ten states with enforced transitions (`skills/relay-dispatch/scripts/manifest/lifecycle.js:ALLOWED_TRANSITIONS`):
 
-```
+```text
   ┌─────────┐
   │  draft   │──────────────────────────────────────────┐
   └────┬─────┘                                          │
        ↓                                                ↓
   ┌──────────────┐                                  ┌────────┐
-  │  dispatched   │──────────────────────────┐       │ closed  │
-  └──────┬────────┘                          │       └─────────┘
-         ↓                                   ↓           ↑
-  ┌──────────────────┐                  ┌───────────┐    │
-  │  review_pending   │─────────────────│ escalated  │───┘
-  └──┬───────────┬───┘                  └───────────┘
-     │           │
-     ↓           ↓
+  │  dispatched   │──────────────────────────────────┐       │ closed  │
+  └──────┬────────┘                                  │       └─────────┘
+         ↓                                           ↓           ↑
+┌─────────────────────────┐                     ┌───────────┐    │
+│ internal_review_pending │─────────────────────│ escalated  │───┘
+└──────┬────────────┬─────┘                     └───────────┘
+       │            │
+       ↓            ↓
+┌────────────────┐   ┌──────────────────┐
+│ publish_pending│──→│  review_pending  │
+└───────┬────────┘   └──┬───────────┬───┘
+        │               │           │
+        ↓               │           │
+   escalated            │           │
+                        ↓           ↓
 ┌────────────────────┐    ┌──────────────────┐
 │ changes_requested   │    │  ready_to_merge   │
 └────────┬───────────┘    └────┬────────┬──────┘
@@ -61,6 +70,10 @@ Eight states with enforced transitions (`relay-manifest.js:ALLOWED_TRANSITIONS`)
                            ready_to_merge
 ```
 
+`internal_review_pending` is the pre-publication review gate over the retained worktree diff. A passing internal review advances to `publish_pending`, never `ready_to_merge`. `publish_pending` is the only state where `publish-run.js` may push/open the PR and stamp `git.pr_number`; successful publication advances to `review_pending`, while publish preflight or push/PR failures advance to `escalated`.
+
+`review_pending` is the post-publication review gate. It reviews the PR diff plus CI/actions, GitHub review, and PR comment signals. A passing post-publication review advances to `ready_to_merge`.
+
 Terminal states: `merged`, `closed`. Once entered, no further transitions. `merge_blocked` is non-terminal: Phase 3 fleet merge queues use it to preserve a failed merge attempt without forcing an invalid review-cycle transition.
 
 ## Manifest Schema
@@ -72,7 +85,7 @@ Each run produces `~/.relay/runs/<repo-slug>/<run-id>.md` — a Markdown file wi
 relay_version: 2
 run_id: issue-42-20260403120000000
 state: review_pending
-next_action: start_review
+next_action: run_review
 
 issue:
   number: 42
@@ -81,7 +94,7 @@ issue:
 git:
   base_branch: main
   working_branch: issue-42
-  pr_number: 128                 # dispatch-owned publication anchor (#198); review/merge consumers read this today
+  pr_number: 128                 # null before publish_pending -> review_pending; review/merge consumers require it after publication
   head_sha: abc123def
 
 github:
@@ -166,7 +179,7 @@ bootstrap_exempt:
 | `anchor.*` | Immutable review scope — prevents drift across rounds |
 | `review.last_reviewed_sha` | Gate-check blocks merge if HEAD has advanced past this |
 | `review.last_reviewer` | Tracks the acting reviewer for the latest round without mutating `roles.reviewer`; escalated same-adapter retry requires an `--independent-review-reason`; analytics must still use `review_apply.reviewer` as the round-level source of truth |
-| `git.pr_number` / `github.pr_created_by_orchestrator` | Orchestrator-owned push + PR creation persists `git.pr_number` for review/merge consumers; `github.pr_created_by_orchestrator` records whether dispatch opened the PR. See [ADR-0001](../docs/decisions/0001-orchestrator-owns-publication.md) |
+| `git.pr_number` / `github.pr_created_by_orchestrator` | Orchestrator-owned push + PR creation persists `git.pr_number` for review/merge consumers; `github.pr_created_by_orchestrator` records whether relay created or reused the PR. In delayed-publication runs these fields stay null/absent until `publish-run.js` advances `publish_pending -> review_pending`. See [ADR-0001](../docs/decisions/0001-orchestrator-owns-publication.md) |
 | `bootstrap_exempt.*` | Optional operator-declared reconciliation for runs that predate an artifact writer but are closed after that writer lands |
 
 ### Adapter Capability vs Route Policy
@@ -209,7 +222,9 @@ Each run keeps an append-only event log at `~/.relay/runs/<repo-slug>/<run-id>/e
 
 ```jsonl
 {"ts":"2026-04-18T12:00:00.000Z","event":"dispatch_start","actor":"codex","run_id":"issue-42-20260418120000000","state_from":"draft","state_to":"dispatched","head_sha":"abc123","round":null,"reason":"new_dispatch","model":null,"executor_network":{"access":"enabled","mechanism":"sandbox_workspace_write.network_access","domains":null},"policy_decision":{"allowed":true,"reason":"managed_cli","phase":"dispatch","actor":"codex","model":null}}
-{"ts":"2026-04-18T12:05:00.000Z","event":"dispatch_result","actor":"codex","run_id":"issue-42-20260418120000000","state_from":"dispatched","state_to":"review_pending","head_sha":"def456","round":null,"reason":"new_dispatch:completed","executor_network":{"access":"enabled","mechanism":"sandbox_workspace_write.network_access","domains":null},"failure_class":null}
+{"ts":"2026-04-18T12:05:00.000Z","event":"dispatch_result","actor":"codex","run_id":"issue-42-20260418120000000","state_from":"dispatched","state_to":"internal_review_pending","head_sha":"def456","round":null,"reason":"new_dispatch:completed","publish_policy":"after-internal-review","executor_network":{"access":"enabled","mechanism":"sandbox_workspace_write.network_access","domains":null},"failure_class":null}
+{"ts":"2026-04-18T12:08:00.000Z","event":"review_apply","actor":"claude","run_id":"issue-42-20260418120000000","state_from":"internal_review_pending","state_to":"publish_pending","head_sha":"def456","round":1,"reviewer":"codex","reason":"pass"}
+{"ts":"2026-04-18T12:09:00.000Z","event":"publish_result","actor":"codex","run_id":"issue-42-20260418120000000","state_from":"publish_pending","state_to":"review_pending","head_sha":"def456","round":null,"reason":"created_pr","pr_number":128,"branch":"issue-42","pr_created_by_orchestrator":true}
 {"ts":"2026-04-18T12:10:00.000Z","event":"review_invoke","actor":"claude","run_id":"issue-42-20260418120000000","state_from":"review_pending","state_to":"review_pending","head_sha":"def456","round":1,"reason":"codex","model":null}
 {"ts":"2026-04-18T12:11:00.000Z","event":"advisory_review","actor":"claude","run_id":"issue-42-20260418120000000","state_from":"review_pending","state_to":"review_pending","head_sha":"def456","round":1,"reason":null,"reviewer":"opencode","model":"example/opencode-model-fast","profile":"blindspot","status":"success","artifact_path":"~/.relay/runs/project-abcd1234/issue-42-20260418120000000/review-round-1-advisory-opencode.json","raw_response_path":"~/.relay/runs/project-abcd1234/issue-42-20260418120000000/review-round-1-advisory-opencode-raw-response.txt","required_count":0,"advisory_count":1,"duplicate_low_confidence_count":0,"elapsed_ms":42000,"advisory_elapsed_ms":42000,"critical_path_wait_ms":5000,"consumed_by_phase":"metrics","phase_decision_waited":true,"frontier_step_replaced":false,"failure_reason":null}
 {"ts":"2026-04-18T12:12:00.000Z","event":"review_apply","actor":"claude","run_id":"issue-42-20260418120000000","state_from":"review_pending","state_to":"changes_requested","head_sha":"def456","round":1,"reviewer":"codex","reason":"changes_requested"}
@@ -222,6 +237,7 @@ Each run keeps an append-only event log at `~/.relay/runs/<repo-slug>/<run-id>/e
 | Event | Emitted by |
 |-------|------------|
 | `dispatch_start`, `dispatch_result`, `environment_drift`, `model_hints_updated` | `relay-dispatch/scripts/dispatch.js` |
+| `publish_result` | `relay-dispatch/scripts/publish-run.js` |
 | `recover_commit`, `recover_commit_failed`, `execution_evidence_rebranded` | `relay-dispatch/scripts/recover-commit.js`, `rebrand-evidence.js` |
 | `iteration_score`, `rubric_quality`, `score_divergence` | `relay-dispatch/scripts/relay-events.js` (helpers) |
 | `close`, `cleanup_result` | `relay-dispatch/scripts/close-run.js`, `cleanup-worktrees.js` |

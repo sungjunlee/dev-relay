@@ -315,7 +315,7 @@ test("reliability-report derives the core scorecard from manifests and events", 
     reason: "squash",
   });
 
-  const stdout = execFileSync("node", [SCRIPT, "--repo", repoRoot, "--json"], { encoding: "utf-8" });
+  const stdout = execFileSync(process.execPath, [SCRIPT, "--repo", repoRoot, "--json"], { encoding: "utf-8" });
   const report = JSON.parse(stdout);
 
   assert.equal("by_actor" in report, false);
@@ -2118,6 +2118,95 @@ test("reliability-report includes dispatch reliability metrics in the top-level 
   assert.equal(report.metrics.pass_rate, 0);
 });
 
+test("reliability-report includes delayed publication lifecycle metrics", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-report-publish-metrics-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  initGitRepo(repoRoot, "Relay Test");
+  const recentTs = new Date(Date.now() - 1 * 60 * 60 * 1000).toISOString();
+  const runDelayedSuccess = createRunId({
+    branch: "run-delayed-success",
+    timestamp: new Date("2026-04-12T10:05:00.000Z"),
+  });
+  const runDelayedFailure = createRunId({
+    branch: "run-delayed-failure",
+    timestamp: new Date("2026-04-12T10:05:01.000Z"),
+  });
+  const runImmediate = createRunId({
+    branch: "run-immediate",
+    timestamp: new Date("2026-04-12T10:05:02.000Z"),
+  });
+
+  writeRun(repoRoot, {
+    runId: runDelayedSuccess,
+    state: STATES.REVIEW_PENDING,
+    rounds: 1,
+    updatedAt: recentTs,
+  });
+  writeRun(repoRoot, {
+    runId: runDelayedFailure,
+    state: STATES.REVIEW_PENDING,
+    rounds: 1,
+    updatedAt: recentTs,
+  });
+  writeRun(repoRoot, {
+    runId: runImmediate,
+    state: STATES.REVIEW_PENDING,
+    rounds: 1,
+    updatedAt: recentTs,
+  });
+
+  appendRunEvent(repoRoot, runDelayedSuccess, {
+    event: "dispatch_result",
+    state_from: STATES.DISPATCHED,
+    state_to: STATES.INTERNAL_REVIEW_PENDING,
+    reason: "new_dispatch:completed",
+    publish_policy: "after-internal-review",
+  });
+  appendRunEvent(repoRoot, runDelayedSuccess, {
+    event: "review_apply",
+    state_from: STATES.INTERNAL_REVIEW_PENDING,
+    state_to: STATES.PUBLISH_PENDING,
+    round: 1,
+    reason: "pass",
+  });
+  appendRunEvent(repoRoot, runDelayedSuccess, {
+    event: "publish_result",
+    state_from: STATES.PUBLISH_PENDING,
+    state_to: STATES.REVIEW_PENDING,
+    reason: "published",
+    pr_number: 123,
+    pr_created_by_orchestrator: true,
+  });
+  appendRunEvent(repoRoot, runDelayedFailure, {
+    event: "dispatch_result",
+    state_from: STATES.DISPATCHED,
+    state_to: STATES.INTERNAL_REVIEW_PENDING,
+    reason: "new_dispatch:completed",
+    publish_policy: "after-internal-review",
+  });
+  appendRunEvent(repoRoot, runDelayedFailure, {
+    event: "publish_result",
+    state_from: STATES.PUBLISH_PENDING,
+    state_to: STATES.ESCALATED,
+    reason: "publish_failed",
+  });
+  appendRunEvent(repoRoot, runImmediate, {
+    event: "dispatch_result",
+    state_from: STATES.DISPATCHED,
+    state_to: STATES.REVIEW_PENDING,
+    reason: "new_dispatch:completed",
+    publish_policy: "immediate",
+  });
+
+  const stdout = execFileSync("node", [SCRIPT, "--repo", repoRoot, "--json"], { encoding: "utf-8" });
+  const report = JSON.parse(stdout);
+
+  assert.equal(report.metrics.delayed_publication_adoption_rate, 0.6667);
+  assert.equal(report.metrics.internal_lgtm_to_publish_rate, 0.5);
+  assert.equal(report.metrics.publish_success_rate, 0.5);
+  assert.equal(report.metrics.publish_failure_rate, 0.5);
+});
+
 test("reliability-report keeps dispatch reliability metrics null when denominators are empty", () => {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-report-dispatch-empty-"));
   process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
@@ -2130,6 +2219,10 @@ test("reliability-report keeps dispatch reliability metrics null when denominato
   assert.equal(report.metrics.dispatch_failure_rate, null);
   assert.equal(report.metrics.recover_commit_rate, null);
   assert.equal(report.metrics.pass_rate, null);
+  assert.equal(report.metrics.delayed_publication_adoption_rate, null);
+  assert.equal(report.metrics.internal_lgtm_to_publish_rate, null);
+  assert.equal(report.metrics.publish_success_rate, null);
+  assert.equal(report.metrics.publish_failure_rate, null);
 });
 
 test("reliability-report computes non-zero pass_rate when runs reach merged/ready_to_merge", () => {

@@ -2,7 +2,7 @@
 "use strict";
 
 /**
- * relay-recover-commit: commit/push/open-PR for executor-complete-but-uncommitted runs.
+ * relay-recover-commit: commit executor-complete-but-uncommitted runs; push/open PR only after publication.
  */
 
 const fs = require("fs");
@@ -12,6 +12,7 @@ const { parsePrNumber, formatExecError } = require("./dispatch-publish");
 const { resolveManifestRecord } = require("./relay-resolver");
 const { appendRunEvent, EVENTS } = require("./relay-events");
 const { STATES } = require("./manifest/lifecycle");
+const { writeManifest } = require("./manifest/store");
 const { getCanonicalRepoRoot, getRunDir, nowIso, summarizeFailure, validateManifestPaths } = require("./manifest/paths");
 const { stampPrNumberUnderLock } = require("./manifest/pr-number-stamp");
 const { rebrandEvidence } = require("./execution-evidence");
@@ -35,7 +36,7 @@ const getCliArg = (flag, fallback) => readArg(args, flag, fallback, CLI_ARG_OPTI
 
 function printHelp(exitCode) {
   console.log("Usage: recover-commit.js (--repo <path> --run-id <id> | --manifest <path>) --reason <text> [options]");
-  console.log("\nCommit, push, and open or reuse a PR for a review_pending relay run whose executor left recoverable work behind.");
+  console.log("\nCommit recoverable work left by an executor. review_pending runs push/open PR; internal_review_pending runs only commit locally.");
   console.log("\nOptions:");
   console.log(`  --repo <path>       ${modeLabel("--repo")} Repository root used with --run-id (default: .)`);
   console.log(`  --run-id <id>       ${modeLabel("--run-id")} Relay run identifier`);
@@ -46,7 +47,7 @@ function printHelp(exitCode) {
   console.log(`  --dry-run           ${modeLabel("--dry-run")} Print planned git/gh commands and manifest mutation only`);
   console.log(`  --json              ${modeLabel("--json")} Output JSON`);
   console.log("\nDecision tree:");
-  console.log("  - Use recover-commit when the executor completed, the run is review_pending, and the retained worktree has uncommitted changes or unpushed commits.");
+  console.log("  - Use recover-commit when the executor completed and the retained worktree has uncommitted changes or unpushed commits.");
   console.log("  - Use dispatch.js --run-id <id> when review requested changes and you need a same-run executor resume.");
   console.log("  - Use finalize-run.js --force-finalize-nonready --reason <text> only when an operator intentionally merges a non-ready run.");
   process.exit(exitCode);
@@ -282,8 +283,9 @@ function main() {
   if (data.state === STATES.MERGED || data.state === STATES.CLOSED) {
     throw new Error(`force-finalize cannot be used from terminal state ${data.state}`);
   }
-  if (data.state !== STATES.REVIEW_PENDING) {
-    throw new Error(`recover-commit requires state=${STATES.REVIEW_PENDING}, got ${data.state}`);
+  const internalReview = data.state === STATES.INTERNAL_REVIEW_PENDING;
+  if (![STATES.INTERNAL_REVIEW_PENDING, STATES.REVIEW_PENDING].includes(data.state)) {
+    throw new Error(`recover-commit requires state=${STATES.INTERNAL_REVIEW_PENDING} or ${STATES.REVIEW_PENDING}, got ${data.state}`);
   }
   if (!branch) {
     throw new Error("manifest is missing git.working_branch");
@@ -310,7 +312,7 @@ function main() {
   const commitBody = buildCommitBody({ runId: data.run_id, reason, timestamp });
 
   let existingPrNumber = null;
-  if (!dryRun) {
+  if (!internalReview && !dryRun) {
     try {
       existingPrNumber = findExistingPr(worktreePath, branch);
     } catch (error) {
@@ -330,22 +332,26 @@ function main() {
   }
 
   if (dryRun) {
-    const prTitleResolution = resolvePrTitle({
-      explicitTitle: prTitleArg,
-      repoPath: worktreePath,
-      branch,
-      runId: data.run_id,
-      data,
-    });
-    const plannedCommands = [
-      commandRecord(worktreePath, ["gh", "pr", "list", "--head", branch, "--json", "number", "--jq", ".[0].number"]),
-    ];
+    const prTitleResolution = internalReview
+      ? { title: null, source: "not_published", issueNumber: null }
+      : resolvePrTitle({
+        explicitTitle: prTitleArg,
+        repoPath: worktreePath,
+        branch,
+        runId: data.run_id,
+        data,
+      });
+    const plannedCommands = internalReview
+      ? []
+      : [commandRecord(worktreePath, ["gh", "pr", "list", "--head", branch, "--json", "number", "--jq", ".[0].number"])];
     if (hasUncommittedChanges) {
       plannedCommands.push(commandRecord(worktreePath, ["git", "-C", worktreePath, "add", "-A"]));
       plannedCommands.push(commandRecord(worktreePath, ["git", "-C", worktreePath, "commit", "-m", commitTitle, "-m", commitBody]));
     }
-    plannedCommands.push(commandRecord(worktreePath, ["git", "-C", worktreePath, "push", "-u", "origin", branch]));
-    plannedCommands.push(commandRecord(worktreePath, ["gh", "pr", "create", "--title", prTitleResolution.title, "--body", prBody]));
+    if (!internalReview) {
+      plannedCommands.push(commandRecord(worktreePath, ["git", "-C", worktreePath, "push", "-u", "origin", branch]));
+      plannedCommands.push(commandRecord(worktreePath, ["gh", "pr", "create", "--title", prTitleResolution.title, "--body", prBody]));
+    }
 
     const result = {
       status: "dry_run",
@@ -360,7 +366,8 @@ function main() {
       commands: plannedCommands,
       manifestMutation: {
         state: data.state,
-        git_pr_number: "stamp after PR number is known, if missing",
+        git_head_sha: "update after commit, if a commit is created",
+        git_pr_number: internalReview ? null : "stamp after PR number is known, if missing",
       },
     };
     console.log(jsonOut ? JSON.stringify(result, null, 2) : plannedCommands.map((cmd) => cmd.shell).join("\n"));
@@ -406,6 +413,43 @@ function main() {
 
   let prNumber = existingPrNumber;
   let prCreated = false;
+  if (internalReview) {
+    const updatedData = {
+      ...data,
+      next_action: "run_internal_review",
+      git: {
+        ...(data.git || {}),
+        head_sha: commitSha,
+      },
+    };
+    writeManifest(manifestRecord.manifestPath, updatedData, manifestRecord.body);
+    appendRecoveryEvent(validatedPaths.repoRoot, updatedData, EVENTS.RECOVER_COMMIT, reason, commitSha, null, branch);
+    const result = {
+      status: "recovered",
+      manifestPath: manifestRecord.manifestPath,
+      runId: data.run_id,
+      state: updatedData.state,
+      branch,
+      worktree: worktreePath,
+      commitSha,
+      commitCreated,
+      prNumber: null,
+      prCreated: false,
+      existingPr: false,
+      dryRun: false,
+    };
+    if (jsonOut) {
+      console.log(JSON.stringify(result, null, 2));
+    } else {
+      console.log(`Recovered relay run: ${data.run_id}`);
+      console.log(`  Branch: ${branch}`);
+      console.log(`  Commit: ${commitSha}${commitCreated ? " (created)" : " (existing)"}`);
+      console.log("  PR: not published yet");
+      console.log(`  State: ${result.state}`);
+    }
+    return;
+  }
+
   const shouldPush = prNumber === null || hasUncommittedChanges || unpushedCommits > 0;
   if (shouldPush) {
     try {

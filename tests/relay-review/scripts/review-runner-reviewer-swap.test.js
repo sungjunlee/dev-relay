@@ -88,6 +88,38 @@ test("reviewer-swap/transitions escalated -> review_pending with different revie
   assert.equal(swapEvent.state_to, STATES.REVIEW_PENDING);
 });
 
+test("reviewer-swap/preserves pre-publication internal review phase", () => {
+  const { data, manifestPath, repoRoot, runId } = setupEscalatedRun({ lastReviewer: "codex" });
+  const prePublication = {
+    ...data,
+    git: {
+      ...(data.git || {}),
+      pr_number: null,
+    },
+    dispatch: {
+      ...(data.dispatch || {}),
+      publish_policy: "after-internal-review",
+    },
+  };
+  writeManifest(manifestPath, prePublication, "");
+
+  const swapped = maybeSwapReviewer(prePublication, "claude", "", manifestPath, repoRoot);
+  assert.equal(swapped.state, STATES.INTERNAL_REVIEW_PENDING);
+  assert.equal(swapped.next_action, "run_internal_review");
+  assert.equal(swapped.review.reviewer_swap_count, 1);
+
+  const persisted = readManifest(manifestPath).data;
+  assert.equal(persisted.state, STATES.INTERNAL_REVIEW_PENDING);
+  assert.equal(persisted.next_action, "run_internal_review");
+
+  const events = fs.readFileSync(getEventsPath(repoRoot, runId), "utf-8")
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line));
+  const swapEvent = events.find((event) => event.event === "reviewer_swap");
+  assert.equal(swapEvent.state_to, STATES.INTERNAL_REVIEW_PENDING);
+});
+
 test("reviewer-swap/rejects same-reviewer retry", () => {
   const { data, manifestPath, repoRoot } = setupEscalatedRun({ lastReviewer: "codex" });
   assert.throws(
@@ -121,6 +153,23 @@ test("reviewer-swap/rejects a second swap after the quota is used", () => {
   assert.throws(
     () => maybeSwapReviewer(data, "claude", "", manifestPath, repoRoot, {
       independentReviewReason: "fresh context",
+    }),
+    /reviewer_swap_count=1 \(max 1 per run\)/
+  );
+});
+
+test("reviewer-swap/rejects a second pre-publication internal swap after the quota is used", () => {
+  const { data, manifestPath, repoRoot } = setupEscalatedRun({ lastReviewer: "codex", swapCount: 1 });
+  const prePublication = {
+    ...data,
+    git: { ...(data.git || {}), pr_number: null },
+    dispatch: { ...(data.dispatch || {}), publish_policy: "after-internal-review" },
+  };
+  writeManifest(manifestPath, prePublication, "");
+
+  assert.throws(
+    () => maybeSwapReviewer(prePublication, "claude", "", manifestPath, repoRoot, {
+      independentReviewReason: "fresh internal context",
     }),
     /reviewer_swap_count=1 \(max 1 per run\)/
   );

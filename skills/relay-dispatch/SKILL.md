@@ -71,11 +71,18 @@ Use defaults for simple work, `--timeout 3600` when the executor prompt includes
 ## Verify Success
 
 JSON output reports `status`, `runId`, `manifestPath`, `runState`, `cleanupPolicy`. Map status → next step:
-- `completed` + `review_pending` → proceed to relay-review
+- `completed` + `internal_review_pending` → run relay-review before PR publication (`--publish-policy after-internal-review`)
+- `completed-with-warning` + `internal_review_pending` → inspect worktree, then run internal relay-review
+- `completed` + `review_pending` → proceed to relay-review (default immediate publication path)
 - `completed-with-warning` + `review_pending` → inspect uncommitted work, then review
 - `failed` + `escalated` → inspect error, fix or re-dispatch
 
 Successful dispatches retain the worktree by default — use the returned `runId` to continue. Resume only from `changes_requested`; dispatch reuses the same run + worktree. On re-dispatch, previous Score Log + reviewer feedback are auto-prepended (storage: `~/.relay/runs/<slug>/<run-id>/previous-attempts.json`).
+
+Publication policy:
+- Default direct dispatch behavior is `--publish-policy immediate`: push/open PR, then `review_pending`.
+- Full `/relay` orchestration uses `--publish-policy after-internal-review`: retain the branch locally in `internal_review_pending`, require relay-review LGTM, then run `publish-run.js` to push/open PR and move to `review_pending`.
+- `publish-run.js` is valid only from `publish_pending`; it writes a `publish_result` event and stamps `git.pr_number`.
 
 ### Handling Failures
 

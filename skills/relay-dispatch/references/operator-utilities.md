@@ -33,6 +33,16 @@ node skills/relay-dispatch/scripts/close-run.js --repo . --run-id <run-id> --rea
 node skills/relay-dispatch/scripts/reliability-report.js --repo . --json
 ```
 
+## `publish-run.js` — Delayed PR publication
+
+Use only after internal relay-review has advanced a run to `publish_pending`:
+
+```bash
+node skills/relay-dispatch/scripts/publish-run.js --repo . --run-id <run-id> --json
+```
+
+The command pushes the retained branch, opens or reuses the PR, stamps `git.pr_number`, writes a `publish_result` event, and advances the manifest to `review_pending`. The next step is post-publication relay-review so CI/actions and external review signals are evaluated before `ready_to_merge`.
+
 ### Reliability Round-Cost Observations
 
 `reliability-report.js --json` includes `round_cost` as an observation-only section for comparing relay shaping changes. It summarizes review rounds, request/leaf linkage, relay-ready leaf counts when the request artifact is available, task-profile guidance size when recorded, execution-evidence preflight failures, review lineage totals, escalation/continue decisions, factor flip counts, and explicitly inferable reviewer rounds avoided by preflight.

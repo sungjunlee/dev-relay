@@ -1379,10 +1379,22 @@ function buildReport({ repoRoot, staleHours, now, manifests, events }) {
     return updatedAt <= now - staleHours * 60 * 60 * 1000;
   });
   const dispatchResults = events.filter((event) => event.event === EVENTS.DISPATCH_RESULT);
+  const delayedDispatchResults = dispatchResults.filter((event) => (
+    event.publish_policy === "after-internal-review"
+    || event.state_to === STATES.INTERNAL_REVIEW_PENDING
+  ));
   const dispatchTimeouts = dispatchResults.filter((event) => (
     event.failure_class === "timeout" || /timeout/i.test(String(event.reason || ""))
   ));
   const dispatchFailures = dispatchResults.filter((event) => event.state_to === STATES.ESCALATED);
+  const internalReviewPasses = events.filter((event) => (
+    event.event === EVENTS.REVIEW_APPLY &&
+    event.state_from === STATES.INTERNAL_REVIEW_PENDING &&
+    event.state_to === STATES.PUBLISH_PENDING
+  ));
+  const publishResults = events.filter((event) => event.event === EVENTS.PUBLISH_RESULT);
+  const publishSuccesses = publishResults.filter((event) => event.state_to === STATES.REVIEW_PENDING);
+  const publishFailures = publishResults.filter((event) => event.state_to === STATES.ESCALATED);
   const recoverCommitRunIds = new Set(
     events
       .filter((event) => event.event === EVENTS.RECOVER_COMMIT && event.run_id)
@@ -1426,6 +1438,10 @@ function buildReport({ repoRoot, staleHours, now, manifests, events }) {
       dispatch_timeout_rate: ratio(dispatchTimeouts.length, dispatchResults.length),
       dispatch_failure_rate: ratio(dispatchFailures.length, dispatchResults.length),
       recover_commit_rate: ratio(recoverCommitRunIds.size, manifests.length),
+      delayed_publication_adoption_rate: ratio(delayedDispatchResults.length, dispatchResults.length),
+      internal_lgtm_to_publish_rate: ratio(internalReviewPasses.length, delayedDispatchResults.length),
+      publish_success_rate: ratio(publishSuccesses.length, publishResults.length),
+      publish_failure_rate: ratio(publishFailures.length, publishResults.length),
     },
     factor_analysis: buildFactorAnalysis(events),
     rubric_insights: buildRubricInsights(events, manifests),
@@ -1661,6 +1677,12 @@ function main() {
   console.log(`  dispatch_timeout_rate: ${report.metrics.dispatch_timeout_rate ?? "n/a"}`);
   console.log(`  dispatch_failure_rate: ${report.metrics.dispatch_failure_rate ?? "n/a"}`);
   console.log(`  recover_commit_rate: ${report.metrics.recover_commit_rate ?? "n/a"}`);
+  console.log(
+    `  delayed_publication: adoption=${report.metrics.delayed_publication_adoption_rate ?? "n/a"} ` +
+    `internal_lgtm_to_publish=${report.metrics.internal_lgtm_to_publish_rate ?? "n/a"} ` +
+    `publish_success=${report.metrics.publish_success_rate ?? "n/a"} ` +
+    `publish_failure=${report.metrics.publish_failure_rate ?? "n/a"}`
+  );
   console.log(`  review_lineage: ${LINEAGE_VALUES.map((value) => `${value}=${report.review_lineage.totals[value]}`).join(", ")}`);
   if (report.round_cost) {
     const roundCost = report.round_cost;

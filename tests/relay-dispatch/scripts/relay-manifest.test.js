@@ -657,6 +657,44 @@ test("updateManifestState allows dispatched -> review_pending when anchor.rubric
   assert.equal(updated.state, STATES.REVIEW_PENDING);
 });
 
+test("updateManifestState supports delayed publication lifecycle transitions with rubric gating", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-delayed-lifecycle-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  initGitRepo(repoRoot, "Relay Maintainer");
+  const runId = "issue-42-20260412000001500";
+  writeRunRubric(repoRoot, runId);
+  const manifest = {
+    run_id: runId,
+    state: STATES.DISPATCHED,
+    next_action: "await_dispatch_result",
+    anchor: { rubric_path: "rubric.yaml" },
+    paths: { repo_root: repoRoot },
+    timestamps: { created_at: "2026-04-12T00:00:00Z", updated_at: "2026-04-12T00:00:00Z" },
+  };
+
+  const internal = updateManifestState(manifest, STATES.INTERNAL_REVIEW_PENDING, "run_internal_review");
+  assert.equal(internal.state, STATES.INTERNAL_REVIEW_PENDING);
+  const publish = updateManifestState(internal, STATES.PUBLISH_PENDING, "publish_pr");
+  assert.equal(publish.state, STATES.PUBLISH_PENDING);
+  const review = updateManifestState(publish, STATES.REVIEW_PENDING, "run_review");
+  assert.equal(review.state, STATES.REVIEW_PENDING);
+});
+
+test("updateManifestState rejects dispatched -> internal_review_pending when anchor.rubric_path is missing", () => {
+  const manifest = {
+    run_id: "issue-42-20260412000001600",
+    state: STATES.DISPATCHED,
+    next_action: "await_dispatch_result",
+    anchor: {},
+    timestamps: { created_at: "2026-04-12T00:00:00Z", updated_at: "2026-04-12T00:00:00Z" },
+  };
+
+  assert.throws(
+    () => updateManifestState(manifest, STATES.INTERNAL_REVIEW_PENDING, "run_internal_review"),
+    /anchor\.rubric_path/
+  );
+});
+
 test("updateManifestState rejects dispatched -> review_pending when the legacy grandfather field is true", () => {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-grandfathered-"));
   process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));

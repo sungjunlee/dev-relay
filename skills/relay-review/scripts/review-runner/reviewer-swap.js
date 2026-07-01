@@ -18,7 +18,11 @@ function maybeSwapReviewer(data, reviewerArg, body, manifestPath, runRepoPath, o
   }
   const reason = independentReviewReason || `different_reviewer:${lastReviewer || "unknown"}->${newReviewerName}`;
 
-  const swappedManifest = forceTransitionState(data, STATES.REVIEW_PENDING, "run_review");
+  // Delayed-publication runs with no PR yet must retry the retained worktree, not a public PR review.
+  const prePublicationReview = !data.git?.pr_number && data.dispatch?.publish_policy === "after-internal-review";
+  const targetState = prePublicationReview ? STATES.INTERNAL_REVIEW_PENDING : STATES.REVIEW_PENDING;
+  const nextAction = prePublicationReview ? "run_internal_review" : "run_review";
+  const swappedManifest = forceTransitionState(data, targetState, nextAction);
   swappedManifest.review = {
     ...(swappedManifest.review || {}),
     reviewer_swap_count: Number(data.review?.reviewer_swap_count || 0) + 1,
@@ -27,7 +31,7 @@ function maybeSwapReviewer(data, reviewerArg, body, manifestPath, runRepoPath, o
   appendRunEvent(runRepoPath, data.run_id, {
     event: EVENTS.REVIEWER_SWAP,
     state_from: STATES.ESCALATED,
-    state_to: STATES.REVIEW_PENDING,
+    state_to: targetState,
     from_reviewer: lastReviewer,
     to_reviewer: newReviewerName,
     reason,

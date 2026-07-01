@@ -8,7 +8,7 @@ const {
 } = require("./score-utils");
 
 const ALLOWED_VERDICTS = new Set(["pass", "changes_requested", "escalated"]);
-const ALLOWED_NEXT_ACTIONS = new Set(["ready_to_merge", "changes_requested", "escalated"]);
+const ALLOWED_NEXT_ACTIONS = new Set(["publish_pending", "ready_to_merge", "changes_requested", "escalated"]);
 const ALLOWED_REVIEW_STATUSES = new Set(["pass", "fail", "not_run"]);
 const ALLOWED_EXECUTION_STATUSES = new Set(["pass", "fail", "not_run", "missing"]);
 const ALLOWED_SCORE_TIERS = new Set(["contract", "quality"]);
@@ -147,6 +147,10 @@ function formatPassRequirementFailures(data) {
 
 function validateReviewVerdict(data, options = {}) {
   const requireExecutionStatus = options.requireExecutionStatus !== false;
+  const passNextActions = new Set(options.passNextActions || ["ready_to_merge"]);
+  const disallowPassReason = typeof options.disallowPassReason === "string" && options.disallowPassReason.trim()
+    ? options.disallowPassReason.trim()
+    : null;
   if (!data || typeof data !== "object" || Array.isArray(data)) {
     throw new Error("Review verdict must be a JSON object");
   }
@@ -184,8 +188,11 @@ function validateReviewVerdict(data, options = {}) {
   validateScopeDrift(data.scope_drift);
 
   if (data.verdict === "pass") {
-    if (data.next_action !== "ready_to_merge") {
-      throw new Error("PASS verdict must set next_action=ready_to_merge");
+    if (disallowPassReason) {
+      throw new Error(`PASS verdict is not allowed: ${disallowPassReason}`);
+    }
+    if (!passNextActions.has(data.next_action)) {
+      throw new Error(`PASS verdict must set next_action=${Array.from(passNextActions).join(" or ")}`);
     }
     const failures = requireExecutionStatus
       ? formatPassRequirementFailures(data)

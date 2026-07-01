@@ -16,7 +16,19 @@ const { ensureRunLayout } = require("../../../../skills/relay-dispatch/scripts/m
 
 const EXPECTED_TRANSITIONS = Object.freeze({
   [STATES.DRAFT]: new Set([STATES.DISPATCHED, STATES.CLOSED]),
-  [STATES.DISPATCHED]: new Set([STATES.REVIEW_PENDING, STATES.ESCALATED, STATES.CLOSED]),
+  [STATES.DISPATCHED]: new Set([
+    STATES.INTERNAL_REVIEW_PENDING,
+    STATES.REVIEW_PENDING,
+    STATES.ESCALATED,
+    STATES.CLOSED,
+  ]),
+  [STATES.INTERNAL_REVIEW_PENDING]: new Set([
+    STATES.CHANGES_REQUESTED,
+    STATES.PUBLISH_PENDING,
+    STATES.ESCALATED,
+    STATES.CLOSED,
+  ]),
+  [STATES.PUBLISH_PENDING]: new Set([STATES.REVIEW_PENDING, STATES.ESCALATED, STATES.CLOSED]),
   [STATES.REVIEW_PENDING]: new Set([STATES.CHANGES_REQUESTED, STATES.READY_TO_MERGE, STATES.ESCALATED, STATES.CLOSED]),
   [STATES.CHANGES_REQUESTED]: new Set([STATES.DISPATCHED, STATES.CLOSED]),
   [STATES.READY_TO_MERGE]: new Set([STATES.MERGED, STATES.MERGE_BLOCKED, STATES.CLOSED]),
@@ -104,11 +116,12 @@ test("manifest/lifecycle validateTransition enforces the full state matrix", () 
   }
 });
 
-test("manifest/lifecycle validateTransitionInvariants only gates dispatched -> review_pending", () => {
+test("manifest/lifecycle validateTransitionInvariants gates dispatch handoffs on rubric anchors", () => {
   const states = Object.values(STATES);
   for (const fromState of states) {
     for (const toState of states) {
       if (fromState === STATES.DISPATCHED && toState === STATES.REVIEW_PENDING) continue;
+      if (fromState === STATES.DISPATCHED && toState === STATES.INTERNAL_REVIEW_PENDING) continue;
       if (fromState === STATES.ESCALATED && toState === STATES.REVIEW_PENDING) continue;
       assert.doesNotThrow(
         () => validateTransitionInvariants({}, fromState, toState),
@@ -127,27 +140,39 @@ test("manifest/lifecycle validateTransitionInvariants only gates dispatched -> r
     ),
     /rubric file is missing/
   );
-});
-
-test("manifest/lifecycle validateTransitionInvariants gates escalated -> review_pending on reviewer_swap_count", () => {
-  assert.doesNotThrow(() => validateTransitionInvariants(
-    { review: { reviewer_swap_count: 0 } },
-    STATES.ESCALATED,
-    STATES.REVIEW_PENDING
-  ));
-  assert.doesNotThrow(() => validateTransitionInvariants(
-    {},
-    STATES.ESCALATED,
-    STATES.REVIEW_PENDING
-  ));
   assert.throws(
     () => validateTransitionInvariants(
-      { review: { reviewer_swap_count: 1 } },
-      STATES.ESCALATED,
-      STATES.REVIEW_PENDING
+      createMissingRubricManifest({
+        runId: "issue-188-20260418091011124-a1b2c3d4",
+      }),
+      STATES.DISPATCHED,
+      STATES.INTERNAL_REVIEW_PENDING
     ),
-    /reviewer_swap_count=1 \(max 1 per run\)/
+    /rubric file is missing/
   );
+});
+
+test("manifest/lifecycle validateTransitionInvariants gates escalated reviewer swaps on reviewer_swap_count", () => {
+  for (const targetState of [STATES.REVIEW_PENDING, STATES.INTERNAL_REVIEW_PENDING]) {
+    assert.doesNotThrow(() => validateTransitionInvariants(
+      { review: { reviewer_swap_count: 0 } },
+      STATES.ESCALATED,
+      targetState
+    ));
+    assert.doesNotThrow(() => validateTransitionInvariants(
+      {},
+      STATES.ESCALATED,
+      targetState
+    ));
+    assert.throws(
+      () => validateTransitionInvariants(
+        { review: { reviewer_swap_count: 1 } },
+        STATES.ESCALATED,
+        targetState
+      ),
+      /reviewer_swap_count=1 \(max 1 per run\)/
+    );
+  }
 });
 
 test("manifest/lifecycle validateTransitionInvariants accepts rubric-backed gates and rejects legacy grandfather fields", () => {

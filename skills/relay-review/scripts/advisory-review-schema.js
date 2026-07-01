@@ -1,7 +1,7 @@
 const {
   formatAdapterPhase,
+  parseJsonObject,
 } = require("../../relay-dispatch/scripts/agent-adapters/transport");
-const { parsePossiblyWrappedReviewerJsonObject } = require("./reviewer-helpers");
 
 const ADVISORY_PROFILES = Object.freeze(["blindspot"]);
 const ADVISORY_SEVERITIES = new Set(["P1", "P2", "P3"]);
@@ -93,7 +93,7 @@ function parseAdvisoryReview(text, {
   const expectedProfile = validateAdvisoryProfile(profile);
   const context = formatAdapterPhase({ adapter, phase });
   try {
-    const parsed = parsePossiblyWrappedReviewerJsonObject(normalizeAdvisoryJsonText(text), {
+    const parsed = parseJsonObject(normalizeAdvisoryJsonText(text), {
       adapter,
       phase,
       description: "advisory review",

@@ -41,9 +41,15 @@ function applyVerdictToManifest(data, verdict, round, prNumber, reviewedHeadSha,
       nextAction = "repair_rubric_and_redispatch";
       latestVerdict = rubricGateFailure.status;
     } else {
-      nextState = STATES.READY_TO_MERGE;
-      nextAction = "await_explicit_merge";
-      latestVerdict = "lgtm";
+      nextState = data.state === STATES.INTERNAL_REVIEW_PENDING
+        ? STATES.PUBLISH_PENDING
+        : STATES.READY_TO_MERGE;
+      nextAction = data.state === STATES.INTERNAL_REVIEW_PENDING
+        ? "publish_pr"
+        : "await_explicit_merge";
+      latestVerdict = data.state === STATES.INTERNAL_REVIEW_PENDING
+        ? "internal_lgtm"
+        : "lgtm";
     }
   } else if (verdict.verdict === "changes_requested") {
     nextState = STATES.CHANGES_REQUESTED;

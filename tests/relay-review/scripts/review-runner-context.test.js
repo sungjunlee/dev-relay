@@ -11,7 +11,9 @@ const {
   DEFAULT_ENFORCEMENT_RUBRIC,
 } = require("../../../skills/relay-dispatch/scripts/test-support");
 const {
+  loadPrReviewSignals,
   loadProjectConventions,
+  loadRetainedWorktreeDiff,
   parseRemoteHost,
   resolveIssueNumber,
 } = require("../../../skills/relay-review/scripts/review-runner/context");
@@ -58,6 +60,49 @@ if (args[0] === "pr" && args[1] === "view") {
     }));
     process.exit(0);
   }
+  if (fields === "statusCheckRollup,reviews,comments") {
+    process.stdout.write(JSON.stringify({
+      statusCheckRollup: fixture.statusCheckRollup || [],
+      reviews: fixture.reviews || [],
+      comments: fixture.comments || [],
+    }));
+    process.exit(0);
+  }
+}
+
+if (args[0] === "repo" && args[1] === "view") {
+  process.stdout.write(JSON.stringify({
+    owner: { login: fixture.owner || "acme" },
+    name: fixture.name || "dev-relay",
+  }));
+  process.exit(0);
+}
+
+if (args[0] === "api" && args[1] === "graphql") {
+  const cursorArg = args.find((arg) => arg.startsWith("threadsCursor="));
+  const pageIndex = cursorArg ? Number(cursorArg.split("=")[1].replace("page-", "")) : 0;
+  const pages = fixture.reviewThreadPages || [{
+    nodes: fixture.reviewThreads || [],
+    pageInfo: { hasNextPage: false, endCursor: null },
+  }];
+  const page = pages[pageIndex] || { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } };
+  const hasNextPage = pageIndex < pages.length - 1;
+  process.stdout.write(JSON.stringify({
+    data: {
+      repository: {
+        pullRequest: {
+          reviewThreads: {
+            pageInfo: {
+              hasNextPage,
+              endCursor: hasNextPage ? "page-" + (pageIndex + 1) : null,
+            },
+            nodes: page.nodes || [],
+          },
+        },
+      },
+    },
+  }));
+  process.exit(0);
 }
 
 process.stderr.write("Unsupported gh invocation: " + args.join(" "));
@@ -172,6 +217,66 @@ test("context/resolveIssueNumber rejects multiple inferred closing refs without 
       () => resolveIssueNumber(repoRoot, 123, null, {}),
       /Ambiguous GitHub closing issue references for PR #123: #99, #100.*manifest\.issue\.number.*anchor\.done_criteria_path/s
     );
+  });
+});
+
+test("context/loadPrReviewSignals includes inline review threads", () => {
+  withFakeGh({
+    statusCheckRollup: [{ name: "test", conclusion: "SUCCESS" }],
+    reviews: [{ author: { login: "reviewer" }, state: "COMMENTED", body: "see inline" }],
+    comments: [{ author: { login: "bot" }, body: "top level" }],
+    reviewThreads: [{
+      path: "skills/relay-review/scripts/review-runner.js",
+      line: 42,
+      isResolved: false,
+      isOutdated: false,
+      comments: {
+        nodes: [{
+          author: { login: "reviewer" },
+          body: "blocking inline feedback",
+        }],
+      },
+    }],
+  }, (repoRoot) => {
+    const signals = loadPrReviewSignals(repoRoot, 123);
+
+    assert.equal(signals.status, "loaded");
+    assert.deepEqual(signals.checks, ["- test: SUCCESS"]);
+    assert.match(signals.reviewThreads[0], /unresolved skills\/relay-review\/scripts\/review-runner\.js:42 reviewer/);
+    assert.match(signals.reviewThreads[0], /blocking inline feedback/);
+  });
+});
+
+test("context/loadPrReviewSignals paginates inline review threads", () => {
+  withFakeGh({
+    statusCheckRollup: [],
+    reviews: [],
+    comments: [],
+    reviewThreadPages: [
+      {
+        nodes: [{
+          path: "first.js",
+          line: 1,
+          isResolved: false,
+          comments: { nodes: [{ author: { login: "reviewer" }, body: "first page" }] },
+        }],
+      },
+      {
+        nodes: [{
+          path: "second.js",
+          line: 2,
+          isResolved: false,
+          comments: { nodes: [{ author: { login: "reviewer" }, body: "second page" }] },
+        }],
+      },
+    ],
+  }, (repoRoot) => {
+    const signals = loadPrReviewSignals(repoRoot, 123);
+
+    assert.equal(signals.status, "loaded");
+    assert.equal(signals.reviewThreads.length, 2);
+    assert.match(signals.reviewThreads[0], /first\.js:1/);
+    assert.match(signals.reviewThreads[1], /second\.js:2/);
   });
 });
 
@@ -320,6 +425,22 @@ test("context/loadProjectConventions content is injected into buildPrompt", () =
   assert.match(prompt, /## Project Conventions/);
   assert.match(prompt, /Do not flag violations of these as issues/);
   assert.match(prompt, /\*\.g\.dart\nbuild\//);
+});
+
+test("context/loadRetainedWorktreeDiff builds an internal diff from retained worktree", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-internal-diff-"));
+  execFileSync("git", ["init", "-b", "main"], { cwd: repoRoot, stdio: "pipe" });
+  execFileSync("git", ["config", "user.name", "Relay Review"], { cwd: repoRoot, stdio: "pipe" });
+  execFileSync("git", ["config", "user.email", "relay-review@example.com"], { cwd: repoRoot, stdio: "pipe" });
+  fs.writeFileSync(path.join(repoRoot, "README.md"), "base\n", "utf-8");
+  execFileSync("git", ["add", "README.md"], { cwd: repoRoot, stdio: "pipe" });
+  execFileSync("git", ["commit", "-m", "init"], { cwd: repoRoot, stdio: "pipe" });
+  execFileSync("git", ["checkout", "-b", "issue-42"], { cwd: repoRoot, stdio: "pipe" });
+  fs.writeFileSync(path.join(repoRoot, "README.md"), "base\nchanged\n", "utf-8");
+  execFileSync("git", ["commit", "-am", "change"], { cwd: repoRoot, stdio: "pipe" });
+
+  const diff = loadRetainedWorktreeDiff(repoRoot, { git: { base_branch: "main" } });
+  assert.match(diff, /\+changed/);
 });
 
 test("context/parseRemoteHost preserves the origin parsing matrix", async (t) => {

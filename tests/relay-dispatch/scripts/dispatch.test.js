@@ -484,6 +484,30 @@ setTimeout(() => {}, 60000);
   return codexPath;
 }
 
+function writeTimedOutUncommittedCodex(binDir) {
+  ensureDefaultFakeGh(binDir);
+  const codexPath = path.join(binDir, "codex");
+  fs.writeFileSync(codexPath, `#!/usr/bin/env node
+const fs = require("fs");
+const args = process.argv.slice(2);
+if (args[0] === "--version") {
+  process.stdout.write("codex-fake\\n");
+  process.exit(0);
+}
+if (args[0] !== "exec") {
+  process.stderr.write("unsupported fake codex invocation");
+  process.exit(1);
+}
+const cwd = args[args.indexOf("-C") + 1];
+const output = args[args.indexOf("-o") + 1];
+fs.appendFileSync(cwd + "/README.md", "timed out uncommitted work\\n", "utf-8");
+fs.writeFileSync(output, "partial result before timeout\\n", "utf-8");
+setTimeout(() => {}, 60000);
+`, "utf-8");
+  fs.chmodSync(codexPath, 0o755);
+  return codexPath;
+}
+
 function writeFakeGh(binDir) {
   const ghPath = path.join(binDir, "gh");
   fs.writeFileSync(ghPath, `#!/usr/bin/env node
@@ -636,6 +660,8 @@ function createPushPrTestEnv({ relayHome, ghState = {}, failGitPush = false, cod
     writeUncommittedCodex(binDir);
   } else if (codexMode === "partial-no-result") {
     writePartialNoResultCodex(binDir);
+  } else if (codexMode === "timeout-uncommitted-result") {
+    writeTimedOutUncommittedCodex(binDir);
   } else {
     writeFakeCodex(binDir);
   }
@@ -680,6 +706,12 @@ childProcess.execFileSync = function patchedExecFileSync(command, args, options)
   const statePath = process.env.RELAY_TEST_GH_STATE;
   const isPush = command === "git" && argv.includes("push");
   const isGh = command === "gh";
+  const isRecoverCommit = command === process.execPath && String(argv[0] || "").endsWith("recover-commit.js");
+  if (process.env.RELAY_TEST_FAIL_RECOVER_COMMIT === "1" && isRecoverCommit) {
+    const error = new Error("simulated recover-commit failure");
+    error.stderr = Buffer.from("simulated recover-commit failure\\n");
+    throw error;
+  }
   if (logPath && (isPush || isGh)) {
     fs.appendFileSync(logPath, JSON.stringify({ command, args: argv }) + "\\n");
   }
@@ -738,9 +770,18 @@ childProcess.execFileSync = function patchedExecFileSync(command, args, options)
 function createGitOnlyPath() {
   const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-git-only-bin-"));
   const gitShim = path.join(binDir, "git");
-  const gitPath = execFileSync("which", ["git"], { encoding: "utf-8", stdio: "pipe" }).trim();
+  const gitPath = fs.existsSync("/usr/bin/git")
+    ? "/usr/bin/git"
+    : execFileSync("which", ["git"], { encoding: "utf-8", stdio: "pipe" }).trim();
   fs.writeFileSync(gitShim, `#!/bin/sh\nexec ${JSON.stringify(gitPath)} \"$@\"\n`, "utf-8");
   fs.chmodSync(gitShim, 0o755);
+  const nodeShim = path.join(binDir, "node");
+  fs.writeFileSync(nodeShim, `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} \"$@\"\n`, "utf-8");
+  fs.chmodSync(nodeShim, 0o755);
+  const bashShim = path.join(binDir, "bash");
+  const bashPath = execFileSync("which", ["bash"], { encoding: "utf-8", stdio: "pipe" }).trim();
+  fs.writeFileSync(bashShim, `#!/bin/sh\nexec ${JSON.stringify(bashPath)} \"$@\"\n`, "utf-8");
+  fs.chmodSync(bashShim, 0o755);
   return binDir;
 }
 
@@ -3422,6 +3463,110 @@ test("dispatch pushes the branch and opens a PR from the orchestrator on success
   assert.ok(execCalls.some((entry) => entry.command === "git" && entry.args.includes("push")));
 });
 
+test("dispatch can defer PR publication until internal review passes", () => {
+  const { repoRoot, relayHome } = setupRepoWithOrigin();
+  const { env, ghLogPath, execLogPath } = createPushPrTestEnv({
+    relayHome,
+    ghState: {
+      prCreateUrl: "https://github.com/acme/dev-relay/pull/421",
+    },
+  });
+
+  const result = JSON.parse(runDispatch(repoRoot, [
+    "-b", "issue-421-delayed-publication",
+    "--prompt", "implement delayed publication",
+    "--publish-policy", "after-internal-review",
+    "--json",
+  ], env));
+
+  assert.equal(result.status, "completed");
+  assert.equal(result.runState, STATES.INTERNAL_REVIEW_PENDING);
+  assert.equal(result.publishPolicy, "after-internal-review");
+  assert.equal(result.prNumber, null);
+  assert.equal(result.prCreatedByUs, null);
+
+  const manifest = readManifest(result.manifestPath).data;
+  assert.equal(manifest.state, STATES.INTERNAL_REVIEW_PENDING);
+  assert.equal(manifest.next_action, "run_internal_review");
+  assert.equal(manifest.git.pr_number, null);
+
+  assert.deepEqual(readJsonLines(ghLogPath), []);
+  assert.ok(!readJsonLines(execLogPath).some((entry) => entry.command === "git" && entry.args.includes("push")));
+});
+
+test("dispatch preserves delayed publication policy across same-run redispatch", () => {
+  const { repoRoot, relayHome } = setupRepoWithOrigin();
+  const { env, ghLogPath, execLogPath } = createPushPrTestEnv({
+    relayHome,
+    ghState: {
+      prCreateUrl: "https://github.com/acme/dev-relay/pull/422",
+    },
+  });
+
+  const first = JSON.parse(runDispatch(repoRoot, [
+    "-b", "issue-422-delayed-redispatch",
+    "--prompt", "first delayed attempt",
+    "--publish-policy", "after-internal-review",
+    "--json",
+  ], env));
+  assert.equal(first.runState, STATES.INTERNAL_REVIEW_PENDING);
+
+  const record = readManifest(first.manifestPath);
+  const updated = updateManifestState(record.data, STATES.CHANGES_REQUESTED, "re_dispatch_requested_changes");
+  writeManifest(first.manifestPath, updated, record.body);
+
+  const second = JSON.parse(runDispatch(repoRoot, [
+    "--run-id", first.runId,
+    "--prompt", "resume delayed attempt",
+    "--json",
+  ], env));
+
+  assert.equal(second.mode, "resume");
+  assert.equal(second.publishPolicy, "after-internal-review");
+  assert.equal(second.runState, STATES.INTERNAL_REVIEW_PENDING);
+  assert.equal(second.prNumber, null);
+
+  const manifest = readManifest(first.manifestPath).data;
+  assert.equal(manifest.dispatch.publish_policy, "after-internal-review");
+  assert.equal(manifest.git.pr_number, null);
+  assert.deepEqual(readJsonLines(ghLogPath), []);
+  assert.ok(!readJsonLines(execLogPath).some((entry) => entry.command === "git" && entry.args.includes("push")));
+});
+
+test("dispatch rejects same-run redispatch publish policy changes", () => {
+  const { repoRoot, relayHome } = setupRepoWithOrigin();
+  const { env } = createPushPrTestEnv({
+    relayHome,
+    ghState: {
+      prCreateUrl: "https://github.com/acme/dev-relay/pull/423",
+    },
+  });
+
+  const first = JSON.parse(runDispatch(repoRoot, [
+    "-b", "issue-423-delayed-redispatch-conflict",
+    "--prompt", "first delayed attempt",
+    "--publish-policy", "after-internal-review",
+    "--json",
+  ], env));
+  const record = readManifest(first.manifestPath);
+  const updated = updateManifestState(record.data, STATES.CHANGES_REQUESTED, "re_dispatch_requested_changes");
+  writeManifest(first.manifestPath, updated, record.body);
+
+  const proc = spawnSync("node", [SCRIPT, repoRoot, ...withRequiredRubric([
+    "--run-id", first.runId,
+    "--prompt", "resume with conflicting policy",
+    "--publish-policy", "immediate",
+    "--json",
+  ])], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    env,
+  });
+
+  assert.notEqual(proc.status, 0);
+  assert.match(proc.stderr, /same-run resume cannot change dispatch\.publish_policy/);
+});
+
 test("dispatch lets explicit role env vars override the unknown defaults", () => {
   const { repoRoot, relayHome } = setupRepoWithOrigin();
   const { env } = createPushPrTestEnv({
@@ -3758,6 +3903,123 @@ test("dispatch leaves uncommitted non-codex runs unrecovered by default", () => 
   assert.equal(manifest.state, STATES.REVIEW_PENDING);
   assert.deepEqual(readJsonLines(ghLogPath), []);
   assert.deepEqual(readJsonLines(execLogPath), []);
+  assert.equal(Number(fs.readFileSync(pushPrCountPath, "utf-8")), 0);
+});
+
+test("dispatch blocks delayed publication internal review when work is uncommitted", () => {
+  const { repoRoot, relayHome } = setupRepoWithOrigin();
+  const { env, ghLogPath, execLogPath, pushPrCountPath } = createPushPrTestEnv({
+    relayHome,
+    ghState: {
+      prCreateUrl: "https://github.com/acme/dev-relay/pull/510",
+    },
+    codexMode: "uncommitted",
+    executor: "claude",
+  });
+
+  let dispatchError;
+  try {
+    runDispatch(repoRoot, [
+      "-b", "issue-510-delayed-uncommitted",
+      "--prompt", "work without commit",
+      "--publish-policy", "after-internal-review",
+      "--executor", "claude",
+      "--json",
+    ], env);
+  } catch (caught) {
+    dispatchError = caught;
+  }
+  assert.ok(dispatchError, "expected delayed uncommitted dispatch to exit nonzero");
+  const result = JSON.parse(String(dispatchError.stdout || ""));
+
+  assert.equal(result.status, "failed");
+  assert.match(result.error, /recover-commit required before internal review/);
+  assert.equal(result.commitMode, "completed-uncommitted, recover-commit required");
+  assert.equal(result.runState, STATES.INTERNAL_REVIEW_PENDING);
+  assert.equal(result.prNumber, null);
+  assert.match(result.uncommitted, /README\.md/);
+  const manifest = readManifest(result.manifestPath).data;
+  assert.equal(manifest.state, STATES.INTERNAL_REVIEW_PENDING);
+  assert.equal(manifest.next_action, "recover_commit_before_internal_review");
+  assert.equal(manifest.git.pr_number, null);
+  assert.deepEqual(readJsonLines(ghLogPath), []);
+  assert.deepEqual(readJsonLines(execLogPath), []);
+  assert.equal(Number(fs.readFileSync(pushPrCountPath, "utf-8")), 0);
+});
+
+test("dispatch blocks delayed publication internal review when timed-out work is uncommitted", () => {
+  const { repoRoot, relayHome } = setupRepoWithOrigin();
+  const { env, ghLogPath, execLogPath, pushPrCountPath } = createPushPrTestEnv({
+    relayHome,
+    ghState: {
+      prCreateUrl: "https://github.com/acme/dev-relay/pull/511",
+    },
+    codexMode: "timeout-uncommitted-result",
+  });
+
+  const proc = spawnSync("node", [SCRIPT, repoRoot, ...withRequiredRubric([
+    "-b", "issue-511-delayed-timeout-uncommitted",
+    "--prompt", "time out with uncommitted work",
+    "--publish-policy", "after-internal-review",
+    "--no-auto-recover-commit",
+    "--timeout", "1",
+    "--json",
+  ])], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    env,
+  });
+
+  assert.notEqual(proc.status, 0);
+  const result = JSON.parse(proc.stdout);
+  assert.equal(result.status, "failed");
+  assert.match(result.error, /recover-commit required before internal review/);
+  assert.equal(result.runState, STATES.INTERNAL_REVIEW_PENDING);
+  assert.match(result.uncommitted, /README\.md/);
+  const manifest = readManifest(result.manifestPath).data;
+  assert.equal(manifest.state, STATES.INTERNAL_REVIEW_PENDING);
+  assert.equal(manifest.next_action, "recover_commit_before_internal_review");
+  assert.equal(manifest.git.pr_number, null);
+  assert.deepEqual(readJsonLines(ghLogPath), []);
+  assert.deepEqual(readJsonLines(execLogPath), []);
+  assert.equal(Number(fs.readFileSync(pushPrCountPath, "utf-8")), 0);
+});
+
+test("dispatch escalates delayed internal review when auto recover-commit fails", () => {
+  const { repoRoot, relayHome } = setupRepoWithOrigin();
+  const { env, ghLogPath, pushPrCountPath } = createPushPrTestEnv({
+    relayHome,
+    ghState: {
+      prCreateUrl: "https://github.com/acme/dev-relay/pull/512",
+    },
+    codexMode: "uncommitted",
+  });
+
+  const proc = spawnSync("node", [SCRIPT, repoRoot, ...withRequiredRubric([
+    "-b", "issue-512-delayed-auto-recover-fails",
+    "--prompt", "work without commit",
+    "--publish-policy", "after-internal-review",
+    "--json",
+  ])], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    env: {
+      ...env,
+      RELAY_TEST_FAIL_RECOVER_COMMIT: "1",
+    },
+  });
+
+  assert.notEqual(proc.status, 0);
+  const result = JSON.parse(proc.stdout);
+  assert.equal(result.status, "failed");
+  assert.match(result.error, /auto_recover_commit_failed/);
+  assert.equal(result.commitMode, "auto-recover failed");
+  assert.equal(result.runState, STATES.ESCALATED);
+  assert.equal(result.prNumber, null);
+  const manifest = readManifest(result.manifestPath).data;
+  assert.equal(manifest.state, STATES.ESCALATED);
+  assert.equal(manifest.git.pr_number, null);
+  assert.deepEqual(readJsonLines(ghLogPath), []);
   assert.equal(Number(fs.readFileSync(pushPrCountPath, "utf-8")), 0);
 });
 

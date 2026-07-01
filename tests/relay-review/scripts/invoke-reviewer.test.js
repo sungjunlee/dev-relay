@@ -391,7 +391,7 @@ process.stdout.write("\`\`\`json\\n" + JSON.stringify({
   assert.equal(result.summary, "No blocking blind spots.");
 });
 
-test("opencode adapter recovers live-style prose-wrapped advisory JSON", () => {
+test("opencode adapter rejects prose-wrapped advisory JSON", () => {
   const { repoRoot, promptPath } = setupRepo();
   const fakeDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-fake-opencode-prose-"));
   const fakeOpencode = writeExecutable(fakeDir, "fake-opencode.js", `#!/usr/bin/env node
@@ -404,21 +404,28 @@ process.stdout.write("Sure, here is the advisory result:\\n" + JSON.stringify({
 }) + "\\n");
 `);
 
-  const stdout = execFileSync("node", [
-    OPENCODE_SCRIPT,
-    "--repo", repoRoot,
-    "--prompt-file", promptPath,
-    "--json",
-  ], {
-    cwd: repoRoot,
-    encoding: "utf-8",
-    stdio: "pipe",
-    env: { ...process.env, RELAY_OPENCODE_BIN: fakeOpencode },
-  });
+  let error;
+  try {
+    execFileSync("node", [
+      OPENCODE_SCRIPT,
+      "--repo", repoRoot,
+      "--prompt-file", promptPath,
+      "--json",
+    ], {
+      cwd: repoRoot,
+      encoding: "utf-8",
+      stdio: "pipe",
+      env: { ...process.env, RELAY_OPENCODE_BIN: fakeOpencode },
+    });
+  } catch (caught) {
+    error = caught;
+  }
 
-  const result = JSON.parse(stdout);
-  assert.equal(result.profile, "blindspot");
-  assert.equal(result.summary, "Recovered from verbose live output.");
+  assert.ok(error, "expected prose-wrapped advisory JSON to fail closed");
+  assert.match(
+    String(error.stderr || ""),
+    /adapter=opencode phase=advisory_review advisory review must be valid JSON:/
+  );
 });
 
 test("opencode adapter reports actionable diagnostics for empty stdout", () => {

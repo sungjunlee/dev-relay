@@ -424,8 +424,9 @@ if (args[0] === "pr" && args[1] === "view") {
     process.stdout.write(JSON.stringify({ headRefName: branch }));
     process.exit(0);
   }
-  if (jsonArg === "comments,commits,mergeable,statusCheckRollup") {
+  if (jsonArg === "comments,commits,mergeable,statusCheckRollup" || jsonArg === "baseRefName,comments,commits,mergeable,statusCheckRollup") {
     process.stdout.write(JSON.stringify({
+      baseRefName: "main",
       comments: [{ body: "<!-- relay-review -->\\n## Relay Review\\nVerdict: PASS\\nRounds: 1", createdAt: ${JSON.stringify(REVIEW_COMMENT_DATE)} }],
       commits: [{ oid: ${JSON.stringify(headSha)}, committedDate: ${JSON.stringify(REVIEW_COMMENT_DATE)} }],
       mergeable: "MERGEABLE",
@@ -446,8 +447,13 @@ if (args[0] === "pr" && args[1] === "merge") {
   saveState({ state: "MERGED", mergeCommit: { oid: sha } });
   process.exit(0);
 }
+if (args[0] === "repo" && args[1] === "view") {
+  process.stdout.write(JSON.stringify({ defaultBranchRef: { name: "main" } }));
+  process.exit(0);
+}
 if (args[0] === "issue" && args[1] === "close") process.exit(0);
-process.exit(0);
+process.stderr.write("unexpected fake gh invocation: " + args.join(" ") + "\\n");
+process.exit(1);
 `, "utf-8");
   fs.chmodSync(ghPath, 0o755);
   return { ghPath, logPath };

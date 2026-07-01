@@ -4,6 +4,8 @@ const { getRubricAnchorStatus } = require("./rubric");
 const STATES = Object.freeze({
   DRAFT: "draft",
   DISPATCHED: "dispatched",
+  INTERNAL_REVIEW_PENDING: "internal_review_pending",
+  PUBLISH_PENDING: "publish_pending",
   REVIEW_PENDING: "review_pending",
   CHANGES_REQUESTED: "changes_requested",
   READY_TO_MERGE: "ready_to_merge",
@@ -15,7 +17,9 @@ const STATES = Object.freeze({
 
 const ALLOWED_TRANSITIONS = Object.freeze({
   [STATES.DRAFT]: new Set([STATES.DISPATCHED, STATES.CLOSED]),
-  [STATES.DISPATCHED]: new Set([STATES.REVIEW_PENDING, STATES.ESCALATED, STATES.CLOSED]),
+  [STATES.DISPATCHED]: new Set([STATES.INTERNAL_REVIEW_PENDING, STATES.REVIEW_PENDING, STATES.ESCALATED, STATES.CLOSED]),
+  [STATES.INTERNAL_REVIEW_PENDING]: new Set([STATES.CHANGES_REQUESTED, STATES.PUBLISH_PENDING, STATES.ESCALATED, STATES.CLOSED]),
+  [STATES.PUBLISH_PENDING]: new Set([STATES.REVIEW_PENDING, STATES.ESCALATED, STATES.CLOSED]),
   [STATES.REVIEW_PENDING]: new Set([STATES.CHANGES_REQUESTED, STATES.READY_TO_MERGE, STATES.ESCALATED, STATES.CLOSED]),
   [STATES.CHANGES_REQUESTED]: new Set([STATES.DISPATCHED, STATES.CLOSED]),
   [STATES.READY_TO_MERGE]: new Set([STATES.MERGED, STATES.MERGE_BLOCKED, STATES.CLOSED]),
@@ -38,20 +42,26 @@ function validateTransition(fromState, toState) {
 }
 
 function validateTransitionInvariants(data, fromState, toState) {
-  if (fromState === STATES.DISPATCHED && toState === STATES.REVIEW_PENDING) {
+  if (
+    fromState === STATES.DISPATCHED
+    && (toState === STATES.INTERNAL_REVIEW_PENDING || toState === STATES.REVIEW_PENDING)
+  ) {
     const rubricAnchor = getRubricAnchorStatus(data);
     if (!rubricAnchor.satisfied) {
       throw new Error(
-        `Cannot transition dispatched -> review_pending because ${rubricAnchor.error} ` +
+        `Cannot transition dispatched -> ${toState} because ${rubricAnchor.error} ` +
         "Generate the rubric with relay-plan and dispatch with --rubric-file."
       );
     }
   }
-  if (fromState === STATES.ESCALATED && toState === STATES.REVIEW_PENDING) {
+  if (
+    fromState === STATES.ESCALATED &&
+    (toState === STATES.REVIEW_PENDING || toState === STATES.INTERNAL_REVIEW_PENDING)
+  ) {
     const swapCount = Number(data.review?.reviewer_swap_count || 0);
     if (swapCount >= 1) {
       throw new Error(
-        `Cannot transition escalated -> review_pending: reviewer_swap_count=${swapCount} (max 1 per run). ` +
+        `Cannot transition escalated -> ${toState}: reviewer_swap_count=${swapCount} (max 1 per run). ` +
         "Use close-run.js --reason to close, or start a new run."
       );
     }

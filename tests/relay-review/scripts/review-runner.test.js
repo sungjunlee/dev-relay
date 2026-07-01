@@ -10,6 +10,7 @@ const {
   STATES,
   createManifestSkeleton,
   ensureRunLayout,
+  forceTransitionState,
   getRunsDir,
   updateManifestState,
   writeManifest,
@@ -31,6 +32,61 @@ const DISPATCH_SCRIPT = path.join(__dirname, "..", "..", "..", "skills", "relay-
 const RECOVER_STATE_SCRIPT = path.join(__dirname, "..", "..", "..", "skills", "relay-dispatch", "scripts", "recover-state.js");
 const REVIEW_RUNNER_LINE_CAP = 390;
 const REVIEW_RUNNER_FUNCTION_CAP = 12;
+
+function installDefaultGhFixture() {
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-gh-"));
+  const ghPath = path.join(binDir, "gh");
+  fs.writeFileSync(ghPath, `#!/usr/bin/env node
+const args = process.argv.slice(2);
+function writeJson(value) {
+  process.stdout.write(JSON.stringify(value));
+}
+if (args[0] === "pr" && args[1] === "view") {
+  const jsonIndex = args.indexOf("--json");
+  const fields = jsonIndex >= 0 ? args[jsonIndex + 1] : "";
+  if (fields === "statusCheckRollup,reviews,comments") {
+    writeJson({
+      statusCheckRollup: [{ name: "unit", conclusion: "SUCCESS", status: "COMPLETED" }],
+      reviews: [],
+      comments: []
+    });
+    process.exit(0);
+  }
+  if (fields === "body" || fields.includes("body")) {
+    writeJson({
+      body: "## Test PR\\n\\nFixture body.\\n",
+      headRefOid: "a".repeat(40),
+      headRefName: "issue-123",
+      closingIssuesReferences: []
+    });
+    process.exit(0);
+  }
+  writeJson({});
+  process.exit(0);
+}
+if (args[0] === "repo" && args[1] === "view") {
+  writeJson({ owner: { login: "acme" }, name: "dev-relay" });
+  process.exit(0);
+}
+if (args[0] === "api" && args[1] === "graphql") {
+  writeJson({ data: { repository: { pullRequest: { reviewThreads: { nodes: [] } } } } });
+  process.exit(0);
+}
+if (args[0] === "api" && args[1] === "user") {
+  process.stdout.write("fixture-reviewer\\n");
+  process.exit(0);
+}
+if (args[0] === "pr" && args[1] === "comment") {
+  process.exit(0);
+}
+process.stderr.write("Unsupported default gh fixture invocation: " + args.join(" "));
+process.exit(1);
+`, "utf-8");
+  fs.chmodSync(ghPath, 0o755);
+  process.env.PATH = `${binDir}:${process.env.PATH}`;
+}
+
+installDefaultGhFixture();
 
 function setupRepo() {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-runner-"));
@@ -320,6 +376,16 @@ function writeFakeGhScript(repoRoot, { prBody, capturePath }) {
 const fs = require("fs");
 const args = process.argv.slice(2);
 if (args[0] === "pr" && args[1] === "view") {
+  const jsonIndex = args.indexOf("--json");
+  const fields = jsonIndex === -1 ? "" : args[jsonIndex + 1];
+  if (fields === "statusCheckRollup,reviews,comments") {
+    process.stdout.write(JSON.stringify({
+      statusCheckRollup: [{ name: "unit", conclusion: "SUCCESS", status: "COMPLETED" }],
+      reviews: [],
+      comments: []
+    }));
+    process.exit(0);
+  }
   if (args.includes("-q") && args[args.indexOf("-q") + 1] === ".body") {
     process.stdout.write(${JSON.stringify(prBody)});
     process.exit(0);
@@ -331,6 +397,18 @@ if (args[0] === "pr" && args[1] === "comment") {
   const bodyIndex = args.indexOf("--body");
   const body = bodyIndex !== -1 ? args[bodyIndex + 1] : "";
   fs.writeFileSync(${JSON.stringify(capturePath)}, body, "utf-8");
+  process.exit(0);
+}
+if (args[0] === "repo" && args[1] === "view") {
+  process.stdout.write(JSON.stringify({ owner: { login: "acme" }, name: "dev-relay" }));
+  process.exit(0);
+}
+if (args[0] === "api" && args[1] === "graphql") {
+  process.stdout.write(JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes: [] } } } } }));
+  process.exit(0);
+}
+if (args[0] === "api" && args[1] === "user") {
+  process.stdout.write("fixture-reviewer\\n");
   process.exit(0);
 }
 process.stderr.write("Unsupported gh invocation: " + args.join(" "));
@@ -466,12 +544,35 @@ if (args[0] === "pr" && args[1] === "view") {
     }));
     process.exit(0);
   }
+  if (fields === "statusCheckRollup,reviews,comments") {
+    process.stdout.write(JSON.stringify({
+      statusCheckRollup: [{ name: "unit", conclusion: "SUCCESS", status: "COMPLETED" }],
+      reviews: [],
+      comments: []
+    }));
+    process.exit(0);
+  }
 }
 
 if (args[0] === "pr" && args[1] === "comment") {
   const bodyIndex = args.indexOf("--body");
   const body = bodyIndex !== -1 ? args[bodyIndex + 1] : "";
   fs.writeFileSync(capturePath, body, "utf-8");
+  process.exit(0);
+}
+
+if (args[0] === "repo" && args[1] === "view") {
+  process.stdout.write(JSON.stringify({ owner: { login: "acme" }, name: "dev-relay" }));
+  process.exit(0);
+}
+
+if (args[0] === "api" && args[1] === "graphql") {
+  process.stdout.write(JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes: [] } } } } }));
+  process.exit(0);
+}
+
+if (args[0] === "api" && args[1] === "user") {
+  process.stdout.write("fixture-reviewer\\n");
   process.exit(0);
 }
 
@@ -872,6 +973,81 @@ test("pass verdict moves review_pending to ready_to_merge", () => {
   assert.equal(manifest.review.last_quality_review_status, "pass");
   assert.equal(manifest.review.last_quality_execution_status, "pass");
   assert.equal(manifest.review.last_quality_execution_reason, null);
+});
+
+test("internal pass verdict moves internal_review_pending to publish_pending without PR comment", () => {
+  const { repoRoot, manifestPath, runId, doneCriteriaPath } = setupRepo();
+  const record = readManifest(manifestPath);
+  const internal = forceTransitionState({
+    ...record.data,
+    git: {
+      ...(record.data.git || {}),
+      pr_number: null,
+    },
+  }, STATES.INTERNAL_REVIEW_PENDING, "run_internal_review");
+  writeManifest(manifestPath, internal, record.body);
+  const reviewFile = writeVerdict(repoRoot, "internal-pass.json", {
+    verdict: "pass",
+    summary: "Internal review is ready to publish.",
+    contract_status: "pass",
+    quality_review_status: "pass",
+    quality_execution_status: "pass",
+    next_action: "publish_pending",
+    issues: [],
+    rubric_scores: defaultRubricScores(),
+    scope_drift: { creep: [], missing: [] },
+  });
+
+  const stdout = execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--run-id", runId,
+    "--done-criteria-file", doneCriteriaPath,
+    "--review-file", reviewFile,
+    "--json",
+  ], { encoding: "utf-8" });
+
+  const result = JSON.parse(stdout);
+  assert.equal(result.state, STATES.PUBLISH_PENDING);
+  assert.equal(result.nextState, STATES.PUBLISH_PENDING);
+  assert.equal(result.commentPosted, false);
+  assert.equal(result.prNumber, null);
+  assert.equal(result.reviewPhase, "internal");
+
+  const manifest = readManifest(manifestPath).data;
+  assert.equal(manifest.state, STATES.PUBLISH_PENDING);
+  assert.equal(manifest.next_action, "publish_pr");
+  assert.equal(manifest.git.pr_number, null);
+  assert.equal(manifest.review.latest_verdict, "internal_lgtm");
+});
+
+test("internal review refuses to run before recover-commit clears uncommitted dispatch work", () => {
+  const { repoRoot, manifestPath, runId, doneCriteriaPath } = setupRepo();
+  const record = readManifest(manifestPath);
+  const internal = forceTransitionState({
+    ...record.data,
+    git: {
+      ...(record.data.git || {}),
+      pr_number: null,
+    },
+  }, STATES.INTERNAL_REVIEW_PENDING, "recover_commit_before_internal_review");
+  writeManifest(manifestPath, internal, record.body);
+  const reviewFile = writePassVerdict(repoRoot, "blocked-internal-pass.json");
+
+  const proc = spawnSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--run-id", runId,
+    "--done-criteria-file", doneCriteriaPath,
+    "--review-file", reviewFile,
+    "--json",
+  ], { encoding: "utf-8" });
+
+  assert.notEqual(proc.status, 0);
+  assert.match(proc.stderr, /requires recover-commit before internal review/);
+  const manifest = readManifest(manifestPath).data;
+  assert.equal(manifest.state, STATES.INTERNAL_REVIEW_PENDING);
+  assert.equal(manifest.next_action, "recover_commit_before_internal_review");
 });
 
 test("review-runner proceeds after audited ready_to_merge HEAD-drift recovery", () => {

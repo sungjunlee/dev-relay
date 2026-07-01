@@ -77,6 +77,31 @@ test("verdict/validateReviewVerdict allows reviewer payloads to omit quality_exe
   assert.equal(validated.quality_execution_status, undefined);
 });
 
+test("verdict/validateReviewVerdict allows internal PASS only with publish_pending policy", () => {
+  const internalPass = makePassVerdict({ next_action: "publish_pending" });
+  assert.throws(
+    () => validateReviewVerdict(internalPass),
+    /PASS verdict must set next_action=ready_to_merge/
+  );
+
+  const validated = validateReviewVerdict(internalPass, { passNextActions: ["publish_pending"] });
+  assert.equal(validated.next_action, "publish_pending");
+});
+
+test("verdict/validateReviewVerdict rejects PASS when an external gate disallows it", () => {
+  assert.throws(
+    () => validateReviewVerdict(makePassVerdict(), {
+      disallowPassReason: "GitHub PR signals failed to load",
+    }),
+    /PASS verdict is not allowed: GitHub PR signals failed to load/
+  );
+
+  const changesRequested = validateReviewVerdict(makeChangesRequestedVerdict(), {
+    disallowPassReason: "GitHub PR signals failed to load",
+  });
+  assert.equal(changesRequested.verdict, "changes_requested");
+});
+
 test("verdict/validateReviewVerdict accepts every lineage enum value", async (t) => {
   for (const lineage of ["new", "deepening", "repeat", "stale", "newly_scoreable", "unknown"]) {
     await t.test(lineage, () => {
