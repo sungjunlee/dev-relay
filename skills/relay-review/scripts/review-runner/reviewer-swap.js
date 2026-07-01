@@ -18,6 +18,7 @@ function maybeSwapReviewer(data, reviewerArg, body, manifestPath, runRepoPath, o
   }
   const reason = independentReviewReason || `different_reviewer:${lastReviewer || "unknown"}->${newReviewerName}`;
 
+  // Delayed-publication runs with no PR yet must retry the retained worktree, not a public PR review.
   const prePublicationReview = !data.git?.pr_number && data.dispatch?.publish_policy === "after-internal-review";
   const targetState = prePublicationReview ? STATES.INTERNAL_REVIEW_PENDING : STATES.REVIEW_PENDING;
   const nextAction = prePublicationReview ? "run_internal_review" : "run_review";

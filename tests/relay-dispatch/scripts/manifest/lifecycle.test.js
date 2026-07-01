@@ -152,25 +152,27 @@ test("manifest/lifecycle validateTransitionInvariants gates dispatch handoffs on
   );
 });
 
-test("manifest/lifecycle validateTransitionInvariants gates escalated -> review_pending on reviewer_swap_count", () => {
-  assert.doesNotThrow(() => validateTransitionInvariants(
-    { review: { reviewer_swap_count: 0 } },
-    STATES.ESCALATED,
-    STATES.REVIEW_PENDING
-  ));
-  assert.doesNotThrow(() => validateTransitionInvariants(
-    {},
-    STATES.ESCALATED,
-    STATES.REVIEW_PENDING
-  ));
-  assert.throws(
-    () => validateTransitionInvariants(
-      { review: { reviewer_swap_count: 1 } },
+test("manifest/lifecycle validateTransitionInvariants gates escalated reviewer swaps on reviewer_swap_count", () => {
+  for (const targetState of [STATES.REVIEW_PENDING, STATES.INTERNAL_REVIEW_PENDING]) {
+    assert.doesNotThrow(() => validateTransitionInvariants(
+      { review: { reviewer_swap_count: 0 } },
       STATES.ESCALATED,
-      STATES.REVIEW_PENDING
-    ),
-    /reviewer_swap_count=1 \(max 1 per run\)/
-  );
+      targetState
+    ));
+    assert.doesNotThrow(() => validateTransitionInvariants(
+      {},
+      STATES.ESCALATED,
+      targetState
+    ));
+    assert.throws(
+      () => validateTransitionInvariants(
+        { review: { reviewer_swap_count: 1 } },
+        STATES.ESCALATED,
+        targetState
+      ),
+      /reviewer_swap_count=1 \(max 1 per run\)/
+    );
+  }
 });
 
 test("manifest/lifecycle validateTransitionInvariants accepts rubric-backed gates and rejects legacy grandfather fields", () => {

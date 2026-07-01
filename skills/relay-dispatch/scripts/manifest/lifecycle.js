@@ -54,11 +54,14 @@ function validateTransitionInvariants(data, fromState, toState) {
       );
     }
   }
-  if (fromState === STATES.ESCALATED && toState === STATES.REVIEW_PENDING) {
+  if (
+    fromState === STATES.ESCALATED &&
+    (toState === STATES.REVIEW_PENDING || toState === STATES.INTERNAL_REVIEW_PENDING)
+  ) {
     const swapCount = Number(data.review?.reviewer_swap_count || 0);
     if (swapCount >= 1) {
       throw new Error(
-        `Cannot transition escalated -> review_pending: reviewer_swap_count=${swapCount} (max 1 per run). ` +
+        `Cannot transition escalated -> ${toState}: reviewer_swap_count=${swapCount} (max 1 per run). ` +
         "Use close-run.js --reason to close, or start a new run."
       );
     }

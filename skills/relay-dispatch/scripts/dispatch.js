@@ -1832,10 +1832,12 @@ async function main() {
   const delayedReviewHasUncommittedWork = PUBLISH_POLICY === "after-internal-review" && (
     status === "completed-uncommitted" || (status === "completed-with-warning" && uncommitted)
   );
+  let delayedReviewRequiresRecover = false;
   if (delayedReviewHasUncommittedWork && !AUTO_RECOVER_COMMIT) {
     status = "failed";
     exitCode = exitCode || 1;
     error = "recover-commit required before internal review: executor left reviewable uncommitted changes";
+    delayedReviewRequiresRecover = true;
   }
 
   let prNumber = manifest.git?.pr_number ?? null;
@@ -1895,10 +1897,20 @@ async function main() {
   const dispatchSuccessNextAction = PUBLISH_POLICY === "after-internal-review"
     ? "run_internal_review"
     : "run_review";
+  const dispatchTargetState = delayedReviewRequiresRecover
+    ? STATES.INTERNAL_REVIEW_PENDING
+    : status === "failed"
+      ? STATES.ESCALATED
+      : dispatchSuccessState;
+  const dispatchNextAction = delayedReviewRequiresRecover
+    ? "recover_commit_before_internal_review"
+    : status === "failed"
+      ? "inspect_dispatch_failure"
+      : dispatchSuccessNextAction;
   manifest = updateManifestState(
     manifest,
-    status === "failed" ? STATES.ESCALATED : dispatchSuccessState,
-    status === "failed" ? "inspect_dispatch_failure" : dispatchSuccessNextAction
+    dispatchTargetState,
+    dispatchNextAction
   );
   const { github: _legacyGithub, ...manifestSansGithub } = manifest;
   const { pr_number: _legacyGithubPrNumber, ...githubFields } = _legacyGithub || {};

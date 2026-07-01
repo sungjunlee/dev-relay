@@ -79,12 +79,24 @@ if (args[0] === "repo" && args[1] === "view") {
 }
 
 if (args[0] === "api" && args[1] === "graphql") {
+  const cursorArg = args.find((arg) => arg.startsWith("threadsCursor="));
+  const pageIndex = cursorArg ? Number(cursorArg.split("=")[1].replace("page-", "")) : 0;
+  const pages = fixture.reviewThreadPages || [{
+    nodes: fixture.reviewThreads || [],
+    pageInfo: { hasNextPage: false, endCursor: null },
+  }];
+  const page = pages[pageIndex] || { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } };
+  const hasNextPage = pageIndex < pages.length - 1;
   process.stdout.write(JSON.stringify({
     data: {
       repository: {
         pullRequest: {
           reviewThreads: {
-            nodes: fixture.reviewThreads || [],
+            pageInfo: {
+              hasNextPage,
+              endCursor: hasNextPage ? "page-" + (pageIndex + 1) : null,
+            },
+            nodes: page.nodes || [],
           },
         },
       },
@@ -232,6 +244,39 @@ test("context/loadPrReviewSignals includes inline review threads", () => {
     assert.deepEqual(signals.checks, ["- test: SUCCESS"]);
     assert.match(signals.reviewThreads[0], /unresolved skills\/relay-review\/scripts\/review-runner\.js:42 reviewer/);
     assert.match(signals.reviewThreads[0], /blocking inline feedback/);
+  });
+});
+
+test("context/loadPrReviewSignals paginates inline review threads", () => {
+  withFakeGh({
+    statusCheckRollup: [],
+    reviews: [],
+    comments: [],
+    reviewThreadPages: [
+      {
+        nodes: [{
+          path: "first.js",
+          line: 1,
+          isResolved: false,
+          comments: { nodes: [{ author: { login: "reviewer" }, body: "first page" }] },
+        }],
+      },
+      {
+        nodes: [{
+          path: "second.js",
+          line: 2,
+          isResolved: false,
+          comments: { nodes: [{ author: { login: "reviewer" }, body: "second page" }] },
+        }],
+      },
+    ],
+  }, (repoRoot) => {
+    const signals = loadPrReviewSignals(repoRoot, 123);
+
+    assert.equal(signals.status, "loaded");
+    assert.equal(signals.reviewThreads.length, 2);
+    assert.match(signals.reviewThreads[0], /first\.js:1/);
+    assert.match(signals.reviewThreads[1], /second\.js:2/);
   });
 });
 

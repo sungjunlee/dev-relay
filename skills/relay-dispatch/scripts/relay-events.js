@@ -166,6 +166,12 @@ function appendRunEvent(repoRoot, runId, eventData) {
     ...(eventData.last_reviewed_sha !== undefined
       ? { last_reviewed_sha: normalizeEventValue(eventData.last_reviewed_sha) }
       : {}),
+    ...(eventData.branch_head_sha !== undefined
+      ? { branch_head_sha: normalizeEventValue(eventData.branch_head_sha) }
+      : {}),
+    ...(eventData.preflight_code !== undefined
+      ? { preflight_code: normalizeEventValue(eventData.preflight_code) }
+      : {}),
     ...(eventData.previous_head_sha !== undefined
       ? { previous_head_sha: normalizeEventValue(eventData.previous_head_sha) }
       : {}),

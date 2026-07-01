@@ -292,6 +292,11 @@ test("happy path commits dirty worktree, pushes, opens PR, stamps manifest, and 
 
 test("internal_review_pending recovery commits locally without pushing or opening a PR", () => {
   const fixture = setupRepo({ dirty: true, manifestState: STATES.INTERNAL_REVIEW_PENDING });
+  const record = readManifest(fixture.manifestPath);
+  writeManifest(fixture.manifestPath, {
+    ...record.data,
+    next_action: "recover_commit_before_internal_review",
+  }, record.body);
   const result = runRecover(fixture, ["--reason", "executor completed before internal review", "--json"]);
 
   assert.equal(result.status, 0, result.stderr);
@@ -304,6 +309,7 @@ test("internal_review_pending recovery commits locally without pushing or openin
 
   const manifest = readManifest(fixture.manifestPath).data;
   assert.equal(manifest.state, STATES.INTERNAL_REVIEW_PENDING);
+  assert.equal(manifest.next_action, "run_internal_review");
   assert.equal(manifest.git.pr_number, null);
   assert.equal(manifest.git.head_sha, parsed.commitSha);
 

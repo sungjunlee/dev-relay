@@ -1021,6 +1021,35 @@ test("internal pass verdict moves internal_review_pending to publish_pending wit
   assert.equal(manifest.review.latest_verdict, "internal_lgtm");
 });
 
+test("internal review refuses to run before recover-commit clears uncommitted dispatch work", () => {
+  const { repoRoot, manifestPath, runId, doneCriteriaPath } = setupRepo();
+  const record = readManifest(manifestPath);
+  const internal = forceTransitionState({
+    ...record.data,
+    git: {
+      ...(record.data.git || {}),
+      pr_number: null,
+    },
+  }, STATES.INTERNAL_REVIEW_PENDING, "recover_commit_before_internal_review");
+  writeManifest(manifestPath, internal, record.body);
+  const reviewFile = writePassVerdict(repoRoot, "blocked-internal-pass.json");
+
+  const proc = spawnSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--run-id", runId,
+    "--done-criteria-file", doneCriteriaPath,
+    "--review-file", reviewFile,
+    "--json",
+  ], { encoding: "utf-8" });
+
+  assert.notEqual(proc.status, 0);
+  assert.match(proc.stderr, /requires recover-commit before internal review/);
+  const manifest = readManifest(manifestPath).data;
+  assert.equal(manifest.state, STATES.INTERNAL_REVIEW_PENDING);
+  assert.equal(manifest.next_action, "recover_commit_before_internal_review");
+});
+
 test("review-runner proceeds after audited ready_to_merge HEAD-drift recovery", () => {
   const { repoRoot, worktreePath, manifestPath, runId, doneCriteriaPath, diffPath } = setupRepo();
   const oldHead = execFileSync("git", ["-C", worktreePath, "rev-parse", "HEAD"], {

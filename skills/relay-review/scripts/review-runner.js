@@ -61,6 +61,7 @@ async function run() {
   if (![STATES.INTERNAL_REVIEW_PENDING, STATES.REVIEW_PENDING].includes(data.state)) {
     throw new Error(`Review runner requires state=internal_review_pending or review_pending, got '${data.state}'`);
   }
+  if (data.next_action === "recover_commit_before_internal_review") throw new Error("Review runner requires recover-commit before internal review because the retained worktree has uncommitted reviewable changes.");
   if (!fs.existsSync(reviewRepoPath)) {
     throw new Error(`Retained review checkout does not exist: ${reviewRepoPath}`);
   }
@@ -386,5 +387,4 @@ if (require.main === module) {
     process.exit(1);
   });
 }
-
 module.exports = { applyVerdictToManifest, buildCommentBody, buildPrompt, buildRedispatchPrompt, buildReviewRunnerRubricGateFailure, detectChurnGrowth, formatIssueList, formatPriorVerdictSummary, formatScopeDrift, getGhLogin, loadRubricFromRunDir, parseRemoteHost, parseReviewVerdict, parseScoreLog, resolveIssueNumber, resolveRemoteHost, validateReviewVerdict, validateScopeDrift };

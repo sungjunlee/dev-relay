@@ -416,6 +416,7 @@ function main() {
   if (internalReview) {
     const updatedData = {
       ...data,
+      next_action: "run_internal_review",
       git: {
         ...(data.git || {}),
         head_sha: commitSha,

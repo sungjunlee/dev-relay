@@ -157,3 +157,20 @@ test("reviewer-swap/rejects a second swap after the quota is used", () => {
     /reviewer_swap_count=1 \(max 1 per run\)/
   );
 });
+
+test("reviewer-swap/rejects a second pre-publication internal swap after the quota is used", () => {
+  const { data, manifestPath, repoRoot } = setupEscalatedRun({ lastReviewer: "codex", swapCount: 1 });
+  const prePublication = {
+    ...data,
+    git: { ...(data.git || {}), pr_number: null },
+    dispatch: { ...(data.dispatch || {}), publish_policy: "after-internal-review" },
+  };
+  writeManifest(manifestPath, prePublication, "");
+
+  assert.throws(
+    () => maybeSwapReviewer(prePublication, "claude", "", manifestPath, repoRoot, {
+      independentReviewReason: "fresh internal context",
+    }),
+    /reviewer_swap_count=1 \(max 1 per run\)/
+  );
+});

@@ -503,10 +503,14 @@ function resolveRepoOwnerName(repoPath) {
 function loadReviewThreads(repoPath, prNumber) {
   const { owner, name } = resolveRepoOwnerName(repoPath);
   const query = `
-query($owner: String!, $name: String!, $number: Int!) {
+query($owner: String!, $name: String!, $number: Int!, $threadsCursor: String) {
   repository(owner: $owner, name: $name) {
     pullRequest(number: $number) {
-      reviewThreads(first: 100) {
+      reviewThreads(first: 100, after: $threadsCursor) {
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
         nodes {
           isResolved
           isOutdated
@@ -526,16 +530,24 @@ query($owner: String!, $name: String!, $number: Int!) {
     }
   }
 }`;
-  const raw = gh(
-    repoPath,
-    "api", "graphql",
-    "-f", `query=${query}`,
-    "-F", `owner=${owner}`,
-    "-F", `name=${name}`,
-    "-F", `number=${prNumber}`
-  );
-  const parsed = JSON.parse(raw);
-  return parsed.data?.repository?.pullRequest?.reviewThreads?.nodes || [];
+  const threads = [];
+  let cursor = null;
+  do {
+    const args = [
+      "api", "graphql",
+      "-f", `query=${query}`,
+      "-F", `owner=${owner}`,
+      "-F", `name=${name}`,
+      "-F", `number=${prNumber}`,
+    ];
+    if (cursor) args.push("-F", `threadsCursor=${cursor}`);
+    const raw = gh(repoPath, ...args);
+    const parsed = JSON.parse(raw);
+    const page = parsed.data?.repository?.pullRequest?.reviewThreads || {};
+    threads.push(...(page.nodes || []));
+    cursor = page.pageInfo?.hasNextPage ? page.pageInfo.endCursor : null;
+  } while (cursor);
+  return threads;
 }
 
 function loadPrReviewSignals(repoPath, prNumber) {

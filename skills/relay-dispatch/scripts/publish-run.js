@@ -39,21 +39,37 @@ function getReviewedHeadSha(data) {
   return normalizeSha(data.review?.last_reviewed_sha);
 }
 
-function buildPublishPreflightError({ reviewedHeadSha, headSha, dirtyStatus }) {
+function publishPreflightError(code, message) {
+  const error = new Error(message);
+  error.code = code;
+  return error;
+}
+
+function buildPublishPreflightError({ reviewedHeadSha, headSha, branchHeadSha, dirtyStatus }) {
   if (!reviewedHeadSha) {
-    return new Error(
+    return publishPreflightError(
+      "publish_missing_review_anchor",
       "publish-run requires review.last_reviewed_sha before publishing. " +
       "Run internal review again so the PR publication has a reviewed HEAD anchor."
     );
   }
   if (headSha !== reviewedHeadSha) {
-    return new Error(
+    return publishPreflightError(
+      "publish_head_drift",
       `Refusing to publish unreviewed HEAD ${headSha}: internal review approved ${reviewedHeadSha}. ` +
       "Run review again before publishing."
     );
   }
+  if (branchHeadSha !== reviewedHeadSha) {
+    return publishPreflightError(
+      "publish_branch_ref_drift",
+      `Refusing to publish unreviewed branch ref ${branchHeadSha}: internal review approved ${reviewedHeadSha}. ` +
+      "Check out/reset the manifest branch to the reviewed commit and run review again before publishing."
+    );
+  }
   if (dirtyStatus) {
-    return new Error(
+    return publishPreflightError(
+      "publish_dirty_worktree",
       "Refusing to publish with uncommitted worktree changes after internal review. " +
       "Commit/recover the changes and run review again before publishing."
     );
@@ -61,8 +77,32 @@ function buildPublishPreflightError({ reviewedHeadSha, headSha, dirtyStatus }) {
   return null;
 }
 
-function escalatePublishPreflightFailure({ data, body, manifestPath, validatedPaths, headSha, branch, error }) {
-  const escalated = updateManifestState(data, STATES.ESCALATED, "inspect_publish_head_drift");
+function publishPreflightReviewFields(error) {
+  const code = error?.code || "publish_preflight_failed";
+  const byCode = {
+    publish_missing_review_anchor: {
+      latestVerdict: "publish_missing_review_anchor",
+      nextAction: "run_internal_review",
+    },
+    publish_head_drift: {
+      latestVerdict: "publish_head_drift",
+      nextAction: "inspect_publish_head_drift",
+    },
+    publish_branch_ref_drift: {
+      latestVerdict: "publish_branch_ref_drift",
+      nextAction: "inspect_publish_branch_ref_drift",
+    },
+    publish_dirty_worktree: {
+      latestVerdict: "publish_dirty_worktree",
+      nextAction: "inspect_publish_dirty_worktree",
+    },
+  };
+  return { code, ...(byCode[code] || { latestVerdict: code, nextAction: "inspect_publish_preflight_failure" }) };
+}
+
+function escalatePublishPreflightFailure({ data, body, manifestPath, validatedPaths, headSha, branchHeadSha, branch, error }) {
+  const preflight = publishPreflightReviewFields(error);
+  const escalated = updateManifestState(data, STATES.ESCALATED, preflight.nextAction);
   writeManifest(manifestPath, {
     ...escalated,
     git: {
@@ -71,7 +111,7 @@ function escalatePublishPreflightFailure({ data, body, manifestPath, validatedPa
     },
     review: {
       ...(escalated.review || {}),
-      latest_verdict: "publish_head_drift",
+      latest_verdict: preflight.latestVerdict,
     },
   }, body);
   appendRunEvent(validatedPaths.repoRoot, data.run_id, {
@@ -79,8 +119,10 @@ function escalatePublishPreflightFailure({ data, body, manifestPath, validatedPa
     state_from: data.state,
     state_to: STATES.ESCALATED,
     head_sha: headSha,
+    branch_head_sha: branchHeadSha,
     last_reviewed_sha: getReviewedHeadSha(data),
     branch,
+    preflight_code: preflight.code,
     reason: String(error.message || error).split("\n")[0],
   });
 }
@@ -121,12 +163,16 @@ async function publishRun(options) {
     encoding: "utf-8",
     stdio: "pipe",
   }).trim();
+  const branchHeadSha = execFileSync("git", ["-C", validatedPaths.worktree, "rev-parse", "--verify", `refs/heads/${branch}`], {
+    encoding: "utf-8",
+    stdio: "pipe",
+  }).trim();
   const dirtyStatus = execFileSync("git", ["-C", validatedPaths.worktree, "status", "--porcelain"], {
     encoding: "utf-8",
     stdio: "pipe",
   }).trim();
   const reviewedHeadSha = getReviewedHeadSha(data);
-  const preflightError = buildPublishPreflightError({ reviewedHeadSha, headSha, dirtyStatus });
+  const preflightError = buildPublishPreflightError({ reviewedHeadSha, headSha, branchHeadSha, dirtyStatus });
   if (preflightError) {
     if (!options.dryRun) {
       escalatePublishPreflightFailure({
@@ -135,6 +181,7 @@ async function publishRun(options) {
         manifestPath,
         validatedPaths,
         headSha,
+        branchHeadSha,
         branch,
         error: preflightError,
       });
@@ -153,6 +200,7 @@ async function publishRun(options) {
       branch,
       baseBranch,
       headSha,
+      branchHeadSha,
       reviewedHeadSha,
       prNumber: data.git?.pr_number || null,
     };
@@ -227,6 +275,7 @@ async function publishRun(options) {
     branch,
     baseBranch,
     headSha,
+    branchHeadSha,
     reviewedHeadSha,
     prNumber: prResult.prNumber,
     prCreatedByUs: prResult.createdByUs,
