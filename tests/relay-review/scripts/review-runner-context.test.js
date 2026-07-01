@@ -21,6 +21,7 @@ const {
   loadRubricFromRunDir,
 } = require("../../../skills/relay-dispatch/scripts/manifest/rubric");
 const { buildPrompt } = require("../../../skills/relay-review/scripts/review-runner/prompt");
+const { withFakeGh } = require("../fixtures/fake-gh");
 
 function createRunFixture() {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-context-"));
@@ -34,96 +35,6 @@ function createRunFixture() {
   const runId = "issue-189-20260418010101010";
   const { runDir } = ensureRunLayout(repoRoot, runId);
   return { repoRoot, runDir, runId };
-}
-
-function withFakeGh(fixture, callback) {
-  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-gh-repo-"));
-  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-gh-bin-"));
-  const ghPath = path.join(binDir, "gh");
-  fs.writeFileSync(ghPath, `#!/usr/bin/env node
-const fixture = JSON.parse(process.env.RELAY_REVIEW_FAKE_GH_FIXTURE || "{}");
-const args = process.argv.slice(2);
-
-if (fixture.failOnCall) {
-  process.stderr.write("gh should not have been called");
-  process.exit(91);
-}
-
-if (args[0] === "pr" && args[1] === "view") {
-  const jsonIndex = args.indexOf("--json");
-  const fields = jsonIndex === -1 ? "" : args[jsonIndex + 1];
-  if (fields === "closingIssuesReferences,body,headRefName") {
-    process.stdout.write(JSON.stringify({
-      closingIssuesReferences: fixture.closingIssuesReferences || [],
-      body: fixture.body || "",
-      headRefName: fixture.headRefName || "",
-    }));
-    process.exit(0);
-  }
-  if (fields === "statusCheckRollup,reviews,comments") {
-    process.stdout.write(JSON.stringify({
-      statusCheckRollup: fixture.statusCheckRollup || [],
-      reviews: fixture.reviews || [],
-      comments: fixture.comments || [],
-    }));
-    process.exit(0);
-  }
-}
-
-if (args[0] === "repo" && args[1] === "view") {
-  process.stdout.write(JSON.stringify({
-    owner: { login: fixture.owner || "acme" },
-    name: fixture.name || "dev-relay",
-  }));
-  process.exit(0);
-}
-
-if (args[0] === "api" && args[1] === "graphql") {
-  const cursorArg = args.find((arg) => arg.startsWith("threadsCursor="));
-  const pageIndex = cursorArg ? Number(cursorArg.split("=")[1].replace("page-", "")) : 0;
-  const pages = fixture.reviewThreadPages || [{
-    nodes: fixture.reviewThreads || [],
-    pageInfo: { hasNextPage: false, endCursor: null },
-  }];
-  const page = pages[pageIndex] || { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } };
-  const hasNextPage = pageIndex < pages.length - 1;
-  process.stdout.write(JSON.stringify({
-    data: {
-      repository: {
-        pullRequest: {
-          reviewThreads: {
-            pageInfo: {
-              hasNextPage,
-              endCursor: hasNextPage ? "page-" + (pageIndex + 1) : null,
-            },
-            nodes: page.nodes || [],
-          },
-        },
-      },
-    },
-  }));
-  process.exit(0);
-}
-
-process.stderr.write("Unsupported gh invocation: " + args.join(" "));
-process.exit(1);
-`, "utf-8");
-  fs.chmodSync(ghPath, 0o755);
-
-  const originalPath = process.env.PATH;
-  const originalFixture = process.env.RELAY_REVIEW_FAKE_GH_FIXTURE;
-  process.env.PATH = `${binDir}:${originalPath}`;
-  process.env.RELAY_REVIEW_FAKE_GH_FIXTURE = JSON.stringify(fixture);
-  try {
-    return callback(repoRoot);
-  } finally {
-    process.env.PATH = originalPath;
-    if (originalFixture === undefined) {
-      delete process.env.RELAY_REVIEW_FAKE_GH_FIXTURE;
-    } else {
-      process.env.RELAY_REVIEW_FAKE_GH_FIXTURE = originalFixture;
-    }
-  }
 }
 
 test("context/resolveIssueNumber prefers manifest issue before GitHub fallbacks", () => {

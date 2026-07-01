@@ -144,4 +144,4 @@ When multiple independent tasks are ready, dispatch in parallel instead of runni
 
 ## Summary Checklist
 
-Verify Done Criteria, relay-review LGTM/audit comment, `ready_to_merge` state, and any sprint/follow-up updates.
+Verify Done Criteria fully implemented, relay-review LGTM/audit comment, `ready_to_merge` state, and any sprint/follow-up updates.

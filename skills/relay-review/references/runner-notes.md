@@ -50,6 +50,17 @@ When applying a verdict, the runner:
 
 Reviewer adapter capabilities are shared with dispatch adapter metadata. See `../../relay-dispatch/references/agent-adapter-platform.md` for the supported adapter matrix, including primary vs advisory review support, read-only enforcement, structured-output shape, and the new-adapter checklist. Antigravity review support is for the `agy` CLI only, not GUI/IDE/Desktop flows.
 
+## External Review Triggers
+
+Delayed-publication runs should spend external review quota only after the internal relay review has converged:
+
+1. While the run is `internal_review_pending`, use relay-review against the retained worktree and do not request CodeRabbit, GitHub PR review, or other public PR reviewers.
+2. After internal PASS moves the run to `publish_pending`, run `publish-run.js`; the first post-publication relay-review round is the normal point to evaluate CI/actions, CodeRabbit, Codex PR review, and review-thread signals.
+3. After publication, trigger external reviewers only for the initial public review or for a meaningful new commit that could change their findings. Do not re-trigger `@coderabbitai review` for comment-only updates, metadata edits, audit-comment rewrites, or small cleanup commits when CI is green and active review threads are resolved.
+4. During final closeout, verify the latest CI/checks, unresolved non-outdated review threads, and latest applicable external review status. Do not spend another external review round merely to restate already-clean signals.
+
+This repository does not currently carry a repo-local CodeRabbit auto-review config. If one is added, prefer an opt-in policy for delayed-publication branches, such as manual review requests after publication or a label convention that enables review only after internal LGTM. On rate-limit responses, wait for quota recovery, push a meaningful code commit if one exists, and request manual review only when the new diff needs it; otherwise continue with the available CI and thread evidence.
+
 ## Execution Evidence Preflight
 
 Execution evidence preflight is script territory, not AI reviewer judgment. The script can verify file type, JSON schema, reviewed HEAD vs evidence HEAD, strict command/hash/exit fields, and `verification_runs[]` records deterministically before spending a reviewer round. The reviewer still handles semantic code review against Done Criteria and rubric anchors after that mechanical proof is valid.

@@ -26,6 +26,7 @@ const {
 const { readRunEvents } = require("../../../skills/relay-dispatch/scripts/relay-events");
 const { createEnforcementFixture } = require("../../../skills/relay-dispatch/scripts/test-support");
 const { EXECUTION_EVIDENCE_FILENAME } = require("../../../skills/relay-review/scripts/review-runner/execution-evidence");
+const { writeFakeGhScript } = require("../../relay-review/fixtures/fake-gh");
 
 const BASELINE_PROMPT_PATH = path.join(__dirname, "..", "fixtures", "dispatch-prompt-baseline", "non-tdd.md");
 const REVIEW_RUNNER_SCRIPT = path.join(__dirname, "..", "..", "..", "skills", "relay-review", "scripts", "review-runner.js");
@@ -407,55 +408,25 @@ function writeFakeGh({ repoRoot, branch, headSha }) {
   const statePath = path.join(repoRoot, "fake-gh-mixed-tdd-state.json");
   const logPath = path.join(repoRoot, "fake-gh-mixed-tdd.log");
   fs.writeFileSync(statePath, JSON.stringify({ state: "OPEN", mergeCommit: null }), "utf-8");
-  fs.writeFileSync(ghPath, `#!/usr/bin/env node
-const { execFileSync } = require("child_process");
-const fs = require("fs");
-const args = process.argv.slice(2);
-const repoRoot = ${JSON.stringify(repoRoot)};
-const branch = ${JSON.stringify(branch)};
-const statePath = ${JSON.stringify(statePath)};
-fs.appendFileSync(${JSON.stringify(logPath)}, args.join(" ") + "\\n", "utf-8");
-function loadState() { return JSON.parse(fs.readFileSync(statePath, "utf-8")); }
-function saveState(next) { fs.writeFileSync(statePath, JSON.stringify(next), "utf-8"); }
-if (args[0] === "pr" && args[1] === "view") {
-  const state = loadState();
-  const jsonArg = args[args.indexOf("--json") + 1] || "";
-  if (jsonArg === "headRefName") {
-    process.stdout.write(JSON.stringify({ headRefName: branch }));
-    process.exit(0);
-  }
-  if (jsonArg === "comments,commits,mergeable,statusCheckRollup" || jsonArg === "baseRefName,comments,commits,mergeable,statusCheckRollup") {
-    process.stdout.write(JSON.stringify({
+  writeFakeGhScript({
+    ghPath,
+    logPath,
+    statePath,
+    fixture: {
+      headRefName: branch,
       baseRefName: "main",
-      comments: [{ body: "<!-- relay-review -->\\n## Relay Review\\nVerdict: PASS\\nRounds: 1", createdAt: ${JSON.stringify(REVIEW_COMMENT_DATE)} }],
-      commits: [{ oid: ${JSON.stringify(headSha)}, committedDate: ${JSON.stringify(REVIEW_COMMENT_DATE)} }],
+      comments: [{ body: "<!-- relay-review -->\n## Relay Review\nVerdict: PASS\nRounds: 1", createdAt: REVIEW_COMMENT_DATE }],
+      commits: [{ oid: headSha, committedDate: REVIEW_COMMENT_DATE }],
       mergeable: "MERGEABLE",
-      statusCheckRollup: []
-    }));
-    process.exit(0);
-  }
-  if (jsonArg === "state,mergeCommit") {
-    process.stdout.write(JSON.stringify({ state: state.state, mergeCommit: state.mergeCommit }));
-    process.exit(0);
-  }
-}
-if (args[0] === "pr" && args[1] === "merge") {
-  execFileSync("git", ["-C", repoRoot, "checkout", "main"], { stdio: "pipe" });
-  execFileSync("git", ["-C", repoRoot, "merge", "--squash", branch], { stdio: "pipe" });
-  execFileSync("git", ["-C", repoRoot, "commit", "-m", "Squash mixed TDD branch"], { stdio: "pipe" });
-  const sha = execFileSync("git", ["-C", repoRoot, "rev-parse", "HEAD"], { encoding: "utf-8", stdio: "pipe" }).trim();
-  saveState({ state: "MERGED", mergeCommit: { oid: sha } });
-  process.exit(0);
-}
-if (args[0] === "repo" && args[1] === "view") {
-  process.stdout.write(JSON.stringify({ defaultBranchRef: { name: "main" } }));
-  process.exit(0);
-}
-if (args[0] === "issue" && args[1] === "close") process.exit(0);
-process.stderr.write("unexpected fake gh invocation: " + args.join(" ") + "\\n");
-process.exit(1);
-`, "utf-8");
-  fs.chmodSync(ghPath, 0o755);
+      statusCheckRollup: [],
+    },
+    merge: {
+      repoRoot,
+      branch,
+      baseBranch: "main",
+      message: "Squash mixed TDD branch",
+    },
+  });
   return { ghPath, logPath };
 }
 
@@ -561,6 +532,7 @@ test("mixed TDD rubric drives red to green to reviewer pass and squash finalize"
     ],
     scope_drift: { creep: [], missing: [] },
   }, null, 2)}\n`, "utf-8");
+  const { ghPath, logPath } = writeFakeGh({ repoRoot: fixture.repoRoot, branch: fixture.branch, headSha });
 
   const reviewResult = JSON.parse(execFileSync("node", [
     REVIEW_RUNNER_SCRIPT,
@@ -572,7 +544,11 @@ test("mixed TDD rubric drives red to green to reviewer pass and squash finalize"
     "--review-file", reviewFile,
     "--no-comment",
     "--json",
-  ], { encoding: "utf-8", stdio: "pipe" }));
+  ], {
+    encoding: "utf-8",
+    stdio: "pipe",
+    env: { ...process.env, RELAY_GH_BIN: ghPath },
+  }));
   const promptText = fs.readFileSync(path.join(fixture.runDir, "review-round-1-prompt.md"), "utf-8");
   const appliedVerdict = JSON.parse(fs.readFileSync(path.join(fixture.runDir, "review-round-1-verdict.json"), "utf-8"));
   const scoreEvent = readRunEvents(fixture.repoRoot, fixture.runId).find((event) => event.event === "iteration_score");
@@ -591,7 +567,6 @@ test("mixed TDD rubric drives red to green to reviewer pass and squash finalize"
   assert.ok(prereqLog.every((line) => line.includes("--test-skip-pattern=anchor\\.test\\.js")));
 
   const baseBefore = Number(git(fixture.repoRoot, "rev-list", "--count", "main"));
-  const { ghPath, logPath } = writeFakeGh({ repoRoot: fixture.repoRoot, branch: fixture.branch, headSha });
   const finalizeResult = JSON.parse(execFileSync("node", [
     FINALIZE_RUN_SCRIPT,
     "--repo", fixture.repoRoot,
