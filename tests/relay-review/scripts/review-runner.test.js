@@ -38,7 +38,7 @@ const REVIEW_RUNNER_LINE_CAP = 390;
 const REVIEW_RUNNER_FUNCTION_CAP = 12;
 
 function installDefaultGhFixture() {
-  installFakeGhOnPath({
+  return installFakeGhOnPath({
     body: "## Test PR\n\nFixture body.\n",
     headRefOid: "a".repeat(40),
     headRefName: "issue-123",
@@ -46,7 +46,8 @@ function installDefaultGhFixture() {
   }, { prefix: "relay-review-gh-" });
 }
 
-installDefaultGhFixture();
+const defaultGhFixture = installDefaultGhFixture();
+test.after(() => defaultGhFixture.restore());
 
 function setupRepo() {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-runner-"));

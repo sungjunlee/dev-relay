@@ -23,6 +23,11 @@ const capturePath = ${JSON.stringify(capturePath)};
 const logPath = ${JSON.stringify(logPath)};
 const statePath = ${JSON.stringify(statePath)};
 const merge = ${JSON.stringify(merge)};
+const prBodySnapshotFields = new Set([
+  "body",
+  "body,headRefOid,headRefName,closingIssuesReferences",
+  "headRefOid,headRefName,body,closingIssuesReferences",
+]);
 
 if (logPath) {
   fs.appendFileSync(logPath, args.join(" ") + "\\n", "utf-8");
@@ -57,11 +62,13 @@ if (args[0] === "pr" && args[1] === "view") {
   const jsonIndex = args.indexOf("--json");
   const fields = jsonIndex >= 0 ? args[jsonIndex + 1] : "";
 
+  // Snapshot callers use gh's jq path to read only the body as raw text.
   if (args.includes("-q") && args[args.indexOf("-q") + 1] === ".body") {
     process.stdout.write(fixture.body || "");
     process.exit(0);
   }
 
+  // loadPrReviewSignals asks for checks, reviews, and top-level comments in one call.
   if (fields === "statusCheckRollup,reviews,comments") {
     writeJson({
       statusCheckRollup: fixture.statusCheckRollup || [],
@@ -71,6 +78,7 @@ if (args[0] === "pr" && args[1] === "view") {
     process.exit(0);
   }
 
+  // Issue inference reads the PR body plus GitHub's closing issue references.
   if (fields === "closingIssuesReferences,body,headRefName") {
     writeJson({
       closingIssuesReferences: fixture.closingIssuesReferences || [],
@@ -80,6 +88,7 @@ if (args[0] === "pr" && args[1] === "view") {
     process.exit(0);
   }
 
+  // The manual PR fallback path mirrors gh issue view's title/body/number shape.
   if (fields === "title,body,number") {
     writeJson({
       number: fixture.number || 123,
@@ -89,17 +98,29 @@ if (args[0] === "pr" && args[1] === "view") {
     process.exit(0);
   }
 
+  // Merge and preflight checks need the branch name without loading heavier PR data.
   if (fields === "headRefName") {
     writeJson({ headRefName: fixture.headRefName || "" });
     process.exit(0);
   }
 
+  if (fields === "number,headRefName,headRefOid") {
+    writeJson({
+      number: fixture.number || 123,
+      headRefName: fixture.headRefName || "",
+      headRefOid: fixture.headRefOid || "a".repeat(40),
+    });
+    process.exit(0);
+  }
+
+  // finalize-run polls PR terminal state after merge attempts.
   if (fields === "state,mergeCommit") {
     const state = loadState();
     writeJson({ state: state.state, mergeCommit: state.mergeCommit });
     process.exit(0);
   }
 
+  // merge gates need the latest relay audit comment, commits, mergeability, and checks.
   if (
     fields === "comments,commits,mergeable,statusCheckRollup" ||
     fields === "baseRefName,comments,commits,mergeable,statusCheckRollup"
@@ -114,7 +135,8 @@ if (args[0] === "pr" && args[1] === "view") {
     process.exit(0);
   }
 
-  if (fields === "body" || fields.includes("body")) {
+  // Body snapshot calls must stay explicit so future field sets fail loudly.
+  if (prBodySnapshotFields.has(fields)) {
     writeJson({
       body: fixture.body || "",
       headRefOid: fixture.headRefOid || "a".repeat(40),
@@ -124,6 +146,7 @@ if (args[0] === "pr" && args[1] === "view") {
     process.exit(0);
   }
 
+  // Some tests only need gh pr view to succeed; unsupported data stays empty.
   writeJson({});
   process.exit(0);
 }
@@ -203,23 +226,29 @@ process.exit(1);
 function installFakeGhOnPath(fixture = {}, options = {}) {
   const binDir = fs.mkdtempSync(path.join(os.tmpdir(), options.prefix || "relay-fake-gh-"));
   const ghPath = path.join(binDir, "gh");
+  const originalPath = process.env.PATH;
   writeFakeGhScript({ ghPath, fixture, ...options });
   process.env.PATH = `${binDir}:${process.env.PATH}`;
-  return { binDir, ghPath };
+  let restored = false;
+  const restore = () => {
+    if (restored) return;
+    process.env.PATH = originalPath;
+    restored = true;
+  };
+  return { binDir, ghPath, restore };
 }
 
 function withFakeGh(fixture, callback, options = {}) {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), options.repoPrefix || "relay-review-gh-repo-"));
-  const originalPath = process.env.PATH;
-  const { binDir, ghPath } = installFakeGhOnPath(fixture, {
+  const installed = installFakeGhOnPath(fixture, {
     prefix: options.binPrefix || "relay-review-gh-bin-",
     ...options,
   });
 
   try {
-    return callback(repoRoot, { binDir, ghPath });
+    return callback(repoRoot, installed);
   } finally {
-    process.env.PATH = originalPath;
+    installed.restore();
   }
 }
 

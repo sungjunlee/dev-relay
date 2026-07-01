@@ -27,7 +27,7 @@ const { installFakeGhOnPath } = require("../fixtures/fake-gh");
 const SCRIPT = path.join(__dirname, "..", "..", "..", "skills", "relay-review", "scripts", "review-runner.js");
 
 function installDefaultGhFixture() {
-  installFakeGhOnPath({
+  return installFakeGhOnPath({
     body: "## Test PR\n\nFixture body.\n",
     headRefOid: "a".repeat(40),
     headRefName: "issue-429",
@@ -35,7 +35,8 @@ function installDefaultGhFixture() {
   }, { prefix: "relay-review-advisory-gh-" });
 }
 
-installDefaultGhFixture();
+const defaultGhFixture = installDefaultGhFixture();
+test.after(() => defaultGhFixture.restore());
 
 function hashFile(filePath) {
   return crypto.createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
