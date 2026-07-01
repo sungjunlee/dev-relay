@@ -190,6 +190,7 @@ function normalizeLeaf(rawLeaf, index, baseDir) {
     reasoning: optionalString(rawLeaf.reasoning),
     copy: Array.isArray(rawLeaf.copy) ? rawLeaf.copy.join(",") : optionalString(rawLeaf.copy),
     test_command: optionalString(rawLeaf.test_command || rawLeaf.testCommand),
+    publish_policy: optionalString(rawLeaf.publish_policy || rawLeaf.publishPolicy),
     register: rawLeaf.register === true,
   };
 }

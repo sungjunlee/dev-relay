@@ -93,12 +93,28 @@ test("publish-run publishes a publish_pending run and advances to review_pending
     manifest = updateManifestState(manifest, STATES.DISPATCHED, "await_dispatch_result");
     manifest = updateManifestState(manifest, STATES.INTERNAL_REVIEW_PENDING, "run_internal_review");
     manifest = updateManifestState(manifest, STATES.PUBLISH_PENDING, "publish_pr");
+    const reviewedHeadSha = execFileSync("git", ["-C", worktree, "rev-parse", "HEAD"], {
+      encoding: "utf-8",
+      stdio: "pipe",
+    }).trim();
+    manifest = {
+      ...manifest,
+      git: {
+        ...(manifest.git || {}),
+        head_sha: reviewedHeadSha,
+      },
+      review: {
+        ...(manifest.review || {}),
+        last_reviewed_sha: reviewedHeadSha,
+      },
+    };
     const manifestPath = getManifestPath(repoRoot, runId);
     writeManifest(manifestPath, manifest);
 
     const result = await publishRun({ repoArg: repoRoot, runIdArg: runId });
     assert.equal(result.state, STATES.REVIEW_PENDING);
     assert.equal(result.prNumber, 123);
+    assert.equal(result.reviewedHeadSha, reviewedHeadSha);
 
     const updated = readManifest(manifestPath).data;
     assert.equal(updated.state, STATES.REVIEW_PENDING);
@@ -112,6 +128,91 @@ test("publish-run publishes a publish_pending run and advances to review_pending
     assert.equal(publishEvent.pr_number, 123);
   } finally {
     process.env.PATH = previousPath;
+    if (previousRelayHome === undefined) {
+      delete process.env.RELAY_HOME;
+    } else {
+      process.env.RELAY_HOME = previousRelayHome;
+    }
+  }
+});
+
+test("publish-run refuses to publish when HEAD drifted after internal review", async () => {
+  const previousRelayHome = process.env.RELAY_HOME;
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  try {
+    const { repoRoot, worktree } = initRepoWithRemote();
+    const runId = "issue-42-20260412000004000";
+    const { runDir } = ensureRunLayout(repoRoot, runId);
+    fs.writeFileSync(path.join(runDir, "rubric.yaml"), "rubric:\n  factors:\n    - name: publish\n", "utf-8");
+
+    let manifest = createManifestSkeleton({
+      repoRoot,
+      runId,
+      branch: "issue-42",
+      baseBranch: "main",
+      issueNumber: 42,
+      worktreePath: worktree,
+      executor: "codex",
+      reviewer: "codex",
+    });
+    manifest = {
+      ...manifest,
+      anchor: {
+        ...(manifest.anchor || {}),
+        rubric_path: "rubric.yaml",
+      },
+    };
+    manifest = updateManifestState(manifest, STATES.DISPATCHED, "await_dispatch_result");
+    manifest = updateManifestState(manifest, STATES.INTERNAL_REVIEW_PENDING, "run_internal_review");
+    manifest = updateManifestState(manifest, STATES.PUBLISH_PENDING, "publish_pr");
+    const reviewedHeadSha = execFileSync("git", ["-C", worktree, "rev-parse", "HEAD"], {
+      encoding: "utf-8",
+      stdio: "pipe",
+    }).trim();
+    manifest = {
+      ...manifest,
+      git: {
+        ...(manifest.git || {}),
+        head_sha: reviewedHeadSha,
+      },
+      review: {
+        ...(manifest.review || {}),
+        last_reviewed_sha: reviewedHeadSha,
+      },
+    };
+    const manifestPath = getManifestPath(repoRoot, runId);
+    writeManifest(manifestPath, manifest);
+
+    fs.writeFileSync(path.join(worktree, "after-review.txt"), "unreviewed\n", "utf-8");
+    execFileSync("git", ["-C", worktree, "add", "after-review.txt"], { encoding: "utf-8", stdio: "pipe" });
+    execFileSync("git", ["-C", worktree, "commit", "-m", "Advance after internal review"], {
+      encoding: "utf-8",
+      stdio: "pipe",
+    });
+    const driftedHeadSha = execFileSync("git", ["-C", worktree, "rev-parse", "HEAD"], {
+      encoding: "utf-8",
+      stdio: "pipe",
+    }).trim();
+
+    await assert.rejects(
+      () => publishRun({ repoArg: repoRoot, runIdArg: runId }),
+      /Refusing to publish unreviewed HEAD/
+    );
+
+    const updated = readManifest(manifestPath).data;
+    assert.equal(updated.state, STATES.ESCALATED);
+    assert.equal(updated.next_action, "inspect_publish_head_drift");
+    assert.equal(updated.git.head_sha, driftedHeadSha);
+    assert.equal(updated.review.last_reviewed_sha, reviewedHeadSha);
+    assert.equal(updated.review.latest_verdict, "publish_head_drift");
+
+    const events = readRunEvents(repoRoot, runId);
+    const publishEvent = events.find((event) => event.event === EVENTS.PUBLISH_RESULT);
+    assert.equal(publishEvent.state_from, STATES.PUBLISH_PENDING);
+    assert.equal(publishEvent.state_to, STATES.ESCALATED);
+    assert.equal(publishEvent.head_sha, driftedHeadSha);
+    assert.equal(publishEvent.last_reviewed_sha, reviewedHeadSha);
+  } finally {
     if (previousRelayHome === undefined) {
       delete process.env.RELAY_HOME;
     } else {

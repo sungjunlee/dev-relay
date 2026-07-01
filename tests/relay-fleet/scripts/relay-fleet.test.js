@@ -695,7 +695,13 @@ test("relay-fleet --dry-run fans out to dispatch dry-run without writing a fleet
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "fleet-fake-"));
   const dispatchScript = writeFakeDispatchScript(tmpDir);
   const logPath = path.join(tmpDir, "dispatch.log");
-  const leaves = [makeLeaf(repoRoot, 1, { issue_number: 504 }), makeLeaf(repoRoot, 2, { issue_number: 505 })];
+  const leaves = [
+    makeLeaf(repoRoot, 1, {
+      issue_number: 504,
+      publish_policy: "after-internal-review",
+    }),
+    makeLeaf(repoRoot, 2, { issue_number: 505 }),
+  ];
   const leavesFile = writeLeavesFile(repoRoot, leaves);
 
   const result = runFleet([
@@ -703,6 +709,7 @@ test("relay-fleet --dry-run fans out to dispatch dry-run without writing a fleet
     "--fleet-id", "fleet-dry",
     "--leaves-file", leavesFile,
     "--dispatch-script", dispatchScript,
+    "--publish-policy", "immediate",
     "--dry-run",
     "--json",
   ], {
@@ -715,7 +722,15 @@ test("relay-fleet --dry-run fans out to dispatch dry-run without writing a fleet
   assert.equal(payload.dryRun, true);
   assert.equal(payload.children.length, 2);
   assert.equal(fs.existsSync(getFleetManifestPath(repoRoot, "fleet-dry")), false);
-  assert.equal(readJsonLines(logPath).every((entry) => entry.dryRun && entry.fleetId === "fleet-dry"), true);
+  const dispatchEntries = readJsonLines(logPath);
+  assert.equal(dispatchEntries.every((entry) => entry.dryRun && entry.fleetId === "fleet-dry"), true);
+  const dispatchByBranch = new Map(dispatchEntries.map((entry) => [entry.branch, entry]));
+  const policyFor = (entry) => {
+    const index = entry.args.indexOf("--publish-policy");
+    return index === -1 ? null : entry.args[index + 1];
+  };
+  assert.equal(policyFor(dispatchByBranch.get("issue-504-leaf-01")), "after-internal-review");
+  assert.equal(policyFor(dispatchByBranch.get("issue-505-leaf-02")), "immediate");
 });
 
 test("relay-fleet --review fans out foreground review-runner once per review_pending child", () => {

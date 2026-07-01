@@ -31,6 +31,54 @@ function readDispatchResult(repoRoot, runId) {
   }
 }
 
+function normalizeSha(value) {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function getReviewedHeadSha(data) {
+  return normalizeSha(data.review?.last_reviewed_sha) || normalizeSha(data.git?.head_sha);
+}
+
+function buildPublishHeadDriftError({ reviewedHeadSha, headSha }) {
+  if (!reviewedHeadSha) {
+    return new Error(
+      "publish-run requires review.last_reviewed_sha or git.head_sha before publishing. " +
+      "Run internal review again so the PR publication has a reviewed HEAD anchor."
+    );
+  }
+  if (headSha !== reviewedHeadSha) {
+    return new Error(
+      `Refusing to publish unreviewed HEAD ${headSha}: internal review approved ${reviewedHeadSha}. ` +
+      "Run review again before publishing."
+    );
+  }
+  return null;
+}
+
+function escalatePublishPreflightFailure({ data, body, manifestPath, validatedPaths, headSha, branch, error }) {
+  const escalated = updateManifestState(data, STATES.ESCALATED, "inspect_publish_head_drift");
+  writeManifest(manifestPath, {
+    ...escalated,
+    git: {
+      ...(escalated.git || {}),
+      head_sha: headSha,
+    },
+    review: {
+      ...(escalated.review || {}),
+      latest_verdict: "publish_head_drift",
+    },
+  }, body);
+  appendRunEvent(validatedPaths.repoRoot, data.run_id, {
+    event: EVENTS.PUBLISH_RESULT,
+    state_from: data.state,
+    state_to: STATES.ESCALATED,
+    head_sha: headSha,
+    last_reviewed_sha: getReviewedHeadSha(data),
+    branch,
+    reason: String(error.message || error).split("\n")[0],
+  });
+}
+
 async function publishRun(options) {
   const repoPath = path.resolve(options.repoArg || ".");
   const manifestRecord = resolveManifestRecord({
@@ -67,6 +115,22 @@ async function publishRun(options) {
     encoding: "utf-8",
     stdio: "pipe",
   }).trim();
+  const reviewedHeadSha = getReviewedHeadSha(data);
+  const preflightError = buildPublishHeadDriftError({ reviewedHeadSha, headSha });
+  if (preflightError) {
+    if (!options.dryRun) {
+      escalatePublishPreflightFailure({
+        data,
+        body,
+        manifestPath,
+        validatedPaths,
+        headSha,
+        branch,
+        error: preflightError,
+      });
+    }
+    throw preflightError;
+  }
 
   if (options.dryRun) {
     return {
@@ -79,6 +143,7 @@ async function publishRun(options) {
       branch,
       baseBranch,
       headSha,
+      reviewedHeadSha,
       prNumber: data.git?.pr_number || null,
     };
   }
@@ -152,6 +217,7 @@ async function publishRun(options) {
     branch,
     baseBranch,
     headSha,
+    reviewedHeadSha,
     prNumber: prResult.prNumber,
     prCreatedByUs: prResult.createdByUs,
   };
