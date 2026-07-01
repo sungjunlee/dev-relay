@@ -46,6 +46,7 @@ function publishPreflightError(code, message) {
 }
 
 function buildPublishPreflightError({ reviewedHeadSha, headSha, branchHeadSha, dirtyStatus }) {
+  // Fail closed from missing review evidence to progressively narrower drift cases.
   if (!reviewedHeadSha) {
     return publishPreflightError(
       "publish_missing_review_anchor",
