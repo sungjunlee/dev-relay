@@ -120,9 +120,11 @@ async function settleAdvisoryForVerdict({ advisoryRun, config, currentState, har
   const waitMs = hardenedAssurance ? config.timeoutSeconds * 1000 : config.graceSeconds * 1000;
   const decisionState = verdict.verdict === "changes_requested"
     ? STATES.CHANGES_REQUESTED
-    : currentState === STATES.INTERNAL_REVIEW_PENDING
-      ? STATES.PUBLISH_PENDING
-      : STATES.READY_TO_MERGE;
+    : verdict.verdict === "escalated"
+      ? STATES.ESCALATED
+      : currentState === STATES.INTERNAL_REVIEW_PENDING
+        ? STATES.PUBLISH_PENDING
+        : STATES.READY_TO_MERGE;
   let advisoryResult = await finishAdvisoryReview({
     advisoryRun,
     consumedByPhase: "review",

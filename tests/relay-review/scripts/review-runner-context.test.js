@@ -11,6 +11,7 @@ const {
   DEFAULT_ENFORCEMENT_RUBRIC,
 } = require("../../../skills/relay-dispatch/scripts/test-support");
 const {
+  loadPrReviewSignals,
   loadProjectConventions,
   loadRetainedWorktreeDiff,
   parseRemoteHost,
@@ -59,6 +60,37 @@ if (args[0] === "pr" && args[1] === "view") {
     }));
     process.exit(0);
   }
+  if (fields === "statusCheckRollup,reviews,comments") {
+    process.stdout.write(JSON.stringify({
+      statusCheckRollup: fixture.statusCheckRollup || [],
+      reviews: fixture.reviews || [],
+      comments: fixture.comments || [],
+    }));
+    process.exit(0);
+  }
+}
+
+if (args[0] === "repo" && args[1] === "view") {
+  process.stdout.write(JSON.stringify({
+    owner: { login: fixture.owner || "acme" },
+    name: fixture.name || "dev-relay",
+  }));
+  process.exit(0);
+}
+
+if (args[0] === "api" && args[1] === "graphql") {
+  process.stdout.write(JSON.stringify({
+    data: {
+      repository: {
+        pullRequest: {
+          reviewThreads: {
+            nodes: fixture.reviewThreads || [],
+          },
+        },
+      },
+    },
+  }));
+  process.exit(0);
 }
 
 process.stderr.write("Unsupported gh invocation: " + args.join(" "));
@@ -173,6 +205,33 @@ test("context/resolveIssueNumber rejects multiple inferred closing refs without 
       () => resolveIssueNumber(repoRoot, 123, null, {}),
       /Ambiguous GitHub closing issue references for PR #123: #99, #100.*manifest\.issue\.number.*anchor\.done_criteria_path/s
     );
+  });
+});
+
+test("context/loadPrReviewSignals includes inline review threads", () => {
+  withFakeGh({
+    statusCheckRollup: [{ name: "test", conclusion: "SUCCESS" }],
+    reviews: [{ author: { login: "reviewer" }, state: "COMMENTED", body: "see inline" }],
+    comments: [{ author: { login: "bot" }, body: "top level" }],
+    reviewThreads: [{
+      path: "skills/relay-review/scripts/review-runner.js",
+      line: 42,
+      isResolved: false,
+      isOutdated: false,
+      comments: {
+        nodes: [{
+          author: { login: "reviewer" },
+          body: "blocking inline feedback",
+        }],
+      },
+    }],
+  }, (repoRoot) => {
+    const signals = loadPrReviewSignals(repoRoot, 123);
+
+    assert.equal(signals.status, "loaded");
+    assert.deepEqual(signals.checks, ["- test: SUCCESS"]);
+    assert.match(signals.reviewThreads[0], /unresolved skills\/relay-review\/scripts\/review-runner\.js:42 reviewer/);
+    assert.match(signals.reviewThreads[0], /blocking inline feedback/);
   });
 });
 

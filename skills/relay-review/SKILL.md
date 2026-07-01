@@ -131,6 +131,8 @@ Before any re-dispatch, check:
 12. If you used the fallback path, apply the structured verdict with the review runner:
 ```bash
 node "${RELAY_SKILL_ROOT:-skills}/relay-review/scripts/review-runner.js" --repo . --run-id "$RUN_ID" --pr "$PR_NUM" --review-file /tmp/review-verdict.json
+# For internal_review_pending before PR publication, omit --pr:
+node "${RELAY_SKILL_ROOT:-skills}/relay-review/scripts/review-runner.js" --repo . --run-id "$RUN_ID" --review-file /tmp/review-verdict.json
 ```
 
 The runner validates the verdict, writes the PR audit comment only for post-publication rounds, updates manifest state, and records round artifacts. Internal rounds use the retained worktree diff and never comment on a PR. For hardened runs, a passing manual verdict requires an explicit `--manual-review-reason` audit reason. See `references/runner-notes.md` for the full audit-trail and backward-compatibility behavior.

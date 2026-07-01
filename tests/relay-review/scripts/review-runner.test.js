@@ -33,6 +33,61 @@ const RECOVER_STATE_SCRIPT = path.join(__dirname, "..", "..", "..", "skills", "r
 const REVIEW_RUNNER_LINE_CAP = 390;
 const REVIEW_RUNNER_FUNCTION_CAP = 12;
 
+function installDefaultGhFixture() {
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-gh-"));
+  const ghPath = path.join(binDir, "gh");
+  fs.writeFileSync(ghPath, `#!/usr/bin/env node
+const args = process.argv.slice(2);
+function writeJson(value) {
+  process.stdout.write(JSON.stringify(value));
+}
+if (args[0] === "pr" && args[1] === "view") {
+  const jsonIndex = args.indexOf("--json");
+  const fields = jsonIndex >= 0 ? args[jsonIndex + 1] : "";
+  if (fields === "statusCheckRollup,reviews,comments") {
+    writeJson({
+      statusCheckRollup: [{ name: "unit", conclusion: "SUCCESS", status: "COMPLETED" }],
+      reviews: [],
+      comments: []
+    });
+    process.exit(0);
+  }
+  if (fields === "body" || fields.includes("body")) {
+    writeJson({
+      body: "## Test PR\\n\\nFixture body.\\n",
+      headRefOid: "a".repeat(40),
+      headRefName: "issue-123",
+      closingIssuesReferences: []
+    });
+    process.exit(0);
+  }
+  writeJson({});
+  process.exit(0);
+}
+if (args[0] === "repo" && args[1] === "view") {
+  writeJson({ owner: { login: "acme" }, name: "dev-relay" });
+  process.exit(0);
+}
+if (args[0] === "api" && args[1] === "graphql") {
+  writeJson({ data: { repository: { pullRequest: { reviewThreads: { nodes: [] } } } } });
+  process.exit(0);
+}
+if (args[0] === "api" && args[1] === "user") {
+  process.stdout.write("fixture-reviewer\\n");
+  process.exit(0);
+}
+if (args[0] === "pr" && args[1] === "comment") {
+  process.exit(0);
+}
+process.stderr.write("Unsupported default gh fixture invocation: " + args.join(" "));
+process.exit(1);
+`, "utf-8");
+  fs.chmodSync(ghPath, 0o755);
+  process.env.PATH = `${binDir}:${process.env.PATH}`;
+}
+
+installDefaultGhFixture();
+
 function setupRepo() {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-runner-"));
   const remoteRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-origin-"));
@@ -321,6 +376,16 @@ function writeFakeGhScript(repoRoot, { prBody, capturePath }) {
 const fs = require("fs");
 const args = process.argv.slice(2);
 if (args[0] === "pr" && args[1] === "view") {
+  const jsonIndex = args.indexOf("--json");
+  const fields = jsonIndex === -1 ? "" : args[jsonIndex + 1];
+  if (fields === "statusCheckRollup,reviews,comments") {
+    process.stdout.write(JSON.stringify({
+      statusCheckRollup: [{ name: "unit", conclusion: "SUCCESS", status: "COMPLETED" }],
+      reviews: [],
+      comments: []
+    }));
+    process.exit(0);
+  }
   if (args.includes("-q") && args[args.indexOf("-q") + 1] === ".body") {
     process.stdout.write(${JSON.stringify(prBody)});
     process.exit(0);
@@ -332,6 +397,18 @@ if (args[0] === "pr" && args[1] === "comment") {
   const bodyIndex = args.indexOf("--body");
   const body = bodyIndex !== -1 ? args[bodyIndex + 1] : "";
   fs.writeFileSync(${JSON.stringify(capturePath)}, body, "utf-8");
+  process.exit(0);
+}
+if (args[0] === "repo" && args[1] === "view") {
+  process.stdout.write(JSON.stringify({ owner: { login: "acme" }, name: "dev-relay" }));
+  process.exit(0);
+}
+if (args[0] === "api" && args[1] === "graphql") {
+  process.stdout.write(JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes: [] } } } } }));
+  process.exit(0);
+}
+if (args[0] === "api" && args[1] === "user") {
+  process.stdout.write("fixture-reviewer\\n");
   process.exit(0);
 }
 process.stderr.write("Unsupported gh invocation: " + args.join(" "));
@@ -467,12 +544,35 @@ if (args[0] === "pr" && args[1] === "view") {
     }));
     process.exit(0);
   }
+  if (fields === "statusCheckRollup,reviews,comments") {
+    process.stdout.write(JSON.stringify({
+      statusCheckRollup: [{ name: "unit", conclusion: "SUCCESS", status: "COMPLETED" }],
+      reviews: [],
+      comments: []
+    }));
+    process.exit(0);
+  }
 }
 
 if (args[0] === "pr" && args[1] === "comment") {
   const bodyIndex = args.indexOf("--body");
   const body = bodyIndex !== -1 ? args[bodyIndex + 1] : "";
   fs.writeFileSync(capturePath, body, "utf-8");
+  process.exit(0);
+}
+
+if (args[0] === "repo" && args[1] === "view") {
+  process.stdout.write(JSON.stringify({ owner: { login: "acme" }, name: "dev-relay" }));
+  process.exit(0);
+}
+
+if (args[0] === "api" && args[1] === "graphql") {
+  process.stdout.write(JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes: [] } } } } }));
+  process.exit(0);
+}
+
+if (args[0] === "api" && args[1] === "user") {
+  process.stdout.write("fixture-reviewer\\n");
   process.exit(0);
 }
 

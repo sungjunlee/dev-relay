@@ -757,6 +757,7 @@ function spawnPublishForChild({ repoRoot, fleetId, child, options, activeChildre
         return;
       }
 
+      // Publishing counts as progress only when the child manifest state changes; a clean exit with no state movement is stalled.
       if (after.state === before.state) {
         resolve({
           leaf_ref: child.leaf_ref,
@@ -1143,6 +1144,7 @@ async function driveChildReviewLoop({ repoRoot, fleetId, child, options, activeC
         };
       }
     } else if (current.run_state === RUN_STATES.PUBLISH_PENDING) {
+      // Resume already-reviewed children by publishing first, then re-entering the public review loop.
       const publish = await spawnPublishForChild({
         repoRoot,
         fleetId,

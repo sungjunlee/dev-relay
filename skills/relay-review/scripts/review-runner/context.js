@@ -289,6 +289,7 @@ function resolveContext(repoPath, repoArg, manifestPathArg, runIdArg, branchArg,
   branch = branch || manifest.data?.git?.working_branch || null;
   prNumber = prNumber || manifest.data?.git?.pr_number || null;
   const runRepoPath = validatedPaths.repoRoot;
+  // Internal review intentionally runs before PR creation; branch lookup only applies after publication.
   if (!prNumber && branch && manifest.data?.state !== STATES.INTERNAL_REVIEW_PENDING) {
     prNumber = resolvePrForBranch(runRepoPath, branch);
   }
@@ -473,6 +474,70 @@ function summarizeComment(comment) {
   return body ? `- ${author}: ${body}` : null;
 }
 
+function summarizeReviewThread(thread) {
+  const comments = Array.isArray(thread?.comments?.nodes)
+    ? thread.comments.nodes
+    : Array.isArray(thread?.comments)
+      ? thread.comments
+      : [];
+  const first = comments[0] || {};
+  const author = first?.author?.login || first?.user?.login || "unknown";
+  const body = String(first?.body || "").trim().replace(/\s+/g, " ").slice(0, 240);
+  const path = thread?.path || first?.path || "unknown path";
+  const line = thread?.line || first?.line || first?.originalLine || "?";
+  const state = thread?.isResolved ? "resolved" : thread?.isOutdated ? "outdated" : "unresolved";
+  return `- ${state} ${path}:${line} ${author}${body ? ` — ${body}` : ""}`;
+}
+
+function resolveRepoOwnerName(repoPath) {
+  const raw = gh(repoPath, "repo", "view", "--json", "owner,name");
+  const parsed = JSON.parse(raw);
+  const owner = parsed.owner?.login || parsed.owner?.name || parsed.owner;
+  const name = parsed.name;
+  if (!owner || !name) {
+    throw new Error("gh repo view did not return owner/name");
+  }
+  return { owner, name };
+}
+
+function loadReviewThreads(repoPath, prNumber) {
+  const { owner, name } = resolveRepoOwnerName(repoPath);
+  const query = `
+query($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      reviewThreads(first: 100) {
+        nodes {
+          isResolved
+          isOutdated
+          path
+          line
+          comments(first: 1) {
+            nodes {
+              author { login }
+              body
+              path
+              line
+              originalLine
+            }
+          }
+        }
+      }
+    }
+  }
+}`;
+  const raw = gh(
+    repoPath,
+    "api", "graphql",
+    "-f", `query=${query}`,
+    "-F", `owner=${owner}`,
+    "-F", `name=${name}`,
+    "-F", `number=${prNumber}`
+  );
+  const parsed = JSON.parse(raw);
+  return parsed.data?.repository?.pullRequest?.reviewThreads?.nodes || [];
+}
+
 function loadPrReviewSignals(repoPath, prNumber) {
   if (!prNumber) {
     return { status: "not_available", reason: "no_pr" };
@@ -484,13 +549,16 @@ function loadPrReviewSignals(repoPath, prNumber) {
       "--json", "statusCheckRollup,reviews,comments"
     );
     const parsed = JSON.parse(raw);
+    const reviewThreads = loadReviewThreads(repoPath, prNumber);
     return {
       status: "loaded",
       checks: Array.isArray(parsed.statusCheckRollup) ? parsed.statusCheckRollup.map(summarizeStatusCheck) : [],
       reviews: Array.isArray(parsed.reviews) ? parsed.reviews.map(summarizeReview) : [],
       comments: Array.isArray(parsed.comments) ? parsed.comments.map(summarizeComment).filter(Boolean) : [],
+      reviewThreads: Array.isArray(reviewThreads) ? reviewThreads.map(summarizeReviewThread) : [],
     };
   } catch (error) {
+    // Keep signal loading non-throwing so review artifacts remain auditable; PASS is blocked later.
     return {
       status: "failed",
       reason: String(error.message || error).split("\n")[0],

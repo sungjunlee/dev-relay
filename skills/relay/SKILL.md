@@ -94,9 +94,9 @@ node "${RELAY_SKILL_ROOT:-skills}/relay-review/scripts/review-runner.js" \
 If review requests changes, re-dispatch and repeat Step 4. If review returns `publish_pending`, publish the branch:
 
 ```bash
-node "${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/publish-run.js" \
-  --repo . --run-id "$RUN_ID" --json
-PR_NUM=$(gh pr list --head issue-<N> --json number -q '.[0].number')
+PUBLISH_RESULT=$(node "${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/publish-run.js" \
+  --repo . --run-id "$RUN_ID" --json)
+PR_NUM=$(node -e 'const r=JSON.parse(process.argv[1]); process.stdout.write(String(r.prNumber || ""));' "$PUBLISH_RESULT")
 ```
 
 Now run the post-publication review. This is the round that can advance to `ready_to_merge`; it includes PR CI/actions, GitHub review, and comment signals in the review prompt.
@@ -144,7 +144,4 @@ When multiple independent tasks are ready, dispatch in parallel instead of runni
 
 ## Summary Checklist
 
-After completing the relay cycle, verify:
-- [ ] Done Criteria fully implemented; relay-review confirms LGTM and PR has the audit comment
-- [ ] PR is `ready_to_merge`, or merged/closed only when relay-merge was explicitly requested
-- [ ] Sprint files and follow-up issues are updated when applicable
+Verify Done Criteria, relay-review LGTM/audit comment, `ready_to_merge` state, and any sprint/follow-up updates.

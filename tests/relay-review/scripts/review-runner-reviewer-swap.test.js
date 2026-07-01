@@ -88,6 +88,38 @@ test("reviewer-swap/transitions escalated -> review_pending with different revie
   assert.equal(swapEvent.state_to, STATES.REVIEW_PENDING);
 });
 
+test("reviewer-swap/preserves pre-publication internal review phase", () => {
+  const { data, manifestPath, repoRoot, runId } = setupEscalatedRun({ lastReviewer: "codex" });
+  const prePublication = {
+    ...data,
+    git: {
+      ...(data.git || {}),
+      pr_number: null,
+    },
+    dispatch: {
+      ...(data.dispatch || {}),
+      publish_policy: "after-internal-review",
+    },
+  };
+  writeManifest(manifestPath, prePublication, "");
+
+  const swapped = maybeSwapReviewer(prePublication, "claude", "", manifestPath, repoRoot);
+  assert.equal(swapped.state, STATES.INTERNAL_REVIEW_PENDING);
+  assert.equal(swapped.next_action, "run_internal_review");
+  assert.equal(swapped.review.reviewer_swap_count, 1);
+
+  const persisted = readManifest(manifestPath).data;
+  assert.equal(persisted.state, STATES.INTERNAL_REVIEW_PENDING);
+  assert.equal(persisted.next_action, "run_internal_review");
+
+  const events = fs.readFileSync(getEventsPath(repoRoot, runId), "utf-8")
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line));
+  const swapEvent = events.find((event) => event.event === "reviewer_swap");
+  assert.equal(swapEvent.state_to, STATES.INTERNAL_REVIEW_PENDING);
+});
+
 test("reviewer-swap/rejects same-reviewer retry", () => {
   const { data, manifestPath, repoRoot } = setupEscalatedRun({ lastReviewer: "codex" });
   assert.throws(

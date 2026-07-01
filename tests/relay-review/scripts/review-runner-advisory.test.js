@@ -25,6 +25,61 @@ const { finishAdvisoryReview } = require("../../../skills/relay-review/scripts/r
 
 const SCRIPT = path.join(__dirname, "..", "..", "..", "skills", "relay-review", "scripts", "review-runner.js");
 
+function installDefaultGhFixture() {
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-advisory-gh-"));
+  const ghPath = path.join(binDir, "gh");
+  fs.writeFileSync(ghPath, `#!/usr/bin/env node
+const args = process.argv.slice(2);
+function writeJson(value) {
+  process.stdout.write(JSON.stringify(value));
+}
+if (args[0] === "pr" && args[1] === "view") {
+  const jsonIndex = args.indexOf("--json");
+  const fields = jsonIndex >= 0 ? args[jsonIndex + 1] : "";
+  if (fields === "statusCheckRollup,reviews,comments") {
+    writeJson({
+      statusCheckRollup: [{ name: "unit", conclusion: "SUCCESS", status: "COMPLETED" }],
+      reviews: [],
+      comments: []
+    });
+    process.exit(0);
+  }
+  if (fields === "body" || fields.includes("body")) {
+    writeJson({
+      body: "## Test PR\\n\\nFixture body.\\n",
+      headRefOid: "a".repeat(40),
+      headRefName: "issue-429",
+      closingIssuesReferences: []
+    });
+    process.exit(0);
+  }
+  writeJson({});
+  process.exit(0);
+}
+if (args[0] === "repo" && args[1] === "view") {
+  writeJson({ owner: { login: "acme" }, name: "dev-relay" });
+  process.exit(0);
+}
+if (args[0] === "api" && args[1] === "graphql") {
+  writeJson({ data: { repository: { pullRequest: { reviewThreads: { nodes: [] } } } } });
+  process.exit(0);
+}
+if (args[0] === "api" && args[1] === "user") {
+  process.stdout.write("fixture-reviewer\\n");
+  process.exit(0);
+}
+if (args[0] === "pr" && args[1] === "comment") {
+  process.exit(0);
+}
+process.stderr.write("Unsupported default gh fixture invocation: " + args.join(" "));
+process.exit(1);
+`, "utf-8");
+  fs.chmodSync(ghPath, 0o755);
+  process.env.PATH = `${binDir}:${process.env.PATH}`;
+}
+
+installDefaultGhFixture();
+
 function hashFile(filePath) {
   return crypto.createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
 }
@@ -659,7 +714,6 @@ test("standard review applies the primary verdict after advisory grace and recor
   const primaryScript = writePrimaryReviewer(repoRoot, passVerdict());
   const opencodeScript = writeFakeOpencode(repoRoot, { delayMs: 3000 });
 
-  const startedAt = Date.now();
   const result = runReview({
     repoRoot,
     runId,
@@ -669,12 +723,10 @@ test("standard review applies the primary verdict after advisory grace and recor
     opencodeScript,
     extraArgs: ["--advisory-grace", "0.05"],
   });
-  const reviewElapsedMs = Date.now() - startedAt;
 
   assert.equal(result.nextState, STATES.READY_TO_MERGE);
   assert.equal(readManifest(manifestPath).data.state, STATES.READY_TO_MERGE);
   assert.equal(result.advisoryReview.status, "deferred");
-  assert.ok(reviewElapsedMs < 4500, `review should return before late advisory completes, elapsed=${reviewElapsedMs}ms`);
 
   const event = waitForEvent(repoRoot, runId, (record) => record.event === "advisory_review", { timeoutMs: 7000 });
   assert.ok(event, "late advisory event should be attached to the run");

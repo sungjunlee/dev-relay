@@ -31,9 +31,9 @@ Boundary rules:
 
 ## State Machine
 
-Ten states with enforced transitions (`relay-manifest.js:ALLOWED_TRANSITIONS`):
+Ten states with enforced transitions (`skills/relay-dispatch/scripts/manifest/lifecycle.js:ALLOWED_TRANSITIONS`):
 
-```
+```text
   ┌─────────┐
   │  draft   │──────────────────────────────────────────┐
   └────┬─────┘                                          │
@@ -49,8 +49,10 @@ Ten states with enforced transitions (`relay-manifest.js:ALLOWED_TRANSITIONS`):
        ↓            ↓
 ┌────────────────┐   ┌──────────────────┐
 │ publish_pending│──→│  review_pending  │
-└────────────────┘   └──┬───────────┬───┘
-                        │           │
+└───────┬────────┘   └──┬───────────┬───┘
+        │               │           │
+        ↓               │           │
+   escalated            │           │
                         ↓           ↓
 ┌────────────────────┐    ┌──────────────────┐
 │ changes_requested   │    │  ready_to_merge   │
@@ -68,7 +70,7 @@ Ten states with enforced transitions (`relay-manifest.js:ALLOWED_TRANSITIONS`):
                            ready_to_merge
 ```
 
-`internal_review_pending` is the pre-publication review gate over the retained worktree diff. A passing internal review advances to `publish_pending`, never `ready_to_merge`. `publish_pending` is the only state where `publish-run.js` may push/open the PR and stamp `git.pr_number`; successful publication advances to `review_pending`.
+`internal_review_pending` is the pre-publication review gate over the retained worktree diff. A passing internal review advances to `publish_pending`, never `ready_to_merge`. `publish_pending` is the only state where `publish-run.js` may push/open the PR and stamp `git.pr_number`; successful publication advances to `review_pending`, while publish preflight or push/PR failures advance to `escalated`.
 
 `review_pending` is the post-publication review gate. It reviews the PR diff plus CI/actions, GitHub review, and PR comment signals. A passing post-publication review advances to `ready_to_merge`.
 

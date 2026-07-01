@@ -66,11 +66,18 @@ function createManifestInState(state = STATES.REVIEW_PENDING) {
     );
   }
   if (state === STATES.INTERNAL_REVIEW_PENDING) {
-    return updateManifestState(
+    const internal = updateManifestState(
       updateManifestState(manifest, STATES.DISPATCHED, "await_dispatch_result"),
       STATES.INTERNAL_REVIEW_PENDING,
       "run_internal_review"
     );
+    return {
+      ...internal,
+      git: {
+        ...internal.git,
+        pr_number: null,
+      },
+    };
   }
   if (state === STATES.PUBLISH_PENDING) {
     return updateManifestState(

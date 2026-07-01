@@ -105,7 +105,7 @@ node "${RELAY_SKILL_ROOT:-skills}/relay-fleet/scripts/relay-fleet.js" \
 ## Behavior
 
 - The fleet script invokes `skills/relay-dispatch/scripts/dispatch.js` as a subprocess once per leaf and always passes `--fleet-id`.
-- `--review` invokes `skills/relay-review/scripts/review-runner.js` as foreground subprocesses for children in `internal_review_pending` or `review_pending`. Internal PASS advances to `publish_pending`, where fleet invokes `skills/relay-dispatch/scripts/publish-run.js`; `changes_requested` invokes `dispatch.js --manifest <child-manifest>` and re-enters the loop until the child reaches `ready_to_merge` or `escalated`.
+- `--review` invokes `skills/relay-review/scripts/review-runner.js` as foreground subprocesses for children in `internal_review_pending` or `review_pending`. Internal PASS advances to `publish_pending`; existing `publish_pending` children are published with `skills/relay-dispatch/scripts/publish-run.js`. `changes_requested` invokes `dispatch.js --manifest <child-manifest>` and re-enters the loop until the child reaches `ready_to_merge` or `escalated`.
 - `merge-queue.js` invokes `skills/relay-merge/scripts/finalize-run.js` as a subprocess for one `ready_to_merge` child at a time. It stops at the first merge failure and marks that child `merge_blocked`.
 - Each child dispatch owns worktree creation, in-flight run checks, executor invocation, and child run manifest writes.
 - Fleet issue locks are checked before each child spawn; `dispatch.js --fleet-id` performs the durable lock during the actual child run.

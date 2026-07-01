@@ -36,13 +36,13 @@ function normalizeSha(value) {
 }
 
 function getReviewedHeadSha(data) {
-  return normalizeSha(data.review?.last_reviewed_sha) || normalizeSha(data.git?.head_sha);
+  return normalizeSha(data.review?.last_reviewed_sha);
 }
 
-function buildPublishHeadDriftError({ reviewedHeadSha, headSha }) {
+function buildPublishPreflightError({ reviewedHeadSha, headSha, dirtyStatus }) {
   if (!reviewedHeadSha) {
     return new Error(
-      "publish-run requires review.last_reviewed_sha or git.head_sha before publishing. " +
+      "publish-run requires review.last_reviewed_sha before publishing. " +
       "Run internal review again so the PR publication has a reviewed HEAD anchor."
     );
   }
@@ -50,6 +50,12 @@ function buildPublishHeadDriftError({ reviewedHeadSha, headSha }) {
     return new Error(
       `Refusing to publish unreviewed HEAD ${headSha}: internal review approved ${reviewedHeadSha}. ` +
       "Run review again before publishing."
+    );
+  }
+  if (dirtyStatus) {
+    return new Error(
+      "Refusing to publish with uncommitted worktree changes after internal review. " +
+      "Commit/recover the changes and run review again before publishing."
     );
   }
   return null;
@@ -115,8 +121,12 @@ async function publishRun(options) {
     encoding: "utf-8",
     stdio: "pipe",
   }).trim();
+  const dirtyStatus = execFileSync("git", ["-C", validatedPaths.worktree, "status", "--porcelain"], {
+    encoding: "utf-8",
+    stdio: "pipe",
+  }).trim();
   const reviewedHeadSha = getReviewedHeadSha(data);
-  const preflightError = buildPublishHeadDriftError({ reviewedHeadSha, headSha });
+  const preflightError = buildPublishPreflightError({ reviewedHeadSha, headSha, dirtyStatus });
   if (preflightError) {
     if (!options.dryRun) {
       escalatePublishPreflightFailure({

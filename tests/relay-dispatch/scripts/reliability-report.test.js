@@ -315,7 +315,7 @@ test("reliability-report derives the core scorecard from manifests and events", 
     reason: "squash",
   });
 
-  const stdout = execFileSync("node", [SCRIPT, "--repo", repoRoot, "--json"], { encoding: "utf-8" });
+  const stdout = execFileSync(process.execPath, [SCRIPT, "--repo", repoRoot, "--json"], { encoding: "utf-8" });
   const report = JSON.parse(stdout);
 
   assert.equal("by_actor" in report, false);

@@ -27,14 +27,11 @@ const { printResult, printUsage } = require("./review-runner/output");
 const { assertKnownReviewRunnerFlags, parseReviewRunnerCliArgs } = require("./review-runner/cli");
 const { buildPolicyGateFailureEnvelope, isRelayPolicyGateError } = require("../../relay-dispatch/scripts/relay-policy-gate");
 const { buildAdapterCapabilityFailureEnvelope, isAdapterCapabilityError } = require("../../relay-dispatch/scripts/agent-adapters/policy");
-
 const { args, cliArgs, options } = parseReviewRunnerCliArgs(process.argv.slice(2));
-
 if (require.main === module && (!args.length || cliArgs.hasFlag(["--help", "-h"]))) {
   printUsage();
   process.exit(cliArgs.hasFlag(["--help", "-h"]) ? 0 : 1);
 }
-
 async function run() {
   assertKnownReviewRunnerFlags(args);
   const {
@@ -205,12 +202,16 @@ async function run() {
     routePlan: runRoutePlan,
   });
   result.rawResponsePath = rawResponsePath;
+  const prSignalsPassBlockReason = !internalReview && prReviewSignals?.status === "failed"
+    ? `GitHub PR signals failed to load: ${prReviewSignals.reason || "unknown error"}`
+    : null;
 
   let verdict = parseReviewVerdict(reviewText, {
     adapter: reviewerName,
     phase: "primary_review",
     passNextActions: passNextActionsFor(internalReview),
     requireExecutionStatus: false,
+    disallowPassReason: prSignalsPassBlockReason,
   });
   if (rubricLoad.state === "loaded" && (!Array.isArray(verdict.rubric_scores) || verdict.rubric_scores.length === 0)) {
     throw new Error(
@@ -242,7 +243,10 @@ async function run() {
       ? buildMissingExecutionEvidenceVerdict(verdict)
       : buildExecutionEvidenceFailureVerdict(verdict);
   }
-  validateReviewVerdict(verdict, { passNextActions: passNextActionsFor(internalReview) });
+  validateReviewVerdict(verdict, {
+    passNextActions: passNextActionsFor(internalReview),
+    disallowPassReason: prSignalsPassBlockReason,
+  });
 
   const repeatedIssueCount = verdict.verdict === "changes_requested"
     ? computeRepeatedIssueCount(runDir, round, verdict.issues)

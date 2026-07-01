@@ -148,6 +148,9 @@ function formatPassRequirementFailures(data) {
 function validateReviewVerdict(data, options = {}) {
   const requireExecutionStatus = options.requireExecutionStatus !== false;
   const passNextActions = new Set(options.passNextActions || ["ready_to_merge"]);
+  const disallowPassReason = typeof options.disallowPassReason === "string" && options.disallowPassReason.trim()
+    ? options.disallowPassReason.trim()
+    : null;
   if (!data || typeof data !== "object" || Array.isArray(data)) {
     throw new Error("Review verdict must be a JSON object");
   }
@@ -185,6 +188,9 @@ function validateReviewVerdict(data, options = {}) {
   validateScopeDrift(data.scope_drift);
 
   if (data.verdict === "pass") {
+    if (disallowPassReason) {
+      throw new Error(`PASS verdict is not allowed: ${disallowPassReason}`);
+    }
     if (!passNextActions.has(data.next_action)) {
       throw new Error(`PASS verdict must set next_action=${Array.from(passNextActions).join(" or ")}`);
     }

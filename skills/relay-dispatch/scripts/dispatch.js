@@ -1055,7 +1055,14 @@ async function main() {
         worktree: validatedPaths.worktree,
       },
     };
-    PUBLISH_POLICY = PUBLISH_POLICY_ARG || manifest.dispatch?.publish_policy || "immediate";
+    const manifestPublishPolicy = manifest.dispatch?.publish_policy || "immediate";
+    if (PUBLISH_POLICY_ARG && PUBLISH_POLICY_ARG !== manifestPublishPolicy) {
+      console.error(
+        `Error: same-run resume cannot change dispatch.publish_policy from ${manifestPublishPolicy} to ${PUBLISH_POLICY_ARG}`
+      );
+      process.exit(1);
+    }
+    PUBLISH_POLICY = manifestPublishPolicy;
     if (!["immediate", "after-internal-review"].includes(PUBLISH_POLICY)) {
       console.error(`Error: manifest dispatch.publish_policy must be immediate or after-internal-review, got ${JSON.stringify(PUBLISH_POLICY)}`);
       process.exit(1);
@@ -1822,11 +1829,10 @@ async function main() {
     status = exitCode === 0 ? "completed" : "failed";
   }
   let commitMode = summarizeCommitMode({ status, gitLog, uncommitted });
-  if (
-    PUBLISH_POLICY === "after-internal-review" &&
-    status === "completed-uncommitted" &&
-    !AUTO_RECOVER_COMMIT
-  ) {
+  const delayedReviewHasUncommittedWork = PUBLISH_POLICY === "after-internal-review" && (
+    status === "completed-uncommitted" || (status === "completed-with-warning" && uncommitted)
+  );
+  if (delayedReviewHasUncommittedWork && !AUTO_RECOVER_COMMIT) {
     status = "failed";
     exitCode = exitCode || 1;
     error = "recover-commit required before internal review: executor left reviewable uncommitted changes";
@@ -1910,26 +1916,14 @@ async function main() {
     ...(Object.keys(github).length ? { github } : {}),
   };
   writeManifest(manifestPath, manifest);
-  appendRunEvent(repoRoot, runId, {
-    event: EVENTS.DISPATCH_RESULT,
-    state_from: STATES.DISPATCHED,
-    state_to: manifest.state,
-    head_sha: currentHead || startHead || null,
-    reason: status === "failed"
-      ? `${RESUME_MODE ? "same_run_resume" : "new_dispatch"}:${error || "dispatch_failed"}`
-      : `${RESUME_MODE ? "same_run_resume" : "new_dispatch"}:${status}`,
-    publish_policy: PUBLISH_POLICY,
-    executor_network: executorNetworkPolicy,
-    executor_policy: executorPolicy,
-    policy_decision: policyDecision,
-    failure_class: networkFailure,
-    execution_evidence_path: executionEvidencePath,
-    execution_evidence_hash: executionEvidencePath ? hashFileSha256(executionEvidencePath) : null,
-  });
 
-  if (AUTO_RECOVER_COMMIT && status === "completed-uncommitted" && !DRY_RUN) {
+  const shouldAutoRecoverCommit = AUTO_RECOVER_COMMIT && !DRY_RUN && (
+    status === "completed-uncommitted" ||
+    (PUBLISH_POLICY === "after-internal-review" && status === "completed-with-warning" && uncommitted)
+  );
+  if (shouldAutoRecoverCommit) {
     const recoverCommitPath = path.join(__dirname, "recover-commit.js");
-    const reason = `auto-recovered after dispatch returned completed-uncommitted with auto-recover-commit enabled (run ${runId})`;
+    const reason = `auto-recovered after dispatch returned ${status} with auto-recover-commit enabled (run ${runId})`;
     try {
       const recoveryOutput = execFileSync(process.execPath, [
         recoverCommitPath,
@@ -1965,9 +1959,42 @@ async function main() {
     } catch (recoverError) {
       const stderr = recoverError.stderr ? String(recoverError.stderr).trim() : "";
       const message = stderr || String(recoverError.message || recoverError).split("\n")[0];
-      console.warn(`Warning: auto recover-commit failed: ${message}`);
+      status = "failed";
+      exitCode = exitCode || 1;
+      error = `auto_recover_commit_failed: ${message}`;
+      commitMode = "auto-recover failed";
+      try {
+        manifest = readManifest(manifestPath).data;
+        if (manifest.state !== STATES.ESCALATED) {
+          manifest = updateManifestState(manifest, STATES.ESCALATED, "inspect_dispatch_failure");
+          manifest = {
+            ...manifest,
+            git: {
+              ...(manifest.git || {}),
+              head_sha: currentHead || startHead || null,
+            },
+          };
+          writeManifest(manifestPath, manifest);
+        }
+      } catch {}
     }
   }
+  appendRunEvent(repoRoot, runId, {
+    event: EVENTS.DISPATCH_RESULT,
+    state_from: STATES.DISPATCHED,
+    state_to: manifest.state,
+    head_sha: currentHead || startHead || null,
+    reason: status === "failed"
+      ? `${RESUME_MODE ? "same_run_resume" : "new_dispatch"}:${error || "dispatch_failed"}`
+      : `${RESUME_MODE ? "same_run_resume" : "new_dispatch"}:${status}`,
+    publish_policy: PUBLISH_POLICY,
+    executor_network: executorNetworkPolicy,
+    executor_policy: executorPolicy,
+    policy_decision: policyDecision,
+    failure_class: networkFailure,
+    execution_evidence_path: executionEvidencePath,
+    execution_evidence_hash: executionEvidencePath ? hashFileSha256(executionEvidencePath) : null,
+  });
 
   // --- Step 4.5: Optional app registration ---
   let threadId = null;
