@@ -35,7 +35,6 @@
  *   --leaf-id <id>         Link the run back to a relay-ready leaf handoff
  *   --done-criteria-file   Persist a frozen Done Criteria anchor path
  *   --register             Register session in executor's app (keeps worktree)
- *   --no-cleanup           Compatibility alias; worktree is retained by default
  *   --auto-recover-commit  Run recover-commit after completed-uncommitted (default: on for codex, off otherwise)
  *   --no-auto-recover-commit  Opt out of codex default auto recover-commit
  *   --dry-run              Show plan without executing
@@ -159,7 +158,7 @@ const KNOWN_FLAGS = [
   "--branch", "-b", "--run-id", "--manifest", "--prompt", "-p", "--prompt-file", "--executor", "-e",
   "--model", "-m", "--model-hints", "--route-intent-file", "--sandbox", "--network-access", "--copy", "--timeout", "--reasoning", "--rubric-file", "--test-command", "--rubric-grandfathered",
   "--request-id", "--leaf-id", "--fleet-id", "--done-criteria-file", "--publish-policy", "--review-assurance", "--tags",
-  "--register", "--no-cleanup", "--auto-recover-commit", "--no-auto-recover-commit", "--allow-conflicting-run", "--dry-run", "--json", "--help", "-h",
+  "--register", "--auto-recover-commit", "--no-auto-recover-commit", "--allow-conflicting-run", "--dry-run", "--json", "--help", "-h",
 ];
 const CLI_ARG_OPTIONS = { commandName: "dispatch", reservedFlags: KNOWN_FLAGS };
 const hasCliFlag = (flag) => schemaHasFlag(args, flag, CLI_ARG_OPTIONS);
@@ -196,7 +195,6 @@ if (!args.length || hasCliFlag(["--help", "-h"])) {
   console.log(`  --fleet-id         ${modeLabel("--fleet-id")} Link the run back to a relay fleet`);
   console.log(`  --done-criteria-file  ${modeLabel("--done-criteria-file")} Persist a frozen Done Criteria anchor path`);
   console.log(`  --register         ${modeLabel("--register")} Register session in executor's app (keeps worktree)`);
-  console.log(`  --no-cleanup       ${modeLabel("--no-cleanup")} Compatibility alias; worktree is retained by default`);
   console.log(`  --auto-recover-commit  ${modeLabel("--auto-recover-commit")} Run recover-commit after completed-uncommitted (default: on for codex, off otherwise)`);
   console.log(`  --no-auto-recover-commit  ${modeLabel("--no-auto-recover-commit")} Opt out of codex default auto recover-commit`);
   console.log(`  --allow-conflicting-run  ${modeLabel("--allow-conflicting-run")} Bypass the in-flight run check (logs conflicting_run_override event)`);
@@ -446,7 +444,6 @@ try {
 }
 
 const REGISTER = hasCliFlag("--register");
-const NO_CLEANUP = hasCliFlag("--no-cleanup");
 const AUTO_RECOVER_COMMIT_REQUESTED = hasCliFlag("--auto-recover-commit");
 const NO_AUTO_RECOVER_COMMIT = hasCliFlag("--no-auto-recover-commit");
 const ALLOW_CONFLICTING_RUN = hasCliFlag("--allow-conflicting-run");
@@ -2106,9 +2103,6 @@ async function main() {
     console.log(`  Diff:        git -C ${shellQuote(wtPath)} diff ${startHead ? startHead + "..HEAD" : "HEAD~1"}`);
     console.log(`  Merge:       git merge ${branch}`);
     console.log(`  Cleanup:     deferred (${cleanupPolicy})`);
-    if (NO_CLEANUP) {
-      console.log("  Note:        --no-cleanup is now a compatibility alias; worktrees are retained by default.");
-    }
   }
 
   if (status === "failed") process.exit(exitCode || 1);

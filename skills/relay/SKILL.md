@@ -1,7 +1,7 @@
 ---
 name: relay
 argument-hint: "[task, issue, or natural-language handoff]"
-description: Execute the relay plan -> dispatch -> review cycle and stop at ready_to_merge unless merge is explicitly requested. Use for GitHub issues, sprint items, task descriptions, or natural-language handoffs.
+description: Use when a GitHub issue, sprint item, task description, or natural-language handoff should be implemented through autonomous executor dispatch; stops at ready_to_merge — merge only on explicit request.
 compatibility: Requires Claude Code or Codex, gh CLI, git, Node.js 18+.
 metadata:
   related-skills: "relay-ready, relay-plan, relay-dispatch, relay-review, relay-merge, relay-fleet, dev-backlog"

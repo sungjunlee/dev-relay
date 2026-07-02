@@ -16,7 +16,7 @@ raw request
   -> relay-dispatch run manifest
   -> relay-review (internal, before PR publication)
   -> publish PR
-  -> relay-review (post-publication, with CI/actions and external review signals)
+  -> post-publication relay-review
   -> ready_to_merge
   -> relay-merge (explicit only)
 ```

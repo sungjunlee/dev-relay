@@ -58,7 +58,6 @@ const FLAGS = [
   { flag: "--model-hints", kind: VALUE, mode: MODE_PARSED, valueName: "<spec>", rationale: "Structured phase=model spec; flag-like following tokens should mean the value is missing." },
   { flag: "--network-access", kind: VALUE, mode: MODE_PARSED, valueName: "<mode>", allowedValues: ["disabled", "enabled"], rationale: "Closed executor network selector; flag-like following tokens should mean the value is missing." },
   { flag: "--next-action", kind: VALUE, mode: MODE_VERBATIM, valueName: "<name>", rationale: "Operator-supplied manifest text; keep the literal argv token." },
-  { flag: "--no-cleanup", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Presence flag; no value is consumed." },
   { flag: "--no-comment", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Presence flag; no value is consumed." },
   { flag: "--no-auto-recover-commit", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Explicit dispatch opt-out from codex default recover-commit after completed-uncommitted; no value is consumed." },
   { flag: "--no-issue-close", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Presence flag; no value is consumed." },
@@ -141,7 +140,7 @@ const COMMAND_FLAGS = {
     "--branch", "--run-id", "--manifest", "--prompt", "--prompt-file", "--executor",
     "--model", "--model-hints", "--route-intent-file", "--sandbox", "--network-access", "--copy", "--timeout", "--reasoning", "--rubric-file",
     "--test-command", "--rubric-grandfathered", "--request-id", "--leaf-id",
-    "--fleet-id", "--done-criteria-file", "--publish-policy", "--review-assurance", "--register", "--no-cleanup", "--auto-recover-commit", "--no-auto-recover-commit",
+    "--fleet-id", "--done-criteria-file", "--publish-policy", "--review-assurance", "--register", "--auto-recover-commit", "--no-auto-recover-commit",
     "--tags", "--allow-conflicting-run", "--dry-run", "--json", "--help",
   ],
   "finalize-run": [

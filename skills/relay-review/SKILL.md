@@ -1,7 +1,7 @@
 ---
 name: relay-review
 argument-hint: "[run-id or branch-name or PR-number]"
-description: Independent PR review against Done Criteria in a fresh context, free from planning bias. Use after dispatch completes and a PR exists.
+description: Use when completed relay executor work needs independent review against frozen Done Criteria — internal pre-publication rounds or post-publication PR rounds.
 context: fork
 compatibility: Requires gh CLI.
 metadata:
@@ -9,9 +9,9 @@ metadata:
   keywords: "리뷰, 검토, review, gate, fresh context"
 ---
 ## Inputs
-- Env: optional `RELAY_SKILL_ROOT` defaults to `skills`; examples use `PR_NUM`, `BRANCH`, `ISSUE_NUM`, and `RUN_ID`.
+- Env: optional `RELAY_SKILL_ROOT` defaults to `skills`; examples use `PR_NUM`, `BRANCH`, and `RUN_ID`.
 - Files: PR diff (`/tmp/pr-diff.txt`), Done Criteria anchor, Score Log/rubric artifacts, run manifest, and optional `/tmp/review-verdict.json`.
-- Sibling scripts: `${RELAY_SKILL_ROOT:-skills}/relay-review/scripts/resolve-issue-number.sh`, `${RELAY_SKILL_ROOT:-skills}/relay-review/scripts/review-runner.js`.
+- Sibling scripts: `${RELAY_SKILL_ROOT:-skills}/relay-review/scripts/review-runner.js`.
 
 # Relay Review
 
@@ -41,8 +41,7 @@ Manual fallback also needs a new session. Do not continue from dispatch, and do 
 PR_NUM=$(gh pr list --head <branch> --json number -q '.[0].number')
 BRANCH=$(gh pr view $PR_NUM --json headRefName -q '.headRefName')
 gh pr diff $PR_NUM > /tmp/pr-diff.txt
-ISSUE_NUM=$(bash "${RELAY_SKILL_ROOT:-skills}/relay-review/scripts/resolve-issue-number.sh" "$PR_NUM" "$BRANCH")  # legacy manual helper; runner resolution is canonical
-gh issue view $ISSUE_NUM  # Done Criteria / Acceptance Criteria source
+gh issue view <N>  # Done Criteria / Acceptance Criteria source; infer <N> per runner-notes.md issue inference
 ```
 
 2. **Fix the anchor** — these do NOT change across rounds:

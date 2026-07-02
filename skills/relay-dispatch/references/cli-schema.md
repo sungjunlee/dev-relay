@@ -70,7 +70,6 @@ Generated from `formatFlagAuditMarkdown()` in `scripts/cli-schema.js`. The same 
 | `--model-hints` | `parsed` | Structured phase=model spec; flag-like following tokens should mean the value is missing. |
 | `--model, -m` | `parsed` | Model selector; flag-like following tokens should mean the value is missing. |
 | `--next-action` | `verbatim` | Operator-supplied manifest text; keep the literal argv token. |
-| `--no-cleanup` | `parsed` | Presence flag; no value is consumed. |
 | `--no-comment` | `parsed` | Presence flag; no value is consumed. |
 | `--no-issue-close` | `parsed` | Presence flag; no value is consumed. |
 | `--older-than` | `parsed` | Numeric threshold; flag-like following tokens should mean the value is missing. |
@@ -141,7 +140,6 @@ Generated from `formatFlagAuditMarkdown()` in `scripts/cli-schema.js`. The same 
 | `--model-hints` | `parsed` | Structured phase=model spec; flag-like following tokens should mean the value is missing. |
 | `--model, -m` | `parsed` | Model selector; flag-like following tokens should mean the value is missing. |
 | `--next-action` | `verbatim` | Operator-supplied manifest text; keep the literal argv token. |
-| `--no-cleanup` | `parsed` | Presence flag; no value is consumed. |
 | `--no-comment` | `parsed` | Presence flag; no value is consumed. |
 | `--no-issue-close` | `parsed` | Presence flag; no value is consumed. |
 | `--older-than` | `parsed` | Numeric threshold; flag-like following tokens should mean the value is missing. |

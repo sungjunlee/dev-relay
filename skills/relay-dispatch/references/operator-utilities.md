@@ -18,7 +18,7 @@ node skills/relay-dispatch/scripts/create-worktree.js <repo> --worktree-path <pa
 
 Successful dispatches keep their worktree by default. Cleanup moves later in the lifecycle, typically after review or merge.
 
-`--no-cleanup` remains accepted as a compatibility alias. `--register` still matters because it also opens the retained worktree in the executor app.
+`--register` still matters because it also opens the retained worktree in the executor app.
 
 Janitor v2 adds git/PR health scoring and optional merged-drift reconciliation (`ready_to_merge` only). See [worktree-janitor-v2.md](./worktree-janitor-v2.md).
 
