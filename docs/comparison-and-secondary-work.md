@@ -5,7 +5,7 @@ Comparison review, comparison implementation, parallel secondary work, and advis
 ## Selection Recipe
 
 - **Comparison review** -> use `relay-review` with one primary reviewer and, when useful, an optional `--advisory-reviewer`. The primary review gates the run.
-- **Comparison implementation** -> use `relay-fleet` or parallel `dispatch.js` calls that share the same Done Criteria file; review and promote one result.
+- **Comparison implementation** -> dispatch parallel `dispatch.js` leaves that share the same Done Criteria file; review and promote one result. `relay-fleet` fits only when each candidate is modeled as its own issue, because fleet admission enforces a unique `issue_number` per leaf.
 - **Secondary work** -> if it is independently mergeable, make it an ordinary relay leaf or fleet leaf; if it is reviewer context only, pass it through advisory review input/output; if it is neither, keep it out of core relay.
 
 Advisory artifacts are not primary merge evidence and do not gate merge unless `policy.review_assurance=hardened` requires them.
@@ -28,46 +28,23 @@ Supported advisory reviewers are `opencode`, `pi`, and `antigravity`.
 
 ## Comparison Implementation
 
-Use a fleet when the comparison candidates are already planned as leaves. Each leaf may vary branch, prompt, or executor, but the competing candidates share the same `done_criteria_file` and `rubric_file`.
-
-```json
-{
-  "leaves": [
-    {
-      "leaf_ref": "candidate-a",
-      "issue_number": 695,
-      "branch": "compare-a",
-      "prompt_file": "/tmp/compare-a.md",
-      "rubric_file": "/tmp/comparison-rubric.yaml",
-      "done_criteria_file": "/tmp/comparison-done.md",
-      "executor": "codex"
-    },
-    {
-      "leaf_ref": "candidate-b",
-      "issue_number": 695,
-      "branch": "compare-b",
-      "prompt_file": "/tmp/compare-b.md",
-      "rubric_file": "/tmp/comparison-rubric.yaml",
-      "done_criteria_file": "/tmp/comparison-done.md",
-      "executor": "opencode"
-    }
-  ]
-}
-```
-
-```bash
-node "${RELAY_SKILL_ROOT:-skills}/relay-fleet/scripts/relay-fleet.js" \
-  --repo . \
-  --fleet-id comparison-695 \
-  --leaves-file /tmp/comparison-695-leaves.json \
-  --parallel 4
-```
-
-For a smaller comparison, dispatch ordinary leaves directly with the same anchors:
+Dispatch the competing candidates as ordinary parallel leaves. The candidates may vary branch, prompt, or executor, but they share the same `--done-criteria-file` and `--rubric-file`; review and promote one result.
 
 ```bash
 node "${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/dispatch.js" . -b compare-a --prompt-file /tmp/compare-a.md --rubric-file /tmp/comparison-rubric.yaml --done-criteria-file /tmp/comparison-done.md --executor codex
 node "${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/dispatch.js" . -b compare-b --prompt-file /tmp/compare-b.md --rubric-file /tmp/comparison-rubric.yaml --done-criteria-file /tmp/comparison-done.md --executor opencode
+```
+
+Keep candidate branch names issue-neutral (`compare-a`, not `issue-695-a`) so the dispatch in-flight run check does not treat the candidates as conflicting runs on one issue.
+
+Do not put same-issue comparison candidates in a fleet: fleet issue-lock admission rejects duplicate `issue_number` values across leaves, so competing candidates for one issue are not admissible fleet leaves. Use `relay-fleet` for comparison work only when each candidate is modeled as its own issue; the leaves may still share `done_criteria_file` and `rubric_file`:
+
+```bash
+node "${RELAY_SKILL_ROOT:-skills}/relay-fleet/scripts/relay-fleet.js" \
+  --repo . \
+  --fleet-id comparison-epic-42 \
+  --leaves-file /tmp/comparison-epic-42-leaves.json \
+  --parallel 4
 ```
 
 ## Operator Boundary
