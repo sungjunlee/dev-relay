@@ -38,18 +38,7 @@ PREFLIGHT=$(node "${RELAY_SKILL_ROOT:-skills}/relay/scripts/run-preflight.js" \
   --body-file "$ISSUE_BODY_FILE" --manifest "$RUN_MANIFEST" --json)
 ```
 
-Branch on the JSON using [preflight-guards.md](references/preflight-guards.md); only evaluate readiness when `inflight.route == "continue"`:
-- `inflight.route == "existing-open-pr"` → set `PR_NUM`, skip Steps 2-3, and review the existing PR.
-- `inflight.route == "existing-merged-pr"` → update the sprint file to `[x]` if present and stop.
-- `inflight.route == "inflight-run"` → resume or inspect that run; continue at its manifest state.
-- `readiness.decision.route_decision == "ready_single"` → proceed to Step 2.
-- `readiness.decision.route_decision == "ready_light"` → proceed to Step 2 with S-size quick planning and compact rubric guidance.
-- `readiness.decision.route_decision == "readiness_prompt"` and `.decision.prompt_allowed == true` → set `SUMMARY=.readiness.signals_summary` and issue exactly `AskUserQuestion("Readiness gaps detected: ${SUMMARY}. Invoke relay-ready first? [y/n/abort]")`.
-- `readiness.decision.route_decision == "needs_split"` and `.decision.prompt_allowed == true` → run proposal-first relay-ready shaping; accepted handoffs become the relay-plan source of truth before any dispatch.
-- `chain-y` → invoke relay-ready Q&A, wait, persist the handoff, set `manifest.anchor.readiness`, then resume Step 2.
-- `chain-n` → emit `bypass_override_by_user` from `.decision.branch_labels["chain-n"].event_payload`, then proceed to Step 2.
-- `chain-abort` → emit `readiness_check_failed` from `.decision.branch_labels["chain-abort"].event_payload`, then close the run.
-- `noninteractive-fail` → emit `readiness_check_failed_nontty` from `.decision.branch_labels["noninteractive-fail"].event_payload`, then close the run.
+Branch on the JSON: follow `inflight.instruction` when `inflight.route != "continue"`, otherwise follow `readiness.decision.instruction`. The full branch table lives in [preflight-guards.md](references/preflight-guards.md). When `readiness.decision.route_decision == "needs_split"`, the instruction routes through proposal-first relay-ready shaping; accepted handoffs become the relay-plan source of truth before any dispatch.
 
 Fast path: bypass relay-ready only for one relay-ready task with a stable review anchor and no clarification/decomposition needed. Otherwise run `relay-ready`; its handoff brief becomes the downstream source of truth.
 

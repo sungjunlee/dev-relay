@@ -7,6 +7,7 @@ const path = require("path");
 
 const {
   buildReadinessDecision,
+  routeFromInflight,
 } = require("../../../skills/relay/scripts/run-preflight");
 
 const {
@@ -20,14 +21,129 @@ const {
 
 const SCRIPT = path.join(__dirname, "..", "..", "..", "skills", "relay", "scripts", "run-preflight.js");
 
-test("route decision treats bypass as ready_single without changing the bypass branch", () => {
-  const decision = buildReadinessDecision({
+const EXPECTED_BRANCH_INSTRUCTIONS = {
+  bypass: "Proceed to Step 2 using the bypass route and keep the readiness_probe event as the readiness evidence.",
+  "ready-light": "Proceed to Step 2 with S-size quick planning and compact rubric guidance while preserving the readiness_probe event payload.",
+  "chain-y": "Ask the operator in plain text to choose y to invoke relay-ready before Step 2, n to emit bypass_override_by_user and proceed to Step 2, or abort to emit readiness_check_failed and close the run after the readiness_probe.",
+  "proposal-first": "Run proposal-first relay-ready shaping after the readiness_probe, require an accepted handoff, and use that handoff as the relay-plan source of truth before dispatch.",
+  "chain-n": "If the operator answers n, emit bypass_override_by_user with the supplied payload and proceed to Step 2.",
+  "chain-abort": "If the operator answers abort, emit readiness_check_failed with the supplied payload and close the run.",
+  "noninteractive-fail": "Emit readiness_check_failed_nontty with the supplied payload and close the run because no prompt is allowed.",
+};
+
+const EXPECTED_INFLIGHT_INSTRUCTIONS = {
+  "existing-open-pr": "Review the existing open PR instead of planning or dispatching a new run.",
+  "existing-merged-pr": "Mark the sprint item done if present and stop because the PR is already merged.",
+  "inflight-run": "Resume or inspect the existing inflight run and continue from its manifest state.",
+  continue: "Continue to readiness handling before planning or dispatch.",
+};
+
+function readyEnvelope(overrides = {}) {
+  return {
     readiness_score: { clarity: "high", granularity: "high", verifiability: "high" },
     bypass: true,
     next_action: "proceed",
     signals_summary: "Ready: bypass conditions passed.",
     task_shape: { strength: "none", strong: false, signals: [] },
-  }, { promptAllowed: false });
+    risk: { high: false, signals: [] },
+    ...overrides,
+  };
+}
+
+test("route branch_labels entries all carry non-empty instruction", () => {
+  const decision = buildReadinessDecision(readyEnvelope(), { promptAllowed: true });
+  const branchKeys = Object.keys(decision.branch_labels);
+
+  assert.deepEqual(branchKeys.sort(), Object.keys(EXPECTED_BRANCH_INSTRUCTIONS).sort());
+  branchKeys.forEach((key) => {
+    assert.equal(typeof decision.branch_labels[key].instruction, "string");
+    assert.ok(decision.branch_labels[key].instruction.length > 0);
+    assert.equal(decision.branch_labels[key].instruction, EXPECTED_BRANCH_INSTRUCTIONS[key]);
+  });
+});
+
+test("route readiness decision instruction follows the recommended branch instruction", () => {
+  const cases = [
+    buildReadinessDecision(readyEnvelope(), { promptAllowed: false }),
+    buildReadinessDecision(readyEnvelope({ bypass: false }), { promptAllowed: false }),
+    buildReadinessDecision(readyEnvelope({
+      bypass: false,
+      next_action: "qa_needed",
+      task_shape: {
+        strength: "strong",
+        strong: true,
+        signals: [{ condition: "broad_scope_language", evidence: "foundation" }],
+      },
+    }), { promptAllowed: true }),
+    buildReadinessDecision(readyEnvelope({
+      bypass: false,
+      next_action: "qa_needed",
+      signals_summary: "Gaps: verifiability=low.",
+      risk: { high: true, signals: ["high_risk_keyword"] },
+    }), { promptAllowed: false }),
+  ];
+
+  cases.forEach((decision) => {
+    assert.equal(
+      decision.instruction,
+      decision.branch_labels[decision.recommended_branch].instruction
+    );
+  });
+});
+
+test("route prompt instruction offers host-neutral y n abort choices", () => {
+  const decision = buildReadinessDecision(readyEnvelope({
+    bypass: false,
+    next_action: "qa_needed",
+    signals_summary: "Gaps: verifiability=low.",
+    risk: { high: true, signals: ["high_risk_keyword"] },
+  }), { promptAllowed: true });
+
+  assert.equal(decision.recommended_branch, "prompt");
+  assert.equal(decision.instruction, EXPECTED_BRANCH_INSTRUCTIONS["chain-y"]);
+  assert.match(decision.instruction, /\by\b/);
+  assert.match(decision.instruction, /\bn\b/);
+  assert.match(decision.instruction, /\babort\b/);
+});
+
+test("route inflight routes all carry next-step instruction", () => {
+  const cases = [
+    {
+      expectedRoute: "existing-open-pr",
+      prCheck: { status: "open", pr: { number: 12 } },
+      runCheck: { runs: [{ runId: "run-open" }] },
+    },
+    {
+      expectedRoute: "existing-merged-pr",
+      prCheck: { status: "merged", pr: { number: 13 } },
+      runCheck: { runs: [{ runId: "run-merged" }] },
+    },
+    {
+      expectedRoute: "inflight-run",
+      prCheck: { status: "not_found", pr: null },
+      runCheck: { runs: [{ runId: "run-active" }] },
+    },
+    {
+      expectedRoute: "continue",
+      prCheck: { status: "not_found", pr: null },
+      runCheck: { runs: [] },
+    },
+  ];
+
+  cases.forEach(({ expectedRoute, prCheck, runCheck }) => {
+    const result = routeFromInflight({ prCheck, runCheck });
+    assert.equal(result.route, expectedRoute);
+    assert.equal(result.instruction, EXPECTED_INFLIGHT_INSTRUCTIONS[expectedRoute]);
+  });
+});
+
+test("run-preflight source does not reference AskUserQuestion", () => {
+  const source = fs.readFileSync(SCRIPT, "utf-8");
+  assert.doesNotMatch(source, /AskUserQuestion/);
+});
+
+test("route decision treats bypass as ready_single without changing the bypass branch", () => {
+  const decision = buildReadinessDecision(readyEnvelope(), { promptAllowed: false });
 
   assert.equal(decision.route_decision, "ready_single");
   assert.equal(decision.recommended_branch, "bypass");

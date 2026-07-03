@@ -1,8 +1,8 @@
 # Relay Preflight Guards
 
 `relay/scripts/run-preflight.js` keeps deterministic guard work outside the
-main `/relay` flow. It prints JSON only. The skill keeps the decision layer,
-including the readiness `AskUserQuestion(...)` branch.
+main `/relay` flow. It prints JSON only, including human-readable next-step
+instructions that the skill follows without carrying route prose inline.
 
 ## Route Stage
 
@@ -17,11 +17,12 @@ node "${RELAY_SKILL_ROOT:-skills}/relay/scripts/run-preflight.js" --stage route 
 - Firing condition: an issue-numbered task is entering Step 1 routing.
 - Signals read: `gh pr list --head <branch> --state all --json number,state,mergedAt,headRefName,url`; non-terminal manifests for the issue via relay-dispatch manifest storage.
 - Events emitted: none by this guard.
+- Instruction field: every in-flight route includes `inflight.instruction`, a one-sentence operator next action.
 - Branch labels:
-  - `existing-open-pr`: open PR found; skip plan/dispatch and review the existing PR.
-  - `existing-merged-pr`: merged PR found; update sprint completion if present and stop.
-  - `inflight-run`: non-terminal run manifest found; resume or inspect that run.
-  - `continue`: no in-flight work found; continue to readiness handling.
+  - `existing-open-pr`: `instruction` tells the operator to review the existing open PR instead of planning or dispatching a new run.
+  - `existing-merged-pr`: `instruction` tells the operator to mark the sprint item done if present and stop because the PR is already merged.
+  - `inflight-run`: `instruction` tells the operator to resume or inspect the existing inflight run and continue from its manifest state.
+  - `continue`: `instruction` tells the operator to continue to readiness handling before planning or dispatch.
 
 ### Readiness probe + chain prompt guard
 
@@ -32,14 +33,15 @@ node "${RELAY_SKILL_ROOT:-skills}/relay/scripts/run-preflight.js" --stage route 
   - `bypass_override_by_user`: emitted by the skill decision layer for `chain-n`.
   - `readiness_check_failed`: emitted by the skill decision layer for `chain-abort`.
   - `readiness_check_failed_nontty`: emitted by the skill decision layer for `noninteractive-fail`.
+- Instruction fields: every `readiness.decision.branch_labels.<label>.instruction` is a one-sentence operator next action, and `readiness.decision.instruction` copies the selected branch instruction, using the prompt instruction when the selected branch is the interactive prompt.
 - Branch labels:
-  - `bypass`: route decision is `ready_single`; probe returns `bypass=true`; proceed to Step 2.
-  - `ready-light`: route decision is `ready_light`; readiness returned `next_action=proceed` without a bypass anchor; proceed to Step 2 using S-size quick planning and compact rubric guidance.
-  - `chain-y`: probe returns `bypass=false`, prompt is allowed, user answers `y`; invoke relay-ready Q&A, persist the handoff, set `manifest.anchor.readiness`, then resume Step 2.
+  - `bypass`: route decision is `ready_single`; probe returns `bypass=true`; `instruction` names the `readiness_probe` event and tells the operator to proceed to Step 2.
+  - `ready-light`: route decision is `ready_light`; readiness returned `next_action=proceed` without a bypass anchor; `instruction` names the `readiness_probe` event and tells the operator to proceed to Step 2 using S-size quick planning and compact rubric guidance.
+  - `chain-y`: probe returns `bypass=false`, prompt is allowed, and the host should ask the operator in plain text to choose `y` to invoke relay-ready before Step 2, `n` to emit `bypass_override_by_user` and proceed to Step 2, or `abort` to emit `readiness_check_failed` and close the run after the `readiness_probe`.
   - `proposal-first`: route decision is `needs_split`, prompt is allowed, and the request must go through relay-ready proposal-first shaping before Step 2. The JSON branch label includes `relay_ready_mode=proposal_first`, `requires_accepted_handoff=true`, and `source_of_truth=accepted_relay_ready_handoff`.
   - `chain-n`: probe returns `bypass=false`, prompt is allowed, user explicitly bypasses relay-ready; emit `bypass_override_by_user` with the script's event payload and proceed to Step 2. For `needs_split`, this remains an explicit operator override, not the default route.
-  - `chain-abort`: probe returns `bypass=false`, prompt is allowed, user answers `abort`; emit `readiness_check_failed` with the script's event payload and close the run.
-  - `noninteractive-fail`: route decision is `readiness_prompt` or `needs_split` and no prompt is allowed; emit `readiness_check_failed_nontty` with the script's event payload and close the run.
+  - `chain-abort`: probe returns `bypass=false`, prompt is allowed, user answers `abort`; `instruction` names `readiness_check_failed` and tells the operator to close the run with the script's event payload.
+  - `noninteractive-fail`: route decision is `readiness_prompt` or `needs_split` and no prompt is allowed; `instruction` names `readiness_check_failed_nontty` and tells the operator to close the run with the script's event payload.
 
 Route decisions are advisory labels, not lifecycle states:
 
@@ -48,8 +50,7 @@ Route decisions are advisory labels, not lifecycle states:
 - `readiness_prompt`: preserve the existing `qa_needed` prompt or non-interactive failure behavior.
 - `needs_split`: strong task-shape signals indicate decomposition should be considered before dispatch. Prompt-allowed runs use `proposal-first`; non-interactive runs still fail closed before dispatch.
 
-Do not move the readiness prompt into the script. The exact prompt remains:
-`AskUserQuestion("Readiness gaps detected: ${SUMMARY}. Invoke relay-ready first? [y/n/abort]")`.
+The readiness prompt wording is host-neutral: ask the operator to choose `y` to invoke relay-ready first, `n` to bypass relay-ready and proceed, or `abort` to close the run.
 
 ## Review Stage
 
