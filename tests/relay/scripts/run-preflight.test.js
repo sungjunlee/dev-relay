@@ -139,6 +139,56 @@ test("route inflight routes all carry next-step instruction", () => {
   });
 });
 
+function setupRouteGhFixture({ prCandidates = [] } = {}) {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-route-preflight-"));
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-route-gh-"));
+  const ghPath = path.join(binDir, "gh");
+  fs.writeFileSync(ghPath, `#!/usr/bin/env node
+const args = process.argv.slice(2);
+if (args[0] === "pr" && args[1] === "list") {
+  process.stdout.write(${JSON.stringify(JSON.stringify(prCandidates))});
+  process.exit(0);
+}
+process.stderr.write("unexpected gh args: " + args.join(" "));
+process.exit(2);
+`, "utf-8");
+  fs.chmodSync(ghPath, 0o755);
+
+  return { repoRoot, env: { ...process.env, PATH: `${binDir}:${process.env.PATH}` } };
+}
+
+function runRoutePreflight(fixture, args = []) {
+  return JSON.parse(execFileSync(process.execPath, [
+    SCRIPT,
+    "--stage", "route",
+    "--repo", fixture.repoRoot,
+    ...args,
+    "--json",
+  ], {
+    encoding: "utf-8",
+    env: fixture.env,
+  }));
+}
+
+test("route inflight readiness decision carries a non-empty instruction", () => {
+  const fixture = setupRouteGhFixture({
+    prCandidates: [{
+      number: 404,
+      state: "OPEN",
+      mergedAt: null,
+      headRefName: "issue-404",
+      url: "https://example.test/pull/404",
+    }],
+  });
+
+  const result = runRoutePreflight(fixture, ["--branch", "issue-404"]);
+
+  assert.equal(result.inflight.route, "existing-open-pr");
+  assert.equal(typeof result.readiness.decision.instruction, "string");
+  assert.ok(result.readiness.decision.instruction.length > 0);
+  assert.equal(result.readiness.decision.instruction, result.inflight.instruction);
+});
+
 test("run-preflight source does not reference AskUserQuestion", () => {
   const source = fs.readFileSync(SCRIPT, "utf-8");
   assert.doesNotMatch(source, /AskUserQuestion/);

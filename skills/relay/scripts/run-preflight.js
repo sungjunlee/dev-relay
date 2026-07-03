@@ -403,6 +403,7 @@ function buildUnevaluatedReadinessForInflightRoute(inflight) {
     elapsed_ms: 0,
     decision: {
       recommended_branch: "not-evaluated",
+      instruction: inflight?.instruction || `Follow the ${route} inflight route before readiness handling.`,
       prompt_allowed: false,
       prompt_summary: null,
       branch_labels: {},
