@@ -8,7 +8,7 @@ metadata:
   keywords: "릴레이, 자동 실행, plan, dispatch, review, merge, relay cycle"
 ---
 ## Inputs
-- Env: optional `RELAY_SKILL_ROOT` defaults to `skills`; role overrides use `RELAY_ORCHESTRATOR`/`RELAY_REVIEWER`; examples use `ISSUE_BODY_FILE`, `RUN_MANIFEST`, `ISSUE_NUMBER`, `BRANCH`, `PREFLIGHT`, `SUMMARY`, `RUN_ID`, and `PR_NUM`.
+- Env: optional `RELAY_SKILL_ROOT` defaults to `skills`; role overrides use `RELAY_ORCHESTRATOR`/`RELAY_REVIEWER`.
 - Files: task/issue text, optional sprint file, readiness probe inputs, `/tmp/dispatch-<N>.md`, and `/tmp/rubric-<N>.yaml`.
 - Sibling scripts: `${RELAY_SKILL_ROOT:-skills}/relay/scripts/run-preflight.js`, `${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/dispatch.js`, `${RELAY_SKILL_ROOT:-skills}/relay-review/scripts/review-runner.js`.
 
