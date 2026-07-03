@@ -16,6 +16,7 @@ const { buildScoreDivergenceAnalysis, loadPrBody, parseScoreLog, toIterationScor
 const { applyQualityExecutionStatus, buildExecutionEvidenceFailureVerdict, buildMissingExecutionEvidenceVerdict, computeQualityExecutionStatus } = require("./review-runner/execution-evidence");
 const { applyReviewAssurancePolicy } = require("./review-runner/assurance");
 const { buildRedispatchPrompt, buildRubricGateRedispatchPrompt, computeFactorStatusFlips, computeRepeatedIssueCount, decideFlipFlopEscalation, detectChurnGrowth, summarizeLineage, toEscalatedVerdict } = require("./review-runner/redispatch");
+const { buildConvergenceSummary, formatConvergenceMarkdown } = require("./review-runner/convergence");
 const { applyVerdictToManifest } = require("./review-runner/manifest-apply");
 const { enforceRoundCap } = require("./review-runner/round-cap");
 const { passNextActionsFor, writeRoundArtifacts } = require("./review-runner/round-artifacts");
@@ -40,9 +41,7 @@ async function run() {
     jsonOut, manifestPathArg, manualReviewReason, noComment, prArg, prepareOnly, repoArg,
     repoPath, reviewFile, reviewerArg, reviewerModel, reviewerScriptArg, runIdArg,
   } = options;
-  if (manualReviewReason && !reviewFile) {
-    throw new Error("--manual-review-reason requires --review-file");
-  }
+  if (manualReviewReason && !reviewFile) throw new Error("--manual-review-reason requires --review-file");
 
   const { branch, issueNumber, manifest, prNumber, reviewRepoPath, runRepoPath } = resolveContext(
     repoPath,
@@ -152,8 +151,7 @@ async function run() {
     rubricStatus: rubricLoad.status,
     rubricWarning: rubricLoad.warning || null,
     runId: data.run_id,
-    state: data.state,
-    verdictPath: null,
+    state: data.state, convergenceSummary: null, verdictPath: null,
   };
   let advisoryRun = null;
   let advisoryResult = null;
@@ -249,9 +247,7 @@ async function run() {
     disallowPassReason: prSignalsPassBlockReason,
   });
 
-  const repeatedIssueCount = verdict.verdict === "changes_requested"
-    ? computeRepeatedIssueCount(runDir, round, verdict.issues)
-    : 0;
+  const repeatedIssueCount = verdict.verdict === "changes_requested" ? computeRepeatedIssueCount(runDir, round, verdict.issues) : 0;
   const lineageSummary = summarizeLineage(verdict.issues);
   let escalationDecision = { round, trigger: "none", factors: [], traces: [], lineage_summary: lineageSummary, decision: "continue", reason: "no_trigger" };
   if (verdict.verdict === "changes_requested" && repeatedIssueCount >= 3) {
@@ -271,6 +267,9 @@ async function run() {
       factorFlips.map(({ factor, trace }) => `Rubric factor '${factor}' status flipped across 3 rounds (trace: ${trace.join("→")}). Owner decision required — reviewer cannot converge autonomously.`).join("; ")
     );
   }
+  const convergenceSummary = buildConvergenceSummary({ runDir, round, verdict, factorFlips, repeatedIssueCount });
+  result.convergenceSummary = convergenceSummary;
+  if (convergenceSummary) writeText(path.join(runDir, `review-round-${round}-convergence.md`), `${formatConvergenceMarkdown(convergenceSummary)}\n`);
 
   const rubricGateRedispatchPath = path.join(runDir, `review-round-${round}-redispatch.md`);
   const rubricGateFailure = verdict.verdict === "pass"
@@ -299,8 +298,8 @@ async function run() {
       ? rubricGateRedispatchPath
       : path.join(runDir, `review-round-${round}-redispatch.md`);
     const redispatchPrompt = rubricGateFailure
-      ? buildRubricGateRedispatchPrompt(rubricGateFailure, doneCriteria, doneCriteriaSource)
-      : buildRedispatchPrompt(verdict, doneCriteria, runDir, round, churnGrowth, doneCriteriaSource, reviewedHeadSha);
+      ? buildRubricGateRedispatchPrompt(rubricGateFailure, doneCriteria, doneCriteriaSource, convergenceSummary)
+      : buildRedispatchPrompt(verdict, doneCriteria, runDir, round, churnGrowth, doneCriteriaSource, reviewedHeadSha, convergenceSummary);
     writeText(redispatchPath, `${redispatchPrompt}\n`);
   }
 

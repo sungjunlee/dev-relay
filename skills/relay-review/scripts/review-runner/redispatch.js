@@ -7,7 +7,7 @@ const { getRubricScoreNumber, getRubricTargetNumber } = require("./score-utils")
 const FLIP_STATES = new Set(["pass", "fail"]);
 const LINEAGE_VALUES = ["deepening", "repeat", "stale", "new", "newly_scoreable", "unknown"];
 
-function buildRedispatchPrompt(verdict, doneCriteria, runDir, round, churnGrowth, doneCriteriaSource, currentHeadSha) {
+function buildRedispatchPrompt(verdict, doneCriteria, runDir, round, churnGrowth, doneCriteriaSource, currentHeadSha, convergenceSummary) {
   const sections = [
     `This is round ${round + 1}. Fix these review issues in the PR. Do not change anything else. Push to the same branch.`,
     "",
@@ -44,6 +44,8 @@ function buildRedispatchPrompt(verdict, doneCriteria, runDir, round, churnGrowth
   if (scoreTarget) {
     sections.push("", scoreTarget);
   }
+
+  appendConvergenceContext(sections, convergenceSummary);
 
   if (churnGrowth) {
     sections.push(
@@ -372,8 +374,15 @@ function toEscalatedVerdict(baseVerdict, summary) {
   };
 }
 
-function buildRubricGateRedispatchPrompt(gateFailure, doneCriteria, doneCriteriaSource) {
-  return [
+function appendConvergenceContext(sections, convergenceSummary) {
+  if (!convergenceSummary) return;
+  const { formatConvergenceMarkdown } = require("./convergence");
+  const convergenceMarkdown = formatConvergenceMarkdown(convergenceSummary);
+  if (convergenceMarkdown) sections.push("", convergenceMarkdown);
+}
+
+function buildRubricGateRedispatchPrompt(gateFailure, doneCriteria, doneCriteriaSource, convergenceSummary) {
+  const sections = [
     "Rubric recovery re-dispatch",
     "",
     "relay-review failed closed on the rubric anchor, not on the code diff.",
@@ -391,7 +400,9 @@ function buildRubricGateRedispatchPrompt(gateFailure, doneCriteria, doneCriteria
     `Done Criteria source: ${doneCriteriaSource}`,
     "Done Criteria:",
     doneCriteria,
-  ].join("\n");
+  ];
+  appendConvergenceContext(sections, convergenceSummary);
+  return sections.join("\n");
 }
 
 module.exports = {
@@ -404,6 +415,7 @@ module.exports = {
   detectChurnGrowth,
   fingerprintIssue,
   findWeakestBelowTargetQualityScore,
+  issueMatchesFactor,
   normalizeFingerprintPart,
   readPriorVerdicts,
   scanPriorVerdicts,
