@@ -1,7 +1,7 @@
 ---
 name: relay-plan
 argument-hint: "[task, issue, or ready handoff]"
-description: Synthesize task intent, explicit AC when present, repo signals, and task risk into a scored rubric for autonomous iteration. Always used before relay-dispatch — rubric depth scales with task size.
+description: Use when a relay run needs its review anchor, scored rubric, or dispatch prompt — always before relay-dispatch, whether AC are explicit, vague, or missing.
 compatibility: Requires gh CLI.
 metadata:
   related-skills: "relay, relay-ready, relay-dispatch, relay-review, dev-backlog"
