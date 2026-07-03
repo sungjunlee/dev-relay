@@ -182,6 +182,7 @@ node skills/relay-merge/scripts/finalize-run.js --run-id <id> --skip-review "hot
 Use `/relay-fleet` when multiple independent leaves are already planned and can run in parallel. Prefer sequential `/relay` when tasks share files, ordering is unclear, or merge conflicts are likely.
 
 Use `/relay-review` advisory review when you need supplemental reviewer evidence for an existing run. Keep comparison implementation work in `/relay-fleet` or independent `/relay` leaves instead of adding a new lifecycle branch.
+For the compact selection recipe, see [Comparison And Secondary Work](comparison-and-secondary-work.md).
 
 ## Worktree Includes
 
