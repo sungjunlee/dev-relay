@@ -8,7 +8,7 @@ metadata:
   keywords: "계획, 루브릭, planning, rubric, dispatch prompt"
 ---
 ## Inputs
-- Env: optional `RELAY_SKILL_ROOT` defaults to `skills`; Step 7/8 examples use `RUN_ID`.
+- Env: optional `RELAY_SKILL_ROOT` defaults to `skills`.
 - Files: relay-ready handoff, task file, issue/user text, optional local harness context (`AGENTS.md`, `CLAUDE.md`, `CHARTER.md`, `spec/capabilities.md`, active sprint notes), optional `/tmp/done-criteria-<N>.md`, `/tmp/dispatch-<N>.md`, and `/tmp/rubric-<N>.yaml`.
 - Sibling scripts: `${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/reliability-report.js`, `${RELAY_SKILL_ROOT:-skills}/relay-plan/scripts/probe-executor-env.js`, `${RELAY_SKILL_ROOT:-skills}/relay-plan/scripts/persist-done-criteria.js`, `${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/dispatch.js`.
 

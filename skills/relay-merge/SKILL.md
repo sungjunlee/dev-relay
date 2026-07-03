@@ -8,9 +8,9 @@ metadata:
   keywords: "머지, 병합, merge, finalize, cleanup"
 ---
 ## Inputs
-- Env: optional `RELAY_SKILL_ROOT` defaults to `skills`; examples use `PR_NUM` and `RUN_ID`.
+- Env: optional `RELAY_SKILL_ROOT` defaults to `skills`.
 - Files: reviewed PR, retained run manifest/worktree, optional sprint file, and follow-up issue text.
-- Sibling scripts: `${RELAY_SKILL_ROOT:-skills}/relay-merge/scripts/gate-check.js`, `${RELAY_SKILL_ROOT:-skills}/relay-merge/scripts/finalize-run.js`, `${RELAY_SKILL_ROOT:-skills}/relay-merge/scripts/append-learnings.js` (invoked from finalize-run post-merge; structurally bounded writer for target repo's `spec/capabilities.md`, followed by a durable commit/push when safe).
+- Sibling scripts: `${RELAY_SKILL_ROOT:-skills}/relay-merge/scripts/gate-check.js`, `${RELAY_SKILL_ROOT:-skills}/relay-merge/scripts/finalize-run.js`, `${RELAY_SKILL_ROOT:-skills}/relay-merge/scripts/append-learnings.js`.
 
 # Relay Merge
 
@@ -70,7 +70,7 @@ This script:
 
 If the retained worktree is dirty, merge still succeeds but cleanup is recorded as `failed` and the manifest moves to `next_action=manual_cleanup_required`.
 
-After the merge state advances to `MERGED` (and before cleanup runs), `finalize-run.js` invokes `append-learnings.js` to write a one-line entry into the matching capability's `## Learnings` block in the target repo's `spec/capabilities.md`. The script is the only writer for that section (anti-adversarial-Goodhart structural defense — see dev-backlog spec-system v0.1 design doc). It no-ops gracefully when `spec/capabilities.md` is absent, the active sprint has no `component:`, or the component does not resolve. It fails loud when multiple active sprints make the target ambiguous or when `component:` contains multiple comma-separated values; `component:` is one primary routing handle, not prose. When an entry is appended, `finalize-run.js` commits and pushes the change from the target repo's base branch when the repo is clean; unsafe cases are recorded under `result.learnings.durability` as manual actions. Any learning failure is recorded under `result.learnings` and does not block cleanup.
+After the merge is confirmed, `finalize-run.js` invokes `append-learnings.js` to record a one-line learning in the target repo's `spec/capabilities.md`. Learning failures are recorded under `result.learnings` and never block cleanup. No-op/fail-loud conditions and durability semantics: [`references/append-learnings.md`](references/append-learnings.md).
 
 Emergency, force-finalize, and bootstrap reconciliation paths: see [`references/operator-emergencies.md`](references/operator-emergencies.md).
 
@@ -99,21 +99,4 @@ If `backlog/sprints/` has an active sprint file, update it. If no sprint file ex
 gh issue create --title "Follow-up: ..." --body "..."
 ```
 
-Task file cleanup (move to `backlog/completed/`) happens at sprint end, not per-issue.
-
-## Sprint File State Transitions
-
-```
-[ ] #N Task name                          ← not started
-[~] #N Task name → PR #M (reviewing)     ← dispatched, review in progress
-[x] #N Task name → PR #M (merged)        ← completed
-```
-
-## Sprint File Updates Summary
-
-| Section | What to update | When |
-|---------|---------------|------|
-| **Plan** | `[~]` → `[x]` with PR ref | Every merge |
-| **Progress** | Structured log with review rounds | Every merge |
-| **Running Context** | Learnings that affect later tasks | When something was discovered |
-| **Follow-up issues** | New GitHub issues | When review found out-of-scope work |
+Task file cleanup (move to `backlog/completed/`) happens at sprint end, not per-issue. Sprint checkbox states are `[ ]` not started → `[~]` reviewing → `[x]` merged, exactly as shown in the section 2 examples; sprint-file semantics belong to `dev-backlog`.
