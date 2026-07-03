@@ -13,6 +13,26 @@ const { resolveManifestRecord } = require("../../relay-dispatch/scripts/relay-re
 const { EVENTS } = require("../../relay-dispatch/scripts/relay-events");
 
 const EVENT_FIELD = "event";
+const INFLIGHT_ROUTE_INSTRUCTIONS = {
+  "existing-open-pr": "Review the existing open PR instead of planning or dispatching a new run.",
+  "existing-merged-pr": "Mark the sprint item done if present and stop because the PR is already merged.",
+  "inflight-run": "Resume or inspect the existing inflight run and continue from its manifest state.",
+  continue: "Continue to readiness handling before planning or dispatch.",
+};
+const BRANCH_INSTRUCTIONS = {
+  bypass: "Proceed to Step 2 using the bypass route and keep the readiness_probe event as the readiness evidence.",
+  "ready-light": "Proceed to Step 2 with S-size quick planning and compact rubric guidance while preserving the readiness_probe event payload.",
+  "chain-y": "Ask the operator in plain text to choose y to invoke relay-ready before Step 2, n to emit bypass_override_by_user and proceed to Step 2, or abort to emit readiness_check_failed and close the run after the readiness_probe.",
+  "proposal-first": "Run proposal-first relay-ready shaping after the readiness_probe, require an accepted handoff, and use that handoff as the relay-plan source of truth before dispatch.",
+  "chain-n": "If the operator answers n, emit bypass_override_by_user with the supplied payload and proceed to Step 2.",
+  "chain-abort": "If the operator answers abort, emit readiness_check_failed with the supplied payload and close the run.",
+  "noninteractive-fail": "Emit readiness_check_failed_nontty with the supplied payload and close the run because no prompt is allowed.",
+};
+
+function buildPromptInstruction(summary) {
+  const detail = summary || "readiness gaps require operator choice";
+  return `Readiness gaps detected: ${detail}. Invoke relay-ready first? Answer y, n, or abort?`;
+}
 const KNOWN_FLAGS = [
   "--stage",
   "--repo",
@@ -181,6 +201,7 @@ function routeFromInflight({ prCheck, runCheck }) {
   if (prCheck.status === "open") {
     return {
       route: "existing-open-pr",
+      instruction: INFLIGHT_ROUTE_INSTRUCTIONS["existing-open-pr"],
       next_action: "skip_plan_dispatch_and_review_existing_pr",
       prNumber: prCheck.pr?.number || null,
       runId: runCheck.runs[0]?.runId || null,
@@ -189,6 +210,7 @@ function routeFromInflight({ prCheck, runCheck }) {
   if (prCheck.status === "merged") {
     return {
       route: "existing-merged-pr",
+      instruction: INFLIGHT_ROUTE_INSTRUCTIONS["existing-merged-pr"],
       next_action: "mark_sprint_done_if_present",
       prNumber: prCheck.pr?.number || null,
       runId: runCheck.runs[0]?.runId || null,
@@ -197,6 +219,7 @@ function routeFromInflight({ prCheck, runCheck }) {
   if (runCheck.runs.length > 0) {
     return {
       route: "inflight-run",
+      instruction: INFLIGHT_ROUTE_INSTRUCTIONS["inflight-run"],
       next_action: "resume_or_inspect_inflight_run",
       prNumber: prCheck.pr?.number || null,
       runId: runCheck.runs[0].runId,
@@ -204,6 +227,7 @@ function routeFromInflight({ prCheck, runCheck }) {
   }
   return {
     route: "continue",
+    instruction: INFLIGHT_ROUTE_INSTRUCTIONS.continue,
     next_action: "continue_to_readiness",
     prNumber: null,
     runId: null,
@@ -267,73 +291,85 @@ function buildReadinessDecision(envelope, { promptAllowed }) {
     recommendedBranch = promptAllowed ? "prompt" : "noninteractive-fail";
   }
 
+  const branchLabels = {
+    bypass: {
+      label: "bypass",
+      [EVENT_FIELD]: EVENTS.READINESS_PROBE,
+      action: "proceed_to_step_2",
+      instruction: BRANCH_INSTRUCTIONS.bypass,
+    },
+    "ready-light": {
+      label: "ready-light",
+      [EVENT_FIELD]: EVENTS.READINESS_PROBE,
+      action: "proceed_to_step_2_light_planning",
+      instruction: BRANCH_INSTRUCTIONS["ready-light"],
+      planning_profile: "ready_light",
+      event_payload: {
+        [EVENT_FIELD]: EVENTS.READINESS_PROBE,
+        ...commonPayload,
+      },
+    },
+    "chain-y": {
+      label: "chain-y",
+      [EVENT_FIELD]: EVENTS.READINESS_PROBE,
+      action: "invoke_relay_ready_then_resume_step_2",
+      instruction: BRANCH_INSTRUCTIONS["chain-y"],
+    },
+    "proposal-first": {
+      label: "proposal-first",
+      [EVENT_FIELD]: EVENTS.READINESS_PROBE,
+      action: "invoke_relay_ready_proposal_first_then_resume_step_2",
+      instruction: BRANCH_INSTRUCTIONS["proposal-first"],
+      relay_ready_mode: "proposal_first",
+      requires_accepted_handoff: true,
+      source_of_truth: "accepted_relay_ready_handoff",
+    },
+    "chain-n": {
+      label: "chain-n",
+      [EVENT_FIELD]: EVENTS.BYPASS_OVERRIDE_BY_USER,
+      action: "proceed_to_step_2",
+      instruction: BRANCH_INSTRUCTIONS["chain-n"],
+      event_payload: {
+        [EVENT_FIELD]: EVENTS.BYPASS_OVERRIDE_BY_USER,
+        reason: "operator_bypass_after_readiness_prompt",
+        ...commonPayload,
+      },
+    },
+    "chain-abort": {
+      label: "chain-abort",
+      [EVENT_FIELD]: EVENTS.READINESS_CHECK_FAILED,
+      action: "close_run",
+      instruction: BRANCH_INSTRUCTIONS["chain-abort"],
+      event_payload: {
+        [EVENT_FIELD]: EVENTS.READINESS_CHECK_FAILED,
+        reason: "operator_aborted_after_readiness_prompt",
+        ...commonPayload,
+      },
+    },
+    "noninteractive-fail": {
+      label: "noninteractive-fail",
+      [EVENT_FIELD]: EVENTS.READINESS_CHECK_FAILED_NONTTY,
+      action: "close_run",
+      instruction: BRANCH_INSTRUCTIONS["noninteractive-fail"],
+      event_payload: {
+        [EVENT_FIELD]: EVENTS.READINESS_CHECK_FAILED_NONTTY,
+        reason: "readiness_gaps_without_prompt",
+        ...commonPayload,
+      },
+    },
+  };
+
   return {
     route_decision: routeDecision,
     recommended_branch: recommendedBranch,
+    instruction: recommendedBranch === "prompt"
+      ? buildPromptInstruction(envelope?.signals_summary)
+      : branchLabels[recommendedBranch].instruction,
     prompt_allowed: promptAllowed,
     prompt_summary: ["readiness_prompt", "needs_split"].includes(routeDecision) && promptAllowed
       ? envelope?.signals_summary || null
       : null,
-    branch_labels: {
-      bypass: {
-        label: "bypass",
-        [EVENT_FIELD]: EVENTS.READINESS_PROBE,
-        action: "proceed_to_step_2",
-      },
-      "ready-light": {
-        label: "ready-light",
-        [EVENT_FIELD]: EVENTS.READINESS_PROBE,
-        action: "proceed_to_step_2_light_planning",
-        planning_profile: "ready_light",
-        event_payload: {
-          [EVENT_FIELD]: EVENTS.READINESS_PROBE,
-          ...commonPayload,
-        },
-      },
-      "chain-y": {
-        label: "chain-y",
-        [EVENT_FIELD]: EVENTS.READINESS_PROBE,
-        action: "invoke_relay_ready_then_resume_step_2",
-      },
-      "proposal-first": {
-        label: "proposal-first",
-        [EVENT_FIELD]: EVENTS.READINESS_PROBE,
-        action: "invoke_relay_ready_proposal_first_then_resume_step_2",
-        relay_ready_mode: "proposal_first",
-        requires_accepted_handoff: true,
-        source_of_truth: "accepted_relay_ready_handoff",
-      },
-      "chain-n": {
-        label: "chain-n",
-        [EVENT_FIELD]: EVENTS.BYPASS_OVERRIDE_BY_USER,
-        action: "proceed_to_step_2",
-        event_payload: {
-          [EVENT_FIELD]: EVENTS.BYPASS_OVERRIDE_BY_USER,
-          reason: "operator_bypass_after_readiness_prompt",
-          ...commonPayload,
-        },
-      },
-      "chain-abort": {
-        label: "chain-abort",
-        [EVENT_FIELD]: EVENTS.READINESS_CHECK_FAILED,
-        action: "close_run",
-        event_payload: {
-          [EVENT_FIELD]: EVENTS.READINESS_CHECK_FAILED,
-          reason: "operator_aborted_after_readiness_prompt",
-          ...commonPayload,
-        },
-      },
-      "noninteractive-fail": {
-        label: "noninteractive-fail",
-        [EVENT_FIELD]: EVENTS.READINESS_CHECK_FAILED_NONTTY,
-        action: "close_run",
-        event_payload: {
-          [EVENT_FIELD]: EVENTS.READINESS_CHECK_FAILED_NONTTY,
-          reason: "readiness_gaps_without_prompt",
-          ...commonPayload,
-        },
-      },
-    },
+    branch_labels: branchLabels,
   };
 }
 
@@ -367,6 +403,7 @@ function buildUnevaluatedReadinessForInflightRoute(inflight) {
     elapsed_ms: 0,
     decision: {
       recommended_branch: "not-evaluated",
+      instruction: inflight?.instruction || `Follow the ${route} inflight route before readiness handling.`,
       prompt_allowed: false,
       prompt_summary: null,
       branch_labels: {},
