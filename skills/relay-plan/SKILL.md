@@ -72,7 +72,7 @@ If AC are missing, vague, or incomplete, write observable Done Criteria first. T
 
 ### 5. Build the rubric
 
-Use the guided interview in `references/rubric-design-guide.md` to synthesize factors from the recovered Done Criteria. Minimal shape:
+Synthesize task intent, explicit AC when present, repo signals, and task risk into a scored rubric — the recovered Done Criteria are the anchor, not the issue text alone. Use the guided interview in `references/rubric-design-guide.md` to synthesize factors from them. Minimal shape:
 
 ```yaml
 rubric:
