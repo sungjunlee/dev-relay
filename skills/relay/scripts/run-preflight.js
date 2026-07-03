@@ -28,6 +28,11 @@ const BRANCH_INSTRUCTIONS = {
   "chain-abort": "If the operator answers abort, emit readiness_check_failed with the supplied payload and close the run.",
   "noninteractive-fail": "Emit readiness_check_failed_nontty with the supplied payload and close the run because no prompt is allowed.",
 };
+
+function buildPromptInstruction(summary) {
+  const detail = summary || "readiness gaps require operator choice";
+  return `Readiness gaps detected: ${detail}. Invoke relay-ready first? Answer y, n, or abort?`;
+}
 const KNOWN_FLAGS = [
   "--stage",
   "--repo",
@@ -357,7 +362,9 @@ function buildReadinessDecision(envelope, { promptAllowed }) {
   return {
     route_decision: routeDecision,
     recommended_branch: recommendedBranch,
-    instruction: (branchLabels[recommendedBranch] || branchLabels["chain-y"]).instruction,
+    instruction: recommendedBranch === "prompt"
+      ? buildPromptInstruction(envelope?.signals_summary)
+      : branchLabels[recommendedBranch].instruction,
     prompt_allowed: promptAllowed,
     prompt_summary: ["readiness_prompt", "needs_split"].includes(routeDecision) && promptAllowed
       ? envelope?.signals_summary || null

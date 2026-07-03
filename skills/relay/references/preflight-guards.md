@@ -33,7 +33,7 @@ node "${RELAY_SKILL_ROOT:-skills}/relay/scripts/run-preflight.js" --stage route 
   - `bypass_override_by_user`: emitted by the skill decision layer for `chain-n`.
   - `readiness_check_failed`: emitted by the skill decision layer for `chain-abort`.
   - `readiness_check_failed_nontty`: emitted by the skill decision layer for `noninteractive-fail`.
-- Instruction fields: every `readiness.decision.branch_labels.<label>.instruction` is a one-sentence operator next action, and `readiness.decision.instruction` copies the selected branch instruction, using the prompt instruction when the selected branch is the interactive prompt.
+- Instruction fields: every `readiness.decision.branch_labels.<label>.instruction` is a one-sentence operator next action, and `readiness.decision.instruction` copies the selected branch instruction except for `recommended_branch == "prompt"`, where it emits the host-neutral readiness question because `prompt` is intentionally not a branch label.
 - Branch labels:
   - `bypass`: route decision is `ready_single`; probe returns `bypass=true`; `instruction` names the `readiness_probe` event and tells the operator to proceed to Step 2.
   - `ready-light`: route decision is `ready_light`; readiness returned `next_action=proceed` without a bypass anchor; `instruction` names the `readiness_probe` event and tells the operator to proceed to Step 2 using S-size quick planning and compact rubric guidance.
@@ -50,7 +50,7 @@ Route decisions are advisory labels, not lifecycle states:
 - `readiness_prompt`: preserve the existing `qa_needed` prompt or non-interactive failure behavior.
 - `needs_split`: strong task-shape signals indicate decomposition should be considered before dispatch. Prompt-allowed runs use `proposal-first`; non-interactive runs still fail closed before dispatch.
 
-The readiness prompt wording is host-neutral: ask the operator to choose `y` to invoke relay-ready first, `n` to bypass relay-ready and proceed, or `abort` to close the run.
+The readiness prompt wording is host-neutral: `Readiness gaps detected: <summary>. Invoke relay-ready first? Answer y, n, or abort?`
 
 ## Review Stage
 

@@ -62,7 +62,7 @@ test("route branch_labels entries all carry non-empty instruction", () => {
   });
 });
 
-test("route readiness decision instruction follows the recommended branch instruction", () => {
+test("route readiness decision instruction follows the recommended branch instruction for branch routes", () => {
   const cases = [
     buildReadinessDecision(readyEnvelope(), { promptAllowed: false }),
     buildReadinessDecision(readyEnvelope({ bypass: false }), { promptAllowed: false }),
@@ -100,7 +100,9 @@ test("route prompt instruction offers host-neutral y n abort choices", () => {
   }), { promptAllowed: true });
 
   assert.equal(decision.recommended_branch, "prompt");
-  assert.equal(decision.instruction, EXPECTED_BRANCH_INSTRUCTIONS["chain-y"]);
+  assert.notEqual(decision.instruction, EXPECTED_BRANCH_INSTRUCTIONS["chain-y"]);
+  assert.match(decision.instruction, /^Readiness gaps detected: Gaps: verifiability=low\./);
+  assert.match(decision.instruction, /\?$/);
   assert.match(decision.instruction, /\by\b/);
   assert.match(decision.instruction, /\bn\b/);
   assert.match(decision.instruction, /\babort\b/);
