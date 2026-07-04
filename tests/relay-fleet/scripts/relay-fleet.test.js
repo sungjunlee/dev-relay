@@ -8,6 +8,7 @@ const path = require("node:path");
 const REPO_ROOT = path.resolve(__dirname, "..", "..", "..");
 const RELAY_FLEET_SCRIPT = path.join(REPO_ROOT, "skills", "relay-fleet", "scripts", "relay-fleet.js");
 
+const { getFleetRuntimePath } = require(RELAY_FLEET_SCRIPT);
 const {
   getFleetIssueLockPath,
   getFleetManifestPath,
@@ -346,6 +347,15 @@ function appendLog(record) {
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
+async function waitForFile(filePath, { timeoutMs = 20000, intervalMs = 20 } = {}) {
+  const started = Date.now();
+  while (!fs.existsSync(filePath)) {
+    if (Date.now() - started > timeoutMs) {
+      throw new Error(\`timed out waiting for release file: \${filePath}\`);
+    }
+    await sleep(intervalMs);
+  }
+}
 function nextPlan(basePlan, runId) {
   if (!Array.isArray(basePlan.sequence)) return basePlan;
   const countDir = process.env.FAKE_REVIEW_COUNT_DIR || path.dirname(process.env.FAKE_REVIEW_CONFIG || ".");
@@ -366,6 +376,9 @@ const manifestPath = getManifestPath(repoRoot, runId);
 const record = readManifest(manifestPath);
 let manifest = record.data;
 async function main() {
+if (plan.wait_for_file) {
+  await waitForFile(plan.wait_for_file);
+}
 if (plan.delay_ms) {
   await sleep(plan.delay_ms);
 }
@@ -1048,7 +1061,16 @@ test("relay-fleet --resume skips a still-running review subprocess", async () =>
     fleetId: "fleet-review-running",
     state: RUN_STATES.REVIEW_PENDING,
   });
-  writeJson(configPath, { [runId]: { to_state: "ready_to_merge", delay_ms: 1000 } });
+  // Instead of a fixed sleep to simulate "still running", the fake review
+  // subprocess blocks on the presence of this release file. That keeps it
+  // alive deterministically for as long as this test needs, regardless of
+  // how long process startup / scheduling takes under a loaded test runner
+  // (see #754: a fixed delay_ms budget could elapse before the `resumed`
+  // child even finished starting up under full-suite parallel load, so the
+  // review subprocess would already be done and the liveness check would
+  // never observe it as running).
+  const releasePath = path.join(tmpDir, "release.flag");
+  writeJson(configPath, { [runId]: { to_state: "ready_to_merge", wait_for_file: releasePath } });
   createFleetManifest(repoRoot, {
     fleetId: "fleet-review-running",
     children: [{ leaf_ref: "leaf-a", run_id: runId, dispatch_status: DISPATCH_STATUS.DISPATCHED }],
@@ -1076,6 +1098,18 @@ test("relay-fleet --resume skips a still-running review subprocess", async () =>
   });
 
   await waitFor(() => readJsonLines(reviewLog).length === 1);
+  // The review subprocess having logged its own "spawn" event only proves
+  // it is executing; it does not prove the parent `first` process has
+  // finished registering the child's pid in the fleet runtime file yet.
+  // `resumed`'s liveness check reads exactly that runtime file, so wait for
+  // the registration itself rather than inferring it indirectly.
+  const runtimePath = getFleetRuntimePath(repoRoot, "fleet-review-running");
+  await waitFor(() => {
+    if (!fs.existsSync(runtimePath)) return false;
+    const runtime = JSON.parse(fs.readFileSync(runtimePath, "utf-8"));
+    return runtime.children?.["leaf-a"]?.phase === "review";
+  });
+
   const resumed = runFleet([
     "--repo", repoRoot,
     "--fleet-id", "fleet-review-running",
@@ -1094,6 +1128,10 @@ test("relay-fleet --resume skips a still-running review subprocess", async () =>
   const payload = JSON.parse(resumed.stdout);
   assert.equal(payload.reviewed_children[0].status, "skipped_running");
   assert.equal(readJsonLines(reviewLog).length, 1);
+
+  // Let the still-running review subprocess finish now that the resume
+  // assertions above are done.
+  fs.writeFileSync(releasePath, "go\n", "utf-8");
   await new Promise((resolve) => first.on("close", resolve));
   assert.equal(readManifest(getManifestPath(repoRoot, runId)).data.state, RUN_STATES.READY_TO_MERGE);
 });
