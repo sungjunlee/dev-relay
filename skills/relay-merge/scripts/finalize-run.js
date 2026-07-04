@@ -162,7 +162,7 @@ function buildStackedBaseOverrideAuditFields(stackedBaseGuard, prNumber, headSha
 
 function fetchPreMergeContext(repoPath, prNumber) {
   const raw = execGh(repoPath, ["pr", "view", String(prNumber),
-    "--json", "baseRefName,comments,commits,mergeable,statusCheckRollup"]);
+    "--json", "baseRefName,comments,commits,mergeable,statusCheckRollup,headRefOid"]);
   const parsed = JSON.parse(raw);
   const checks = parsed.statusCheckRollup || [];
   return {
@@ -170,6 +170,7 @@ function fetchPreMergeContext(repoPath, prNumber) {
     comments: parsed.comments || [],
     commits: parsed.commits || [],
     mergeable: parsed.mergeable || null,
+    headRefOid: parsed.headRefOid || null,
     checks,
     unsafeChecks: checks.filter(isUnsafeStatusCheck),
   };
@@ -759,6 +760,7 @@ function main() {
         manifestData: safeData,
         expectedReviewerLogin: safeData.review?.reviewer_login || null,
         runDir: getRunDir(validatedPaths.repoRoot, safeData.run_id),
+        headRefOid: preMerge.headRefOid,
       });
       if (!reviewGate.readyToMerge) {
         if (!dryRun) {

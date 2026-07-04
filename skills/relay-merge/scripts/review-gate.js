@@ -112,12 +112,27 @@ function normalizeCommentRecords(comments) {
   ));
 }
 
-function extractLatestCommit(commits) {
+function extractLatestCommit(commits, headRefOid) {
+  const commitList = commits || [];
+
+  if (headRefOid) {
+    const headCommit = commitList.find((commit) => commit.oid === headRefOid);
+    if (headCommit) {
+      return {
+        latestCommit: headCommit.oid,
+        latestCommitAt: toIsoOrNull(headCommit.committedDate || headCommit.authoredDate),
+      };
+    }
+  }
+
+  // Fallback scan: use >= so that on committedDate ties (e.g. after a rebase
+  // collapses timestamps to the same second) the later array entry wins,
+  // which for `gh pr view --json commits` is the entry closer to HEAD.
   let latestCommit = null;
   let latestCommitAt = null;
-  for (const commit of commits || []) {
+  for (const commit of commitList) {
     const committedAt = toIsoOrNull(commit.committedDate || commit.authoredDate);
-    if (committedAt && (!latestCommitAt || committedAt > latestCommitAt)) {
+    if (committedAt && (!latestCommitAt || committedAt >= latestCommitAt)) {
       latestCommitAt = committedAt;
       latestCommit = commit.oid || null;
     }
@@ -342,9 +357,9 @@ function buildReviewAssuranceGateFailure({ prNumber, manifestData, runDir }) {
   return null;
 }
 
-function evaluateReviewGate({ prNumber, comments, commits, manifestData, expectedReviewerLogin, runDir }) {
+function evaluateReviewGate({ prNumber, comments, commits, manifestData, expectedReviewerLogin, runDir, headRefOid }) {
   const commentRecords = normalizeCommentRecords(comments);
-  const { latestCommit, latestCommitAt } = extractLatestCommit(commits);
+  const { latestCommit, latestCommitAt } = extractLatestCommit(commits, headRefOid);
   const rubricAnchor = manifestData
     ? getRubricAnchorStatus(manifestData, runDir ? { runDir } : undefined)
     : null;
