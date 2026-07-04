@@ -171,6 +171,48 @@ test("leaves skip_reason null when test infra exists but the planner declared no
   assert.equal(result.tdd.skip_reason, null);
 });
 
+test("counts prerequisites at whatever list indentation the rubric uses, excluding nested sequences", () => {
+  const fourSpaceItems = [
+    "rubric:",
+    "  prerequisites:",
+    "      - command: \"npm test\"",
+    "        target: \"exit 0\"",
+    "      - command: \"tsc --noEmit\"",
+    "        target: \"exit 0\"",
+    "  factors:",
+    "    - name: X",
+    "      tier: contract",
+    "      target: \"exit 0\"",
+  ].join("\n");
+  assert.equal(buildQualityCardSummary({ rubricYaml: fourSpaceItems }).prerequisites_count, 2);
+
+  const sameIndentItems = [
+    "rubric:",
+    "  prerequisites:",
+    "  - command: \"npm test\"",
+    "    target: \"exit 0\"",
+    "  factors:",
+    "    - name: X",
+    "      tier: contract",
+    "      target: \"exit 0\"",
+  ].join("\n");
+  assert.equal(buildQualityCardSummary({ rubricYaml: sameIndentItems }).prerequisites_count, 1);
+
+  const nestedSequence = [
+    "rubric:",
+    "  prerequisites:",
+    "    - command: \"npm test\"",
+    "      args:",
+    "        - \"--verbose\"",
+    "        - \"--bail\"",
+    "  factors:",
+    "    - name: X",
+    "      tier: contract",
+    "      target: \"exit 0\"",
+  ].join("\n");
+  assert.equal(buildQualityCardSummary({ rubricYaml: nestedSequence }).prerequisites_count, 1);
+});
+
 test("counts prerequisites, contract, and quality factors on a mixed rubric", () => {
   const result = buildQualityCardSummary({
     rubricYaml: rubricWithFactors(

@@ -16,6 +16,7 @@ const TDD_SKIP_REASONS = new Set([
 function countPrerequisites(rubricYaml) {
   let inSection = false;
   let sectionIndent = null;
+  let itemIndent = null;
   let count = 0;
 
   for (const line of String(rubricYaml || "").split(/\r?\n/)) {
@@ -25,6 +26,7 @@ function countPrerequisites(rubricYaml) {
     if (section && section[2] === "prerequisites") {
       inSection = !section[3];
       sectionIndent = inSection ? section[1].length : null;
+      itemIndent = null;
       continue;
     }
 
@@ -36,8 +38,16 @@ function countPrerequisites(rubricYaml) {
       continue;
     }
 
+    // Lock onto the first item's dash indent (extractAllFactors tolerates any
+    // list indentation, including dashes at the section key's own indent);
+    // deeper dashes are nested sequences inside an entry, not new entries.
     const listItemStart = line.match(/^(\s*)-\s*/);
-    if (listItemStart && listItemStart[1].length === sectionIndent + 2) {
+    if (!listItemStart) continue;
+    const dashIndent = listItemStart[1].length;
+    if (itemIndent === null && dashIndent >= sectionIndent) {
+      itemIndent = dashIndent;
+    }
+    if (dashIndent === itemIndent) {
       count += 1;
     }
   }
