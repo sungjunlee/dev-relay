@@ -245,4 +245,5 @@ function validateReadyLightRubric({ rubricYaml, taskProfile = {} } = {}) {
 
 module.exports = {
   validateReadyLightRubric,
+  isRepoHygieneFactor,
 };

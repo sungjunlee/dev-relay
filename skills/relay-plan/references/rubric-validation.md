@@ -59,6 +59,10 @@ Quality factors: 0
 Substantive total: 1
 Quality ratio: N/A (mechanical S-size task)
 Auto coverage: 2 / 2 checks automated across prerequisites + factors
+Hygiene-in-factor violations: none
+TDD eligible factors: 1
+TDD applied (tdd_anchor): 0
+TDD skip reason: none declared (test infra available; planner did not opt in)
 Calibration status: skipped (S task)
 Risk signals: none
 Rationale: Recovered Done Criteria require one observable behavior change; no design-bearing quality judgment was introduced.
@@ -82,9 +86,13 @@ Quality factors: 0
 Substantive total: 1
 Quality ratio: N/A (ready-light S-size task)
 Auto coverage: 1 / 2 checks automated across prerequisites + factors
+Hygiene-in-factor violations: none
+TDD eligible factors: 0
+TDD applied (tdd_anchor): 0
+TDD skip reason: docs_only
 Calibration status: skipped (ready-light)
 Risk signals: none
-Rationale: Readiness already returned proceed, but no bypass anchor exists; use one observable contract factor plus the smallest verification path.
+Rationale: Readiness already returned proceed, but no bypass anchor exists; this is a docs-only edit, so use one observable contract factor plus the smallest verification path.
 Over-engineering check: Unsupported helper, dependency, config, or abstraction requirements are over-engineering risk.
 Grade: B
 Action: dispatch allowed
@@ -98,6 +106,10 @@ Quality factors: 1
 Substantive total: 2
 Quality ratio: 50%
 Auto coverage: 1 / 3 checks automated across prerequisites + factors
+Hygiene-in-factor violations: none
+TDD eligible factors: 0
+TDD applied (tdd_anchor): 0
+TDD skip reason: none declared
 Calibration status: compact (ready-light design-bearing)
 Risk signals: design-bearing
 Design-bearing rationale: The task is still S-size, but user-visible copy or prompt wording can be correct in shape while poor in judgment, so one quality factor is justified.
@@ -113,6 +125,10 @@ Quality factors: 2
 Substantive total: 4
 Quality ratio: 50%
 Auto coverage: 3 / 6 checks automated across prerequisites + factors
+Hygiene-in-factor violations: none
+TDD eligible factors: 2
+TDD applied (tdd_anchor): 1
+TDD anchors: `tests/front-matter.test.js` via `jest` (Parser rejects malformed front matter)
 Calibration status: skipped (S/M task)
 Risk signals: none
 Historical signal:
@@ -137,6 +153,10 @@ Quality factors: 2
 Substantive total: 4
 Quality ratio: 50%
 Auto coverage: 3 / 6 checks automated across prerequisites + factors
+Hygiene-in-factor violations: none
+TDD eligible factors: 2
+TDD applied (tdd_anchor): 0
+TDD skip reason: no_runner (auto-derived — probe reported no test infra)
 Calibration status: skipped (S/M task)
 Risk signals: none
 Historical signal: Empty-data state — historical signal not available, proceed to rubric design.
@@ -161,6 +181,10 @@ Quality factors: 2
 Substantive total: 4
 Quality ratio: 50%
 Auto coverage: 3 / 6 checks automated across prerequisites + factors
+Hygiene-in-factor violations: none
+TDD eligible factors: 2
+TDD applied (tdd_anchor): 0
+TDD skip reason: no_runner (auto-derived — probe unavailable, treated as no test infra)
 Calibration status: skipped (S/M task)
 Risk signals: none
 Historical signal: Reliability report unavailable: Unexpected end of JSON input. Proceeding without historical signal.
@@ -177,6 +201,20 @@ probe_signal.scripts: no quality infra detected
 Grade: A
 Action: dispatch allowed
 ```
+
+### TDD skip reasons
+
+When zero factors carry an applied `tdd_anchor`, the quality card records why as one of five standardized reasons (see `skills/relay-plan/scripts/quality-card.js`):
+
+| Reason | When it applies |
+|--------|------------------|
+| `no_runner` | No test infra was detected (auto-derived from the probe signal; the planner does not need to declare this one) |
+| `docs_only` | The diff is docs-only — nothing executable to test-drive |
+| `broad_ui_judgment` | The outcome is broad visual/UX judgment, not a crisp assertion a test can pin down |
+| `exploratory_task` | The task is a spike or investigation where behavior is discovered, not specified up front |
+| `non_crisp_behavior` | Done Criteria describe behavior too loosely for a failing-test-first anchor |
+
+An unrecognized skip reason string is a fail-closed error, not a silent coercion — pick one of the five values above or leave it undeclared.
 
 ## Grading logic
 
