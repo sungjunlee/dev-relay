@@ -267,6 +267,10 @@ function increment(map, key) {
 // - Review and merge facts are never copied into the fleet manifest. Any mixed
 //   picture, such as dispatched + escalated + pre-manifest-failed children, is
 //   normal and must be derived on read.
+// - pr_number, base_branch, and review_round are read-time pass-throughs of the
+//   child manifest's git.pr_number, git.base_branch, and review.rounds. They are
+//   nullable and only populated when the child manifest is readable; they carry
+//   no independent semantics beyond what the child manifest already states.
 function deriveFleetSummary(repoRoot, fleet) {
   const normalized = normalizeFleetManifest(fleet);
   const byDispatchStatus = {};
@@ -281,6 +285,9 @@ function deriveFleetSummary(repoRoot, fleet) {
       dispatch_status: child.dispatch_status,
       run_state: null,
       manifest_path: null,
+      pr_number: null,
+      base_branch: null,
+      review_round: null,
       error: null,
     };
 
@@ -296,6 +303,9 @@ function deriveFleetSummary(repoRoot, fleet) {
     try {
       const childRecord = readManifest(childManifestPath);
       summaryChild.run_state = childRecord.data?.state || "unknown";
+      summaryChild.pr_number = childRecord.data?.git?.pr_number ?? null;
+      summaryChild.base_branch = childRecord.data?.git?.base_branch ?? null;
+      summaryChild.review_round = childRecord.data?.review?.rounds ?? null;
     } catch (error) {
       summaryChild.run_state = "missing_manifest";
       summaryChild.error = String(error.message || error);

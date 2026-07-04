@@ -33,6 +33,10 @@ const {
   releaseIssueLock,
   writeFleetManifest,
 } = require("../../../skills/relay-dispatch/scripts/manifest/fleet");
+const {
+  getRequestPath,
+  persistRequestContract,
+} = require("../../../skills/relay-ready/scripts/relay-request");
 
 function initGitRepo(repoRoot) {
   execFileSync("git", ["init", "-b", "main"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
@@ -71,10 +75,29 @@ function makeLeaf(repoRoot, index, overrides = {}) {
     prompt_file: promptFile,
     rubric_file: rubricFile,
     done_criteria_file: doneCriteriaFile,
-    request_id: overrides.request_id || "req-20260514010101000",
+    // No default request_id: leaves without one are exempt from the
+    // relay-ready lineage check (validateLeafLineage). Tests that exercise
+    // lineage pass their own request_id explicitly, backed by a real
+    // persisted request artifact via persistFixtureRequest below.
     leaf_id: overrides.leaf_id || leafRef,
     ...overrides,
   };
+}
+
+// Persists a real single-leaf relay-ready request artifact so fleet leaves can
+// reference a request_id/leaf_id pair that validateLeafLineage will resolve.
+function persistFixtureRequest(repoRoot, requestId, leafId) {
+  persistRequestContract(repoRoot, {
+    source: { kind: "manual" },
+    request_text: `Fixture request for ${leafId}`,
+    handoff: {
+      leaf_id: leafId,
+      title: `Fixture leaf ${leafId}`,
+      goal: `Implement ${leafId}`,
+      done_criteria_markdown: `- ${leafId} is done`,
+    },
+  }, { requestId });
+  return getRequestPath(repoRoot, requestId);
 }
 
 function writeLeavesFile(repoRoot, leaves) {
@@ -1207,4 +1230,327 @@ test("relay-fleet --status prints derived summary without writing the fleet mani
   assert.match(textResult.stdout, /Needs operator attention:/);
   assert.match(textResult.stdout, new RegExp(`leaf-escalated: escalated \\(${escalatedRun}\\)`));
   assert.equal(fs.readFileSync(created.manifestPath, "utf-8"), before);
+});
+
+function writeFakeGhDefaultBranch(tmpDir, defaultBranchName) {
+  const ghPath = path.join(tmpDir, "fake-gh-default-branch.js");
+  fs.writeFileSync(ghPath, `#!/usr/bin/env node
+const args = process.argv.slice(2);
+if (args[0] === "repo" && args[1] === "view") {
+  process.stdout.write(JSON.stringify({ defaultBranchRef: { name: ${JSON.stringify(defaultBranchName)} } }));
+  process.exit(0);
+}
+process.stderr.write("unsupported fake gh invocation: " + args.join(" ") + "\\n");
+process.exit(1);
+`, "utf-8");
+  fs.chmodSync(ghPath, 0o755);
+  return ghPath;
+}
+
+test("relay-fleet rejects a depends_on entry that names another leaf in the same leaves file", () => {
+  const { relayHome, repoRoot } = setupRepo("relay-fleet-dep-same-wave-");
+  const dispatchScript = writeFakeDispatchScript(fs.mkdtempSync(path.join(os.tmpdir(), "fleet-fake-")));
+  const leavesFile = writeLeavesFile(repoRoot, [
+    makeLeaf(repoRoot, 1, { issue_number: 540, leaf_ref: "leaf-a", leaf_id: "leaf-a" }),
+    makeLeaf(repoRoot, 2, { issue_number: 541, leaf_ref: "leaf-b", leaf_id: "leaf-b", depends_on: ["leaf-a"] }),
+  ]);
+
+  const result = runFleet([
+    "--repo", repoRoot,
+    "--fleet-id", "fleet-dep-same-wave",
+    "--leaves-file", leavesFile,
+    "--dispatch-script", dispatchScript,
+    "--json",
+  ], { relayHome });
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /same-wave dependency/);
+  assert.equal(fs.existsSync(getFleetManifestPath(repoRoot, "fleet-dep-same-wave")), false);
+});
+
+test("relay-fleet rejects a depends_on entry that references the leaf itself", () => {
+  const { relayHome, repoRoot } = setupRepo("relay-fleet-dep-self-");
+  const dispatchScript = writeFakeDispatchScript(fs.mkdtempSync(path.join(os.tmpdir(), "fleet-fake-")));
+  const leavesFile = writeLeavesFile(repoRoot, [
+    makeLeaf(repoRoot, 1, { issue_number: 542, leaf_ref: "leaf-a", leaf_id: "leaf-a", depends_on: ["leaf-a"] }),
+  ]);
+
+  const result = runFleet([
+    "--repo", repoRoot,
+    "--fleet-id", "fleet-dep-self",
+    "--leaves-file", leavesFile,
+    "--dispatch-script", dispatchScript,
+    "--json",
+  ], { relayHome });
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /references itself/);
+  assert.equal(fs.existsSync(getFleetManifestPath(repoRoot, "fleet-dep-self")), false);
+});
+
+test("relay-fleet accepts a depends_on entry that references a leaf outside this leaves file", () => {
+  const { relayHome, repoRoot } = setupRepo("relay-fleet-dep-external-");
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "fleet-fake-"));
+  const dispatchScript = writeFakeDispatchScript(tmpDir);
+  const logPath = path.join(tmpDir, "dispatch.log");
+  const leavesFile = writeLeavesFile(repoRoot, [
+    makeLeaf(repoRoot, 1, {
+      issue_number: 543,
+      leaf_ref: "leaf-c",
+      leaf_id: "leaf-c",
+      depends_on: ["leaf-dispatched-in-an-earlier-wave"],
+    }),
+  ]);
+
+  const result = runFleet([
+    "--repo", repoRoot,
+    "--fleet-id", "fleet-dep-external",
+    "--leaves-file", leavesFile,
+    "--dispatch-script", dispatchScript,
+    "--dry-run",
+    "--json",
+  ], {
+    relayHome,
+    env: { FAKE_DISPATCH_LOG: logPath },
+  });
+
+  assert.equal(result.status, 0, `${result.stderr}\n${result.stdout}`);
+  const payload = JSON.parse(result.stdout);
+  assert.equal(payload.dryRun, true);
+  assert.equal(payload.children.length, 1);
+  assert.equal(payload.children[0].status, "dry_run");
+});
+
+test("relay-fleet --dry-run fails closed when request_id does not resolve to a relay-ready request artifact", () => {
+  const { relayHome, repoRoot } = setupRepo("relay-fleet-lineage-missing-");
+  const dispatchScript = writeFakeDispatchScript(fs.mkdtempSync(path.join(os.tmpdir(), "fleet-fake-")));
+  const leavesFile = writeLeavesFile(repoRoot, [
+    makeLeaf(repoRoot, 1, {
+      issue_number: 544,
+      leaf_ref: "leaf-d",
+      leaf_id: "leaf-d",
+      request_id: "req-does-not-exist-000",
+    }),
+  ]);
+
+  const result = runFleet([
+    "--repo", repoRoot,
+    "--fleet-id", "fleet-lineage-missing",
+    "--leaves-file", leavesFile,
+    "--dispatch-script", dispatchScript,
+    "--dry-run",
+    "--json",
+  ], { relayHome });
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /does not resolve to a relay-ready request artifact/);
+  assert.equal(fs.existsSync(getFleetManifestPath(repoRoot, "fleet-lineage-missing")), false);
+});
+
+test("relay-fleet --dry-run fails closed when leaf_id is not among the request's leaf handoffs", () => {
+  const { relayHome, repoRoot } = setupRepo("relay-fleet-lineage-mismatch-");
+  const dispatchScript = writeFakeDispatchScript(fs.mkdtempSync(path.join(os.tmpdir(), "fleet-fake-")));
+  persistFixtureRequest(repoRoot, "req-lineage-mismatch", "leaf-real");
+  const leavesFile = writeLeavesFile(repoRoot, [
+    makeLeaf(repoRoot, 1, {
+      issue_number: 545,
+      leaf_ref: "leaf-e",
+      leaf_id: "leaf-not-in-request",
+      request_id: "req-lineage-mismatch",
+    }),
+  ]);
+
+  const result = runFleet([
+    "--repo", repoRoot,
+    "--fleet-id", "fleet-lineage-mismatch",
+    "--leaves-file", leavesFile,
+    "--dispatch-script", dispatchScript,
+    "--dry-run",
+    "--json",
+  ], { relayHome });
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /is not among the leaf handoffs persisted for request/);
+});
+
+test("relay-fleet --dry-run succeeds when request_id and leaf_id resolve to a persisted request artifact", () => {
+  const { relayHome, repoRoot } = setupRepo("relay-fleet-lineage-ok-");
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "fleet-fake-"));
+  const dispatchScript = writeFakeDispatchScript(tmpDir);
+  const logPath = path.join(tmpDir, "dispatch.log");
+  persistFixtureRequest(repoRoot, "req-lineage-ok", "leaf-f");
+  const leavesFile = writeLeavesFile(repoRoot, [
+    makeLeaf(repoRoot, 1, {
+      issue_number: 546,
+      leaf_ref: "leaf-f",
+      leaf_id: "leaf-f",
+      request_id: "req-lineage-ok",
+    }),
+  ]);
+
+  const result = runFleet([
+    "--repo", repoRoot,
+    "--fleet-id", "fleet-lineage-ok",
+    "--leaves-file", leavesFile,
+    "--dispatch-script", dispatchScript,
+    "--dry-run",
+    "--json",
+  ], {
+    relayHome,
+    env: { FAKE_DISPATCH_LOG: logPath },
+  });
+
+  assert.equal(result.status, 0, `${result.stderr}\n${result.stdout}`);
+  const payload = JSON.parse(result.stdout);
+  assert.equal(payload.dryRun, true);
+  assert.equal(payload.children[0].status, "dry_run");
+});
+
+test("relay-fleet --status surfaces missing_pr, merge_blocked, high_review_rounds, stale_base, and stuck_child alongside the existing reasons, with a healthy child producing none", () => {
+  const { relayHome, repoRoot } = setupRepo("relay-fleet-status-debt-");
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "fleet-status-debt-fake-"));
+  const fleetId = "fleet-status-debt";
+
+  // Existing reasons, reused from the fixtures above: dispatch_failed_pre_manifest
+  // (no run_id) and escalated/changes_requested/missing_manifest need a run_id.
+  const escalatedRun = "issue-550-20260601010101000-a1b2c3d4";
+  const changesRequestedRun = "issue-551-20260601010101000-a1b2c3d4";
+  const missingManifestRun = "issue-552-20260601010101000-a1b2c3d4";
+  // New reasons.
+  const missingPrRun = "issue-553-20260601010101000-a1b2c3d4";
+  const mergeBlockedRun = "issue-554-20260601010101000-a1b2c3d4";
+  const highReviewRoundsRun = "issue-555-20260601010101000-a1b2c3d4";
+  const staleBaseRun = "issue-556-20260601010101000-a1b2c3d4";
+  const stuckChildRun = "issue-557-20260601010101000-a1b2c3d4";
+  const healthyRun = "issue-558-20260601010101000-a1b2c3d4";
+
+  function makeChildManifest(runId, leafId, { patch = (manifest) => manifest } = {}) {
+    fs.mkdirSync(getRunDir(repoRoot, runId), { recursive: true });
+    let manifest = createManifestSkeleton({
+      repoRoot,
+      runId,
+      branch: `${leafId}-branch`,
+      baseBranch: "main",
+      issueNumber: Number(runId.slice(6, 9)),
+      worktreePath: path.join(repoRoot, "wt", runId),
+      fleetId,
+      leafId,
+    });
+    // Any transition into review_pending requires a satisfied rubric anchor
+    // (see lifecycle.js validateTransitionInvariants); write one up front so
+    // every fixture below can freely reach review_pending regardless of which
+    // attention reason it exercises.
+    fs.writeFileSync(path.join(getRunDir(repoRoot, runId), "rubric.yaml"), "rubric:\n  size_class: S\n", "utf-8");
+    manifest = { ...manifest, anchor: { ...(manifest.anchor || {}), rubric_path: "rubric.yaml" } };
+    manifest = updateManifestState(manifest, RUN_STATES.DISPATCHED, "await_dispatch_result");
+    manifest = patch(manifest);
+    writeManifest(getManifestPath(repoRoot, runId), manifest);
+    return runId;
+  }
+
+  makeChildManifest(escalatedRun, "leaf-escalated", {
+    patch: (manifest) => updateManifestState(manifest, RUN_STATES.ESCALATED, "inspect_dispatch_failure"),
+  });
+  makeChildManifest(changesRequestedRun, "leaf-changes-requested", {
+    patch: (manifest) => {
+      manifest = updateManifestState(manifest, RUN_STATES.REVIEW_PENDING, "await_review");
+      return updateManifestState(manifest, RUN_STATES.CHANGES_REQUESTED, "retry");
+    },
+  });
+  // missing-manifest: fleet child references a run_id whose manifest file was never written.
+
+  makeChildManifest(missingPrRun, "leaf-missing-pr", {
+    patch: (manifest) => updateManifestState(manifest, RUN_STATES.REVIEW_PENDING, "await_review"),
+  });
+  makeChildManifest(mergeBlockedRun, "leaf-merge-blocked", {
+    patch: (manifest) => {
+      manifest = updateManifestState(manifest, RUN_STATES.REVIEW_PENDING, "await_review");
+      manifest = updateManifestState(manifest, RUN_STATES.READY_TO_MERGE, "ready");
+      manifest = updateManifestState(manifest, RUN_STATES.MERGE_BLOCKED, "merge_failed");
+      return { ...manifest, git: { ...manifest.git, pr_number: 601 } };
+    },
+  });
+  makeChildManifest(highReviewRoundsRun, "leaf-high-review-rounds", {
+    patch: (manifest) => {
+      manifest = updateManifestState(manifest, RUN_STATES.REVIEW_PENDING, "await_review");
+      return {
+        ...manifest,
+        git: { ...manifest.git, pr_number: 602 },
+        review: { ...manifest.review, rounds: 3 },
+      };
+    },
+  });
+  makeChildManifest(staleBaseRun, "leaf-stale-base", {
+    patch: (manifest) => {
+      manifest = updateManifestState(manifest, RUN_STATES.REVIEW_PENDING, "await_review");
+      return {
+        ...manifest,
+        git: { ...manifest.git, pr_number: 603, base_branch: "develop" },
+      };
+    },
+  });
+  makeChildManifest(stuckChildRun, "leaf-stuck-child", {
+    patch: (manifest) => ({
+      ...manifest,
+      git: { ...manifest.git, pr_number: 604 },
+    }),
+  });
+  makeChildManifest(healthyRun, "leaf-healthy", {
+    patch: (manifest) => {
+      manifest = updateManifestState(manifest, RUN_STATES.REVIEW_PENDING, "await_review");
+      manifest = updateManifestState(manifest, RUN_STATES.READY_TO_MERGE, "ready");
+      manifest = updateManifestState(manifest, RUN_STATES.MERGED, "merged");
+      return { ...manifest, git: { ...manifest.git, pr_number: 605 } };
+    },
+  });
+
+  createFleetManifest(repoRoot, {
+    fleetId,
+    children: [
+      { leaf_ref: "leaf-dispatch-failed", run_id: null, dispatch_status: DISPATCH_STATUS.DISPATCH_FAILED_PRE_MANIFEST },
+      { leaf_ref: "leaf-escalated", run_id: escalatedRun, dispatch_status: DISPATCH_STATUS.DISPATCHED },
+      { leaf_ref: "leaf-changes-requested", run_id: changesRequestedRun, dispatch_status: DISPATCH_STATUS.DISPATCHED },
+      { leaf_ref: "leaf-missing-manifest", run_id: missingManifestRun, dispatch_status: DISPATCH_STATUS.DISPATCHED },
+      { leaf_ref: "leaf-missing-pr", run_id: missingPrRun, dispatch_status: DISPATCH_STATUS.DISPATCHED },
+      { leaf_ref: "leaf-merge-blocked", run_id: mergeBlockedRun, dispatch_status: DISPATCH_STATUS.DISPATCHED },
+      { leaf_ref: "leaf-high-review-rounds", run_id: highReviewRoundsRun, dispatch_status: DISPATCH_STATUS.DISPATCHED },
+      { leaf_ref: "leaf-stale-base", run_id: staleBaseRun, dispatch_status: DISPATCH_STATUS.DISPATCHED },
+      { leaf_ref: "leaf-stuck-child", run_id: stuckChildRun, dispatch_status: DISPATCH_STATUS.DISPATCHED },
+      { leaf_ref: "leaf-healthy", run_id: healthyRun, dispatch_status: DISPATCH_STATUS.DISPATCHED },
+    ],
+  });
+
+  const fakeGh = writeFakeGhDefaultBranch(tmpDir, "main");
+
+  const result = runFleet([
+    "--repo", repoRoot,
+    "--fleet-id", fleetId,
+    "--status",
+    "--json",
+  ], { relayHome, env: { RELAY_GH_BIN: fakeGh } });
+
+  assert.equal(result.status, 0, `${result.stderr}\n${result.stdout}`);
+  const payload = JSON.parse(result.stdout);
+  const attention = payload.operator_attention;
+
+  function has(leafRef, reason) {
+    return attention.some((item) => item.leaf_ref === leafRef && item.reason === reason);
+  }
+
+  // Existing reasons still fire, byte-identical.
+  assert.equal(has("leaf-dispatch-failed", DISPATCH_STATUS.DISPATCH_FAILED_PRE_MANIFEST), true);
+  assert.equal(has("leaf-escalated", "escalated"), true);
+  assert.equal(has("leaf-changes-requested", "changes_requested"), true);
+  assert.equal(has("leaf-missing-manifest", "missing_manifest"), true);
+
+  // New reasons.
+  assert.equal(has("leaf-missing-pr", "missing_pr"), true);
+  assert.equal(has("leaf-merge-blocked", "merge_blocked"), true);
+  assert.equal(has("leaf-high-review-rounds", "high_review_rounds"), true);
+  assert.equal(has("leaf-stale-base", "stale_base"), true);
+  assert.equal(has("leaf-stuck-child", "stuck_child"), true);
+
+  // The healthy child (terminal, PR stamped, rounds below threshold, base
+  // branch matches default, not eligible for stuck_child) produces zero items.
+  assert.equal(attention.some((item) => item.leaf_ref === "leaf-healthy"), false);
 });

@@ -20,6 +20,7 @@ const {
 } = require("../../relay-dispatch/scripts/manifest/paths");
 const { STATES: RUN_STATES } = require("../../relay-dispatch/scripts/manifest/lifecycle");
 const { readManifest } = require("../../relay-dispatch/scripts/manifest/store");
+const { execGh } = require("../../relay-dispatch/scripts/exec");
 const {
   DISPATCH_STATUS,
   FleetIssueLockError,
@@ -33,6 +34,7 @@ const {
   updateFleetState,
   upsertFleetChild,
 } = require("../../relay-dispatch/scripts/manifest/fleet");
+const { getRequestPath, readRequestArtifact } = require("../../relay-ready/scripts/relay-request");
 
 const DEFAULT_PARALLEL = 4;
 const DEFAULT_DISPATCH_SCRIPT = path.join(__dirname, "..", "..", "relay-dispatch", "scripts", "dispatch.js");
@@ -161,6 +163,19 @@ function resolveInputPath(value, baseDir, label) {
   return path.resolve(baseDir, raw);
 }
 
+function normalizeDependsOn(rawValue, index) {
+  if (rawValue === undefined || rawValue === null) return undefined;
+  if (!Array.isArray(rawValue)) {
+    throw new FleetInputError(`leaves[${index}].depends_on must be an array of leaf_ref strings`);
+  }
+  return rawValue.map((entry, entryIndex) => {
+    if (typeof entry !== "string" || entry.trim() === "") {
+      throw new FleetInputError(`leaves[${index}].depends_on[${entryIndex}] must be a non-empty string`);
+    }
+    return entry.trim();
+  });
+}
+
 function normalizeLeaf(rawLeaf, index, baseDir) {
   if (!rawLeaf || typeof rawLeaf !== "object" || Array.isArray(rawLeaf)) {
     throw new FleetInputError(`leaves[${index}] must be an object`);
@@ -181,6 +196,7 @@ function normalizeLeaf(rawLeaf, index, baseDir) {
     ),
     request_id: optionalString(rawLeaf.request_id || rawLeaf.requestId),
     leaf_id: optionalString(rawLeaf.leaf_id || rawLeaf.leafId) || leafRef,
+    depends_on: normalizeDependsOn(rawLeaf.depends_on ?? rawLeaf.dependsOn, index),
     executor: optionalString(rawLeaf.executor),
     model: optionalString(rawLeaf.model),
     model_hints: optionalString(rawLeaf.model_hints || rawLeaf.modelHints),
@@ -218,6 +234,86 @@ function validateUniqueIssues(leaves) {
   }
 }
 
+// Fail-closed same-wave dependency guard. A leaf's depends_on entry that names
+// another leaf in THIS SAME leaves file cannot be satisfied by fan-out, since
+// fan-out dispatches every leaf in the file concurrently — that dependency must
+// be dispatched in an earlier wave (a separate --leaves-file/--fleet-id run)
+// first, then dropped from this file. A depends_on entry naming a leaf_ref that
+// is not present in this file is accepted silently: it is assumed to already be
+// satisfied by an earlier wave or external dispatch (see SKILL.md).
+function validateLeafDependencies(leaves) {
+  const refsInFile = new Set(leaves.map((leaf) => leaf.leaf_ref));
+  for (const leaf of leaves) {
+    if (!Array.isArray(leaf.depends_on)) continue;
+    for (const dependency of leaf.depends_on) {
+      if (dependency === leaf.leaf_ref) {
+        throw new FleetInputError(
+          `leaf '${leaf.leaf_ref}' has a depends_on entry that references itself`
+        );
+      }
+      if (refsInFile.has(dependency)) {
+        throw new FleetInputError(
+          `leaf '${leaf.leaf_ref}' depends_on '${dependency}', which is also in this leaves file (same-wave dependency); ` +
+          `dispatch '${dependency}' in an earlier wave (a separate fleet run) and remove it from this leaves file before fanning out '${leaf.leaf_ref}'.`
+        );
+      }
+      // Else: dependency is external to this leaves file and assumed already satisfied.
+    }
+  }
+}
+
+// Reads decomposition.leaf_order (multi-leaf requests) or the top-level
+// leaf_id (single-leaf requests) from a persisted relay-ready request
+// artifact's data, per the shapes written by relay-request.js's
+// buildRequestArtifactData. Returns [] when neither is present.
+function collectRequestLeafIds(requestData) {
+  if (requestData?.decomposition && Array.isArray(requestData.decomposition.leaf_order)) {
+    return requestData.decomposition.leaf_order;
+  }
+  if (typeof requestData?.leaf_id === "string" && requestData.leaf_id.trim() !== "") {
+    return [requestData.leaf_id];
+  }
+  return [];
+}
+
+// Fail-closed relay-ready lineage check: a leaf that claims a request_id must
+// point at a request artifact that actually exists and parses, and if it also
+// names a leaf_id, that leaf_id must be one of the leaf handoffs persisted for
+// that request. Leaves without a request_id are exempt (see SKILL.md). This is
+// separate from loadLeavesFile because it needs repoRoot, which loadLeavesFile
+// does not have in scope.
+function validateLeafLineage(repoRoot, leaves) {
+  for (const leaf of leaves) {
+    if (!leaf.request_id) continue;
+
+    const requestPath = getRequestPath(repoRoot, leaf.request_id);
+    if (!fs.existsSync(requestPath)) {
+      throw new FleetInputError(
+        `leaf '${leaf.leaf_ref}' request_id '${leaf.request_id}' does not resolve to a relay-ready request artifact: ${requestPath}`
+      );
+    }
+
+    let artifact;
+    try {
+      artifact = readRequestArtifact(requestPath);
+    } catch (error) {
+      throw new FleetInputError(
+        `leaf '${leaf.leaf_ref}' request_id '${leaf.request_id}' request artifact is unreadable at ${requestPath}: ${error.message}`
+      );
+    }
+
+    if (leaf.leaf_id) {
+      const knownLeafIds = collectRequestLeafIds(artifact.data);
+      if (!knownLeafIds.includes(leaf.leaf_id)) {
+        throw new FleetInputError(
+          `leaf '${leaf.leaf_ref}' leaf_id '${leaf.leaf_id}' is not among the leaf handoffs persisted for request '${leaf.request_id}' ` +
+          `(known: ${knownLeafIds.length ? knownLeafIds.join(", ") : "none"})`
+        );
+      }
+    }
+  }
+}
+
 function loadLeavesFile(leavesFile) {
   const resolved = path.resolve(requireNonEmptyString(leavesFile, "--leaves-file"));
   const payload = JSON.parse(fs.readFileSync(resolved, "utf-8"));
@@ -227,6 +323,7 @@ function loadLeavesFile(leavesFile) {
   }
   const leaves = rawLeaves.map((leaf, index) => normalizeLeaf(leaf, index, path.dirname(resolved)));
   validateUniqueIssues(leaves);
+  validateLeafDependencies(leaves);
   validateLeafFiles(leaves);
   return leaves;
 }
@@ -1036,21 +1133,90 @@ async function runPool(items, limit, worker) {
   return results;
 }
 
-function buildOperatorAttention(summary) {
-  return summary.children
-    .filter((child) => {
-      return child.dispatch_status === DISPATCH_STATUS.DISPATCH_FAILED_PRE_MANIFEST
-        || child.run_state === "missing_manifest"
-        || child.run_state === "escalated"
-        || child.run_state === "changes_requested";
-    })
-    .map((child) => ({
-      leaf_ref: child.leaf_ref,
-      run_id: child.run_id,
-      reason: child.dispatch_status === DISPATCH_STATUS.DISPATCH_FAILED_PRE_MANIFEST
-        ? DISPATCH_STATUS.DISPATCH_FAILED_PRE_MANIFEST
-        : child.run_state,
-    }));
+// Mirrors skills/relay-merge/scripts/finalize-run.js's fetchDefaultBranchName
+// (gh repo view --json defaultBranchRef) without importing from relay-merge,
+// which is frozen for this change. Returns null on any failure (no remote, gh
+// unavailable, offline) so callers must treat a null default branch as
+// "unknown" rather than a mismatch.
+function resolveFleetDefaultBranch(repoRoot) {
+  try {
+    const raw = execGh(repoRoot, ["repo", "view", "--json", "defaultBranchRef"]);
+    const parsed = JSON.parse(raw);
+    return parsed?.defaultBranchRef?.name || null;
+  } catch {
+    return null;
+  }
+}
+
+const MISSING_PR_RUN_STATES = new Set([
+  RUN_STATES.REVIEW_PENDING,
+  RUN_STATES.READY_TO_MERGE,
+  RUN_STATES.MERGE_BLOCKED,
+]);
+const KNOWN_RUN_STATES = new Set(Object.values(RUN_STATES));
+
+// The four original reasons, preserved byte-identical: at most one of these
+// ever applies to a given child (dispatch_failed_pre_manifest requires
+// run_id:null, which forces run_state to "no_run_manifest" and so can never
+// co-occur with missing_manifest/escalated/changes_requested).
+function legacyAttentionReason(child) {
+  if (child.dispatch_status === DISPATCH_STATUS.DISPATCH_FAILED_PRE_MANIFEST) {
+    return DISPATCH_STATUS.DISPATCH_FAILED_PRE_MANIFEST;
+  }
+  if (child.run_state === "missing_manifest") return "missing_manifest";
+  if (child.run_state === "escalated") return "escalated";
+  if (child.run_state === "changes_requested") return "changes_requested";
+  return null;
+}
+
+// New reasons are independent of each other and of the legacy reason above, so
+// a single child can surface more than one attention item.
+function additionalAttentionReasons(child, { repoRoot, fleetId, defaultBranchName }) {
+  const reasons = [];
+
+  if (MISSING_PR_RUN_STATES.has(child.run_state) && !child.pr_number) {
+    reasons.push("missing_pr");
+  }
+  if (child.run_state === RUN_STATES.MERGE_BLOCKED) {
+    reasons.push("merge_blocked");
+  }
+  if (Number(child.review_round) >= 3) {
+    reasons.push("high_review_rounds");
+  }
+  if (child.base_branch && defaultBranchName && child.base_branch !== defaultBranchName) {
+    reasons.push("stale_base");
+  }
+  if (
+    child.dispatch_status === DISPATCH_STATUS.DISPATCHED
+    && KNOWN_RUN_STATES.has(child.run_state)
+    && !terminalForFleetReview(child.run_state)
+    && repoRoot
+    && fleetId
+    && !runtimeChildIsAlive(repoRoot, fleetId, child.leaf_ref)
+  ) {
+    reasons.push("stuck_child");
+  }
+
+  return reasons;
+}
+
+function buildOperatorAttention(summary, context = {}) {
+  const { repoRoot, fleetId } = context;
+  const needsDefaultBranch = summary.children.some((child) => child.base_branch);
+  const defaultBranchName = needsDefaultBranch && repoRoot ? resolveFleetDefaultBranch(repoRoot) : null;
+  const resolvedContext = { repoRoot, fleetId, defaultBranchName };
+
+  const items = [];
+  for (const child of summary.children) {
+    const legacyReason = legacyAttentionReason(child);
+    if (legacyReason) {
+      items.push({ leaf_ref: child.leaf_ref, run_id: child.run_id, reason: legacyReason });
+    }
+    for (const reason of additionalAttentionReasons(child, resolvedContext)) {
+      items.push({ leaf_ref: child.leaf_ref, run_id: child.run_id, reason });
+    }
+  }
+  return items;
 }
 
 function formatStatusText(summary, operatorAttention) {
@@ -1086,7 +1252,7 @@ function formatStatusText(summary, operatorAttention) {
 async function statusFleet({ repoRoot, fleetId }) {
   const fleet = readFleetManifest(repoRoot, fleetId).data;
   const summary = deriveFleetSummary(repoRoot, fleet);
-  return { summary, operator_attention: buildOperatorAttention(summary) };
+  return { summary, operator_attention: buildOperatorAttention(summary, { repoRoot, fleetId }) };
 }
 
 function findSummaryChild(repoRoot, fleetId, leafRef) {
@@ -1212,7 +1378,7 @@ async function reviewFleet({ repoRoot, fleetId, options, activeChildren = new Ma
     });
   });
   const summary = deriveFleetSummary(repoRoot, readFleetManifest(repoRoot, fleetId).data);
-  const operatorAttention = buildOperatorAttention(summary);
+  const operatorAttention = buildOperatorAttention(summary, { repoRoot, fleetId });
   const failures = children.some((child) => {
     return !["complete", "skipped"].includes(child.status);
   });
@@ -1284,6 +1450,7 @@ async function runFleet(options) {
   const leaves = options.leavesFile
     ? loadLeavesFile(options.leavesFile)
     : (options.resume ? readPersistedLeaves(repoRoot, fleetId) : []);
+  validateLeafLineage(repoRoot, leaves);
 
   if (!options.resume && !options.dryRun && fs.existsSync(manifestPath)) {
     throw new FleetInputError(`fleet manifest already exists: ${manifestPath}; use --resume`);
@@ -1360,7 +1527,7 @@ async function runFleet(options) {
     reconcileFleet(repoRoot, fleetId, leaves);
     const fleet = maybeFinalizeFleet(repoRoot, fleetId);
     const summary = deriveFleetSummary(repoRoot, fleet);
-    const operatorAttention = buildOperatorAttention(summary);
+    const operatorAttention = buildOperatorAttention(summary, { repoRoot, fleetId });
     const preManifestFailures = summary.children
       .some((child) => child.dispatch_status === DISPATCH_STATUS.DISPATCH_FAILED_PRE_MANIFEST);
     if (options.resume && summary.children.some(childNeedsReviewLoop)) {
