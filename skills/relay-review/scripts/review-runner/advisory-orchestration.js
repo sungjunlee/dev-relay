@@ -13,7 +13,16 @@ const {
   writeAdvisoryDecision,
 } = require("./advisory");
 
-const HARDENED_EVENT_BINDING_WAIT_MS = 1000;
+// finishAdvisoryReview polls with early return (see advisory.js), so this
+// ceiling is only fully paid when the event genuinely never lands (the
+// fail-closed failure path). 10s covers pathological parallel-runner load,
+// mirroring DEFAULT_ADVISORY_GRACE_SECONDS = 10 in advisory.js.
+const DEFAULT_HARDENED_EVENT_BINDING_WAIT_MS = 10000;
+
+function resolveHardenedBindingWaitMs(env = process.env) {
+  const raw = Number(env.RELAY_ADVISORY_EVENT_BINDING_WAIT_MS || DEFAULT_HARDENED_EVENT_BINDING_WAIT_MS);
+  return Number.isSafeInteger(raw) && raw > 0 ? raw : DEFAULT_HARDENED_EVENT_BINDING_WAIT_MS;
+}
 
 function resolveAdvisoryConfig({
   advisoryGraceArg,
@@ -166,7 +175,7 @@ async function settleAdvisoryForVerdict({ advisoryRun, config, currentState, har
       consumedByPhase: "review",
       criticalPathWaitMs,
       requireEventBoundSuccess: true,
-      waitMs: HARDENED_EVENT_BINDING_WAIT_MS,
+      waitMs: resolveHardenedBindingWaitMs(),
     });
     advisoryResult = {
       ...advisoryResult,
@@ -183,6 +192,7 @@ async function settleAdvisoryForVerdict({ advisoryRun, config, currentState, har
 
 module.exports = {
   resolveAdvisoryConfig,
+  resolveHardenedBindingWaitMs,
   settleAdvisoryForVerdict,
   startConfiguredAdvisory,
 };
