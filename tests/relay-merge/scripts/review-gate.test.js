@@ -408,6 +408,56 @@ test("evaluateReviewGate rejects the legacy grandfather field matrix", async (t)
   }
 });
 
+function evaluateWithTiedCommits({ headRefOid } = {}) {
+  const { runDir, manifestData } = createRubricStateFixture("loaded");
+  // Two commits share the same committedDate (second-granularity tie, e.g. after
+  // a rebase). "commit-head" is first in array order but is the actual PR HEAD;
+  // "commit-other" is a non-HEAD commit sharing the same timestamp.
+  manifestData.review.last_reviewed_sha = "commit-head";
+  return evaluateReviewGate({
+    prNumber: 40,
+    comments: [
+      {
+        body: "<!-- relay-review -->\n## Relay Review\nVerdict: PASS\nRounds: 1",
+        createdAt: "2026-04-03T08:00:00Z",
+      },
+    ],
+    commits: [
+      { oid: "commit-head", committedDate: "2026-04-03T07:00:00Z" },
+      { oid: "commit-other", committedDate: "2026-04-03T07:00:00Z" },
+    ],
+    manifestData,
+    runDir,
+    headRefOid,
+  });
+}
+
+test("extractLatestCommit prefers headRefOid on committedDate ties", () => {
+  const result = evaluateWithTiedCommits({ headRefOid: "commit-head" });
+
+  assert.equal(result.status, "lgtm");
+  assert.equal(result.readyToMerge, true);
+  assert.equal(result.latestCommit, "commit-head");
+});
+
+test("extractLatestCommit falls back to the later array entry on ties when headRefOid is absent", () => {
+  const result = evaluateWithTiedCommits();
+
+  // Without headRefOid, the >= fallback scan lets the later array entry win
+  // the tie, which is stale relative to last_reviewed_sha="commit-head".
+  assert.equal(result.status, "stale");
+  assert.equal(result.readyToMerge, false);
+  assert.equal(result.latestCommit, "commit-other");
+});
+
+test("extractLatestCommit falls back to the scan when headRefOid is not among the commits", () => {
+  const result = evaluateWithTiedCommits({ headRefOid: "commit-not-in-list" });
+
+  assert.equal(result.status, "stale");
+  assert.equal(result.readyToMerge, false);
+  assert.equal(result.latestCommit, "commit-other");
+});
+
 test("buildSkipComment records only rubric_status after grandfather retirement", () => {
   const comment = buildSkipComment("hotfix", {
     rubricStatus: "legacy_grandfather_field",

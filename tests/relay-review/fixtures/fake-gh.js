@@ -123,7 +123,8 @@ if (args[0] === "pr" && args[1] === "view") {
   // merge gates need the latest relay audit comment, commits, mergeability, and checks.
   if (
     fields === "comments,commits,mergeable,statusCheckRollup" ||
-    fields === "baseRefName,comments,commits,mergeable,statusCheckRollup"
+    fields === "baseRefName,comments,commits,mergeable,statusCheckRollup" ||
+    fields === "baseRefName,comments,commits,mergeable,statusCheckRollup,headRefOid"
   ) {
     writeJson({
       baseRefName: fixture.baseRefName || "main",
@@ -131,6 +132,7 @@ if (args[0] === "pr" && args[1] === "view") {
       commits: fixture.commits || [],
       mergeable: fixture.mergeable || "MERGEABLE",
       statusCheckRollup: fixture.statusCheckRollup || [],
+      headRefOid: fixture.headRefOid || "a".repeat(40),
     });
     process.exit(0);
   }

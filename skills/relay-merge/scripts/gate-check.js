@@ -338,6 +338,7 @@ function main() {
   let commits;
   let manifestData = null;
   let runDir = null;
+  let headRefOid = null;
   if (DRY_RUN) {
     // Dry-run: read JSON object/array from stdin, or plain text as single comment
     const stdin = require("fs").readFileSync(0, "utf-8").trim();
@@ -348,16 +349,18 @@ function main() {
       commits = Array.isArray(parsed.commits) ? parsed.commits : [];
       manifestData = parsed.manifest || null;
       runDir = typeof parsed.runDir === "string" ? parsed.runDir : null;
+      headRefOid = typeof parsed.headRefOid === "string" ? parsed.headRefOid : null;
     } catch {
       // Plain text: treat entire stdin as one comment body
       comments = [{ body: stdin, createdAt: null }];
       commits = [];
     }
   } else {
-    const raw = execGh(null, ["pr", "view", PR_NUM, "--json", "comments,commits,headRefName"]);
+    const raw = execGh(null, ["pr", "view", PR_NUM, "--json", "comments,commits,headRefName,headRefOid"]);
     const parsed = JSON.parse(raw);
     comments = parsed.comments || [];
     commits = parsed.commits || [];
+    headRefOid = parsed.headRefOid || null;
     const manifestRecord = tryResolveManifestForPr(PR_NUM, parsed.headRefName || null);
     if (manifestRecord.error || !manifestRecord.data) {
       output({
@@ -428,6 +431,7 @@ function main() {
     manifestData,
     expectedReviewerLogin,
     runDir,
+    headRefOid,
   });
   const reviewRunnerRubricGate = deriveReviewRunnerRubricGate(manifestData, runDir);
   const enrichedResult = reviewRunnerRubricGate
