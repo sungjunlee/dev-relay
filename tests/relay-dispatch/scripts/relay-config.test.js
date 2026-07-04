@@ -181,7 +181,18 @@ test("doctor includes project route provenance and best-effort model probes", ()
     cwd: repoRoot,
     env: {
       PATH: `${binDir}${path.delimiter}/usr/bin:/bin`,
-      RELAY_CONFIG_MODEL_PROBE_TIMEOUT_MS: "1000",
+      // This test asserts a successful ("ok") probe outcome, not timeout
+      // behavior (that is covered separately below by the sleep(2s) fixture
+      // in "doctor reports optional Pi model-list probe timeouts...").
+      // relay-config.js bounds each model-list probe with execFileSync's
+      // own `timeout` option (see probeModels in relay-config.js), which
+      // races real process fork/exec latency against the wall clock. Under
+      // full-suite parallel load (many test files forking subprocesses at
+      // once), that fork/exec latency for the trivial opencode/pi fixture
+      // scripts here can occasionally exceed a short window even though the
+      // fixtures themselves do no work (#759). Use a generous ceiling so the
+      // probe has real headroom to complete under contention.
+      RELAY_CONFIG_MODEL_PROBE_TIMEOUT_MS: "20000",
     },
   });
 
