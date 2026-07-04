@@ -504,7 +504,22 @@ test("review-runner accepts pi advisory review when route policy allows the revi
     opencodeScript: null,
     piScript,
     advisoryReviewer: "pi",
-    extraArgs: ["--advisory-reviewer-model", "openai/gpt-5"],
+    // This test asserts the advisory pipeline completes successfully, not
+    // grace-window boundary behavior (that is covered separately by the
+    // dedicated "...applies the primary verdict after advisory grace..." and
+    // "...when advisory times out during grace" tests, which use deliberate
+    // delayMs values well past their own short --advisory-grace/--advisory-timeout).
+    // review-runner.js's standard-mode settleAdvisoryForVerdict polls for the
+    // advisory result for only DEFAULT_ADVISORY_GRACE_SECONDS (10s) when this
+    // flag is not passed. Completing requires a chain of real subprocess
+    // spawns (detached advisory-worker node process -> `git worktree add` ->
+    // the fake pi reviewer node process -> a file-based round trip back to
+    // this process before the event is appended). Under full-suite parallel
+    // load (many files forking subprocesses concurrently), that chain can
+    // occasionally take longer than 10s of wall clock even though every step
+    // does effectively no work (#759). Pass a generous grace so polling has
+    // real headroom to observe completion under contention.
+    extraArgs: ["--advisory-reviewer-model", "openai/gpt-5", "--advisory-grace", "30"],
   });
   const event = readRunEvents(repoRoot, runId).find((record) => record.event === "advisory_review");
 
