@@ -9,7 +9,7 @@ metadata:
   entry: scripts/relay-config.js
 ---
 ## Inputs
-- Env: optional `RELAY_SKILL_ROOT` defaults to `skills`; relay policy writes to `RELAY_POLICY_PATH` or `~/.relay/policy.json`.
+- Env: optional `RELAY_SKILL_ROOT` defaults to `skills`; relay policy writes to `RELAY_POLICY_PATH` or `~/.relay/policy.json`; optional `RELAY_CONFIG_MODEL_PROBE_TIMEOUT_MS` defaults model-list probes to `20000` ms.
 - Files: effective relay policy, optional repo `.relay/policy.json`, optional `~/.relay/executors.json`.
 - Sibling scripts: `${RELAY_SKILL_ROOT:-skills}/relay-config/scripts/relay-config.js`, `${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/relay-config.js`.
 
