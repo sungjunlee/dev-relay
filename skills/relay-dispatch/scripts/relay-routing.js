@@ -532,7 +532,7 @@ function loadRouteConfig({ repoRoot, relayHome, globalPath, projectPath, globalR
         if (globalConfig) {
           projectConfig = {
             version: 2,
-            strict: false,
+            // v1 has no strict concept; omit the key so it cannot override global strict at merge.
             defaults: validateProjectRoutes(projectRoutes, "injected project routes").defaults,
             executor_defaults: {},
             routes: [],
@@ -552,7 +552,7 @@ function loadRouteConfig({ repoRoot, relayHome, globalPath, projectPath, globalR
         if (globalConfig) {
           projectConfig = {
             version: 2,
-            strict: false,
+            // v1 has no strict concept; omit the key so it cannot override global strict at merge.
             defaults: validateProjectRoutes(parsed, resolvedProjectPath).defaults,
             executor_defaults: {},
             routes: [],

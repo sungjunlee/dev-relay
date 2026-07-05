@@ -212,6 +212,8 @@ test("dispatch does not emit unregistered route event for registered route", () 
 
 test("dispatch does not emit unregistered route event for managed model-less actor", () => {
   const { repoRoot, relayHome, rubricFile } = setupRepo();
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-route-managed-bin-"));
+  writeFakeCodex(binDir);
 
   const proc = spawnSync(process.execPath, [
     SCRIPT, repoRoot,
@@ -219,20 +221,24 @@ test("dispatch does not emit unregistered route event for managed model-less act
     "-p", "managed model-less plan",
     "--rubric-file", rubricFile,
     "--executor", "codex",
-    "--dry-run",
     "--json",
   ], {
     cwd: repoRoot,
     encoding: "utf-8",
-    env: { ...process.env, RELAY_HOME: relayHome },
+    env: { ...process.env, RELAY_HOME: relayHome, PATH: `${binDir}${path.delimiter}${process.env.PATH || ""}` },
   });
 
   assert.equal(proc.status, 0, proc.stderr);
   const output = JSON.parse(proc.stdout);
+  const events = fs.readFileSync(path.join(output.runDir, "events.jsonl"), "utf-8")
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line));
+  const routeResolution = events.find((event) => event.event === "route_resolution");
   // Managed model-less actors resolve to managed_cli, never unknown_allowed,
-  // so the UNREGISTERED_ROUTE_USED emission condition cannot fire for them.
-  assert.equal(output.route_plan.phases.dispatch.policy_decision.reason, "managed_cli");
-  assert.equal(output.policy_decision.reason, "managed_cli");
+  // so the UNREGISTERED_ROUTE_USED emission condition must not fire.
+  assert.equal(routeResolution.policy_decision.reason, "managed_cli");
+  assert.equal(events.some((event) => event.event === "unregistered_route_used"), false);
 });
 
 test("dispatch project policy deny overrides personal route before unmanaged CLI invocation", () => {

@@ -461,6 +461,20 @@ test("project routes that omit strict inherit global strict mode", () => {
   });
   assert.equal(explicitOverride.ok, true);
   assert.equal(explicitOverride.config.strict, false);
+
+  // v1 project routes have no strict concept and must inherit global strict too.
+  const v1Project = loadRouteConfig({
+    repoRoot,
+    relayHome,
+    projectRoutes: {
+      version: 1,
+      defaults: {
+        dispatch: { executor: "pi", model: "openai/project-v1" },
+      },
+    },
+  });
+  assert.equal(v1Project.ok, true);
+  assert.equal(v1Project.config.strict, true);
 });
 
 test("route intent resolver gives run intent precedence over project defaults", () => {
