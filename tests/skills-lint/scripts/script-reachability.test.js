@@ -10,14 +10,6 @@ const ADAPTER_INDEX_PATH = path.join(SKILLS_DIR, "relay-dispatch", "scripts", "a
 
 const PACKAGED_SCRIPT_ALLOWLIST = [
   // Keep empty when possible. Each entry must include a justification comment.
-  //
-  // TEMPORARY TRACKED ORPHAN — NOT convention-invoked. task-profile.js is a
-  // confirmed orphan (docs reference references/task-profile.md, the reference
-  // doc, not this script; no runtime import, adapter registration, or dynamic
-  // spawn). This observation-only PR must not delete packaged skill code, so
-  // the orphan rides here as tracked debt. Remove this entry when issue #788
-  // (wire into relay-plan flow or delete) lands.
-  "skills/relay-plan/scripts/task-profile.js",
 ];
 
 function toRepoRelative(filePath, repoRoot) {
