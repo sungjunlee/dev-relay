@@ -171,3 +171,32 @@ test("project routes executor_defaults override global routes defaults in shared
   assert.equal(resolveExecutorDefaultModel("opencode", { relayHome, repoRoot }), "openai/project-default");
   assert.equal(loadExecutorModelConfig({ relayHome, repoRoot }).executors.opencode.default_model, "openai/project-default");
 });
+
+test("default-model resolution without repoRoot uses only the global scope (no cwd fallback)", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "relay-executor-model-config-"));
+  const relayHome = path.join(root, "relay-home");
+  const repoRoot = path.join(root, "repo");
+  initGitRepo(repoRoot);
+  writeJson(path.join(relayHome, "routes.json"), {
+    version: 2,
+    executor_defaults: {
+      opencode: { model: "openai/global-default" },
+    },
+  });
+  writeJson(getProjectRoutesPath(repoRoot, { relayHome }), {
+    version: 2,
+    executor_defaults: {
+      opencode: { model: "openai/project-default" },
+    },
+  });
+
+  const previousCwd = process.cwd();
+  process.chdir(repoRoot);
+  try {
+    // Without an explicit repoRoot the resolver must not pick up the
+    // project routes of whatever directory it happens to run in.
+    assert.equal(resolveExecutorDefaultModel("opencode", { relayHome }), "openai/global-default");
+  } finally {
+    process.chdir(previousCwd);
+  }
+});

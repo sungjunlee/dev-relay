@@ -119,8 +119,11 @@ function routesConfigToExecutorModelConfig(routeConfig, sourceLabel) {
 
 function readOptionalRoutesExecutorModelConfig({ relayHome, repoRoot, globalPath, projectPath } = {}) {
   const resolvedGlobalPath = globalPath || resolveRoutesConfigPath(relayHome);
-  const effectiveRepoRoot = repoRoot || process.cwd();
-  if (!fs.existsSync(resolvedGlobalPath) && !projectPath && !effectiveRepoRoot) return null;
+  // No cwd fallback: without an explicit repoRoot only the global scope may
+  // contribute, otherwise an unrelated project's routes could leak into
+  // default-model resolution.
+  const effectiveRepoRoot = repoRoot || null;
+  if (!fs.existsSync(resolvedGlobalPath) && !projectPath) return null;
   try {
     const { loadRouteConfig } = require("./relay-routing");
     const result = loadRouteConfig({
