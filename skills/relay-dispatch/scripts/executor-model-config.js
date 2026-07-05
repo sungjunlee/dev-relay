@@ -106,44 +106,50 @@ function resolveRoutesConfigPath(relayHome) {
   return path.join(home, "routes.json");
 }
 
-function readOptionalRoutesExecutorModelConfig(filePath) {
-  if (!fs.existsSync(filePath)) return null;
-  let parsed;
-  try {
-    parsed = readJsonConfig(filePath, { optional: false });
-  } catch (error) {
-    console.error(`Warning: ignoring routes executor defaults at ${filePath}: ${error.message}`);
-    return { executors: {} };
-  }
-  if (!isPlainObject(parsed) || parsed.version !== 2) {
-    console.error(`Warning: ignoring routes executor defaults at ${filePath}: expected routes config version 2`);
-    return { executors: {} };
-  }
-  if (parsed.executor_defaults === undefined) return { executors: {} };
-  if (!isPlainObject(parsed.executor_defaults)) {
-    console.error(`Warning: ignoring routes executor defaults at ${filePath}: executor_defaults must be an object`);
-    return { executors: {} };
-  }
+function routesConfigToExecutorModelConfig(routeConfig, sourceLabel) {
   const executors = {};
-  for (const [executor, config] of Object.entries(parsed.executor_defaults)) {
-    if (!isPlainObject(config)) {
-      console.error(`Warning: ignoring routes executor default for ${executor} at ${filePath}: expected object`);
-      continue;
-    }
-    if (config.model !== undefined && (typeof config.model !== "string" || !config.model.trim())) {
-      console.error(`Warning: ignoring routes executor default for ${executor} at ${filePath}: model must be a non-empty string`);
-      continue;
-    }
-    if (typeof config.model === "string" && config.model.trim()) {
-      executors[executor] = { default_model: config.model.trim() };
+  for (const [executor, config] of Object.entries(routeConfig?.executor_defaults || {})) {
+    const model = typeof config?.model === "string" ? config.model.trim() : "";
+    if (model) {
+      executors[executor] = { default_model: model };
     }
   }
-  return validateExecutorModelConfig({ executors }, filePath);
+  return validateExecutorModelConfig({ executors }, sourceLabel);
 }
 
-function loadExecutorModelConfig({ relayHome, bundledPath = BUNDLED_EXECUTOR_MODEL_CONFIG, localPath } = {}) {
+function readOptionalRoutesExecutorModelConfig({ relayHome, repoRoot, globalPath, projectPath } = {}) {
+  const resolvedGlobalPath = globalPath || resolveRoutesConfigPath(relayHome);
+  const effectiveRepoRoot = repoRoot || process.cwd();
+  if (!fs.existsSync(resolvedGlobalPath) && !projectPath && !effectiveRepoRoot) return null;
+  try {
+    const { loadRouteConfig } = require("./relay-routing");
+    const result = loadRouteConfig({
+      repoRoot: effectiveRepoRoot,
+      relayHome,
+      globalPath: resolvedGlobalPath,
+      projectPath,
+    });
+    if (result.status === "absent") return null;
+    if (!result.ok) {
+      const message = result.errors?.map((error) => error.message).join("; ") || "invalid routes config";
+      console.error(`Warning: ignoring routes executor defaults at ${resolvedGlobalPath}: ${message}`);
+      return { executors: {} };
+    }
+    return routesConfigToExecutorModelConfig(result.config, resolvedGlobalPath);
+  } catch (error) {
+    console.error(`Warning: ignoring routes executor defaults at ${resolvedGlobalPath}: ${error.message}`);
+    return { executors: {} };
+  }
+}
+
+function loadExecutorModelConfig({ relayHome, repoRoot, bundledPath = BUNDLED_EXECUTOR_MODEL_CONFIG, localPath, routesPath, projectRoutesPath } = {}) {
   const bundled = validateExecutorModelConfig(readJsonConfig(bundledPath), bundledPath);
-  const routesConfig = localPath ? null : readOptionalRoutesExecutorModelConfig(resolveRoutesConfigPath(relayHome));
+  const routesConfig = localPath ? null : readOptionalRoutesExecutorModelConfig({
+    relayHome,
+    repoRoot,
+    globalPath: routesPath,
+    projectPath: projectRoutesPath,
+  });
   if (routesConfig) {
     return mergeExecutorModelConfigs(bundled, routesConfig);
   }
@@ -155,7 +161,12 @@ function loadExecutorModelConfig({ relayHome, bundledPath = BUNDLED_EXECUTOR_MOD
 function resolveExecutorDefaultModel(executor, options = {}) {
   const bundledPath = options.bundledPath || BUNDLED_EXECUTOR_MODEL_CONFIG;
   const bundled = validateExecutorModelConfig(readJsonConfig(bundledPath), bundledPath);
-  const routesConfig = options.localPath ? null : readOptionalRoutesExecutorModelConfig(resolveRoutesConfigPath(options.relayHome));
+  const routesConfig = options.localPath ? null : readOptionalRoutesExecutorModelConfig({
+    relayHome: options.relayHome,
+    repoRoot: options.repoRoot,
+    globalPath: options.routesPath,
+    projectPath: options.projectRoutesPath,
+  });
   if (routesConfig) {
     const config = mergeExecutorModelConfigs(bundled, routesConfig);
     const value = config.executors?.[executor]?.default_model;

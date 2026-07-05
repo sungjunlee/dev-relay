@@ -168,7 +168,7 @@ function invokeReviewer({
   };
 }
 
-function resolveReviewerModel(data, reviewerModel, reviewerName = null, { routePlan = null } = {}) {
+function resolveReviewerModel(data, reviewerModel, reviewerName = null, { routePlan = null, repoRoot = null } = {}) {
   if (reviewerModel) return { model: reviewerModel, source: "cli" };
   const routeReview = routePlanReviewPhase(routePlan);
   if (routeReview?.model && (!routeReview.reviewer || routeReview.reviewer === reviewerName)) {
@@ -178,7 +178,7 @@ function resolveReviewerModel(data, reviewerModel, reviewerName = null, { routeP
   if (typeof hintedModel === "string" && hintedModel.trim()) return { model: hintedModel.trim(), source: "model_hints" };
   if (["opencode", "pi", "antigravity", "cline"].includes(reviewerName)) {
     return {
-      model: resolveExecutorDefaultModel(reviewerName, { relayHome: process.env.RELAY_HOME }),
+      model: resolveExecutorDefaultModel(reviewerName, { relayHome: process.env.RELAY_HOME, repoRoot }),
       source: "executor_defaults",
     };
   }
@@ -277,7 +277,7 @@ function buildPrimaryReviewerPreflight({
   runRepoPath,
   routePlan = null,
 }) {
-  const resolvedReviewerModel = resolveReviewerModel(data, reviewerModel, reviewerName, { routePlan });
+  const resolvedReviewerModel = resolveReviewerModel(data, reviewerModel, reviewerName, { routePlan, repoRoot: runRepoPath });
   const effectiveReviewerModel = resolvedReviewerModel.model;
   const reviewerPolicy = buildReviewerPolicy({ reviewerName, reviewerScript });
   try {

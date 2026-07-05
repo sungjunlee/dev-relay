@@ -70,7 +70,7 @@ function startConfiguredAdvisory({
   runRepoPath,
 }) {
   if (!config.reviewer) return { advisoryRun: null, resultAdvisory: undefined };
-  const advisoryModel = resolveAdvisoryModel(data, config.reviewer, config.model);
+  const advisoryModel = resolveAdvisoryModel(data, config.reviewer, config.model, { repoRoot: runRepoPath });
   const reviewerPolicy = buildAdvisoryReviewerPolicy(config.reviewer);
   let policyDecision;
   try {

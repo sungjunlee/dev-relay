@@ -166,6 +166,50 @@ test("dispatch emits unregistered route event for open-mode unmanaged model rout
   assert.equal(unregistered.model, "openai/unregistered");
 });
 
+test("dispatch does not emit unregistered route event for registered route", () => {
+  const { repoRoot, relayHome, rubricFile } = setupRepo();
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-route-registered-bin-"));
+  writeFakePi(binDir);
+  writeJson(path.join(relayHome, "routes.json"), {
+    version: 2,
+    strict: false,
+    defaults: {
+      dispatch: { executor: "codex" },
+      review: { reviewer: "codex" },
+      advisory_review: null,
+    },
+    routes: [
+      { route: "openai/registered", phases: ["dispatch"], executors: ["pi"] },
+    ],
+    denied_routes: [],
+    presets: {},
+  });
+
+  const proc = spawnSync(process.execPath, [
+    SCRIPT, repoRoot,
+    "-b", "issue-registered-route",
+    "-p", "registered route plan",
+    "--rubric-file", rubricFile,
+    "--executor", "pi",
+    "--model", "openai/registered",
+    "--json",
+  ], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    env: { ...process.env, RELAY_HOME: relayHome, PATH: `${binDir}${path.delimiter}${process.env.PATH || ""}` },
+  });
+
+  assert.equal(proc.status, 0, proc.stderr);
+  const output = JSON.parse(proc.stdout);
+  const events = fs.readFileSync(path.join(output.runDir, "events.jsonl"), "utf-8")
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line));
+  const routeResolution = events.find((event) => event.event === "route_resolution");
+  assert.equal(routeResolution.policy_decision.reason, "allowed_model_route");
+  assert.equal(events.some((event) => event.event === "unregistered_route_used"), false);
+});
+
 test("dispatch project policy deny overrides personal route before unmanaged CLI invocation", () => {
   const { root, repoRoot, relayHome, rubricFile } = setupRepo();
   writePolicy(relayHome, {

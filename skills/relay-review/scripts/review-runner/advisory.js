@@ -38,11 +38,11 @@ function parseNonNegativeSeconds(value, fallback = DEFAULT_ADVISORY_GRACE_SECOND
   return parsed;
 }
 
-function resolveAdvisoryModel(data, reviewerName, explicitModel) {
+function resolveAdvisoryModel(data, reviewerName, explicitModel, { repoRoot = null } = {}) {
   if (explicitModel) return explicitModel;
   const hinted = data?.model_hints?.advisory_review;
   if (typeof hinted === "string" && hinted.trim()) return hinted.trim();
-  return resolveExecutorDefaultModel(reviewerName, { relayHome: process.env.RELAY_HOME });
+  return resolveExecutorDefaultModel(reviewerName, { relayHome: process.env.RELAY_HOME, repoRoot });
 }
 
 function createAdvisoryWorktree(reviewRepoPath, runDir, reviewerName) {

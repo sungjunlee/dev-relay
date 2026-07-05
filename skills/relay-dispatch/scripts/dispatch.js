@@ -290,6 +290,7 @@ function loadInitialRoutePlan(repoRoot) {
       projectRoutes: projectRoutes.routes,
       policy: policyResult.policy,
       relayHome: RELAY_HOME_FOR_ROUTES,
+      repoRoot,
     }),
   };
 }
@@ -1246,7 +1247,7 @@ async function main() {
     routePlanModel: INITIAL_ROUTE_RESOLUTION.routePlan.phases.dispatch?.model || null,
     manifestModelHints: manifest?.model_hints,
     cliModelHints: MODEL_HINTS,
-    executorDefaultModel: () => resolveExecutorDefaultModel(EXECUTOR, { relayHome: RELAY_HOME }),
+    executorDefaultModel: () => resolveExecutorDefaultModel(EXECUTOR, { relayHome: RELAY_HOME, repoRoot }),
   });
   const provider = typeof adapter.parseProvider === "function"
     ? (adapter.parseProvider(effectiveDispatchModel) ?? adapter.providerDefault ?? null)

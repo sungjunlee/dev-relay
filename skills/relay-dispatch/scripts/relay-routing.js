@@ -507,8 +507,6 @@ function loadRouteConfig({ repoRoot, relayHome, globalPath, projectPath, globalR
       globalConfig = validateRouteConfig(globalRoutes, "injected global routes");
     } else if (resolvedGlobalPath && fs.existsSync(resolvedGlobalPath)) {
       globalConfig = validateRouteConfig(readProjectRoutesFile(resolvedGlobalPath), resolvedGlobalPath);
-    } else {
-      return { ok: true, status: "absent", config: null, errors: [], sources };
     }
   } catch (error) {
     return { ok: false, status: "error", config: null, errors: [{ source: resolvedGlobalPath, message: error.message }], sources };
@@ -517,31 +515,58 @@ function loadRouteConfig({ repoRoot, relayHome, globalPath, projectPath, globalR
   let effectiveConfig = globalConfig;
   try {
     let projectConfig = null;
+    let projectConfigVersion = null;
     if (projectRoutes !== undefined) {
-      projectConfig = validateRouteConfig(projectRoutes, "injected project routes", { project: true });
+      projectConfigVersion = projectRoutes?.version;
+      if (projectConfigVersion === 2) {
+        projectConfig = validateRouteConfig(projectRoutes, "injected project routes", { project: true });
+      } else if (projectConfigVersion === 1) {
+        if (globalConfig) {
+          projectConfig = {
+            version: 2,
+            strict: false,
+            defaults: validateProjectRoutes(projectRoutes, "injected project routes").defaults,
+            executor_defaults: {},
+            routes: [],
+            denied_routes: [],
+            presets: {},
+          };
+        }
+      } else {
+        projectConfig = validateRouteConfig(projectRoutes, "injected project routes", { project: true });
+      }
     } else if (resolvedProjectPath && fs.existsSync(resolvedProjectPath)) {
       const parsed = readProjectRoutesFile(resolvedProjectPath);
+      projectConfigVersion = parsed?.version;
       if (parsed?.version === 2) {
         projectConfig = validateRouteConfig(parsed, resolvedProjectPath, { project: true });
       } else if (parsed?.version === 1) {
-        projectConfig = {
-          version: 2,
-          strict: false,
-          defaults: validateProjectRoutes(parsed, resolvedProjectPath).defaults,
-          executor_defaults: {},
-          routes: [],
-          denied_routes: [],
-          presets: {},
-        };
+        if (globalConfig) {
+          projectConfig = {
+            version: 2,
+            strict: false,
+            defaults: validateProjectRoutes(parsed, resolvedProjectPath).defaults,
+            executor_defaults: {},
+            routes: [],
+            denied_routes: [],
+            presets: {},
+          };
+        }
       } else {
         projectConfig = validateRouteConfig(parsed, resolvedProjectPath, { project: true });
       }
     }
-    if (projectConfig) {
+    if (globalConfig && projectConfig) {
       effectiveConfig = mergeRouteConfigs(globalConfig, projectConfig);
+    } else if (projectConfig) {
+      effectiveConfig = projectConfig;
     }
   } catch (error) {
     return { ok: false, status: "error", config: null, errors: [{ source: resolvedProjectPath, message: error.message }], sources };
+  }
+
+  if (!effectiveConfig) {
+    return { ok: true, status: "absent", config: null, errors: [], sources };
   }
 
   return {
@@ -618,20 +643,20 @@ function pickField({ phase, field, runIntent, projectRoutes, policy }) {
   return { value: null, source: "unresolved" };
 }
 
-function resolveModelForActor({ phase, actor, runIntent, projectRoutes, policy, relayHome, executorModelResolver }) {
+function resolveModelForActor({ phase, actor, runIntent, projectRoutes, policy, relayHome, repoRoot, executorModelResolver }) {
   const explicit = pickField({ phase, field: "model", runIntent, projectRoutes, policy });
   if (explicit.source !== "unresolved") return explicit;
   if (actor) {
     const routeConfigDefault = nonEmptyString(policy?.executor_defaults?.[actor]?.model);
     if (routeConfigDefault) return { value: routeConfigDefault, source: "executor_defaults" };
     const resolver = executorModelResolver || resolveExecutorDefaultModel;
-    const model = resolver(actor, { relayHome });
+    const model = resolver(actor, { relayHome, repoRoot });
     if (model) return { value: model, source: "executor_defaults" };
   }
   return { value: null, source: "unresolved" };
 }
 
-function resolvePhaseRoute({ phase, runIntent, projectRoutes, policy, relayHome, executorModelResolver }) {
+function resolvePhaseRoute({ phase, runIntent, projectRoutes, policy, relayHome, repoRoot, executorModelResolver }) {
   const actorField = actorFieldForPhase(phase);
   const selected = pickField({ phase, field: actorField, runIntent, projectRoutes, policy });
   if (!selected.value && phase === "advisory_review") {
@@ -645,6 +670,7 @@ function resolvePhaseRoute({ phase, runIntent, projectRoutes, policy, relayHome,
     projectRoutes,
     policy,
     relayHome,
+    repoRoot,
     executorModelResolver,
   });
   const resolved = {
@@ -678,6 +704,7 @@ function resolveRouteIntent({
   projectRoutes = null,
   policy = buildDefaultRelayPolicy(),
   relayHome = process.env.RELAY_HOME,
+  repoRoot = null,
   executorModelResolver = null,
 } = {}) {
   const normalizedProjectRoutes = projectRoutes ? validateProjectRoutes(projectRoutes, "project routes") : null;
@@ -689,6 +716,7 @@ function resolveRouteIntent({
       projectRoutes: normalizedProjectRoutes,
       policy,
       relayHome,
+      repoRoot,
       executorModelResolver,
     });
   }

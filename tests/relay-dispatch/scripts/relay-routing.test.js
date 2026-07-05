@@ -278,6 +278,68 @@ test("route config v2 accepts unified fields and carries presets unconsumed", ()
   });
 });
 
+test("route config loader accepts global-only routes config", () => {
+  const { relayHome, repoRoot } = tempRepo();
+  writeJson(path.join(relayHome, "routes.json"), {
+    version: 2,
+    strict: false,
+    defaults: {
+      dispatch: { executor: "opencode" },
+      review: { reviewer: "codex" },
+      advisory_review: null,
+    },
+    executor_defaults: {
+      opencode: { model: "openai/global" },
+    },
+    routes: [
+      { route: "openai/global", phases: ["dispatch"], executors: ["opencode"] },
+    ],
+    denied_routes: [],
+    presets: {},
+  });
+
+  const result = loadRouteConfig({ repoRoot, relayHome });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.status, "ok");
+  assert.equal(result.config.strict, false);
+  assert.deepEqual(result.config.defaults.dispatch, { executor: "opencode" });
+  assert.deepEqual(result.config.executor_defaults.opencode, { model: "openai/global" });
+  assert.deepEqual(result.config.routes.map((entry) => entry.route), ["openai/global"]);
+});
+
+test("route config loader accepts project-only v2 routes config", () => {
+  const { relayHome, repoRoot } = tempRepo();
+  writeJson(getProjectRoutesPath(repoRoot, { relayHome }), {
+    version: 2,
+    strict: true,
+    defaults: {
+      dispatch: { executor: "pi", model: "openai/project" },
+    },
+    executor_defaults: {
+      pi: { model: "openai/project" },
+    },
+    routes: [
+      { route: "openai/project", phases: ["dispatch"], executors: ["pi"] },
+    ],
+    denied_routes: ["openai/blocked"],
+    presets: {
+      project: { dispatch: { executor: "pi", model: "openai/project" } },
+    },
+  });
+
+  const result = loadRouteConfig({ repoRoot, relayHome });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.status, "ok");
+  assert.equal(result.config.strict, true);
+  assert.deepEqual(result.config.defaults.dispatch, { executor: "pi", model: "openai/project" });
+  assert.deepEqual(result.config.executor_defaults.pi, { model: "openai/project" });
+  assert.deepEqual(result.config.routes.map((entry) => entry.route), ["openai/project"]);
+  assert.deepEqual(result.config.denied_routes.map((entry) => entry.route), ["openai/blocked"]);
+  assert.deepEqual(result.config.presets.project.dispatch, { executor: "pi", model: "openai/project" });
+});
+
 test("route config loader merges global and project v2 per field with project presets winning", () => {
   const { relayHome, repoRoot } = tempRepo();
   writeJson(path.join(relayHome, "routes.json"), {
@@ -330,6 +392,44 @@ test("route config loader merges global and project v2 per field with project pr
   assert.deepEqual(result.config.denied_routes.map((entry) => entry.route), ["openai/denied-global", "openai/denied-project"]);
   assert.deepEqual(result.config.presets.light.dispatch, { executor: "pi", model: "openai/project" });
   assert.deepEqual(result.config.presets.diverse.advisory_review, { reviewer: "pi", profile: "blindspot" });
+});
+
+test("route config loader accepts project v1 routes when global v2 routes is source of truth", () => {
+  const { relayHome, repoRoot } = tempRepo();
+  writeJson(path.join(relayHome, "routes.json"), {
+    version: 2,
+    strict: false,
+    defaults: {
+      dispatch: { executor: "opencode" },
+      review: { reviewer: "codex" },
+      advisory_review: null,
+    },
+    executor_defaults: {
+      opencode: { model: "openai/global" },
+    },
+    routes: [
+      { route: "openai/global", phases: ["dispatch"], executors: ["opencode"] },
+    ],
+    denied_routes: [],
+    presets: {},
+  });
+  writeJson(getProjectRoutesPath(repoRoot, { relayHome }), {
+    version: 1,
+    defaults: {
+      dispatch: { executor: "pi", model: "openai/project-v1" },
+      review: { reviewer: "codex" },
+    },
+  });
+
+  const result = loadRouteConfig({ repoRoot, relayHome });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.status, "ok");
+  assert.equal(result.config.strict, false);
+  assert.deepEqual(result.config.defaults.dispatch, { executor: "pi", model: "openai/project-v1" });
+  assert.deepEqual(result.config.defaults.review, { reviewer: "codex" });
+  assert.deepEqual(result.config.executor_defaults.opencode, { model: "openai/global" });
+  assert.deepEqual(result.config.routes.map((entry) => entry.route), ["openai/global"]);
 });
 
 test("route intent resolver gives run intent precedence over project defaults", () => {
