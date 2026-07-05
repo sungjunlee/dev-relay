@@ -304,8 +304,8 @@ function actorHasConfiguredAllowedRoute(policy, actor) {
 }
 
 function modelProbeTimeoutMs() {
-  const raw = Number(process.env.RELAY_CONFIG_MODEL_PROBE_TIMEOUT_MS || 5000);
-  return Number.isSafeInteger(raw) && raw > 0 ? raw : 5000;
+  const raw = Number(process.env.RELAY_CONFIG_MODEL_PROBE_TIMEOUT_MS || 20000);
+  return Number.isSafeInteger(raw) && raw > 0 ? raw : 20000;
 }
 
 function probeModels(name, executable) {
@@ -332,7 +332,7 @@ function probeModels(name, executable) {
     return {
       status: "warning",
       models: [],
-      warning: `optional model-list probe failed for ${name} (${command}) after ${timeoutMs}ms: ${detail}`,
+      warning: `optional model-list probe failed for ${name} (${command}) after ${timeoutMs}ms: ${detail} (set RELAY_CONFIG_MODEL_PROBE_TIMEOUT_MS to adjust)`,
     };
   }
 }

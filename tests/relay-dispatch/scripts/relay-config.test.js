@@ -233,6 +233,7 @@ test("doctor reports optional Pi model-list probe timeouts without masking insta
   assert.equal(pi.model_probe.status, "warning");
   assert.match(pi.model_probe.warning, /optional model-list probe failed for pi/i);
   assert.match(pi.model_probe.warning, /after 50ms/);
+  assert.match(pi.model_probe.warning, /set RELAY_CONFIG_MODEL_PROBE_TIMEOUT_MS to adjust/);
 });
 
 test("check exits zero for allowed managed CLI routes and reports the decision reason", () => {
