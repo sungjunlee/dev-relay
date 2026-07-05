@@ -6,12 +6,13 @@ const path = require("path");
 const { CLEANUP_STATUSES, runCleanup, updateManifestCleanup } = require("./manifest/cleanup");
 const { STATES, updateManifestState } = require("./manifest/lifecycle");
 const {
+  getEventsPath,
   validateManifestPaths,
 } = require("./manifest/paths");
-const { writeManifest } = require("./manifest/store");
+const { getActorName, writeManifest } = require("./manifest/store");
 const { findUnknownFlags, modeLabel, readArg, schemaHasFlag } = require("./cli-args");
 const { resolveManifestRecord } = require("./relay-resolver");
-const { appendRunEvent, EVENTS } = require("./relay-events");
+const { appendEventLineToPath, appendRunEvent, EVENTS } = require("./relay-events");
 
 const args = process.argv.slice(2);
 const CLI_ARG_OPTIONS = { commandName: "close-run", reservedFlags: ["-h"] };
@@ -47,6 +48,24 @@ function buildSkippedCleanupSummary(data, dryRun) {
     deleteMergedBranch: false,
     error: null,
   };
+}
+
+function appendCloseEvent(repoRoot, runId, eventData) {
+  if (eventData.worktree_missing !== true) {
+    return appendRunEvent(repoRoot, runId, eventData);
+  }
+  return appendEventLineToPath(getEventsPath(repoRoot, runId), {
+    ts: eventData.ts || new Date().toISOString(),
+    event: eventData.event,
+    actor: getActorName(repoRoot),
+    run_id: runId,
+    state_from: eventData.state_from ?? null,
+    state_to: eventData.state_to ?? null,
+    head_sha: eventData.head_sha ?? null,
+    round: eventData.round ?? null,
+    reason: eventData.reason ?? null,
+    worktree_missing: true,
+  });
 }
 
 function main() {
@@ -107,7 +126,7 @@ function main() {
 
   if (!dryRun) {
     writeManifest(manifestPath, updated, body);
-    appendRunEvent(repoRoot, updated.run_id, {
+    appendCloseEvent(repoRoot, updated.run_id, {
       event: EVENTS.CLOSE,
       state_from: safeData.state,
       state_to: STATES.CLOSED,

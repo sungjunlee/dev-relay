@@ -2662,7 +2662,7 @@ test("dispatch fails closed on detached HEAD when origin HEAD is unresolved befo
   assert.equal(fs.existsSync(path.join(relayHome, "worktrees")), false);
 });
 
-test("dispatch resume fails loudly when the retained worktree is missing", () => {
+test("dispatch resume missing-worktree error reprovisions an existing branch without recreating it", () => {
   const { repoRoot, relayHome } = setupRepo();
   process.env.RELAY_HOME = relayHome;
   const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
@@ -2681,6 +2681,7 @@ test("dispatch resume fails loudly when the retained worktree is missing", () =>
   let updated = updateManifestState(record.data, STATES.CHANGES_REQUESTED, "re_dispatch_requested_changes");
   writeManifest(manifestPath, updated, record.body);
   execFileSync("git", ["worktree", "remove", "--force", first.worktree], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
+  execFileSync("git", ["show-ref", "--verify", "refs/heads/issue-42"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
 
   const result = spawnSync("node", [SCRIPT, repoRoot, "--run-id", runId, "--prompt", "resume", "--json"], {
     cwd: repoRoot,
@@ -2692,7 +2693,43 @@ test("dispatch resume fails loudly when the retained worktree is missing", () =>
   assert.match(result.stderr, /retained worktree is missing/);
   assert.match(result.stderr, new RegExp(escapeRegExp(first.worktree)));
   assert.match(result.stderr, /git worktree add /);
-  assert.match(result.stderr, / -b 'issue-42' 'main'/);
+  assert.match(result.stderr, new RegExp(`git worktree add '${escapeRegExp(first.worktree)}' 'issue-42'`));
+  assert.doesNotMatch(result.stderr, / -b 'issue-42'/);
+  assert.equal(listManifestPaths(repoRoot).length, 1);
+});
+
+test("dispatch resume missing-worktree error creates the branch only when it is absent", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  writeFakeCodex(binDir);
+  const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}` };
+
+  const first = JSON.parse(runDispatch(repoRoot, [
+    "-b", "issue-42-absent",
+    "--prompt", "first pass",
+    "--json",
+  ], env));
+  const manifestPath = first.manifestPath;
+  const runId = first.runId;
+
+  const record = readManifest(manifestPath);
+  let updated = updateManifestState(record.data, STATES.CHANGES_REQUESTED, "re_dispatch_requested_changes");
+  writeManifest(manifestPath, updated, record.body);
+  execFileSync("git", ["worktree", "remove", "--force", first.worktree], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
+  execFileSync("git", ["branch", "-D", "issue-42-absent"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
+
+  const result = spawnSync("node", [SCRIPT, repoRoot, "--run-id", runId, "--prompt", "resume", "--json"], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    env,
+  });
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /retained worktree is missing/);
+  assert.match(result.stderr, new RegExp(escapeRegExp(first.worktree)));
+  assert.match(result.stderr, /git worktree add /);
+  assert.match(result.stderr, / -b 'issue-42-absent' 'main'/);
   assert.equal(listManifestPaths(repoRoot).length, 1);
 });
 

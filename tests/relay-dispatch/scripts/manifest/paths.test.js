@@ -260,3 +260,29 @@ test("manifest/paths default mode rejects existing pruned relay-owned worktrees 
   assert.equal(missingResult.worktreeLocation, "relay_worktree");
   assert.equal(missingResult.worktreeMissing, true);
 });
+
+test("manifest/paths rejects missing worktrees outside repo and relay-owned roots", () => {
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-paths-untrusted-repo-"));
+  initGitRepo(repoRoot);
+  const runId = "issue-295-20260425010104000-a1b2c3d4";
+  const manifestPath = getManifestPath(repoRoot, runId);
+  const untrustedMissingWorktree = path.join(
+    os.tmpdir(),
+    `relay-paths-untrusted-missing-${process.pid}-${Date.now()}`
+  );
+
+  assert.equal(fs.existsSync(untrustedMissingWorktree), false);
+  assert.throws(
+    () => validateManifestPaths({
+      repo_root: repoRoot,
+      worktree: untrustedMissingWorktree,
+    }, {
+      expectedRepoRoot: repoRoot,
+      manifestPath,
+      runId,
+      caller: "manifest/paths.test untrusted missing",
+    }),
+    /is not contained under the expected repo root/
+  );
+});

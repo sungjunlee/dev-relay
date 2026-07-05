@@ -20,14 +20,15 @@ const fs = require("fs");
 const { execFileSync } = require("child_process");
 const { STATES, forceTransitionState } = require("./manifest/lifecycle");
 const {
+  getEventsPath,
   getRunDir,
   validateManifestPaths,
 } = require("./manifest/paths");
-const { writeManifest } = require("./manifest/store");
+const { getActorName, writeManifest } = require("./manifest/store");
 const { readTextFileWithoutFollowingSymlinks } = require("./manifest/rubric");
 const { findUnknownFlags, modeLabel, readArg, schemaHasFlag } = require("./cli-args");
 const { resolveManifestRecord } = require("./relay-resolver");
-const { appendRunEvent, EVENTS } = require("./relay-events");
+const { appendEventLineToPath, appendRunEvent, EVENTS } = require("./relay-events");
 const CLI_ARG_OPTIONS = { commandName: "recover-state", reservedFlags: ["-h"] };
 const PR_BODY_FETCH_TIMEOUT_MS = 15000;
 
@@ -82,6 +83,23 @@ const RECOVERY_TRANSITIONS = Object.freeze([
     description: "Dispatch hung or operator killed; unstick the manifest so re-dispatch is reachable.",
   },
 ]);
+
+function appendStateRecoveryEvent(repoRoot, runId, eventData) {
+  if (eventData.worktree_missing !== true) {
+    return appendRunEvent(repoRoot, runId, eventData);
+  }
+  const record = {
+    ts: eventData.ts || new Date().toISOString(),
+    event: eventData.event,
+    actor: getActorName(repoRoot),
+    run_id: runId,
+    ...Object.fromEntries(
+      Object.entries(eventData)
+        .filter(([key, value]) => key !== "event" && value !== undefined)
+    ),
+  };
+  return appendEventLineToPath(getEventsPath(repoRoot, runId), record);
+}
 
 function printUsage(stream = console.log) {
   stream(
@@ -515,7 +533,7 @@ function main() {
 
   if (!dryRun) {
     writeManifest(manifestPath, updated, body);
-    appendRunEvent(repoRoot, updated.run_id, {
+    appendStateRecoveryEvent(repoRoot, updated.run_id, {
       event: EVENTS.STATE_RECOVERY,
       state_from: fromState,
       state_to: toState,

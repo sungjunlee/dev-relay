@@ -505,8 +505,16 @@ function validateManifestPaths(paths, {
   const repoContainedWorktree = isPathContainedWithin(effectiveRepoRoot, worktree);
   const relayOwnedWorktreeCandidate = isPathContainedWithin(relayWorktreeBase, worktree)
     && path.basename(worktree) === path.basename(effectiveRepoRoot);
+  const expectedGitCommonDir = getWorktreeGitCommonDir(effectiveRepoRoot) || path.join(effectiveRepoRoot, ".git");
   const worktreeExists = fs.existsSync(worktree);
   if (!worktreeExists) {
+    if (!repoContainedWorktree && !relayOwnedWorktreeCandidate) {
+      throw new Error(
+        `${caller}: manifest paths.worktree ${JSON.stringify(worktree)} is not contained under the expected repo root ` +
+        `${JSON.stringify(effectiveRepoRoot)} and is not a relay-owned worktree under ${JSON.stringify(relayWorktreeBase)} ` +
+        `that is bound to ${JSON.stringify(expectedGitCommonDir)} for repo ${JSON.stringify(path.basename(effectiveRepoRoot))}.`
+      );
+    }
     return {
       repoRoot: effectiveRepoRoot,
       worktree,
@@ -519,7 +527,6 @@ function validateManifestPaths(paths, {
       relayWorktreeBase,
     };
   }
-  const expectedGitCommonDir = getWorktreeGitCommonDir(effectiveRepoRoot) || path.join(effectiveRepoRoot, ".git");
   const worktreeGitCommonDir = getWorktreeGitCommonDir(worktree);
   const relayOwnedWorktree = relayOwnedWorktreeCandidate
     && (

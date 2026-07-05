@@ -578,10 +578,27 @@ function shellQuote(s) {
   return "'" + s.replace(/'/g, "'\\''") + "'";
 }
 
-function formatMissingResumeWorktreeError({ runId, worktreePath, branch, baseBranch }) {
-  const reprovisionCommand = branch && baseBranch
-    ? `git worktree add ${shellQuote(worktreePath)} -b ${shellQuote(branch)} ${shellQuote(baseBranch)}`
-    : null;
+function localBranchExists(repoRoot, branch) {
+  if (!repoRoot || !branch) return false;
+  try {
+    execFileSync("git", ["show-ref", "--verify", `refs/heads/${branch}`], {
+      cwd: repoRoot,
+      encoding: "utf-8",
+      stdio: "pipe",
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function formatMissingResumeWorktreeError({ repoRoot, runId, worktreePath, branch, baseBranch }) {
+  let reprovisionCommand = null;
+  if (branch && localBranchExists(repoRoot, branch)) {
+    reprovisionCommand = `git worktree add ${shellQuote(worktreePath)} ${shellQuote(branch)}`;
+  } else if (branch && baseBranch) {
+    reprovisionCommand = `git worktree add ${shellQuote(worktreePath)} -b ${shellQuote(branch)} ${shellQuote(baseBranch)}`;
+  }
   return [
     `retained worktree is missing for run '${runId}': ${worktreePath || "(unset)"}`,
     ...(reprovisionCommand
@@ -1099,6 +1116,7 @@ async function main() {
     }
     if (validatedPaths.worktreeMissing) {
       console.error(`Error: ${formatMissingResumeWorktreeError({
+        repoRoot,
         runId,
         worktreePath: manifest.paths?.worktree || wtPath,
         branch,
