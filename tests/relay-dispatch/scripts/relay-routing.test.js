@@ -349,6 +349,30 @@ test("project-only v2 routes config stays inactive without a global routes file"
   assert.equal(malformed.config, null);
 });
 
+test("project null model does not erase inherited global dispatch model", () => {
+  const { relayHome, repoRoot } = tempRepo();
+  writeJson(path.join(relayHome, "routes.json"), {
+    version: 2,
+    defaults: {
+      dispatch: { executor: "opencode", model: "openai/global-model" },
+    },
+  });
+  writeJson(getProjectRoutesPath(repoRoot, { relayHome }), {
+    version: 2,
+    defaults: {
+      dispatch: { model: null },
+    },
+  });
+
+  const result = loadRouteConfig({ repoRoot, relayHome });
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.config.defaults.dispatch, {
+    executor: "opencode",
+    model: "openai/global-model",
+  });
+});
+
 test("route config rejects non-object preset values", () => {
   assert.throws(
     () => validateRouteConfig({ version: 2, presets: { light: "opencode" } }, "unit"),

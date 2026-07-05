@@ -271,30 +271,36 @@ function normalizeRouteDefault(value, phase, sourceLabel, { partial = false } = 
   const routeDefault = requirePhaseObject(value, phase, sourceLabel);
   if (routeDefault === null) return null;
 
+  // Only materialize a field when normalization yields a value: null/omitted
+  // optional fields must not create own undefined properties that erase
+  // inherited values at merge time.
+  const assignIfDefined = (target, field, value) => {
+    if (value !== undefined) target[field] = value;
+  };
   if (phase === "dispatch") {
     const normalized = {};
     if (routeDefault.executor !== undefined || !partial) {
-      normalized.executor = normalizeOptionalField(routeDefault, "executor", sourceLabel, {
+      assignIfDefined(normalized, "executor", normalizeOptionalField(routeDefault, "executor", sourceLabel, {
         required: !partial,
         label: "defaults.dispatch.executor",
-      });
+      }));
     }
     if (routeDefault.model !== undefined) {
-      normalized.model = normalizeOptionalField(routeDefault, "model", sourceLabel, { label: "defaults.dispatch.model" });
+      assignIfDefined(normalized, "model", normalizeOptionalField(routeDefault, "model", sourceLabel, { label: "defaults.dispatch.model" }));
     }
     return normalized;
   }
   if (phase === "review" || phase === "advisory_review") {
     const normalized = {};
     if (routeDefault.reviewer !== undefined || !partial) {
-      normalized.reviewer = normalizeOptionalField(routeDefault, "reviewer", sourceLabel, {
+      assignIfDefined(normalized, "reviewer", normalizeOptionalField(routeDefault, "reviewer", sourceLabel, {
         required: !partial,
         label: `defaults.${phase}.reviewer`,
-      });
+      }));
     }
-    if (routeDefault.model !== undefined) normalized.model = normalizeOptionalField(routeDefault, "model", sourceLabel, { label: `defaults.${phase}.model` });
+    if (routeDefault.model !== undefined) assignIfDefined(normalized, "model", normalizeOptionalField(routeDefault, "model", sourceLabel, { label: `defaults.${phase}.model` }));
     if (phase === "advisory_review" && routeDefault.profile !== undefined) {
-      normalized.profile = normalizeOptionalField(routeDefault, "profile", sourceLabel, { label: "defaults.advisory_review.profile" });
+      assignIfDefined(normalized, "profile", normalizeOptionalField(routeDefault, "profile", sourceLabel, { label: "defaults.advisory_review.profile" }));
     }
     return normalized;
   }
