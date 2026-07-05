@@ -319,8 +319,8 @@ test("single leaf labels do not override cross-module done criteria", () => {
 ## Done Criteria
 
 - \`skills/relay-ready/scripts/score-readiness.js\` changes readiness scoring.
-- \`skills/relay-plan/scripts/task-profile.js\` changes planning profile scoring.
-- \`tests/relay-plan/scripts/task-profile.test.js\` passes.
+- \`skills/relay-plan/scripts/tdd-flavor.js\` changes planning flavor rendering.
+- \`tests/relay-plan/scripts/tdd-flavor.test.js\` passes.
 `;
 
   const result = scoreReadiness(body);
