@@ -108,6 +108,7 @@ Mutation discipline follows the spec-system contract from `sungjunlee/dev-backlo
 - 2026-07-05 (run #issue-767-20260704235320527-cdfac42e): relay-merge of PR #780 [PR #780]
 - 2026-07-05 (run #issue-788-20260705072111604-84a15ef5): relay-merge of PR #790 [PR #790]
 - 2026-07-05 (run #issue-794-20260705113330215-c4fff992): relay-merge of PR #798 [PR #798]
+- 2026-07-05 (run #issue-793-20260705113325650-8648a194): relay-merge of PR #796 [PR #796]
 <!-- LEARN:END -->
 
 ### Decisions
