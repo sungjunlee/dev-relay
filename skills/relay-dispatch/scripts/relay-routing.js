@@ -421,16 +421,24 @@ function validateRouteConfig(routes, sourceLabel = "routes config", { project = 
   if (routes.strict !== undefined && typeof routes.strict !== "boolean") {
     throw new Error(`invalid routes config at ${sourceLabel}: strict must be a boolean`);
   }
-  return {
+  const normalized = {
     ...cloneJson(routes),
     version: 2,
-    strict: routes.strict === true,
     defaults: normalizeRoutesDefaults(routes.defaults, sourceLabel, { project }),
     executor_defaults: normalizeExecutorDefaults(routes.executor_defaults, sourceLabel),
     routes: normalizeRouteEntries(routes.routes, "routes", sourceLabel),
     denied_routes: normalizeRouteEntries(routes.denied_routes, "denied_routes", sourceLabel),
     presets: normalizePresets(routes.presets, sourceLabel),
   };
+  // Preserve omission: a scope that does not set strict must not override
+  // another scope's strict at merge time (mergeRouteConfigs keys off
+  // hasOwnProperty, so materializing a default false here would defeat it).
+  if (routes.strict === undefined) {
+    delete normalized.strict;
+  } else {
+    normalized.strict = routes.strict === true;
+  }
+  return normalized;
 }
 
 function mergePhaseDefaults(base = {}, override = {}) {

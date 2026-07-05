@@ -432,6 +432,37 @@ test("route config loader accepts project v1 routes when global v2 routes is sou
   assert.deepEqual(result.config.routes.map((entry) => entry.route), ["openai/global"]);
 });
 
+test("project routes that omit strict inherit global strict mode", () => {
+  const { relayHome, repoRoot } = tempRepo();
+  writeJson(path.join(relayHome, "routes.json"), {
+    version: 2,
+    strict: true,
+    routes: [
+      { route: "openai/global", phases: ["dispatch"], executors: ["opencode"] },
+    ],
+  });
+  writeJson(getProjectRoutesPath(repoRoot, { relayHome }), {
+    version: 2,
+    executor_defaults: {
+      pi: { model: "openai/project" },
+    },
+  });
+
+  const result = loadRouteConfig({ repoRoot, relayHome });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.status, "ok");
+  assert.equal(result.config.strict, true);
+
+  const explicitOverride = loadRouteConfig({
+    repoRoot,
+    relayHome,
+    projectRoutes: { version: 2, strict: false },
+  });
+  assert.equal(explicitOverride.ok, true);
+  assert.equal(explicitOverride.config.strict, false);
+});
+
 test("route intent resolver gives run intent precedence over project defaults", () => {
   const result = resolveRouteIntent({
     runIntent: {
