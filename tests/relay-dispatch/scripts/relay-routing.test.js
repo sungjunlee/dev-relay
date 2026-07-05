@@ -227,6 +227,12 @@ test("project routes reader reports absent and malformed routes.json determinist
   assert.equal(malformed.ok, false);
   assert.equal(malformed.status, "error");
   assert.match(malformed.error, /failed to parse project routes/);
+
+  fs.writeFileSync(absent.path, JSON.stringify({ version: 2, strict: true }, null, 2), "utf-8");
+  const ignoredV2 = loadProjectRoutes({ repoRoot, relayHome });
+  assert.equal(ignoredV2.ok, true);
+  assert.equal(ignoredV2.status, "ignored_v2");
+  assert.equal(ignoredV2.routes, null);
 });
 
 test("project routes schema accepts phase defaults and rejects malformed actors", () => {

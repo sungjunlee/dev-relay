@@ -624,11 +624,18 @@ function loadProjectRoutes({ repoRoot, relayHome } = {}) {
     return { ok: true, status: "absent", path: filePath, routes: null, error: null };
   }
   try {
+    const parsed = readProjectRoutesFile(filePath);
+    if (isPlainObject(parsed) && parsed.version === 2) {
+      // v2 project routes belong to the routes-config world (loadRouteConfig,
+      // active only with the global routes file). Legacy route planning
+      // ignores them instead of failing the v1 validator.
+      return { ok: true, status: "ignored_v2", path: filePath, routes: null, error: null };
+    }
     return {
       ok: true,
       status: "ok",
       path: filePath,
-      routes: validateProjectRoutes(readProjectRoutesFile(filePath), filePath),
+      routes: validateProjectRoutes(parsed, filePath),
       error: null,
     };
   } catch (error) {
