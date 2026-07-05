@@ -1742,7 +1742,12 @@ async function main() {
   }
   const elapsed = Math.round((Date.now() - startTime) / 1000);
 
-  adapter.finalizeResult({ stdoutLog, resultFile });
+  try {
+    adapter.finalizeResult({ stdoutLog, resultFile });
+  } catch (finalizeError) {
+    exitCode = exitCode || 1;
+    error = error || `executor_result_finalize_failed: ${String(finalizeError.message || finalizeError).split("\n")[0]}`;
+  }
 
   // --- Step 4: Collect results ---
   let resultText = "";

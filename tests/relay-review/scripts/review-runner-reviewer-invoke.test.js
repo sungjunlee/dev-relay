@@ -166,6 +166,10 @@ test("reviewer-invoke/resolveReviewerScript resolves built-in adapters and rejec
   assert.match(piScript, /invoke-reviewer-pi\.js$/);
   const cursorScript = resolveReviewerScript("cursor");
   assert.match(cursorScript, /invoke-reviewer-cursor\.js$/);
+  assert.throws(
+    () => resolveReviewerScript("cline"),
+    /supports advisory_review but not primary_review/
+  );
   assert.throws(() => resolveReviewerScript("../bad"), /Invalid reviewer name/);
 });
 
@@ -174,6 +178,7 @@ test("reviewer-invoke/resolveReviewerScript allows parity adapters for advisory 
   assert.match(script, /invoke-reviewer-opencode\.js$/);
   assert.match(resolveReviewerScript("pi", null, { phase: ADAPTER_PHASES.ADVISORY_REVIEW }), /invoke-reviewer-pi\.js$/);
   assert.match(resolveReviewerScript("antigravity", null, { phase: ADAPTER_PHASES.ADVISORY_REVIEW }), /invoke-reviewer-antigravity\.js$/);
+  assert.match(resolveReviewerScript("cline", null, { phase: ADAPTER_PHASES.ADVISORY_REVIEW }), /invoke-reviewer-cline\.js$/);
   assert.throws(
     () => resolveReviewerScript("cursor", null, { phase: ADAPTER_PHASES.ADVISORY_REVIEW }),
     /not advisory_review/
@@ -214,6 +219,13 @@ test("reviewer-invoke/buildPrimaryReviewerPolicy records Cursor ask-mode metadat
   assert.equal(policy.sandbox.enforcement_level, "informational");
   assert.deepEqual(policy.sandbox.flags, ["--mode", "ask", "--trust", "--force", "--workspace"]);
   assert.equal(policy.read_only.enforcement_level, "prompt-only");
+});
+
+test("reviewer-invoke/buildPrimaryReviewerPolicy fails closed for Cline primary review", () => {
+  assert.throws(
+    () => buildPrimaryReviewerPolicy("cline"),
+    /adapter capability denied.*adapter=cline.*phase=primary_review/s
+  );
 });
 
 test("reviewer-invoke/buildPrimaryReviewerPolicy records Antigravity CLI version metadata", (t) => {

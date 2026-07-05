@@ -63,7 +63,7 @@ npx skills add . -g -y
 ### Prerequisites
 
 - [Claude Code](https://claude.ai/code) or [Codex](https://chatgpt.com/codex)
-- Optional agent harness CLIs for `opencode`, `pi`, `antigravity`, or `cursor` when selecting those adapters; route policy must allow the selected provider/model route.
+- Optional agent harness CLIs for `opencode`, `pi`, `antigravity`, `cursor`, or `cline` when selecting those adapters; route policy must allow the selected provider/model route.
 - [`gh` CLI](https://cli.github.com/) authenticated with `gh auth login`
 - Git 2.20+
 - Node.js 18+
@@ -72,9 +72,9 @@ Adapter minimum versions, binary overrides, timeouts, capability gates, and prov
 
 ## Configure Routes
 
-Relay distinguishes CLI harnesses from provider/model routes. Names such as `codex`, `claude`, `opencode`, `pi`, and `antigravity` describe how relay invokes an agent. The compliance boundary is the provider/model route, for example `example/opencode-model-fast`, `example/pi-model-fast`, or `google/antigravity-cli`.
+Relay distinguishes CLI harnesses from provider/model routes. Names such as `codex`, `claude`, `opencode`, `pi`, `antigravity`, and `cline` describe how relay invokes an agent. The compliance boundary is the provider/model route, for example `example/opencode-model-fast`, `example/pi-model-fast`, `google/antigravity-cli`, or `cline-pass/glm-5.2`.
 
-Without a policy file, relay stays conservative: managed Codex and Claude CLIs are allowed by default, while OpenCode, Pi, Antigravity, and advisory reviewers require explicit route approval.
+Without a policy file, relay stays conservative: managed Codex and Claude CLIs are allowed by default, while OpenCode, Pi, Antigravity, Cline, and advisory reviewers require explicit route approval.
 
 After installing skills, ask for setup in plain language:
 

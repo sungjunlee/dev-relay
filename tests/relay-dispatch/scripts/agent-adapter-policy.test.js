@@ -102,6 +102,48 @@ test("policy audit records Pi primary review read-only tool allowlist metadata",
   assert.match(audit.warnings.join("\n"), /dirty worktree/i);
 });
 
+test("policy audit keeps Cline dispatch sandbox and network informational", () => {
+  const audit = buildAgentPolicyAudit({
+    descriptor: getAgentAdapterDescriptor("cline"),
+    phase: ADAPTER_PHASES.DISPATCH,
+    requested: {
+      sandbox: "read-only",
+      networkAccess: "enabled",
+      readOnly: true,
+    },
+  });
+
+  assert.equal(audit.safe, true);
+  assert.equal(audit.sandbox.enforcement_level, "informational");
+  assert.equal(audit.network.enforcement_level, "informational");
+  assert.equal(audit.read_only.enforcement_level, "informational");
+  assert.match(audit.warnings.join("\n"), /does not prevent writes/i);
+  assert.match(audit.warnings.join("\n"), /does not gate network access/i);
+  assert.deepEqual(audit.fail_closed_reasons, []);
+});
+
+test("policy audit records Cline advisory review prompt-only read-only guard", () => {
+  const audit = buildAgentPolicyAudit({
+    descriptor: getAgentAdapterDescriptor("cline"),
+    phase: ADAPTER_PHASES.ADVISORY_REVIEW,
+    requested: {
+      sandbox: "read-only",
+      networkAccess: "ambient",
+      readOnly: true,
+    },
+  });
+
+  assert.equal(audit.safe, true);
+  assert.equal(audit.sandbox.enforcement_level, "informational");
+  assert.equal(audit.network.enforcement_level, "informational");
+  assert.equal(audit.read_only.enforcement_level, "prompt-only");
+  assert.deepEqual(audit.read_only.flags, [
+    "prompt:do-not-modify-files",
+    "git-status-before-after",
+  ]);
+  assert.match(audit.warnings.join("\n"), /worktree mutation/i);
+});
+
 test("policy audit records Antigravity dispatch sandbox and add-dir metadata", () => {
   const audit = buildAgentPolicyAudit({
     descriptor: getAgentAdapterDescriptor("antigravity"),

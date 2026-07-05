@@ -2,9 +2,9 @@
 
 Route policy answers one operational question: which provider/model route is allowed to run in each relay phase?
 
-Executor and reviewer names such as `codex`, `claude`, `opencode`, and `pi` are harness names. They select a CLI adapter and execution contract. They are not the compliance boundary. The compliance boundary is the provider/model route string, for example `example/opencode-model-fast`, `example/pi-model-fast`, `example/pi-model-deep`, or `ollama/qwen3`.
+Executor and reviewer names such as `codex`, `claude`, `opencode`, `pi`, and `cline` are harness names. They select a CLI adapter and execution contract. They are not the compliance boundary. The compliance boundary is the provider/model route string, for example `example/opencode-model-fast`, `example/pi-model-fast`, `cline-pass/glm-5.2`, or `ollama/qwen3`.
 
-Codex and Claude are the managed CLI defaults. In the default managed profile, a model-less Codex or Claude invocation is allowed because the CLI account and its managed default model are the boundary. Generated company defaults should not pin Codex or Claude model names just to make policy explicit. OpenCode, Pi, and Antigravity are routing harnesses, so managed/company profiles must require an explicit provider/model route and an allow rule before they can run.
+Codex and Claude are the managed CLI defaults. In the default managed profile, a model-less Codex or Claude invocation is allowed because the CLI account and its managed default model are the boundary. Generated company defaults should not pin Codex or Claude model names just to make policy explicit. OpenCode, Pi, Antigravity, and Cline are routing harnesses, so managed/company profiles must require an explicit provider/model route and an allow rule before they can run.
 
 ## Default Posture
 
@@ -26,7 +26,7 @@ When no policy config exists, relay loads a fail-closed default policy:
 }
 ```
 
-That means missing policy config defaults to Codex/Claude managed CLI only. `codex` and `claude` pass the gate without a pinned model route. `opencode`, `pi`, `antigravity`, and any other unmanaged harness fail unless the effective invocation includes a provider/model route and that route matches `allowed_model_routes`.
+That means missing policy config defaults to Codex/Claude managed CLI only. `codex` and `claude` pass the gate without a pinned model route. `opencode`, `pi`, `antigravity`, `cline`, and any other unmanaged harness fail unless the effective invocation includes a provider/model route and that route matches `allowed_model_routes`.
 
 ## Precedence
 
