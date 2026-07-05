@@ -56,7 +56,11 @@ function setupRepo({ dirtyWorktree = false, state = STATES.REVIEW_PENDING } = {}
   manifest = updateManifestState(manifest, STATES.DISPATCHED, "await_dispatch_result");
   manifest.anchor.rubric_path = "rubric.yaml";
   fs.writeFileSync(path.join(ensureRunLayout(repoRoot, runId).runDir, "rubric.yaml"), "rubric:\n  factors:\n    - name: close-run\n", "utf-8");
-  manifest = updateManifestState(manifest, STATES.REVIEW_PENDING, "run_review");
+  if (state === STATES.DISPATCHED) {
+    // Leave the manifest in the incident state: dispatched but missing its worktree.
+  } else {
+    manifest = updateManifestState(manifest, STATES.REVIEW_PENDING, "run_review");
+  }
   if (state === STATES.ESCALATED) {
     manifest = updateManifestState(manifest, STATES.ESCALATED, "inspect_review_failure");
   }
@@ -91,8 +95,17 @@ function createUnrelatedRelayOwnedWorktree(repoRoot, branch = "issue-42") {
 function createMissingRelayOwnedWorktree(repoRoot) {
   const relayWorktrees = path.join(process.env.RELAY_HOME, "worktrees");
   fs.mkdirSync(relayWorktrees, { recursive: true });
-  const worktreeParent = fs.mkdtempSync(path.join(relayWorktrees, "missing-"));
+  const worktreeParent = path.join(relayWorktrees, "072287e7");
+  fs.mkdirSync(worktreeParent, { recursive: true });
   return path.join(worktreeParent, path.basename(repoRoot));
+}
+
+function createMissingWrongBasenameRelayWorktree(repoRoot) {
+  const relayWorktrees = path.join(process.env.RELAY_HOME, "worktrees");
+  fs.mkdirSync(relayWorktrees, { recursive: true });
+  const worktreeParent = path.join(relayWorktrees, "072287e7");
+  fs.mkdirSync(worktreeParent, { recursive: true });
+  return path.join(worktreeParent, `${path.basename(repoRoot)}-foreign`);
 }
 
 function branchExists(repoRoot, branch) {
@@ -123,6 +136,49 @@ test("close-run closes an active run and cleans a clean worktree", () => {
   assert.equal(result.nextAction, "done");
   assert.equal(result.cleanup.cleanupStatus, "succeeded");
   assert.equal(fs.existsSync(worktreePath), false);
+
+  const manifest = readManifest(manifestPath).data;
+  assert.equal(manifest.state, STATES.CLOSED);
+  assert.equal(manifest.cleanup.status, "succeeded");
+
+  const events = fs.readFileSync(getEventsPath(repoRoot, runId), "utf-8");
+  assert.match(events, /"event":"close"/);
+  assert.match(events, /"event":"cleanup_result"/);
+});
+
+test("close-run closes dispatched runs whose relay-owned worktree was already pruned", () => {
+  const { repoRoot, manifestPath, runId, worktreePath } = setupRepo({ state: STATES.DISPATCHED });
+  const missingWorktree = createMissingRelayOwnedWorktree(repoRoot);
+  execFileSync("git", ["worktree", "remove", "--force", worktreePath], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+  });
+  const record = readManifest(manifestPath);
+  writeManifest(manifestPath, {
+    ...record.data,
+    paths: {
+      ...(record.data.paths || {}),
+      worktree: missingWorktree,
+    },
+  }, record.body);
+
+  const stdout = execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--run-id", runId,
+    "--reason", "stale_non_terminal_run",
+    "--json",
+  ], { encoding: "utf-8" });
+
+  const result = JSON.parse(stdout);
+  assert.equal(result.previousState, STATES.DISPATCHED);
+  assert.equal(result.state, STATES.CLOSED);
+  assert.equal(result.nextAction, "done");
+  assert.equal(result.cleanup.cleanupStatus, "succeeded");
+  assert.equal(result.cleanup.worktreePath, missingWorktree);
+  assert.equal(result.cleanup.worktreeExistsBefore, false);
+  assert.equal(result.cleanup.worktreeRemoved, true);
 
   const manifest = readManifest(manifestPath).data;
   assert.equal(manifest.state, STATES.CLOSED);
@@ -230,9 +286,9 @@ test("close-run rejects relay-base same-name worktrees before cleanup", () => {
   assert.equal(manifest.cleanup.status, "pending");
 });
 
-test("close-run rejects missing relay-base same-name worktrees before cleanup", () => {
+test("close-run rejects missing relay-base wrong-basename worktrees before cleanup", () => {
   const { repoRoot, manifestPath, runId, worktreePath } = setupRepo();
-  const missingWorktree = createMissingRelayOwnedWorktree(repoRoot);
+  const missingWorktree = createMissingWrongBasenameRelayWorktree(repoRoot);
   const record = readManifest(manifestPath);
   writeManifest(manifestPath, {
     ...record.data,

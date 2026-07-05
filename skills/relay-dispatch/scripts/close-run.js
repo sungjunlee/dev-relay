@@ -73,6 +73,7 @@ function main() {
     expectedRepoRoot: repoRoot,
     manifestPath,
     runId: data.run_id,
+    acceptPrunedRelayOwned: true,
     caller: "close-run",
   });
   const safeData = {
@@ -95,6 +96,7 @@ function main() {
       data: updated,
       dryRun,
       deleteMergedBranch: false,
+      acceptPrunedRelayOwned: true,
     });
     updated = cleanupResult.updatedData;
   } else {
