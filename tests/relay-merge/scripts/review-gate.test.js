@@ -8,7 +8,7 @@ const path = require("path");
 const { buildSkipComment, evaluateReviewGate } = require("../../../skills/relay-merge/scripts/review-gate");
 const {
   createGrandfatheredRubricAnchor,
-} = require("../../../skills/relay-dispatch/scripts/test-support");
+} = require("../../relay-dispatch/scripts/test-support");
 
 function createRubricStateFixture(state) {
   const runDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-gate-"));

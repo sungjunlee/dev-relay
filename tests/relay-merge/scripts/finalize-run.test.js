@@ -16,7 +16,7 @@ const {
   writeManifest,
 } = require("../../../skills/relay-dispatch/scripts/relay-manifest");
 const { readRunEvents } = require("../../../skills/relay-dispatch/scripts/relay-events");
-const { createEnforcementFixture } = require("../../../skills/relay-dispatch/scripts/test-support");
+const { createEnforcementFixture } = require("../../relay-dispatch/scripts/test-support");
 
 const SCRIPT = path.join(__dirname, "..", "..", "..", "skills", "relay-merge", "scripts", "finalize-run.js");
 const DEFAULT_COMMIT_DATE = "2026-04-03T08:00:00Z";

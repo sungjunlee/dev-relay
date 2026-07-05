@@ -34,7 +34,7 @@ const {
 } = require("../../../skills/relay-dispatch/scripts/relay-manifest");
 const {
   createGrandfatheredRubricAnchor,
-} = require("../../../skills/relay-dispatch/scripts/test-support");
+} = require("./test-support");
 
 function initGitRepo(repoRoot, actor = "Relay Test") {
   execFileSync("git", ["init", "-b", "main"], { cwd: repoRoot, stdio: "pipe" });

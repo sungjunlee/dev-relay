@@ -21,7 +21,7 @@ const {
   DEFAULT_ENFORCEMENT_RUBRIC,
   createGrandfatheredRubricAnchor,
   createEnforcementFixture,
-} = require("../../../skills/relay-dispatch/scripts/test-support");
+} = require("../../relay-dispatch/scripts/test-support");
 const {
   EXECUTION_EVIDENCE_FILENAME,
   FORCE_FINALIZE_GUIDANCE,

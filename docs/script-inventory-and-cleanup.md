@@ -30,7 +30,7 @@ an operator CLI, adapter entry point, or archived measurement tool.
 | `scripts/recover-state.js` | Optional operator tool | Canonical structured state recovery command. | Keep. |
 | `scripts/update-manifest-state.js` | Decision needed | Public CLI in `cli-schema.js`, tests, and historical docs; not the canonical recovery path. | Either deprecate in favor of `recover-state.js` or document the remaining use case. Do not delete silently. |
 | `scripts/reliability-report.js` | Optional operator tool / planner signal producer | `/relay-plan` reads it before rubric design. | Keep. |
-| `scripts/smoke_dispatch_scenarios.py` | Archived measurement tool | Referenced from scenario-test docs only. | Move out of packaged `skills/` if it is no longer a shipped operator tool. |
+| `scripts/smoke_dispatch_scenarios.py` | Archived measurement tool | Deleted from packaged `skills/` in #765. | Removed; dated evidence docs remain historical. |
 | `scripts/claude-app-register.js` | Shared helper | Imported by the Claude executor adapter. | Keep while Claude executor registration parity exists. |
 | `scripts/codex-app-register.js` | Shared helper | Imported by the Codex executor adapter. | Keep. |
 | `scripts/worktree-runtime.js` | Shared helper | Imported by `dispatch.js` and `create-worktree.js`. | Keep. |
@@ -42,7 +42,7 @@ an operator CLI, adapter entry point, or archived measurement tool.
 | `scripts/exec.js` | Shared helper | Imported by dispatch, worktree, merge, and review helpers. | Keep. |
 | `scripts/cli-args.js` | Shared helper | Imported across all skills. | Keep. |
 | `scripts/cli-schema.js` | Shared helper / public registry | Imported by `cli-args.js`. | Keep and update when public CLIs are added or removed. |
-| `scripts/test-support.js` | Test support | Used by tests only. | Consider moving under `tests/` if packaged install weight matters. |
+| `tests/relay-dispatch/scripts/test-support.js` | Test support | Used by tests only. | Moved out of packaged `skills/` in #765. |
 | `scripts/relay-events.js` | Shared helper | Event journal producer used across dispatch, review, and merge. | Keep. |
 | `scripts/relay-resolver.js` | Shared helper | Manifest/run/branch resolution for dispatch, review, and merge. | Keep. |
 | `scripts/relay-manifest.js` | Compatibility facade | Thin re-export facade after manifest split. | Keep until downstream imports are fully migrated or facade compatibility is intentionally retired. |

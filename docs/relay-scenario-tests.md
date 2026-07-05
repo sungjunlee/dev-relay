@@ -24,11 +24,7 @@ Expect:
 
 ### 2. Dispatch success writes manifest and ends in `review_pending`
 
-Command:
-
-```bash
-python3 skills/relay-dispatch/scripts/smoke_dispatch_scenarios.py
-```
+Historical note: this archived measurement scenario was removed from the packaged skills tree in #765.
 
 Scenario:
 
@@ -47,11 +43,7 @@ Expect:
 
 ### 3. Dispatch structured no-op writes manifest and ends in `review_pending`
 
-Command:
-
-```bash
-python3 skills/relay-dispatch/scripts/smoke_dispatch_scenarios.py
-```
+Historical note: this archived measurement scenario was removed from the packaged skills tree in #765.
 
 Scenario:
 

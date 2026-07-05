@@ -16,7 +16,7 @@ const {
   writeManifest,
 } = require("../../../skills/relay-dispatch/scripts/relay-manifest");
 const { findManifestByRunId, resolveManifestRecord } = require("../../../skills/relay-dispatch/scripts/relay-resolver");
-const { createEnforcementFixture } = require("../../../skills/relay-dispatch/scripts/test-support");
+const { createEnforcementFixture } = require("./test-support");
 
 const CLOSE_RUN_SCRIPT = path.join(__dirname, "..", "..", "..", "skills", "relay-dispatch", "scripts", "close-run.js");
 const EXACT_PR_COLLISION_PR = 40;
