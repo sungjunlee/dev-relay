@@ -100,11 +100,11 @@ test("readArg preserves -h as a value for verbatim-mode reason flags", () => {
   );
 });
 
-test("readArg rejects -h as a value for update-manifest-state state flags", () => {
+test("readArg rejects -h as a value for recover-state target state flags", () => {
   // Anti-theater: state-transition selectors must not reinterpret the short help alias as the
   // requested manifest state when the caller declares `-h` reserved.
   assert.equal(
-    readArg(["--state", "-h"], "--state", undefined, { reservedFlags: ["-h"] }),
+    readArg(["--to", "-h"], "--to", undefined, { reservedFlags: ["-h"] }),
     undefined
   );
 });
