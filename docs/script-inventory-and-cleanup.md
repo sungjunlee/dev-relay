@@ -28,7 +28,6 @@ an operator CLI, adapter entry point, or archived measurement tool.
 | `scripts/close-run.js` | Optional operator tool | Used by cleanup output and documented recovery flows. | Keep. |
 | `scripts/recover-commit.js` | Optional operator tool | Canonical recovery for executor completed without commit/PR. | Keep. |
 | `scripts/recover-state.js` | Optional operator tool | Canonical structured state recovery command. | Keep. |
-| `scripts/update-manifest-state.js` | Decision needed | Public CLI in `cli-schema.js`, tests, and historical docs; not the canonical recovery path. | Either deprecate in favor of `recover-state.js` or document the remaining use case. Do not delete silently. |
 | `scripts/reliability-report.js` | Optional operator tool / planner signal producer | `/relay-plan` reads it before rubric design. | Keep. |
 | `scripts/smoke_dispatch_scenarios.py` | Archived measurement tool | Deleted from packaged `skills/` in #765. | Removed; dated evidence docs remain historical. |
 | `scripts/claude-app-register.js` | Shared helper | Imported by the Claude executor adapter. | Keep while Claude executor registration parity exists. |
@@ -84,7 +83,7 @@ an operator CLI, adapter entry point, or archived measurement tool.
 | `scripts/finalize-run.js` | Runtime entry point | `/relay-merge` step 1. | Keep. |
 | `scripts/review-gate.js` | Shared helper | Used by gate-check and finalize. | Keep. |
 | `scripts/relay-reconcile-artifact.js` | Optional operator tool | Documented bootstrap artifact reconciliation path. | Keep while bootstrap exemption remains supported. |
-| `scripts/sprint-close-report.js` | Optional operator tool / decision needed | Recently added and tested; not yet referenced by `relay-merge/SKILL.md`. | Promote by documenting the sprint-close invocation, or move out of packaged runtime if it stays manual/research-only. |
+| `scripts/sprint-close-report.js` | Optional operator tool | Documented in `relay-merge/references/sprint-close-report.md`; decision record #767. | Keep for sprint-close repeated-quality reporting after the last sprint PR merges. |
 
 ## Cleanup Order
 
@@ -111,8 +110,8 @@ node --test tests/relay-dispatch/scripts/cli-schema.test.js
 
 - `plan-runner.js` and its `invoke-planner-*` adapters were retired from the runtime skill package because isolated planning was optional and duplicated the human-in-the-loop `/relay-plan` flow.
 - `tdd-flavor.js` is a shared rubric helper despite its narrow name. It remains after `plan-runner` cleanup.
-- `sprint-close-report.js` is not dead code just because it lacks runtime imports. It landed as a report-only operator utility and needs a workflow reference or explicit archival decision.
-- `update-manifest-state.js` overlaps with `recover-state.js`, but overlap is not proof of dead code. It needs a deprecation decision because it remains in the public CLI schema.
+- #767 documents `sprint-close-report.js` as a report-only operator utility for sprint close, after the last sprint PR merges.
+- #767 retires `update-manifest-state.js`; use `recover-state.js` as the canonical structured state recovery command.
 
 ## Retired In #766
 
