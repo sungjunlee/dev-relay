@@ -110,6 +110,8 @@ const FLAGS = [
   { flag: "--state", kind: VALUE, mode: MODE_PARSED, valueName: "<state>", rationale: "Closed manifest state selector; flag-like following tokens should mean the value is missing." },
   { flag: "--tags", kind: VALUE, mode: MODE_PARSED, valueName: "<csv>", rationale: "Explicit routing tags; flag-like following tokens should mean the value is missing." },
   { flag: "--test-command", kind: VALUE, mode: MODE_VERBATIM, valueName: "<cmd>", rationale: "Execution evidence must preserve the operator-supplied command token exactly." },
+  { flag: "--test-result-file", kind: VALUE, mode: MODE_VERBATIM, valueName: "<path>", rationale: "Operator-supplied execution result artifact path; keep the literal argv token." },
+  { flag: "--test-exit-code", kind: VALUE, mode: MODE_PARSED, valueName: "<n>", rationale: "Numeric execution result status; flag-like following tokens should mean the value is missing." },
   { flag: "--text", kind: VALUE, mode: MODE_VERBATIM, valueName: "<text>", rationale: "Operator-supplied Done Criteria text body; keep the literal argv token." },
   { flag: "--timeout", kind: VALUE, mode: MODE_PARSED, valueName: "<seconds>", rationale: "Numeric timeout; flag-like following tokens should mean the value is missing." },
   { flag: "--title", aliases: ["-t"], kind: VALUE, mode: MODE_VERBATIM, valueName: "<text>", rationale: "Operator-supplied thread title; keep the literal argv token." },
@@ -184,6 +186,7 @@ const COMMAND_FLAGS = {
   ],
   "recover-commit": [
     "--repo", "--run-id", "--manifest", "--reason", "--pr-title", "--pr-body-file",
+    "--test-command", "--test-result-file", "--test-exit-code",
     "--dry-run", "--json", "--help",
   ],
   "relay-config": [
