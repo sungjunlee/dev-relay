@@ -4,6 +4,7 @@
 
 const path = require("path");
 const { CLEANUP_STATUSES, runCleanup, updateManifestCleanup } = require("./manifest/cleanup");
+const { execGit } = require("./exec");
 const { STATES, updateManifestState } = require("./manifest/lifecycle");
 const {
   getEventsPath,
@@ -51,15 +52,25 @@ function buildSkippedCleanupSummary(data, dryRun) {
   };
 }
 
-function buildMissingWorktreeCleanupResult(data, dryRun) {
+function buildMissingWorktreeCleanupResult(repoRoot, data, dryRun) {
   const attemptedAt = nowIso();
+  // The vanished directory can still be REGISTERED as a git worktree (external
+  // rm -rf leaves the registration and keeps the branch marked checked out
+  // there); prune clears the stale registration.
+  let pruneRan = false;
+  if (!dryRun) {
+    try {
+      execGit(repoRoot, ["worktree", "prune"]);
+      pruneRan = true;
+    } catch {}
+  }
   const updatedData = updateManifestCleanup(data, {
     status: CLEANUP_STATUSES.SUCCEEDED,
     last_attempted_at: attemptedAt,
     cleaned_at: attemptedAt,
     worktree_removed: true,
     branch_deleted: true,
-    prune_ran: false,
+    prune_ran: pruneRan,
     error: null,
   }, "done");
   return {
@@ -78,7 +89,7 @@ function buildMissingWorktreeCleanupResult(data, dryRun) {
       branch: data.git?.working_branch || null,
       branchExistedBefore: false,
       branchDeleted: true,
-      pruneRan: false,
+      pruneRan,
       deleteMergedBranch: false,
       error: null,
     },
@@ -146,7 +157,7 @@ function main() {
   let cleanupResult = null;
   if ((updated.policy?.cleanup || "on_close") === "on_close") {
     cleanupResult = validatedPaths.worktreeMissing
-      ? buildMissingWorktreeCleanupResult(updated, dryRun)
+      ? buildMissingWorktreeCleanupResult(repoRoot, updated, dryRun)
       : runCleanup({
           repoRoot,
           data: updated,

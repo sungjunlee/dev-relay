@@ -254,12 +254,14 @@ test("close-run closes when the manifest worktree path no longer exists", () => 
   assert.equal(result.state, STATES.CLOSED);
   assert.equal(result.cleanup.cleanupStatus, "succeeded");
   assert.equal(result.cleanup.worktreeExistsBefore, false);
+  assert.equal(result.cleanup.pruneRan, true, "missing-worktree close must prune stale git worktree registrations");
   assert.equal(fs.existsSync(worktreePath), true, "close-run must not infer and touch a different worktree");
   assert.equal(fs.existsSync(missingWorktree), false);
 
   const manifest = readManifest(manifestPath).data;
   assert.equal(manifest.state, STATES.CLOSED);
   assert.equal(manifest.cleanup.status, "succeeded");
+  assert.equal(manifest.cleanup.prune_ran, true);
 
   const events = fs.readFileSync(getEventsPath(repoRoot, runId), "utf-8");
   assert.match(events, /"event":"close"/);
