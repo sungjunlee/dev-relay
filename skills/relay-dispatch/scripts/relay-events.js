@@ -54,6 +54,7 @@ const EVENTS = Object.freeze({
   SCORE_DIVERGENCE: "score_divergence",
   SKIP_REVIEW: "skip_review",
   STATE_RECOVERY: "state_recovery",
+  UNREGISTERED_ROUTE_USED: "unregistered_route_used",
 });
 
 const EVENT_VALUES = Object.freeze(Object.values(EVENTS));
@@ -202,6 +203,12 @@ function appendRunEvent(repoRoot, runId, eventData) {
     ...(eventData.executor !== undefined
       ? { executor: normalizeEventValue(eventData.executor) }
       : {}),
+    ...(eventData.phase !== undefined
+      ? { phase: normalizeEventValue(eventData.phase) }
+      : {}),
+    ...(eventData.actor_field !== undefined
+      ? { actor_field: normalizeEventValue(eventData.actor_field) }
+      : {}),
     ...(eventData.kind !== undefined
       ? { kind: normalizeEventValue(eventData.kind) }
       : {}),
@@ -336,6 +343,36 @@ function appendRunEvent(repoRoot, runId, eventData) {
 
   appendEventLine(repoRoot, runId, record);
   return record;
+}
+
+function appendUnregisteredRouteUsedEvent(repoRoot, runId, {
+  state = null,
+  headSha = null,
+  round = undefined,
+  policyDecision,
+} = {}) {
+  if (policyDecision?.reason !== "unknown_allowed") return null;
+  const phase = normalizeEventValue(policyDecision.phase);
+  const actorField = normalizeEventValue(policyDecision.actor_field)
+    || (phase === "review" || phase === "advisory_review" ? "reviewer" : "executor");
+  const record = {
+    event: EVENTS.UNREGISTERED_ROUTE_USED,
+    state_from: state,
+    state_to: state,
+    head_sha: headSha,
+    round,
+    reason: "unknown_allowed",
+    phase,
+    actor_field: actorField,
+    model: policyDecision.model || null,
+    policy_decision: policyDecision,
+  };
+  if (actorField === "reviewer") {
+    record.reviewer = policyDecision.reviewer || policyDecision.actor || null;
+  } else {
+    record.executor = policyDecision.executor || policyDecision.actor || null;
+  }
+  return appendRunEvent(repoRoot, runId, record);
 }
 
 function appendIterationScore(repoRoot, runId, { round, scores } = {}) {
@@ -534,6 +571,7 @@ module.exports = {
   appendRubricQuality,
   appendRunEvent,
   appendScoreDivergence,
+  appendUnregisteredRouteUsedEvent,
   EVENTS,
   readAllRunEvents,
   readRunEvents,

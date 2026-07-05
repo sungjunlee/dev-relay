@@ -56,6 +56,18 @@ fs.writeFileSync(output, "route plan ok\\n", "utf-8");
   fs.chmodSync(codexPath, 0o755);
 }
 
+function writeFakePi(binDir) {
+  const piPath = path.join(binDir, "pi");
+  fs.writeFileSync(piPath, `#!/usr/bin/env node
+if (process.argv.includes("--version")) {
+  process.stdout.write("pi-fake\\n");
+  process.exit(0);
+}
+process.stdout.write("pi route plan ok\\n");
+`, "utf-8");
+  fs.chmodSync(piPath, 0o755);
+}
+
 test("dispatch dry-run consumes route intent and previews route plan", () => {
   const { root, repoRoot, relayHome, rubricFile } = setupRepo();
   writePolicy(relayHome, {
@@ -92,6 +104,10 @@ test("dispatch dry-run consumes route intent and previews route plan", () => {
 
 test("dispatch denied route intent fails before executor invocation", () => {
   const { root, repoRoot, relayHome, rubricFile } = setupRepo();
+  writePolicy(relayHome, {
+    profile: "strict-deny-unknown",
+    deny_unknown_model_routes: true,
+  });
   const intentPath = path.join(root, "route-intent-denied.json");
   writeJson(intentPath, {
     dispatch: { executor: "pi", model: "example/pi-model-fast" },
@@ -114,6 +130,40 @@ test("dispatch denied route intent fails before executor invocation", () => {
   const output = JSON.parse(proc.stdout);
   assert.equal(output.policy_decision.reason, "unknown_model_route");
   assert.equal(output.route_plan.phases.dispatch.executor, "pi");
+});
+
+test("dispatch emits unregistered route event for open-mode unmanaged model route", () => {
+  const { repoRoot, relayHome, rubricFile } = setupRepo();
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-route-open-bin-"));
+  writeFakePi(binDir);
+
+  const proc = spawnSync(process.execPath, [
+    SCRIPT, repoRoot,
+    "-b", "issue-open-unregistered",
+    "-p", "open route plan",
+    "--rubric-file", rubricFile,
+    "--executor", "pi",
+    "--model", "openai/unregistered",
+    "--json",
+  ], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    env: { ...process.env, RELAY_HOME: relayHome, PATH: `${binDir}${path.delimiter}${process.env.PATH || ""}` },
+  });
+
+  assert.equal(proc.status, 0, proc.stderr);
+  const output = JSON.parse(proc.stdout);
+  const events = fs.readFileSync(path.join(output.runDir, "events.jsonl"), "utf-8")
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line));
+  const routeResolution = events.find((event) => event.event === "route_resolution");
+  assert.equal(routeResolution.policy_decision.reason, "unknown_allowed");
+  const unregistered = events.find((event) => event.event === "unregistered_route_used");
+  assert.equal(unregistered.phase, "dispatch");
+  assert.equal(unregistered.actor_field, "executor");
+  assert.equal(unregistered.executor, "pi");
+  assert.equal(unregistered.model, "openai/unregistered");
 });
 
 test("dispatch project policy deny overrides personal route before unmanaged CLI invocation", () => {

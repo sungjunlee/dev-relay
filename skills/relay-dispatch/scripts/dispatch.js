@@ -125,7 +125,7 @@ const {
 } = require("./manifest/guidance");
 const { STATES, updateManifestState } = require("./manifest/lifecycle");
 const { resolveManifestRecord } = require("./relay-resolver");
-const { appendRunEvent, EVENTS } = require("./relay-events");
+const { appendRunEvent, appendUnregisteredRouteUsedEvent, EVENTS } = require("./relay-events");
 const {
   ADAPTER_PHASES,
   getAgentAdapterDescriptor,
@@ -1564,6 +1564,11 @@ async function main() {
       policy_decision: policyDecision,
       route_plan_path: routePlanSnapshot.path,
       route_plan_summary: summarizeRoutePlan(routePlan),
+    });
+    appendUnregisteredRouteUsedEvent(repoRoot, runId, {
+      state: manifest.state,
+      headSha: manifest.git?.head_sha || null,
+      policyDecision,
     });
   }
 

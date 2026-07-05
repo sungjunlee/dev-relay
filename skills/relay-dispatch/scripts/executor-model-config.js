@@ -101,8 +101,52 @@ function resolveLocalExecutorModelConfigPath(relayHome) {
   return path.join(home, "executors.json");
 }
 
+function resolveRoutesConfigPath(relayHome) {
+  const home = relayHome || process.env.RELAY_HOME || path.join(os.homedir(), ".relay");
+  return path.join(home, "routes.json");
+}
+
+function readOptionalRoutesExecutorModelConfig(filePath) {
+  if (!fs.existsSync(filePath)) return null;
+  let parsed;
+  try {
+    parsed = readJsonConfig(filePath, { optional: false });
+  } catch (error) {
+    console.error(`Warning: ignoring routes executor defaults at ${filePath}: ${error.message}`);
+    return { executors: {} };
+  }
+  if (!isPlainObject(parsed) || parsed.version !== 2) {
+    console.error(`Warning: ignoring routes executor defaults at ${filePath}: expected routes config version 2`);
+    return { executors: {} };
+  }
+  if (parsed.executor_defaults === undefined) return { executors: {} };
+  if (!isPlainObject(parsed.executor_defaults)) {
+    console.error(`Warning: ignoring routes executor defaults at ${filePath}: executor_defaults must be an object`);
+    return { executors: {} };
+  }
+  const executors = {};
+  for (const [executor, config] of Object.entries(parsed.executor_defaults)) {
+    if (!isPlainObject(config)) {
+      console.error(`Warning: ignoring routes executor default for ${executor} at ${filePath}: expected object`);
+      continue;
+    }
+    if (config.model !== undefined && (typeof config.model !== "string" || !config.model.trim())) {
+      console.error(`Warning: ignoring routes executor default for ${executor} at ${filePath}: model must be a non-empty string`);
+      continue;
+    }
+    if (typeof config.model === "string" && config.model.trim()) {
+      executors[executor] = { default_model: config.model.trim() };
+    }
+  }
+  return validateExecutorModelConfig({ executors }, filePath);
+}
+
 function loadExecutorModelConfig({ relayHome, bundledPath = BUNDLED_EXECUTOR_MODEL_CONFIG, localPath } = {}) {
   const bundled = validateExecutorModelConfig(readJsonConfig(bundledPath), bundledPath);
+  const routesConfig = localPath ? null : readOptionalRoutesExecutorModelConfig(resolveRoutesConfigPath(relayHome));
+  if (routesConfig) {
+    return mergeExecutorModelConfigs(bundled, routesConfig);
+  }
   const resolvedLocalPath = localPath || resolveLocalExecutorModelConfigPath(relayHome);
   const local = readOptionalExecutorModelConfig(resolvedLocalPath);
   return mergeExecutorModelConfigs(bundled, local);
@@ -111,6 +155,12 @@ function loadExecutorModelConfig({ relayHome, bundledPath = BUNDLED_EXECUTOR_MOD
 function resolveExecutorDefaultModel(executor, options = {}) {
   const bundledPath = options.bundledPath || BUNDLED_EXECUTOR_MODEL_CONFIG;
   const bundled = validateExecutorModelConfig(readJsonConfig(bundledPath), bundledPath);
+  const routesConfig = options.localPath ? null : readOptionalRoutesExecutorModelConfig(resolveRoutesConfigPath(options.relayHome));
+  if (routesConfig) {
+    const config = mergeExecutorModelConfigs(bundled, routesConfig);
+    const value = config.executors?.[executor]?.default_model;
+    return typeof value === "string" && value.trim() ? value.trim() : null;
+  }
   const resolvedLocalPath = options.localPath || resolveLocalExecutorModelConfigPath(options.relayHome);
   const local = readOptionalExecutorModelConfig(resolvedLocalPath);
   const config = mergeExecutorModelConfigs(bundled, local);
@@ -124,5 +174,6 @@ module.exports = {
   mergeExecutorModelConfigs,
   resolveExecutorDefaultModel,
   resolveLocalExecutorModelConfigPath,
+  resolveRoutesConfigPath,
   validateExecutorModelConfig,
 };

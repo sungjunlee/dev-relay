@@ -1894,6 +1894,10 @@ test("dispatch opencode executor records provider metadata", () => {
 test("dispatch denies disallowed executor route before spawning the executor", () => {
   const { repoRoot, relayHome } = setupRepo();
   process.env.RELAY_HOME = relayHome;
+  writeRelayPolicy(relayHome, {
+    profile: "strict-deny-unknown",
+    deny_unknown_model_routes: true,
+  });
   const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-opencode-bin-"));
   const capturePath = path.join(os.tmpdir(), `relay-dispatch-policy-denied-${Date.now()}.json`);
   writeArgCaptureOpencode(binDir, capturePath);

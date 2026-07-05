@@ -11,6 +11,7 @@ const {
 } = require("../../../skills/relay-dispatch/scripts/executor-model-config");
 
 function writeJson(filePath, value) {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
   fs.writeFileSync(filePath, JSON.stringify(value, null, 2), "utf-8");
   return filePath;
 }
@@ -103,4 +104,32 @@ test("loadExecutorModelConfig preserves local executor entries", () => {
   assert.equal(config.executors.opencode.default_model, "example/opencode-model-local");
   assert.deepEqual(config.executors.opencode.candidate_models, ["example/opencode-model-local"]);
   assert.equal(config.executors.codex.default_model, "gpt-5.5");
+});
+
+test("routes config executor_defaults override legacy executors config when routes is source of truth", () => {
+  const relayHome = fs.mkdtempSync(path.join(os.tmpdir(), "relay-executor-model-config-"));
+  writeJson(path.join(relayHome, "routes.json"), {
+    version: 2,
+    strict: false,
+    defaults: {
+      dispatch: { executor: "opencode" },
+      review: { reviewer: "codex" },
+      advisory_review: null,
+    },
+    executor_defaults: {
+      opencode: { model: "openai/routes-default" },
+    },
+    routes: [],
+    denied_routes: [],
+    presets: {},
+  });
+  writeJson(path.join(relayHome, "executors.json"), {
+    executors: {
+      opencode: {
+        default_model: "openai/legacy-default",
+      },
+    },
+  });
+
+  assert.equal(resolveExecutorDefaultModel("opencode", { relayHome }), "openai/routes-default");
 });

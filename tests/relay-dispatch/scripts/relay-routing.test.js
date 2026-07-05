@@ -8,10 +8,12 @@ const path = require("path");
 const {
   classifyChangedFiles,
   collectRoutingTagSources,
+  loadRouteConfig,
   loadProjectRoutes,
   normalizeTags,
   resolveRouteIntent,
   resolveRoutingDecision,
+  validateRouteConfig,
   validateProjectRoutes,
   validateRoutingRules,
 } = require("../../../skills/relay-dispatch/scripts/relay-routing");
@@ -244,6 +246,90 @@ test("project routes schema accepts phase defaults and rejects malformed actors"
     }, "routes.json"),
     /defaults\.dispatch\.executor must be a non-empty string/
   );
+});
+
+test("route config v2 accepts unified fields and carries presets unconsumed", () => {
+  const config = validateRouteConfig({
+    version: 2,
+    strict: true,
+    defaults: {
+      dispatch: { executor: "opencode" },
+      review: { reviewer: "codex" },
+      advisory_review: null,
+    },
+    executor_defaults: {
+      opencode: { model: "openai/gpt-5.3-codex-spark" },
+    },
+    routes: [
+      { route: "openai/*", phases: ["dispatch"], executors: ["opencode"] },
+    ],
+    denied_routes: ["openai/banned"],
+    presets: {
+      light: { dispatch: { executor: "opencode", model: "openai/gpt-5.3-codex-spark" } },
+    },
+  }, "routes.json");
+
+  assert.equal(config.version, 2);
+  assert.equal(config.strict, true);
+  assert.deepEqual(config.executor_defaults.opencode, { model: "openai/gpt-5.3-codex-spark" });
+  assert.deepEqual(config.presets.light.dispatch, {
+    executor: "opencode",
+    model: "openai/gpt-5.3-codex-spark",
+  });
+});
+
+test("route config loader merges global and project v2 per field with project presets winning", () => {
+  const { relayHome, repoRoot } = tempRepo();
+  writeJson(path.join(relayHome, "routes.json"), {
+    version: 2,
+    strict: false,
+    defaults: {
+      dispatch: { executor: "codex" },
+      review: { reviewer: "codex" },
+      advisory_review: null,
+    },
+    executor_defaults: {
+      opencode: { model: "openai/global" },
+    },
+    routes: [
+      { route: "openai/global", phases: ["dispatch"], executors: ["opencode"] },
+    ],
+    denied_routes: ["openai/denied-global"],
+    presets: {
+      light: { dispatch: { executor: "opencode", model: "openai/global" } },
+      diverse: { advisory_review: { reviewer: "pi", profile: "blindspot" } },
+    },
+  });
+  writeJson(getProjectRoutesPath(repoRoot, { relayHome }), {
+    version: 2,
+    strict: true,
+    defaults: {
+      dispatch: { executor: "pi", model: "openai/project" },
+    },
+    executor_defaults: {
+      opencode: { model: "openai/project" },
+    },
+    routes: [
+      { route: "openai/project", phases: ["review"], reviewers: ["opencode"] },
+    ],
+    denied_routes: ["openai/denied-project"],
+    presets: {
+      light: { dispatch: { executor: "pi", model: "openai/project" } },
+    },
+  });
+
+  const result = loadRouteConfig({ repoRoot, relayHome });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.status, "ok");
+  assert.equal(result.config.strict, true);
+  assert.deepEqual(result.config.defaults.dispatch, { executor: "pi", model: "openai/project" });
+  assert.deepEqual(result.config.defaults.review, { reviewer: "codex" });
+  assert.deepEqual(result.config.executor_defaults.opencode, { model: "openai/project" });
+  assert.deepEqual(result.config.routes.map((entry) => entry.route), ["openai/global", "openai/project"]);
+  assert.deepEqual(result.config.denied_routes.map((entry) => entry.route), ["openai/denied-global", "openai/denied-project"]);
+  assert.deepEqual(result.config.presets.light.dispatch, { executor: "pi", model: "openai/project" });
+  assert.deepEqual(result.config.presets.diverse.advisory_review, { reviewer: "pi", profile: "blindspot" });
 });
 
 test("route intent resolver gives run intent precedence over project defaults", () => {

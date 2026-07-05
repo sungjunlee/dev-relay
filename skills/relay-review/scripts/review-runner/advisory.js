@@ -12,7 +12,7 @@ const {
 } = require("../../../relay-dispatch/scripts/agent-adapters/policy");
 const { resolveExecutorDefaultModel } = require("../../../relay-dispatch/scripts/executor-model-config");
 const { hashFileSha256 } = require("../../../relay-dispatch/scripts/execution-evidence");
-const { appendRunEvent, EVENTS, readRunEvents } = require("../../../relay-dispatch/scripts/relay-events");
+const { appendRunEvent, appendUnregisteredRouteUsedEvent, EVENTS, readRunEvents } = require("../../../relay-dispatch/scripts/relay-events");
 const { parseAdvisoryReview, validateAdvisoryProfile } = require("../advisory-review-schema");
 const { captureGitStatus, resolveReviewerScript } = require("./reviewer-invoke");
 const { writeText } = require("./common");
@@ -465,6 +465,12 @@ function executeAdvisoryRequest(request) {
       failure_reason: failureReason,
       ...counts,
       ...timingFields,
+    });
+    appendUnregisteredRouteUsedEvent(request.runRepoPath, request.runId, {
+      state: request.state,
+      headSha: request.headSha,
+      round: request.round,
+      policyDecision: request.policyDecision,
     });
   } catch (error) {
     status = "failed";

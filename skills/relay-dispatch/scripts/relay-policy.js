@@ -53,6 +53,14 @@ function buildDefaultRelayPolicy() {
   };
 }
 
+function buildOpenDefaultRelayPolicy() {
+  return {
+    ...buildDefaultRelayPolicy(),
+    managed_cli: ["codex", "claude", "cursor"],
+    deny_unknown_model_routes: false,
+  };
+}
+
 function resolveRelayPolicyPath({ relayHome } = {}) {
   if (nonEmptyString(process.env.RELAY_POLICY_PATH)) {
     return process.env.RELAY_POLICY_PATH.trim();
@@ -363,7 +371,87 @@ function resolveProjectPolicyPath(repoRoot, relayHome) {
   }
 }
 
+function routesConfigToRelayPolicy(routeConfig) {
+  const defaults = buildDefaultRelayPolicy().defaults;
+  const routesDefaults = routeConfig?.defaults || {};
+  return validateRelayPolicy({
+    version: 1,
+    profile: "routes-config",
+    defaults: {
+      dispatch: {
+        ...defaults.dispatch,
+        ...(isPlainObject(routesDefaults.dispatch) ? routesDefaults.dispatch : {}),
+      },
+      review: {
+        ...defaults.review,
+        ...(isPlainObject(routesDefaults.review) ? routesDefaults.review : {}),
+      },
+      advisory_review: Object.prototype.hasOwnProperty.call(routesDefaults, "advisory_review")
+        ? routesDefaults.advisory_review
+        : defaults.advisory_review,
+    },
+    managed_cli: ["codex", "claude", "cursor"],
+    allowed_model_routes: routeConfig?.routes || [],
+    denied_model_routes: routeConfig?.denied_routes || [],
+    routing_rules: [],
+    deny_unknown_model_routes: routeConfig?.strict === true,
+    executor_defaults: cloneJson(routeConfig?.executor_defaults || {}),
+    presets: cloneJson(routeConfig?.presets || {}),
+    routes_config: {
+      version: 2,
+      strict: routeConfig?.strict === true,
+    },
+  }, "routes config policy");
+}
+
 function loadRelayPolicy(options = {}) {
+  let routeConfigResult = null;
+  try {
+    const { loadRouteConfig } = require("./relay-routing");
+    routeConfigResult = loadRouteConfig({
+      repoRoot: options.repoRoot,
+      relayHome: options.relayHome,
+      globalPath: options.routesPath,
+      projectPath: options.projectRoutesPath,
+      globalRoutes: options.globalRoutes,
+      projectRoutes: options.projectRoutes,
+    });
+  } catch (error) {
+    routeConfigResult = {
+      ok: false,
+      status: "error",
+      config: null,
+      errors: [{ source: "routes config", message: error.message }],
+      sources: {},
+    };
+  }
+  if (routeConfigResult?.ok === false) {
+    return {
+      ok: false,
+      status: "error",
+      policy: null,
+      errors: routeConfigResult.errors.map((error) => ({
+        reason: "invalid_policy",
+        source: error.source,
+        message: error.message,
+      })),
+      sources: {
+        routes: routeConfigResult.sources,
+      },
+    };
+  }
+  if (routeConfigResult?.status === "ok") {
+    return {
+      ok: true,
+      status: "ok",
+      policy: routesConfigToRelayPolicy(routeConfigResult.config),
+      errors: [],
+      sources: {
+        routes: routeConfigResult.sources,
+      },
+    };
+  }
+
   const globalPath = options.globalPath || resolveRelayPolicyPath({ relayHome: options.relayHome });
   const repoPath = options.repoPolicyPath || resolveRepoPolicyPath(options.repoRoot);
   const projectPath = options.projectPolicyPath || resolveProjectPolicyPath(options.repoRoot, options.relayHome);
@@ -383,7 +471,7 @@ function loadRelayPolicy(options = {}) {
       policy = validateRelayPolicy(readJsonFile(globalPath), globalPath);
       status = "ok";
     } else {
-      policy = buildDefaultRelayPolicy();
+      policy = buildOpenDefaultRelayPolicy();
     }
   } catch (error) {
     return {

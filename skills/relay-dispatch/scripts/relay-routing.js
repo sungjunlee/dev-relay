@@ -1,10 +1,13 @@
 "use strict";
 
 const fs = require("fs");
+const os = require("os");
 const path = require("path");
 const { resolveExecutorDefaultModel } = require("./executor-model-config");
 const { getProjectRoutesPath } = require("./manifest/paths");
 const { buildDefaultRelayPolicy, evaluateRelayRoute } = require("./relay-policy");
+
+const GLOBAL_ROUTES_FILE = "routes.json";
 
 function isPlainObject(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -264,20 +267,31 @@ function normalizeOptionalField(object, fieldName, sourceLabel, { required = fal
   return value;
 }
 
-function normalizeRouteDefault(value, phase, sourceLabel) {
+function normalizeRouteDefault(value, phase, sourceLabel, { partial = false } = {}) {
   const routeDefault = requirePhaseObject(value, phase, sourceLabel);
   if (routeDefault === null) return null;
 
   if (phase === "dispatch") {
-    return {
-      executor: normalizeOptionalField(routeDefault, "executor", sourceLabel, { required: true, label: "defaults.dispatch.executor" }),
-      ...(routeDefault.model !== undefined ? { model: normalizeOptionalField(routeDefault, "model", sourceLabel, { label: "defaults.dispatch.model" }) } : {}),
-    };
+    const normalized = {};
+    if (routeDefault.executor !== undefined || !partial) {
+      normalized.executor = normalizeOptionalField(routeDefault, "executor", sourceLabel, {
+        required: !partial,
+        label: "defaults.dispatch.executor",
+      });
+    }
+    if (routeDefault.model !== undefined) {
+      normalized.model = normalizeOptionalField(routeDefault, "model", sourceLabel, { label: "defaults.dispatch.model" });
+    }
+    return normalized;
   }
   if (phase === "review" || phase === "advisory_review") {
-    const normalized = {
-      reviewer: normalizeOptionalField(routeDefault, "reviewer", sourceLabel, { required: true, label: `defaults.${phase}.reviewer` }),
-    };
+    const normalized = {};
+    if (routeDefault.reviewer !== undefined || !partial) {
+      normalized.reviewer = normalizeOptionalField(routeDefault, "reviewer", sourceLabel, {
+        required: !partial,
+        label: `defaults.${phase}.reviewer`,
+      });
+    }
     if (routeDefault.model !== undefined) normalized.model = normalizeOptionalField(routeDefault, "model", sourceLabel, { label: `defaults.${phase}.model` });
     if (phase === "advisory_review" && routeDefault.profile !== undefined) {
       normalized.profile = normalizeOptionalField(routeDefault, "profile", sourceLabel, { label: "defaults.advisory_review.profile" });
@@ -288,6 +302,9 @@ function normalizeRouteDefault(value, phase, sourceLabel) {
 }
 
 function validateProjectRoutes(routes, sourceLabel = "project routes") {
+  if (isPlainObject(routes) && routes.version === 2) {
+    return validateRouteConfig(routes, sourceLabel, { project: true });
+  }
   if (!isPlainObject(routes)) {
     throw new Error(`invalid project routes at ${sourceLabel}: expected object`);
   }
@@ -306,6 +323,233 @@ function validateProjectRoutes(routes, sourceLabel = "project routes") {
       ...(defaults.review !== undefined ? { review: normalizeRouteDefault(defaults.review, "review", sourceLabel) } : {}),
       ...(defaults.advisory_review !== undefined ? { advisory_review: normalizeRouteDefault(defaults.advisory_review, "advisory_review", sourceLabel) } : {}),
     },
+  };
+}
+
+function assertNonEmptyStringArray(value, fieldName, sourceLabel) {
+  if (!Array.isArray(value)) {
+    throw new Error(`invalid routes config at ${sourceLabel}: ${fieldName} must be an array`);
+  }
+  return value.map((item, index) => {
+    const normalized = nonEmptyString(item);
+    if (!normalized) {
+      throw new Error(`invalid routes config at ${sourceLabel}: ${fieldName}[${index}] must be a non-empty string`);
+    }
+    return normalized;
+  });
+}
+
+function normalizeRouteEntry(entry, listName, index, sourceLabel) {
+  if (typeof entry === "string") {
+    const route = nonEmptyString(entry);
+    if (!route) {
+      throw new Error(`invalid routes config at ${sourceLabel}: ${listName}[${index}] must be a non-empty route string`);
+    }
+    return { route };
+  }
+  if (!isPlainObject(entry)) {
+    throw new Error(`invalid routes config at ${sourceLabel}: ${listName}[${index}] must be a route string or object`);
+  }
+  const route = nonEmptyString(entry.route);
+  if (!route) {
+    throw new Error(`invalid routes config at ${sourceLabel}: ${listName}[${index}].route must be a non-empty string`);
+  }
+  const normalized = { route };
+  for (const field of ["phases", "executors", "reviewers"]) {
+    if (entry[field] !== undefined) {
+      normalized[field] = assertNonEmptyStringArray(entry[field], `${listName}[${index}].${field}`, sourceLabel);
+    }
+  }
+  return normalized;
+}
+
+function normalizeRouteEntries(value, listName, sourceLabel) {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) {
+    throw new Error(`invalid routes config at ${sourceLabel}: ${listName} must be an array`);
+  }
+  return value.map((entry, index) => normalizeRouteEntry(entry, listName, index, sourceLabel));
+}
+
+function normalizeRoutesDefaults(defaults, sourceLabel, { project = false } = {}) {
+  if (defaults === undefined) return {};
+  if (!isPlainObject(defaults)) {
+    throw new Error(`invalid routes config at ${sourceLabel}: defaults must be an object`);
+  }
+  return {
+    ...(defaults.dispatch !== undefined ? { dispatch: normalizeRouteDefault(defaults.dispatch, "dispatch", sourceLabel, { partial: project }) } : {}),
+    ...(defaults.review !== undefined ? { review: normalizeRouteDefault(defaults.review, "review", sourceLabel, { partial: project }) } : {}),
+    ...(defaults.advisory_review !== undefined ? { advisory_review: normalizeRouteDefault(defaults.advisory_review, "advisory_review", sourceLabel, { partial: project }) } : {}),
+  };
+}
+
+function normalizeExecutorDefaults(value, sourceLabel) {
+  if (value === undefined) return {};
+  if (!isPlainObject(value)) {
+    throw new Error(`invalid routes config at ${sourceLabel}: executor_defaults must be an object`);
+  }
+  const normalized = {};
+  for (const [executor, config] of Object.entries(value)) {
+    const executorName = nonEmptyString(executor);
+    if (!executorName) {
+      throw new Error(`invalid routes config at ${sourceLabel}: executor_defaults keys must be non-empty strings`);
+    }
+    if (!isPlainObject(config)) {
+      throw new Error(`invalid routes config at ${sourceLabel}: executor_defaults.${executorName} must be an object`);
+    }
+    const model = normalizeOptionalField(config, "model", sourceLabel, { label: `executor_defaults.${executorName}.model` });
+    normalized[executorName] = model === undefined ? {} : { model };
+  }
+  return normalized;
+}
+
+function normalizePresets(value, sourceLabel) {
+  if (value === undefined) return {};
+  if (!isPlainObject(value)) {
+    throw new Error(`invalid routes config at ${sourceLabel}: presets must be an object`);
+  }
+  return cloneJson(value);
+}
+
+function validateRouteConfig(routes, sourceLabel = "routes config", { project = false } = {}) {
+  if (!isPlainObject(routes)) {
+    throw new Error(`invalid routes config at ${sourceLabel}: expected object`);
+  }
+  if (routes.version !== 2) {
+    throw new Error(`invalid routes config at ${sourceLabel}: version must be 2`);
+  }
+  if (routes.strict !== undefined && typeof routes.strict !== "boolean") {
+    throw new Error(`invalid routes config at ${sourceLabel}: strict must be a boolean`);
+  }
+  return {
+    ...cloneJson(routes),
+    version: 2,
+    strict: routes.strict === true,
+    defaults: normalizeRoutesDefaults(routes.defaults, sourceLabel, { project }),
+    executor_defaults: normalizeExecutorDefaults(routes.executor_defaults, sourceLabel),
+    routes: normalizeRouteEntries(routes.routes, "routes", sourceLabel),
+    denied_routes: normalizeRouteEntries(routes.denied_routes, "denied_routes", sourceLabel),
+    presets: normalizePresets(routes.presets, sourceLabel),
+  };
+}
+
+function mergePhaseDefaults(base = {}, override = {}) {
+  if (override === null) return null;
+  if (base === null) return override === undefined ? null : cloneJson(override);
+  return {
+    ...(isPlainObject(base) ? base : {}),
+    ...(isPlainObject(override) ? override : {}),
+  };
+}
+
+function mergeDefaults(base = {}, override = {}) {
+  const merged = { ...(base || {}) };
+  for (const phase of ["dispatch", "review", "advisory_review"]) {
+    if (Object.prototype.hasOwnProperty.call(override || {}, phase)) {
+      merged[phase] = mergePhaseDefaults(merged[phase], override[phase]);
+    }
+  }
+  return merged;
+}
+
+function mergeExecutorDefaults(base = {}, override = {}) {
+  const merged = cloneJson(base || {});
+  for (const [executor, config] of Object.entries(override || {})) {
+    merged[executor] = {
+      ...(merged[executor] || {}),
+      ...config,
+    };
+  }
+  return merged;
+}
+
+function mergeRouteConfigs(base, override) {
+  if (!override) return cloneJson(base);
+  return {
+    ...cloneJson(base),
+    ...cloneJson(override),
+    version: 2,
+    strict: Object.prototype.hasOwnProperty.call(override, "strict") ? override.strict === true : base.strict === true,
+    defaults: mergeDefaults(base.defaults, override.defaults),
+    executor_defaults: mergeExecutorDefaults(base.executor_defaults, override.executor_defaults),
+    routes: [...(base.routes || []), ...(override.routes || [])],
+    denied_routes: [...(base.denied_routes || []), ...(override.denied_routes || [])],
+    presets: {
+      ...(base.presets || {}),
+      ...(override.presets || {}),
+    },
+  };
+}
+
+function resolveGlobalRoutesPath({ relayHome } = {}) {
+  const home = relayHome || process.env.RELAY_HOME || path.join(os.homedir(), ".relay");
+  return path.join(home, GLOBAL_ROUTES_FILE);
+}
+
+function loadRouteConfig({ repoRoot, relayHome, globalPath, projectPath, globalRoutes, projectRoutes } = {}) {
+  const resolvedGlobalPath = globalPath || resolveGlobalRoutesPath({ relayHome });
+  let resolvedProjectPath = projectPath || null;
+  if (!resolvedProjectPath && repoRoot) {
+    try {
+      resolvedProjectPath = getProjectRoutesPath(repoRoot, { relayHome });
+    } catch {
+      resolvedProjectPath = null;
+    }
+  }
+  const sources = {
+    global: resolvedGlobalPath,
+    project: resolvedProjectPath,
+  };
+
+  let globalConfig = null;
+  try {
+    if (globalRoutes !== undefined) {
+      globalConfig = validateRouteConfig(globalRoutes, "injected global routes");
+    } else if (resolvedGlobalPath && fs.existsSync(resolvedGlobalPath)) {
+      globalConfig = validateRouteConfig(readProjectRoutesFile(resolvedGlobalPath), resolvedGlobalPath);
+    } else {
+      return { ok: true, status: "absent", config: null, errors: [], sources };
+    }
+  } catch (error) {
+    return { ok: false, status: "error", config: null, errors: [{ source: resolvedGlobalPath, message: error.message }], sources };
+  }
+
+  let effectiveConfig = globalConfig;
+  try {
+    let projectConfig = null;
+    if (projectRoutes !== undefined) {
+      projectConfig = validateRouteConfig(projectRoutes, "injected project routes", { project: true });
+    } else if (resolvedProjectPath && fs.existsSync(resolvedProjectPath)) {
+      const parsed = readProjectRoutesFile(resolvedProjectPath);
+      if (parsed?.version === 2) {
+        projectConfig = validateRouteConfig(parsed, resolvedProjectPath, { project: true });
+      } else if (parsed?.version === 1) {
+        projectConfig = {
+          version: 2,
+          strict: false,
+          defaults: validateProjectRoutes(parsed, resolvedProjectPath).defaults,
+          executor_defaults: {},
+          routes: [],
+          denied_routes: [],
+          presets: {},
+        };
+      } else {
+        projectConfig = validateRouteConfig(parsed, resolvedProjectPath, { project: true });
+      }
+    }
+    if (projectConfig) {
+      effectiveConfig = mergeRouteConfigs(globalConfig, projectConfig);
+    }
+  } catch (error) {
+    return { ok: false, status: "error", config: null, errors: [{ source: resolvedProjectPath, message: error.message }], sources };
+  }
+
+  return {
+    ok: true,
+    status: "ok",
+    config: effectiveConfig,
+    errors: [],
+    sources,
   };
 }
 
@@ -378,6 +622,8 @@ function resolveModelForActor({ phase, actor, runIntent, projectRoutes, policy, 
   const explicit = pickField({ phase, field: "model", runIntent, projectRoutes, policy });
   if (explicit.source !== "unresolved") return explicit;
   if (actor) {
+    const routeConfigDefault = nonEmptyString(policy?.executor_defaults?.[actor]?.model);
+    if (routeConfigDefault) return { value: routeConfigDefault, source: "executor_defaults" };
     const resolver = executorModelResolver || resolveExecutorDefaultModel;
     const model = resolver(actor, { relayHome });
     if (model) return { value: model, source: "executor_defaults" };
@@ -577,10 +823,13 @@ function resolveRoutingDecision({
 module.exports = {
   classifyChangedFiles,
   collectRoutingTagSources,
+  loadRouteConfig,
   loadProjectRoutes,
   normalizeTags,
   resolveRouteIntent,
   resolveRoutingDecision,
+  resolveGlobalRoutesPath,
+  validateRouteConfig,
   validateProjectRoutes,
   validateRoutingRules,
 };

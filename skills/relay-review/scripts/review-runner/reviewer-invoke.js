@@ -16,7 +16,7 @@ const {
 } = require("../../../relay-dispatch/scripts/agent-adapters/policy");
 const { resolveExecutorDefaultModel } = require("../../../relay-dispatch/scripts/executor-model-config");
 const { getRoutePlanPath } = require("../../../relay-dispatch/scripts/manifest/paths");
-const { appendRunEvent, EVENTS } = require("../../../relay-dispatch/scripts/relay-events");
+const { appendRunEvent, appendUnregisteredRouteUsedEvent, EVENTS } = require("../../../relay-dispatch/scripts/relay-events");
 const { assertRelayPolicyGate } = require("../../../relay-dispatch/scripts/relay-policy-gate");
 const { applyPolicyViolationToManifest } = require("./manifest-apply");
 const { git, readText, writeText } = require("./common");
@@ -332,6 +332,12 @@ function loadReviewText({ body, data, manifestPath, prNumber, promptPath, review
     policy_decision: policyDecision,
     route_source: routeSource,
     reviewer_policy: reviewerPolicy,
+  });
+  appendUnregisteredRouteUsedEvent(runRepoPath, data.run_id, {
+    state: data.state,
+    headSha: reviewedHeadSha || null,
+    round,
+    policyDecision,
   });
 
   const statusBeforeReviewer = captureGitStatus(reviewRepoPath);
