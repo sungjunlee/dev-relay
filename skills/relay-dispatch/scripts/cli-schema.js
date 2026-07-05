@@ -209,11 +209,6 @@ const COMMAND_FLAGS = {
     "--advisory-reviewer-model", "--advisory-timeout", "--advisory-grace", "--prepare-only",
     "--manual-review-reason", "--independent-review-reason", "--no-comment", "--json", "--help",
   ],
-  "update-manifest-state": [
-    "--manifest", "--repo", "--run-id", "--branch", "--state", "--next-action",
-    "--pr-number", "--head-sha", "--rounds", "--verdict", "--last-reviewed-sha",
-    "--max-rounds", "--repeated-issue-count", "--dry-run", "--json", "--help",
-  ],
 };
 
 const flagByPrimary = new Map();

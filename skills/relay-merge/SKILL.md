@@ -73,6 +73,7 @@ If the retained worktree is dirty, merge still succeeds but cleanup is recorded 
 After the merge is confirmed, `finalize-run.js` invokes `append-learnings.js` to record a one-line learning in the target repo's `spec/capabilities.md`. Learning failures are recorded under `result.learnings` and never block cleanup. No-op/fail-loud conditions and durability semantics: [`references/append-learnings.md`](references/append-learnings.md).
 
 Emergency, force-finalize, and bootstrap reconciliation paths: see [`references/operator-emergencies.md`](references/operator-emergencies.md).
+Sprint-close repeated-quality reporting: see [`references/sprint-close-report.md`](references/sprint-close-report.md).
 
 ### 2. Sprint file update (if available)
 
