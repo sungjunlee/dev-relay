@@ -333,6 +333,21 @@ test("project-only v2 routes config stays inactive without a global routes file"
   assert.equal(result.ok, true);
   assert.equal(result.status, "absent");
   assert.equal(result.config, null);
+
+  // Even a malformed project routes file must not break anything while the
+  // global file is absent — the routes-config world is inert.
+  fs.writeFileSync(getProjectRoutesPath(repoRoot, { relayHome }), "{not-json\n", "utf-8");
+  const malformed = loadRouteConfig({ repoRoot, relayHome });
+  assert.equal(malformed.ok, true);
+  assert.equal(malformed.status, "absent");
+  assert.equal(malformed.config, null);
+});
+
+test("route config rejects non-object preset values", () => {
+  assert.throws(
+    () => validateRouteConfig({ version: 2, presets: { light: "opencode" } }, "unit"),
+    /presets\.light must be an object/
+  );
 });
 
 test("route config loader merges global and project v2 per field with project presets winning", () => {

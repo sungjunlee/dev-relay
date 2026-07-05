@@ -408,6 +408,11 @@ function normalizePresets(value, sourceLabel) {
   if (!isPlainObject(value)) {
     throw new Error(`invalid routes config at ${sourceLabel}: presets must be an object`);
   }
+  for (const [name, preset] of Object.entries(value)) {
+    if (!isPlainObject(preset)) {
+      throw new Error(`invalid routes config at ${sourceLabel}: presets.${name} must be an object`);
+    }
+  }
   return cloneJson(value);
 }
 
@@ -518,6 +523,13 @@ function loadRouteConfig({ repoRoot, relayHome, globalPath, projectPath, globalR
     }
   } catch (error) {
     return { ok: false, status: "error", config: null, errors: [{ source: resolvedGlobalPath, message: error.message }], sources };
+  }
+
+  // DC #781 A1 §3: without the global routes file the routes-config world is
+  // entirely inert — do not even parse the project file, so legacy
+  // policy.json/executors.json loading can never be broken by its contents.
+  if (!globalConfig) {
+    return { ok: true, status: "absent", config: null, errors: [], sources };
   }
 
   let effectiveConfig = globalConfig;
