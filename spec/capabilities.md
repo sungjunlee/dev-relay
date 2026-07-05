@@ -167,7 +167,7 @@ Mutation discipline follows the spec-system contract from `sungjunlee/dev-backlo
 
 ### Hard Constraints
 - Never merge a PR whose `review.last_reviewed_sha` does not match current PR HEAD unless an explicit audited review bypass is used.
-- Never write outside the matching capability's `<!-- LEARN:BEGIN -->` / `<!-- LEARN:END -->` markers.
+- Never write outside the matching capability's LEARN BEGIN/END comment markers.
 
 ### Learnings
 <!-- LEARN:BEGIN -->
