@@ -1,5 +1,9 @@
 # Script Inventory and Cleanup Policy
 
+> Superseded by `tests/skills-lint/scripts/script-reachability.test.js` for
+> ongoing enforcement. The category taxonomy and Decision Notes below remain as
+> historical rationale; do not refresh the full inventory table.
+
 This document classifies runtime scripts before deleting or moving anything. The
 main rule: a script with zero runtime imports is not automatically dead. It may be
 an operator CLI, adapter entry point, or archived measurement tool.
