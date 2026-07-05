@@ -564,10 +564,11 @@ function loadRouteConfig({ repoRoot, relayHome, globalPath, projectPath, globalR
         projectConfig = validateRouteConfig(parsed, resolvedProjectPath, { project: true });
       }
     }
+    // DC #781 A1 §3: routes config becomes the source of truth only when the
+    // GLOBAL routes.json exists. A project-only routes file must not bypass
+    // legacy policy.json/executors.json precedence.
     if (globalConfig && projectConfig) {
       effectiveConfig = mergeRouteConfigs(globalConfig, projectConfig);
-    } else if (projectConfig) {
-      effectiveConfig = projectConfig;
     }
   } catch (error) {
     return { ok: false, status: "error", config: null, errors: [{ source: resolvedProjectPath, message: error.message }], sources };

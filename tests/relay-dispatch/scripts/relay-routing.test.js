@@ -308,7 +308,7 @@ test("route config loader accepts global-only routes config", () => {
   assert.deepEqual(result.config.routes.map((entry) => entry.route), ["openai/global"]);
 });
 
-test("route config loader accepts project-only v2 routes config", () => {
+test("project-only v2 routes config stays inactive without a global routes file", () => {
   const { relayHome, repoRoot } = tempRepo();
   writeJson(getProjectRoutesPath(repoRoot, { relayHome }), {
     version: 2,
@@ -322,22 +322,17 @@ test("route config loader accepts project-only v2 routes config", () => {
     routes: [
       { route: "openai/project", phases: ["dispatch"], executors: ["pi"] },
     ],
-    denied_routes: ["openai/blocked"],
-    presets: {
-      project: { dispatch: { executor: "pi", model: "openai/project" } },
-    },
+    denied_routes: [],
+    presets: {},
   });
 
+  // DC #781 A1 §3: without the GLOBAL routes.json, legacy precedence holds;
+  // a project-only routes file must not become the source of truth.
   const result = loadRouteConfig({ repoRoot, relayHome });
 
   assert.equal(result.ok, true);
-  assert.equal(result.status, "ok");
-  assert.equal(result.config.strict, true);
-  assert.deepEqual(result.config.defaults.dispatch, { executor: "pi", model: "openai/project" });
-  assert.deepEqual(result.config.executor_defaults.pi, { model: "openai/project" });
-  assert.deepEqual(result.config.routes.map((entry) => entry.route), ["openai/project"]);
-  assert.deepEqual(result.config.denied_routes.map((entry) => entry.route), ["openai/blocked"]);
-  assert.deepEqual(result.config.presets.project.dispatch, { executor: "pi", model: "openai/project" });
+  assert.equal(result.status, "absent");
+  assert.equal(result.config, null);
 });
 
 test("route config loader merges global and project v2 per field with project presets winning", () => {
