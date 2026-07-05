@@ -3064,6 +3064,12 @@ test("dispatch with --executor cline escalates malformed JSONL through the manif
   assert.equal(manifest.state, STATES.ESCALATED);
   assert.equal(manifest.dispatch.last_executor, "cline");
   assert.equal(manifest.dispatch.last_model, "cline-pass/glm-5.2");
+  const commitLog = execFileSync("git", ["-C", result.worktree, "log", "--oneline", "-1"], {
+    encoding: "utf-8",
+    stdio: "pipe",
+  }).trim();
+  assert.match(commitLog, /fake cline malformed result/);
+  assert.equal(fs.readFileSync(path.join(result.worktree, "cline-work.txt"), "utf-8"), "work before malformed result\n");
 });
 
 test("dispatch artifacts are persisted in the run directory", () => {

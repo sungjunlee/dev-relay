@@ -113,6 +113,7 @@ function buildPrompt(promptText) {
     "Do not wrap the response in markdown fences.",
     "Do not modify files, create commits, or write comments. Treat the checkout as read-only.",
     "Relay will check git status after this process and escalate any worktree mutation as a policy violation.",
+    "Do not use cline --worktree; relay already selected the review checkout with --cwd.",
     "",
     promptText,
   ].join("\n");

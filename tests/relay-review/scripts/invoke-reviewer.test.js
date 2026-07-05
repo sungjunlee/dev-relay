@@ -1258,6 +1258,7 @@ process.stdout.write(JSON.stringify({
   ]);
   assert.match(loggedArgs[9], /NON-INTERACTIVE ADVISORY REVIEW/);
   assert.match(loggedArgs[9], /Return a passing review\./);
+  assert.match(loggedArgs[9], /Do not use cline --worktree; relay already selected the review checkout with --cwd\./);
   assert.equal(loggedArgs.includes("--worktree"), false);
 });
 
