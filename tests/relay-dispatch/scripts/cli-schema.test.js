@@ -143,7 +143,6 @@ test("recover-commit flags are registered with explicit required modes", () => {
 });
 
 const HELP_COMMANDS = [
-  ["analyze-flip-flop-pattern", path.join(__dirname, "..", "..", "..", "skills", "relay-review", "scripts", "analyze-flip-flop-pattern.js")],
   ["cleanup-worktrees", path.join(__dirname, "..", "..", "..", "skills", "relay-dispatch", "scripts", "cleanup-worktrees.js")],
   ["close-run", path.join(__dirname, "..", "..", "..", "skills", "relay-dispatch", "scripts", "close-run.js")],
   ["create-worktree", path.join(__dirname, "..", "..", "..", "skills", "relay-dispatch", "scripts", "create-worktree.js")],

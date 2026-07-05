@@ -122,9 +122,6 @@ const FLAGS = [
 ];
 
 const COMMAND_FLAGS = {
-  "analyze-flip-flop-pattern": [
-    "--print", "--post-comment", "--issue", "--window-days", "--runs-dir", "--help",
-  ],
   "cleanup-worktrees": [
     "--repo", "--older-than", "--all", "--dry-run", "--json",
     "--inspect", "--reconcile-merged", "--stale-days", "--help",

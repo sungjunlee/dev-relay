@@ -63,8 +63,6 @@ an operator CLI, adapter entry point, or archived measurement tool.
 | `scripts/persist-done-criteria.js` | Runtime entry point | `/relay-plan` uses it to persist Phase 1 deviations. | Keep. |
 | `scripts/tdd-flavor.js` | Shared helper | Imported by `reliability-report.js`, `sprint-close-report.js`, and `tdd-suggestion.js`. | Keep. Consider renaming to a rubric parser/renderer name because it is shared outside the planner flow. |
 | `scripts/tdd-suggestion.js` | Optional planner helper | Mentioned by TDD reference; not wired into default `/relay-plan` flow. | Keep while Phase 1.2 TDD mode is planned; wire or fold into `rubric-pattern-tdd-flavor.md` when #142 lands. |
-| `scripts/reliability-report-consumer.js` | Tested helper (unused in SKILL) | #139 landed inline SKILL consumption; helper retains fallback contract tests. | Keep for now as tested fallback renderer; candidate to wire or retire in a focused cleanup PR. |
-| `scripts/probe-executor-env-consumer.js` | Tested helper (unused in SKILL) | #140 landed inline SKILL consumption; same shape as reliability consumer. | Same as reliability consumer — wire or retire explicitly, do not leave ambiguous. |
 
 ### Relay Review
 
@@ -74,7 +72,6 @@ an operator CLI, adapter entry point, or archived measurement tool.
 | `scripts/invoke-reviewer-codex.js` | Adapter entry point | Discovered by reviewer name. | Keep while Codex reviewer is supported. |
 | `scripts/invoke-reviewer-claude.js` | Adapter entry point | Discovered by reviewer name. | Keep while Claude reviewer is supported. |
 | `scripts/resolve-issue-number.sh` | Optional legacy helper | `relay-review/SKILL.md` labels it legacy manual helper. | Keep only while manual fallback docs still reference it. |
-| `scripts/analyze-flip-flop-pattern.js` | Optional operator / measurement tool | Issue #270 Phase A evidence; registered in `cli-schema.js`. | Keep as optional operator command until Phase B decision; evidence lives on GitHub issue #270, not in-repo. |
 | `scripts/review-schema.js` | Shared helper | Used by reviewer adapters and verdict parsing. | Keep. |
 | `scripts/reviewer-helpers.js` | Shared helper | Used by reviewer adapters. | Keep. |
 | `scripts/review-runner/*.js` | Shared helper modules | Stage modules for the review runner facade. | Keep. Treat as private implementation modules of `review-runner.js`. |
@@ -116,4 +113,12 @@ node --test tests/relay-dispatch/scripts/cli-schema.test.js
 - `tdd-flavor.js` is a shared rubric helper despite its narrow name. It remains after `plan-runner` cleanup.
 - `sprint-close-report.js` is not dead code just because it lacks runtime imports. It landed as a report-only operator utility and needs a workflow reference or explicit archival decision.
 - `update-manifest-state.js` overlaps with `recover-state.js`, but overlap is not proof of dead code. It needs a deprecation decision because it remains in the public CLI schema.
-- `reliability-report-consumer.js` / `probe-executor-env-consumer.js`: Phase 0 resolved consumption **in `relay-plan/SKILL.md`** (raw producer JSON). Helpers remain tested but unwired — next cleanup PR should wire or delete them explicitly.
+
+## Retired In #766
+
+| Script | Prior status | #766 decision |
+|--------|--------------|---------------|
+| `scripts/reliability-report-consumer.js` | Tested helper, unused by runtime flow. | Deleted with its dedicated test; relay-plan already consumes raw producer JSON directly. |
+| `scripts/probe-executor-env-consumer.js` | Tested helper, unused by runtime flow. | Deleted with its dedicated test; relay-plan already consumes raw probe JSON directly. |
+| `scripts/run-qa-loop.js` | Readiness intake helper with only dedicated test coverage. | Deleted with its dedicated test after the sequential Q&A flow was not wired into runtime intake. |
+| `scripts/analyze-flip-flop-pattern.js` | Optional operator/measurement tool registered in `cli-schema.js`. | Deleted with its dedicated test and removed from the public CLI registry. |
