@@ -54,9 +54,10 @@ function buildDefaultRelayPolicy() {
 }
 
 function buildOpenDefaultRelayPolicy() {
+  // DC #781 A1 §3: identical to buildDefaultRelayPolicy() with ONLY the
+  // posture flipped. Do not widen managed_cli here.
   return {
     ...buildDefaultRelayPolicy(),
-    managed_cli: ["codex", "claude", "cursor"],
     deny_unknown_model_routes: false,
   };
 }
@@ -390,7 +391,7 @@ function routesConfigToRelayPolicy(routeConfig) {
         ? routesDefaults.advisory_review
         : defaults.advisory_review,
     },
-    managed_cli: ["codex", "claude", "cursor"],
+    managed_cli: buildDefaultRelayPolicy().managed_cli,
     allowed_model_routes: routeConfig?.routes || [],
     denied_model_routes: routeConfig?.denied_routes || [],
     routing_rules: [],

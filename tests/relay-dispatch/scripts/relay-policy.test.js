@@ -41,7 +41,7 @@ test("loadRelayPolicy uses open built-in defaults when config is missing", () =>
 
   assert.equal(result.ok, true);
   assert.equal(result.status, "defaulted");
-  assert.deepEqual(result.policy.managed_cli, ["codex", "claude", "cursor"]);
+  assert.deepEqual(result.policy.managed_cli, buildDefaultRelayPolicy().managed_cli);
   assert.deepEqual(result.policy.allowed_model_routes, []);
   assert.equal(result.policy.deny_unknown_model_routes, false);
 
