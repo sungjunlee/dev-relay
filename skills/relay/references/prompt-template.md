@@ -67,8 +67,11 @@ rubric:
       weight: required
 ```
 
+## Test-run Discipline
+While iterating, run only the targeted or touched suites needed to verify the current change. Treat long repo-wide prerequisite checks as the final gate: run them once at the end before committing, because re-running long prerequisites every iteration can consume the dispatch timeout.
+
 ## Iteration Protocol
-0. PREREQUISITE GATE: Run all prerequisite checks. Any fails → fix before proceeding.
+0. PREREQUISITE GATE: Follow Test-run Discipline. During iteration, run targeted checks; run long repo-wide prerequisites once as the final gate before committing. Any final prerequisite failure must be fixed before completion.
 1. Run automated checks and self-review against the rubric.
 2. Fix the weakest required factor without regressing any locked factor.
 3. Re-run the rubric, update the Score Log, then stop only when all required factors meet target.
