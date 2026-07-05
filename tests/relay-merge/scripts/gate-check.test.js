@@ -18,7 +18,7 @@ const {
 const {
   createEnforcementFixture,
   createGrandfatheredRubricAnchor,
-} = require("../../../skills/relay-dispatch/scripts/test-support");
+} = require("../../relay-dispatch/scripts/test-support");
 
 const SCRIPT = path.join(__dirname, "..", "..", "..", "skills", "relay-merge", "scripts", "gate-check.js");
 const HISTORICAL_FIXTURE_DIR = path.join(__dirname, "..", "fixtures", "historical-issue-401");

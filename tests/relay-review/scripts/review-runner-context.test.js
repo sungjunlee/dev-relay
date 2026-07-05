@@ -9,7 +9,7 @@ const { ensureRunLayout } = require("../../../skills/relay-dispatch/scripts/rela
 const {
   createEnforcementFixture,
   DEFAULT_ENFORCEMENT_RUBRIC,
-} = require("../../../skills/relay-dispatch/scripts/test-support");
+} = require("../../relay-dispatch/scripts/test-support");
 const {
   loadPrReviewSignals,
   loadProjectConventions,

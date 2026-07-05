@@ -24,7 +24,7 @@ const {
   writeManifest,
 } = require("../../../skills/relay-dispatch/scripts/relay-manifest");
 const { readRunEvents } = require("../../../skills/relay-dispatch/scripts/relay-events");
-const { createEnforcementFixture } = require("../../../skills/relay-dispatch/scripts/test-support");
+const { createEnforcementFixture } = require("../../relay-dispatch/scripts/test-support");
 const { EXECUTION_EVIDENCE_FILENAME } = require("../../../skills/relay-review/scripts/review-runner/execution-evidence");
 const { writeFakeGhScript } = require("../../relay-review/fixtures/fake-gh");
 

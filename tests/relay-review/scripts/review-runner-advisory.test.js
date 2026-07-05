@@ -19,7 +19,7 @@ const { appendRunEvent, EVENTS, readRunEvents } = require("../../../skills/relay
 const {
   DEFAULT_ENFORCEMENT_RUBRIC,
   createEnforcementFixture,
-} = require("../../../skills/relay-dispatch/scripts/test-support");
+} = require("../../relay-dispatch/scripts/test-support");
 const { EXECUTION_EVIDENCE_FILENAME } = require("../../../skills/relay-review/scripts/review-runner/execution-evidence");
 const { finishAdvisoryReview } = require("../../../skills/relay-review/scripts/review-runner/advisory");
 const { installFakeGhOnPath } = require("../fixtures/fake-gh");

@@ -29,7 +29,7 @@ const {
 } = require("../../../skills/relay-dispatch/scripts/rubric-size");
 const { buildDefaultRelayPolicy } = require("../../../skills/relay-dispatch/scripts/relay-policy");
 const { evaluateReviewGate } = require("../../../skills/relay-merge/scripts/review-gate");
-const { createEnforcementFixture } = require("../../../skills/relay-dispatch/scripts/test-support");
+const { createEnforcementFixture } = require("./test-support");
 
 const SCRIPT = path.join(__dirname, "..", "..", "..", "skills", "relay-dispatch", "scripts", "dispatch.js");
 const WORKTREE_RUNTIME_FIXTURE_DIR = path.join(__dirname, "..", "fixtures", "worktree-runtime");
