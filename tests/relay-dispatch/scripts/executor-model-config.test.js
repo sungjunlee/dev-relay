@@ -1,5 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const { execFileSync } = require("child_process");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
@@ -9,10 +10,17 @@ const {
   resolveExecutorDefaultModel,
   validateExecutorModelConfig,
 } = require("../../../skills/relay-dispatch/scripts/executor-model-config");
+const { getProjectRoutesPath } = require("../../../skills/relay-dispatch/scripts/manifest/paths");
 
 function writeJson(filePath, value) {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
   fs.writeFileSync(filePath, JSON.stringify(value, null, 2), "utf-8");
   return filePath;
+}
+
+function initGitRepo(repoRoot) {
+  fs.mkdirSync(repoRoot, { recursive: true });
+  execFileSync("git", ["init", "-b", "main"], { cwd: repoRoot, stdio: "pipe" });
 }
 
 function withCapturedStderr(fn) {
@@ -103,4 +111,92 @@ test("loadExecutorModelConfig preserves local executor entries", () => {
   assert.equal(config.executors.opencode.default_model, "example/opencode-model-local");
   assert.deepEqual(config.executors.opencode.candidate_models, ["example/opencode-model-local"]);
   assert.equal(config.executors.codex.default_model, "gpt-5.5");
+});
+
+test("routes config executor_defaults override legacy executors config when routes is source of truth", () => {
+  const relayHome = fs.mkdtempSync(path.join(os.tmpdir(), "relay-executor-model-config-"));
+  writeJson(path.join(relayHome, "routes.json"), {
+    version: 2,
+    strict: false,
+    defaults: {
+      dispatch: { executor: "opencode" },
+      review: { reviewer: "codex" },
+      advisory_review: null,
+    },
+    executor_defaults: {
+      opencode: { model: "openai/routes-default" },
+    },
+    routes: [],
+    denied_routes: [],
+    presets: {},
+  });
+  writeJson(path.join(relayHome, "executors.json"), {
+    executors: {
+      opencode: {
+        default_model: "openai/legacy-default",
+      },
+    },
+  });
+
+  assert.equal(resolveExecutorDefaultModel("opencode", { relayHome }), "openai/routes-default");
+});
+
+test("project routes executor_defaults override global routes defaults in shared resolver", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "relay-executor-model-config-"));
+  const relayHome = path.join(root, "relay-home");
+  const repoRoot = path.join(root, "repo");
+  initGitRepo(repoRoot);
+  writeJson(path.join(relayHome, "routes.json"), {
+    version: 2,
+    strict: false,
+    defaults: {
+      dispatch: { executor: "opencode" },
+      review: { reviewer: "codex" },
+      advisory_review: null,
+    },
+    executor_defaults: {
+      opencode: { model: "openai/global-default" },
+    },
+    routes: [],
+    denied_routes: [],
+    presets: {},
+  });
+  writeJson(getProjectRoutesPath(repoRoot, { relayHome }), {
+    version: 2,
+    executor_defaults: {
+      opencode: { model: "openai/project-default" },
+    },
+  });
+
+  assert.equal(resolveExecutorDefaultModel("opencode", { relayHome, repoRoot }), "openai/project-default");
+  assert.equal(loadExecutorModelConfig({ relayHome, repoRoot }).executors.opencode.default_model, "openai/project-default");
+});
+
+test("default-model resolution without repoRoot uses only the global scope (no cwd fallback)", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "relay-executor-model-config-"));
+  const relayHome = path.join(root, "relay-home");
+  const repoRoot = path.join(root, "repo");
+  initGitRepo(repoRoot);
+  writeJson(path.join(relayHome, "routes.json"), {
+    version: 2,
+    executor_defaults: {
+      opencode: { model: "openai/global-default" },
+    },
+  });
+  writeJson(getProjectRoutesPath(repoRoot, { relayHome }), {
+    version: 2,
+    executor_defaults: {
+      opencode: { model: "openai/project-default" },
+    },
+  });
+
+  const previousCwd = process.cwd();
+  process.chdir(repoRoot);
+  try {
+    // Without an explicit repoRoot the resolver must not pick up the
+    // project routes of whatever directory it happens to run in.
+    assert.equal(resolveExecutorDefaultModel("opencode", { relayHome }), "openai/global-default");
+  } finally {
+    process.chdir(previousCwd);
+  }
 });

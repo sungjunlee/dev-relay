@@ -415,6 +415,37 @@ test("appendEventLineToPath writes explicit events paths through relay event val
   );
 });
 
+test("appendRunEvent records unregistered route usage payload fields", () => {
+  const { repoRoot, runId } = createContext();
+
+  appendRunEvent(repoRoot, runId, {
+    event: EVENTS.UNREGISTERED_ROUTE_USED,
+    state_from: "dispatched",
+    state_to: "dispatched",
+    reason: "unknown_allowed",
+    phase: "dispatch",
+    actor_field: "executor",
+    executor: "opencode",
+    model: "openai/unregistered",
+    policy_decision: {
+      allowed: true,
+      reason: "unknown_allowed",
+      phase: "dispatch",
+      actor_field: "executor",
+      executor: "opencode",
+      model: "openai/unregistered",
+    },
+  });
+
+  const [event] = readRunEvents(repoRoot, runId);
+  assert.equal(event.event, "unregistered_route_used");
+  assert.equal(event.phase, "dispatch");
+  assert.equal(event.actor_field, "executor");
+  assert.equal(event.executor, "opencode");
+  assert.equal(event.model, "openai/unregistered");
+  assert.equal(event.reason, "unknown_allowed");
+});
+
 test("readRunEvents tolerates historical-only event names", () => {
   const { repoRoot, runId } = createContext();
   const eventsPath = getEventsPath(repoRoot, runId);

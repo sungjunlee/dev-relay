@@ -125,7 +125,7 @@ const {
 } = require("./manifest/guidance");
 const { STATES, updateManifestState } = require("./manifest/lifecycle");
 const { resolveManifestRecord } = require("./relay-resolver");
-const { appendRunEvent, EVENTS } = require("./relay-events");
+const { appendRunEvent, appendUnregisteredRouteUsedEvent, EVENTS } = require("./relay-events");
 const {
   ADAPTER_PHASES,
   getAgentAdapterDescriptor,
@@ -290,6 +290,7 @@ function loadInitialRoutePlan(repoRoot) {
       projectRoutes: projectRoutes.routes,
       policy: policyResult.policy,
       relayHome: RELAY_HOME_FOR_ROUTES,
+      repoRoot,
     }),
   };
 }
@@ -1296,7 +1297,7 @@ async function main() {
     routePlanModel: INITIAL_ROUTE_RESOLUTION.routePlan.phases.dispatch?.model || null,
     manifestModelHints: manifest?.model_hints,
     cliModelHints: MODEL_HINTS,
-    executorDefaultModel: () => resolveExecutorDefaultModel(EXECUTOR, { relayHome: RELAY_HOME }),
+    executorDefaultModel: () => resolveExecutorDefaultModel(EXECUTOR, { relayHome: RELAY_HOME, repoRoot }),
   });
   const provider = typeof adapter.parseProvider === "function"
     ? (adapter.parseProvider(effectiveDispatchModel) ?? adapter.providerDefault ?? null)
@@ -1614,6 +1615,11 @@ async function main() {
       policy_decision: policyDecision,
       route_plan_path: routePlanSnapshot.path,
       route_plan_summary: summarizeRoutePlan(routePlan),
+    });
+    appendUnregisteredRouteUsedEvent(repoRoot, runId, {
+      state: manifest.state,
+      headSha: manifest.git?.head_sha || null,
+      policyDecision,
     });
   }
 

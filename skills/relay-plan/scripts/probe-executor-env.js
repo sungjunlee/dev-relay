@@ -206,9 +206,9 @@ function nonEmptyString(value) {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
-function resolveEffectiveProbeModel(executor, model, { relayHome = process.env.RELAY_HOME } = {}) {
+function resolveEffectiveProbeModel(executor, model, { relayHome = process.env.RELAY_HOME, repoRoot = null } = {}) {
   if (MANAGED_MODELLESS_EXECUTORS.has(executor)) return null;
-  return nonEmptyString(model) || resolveExecutorDefaultModel(executor, { relayHome });
+  return nonEmptyString(model) || resolveExecutorDefaultModel(executor, { relayHome, repoRoot });
 }
 
 // ---------------------------------------------------------------------------
@@ -221,7 +221,7 @@ function run({ repoPath, executor, model, timeout, projectOnly, jsonOut }) {
   let agentProbe = { error: null, raw: null };
   let policyDecision = null;
   if (!projectOnly) {
-    const effectiveProbeModel = resolveEffectiveProbeModel(executor, model);
+    const effectiveProbeModel = resolveEffectiveProbeModel(executor, model, { repoRoot: repoPath });
     // The probe checks whether the selected executor route is acceptable for
     // dispatch. relay-config exposes dispatch/review policy phases, not a
     // separate operator-facing probe phase.

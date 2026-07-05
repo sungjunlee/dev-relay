@@ -153,6 +153,12 @@ function setupRepo({
     },
   };
   const selectedPolicy = policyByName[modelPolicy];
+  if (modelPolicy === "strict-routes") {
+    fs.writeFileSync(path.join(process.env.RELAY_HOME, "routes.json"), JSON.stringify({
+      version: 2,
+      strict: true,
+    }, null, 2), "utf-8");
+  }
   if (selectedPolicy) {
     fs.writeFileSync(path.join(process.env.RELAY_HOME, "policy.json"), JSON.stringify({
       ...buildDefaultRelayPolicy(),
@@ -427,7 +433,7 @@ test("review-runner accepts opencode primary review when route policy allows the
 });
 
 test("review-runner denies opencode primary review before spawning when route policy blocks the model", () => {
-  const { repoRoot, manifestPath, runId, doneCriteriaPath, diffPath } = setupRepo({ modelPolicy: "default" });
+  const { repoRoot, manifestPath, runId, doneCriteriaPath, diffPath } = setupRepo({ modelPolicy: "strict-routes" });
   const logPath = path.join(repoRoot, "opencode-primary-policy.log");
   const opencodeScript = writeFakeOpencode(repoRoot, {
     logPath,
@@ -498,7 +504,7 @@ test("review-runner uses manifest routing advisory defaults without changing the
 });
 
 test("review-runner denies disallowed advisory model before spawning advisory reviewer", () => {
-  const { repoRoot, runId, doneCriteriaPath, diffPath } = setupRepo({ modelPolicy: "default" });
+  const { repoRoot, runId, doneCriteriaPath, diffPath } = setupRepo({ modelPolicy: "strict-routes" });
   const logPath = path.join(repoRoot, "advisory-policy.log");
   const primaryScript = writePrimaryReviewer(repoRoot, passVerdict());
   const opencodeScript = writeFakeOpencode(repoRoot, { logPath });
@@ -616,7 +622,7 @@ test("review-runner accepts cline advisory review when route policy allows the r
 });
 
 test("review-runner denies pi advisory model before spawning advisory reviewer", () => {
-  const { repoRoot, runId, doneCriteriaPath, diffPath } = setupRepo({ modelPolicy: "default" });
+  const { repoRoot, runId, doneCriteriaPath, diffPath } = setupRepo({ modelPolicy: "strict-routes" });
   const logPath = path.join(repoRoot, "pi-advisory-policy.log");
   const primaryScript = writePrimaryReviewer(repoRoot, passVerdict());
   const piScript = writeFakeAdvisoryCli(repoRoot, "pi", { logPath });
@@ -653,7 +659,7 @@ test("review-runner denies pi advisory model before spawning advisory reviewer",
 });
 
 test("review-runner denies antigravity advisory model before spawning advisory reviewer", () => {
-  const { repoRoot, runId, doneCriteriaPath, diffPath } = setupRepo({ modelPolicy: "default" });
+  const { repoRoot, runId, doneCriteriaPath, diffPath } = setupRepo({ modelPolicy: "strict-routes" });
   const logPath = path.join(repoRoot, "antigravity-advisory-policy.log");
   const primaryScript = writePrimaryReviewer(repoRoot, passVerdict());
   const antigravityScript = writeFakeAdvisoryCli(repoRoot, "antigravity", { logPath });

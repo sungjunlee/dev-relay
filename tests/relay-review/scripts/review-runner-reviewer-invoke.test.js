@@ -616,6 +616,10 @@ test("reviewer-invoke/loadReviewText denies disallowed reviewer model before ada
     process.env.RELAY_HOME = originalRelayHome;
   });
   process.env.RELAY_HOME = relayHome;
+  writeRelayPolicy(relayHome, {
+    profile: "strict-review-deny",
+    deny_unknown_model_routes: true,
+  });
 
   const helperDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-helper-"));
   const markerPath = path.join(helperDir, "invoked.txt");
@@ -755,6 +759,48 @@ test("reviewer-invoke keeps managed Codex reviewer modeless despite local execut
   assert.equal(reviewInvokeEvent.model, null);
   assert.equal(reviewInvokeEvent.policy_decision.allowed, true);
   assert.equal(reviewInvokeEvent.policy_decision.reason, "managed_cli");
+});
+
+test("reviewer-invoke/loadReviewText emits unregistered route event for open-mode unmanaged review route", (t) => {
+  const originalRelayHome = process.env.RELAY_HOME;
+  const { relayHome, repoRoot, runDir, manifestPath, manifest, promptPath, runId } = setupReviewRun();
+  t.after(() => {
+    if (originalRelayHome === undefined) {
+      delete process.env.RELAY_HOME;
+      return;
+    }
+    process.env.RELAY_HOME = originalRelayHome;
+  });
+  process.env.RELAY_HOME = relayHome;
+
+  const helperDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-helper-"));
+  const reviewerScript = writeReviewerArgEchoScript(helperDir, "reviewer-unregistered-route.js");
+
+  loadReviewText({
+    body: "# Notes\n",
+    data: manifest,
+    manifestPath,
+    prNumber: 11,
+    promptPath,
+    reviewFile: null,
+    reviewRepoPath: repoRoot,
+    reviewedHeadSha: "abc123",
+    reviewerModel: "openai/unregistered-review",
+    reviewerName: "opencode",
+    reviewerScript,
+    round: 1,
+    runDir,
+    runRepoPath: repoRoot,
+  });
+
+  const events = fs.readFileSync(getEventsPath(repoRoot, runId), "utf-8").trim().split("\n").map((line) => JSON.parse(line));
+  const reviewInvokeEvent = events.find((event) => event.event === "review_invoke");
+  const unregistered = events.find((event) => event.event === "unregistered_route_used");
+  assert.equal(reviewInvokeEvent.policy_decision.reason, "unknown_allowed");
+  assert.equal(unregistered.phase, "review");
+  assert.equal(unregistered.actor_field, "reviewer");
+  assert.equal(unregistered.reviewer, "opencode");
+  assert.equal(unregistered.model, "openai/unregistered-review");
 });
 
 test("reviewer-invoke/loadReviewText escalates when the reviewer mutates the worktree", (t) => {

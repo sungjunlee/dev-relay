@@ -400,6 +400,11 @@ test("CLI denied pi probe reports the explicit unknown model route", () => {
 test("CLI reports missing opencode model without invoking adapter probe", () => {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "probe-policy-denied-"));
   const relayHome = fs.mkdtempSync(path.join(os.tmpdir(), "probe-policy-home-"));
+  // Open-by-default posture (#781): the deny path now requires strict routes config.
+  fs.writeFileSync(path.join(relayHome, "routes.json"), JSON.stringify({
+    version: 2,
+    strict: true,
+  }, null, 2), "utf-8");
   const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "probe-policy-bin-"));
   const markerPath = path.join(binDir, "opencode-invoked.txt");
   const opencodePath = path.join(binDir, "opencode");

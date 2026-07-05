@@ -67,9 +67,12 @@ test("policy gate keeps Codex and Claude model-less managed CLI routes compatibl
 });
 
 test("policy gate denies unmanaged executor model routes unless explicitly allowed", () => {
+  // Open-by-default posture (#781): denial now requires strict routes config.
+  const relayHome = tempDir();
+  writeJson(path.join(relayHome, "routes.json"), { version: 2, strict: true });
   assert.throws(
     () => assertRelayPolicyGate({
-      relayHome: tempDir(),
+      relayHome,
       phase: "dispatch",
       executor: "opencode",
       model: "example/opencode-model-fast",

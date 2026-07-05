@@ -101,8 +101,61 @@ function resolveLocalExecutorModelConfigPath(relayHome) {
   return path.join(home, "executors.json");
 }
 
-function loadExecutorModelConfig({ relayHome, bundledPath = BUNDLED_EXECUTOR_MODEL_CONFIG, localPath } = {}) {
+function resolveRoutesConfigPath(relayHome) {
+  const home = relayHome || process.env.RELAY_HOME || path.join(os.homedir(), ".relay");
+  return path.join(home, "routes.json");
+}
+
+function routesConfigToExecutorModelConfig(routeConfig, sourceLabel) {
+  const executors = {};
+  for (const [executor, config] of Object.entries(routeConfig?.executor_defaults || {})) {
+    const model = typeof config?.model === "string" ? config.model.trim() : "";
+    if (model) {
+      executors[executor] = { default_model: model };
+    }
+  }
+  return validateExecutorModelConfig({ executors }, sourceLabel);
+}
+
+function readOptionalRoutesExecutorModelConfig({ relayHome, repoRoot, globalPath, projectPath } = {}) {
+  const resolvedGlobalPath = globalPath || resolveRoutesConfigPath(relayHome);
+  // No cwd fallback: without an explicit repoRoot only the global scope may
+  // contribute, otherwise an unrelated project's routes could leak into
+  // default-model resolution.
+  const effectiveRepoRoot = repoRoot || null;
+  if (!fs.existsSync(resolvedGlobalPath) && !projectPath) return null;
+  try {
+    const { loadRouteConfig } = require("./relay-routing");
+    const result = loadRouteConfig({
+      repoRoot: effectiveRepoRoot,
+      relayHome,
+      globalPath: resolvedGlobalPath,
+      projectPath,
+    });
+    if (result.status === "absent") return null;
+    if (!result.ok) {
+      const message = result.errors?.map((error) => error.message).join("; ") || "invalid routes config";
+      console.error(`Warning: ignoring routes executor defaults at ${resolvedGlobalPath}: ${message}`);
+      return { executors: {} };
+    }
+    return routesConfigToExecutorModelConfig(result.config, resolvedGlobalPath);
+  } catch (error) {
+    console.error(`Warning: ignoring routes executor defaults at ${resolvedGlobalPath}: ${error.message}`);
+    return { executors: {} };
+  }
+}
+
+function loadExecutorModelConfig({ relayHome, repoRoot, bundledPath = BUNDLED_EXECUTOR_MODEL_CONFIG, localPath, routesPath, projectRoutesPath } = {}) {
   const bundled = validateExecutorModelConfig(readJsonConfig(bundledPath), bundledPath);
+  const routesConfig = localPath ? null : readOptionalRoutesExecutorModelConfig({
+    relayHome,
+    repoRoot,
+    globalPath: routesPath,
+    projectPath: projectRoutesPath,
+  });
+  if (routesConfig) {
+    return mergeExecutorModelConfigs(bundled, routesConfig);
+  }
   const resolvedLocalPath = localPath || resolveLocalExecutorModelConfigPath(relayHome);
   const local = readOptionalExecutorModelConfig(resolvedLocalPath);
   return mergeExecutorModelConfigs(bundled, local);
@@ -111,6 +164,17 @@ function loadExecutorModelConfig({ relayHome, bundledPath = BUNDLED_EXECUTOR_MOD
 function resolveExecutorDefaultModel(executor, options = {}) {
   const bundledPath = options.bundledPath || BUNDLED_EXECUTOR_MODEL_CONFIG;
   const bundled = validateExecutorModelConfig(readJsonConfig(bundledPath), bundledPath);
+  const routesConfig = options.localPath ? null : readOptionalRoutesExecutorModelConfig({
+    relayHome: options.relayHome,
+    repoRoot: options.repoRoot,
+    globalPath: options.routesPath,
+    projectPath: options.projectRoutesPath,
+  });
+  if (routesConfig) {
+    const config = mergeExecutorModelConfigs(bundled, routesConfig);
+    const value = config.executors?.[executor]?.default_model;
+    return typeof value === "string" && value.trim() ? value.trim() : null;
+  }
   const resolvedLocalPath = options.localPath || resolveLocalExecutorModelConfigPath(options.relayHome);
   const local = readOptionalExecutorModelConfig(resolvedLocalPath);
   const config = mergeExecutorModelConfigs(bundled, local);
@@ -124,5 +188,6 @@ module.exports = {
   mergeExecutorModelConfigs,
   resolveExecutorDefaultModel,
   resolveLocalExecutorModelConfigPath,
+  resolveRoutesConfigPath,
   validateExecutorModelConfig,
 };

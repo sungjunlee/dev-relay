@@ -170,6 +170,7 @@ test("EVENTS is a frozen object map for current run journal event names", () => 
   assert.equal(EVENTS.READINESS_CHECK_FAILED, "readiness_check_failed");
   assert.equal(EVENTS.READINESS_CHECK_FAILED_NONTTY, "readiness_check_failed_nontty");
   assert.equal(EVENTS.READINESS_PROBE, "readiness_probe");
+  assert.equal(EVENTS.UNREGISTERED_ROUTE_USED, "unregistered_route_used");
 });
 
 test("EVENTS values match the event names emitted by producer call sites under skills", () => {
