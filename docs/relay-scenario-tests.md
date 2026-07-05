@@ -81,20 +81,20 @@ Expect:
 
 - all skill files parse as YAML
 
-### 5. Manifest resolver and state helper update the intended run
+### 5. Manifest resolver and state recovery update the intended run
 
 Command:
 
 ```bash
-node --test tests/relay-dispatch/scripts/update-manifest-state.test.js
+node --test tests/relay-dispatch/scripts/relay-resolver.test.js tests/relay-dispatch/scripts/recover-state.test.js
 ```
 
 Expect:
 
 - `run_id` resolves the intended manifest directly
 - ambiguous branch-only lookup fails instead of silently picking the newest run
-- helper updates `review_pending -> ready_to_merge`
-- helper persists `git.pr_number`, `git.head_sha`, `review.rounds`, `review.latest_verdict`, and `review.last_reviewed_sha`
+- `recover-state.js` (canonical since #767 retired `update-manifest-state.js`) applies only whitelisted recovery transitions with an audit reason
+- recovery persists the manifest state change and event journal entry
 
 ### 6. Same-run dispatch resume reuses the retained worktree
 
