@@ -269,10 +269,12 @@ test("validateManifestPaths accepts repo-contained and relay-owned worktrees", (
   createCommittedRepo(repoRoot, "Relay Paths");
   const runId = "issue-42-20260402103000500";
   const manifestPath = ensureRunLayout(repoRoot, runId).manifestPath;
+  const repoContainedWorktree = path.join(repoRoot, "wt", "issue-42");
+  fs.mkdirSync(repoContainedWorktree, { recursive: true });
 
   const repoContained = validateManifestPaths({
     repo_root: repoRoot,
-    worktree: path.join(repoRoot, "wt", "issue-42"),
+    worktree: repoContainedWorktree,
   }, {
     expectedRepoRoot: repoRoot,
     manifestPath,
@@ -280,7 +282,7 @@ test("validateManifestPaths accepts repo-contained and relay-owned worktrees", (
     caller: "relay-manifest.test repo-contained",
   });
   assert.equal(repoContained.repoRoot, path.resolve(repoRoot));
-  assert.equal(repoContained.worktree, path.join(repoRoot, "wt", "issue-42"));
+  assert.equal(repoContained.worktree, repoContainedWorktree);
   assert.equal(repoContained.worktreeLocation, "repo_root");
 
   const relayOwnedWorktree = createRelayOwnedWorktree(repoRoot);
@@ -355,6 +357,20 @@ test("validateManifestPaths rejects mismatched repo roots, escaped worktrees, an
     runId,
     caller: "relay-manifest.test missing relay-owned worktree",
   }), /is not contained under the expected repo root/);
+
+  const missingResult = validateManifestPaths({
+    repo_root: repoRoot,
+    worktree: missingRelayOwnedWorktree,
+  }, {
+    expectedRepoRoot: repoRoot,
+    manifestPath,
+    runId,
+    allowMissingWorktree: true,
+    caller: "relay-manifest.test allowed missing relay-owned worktree",
+  });
+  assert.equal(missingResult.worktree, missingRelayOwnedWorktree);
+  assert.equal(missingResult.worktreeLocation, "relay_worktree");
+  assert.equal(missingResult.worktreeMissing, true);
 
   assert.throws(() => validateManifestPaths({
     repo_root: attackerRoot,

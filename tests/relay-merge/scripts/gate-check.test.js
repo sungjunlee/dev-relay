@@ -250,6 +250,8 @@ function writeLiveManifest(repoRoot, relayHome, {
   });
   const manifestPath = getManifestPath(repoRoot, runId);
   const runDir = getRunDir(repoRoot, runId);
+  const worktreePath = path.join(repoRoot, "worktree");
+  fs.mkdirSync(worktreePath, { recursive: true });
   if (looksLikeContainedRubricPath(anchor.rubric_path) && rubricContent !== false) {
     const fullPath = path.join(runDir, anchor.rubric_path);
     fs.mkdirSync(path.dirname(fullPath), { recursive: true });
@@ -262,7 +264,7 @@ function writeLiveManifest(repoRoot, relayHome, {
       branch: "issue-40",
       baseBranch: "main",
       issueNumber: 40,
-      worktreePath: path.join(repoRoot, "worktree"),
+      worktreePath,
       orchestrator: "test",
       executor: "codex",
       reviewer: "codex",
@@ -394,8 +396,10 @@ function createHistoricalLegacyFixture() {
   const { data, body } = readManifest(sourceManifestPath);
   const manifestPath = getManifestPath(repoRoot, data.run_id);
   const runDir = getRunDir(repoRoot, data.run_id);
+  const worktreePath = path.join(repoRoot, "worktree");
 
   fs.mkdirSync(runDir, { recursive: true });
+  fs.mkdirSync(worktreePath, { recursive: true });
   fs.copyFileSync(sourceRubricPath, path.join(runDir, "rubric.yaml"));
 
   writeManifest(manifestPath, {
@@ -421,7 +425,7 @@ function createHistoricalLegacyFixture() {
     paths: {
       ...(data.paths || {}),
       repo_root: repoRoot,
-      worktree: path.join(repoRoot, "worktree"),
+      worktree: worktreePath,
     },
   }, body);
 

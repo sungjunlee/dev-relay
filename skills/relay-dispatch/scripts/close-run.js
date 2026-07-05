@@ -4,14 +4,18 @@
 
 const path = require("path");
 const { CLEANUP_STATUSES, runCleanup, updateManifestCleanup } = require("./manifest/cleanup");
+const { execGit } = require("./exec");
 const { STATES, updateManifestState } = require("./manifest/lifecycle");
 const {
+  getEventsPath,
+  nowIso,
+  summarizeFailure,
   validateManifestPaths,
 } = require("./manifest/paths");
-const { writeManifest } = require("./manifest/store");
+const { getActorName, writeManifest } = require("./manifest/store");
 const { findUnknownFlags, modeLabel, readArg, schemaHasFlag } = require("./cli-args");
 const { resolveManifestRecord } = require("./relay-resolver");
-const { appendRunEvent, EVENTS } = require("./relay-events");
+const { appendEventLineToPath, appendRunEvent, EVENTS } = require("./relay-events");
 
 const args = process.argv.slice(2);
 const CLI_ARG_OPTIONS = { commandName: "close-run", reservedFlags: ["-h"] };
@@ -49,6 +53,74 @@ function buildSkippedCleanupSummary(data, dryRun) {
   };
 }
 
+function buildMissingWorktreeCleanupResult(repoRoot, data, dryRun) {
+  const attemptedAt = nowIso();
+  // The vanished directory can still be REGISTERED as a git worktree (external
+  // rm -rf leaves the registration and keeps the branch marked checked out
+  // there); prune clears the stale registration. A prune failure must surface
+  // with runCleanup-style failure semantics, not be swallowed as success.
+  let pruneRan = false;
+  let pruneError = null;
+  if (!dryRun) {
+    try {
+      execGit(repoRoot, ["worktree", "prune"]);
+      pruneRan = true;
+    } catch (error) {
+      pruneError = `worktree prune failed for missing worktree: ${summarizeFailure(error)}`;
+    }
+  }
+  const cleanupStatus = pruneError ? CLEANUP_STATUSES.FAILED : CLEANUP_STATUSES.SUCCEEDED;
+  const nextAction = pruneError ? "manual_cleanup_required" : "done";
+  const updatedData = updateManifestCleanup(data, {
+    status: cleanupStatus,
+    last_attempted_at: attemptedAt,
+    cleaned_at: pruneError ? (data.cleanup?.cleaned_at || null) : attemptedAt,
+    worktree_removed: true,
+    branch_deleted: true,
+    prune_ran: pruneRan,
+    error: pruneError,
+  }, nextAction);
+  return {
+    updatedData,
+    summary: {
+      state: data.state,
+      cleanupStatus,
+      nextAction,
+      attemptedAt,
+      dryRun,
+      worktreePath: data.paths?.worktree || null,
+      worktreeExistsBefore: false,
+      worktreeRemoved: true,
+      worktreeDirty: false,
+      worktreeStatus: null,
+      branch: data.git?.working_branch || null,
+      branchExistedBefore: false,
+      branchDeleted: true,
+      pruneRan,
+      deleteMergedBranch: false,
+      error: pruneError,
+    },
+  };
+}
+
+function appendCloseEvent(repoRoot, runId, eventData) {
+  if (eventData.worktree_missing !== true) {
+    return appendRunEvent(repoRoot, runId, eventData);
+  }
+  return appendEventLineToPath(getEventsPath(repoRoot, runId), {
+    ts: eventData.ts || new Date().toISOString(),
+    event: eventData.event,
+    actor: getActorName(repoRoot),
+    run_id: runId,
+    state_from: eventData.state_from ?? null,
+    state_to: eventData.state_to ?? null,
+    head_sha: eventData.head_sha ?? null,
+    round: eventData.round ?? null,
+    reason: eventData.reason ?? null,
+    worktree_missing: true,
+  });
+}
+
 function main() {
   const unknownFlags = findUnknownFlags(args, "close-run");
   if (unknownFlags.length) {
@@ -73,6 +145,7 @@ function main() {
     expectedRepoRoot: repoRoot,
     manifestPath,
     runId: data.run_id,
+    allowMissingWorktree: true,
     caller: "close-run",
   });
   const safeData = {
@@ -90,12 +163,14 @@ function main() {
   let updated = updateManifestState(safeData, STATES.CLOSED, "manual_cleanup_required");
   let cleanupResult = null;
   if ((updated.policy?.cleanup || "on_close") === "on_close") {
-    cleanupResult = runCleanup({
-      repoRoot,
-      data: updated,
-      dryRun,
-      deleteMergedBranch: false,
-    });
+    cleanupResult = validatedPaths.worktreeMissing
+      ? buildMissingWorktreeCleanupResult(repoRoot, updated, dryRun)
+      : runCleanup({
+          repoRoot,
+          data: updated,
+          dryRun,
+          deleteMergedBranch: false,
+        });
     updated = cleanupResult.updatedData;
   } else {
     updated = updateManifestCleanup(updated, { status: CLEANUP_STATUSES.SKIPPED }, "done");
@@ -107,13 +182,14 @@ function main() {
 
   if (!dryRun) {
     writeManifest(manifestPath, updated, body);
-    appendRunEvent(repoRoot, updated.run_id, {
+    appendCloseEvent(repoRoot, updated.run_id, {
       event: EVENTS.CLOSE,
       state_from: safeData.state,
       state_to: STATES.CLOSED,
       head_sha: updated.git?.head_sha || null,
       round: updated.review?.rounds || null,
       reason,
+      ...(validatedPaths.worktreeMissing ? { worktree_missing: true } : {}),
     });
     appendRunEvent(repoRoot, updated.run_id, {
       event: EVENTS.CLEANUP_RESULT,

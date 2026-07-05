@@ -578,6 +578,45 @@ function shellQuote(s) {
   return "'" + s.replace(/'/g, "'\\''") + "'";
 }
 
+function localBranchExists(repoRoot, branch) {
+  if (!repoRoot || !branch) return false;
+  try {
+    execFileSync("git", ["show-ref", "--verify", `refs/heads/${branch}`], {
+      cwd: repoRoot,
+      encoding: "utf-8",
+      stdio: "pipe",
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function formatMissingResumeWorktreeError({ repoRoot, runId, worktreePath, branch, baseBranch }) {
+  let reprovisionCommand = null;
+  if (branch && localBranchExists(repoRoot, branch)) {
+    reprovisionCommand = `git worktree add ${shellQuote(worktreePath)} ${shellQuote(branch)}`;
+  } else if (branch && baseBranch) {
+    reprovisionCommand = `git worktree add ${shellQuote(worktreePath)} -b ${shellQuote(branch)} ${shellQuote(baseBranch)}`;
+  }
+  // An externally deleted directory can still be REGISTERED as a worktree (and
+  // its branch marked checked out there), which would make a bare `worktree add`
+  // fail — clear the stale registration first.
+  const unregisterCommand = `git worktree remove --force ${shellQuote(worktreePath)} 2>/dev/null || git worktree prune`;
+  return [
+    `retained worktree is missing for run '${runId}': ${worktreePath || "(unset)"}`,
+    ...(reprovisionCommand
+      ? [
+          "Re-provision the retained worktree before resuming (clears any stale registration first):",
+          `  ${unregisterCommand}`,
+          `  ${reprovisionCommand}`,
+        ]
+      : [
+          "Re-provision the retained worktree before resuming with create-worktree.js, then retry.",
+        ]),
+  ].join("\n");
+}
+
 function terminateProcessTree(pid) {
   if (!pid) return;
   try {
@@ -1037,6 +1076,7 @@ async function main() {
       expectedRepoRoot: MANIFEST_INPUT ? undefined : ((repoPathRaw || looksLikeGitRepo(repoRoot)) ? repoRoot : undefined),
       manifestPath,
       runId: manifest.run_id || runId,
+      allowMissingWorktree: true,
       caller: "dispatch resume",
     });
     repoRoot = validatedPaths.repoRoot;
@@ -1078,6 +1118,16 @@ async function main() {
     }
     if (!branch) {
       console.error(`Error: manifest ${manifestPath} is missing git.working_branch`);
+      process.exit(1);
+    }
+    if (validatedPaths.worktreeMissing) {
+      console.error(`Error: ${formatMissingResumeWorktreeError({
+        repoRoot,
+        runId,
+        worktreePath: manifest.paths?.worktree || wtPath,
+        branch,
+        baseBranch,
+      })}`);
       process.exit(1);
     }
     if (!wtPath || !fs.existsSync(wtPath)) {

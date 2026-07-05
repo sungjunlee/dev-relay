@@ -89,6 +89,7 @@ function setupRun({
   });
   const manifestPath = ensureRunLayout(repoRoot, runId).manifestPath;
   const worktreePath = path.join(repoRoot, "wt", branch);
+  fs.mkdirSync(worktreePath, { recursive: true });
   let manifest = createManifestSkeleton({
     repoRoot,
     runId,

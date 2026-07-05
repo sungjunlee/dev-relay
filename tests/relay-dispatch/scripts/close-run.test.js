@@ -230,7 +230,7 @@ test("close-run rejects relay-base same-name worktrees before cleanup", () => {
   assert.equal(manifest.cleanup.status, "pending");
 });
 
-test("close-run rejects missing relay-base same-name worktrees before cleanup", () => {
+test("close-run closes when the manifest worktree path no longer exists", () => {
   const { repoRoot, manifestPath, runId, worktreePath } = setupRepo();
   const missingWorktree = createMissingRelayOwnedWorktree(repoRoot);
   const record = readManifest(manifestPath);
@@ -242,24 +242,80 @@ test("close-run rejects missing relay-base same-name worktrees before cleanup", 
     },
   }, record.body);
 
-  const result = spawnSync("node", [
+  const stdout = execFileSync("node", [
     SCRIPT,
     "--repo", repoRoot,
     "--run-id", runId,
     "--reason", "stale_non_terminal_run",
     "--json",
-  ], {
-    encoding: "utf-8",
-  });
+  ], { encoding: "utf-8" });
 
-  assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /manifest paths\.worktree/);
-  assert.equal(fs.existsSync(worktreePath), true, "close-run must fail before touching the real worktree");
+  const result = JSON.parse(stdout);
+  assert.equal(result.state, STATES.CLOSED);
+  assert.equal(result.cleanup.cleanupStatus, "succeeded");
+  assert.equal(result.cleanup.worktreeExistsBefore, false);
+  assert.equal(result.cleanup.pruneRan, true, "missing-worktree close must prune stale git worktree registrations");
+  assert.equal(fs.existsSync(worktreePath), true, "close-run must not infer and touch a different worktree");
   assert.equal(fs.existsSync(missingWorktree), false);
 
   const manifest = readManifest(manifestPath).data;
-  assert.equal(manifest.state, STATES.REVIEW_PENDING);
-  assert.equal(manifest.cleanup.status, "pending");
+  assert.equal(manifest.state, STATES.CLOSED);
+  assert.equal(manifest.cleanup.status, "succeeded");
+  assert.equal(manifest.cleanup.prune_ran, true);
+
+  const events = fs.readFileSync(getEventsPath(repoRoot, runId), "utf-8");
+  assert.match(events, /"event":"close"/);
+  assert.match(events, /"worktree_missing":true/);
+});
+
+test("close-run surfaces prune failure on missing worktree instead of recording success", () => {
+  const { repoRoot, manifestPath, runId } = setupRepo();
+  const missingWorktree = createMissingRelayOwnedWorktree(repoRoot);
+  const record = readManifest(manifestPath);
+  writeManifest(manifestPath, {
+    ...record.data,
+    paths: {
+      ...(record.data.paths || {}),
+      worktree: missingWorktree,
+    },
+  }, record.body);
+
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-fail-git-"));
+  const realGit = execFileSync("which", ["git"], { encoding: "utf-8" }).trim();
+  fs.writeFileSync(path.join(binDir, "git"), [
+    "#!/bin/sh",
+    "case \"$*\" in",
+    "  *\"worktree prune\"*)",
+    '    echo "fatal: simulated prune lock" >&2',
+    "    exit 128",
+    "    ;;",
+    "esac",
+    `exec ${JSON.stringify(realGit)} "$@"`,
+    "",
+  ].join("\n"), { mode: 0o755 });
+
+  const stdout = execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--run-id", runId,
+    "--reason", "stale_non_terminal_run",
+    "--json",
+  ], { encoding: "utf-8", env: { ...process.env, RELAY_GIT_BIN: path.join(binDir, "git"), PATH: `${binDir}:${process.env.PATH}` } });
+
+  const result = JSON.parse(stdout);
+  assert.equal(result.state, STATES.CLOSED);
+  assert.equal(result.cleanup.cleanupStatus, "failed");
+  assert.equal(result.cleanup.nextAction, "manual_cleanup_required");
+  assert.equal(result.cleanup.pruneRan, false);
+  assert.match(result.cleanup.error, /worktree prune failed for missing worktree/);
+
+  const manifest = readManifest(manifestPath).data;
+  assert.equal(manifest.cleanup.status, "failed");
+  assert.equal(manifest.cleanup.prune_ran, false);
+  assert.match(manifest.cleanup.error, /worktree prune failed/);
+
+  const events = fs.readFileSync(getEventsPath(repoRoot, runId), "utf-8");
+  assert.match(events, /"worktree_missing":true/);
 });
 
 test("close-run rejects tampered paths.repo_root before state changes or cleanup side effects", () => {

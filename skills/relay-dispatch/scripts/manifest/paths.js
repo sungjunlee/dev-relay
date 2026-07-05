@@ -429,6 +429,7 @@ function validateManifestPaths(paths, {
   manifestPath,
   runId,
   requireWorktree = false,
+  allowMissingWorktree = false,
   acceptPrunedRelayOwned = false,
   caller = "relay manifest consumer",
 } = {}) {
@@ -506,13 +507,31 @@ function validateManifestPaths(paths, {
   const relayOwnedWorktreeCandidate = isPathContainedWithin(relayWorktreeBase, worktree)
     && path.basename(worktree) === path.basename(effectiveRepoRoot);
   const expectedGitCommonDir = getWorktreeGitCommonDir(effectiveRepoRoot) || path.join(effectiveRepoRoot, ".git");
-  const worktreeGitCommonDir = fs.existsSync(worktree)
-    ? getWorktreeGitCommonDir(worktree)
-    : null;
+  const worktreeExists = fs.existsSync(worktree);
+  if (!worktreeExists) {
+    if (!allowMissingWorktree || (!repoContainedWorktree && !relayOwnedWorktreeCandidate)) {
+      throw new Error(
+        `${caller}: manifest paths.worktree ${JSON.stringify(worktree)} is not contained under the expected repo root ` +
+        `${JSON.stringify(effectiveRepoRoot)} and is not a relay-owned worktree under ${JSON.stringify(relayWorktreeBase)} ` +
+        `that is bound to ${JSON.stringify(expectedGitCommonDir)} for repo ${JSON.stringify(path.basename(effectiveRepoRoot))}.`
+      );
+    }
+    return {
+      repoRoot: effectiveRepoRoot,
+      worktree,
+      worktreeLocation: repoContainedWorktree
+        ? "repo_root"
+        : (relayOwnedWorktreeCandidate ? "relay_worktree" : "missing"),
+      worktreeExists: false,
+      worktreeMissing: true,
+      prunedRelayOwnedForCleanup: false,
+      relayWorktreeBase,
+    };
+  }
+  const worktreeGitCommonDir = getWorktreeGitCommonDir(worktree);
   const relayOwnedWorktree = relayOwnedWorktreeCandidate
     && (
-      fs.existsSync(worktree)
-      && worktreeGitCommonDir
+      worktreeGitCommonDir
       && (
         worktreeGitCommonDir === expectedGitCommonDir
         || sameFilesystemLocation(worktreeGitCommonDir, expectedGitCommonDir)
@@ -535,6 +554,8 @@ function validateManifestPaths(paths, {
     repoRoot: effectiveRepoRoot,
     worktree,
     worktreeLocation: repoContainedWorktree ? "repo_root" : "relay_worktree",
+    worktreeExists: true,
+    worktreeMissing: false,
     prunedRelayOwnedForCleanup: prunedRelayOwnedWorktreeForCleanup,
     relayWorktreeBase,
   };
