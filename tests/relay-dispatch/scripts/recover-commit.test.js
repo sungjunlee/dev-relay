@@ -1,6 +1,7 @@
 // canary: bare-string `event === "..."` reader assertions in this file are deliberate canaries against EVENTS schema drift; do not port to EVENTS.X (see #313).
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const crypto = require("crypto");
 const { execFileSync, spawnSync } = require("child_process");
 const fs = require("fs");
 const os = require("os");
@@ -258,6 +259,10 @@ function ghArg(argv, flag) {
   return index === -1 ? undefined : argv[index + 1];
 }
 
+function sha256File(filePath) {
+  return crypto.createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
+}
+
 test("happy path commits dirty worktree, pushes, opens PR, stamps manifest, and emits audit event", () => {
   const fixture = setupRepo({ dirty: true });
   const result = runRecover(fixture, ["--reason", "executor completed before commit", "--json"]);
@@ -444,6 +449,76 @@ test("dirty worktree recovery rebrands execution evidence to the created commit 
   assert.equal(rebrandEvent.prior_state, STATES.REVIEW_PENDING);
   assert.equal(rebrandEvent.required_reason, "executor completed before commit");
   assert.equal(rebrandEvent.operator_initiated, true);
+});
+
+test("missing execution evidence with operator test flags writes artifact at recovered HEAD", () => {
+  const fixture = setupRepo({ dirty: true });
+  const resultFile = path.join(fixture.runDir, "operator-test-result.txt");
+  fs.writeFileSync(resultFile, "node --test passed\n", "utf-8");
+  const testCommand = "node --test tests/relay-dispatch/scripts/recover-commit.test.js";
+
+  const result = runRecover(fixture, [
+    "--reason", "executor died before evidence write",
+    "--test-command", testCommand,
+    "--test-result-file", resultFile,
+    "--test-exit-code", "0",
+    "--json",
+  ]);
+
+  assert.equal(result.status, 0, result.stderr);
+  const parsed = JSON.parse(result.stdout);
+  const evidencePath = path.join(fixture.runDir, EXECUTION_EVIDENCE_FILENAME);
+  const evidence = JSON.parse(fs.readFileSync(evidencePath, "utf-8"));
+  assert.equal(parsed.commitCreated, true);
+  assert.equal(evidence.head_sha, parsed.commitSha);
+  assert.equal(evidence.test_command, testCommand);
+  assert.equal(evidence.test_result_hash, sha256File(resultFile));
+  assert.equal(evidence.test_exit_code, 0);
+  assert.equal(evidence.recorded_by, "recover-commit-operator-v1");
+  assert.doesNotMatch(result.stderr, /execution-evidence\.json missing/);
+});
+
+test("missing execution evidence without operator test flags preserves recovery and warns once", () => {
+  const fixture = setupRepo({ dirty: true });
+  const result = runRecover(fixture, ["--reason", "executor died before evidence write", "--json"]);
+
+  assert.equal(result.status, 0, result.stderr);
+  const parsed = JSON.parse(result.stdout);
+  assert.equal(parsed.status, "recovered");
+  assert.equal(parsed.commitCreated, true);
+  assert.equal(fs.existsSync(path.join(fixture.runDir, EXECUTION_EVIDENCE_FILENAME)), false);
+  const warningLines = result.stderr.trim().split("\n").filter(Boolean);
+  assert.equal(warningLines.length, 1);
+  assert.match(warningLines[0], /execution-evidence\.json missing/);
+  assert.match(warningLines[0], /--test-command/);
+  assert.match(warningLines[0], /--test-result-file/);
+  assert.match(warningLines[0], /--test-exit-code/);
+});
+
+test("operator test flags refuse to overwrite existing execution evidence", () => {
+  const fixture = setupRepo({ dirty: true, evidence: true });
+  const resultFile = path.join(fixture.runDir, "operator-test-result.txt");
+  fs.writeFileSync(resultFile, "node --test passed\n", "utf-8");
+  const beforeHead = execFileSync("git", ["-C", fixture.worktreePath, "rev-parse", "HEAD"], { encoding: "utf-8" }).trim();
+  const evidencePath = path.join(fixture.runDir, EXECUTION_EVIDENCE_FILENAME);
+  const beforeEvidence = fs.readFileSync(evidencePath, "utf-8");
+
+  const result = runRecover(fixture, [
+    "--reason", "operator attempted evidence overwrite",
+    "--test-command", "node --test",
+    "--test-result-file", resultFile,
+    "--test-exit-code", "0",
+    "--json",
+  ]);
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /execution-evidence\.json already exists/);
+  assert.match(result.stderr, /rebrand-evidence\.js/);
+  assert.equal(execFileSync("git", ["-C", fixture.worktreePath, "rev-parse", "HEAD"], { encoding: "utf-8" }).trim(), beforeHead);
+  assert.equal(execFileSync("git", ["-C", fixture.worktreePath, "status", "--porcelain"], { encoding: "utf-8" }).trim(), "?? recovered.txt");
+  assert.equal(fs.readFileSync(evidencePath, "utf-8"), beforeEvidence);
+  assert.equal(readJsonLines(fixture.ghLogPath).length, 0);
+  assert.equal(readRunEvents(fixture.repoRoot, fixture.runId).length, 0);
 });
 
 test("already-committed recovery leaves execution evidence byte-identical", () => {

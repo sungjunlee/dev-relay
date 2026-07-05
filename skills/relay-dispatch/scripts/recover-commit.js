@@ -15,7 +15,12 @@ const { STATES } = require("./manifest/lifecycle");
 const { writeManifest } = require("./manifest/store");
 const { getCanonicalRepoRoot, getRunDir, nowIso, summarizeFailure, validateManifestPaths } = require("./manifest/paths");
 const { stampPrNumberUnderLock } = require("./manifest/pr-number-stamp");
-const { rebrandEvidence } = require("./execution-evidence");
+const {
+  EXECUTION_EVIDENCE_FILENAME,
+  buildExecutionEvidence,
+  rebrandEvidence,
+  writeExecutionEvidence,
+} = require("./execution-evidence");
 const {
   findUnknownFlags,
   modeLabel,
@@ -44,6 +49,9 @@ function printHelp(exitCode) {
   console.log(`  --reason <text>     ${modeLabel("--reason")} Required audit reason; preserved verbatim`);
   console.log(`  --pr-title <text>   ${modeLabel("--pr-title")} PR title override`);
   console.log(`  --pr-body-file <path> ${modeLabel("--pr-body-file")} PR body override file`);
+  console.log(`  --test-command <cmd> ${modeLabel("--test-command")} Operator-run test command for missing execution evidence`);
+  console.log(`  --test-result-file <path> ${modeLabel("--test-result-file")} Operator-run test output file to hash for missing execution evidence`);
+  console.log(`  --test-exit-code <n> ${modeLabel("--test-exit-code")} Operator-run test exit code for missing execution evidence`);
   console.log(`  --dry-run           ${modeLabel("--dry-run")} Print planned git/gh commands and manifest mutation only`);
   console.log(`  --json              ${modeLabel("--json")} Output JSON`);
   console.log("\nDecision tree:");
@@ -168,6 +176,61 @@ function readPrBodyFile(prBodyFile) {
   return fs.readFileSync(resolved, "utf-8");
 }
 
+function parseTestExitCode(value, flagWasProvided) {
+  if (!flagWasProvided) return undefined;
+  if (value === undefined || value === null || String(value).trim() === "") {
+    throw new Error("--test-exit-code <n> is required when --test-exit-code is provided");
+  }
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed)) {
+    throw new Error(`--test-exit-code must be an integer, got ${value}`);
+  }
+  return parsed;
+}
+
+function resolveTestResultFile(resultFileArg) {
+  if (!resultFileArg) return undefined;
+  const resolved = path.resolve(resultFileArg);
+  const stat = fs.statSync(resolved);
+  if (!stat.isFile()) {
+    throw new Error(`--test-result-file must point to a file: ${resolved}`);
+  }
+  return resolved;
+}
+
+function warnMissingExecutionEvidence(runId) {
+  console.error(
+    `Warning: ${EXECUTION_EVIDENCE_FILENAME} missing for ${runId}; ` +
+    "pass --test-command <cmd> --test-result-file <path> --test-exit-code <n> to record operator-run evidence."
+  );
+}
+
+function writeOperatorExecutionEvidenceIfRequested({
+  runDir,
+  evidencePath,
+  operatorEvidenceRequested,
+  testCommand,
+  testResultFile,
+  testExitCode,
+  headSha,
+  timestamp,
+}) {
+  if (!operatorEvidenceRequested) return null;
+  const evidence = {
+    ...buildExecutionEvidence({
+      headSha,
+      testCommand,
+      resultFilePath: testResultFile,
+      executor: "recover-commit-operator-v1",
+      recordedAt: timestamp,
+      testExitCode,
+    }),
+    recorded_by: "recover-commit-operator-v1",
+  };
+  writeExecutionEvidence(runDir, evidence);
+  return evidencePath;
+}
+
 function resolveRun({ repoArg, runId, manifestArg }) {
   const repoRoot = path.resolve(repoArg || ".");
   try {
@@ -247,6 +310,11 @@ function main() {
   const reason = String(getCliArg("--reason") || "").trim();
   const prTitleArg = getCliArg("--pr-title");
   const prBodyFile = getCliArg("--pr-body-file");
+  const operatorEvidenceRequested = hasCliFlag("--test-command") || hasCliFlag("--test-result-file") || hasCliFlag("--test-exit-code");
+  const testCommand = getCliArg("--test-command");
+  const testResultFileArg = getCliArg("--test-result-file");
+  const testExitCodeArg = getCliArg("--test-exit-code");
+  const testExitCodeProvided = hasCliFlag("--test-exit-code");
   const dryRun = hasCliFlag("--dry-run");
   const jsonOut = hasCliFlag("--json");
   const timestamp = nowIso();
@@ -279,6 +347,18 @@ function main() {
   };
   const branch = data.git?.working_branch;
   const worktreePath = validatedPaths.worktree;
+  const runDir = getRunDir(validatedPaths.repoRoot, data.run_id);
+  const evidencePath = path.join(runDir, EXECUTION_EVIDENCE_FILENAME);
+  const evidenceExists = fs.existsSync(evidencePath);
+
+  if (operatorEvidenceRequested && evidenceExists) {
+    throw new Error(
+      `${EXECUTION_EVIDENCE_FILENAME} already exists for ${data.run_id}; refusing to overwrite it. ` +
+      "Use skills/relay-dispatch/scripts/rebrand-evidence.js when existing evidence needs to be rebound to a new HEAD."
+    );
+  }
+  const testResultFile = resolveTestResultFile(testResultFileArg);
+  const testExitCode = parseTestExitCode(testExitCodeArg, testExitCodeProvided);
 
   if (data.state === STATES.MERGED || data.state === STATES.CLOSED) {
     throw new Error(`force-finalize cannot be used from terminal state ${data.state}`);
@@ -389,7 +469,7 @@ function main() {
     }
   }
   if (commitCreated) {
-    const rebrandResult = rebrandEvidence(getRunDir(validatedPaths.repoRoot, data.run_id), {
+    const rebrandResult = rebrandEvidence(runDir, {
       newHeadSha: commitSha,
       recordedBy: "recover-commit-rebrand",
       reason: `recover-commit added new commit; previous evidence bound to pre-commit SHA. Audit reason: ${reason}`,
@@ -408,6 +488,21 @@ function main() {
         execution_evidence_path: rebrandResult.evidencePath,
         execution_evidence_hash: rebrandResult.evidenceHash,
       });
+    }
+  }
+  if (!evidenceExists) {
+    writeOperatorExecutionEvidenceIfRequested({
+      runDir,
+      evidencePath,
+      operatorEvidenceRequested,
+      testCommand,
+      testResultFile,
+      testExitCode,
+      headSha: commitSha,
+      timestamp,
+    });
+    if (!operatorEvidenceRequested) {
+      warnMissingExecutionEvidence(data.run_id);
     }
   }
 

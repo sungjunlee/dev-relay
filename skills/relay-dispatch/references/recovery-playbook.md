@@ -22,6 +22,24 @@ node skills/relay-dispatch/scripts/recover-commit.js --run-id <id> \
   --reason "..." --pr-title "..." --pr-body-file /tmp/pr-body.md
 ```
 
+If the executor completed and the operator has run the verification command, but the executor died before writing `execution-evidence.json`, record the missing evidence during recovery instead of hand-writing the artifact. `recover-commit.js` writes evidence only when the run dir does not already contain `execution-evidence.json`; if the artifact exists, use `rebrand-evidence.js` for stale-HEAD rebinding rather than clobbering it.
+
+Worked example, shaped like incident #788: the retained worktree has completed code, no evidence artifact, and the operator has a captured test log.
+
+```bash
+node --test tests/relay-dispatch/scripts/recover-commit.test.js \
+  > /tmp/issue-788-recover-tests.txt 2>&1
+echo $?  # 0
+
+node skills/relay-dispatch/scripts/recover-commit.js --repo . --run-id issue-788 \
+  --reason "executor completed but died before execution evidence write; operator verified tests" \
+  --test-command "node --test tests/relay-dispatch/scripts/recover-commit.test.js" \
+  --test-result-file /tmp/issue-788-recover-tests.txt \
+  --test-exit-code 0
+```
+
+The resulting `execution-evidence.json` is bound to the post-recovery HEAD, preserves the test command verbatim, hashes the result file, records `test_exit_code: 0`, and uses `recorded_by: "recover-commit-operator-v1"`. The next step is the normal `review-runner.js` path. Do not use `finalize-run.js --force-finalize-nonready` when the goal is to supply real execution evidence for review.
+
 When `--pr-title` is omitted, the PR title defaults to the linked GitHub issue title as `<issue title> (#<N>)`, first from `manifest.issue.number`, then from an unambiguous `issue-N` branch name. If issue lookup fails or no issue is linked, it falls back to `Recover <branch> (<run-id>)`. `--pr-title` always wins exactly.
 
 If a PR already exists for the branch, the command no-ops the create step and stamps `pr_number` from the existing PR — safe to re-run after a partial failure. Use `--dry-run` first when uncertain.
