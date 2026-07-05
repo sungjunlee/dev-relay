@@ -29,7 +29,8 @@ Route selection is one user-facing concept: a single routes.json schema (open-by
 
 ### Unplanned (found during Batch 1 execution)
 
-- [~] #786 close-run cannot close runs whose worktree was pruned by dispatch signal cleanup — S; part 1 (close-run acceptPrunedRelayOwned) dispatched in parallel; part 2 (dispatch.js signal stamping) deferred until #781 A1 merges
+- [~] #786 close-run cannot close runs whose worktree was pruned by dispatch signal cleanup — S; part 1 ready_to_merge (PR #789, R3 PASS); part 2 (dispatch.js signal stamping) deferred until #781 A1 merges
+- [ ] #795 dispatch branches from local main; unpushed local commits contaminate every PR diff — filed after the same scope-noise finding cost one review round on each of PR #789/#791/#792 (rule of three)
 
 ## Running Context
 
@@ -42,6 +43,10 @@ Route selection is one user-facing concept: a single routes.json schema (open-by
 - Phase D (relay-plan route recommendation + fleet per-leaf fill) is NOT in this sprint — observe-gated on ≥~10 non-default-route runs over ~4 weeks after A–C ship.
 
 ## Progress
+
+### 2026-07-05 (continued, 2)
+- #784 R1 hit the same stranded-learnings-commit scope finding as #789; same remedy (merge origin/main into branch). Evidence had to be authored by orchestrator (executor died before writing execution-evidence.json): real full-suite run teed to result file, evidence built via execution-evidence.js helpers (schema needs command/cwd/head_sha/exit_code/recorded_by/recorded_at + one of output_hash/stdout_hash/stderr_hash). R2 PASS → `ready_to_merge` (PR #791).
+- #781-A1 salvage: codex work verified near-complete (loader/mapping/ADR/event all present). 9 suite failures triaged: 3 contention flakes (timing/SIGINT/fleet), 6 real posture-flip reconciliations — legacy no-config denial tests now seed `routes.json {version:2, strict:true}` fixtures to keep denial coverage (relay-policy-gate, probe-executor-env, review-runner-advisory ×4). 53/53 green after reconcile.
 
 ### 2026-07-05 (continued)
 - Harness background-task kills recurred (06:42, 07:42, 07:59 — kills follow orchestrator turn end, not a fixed schedule). Adapted: long operations now run foreground within a turn; codex work salvaged from surviving worktrees instead of re-dispatching.
