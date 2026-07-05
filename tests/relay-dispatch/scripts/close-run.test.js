@@ -100,6 +100,13 @@ function createMissingRelayOwnedWorktree(repoRoot) {
   return path.join(worktreeParent, path.basename(repoRoot));
 }
 
+function createBrokenRelayOwnedWorktreeShell(repoRoot) {
+  const worktreePath = createMissingRelayOwnedWorktree(repoRoot);
+  fs.mkdirSync(worktreePath, { recursive: true });
+  fs.writeFileSync(path.join(worktreePath, "sentinel.txt"), "manual cleanup required\n", "utf-8");
+  return worktreePath;
+}
+
 function createMissingWrongBasenameRelayWorktree(repoRoot) {
   const relayWorktrees = path.join(process.env.RELAY_HOME, "worktrees");
   fs.mkdirSync(relayWorktrees, { recursive: true });
@@ -187,6 +194,44 @@ test("close-run closes dispatched runs whose relay-owned worktree was already pr
   const events = fs.readFileSync(getEventsPath(repoRoot, runId), "utf-8");
   assert.match(events, /"event":"close"/);
   assert.match(events, /"event":"cleanup_result"/);
+});
+
+test("close-run rejects existing relay-owned worktree shells with broken git metadata", () => {
+  const { repoRoot, manifestPath, runId, worktreePath } = setupRepo({ state: STATES.DISPATCHED });
+  const brokenWorktreeShell = createBrokenRelayOwnedWorktreeShell(repoRoot);
+  execFileSync("git", ["worktree", "remove", "--force", worktreePath], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+  });
+  const record = readManifest(manifestPath);
+  writeManifest(manifestPath, {
+    ...record.data,
+    paths: {
+      ...(record.data.paths || {}),
+      worktree: brokenWorktreeShell,
+    },
+  }, record.body);
+
+  const result = spawnSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--run-id", runId,
+    "--reason", "stale_non_terminal_run",
+    "--json",
+  ], {
+    encoding: "utf-8",
+  });
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /refusing destructive cleanup for existing relay-owned worktree shell/);
+  assert.equal(fs.existsSync(brokenWorktreeShell), true);
+  assert.equal(fs.existsSync(path.join(brokenWorktreeShell, "sentinel.txt")), true);
+  assert.equal(fs.existsSync(getEventsPath(repoRoot, runId)), false);
+
+  const manifest = readManifest(manifestPath).data;
+  assert.equal(manifest.state, STATES.DISPATCHED);
+  assert.equal(manifest.cleanup.status, "pending");
 });
 
 test("close-run fails when --run-id does not resolve", () => {

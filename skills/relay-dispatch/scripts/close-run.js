@@ -3,6 +3,7 @@
 // then retry resolution or re-dispatch with an explicit selector.
 
 const path = require("path");
+const fs = require("fs");
 const { CLEANUP_STATUSES, runCleanup, updateManifestCleanup } = require("./manifest/cleanup");
 const { STATES, updateManifestState } = require("./manifest/lifecycle");
 const {
@@ -76,6 +77,13 @@ function main() {
     acceptPrunedRelayOwned: true,
     caller: "close-run",
   });
+  if (validatedPaths.prunedRelayOwnedForCleanup && fs.existsSync(validatedPaths.worktree)) {
+    throw new Error(
+      `close-run: refusing destructive cleanup for existing relay-owned worktree shell ` +
+      `${JSON.stringify(validatedPaths.worktree)} with missing or broken git metadata. ` +
+      `Remove it manually, then retry close-run.`
+    );
+  }
   const safeData = {
     ...data,
     paths: {
