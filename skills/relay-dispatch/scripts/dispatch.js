@@ -599,11 +599,16 @@ function formatMissingResumeWorktreeError({ repoRoot, runId, worktreePath, branc
   } else if (branch && baseBranch) {
     reprovisionCommand = `git worktree add ${shellQuote(worktreePath)} -b ${shellQuote(branch)} ${shellQuote(baseBranch)}`;
   }
+  // An externally deleted directory can still be REGISTERED as a worktree (and
+  // its branch marked checked out there), which would make a bare `worktree add`
+  // fail — clear the stale registration first.
+  const unregisterCommand = `git worktree remove --force ${shellQuote(worktreePath)} 2>/dev/null || git worktree prune`;
   return [
     `retained worktree is missing for run '${runId}': ${worktreePath || "(unset)"}`,
     ...(reprovisionCommand
       ? [
-          "Re-provision the retained worktree before resuming:",
+          "Re-provision the retained worktree before resuming (clears any stale registration first):",
+          `  ${unregisterCommand}`,
           `  ${reprovisionCommand}`,
         ]
       : [

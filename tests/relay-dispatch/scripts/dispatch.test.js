@@ -2693,9 +2693,40 @@ test("dispatch resume missing-worktree error reprovisions an existing branch wit
   assert.match(result.stderr, /retained worktree is missing/);
   assert.match(result.stderr, new RegExp(escapeRegExp(first.worktree)));
   assert.match(result.stderr, /git worktree add /);
+  assert.match(result.stderr, new RegExp(`git worktree remove --force '${escapeRegExp(first.worktree)}' 2>/dev/null \\|\\| git worktree prune`));
   assert.match(result.stderr, new RegExp(`git worktree add '${escapeRegExp(first.worktree)}' 'issue-42'`));
   assert.doesNotMatch(result.stderr, / -b 'issue-42'/);
   assert.equal(listManifestPaths(repoRoot).length, 1);
+});
+
+test("dispatch resume missing-worktree hint stays runnable when the deleted directory is still registered", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  writeFakeCodex(binDir);
+  const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}` };
+
+  const first = JSON.parse(runDispatch(repoRoot, [
+    "-b", "issue-43",
+    "--prompt", "first pass",
+    "--json",
+  ], env));
+  const record = readManifest(first.manifestPath);
+  writeManifest(first.manifestPath, updateManifestState(record.data, STATES.CHANGES_REQUESTED, "re_dispatch_requested_changes"), record.body);
+  fs.rmSync(first.worktree, { recursive: true, force: true });
+  const registered = execFileSync("git", ["worktree", "list", "--porcelain"], { cwd: repoRoot, encoding: "utf-8" });
+  assert.match(registered, new RegExp(escapeRegExp(first.worktree)));
+
+  const result = spawnSync("node", [SCRIPT, repoRoot, "--run-id", first.runId, "--prompt", "resume", "--json"], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    env,
+  });
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /retained worktree is missing/);
+  assert.match(result.stderr, new RegExp(`git worktree remove --force '${escapeRegExp(first.worktree)}' 2>/dev/null \\|\\| git worktree prune`));
+  assert.match(result.stderr, new RegExp(`git worktree add '${escapeRegExp(first.worktree)}' 'issue-43'`));
 });
 
 test("dispatch resume missing-worktree error creates the branch only when it is absent", () => {
