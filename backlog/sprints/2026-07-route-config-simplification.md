@@ -16,8 +16,8 @@ Route selection is one user-facing concept: a single routes.json schema (open-by
 
 ### Batch 1 — substrate + independent bugfix (parallelizable)
 
-- [ ] #784 relay-config inspect: opencode/pi model-list probes time out (ETIMEDOUT at 5s) — S, ~1 relay run; independent of the phase chain, good parallel candidate alongside #781
-- [ ] #781 Routes single concept: unified routes.json, open-by-default posture, strict opt-in (Phase A) — L; expect 2–3 dispatches or a fleet split (loader/gate → relay-config vocabulary → friction wiring + ADR 0007)
+- [~] #784 relay-config inspect: opencode/pi model-list probes time out (ETIMEDOUT at 5s) — S, ~1 relay run; independent of the phase chain, good parallel candidate alongside #781
+- [~] #781 Routes single concept: unified routes.json, open-by-default posture, strict opt-in (Phase A) — L; split as A1 loader/gate/posture/event/ADR → A2 relay-config vocabulary → A3 friction wiring + doc banners; A1 dispatched
 
 ### Batch 2 — per-run UX (blocked by #781)
 
@@ -26,6 +26,10 @@ Route selection is one user-facing concept: a single routes.json schema (open-by
 ### Batch 3 — self-audit (blocked by #781)
 
 - [ ] #783 relay-config revise mode: gaps --json, conversational amendments, migrate (Phase C) — M; degrades gracefully without #782 (preset_broken gap type inert until presets exist)
+
+### Unplanned (found during Batch 1 execution)
+
+- [~] #786 close-run cannot close runs whose worktree was pruned by dispatch signal cleanup — S; part 1 (close-run acceptPrunedRelayOwned) dispatched in parallel; part 2 (dispatch.js signal stamping) deferred until #781 A1 merges
 
 ## Running Context
 
@@ -41,3 +45,8 @@ Route selection is one user-facing concept: a single routes.json schema (open-by
 
 ### 2026-07-05
 - Sprint planned. Design doc committed (72fab9f), issues #781–#784 created with milestone "Route Config Simplification", task mirrors synced (81f79c6).
+- Batch 1 dual-dispatch (codex+codex): #784 run `issue-784-20260705061528614-395cfc3a` (root cause pre-measured: opencode ~10.0s, pi ~8.1s vs 5s budget; fix = default 20000 + actionable warning + doc line). #781 A1 on branch `issue-781-a1` (loader/mapping/posture-flip/UNREGISTERED_ROUTE_USED/ADR 0007). File surfaces verified disjoint.
+- Planning shape-check: open-mode gate reuses EXISTING `unknown_allowed` reason from evaluateRelayRoute (relay-policy.js:566) — design doc's `unregistered_route_open_mode` reason name corrected at dispatch, gate function stays byte-identical.
+- Note: another session is running relay on this repo today (#768 run 06:08, #765 recovery commit) — expect push races; rebase before push.
+- 06:42 incident: both Batch 1 background dispatches SIGTERM-killed pre-commit. dispatch.js cleanup() removed worktrees but left manifests `dispatched`; close-run then threw on the missing worktree path. Recovered via temporary detached worktrees + close-run + fresh re-dispatch (runs `...c4ed5772` #784, `...aefaea7c` #781-A1). Zero executor work lost (verified: branch commits were only origin/main advances).
+- Filed #786 for the recovery gap: close-run misses `acceptPrunedRelayOwned: true` (escape hatch exists in validateManifestPaths; cleanup-worktrees already uses it). Part 1 dispatched as third parallel run (branch issue-786); part 2 (signal-handler manifest stamping in dispatch.js) deferred behind A1 to avoid file collision.
