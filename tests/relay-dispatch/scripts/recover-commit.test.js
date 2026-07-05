@@ -489,6 +489,29 @@ test("missing execution evidence with operator test flags writes artifact at rec
   assert.equal(events.filter((entry) => entry.event === "execution_evidence_rebranded").length, 0);
 });
 
+test("operator test flags reject nonzero exit code before evidence or recovery side effects", () => {
+  const fixture = setupRepo({ dirty: true });
+  const resultFile = path.join(fixture.runDir, "operator-test-result.txt");
+  fs.writeFileSync(resultFile, "node --test failed\n", "utf-8");
+  const beforeHead = execFileSync("git", ["-C", fixture.worktreePath, "rev-parse", "HEAD"], { encoding: "utf-8" }).trim();
+
+  const result = runRecover(fixture, [
+    "--reason", "operator test run failed",
+    "--test-command", "node --test",
+    "--test-result-file", resultFile,
+    "--test-exit-code", "1",
+    "--json",
+  ]);
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /--test-exit-code must be 0/);
+  assert.equal(fs.existsSync(path.join(fixture.runDir, EXECUTION_EVIDENCE_FILENAME)), false);
+  assert.equal(execFileSync("git", ["-C", fixture.worktreePath, "rev-parse", "HEAD"], { encoding: "utf-8" }).trim(), beforeHead);
+  assert.equal(execFileSync("git", ["-C", fixture.worktreePath, "status", "--porcelain"], { encoding: "utf-8" }).trim(), "?? recovered.txt");
+  assert.equal(readJsonLines(fixture.ghLogPath).length, 0);
+  assert.equal(readRunEvents(fixture.repoRoot, fixture.runId).length, 0);
+});
+
 [
   ["--test-command"],
   ["--test-result-file"],

@@ -186,6 +186,9 @@ function parseTestExitCode(value, flagWasProvided) {
   if (!Number.isSafeInteger(parsed)) {
     throw new Error(`--test-exit-code must be an integer, got ${value}`);
   }
+  if (parsed !== 0) {
+    throw new Error(`--test-exit-code must be 0 for operator-verified execution evidence, got ${parsed}`);
+  }
   return parsed;
 }
 
