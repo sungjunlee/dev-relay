@@ -7,6 +7,7 @@ const { CLEANUP_STATUSES, runCleanup, updateManifestCleanup } = require("./manif
 const { STATES, updateManifestState } = require("./manifest/lifecycle");
 const {
   getEventsPath,
+  nowIso,
   validateManifestPaths,
 } = require("./manifest/paths");
 const { getActorName, writeManifest } = require("./manifest/store");
@@ -47,6 +48,40 @@ function buildSkippedCleanupSummary(data, dryRun) {
     pruneRan: false,
     deleteMergedBranch: false,
     error: null,
+  };
+}
+
+function buildMissingWorktreeCleanupResult(data, dryRun) {
+  const attemptedAt = nowIso();
+  const updatedData = updateManifestCleanup(data, {
+    status: CLEANUP_STATUSES.SUCCEEDED,
+    last_attempted_at: attemptedAt,
+    cleaned_at: attemptedAt,
+    worktree_removed: true,
+    branch_deleted: true,
+    prune_ran: false,
+    error: null,
+  }, "done");
+  return {
+    updatedData,
+    summary: {
+      state: data.state,
+      cleanupStatus: CLEANUP_STATUSES.SUCCEEDED,
+      nextAction: "done",
+      attemptedAt,
+      dryRun,
+      worktreePath: data.paths?.worktree || null,
+      worktreeExistsBefore: false,
+      worktreeRemoved: true,
+      worktreeDirty: false,
+      worktreeStatus: null,
+      branch: data.git?.working_branch || null,
+      branchExistedBefore: false,
+      branchDeleted: true,
+      pruneRan: false,
+      deleteMergedBranch: false,
+      error: null,
+    },
   };
 }
 
@@ -92,6 +127,7 @@ function main() {
     expectedRepoRoot: repoRoot,
     manifestPath,
     runId: data.run_id,
+    allowMissingWorktree: true,
     caller: "close-run",
   });
   const safeData = {
@@ -109,12 +145,14 @@ function main() {
   let updated = updateManifestState(safeData, STATES.CLOSED, "manual_cleanup_required");
   let cleanupResult = null;
   if ((updated.policy?.cleanup || "on_close") === "on_close") {
-    cleanupResult = runCleanup({
-      repoRoot,
-      data: updated,
-      dryRun,
-      deleteMergedBranch: false,
-    });
+    cleanupResult = validatedPaths.worktreeMissing
+      ? buildMissingWorktreeCleanupResult(updated, dryRun)
+      : runCleanup({
+          repoRoot,
+          data: updated,
+          dryRun,
+          deleteMergedBranch: false,
+        });
     updated = cleanupResult.updatedData;
   } else {
     updated = updateManifestCleanup(updated, { status: CLEANUP_STATUSES.SKIPPED }, "done");

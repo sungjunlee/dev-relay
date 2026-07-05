@@ -1071,6 +1071,7 @@ async function main() {
       expectedRepoRoot: MANIFEST_INPUT ? undefined : ((repoPathRaw || looksLikeGitRepo(repoRoot)) ? repoRoot : undefined),
       manifestPath,
       runId: manifest.run_id || runId,
+      allowMissingWorktree: true,
       caller: "dispatch resume",
     });
     repoRoot = validatedPaths.repoRoot;

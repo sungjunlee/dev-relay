@@ -448,7 +448,7 @@ test("cleanup-worktrees rejects relay-base same-name worktrees before deleting u
   assert.equal(manifest.cleanup.status, "pending");
 });
 
-test("cleanup-worktrees cleans stale missing relay-owned manifests and is idempotent", () => {
+test("cleanup-worktrees fails closed on stale missing relay-owned manifests", () => {
   const repoRoot = setupRepo();
   const updatedAt = "2026-04-01T00:00:00.000Z";
   const first = writeStaleMissingRelayRun(repoRoot, {
@@ -469,10 +469,12 @@ test("cleanup-worktrees cleans stale missing relay-owned manifests and is idempo
   ], { encoding: "utf-8" });
 
   const dryRunResult = JSON.parse(dryRunStdout);
-  const dryRunCleanedIds = new Set(dryRunResult.cleaned.map((entry) => entry.runId));
-  assert.equal(dryRunResult.failed.length, 0);
-  assert.equal(dryRunCleanedIds.has(first.runId), true);
-  assert.equal(dryRunCleanedIds.has(second.runId), true);
+  const dryRunFailedIds = new Set(dryRunResult.failed.map((entry) => entry.runId));
+  assert.equal(dryRunResult.cleaned.length, 0);
+  assert.equal(dryRunResult.failed.length, 2);
+  assert.equal(dryRunFailedIds.has(first.runId), true);
+  assert.equal(dryRunFailedIds.has(second.runId), true);
+  assert.match(dryRunResult.failed[0].error, /manifest paths\.worktree/);
   assert.equal(readManifest(first.manifestPath).data.cleanup.status, "pending", "dry-run must not persist cleanup state");
 
   const firstRunStdout = execFileSync("node", [
@@ -483,12 +485,14 @@ test("cleanup-worktrees cleans stale missing relay-owned manifests and is idempo
   ], { encoding: "utf-8" });
 
   const firstRunResult = JSON.parse(firstRunStdout);
-  const cleanedIds = new Set(firstRunResult.cleaned.map((entry) => entry.runId));
-  assert.equal(firstRunResult.failed.length, 0);
-  assert.equal(cleanedIds.has(first.runId), true);
-  assert.equal(cleanedIds.has(second.runId), true);
-  assert.equal(readManifest(first.manifestPath).data.cleanup.status, "succeeded");
-  assert.equal(readManifest(second.manifestPath).data.cleanup.status, "succeeded");
+  const failedIds = new Set(firstRunResult.failed.map((entry) => entry.runId));
+  assert.equal(firstRunResult.cleaned.length, 0);
+  assert.equal(firstRunResult.failed.length, 2);
+  assert.equal(failedIds.has(first.runId), true);
+  assert.equal(failedIds.has(second.runId), true);
+  assert.match(firstRunResult.failed[0].error, /manifest paths\.worktree/);
+  assert.equal(readManifest(first.manifestPath).data.cleanup.status, "pending");
+  assert.equal(readManifest(second.manifestPath).data.cleanup.status, "pending");
 
   const secondRunStdout = execFileSync("node", [
     SCRIPT,
@@ -498,11 +502,8 @@ test("cleanup-worktrees cleans stale missing relay-owned manifests and is idempo
   ], { encoding: "utf-8" });
 
   const secondRunResult = JSON.parse(secondRunStdout);
-  const skippedById = new Map(secondRunResult.skipped.map((entry) => [entry.runId, entry.reason]));
-  assert.equal(secondRunResult.failed.length, 0);
   assert.equal(secondRunResult.cleaned.length, 0);
-  assert.equal(skippedById.get(first.runId), "already_cleaned");
-  assert.equal(skippedById.get(second.runId), "already_cleaned");
+  assert.equal(secondRunResult.failed.length, 2);
 });
 
 test("cleanup-worktrees removes existing relay-owned directories with pruned git bindings", () => {

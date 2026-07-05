@@ -453,6 +453,7 @@ function main() {
     expectedRepoRoot: repoRoot,
     manifestPath,
     runId: data.run_id,
+    allowMissingWorktree: true,
     caller: "recover-state",
   });
   const safeData = {

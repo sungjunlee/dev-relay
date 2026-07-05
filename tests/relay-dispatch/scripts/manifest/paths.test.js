@@ -86,10 +86,12 @@ test("manifest/paths validateManifestPaths canonicalizes same-git-common-dir rep
   });
   const runId = "issue-626-20260526131500000-a1b2c3d4";
   const manifestPath = getManifestPath(repoRoot, runId);
+  const worktreePath = path.join(repoRoot, "wt", "issue-626");
+  fs.mkdirSync(worktreePath, { recursive: true });
 
   const result = validateManifestPaths({
     repo_root: linkedRoot,
-    worktree: path.join(repoRoot, "wt", "issue-626"),
+    worktree: worktreePath,
   }, {
     expectedRepoRoot: repoRoot,
     manifestPath,
@@ -141,7 +143,7 @@ test("manifest/paths cleanup mode uses canonical root for pruned same-git-common
   assert.equal(result.prunedRelayOwnedForCleanup, true);
 });
 
-test("manifest/paths cleanup mode accepts pruned and missing relay-owned worktrees", () => {
+test("manifest/paths cleanup mode accepts pruned relay-owned worktrees but rejects missing worktrees without opt-in", () => {
   process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-paths-cleanup-repo-"));
   initGitRepo(repoRoot);
@@ -173,20 +175,19 @@ test("manifest/paths cleanup mode accepts pruned and missing relay-owned worktre
 
   const missingWorktree = path.join(relayWorktreeBase, "missing-directory", repoBasename);
   fs.mkdirSync(path.dirname(missingWorktree), { recursive: true });
-  const missingResult = validateManifestPaths({
-    repo_root: repoRoot,
-    worktree: missingWorktree,
-  }, {
-    expectedRepoRoot: repoRoot,
-    manifestPath,
-    runId,
-    acceptPrunedRelayOwned: true,
-    caller: "manifest/paths.test cleanup missing",
-  });
-  assert.equal(missingResult.worktree, missingWorktree);
-  assert.equal(missingResult.worktreeLocation, "relay_worktree");
-  assert.equal(missingResult.worktreeMissing, true);
-  assert.equal(missingResult.prunedRelayOwnedForCleanup, false);
+  assert.throws(
+    () => validateManifestPaths({
+      repo_root: repoRoot,
+      worktree: missingWorktree,
+    }, {
+      expectedRepoRoot: repoRoot,
+      manifestPath,
+      runId,
+      acceptPrunedRelayOwned: true,
+      caller: "manifest/paths.test cleanup missing",
+    }),
+    /is not contained under the expected repo root/
+  );
   assert.equal(fs.existsSync(missingWorktree), false, "fixture must exercise the no-realpath missing-directory branch");
 });
 
@@ -220,7 +221,7 @@ test("manifest/paths cleanup mode rejects relay-owned symlink escapes", () => {
   );
 });
 
-test("manifest/paths default mode rejects existing pruned relay-owned worktrees but reports missing paths", () => {
+test("manifest/paths default mode rejects existing pruned and missing relay-owned worktrees", () => {
   process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-paths-strict-repo-"));
   initGitRepo(repoRoot);
@@ -247,6 +248,31 @@ test("manifest/paths default mode rejects existing pruned relay-owned worktrees 
     /is not contained under the expected repo root/
   );
 
+  assert.throws(
+    () => validateManifestPaths({
+      repo_root: repoRoot,
+      worktree: missingWorktree,
+    }, {
+      expectedRepoRoot: repoRoot,
+      manifestPath,
+      runId,
+      caller: "manifest/paths.test strict missing",
+    }),
+    /is not contained under the expected repo root/
+  );
+});
+
+test("manifest/paths missing-worktree mode reports trusted-shape missing paths", () => {
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-paths-missing-ok-repo-"));
+  initGitRepo(repoRoot);
+  const runId = "issue-295-20260425010103500-a1b2c3d4";
+  const manifestPath = getManifestPath(repoRoot, runId);
+  const relayWorktreeBase = path.join(process.env.RELAY_HOME, "worktrees");
+  const missingWorktree = path.join(relayWorktreeBase, "missing-directory", path.basename(repoRoot));
+
+  fs.mkdirSync(path.dirname(missingWorktree), { recursive: true });
+
   const missingResult = validateManifestPaths({
     repo_root: repoRoot,
     worktree: missingWorktree,
@@ -254,7 +280,8 @@ test("manifest/paths default mode rejects existing pruned relay-owned worktrees 
     expectedRepoRoot: repoRoot,
     manifestPath,
     runId,
-    caller: "manifest/paths.test strict missing",
+    allowMissingWorktree: true,
+    caller: "manifest/paths.test allowed missing",
   });
   assert.equal(missingResult.worktree, missingWorktree);
   assert.equal(missingResult.worktreeLocation, "relay_worktree");
