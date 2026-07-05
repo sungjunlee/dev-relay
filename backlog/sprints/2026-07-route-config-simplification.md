@@ -43,6 +43,12 @@ Route selection is one user-facing concept: a single routes.json schema (open-by
 
 ## Progress
 
+### 2026-07-05 (continued)
+- Harness background-task kills recurred (06:42, 07:42, 07:59 — kills follow orchestrator turn end, not a fixed schedule). Adapted: long operations now run foreground within a turn; codex work salvaged from surviving worktrees instead of re-dispatching.
+- #786: R2 fix survived in worktree; orchestrator verified (close-run + full suite green), recovered via force rollback → review_pending → manual commit `2cfdbc3` + rebrand-evidence. R3 verdict PASS → `ready_to_merge` (PR #789).
+- #784: executor's 4-line fix survived; 126 stray unstaged deletions restored via `git ls-files --deleted | git restore`. Orchestrator added the one missing warning-token assertion, committed `01f31aa`, opened PR #791. execution-evidence.json was never written (executor killed early) — evidence rebuilt from a real orchestrator-run full suite before review.
+- Learning: recover-state whitelist requires two hops from `dispatched` (`--force` → changes_requested → review_pending), and changes_requested→review_pending gates on a NEW pushed commit; commit first, then transition.
+
 ### 2026-07-05
 - Sprint planned. Design doc committed (72fab9f), issues #781–#784 created with milestone "Route Config Simplification", task mirrors synced (81f79c6).
 - Batch 1 dual-dispatch (codex+codex): #784 run `issue-784-20260705061528614-395cfc3a` (root cause pre-measured: opencode ~10.0s, pi ~8.1s vs 5s budget; fix = default 20000 + actionable warning + doc line). #781 A1 on branch `issue-781-a1` (loader/mapping/posture-flip/UNREGISTERED_ROUTE_USED/ADR 0007). File surfaces verified disjoint.
