@@ -2689,7 +2689,10 @@ test("dispatch resume fails loudly when the retained worktree is missing", () =>
   });
 
   assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /(retained worktree is missing|manifest paths\.worktree)/);
+  assert.match(result.stderr, /retained worktree is missing/);
+  assert.match(result.stderr, new RegExp(escapeRegExp(first.worktree)));
+  assert.match(result.stderr, /git worktree add /);
+  assert.match(result.stderr, / -b 'issue-42' 'main'/);
   assert.equal(listManifestPaths(repoRoot).length, 1);
 });
 

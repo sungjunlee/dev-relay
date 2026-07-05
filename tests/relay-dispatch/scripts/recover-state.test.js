@@ -531,3 +531,36 @@ test("escalated -> changes_requested succeeds without --force (alias for 'go bac
   const manifest = readManifest(manifestPath).data;
   assert.equal(manifest.state, STATES.CHANGES_REQUESTED);
 });
+
+test("dispatched -> changes_requested succeeds when the manifest worktree path no longer exists", () => {
+  const { repoRoot, runId, manifestPath, worktreePath } = setupRepo({ state: STATES.DISPATCHED });
+  execFileSync("git", ["worktree", "remove", "--force", worktreePath], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+  });
+
+  const stdout = execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--run-id", runId,
+    "--to", STATES.CHANGES_REQUESTED,
+    "--reason", "dispatch hung; executor killed externally",
+    "--force",
+    "--json",
+  ], { encoding: "utf-8" });
+
+  const result = JSON.parse(stdout);
+  assert.equal(result.previousState, STATES.DISPATCHED);
+  assert.equal(result.state, STATES.CHANGES_REQUESTED);
+  assert.equal(result.nextAction, "await_redispatch");
+
+  const manifest = readManifest(manifestPath).data;
+  assert.equal(manifest.state, STATES.CHANGES_REQUESTED);
+
+  const event = readRunEvents(repoRoot, runId).find((entry) => entry.event === "state_recovery");
+  assert.equal(event?.state_from, STATES.DISPATCHED);
+  assert.equal(event?.state_to, STATES.CHANGES_REQUESTED);
+  assert.equal(event?.worktree_missing, true);
+  assert.equal(event?.reason, "dispatch hung; executor killed externally");
+});

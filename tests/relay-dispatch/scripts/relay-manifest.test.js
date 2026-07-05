@@ -346,7 +346,7 @@ test("validateManifestPaths rejects mismatched repo roots, escaped worktrees, an
     caller: "relay-manifest.test escaped worktree",
   }), /is not contained under the expected repo root/);
 
-  assert.throws(() => validateManifestPaths({
+  const missingResult = validateManifestPaths({
     repo_root: repoRoot,
     worktree: missingRelayOwnedWorktree,
   }, {
@@ -354,7 +354,10 @@ test("validateManifestPaths rejects mismatched repo roots, escaped worktrees, an
     manifestPath,
     runId,
     caller: "relay-manifest.test missing relay-owned worktree",
-  }), /is not contained under the expected repo root/);
+  });
+  assert.equal(missingResult.worktree, missingRelayOwnedWorktree);
+  assert.equal(missingResult.worktreeLocation, "relay_worktree");
+  assert.equal(missingResult.worktreeMissing, true);
 
   assert.throws(() => validateManifestPaths({
     repo_root: attackerRoot,

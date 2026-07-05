@@ -114,6 +114,7 @@ function main() {
       head_sha: updated.git?.head_sha || null,
       round: updated.review?.rounds || null,
       reason,
+      ...(validatedPaths.worktreeMissing ? { worktree_missing: true } : {}),
     });
     appendRunEvent(repoRoot, updated.run_id, {
       event: EVENTS.CLEANUP_RESULT,

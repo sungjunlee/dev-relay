@@ -578,6 +578,23 @@ function shellQuote(s) {
   return "'" + s.replace(/'/g, "'\\''") + "'";
 }
 
+function formatMissingResumeWorktreeError({ runId, worktreePath, branch, baseBranch }) {
+  const reprovisionCommand = branch && baseBranch
+    ? `git worktree add ${shellQuote(worktreePath)} -b ${shellQuote(branch)} ${shellQuote(baseBranch)}`
+    : null;
+  return [
+    `retained worktree is missing for run '${runId}': ${worktreePath || "(unset)"}`,
+    ...(reprovisionCommand
+      ? [
+          "Re-provision the retained worktree before resuming:",
+          `  ${reprovisionCommand}`,
+        ]
+      : [
+          "Re-provision the retained worktree before resuming with create-worktree.js, then retry.",
+        ]),
+  ].join("\n");
+}
+
 function terminateProcessTree(pid) {
   if (!pid) return;
   try {
@@ -1078,6 +1095,15 @@ async function main() {
     }
     if (!branch) {
       console.error(`Error: manifest ${manifestPath} is missing git.working_branch`);
+      process.exit(1);
+    }
+    if (validatedPaths.worktreeMissing) {
+      console.error(`Error: ${formatMissingResumeWorktreeError({
+        runId,
+        worktreePath: manifest.paths?.worktree || wtPath,
+        branch,
+        baseBranch,
+      })}`);
       process.exit(1);
     }
     if (!wtPath || !fs.existsSync(wtPath)) {

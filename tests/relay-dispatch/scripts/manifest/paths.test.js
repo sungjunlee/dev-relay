@@ -185,6 +185,8 @@ test("manifest/paths cleanup mode accepts pruned and missing relay-owned worktre
   });
   assert.equal(missingResult.worktree, missingWorktree);
   assert.equal(missingResult.worktreeLocation, "relay_worktree");
+  assert.equal(missingResult.worktreeMissing, true);
+  assert.equal(missingResult.prunedRelayOwnedForCleanup, false);
   assert.equal(fs.existsSync(missingWorktree), false, "fixture must exercise the no-realpath missing-directory branch");
 });
 
@@ -218,7 +220,7 @@ test("manifest/paths cleanup mode rejects relay-owned symlink escapes", () => {
   );
 });
 
-test("manifest/paths default mode still rejects pruned relay-owned worktrees", () => {
+test("manifest/paths default mode rejects existing pruned relay-owned worktrees but reports missing paths", () => {
   process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-paths-strict-repo-"));
   initGitRepo(repoRoot);
@@ -232,18 +234,29 @@ test("manifest/paths default mode still rejects pruned relay-owned worktrees", (
   fs.mkdirSync(prunedWorktree, { recursive: true });
   fs.mkdirSync(path.dirname(missingWorktree), { recursive: true });
 
-  for (const worktree of [prunedWorktree, missingWorktree]) {
-    assert.throws(
-      () => validateManifestPaths({
-        repo_root: repoRoot,
-        worktree,
-      }, {
-        expectedRepoRoot: repoRoot,
-        manifestPath,
-        runId,
-        caller: "manifest/paths.test strict pruned",
-      }),
-      /is not contained under the expected repo root/
-    );
-  }
+  assert.throws(
+    () => validateManifestPaths({
+      repo_root: repoRoot,
+      worktree: prunedWorktree,
+    }, {
+      expectedRepoRoot: repoRoot,
+      manifestPath,
+      runId,
+      caller: "manifest/paths.test strict pruned",
+    }),
+    /is not contained under the expected repo root/
+  );
+
+  const missingResult = validateManifestPaths({
+    repo_root: repoRoot,
+    worktree: missingWorktree,
+  }, {
+    expectedRepoRoot: repoRoot,
+    manifestPath,
+    runId,
+    caller: "manifest/paths.test strict missing",
+  });
+  assert.equal(missingResult.worktree, missingWorktree);
+  assert.equal(missingResult.worktreeLocation, "relay_worktree");
+  assert.equal(missingResult.worktreeMissing, true);
 });

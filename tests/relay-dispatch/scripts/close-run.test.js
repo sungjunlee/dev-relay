@@ -230,7 +230,7 @@ test("close-run rejects relay-base same-name worktrees before cleanup", () => {
   assert.equal(manifest.cleanup.status, "pending");
 });
 
-test("close-run rejects missing relay-base same-name worktrees before cleanup", () => {
+test("close-run closes when the manifest worktree path no longer exists", () => {
   const { repoRoot, manifestPath, runId, worktreePath } = setupRepo();
   const missingWorktree = createMissingRelayOwnedWorktree(repoRoot);
   const record = readManifest(manifestPath);
@@ -242,24 +242,28 @@ test("close-run rejects missing relay-base same-name worktrees before cleanup", 
     },
   }, record.body);
 
-  const result = spawnSync("node", [
+  const stdout = execFileSync("node", [
     SCRIPT,
     "--repo", repoRoot,
     "--run-id", runId,
     "--reason", "stale_non_terminal_run",
     "--json",
-  ], {
-    encoding: "utf-8",
-  });
+  ], { encoding: "utf-8" });
 
-  assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /manifest paths\.worktree/);
-  assert.equal(fs.existsSync(worktreePath), true, "close-run must fail before touching the real worktree");
+  const result = JSON.parse(stdout);
+  assert.equal(result.state, STATES.CLOSED);
+  assert.equal(result.cleanup.cleanupStatus, "succeeded");
+  assert.equal(result.cleanup.worktreeExistsBefore, false);
+  assert.equal(fs.existsSync(worktreePath), true, "close-run must not infer and touch a different worktree");
   assert.equal(fs.existsSync(missingWorktree), false);
 
   const manifest = readManifest(manifestPath).data;
-  assert.equal(manifest.state, STATES.REVIEW_PENDING);
-  assert.equal(manifest.cleanup.status, "pending");
+  assert.equal(manifest.state, STATES.CLOSED);
+  assert.equal(manifest.cleanup.status, "succeeded");
+
+  const events = fs.readFileSync(getEventsPath(repoRoot, runId), "utf-8");
+  assert.match(events, /"event":"close"/);
+  assert.match(events, /"worktree_missing":true/);
 });
 
 test("close-run rejects tampered paths.repo_root before state changes or cleanup side effects", () => {

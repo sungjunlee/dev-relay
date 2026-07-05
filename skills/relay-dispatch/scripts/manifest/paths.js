@@ -505,14 +505,25 @@ function validateManifestPaths(paths, {
   const repoContainedWorktree = isPathContainedWithin(effectiveRepoRoot, worktree);
   const relayOwnedWorktreeCandidate = isPathContainedWithin(relayWorktreeBase, worktree)
     && path.basename(worktree) === path.basename(effectiveRepoRoot);
+  const worktreeExists = fs.existsSync(worktree);
+  if (!worktreeExists) {
+    return {
+      repoRoot: effectiveRepoRoot,
+      worktree,
+      worktreeLocation: repoContainedWorktree
+        ? "repo_root"
+        : (relayOwnedWorktreeCandidate ? "relay_worktree" : "missing"),
+      worktreeExists: false,
+      worktreeMissing: true,
+      prunedRelayOwnedForCleanup: false,
+      relayWorktreeBase,
+    };
+  }
   const expectedGitCommonDir = getWorktreeGitCommonDir(effectiveRepoRoot) || path.join(effectiveRepoRoot, ".git");
-  const worktreeGitCommonDir = fs.existsSync(worktree)
-    ? getWorktreeGitCommonDir(worktree)
-    : null;
+  const worktreeGitCommonDir = getWorktreeGitCommonDir(worktree);
   const relayOwnedWorktree = relayOwnedWorktreeCandidate
     && (
-      fs.existsSync(worktree)
-      && worktreeGitCommonDir
+      worktreeGitCommonDir
       && (
         worktreeGitCommonDir === expectedGitCommonDir
         || sameFilesystemLocation(worktreeGitCommonDir, expectedGitCommonDir)
@@ -535,6 +546,8 @@ function validateManifestPaths(paths, {
     repoRoot: effectiveRepoRoot,
     worktree,
     worktreeLocation: repoContainedWorktree ? "repo_root" : "relay_worktree",
+    worktreeExists: true,
+    worktreeMissing: false,
     prunedRelayOwnedForCleanup: prunedRelayOwnedWorktreeForCleanup,
     relayWorktreeBase,
   };

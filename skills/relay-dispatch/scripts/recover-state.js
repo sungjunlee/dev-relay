@@ -530,6 +530,7 @@ function main() {
         ?? prBodyOnlyContext?.lastReviewedSha
         ?? readyHeadDriftContext?.lastReviewedSha
         ?? (safeData.review?.last_reviewed_sha || null),
+      ...(validatedPaths.worktreeMissing ? { worktree_missing: true } : {}),
       ...(readyHeadDriftContext
         ? {
             pr_number: readyHeadDriftContext.prNumber,

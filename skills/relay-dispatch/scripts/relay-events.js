@@ -184,6 +184,9 @@ function appendRunEvent(repoRoot, runId, eventData) {
     ...(eventData.pr_body_only !== undefined
       ? { pr_body_only: eventData.pr_body_only === true }
       : {}),
+    ...(eventData.worktree_missing !== undefined
+      ? { worktree_missing: eventData.worktree_missing === true }
+      : {}),
     ...(eventData.publish_policy !== undefined
       ? { publish_policy: normalizeEventValue(eventData.publish_policy) }
       : {}),
