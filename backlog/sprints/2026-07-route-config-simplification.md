@@ -16,8 +16,8 @@ Route selection is one user-facing concept: a single routes.json schema (open-by
 
 ### Batch 1 — substrate + independent bugfix (parallelizable)
 
-- [~] #784 relay-config inspect: opencode/pi model-list probes time out (ETIMEDOUT at 5s) — S, ~1 relay run; independent of the phase chain, good parallel candidate alongside #781
-- [~] #781 Routes single concept: unified routes.json, open-by-default posture, strict opt-in (Phase A) — L; split as A1 loader/gate/posture/event/ADR → A2 relay-config vocabulary → A3 friction wiring + doc banners; A1 dispatched
+- [x] #784 relay-config inspect: opencode/pi model-list probes time out (ETIMEDOUT at 5s) — S, ~1 relay run; independent of the phase chain, good parallel candidate alongside #781
+- [~] #781 Routes single concept: unified routes.json, open-by-default posture, strict opt-in (Phase A) — L; split as A1 loader/gate/posture/event/ADR → A2 relay-config vocabulary → A3 friction wiring + doc banners; A1 merged (PR #792)
 
 ### Batch 2 — per-run UX (blocked by #781)
 
@@ -29,7 +29,7 @@ Route selection is one user-facing concept: a single routes.json schema (open-by
 
 ### Unplanned (found during Batch 1 execution)
 
-- [~] #786 close-run cannot close runs whose worktree was pruned by dispatch signal cleanup — S; part 1 ready_to_merge (PR #789, R3 PASS); part 2 (dispatch.js signal stamping) deferred until #781 A1 merges
+- [x] #786 close-run cannot close runs whose worktree was pruned by dispatch signal cleanup — S; superseded by #785 (other session's three-case worktree matrix, PR #797); PR #789 closed unmerged, part 2 follow-up tracked in #785's thread
 - [ ] #795 dispatch branches from local main; unpushed local commits contaminate every PR diff — filed after the same scope-noise finding cost one review round on each of PR #789/#791/#792 (rule of three)
 
 ## Running Context
@@ -44,7 +44,10 @@ Route selection is one user-facing concept: a single routes.json schema (open-by
 
 ## Progress
 
-### 2026-07-05 (continued, 3)
+### 2026-07-06 (merge)
+- Batch 1 landed on user instruction. Merge audit first surfaced a parallel-session collision: PR #789 (#786 part 1) conflicted with main because the other session's #797 (#785) fixed the same vanished-worktree dead-end via a more general three-case ownership matrix, and the owner had already closed #786 as fixed-by-#785. Remaining #789 diff added no behavior main doesn't enforce → PR #789 closed unmerged with rationale, run closed. Precedent applied: close superseded PR; no narrow follow-up needed (part 2 lives in #785's thread).
+- #791 (#784) and #792 (#781 A1) squash-merged via finalize-run; both learnings pushes hit the expected post-merge fetch race → rebase + push each time. Full suite on merged main (with #796/#797 in the mix): 1612 pass / 0 fail.
+- Next: #781 A2 (relay-config vocabulary) can now dispatch on merged A1; then A3, then Batch 2 (#782). #795 still open in Unplanned.
 - #781-A1 converged to PASS at R11 (PR #792 `ready_to_merge`). Review rounds R2–R10 each caught a real, progressively narrower defect in the salvaged loader: strict-omission materialization defeating the merge guard (R2), the same bug via the v1 path + event-journal-level suppression verification (R3), managed_cli shape drift from DC §3 (R4), project-only routes bypassing legacy precedence (R5), per-preset validation + fully-inert project parsing without global (R6), legacy planner failing on v2 project files → `ignored_v2` (R7), complete F2 test-edit enumeration in PR body — 11 items (R8), cwd fallback leaking foreign project executor_defaults (R9), null optional defaults erasing inherited values (R10).
 - Convergence pattern worth keeping: fail-closed→open posture flips have a long tail of "who else materializes the default" sites (validator, v1 converter, merge, resolver fallbacks). Rubric factor F2's "legacy byte-identical + justify every test edit" did the heavy lifting.
 - All three Batch-1 PRs now `ready_to_merge`: #789 (#786 part 1), #791 (#784), #792 (#781 A1). Merge order when instructed: #789/#791 independent; #792 first of the #781 chain (A2 vocabulary depends on it).
