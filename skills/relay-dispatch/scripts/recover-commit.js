@@ -334,6 +334,16 @@ function main() {
   const testCommand = getCliArg("--test-command");
   const testResultFileArg = getCliArg("--test-result-file");
   const testExitCodeArg = getCliArg("--test-exit-code");
+  if (operatorEvidenceRequested) {
+    // A flag given as the final argv token parses to undefined; blank values are
+    // equally unusable — both would silently write "unspecified" evidence fields.
+    if (typeof testCommand !== "string" || testCommand.trim() === "") {
+      throw new Error("--test-command requires a non-empty value when recording operator evidence");
+    }
+    if (typeof testResultFileArg !== "string" || testResultFileArg.trim() === "") {
+      throw new Error("--test-result-file requires a non-empty value when recording operator evidence");
+    }
+  }
   const testExitCodeProvided = hasCliFlag("--test-exit-code");
   const dryRun = hasCliFlag("--dry-run");
   const jsonOut = hasCliFlag("--json");

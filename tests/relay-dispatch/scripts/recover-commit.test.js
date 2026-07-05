@@ -513,6 +513,37 @@ test("operator test flags reject nonzero exit code before evidence or recovery s
 });
 
 [
+  ["--test-command", /--test-command requires a non-empty value/],
+  ["--test-result-file", /--test-result-file requires a non-empty value/],
+].forEach(([finalFlag, expected]) => {
+  test(`operator test flags reject ${finalFlag} given as final token without a value`, () => {
+    const fixture = setupRepo({ dirty: true });
+    const resultFile = path.join(fixture.runDir, "operator-test-result.txt");
+    fs.writeFileSync(resultFile, "ok\n", "utf-8");
+    const beforeHead = execFileSync("git", ["-C", fixture.worktreePath, "rev-parse", "HEAD"], { encoding: "utf-8" }).trim();
+
+    const args = [
+      "--reason", "operator evidence with missing value",
+      "--json",
+      "--test-exit-code", "0",
+    ];
+    if (finalFlag === "--test-command") {
+      args.push("--test-result-file", resultFile, "--test-command");
+    } else {
+      args.push("--test-command", "node --test", "--test-result-file");
+    }
+    const result = runRecover(fixture, args);
+
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, expected);
+    assert.equal(fs.existsSync(path.join(fixture.runDir, EXECUTION_EVIDENCE_FILENAME)), false);
+    assert.equal(execFileSync("git", ["-C", fixture.worktreePath, "rev-parse", "HEAD"], { encoding: "utf-8" }).trim(), beforeHead);
+    assert.equal(readJsonLines(fixture.ghLogPath).length, 0);
+    assert.equal(readRunEvents(fixture.repoRoot, fixture.runId).length, 0);
+  });
+});
+
+[
   ["--test-command"],
   ["--test-result-file"],
   ["--test-exit-code"],
