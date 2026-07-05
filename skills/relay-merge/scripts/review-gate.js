@@ -267,6 +267,12 @@ function hasTrustedExecutionEvidenceEvent(events, { runDir, reviewedHead }) {
       event.new_head_sha === reviewedHead &&
       samePath(event.execution_evidence_path, evidencePath) &&
       event.execution_evidence_hash === evidenceHash
+    ) ||
+    (
+      event.event === "operator_execution_evidence" &&
+      event.head_sha === reviewedHead &&
+      samePath(event.execution_evidence_path, evidencePath) &&
+      event.execution_evidence_hash === evidenceHash
     )
   ));
 }
@@ -351,7 +357,7 @@ function buildReviewAssuranceGateFailure({ prNumber, manifestData, runDir }) {
       status: "hardened_execution_evidence_failed",
       pr: prNumber,
       readyToMerge: false,
-      reason: "strict execution evidence is not bound to a dispatch_result or execution_evidence_rebranded event for the reviewed HEAD.",
+      reason: "strict execution evidence is not bound to a dispatch_result, execution_evidence_rebranded, or operator_execution_evidence event for the reviewed HEAD.",
     };
   }
   return null;

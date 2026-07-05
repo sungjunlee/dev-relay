@@ -34,6 +34,7 @@ const EVENTS = Object.freeze({
   MERGE_BLOCKED: "merge_blocked",
   MERGE_FINALIZE: "merge_finalize",
   MODEL_HINTS_UPDATED: "model_hints_updated",
+  OPERATOR_EXECUTION_EVIDENCE: "operator_execution_evidence",
   PUBLISH_RESULT: "publish_result",
   PR_BODY_SNAPSHOT_FAILED: "pr_body_snapshot_failed",
   PR_NUMBER_STAMPED: "pr_number_stamped",

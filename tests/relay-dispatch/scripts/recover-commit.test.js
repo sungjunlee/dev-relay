@@ -476,6 +476,54 @@ test("missing execution evidence with operator test flags writes artifact at rec
   assert.equal(evidence.test_exit_code, 0);
   assert.equal(evidence.recorded_by, "recover-commit-operator-v1");
   assert.doesNotMatch(result.stderr, /execution-evidence\.json missing/);
+
+  const events = readRunEvents(fixture.repoRoot, fixture.runId);
+  const operatorEvidenceEvent = events.find((entry) => entry.event === "operator_execution_evidence");
+  assert.equal(operatorEvidenceEvent.head_sha, parsed.commitSha);
+  assert.equal(operatorEvidenceEvent.commit_sha, parsed.commitSha);
+  assert.equal(operatorEvidenceEvent.branch, fixture.branch);
+  assert.equal(operatorEvidenceEvent.reason, "executor died before evidence write");
+  assert.equal(operatorEvidenceEvent.operator_initiated, true);
+  assert.equal(operatorEvidenceEvent.execution_evidence_path, evidencePath);
+  assert.equal(operatorEvidenceEvent.execution_evidence_hash, sha256File(evidencePath));
+  assert.equal(events.filter((entry) => entry.event === "execution_evidence_rebranded").length, 0);
+});
+
+[
+  ["--test-command"],
+  ["--test-result-file"],
+  ["--test-exit-code"],
+  ["--test-command", "--test-result-file"],
+  ["--test-command", "--test-exit-code"],
+  ["--test-result-file", "--test-exit-code"],
+].forEach((flags) => {
+  test(`operator test flags reject incomplete evidence set: ${flags.join(" ")}`, () => {
+    const fixture = setupRepo({ dirty: true });
+    const resultFile = path.join(fixture.runDir, "operator-test-result.txt");
+    fs.writeFileSync(resultFile, "node --test passed\n", "utf-8");
+    const beforeHead = execFileSync("git", ["-C", fixture.worktreePath, "rev-parse", "HEAD"], { encoding: "utf-8" }).trim();
+    const args = ["--reason", "partial operator evidence"];
+    for (const flag of flags) {
+      args.push(flag);
+      if (flag === "--test-command") args.push("node --test");
+      if (flag === "--test-result-file") args.push(resultFile);
+      if (flag === "--test-exit-code") args.push("0");
+    }
+    args.push("--json");
+
+    const result = runRecover(fixture, args);
+
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /Operator execution evidence flags must be provided together/);
+    for (const requiredFlag of ["--test-command", "--test-result-file", "--test-exit-code"]) {
+      assert.match(result.stderr, new RegExp(requiredFlag));
+    }
+    assert.equal(fs.existsSync(path.join(fixture.runDir, EXECUTION_EVIDENCE_FILENAME)), false);
+    assert.equal(execFileSync("git", ["-C", fixture.worktreePath, "rev-parse", "HEAD"], { encoding: "utf-8" }).trim(), beforeHead);
+    assert.equal(execFileSync("git", ["-C", fixture.worktreePath, "status", "--porcelain"], { encoding: "utf-8" }).trim(), "?? recovered.txt");
+    assert.equal(readJsonLines(fixture.ghLogPath).length, 0);
+    assert.equal(readRunEvents(fixture.repoRoot, fixture.runId).length, 0);
+  });
 });
 
 test("missing execution evidence without operator test flags preserves recovery and warns once", () => {

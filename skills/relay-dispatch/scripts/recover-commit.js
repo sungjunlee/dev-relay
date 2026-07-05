@@ -18,6 +18,7 @@ const { stampPrNumberUnderLock } = require("./manifest/pr-number-stamp");
 const {
   EXECUTION_EVIDENCE_FILENAME,
   buildExecutionEvidence,
+  hashFileSha256,
   rebrandEvidence,
   writeExecutionEvidence,
 } = require("./execution-evidence");
@@ -198,6 +199,16 @@ function resolveTestResultFile(resultFileArg) {
   return resolved;
 }
 
+function validateOperatorEvidenceFlagSet(providedFlags) {
+  if (providedFlags.length === 0 || providedFlags.length === 3) return;
+  const required = ["--test-command", "--test-result-file", "--test-exit-code"];
+  const missing = required.filter((flag) => !providedFlags.includes(flag));
+  throw new Error(
+    "Operator execution evidence flags must be provided together: " +
+    `${required.join(", ")}. Missing: ${missing.join(", ")}`
+  );
+}
+
 function warnMissingExecutionEvidence(runId) {
   console.error(
     `Warning: ${EXECUTION_EVIDENCE_FILENAME} missing for ${runId}; ` +
@@ -227,8 +238,11 @@ function writeOperatorExecutionEvidenceIfRequested({
     }),
     recorded_by: "recover-commit-operator-v1",
   };
-  writeExecutionEvidence(runDir, evidence);
-  return evidencePath;
+  const writtenPath = writeExecutionEvidence(runDir, evidence);
+  return {
+    path: writtenPath,
+    hash: hashFileSha256(writtenPath),
+  };
 }
 
 function resolveRun({ repoArg, runId, manifestArg }) {
@@ -310,7 +324,10 @@ function main() {
   const reason = String(getCliArg("--reason") || "").trim();
   const prTitleArg = getCliArg("--pr-title");
   const prBodyFile = getCliArg("--pr-body-file");
-  const operatorEvidenceRequested = hasCliFlag("--test-command") || hasCliFlag("--test-result-file") || hasCliFlag("--test-exit-code");
+  const operatorEvidenceFlags = ["--test-command", "--test-result-file", "--test-exit-code"]
+    .filter((flag) => hasCliFlag(flag));
+  validateOperatorEvidenceFlagSet(operatorEvidenceFlags);
+  const operatorEvidenceRequested = operatorEvidenceFlags.length > 0;
   const testCommand = getCliArg("--test-command");
   const testResultFileArg = getCliArg("--test-result-file");
   const testExitCodeArg = getCliArg("--test-exit-code");
@@ -491,7 +508,7 @@ function main() {
     }
   }
   if (!evidenceExists) {
-    writeOperatorExecutionEvidenceIfRequested({
+    const operatorEvidence = writeOperatorExecutionEvidenceIfRequested({
       runDir,
       evidencePath,
       operatorEvidenceRequested,
@@ -501,6 +518,21 @@ function main() {
       headSha: commitSha,
       timestamp,
     });
+    if (operatorEvidence) {
+      appendRunEvent(validatedPaths.repoRoot, data.run_id, {
+        event: EVENTS.OPERATOR_EXECUTION_EVIDENCE,
+        state_from: data.state,
+        state_to: data.state,
+        head_sha: commitSha,
+        commit_sha: commitSha,
+        branch,
+        round: data.review?.rounds || null,
+        reason,
+        operator_initiated: true,
+        execution_evidence_path: operatorEvidence.path,
+        execution_evidence_hash: operatorEvidence.hash,
+      });
+    }
     if (!operatorEvidenceRequested) {
       warnMissingExecutionEvidence(data.run_id);
     }

@@ -361,6 +361,39 @@ test("evaluateReviewGate accepts hardened PASS when advisory and strict evidence
   assert.equal(result.readyToMerge, true);
 });
 
+test("evaluateReviewGate trusts operator-recorded execution evidence provenance", () => {
+  const { headSha, runDir, manifestData } = createHardenedGateFixture({ evidenceProvenance: false });
+  const evidencePath = path.join(runDir, "execution-evidence.json");
+  appendEvent(runDir, {
+    event: "operator_execution_evidence",
+    head_sha: headSha,
+    operator_initiated: true,
+    execution_evidence_path: evidencePath,
+    execution_evidence_hash: hashFile(evidencePath),
+  });
+
+  const result = evaluateReviewGate({
+    prNumber: 40,
+    comments: [
+      {
+        body: "<!-- relay-review -->\n## Relay Review\nVerdict: PASS\nRounds: 1",
+        createdAt: "2026-04-03T08:00:00Z",
+      },
+    ],
+    commits: [
+      {
+        oid: headSha,
+        committedDate: "2026-04-03T07:00:00Z",
+      },
+    ],
+    manifestData,
+    runDir,
+  });
+
+  assert.equal(result.status, "lgtm");
+  assert.equal(result.readyToMerge, true);
+});
+
 test("evaluateReviewGate accepts hardened PASS with verification_runs evidence", () => {
   const { headSha, runDir, manifestData } = createHardenedGateFixture({ verificationRuns: true });
   const result = evaluateReviewGate({
