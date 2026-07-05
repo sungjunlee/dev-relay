@@ -39,7 +39,7 @@ When Step 0a is active, also append this sentence under the final self-review st
 ```
 BEFORE LOOP: Run baseline if defined. RULE: Do NOT modify automated check commands.
 LOOP (max 5 iterations):
-  0. PREREQUISITE GATE: Run prerequisite checks. Any fails → fix before scoring factors.
+  0. PREREQUISITE GATE: Test-run discipline — treat prerequisite checks as the final gate, not a per-iteration check. During the loop, run only targeted or touched suites needed to verify the current change; run long repo-wide prerequisites once at the end before committing, because re-running long prerequisites every iteration can consume the dispatch timeout.
   1. Run automated factors and self-evaluate evaluated factors. Record evidence in the Score Log. Use 0-10 numbers for quality factors with numeric targets.
   2. Fix the weakest required failing factor with one focused change. For below-target quality scores, optimize the lowest reviewer score without changing rubric commands.
   3. Re-run affected checks plus any previously passing factor that could regress.

@@ -80,6 +80,8 @@ Rank the outcomes that would hurt most if they shipped wrong. Each kept concern 
 
 Contract is "is it there?" Quality is "is it good?" Move repo-wide checks to `prerequisites`; do not count them as substantive factors.
 
+When a prerequisite is expected to take longer than about 2 minutes, include the dispatch prompt's Test-run Discipline block so executors iterate with targeted checks and run the long prerequisite once as the final gate. Size the dispatch `--timeout` for that final gate plus implementation time; for example, use `--timeout 5400` instead of relying on Codex's 3600-second default when a repo-wide prerequisite already consumes several minutes.
+
 ### Q3: What can be measured with a command?
 
 Inventory project tools before deciding what is measurable:
