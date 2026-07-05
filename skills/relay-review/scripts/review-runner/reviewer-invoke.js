@@ -176,7 +176,7 @@ function resolveReviewerModel(data, reviewerModel, reviewerName = null, { routeP
   }
   const hintedModel = data?.model_hints?.review;
   if (typeof hintedModel === "string" && hintedModel.trim()) return { model: hintedModel.trim(), source: "model_hints" };
-  if (["opencode", "pi", "antigravity"].includes(reviewerName)) {
+  if (["opencode", "pi", "antigravity", "cline"].includes(reviewerName)) {
     return {
       model: resolveExecutorDefaultModel(reviewerName, { relayHome: process.env.RELAY_HOME }),
       source: "executor_defaults",

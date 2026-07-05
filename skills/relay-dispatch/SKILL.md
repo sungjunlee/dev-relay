@@ -16,7 +16,7 @@ metadata:
 
 ## Use when
 
-- Delegating implementation to an executor (`codex`, `claude`, `opencode`, `pi`, `antigravity`, `cursor`) via worktree isolation
+- Delegating implementation to an executor (`codex`, `claude`, `opencode`, `pi`, `antigravity`, `cursor`, `cline`) via worktree isolation
 - Resuming a same-run after a `changes_requested` review
 - Running background or parallel dispatches for independent tasks
 
@@ -41,9 +41,9 @@ node "${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/dispatch.js" . -e codex
 
 For background and parallel dispatch, see `../relay/SKILL.md` § Batch Mode (single source of truth for the parallel-fork flow).
 
-Supported executors: `codex`, `claude`, `opencode`, `pi`, `antigravity`, and `cursor`. For non-default routes, pass `--executor pi`, `--executor antigravity`, `--executor cursor`, or another supported executor with a route-policy-approved model.
+Supported executors: `codex`, `claude`, `opencode`, `pi`, `antigravity`, `cursor`, and `cline`. For non-default routes, pass `--executor pi`, `--executor antigravity`, `--executor cursor`, `--executor cline`, or another supported executor with a route-policy-approved model.
 
-Default timeouts are `codex: 2400` and `claude/opencode/pi/antigravity/cursor: 1800`. Model examples, capability gates, and the 7-field executor contract are documented in `references/agent-adapter-platform.md` and `references/model-routing.md`.
+Default timeouts are `codex: 2400` and `claude/opencode/pi/antigravity/cursor/cline: 1800`. Model examples, capability gates, and the 7-field executor contract are documented in `references/agent-adapter-platform.md` and `references/model-routing.md`.
 
 ## Options
 

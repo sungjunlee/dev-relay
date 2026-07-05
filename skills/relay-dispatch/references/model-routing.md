@@ -5,7 +5,7 @@ Dispatch model routing answers two separate questions:
 - Which executor harness should run the task?
 - Which provider/model route, if any, should that harness use?
 
-Executor names such as `codex`, `claude`, `opencode`, `pi`, and `antigravity` select a CLI adapter. Provider/model route strings such as `example/opencode-model-fast`, `openai/gpt-5`, or `google/antigravity-cli` are the model-policy boundary.
+Executor names such as `codex`, `claude`, `opencode`, `pi`, `antigravity`, and `cline` select a CLI adapter. Provider/model route strings such as `example/opencode-model-fast`, `openai/gpt-5`, `google/antigravity-cli`, or `cline-pass/glm-5.2` are the model-policy boundary.
 
 ## Dispatch Selection
 
@@ -23,7 +23,7 @@ The selected model route still has to pass route policy before the executor runs
 
 Codex and Claude are managed CLI defaults. They may intentionally run with `model: null`, because the authenticated managed CLI account is the operational boundary.
 
-OpenCode, Pi, Antigravity, and other unmanaged harnesses should use explicit provider/model routes and matching route-policy allow rules. A missing or disallowed route fails before spawning the executor.
+OpenCode, Pi, Antigravity, Cline, and other unmanaged harnesses should use explicit provider/model routes and matching route-policy allow rules. A missing or disallowed route fails before spawning the executor.
 
 ## Executor Model Config
 
@@ -35,6 +35,10 @@ Bundled executor model config intentionally ships empty so installs do not selec
     "opencode": {
       "default_model": "example/opencode-model-fast",
       "candidate_models": ["example/opencode-model-fast"]
+    },
+    "cline": {
+      "default_model": "cline-pass/glm-5.2",
+      "candidate_models": ["cline-pass/glm-5.2"]
     }
   }
 }
@@ -49,6 +53,14 @@ The top-level `relay` skill does not invoke `relay-dispatch` as a nested skill. 
 ```bash
 node "${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/dispatch.js" . \
   --executor opencode --model example/opencode-model-fast \
+  -b issue-42 --prompt-file /tmp/dispatch-42.md --rubric-file /tmp/rubric-42.yaml
+```
+
+For ClinePass:
+
+```bash
+node "${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/dispatch.js" . \
+  --executor cline --model cline-pass/glm-5.2 \
   -b issue-42 --prompt-file /tmp/dispatch-42.md --rubric-file /tmp/rubric-42.yaml
 ```
 

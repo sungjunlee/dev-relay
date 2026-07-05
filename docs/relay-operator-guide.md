@@ -32,7 +32,7 @@ $relay-config Use example/opencode-model-fast for personal advisory review
 $relay-config Use my selected OpenCode provider/model route for personal dispatch and review dogfood
 ```
 
-Route policy is based on provider/model routes, not only harness names. Managed Codex and Claude CLIs work by default when no policy exists. OpenCode, Pi, and advisory reviewers require explicit route approval. See [model-route-policy.md](model-route-policy.md) for the full policy shape and precedence order.
+Route policy is based on provider/model routes, not only harness names. Managed Codex and Claude CLIs work by default when no policy exists. OpenCode, Pi, Antigravity, Cline, and advisory reviewers require explicit route approval. See [model-route-policy.md](model-route-policy.md) for the full policy shape and precedence order.
 
 Project-local route UX lives outside the repo under `~/.relay/projects/<repo-slug>/project.json`, `~/.relay/projects/<repo-slug>/policy.json`, and `~/.relay/projects/<repo-slug>/routes.json`. Policy is authorization; `routes.json` stores preferences only and cannot grant routes. Use `relay-config plan-run --json` to preview the effective dispatch/review/advisory routing before dispatch, and use `--route-intent-file` for one-off run overrides. Dispatch persists the audited decision as `route-plan.json` in the run directory.
 
@@ -91,8 +91,8 @@ Useful dispatch flags:
 
 | Flag | Purpose |
 | --- | --- |
-| `--executor` | Select `codex`, `claude`, `opencode`, or `pi` |
-| `--model` | Pass a model override when the harness supports it; Pi should use an explicit provider/model route |
+| `--executor` | Select `codex`, `claude`, `opencode`, `pi`, `antigravity`, `cursor`, or `cline` |
+| `--model` | Pass a model override when the harness supports it; unmanaged harnesses should use an explicit provider/model route |
 | `--network-access enabled` | Enable Codex workspace-write network access for supported runs |
 | `--copy` | Copy extra gitignored files into the worktree |
 | `--register` | Register a Codex app thread or Claude relay-side receipt |
@@ -129,6 +129,7 @@ Implementation status describes the adapter surface shipped in relay. Live statu
 | `pi` | Implementation: `stable`<br>Live: `limited` by route-specific healthy dispatch canaries | Implementation: `stable`<br>Live: `limited` by route-specific reviewer canaries | Implementation: `stable`<br>Live: `limited` by route-specific advisory evidence |
 | `antigravity` | Implementation: `limited`<br>Live: `limited` by `google/antigravity-cli` healthy dispatch canary evidence | Implementation: `fail-safe-experimental`<br>Live: `blocked` until strict verdict JSON is accepted in a healthy live reviewer canary | Implementation: `fail-safe-experimental`<br>Live: `blocked` by current timeout/worktree-mutation blocker |
 | `cursor` | Implementation: `limited`<br>Live: `blocked` until route-specific healthy dispatch canaries exist | Implementation: `limited`<br>Live: `blocked` until strict verdict JSON is accepted in a healthy live reviewer canary | Implementation: `not-supported`<br>Live: `not-supported` |
+| `cline` | Implementation: `limited`<br>Live: `limited` by route-specific ClinePass smoke evidence | Implementation: `not-supported`<br>Live: `blocked` until strict verdict JSON is accepted in a healthy live reviewer canary | Implementation: `limited`<br>Live: `limited` by route policy and advisory evidence |
 
 Status meanings:
 
@@ -147,6 +148,20 @@ Timeouts are inconclusive unless the step is an intentionally bounded fail-safe 
 ### Antigravity Live Canary
 
 Antigravity dispatch has route-specific healthy live canary evidence for `google/antigravity-cli`; primary and advisory review remain fail-safe experimental until healthy reviewer canaries pass. Fake-bin tests alone do not prove live executor or reviewer success.
+
+Use the live dogfood harness documented in `skills/relay-dispatch/references/operator-utilities.md` for repeatable Antigravity evidence; keep detailed adapter semantics in `skills/relay-dispatch/references/agent-adapter-platform.md`.
+
+### ClinePass Live Canary
+
+Cline dispatch and advisory review use `cline --json -P cline-pass --cwd <repo>` and parse the final JSONL `run_result.text`. Relay never passes `cline --worktree`; the relay worktree remains the boundary. Treat Cline primary review as blocked until a live canary returns strict verdict JSON within timeout and leaves the worktree clean.
+
+Primary-review promotion requires a canary that runs the Cline reviewer path against a retained review worktree and validates all of the following:
+
+- `run_result.text` is raw JSON matching `REVIEWER_VERDICT_JSON_SCHEMA` from `skills/relay-review/scripts/review-schema.js`.
+- The invocation returns within `RELAY_CLINE_REVIEW_TIMEOUT`.
+- `git status --porcelain` is unchanged after review.
+- Timeout, malformed JSONL, missing `run_result.text`, schema rejection, or worktree mutation is recorded as a fail-safe limitation, not healthy review evidence.
+- `primary_review.supported=true` is enabled only in the same change that updates descriptor metadata, tests, and operator docs for the promoted route.
 
 Use the live dogfood harness for repeatable Pi, OpenCode, and Antigravity evidence. Full harness semantics and outcome meanings live in `skills/relay-dispatch/references/operator-utilities.md`; adapter status and healthy-path criteria live in `skills/relay-dispatch/references/agent-adapter-platform.md`.
 

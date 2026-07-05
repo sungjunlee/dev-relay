@@ -30,9 +30,9 @@ after(() => {
   if (TMP_ROOT) fs.rmSync(TMP_ROOT, { recursive: true, force: true });
 });
 
-test("registry exposes codex, claude, opencode, pi, antigravity, and cursor", () => {
-  assert.deepEqual(listExecutors(), ["codex", "claude", "opencode", "pi", "antigravity", "cursor"]);
-  assert.deepEqual(listExecutors().sort(), ["antigravity", "claude", "codex", "cursor", "opencode", "pi"]);
+test("registry exposes codex, claude, opencode, pi, antigravity, cursor, and cline", () => {
+  assert.deepEqual(listExecutors(), ["codex", "claude", "opencode", "pi", "antigravity", "cursor", "cline"]);
+  assert.deepEqual(listExecutors().sort(), ["antigravity", "claude", "cline", "codex", "cursor", "opencode", "pi"]);
   assert.throws(() => getExecutor("nonexistent"), /unknown executor/);
 });
 
@@ -66,6 +66,14 @@ test("cursor adapter exposes the same 7 fields", () => {
     assert.ok(typeof cursor[k] !== "undefined", `missing field: ${k}`);
   }
   assert.equal(cursor.cliBinary, "agent");
+});
+
+test("cline adapter exposes the same 7 fields", () => {
+  const cline = getExecutor("cline");
+  for (const k of ["cliBinary", "defaultTimeout", "validateExecutionMode", "buildExecCommand", "finalizeResult", "register", "probe"]) {
+    assert.ok(typeof cline[k] !== "undefined", `missing field: ${k}`);
+  }
+  assert.equal(cline.cliBinary, "cline");
 });
 
 test("opencode validateExecutionMode accepts workspace-write+disabled with experimental warning", () => {
@@ -210,6 +218,45 @@ test("cursor buildExecCommand: workspace, sandbox, model, and prompt argv", () =
   assert.equal(r.args.includes("--worktree"), false);
 });
 
+test("cline buildExecCommand: json, provider, cwd, timeout, model, and no worktree flag", () => {
+  const cline = getExecutor("cline");
+  const r = cline.buildExecCommand({
+    wtPath: WT,
+    prompt: "do the thing",
+    model: "cline-pass/glm-5.2",
+    sandbox: "workspace-write",
+    timeoutSeconds: 123,
+  });
+  assert.equal(r.cmd, "cline");
+  assert.deepEqual(r.args.slice(0, 9), [
+    "--json",
+    "-P", "cline-pass",
+    "-m", "cline-pass/glm-5.2",
+    "--cwd", WT,
+    "--timeout", "123",
+  ]);
+  assert.match(r.args[9], /RELAY WORKTREE BOUNDARY/);
+  assert.match(r.args[9], new RegExp(`Repository worktree: ${WT.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
+  assert.match(r.args[9], /Do not use cline --worktree/);
+  assert.match(r.args[9], /\ndo the thing$/);
+  assert.equal(r.args.includes("--worktree"), false);
+  assert.equal(r.cwd, WT);
+  assert.equal(r.codexGitCommonDir, null);
+});
+
+test("cline buildExecCommand: omitted model still pins provider to cline-pass", () => {
+  const cline = getExecutor("cline");
+  const r = cline.buildExecCommand({
+    wtPath: "/tmp/wt",
+    prompt: "P",
+    model: null,
+    sandbox: "workspace-write",
+    timeoutSeconds: null,
+  });
+  assert.deepEqual(r.args.slice(0, 6), ["--json", "-P", "cline-pass", "--cwd", "/tmp/wt", "--timeout"]);
+  assert.equal(r.args[6], "1800");
+});
+
 test("cursor validateExecutionMode fails closed for read-only dispatch", () => {
   const cursor = getExecutor("cursor");
   const r = cursor.validateExecutionMode({ sandbox: "read-only", networkAccess: "disabled" });
@@ -226,6 +273,41 @@ test("cursor finalizeResult copies stdout into the relay result file", () => {
   const copied = cursor.finalizeResult({ stdoutLog, resultFile });
   assert.deepEqual(copied, { copied: true, status: "copied", bytes: "cursor result\n".length });
   assert.equal(fs.readFileSync(resultFile, "utf-8"), "cursor result\n");
+});
+
+test("cline finalizeResult extracts run_result.text into the relay result file", () => {
+  const cline = getExecutor("cline");
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "relay-cline-finalize-"));
+  const stdoutLog = path.join(tmp, "stdout.log");
+  const resultFile = path.join(tmp, "result.txt");
+  fs.writeFileSync(stdoutLog, [
+    JSON.stringify({ type: "agent_event", event: { type: "content_start", text: "ignored" } }),
+    JSON.stringify({ type: "run_result", text: "first" }),
+    JSON.stringify({ type: "run_result", text: "final answer" }),
+    "",
+  ].join("\n"), "utf-8");
+  const copied = cline.finalizeResult({ stdoutLog, resultFile });
+  assert.deepEqual(copied, { copied: true, status: "extracted", bytes: "final answer\n".length });
+  assert.equal(fs.readFileSync(resultFile, "utf-8"), "final answer\n");
+});
+
+test("cline finalizeResult fails when JSONL is malformed or missing run_result.text", () => {
+  const cline = getExecutor("cline");
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "relay-cline-finalize-invalid-"));
+  const stdoutLog = path.join(tmp, "stdout.log");
+  const resultFile = path.join(tmp, "result.txt");
+
+  fs.writeFileSync(stdoutLog, "not-json\n", "utf-8");
+  assert.throws(
+    () => cline.finalizeResult({ stdoutLog, resultFile }),
+    /Cline JSONL line 1 must be valid JSON/
+  );
+
+  fs.writeFileSync(stdoutLog, `${JSON.stringify({ type: "agent_event" })}\n`, "utf-8");
+  assert.throws(
+    () => cline.finalizeResult({ stdoutLog, resultFile }),
+    /did not include run_result\.text/
+  );
 });
 
 test("pi finalizeResult copies stdout into the relay result file", () => {
@@ -444,6 +526,59 @@ esac
     process.env.PATH = originalPath;
     if (originalBin) process.env.RELAY_CURSOR_AGENT_BIN = originalBin;
     else delete process.env.RELAY_CURSOR_AGENT_BIN;
+  }
+});
+
+test("cline probe returns {error: 'cline CLI not found', raw: null} when binary missing", () => {
+  const emptyBin = path.join(TMP_ROOT, "empty-cline-bin");
+  fs.mkdirSync(emptyBin, { recursive: true });
+  const originalPath = process.env.PATH;
+  const originalBin = process.env.RELAY_CLINE_BIN;
+  process.env.PATH = emptyBin;
+  delete process.env.RELAY_CLINE_BIN;
+  try {
+    const cline = getExecutor("cline");
+    const result = cline.probe({ timeout: 5 });
+    assert.match(result.error, /cline CLI not found/);
+    assert.equal(result.raw, null);
+  } finally {
+    process.env.PATH = originalPath;
+    if (originalBin) process.env.RELAY_CLINE_BIN = originalBin;
+    else delete process.env.RELAY_CLINE_BIN;
+  }
+});
+
+test("cline probe payload exposes version and supported flags without live API call", () => {
+  const fakeBin = path.join(TMP_ROOT, "fake-cline-bin");
+  const fakeCline = path.join(fakeBin, "cline");
+  fs.mkdirSync(fakeBin, { recursive: true });
+  fs.writeFileSync(fakeCline, `#!/bin/sh
+case "$1" in
+  --version) echo "3.0.36-test" ;;
+  --help) echo "Usage: cline --json --cwd --provider -P --model -m --timeout --worktree" ;;
+  *) exit 2 ;;
+esac
+`);
+  fs.chmodSync(fakeCline, 0o755);
+
+  const originalPath = process.env.PATH;
+  const originalBin = process.env.RELAY_CLINE_BIN;
+  process.env.PATH = `${fakeBin}${path.delimiter}${originalPath || ""}`;
+  delete process.env.RELAY_CLINE_BIN;
+  try {
+    const cline = getExecutor("cline");
+    const result = cline.probe({ timeout: 5 });
+    assert.equal(result.error, null);
+    const parsed = JSON.parse(result.raw);
+    assert.equal(parsed.version, "3.0.36-test");
+    assert.equal(parsed.provider_default, "cline-pass");
+    assert.ok(parsed.supported_flags.includes("--json"));
+    assert.ok(parsed.supported_flags.includes("--cwd"));
+    assert.ok(parsed.warnings.some((warning) => /worktree/i.test(warning)));
+  } finally {
+    process.env.PATH = originalPath;
+    if (originalBin) process.env.RELAY_CLINE_BIN = originalBin;
+    else delete process.env.RELAY_CLINE_BIN;
   }
 });
 

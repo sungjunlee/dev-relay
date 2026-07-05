@@ -63,7 +63,7 @@ Optional advisory path: add a non-gating blind-spot lane alongside the primary r
 ```bash
 node "${RELAY_SKILL_ROOT:-skills}/relay-review/scripts/review-runner.js" --repo . --run-id "$RUN_ID" --pr "$PR_NUM" --reviewer codex --advisory-reviewer <name> --advisory-profile blindspot --json
 ```
-Supported advisory reviewers: `--advisory-reviewer opencode`, `--advisory-reviewer pi`, and `--advisory-reviewer antigravity`.
+Supported advisory reviewers: `--advisory-reviewer opencode`, `--advisory-reviewer pi`, `--advisory-reviewer antigravity`, and `--advisory-reviewer cline`.
 
 Advisory review is non-gating for `policy.review_assurance=standard`: it records artifacts and never replaces the primary verdict. For `policy.review_assurance=hardened`, advisory review and strict execution evidence become required gates. Full advisory timing, failure, and route semantics are in `references/runner-notes.md` and the adapter platform reference.
 

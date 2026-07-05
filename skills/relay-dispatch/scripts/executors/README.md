@@ -22,3 +22,5 @@ opencode is an experimental dispatch executor. Reviewer policy is defined in `re
 antigravity targets the Google Antigravity `agy` CLI only. The relay adapter does not read Antigravity IDE/Desktop state, GUI sessions, plugin runtime, or PTY state. `agy --version` is recorded as CLI-version evidence separately from any desktop app version.
 
 cursor targets the Cursor Agent `agent` CLI only. Dispatch uses `--workspace` and never `agent --worktree` so relay worktree isolation stays authoritative. Primary review uses `--mode ask --output-format json` and parses the wrapper `result` field into strict verdict JSON.
+
+cline targets the Cline CLI only. Dispatch uses `--json --cwd <relay-worktree>` and never `cline --worktree` so relay worktree isolation stays authoritative. Relay parses the final JSONL `run_result.text` payload into the dispatch result file.

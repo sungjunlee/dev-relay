@@ -24,7 +24,7 @@ PR_NUM=<pr-number>
 node "${RELAY_SKILL_ROOT:-skills}/relay-review/scripts/review-runner.js" --repo . --run-id "$RUN_ID" --pr "$PR_NUM" --reviewer codex --advisory-reviewer opencode --advisory-profile blindspot --json
 ```
 
-Supported advisory reviewers are `opencode`, `pi`, and `antigravity`.
+Supported advisory reviewers are `opencode`, `pi`, `antigravity`, and `cline`.
 
 ## Comparison Implementation
 

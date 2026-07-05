@@ -255,9 +255,11 @@ test("operator docs mention every supported dispatch and review adapter", () => 
   assert.match(dispatchDocs, /--executor pi/);
   assert.match(dispatchDocs, /--executor antigravity/);
   assert.match(dispatchDocs, /--executor cursor/);
+  assert.match(dispatchDocs, /--executor cline/);
   assert.match(reviewDocs, /--reviewer pi/);
   assert.match(reviewDocs, /--reviewer antigravity/);
   assert.match(reviewDocs, /--reviewer cursor/);
+  assert.match(reviewDocs, /--advisory-reviewer cline/);
   assert.match(readRepoFile(ADAPTER_PLATFORM_DOC), /agy`? CLI only/);
 });
 

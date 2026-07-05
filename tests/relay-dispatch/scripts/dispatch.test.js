@@ -286,6 +286,49 @@ process.stdout.write("antigravity completed\\n");
   return agyPath;
 }
 
+function writeArgCaptureCline(binDir, capturePath) {
+  ensureDefaultFakeGh(binDir);
+  const clinePath = path.join(binDir, "cline");
+  fs.writeFileSync(clinePath, `#!/usr/bin/env node
+const fs = require("fs");
+const { execFileSync } = require("child_process");
+const args = process.argv.slice(2);
+if (args[0] === "--version") { process.stdout.write("3.0.36-test\\n"); process.exit(0); }
+if (args[0] === "--help") { process.stdout.write("Usage: cline --json --cwd --provider -P --model -m --timeout --worktree\\n"); process.exit(0); }
+if (!args.includes("--json")) { process.stderr.write("unsupported fake cline invocation"); process.exit(1); }
+fs.writeFileSync(${JSON.stringify(capturePath)}, JSON.stringify(args), "utf-8");
+const cwd = args[args.indexOf("--cwd") + 1];
+const fileName = "captured-cline.txt";
+fs.writeFileSync(cwd + "/" + fileName, fileName + "\\n", "utf-8");
+execFileSync("git", ["-C", cwd, "add", fileName], { stdio: "pipe" });
+execFileSync("git", ["-C", cwd, "commit", "-m", "fake " + fileName], { stdio: "pipe" });
+process.stdout.write(JSON.stringify({ type: "agent_event", event: { type: "content_start", text: "ignored" } }) + "\\n");
+process.stdout.write(JSON.stringify({ type: "run_result", text: "cline completed" }) + "\\n");
+`, "utf-8");
+  fs.chmodSync(clinePath, 0o755);
+  return clinePath;
+}
+
+function writeMalformedResultCline(binDir) {
+  ensureDefaultFakeGh(binDir);
+  const clinePath = path.join(binDir, "cline");
+  fs.writeFileSync(clinePath, `#!/usr/bin/env node
+const fs = require("fs");
+const { execFileSync } = require("child_process");
+const args = process.argv.slice(2);
+if (args[0] === "--version") { process.stdout.write("3.0.36-test\\n"); process.exit(0); }
+if (args[0] === "--help") { process.stdout.write("Usage: cline --json --cwd --provider -P --model -m --timeout\\n"); process.exit(0); }
+if (!args.includes("--json")) { process.stderr.write("unsupported fake cline invocation"); process.exit(1); }
+const cwd = args[args.indexOf("--cwd") + 1];
+fs.writeFileSync(cwd + "/cline-work.txt", "work before malformed result\\n", "utf-8");
+execFileSync("git", ["-C", cwd, "add", "cline-work.txt"], { stdio: "pipe" });
+execFileSync("git", ["-C", cwd, "commit", "-m", "fake cline malformed result"], { stdio: "pipe" });
+process.stdout.write("{not-json\\n");
+`, "utf-8");
+  fs.chmodSync(clinePath, 0o755);
+  return clinePath;
+}
+
 function writeNoOpCodex(binDir) {
   ensureDefaultFakeGh(binDir);
   const codexPath = path.join(binDir, "codex");
@@ -2938,6 +2981,89 @@ test("dispatch with --executor antigravity invokes agy and copies stdout into th
   assert.equal(manifest.policy.executor_policy.cli.binary, "agy");
   assert.equal(manifest.policy.executor_policy.cli.version, "agy 1.0.2");
   assert.deepEqual(manifest.policy.executor_policy.sandbox.flags, ["--sandbox", "--add-dir <git-common-dir>"]);
+});
+
+test("dispatch with --executor cline invokes Cline and extracts run_result.text into the result file", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  writeRelayPolicy(relayHome, {
+    profile: "allow-cline-dispatch",
+    allowed_model_routes: [{ route: "cline-pass/*", phases: ["dispatch"], executors: ["cline"] }],
+  });
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-cline-bin-"));
+  const capturePath = path.join(os.tmpdir(), `relay-dispatch-argv-${Date.now()}-cline.json`);
+  writeArgCaptureCline(binDir, capturePath);
+  const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}`, RELAY_HOME: relayHome };
+  const taskPrompt = "test cline task";
+
+  const result = JSON.parse(runDispatch(repoRoot, [
+    "-b", "cline-test",
+    "-e", "cline",
+    "--model", "cline-pass/glm-5.2",
+    "--timeout", "31",
+    "--prompt", taskPrompt,
+    "--json",
+  ], env));
+
+  assert.equal(result.status, "completed");
+  assert.equal(result.executor, "cline");
+  assert.equal(result.runState, STATES.REVIEW_PENDING);
+  assert.ok(result.commits);
+  assert.equal(fs.readFileSync(result.resultFile, "utf-8"), "cline completed\n");
+  const capturedArgs = JSON.parse(fs.readFileSync(capturePath, "utf-8"));
+  assert.deepEqual(capturedArgs.slice(0, 9), [
+    "--json",
+    "-P", "cline-pass",
+    "-m", "cline-pass/glm-5.2",
+    "--cwd", result.worktree,
+    "--timeout", "31",
+  ]);
+  assert.match(capturedArgs[9], /^\[RELAY WORKTREE BOUNDARY\]\n/);
+  assert.match(capturedArgs[9], new RegExp(`Repository worktree: ${escapeRegExp(result.worktree)}`));
+  assert.match(capturedArgs[9], /Do not use cline --worktree/);
+  assert.ok(capturedArgs[9].endsWith(buildDispatchExecPrompt(taskPrompt)));
+  assert.equal(capturedArgs.includes("--worktree"), false);
+
+  const manifest = readManifest(result.manifestPath).data;
+  assert.equal(manifest.dispatch.last_executor, "cline");
+  assert.equal(manifest.dispatch.last_model, "cline-pass/glm-5.2");
+  assert.equal(manifest.dispatch.last_provider, "cline-pass");
+});
+
+test("dispatch with --executor cline escalates malformed JSONL through the manifest failure path", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  writeRelayPolicy(relayHome, {
+    profile: "allow-cline-dispatch",
+    allowed_model_routes: [{ route: "cline-pass/*", phases: ["dispatch"], executors: ["cline"] }],
+  });
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-cline-bin-"));
+  writeMalformedResultCline(binDir);
+  const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}`, RELAY_HOME: relayHome };
+
+  const proc = spawnSync("node", [SCRIPT, repoRoot, ...withRequiredRubric([
+    "-b", "cline-malformed-result",
+    "-e", "cline",
+    "--model", "cline-pass/glm-5.2",
+    "--prompt", "test cline malformed result",
+    "--json",
+  ])], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    env,
+  });
+
+  assert.notEqual(proc.status, 0);
+  const result = JSON.parse(proc.stdout);
+  assert.equal(result.status, "failed");
+  assert.equal(result.runState, STATES.ESCALATED);
+  assert.match(result.error, /executor_result_finalize_failed: .*Cline JSONL line 1 must be valid JSON/);
+  assert.equal(fs.existsSync(result.resultFile), false);
+
+  const manifest = readManifest(result.manifestPath).data;
+  assert.equal(manifest.state, STATES.ESCALATED);
+  assert.equal(manifest.dispatch.last_executor, "cline");
+  assert.equal(manifest.dispatch.last_model, "cline-pass/glm-5.2");
 });
 
 test("dispatch artifacts are persisted in the run directory", () => {

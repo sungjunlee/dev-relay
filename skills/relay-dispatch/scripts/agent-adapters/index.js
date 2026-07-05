@@ -4,6 +4,7 @@ const opencode = require("../executors/opencode");
 const pi = require("../executors/pi");
 const antigravity = require("../executors/antigravity");
 const cursor = require("../executors/cursor");
+const cline = require("../executors/cline");
 const bundledModels = require("../../references/executor-models.json");
 
 const ADAPTER_PHASES = Object.freeze({
@@ -1038,6 +1039,168 @@ const DESCRIPTORS = Object.freeze({
     reviewer: {
       primaryReviewScript: "invoke-reviewer-cursor.js",
       advisoryReviewScript: null,
+    },
+  }),
+  cline: buildDescriptor({
+    name: "cline",
+    displayName: "Cline CLI",
+    executor: cline,
+    phases: {
+      [ADAPTER_PHASES.DISPATCH]: {
+        supported: true,
+        trust: "executor",
+      },
+      [ADAPTER_PHASES.PRIMARY_REVIEW]: {
+        supported: false,
+        trust: "unsupported",
+      },
+      [ADAPTER_PHASES.ADVISORY_REVIEW]: {
+        supported: true,
+        trust: "advisory",
+      },
+    },
+    capabilities: {
+      sandbox: {
+        dispatch: {
+          modes: ["workspace-write"],
+          enforced: false,
+        },
+        primaryReview: null,
+        advisoryReview: {
+          mode: "read-only",
+          enforced: false,
+          guard: "detached-worktree-status",
+        },
+      },
+      network: {
+        dispatch: {
+          configurable: false,
+          enabledMode: "ambient",
+        },
+        primaryReview: null,
+        advisoryReview: {
+          configurable: false,
+          enabledMode: "ambient",
+        },
+      },
+      readOnly: {
+        dispatch: false,
+        primaryReview: false,
+        advisoryReview: true,
+      },
+      policy: {
+        dispatch: {
+          sandbox: {
+            "workspace-write": {
+              enforcement_level: "informational",
+              mechanism: "cline-cli-cwd",
+              flags: ["--cwd"],
+              warnings: ["Cline dispatch does not provide native relay sandbox containment; relay uses the worktree boundary and never cline --worktree."],
+            },
+            "read-only": {
+              enforcement_level: "informational",
+              mechanism: "cline-cli-cwd",
+              warnings: ["Cline dispatch read-only intent is informational only and does not prevent writes."],
+            },
+          },
+          network: {
+            disabled: {
+              enforcement_level: "informational",
+              mechanism: "ambient-network",
+              warnings: ["Cline dispatch does not gate network access at the executor level."],
+            },
+            enabled: {
+              enforcement_level: "informational",
+              mechanism: "ambient-network",
+              warnings: ["Cline dispatch does not gate network access at the executor level."],
+            },
+          },
+          read_only: {
+            true: {
+              enforcement_level: "informational",
+              mechanism: "cline-cli-cwd",
+              warnings: ["Cline dispatch read-only intent is informational only and does not prevent writes."],
+            },
+            false: {
+              enforcement_level: "unsupported",
+              mechanism: "write-capable-dispatch",
+            },
+          },
+        },
+        primary_review: null,
+        advisory_review: {
+          sandbox: {
+            "read-only": {
+              enforcement_level: "informational",
+              mechanism: "detached-worktree-status-guard",
+              flags: ["prompt:do-not-modify-files", "git-status-before-after"],
+              warnings: ["Cline advisory review has no native relay sandbox; relay records post-run worktree mutation as a policy violation."],
+            },
+          },
+          network: {
+            ambient: {
+              enforcement_level: "informational",
+              mechanism: "ambient-network",
+              warnings: ["Cline advisory review does not gate network access at the CLI level."],
+            },
+            disabled: {
+              enforcement_level: "informational",
+              mechanism: "ambient-network",
+              warnings: ["Cline advisory review does not gate network access at the CLI level."],
+            },
+          },
+          read_only: {
+            true: {
+              enforcement_level: "prompt-only",
+              mechanism: "prompt-instruction-with-detached-worktree-status-guard",
+              flags: ["prompt:do-not-modify-files", "git-status-before-after"],
+              warnings: ["Cline advisory read-only instructions do not prevent writes; relay records post-run worktree mutation as a policy violation."],
+            },
+          },
+        },
+      },
+      transport: {
+        dispatch: "cline-cli",
+        primaryReview: null,
+        advisoryReview: "cline-cli",
+      },
+      structuredOutput: {
+        dispatch: "jsonl-run-result-text",
+        primaryReview: null,
+        advisoryReview: "jsonl-run-result-text",
+      },
+      liveSupport: {
+        status: "mvp-advisory",
+        dispatch: "supported with explicit route-policy approval",
+        primaryReview: "not-supported until healthy live reviewer canary passes",
+        advisoryReview: "supported with prompt-only read-only guard and route-policy approval",
+        until: "primary review until strict verdict JSON canary and no-mutation evidence pass",
+        healthyCriteria: {
+          primaryReview: "invoke-reviewer-cline primary-review canary returns REVIEWER_VERDICT_JSON_SCHEMA JSON within timeout and leaves git status clean",
+          failureMode: "timeouts, malformed JSONL, missing run_result.text, schema errors, or worktree mutation are fail-safe limitations, not healthy evidence",
+          promotion: "enable primary_review.supported=true only after the exact route passes the canary and descriptor/docs/tests are updated together",
+        },
+      },
+      appRegistration: {
+        supported: false,
+        transport: null,
+      },
+      modelDefaults: {
+        provider: cline.providerDefault,
+        dispatch: {
+          configKey: "cline",
+          defaultModel: bundledDefaultModel("cline"),
+        },
+        primaryReview: null,
+        advisoryReview: {
+          configKey: "cline",
+          defaultModel: bundledDefaultModel("cline"),
+        },
+      },
+    },
+    reviewer: {
+      primaryReviewScript: null,
+      advisoryReviewScript: "invoke-reviewer-cline.js",
     },
   }),
 });

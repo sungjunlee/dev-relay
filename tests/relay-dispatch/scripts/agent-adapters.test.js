@@ -10,8 +10,8 @@ const {
 } = require("../../../skills/relay-dispatch/scripts/agent-adapters");
 
 test("agent adapter registry exposes the current built-in adapters", () => {
-  assert.deepEqual(listAgentAdapterNames(), ["claude", "codex", "opencode", "pi", "antigravity", "cursor"]);
-  assert.deepEqual(listAgentAdapters().map((descriptor) => descriptor.name), ["claude", "codex", "opencode", "pi", "antigravity", "cursor"]);
+  assert.deepEqual(listAgentAdapterNames(), ["claude", "codex", "opencode", "pi", "antigravity", "cursor", "cline"]);
+  assert.deepEqual(listAgentAdapters().map((descriptor) => descriptor.name), ["claude", "codex", "opencode", "pi", "antigravity", "cursor", "cline"]);
 });
 
 test("agent adapter registry reports dispatch, primary review, and advisory review independently", () => {
@@ -34,6 +34,10 @@ test("agent adapter registry reports dispatch, primary review, and advisory revi
   assert.equal(supportsAgentAdapterPhase("antigravity", ADAPTER_PHASES.DISPATCH), true);
   assert.equal(supportsAgentAdapterPhase("antigravity", ADAPTER_PHASES.PRIMARY_REVIEW), true);
   assert.equal(supportsAgentAdapterPhase("antigravity", ADAPTER_PHASES.ADVISORY_REVIEW), true);
+
+  assert.equal(supportsAgentAdapterPhase("cline", ADAPTER_PHASES.DISPATCH), true);
+  assert.equal(supportsAgentAdapterPhase("cline", ADAPTER_PHASES.PRIMARY_REVIEW), false);
+  assert.equal(supportsAgentAdapterPhase("cline", ADAPTER_PHASES.ADVISORY_REVIEW), true);
 });
 
 test("agent adapter descriptors expose structured capabilities and the executor contract", () => {
@@ -139,16 +143,36 @@ test("agent adapter descriptors expose structured capabilities and the executor 
   assert.equal(cursor.capabilities.structuredOutput.primaryReview, "json-wrapper-result-field");
   assert.equal(cursor.reviewer.primaryReviewScript, "invoke-reviewer-cursor.js");
   assert.equal(cursor.reviewer.advisoryReviewScript, null);
+
+  const cline = getAgentAdapterDescriptor("cline");
+  assert.equal(cline.executor.cliBinary, "cline");
+  assert.equal(cline.capabilities.appRegistration.supported, false);
+  assert.equal(cline.capabilities.modelDefaults.provider, "cline-pass");
+  assert.deepEqual(cline.capabilities.sandbox.dispatch.modes, ["workspace-write"]);
+  assert.equal(cline.capabilities.sandbox.dispatch.enforced, false);
+  assert.equal(cline.phases[ADAPTER_PHASES.PRIMARY_REVIEW].supported, false);
+  assert.equal(cline.phases[ADAPTER_PHASES.ADVISORY_REVIEW].trust, "advisory");
+  assert.equal(cline.capabilities.readOnly.primaryReview, false);
+  assert.equal(cline.capabilities.readOnly.advisoryReview, true);
+  assert.equal(cline.capabilities.transport.dispatch, "cline-cli");
+  assert.equal(cline.capabilities.transport.advisoryReview, "cline-cli");
+  assert.equal(cline.capabilities.structuredOutput.dispatch, "jsonl-run-result-text");
+  assert.equal(cline.capabilities.structuredOutput.advisoryReview, "jsonl-run-result-text");
+  assert.equal(cline.capabilities.modelDefaults.dispatch.defaultModel, null);
+  assert.equal(cline.capabilities.modelDefaults.advisoryReview.defaultModel, null);
+  assert.match(cline.capabilities.liveSupport.primaryReview, /not-supported/i);
+  assert.equal(cline.reviewer.primaryReviewScript, null);
+  assert.equal(cline.reviewer.advisoryReviewScript, "invoke-reviewer-cline.js");
 });
 
 test("agent adapter registry fails closed for unknown adapters and phases", () => {
   assert.throws(
     () => getAgentAdapterDescriptor("nonexistent"),
-    /unknown agent adapter 'nonexistent'\. Supported: claude, codex, opencode, pi, antigravity, cursor/
+    /unknown agent adapter 'nonexistent'\. Supported: claude, codex, opencode, pi, antigravity, cursor, cline/
   );
   assert.throws(
     () => supportsAgentAdapterPhase("nonexistent", ADAPTER_PHASES.DISPATCH),
-    /unknown agent adapter 'nonexistent'\. Supported: claude, codex, opencode, pi, antigravity, cursor/
+    /unknown agent adapter 'nonexistent'\. Supported: claude, codex, opencode, pi, antigravity, cursor, cline/
   );
   assert.throws(
     () => supportsAgentAdapterPhase("codex", "unknown_phase"),

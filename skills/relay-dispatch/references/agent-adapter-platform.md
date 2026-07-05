@@ -38,6 +38,7 @@ Isolation details by built-in reviewer:
 | `pi` | `RELAY_PI_BIN` can override the binary path; `RELAY_PI_REVIEW_TIMEOUT` sets the primary-review parent timeout. Review uses a read/grep/find/ls allowlist plus dirty-worktree checks. |
 | `antigravity` | `RELAY_ANTIGRAVITY_BIN` can override the binary path; `RELAY_ANTIGRAVITY_REVIEW_TIMEOUT` sets the review/canary parent timeout as a positive duration such as `120s`, `10m`, or `1h`; the default is `1800s`. Relay targets the `agy` command-line interface only; GUI, IDE, Desktop, plugin runtime, and interactive PTY flows are not supported. |
 | `cursor` | `RELAY_CURSOR_AGENT_BIN` can override the binary path; `RELAY_CURSOR_REVIEW_TIMEOUT` sets the primary-review parent timeout. Primary review uses ask mode and parses the wrapper `result` field. |
+| `cline` | `RELAY_CLINE_BIN` can override the binary path; `RELAY_CLINE_REVIEW_TIMEOUT` sets the Cline reviewer-script parent timeout, while `--advisory-timeout` remains the outer review-runner cap and may fire first. Dispatch and advisory review invoke `cline --json -P <provider> --cwd <repo>` and parse the final JSONL `run_result.text`. Primary review is not supported until a healthy strict-verdict live canary passes. |
 
 Advisory review is non-gating for `policy.review_assurance=standard`: it starts concurrently, waits only the configured grace window on the critical path, records `advisory_review` plus `review-round-N-advisory-<reviewer>-*`, and never changes the trusted verdict or redispatch prompt. Failures, timeouts, invalid JSON, and write-policy violations are recorded without changing the primary outcome. Late artifacts are classified as metrics after a passing primary decision or redispatch evidence after changes requested.
 
@@ -53,8 +54,11 @@ For `policy.review_assurance=hardened`, the runner fails fast unless the command
 | `pi` | Yes | Yes | Yes | Dispatch has no native relay sandbox; review uses read/grep/find/ls tool allowlist plus status guard. | Primary/advisory via `--tools read,grep,find,ls` plus dirty-worktree check. | Dispatch ambient/informational; review has no network tool in the relay allowlist. | Dispatch stdout copied to result file; primary verdict JSON text; advisory JSON text. | `pi` CLI. | No. |
 | `antigravity` | Yes, limited with route-specific healthy dispatch canary evidence for `google/antigravity-cli` | Yes, fail-safe experimental until healthy live reviewer canary passes | Yes, fail-safe experimental until healthy live advisory canary passes | `agy --sandbox`; dispatch also adds the git common dir with `--add-dir`. | Dispatch read-only is unsupported; review relies on prompt instruction plus dirty-worktree check. | Ambient/informational; `agy` exposes no relay network gate. | Dispatch stdout copied to result file; primary verdict JSON text; advisory JSON text. | `agy` CLI only. | No. |
 | `cursor` | Yes, optional experimental | Yes, optional experimental | No | Dispatch uses `agent --sandbox enabled` when workspace-write is requested; relay passes `--workspace` only (never `agent --worktree`). | Primary review uses `agent --mode ask`; dispatch read-only is unsupported (fail-closed). | Ambient/informational; no relay network gate. | Dispatch stdout copied to result file; primary review parses JSON wrapper `result` field. | `agent` CLI. | Yes, `agent create-chat` when `--register` is used. |
+| `cline` | Yes, explicit route-policy approval required | No, blocked until live strict-verdict canary promotion | Yes | Informational only; relay passes `--cwd` and never `cline --worktree`. | Advisory prompt plus detached-worktree status guard; dispatch read-only is informational only. | Ambient/informational; no relay network gate. | Dispatch and advisory review parse JSONL `run_result.text`. | `cline` CLI. | No. |
 
 Antigravity support targets the Google Antigravity `agy` CLI only. Relay does not support Antigravity GUI, IDE, Desktop, plugin runtime, or interactive PTY state as a dispatch or review surface.
+
+Cline support targets the Cline CLI only. Relay does not use Cline TUI, ACP, hub dashboard, GUI state, or `cline --worktree`. Use explicit `cline-pass/*` routes plus policy allow rules for dispatch or advisory review; primary review stays unsupported until a live canary proves `REVIEWER_VERDICT_JSON_SCHEMA` output in `run_result.text`, completion within `RELAY_CLINE_REVIEW_TIMEOUT`, and no worktree mutation. Timeouts, malformed JSONL, missing `run_result.text`, schema failures, and dirty worktrees are fail-safe limitations, not healthy evidence.
 
 ## Antigravity Live Support Status
 
@@ -99,4 +103,8 @@ node skills/relay-review/scripts/review-runner.js --repo . --run-id "$RUN_ID" --
 # Cursor Agent CLI dispatch and primary review (optional harness; add cursor to managed_cli for slug-only models)
 node skills/relay-dispatch/scripts/dispatch.js . --executor cursor --model composer-2.5 -b issue-42 -p "..." --rubric-file rubric.yaml
 node skills/relay-review/scripts/review-runner.js --repo . --run-id "$RUN_ID" --reviewer cursor --reviewer-model composer-2.5 --json
+
+# ClinePass dispatch and advisory review with an explicit route
+node skills/relay-dispatch/scripts/dispatch.js . --executor cline --model cline-pass/glm-5.2 -b issue-42 -p "..." --rubric-file rubric.yaml
+node skills/relay-review/scripts/review-runner.js --repo . --run-id "$RUN_ID" --reviewer codex --advisory-reviewer cline --advisory-reviewer-model cline-pass/glm-5.2 --json
 ```

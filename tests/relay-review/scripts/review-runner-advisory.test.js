@@ -139,6 +139,18 @@ function setupRepo({
         reviewers: ["mirror"],
       }],
     },
+    "allow-cline-advisory": {
+      profile: "allow-cline-advisory",
+      allowed_model_routes: [{
+        route: "cline-pass/*",
+        phases: ["advisory_review"],
+        reviewers: ["cline"],
+      }, {
+        route: "mirror/*",
+        phases: ["review"],
+        reviewers: ["mirror"],
+      }],
+    },
   };
   const selectedPolicy = policyByName[modelPolicy];
   if (selectedPolicy) {
@@ -258,17 +270,7 @@ setTimeout(() => {
 
 function writeFakeAdvisoryCli(repoRoot, name, { delayMs = 0, logPath = null, invalidJson = false, mutate = false } = {}) {
   const filePath = path.join(repoRoot, `fake-${name}.js`);
-  fs.writeFileSync(filePath, `#!/usr/bin/env node
-const fs = require("fs");
-const path = require("path");
-const logPath = ${JSON.stringify(logPath)};
-if (logPath) fs.appendFileSync(logPath, "advisory-start " + Date.now() + "\\n");
-if (${mutate ? "true" : "false"}) fs.writeFileSync(path.join(process.cwd(), "advisory-mutated.txt"), "bad\\n", "utf-8");
-setTimeout(() => {
-  if (${invalidJson ? "true" : "false"}) {
-    process.stdout.write("not json");
-  } else {
-    process.stdout.write(JSON.stringify({
+  const advisoryPayload = `JSON.stringify({
       profile: "blindspot",
       summary: ${JSON.stringify(`${name} advisory blind spot.`)},
       required_findings: [],
@@ -282,7 +284,23 @@ setTimeout(() => {
         confidence: 0.8
       }],
       duplicate_or_low_confidence: []
-    }));
+    })`;
+  fs.writeFileSync(filePath, `#!/usr/bin/env node
+const fs = require("fs");
+const path = require("path");
+const logPath = ${JSON.stringify(logPath)};
+if (logPath) fs.appendFileSync(logPath, "advisory-start " + Date.now() + "\\n");
+if (${mutate ? "true" : "false"}) fs.writeFileSync(path.join(process.cwd(), "advisory-mutated.txt"), "bad\\n", "utf-8");
+setTimeout(() => {
+  if (${invalidJson ? "true" : "false"}) {
+    process.stdout.write("not json");
+  } else {
+    const payload = ${advisoryPayload};
+    if (${name === "cline" ? "true" : "false"}) {
+      process.stdout.write(JSON.stringify({ type: "run_result", text: payload }) + "\\n");
+    } else {
+      process.stdout.write(payload);
+    }
   }
   if (logPath) fs.appendFileSync(logPath, "advisory-end " + Date.now() + "\\n");
 }, ${Number(delayMs)});
@@ -310,6 +328,7 @@ function runReview({
   opencodeScript,
   piScript = null,
   antigravityScript = null,
+  clineScript = null,
   advisoryReviewer = "opencode",
   reviewer = "codex",
   extraArgs = [],
@@ -318,6 +337,7 @@ function runReview({
   if (opencodeScript) env.RELAY_OPENCODE_BIN = opencodeScript;
   if (piScript) env.RELAY_PI_BIN = piScript;
   if (antigravityScript) env.RELAY_ANTIGRAVITY_BIN = antigravityScript;
+  if (clineScript) env.RELAY_CLINE_BIN = clineScript;
   const advisoryModelArgs = (
     advisoryReviewer === "opencode" &&
     !extraArgs.includes("--advisory-reviewer-model")
@@ -563,6 +583,36 @@ test("review-runner accepts antigravity advisory review when route policy allows
   assert.equal(event.reviewer_policy.adapter, "antigravity");
   assert.equal(event.reviewer_policy.phase, "advisory_review");
   assert.equal(event.reviewer_policy.safe, true);
+});
+
+test("review-runner accepts cline advisory review when route policy allows the reviewer model", () => {
+  const { repoRoot, runDir, runId, doneCriteriaPath, diffPath } = setupRepo({ modelPolicy: "allow-cline-advisory" });
+  const primaryScript = writePrimaryReviewer(repoRoot, passVerdict());
+  const clineScript = writeFakeAdvisoryCli(repoRoot, "cline");
+
+  const result = runReview({
+    repoRoot,
+    runId,
+    doneCriteriaPath,
+    diffPath,
+    primaryScript,
+    opencodeScript: null,
+    clineScript,
+    advisoryReviewer: "cline",
+    extraArgs: ["--advisory-reviewer-model", "cline-pass/glm-5.2", "--advisory-grace", "30"],
+  });
+  const event = readRunEvents(repoRoot, runId).find((record) => record.event === "advisory_review");
+
+  assert.equal(result.nextState, STATES.READY_TO_MERGE);
+  assert.equal(result.advisoryReview.status, "success");
+  assert.equal(result.advisoryReview.reviewer, "cline");
+  assert.ok(fs.existsSync(path.join(runDir, "review-round-1-advisory-cline.json")));
+  assert.equal(event.reviewer, "cline");
+  assert.equal(event.policy_decision.allowed, true);
+  assert.equal(event.policy_decision.model, "cline-pass/glm-5.2");
+  assert.equal(event.reviewer_policy.adapter, "cline");
+  assert.equal(event.reviewer_policy.phase, "advisory_review");
+  assert.equal(event.reviewer_policy.read_only.enforcement_level, "prompt-only");
 });
 
 test("review-runner denies pi advisory model before spawning advisory reviewer", () => {
