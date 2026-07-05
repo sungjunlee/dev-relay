@@ -9,6 +9,7 @@ const { STATES, updateManifestState } = require("./manifest/lifecycle");
 const {
   getEventsPath,
   nowIso,
+  summarizeFailure,
   validateManifestPaths,
 } = require("./manifest/paths");
 const { getActorName, writeManifest } = require("./manifest/store");
@@ -56,29 +57,35 @@ function buildMissingWorktreeCleanupResult(repoRoot, data, dryRun) {
   const attemptedAt = nowIso();
   // The vanished directory can still be REGISTERED as a git worktree (external
   // rm -rf leaves the registration and keeps the branch marked checked out
-  // there); prune clears the stale registration.
+  // there); prune clears the stale registration. A prune failure must surface
+  // with runCleanup-style failure semantics, not be swallowed as success.
   let pruneRan = false;
+  let pruneError = null;
   if (!dryRun) {
     try {
       execGit(repoRoot, ["worktree", "prune"]);
       pruneRan = true;
-    } catch {}
+    } catch (error) {
+      pruneError = `worktree prune failed for missing worktree: ${summarizeFailure(error)}`;
+    }
   }
+  const cleanupStatus = pruneError ? CLEANUP_STATUSES.FAILED : CLEANUP_STATUSES.SUCCEEDED;
+  const nextAction = pruneError ? "manual_cleanup_required" : "done";
   const updatedData = updateManifestCleanup(data, {
-    status: CLEANUP_STATUSES.SUCCEEDED,
+    status: cleanupStatus,
     last_attempted_at: attemptedAt,
-    cleaned_at: attemptedAt,
+    cleaned_at: pruneError ? (data.cleanup?.cleaned_at || null) : attemptedAt,
     worktree_removed: true,
     branch_deleted: true,
     prune_ran: pruneRan,
-    error: null,
-  }, "done");
+    error: pruneError,
+  }, nextAction);
   return {
     updatedData,
     summary: {
       state: data.state,
-      cleanupStatus: CLEANUP_STATUSES.SUCCEEDED,
-      nextAction: "done",
+      cleanupStatus,
+      nextAction,
       attemptedAt,
       dryRun,
       worktreePath: data.paths?.worktree || null,
@@ -91,7 +98,7 @@ function buildMissingWorktreeCleanupResult(repoRoot, data, dryRun) {
       branchDeleted: true,
       pruneRan,
       deleteMergedBranch: false,
-      error: null,
+      error: pruneError,
     },
   };
 }
