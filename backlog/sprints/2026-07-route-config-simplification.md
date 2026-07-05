@@ -44,6 +44,11 @@ Route selection is one user-facing concept: a single routes.json schema (open-by
 
 ## Progress
 
+### 2026-07-05 (continued, 3)
+- #781-A1 converged to PASS at R11 (PR #792 `ready_to_merge`). Review rounds R2–R10 each caught a real, progressively narrower defect in the salvaged loader: strict-omission materialization defeating the merge guard (R2), the same bug via the v1 path + event-journal-level suppression verification (R3), managed_cli shape drift from DC §3 (R4), project-only routes bypassing legacy precedence (R5), per-preset validation + fully-inert project parsing without global (R6), legacy planner failing on v2 project files → `ignored_v2` (R7), complete F2 test-edit enumeration in PR body — 11 items (R8), cwd fallback leaking foreign project executor_defaults (R9), null optional defaults erasing inherited values (R10).
+- Convergence pattern worth keeping: fail-closed→open posture flips have a long tail of "who else materializes the default" sites (validator, v1 converter, merge, resolver fallbacks). Rubric factor F2's "legacy byte-identical + justify every test edit" did the heavy lifting.
+- All three Batch-1 PRs now `ready_to_merge`: #789 (#786 part 1), #791 (#784), #792 (#781 A1). Merge order when instructed: #789/#791 independent; #792 first of the #781 chain (A2 vocabulary depends on it).
+
 ### 2026-07-05 (continued, 2)
 - #784 R1 hit the same stranded-learnings-commit scope finding as #789; same remedy (merge origin/main into branch). Evidence had to be authored by orchestrator (executor died before writing execution-evidence.json): real full-suite run teed to result file, evidence built via execution-evidence.js helpers (schema needs command/cwd/head_sha/exit_code/recorded_by/recorded_at + one of output_hash/stdout_hash/stderr_hash). R2 PASS → `ready_to_merge` (PR #791).
 - #781-A1 salvage: codex work verified near-complete (loader/mapping/ADR/event all present). 9 suite failures triaged: 3 contention flakes (timing/SIGINT/fleet), 6 real posture-flip reconciliations — legacy no-config denial tests now seed `routes.json {version:2, strict:true}` fixtures to keep denial coverage (relay-policy-gate, probe-executor-env, review-runner-advisory ×4). 53/53 green after reconcile.
