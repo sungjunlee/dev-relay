@@ -301,6 +301,26 @@ test("reconcile row 2 reports a live lease within timeout", async (t) => {
   assert.equal(isPgidAlive(child.pid), true);
 });
 
+test("reconcile treats a zombie-only process group lease as dead retry evidence", () => {
+  const fixture = setupRepo();
+  const pgid = 888888;
+  const leasePath = writeLease(fixture, {
+    pid: pgid,
+    pgid,
+    startedAt: new Date().toISOString(),
+    timeoutS: 60,
+  });
+  fixture.env.RELAY_TEST_PROCESS_GROUP_ALIVE_EPERM = String(pgid);
+  fixture.env.RELAY_TEST_PROCESS_GROUP_STATES = JSON.stringify([{ pgid, stat: "Z" }]);
+
+  const result = parseJsonResult(runReconcile(fixture));
+
+  assert.equal(result.row, 5);
+  assert.equal(result.status, "interrupted");
+  assert.equal(fs.existsSync(leasePath), false);
+  assert.equal(readManifest(fixture.manifestPath).data.state, STATES.DISPATCHED);
+});
+
 test("reconcile treats host-mismatched leases as stale evidence", async (t) => {
   const fixture = setupRepo({ committedWork: true });
   const child = await spawnSleeper(t);

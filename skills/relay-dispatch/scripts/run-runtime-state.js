@@ -3,6 +3,7 @@
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
+const { execFileSync } = require("child_process");
 
 const { ensureRunLayout, getRunDir } = require("./manifest/paths");
 const { readRunEvents } = require("./relay-events");
@@ -11,6 +12,8 @@ const LEASE_FILENAME = "lease.json";
 const DISPATCH_STDOUT_LOG = "dispatch-stdout.log";
 const DISPATCH_STDERR_LOG = "dispatch-stderr.log";
 const DISPATCH_RESULT_FILE = "dispatch-result.txt";
+
+let posixProcessStateInspectionUnavailable = false;
 
 function probeProcessGroup(pgid) {
   const normalizedPgid = Number(pgid);
@@ -22,14 +25,62 @@ function probeProcessGroup(pgid) {
   process.kill(process.platform === "win32" ? normalizedPgid : -normalizedPgid, 0);
 }
 
+function readTestProcessGroupStates(pgid) {
+  const raw = process.env.RELAY_TEST_PROCESS_GROUP_STATES;
+  if (!raw) return null;
+  try {
+    const rows = JSON.parse(raw);
+    if (!Array.isArray(rows)) return null;
+    return rows
+      .filter((row) => Number(row?.pgid) === Number(pgid))
+      .map((row) => String(row?.stat ?? row?.state ?? "").trim())
+      .filter(Boolean);
+  } catch {
+    return null;
+  }
+}
+
+function readPosixProcessGroupStates(pgid) {
+  const testStates = readTestProcessGroupStates(pgid);
+  if (testStates) return testStates;
+  if (process.platform === "win32") return null;
+  if (posixProcessStateInspectionUnavailable) return null;
+  try {
+    const output = execFileSync("ps", ["-axo", "pgid=,stat="], {
+      encoding: "utf-8",
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: 1000,
+      maxBuffer: 1024 * 1024,
+    });
+    return output
+      .split(/\r?\n/)
+      .map((line) => line.trim().match(/^(-?\d+)\s+(\S+)/))
+      .filter((match) => match && Number(match[1]) === Number(pgid))
+      .map((match) => match[2]);
+  } catch {
+    posixProcessStateInspectionUnavailable = true;
+    return null;
+  }
+}
+
+function isZombieProcessState(stat) {
+  return String(stat || "").trim().toUpperCase().startsWith("Z");
+}
+
+function isZombieOnlyProcessGroup(pgid) {
+  const states = readPosixProcessGroupStates(pgid);
+  return Array.isArray(states) && states.length > 0 && states.every(isZombieProcessState);
+}
+
 function isProcessGroupAlive(pgid) {
   if (!pgid || !Number.isFinite(Number(pgid))) return false;
+  const normalizedPgid = Number(pgid);
   try {
-    probeProcessGroup(pgid);
-    return true;
+    probeProcessGroup(normalizedPgid);
+    return !isZombieOnlyProcessGroup(normalizedPgid);
   } catch (error) {
     if (error.code === "ESRCH") return false;
-    if (error.code === "EPERM") return true;
+    if (error.code === "EPERM") return !isZombieOnlyProcessGroup(normalizedPgid);
     return false;
   }
 }
