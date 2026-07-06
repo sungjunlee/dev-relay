@@ -1419,8 +1419,10 @@ test("finalize-run writes merged state to disk before fallible post-merge steps"
   assert.equal(retry.manifestPath, manifestPath);
   assert.equal(retry.state, STATES.MERGED);
   assert.equal(retry.nextAction, "done");
+  assert.equal(retry.remoteBranchDeleted, true);
   assert.equal(retry.cleanup.cleanupStatus, "succeeded");
   assert.equal(fs.existsSync(worktreePath), false);
+  assert.equal(remoteBranchExists(repoRoot, branch), false);
 
   const retriedManifest = readManifest(manifestPath).data;
   assert.equal(retriedManifest.state, STATES.MERGED);

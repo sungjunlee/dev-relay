@@ -1109,6 +1109,9 @@ function main() {
         throw new Error("simulated post-merge failure after merged manifest write");
       }
     }
+  }
+
+  if (!skipMerge && updated.state === STATES.MERGED) {
     if (!dryRun) {
       const remoteDelete = deleteRemoteBranch(repoPath, branch);
       remoteName = remoteDelete.remoteName;
