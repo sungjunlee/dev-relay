@@ -17,7 +17,7 @@ Route selection is one user-facing concept: a single routes.json schema (open-by
 ### Batch 1 — substrate + independent bugfix (parallelizable)
 
 - [x] #784 relay-config inspect: opencode/pi model-list probes time out (ETIMEDOUT at 5s) — S, ~1 relay run; independent of the phase chain, good parallel candidate alongside #781
-- [~] #781 Routes single concept: unified routes.json, open-by-default posture, strict opt-in (Phase A) — L; split as A1 loader/gate/posture/event/ADR → A2 relay-config vocabulary → A3 friction wiring + doc banners; A1 merged (PR #792), A2 merged (PR #804), A3 remaining
+- [~] #781 Routes single concept: unified routes.json, open-by-default posture, strict opt-in (Phase A) — L; split as A1 loader/gate/posture/event/ADR → A2 relay-config vocabulary → A3 friction wiring + doc banners; A1 merged (PR #792), A2 merged (PR #804), A3 `ready_to_merge` (PR #811 — merging it completes Phase A and closes #781)
 
 ### Batch 2 — per-run UX (blocked by #781)
 
@@ -31,7 +31,8 @@ Route selection is one user-facing concept: a single routes.json schema (open-by
 
 - [x] #786 close-run cannot close runs whose worktree was pruned by dispatch signal cleanup — S; superseded by #785 (other session's three-case worktree matrix, PR #797); PR #789 closed unmerged, part 2 follow-up tracked in #785's thread
 - [ ] #795 dispatch branches from local main; unpushed local commits contaminate every PR diff — filed after the same scope-noise finding cost one review round on each of PR #789/#791/#792 (rule of three)
-- [ ] #805 validateManifestPaths rejects relay worktrees for runs dispatched from a linked worktree (basename mismatch) — S; blocked recover-commit/recover-state/review-runner/gate-check for the A2 run; verified workaround: `--manifest` form without `--repo`
+- [~] #805 validateManifestPaths rejects relay worktrees for runs dispatched from a linked worktree (basename mismatch) — S; PR #810 `ready_to_merge` (R1 PASS); interim workaround was `--manifest` form without `--repo`
+- [ ] #809 dispatch.js from a linked worktree records base_branch that does not exist on origin; auto PR creation always fails → escalated — S; third member of the linked-worktree family (#805/#807/#808)
 - [ ] #807 finalize-run post-merge crash (runCleanup removes worktree → getCanonicalRepoRoot on it; writeManifest is last) leaves run stuck at ready_to_merge — S; A2 run completed manually via updateManifestState+writeManifest + cleanup_result event
 - [ ] #808 finalize-run pre-merge CI gate blocks already-MERGED PRs on never-completing checks (CodeRabbit PENDING after branch delete) — S; ordering fix: fetch merge state before assertPreMergeSafety
 
@@ -46,6 +47,14 @@ Route selection is one user-facing concept: a single routes.json schema (open-by
 - Phase D (relay-plan route recommendation + fleet per-leaf fill) is NOT in this sprint — observe-gated on ≥~10 non-default-route runs over ~4 weeks after A–C ship.
 
 ## Progress
+
+### 2026-07-06 (A3 + #805 parallel)
+- First parallel dual-dispatch on merged A2 base: A3 (run `...b0d2faf2`, branch issue-781-a3) + #805 (run `...658ece28`, branch issue-805). File surfaces verified disjoint; #805's DC explicitly forbade touching A3's surfaces and vice versa.
+- CORRECTION to earlier turns: "both dispatches killed at 25min" was a misread — rtk mangled `ps -p $p` chains into pager errors that looked like "gone". Both dispatches were alive the whole time. Lesson recorded: probe processes with plain `pgrep -f` or `rtk proxy`, never `ps -p N && echo` chains.
+- #805 dispatch self-completed cleanly (commit 7ce143c, execution-evidence self-written) but landed `escalated`: dispatch auto-PR used manifest base_branch `worktree-floofy-seeking-music` — a local-only branch that never exists on origin. Filed as #809 (third linked-worktree defect after #805/#807/#808). PR #810 created manually with base main; recover-state escalated→review_pending --force; R1 PASS bull's-eye → `ready_to_merge`.
+- A3 executor completed the implementation but timed out at 5400s before committing — final full-suite gate contended with THREE concurrent suite runs (its own + two orchestrator evidence runs; the orchestrator's premature "salvage" test runs, triggered by the rtk misread, likely ate its margin). Salvaged: orchestrator commit adc26ea, escalated→review_pending --force, PR #811 (base main), evidence from assembled orchestrator runs (dispatch 156/156, relay-review 432/432, remaining dirs green, SIGINT process-group contention flake passed isolated in both worktrees).
+- A3 R1 CHANGES_REQUESTED on one finding: PR body claimed "pure additions" but 3 pre-existing JSON denial tests each gained one additive hint assertion. Fixed via gh pr edit + recover-state --allow-same-head --require-pr-body-change (first use of the PR-body-only same-HEAD recovery path). R2 LGTM, all DC VERIFIED → `ready_to_merge`.
+- Both PRs stopped at ready_to_merge per protocol. Merging #811 completes Phase A and closes #781, unblocking Batch 2 (#782).
 
 ### 2026-07-06 (A2 merge)
 - PR #804 squash-merged on user instruction. The landing itself surfaced two more finalize-run defects, both filed: #808 (pre-merge CI gate runs before already-MERGED detection; first `test IN_PROGRESS` on the fresh push, then `CodeRabbit PENDING` that only cleared minutes after branch delete) and #807 (post-merge crash: runCleanup removes the worktree, a follow-on path calls getCanonicalRepoRoot on it, and writeManifest — the LAST step — never runs, so merge_finalize events journal but the manifest sticks at ready_to_merge; retries impossible in any configuration).
