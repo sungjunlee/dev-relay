@@ -17,11 +17,11 @@ Route selection is one user-facing concept: a single routes.json schema (open-by
 ### Batch 1 — substrate + independent bugfix (parallelizable)
 
 - [x] #784 relay-config inspect: opencode/pi model-list probes time out (ETIMEDOUT at 5s) — S, ~1 relay run; independent of the phase chain, good parallel candidate alongside #781
-- [~] #781 Routes single concept: unified routes.json, open-by-default posture, strict opt-in (Phase A) — L; split as A1 loader/gate/posture/event/ADR → A2 relay-config vocabulary → A3 friction wiring + doc banners; A1 merged (PR #792), A2 merged (PR #804), A3 `ready_to_merge` (PR #811 — merging it completes Phase A and closes #781)
+- [x] #781 Routes single concept: unified routes.json, open-by-default posture, strict opt-in (Phase A) — A1 PR #792, A2 PR #804, A3 PR #811 all merged; #781 closed, Phase A complete
 
 ### Batch 2 — per-run UX (blocked by #781)
 
-- [ ] #782 Route presets: --route-preset, /relay natural-language mapping, model catalog (Phase B) — M
+- [~] #782 Route presets: --route-preset, /relay natural-language mapping, model catalog (Phase B) — M; dispatched (run `...ad6ee5d0`, codex, parallel with #807/#808)
 
 ### Batch 3 — self-audit (blocked by #781)
 
@@ -31,8 +31,9 @@ Route selection is one user-facing concept: a single routes.json schema (open-by
 
 - [x] #786 close-run cannot close runs whose worktree was pruned by dispatch signal cleanup — S; superseded by #785 (other session's three-case worktree matrix, PR #797); PR #789 closed unmerged, part 2 follow-up tracked in #785's thread
 - [ ] #795 dispatch branches from local main; unpushed local commits contaminate every PR diff — filed after the same scope-noise finding cost one review round on each of PR #789/#791/#792 (rule of three)
-- [~] #805 validateManifestPaths rejects relay worktrees for runs dispatched from a linked worktree (basename mismatch) — S; PR #810 `ready_to_merge` (R1 PASS); interim workaround was `--manifest` form without `--repo`
-- [ ] #809 dispatch.js from a linked worktree records base_branch that does not exist on origin; auto PR creation always fails → escalated — S; third member of the linked-worktree family (#805/#807/#808)
+- [x] #805 validateManifestPaths rejects relay worktrees for runs dispatched from a linked worktree (basename mismatch) — PR #810 merged; fix proven live by gate-check passing for PR #811 via normal --repo resolution
+- [ ] #809 dispatch.js from a linked worktree records base_branch that does not exist on origin — S; TWO symptoms now: auto-PR fails (escalated), and after finalize's learnings push published origin/worktree-floofy-seeking-music, new dispatches failed at base-merge until the stray remote branch was deleted
+- [~] #807+#808 finalize-run resilience (post-merge crash + stale pre-merge gate) — dispatched as one run (`...585f0a8b`, codex, same finalize-run.js surface, parallel with #782)
 - [ ] #807 finalize-run post-merge crash (runCleanup removes worktree → getCanonicalRepoRoot on it; writeManifest is last) leaves run stuck at ready_to_merge — S; A2 run completed manually via updateManifestState+writeManifest + cleanup_result event
 - [ ] #808 finalize-run pre-merge CI gate blocks already-MERGED PRs on never-completing checks (CodeRabbit PENDING after branch delete) — S; ordering fix: fetch merge state before assertPreMergeSafety
 
@@ -47,6 +48,12 @@ Route selection is one user-facing concept: a single routes.json schema (open-by
 - Phase D (relay-plan route recommendation + fleet per-leaf fill) is NOT in this sprint — observe-gated on ≥~10 non-default-route runs over ~4 weeks after A–C ship.
 
 ## Progress
+
+### 2026-07-06 (Phase A complete + Batch 2 dispatch)
+- PR #810 (#805) merged first — finalize-run completed CLEANLY this time (worktree intact, no recreate dance). PR #811 (A3) then gate-checked via the NORMAL --repo path — the just-merged #805 fix proving itself live — and merged; learnings push race resolved by rebase+push as usual. #781 CLOSED: Phase A (A1 PR #792 → A2 PR #804 → A3 PR #811) complete.
+- #809 second symptom: finalize's learnings push had published `origin/worktree-floofy-seeking-music`; the stale remote branch made both new dispatches fail at base-merge (`failed to merge origin/worktree-floofy-seeking-music into worktree`). Deleted the remote branch, commented on #809 (fix should also stop learnings pushes publishing worktree-* branches), re-dispatched clean.
+- Batch 2 launched in parallel: #782 (route presets, run `...ad6ee5d0`) + #807/#808 combo (finalize-run resilience, run `...585f0a8b`) — disjoint file surfaces, both codex, dispatch prompts now carry "COMMIT EARLY / budget the final gate" guidance from the A3 timeout lesson.
+- Post-Phase-A main suite: relay-fleet shows 3-6 UNSTABLE failures (different tests each run — fan-out/SIGINT/review-resume timing family) while two codex dispatches hammer the machine; both A3 and #805 worktrees had relay-fleet green pre-merge. Verdict deferred to a quiet-machine rerun after the dispatches finish; if still red then, suspects are #810 paths.js × fleet child validation or #803×#811 dispatch.js interplay.
 
 ### 2026-07-06 (A3 + #805 parallel)
 - First parallel dual-dispatch on merged A2 base: A3 (run `...b0d2faf2`, branch issue-781-a3) + #805 (run `...658ece28`, branch issue-805). File surfaces verified disjoint; #805's DC explicitly forbade touching A3's surfaces and vice versa.
