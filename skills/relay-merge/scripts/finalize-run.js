@@ -457,6 +457,14 @@ function runFinalizeCleanup({
       worktree: null,
     },
   };
+  if (!dryRun) {
+    try {
+      execGit(repoRoot, ["worktree", "prune"]);
+    } catch {
+      // runCleanup records the cleanup failure if stale registration cleanup
+      // still prevents branch deletion or final pruning.
+    }
+  }
   const cleanupResult = runCleanup({
     repoRoot,
     data: cleanupInput,

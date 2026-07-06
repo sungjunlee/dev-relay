@@ -1279,13 +1279,15 @@ test("finalize-run skips pre-merge gates when GitHub already reports the PR merg
   assert.doesNotMatch(ghLog, /pr merge 123 --squash/);
 });
 
-test("finalize-run completes an already-merged retry when the retained worktree is missing", () => {
+test("finalize-run completes an already-merged retry when the retained worktree is missing with stale git registration", () => {
   const { repoRoot, manifestPath, branch, worktreePath, headSha } = setupRepo();
-  execFileSync("git", ["-C", repoRoot, "worktree", "remove", "--force", worktreePath], {
+  fs.rmSync(worktreePath, { recursive: true, force: true });
+  const worktreeListBefore = execFileSync("git", ["-C", repoRoot, "worktree", "list", "--porcelain"], {
     encoding: "utf-8",
     stdio: "pipe",
   });
   assert.equal(fs.existsSync(worktreePath), false);
+  assert.ok(worktreeListBefore.includes(worktreePath));
   const logPath = path.join(repoRoot, "gh.log");
   const fakeGh = writeFakeGh(logPath, {
     state: "MERGED",
@@ -1328,6 +1330,7 @@ test("finalize-run completes an already-merged retry when the retained worktree 
   assert.equal(manifest.cleanup.status, "succeeded");
   assert.equal(manifest.cleanup.worktree_removed, true);
   assert.equal(manifest.cleanup.branch_deleted, true);
+  assert.equal(manifest.cleanup.prune_ran, true);
 
   const ghLog = fs.readFileSync(logPath, "utf-8");
   assert.doesNotMatch(ghLog, /statusCheckRollup/);
