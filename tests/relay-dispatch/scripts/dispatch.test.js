@@ -2605,10 +2605,43 @@ test("dispatch denies disallowed executor route before spawning the executor", (
   assert.equal(result.policy_decision.model, "example/opencode-model-fast");
   assert.equal(result.policy_decision.reason, "unknown_model_route");
   assert.match(result.error, /reason=unknown_model_route/);
+  assert.equal(result.hint, "run relay-config to register this route");
   assert.equal(result.adapter_capability.adapter, "opencode");
   assert.equal(result.adapter_capability.phase, "dispatch");
   assert.equal(result.adapter_capability.safe, true);
   assert.equal(result.executor_policy.adapter, "opencode");
+});
+
+test("dispatch prints relay-config route hint for text route denial", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  writeRelayPolicy(relayHome, {
+    profile: "strict-deny-unknown",
+    deny_unknown_model_routes: true,
+  });
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-opencode-bin-"));
+  const capturePath = path.join(os.tmpdir(), `relay-dispatch-policy-denied-text-${Date.now()}.json`);
+  writeArgCaptureOpencode(binDir, capturePath);
+
+  const proc = spawnSync("node", [SCRIPT, repoRoot, ...withRequiredRubric([
+    "-b", "issue-policy-denied-text",
+    "-p", "must not spawn opencode",
+    "-e", "opencode",
+    "-m", "example/opencode-model-fast",
+  ])], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    env: {
+      ...process.env,
+      PATH: `${binDir}:${process.env.PATH}`,
+      RELAY_HOME: relayHome,
+    },
+  });
+
+  assert.notEqual(proc.status, 0);
+  assert.equal(fs.existsSync(capturePath), false);
+  assert.match(proc.stderr, /Error: relay policy denied model route.*reason=unknown_model_route/);
+  assert.match(proc.stderr, /hint: run relay-config to register this route/);
 });
 
 test("dispatch reports adapter-capability denial before model-route policy", () => {
@@ -2687,6 +2720,78 @@ test("dispatch opencode executor fails closed when no model route is supplied", 
   assert.equal(result.status, "failed");
   assert.equal(result.policy_decision.reason, "missing_model_route");
   assert.equal(result.policy_decision.model, null);
+  assert.equal(result.hint, "run relay-config to set a default model for this route");
+});
+
+test("dispatch prints relay-config default-model hint for text unresolved model", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  writeRelayPolicy(relayHome, {
+    profile: "allow-opencode-dispatch",
+    allowed_model_routes: [{ route: "example/opencode-model-*", phases: ["dispatch"], executors: ["opencode"] }],
+  });
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-opencode-bin-"));
+  const capturePath = path.join(os.tmpdir(), `relay-dispatch-missing-model-text-${Date.now()}.json`);
+  writeArgCaptureOpencode(binDir, capturePath);
+
+  const proc = spawnSync("node", [SCRIPT, repoRoot, ...withRequiredRubric([
+    "-b", "issue-opencode-missing-model-text",
+    "-p", "test missing opencode model route",
+    "-e", "opencode",
+  ])], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    env: {
+      ...process.env,
+      PATH: `${binDir}:${process.env.PATH}`,
+      RELAY_HOME: relayHome,
+    },
+  });
+
+  assert.notEqual(proc.status, 0);
+  assert.equal(fs.existsSync(capturePath), false);
+  assert.match(proc.stderr, /Error: relay policy denied model route.*reason=missing_model_route/);
+  assert.match(proc.stderr, /hint: run relay-config to set a default model for this route/);
+});
+
+test("dispatch reports install hint when executor CLI is missing in JSON and text modes", () => {
+  for (const jsonOut of [true, false]) {
+    const { repoRoot, relayHome } = setupRepo();
+    process.env.RELAY_HOME = relayHome;
+    writeRelayPolicy(relayHome, {
+      profile: "allow-opencode-dispatch",
+      allowed_model_routes: [{ route: "example/opencode-model-*", phases: ["dispatch"], executors: ["opencode"] }],
+    });
+    const args = [
+      "-b", `issue-opencode-missing-cli-${jsonOut ? "json" : "text"}`,
+      "-p", "test missing opencode cli",
+      "-e", "opencode",
+      "-m", "example/opencode-model-fast",
+    ];
+    if (jsonOut) args.push("--json");
+
+    const proc = spawnSync("node", [SCRIPT, repoRoot, ...withRequiredRubric(args)], {
+      cwd: repoRoot,
+      encoding: "utf-8",
+      env: {
+        ...process.env,
+        PATH: createGitOnlyPath(),
+        RELAY_HOME: relayHome,
+      },
+    });
+
+    assert.notEqual(proc.status, 0);
+    assert.match(proc.stderr, /Error: opencode CLI not found\./);
+    assert.match(proc.stderr, /hint: install the opencode CLI and ensure it is on PATH/);
+    if (jsonOut) {
+      const result = JSON.parse(proc.stdout);
+      assert.equal(result.status, "failed");
+      assert.equal(result.error, "opencode CLI not found.");
+      assert.equal(result.hint, "install the opencode CLI and ensure it is on PATH");
+    } else {
+      assert.equal(proc.stdout, "");
+    }
+  }
 });
 
 test("dispatch opencode executor lets RELAY_HOME executors config override bundled model", () => {

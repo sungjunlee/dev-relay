@@ -144,6 +144,11 @@ const {
   assertRelayPolicyGate,
   buildPolicyGateFailureEnvelope,
 } = require("./relay-policy-gate");
+const {
+  hintForCliBinary,
+  hintForPolicyDecision,
+  withHint,
+} = require("./route-failure-hints");
 const { loadRelayPolicy } = require("./relay-policy");
 const { loadProjectRoutes, resolveRouteIntent, resolveRoutingDecision } = require("./relay-routing");
 const { classifyRepositoryDirt, formatRuntimeMetadataDirt } = require("./runtime-dirt");
@@ -910,7 +915,17 @@ function validateExecutorCli() {
   try {
     version = execFileSync(cli, ["--version"], { encoding: "utf-8", stdio: "pipe" }).trim();
   } catch {
-    console.error(`Error: ${cli} CLI not found.`);
+    const message = `${cli} CLI not found.`;
+    const hint = hintForCliBinary(cli);
+    if (JSON_OUT_REQUESTED) {
+      console.log(JSON.stringify({
+        status: "failed",
+        error: message,
+        hint,
+      }, null, 2));
+    }
+    console.error(`Error: ${message}`);
+    console.error(`hint: ${hint}`);
     process.exit(1);
   }
   return { binary: cli, version };
@@ -1490,11 +1505,13 @@ async function main() {
         },
       },
     });
+    const hint = hintForPolicyDecision(envelope.policy_decision);
     if (JSON_OUT) {
-      console.log(JSON.stringify(envelope, null, 2));
+      console.log(JSON.stringify(withHint(envelope, hint), null, 2));
     } else {
       console.error(`Error: ${envelope.error}`);
     }
+    if (hint) console.error(`hint: ${hint}`);
     process.exit(1);
   }
 

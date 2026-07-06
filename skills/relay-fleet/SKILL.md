@@ -47,6 +47,7 @@ Use a JSON file containing a non-empty `leaves[]` array. Each leaf must include:
 relay-fleet only fans out already-decomposed leaf contracts; it never splits a raw or ambiguous request itself — route that intake through `relay-ready` first and pass its leaf output here.
 
 Optional per-leaf fields are passed through to `dispatch.js`: `request_id`, `leaf_id`, `executor`, `model`, `model_hints`, `sandbox`, `network_access`, `timeout`, `reasoning`, `copy`, `test_command`, and `register`. An optional `depends_on` array of `leaf_ref` strings records ordering intent: a reference to another leaf in the *same* leaves file fails closed at load time (dispatch that leaf in an earlier wave and drop the reference here); a reference to a `leaf_ref` outside this file is accepted silently and assumed already satisfied.
+If a leaf's executor route is denied or its model is unresolved, pause that leaf and use `relay-config` to register the route or set the default before resuming the fleet.
 
 ## Commands
 

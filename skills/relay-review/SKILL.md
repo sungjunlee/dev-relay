@@ -58,6 +58,7 @@ node "${RELAY_SKILL_ROOT:-skills}/relay-review/scripts/review-runner.js" --repo 
 Run the runner in the foreground. Do NOT background it, detach it, or return with "I'll wait for the background runner." The relay-review result is the runner's verdict; do not return until the runner exits and the new `review-round-N-verdict.json` exists.
 
 Supported primary reviewers: `--reviewer codex`, `--reviewer claude`, `--reviewer opencode`, `--reviewer pi`, `--reviewer antigravity`, and `--reviewer cursor`. Adapter precedence, environment knobs, capability gates, and model examples live in `../relay-dispatch/references/agent-adapter-platform.md`.
+If a reviewer route is denied or its model is unresolved, run `relay-config` to register the route or set the reviewer default before re-running review.
 
 Optional advisory path: add a non-gating blind-spot lane alongside the primary reviewer:
 ```bash

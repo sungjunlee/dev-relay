@@ -15,6 +15,7 @@ const { buildCommentBody, formatIssueList, formatScopeDrift, postComment } = req
 const { buildScoreDivergenceAnalysis, loadPrBody, parseScoreLog, toIterationScoreEventEntry } = require("./review-runner/divergence");
 const { applyQualityExecutionStatus, buildExecutionEvidenceFailureVerdict, buildMissingExecutionEvidenceVerdict, computeQualityExecutionStatus } = require("./review-runner/execution-evidence");
 const { applyReviewAssurancePolicy } = require("./review-runner/assurance");
+const { printFailureAndExit } = require("./review-runner/failure-output");
 const { buildRedispatchPrompt, buildRubricGateRedispatchPrompt, computeFactorStatusFlips, computeRepeatedIssueCount, decideFlipFlopEscalation, detectChurnGrowth, summarizeLineage, toEscalatedVerdict } = require("./review-runner/redispatch");
 const { buildConvergenceSummary, formatConvergenceMarkdown } = require("./review-runner/convergence");
 const { applyVerdictToManifest } = require("./review-runner/manifest-apply");
@@ -26,8 +27,6 @@ const { maybeSwapReviewer } = require("./review-runner/reviewer-swap");
 const { resolveAdvisoryConfig, settleAdvisoryForVerdict, startConfiguredAdvisory } = require("./review-runner/advisory-orchestration");
 const { printResult, printUsage } = require("./review-runner/output");
 const { assertKnownReviewRunnerFlags, parseReviewRunnerCliArgs } = require("./review-runner/cli");
-const { buildPolicyGateFailureEnvelope, isRelayPolicyGateError } = require("../../relay-dispatch/scripts/relay-policy-gate");
-const { buildAdapterCapabilityFailureEnvelope, isAdapterCapabilityError } = require("../../relay-dispatch/scripts/agent-adapters/policy");
 const { args, cliArgs, options } = parseReviewRunnerCliArgs(process.argv.slice(2));
 if (require.main === module && (!args.length || cliArgs.hasFlag(["--help", "-h"]))) {
   printUsage();
@@ -374,16 +373,7 @@ async function run() {
 
 if (require.main === module) {
   Promise.resolve(run()).catch((error) => {
-    if (cliArgs.hasFlag("--json") && isRelayPolicyGateError(error)) {
-      console.log(JSON.stringify(buildPolicyGateFailureEnvelope(error, {
-        ok: false,
-        ...(error.adapterCapability ? { adapter_capability: error.adapterCapability } : {}),
-      }), null, 2));
-    } else if (cliArgs.hasFlag("--json") && isAdapterCapabilityError(error)) {
-      console.log(JSON.stringify(buildAdapterCapabilityFailureEnvelope(error, { ok: false }), null, 2));
-    }
-    console.error(`Error: ${error.message}`);
-    process.exit(1);
+    printFailureAndExit(error, { jsonOut: cliArgs.hasFlag("--json") });
   });
 }
 module.exports = { applyVerdictToManifest, buildCommentBody, buildPrompt, buildRedispatchPrompt, buildReviewRunnerRubricGateFailure, detectChurnGrowth, formatIssueList, formatPriorVerdictSummary, formatScopeDrift, getGhLogin, loadRubricFromRunDir, parseRemoteHost, parseReviewVerdict, parseScoreLog, resolveIssueNumber, resolveRemoteHost, validateReviewVerdict, validateScopeDrift };
