@@ -1914,6 +1914,7 @@ async function main() {
     startHead = execGit(wtPath, ["rev-parse", "HEAD"]);
   } catch {}
 
+  fs.rmSync(resultFile, { force: true });
   const dispatchFromState = manifest.state;
   manifest = manifest.state === STATES.DISPATCHED
     ? {
@@ -1953,7 +1954,6 @@ async function main() {
 
   // Redirect stdout/stderr to files. Using spawn with detached: true gives us
   // a killable process group (terminateProcessGroup sends SIGTERM to -pid).
-  fs.rmSync(resultFile, { force: true });
   const stdoutFd = fs.openSync(stdoutLog, "w");
   const stderrFd = fs.openSync(stderrLog, "w");
 

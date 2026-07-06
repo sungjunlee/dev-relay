@@ -1513,6 +1513,56 @@ test("dispatch resume clears stale structured result before executor attempt", (
   assert.equal(readManifest(first.manifestPath).data.state, STATES.ESCALATED);
 });
 
+test("dispatch resume clears stale structured result before entering dispatched pre-spawn window", async () => {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  writeFakeCodex(binDir);
+  const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}`, RELAY_HOME: relayHome };
+
+  const first = JSON.parse(runDispatch(repoRoot, [
+    "-b", "issue-812-stale-result-pre-spawn",
+    "--prompt", "first pass writes a result",
+    "--json",
+  ], env));
+  assert.equal(first.runState, STATES.REVIEW_PENDING);
+  assert.equal(fs.readFileSync(first.resultFile, "utf-8"), "ok\n");
+
+  const record = readManifest(first.manifestPath);
+  const updated = updateManifestState(record.data, STATES.CHANGES_REQUESTED, "re_dispatch_requested_changes");
+  writeManifest(first.manifestPath, updated, record.body);
+  writeSleepingCodex(binDir);
+  const resumeEnv = {
+    ...env,
+    RELAY_TEST_BEFORE_EXECUTOR_SPAWN_PAUSE_MS: "30000",
+  };
+
+  const proc = spawn(process.execPath, [SCRIPT, repoRoot, ...withRequiredRubric([
+    "--run-id", first.runId,
+    "--prompt", "resume attempt pauses before spawn",
+    "--json",
+  ])], {
+    cwd: repoRoot,
+    env: resumeEnv,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  const exitPromise = waitForDispatchExit(proc);
+
+  try {
+    await waitFor(() => {
+      const events = readRunEvents(repoRoot, first.runId);
+      return events.some((event) => event.event === "dispatch_start" && event.reason === "same_run_resume");
+    }, { timeoutMs: 30000, message: "resume dispatch_start before executor spawn" });
+
+    assert.equal(fs.existsSync(first.resultFile), false);
+  } finally {
+    if (!proc.killed) {
+      proc.kill("SIGTERM");
+    }
+    await exitPromise;
+  }
+});
+
 async function runInterruptedDispatchSignalTest(signalName) {
   const { repoRoot, relayHome } = setupRepo();
   process.env.RELAY_HOME = relayHome;

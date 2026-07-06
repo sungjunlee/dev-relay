@@ -521,6 +521,26 @@ test("reconcile row 5 treats an empty dispatch result as no completion evidence"
   assert.equal(readManifest(fixture.manifestPath).data.state, STATES.DISPATCHED);
 });
 
+test("reconcile ignores stale legacy result_file when Phase 2 dispatch result path exists", () => {
+  const fixture = setupRepo({ oldShapePaths: true });
+  const record = readManifest(fixture.manifestPath);
+  const legacyResultFile = record.data.paths.result_file;
+  try {
+    fs.writeFileSync(legacyResultFile, "stale result from previous attempt\n", "utf-8");
+    record.data.paths.dispatch_result = path.join(fixture.runDir, "dispatch-result.txt");
+    writeManifest(fixture.manifestPath, record.data, record.body);
+
+    const result = parseJsonResult(runReconcile(fixture));
+
+    assert.equal(result.row, 5);
+    assert.equal(result.status, "interrupted");
+    assert.equal(readManifest(fixture.manifestPath).data.state, STATES.DISPATCHED);
+    assert.deepEqual(fs.readFileSync(fixture.ghLogPath, "utf-8").trim(), "");
+  } finally {
+    fs.rmSync(legacyResultFile, { force: true });
+  }
+});
+
 test("reconcile row 5 journals interrupted once for dead old-shape runs with no work", () => {
   const fixture = setupRepo({ oldShapePaths: true });
 

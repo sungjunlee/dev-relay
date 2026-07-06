@@ -148,9 +148,12 @@ function uniqueExistingOrder(values) {
 
 function getDispatchResultCandidates(repoRoot, runId, manifest = {}) {
   const runPaths = getRunArtifactPaths(repoRoot, runId);
+  const paths = manifest.paths || {};
+  const hasPhase2DispatchPath = ["dispatch_result", "dispatch_stdout", "dispatch_stderr", "lease"]
+    .some((field) => typeof paths[field] === "string" && paths[field].trim() !== "");
   return uniqueExistingOrder([
-    manifest.paths?.dispatch_result,
-    manifest.paths?.result_file,
+    paths.dispatch_result,
+    hasPhase2DispatchPath ? null : paths.result_file,
     runPaths.resultFile,
   ]);
 }
