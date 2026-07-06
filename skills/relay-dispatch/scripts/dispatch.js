@@ -1659,6 +1659,10 @@ async function main() {
         executor_network: executorNetworkPolicy,
         executor_policy: executorPolicy,
       },
+      dispatch: {
+        ...(manifest.dispatch || {}),
+        publish_policy: PUBLISH_POLICY,
+      },
       routing: routingDecision,
       routes: {
         plan_path: "route-plan.json",

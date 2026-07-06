@@ -1498,7 +1498,7 @@ test("dispatch SIGINT does not treat leader exit as process-group termination wh
   }
 });
 
-test("dispatch interruption immediately after worktree creation journals a resumable manifest", async () => {
+test("dispatch interruption immediately after worktree creation preserves delayed publication on resume", async () => {
   const { repoRoot, relayHome } = setupRepo();
   process.env.RELAY_HOME = relayHome;
   const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-after-worktree-bin-"));
@@ -1518,6 +1518,7 @@ test("dispatch interruption immediately after worktree creation journals a resum
   const proc = spawn(process.execPath, [SCRIPT, repoRoot, ...withRequiredRubric([
     "-b", "issue-800-after-worktree-signal",
     "--prompt", "pause immediately after worktree create",
+    "--publish-policy", "after-internal-review",
     "--json",
   ])], {
     cwd: repoRoot,
@@ -1562,6 +1563,7 @@ test("dispatch interruption immediately after worktree creation journals a resum
     assert.equal(fs.realpathSync(manifest.paths.worktree), fs.realpathSync(worktreePath));
     assert.ok(fs.existsSync(manifest.paths.worktree), "after-worktree signal must preserve the retained worktree");
     assert.ok(manifest.anchor?.rubric_path, "signal-written manifest must retain the rubric anchor for resume");
+    assert.equal(manifest.dispatch?.publish_policy, "after-internal-review");
     assert.equal(manifest.environment.node_version, null);
     assert.equal(manifest.environment.dispatch_ts, null);
 
@@ -1586,11 +1588,16 @@ test("dispatch interruption immediately after worktree creation journals a resum
       RELAY_HOME: relayHome,
     }));
     assert.equal(resume.mode, "resume");
+    assert.equal(resume.publishPolicy, "after-internal-review");
     assert.equal(resume.runId, manifest.run_id);
     assert.equal(resume.worktree, manifest.paths.worktree);
-    assert.equal(resume.runState, STATES.REVIEW_PENDING);
+    assert.equal(resume.runState, STATES.INTERNAL_REVIEW_PENDING);
 
     const resumedManifest = readManifest(manifestPath).data;
+    assert.equal(resumedManifest.dispatch.publish_policy, "after-internal-review");
+    assert.equal(resumedManifest.state, STATES.INTERNAL_REVIEW_PENDING);
+    assert.equal(resumedManifest.next_action, "run_internal_review");
+    assert.equal(resumedManifest.git.pr_number, null);
     assert.equal(resumedManifest.environment.node_version, process.version);
     assert.equal(typeof resumedManifest.environment.dispatch_ts, "string");
     assert.match(resumedManifest.environment.main_sha, /^[0-9a-f]{40}$/);
