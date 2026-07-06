@@ -69,6 +69,7 @@ function waitForPrNumberStampLock(lockPath) {
 
 function stampPrNumberUnderLock(manifestRecord, numericPrNumber, options = {}) {
   const caller = options.caller || "PR number stamping";
+  const updateFreshData = options.updateFreshData || null;
   const expectedRepoRoot = options.expectedRepoRoot === undefined
     ? defaultRepoRoot()
     : options.expectedRepoRoot;
@@ -97,11 +98,11 @@ function stampPrNumberUnderLock(manifestRecord, numericPrNumber, options = {}) {
       return freshRecord;
     }
     const freshPrNumber = freshRecord.data?.git?.pr_number;
-    if (freshPrNumber !== undefined && freshPrNumber !== null) {
+    if (freshPrNumber !== undefined && freshPrNumber !== null && !updateFreshData) {
       return freshRecord;
     }
     throw new Error(
-      `${caller}: .pr_number_stamp.lock contention timeout left git.pr_number unset after a fresh re-read. `
+      `${caller}: .pr_number_stamp.lock contention timeout left git.pr_number unset or a locked manifest update unapplied after a fresh re-read. `
       + "This may indicate a stale lock, peer crash, or a still-running holder on a slow filesystem. "
       + `Inspect ${JSON.stringify(lockPath)} and clear it only after confirming no active holder is still stamping. `
       + "See #185 / #166 for background."
@@ -126,11 +127,13 @@ function stampPrNumberUnderLock(manifestRecord, numericPrNumber, options = {}) {
       caller,
     });
 
-    if (freshRecord.data?.git?.pr_number !== undefined && freshRecord.data?.git?.pr_number !== null) {
+    const freshPrNumber = freshRecord.data?.git?.pr_number;
+    const shouldStampPrNumber = freshPrNumber === undefined || freshPrNumber === null;
+    if (!shouldStampPrNumber && !updateFreshData) {
       return freshRecord;
     }
 
-    const updatedData = {
+    let updatedData = {
       ...freshRecord.data,
       paths: {
         ...(freshRecord.data?.paths || {}),
@@ -139,9 +142,21 @@ function stampPrNumberUnderLock(manifestRecord, numericPrNumber, options = {}) {
       },
       git: {
         ...(freshRecord.data?.git || {}),
-        pr_number: numericPrNumber,
+        ...(shouldStampPrNumber ? { pr_number: numericPrNumber } : {}),
       },
     };
+
+    if (updateFreshData) {
+      updatedData = updateFreshData(updatedData, {
+        freshRecord,
+        freshValidatedPaths,
+        prNumber: numericPrNumber,
+        stampedPrNumber: shouldStampPrNumber,
+      });
+      if (!updatedData || typeof updatedData !== "object" || Array.isArray(updatedData)) {
+        throw new Error(`${caller}: updateFreshData must return manifest data`);
+      }
+    }
 
     writeManifest(manifestRecord.manifestPath, updatedData, freshRecord.body);
 
@@ -150,7 +165,7 @@ function stampPrNumberUnderLock(manifestRecord, numericPrNumber, options = {}) {
     const alreadyStamped = readRunEvents(repoRoot, updatedData.run_id)
       .some((entry) => entry.event === EVENTS.PR_NUMBER_STAMPED);
 
-    if (!alreadyStamped) {
+    if (shouldStampPrNumber && !alreadyStamped) {
       appendRunEvent(repoRoot, updatedData.run_id, {
         event: EVENTS.PR_NUMBER_STAMPED,
         state_from: updatedData.state,

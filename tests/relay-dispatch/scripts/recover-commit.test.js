@@ -26,6 +26,7 @@ const SCRIPT = path.join(__dirname, "..", "..", "..", "skills", "relay-dispatch"
 
 function writeFakeGh(binDir, statePath, logPath, initialState = {}) {
   const ghPath = path.join(binDir, "gh");
+  const relayManifestPath = path.resolve(__dirname, "..", "..", "..", "skills", "relay-dispatch", "scripts", "relay-manifest.js");
   fs.writeFileSync(ghPath, `#!/usr/bin/env node
 const fs = require("fs");
 const args = process.argv.slice(2);
@@ -34,6 +35,32 @@ const logPath = process.env.RELAY_TEST_GH_LOG;
 if (logPath) fs.appendFileSync(logPath, JSON.stringify(args) + "\\n", "utf-8");
 const state = fs.existsSync(statePath) ? JSON.parse(fs.readFileSync(statePath, "utf-8")) : {};
 function save() { fs.writeFileSync(statePath, JSON.stringify(state, null, 2)); }
+function applyManifestPatch(patch) {
+  if (!patch || !patch.manifestPath) return;
+  const { readManifest, writeManifest, updateManifestState } = require(${JSON.stringify(relayManifestPath)});
+  const record = readManifest(patch.manifestPath);
+  let data = record.data;
+  if (patch.transitionTo) {
+    data = updateManifestState(data, patch.transitionTo, patch.nextAction);
+  }
+  for (const [key, value] of Object.entries(patch.merge || {})) {
+    if (value && typeof value === "object" && !Array.isArray(value)) {
+      data = {
+        ...data,
+        [key]: {
+          ...(data[key] || {}),
+          ...value,
+        },
+      };
+    } else {
+      data = {
+        ...data,
+        [key]: value,
+      };
+    }
+  }
+  writeManifest(patch.manifestPath, data, record.body);
+}
 if (args[0] === "pr" && args[1] === "list") {
   if (state.failPrList) {
     process.stderr.write(state.failPrList + "\\n");
@@ -53,6 +80,7 @@ if (args[0] === "pr" && args[1] === "create") {
   }
   state.existingPrNumber = state.createNumber || 281;
   save();
+  applyManifestPatch(state.patchManifestOnPrCreate);
   process.stdout.write("https://github.com/acme/dev-relay/pull/" + state.existingPrNumber + "\\n");
   process.exit(0);
 }
@@ -253,6 +281,14 @@ function runRecover(fixture, extraArgs = []) {
 function readJsonLines(filePath) {
   const text = fs.existsSync(filePath) ? fs.readFileSync(filePath, "utf-8").trim() : "";
   return text ? text.split("\n").map((line) => JSON.parse(line)) : [];
+}
+
+function updateGhState(fixture, patch) {
+  const state = JSON.parse(fs.readFileSync(fixture.statePath, "utf-8"));
+  fs.writeFileSync(fixture.statePath, JSON.stringify({
+    ...state,
+    ...patch,
+  }, null, 2));
 }
 
 function findGhCall(fixture, command, subcommand) {
@@ -717,6 +753,39 @@ test("dispatched already-committed recovery rebrands stale execution evidence to
   assert.equal(rebrandEvent.new_head_sha, parsed.commitSha);
   assert.equal(rebrandEvent.affected_head_sha, parsed.commitSha);
   assert.equal(rebrandEvent.reason, "executor committed before dispatch crash");
+});
+
+test("dispatched recovery stamps PR from a fresh locked manifest update", () => {
+  const fixture = setupRepo({ dirty: true, manifestState: STATES.DISPATCHED });
+  updateGhState(fixture, {
+    patchManifestOnPrCreate: {
+      manifestPath: fixture.manifestPath,
+      merge: {
+        review: {
+          rounds: 4,
+          latest_verdict: "concurrent_review_started",
+        },
+      },
+    },
+  });
+
+  const result = runRecover(fixture, ["--reason", "executor completed during supervisor crash", "--json"]);
+
+  assert.equal(result.status, 0, result.stderr);
+  const parsed = JSON.parse(result.stdout);
+  const manifest = readManifest(fixture.manifestPath).data;
+  assert.equal(parsed.status, "recovered");
+  assert.equal(manifest.state, STATES.REVIEW_PENDING);
+  assert.equal(manifest.next_action, "run_review");
+  assert.equal(manifest.review.rounds, 4);
+  assert.equal(manifest.review.latest_verdict, "concurrent_review_started");
+  assert.equal(manifest.git.pr_number, 281);
+  assert.equal(manifest.git.head_sha, parsed.commitSha);
+
+  const stampEvents = readRunEvents(fixture.repoRoot, fixture.runId)
+    .filter((entry) => entry.event === "pr_number_stamped");
+  assert.equal(stampEvents.length, 1);
+  assert.equal(stampEvents[0].round, 4);
 });
 
 test("clean worktree with no unpushed commits rejects as nothing to recover", () => {

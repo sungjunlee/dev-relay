@@ -10,7 +10,7 @@ const path = require("path");
 
 const { parsePrNumber, formatExecError } = require("./dispatch-publish");
 const { resolveManifestRecord } = require("./relay-resolver");
-const { appendRunEvent, EVENTS, readRunEvents } = require("./relay-events");
+const { appendRunEvent, EVENTS } = require("./relay-events");
 const { STATES, updateManifestState } = require("./manifest/lifecycle");
 const { writeManifest } = require("./manifest/store");
 const { getCanonicalRepoRoot, getRunDir, nowIso, summarizeFailure, validateManifestPaths } = require("./manifest/paths");
@@ -672,31 +672,32 @@ function main() {
 
   let stampedRecord = manifestRecord;
   if (recoveringFromDispatched) {
-    const updatedData = {
-      ...data,
-      git: {
-        ...(data.git || {}),
-        pr_number: prNumber,
-        head_sha: commitSha,
+    stampedRecord = stampPrNumberUnderLock(manifestRecord, prNumber, {
+      expectedRepoRoot: validatedPaths.repoRoot,
+      caller: "recover-commit dispatched PR stamping",
+      reason: `Stamped git.pr_number=${prNumber} during recover-commit`,
+      updateFreshData(freshData) {
+        let updatedData = freshData;
+        let shouldUpdateHead = false;
+        if (updatedData.state === STATES.DISPATCHED) {
+          const target = dispatchCompletionTarget(updatedData);
+          updatedData = updateManifestState(updatedData, target.state, target.nextAction);
+          shouldUpdateHead = true;
+        } else if ([STATES.INTERNAL_REVIEW_PENDING, STATES.REVIEW_PENDING].includes(updatedData.state)) {
+          shouldUpdateHead = true;
+        }
+        if (!shouldUpdateHead) {
+          return updatedData;
+        }
+        return {
+          ...updatedData,
+          git: {
+            ...(updatedData.git || {}),
+            head_sha: commitSha,
+          },
+        };
       },
-    };
-    writeManifest(manifestRecord.manifestPath, updatedData, manifestRecord.body);
-    const alreadyStamped = readRunEvents(validatedPaths.repoRoot, updatedData.run_id)
-      .some((entry) => entry.event === EVENTS.PR_NUMBER_STAMPED);
-    if (!alreadyStamped) {
-      appendRunEvent(validatedPaths.repoRoot, updatedData.run_id, {
-        event: EVENTS.PR_NUMBER_STAMPED,
-        state_from: updatedData.state,
-        state_to: updatedData.state,
-        head_sha: updatedData.git?.head_sha || null,
-        round: updatedData.review?.rounds || null,
-        reason: `Stamped git.pr_number=${prNumber} during recover-commit`,
-      });
-    }
-    stampedRecord = {
-      ...manifestRecord,
-      data: updatedData,
-    };
+    });
   } else if (data.git?.pr_number === undefined || data.git?.pr_number === null) {
     stampedRecord = stampPrNumberUnderLock(manifestRecord, prNumber, {
       expectedRepoRoot: validatedPaths.repoRoot,
