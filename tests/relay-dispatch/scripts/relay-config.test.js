@@ -9,6 +9,9 @@ const {
   buildDefaultRelayPolicy,
   validateRelayPolicy,
 } = require("../../../skills/relay-dispatch/scripts/relay-policy");
+const {
+  validateRouteConfig,
+} = require("../../../skills/relay-dispatch/scripts/relay-routing");
 const { getProjectPolicyPath } = require("../../../skills/relay-dispatch/scripts/manifest/paths");
 
 const REPO_ROOT = path.join(__dirname, "..", "..", "..");
@@ -50,10 +53,27 @@ function parseJson(result) {
   return JSON.parse(result.stdout);
 }
 
+function parseJsonAllowingStderr(result) {
+  return JSON.parse(result.stdout);
+}
+
 function readPolicy(relayHome) {
   const policyPath = path.join(relayHome, "policy.json");
   const policy = JSON.parse(fs.readFileSync(policyPath, "utf-8"));
   return validateRelayPolicy(policy, policyPath);
+}
+
+function readRoutes(relayHome) {
+  return JSON.parse(fs.readFileSync(path.join(relayHome, "routes.json"), "utf-8"));
+}
+
+function validateRoutes(relayHome) {
+  const routesPath = path.join(relayHome, "routes.json");
+  return validateRouteConfig(readRoutes(relayHome), routesPath);
+}
+
+function hasOwn(object, key) {
+  return Object.prototype.hasOwnProperty.call(object, key);
 }
 
 function writeExecutable(filePath, body = "#!/bin/sh\nexit 0\n") {
@@ -72,7 +92,7 @@ function writeJson(filePath, value) {
   fs.writeFileSync(filePath, JSON.stringify(value, null, 2), "utf-8");
 }
 
-test("init --profile company writes a company-safe global policy", () => {
+test("init --profile company writes strict global routes config without optional scaffolding", () => {
   const relayHome = tempDir();
 
   const result = runConfig(["init", "--profile", "company", "--json"], { relayHome });
@@ -81,38 +101,35 @@ test("init --profile company writes a company-safe global policy", () => {
   const output = parseJson(result);
   assert.equal(output.ok, true);
   assert.equal(output.profile, "company");
-  assert.equal(output.path, path.join(relayHome, "policy.json"));
+  assert.equal(output.path, path.join(relayHome, "routes.json"));
+  assert.deepEqual(output.warnings, []);
 
-  const policy = readPolicy(relayHome);
-  assert.equal(policy.profile, "company");
-  assert.deepEqual(policy.defaults, {
-    dispatch: { executor: "codex" },
-    review: { reviewer: "codex" },
-    advisory_review: null,
+  assert.deepEqual(readRoutes(relayHome), {
+    version: 2,
+    strict: true,
+    routes: [],
+    denied_routes: [],
   });
-  assert.deepEqual(policy.managed_cli, ["codex", "claude"]);
-  assert.deepEqual(policy.allowed_model_routes, []);
-  assert.deepEqual(policy.denied_model_routes, []);
-  assert.equal(policy.deny_unknown_model_routes, true);
-  assert.equal(Object.prototype.hasOwnProperty.call(policy.defaults.dispatch, "model"), false);
-  assert.equal(Object.prototype.hasOwnProperty.call(policy.defaults.review, "model"), false);
+  assert.equal(fs.existsSync(path.join(relayHome, "policy.json")), false);
+  assert.deepEqual(validateRoutes(relayHome).routes, []);
 });
 
-test("init --profile personal remains explicit and does not add OpenCode or Pi routes", () => {
+test("init --profile personal writes open global routes config without optional scaffolding", () => {
   const relayHome = tempDir();
 
   const result = runConfig(["init", "--profile", "personal", "--json"], { relayHome });
 
   assert.equal(result.status, 0, result.combined);
-  const policy = readPolicy(relayHome);
-  assert.equal(policy.profile, "personal");
-  assert.deepEqual(policy.managed_cli, ["codex", "claude"]);
-  assert.deepEqual(policy.allowed_model_routes, []);
-  assert.deepEqual(policy.denied_model_routes, []);
-  assert.equal(policy.deny_unknown_model_routes, true);
+  assert.deepEqual(readRoutes(relayHome), {
+    version: 2,
+    strict: false,
+    routes: [],
+    denied_routes: [],
+  });
+  assert.equal(fs.existsSync(path.join(relayHome, "policy.json")), false);
 });
 
-test("show --effective emits deterministic JSON for the loaded effective policy", () => {
+test("show --effective emits deterministic JSON for routes-backed config", () => {
   const relayHome = tempDir();
   assert.equal(runConfig(["init", "--profile", "company", "--json"], { relayHome }).status, 0);
 
@@ -122,8 +139,26 @@ test("show --effective emits deterministic JSON for the loaded effective policy"
   const output = parseJson(result);
   assert.equal(output.ok, true);
   assert.equal(output.status, "ok");
+  assert.equal(output.sources.routes.global, path.join(relayHome, "routes.json"));
+  assert.equal(output.policy.profile, "routes-config");
+  assert.equal(output.policy.deny_unknown_model_routes, true);
+});
+
+test("show --effective preserves legacy policy-only JSON behavior", () => {
+  const relayHome = tempDir();
+  writeJson(path.join(relayHome, "policy.json"), {
+    ...buildDefaultRelayPolicy(),
+    profile: "legacy-company",
+  });
+
+  const result = runConfig(["show", "--effective", "--json"], { relayHome });
+
+  assert.equal(result.status, 0, result.combined);
+  const output = parseJson(result);
+  assert.equal(output.ok, true);
+  assert.equal(output.status, "ok");
   assert.equal(output.sources.global, path.join(relayHome, "policy.json"));
-  assert.equal(output.policy.profile, "company");
+  assert.equal(output.policy.profile, "legacy-company");
 });
 
 test("doctor uses local PATH only and labels installed disallowed harnesses as policy-disallowed", () => {
@@ -271,23 +306,26 @@ test("check exits non-zero for missing and unknown OpenCode/Pi provider routes",
   assert.equal(parseJson(unknown).decision.reason, "unknown_model_route");
 });
 
-test("set-default mutates supported default actor paths and preserves v1 policy shape", () => {
+test("set-default writes exactly the requested default path in routes config", () => {
   const relayHome = tempDir();
-  assert.equal(runConfig(["init", "--profile", "company", "--json"], { relayHome }).status, 0);
 
   const advisory = runConfig(["set-default", "advisory_review.reviewer", "claude", "--json"], { relayHome });
   assert.equal(advisory.status, 0, advisory.combined);
 
-  const policy = readPolicy(relayHome);
-  assert.deepEqual(policy.defaults.advisory_review, { reviewer: "claude" });
+  assert.deepEqual(readRoutes(relayHome), {
+    version: 2,
+    defaults: {
+      advisory_review: { reviewer: "claude" },
+    },
+  });
 });
 
-test("allow-route maps mixed executor phases to executors and reviewer phases to reviewers", () => {
+test("add-route maps mixed executor phases to executors and reviewer phases to reviewers", () => {
   const relayHome = tempDir();
   assert.equal(runConfig(["init", "--profile", "company", "--json"], { relayHome }).status, 0);
 
   const mutation = runConfig([
-    "allow-route",
+    "add-route",
     "example/opencode-model-*",
     "--executor",
     "opencode",
@@ -297,7 +335,7 @@ test("allow-route maps mixed executor phases to executors and reviewer phases to
   ], { relayHome });
   assert.equal(mutation.status, 0, mutation.combined);
 
-  const [entry] = readPolicy(relayHome).allowed_model_routes;
+  const [entry] = readRoutes(relayHome).routes;
   assert.equal(entry.route, "example/opencode-model-*");
   assert.deepEqual(new Set(entry.phases), new Set(["advisory_review", "dispatch"]));
   assert.deepEqual(entry.executors, ["opencode"]);
@@ -336,7 +374,7 @@ test("check requires only the actor role required by the selected phase", () => 
   const relayHome = tempDir();
   assert.equal(runConfig(["init", "--profile", "company", "--json"], { relayHome }).status, 0);
   assert.equal(runConfig([
-    "allow-route",
+    "add-route",
     "example/opencode-model-*",
     "--reviewer",
     "opencode",
@@ -402,7 +440,7 @@ test("deny-route preserves route scopes and denied routes win during check", () 
   const relayHome = tempDir();
   assert.equal(runConfig(["init", "--profile", "company", "--json"], { relayHome }).status, 0);
   assert.equal(runConfig([
-    "allow-route",
+    "add-route",
     "example/opencode-model-*",
     "--executor",
     "opencode",
@@ -422,7 +460,7 @@ test("deny-route preserves route scopes and denied routes win during check", () 
   ], { relayHome });
   assert.equal(mutation.status, 0, mutation.combined);
 
-  const [entry] = readPolicy(relayHome).denied_model_routes;
+  const [entry] = readRoutes(relayHome).denied_routes;
   assert.deepEqual(entry, {
     route: "example/opencode-model-bad",
     phases: ["dispatch"],
@@ -441,6 +479,219 @@ test("deny-route preserves route scopes and denied routes win during check", () 
   ], { relayHome });
   assert.notEqual(denied.status, 0, denied.combined);
   assert.equal(parseJson(denied).decision.reason, "denied_model_route");
+});
+
+test("allow-route is a deprecated alias with stdout parity and one stderr line", () => {
+  const relayHome = tempDir();
+  const args = [
+    "add-route",
+    "example/opencode-model-*",
+    "--executor",
+    "opencode",
+    "--phase",
+    "dispatch",
+    "--json",
+  ];
+  const addRoute = runConfig(args, { relayHome });
+  assert.equal(addRoute.status, 0, addRoute.combined);
+
+  fs.unlinkSync(path.join(relayHome, "routes.json"));
+  const alias = runConfig(["allow-route", ...args.slice(1)], { relayHome });
+  assert.equal(alias.status, 0, alias.combined);
+  assert.equal(alias.stdout, addRoute.stdout);
+  const stderrLines = alias.stderr.trim().split(/\r?\n/).filter(Boolean);
+  assert.equal(stderrLines.length, 1);
+  assert.match(stderrLines[0], /allow-route is deprecated; use add-route/i);
+  assert.equal(parseJsonAllowingStderr(alias).action, "add-route");
+});
+
+test("mutation commands create routes.json, preserve existing v2 fields, and warn only when shadowing legacy config", () => {
+  const specs = [
+    {
+      name: "init",
+      args: ["init", "--profile", "company", "--json"],
+      assertCreated(routes) {
+        assert.deepEqual(routes, {
+          version: 2,
+          strict: true,
+          routes: [],
+          denied_routes: [],
+        });
+      },
+      assertExisting(routes) {
+        assert.equal(routes.strict, true);
+        assert.deepEqual(routes.routes, [{ route: "openai/existing", phases: ["dispatch"], executors: ["opencode"] }]);
+        assert.deepEqual(routes.denied_routes, [{ route: "openai/blocked", phases: ["review"], reviewers: ["pi"] }]);
+      },
+    },
+    {
+      name: "set-default",
+      args: ["set-default", "review.reviewer", "claude", "--json"],
+      assertCreated(routes) {
+        assert.deepEqual(routes, {
+          version: 2,
+          defaults: {
+            review: { reviewer: "claude" },
+          },
+        });
+      },
+      assertExisting(routes) {
+        assert.deepEqual(routes.defaults, {
+          dispatch: { executor: "opencode" },
+          review: { reviewer: "claude" },
+        });
+      },
+    },
+    {
+      name: "add-route",
+      args: ["add-route", "openai/new", "--phase", "dispatch", "--executor", "opencode", "--json"],
+      assertCreated(routes) {
+        assert.deepEqual(routes, {
+          version: 2,
+          routes: [{ route: "openai/new", phases: ["dispatch"], executors: ["opencode"] }],
+        });
+      },
+      assertExisting(routes) {
+        assert.deepEqual(routes.routes, [
+          { route: "openai/existing", phases: ["dispatch"], executors: ["opencode"] },
+          { route: "openai/new", phases: ["dispatch"], executors: ["opencode"] },
+        ]);
+      },
+    },
+    {
+      name: "deny-route",
+      args: ["deny-route", "openai/new-deny", "--phase", "review", "--reviewer", "pi", "--json"],
+      assertCreated(routes) {
+        assert.deepEqual(routes, {
+          version: 2,
+          denied_routes: [{ route: "openai/new-deny", phases: ["review"], reviewers: ["pi"] }],
+        });
+      },
+      assertExisting(routes) {
+        assert.deepEqual(routes.denied_routes, [
+          { route: "openai/blocked", phases: ["review"], reviewers: ["pi"] },
+          { route: "openai/new-deny", phases: ["review"], reviewers: ["pi"] },
+        ]);
+      },
+    },
+  ];
+
+  for (const spec of specs) {
+    const createdHome = tempDir(`relay-config-${spec.name}-created-`);
+    const created = runConfig(spec.args, { relayHome: createdHome });
+    assert.equal(created.status, 0, `${spec.name} create\n${created.combined}`);
+    assert.deepEqual(parseJson(created).warnings, []);
+    spec.assertCreated(readRoutes(createdHome));
+    assert.equal(fs.existsSync(path.join(createdHome, "policy.json")), false);
+
+    const existingHome = tempDir(`relay-config-${spec.name}-existing-`);
+    writeJson(path.join(existingHome, "routes.json"), {
+      version: 2,
+      strict: true,
+      defaults: {
+        dispatch: { executor: "opencode" },
+      },
+      executor_defaults: {
+        opencode: { model: "openai/existing" },
+      },
+      routes: [{ route: "openai/existing", phases: ["dispatch"], executors: ["opencode"] }],
+      denied_routes: [{ route: "openai/blocked", phases: ["review"], reviewers: ["pi"] }],
+      presets: {
+        fast: { dispatch: { executor: "opencode", model: "openai/existing" } },
+      },
+    });
+    const existing = runConfig(spec.args, { relayHome: existingHome });
+    assert.equal(existing.status, 0, `${spec.name} existing\n${existing.combined}`);
+    assert.deepEqual(parseJson(existing).warnings, []);
+    const existingRoutes = readRoutes(existingHome);
+    spec.assertExisting(existingRoutes);
+    assert.equal(existingRoutes.strict, true);
+    assert.deepEqual(existingRoutes.executor_defaults, {
+      opencode: { model: "openai/existing" },
+    });
+    assert.deepEqual(existingRoutes.presets, {
+      fast: { dispatch: { executor: "opencode", model: "openai/existing" } },
+    });
+
+    const legacyHome = tempDir(`relay-config-${spec.name}-legacy-`);
+    const legacyPath = path.join(legacyHome, "policy.json");
+    const legacyPolicy = {
+      ...buildDefaultRelayPolicy(),
+      profile: "legacy",
+      allowed_model_routes: [{ route: "legacy/*", phases: ["dispatch"], executors: ["opencode"] }],
+    };
+    writeJson(legacyPath, legacyPolicy);
+    const before = fs.readFileSync(legacyPath, "utf-8");
+    const legacy = runConfig(spec.args, { relayHome: legacyHome });
+    assert.equal(legacy.status, 0, `${spec.name} legacy\n${legacy.combined}`);
+    const legacyOutput = parseJson(legacy);
+    assert.equal(legacyOutput.warnings.length, 1);
+    assert.match(legacyOutput.warnings[0], /routes\.json now takes precedence/i);
+    assert.match(legacyOutput.warnings[0], /policy\.json\/executors\.json are ignored/i);
+    assert.equal(fs.readFileSync(legacyPath, "utf-8"), before);
+    assert.equal(fs.existsSync(path.join(legacyHome, "routes.json")), true);
+  }
+});
+
+test("route mutations preserve omitted optional keys and absent default phases", () => {
+  const addHome = tempDir("relay-config-add-omission-");
+  assert.equal(runConfig([
+    "add-route",
+    "openai/new",
+    "--phase",
+    "dispatch",
+    "--executor",
+    "opencode",
+    "--json",
+  ], { relayHome: addHome }).status, 0);
+  const addRoutes = readRoutes(addHome);
+  assert.deepEqual(Object.keys(addRoutes).sort(), ["routes", "version"]);
+  assert.equal(hasOwn(addRoutes, "strict"), false);
+  assert.equal(hasOwn(addRoutes, "defaults"), false);
+  assert.equal(hasOwn(addRoutes, "executor_defaults"), false);
+  assert.equal(hasOwn(addRoutes, "presets"), false);
+
+  const defaultHome = tempDir("relay-config-default-omission-");
+  assert.equal(runConfig([
+    "set-default",
+    "advisory_review.reviewer",
+    "pi",
+    "--json",
+  ], { relayHome: defaultHome }).status, 0);
+  const defaultRoutes = readRoutes(defaultHome);
+  assert.deepEqual(defaultRoutes, {
+    version: 2,
+    defaults: {
+      advisory_review: { reviewer: "pi" },
+    },
+  });
+  assert.equal(hasOwn(defaultRoutes.defaults, "dispatch"), false);
+  assert.equal(hasOwn(defaultRoutes.defaults, "review"), false);
+});
+
+test("validation failure leaves the routes file untouched", () => {
+  const relayHome = tempDir();
+  const routesPath = path.join(relayHome, "routes.json");
+  writeJson(routesPath, {
+    version: 2,
+    routes: [],
+    presets: [],
+  });
+  const before = fs.readFileSync(routesPath, "utf-8");
+
+  const result = runConfig([
+    "add-route",
+    "openai/new",
+    "--phase",
+    "dispatch",
+    "--executor",
+    "opencode",
+    "--json",
+  ], { relayHome });
+
+  assert.notEqual(result.status, 0, result.combined);
+  assert.match(result.combined, /presets must be an object/);
+  assert.equal(fs.readFileSync(routesPath, "utf-8"), before);
 });
 
 test("invalid args fail closed with non-zero exits", () => {
@@ -474,14 +725,25 @@ test("subcommands reject known relay-config flags outside their supported gramma
   const show = runConfig(["show", "--effective", "--executor", "codex"], { relayHome });
   assert.notEqual(show.status, 0, show.combined);
   assert.match(show.combined, /unsupported flags for show: --executor/);
+
+  const addRoute = runConfig(["add-route", "openai/*", "--phase", "dispatch", "--model", "openai/gpt-5"], { relayHome });
+  assert.notEqual(addRoute.status, 0, addRoute.combined);
+  assert.match(addRoute.combined, /unsupported flags for add-route: --model/);
+
+  const allowRoute = runConfig(["allow-route", "openai/*", "--phase", "dispatch", "--model", "openai/gpt-5"], { relayHome });
+  assert.notEqual(allowRoute.status, 0, allowRoute.combined);
+  assert.match(allowRoute.combined, /unsupported flags for allow-route: --model/);
 });
 
-test("help explains harness actors and provider/model route boundaries", () => {
+test("help explains harness actors and provider/model route boundaries without policy prose", () => {
   const result = runConfig(["--help"]);
 
   assert.equal(result.status, 0, result.combined);
   assert.match(result.stdout, /executor\/reviewer names are harnesses/i);
-  assert.match(result.stdout, /provider\/model route strings are the policy boundary/i);
+  assert.match(result.stdout, /provider\/model route strings are the routing boundary/i);
+  assert.match(result.stdout, /add-route <pattern>/);
+  assert.match(result.stdout, /allow-route <pattern>.*deprecated/i);
+  assert.doesNotMatch(result.stdout, /\bpolicy\b/i);
 });
 
 test("plan-run previews managed Codex dispatch and review routes", () => {

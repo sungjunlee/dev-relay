@@ -30,7 +30,7 @@ function printJson(value) {
 function printHelp() {
   console.log("Usage: relay-config <command> [options]");
   console.log("");
-  console.log("Interactive relay route-policy setup helper. Use the skill for natural-language setup, or this wrapper for deterministic shorthand.");
+  console.log("Interactive relay route setup helper. Use the skill for natural-language setup, or this wrapper for deterministic shorthand.");
   console.log("");
   console.log("Common setup requests:");
   console.log('  "relay setup 해줘"');
@@ -43,11 +43,12 @@ function printHelp() {
   console.log("  show [--json]");
   console.log("  doctor [--json]");
   console.log("  check <phase> <actor> [provider/model] [--json]");
-  console.log("  allow-route <pattern> --phase <csv> [--executor <name>] [--reviewer <name>] [--json]");
+  console.log("  add-route <pattern> --phase <csv> [--executor <name>] [--reviewer <name>] [--json]");
+  console.log("  allow-route <pattern> --phase <csv> [--executor <name>] [--reviewer <name>] [--json] (deprecated; use add-route)");
   console.log("  deny-route <pattern> [--phase <csv>] [--executor <name>] [--reviewer <name>] [--json]");
   console.log("  set-default <path> <value> [--json]");
   console.log("");
-  console.log("Policy boundary: executor/reviewer names are harnesses; provider/model route strings are the compliance boundary.");
+  console.log("Routing boundary: executor/reviewer names are harnesses; provider/model route strings are the routing boundary.");
 }
 
 function runCore(args, { capture = false } = {}) {
@@ -78,6 +79,11 @@ function parseJsonOutput(result, label) {
   }
 }
 
+function displayToolRouteStatus(tool) {
+  if (tool.policy === "policy-disallowed") return "route-disallowed";
+  return tool.policy;
+}
+
 function inspect(jsonOut) {
   const showResult = runCore(["show", "--effective", "--json"], { capture: true });
   const doctorResult = runCore(["doctor", "--json"], { capture: true });
@@ -104,15 +110,17 @@ function inspect(jsonOut) {
   }
 
   console.log(`relay-config inspect: ${output.ok ? "ok" : "failed"}`);
-  console.log(`policy status: ${policy.status || "unknown"}`);
-  if (policy.sources?.global) console.log(`global policy: ${policy.sources.global}`);
-  if (policy.sources?.repo) console.log(`repo policy: ${policy.sources.repo}`);
+  console.log(`routes status: ${policy.status || "unknown"}`);
+  if (policy.sources?.routes?.global) console.log(`global config: ${policy.sources.routes.global}`);
+  else if (policy.sources?.global) console.log(`global config: ${policy.sources.global}`);
+  if (policy.sources?.routes?.project) console.log(`repo config: ${policy.sources.routes.project}`);
+  else if (policy.sources?.repo) console.log(`repo config: ${policy.sources.repo}`);
   console.log(`project config: ${projectConfig.status} at ${projectConfig.path || "(unresolved)"}`);
   console.log(`executors config: ${output.executorsConfig.exists ? "present" : "missing"} at ${configPath}`);
   if (Array.isArray(doctor.tools)) {
     for (const tool of doctor.tools) {
       const installed = tool.installed ? `installed at ${tool.path}` : "not installed on PATH";
-      console.log(`${tool.name}: ${installed}; ${tool.policy} (${tool.reason})`);
+      console.log(`${tool.name}: ${installed}; ${displayToolRouteStatus(tool)} (${tool.reason})`);
     }
   }
   return ok ? 0 : 1;
