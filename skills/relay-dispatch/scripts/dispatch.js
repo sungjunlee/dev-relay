@@ -1953,6 +1953,7 @@ async function main() {
 
   // Redirect stdout/stderr to files. Using spawn with detached: true gives us
   // a killable process group (terminateProcessGroup sends SIGTERM to -pid).
+  fs.rmSync(resultFile, { force: true });
   const stdoutFd = fs.openSync(stdoutLog, "w");
   const stderrFd = fs.openSync(stderrLog, "w");
 

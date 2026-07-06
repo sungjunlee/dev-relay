@@ -133,7 +133,16 @@ function buildBaseResult({ row, rowName, status, manifestPath, runId, data, dryR
   };
 }
 
-function appendInterruptedIfNeeded(repoRoot, data, manifestPath, reason, leaseStatus, worktreePath, dryRun) {
+function appendInterruptedIfNeeded(
+  repoRoot,
+  data,
+  manifestPath,
+  reason,
+  leaseStatus,
+  worktreePath,
+  dryRun,
+  { executorTerminated = reason === "reconcile_timeout" } = {}
+) {
   const tail = latestRunEvent(repoRoot, data.run_id);
   const alreadyTail = tail?.event === EVENTS.DISPATCH_INTERRUPTED;
   if (!dryRun && !alreadyTail) {
@@ -147,7 +156,7 @@ function appendInterruptedIfNeeded(repoRoot, data, manifestPath, reason, leaseSt
       executor_pgid: leaseStatus.lease?.pgid ?? null,
       elapsed_s: leaseStatus.elapsed_s,
       timeout_s: leaseStatus.lease?.timeout_s ?? null,
-      executor_terminated: reason === "reconcile_timeout",
+      executor_terminated: executorTerminated,
       worktree: worktreePath || null,
     });
   }
@@ -293,7 +302,12 @@ async function main() {
       return;
     }
 
-    const plannedActions = ["kill_process_group", "journal_dispatch_interrupted", "remove_lease"];
+    const plannedActions = [
+      "kill_process_group",
+      "wait_for_process_group_exit",
+      "journal_dispatch_interrupted",
+      "remove_lease_if_process_group_gone",
+    ];
     if (dryRun) {
       outputResult({
         ...buildBaseResult({
@@ -314,7 +328,37 @@ async function main() {
     }
 
     terminateProcessGroup(leaseStatus.lease.pgid);
-    await waitForProcessGroupExit(leaseStatus.lease.pgid);
+    const killConfirmed = await waitForProcessGroupExit(leaseStatus.lease.pgid);
+    if (!killConfirmed) {
+      const interrupted = appendInterruptedIfNeeded(
+        normalizedRepoRoot,
+        data,
+        record.manifestPath,
+        "reconcile_timeout_unsettled",
+        leaseStatus,
+        worktreePath,
+        false,
+        { executorTerminated: false }
+      );
+      outputResult({
+        ...buildBaseResult({
+          row: 3,
+          rowName: "lease_live_timed_out",
+          status: "timed_out_unsettled",
+          manifestPath: record.manifestPath,
+          runId: normalizedRunId,
+          data,
+          dryRun,
+          nextAction: "kill_executor_or_wait",
+        }),
+        lease: leaseStatus.lease,
+        elapsed_s: leaseStatus.elapsed_s,
+        killConfirmed,
+        journaled: interrupted.journaled,
+        resumeCommand: interrupted.resumeCommand,
+      }, jsonOut);
+      return;
+    }
     const interrupted = appendInterruptedIfNeeded(
       normalizedRepoRoot,
       data,
@@ -322,7 +366,8 @@ async function main() {
       "reconcile_timeout",
       leaseStatus,
       worktreePath,
-      false
+      false,
+      { executorTerminated: true }
     );
     removeRunLease(normalizedRepoRoot, normalizedRunId);
     outputResult({
@@ -338,6 +383,7 @@ async function main() {
       }),
       lease: leaseStatus.lease,
       elapsed_s: leaseStatus.elapsed_s,
+      killConfirmed,
       journaled: interrupted.journaled,
       resumeCommand: interrupted.resumeCommand,
     }, jsonOut);

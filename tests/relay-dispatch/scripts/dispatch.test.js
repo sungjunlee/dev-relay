@@ -1023,14 +1023,20 @@ if (args[0] !== "exec") {
   process.exit(1);
 }
 const marker = process.env.RELAY_TEST_EXECUTOR_MARKER;
-const child = spawn(process.execPath, ["-e", "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);"], {
+const childReady = marker ? marker + ".child-ready" : "";
+const child = spawn("/bin/sh", ["-c", "trap '' TERM; : > \\"$1\\"; while :; do sleep 1; done", "relay-child", childReady], {
   stdio: "ignore",
 });
 child.unref();
 if (marker) {
-  setTimeout(() => {
-    fs.writeFileSync(marker, JSON.stringify({ pid: process.pid, pgid: process.pid, childPid: child.pid }), "utf-8");
-  }, 250);
+  const publishMarker = () => {
+    if (fs.existsSync(childReady)) {
+      fs.writeFileSync(marker, JSON.stringify({ pid: process.pid, pgid: process.pid, childPid: child.pid }), "utf-8");
+      return;
+    }
+    setTimeout(publishMarker, 25);
+  };
+  publishMarker();
 }
 process.on("SIGTERM", () => {
   if (marker) {
@@ -1417,6 +1423,50 @@ test("dispatch reuses the same run and worktree on resume", () => {
   assert.match(events, /"reason":"same_run_resume:completed"/);
 });
 
+test("dispatch resume clears stale structured result before executor attempt", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  writeFakeCodex(binDir);
+  const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}`, RELAY_HOME: relayHome };
+
+  const first = JSON.parse(runDispatch(repoRoot, [
+    "-b", "issue-812-stale-result-resume",
+    "--prompt", "first pass writes a result",
+    "--json",
+  ], env));
+  assert.equal(first.runState, STATES.REVIEW_PENDING);
+  assert.equal(fs.readFileSync(first.resultFile, "utf-8"), "ok\n");
+
+  const record = readManifest(first.manifestPath);
+  const updated = updateManifestState(record.data, STATES.CHANGES_REQUESTED, "re_dispatch_requested_changes");
+  writeManifest(first.manifestPath, updated, record.body);
+  writeSilentCodex(binDir);
+
+  const resume = spawnSync(process.execPath, [SCRIPT, repoRoot,
+    "--run-id", first.runId,
+    "--prompt", "resume attempt exits without writing result",
+    "--json",
+  ], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    env,
+    stdio: "pipe",
+  });
+
+  assert.notEqual(resume.status, 0);
+  const result = JSON.parse(resume.stdout);
+  assert.equal(result.mode, "resume");
+  assert.equal(result.runId, first.runId);
+  assert.equal(result.resultFile, first.resultFile);
+  assert.equal(result.status, "failed");
+  assert.equal(result.runState, STATES.ESCALATED);
+  assert.match(result.error, /silent failure/);
+  assert.equal(result.resultPreview, "");
+  assert.equal(fs.existsSync(first.resultFile), false);
+  assert.equal(readManifest(first.manifestPath).data.state, STATES.ESCALATED);
+});
+
 async function runInterruptedDispatchSignalTest(signalName) {
   const { repoRoot, relayHome } = setupRepo();
   process.env.RELAY_HOME = relayHome;
@@ -1444,10 +1494,28 @@ async function runInterruptedDispatchSignalTest(signalName) {
   const exitPromise = waitForDispatchExit(proc);
 
   try {
-    marker = await waitFor(() => {
-      if (!fs.existsSync(markerPath)) return null;
-      return JSON.parse(fs.readFileSync(markerPath, "utf-8"));
-    }, { timeoutMs: 30000, message: "fake executor marker" });
+    try {
+      const markerPromise = waitFor(() => {
+        if (!fs.existsSync(markerPath)) return null;
+        return JSON.parse(fs.readFileSync(markerPath, "utf-8"));
+      }, { timeoutMs: 30000, message: "fake executor marker" });
+      const markerOrExit = await Promise.race([
+        markerPromise.then((value) => ({ marker: value })),
+        exitPromise.then((value) => ({ earlyExit: value })),
+      ]);
+      if (markerOrExit.earlyExit) {
+        assert.fail(`dispatch exited before fake executor marker\nstdout:\n${markerOrExit.earlyExit.stdout}\nstderr:\n${markerOrExit.earlyExit.stderr}`);
+      }
+      marker = markerOrExit.marker;
+    } catch (error) {
+      const manifestPath = listManifestPaths(repoRoot)[0];
+      const manifest = manifestPath && fs.existsSync(manifestPath) ? readManifest(manifestPath).data : null;
+      const stdoutLog = manifest?.paths?.dispatch_stdout;
+      const stderrLog = manifest?.paths?.dispatch_stderr;
+      const executorStdout = stdoutLog && fs.existsSync(stdoutLog) ? fs.readFileSync(stdoutLog, "utf-8") : "";
+      const executorStderr = stderrLog && fs.existsSync(stderrLog) ? fs.readFileSync(stderrLog, "utf-8") : "";
+      assert.fail(`${error.message}\nexecutor stdout:\n${executorStdout}\nexecutor stderr:\n${executorStderr}`);
+    }
     const manifestPath = await waitFor(() => listManifestPaths(repoRoot)[0], {
       timeoutMs: 30000,
       message: "dispatch manifest path",

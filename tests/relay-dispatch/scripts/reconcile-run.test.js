@@ -220,6 +220,12 @@ function killPgid(pgid) {
   } catch {}
 }
 
+function killPgidForce(pgid) {
+  try {
+    process.kill(-Number(pgid), "SIGKILL");
+  } catch {}
+}
+
 async function waitFor(condition, { timeoutMs = 5000, intervalMs = 50, message = "condition" } = {}) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -229,15 +235,39 @@ async function waitFor(condition, { timeoutMs = 5000, intervalMs = 50, message =
   throw new Error(`timed out waiting for ${message}`);
 }
 
-async function spawnSleeper(t) {
-  const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000);"], {
-    detached: true,
-    stdio: "ignore",
+// Reconcile targets executors whose dispatch supervisor is already dead, so the
+// real process is orphaned (reparented to init, which reaps it on death). Spawn
+// through a short-lived intermediate so the sleeper is orphaned the same way;
+// keeping the test process as the parent would leave an unreaped zombie while
+// runReconcile blocks the event loop in execFileSync, and kill(-pgid, 0) reports
+// zombie groups as alive.
+async function spawnOrphanedSleeper(t, { inlineSetup = "", cleanup = killPgid } = {}) {
+  const sleeperSource = `${inlineSetup}setInterval(() => {}, 1000);`;
+  const launcherSource = [
+    'const { spawn } = require("child_process");',
+    `const child = spawn(process.execPath, ["-e", ${JSON.stringify(sleeperSource)}], { detached: true, stdio: "ignore" });`,
+    "child.unref();",
+    "console.log(child.pid);",
+  ].join("\n");
+  const stdout = execFileSync(process.execPath, ["-e", launcherSource], { encoding: "utf-8" });
+  const pid = Number(stdout.trim());
+  if (!Number.isFinite(pid) || pid <= 0) {
+    throw new Error(`orphaned sleeper launcher returned invalid pid: ${JSON.stringify(stdout)}`);
+  }
+  t.after(() => cleanup(pid));
+  await waitFor(() => isPgidAlive(pid), { message: `pgid ${pid} alive` });
+  return { pid };
+}
+
+function spawnSleeper(t) {
+  return spawnOrphanedSleeper(t);
+}
+
+function spawnSigtermIgnoringSleeper(t) {
+  return spawnOrphanedSleeper(t, {
+    inlineSetup: "process.on('SIGTERM', () => {}); ",
+    cleanup: killPgidForce,
   });
-  child.unref();
-  t.after(() => killPgid(child.pid));
-  await waitFor(() => isPgidAlive(child.pid), { message: `pgid ${child.pid} alive` });
-  return child;
 }
 
 test("reconcile row 1 no-ops when manifest is not dispatched", () => {
@@ -290,6 +320,25 @@ test("reconcile treats host-mismatched leases as stale evidence", async (t) => {
   assert.equal(isPgidAlive(child.pid), true);
 });
 
+test("reconcile treats host-mismatched leases without work as stale retry evidence", async (t) => {
+  const fixture = setupRepo();
+  const child = await spawnSleeper(t);
+  const leasePath = writeLease(fixture, {
+    pgid: child.pid,
+    host: "other-host.example.test",
+    startedAt: new Date().toISOString(),
+    timeoutS: 60,
+  });
+
+  const result = parseJsonResult(runReconcile(fixture));
+
+  assert.equal(result.row, 5);
+  assert.equal(result.status, "interrupted");
+  assert.equal(fs.existsSync(leasePath), false);
+  assert.equal(readManifest(fixture.manifestPath).data.state, STATES.DISPATCHED);
+  assert.equal(isPgidAlive(child.pid), true);
+});
+
 test("reconcile row 3 kills a timed-out live lease and journals interruption", async (t) => {
   const fixture = setupRepo();
   const child = await spawnSleeper(t);
@@ -308,6 +357,29 @@ test("reconcile row 3 kills a timed-out live lease and journals interruption", a
   const events = readRunEvents(fixture.repoRoot, fixture.runId);
   assert.equal(events.at(-1).event, EVENTS.DISPATCH_INTERRUPTED);
   assert.equal(events.at(-1).reason, "reconcile_timeout");
+});
+
+test("reconcile row 3 keeps the lease when a timed-out process group ignores SIGTERM", async (t) => {
+  const fixture = setupRepo();
+  const child = await spawnSigtermIgnoringSleeper(t);
+  const leasePath = writeLease(fixture, {
+    pgid: child.pid,
+    startedAt: new Date(Date.now() - 10_000).toISOString(),
+    timeoutS: 1,
+  });
+
+  const result = parseJsonResult(runReconcile(fixture));
+
+  assert.equal(result.row, 3);
+  assert.equal(result.status, "timed_out_unsettled");
+  assert.equal(result.nextAction, "kill_executor_or_wait");
+  assert.equal(result.killConfirmed, false);
+  assert.equal(fs.existsSync(leasePath), true);
+  assert.equal(isPgidAlive(child.pid), true);
+  const events = readRunEvents(fixture.repoRoot, fixture.runId);
+  assert.equal(events.at(-1).event, EVENTS.DISPATCH_INTERRUPTED);
+  assert.equal(events.at(-1).reason, "reconcile_timeout_unsettled");
+  assert.equal(events.at(-1).executor_terminated, false);
 });
 
 test("reconcile row 4 recovers dead runs with committed work via recover-commit", () => {

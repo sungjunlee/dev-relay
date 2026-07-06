@@ -8,7 +8,8 @@ Operator-facing recovery commands for `relay-dispatch`. These cover the two cano
 
 - `lease.json` exists only while an executor is expected to be running: `{ pid, pgid, host, started_at, timeout_s }`. `pid` is the dispatch supervisor and `pgid` is the detached executor process group.
 - `dispatch-stdout.log`, `dispatch-stderr.log`, and `dispatch-result.txt` are live runtime artifacts in the run directory and are recorded in manifest `paths`.
-- A lease is live only when `host` matches the current host and the process group probe succeeds; `EPERM` counts as alive. A host mismatch is treated as live but unverifiable, so cleanup tools fail closed unless `--force` is supplied.
+- For `reconcile-run.js`, a lease is live only when `host` matches the current host and the process group probe succeeds; `EPERM` counts as alive. A host mismatch is stale evidence for reconcile rows 4/5 because this host cannot safely signal that process group.
+- For destructive cleanup (`cleanup-worktrees.js` and `close-run.js`), a host mismatch is an unverifiable lease and blocks worktree removal unless `--force` is supplied.
 
 ```bash
 # Inspect/settle one dispatched run
@@ -24,7 +25,7 @@ Decision table:
 |---|---|---|
 | 1 | Manifest state is not `dispatched` | No-op report with current state and no next action. |
 | 2 | Lease is live and elapsed time is within `timeout_s` | No-op report as running, including remaining time. |
-| 3 | Lease is live, same host, and elapsed time exceeds `timeout_s` | Kill the executor pgid, append `dispatch_interrupted` with reason `reconcile_timeout`, remove `lease.json`, and report resume options. |
+| 3 | Lease is live, same host, and elapsed time exceeds `timeout_s` | Send SIGTERM to the executor pgid and wait for the process group to exit. If exit is confirmed, append `dispatch_interrupted` with reason `reconcile_timeout`, remove `lease.json`, and report resume options. If the process group remains alive, append `dispatch_interrupted` with reason `reconcile_timeout_unsettled`, keep `lease.json`, and report `timed_out_unsettled`. |
 | 4 | Lease is dead/absent and a result file or branch work exists | Remove `lease.json`, transition `dispatched -> review_pending` through the manifest lifecycle helper, then invoke `recover-commit.js` when commit/push/PR recovery is needed. Reconcile does not duplicate commit/push/PR logic. |
 | 5 | Lease is dead/absent and there is no result or work | Append `dispatch_interrupted` with reason `reconcile_dead_no_work` unless it is already the tail event, remove any stale lease, and report the `dispatch.js --manifest ...` resume command. |
 

@@ -274,6 +274,40 @@ test("cleanup-worktrees refuses to remove a worktree with a live run lease witho
   assert.equal(readManifest(manifestPath).data.cleanup.status, "pending");
 });
 
+test("cleanup-worktrees refuses host-mismatched run leases without --force", () => {
+  const repoRoot = setupRepo();
+  const updatedAt = "2026-04-01T00:00:00.000Z";
+  const { manifestPath, worktreePath } = writeRun(repoRoot, {
+    branch: "issue-host-mismatch-lease",
+    state: STATES.MERGED,
+    updatedAt,
+  });
+  const runId = readManifest(manifestPath).data.run_id;
+  const runDir = ensureRunLayout(repoRoot, runId).runDir;
+  fs.writeFileSync(path.join(runDir, "lease.json"), JSON.stringify({
+    pid: 999999,
+    pgid: 999999,
+    host: "other-host.example.test",
+    started_at: new Date().toISOString(),
+    timeout_s: 60,
+  }, null, 2), "utf-8");
+
+  const stdout = execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--all",
+    "--json",
+  ], { encoding: "utf-8" });
+
+  const result = JSON.parse(stdout);
+  assert.equal(result.cleaned.length, 0);
+  assert.equal(result.failed.length, 1);
+  assert.match(result.failed[0].error, /host_mismatch|host mismatch|unverifiable lease/);
+  assert.match(result.failed[0].error, /other-host\.example\.test/);
+  assert.equal(fs.existsSync(worktreePath), true);
+  assert.equal(readManifest(manifestPath).data.cleanup.status, "pending");
+});
+
 test("cleanup-worktrees --force removes a worktree with a live run lease", async (t) => {
   const repoRoot = setupRepo();
   const updatedAt = "2026-04-01T00:00:00.000Z";
@@ -308,6 +342,40 @@ test("cleanup-worktrees --force removes a worktree with a live run lease", async
   assert.equal(fs.existsSync(worktreePath), false);
   assert.equal(readManifest(manifestPath).data.cleanup.status, "succeeded");
   assert.equal(isPgidAlive(child.pid), true);
+});
+
+test("cleanup-worktrees --force removes a worktree with a host-mismatched run lease", () => {
+  const repoRoot = setupRepo();
+  const updatedAt = "2026-04-01T00:00:00.000Z";
+  const { manifestPath, worktreePath } = writeRun(repoRoot, {
+    branch: "issue-host-mismatch-lease-force",
+    state: STATES.MERGED,
+    updatedAt,
+  });
+  const runId = readManifest(manifestPath).data.run_id;
+  const runDir = ensureRunLayout(repoRoot, runId).runDir;
+  fs.writeFileSync(path.join(runDir, "lease.json"), JSON.stringify({
+    pid: 999999,
+    pgid: 999999,
+    host: "other-host.example.test",
+    started_at: new Date().toISOString(),
+    timeout_s: 60,
+  }, null, 2), "utf-8");
+
+  const stdout = execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--all",
+    "--force",
+    "--json",
+  ], { encoding: "utf-8" });
+
+  const result = JSON.parse(stdout);
+  assert.equal(result.cleaned.length, 1);
+  assert.equal(result.failed.length, 0);
+  assert.equal(result.cleaned[0].branch, "issue-host-mismatch-lease-force");
+  assert.equal(fs.existsSync(worktreePath), false);
+  assert.equal(readManifest(manifestPath).data.cleanup.status, "succeeded");
 });
 
 test("cleanup-worktrees reports stale open runs without deleting them", () => {

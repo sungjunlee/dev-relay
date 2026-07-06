@@ -28,7 +28,7 @@ if (!args.length || hasCliFlag(["--help", "-h"])) {
   console.log(`  --repo <path>    ${modeLabel("--repo")} Repository root`);
   console.log(`  --run-id <id>    ${modeLabel("--run-id")} Relay run identifier`);
   console.log(`  --reason <text>  ${modeLabel("--reason")} Audit reason`);
-  console.log(`  --force          ${modeLabel("--force")} Override a live run lease`);
+  console.log(`  --force          ${modeLabel("--force")} Override a live or unverifiable run lease`);
   console.log(`  --dry-run        ${modeLabel("--dry-run")} Print result without writing`);
   console.log(`  --json           ${modeLabel("--json")} Output JSON`);
   process.exit(hasCliFlag(["--help", "-h"]) ? 0 : 1);

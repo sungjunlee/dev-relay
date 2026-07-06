@@ -127,7 +127,7 @@ if (hasCliFlag(["--help", "-h"])) {
   console.log(`  --inspect              ${modeLabel("--inspect")} Health inventory only (no cleanup or shell sweep)`);
   console.log(`  --reconcile-merged     ${modeLabel("--reconcile-merged")} Reconcile merged drift for eligible non-terminal runs`);
   console.log(`  --stale-days <days>    ${modeLabel("--stale-days")} Stale classification threshold (default: ${DEFAULT_STALE_DAYS})`);
-  console.log(`  --force                ${modeLabel("--force")} Override a live run lease when removing a worktree`);
+  console.log(`  --force                ${modeLabel("--force")} Override a live or unverifiable run lease when removing a worktree`);
   process.exit(0);
 }
 

@@ -212,11 +212,18 @@ function formatLeaseForMessage(status) {
   return `pid=${lease.pid ?? "unknown"} pgid=${lease.pgid ?? "unknown"} host=${lease.host ?? "unknown"}`;
 }
 
+function isDestructiveCleanupBlockedByLease(status) {
+  return status.exists && (status.live || status.reason === "host_mismatch");
+}
+
 function assertNoLiveRunLease({ repoRoot, runId, force = false, caller = "relay-dispatch" }) {
   const status = getRunLeaseStatus(repoRoot, runId);
-  if (status.live && !force) {
+  if (isDestructiveCleanupBlockedByLease(status) && !force) {
+    const leaseKind = status.reason === "host_mismatch"
+      ? "unverifiable host_mismatch lease"
+      : "live lease";
     throw new Error(
-      `${caller}: refusing to remove worktree for run ${runId}; live lease ${formatLeaseForMessage(status)}. ` +
+      `${caller}: refusing to remove worktree for run ${runId}; ${leaseKind} ${formatLeaseForMessage(status)}. ` +
       "Wait for the executor to finish, run reconcile-run.js, or pass --force to override."
     );
   }
@@ -235,6 +242,7 @@ module.exports = {
   getLeasePath,
   getRunArtifactPaths,
   getRunLeaseStatus,
+  isDestructiveCleanupBlockedByLease,
   isProcessGroupAlive,
   latestRunEvent,
   readRunLease,
