@@ -378,6 +378,66 @@ test("cleanup-worktrees --force removes a worktree with a host-mismatched run le
   assert.equal(readManifest(manifestPath).data.cleanup.status, "succeeded");
 });
 
+test("cleanup-worktrees dry-run surfaces corrupt run leases as stale evidence", () => {
+  const repoRoot = setupRepo();
+  const updatedAt = "2026-04-01T00:00:00.000Z";
+  const { manifestPath, worktreePath } = writeRun(repoRoot, {
+    branch: "issue-corrupt-lease-dry-run",
+    state: STATES.MERGED,
+    updatedAt,
+  });
+  const runId = readManifest(manifestPath).data.run_id;
+  const runDir = ensureRunLayout(repoRoot, runId).runDir;
+  fs.writeFileSync(path.join(runDir, "lease.json"), "{\"pid\":", "utf-8");
+
+  const stdout = execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--all",
+    "--dry-run",
+    "--json",
+  ], { encoding: "utf-8" });
+
+  const result = JSON.parse(stdout);
+  assert.equal(result.cleaned.length, 1);
+  assert.equal(result.failed.length, 0);
+  assert.equal(result.cleaned[0].branch, "issue-corrupt-lease-dry-run");
+  assert.equal(result.cleaned[0].leaseStatus, "corrupt");
+  assert.match(result.cleaned[0].leaseError, /invalid run lease/);
+  assert.equal(fs.existsSync(worktreePath), true);
+  assert.equal(readManifest(manifestPath).data.cleanup.status, "pending");
+});
+
+test("cleanup-worktrees --force removes a worktree with a corrupt run lease", () => {
+  const repoRoot = setupRepo();
+  const updatedAt = "2026-04-01T00:00:00.000Z";
+  const { manifestPath, worktreePath } = writeRun(repoRoot, {
+    branch: "issue-corrupt-lease-force",
+    state: STATES.MERGED,
+    updatedAt,
+  });
+  const runId = readManifest(manifestPath).data.run_id;
+  const runDir = ensureRunLayout(repoRoot, runId).runDir;
+  fs.writeFileSync(path.join(runDir, "lease.json"), "{\"pid\":", "utf-8");
+
+  const stdout = execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--all",
+    "--force",
+    "--json",
+  ], { encoding: "utf-8" });
+
+  const result = JSON.parse(stdout);
+  assert.equal(result.cleaned.length, 1);
+  assert.equal(result.failed.length, 0);
+  assert.equal(result.cleaned[0].branch, "issue-corrupt-lease-force");
+  assert.equal(result.cleaned[0].leaseStatus, "corrupt");
+  assert.match(result.cleaned[0].leaseError, /invalid run lease/);
+  assert.equal(fs.existsSync(worktreePath), false);
+  assert.equal(readManifest(manifestPath).data.cleanup.status, "succeeded");
+});
+
 test("cleanup-worktrees reports stale open runs without deleting them", () => {
   const repoRoot = setupRepo();
   const updatedAt = "2026-04-01T00:00:00.000Z";

@@ -14,6 +14,8 @@ const { classifyRepositoryDirt } = require("./runtime-dirt");
 const { resolveManifestRecord } = require("./relay-resolver");
 const { appendRunEvent, EVENTS } = require("./relay-events");
 const {
+  corruptRunLeaseEventFields,
+  corruptRunLeaseReportFields,
   getDispatchResultCandidates,
   getRunLeaseStatus,
   latestRunEvent,
@@ -144,6 +146,7 @@ function appendInterruptedIfNeeded(
   {
     executorTerminated = reason === "reconcile_timeout",
     suppressDuplicateTail = true,
+    eventFields = {},
   } = {}
 ) {
   const tail = latestRunEvent(repoRoot, data.run_id);
@@ -162,6 +165,7 @@ function appendInterruptedIfNeeded(
       timeout_s: leaseStatus.lease?.timeout_s ?? null,
       executor_terminated: executorTerminated,
       worktree: worktreePath || null,
+      ...eventFields,
     });
   }
   return {
@@ -188,7 +192,7 @@ function dispatchCompletionTarget(data) {
   throw new Error(`unsupported dispatch.publish_policy for reconcile: ${publishPolicy}`);
 }
 
-function appendStateRecovery(repoRoot, before, after, reason) {
+function appendStateRecovery(repoRoot, before, after, reason, eventFields = {}) {
   appendRunEvent(repoRoot, after.run_id, {
     event: EVENTS.STATE_RECOVERY,
     state_from: before.state,
@@ -196,10 +200,11 @@ function appendStateRecovery(repoRoot, before, after, reason) {
     head_sha: after.git?.head_sha || null,
     round: after.review?.rounds || null,
     reason,
+    ...eventFields,
   });
 }
 
-function transitionDispatchedToCompletionTarget({ repoRoot, manifestPath, body, data, currentHead, dryRun }) {
+function transitionDispatchedToCompletionTarget({ repoRoot, manifestPath, body, data, currentHead, dryRun, eventFields = {} }) {
   const target = dispatchCompletionTarget(data);
   const updated = {
     ...updateManifestState(data, target.state, target.nextAction),
@@ -210,7 +215,7 @@ function transitionDispatchedToCompletionTarget({ repoRoot, manifestPath, body, 
   };
   if (!dryRun) {
     writeManifest(manifestPath, updated, body);
-    appendStateRecovery(repoRoot, data, updated, "reconcile_dead_work");
+    appendStateRecovery(repoRoot, data, updated, "reconcile_dead_work", eventFields);
   }
   return updated;
 }
@@ -398,6 +403,8 @@ async function main() {
   const worktreeInspection = inspectWorktree(worktreePath, data);
   const hasRecoverableWork = worktreeInspection.newCommits > 0 || worktreeInspection.hasReviewableDirt;
   const hasResult = !!resultFile;
+  const corruptLeaseReport = corruptRunLeaseReportFields(leaseStatus);
+  const corruptLeaseEvent = corruptRunLeaseEventFields(leaseStatus);
   if (hasResult || hasRecoverableWork) {
     const target = dispatchCompletionTarget(data);
     const plannedActions = [
@@ -423,6 +430,7 @@ async function main() {
         newCommits: worktreeInspection.newCommits,
         hasReviewableDirt: worktreeInspection.hasReviewableDirt,
         plannedActions,
+        ...corruptLeaseReport,
       }, jsonOut);
       return;
     }
@@ -437,7 +445,7 @@ async function main() {
         dryRun: false,
       });
       updated = readManifest(record.manifestPath).data;
-      appendStateRecovery(normalizedRepoRoot, data, updated, "reconcile_dead_work");
+      appendStateRecovery(normalizedRepoRoot, data, updated, "reconcile_dead_work", corruptLeaseEvent);
     } else {
       updated = transitionDispatchedToCompletionTarget({
         repoRoot: normalizedRepoRoot,
@@ -446,6 +454,7 @@ async function main() {
         data,
         currentHead: worktreeInspection.currentHead,
         dryRun: false,
+        eventFields: corruptLeaseEvent,
       });
     }
     outputResult({
@@ -464,6 +473,7 @@ async function main() {
       newCommits: worktreeInspection.newCommits,
       hasReviewableDirt: worktreeInspection.hasReviewableDirt,
       recovery,
+      ...corruptLeaseReport,
     }, jsonOut);
     return;
   }
@@ -483,6 +493,7 @@ async function main() {
       }),
       plannedActions,
       resumeCommand: resumeCommand(record.manifestPath),
+      ...corruptLeaseReport,
     }, jsonOut);
     return;
   }
@@ -494,7 +505,8 @@ async function main() {
     "reconcile_dead_no_work",
     leaseStatus,
     worktreePath,
-    false
+    false,
+    { eventFields: corruptLeaseEvent }
   );
   removeRunLease(normalizedRepoRoot, normalizedRunId);
   outputResult({
@@ -511,6 +523,7 @@ async function main() {
     journaled: interrupted.journaled,
     alreadyTailEvent: interrupted.alreadyTail,
     resumeCommand: interrupted.resumeCommand,
+    ...corruptLeaseReport,
   }, jsonOut);
 }
 

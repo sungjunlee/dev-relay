@@ -282,6 +282,30 @@ test("close-run --force closes and cleans a worktree with a host-mismatched run 
   assert.equal(readManifest(manifestPath).data.state, STATES.CLOSED);
 });
 
+test("close-run --force closes and cleans a worktree with a corrupt run lease", () => {
+  const { repoRoot, manifestPath, runId, worktreePath } = setupRepo();
+  const runDir = ensureRunLayout(repoRoot, runId).runDir;
+  fs.writeFileSync(path.join(runDir, "lease.json"), "{\"pid\":", "utf-8");
+
+  const stdout = execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--run-id", runId,
+    "--reason", "stale_non_terminal_run",
+    "--force",
+    "--json",
+  ], { encoding: "utf-8" });
+
+  const result = JSON.parse(stdout);
+  assert.equal(result.force, true);
+  assert.equal(result.leaseStatus, "corrupt");
+  assert.match(result.leaseError, /invalid run lease/);
+  assert.equal(result.state, STATES.CLOSED);
+  assert.equal(result.cleanup.cleanupStatus, "succeeded");
+  assert.equal(fs.existsSync(worktreePath), false);
+  assert.equal(readManifest(manifestPath).data.state, STATES.CLOSED);
+});
+
 test("close-run fails when --run-id does not resolve", () => {
   const { repoRoot } = setupRepo();
   const missingRunId = createRunId({

@@ -359,6 +359,45 @@ test("reconcile treats host-mismatched leases without work as stale retry eviden
   assert.equal(isPgidAlive(child.pid), true);
 });
 
+test("reconcile treats corrupt leases with committed work as stale evidence", () => {
+  const fixture = setupRepo({ committedWork: true });
+  const leasePath = path.join(fixture.runDir, "lease.json");
+  fs.writeFileSync(leasePath, "{\"pid\":", "utf-8");
+
+  const result = parseJsonResult(runReconcile(fixture));
+
+  assert.equal(result.row, 4);
+  assert.equal(result.status, "recovered");
+  assert.equal(result.leaseStatus, "corrupt");
+  assert.match(result.leaseError, /invalid run lease/);
+  assert.equal(fs.existsSync(leasePath), false);
+  const manifest = readManifest(fixture.manifestPath).data;
+  assert.equal(manifest.state, STATES.REVIEW_PENDING);
+  const events = readRunEvents(fixture.repoRoot, fixture.runId);
+  const stateRecovery = events.find((event) => event.event === EVENTS.STATE_RECOVERY);
+  assert.equal(stateRecovery.failure_class, "corrupt_run_lease");
+  assert.match(stateRecovery.failure_reason, /invalid run lease/);
+});
+
+test("reconcile treats corrupt leases without work as stale retry evidence", () => {
+  const fixture = setupRepo();
+  const leasePath = path.join(fixture.runDir, "lease.json");
+  fs.writeFileSync(leasePath, "{\"pid\":", "utf-8");
+
+  const result = parseJsonResult(runReconcile(fixture));
+
+  assert.equal(result.row, 5);
+  assert.equal(result.status, "interrupted");
+  assert.equal(result.leaseStatus, "corrupt");
+  assert.match(result.leaseError, /invalid run lease/);
+  assert.equal(fs.existsSync(leasePath), false);
+  assert.equal(readManifest(fixture.manifestPath).data.state, STATES.DISPATCHED);
+  const events = readRunEvents(fixture.repoRoot, fixture.runId);
+  assert.equal(events.at(-1).event, EVENTS.DISPATCH_INTERRUPTED);
+  assert.equal(events.at(-1).failure_class, "corrupt_run_lease");
+  assert.match(events.at(-1).failure_reason, /invalid run lease/);
+});
+
 test("reconcile row 3 kills a timed-out live lease and journals interruption", async (t) => {
   const fixture = setupRepo();
   const child = await spawnSleeper(t);

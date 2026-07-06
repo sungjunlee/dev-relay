@@ -16,7 +16,7 @@ const { getActorName, writeManifest } = require("./manifest/store");
 const { findUnknownFlags, modeLabel, readArg, schemaHasFlag } = require("./cli-args");
 const { resolveManifestRecord } = require("./relay-resolver");
 const { appendEventLineToPath, appendRunEvent, EVENTS } = require("./relay-events");
-const { assertNoLiveRunLease } = require("./run-runtime-state");
+const { assertNoLiveRunLease, corruptRunLeaseReportFields } = require("./run-runtime-state");
 
 const args = process.argv.slice(2);
 const CLI_ARG_OPTIONS = { commandName: "close-run", reservedFlags: ["-h"] };
@@ -162,7 +162,7 @@ function main() {
   if (safeData.state === STATES.MERGED || safeData.state === STATES.CLOSED) {
     throw new Error(`close-run only supports active runs, got '${safeData.state}'`);
   }
-  assertNoLiveRunLease({
+  const leaseStatus = assertNoLiveRunLease({
     repoRoot,
     runId: safeData.run_id,
     force,
@@ -222,6 +222,7 @@ function main() {
     cleanup: cleanupResult.summary,
     dryRun,
     force,
+    ...corruptRunLeaseReportFields(leaseStatus),
   };
 
   if (jsonOut) {

@@ -35,7 +35,7 @@ const {
 const { findUnknownFlags, modeLabel, readArg, schemaHasFlag } = require("./cli-args");
 const { appendRunEvent, EVENTS } = require("./relay-events");
 const { safeFormatRunId } = require("./relay-resolver");
-const { assertNoLiveRunLease } = require("./run-runtime-state");
+const { assertNoLiveRunLease, corruptRunLeaseReportFields } = require("./run-runtime-state");
 const {
   DEFAULT_STALE_DAYS,
   assessRunWorktreeHealth,
@@ -244,8 +244,9 @@ function run() {
       reconcileMerged
       && health.reconcileEligible
     ) {
+      let leaseStatus = null;
       try {
-        assertNoLiveRunLease({
+        leaseStatus = assertNoLiveRunLease({
           repoRoot,
           runId: normalizedData.run_id,
           force,
@@ -264,6 +265,7 @@ function run() {
         });
         continue;
       }
+      const leaseReport = corruptRunLeaseReportFields(leaseStatus);
 
       let reconcileData = normalizedData;
       if (!dryRun) {
@@ -297,6 +299,7 @@ function run() {
 
       const item = {
         ...enrichedBaseInfo,
+        ...leaseReport,
         state: dryRun ? normalizedData.state : reconcileData.state,
         cleanupStatus: cleanupResult.summary.cleanupStatus,
         nextAction: cleanupResult.summary.nextAction,
@@ -348,8 +351,9 @@ function run() {
       continue;
     }
 
+    let leaseStatus = null;
     try {
-      assertNoLiveRunLease({
+      leaseStatus = assertNoLiveRunLease({
         repoRoot,
         runId: normalizedData.run_id,
         force,
@@ -368,6 +372,7 @@ function run() {
       });
       continue;
     }
+    const leaseReport = corruptRunLeaseReportFields(leaseStatus);
 
     const cleanupResult = runCleanup({
       repoRoot,
@@ -379,6 +384,7 @@ function run() {
 
     const item = {
       ...enrichedBaseInfo,
+      ...leaseReport,
       cleanupStatus: cleanupResult.summary.cleanupStatus,
       nextAction: cleanupResult.summary.nextAction,
       worktreeRemoved: cleanupResult.summary.worktreeRemoved,

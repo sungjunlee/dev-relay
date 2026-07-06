@@ -197,6 +197,40 @@ function readRunLease(repoRoot, runId) {
   }
 }
 
+function buildCorruptRunLeaseStatus(leasePath, error) {
+  return {
+    exists: true,
+    lease: null,
+    leasePath,
+    live: false,
+    canSignal: false,
+    reason: "corrupt",
+    status: "corrupt",
+    elapsed_s: null,
+    remaining_s: null,
+    error: error.message,
+  };
+}
+
+function corruptRunLeaseReportFields(status) {
+  if (status?.reason !== "corrupt") return {};
+  return {
+    leaseStatus: "corrupt",
+    leasePath: status.leasePath,
+    leaseError: status.error || "invalid run lease",
+  };
+}
+
+function corruptRunLeaseEventFields(status) {
+  if (status?.reason !== "corrupt") return {};
+  return {
+    status: "corrupt",
+    failure_class: "corrupt_run_lease",
+    failure_reason: status.error || "invalid run lease",
+    artifact_path: status.leasePath,
+  };
+}
+
 function writeRunLease(repoRoot, runId, { pid = process.pid, pgid, host = os.hostname(), startedAt = new Date().toISOString(), timeoutS }) {
   ensureRunLayout(repoRoot, runId);
   const lease = normalizeLease({
@@ -219,7 +253,12 @@ function removeRunLease(repoRoot, runId) {
 
 function getRunLeaseStatus(repoRoot, runId) {
   const leasePath = getLeasePath(repoRoot, runId);
-  const lease = readRunLease(repoRoot, runId);
+  let lease = null;
+  try {
+    lease = readRunLease(repoRoot, runId);
+  } catch (error) {
+    return buildCorruptRunLeaseStatus(leasePath, error);
+  }
   if (!lease) {
     return {
       exists: false,
@@ -290,6 +329,8 @@ module.exports = {
   DISPATCH_STDOUT_LOG,
   LEASE_FILENAME,
   assertNoLiveRunLease,
+  corruptRunLeaseEventFields,
+  corruptRunLeaseReportFields,
   dispatchManifestPathFields,
   formatLeaseForMessage,
   getDispatchResultCandidates,
