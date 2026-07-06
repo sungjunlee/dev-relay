@@ -84,6 +84,7 @@ node skills/relay-dispatch/scripts/dispatch.js . -b test-branch -p "task" --dry-
 
 # Dispatch with rubric (persists rubric for reviewer)
 node skills/relay-dispatch/scripts/dispatch.js . -b issue-42 --prompt-file /tmp/dispatch-42.md --rubric-file /tmp/rubric-42.yaml
+node skills/relay-dispatch/scripts/dispatch.js . -b issue-42 --prompt-file /tmp/dispatch-42.md --rubric-file /tmp/rubric-42.yaml --detach --json
 
 # Worktree cleanup
 node skills/relay-dispatch/scripts/cleanup-worktrees.js --repo . --dry-run
@@ -104,6 +105,9 @@ node skills/relay-dispatch/scripts/rebrand-evidence.js --run-id <id> --reason ".
 # Finalize / merge (cross-skill: finalize-run lives under relay-merge, not relay-dispatch)
 node skills/relay-merge/scripts/finalize-run.js --run-id <id> --merge-method squash --json
 node skills/relay-merge/scripts/finalize-run.js --run-id <id> --force-finalize-nonready --reason "..." --json
+
+# Final gate for broad changes (serialize; fleet condition waits can flake under parallel file execution)
+node --test --test-concurrency=1 tests/relay-ready/scripts/*.test.js tests/relay-plan/scripts/*.test.js tests/relay-dispatch/scripts/*.test.js tests/relay-review/scripts/*.test.js tests/relay-merge/scripts/*.test.js tests/relay/scripts/*.test.js tests/relay-config/scripts/*.test.js tests/relay-fleet/scripts/*.test.js tests/skills-lint/scripts/*.test.js
 ```
 
 ## Key Design Decisions

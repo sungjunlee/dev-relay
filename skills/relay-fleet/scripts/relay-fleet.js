@@ -35,6 +35,7 @@ const {
   upsertFleetChild,
 } = require("../../relay-dispatch/scripts/manifest/fleet");
 const { getRequestPath, readRequestArtifact } = require("../../relay-ready/scripts/relay-request");
+const { runReconcile } = require("../../relay-dispatch/scripts/reconcile-advisory");
 
 const DEFAULT_PARALLEL = 4;
 const DEFAULT_DISPATCH_SCRIPT = path.join(__dirname, "..", "..", "relay-dispatch", "scripts", "dispatch.js");
@@ -375,6 +376,10 @@ function processIsAlive(pid) {
   }
 }
 
+function sleepAsync(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function readRuntime(repoRoot, fleetId) {
   const runtimePath = getFleetRuntimePath(repoRoot, fleetId);
   const runtime = readJsonIfExists(runtimePath, { fleet_id: fleetId, children: {} });
@@ -572,6 +577,7 @@ function buildDispatchArgs({ repoRoot, fleetId, leaf, options }) {
   }
   if (leaf.register || options.register) args.push("--register");
   if (options.dryRun) args.push("--dry-run");
+  else args.push("--detach");
   return args;
 }
 
@@ -588,6 +594,85 @@ function parseDispatchJson(stdout) {
     } catch {}
   }
   return null;
+}
+
+function dispatchPollTimeoutMs(leaf, options) {
+  const rawSeconds = Number(leaf.timeout || options.timeout || 2400);
+  const seconds = Number.isFinite(rawSeconds) && rawSeconds > 0 ? rawSeconds : 2400;
+  const envOverride = Number(process.env.RELAY_FLEET_DISPATCH_POLL_TIMEOUT_MS || 0);
+  if (Number.isFinite(envOverride) && envOverride > 0) return envOverride;
+  return (seconds + 60) * 1000;
+}
+
+function readRunState(repoRoot, runId) {
+  const manifestPath = getManifestPath(repoRoot, runId);
+  if (!fs.existsSync(manifestPath)) return null;
+  return readManifest(manifestPath).data?.state || null;
+}
+
+function reconcileDryRun(repoRoot, runId) {
+  try {
+    return runReconcile({ repoRoot, runId, mutate: false });
+  } catch (error) {
+    return {
+      status: "error",
+      error: error.message,
+    };
+  }
+}
+
+async function waitForDetachedDispatchProgress({ repoRoot, runId, leaf, options, isInterrupted }) {
+  const deadline = Date.now() + dispatchPollTimeoutMs(leaf, options);
+  let lastReconcile = null;
+  while (Date.now() < deadline) {
+    if (isInterrupted()) {
+      return { status: "skipped_interrupted", run_id: runId, reconcile: lastReconcile };
+    }
+
+    const runState = readRunState(repoRoot, runId);
+    if (runState && runState !== RUN_STATES.DISPATCHED) {
+      return { status: "dispatched", run_id: runId, run_state: runState, reconcile: lastReconcile };
+    }
+
+    if (runState === RUN_STATES.DISPATCHED) {
+      lastReconcile = reconcileDryRun(repoRoot, runId);
+      if (lastReconcile.rowName === "dead_with_result_or_work") {
+        const healed = runReconcile({ repoRoot, runId, mutate: true });
+        return {
+          status: healed.state === RUN_STATES.DISPATCHED ? "dispatch_reconcile_incomplete" : "dispatched",
+          run_id: runId,
+          run_state: healed.state,
+          reconcile: healed,
+        };
+      }
+      if (lastReconcile.rowName === "dead_no_result_no_work") {
+        const healed = runReconcile({ repoRoot, runId, mutate: true });
+        return {
+          status: "dispatch_interrupted",
+          run_id: runId,
+          run_state: healed.state,
+          reconcile: healed,
+        };
+      }
+      if (lastReconcile.rowName === "not_dispatched") {
+        return {
+          status: "dispatched",
+          run_id: runId,
+          run_state: lastReconcile.state,
+          reconcile: lastReconcile,
+        };
+      }
+    }
+
+    await sleepAsync(runState === RUN_STATES.DISPATCHED ? 2000 : 250);
+  }
+
+  return {
+    status: "dispatch_poll_timeout",
+    run_id: runId,
+    run_state: readRunState(repoRoot, runId),
+    reconcile: lastReconcile,
+  };
 }
 
 function buildReviewArgs({ repoRoot, runId, options }) {
@@ -982,48 +1067,44 @@ function terminateChild(child) {
   }
 }
 
-function spawnDispatchForLeaf({ repoRoot, fleetId, leaf, options, activeChildren, isInterrupted }) {
-  return new Promise((resolve) => {
-    if (isInterrupted()) {
-      resolve({ leaf_ref: leaf.leaf_ref, status: "skipped_interrupted" });
-      return;
-    }
+async function spawnDispatchForLeaf({ repoRoot, fleetId, leaf, options, activeChildren, isInterrupted }) {
+  if (isInterrupted()) {
+    return { leaf_ref: leaf.leaf_ref, status: "skipped_interrupted" };
+  }
 
-    if (!options.dryRun) {
-      try {
-        const lock = acquireIssueLock({
-          repoRoot,
-          issueNumber: leaf.issue_number,
-          fleetId,
-          runId: null,
-        });
-        releaseIssueLock(lock);
-      } catch (error) {
-        if (!(error instanceof FleetIssueLockError)) {
-          resolve({ leaf_ref: leaf.leaf_ref, status: "failed", error: String(error.message || error) });
-          return;
-        }
-        setFleetChild(repoRoot, fleetId, {
-          leaf_ref: leaf.leaf_ref,
-          run_id: null,
-          dispatch_status: DISPATCH_STATUS.DISPATCH_FAILED_PRE_MANIFEST,
-        });
-        resolve({ leaf_ref: leaf.leaf_ref, status: "dispatch_failed_pre_manifest", error: error.message });
-        return;
+  if (!options.dryRun) {
+    try {
+      const lock = acquireIssueLock({
+        repoRoot,
+        issueNumber: leaf.issue_number,
+        fleetId,
+        runId: null,
+      });
+      releaseIssueLock(lock);
+    } catch (error) {
+      if (!(error instanceof FleetIssueLockError)) {
+        return { leaf_ref: leaf.leaf_ref, status: "failed", error: String(error.message || error) };
       }
-
       setFleetChild(repoRoot, fleetId, {
         leaf_ref: leaf.leaf_ref,
         run_id: null,
-        dispatch_status: DISPATCH_STATUS.DISPATCHING,
+        dispatch_status: DISPATCH_STATUS.DISPATCH_FAILED_PRE_MANIFEST,
       });
+      return { leaf_ref: leaf.leaf_ref, status: "dispatch_failed_pre_manifest", error: error.message };
     }
 
-    const args = buildDispatchArgs({ repoRoot, fleetId, leaf, options });
+    setFleetChild(repoRoot, fleetId, {
+      leaf_ref: leaf.leaf_ref,
+      run_id: null,
+      dispatch_status: DISPATCH_STATUS.DISPATCHING,
+    });
+  }
+
+  const args = buildDispatchArgs({ repoRoot, fleetId, leaf, options });
+  const launch = await new Promise((resolve) => {
     const child = spawn(process.execPath, args, {
       cwd: repoRoot,
       env: process.env,
-      detached: process.platform !== "win32",
       stdio: ["ignore", "pipe", "pipe"],
     });
 
@@ -1031,7 +1112,6 @@ function spawnDispatchForLeaf({ repoRoot, fleetId, leaf, options, activeChildren
     let stderr = "";
     let settled = false;
     activeChildren.set(leaf.leaf_ref, child);
-    if (!options.dryRun) upsertRuntimeChild(repoRoot, fleetId, leaf, child);
 
     child.stdout.on("data", (chunk) => { stdout += chunk.toString("utf-8"); });
     child.stderr.on("data", (chunk) => { stderr += chunk.toString("utf-8"); });
@@ -1039,72 +1119,102 @@ function spawnDispatchForLeaf({ repoRoot, fleetId, leaf, options, activeChildren
       if (settled) return;
       settled = true;
       activeChildren.delete(leaf.leaf_ref);
-      if (!options.dryRun) {
-        removeRuntimeChild(repoRoot, fleetId, leaf.leaf_ref);
-        setFleetChild(repoRoot, fleetId, {
-          leaf_ref: leaf.leaf_ref,
-          run_id: null,
-          dispatch_status: DISPATCH_STATUS.DISPATCH_FAILED_PRE_MANIFEST,
-        });
-      }
-      resolve({ leaf_ref: leaf.leaf_ref, status: "dispatch_failed_pre_manifest", error: error.message });
+      resolve({ code: 1, signal: null, stdout, stderr, error: error.message });
     });
     child.once("close", (code, signal) => {
       if (settled) return;
       settled = true;
       activeChildren.delete(leaf.leaf_ref);
-      if (!options.dryRun) removeRuntimeChild(repoRoot, fleetId, leaf.leaf_ref);
-
-      const payload = parseDispatchJson(stdout);
-      if (options.dryRun) {
-        resolve({
-          leaf_ref: leaf.leaf_ref,
-          status: code === 0 ? "dry_run" : "dry_run_failed",
-          exit_code: code,
-          signal,
-          payload,
-          stderr,
-        });
-        return;
-      }
-
-      let runId = payload?.runId || null;
-      if (!runId) {
-        const record = findRunRecordForLeaf(listFleetRunRecords(repoRoot, fleetId), leaf);
-        runId = record?.data?.run_id || null;
-      }
-
-      if (runId) {
-        setFleetChild(repoRoot, fleetId, {
-          leaf_ref: leaf.leaf_ref,
-          run_id: runId,
-          dispatch_status: DISPATCH_STATUS.DISPATCHED,
-        });
-        resolve({
-          leaf_ref: leaf.leaf_ref,
-          status: code === 0 ? "dispatched" : "dispatched_with_child_failure",
-          run_id: runId,
-          exit_code: code,
-          signal,
-          stderr,
-        });
-        return;
-      }
-
-      setFleetChild(repoRoot, fleetId, {
-        leaf_ref: leaf.leaf_ref,
-        run_id: null,
-        dispatch_status: DISPATCH_STATUS.DISPATCH_FAILED_PRE_MANIFEST,
-      });
-      resolve({
-        leaf_ref: leaf.leaf_ref,
-        status: "dispatch_failed_pre_manifest",
-        exit_code: code,
-        signal,
-        stderr,
-      });
+      resolve({ code: code ?? 1, signal, stdout, stderr, error: null });
     });
   });
+
+  const payload = parseDispatchJson(launch.stdout);
+  if (options.dryRun) {
+    return {
+      leaf_ref: leaf.leaf_ref,
+      status: launch.code === 0 ? "dry_run" : "dry_run_failed",
+      exit_code: launch.code,
+      signal: launch.signal,
+      payload,
+      stderr: launch.stderr,
+      error: launch.error,
+    };
+  }
+
+  let runId = payload?.runId || null;
+  if (!runId) {
+    const record = findRunRecordForLeaf(listFleetRunRecords(repoRoot, fleetId), leaf);
+    runId = record?.data?.run_id || null;
+  }
+
+  if (!runId || launch.code !== 0) {
+    setFleetChild(repoRoot, fleetId, {
+      leaf_ref: leaf.leaf_ref,
+      run_id: runId,
+      dispatch_status: runId ? DISPATCH_STATUS.DISPATCHED : DISPATCH_STATUS.DISPATCH_FAILED_PRE_MANIFEST,
+    });
+    if (runId && payload?.supervisorPid) {
+      upsertRuntimeProcess(repoRoot, fleetId, leaf.leaf_ref, { pid: payload.supervisorPid }, {
+        phase: "dispatch",
+        run_id: runId,
+        branch: leaf.branch,
+        issue_number: leaf.issue_number,
+      });
+    }
+    return {
+      leaf_ref: leaf.leaf_ref,
+      status: runId ? "dispatched_with_child_failure" : "dispatch_failed_pre_manifest",
+      run_id: runId,
+      exit_code: launch.code,
+      signal: launch.signal,
+      stderr: launch.stderr,
+      payload,
+      error: launch.error,
+    };
+  }
+
+  setFleetChild(repoRoot, fleetId, {
+    leaf_ref: leaf.leaf_ref,
+    run_id: runId,
+    dispatch_status: DISPATCH_STATUS.DISPATCHING,
+  });
+  if (payload?.supervisorPid) {
+    upsertRuntimeProcess(repoRoot, fleetId, leaf.leaf_ref, { pid: payload.supervisorPid }, {
+      phase: "dispatch",
+      run_id: runId,
+      branch: leaf.branch,
+      issue_number: leaf.issue_number,
+    });
+  }
+
+  const progress = await waitForDetachedDispatchProgress({
+    repoRoot,
+    runId,
+    leaf,
+    options,
+    isInterrupted,
+  });
+  if (progress.status !== "skipped_interrupted") {
+    removeRuntimeChild(repoRoot, fleetId, leaf.leaf_ref);
+  }
+  setFleetChild(repoRoot, fleetId, {
+    leaf_ref: leaf.leaf_ref,
+    run_id: runId,
+    dispatch_status: DISPATCH_STATUS.DISPATCHED,
+  });
+
+  return {
+    leaf_ref: leaf.leaf_ref,
+    status: progress.status,
+    run_id: runId,
+    exit_code: launch.code,
+    signal: launch.signal,
+    stderr: launch.stderr,
+    payload,
+    reconcile: progress.reconcile,
+    run_state: progress.run_state,
+  };
 }
 
 function childNeedsDispatch(child) {

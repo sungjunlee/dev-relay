@@ -196,6 +196,7 @@ function writeFakeDispatchScript(tmpDir) {
   fs.writeFileSync(scriptPath, `#!/usr/bin/env node
 const fs = require("node:fs");
 const path = require("node:path");
+const { spawn } = require("node:child_process");
 
 const sourceRoot = process.env.RELAY_SOURCE_ROOT;
 const {
@@ -238,7 +239,10 @@ function sleep(ms) {
 }
 function appendLog(record) {
   if (!process.env.FAKE_DISPATCH_LOG) return;
-  fs.appendFileSync(process.env.FAKE_DISPATCH_LOG, JSON.stringify(record) + "\\n", "utf-8");
+  fs.appendFileSync(process.env.FAKE_DISPATCH_LOG, JSON.stringify({
+    ...record,
+    detachedChild: process.env.FAKE_DETACHED_CHILD === "1",
+  }) + "\\n", "utf-8");
 }
 async function main() {
   const manifestInput = get("--manifest");
@@ -276,7 +280,38 @@ async function main() {
   }
   const plan = config[branch] || {};
   const issueNumber = issueFromBranch(branch);
+  const runId = plan.run_id || \`issue-\${issueNumber}-2026051401010\${String(Math.abs(branch.length) % 10)}000-a1b2c3d4\`;
+  const manifestPath = getManifestPath(repoRoot, runId);
+  const runDir = getRunDir(repoRoot, runId);
   appendLog({ event: "spawn", branch, leafId, fleetId, dryRun, args });
+  if (has("--detach") && plan.fail_before_manifest) {
+    process.stderr.write("fake pre-manifest failure\\n");
+    process.exit(plan.exit_code || 17);
+  }
+  if (has("--detach") && process.env.FAKE_DETACHED_CHILD !== "1") {
+    const childArgs = process.argv.slice(1).filter((arg) => arg !== "--detach");
+    const child = spawn(process.execPath, childArgs, {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        FAKE_DETACHED_CHILD: "1",
+      },
+      detached: true,
+      stdio: "ignore",
+    });
+    child.unref();
+    process.stdout.write(JSON.stringify({
+      status: "detached",
+      runId,
+      manifestPath,
+      runDir,
+      stdoutLog: path.join(runDir, "dispatch-stdout.log"),
+      stderrLog: path.join(runDir, "dispatch-stderr.log"),
+      supervisorPid: child.pid,
+      reconcileCommand: \`node skills/relay-dispatch/scripts/reconcile-run.js --repo . --run-id \${runId}\`,
+    }) + "\\n");
+    return;
+  }
   if (plan.delay_before_manifest_ms) {
     await sleep(plan.delay_before_manifest_ms);
   }
@@ -284,9 +319,6 @@ async function main() {
     process.stderr.write("fake pre-manifest failure\\n");
     process.exit(plan.exit_code || 17);
   }
-  const runId = plan.run_id || \`issue-\${issueNumber}-2026051401010\${String(Math.abs(branch.length) % 10)}000-a1b2c3d4\`;
-  const manifestPath = getManifestPath(repoRoot, runId);
-  const runDir = getRunDir(repoRoot, runId);
   if (!dryRun && plan.create_manifest !== false) {
     fs.mkdirSync(runDir, { recursive: true });
     let manifest = createManifestSkeleton({
@@ -302,6 +334,14 @@ async function main() {
       doneCriteriaPath: get("--done-criteria-file"),
       fleetId,
     });
+    fs.writeFileSync(path.join(runDir, "rubric.yaml"), "rubric:\\n  size_class: S\\n", "utf-8");
+    manifest = {
+      ...manifest,
+      anchor: {
+        ...(manifest.anchor || {}),
+        rubric_path: "rubric.yaml",
+      },
+    };
     manifest = updateManifestState(manifest, STATES.DISPATCHED, "await_dispatch_result");
     if (plan.run_state === "review_pending") {
       manifest = updateManifestState(manifest, STATES.REVIEW_PENDING, "await_review");
@@ -541,6 +581,51 @@ test("relay-fleet records and resumes a child dispatch that fails before manifes
   assert.match(child.run_id, /^issue-483-/);
 });
 
+test("relay-fleet launches leaf dispatch with --detach and polls the manifest instead of holding the launcher", () => {
+  const { relayHome, repoRoot } = setupRepo("relay-fleet-detach-");
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "fleet-fake-"));
+  const dispatchScript = writeFakeDispatchScript(tmpDir);
+  const configPath = path.join(tmpDir, "config.json");
+  const logPath = path.join(tmpDir, "dispatch.log");
+  const leaf = makeLeaf(repoRoot, 1, { issue_number: 802 });
+  const leavesFile = writeLeavesFile(repoRoot, [leaf]);
+  writeJson(configPath, {
+    [leaf.branch]: {
+      delay_before_manifest_ms: 900,
+      delay_after_manifest_ms: 5000,
+      run_state: "review_pending",
+    },
+  });
+
+  const started = Date.now();
+  const result = runFleet([
+    "--repo", repoRoot,
+    "--fleet-id", "fleet-detach",
+    "--leaves-file", leavesFile,
+    "--dispatch-script", dispatchScript,
+    "--json",
+  ], {
+    relayHome,
+    env: {
+      FAKE_DISPATCH_CONFIG: configPath,
+      FAKE_DISPATCH_LOG: logPath,
+    },
+    timeout: 7000,
+  });
+  const elapsedMs = Date.now() - started;
+
+  assert.equal(result.status, 0, `${result.stderr}\n${result.stdout}`);
+  assert.ok(elapsedMs < 4500, `fleet should not wait for detached child tail delay; elapsed=${elapsedMs}`);
+  const logs = readJsonLines(logPath);
+  assert.ok(logs.some((entry) => entry.args.includes("--detach")), "fleet must pass --detach to dispatch.js");
+  const fleet = readFleetManifest(repoRoot, "fleet-detach").data;
+  const child = fleet.children[0];
+  assert.equal(child.dispatch_status, DISPATCH_STATUS.DISPATCHED);
+  assert.match(child.run_id, /^issue-802-/);
+  const manifest = readManifest(getManifestPath(repoRoot, child.run_id)).data;
+  assert.equal(manifest.state, RUN_STATES.REVIEW_PENDING);
+});
+
 test("relay-fleet keeps manifest consistent when child 3 of 5 fails before manifest creation", () => {
   const { relayHome, repoRoot } = setupRepo("relay-fleet-partial-");
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "fleet-fake-"));
@@ -704,7 +789,7 @@ test("resume while a child subprocess is still running does not double-dispatch"
     stdio: ["ignore", "pipe", "pipe"],
   });
 
-  await waitFor(() => readJsonLines(logPath).length === 1);
+  await waitFor(() => readJsonLines(logPath).filter((entry) => !entry.detachedChild).length === 1);
   await waitFor(() => readFleetManifest(repoRoot, "fleet-running").data.children[0]?.dispatch_status === DISPATCH_STATUS.DISPATCHING);
 
   const resumed = runFleet([
@@ -722,7 +807,7 @@ test("resume while a child subprocess is still running does not double-dispatch"
   });
 
   assert.equal(resumed.status, 0, resumed.stderr);
-  assert.equal(readJsonLines(logPath).length, 1);
+  assert.equal(readJsonLines(logPath).filter((entry) => !entry.detachedChild).length, 1);
   await new Promise((resolve) => first.on("close", resolve));
 });
 

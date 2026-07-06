@@ -23,6 +23,7 @@ const {
   readArg,
   schemaHasFlag,
 } = require("./cli-args");
+const { listDeadDispatchedRunAdvisories } = require("./reconcile-advisory");
 
 const args = process.argv.slice(2);
 const COMMAND_NAME = "relay-config";
@@ -424,6 +425,7 @@ function commandDoctor(positionals, jsonOut) {
   const tools = toolNames.map((name) => doctorTool(result.policy, name));
   const projectConfig = loadProjectConfig({ repoRoot: process.cwd() });
   const projectRoutes = loadProjectRoutes({ repoRoot: process.cwd() });
+  const advisories = listDeadDispatchedRunAdvisories(process.cwd());
   const output = {
     ok: true,
     status: result.status,
@@ -431,6 +433,7 @@ function commandDoctor(positionals, jsonOut) {
     project_config: projectConfig,
     project_routes: projectRoutes,
     tools,
+    advisories,
   };
 
   if (jsonOut) {
@@ -440,6 +443,13 @@ function commandDoctor(positionals, jsonOut) {
     for (const tool of tools) {
       const installed = tool.installed ? `installed at ${tool.path}` : "not installed on PATH";
       console.log(`${tool.name}: ${installed}; ${displayToolRouteStatus(tool)} (${tool.reason})`);
+    }
+    for (const advisory of advisories) {
+      if (advisory.kind !== "dead_dispatched_run") continue;
+      console.log(
+        `advisory: run ${advisory.runId} is dispatched with ${advisory.leaseStatus} lease; ` +
+        `reconcile row ${advisory.reconcile?.row || "unknown"} (${advisory.reconcile?.rowName || "unknown"})`
+      );
     }
   }
 }

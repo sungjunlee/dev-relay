@@ -11,6 +11,7 @@ const {
   captureAttempt,
   createRunId,
   getEventsPath,
+  getManifestPath,
   getRubricAnchorStatus,
   getRunDir,
   listManifestPaths,
@@ -164,6 +165,37 @@ fs.writeFileSync(cwd + "/" + fileName, fileName + "\\n", "utf-8");
 execFileSync("git", ["-C", cwd, "add", fileName], { stdio: "pipe" });
 execFileSync("git", ["-C", cwd, "commit", "-m", "fake " + fileName], { stdio: "pipe" });
 fs.writeFileSync(output, "ok\\n", "utf-8");
+`, "utf-8");
+  fs.chmodSync(codexPath, 0o755);
+  return codexPath;
+}
+
+function writeDelayedCompletionCodex(binDir, markerPath) {
+  ensureDefaultFakeGh(binDir);
+  const codexPath = path.join(binDir, "codex");
+  fs.writeFileSync(codexPath, `#!/usr/bin/env node
+const fs = require("fs");
+const { execFileSync } = require("child_process");
+const args = process.argv.slice(2);
+if (args[0] === "--version") {
+  process.stdout.write("codex-fake\\n");
+  process.exit(0);
+}
+if (args[0] !== "exec") {
+  process.stderr.write("unsupported fake codex invocation");
+  process.exit(1);
+}
+const cwd = args[args.indexOf("-C") + 1];
+const output = args[args.indexOf("-o") + 1];
+const delayMs = Number(process.env.RELAY_TEST_DETACH_EXECUTOR_DELAY_MS || 2500);
+setTimeout(() => {
+  fs.writeFileSync(${JSON.stringify(markerPath)}, JSON.stringify({ pid: process.pid, ppid: process.ppid }), "utf-8");
+  fs.writeFileSync(cwd + "/detached.txt", "detached completed\\n", "utf-8");
+  execFileSync("git", ["-C", cwd, "add", "detached.txt"], { stdio: "pipe" });
+  execFileSync("git", ["-C", cwd, "commit", "-m", "fake detached completion"], { stdio: "pipe" });
+  fs.writeFileSync(output, "detached ok\\n", "utf-8");
+  process.exit(0);
+}, delayMs);
 `, "utf-8");
   fs.chmodSync(codexPath, 0o755);
   return codexPath;
@@ -1112,6 +1144,75 @@ async function waitForDispatchExit(proc) {
 function readExecutionEvidence(runDir) {
   return JSON.parse(fs.readFileSync(path.join(runDir, EXECUTION_EVIDENCE_FILENAME), "utf-8"));
 }
+
+test("dispatch --detach returns a launch receipt while detached supervisor completes the run", async () => {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-detach-bin-"));
+  const markerPath = path.join(os.tmpdir(), `relay-dispatch-detach-${Date.now()}.json`);
+  writeDelayedCompletionCodex(binDir, markerPath);
+  const env = {
+    ...process.env,
+    PATH: `${binDir}:${process.env.PATH}`,
+    RELAY_HOME: relayHome,
+    RELAY_TEST_DETACH_EXECUTOR_DELAY_MS: "8000",
+  };
+
+  const started = Date.now();
+  const launched = spawnSync(process.execPath, [SCRIPT, repoRoot, ...withRequiredRubric([
+    "-b", "issue-802-detach",
+    "--prompt", "detached launch task",
+    "--detach",
+    "--json",
+  ])], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    env,
+    timeout: 7000,
+  });
+  const elapsedMs = Date.now() - started;
+
+  assert.equal(launched.status, 0, `${launched.stderr}\n${launched.stdout}`);
+  assert.ok(elapsedMs < 7000, `detach parent should return before delayed executor finishes; elapsed=${elapsedMs}`);
+  assert.equal(fs.existsSync(markerPath), false, "executor should not have completed before detach receipt returned");
+  const receipt = JSON.parse(launched.stdout);
+  assert.equal(receipt.status, "detached");
+  assert.match(receipt.runId, /^issue-802-/);
+  assert.equal(receipt.manifestPath, getManifestPath(repoRoot, receipt.runId));
+  assert.equal(Number.isInteger(receipt.supervisorPid), true);
+  assert.ok(receipt.supervisorPid > 0);
+  assert.equal(receipt.stdoutLog, path.join(getRunDir(repoRoot, receipt.runId), "dispatch-stdout.log"));
+  assert.equal(receipt.stderrLog, path.join(getRunDir(repoRoot, receipt.runId), "dispatch-stderr.log"));
+  assert.equal(fs.existsSync(receipt.stdoutLog), true);
+  assert.equal(fs.existsSync(receipt.stderrLog), true);
+  assert.match(receipt.reconcileCommand, new RegExp(`node skills/relay-dispatch/scripts/reconcile-run\\.js --repo .* --run-id ${receipt.runId}`));
+  assert.doesNotMatch(receipt.reconcileCommand, /--dry-run/);
+  assert.doesNotThrow(() => process.kill(receipt.supervisorPid, 0));
+
+  await waitFor(() => fs.existsSync(markerPath), {
+    timeoutMs: 15000,
+    intervalMs: 100,
+    message: "detached executor completion marker",
+  });
+  await waitFor(() => {
+    const manifest = readManifest(receipt.manifestPath).data;
+    return manifest.state === STATES.REVIEW_PENDING && !fs.existsSync(path.join(getRunDir(repoRoot, receipt.runId), "lease.json"));
+  }, {
+    timeoutMs: 15000,
+    intervalMs: 100,
+    message: "detached dispatch completion",
+  });
+
+  const reconcile = JSON.parse(execFileSync(process.execPath, [
+    path.join(__dirname, "..", "..", "..", "skills", "relay-dispatch", "scripts", "reconcile-run.js"),
+    "--repo", repoRoot,
+    "--run-id", receipt.runId,
+    "--dry-run",
+    "--json",
+  ], { cwd: repoRoot, encoding: "utf-8", env }));
+  assert.equal(reconcile.rowName, "not_dispatched");
+  assert.equal(reconcile.state, STATES.REVIEW_PENDING);
+});
 
 function guidancePrompt({ task = "guidance test task", reviewAssurance = null } = {}) {
   const reviewAssuranceLines = reviewAssurance ? [`  review_assurance: ${reviewAssurance}`] : [];

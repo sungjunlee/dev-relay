@@ -32,6 +32,9 @@ metadata:
 # Foreground (blocking — simple tasks, default executor: codex)
 node "${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/dispatch.js" . -b feature-auth -p "..." --rubric-file rubric.yaml
 
+# Detached (recommended for long/background work; survives caller shell exit)
+node "${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/dispatch.js" . -b feature-auth -p "..." --rubric-file rubric.yaml --detach --json
+
 # Same-run resume after a changes-requested review
 node "${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/dispatch.js" . --run-id issue-42-20260403120000000 --prompt-file review-round-2-redispatch.md
 
@@ -56,9 +59,12 @@ Essential flags:
 - `--rubric-file` is required for new dispatches from relay-plan.
 - `--executor, -e`, `--model, -m`, and `--model-hints` select harness/model routes subject to policy.
 - `--review-assurance`, `--request-id`, `--leaf-id`, and `--done-criteria-file` persist review and readiness anchors.
+- `--detach` starts a detached dispatch supervisor, prints a receipt, and returns before executor completion.
 - `--dry-run` validates without executing; `--json` returns structured output for orchestration.
 
 Manifest layout is `~/.relay/runs/<repo-slug>/<run-id>.md` plus `events.jsonl`; readiness linkage is persisted as `source.request_id`, `source.leaf_id`, and `anchor.done_criteria_path`. Model precedence and route-policy behavior are documented in `references/model-routing.md`.
+
+Detached JSON receipts include `runId`, `manifestPath`, `supervisorPid`, `stdoutLog`, `stderrLog`, and a copy-pasteable `reconcileCommand`. The supervisor writes `lease.json` and runtime logs in the run directory; use `reconcile-run.js --dry-run --json` to poll or diagnose a detached run.
 
 ### Executor model routing
 

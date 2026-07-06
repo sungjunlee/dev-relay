@@ -35,6 +35,7 @@ const FLAGS = [
   { flag: "--copy", kind: VALUE, mode: MODE_VERBATIM, valueName: "<file,...>", rationale: "Operator-supplied file list; keep the literal argv token." },
   { flag: "--diff-file", kind: VALUE, mode: MODE_VERBATIM, valueName: "<path>", rationale: "Operator-supplied fixture path; keep the literal argv token." },
   { flag: "--dispatch", kind: VALUE, mode: MODE_PARSED, valueName: "<actor[:provider/model]>", rationale: "Run route preview selector; flag-like following tokens should mean the value is missing." },
+  { flag: "--detach", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Launch dispatch under a detached supervisor and return a receipt; no value is consumed." },
   { flag: "--done-criteria-file", kind: VALUE, mode: MODE_VERBATIM, valueName: "<path>", rationale: "Operator-supplied anchor path; keep the literal argv token." },
   { flag: "--dry-run", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Presence flag; no value is consumed." },
   { flag: "--effective", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Presence flag; no value is consumed." },
@@ -140,7 +141,7 @@ const COMMAND_FLAGS = {
     "--model", "--model-hints", "--route-intent-file", "--sandbox", "--network-access", "--copy", "--timeout", "--reasoning", "--rubric-file",
     "--test-command", "--rubric-grandfathered", "--request-id", "--leaf-id",
     "--fleet-id", "--done-criteria-file", "--publish-policy", "--review-assurance", "--register", "--auto-recover-commit", "--no-auto-recover-commit",
-    "--tags", "--allow-conflicting-run", "--dry-run", "--json", "--help",
+    "--tags", "--allow-conflicting-run", "--detach", "--dry-run", "--json", "--help",
   ],
   "finalize-run": [
     "--repo", "--run-id", "--manifest", "--branch", "--pr", "--merge-method",

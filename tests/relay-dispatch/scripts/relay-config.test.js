@@ -12,7 +12,19 @@ const {
 const {
   validateRouteConfig,
 } = require("../../../skills/relay-dispatch/scripts/relay-routing");
-const { getProjectPolicyPath } = require("../../../skills/relay-dispatch/scripts/manifest/paths");
+const {
+  getManifestPath,
+  getProjectPolicyPath,
+  getRunDir,
+} = require("../../../skills/relay-dispatch/scripts/manifest/paths");
+const {
+  createManifestSkeleton,
+  writeManifest,
+} = require("../../../skills/relay-dispatch/scripts/manifest/store");
+const {
+  STATES,
+  updateManifestState,
+} = require("../../../skills/relay-dispatch/scripts/manifest/lifecycle");
 
 const REPO_ROOT = path.join(__dirname, "..", "..", "..");
 const SCRIPT = path.join(REPO_ROOT, "skills", "relay-dispatch", "scripts", "relay-config.js");
@@ -85,11 +97,45 @@ function initGitRepo(repoRoot) {
   execFileSync("git", ["init", "-b", "main"], { cwd: repoRoot, stdio: "pipe" });
   execFileSync("git", ["config", "user.name", "Relay Config Test"], { cwd: repoRoot, stdio: "pipe" });
   execFileSync("git", ["config", "user.email", "relay-config@example.com"], { cwd: repoRoot, stdio: "pipe" });
+  fs.writeFileSync(path.join(repoRoot, "README.md"), "base\n", "utf-8");
+  execFileSync("git", ["add", "README.md"], { cwd: repoRoot, stdio: "pipe" });
+  execFileSync("git", ["commit", "-m", "init"], { cwd: repoRoot, stdio: "pipe" });
 }
 
 function writeJson(filePath, value) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   fs.writeFileSync(filePath, JSON.stringify(value, null, 2), "utf-8");
+}
+
+function writeDeadDispatchedRun(repoRoot, relayHome, runId = "issue-802-20260707010101000-a1b2c3d4") {
+  const previousRelayHome = process.env.RELAY_HOME;
+  process.env.RELAY_HOME = relayHome;
+  const runDir = getRunDir(repoRoot, runId);
+  try {
+    fs.mkdirSync(runDir, { recursive: true });
+    fs.writeFileSync(path.join(runDir, "rubric.yaml"), "rubric:\n  size_class: S\n", "utf-8");
+    let manifest = createManifestSkeleton({
+      repoRoot,
+      runId,
+      branch: "issue-802-doctor",
+      baseBranch: "main",
+      issueNumber: 802,
+      worktreePath: path.join(repoRoot, "worktrees", runId),
+    });
+    manifest = {
+      ...manifest,
+      anchor: {
+        ...(manifest.anchor || {}),
+        rubric_path: "rubric.yaml",
+      },
+    };
+    manifest = updateManifestState(manifest, STATES.DISPATCHED, "await_dispatch_result");
+    writeManifest(getManifestPath(repoRoot, runId), manifest);
+    return { runId, manifestPath: getManifestPath(repoRoot, runId) };
+  } finally {
+    if (previousRelayHome === undefined) delete process.env.RELAY_HOME;
+    else process.env.RELAY_HOME = previousRelayHome;
+  }
 }
 
 test("init --profile company writes strict global routes config without optional scaffolding", () => {
@@ -240,6 +286,32 @@ test("doctor includes project route provenance and best-effort model probes", ()
   assert.deepEqual(opencode.model_probe.models, ["example/opencode-model-fast", "openai/gpt-5"]);
   const pi = output.tools.find((tool) => tool.name === "pi");
   assert.deepEqual(pi.model_probe.models, ["example/pi-model-fast"]);
+});
+
+test("doctor surfaces dead dispatched runs as advisory reconcile findings", () => {
+  const relayHome = tempDir();
+  const repoRoot = tempDir("relay-config-doctor-dead-run-");
+  initGitRepo(repoRoot);
+  writeJson(path.join(relayHome, "policy.json"), {
+    ...buildDefaultRelayPolicy(),
+    profile: "global",
+  });
+  const deadRun = writeDeadDispatchedRun(repoRoot, relayHome);
+
+  const result = runConfig(["doctor", "--json"], { relayHome, cwd: repoRoot });
+
+  assert.equal(result.status, 0, result.combined);
+  const output = parseJson(result);
+  const finding = output.advisories.find((entry) => entry.kind === "dead_dispatched_run");
+  assert.ok(finding, "doctor should include a dead_dispatched_run advisory");
+  assert.equal(finding.runId, deadRun.runId);
+  assert.equal(finding.manifestPath, deadRun.manifestPath);
+  assert.equal(finding.reconcile.rowName, "dead_no_result_no_work");
+  assert.equal(finding.reconcile.dryRun, true);
+  assert.deepEqual(finding.reconcile.plannedActions, [
+    "journal_dispatch_interrupted_if_needed",
+    "remove_lease_if_present",
+  ]);
 });
 
 test("doctor reports optional Pi model-list probe timeouts without masking install or policy status", () => {

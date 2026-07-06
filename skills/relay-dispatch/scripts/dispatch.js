@@ -37,6 +37,7 @@
  *   --register             Register session in executor's app (keeps worktree)
  *   --auto-recover-commit  Run recover-commit after completed-uncommitted (default: on for codex, off otherwise)
  *   --no-auto-recover-commit  Opt out of codex default auto recover-commit
+ *   --detach               Launch detached supervisor and print a receipt
  *   --dry-run              Show plan without executing
  *   --json                 Output as JSON
  *
@@ -173,7 +174,7 @@ const KNOWN_FLAGS = [
   "--branch", "-b", "--run-id", "--manifest", "--prompt", "-p", "--prompt-file", "--executor", "-e",
   "--model", "-m", "--model-hints", "--route-intent-file", "--sandbox", "--network-access", "--copy", "--timeout", "--reasoning", "--rubric-file", "--test-command", "--rubric-grandfathered",
   "--request-id", "--leaf-id", "--fleet-id", "--done-criteria-file", "--publish-policy", "--review-assurance", "--tags",
-  "--register", "--auto-recover-commit", "--no-auto-recover-commit", "--allow-conflicting-run", "--dry-run", "--json", "--help", "-h",
+  "--register", "--auto-recover-commit", "--no-auto-recover-commit", "--allow-conflicting-run", "--detach", "--dry-run", "--json", "--help", "-h",
 ];
 const CLI_ARG_OPTIONS = { commandName: "dispatch", reservedFlags: KNOWN_FLAGS };
 const hasCliFlag = (flag) => schemaHasFlag(args, flag, CLI_ARG_OPTIONS);
@@ -213,6 +214,7 @@ if (!args.length || hasCliFlag(["--help", "-h"])) {
   console.log(`  --auto-recover-commit  ${modeLabel("--auto-recover-commit")} Run recover-commit after completed-uncommitted (default: on for codex, off otherwise)`);
   console.log(`  --no-auto-recover-commit  ${modeLabel("--no-auto-recover-commit")} Opt out of codex default auto recover-commit`);
   console.log(`  --allow-conflicting-run  ${modeLabel("--allow-conflicting-run")} Bypass the in-flight run check (logs conflicting_run_override event)`);
+  console.log(`  --detach           ${modeLabel("--detach")} Launch detached supervisor and print a receipt`);
   console.log(`  --dry-run          ${modeLabel("--dry-run")} Show plan without executing`);
   console.log(`  --json             ${modeLabel("--json")} Output as JSON`);
   process.exit(hasCliFlag(["--help", "-h"]) ? 0 : 1);
@@ -463,12 +465,18 @@ const REGISTER = hasCliFlag("--register");
 const AUTO_RECOVER_COMMIT_REQUESTED = hasCliFlag("--auto-recover-commit");
 const NO_AUTO_RECOVER_COMMIT = hasCliFlag("--no-auto-recover-commit");
 const ALLOW_CONFLICTING_RUN = hasCliFlag("--allow-conflicting-run");
+const DETACH = hasCliFlag("--detach");
 const DRY_RUN = hasCliFlag("--dry-run");
 const JSON_OUT = JSON_OUT_REQUESTED;
 const RESUME_MODE = !!MANIFEST_INPUT || (!!RUN_ID && !BRANCH);
 
 if (AUTO_RECOVER_COMMIT_REQUESTED && NO_AUTO_RECOVER_COMMIT) {
   console.error("Error: use either --auto-recover-commit or --no-auto-recover-commit, not both");
+  process.exit(1);
+}
+
+if (DETACH && DRY_RUN) {
+  console.error("Error: use either --detach or --dry-run, not both");
   process.exit(1);
 }
 
@@ -592,6 +600,138 @@ function resolveBaseBranchForNewDispatch(repoDir) {
 
 function shellQuote(s) {
   return "'" + s.replace(/'/g, "'\\''") + "'";
+}
+
+const DETACH_RECEIPT_ENV = "RELAY_DISPATCH_DETACH_RECEIPT_PATH";
+let detachReceiptWritten = false;
+
+function removeDetachFlag(argv) {
+  return argv.filter((arg) => arg !== "--detach" && !String(arg).startsWith("--detach="));
+}
+
+function tailFile(filePath, maxBytes = 8192) {
+  try {
+    const stat = fs.statSync(filePath);
+    const start = Math.max(0, stat.size - maxBytes);
+    const fd = fs.openSync(filePath, "r");
+    try {
+      const buffer = Buffer.alloc(stat.size - start);
+      fs.readSync(fd, buffer, 0, buffer.length, start);
+      return buffer.toString("utf-8").trim();
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {
+    return "";
+  }
+}
+
+function reconcileCommandForReceipt(repoRoot, runId) {
+  return `node skills/relay-dispatch/scripts/reconcile-run.js --repo ${shellQuote(repoRoot)} --run-id ${runId}`;
+}
+
+function writeJsonFileAtomically(filePath, value) {
+  const tmpPath = `${filePath}.${process.pid}.tmp`;
+  fs.writeFileSync(tmpPath, `${JSON.stringify(value, null, 2)}\n`, "utf-8");
+  fs.renameSync(tmpPath, filePath);
+}
+
+function ensureEmptyFile(filePath) {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  const fd = fs.openSync(filePath, "a");
+  fs.closeSync(fd);
+}
+
+function writeDetachReceiptIfRequested({ repoRoot, runId, manifestPath, runDir, stdoutLog, stderrLog }) {
+  if (detachReceiptWritten) return;
+  const receiptPath = process.env[DETACH_RECEIPT_ENV];
+  if (!receiptPath) return;
+  if (!runId || !manifestPath || !stdoutLog || !stderrLog) return;
+  ensureEmptyFile(stdoutLog);
+  ensureEmptyFile(stderrLog);
+  writeJsonFileAtomically(receiptPath, {
+    runId,
+    runDir,
+    manifestPath,
+    stdoutLog,
+    stderrLog,
+    reconcileCommand: reconcileCommandForReceipt(repoRoot, runId),
+  });
+  detachReceiptWritten = true;
+  delete process.env[DETACH_RECEIPT_ENV];
+}
+
+async function waitForDetachReceipt({ receiptPath, stderrPath, stdoutPath, child, timeoutMs = 7000 }) {
+  const deadline = Date.now() + timeoutMs;
+  let childExit = null;
+  child.once("exit", (code, signal) => {
+    childExit = { code, signal };
+  });
+  while (Date.now() < deadline) {
+    if (fs.existsSync(receiptPath)) {
+      let receipt;
+      try {
+        receipt = JSON.parse(fs.readFileSync(receiptPath, "utf-8"));
+      } catch {
+        await sleepAsync(25);
+        continue;
+      }
+      if (!receipt.runId) {
+        throw new Error(`detached dispatch wrote an invalid receipt without runId: ${receiptPath}`);
+      }
+      return receipt;
+    }
+    if (childExit) {
+      const stderrTail = tailFile(stderrPath);
+      const stdoutTail = tailFile(stdoutPath);
+      const detail = stderrTail || stdoutTail || `child exited code=${childExit.code} signal=${childExit.signal || "none"}`;
+      throw new Error(`detached dispatch exited before receipt: ${detail}`);
+    }
+    await sleepAsync(50);
+  }
+  const stderrTail = tailFile(stderrPath);
+  const detail = stderrTail ? ` stderr tail:\n${stderrTail}` : "";
+  throw new Error(`timed out waiting for detached dispatch receipt at ${receiptPath}.${detail}`);
+}
+
+async function launchDetachedAndExit() {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-dispatch-detach-"));
+  const receiptPath = path.join(tmpDir, "receipt.json");
+  const stdoutPath = path.join(tmpDir, "supervisor-stdout.log");
+  const stderrPath = path.join(tmpDir, "supervisor-stderr.log");
+  const stdoutFd = fs.openSync(stdoutPath, "w");
+  const stderrFd = fs.openSync(stderrPath, "w");
+  let child;
+  try {
+    child = nodeSpawn(process.execPath, [__filename, ...removeDetachFlag(args)], {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        [DETACH_RECEIPT_ENV]: receiptPath,
+      },
+      detached: true,
+      stdio: ["ignore", stdoutFd, stderrFd],
+    });
+  } finally {
+    try { fs.closeSync(stdoutFd); } catch {}
+    try { fs.closeSync(stderrFd); } catch {}
+  }
+  child.unref();
+  const receipt = await waitForDetachReceipt({ receiptPath, stderrPath, stdoutPath, child });
+  const output = {
+    status: "detached",
+    ...receipt,
+    supervisorPid: child.pid,
+  };
+  if (JSON_OUT) {
+    console.log(JSON.stringify(output, null, 2));
+  } else {
+    console.log(`Detached dispatch launched: ${output.runId}`);
+    console.log(`  Manifest:  ${output.manifestPath}`);
+    console.log(`  Stdout log: ${output.stdoutLog}`);
+    console.log(`  Stderr log: ${output.stderrLog}`);
+    console.log(`  Reconcile:  ${output.reconcileCommand}`);
+  }
 }
 
 function localBranchExists(repoRoot, branch) {
@@ -1997,6 +2137,14 @@ async function main() {
       try { fs.closeSync(stderrFd); } catch {}
       throw new Error(`lease_write_failed: ${leaseError.message}`);
     }
+    writeDetachReceiptIfRequested({
+      repoRoot,
+      runId,
+      manifestPath,
+      runDir: runArtifactPaths.runDir,
+      stdoutLog,
+      stderrLog,
+    });
   }
 
   executorClosePromise = new Promise((resolve) => {
@@ -2441,7 +2589,20 @@ async function main() {
   if (status === "failed") process.exit(exitCode || 1);
 }
 
-main().catch((e) => {
-  console.error(`Error: ${e.message}`);
-  process.exit(1);
-});
+if (DETACH) {
+  launchDetachedAndExit().catch((e) => {
+    if (JSON_OUT) {
+      console.log(JSON.stringify({
+        status: "failed",
+        error: e.message,
+      }, null, 2));
+    }
+    console.error(`Error: ${e.message}`);
+    process.exit(1);
+  });
+} else {
+  main().catch((e) => {
+    console.error(`Error: ${e.message}`);
+    process.exit(1);
+  });
+}

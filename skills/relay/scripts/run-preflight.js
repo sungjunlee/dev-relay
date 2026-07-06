@@ -11,6 +11,7 @@ const {
 const { findInflightRunsForIssue } = require("../../relay-dispatch/scripts/manifest/inflight-runs");
 const { resolveManifestRecord } = require("../../relay-dispatch/scripts/relay-resolver");
 const { EVENTS } = require("../../relay-dispatch/scripts/relay-events");
+const { buildRunReconcileAdvisory } = require("../../relay-dispatch/scripts/reconcile-advisory");
 
 const EVENT_FIELD = "event";
 const INFLIGHT_ROUTE_INSTRUCTIONS = {
@@ -47,6 +48,7 @@ const KNOWN_FLAGS = [
   "--previous-verdict",
   "--previous-head-sha",
   "--previous-last-reviewed-sha",
+  "--reconcile",
   "--skip-readiness",
   "--bypass-readiness",
   "--skip-readiness-reason",
@@ -80,6 +82,7 @@ function usage() {
     "  --pr <n>                   Resolve manifest by PR number",
     "  --previous-rounds <n>      Previous review.rounds snapshot for comparison",
     "  --previous-verdict <name>  Previous review.latest_verdict snapshot for comparison",
+    "  --reconcile                Mutate dead dispatched runs by running reconcile-run.js (default: dry-run verdict only)",
   ].join("\n");
 }
 
@@ -644,12 +647,19 @@ function runReviewStage(cliArgs) {
   const repoRoot = path.resolve(cliArgs.getArg("--repo") || ".");
   const record = resolveReviewManifest(cliArgs, repoRoot);
   const snapshot = snapshotReview(record);
+  const reconcile = buildRunReconcileAdvisory({
+    repoRoot,
+    manifestPath: record.manifestPath,
+    data: record.data,
+    mutate: cliArgs.hasFlag("--reconcile"),
+  });
   return {
     ok: true,
     stage: "review",
     repo: repoRoot,
     snapshot,
     ready_status: buildReadyStatus(snapshot, repoRoot),
+    reconcile,
     comparison: compareReviewSnapshot(snapshot, cliArgs),
   };
 }
