@@ -1071,15 +1071,6 @@ function main() {
         );
       }
     }
-    if (!dryRun) {
-      const remoteDelete = deleteRemoteBranch(repoPath, branch);
-      remoteName = remoteDelete.remoteName;
-      remoteBranchDeleteAttempted = remoteDelete.attempted;
-      remoteBranchDeleted = remoteDelete.deleted;
-      remoteBranchDeleteWarning = remoteDelete.warning;
-    } else {
-      remoteBranchDeleted = true;
-    }
     updated = forceFinalizeNonready
       ? forceUpdateManifestState(updated, STATES.MERGED, "manual_cleanup_required", {
         reason: forceFinalizeReason,
@@ -1117,6 +1108,15 @@ function main() {
       if (process.env.RELAY_FINALIZE_ABORT_AFTER_MERGE_WRITE) {
         throw new Error("simulated post-merge failure after merged manifest write");
       }
+    }
+    if (!dryRun) {
+      const remoteDelete = deleteRemoteBranch(repoPath, branch);
+      remoteName = remoteDelete.remoteName;
+      remoteBranchDeleteAttempted = remoteDelete.attempted;
+      remoteBranchDeleted = remoteDelete.deleted;
+      remoteBranchDeleteWarning = remoteDelete.warning;
+    } else {
+      remoteBranchDeleted = true;
     }
   }
 

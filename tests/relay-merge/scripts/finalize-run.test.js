@@ -1400,6 +1400,7 @@ test("finalize-run writes merged state to disk before fallible post-merge steps"
   assert.equal(manifest.next_action, "manual_cleanup_required");
   assert.equal(manifest.cleanup.status, "pending");
   assert.equal(fs.existsSync(worktreePath), true);
+  assert.equal(remoteBranchExists(repoRoot, branch), true);
   const fallback = writeNullPrBranchFallbackManifest({ repoRoot, branch, worktreePath, headSha });
 
   const retryStdout = execFileSync("node", [
