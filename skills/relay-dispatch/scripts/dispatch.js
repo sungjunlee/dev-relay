@@ -1340,6 +1340,7 @@ function writeRoutePlanSnapshot({ repoRoot, runId, routePlan, policyResult, proj
   const snapshot = {
     version: 1,
     resolved_at: resolvedAt,
+    ...(routePlan.route_preset ? { route_preset: routePlan.route_preset } : {}),
     policy: {
       status: policyResult?.status || null,
       sources: policyResult?.sources || null,
@@ -1643,6 +1644,7 @@ async function main() {
       console.error("Error: " + formatInflightCollisionError(inflightRuns, { issueNumber: issueForCollisionCheck }));
       process.exit(1);
     }
+    runtime = resolveDispatchRuntime(repoRoot);
     runId = runId || createRunId({ issueNumber, branch });
     if (FLEET_ID && issueForCollisionCheck && !DRY_RUN) {
       try {
@@ -1667,7 +1669,6 @@ async function main() {
       console.error(`Error: worktree path already exists: ${wtPath}`);
       process.exit(1);
     }
-    runtime = resolveDispatchRuntime(repoRoot);
     if (inflightRuns.length > 0 && ALLOW_CONFLICTING_RUN) {
       appendRunEvent(repoRoot, runId, {
         event: EVENTS.CONFLICTING_RUN_OVERRIDE,

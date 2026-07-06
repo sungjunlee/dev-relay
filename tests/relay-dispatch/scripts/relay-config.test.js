@@ -15,6 +15,7 @@ const {
 const {
   getManifestPath,
   getProjectPolicyPath,
+  getProjectRoutesPath,
   getRunDir,
 } = require("../../../skills/relay-dispatch/scripts/manifest/paths");
 const {
@@ -926,18 +927,37 @@ test("preset add warns once when creating routes.json over legacy fallback confi
   assert.equal(fs.readFileSync(legacyPath, "utf-8"), before);
 });
 
-test("preset show reads effective presets and preset remove drops empty preset scaffolding", () => {
+test("preset show reads global presets and preset remove drops empty preset scaffolding", () => {
   const relayHome = tempDir();
+  const repoRoot = tempDir("relay-config-preset-show-repo-");
+  initGitRepo(repoRoot);
   writeJson(path.join(relayHome, "routes.json"), {
     version: 2,
     presets: {
       light: { dispatch: { executor: "codex" } },
     },
   });
+  writeJson(getProjectRoutesPath(repoRoot, { relayHome }), {
+    version: 2,
+    presets: {
+      light: { dispatch: { executor: "opencode" } },
+      project_only: { review: { reviewer: "claude" } },
+    },
+  });
 
-  const show = runConfig(["preset", "show", "light", "--json"], { relayHome });
+  const show = runConfig(["preset", "show", "light", "--json"], { relayHome, cwd: repoRoot });
   assert.equal(show.status, 0, show.combined);
   assert.deepEqual(parseJson(show).preset, { dispatch: { executor: "codex" } });
+
+  const showAll = runConfig(["preset", "show", "--json"], { relayHome, cwd: repoRoot });
+  assert.equal(showAll.status, 0, showAll.combined);
+  assert.deepEqual(parseJson(showAll).presets, {
+    light: { dispatch: { executor: "codex" } },
+  });
+
+  const showProjectOnly = runConfig(["preset", "show", "project_only", "--json"], { relayHome, cwd: repoRoot });
+  assert.notEqual(showProjectOnly.status, 0, showProjectOnly.combined);
+  assert.match(showProjectOnly.combined, /unknown preset: project_only/);
 
   const remove = runConfig(["preset", "remove", "light", "--json"], { relayHome });
   assert.equal(remove.status, 0, remove.combined);

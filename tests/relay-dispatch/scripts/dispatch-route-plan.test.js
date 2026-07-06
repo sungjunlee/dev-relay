@@ -152,7 +152,7 @@ test("dispatch dry-run expands route preset below explicit flags and records pre
   assert.equal(output.route_plan.phases.advisory_review.profile, "blindspot");
 });
 
-test("dispatch unknown route preset fails before creating run side effects", () => {
+test("dispatch unknown route preset fails before creating run side effects including fleet locks", () => {
   const { repoRoot, relayHome, rubricFile } = setupRepo();
   writeJson(path.join(relayHome, "routes.json"), {
     version: 2,
@@ -165,9 +165,10 @@ test("dispatch unknown route preset fails before creating run side effects", () 
 
   const proc = spawnSync(process.execPath, [
     SCRIPT, repoRoot,
-    "-b", "issue-unknown-preset",
+    "-b", "issue-123-unknown-preset",
     "-p", "unknown preset route plan",
     "--rubric-file", rubricFile,
+    "--fleet-id", "issue-123",
     "--route-preset", "missing",
     "--json",
   ], {
@@ -182,6 +183,7 @@ test("dispatch unknown route preset fails before creating run side effects", () 
   assert.deepEqual(output.available_presets, ["hardened", "light"]);
   assert.equal(fs.existsSync(path.join(relayHome, "runs")), false);
   assert.equal(fs.existsSync(path.join(relayHome, "worktrees")), false);
+  assert.equal(fs.existsSync(path.join(relayHome, "fleets")), false);
 });
 
 test("dispatch route preset review_assurance maps to existing review assurance path", () => {
@@ -216,6 +218,48 @@ test("dispatch route preset review_assurance maps to existing review assurance p
   assert.equal(proc.status, 0, proc.stderr);
   const output = JSON.parse(proc.stdout);
   assert.equal(output.reviewAssurance, "hardened");
+});
+
+test("dispatch persists review assurance route preset source metadata in route-plan snapshot", () => {
+  const { repoRoot, relayHome, rubricFile } = setupRepo();
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-route-preset-hardened-bin-"));
+  writeFakeCodex(binDir);
+  writeJson(path.join(relayHome, "routes.json"), {
+    version: 2,
+    strict: true,
+    defaults: {
+      dispatch: { executor: "codex" },
+      review: { reviewer: "codex" },
+      advisory_review: null,
+    },
+    presets: {
+      hardened: { review_assurance: "hardened" },
+    },
+  });
+
+  const proc = spawnSync(process.execPath, [
+    SCRIPT, repoRoot,
+    "-b", "issue-preset-hardened-real",
+    "-p", "hardened preset persisted route plan",
+    "--rubric-file", rubricFile,
+    "--route-preset", "hardened",
+    "--json",
+  ], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    env: { ...process.env, RELAY_HOME: relayHome, PATH: `${binDir}${path.delimiter}${process.env.PATH || ""}` },
+  });
+
+  assert.equal(proc.status, 0, proc.stderr);
+  const output = JSON.parse(proc.stdout);
+  assert.equal(fs.existsSync(output.routePlanPath), true);
+  const snapshot = JSON.parse(fs.readFileSync(output.routePlanPath, "utf-8"));
+  assert.equal(snapshot.route_preset.name, "hardened");
+  assert.equal(snapshot.route_preset.source, "preset:hardened");
+  assert.equal(snapshot.route_preset.review_assurance, "hardened");
+  assert.deepEqual(snapshot.route_preset.filled, [{ field: "review_assurance" }]);
+  const manifest = readManifest(output.manifestPath).data;
+  assert.equal(manifest.policy.review_assurance, "hardened");
 });
 
 test("dispatch denied route intent fails before executor invocation", () => {

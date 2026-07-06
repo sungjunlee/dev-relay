@@ -171,6 +171,16 @@ function writeRoutes(routesPath, routes) {
   return routes;
 }
 
+function loadGlobalPresetsForShow() {
+  const routesPath = relayRoutesPath();
+  if (!fs.existsSync(routesPath)) {
+    return {};
+  }
+  const routes = readRoutesFile(routesPath);
+  const validated = validateRouteConfig(routes, routesPath);
+  return cloneJson(validated.presets || {});
+}
+
 function requireValue(value, label) {
   const normalized = nonEmptyString(value);
   if (!normalized) throw new Error(`${label} is required`);
@@ -750,11 +760,7 @@ function commandPreset(positionals, jsonOut) {
       throw new Error("preset show accepts optional <name>");
     }
     const name = positionals[2] ? requireValue(positionals[2], "preset name") : null;
-    const result = loadRelayPolicy({ repoRoot: process.cwd() });
-    if (!result.ok) {
-      throw new Error(result.errors?.[0]?.message || "failed to load routes config");
-    }
-    const presets = cloneJson(result.policy?.presets || {});
+    const presets = loadGlobalPresetsForShow();
     const output = {
       ok: true,
       action: "preset show",
