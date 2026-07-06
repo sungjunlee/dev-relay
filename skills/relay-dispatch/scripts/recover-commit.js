@@ -10,8 +10,8 @@ const path = require("path");
 
 const { parsePrNumber, formatExecError } = require("./dispatch-publish");
 const { resolveManifestRecord } = require("./relay-resolver");
-const { appendRunEvent, EVENTS } = require("./relay-events");
-const { STATES } = require("./manifest/lifecycle");
+const { appendRunEvent, EVENTS, readRunEvents } = require("./relay-events");
+const { STATES, updateManifestState } = require("./manifest/lifecycle");
 const { writeManifest } = require("./manifest/store");
 const { getCanonicalRepoRoot, getRunDir, nowIso, summarizeFailure, validateManifestPaths } = require("./manifest/paths");
 const { stampPrNumberUnderLock } = require("./manifest/pr-number-stamp");
@@ -261,6 +261,23 @@ function resolveRun({ repoArg, runId, manifestArg }) {
   }
 }
 
+function dispatchCompletionTarget(data) {
+  const publishPolicy = data.dispatch?.publish_policy || "immediate";
+  if (publishPolicy === "after-internal-review") {
+    return {
+      state: STATES.INTERNAL_REVIEW_PENDING,
+      nextAction: "run_internal_review",
+    };
+  }
+  if (publishPolicy === "immediate") {
+    return {
+      state: STATES.REVIEW_PENDING,
+      nextAction: "run_review",
+    };
+  }
+  throw new Error(`unsupported dispatch.publish_policy for recovery: ${publishPolicy}`);
+}
+
 function expectedRepoRootForValidation(repoArg, manifestArg) {
   if (manifestArg && !repoArg) return undefined;
   return getCanonicalRepoRoot(path.resolve(repoArg || "."));
@@ -367,7 +384,7 @@ function main() {
     runId: manifestRecord.data?.run_id,
     caller: "recover-commit",
   });
-  const data = {
+  let data = {
     ...manifestRecord.data,
     paths: {
       ...(manifestRecord.data?.paths || {}),
@@ -392,6 +409,11 @@ function main() {
 
   if (data.state === STATES.MERGED || data.state === STATES.CLOSED) {
     throw new Error(`force-finalize cannot be used from terminal state ${data.state}`);
+  }
+  const recoveringFromDispatched = data.state === STATES.DISPATCHED;
+  if (recoveringFromDispatched) {
+    const target = dispatchCompletionTarget(data);
+    data = updateManifestState(data, target.state, target.nextAction);
   }
   const internalReview = data.state === STATES.INTERNAL_REVIEW_PENDING;
   if (![STATES.INTERNAL_REVIEW_PENDING, STATES.REVIEW_PENDING].includes(data.state)) {
@@ -635,7 +657,33 @@ function main() {
   }
 
   let stampedRecord = manifestRecord;
-  if (data.git?.pr_number === undefined || data.git?.pr_number === null) {
+  if (recoveringFromDispatched) {
+    const updatedData = {
+      ...data,
+      git: {
+        ...(data.git || {}),
+        pr_number: prNumber,
+        head_sha: commitSha,
+      },
+    };
+    writeManifest(manifestRecord.manifestPath, updatedData, manifestRecord.body);
+    const alreadyStamped = readRunEvents(validatedPaths.repoRoot, updatedData.run_id)
+      .some((entry) => entry.event === EVENTS.PR_NUMBER_STAMPED);
+    if (!alreadyStamped) {
+      appendRunEvent(validatedPaths.repoRoot, updatedData.run_id, {
+        event: EVENTS.PR_NUMBER_STAMPED,
+        state_from: updatedData.state,
+        state_to: updatedData.state,
+        head_sha: updatedData.git?.head_sha || null,
+        round: updatedData.review?.rounds || null,
+        reason: `Stamped git.pr_number=${prNumber} during recover-commit`,
+      });
+    }
+    stampedRecord = {
+      ...manifestRecord,
+      data: updatedData,
+    };
+  } else if (data.git?.pr_number === undefined || data.git?.pr_number === null) {
     stampedRecord = stampPrNumberUnderLock(manifestRecord, prNumber, {
       expectedRepoRoot: validatedPaths.repoRoot,
       caller: "recover-commit PR stamping",

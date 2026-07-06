@@ -32,6 +32,10 @@ if (logPath) fs.appendFileSync(logPath, JSON.stringify(args) + "\\n", "utf-8");
 const state = fs.existsSync(statePath) ? JSON.parse(fs.readFileSync(statePath, "utf-8")) : {};
 function save() { fs.writeFileSync(statePath, JSON.stringify(state, null, 2)); }
 if (args[0] === "pr" && args[1] === "list") {
+  if (state.failPrList) {
+    process.stderr.write(state.failPrList + "\\n");
+    process.exit(1);
+  }
   if (state.existingPrNumber !== undefined && state.existingPrNumber !== null) {
     process.stdout.write(String(state.existingPrNumber) + "\\n");
   }
@@ -39,6 +43,11 @@ if (args[0] === "pr" && args[1] === "list") {
 }
 if (args[0] === "pr" && args[1] === "create") {
   state.createCalls = Number(state.createCalls || 0) + 1;
+  if (state.failPrCreate) {
+    save();
+    process.stderr.write(state.failPrCreate + "\\n");
+    process.exit(1);
+  }
   state.existingPrNumber = state.createNumber || 281;
   save();
   process.stdout.write("https://github.com/acme/dev-relay/pull/" + state.existingPrNumber + "\\n");
@@ -71,7 +80,10 @@ function setupRepo({
   manifestState = STATES.DISPATCHED,
   committedWork = false,
   resultFile = false,
+  resultFileContent = "executor result before crash\n",
   oldShapePaths = false,
+  publishPolicy = "immediate",
+  ghState = {},
 } = {}) {
   const repoRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "relay-reconcile-run-")));
   const relayHome = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-")));
@@ -121,6 +133,7 @@ function setupRepo({
     reviewer: "codex",
   });
   manifest = updateManifestState(manifest, STATES.DISPATCHED, "await_dispatch_result");
+  manifest.dispatch = { publish_policy: publishPolicy };
   manifest.anchor.rubric_path = "rubric.yaml";
   manifest.git.head_sha = dispatchHead;
   fs.writeFileSync(path.join(layout.runDir, "rubric.yaml"), "rubric:\n  factors:\n    - name: reconcile-run\n", "utf-8");
@@ -136,7 +149,7 @@ function setupRepo({
   }
   writeManifest(layout.manifestPath, manifest);
   if (resultFile) {
-    fs.writeFileSync(path.join(layout.runDir, "dispatch-result.txt"), "executor result before crash\n", "utf-8");
+    fs.writeFileSync(path.join(layout.runDir, "dispatch-result.txt"), resultFileContent, "utf-8");
   }
   fs.writeFileSync(path.join(layout.runDir, EXECUTION_EVIDENCE_FILENAME), JSON.stringify({
     schema_version: 1,
@@ -148,7 +161,7 @@ function setupRepo({
     recorded_by: "dispatch-orchestrator-v1",
   }, null, 2));
 
-  const ghPath = writeFakeGh(binDir, statePath, ghLogPath);
+  const ghPath = writeFakeGh(binDir, statePath, ghLogPath, ghState);
   const env = {
     ...process.env,
     RELAY_HOME: relayHome,
@@ -258,6 +271,25 @@ test("reconcile row 2 reports a live lease within timeout", async (t) => {
   assert.equal(isPgidAlive(child.pid), true);
 });
 
+test("reconcile treats host-mismatched leases as stale evidence", async (t) => {
+  const fixture = setupRepo({ committedWork: true });
+  const child = await spawnSleeper(t);
+  const leasePath = writeLease(fixture, {
+    pgid: child.pid,
+    host: "other-host.example.test",
+    startedAt: new Date().toISOString(),
+    timeoutS: 60,
+  });
+
+  const result = parseJsonResult(runReconcile(fixture));
+
+  assert.equal(result.row, 4);
+  assert.equal(result.status, "recovered");
+  assert.equal(fs.existsSync(leasePath), false);
+  assert.equal(readManifest(fixture.manifestPath).data.state, STATES.REVIEW_PENDING);
+  assert.equal(isPgidAlive(child.pid), true);
+});
+
 test("reconcile row 3 kills a timed-out live lease and journals interruption", async (t) => {
   const fixture = setupRepo();
   const child = await spawnSleeper(t);
@@ -308,6 +340,59 @@ test("reconcile row 4 recovers dead runs with committed work via recover-commit"
   const second = parseJsonResult(runReconcile(fixture));
   assert.equal(second.row, 1);
   assert.equal(second.state, STATES.REVIEW_PENDING);
+});
+
+test("reconcile row 4 leaves dispatched runs retryable when recover-commit fails", () => {
+  const fixture = setupRepo({
+    committedWork: true,
+    ghState: { failPrList: "simulated pr list outage" },
+  });
+  writeLease(fixture, {
+    pid: 999999,
+    pgid: 999999,
+    startedAt: new Date(Date.now() - 10_000).toISOString(),
+    timeoutS: 1,
+  });
+
+  const first = runReconcile(fixture);
+  assert.notEqual(first.status, 0);
+  assert.match(first.stderr, /pr_list_failed/);
+  assert.equal(readManifest(fixture.manifestPath).data.state, STATES.DISPATCHED);
+
+  const second = runReconcile(fixture);
+  assert.notEqual(second.status, 0);
+  assert.match(second.stderr, /pr_list_failed/);
+  assert.equal(readManifest(fixture.manifestPath).data.state, STATES.DISPATCHED);
+});
+
+test("reconcile row 4 preserves delayed-publication internal review policy", () => {
+  const fixture = setupRepo({
+    committedWork: true,
+    publishPolicy: "after-internal-review",
+  });
+
+  const result = parseJsonResult(runReconcile(fixture));
+
+  assert.equal(result.row, 4);
+  assert.equal(result.status, "recovered");
+  assert.equal(result.state, STATES.INTERNAL_REVIEW_PENDING);
+  assert.equal(result.nextAction, "run_internal_review");
+  assert.equal(result.recovery.prNumber, null);
+  const manifest = readManifest(fixture.manifestPath).data;
+  assert.equal(manifest.state, STATES.INTERNAL_REVIEW_PENDING);
+  assert.equal(manifest.next_action, "run_internal_review");
+  assert.equal(manifest.git.pr_number, null);
+  assert.deepEqual(fs.readFileSync(fixture.ghLogPath, "utf-8").trim(), "");
+});
+
+test("reconcile row 5 treats an empty dispatch result as no completion evidence", () => {
+  const fixture = setupRepo({ resultFile: true, resultFileContent: "" });
+
+  const result = parseJsonResult(runReconcile(fixture));
+
+  assert.equal(result.row, 5);
+  assert.equal(result.status, "interrupted");
+  assert.equal(readManifest(fixture.manifestPath).data.state, STATES.DISPATCHED);
 });
 
 test("reconcile row 5 journals interrupted once for dead old-shape runs with no work", () => {

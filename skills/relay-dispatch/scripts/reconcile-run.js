@@ -9,7 +9,7 @@ const { findUnknownFlags, modeLabel, readArg, schemaHasFlag } = require("./cli-a
 const { execGit } = require("./exec");
 const { STATES, updateManifestState } = require("./manifest/lifecycle");
 const { summarizeFailure, validateManifestPaths } = require("./manifest/paths");
-const { writeManifest } = require("./manifest/store");
+const { readManifest, writeManifest } = require("./manifest/store");
 const { classifyRepositoryDirt } = require("./runtime-dirt");
 const { resolveManifestRecord } = require("./relay-resolver");
 const { appendRunEvent, EVENTS } = require("./relay-events");
@@ -44,7 +44,8 @@ if (!args.length || hasCliFlag(["--help", "-h"])) {
 
 function hasNonEmptyFile(filePath) {
   try {
-    return fs.statSync(filePath).isFile();
+    const stat = fs.statSync(filePath);
+    return stat.isFile() && stat.size > 0;
   } catch {
     return false;
   }
@@ -157,9 +158,38 @@ function appendInterruptedIfNeeded(repoRoot, data, manifestPath, reason, leaseSt
   };
 }
 
-function transitionDispatchedToReviewPending({ repoRoot, manifestPath, body, data, currentHead, dryRun }) {
+function dispatchCompletionTarget(data) {
+  const publishPolicy = data.dispatch?.publish_policy || "immediate";
+  if (publishPolicy === "after-internal-review") {
+    return {
+      state: STATES.INTERNAL_REVIEW_PENDING,
+      nextAction: "run_internal_review",
+    };
+  }
+  if (publishPolicy === "immediate") {
+    return {
+      state: STATES.REVIEW_PENDING,
+      nextAction: "run_review",
+    };
+  }
+  throw new Error(`unsupported dispatch.publish_policy for reconcile: ${publishPolicy}`);
+}
+
+function appendStateRecovery(repoRoot, before, after, reason) {
+  appendRunEvent(repoRoot, after.run_id, {
+    event: EVENTS.STATE_RECOVERY,
+    state_from: before.state,
+    state_to: after.state,
+    head_sha: after.git?.head_sha || null,
+    round: after.review?.rounds || null,
+    reason,
+  });
+}
+
+function transitionDispatchedToCompletionTarget({ repoRoot, manifestPath, body, data, currentHead, dryRun }) {
+  const target = dispatchCompletionTarget(data);
   const updated = {
-    ...updateManifestState(data, STATES.REVIEW_PENDING, "run_review"),
+    ...updateManifestState(data, target.state, target.nextAction),
     git: {
       ...(data.git || {}),
       head_sha: currentHead || data.git?.head_sha || null,
@@ -167,14 +197,7 @@ function transitionDispatchedToReviewPending({ repoRoot, manifestPath, body, dat
   };
   if (!dryRun) {
     writeManifest(manifestPath, updated, body);
-    appendRunEvent(repoRoot, updated.run_id, {
-      event: EVENTS.STATE_RECOVERY,
-      state_from: data.state,
-      state_to: updated.state,
-      head_sha: updated.git?.head_sha || null,
-      round: updated.review?.rounds || null,
-      reason: "reconcile_dead_work",
-    });
+    appendStateRecovery(repoRoot, data, updated, "reconcile_dead_work");
   }
   return updated;
 }
@@ -326,9 +349,12 @@ async function main() {
   const hasRecoverableWork = worktreeInspection.newCommits > 0 || worktreeInspection.hasReviewableDirt;
   const hasResult = !!resultFile;
   if (hasResult || hasRecoverableWork) {
+    const target = dispatchCompletionTarget(data);
     const plannedActions = [
       "remove_lease_if_present",
-      "transition_to_review_pending",
+      target.state === STATES.INTERNAL_REVIEW_PENDING
+        ? "transition_to_internal_review_pending"
+        : "transition_to_review_pending",
       "run_recover_commit_if_needed",
     ];
     if (dryRun) {
@@ -352,19 +378,23 @@ async function main() {
     }
 
     removeRunLease(normalizedRepoRoot, normalizedRunId);
-    const updated = transitionDispatchedToReviewPending({
-      repoRoot: normalizedRepoRoot,
-      manifestPath: record.manifestPath,
-      body: record.body,
-      data,
-      currentHead: worktreeInspection.currentHead,
-      dryRun: false,
-    });
     let recovery = null;
+    let updated = null;
     if (hasRecoverableWork) {
       recovery = runRecoverCommit({
         repoRoot: normalizedRepoRoot,
         runId: normalizedRunId,
+        dryRun: false,
+      });
+      updated = readManifest(record.manifestPath).data;
+      appendStateRecovery(normalizedRepoRoot, data, updated, "reconcile_dead_work");
+    } else {
+      updated = transitionDispatchedToCompletionTarget({
+        repoRoot: normalizedRepoRoot,
+        manifestPath: record.manifestPath,
+        body: record.body,
+        data,
+        currentHead: worktreeInspection.currentHead,
         dryRun: false,
       });
     }

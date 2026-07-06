@@ -186,7 +186,7 @@ function getRunLeaseStatus(repoRoot, runId) {
       exists: true,
       lease,
       leasePath,
-      live: true,
+      live: false,
       canSignal: false,
       reason: "host_mismatch",
       elapsed_s: elapsedS,

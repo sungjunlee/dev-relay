@@ -274,6 +274,42 @@ test("cleanup-worktrees refuses to remove a worktree with a live run lease witho
   assert.equal(readManifest(manifestPath).data.cleanup.status, "pending");
 });
 
+test("cleanup-worktrees --force removes a worktree with a live run lease", async (t) => {
+  const repoRoot = setupRepo();
+  const updatedAt = "2026-04-01T00:00:00.000Z";
+  const { manifestPath, worktreePath } = writeRun(repoRoot, {
+    branch: "issue-live-lease-force",
+    state: STATES.MERGED,
+    updatedAt,
+  });
+  const runId = readManifest(manifestPath).data.run_id;
+  const child = await spawnSleeper(t);
+  const runDir = ensureRunLayout(repoRoot, runId).runDir;
+  fs.writeFileSync(path.join(runDir, "lease.json"), JSON.stringify({
+    pid: process.pid,
+    pgid: child.pid,
+    host: os.hostname(),
+    started_at: new Date().toISOString(),
+    timeout_s: 60,
+  }, null, 2), "utf-8");
+
+  const stdout = execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--all",
+    "--force",
+    "--json",
+  ], { encoding: "utf-8" });
+
+  const result = JSON.parse(stdout);
+  assert.equal(result.cleaned.length, 1);
+  assert.equal(result.failed.length, 0);
+  assert.equal(result.cleaned[0].branch, "issue-live-lease-force");
+  assert.equal(fs.existsSync(worktreePath), false);
+  assert.equal(readManifest(manifestPath).data.cleanup.status, "succeeded");
+  assert.equal(isPgidAlive(child.pid), true);
+});
+
 test("cleanup-worktrees reports stale open runs without deleting them", () => {
   const repoRoot = setupRepo();
   const updatedAt = "2026-04-01T00:00:00.000Z";
