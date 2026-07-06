@@ -21,6 +21,36 @@ function initGitRepo(repoRoot) {
   execFileSync("git", ["config", "user.email", "relay@example.com"], { cwd: repoRoot, stdio: "pipe" });
 }
 
+function commitBaseFile(repoRoot) {
+  fs.writeFileSync(path.join(repoRoot, "README.md"), "base\n", "utf-8");
+  execFileSync("git", ["add", "README.md"], { cwd: repoRoot, stdio: "pipe" });
+  execFileSync("git", ["commit", "-m", "init"], { cwd: repoRoot, stdio: "pipe" });
+}
+
+function createLinkedDispatchFixture(runId) {
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-paths-linked-dispatch-"));
+  const repoRoot = path.join(fixtureRoot, "dev-relay");
+  fs.mkdirSync(repoRoot, { recursive: true });
+  initGitRepo(repoRoot);
+  commitBaseFile(repoRoot);
+
+  const linkedRoot = path.join(repoRoot, ".claude", "worktrees", "floofy-seeking-music");
+  execFileSync("git", ["worktree", "add", linkedRoot, "-b", "linked-dispatch-root"], {
+    cwd: repoRoot,
+    stdio: "pipe",
+  });
+
+  return {
+    fixtureRoot,
+    repoRoot,
+    linkedRoot,
+    manifestPath: getManifestPath(repoRoot, runId),
+    relayWorktreeBase: path.join(process.env.RELAY_HOME, "worktrees"),
+    runId,
+  };
+}
+
 test("manifest/paths validateRunId accepts createRunId output", () => {
   const runId = createRunId({
     branch: "Issue 188 Paths",
@@ -101,6 +131,81 @@ test("manifest/paths validateManifestPaths canonicalizes same-git-common-dir rep
 
   assert.equal(result.repoRoot, path.resolve(repoRoot));
   assert.equal(result.worktreeLocation, "repo_root");
+});
+
+test("manifest/paths accepts relay worktree named after linked dispatch root when expected root is primary", () => {
+  const runId = "issue-805-20260706000901940-2ab48b13";
+  const { repoRoot, linkedRoot, manifestPath, relayWorktreeBase } = createLinkedDispatchFixture(runId);
+  const relayWorktree = path.join(relayWorktreeBase, "949b24bd", path.basename(linkedRoot));
+  execFileSync("git", ["worktree", "add", relayWorktree, "-b", "issue-805-relay"], {
+    cwd: repoRoot,
+    stdio: "pipe",
+  });
+
+  const result = validateManifestPaths({
+    repo_root: linkedRoot,
+    worktree: relayWorktree,
+  }, {
+    expectedRepoRoot: repoRoot,
+    manifestPath,
+    runId,
+    caller: "manifest/paths.test linked dispatch root relay worktree",
+  });
+
+  assert.equal(path.basename(repoRoot), "dev-relay");
+  assert.equal(path.basename(linkedRoot), "floofy-seeking-music");
+  assert.equal(result.repoRoot, path.resolve(repoRoot));
+  assert.equal(result.worktree, relayWorktree);
+  assert.equal(result.worktreeLocation, "relay_worktree");
+});
+
+test("manifest/paths rejects linked-root relay worktree basename when git common dir differs", () => {
+  const runId = "issue-805-20260706000901941-2ab48b13";
+  const { repoRoot, linkedRoot, manifestPath, relayWorktreeBase } = createLinkedDispatchFixture(runId);
+  const attackerRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-paths-linked-attacker-"));
+  initGitRepo(attackerRoot);
+  commitBaseFile(attackerRoot);
+  const attackerRelayWorktree = path.join(relayWorktreeBase, "attacker-binding", path.basename(linkedRoot));
+  execFileSync("git", ["worktree", "add", attackerRelayWorktree, "-b", "attacker-relay"], {
+    cwd: attackerRoot,
+    stdio: "pipe",
+  });
+
+  assert.throws(
+    () => validateManifestPaths({
+      repo_root: linkedRoot,
+      worktree: attackerRelayWorktree,
+    }, {
+      expectedRepoRoot: repoRoot,
+      manifestPath,
+      runId,
+      caller: "manifest/paths.test linked dispatch wrong common dir",
+    }),
+    /is not contained under the expected repo root/
+  );
+});
+
+test("manifest/paths rejects linked-root relay worktree basename outside relay worktree base", () => {
+  const runId = "issue-805-20260706000901942-2ab48b13";
+  const { fixtureRoot, repoRoot, linkedRoot, manifestPath } = createLinkedDispatchFixture(runId);
+  const outsideRelayWorktree = path.join(fixtureRoot, "outside-relay-base", path.basename(linkedRoot));
+  execFileSync("git", ["worktree", "add", outsideRelayWorktree, "-b", "outside-relay"], {
+    cwd: repoRoot,
+    stdio: "pipe",
+  });
+
+  assert.throws(
+    () => validateManifestPaths({
+      repo_root: linkedRoot,
+      worktree: outsideRelayWorktree,
+    }, {
+      expectedRepoRoot: repoRoot,
+      manifestPath,
+      runId,
+      caller: "manifest/paths.test linked dispatch outside relay base",
+    }),
+    /is not contained under the expected repo root/
+  );
 });
 
 test("manifest/paths cleanup mode uses canonical root for pruned same-git-common-dir worktrees", () => {

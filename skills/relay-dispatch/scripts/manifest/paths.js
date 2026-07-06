@@ -367,9 +367,10 @@ function isRealpathContainedWithin(basePath, candidatePath, { allowEqual = false
   }
 }
 
-function isRelayOwnedWorktreeShapeForCleanup({ relayWorktreeBase, worktree, repoRoot }) {
+function isRelayOwnedWorktreeShapeForCleanup({ relayWorktreeBase, worktree, repoRootBasenames }) {
+  const repoBasenames = new Set((repoRootBasenames || []).filter(Boolean));
   const structurallyRelayOwned = isPathContainedWithin(relayWorktreeBase, worktree)
-    && path.basename(worktree) === path.basename(repoRoot);
+    && repoBasenames.has(path.basename(worktree));
   if (!structurallyRelayOwned) {
     return false;
   }
@@ -504,8 +505,12 @@ function validateManifestPaths(paths, {
   const worktree = path.resolve(worktreeRaw);
   const relayWorktreeBase = getRelayWorktreeBase();
   const repoContainedWorktree = isPathContainedWithin(effectiveRepoRoot, worktree);
+  const relayOwnedRepoRootBasenames = [
+    path.basename(effectiveRepoRoot),
+    path.basename(repoRoot),
+  ];
   const relayOwnedWorktreeCandidate = isPathContainedWithin(relayWorktreeBase, worktree)
-    && path.basename(worktree) === path.basename(effectiveRepoRoot);
+    && relayOwnedRepoRootBasenames.includes(path.basename(worktree));
   const expectedGitCommonDir = getWorktreeGitCommonDir(effectiveRepoRoot) || path.join(effectiveRepoRoot, ".git");
   const worktreeExists = fs.existsSync(worktree);
   if (!worktreeExists) {
@@ -540,7 +545,11 @@ function validateManifestPaths(paths, {
   const prunedRelayOwnedWorktreeForCleanup = acceptPrunedRelayOwned
     && !relayOwnedWorktree
     && (!worktreeGitCommonDir || !fs.existsSync(worktreeGitCommonDir))
-    && isRelayOwnedWorktreeShapeForCleanup({ relayWorktreeBase, worktree, repoRoot: effectiveRepoRoot });
+    && isRelayOwnedWorktreeShapeForCleanup({
+      relayWorktreeBase,
+      worktree,
+      repoRootBasenames: relayOwnedRepoRootBasenames,
+    });
 
   if (!repoContainedWorktree && !relayOwnedWorktree && !prunedRelayOwnedWorktreeForCleanup) {
     throw new Error(
