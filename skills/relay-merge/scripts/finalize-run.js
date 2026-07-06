@@ -533,6 +533,13 @@ function resolveFinalizeManifestRecord({
   prNumber,
   includeTerminal,
 }) {
+  if (hasExplicitBranchPrSelector({ manifestPath, runId, branch, prNumber })) {
+    const retryRecord = resolveMergedBranchPrRetryRecord({ repoRoot, branch, prNumber });
+    if (retryRecord) {
+      return retryRecord;
+    }
+  }
+
   try {
     return resolveManifestRecord({
       repoRoot,

@@ -165,6 +165,30 @@ function setupRepo({
   return { repoRoot, manifestPath, branch, worktreePath, headSha, runId };
 }
 
+function writeNullPrBranchFallbackManifest({ repoRoot, branch, worktreePath, headSha }) {
+  const runId = createRunId({
+    branch,
+    timestamp: new Date("2026-04-03T07:05:00.000Z"),
+  });
+  const manifestPath = ensureRunLayout(repoRoot, runId).manifestPath;
+  let manifest = createManifestSkeleton({
+    repoRoot,
+    runId,
+    branch,
+    baseBranch: "main",
+    issueNumber: 43,
+    worktreePath,
+    orchestrator: "codex",
+    executor: "codex",
+    reviewer: "codex",
+  });
+  manifest.git.pr_number = null;
+  manifest.git.head_sha = headSha;
+  manifest = buildManifestForState(manifest, STATES.DISPATCHED);
+  writeManifest(manifestPath, manifest);
+  return { manifestPath, runId };
+}
+
 function seedCapabilitiesForLearning(repoRoot, component = "merge-finalize") {
   fs.mkdirSync(path.join(repoRoot, "spec"), { recursive: true });
   fs.mkdirSync(path.join(repoRoot, "backlog", "sprints"), { recursive: true });
@@ -1376,6 +1400,7 @@ test("finalize-run writes merged state to disk before fallible post-merge steps"
   assert.equal(manifest.next_action, "manual_cleanup_required");
   assert.equal(manifest.cleanup.status, "pending");
   assert.equal(fs.existsSync(worktreePath), true);
+  const fallback = writeNullPrBranchFallbackManifest({ repoRoot, branch, worktreePath, headSha });
 
   const retryStdout = execFileSync("node", [
     SCRIPT,
@@ -1390,6 +1415,7 @@ test("finalize-run writes merged state to disk before fallible post-merge steps"
     env: { ...process.env, RELAY_GH_BIN: fakeGh },
   });
   const retry = JSON.parse(retryStdout);
+  assert.equal(retry.manifestPath, manifestPath);
   assert.equal(retry.state, STATES.MERGED);
   assert.equal(retry.nextAction, "done");
   assert.equal(retry.cleanup.cleanupStatus, "succeeded");
@@ -1399,6 +1425,7 @@ test("finalize-run writes merged state to disk before fallible post-merge steps"
   assert.equal(retriedManifest.state, STATES.MERGED);
   assert.equal(retriedManifest.next_action, "done");
   assert.equal(retriedManifest.cleanup.status, "succeeded");
+  assert.equal(readManifest(fallback.manifestPath).data.state, STATES.DISPATCHED);
 });
 
 test("finalize-run blocks merge when PR has merge conflicts", () => {
