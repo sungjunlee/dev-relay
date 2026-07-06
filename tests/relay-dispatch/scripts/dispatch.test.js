@@ -973,6 +973,40 @@ fs.writeFileSync(output, "lease ok\\n", "utf-8");
   return codexPath;
 }
 
+function writeLeaseFreshnessCheckingCodex(binDir, markerPath) {
+  ensureDefaultFakeGh(binDir);
+  const codexPath = path.join(binDir, "codex");
+  fs.writeFileSync(codexPath, `#!/usr/bin/env node
+const fs = require("fs");
+const path = require("path");
+const { execFileSync } = require("child_process");
+const args = process.argv.slice(2);
+if (args[0] === "--version") {
+  process.stdout.write("codex-fake\\n");
+  process.exit(0);
+}
+if (args[0] !== "exec") {
+  process.stderr.write("unsupported fake codex invocation");
+  process.exit(1);
+}
+const cwd = args[args.indexOf("-C") + 1];
+const output = args[args.indexOf("-o") + 1];
+const leasePath = path.join(path.dirname(output), "lease.json");
+const lease = JSON.parse(fs.readFileSync(leasePath, "utf-8"));
+fs.writeFileSync(${JSON.stringify(markerPath)}, JSON.stringify({
+  executorPid: process.pid,
+  leasePath,
+  lease,
+}), "utf-8");
+fs.writeFileSync(path.join(cwd, "lease-fresh.txt"), "fresh lease checked\\n", "utf-8");
+execFileSync("git", ["-C", cwd, "add", "lease-fresh.txt"], { stdio: "pipe" });
+execFileSync("git", ["-C", cwd, "commit", "-m", "fake fresh lease checked"], { stdio: "pipe" });
+fs.writeFileSync(output, "lease fresh\\n", "utf-8");
+`, "utf-8");
+  fs.chmodSync(codexPath, 0o755);
+  return codexPath;
+}
+
 function writeLeaderExitDescendantCodex(binDir) {
   ensureDefaultFakeGh(binDir);
   const codexPath = path.join(binDir, "codex");
@@ -3916,6 +3950,65 @@ test("dispatch creates a run lease while executor runs and removes it on normal 
   assert.equal(Number.isInteger(marker.lease.pgid), true);
   assert.equal(marker.lease.host, os.hostname());
   assert.equal(marker.lease.timeout_s, 2400);
+  assert.equal(fs.existsSync(marker.leasePath), false);
+});
+
+test("dispatch resume waits for the fresh run lease when stale lease.json exists", () => {
+  if (process.platform === "win32") return;
+
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  writeFakeCodex(binDir);
+  const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}`, RELAY_HOME: relayHome };
+  const first = makeDispatchedResumeFixture(repoRoot, env, { appendInterruptedEvent: true });
+  const staleLease = {
+    pid: 111111,
+    pgid: 222222,
+    host: os.hostname(),
+    started_at: new Date(Date.now() - 60_000).toISOString(),
+    timeout_s: 2400,
+  };
+  fs.writeFileSync(path.join(first.runDir, "lease.json"), `${JSON.stringify(staleLease, null, 2)}\n`, "utf-8");
+
+  const markerPath = path.join(os.tmpdir(), `relay-dispatch-lease-fresh-${Date.now()}.json`);
+  writeLeaseFreshnessCheckingCodex(binDir, markerPath);
+  const preloadPath = writePreloadScript(binDir, "delay-lease-write-preload.js", `
+const fs = require("fs");
+const path = require("path");
+const originalWriteFileSync = fs.writeFileSync;
+const isDispatch = String(process.argv[1] || "").endsWith("dispatch.js");
+fs.writeFileSync = function patchedWriteFileSync(filePath, data, options) {
+  if (
+    isDispatch &&
+    path.basename(String(filePath)) === "lease.json" &&
+    process.env.RELAY_TEST_DELAY_LEASE_WRITE_MS
+  ) {
+    const delayMs = Number(process.env.RELAY_TEST_DELAY_LEASE_WRITE_MS);
+    if (Number.isFinite(delayMs) && delayMs > 0) {
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, delayMs);
+    }
+  }
+  return originalWriteFileSync.call(this, filePath, data, options);
+};
+`);
+  const delayedEnv = withNodePreload({
+    ...env,
+    RELAY_TEST_DELAY_LEASE_WRITE_MS: "750",
+  }, preloadPath);
+
+  const second = JSON.parse(runDispatch(repoRoot, [
+    "--run-id", first.runId,
+    "--prompt", "resume with stale lease present",
+    "--json",
+  ], delayedEnv));
+
+  assert.equal(second.mode, "resume");
+  assert.equal(second.runId, first.runId);
+  const marker = JSON.parse(fs.readFileSync(markerPath, "utf-8"));
+  assert.equal(marker.leasePath, path.join(first.runDir, "lease.json"));
+  assert.equal(marker.lease.pgid, marker.executorPid);
+  assert.notEqual(marker.lease.pgid, staleLease.pgid);
   assert.equal(fs.existsSync(marker.leasePath), false);
 });
 

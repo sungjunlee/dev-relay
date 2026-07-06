@@ -634,12 +634,32 @@ function sleepAsync(ms) {
 
 const POSIX_LEASE_GATE_SCRIPT = [
   "lease_path=$1",
-  "shift",
+  "expected_pid=$2",
+  "expected_pgid=$$",
+  "shift 2",
   "attempt=0",
-  "while [ ! -f \"$lease_path\" ]; do",
+  "lease_matches() {",
+  "  [ -f \"$lease_path\" ] || return 1",
+  "  awk -v expected_pid=\"$expected_pid\" -v expected_pgid=\"$expected_pgid\" '",
+  "    /\"pid\"[[:space:]]*:/ {",
+  "      value = $0",
+  "      sub(/^.*\"pid\"[[:space:]]*:[[:space:]]*/, \"\", value)",
+  "      sub(/[^0-9].*$/, \"\", value)",
+  "      if (value == expected_pid) pid_ok = 1",
+  "    }",
+  "    /\"pgid\"[[:space:]]*:/ {",
+  "      value = $0",
+  "      sub(/^.*\"pgid\"[[:space:]]*:[[:space:]]*/, \"\", value)",
+  "      sub(/[^0-9].*$/, \"\", value)",
+  "      if (value == expected_pgid) pgid_ok = 1",
+  "    }",
+  "    END { exit((pid_ok && pgid_ok) ? 0 : 1) }",
+  "  ' \"$lease_path\"",
+  "}",
+  "while ! lease_matches; do",
   "  attempt=$((attempt + 1))",
   "  if [ \"$attempt\" -ge 600 ]; then",
-  "    echo \"relay-dispatch: timed out waiting for run lease: $lease_path\" >&2",
+  "    echo \"relay-dispatch: timed out waiting for fresh run lease: $lease_path pid=$expected_pid pgid=$expected_pgid\" >&2",
   "    exit 125",
   "  fi",
   "  sleep 0.05",
@@ -653,7 +673,7 @@ function buildLeaseGatedCommand({ cmd, args, leasePath }) {
   }
   return {
     cmd: "/bin/sh",
-    args: ["-c", POSIX_LEASE_GATE_SCRIPT, "relay-dispatch-lease-gate", leasePath, cmd, ...args],
+    args: ["-c", POSIX_LEASE_GATE_SCRIPT, "relay-dispatch-lease-gate", leasePath, String(process.pid), cmd, ...args],
   };
 }
 
