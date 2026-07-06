@@ -629,16 +629,46 @@ function terminateProcessTree(pid) {
   } catch {}
 }
 
+function probeProcessGroup(pgid) {
+  const normalizedPgid = Number(pgid);
+  if (process.env.RELAY_TEST_PROCESS_GROUP_ALIVE_EPERM === String(normalizedPgid)) {
+    const error = new Error("operation not permitted");
+    error.code = "EPERM";
+    throw error;
+  }
+  process.kill(process.platform === "win32" ? normalizedPgid : -normalizedPgid, 0);
+}
+
 function isProcessGroupAlive(pgid) {
   if (!pgid || !Number.isFinite(Number(pgid))) return false;
   try {
-    process.kill(-Number(pgid), 0);
+    probeProcessGroup(pgid);
     return true;
   } catch (error) {
     if (error.code === "ESRCH") return false;
     if (error.code === "EPERM") return true;
     return false;
   }
+}
+
+function sleepAsync(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitForProcessGroupExit(pgid, { timeoutMs = 1500, intervalMs = 50 } = {}) {
+  if (!pgid || !Number.isFinite(Number(pgid))) return false;
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!isProcessGroupAlive(pgid)) return true;
+    await sleepAsync(Math.min(intervalMs, Math.max(1, deadline - Date.now())));
+  }
+  return !isProcessGroupAlive(pgid);
+}
+
+function maybePauseBeforeExecutorSpawnForTest() {
+  const pauseMs = Number(process.env.RELAY_TEST_BEFORE_EXECUTOR_SPAWN_PAUSE_MS || 0);
+  if (!Number.isFinite(pauseMs) || pauseMs <= 0) return Promise.resolve();
+  return new Promise((resolve) => setTimeout(resolve, pauseMs));
 }
 
 function latestRunEvent(repoRoot, runId) {
@@ -1061,6 +1091,7 @@ async function main() {
   let copiedFiles = [];
   let executorPid = null;
   let executorPgid = null;
+  let executorClosePromise = null;
   let dispatchStartTime = null;
   let fleetIssueLock = null;
   let handlingSignal = false;
@@ -1100,17 +1131,28 @@ async function main() {
         : "node skills/relay-dispatch/scripts/dispatch.js --manifest <manifest-path>";
       const suffix = signal === "SIGTERM" && !executorTerminated
         ? " The executor may still be running and may complete on its own."
+        : signal === "SIGINT" && executorPid && !executorTerminated
+          ? " Executor termination was requested, but the process group may still be running."
         : "";
       console.error(`Dispatch interrupted by ${signal}; retained worktree at ${wtPath || "(unknown)"}. Resume with: ${command}.${suffix}`);
     } catch {}
   }
 
-  function handleSignal(signal) {
+  async function handleSignal(signal) {
     if (handlingSignal) return;
     handlingSignal = true;
-    const executorTerminated = signal === "SIGINT";
-    if (executorTerminated) {
+    let executorTerminated = false;
+    if (signal === "SIGINT") {
+      const pgid = executorPgid || executorPid;
       terminateProcessTree(executorPid);
+      if (executorClosePromise) {
+        executorTerminated = await Promise.race([
+          executorClosePromise.then(() => true),
+          waitForProcessGroupExit(pgid),
+        ]);
+      } else {
+        executorTerminated = await waitForProcessGroupExit(pgid);
+      }
     }
     journalDispatchInterrupted(signal, executorTerminated);
     releaseFleetIssueLock();
@@ -1119,8 +1161,8 @@ async function main() {
   }
 
   process.once("exit", releaseFleetIssueLock);
-  process.on("SIGINT", () => handleSignal("SIGINT"));
-  process.on("SIGTERM", () => handleSignal("SIGTERM"));
+  process.on("SIGINT", () => { void handleSignal("SIGINT"); });
+  process.on("SIGTERM", () => { void handleSignal("SIGTERM"); });
 
   if (RESUME_MODE) {
     const manifestRecord = resolveManifestRecord({
@@ -1820,6 +1862,7 @@ async function main() {
     executor_policy: executorPolicy,
     policy_decision: policyDecision,
   });
+  await maybePauseBeforeExecutorSpawnForTest();
 
   // Redirect stdout/stderr to files. Using spawn with detached: true gives us
   // a killable process group (terminateProcessTree sends SIGTERM to -pid).
@@ -1832,7 +1875,7 @@ async function main() {
   executorPid = child.pid;
   executorPgid = child.pid;
 
-  const execResult = await new Promise((resolve) => {
+  executorClosePromise = new Promise((resolve) => {
     let timedOut = false;
     const timer = setTimeout(() => {
       timedOut = true;
@@ -1849,6 +1892,9 @@ async function main() {
       resolve({ code: 1, signal: null, timedOut, spawnError: e });
     });
   });
+  const execResult = await executorClosePromise;
+  if (handlingSignal) return;
+  executorClosePromise = null;
   executorPid = null;
   executorPgid = null;
 

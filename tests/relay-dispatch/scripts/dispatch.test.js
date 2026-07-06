@@ -1399,6 +1399,131 @@ test("dispatch SIGINT terminates executor group and preserves worktree while jou
   await runInterruptedDispatchSignalTest("SIGINT");
 });
 
+test("dispatch handles interruption before executor spawn without removing the worktree", async () => {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-pre-spawn-bin-"));
+  const markerPath = path.join(os.tmpdir(), `relay-dispatch-pre-spawn-${process.pid}-${Date.now()}.json`);
+  writeSleepingCodex(binDir);
+  const env = {
+    ...process.env,
+    PATH: `${binDir}:${process.env.PATH}`,
+    RELAY_HOME: relayHome,
+    RELAY_TEST_BEFORE_EXECUTOR_SPAWN_PAUSE_MS: "30000",
+    RELAY_TEST_EXECUTOR_MARKER: markerPath,
+  };
+  let manifestPath = null;
+
+  const proc = spawn(process.execPath, [SCRIPT, repoRoot, ...withRequiredRubric([
+    "-b", "issue-800-pre-spawn-signal",
+    "--prompt", "pause before spawn",
+    "--json",
+  ])], {
+    cwd: repoRoot,
+    env,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  const exitPromise = waitForDispatchExit(proc);
+
+  try {
+    manifestPath = await waitFor(() => {
+      const candidate = listManifestPaths(repoRoot)[0];
+      if (!candidate) return null;
+      const manifest = readManifest(candidate).data;
+      const events = readRunEvents(repoRoot, manifest.run_id);
+      return events.some((event) => event.event === "dispatch_start") ? candidate : null;
+    }, { timeoutMs: 30000, message: "dispatch_start before executor spawn" });
+
+    proc.kill("SIGINT");
+    const result = await exitPromise;
+    assert.equal(result.code, 1);
+    assert.equal(result.signal, null);
+    assert.match(result.stderr, /Dispatch interrupted by SIGINT/);
+
+    const manifest = readManifest(manifestPath).data;
+    assert.equal(manifest.state, STATES.DISPATCHED);
+    assert.ok(fs.existsSync(manifest.paths.worktree), "pre-spawn signal must preserve the retained worktree");
+    assert.equal(fs.existsSync(markerPath), false, "executor must not have spawned before the pre-spawn signal");
+
+    const interruptedEvent = readRunEvents(repoRoot, manifest.run_id).at(-1);
+    assert.equal(interruptedEvent.event, "dispatch_interrupted");
+    assert.equal(interruptedEvent.signal, "SIGINT");
+    assert.equal(interruptedEvent.executor_pid, null);
+    assert.equal(interruptedEvent.executor_pgid, null);
+    assert.equal(interruptedEvent.executor_terminated, false);
+    assert.equal(interruptedEvent.worktree, manifest.paths.worktree);
+    assert.equal(interruptedEvent.state_from, STATES.DISPATCHED);
+    assert.equal(interruptedEvent.state_to, STATES.DISPATCHED);
+  } finally {
+    if (!proc.killed) {
+      proc.kill("SIGTERM");
+    }
+  }
+});
+
+test("dispatch exits and preserves worktree when interruption journaling fails", async () => {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-journal-fail-bin-"));
+  const markerPath = path.join(os.tmpdir(), `relay-dispatch-journal-fail-${process.pid}-${Date.now()}.json`);
+  writeSleepingCodex(binDir);
+  const env = {
+    ...process.env,
+    PATH: `${binDir}:${process.env.PATH}`,
+    RELAY_HOME: relayHome,
+    RELAY_TEST_EXECUTOR_MARKER: markerPath,
+  };
+  let marker = null;
+  let manifestPath = null;
+  let manifest = null;
+
+  const proc = spawn(process.execPath, [SCRIPT, repoRoot, ...withRequiredRubric([
+    "-b", "issue-800-journal-failure",
+    "--prompt", "sleep until journal failure interruption",
+    "--json",
+  ])], {
+    cwd: repoRoot,
+    env,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  const exitPromise = waitForDispatchExit(proc);
+
+  try {
+    marker = await waitFor(() => {
+      if (!fs.existsSync(markerPath)) return null;
+      return JSON.parse(fs.readFileSync(markerPath, "utf-8"));
+    }, { timeoutMs: 30000, message: "fake executor marker" });
+    manifestPath = await waitFor(() => listManifestPaths(repoRoot)[0], {
+      timeoutMs: 30000,
+      message: "dispatch manifest path",
+    });
+    manifest = readManifest(manifestPath).data;
+    const eventsPath = getEventsPath(repoRoot, manifest.run_id);
+    fs.rmSync(eventsPath, { force: true });
+    fs.symlinkSync(path.join(os.tmpdir(), `relay-dispatch-events-target-${process.pid}-${Date.now()}`), eventsPath);
+
+    proc.kill("SIGTERM");
+    const result = await exitPromise;
+    assert.equal(result.code, 1);
+    assert.equal(result.signal, null);
+    assert.match(result.stderr, /Dispatch interrupted by SIGTERM/);
+
+    const updatedManifest = readManifest(manifestPath).data;
+    assert.equal(updatedManifest.state, STATES.DISPATCHED);
+    assert.ok(fs.existsSync(updatedManifest.paths.worktree), "journal failure signal path must preserve the retained worktree");
+    assert.equal(isPgidAlive(marker.pgid), true, "SIGTERM must still leave the executor process group alive when journaling fails");
+  } finally {
+    const pgid = marker?.pgid;
+    if (pgid) {
+      killPgid(pgid);
+      await waitForPgidDead(pgid);
+    }
+    if (!proc.killed) {
+      proc.kill("SIGTERM");
+    }
+  }
+});
+
 function makeDispatchedResumeFixture(repoRoot, env, { appendInterruptedEvent, pgid = 987654, pid = pgid } = {}) {
   const first = JSON.parse(runDispatch(repoRoot, [
     "-b", `issue-800-resume-${Date.now()}-${Math.random().toString(16).slice(2)}`,
@@ -1495,6 +1620,42 @@ test("dispatch refuses interrupted resume while recorded pgid is still alive", a
     killPgid(blocker.pid);
     await Promise.race([blockerExit, sleep(5000)]);
   }
+});
+
+test("dispatch refuses interrupted resume when pgid probe returns EPERM", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  writeFakeCodex(binDir);
+  const epermPgid = 424242;
+  const env = {
+    ...process.env,
+    PATH: `${binDir}:${process.env.PATH}`,
+    RELAY_HOME: relayHome,
+    RELAY_TEST_PROCESS_GROUP_ALIVE_EPERM: String(epermPgid),
+  };
+  const first = makeDispatchedResumeFixture(repoRoot, env, {
+    appendInterruptedEvent: true,
+    pid: epermPgid,
+    pgid: epermPgid,
+  });
+
+  const result = spawnSync(process.execPath, [SCRIPT, repoRoot,
+    "--run-id", first.runId,
+    "--prompt", "resume interrupted dispatch",
+    "--json",
+  ], {
+    cwd: repoRoot,
+    env,
+    encoding: "utf-8",
+    stdio: "pipe",
+  });
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /interrupted executor process group is still alive/);
+  assert.match(result.stderr, new RegExp(`pid=${epermPgid}`));
+  assert.match(result.stderr, /Wait for it to finish, or kill that process group before resuming/);
+  assert.equal(readManifest(first.manifestPath).data.state, STATES.DISPATCHED);
 });
 
 test("dispatch still refuses resume from non-interrupted dispatched state", () => {
