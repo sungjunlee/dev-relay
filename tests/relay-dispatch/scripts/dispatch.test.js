@@ -1562,6 +1562,8 @@ test("dispatch interruption immediately after worktree creation journals a resum
     assert.equal(fs.realpathSync(manifest.paths.worktree), fs.realpathSync(worktreePath));
     assert.ok(fs.existsSync(manifest.paths.worktree), "after-worktree signal must preserve the retained worktree");
     assert.ok(manifest.anchor?.rubric_path, "signal-written manifest must retain the rubric anchor for resume");
+    assert.equal(manifest.environment.node_version, null);
+    assert.equal(manifest.environment.dispatch_ts, null);
 
     const interruptedEvent = readRunEvents(repoRoot, manifest.run_id).at(-1);
     assert.equal(interruptedEvent.event, "dispatch_interrupted");
@@ -1587,6 +1589,14 @@ test("dispatch interruption immediately after worktree creation journals a resum
     assert.equal(resume.runId, manifest.run_id);
     assert.equal(resume.worktree, manifest.paths.worktree);
     assert.equal(resume.runState, STATES.REVIEW_PENDING);
+
+    const resumedManifest = readManifest(manifestPath).data;
+    assert.equal(resumedManifest.environment.node_version, process.version);
+    assert.equal(typeof resumedManifest.environment.dispatch_ts, "string");
+    assert.match(resumedManifest.environment.main_sha, /^[0-9a-f]{40}$/);
+    assert.equal(resumedManifest.environment.lockfile_hash, null);
+    const resumeEvents = readRunEvents(repoRoot, manifest.run_id);
+    assert.equal(resumeEvents.some((event) => event.event === "environment_drift"), false);
   } finally {
     if (!proc.killed) {
       proc.kill("SIGTERM");

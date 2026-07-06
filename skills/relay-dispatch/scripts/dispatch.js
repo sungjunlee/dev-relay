@@ -1296,6 +1296,19 @@ async function main() {
 
     // --- Environment drift check ---
     const currentEnv = collectEnvironmentSnapshot(repoRoot, baseBranch);
+    const needsDraftEnvironmentBackfill = manifest.state === STATES.DRAFT
+      && resumesInterruptedDispatch
+      && (
+        !manifest.environment
+        || ["node_version", "main_sha", "lockfile_hash", "dispatch_ts"].every((field) => manifest.environment[field] == null)
+      );
+    if (needsDraftEnvironmentBackfill) {
+      manifest = {
+        ...manifest,
+        environment: currentEnv,
+      };
+      writeManifest(manifestPath, manifest);
+    }
     const drift = compareEnvironmentSnapshot(manifest.environment, currentEnv);
     if (drift.length) {
       const driftMsg = drift.map(d => `${d.field}: ${d.from} → ${d.to}`).join(", ");
