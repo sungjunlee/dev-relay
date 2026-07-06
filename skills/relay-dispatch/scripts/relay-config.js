@@ -252,13 +252,18 @@ function commandInit(positionals, jsonOut) {
     throw new Error("init does not accept positional arguments");
   }
   const profile = requireValue(readArg(args, "--profile", undefined, CLI_ARG_OPTIONS), "--profile");
-  const { routesPath, routes, warnings } = loadRoutesForMutation();
-  const updated = cloneJson(routes);
-  updated.version = 2;
-  updated.strict = profile === "company";
-  if (!hasOwn(updated, "routes")) updated.routes = [];
-  if (!hasOwn(updated, "denied_routes")) updated.denied_routes = [];
-  const written = writeRoutes(routesPath, updated);
+  // Overwrite semantics: init builds the profile shape from scratch so it can
+  // also recover from an invalid existing routes.json. Only the legacy-shadow
+  // warning depends on prior filesystem state.
+  const routesPath = relayRoutesPath();
+  const routesExisted = fs.existsSync(routesPath);
+  const warnings = legacyShadowWarnings({ routesExisted });
+  const written = writeRoutes(routesPath, {
+    version: 2,
+    strict: profile === "company",
+    routes: [],
+    denied_routes: [],
+  });
   outputMutation({ jsonOut, action: "init", profile, routesPath, routes: written, warnings });
 }
 

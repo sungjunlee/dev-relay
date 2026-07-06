@@ -518,10 +518,16 @@ test("mutation commands create routes.json, preserve existing v2 fields, and war
           denied_routes: [],
         });
       },
+      // init has overwrite semantics: the pre-existing config is replaced by
+      // the fresh profile shape rather than merged into.
+      overwrites: true,
       assertExisting(routes) {
-        assert.equal(routes.strict, true);
-        assert.deepEqual(routes.routes, [{ route: "openai/existing", phases: ["dispatch"], executors: ["opencode"] }]);
-        assert.deepEqual(routes.denied_routes, [{ route: "openai/blocked", phases: ["review"], reviewers: ["pi"] }]);
+        assert.deepEqual(routes, {
+          version: 2,
+          strict: true,
+          routes: [],
+          denied_routes: [],
+        });
       },
     },
     {
@@ -605,13 +611,15 @@ test("mutation commands create routes.json, preserve existing v2 fields, and war
     assert.deepEqual(parseJson(existing).warnings, []);
     const existingRoutes = readRoutes(existingHome);
     spec.assertExisting(existingRoutes);
-    assert.equal(existingRoutes.strict, true);
-    assert.deepEqual(existingRoutes.executor_defaults, {
-      opencode: { model: "openai/existing" },
-    });
-    assert.deepEqual(existingRoutes.presets, {
-      fast: { dispatch: { executor: "opencode", model: "openai/existing" } },
-    });
+    if (!spec.overwrites) {
+      assert.equal(existingRoutes.strict, true);
+      assert.deepEqual(existingRoutes.executor_defaults, {
+        opencode: { model: "openai/existing" },
+      });
+      assert.deepEqual(existingRoutes.presets, {
+        fast: { dispatch: { executor: "opencode", model: "openai/existing" } },
+      });
+    }
 
     const legacyHome = tempDir(`relay-config-${spec.name}-legacy-`);
     const legacyPath = path.join(legacyHome, "policy.json");
@@ -692,6 +700,67 @@ test("validation failure leaves the routes file untouched", () => {
   assert.notEqual(result.status, 0, result.combined);
   assert.match(result.combined, /presets must be an object/);
   assert.equal(fs.readFileSync(routesPath, "utf-8"), before);
+});
+
+test("init overwrites an invalid existing routes.json instead of failing on it", () => {
+  const relayHome = tempDir();
+  const routesPath = path.join(relayHome, "routes.json");
+  writeJson(routesPath, {
+    version: 2,
+    routes: [],
+    presets: [],
+  });
+
+  const result = runConfig(["init", "--profile", "personal", "--json"], { relayHome });
+
+  assert.equal(result.status, 0, result.combined);
+  assert.deepEqual(readRoutes(relayHome), {
+    version: 2,
+    strict: false,
+    routes: [],
+    denied_routes: [],
+  });
+});
+
+test("init rejects profiles other than company or personal", () => {
+  const relayHome = tempDir();
+
+  const result = runConfig(["init", "--profile", "compnay", "--json"], { relayHome });
+
+  assert.notEqual(result.status, 0, result.combined);
+  assert.match(result.combined, /--profile must be one of: company, personal/);
+  assert.equal(fs.existsSync(path.join(relayHome, "routes.json")), false);
+});
+
+test("legacy-shadow warning three states in text mode", () => {
+  const warningPattern = /^warning: routes\.json now takes precedence; legacy policy\.json\/executors\.json are ignored/;
+  const mutationArgs = ["add-route", "openai/new", "--phase", "dispatch", "--executor", "opencode"];
+
+  const shadowHome = tempDir("relay-config-text-shadow-");
+  writeJson(path.join(shadowHome, "policy.json"), {
+    ...buildDefaultRelayPolicy(),
+    profile: "legacy",
+  });
+  const shadow = runConfig(mutationArgs, { relayHome: shadowHome });
+  assert.equal(shadow.status, 0, shadow.combined);
+  const shadowWarningLines = shadow.stdout.split(/\r?\n/).filter((line) => warningPattern.test(line));
+  assert.equal(shadowWarningLines.length, 1, shadow.stdout);
+  assert.match(shadow.stdout, /relay-config: add-route wrote /);
+
+  const existingHome = tempDir("relay-config-text-existing-");
+  writeJson(path.join(existingHome, "policy.json"), {
+    ...buildDefaultRelayPolicy(),
+    profile: "legacy",
+  });
+  writeJson(path.join(existingHome, "routes.json"), { version: 2, routes: [] });
+  const existing = runConfig(mutationArgs, { relayHome: existingHome });
+  assert.equal(existing.status, 0, existing.combined);
+  assert.doesNotMatch(existing.stdout, /warning:/);
+
+  const freshHome = tempDir("relay-config-text-fresh-");
+  const fresh = runConfig(mutationArgs, { relayHome: freshHome });
+  assert.equal(fresh.status, 0, fresh.combined);
+  assert.doesNotMatch(fresh.stdout, /warning:/);
 });
 
 test("invalid args fail closed with non-zero exits", () => {
