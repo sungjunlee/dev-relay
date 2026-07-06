@@ -1376,6 +1376,29 @@ test("finalize-run writes merged state to disk before fallible post-merge steps"
   assert.equal(manifest.next_action, "manual_cleanup_required");
   assert.equal(manifest.cleanup.status, "pending");
   assert.equal(fs.existsSync(worktreePath), true);
+
+  const retryStdout = execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--branch", branch,
+    "--pr", "123",
+    "--json",
+  ], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+    env: { ...process.env, RELAY_GH_BIN: fakeGh },
+  });
+  const retry = JSON.parse(retryStdout);
+  assert.equal(retry.state, STATES.MERGED);
+  assert.equal(retry.nextAction, "done");
+  assert.equal(retry.cleanup.cleanupStatus, "succeeded");
+  assert.equal(fs.existsSync(worktreePath), false);
+
+  const retriedManifest = readManifest(manifestPath).data;
+  assert.equal(retriedManifest.state, STATES.MERGED);
+  assert.equal(retriedManifest.next_action, "done");
+  assert.equal(retriedManifest.cleanup.status, "succeeded");
 });
 
 test("finalize-run blocks merge when PR has merge conflicts", () => {
