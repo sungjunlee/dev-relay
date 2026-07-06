@@ -32,6 +32,7 @@
  */
 
 const path = require("path");
+const fs = require("fs");
 const {
   getExpectedManifestRepoRoot,
   getRunDir,
@@ -218,6 +219,21 @@ function fetchPrMergeState(repoPath, prNumber) {
     state: parsed.state || null,
     mergeCommitSha: parsed.mergeCommit?.oid || null,
   };
+}
+
+function isMergedPrState(prMergeState) {
+  return prMergeState?.state === "MERGED";
+}
+
+function manifestHeadShaFallback(manifestData) {
+  return manifestData?.git?.head_sha || manifestData?.review?.last_reviewed_sha || null;
+}
+
+function resolveCurrentHeadSha(worktreePath, manifestData) {
+  if (worktreePath && fs.existsSync(worktreePath)) {
+    return execGit(worktreePath, ["rev-parse", "HEAD"]);
+  }
+  return manifestHeadShaFallback(manifestData);
 }
 
 function fetchDefaultBranchName(repoPath) {
@@ -415,6 +431,54 @@ function deleteRemoteBranch(repoPath, branch) {
       warning: summarizeFailure(error),
     };
   }
+}
+
+function runFinalizeCleanup({
+  repoRoot,
+  data,
+  dryRun,
+  deleteMergedBranch,
+}) {
+  const worktreePath = data?.paths?.worktree || null;
+  const worktreeAlreadyMissing = Boolean(worktreePath) && !fs.existsSync(worktreePath);
+  if (!worktreeAlreadyMissing) {
+    return runCleanup({
+      repoRoot,
+      data,
+      dryRun,
+      deleteMergedBranch,
+    });
+  }
+
+  const cleanupInput = {
+    ...data,
+    paths: {
+      ...(data.paths || {}),
+      worktree: null,
+    },
+  };
+  const cleanupResult = runCleanup({
+    repoRoot,
+    data: cleanupInput,
+    dryRun,
+    deleteMergedBranch,
+  });
+
+  return {
+    updatedData: {
+      ...cleanupResult.updatedData,
+      paths: {
+        ...(cleanupResult.updatedData.paths || {}),
+        worktree: worktreePath,
+      },
+    },
+    summary: {
+      ...cleanupResult.summary,
+      worktreePath,
+      worktreeExistsBefore: false,
+      worktreeRemoved: true,
+    },
+  };
 }
 
 function resolveCurrentBranch(repoPath) {
@@ -619,6 +683,7 @@ function main() {
     expectedRepoRoot: selectorExpectedRepoRoot,
     manifestPath: manifestRecord.manifestPath,
     runId: manifestRecord.data?.run_id,
+    allowMissingWorktree: true,
     caller: "finalize-run",
   });
   repoPath = validatedPaths.repoRoot;
@@ -635,6 +700,7 @@ function main() {
       expectedRepoRoot: manifestArg ? undefined : repoPath,
       manifestPath: manifestRecord.manifestPath,
       runId: manifestRecord.data?.run_id,
+      allowMissingWorktree: true,
       caller: "finalize-run",
     });
   }
@@ -697,8 +763,31 @@ function main() {
   const skipReviewRubricStatus = skipReviewRubricAudit.rubricStatus;
 
   if (mergeAllowed) {
-    currentHeadSha = execGit(validatedPaths.worktree, ["rev-parse", "HEAD"]);
-    if (skipReviewReason) {
+    if (!dryRun) {
+      prMergeState = fetchPrMergeState(repoPath, prNumber);
+      if (isMergedPrState(prMergeState)) {
+        mergeRecovered = true;
+      }
+    }
+    const alreadyMerged = !dryRun && isMergedPrState(prMergeState);
+    if (alreadyMerged) {
+      currentHeadSha = manifestHeadShaFallback(safeData);
+    } else {
+      if (validatedPaths.worktreeMissing) {
+        validateManifestPaths(safeData.paths, {
+          expectedRepoRoot: validatedPaths.repoRoot,
+          manifestPath,
+          runId: safeData.run_id,
+          caller: "finalize-run",
+        });
+      }
+      currentHeadSha = resolveCurrentHeadSha(validatedPaths.worktree, safeData);
+    }
+    if (alreadyMerged) {
+      // The PR is already in GitHub's terminal MERGED state. Retry finalization
+      // must skip gates whose inputs can disappear after merge (checks, branch
+      // base, and retained worktree HEAD) and move on to manifest finalization.
+    } else if (skipReviewReason) {
       const skipReviewFailure = buildSkipReviewGateFailure(prNumber, skipReviewRubricAudit);
       if (skipReviewFailure) {
         if (!dryRun) {
@@ -835,27 +924,29 @@ function main() {
       });
     }
 
-    prMergeState = dryRun ? prMergeState : fetchPrMergeState(repoPath, prNumber);
-    if (!dryRun && prMergeState.state !== "MERGED") {
+    if (!dryRun && !prMergeState) {
+      prMergeState = fetchPrMergeState(repoPath, prNumber);
+    }
+    if (!dryRun && !isMergedPrState(prMergeState)) {
       try {
         execGh(repoPath, ["pr", "merge", String(prNumber), mergeFlag(mergeMethod)]);
         mergePerformed = true;
         prMergeState = fetchPrMergeState(repoPath, prNumber);
       } catch (error) {
         prMergeState = fetchPrMergeState(repoPath, prNumber);
-        if (prMergeState.state !== "MERGED") {
+        if (!isMergedPrState(prMergeState)) {
           throw error;
         }
         mergeRecovered = true;
       }
-    } else if (!dryRun && prMergeState.state === "MERGED") {
+    } else if (!dryRun && isMergedPrState(prMergeState)) {
       mergeRecovered = true;
     } else if (dryRun) {
       mergePerformed = true;
     }
     // Merge queue support: if PR isn't immediately MERGED, poll for completion.
     // Repos with merge queues transition through an intermediate state before merging.
-    if (!dryRun && prMergeState.state !== "MERGED") {
+    if (!dryRun && !isMergedPrState(prMergeState)) {
       const MERGE_QUEUE_POLL_INTERVAL_MS = parseInt(process.env.RELAY_MERGE_QUEUE_POLL_MS || "30000", 10);
       const MERGE_QUEUE_MAX_POLLS = parseInt(process.env.RELAY_MERGE_QUEUE_MAX_POLLS || "60", 10);
       if (!Number.isFinite(MERGE_QUEUE_POLL_INTERVAL_MS) || MERGE_QUEUE_POLL_INTERVAL_MS < 100) {
@@ -871,7 +962,7 @@ function main() {
       for (let i = 0; i < MERGE_QUEUE_MAX_POLLS; i++) {
         Atomics.wait(sleepBuf, 0, 0, MERGE_QUEUE_POLL_INTERVAL_MS);
         prMergeState = fetchPrMergeState(repoPath, prNumber);
-        if (prMergeState.state === "MERGED") break;
+        if (isMergedPrState(prMergeState)) break;
         if (prMergeState.state === "OPEN") {
           appendRunEvent(repoPath, safeData.run_id, {
             event: EVENTS.MERGE_BLOCKED,
@@ -886,7 +977,7 @@ function main() {
           );
         }
       }
-      if (prMergeState.state !== "MERGED") {
+      if (!isMergedPrState(prMergeState)) {
         appendRunEvent(repoPath, safeData.run_id, {
           event: EVENTS.MERGE_BLOCKED,
           state_from: safeData.state,
@@ -943,6 +1034,10 @@ function main() {
           safeData.state
         ),
       });
+      writeManifest(manifestPath, updated, body);
+      if (process.env.RELAY_FINALIZE_ABORT_AFTER_MERGE_WRITE) {
+        throw new Error("simulated post-merge failure after merged manifest write");
+      }
     }
   }
 
@@ -973,7 +1068,7 @@ function main() {
     }
   }
 
-  const cleanupResult = runCleanup({
+  const cleanupResult = runFinalizeCleanup({
     repoRoot: repoPath,
     data: updated,
     dryRun,

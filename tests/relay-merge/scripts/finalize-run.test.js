@@ -1228,6 +1228,153 @@ test("finalize-run resumes cleanup when the PR is already merged", () => {
   assert.doesNotMatch(ghLog, /pr merge 123 --squash/);
 });
 
+test("finalize-run skips pre-merge gates when GitHub already reports the PR merged", () => {
+  const { repoRoot, manifestPath, branch, worktreePath, headSha } = setupRepo();
+  const logPath = path.join(repoRoot, "gh.log");
+  const fakeGh = writeFakeGh(logPath, {
+    baseRefName: "issue-688",
+    comments: [DEFAULT_REVIEW_COMMENT],
+    commits: [
+      {
+        oid: headSha,
+        committedDate: DEFAULT_COMMIT_DATE,
+      },
+    ],
+    state: "MERGED",
+    mergeCommit: { oid: "merged-sha" },
+    statusCheckRollup: [
+      { context: "coderabbit", state: "PENDING" },
+    ],
+    basePrCandidates: [],
+  });
+
+  const stdout = execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--branch", branch,
+    "--pr", "123",
+    "--json",
+  ], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+    env: { ...process.env, RELAY_GH_BIN: fakeGh },
+  });
+
+  const result = JSON.parse(stdout);
+  assert.equal(result.mergePerformed, false);
+  assert.equal(result.mergeRecovered, true);
+  assert.equal(result.state, STATES.MERGED);
+  assert.equal(result.cleanup.cleanupStatus, "succeeded");
+  assert.equal(fs.existsSync(worktreePath), false);
+
+  const manifest = readManifest(manifestPath).data;
+  assert.equal(manifest.state, STATES.MERGED);
+  assert.equal(manifest.cleanup.status, "succeeded");
+
+  const ghLog = fs.readFileSync(logPath, "utf-8");
+  assert.match(ghLog, /pr view 123 --json state,mergeCommit/);
+  assert.doesNotMatch(ghLog, /statusCheckRollup/);
+  assert.doesNotMatch(ghLog, /pr list --head issue-688 --state all/);
+  assert.doesNotMatch(ghLog, /pr merge 123 --squash/);
+});
+
+test("finalize-run completes an already-merged retry when the retained worktree is missing", () => {
+  const { repoRoot, manifestPath, branch, worktreePath, headSha } = setupRepo();
+  execFileSync("git", ["-C", repoRoot, "worktree", "remove", "--force", worktreePath], {
+    encoding: "utf-8",
+    stdio: "pipe",
+  });
+  assert.equal(fs.existsSync(worktreePath), false);
+  const logPath = path.join(repoRoot, "gh.log");
+  const fakeGh = writeFakeGh(logPath, {
+    state: "MERGED",
+    mergeCommit: { oid: "merged-sha" },
+    statusCheckRollup: [
+      { context: "coderabbit", state: "PENDING" },
+    ],
+  });
+
+  const stdout = execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--branch", branch,
+    "--pr", "123",
+    "--json",
+  ], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+    env: { ...process.env, RELAY_GH_BIN: fakeGh },
+  });
+
+  const result = JSON.parse(stdout);
+  assert.equal(result.mergePerformed, false);
+  assert.equal(result.mergeRecovered, true);
+  assert.equal(result.state, STATES.MERGED);
+  assert.equal(result.nextAction, "done");
+  assert.equal(result.cleanup.cleanupStatus, "succeeded");
+  assert.equal(result.cleanup.worktreePath, worktreePath);
+  assert.equal(result.cleanup.worktreeExistsBefore, false);
+  assert.equal(result.cleanup.worktreeRemoved, true);
+  assert.equal(result.cleanup.branchDeleted, true);
+  assert.equal(result.cleanup.pruneRan, true);
+  assert.equal(branchExists(repoRoot, branch), false);
+
+  const manifest = readManifest(manifestPath).data;
+  assert.equal(manifest.state, STATES.MERGED);
+  assert.equal(manifest.git.head_sha, headSha);
+  assert.equal(manifest.paths.worktree, worktreePath);
+  assert.equal(manifest.cleanup.status, "succeeded");
+  assert.equal(manifest.cleanup.worktree_removed, true);
+  assert.equal(manifest.cleanup.branch_deleted, true);
+
+  const ghLog = fs.readFileSync(logPath, "utf-8");
+  assert.doesNotMatch(ghLog, /statusCheckRollup/);
+  assert.doesNotMatch(ghLog, /pr merge 123 --squash/);
+});
+
+test("finalize-run writes merged state to disk before fallible post-merge steps", () => {
+  const { repoRoot, manifestPath, branch, worktreePath, headSha, runId } = setupRepo();
+  const logPath = path.join(repoRoot, "gh.log");
+  const fakeGh = writeFakeGh(logPath, {
+    comments: [DEFAULT_REVIEW_COMMENT],
+    commits: [
+      {
+        oid: headSha,
+        committedDate: DEFAULT_COMMIT_DATE,
+      },
+    ],
+  });
+
+  const result = spawnSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--branch", branch,
+    "--pr", "123",
+    "--json",
+  ], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+    env: {
+      ...process.env,
+      RELAY_GH_BIN: fakeGh,
+      RELAY_FINALIZE_ABORT_AFTER_MERGE_WRITE: "1",
+    },
+  });
+
+  assert.notEqual(result.status, 0, result.stdout);
+  assert.match(result.stderr, /simulated post-merge failure after merged manifest write/);
+  const mergeEvent = readRunEvents(repoRoot, runId).find((event) => event.event === "merge_finalize");
+  assert.equal(mergeEvent?.state_to, STATES.MERGED);
+  const manifest = readManifest(manifestPath).data;
+  assert.equal(manifest.state, STATES.MERGED);
+  assert.equal(manifest.next_action, "manual_cleanup_required");
+  assert.equal(manifest.cleanup.status, "pending");
+  assert.equal(fs.existsSync(worktreePath), true);
+});
+
 test("finalize-run blocks merge when PR has merge conflicts", () => {
   const { repoRoot, manifestPath, branch } = setupRepo();
   const logPath = path.join(repoRoot, "gh.log");
