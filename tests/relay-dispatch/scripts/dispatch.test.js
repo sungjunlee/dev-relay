@@ -1,7 +1,7 @@
 // canary: bare-string `event === "..."` reader assertions in this file are deliberate canaries against EVENTS schema drift; do not port to EVENTS.X (see #313).
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { execFileSync, spawnSync } = require("child_process");
+const { execFileSync, spawn, spawnSync } = require("child_process");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
@@ -28,6 +28,7 @@ const {
   RUBRIC_SIZE_UNPARSEABLE,
 } = require("../../../skills/relay-dispatch/scripts/rubric-size");
 const { buildDefaultRelayPolicy } = require("../../../skills/relay-dispatch/scripts/relay-policy");
+const { appendRunEvent, EVENTS, readRunEvents } = require("../../../skills/relay-dispatch/scripts/relay-events");
 const { evaluateReviewGate } = require("../../../skills/relay-merge/scripts/review-gate");
 const { createEnforcementFixture } = require("./test-support");
 
@@ -860,6 +861,94 @@ function runDispatch(repoRoot, args, env) {
   });
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitFor(condition, { timeoutMs = 5000, intervalMs = 50, message = "condition" } = {}) {
+  const deadline = Date.now() + timeoutMs;
+  let lastError = null;
+  while (Date.now() < deadline) {
+    try {
+      const value = condition();
+      if (value) return value;
+    } catch (error) {
+      lastError = error;
+    }
+    await sleep(intervalMs);
+  }
+  throw new Error(`Timed out waiting for ${message}${lastError ? `: ${lastError.message}` : ""}`);
+}
+
+function isPgidAlive(pgid) {
+  if (!pgid) return false;
+  try {
+    process.kill(-Number(pgid), 0);
+    return true;
+  } catch (error) {
+    if (error.code === "EPERM") return true;
+    if (error.code === "ESRCH") return false;
+    return false;
+  }
+}
+
+function killPgid(pgid) {
+  if (!pgid) return;
+  try {
+    process.kill(-Number(pgid), "SIGTERM");
+  } catch {}
+}
+
+async function waitForPgidDead(pgid) {
+  await waitFor(() => !isPgidAlive(pgid), {
+    timeoutMs: 5000,
+    message: `process group ${pgid} to exit`,
+  });
+}
+
+function writeSleepingCodex(binDir) {
+  ensureDefaultFakeGh(binDir);
+  const codexPath = path.join(binDir, "codex");
+  fs.writeFileSync(codexPath, `#!/usr/bin/env node
+const fs = require("fs");
+const args = process.argv.slice(2);
+if (args[0] === "--version") {
+  process.stdout.write("codex-fake\\n");
+  process.exit(0);
+}
+if (args[0] !== "exec") {
+  process.stderr.write("unsupported fake codex invocation");
+  process.exit(1);
+}
+const marker = process.env.RELAY_TEST_EXECUTOR_MARKER;
+if (marker) {
+  fs.writeFileSync(marker, JSON.stringify({ pid: process.pid, pgid: process.pid }), "utf-8");
+}
+process.on("SIGTERM", () => {
+  if (marker) {
+    fs.writeFileSync(marker + ".terminated", JSON.stringify({ pid: process.pid, signal: "SIGTERM" }), "utf-8");
+  }
+  process.exit(143);
+});
+setInterval(() => {}, 1000);
+`, "utf-8");
+  fs.chmodSync(codexPath, 0o755);
+  return codexPath;
+}
+
+async function waitForDispatchExit(proc) {
+  let stdout = "";
+  let stderr = "";
+  proc.stdout.setEncoding("utf-8");
+  proc.stderr.setEncoding("utf-8");
+  proc.stdout.on("data", (chunk) => { stdout += chunk; });
+  proc.stderr.on("data", (chunk) => { stderr += chunk; });
+  const result = await new Promise((resolve) => {
+    proc.on("close", (code, signal) => resolve({ code, signal }));
+  });
+  return { ...result, stdout, stderr };
+}
+
 function readExecutionEvidence(runDir) {
   return JSON.parse(fs.readFileSync(path.join(runDir, EXECUTION_EVIDENCE_FILENAME), "utf-8"));
 }
@@ -1218,6 +1307,218 @@ test("dispatch reuses the same run and worktree on resume", () => {
   assert.match(events, /"event":"dispatch_start"/);
   assert.match(events, /"reason":"same_run_resume"/);
   assert.match(events, /"reason":"same_run_resume:completed"/);
+});
+
+async function runInterruptedDispatchSignalTest(signalName) {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-sleep-bin-"));
+  const markerPath = path.join(os.tmpdir(), `relay-dispatch-sleep-${process.pid}-${Date.now()}-${signalName}.json`);
+  writeSleepingCodex(binDir);
+  const env = {
+    ...process.env,
+    PATH: `${binDir}:${process.env.PATH}`,
+    RELAY_HOME: relayHome,
+    RELAY_TEST_EXECUTOR_MARKER: markerPath,
+  };
+  let marker = null;
+  let interruptedEvent = null;
+
+  const proc = spawn(process.execPath, [SCRIPT, repoRoot, ...withRequiredRubric([
+    "-b", `issue-800-${signalName.toLowerCase()}`,
+    "--prompt", "sleep until interrupted",
+    "--json",
+  ])], {
+    cwd: repoRoot,
+    env,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  const exitPromise = waitForDispatchExit(proc);
+
+  try {
+    marker = await waitFor(() => {
+      if (!fs.existsSync(markerPath)) return null;
+      return JSON.parse(fs.readFileSync(markerPath, "utf-8"));
+    }, { timeoutMs: 30000, message: "fake executor marker" });
+    const manifestPath = await waitFor(() => listManifestPaths(repoRoot)[0], {
+      timeoutMs: 30000,
+      message: "dispatch manifest path",
+    });
+
+    proc.kill(signalName);
+    const result = await exitPromise;
+    assert.equal(result.code, 1);
+    assert.equal(result.signal, null);
+    assert.match(result.stderr, new RegExp(`Dispatch interrupted by ${signalName}`));
+    assert.match(result.stderr, /Resume with: node skills\/relay-dispatch\/scripts\/dispatch\.js --manifest /);
+    if (signalName === "SIGTERM") {
+      assert.match(result.stderr, /executor may still be running/);
+    }
+
+    const manifest = readManifest(manifestPath).data;
+    assert.equal(manifest.state, STATES.DISPATCHED);
+    assert.ok(fs.existsSync(manifest.paths.worktree), "signal handling must preserve the retained worktree");
+
+    const events = readRunEvents(repoRoot, manifest.run_id);
+    interruptedEvent = events.at(-1);
+    assert.equal(interruptedEvent.event, "dispatch_interrupted");
+    assert.equal(interruptedEvent.signal, signalName);
+    assert.equal(interruptedEvent.executor_pid, marker.pid);
+    assert.equal(interruptedEvent.executor_pgid, marker.pgid);
+    assert.equal(interruptedEvent.timeout_s, 2400);
+    assert.equal(typeof interruptedEvent.elapsed_s, "number");
+    assert.ok(interruptedEvent.elapsed_s >= 0);
+    assert.equal(interruptedEvent.worktree, manifest.paths.worktree);
+    assert.equal(interruptedEvent.state_from, STATES.DISPATCHED);
+    assert.equal(interruptedEvent.state_to, STATES.DISPATCHED);
+
+    if (signalName === "SIGTERM") {
+      assert.equal(interruptedEvent.executor_terminated, false);
+      assert.equal(isPgidAlive(marker.pgid), true, "SIGTERM must not kill the detached executor process group");
+    } else {
+      assert.equal(interruptedEvent.executor_terminated, true);
+      await waitForPgidDead(marker.pgid);
+    }
+  } finally {
+    const pgid = interruptedEvent?.executor_pgid || marker?.pgid;
+    if (signalName === "SIGTERM" && pgid) {
+      killPgid(pgid);
+      await waitForPgidDead(pgid);
+    }
+    if (!proc.killed) {
+      proc.kill("SIGTERM");
+    }
+  }
+}
+
+test("dispatch SIGTERM preserves executor and worktree while journaling dispatch_interrupted", async () => {
+  await runInterruptedDispatchSignalTest("SIGTERM");
+});
+
+test("dispatch SIGINT terminates executor group and preserves worktree while journaling dispatch_interrupted", async () => {
+  await runInterruptedDispatchSignalTest("SIGINT");
+});
+
+function makeDispatchedResumeFixture(repoRoot, env, { appendInterruptedEvent, pgid = 987654, pid = pgid } = {}) {
+  const first = JSON.parse(runDispatch(repoRoot, [
+    "-b", `issue-800-resume-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    "--prompt", "first pass",
+    "--json",
+  ], env));
+  const record = readManifest(first.manifestPath);
+  const dispatchedManifest = {
+    ...record.data,
+    state: STATES.DISPATCHED,
+    next_action: "await_dispatch_result",
+  };
+  writeManifest(first.manifestPath, dispatchedManifest, record.body);
+  if (appendInterruptedEvent) {
+    appendRunEvent(repoRoot, first.runId, {
+      event: EVENTS.DISPATCH_INTERRUPTED,
+      state_from: STATES.DISPATCHED,
+      state_to: STATES.DISPATCHED,
+      reason: "signal",
+      signal: "SIGTERM",
+      executor_pid: pid,
+      executor_pgid: pgid,
+      elapsed_s: 1,
+      timeout_s: 2400,
+      executor_terminated: false,
+      worktree: first.worktree,
+    });
+  }
+  return first;
+}
+
+test("dispatch resumes from dispatched when latest event is dispatch_interrupted and recorded pgid is dead", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  writeFakeCodex(binDir);
+  const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}`, RELAY_HOME: relayHome };
+  const first = makeDispatchedResumeFixture(repoRoot, env, { appendInterruptedEvent: true });
+
+  const second = JSON.parse(runDispatch(repoRoot, [
+    "--run-id", first.runId,
+    "--prompt", "resume interrupted dispatch",
+    "--json",
+  ], env));
+
+  assert.equal(second.mode, "resume");
+  assert.equal(second.runId, first.runId);
+  assert.equal(second.worktree, first.worktree);
+  assert.equal(second.runState, STATES.REVIEW_PENDING);
+  const events = readRunEvents(repoRoot, first.runId);
+  assert.equal(events.at(-2).event, "dispatch_start");
+  assert.equal(events.at(-2).state_from, STATES.DISPATCHED);
+  assert.equal(events.at(-2).state_to, STATES.DISPATCHED);
+  assert.equal(events.at(-1).event, "dispatch_result");
+});
+
+test("dispatch refuses interrupted resume while recorded pgid is still alive", async () => {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  writeFakeCodex(binDir);
+  const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}`, RELAY_HOME: relayHome };
+  const blocker = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000);"], {
+    detached: true,
+    stdio: "ignore",
+  });
+  const blockerExit = new Promise((resolve) => blocker.on("close", resolve));
+  blocker.unref();
+
+  try {
+    const first = makeDispatchedResumeFixture(repoRoot, env, {
+      appendInterruptedEvent: true,
+      pid: blocker.pid,
+      pgid: blocker.pid,
+    });
+
+    const result = spawnSync(process.execPath, [SCRIPT, repoRoot,
+      "--run-id", first.runId,
+      "--prompt", "resume interrupted dispatch",
+      "--json",
+    ], {
+      cwd: repoRoot,
+      env,
+      encoding: "utf-8",
+      stdio: "pipe",
+    });
+
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /interrupted executor process group is still alive/);
+    assert.match(result.stderr, new RegExp(`pid=${blocker.pid}`));
+    assert.match(result.stderr, /Wait for it to finish, or kill that process group before resuming/);
+    assert.equal(readManifest(first.manifestPath).data.state, STATES.DISPATCHED);
+  } finally {
+    killPgid(blocker.pid);
+    await Promise.race([blockerExit, sleep(5000)]);
+  }
+});
+
+test("dispatch still refuses resume from non-interrupted dispatched state", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  writeFakeCodex(binDir);
+  const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}`, RELAY_HOME: relayHome };
+  const first = makeDispatchedResumeFixture(repoRoot, env, { appendInterruptedEvent: false });
+
+  const result = spawnSync(process.execPath, [SCRIPT, repoRoot,
+    "--run-id", first.runId,
+    "--prompt", "resume non-interrupted dispatch",
+    "--json",
+  ], {
+    cwd: repoRoot,
+    env,
+    encoding: "utf-8",
+    stdio: "pipe",
+  });
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /same-run resume requires state='changes_requested', got 'dispatched'/);
+  assert.equal(readManifest(first.manifestPath).data.state, STATES.DISPATCHED);
 });
 
 function writeResumeCaptureCodex(binDir, capturePath) {

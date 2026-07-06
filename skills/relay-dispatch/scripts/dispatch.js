@@ -125,7 +125,7 @@ const {
 } = require("./manifest/guidance");
 const { STATES, updateManifestState } = require("./manifest/lifecycle");
 const { resolveManifestRecord } = require("./relay-resolver");
-const { appendRunEvent, appendUnregisteredRouteUsedEvent, EVENTS } = require("./relay-events");
+const { appendRunEvent, appendUnregisteredRouteUsedEvent, EVENTS, readRunEvents } = require("./relay-events");
 const {
   ADAPTER_PHASES,
   getAgentAdapterDescriptor,
@@ -629,6 +629,23 @@ function terminateProcessTree(pid) {
   } catch {}
 }
 
+function isProcessGroupAlive(pgid) {
+  if (!pgid || !Number.isFinite(Number(pgid))) return false;
+  try {
+    process.kill(-Number(pgid), 0);
+    return true;
+  } catch (error) {
+    if (error.code === "ESRCH") return false;
+    if (error.code === "EPERM") return true;
+    return false;
+  }
+}
+
+function latestRunEvent(repoRoot, runId) {
+  const events = readRunEvents(repoRoot, runId);
+  return events.length ? events[events.length - 1] : null;
+}
+
 function validateResumeRequestLinkage(manifest, { requestId, leafId, fleetId, doneCriteriaPath }) {
   const checks = [
     {
@@ -1042,9 +1059,11 @@ async function main() {
   let issueNumber = inferIssueNumber(branch);
   let manifest;
   let copiedFiles = [];
-  let createdWorktree = false;
   let executorPid = null;
+  let executorPgid = null;
+  let dispatchStartTime = null;
   let fleetIssueLock = null;
+  let handlingSignal = false;
 
   function releaseFleetIssueLock() {
     if (!fleetIssueLock) return;
@@ -1052,18 +1071,56 @@ async function main() {
     fleetIssueLock = null;
   }
 
-  function cleanup() {
-    terminateProcessTree(executorPid);
-    releaseFleetIssueLock();
-    if (createdWorktree) {
-      removeWorktree({ repoRoot, worktreePath: wtPath });
+  function journalDispatchInterrupted(signal, executorTerminated) {
+    if (!manifest || !runId) return;
+    let runDir;
+    try {
+      runDir = getRunDir(repoRoot, runId);
+      if (!fs.existsSync(runDir)) return;
+      appendRunEvent(repoRoot, runId, {
+        event: EVENTS.DISPATCH_INTERRUPTED,
+        state_from: manifest.state || null,
+        state_to: manifest.state || null,
+        reason: "signal",
+        signal,
+        executor_pid: executorPid,
+        executor_pgid: executorPgid,
+        elapsed_s: dispatchStartTime ? Math.max(0, Math.round((Date.now() - dispatchStartTime) / 1000)) : null,
+        timeout_s: TIMEOUT,
+        executor_terminated: executorTerminated,
+        worktree: wtPath || null,
+      });
+    } catch {}
+  }
+
+  function printSignalRecoveryHint(signal, executorTerminated) {
+    try {
+      const command = manifestPath
+        ? `node skills/relay-dispatch/scripts/dispatch.js --manifest ${manifestPath}`
+        : "node skills/relay-dispatch/scripts/dispatch.js --manifest <manifest-path>";
+      const suffix = signal === "SIGTERM" && !executorTerminated
+        ? " The executor may still be running and may complete on its own."
+        : "";
+      console.error(`Dispatch interrupted by ${signal}; retained worktree at ${wtPath || "(unknown)"}. Resume with: ${command}.${suffix}`);
+    } catch {}
+  }
+
+  function handleSignal(signal) {
+    if (handlingSignal) return;
+    handlingSignal = true;
+    const executorTerminated = signal === "SIGINT";
+    if (executorTerminated) {
+      terminateProcessTree(executorPid);
     }
+    journalDispatchInterrupted(signal, executorTerminated);
+    releaseFleetIssueLock();
+    printSignalRecoveryHint(signal, executorTerminated);
     process.exit(1);
   }
 
   process.once("exit", releaseFleetIssueLock);
-  process.on("SIGINT", cleanup);
-  process.on("SIGTERM", cleanup);
+  process.on("SIGINT", () => handleSignal("SIGINT"));
+  process.on("SIGTERM", () => handleSignal("SIGTERM"));
 
   if (RESUME_MODE) {
     const manifestRecord = resolveManifestRecord({
@@ -1113,7 +1170,17 @@ async function main() {
       console.error(`Error: manifest repo root is not a git repository: ${repoRoot}`);
       process.exit(1);
     }
-    if (manifest.state !== STATES.CHANGES_REQUESTED) {
+    const latestEvent = manifest.state === STATES.DISPATCHED ? latestRunEvent(repoRoot, runId) : null;
+    const resumesInterruptedDispatch = latestEvent?.event === EVENTS.DISPATCH_INTERRUPTED;
+    if (resumesInterruptedDispatch && isProcessGroupAlive(latestEvent.executor_pgid)) {
+      console.error(
+        `Error: interrupted executor process group is still alive for run '${runId}' ` +
+        `(pid=${latestEvent.executor_pid ?? "unknown"}, pgid=${latestEvent.executor_pgid}). ` +
+        "Wait for it to finish, or kill that process group before resuming."
+      );
+      process.exit(1);
+    }
+    if (manifest.state !== STATES.CHANGES_REQUESTED && !resumesInterruptedDispatch) {
       console.error(`Error: same-run resume requires state='${STATES.CHANGES_REQUESTED}', got '${manifest.state}'`);
       process.exit(1);
     }
@@ -1477,7 +1544,6 @@ async function main() {
         assertWithin,
       });
       copiedFiles = created.copiedFiles;
-      createdWorktree = true;
     } catch (error) {
       console.error(`Error: ${error.message}`);
       process.exit(1);
@@ -1710,6 +1776,7 @@ async function main() {
   let exitCode = 0;
   let error = null;
   const startTime = Date.now();
+  dispatchStartTime = startTime;
   let stderrText = "";
 
   // Record HEAD before execution so we can measure only new work.
@@ -1719,7 +1786,12 @@ async function main() {
   } catch {}
 
   const dispatchFromState = manifest.state;
-  manifest = updateManifestState(manifest, STATES.DISPATCHED, "await_dispatch_result");
+  manifest = manifest.state === STATES.DISPATCHED
+    ? {
+        ...manifest,
+        next_action: "await_dispatch_result",
+      }
+    : updateManifestState(manifest, STATES.DISPATCHED, "await_dispatch_result");
   manifest = {
     ...manifest,
     git: {
@@ -1758,6 +1830,7 @@ async function main() {
   if (execCwd) spawnOpts.cwd = execCwd;
   const child = nodeSpawn(cmd, execArgs, spawnOpts);
   executorPid = child.pid;
+  executorPgid = child.pid;
 
   const execResult = await new Promise((resolve) => {
     let timedOut = false;
@@ -1777,6 +1850,7 @@ async function main() {
     });
   });
   executorPid = null;
+  executorPgid = null;
 
   if (execResult.timedOut) {
     exitCode = 1;
