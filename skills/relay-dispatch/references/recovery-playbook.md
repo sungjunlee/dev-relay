@@ -2,6 +2,41 @@
 
 Operator-facing recovery commands for `relay-dispatch`. These cover the two canonical "happy path failed but the work is salvageable" scenarios: the executor finished without committing, and the manifest state needs to advance after an external event. Both replace ad-hoc shell sequences with structured, audit-trailed commands — prefer them over hand-edits.
 
+## Crash-only dispatch reconcile
+
+`reconcile-run.js` settles a run that is still `dispatched` after the dispatch supervisor died, the machine rebooted, the executor was OOM-killed, or an operator needs to check an interrupted run from another shell. It uses the run directory as the runtime state root:
+
+- `lease.json` exists only while an executor is expected to be running: `{ pid, pgid, host, started_at, timeout_s }`. `pid` is the dispatch supervisor and `pgid` is the detached executor process group.
+- `dispatch-stdout.log`, `dispatch-stderr.log`, and `dispatch-result.txt` are live runtime artifacts in the run directory and are recorded in manifest `paths`.
+- A lease is live only when `host` matches the current host and the process group probe succeeds; `EPERM` counts as alive. A host mismatch is treated as live but unverifiable, so cleanup tools fail closed unless `--force` is supplied.
+
+```bash
+# Inspect/settle one dispatched run
+node skills/relay-dispatch/scripts/reconcile-run.js --repo . --run-id <id> --json
+
+# Preview the exact decision row and planned actions
+node skills/relay-dispatch/scripts/reconcile-run.js --repo . --run-id <id> --dry-run --json
+```
+
+Decision table:
+
+| Row | Condition | Action |
+|---|---|---|
+| 1 | Manifest state is not `dispatched` | No-op report with current state and no next action. |
+| 2 | Lease is live and elapsed time is within `timeout_s` | No-op report as running, including remaining time. |
+| 3 | Lease is live, same host, and elapsed time exceeds `timeout_s` | Kill the executor pgid, append `dispatch_interrupted` with reason `reconcile_timeout`, remove `lease.json`, and report resume options. |
+| 4 | Lease is dead/absent and a result file or branch work exists | Remove `lease.json`, transition `dispatched -> review_pending` through the manifest lifecycle helper, then invoke `recover-commit.js` when commit/push/PR recovery is needed. Reconcile does not duplicate commit/push/PR logic. |
+| 5 | Lease is dead/absent and there is no result or work | Append `dispatch_interrupted` with reason `reconcile_dead_no_work` unless it is already the tail event, remove any stale lease, and report the `dispatch.js --manifest ...` resume command. |
+
+Worked example:
+
+```bash
+node skills/relay-dispatch/scripts/reconcile-run.js --repo . \
+  --run-id issue-801-20260501010000000-abcd1234 --json
+```
+
+If row 4 reports `recovered`, continue with normal review. If row 5 reports `interrupted`, re-run the reported `dispatch.js --manifest ...` command after adjusting the prompt or timeout as needed.
+
 ## Executor completed but did not commit
 
 `recover-commit.js` handles the canonical "executor finished implementation but timed out before committing" path. For `review_pending` runs it replaces the ad-hoc `git add -A && git commit && git push -u && gh pr create` shell sequence with a single command that preflights, commits via template, pushes (no force), creates the PR (idempotent on re-run), stamps `git.pr_number` via the shared lock helper, and emits a `recover_commit` event. Manifest state stays `review_pending` — the next step is the normal post-publication review.

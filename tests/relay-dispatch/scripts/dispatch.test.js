@@ -936,6 +936,43 @@ setInterval(() => {}, 1000);
   return codexPath;
 }
 
+function writeLeaseCheckingCodex(binDir, markerPath) {
+  ensureDefaultFakeGh(binDir);
+  const codexPath = path.join(binDir, "codex");
+  fs.writeFileSync(codexPath, `#!/usr/bin/env node
+const fs = require("fs");
+const path = require("path");
+const { execFileSync } = require("child_process");
+const args = process.argv.slice(2);
+if (args[0] === "--version") {
+  process.stdout.write("codex-fake\\n");
+  process.exit(0);
+}
+if (args[0] !== "exec") {
+  process.stderr.write("unsupported fake codex invocation");
+  process.exit(1);
+}
+const cwd = args[args.indexOf("-C") + 1];
+const output = args[args.indexOf("-o") + 1];
+const leasePath = path.join(path.dirname(output), "lease.json");
+if (!fs.existsSync(leasePath)) {
+  process.stderr.write("lease missing while executor runs: " + leasePath + "\\n");
+  process.exit(2);
+}
+fs.writeFileSync(${JSON.stringify(markerPath)}, JSON.stringify({
+  output,
+  leasePath,
+  lease: JSON.parse(fs.readFileSync(leasePath, "utf-8")),
+}), "utf-8");
+fs.writeFileSync(path.join(cwd, "lease-checked.txt"), "lease was present\\n", "utf-8");
+execFileSync("git", ["-C", cwd, "add", "lease-checked.txt"], { stdio: "pipe" });
+execFileSync("git", ["-C", cwd, "commit", "-m", "fake lease checked"], { stdio: "pipe" });
+fs.writeFileSync(output, "lease ok\\n", "utf-8");
+`, "utf-8");
+  fs.chmodSync(codexPath, 0o755);
+  return codexPath;
+}
+
 function writeLeaderExitDescendantCodex(binDir) {
   ensureDefaultFakeGh(binDir);
   const codexPath = path.join(binDir, "codex");
@@ -3839,9 +3876,47 @@ test("dispatch artifacts are persisted in the run directory", () => {
   const promptText = fs.readFileSync(path.join(result.runDir, "dispatch-prompt.md"), "utf-8");
   assert.match(promptText, /artifact test task/);
 
+  assert.equal(result.resultFile, path.join(result.runDir, "dispatch-result.txt"));
+  assert.equal(result.stdoutLog, path.join(result.runDir, "dispatch-stdout.log"));
+  assert.equal(result.stderrLog, path.join(result.runDir, "dispatch-stderr.log"));
   assert.ok(fs.existsSync(path.join(result.runDir, "dispatch-result.txt")));
+  assert.ok(fs.existsSync(path.join(result.runDir, "dispatch-stdout.log")));
+  assert.ok(fs.existsSync(path.join(result.runDir, "dispatch-stderr.log")));
   const resultText = fs.readFileSync(path.join(result.runDir, "dispatch-result.txt"), "utf-8");
   assert.match(resultText, /ok/);
+
+  const manifest = readManifest(result.manifestPath).data;
+  assert.equal(manifest.paths.dispatch_result, path.join(result.runDir, "dispatch-result.txt"));
+  assert.equal(manifest.paths.dispatch_stdout, path.join(result.runDir, "dispatch-stdout.log"));
+  assert.equal(manifest.paths.dispatch_stderr, path.join(result.runDir, "dispatch-stderr.log"));
+  assert.equal(manifest.paths.lease, path.join(result.runDir, "lease.json"));
+  assert.equal(fs.existsSync(path.join(result.runDir, "lease.json")), false);
+});
+
+test("dispatch creates a run lease while executor runs and removes it on normal completion", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  const markerPath = path.join(os.tmpdir(), `relay-dispatch-lease-${Date.now()}.json`);
+  writeLeaseCheckingCodex(binDir, markerPath);
+  const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}` };
+
+  const result = JSON.parse(runDispatch(repoRoot, [
+    "-b", "issue-lease",
+    "--prompt", "lease lifecycle task",
+    "--json",
+  ], env));
+
+  assert.equal(result.status, "completed");
+  const marker = JSON.parse(fs.readFileSync(markerPath, "utf-8"));
+  assert.equal(marker.output, path.join(result.runDir, "dispatch-result.txt"));
+  assert.equal(marker.leasePath, path.join(result.runDir, "lease.json"));
+  assert.equal(Number.isInteger(marker.lease.pid), true);
+  assert.ok(marker.lease.pid > 0);
+  assert.equal(Number.isInteger(marker.lease.pgid), true);
+  assert.equal(marker.lease.host, os.hostname());
+  assert.equal(marker.lease.timeout_s, 2400);
+  assert.equal(fs.existsSync(marker.leasePath), false);
 });
 
 test("dispatch persists selected guidance metadata in run artifacts and events", () => {

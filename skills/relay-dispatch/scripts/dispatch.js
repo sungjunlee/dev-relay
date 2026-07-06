@@ -125,7 +125,7 @@ const {
 } = require("./manifest/guidance");
 const { STATES, updateManifestState } = require("./manifest/lifecycle");
 const { resolveManifestRecord } = require("./relay-resolver");
-const { appendRunEvent, appendUnregisteredRouteUsedEvent, EVENTS, readRunEvents } = require("./relay-events");
+const { appendRunEvent, appendUnregisteredRouteUsedEvent, EVENTS } = require("./relay-events");
 const {
   ADAPTER_PHASES,
   getAgentAdapterDescriptor,
@@ -147,6 +147,16 @@ const {
 const { loadRelayPolicy } = require("./relay-policy");
 const { loadProjectRoutes, resolveRouteIntent, resolveRoutingDecision } = require("./relay-routing");
 const { classifyRepositoryDirt, formatRuntimeMetadataDirt } = require("./runtime-dirt");
+const {
+  dispatchManifestPathFields,
+  getRunArtifactPaths,
+  isProcessGroupAlive,
+  latestRunEvent,
+  removeRunLease,
+  terminateProcessGroup,
+  waitForProcessGroupExit,
+  writeRunLease,
+} = require("./run-runtime-state");
 
 // ---------------------------------------------------------------------------
 // Args
@@ -618,51 +628,33 @@ function formatMissingResumeWorktreeError({ repoRoot, runId, worktreePath, branc
   ].join("\n");
 }
 
-function terminateProcessTree(pid) {
-  if (!pid) return;
-  try {
-    if (process.platform === "win32") {
-      execFileSync("taskkill", ["/PID", String(pid), "/T", "/F"], { stdio: "pipe" });
-    } else {
-      process.kill(-pid, "SIGTERM"); // negative PID = entire process group
-    }
-  } catch {}
-}
-
-function probeProcessGroup(pgid) {
-  const normalizedPgid = Number(pgid);
-  if (process.env.RELAY_TEST_PROCESS_GROUP_ALIVE_EPERM === String(normalizedPgid)) {
-    const error = new Error("operation not permitted");
-    error.code = "EPERM";
-    throw error;
-  }
-  process.kill(process.platform === "win32" ? normalizedPgid : -normalizedPgid, 0);
-}
-
-function isProcessGroupAlive(pgid) {
-  if (!pgid || !Number.isFinite(Number(pgid))) return false;
-  try {
-    probeProcessGroup(pgid);
-    return true;
-  } catch (error) {
-    if (error.code === "ESRCH") return false;
-    if (error.code === "EPERM") return true;
-    return false;
-  }
-}
-
 function sleepAsync(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function waitForProcessGroupExit(pgid, { timeoutMs = 1500, intervalMs = 50 } = {}) {
-  if (!pgid || !Number.isFinite(Number(pgid))) return false;
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (!isProcessGroupAlive(pgid)) return true;
-    await sleepAsync(Math.min(intervalMs, Math.max(1, deadline - Date.now())));
+const POSIX_LEASE_GATE_SCRIPT = [
+  "lease_path=$1",
+  "shift",
+  "attempt=0",
+  "while [ ! -f \"$lease_path\" ]; do",
+  "  attempt=$((attempt + 1))",
+  "  if [ \"$attempt\" -ge 600 ]; then",
+  "    echo \"relay-dispatch: timed out waiting for run lease: $lease_path\" >&2",
+  "    exit 125",
+  "  fi",
+  "  sleep 0.05",
+  "done",
+  "exec \"$@\"",
+].join("\n");
+
+function buildLeaseGatedCommand({ cmd, args, leasePath }) {
+  if (process.platform === "win32") {
+    return { cmd, args };
   }
-  return !isProcessGroupAlive(pgid);
+  return {
+    cmd: "/bin/sh",
+    args: ["-c", POSIX_LEASE_GATE_SCRIPT, "relay-dispatch-lease-gate", leasePath, cmd, ...args],
+  };
 }
 
 function maybePauseBeforeExecutorSpawnForTest() {
@@ -681,11 +673,6 @@ function maybePauseAfterWorktreeCreateForTest() {
     } catch {}
   }
   return new Promise((resolve) => setTimeout(resolve, pauseMs));
-}
-
-function latestRunEvent(repoRoot, runId) {
-  const events = readRunEvents(repoRoot, runId);
-  return events.length ? events[events.length - 1] : null;
 }
 
 function validateResumeRequestLinkage(manifest, { requestId, leafId, fleetId, doneCriteriaPath }) {
@@ -1183,7 +1170,7 @@ async function main() {
     let executorTerminated = false;
     if (signal === "SIGINT") {
       const pgid = executorPgid || executorPid;
-      terminateProcessTree(executorPid);
+      terminateProcessGroup(pgid);
       executorTerminated = await waitForProcessGroupExit(pgid);
       if (executorClosePromise) {
         await Promise.race([
@@ -1375,9 +1362,11 @@ async function main() {
   executorNetworkPolicy = runtime.executorNetworkPolicy;
   INITIAL_ROUTE_RESOLUTION = runtime.routeResolution;
   AUTO_RECOVER_COMMIT = runtime.autoRecoverCommit;
-  resultFile = path.join(os.tmpdir(), `dispatch-${EXECUTOR}-${wtId}.txt`);
-  stdoutLog = path.join(os.tmpdir(), `dispatch-${EXECUTOR}-${wtId}.log`);
-  stderrLog = path.join(os.tmpdir(), `dispatch-${EXECUTOR}-${wtId}.err`);
+  const runArtifactPaths = getRunArtifactPaths(repoRoot, runId);
+  resultFile = runArtifactPaths.resultFile;
+  stdoutLog = runArtifactPaths.stdoutLog;
+  stderrLog = runArtifactPaths.stderrLog;
+  const manifestPathFields = dispatchManifestPathFields(runArtifactPaths);
 
   if (RESUME_MODE) {
     try {
@@ -1654,6 +1643,10 @@ async function main() {
     });
     manifest = {
       ...manifest,
+      paths: {
+        ...(manifest.paths || {}),
+        ...manifestPathFields,
+      },
       policy: {
         ...(manifest.policy || {}),
         executor_network: executorNetworkPolicy,
@@ -1738,6 +1731,10 @@ async function main() {
   } else if (manifest) {
     manifest = {
       ...manifest,
+      paths: {
+        ...(manifest.paths || {}),
+        ...manifestPathFields,
+      },
       policy: {
         ...(manifest.policy || {}),
         executor_network: executorNetworkPolicy,
@@ -1935,21 +1932,40 @@ async function main() {
   await maybePauseBeforeExecutorSpawnForTest();
 
   // Redirect stdout/stderr to files. Using spawn with detached: true gives us
-  // a killable process group (terminateProcessTree sends SIGTERM to -pid).
+  // a killable process group (terminateProcessGroup sends SIGTERM to -pid).
   const stdoutFd = fs.openSync(stdoutLog, "w");
   const stderrFd = fs.openSync(stderrLog, "w");
 
   const spawnOpts = { stdio: ["ignore", stdoutFd, stderrFd], detached: true };
   if (execCwd) spawnOpts.cwd = execCwd;
-  const child = nodeSpawn(cmd, execArgs, spawnOpts);
+  const gatedCommand = buildLeaseGatedCommand({
+    cmd,
+    args: execArgs,
+    leasePath: runArtifactPaths.leasePath,
+  });
+  const child = nodeSpawn(gatedCommand.cmd, gatedCommand.args, spawnOpts);
   executorPid = child.pid;
   executorPgid = child.pid;
+  if (executorPgid) {
+    try {
+      writeRunLease(repoRoot, runId, {
+        pid: process.pid,
+        pgid: executorPgid,
+        timeoutS: TIMEOUT,
+      });
+    } catch (leaseError) {
+      terminateProcessGroup(executorPgid);
+      try { fs.closeSync(stdoutFd); } catch {}
+      try { fs.closeSync(stderrFd); } catch {}
+      throw new Error(`lease_write_failed: ${leaseError.message}`);
+    }
+  }
 
   executorClosePromise = new Promise((resolve) => {
     let timedOut = false;
     const timer = setTimeout(() => {
       timedOut = true;
-      terminateProcessTree(child.pid);
+      terminateProcessGroup(child.pid);
     }, TIMEOUT * 1000);
 
     child.on("close", (code, signal) => {
@@ -1964,6 +1980,7 @@ async function main() {
   });
   const execResult = await executorClosePromise;
   if (handlingSignal) return;
+  removeRunLease(repoRoot, runId);
   executorClosePromise = null;
   executorPid = null;
   executorPgid = null;
@@ -2122,7 +2139,10 @@ async function main() {
     fs.writeFileSync(path.join(runDir, "dispatch-prompt.md"), taskPrompt, "utf-8");
   } catch {}
   try {
-    if (resultText) fs.writeFileSync(path.join(runDir, "dispatch-result.txt"), resultText, "utf-8");
+    const persistedResultPath = path.join(runDir, "dispatch-result.txt");
+    if (resultText && path.resolve(resultFile) !== path.resolve(persistedResultPath)) {
+      fs.writeFileSync(persistedResultPath, resultText, "utf-8");
+    }
   } catch {}
   let executionEvidencePath = null;
   try {

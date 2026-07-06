@@ -35,6 +35,7 @@ const {
 const { findUnknownFlags, modeLabel, readArg, schemaHasFlag } = require("./cli-args");
 const { appendRunEvent, EVENTS } = require("./relay-events");
 const { safeFormatRunId } = require("./relay-resolver");
+const { assertNoLiveRunLease } = require("./run-runtime-state");
 const {
   DEFAULT_STALE_DAYS,
   assessRunWorktreeHealth,
@@ -126,6 +127,7 @@ if (hasCliFlag(["--help", "-h"])) {
   console.log(`  --inspect              ${modeLabel("--inspect")} Health inventory only (no cleanup or shell sweep)`);
   console.log(`  --reconcile-merged     ${modeLabel("--reconcile-merged")} Reconcile merged drift for eligible non-terminal runs`);
   console.log(`  --stale-days <days>    ${modeLabel("--stale-days")} Stale classification threshold (default: ${DEFAULT_STALE_DAYS})`);
+  console.log(`  --force                ${modeLabel("--force")} Override a live run lease when removing a worktree`);
   process.exit(0);
 }
 
@@ -141,6 +143,7 @@ function run() {
   const jsonOut = hasCliFlag("--json");
   const inspectOnly = hasCliFlag("--inspect");
   const reconcileMerged = hasCliFlag("--reconcile-merged");
+  const force = hasCliFlag("--force");
   const staleDays = parsePositiveNumber(readArg(args, "--stale-days", String(DEFAULT_STALE_DAYS), CLI_ARG_OPTIONS), "--stale-days");
   const olderThanHours = all ? 0 : parseHours(readArg(args, "--older-than", "24", CLI_ARG_OPTIONS), "--older-than");
   const now = Date.now();
@@ -151,6 +154,7 @@ function run() {
     olderThanHours,
     staleDays,
     dryRun,
+    force,
     all,
     inspectOnly,
     reconcileMerged,
@@ -240,6 +244,27 @@ function run() {
       reconcileMerged
       && health.reconcileEligible
     ) {
+      try {
+        assertNoLiveRunLease({
+          repoRoot,
+          runId: normalizedData.run_id,
+          force,
+          caller: "cleanup-worktrees",
+        });
+      } catch (error) {
+        result.failed.push({
+          ...enrichedBaseInfo,
+          cleanupStatus: CLEANUP_STATUSES.FAILED,
+          nextAction: "reconcile_run_or_force_cleanup",
+          worktreeRemoved: false,
+          branchDeleted: false,
+          pruneRan: false,
+          error: error.message,
+          reason: "live_lease",
+        });
+        continue;
+      }
+
       let reconcileData = normalizedData;
       if (!dryRun) {
         reconcileData = forceUpdateManifestState(
@@ -320,6 +345,27 @@ function run() {
 
     if (cleanupStatus === CLEANUP_STATUSES.SUCCEEDED) {
       result.skipped.push({ ...enrichedBaseInfo, reason: "already_cleaned" });
+      continue;
+    }
+
+    try {
+      assertNoLiveRunLease({
+        repoRoot,
+        runId: normalizedData.run_id,
+        force,
+        caller: "cleanup-worktrees",
+      });
+    } catch (error) {
+      result.failed.push({
+        ...enrichedBaseInfo,
+        cleanupStatus: CLEANUP_STATUSES.FAILED,
+        nextAction: "reconcile_run_or_force_cleanup",
+        worktreeRemoved: false,
+        branchDeleted: false,
+        pruneRan: false,
+        error: error.message,
+        reason: "live_lease",
+      });
       continue;
     }
 

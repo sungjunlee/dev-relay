@@ -16,17 +16,19 @@ const { getActorName, writeManifest } = require("./manifest/store");
 const { findUnknownFlags, modeLabel, readArg, schemaHasFlag } = require("./cli-args");
 const { resolveManifestRecord } = require("./relay-resolver");
 const { appendEventLineToPath, appendRunEvent, EVENTS } = require("./relay-events");
+const { assertNoLiveRunLease } = require("./run-runtime-state");
 
 const args = process.argv.slice(2);
 const CLI_ARG_OPTIONS = { commandName: "close-run", reservedFlags: ["-h"] };
 const hasCliFlag = (flag) => schemaHasFlag(args, flag, CLI_ARG_OPTIONS);
 
 if (!args.length || hasCliFlag(["--help", "-h"])) {
-  console.log("Usage: close-run.js --repo <path> --run-id <id> --reason <text> [--dry-run] [--json]");
+  console.log("Usage: close-run.js --repo <path> --run-id <id> --reason <text> [--force] [--dry-run] [--json]");
   console.log("\nOptions:");
   console.log(`  --repo <path>    ${modeLabel("--repo")} Repository root`);
   console.log(`  --run-id <id>    ${modeLabel("--run-id")} Relay run identifier`);
   console.log(`  --reason <text>  ${modeLabel("--reason")} Audit reason`);
+  console.log(`  --force          ${modeLabel("--force")} Override a live run lease`);
   console.log(`  --dry-run        ${modeLabel("--dry-run")} Print result without writing`);
   console.log(`  --json           ${modeLabel("--json")} Output JSON`);
   process.exit(hasCliFlag(["--help", "-h"]) ? 0 : 1);
@@ -132,6 +134,7 @@ function main() {
   const reason = readArg(args, "--reason", undefined, CLI_ARG_OPTIONS);
   const dryRun = hasCliFlag("--dry-run");
   const jsonOut = hasCliFlag("--json");
+  const force = hasCliFlag("--force");
 
   if (!runId) {
     throw new Error("--run-id is required");
@@ -159,6 +162,12 @@ function main() {
   if (safeData.state === STATES.MERGED || safeData.state === STATES.CLOSED) {
     throw new Error(`close-run only supports active runs, got '${safeData.state}'`);
   }
+  assertNoLiveRunLease({
+    repoRoot,
+    runId: safeData.run_id,
+    force,
+    caller: "close-run",
+  });
 
   let updated = updateManifestState(safeData, STATES.CLOSED, "manual_cleanup_required");
   let cleanupResult = null;
@@ -212,6 +221,7 @@ function main() {
     reason,
     cleanup: cleanupResult.summary,
     dryRun,
+    force,
   };
 
   if (jsonOut) {

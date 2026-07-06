@@ -145,6 +145,23 @@ test("recover-commit flags are registered with explicit required modes", () => {
   }
 });
 
+test("reconcile-run flags are registered with explicit required modes", () => {
+  const definitions = new Map(FLAGS.map((definition) => [definition.flag, definition]));
+  const expected = [
+    ["--repo", VALUE, MODE_VERBATIM],
+    ["--run-id", VALUE, MODE_PARSED],
+    ["--dry-run", BOOLEAN, MODE_PARSED],
+    ["--json", BOOLEAN, MODE_PARSED],
+    ["--help", BOOLEAN, MODE_PARSED],
+  ];
+
+  for (const [flag, kind, mode] of expected) {
+    assert.ok(COMMAND_FLAGS["reconcile-run"].includes(flag), `reconcile-run should allow ${flag}`);
+    assert.equal(definitions.get(flag)?.kind, kind, `${flag} kind`);
+    assert.equal(definitions.get(flag)?.mode, mode, `${flag} mode`);
+  }
+});
+
 const HELP_COMMANDS = [
   ["cleanup-worktrees", path.join(__dirname, "..", "..", "..", "skills", "relay-dispatch", "scripts", "cleanup-worktrees.js")],
   ["close-run", path.join(__dirname, "..", "..", "..", "skills", "relay-dispatch", "scripts", "close-run.js")],
@@ -160,6 +177,7 @@ const HELP_COMMANDS = [
   ["persist-request", path.join(__dirname, "..", "..", "..", "skills", "relay-ready", "scripts", "persist-request.js")],
   ["probe-executor-env", path.join(__dirname, "..", "..", "..", "skills", "relay-plan", "scripts", "probe-executor-env.js")],
   ["recover-commit", path.join(__dirname, "..", "..", "..", "skills", "relay-dispatch", "scripts", "recover-commit.js")],
+  ["reconcile-run", path.join(__dirname, "..", "..", "..", "skills", "relay-dispatch", "scripts", "reconcile-run.js")],
   ["relay-config", path.join(__dirname, "..", "..", "..", "skills", "relay-dispatch", "scripts", "relay-config.js")],
   ["rebrand-evidence", path.join(__dirname, "..", "..", "..", "skills", "relay-dispatch", "scripts", "rebrand-evidence.js")],
   ["recover-state", path.join(__dirname, "..", "..", "..", "skills", "relay-dispatch", "scripts", "recover-state.js")],
