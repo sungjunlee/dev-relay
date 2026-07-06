@@ -532,11 +532,13 @@ function main() {
       throw new Error(`commit_failed: ${detail}`);
     }
   }
-  if (commitCreated) {
+  if (evidenceExists) {
     const rebrandResult = rebrandEvidence(runDir, {
       newHeadSha: commitSha,
       recordedBy: "recover-commit-rebrand",
-      reason: `recover-commit added new commit; previous evidence bound to pre-commit SHA. Audit reason: ${reason}`,
+      reason: commitCreated
+        ? `recover-commit added new commit; previous evidence bound to pre-commit SHA. Audit reason: ${reason}`
+        : `recover-commit recovered existing commit; previous evidence bound to stale SHA. Audit reason: ${reason}`,
     });
     if (rebrandResult.rewritten) {
       appendRunEvent(validatedPaths.repoRoot, data.run_id, {

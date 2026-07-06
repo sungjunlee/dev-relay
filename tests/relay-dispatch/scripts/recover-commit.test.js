@@ -152,6 +152,7 @@ function setupRepo({
   runtimeOnlyDirty = false,
   unpushed = false,
   evidence = false,
+  staleEvidence = false,
   manifestState = STATES.REVIEW_PENDING,
   branch = "issue-281",
   issueNumber = 281,
@@ -179,6 +180,7 @@ function setupRepo({
   const worktreePath = path.join(repoRoot, "wt", branch);
   fs.mkdirSync(path.dirname(worktreePath), { recursive: true });
   execFileSync("git", ["worktree", "add", worktreePath, "-b", branch], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
+  const dispatchHead = execFileSync("git", ["-C", worktreePath, "rev-parse", "HEAD"], { encoding: "utf-8" }).trim();
   if (dirty) {
     fs.writeFileSync(path.join(worktreePath, "recovered.txt"), "completed but uncommitted\n", "utf-8");
   }
@@ -211,7 +213,9 @@ function setupRepo({
   manifest = buildManifestForState(manifest, manifestState, repoRoot, runId);
   writeManifest(manifestPath, manifest);
   if (evidence) {
-    const headSha = execFileSync("git", ["-C", worktreePath, "rev-parse", "HEAD"], { encoding: "utf-8" }).trim();
+    const headSha = staleEvidence
+      ? dispatchHead
+      : execFileSync("git", ["-C", worktreePath, "rev-parse", "HEAD"], { encoding: "utf-8" }).trim();
     writeExecutionEvidence(runDir, {
       schema_version: 1,
       head_sha: headSha,
@@ -682,6 +686,37 @@ test("already-committed recovery leaves execution evidence byte-identical", () =
     readRunEvents(fixture.repoRoot, fixture.runId).filter((entry) => entry.event === "execution_evidence_rebranded").length,
     0
   );
+});
+
+test("dispatched already-committed recovery rebrands stale execution evidence to recovered HEAD", () => {
+  const fixture = setupRepo({
+    unpushed: true,
+    evidence: true,
+    staleEvidence: true,
+    manifestState: STATES.DISPATCHED,
+  });
+  const evidencePath = path.join(fixture.runDir, EXECUTION_EVIDENCE_FILENAME);
+  const beforeEvidence = JSON.parse(fs.readFileSync(evidencePath, "utf-8"));
+
+  const result = runRecover(fixture, ["--reason", "executor committed before dispatch crash", "--json"]);
+
+  assert.equal(result.status, 0, result.stderr);
+  const parsed = JSON.parse(result.stdout);
+  const manifest = readManifest(fixture.manifestPath).data;
+  const afterEvidence = JSON.parse(fs.readFileSync(evidencePath, "utf-8"));
+  assert.equal(parsed.commitCreated, false);
+  assert.equal(manifest.state, STATES.REVIEW_PENDING);
+  assert.equal(manifest.git.head_sha, parsed.commitSha);
+  assert.equal(afterEvidence.head_sha, parsed.commitSha);
+  assert.equal(afterEvidence.recorded_by, "recover-commit-rebrand");
+  assert.equal(afterEvidence.rebrand.previous_head_sha, beforeEvidence.head_sha);
+
+  const rebrandEvent = readRunEvents(fixture.repoRoot, fixture.runId)
+    .find((entry) => entry.event === "execution_evidence_rebranded");
+  assert.equal(rebrandEvent.previous_head_sha, beforeEvidence.head_sha);
+  assert.equal(rebrandEvent.new_head_sha, parsed.commitSha);
+  assert.equal(rebrandEvent.affected_head_sha, parsed.commitSha);
+  assert.equal(rebrandEvent.reason, "executor committed before dispatch crash");
 });
 
 test("clean worktree with no unpushed commits rejects as nothing to recover", () => {
