@@ -141,11 +141,15 @@ function appendInterruptedIfNeeded(
   leaseStatus,
   worktreePath,
   dryRun,
-  { executorTerminated = reason === "reconcile_timeout" } = {}
+  {
+    executorTerminated = reason === "reconcile_timeout",
+    suppressDuplicateTail = true,
+  } = {}
 ) {
   const tail = latestRunEvent(repoRoot, data.run_id);
   const alreadyTail = tail?.event === EVENTS.DISPATCH_INTERRUPTED;
-  if (!dryRun && !alreadyTail) {
+  const shouldAppend = !dryRun && (!suppressDuplicateTail || !alreadyTail);
+  if (shouldAppend) {
     appendRunEvent(repoRoot, data.run_id, {
       event: EVENTS.DISPATCH_INTERRUPTED,
       state_from: data.state,
@@ -161,7 +165,7 @@ function appendInterruptedIfNeeded(
     });
   }
   return {
-    journaled: !dryRun && !alreadyTail,
+    journaled: shouldAppend,
     alreadyTail,
     resumeCommand: resumeCommand(manifestPath),
   };
@@ -338,7 +342,7 @@ async function main() {
         leaseStatus,
         worktreePath,
         false,
-        { executorTerminated: false }
+        { executorTerminated: false, suppressDuplicateTail: false }
       );
       outputResult({
         ...buildBaseResult({
@@ -367,7 +371,7 @@ async function main() {
       leaseStatus,
       worktreePath,
       false,
-      { executorTerminated: true }
+      { executorTerminated: true, suppressDuplicateTail: false }
     );
     removeRunLease(normalizedRepoRoot, normalizedRunId);
     outputResult({

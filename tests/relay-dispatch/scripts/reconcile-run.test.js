@@ -16,7 +16,7 @@ const {
   updateManifestState,
   writeManifest,
 } = require("../../../skills/relay-dispatch/scripts/relay-manifest");
-const { EVENTS, readRunEvents } = require("../../../skills/relay-dispatch/scripts/relay-events");
+const { appendRunEvent, EVENTS, readRunEvents } = require("../../../skills/relay-dispatch/scripts/relay-events");
 const { EXECUTION_EVIDENCE_FILENAME } = require("../../../skills/relay-dispatch/scripts/execution-evidence");
 
 const SCRIPT = path.join(__dirname, "..", "..", "..", "skills", "relay-dispatch", "scripts", "reconcile-run.js");
@@ -377,6 +377,40 @@ test("reconcile row 3 kills a timed-out live lease and journals interruption", a
   const events = readRunEvents(fixture.repoRoot, fixture.runId);
   assert.equal(events.at(-1).event, EVENTS.DISPATCH_INTERRUPTED);
   assert.equal(events.at(-1).reason, "reconcile_timeout");
+});
+
+test("reconcile row 3 journals timeout kill after a prior dispatch interruption tail", async (t) => {
+  const fixture = setupRepo();
+  const child = await spawnSleeper(t);
+  const leasePath = writeLease(fixture, {
+    pgid: child.pid,
+    startedAt: new Date(Date.now() - 10_000).toISOString(),
+    timeoutS: 1,
+  });
+  appendRunEvent(fixture.repoRoot, fixture.runId, {
+    event: EVENTS.DISPATCH_INTERRUPTED,
+    state_from: STATES.DISPATCHED,
+    state_to: STATES.DISPATCHED,
+    reason: "dispatch_supervisor_interrupted",
+    executor_pid: child.pid,
+    executor_pgid: child.pid,
+    executor_terminated: false,
+    worktree: fixture.worktreePath,
+  });
+  const beforeEvents = readRunEvents(fixture.repoRoot, fixture.runId);
+
+  const result = parseJsonResult(runReconcile(fixture));
+
+  assert.equal(result.row, 3);
+  assert.equal(result.status, "timed_out_killed");
+  assert.equal(result.journaled, true);
+  assert.equal(fs.existsSync(leasePath), false);
+  await waitFor(() => !isPgidAlive(child.pid), { message: `pgid ${child.pid} dead` });
+  const events = readRunEvents(fixture.repoRoot, fixture.runId);
+  assert.equal(events.length, beforeEvents.length + 1);
+  assert.equal(events.at(-1).event, EVENTS.DISPATCH_INTERRUPTED);
+  assert.equal(events.at(-1).reason, "reconcile_timeout");
+  assert.equal(events.at(-1).executor_terminated, true);
 });
 
 test("reconcile row 3 keeps the lease when a timed-out process group ignores SIGTERM", async (t) => {
