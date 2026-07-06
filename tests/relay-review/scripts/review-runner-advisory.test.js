@@ -466,7 +466,118 @@ test("review-runner denies opencode primary review before spawning when route po
   assert.equal(result.policy_decision.phase, "review");
   assert.equal(result.policy_decision.reviewer, "opencode");
   assert.equal(result.policy_decision.model, "example/opencode-model-fast");
+  assert.equal(result.hint, "run relay-config to register this route");
   assert.equal(readManifest(manifestPath).data.state, STATES.REVIEW_PENDING);
+});
+
+test("review-runner prints relay-config route hint for text primary review route denial", () => {
+  const { repoRoot, manifestPath, runId, doneCriteriaPath, diffPath } = setupRepo({ modelPolicy: "strict-routes" });
+  const logPath = path.join(repoRoot, "opencode-primary-policy-text.log");
+  const opencodeScript = writeFakeOpencode(repoRoot, {
+    logPath,
+    primaryVerdict: passVerdict(),
+  });
+  const proc = spawnSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--run-id", runId,
+    "--pr", "429",
+    "--done-criteria-file", doneCriteriaPath,
+    "--diff-file", diffPath,
+    "--reviewer", "opencode",
+    "--reviewer-model", "example/opencode-model-fast",
+    "--no-comment",
+  ], {
+    encoding: "utf-8",
+    env: { ...process.env, RELAY_OPENCODE_BIN: opencodeScript },
+  });
+
+  assert.notEqual(proc.status, 0);
+  assert.equal(fs.existsSync(logPath), false);
+  assert.equal(proc.stdout, "");
+  assert.match(proc.stderr, /Error: relay policy denied model route.*phase=review.*reviewer=opencode.*reason=unknown_model_route/);
+  assert.match(proc.stderr, /hint: run relay-config to register this route/);
+  assert.equal(readManifest(manifestPath).data.state, STATES.REVIEW_PENDING);
+});
+
+test("review-runner reports relay-config default-model hint for unresolved primary reviewer model in JSON and text modes", () => {
+  for (const jsonOut of [true, false]) {
+    const { repoRoot, manifestPath, runId, doneCriteriaPath, diffPath } = setupRepo({ modelPolicy: "strict-routes" });
+    const logPath = path.join(repoRoot, `opencode-primary-missing-model-${jsonOut ? "json" : "text"}.log`);
+    const opencodeScript = writeFakeOpencode(repoRoot, {
+      logPath,
+      primaryVerdict: passVerdict(),
+    });
+    const args = [
+      SCRIPT,
+      "--repo", repoRoot,
+      "--run-id", runId,
+      "--pr", "429",
+      "--done-criteria-file", doneCriteriaPath,
+      "--diff-file", diffPath,
+      "--reviewer", "opencode",
+      "--no-comment",
+    ];
+    if (jsonOut) args.push("--json");
+
+    const proc = spawnSync("node", args, {
+      encoding: "utf-8",
+      env: { ...process.env, RELAY_OPENCODE_BIN: opencodeScript },
+    });
+
+    assert.notEqual(proc.status, 0);
+    assert.equal(fs.existsSync(logPath), false);
+    assert.match(proc.stderr, /Error: relay policy denied model route.*phase=review.*reviewer=opencode.*reason=missing_model_route/);
+    assert.match(proc.stderr, /hint: run relay-config to set a default model for this route/);
+    assert.equal(readManifest(manifestPath).data.state, STATES.REVIEW_PENDING);
+    if (jsonOut) {
+      const result = JSON.parse(proc.stdout);
+      assert.equal(result.status, "failed");
+      assert.equal(result.policy_decision.reason, "missing_model_route");
+      assert.equal(result.policy_decision.model, null);
+      assert.equal(result.hint, "run relay-config to set a default model for this route");
+    } else {
+      assert.equal(proc.stdout, "");
+    }
+  }
+});
+
+test("review-runner reports install hint when primary reviewer CLI is missing in JSON and text modes", () => {
+  for (const jsonOut of [true, false]) {
+    const { repoRoot, runId, doneCriteriaPath, diffPath } = setupRepo({
+      modelPolicy: "allow-opencode-primary",
+      roles: { orchestrator: "codex", executor: "codex", reviewer: "opencode" },
+    });
+    const args = [
+      SCRIPT,
+      "--repo", repoRoot,
+      "--run-id", runId,
+      "--pr", "429",
+      "--done-criteria-file", doneCriteriaPath,
+      "--diff-file", diffPath,
+      "--reviewer", "opencode",
+      "--reviewer-model", "example/opencode-model-fast",
+      "--no-comment",
+    ];
+    if (jsonOut) args.push("--json");
+
+    const proc = spawnSync("node", args, {
+      encoding: "utf-8",
+      env: { ...process.env, RELAY_OPENCODE_BIN: path.join(repoRoot, "missing-opencode") },
+    });
+
+    assert.notEqual(proc.status, 0);
+    assert.match(proc.stderr, /Error: .*opencode.*ENOENT/s);
+    assert.match(proc.stderr, /hint: install the opencode CLI and ensure it is on PATH/);
+    if (jsonOut) {
+      const result = JSON.parse(proc.stdout);
+      assert.equal(result.status, "failed");
+      assert.match(result.error, /opencode.*ENOENT/s);
+      assert.equal(result.hint, "install the opencode CLI and ensure it is on PATH");
+    } else {
+      assert.equal(proc.stdout, "");
+    }
+  }
 });
 
 test("review-runner uses manifest routing advisory defaults without changing the primary reviewer", () => {

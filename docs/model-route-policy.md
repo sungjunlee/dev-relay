@@ -1,5 +1,7 @@
 # Model Route Policy
 
+> **Superseded in part:** `docs/route-config-simplification-design.md` and `docs/decisions/0007-routes-single-concept.md` supersede this document's storage and UX model: `routes.json` is now the single user-facing route concept, while `policy.json` is legacy-read-only once routes config is present. The gate semantics, phase tuples, managed CLI behavior, strict-mode denial rules, and adapter-capability separation below still apply.
+
 Route policy answers one operational question: which provider/model route is allowed to run in each relay phase?
 
 Executor and reviewer names such as `codex`, `claude`, `opencode`, `pi`, and `cline` are harness names. They select a CLI adapter and execution contract. They are not the compliance boundary. The compliance boundary is the provider/model route string, for example `example/opencode-model-fast`, `example/pi-model-fast`, `cline-pass/glm-5.2`, or `ollama/qwen3`.

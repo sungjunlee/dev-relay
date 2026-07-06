@@ -52,6 +52,8 @@ Write the dispatch prompt and rubric YAML to temp files such as `/tmp/dispatch-<
 
 `relay` owns lifecycle orchestration; `relay-dispatch` owns dispatch CLI semantics. When an operator needs a fixed executor or model, pass the dispatch options explicitly in this command. Common pass-through knobs are `--executor`, `--model`, and `--model-hints`; see `../relay-dispatch/references/model-routing.md` and `../relay-dispatch/references/cli-schema.md` for full route and option semantics.
 
+If the user names an executor whose route or model cannot resolve, invoke `relay-config` inline: ask one focused question, write the route/default, then continue the dispatch cycle instead of failing the run.
+
 ```bash
 node "${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/dispatch.js" . \
   -b issue-<N> --prompt-file /tmp/dispatch-<N>.md --rubric-file /tmp/rubric-<N>.yaml \

@@ -115,6 +115,8 @@ Write the dispatch prompt and rubric YAML to temp files. The prompt uses `../rel
 
 Return a handoff summary with dispatch prompt path, rubric YAML path, Done Criteria anchor path when persisted, review assurance level, and the recommended `relay-dispatch` command. Use `--review-assurance hardened` only when task/rubric risk requires stronger verification; never derive it from executor or reviewer identity.
 
+If the recommended executor or reviewer route/model cannot resolve, point the operator to `relay-config` to register the route or set the default before dispatch.
+
 When Step 7 persisted Done Criteria, the dispatch handoff must preserve both anchors:
 
 ```bash
