@@ -98,6 +98,7 @@ Publication policy:
 
 ## Recovery and operator utilities
 
+- Crash-only settlement after signal/reboot/OOM or from another shell → `references/recovery-playbook.md` (`reconcile-run.js`).
 - Executor finished but did not commit / push / open the PR → `references/recovery-playbook.md` (`recover-commit.js`).
 - Manifest state needs adjustment after an external event (direct push, hung dispatch, escalation) → `references/recovery-playbook.md` (`recover-state.js`, includes the whitelist transition table).
 - Standalone worktree creation, cleanup, run-close, reliability report → `references/operator-utilities.md`.

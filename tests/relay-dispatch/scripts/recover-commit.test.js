@@ -2,7 +2,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const crypto = require("crypto");
-const { execFileSync, spawnSync } = require("child_process");
+const { execFileSync, spawn, spawnSync } = require("child_process");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
@@ -26,6 +26,7 @@ const SCRIPT = path.join(__dirname, "..", "..", "..", "skills", "relay-dispatch"
 
 function writeFakeGh(binDir, statePath, logPath, initialState = {}) {
   const ghPath = path.join(binDir, "gh");
+  const relayManifestPath = path.resolve(__dirname, "..", "..", "..", "skills", "relay-dispatch", "scripts", "relay-manifest.js");
   fs.writeFileSync(ghPath, `#!/usr/bin/env node
 const fs = require("fs");
 const args = process.argv.slice(2);
@@ -34,6 +35,32 @@ const logPath = process.env.RELAY_TEST_GH_LOG;
 if (logPath) fs.appendFileSync(logPath, JSON.stringify(args) + "\\n", "utf-8");
 const state = fs.existsSync(statePath) ? JSON.parse(fs.readFileSync(statePath, "utf-8")) : {};
 function save() { fs.writeFileSync(statePath, JSON.stringify(state, null, 2)); }
+function applyManifestPatch(patch) {
+  if (!patch || !patch.manifestPath) return;
+  const { readManifest, writeManifest, updateManifestState } = require(${JSON.stringify(relayManifestPath)});
+  const record = readManifest(patch.manifestPath);
+  let data = record.data;
+  if (patch.transitionTo) {
+    data = updateManifestState(data, patch.transitionTo, patch.nextAction);
+  }
+  for (const [key, value] of Object.entries(patch.merge || {})) {
+    if (value && typeof value === "object" && !Array.isArray(value)) {
+      data = {
+        ...data,
+        [key]: {
+          ...(data[key] || {}),
+          ...value,
+        },
+      };
+    } else {
+      data = {
+        ...data,
+        [key]: value,
+      };
+    }
+  }
+  writeManifest(patch.manifestPath, data, record.body);
+}
 if (args[0] === "pr" && args[1] === "list") {
   if (state.failPrList) {
     process.stderr.write(state.failPrList + "\\n");
@@ -53,6 +80,7 @@ if (args[0] === "pr" && args[1] === "create") {
   }
   state.existingPrNumber = state.createNumber || 281;
   save();
+  applyManifestPatch(state.patchManifestOnPrCreate);
   process.stdout.write("https://github.com/acme/dev-relay/pull/" + state.existingPrNumber + "\\n");
   process.exit(0);
 }
@@ -121,6 +149,7 @@ function buildManifestForState(manifest, state, repoRoot, runId) {
   const runDir = ensureRunLayout(repoRoot, runId).runDir;
   fs.writeFileSync(path.join(runDir, "rubric.yaml"), "rubric:\n  factors:\n    - name: recover-commit\n", "utf-8");
   manifest.anchor.rubric_path = "rubric.yaml";
+  if (state === STATES.DISPATCHED) return manifest;
   if (state === STATES.INTERNAL_REVIEW_PENDING) {
     return updateManifestState(manifest, STATES.INTERNAL_REVIEW_PENDING, "run_internal_review");
   }
@@ -151,6 +180,7 @@ function setupRepo({
   runtimeOnlyDirty = false,
   unpushed = false,
   evidence = false,
+  staleEvidence = false,
   manifestState = STATES.REVIEW_PENDING,
   branch = "issue-281",
   issueNumber = 281,
@@ -178,6 +208,7 @@ function setupRepo({
   const worktreePath = path.join(repoRoot, "wt", branch);
   fs.mkdirSync(path.dirname(worktreePath), { recursive: true });
   execFileSync("git", ["worktree", "add", worktreePath, "-b", branch], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
+  const dispatchHead = execFileSync("git", ["-C", worktreePath, "rev-parse", "HEAD"], { encoding: "utf-8" }).trim();
   if (dirty) {
     fs.writeFileSync(path.join(worktreePath, "recovered.txt"), "completed but uncommitted\n", "utf-8");
   }
@@ -210,7 +241,9 @@ function setupRepo({
   manifest = buildManifestForState(manifest, manifestState, repoRoot, runId);
   writeManifest(manifestPath, manifest);
   if (evidence) {
-    const headSha = execFileSync("git", ["-C", worktreePath, "rev-parse", "HEAD"], { encoding: "utf-8" }).trim();
+    const headSha = staleEvidence
+      ? dispatchHead
+      : execFileSync("git", ["-C", worktreePath, "rev-parse", "HEAD"], { encoding: "utf-8" }).trim();
     writeExecutionEvidence(runDir, {
       schema_version: 1,
       head_sha: headSha,
@@ -250,6 +283,14 @@ function readJsonLines(filePath) {
   return text ? text.split("\n").map((line) => JSON.parse(line)) : [];
 }
 
+function updateGhState(fixture, patch) {
+  const state = JSON.parse(fs.readFileSync(fixture.statePath, "utf-8"));
+  fs.writeFileSync(fixture.statePath, JSON.stringify({
+    ...state,
+    ...patch,
+  }, null, 2));
+}
+
 function findGhCall(fixture, command, subcommand) {
   return readJsonLines(fixture.ghLogPath).find((argv) => argv[0] === command && argv[1] === subcommand);
 }
@@ -257,6 +298,50 @@ function findGhCall(fixture, command, subcommand) {
 function ghArg(argv, flag) {
   const index = argv.indexOf(flag);
   return index === -1 ? undefined : argv[index + 1];
+}
+
+function isPgidAlive(pgid) {
+  if (!pgid) return false;
+  try {
+    process.kill(-Number(pgid), 0);
+    return true;
+  } catch (error) {
+    if (error.code === "EPERM") return true;
+    if (error.code === "ESRCH") return false;
+    return false;
+  }
+}
+
+function killPgid(pgid) {
+  if (!pgid) return;
+  try {
+    process.kill(-Number(pgid), "SIGTERM");
+  } catch {}
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitFor(condition, { timeoutMs = 5000, intervalMs = 50, message = "condition" } = {}) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (condition()) return true;
+    await sleep(intervalMs);
+  }
+  throw new Error(`Timed out waiting for ${message}`);
+}
+
+function writeLease(fixture, { pid, pgid }) {
+  const leasePath = path.join(fixture.runDir, "lease.json");
+  fs.writeFileSync(leasePath, `${JSON.stringify({
+    pid,
+    pgid,
+    host: os.hostname(),
+    started_at: new Date().toISOString(),
+    timeout_s: 2400,
+  }, null, 2)}\n`, "utf-8");
+  return leasePath;
 }
 
 function sha256File(filePath) {
@@ -639,6 +724,70 @@ test("already-committed recovery leaves execution evidence byte-identical", () =
   );
 });
 
+test("dispatched already-committed recovery rebrands stale execution evidence to recovered HEAD", () => {
+  const fixture = setupRepo({
+    unpushed: true,
+    evidence: true,
+    staleEvidence: true,
+    manifestState: STATES.DISPATCHED,
+  });
+  const evidencePath = path.join(fixture.runDir, EXECUTION_EVIDENCE_FILENAME);
+  const beforeEvidence = JSON.parse(fs.readFileSync(evidencePath, "utf-8"));
+
+  const result = runRecover(fixture, ["--reason", "executor committed before dispatch crash", "--json"]);
+
+  assert.equal(result.status, 0, result.stderr);
+  const parsed = JSON.parse(result.stdout);
+  const manifest = readManifest(fixture.manifestPath).data;
+  const afterEvidence = JSON.parse(fs.readFileSync(evidencePath, "utf-8"));
+  assert.equal(parsed.commitCreated, false);
+  assert.equal(manifest.state, STATES.REVIEW_PENDING);
+  assert.equal(manifest.git.head_sha, parsed.commitSha);
+  assert.equal(afterEvidence.head_sha, parsed.commitSha);
+  assert.equal(afterEvidence.recorded_by, "recover-commit-rebrand");
+  assert.equal(afterEvidence.rebrand.previous_head_sha, beforeEvidence.head_sha);
+
+  const rebrandEvent = readRunEvents(fixture.repoRoot, fixture.runId)
+    .find((entry) => entry.event === "execution_evidence_rebranded");
+  assert.equal(rebrandEvent.previous_head_sha, beforeEvidence.head_sha);
+  assert.equal(rebrandEvent.new_head_sha, parsed.commitSha);
+  assert.equal(rebrandEvent.affected_head_sha, parsed.commitSha);
+  assert.equal(rebrandEvent.reason, "executor committed before dispatch crash");
+});
+
+test("dispatched recovery stamps PR from a fresh locked manifest update", () => {
+  const fixture = setupRepo({ dirty: true, manifestState: STATES.DISPATCHED });
+  updateGhState(fixture, {
+    patchManifestOnPrCreate: {
+      manifestPath: fixture.manifestPath,
+      merge: {
+        review: {
+          rounds: 4,
+          latest_verdict: "concurrent_review_started",
+        },
+      },
+    },
+  });
+
+  const result = runRecover(fixture, ["--reason", "executor completed during supervisor crash", "--json"]);
+
+  assert.equal(result.status, 0, result.stderr);
+  const parsed = JSON.parse(result.stdout);
+  const manifest = readManifest(fixture.manifestPath).data;
+  assert.equal(parsed.status, "recovered");
+  assert.equal(manifest.state, STATES.REVIEW_PENDING);
+  assert.equal(manifest.next_action, "run_review");
+  assert.equal(manifest.review.rounds, 4);
+  assert.equal(manifest.review.latest_verdict, "concurrent_review_started");
+  assert.equal(manifest.git.pr_number, 281);
+  assert.equal(manifest.git.head_sha, parsed.commitSha);
+
+  const stampEvents = readRunEvents(fixture.repoRoot, fixture.runId)
+    .filter((entry) => entry.event === "pr_number_stamped");
+  assert.equal(stampEvents.length, 1);
+  assert.equal(stampEvents[0].round, 4);
+});
+
 test("clean worktree with no unpushed commits rejects as nothing to recover", () => {
   const fixture = setupRepo();
   const result = runRecover(fixture, ["--reason", "no work", "--json"]);
@@ -661,6 +810,38 @@ test("runtime-only Antigravity dirt rejects as nothing reviewable to recover", (
   assert.equal(execFileSync("git", ["-C", fixture.worktreePath, "rev-parse", "HEAD"], { encoding: "utf-8" }).trim(), beforeHead);
   assert.equal(readManifest(fixture.manifestPath).data.git.pr_number, null);
   assert.equal(readJsonLines(fixture.ghLogPath).filter((argv) => argv[0] === "pr" && argv[1] === "create").length, 0);
+});
+
+test("dispatched recovery refuses to run while the run lease is live", async () => {
+  if (process.platform === "win32") return;
+
+  const fixture = setupRepo({ dirty: true, manifestState: STATES.DISPATCHED });
+  const blocker = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000);"], {
+    detached: true,
+    stdio: "ignore",
+  });
+  const blockerExit = new Promise((resolve) => blocker.on("close", resolve));
+  blocker.unref();
+
+  try {
+    await waitFor(() => isPgidAlive(blocker.pid), { message: `pgid ${blocker.pid} alive` });
+    const leasePath = writeLease(fixture, { pid: blocker.pid, pgid: blocker.pid });
+    const beforeHead = execFileSync("git", ["-C", fixture.worktreePath, "rev-parse", "HEAD"], { encoding: "utf-8" }).trim();
+    const result = runRecover(fixture, ["--reason", "direct recovery while executor still runs", "--json"]);
+
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /live run lease/);
+    assert.match(result.stderr, /reconcile-run\.js/);
+    assert.equal(fs.existsSync(leasePath), true);
+    assert.equal(readManifest(fixture.manifestPath).data.state, STATES.DISPATCHED);
+    assert.equal(execFileSync("git", ["-C", fixture.worktreePath, "rev-parse", "HEAD"], { encoding: "utf-8" }).trim(), beforeHead);
+    assert.equal(execFileSync("git", ["-C", fixture.worktreePath, "status", "--porcelain"], { encoding: "utf-8" }).trim(), "?? recovered.txt");
+    assert.equal(readJsonLines(fixture.ghLogPath).length, 0);
+    assert.equal(readRunEvents(fixture.repoRoot, fixture.runId).length, 0);
+  } finally {
+    killPgid(blocker.pid);
+    await Promise.race([blockerExit, sleep(5000)]);
+  }
 });
 
 test("unknown run id fails through resolveManifestRecord", () => {

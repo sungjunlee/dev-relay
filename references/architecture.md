@@ -113,6 +113,10 @@ model_hints:
 paths:
   repo_root: /Users/me/project
   worktree: /tmp/relay-wt-issue-42
+  dispatch_stdout: ~/.relay/runs/<repo-slug>/<run-id>/dispatch-stdout.log
+  dispatch_stderr: ~/.relay/runs/<repo-slug>/<run-id>/dispatch-stderr.log
+  dispatch_result: ~/.relay/runs/<repo-slug>/<run-id>/dispatch-result.txt
+  lease: ~/.relay/runs/<repo-slug>/<run-id>/lease.json
 
 policy:
   merge: manual_after_lgtm      # merge strategy
@@ -173,6 +177,7 @@ bootstrap_exempt:
 | `dispatch.last_model` / executor config | Dispatch records the effective model route when one exists. The skill-bundled `skills/relay-dispatch/references/executor-models.json` intentionally ships empty; unmanaged executors need an explicit route from CLI/model hints/project routes or a local `~/.relay/executors.json` default, and the selected route still passes through the route policy gate. Codex/Claude managed CLI defaults normally record a null model route. |
 | Route policy | Stored outside the manifest in `~/.relay/policy.json`, optional repo-local `.relay/policy.json`, and optional project-local `~/.relay/projects/<repo-slug>/policy.json`. Executor/reviewer names are harnesses; provider/model route strings are the policy boundary. Final operator precedence is `CLI flags / --route-intent-file -> project routes.json -> routing rules -> defaults -> existing relay defaults -> policy gate`. Adapter capability gates run before this policy gate. |
 | Route plan | Dispatch writes `route-plan.json` in the run directory with effective dispatch/review/advisory routes, source traces, and policy decisions. The manifest stores only a compact `routes.summary` plus `routes.plan_path` so operators can audit routing without bloating the lifecycle contract. |
+| Run-dir runtime artifacts | While dispatch is active, `lease.json` records `{ pid, pgid, host, started_at, timeout_s }` for crash-only reconciliation. Executor stdout, stderr, and result output live as `dispatch-stdout.log`, `dispatch-stderr.log`, and `dispatch-result.txt` in the same run directory and are referenced from manifest `paths`. |
 | `policy.merge` | `manual_after_lgtm` — orchestrator must explicitly merge |
 | `policy.reviewer_write` | `forbid` — review runner rejects rounds where reviewer mutated files |
 | `policy.review_assurance` | `standard` keeps current behavior; `hardened` requires stronger review/evidence gates without using agent identity heuristics. Hardened review commands must include an advisory reviewer, and passing verdicts require successful advisory artifacts plus strict execution evidence. When `execution-evidence.json` includes `verification_runs[]`, hardened gates prefer those actual command-run records; legacy evidence without that array still falls back to `test_exit_code=0` plus a SHA-bound result hash |
@@ -236,12 +241,12 @@ Each run keeps an append-only event log at `~/.relay/runs/<repo-slug>/<run-id>/e
 
 | Event | Emitted by |
 |-------|------------|
-| `dispatch_start`, `dispatch_interrupted`, `dispatch_result`, `environment_drift`, `model_hints_updated` | `relay-dispatch/scripts/dispatch.js` |
+| `dispatch_start`, `dispatch_interrupted`, `dispatch_result`, `environment_drift`, `model_hints_updated` | `relay-dispatch/scripts/dispatch.js`; `reconcile-run.js` may also emit `dispatch_interrupted` when settling dead or timed-out dispatched runs |
 | `publish_result` | `relay-dispatch/scripts/publish-run.js` |
 | `recover_commit`, `recover_commit_failed`, `execution_evidence_rebranded` | `relay-dispatch/scripts/recover-commit.js`, `rebrand-evidence.js` |
 | `iteration_score`, `rubric_quality`, `score_divergence` | `relay-dispatch/scripts/relay-events.js` (helpers) |
 | `close`, `cleanup_result` | `relay-dispatch/scripts/close-run.js`, `cleanup-worktrees.js` |
-| `state_recovery` | `relay-dispatch/scripts/recover-state.js` |
+| `state_recovery` | `relay-dispatch/scripts/recover-state.js`; `reconcile-run.js` emits it for `dispatched -> review_pending` dead-work recovery |
 | `review_invoke` | `relay-review/scripts/review-runner/reviewer-invoke.js` |
 | `advisory_review` | `relay-review/scripts/review-runner/advisory.js` |
 | `review_apply` | `relay-review/scripts/review-runner.js`, `reviewer-invoke.js` |

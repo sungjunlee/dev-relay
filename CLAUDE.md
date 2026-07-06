@@ -97,6 +97,7 @@ node skills/relay-dispatch/scripts/reliability-report.js --repo . --by-dispatch 
 node skills/relay-review/scripts/review-runner.js --repo . --run-id <id> --reviewer codex --json
 
 # Recovery (when codex finishes but does not commit/push/PR)
+node skills/relay-dispatch/scripts/reconcile-run.js --repo . --run-id <id> --json
 node skills/relay-dispatch/scripts/recover-commit.js --run-id <id> --reason "..."
 node skills/relay-dispatch/scripts/rebrand-evidence.js --run-id <id> --reason "..."
 

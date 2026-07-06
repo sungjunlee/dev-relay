@@ -936,6 +936,77 @@ setInterval(() => {}, 1000);
   return codexPath;
 }
 
+function writeLeaseCheckingCodex(binDir, markerPath) {
+  ensureDefaultFakeGh(binDir);
+  const codexPath = path.join(binDir, "codex");
+  fs.writeFileSync(codexPath, `#!/usr/bin/env node
+const fs = require("fs");
+const path = require("path");
+const { execFileSync } = require("child_process");
+const args = process.argv.slice(2);
+if (args[0] === "--version") {
+  process.stdout.write("codex-fake\\n");
+  process.exit(0);
+}
+if (args[0] !== "exec") {
+  process.stderr.write("unsupported fake codex invocation");
+  process.exit(1);
+}
+const cwd = args[args.indexOf("-C") + 1];
+const output = args[args.indexOf("-o") + 1];
+const leasePath = path.join(path.dirname(output), "lease.json");
+if (!fs.existsSync(leasePath)) {
+  process.stderr.write("lease missing while executor runs: " + leasePath + "\\n");
+  process.exit(2);
+}
+fs.writeFileSync(${JSON.stringify(markerPath)}, JSON.stringify({
+  output,
+  leasePath,
+  lease: JSON.parse(fs.readFileSync(leasePath, "utf-8")),
+}), "utf-8");
+fs.writeFileSync(path.join(cwd, "lease-checked.txt"), "lease was present\\n", "utf-8");
+execFileSync("git", ["-C", cwd, "add", "lease-checked.txt"], { stdio: "pipe" });
+execFileSync("git", ["-C", cwd, "commit", "-m", "fake lease checked"], { stdio: "pipe" });
+fs.writeFileSync(output, "lease ok\\n", "utf-8");
+`, "utf-8");
+  fs.chmodSync(codexPath, 0o755);
+  return codexPath;
+}
+
+function writeLeaseFreshnessCheckingCodex(binDir, markerPath) {
+  ensureDefaultFakeGh(binDir);
+  const codexPath = path.join(binDir, "codex");
+  fs.writeFileSync(codexPath, `#!/usr/bin/env node
+const fs = require("fs");
+const path = require("path");
+const { execFileSync } = require("child_process");
+const args = process.argv.slice(2);
+if (args[0] === "--version") {
+  process.stdout.write("codex-fake\\n");
+  process.exit(0);
+}
+if (args[0] !== "exec") {
+  process.stderr.write("unsupported fake codex invocation");
+  process.exit(1);
+}
+const cwd = args[args.indexOf("-C") + 1];
+const output = args[args.indexOf("-o") + 1];
+const leasePath = path.join(path.dirname(output), "lease.json");
+const lease = JSON.parse(fs.readFileSync(leasePath, "utf-8"));
+fs.writeFileSync(${JSON.stringify(markerPath)}, JSON.stringify({
+  executorPid: process.pid,
+  leasePath,
+  lease,
+}), "utf-8");
+fs.writeFileSync(path.join(cwd, "lease-fresh.txt"), "fresh lease checked\\n", "utf-8");
+execFileSync("git", ["-C", cwd, "add", "lease-fresh.txt"], { stdio: "pipe" });
+execFileSync("git", ["-C", cwd, "commit", "-m", "fake fresh lease checked"], { stdio: "pipe" });
+fs.writeFileSync(output, "lease fresh\\n", "utf-8");
+`, "utf-8");
+  fs.chmodSync(codexPath, 0o755);
+  return codexPath;
+}
+
 function writeLeaderExitDescendantCodex(binDir) {
   ensureDefaultFakeGh(binDir);
   const codexPath = path.join(binDir, "codex");
@@ -952,14 +1023,20 @@ if (args[0] !== "exec") {
   process.exit(1);
 }
 const marker = process.env.RELAY_TEST_EXECUTOR_MARKER;
-const child = spawn(process.execPath, ["-e", "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);"], {
+const childReady = marker ? marker + ".child-ready" : "";
+const child = spawn("/bin/sh", ["-c", "trap '' TERM; : > \\"$1\\"; while :; do sleep 1; done", "relay-child", childReady], {
   stdio: "ignore",
 });
 child.unref();
 if (marker) {
-  setTimeout(() => {
-    fs.writeFileSync(marker, JSON.stringify({ pid: process.pid, pgid: process.pid, childPid: child.pid }), "utf-8");
-  }, 250);
+  const publishMarker = () => {
+    if (fs.existsSync(childReady)) {
+      fs.writeFileSync(marker, JSON.stringify({ pid: process.pid, pgid: process.pid, childPid: child.pid }), "utf-8");
+      return;
+    }
+    setTimeout(publishMarker, 25);
+  };
+  publishMarker();
 }
 process.on("SIGTERM", () => {
   if (marker) {
@@ -968,6 +1045,52 @@ process.on("SIGTERM", () => {
   process.exit(143);
 });
 setInterval(() => {}, 1000);
+`, "utf-8");
+  fs.chmodSync(codexPath, 0o755);
+  return codexPath;
+}
+
+function writeLeaderExitBackgroundCodex(binDir) {
+  ensureDefaultFakeGh(binDir);
+  const codexPath = path.join(binDir, "codex");
+  fs.writeFileSync(codexPath, `#!/usr/bin/env node
+const fs = require("fs");
+const path = require("path");
+const { spawn } = require("child_process");
+const args = process.argv.slice(2);
+if (args[0] === "--version") {
+  process.stdout.write("codex-fake\\n");
+  process.exit(0);
+}
+if (args[0] !== "exec") {
+  process.stderr.write("unsupported fake codex invocation");
+  process.exit(1);
+}
+const output = args[args.indexOf("-o") + 1];
+const leasePath = path.join(path.dirname(output), "lease.json");
+const marker = process.env.RELAY_TEST_EXECUTOR_MARKER;
+const childReady = marker ? marker + ".child-ready" : "";
+const child = spawn("/bin/sh", ["-c", ": > \\"$1\\"; while :; do sleep 1; done", "relay-child", childReady], {
+  stdio: "ignore",
+});
+child.unref();
+const finishWhenReady = () => {
+  if (fs.existsSync(childReady)) {
+    const lease = fs.existsSync(leasePath) ? JSON.parse(fs.readFileSync(leasePath, "utf-8")) : null;
+    fs.writeFileSync(marker, JSON.stringify({
+      pid: process.pid,
+      pgid: process.pid,
+      childPid: child.pid,
+      output,
+      leasePath,
+      lease,
+    }), "utf-8");
+    fs.writeFileSync(output, "background child still running\\n", "utf-8");
+    process.exit(0);
+  }
+  setTimeout(finishWhenReady, 25);
+};
+finishWhenReady();
 `, "utf-8");
   fs.chmodSync(codexPath, 0o755);
   return codexPath;
@@ -1346,6 +1469,100 @@ test("dispatch reuses the same run and worktree on resume", () => {
   assert.match(events, /"reason":"same_run_resume:completed"/);
 });
 
+test("dispatch resume clears stale structured result before executor attempt", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  writeFakeCodex(binDir);
+  const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}`, RELAY_HOME: relayHome };
+
+  const first = JSON.parse(runDispatch(repoRoot, [
+    "-b", "issue-812-stale-result-resume",
+    "--prompt", "first pass writes a result",
+    "--json",
+  ], env));
+  assert.equal(first.runState, STATES.REVIEW_PENDING);
+  assert.equal(fs.readFileSync(first.resultFile, "utf-8"), "ok\n");
+
+  const record = readManifest(first.manifestPath);
+  const updated = updateManifestState(record.data, STATES.CHANGES_REQUESTED, "re_dispatch_requested_changes");
+  writeManifest(first.manifestPath, updated, record.body);
+  writeSilentCodex(binDir);
+
+  const resume = spawnSync(process.execPath, [SCRIPT, repoRoot,
+    "--run-id", first.runId,
+    "--prompt", "resume attempt exits without writing result",
+    "--json",
+  ], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    env,
+    stdio: "pipe",
+  });
+
+  assert.notEqual(resume.status, 0);
+  const result = JSON.parse(resume.stdout);
+  assert.equal(result.mode, "resume");
+  assert.equal(result.runId, first.runId);
+  assert.equal(result.resultFile, first.resultFile);
+  assert.equal(result.status, "failed");
+  assert.equal(result.runState, STATES.ESCALATED);
+  assert.match(result.error, /silent failure/);
+  assert.equal(result.resultPreview, "");
+  assert.equal(fs.existsSync(first.resultFile), false);
+  assert.equal(readManifest(first.manifestPath).data.state, STATES.ESCALATED);
+});
+
+test("dispatch resume clears stale structured result before entering dispatched pre-spawn window", async () => {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  writeFakeCodex(binDir);
+  const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}`, RELAY_HOME: relayHome };
+
+  const first = JSON.parse(runDispatch(repoRoot, [
+    "-b", "issue-812-stale-result-pre-spawn",
+    "--prompt", "first pass writes a result",
+    "--json",
+  ], env));
+  assert.equal(first.runState, STATES.REVIEW_PENDING);
+  assert.equal(fs.readFileSync(first.resultFile, "utf-8"), "ok\n");
+
+  const record = readManifest(first.manifestPath);
+  const updated = updateManifestState(record.data, STATES.CHANGES_REQUESTED, "re_dispatch_requested_changes");
+  writeManifest(first.manifestPath, updated, record.body);
+  writeSleepingCodex(binDir);
+  const resumeEnv = {
+    ...env,
+    RELAY_TEST_BEFORE_EXECUTOR_SPAWN_PAUSE_MS: "30000",
+  };
+
+  const proc = spawn(process.execPath, [SCRIPT, repoRoot, ...withRequiredRubric([
+    "--run-id", first.runId,
+    "--prompt", "resume attempt pauses before spawn",
+    "--json",
+  ])], {
+    cwd: repoRoot,
+    env: resumeEnv,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  const exitPromise = waitForDispatchExit(proc);
+
+  try {
+    await waitFor(() => {
+      const events = readRunEvents(repoRoot, first.runId);
+      return events.some((event) => event.event === "dispatch_start" && event.reason === "same_run_resume");
+    }, { timeoutMs: 30000, message: "resume dispatch_start before executor spawn" });
+
+    assert.equal(fs.existsSync(first.resultFile), false);
+  } finally {
+    if (!proc.killed) {
+      proc.kill("SIGTERM");
+    }
+    await exitPromise;
+  }
+});
+
 async function runInterruptedDispatchSignalTest(signalName) {
   const { repoRoot, relayHome } = setupRepo();
   process.env.RELAY_HOME = relayHome;
@@ -1373,10 +1590,28 @@ async function runInterruptedDispatchSignalTest(signalName) {
   const exitPromise = waitForDispatchExit(proc);
 
   try {
-    marker = await waitFor(() => {
-      if (!fs.existsSync(markerPath)) return null;
-      return JSON.parse(fs.readFileSync(markerPath, "utf-8"));
-    }, { timeoutMs: 30000, message: "fake executor marker" });
+    try {
+      const markerPromise = waitFor(() => {
+        if (!fs.existsSync(markerPath)) return null;
+        return JSON.parse(fs.readFileSync(markerPath, "utf-8"));
+      }, { timeoutMs: 30000, message: "fake executor marker" });
+      const markerOrExit = await Promise.race([
+        markerPromise.then((value) => ({ marker: value })),
+        exitPromise.then((value) => ({ earlyExit: value })),
+      ]);
+      if (markerOrExit.earlyExit) {
+        assert.fail(`dispatch exited before fake executor marker\nstdout:\n${markerOrExit.earlyExit.stdout}\nstderr:\n${markerOrExit.earlyExit.stderr}`);
+      }
+      marker = markerOrExit.marker;
+    } catch (error) {
+      const manifestPath = listManifestPaths(repoRoot)[0];
+      const manifest = manifestPath && fs.existsSync(manifestPath) ? readManifest(manifestPath).data : null;
+      const stdoutLog = manifest?.paths?.dispatch_stdout;
+      const stderrLog = manifest?.paths?.dispatch_stderr;
+      const executorStdout = stdoutLog && fs.existsSync(stdoutLog) ? fs.readFileSync(stdoutLog, "utf-8") : "";
+      const executorStderr = stderrLog && fs.existsSync(stderrLog) ? fs.readFileSync(stderrLog, "utf-8") : "";
+      assert.fail(`${error.message}\nexecutor stdout:\n${executorStdout}\nexecutor stderr:\n${executorStderr}`);
+    }
     const manifestPath = await waitFor(() => listManifestPaths(repoRoot)[0], {
       timeoutMs: 30000,
       message: "dispatch manifest path",
@@ -3944,9 +4179,165 @@ test("dispatch artifacts are persisted in the run directory", () => {
   const promptText = fs.readFileSync(path.join(result.runDir, "dispatch-prompt.md"), "utf-8");
   assert.match(promptText, /artifact test task/);
 
+  assert.equal(result.resultFile, path.join(result.runDir, "dispatch-result.txt"));
+  assert.equal(result.stdoutLog, path.join(result.runDir, "dispatch-stdout.log"));
+  assert.equal(result.stderrLog, path.join(result.runDir, "dispatch-stderr.log"));
   assert.ok(fs.existsSync(path.join(result.runDir, "dispatch-result.txt")));
+  assert.ok(fs.existsSync(path.join(result.runDir, "dispatch-stdout.log")));
+  assert.ok(fs.existsSync(path.join(result.runDir, "dispatch-stderr.log")));
   const resultText = fs.readFileSync(path.join(result.runDir, "dispatch-result.txt"), "utf-8");
   assert.match(resultText, /ok/);
+
+  const manifest = readManifest(result.manifestPath).data;
+  assert.equal(manifest.paths.dispatch_result, path.join(result.runDir, "dispatch-result.txt"));
+  assert.equal(manifest.paths.dispatch_stdout, path.join(result.runDir, "dispatch-stdout.log"));
+  assert.equal(manifest.paths.dispatch_stderr, path.join(result.runDir, "dispatch-stderr.log"));
+  assert.equal(manifest.paths.lease, path.join(result.runDir, "lease.json"));
+  assert.equal(fs.existsSync(path.join(result.runDir, "lease.json")), false);
+});
+
+test("dispatch creates a run lease while executor runs and removes it on normal completion", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  const markerPath = path.join(os.tmpdir(), `relay-dispatch-lease-${Date.now()}.json`);
+  writeLeaseCheckingCodex(binDir, markerPath);
+  const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}` };
+
+  const result = JSON.parse(runDispatch(repoRoot, [
+    "-b", "issue-lease",
+    "--prompt", "lease lifecycle task",
+    "--json",
+  ], env));
+
+  assert.equal(result.status, "completed");
+  const marker = JSON.parse(fs.readFileSync(markerPath, "utf-8"));
+  assert.equal(marker.output, path.join(result.runDir, "dispatch-result.txt"));
+  assert.equal(marker.leasePath, path.join(result.runDir, "lease.json"));
+  assert.equal(Number.isInteger(marker.lease.pid), true);
+  assert.ok(marker.lease.pid > 0);
+  assert.equal(Number.isInteger(marker.lease.pgid), true);
+  assert.equal(marker.lease.host, os.hostname());
+  assert.equal(marker.lease.timeout_s, 2400);
+  assert.equal(fs.existsSync(marker.leasePath), false);
+});
+
+test("dispatch keeps lease and leaves run dispatched when executor leader exits with a live process group", async () => {
+  if (process.platform === "win32") return;
+
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bg-bin-"));
+  const markerPath = path.join(os.tmpdir(), `relay-dispatch-bg-${process.pid}-${Date.now()}.json`);
+  writeLeaderExitBackgroundCodex(binDir);
+  const env = {
+    ...process.env,
+    PATH: `${binDir}:${process.env.PATH}`,
+    RELAY_HOME: relayHome,
+    RELAY_TEST_EXECUTOR_MARKER: markerPath,
+  };
+  let marker = null;
+
+  try {
+    const result = spawnSync(process.execPath, [SCRIPT, repoRoot, ...withRequiredRubric([
+      "-b", "issue-801-leader-close-live-pgid",
+      "--prompt", "leader exits while background child keeps pgid alive",
+      "--json",
+    ])], {
+      cwd: repoRoot,
+      env,
+      encoding: "utf-8",
+      stdio: "pipe",
+      timeout: 30000,
+    });
+
+    marker = JSON.parse(fs.readFileSync(markerPath, "utf-8"));
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /executor process group .*still alive after executor leader exited/);
+    assert.equal(fs.existsSync(marker.leasePath), true);
+    const lease = JSON.parse(fs.readFileSync(marker.leasePath, "utf-8"));
+    assert.equal(lease.pgid, marker.pgid);
+
+    const manifestPath = listManifestPaths(repoRoot)[0];
+    const manifest = readManifest(manifestPath).data;
+    assert.equal(manifest.state, STATES.DISPATCHED);
+    const interruptedEvent = readRunEvents(repoRoot, manifest.run_id).at(-1);
+    assert.equal(interruptedEvent.event, "dispatch_interrupted");
+    assert.equal(interruptedEvent.reason, "executor_group_unsettled_after_leader_close");
+    assert.equal(interruptedEvent.executor_pgid, marker.pgid);
+    assert.equal(interruptedEvent.executor_terminated, false);
+  } finally {
+    if (marker?.pgid) {
+      try {
+        process.kill(-Number(marker.pgid), "SIGKILL");
+      } catch {}
+      try {
+        await waitFor(() => !isPgidAlive(marker.pgid), {
+          timeoutMs: 1000,
+          message: `process group ${marker.pgid} to exit`,
+        });
+      } catch {}
+    }
+  }
+});
+
+test("dispatch resume waits for the fresh run lease when stale lease.json exists", () => {
+  if (process.platform === "win32") return;
+
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  writeFakeCodex(binDir);
+  const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}`, RELAY_HOME: relayHome };
+  const first = makeDispatchedResumeFixture(repoRoot, env, { appendInterruptedEvent: true });
+  const staleLease = {
+    pid: 111111,
+    pgid: 222222,
+    host: os.hostname(),
+    started_at: new Date(Date.now() - 60_000).toISOString(),
+    timeout_s: 2400,
+  };
+  fs.writeFileSync(path.join(first.runDir, "lease.json"), `${JSON.stringify(staleLease, null, 2)}\n`, "utf-8");
+
+  const markerPath = path.join(os.tmpdir(), `relay-dispatch-lease-fresh-${Date.now()}.json`);
+  writeLeaseFreshnessCheckingCodex(binDir, markerPath);
+  const preloadPath = writePreloadScript(binDir, "delay-lease-write-preload.js", `
+const fs = require("fs");
+const path = require("path");
+const originalWriteFileSync = fs.writeFileSync;
+const isDispatch = String(process.argv[1] || "").endsWith("dispatch.js");
+fs.writeFileSync = function patchedWriteFileSync(filePath, data, options) {
+  if (
+    isDispatch &&
+    path.basename(String(filePath)) === "lease.json" &&
+    process.env.RELAY_TEST_DELAY_LEASE_WRITE_MS
+  ) {
+    const delayMs = Number(process.env.RELAY_TEST_DELAY_LEASE_WRITE_MS);
+    if (Number.isFinite(delayMs) && delayMs > 0) {
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, delayMs);
+    }
+  }
+  return originalWriteFileSync.call(this, filePath, data, options);
+};
+`);
+  const delayedEnv = withNodePreload({
+    ...env,
+    RELAY_TEST_DELAY_LEASE_WRITE_MS: "750",
+  }, preloadPath);
+
+  const second = JSON.parse(runDispatch(repoRoot, [
+    "--run-id", first.runId,
+    "--prompt", "resume with stale lease present",
+    "--json",
+  ], delayedEnv));
+
+  assert.equal(second.mode, "resume");
+  assert.equal(second.runId, first.runId);
+  const marker = JSON.parse(fs.readFileSync(markerPath, "utf-8"));
+  assert.equal(marker.leasePath, path.join(first.runDir, "lease.json"));
+  assert.equal(marker.lease.pgid, marker.executorPid);
+  assert.notEqual(marker.lease.pgid, staleLease.pgid);
+  assert.equal(fs.existsSync(marker.leasePath), false);
 });
 
 test("dispatch persists selected guidance metadata in run artifacts and events", () => {

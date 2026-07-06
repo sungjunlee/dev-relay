@@ -1,6 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { execFileSync, spawnSync } = require("child_process");
+const { execFileSync, spawn, spawnSync } = require("child_process");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
@@ -107,6 +107,43 @@ function branchExists(repoRoot, branch) {
   }
 }
 
+function isPgidAlive(pgid) {
+  try {
+    process.kill(-Number(pgid), 0);
+    return true;
+  } catch (error) {
+    if (error.code === "EPERM") return true;
+    if (error.code === "ESRCH") return false;
+    return false;
+  }
+}
+
+function killPgid(pgid) {
+  try {
+    process.kill(-Number(pgid), "SIGTERM");
+  } catch {}
+}
+
+async function waitFor(condition, { timeoutMs = 5000, intervalMs = 50, message = "condition" } = {}) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (condition()) return;
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+  throw new Error(`timed out waiting for ${message}`);
+}
+
+async function spawnSleeper(t) {
+  const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000);"], {
+    detached: true,
+    stdio: "ignore",
+  });
+  child.unref();
+  t.after(() => killPgid(child.pid));
+  await waitFor(() => isPgidAlive(child.pid), { message: `pgid ${child.pid} alive` });
+  return child;
+}
+
 test("close-run closes an active run and cleans a clean worktree", () => {
   const { repoRoot, manifestPath, runId, worktreePath } = setupRepo();
 
@@ -131,6 +168,142 @@ test("close-run closes an active run and cleans a clean worktree", () => {
   const events = fs.readFileSync(getEventsPath(repoRoot, runId), "utf-8");
   assert.match(events, /"event":"close"/);
   assert.match(events, /"event":"cleanup_result"/);
+});
+
+test("close-run refuses to close and clean a worktree with a live run lease without --force", async (t) => {
+  const { repoRoot, manifestPath, runId, worktreePath } = setupRepo();
+  const child = await spawnSleeper(t);
+  const runDir = ensureRunLayout(repoRoot, runId).runDir;
+  fs.writeFileSync(path.join(runDir, "lease.json"), JSON.stringify({
+    pid: process.pid,
+    pgid: child.pid,
+    host: os.hostname(),
+    started_at: new Date().toISOString(),
+    timeout_s: 60,
+  }, null, 2), "utf-8");
+
+  const result = spawnSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--run-id", runId,
+    "--reason", "stale_non_terminal_run",
+    "--json",
+  ], { encoding: "utf-8" });
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /live lease/);
+  assert.match(result.stderr, new RegExp(`pid=${process.pid}`));
+  assert.match(result.stderr, new RegExp(`host=${os.hostname().replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
+  assert.equal(fs.existsSync(worktreePath), true);
+  assert.equal(readManifest(manifestPath).data.state, STATES.REVIEW_PENDING);
+});
+
+test("close-run refuses host-mismatched run leases without --force", () => {
+  const { repoRoot, manifestPath, runId, worktreePath } = setupRepo();
+  const runDir = ensureRunLayout(repoRoot, runId).runDir;
+  fs.writeFileSync(path.join(runDir, "lease.json"), JSON.stringify({
+    pid: 999999,
+    pgid: 999999,
+    host: "other-host.example.test",
+    started_at: new Date().toISOString(),
+    timeout_s: 60,
+  }, null, 2), "utf-8");
+
+  const result = spawnSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--run-id", runId,
+    "--reason", "stale_non_terminal_run",
+    "--json",
+  ], { encoding: "utf-8" });
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /host_mismatch|host mismatch|unverifiable lease/);
+  assert.match(result.stderr, /other-host\.example\.test/);
+  assert.equal(fs.existsSync(worktreePath), true);
+  assert.equal(readManifest(manifestPath).data.state, STATES.REVIEW_PENDING);
+});
+
+test("close-run --force closes and cleans a worktree with a live run lease", async (t) => {
+  const { repoRoot, manifestPath, runId, worktreePath } = setupRepo();
+  const child = await spawnSleeper(t);
+  const runDir = ensureRunLayout(repoRoot, runId).runDir;
+  fs.writeFileSync(path.join(runDir, "lease.json"), JSON.stringify({
+    pid: process.pid,
+    pgid: child.pid,
+    host: os.hostname(),
+    started_at: new Date().toISOString(),
+    timeout_s: 60,
+  }, null, 2), "utf-8");
+
+  const stdout = execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--run-id", runId,
+    "--reason", "stale_non_terminal_run",
+    "--force",
+    "--json",
+  ], { encoding: "utf-8" });
+
+  const result = JSON.parse(stdout);
+  assert.equal(result.force, true);
+  assert.equal(result.state, STATES.CLOSED);
+  assert.equal(result.cleanup.cleanupStatus, "succeeded");
+  assert.equal(fs.existsSync(worktreePath), false);
+  assert.equal(readManifest(manifestPath).data.state, STATES.CLOSED);
+  assert.equal(isPgidAlive(child.pid), true);
+});
+
+test("close-run --force closes and cleans a worktree with a host-mismatched run lease", () => {
+  const { repoRoot, manifestPath, runId, worktreePath } = setupRepo();
+  const runDir = ensureRunLayout(repoRoot, runId).runDir;
+  fs.writeFileSync(path.join(runDir, "lease.json"), JSON.stringify({
+    pid: 999999,
+    pgid: 999999,
+    host: "other-host.example.test",
+    started_at: new Date().toISOString(),
+    timeout_s: 60,
+  }, null, 2), "utf-8");
+
+  const stdout = execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--run-id", runId,
+    "--reason", "stale_non_terminal_run",
+    "--force",
+    "--json",
+  ], { encoding: "utf-8" });
+
+  const result = JSON.parse(stdout);
+  assert.equal(result.force, true);
+  assert.equal(result.state, STATES.CLOSED);
+  assert.equal(result.cleanup.cleanupStatus, "succeeded");
+  assert.equal(fs.existsSync(worktreePath), false);
+  assert.equal(readManifest(manifestPath).data.state, STATES.CLOSED);
+});
+
+test("close-run --force closes and cleans a worktree with a corrupt run lease", () => {
+  const { repoRoot, manifestPath, runId, worktreePath } = setupRepo();
+  const runDir = ensureRunLayout(repoRoot, runId).runDir;
+  fs.writeFileSync(path.join(runDir, "lease.json"), "{\"pid\":", "utf-8");
+
+  const stdout = execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--run-id", runId,
+    "--reason", "stale_non_terminal_run",
+    "--force",
+    "--json",
+  ], { encoding: "utf-8" });
+
+  const result = JSON.parse(stdout);
+  assert.equal(result.force, true);
+  assert.equal(result.leaseStatus, "corrupt");
+  assert.match(result.leaseError, /invalid run lease/);
+  assert.equal(result.state, STATES.CLOSED);
+  assert.equal(result.cleanup.cleanupStatus, "succeeded");
+  assert.equal(fs.existsSync(worktreePath), false);
+  assert.equal(readManifest(manifestPath).data.state, STATES.CLOSED);
 });
 
 test("close-run fails when --run-id does not resolve", () => {

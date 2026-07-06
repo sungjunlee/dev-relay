@@ -126,10 +126,10 @@ const FLAGS = [
 const COMMAND_FLAGS = {
   "cleanup-worktrees": [
     "--repo", "--older-than", "--all", "--dry-run", "--json",
-    "--inspect", "--reconcile-merged", "--stale-days", "--help",
+    "--inspect", "--reconcile-merged", "--stale-days", "--force", "--help",
   ],
   "close-run": [
-    "--repo", "--run-id", "--reason", "--dry-run", "--json", "--help",
+    "--repo", "--run-id", "--reason", "--force", "--dry-run", "--json", "--help",
   ],
   "create-worktree": [
     "--branch", "--title", "--topic", "--worktree-path", "--copy",
@@ -188,6 +188,9 @@ const COMMAND_FLAGS = {
     "--repo", "--run-id", "--manifest", "--reason", "--pr-title", "--pr-body-file",
     "--test-command", "--test-result-file", "--test-exit-code",
     "--dry-run", "--json", "--help",
+  ],
+  "reconcile-run": [
+    "--repo", "--run-id", "--dry-run", "--json", "--help",
   ],
   "relay-config": [
     "--profile", "--effective", "--phase", "--executor", "--reviewer", "--model",
