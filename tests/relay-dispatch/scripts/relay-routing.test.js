@@ -543,6 +543,60 @@ test("route intent resolver gives run intent precedence over project defaults", 
   assert.equal(result.phases.review.policy_decision.reason, "managed_cli");
 });
 
+test("route preset expansion fills only unset run intent fields with preset sources", () => {
+  const result = resolveRouteIntent({
+    runIntent: {
+      dispatch: { executor: "codex" },
+    },
+    routePresetName: "light",
+    policy: routePolicy({
+      presets: {
+        light: {
+          dispatch: { executor: "opencode", model: "example/opencode-model-fast" },
+          advisory_review: { reviewer: "pi", model: "example/pi-model-fast", profile: "blindspot" },
+        },
+      },
+      allowed_model_routes: [
+        { route: "example/opencode-model-*", phases: ["dispatch"], executors: ["opencode"] },
+        { route: "example/pi-model-*", phases: ["advisory_review"], reviewers: ["pi"] },
+      ],
+    }),
+  });
+
+  assert.equal(result.route_preset.name, "light");
+  assert.equal(result.phases.dispatch.executor, "codex");
+  assert.equal(result.phases.dispatch.sources.executor, "run_intent");
+  assert.equal(result.phases.dispatch.model, "example/opencode-model-fast");
+  assert.equal(result.phases.dispatch.sources.model, "preset:light");
+  assert.equal(result.phases.advisory_review.reviewer, "pi");
+  assert.equal(result.phases.advisory_review.sources.reviewer, "preset:light");
+  assert.equal(result.phases.advisory_review.profile, "blindspot");
+  assert.equal(result.phases.advisory_review.sources.profile, "preset:light");
+});
+
+test("route preset expansion errors with available presets when missing or unconfigured", () => {
+  assert.throws(
+    () => resolveRouteIntent({
+      routePresetName: "missing",
+      policy: routePolicy({
+        presets: {
+          light: { dispatch: { executor: "codex" } },
+          hardened: { review_assurance: "hardened" },
+        },
+      }),
+    }),
+    /unknown route preset 'missing'.*available presets: hardened, light/
+  );
+
+  assert.throws(
+    () => resolveRouteIntent({
+      routePresetName: "light",
+      policy: routePolicy(),
+    }),
+    /no route presets configured.*relay-config/
+  );
+});
+
 test("route intent resolver uses project defaults before built-in managed defaults", () => {
   const result = resolveRouteIntent({
     projectRoutes: {

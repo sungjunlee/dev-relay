@@ -24,6 +24,17 @@ Execute the plan -> dispatch -> review cycle. Stop at `ready_to_merge` unless th
 
 Standard Codex path: stamp `RELAY_ORCHESTRATOR=codex` and review through `review-runner --reviewer codex`. Assigned manifest roles stay immutable; acting reviewer data is recorded separately.
 
+## Route Preset Words
+
+When the user gives a routing style, map only these clear words:
+| User wording | Dispatch option |
+| --- | --- |
+| `가볍게`, `싸게`, `light` | `--route-preset light` |
+| `리뷰 다양하게`, `diverse` | `--route-preset diverse` |
+| `하드하게`, `hardened` | `--route-preset hardened` |
+
+If no wording matches, list configured presets from routes config and ask/continue with defaults; do not guess.
+
 ## Step 1: Re-Anchor and Route
 
 Run `git fetch origin`; if a sprint file exists, re-read Running Context and completed/in-flight status changes. Apply any previous-task context before proceeding.

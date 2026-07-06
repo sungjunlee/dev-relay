@@ -162,6 +162,14 @@ test("reconcile-run flags are registered with explicit required modes", () => {
   }
 });
 
+test("dispatch registers --route-preset as a parsed value flag", () => {
+  const definition = FLAGS.find((entry) => entry.flag === "--route-preset");
+  assert.ok(definition, "--route-preset should be registered");
+  assert.equal(definition.kind, VALUE);
+  assert.equal(definition.mode, MODE_PARSED);
+  assert.ok(COMMAND_FLAGS.dispatch.includes("--route-preset"));
+});
+
 const HELP_COMMANDS = [
   ["cleanup-worktrees", path.join(__dirname, "..", "..", "..", "skills", "relay-dispatch", "scripts", "cleanup-worktrees.js")],
   ["close-run", path.join(__dirname, "..", "..", "..", "skills", "relay-dispatch", "scripts", "close-run.js")],

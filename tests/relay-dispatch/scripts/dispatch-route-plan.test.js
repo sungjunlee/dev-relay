@@ -102,6 +102,122 @@ test("dispatch dry-run consumes route intent and previews route plan", () => {
   assert.equal(output.route_plan.phases.dispatch.policy_decision.reason, "allowed_model_route");
 });
 
+test("dispatch dry-run expands route preset below explicit flags and records preset sources", () => {
+  const { repoRoot, relayHome, rubricFile } = setupRepo();
+  writeJson(path.join(relayHome, "routes.json"), {
+    version: 2,
+    strict: true,
+    defaults: {
+      dispatch: { executor: "codex" },
+      review: { reviewer: "codex" },
+      advisory_review: null,
+    },
+    routes: [
+      { route: "example/opencode-model-*", phases: ["dispatch"], executors: ["opencode"] },
+      { route: "example/opencode-model-*", phases: ["dispatch"], executors: ["codex"] },
+      { route: "example/pi-model-*", phases: ["advisory_review"], reviewers: ["pi"] },
+    ],
+    presets: {
+      light: {
+        dispatch: { executor: "opencode", model: "example/opencode-model-fast" },
+        advisory_review: { reviewer: "pi", model: "example/pi-model-fast", profile: "blindspot" },
+      },
+    },
+  });
+
+  const proc = spawnSync(process.execPath, [
+    SCRIPT, repoRoot,
+    "-b", "issue-route-preset-dry",
+    "-p", "dry preset route plan",
+    "--rubric-file", rubricFile,
+    "--route-preset", "light",
+    "--executor", "codex",
+    "--dry-run",
+    "--json",
+  ], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    env: { ...process.env, RELAY_HOME: relayHome },
+  });
+
+  assert.equal(proc.status, 0, proc.stderr);
+  const output = JSON.parse(proc.stdout);
+  assert.equal(output.executor, "codex");
+  assert.equal(output.route_plan.phases.dispatch.executor, "codex");
+  assert.equal(output.route_plan.phases.dispatch.sources.executor, "run_intent");
+  assert.equal(output.route_plan.phases.dispatch.model, "example/opencode-model-fast");
+  assert.equal(output.route_plan.phases.dispatch.sources.model, "preset:light");
+  assert.equal(output.route_plan.phases.advisory_review.reviewer, "pi");
+  assert.equal(output.route_plan.phases.advisory_review.sources.reviewer, "preset:light");
+  assert.equal(output.route_plan.phases.advisory_review.profile, "blindspot");
+});
+
+test("dispatch unknown route preset fails before creating run side effects", () => {
+  const { repoRoot, relayHome, rubricFile } = setupRepo();
+  writeJson(path.join(relayHome, "routes.json"), {
+    version: 2,
+    strict: false,
+    presets: {
+      light: { dispatch: { executor: "codex" } },
+      hardened: { review_assurance: "hardened" },
+    },
+  });
+
+  const proc = spawnSync(process.execPath, [
+    SCRIPT, repoRoot,
+    "-b", "issue-unknown-preset",
+    "-p", "unknown preset route plan",
+    "--rubric-file", rubricFile,
+    "--route-preset", "missing",
+    "--json",
+  ], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    env: { ...process.env, RELAY_HOME: relayHome },
+  });
+
+  assert.notEqual(proc.status, 0);
+  const output = JSON.parse(proc.stdout);
+  assert.match(output.error, /unknown route preset 'missing'/);
+  assert.deepEqual(output.available_presets, ["hardened", "light"]);
+  assert.equal(fs.existsSync(path.join(relayHome, "runs")), false);
+  assert.equal(fs.existsSync(path.join(relayHome, "worktrees")), false);
+});
+
+test("dispatch route preset review_assurance maps to existing review assurance path", () => {
+  const { repoRoot, relayHome, rubricFile } = setupRepo();
+  writeJson(path.join(relayHome, "routes.json"), {
+    version: 2,
+    strict: true,
+    defaults: {
+      dispatch: { executor: "codex" },
+      review: { reviewer: "codex" },
+      advisory_review: null,
+    },
+    presets: {
+      hardened: { review_assurance: "hardened" },
+    },
+  });
+
+  const proc = spawnSync(process.execPath, [
+    SCRIPT, repoRoot,
+    "-b", "issue-preset-hardened",
+    "-p", "hardened preset route plan",
+    "--rubric-file", rubricFile,
+    "--route-preset", "hardened",
+    "--dry-run",
+    "--json",
+  ], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    env: { ...process.env, RELAY_HOME: relayHome },
+  });
+
+  assert.equal(proc.status, 0, proc.stderr);
+  const output = JSON.parse(proc.stdout);
+  assert.equal(output.reviewAssurance, "hardened");
+});
+
 test("dispatch denied route intent fails before executor invocation", () => {
   const { root, repoRoot, relayHome, rubricFile } = setupRepo();
   writePolicy(relayHome, {

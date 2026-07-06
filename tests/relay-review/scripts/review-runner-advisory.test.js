@@ -25,6 +25,7 @@ const { finishAdvisoryReview } = require("../../../skills/relay-review/scripts/r
 const { installFakeGhOnPath } = require("../fixtures/fake-gh");
 
 const SCRIPT = path.join(__dirname, "..", "..", "..", "skills", "relay-review", "scripts", "review-runner.js");
+const DISPATCH_SCRIPT = path.join(__dirname, "..", "..", "..", "skills", "relay-dispatch", "scripts", "dispatch.js");
 
 function installDefaultGhFixture() {
   return installFakeGhOnPath({
@@ -40,6 +41,11 @@ test.after(() => defaultGhFixture.restore());
 
 function hashFile(filePath) {
   return crypto.createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
+}
+
+function writeJson(filePath, value) {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf-8");
 }
 
 function defaultRubricScores() {
@@ -220,6 +226,71 @@ function setupRepo({
   fs.writeFileSync(doneCriteriaPath, "# Done Criteria\n\n- Add advisory lane\n", "utf-8");
   fs.writeFileSync(diffPath, "diff --git a/README.md b/README.md\n+advisory\n", "utf-8");
   return { repoRoot, manifestPath, runDir, runId, doneCriteriaPath, diffPath };
+}
+
+function setupDispatchRepoForPresetAdvisory() {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-preset-dispatch-"));
+  const remoteRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-preset-origin-"));
+  const relayHome = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  process.env.RELAY_HOME = relayHome;
+  execFileSync("git", ["init", "-b", "main"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
+  execFileSync("git", ["init", "--bare", remoteRoot], { encoding: "utf-8", stdio: "pipe" });
+  execFileSync("git", ["config", "user.name", "Relay Preset Dispatch"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
+  execFileSync("git", ["config", "user.email", "relay-preset@example.com"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
+  fs.writeFileSync(path.join(repoRoot, "README.md"), "base\n", "utf-8");
+  execFileSync("git", ["add", "README.md"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
+  execFileSync("git", ["commit", "-m", "init"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
+  execFileSync("git", ["remote", "add", "origin", remoteRoot], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
+  execFileSync("git", ["push", "-u", "origin", "main"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
+
+  const rubricFile = path.join(repoRoot, "rubric.yaml");
+  const doneCriteriaPath = path.join(repoRoot, "done-criteria.md");
+  const diffPath = path.join(repoRoot, "pr.diff");
+  fs.writeFileSync(rubricFile, DEFAULT_ENFORCEMENT_RUBRIC, "utf-8");
+  fs.writeFileSync(doneCriteriaPath, "# Done Criteria\n\n- Route advisory preset\n", "utf-8");
+  fs.writeFileSync(diffPath, "diff --git a/README.md b/README.md\n+advisory preset\n", "utf-8");
+  writeJson(path.join(relayHome, "routes.json"), {
+    version: 2,
+    strict: true,
+    defaults: {
+      dispatch: { executor: "codex" },
+      review: { reviewer: "codex" },
+      advisory_review: null,
+    },
+    routes: [
+      { route: "example/opencode-model-*", phases: ["advisory_review"], reviewers: ["opencode"] },
+    ],
+    presets: {
+      diverse: {
+        advisory_review: {
+          reviewer: "opencode",
+          model: "example/opencode-model-fast",
+          profile: "blindspot",
+        },
+      },
+    },
+  });
+  return { repoRoot, relayHome, rubricFile, doneCriteriaPath, diffPath };
+}
+
+function writeNoOpCodex(binDir) {
+  const codexPath = path.join(binDir, "codex");
+  fs.writeFileSync(codexPath, `#!/usr/bin/env node
+const fs = require("fs");
+const args = process.argv.slice(2);
+if (args[0] === "--version") {
+  process.stdout.write("codex-fake\\n");
+  process.exit(0);
+}
+if (args[0] !== "exec") {
+  process.stderr.write("unsupported fake codex invocation");
+  process.exit(1);
+}
+const output = args[args.indexOf("-o") + 1];
+fs.writeFileSync(output, "preset dispatch ok\\n", "utf-8");
+`, "utf-8");
+  fs.chmodSync(codexPath, 0o755);
+  return codexPath;
 }
 
 function writePrimaryReviewer(repoRoot, verdict, { logPath = null, delayMs = 0 } = {}) {
@@ -612,6 +683,59 @@ test("review-runner uses manifest routing advisory defaults without changing the
   assert.equal(result.advisoryReview.source, "routing");
   assert.equal(manifest.review.last_reviewer, "codex");
   assert.deepEqual(manifest.roles, { orchestrator: "codex", executor: "codex", reviewer: "codex" });
+});
+
+test("preset-only dispatch starts advisory review through manifest routing selection", () => {
+  const { repoRoot, relayHome, rubricFile, doneCriteriaPath, diffPath } = setupDispatchRepoForPresetAdvisory();
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-preset-bin-"));
+  writeNoOpCodex(binDir);
+
+  const dispatch = spawnSync(process.execPath, [
+    DISPATCH_SCRIPT,
+    repoRoot,
+    "-b",
+    "issue-preset-advisory",
+    "-p",
+    "dispatch with diverse route preset",
+    "--rubric-file",
+    rubricFile,
+    "--route-preset",
+    "diverse",
+    "--json",
+  ], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    env: {
+      ...process.env,
+      RELAY_HOME: relayHome,
+      PATH: `${binDir}${path.delimiter}${process.env.PATH || ""}`,
+    },
+  });
+  assert.equal(dispatch.status, 0, dispatch.stderr);
+  const dispatchOutput = JSON.parse(dispatch.stdout);
+  const manifest = readManifest(dispatchOutput.manifestPath).data;
+  assert.deepEqual(manifest.routing.selected.advisory_review, {
+    reviewer: "opencode",
+    model: "example/opencode-model-fast",
+    profile: "blindspot",
+  });
+
+  const primaryScript = writePrimaryReviewer(repoRoot, passVerdict());
+  const opencodeScript = writeFakeOpencode(repoRoot);
+  const result = runReview({
+    repoRoot,
+    runId: dispatchOutput.runId,
+    doneCriteriaPath,
+    diffPath,
+    primaryScript,
+    opencodeScript,
+    advisoryReviewer: null,
+    extraArgs: ["--advisory-grace", "30"],
+  });
+
+  assert.equal(result.nextState, STATES.READY_TO_MERGE);
+  assert.equal(result.advisoryReview.reviewer, "opencode");
+  assert.equal(result.advisoryReview.source, "routing");
 });
 
 test("review-runner denies disallowed advisory model before spawning advisory reviewer", () => {
