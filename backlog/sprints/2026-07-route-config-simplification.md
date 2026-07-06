@@ -17,7 +17,7 @@ Route selection is one user-facing concept: a single routes.json schema (open-by
 ### Batch 1 — substrate + independent bugfix (parallelizable)
 
 - [x] #784 relay-config inspect: opencode/pi model-list probes time out (ETIMEDOUT at 5s) — S, ~1 relay run; independent of the phase chain, good parallel candidate alongside #781
-- [~] #781 Routes single concept: unified routes.json, open-by-default posture, strict opt-in (Phase A) — L; split as A1 loader/gate/posture/event/ADR → A2 relay-config vocabulary → A3 friction wiring + doc banners; A1 merged (PR #792)
+- [~] #781 Routes single concept: unified routes.json, open-by-default posture, strict opt-in (Phase A) — L; split as A1 loader/gate/posture/event/ADR → A2 relay-config vocabulary → A3 friction wiring + doc banners; A1 merged (PR #792), A2 `ready_to_merge` (PR #804), A3 remaining
 
 ### Batch 2 — per-run UX (blocked by #781)
 
@@ -43,6 +43,14 @@ Route selection is one user-facing concept: a single routes.json schema (open-by
 - Phase D (relay-plan route recommendation + fleet per-leaf fill) is NOT in this sprint — observe-gated on ≥~10 non-default-route runs over ~4 weeks after A–C ship.
 
 ## Progress
+
+### 2026-07-06 (A2)
+- #781 A2 dispatched on merged A1 (run `issue-781-20260706000901940-2ab48b13`, codex, branch issue-781-a2). Issue #781 had been auto-closed by PR #792's squash merge — reopened with rationale (A2/A3 remain).
+- Harness kill recurred (~01:05, dispatch PID + codex both dead, no JSON emitted) AFTER codex finished implementing (5 files, +483/-149, targeted 31/31 green in worktree). Salvage playbook applied: orchestrator verification (full suite FULL_SUITE_DONE exit=0) → provenance commit 1c7cb08 → two-hop recover-state → PR #804 → evidence via execution-evidence.js helpers.
+- NEW INFRA BUG filed as #805: runs dispatched from a linked worktree (Claude's .claude/worktrees/*) fail validateManifestPaths in recover-commit/recover-state/review-runner — relay worktree basename (dispatching root) vs canonicalized primary root basename mismatch. Verified workaround used throughout: `--manifest <path>` form without `--repo` (expectedRepoRoot undefined → validates against manifest's own repo_root).
+- R1 CHANGES_REQUESTED, 3 real findings: init lost overwrite semantics (preserved existing fields + couldn't recover from invalid routes.json); PR-body test-edit enumeration incomplete (orchestrator-authored body missed 3 wrapper-suite edits); legacy-shadow warning three states asserted only in JSON mode. Fixed as orchestrator-correction (630d7ac): commandInit rebuilt from scratch, text-mode three-state test, full 10-item enumeration. Note: profile enum guard was UNREACHABLE (cli-schema.js --profile allowedValues already enforces) — pinned existing behavior in a test instead of adding dead code.
+- R2 full-suite gate: one relay-review contention flake (different test failed on each run; isolated reruns 429/429 + skills-lint 24/24) — deflake-by-isolation per playbook, rerun note appended to evidence log.
+- R2 PASS → `ready_to_merge` (PR #804, rounds 2, all DC VERIFIED). Stopped before merge per protocol.
 
 ### 2026-07-06 (merge)
 - Batch 1 landed on user instruction. Merge audit first surfaced a parallel-session collision: PR #789 (#786 part 1) conflicted with main because the other session's #797 (#785) fixed the same vanished-worktree dead-end via a more general three-case ownership matrix, and the owner had already closed #786 as fixed-by-#785. Remaining #789 diff added no behavior main doesn't enforce → PR #789 closed unmerged with rationale, run closed. Precedent applied: close superseded PR; no narrow follow-up needed (part 2 lives in #785's thread).
