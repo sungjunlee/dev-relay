@@ -17,7 +17,7 @@ Route selection is one user-facing concept: a single routes.json schema (open-by
 ### Batch 1 — substrate + independent bugfix (parallelizable)
 
 - [x] #784 relay-config inspect: opencode/pi model-list probes time out (ETIMEDOUT at 5s) — S, ~1 relay run; independent of the phase chain, good parallel candidate alongside #781
-- [~] #781 Routes single concept: unified routes.json, open-by-default posture, strict opt-in (Phase A) — L; split as A1 loader/gate/posture/event/ADR → A2 relay-config vocabulary → A3 friction wiring + doc banners; A1 merged (PR #792), A2 `ready_to_merge` (PR #804), A3 remaining
+- [~] #781 Routes single concept: unified routes.json, open-by-default posture, strict opt-in (Phase A) — L; split as A1 loader/gate/posture/event/ADR → A2 relay-config vocabulary → A3 friction wiring + doc banners; A1 merged (PR #792), A2 merged (PR #804), A3 remaining
 
 ### Batch 2 — per-run UX (blocked by #781)
 
@@ -31,6 +31,9 @@ Route selection is one user-facing concept: a single routes.json schema (open-by
 
 - [x] #786 close-run cannot close runs whose worktree was pruned by dispatch signal cleanup — S; superseded by #785 (other session's three-case worktree matrix, PR #797); PR #789 closed unmerged, part 2 follow-up tracked in #785's thread
 - [ ] #795 dispatch branches from local main; unpushed local commits contaminate every PR diff — filed after the same scope-noise finding cost one review round on each of PR #789/#791/#792 (rule of three)
+- [ ] #805 validateManifestPaths rejects relay worktrees for runs dispatched from a linked worktree (basename mismatch) — S; blocked recover-commit/recover-state/review-runner/gate-check for the A2 run; verified workaround: `--manifest` form without `--repo`
+- [ ] #807 finalize-run post-merge crash (runCleanup removes worktree → getCanonicalRepoRoot on it; writeManifest is last) leaves run stuck at ready_to_merge — S; A2 run completed manually via updateManifestState+writeManifest + cleanup_result event
+- [ ] #808 finalize-run pre-merge CI gate blocks already-MERGED PRs on never-completing checks (CodeRabbit PENDING after branch delete) — S; ordering fix: fetch merge state before assertPreMergeSafety
 
 ## Running Context
 
@@ -43,6 +46,13 @@ Route selection is one user-facing concept: a single routes.json schema (open-by
 - Phase D (relay-plan route recommendation + fleet per-leaf fill) is NOT in this sprint — observe-gated on ≥~10 non-default-route runs over ~4 weeks after A–C ship.
 
 ## Progress
+
+### 2026-07-06 (A2 merge)
+- PR #804 squash-merged on user instruction. The landing itself surfaced two more finalize-run defects, both filed: #808 (pre-merge CI gate runs before already-MERGED detection; first `test IN_PROGRESS` on the fresh push, then `CodeRabbit PENDING` that only cleared minutes after branch delete) and #807 (post-merge crash: runCleanup removes the worktree, a follow-on path calls getCanonicalRepoRoot on it, and writeManifest — the LAST step — never runs, so merge_finalize events journal but the manifest sticks at ready_to_merge; retries impossible in any configuration).
+- Also hit during landing: gate-check has no --manifest form, so #805 blocks it entirely for linked-worktree runs (finalize-run's internal audit re-check covered the gate); a silent earlier push failure meant R2 review passed against local 630d7ac while the PR head was still 1c7cb08 — caught by finalize's fresh-review gate (stale), fixed by pushing before retry.
+- Run completed manually per #807 comment: updateManifestState→merged + writeManifest via node (validateTransition machinery), cleanup_result event with reason manual_cleanup_after_finalize_crash_807, worktree pruned + local branch deleted. Issue #781 reopened 3× (auto-closed by #792 squash, #804 merge, then finalize retries' best-effort issue close) — stays open for A3.
+- Other session landed #803 (#800 crash-only Phase 1: non-destructive signal handling in dispatch.js) — future harness kills should no longer prune worktrees mid-dispatch.
+- Next: A3 (friction wiring + doc banners) + #805 fix are disjoint file surfaces — parallel dispatch candidates on merged main.
 
 ### 2026-07-06 (A2)
 - #781 A2 dispatched on merged A1 (run `issue-781-20260706000901940-2ab48b13`, codex, branch issue-781-a2). Issue #781 had been auto-closed by PR #792's squash merge — reopened with rationale (A2/A3 remain).
