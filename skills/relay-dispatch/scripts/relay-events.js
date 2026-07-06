@@ -23,6 +23,8 @@ const EVENTS = Object.freeze({
   CLEANUP_RESULT: "cleanup_result",
   CLOSE: "close",
   CONFLICTING_RUN_OVERRIDE: "conflicting_run_override",
+  // Consumer: dispatch resume gate and Phase 2 reconciler use this to resume or reconcile interrupted dispatches.
+  DISPATCH_INTERRUPTED: "dispatch_interrupted",
   DISPATCH_RESULT: "dispatch_result",
   DISPATCH_START: "dispatch_start",
   ENVIRONMENT_DRIFT: "environment_drift",
@@ -203,6 +205,27 @@ function appendRunEvent(repoRoot, runId, eventData) {
       : {}),
     ...(eventData.executor !== undefined
       ? { executor: normalizeEventValue(eventData.executor) }
+      : {}),
+    ...(eventData.signal !== undefined
+      ? { signal: normalizeEventValue(eventData.signal) }
+      : {}),
+    ...(eventData.executor_pid !== undefined
+      ? { executor_pid: normalizeEventValue(eventData.executor_pid) }
+      : {}),
+    ...(eventData.executor_pgid !== undefined
+      ? { executor_pgid: normalizeEventValue(eventData.executor_pgid) }
+      : {}),
+    ...(eventData.elapsed_s !== undefined
+      ? { elapsed_s: normalizeEventValue(eventData.elapsed_s) }
+      : {}),
+    ...(eventData.timeout_s !== undefined
+      ? { timeout_s: normalizeEventValue(eventData.timeout_s) }
+      : {}),
+    ...(eventData.executor_terminated !== undefined
+      ? { executor_terminated: eventData.executor_terminated === true }
+      : {}),
+    ...(eventData.worktree !== undefined
+      ? { worktree: normalizeEventValue(eventData.worktree) }
       : {}),
     ...(eventData.phase !== undefined
       ? { phase: normalizeEventValue(eventData.phase) }

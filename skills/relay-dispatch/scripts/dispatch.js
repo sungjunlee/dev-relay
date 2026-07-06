@@ -125,7 +125,7 @@ const {
 } = require("./manifest/guidance");
 const { STATES, updateManifestState } = require("./manifest/lifecycle");
 const { resolveManifestRecord } = require("./relay-resolver");
-const { appendRunEvent, appendUnregisteredRouteUsedEvent, EVENTS } = require("./relay-events");
+const { appendRunEvent, appendUnregisteredRouteUsedEvent, EVENTS, readRunEvents } = require("./relay-events");
 const {
   ADAPTER_PHASES,
   getAgentAdapterDescriptor,
@@ -629,6 +629,65 @@ function terminateProcessTree(pid) {
   } catch {}
 }
 
+function probeProcessGroup(pgid) {
+  const normalizedPgid = Number(pgid);
+  if (process.env.RELAY_TEST_PROCESS_GROUP_ALIVE_EPERM === String(normalizedPgid)) {
+    const error = new Error("operation not permitted");
+    error.code = "EPERM";
+    throw error;
+  }
+  process.kill(process.platform === "win32" ? normalizedPgid : -normalizedPgid, 0);
+}
+
+function isProcessGroupAlive(pgid) {
+  if (!pgid || !Number.isFinite(Number(pgid))) return false;
+  try {
+    probeProcessGroup(pgid);
+    return true;
+  } catch (error) {
+    if (error.code === "ESRCH") return false;
+    if (error.code === "EPERM") return true;
+    return false;
+  }
+}
+
+function sleepAsync(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitForProcessGroupExit(pgid, { timeoutMs = 1500, intervalMs = 50 } = {}) {
+  if (!pgid || !Number.isFinite(Number(pgid))) return false;
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!isProcessGroupAlive(pgid)) return true;
+    await sleepAsync(Math.min(intervalMs, Math.max(1, deadline - Date.now())));
+  }
+  return !isProcessGroupAlive(pgid);
+}
+
+function maybePauseBeforeExecutorSpawnForTest() {
+  const pauseMs = Number(process.env.RELAY_TEST_BEFORE_EXECUTOR_SPAWN_PAUSE_MS || 0);
+  if (!Number.isFinite(pauseMs) || pauseMs <= 0) return Promise.resolve();
+  return new Promise((resolve) => setTimeout(resolve, pauseMs));
+}
+
+function maybePauseAfterWorktreeCreateForTest() {
+  const pauseMs = Number(process.env.RELAY_TEST_AFTER_WORKTREE_CREATE_PAUSE_MS || 0);
+  if (!Number.isFinite(pauseMs) || pauseMs <= 0) return Promise.resolve();
+  const markerPath = process.env.RELAY_TEST_AFTER_WORKTREE_CREATE_MARKER;
+  if (markerPath) {
+    try {
+      fs.writeFileSync(markerPath, JSON.stringify({ pid: process.pid, ts: Date.now() }), "utf-8");
+    } catch {}
+  }
+  return new Promise((resolve) => setTimeout(resolve, pauseMs));
+}
+
+function latestRunEvent(repoRoot, runId) {
+  const events = readRunEvents(repoRoot, runId);
+  return events.length ? events[events.length - 1] : null;
+}
+
 function validateResumeRequestLinkage(manifest, { requestId, leafId, fleetId, doneCriteriaPath }) {
   const checks = [
     {
@@ -1042,9 +1101,12 @@ async function main() {
   let issueNumber = inferIssueNumber(branch);
   let manifest;
   let copiedFiles = [];
-  let createdWorktree = false;
   let executorPid = null;
+  let executorPgid = null;
+  let executorClosePromise = null;
+  let dispatchStartTime = null;
   let fleetIssueLock = null;
+  let handlingSignal = false;
 
   function releaseFleetIssueLock() {
     if (!fleetIssueLock) return;
@@ -1052,18 +1114,93 @@ async function main() {
     fleetIssueLock = null;
   }
 
-  function cleanup() {
-    terminateProcessTree(executorPid);
-    releaseFleetIssueLock();
-    if (createdWorktree) {
-      removeWorktree({ repoRoot, worktreePath: wtPath });
+  function persistInterruptedManifestForSignal() {
+    if (!manifest || !manifestPath || !runId) return false;
+    try {
+      const runDir = getRunDir(repoRoot, runId);
+      ensureRunLayout(repoRoot, runId);
+      if (RUBRIC_FILE && !hasRubricPath(manifest)) {
+        const rubricSrc = path.resolve(RUBRIC_FILE);
+        const persistedRubric = getPersistedRubricPath(runDir, "rubric.yaml");
+        copyFileAtomically(rubricSrc, persistedRubric.resolvedPath);
+        manifest = {
+          ...manifest,
+          anchor: {
+            ...(manifest.anchor || {}),
+            rubric_path: persistedRubric.rubricPath,
+          },
+        };
+      }
+      if (!fs.existsSync(manifestPath)) {
+        writeManifest(manifestPath, manifest);
+      }
+      return true;
+    } catch {
+      return false;
     }
+  }
+
+  function journalDispatchInterrupted(signal, executorTerminated) {
+    if (!manifest || !runId) return;
+    let runDir;
+    try {
+      if (!persistInterruptedManifestForSignal()) return;
+      runDir = getRunDir(repoRoot, runId);
+      if (!fs.existsSync(runDir)) return;
+      appendRunEvent(repoRoot, runId, {
+        event: EVENTS.DISPATCH_INTERRUPTED,
+        state_from: manifest.state || null,
+        state_to: manifest.state || null,
+        reason: "signal",
+        signal,
+        executor_pid: executorPid,
+        executor_pgid: executorPgid,
+        elapsed_s: dispatchStartTime ? Math.max(0, Math.round((Date.now() - dispatchStartTime) / 1000)) : null,
+        timeout_s: TIMEOUT,
+        executor_terminated: executorTerminated,
+        worktree: wtPath || null,
+      });
+    } catch {}
+  }
+
+  function printSignalRecoveryHint(signal, executorTerminated) {
+    try {
+      const command = manifestPath
+        ? `node skills/relay-dispatch/scripts/dispatch.js --manifest ${manifestPath}`
+        : "node skills/relay-dispatch/scripts/dispatch.js --manifest <manifest-path>";
+      const suffix = signal === "SIGTERM" && !executorTerminated
+        ? " The executor may still be running and may complete on its own."
+        : signal === "SIGINT" && executorPid && !executorTerminated
+          ? " Executor termination was requested, but the process group may still be running."
+        : "";
+      console.error(`Dispatch interrupted by ${signal}; retained worktree at ${wtPath || "(unknown)"}. Resume with: ${command}.${suffix}`);
+    } catch {}
+  }
+
+  async function handleSignal(signal) {
+    if (handlingSignal) return;
+    handlingSignal = true;
+    let executorTerminated = false;
+    if (signal === "SIGINT") {
+      const pgid = executorPgid || executorPid;
+      terminateProcessTree(executorPid);
+      executorTerminated = await waitForProcessGroupExit(pgid);
+      if (executorClosePromise) {
+        await Promise.race([
+          executorClosePromise.catch(() => null),
+          sleepAsync(100),
+        ]);
+      }
+    }
+    journalDispatchInterrupted(signal, executorTerminated);
+    releaseFleetIssueLock();
+    printSignalRecoveryHint(signal, executorTerminated);
     process.exit(1);
   }
 
   process.once("exit", releaseFleetIssueLock);
-  process.on("SIGINT", cleanup);
-  process.on("SIGTERM", cleanup);
+  process.on("SIGINT", () => { void handleSignal("SIGINT"); });
+  process.on("SIGTERM", () => { void handleSignal("SIGTERM"); });
 
   if (RESUME_MODE) {
     const manifestRecord = resolveManifestRecord({
@@ -1113,7 +1250,18 @@ async function main() {
       console.error(`Error: manifest repo root is not a git repository: ${repoRoot}`);
       process.exit(1);
     }
-    if (manifest.state !== STATES.CHANGES_REQUESTED) {
+    const interruptibleResumeState = manifest.state === STATES.DISPATCHED || manifest.state === STATES.DRAFT;
+    const latestEvent = interruptibleResumeState ? latestRunEvent(repoRoot, runId) : null;
+    const resumesInterruptedDispatch = interruptibleResumeState && latestEvent?.event === EVENTS.DISPATCH_INTERRUPTED;
+    if (resumesInterruptedDispatch && isProcessGroupAlive(latestEvent.executor_pgid)) {
+      console.error(
+        `Error: interrupted executor process group is still alive for run '${runId}' ` +
+        `(pid=${latestEvent.executor_pid ?? "unknown"}, pgid=${latestEvent.executor_pgid}). ` +
+        "Wait for it to finish, or kill that process group before resuming."
+      );
+      process.exit(1);
+    }
+    if (manifest.state !== STATES.CHANGES_REQUESTED && !resumesInterruptedDispatch) {
       console.error(`Error: same-run resume requires state='${STATES.CHANGES_REQUESTED}', got '${manifest.state}'`);
       process.exit(1);
     }
@@ -1148,6 +1296,19 @@ async function main() {
 
     // --- Environment drift check ---
     const currentEnv = collectEnvironmentSnapshot(repoRoot, baseBranch);
+    const needsDraftEnvironmentBackfill = manifest.state === STATES.DRAFT
+      && resumesInterruptedDispatch
+      && (
+        !manifest.environment
+        || ["node_version", "main_sha", "lockfile_hash", "dispatch_ts"].every((field) => manifest.environment[field] == null)
+      );
+    if (needsDraftEnvironmentBackfill) {
+      manifest = {
+        ...manifest,
+        environment: currentEnv,
+      };
+      writeManifest(manifestPath, manifest);
+    }
     const drift = compareEnvironmentSnapshot(manifest.environment, currentEnv);
     if (drift.length) {
       const driftMsg = drift.map(d => `${d.field}: ${d.from} → ${d.to}`).join(", ");
@@ -1466,6 +1627,48 @@ async function main() {
   };
 
   if (!RESUME_MODE) {
+    manifest = createManifestSkeleton({
+      repoRoot,
+      runId,
+      branch,
+      baseBranch,
+      issueNumber,
+      worktreePath: wtPath,
+      orchestrator: resolveRoleBinding("RELAY_ORCHESTRATOR", "unknown"),
+      executor: EXECUTOR,
+      reviewer: resolveRoleBinding("RELAY_REVIEWER", "unknown"),
+      cleanupPolicy,
+      requestId: REQUEST_ID || null,
+      leafId: LEAF_ID || null,
+      doneCriteriaPath: resolvedDoneCriteriaPath,
+      doneCriteriaSource: inferDoneCriteriaSource({
+        repoRoot,
+        runId,
+        doneCriteriaPath: resolvedDoneCriteriaPath,
+        requestId: REQUEST_ID,
+        leafId: LEAF_ID,
+      }),
+      reviewAssurance: REVIEW_ASSURANCE,
+      modelHints: MODEL_HINTS,
+      fleetId: FLEET_ID,
+    });
+    manifest = {
+      ...manifest,
+      policy: {
+        ...(manifest.policy || {}),
+        executor_network: executorNetworkPolicy,
+        executor_policy: executorPolicy,
+      },
+      dispatch: {
+        ...(manifest.dispatch || {}),
+        publish_policy: PUBLISH_POLICY,
+      },
+      routing: routingDecision,
+      routes: {
+        plan_path: "route-plan.json",
+        summary: summarizeRoutePlan(routePlan),
+      },
+    };
     try {
       const created = createWorktree({
         repoRoot,
@@ -1477,11 +1680,11 @@ async function main() {
         assertWithin,
       });
       copiedFiles = created.copiedFiles;
-      createdWorktree = true;
     } catch (error) {
       console.error(`Error: ${error.message}`);
       process.exit(1);
     }
+    await maybePauseAfterWorktreeCreateForTest();
 
     // Merge base branch into worktree so the executor works on merged state.
     // Prevents wasted rounds from stale-base conflicts or CI failures.
@@ -1509,34 +1712,9 @@ async function main() {
     }
 
     const environment = collectEnvironmentSnapshot(repoRoot, baseBranch);
-    manifest = createManifestSkeleton({
-      repoRoot,
-      runId,
-      branch,
-      baseBranch,
-      issueNumber,
-      worktreePath: wtPath,
-      orchestrator: resolveRoleBinding("RELAY_ORCHESTRATOR", "unknown"),
-      executor: EXECUTOR,
-      reviewer: resolveRoleBinding("RELAY_REVIEWER", "unknown"),
-      cleanupPolicy,
-      environment,
-      requestId: REQUEST_ID || null,
-      leafId: LEAF_ID || null,
-      doneCriteriaPath: resolvedDoneCriteriaPath,
-      doneCriteriaSource: inferDoneCriteriaSource({
-        repoRoot,
-        runId,
-        doneCriteriaPath: resolvedDoneCriteriaPath,
-        requestId: REQUEST_ID,
-        leafId: LEAF_ID,
-      }),
-      reviewAssurance: REVIEW_ASSURANCE,
-      modelHints: MODEL_HINTS,
-      fleetId: FLEET_ID,
-    });
     manifest = {
       ...manifest,
+      environment,
       policy: {
         ...(manifest.policy || {}),
         executor_network: executorNetworkPolicy,
@@ -1710,6 +1888,7 @@ async function main() {
   let exitCode = 0;
   let error = null;
   const startTime = Date.now();
+  dispatchStartTime = startTime;
   let stderrText = "";
 
   // Record HEAD before execution so we can measure only new work.
@@ -1719,7 +1898,12 @@ async function main() {
   } catch {}
 
   const dispatchFromState = manifest.state;
-  manifest = updateManifestState(manifest, STATES.DISPATCHED, "await_dispatch_result");
+  manifest = manifest.state === STATES.DISPATCHED
+    ? {
+        ...manifest,
+        next_action: "await_dispatch_result",
+      }
+    : updateManifestState(manifest, STATES.DISPATCHED, "await_dispatch_result");
   manifest = {
     ...manifest,
     git: {
@@ -1748,6 +1932,7 @@ async function main() {
     executor_policy: executorPolicy,
     policy_decision: policyDecision,
   });
+  await maybePauseBeforeExecutorSpawnForTest();
 
   // Redirect stdout/stderr to files. Using spawn with detached: true gives us
   // a killable process group (terminateProcessTree sends SIGTERM to -pid).
@@ -1758,8 +1943,9 @@ async function main() {
   if (execCwd) spawnOpts.cwd = execCwd;
   const child = nodeSpawn(cmd, execArgs, spawnOpts);
   executorPid = child.pid;
+  executorPgid = child.pid;
 
-  const execResult = await new Promise((resolve) => {
+  executorClosePromise = new Promise((resolve) => {
     let timedOut = false;
     const timer = setTimeout(() => {
       timedOut = true;
@@ -1776,7 +1962,11 @@ async function main() {
       resolve({ code: 1, signal: null, timedOut, spawnError: e });
     });
   });
+  const execResult = await executorClosePromise;
+  if (handlingSignal) return;
+  executorClosePromise = null;
   executorPid = null;
+  executorPgid = null;
 
   if (execResult.timedOut) {
     exitCode = 1;

@@ -236,7 +236,7 @@ Each run keeps an append-only event log at `~/.relay/runs/<repo-slug>/<run-id>/e
 
 | Event | Emitted by |
 |-------|------------|
-| `dispatch_start`, `dispatch_result`, `environment_drift`, `model_hints_updated` | `relay-dispatch/scripts/dispatch.js` |
+| `dispatch_start`, `dispatch_interrupted`, `dispatch_result`, `environment_drift`, `model_hints_updated` | `relay-dispatch/scripts/dispatch.js` |
 | `publish_result` | `relay-dispatch/scripts/publish-run.js` |
 | `recover_commit`, `recover_commit_failed`, `execution_evidence_rebranded` | `relay-dispatch/scripts/recover-commit.js`, `rebrand-evidence.js` |
 | `iteration_score`, `rubric_quality`, `score_divergence` | `relay-dispatch/scripts/relay-events.js` (helpers) |
