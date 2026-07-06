@@ -2001,6 +2001,30 @@ async function main() {
   });
   const execResult = await executorClosePromise;
   if (handlingSignal) return;
+  if (executorPgid) {
+    const processGroupGone = await waitForProcessGroupExit(executorPgid);
+    if (!processGroupGone) {
+      try { fs.closeSync(stdoutFd); } catch {}
+      try { fs.closeSync(stderrFd); } catch {}
+      appendRunEvent(repoRoot, runId, {
+        event: EVENTS.DISPATCH_INTERRUPTED,
+        state_from: STATES.DISPATCHED,
+        state_to: STATES.DISPATCHED,
+        reason: "executor_group_unsettled_after_leader_close",
+        signal: null,
+        executor_pid: executorPid,
+        executor_pgid: executorPgid,
+        elapsed_s: dispatchStartTime ? Math.max(0, Math.round((Date.now() - dispatchStartTime) / 1000)) : null,
+        timeout_s: TIMEOUT,
+        executor_terminated: false,
+        worktree: wtPath || null,
+      });
+      throw new Error(
+        `executor process group ${executorPgid} is still alive after executor leader exited; ` +
+        `kept run lease at ${runArtifactPaths.leasePath}. Run reconcile-run.js for run ${runId}.`
+      );
+    }
+  }
   removeRunLease(repoRoot, runId);
   executorClosePromise = null;
   executorPid = null;

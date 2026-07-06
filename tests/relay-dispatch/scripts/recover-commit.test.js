@@ -2,7 +2,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const crypto = require("crypto");
-const { execFileSync, spawnSync } = require("child_process");
+const { execFileSync, spawn, spawnSync } = require("child_process");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
@@ -121,6 +121,7 @@ function buildManifestForState(manifest, state, repoRoot, runId) {
   const runDir = ensureRunLayout(repoRoot, runId).runDir;
   fs.writeFileSync(path.join(runDir, "rubric.yaml"), "rubric:\n  factors:\n    - name: recover-commit\n", "utf-8");
   manifest.anchor.rubric_path = "rubric.yaml";
+  if (state === STATES.DISPATCHED) return manifest;
   if (state === STATES.INTERNAL_REVIEW_PENDING) {
     return updateManifestState(manifest, STATES.INTERNAL_REVIEW_PENDING, "run_internal_review");
   }
@@ -257,6 +258,50 @@ function findGhCall(fixture, command, subcommand) {
 function ghArg(argv, flag) {
   const index = argv.indexOf(flag);
   return index === -1 ? undefined : argv[index + 1];
+}
+
+function isPgidAlive(pgid) {
+  if (!pgid) return false;
+  try {
+    process.kill(-Number(pgid), 0);
+    return true;
+  } catch (error) {
+    if (error.code === "EPERM") return true;
+    if (error.code === "ESRCH") return false;
+    return false;
+  }
+}
+
+function killPgid(pgid) {
+  if (!pgid) return;
+  try {
+    process.kill(-Number(pgid), "SIGTERM");
+  } catch {}
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitFor(condition, { timeoutMs = 5000, intervalMs = 50, message = "condition" } = {}) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (condition()) return true;
+    await sleep(intervalMs);
+  }
+  throw new Error(`Timed out waiting for ${message}`);
+}
+
+function writeLease(fixture, { pid, pgid }) {
+  const leasePath = path.join(fixture.runDir, "lease.json");
+  fs.writeFileSync(leasePath, `${JSON.stringify({
+    pid,
+    pgid,
+    host: os.hostname(),
+    started_at: new Date().toISOString(),
+    timeout_s: 2400,
+  }, null, 2)}\n`, "utf-8");
+  return leasePath;
 }
 
 function sha256File(filePath) {
@@ -661,6 +706,38 @@ test("runtime-only Antigravity dirt rejects as nothing reviewable to recover", (
   assert.equal(execFileSync("git", ["-C", fixture.worktreePath, "rev-parse", "HEAD"], { encoding: "utf-8" }).trim(), beforeHead);
   assert.equal(readManifest(fixture.manifestPath).data.git.pr_number, null);
   assert.equal(readJsonLines(fixture.ghLogPath).filter((argv) => argv[0] === "pr" && argv[1] === "create").length, 0);
+});
+
+test("dispatched recovery refuses to run while the run lease is live", async () => {
+  if (process.platform === "win32") return;
+
+  const fixture = setupRepo({ dirty: true, manifestState: STATES.DISPATCHED });
+  const blocker = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000);"], {
+    detached: true,
+    stdio: "ignore",
+  });
+  const blockerExit = new Promise((resolve) => blocker.on("close", resolve));
+  blocker.unref();
+
+  try {
+    await waitFor(() => isPgidAlive(blocker.pid), { message: `pgid ${blocker.pid} alive` });
+    const leasePath = writeLease(fixture, { pid: blocker.pid, pgid: blocker.pid });
+    const beforeHead = execFileSync("git", ["-C", fixture.worktreePath, "rev-parse", "HEAD"], { encoding: "utf-8" }).trim();
+    const result = runRecover(fixture, ["--reason", "direct recovery while executor still runs", "--json"]);
+
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /live run lease/);
+    assert.match(result.stderr, /reconcile-run\.js/);
+    assert.equal(fs.existsSync(leasePath), true);
+    assert.equal(readManifest(fixture.manifestPath).data.state, STATES.DISPATCHED);
+    assert.equal(execFileSync("git", ["-C", fixture.worktreePath, "rev-parse", "HEAD"], { encoding: "utf-8" }).trim(), beforeHead);
+    assert.equal(execFileSync("git", ["-C", fixture.worktreePath, "status", "--porcelain"], { encoding: "utf-8" }).trim(), "?? recovered.txt");
+    assert.equal(readJsonLines(fixture.ghLogPath).length, 0);
+    assert.equal(readRunEvents(fixture.repoRoot, fixture.runId).length, 0);
+  } finally {
+    killPgid(blocker.pid);
+    await Promise.race([blockerExit, sleep(5000)]);
+  }
 });
 
 test("unknown run id fails through resolveManifestRecord", () => {

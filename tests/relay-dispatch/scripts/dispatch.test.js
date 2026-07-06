@@ -1050,6 +1050,52 @@ setInterval(() => {}, 1000);
   return codexPath;
 }
 
+function writeLeaderExitBackgroundCodex(binDir) {
+  ensureDefaultFakeGh(binDir);
+  const codexPath = path.join(binDir, "codex");
+  fs.writeFileSync(codexPath, `#!/usr/bin/env node
+const fs = require("fs");
+const path = require("path");
+const { spawn } = require("child_process");
+const args = process.argv.slice(2);
+if (args[0] === "--version") {
+  process.stdout.write("codex-fake\\n");
+  process.exit(0);
+}
+if (args[0] !== "exec") {
+  process.stderr.write("unsupported fake codex invocation");
+  process.exit(1);
+}
+const output = args[args.indexOf("-o") + 1];
+const leasePath = path.join(path.dirname(output), "lease.json");
+const marker = process.env.RELAY_TEST_EXECUTOR_MARKER;
+const childReady = marker ? marker + ".child-ready" : "";
+const child = spawn("/bin/sh", ["-c", ": > \\"$1\\"; while :; do sleep 1; done", "relay-child", childReady], {
+  stdio: "ignore",
+});
+child.unref();
+const finishWhenReady = () => {
+  if (fs.existsSync(childReady)) {
+    const lease = fs.existsSync(leasePath) ? JSON.parse(fs.readFileSync(leasePath, "utf-8")) : null;
+    fs.writeFileSync(marker, JSON.stringify({
+      pid: process.pid,
+      pgid: process.pid,
+      childPid: child.pid,
+      output,
+      leasePath,
+      lease,
+    }), "utf-8");
+    fs.writeFileSync(output, "background child still running\\n", "utf-8");
+    process.exit(0);
+  }
+  setTimeout(finishWhenReady, 25);
+};
+finishWhenReady();
+`, "utf-8");
+  fs.chmodSync(codexPath, 0o755);
+  return codexPath;
+}
+
 async function waitForDispatchExit(proc) {
   let stdout = "";
   let stderr = "";
@@ -4019,6 +4065,65 @@ test("dispatch creates a run lease while executor runs and removes it on normal 
   assert.equal(marker.lease.host, os.hostname());
   assert.equal(marker.lease.timeout_s, 2400);
   assert.equal(fs.existsSync(marker.leasePath), false);
+});
+
+test("dispatch keeps lease and leaves run dispatched when executor leader exits with a live process group", async () => {
+  if (process.platform === "win32") return;
+
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bg-bin-"));
+  const markerPath = path.join(os.tmpdir(), `relay-dispatch-bg-${process.pid}-${Date.now()}.json`);
+  writeLeaderExitBackgroundCodex(binDir);
+  const env = {
+    ...process.env,
+    PATH: `${binDir}:${process.env.PATH}`,
+    RELAY_HOME: relayHome,
+    RELAY_TEST_EXECUTOR_MARKER: markerPath,
+  };
+  let marker = null;
+
+  try {
+    const result = spawnSync(process.execPath, [SCRIPT, repoRoot, ...withRequiredRubric([
+      "-b", "issue-801-leader-close-live-pgid",
+      "--prompt", "leader exits while background child keeps pgid alive",
+      "--json",
+    ])], {
+      cwd: repoRoot,
+      env,
+      encoding: "utf-8",
+      stdio: "pipe",
+      timeout: 30000,
+    });
+
+    marker = JSON.parse(fs.readFileSync(markerPath, "utf-8"));
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /executor process group .*still alive after executor leader exited/);
+    assert.equal(fs.existsSync(marker.leasePath), true);
+    const lease = JSON.parse(fs.readFileSync(marker.leasePath, "utf-8"));
+    assert.equal(lease.pgid, marker.pgid);
+
+    const manifestPath = listManifestPaths(repoRoot)[0];
+    const manifest = readManifest(manifestPath).data;
+    assert.equal(manifest.state, STATES.DISPATCHED);
+    const interruptedEvent = readRunEvents(repoRoot, manifest.run_id).at(-1);
+    assert.equal(interruptedEvent.event, "dispatch_interrupted");
+    assert.equal(interruptedEvent.reason, "executor_group_unsettled_after_leader_close");
+    assert.equal(interruptedEvent.executor_pgid, marker.pgid);
+    assert.equal(interruptedEvent.executor_terminated, false);
+  } finally {
+    if (marker?.pgid) {
+      try {
+        process.kill(-Number(marker.pgid), "SIGKILL");
+      } catch {}
+      try {
+        await waitFor(() => !isPgidAlive(marker.pgid), {
+          timeoutMs: 1000,
+          message: `process group ${marker.pgid} to exit`,
+        });
+      } catch {}
+    }
+  }
 });
 
 test("dispatch resume waits for the fresh run lease when stale lease.json exists", () => {

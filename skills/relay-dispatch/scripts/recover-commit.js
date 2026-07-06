@@ -34,6 +34,10 @@ const {
   formatRuntimeMetadataDirt,
   gitAddReviewableArgs,
 } = require("./runtime-dirt");
+const {
+  formatLeaseForMessage,
+  getRunLeaseStatus,
+} = require("./run-runtime-state");
 
 const args = process.argv.slice(2);
 const CLI_ARG_OPTIONS = { commandName: "recover-commit", reservedFlags: ["-h"] };
@@ -412,6 +416,14 @@ function main() {
   }
   const recoveringFromDispatched = data.state === STATES.DISPATCHED;
   if (recoveringFromDispatched) {
+    const leaseStatus = getRunLeaseStatus(validatedPaths.repoRoot, data.run_id);
+    if (leaseStatus.live || leaseStatus.reason === "host_mismatch") {
+      const leaseKind = leaseStatus.reason === "host_mismatch" ? "unverifiable run lease" : "live run lease";
+      throw new Error(
+        `recover-commit refuses dispatched recovery while ${leaseKind} exists for ${data.run_id}: ` +
+        `${formatLeaseForMessage(leaseStatus)}. Run reconcile-run.js --repo ${validatedPaths.repoRoot} --run-id ${data.run_id} first.`
+      );
+    }
     const target = dispatchCompletionTarget(data);
     data = updateManifestState(data, target.state, target.nextAction);
   }
