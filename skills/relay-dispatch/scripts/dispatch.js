@@ -671,6 +671,18 @@ function maybePauseBeforeExecutorSpawnForTest() {
   return new Promise((resolve) => setTimeout(resolve, pauseMs));
 }
 
+function maybePauseAfterWorktreeCreateForTest() {
+  const pauseMs = Number(process.env.RELAY_TEST_AFTER_WORKTREE_CREATE_PAUSE_MS || 0);
+  if (!Number.isFinite(pauseMs) || pauseMs <= 0) return Promise.resolve();
+  const markerPath = process.env.RELAY_TEST_AFTER_WORKTREE_CREATE_MARKER;
+  if (markerPath) {
+    try {
+      fs.writeFileSync(markerPath, JSON.stringify({ pid: process.pid, ts: Date.now() }), "utf-8");
+    } catch {}
+  }
+  return new Promise((resolve) => setTimeout(resolve, pauseMs));
+}
+
 function latestRunEvent(repoRoot, runId) {
   const events = readRunEvents(repoRoot, runId);
   return events.length ? events[events.length - 1] : null;
@@ -1102,10 +1114,37 @@ async function main() {
     fleetIssueLock = null;
   }
 
+  function persistInterruptedManifestForSignal() {
+    if (!manifest || !manifestPath || !runId) return false;
+    try {
+      const runDir = getRunDir(repoRoot, runId);
+      ensureRunLayout(repoRoot, runId);
+      if (RUBRIC_FILE && !hasRubricPath(manifest)) {
+        const rubricSrc = path.resolve(RUBRIC_FILE);
+        const persistedRubric = getPersistedRubricPath(runDir, "rubric.yaml");
+        copyFileAtomically(rubricSrc, persistedRubric.resolvedPath);
+        manifest = {
+          ...manifest,
+          anchor: {
+            ...(manifest.anchor || {}),
+            rubric_path: persistedRubric.rubricPath,
+          },
+        };
+      }
+      if (!fs.existsSync(manifestPath)) {
+        writeManifest(manifestPath, manifest);
+      }
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   function journalDispatchInterrupted(signal, executorTerminated) {
     if (!manifest || !runId) return;
     let runDir;
     try {
+      if (!persistInterruptedManifestForSignal()) return;
       runDir = getRunDir(repoRoot, runId);
       if (!fs.existsSync(runDir)) return;
       appendRunEvent(repoRoot, runId, {
@@ -1145,13 +1184,12 @@ async function main() {
     if (signal === "SIGINT") {
       const pgid = executorPgid || executorPid;
       terminateProcessTree(executorPid);
+      executorTerminated = await waitForProcessGroupExit(pgid);
       if (executorClosePromise) {
-        executorTerminated = await Promise.race([
-          executorClosePromise.then(() => true),
-          waitForProcessGroupExit(pgid),
+        await Promise.race([
+          executorClosePromise.catch(() => null),
+          sleepAsync(100),
         ]);
-      } else {
-        executorTerminated = await waitForProcessGroupExit(pgid);
       }
     }
     journalDispatchInterrupted(signal, executorTerminated);
@@ -1212,8 +1250,9 @@ async function main() {
       console.error(`Error: manifest repo root is not a git repository: ${repoRoot}`);
       process.exit(1);
     }
-    const latestEvent = manifest.state === STATES.DISPATCHED ? latestRunEvent(repoRoot, runId) : null;
-    const resumesInterruptedDispatch = latestEvent?.event === EVENTS.DISPATCH_INTERRUPTED;
+    const interruptibleResumeState = manifest.state === STATES.DISPATCHED || manifest.state === STATES.DRAFT;
+    const latestEvent = interruptibleResumeState ? latestRunEvent(repoRoot, runId) : null;
+    const resumesInterruptedDispatch = interruptibleResumeState && latestEvent?.event === EVENTS.DISPATCH_INTERRUPTED;
     if (resumesInterruptedDispatch && isProcessGroupAlive(latestEvent.executor_pgid)) {
       console.error(
         `Error: interrupted executor process group is still alive for run '${runId}' ` +
@@ -1575,6 +1614,44 @@ async function main() {
   };
 
   if (!RESUME_MODE) {
+    manifest = createManifestSkeleton({
+      repoRoot,
+      runId,
+      branch,
+      baseBranch,
+      issueNumber,
+      worktreePath: wtPath,
+      orchestrator: resolveRoleBinding("RELAY_ORCHESTRATOR", "unknown"),
+      executor: EXECUTOR,
+      reviewer: resolveRoleBinding("RELAY_REVIEWER", "unknown"),
+      cleanupPolicy,
+      requestId: REQUEST_ID || null,
+      leafId: LEAF_ID || null,
+      doneCriteriaPath: resolvedDoneCriteriaPath,
+      doneCriteriaSource: inferDoneCriteriaSource({
+        repoRoot,
+        runId,
+        doneCriteriaPath: resolvedDoneCriteriaPath,
+        requestId: REQUEST_ID,
+        leafId: LEAF_ID,
+      }),
+      reviewAssurance: REVIEW_ASSURANCE,
+      modelHints: MODEL_HINTS,
+      fleetId: FLEET_ID,
+    });
+    manifest = {
+      ...manifest,
+      policy: {
+        ...(manifest.policy || {}),
+        executor_network: executorNetworkPolicy,
+        executor_policy: executorPolicy,
+      },
+      routing: routingDecision,
+      routes: {
+        plan_path: "route-plan.json",
+        summary: summarizeRoutePlan(routePlan),
+      },
+    };
     try {
       const created = createWorktree({
         repoRoot,
@@ -1590,6 +1667,7 @@ async function main() {
       console.error(`Error: ${error.message}`);
       process.exit(1);
     }
+    await maybePauseAfterWorktreeCreateForTest();
 
     // Merge base branch into worktree so the executor works on merged state.
     // Prevents wasted rounds from stale-base conflicts or CI failures.
@@ -1617,34 +1695,9 @@ async function main() {
     }
 
     const environment = collectEnvironmentSnapshot(repoRoot, baseBranch);
-    manifest = createManifestSkeleton({
-      repoRoot,
-      runId,
-      branch,
-      baseBranch,
-      issueNumber,
-      worktreePath: wtPath,
-      orchestrator: resolveRoleBinding("RELAY_ORCHESTRATOR", "unknown"),
-      executor: EXECUTOR,
-      reviewer: resolveRoleBinding("RELAY_REVIEWER", "unknown"),
-      cleanupPolicy,
-      environment,
-      requestId: REQUEST_ID || null,
-      leafId: LEAF_ID || null,
-      doneCriteriaPath: resolvedDoneCriteriaPath,
-      doneCriteriaSource: inferDoneCriteriaSource({
-        repoRoot,
-        runId,
-        doneCriteriaPath: resolvedDoneCriteriaPath,
-        requestId: REQUEST_ID,
-        leafId: LEAF_ID,
-      }),
-      reviewAssurance: REVIEW_ASSURANCE,
-      modelHints: MODEL_HINTS,
-      fleetId: FLEET_ID,
-    });
     manifest = {
       ...manifest,
+      environment,
       policy: {
         ...(manifest.policy || {}),
         executor_network: executorNetworkPolicy,

@@ -936,6 +936,43 @@ setInterval(() => {}, 1000);
   return codexPath;
 }
 
+function writeLeaderExitDescendantCodex(binDir) {
+  ensureDefaultFakeGh(binDir);
+  const codexPath = path.join(binDir, "codex");
+  fs.writeFileSync(codexPath, `#!/usr/bin/env node
+const fs = require("fs");
+const { spawn } = require("child_process");
+const args = process.argv.slice(2);
+if (args[0] === "--version") {
+  process.stdout.write("codex-fake\\n");
+  process.exit(0);
+}
+if (args[0] !== "exec") {
+  process.stderr.write("unsupported fake codex invocation");
+  process.exit(1);
+}
+const marker = process.env.RELAY_TEST_EXECUTOR_MARKER;
+const child = spawn(process.execPath, ["-e", "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);"], {
+  stdio: "ignore",
+});
+child.unref();
+if (marker) {
+  setTimeout(() => {
+    fs.writeFileSync(marker, JSON.stringify({ pid: process.pid, pgid: process.pid, childPid: child.pid }), "utf-8");
+  }, 250);
+}
+process.on("SIGTERM", () => {
+  if (marker) {
+    fs.writeFileSync(marker + ".terminated", JSON.stringify({ pid: process.pid, childPid: child.pid, signal: "SIGTERM" }), "utf-8");
+  }
+  process.exit(143);
+});
+setInterval(() => {}, 1000);
+`, "utf-8");
+  fs.chmodSync(codexPath, 0o755);
+  return codexPath;
+}
+
 async function waitForDispatchExit(proc) {
   let stdout = "";
   let stderr = "";
@@ -1397,6 +1434,164 @@ test("dispatch SIGTERM preserves executor and worktree while journaling dispatch
 
 test("dispatch SIGINT terminates executor group and preserves worktree while journaling dispatch_interrupted", async () => {
   await runInterruptedDispatchSignalTest("SIGINT");
+});
+
+test("dispatch SIGINT does not treat leader exit as process-group termination while a descendant remains", async () => {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-leader-exit-bin-"));
+  const markerPath = path.join(os.tmpdir(), `relay-dispatch-leader-exit-${process.pid}-${Date.now()}.json`);
+  writeLeaderExitDescendantCodex(binDir);
+  const env = {
+    ...process.env,
+    PATH: `${binDir}:${process.env.PATH}`,
+    RELAY_HOME: relayHome,
+    RELAY_TEST_EXECUTOR_MARKER: markerPath,
+  };
+  let marker = null;
+
+  const proc = spawn(process.execPath, [SCRIPT, repoRoot, ...withRequiredRubric([
+    "-b", "issue-800-sigint-descendant",
+    "--prompt", "leader exits but descendant ignores sigterm",
+    "--json",
+  ])], {
+    cwd: repoRoot,
+    env,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  const exitPromise = waitForDispatchExit(proc);
+
+  try {
+    marker = await waitFor(() => {
+      if (!fs.existsSync(markerPath)) return null;
+      return JSON.parse(fs.readFileSync(markerPath, "utf-8"));
+    }, { timeoutMs: 30000, message: "fake executor marker" });
+    const manifestPath = await waitFor(() => listManifestPaths(repoRoot)[0], {
+      timeoutMs: 30000,
+      message: "dispatch manifest path",
+    });
+
+    proc.kill("SIGINT");
+    const result = await exitPromise;
+    assert.equal(result.code, 1);
+    assert.equal(result.signal, null);
+    assert.match(result.stderr, /Executor termination was requested, but the process group may still be running/);
+
+    const manifest = readManifest(manifestPath).data;
+    const interruptedEvent = readRunEvents(repoRoot, manifest.run_id).at(-1);
+    assert.equal(interruptedEvent.event, "dispatch_interrupted");
+    assert.equal(interruptedEvent.signal, "SIGINT");
+    assert.equal(interruptedEvent.executor_pid, marker.pid);
+    assert.equal(interruptedEvent.executor_pgid, marker.pgid);
+    assert.equal(interruptedEvent.executor_terminated, false);
+    assert.equal(isPgidAlive(marker.pgid), true, "descendant keeps the executor process group alive");
+  } finally {
+    if (marker?.pgid) {
+      try {
+        process.kill(-Number(marker.pgid), "SIGKILL");
+      } catch {}
+      await waitForPgidDead(marker.pgid);
+    }
+    if (!proc.killed) {
+      proc.kill("SIGTERM");
+    }
+  }
+});
+
+test("dispatch interruption immediately after worktree creation journals a resumable manifest", async () => {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-after-worktree-bin-"));
+  const markerPath = path.join(os.tmpdir(), `relay-dispatch-after-worktree-${process.pid}-${Date.now()}.json`);
+  const pauseMarkerPath = path.join(os.tmpdir(), `relay-dispatch-after-worktree-pause-${process.pid}-${Date.now()}.json`);
+  writeSleepingCodex(binDir);
+  const env = {
+    ...process.env,
+    PATH: `${binDir}:${process.env.PATH}`,
+    RELAY_HOME: relayHome,
+    RELAY_TEST_AFTER_WORKTREE_CREATE_PAUSE_MS: "30000",
+    RELAY_TEST_AFTER_WORKTREE_CREATE_MARKER: pauseMarkerPath,
+    RELAY_TEST_EXECUTOR_MARKER: markerPath,
+  };
+  let manifestPath = null;
+
+  const proc = spawn(process.execPath, [SCRIPT, repoRoot, ...withRequiredRubric([
+    "-b", "issue-800-after-worktree-signal",
+    "--prompt", "pause immediately after worktree create",
+    "--json",
+  ])], {
+    cwd: repoRoot,
+    env,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  const exitPromise = waitForDispatchExit(proc);
+
+  try {
+    await waitFor(() => fs.existsSync(pauseMarkerPath), {
+      timeoutMs: 30000,
+      message: "after-worktree create pause marker",
+    });
+    const repoRootReal = fs.realpathSync(repoRoot);
+    const worktreePath = await waitFor(() => {
+      const output = execFileSync("git", ["worktree", "list", "--porcelain"], {
+        cwd: repoRoot,
+        encoding: "utf-8",
+        stdio: "pipe",
+      });
+      const paths = output
+        .split("\n")
+        .filter((line) => line.startsWith("worktree "))
+        .map((line) => line.slice("worktree ".length));
+      return paths.find((candidate) => fs.realpathSync(candidate) !== repoRootReal) || null;
+    }, { timeoutMs: 30000, message: "created dispatch worktree" });
+
+    proc.kill("SIGTERM");
+    const result = await exitPromise;
+    assert.equal(result.code, 1);
+    assert.equal(result.signal, null);
+    assert.match(result.stderr, /Dispatch interrupted by SIGTERM/);
+    assert.match(result.stderr, /Resume with: node skills\/relay-dispatch\/scripts\/dispatch\.js --manifest /);
+    assert.equal(fs.existsSync(markerPath), false, "executor must not spawn in the after-worktree pause");
+
+    manifestPath = await waitFor(() => listManifestPaths(repoRoot)[0], {
+      timeoutMs: 5000,
+      message: "signal-written dispatch manifest path",
+    });
+    const manifest = readManifest(manifestPath).data;
+    assert.equal(manifest.state, STATES.DRAFT);
+    assert.equal(fs.realpathSync(manifest.paths.worktree), fs.realpathSync(worktreePath));
+    assert.ok(fs.existsSync(manifest.paths.worktree), "after-worktree signal must preserve the retained worktree");
+    assert.ok(manifest.anchor?.rubric_path, "signal-written manifest must retain the rubric anchor for resume");
+
+    const interruptedEvent = readRunEvents(repoRoot, manifest.run_id).at(-1);
+    assert.equal(interruptedEvent.event, "dispatch_interrupted");
+    assert.equal(interruptedEvent.signal, "SIGTERM");
+    assert.equal(interruptedEvent.executor_pid, null);
+    assert.equal(interruptedEvent.executor_pgid, null);
+    assert.equal(interruptedEvent.executor_terminated, false);
+    assert.equal(interruptedEvent.worktree, manifest.paths.worktree);
+    assert.equal(interruptedEvent.state_from, STATES.DRAFT);
+    assert.equal(interruptedEvent.state_to, STATES.DRAFT);
+
+    writeFakeCodex(binDir);
+    const resume = JSON.parse(runDispatch(repoRoot, [
+      "--manifest", manifestPath,
+      "--prompt", "resume after early interruption",
+      "--json",
+    ], {
+      ...process.env,
+      PATH: `${binDir}:${process.env.PATH}`,
+      RELAY_HOME: relayHome,
+    }));
+    assert.equal(resume.mode, "resume");
+    assert.equal(resume.runId, manifest.run_id);
+    assert.equal(resume.worktree, manifest.paths.worktree);
+    assert.equal(resume.runState, STATES.REVIEW_PENDING);
+  } finally {
+    if (!proc.killed) {
+      proc.kill("SIGTERM");
+    }
+  }
 });
 
 test("dispatch handles interruption before executor spawn without removing the worktree", async () => {
