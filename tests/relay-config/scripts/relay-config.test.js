@@ -5,10 +5,6 @@ const os = require("os");
 const path = require("path");
 const { spawnSync } = require("child_process");
 
-const {
-  validateRelayPolicy,
-} = require("../../../skills/relay-dispatch/scripts/relay-policy");
-
 const REPO_ROOT = path.join(__dirname, "..", "..", "..");
 const SCRIPT = path.join(REPO_ROOT, "skills", "relay-config", "scripts", "relay-config.js");
 
@@ -51,23 +47,24 @@ function parseJson(result) {
   return JSON.parse(result.stdout);
 }
 
-function readPolicy(relayHome) {
-  const policyPath = path.join(relayHome, "policy.json");
-  const policy = JSON.parse(fs.readFileSync(policyPath, "utf-8"));
-  return validateRelayPolicy(policy, policyPath);
+function readRoutes(relayHome) {
+  return JSON.parse(fs.readFileSync(path.join(relayHome, "routes.json"), "utf-8"));
 }
 
-test("init company shorthand delegates to core init --profile company", () => {
+test("init company shorthand delegates to core init --profile company routes config", () => {
   const relayHome = tempDir();
 
   const result = runConfig(["init", "company", "--json"], { relayHome });
 
   assert.equal(result.status, 0, result.combined);
   assert.equal(parseJson(result).profile, "company");
-  const policy = readPolicy(relayHome);
-  assert.equal(policy.profile, "company");
-  assert.deepEqual(policy.managed_cli, ["codex", "claude"]);
-  assert.equal(Object.prototype.hasOwnProperty.call(policy.defaults.dispatch, "model"), false);
+  assert.deepEqual(readRoutes(relayHome), {
+    version: 2,
+    strict: true,
+    routes: [],
+    denied_routes: [],
+  });
+  assert.equal(fs.existsSync(path.join(relayHome, "policy.json")), false);
 });
 
 test("show shorthand adds --effective", () => {
@@ -80,14 +77,15 @@ test("show shorthand adds --effective", () => {
   const output = parseJson(result);
   assert.equal(output.ok, true);
   assert.equal(output.status, "ok");
-  assert.equal(output.policy.profile, "personal");
+  assert.equal(output.policy.profile, "routes-config");
+  assert.equal(output.policy.deny_unknown_model_routes, false);
 });
 
 test("check shorthand maps reviewer phases to reviewer-only core checks", () => {
   const relayHome = tempDir();
   assert.equal(runConfig(["init", "company", "--json"], { relayHome }).status, 0);
   assert.equal(runConfig([
-    "allow-route",
+    "add-route",
     "example/opencode-model-*",
     "--phase",
     "advisory_review",
@@ -126,12 +124,25 @@ test("inspect reports effective policy, doctor output, and executors config stat
   assert.ok(output.doctor.tools.some((tool) => tool.name === "codex"));
 });
 
+test("inspect human output describes routes without policy prose", () => {
+  const relayHome = tempDir();
+
+  const result = runConfig(["inspect"], { relayHome });
+
+  assert.equal(result.status, 0, result.combined);
+  assert.match(result.stdout, /routes status:/i);
+  assert.doesNotMatch(result.stdout.replace(/policy\.json/g, "legacy-file"), /\bpolicy\b/i);
+});
+
 test("help advertises natural-language setup and provider/model boundary", () => {
   const result = runConfig(["--help"]);
 
   assert.equal(result.status, 0, result.combined);
   assert.match(result.stdout, /relay setup 해줘/);
-  assert.match(result.stdout, /provider\/model route strings are the compliance boundary/i);
+  assert.match(result.stdout, /provider\/model route strings are the routing boundary/i);
+  assert.match(result.stdout, /add-route <pattern>/);
+  assert.match(result.stdout, /allow-route <pattern>.*deprecated/i);
+  assert.doesNotMatch(result.stdout, /\bpolicy\b/i);
 });
 
 test("inspect rejects unsupported arguments instead of ignoring them", () => {

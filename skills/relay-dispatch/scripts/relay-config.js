@@ -4,15 +4,18 @@ const fs = require("fs");
 const path = require("path");
 const { execFileSync } = require("child_process");
 const {
-  buildDefaultRelayPolicy,
   evaluateRelayRoute,
   loadRelayPolicy,
   resolveRelayPolicyPath,
-  validateRelayPolicy,
 } = require("./relay-policy");
 const { loadProjectConfig } = require("./project-config");
 const { getProjectConfigPath, getProjectPolicyPath, getProjectRoutesPath, getRepoSlug } = require("./manifest/paths");
-const { loadProjectRoutes, resolveRouteIntent } = require("./relay-routing");
+const {
+  loadProjectRoutes,
+  resolveGlobalRoutesPath,
+  resolveRouteIntent,
+  validateRouteConfig,
+} = require("./relay-routing");
 const {
   findUnknownFlags,
   getPositionals,
@@ -40,6 +43,7 @@ const SUBCOMMAND_FLAGS = {
   check: new Set(["--phase", "--executor", "--reviewer", "--model", "--json", "--help"]),
   "plan-run": new Set(["--repo", "--dispatch", "--review", "--advisory-review", "--route-intent-file", "--json", "--help"]),
   "set-default": new Set(["--json", "--help"]),
+  "add-route": new Set(["--phase", "--executor", "--reviewer", "--json", "--help"]),
   "allow-route": new Set(["--phase", "--executor", "--reviewer", "--json", "--help"]),
   "deny-route": new Set(["--phase", "--executor", "--reviewer", "--json", "--help"]),
 };
@@ -64,7 +68,7 @@ function printJson(value) {
 function printHelp() {
   console.log("Usage: relay-config.js <command> [options]");
   console.log("");
-  console.log("Configure relay provider/model route policy. Executor/reviewer names are harnesses; provider/model route strings are the policy boundary.");
+  console.log("Configure relay provider/model routes. Executor/reviewer names are harnesses; provider/model route strings are the routing boundary.");
   console.log("");
   console.log("Commands:");
   console.log(`  init --profile <company|personal> ${modeLabel("--profile")} [--json ${modeLabel("--json")}]`);
@@ -73,7 +77,8 @@ function printHelp() {
   console.log(`  check --phase <phase> ${modeLabel("--phase")} [--executor <name> ${modeLabel("--executor")}] [--reviewer <name> ${modeLabel("--reviewer")}] [--model <provider/model> ${modeLabel("--model")}] [--json ${modeLabel("--json")}]`);
   console.log(`  plan-run [--repo <path> ${modeLabel("--repo")}] [--dispatch <actor[:provider/model]> ${modeLabel("--dispatch")}] [--review <actor[:provider/model]> ${modeLabel("--review")}] [--advisory-review <actor[:provider/model]> ${modeLabel("--advisory-review")}] [--route-intent-file <path> ${modeLabel("--route-intent-file")}] [--json ${modeLabel("--json")}]`);
   console.log("  set-default <path> <value> [--json]");
-  console.log(`  allow-route <pattern> --phase <csv> ${modeLabel("--phase")} [--executor <name> ${modeLabel("--executor")}] [--reviewer <name> ${modeLabel("--reviewer")}] [--json ${modeLabel("--json")}]`);
+  console.log(`  add-route <pattern> --phase <csv> ${modeLabel("--phase")} [--executor <name> ${modeLabel("--executor")}] [--reviewer <name> ${modeLabel("--reviewer")}] [--json ${modeLabel("--json")}]`);
+  console.log(`  allow-route <pattern> --phase <csv> ${modeLabel("--phase")} [--executor <name> ${modeLabel("--executor")}] [--reviewer <name> ${modeLabel("--reviewer")}] [--json ${modeLabel("--json")}] (deprecated; use add-route)`);
   console.log(`  deny-route <pattern> [--phase <csv> ${modeLabel("--phase")}] [--executor <name> ${modeLabel("--executor")}] [--reviewer <name> ${modeLabel("--reviewer")}] [--json ${modeLabel("--json")}]`);
   console.log("");
   console.log("Supported default paths:");
@@ -102,38 +107,64 @@ function unsupportedFlagsForCommand(command, argv) {
   return [...new Set(unsupported)];
 }
 
-function relayPolicyPath() {
-  return resolveRelayPolicyPath();
+function isPlainObject(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-function writePolicy(policyPath, policy) {
-  const normalized = validateRelayPolicy(policy, policyPath);
-  fs.mkdirSync(path.dirname(policyPath), { recursive: true });
-  fs.writeFileSync(policyPath, `${JSON.stringify(normalized, null, 2)}\n`, "utf-8");
-  return normalized;
+function cloneJson(value) {
+  return JSON.parse(JSON.stringify(value));
 }
 
-function loadGlobalPolicyForMutation() {
-  const policyPath = relayPolicyPath();
-  const result = loadRelayPolicy({ globalPath: policyPath, repoRoot: null });
-  if (!result.ok) {
-    const error = result.errors[0];
-    throw new Error(error ? error.message : "failed to load relay policy");
+function hasOwn(object, key) {
+  return Object.prototype.hasOwnProperty.call(object, key);
+}
+
+function relayRoutesPath() {
+  return resolveGlobalRoutesPath();
+}
+
+function readRoutesFile(routesPath) {
+  try {
+    return JSON.parse(fs.readFileSync(routesPath, "utf-8"));
+  } catch (error) {
+    throw new Error(`failed to read routes config at ${routesPath}: ${error.message}`);
   }
+}
+
+function legacyShadowWarnings({ routesExisted }) {
+  if (routesExisted) return [];
+  if (!fs.existsSync(resolveRelayPolicyPath())) return [];
+  return [
+    "routes.json now takes precedence; legacy policy.json/executors.json are ignored until migration arrives in Phase C",
+  ];
+}
+
+function loadRoutesForMutation() {
+  const routesPath = relayRoutesPath();
+  const routesExisted = fs.existsSync(routesPath);
+  if (!routesExisted) {
+    return {
+      routesPath,
+      routesExisted,
+      routes: { version: 2 },
+      warnings: legacyShadowWarnings({ routesExisted }),
+    };
+  }
+  const routes = readRoutesFile(routesPath);
+  validateRouteConfig(routes, routesPath);
   return {
-    policyPath,
-    policy: result.policy,
+    routesPath,
+    routesExisted,
+    routes,
+    warnings: legacyShadowWarnings({ routesExisted }),
   };
 }
 
-function buildProfilePolicy(profile) {
-  return validateRelayPolicy(
-    {
-      ...buildDefaultRelayPolicy(),
-      profile,
-    },
-    `${profile} relay policy`
-  );
+function writeRoutes(routesPath, routes) {
+  validateRouteConfig(routes, routesPath);
+  fs.mkdirSync(path.dirname(routesPath), { recursive: true });
+  fs.writeFileSync(routesPath, `${JSON.stringify(routes, null, 2)}\n`, "utf-8");
+  return routes;
 }
 
 function requireValue(value, label) {
@@ -198,19 +229,22 @@ function routeEntry(pattern, { phases, executor, reviewer }) {
   return entry;
 }
 
-function outputMutation({ jsonOut, action, policyPath, policy, entry = null, defaultPath = null }) {
+function outputMutation({ jsonOut, action, routesPath, routes, entry = null, defaultPath = null, profile = null, warnings = [] }) {
   if (jsonOut) {
     printJson({
       ok: true,
       action,
-      path: policyPath,
+      profile,
+      path: routesPath,
       defaultPath,
       entry,
-      policy,
+      routes,
+      warnings,
     });
     return;
   }
-  console.log(`relay-config: ${action} wrote ${policyPath}`);
+  for (const warning of warnings) console.log(`warning: ${warning}`);
+  console.log(`relay-config: ${action} wrote ${routesPath}`);
 }
 
 function commandInit(positionals, jsonOut) {
@@ -218,19 +252,19 @@ function commandInit(positionals, jsonOut) {
     throw new Error("init does not accept positional arguments");
   }
   const profile = requireValue(readArg(args, "--profile", undefined, CLI_ARG_OPTIONS), "--profile");
-  const policyPath = relayPolicyPath();
-  const policy = writePolicy(policyPath, buildProfilePolicy(profile));
-  if (jsonOut) {
-    printJson({
-      ok: true,
-      action: "init",
-      profile,
-      path: policyPath,
-      policy,
-    });
-  } else {
-    console.log(`relay-config: initialized ${profile} policy at ${policyPath}`);
-  }
+  // Overwrite semantics: init builds the profile shape from scratch so it can
+  // also recover from an invalid existing routes.json. Only the legacy-shadow
+  // warning depends on prior filesystem state.
+  const routesPath = relayRoutesPath();
+  const routesExisted = fs.existsSync(routesPath);
+  const warnings = legacyShadowWarnings({ routesExisted });
+  const written = writeRoutes(routesPath, {
+    version: 2,
+    strict: profile === "company",
+    routes: [],
+    denied_routes: [],
+  });
+  outputMutation({ jsonOut, action: "init", profile, routesPath, routes: written, warnings });
 }
 
 function commandShow(positionals, jsonOut) {
@@ -245,12 +279,14 @@ function commandShow(positionals, jsonOut) {
   if (jsonOut) {
     printJson(result);
   } else if (result.ok) {
-    console.log(`relay-config: effective policy status ${result.status}`);
-    console.log(`global: ${result.sources.global}`);
-    if (result.sources.repo) console.log(`repo: ${result.sources.repo}`);
+    console.log(`relay-config: effective routes status ${result.status}`);
+    const globalSource = result.sources.routes?.global || result.sources.global;
+    const repoSource = result.sources.routes?.project || result.sources.repo || result.sources.project;
+    console.log(`global config: ${globalSource}`);
+    if (repoSource) console.log(`repo config: ${repoSource}`);
     console.log(JSON.stringify(result.policy, null, 2));
   } else {
-    console.log("relay-config: effective policy failed to load");
+    console.log("relay-config: effective routes failed to load");
     for (const error of result.errors) {
       console.log(`${error.reason}: ${error.message}`);
     }
@@ -359,6 +395,11 @@ function doctorTool(policy, name) {
   };
 }
 
+function displayToolRouteStatus(tool) {
+  if (tool.policy === "policy-disallowed") return "route-disallowed";
+  return tool.policy;
+}
+
 function commandDoctor(positionals, jsonOut) {
   if (positionals.length !== 1) {
     throw new Error("doctor does not accept positional arguments");
@@ -367,7 +408,7 @@ function commandDoctor(positionals, jsonOut) {
   if (!result.ok) {
     if (jsonOut) printJson({ ok: false, status: result.status, sources: result.sources, errors: result.errors });
     else {
-      console.error("relay-config doctor: policy failed to load");
+      console.error("relay-config doctor: routes failed to load");
       for (const error of result.errors) console.error(`${error.reason}: ${error.message}`);
     }
     process.exitCode = 1;
@@ -395,10 +436,10 @@ function commandDoctor(positionals, jsonOut) {
   if (jsonOut) {
     printJson(output);
   } else {
-    console.log(`relay-config doctor: policy ${result.status}`);
+    console.log(`relay-config doctor: routes ${result.status}`);
     for (const tool of tools) {
       const installed = tool.installed ? `installed at ${tool.path}` : "not installed on PATH";
-      console.log(`${tool.name}: ${installed}; ${tool.policy} (${tool.reason})`);
+      console.log(`${tool.name}: ${installed}; ${displayToolRouteStatus(tool)} (${tool.reason})`);
     }
   }
 }
@@ -467,6 +508,10 @@ function readRouteIntentFile(filePath) {
   return parsed;
 }
 
+function humanWarning(warning) {
+  return String(warning).replace(/\bpolicy label\b/g, "route label");
+}
+
 function commandPlanRun(positionals, jsonOut) {
   if (positionals.length !== 1) {
     throw new Error("plan-run does not accept positional arguments");
@@ -501,7 +546,7 @@ function commandPlanRun(positionals, jsonOut) {
       warnings: [],
     };
     if (jsonOut) printJson(output);
-    else console.error(`relay-config plan-run: policy failed: ${policyResult.errors?.[0]?.message || "unknown policy error"}`);
+    else console.error(`relay-config plan-run: routes failed: ${policyResult.errors?.[0]?.message || "unknown route config error"}`);
     process.exitCode = 1;
     return;
   }
@@ -568,9 +613,9 @@ function commandPlanRun(positionals, jsonOut) {
     console.log(`relay-config plan-run: ${output.status}`);
     for (const phase of phaseValues) {
       const actor = phase.executor || phase.reviewer || "(none)";
-      console.log(`${phase.phase}: ${actor} model=${phase.model || "(none)"} policy=${phase.policy_decision.reason}`);
+      console.log(`${phase.phase}: ${actor} model=${phase.model || "(none)"} decision=${phase.policy_decision.reason}`);
     }
-    for (const warning of warnings) console.log(`warning: ${warning}`);
+    for (const warning of warnings) console.log(`warning: ${humanWarning(warning)}`);
   }
   if (!output.ok) process.exitCode = 1;
 }
@@ -585,14 +630,16 @@ function commandSetDefault(positionals, jsonOut) {
     throw new Error(`unsupported default path: ${defaultPath}`);
   }
 
-  const { policyPath, policy } = loadGlobalPolicyForMutation();
+  const { routesPath, routes, warnings } = loadRoutesForMutation();
+  const updated = cloneJson(routes);
   const [phase, field] = defaultPath.split(".");
-  policy.defaults[phase] = {
-    ...(policy.defaults[phase] || {}),
+  if (!hasOwn(updated, "defaults")) updated.defaults = {};
+  updated.defaults[phase] = {
+    ...(isPlainObject(updated.defaults[phase]) ? updated.defaults[phase] : {}),
     [field]: value,
   };
-  const updated = writePolicy(policyPath, policy);
-  outputMutation({ jsonOut, action: "set-default", policyPath, policy: updated, defaultPath });
+  const written = writeRoutes(routesPath, updated);
+  outputMutation({ jsonOut, action: "set-default", routesPath, routes: written, defaultPath, warnings });
 }
 
 function commandRouteMutation(positionals, jsonOut, { action, listName, requirePhase }) {
@@ -605,10 +652,12 @@ function commandRouteMutation(positionals, jsonOut, { action, listName, requireP
   const reviewer = readArg(args, "--reviewer", undefined, CLI_ARG_OPTIONS);
   const entry = routeEntry(pattern, { phases, executor, reviewer });
 
-  const { policyPath, policy } = loadGlobalPolicyForMutation();
-  policy[listName].push(entry);
-  const updated = writePolicy(policyPath, policy);
-  outputMutation({ jsonOut, action, policyPath, policy: updated, entry });
+  const { routesPath, routes, warnings } = loadRoutesForMutation();
+  const updated = cloneJson(routes);
+  if (!hasOwn(updated, listName)) updated[listName] = [];
+  updated[listName].push(entry);
+  const written = writeRoutes(routesPath, updated);
+  outputMutation({ jsonOut, action, routesPath, routes: written, entry, warnings });
 }
 
 function main() {
@@ -656,17 +705,25 @@ function main() {
     case "set-default":
       commandSetDefault(positionals, jsonOut);
       break;
-    case "allow-route":
+    case "add-route":
       commandRouteMutation(positionals, jsonOut, {
-        action: "allow-route",
-        listName: "allowed_model_routes",
+        action: "add-route",
+        listName: "routes",
+        requirePhase: true,
+      });
+      break;
+    case "allow-route":
+      console.error("Warning: allow-route is deprecated; use add-route");
+      commandRouteMutation(positionals, jsonOut, {
+        action: "add-route",
+        listName: "routes",
         requirePhase: true,
       });
       break;
     case "deny-route":
       commandRouteMutation(positionals, jsonOut, {
         action: "deny-route",
-        listName: "denied_model_routes",
+        listName: "denied_routes",
         requirePhase: false,
       });
       break;
