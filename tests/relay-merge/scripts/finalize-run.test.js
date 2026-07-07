@@ -2000,6 +2000,56 @@ test("finalize-run blocks an already-merged retry when review is stale for curre
   assert.equal(fs.existsSync(worktreePath), true);
 });
 
+test("finalize-run preserves the skip-review audit on an already-merged retry", () => {
+  const { repoRoot, manifestPath, branch, worktreePath, runId, headSha } = setupRepo();
+  const logPath = path.join(repoRoot, "gh.log");
+  const fakeGh = writeFakeGh(logPath, {
+    state: "MERGED",
+    mergeCommit: { oid: "merged-sha" },
+    comments: [],
+    commits: [
+      {
+        oid: headSha,
+        committedDate: DEFAULT_COMMIT_DATE,
+      },
+    ],
+    statusCheckRollup: [
+      { context: "coderabbit", state: "PENDING" },
+    ],
+  });
+
+  const stdout = execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--branch", branch,
+    "--pr", "123",
+    "--skip-review", "hotfix on already merged PR",
+    "--json",
+  ], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+    env: { ...process.env, RELAY_GH_BIN: fakeGh },
+  });
+
+  const result = JSON.parse(stdout);
+  assert.equal(result.state, STATES.MERGED);
+  assert.equal(result.reviewGate.status, "skipped");
+  assert.equal(fs.existsSync(worktreePath), false);
+
+  // Audit trail preserved: SKIP_REVIEW event + relay-review-skip PR comment.
+  const events = readRunEvents(repoRoot, runId);
+  assert.ok(events.find((entry) => entry.event === "skip_review"));
+
+  const ghLog = fs.readFileSync(logPath, "utf-8");
+  assert.match(ghLog, /pr comment 123 --body/);
+  // CI checks stay skipped on the already-merged path.
+  assert.doesNotMatch(ghLog, /statusCheckRollup/);
+
+  const manifest = readManifest(manifestPath).data;
+  assert.equal(manifest.state, STATES.MERGED);
+});
+
 test("finalize-run blocks merge when no relay review audit trail exists", () => {
   const { repoRoot, branch, headSha } = setupRepo();
   const logPath = path.join(repoRoot, "gh.log");

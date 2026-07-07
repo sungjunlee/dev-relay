@@ -193,6 +193,53 @@ function fetchPreMergeContext(repoPath, prNumber) {
   };
 }
 
+// Enforce the skip-review rubric gate. Throws (after journaling MERGE_BLOCKED)
+// when the operator's --skip-review is not admissible. Shared by the normal and
+// already-merged finalize paths so both apply the identical audit check.
+function assertSkipReviewGate(repoPath, safeData, { prNumber, currentHeadSha, dryRun, skipReviewRubricAudit }) {
+  const skipReviewFailure = buildSkipReviewGateFailure(prNumber, skipReviewRubricAudit);
+  if (!skipReviewFailure) {
+    return;
+  }
+  if (!dryRun) {
+    appendRunEvent(repoPath, safeData.run_id, {
+      event: EVENTS.MERGE_BLOCKED,
+      state_from: safeData.state,
+      state_to: safeData.state,
+      head_sha: currentHeadSha,
+      round: safeData.review?.rounds || null,
+      reason: skipReviewFailure.status,
+    });
+  }
+  throw new Error(`Fresh review gate failed: ${skipReviewFailure.status}`);
+}
+
+// Record the operator skip-review audit trail (SKIP_REVIEW event + relay-review-skip
+// PR comment) and return the skipped reviewGate. Shared by the normal and
+// already-merged finalize paths so the audit is identical on both.
+function recordSkipReviewAudit(repoPath, safeData, { prNumber, currentHeadSha, dryRun, skipReviewReason, skipReviewRubricStatus, skipReviewRubricAudit }) {
+  if (!dryRun) {
+    const skipComment = buildSkipComment(skipReviewReason, skipReviewRubricAudit);
+    appendRunEvent(repoPath, safeData.run_id, {
+      event: EVENTS.SKIP_REVIEW,
+      state_from: safeData.state,
+      state_to: safeData.state,
+      head_sha: currentHeadSha,
+      round: safeData.review?.rounds || null,
+      reason: skipReviewReason,
+      rubric_status: skipReviewRubricStatus,
+    });
+    execGh(repoPath, ["pr", "comment", String(prNumber), "--body", skipComment]);
+  }
+  return {
+    status: "skipped",
+    pr: prNumber,
+    reason: skipReviewReason,
+    rubricStatus: skipReviewRubricStatus,
+    readyToMerge: safeData.state === STATES.READY_TO_MERGE,
+  };
+}
+
 function normalizeStatusCheckValue(value) {
   return String(value || "").trim().toUpperCase();
 }
@@ -885,7 +932,15 @@ function main() {
       // stale or advanced review marker cannot be finalized silently against an
       // externally merged PR. Explicit operator overrides
       // (--force-finalize-nonready, --skip-review) keep their bypass semantics.
-      if (!forceFinalizeNonready && !skipReviewReason && safeData.state === STATES.READY_TO_MERGE) {
+      if (skipReviewReason) {
+        // Preserve the operator skip-review audit trail (rubric gate +
+        // SKIP_REVIEW event + relay-review-skip comment) on the already-merged
+        // retry, while skipping the moot CI/mergeability/stacked-base checks.
+        assertSkipReviewGate(repoPath, safeData, { prNumber, currentHeadSha, dryRun, skipReviewRubricAudit });
+        reviewGate = recordSkipReviewAudit(repoPath, safeData, {
+          prNumber, currentHeadSha, dryRun, skipReviewReason, skipReviewRubricStatus, skipReviewRubricAudit,
+        });
+      } else if (!forceFinalizeNonready && safeData.state === STATES.READY_TO_MERGE) {
         const reviewContext = fetchReviewContext(repoPath, prNumber);
         reviewGate = evaluateReviewGate({
           prNumber,
@@ -911,20 +966,7 @@ function main() {
         }
       }
     } else if (skipReviewReason) {
-      const skipReviewFailure = buildSkipReviewGateFailure(prNumber, skipReviewRubricAudit);
-      if (skipReviewFailure) {
-        if (!dryRun) {
-          appendRunEvent(repoPath, safeData.run_id, {
-            event: EVENTS.MERGE_BLOCKED,
-            state_from: safeData.state,
-            state_to: safeData.state,
-            head_sha: currentHeadSha,
-            round: safeData.review?.rounds || null,
-            reason: skipReviewFailure.status,
-          });
-        }
-        throw new Error(`Fresh review gate failed: ${skipReviewFailure.status}`);
-      }
+      assertSkipReviewGate(repoPath, safeData, { prNumber, currentHeadSha, dryRun, skipReviewRubricAudit });
       const preMerge = fetchPreMergeContext(repoPath, prNumber);
       stackedBaseGuard = buildStackedBaseGuard(
         repoPath,
@@ -943,26 +985,9 @@ function main() {
         });
       }
       assertStackedBaseGuard(stackedBaseGuard, prNumber);
-      reviewGate = {
-        status: "skipped",
-        pr: prNumber,
-        reason: skipReviewReason,
-        rubricStatus: skipReviewRubricStatus,
-        readyToMerge: safeData.state === STATES.READY_TO_MERGE,
-      };
-      if (!dryRun) {
-        const skipComment = buildSkipComment(skipReviewReason, skipReviewRubricAudit);
-        appendRunEvent(repoPath, safeData.run_id, {
-          event: EVENTS.SKIP_REVIEW,
-          state_from: safeData.state,
-          state_to: safeData.state,
-          head_sha: currentHeadSha,
-          round: safeData.review?.rounds || null,
-          reason: skipReviewReason,
-          rubric_status: skipReviewRubricStatus,
-        });
-        execGh(repoPath, ["pr", "comment", String(prNumber), "--body", skipComment]);
-      }
+      reviewGate = recordSkipReviewAudit(repoPath, safeData, {
+        prNumber, currentHeadSha, dryRun, skipReviewReason, skipReviewRubricStatus, skipReviewRubricAudit,
+      });
     } else if (safeData.state === STATES.READY_TO_MERGE) {
       const preMerge = fetchPreMergeContext(repoPath, prNumber);
       reviewGate = evaluateReviewGate({
