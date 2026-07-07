@@ -16,6 +16,7 @@ const {
   resolveRouteIntent,
   validateRouteConfig,
 } = require("./relay-routing");
+const { normalizeReviewAssurance } = require("./manifest/review-assurance");
 const {
   findUnknownFlags,
   getPositionals,
@@ -47,6 +48,7 @@ const SUBCOMMAND_FLAGS = {
   "add-route": new Set(["--phase", "--executor", "--reviewer", "--json", "--help"]),
   "allow-route": new Set(["--phase", "--executor", "--reviewer", "--json", "--help"]),
   "deny-route": new Set(["--phase", "--executor", "--reviewer", "--json", "--help"]),
+  preset: new Set(["--dispatch", "--review", "--advisory-review", "--advisory-profile", "--review-assurance", "--json", "--help"]),
 };
 const RELAY_CONFIG_FLAG_ALIASES = new Map([
   ["-h", "--help"],
@@ -81,6 +83,7 @@ function printHelp() {
   console.log(`  add-route <pattern> --phase <csv> ${modeLabel("--phase")} [--executor <name> ${modeLabel("--executor")}] [--reviewer <name> ${modeLabel("--reviewer")}] [--json ${modeLabel("--json")}]`);
   console.log(`  allow-route <pattern> --phase <csv> ${modeLabel("--phase")} [--executor <name> ${modeLabel("--executor")}] [--reviewer <name> ${modeLabel("--reviewer")}] [--json ${modeLabel("--json")}] (deprecated; use add-route)`);
   console.log(`  deny-route <pattern> [--phase <csv> ${modeLabel("--phase")}] [--executor <name> ${modeLabel("--executor")}] [--reviewer <name> ${modeLabel("--reviewer")}] [--json ${modeLabel("--json")}]`);
+  console.log(`  preset add|remove|show <name> [--dispatch <actor[:provider/model]> ${modeLabel("--dispatch")}] [--review <actor[:provider/model]> ${modeLabel("--review")}] [--advisory-review <actor[:provider/model]> ${modeLabel("--advisory-review")}] [--advisory-profile <name> ${modeLabel("--advisory-profile")}] [--review-assurance <standard|hardened> ${modeLabel("--review-assurance")}] [--json ${modeLabel("--json")}]`);
   console.log("");
   console.log("Supported default paths:");
   console.log("  dispatch.executor, review.reviewer, advisory_review.reviewer");
@@ -168,6 +171,16 @@ function writeRoutes(routesPath, routes) {
   return routes;
 }
 
+function loadGlobalPresetsForShow() {
+  const routesPath = relayRoutesPath();
+  if (!fs.existsSync(routesPath)) {
+    return {};
+  }
+  const routes = readRoutesFile(routesPath);
+  const validated = validateRouteConfig(routes, routesPath);
+  return cloneJson(validated.presets || {});
+}
+
 function requireValue(value, label) {
   const normalized = nonEmptyString(value);
   if (!normalized) throw new Error(`${label} is required`);
@@ -230,7 +243,7 @@ function routeEntry(pattern, { phases, executor, reviewer }) {
   return entry;
 }
 
-function outputMutation({ jsonOut, action, routesPath, routes, entry = null, defaultPath = null, profile = null, warnings = [] }) {
+function outputMutation({ jsonOut, action, routesPath, routes, entry = null, defaultPath = null, profile = null, presetName = null, preset = null, warnings = [] }) {
   if (jsonOut) {
     printJson({
       ok: true,
@@ -239,6 +252,8 @@ function outputMutation({ jsonOut, action, routesPath, routes, entry = null, def
       path: routesPath,
       defaultPath,
       entry,
+      presetName,
+      preset,
       routes,
       warnings,
     });
@@ -681,6 +696,157 @@ function commandRouteMutation(positionals, jsonOut, { action, listName, requireP
   outputMutation({ jsonOut, action, routesPath, routes: written, entry, warnings });
 }
 
+function presetActorForPhase(phase, value) {
+  if (!isPlainObject(value)) return null;
+  return REVIEWER_PHASES.has(phase) ? nonEmptyString(value.reviewer) : nonEmptyString(value.executor);
+}
+
+function presetReferenceWarnings(routes, presetName, preset) {
+  const warnings = [];
+  const policyResult = loadRelayPolicy({ globalRoutes: routes });
+  const policy = policyResult.ok ? policyResult.policy : null;
+  for (const phase of VALID_PHASES) {
+    const phaseValue = preset[phase];
+    if (!isPlainObject(phaseValue)) continue;
+    const actor = presetActorForPhase(phase, phaseValue);
+    if (actor && !findOnPath(actor)) {
+      warnings.push(`${actor} CLI not found on PATH for preset ${presetName} ${phase}`);
+    }
+    const model = nonEmptyString(phaseValue.model);
+    if (policy && routes.strict === true && actor && model) {
+      const decision = REVIEWER_PHASES.has(phase)
+        ? evaluateRelayRoute(policy, { phase, reviewer: actor, model })
+        : evaluateRelayRoute(policy, { phase, executor: actor, model });
+      if (decision.reason === "unknown_model_route" || decision.reason === "missing_model_route") {
+        warnings.push(`strict routes config does not register ${phase} route ${model} for ${actor}`);
+      }
+    }
+  }
+  return warnings;
+}
+
+function parsePresetFromArgs() {
+  const preset = {};
+  const dispatchSpec = parseRouteSpec(readArg(args, "--dispatch", undefined, CLI_ARG_OPTIONS), "dispatch");
+  const reviewSpec = parseRouteSpec(readArg(args, "--review", undefined, CLI_ARG_OPTIONS), "review");
+  const advisorySpec = parseRouteSpec(readArg(args, "--advisory-review", undefined, CLI_ARG_OPTIONS), "advisory_review");
+  if (dispatchSpec) preset.dispatch = dispatchSpec;
+  if (reviewSpec) preset.review = reviewSpec;
+  const advisoryProfile = nonEmptyString(readArg(args, "--advisory-profile", undefined, CLI_ARG_OPTIONS));
+  if (advisoryProfile && !advisorySpec) {
+    throw new Error("--advisory-profile requires --advisory-review");
+  }
+  if (advisorySpec) {
+    preset.advisory_review = {
+      ...advisorySpec,
+      ...(advisoryProfile ? { profile: advisoryProfile } : {}),
+    };
+  }
+  const reviewAssurance = nonEmptyString(readArg(args, "--review-assurance", undefined, CLI_ARG_OPTIONS));
+  if (reviewAssurance) {
+    preset.review_assurance = normalizeReviewAssurance(reviewAssurance);
+  }
+  if (!Object.keys(preset).length) {
+    throw new Error("preset add requires at least one of --dispatch, --review, --advisory-review, or --review-assurance");
+  }
+  return preset;
+}
+
+const PRESET_MUTATION_FLAGS = [
+  "--dispatch", "--review", "--advisory-review", "--advisory-profile", "--review-assurance",
+];
+
+// add-only flags describe a mutation; show/remove must reject them rather than
+// silently ignore an inapplicable flag. Detect presence (hasCliFlag), not a
+// parsed value — a value flag given bare (e.g. `--dispatch --json`) reads back as
+// undefined but is still present and must still be rejected.
+function assertNoPresetMutationFlags(action) {
+  const present = PRESET_MUTATION_FLAGS.filter((flag) => hasCliFlag(flag));
+  if (present.length) {
+    throw new Error(`preset ${action} does not accept ${present.join(", ")}`);
+  }
+}
+
+function commandPreset(positionals, jsonOut) {
+  const action = positionals[1];
+  if (!["add", "remove", "show"].includes(action)) {
+    throw new Error("preset requires add, remove, or show");
+  }
+  if (action !== "add") {
+    assertNoPresetMutationFlags(action);
+  }
+
+  if (action === "show") {
+    if (positionals.length !== 2 && positionals.length !== 3) {
+      throw new Error("preset show accepts optional <name>");
+    }
+    const name = positionals[2] ? requireValue(positionals[2], "preset name") : null;
+    const presets = loadGlobalPresetsForShow();
+    const output = {
+      ok: true,
+      action: "preset show",
+      presets,
+      ...(name ? { presetName: name, preset: presets[name] || null } : {}),
+    };
+    if (name && !presets[name]) {
+      throw new Error(`unknown preset: ${name}`);
+    }
+    if (jsonOut) {
+      printJson(output);
+    } else if (name) {
+      console.log(JSON.stringify(output.preset, null, 2));
+    } else {
+      console.log(JSON.stringify(presets, null, 2));
+    }
+    return;
+  }
+
+  if (positionals.length !== 3) {
+    throw new Error(`preset ${action} requires <name>`);
+  }
+  const presetName = requireValue(positionals[2], "preset name");
+  const { routesPath, routes, warnings } = loadRoutesForMutation();
+  const updated = cloneJson(routes);
+
+  if (action === "add") {
+    const preset = parsePresetFromArgs();
+    updated.presets = {
+      ...(isPlainObject(updated.presets) ? updated.presets : {}),
+      [presetName]: preset,
+    };
+    validateRouteConfig(updated, routesPath);
+    const routeWarnings = presetReferenceWarnings(updated, presetName, preset);
+    const written = writeRoutes(routesPath, updated);
+    outputMutation({
+      jsonOut,
+      action: "preset add",
+      routesPath,
+      routes: written,
+      presetName,
+      preset,
+      warnings: [...warnings, ...routeWarnings],
+    });
+    return;
+  }
+
+  if (!isPlainObject(updated.presets) || !Object.prototype.hasOwnProperty.call(updated.presets, presetName)) {
+    throw new Error(`unknown preset: ${presetName}`);
+  }
+  const removed = updated.presets[presetName];
+  delete updated.presets[presetName];
+  if (!Object.keys(updated.presets).length) delete updated.presets;
+  const written = writeRoutes(routesPath, updated);
+  outputMutation({
+    jsonOut,
+    action: "preset remove",
+    routesPath,
+    routes: written,
+    presetName,
+    preset: removed,
+    warnings,
+  });
+}
+
 function main() {
   if (!args.length || hasCliFlag(["--help", "-h"])) {
     printHelp();
@@ -747,6 +913,9 @@ function main() {
         listName: "denied_routes",
         requirePhase: false,
       });
+      break;
+    case "preset":
+      commandPreset(positionals, jsonOut);
       break;
   }
 }

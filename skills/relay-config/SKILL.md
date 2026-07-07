@@ -22,6 +22,7 @@ Set up relay routes interactively. The user should not have to memorize command 
 - The user asks to set up or configure relay
 - The user wants company-safe strict mode, personal open mode, OpenCode/Pi opt-in, or advisory-review routing
 - The user asks whether a provider/model route such as `example/opencode-model-*` or `openai/*` is available
+- The user asks to create, show, or remove a route preset such as `light`, `diverse`, or `hardened`
 - The user asks to run relay doctor/check
 
 ## Do not use when
@@ -51,6 +52,7 @@ Infer from the user's words before asking questions:
 - `managed only`, `codex/claude only` -> no unmanaged provider/model route opt-in
 - routes containing `/`, such as `example/opencode-model-*`, `example/pi-*`, `openai/*`, or `ollama/*` -> provider/model route patterns
 - `advisory`, `reviewer`, `documentation`, `docs` -> likely advisory-review phases
+- `preset`, `light`, `diverse`, `hardened`, `프리셋`, `가볍게`, `싸게`, `하드하게` -> preset CRUD or inspection
 
 Ask only for missing decisions, one at a time. Use plain language and wait for the user's answer. Do not use host-specific question primitives as the only path; this skill must work in both Claude Code and Codex.
 
@@ -63,6 +65,7 @@ Before mutating routes, show a concise proposal:
 - provider/model routes to add
 - phases and actors for each route
 - default actors to set, if any
+- preset name and bundle fields (`dispatch`, `review`, `advisory_review`, `review_assurance`), if requested
 
 Ask for confirmation. If the user already explicitly approved the exact route changes in the same request, proceed and state what will be written.
 
@@ -74,9 +77,13 @@ Use the wrapper for shorthand, or pass through full flags:
 node "${RELAY_SKILL_ROOT:-skills}/relay-config/scripts/relay-config.js" init company
 node "${RELAY_SKILL_ROOT:-skills}/relay-config/scripts/relay-config.js" add-route 'example/opencode-model-*' --phase dispatch,advisory_review --executor opencode
 node "${RELAY_SKILL_ROOT:-skills}/relay-config/scripts/relay-config.js" set-default advisory_review.reviewer opencode
+node "${RELAY_SKILL_ROOT:-skills}/relay-config/scripts/relay-config.js" preset add light --dispatch opencode:example/opencode-model-fast
+node "${RELAY_SKILL_ROOT:-skills}/relay-config/scripts/relay-config.js" preset show light
 ```
 
 Generated company and personal profiles must not pin Codex or Claude model names. Do not hardcode company-specific route defaults; use the user's supplied provider/model route patterns.
+
+Consult `references/model-catalog.md` only when live model-list probes fail or the user explicitly asks for a model recommendation; otherwise prefer `doctor` probe output or the user's supplied model id.
 
 ### 5. Verify
 
@@ -101,6 +108,9 @@ The wrapper accepts common shorthand and delegates to `relay-dispatch/scripts/re
 | `show` | `show --effective` |
 | `doctor` | `doctor` |
 | `add-route example/opencode-model-* --phase dispatch --executor opencode` | `add-route example/opencode-model-* --phase dispatch --executor opencode` |
+| `preset add light --dispatch opencode:example/opencode-model-fast` | `preset add light --dispatch opencode:example/opencode-model-fast` |
+| `preset remove light` | `preset remove light` |
+| `preset show light` | `preset show light` |
 | `check dispatch opencode example/opencode-model-fast` | `check --phase dispatch --executor opencode --model example/opencode-model-fast` |
 | `check review opencode example/opencode-model-fast` | `check --phase review --reviewer opencode --model example/opencode-model-fast` |
 | `check advisory_review pi example/pi-model-fast` | `check --phase advisory_review --reviewer pi --model example/pi-model-fast` |

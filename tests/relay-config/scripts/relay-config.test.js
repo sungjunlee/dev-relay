@@ -106,6 +106,34 @@ test("check shorthand maps reviewer phases to reviewer-only core checks", () => 
   assert.equal(parseJson(result).decision.reason, "allowed_model_route");
 });
 
+test("preset subcommands pass through wrapper shorthand", () => {
+  const relayHome = tempDir();
+
+  const add = runConfig([
+    "preset",
+    "add",
+    "hardened",
+    "--review-assurance",
+    "hardened",
+    "--json",
+  ], { relayHome });
+  assert.equal(add.status, 0, add.combined);
+  assert.deepEqual(readRoutes(relayHome), {
+    version: 2,
+    presets: {
+      hardened: { review_assurance: "hardened" },
+    },
+  });
+
+  const show = runConfig(["preset", "show", "hardened", "--json"], { relayHome });
+  assert.equal(show.status, 0, show.combined);
+  assert.equal(parseJson(show).preset.review_assurance, "hardened");
+
+  const remove = runConfig(["preset", "remove", "hardened", "--json"], { relayHome });
+  assert.equal(remove.status, 0, remove.combined);
+  assert.equal(Object.prototype.hasOwnProperty.call(readRoutes(relayHome), "presets"), false);
+});
+
 test("inspect reports effective policy, doctor output, and executors config state", () => {
   const relayHome = tempDir();
   const executorsPath = path.join(relayHome, "executors.json");
@@ -141,6 +169,7 @@ test("help advertises natural-language setup and provider/model boundary", () =>
   assert.match(result.stdout, /relay setup 해줘/);
   assert.match(result.stdout, /provider\/model route strings are the routing boundary/i);
   assert.match(result.stdout, /add-route <pattern>/);
+  assert.match(result.stdout, /preset add\|remove\|show/);
   assert.match(result.stdout, /allow-route <pattern>.*deprecated/i);
   assert.doesNotMatch(result.stdout, /\bpolicy\b/i);
 });

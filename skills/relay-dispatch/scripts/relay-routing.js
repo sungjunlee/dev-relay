@@ -8,6 +8,7 @@ const { getProjectRoutesPath } = require("./manifest/paths");
 const { buildDefaultRelayPolicy, evaluateRelayRoute } = require("./relay-policy");
 
 const GLOBAL_ROUTES_FILE = "routes.json";
+const ROUTE_INTENT_SOURCES_KEY = "__route_sources";
 
 function isPlainObject(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -661,10 +662,119 @@ function defaultForPhase(policy, phase) {
   return cloneJson(buildDefaultRelayPolicy().defaults[phase]);
 }
 
+function availablePresetNames(policy) {
+  return Object.keys(policy?.presets || {}).sort();
+}
+
+function presetError(message, details = {}) {
+  const error = new Error(message);
+  for (const [key, value] of Object.entries(details)) error[key] = value;
+  return error;
+}
+
+function normalizePresetName(value) {
+  return nonEmptyString(value);
+}
+
+function hasRunIntentField(runIntent, phase, field) {
+  return isPlainObject(runIntent?.[phase])
+    && Object.prototype.hasOwnProperty.call(runIntent[phase], field);
+}
+
+function setRunIntentField(target, phase, field, value, source) {
+  const normalized = nonEmptyString(value);
+  if (!normalized) return false;
+  if (!isPlainObject(target[phase])) target[phase] = {};
+  target[phase][field] = normalized;
+  if (!isPlainObject(target[ROUTE_INTENT_SOURCES_KEY])) target[ROUTE_INTENT_SOURCES_KEY] = {};
+  if (!isPlainObject(target[ROUTE_INTENT_SOURCES_KEY][phase])) target[ROUTE_INTENT_SOURCES_KEY][phase] = {};
+  target[ROUTE_INTENT_SOURCES_KEY][phase][field] = source;
+  return true;
+}
+
+function runIntentSource(runIntent, phase, field) {
+  return nonEmptyString(runIntent?.[ROUTE_INTENT_SOURCES_KEY]?.[phase]?.[field]) || "run_intent";
+}
+
+function normalizePresetPhase(preset, presetName, phase) {
+  if (preset[phase] === undefined || preset[phase] === null) return null;
+  return normalizeRouteDefault(preset[phase], phase, `preset:${presetName}`, { partial: true });
+}
+
+function expandRoutePreset({ runIntent = null, policy = {}, routePresetName = null } = {}) {
+  const presetName = normalizePresetName(routePresetName);
+  if (!presetName) {
+    return {
+      runIntent: cloneJson(runIntent || {}),
+      routePreset: null,
+    };
+  }
+
+  const presets = policy?.presets || {};
+  const available = availablePresetNames(policy);
+  if (!available.length) {
+    throw presetError(
+      `no route presets configured; run relay-config preset add <name> to create one before using --route-preset ${presetName}`,
+      { code: "route_preset_unconfigured", availablePresets: [] }
+    );
+  }
+  if (!Object.prototype.hasOwnProperty.call(presets, presetName)) {
+    throw presetError(
+      `unknown route preset '${presetName}'; available presets: ${available.join(", ")}`,
+      { code: "unknown_route_preset", availablePresets: available }
+    );
+  }
+
+  const preset = presets[presetName];
+  if (!isPlainObject(preset)) {
+    throw presetError(`route preset '${presetName}' must be an object`, {
+      code: "invalid_route_preset",
+      availablePresets: available,
+    });
+  }
+
+  const expanded = cloneJson(runIntent || {});
+  const filled = [];
+  const source = `preset:${presetName}`;
+  for (const phase of ROUTE_PHASES) {
+    const presetPhase = normalizePresetPhase(preset, presetName, phase);
+    if (!presetPhase) continue;
+    for (const [field, value] of Object.entries(presetPhase)) {
+      if (hasRunIntentField(expanded, phase, field)) continue;
+      if (setRunIntentField(expanded, phase, field, value, source)) {
+        filled.push({ phase, field });
+      }
+    }
+  }
+
+  const reviewAssurance = nonEmptyString(preset.review_assurance);
+  // Only claim review_assurance when the preset actually applies it. When the
+  // field is already set (e.g. an explicit CLI --review-assurance seeded into the
+  // run intent), the preset must not report it as filled/applied.
+  let appliedReviewAssurance = null;
+  if (reviewAssurance && !Object.prototype.hasOwnProperty.call(expanded, "review_assurance")) {
+    expanded.review_assurance = reviewAssurance;
+    if (!isPlainObject(expanded[ROUTE_INTENT_SOURCES_KEY])) expanded[ROUTE_INTENT_SOURCES_KEY] = {};
+    expanded[ROUTE_INTENT_SOURCES_KEY].review_assurance = source;
+    filled.push({ field: "review_assurance" });
+    appliedReviewAssurance = reviewAssurance;
+  }
+
+  return {
+    runIntent: expanded,
+    routePreset: {
+      name: presetName,
+      source,
+      filled,
+      review_assurance: appliedReviewAssurance,
+    },
+  };
+}
+
 function pickField({ phase, field, runIntent, projectRoutes, policy }) {
   const runPhase = runIntent?.[phase];
   if (isPlainObject(runPhase) && Object.prototype.hasOwnProperty.call(runPhase, field)) {
-    return { value: nonEmptyString(runPhase[field]), source: "run_intent" };
+    return { value: nonEmptyString(runPhase[field]), source: runIntentSource(runIntent, phase, field) };
   }
   const projectPhase = projectRoutes?.defaults?.[phase];
   if (isPlainObject(projectPhase) && Object.prototype.hasOwnProperty.call(projectPhase, field)) {
@@ -735,6 +845,7 @@ function resolvePhaseRoute({ phase, runIntent, projectRoutes, policy, relayHome,
 
 function resolveRouteIntent({
   runIntent = null,
+  routePresetName = null,
   projectRoutes = null,
   policy = buildDefaultRelayPolicy(),
   relayHome = process.env.RELAY_HOME,
@@ -742,11 +853,13 @@ function resolveRouteIntent({
   executorModelResolver = null,
 } = {}) {
   const normalizedProjectRoutes = projectRoutes ? validateProjectRoutes(projectRoutes, "project routes") : null;
+  const presetExpansion = expandRoutePreset({ runIntent, policy, routePresetName });
+  const effectiveRunIntent = presetExpansion.runIntent;
   const phases = {};
   for (const phase of ROUTE_PHASES) {
     phases[phase] = resolvePhaseRoute({
       phase,
-      runIntent,
+      runIntent: effectiveRunIntent,
       projectRoutes: normalizedProjectRoutes,
       policy,
       relayHome,
@@ -756,6 +869,7 @@ function resolveRouteIntent({
   }
   return {
     version: 1,
+    ...(presetExpansion.routePreset ? { route_preset: presetExpansion.routePreset } : {}),
     phases,
   };
 }

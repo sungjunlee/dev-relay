@@ -94,6 +94,7 @@ const FLAGS = [
   { flag: "--review", kind: VALUE, mode: MODE_PARSED, valueName: "<actor[:provider/model]>", rationale: "Run route preview selector; flag-like following tokens should mean the value is missing." },
   { flag: "--advisory-review", kind: VALUE, mode: MODE_PARSED, valueName: "<actor[:provider/model]>", rationale: "Run route preview selector; flag-like following tokens should mean the value is missing." },
   { flag: "--route-intent-file", kind: VALUE, mode: MODE_VERBATIM, valueName: "<path>", rationale: "Operator-supplied run route intent JSON path; keep the literal argv token." },
+  { flag: "--route-preset", kind: VALUE, mode: MODE_PARSED, valueName: "<name>", rationale: "Closed routes.json preset selector; flag-like following tokens should mean the value is missing." },
   { flag: "--manual-review-reason", kind: VALUE, mode: MODE_VERBATIM, valueName: "<reason>", rationale: "Audit reason for applying a manual review verdict under hardened assurance." },
   { flag: "--reviewer", kind: VALUE, mode: MODE_PARSED, valueName: "<name>", rationale: "Reviewer adapter selector; flag-like following tokens should mean the value is missing." },
   { flag: "--reviewer-model", kind: VALUE, mode: MODE_PARSED, valueName: "<name>", rationale: "Reviewer model selector; flag-like following tokens should mean the value is missing." },
@@ -139,7 +140,7 @@ const COMMAND_FLAGS = {
   ],
   dispatch: [
     "--branch", "--run-id", "--manifest", "--prompt", "--prompt-file", "--executor",
-    "--model", "--model-hints", "--route-intent-file", "--sandbox", "--network-access", "--copy", "--timeout", "--reasoning", "--rubric-file",
+    "--model", "--model-hints", "--route-intent-file", "--route-preset", "--sandbox", "--network-access", "--copy", "--timeout", "--reasoning", "--rubric-file",
     "--test-command", "--rubric-grandfathered", "--request-id", "--leaf-id",
     "--fleet-id", "--done-criteria-file", "--publish-policy", "--review-assurance", "--register", "--auto-recover-commit", "--no-auto-recover-commit",
     "--tags", "--allow-conflicting-run", "--detach", "--dry-run", "--json", "--help",
@@ -197,7 +198,7 @@ const COMMAND_FLAGS = {
   "relay-config": [
     "--profile", "--effective", "--phase", "--executor", "--reviewer", "--model",
     "--repo", "--dispatch", "--review", "--advisory-review", "--route-intent-file",
-    "--reconcile", "--json", "--help",
+    "--reconcile", "--review-assurance", "--advisory-profile", "--json", "--help",
   ],
   "rebrand-evidence": [
     "--repo", "--run-id", "--manifest", "--reason", "--dry-run", "--json", "--help",

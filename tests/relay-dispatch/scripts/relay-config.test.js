@@ -15,6 +15,7 @@ const {
 const {
   getManifestPath,
   getProjectPolicyPath,
+  getProjectRoutesPath,
   getRunDir,
 } = require("../../../skills/relay-dispatch/scripts/manifest/paths");
 const {
@@ -843,6 +844,182 @@ test("route mutations preserve omitted optional keys and absent default phases",
   });
   assert.equal(hasOwn(defaultRoutes.defaults, "dispatch"), false);
   assert.equal(hasOwn(defaultRoutes.defaults, "review"), false);
+
+  const presetHome = tempDir("relay-config-preset-omission-");
+  assert.equal(runConfig([
+    "preset",
+    "add",
+    "hardened",
+    "--review-assurance",
+    "hardened",
+    "--json",
+  ], { relayHome: presetHome }).status, 0);
+  assert.deepEqual(readRoutes(presetHome), {
+    version: 2,
+    presets: {
+      hardened: { review_assurance: "hardened" },
+    },
+  });
+});
+
+test("preset add supports review assurance and validates referenced routes with warnings", () => {
+  const relayHome = tempDir();
+  const binDir = tempDir("relay-config-preset-bin-");
+  writeExecutable(path.join(binDir, "opencode"));
+  writeJson(path.join(relayHome, "routes.json"), {
+    version: 2,
+    strict: true,
+    routes: [
+      { route: "openai/registered", phases: ["dispatch"], executors: ["opencode"] },
+    ],
+  });
+
+  const result = runConfig([
+    "preset",
+    "add",
+    "hardened",
+    "--dispatch",
+    "opencode:openai/unregistered",
+    "--advisory-review",
+    "pi:openai/advisory",
+    "--review-assurance",
+    "hardened",
+    "--json",
+  ], {
+    relayHome,
+    env: { PATH: `${binDir}${path.delimiter}/usr/bin:/bin` },
+  });
+
+  assert.equal(result.status, 0, result.combined);
+  const output = parseJson(result);
+  assert.equal(output.action, "preset add");
+  assert.match(output.warnings.join("\n"), /strict routes config does not register dispatch route openai\/unregistered/i);
+  assert.match(output.warnings.join("\n"), /pi CLI not found/i);
+  assert.deepEqual(readRoutes(relayHome).presets.hardened, {
+    dispatch: { executor: "opencode", model: "openai/unregistered" },
+    advisory_review: { reviewer: "pi", model: "openai/advisory" },
+    review_assurance: "hardened",
+  });
+});
+
+test("preset add warns once when creating routes.json over legacy fallback config", () => {
+  const relayHome = tempDir();
+  const legacyPath = path.join(relayHome, "policy.json");
+  writeJson(legacyPath, {
+    ...buildDefaultRelayPolicy(),
+    profile: "legacy",
+  });
+  const before = fs.readFileSync(legacyPath, "utf-8");
+
+  const result = runConfig([
+    "preset",
+    "add",
+    "hardened",
+    "--review-assurance",
+    "hardened",
+    "--json",
+  ], { relayHome });
+
+  assert.equal(result.status, 0, result.combined);
+  const output = parseJson(result);
+  assert.equal(output.warnings.length, 1);
+  assert.match(output.warnings[0], /routes\.json now takes precedence/i);
+  assert.equal(fs.readFileSync(legacyPath, "utf-8"), before);
+});
+
+test("preset show reads global presets and preset remove drops empty preset scaffolding", () => {
+  const relayHome = tempDir();
+  const repoRoot = tempDir("relay-config-preset-show-repo-");
+  initGitRepo(repoRoot);
+  writeJson(path.join(relayHome, "routes.json"), {
+    version: 2,
+    presets: {
+      light: { dispatch: { executor: "codex" } },
+    },
+  });
+  writeJson(getProjectRoutesPath(repoRoot, { relayHome }), {
+    version: 2,
+    presets: {
+      light: { dispatch: { executor: "opencode" } },
+      project_only: { review: { reviewer: "claude" } },
+    },
+  });
+
+  const show = runConfig(["preset", "show", "light", "--json"], { relayHome, cwd: repoRoot });
+  assert.equal(show.status, 0, show.combined);
+  assert.deepEqual(parseJson(show).preset, { dispatch: { executor: "codex" } });
+
+  const showAll = runConfig(["preset", "show", "--json"], { relayHome, cwd: repoRoot });
+  assert.equal(showAll.status, 0, showAll.combined);
+  assert.deepEqual(parseJson(showAll).presets, {
+    light: { dispatch: { executor: "codex" } },
+  });
+
+  const showProjectOnly = runConfig(["preset", "show", "project_only", "--json"], { relayHome, cwd: repoRoot });
+  assert.notEqual(showProjectOnly.status, 0, showProjectOnly.combined);
+  assert.match(showProjectOnly.combined, /unknown preset: project_only/);
+
+  const remove = runConfig(["preset", "remove", "light", "--json"], { relayHome });
+  assert.equal(remove.status, 0, remove.combined);
+  assert.equal(hasOwn(readRoutes(relayHome), "presets"), false);
+
+  const showEmpty = runConfig(["preset", "show", "--json"], { relayHome });
+  assert.equal(showEmpty.status, 0, showEmpty.combined);
+  assert.deepEqual(parseJson(showEmpty).presets, {});
+});
+
+test("preset show/remove reject add-only mutation flags and add requires --advisory-review for --advisory-profile", () => {
+  const relayHome = tempDir();
+  writeJson(path.join(relayHome, "routes.json"), {
+    version: 2,
+    presets: {
+      light: { dispatch: { executor: "codex" } },
+    },
+  });
+
+  const removeWithFlag = runConfig(["preset", "remove", "light", "--dispatch", "opencode:fast", "--json"], { relayHome });
+  assert.notEqual(removeWithFlag.status, 0, removeWithFlag.combined);
+  assert.match(removeWithFlag.combined, /preset remove does not accept --dispatch/);
+  // The inapplicable mutation flag must be rejected before the preset is removed.
+  assert.equal(hasOwn(readRoutes(relayHome).presets, "light"), true);
+
+  const showWithFlag = runConfig(["preset", "show", "light", "--review-assurance", "hardened", "--json"], { relayHome });
+  assert.notEqual(showWithFlag.status, 0, showWithFlag.combined);
+  assert.match(showWithFlag.combined, /preset show does not accept --review-assurance/);
+
+  // A bare value flag (present without a value) must still be rejected on remove.
+  const removeBareFlag = runConfig(["preset", "remove", "light", "--dispatch", "--json"], { relayHome });
+  assert.notEqual(removeBareFlag.status, 0, removeBareFlag.combined);
+  assert.match(removeBareFlag.combined, /preset remove does not accept --dispatch/);
+  assert.equal(hasOwn(readRoutes(relayHome).presets, "light"), true);
+
+  const addProfileNoReviewer = runConfig(["preset", "add", "p", "--advisory-profile", "blindspot", "--json"], { relayHome });
+  assert.notEqual(addProfileNoReviewer.status, 0, addProfileNoReviewer.combined);
+  assert.match(addProfileNoReviewer.combined, /--advisory-profile requires --advisory-review/);
+});
+
+test("preset mutation validation failure leaves the routes file untouched", () => {
+  const relayHome = tempDir();
+  const routesPath = path.join(relayHome, "routes.json");
+  writeJson(routesPath, {
+    version: 2,
+    routes: [],
+    presets: [],
+  });
+  const before = fs.readFileSync(routesPath, "utf-8");
+
+  const result = runConfig([
+    "preset",
+    "add",
+    "light",
+    "--dispatch",
+    "opencode:openai/new",
+    "--json",
+  ], { relayHome });
+
+  assert.notEqual(result.status, 0, result.combined);
+  assert.match(result.combined, /presets must be an object/);
+  assert.equal(fs.readFileSync(routesPath, "utf-8"), before);
 });
 
 test("validation failure leaves the routes file untouched", () => {
@@ -970,6 +1147,10 @@ test("subcommands reject known relay-config flags outside their supported gramma
   const allowRoute = runConfig(["allow-route", "openai/*", "--phase", "dispatch", "--model", "openai/gpt-5"], { relayHome });
   assert.notEqual(allowRoute.status, 0, allowRoute.combined);
   assert.match(allowRoute.combined, /unsupported flags for allow-route: --model/);
+
+  const preset = runConfig(["preset", "show", "--model", "openai/gpt-5"], { relayHome });
+  assert.notEqual(preset.status, 0, preset.combined);
+  assert.match(preset.combined, /unsupported flags for preset: --model/);
 });
 
 test("help explains harness actors and provider/model route boundaries without policy prose", () => {
@@ -979,6 +1160,7 @@ test("help explains harness actors and provider/model route boundaries without p
   assert.match(result.stdout, /executor\/reviewer names are harnesses/i);
   assert.match(result.stdout, /provider\/model route strings are the routing boundary/i);
   assert.match(result.stdout, /add-route <pattern>/);
+  assert.match(result.stdout, /preset add\|remove\|show/);
   assert.match(result.stdout, /allow-route <pattern>.*deprecated/i);
   assert.doesNotMatch(result.stdout, /\bpolicy\b/i);
 });

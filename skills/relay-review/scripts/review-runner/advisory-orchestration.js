@@ -39,16 +39,22 @@ function resolveAdvisoryConfig({
   const routed = data?.routing?.selected?.advisory_review && typeof data.routing.selected.advisory_review === "object"
     ? data.routing.selected.advisory_review
     : {};
-  const reviewer = advisoryReviewerArg || planned.reviewer || routed.reviewer || null;
+  const reviewer = advisoryReviewerArg || routed.reviewer || planned.reviewer || null;
   if (!reviewer && (advisoryProfileArg || advisoryReviewerModel || advisoryTimeoutArg || advisoryGraceArg)) {
     throw new Error("--advisory-reviewer is required when advisory options are supplied and no manifest routing advisory reviewer is selected");
   }
+  // A route-plan model/profile was planned for planned.reviewer specifically. Only
+  // inherit it when that planned reviewer is the one actually selected, so a routed
+  // (or CLI) advisory reviewer cannot pick up a model meant for a different reviewer.
+  const plannedForSelected = planned.reviewer && planned.reviewer === reviewer;
+  const plannedModel = plannedForSelected ? planned.model : null;
+  const plannedProfile = plannedForSelected ? planned.profile : null;
   return {
     graceSeconds: reviewer ? parseNonNegativeSeconds(advisoryGraceArg) : null,
-    model: reviewer ? (advisoryReviewerModel || planned.model || routed.model || routed.reviewer_model || null) : null,
-    profile: reviewer ? validateAdvisoryProfile(advisoryProfileArg || planned.profile || routed.profile || "blindspot") : null,
+    model: reviewer ? (advisoryReviewerModel || routed.model || routed.reviewer_model || plannedModel || null) : null,
+    profile: reviewer ? validateAdvisoryProfile(advisoryProfileArg || routed.profile || plannedProfile || "blindspot") : null,
     reviewer,
-    source: reviewer ? (advisoryReviewerArg ? "cli" : planned.reviewer ? "route_plan" : "routing") : null,
+    source: reviewer ? (advisoryReviewerArg ? "cli" : routed.reviewer ? "routing" : "route_plan") : null,
     timeoutSeconds: reviewer ? parsePositiveSeconds(advisoryTimeoutArg) : null,
   };
 }

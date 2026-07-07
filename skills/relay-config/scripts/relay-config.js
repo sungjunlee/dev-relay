@@ -46,6 +46,7 @@ function printHelp() {
   console.log("  add-route <pattern> --phase <csv> [--executor <name>] [--reviewer <name>] [--json]");
   console.log("  allow-route <pattern> --phase <csv> [--executor <name>] [--reviewer <name>] [--json] (deprecated; use add-route)");
   console.log("  deny-route <pattern> [--phase <csv>] [--executor <name>] [--reviewer <name>] [--json]");
+  console.log("  preset add|remove|show <name> [--dispatch <actor[:provider/model]>] [--review <actor[:provider/model]>] [--advisory-review <actor[:provider/model]>] [--review-assurance <standard|hardened>] [--json]");
   console.log("  set-default <path> <value> [--json]");
   console.log("");
   console.log("Routing boundary: executor/reviewer names are harnesses; provider/model route strings are the routing boundary.");

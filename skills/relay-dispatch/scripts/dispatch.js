@@ -20,6 +20,7 @@
  *   --executor, -e <name>  Executor to use (default: codex)
  *   --model, -m <name>     Model override (default: from executor config)
  *   --model-hints <spec>   Persist per-phase model hints (phase=model,...)
+ *   --route-preset <name>  Expand named routes.json preset into unset route fields
  *   --sandbox <mode>       workspace-write | read-only (default: workspace-write)
  *   --network-access <mode> disabled | enabled (default: disabled; codex workspace-write only)
  *   --copy <file,...>      Additional files to copy
@@ -172,7 +173,7 @@ const args = process.argv.slice(2);
 
 const KNOWN_FLAGS = [
   "--branch", "-b", "--run-id", "--manifest", "--prompt", "-p", "--prompt-file", "--executor", "-e",
-  "--model", "-m", "--model-hints", "--route-intent-file", "--sandbox", "--network-access", "--copy", "--timeout", "--reasoning", "--rubric-file", "--test-command", "--rubric-grandfathered",
+  "--model", "-m", "--model-hints", "--route-intent-file", "--route-preset", "--sandbox", "--network-access", "--copy", "--timeout", "--reasoning", "--rubric-file", "--test-command", "--rubric-grandfathered",
   "--request-id", "--leaf-id", "--fleet-id", "--done-criteria-file", "--publish-policy", "--review-assurance", "--tags",
   "--register", "--auto-recover-commit", "--no-auto-recover-commit", "--allow-conflicting-run", "--detach", "--dry-run", "--json", "--help", "-h",
 ];
@@ -195,6 +196,7 @@ if (!args.length || hasCliFlag(["--help", "-h"])) {
   console.log(`  --model, -m        ${modeLabel("--model")} Model override`);
   console.log(`  --model-hints      ${modeLabel("--model-hints")} Persist per-phase model hints (phase=model,...)`);
   console.log(`  --route-intent-file ${modeLabel("--route-intent-file")} Read one-off run route intent JSON`);
+  console.log(`  --route-preset     ${modeLabel("--route-preset")} Expand named routes.json preset into unset route fields`);
   console.log(`  --sandbox          ${modeLabel("--sandbox")} workspace-write | read-only (default: workspace-write)`);
   console.log(`  --network-access   ${modeLabel("--network-access")} disabled | enabled (default: disabled; codex workspace-write only)`);
   console.log(`  --copy <files>     ${modeLabel("--copy")} Additional files to copy (comma-separated)`);
@@ -238,6 +240,7 @@ const PROMPT_FILE = readArg(args, "--prompt-file", undefined, CLI_ARG_OPTIONS);
 const EXECUTOR_ARG = readArg(args, ["--executor", "-e"], undefined, CLI_ARG_OPTIONS);
 const MODEL = readArg(args, ["--model", "-m"], undefined, CLI_ARG_OPTIONS);
 const ROUTE_INTENT_FILE = readArg(args, "--route-intent-file", undefined, CLI_ARG_OPTIONS);
+const ROUTE_PRESET = readArg(args, "--route-preset", undefined, CLI_ARG_OPTIONS);
 const RELAY_HOME_FOR_ROUTES = process.env.RELAY_HOME || path.join(os.homedir(), ".relay");
 
 function failEarly(message, extra = {}) {
@@ -265,6 +268,10 @@ function readRouteIntentFile(filePath) {
   } catch (error) {
     failEarly(`failed to read route intent file at ${resolved}: ${error.message}`);
   }
+}
+
+function nonEmptyString(value) {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
 function mergeDispatchCliIntoRunIntent(baseIntent, { executor, model }) {
@@ -298,17 +305,36 @@ function loadInitialRoutePlan(repoRoot) {
     executor: EXECUTOR_ARG,
     model: MODEL,
   });
-  return {
-    routeIntent,
-    projectRoutes,
-    policyResult,
-    routePlan: resolveRouteIntent({
+  // An explicit CLI --review-assurance always wins. Seed it into the run intent
+  // before preset expansion so a preset cannot record itself as having filled a
+  // field the CLI overrode (keeps the persisted route-plan attribution honest).
+  if (REVIEW_ASSURANCE_RAW && !nonEmptyString(routeIntent.review_assurance)) {
+    routeIntent.review_assurance = normalizeReviewAssurance(REVIEW_ASSURANCE_RAW);
+  }
+  let routePlan;
+  try {
+    routePlan = resolveRouteIntent({
       runIntent: routeIntent,
+      routePresetName: ROUTE_PRESET,
       projectRoutes: projectRoutes.routes,
       policy: policyResult.policy,
       relayHome: RELAY_HOME_FOR_ROUTES,
       repoRoot,
-    }),
+    });
+  } catch (error) {
+    const extra = {
+      error_code: error.code || "route_preset_error",
+    };
+    if (Array.isArray(error.availablePresets)) {
+      extra.available_presets = error.availablePresets;
+    }
+    failEarly(error.message, extra);
+  }
+  return {
+    routeIntent,
+    projectRoutes,
+    policyResult,
+    routePlan,
   };
 }
 
@@ -329,6 +355,7 @@ const DONE_CRITERIA_FILE = readArg(args, "--done-criteria-file", undefined, CLI_
 const REVIEW_ASSURANCE_RAW = readArg(args, "--review-assurance", undefined, CLI_ARG_OPTIONS);
 const ROUTING_TAGS = readArg(args, "--tags", "", CLI_ARG_OPTIONS);
 let REVIEW_ASSURANCE;
+let REVIEW_ASSURANCE_SOURCE = REVIEW_ASSURANCE_RAW ? "cli" : null;
 try {
   REVIEW_ASSURANCE = normalizeReviewAssurance(REVIEW_ASSURANCE_RAW || "standard");
 } catch (error) {
@@ -346,6 +373,30 @@ let AUTO_RECOVER_COMMIT = null;
 
 function resolveDispatchRuntime(repoRoot) {
   const routeResolution = loadInitialRoutePlan(repoRoot);
+  // Route-derived review assurance is a preset-feature behavior. No-preset
+  // dispatches must stay byte-identical (DC6): a route-intent file must not
+  // change policy.review_assurance when no --route-preset was requested; those
+  // runs fall through to prompt-derived assurance extraction as before.
+  if (!REVIEW_ASSURANCE_RAW && ROUTE_PRESET) {
+    const intentReviewAssurance = nonEmptyString(routeResolution.routeIntent?.review_assurance);
+    const presetReviewAssurance = nonEmptyString(routeResolution.routePlan?.route_preset?.review_assurance);
+    const routeReviewAssurance = intentReviewAssurance || presetReviewAssurance;
+    if (routeReviewAssurance) {
+      try {
+        REVIEW_ASSURANCE = normalizeReviewAssurance(routeReviewAssurance);
+        REVIEW_ASSURANCE_SOURCE = intentReviewAssurance
+          ? "route_intent"
+          : routeResolution.routePlan.route_preset.source;
+      } catch (error) {
+        failEarly(error.message, {
+          error_code: "invalid_review_assurance",
+          review_assurance_source: intentReviewAssurance
+            ? "route_intent"
+            : routeResolution.routePlan?.route_preset?.source || null,
+        });
+      }
+    }
+  }
   const executor = EXECUTOR_ARG || routeResolution.routePlan.phases.dispatch?.executor || "codex";
   let resolvedAdapter;
   let resolvedAdapterDescriptor;
@@ -1268,11 +1319,38 @@ function summarizeRoutePlan(routePlan) {
   return summary;
 }
 
+function presetAdvisorySelection(routePlan) {
+  const presetSource = routePlan?.route_preset?.source;
+  const advisory = routePlan?.phases?.advisory_review;
+  if (!presetSource || !advisory?.reviewer) return null;
+  const sources = advisory.sources || {};
+  const hasPresetSource = ["reviewer", "model", "profile"].some((field) => sources[field] === presetSource);
+  if (!hasPresetSource) return null;
+  return {
+    reviewer: advisory.reviewer,
+    ...(advisory.model ? { model: advisory.model } : {}),
+    ...(advisory.profile ? { profile: advisory.profile } : {}),
+  };
+}
+
+function applyPresetAdvisoryToRoutingDecision(routingDecision, routePlan) {
+  const advisory = presetAdvisorySelection(routePlan);
+  if (!advisory) return routingDecision;
+  return {
+    ...routingDecision,
+    selected: {
+      ...(routingDecision.selected || {}),
+      advisory_review: advisory,
+    },
+  };
+}
+
 function writeRoutePlanSnapshot({ repoRoot, runId, routePlan, policyResult, projectRoutes, resolvedAt = new Date().toISOString() }) {
   const routePlanPath = getRoutePlanPath(repoRoot, runId);
   const snapshot = {
     version: 1,
     resolved_at: resolvedAt,
+    ...(routePlan.route_preset ? { route_preset: routePlan.route_preset } : {}),
     policy: {
       status: policyResult?.status || null,
       sources: policyResult?.sources || null,
@@ -1348,6 +1426,7 @@ async function main() {
   let dispatchStartTime = null;
   let fleetIssueLock = null;
   let handlingSignal = false;
+  let runtime = null;
 
   function releaseFleetIssueLock() {
     if (!fleetIssueLock) return;
@@ -1535,6 +1614,8 @@ async function main() {
       process.exit(1);
     }
 
+    runtime = resolveDispatchRuntime(repoRoot);
+
     // --- Environment drift check ---
     const currentEnv = collectEnvironmentSnapshot(repoRoot, baseBranch);
     const needsDraftEnvironmentBackfill = manifest.state === STATES.DRAFT
@@ -1573,6 +1654,7 @@ async function main() {
       console.error("Error: " + formatInflightCollisionError(inflightRuns, { issueNumber: issueForCollisionCheck }));
       process.exit(1);
     }
+    runtime = resolveDispatchRuntime(repoRoot);
     runId = runId || createRunId({ issueNumber, branch });
     if (FLEET_ID && issueForCollisionCheck && !DRY_RUN) {
       try {
@@ -1607,7 +1689,6 @@ async function main() {
     }
   }
 
-  const runtime = resolveDispatchRuntime(repoRoot);
   EXECUTOR = runtime.executor;
   adapter = runtime.adapter;
   adapterDescriptor = runtime.adapterDescriptor;
@@ -1647,7 +1728,7 @@ async function main() {
 
   const taskPromptResult = readTaskPrompt({ runDir: manifestRunDir, resumeMode: RESUME_MODE });
   let taskPrompt = taskPromptResult.prompt;
-  if (!RESUME_MODE && REVIEW_ASSURANCE_RAW === undefined) {
+  if (!RESUME_MODE && REVIEW_ASSURANCE_RAW === undefined && REVIEW_ASSURANCE_SOURCE === null) {
     try {
       REVIEW_ASSURANCE = extractReviewAssuranceFromPrompt(taskPrompt) || REVIEW_ASSURANCE;
     } catch (error) {
@@ -1767,7 +1848,7 @@ async function main() {
       },
     },
   };
-  const routingDecision = resolveRoutingDecision({
+  let routingDecision = resolveRoutingDecision({
     policy: effectivePolicy.policy || {},
     cliTags: ROUTING_TAGS,
     taskProfile: manifest?.advisory?.guidance?.task_profile_summary || null,
@@ -1780,6 +1861,7 @@ async function main() {
     changedFiles: collectChangedFilesForRouting(RESUME_MODE ? wtPath : repoRoot, baseBranch),
     testCommands: TEST_COMMAND ? [TEST_COMMAND] : [],
   });
+  routingDecision = applyPresetAdvisoryToRoutingDecision(routingDecision, routePlan);
 
   // --- Dry run ---
   if (DRY_RUN) {
