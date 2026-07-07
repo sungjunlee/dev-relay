@@ -55,9 +55,7 @@ Fast path: bypass relay-ready only for one relay-ready task with a stable review
 
 ## Step 2: Plan
 
-**Always build a rubric.** Follow relay-plan's process: read task, recover Done Criteria, build rubric, emit handoff artifacts. Do NOT dispatch from relay-plan; Step 3 handles dispatch.
-
-Write the dispatch prompt and rubric YAML to temp files such as `/tmp/dispatch-<N>.md` and `/tmp/rubric-<N>.yaml`.
+**Always build a rubric.** Follow relay-plan's process: read task, recover Done Criteria, build rubric, emit handoff artifacts. Do NOT dispatch from relay-plan; Step 3 handles dispatch. Write the dispatch prompt and rubric YAML to temp files such as `/tmp/dispatch-<N>.md` and `/tmp/rubric-<N>.yaml`.
 
 ## Step 3: Dispatch (relay-dispatch)
 
@@ -80,14 +78,11 @@ node "${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/reconcile-run.js" --rep
 node "${RELAY_SKILL_ROOT:-skills}/relay/scripts/run-preflight.js" --stage review --repo . --run-id "$RUN_ID" --json
 ```
 
-Wait for completion. Check the manifest/result:
-- `status: "completed"` and `runState: "internal_review_pending"` → proceed to Step 4
-- `status: "completed-with-warning"` and `runState: "internal_review_pending"` → executor timed out but made progress; check worktree, proceed to Step 4
+Check the manifest/result:
+- `status: "completed"`/`"completed-with-warning"` and `runState: "internal_review_pending"` → proceed to Step 4 (on warning, the executor timed out but made progress; check the worktree)
 - `status: "failed"` and `runState: "escalated"` → inspect the dispatch error / manifest, fix and re-dispatch
 
-Capture `runId`, `manifestPath`, and `runState` from dispatch output. Do not create or look up a PR yet; publication happens only after internal review LGTM.
-
-The manifest is written under `~/.relay/runs/<repo-slug>/`. Readiness linkage is recorded there, but the run lifecycle remains execution-only. If a sprint file exists, mark the plan item in-flight.
+Capture `runId`, `manifestPath`, `runState`; do not create or look up a PR yet (publication happens only after internal review LGTM). The manifest is under `~/.relay/runs/<repo-slug>/`; if a sprint file exists, mark the plan item in-flight.
 
 ## Step 4: Review (relay-review)
 
@@ -108,9 +103,7 @@ PUBLISH_RESULT=$(node "${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/publis
 PR_NUM=$(node -e 'const r=JSON.parse(process.argv[1]); process.stdout.write(String(r.prNumber || ""));' "$PUBLISH_RESULT")
 ```
 
-Now run the post-publication review. This is the round that can advance to `ready_to_merge`; it includes PR CI/actions, GitHub review, and comment signals in the review prompt.
-
-Snapshot review state before invoking relay-review:
+Now run the post-publication review — the round that can advance to `ready_to_merge` (it folds in PR CI/actions, GitHub review, and comment signals). Snapshot review state first:
 ```bash
 REVIEW_BEFORE=$(node "${RELAY_SKILL_ROOT:-skills}/relay/scripts/run-preflight.js" \
   --stage review --repo . --run-id "$RUN_ID" --pr "$PR_NUM" --json)

@@ -373,7 +373,11 @@ let AUTO_RECOVER_COMMIT = null;
 
 function resolveDispatchRuntime(repoRoot) {
   const routeResolution = loadInitialRoutePlan(repoRoot);
-  if (!REVIEW_ASSURANCE_RAW) {
+  // Route-derived review assurance is a preset-feature behavior. No-preset
+  // dispatches must stay byte-identical (DC6): a route-intent file must not
+  // change policy.review_assurance when no --route-preset was requested; those
+  // runs fall through to prompt-derived assurance extraction as before.
+  if (!REVIEW_ASSURANCE_RAW && ROUTE_PRESET) {
     const intentReviewAssurance = nonEmptyString(routeResolution.routeIntent?.review_assurance);
     const presetReviewAssurance = nonEmptyString(routeResolution.routePlan?.route_preset?.review_assurance);
     const routeReviewAssurance = intentReviewAssurance || presetReviewAssurance;
