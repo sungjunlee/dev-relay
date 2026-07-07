@@ -748,11 +748,16 @@ function expandRoutePreset({ runIntent = null, policy = {}, routePresetName = nu
   }
 
   const reviewAssurance = nonEmptyString(preset.review_assurance);
+  // Only claim review_assurance when the preset actually applies it. When the
+  // field is already set (e.g. an explicit CLI --review-assurance seeded into the
+  // run intent), the preset must not report it as filled/applied.
+  let appliedReviewAssurance = null;
   if (reviewAssurance && !Object.prototype.hasOwnProperty.call(expanded, "review_assurance")) {
     expanded.review_assurance = reviewAssurance;
     if (!isPlainObject(expanded[ROUTE_INTENT_SOURCES_KEY])) expanded[ROUTE_INTENT_SOURCES_KEY] = {};
     expanded[ROUTE_INTENT_SOURCES_KEY].review_assurance = source;
     filled.push({ field: "review_assurance" });
+    appliedReviewAssurance = reviewAssurance;
   }
 
   return {
@@ -761,7 +766,7 @@ function expandRoutePreset({ runIntent = null, policy = {}, routePresetName = nu
       name: presetName,
       source,
       filled,
-      review_assurance: reviewAssurance || null,
+      review_assurance: appliedReviewAssurance,
     },
   };
 }

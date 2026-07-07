@@ -305,6 +305,12 @@ function loadInitialRoutePlan(repoRoot) {
     executor: EXECUTOR_ARG,
     model: MODEL,
   });
+  // An explicit CLI --review-assurance always wins. Seed it into the run intent
+  // before preset expansion so a preset cannot record itself as having filled a
+  // field the CLI overrode (keeps the persisted route-plan attribution honest).
+  if (REVIEW_ASSURANCE_RAW && !nonEmptyString(routeIntent.review_assurance)) {
+    routeIntent.review_assurance = normalizeReviewAssurance(REVIEW_ASSURANCE_RAW);
+  }
   let routePlan;
   try {
     routePlan = resolveRouteIntent({

@@ -262,6 +262,52 @@ test("dispatch persists review assurance route preset source metadata in route-p
   assert.equal(manifest.policy.review_assurance, "hardened");
 });
 
+test("dispatch keeps explicit --review-assurance over a preset in the route-plan snapshot", () => {
+  const { repoRoot, relayHome, rubricFile } = setupRepo();
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-route-preset-cli-override-bin-"));
+  writeFakeCodex(binDir);
+  writeJson(path.join(relayHome, "routes.json"), {
+    version: 2,
+    strict: true,
+    defaults: {
+      dispatch: { executor: "codex" },
+      review: { reviewer: "codex" },
+      advisory_review: null,
+    },
+    presets: {
+      hardened: { review_assurance: "hardened" },
+    },
+  });
+
+  const proc = spawnSync(process.execPath, [
+    SCRIPT, repoRoot,
+    "-b", "issue-preset-cli-override-real",
+    "-p", "preset with explicit review-assurance override",
+    "--rubric-file", rubricFile,
+    "--route-preset", "hardened",
+    "--review-assurance", "standard",
+    "--json",
+  ], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    env: { ...process.env, RELAY_HOME: relayHome, PATH: `${binDir}${path.delimiter}${process.env.PATH || ""}` },
+  });
+
+  assert.equal(proc.status, 0, proc.stderr);
+  const output = JSON.parse(proc.stdout);
+  // The explicit CLI flag wins for execution ...
+  const manifest = readManifest(output.manifestPath).data;
+  assert.equal(manifest.policy.review_assurance, "standard");
+  // ... and the snapshot must not attribute review_assurance to the preset.
+  const snapshot = JSON.parse(fs.readFileSync(output.routePlanPath, "utf-8"));
+  assert.equal(snapshot.route_preset.name, "hardened");
+  assert.equal(snapshot.route_preset.review_assurance, null);
+  assert.ok(
+    !snapshot.route_preset.filled.some((entry) => entry.field === "review_assurance"),
+    "preset must not claim it filled review_assurance when the CLI overrode it"
+  );
+});
+
 test("dispatch denied route intent fails before executor invocation", () => {
   const { root, repoRoot, relayHome, rubricFile } = setupRepo();
   writePolicy(relayHome, {
