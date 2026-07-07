@@ -82,6 +82,7 @@ const FLAGS = [
   { flag: "--reasoning", kind: VALUE, mode: MODE_PARSED, valueName: "<level>",
     allowedValues: ["none", "minimal", "low", "medium", "high", "xhigh"],
     rationale: "Codex reasoning_effort override; closed selector over codex CLI levels." },
+  { flag: "--reconcile", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Explicit opt-in to mutate dead dispatched runs during doctor/preflight reconciliation." },
   { flag: "--reconcile-merged", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Reconcile merged drift for ready_to_merge runs with merge evidence." },
   { flag: "--register", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Presence flag; no value is consumed." },
   { flag: "--repeated-issue-count", kind: VALUE, mode: MODE_PARSED, valueName: "<n>", rationale: "Numeric review field; flag-like following tokens should mean the value is missing." },
@@ -196,7 +197,7 @@ const COMMAND_FLAGS = {
   "relay-config": [
     "--profile", "--effective", "--phase", "--executor", "--reviewer", "--model",
     "--repo", "--dispatch", "--review", "--advisory-review", "--route-intent-file",
-    "--json", "--help",
+    "--reconcile", "--json", "--help",
   ],
   "rebrand-evidence": [
     "--repo", "--run-id", "--manifest", "--reason", "--dry-run", "--json", "--help",

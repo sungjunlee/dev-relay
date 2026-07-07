@@ -66,7 +66,7 @@ function buildRunReconcileAdvisory({ repoRoot, manifestPath, data, mutate = fals
   };
 }
 
-function listDeadDispatchedRunAdvisories(repoRoot) {
+function listDeadDispatchedRunAdvisories(repoRoot, { mutate = false } = {}) {
   const advisories = [];
   for (const manifestPath of listManifestPaths(repoRoot)) {
     let record;
@@ -79,7 +79,7 @@ function listDeadDispatchedRunAdvisories(repoRoot) {
       repoRoot,
       manifestPath,
       data: record.data,
-      mutate: false,
+      mutate,
     });
     if (!advisory.required) continue;
     advisories.push({
@@ -88,6 +88,7 @@ function listDeadDispatchedRunAdvisories(repoRoot) {
       runId: advisory.runId,
       manifestPath,
       leaseStatus: advisory.lease_status?.reason || null,
+      mutated: advisory.mutated,
       reconcile: advisory.verdict,
     });
   }
