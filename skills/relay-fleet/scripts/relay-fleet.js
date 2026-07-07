@@ -496,6 +496,23 @@ function findRunRecordForLeaf(records, leaf) {
   }) || null;
 }
 
+function findFleetChild(fleet, leafRef) {
+  return fleet.children.find((child) => child.leaf_ref === leafRef) || null;
+}
+
+function shouldAdoptRunRecord(fleet, leafRef, record) {
+  const existing = findFleetChild(fleet, leafRef);
+  if (
+    existing
+    && existing.run_id === record.data.run_id
+    && record.data.state === RUN_STATES.DISPATCHED
+    && existing.dispatch_status !== DISPATCH_STATUS.DISPATCHED
+  ) {
+    return false;
+  }
+  return true;
+}
+
 function issueLockHeld(repoRoot, fleetId, leaf) {
   try {
     const lock = acquireIssueLock({
@@ -519,6 +536,7 @@ function reconcileFleet(repoRoot, fleetId, leaves) {
   for (const record of records) {
     const leafRef = runRecordLeafRef(record);
     if (!leafRef || !record.data?.run_id) continue;
+    if (!shouldAdoptRunRecord(fleet, leafRef, record)) continue;
     fleet = setFleetChild(repoRoot, fleetId, {
       leaf_ref: leafRef,
       run_id: record.data.run_id,
@@ -621,12 +639,27 @@ function reconcileDryRun(repoRoot, runId) {
   }
 }
 
-async function waitForDetachedDispatchProgress({ repoRoot, runId, leaf, options, isInterrupted }) {
+function reconcileMutating(repoRoot, runId) {
+  try {
+    return runReconcile({ repoRoot, runId, mutate: true });
+  } catch (error) {
+    return {
+      status: "error",
+      error: error.message,
+    };
+  }
+}
+
+function detachedSupervisorIsAlive(repoRoot, fleetId, leaf) {
+  return Boolean(fleetId && leaf?.leaf_ref && runtimeChildIsAlive(repoRoot, fleetId, leaf.leaf_ref));
+}
+
+async function waitForDetachedDispatchProgress({ repoRoot, fleetId, runId, leaf, options, isInterrupted }) {
   const deadline = Date.now() + dispatchPollTimeoutMs(leaf, options);
   let lastReconcile = null;
   while (Date.now() < deadline) {
     if (isInterrupted()) {
-      return { status: "skipped_interrupted", run_id: runId, reconcile: lastReconcile };
+      return { status: "skipped_interrupted", run_id: runId, reconcile: lastReconcile, keep_runtime: true };
     }
 
     const runState = readRunState(repoRoot, runId);
@@ -636,17 +669,64 @@ async function waitForDetachedDispatchProgress({ repoRoot, runId, leaf, options,
 
     if (runState === RUN_STATES.DISPATCHED) {
       lastReconcile = reconcileDryRun(repoRoot, runId);
+      if (lastReconcile.status === "error") {
+        return {
+          status: "dispatch_reconcile_error",
+          run_id: runId,
+          run_state: runState,
+          reconcile: lastReconcile,
+          keep_runtime: detachedSupervisorIsAlive(repoRoot, fleetId, leaf),
+        };
+      }
+      if (lastReconcile.rowName === "lease_live_timed_out") {
+        return {
+          status: "dispatch_timeout",
+          run_id: runId,
+          run_state: runState,
+          reconcile: lastReconcile,
+          keep_runtime: true,
+        };
+      }
       if (lastReconcile.rowName === "dead_with_result_or_work") {
-        const healed = runReconcile({ repoRoot, runId, mutate: true });
+        const healed = reconcileMutating(repoRoot, runId);
+        if (healed.status === "error") {
+          return {
+            status: "dispatch_reconcile_error",
+            run_id: runId,
+            run_state: runState,
+            reconcile: healed,
+            keep_runtime: detachedSupervisorIsAlive(repoRoot, fleetId, leaf),
+          };
+        }
         return {
           status: healed.state === RUN_STATES.DISPATCHED ? "dispatch_reconcile_incomplete" : "dispatched",
           run_id: runId,
           run_state: healed.state,
           reconcile: healed,
+          keep_runtime: healed.state === RUN_STATES.DISPATCHED
+            && detachedSupervisorIsAlive(repoRoot, fleetId, leaf),
         };
       }
       if (lastReconcile.rowName === "dead_no_result_no_work") {
-        const healed = runReconcile({ repoRoot, runId, mutate: true });
+        if (detachedSupervisorIsAlive(repoRoot, fleetId, leaf)) {
+          return {
+            status: "dispatch_poll_timeout",
+            run_id: runId,
+            run_state: runState,
+            reconcile: lastReconcile,
+            keep_runtime: true,
+          };
+        }
+        const healed = reconcileMutating(repoRoot, runId);
+        if (healed.status === "error") {
+          return {
+            status: "dispatch_reconcile_error",
+            run_id: runId,
+            run_state: runState,
+            reconcile: healed,
+            keep_runtime: false,
+          };
+        }
         return {
           status: "dispatch_interrupted",
           run_id: runId,
@@ -672,7 +752,22 @@ async function waitForDetachedDispatchProgress({ repoRoot, runId, leaf, options,
     run_id: runId,
     run_state: readRunState(repoRoot, runId),
     reconcile: lastReconcile,
+    keep_runtime: detachedSupervisorIsAlive(repoRoot, fleetId, leaf),
   };
+}
+
+function detachedDispatchSucceeded(progress) {
+  return progress?.status === "dispatched";
+}
+
+function detachedDispatchKeepsRuntime(progress) {
+  return progress?.keep_runtime === true || progress?.status === "skipped_interrupted";
+}
+
+function dispatchStatusForDetachedProgress(progress) {
+  if (detachedDispatchSucceeded(progress)) return DISPATCH_STATUS.DISPATCHED;
+  if (detachedDispatchKeepsRuntime(progress)) return DISPATCH_STATUS.DISPATCHING;
+  return DISPATCH_STATUS.PENDING;
 }
 
 function buildReviewArgs({ repoRoot, runId, options }) {
@@ -1149,12 +1244,15 @@ async function spawnDispatchForLeaf({ repoRoot, fleetId, leaf, options, activeCh
   }
 
   if (!runId || launch.code !== 0) {
+    const keepRuntime = Boolean(runId && payload?.supervisorPid);
     setFleetChild(repoRoot, fleetId, {
       leaf_ref: leaf.leaf_ref,
       run_id: runId,
-      dispatch_status: runId ? DISPATCH_STATUS.DISPATCHED : DISPATCH_STATUS.DISPATCH_FAILED_PRE_MANIFEST,
+      dispatch_status: runId
+        ? (keepRuntime ? DISPATCH_STATUS.DISPATCHING : DISPATCH_STATUS.PENDING)
+        : DISPATCH_STATUS.DISPATCH_FAILED_PRE_MANIFEST,
     });
-    if (runId && payload?.supervisorPid) {
+    if (keepRuntime) {
       upsertRuntimeProcess(repoRoot, fleetId, leaf.leaf_ref, { pid: payload.supervisorPid }, {
         phase: "dispatch",
         run_id: runId,
@@ -1190,18 +1288,19 @@ async function spawnDispatchForLeaf({ repoRoot, fleetId, leaf, options, activeCh
 
   const progress = await waitForDetachedDispatchProgress({
     repoRoot,
+    fleetId,
     runId,
     leaf,
     options,
     isInterrupted,
   });
-  if (progress.status !== "skipped_interrupted") {
+  if (!detachedDispatchKeepsRuntime(progress)) {
     removeRuntimeChild(repoRoot, fleetId, leaf.leaf_ref);
   }
   setFleetChild(repoRoot, fleetId, {
     leaf_ref: leaf.leaf_ref,
     run_id: runId,
-    dispatch_status: DISPATCH_STATUS.DISPATCHED,
+    dispatch_status: dispatchStatusForDetachedProgress(progress),
   });
 
   return {
@@ -1241,6 +1340,10 @@ async function runPool(items, limit, worker) {
   });
   await Promise.all(workers);
   return results;
+}
+
+function dispatchFanoutFailed(children) {
+  return children.some((child) => child?.status !== "dispatched");
 }
 
 // Mirrors skills/relay-merge/scripts/finalize-run.js's fetchDefaultBranchName
@@ -1640,6 +1743,7 @@ async function runFleet(options) {
     const operatorAttention = buildOperatorAttention(summary, { repoRoot, fleetId });
     const preManifestFailures = summary.children
       .some((child) => child.dispatch_status === DISPATCH_STATUS.DISPATCH_FAILED_PRE_MANIFEST);
+    const dispatchFailures = dispatchFanoutFailed(children);
     if (options.resume && summary.children.some(childNeedsReviewLoop)) {
       const reviewResult = await reviewFleet({
         repoRoot,
@@ -1652,13 +1756,13 @@ async function runFleet(options) {
         .some((child) => child.dispatch_status === DISPATCH_STATUS.DISPATCH_FAILED_PRE_MANIFEST);
       return {
         ...reviewResult,
-        ok: reviewResult.ok && !reviewPreManifestFailures,
+        ok: reviewResult.ok && !reviewPreManifestFailures && !dispatchFailures,
         fleetManifestPath: manifestPath,
         dispatch_children: children,
       };
     }
     return {
-      ok: !interrupted && !preManifestFailures,
+      ok: !interrupted && !preManifestFailures && !dispatchFailures,
       interrupted,
       fleet_id: fleetId,
       fleetManifestPath: manifestPath,

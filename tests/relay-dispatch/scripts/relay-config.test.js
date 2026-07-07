@@ -148,6 +148,17 @@ function writeDeadDispatchedRun(repoRoot, relayHome, runId = "issue-802-20260707
   });
 }
 
+function writeHostMismatchedLease(manifestPath, runId) {
+  const runDir = path.join(path.dirname(manifestPath), runId);
+  fs.writeFileSync(path.join(runDir, "lease.json"), JSON.stringify({
+    pid: process.pid,
+    pgid: process.pid,
+    host: "other-host.example.test",
+    started_at: new Date().toISOString(),
+    timeout_s: 60,
+  }, null, 2), "utf-8");
+}
+
 test("init --profile company writes strict global routes config without optional scaffolding", () => {
   const relayHome = tempDir();
 
@@ -324,6 +335,30 @@ test("doctor surfaces dead dispatched runs as advisory reconcile findings", () =
     "remove_lease_if_present",
   ]);
   assert.deepEqual(withRelayHome(relayHome, () => readRunEvents(repoRoot, deadRun.runId)), []);
+});
+
+test("doctor surfaces host-mismatched dispatched run leases as advisory reconcile findings", () => {
+  const relayHome = tempDir();
+  const repoRoot = tempDir("relay-config-doctor-host-mismatch-run-");
+  initGitRepo(repoRoot);
+  writeJson(path.join(relayHome, "policy.json"), {
+    ...buildDefaultRelayPolicy(),
+    profile: "global",
+  });
+  const deadRun = writeDeadDispatchedRun(repoRoot, relayHome);
+  writeHostMismatchedLease(deadRun.manifestPath, deadRun.runId);
+
+  const result = runConfig(["doctor", "--json"], { relayHome, cwd: repoRoot });
+
+  assert.equal(result.status, 0, result.combined);
+  const output = parseJson(result);
+  const finding = output.advisories.find((entry) => entry.kind === "dead_dispatched_run");
+  assert.ok(finding, "doctor should include a dead_dispatched_run advisory");
+  assert.equal(finding.runId, deadRun.runId);
+  assert.equal(finding.leaseStatus, "host_mismatch");
+  assert.equal(finding.mutated, false);
+  assert.equal(finding.reconcile.rowName, "dead_no_result_no_work");
+  assert.equal(finding.reconcile.dryRun, true);
 });
 
 test("doctor mutates dead dispatched run reconciliation only with explicit flag", () => {

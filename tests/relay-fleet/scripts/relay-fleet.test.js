@@ -343,7 +343,7 @@ async function main() {
       },
     };
     manifest = updateManifestState(manifest, STATES.DISPATCHED, "await_dispatch_result");
-    if (plan.run_state === "review_pending") {
+    if (plan.run_state !== "dispatched") {
       manifest = updateManifestState(manifest, STATES.REVIEW_PENDING, "await_review");
     }
     writeManifest(manifestPath, manifest);
@@ -463,7 +463,7 @@ if (!plan.stall) {
       },
     };
   }
-  if (plan.to_state === "ready_to_merge") {
+  if (plan.to_state === "ready_to_merge" || plan.to_state === undefined) {
     manifest = updateManifestState(manifest, STATES.READY_TO_MERGE, "fleet_fake_review_pass");
   } else if (plan.to_state === "escalated") {
     manifest = updateManifestState(manifest, STATES.ESCALATED, "fleet_fake_review_escalated");
@@ -547,6 +547,7 @@ test("relay-fleet records and resumes a child dispatch that fails before manifes
   const { relayHome, repoRoot } = setupRepo("relay-fleet-premanifest-");
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "fleet-fake-"));
   const dispatchScript = writeFakeDispatchScript(tmpDir);
+  const reviewScript = writeFakeReviewScript(tmpDir);
   const configPath = path.join(tmpDir, "config.json");
   const leaf = makeLeaf(repoRoot, 1, { issue_number: 483 });
   const leavesFile = writeLeavesFile(repoRoot, [leaf]);
@@ -575,6 +576,7 @@ test("relay-fleet records and resumes a child dispatch that fails before manifes
     "--fleet-id", "fleet-premanifest",
     "--resume",
     "--dispatch-script", dispatchScript,
+    "--review-script", reviewScript,
     "--json",
   ], {
     relayHome,
@@ -621,14 +623,17 @@ test("relay-fleet launches leaf dispatch with --detach and leaves child progress
   });
   const elapsedMs = Date.now() - started;
 
-  assert.equal(result.status, 0, `${result.stderr}\n${result.stdout}`);
+  assert.notEqual(result.status, 0, `${result.stderr}\n${result.stdout}`);
+  const output = JSON.parse(result.stdout);
+  assert.equal(output.ok, false);
+  assert.equal(output.children[0].status, "dispatch_poll_timeout");
   assert.ok(elapsedMs < 4500, `fleet should not wait for detached child tail delay; elapsed=${elapsedMs}`);
   const logs = readJsonLines(logPath);
   assert.ok(logs.some((entry) => entry.args.includes("--detach")), "fleet must pass --detach to dispatch.js");
   assert.ok(logs.some((entry) => entry.detachedChild), "fake detached child must start outside the fleet launcher");
   const fleet = readFleetManifest(repoRoot, "fleet-detach").data;
   const child = fleet.children[0];
-  assert.equal(child.dispatch_status, DISPATCH_STATUS.DISPATCHED);
+  assert.equal(child.dispatch_status, DISPATCH_STATUS.DISPATCHING);
   assert.match(child.run_id, /^issue-802-/);
   const manifestPath = getManifestPath(repoRoot, child.run_id);
   const manifest = readManifest(manifestPath).data;
@@ -637,6 +642,52 @@ test("relay-fleet launches leaf dispatch with --detach and leaves child progress
   await waitFor(() => readManifest(manifestPath).data.state === RUN_STATES.REVIEW_PENDING, {
     timeoutMs: 8000,
     intervalMs: 100,
+  });
+});
+
+test("relay-fleet keeps live incomplete detached dispatches retry-safe", async () => {
+  const { relayHome, repoRoot } = setupRepo("relay-fleet-incomplete-detach-");
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "fleet-fake-"));
+  const dispatchScript = writeFakeDispatchScript(tmpDir);
+  const configPath = path.join(tmpDir, "config.json");
+  const leaf = makeLeaf(repoRoot, 1, { issue_number: 803 });
+  const leavesFile = writeLeavesFile(repoRoot, [leaf]);
+  writeJson(configPath, {
+    [leaf.branch]: {
+      delay_after_manifest_ms: 1500,
+      run_state: "dispatched",
+      transition_after_delay_to: "review_pending",
+    },
+  });
+
+  const result = runFleet([
+    "--repo", repoRoot,
+    "--fleet-id", "fleet-incomplete-detach",
+    "--leaves-file", leavesFile,
+    "--dispatch-script", dispatchScript,
+    "--json",
+  ], {
+    relayHome,
+    env: {
+      FAKE_DISPATCH_CONFIG: configPath,
+      RELAY_FLEET_DISPATCH_POLL_TIMEOUT_MS: "300",
+    },
+  });
+
+  assert.notEqual(result.status, 0, `${result.stderr}\n${result.stdout}`);
+  const output = JSON.parse(result.stdout);
+  assert.equal(output.ok, false);
+  assert.equal(output.children[0].status, "dispatch_poll_timeout");
+  const fleet = readFleetManifest(repoRoot, "fleet-incomplete-detach").data;
+  const child = fleet.children[0];
+  assert.equal(child.dispatch_status, DISPATCH_STATUS.DISPATCHING);
+  assert.match(child.run_id, /^issue-803-/);
+  assert.ok(fs.existsSync(getFleetRuntimePath(repoRoot, "fleet-incomplete-detach")));
+
+  const manifestPath = getManifestPath(repoRoot, child.run_id);
+  await waitFor(() => readManifest(manifestPath).data.state === RUN_STATES.REVIEW_PENDING, {
+    timeoutMs: 5000,
+    intervalMs: 50,
   });
 });
 
@@ -719,6 +770,7 @@ test("SIGINT during fan-out leaves a consistent fleet manifest and resume recove
   const { relayHome, repoRoot } = setupRepo("relay-fleet-sigint-");
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "fleet-fake-"));
   const dispatchScript = writeFakeDispatchScript(tmpDir);
+  const reviewScript = writeFakeReviewScript(tmpDir);
   const configPath = path.join(tmpDir, "config.json");
   const leaf = makeLeaf(repoRoot, 1, { issue_number: 502 });
   const leavesFile = writeLeavesFile(repoRoot, [leaf]);
@@ -762,6 +814,7 @@ test("SIGINT during fan-out leaves a consistent fleet manifest and resume recove
     "--fleet-id", "fleet-sigint",
     "--resume",
     "--dispatch-script", dispatchScript,
+    "--review-script", reviewScript,
     "--json",
   ], {
     relayHome,
@@ -779,6 +832,7 @@ test("resume while a child subprocess is still running does not double-dispatch"
   const { relayHome, repoRoot } = setupRepo("relay-fleet-running-");
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "fleet-fake-"));
   const dispatchScript = writeFakeDispatchScript(tmpDir);
+  const reviewScript = writeFakeReviewScript(tmpDir);
   const logPath = path.join(tmpDir, "dispatch.log");
   const configPath = path.join(tmpDir, "config.json");
   const leaf = makeLeaf(repoRoot, 1, { issue_number: 503 });
@@ -811,6 +865,7 @@ test("resume while a child subprocess is still running does not double-dispatch"
     "--fleet-id", "fleet-running",
     "--resume",
     "--dispatch-script", dispatchScript,
+    "--review-script", reviewScript,
     "--json",
   ], {
     relayHome,

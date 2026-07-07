@@ -10,6 +10,7 @@ const { getRunLeaseStatus } = require("./run-runtime-state");
 
 const DEAD_DISPATCH_LEASE_REASONS = new Set([
   "absent",
+  "host_mismatch",
   "process_group_dead",
   "corrupt",
 ]);
