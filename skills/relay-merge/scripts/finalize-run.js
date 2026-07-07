@@ -32,6 +32,7 @@
  */
 
 const path = require("path");
+const fs = require("fs");
 const {
   getExpectedManifestRepoRoot,
   getRunDir,
@@ -46,6 +47,7 @@ const {
 } = require("../../relay-dispatch/scripts/manifest/lifecycle");
 const {
   getActorName,
+  listManifestRecords,
   writeManifest,
 } = require("../../relay-dispatch/scripts/manifest/store");
 const { resolveManifestRecord } = require("../../relay-dispatch/scripts/relay-resolver");
@@ -160,6 +162,21 @@ function buildStackedBaseOverrideAuditFields(stackedBaseGuard, prNumber, headSha
   };
 }
 
+// Fetch only the inputs the fresh review gate needs, without pulling
+// statusCheckRollup/mergeable/base. Used on the already-merged retry path where
+// CI, mergeability, and stacked-base checks are moot but the review marker must
+// still be validated.
+function fetchReviewContext(repoPath, prNumber) {
+  const raw = execGh(repoPath, ["pr", "view", String(prNumber),
+    "--json", "comments,commits,headRefOid"]);
+  const parsed = JSON.parse(raw);
+  return {
+    comments: parsed.comments || [],
+    commits: parsed.commits || [],
+    headRefOid: parsed.headRefOid || null,
+  };
+}
+
 function fetchPreMergeContext(repoPath, prNumber) {
   const raw = execGh(repoPath, ["pr", "view", String(prNumber),
     "--json", "baseRefName,comments,commits,mergeable,statusCheckRollup,headRefOid"]);
@@ -173,6 +190,53 @@ function fetchPreMergeContext(repoPath, prNumber) {
     headRefOid: parsed.headRefOid || null,
     checks,
     unsafeChecks: checks.filter(isUnsafeStatusCheck),
+  };
+}
+
+// Enforce the skip-review rubric gate. Throws (after journaling MERGE_BLOCKED)
+// when the operator's --skip-review is not admissible. Shared by the normal and
+// already-merged finalize paths so both apply the identical audit check.
+function assertSkipReviewGate(repoPath, safeData, { prNumber, currentHeadSha, dryRun, skipReviewRubricAudit }) {
+  const skipReviewFailure = buildSkipReviewGateFailure(prNumber, skipReviewRubricAudit);
+  if (!skipReviewFailure) {
+    return;
+  }
+  if (!dryRun) {
+    appendRunEvent(repoPath, safeData.run_id, {
+      event: EVENTS.MERGE_BLOCKED,
+      state_from: safeData.state,
+      state_to: safeData.state,
+      head_sha: currentHeadSha,
+      round: safeData.review?.rounds || null,
+      reason: skipReviewFailure.status,
+    });
+  }
+  throw new Error(`Fresh review gate failed: ${skipReviewFailure.status}`);
+}
+
+// Record the operator skip-review audit trail (SKIP_REVIEW event + relay-review-skip
+// PR comment) and return the skipped reviewGate. Shared by the normal and
+// already-merged finalize paths so the audit is identical on both.
+function recordSkipReviewAudit(repoPath, safeData, { prNumber, currentHeadSha, dryRun, skipReviewReason, skipReviewRubricStatus, skipReviewRubricAudit }) {
+  if (!dryRun) {
+    const skipComment = buildSkipComment(skipReviewReason, skipReviewRubricAudit);
+    appendRunEvent(repoPath, safeData.run_id, {
+      event: EVENTS.SKIP_REVIEW,
+      state_from: safeData.state,
+      state_to: safeData.state,
+      head_sha: currentHeadSha,
+      round: safeData.review?.rounds || null,
+      reason: skipReviewReason,
+      rubric_status: skipReviewRubricStatus,
+    });
+    execGh(repoPath, ["pr", "comment", String(prNumber), "--body", skipComment]);
+  }
+  return {
+    status: "skipped",
+    pr: prNumber,
+    reason: skipReviewReason,
+    rubricStatus: skipReviewRubricStatus,
+    readyToMerge: safeData.state === STATES.READY_TO_MERGE,
   };
 }
 
@@ -218,6 +282,21 @@ function fetchPrMergeState(repoPath, prNumber) {
     state: parsed.state || null,
     mergeCommitSha: parsed.mergeCommit?.oid || null,
   };
+}
+
+function isMergedPrState(prMergeState) {
+  return prMergeState?.state === "MERGED";
+}
+
+function manifestHeadShaFallback(manifestData) {
+  return manifestData?.git?.head_sha || manifestData?.review?.last_reviewed_sha || null;
+}
+
+function resolveCurrentHeadSha(worktreePath, manifestData) {
+  if (worktreePath && fs.existsSync(worktreePath)) {
+    return execGit(worktreePath, ["rev-parse", "HEAD"]);
+  }
+  return manifestHeadShaFallback(manifestData);
 }
 
 function fetchDefaultBranchName(repoPath) {
@@ -417,6 +496,146 @@ function deleteRemoteBranch(repoPath, branch) {
   }
 }
 
+function runFinalizeCleanup({
+  repoRoot,
+  data,
+  dryRun,
+  deleteMergedBranch,
+}) {
+  const worktreePath = data?.paths?.worktree || null;
+  const worktreeAlreadyMissing = Boolean(worktreePath) && !fs.existsSync(worktreePath);
+  if (!worktreeAlreadyMissing) {
+    return runCleanup({
+      repoRoot,
+      data,
+      dryRun,
+      deleteMergedBranch,
+    });
+  }
+
+  const cleanupInput = {
+    ...data,
+    paths: {
+      ...(data.paths || {}),
+      worktree: null,
+    },
+  };
+  if (!dryRun) {
+    try {
+      execGit(repoRoot, ["worktree", "prune"]);
+    } catch {
+      // runCleanup records the cleanup failure if stale registration cleanup
+      // still prevents branch deletion or final pruning.
+    }
+  }
+  const cleanupResult = runCleanup({
+    repoRoot,
+    data: cleanupInput,
+    dryRun,
+    deleteMergedBranch,
+  });
+
+  return {
+    updatedData: {
+      ...cleanupResult.updatedData,
+      paths: {
+        ...(cleanupResult.updatedData.paths || {}),
+        worktree: worktreePath,
+      },
+    },
+    summary: {
+      ...cleanupResult.summary,
+      worktreePath,
+      worktreeExistsBefore: false,
+      worktreeRemoved: true,
+    },
+  };
+}
+
+function hasExplicitBranchPrSelector({ manifestPath, runId, branch, prNumber }) {
+  return !manifestPath && !runId && branch && prNumber !== undefined && prNumber !== null;
+}
+
+function matchesBranchPr(record, branch, prNumber) {
+  return record?.data?.git?.working_branch === branch
+    && Number(record?.data?.git?.pr_number || 0) === Number(prNumber);
+}
+
+// A merged run is a crash-resume target only while its finalize cleanup or
+// post-merge bookkeeping is still pending. A run that completed (next_action=done
+// or cleanup already succeeded) must not be re-selected — re-running it would
+// duplicate post-merge side effects (remote branch delete, issue close, durable
+// learnings commit).
+function mergedRetryStillPending(record) {
+  const data = record?.data || {};
+  if (data.next_action === "done") {
+    return false;
+  }
+  return data.cleanup?.status !== "succeeded";
+}
+
+function resolveMergedBranchPrRetryRecord({ repoRoot, branch, prNumber }) {
+  const exactMatches = listManifestRecords(repoRoot)
+    .filter((record) => matchesBranchPr(record, branch, prNumber));
+  const mergedMatches = exactMatches
+    .filter((record) => record?.data?.state === STATES.MERGED);
+  const pendingMerged = mergedMatches.filter(mergedRetryStillPending);
+
+  if (exactMatches.length === 1 && pendingMerged.length === 1) {
+    return resolveManifestRecord({
+      repoRoot,
+      runId: pendingMerged[0].data.run_id,
+    });
+  }
+
+  if (exactMatches.length > 1 && mergedMatches.length === exactMatches.length && pendingMerged.length > 1) {
+    const runIds = pendingMerged
+      .map((record) => record?.data?.run_id || path.basename(record?.manifestPath || "unknown", ".md"))
+      .join(", ");
+    throw new Error(
+      `Ambiguous merged relay manifest for branch '${branch}' + pr '${prNumber}' ` +
+      `(${pendingMerged.length} candidates): ${runIds}. Pass --run-id or --manifest explicitly.`
+    );
+  }
+
+  return null;
+}
+
+function resolveFinalizeManifestRecord({
+  repoRoot,
+  manifestPath,
+  runId,
+  branch,
+  prNumber,
+  includeTerminal,
+}) {
+  if (hasExplicitBranchPrSelector({ manifestPath, runId, branch, prNumber })) {
+    const retryRecord = resolveMergedBranchPrRetryRecord({ repoRoot, branch, prNumber });
+    if (retryRecord) {
+      return retryRecord;
+    }
+  }
+
+  try {
+    return resolveManifestRecord({
+      repoRoot,
+      manifestPath,
+      runId,
+      branch,
+      prNumber,
+      includeTerminal,
+    });
+  } catch (error) {
+    if (hasExplicitBranchPrSelector({ manifestPath, runId, branch, prNumber })) {
+      const retryRecord = resolveMergedBranchPrRetryRecord({ repoRoot, branch, prNumber });
+      if (retryRecord) {
+        return retryRecord;
+      }
+    }
+    throw error;
+  }
+}
+
 function resolveCurrentBranch(repoPath) {
   try {
     return execGit(repoPath, ["symbolic-ref", "--short", "HEAD"]);
@@ -604,7 +823,7 @@ function main() {
   }
 
   let branch = cliArgs.getArg("--branch");
-  let manifestRecord = resolveManifestRecord({
+  let manifestRecord = resolveFinalizeManifestRecord({
     repoRoot: repoPath,
     manifestPath: manifestArg,
     runId,
@@ -619,11 +838,12 @@ function main() {
     expectedRepoRoot: selectorExpectedRepoRoot,
     manifestPath: manifestRecord.manifestPath,
     runId: manifestRecord.data?.run_id,
+    allowMissingWorktree: true,
     caller: "finalize-run",
   });
   repoPath = validatedPaths.repoRoot;
   if ((manifestArg || runId) && !repoArg) {
-    manifestRecord = resolveManifestRecord({
+    manifestRecord = resolveFinalizeManifestRecord({
       repoRoot: repoPath,
       manifestPath: manifestArg,
       runId,
@@ -635,6 +855,7 @@ function main() {
       expectedRepoRoot: manifestArg ? undefined : repoPath,
       manifestPath: manifestRecord.manifestPath,
       runId: manifestRecord.data?.run_id,
+      allowMissingWorktree: true,
       caller: "finalize-run",
     });
   }
@@ -697,22 +918,69 @@ function main() {
   const skipReviewRubricStatus = skipReviewRubricAudit.rubricStatus;
 
   if (mergeAllowed) {
-    currentHeadSha = execGit(validatedPaths.worktree, ["rev-parse", "HEAD"]);
-    if (skipReviewReason) {
-      const skipReviewFailure = buildSkipReviewGateFailure(prNumber, skipReviewRubricAudit);
-      if (skipReviewFailure) {
-        if (!dryRun) {
-          appendRunEvent(repoPath, safeData.run_id, {
-            event: EVENTS.MERGE_BLOCKED,
-            state_from: safeData.state,
-            state_to: safeData.state,
-            head_sha: currentHeadSha,
-            round: safeData.review?.rounds || null,
-            reason: skipReviewFailure.status,
-          });
-        }
-        throw new Error(`Fresh review gate failed: ${skipReviewFailure.status}`);
+    if (!dryRun) {
+      prMergeState = fetchPrMergeState(repoPath, prNumber);
+      if (isMergedPrState(prMergeState)) {
+        mergeRecovered = true;
       }
+    }
+    const alreadyMerged = !dryRun && isMergedPrState(prMergeState);
+    if (alreadyMerged) {
+      currentHeadSha = manifestHeadShaFallback(safeData);
+    } else {
+      if (validatedPaths.worktreeMissing) {
+        validateManifestPaths(safeData.paths, {
+          expectedRepoRoot: validatedPaths.repoRoot,
+          manifestPath,
+          runId: safeData.run_id,
+          caller: "finalize-run",
+        });
+      }
+      currentHeadSha = resolveCurrentHeadSha(validatedPaths.worktree, safeData);
+    }
+    if (alreadyMerged) {
+      // The PR is already in GitHub's terminal MERGED state. Retry finalization
+      // must skip gates whose inputs disappear or are moot after merge (CI
+      // checks, mergeability, stacked base, retained worktree HEAD). It STILL
+      // runs the fresh review gate for a normal ready_to_merge finalize so a
+      // stale or advanced review marker cannot be finalized silently against an
+      // externally merged PR. Explicit operator overrides
+      // (--force-finalize-nonready, --skip-review) keep their bypass semantics.
+      if (skipReviewReason) {
+        // Preserve the operator skip-review audit trail (rubric gate +
+        // SKIP_REVIEW event + relay-review-skip comment) on the already-merged
+        // retry, while skipping the moot CI/mergeability/stacked-base checks.
+        assertSkipReviewGate(repoPath, safeData, { prNumber, currentHeadSha, dryRun, skipReviewRubricAudit });
+        reviewGate = recordSkipReviewAudit(repoPath, safeData, {
+          prNumber, currentHeadSha, dryRun, skipReviewReason, skipReviewRubricStatus, skipReviewRubricAudit,
+        });
+      } else if (!forceFinalizeNonready && safeData.state === STATES.READY_TO_MERGE) {
+        const reviewContext = fetchReviewContext(repoPath, prNumber);
+        reviewGate = evaluateReviewGate({
+          prNumber,
+          comments: reviewContext.comments,
+          commits: reviewContext.commits,
+          manifestData: safeData,
+          expectedReviewerLogin: safeData.review?.reviewer_login || null,
+          runDir: getRunDir(validatedPaths.repoRoot, safeData.run_id),
+          headRefOid: reviewContext.headRefOid,
+        });
+        if (!reviewGate.readyToMerge) {
+          if (!dryRun) {
+            appendRunEvent(repoPath, safeData.run_id, {
+              event: EVENTS.MERGE_BLOCKED,
+              state_from: safeData.state,
+              state_to: safeData.state,
+              head_sha: reviewGate.latestCommit || currentHeadSha,
+              round: safeData.review?.rounds || null,
+              reason: reviewGate.status,
+            });
+          }
+          throw new Error(`Fresh review gate failed: ${reviewGate.status}`);
+        }
+      }
+    } else if (skipReviewReason) {
+      assertSkipReviewGate(repoPath, safeData, { prNumber, currentHeadSha, dryRun, skipReviewRubricAudit });
       const preMerge = fetchPreMergeContext(repoPath, prNumber);
       stackedBaseGuard = buildStackedBaseGuard(
         repoPath,
@@ -731,26 +999,9 @@ function main() {
         });
       }
       assertStackedBaseGuard(stackedBaseGuard, prNumber);
-      reviewGate = {
-        status: "skipped",
-        pr: prNumber,
-        reason: skipReviewReason,
-        rubricStatus: skipReviewRubricStatus,
-        readyToMerge: safeData.state === STATES.READY_TO_MERGE,
-      };
-      if (!dryRun) {
-        const skipComment = buildSkipComment(skipReviewReason, skipReviewRubricAudit);
-        appendRunEvent(repoPath, safeData.run_id, {
-          event: EVENTS.SKIP_REVIEW,
-          state_from: safeData.state,
-          state_to: safeData.state,
-          head_sha: currentHeadSha,
-          round: safeData.review?.rounds || null,
-          reason: skipReviewReason,
-          rubric_status: skipReviewRubricStatus,
-        });
-        execGh(repoPath, ["pr", "comment", String(prNumber), "--body", skipComment]);
-      }
+      reviewGate = recordSkipReviewAudit(repoPath, safeData, {
+        prNumber, currentHeadSha, dryRun, skipReviewReason, skipReviewRubricStatus, skipReviewRubricAudit,
+      });
     } else if (safeData.state === STATES.READY_TO_MERGE) {
       const preMerge = fetchPreMergeContext(repoPath, prNumber);
       reviewGate = evaluateReviewGate({
@@ -835,27 +1086,29 @@ function main() {
       });
     }
 
-    prMergeState = dryRun ? prMergeState : fetchPrMergeState(repoPath, prNumber);
-    if (!dryRun && prMergeState.state !== "MERGED") {
+    if (!dryRun && !prMergeState) {
+      prMergeState = fetchPrMergeState(repoPath, prNumber);
+    }
+    if (!dryRun && !isMergedPrState(prMergeState)) {
       try {
         execGh(repoPath, ["pr", "merge", String(prNumber), mergeFlag(mergeMethod)]);
         mergePerformed = true;
         prMergeState = fetchPrMergeState(repoPath, prNumber);
       } catch (error) {
         prMergeState = fetchPrMergeState(repoPath, prNumber);
-        if (prMergeState.state !== "MERGED") {
+        if (!isMergedPrState(prMergeState)) {
           throw error;
         }
         mergeRecovered = true;
       }
-    } else if (!dryRun && prMergeState.state === "MERGED") {
+    } else if (!dryRun && isMergedPrState(prMergeState)) {
       mergeRecovered = true;
     } else if (dryRun) {
       mergePerformed = true;
     }
     // Merge queue support: if PR isn't immediately MERGED, poll for completion.
     // Repos with merge queues transition through an intermediate state before merging.
-    if (!dryRun && prMergeState.state !== "MERGED") {
+    if (!dryRun && !isMergedPrState(prMergeState)) {
       const MERGE_QUEUE_POLL_INTERVAL_MS = parseInt(process.env.RELAY_MERGE_QUEUE_POLL_MS || "30000", 10);
       const MERGE_QUEUE_MAX_POLLS = parseInt(process.env.RELAY_MERGE_QUEUE_MAX_POLLS || "60", 10);
       if (!Number.isFinite(MERGE_QUEUE_POLL_INTERVAL_MS) || MERGE_QUEUE_POLL_INTERVAL_MS < 100) {
@@ -871,7 +1124,7 @@ function main() {
       for (let i = 0; i < MERGE_QUEUE_MAX_POLLS; i++) {
         Atomics.wait(sleepBuf, 0, 0, MERGE_QUEUE_POLL_INTERVAL_MS);
         prMergeState = fetchPrMergeState(repoPath, prNumber);
-        if (prMergeState.state === "MERGED") break;
+        if (isMergedPrState(prMergeState)) break;
         if (prMergeState.state === "OPEN") {
           appendRunEvent(repoPath, safeData.run_id, {
             event: EVENTS.MERGE_BLOCKED,
@@ -886,7 +1139,7 @@ function main() {
           );
         }
       }
-      if (prMergeState.state !== "MERGED") {
+      if (!isMergedPrState(prMergeState)) {
         appendRunEvent(repoPath, safeData.run_id, {
           event: EVENTS.MERGE_BLOCKED,
           state_from: safeData.state,
@@ -900,15 +1153,6 @@ function main() {
           `PR #${prNumber} did not merge after ~${totalWaitMin} minutes in the merge queue (state=${prMergeState.state || "unknown"}). Check the GitHub merge queue page.`
         );
       }
-    }
-    if (!dryRun) {
-      const remoteDelete = deleteRemoteBranch(repoPath, branch);
-      remoteName = remoteDelete.remoteName;
-      remoteBranchDeleteAttempted = remoteDelete.attempted;
-      remoteBranchDeleted = remoteDelete.deleted;
-      remoteBranchDeleteWarning = remoteDelete.warning;
-    } else {
-      remoteBranchDeleted = true;
     }
     updated = forceFinalizeNonready
       ? forceUpdateManifestState(updated, STATES.MERGED, "manual_cleanup_required", {
@@ -943,6 +1187,22 @@ function main() {
           safeData.state
         ),
       });
+      writeManifest(manifestPath, updated, body);
+      if (process.env.RELAY_FINALIZE_ABORT_AFTER_MERGE_WRITE) {
+        throw new Error("simulated post-merge failure after merged manifest write");
+      }
+    }
+  }
+
+  if (!skipMerge && updated.state === STATES.MERGED) {
+    if (!dryRun) {
+      const remoteDelete = deleteRemoteBranch(repoPath, branch);
+      remoteName = remoteDelete.remoteName;
+      remoteBranchDeleteAttempted = remoteDelete.attempted;
+      remoteBranchDeleted = remoteDelete.deleted;
+      remoteBranchDeleteWarning = remoteDelete.warning;
+    } else {
+      remoteBranchDeleted = true;
     }
   }
 
@@ -973,7 +1233,7 @@ function main() {
     }
   }
 
-  const cleanupResult = runCleanup({
+  const cleanupResult = runFinalizeCleanup({
     repoRoot: repoPath,
     data: updated,
     dryRun,
