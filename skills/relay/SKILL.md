@@ -57,12 +57,19 @@ If the user names an executor whose route or model cannot resolve, invoke `relay
 ```bash
 node "${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/dispatch.js" . \
   -b issue-<N> --prompt-file /tmp/dispatch-<N>.md --rubric-file /tmp/rubric-<N>.yaml \
-  --publish-policy after-internal-review --timeout 3600
+  --publish-policy after-internal-review --timeout 3600 --detach --json
 # If relay-ready ran, append: --request-id <id> --leaf-id <id> --done-criteria-file <done-criteria-path>
 # To pin a dispatch route, append: --executor <name> --model <provider/model> or --model-hints dispatch=<provider/model>
 ```
 
-Wait for completion. Check result:
+`--detach` prints a launch receipt with `runId`, `manifestPath`, `supervisorPid`, `stdoutLog`, `stderrLog`, and `reconcileCommand`; the supervisor continues if the calling shell dies. Poll the run until it leaves `dispatched`:
+
+```bash
+node "${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/reconcile-run.js" --repo . --run-id "$RUN_ID" --dry-run --json
+node "${RELAY_SKILL_ROOT:-skills}/relay/scripts/run-preflight.js" --stage review --repo . --run-id "$RUN_ID" --json
+```
+
+Wait for completion. Check the manifest/result:
 - `status: "completed"` and `runState: "internal_review_pending"` → proceed to Step 4
 - `status: "completed-with-warning"` and `runState: "internal_review_pending"` → executor timed out but made progress; check worktree, proceed to Step 4
 - `status: "failed"` and `runState: "escalated"` → inspect the dispatch error / manifest, fix and re-dispatch

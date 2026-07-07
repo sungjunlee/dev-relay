@@ -15,6 +15,9 @@ const {
   createManifestSkeleton,
   createRunId,
   ensureRunLayout,
+  getManifestPath,
+  getRunDir,
+  readManifest,
   updateManifestState,
   writeManifest,
 } = require("../../../skills/relay-dispatch/scripts/relay-manifest");
@@ -170,6 +173,67 @@ function runRoutePreflight(fixture, args = []) {
   }));
 }
 
+function setupReviewRepo(prefix = "relay-review-preflight-") {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  const relayHome = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  execFileSync("git", ["init", "-b", "main"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
+  execFileSync("git", ["config", "user.name", "Relay Preflight Test"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
+  execFileSync("git", ["config", "user.email", "relay-preflight@example.com"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
+  fs.writeFileSync(path.join(repoRoot, "README.md"), "base\n", "utf-8");
+  execFileSync("git", ["add", "README.md"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
+  execFileSync("git", ["commit", "-m", "init"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
+  return { repoRoot, relayHome };
+}
+
+function writeDispatchedRun(repoRoot, relayHome, runId = createRunId({ issueNumber: 802, branch: "issue-802-preflight" })) {
+  const previousRelayHome = process.env.RELAY_HOME;
+  process.env.RELAY_HOME = relayHome;
+  const runDir = getRunDir(repoRoot, runId);
+  try {
+    ensureRunLayout(repoRoot, runId);
+    const worktreePath = path.join(repoRoot, "worktrees", runId);
+    let manifest = createManifestSkeleton({
+      repoRoot,
+      runId,
+      branch: "issue-802-preflight",
+      baseBranch: "main",
+      issueNumber: 802,
+      worktreePath,
+    });
+    manifest = {
+      ...manifest,
+      anchor: {
+        ...(manifest.anchor || {}),
+        rubric_path: "rubric.yaml",
+      },
+    };
+    fs.writeFileSync(path.join(runDir, "rubric.yaml"), "rubric:\n  size_class: S\n", "utf-8");
+    manifest = updateManifestState(manifest, STATES.DISPATCHED, "await_dispatch_result");
+    writeManifest(getManifestPath(repoRoot, runId), manifest);
+    return { runId, runDir, manifestPath: getManifestPath(repoRoot, runId) };
+  } finally {
+    if (previousRelayHome === undefined) delete process.env.RELAY_HOME;
+    else process.env.RELAY_HOME = previousRelayHome;
+  }
+}
+
+function runDeadReviewPreflight({ repoRoot, relayHome, runId, extraArgs = [] }) {
+  return JSON.parse(execFileSync(process.execPath, [
+    SCRIPT,
+    "--stage", "review",
+    "--repo", repoRoot,
+    "--run-id", runId,
+    ...extraArgs,
+    "--json",
+  ], {
+    encoding: "utf-8",
+    env: {
+      ...process.env,
+      RELAY_HOME: relayHome,
+    },
+  }));
+}
+
 test("route inflight readiness decision carries a non-empty instruction", () => {
   const fixture = setupRouteGhFixture({
     prCandidates: [{
@@ -187,6 +251,67 @@ test("route inflight readiness decision carries a non-empty instruction", () => 
   assert.equal(typeof result.readiness.decision.instruction, "string");
   assert.ok(result.readiness.decision.instruction.length > 0);
   assert.equal(result.readiness.decision.instruction, result.inflight.instruction);
+});
+
+test("review preflight surfaces dead dispatched lease reconcile verdict without mutating by default", () => {
+  const fixture = setupReviewRepo();
+  const { runId, manifestPath } = writeDispatchedRun(fixture.repoRoot, fixture.relayHome);
+
+  const result = runDeadReviewPreflight({ ...fixture, runId });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.stage, "review");
+  assert.equal(result.snapshot.state, STATES.DISPATCHED);
+  assert.equal(result.reconcile.required, true);
+  assert.equal(result.reconcile.mutated, false);
+  assert.equal(result.reconcile.verdict.rowName, "dead_no_result_no_work");
+  assert.equal(result.reconcile.verdict.row, 5);
+  assert.equal(result.reconcile.verdict.dryRun, true);
+  assert.deepEqual(result.reconcile.verdict.plannedActions, [
+    "journal_dispatch_interrupted_if_needed",
+    "remove_lease_if_present",
+  ]);
+  assert.match(result.reconcile.verdict.resumeCommand, /dispatch\.js --manifest /);
+  assert.equal(result.reconcile.verdict.manifestPath, manifestPath);
+
+  const record = JSON.parse(execFileSync(process.execPath, [
+    SCRIPT,
+    "--stage", "review",
+    "--repo", fixture.repoRoot,
+    "--run-id", runId,
+    "--json",
+  ], {
+    encoding: "utf-8",
+    env: {
+      ...process.env,
+      RELAY_HOME: fixture.relayHome,
+    },
+  }));
+  assert.equal(record.snapshot.state, STATES.DISPATCHED);
+});
+
+test("review preflight reports fresh status after mutating reconcile advances the run", () => {
+  const fixture = setupReviewRepo();
+  const { runId, runDir, manifestPath } = writeDispatchedRun(fixture.repoRoot, fixture.relayHome);
+  fs.writeFileSync(path.join(runDir, "dispatch-result.txt"), "executor completed\n", "utf-8");
+
+  const result = runDeadReviewPreflight({
+    ...fixture,
+    runId,
+    extraArgs: ["--reconcile", "--previous-rounds", "0"],
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.reconcile.required, true);
+  assert.equal(result.reconcile.mutated, true);
+  assert.equal(result.reconcile.verdict.rowName, "dead_with_result_or_work");
+  assert.equal(result.reconcile.verdict.dryRun, false);
+  assert.equal(result.reconcile.verdict.state, STATES.REVIEW_PENDING);
+  assert.equal(result.snapshot.state, STATES.REVIEW_PENDING);
+  assert.equal(result.ready_status.status, "not_ready");
+  assert.equal(result.ready_status.reason, "state_review_pending");
+  assert.equal(result.comparison.current.state, STATES.REVIEW_PENDING);
+  assert.equal(readManifest(manifestPath).data.state, STATES.REVIEW_PENDING);
 });
 
 test("run-preflight source does not reference AskUserQuestion", () => {

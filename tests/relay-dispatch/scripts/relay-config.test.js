@@ -12,7 +12,23 @@ const {
 const {
   validateRouteConfig,
 } = require("../../../skills/relay-dispatch/scripts/relay-routing");
-const { getProjectPolicyPath } = require("../../../skills/relay-dispatch/scripts/manifest/paths");
+const {
+  getManifestPath,
+  getProjectPolicyPath,
+  getRunDir,
+} = require("../../../skills/relay-dispatch/scripts/manifest/paths");
+const {
+  createManifestSkeleton,
+  writeManifest,
+} = require("../../../skills/relay-dispatch/scripts/manifest/store");
+const {
+  STATES,
+  updateManifestState,
+} = require("../../../skills/relay-dispatch/scripts/manifest/lifecycle");
+const {
+  EVENTS,
+  readRunEvents,
+} = require("../../../skills/relay-dispatch/scripts/relay-events");
 
 const REPO_ROOT = path.join(__dirname, "..", "..", "..");
 const SCRIPT = path.join(REPO_ROOT, "skills", "relay-dispatch", "scripts", "relay-config.js");
@@ -85,11 +101,62 @@ function initGitRepo(repoRoot) {
   execFileSync("git", ["init", "-b", "main"], { cwd: repoRoot, stdio: "pipe" });
   execFileSync("git", ["config", "user.name", "Relay Config Test"], { cwd: repoRoot, stdio: "pipe" });
   execFileSync("git", ["config", "user.email", "relay-config@example.com"], { cwd: repoRoot, stdio: "pipe" });
+  fs.writeFileSync(path.join(repoRoot, "README.md"), "base\n", "utf-8");
+  execFileSync("git", ["add", "README.md"], { cwd: repoRoot, stdio: "pipe" });
+  execFileSync("git", ["commit", "-m", "init"], { cwd: repoRoot, stdio: "pipe" });
 }
 
 function writeJson(filePath, value) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   fs.writeFileSync(filePath, JSON.stringify(value, null, 2), "utf-8");
+}
+
+function withRelayHome(relayHome, fn) {
+  const previousRelayHome = process.env.RELAY_HOME;
+  process.env.RELAY_HOME = relayHome;
+  try {
+    return fn();
+  } finally {
+    if (previousRelayHome === undefined) delete process.env.RELAY_HOME;
+    else process.env.RELAY_HOME = previousRelayHome;
+  }
+}
+
+function writeDeadDispatchedRun(repoRoot, relayHome, runId = "issue-802-20260707010101000-a1b2c3d4") {
+  return withRelayHome(relayHome, () => {
+    const runDir = getRunDir(repoRoot, runId);
+    fs.mkdirSync(runDir, { recursive: true });
+    fs.writeFileSync(path.join(runDir, "rubric.yaml"), "rubric:\n  size_class: S\n", "utf-8");
+    let manifest = createManifestSkeleton({
+      repoRoot,
+      runId,
+      branch: "issue-802-doctor",
+      baseBranch: "main",
+      issueNumber: 802,
+      worktreePath: path.join(repoRoot, "worktrees", runId),
+    });
+    manifest = {
+      ...manifest,
+      anchor: {
+        ...(manifest.anchor || {}),
+        rubric_path: "rubric.yaml",
+      },
+    };
+    manifest = updateManifestState(manifest, STATES.DISPATCHED, "await_dispatch_result");
+    writeManifest(getManifestPath(repoRoot, runId), manifest);
+    return { runId, manifestPath: getManifestPath(repoRoot, runId) };
+  });
+}
+
+function writeHostMismatchedLease(manifestPath, runId) {
+  const runDir = path.join(path.dirname(manifestPath), runId);
+  fs.writeFileSync(path.join(runDir, "lease.json"), JSON.stringify({
+    pid: process.pid,
+    pgid: process.pid,
+    host: "other-host.example.test",
+    started_at: new Date().toISOString(),
+    timeout_s: 60,
+  }, null, 2), "utf-8");
 }
 
 test("init --profile company writes strict global routes config without optional scaffolding", () => {
@@ -190,6 +257,28 @@ test("doctor uses local PATH only and labels installed disallowed harnesses as p
   );
 });
 
+test("doctor reports diagnostics instead of failing outside git checkouts", () => {
+  const relayHome = tempDir();
+  const nonRepoRoot = tempDir("relay-config-doctor-nonrepo-");
+  writeJson(path.join(relayHome, "routes.json"), {
+    version: 2,
+    strict: false,
+    routes: [],
+    denied_routes: [],
+  });
+
+  const result = runConfig(["doctor", "--json"], { relayHome, cwd: nonRepoRoot });
+
+  assert.equal(result.status, 0, result.combined);
+  const output = parseJson(result);
+  assert.equal(output.ok, true);
+  assert.equal(output.project_config.status, "error");
+  assert.match(output.project_config.error, /unable to resolve main repo root/);
+  assert.equal(output.project_routes.status, "error");
+  assert.match(output.project_routes.error, /unable to resolve main repo root/);
+  assert.deepEqual(output.advisories, []);
+});
+
 test("doctor includes project route provenance and best-effort model probes", () => {
   const relayHome = tempDir();
   const repoRoot = tempDir("relay-config-doctor-repo-");
@@ -240,6 +329,85 @@ test("doctor includes project route provenance and best-effort model probes", ()
   assert.deepEqual(opencode.model_probe.models, ["example/opencode-model-fast", "openai/gpt-5"]);
   const pi = output.tools.find((tool) => tool.name === "pi");
   assert.deepEqual(pi.model_probe.models, ["example/pi-model-fast"]);
+});
+
+test("doctor surfaces dead dispatched runs as advisory reconcile findings", () => {
+  const relayHome = tempDir();
+  const repoRoot = tempDir("relay-config-doctor-dead-run-");
+  initGitRepo(repoRoot);
+  writeJson(path.join(relayHome, "policy.json"), {
+    ...buildDefaultRelayPolicy(),
+    profile: "global",
+  });
+  const deadRun = writeDeadDispatchedRun(repoRoot, relayHome);
+
+  const result = runConfig(["doctor", "--json"], { relayHome, cwd: repoRoot });
+
+  assert.equal(result.status, 0, result.combined);
+  const output = parseJson(result);
+  const finding = output.advisories.find((entry) => entry.kind === "dead_dispatched_run");
+  assert.ok(finding, "doctor should include a dead_dispatched_run advisory");
+  assert.equal(finding.runId, deadRun.runId);
+  assert.equal(finding.manifestPath, deadRun.manifestPath);
+  assert.equal(finding.mutated, false);
+  assert.equal(finding.reconcile.rowName, "dead_no_result_no_work");
+  assert.equal(finding.reconcile.dryRun, true);
+  assert.deepEqual(finding.reconcile.plannedActions, [
+    "journal_dispatch_interrupted_if_needed",
+    "remove_lease_if_present",
+  ]);
+  assert.deepEqual(withRelayHome(relayHome, () => readRunEvents(repoRoot, deadRun.runId)), []);
+});
+
+test("doctor surfaces host-mismatched dispatched run leases as advisory reconcile findings", () => {
+  const relayHome = tempDir();
+  const repoRoot = tempDir("relay-config-doctor-host-mismatch-run-");
+  initGitRepo(repoRoot);
+  writeJson(path.join(relayHome, "policy.json"), {
+    ...buildDefaultRelayPolicy(),
+    profile: "global",
+  });
+  const deadRun = writeDeadDispatchedRun(repoRoot, relayHome);
+  writeHostMismatchedLease(deadRun.manifestPath, deadRun.runId);
+
+  const result = runConfig(["doctor", "--json"], { relayHome, cwd: repoRoot });
+
+  assert.equal(result.status, 0, result.combined);
+  const output = parseJson(result);
+  const finding = output.advisories.find((entry) => entry.kind === "dead_dispatched_run");
+  assert.ok(finding, "doctor should include a dead_dispatched_run advisory");
+  assert.equal(finding.runId, deadRun.runId);
+  assert.equal(finding.leaseStatus, "host_mismatch");
+  assert.equal(finding.mutated, false);
+  assert.equal(finding.reconcile.rowName, "dead_no_result_no_work");
+  assert.equal(finding.reconcile.dryRun, true);
+});
+
+test("doctor mutates dead dispatched run reconciliation only with explicit flag", () => {
+  const relayHome = tempDir();
+  const repoRoot = tempDir("relay-config-doctor-reconcile-run-");
+  initGitRepo(repoRoot);
+  writeJson(path.join(relayHome, "policy.json"), {
+    ...buildDefaultRelayPolicy(),
+    profile: "global",
+  });
+  const deadRun = writeDeadDispatchedRun(repoRoot, relayHome);
+
+  const result = runConfig(["doctor", "--json", "--reconcile"], { relayHome, cwd: repoRoot });
+
+  assert.equal(result.status, 0, result.combined);
+  const output = parseJson(result);
+  const finding = output.advisories.find((entry) => entry.kind === "dead_dispatched_run");
+  assert.ok(finding, "doctor should include a dead_dispatched_run advisory");
+  assert.equal(finding.runId, deadRun.runId);
+  assert.equal(finding.mutated, true);
+  assert.equal(finding.reconcile.rowName, "dead_no_result_no_work");
+  assert.equal(finding.reconcile.dryRun, false);
+  assert.equal(finding.reconcile.journaled, true);
+
+  const events = withRelayHome(relayHome, () => readRunEvents(repoRoot, deadRun.runId));
+  assert.equal(events.at(-1).event, EVENTS.DISPATCH_INTERRUPTED);
+  assert.equal(events.at(-1).reason, "reconcile_dead_no_work");
 });
 
 test("doctor reports optional Pi model-list probe timeouts without masking install or policy status", () => {

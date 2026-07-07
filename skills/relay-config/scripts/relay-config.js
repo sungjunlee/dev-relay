@@ -41,7 +41,7 @@ function printHelp() {
   console.log("  inspect [--json]");
   console.log("  init company|personal [--json]");
   console.log("  show [--json]");
-  console.log("  doctor [--json]");
+  console.log("  doctor [--json] [--reconcile]");
   console.log("  check <phase> <actor> [provider/model] [--json]");
   console.log("  add-route <pattern> --phase <csv> [--executor <name>] [--reviewer <name>] [--json]");
   console.log("  allow-route <pattern> --phase <csv> [--executor <name>] [--reviewer <name>] [--json] (deprecated; use add-route)");

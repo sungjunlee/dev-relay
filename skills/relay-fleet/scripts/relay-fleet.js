@@ -35,6 +35,7 @@ const {
   upsertFleetChild,
 } = require("../../relay-dispatch/scripts/manifest/fleet");
 const { getRequestPath, readRequestArtifact } = require("../../relay-ready/scripts/relay-request");
+const { runReconcile } = require("../../relay-dispatch/scripts/reconcile-advisory");
 
 const DEFAULT_PARALLEL = 4;
 const DEFAULT_DISPATCH_SCRIPT = path.join(__dirname, "..", "..", "relay-dispatch", "scripts", "dispatch.js");
@@ -49,6 +50,19 @@ const KNOWN_FLAGS = [
 const CLI_ARG_OPTIONS = { commandName: "relay-fleet", reservedFlags: KNOWN_FLAGS };
 const MODE_PARSED_LABEL = "[parsed]";
 const MODE_VERBATIM_LABEL = "[verbatim]";
+const DETACHED_DISPATCH_SUCCESS_STATES = new Set([
+  RUN_STATES.INTERNAL_REVIEW_PENDING,
+  RUN_STATES.REVIEW_PENDING,
+  RUN_STATES.PUBLISH_PENDING,
+  RUN_STATES.CHANGES_REQUESTED,
+  RUN_STATES.READY_TO_MERGE,
+  RUN_STATES.MERGE_BLOCKED,
+  RUN_STATES.MERGED,
+]);
+const DETACHED_DISPATCH_FAILURE_STATES = new Set([
+  RUN_STATES.ESCALATED,
+  RUN_STATES.CLOSED,
+]);
 
 class FleetInputError extends Error {
   constructor(message) {
@@ -375,6 +389,10 @@ function processIsAlive(pid) {
   }
 }
 
+function sleepAsync(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function readRuntime(repoRoot, fleetId) {
   const runtimePath = getFleetRuntimePath(repoRoot, fleetId);
   const runtime = readJsonIfExists(runtimePath, { fleet_id: fleetId, children: {} });
@@ -476,7 +494,18 @@ function listFleetRunRecords(repoRoot, fleetId) {
         return null;
       }
     })
-    .filter((record) => record && record.data?.fleet_id === fleetId);
+    .filter((record) => record && record.data?.fleet_id === fleetId)
+    .sort((left, right) => {
+      const leftKey = [
+        left.data?.timestamps?.created_at || "",
+        left.data?.run_id || path.basename(left.manifestPath),
+      ].join(" ");
+      const rightKey = [
+        right.data?.timestamps?.created_at || "",
+        right.data?.run_id || path.basename(right.manifestPath),
+      ].join(" ");
+      return rightKey.localeCompare(leftKey);
+    });
 }
 
 function runRecordLeafRef(record) {
@@ -489,6 +518,26 @@ function findRunRecordForLeaf(records, leaf) {
       || record.data?.source?.leaf_id === leaf.leaf_ref
       || record.data?.git?.working_branch === leaf.branch;
   }) || null;
+}
+
+function findFleetChild(fleet, leafRef) {
+  return fleet.children.find((child) => child.leaf_ref === leafRef) || null;
+}
+
+function detachedDispatchRunStateSucceeded(runState) {
+  return DETACHED_DISPATCH_SUCCESS_STATES.has(runState);
+}
+
+function dispatchStatusForReconciledRunState(runState) {
+  if (runState === RUN_STATES.DISPATCHED) return DISPATCH_STATUS.DISPATCHING;
+  if (detachedDispatchRunStateSucceeded(runState)) return DISPATCH_STATUS.DISPATCHED;
+  return null;
+}
+
+function dispatchStatusForRunRecordAdoption(fleet, leafRef, record) {
+  const existing = findFleetChild(fleet, leafRef);
+  if (existing?.run_id && existing.run_id !== record.data.run_id) return null;
+  return dispatchStatusForReconciledRunState(record.data.state);
 }
 
 function issueLockHeld(repoRoot, fleetId, leaf) {
@@ -514,10 +563,12 @@ function reconcileFleet(repoRoot, fleetId, leaves) {
   for (const record of records) {
     const leafRef = runRecordLeafRef(record);
     if (!leafRef || !record.data?.run_id) continue;
+    const dispatchStatus = dispatchStatusForRunRecordAdoption(fleet, leafRef, record);
+    if (!dispatchStatus) continue;
     fleet = setFleetChild(repoRoot, fleetId, {
       leaf_ref: leafRef,
       run_id: record.data.run_id,
-      dispatch_status: DISPATCH_STATUS.DISPATCHED,
+      dispatch_status: dispatchStatus,
     });
   }
 
@@ -572,6 +623,7 @@ function buildDispatchArgs({ repoRoot, fleetId, leaf, options }) {
   }
   if (leaf.register || options.register) args.push("--register");
   if (options.dryRun) args.push("--dry-run");
+  else args.push("--detach");
   return args;
 }
 
@@ -588,6 +640,229 @@ function parseDispatchJson(stdout) {
     } catch {}
   }
   return null;
+}
+
+function dispatchPollTimeoutMs(leaf, options) {
+  const rawSeconds = Number(leaf.timeout || options.timeout || 2400);
+  const seconds = Number.isFinite(rawSeconds) && rawSeconds > 0 ? rawSeconds : 2400;
+  const envOverride = Number(process.env.RELAY_FLEET_DISPATCH_POLL_TIMEOUT_MS || 0);
+  if (Number.isFinite(envOverride) && envOverride > 0) return envOverride;
+  return (seconds + 60) * 1000;
+}
+
+function readRunState(repoRoot, runId) {
+  const manifestPath = getManifestPath(repoRoot, runId);
+  if (!fs.existsSync(manifestPath)) return null;
+  return readManifest(manifestPath).data?.state || null;
+}
+
+function detachedDispatchStatusForRunState(runState) {
+  if (detachedDispatchRunStateSucceeded(runState)) return "dispatched";
+  if (DETACHED_DISPATCH_FAILURE_STATES.has(runState)) return "dispatch_terminal_failure";
+  return "dispatch_unexpected_state";
+}
+
+function detachedDispatchProgressForRunState(runId, runState, reconcile) {
+  return {
+    status: detachedDispatchStatusForRunState(runState),
+    run_id: runId,
+    run_state: runState,
+    reconcile,
+  };
+}
+
+function reconcileDryRun(repoRoot, runId) {
+  try {
+    return runReconcile({ repoRoot, runId, mutate: false });
+  } catch (error) {
+    return {
+      status: "error",
+      error: error.message,
+    };
+  }
+}
+
+function reconcileMutating(repoRoot, runId) {
+  try {
+    return runReconcile({ repoRoot, runId, mutate: true });
+  } catch (error) {
+    return {
+      status: "error",
+      error: error.message,
+    };
+  }
+}
+
+function detachedSupervisorIsAlive(repoRoot, fleetId, leaf) {
+  return Boolean(fleetId && leaf?.leaf_ref && runtimeChildIsAlive(repoRoot, fleetId, leaf.leaf_ref));
+}
+
+async function waitForDetachedDispatchProgress({ repoRoot, fleetId, runId, leaf, options, isInterrupted }) {
+  const deadline = Date.now() + dispatchPollTimeoutMs(leaf, options);
+  let lastReconcile = null;
+  while (Date.now() < deadline) {
+    if (isInterrupted()) {
+      return { status: "skipped_interrupted", run_id: runId, reconcile: lastReconcile, keep_runtime: true };
+    }
+
+    const runState = readRunState(repoRoot, runId);
+    if (runState && runState !== RUN_STATES.DISPATCHED) {
+      return detachedDispatchProgressForRunState(runId, runState, lastReconcile);
+    }
+
+    if (runState === RUN_STATES.DISPATCHED) {
+      lastReconcile = reconcileDryRun(repoRoot, runId);
+      if (lastReconcile.status === "error") {
+        return {
+          status: "dispatch_reconcile_error",
+          run_id: runId,
+          run_state: runState,
+          reconcile: lastReconcile,
+          keep_runtime: detachedSupervisorIsAlive(repoRoot, fleetId, leaf),
+        };
+      }
+      if (lastReconcile.rowName === "lease_live_timed_out") {
+        return {
+          status: "dispatch_timeout",
+          run_id: runId,
+          run_state: runState,
+          reconcile: lastReconcile,
+          keep_runtime: true,
+        };
+      }
+      if (lastReconcile.rowName === "dead_with_result_or_work") {
+        const healed = reconcileMutating(repoRoot, runId);
+        if (healed.status === "error") {
+          return {
+            status: "dispatch_reconcile_error",
+            run_id: runId,
+            run_state: runState,
+            reconcile: healed,
+            keep_runtime: detachedSupervisorIsAlive(repoRoot, fleetId, leaf),
+          };
+        }
+        return {
+          status: healed.state === RUN_STATES.DISPATCHED
+            ? "dispatch_reconcile_incomplete"
+            : detachedDispatchStatusForRunState(healed.state),
+          run_id: runId,
+          run_state: healed.state,
+          reconcile: healed,
+          keep_runtime: healed.state === RUN_STATES.DISPATCHED
+            && detachedSupervisorIsAlive(repoRoot, fleetId, leaf),
+        };
+      }
+      if (lastReconcile.rowName === "dead_no_result_no_work") {
+        if (detachedSupervisorIsAlive(repoRoot, fleetId, leaf)) {
+          return {
+            status: "dispatch_poll_timeout",
+            run_id: runId,
+            run_state: runState,
+            reconcile: lastReconcile,
+            keep_runtime: true,
+          };
+        }
+        const healed = reconcileMutating(repoRoot, runId);
+        if (healed.status === "error") {
+          return {
+            status: "dispatch_reconcile_error",
+            run_id: runId,
+            run_state: runState,
+            reconcile: healed,
+            keep_runtime: false,
+          };
+        }
+        return {
+          status: "dispatch_interrupted",
+          run_id: runId,
+          run_state: healed.state,
+          reconcile: healed,
+        };
+      }
+      if (lastReconcile.rowName === "not_dispatched") {
+        return detachedDispatchProgressForRunState(runId, lastReconcile.state, lastReconcile);
+      }
+    }
+
+    await sleepAsync(runState === RUN_STATES.DISPATCHED ? 2000 : 250);
+  }
+
+  return {
+    status: "dispatch_poll_timeout",
+    run_id: runId,
+    run_state: readRunState(repoRoot, runId),
+    reconcile: lastReconcile,
+    keep_runtime: detachedSupervisorIsAlive(repoRoot, fleetId, leaf),
+  };
+}
+
+function detachedDispatchSucceeded(progress) {
+  return progress?.status === "dispatched";
+}
+
+function detachedDispatchKeepsRuntime(progress) {
+  return progress?.keep_runtime === true || progress?.status === "skipped_interrupted";
+}
+
+function dispatchStatusForDetachedProgress(progress) {
+  if (detachedDispatchSucceeded(progress)) return DISPATCH_STATUS.DISPATCHED;
+  if (detachedDispatchKeepsRuntime(progress)) return DISPATCH_STATUS.DISPATCHING;
+  return DISPATCH_STATUS.PENDING;
+}
+
+function childNeedsResumeDispatchPoll(child) {
+  return child?.dispatch_status === DISPATCH_STATUS.DISPATCHING && Boolean(child.run_id);
+}
+
+function selectResumeDispatchPollChildren(repoRoot, fleetId, leaves) {
+  const fleet = readFleetManifest(repoRoot, fleetId).data;
+  const leavesByRef = new Map(leaves.map((leaf) => [leaf.leaf_ref, leaf]));
+  return fleet.children
+    .filter(childNeedsResumeDispatchPoll)
+    .map((child) => ({
+      child,
+      leaf: leavesByRef.get(child.leaf_ref) || { leaf_ref: child.leaf_ref },
+    }));
+}
+
+async function pollResumeDispatchForChild({ repoRoot, fleetId, leaf, child, options, isInterrupted }) {
+  const progress = await waitForDetachedDispatchProgress({
+    repoRoot,
+    fleetId,
+    runId: child.run_id,
+    leaf,
+    options,
+    isInterrupted,
+  });
+  if (!detachedDispatchKeepsRuntime(progress)) {
+    removeRuntimeChild(repoRoot, fleetId, child.leaf_ref);
+  }
+  setFleetChild(repoRoot, fleetId, {
+    leaf_ref: child.leaf_ref,
+    run_id: child.run_id,
+    dispatch_status: dispatchStatusForDetachedProgress(progress),
+  });
+  return {
+    leaf_ref: child.leaf_ref,
+    status: progress.status,
+    run_id: child.run_id,
+    reconcile: progress.reconcile,
+    run_state: progress.run_state,
+  };
+}
+
+async function pollResumeDispatchingChildren({ repoRoot, fleetId, leaves, options, isInterrupted }) {
+  const children = selectResumeDispatchPollChildren(repoRoot, fleetId, leaves);
+  return runPool(children, options.parallel, ({ leaf, child }) => {
+    return pollResumeDispatchForChild({
+      repoRoot,
+      fleetId,
+      leaf,
+      child,
+      options,
+      isInterrupted,
+    });
+  });
 }
 
 function buildReviewArgs({ repoRoot, runId, options }) {
@@ -982,48 +1257,44 @@ function terminateChild(child) {
   }
 }
 
-function spawnDispatchForLeaf({ repoRoot, fleetId, leaf, options, activeChildren, isInterrupted }) {
-  return new Promise((resolve) => {
-    if (isInterrupted()) {
-      resolve({ leaf_ref: leaf.leaf_ref, status: "skipped_interrupted" });
-      return;
-    }
+async function spawnDispatchForLeaf({ repoRoot, fleetId, leaf, options, activeChildren, isInterrupted }) {
+  if (isInterrupted()) {
+    return { leaf_ref: leaf.leaf_ref, status: "skipped_interrupted" };
+  }
 
-    if (!options.dryRun) {
-      try {
-        const lock = acquireIssueLock({
-          repoRoot,
-          issueNumber: leaf.issue_number,
-          fleetId,
-          runId: null,
-        });
-        releaseIssueLock(lock);
-      } catch (error) {
-        if (!(error instanceof FleetIssueLockError)) {
-          resolve({ leaf_ref: leaf.leaf_ref, status: "failed", error: String(error.message || error) });
-          return;
-        }
-        setFleetChild(repoRoot, fleetId, {
-          leaf_ref: leaf.leaf_ref,
-          run_id: null,
-          dispatch_status: DISPATCH_STATUS.DISPATCH_FAILED_PRE_MANIFEST,
-        });
-        resolve({ leaf_ref: leaf.leaf_ref, status: "dispatch_failed_pre_manifest", error: error.message });
-        return;
+  if (!options.dryRun) {
+    try {
+      const lock = acquireIssueLock({
+        repoRoot,
+        issueNumber: leaf.issue_number,
+        fleetId,
+        runId: null,
+      });
+      releaseIssueLock(lock);
+    } catch (error) {
+      if (!(error instanceof FleetIssueLockError)) {
+        return { leaf_ref: leaf.leaf_ref, status: "failed", error: String(error.message || error) };
       }
-
       setFleetChild(repoRoot, fleetId, {
         leaf_ref: leaf.leaf_ref,
         run_id: null,
-        dispatch_status: DISPATCH_STATUS.DISPATCHING,
+        dispatch_status: DISPATCH_STATUS.DISPATCH_FAILED_PRE_MANIFEST,
       });
+      return { leaf_ref: leaf.leaf_ref, status: "dispatch_failed_pre_manifest", error: error.message };
     }
 
-    const args = buildDispatchArgs({ repoRoot, fleetId, leaf, options });
+    setFleetChild(repoRoot, fleetId, {
+      leaf_ref: leaf.leaf_ref,
+      run_id: null,
+      dispatch_status: DISPATCH_STATUS.DISPATCHING,
+    });
+  }
+
+  const args = buildDispatchArgs({ repoRoot, fleetId, leaf, options });
+  const launch = await new Promise((resolve) => {
     const child = spawn(process.execPath, args, {
       cwd: repoRoot,
       env: process.env,
-      detached: process.platform !== "win32",
       stdio: ["ignore", "pipe", "pipe"],
     });
 
@@ -1031,7 +1302,6 @@ function spawnDispatchForLeaf({ repoRoot, fleetId, leaf, options, activeChildren
     let stderr = "";
     let settled = false;
     activeChildren.set(leaf.leaf_ref, child);
-    if (!options.dryRun) upsertRuntimeChild(repoRoot, fleetId, leaf, child);
 
     child.stdout.on("data", (chunk) => { stdout += chunk.toString("utf-8"); });
     child.stderr.on("data", (chunk) => { stderr += chunk.toString("utf-8"); });
@@ -1039,72 +1309,106 @@ function spawnDispatchForLeaf({ repoRoot, fleetId, leaf, options, activeChildren
       if (settled) return;
       settled = true;
       activeChildren.delete(leaf.leaf_ref);
-      if (!options.dryRun) {
-        removeRuntimeChild(repoRoot, fleetId, leaf.leaf_ref);
-        setFleetChild(repoRoot, fleetId, {
-          leaf_ref: leaf.leaf_ref,
-          run_id: null,
-          dispatch_status: DISPATCH_STATUS.DISPATCH_FAILED_PRE_MANIFEST,
-        });
-      }
-      resolve({ leaf_ref: leaf.leaf_ref, status: "dispatch_failed_pre_manifest", error: error.message });
+      resolve({ code: 1, signal: null, stdout, stderr, error: error.message });
     });
     child.once("close", (code, signal) => {
       if (settled) return;
       settled = true;
       activeChildren.delete(leaf.leaf_ref);
-      if (!options.dryRun) removeRuntimeChild(repoRoot, fleetId, leaf.leaf_ref);
-
-      const payload = parseDispatchJson(stdout);
-      if (options.dryRun) {
-        resolve({
-          leaf_ref: leaf.leaf_ref,
-          status: code === 0 ? "dry_run" : "dry_run_failed",
-          exit_code: code,
-          signal,
-          payload,
-          stderr,
-        });
-        return;
-      }
-
-      let runId = payload?.runId || null;
-      if (!runId) {
-        const record = findRunRecordForLeaf(listFleetRunRecords(repoRoot, fleetId), leaf);
-        runId = record?.data?.run_id || null;
-      }
-
-      if (runId) {
-        setFleetChild(repoRoot, fleetId, {
-          leaf_ref: leaf.leaf_ref,
-          run_id: runId,
-          dispatch_status: DISPATCH_STATUS.DISPATCHED,
-        });
-        resolve({
-          leaf_ref: leaf.leaf_ref,
-          status: code === 0 ? "dispatched" : "dispatched_with_child_failure",
-          run_id: runId,
-          exit_code: code,
-          signal,
-          stderr,
-        });
-        return;
-      }
-
-      setFleetChild(repoRoot, fleetId, {
-        leaf_ref: leaf.leaf_ref,
-        run_id: null,
-        dispatch_status: DISPATCH_STATUS.DISPATCH_FAILED_PRE_MANIFEST,
-      });
-      resolve({
-        leaf_ref: leaf.leaf_ref,
-        status: "dispatch_failed_pre_manifest",
-        exit_code: code,
-        signal,
-        stderr,
-      });
+      resolve({ code: code ?? 1, signal, stdout, stderr, error: null });
     });
   });
+
+  const payload = parseDispatchJson(launch.stdout);
+  if (options.dryRun) {
+    return {
+      leaf_ref: leaf.leaf_ref,
+      status: launch.code === 0 ? "dry_run" : "dry_run_failed",
+      exit_code: launch.code,
+      signal: launch.signal,
+      payload,
+      stderr: launch.stderr,
+      error: launch.error,
+    };
+  }
+
+  let runId = payload?.runId || null;
+  if (!runId) {
+    const record = findRunRecordForLeaf(listFleetRunRecords(repoRoot, fleetId), leaf);
+    runId = record?.data?.run_id || null;
+  }
+
+  if (!runId || launch.code !== 0) {
+    const keepRuntime = Boolean(runId && payload?.supervisorPid);
+    setFleetChild(repoRoot, fleetId, {
+      leaf_ref: leaf.leaf_ref,
+      run_id: runId,
+      dispatch_status: runId
+        ? (keepRuntime ? DISPATCH_STATUS.DISPATCHING : DISPATCH_STATUS.PENDING)
+        : DISPATCH_STATUS.DISPATCH_FAILED_PRE_MANIFEST,
+    });
+    if (keepRuntime) {
+      upsertRuntimeProcess(repoRoot, fleetId, leaf.leaf_ref, { pid: payload.supervisorPid }, {
+        phase: "dispatch",
+        run_id: runId,
+        branch: leaf.branch,
+        issue_number: leaf.issue_number,
+      });
+    }
+    return {
+      leaf_ref: leaf.leaf_ref,
+      status: runId ? "dispatched_with_child_failure" : "dispatch_failed_pre_manifest",
+      run_id: runId,
+      exit_code: launch.code,
+      signal: launch.signal,
+      stderr: launch.stderr,
+      payload,
+      error: launch.error,
+    };
+  }
+
+  setFleetChild(repoRoot, fleetId, {
+    leaf_ref: leaf.leaf_ref,
+    run_id: runId,
+    dispatch_status: DISPATCH_STATUS.DISPATCHING,
+  });
+  if (payload?.supervisorPid) {
+    upsertRuntimeProcess(repoRoot, fleetId, leaf.leaf_ref, { pid: payload.supervisorPid }, {
+      phase: "dispatch",
+      run_id: runId,
+      branch: leaf.branch,
+      issue_number: leaf.issue_number,
+    });
+  }
+
+  const progress = await waitForDetachedDispatchProgress({
+    repoRoot,
+    fleetId,
+    runId,
+    leaf,
+    options,
+    isInterrupted,
+  });
+  if (!detachedDispatchKeepsRuntime(progress)) {
+    removeRuntimeChild(repoRoot, fleetId, leaf.leaf_ref);
+  }
+  setFleetChild(repoRoot, fleetId, {
+    leaf_ref: leaf.leaf_ref,
+    run_id: runId,
+    dispatch_status: dispatchStatusForDetachedProgress(progress),
+  });
+
+  return {
+    leaf_ref: leaf.leaf_ref,
+    status: progress.status,
+    run_id: runId,
+    exit_code: launch.code,
+    signal: launch.signal,
+    stderr: launch.stderr,
+    payload,
+    reconcile: progress.reconcile,
+    run_state: progress.run_state,
+  };
 }
 
 function childNeedsDispatch(child) {
@@ -1131,6 +1435,14 @@ async function runPool(items, limit, worker) {
   });
   await Promise.all(workers);
   return results;
+}
+
+function dispatchFanoutFailed(children) {
+  return children.some((child) => child?.status !== "dispatched");
+}
+
+function fleetDispatchIncomplete(summary) {
+  return summary.children.some((child) => child.dispatch_status !== DISPATCH_STATUS.DISPATCHED);
 }
 
 // Mirrors skills/relay-merge/scripts/finalize-run.js's fetchDefaultBranchName
@@ -1512,9 +1824,19 @@ async function runFleet(options) {
 
   try {
     reconcileFleet(repoRoot, fleetId, leaves);
+    const resumePollChildren = options.resume
+      ? await pollResumeDispatchingChildren({
+        repoRoot,
+        fleetId,
+        leaves,
+        options,
+        isInterrupted: () => interrupted,
+      })
+      : [];
+    reconcileFleet(repoRoot, fleetId, leaves);
     const dispatchLeaves = selectLeavesToDispatch(repoRoot, fleetId, leaves);
     validateLeafFiles(dispatchLeaves);
-    const children = await runPool(dispatchLeaves, options.parallel, (leaf) => {
+    const dispatchChildren = await runPool(dispatchLeaves, options.parallel, (leaf) => {
       return spawnDispatchForLeaf({
         repoRoot,
         fleetId,
@@ -1524,12 +1846,15 @@ async function runFleet(options) {
         isInterrupted: () => interrupted,
       });
     });
+    const children = [...resumePollChildren, ...dispatchChildren];
     reconcileFleet(repoRoot, fleetId, leaves);
     const fleet = maybeFinalizeFleet(repoRoot, fleetId);
     const summary = deriveFleetSummary(repoRoot, fleet);
     const operatorAttention = buildOperatorAttention(summary, { repoRoot, fleetId });
     const preManifestFailures = summary.children
       .some((child) => child.dispatch_status === DISPATCH_STATUS.DISPATCH_FAILED_PRE_MANIFEST);
+    const dispatchFailures = dispatchFanoutFailed(dispatchChildren);
+    const incompleteDispatches = fleetDispatchIncomplete(summary);
     if (options.resume && summary.children.some(childNeedsReviewLoop)) {
       const reviewResult = await reviewFleet({
         repoRoot,
@@ -1540,15 +1865,16 @@ async function runFleet(options) {
       });
       const reviewPreManifestFailures = reviewResult.summary.children
         .some((child) => child.dispatch_status === DISPATCH_STATUS.DISPATCH_FAILED_PRE_MANIFEST);
+      const reviewIncompleteDispatches = fleetDispatchIncomplete(reviewResult.summary);
       return {
         ...reviewResult,
-        ok: reviewResult.ok && !reviewPreManifestFailures,
+        ok: reviewResult.ok && !reviewPreManifestFailures && !dispatchFailures && !reviewIncompleteDispatches,
         fleetManifestPath: manifestPath,
         dispatch_children: children,
       };
     }
     return {
-      ok: !interrupted && !preManifestFailures,
+      ok: !interrupted && !preManifestFailures && !dispatchFailures && !incompleteDispatches,
       interrupted,
       fleet_id: fleetId,
       fleetManifestPath: manifestPath,

@@ -11,6 +11,16 @@ Operator-facing recovery commands for `relay-dispatch`. These cover the two cano
 - For `reconcile-run.js`, a lease is live only when `host` matches the current host and the process group probe succeeds; `EPERM` counts as alive. A host mismatch is stale evidence for reconcile rows 4/5 because this host cannot safely signal that process group.
 - For destructive cleanup (`cleanup-worktrees.js` and `close-run.js`), a host mismatch is an unverifiable lease and blocks worktree removal unless `--force` is supplied.
 
+Prefer first-class detached dispatch for long-running work:
+
+```bash
+node skills/relay-dispatch/scripts/dispatch.js . -b issue-802 \
+  --prompt-file /tmp/dispatch-802.md --rubric-file /tmp/rubric-802.yaml \
+  --detach --json
+```
+
+The launch receipt includes `runId`, `manifestPath`, `supervisorPid`, `stdoutLog`, `stderrLog`, and `reconcileCommand`. The detached supervisor owns the lease and survives the caller shell exiting; use the printed reconcile command to inspect progress from any later relay touch.
+
 ```bash
 # Inspect/settle one dispatched run
 node skills/relay-dispatch/scripts/reconcile-run.js --repo . --run-id <id> --json

@@ -23,6 +23,7 @@ const {
   readArg,
   schemaHasFlag,
 } = require("./cli-args");
+const { listDeadDispatchedRunAdvisories } = require("./reconcile-advisory");
 
 const args = process.argv.slice(2);
 const COMMAND_NAME = "relay-config";
@@ -39,7 +40,7 @@ const DOCTOR_TOOLS = ["codex", "claude", "opencode", "pi"];
 const SUBCOMMAND_FLAGS = {
   init: new Set(["--profile", "--json", "--help"]),
   show: new Set(["--effective", "--json", "--help"]),
-  doctor: new Set(["--json", "--help"]),
+  doctor: new Set(["--json", "--reconcile", "--help"]),
   check: new Set(["--phase", "--executor", "--reviewer", "--model", "--json", "--help"]),
   "plan-run": new Set(["--repo", "--dispatch", "--review", "--advisory-review", "--route-intent-file", "--json", "--help"]),
   "set-default": new Set(["--json", "--help"]),
@@ -73,7 +74,7 @@ function printHelp() {
   console.log("Commands:");
   console.log(`  init --profile <company|personal> ${modeLabel("--profile")} [--json ${modeLabel("--json")}]`);
   console.log(`  show --effective ${modeLabel("--effective")} [--json ${modeLabel("--json")}]`);
-  console.log(`  doctor [--json ${modeLabel("--json")}]`);
+  console.log(`  doctor [--json ${modeLabel("--json")}] [--reconcile ${modeLabel("--reconcile")}]`);
   console.log(`  check --phase <phase> ${modeLabel("--phase")} [--executor <name> ${modeLabel("--executor")}] [--reviewer <name> ${modeLabel("--reviewer")}] [--model <provider/model> ${modeLabel("--model")}] [--json ${modeLabel("--json")}]`);
   console.log(`  plan-run [--repo <path> ${modeLabel("--repo")}] [--dispatch <actor[:provider/model]> ${modeLabel("--dispatch")}] [--review <actor[:provider/model]> ${modeLabel("--review")}] [--advisory-review <actor[:provider/model]> ${modeLabel("--advisory-review")}] [--route-intent-file <path> ${modeLabel("--route-intent-file")}] [--json ${modeLabel("--json")}]`);
   console.log("  set-default <path> <value> [--json]");
@@ -400,6 +401,15 @@ function displayToolRouteStatus(tool) {
   return tool.policy;
 }
 
+function listDoctorRunAdvisories(repoRoot, options) {
+  try {
+    return listDeadDispatchedRunAdvisories(repoRoot, options);
+  } catch (error) {
+    if (error?.name === "CanonicalRepoRootResolutionError") return [];
+    throw error;
+  }
+}
+
 function commandDoctor(positionals, jsonOut) {
   if (positionals.length !== 1) {
     throw new Error("doctor does not accept positional arguments");
@@ -424,6 +434,9 @@ function commandDoctor(positionals, jsonOut) {
   const tools = toolNames.map((name) => doctorTool(result.policy, name));
   const projectConfig = loadProjectConfig({ repoRoot: process.cwd() });
   const projectRoutes = loadProjectRoutes({ repoRoot: process.cwd() });
+  const advisories = listDoctorRunAdvisories(process.cwd(), {
+    mutate: hasCliFlag("--reconcile"),
+  });
   const output = {
     ok: true,
     status: result.status,
@@ -431,6 +444,7 @@ function commandDoctor(positionals, jsonOut) {
     project_config: projectConfig,
     project_routes: projectRoutes,
     tools,
+    advisories,
   };
 
   if (jsonOut) {
@@ -440,6 +454,13 @@ function commandDoctor(positionals, jsonOut) {
     for (const tool of tools) {
       const installed = tool.installed ? `installed at ${tool.path}` : "not installed on PATH";
       console.log(`${tool.name}: ${installed}; ${displayToolRouteStatus(tool)} (${tool.reason})`);
+    }
+    for (const advisory of advisories) {
+      if (advisory.kind !== "dead_dispatched_run") continue;
+      console.log(
+        `advisory: run ${advisory.runId} is dispatched with ${advisory.leaseStatus} lease; ` +
+        `reconcile row ${advisory.reconcile?.row || "unknown"} (${advisory.reconcile?.rowName || "unknown"})`
+      );
     }
   }
 }
