@@ -21,7 +21,7 @@ Route selection is one user-facing concept: a single routes.json schema (open-by
 
 ### Batch 2 — per-run UX (blocked by #781)
 
-- [~] #782 Route presets: --route-preset, /relay natural-language mapping, model catalog (Phase B) — M; dispatched (run `...ad6ee5d0`, codex, parallel with #807/#808)
+- [~] #782 Route presets: --route-preset, /relay natural-language mapping, model catalog (Phase B) — M; PR #813 **ready_to_merge** (LGTM round 7, awaiting explicit merge). Rebased onto post-Batch-1 main (cli-schema flag union + relay-config.test import union), then 5 review-driven corrections
 
 ### Batch 3 — self-audit (blocked by #781)
 
@@ -33,9 +33,11 @@ Route selection is one user-facing concept: a single routes.json schema (open-by
 - [ ] #795 dispatch branches from local main; unpushed local commits contaminate every PR diff — filed after the same scope-noise finding cost one review round on each of PR #789/#791/#792 (rule of three)
 - [x] #805 validateManifestPaths rejects relay worktrees for runs dispatched from a linked worktree (basename mismatch) — PR #810 merged; fix proven live by gate-check passing for PR #811 via normal --repo resolution
 - [ ] #809 dispatch.js from a linked worktree records base_branch that does not exist on origin — S; TWO symptoms now: auto-PR fails (escalated), and after finalize's learnings push published origin/worktree-floofy-seeking-music, new dispatches failed at base-merge until the stray remote branch was deleted
-- [~] #807+#808 finalize-run resilience (post-merge crash + stale pre-merge gate) — dispatched as one run (`...585f0a8b`, codex, same finalize-run.js surface, parallel with #782)
+- [~] #807+#808 finalize-run resilience (post-merge crash + stale pre-merge gate) — PR #814 **ready_to_merge** (LGTM round 9, awaiting explicit merge); run `...585f0a8b`, codex base + R6-R9 orchestrator-corrections
 - [ ] #807 finalize-run post-merge crash (runCleanup removes worktree → getCanonicalRepoRoot on it; writeManifest is last) leaves run stuck at ready_to_merge — S; A2 run completed manually via updateManifestState+writeManifest + cleanup_result event
 - [ ] #808 finalize-run pre-merge CI gate blocks already-MERGED PRs on never-completing checks (CodeRabbit PENDING after branch delete) — S; ordering fix: fetch merge state before assertPreMergeSafety
+- [ ] #815 flaky test: dispatch SIGINT descendant-survival warning intermittently missing under elevated spawn latency — filed during #814; passes isolated, flakes under load
+- [ ] #819 relay-dispatch signal tests leak SIGTERM-ignoring codex fixtures — THE root cause of this session's "relay-fleet flakes" + suite hangs (load 54-95 from ~13 leaked day-old fixtures); teardown must SIGKILL spawned fixture PIDs. Reaped manually this session; related to #815
 
 ## Running Context
 
@@ -48,6 +50,13 @@ Route selection is one user-facing concept: a single routes.json schema (open-by
 - Phase D (relay-plan route recommendation + fleet per-leaf fill) is NOT in this sprint — observe-gated on ≥~10 non-default-route runs over ~4 weeks after A–C ship.
 
 ## Progress
+
+### 2026-07-07/08 (Batch 2 → both ready_to_merge)
+- **Both Batch 2 PRs reached ready_to_merge; neither merged (awaiting explicit instruction).** #813 (#782) LGTM round 7; #814 (#807/#808) LGTM round 9.
+- **Root cause of the session-long "relay-fleet flakes" identified: it was never flaky code.** (1) Disk hit 100% (ENOSPC) — empty task-output files + suite "failures" were write failures; user cleared it (DaisyDisk). (2) The relay-dispatch SIGINT/leader-exit tests leak fake-`codex` fixture processes that run `process.on('SIGTERM',()=>{}); setInterval(...)` from temp dirs and **ignore SIGTERM by design**; across days of killed suite runs ~13 leaked (1-day+ ELAPSED), driving load average to 54-95 and hanging/flaking the subprocess/timing suites (relay-fleet resume, dispatch interruption, microbenchmark p95). Reaped with `pkill -9 -f relay-codex`; load fell to ~14 and the affected suites ran green. Fix belongs in the tests (teardown must SIGKILL spawned fixture PIDs) — file as relay-dispatch test-hygiene follow-up. Memory: `feedback_dispatch_signal_tests_leak_fixtures`.
+- #814 (#807/#808) R6-R9 orchestrator-corrections, each with full-suite/relay-merge evidence + recover-state re-review: R6 ran the fresh review gate on the terminal-merged retry path (remote-branch delete); R7 (deepening) fetched review-only inputs so the merged path skips CI/mergeability but still gates review; R8 (new) preserved the skip-review audit trail on the already-merged path; R9 (new) restricted the merged branch+pr auto-retry selector to runs with pending cleanup (no duplicate post-merge side effects on completed runs). R9 PASS, 0 issues.
+- #813 (#782) rebased onto post-Batch-1 main (2 additive conflicts: cli-schema flag-list union + relay-config.test import union), force-pushed, re-reviewed. R3 escalated (flip-flop on preset-expansion / snapshot-attribution factors) → owner fix: explicit `--review-assurance` now seeds the run intent before preset expansion and the snapshot only attributes what the preset actually applied. R4 (2 newly_scoreable): DC6 no-preset byte-identical (gated route-derived assurance on `--route-preset`) + SKILL.md trimmed 156→149. R5 (2 new): advisory model must not inherit a different planned reviewer's model; preset show/remove reject add-only flags. R6 (deepening): detect bare add-only flags by presence (hasCliFlag), not value. R7 PASS, 0 issues.
+- Every orchestrator-correction round: authored execution-evidence at the committed head, `recover-state` (changes_requested/escalated → review_pending, `--force` for escalated), then `review-runner` — the same audited-transition discipline as Batch 1 salvages. All relay tooling used the `--manifest` form (#805 linked-worktree).
 
 ### 2026-07-06 (Phase A complete + Batch 2 dispatch)
 - PR #810 (#805) merged first — finalize-run completed CLEANLY this time (worktree intact, no recreate dance). PR #811 (A3) then gate-checked via the NORMAL --repo path — the just-merged #805 fix proving itself live — and merged; learnings push race resolved by rebase+push as usual. #781 CLOSED: Phase A (A1 PR #792 → A2 PR #804 → A3 PR #811) complete.
