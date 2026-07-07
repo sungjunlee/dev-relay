@@ -8,7 +8,10 @@ const path = require("node:path");
 const REPO_ROOT = path.resolve(__dirname, "..", "..", "..");
 const RELAY_FLEET_SCRIPT = path.join(REPO_ROOT, "skills", "relay-fleet", "scripts", "relay-fleet.js");
 
-const { getFleetRuntimePath } = require(RELAY_FLEET_SCRIPT);
+const {
+  getFleetLeavesStorePath,
+  getFleetRuntimePath,
+} = require(RELAY_FLEET_SCRIPT);
 const {
   getFleetIssueLockPath,
   getFleetManifestPath,
@@ -689,6 +692,59 @@ test("relay-fleet keeps live incomplete detached dispatches retry-safe", async (
     timeoutMs: 5000,
     intervalMs: 50,
   });
+});
+
+test("relay-fleet --resume polls existing dispatching detached child runs before returning ok", () => {
+  const { relayHome, repoRoot } = setupRepo("relay-fleet-resume-detached-");
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "fleet-resume-detached-fake-"));
+  const dispatchScript = writeFakeDispatchScript(tmpDir);
+  const reviewScript = writeFakeReviewScript(tmpDir);
+  const reviewLog = path.join(tmpDir, "review.log");
+  const fleetId = "fleet-resume-detached";
+  const runId = "issue-804-20260515010101000-a1b2c3d4";
+  const leaf = makeLeaf(repoRoot, 1, { issue_number: 804 });
+
+  writeChildRun(repoRoot, {
+    runId,
+    branch: leaf.branch,
+    issueNumber: leaf.issue_number,
+    leafId: leaf.leaf_id,
+    fleetId,
+    state: RUN_STATES.DISPATCHED,
+  });
+  fs.writeFileSync(path.join(getRunDir(repoRoot, runId), "dispatch-result.txt"), "executor finished before supervisor death\n", "utf-8");
+  const leavesStorePath = getFleetLeavesStorePath(repoRoot, fleetId);
+  fs.mkdirSync(path.dirname(leavesStorePath), { recursive: true });
+  writeJson(leavesStorePath, { fleet_id: fleetId, leaves: [leaf] });
+  createFleetManifest(repoRoot, {
+    fleetId,
+    children: [{ leaf_ref: leaf.leaf_ref, run_id: runId, dispatch_status: DISPATCH_STATUS.DISPATCHING }],
+  });
+  let fleet = readFleetManifest(repoRoot, fleetId).data;
+  fleet.fleet_state = FLEET_STATES.DISPATCHING;
+  writeFleetManifest(repoRoot, fleet);
+
+  const result = runFleet([
+    "--repo", repoRoot,
+    "--fleet-id", fleetId,
+    "--resume",
+    "--dispatch-script", dispatchScript,
+    "--review-script", reviewScript,
+    "--json",
+  ], {
+    relayHome,
+    env: { FAKE_REVIEW_LOG: reviewLog },
+  });
+
+  assert.equal(result.status, 0, `${result.stderr}\n${result.stdout}`);
+  const payload = JSON.parse(result.stdout);
+  assert.equal(payload.dispatch_children.length, 1);
+  assert.equal(payload.dispatch_children[0].status, "dispatched");
+  assert.equal(payload.dispatch_children[0].reconcile.rowName, "dead_with_result_or_work");
+  assert.equal(readJsonLines(reviewLog).length, 1);
+  const child = readFleetManifest(repoRoot, fleetId).data.children[0];
+  assert.equal(child.dispatch_status, DISPATCH_STATUS.DISPATCHED);
+  assert.equal(readManifest(getManifestPath(repoRoot, runId)).data.state, RUN_STATES.READY_TO_MERGE);
 });
 
 test("relay-fleet keeps manifest consistent when child 3 of 5 fails before manifest creation", () => {

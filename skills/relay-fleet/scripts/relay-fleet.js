@@ -770,6 +770,61 @@ function dispatchStatusForDetachedProgress(progress) {
   return DISPATCH_STATUS.PENDING;
 }
 
+function childNeedsResumeDispatchPoll(child) {
+  return child?.dispatch_status === DISPATCH_STATUS.DISPATCHING && Boolean(child.run_id);
+}
+
+function selectResumeDispatchPollChildren(repoRoot, fleetId, leaves) {
+  const fleet = readFleetManifest(repoRoot, fleetId).data;
+  const leavesByRef = new Map(leaves.map((leaf) => [leaf.leaf_ref, leaf]));
+  return fleet.children
+    .filter(childNeedsResumeDispatchPoll)
+    .map((child) => ({
+      child,
+      leaf: leavesByRef.get(child.leaf_ref) || { leaf_ref: child.leaf_ref },
+    }));
+}
+
+async function pollResumeDispatchForChild({ repoRoot, fleetId, leaf, child, options, isInterrupted }) {
+  const progress = await waitForDetachedDispatchProgress({
+    repoRoot,
+    fleetId,
+    runId: child.run_id,
+    leaf,
+    options,
+    isInterrupted,
+  });
+  if (!detachedDispatchKeepsRuntime(progress)) {
+    removeRuntimeChild(repoRoot, fleetId, child.leaf_ref);
+  }
+  setFleetChild(repoRoot, fleetId, {
+    leaf_ref: child.leaf_ref,
+    run_id: child.run_id,
+    dispatch_status: dispatchStatusForDetachedProgress(progress),
+  });
+  return {
+    leaf_ref: child.leaf_ref,
+    status: progress.status,
+    run_id: child.run_id,
+    reconcile: progress.reconcile,
+    run_state: progress.run_state,
+  };
+}
+
+async function pollResumeDispatchingChildren({ repoRoot, fleetId, leaves, options, isInterrupted }) {
+  const children = selectResumeDispatchPollChildren(repoRoot, fleetId, leaves);
+  return runPool(children, options.parallel, ({ leaf, child }) => {
+    return pollResumeDispatchForChild({
+      repoRoot,
+      fleetId,
+      leaf,
+      child,
+      options,
+      isInterrupted,
+    });
+  });
+}
+
 function buildReviewArgs({ repoRoot, runId, options }) {
   const args = [
     options.reviewScript,
@@ -1346,6 +1401,10 @@ function dispatchFanoutFailed(children) {
   return children.some((child) => child?.status !== "dispatched");
 }
 
+function fleetDispatchIncomplete(summary) {
+  return summary.children.some((child) => child.dispatch_status !== DISPATCH_STATUS.DISPATCHED);
+}
+
 // Mirrors skills/relay-merge/scripts/finalize-run.js's fetchDefaultBranchName
 // (gh repo view --json defaultBranchRef) without importing from relay-merge,
 // which is frozen for this change. Returns null on any failure (no remote, gh
@@ -1725,9 +1784,19 @@ async function runFleet(options) {
 
   try {
     reconcileFleet(repoRoot, fleetId, leaves);
+    const resumePollChildren = options.resume
+      ? await pollResumeDispatchingChildren({
+        repoRoot,
+        fleetId,
+        leaves,
+        options,
+        isInterrupted: () => interrupted,
+      })
+      : [];
+    reconcileFleet(repoRoot, fleetId, leaves);
     const dispatchLeaves = selectLeavesToDispatch(repoRoot, fleetId, leaves);
     validateLeafFiles(dispatchLeaves);
-    const children = await runPool(dispatchLeaves, options.parallel, (leaf) => {
+    const dispatchChildren = await runPool(dispatchLeaves, options.parallel, (leaf) => {
       return spawnDispatchForLeaf({
         repoRoot,
         fleetId,
@@ -1737,13 +1806,15 @@ async function runFleet(options) {
         isInterrupted: () => interrupted,
       });
     });
+    const children = [...resumePollChildren, ...dispatchChildren];
     reconcileFleet(repoRoot, fleetId, leaves);
     const fleet = maybeFinalizeFleet(repoRoot, fleetId);
     const summary = deriveFleetSummary(repoRoot, fleet);
     const operatorAttention = buildOperatorAttention(summary, { repoRoot, fleetId });
     const preManifestFailures = summary.children
       .some((child) => child.dispatch_status === DISPATCH_STATUS.DISPATCH_FAILED_PRE_MANIFEST);
-    const dispatchFailures = dispatchFanoutFailed(children);
+    const dispatchFailures = dispatchFanoutFailed(dispatchChildren);
+    const incompleteDispatches = fleetDispatchIncomplete(summary);
     if (options.resume && summary.children.some(childNeedsReviewLoop)) {
       const reviewResult = await reviewFleet({
         repoRoot,
@@ -1754,15 +1825,16 @@ async function runFleet(options) {
       });
       const reviewPreManifestFailures = reviewResult.summary.children
         .some((child) => child.dispatch_status === DISPATCH_STATUS.DISPATCH_FAILED_PRE_MANIFEST);
+      const reviewIncompleteDispatches = fleetDispatchIncomplete(reviewResult.summary);
       return {
         ...reviewResult,
-        ok: reviewResult.ok && !reviewPreManifestFailures && !dispatchFailures,
+        ok: reviewResult.ok && !reviewPreManifestFailures && !dispatchFailures && !reviewIncompleteDispatches,
         fleetManifestPath: manifestPath,
         dispatch_children: children,
       };
     }
     return {
-      ok: !interrupted && !preManifestFailures && !dispatchFailures,
+      ok: !interrupted && !preManifestFailures && !dispatchFailures && !incompleteDispatches,
       interrupted,
       fleet_id: fleetId,
       fleetManifestPath: manifestPath,
