@@ -247,6 +247,18 @@ function appendLog(record) {
     detachedChild: process.env.FAKE_DETACHED_CHILD === "1",
   }) + "\\n", "utf-8");
 }
+function transitionFromDispatched(manifest, state) {
+  if (state === "review_pending") {
+    return updateManifestState(manifest, STATES.REVIEW_PENDING, "await_review");
+  }
+  if (state === "escalated") {
+    return updateManifestState(manifest, STATES.ESCALATED, "fleet_fake_escalated");
+  }
+  if (state === "closed") {
+    return updateManifestState(manifest, STATES.CLOSED, "fleet_fake_closed");
+  }
+  return manifest;
+}
 async function main() {
   const manifestInput = get("--manifest");
   const branch = get(["--branch", "-b"]);
@@ -359,10 +371,10 @@ async function main() {
   if (plan.delay_after_manifest_ms) {
     await sleep(plan.delay_after_manifest_ms);
   }
-  if (plan.transition_after_delay_to === "review_pending" && fs.existsSync(manifestPath)) {
+  if (plan.transition_after_delay_to && fs.existsSync(manifestPath)) {
     const record = readManifest(manifestPath);
     if (record.data.state === STATES.DISPATCHED) {
-      writeManifest(manifestPath, updateManifestState(record.data, STATES.REVIEW_PENDING, "await_review"), record.body);
+      writeManifest(manifestPath, transitionFromDispatched(record.data, plan.transition_after_delay_to), record.body);
     }
   }
   if (lock) releaseIssueLock(lock);
@@ -692,6 +704,56 @@ test("relay-fleet keeps live incomplete detached dispatches retry-safe", async (
     timeoutMs: 5000,
     intervalMs: 50,
   });
+});
+
+test("relay-fleet treats detached terminal child states as failed dispatch outcomes", () => {
+  const { relayHome, repoRoot } = setupRepo("relay-fleet-terminal-detach-");
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "fleet-terminal-detach-fake-"));
+  const dispatchScript = writeFakeDispatchScript(tmpDir);
+  const configPath = path.join(tmpDir, "config.json");
+  const escalatedLeaf = makeLeaf(repoRoot, 1, { issue_number: 805 });
+  const closedLeaf = makeLeaf(repoRoot, 2, { issue_number: 806 });
+  const leavesFile = writeLeavesFile(repoRoot, [escalatedLeaf, closedLeaf]);
+  writeJson(configPath, {
+    [escalatedLeaf.branch]: {
+      delay_before_manifest_ms: 100,
+      run_state: "dispatched",
+      transition_after_delay_to: "escalated",
+    },
+    [closedLeaf.branch]: {
+      delay_before_manifest_ms: 100,
+      run_state: "dispatched",
+      transition_after_delay_to: "closed",
+    },
+  });
+
+  const result = runFleet([
+    "--repo", repoRoot,
+    "--fleet-id", "fleet-terminal-detach",
+    "--leaves-file", leavesFile,
+    "--dispatch-script", dispatchScript,
+    "--json",
+  ], {
+    relayHome,
+    env: { FAKE_DISPATCH_CONFIG: configPath },
+  });
+
+  assert.notEqual(result.status, 0, `${result.stderr}\n${result.stdout}`);
+  const output = JSON.parse(result.stdout);
+  assert.equal(output.ok, false);
+  assert.deepEqual(output.children.map((child) => [child.leaf_ref, child.status, child.run_state]), [
+    [escalatedLeaf.leaf_ref, "dispatch_terminal_failure", RUN_STATES.ESCALATED],
+    [closedLeaf.leaf_ref, "dispatch_terminal_failure", RUN_STATES.CLOSED],
+  ]);
+  assert.equal(output.summary.by_dispatch_status[DISPATCH_STATUS.PENDING], 2);
+  assert.equal(output.summary.by_run_state[RUN_STATES.ESCALATED], 1);
+  assert.equal(output.summary.by_run_state[RUN_STATES.CLOSED], 1);
+
+  const fleet = readFleetManifest(repoRoot, "fleet-terminal-detach").data;
+  assert.deepEqual(fleet.children.map((child) => child.dispatch_status), [
+    DISPATCH_STATUS.PENDING,
+    DISPATCH_STATUS.PENDING,
+  ]);
 });
 
 test("relay-fleet --resume polls existing dispatching detached child runs before returning ok", () => {

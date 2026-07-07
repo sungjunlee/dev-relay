@@ -50,6 +50,19 @@ const KNOWN_FLAGS = [
 const CLI_ARG_OPTIONS = { commandName: "relay-fleet", reservedFlags: KNOWN_FLAGS };
 const MODE_PARSED_LABEL = "[parsed]";
 const MODE_VERBATIM_LABEL = "[verbatim]";
+const DETACHED_DISPATCH_SUCCESS_STATES = new Set([
+  RUN_STATES.INTERNAL_REVIEW_PENDING,
+  RUN_STATES.REVIEW_PENDING,
+  RUN_STATES.PUBLISH_PENDING,
+  RUN_STATES.CHANGES_REQUESTED,
+  RUN_STATES.READY_TO_MERGE,
+  RUN_STATES.MERGE_BLOCKED,
+  RUN_STATES.MERGED,
+]);
+const DETACHED_DISPATCH_FAILURE_STATES = new Set([
+  RUN_STATES.ESCALATED,
+  RUN_STATES.CLOSED,
+]);
 
 class FleetInputError extends Error {
   constructor(message) {
@@ -500,15 +513,18 @@ function findFleetChild(fleet, leafRef) {
   return fleet.children.find((child) => child.leaf_ref === leafRef) || null;
 }
 
+function detachedDispatchRunStateSucceeded(runState) {
+  return DETACHED_DISPATCH_SUCCESS_STATES.has(runState);
+}
+
 function shouldAdoptRunRecord(fleet, leafRef, record) {
   const existing = findFleetChild(fleet, leafRef);
   if (
     existing
     && existing.run_id === record.data.run_id
-    && record.data.state === RUN_STATES.DISPATCHED
     && existing.dispatch_status !== DISPATCH_STATUS.DISPATCHED
   ) {
-    return false;
+    return detachedDispatchRunStateSucceeded(record.data.state);
   }
   return true;
 }
@@ -628,6 +644,21 @@ function readRunState(repoRoot, runId) {
   return readManifest(manifestPath).data?.state || null;
 }
 
+function detachedDispatchStatusForRunState(runState) {
+  if (detachedDispatchRunStateSucceeded(runState)) return "dispatched";
+  if (DETACHED_DISPATCH_FAILURE_STATES.has(runState)) return "dispatch_terminal_failure";
+  return "dispatch_unexpected_state";
+}
+
+function detachedDispatchProgressForRunState(runId, runState, reconcile) {
+  return {
+    status: detachedDispatchStatusForRunState(runState),
+    run_id: runId,
+    run_state: runState,
+    reconcile,
+  };
+}
+
 function reconcileDryRun(repoRoot, runId) {
   try {
     return runReconcile({ repoRoot, runId, mutate: false });
@@ -664,7 +695,7 @@ async function waitForDetachedDispatchProgress({ repoRoot, fleetId, runId, leaf,
 
     const runState = readRunState(repoRoot, runId);
     if (runState && runState !== RUN_STATES.DISPATCHED) {
-      return { status: "dispatched", run_id: runId, run_state: runState, reconcile: lastReconcile };
+      return detachedDispatchProgressForRunState(runId, runState, lastReconcile);
     }
 
     if (runState === RUN_STATES.DISPATCHED) {
@@ -699,7 +730,9 @@ async function waitForDetachedDispatchProgress({ repoRoot, fleetId, runId, leaf,
           };
         }
         return {
-          status: healed.state === RUN_STATES.DISPATCHED ? "dispatch_reconcile_incomplete" : "dispatched",
+          status: healed.state === RUN_STATES.DISPATCHED
+            ? "dispatch_reconcile_incomplete"
+            : detachedDispatchStatusForRunState(healed.state),
           run_id: runId,
           run_state: healed.state,
           reconcile: healed,
@@ -735,12 +768,7 @@ async function waitForDetachedDispatchProgress({ repoRoot, fleetId, runId, leaf,
         };
       }
       if (lastReconcile.rowName === "not_dispatched") {
-        return {
-          status: "dispatched",
-          run_id: runId,
-          run_state: lastReconcile.state,
-          reconcile: lastReconcile,
-        };
+        return detachedDispatchProgressForRunState(runId, lastReconcile.state, lastReconcile);
       }
     }
 
