@@ -987,6 +987,12 @@ test("preset show/remove reject add-only mutation flags and add requires --advis
   assert.notEqual(showWithFlag.status, 0, showWithFlag.combined);
   assert.match(showWithFlag.combined, /preset show does not accept --review-assurance/);
 
+  // A bare value flag (present without a value) must still be rejected on remove.
+  const removeBareFlag = runConfig(["preset", "remove", "light", "--dispatch", "--json"], { relayHome });
+  assert.notEqual(removeBareFlag.status, 0, removeBareFlag.combined);
+  assert.match(removeBareFlag.combined, /preset remove does not accept --dispatch/);
+  assert.equal(hasOwn(readRoutes(relayHome).presets, "light"), true);
+
   const addProfileNoReviewer = runConfig(["preset", "add", "p", "--advisory-profile", "blindspot", "--json"], { relayHome });
   assert.notEqual(addProfileNoReviewer.status, 0, addProfileNoReviewer.combined);
   assert.match(addProfileNoReviewer.combined, /--advisory-profile requires --advisory-review/);

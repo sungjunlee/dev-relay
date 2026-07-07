@@ -757,11 +757,11 @@ const PRESET_MUTATION_FLAGS = [
 ];
 
 // add-only flags describe a mutation; show/remove must reject them rather than
-// silently ignore an inapplicable flag.
+// silently ignore an inapplicable flag. Detect presence (hasCliFlag), not a
+// parsed value — a value flag given bare (e.g. `--dispatch --json`) reads back as
+// undefined but is still present and must still be rejected.
 function assertNoPresetMutationFlags(action) {
-  const present = PRESET_MUTATION_FLAGS.filter(
-    (flag) => readArg(args, flag, undefined, CLI_ARG_OPTIONS) !== undefined
-  );
+  const present = PRESET_MUTATION_FLAGS.filter((flag) => hasCliFlag(flag));
   if (present.length) {
     throw new Error(`preset ${action} does not accept ${present.join(", ")}`);
   }
