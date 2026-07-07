@@ -732,11 +732,14 @@ function parsePresetFromArgs() {
   const advisorySpec = parseRouteSpec(readArg(args, "--advisory-review", undefined, CLI_ARG_OPTIONS), "advisory_review");
   if (dispatchSpec) preset.dispatch = dispatchSpec;
   if (reviewSpec) preset.review = reviewSpec;
+  const advisoryProfile = nonEmptyString(readArg(args, "--advisory-profile", undefined, CLI_ARG_OPTIONS));
+  if (advisoryProfile && !advisorySpec) {
+    throw new Error("--advisory-profile requires --advisory-review");
+  }
   if (advisorySpec) {
-    const profile = nonEmptyString(readArg(args, "--advisory-profile", undefined, CLI_ARG_OPTIONS));
     preset.advisory_review = {
       ...advisorySpec,
-      ...(profile ? { profile } : {}),
+      ...(advisoryProfile ? { profile: advisoryProfile } : {}),
     };
   }
   const reviewAssurance = nonEmptyString(readArg(args, "--review-assurance", undefined, CLI_ARG_OPTIONS));
@@ -749,10 +752,28 @@ function parsePresetFromArgs() {
   return preset;
 }
 
+const PRESET_MUTATION_FLAGS = [
+  "--dispatch", "--review", "--advisory-review", "--advisory-profile", "--review-assurance",
+];
+
+// add-only flags describe a mutation; show/remove must reject them rather than
+// silently ignore an inapplicable flag.
+function assertNoPresetMutationFlags(action) {
+  const present = PRESET_MUTATION_FLAGS.filter(
+    (flag) => readArg(args, flag, undefined, CLI_ARG_OPTIONS) !== undefined
+  );
+  if (present.length) {
+    throw new Error(`preset ${action} does not accept ${present.join(", ")}`);
+  }
+}
+
 function commandPreset(positionals, jsonOut) {
   const action = positionals[1];
   if (!["add", "remove", "show"].includes(action)) {
     throw new Error("preset requires add, remove, or show");
+  }
+  if (action !== "add") {
+    assertNoPresetMutationFlags(action);
   }
 
   if (action === "show") {

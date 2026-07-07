@@ -968,6 +968,30 @@ test("preset show reads global presets and preset remove drops empty preset scaf
   assert.deepEqual(parseJson(showEmpty).presets, {});
 });
 
+test("preset show/remove reject add-only mutation flags and add requires --advisory-review for --advisory-profile", () => {
+  const relayHome = tempDir();
+  writeJson(path.join(relayHome, "routes.json"), {
+    version: 2,
+    presets: {
+      light: { dispatch: { executor: "codex" } },
+    },
+  });
+
+  const removeWithFlag = runConfig(["preset", "remove", "light", "--dispatch", "opencode:fast", "--json"], { relayHome });
+  assert.notEqual(removeWithFlag.status, 0, removeWithFlag.combined);
+  assert.match(removeWithFlag.combined, /preset remove does not accept --dispatch/);
+  // The inapplicable mutation flag must be rejected before the preset is removed.
+  assert.equal(hasOwn(readRoutes(relayHome).presets, "light"), true);
+
+  const showWithFlag = runConfig(["preset", "show", "light", "--review-assurance", "hardened", "--json"], { relayHome });
+  assert.notEqual(showWithFlag.status, 0, showWithFlag.combined);
+  assert.match(showWithFlag.combined, /preset show does not accept --review-assurance/);
+
+  const addProfileNoReviewer = runConfig(["preset", "add", "p", "--advisory-profile", "blindspot", "--json"], { relayHome });
+  assert.notEqual(addProfileNoReviewer.status, 0, addProfileNoReviewer.combined);
+  assert.match(addProfileNoReviewer.combined, /--advisory-profile requires --advisory-review/);
+});
+
 test("preset mutation validation failure leaves the routes file untouched", () => {
   const relayHome = tempDir();
   const routesPath = path.join(relayHome, "routes.json");
