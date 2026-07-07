@@ -57,6 +57,7 @@ function printHelp(exitCode) {
   console.log(`  --test-command <cmd> ${modeLabel("--test-command")} Operator-run test command for missing execution evidence`);
   console.log(`  --test-result-file <path> ${modeLabel("--test-result-file")} Operator-run test output file to hash for missing execution evidence`);
   console.log(`  --test-exit-code <n> ${modeLabel("--test-exit-code")} Operator-run test exit code for missing execution evidence`);
+  console.log(`  --replace-placeholder-evidence ${modeLabel("--replace-placeholder-evidence")} Replace dispatch timeout placeholder evidence with operator-run evidence`);
   console.log(`  --dry-run           ${modeLabel("--dry-run")} Print planned git/gh commands and manifest mutation only`);
   console.log(`  --json              ${modeLabel("--json")} Output JSON`);
   console.log("\nDecision tree:");
@@ -223,6 +224,25 @@ function warnMissingExecutionEvidence(runId) {
   );
 }
 
+function readExecutionEvidenceIfPresent(evidencePath) {
+  return JSON.parse(fs.readFileSync(evidencePath, "utf-8"));
+}
+
+function isDispatchPlaceholderEvidence(evidence) {
+  return evidence?.recorded_by === "dispatch-orchestrator-v1"
+    && evidence?.test_command === "unspecified";
+}
+
+function summarizeReplacedPlaceholderEvidence(evidence) {
+  if (!evidence) return null;
+  return {
+    recorded_by: evidence.recorded_by ?? null,
+    test_command: evidence.test_command ?? null,
+    test_exit_code: evidence.test_exit_code ?? null,
+    head_sha: evidence.head_sha ?? null,
+  };
+}
+
 function writeOperatorExecutionEvidenceIfRequested({
   runDir,
   evidencePath,
@@ -348,10 +368,14 @@ function main() {
   const reason = String(getCliArg("--reason") || "").trim();
   const prTitleArg = getCliArg("--pr-title");
   const prBodyFile = getCliArg("--pr-body-file");
+  const replacePlaceholderEvidence = hasCliFlag("--replace-placeholder-evidence");
   const operatorEvidenceFlags = ["--test-command", "--test-result-file", "--test-exit-code"]
     .filter((flag) => hasCliFlag(flag));
   validateOperatorEvidenceFlagSet(operatorEvidenceFlags);
   const operatorEvidenceRequested = operatorEvidenceFlags.length > 0;
+  if (replacePlaceholderEvidence && !operatorEvidenceRequested) {
+    throw new Error("--replace-placeholder-evidence requires --test-command, --test-result-file, and --test-exit-code");
+  }
   const testCommand = getCliArg("--test-command");
   const testResultFileArg = getCliArg("--test-result-file");
   const testExitCodeArg = getCliArg("--test-exit-code");
@@ -401,11 +425,30 @@ function main() {
   const runDir = getRunDir(validatedPaths.repoRoot, data.run_id);
   const evidencePath = path.join(runDir, EXECUTION_EVIDENCE_FILENAME);
   const evidenceExists = fs.existsSync(evidencePath);
-
+  let existingEvidence = null;
+  let existingEvidenceReadError = null;
   if (operatorEvidenceRequested && evidenceExists) {
+    try {
+      existingEvidence = readExecutionEvidenceIfPresent(evidencePath);
+    } catch (error) {
+      existingEvidenceReadError = error;
+    }
+  }
+  const existingEvidenceIsPlaceholder = isDispatchPlaceholderEvidence(existingEvidence);
+  const shouldReplacePlaceholderEvidence = operatorEvidenceRequested
+    && replacePlaceholderEvidence
+    && evidenceExists
+    && existingEvidenceReadError === null
+    && existingEvidenceIsPlaceholder;
+
+  if (operatorEvidenceRequested && evidenceExists && !shouldReplacePlaceholderEvidence) {
+    const placeholderGuidance = existingEvidenceIsPlaceholder
+      ? " Pass --replace-placeholder-evidence to replace this dispatch placeholder with operator-run evidence."
+      : "";
     throw new Error(
       `${EXECUTION_EVIDENCE_FILENAME} already exists for ${data.run_id}; refusing to overwrite it. ` +
-      "Use skills/relay-dispatch/scripts/rebrand-evidence.js when existing evidence needs to be rebound to a new HEAD."
+      "Use skills/relay-dispatch/scripts/rebrand-evidence.js when existing evidence needs to be rebound to a new HEAD." +
+      placeholderGuidance
     );
   }
   const testResultFile = resolveTestResultFile(testResultFileArg);
@@ -532,7 +575,7 @@ function main() {
       throw new Error(`commit_failed: ${detail}`);
     }
   }
-  if (evidenceExists) {
+  if (evidenceExists && !shouldReplacePlaceholderEvidence) {
     const rebrandResult = rebrandEvidence(runDir, {
       newHeadSha: commitSha,
       recordedBy: "recover-commit-rebrand",
@@ -556,7 +599,7 @@ function main() {
       });
     }
   }
-  if (!evidenceExists) {
+  if (!evidenceExists || shouldReplacePlaceholderEvidence) {
     const operatorEvidence = writeOperatorExecutionEvidenceIfRequested({
       runDir,
       evidencePath,
@@ -580,9 +623,18 @@ function main() {
         operator_initiated: true,
         execution_evidence_path: operatorEvidence.path,
         execution_evidence_hash: operatorEvidence.hash,
+        ...(shouldReplacePlaceholderEvidence
+          ? {
+            override_class: "replace_placeholder_evidence",
+            affected_head_sha: commitSha,
+            prior_state: data.state,
+            required_reason: reason,
+            before: summarizeReplacedPlaceholderEvidence(existingEvidence),
+          }
+          : {}),
       });
     }
-    if (!operatorEvidenceRequested) {
+    if (!operatorEvidenceRequested && !evidenceExists) {
       warnMissingExecutionEvidence(data.run_id);
     }
   }

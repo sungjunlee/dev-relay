@@ -180,6 +180,7 @@ function setupRepo({
   runtimeOnlyDirty = false,
   unpushed = false,
   evidence = false,
+  placeholderEvidence = false,
   staleEvidence = false,
   manifestState = STATES.REVIEW_PENDING,
   branch = "issue-281",
@@ -247,9 +248,10 @@ function setupRepo({
     writeExecutionEvidence(runDir, {
       schema_version: 1,
       head_sha: headSha,
-      test_command: "node --test tests/relay-*/scripts/*.test.js",
+      test_command: placeholderEvidence ? "unspecified" : "node --test tests/relay-*/scripts/*.test.js",
       test_result_hash: "unspecified",
       test_result_summary: "unspecified",
+      ...(placeholderEvidence ? { test_exit_code: 1 } : {}),
       recorded_at: "2026-04-24T01:00:00.000Z",
       recorded_by: "dispatch-orchestrator-v1",
     });
@@ -701,6 +703,98 @@ test("operator test flags refuse to overwrite existing execution evidence", () =
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /execution-evidence\.json already exists/);
   assert.match(result.stderr, /rebrand-evidence\.js/);
+  assert.equal(execFileSync("git", ["-C", fixture.worktreePath, "rev-parse", "HEAD"], { encoding: "utf-8" }).trim(), beforeHead);
+  assert.equal(execFileSync("git", ["-C", fixture.worktreePath, "status", "--porcelain"], { encoding: "utf-8" }).trim(), "?? recovered.txt");
+  assert.equal(fs.readFileSync(evidencePath, "utf-8"), beforeEvidence);
+  assert.equal(readJsonLines(fixture.ghLogPath).length, 0);
+  assert.equal(readRunEvents(fixture.repoRoot, fixture.runId).length, 0);
+});
+
+test("operator test flags replace dispatch placeholder evidence only with explicit opt-in", () => {
+  const fixture = setupRepo({ dirty: true, evidence: true, placeholderEvidence: true });
+  const resultFile = path.join(fixture.runDir, "operator-test-result.txt");
+  fs.writeFileSync(resultFile, "node --test passed\n", "utf-8");
+  const evidencePath = path.join(fixture.runDir, EXECUTION_EVIDENCE_FILENAME);
+  const beforeEvidence = JSON.parse(fs.readFileSync(evidencePath, "utf-8"));
+
+  const result = runRecover(fixture, [
+    "--reason", "operator verified timeout placeholder",
+    "--test-command", "node --test tests/relay-dispatch/scripts/recover-commit.test.js",
+    "--test-result-file", resultFile,
+    "--test-exit-code", "0",
+    "--replace-placeholder-evidence",
+    "--json",
+  ]);
+
+  assert.equal(result.status, 0, result.stderr);
+  const parsed = JSON.parse(result.stdout);
+  const afterEvidence = JSON.parse(fs.readFileSync(evidencePath, "utf-8"));
+  assert.equal(afterEvidence.head_sha, parsed.commitSha);
+  assert.equal(afterEvidence.test_command, "node --test tests/relay-dispatch/scripts/recover-commit.test.js");
+  assert.equal(afterEvidence.test_result_hash, sha256File(resultFile));
+  assert.equal(afterEvidence.test_exit_code, 0);
+  assert.equal(afterEvidence.recorded_by, "recover-commit-operator-v1");
+
+  const events = readRunEvents(fixture.repoRoot, fixture.runId);
+  const operatorEvidenceEvent = events.find((entry) => entry.event === "operator_execution_evidence");
+  assert.equal(operatorEvidenceEvent.reason, "operator verified timeout placeholder");
+  assert.equal(operatorEvidenceEvent.override_class, "replace_placeholder_evidence");
+  assert.equal(operatorEvidenceEvent.affected_head_sha, parsed.commitSha);
+  assert.equal(operatorEvidenceEvent.required_reason, "operator verified timeout placeholder");
+  assert.equal(operatorEvidenceEvent.before.recorded_by, beforeEvidence.recorded_by);
+  assert.equal(operatorEvidenceEvent.before.test_command, "unspecified");
+  assert.equal(operatorEvidenceEvent.before.test_exit_code, 1);
+  assert.equal(operatorEvidenceEvent.before.head_sha, beforeEvidence.head_sha);
+  assert.equal(events.filter((entry) => entry.event === "execution_evidence_rebranded").length, 0);
+});
+
+test("operator test flags refuse placeholder evidence without replacement opt-in", () => {
+  const fixture = setupRepo({ dirty: true, evidence: true, placeholderEvidence: true });
+  const resultFile = path.join(fixture.runDir, "operator-test-result.txt");
+  fs.writeFileSync(resultFile, "node --test passed\n", "utf-8");
+  const beforeHead = execFileSync("git", ["-C", fixture.worktreePath, "rev-parse", "HEAD"], { encoding: "utf-8" }).trim();
+  const evidencePath = path.join(fixture.runDir, EXECUTION_EVIDENCE_FILENAME);
+  const beforeEvidence = fs.readFileSync(evidencePath, "utf-8");
+
+  const result = runRecover(fixture, [
+    "--reason", "operator attempted placeholder replacement without opt-in",
+    "--test-command", "node --test",
+    "--test-result-file", resultFile,
+    "--test-exit-code", "0",
+    "--json",
+  ]);
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /execution-evidence\.json already exists/);
+  assert.match(result.stderr, /--replace-placeholder-evidence/);
+  assert.equal(execFileSync("git", ["-C", fixture.worktreePath, "rev-parse", "HEAD"], { encoding: "utf-8" }).trim(), beforeHead);
+  assert.equal(execFileSync("git", ["-C", fixture.worktreePath, "status", "--porcelain"], { encoding: "utf-8" }).trim(), "?? recovered.txt");
+  assert.equal(fs.readFileSync(evidencePath, "utf-8"), beforeEvidence);
+  assert.equal(readJsonLines(fixture.ghLogPath).length, 0);
+  assert.equal(readRunEvents(fixture.repoRoot, fixture.runId).length, 0);
+});
+
+test("operator test flags refuse to replace real execution evidence even with placeholder flag", () => {
+  const fixture = setupRepo({ dirty: true, evidence: true });
+  const resultFile = path.join(fixture.runDir, "operator-test-result.txt");
+  fs.writeFileSync(resultFile, "node --test passed\n", "utf-8");
+  const beforeHead = execFileSync("git", ["-C", fixture.worktreePath, "rev-parse", "HEAD"], { encoding: "utf-8" }).trim();
+  const evidencePath = path.join(fixture.runDir, EXECUTION_EVIDENCE_FILENAME);
+  const beforeEvidence = fs.readFileSync(evidencePath, "utf-8");
+
+  const result = runRecover(fixture, [
+    "--reason", "operator attempted real evidence replacement",
+    "--test-command", "node --test",
+    "--test-result-file", resultFile,
+    "--test-exit-code", "0",
+    "--replace-placeholder-evidence",
+    "--json",
+  ]);
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /execution-evidence\.json already exists/);
+  assert.match(result.stderr, /rebrand-evidence\.js/);
+  assert.doesNotMatch(result.stderr, /--replace-placeholder-evidence/);
   assert.equal(execFileSync("git", ["-C", fixture.worktreePath, "rev-parse", "HEAD"], { encoding: "utf-8" }).trim(), beforeHead);
   assert.equal(execFileSync("git", ["-C", fixture.worktreePath, "status", "--porcelain"], { encoding: "utf-8" }).trim(), "?? recovered.txt");
   assert.equal(fs.readFileSync(evidencePath, "utf-8"), beforeEvidence);

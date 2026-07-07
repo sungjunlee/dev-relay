@@ -90,6 +90,7 @@ const FLAGS = [
   { flag: "--request-id", kind: VALUE, mode: MODE_PARSED, valueName: "<id>", rationale: "Structured relay-ready identifier; flag-like following tokens should mean the value is missing." },
   { flag: "--require-pr-body-change", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Require audited PR body evidence for same-HEAD recovery; no value is consumed." },
   { flag: "--review-file", kind: VALUE, mode: MODE_VERBATIM, valueName: "<path>", rationale: "Operator-supplied verdict path; keep the literal argv token." },
+  { flag: "--replace-placeholder-evidence", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Explicit opt-in to replace dispatch timeout placeholder evidence with operator-run evidence." },
   { flag: "--review-assurance", kind: VALUE, mode: MODE_PARSED, valueName: "<level>", allowedValues: ["standard", "hardened"], rationale: "Run-level review assurance policy; closed selector independent of agent identity." },
   { flag: "--review", kind: VALUE, mode: MODE_PARSED, valueName: "<actor[:provider/model]>", rationale: "Run route preview selector; flag-like following tokens should mean the value is missing." },
   { flag: "--advisory-review", kind: VALUE, mode: MODE_PARSED, valueName: "<actor[:provider/model]>", rationale: "Run route preview selector; flag-like following tokens should mean the value is missing." },
@@ -189,7 +190,7 @@ const COMMAND_FLAGS = {
   ],
   "recover-commit": [
     "--repo", "--run-id", "--manifest", "--reason", "--pr-title", "--pr-body-file",
-    "--test-command", "--test-result-file", "--test-exit-code",
+    "--test-command", "--test-result-file", "--test-exit-code", "--replace-placeholder-evidence",
     "--dry-run", "--json", "--help",
   ],
   "reconcile-run": [

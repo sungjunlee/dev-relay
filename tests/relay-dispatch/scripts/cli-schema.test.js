@@ -132,6 +132,7 @@ test("recover-commit flags are registered with explicit required modes", () => {
     ["--test-command", VALUE, MODE_VERBATIM],
     ["--test-result-file", VALUE, MODE_VERBATIM],
     ["--test-exit-code", VALUE, MODE_PARSED],
+    ["--replace-placeholder-evidence", BOOLEAN, MODE_PARSED],
     ["--run-id", VALUE, MODE_PARSED],
     ["--dry-run", BOOLEAN, MODE_PARSED],
     ["--json", BOOLEAN, MODE_PARSED],
