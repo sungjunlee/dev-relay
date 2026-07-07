@@ -9,6 +9,7 @@ const {
   findUnknownFlags,
 } = require("../../relay-dispatch/scripts/cli-args");
 const { findInflightRunsForIssue } = require("../../relay-dispatch/scripts/manifest/inflight-runs");
+const { readManifest } = require("../../relay-dispatch/scripts/manifest/store");
 const { resolveManifestRecord } = require("../../relay-dispatch/scripts/relay-resolver");
 const { EVENTS } = require("../../relay-dispatch/scripts/relay-events");
 const { buildRunReconcileAdvisory } = require("../../relay-dispatch/scripts/reconcile-advisory");
@@ -645,14 +646,20 @@ function compareReviewSnapshot(current, cliArgs) {
 
 function runReviewStage(cliArgs) {
   const repoRoot = path.resolve(cliArgs.getArg("--repo") || ".");
-  const record = resolveReviewManifest(cliArgs, repoRoot);
-  const snapshot = snapshotReview(record);
+  let record = resolveReviewManifest(cliArgs, repoRoot);
   const reconcile = buildRunReconcileAdvisory({
     repoRoot,
     manifestPath: record.manifestPath,
     data: record.data,
     mutate: cliArgs.hasFlag("--reconcile"),
   });
+  if (reconcile.mutated && reconcile.verdict?.state && reconcile.verdict.state !== record.data?.state) {
+    record = {
+      manifestPath: record.manifestPath,
+      ...readManifest(record.manifestPath),
+    };
+  }
+  const snapshot = snapshotReview(record);
   return {
     ok: true,
     stage: "review",

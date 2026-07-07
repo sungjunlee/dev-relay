@@ -17,6 +17,7 @@ const {
   ensureRunLayout,
   getManifestPath,
   getRunDir,
+  readManifest,
   updateManifestState,
   writeManifest,
 } = require("../../../skills/relay-dispatch/scripts/relay-manifest");
@@ -287,6 +288,30 @@ test("review preflight surfaces dead dispatched lease reconcile verdict without 
     },
   }));
   assert.equal(record.snapshot.state, STATES.DISPATCHED);
+});
+
+test("review preflight reports fresh status after mutating reconcile advances the run", () => {
+  const fixture = setupReviewRepo();
+  const { runId, runDir, manifestPath } = writeDispatchedRun(fixture.repoRoot, fixture.relayHome);
+  fs.writeFileSync(path.join(runDir, "dispatch-result.txt"), "executor completed\n", "utf-8");
+
+  const result = runDeadReviewPreflight({
+    ...fixture,
+    runId,
+    extraArgs: ["--reconcile", "--previous-rounds", "0"],
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.reconcile.required, true);
+  assert.equal(result.reconcile.mutated, true);
+  assert.equal(result.reconcile.verdict.rowName, "dead_with_result_or_work");
+  assert.equal(result.reconcile.verdict.dryRun, false);
+  assert.equal(result.reconcile.verdict.state, STATES.REVIEW_PENDING);
+  assert.equal(result.snapshot.state, STATES.REVIEW_PENDING);
+  assert.equal(result.ready_status.status, "not_ready");
+  assert.equal(result.ready_status.reason, "state_review_pending");
+  assert.equal(result.comparison.current.state, STATES.REVIEW_PENDING);
+  assert.equal(readManifest(manifestPath).data.state, STATES.REVIEW_PENDING);
 });
 
 test("run-preflight source does not reference AskUserQuestion", () => {

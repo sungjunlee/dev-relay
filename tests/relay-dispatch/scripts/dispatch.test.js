@@ -1214,6 +1214,113 @@ test("dispatch --detach returns a launch receipt while detached supervisor compl
   assert.equal(reconcile.state, STATES.REVIEW_PENDING);
 });
 
+test("dispatch --detach fails if the detached supervisor exits before writing its receipt", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  const missingManifest = path.join(repoRoot, "missing-manifest.md");
+  const env = {
+    ...process.env,
+    RELAY_HOME: relayHome,
+  };
+
+  const result = spawnSync(process.execPath, [
+    SCRIPT,
+    repoRoot,
+    "--manifest", missingManifest,
+    "--prompt", "resume missing manifest",
+    "--detach",
+    "--json",
+  ], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    env,
+    timeout: 7000,
+  });
+
+  assert.notEqual(result.status, 0);
+  const payload = JSON.parse(result.stdout);
+  assert.equal(payload.status, "failed");
+  assert.match(payload.error, /detached dispatch exited before receipt/);
+  assert.match(result.stderr, /detached dispatch exited before receipt/);
+});
+
+test("dispatch --manifest --detach returns a launch receipt while detached resume completes the run", async () => {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-detach-resume-bin-"));
+  writeFakeCodex(binDir);
+  const env = {
+    ...process.env,
+    PATH: `${binDir}:${process.env.PATH}`,
+    RELAY_HOME: relayHome,
+  };
+
+  const first = JSON.parse(runDispatch(repoRoot, [
+    "-b", "issue-802-detach-resume",
+    "--prompt", "first pass",
+    "--json",
+  ], env));
+  assert.equal(first.runState, STATES.REVIEW_PENDING);
+
+  const record = readManifest(first.manifestPath);
+  const updated = updateManifestState(record.data, STATES.CHANGES_REQUESTED, "re_dispatch_requested_changes");
+  writeManifest(first.manifestPath, updated, record.body);
+
+  const markerPath = path.join(os.tmpdir(), `relay-dispatch-detach-resume-${process.pid}-${Date.now()}.json`);
+  writeDelayedCompletionCodex(binDir, markerPath);
+  const resumeEnv = {
+    ...env,
+    RELAY_TEST_DETACH_EXECUTOR_DELAY_MS: "5000",
+  };
+
+  const started = Date.now();
+  const launched = spawnSync(process.execPath, [
+    SCRIPT,
+    repoRoot,
+    "--manifest", first.manifestPath,
+    "--prompt", "detached resume task",
+    "--detach",
+    "--json",
+  ], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    env: resumeEnv,
+    timeout: 7000,
+  });
+  const elapsedMs = Date.now() - started;
+
+  assert.equal(launched.status, 0, `${launched.stderr}\n${launched.stdout}`);
+  assert.ok(elapsedMs < 7000, `detach parent should return before delayed resume finishes; elapsed=${elapsedMs}`);
+  assert.equal(fs.existsSync(markerPath), false, "resume executor should not have completed before detach receipt returned");
+  const receipt = JSON.parse(launched.stdout);
+  assert.equal(receipt.status, "detached");
+  assert.equal(receipt.runId, first.runId);
+  assert.equal(receipt.manifestPath, first.manifestPath);
+  assert.equal(receipt.runDir, first.runDir);
+  assert.equal(Number.isInteger(receipt.supervisorPid), true);
+  assert.ok(receipt.supervisorPid > 0);
+  assert.equal(receipt.stdoutLog, path.join(first.runDir, "dispatch-stdout.log"));
+  assert.equal(receipt.stderrLog, path.join(first.runDir, "dispatch-stderr.log"));
+  assert.equal(fs.existsSync(receipt.stdoutLog), true);
+  assert.equal(fs.existsSync(receipt.stderrLog), true);
+  assert.match(receipt.reconcileCommand, new RegExp(`node skills/relay-dispatch/scripts/reconcile-run\\.js --repo .* --run-id ${first.runId}`));
+  assert.doesNotThrow(() => process.kill(receipt.supervisorPid, 0));
+
+  await waitFor(() => fs.existsSync(markerPath), {
+    timeoutMs: 12000,
+    intervalMs: 100,
+    message: "detached resume executor completion marker",
+  });
+  await waitFor(() => {
+    const manifest = readManifest(first.manifestPath).data;
+    return manifest.state === STATES.REVIEW_PENDING && !fs.existsSync(path.join(first.runDir, "lease.json"));
+  }, {
+    timeoutMs: 12000,
+    intervalMs: 100,
+    message: "detached resume dispatch completion",
+  });
+});
+
 function guidancePrompt({ task = "guidance test task", reviewAssurance = null } = {}) {
   const reviewAssuranceLines = reviewAssurance ? [`  review_assurance: ${reviewAssurance}`] : [];
   return [

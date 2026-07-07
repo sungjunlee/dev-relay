@@ -356,6 +356,12 @@ async function main() {
   if (plan.delay_after_manifest_ms) {
     await sleep(plan.delay_after_manifest_ms);
   }
+  if (plan.transition_after_delay_to === "review_pending" && fs.existsSync(manifestPath)) {
+    const record = readManifest(manifestPath);
+    if (record.data.state === STATES.DISPATCHED) {
+      writeManifest(manifestPath, updateManifestState(record.data, STATES.REVIEW_PENDING, "await_review"), record.body);
+    }
+  }
   if (lock) releaseIssueLock(lock);
   if (plan.exit_code && plan.exit_code !== 0) {
     process.stderr.write("fake dispatch failure after manifest\\n");
@@ -581,7 +587,7 @@ test("relay-fleet records and resumes a child dispatch that fails before manifes
   assert.match(child.run_id, /^issue-483-/);
 });
 
-test("relay-fleet launches leaf dispatch with --detach and polls the manifest instead of holding the launcher", () => {
+test("relay-fleet launches leaf dispatch with --detach and leaves child progress independent of the fleet supervisor", async () => {
   const { relayHome, repoRoot } = setupRepo("relay-fleet-detach-");
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "fleet-fake-"));
   const dispatchScript = writeFakeDispatchScript(tmpDir);
@@ -593,7 +599,8 @@ test("relay-fleet launches leaf dispatch with --detach and polls the manifest in
     [leaf.branch]: {
       delay_before_manifest_ms: 900,
       delay_after_manifest_ms: 5000,
-      run_state: "review_pending",
+      run_state: "dispatched",
+      transition_after_delay_to: "review_pending",
     },
   });
 
@@ -618,12 +625,19 @@ test("relay-fleet launches leaf dispatch with --detach and polls the manifest in
   assert.ok(elapsedMs < 4500, `fleet should not wait for detached child tail delay; elapsed=${elapsedMs}`);
   const logs = readJsonLines(logPath);
   assert.ok(logs.some((entry) => entry.args.includes("--detach")), "fleet must pass --detach to dispatch.js");
+  assert.ok(logs.some((entry) => entry.detachedChild), "fake detached child must start outside the fleet launcher");
   const fleet = readFleetManifest(repoRoot, "fleet-detach").data;
   const child = fleet.children[0];
   assert.equal(child.dispatch_status, DISPATCH_STATUS.DISPATCHED);
   assert.match(child.run_id, /^issue-802-/);
-  const manifest = readManifest(getManifestPath(repoRoot, child.run_id)).data;
-  assert.equal(manifest.state, RUN_STATES.REVIEW_PENDING);
+  const manifestPath = getManifestPath(repoRoot, child.run_id);
+  const manifest = readManifest(manifestPath).data;
+  assert.equal(manifest.state, RUN_STATES.DISPATCHED);
+
+  await waitFor(() => readManifest(manifestPath).data.state === RUN_STATES.REVIEW_PENDING, {
+    timeoutMs: 8000,
+    intervalMs: 100,
+  });
 });
 
 test("relay-fleet keeps manifest consistent when child 3 of 5 fails before manifest creation", () => {
