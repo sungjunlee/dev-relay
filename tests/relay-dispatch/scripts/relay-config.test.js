@@ -257,6 +257,28 @@ test("doctor uses local PATH only and labels installed disallowed harnesses as p
   );
 });
 
+test("doctor reports diagnostics instead of failing outside git checkouts", () => {
+  const relayHome = tempDir();
+  const nonRepoRoot = tempDir("relay-config-doctor-nonrepo-");
+  writeJson(path.join(relayHome, "routes.json"), {
+    version: 2,
+    strict: false,
+    routes: [],
+    denied_routes: [],
+  });
+
+  const result = runConfig(["doctor", "--json"], { relayHome, cwd: nonRepoRoot });
+
+  assert.equal(result.status, 0, result.combined);
+  const output = parseJson(result);
+  assert.equal(output.ok, true);
+  assert.equal(output.project_config.status, "error");
+  assert.match(output.project_config.error, /unable to resolve main repo root/);
+  assert.equal(output.project_routes.status, "error");
+  assert.match(output.project_routes.error, /unable to resolve main repo root/);
+  assert.deepEqual(output.advisories, []);
+});
+
 test("doctor includes project route provenance and best-effort model probes", () => {
   const relayHome = tempDir();
   const repoRoot = tempDir("relay-config-doctor-repo-");

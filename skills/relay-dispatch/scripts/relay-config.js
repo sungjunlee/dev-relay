@@ -401,6 +401,15 @@ function displayToolRouteStatus(tool) {
   return tool.policy;
 }
 
+function listDoctorRunAdvisories(repoRoot, options) {
+  try {
+    return listDeadDispatchedRunAdvisories(repoRoot, options);
+  } catch (error) {
+    if (error?.name === "CanonicalRepoRootResolutionError") return [];
+    throw error;
+  }
+}
+
 function commandDoctor(positionals, jsonOut) {
   if (positionals.length !== 1) {
     throw new Error("doctor does not accept positional arguments");
@@ -425,7 +434,7 @@ function commandDoctor(positionals, jsonOut) {
   const tools = toolNames.map((name) => doctorTool(result.policy, name));
   const projectConfig = loadProjectConfig({ repoRoot: process.cwd() });
   const projectRoutes = loadProjectRoutes({ repoRoot: process.cwd() });
-  const advisories = listDeadDispatchedRunAdvisories(process.cwd(), {
+  const advisories = listDoctorRunAdvisories(process.cwd(), {
     mutate: hasCliFlag("--reconcile"),
   });
   const output = {
