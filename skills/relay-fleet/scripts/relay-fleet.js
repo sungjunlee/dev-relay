@@ -494,7 +494,18 @@ function listFleetRunRecords(repoRoot, fleetId) {
         return null;
       }
     })
-    .filter((record) => record && record.data?.fleet_id === fleetId);
+    .filter((record) => record && record.data?.fleet_id === fleetId)
+    .sort((left, right) => {
+      const leftKey = [
+        left.data?.timestamps?.created_at || "",
+        left.data?.run_id || path.basename(left.manifestPath),
+      ].join(" ");
+      const rightKey = [
+        right.data?.timestamps?.created_at || "",
+        right.data?.run_id || path.basename(right.manifestPath),
+      ].join(" ");
+      return rightKey.localeCompare(leftKey);
+    });
 }
 
 function runRecordLeafRef(record) {
@@ -517,16 +528,16 @@ function detachedDispatchRunStateSucceeded(runState) {
   return DETACHED_DISPATCH_SUCCESS_STATES.has(runState);
 }
 
-function shouldAdoptRunRecord(fleet, leafRef, record) {
+function dispatchStatusForReconciledRunState(runState) {
+  if (runState === RUN_STATES.DISPATCHED) return DISPATCH_STATUS.DISPATCHING;
+  if (detachedDispatchRunStateSucceeded(runState)) return DISPATCH_STATUS.DISPATCHED;
+  return null;
+}
+
+function dispatchStatusForRunRecordAdoption(fleet, leafRef, record) {
   const existing = findFleetChild(fleet, leafRef);
-  if (
-    existing
-    && existing.run_id === record.data.run_id
-    && existing.dispatch_status !== DISPATCH_STATUS.DISPATCHED
-  ) {
-    return detachedDispatchRunStateSucceeded(record.data.state);
-  }
-  return true;
+  if (existing?.run_id && existing.run_id !== record.data.run_id) return null;
+  return dispatchStatusForReconciledRunState(record.data.state);
 }
 
 function issueLockHeld(repoRoot, fleetId, leaf) {
@@ -552,11 +563,12 @@ function reconcileFleet(repoRoot, fleetId, leaves) {
   for (const record of records) {
     const leafRef = runRecordLeafRef(record);
     if (!leafRef || !record.data?.run_id) continue;
-    if (!shouldAdoptRunRecord(fleet, leafRef, record)) continue;
+    const dispatchStatus = dispatchStatusForRunRecordAdoption(fleet, leafRef, record);
+    if (!dispatchStatus) continue;
     fleet = setFleetChild(repoRoot, fleetId, {
       leaf_ref: leafRef,
       run_id: record.data.run_id,
-      dispatch_status: DISPATCH_STATUS.DISPATCHED,
+      dispatch_status: dispatchStatus,
     });
   }
 

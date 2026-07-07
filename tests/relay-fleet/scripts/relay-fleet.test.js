@@ -11,6 +11,7 @@ const RELAY_FLEET_SCRIPT = path.join(REPO_ROOT, "skills", "relay-fleet", "script
 const {
   getFleetLeavesStorePath,
   getFleetRuntimePath,
+  reconcileFleet,
 } = require(RELAY_FLEET_SCRIPT);
 const {
   getFleetIssueLockPath,
@@ -855,20 +856,14 @@ test("relay-fleet resume re-adopts orphan child via fleet_id back-pointer", () =
     fleetId: "fleet-orphan",
     children: [{ leaf_ref: "leaf-01", run_id: null, dispatch_status: DISPATCH_STATUS.PENDING }],
   });
-  const manifestPath = getManifestPath(repoRoot, runId);
-  fs.mkdirSync(getRunDir(repoRoot, runId), { recursive: true });
-  let childManifest = createManifestSkeleton({
-    repoRoot,
+  writeChildRun(repoRoot, {
     runId,
     branch: "issue-501-leaf-01",
-    baseBranch: "main",
     issueNumber: 501,
-    worktreePath: path.join(repoRoot, "wt"),
     leafId: "leaf-01",
     fleetId: "fleet-orphan",
+    state: RUN_STATES.READY_TO_MERGE,
   });
-  childManifest = updateManifestState(childManifest, RUN_STATES.DISPATCHED, "await_dispatch_result");
-  writeManifest(manifestPath, childManifest);
 
   const result = runFleet([
     "--repo", repoRoot,
@@ -882,6 +877,65 @@ test("relay-fleet resume re-adopts orphan child via fleet_id back-pointer", () =
   const child = readFleetManifest(repoRoot, "fleet-orphan").data.children[0];
   assert.equal(child.run_id, runId);
   assert.equal(child.dispatch_status, DISPATCH_STATUS.DISPATCHED);
+});
+
+test("relay-fleet reconcile adopts orphan in-flight dispatched run as dispatching", () => {
+  const { repoRoot } = setupRepo("relay-fleet-orphan-dispatching-");
+  const fleetId = "fleet-orphan-dispatching";
+  const runId = "issue-807-20260515010101000-a1b2c3d4";
+  const leaf = makeLeaf(repoRoot, 1, { issue_number: 807 });
+  createFleetManifest(repoRoot, {
+    fleetId,
+    children: [{ leaf_ref: leaf.leaf_ref, run_id: null, dispatch_status: DISPATCH_STATUS.DISPATCHING }],
+  });
+  writeChildRun(repoRoot, {
+    runId,
+    branch: leaf.branch,
+    issueNumber: leaf.issue_number,
+    leafId: leaf.leaf_id,
+    fleetId,
+    state: RUN_STATES.DISPATCHED,
+  });
+
+  reconcileFleet(repoRoot, fleetId, [leaf]);
+
+  const child = readFleetManifest(repoRoot, fleetId).data.children[0];
+  assert.equal(child.run_id, runId);
+  assert.equal(child.dispatch_status, DISPATCH_STATUS.DISPATCHING);
+});
+
+test("relay-fleet reconcile does not let stale run records replace current child run", () => {
+  const { repoRoot } = setupRepo("relay-fleet-stale-record-");
+  const fleetId = "fleet-stale-record";
+  const staleRunId = "issue-808-20260514010101000-a1b2c3d4";
+  const currentRunId = "issue-808-20260515010101000-a1b2c3d4";
+  const leaf = makeLeaf(repoRoot, 1, { issue_number: 808 });
+  writeChildRun(repoRoot, {
+    runId: staleRunId,
+    branch: leaf.branch,
+    issueNumber: leaf.issue_number,
+    leafId: leaf.leaf_id,
+    fleetId,
+    state: RUN_STATES.READY_TO_MERGE,
+  });
+  writeChildRun(repoRoot, {
+    runId: currentRunId,
+    branch: leaf.branch,
+    issueNumber: leaf.issue_number,
+    leafId: leaf.leaf_id,
+    fleetId,
+    state: RUN_STATES.DISPATCHED,
+  });
+  createFleetManifest(repoRoot, {
+    fleetId,
+    children: [{ leaf_ref: leaf.leaf_ref, run_id: currentRunId, dispatch_status: DISPATCH_STATUS.DISPATCHING }],
+  });
+
+  reconcileFleet(repoRoot, fleetId, [leaf]);
+
+  const child = readFleetManifest(repoRoot, fleetId).data.children[0];
+  assert.equal(child.run_id, currentRunId);
+  assert.equal(child.dispatch_status, DISPATCH_STATUS.DISPATCHING);
 });
 
 test("SIGINT during fan-out leaves a consistent fleet manifest and resume recovers", async () => {
