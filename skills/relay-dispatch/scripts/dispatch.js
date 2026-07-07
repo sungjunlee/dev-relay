@@ -609,6 +609,10 @@ function removeDetachFlag(argv) {
   return argv.filter((arg) => arg !== "--detach" && !String(arg).startsWith("--detach="));
 }
 
+function appendRunIdArg(argv, runId) {
+  return [...argv, "--run-id", runId];
+}
+
 function tailFile(filePath, maxBytes = 8192) {
   try {
     const stat = fs.statSync(filePath);
@@ -661,13 +665,80 @@ function writeDetachReceiptIfRequested({ repoRoot, runId, manifestPath, runDir, 
   delete process.env[DETACH_RECEIPT_ENV];
 }
 
-async function waitForDetachReceipt({ receiptPath, stderrPath, stdoutPath, child, timeoutMs = 7000 }) {
+function buildDetachReceipt({ repoRoot, runId, manifestPath, runDir, stdoutLog, stderrLog, note = null }) {
+  return {
+    runId,
+    runDir,
+    manifestPath,
+    stdoutLog,
+    stderrLog,
+    reconcileCommand: reconcileCommandForReceipt(repoRoot, runId),
+    ...(note ? { note } : {}),
+  };
+}
+
+function buildFallbackReceiptForRun({ repoRoot, runId, manifestPath, note }) {
+  const paths = getRunArtifactPaths(repoRoot, runId);
+  return buildDetachReceipt({
+    repoRoot,
+    runId,
+    manifestPath,
+    runDir: paths.runDir,
+    stdoutLog: paths.stdoutLog,
+    stderrLog: paths.stderrLog,
+    note,
+  });
+}
+
+function planDetachedLaunch() {
+  const childArgs = removeDetachFlag(args);
+
+  if (!RESUME_MODE) {
+    const runId = RUN_ID || createRunId({ issueNumber: inferIssueNumber(BRANCH), branch: BRANCH });
+    const plannedChildArgs = RUN_ID ? childArgs : appendRunIdArg(childArgs, runId);
+    return {
+      childArgs: plannedChildArgs,
+      fallbackReceipt: buildFallbackReceiptForRun({
+        repoRoot: REPO_PATH,
+        runId,
+        manifestPath: getManifestPath(REPO_PATH, runId),
+        note: "detached supervisor is still running; the child receipt was not written before the parent wait ceiling. The manifest may appear after setup finishes. Use the logs or reconcile command to follow progress.",
+      }),
+    };
+  }
+
+  try {
+    const manifestPath = MANIFEST_INPUT ? path.resolve(MANIFEST_INPUT) : getManifestPath(REPO_PATH, RUN_ID);
+    if (!fs.existsSync(manifestPath)) {
+      return { childArgs, fallbackReceipt: null };
+    }
+    const record = readManifest(manifestPath);
+    const runId = record.data?.run_id || RUN_ID;
+    const repoRoot = record.data?.paths?.repo_root ? path.resolve(record.data.paths.repo_root) : REPO_PATH;
+    if (!runId) {
+      return { childArgs, fallbackReceipt: null };
+    }
+    return {
+      childArgs,
+      fallbackReceipt: buildFallbackReceiptForRun({
+        repoRoot,
+        runId,
+        manifestPath,
+        note: "detached supervisor is still running; the child receipt was not written before the parent wait ceiling. Use the logs or reconcile command to follow progress.",
+      }),
+    };
+  } catch {
+    return { childArgs, fallbackReceipt: null };
+  }
+}
+
+async function waitForDetachReceipt({ receiptPath, stderrPath, stdoutPath, child, fallbackReceipt = null, timeoutMs = 30000 }) {
   const deadline = Date.now() + timeoutMs;
   let childExit = null;
   child.once("exit", (code, signal) => {
     childExit = { code, signal };
   });
-  while (Date.now() < deadline) {
+  while (true) {
     if (fs.existsSync(receiptPath)) {
       let receipt;
       try {
@@ -687,11 +758,11 @@ async function waitForDetachReceipt({ receiptPath, stderrPath, stdoutPath, child
       const detail = stderrTail || stdoutTail || `child exited code=${childExit.code} signal=${childExit.signal || "none"}`;
       throw new Error(`detached dispatch exited before receipt: ${detail}`);
     }
+    if (Date.now() >= deadline && fallbackReceipt) {
+      return fallbackReceipt;
+    }
     await sleepAsync(50);
   }
-  const stderrTail = tailFile(stderrPath);
-  const detail = stderrTail ? ` stderr tail:\n${stderrTail}` : "";
-  throw new Error(`timed out waiting for detached dispatch receipt at ${receiptPath}.${detail}`);
 }
 
 async function launchDetachedAndExit() {
@@ -699,11 +770,12 @@ async function launchDetachedAndExit() {
   const receiptPath = path.join(tmpDir, "receipt.json");
   const stdoutPath = path.join(tmpDir, "supervisor-stdout.log");
   const stderrPath = path.join(tmpDir, "supervisor-stderr.log");
+  const detachedLaunch = planDetachedLaunch();
   const stdoutFd = fs.openSync(stdoutPath, "w");
   const stderrFd = fs.openSync(stderrPath, "w");
   let child;
   try {
-    child = nodeSpawn(process.execPath, [__filename, ...removeDetachFlag(args)], {
+    child = nodeSpawn(process.execPath, [__filename, ...detachedLaunch.childArgs], {
       cwd: process.cwd(),
       env: {
         ...process.env,
@@ -717,7 +789,13 @@ async function launchDetachedAndExit() {
     try { fs.closeSync(stderrFd); } catch {}
   }
   child.unref();
-  const receipt = await waitForDetachReceipt({ receiptPath, stderrPath, stdoutPath, child });
+  const receipt = await waitForDetachReceipt({
+    receiptPath,
+    stderrPath,
+    stdoutPath,
+    child,
+    fallbackReceipt: detachedLaunch.fallbackReceipt,
+  });
   const output = {
     status: "detached",
     ...receipt,
@@ -731,6 +809,7 @@ async function launchDetachedAndExit() {
     console.log(`  Stdout log: ${output.stdoutLog}`);
     console.log(`  Stderr log: ${output.stderrLog}`);
     console.log(`  Reconcile:  ${output.reconcileCommand}`);
+    if (output.note) console.log(`  Note:       ${output.note}`);
   }
 }
 
@@ -2106,6 +2185,14 @@ async function main() {
     executor_network: executorNetworkPolicy,
     executor_policy: executorPolicy,
     policy_decision: policyDecision,
+  });
+  writeDetachReceiptIfRequested({
+    repoRoot,
+    runId,
+    manifestPath,
+    runDir: runArtifactPaths.runDir,
+    stdoutLog,
+    stderrLog,
   });
   await maybePauseBeforeExecutorSpawnForTest();
 

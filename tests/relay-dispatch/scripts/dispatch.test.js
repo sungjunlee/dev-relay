@@ -1214,6 +1214,67 @@ test("dispatch --detach returns a launch receipt while detached supervisor compl
   assert.equal(reconcile.state, STATES.REVIEW_PENDING);
 });
 
+test("dispatch --detach returns a receipt during slow pre-executor setup while supervisor continues", async () => {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-detach-slow-setup-bin-"));
+  const markerPath = path.join(os.tmpdir(), `relay-dispatch-detach-slow-setup-${process.pid}-${Date.now()}.json`);
+  writeSleepingCodex(binDir);
+  const env = {
+    ...process.env,
+    PATH: `${binDir}:${process.env.PATH}`,
+    RELAY_HOME: relayHome,
+    RELAY_TEST_BEFORE_EXECUTOR_SPAWN_PAUSE_MS: "9000",
+    RELAY_TEST_EXECUTOR_MARKER: markerPath,
+  };
+
+  const launched = spawnSync(process.execPath, [SCRIPT, repoRoot, ...withRequiredRubric([
+    "-b", "issue-802-detach-slow-setup",
+    "--prompt", "detached launch pauses before executor spawn",
+    "--detach",
+    "--json",
+  ])], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    env,
+    timeout: 12000,
+  });
+
+  let receipt = null;
+  try {
+    assert.equal(launched.status, 0, `${launched.stderr}\n${launched.stdout}`);
+    assert.equal(launched.error, undefined);
+    assert.equal(fs.existsSync(markerPath), false, "executor should not spawn before detach receipt returned");
+    receipt = JSON.parse(launched.stdout);
+    assert.equal(receipt.status, "detached");
+    assert.match(receipt.runId, /^issue-802-/);
+    assert.equal(receipt.manifestPath, getManifestPath(repoRoot, receipt.runId));
+    assert.equal(receipt.runDir, getRunDir(repoRoot, receipt.runId));
+    assert.equal(receipt.stdoutLog, path.join(getRunDir(repoRoot, receipt.runId), "dispatch-stdout.log"));
+    assert.equal(receipt.stderrLog, path.join(getRunDir(repoRoot, receipt.runId), "dispatch-stderr.log"));
+    assert.equal(fs.existsSync(receipt.stdoutLog), true);
+    assert.equal(fs.existsSync(receipt.stderrLog), true);
+    assert.match(receipt.reconcileCommand, new RegExp(`node skills/relay-dispatch/scripts/reconcile-run\\.js --repo .* --run-id ${receipt.runId}`));
+    assert.equal(Number.isInteger(receipt.supervisorPid), true);
+    assert.ok(receipt.supervisorPid > 0);
+    assert.doesNotThrow(() => process.kill(receipt.supervisorPid, 0));
+  } finally {
+    if (receipt?.supervisorPid) {
+      try {
+        process.kill(receipt.supervisorPid, "SIGTERM");
+      } catch {}
+      await waitFor(() => {
+        try {
+          process.kill(receipt.supervisorPid, 0);
+          return false;
+        } catch (error) {
+          return error.code === "ESRCH";
+        }
+      }, { timeoutMs: 5000, message: "detached supervisor to exit after slow setup test" });
+    }
+  }
+});
+
 test("dispatch --detach fails if the detached supervisor exits before writing its receipt", () => {
   const { repoRoot, relayHome } = setupRepo();
   process.env.RELAY_HOME = relayHome;
