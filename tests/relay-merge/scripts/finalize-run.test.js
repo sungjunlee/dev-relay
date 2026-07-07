@@ -1252,6 +1252,40 @@ test("finalize-run resumes cleanup when the PR is already merged", () => {
   assert.doesNotMatch(ghLog, /pr merge 123 --squash/);
 });
 
+test("finalize-run does not re-select a completed merged run on branch+pr re-invocation", () => {
+  const { repoRoot, branch, headSha } = setupRepo();
+  const logPath = path.join(repoRoot, "gh.log");
+  const ghOptions = {
+    comments: [DEFAULT_REVIEW_COMMENT],
+    commits: [
+      {
+        oid: headSha,
+        committedDate: DEFAULT_COMMIT_DATE,
+      },
+    ],
+    state: "MERGED",
+    mergeCommit: { oid: "merged-sha" },
+  };
+  const fakeGh = writeFakeGh(logPath, ghOptions);
+
+  // First finalize completes the run: MERGED, cleanup succeeded, next_action done.
+  const first = JSON.parse(execFileSync("node", [
+    SCRIPT, "--repo", repoRoot, "--branch", branch, "--pr", "123", "--json",
+  ], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe", env: { ...process.env, RELAY_GH_BIN: fakeGh } }));
+  assert.equal(first.state, STATES.MERGED);
+  assert.equal(first.nextAction, "done");
+
+  // Re-invoking the same branch+pr must NOT re-select the completed run and
+  // re-run post-merge bookkeeping. It fails closed (requires --run-id/--manifest).
+  fs.writeFileSync(logPath, "", "utf-8");
+  assert.throws(() => execFileSync("node", [
+    SCRIPT, "--repo", repoRoot, "--branch", branch, "--pr", "123", "--json",
+  ], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe", env: { ...process.env, RELAY_GH_BIN: fakeGh } }));
+  const secondLog = fs.readFileSync(logPath, "utf-8");
+  assert.doesNotMatch(secondLog, /issue close/);
+  assert.doesNotMatch(secondLog, /pr comment/);
+});
+
 test("finalize-run skips pre-merge gates when GitHub already reports the PR merged", () => {
   const { repoRoot, manifestPath, branch, worktreePath, headSha } = setupRepo();
   const logPath = path.join(repoRoot, "gh.log");

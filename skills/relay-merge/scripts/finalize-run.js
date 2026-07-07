@@ -561,26 +561,40 @@ function matchesBranchPr(record, branch, prNumber) {
     && Number(record?.data?.git?.pr_number || 0) === Number(prNumber);
 }
 
+// A merged run is a crash-resume target only while its finalize cleanup or
+// post-merge bookkeeping is still pending. A run that completed (next_action=done
+// or cleanup already succeeded) must not be re-selected — re-running it would
+// duplicate post-merge side effects (remote branch delete, issue close, durable
+// learnings commit).
+function mergedRetryStillPending(record) {
+  const data = record?.data || {};
+  if (data.next_action === "done") {
+    return false;
+  }
+  return data.cleanup?.status !== "succeeded";
+}
+
 function resolveMergedBranchPrRetryRecord({ repoRoot, branch, prNumber }) {
   const exactMatches = listManifestRecords(repoRoot)
     .filter((record) => matchesBranchPr(record, branch, prNumber));
   const mergedMatches = exactMatches
     .filter((record) => record?.data?.state === STATES.MERGED);
+  const pendingMerged = mergedMatches.filter(mergedRetryStillPending);
 
-  if (exactMatches.length === 1 && mergedMatches.length === 1) {
+  if (exactMatches.length === 1 && pendingMerged.length === 1) {
     return resolveManifestRecord({
       repoRoot,
-      runId: mergedMatches[0].data.run_id,
+      runId: pendingMerged[0].data.run_id,
     });
   }
 
-  if (exactMatches.length > 1 && mergedMatches.length === exactMatches.length) {
-    const runIds = mergedMatches
+  if (exactMatches.length > 1 && mergedMatches.length === exactMatches.length && pendingMerged.length > 1) {
+    const runIds = pendingMerged
       .map((record) => record?.data?.run_id || path.basename(record?.manifestPath || "unknown", ".md"))
       .join(", ");
     throw new Error(
       `Ambiguous merged relay manifest for branch '${branch}' + pr '${prNumber}' ` +
-      `(${mergedMatches.length} candidates): ${runIds}. Pass --run-id or --manifest explicitly.`
+      `(${pendingMerged.length} candidates): ${runIds}. Pass --run-id or --manifest explicitly.`
     );
   }
 
