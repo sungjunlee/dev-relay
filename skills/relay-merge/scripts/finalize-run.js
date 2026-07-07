@@ -162,6 +162,21 @@ function buildStackedBaseOverrideAuditFields(stackedBaseGuard, prNumber, headSha
   };
 }
 
+// Fetch only the inputs the fresh review gate needs, without pulling
+// statusCheckRollup/mergeable/base. Used on the already-merged retry path where
+// CI, mergeability, and stacked-base checks are moot but the review marker must
+// still be validated.
+function fetchReviewContext(repoPath, prNumber) {
+  const raw = execGh(repoPath, ["pr", "view", String(prNumber),
+    "--json", "comments,commits,headRefOid"]);
+  const parsed = JSON.parse(raw);
+  return {
+    comments: parsed.comments || [],
+    commits: parsed.commits || [],
+    headRefOid: parsed.headRefOid || null,
+  };
+}
+
 function fetchPreMergeContext(repoPath, prNumber) {
   const raw = execGh(repoPath, ["pr", "view", String(prNumber),
     "--json", "baseRefName,comments,commits,mergeable,statusCheckRollup,headRefOid"]);
@@ -864,8 +879,37 @@ function main() {
     }
     if (alreadyMerged) {
       // The PR is already in GitHub's terminal MERGED state. Retry finalization
-      // must skip gates whose inputs can disappear after merge (checks, branch
-      // base, and retained worktree HEAD) and move on to manifest finalization.
+      // must skip gates whose inputs disappear or are moot after merge (CI
+      // checks, mergeability, stacked base, retained worktree HEAD). It STILL
+      // runs the fresh review gate for a normal ready_to_merge finalize so a
+      // stale or advanced review marker cannot be finalized silently against an
+      // externally merged PR. Explicit operator overrides
+      // (--force-finalize-nonready, --skip-review) keep their bypass semantics.
+      if (!forceFinalizeNonready && !skipReviewReason && safeData.state === STATES.READY_TO_MERGE) {
+        const reviewContext = fetchReviewContext(repoPath, prNumber);
+        reviewGate = evaluateReviewGate({
+          prNumber,
+          comments: reviewContext.comments,
+          commits: reviewContext.commits,
+          manifestData: safeData,
+          expectedReviewerLogin: safeData.review?.reviewer_login || null,
+          runDir: getRunDir(validatedPaths.repoRoot, safeData.run_id),
+          headRefOid: reviewContext.headRefOid,
+        });
+        if (!reviewGate.readyToMerge) {
+          if (!dryRun) {
+            appendRunEvent(repoPath, safeData.run_id, {
+              event: EVENTS.MERGE_BLOCKED,
+              state_from: safeData.state,
+              state_to: safeData.state,
+              head_sha: reviewGate.latestCommit || currentHeadSha,
+              round: safeData.review?.rounds || null,
+              reason: reviewGate.status,
+            });
+          }
+          throw new Error(`Fresh review gate failed: ${reviewGate.status}`);
+        }
+      }
     } else if (skipReviewReason) {
       const skipReviewFailure = buildSkipReviewGateFailure(prNumber, skipReviewRubricAudit);
       if (skipReviewFailure) {

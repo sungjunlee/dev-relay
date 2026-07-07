@@ -1316,6 +1316,13 @@ test("finalize-run completes an already-merged retry when the retained worktree 
   const fakeGh = writeFakeGh(logPath, {
     state: "MERGED",
     mergeCommit: { oid: "merged-sha" },
+    comments: [DEFAULT_REVIEW_COMMENT],
+    commits: [
+      {
+        oid: headSha,
+        committedDate: DEFAULT_COMMIT_DATE,
+      },
+    ],
     statusCheckRollup: [
       { context: "coderabbit", state: "PENDING" },
     ],
@@ -1947,6 +1954,50 @@ test("finalize-run blocks merge when review is stale for current HEAD", () => {
 
   const manifest = readManifest(manifestPath).data;
   assert.equal(manifest.state, STATES.READY_TO_MERGE);
+});
+
+test("finalize-run blocks an already-merged retry when review is stale for current HEAD", () => {
+  const { repoRoot, manifestPath, branch, worktreePath } = setupRepo();
+  fs.writeFileSync(path.join(worktreePath, "followup.txt"), "new\n", "utf-8");
+  execFileSync("git", ["-C", worktreePath, "add", "followup.txt"], { encoding: "utf-8", stdio: "pipe" });
+  execFileSync("git", ["-C", worktreePath, "commit", "-m", "Follow-up"], { encoding: "utf-8", stdio: "pipe" });
+  const newHeadSha = execFileSync("git", ["-C", worktreePath, "rev-parse", "HEAD"], { encoding: "utf-8", stdio: "pipe" }).trim();
+
+  const logPath = path.join(repoRoot, "gh.log");
+  const fakeGh = writeFakeGh(logPath, {
+    state: "MERGED",
+    mergeCommit: { oid: "merged-sha" },
+    comments: [
+      {
+        body: "<!-- relay-review -->\n## Relay Review\nVerdict: LGTM\nRounds: 1",
+        createdAt: "2026-04-03T08:00:00Z",
+      },
+    ],
+    commits: [
+      {
+        oid: newHeadSha,
+        committedDate: "2026-04-03T09:00:00Z",
+      },
+    ],
+  });
+
+  assert.throws(() => execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--branch", branch,
+    "--pr", "123",
+    "--json",
+  ], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+    env: { ...process.env, RELAY_GH_BIN: fakeGh },
+  }), /Fresh review gate failed: stale/);
+
+  // The externally merged PR must NOT be silently finalized on a stale review marker.
+  const manifest = readManifest(manifestPath).data;
+  assert.equal(manifest.state, STATES.READY_TO_MERGE);
+  assert.equal(fs.existsSync(worktreePath), true);
 });
 
 test("finalize-run blocks merge when no relay review audit trail exists", () => {
