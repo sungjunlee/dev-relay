@@ -118,3 +118,7 @@ node "${RELAY_SKILL_ROOT:-skills}/relay-fleet/scripts/relay-fleet.js" \
 ## SPOF
 
 There is intentionally no daemon. A fleet makes progress only while `relay-fleet` is actively running. If the session dies, the fleet pauses; re-run with `--resume` to reconcile child manifests, skip still-running children, and continue recoverable pre-manifest failures.
+
+## /goal Persistence
+
+For long fleets, the operator may activate host `/goal` after fan-out to keep one session driving the daemonless loop. Use the copy-paste condition and idempotent operating loop in [references/goal-persistence.md](references/goal-persistence.md); the condition must name the transcript-visible `--status --json` check, not just an operator process.
