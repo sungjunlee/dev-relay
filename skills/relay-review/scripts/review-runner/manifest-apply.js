@@ -1,4 +1,5 @@
 const { STATES, updateManifestState } = require("../../../relay-dispatch/scripts/manifest/lifecycle");
+const { isLowConfidenceAdvisoryPass } = require("./verdict");
 
 function refreshManifestWithoutStateChange(data, nextAction) {
   return {
@@ -51,6 +52,16 @@ function applyVerdictToManifest(data, verdict, round, prNumber, reviewedHeadSha,
         ? "internal_lgtm"
         : "lgtm";
     }
+  } else if (verdict.verdict === "changes_requested" && isLowConfidenceAdvisoryPass(verdict)) {
+    nextState = data.state === STATES.INTERNAL_REVIEW_PENDING
+      ? STATES.PUBLISH_PENDING
+      : STATES.READY_TO_MERGE;
+    nextAction = data.state === STATES.INTERNAL_REVIEW_PENDING
+      ? "publish_pr"
+      : "await_explicit_merge";
+    latestVerdict = data.state === STATES.INTERNAL_REVIEW_PENDING
+      ? "internal_lgtm"
+      : "lgtm";
   } else if (verdict.verdict === "changes_requested") {
     nextState = STATES.CHANGES_REQUESTED;
     nextAction = "re_dispatch_requested_changes";
@@ -75,7 +86,7 @@ function applyVerdictToManifest(data, verdict, round, prNumber, reviewedHeadSha,
       ...(updated.review || {}),
       rounds: round,
       latest_verdict: latestVerdict,
-      repeated_issue_count: verdict.verdict === "changes_requested" ? repeatedIssueCount : 0,
+      repeated_issue_count: verdict.verdict === "changes_requested" && !isLowConfidenceAdvisoryPass(verdict) ? repeatedIssueCount : 0,
       ...(options.lineageSummary ? { last_lineage_summary: options.lineageSummary } : {}),
       last_reviewed_sha: reviewedHeadSha || null,
       ...buildReviewStatusFields(verdict),

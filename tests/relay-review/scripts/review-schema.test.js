@@ -33,7 +33,7 @@ test("schema/verdict issues mark rejection metadata as nullable+required (OpenAI
   }
 });
 
-test("schema/verdict issue required matrix lists all 11 properties (strict-mode complete)", async (t) => {
+test("schema/verdict issue required matrix lists all 12 properties (strict-mode complete)", async (t) => {
   for (const [label, schema] of [
     ["runner", REVIEW_VERDICT_JSON_SCHEMA],
     ["reviewer", REVIEWER_VERDICT_JSON_SCHEMA],
@@ -48,12 +48,30 @@ test("schema/verdict issue required matrix lists all 11 properties (strict-mode 
         "line",
         "category",
         "severity",
+        "confidence",
         "factor",
         "attempted_approach",
         "fix_direction",
         "lineage",
         "relates_to",
       ]);
+    });
+  }
+});
+
+test("schema/verdict issue confidence enum is required", async (t) => {
+  for (const [label, schema] of [
+    ["runner", REVIEW_VERDICT_JSON_SCHEMA],
+    ["reviewer", REVIEWER_VERDICT_JSON_SCHEMA],
+  ]) {
+    await t.test(label, () => {
+      const issue = issueSchema(schema);
+
+      assert.deepEqual(issue.properties.confidence, {
+        type: "string",
+        enum: ["low", "medium", "high"],
+      });
+      assert.equal(issue.required.includes("confidence"), true, "confidence must be required");
     });
   }
 });

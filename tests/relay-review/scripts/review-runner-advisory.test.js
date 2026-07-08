@@ -86,7 +86,7 @@ function changesRequestedVerdict() {
       file: "README.md",
       line: 1,
       category: "contract",
-      severity: "high",
+      severity: "high", confidence: "high",
     }],
   };
 }

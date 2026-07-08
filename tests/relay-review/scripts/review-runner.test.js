@@ -683,7 +683,7 @@ test("review-runner snapshots PR body separately for round 2", () => {
       file: "README.md",
       line: 1,
       category: "contract",
-      severity: "high",
+      severity: "high", confidence: "high",
     }],
     rubric_scores: defaultRubricScores(),
     scope_drift: { creep: [], missing: [] },
@@ -1277,7 +1277,7 @@ test("review-runner fail-closes reviewer PASS into changes_requested when execut
   const commentBody = fs.readFileSync(commentCapturePath, "utf-8");
 
   const manifest = readManifest(manifestPath).data;
-  const reviewApplyEvent = readRunEvents(repoRoot, runId).find((event) => event.event === "review_apply");
+  const reviewApplyEvent = [...readRunEvents(repoRoot, runId)].reverse().find((event) => event.event === "review_apply");
 
   assert.equal(result.appliedVerdict, "changes_requested");
   assert.equal(result.state, STATES.CHANGES_REQUESTED);
@@ -1318,7 +1318,7 @@ test("review-runner stores the runner-computed quality_execution_status in the v
       file: "src/index.js",
       line: 10,
       category: "contract",
-      severity: "high",
+      severity: "high", confidence: "high",
     }],
     rubric_scores: defaultRubricScores(),
     scope_drift: { creep: [], missing: [] },
@@ -1397,7 +1397,7 @@ test("review-runner fail-closes reviewer PASS into changes_requested when execut
   const verdictRecord = JSON.parse(fs.readFileSync(result.verdictPath, "utf-8"));
   const commentBody = fs.readFileSync(commentCapturePath, "utf-8");
   const manifest = readManifest(manifestPath).data;
-  const reviewApplyEvent = readRunEvents(repoRoot, runId).find((event) => event.event === "review_apply");
+  const reviewApplyEvent = [...readRunEvents(repoRoot, runId)].reverse().find((event) => event.event === "review_apply");
 
   assert.equal(result.appliedVerdict, "changes_requested");
   assert.equal(result.state, STATES.CHANGES_REQUESTED);
@@ -1580,7 +1580,7 @@ test("changes_requested verdict creates a re-dispatch artifact", () => {
         file: "src/index.js",
         line: 12,
         category: "contract",
-        severity: "high",
+        severity: "high", confidence: "high",
       },
     ],
     rubric_scores: defaultRubricScores(),
@@ -1616,6 +1616,74 @@ test("changes_requested verdict creates a re-dispatch artifact", () => {
   assert.deepEqual(manifest.review.last_lineage_summary, { deepening: 0, repeat: 0, stale: 0, new: 0, newly_scoreable: 0, unknown: 1 });
 });
 
+test("all-low-confidence changes_requested verdict applies as advisory pass while preserving findings", () => {
+  const { repoRoot, manifestPath, doneCriteriaPath, diffPath, runId } = setupRepo();
+  const reviewFile = writeVerdict(repoRoot, "low-confidence-changes.json", {
+    verdict: "changes_requested",
+    summary: "Only speculative quality notes remain.",
+    contract_status: "pass",
+    quality_review_status: "fail",
+    quality_execution_status: "pass",
+    next_action: "changes_requested",
+    issues: [
+      {
+        title: "Consider clearer helper naming",
+        body: "The helper name may be easier to scan if it mentions the state it returns.",
+        file: "src/index.js",
+        line: 12,
+        category: "quality",
+        severity: "low",
+        confidence: "low",
+      },
+      {
+        title: "Consider localizing the loop variable",
+        body: "The loop variable is readable as-is, but a narrower name might reduce scan time.",
+        file: "src/index.js",
+        line: 20,
+        category: "quality",
+        severity: "low",
+        confidence: "low",
+      },
+    ],
+    rubric_scores: defaultRubricScores(),
+    scope_drift: { creep: [], missing: [] },
+  });
+
+  const stdout = execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--branch", "issue-42",
+    "--pr", "123",
+    "--done-criteria-file", doneCriteriaPath,
+    "--diff-file", diffPath,
+    "--review-file", reviewFile,
+    "--no-comment",
+    "--json",
+  ], { encoding: "utf-8" });
+
+  const result = JSON.parse(stdout);
+  const manifest = readManifest(manifestPath).data;
+  const verdictRecord = JSON.parse(fs.readFileSync(result.verdictPath, "utf-8"));
+  const reviewApplyEvent = [...readRunEvents(repoRoot, runId)].reverse().find((event) => event.event === "review_apply");
+
+  assert.equal(result.appliedVerdict, "pass");
+  assert.equal(result.state, STATES.READY_TO_MERGE);
+  assert.equal(result.redispatchPath, null);
+  assert.deepEqual(result.confidenceDowngrade, {
+    originalVerdict: "changes_requested",
+    appliedVerdict: "pass",
+    lowConfidenceCount: 2,
+  });
+  assert.equal(manifest.state, STATES.READY_TO_MERGE);
+  assert.equal(manifest.review.latest_verdict, "lgtm");
+  assert.equal(verdictRecord.verdict, "changes_requested");
+  assert.equal(verdictRecord.issues.length, 2);
+  assert.ok(verdictRecord.issues.every((issue) => issue.confidence === "low"));
+  assert.equal(reviewApplyEvent?.reason, "changes_requested");
+  assert.equal(reviewApplyEvent?.confidence_downgrade, true);
+  assert.equal(reviewApplyEvent?.low_confidence_count, 2);
+});
+
 test("review-runner records rubric_scores as iteration_score events", () => {
   const { repoRoot, runId, doneCriteriaPath, diffPath } = setupRepo();
   const reviewFile = writeVerdict(repoRoot, "changes-with-scores.json", {
@@ -1632,7 +1700,7 @@ test("review-runner records rubric_scores as iteration_score events", () => {
         file: "src/index.js",
         line: 12,
         category: "contract",
-        severity: "high",
+        severity: "high", confidence: "high",
       },
     ],
     rubric_scores: [
@@ -1731,7 +1799,7 @@ test("review-runner records score divergence and appends warning text to the PR 
         file: "src/index.js",
         line: 12,
         category: "contract",
-        severity: "high",
+        severity: "high", confidence: "high",
       },
     ],
     rubric_scores: [
@@ -1826,7 +1894,7 @@ test("review-runner keeps event journals on the manifest repo slug when --repo i
         file: "src/index.js",
         line: 12,
         category: "contract",
-        severity: "high",
+        severity: "high", confidence: "high",
       },
     ],
     rubric_scores: [
@@ -2074,7 +2142,7 @@ test("invalid pass verdict is rejected", () => {
         file: "x.js",
         line: 1,
         category: "contract",
-        severity: "low",
+        severity: "low", confidence: "low",
       },
     ],
     rubric_scores: defaultRubricScores(),
@@ -2232,7 +2300,7 @@ test("invalid scope_drift missing status is rejected", () => {
     contract_status: "fail",
     quality_review_status: "not_run",
     next_action: "changes_requested",
-    issues: [{ title: "Missing", body: "Not implemented", file: "x.js", line: 1, category: "contract", severity: "high" }],
+    issues: [{ title: "Missing", body: "Not implemented", file: "x.js", line: 1, category: "contract", severity: "high", confidence: "high" }],
     rubric_scores: defaultRubricScores(),
     scope_drift: {
       creep: [],
@@ -2261,7 +2329,7 @@ test("changes_requested verdict with scope_drift includes drift in redispatch", 
     contract_status: "fail",
     quality_review_status: "not_run",
     next_action: "changes_requested",
-    issues: [{ title: "Creep", body: "Unrelated change", file: "extra.js", line: 1, category: "scope", severity: "medium" }],
+    issues: [{ title: "Creep", body: "Unrelated change", file: "extra.js", line: 1, category: "scope", severity: "medium", confidence: "medium" }],
     rubric_scores: defaultRubricScores(),
     scope_drift: {
       creep: [{ file: "extra.js", reason: "Not in Done Criteria" }],
@@ -2354,7 +2422,7 @@ process.stdout.write(JSON.stringify({
     file: "marker.txt",
     line: 1,
     category: "contract",
-    severity: "high"
+    severity: "high", confidence: "high"
   }],
   rubric_scores: ${JSON.stringify(defaultRubricScores())},
   scope_drift: { creep: [], missing: [] }
@@ -2426,7 +2494,7 @@ test("repeated identical issues escalate on the third consecutive round", () => 
         file: "src/index.js",
         line: 12,
         category: "contract",
-        severity: "high",
+        severity: "high", confidence: "high",
       },
     ],
     rubric_scores: defaultRubricScores(),
@@ -2501,7 +2569,7 @@ test("rubric factor flip-flops fail closed for stale lineage without waiting for
       file: "src/index.js",
       line: 12,
       category: "Behavior",
-      severity: "high",
+      severity: "high", confidence: "high",
       lineage: "stale",
       relates_to: "Round 2 Behavior",
     }],
@@ -2525,7 +2593,7 @@ test("formatPriorVerdictSummary produces correct round numbers and rubric summar
     {
       verdict: "changes_requested",
       summary: "Missing tests",
-      issues: [{ title: "a", body: "b", file: "x.js", line: 1, category: "contract", severity: "high" }],
+      issues: [{ title: "a", body: "b", file: "x.js", line: 1, category: "contract", severity: "high", confidence: "high" }],
       rubric_scores: [
         { factor: "Coverage", target: ">= 8", observed: "5", status: "fail", tier: "contract", notes: "low" },
       ],
@@ -2534,8 +2602,8 @@ test("formatPriorVerdictSummary produces correct round numbers and rubric summar
       verdict: "changes_requested",
       summary: "No auth guard",
       issues: [
-        { title: "c", body: "d", file: "y.js", line: 2, category: "quality", severity: "medium" },
-        { title: "e", body: "f", file: "z.js", line: 3, category: "contract", severity: "high" },
+        { title: "c", body: "d", file: "y.js", line: 2, category: "quality", severity: "medium", confidence: "medium" },
+        { title: "e", body: "f", file: "z.js", line: 3, category: "contract", severity: "high", confidence: "high" },
       ],
       rubric_scores: [],
     },
@@ -2613,7 +2681,7 @@ test("round 2 review prompt contains Prior Round Context section", () => {
       file: "src/index.js",
       line: 10,
       category: "contract",
-      severity: "high",
+      severity: "high", confidence: "high",
     }],
     rubric_scores: defaultRubricScores(),
     scope_drift: { creep: [], missing: [] },
@@ -2672,7 +2740,7 @@ test("round 2 redispatch artifact contains prior round summary", () => {
       file: "src/index.js",
       line: 5,
       category: "contract",
-      severity: "high",
+      severity: "high", confidence: "high",
     }],
     rubric_scores: defaultRubricScores(),
     scope_drift: { creep: [], missing: [] },
@@ -2706,7 +2774,7 @@ test("round 2 redispatch artifact contains prior round summary", () => {
       file: "src/index.js",
       line: 5,
       category: "contract",
-      severity: "high",
+      severity: "high", confidence: "high",
     }],
     rubric_scores: defaultRubricScores(),
     scope_drift: { creep: [], missing: [] },
@@ -2828,7 +2896,7 @@ test("buildRedispatchPrompt includes churn WARNING when churnGrowth is provided"
   fs.writeFileSync(helperPath, [
     `process.argv = ["node", "helper.js", "--repo", "/dev/null", "--branch", "x", "--pr", "1"];`,
     `const { buildRedispatchPrompt } = require(${JSON.stringify(SCRIPT)});`,
-    `const verdict = { verdict: "changes_requested", summary: "test", issues: [{ title: "t", body: "b", file: "x.js", line: 1, category: "contract", severity: "high" }], scope_drift: { creep: [], missing: [] } };`,
+    `const verdict = { verdict: "changes_requested", summary: "test", issues: [{ title: "t", body: "b", file: "x.js", line: 1, category: "contract", severity: "high", confidence: "high" }], scope_drift: { creep: [], missing: [] } };`,
     `const churn = { prevPrevLines: 50, prevLines: 80, curLines: 120 };`,
     `const result = buildRedispatchPrompt(verdict, "AC: do X", null, 3, churn);`,
     `process.stdout.write(result);`,
@@ -2843,7 +2911,7 @@ test("buildRedispatchPrompt omits churn WARNING when churnGrowth is null", () =>
   fs.writeFileSync(helperPath, [
     `process.argv = ["node", "helper.js", "--repo", "/dev/null", "--branch", "x", "--pr", "1"];`,
     `const { buildRedispatchPrompt } = require(${JSON.stringify(SCRIPT)});`,
-    `const verdict = { verdict: "changes_requested", summary: "test", issues: [{ title: "t", body: "b", file: "x.js", line: 1, category: "contract", severity: "high" }], scope_drift: { creep: [], missing: [] } };`,
+    `const verdict = { verdict: "changes_requested", summary: "test", issues: [{ title: "t", body: "b", file: "x.js", line: 1, category: "contract", severity: "high", confidence: "high" }], scope_drift: { creep: [], missing: [] } };`,
     `const result = buildRedispatchPrompt(verdict, "AC: do X", null, 3, null);`,
     `process.stdout.write(result);`,
   ].join("\n"), "utf-8");
@@ -2861,7 +2929,7 @@ test("buildRedispatchPrompt includes prior-round factor flips", () => {
   fs.writeFileSync(helperPath, [
     `process.argv = ["node", "helper.js", "--repo", "/dev/null", "--branch", "x", "--pr", "1"];`,
     `const { buildRedispatchPrompt } = require(${JSON.stringify(SCRIPT)});`,
-    `const verdict = { verdict: "changes_requested", summary: "test", issues: [{ title: "t", body: "b", file: "x.js", line: 1, category: "contract", severity: "high" }], scope_drift: { creep: [], missing: [] } };`,
+    `const verdict = { verdict: "changes_requested", summary: "test", issues: [{ title: "t", body: "b", file: "x.js", line: 1, category: "contract", severity: "high", confidence: "high" }], scope_drift: { creep: [], missing: [] } };`,
     `process.stdout.write(buildRedispatchPrompt(verdict, "AC: do X", ${JSON.stringify(runDir)}, 4, null));`,
   ].join("\n"), "utf-8");
   const out = execFileSync("node", [helperPath], { encoding: "utf-8" });

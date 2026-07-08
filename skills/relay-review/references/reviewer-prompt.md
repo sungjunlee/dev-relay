@@ -80,6 +80,8 @@ If a rubric is present:
 
 Do not invent nitpicks. Style-only suggestions are not review findings.
 
+Score every issue's confidence. high = clear defect, reproducible from diff alone. medium = likely defect, may need execution to confirm. low = stylistic or speculative, do not block on this alone.
+
 ### Verification evidence
 
 In your summary, enumerate each Done Criteria item with one of four statuses, based on diff evidence:

@@ -13,6 +13,9 @@ const ALLOWED_REVIEW_STATUSES = new Set(["pass", "fail", "not_run"]);
 const ALLOWED_EXECUTION_STATUSES = new Set(["pass", "fail", "not_run", "missing"]);
 const ALLOWED_SCORE_TIERS = new Set(["contract", "quality"]);
 const ALLOWED_LINEAGE_VALUES = new Set(["new", "deepening", "repeat", "stale", "newly_scoreable", "unknown"]);
+const ALLOWED_ISSUE_CONFIDENCE_VALUES = new Set(
+  REVIEW_VERDICT_JSON_SCHEMA.properties.issues.items.properties.confidence.enum
+);
 const OPTIONAL_ISSUE_REJECTION_METADATA = ["factor", "attempted_approach", "fix_direction"];
 const ALLOWED_DRIFT_STATUSES = new Set(
   REVIEW_VERDICT_JSON_SCHEMA.properties.scope_drift.properties.missing.items.properties.status.enum
@@ -49,6 +52,9 @@ function validateIssue(issue, index) {
   if (!Number.isInteger(issue.line) || issue.line <= 0) {
     throw new Error(`${location}.line must be a positive integer`);
   }
+  if (!ALLOWED_ISSUE_CONFIDENCE_VALUES.has(issue.confidence)) {
+    throw new Error(`${location}.confidence must be one of: ${Array.from(ALLOWED_ISSUE_CONFIDENCE_VALUES).join(", ")}`);
+  }
   for (const key of OPTIONAL_ISSUE_REJECTION_METADATA) {
     if (issue[key] !== undefined && issue[key] !== null && !String(issue[key] || "").trim()) {
       throw new Error(`${location}.${key} must be a non-empty string, null, or absent`);
@@ -60,6 +66,23 @@ function validateIssue(issue, index) {
   if (issue.relates_to !== undefined && issue.relates_to !== null && (typeof issue.relates_to !== "string" || !issue.relates_to.trim())) {
     throw new Error(`${location}.relates_to must be a non-empty string or null when present`);
   }
+}
+
+function isLowConfidenceAdvisoryPass(verdict) {
+  return verdict?.verdict === "changes_requested"
+    && Array.isArray(verdict.issues)
+    && verdict.issues.length > 0
+    && verdict.issues.every((issue) => issue?.confidence === "low");
+}
+
+function buildConfidenceDowngrade(verdict) {
+  const lowConfidenceCount = Array.isArray(verdict?.issues)
+    ? verdict.issues.filter((issue) => issue?.confidence === "low").length
+    : 0;
+  return {
+    applied: isLowConfidenceAdvisoryPass(verdict),
+    lowConfidenceCount,
+  };
 }
 
 function validateRubricScore(score, index) {
@@ -232,9 +255,12 @@ function validateReviewVerdict(data, options = {}) {
 
 module.exports = {
   ALLOWED_EXECUTION_STATUSES,
+  ALLOWED_ISSUE_CONFIDENCE_VALUES,
   ALLOWED_LINEAGE_VALUES,
   ALLOWED_SCORE_TIERS,
   ALLOWED_REVIEW_STATUSES,
+  buildConfidenceDowngrade,
+  isLowConfidenceAdvisoryPass,
   parseReviewVerdict,
   validateIssue,
   validateReviewVerdict,

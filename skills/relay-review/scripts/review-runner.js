@@ -10,7 +10,7 @@ const { appendIterationScore, appendRunEvent, appendScoreDivergence, EVENTS } = 
 const { git, writeText } = require("./review-runner/common");
 const { applyReviewerIdentity, getGhLogin, parseRemoteHost, resolveContext, resolveIssueNumber, resolveRemoteHost } = require("./review-runner/context");
 const { buildPrompt, formatPriorVerdictSummary } = require("./review-runner/prompt");
-const { parseReviewVerdict, validateReviewVerdict, validateScopeDrift } = require("./review-runner/verdict");
+const { buildConfidenceDowngrade, isLowConfidenceAdvisoryPass, parseReviewVerdict, validateReviewVerdict, validateScopeDrift } = require("./review-runner/verdict");
 const { buildCommentBody, formatIssueList, formatScopeDrift, postComment } = require("./review-runner/comment");
 const { buildScoreDivergenceAnalysis, loadPrBody, parseScoreLog, toIterationScoreEventEntry } = require("./review-runner/divergence");
 const { applyQualityExecutionStatus, buildExecutionEvidenceFailureVerdict, buildMissingExecutionEvidenceVerdict, computeQualityExecutionStatus } = require("./review-runner/execution-evidence");
@@ -246,10 +246,12 @@ async function run() {
     disallowPassReason: prSignalsPassBlockReason,
   });
 
-  const repeatedIssueCount = verdict.verdict === "changes_requested" ? computeRepeatedIssueCount(runDir, round, verdict.issues) : 0;
+  const confidenceDowngrade = buildConfidenceDowngrade(verdict);
+  const blockingChangesRequested = verdict.verdict === "changes_requested" && !confidenceDowngrade.applied;
+  const repeatedIssueCount = blockingChangesRequested ? computeRepeatedIssueCount(runDir, round, verdict.issues) : 0;
   const lineageSummary = summarizeLineage(verdict.issues);
   let escalationDecision = { round, trigger: "none", factors: [], traces: [], lineage_summary: lineageSummary, decision: "continue", reason: "no_trigger" };
-  if (verdict.verdict === "changes_requested" && repeatedIssueCount >= 3) {
+  if (blockingChangesRequested && repeatedIssueCount >= 3) {
     verdict = toEscalatedVerdict(
       verdict,
       `Repeated identical review issues hit ${repeatedIssueCount} consecutive rounds.`
@@ -292,7 +294,7 @@ async function run() {
   writeText(verdictPath, `${JSON.stringify(verdictRecord, null, 2)}\n`);
 
   let redispatchPath = null;
-  if (verdict.verdict === "changes_requested" || rubricGateFailure) {
+  if ((verdict.verdict === "changes_requested" && !confidenceDowngrade.applied) || rubricGateFailure) {
     redispatchPath = rubricGateFailure
       ? rubricGateRedispatchPath
       : path.join(runDir, `review-round-${round}-redispatch.md`);
@@ -336,6 +338,8 @@ async function run() {
     reviewer: reviewerName,
     reason: rubricGateFailure ? rubricGateFailure.status : verdict.verdict,
     lineage_summary: escalationDecision.lineage_summary || lineageSummary,
+    confidence_downgrade: confidenceDowngrade.applied,
+    low_confidence_count: confidenceDowngrade.lowConfidenceCount,
   });
 
   if (Array.isArray(verdict.rubric_scores) && verdict.rubric_scores.length > 0) {
@@ -351,7 +355,12 @@ async function run() {
     });
   }
 
-  result.appliedVerdict = rubricGateFailure ? "changes_requested" : verdict.verdict;
+  result.appliedVerdict = rubricGateFailure ? "changes_requested" : isLowConfidenceAdvisoryPass(verdict) ? "pass" : verdict.verdict;
+  result.confidenceDowngrade = confidenceDowngrade.applied ? {
+    originalVerdict: verdict.verdict,
+    appliedVerdict: "pass",
+    lowConfidenceCount: confidenceDowngrade.lowConfidenceCount,
+  } : null;
   result.nextState = updatedManifest.state;
   result.redispatchPath = redispatchPath;
   result.repeatedIssueCount = repeatedIssueCount;

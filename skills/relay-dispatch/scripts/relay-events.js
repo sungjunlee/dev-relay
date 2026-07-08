@@ -362,6 +362,12 @@ function appendRunEvent(repoRoot, runId, eventData) {
     ...(eventData.duplicate_low_confidence_count !== undefined
       ? { duplicate_low_confidence_count: normalizeEventValue(eventData.duplicate_low_confidence_count) }
       : {}),
+    ...(eventData.confidence_downgrade !== undefined
+      ? { confidence_downgrade: eventData.confidence_downgrade === true }
+      : {}),
+    ...(eventData.low_confidence_count !== undefined
+      ? { low_confidence_count: normalizeEventValue(eventData.low_confidence_count) }
+      : {}),
     ...(eventData.elapsed_ms !== undefined
       ? { elapsed_ms: normalizeEventValue(eventData.elapsed_ms) }
       : {}),

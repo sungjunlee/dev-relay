@@ -41,6 +41,7 @@ const REVIEW_VERDICT_PROPERTIES = {
         "line",
         "category",
         "severity",
+        "confidence",
         "factor",
         "attempted_approach",
         "fix_direction",
@@ -54,6 +55,10 @@ const REVIEW_VERDICT_PROPERTIES = {
         line: { type: "integer", minimum: 1 },
         category: { type: "string", minLength: 1 },
         severity: { type: "string", minLength: 1 },
+        confidence: {
+          type: "string",
+          enum: ["low", "medium", "high"],
+        },
         ...REJECTION_METADATA_PROPERTIES,
         lineage: {
           type: "string",

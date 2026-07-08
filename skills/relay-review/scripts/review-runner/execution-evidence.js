@@ -184,6 +184,7 @@ function buildExecutionEvidenceFailureVerdict(verdict) {
       line: 1,
       category: "quality",
       severity: "high",
+      confidence: "high",
     }],
   };
 }
