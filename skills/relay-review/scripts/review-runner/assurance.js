@@ -123,6 +123,7 @@ function applyLaneRequiredFindingDemotion(verdict, result, {
 function applyReviewAssurancePolicy(verdict, {
   advisoryResult,
   advisoryResults,
+  expectedAdvisoryCount = null,
   hardenedAssurance,
   laneDemotionCount = 0,
   manualReviewReason,
@@ -138,8 +139,11 @@ function applyReviewAssurancePolicy(verdict, {
   }
 
   const results = resultList(advisoryResult, advisoryResults);
+  const requiredAdvisoryCount = Number.isFinite(expectedAdvisoryCount)
+    ? Math.max(0, Number(expectedAdvisoryCount))
+    : hardenedAssurance ? 1 : 0;
 
-  if (hardenedAssurance && results.length === 0) {
+  if (hardenedAssurance && results.length < requiredAdvisoryCount) {
     return failReviewAssurance(verdict, buildAssuranceIssue(
       "Missing hardened advisory review",
       "policy.review_assurance=hardened requires an advisory review artifact for the reviewed round."

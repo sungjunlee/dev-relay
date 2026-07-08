@@ -1226,6 +1226,47 @@ test("on_pass advisory lane starts after an applied primary pass", () => {
   assert.ok(request.startedAt >= primaryEnd);
 });
 
+test("hardened on_pass-only advisory lane starts before full missing-advisory gate", () => {
+  const { repoRoot, manifestPath, runId, doneCriteriaPath, diffPath } = setupRepo({
+    reviewAssurance: "hardened",
+    strictEvidence: true,
+  });
+  const record = readManifest(manifestPath);
+  writeManifest(manifestPath, {
+    ...record.data,
+    routing: {
+      version: 1,
+      selected: {
+        advisory_review: [
+          { reviewer: "opencode", model: "example/opencode-model-fast", trigger: "on_pass" },
+        ],
+      },
+    },
+  }, record.body);
+  const primaryScript = writePrimaryReviewer(repoRoot, passVerdict());
+  const opencodeScript = writeFakeOpencode(repoRoot);
+
+  const result = runReview({
+    repoRoot,
+    runId,
+    doneCriteriaPath,
+    diffPath,
+    primaryScript,
+    opencodeScript,
+    advisoryReviewer: null,
+    extraArgs: ["--advisory-timeout", "30"],
+  });
+  const events = readRunEvents(repoRoot, runId).filter((record) => record.event === EVENTS.ADVISORY_REVIEW);
+
+  assert.equal(result.nextState, STATES.READY_TO_MERGE);
+  assert.equal(readManifest(manifestPath).data.state, STATES.READY_TO_MERGE);
+  assert.equal(result.advisoryReviews.length, 1);
+  assert.equal(result.advisoryReviews[0].status, "success");
+  assert.equal(result.advisoryReviews[0].trigger, "on_pass");
+  assert.equal(events.length, 1);
+  assert.equal(events[0].trigger, "on_pass");
+});
+
 test("on_pass advisory lane is not started when applied primary verdict requests changes", () => {
   const { repoRoot, manifestPath, runDir, runId, doneCriteriaPath, diffPath } = setupRepo();
   const record = readManifest(manifestPath);
@@ -1415,7 +1456,7 @@ test("standard review applies the primary verdict when advisory times out during
   assert.equal(result.nextState, STATES.READY_TO_MERGE);
   assert.equal(readManifest(manifestPath).data.state, STATES.READY_TO_MERGE);
   assert.equal(result.advisoryReview.status, "timeout");
-  assert.match(result.advisoryReview.failureReason, /timed out after 1s/);
+  assert.match(result.advisoryReview.failureReason, /reviewer advisory_review timed out after 1s/);
   assert.equal(event.status, "timeout");
   assert.equal(event.consumed_by_phase, "review");
 });
@@ -1500,6 +1541,95 @@ test("hardened advisory finish does not expose success before event provenance i
   });
 
   assert.equal(bound.status, "success");
+});
+
+test("hardened advisory finish binds cached success when result rewrite lands after deadline", async () => {
+  const { repoRoot, manifestPath, runDir, runId } = setupRepo({
+    reviewAssurance: "hardened",
+    strictEvidence: true,
+  });
+  const manifest = readManifest(manifestPath).data;
+  const artifactPath = path.join(runDir, "review-round-1-advisory-opencode.json");
+  const resultPath = path.join(runDir, "review-round-1-advisory-opencode-result.json");
+  fs.writeFileSync(artifactPath, `${JSON.stringify({
+    profile: "blindspot",
+    summary: "No required findings.",
+    required_findings: [],
+    advisory_findings: [{
+      title: "Advisory note",
+      body: "Recorded after the primary path.",
+      file: "README.md",
+      line: 1,
+      severity: "P3",
+      category: "test-gap",
+      confidence: 0.8,
+    }],
+    duplicate_or_low_confidence: [],
+  }, null, 2)}\n`, "utf-8");
+  const result = {
+    artifactHash: hashFile(artifactPath),
+    artifactPath,
+    advisory_count: 1,
+    duplicate_low_confidence_count: 0,
+    failureReason: null,
+    profile: "blindspot",
+    rawResponsePath: null,
+    required_count: 0,
+    reviewer: "opencode",
+    status: "success",
+  };
+  fs.writeFileSync(resultPath, `${JSON.stringify(result, null, 2)}\n`, "utf-8");
+  const resultDeadlineMs = Date.now() - 10;
+  const oldTime = new Date(resultDeadlineMs - 100);
+  fs.utimesSync(resultPath, oldTime, oldTime);
+
+  const advisoryRun = {
+    headSha: manifest.git.head_sha,
+    profile: "blindspot",
+    resultPath,
+    reviewerName: "opencode",
+    round: 1,
+    runId,
+    runRepoPath: repoRoot,
+    startedAt: Date.now(),
+  };
+  const finishPromise = finishAdvisoryReview({
+    advisoryRun,
+    requireEventBoundSuccess: true,
+    resultDeadlineMs,
+    waitMs: 250,
+  });
+  setTimeout(() => {
+    appendRunEvent(repoRoot, runId, {
+      event: EVENTS.ADVISORY_REVIEW,
+      state_from: STATES.REVIEW_PENDING,
+      state_to: STATES.REVIEW_PENDING,
+      head_sha: manifest.git.head_sha,
+      round: 1,
+      reviewer: "opencode",
+      profile: "blindspot",
+      status: "success",
+      artifact_path: artifactPath,
+      advisory_artifact_hash: result.artifactHash,
+      raw_response_path: null,
+      failure_reason: null,
+      required_count: 0,
+      advisory_count: 1,
+      duplicate_low_confidence_count: 0,
+    });
+    fs.writeFileSync(resultPath, `${JSON.stringify({
+      ...result,
+      consumedByPhase: "review",
+      criticalPathWaitMs: 25,
+      elapsedMs: 25,
+      phaseDecisionWaited: true,
+    }, null, 2)}\n`, "utf-8");
+  }, 25);
+
+  const bound = await finishPromise;
+
+  assert.equal(bound.status, "success");
+  assert.equal(bound.artifactHash, result.artifactHash);
 });
 
 test("invalid advisory JSON is recorded as advisory failure while primary pass still applies", () => {

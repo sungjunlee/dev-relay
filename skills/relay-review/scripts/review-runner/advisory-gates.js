@@ -20,7 +20,9 @@ async function settleAdvisoryGatesForRound({
   startOptions,
   verdict,
 }) {
-  const settlementDeadlineMs = (advisoryConfig.lanes || []).length
+  const advisoryLanes = advisoryConfig.lanes || [];
+  const everyRoundLaneCount = advisoryLanes.filter((lane) => lane.trigger === "every_round").length;
+  const settlementDeadlineMs = advisoryLanes.length
     ? createAdvisorySettlementDeadline({ config: advisoryConfig, hardenedAssurance })
     : null;
   let advisoryResult = null;
@@ -40,6 +42,7 @@ async function settleAdvisoryGatesForRound({
     advisoryResults,
     disallowPassReason: prSignalsPassBlockReason,
     executionStatus,
+    expectedAdvisoryCount: everyRoundLaneCount,
     hardenedAssurance,
     internalReview,
     laneDemotionCount,
@@ -67,6 +70,7 @@ async function settleAdvisoryGatesForRound({
         advisoryResults,
         disallowPassReason: prSignalsPassBlockReason,
         executionStatus,
+        expectedAdvisoryCount: advisoryLanes.length,
         hardenedAssurance,
         internalReview,
         laneDemotionCount,

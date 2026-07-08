@@ -317,7 +317,9 @@ async function finishAdvisoryReview({
     return buildUnboundSuccessResult(advisoryRun, result, failureReason, { criticalPathWaitMs, consumedByPhase });
   }
   if (unboundSuccess) {
-    return buildUnboundSuccessResult(advisoryRun, unboundSuccess.result, unboundSuccess.failureReason, { criticalPathWaitMs, consumedByPhase });
+    const failureReason = advisorySuccessBindingFailure(advisoryRun, unboundSuccess.result);
+    if (!failureReason) return unboundSuccess.result;
+    return buildUnboundSuccessResult(advisoryRun, unboundSuccess.result, failureReason, { criticalPathWaitMs, consumedByPhase });
   }
   return buildDeferredResult(advisoryRun, { criticalPathWaitMs, consumedByPhase });
 }
@@ -432,7 +434,7 @@ function executeAdvisoryRequest(request) {
     } else if (outcome.timeout) {
       status = "timeout";
       failureReason = (
-        `${request.reviewerName} reviewer advisory_review exceeded ${timeoutMs / 1000}s timeout; ` +
+        `${request.reviewerName} reviewer advisory_review timed out after ${timeoutMs / 1000}s; ` +
         `model=${request.reviewerModel || "default"}; raw_response=${rawResponsePath}`
       );
     } else if (outcome.error || outcome.code !== 0) {
