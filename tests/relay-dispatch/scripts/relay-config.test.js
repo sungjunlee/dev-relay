@@ -1112,6 +1112,9 @@ test("gaps --json reports observed route drift with verbatim proposals and no wr
       strictbad: {
         dispatch: { executor: "opencode", model: "openai/unregistered" },
       },
+      missingcli: {
+        review: { reviewer: "ghost" },
+      },
     },
   });
   writeJson(path.join(relayHome, "policy.json"), {
@@ -1178,15 +1181,36 @@ test("gaps --json reports observed route drift with verbatim proposals and no wr
   });
   assert.equal(byType.get("legacy_config_present")?.[0]?.proposal.subcommand, "migrate");
   assert.equal(byType.get("unregistered_route_in_use")?.[0]?.model, "example/pi-model-fast");
-  assert.equal(byType.get("route_without_cli")?.[0]?.actor, "ghost");
-  assert.deepEqual(byType.get("preset_broken")?.[0]?.proposal, {
+  const routeWithoutCli = byType.get("route_without_cli")?.[0];
+  assert.equal(routeWithoutCli?.actor, "ghost");
+  assert.deepEqual(routeWithoutCli.proposal, {
+    kind: "manual",
+    args: [],
+    automatic: false,
+    reason: "cli_missing",
+    action: "install_cli_or_remove_route",
+  });
+  const missingCliPreset = byType.get("preset_broken")?.find((gap) => gap.reason === "cli_missing");
+  assert.deepEqual(missingCliPreset?.proposal, {
+    kind: "manual",
+    args: [],
+    automatic: false,
+    reason: "cli_missing",
+    action: "install_cli_or_edit_preset",
+  });
+  const strictPreset = byType.get("preset_broken")?.find((gap) => gap.model === "openai/unregistered");
+  assert.deepEqual(strictPreset?.proposal, {
     subcommand: "add-route",
     args: ["add-route", "openai/unregistered", "--phase", "dispatch", "--executor", "opencode", "--json"],
   });
   assert.equal(byType.get("probe_failure")?.length, 2);
   for (const gap of output.gaps) {
-    assert.equal(typeof gap.proposal?.subcommand, "string", `${gap.type} missing proposal subcommand`);
     assert.ok(Array.isArray(gap.proposal.args), `${gap.type} missing proposal args`);
+    if (gap.proposal.automatic === false) {
+      assert.ok(gap.proposal.reason, `${gap.type} non-automatic proposal missing reason`);
+    } else {
+      assert.equal(typeof gap.proposal?.subcommand, "string", `${gap.type} missing proposal subcommand`);
+    }
   }
   assert.equal(fs.readFileSync(path.join(relayHome, "routes.json"), "utf-8"), beforeRoutes);
   assert.equal(fs.readFileSync(eventsPath, "utf-8"), beforeEvents);
@@ -1221,7 +1245,8 @@ test("migrate requires confirmation and preserves legacy effective route resolut
       opencode: { default_model: "openai/gpt-5.3-codex-spark" },
     },
   });
-  writeJson(getProjectRoutesPath(repoRoot, { relayHome }), {
+  const projectRoutesPath = getProjectRoutesPath(repoRoot, { relayHome });
+  writeJson(projectRoutesPath, {
     version: 1,
     defaults: {
       dispatch: { executor: "opencode", model: "openai/gpt-5.3-codex-spark" },
@@ -1265,14 +1290,29 @@ test("migrate requires confirmation and preserves legacy effective route resolut
   const output = parseJson(migrated);
   assert.equal(output.wrote, true);
   assert.equal(output.routes.strict, true);
+  assert.deepEqual(output.routes.defaults.dispatch, {
+    executor: "opencode",
+    model: "openai/gpt-5.3-codex-spark",
+  });
+  assert.deepEqual(output.routes.defaults.advisory_review, {
+    reviewer: "pi",
+    model: "example/pi-model-fast",
+    profile: "blindspot",
+  });
   assert.deepEqual(readRoutes(relayHome).executor_defaults, {
     opencode: { model: "openai/gpt-5.3-codex-spark" },
   });
   assert.deepEqual(resolveMatrix(), before);
+  const retainedProjectRoutes = `${projectRoutesPath}.retained`;
+  fs.renameSync(projectRoutesPath, retainedProjectRoutes);
+  assert.deepEqual(resolveMatrix(), before);
+  fs.renameSync(retainedProjectRoutes, projectRoutesPath);
   assert.equal(fs.existsSync(path.join(relayHome, "policy.json")), true);
   assert.equal(fs.existsSync(path.join(relayHome, "executors.json")), true);
+  assert.equal(fs.existsSync(projectRoutesPath), true);
   assert.match(fs.readFileSync(path.join(relayHome, "policy.json.migrated"), "utf-8"), /migrated into routes\.json/);
   assert.match(fs.readFileSync(path.join(relayHome, "executors.json.migrated"), "utf-8"), /migrated into routes\.json/);
+  assert.match(fs.readFileSync(`${projectRoutesPath}.migrated`, "utf-8"), /migrated into routes\.json/);
 });
 
 test("validation failure leaves the routes file untouched", () => {

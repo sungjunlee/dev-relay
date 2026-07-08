@@ -488,8 +488,24 @@ function addRouteProposal({ phase, actor, actorField, route }) {
   return { subcommand: "add-route", args };
 }
 
-function diagnosticProposal() {
-  return { subcommand: "doctor", args: ["doctor", "--json"], automatic: false };
+function probeDiagnosticProposal() {
+  return {
+    kind: "diagnostic",
+    command: "doctor",
+    args: ["doctor", "--json"],
+    automatic: false,
+    reason: "probe_failure",
+  };
+}
+
+function manualProposal({ reason, action }) {
+  return {
+    kind: "manual",
+    args: [],
+    automatic: false,
+    reason,
+    action,
+  };
 }
 
 function migrateProposal() {
@@ -582,7 +598,7 @@ function collectPresetGaps({ gaps, seen, policy, toolsByName }) {
       const actorField = actorFieldForPhase(phase);
       const actor = nonEmptyString(phaseValue[actorField]);
       if (!actor) continue;
-      const tool = toolsByName.get(actor);
+      const tool = toolsByName.get(actor) || doctorTool(policy, actor);
       if (tool && !tool.installed) {
         pushGap(gaps, seen, {
           type: "preset_broken",
@@ -591,7 +607,10 @@ function collectPresetGaps({ gaps, seen, policy, toolsByName }) {
           actor,
           actor_field: actorField,
           reason: "cli_missing",
-          proposal: diagnosticProposal(),
+          proposal: manualProposal({
+            reason: "cli_missing",
+            action: "install_cli_or_edit_preset",
+          }),
         });
       }
       const model = nonEmptyString(phaseValue.model);
@@ -702,7 +721,7 @@ function commandGaps(positionals, jsonOut) {
         actor: tool.name,
         path: tool.path,
         warning: tool.model_probe.warning,
-        proposal: diagnosticProposal(),
+        proposal: probeDiagnosticProposal(),
       });
     }
   }
@@ -719,7 +738,10 @@ function commandGaps(positionals, jsonOut) {
         actor_field: entry.actorField,
         phase: entry.phase,
         route: entry.route,
-        proposal: diagnosticProposal(),
+        proposal: manualProposal({
+          reason: "cli_missing",
+          action: "install_cli_or_remove_route",
+        }),
       });
     }
     if (entry.listName === "allowed_model_routes" && entry.actorField === "executor" && entry.phase === "dispatch" && !executorDefaultModel(policyResult.policy, entry.actor)) {
@@ -769,7 +791,10 @@ function commandGaps(positionals, jsonOut) {
     console.log(`relay-config gaps: ${gaps.length} gap${gaps.length === 1 ? "" : "s"}`);
     for (const gap of gaps) {
       const subject = [gap.type, gap.actor, gap.phase, gap.model || gap.route || gap.path].filter(Boolean).join(" ");
-      console.log(`${subject}: ${gap.proposal.subcommand} ${gap.proposal.args.slice(1).join(" ")}`);
+      const proposal = gap.proposal.subcommand
+        ? `${gap.proposal.subcommand} ${gap.proposal.args.slice(1).join(" ")}`
+        : `${gap.proposal.kind || "manual"} ${gap.proposal.action || gap.proposal.reason || ""}`.trim();
+      console.log(`${subject}: ${proposal}`);
     }
   }
 }
@@ -809,6 +834,31 @@ function routesFromPolicy(policy, executorDefaults) {
   return routes;
 }
 
+function mergeRouteDefaults(base = {}, override = {}) {
+  const merged = cloneJson(base || {});
+  for (const phase of VALID_PHASES) {
+    if (!hasOwn(override || {}, phase)) continue;
+    merged[phase] = {
+      ...(isPlainObject(merged[phase]) ? merged[phase] : {}),
+      ...(isPlainObject(override[phase]) ? override[phase] : {}),
+    };
+  }
+  return merged;
+}
+
+function foldProjectRoutesV1(routes, projectRoutes) {
+  if (projectRoutes.status === "absent" || projectRoutes.status === "ignored_v2") return routes;
+  if (!projectRoutes.ok) {
+    if (!projectRoutes.path) return routes;
+    throw new Error(projectRoutes.error || "failed to load project routes v1");
+  }
+  if (projectRoutes.routes?.version !== 1) return routes;
+  const folded = cloneJson(routes);
+  folded.defaults = mergeRouteDefaults(folded.defaults, projectRoutes.routes.defaults);
+  validateRouteConfig(folded, "migrated routes config");
+  return folded;
+}
+
 function writeMigratedMarker(filePath, routesPath) {
   if (!filePath || !fs.existsSync(filePath)) return null;
   const markerPath = `${filePath}.migrated`;
@@ -845,8 +895,17 @@ function commandMigrate(positionals, jsonOut) {
     return;
   }
   const executorDefaults = executorDefaultsFromLegacyExecutors(executorsPath);
-  const routes = routesFromPolicy(policyResult.policy, executorDefaults);
   const projectRoutes = loadProjectRoutes({ repoRoot, relayHome });
+  let routes;
+  try {
+    routes = foldProjectRoutesV1(routesFromPolicy(policyResult.policy, executorDefaults), projectRoutes);
+  } catch (error) {
+    const output = { ok: false, status: "project_routes_error", errors: [{ message: error.message }], project_routes: projectRoutes };
+    if (jsonOut) printJson(output);
+    else console.error(`relay-config migrate: project routes failed: ${error.message}`);
+    process.exitCode = 1;
+    return;
+  }
   const legacyPaths = legacyConfigPaths({ repoRoot, relayHome });
   const output = {
     ok: true,

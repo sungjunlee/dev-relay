@@ -442,8 +442,7 @@ function executeAdvisoryRequest(request) {
     } else if (outcome.timeout) {
       status = "timeout";
       failureReason = (
-        `${request.reviewerName} reviewer advisory_review timed out after ${timeoutMs / 1000}s ` +
-        `(exceeded ${timeoutMs / 1000}s timeout); ` +
+        `${request.reviewerName} reviewer advisory_review timed out after ${timeoutMs / 1000}s; ` +
         `model=${request.reviewerModel || "default"}; raw_response=${rawResponsePath}`
       );
     } else if (outcome.error || outcome.code !== 0) {
