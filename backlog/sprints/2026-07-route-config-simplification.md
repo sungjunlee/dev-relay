@@ -25,7 +25,7 @@ Route selection is one user-facing concept: a single routes.json schema (open-by
 
 ### Batch 3 — self-audit (blocked by #781)
 
-- [ ] #783 relay-config revise mode: gaps --json, conversational amendments, migrate (Phase C) — M; deps satisfied (Phase A/B merged; preset_broken + unregistered_route_in_use now live). **HELD 2026-07-08**: disjoint file surface is `relay-config.js`, which the other session's live `issue-825` (Epic #825 model-resolution, branch `issue-825-model-resolution`) is actively editing — concurrent dispatch = cross-session conflict. Also disk at 1.3Gi/100% (ENOSPC risk for a 2nd codex run). Dispatch once #825 lands + disk freed.
+- [ ] #783 relay-config revise mode: gaps --json, conversational amendments, migrate (Phase C) — M; deps satisfied (Phase A/B merged; preset_broken + unregistered_route_in_use now live). **UNBLOCKED 2026-07-08 (was held)**: #825 landed (PR #831, merged) so `relay-config.js` contention cleared; disk freed to 8Gi, load 7.6, no fixture leaks. relay-config.js grew 766→1034 (adds `resolve-model`); `gaps`/`migrate`/`revise` still absent → #783 additive, no collision. Ready to dispatch. Plan note: replan on the post-#831 file; consider whether `gaps` should gain a model-resolution-health type now that resolution exists (see Progress).
 
 ### Unplanned (found during Batch 1 execution)
 
@@ -36,8 +36,8 @@ Route selection is one user-facing concept: a single routes.json schema (open-by
 - [x] #807+#808 finalize-run resilience (post-merge crash + stale pre-merge gate) → PR #814 **merged** 2026-07-07 (LGTM round 9; run `...585f0a8b`, codex base + R6-R9 orchestrator-corrections)
 - [ ] #807 finalize-run post-merge crash (runCleanup removes worktree → getCanonicalRepoRoot on it; writeManifest is last) leaves run stuck at ready_to_merge — S; A2 run completed manually via updateManifestState+writeManifest + cleanup_result event
 - [ ] #808 finalize-run pre-merge CI gate blocks already-MERGED PRs on never-completing checks (CodeRabbit PENDING after branch delete) — S; ordering fix: fetch merge state before assertPreMergeSafety
-- [ ] #815 flaky test: dispatch SIGINT descendant-survival warning intermittently missing under elevated spawn latency — filed during #814; passes isolated, flakes under load
-- [ ] #819 relay-dispatch signal tests leak SIGTERM-ignoring codex fixtures — THE root cause of this session's "relay-fleet flakes" + suite hangs (load 54-95 from ~13 leaked day-old fixtures); teardown must SIGKILL spawned fixture PIDs. Reaped manually this session; related to #815
+- [x] #815 flaky test: dispatch SIGINT descendant-survival warning intermittently missing → **resolved by other session, PR #836** (stabilize SIGINT descendant survival fixture)
+- [x] #819 relay-dispatch signal tests leak SIGTERM-ignoring codex fixtures — THE root cause of the 2026-07-07 "relay-fleet flakes" + suite hangs → **resolved by other session, PR #835** (clean up relay dispatch signal fixtures)
 
 ## Running Context
 
@@ -50,6 +50,11 @@ Route selection is one user-facing concept: a single routes.json schema (open-by
 - Phase D (relay-plan route recommendation + fleet per-leaf fill) is NOT in this sprint — observe-gated on ≥~10 non-default-route runs over ~4 weeks after A–C ship.
 
 ## Progress
+
+### 2026-07-08 12:20 (window opened; other session landed both new epics)
+- **Other session shipped both new epics + two of this sprint's Unplanned bugs**, all merged to main (HEAD `c9bc690`): #831 = Epic #825 provider-aware model resolution (one PR, #820-#825 closed); #832 = Epic #826 operational visibility (`run-observer.js` + `relay-status.js` + `relay-recover`, #826-#830 closed); #835 fixed #819 (fixture leak I filed); #836 fixed #815 (SIGINT flake). Both epics disjoint from #783's surface (verified: #832 = all new files; #831 = `resolve-model` in relay-config.js, no `gaps`/`migrate`/`revise`).
+- **Environment recovered**: disk 1.3Gi→8.0Gi (user cleared), load 42→7.6, 0 leaked fixtures. **#783 unblocked.**
+- **#783 replan note (post-#831)**: relay-config.js is now 1034 lines and model resolution exists. Open scope question for the plan: keep #783's `gaps` to its original 7 gap types (AC-frozen), or add a model-resolution-health type (e.g. `unresolved_preset_model` / `stale_catalog`) now that #831's resolver + catalog fallback are live. Original AC is the review anchor; any added type must be a deliberate AC amendment, not scope creep. `migrate` scope unchanged (policy.json/executors.json/v1 routes → unified; resolver config is already unified).
 
 ### 2026-07-08 (Batch 2 merged; #783 held on cross-session contention)
 - **Both Batch 2 PRs merged** (user instruction): #813 (#782 route presets) 2026-07-07 23:05, #814 (#807/#808 finalize-run resilience) 2026-07-07 23:04. main HEAD `29fd532`. **Only #783 (Phase C) remains** in the sprint plan; Phase D still observe-gated.
