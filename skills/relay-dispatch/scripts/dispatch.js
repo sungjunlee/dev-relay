@@ -2284,7 +2284,10 @@ async function main() {
 
   if (execResult.timedOut) {
     exitCode = 1;
-    error = `executor timed out after ${TIMEOUT}s`;
+    error = (
+      `executor total_timeout after ${TIMEOUT}s; ` +
+      `stdout=${stdoutLog}; stderr=${stderrLog}; result=${resultFile}`
+    );
   } else if (execResult.spawnError) {
     exitCode = 1;
     error = execResult.spawnError.message.split("\n")[0];
@@ -2354,6 +2357,11 @@ async function main() {
   let uncommitted = dirt.reviewableStatus;
 
   const hasResult = resultText !== "";
+  const dispatchFailureClass = execResult.timedOut
+    ? "total_timeout"
+    : !hasResult
+    ? "no_result"
+    : networkFailure || null;
 
   // Detect approval-wait: executor stopped to ask for confirmation instead of working.
   const BLOCKED_PATTERNS = [
@@ -2371,7 +2379,10 @@ async function main() {
     error = error || `executor blocked on approval: ${resultText.split("\n")[0].slice(0, 120)}`;
   } else if (!hasResult) {
     status = "failed";
-    error = error || "executor produced no structured result file or summary (silent failure)";
+    error = error || (
+      `executor no_result: produced no structured result file or summary (silent failure); ` +
+      `stdout=${stdoutLog}; stderr=${stderrLog}; result=${resultFile}`
+    );
   } else if (execResult.timedOut && hasWork) {
     status = "completed-with-warning";
   } else if (exitCode === 0 && !gitLog && dirt.hasOnlyRuntimeMetadataDirt && EXECUTOR !== "codex") {
@@ -2569,6 +2580,7 @@ async function main() {
     executor_policy: executorPolicy,
     policy_decision: policyDecision,
     failure_class: networkFailure,
+    dispatch_failure_class: dispatchFailureClass,
     execution_evidence_path: executionEvidencePath,
     execution_evidence_hash: executionEvidencePath ? hashFileSha256(executionEvidencePath) : null,
   });
@@ -2625,6 +2637,7 @@ async function main() {
     elapsed: `${elapsed}s`,
     exitCode,
     error,
+    dispatchFailureClass,
     registered: !!threadId,
     threadId,
     commits: gitLog,

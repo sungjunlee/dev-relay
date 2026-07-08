@@ -66,6 +66,7 @@ node "${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/dispatch.js" . \
 
 ```bash
 node "${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/reconcile-run.js" --repo . --run-id "$RUN_ID" --dry-run --json
+node "${RELAY_SKILL_ROOT:-skills}/relay/scripts/relay-recover.js" --repo . --run-id "$RUN_ID" --dry-run --json
 node "${RELAY_SKILL_ROOT:-skills}/relay/scripts/run-preflight.js" --stage review --repo . --run-id "$RUN_ID" --json
 ```
 

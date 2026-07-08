@@ -16,6 +16,8 @@ const { parseReviewerJsonObject, summarizeFailure } = require("./reviewer-helper
 
 const args = process.argv.slice(2);
 const KNOWN_FLAGS = ["--repo", "--prompt-file", "--model", "--json", "--help", "-h"];
+const REVIEW_TIMEOUT_ENV = "RELAY_CODEX_REVIEW_TIMEOUT";
+const DEFAULT_REVIEW_TIMEOUT = "900s";
 const cliArgs = bindCliArgs(args, {
   commandName: "invoke-reviewer-codex",
   reservedFlags: KNOWN_FLAGS,
@@ -37,11 +39,40 @@ function readNonEmptyFile(filePath) {
   return text || null;
 }
 
+function parseReviewTimeoutMs(value) {
+  const text = String(value || DEFAULT_REVIEW_TIMEOUT).trim();
+  const match = text.match(/^(\d+)(ms|s|m)?$/);
+  if (!match) {
+    throw new Error(`${REVIEW_TIMEOUT_ENV} must be a duration like 900s, 15m, or 60000ms`);
+  }
+  const amount = Number(match[1]);
+  const unit = match[2] || "ms";
+  const multiplier = unit === "m" ? 60 * 1000 : unit === "s" ? 1000 : 1;
+  const ms = amount * multiplier;
+  if (!Number.isSafeInteger(ms) || ms <= 0) {
+    throw new Error(`${REVIEW_TIMEOUT_ENV} must resolve to a positive timeout`);
+  }
+  return ms;
+}
+
+function isExecTimeout(error) {
+  return error && (error.code === "ETIMEDOUT" || error.signal === "SIGTERM" || error.signal === "SIGKILL");
+}
+
+function writeRawResponse(filePath, error) {
+  const stdout = String(error?.stdout || "").trim();
+  const stderr = String(error?.stderr || "").trim();
+  const text = stderr ? [stdout, "", "stderr:", stderr].filter(Boolean).join("\n") : stdout;
+  fs.writeFileSync(filePath, `${text || "(no output)"}\n`, "utf-8");
+}
+
 function main() {
   const repoPath = path.resolve(cliArgs.getArg("--repo") || ".");
   const promptFile = cliArgs.getArg("--prompt-file");
   const model = cliArgs.getArg("--model");
   const codexBin = process.env.RELAY_CODEX_BIN || "codex";
+  const reviewTimeout = String(process.env[REVIEW_TIMEOUT_ENV] || DEFAULT_REVIEW_TIMEOUT).trim();
+  const parentTimeoutMs = parseReviewTimeoutMs(reviewTimeout);
 
   if (!promptFile) {
     throw new Error("--prompt-file is required");
@@ -50,6 +81,7 @@ function main() {
   const promptText = fs.readFileSync(promptFile, "utf-8").trim();
   const schemaPath = path.join(os.tmpdir(), `relay-review-schema-${process.pid}-${Date.now()}.json`);
   const resultPath = path.join(os.tmpdir(), `relay-review-codex-${process.pid}-${Date.now()}.json`);
+  const rawResponsePath = path.join(os.tmpdir(), `relay-review-codex-${process.pid}-${Date.now()}-raw-response.txt`);
 
   try {
     fs.writeFileSync(schemaPath, `${JSON.stringify(REVIEWER_VERDICT_JSON_SCHEMA, null, 2)}\n`, "utf-8");
@@ -81,12 +113,24 @@ function main() {
         cwd: repoPath,
         encoding: "utf-8",
         stdio: "pipe",
+        timeout: parentTimeoutMs,
+        killSignal: "SIGKILL",
         maxBuffer: 10 * 1024 * 1024,
       });
     } catch (error) {
+      writeRawResponse(rawResponsePath, error);
+      if (isExecTimeout(error)) {
+        throw new Error(
+          `Codex reviewer primary_review timed out after ${reviewTimeout} (${REVIEW_TIMEOUT_ENV}); ` +
+          `model=${model || "default"}; raw_response=${rawResponsePath}`
+        );
+      }
       const recovered = readNonEmptyFile(resultPath);
       if (!recovered) {
-        throw new Error(`Codex reviewer failed: ${summarizeFailure(error)}`);
+        throw new Error(
+          `Codex reviewer primary_review failed; model=${model || "default"}; ` +
+          `raw_response=${rawResponsePath}; ${summarizeFailure(error)}`
+        );
       }
     }
 
@@ -107,6 +151,9 @@ function main() {
   } finally {
     try { fs.unlinkSync(schemaPath); } catch {}
     try { fs.unlinkSync(resultPath); } catch {}
+    if (fs.existsSync(rawResponsePath) && fs.statSync(rawResponsePath).size === 0) {
+      try { fs.unlinkSync(rawResponsePath); } catch {}
+    }
   }
 }
 

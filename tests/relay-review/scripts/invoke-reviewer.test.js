@@ -172,6 +172,42 @@ process.exit(1);
   assert.equal(result.summary, "Recovered.");
 });
 
+test("codex adapter timeout reports model and raw response path", () => {
+  const { repoRoot, promptPath } = setupRepo();
+  const fakeDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-fake-codex-timeout-"));
+  const fakeCodex = writeExecutable(fakeDir, "fake-codex.js", `#!/usr/bin/env node
+setTimeout(() => {
+  process.stdout.write("late output\\n");
+}, 1000);
+`);
+
+  let error;
+  try {
+    execFileSync("node", [
+      CODEX_SCRIPT,
+      "--repo", repoRoot,
+      "--prompt-file", promptPath,
+      "--model", "codex-test-model",
+      "--json",
+    ], {
+      cwd: repoRoot,
+      encoding: "utf-8",
+      stdio: "pipe",
+      timeout: 5000,
+      env: { ...process.env, RELAY_CODEX_BIN: fakeCodex, RELAY_CODEX_REVIEW_TIMEOUT: "10ms" },
+    });
+    assert.fail("expected invoke-reviewer-codex.js to time out");
+  } catch (caught) {
+    error = caught;
+  }
+
+  const stderr = String(error.stderr || "");
+  assert.match(stderr, /Codex reviewer primary_review timed out after 10ms/);
+  assert.match(stderr, /RELAY_CODEX_REVIEW_TIMEOUT/);
+  assert.match(stderr, /model=codex-test-model/);
+  assert.match(stderr, /raw_response=/);
+});
+
 test("claude adapter can recover from a non-zero exit when stdout contains JSON", () => {
   const { repoRoot, promptPath } = setupRepo();
   const fakeDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-fake-claude-recover-"));
