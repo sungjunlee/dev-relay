@@ -97,6 +97,8 @@ function lowConfidenceChangesRequestedVerdict() {
   return {
     ...changesRequestedVerdict(),
     summary: "Only a low-confidence concern remains.",
+    contract_status: "pass",
+    quality_review_status: "pass",
     issues: [{
       title: "Speculative primary concern",
       body: "This concern is intentionally low confidence.",
@@ -1200,6 +1202,111 @@ test("on_pass advisory lane is not started when applied primary verdict requests
   assert.equal(readRunEvents(repoRoot, runId).some((record) => record.event === EVENTS.ADVISORY_REVIEW), false);
 });
 
+test("no-lane standard review preserves low-confidence applied-pass artifact shape", () => {
+  const { repoRoot, manifestPath, runId, doneCriteriaPath, diffPath } = setupRepo();
+  const primaryScript = writePrimaryReviewer(repoRoot, lowConfidenceChangesRequestedVerdict());
+
+  const result = runReview({
+    repoRoot,
+    runId,
+    doneCriteriaPath,
+    diffPath,
+    primaryScript,
+    advisoryReviewer: null,
+  });
+  const manifest = readManifest(manifestPath).data;
+  const verdictRecord = JSON.parse(fs.readFileSync(result.verdictPath, "utf-8"));
+  const reviewApply = readRunEvents(repoRoot, runId).find((record) => record.event === EVENTS.REVIEW_APPLY);
+
+  assert.equal(result.nextState, STATES.READY_TO_MERGE);
+  assert.equal(result.appliedVerdict, "pass");
+  assert.deepEqual(result.confidenceDowngrade, {
+    originalVerdict: "changes_requested",
+    appliedVerdict: "pass",
+    lowConfidenceCount: 1,
+  });
+  assert.equal(manifest.state, STATES.READY_TO_MERGE);
+  assert.equal(verdictRecord.verdict, "changes_requested");
+  assert.equal(verdictRecord.applied_verdict, "pass");
+  assert.equal(verdictRecord.issues[0].confidence, "low");
+  assert.equal(reviewApply.reason, "pass");
+  assert.equal(reviewApply.confidence_downgrade, true);
+  assert.equal(reviewApply.low_confidence_count, 1);
+});
+
+test("on_pass advisory lane is not started after every_round gating demotes pass", () => {
+  const { repoRoot, manifestPath, runDir, runId, doneCriteriaPath, diffPath } = setupRepo();
+  const record = readManifest(manifestPath);
+  writeManifest(manifestPath, {
+    ...record.data,
+    routing: {
+      version: 1,
+      selected: {
+        advisory_review: [
+          { reviewer: "opencode", model: "example/opencode-model-fast", trigger: "every_round", gating: true },
+          { reviewer: "opencode", model: "example/opencode-model-fast", trigger: "on_pass" },
+        ],
+      },
+    },
+  }, record.body);
+  const primaryScript = writePrimaryReviewer(repoRoot, passVerdict());
+  const opencodeScript = writeFakeOpencode(repoRoot, { requiredFinding: true });
+
+  const result = runReview({
+    repoRoot,
+    runId,
+    doneCriteriaPath,
+    diffPath,
+    primaryScript,
+    opencodeScript,
+    advisoryReviewer: null,
+    extraArgs: ["--advisory-grace", "30"],
+  });
+  const events = readRunEvents(repoRoot, runId).filter((record) => record.event === EVENTS.ADVISORY_REVIEW);
+
+  assert.equal(result.nextState, STATES.CHANGES_REQUESTED);
+  assert.equal(result.advisoryReviews.length, 1);
+  assert.equal(result.advisoryReviews[0].trigger, "every_round");
+  assert.equal(events.length, 1);
+  assert.equal(events[0].trigger, "every_round");
+  assert.equal(fs.existsSync(path.join(runDir, "review-round-1-advisory-opencode-lane2-request.json")), false);
+});
+
+test("multiple on_pass advisory lanes share one remaining grace budget", () => {
+  const { repoRoot, manifestPath, runId, doneCriteriaPath, diffPath } = setupRepo();
+  const record = readManifest(manifestPath);
+  writeManifest(manifestPath, {
+    ...record.data,
+    routing: {
+      version: 1,
+      selected: {
+        advisory_review: [
+          { reviewer: "opencode", model: "example/opencode-model-fast", trigger: "on_pass" },
+          { reviewer: "opencode", model: "example/opencode-model-fast", trigger: "on_pass" },
+        ],
+      },
+    },
+  }, record.body);
+  const primaryScript = writePrimaryReviewer(repoRoot, passVerdict());
+  const opencodeScript = writeFakeOpencode(repoRoot, { delayMs: 2000 });
+
+  const result = runReview({
+    repoRoot,
+    runId,
+    doneCriteriaPath,
+    diffPath,
+    primaryScript,
+    opencodeScript,
+    advisoryReviewer: null,
+    extraArgs: ["--advisory-grace", "0.25"],
+  });
+  const waits = result.advisoryReviews.map((entry) => Number(entry.criticalPathWaitMs || 0));
+
+  assert.equal(result.nextState, STATES.READY_TO_MERGE);
+  assert.deepEqual(result.advisoryReviews.map((entry) => entry.status), ["deferred", "deferred"]);
+  assert.ok(waits.reduce((sum, value) => sum + value, 0) < 400, `expected shared wait budget, got waits ${waits.join(", ")}`);
+});
+
 test("standard review applies the primary verdict after advisory grace and records late advisory as metrics-only", () => {
   const { repoRoot, manifestPath, runId, doneCriteriaPath, diffPath } = setupRepo();
   const primaryScript = writePrimaryReviewer(repoRoot, passVerdict());
@@ -1431,8 +1538,13 @@ test("gating lane demotes a pass produced by low-confidence primary downgrade", 
   const verdict = JSON.parse(fs.readFileSync(result.verdictPath, "utf-8"));
 
   assert.equal(result.nextState, STATES.CHANGES_REQUESTED);
-  assert.equal(result.confidenceDowngrade.applied, true);
-  assert.equal(reviewApply.confidence_downgrade.applied, true);
+  assert.deepEqual(result.confidenceDowngrade, {
+    originalVerdict: "changes_requested",
+    appliedVerdict: "changes_requested",
+    lowConfidenceCount: 1,
+  });
+  assert.equal(reviewApply.confidence_downgrade, true);
+  assert.equal(reviewApply.low_confidence_count, 1);
   assert.match(verdict.summary, /gating advisory lane/i);
   assert.equal(verdict.issues[0].confidence, "high");
 });

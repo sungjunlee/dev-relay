@@ -113,6 +113,13 @@ function readJsonIfExists(filePath) {
   }
 }
 
+function readJsonIfExistsBefore(filePath, latestMtimeMs = null) {
+  const result = readJsonIfExists(filePath);
+  if (!result || !Number.isFinite(latestMtimeMs)) return result;
+  const stat = fs.statSync(filePath);
+  return stat.mtimeMs <= latestMtimeMs ? result : null;
+}
+
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -284,13 +291,14 @@ async function finishAdvisoryReview({
   advisoryRun,
   criticalPathWaitMs = 0,
   requireEventBoundSuccess = false,
+  resultDeadlineMs = null,
   waitMs,
   consumedByPhase = "review",
 }) {
   const deadline = Date.now() + Math.max(0, Number(waitMs || 0));
   let unboundSuccess = null;
   while (Date.now() <= deadline) {
-    const result = readJsonIfExists(advisoryRun.resultPath);
+    const result = readJsonIfExistsBefore(advisoryRun.resultPath, resultDeadlineMs);
     if (result) {
       if (!requireEventBoundSuccess || result.status !== "success") return result;
       const failureReason = advisorySuccessBindingFailure(advisoryRun, result);
@@ -300,7 +308,7 @@ async function finishAdvisoryReview({
     if (Date.now() === deadline) break;
     await sleep(Math.min(25, Math.max(1, deadline - Date.now())));
   }
-  const result = readJsonIfExists(advisoryRun.resultPath);
+  const result = readJsonIfExistsBefore(advisoryRun.resultPath, resultDeadlineMs);
   if (result) {
     if (!requireEventBoundSuccess || result.status !== "success") return result;
     const failureReason = advisorySuccessBindingFailure(advisoryRun, result);

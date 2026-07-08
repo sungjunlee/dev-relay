@@ -16,7 +16,6 @@ const { buildScoreDivergenceAnalysis, loadPrBody, parseScoreLog, toIterationScor
 const { applyQualityExecutionStatus, computeQualityExecutionStatus } = require("./review-runner/execution-evidence");
 const { buildLaneCapEscalationDecision, getReviewAssuranceMetadata } = require("./review-runner/assurance");
 const { printFailureAndExit } = require("./review-runner/failure-output");
-const { applyPassEquivalentGates } = require("./review-runner/confidence-downgrade");
 const { buildRedispatchPrompt, buildRubricGateRedispatchPrompt, computeFactorStatusFlips, computeRepeatedIssueCount, decideFlipFlopEscalation, detectChurnGrowth, summarizeLineage, toEscalatedVerdict } = require("./review-runner/redispatch");
 const { buildConvergenceSummary, formatConvergenceMarkdown } = require("./review-runner/convergence");
 const { applyVerdictToManifest } = require("./review-runner/manifest-apply");
@@ -25,7 +24,8 @@ const { passNextActionsFor, writeRoundArtifacts } = require("./review-runner/rou
 const { maybeBlockForExecutionEvidencePreflight } = require("./review-runner/preflight");
 const { buildPrimaryReviewerPreflight, loadReviewText, loadRunRoutePlan, resolveReviewerName, resolveReviewerScript } = require("./review-runner/reviewer-invoke");
 const { maybeSwapReviewer } = require("./review-runner/reviewer-swap");
-const { appendAdvisoryRunsForTrigger, resolveAdvisoryConfig, settleConfiguredAdvisories } = require("./review-runner/advisory-orchestration");
+const { appendAdvisoryRunsForTrigger, resolveAdvisoryConfig } = require("./review-runner/advisory-orchestration");
+const { settleAdvisoryGatesForRound } = require("./review-runner/advisory-gates");
 const { printResult, printUsage } = require("./review-runner/output");
 const { assertKnownReviewRunnerFlags, parseReviewRunnerCliArgs } = require("./review-runner/cli");
 const { args, cliArgs, options } = parseReviewRunnerCliArgs(process.argv.slice(2));
@@ -43,15 +43,7 @@ async function run() {
   } = options;
   if (manualReviewReason && !reviewFile) throw new Error("--manual-review-reason requires --review-file");
 
-  const { branch, issueNumber, manifest, prNumber, reviewRepoPath, runRepoPath } = resolveContext(
-    repoPath,
-    repoArg,
-    manifestPathArg,
-    runIdArg,
-    branchArg,
-    prArg,
-    doneCriteriaFile
-  );
+  const { branch, issueNumber, manifest, prNumber, reviewRepoPath, runRepoPath } = resolveContext(repoPath, repoArg, manifestPathArg, runIdArg, branchArg, prArg, doneCriteriaFile);
   const { body, manifestPath } = manifest;
   let { data } = manifest;
   data = maybeSwapReviewer(data, reviewerArg, body, manifestPath, runRepoPath, { independentReviewReason });
@@ -153,7 +145,7 @@ async function run() {
     runId: data.run_id,
     state: data.state, convergenceSummary: null, verdictPath: null,
   };
-  let advisoryRuns = [], advisoryResult = null, advisoryResults = [], primaryReviewerPreflight = null;
+  let advisoryRuns = [], advisoryResult = null, advisoryResults = [], gateResult = null, primaryReviewerPreflight = null;
 
   if (prepareOnly) {
     printResult({ doneCriteriaPath, diffPath, jsonOut, manifestPath, originalState: data.state, prepareOnly, prNumber, promptPath, redispatchPath: null, result, updatedManifest: null, verdictPath: null });
@@ -220,26 +212,23 @@ async function run() {
   }
   const executionStatus = computeQualityExecutionStatus({ runDir, reviewedHead: reviewedHeadSha, strict: hardenedAssurance });
   verdict = applyQualityExecutionStatus(verdict, executionStatus);
-  ({ advisoryResult, advisoryResults } = await settleConfiguredAdvisories({
+  const gateSettlement = await settleAdvisoryGatesForRound({
+    advisoryConfig,
     advisoryRuns,
-    config: advisoryConfig,
     currentState: data.state,
-    hardenedAssurance,
-    result,
-    verdict,
-  }));
-  const gateResult = applyPassEquivalentGates(verdict, {
-    advisoryResult,
-    advisoryResults,
-    disallowPassReason: prSignalsPassBlockReason,
     executionStatus,
     hardenedAssurance,
     internalReview,
     laneDemotionCount: Number(data.review?.lane_demotions || 0),
     manualReviewReason,
+    prSignalsPassBlockReason,
+    result,
     reviewFile,
+    startOptions: advisoryStartOptions,
+    verdict,
   });
-  verdict = gateResult.verdict;
+  ({ advisoryResult, advisoryResults, advisoryRuns, gateResult, verdict } = gateSettlement);
+
   const confidenceDowngrade = gateResult.confidenceDowngrade;
   const assuranceMetadata = getReviewAssuranceMetadata(verdict);
   if (assuranceMetadata) result.reviewAssuranceDecision = assuranceMetadata;
@@ -276,7 +265,7 @@ async function run() {
   if (convergenceSummary) writeText(path.join(runDir, `review-round-${round}-convergence.md`), `${formatConvergenceMarkdown(convergenceSummary)}\n`);
 
   const rubricGateRedispatchPath = path.join(runDir, `review-round-${round}-redispatch.md`);
-  const rubricGateFailure = verdict.verdict === "pass" || confidenceDowngrade.applied
+  const rubricGateFailure = verdict.verdict === "pass" || confidenceDowngradeApplied
     ? buildReviewRunnerRubricGateFailure(data.run_id, rubricGateRedispatchPath, rubricLoad)
     : null;
   const confidenceDowngradeAppliedAsFinalPass = confidenceDowngradeApplied && !rubricGateFailure;
@@ -300,7 +289,7 @@ async function run() {
   writeText(verdictPath, `${JSON.stringify(verdictRecord, null, 2)}\n`);
 
   let redispatchPath = null;
-  if ((verdict.verdict === "changes_requested" && !confidenceDowngrade.applied) || rubricGateFailure) {
+  if ((verdict.verdict === "changes_requested" && !confidenceDowngradeAppliedAsFinalPass) || rubricGateFailure) {
     redispatchPath = rubricGateFailure
       ? rubricGateRedispatchPath
       : path.join(runDir, `review-round-${round}-redispatch.md`);
@@ -335,6 +324,13 @@ async function run() {
   updatedManifest = applyReviewerIdentity(updatedManifest, noComment || internalReview, runRepoPath);
   writeManifest(manifestPath, updatedManifest, body);
   appendRunEvent(runRepoPath, data.run_id, { event: EVENTS.ESCALATION_DECISION, state_from: data.state, state_to: updatedManifest.state, head_sha: reviewedHeadSha, ...escalationDecision });
+  const reportedConfidenceDowngrade = confidenceDowngrade.applied && !rubricGateFailure
+    ? {
+      originalVerdict: "changes_requested",
+      appliedVerdict,
+      lowConfidenceCount: confidenceDowngrade.lowConfidenceCount,
+    }
+    : null;
   const reviewApplyReason = confidenceDowngradeAppliedAsFinalPass ? "pass" : rubricGateFailure ? rubricGateFailure.status : verdict.verdict;
   appendRunEvent(runRepoPath, data.run_id, {
     event: EVENTS.REVIEW_APPLY,
@@ -345,9 +341,9 @@ async function run() {
     reviewer: reviewerName,
     reason: reviewApplyReason,
     lineage_summary: escalationDecision.lineage_summary || lineageSummary,
-    ...(confidenceDowngradeAppliedAsFinalPass ? {
+    ...(reportedConfidenceDowngrade ? {
       confidence_downgrade: true,
-      low_confidence_count: confidenceDowngrade.lowConfidenceCount,
+      low_confidence_count: reportedConfidenceDowngrade.lowConfidenceCount,
     } : {}),
   });
 
@@ -365,7 +361,7 @@ async function run() {
   }
 
   result.appliedVerdict = appliedVerdict;
-  result.confidenceDowngrade = confidenceDowngradeAppliedAsFinalPass ? { originalVerdict: verdict.verdict, appliedVerdict: "pass", lowConfidenceCount: confidenceDowngrade.lowConfidenceCount } : null;
+  result.confidenceDowngrade = reportedConfidenceDowngrade;
   result.nextState = updatedManifest.state;
   result.redispatchPath = redispatchPath;
   result.repeatedIssueCount = repeatedIssueCount;

@@ -181,12 +181,32 @@ function advisoryResultList(value) {
   return value ? [value] : [];
 }
 
+function advisoryResultKey(value) {
+  return [
+    Number(value?.lane_index || value?.laneIndex || 0),
+    value?.trigger || "every_round",
+    value?.reviewer || "unknown-reviewer",
+    value?.profile || "blindspot",
+  ].join(":");
+}
+
 function setResultAdvisory(result, value) {
   const list = advisoryResultList(value);
   if (list.length > 0 || Array.isArray(value)) {
     result.advisoryReviews = list;
     result.advisoryReview = list[0];
   }
+}
+
+function upsertResultAdvisory(result, value) {
+  const incoming = advisoryResultList(value);
+  if (!incoming.length && !Array.isArray(value)) return;
+  const existing = Array.isArray(result.advisoryReviews)
+    ? result.advisoryReviews
+    : advisoryResultList(result.advisoryReview);
+  const byKey = new Map(existing.map((entry) => [advisoryResultKey(entry), entry]));
+  for (const entry of incoming) byKey.set(advisoryResultKey(entry), entry);
+  setResultAdvisory(result, Array.from(byKey.values()));
 }
 
 function advisoryWarningsFor(results) {
@@ -201,7 +221,7 @@ function advisoryWarningsFor(results) {
 
 function appendAdvisoryRunsForTrigger({ advisoryRuns = [], result, startOptions, trigger }) {
   const started = startConfiguredAdvisory({ ...startOptions, trigger });
-  setResultAdvisory(result, started.resultAdvisory);
+  upsertResultAdvisory(result, started.resultAdvisory);
   return advisoryRuns.concat(started.advisoryRuns || []);
 }
 
@@ -293,9 +313,24 @@ function startConfiguredAdvisory({
   };
 }
 
-async function settleOneAdvisoryForVerdict({ advisoryRun, config, currentState, hardenedAssurance, verdict }) {
+function advisorySettlementWaitMs(config, hardenedAssurance) {
+  return (hardenedAssurance ? config.timeoutSeconds : config.graceSeconds) * 1000;
+}
+
+function createAdvisorySettlementDeadline({ config, hardenedAssurance, now = Date.now() }) {
+  return now + Math.max(0, advisorySettlementWaitMs(config, hardenedAssurance));
+}
+
+function remainingAdvisorySettlementWaitMs({ config, hardenedAssurance, settlementDeadlineMs = null }) {
+  if (Number.isFinite(settlementDeadlineMs)) {
+    return Math.max(0, settlementDeadlineMs - Date.now());
+  }
+  return advisorySettlementWaitMs(config, hardenedAssurance);
+}
+
+async function settleOneAdvisoryForVerdict({ advisoryRun, config, currentState, hardenedAssurance, settlementDeadlineMs = null, verdict }) {
   const waitStartedAt = Date.now();
-  const waitMs = hardenedAssurance ? config.timeoutSeconds * 1000 : config.graceSeconds * 1000;
+  const waitMs = remainingAdvisorySettlementWaitMs({ config, hardenedAssurance, settlementDeadlineMs });
   const decisionState = verdict.verdict === "changes_requested"
     ? STATES.CHANGES_REQUESTED
     : verdict.verdict === "escalated"
@@ -307,6 +342,7 @@ async function settleOneAdvisoryForVerdict({ advisoryRun, config, currentState, 
     advisoryRun,
     consumedByPhase: "review",
     criticalPathWaitMs: 0,
+    resultDeadlineMs: settlementDeadlineMs,
     waitMs,
   });
   const criticalPathWaitMs = Date.now() - waitStartedAt;
@@ -344,6 +380,7 @@ async function settleOneAdvisoryForVerdict({ advisoryRun, config, currentState, 
       consumedByPhase: "review",
       criticalPathWaitMs,
       requireEventBoundSuccess: true,
+      resultDeadlineMs: settlementDeadlineMs,
       waitMs: resolveHardenedBindingWaitMs(),
     });
     advisoryResult = {
@@ -359,7 +396,7 @@ async function settleOneAdvisoryForVerdict({ advisoryRun, config, currentState, 
   };
 }
 
-async function settleAdvisoryForVerdict({ advisoryRun = null, advisoryRuns = null, config, currentState, hardenedAssurance, verdict }) {
+async function settleAdvisoryForVerdict({ advisoryRun = null, advisoryRuns = null, config, currentState, hardenedAssurance, settlementDeadlineMs = null, verdict }) {
   const runs = advisoryRuns || (advisoryRun ? [advisoryRun] : []);
   if (!runs.length) return { advisoryResult: null, advisoryResults: [], resultAdvisory: undefined };
   const settled = [];
@@ -369,6 +406,7 @@ async function settleAdvisoryForVerdict({ advisoryRun = null, advisoryRuns = nul
       config,
       currentState,
       hardenedAssurance,
+      settlementDeadlineMs,
       verdict,
     }));
   }
@@ -381,21 +419,29 @@ async function settleAdvisoryForVerdict({ advisoryRun = null, advisoryRuns = nul
   };
 }
 
-async function settleConfiguredAdvisories({ advisoryRuns, config, currentState, hardenedAssurance, result, verdict }) {
+async function settleConfiguredAdvisories({ advisoryRuns, config, currentState, hardenedAssurance, priorAdvisoryResults = [], result, settlementDeadlineMs = null, verdict }) {
   const settled = await settleAdvisoryForVerdict({
     advisoryRuns,
     config,
     currentState,
     hardenedAssurance,
+    settlementDeadlineMs,
     verdict,
   });
-  setResultAdvisory(result, settled.resultAdvisory);
-  result.advisoryWarnings = advisoryWarningsFor(settled.advisoryResults);
-  return settled;
+  const advisoryResults = advisoryResultList(priorAdvisoryResults).concat(settled.advisoryResults);
+  upsertResultAdvisory(result, settled.resultAdvisory);
+  result.advisoryWarnings = advisoryWarningsFor(advisoryResults);
+  return {
+    ...settled,
+    advisoryResult: advisoryResults[0] || null,
+    advisoryResults,
+    resultAdvisory: resultListForOutput(advisoryResults),
+  };
 }
 
 module.exports = {
   appendAdvisoryRunsForTrigger,
+  createAdvisorySettlementDeadline,
   resolveAdvisoryConfig,
   resolveHardenedBindingWaitMs,
   settleConfiguredAdvisories,
