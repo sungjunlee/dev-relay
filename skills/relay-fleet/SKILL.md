@@ -33,6 +33,8 @@ Run Phase 1 multi-leaf orchestration after `relay-ready` and `relay-plan` have a
 
 Design rationale, rejected alternatives, non-goals, and the Phase 2/3 roadmap: [references/design.md](references/design.md).
 
+To run a dev-backlog sprint batch as one fleet wave, use the mapping recipe in [references/sprint-to-leaves.md](references/sprint-to-leaves.md).
+
 ## Input Contract
 
 Use a JSON file containing a non-empty `leaves[]` array. Each leaf must include:
