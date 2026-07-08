@@ -311,6 +311,21 @@ function appendRunEvent(repoRoot, runId, eventData) {
     ...(eventData.trigger !== undefined
       ? { trigger: normalizeEventValue(eventData.trigger) }
       : {}),
+    ...(eventData.gating !== undefined
+      ? { gating: eventData.gating === true }
+      : {}),
+    ...(eventData.lane_index !== undefined
+      ? { lane_index: normalizeEventValue(eventData.lane_index) }
+      : {}),
+    ...(eventData.confidence_downgrade !== undefined
+      ? { confidence_downgrade: normalizeEventValue(eventData.confidence_downgrade) }
+      : {}),
+    ...(eventData.lane_demotion_cap !== undefined
+      ? { lane_demotion_cap: normalizeEventValue(eventData.lane_demotion_cap) }
+      : {}),
+    ...(eventData.lane_demotion_count !== undefined
+      ? { lane_demotion_count: normalizeEventValue(eventData.lane_demotion_count) }
+      : {}),
     ...(eventData.factors !== undefined
       ? { factors: normalizeEventValue(eventData.factors) }
       : {}),

@@ -122,7 +122,10 @@ function sleepSync(ms) {
 }
 
 function startAdvisoryReview({
+  artifactReviewerName = null,
+  gating = false,
   headSha,
+  laneIndex = 1,
   profile,
   promptText,
   policyDecision = null,
@@ -135,18 +138,24 @@ function startAdvisoryReview({
   runDir,
   runId,
   runRepoPath,
+  source = null,
   state,
   timeoutSeconds,
+  trigger = "every_round",
 }) {
-  const paths = advisoryPaths(runDir, round, reviewerName);
-  const promptPath = path.join(runDir, `review-round-${round}-advisory-${reviewerName}-prompt.md`);
+  const artifactName = artifactReviewerName || reviewerName;
+  const paths = advisoryPaths(runDir, round, artifactName);
+  const promptPath = paths.promptPath;
   writeText(promptPath, `${promptText}\n`);
   const reviewerScript = resolveReviewerScript(reviewerName, null, { phase: ADAPTER_PHASES.ADVISORY_REVIEW });
   const startedAt = Date.now();
   const effectiveReviewerPolicy = reviewerPolicy || buildAdvisoryReviewerPolicy(reviewerName);
   const request = {
+    artifactReviewerName: artifactName,
     decisionPath: paths.decisionPath,
+    gating: gating === true,
     headSha,
+    laneIndex,
     profile,
     promptPath,
     requestPath: paths.requestPath,
@@ -162,9 +171,11 @@ function startAdvisoryReview({
     runDir,
     runId,
     runRepoPath,
+    source,
     startedAt,
     state,
     timeoutSeconds: parsePositiveSeconds(timeoutSeconds),
+    trigger,
   };
   writeJson(paths.requestPath, request);
 
@@ -202,12 +213,17 @@ function buildDeferredResult(advisoryRun, { criticalPathWaitMs = 0, consumedByPh
     duplicate_low_confidence_count: 0,
     elapsedMs: Date.now() - advisoryRun.startedAt,
     failureReason: null,
+    gating: advisoryRun.gating === true,
+    lane_index: advisoryRun.laneIndex || 1,
+    model: advisoryRun.reviewerModel || null,
     phaseDecisionWaited: criticalPathWaitMs > 0,
     profile: advisoryRun.profile,
     rawResponsePath: null,
     required_count: 0,
     reviewer: advisoryRun.reviewerName,
+    source: advisoryRun.source || null,
     status: "deferred",
+    trigger: advisoryRun.trigger || "every_round",
   };
 }
 
@@ -353,7 +369,7 @@ function executeAdvisoryRequest(request) {
 
   try {
     const timeoutMs = parsePositiveSeconds(request.timeoutSeconds) * 1000;
-    advisoryRepoPath = createAdvisoryWorktree(request.reviewRepoPath, request.runDir, request.reviewerName);
+    advisoryRepoPath = createAdvisoryWorktree(request.reviewRepoPath, request.runDir, request.artifactReviewerName || request.reviewerName);
     const statusBefore = captureGitStatus(advisoryRepoPath);
     const execArgs = [
       request.reviewerScript,
@@ -386,12 +402,12 @@ function executeAdvisoryRequest(request) {
       };
     }
 
-    rawResponsePath = writeRawResponse(request.runDir, request.round, request.reviewerName, stdout, stderr);
+    rawResponsePath = writeRawResponse(request.runDir, request.round, request.artifactReviewerName || request.reviewerName, stdout, stderr);
     const statusAfter = captureGitStatus(advisoryRepoPath);
     if (statusBefore !== statusAfter) {
       status = "policy_violation";
       failureReason = "advisory_reviewer_modified_worktree";
-      artifactPath = path.join(request.runDir, `review-round-${request.round}-advisory-${request.reviewerName}-policy-violation.txt`);
+      artifactPath = path.join(request.runDir, `review-round-${request.round}-advisory-${request.artifactReviewerName || request.reviewerName}-policy-violation.txt`);
       writeText(artifactPath, [
         "Advisory reviewer write policy violation detected.",
         "",
@@ -407,7 +423,7 @@ function executeAdvisoryRequest(request) {
     } else if (outcome.timeout) {
       status = "timeout";
       failureReason = (
-        `${request.reviewerName} reviewer advisory_review timed out after ${timeoutMs / 1000}s; ` +
+        `${request.reviewerName} reviewer advisory_review exceeded ${timeoutMs / 1000}s timeout; ` +
         `model=${request.reviewerModel || "default"}; raw_response=${rawResponsePath}`
       );
     } else if (outcome.error || outcome.code !== 0) {
@@ -419,7 +435,7 @@ function executeAdvisoryRequest(request) {
         phase: "advisory_review",
         profile: request.profile,
       });
-      artifactPath = path.join(request.runDir, `review-round-${request.round}-advisory-${request.reviewerName}.json`);
+      artifactPath = path.join(request.runDir, `review-round-${request.round}-advisory-${request.artifactReviewerName || request.reviewerName}.json`);
       writeText(artifactPath, `${JSON.stringify(parsed, null, 2)}\n`);
       counts = {
         required_count: parsed.required_findings.length,
@@ -437,10 +453,15 @@ function executeAdvisoryRequest(request) {
     artifactHash,
     artifactPath,
     failureReason,
+    gating: request.gating === true,
+    lane_index: request.laneIndex || 1,
+    model: request.reviewerModel || null,
     profile: request.profile,
     rawResponsePath,
     reviewer: request.reviewerName,
+    source: request.source || null,
     status,
+    trigger: request.trigger || "every_round",
     ...counts,
   };
   writeJson(request.resultPath, result);
@@ -458,11 +479,14 @@ function executeAdvisoryRequest(request) {
       state_to: request.state,
       head_sha: request.headSha,
       round: request.round,
+      lane_index: request.laneIndex || 1,
       reviewer: request.reviewerName,
       model: request.reviewerModel,
       reviewer_policy: request.reviewerPolicy,
       policy_decision: request.policyDecision,
       profile: request.profile,
+      trigger: request.trigger || "every_round",
+      gating: request.gating === true,
       status,
       artifact_path: artifactPath,
       advisory_artifact_hash: artifactHash,

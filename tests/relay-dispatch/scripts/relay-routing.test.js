@@ -86,7 +86,12 @@ test("routing CLI tags override inferred labels, profile, rubric, and file tags"
   assert.deepEqual(decision.effective_tags, ["security"]);
   assert.equal(decision.matched, true);
   assert.equal(decision.matched_rule.name, "security");
-  assert.deepEqual(decision.selected.advisory_review, { reviewer: "claude", profile: "blindspot" });
+  assert.deepEqual(decision.selected.advisory_review, [{
+    reviewer: "claude",
+    profile: "blindspot",
+    trigger: "every_round",
+    gating: false,
+  }]);
 });
 
 test("routing collects label, task_profile, rubric, and test-command tags when CLI tags are absent", () => {
@@ -152,7 +157,12 @@ test("routing first matching rule selects advisory defaults only", () => {
   assert.equal(decision.matched, true);
   assert.equal(decision.matched_rule.name, "first");
   assert.deepEqual(decision.selected, {
-    advisory_review: { reviewer: "claude", profile: "blindspot" },
+    advisory_review: [{
+      reviewer: "claude",
+      profile: "blindspot",
+      trigger: "every_round",
+      gating: false,
+    }],
   });
   assert.deepEqual(originalPolicy.defaults.review, { reviewer: "codex" });
   assert.deepEqual(decision.ignored_primary_review, { reviewer: "opencode" });
@@ -202,7 +212,12 @@ test("routing duplicate rule names warn but preserve first-match order", () => {
   const decision = resolveRoutingDecision({ policy: policy(rules), issueLabels: ["docs"] });
   assert.equal(decision.matched_rule.name, "dup");
   assert.equal(decision.matched_rule.index, 0);
-  assert.deepEqual(decision.selected.advisory_review, { reviewer: "claude" });
+  assert.deepEqual(decision.selected.advisory_review, [{
+    reviewer: "claude",
+    profile: "blindspot",
+    trigger: "every_round",
+    gating: false,
+  }]);
   assert.deepEqual(decision.warnings, [
     {
       code: "duplicate_rule_name",
@@ -236,14 +251,48 @@ test("project routes reader reports absent and malformed routes.json determinist
 });
 
 test("project routes schema accepts phase defaults and rejects malformed actors", () => {
-  assert.deepEqual(validateProjectRoutes({
+  const normalized = validateProjectRoutes({
     version: 1,
     defaults: {
       dispatch: { executor: "pi", model: "example/pi-model-fast" },
       review: { reviewer: "codex" },
       advisory_review: { reviewer: "opencode", model: "example/opencode-model-cheap", profile: "blindspot" },
     },
-  }, "routes.json").defaults.review, { reviewer: "codex" });
+  }, "routes.json");
+
+  assert.deepEqual(normalized.defaults.review, { reviewer: "codex" });
+  assert.deepEqual(normalized.defaults.advisory_review, [{
+    reviewer: "opencode",
+    model: "example/opencode-model-cheap",
+    profile: "blindspot",
+    trigger: "every_round",
+    gating: false,
+  }]);
+
+  assert.deepEqual(validateProjectRoutes({
+    version: 1,
+    defaults: {
+      advisory_review: [
+        { reviewer: "opencode", model: "example/opencode-model-fast", gating: true },
+        { reviewer: "pi", model: "openai/gpt-5", trigger: "on_pass" },
+      ],
+    },
+  }, "routes.json").defaults.advisory_review, [
+    {
+      reviewer: "opencode",
+      model: "example/opencode-model-fast",
+      profile: "blindspot",
+      trigger: "every_round",
+      gating: true,
+    },
+    {
+      reviewer: "pi",
+      model: "openai/gpt-5",
+      profile: "blindspot",
+      trigger: "on_pass",
+      gating: false,
+    },
+  ]);
 
   assert.throws(
     () => validateProjectRoutes({
@@ -431,7 +480,12 @@ test("route config loader merges global and project v2 per field with project pr
   assert.deepEqual(result.config.routes.map((entry) => entry.route), ["openai/global", "openai/project"]);
   assert.deepEqual(result.config.denied_routes.map((entry) => entry.route), ["openai/denied-global", "openai/denied-project"]);
   assert.deepEqual(result.config.presets.light.dispatch, { executor: "pi", model: "openai/project" });
-  assert.deepEqual(result.config.presets.diverse.advisory_review, { reviewer: "pi", profile: "blindspot" });
+  assert.deepEqual(result.config.presets.diverse.advisory_review, [{
+    reviewer: "pi",
+    profile: "blindspot",
+    trigger: "every_round",
+    gating: false,
+  }]);
 });
 
 test("route config loader accepts project v1 routes when global v2 routes is source of truth", () => {
@@ -568,10 +622,57 @@ test("route preset expansion fills only unset run intent fields with preset sour
   assert.equal(result.phases.dispatch.sources.executor, "run_intent");
   assert.equal(result.phases.dispatch.model, "example/opencode-model-fast");
   assert.equal(result.phases.dispatch.sources.model, "preset:light");
-  assert.equal(result.phases.advisory_review.reviewer, "pi");
-  assert.equal(result.phases.advisory_review.sources.reviewer, "preset:light");
-  assert.equal(result.phases.advisory_review.profile, "blindspot");
-  assert.equal(result.phases.advisory_review.sources.profile, "preset:light");
+  assert.equal(result.phases.advisory_review[0].reviewer, "pi");
+  assert.equal(result.phases.advisory_review[0].sources.reviewer, "preset:light");
+  assert.equal(result.phases.advisory_review[0].profile, "blindspot");
+  assert.equal(result.phases.advisory_review[0].trigger, "every_round");
+  assert.equal(result.phases.advisory_review[0].gating, false);
+  assert.equal(result.phases.advisory_review[0].sources.profile, "preset:light");
+});
+
+test("route intent resolver preserves advisory lane lists from policy defaults", () => {
+  const result = resolveRouteIntent({
+    policy: routePolicy({
+      defaults: {
+        dispatch: { executor: "codex" },
+        review: { reviewer: "codex" },
+        advisory_review: [
+          { reviewer: "opencode", model: "example/opencode-model-fast", gating: true },
+          { reviewer: "pi", model: "openai/gpt-5", trigger: "on_pass" },
+        ],
+      },
+      allowed_model_routes: [
+        { route: "example/opencode-model-*", phases: ["advisory_review"], reviewers: ["opencode"] },
+        { route: "openai/*", phases: ["advisory_review"], reviewers: ["pi"] },
+      ],
+    }),
+  });
+
+  assert.deepEqual(result.phases.advisory_review.map(({ reviewer, model, profile, trigger, gating, source }) => ({
+    reviewer,
+    model,
+    profile,
+    trigger,
+    gating,
+    source,
+  })), [
+    {
+      reviewer: "opencode",
+      model: "example/opencode-model-fast",
+      profile: "blindspot",
+      trigger: "every_round",
+      gating: true,
+      source: "policy_defaults",
+    },
+    {
+      reviewer: "pi",
+      model: "openai/gpt-5",
+      profile: "blindspot",
+      trigger: "on_pass",
+      gating: false,
+      source: "policy_defaults",
+    },
+  ]);
 });
 
 test("route preset expansion carries model resolution metadata with resolved model", () => {

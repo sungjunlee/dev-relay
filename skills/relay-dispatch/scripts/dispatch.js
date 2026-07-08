@@ -1381,6 +1381,19 @@ function summarizeRoutePlan(routePlan) {
   const summary = {};
   for (const [phase, value] of Object.entries(routePlan?.phases || {})) {
     if (!value) continue;
+    if (Array.isArray(value)) {
+      summary[phase] = value.map((lane) => ({
+        actor: lane.executor || lane.reviewer || null,
+        actor_field: lane.executor ? "executor" : "reviewer",
+        model: lane.model || null,
+        policy_reason: lane.policy_decision?.reason || null,
+        model_resolution_source: lane.model_resolution?.source || null,
+        ...(lane.profile ? { profile: lane.profile } : {}),
+        ...(lane.trigger ? { trigger: lane.trigger } : {}),
+        ...(lane.gating !== undefined ? { gating: lane.gating === true } : {}),
+      }));
+      continue;
+    }
     summary[phase] = {
       actor: value.executor || value.reviewer || null,
       actor_field: value.executor ? "executor" : "reviewer",
@@ -1395,6 +1408,11 @@ function summarizeRoutePlan(routePlan) {
 function collectModelResolution(routePlan) {
   const metadata = {};
   for (const [phase, value] of Object.entries(routePlan?.phases || {})) {
+    if (Array.isArray(value)) {
+      const entries = value.map((lane) => lane?.model_resolution || null);
+      if (entries.some(Boolean)) metadata[phase] = entries;
+      continue;
+    }
     if (value?.model_resolution) metadata[phase] = value.model_resolution;
   }
   return Object.keys(metadata).length ? metadata : null;
@@ -1403,15 +1421,21 @@ function collectModelResolution(routePlan) {
 function presetAdvisorySelection(routePlan) {
   const presetSource = routePlan?.route_preset?.source;
   const advisory = routePlan?.phases?.advisory_review;
-  if (!presetSource || !advisory?.reviewer) return null;
-  const sources = advisory.sources || {};
-  const hasPresetSource = ["reviewer", "model", "profile"].some((field) => sources[field] === presetSource);
-  if (!hasPresetSource) return null;
-  return {
-    reviewer: advisory.reviewer,
-    ...(advisory.model ? { model: advisory.model } : {}),
-    ...(advisory.profile ? { profile: advisory.profile } : {}),
-  };
+  if (!presetSource || !advisory) return null;
+  const lanes = Array.isArray(advisory) ? advisory : [advisory];
+  const selected = lanes
+    .filter((lane) => {
+      const sources = lane.sources || {};
+      return ["reviewer", "model", "profile", "trigger", "gating"].some((field) => sources[field] === presetSource);
+    })
+    .map((lane) => ({
+      reviewer: lane.reviewer,
+      ...(lane.model ? { model: lane.model } : {}),
+      ...(lane.profile ? { profile: lane.profile } : {}),
+      trigger: lane.trigger || "every_round",
+      gating: lane.gating === true,
+    }));
+  return selected.length ? selected : null;
 }
 
 function applyPresetAdvisoryToRoutingDecision(routingDecision, routePlan) {

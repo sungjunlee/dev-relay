@@ -18,10 +18,106 @@ const {
 // fail-closed failure path). 10s covers pathological parallel-runner load,
 // mirroring DEFAULT_ADVISORY_GRACE_SECONDS = 10 in advisory.js.
 const DEFAULT_HARDENED_EVENT_BINDING_WAIT_MS = 10000;
+const ADVISORY_TRIGGERS = new Set(["every_round", "on_pass"]);
 
 function resolveHardenedBindingWaitMs(env = process.env) {
   const raw = Number(env.RELAY_ADVISORY_EVENT_BINDING_WAIT_MS || DEFAULT_HARDENED_EVENT_BINDING_WAIT_MS);
   return Number.isSafeInteger(raw) && raw > 0 ? raw : DEFAULT_HARDENED_EVENT_BINDING_WAIT_MS;
+}
+
+function isPlainObject(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function nonEmptyString(value) {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function hasAdvisoryConfigValue(value) {
+  if (Array.isArray(value)) return value.length > 0;
+  return isPlainObject(value) && Object.keys(value).length > 0;
+}
+
+function normalizeTrigger(value) {
+  const trigger = nonEmptyString(value) || "every_round";
+  if (!ADVISORY_TRIGGERS.has(trigger)) {
+    throw new Error(`advisory lane trigger must be one of: ${Array.from(ADVISORY_TRIGGERS).join(", ")}`);
+  }
+  return trigger;
+}
+
+function normalizeGating(value) {
+  if (value === undefined || value === null) return false;
+  if (typeof value !== "boolean") {
+    throw new Error("advisory lane gating must be a boolean");
+  }
+  return value;
+}
+
+function normalizeLaneList(value, source) {
+  if (!hasAdvisoryConfigValue(value)) return [];
+  const entries = Array.isArray(value) ? value : [value];
+  return entries.map((entry, index) => {
+    if (!isPlainObject(entry)) {
+      throw new Error(`advisory lane ${index + 1} from ${source} must be an object`);
+    }
+    const reviewer = nonEmptyString(entry.reviewer);
+    if (!reviewer) {
+      throw new Error(`advisory lane ${index + 1} from ${source} requires reviewer`);
+    }
+    return {
+      index: index + 1,
+      reviewer,
+      model: nonEmptyString(entry.model || entry.reviewer_model),
+      modelResolution: isPlainObject(entry.model_resolution) ? entry.model_resolution : null,
+      profile: validateAdvisoryProfile(entry.profile || "blindspot"),
+      trigger: normalizeTrigger(entry.trigger),
+      gating: normalizeGating(entry.gating),
+      source,
+    };
+  });
+}
+
+function matchingPlannedLane(plannedLanes, lane, index) {
+  const sameIndex = plannedLanes[index];
+  if (sameIndex?.reviewer === lane.reviewer) return sameIndex;
+  return plannedLanes.find((planned) => planned.reviewer === lane.reviewer) || null;
+}
+
+function withCliOverrides(lanes, {
+  advisoryProfileArg,
+  advisoryReviewerModel,
+  plannedLanes = [],
+}) {
+  return lanes.map((lane, index) => {
+    const planned = matchingPlannedLane(plannedLanes, lane, index);
+    const selectedModel = advisoryReviewerModel || lane.model || planned?.model || null;
+    const modelFromPlan = !advisoryReviewerModel && planned?.model && selectedModel === planned.model;
+    return {
+      ...lane,
+      model: selectedModel,
+      modelResolution: lane.modelResolution || (modelFromPlan ? planned?.modelResolution || null : null),
+      profile: validateAdvisoryProfile(advisoryProfileArg || lane.profile || "blindspot"),
+    };
+  });
+}
+
+function assignArtifactReviewerNames(lanes) {
+  const counts = new Map();
+  for (const lane of lanes) {
+    counts.set(lane.reviewer, (counts.get(lane.reviewer) || 0) + 1);
+  }
+  const seen = new Map();
+  return lanes.map((lane) => {
+    const seenCount = (seen.get(lane.reviewer) || 0) + 1;
+    seen.set(lane.reviewer, seenCount);
+    return {
+      ...lane,
+      artifactReviewerName: counts.get(lane.reviewer) > 1 && seenCount > 1
+        ? `${lane.reviewer}-lane${lane.index}`
+        : lane.reviewer,
+    };
+  });
 }
 
 function resolveAdvisoryConfig({
@@ -33,33 +129,80 @@ function resolveAdvisoryConfig({
   data,
   routePlan = null,
 }) {
-  const planned = routePlan?.phases?.advisory_review && typeof routePlan.phases.advisory_review === "object"
-    ? routePlan.phases.advisory_review
-    : {};
-  const routed = data?.routing?.selected?.advisory_review && typeof data.routing.selected.advisory_review === "object"
-    ? data.routing.selected.advisory_review
-    : {};
-  const reviewer = advisoryReviewerArg || routed.reviewer || planned.reviewer || null;
-  if (!reviewer && (advisoryProfileArg || advisoryReviewerModel || advisoryTimeoutArg || advisoryGraceArg)) {
+  const plannedRaw = routePlan?.phases?.advisory_review;
+  const routedRaw = data?.routing?.selected?.advisory_review;
+  const plannedLanes = normalizeLaneList(plannedRaw, "route_plan");
+  let lanes = [];
+  let source = null;
+  if (advisoryReviewerArg) {
+    lanes = normalizeLaneList({
+      reviewer: advisoryReviewerArg,
+      model: advisoryReviewerModel,
+      profile: advisoryProfileArg || "blindspot",
+    }, "cli");
+    source = "cli";
+  } else if (hasAdvisoryConfigValue(routedRaw)) {
+    lanes = normalizeLaneList(routedRaw, "routing");
+    source = "routing";
+  } else if (plannedLanes.length) {
+    lanes = plannedLanes;
+    source = "route_plan";
+  }
+
+  if (!lanes.length && (advisoryProfileArg || advisoryReviewerModel || advisoryTimeoutArg || advisoryGraceArg)) {
     throw new Error("--advisory-reviewer is required when advisory options are supplied and no manifest routing advisory reviewer is selected");
   }
-  // A route-plan model/profile was planned for planned.reviewer specifically. Only
-  // inherit it when that planned reviewer is the one actually selected, so a routed
-  // (or CLI) advisory reviewer cannot pick up a model meant for a different reviewer.
-  const plannedForSelected = planned.reviewer && planned.reviewer === reviewer;
-  const plannedModel = plannedForSelected ? planned.model : null;
-  const plannedProfile = plannedForSelected ? planned.profile : null;
-  const selectedModel = advisoryReviewerModel || routed.model || routed.reviewer_model || plannedModel || null;
-  const modelFromPlan = reviewer && !advisoryReviewerModel && plannedForSelected && plannedModel && selectedModel === plannedModel;
+
+  lanes = assignArtifactReviewerNames(withCliOverrides(lanes, {
+    advisoryProfileArg,
+    advisoryReviewerModel,
+    plannedLanes,
+  }));
+  const first = lanes[0] || {};
+
   return {
-    graceSeconds: reviewer ? parseNonNegativeSeconds(advisoryGraceArg) : null,
-    model: reviewer ? selectedModel : null,
-    modelResolution: modelFromPlan ? planned.model_resolution || null : null,
-    profile: reviewer ? validateAdvisoryProfile(advisoryProfileArg || routed.profile || plannedProfile || "blindspot") : null,
-    reviewer,
-    source: reviewer ? (advisoryReviewerArg ? "cli" : routed.reviewer ? "routing" : "route_plan") : null,
-    timeoutSeconds: reviewer ? parsePositiveSeconds(advisoryTimeoutArg) : null,
+    graceSeconds: lanes.length ? parseNonNegativeSeconds(advisoryGraceArg) : null,
+    lanes,
+    model: first.model || null,
+    modelResolution: first.modelResolution || null,
+    profile: first.profile || null,
+    reviewer: first.reviewer || null,
+    source: lanes.length ? source : null,
+    timeoutSeconds: lanes.length ? parsePositiveSeconds(advisoryTimeoutArg) : null,
   };
+}
+
+function resultListForOutput(results) {
+  return results.length === 1 ? results[0] : results;
+}
+
+function advisoryResultList(value) {
+  if (Array.isArray(value)) return value.filter(Boolean);
+  return value ? [value] : [];
+}
+
+function setResultAdvisory(result, value) {
+  const list = advisoryResultList(value);
+  if (list.length > 0 || Array.isArray(value)) {
+    result.advisoryReviews = list;
+    result.advisoryReview = list[0];
+  }
+}
+
+function advisoryWarningsFor(results) {
+  return (results || [])
+    .filter((entry) => entry && entry.status && entry.status !== "success" && entry.status !== "deferred")
+    .map((entry) => (
+      `Advisory review warning: ${entry.reviewer || "unknown reviewer"} ` +
+      `(${entry.trigger || "every_round"}, profile=${entry.profile || "blindspot"}) ` +
+      `status=${entry.status}: ${entry.failureReason || "no failure reason recorded"}`
+    ));
+}
+
+function appendAdvisoryRunsForTrigger({ advisoryRuns = [], result, startOptions, trigger }) {
+  const started = startConfiguredAdvisory({ ...startOptions, trigger });
+  setResultAdvisory(result, started.resultAdvisory);
+  return advisoryRuns.concat(started.advisoryRuns || []);
 }
 
 function startConfiguredAdvisory({
@@ -77,64 +220,80 @@ function startConfiguredAdvisory({
   rubricLoad,
   runDir,
   runRepoPath,
+  trigger = "every_round",
 }) {
-  if (!config.reviewer) return { advisoryRun: null, resultAdvisory: undefined };
-  const advisoryModel = resolveAdvisoryModel(data, config.reviewer, config.model, { repoRoot: runRepoPath });
-  const reviewerPolicy = buildAdvisoryReviewerPolicy(config.reviewer);
-  let policyDecision;
-  try {
-    policyDecision = assertRelayPolicyGate({
-      repoRoot: runRepoPath,
-      phase: "advisory_review",
-      reviewer: config.reviewer,
-      model: advisoryModel,
+  const lanes = (config.lanes || []).filter((lane) => lane.trigger === trigger);
+  if (!lanes.length) return { advisoryRuns: [], resultAdvisory: undefined };
+  const advisoryRuns = [];
+  const resultAdvisories = [];
+  for (const lane of lanes) {
+    const advisoryModel = resolveAdvisoryModel(data, lane.reviewer, lane.model, { repoRoot: runRepoPath });
+    const reviewerPolicy = buildAdvisoryReviewerPolicy(lane.reviewer);
+    let policyDecision;
+    try {
+      policyDecision = assertRelayPolicyGate({
+        repoRoot: runRepoPath,
+        phase: "advisory_review",
+        reviewer: lane.reviewer,
+        model: advisoryModel,
+      });
+    } catch (error) {
+      error.adapterCapability = reviewerPolicy;
+      throw error;
+    }
+    const promptText = buildAdvisoryPrompt({
+      branch,
+      diffText,
+      doneCriteria,
+      doneCriteriaSource,
+      issueNumber,
+      prNumber,
+      profile: lane.profile,
+      round,
+      rubricLoad,
     });
-  } catch (error) {
-    error.adapterCapability = reviewerPolicy;
-    throw error;
-  }
-  const promptText = buildAdvisoryPrompt({
-    branch,
-    diffText,
-    doneCriteria,
-    doneCriteriaSource,
-    issueNumber,
-    prNumber,
-    profile: config.profile,
-    round,
-    rubricLoad,
-  });
-  const advisoryRun = startAdvisoryReview({
-    headSha: reviewedHeadSha,
-    profile: config.profile,
-    promptText,
-    reviewerModel: advisoryModel,
-    modelResolution: config.modelResolution || null,
-    reviewerName: config.reviewer,
-    reviewerPolicy,
-    policyDecision,
-    reviewRepoPath,
-    round,
-    runDir,
-    runId: data.run_id,
-    runRepoPath,
-    state: data.state,
-    timeoutSeconds: config.timeoutSeconds,
-  });
-  return {
-    advisoryRun,
-    resultAdvisory: {
-      profile: config.profile,
-      reviewer: config.reviewer,
-      source: config.source,
+    const advisoryRun = startAdvisoryReview({
+      artifactReviewerName: lane.artifactReviewerName,
+      gating: lane.gating,
+      headSha: reviewedHeadSha,
+      laneIndex: lane.index,
+      profile: lane.profile,
+      promptText,
+      reviewerModel: advisoryModel,
+      modelResolution: lane.modelResolution || null,
+      reviewerName: lane.reviewer,
+      reviewerPolicy,
+      policyDecision,
+      reviewRepoPath,
+      round,
+      runDir,
+      runId: data.run_id,
+      runRepoPath,
+      source: lane.source,
+      state: data.state,
+      timeoutSeconds: config.timeoutSeconds,
+      trigger: lane.trigger,
+    });
+    advisoryRuns.push(advisoryRun);
+    resultAdvisories.push({
+      gating: lane.gating,
+      lane_index: lane.index,
+      model: advisoryModel,
+      profile: lane.profile,
+      reviewer: lane.reviewer,
+      source: lane.source,
       status: "running",
+      trigger: lane.trigger,
       policy_decision: policyDecision,
-    },
+    });
+  }
+  return {
+    advisoryRuns,
+    resultAdvisory: resultListForOutput(resultAdvisories),
   };
 }
 
-async function settleAdvisoryForVerdict({ advisoryRun, config, currentState, hardenedAssurance, verdict }) {
-  if (!advisoryRun) return { advisoryResult: null, resultAdvisory: undefined };
+async function settleOneAdvisoryForVerdict({ advisoryRun, config, currentState, hardenedAssurance, verdict }) {
   const waitStartedAt = Date.now();
   const waitMs = hardenedAssurance ? config.timeoutSeconds * 1000 : config.graceSeconds * 1000;
   const decisionState = verdict.verdict === "changes_requested"
@@ -196,13 +355,50 @@ async function settleAdvisoryForVerdict({ advisoryRun, config, currentState, har
   }
   return {
     advisoryResult,
-    resultAdvisory: { ...advisoryResult, source: config.source },
+    resultAdvisory: { ...advisoryResult, source: advisoryRun.source },
   };
 }
 
+async function settleAdvisoryForVerdict({ advisoryRun = null, advisoryRuns = null, config, currentState, hardenedAssurance, verdict }) {
+  const runs = advisoryRuns || (advisoryRun ? [advisoryRun] : []);
+  if (!runs.length) return { advisoryResult: null, advisoryResults: [], resultAdvisory: undefined };
+  const settled = [];
+  for (const run of runs) {
+    settled.push(await settleOneAdvisoryForVerdict({
+      advisoryRun: run,
+      config,
+      currentState,
+      hardenedAssurance,
+      verdict,
+    }));
+  }
+  const advisoryResults = settled.map((entry) => entry.advisoryResult);
+  const resultAdvisories = settled.map((entry) => entry.resultAdvisory);
+  return {
+    advisoryResult: advisoryResults[0] || null,
+    advisoryResults,
+    resultAdvisory: resultListForOutput(resultAdvisories),
+  };
+}
+
+async function settleConfiguredAdvisories({ advisoryRuns, config, currentState, hardenedAssurance, result, verdict }) {
+  const settled = await settleAdvisoryForVerdict({
+    advisoryRuns,
+    config,
+    currentState,
+    hardenedAssurance,
+    verdict,
+  });
+  setResultAdvisory(result, settled.resultAdvisory);
+  result.advisoryWarnings = advisoryWarningsFor(settled.advisoryResults);
+  return settled;
+}
+
 module.exports = {
+  appendAdvisoryRunsForTrigger,
   resolveAdvisoryConfig,
   resolveHardenedBindingWaitMs,
+  settleConfiguredAdvisories,
   settleAdvisoryForVerdict,
   startConfiguredAdvisory,
 };
