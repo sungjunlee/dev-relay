@@ -1,7 +1,7 @@
 ---
 name: relay-config
 argument-hint: "[setup request or command]"
-description: Interactive setup for relay routes. Use when the user asks to set up relay, configure company/personal relay routing, enable OpenCode or Pi, resolve model names, add provider/model routes, check advisory-review routing, or run relay-config doctor/check.
+description: Interactive setup and revision for relay routes. Use when the user asks to set up relay, configure company/personal relay routing, enable OpenCode or Pi, resolve model names, add provider/model routes, check/revise relay settings, or run relay-config doctor/check/gaps.
 compatibility: Requires Node.js 18+ and the sibling relay-dispatch skill.
 metadata:
   related-skills: "relay, relay-dispatch, relay-review"
@@ -26,6 +26,7 @@ Set up relay routes interactively. The user should not have to memorize command 
 - The user asks whether model catalog entries are fresh or stale
 - The user asks to create, show, or remove a route preset such as `light`, `diverse`, or `hardened`
 - The user asks to run relay doctor/check
+- The user asks for 설정 점검, 리바이즈, revise, drift check, or to fix relay config gaps
 
 ## Do not use when
 
@@ -55,10 +56,19 @@ Infer from the user's words before asking questions:
 - routes containing `/`, such as `example/opencode-model-*`, `example/pi-*`, `openai/*`, or `ollama/*` -> provider/model route patterns
 - `advisory`, `reviewer`, `documentation`, `docs` -> likely advisory-review phases
 - `preset`, `light`, `diverse`, `hardened`, `프리셋`, `가볍게`, `싸게`, `하드하게` -> preset CRUD or inspection
+- `설정 점검`, `점검해줘`, `리바이즈`, `revise`, `gaps`, `drift` -> revise workflow
 
 Ask only for missing decisions, one at a time. Use plain language and wait for the user's answer. Do not use host-specific question primitives as the only path; this skill must work in both Claude Code and Codex.
 
 ### 3. Propose before writing
+
+For revise requests, run:
+
+```bash
+node "${RELAY_SKILL_ROOT:-skills}/relay-config/scripts/relay-config.js" gaps --json
+```
+
+Present each gap with the concrete proposal from `proposal.args` in plain language. Apply only accepted proposals, verbatim, through the existing subcommands (`add-route`, `preset add`, `set-default`, `migrate`). `probe_failure` and other `automatic: false` proposals are diagnostic only; surface them without inventing an automatic fix.
 
 Before mutating routes, show a concise proposal:
 
@@ -81,7 +91,9 @@ node "${RELAY_SKILL_ROOT:-skills}/relay-config/scripts/relay-config.js" add-rout
 node "${RELAY_SKILL_ROOT:-skills}/relay-config/scripts/relay-config.js" resolve-model --phase review --reviewer opencode --model glm-5.2 --json
 node "${RELAY_SKILL_ROOT:-skills}/relay-config/scripts/relay-config.js" catalog-report --json
 node "${RELAY_SKILL_ROOT:-skills}/relay-config/scripts/relay-config.js" set-default advisory_review.reviewer opencode
+node "${RELAY_SKILL_ROOT:-skills}/relay-config/scripts/relay-config.js" set-default executor_defaults.opencode.model example/opencode-model-fast
 node "${RELAY_SKILL_ROOT:-skills}/relay-config/scripts/relay-config.js" preset add light --dispatch opencode:example/opencode-model-fast
+node "${RELAY_SKILL_ROOT:-skills}/relay-config/scripts/relay-config.js" migrate --yes
 node "${RELAY_SKILL_ROOT:-skills}/relay-config/scripts/relay-config.js" preset show light
 ```
 
@@ -112,6 +124,8 @@ The wrapper accepts common shorthand and delegates to `relay-dispatch/scripts/re
 | `show` | `show --effective` |
 | `doctor` | `doctor` |
 | `catalog-report` | `catalog-report` |
+| `gaps` | `gaps` |
+| `migrate --yes` | `migrate --yes` |
 | `resolve-model --phase review --reviewer opencode --model glm-5.2` | `resolve-model --phase review --reviewer opencode --model glm-5.2` |
 | `add-route example/opencode-model-* --phase dispatch --executor opencode` | `add-route example/opencode-model-* --phase dispatch --executor opencode` |
 | `preset add light --dispatch opencode:example/opencode-model-fast` | `preset add light --dispatch opencode:example/opencode-model-fast` |

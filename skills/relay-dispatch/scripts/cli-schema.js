@@ -125,6 +125,7 @@ const FLAGS = [
   { flag: "--verdict", kind: VALUE, mode: MODE_PARSED, valueName: "<name>", rationale: "Closed review verdict selector; flag-like following tokens should mean the value is missing." },
   { flag: "--window-days", kind: VALUE, mode: MODE_PARSED, valueName: "<N>", rationale: "Numeric scan window; flag-like following tokens should mean the value is missing." },
   { flag: "--worktree-path", kind: VALUE, mode: MODE_VERBATIM, valueName: "<path>", rationale: "Operator-supplied worktree path; keep the literal argv token." },
+  { flag: "--yes", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Explicit confirmation for commands that would otherwise run as dry-run only." },
   { flag: "--writer-pr", kind: VALUE, mode: MODE_PARSED, valueName: "<number>", rationale: "Numeric PR selector for the writer PR; flag-like following tokens should mean the value is missing." },
 ];
 
@@ -201,7 +202,7 @@ const COMMAND_FLAGS = {
     "--profile", "--effective", "--phase", "--executor", "--reviewer", "--model",
     "--fallback",
     "--repo", "--dispatch", "--review", "--advisory-review", "--route-intent-file",
-    "--reconcile", "--review-assurance", "--advisory-profile", "--json", "--help",
+    "--reconcile", "--review-assurance", "--advisory-profile", "--yes", "--json", "--help",
   ],
   "rebrand-evidence": [
     "--repo", "--run-id", "--manifest", "--reason", "--dry-run", "--json", "--help",

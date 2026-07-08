@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 const fs = require("fs");
+const os = require("os");
 const path = require("path");
 const {
   evaluateRelayRoute,
@@ -10,11 +11,16 @@ const {
 const { loadProjectConfig } = require("./project-config");
 const { getProjectConfigPath, getProjectPolicyPath, getProjectRoutesPath, getRepoSlug } = require("./manifest/paths");
 const {
+  loadRouteConfig,
   loadProjectRoutes,
   resolveGlobalRoutesPath,
   resolveRouteIntent,
   validateRouteConfig,
 } = require("./relay-routing");
+const {
+  readAllRunEvents,
+  EVENTS,
+} = require("./relay-events");
 const { normalizeReviewAssurance } = require("./manifest/review-assurance");
 const {
   findUnknownFlags,
@@ -50,6 +56,8 @@ const SUBCOMMAND_FLAGS = {
   show: new Set(["--effective", "--json", "--help"]),
   doctor: new Set(["--json", "--reconcile", "--help"]),
   "catalog-report": new Set(["--json", "--help"]),
+  gaps: new Set(["--json", "--help"]),
+  migrate: new Set(["--yes", "--json", "--help"]),
   "resolve-model": new Set(["--phase", "--executor", "--reviewer", "--model", "--fallback", "--json", "--help"]),
   check: new Set(["--phase", "--executor", "--reviewer", "--model", "--json", "--help"]),
   "plan-run": new Set(["--repo", "--dispatch", "--review", "--advisory-review", "--route-intent-file", "--json", "--help"]),
@@ -87,6 +95,8 @@ function printHelp() {
   console.log(`  show --effective ${modeLabel("--effective")} [--json ${modeLabel("--json")}]`);
   console.log(`  doctor [--json ${modeLabel("--json")}] [--reconcile ${modeLabel("--reconcile")}]`);
   console.log(`  catalog-report [--json ${modeLabel("--json")}]`);
+  console.log(`  gaps [--json ${modeLabel("--json")}]`);
+  console.log(`  migrate [--yes] [--json ${modeLabel("--json")}]`);
   console.log(`  resolve-model --phase <phase> ${modeLabel("--phase")} [--executor <name> ${modeLabel("--executor")}] [--reviewer <name> ${modeLabel("--reviewer")}] [--model <name|provider/model> ${modeLabel("--model")}] [--fallback catalog ${modeLabel("--fallback")}] [--json ${modeLabel("--json")}]`);
   console.log(`  check --phase <phase> ${modeLabel("--phase")} [--executor <name> ${modeLabel("--executor")}] [--reviewer <name> ${modeLabel("--reviewer")}] [--model <provider/model> ${modeLabel("--model")}] [--json ${modeLabel("--json")}]`);
   console.log(`  plan-run [--repo <path> ${modeLabel("--repo")}] [--dispatch <actor[:provider/model]> ${modeLabel("--dispatch")}] [--review <actor[:provider/model]> ${modeLabel("--review")}] [--advisory-review <actor[:provider/model]> ${modeLabel("--advisory-review")}] [--route-intent-file <path> ${modeLabel("--route-intent-file")}] [--json ${modeLabel("--json")}]`);
@@ -97,7 +107,7 @@ function printHelp() {
   console.log(`  preset add|remove|show <name> [--dispatch <actor[:provider/model]> ${modeLabel("--dispatch")}] [--review <actor[:provider/model]> ${modeLabel("--review")}] [--advisory-review <actor[:provider/model]> ${modeLabel("--advisory-review")}] [--advisory-profile <name> ${modeLabel("--advisory-profile")}] [--review-assurance <standard|hardened> ${modeLabel("--review-assurance")}] [--json ${modeLabel("--json")}]`);
   console.log("");
   console.log("Supported default paths:");
-  console.log("  dispatch.executor, review.reviewer, advisory_review.reviewer");
+  console.log("  dispatch.executor, review.reviewer, advisory_review.reviewer, executor_defaults.<executor>.model");
   console.log("");
   console.log(`Options: --help ${modeLabel("--help")}`);
 }
@@ -150,7 +160,7 @@ function legacyShadowWarnings({ routesExisted }) {
   if (routesExisted) return [];
   if (!fs.existsSync(resolveRelayPolicyPath())) return [];
   return [
-    "routes.json now takes precedence; legacy policy.json/executors.json are ignored until migration arrives in Phase C",
+    "routes.json now takes precedence; legacy policy.json/executors.json are ignored; run relay-config migrate to fold legacy defaults into routes.json",
   ];
 }
 
@@ -435,6 +445,453 @@ function commandDoctor(positionals, jsonOut) {
         `reconcile row ${advisory.reconcile?.row || "unknown"} (${advisory.reconcile?.rowName || "unknown"})`
       );
     }
+  }
+}
+
+function routeActorEntries(policy, listName = "allowed_model_routes") {
+  const entries = [];
+  for (const route of policy?.[listName] || []) {
+    const phases = route.phases || VALID_PHASES;
+    for (const phase of phases) {
+      const actorField = actorFieldForPhase(phase);
+      const actors = actorField === "reviewer" ? route.reviewers : route.executors;
+      for (const actor of actors || []) {
+        entries.push({
+          phase,
+          actor,
+          actorField,
+          route: route.route,
+          listName,
+        });
+      }
+    }
+  }
+  return entries;
+}
+
+function sampleRouteFromPattern(pattern) {
+  const route = nonEmptyString(pattern);
+  if (!route) return null;
+  if (!route.includes("*")) return route;
+  return route.replace(/\*/g, "fast");
+}
+
+function defaultRoutePatternForActor(actor) {
+  if (actor === "opencode") return "example/opencode-model-*";
+  if (actor === "pi") return "example/pi-*";
+  return `${actor}/*`;
+}
+
+function addRouteProposal({ phase, actor, actorField, route }) {
+  const args = ["add-route", route, "--phase", phase];
+  args.push(actorField === "reviewer" ? "--reviewer" : "--executor", actor, "--json");
+  return { subcommand: "add-route", args };
+}
+
+function diagnosticProposal() {
+  return { subcommand: "doctor", args: ["doctor", "--json"], automatic: false };
+}
+
+function migrateProposal() {
+  return { subcommand: "migrate", args: ["migrate", "--yes", "--json"] };
+}
+
+function setExecutorDefaultProposal(actor, model) {
+  return {
+    subcommand: "set-default",
+    args: ["set-default", `executor_defaults.${actor}.model`, model, "--json"],
+  };
+}
+
+function gapKey(gap) {
+  return JSON.stringify([
+    gap.type,
+    gap.actor || null,
+    gap.actor_field || null,
+    gap.phase || null,
+    gap.route || null,
+    gap.model || null,
+    gap.path || null,
+    gap.preset || null,
+  ]);
+}
+
+function pushGap(gaps, seen, gap) {
+  const key = gapKey(gap);
+  if (seen.has(key)) return;
+  seen.add(key);
+  gaps.push(gap);
+}
+
+function executorDefaultModel(policy, actor) {
+  return nonEmptyString(policy?.executor_defaults?.[actor]?.model);
+}
+
+function legacyConfigPaths({ repoRoot, relayHome }) {
+  const paths = [];
+  const globalPolicy = resolveRelayPolicyPath({ relayHome });
+  if (globalPolicy && fs.existsSync(globalPolicy)) {
+    paths.push({ kind: "global_policy", path: globalPolicy });
+  }
+  const executorsPath = process.env.RELAY_EXECUTORS_PATH || path.join(relayHome || process.env.RELAY_HOME || path.join(os.homedir(), ".relay"), "executors.json");
+  if (executorsPath && fs.existsSync(executorsPath)) {
+    paths.push({ kind: "executors", path: executorsPath });
+  }
+  const repoPolicy = repoRoot ? path.join(repoRoot, ".relay", "policy.json") : null;
+  if (repoPolicy && fs.existsSync(repoPolicy)) {
+    paths.push({ kind: "repo_policy", path: repoPolicy });
+  }
+  const projectRoutesPath = repoRoot ? getProjectRoutesPath(repoRoot, { relayHome }) : null;
+  if (projectRoutesPath && fs.existsSync(projectRoutesPath)) {
+    try {
+      const projectRoutes = readRoutesFile(projectRoutesPath);
+      if (projectRoutes?.version === 1) {
+        paths.push({ kind: "project_routes_v1", path: projectRoutesPath });
+      }
+    } catch {
+      paths.push({ kind: "project_routes_unknown", path: projectRoutesPath });
+    }
+  }
+  return paths;
+}
+
+function configuredActorSet(policy) {
+  const actors = new Set([
+    ...defaultActors(policy),
+    ...routeActors(policy),
+  ]);
+  return actors;
+}
+
+function routeConfiguredForTuple(policy, { phase, actor, actorField, model }) {
+  const tuple = actorField === "reviewer"
+    ? { phase, reviewer: actor, model }
+    : { phase, executor: actor, model };
+  const decision = evaluateRelayRoute(policy, tuple);
+  return decision.reason === "allowed_model_route" || decision.reason === "managed_cli";
+}
+
+function collectPresetGaps({ gaps, seen, policy, toolsByName }) {
+  const presets = policy?.presets || {};
+  if (!isPlainObject(presets) || Object.keys(presets).length === 0) return;
+  for (const [presetName, preset] of Object.entries(presets)) {
+    if (!isPlainObject(preset)) continue;
+    for (const phase of VALID_PHASES) {
+      const phaseValue = preset[phase];
+      if (!isPlainObject(phaseValue)) continue;
+      const actorField = actorFieldForPhase(phase);
+      const actor = nonEmptyString(phaseValue[actorField]);
+      if (!actor) continue;
+      const tool = toolsByName.get(actor);
+      if (tool && !tool.installed) {
+        pushGap(gaps, seen, {
+          type: "preset_broken",
+          preset: presetName,
+          phase,
+          actor,
+          actor_field: actorField,
+          reason: "cli_missing",
+          proposal: diagnosticProposal(),
+        });
+      }
+      const model = nonEmptyString(phaseValue.model);
+      if (policy.deny_unknown_model_routes && model) {
+        const decision = evaluateRelayRoute(policy, actorField === "reviewer"
+          ? { phase, reviewer: actor, model }
+          : { phase, executor: actor, model });
+        if (decision.reason === "unknown_model_route" || decision.reason === "missing_model_route") {
+          pushGap(gaps, seen, {
+            type: "preset_broken",
+            preset: presetName,
+            phase,
+            actor,
+            actor_field: actorField,
+            model,
+            reason: decision.reason,
+            proposal: addRouteProposal({ phase, actor, actorField, route: model }),
+          });
+        }
+      }
+    }
+  }
+}
+
+function collectUsageGaps({ gaps, seen, policy, repoRoot }) {
+  let events = [];
+  try {
+    events = readAllRunEvents(repoRoot);
+  } catch {
+    events = [];
+  }
+  const tuples = new Map();
+  for (const event of events) {
+    if (event.event !== EVENTS.UNREGISTERED_ROUTE_USED) continue;
+    const phase = nonEmptyString(event.phase || event.policy_decision?.phase);
+    const actorField = nonEmptyString(event.actor_field || event.policy_decision?.actor_field)
+      || (phase === "review" || phase === "advisory_review" ? "reviewer" : "executor");
+    const actor = nonEmptyString(actorField === "reviewer"
+      ? (event.reviewer || event.policy_decision?.reviewer || event.policy_decision?.actor)
+      : (event.executor || event.policy_decision?.executor || event.policy_decision?.actor));
+    const model = nonEmptyString(event.model || event.policy_decision?.model);
+    if (!phase || !actor || !model) continue;
+    const key = `${phase}\u0000${actorField}\u0000${actor}\u0000${model}`;
+    tuples.set(key, { phase, actorField, actor, model, count: (tuples.get(key)?.count || 0) + 1 });
+  }
+  for (const tuple of [...tuples.values()].sort((a, b) => `${a.phase}:${a.actor}:${a.model}`.localeCompare(`${b.phase}:${b.actor}:${b.model}`))) {
+    if (routeConfiguredForTuple(policy, tuple)) continue;
+    pushGap(gaps, seen, {
+      type: "unregistered_route_in_use",
+      phase: tuple.phase,
+      actor: tuple.actor,
+      actor_field: tuple.actorField,
+      model: tuple.model,
+      occurrences: tuple.count,
+      proposal: addRouteProposal({
+        phase: tuple.phase,
+        actor: tuple.actor,
+        actorField: tuple.actorField,
+        route: tuple.model,
+      }),
+    });
+  }
+}
+
+function commandGaps(positionals, jsonOut) {
+  if (positionals.length !== 1) {
+    throw new Error("gaps does not accept positional arguments");
+  }
+  const repoRoot = process.cwd();
+  const relayHome = process.env.RELAY_HOME || path.join(os.homedir(), ".relay");
+  const policyResult = loadRelayPolicy({ repoRoot, relayHome });
+  if (!policyResult.ok) {
+    const output = { ok: false, status: policyResult.status, sources: policyResult.sources, errors: policyResult.errors, gaps: [] };
+    if (jsonOut) printJson(output);
+    else console.error(`relay-config gaps: routes failed: ${policyResult.errors?.[0]?.message || "unknown route config error"}`);
+    process.exitCode = 1;
+    return;
+  }
+
+  const routeConfig = loadRouteConfig({ repoRoot, relayHome });
+  const toolNames = [...new Set([
+    ...DOCTOR_TOOLS,
+    ...policyResult.policy.managed_cli,
+    ...defaultActors(policyResult.policy),
+    ...routeActors(policyResult.policy),
+  ])].sort();
+  const tools = toolNames.map((name) => doctorTool(policyResult.policy, name));
+  const toolsByName = new Map(tools.map((tool) => [tool.name, tool]));
+  const configuredActors = configuredActorSet(policyResult.policy);
+  const gaps = [];
+  const seen = new Set();
+
+  for (const tool of tools) {
+    if (tool.installed && !configuredActors.has(tool.name) && tool.policy === "policy-disallowed") {
+      const route = defaultRoutePatternForActor(tool.name);
+      pushGap(gaps, seen, {
+        type: "installed_cli_unrouted",
+        actor: tool.name,
+        path: tool.path,
+        phase: "dispatch",
+        actor_field: "executor",
+        proposal: addRouteProposal({ phase: "dispatch", actor: tool.name, actorField: "executor", route }),
+      });
+    }
+    if (tool.model_probe?.status === "warning") {
+      pushGap(gaps, seen, {
+        type: "probe_failure",
+        actor: tool.name,
+        path: tool.path,
+        warning: tool.model_probe.warning,
+        proposal: diagnosticProposal(),
+      });
+    }
+  }
+
+  for (const entry of [
+    ...routeActorEntries(policyResult.policy, "allowed_model_routes"),
+    ...routeActorEntries(policyResult.policy, "denied_model_routes"),
+  ]) {
+    const tool = toolsByName.get(entry.actor) || doctorTool(policyResult.policy, entry.actor);
+    if (!tool.installed) {
+      pushGap(gaps, seen, {
+        type: "route_without_cli",
+        actor: entry.actor,
+        actor_field: entry.actorField,
+        phase: entry.phase,
+        route: entry.route,
+        proposal: diagnosticProposal(),
+      });
+    }
+    if (entry.listName === "allowed_model_routes" && entry.actorField === "executor" && entry.phase === "dispatch" && !executorDefaultModel(policyResult.policy, entry.actor)) {
+      const model = sampleRouteFromPattern(entry.route);
+      if (model) {
+        pushGap(gaps, seen, {
+          type: "executor_missing_default_model",
+          actor: entry.actor,
+          phase: entry.phase,
+          route: entry.route,
+          model,
+          proposal: setExecutorDefaultProposal(entry.actor, model),
+        });
+      }
+    }
+  }
+
+  for (const legacy of legacyConfigPaths({ repoRoot, relayHome })) {
+    pushGap(gaps, seen, {
+      type: "legacy_config_present",
+      legacy_kind: legacy.kind,
+      path: legacy.path,
+      shadowed: routeConfig.status === "ok",
+      proposal: migrateProposal(),
+    });
+  }
+
+  collectPresetGaps({ gaps, seen, policy: policyResult.policy, toolsByName });
+  collectUsageGaps({ gaps, seen, policy: policyResult.policy, repoRoot });
+
+  gaps.sort((a, b) => gapKey(a).localeCompare(gapKey(b)));
+  const output = {
+    ok: true,
+    status: policyResult.status,
+    sources: policyResult.sources,
+    route_config: {
+      status: routeConfig.status,
+      sources: routeConfig.sources,
+    },
+    tools,
+    gaps,
+  };
+
+  if (jsonOut) {
+    printJson(output);
+  } else {
+    console.log(`relay-config gaps: ${gaps.length} gap${gaps.length === 1 ? "" : "s"}`);
+    for (const gap of gaps) {
+      const subject = [gap.type, gap.actor, gap.phase, gap.model || gap.route || gap.path].filter(Boolean).join(" ");
+      console.log(`${subject}: ${gap.proposal.subcommand} ${gap.proposal.args.slice(1).join(" ")}`);
+    }
+  }
+}
+
+function readOptionalJson(filePath) {
+  if (!filePath || !fs.existsSync(filePath)) return null;
+  return readRoutesFile(filePath);
+}
+
+function executorDefaultsFromLegacyExecutors(filePath) {
+  const parsed = readOptionalJson(filePath);
+  const defaults = {};
+  for (const [executor, config] of Object.entries(parsed?.executors || {})) {
+    const model = nonEmptyString(config?.default_model);
+    if (model) defaults[executor] = { model };
+  }
+  return defaults;
+}
+
+function routesFromPolicy(policy, executorDefaults) {
+  const routes = {
+    version: 2,
+    strict: policy.deny_unknown_model_routes === true,
+    defaults: cloneJson(policy.defaults || {}),
+    executor_defaults: {
+      ...(isPlainObject(policy.executor_defaults) ? cloneJson(policy.executor_defaults) : {}),
+      ...executorDefaults,
+    },
+    routes: cloneJson(policy.allowed_model_routes || []),
+    denied_routes: cloneJson(policy.denied_model_routes || []),
+  };
+  if (isPlainObject(policy.presets) && Object.keys(policy.presets).length) {
+    routes.presets = cloneJson(policy.presets);
+  }
+  if (!Object.keys(routes.executor_defaults).length) delete routes.executor_defaults;
+  validateRouteConfig(routes, "migrated routes config");
+  return routes;
+}
+
+function writeMigratedMarker(filePath, routesPath) {
+  if (!filePath || !fs.existsSync(filePath)) return null;
+  const markerPath = `${filePath}.migrated`;
+  fs.writeFileSync(
+    markerPath,
+    `migrated into routes.json\nsource: ${filePath}\ntarget: ${routesPath}\nlegacy file retained; do not delete automatically\n`,
+    "utf-8"
+  );
+  return markerPath;
+}
+
+function commandMigrate(positionals, jsonOut) {
+  if (positionals.length !== 1) {
+    throw new Error("migrate does not accept positional arguments");
+  }
+  const repoRoot = process.cwd();
+  const relayHome = process.env.RELAY_HOME || path.join(os.homedir(), ".relay");
+  const routesPath = relayRoutesPath();
+  const executorsPath = process.env.RELAY_EXECUTORS_PATH || path.join(relayHome, "executors.json");
+  const confirmed = hasCliFlag("--yes");
+  const routesExisted = fs.existsSync(routesPath);
+  const policyResult = routesExisted
+    ? loadRelayPolicy({ repoRoot, relayHome })
+    : loadRelayPolicy({
+      repoRoot,
+      relayHome,
+      routesPath: path.join(relayHome, "__relay_config_migrate_absent_routes__.json"),
+    });
+  if (!policyResult.ok) {
+    const output = { ok: false, status: "policy_error", errors: policyResult.errors };
+    if (jsonOut) printJson(output);
+    else console.error(`relay-config migrate: legacy routes failed: ${policyResult.errors?.[0]?.message || "unknown route config error"}`);
+    process.exitCode = 1;
+    return;
+  }
+  const executorDefaults = executorDefaultsFromLegacyExecutors(executorsPath);
+  const routes = routesFromPolicy(policyResult.policy, executorDefaults);
+  const projectRoutes = loadProjectRoutes({ repoRoot, relayHome });
+  const legacyPaths = legacyConfigPaths({ repoRoot, relayHome });
+  const output = {
+    ok: true,
+    action: "migrate",
+    dry_run: !confirmed,
+    wrote: false,
+    path: routesPath,
+    routes,
+    project_routes: projectRoutes,
+    legacy: legacyPaths,
+    summary: [
+      `${routes.routes.length} allowed route(s)`,
+      `${routes.denied_routes.length} denied route(s)`,
+      `${Object.keys(routes.executor_defaults || {}).length} executor default(s)`,
+      `strict=${routes.strict === true}`,
+    ],
+  };
+
+  if (!confirmed) {
+    if (jsonOut) {
+      printJson(output);
+    } else {
+      console.log("relay-config migrate: dry run");
+      for (const line of output.summary) console.log(`  ${line}`);
+      console.log("rerun with --yes to write routes.json and .migrated marker notes");
+    }
+    return;
+  }
+
+  writeRoutes(routesPath, routes);
+  const markers = [];
+  for (const legacy of legacyPaths) {
+    const marker = writeMigratedMarker(legacy.path, routesPath);
+    if (marker) markers.push(marker);
+  }
+  output.dry_run = false;
+  output.wrote = true;
+  output.markers = markers;
+
+  if (jsonOut) {
+    printJson(output);
+  } else {
+    console.log(`relay-config migrate: wrote ${routesPath}`);
+    for (const line of output.summary) console.log(`  ${line}`);
+    for (const marker of markers) console.log(`  marker: ${marker}`);
   }
 }
 
@@ -786,18 +1243,28 @@ function commandSetDefault(positionals, jsonOut) {
   }
   const defaultPath = positionals[1];
   const value = requireValue(positionals[2], "default value");
-  if (!DEFAULT_PATHS.has(defaultPath)) {
+  const executorDefaultMatch = defaultPath.match(/^executor_defaults\.([^.\s]+)\.model$/);
+  if (!DEFAULT_PATHS.has(defaultPath) && !executorDefaultMatch) {
     throw new Error(`unsupported default path: ${defaultPath}`);
   }
 
   const { routesPath, routes, warnings } = loadRoutesForMutation();
   const updated = cloneJson(routes);
-  const [phase, field] = defaultPath.split(".");
-  if (!hasOwn(updated, "defaults")) updated.defaults = {};
-  updated.defaults[phase] = {
-    ...(isPlainObject(updated.defaults[phase]) ? updated.defaults[phase] : {}),
-    [field]: value,
-  };
+  if (executorDefaultMatch) {
+    const executor = executorDefaultMatch[1];
+    if (!hasOwn(updated, "executor_defaults")) updated.executor_defaults = {};
+    updated.executor_defaults[executor] = {
+      ...(isPlainObject(updated.executor_defaults[executor]) ? updated.executor_defaults[executor] : {}),
+      model: value,
+    };
+  } else {
+    const [phase, field] = defaultPath.split(".");
+    if (!hasOwn(updated, "defaults")) updated.defaults = {};
+    updated.defaults[phase] = {
+      ...(isPlainObject(updated.defaults[phase]) ? updated.defaults[phase] : {}),
+      [field]: value,
+    };
+  }
   const written = writeRoutes(routesPath, updated);
   outputMutation({ jsonOut, action: "set-default", routesPath, routes: written, defaultPath, warnings });
 }
@@ -1026,6 +1493,12 @@ function main() {
       break;
     case "catalog-report":
       commandCatalogReport(positionals, jsonOut);
+      break;
+    case "gaps":
+      commandGaps(positionals, jsonOut);
+      break;
+    case "migrate":
+      commandMigrate(positionals, jsonOut);
       break;
     case "resolve-model":
       commandResolveModel(positionals, jsonOut);

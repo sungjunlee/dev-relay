@@ -28,6 +28,7 @@ const {
 } = require("../../../skills/relay-dispatch/scripts/manifest/lifecycle");
 const {
   EVENTS,
+  appendRunEvent,
   readRunEvents,
 } = require("../../../skills/relay-dispatch/scripts/relay-events");
 
@@ -96,6 +97,16 @@ function hasOwn(object, key) {
 function writeExecutable(filePath, body = "#!/bin/sh\nexit 0\n") {
   fs.writeFileSync(filePath, body, "utf-8");
   fs.chmodSync(filePath, 0o755);
+}
+
+function writeProbeFailingTool(binDir, name, probeArg) {
+  writeExecutable(path.join(binDir, name), `#!/bin/sh
+if [ "$1" = "${probeArg}" ]; then
+  echo '${name} probe unavailable' >&2
+  exit 2
+fi
+exit 0
+`);
 }
 
 function initGitRepo(repoRoot) {
@@ -1080,6 +1091,188 @@ test("preset mutation validation failure leaves the routes file untouched", () =
   assert.notEqual(result.status, 0, result.combined);
   assert.match(result.combined, /presets must be an object/);
   assert.equal(fs.readFileSync(routesPath, "utf-8"), before);
+});
+
+test("gaps --json reports observed route drift with verbatim proposals and no writes", () => {
+  const relayHome = tempDir("relay-config-gaps-home-");
+  const repoRoot = tempDir("relay-config-gaps-repo-");
+  initGitRepo(repoRoot);
+  const binDir = tempDir("relay-config-gaps-bin-");
+  writeProbeFailingTool(binDir, "opencode", "models");
+  writeProbeFailingTool(binDir, "pi", "--list-models");
+
+  writeJson(path.join(relayHome, "routes.json"), {
+    version: 2,
+    strict: true,
+    routes: [
+      { route: "example/opencode-model-*", phases: ["dispatch"], executors: ["opencode"] },
+      { route: "ghost/*", phases: ["review"], reviewers: ["ghost"] },
+    ],
+    presets: {
+      strictbad: {
+        dispatch: { executor: "opencode", model: "openai/unregistered" },
+      },
+    },
+  });
+  writeJson(path.join(relayHome, "policy.json"), {
+    ...buildDefaultRelayPolicy(),
+    profile: "legacy",
+    allowed_model_routes: [{ route: "legacy/*", phases: ["dispatch"], executors: ["opencode"] }],
+  });
+  writeJson(path.join(relayHome, "executors.json"), {
+    executors: {
+      opencode: { default_model: "example/opencode-model-fast" },
+    },
+  });
+
+  withRelayHome(relayHome, () => {
+    appendRunEvent(repoRoot, "issue-783-20260708010101000-a1b2c3d4", {
+      event: EVENTS.UNREGISTERED_ROUTE_USED,
+      reason: "unknown_allowed",
+      phase: "dispatch",
+      actor_field: "executor",
+      executor: "pi",
+      model: "example/pi-model-fast",
+      policy_decision: {
+        allowed: true,
+        reason: "unknown_allowed",
+        phase: "dispatch",
+        actor: "pi",
+        executor: "pi",
+        model: "example/pi-model-fast",
+      },
+    });
+  });
+  const eventsPath = withRelayHome(relayHome, () => path.join(
+    getRunDir(repoRoot, "issue-783-20260708010101000-a1b2c3d4"),
+    "events.jsonl"
+  ));
+  const beforeRoutes = fs.readFileSync(path.join(relayHome, "routes.json"), "utf-8");
+  const beforeEvents = fs.readFileSync(eventsPath, "utf-8");
+
+  const result = runConfig(["gaps", "--json"], {
+    relayHome,
+    cwd: repoRoot,
+    env: {
+      PATH: `${binDir}${path.delimiter}/usr/bin:/bin`,
+      RELAY_CONFIG_MODEL_PROBE_TIMEOUT_MS: "1000",
+    },
+  });
+
+  assert.equal(result.status, 0, result.combined);
+  const output = parseJson(result);
+  const byType = output.gaps.reduce((map, gap) => {
+    if (!map.has(gap.type)) map.set(gap.type, []);
+    map.get(gap.type).push(gap);
+    return map;
+  }, new Map());
+  assert.equal(byType.get("installed_cli_unrouted")?.[0]?.actor, "pi");
+  assert.deepEqual(byType.get("installed_cli_unrouted")[0].proposal, {
+    subcommand: "add-route",
+    args: ["add-route", "example/pi-*", "--phase", "dispatch", "--executor", "pi", "--json"],
+  });
+  assert.equal(byType.get("executor_missing_default_model")?.[0]?.actor, "opencode");
+  assert.deepEqual(byType.get("executor_missing_default_model")[0].proposal, {
+    subcommand: "set-default",
+    args: ["set-default", "executor_defaults.opencode.model", "example/opencode-model-fast", "--json"],
+  });
+  assert.equal(byType.get("legacy_config_present")?.[0]?.proposal.subcommand, "migrate");
+  assert.equal(byType.get("unregistered_route_in_use")?.[0]?.model, "example/pi-model-fast");
+  assert.equal(byType.get("route_without_cli")?.[0]?.actor, "ghost");
+  assert.deepEqual(byType.get("preset_broken")?.[0]?.proposal, {
+    subcommand: "add-route",
+    args: ["add-route", "openai/unregistered", "--phase", "dispatch", "--executor", "opencode", "--json"],
+  });
+  assert.equal(byType.get("probe_failure")?.length, 2);
+  for (const gap of output.gaps) {
+    assert.equal(typeof gap.proposal?.subcommand, "string", `${gap.type} missing proposal subcommand`);
+    assert.ok(Array.isArray(gap.proposal.args), `${gap.type} missing proposal args`);
+  }
+  assert.equal(fs.readFileSync(path.join(relayHome, "routes.json"), "utf-8"), beforeRoutes);
+  assert.equal(fs.readFileSync(eventsPath, "utf-8"), beforeEvents);
+  assert.equal(fs.existsSync(path.join(relayHome, "policy.json.migrated")), false);
+});
+
+test("migrate requires confirmation and preserves legacy effective route resolution", () => {
+  const relayHome = tempDir("relay-config-migrate-home-");
+  const repoRoot = tempDir("relay-config-migrate-repo-");
+  initGitRepo(repoRoot);
+  writeJson(path.join(relayHome, "policy.json"), {
+    ...buildDefaultRelayPolicy(),
+    profile: "legacy-open",
+    defaults: {
+      dispatch: { executor: "opencode" },
+      review: { reviewer: "codex" },
+      advisory_review: { reviewer: "pi", profile: "blindspot" },
+    },
+    managed_cli: ["codex", "claude"],
+    allowed_model_routes: [
+      { route: "openai/*", phases: ["dispatch"], executors: ["opencode"] },
+      { route: "example/pi-*", phases: ["advisory_review"], reviewers: ["pi"] },
+    ],
+    denied_model_routes: [
+      { route: "openai/blocked", phases: ["dispatch"], executors: ["opencode"] },
+    ],
+    routing_rules: [],
+    deny_unknown_model_routes: true,
+  });
+  writeJson(path.join(relayHome, "executors.json"), {
+    executors: {
+      opencode: { default_model: "openai/gpt-5.3-codex-spark" },
+    },
+  });
+  writeJson(getProjectRoutesPath(repoRoot, { relayHome }), {
+    version: 1,
+    defaults: {
+      dispatch: { executor: "opencode", model: "openai/gpt-5.3-codex-spark" },
+      advisory_review: { reviewer: "pi", model: "example/pi-model-fast", profile: "blindspot" },
+    },
+  });
+
+  const tuples = [
+    ["dispatch", "opencode", "openai/gpt-5.3-codex-spark"],
+    ["dispatch", "opencode", "openai/blocked"],
+    ["advisory_review", "pi", "example/pi-model-fast"],
+    ["review", "codex", null],
+  ];
+  const resolveMatrix = () => tuples.map(([phase, actor, model]) => {
+    const args = ["check", "--phase", phase];
+    if (phase === "dispatch") args.push("--executor", actor);
+    else args.push("--reviewer", actor);
+    if (model) args.push("--model", model);
+    args.push("--json");
+    const result = runConfig(args, { relayHome, cwd: repoRoot });
+    const parsed = JSON.parse(result.stdout);
+    return {
+      phase,
+      actor,
+      model,
+      status: result.status,
+      ok: parsed.ok,
+      reason: parsed.decision.reason,
+      matchedRoute: parsed.decision.matchedRoute || null,
+    };
+  });
+
+  const before = resolveMatrix();
+  const dry = runConfig(["migrate", "--json"], { relayHome, cwd: repoRoot });
+  assert.equal(dry.status, 0, dry.combined);
+  assert.equal(parseJson(dry).dry_run, true);
+  assert.equal(fs.existsSync(path.join(relayHome, "routes.json")), false);
+
+  const migrated = runConfig(["migrate", "--yes", "--json"], { relayHome, cwd: repoRoot });
+  assert.equal(migrated.status, 0, migrated.combined);
+  const output = parseJson(migrated);
+  assert.equal(output.wrote, true);
+  assert.equal(output.routes.strict, true);
+  assert.deepEqual(readRoutes(relayHome).executor_defaults, {
+    opencode: { model: "openai/gpt-5.3-codex-spark" },
+  });
+  assert.deepEqual(resolveMatrix(), before);
+  assert.equal(fs.existsSync(path.join(relayHome, "policy.json")), true);
+  assert.equal(fs.existsSync(path.join(relayHome, "executors.json")), true);
+  assert.match(fs.readFileSync(path.join(relayHome, "policy.json.migrated"), "utf-8"), /migrated into routes\.json/);
+  assert.match(fs.readFileSync(path.join(relayHome, "executors.json.migrated"), "utf-8"), /migrated into routes\.json/);
 });
 
 test("validation failure leaves the routes file untouched", () => {

@@ -43,6 +43,8 @@ function printHelp() {
   console.log("  show [--json]");
   console.log("  doctor [--json] [--reconcile]");
   console.log("  catalog-report [--json]");
+  console.log("  gaps [--json]");
+  console.log("  migrate [--yes] [--json]");
   console.log("  resolve-model --phase <phase> [--executor <name>] [--reviewer <name>] [--model <name|provider/model>] [--fallback catalog] [--json]");
   console.log("  check <phase> <actor> [provider/model] [--json]");
   console.log("  add-route <pattern> --phase <csv> [--executor <name>] [--reviewer <name>] [--json]");
