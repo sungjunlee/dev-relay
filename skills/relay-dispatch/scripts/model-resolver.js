@@ -6,6 +6,19 @@ const { execFileSync } = require("child_process");
 const { MODEL_CATALOG, CATALOG_LAST_CHECKED, STALE_AFTER_DAYS } = require("./model-catalog");
 const { evaluateRelayRoute } = require("./relay-policy");
 
+const PROVIDER_COLUMN_VALUES = new Set([
+  "anthropic",
+  "cline-pass",
+  "deepseek",
+  "google",
+  "groq",
+  "mistral",
+  "openai",
+  "openrouter",
+  "xai",
+  "zai",
+]);
+
 function nonEmptyString(value) {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
@@ -49,8 +62,18 @@ function normalizeModelLine(line) {
     .replace(/^[-*\u2022]\s*/, "")
     .trim();
   if (!stripped) return null;
-  const first = stripped.split(/\s+/)[0].replace(/,$/, "");
+  if (/^-+$/.test(stripped.replace(/\s+/g, ""))) return null;
+  const tokens = stripped.split(/\s+/).map((token) => token.replace(/,$/, ""));
+  const [first, second] = tokens;
+  if (first === "provider" && second === "model") return null;
+  if (first && second && isProviderColumn(first) && !first.includes("/") && !second.includes("/")) {
+    return nonEmptyString(`${first}/${second}`);
+  }
   return nonEmptyString(first);
+}
+
+function isProviderColumn(value) {
+  return PROVIDER_COLUMN_VALUES.has(String(value || "").toLowerCase());
 }
 
 function uniqueStrings(values) {

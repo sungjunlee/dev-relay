@@ -223,6 +223,40 @@ exit 2
   assert.equal(result.probe.status, "ok");
 });
 
+test("model resolver parses Pi provider and model table columns", () => {
+  const dir = tempDir();
+  const piPath = path.join(dir, "pi");
+  fs.writeFileSync(piPath, `#!/bin/sh
+if [ "$1" = "--list-models" ]; then
+  printf 'provider model context\\n'
+  printf '-------- ----- -------\\n'
+  printf 'openai gpt-5-fast 128k\\n'
+  printf 'anthropic claude-4.5-sonnet 200k\\n'
+  exit 0
+fi
+exit 2
+`, "utf-8");
+  fs.chmodSync(piPath, 0o755);
+
+  const result = resolveModelRequest({
+    phase: "dispatch",
+    actor: "pi",
+    actorField: "executor",
+    model: "gpt-5-fast",
+    policy: policy({
+      allowed_model_routes: [
+        { route: "openai/*", phases: ["dispatch"], executors: ["pi"] },
+      ],
+    }),
+    findExecutable: () => piPath,
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.resolved_route, "openai/gpt-5-fast");
+  assert.equal(result.source, "live_probe");
+  assert.deepEqual(result.candidates, ["openai/gpt-5-fast"]);
+});
+
 test("model resolver uses actor-scoped catalog fallback only when requested", () => {
   const withoutFallback = resolveModelRequest({
     phase: "dispatch",
