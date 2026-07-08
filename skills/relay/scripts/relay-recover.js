@@ -84,13 +84,13 @@ function resolveRun({ repoRoot, runId, issueArg }) {
   const issueNumber = Number(issueArg);
   if (!Number.isInteger(issueNumber) || issueNumber <= 0) throw new Error("--issue must be a positive integer");
   const selection = selectIssueRuns(repoRoot, issueNumber);
-  if (!selection.selected_run_id) {
-    const error = new Error(`no relay run found for issue #${issueNumber}`);
+  if (selection.selection_reason === "multiple_active_runs") {
+    const error = new Error(`multiple active relay runs found for issue #${issueNumber}; pass --run-id`);
     error.selection = selection;
     throw error;
   }
-  if (selection.selection_reason === "multiple_active_runs") {
-    const error = new Error(`multiple active relay runs found for issue #${issueNumber}; pass --run-id`);
+  if (!selection.selected_run_id) {
+    const error = new Error(`no relay run found for issue #${issueNumber}`);
     error.selection = selection;
     throw error;
   }

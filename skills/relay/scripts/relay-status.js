@@ -46,7 +46,8 @@ function selectIssueRuns(repoRoot, issueNumber) {
   const candidates = listManifestRecords(repoRoot)
     .filter((record) => manifestIssueNumber(record) === issueNumber);
   const active = candidates.filter((record) => !isTerminalState(record.data?.state));
-  const selected = active[0] || candidates[0] || null;
+  const ambiguousActive = active.length > 1;
+  const selected = ambiguousActive ? null : active[0] || candidates[0] || null;
   return {
     issue: issueNumber,
     selected_run_id: selected?.data?.run_id || null,
@@ -83,6 +84,15 @@ function formatRow(row) {
 }
 
 function formatIssueNoRun(selection) {
+  if (selection.selection_reason === "multiple_active_runs") {
+    return [
+      `Issue: #${selection.issue}`,
+      "Run: ambiguous",
+      "Selection: multiple_active_runs",
+      `Candidates: ${selection.candidates.map((candidate) => candidate.run_id).join(", ")}`,
+      "Next: pass --run-id for the intended run",
+    ].join("\n");
+  }
   return [
     `Issue: #${selection.issue}`,
     "Run: none",

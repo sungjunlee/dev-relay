@@ -74,6 +74,20 @@ test("relay-status selects a single active issue run", () => {
   }
 });
 
+test("relay-status refuses to select an arbitrary active issue run", () => {
+  const fixture = setupRepo();
+  try {
+    writeRun(fixture, { issueNumber: 828, suffix: "a" });
+    writeRun(fixture, { issueNumber: 828, suffix: "b" });
+    const selection = selectIssueRuns(fixture.repoRoot, 828);
+    assert.equal(selection.selected_run_id, null);
+    assert.equal(selection.selection_reason, "multiple_active_runs");
+    assert.equal(selection.candidates.length, 2);
+  } finally {
+    fixture.restore();
+  }
+});
+
 test("relay-recover plans reconcile for dead work but refuses missing worktree", () => {
   const recoverable = planFor({
     run_id: "issue-829-20260708000000000-aaaaaaaa",
