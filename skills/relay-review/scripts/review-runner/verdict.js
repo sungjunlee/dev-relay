@@ -69,11 +69,22 @@ function validateIssue(issue, index) {
   }
 }
 
+function hasBlockingRubricScores(verdict) {
+  return (Array.isArray(verdict?.rubric_scores) ? verdict.rubric_scores : []).some((score) => {
+    if (score?.status === "fail") return true;
+    if (score?.tier !== "quality") return false;
+    const numericScore = getRubricScoreNumber(score);
+    const targetScore = getRubricTargetNumber(score);
+    return numericScore !== null && targetScore !== null && numericScore < targetScore;
+  });
+}
+
 function isLowConfidenceAdvisoryPass(verdict) {
   return verdict?.verdict === "changes_requested"
     && Array.isArray(verdict.issues)
     && verdict.issues.length > 0
-    && verdict.issues.every((issue) => issue?.confidence === "low");
+    && verdict.issues.every((issue) => issue?.confidence === "low")
+    && !hasBlockingRubricScores(verdict);
 }
 
 function getAppliedVerdict(verdict) {
@@ -282,6 +293,7 @@ module.exports = {
   buildConfidenceDowngrade,
   buildLowConfidencePassGateVerdict,
   getAppliedVerdict,
+  hasBlockingRubricScores,
   isLowConfidenceAdvisoryPass,
   parseReviewVerdict,
   validateIssue,
