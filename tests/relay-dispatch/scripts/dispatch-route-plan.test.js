@@ -121,6 +121,19 @@ test("dispatch dry-run expands route preset below explicit flags and records pre
       light: {
         dispatch: { executor: "opencode", model: "example/opencode-model-fast" },
         advisory_review: { reviewer: "pi", model: "example/pi-model-fast", profile: "blindspot" },
+        model_resolution: {
+          advisory_review: {
+            original_input: "pi:fast",
+            actor: "pi",
+            actor_field: "reviewer",
+            phase: "advisory_review",
+            requested_model: "fast",
+            resolved_route: "example/pi-model-fast",
+            source: "catalog_fallback",
+            candidates: ["example/pi-model-fast"],
+            warnings: ["catalog fallback"],
+          },
+        },
       },
     },
   });
@@ -147,9 +160,11 @@ test("dispatch dry-run expands route preset below explicit flags and records pre
   assert.equal(output.route_plan.phases.dispatch.sources.executor, "run_intent");
   assert.equal(output.route_plan.phases.dispatch.model, "example/opencode-model-fast");
   assert.equal(output.route_plan.phases.dispatch.sources.model, "preset:light");
-  assert.equal(output.route_plan.phases.advisory_review.reviewer, "pi");
-  assert.equal(output.route_plan.phases.advisory_review.sources.reviewer, "preset:light");
-  assert.equal(output.route_plan.phases.advisory_review.profile, "blindspot");
+  assert.equal(output.route_plan.phases.advisory_review[0].reviewer, "pi");
+  assert.equal(output.route_plan.phases.advisory_review[0].sources.reviewer, "preset:light");
+  assert.equal(output.route_plan.phases.advisory_review[0].profile, "blindspot");
+  assert.equal(output.route_plan.phases.advisory_review[0].model_resolution.original_input, "pi:fast");
+  assert.equal(output.route_plan.phases.advisory_review[0].model_resolution.source, "catalog_fallback");
 });
 
 test("dispatch unknown route preset fails before creating run side effects including fleet locks", () => {

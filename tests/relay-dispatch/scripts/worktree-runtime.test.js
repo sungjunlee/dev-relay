@@ -84,6 +84,91 @@ test("formatDispatchDryRun matches the frozen dispatch text fixture", () => {
   assert.equal(actual, expected);
 });
 
+test("formatDispatchDryRun formats advisory lane arrays without object coercion", () => {
+  const actual = formatDispatchDryRun({
+    runId: "lane-array-1",
+    mode: "new",
+    executor: "codex",
+    repoRoot: "/tmp/repo",
+    manifestPath: "/tmp/manifest.md",
+    prompt: "task",
+    model: null,
+    sandbox: "workspace-write",
+    register: false,
+    resultFile: "/tmp/result.txt",
+    cleanupPolicy: "on_close",
+    timeout: 2400,
+    routingDecision: {
+      matched: true,
+      matched_rule: { name: "docs", index: 0 },
+      source_tags: { cli: ["docs"] },
+      effective_tags: ["docs"],
+      selected: {
+        advisory_review: [
+          {
+            reviewer: "opencode",
+            profile: "blindspot",
+            model: "example/opencode-model-fast",
+          },
+          {
+            reviewer: "pi",
+            profile: "blindspot",
+            trigger: "on_pass",
+            gating: true,
+          },
+        ],
+      },
+    },
+    worktreePlan: {
+      worktree: "/tmp/worktree",
+      branch: "issue-lanes",
+      worktreeinclude: [],
+    },
+  });
+
+  assert.match(
+    actual,
+    /Selected: advisory_review=opencode\/blindspot model=example\/opencode-model-fast, pi\/blindspot trigger=on_pass gating=true/
+  );
+  assert.doesNotMatch(actual, /\[object Object\]/);
+});
+
+test("formatDispatchDryRun formats legacy single advisory reviewer_model selections", () => {
+  const actual = formatDispatchDryRun({
+    runId: "legacy-object-1",
+    mode: "new",
+    executor: "codex",
+    repoRoot: "/tmp/repo",
+    manifestPath: "/tmp/manifest.md",
+    prompt: "task",
+    model: null,
+    sandbox: "workspace-write",
+    register: false,
+    resultFile: "/tmp/result.txt",
+    cleanupPolicy: "on_close",
+    timeout: 2400,
+    routingDecision: {
+      matched: true,
+      matched_rule: { name: "legacy", index: 0 },
+      source_tags: { cli: ["compat"] },
+      effective_tags: ["compat"],
+      selected: {
+        advisory_review: {
+          reviewer: "cline",
+          reviewer_model: "cline-pass/glm-5.2",
+        },
+      },
+    },
+    worktreePlan: {
+      worktree: "/tmp/worktree",
+      branch: "issue-legacy",
+      worktreeinclude: [],
+    },
+  });
+
+  assert.match(actual, /Selected: advisory_review=cline\/blindspot model=cline-pass\/glm-5.2/);
+});
+
 test("createWorktree dry-run returns the frozen fixture shape", () => {
   const actual = createWorktree({
     repoRoot: "/tmp/issue187-fixtures/repo",

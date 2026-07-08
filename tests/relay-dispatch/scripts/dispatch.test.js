@@ -3821,10 +3821,12 @@ test("dispatch routing dry-run JSON explains CLI tags and selected advisory defa
   assert.equal(result.routing_decision.effective_source, "cli");
   assert.deepEqual(result.routing_decision.source_tags.cli, ["docs"]);
   assert.equal(result.routing_decision.matched_rule.name, "docs");
-  assert.deepEqual(result.routing_decision.selected.advisory_review, {
+  assert.deepEqual(result.routing_decision.selected.advisory_review, [{
     reviewer: "claude",
     profile: "blindspot",
-  });
+    trigger: "every_round",
+    gating: false,
+  }]);
 });
 
 test("dispatch routing dry-run text explains no-match decisions", () => {

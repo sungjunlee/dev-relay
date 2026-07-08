@@ -17,6 +17,24 @@ function formatPlan({ worktreePath, branch, title, register, pin, includeFiles }
   return lines.join("\n");
 }
 
+function formatAdvisorySelection(value) {
+  if (!value) return "(none)";
+  const lanes = Array.isArray(value) ? value : [value];
+  const formatted = lanes
+    .filter((lane) => lane && typeof lane === "object")
+    .map((lane) => {
+      const reviewer = lane.reviewer || "(unknown)";
+      const profile = lane.profile || "blindspot";
+      const model = lane.model || lane.reviewer_model;
+      const suffixes = [];
+      if (model) suffixes.push(`model=${model}`);
+      if (lane.trigger && lane.trigger !== "every_round") suffixes.push(`trigger=${lane.trigger}`);
+      if (lane.gating === true) suffixes.push("gating=true");
+      return `${reviewer}/${profile}${suffixes.length ? ` ${suffixes.join(" ")}` : ""}`;
+    });
+  return formatted.length ? formatted.join(", ") : "(none)";
+}
+
 function formatDispatchDryRun({
   runId,
   mode,
@@ -96,12 +114,9 @@ function formatDispatchDryRun({
       .filter(([, tags]) => Array.isArray(tags) && tags.length)
       .map(([source, tags]) => `${source.replace(/_/g, "-")}=${tags.join(",")}`);
     const effective = (routingDecision.effective_tags || []).join(",") || "(none)";
-    const advisory = routingDecision.selected?.advisory_review
-      ? Object.values(routingDecision.selected.advisory_review).join("/")
-      : "(none)";
     lines.push(`  Routing: ${matched}`);
     lines.push(`  Tags:    ${[...sourceParts, `effective=${effective}`].join(" ")}`);
-    lines.push(`  Selected: advisory_review=${advisory}`);
+    lines.push(`  Selected: advisory_review=${formatAdvisorySelection(routingDecision.selected?.advisory_review)}`);
     if (routingDecision.warnings?.length) {
       lines.push(`  Routing warnings: ${routingDecision.warnings.map((warning) => warning.code).join(", ")}`);
     }

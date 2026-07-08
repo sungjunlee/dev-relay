@@ -168,6 +168,30 @@ test("routing first matching rule selects advisory defaults only", () => {
   assert.deepEqual(decision.ignored_primary_review, { reviewer: "opencode" });
 });
 
+test("routing preserves legacy reviewer_model advisory shorthand as lane model", () => {
+  const decision = resolveRoutingDecision({
+    policy: policy([
+      {
+        name: "legacy-advisory",
+        match: { tags: ["compat"] },
+        advisory_review: {
+          reviewer: "opencode",
+          reviewer_model: "example/opencode-model-fast",
+        },
+      },
+    ]),
+    issueLabels: ["compat"],
+  });
+
+  assert.deepEqual(decision.selected.advisory_review, [{
+    reviewer: "opencode",
+    model: "example/opencode-model-fast",
+    profile: "blindspot",
+    trigger: "every_round",
+    gating: false,
+  }]);
+});
+
 test("routing reports no match with null advisory selection", () => {
   const decision = resolveRoutingDecision({
     policy: policy([
@@ -704,6 +728,44 @@ test("route preset expansion carries model resolution metadata with resolved mod
   assert.equal(result.phases.dispatch.model, "opencode-go/glm-5.2");
   assert.equal(result.phases.dispatch.model_resolution.original_input, "opencode:glm-5.2");
   assert.equal(result.phases.dispatch.model_resolution.source, "live_probe");
+});
+
+test("route preset expansion carries advisory model resolution metadata onto preset lanes", () => {
+  const result = resolveRouteIntent({
+    routePresetName: "diverse",
+    policy: routePolicy({
+      presets: {
+        diverse: {
+          advisory_review: {
+            reviewer: "cline",
+            model: "cline-pass/glm-5.2",
+            profile: "blindspot",
+          },
+          model_resolution: {
+            advisory_review: {
+              original_input: "cline:glm-5.2",
+              actor: "cline",
+              actor_field: "reviewer",
+              phase: "advisory_review",
+              requested_model: "glm-5.2",
+              resolved_route: "cline-pass/glm-5.2",
+              source: "catalog_fallback",
+              candidates: ["cline-pass/glm-5.2"],
+              warnings: ["catalog fallback"],
+            },
+          },
+        },
+      },
+      allowed_model_routes: [
+        { route: "cline-pass/*", phases: ["advisory_review"], reviewers: ["cline"] },
+      ],
+    }),
+  });
+
+  assert.equal(result.phases.advisory_review[0].reviewer, "cline");
+  assert.equal(result.phases.advisory_review[0].model, "cline-pass/glm-5.2");
+  assert.equal(result.phases.advisory_review[0].model_resolution.original_input, "cline:glm-5.2");
+  assert.equal(result.phases.advisory_review[0].model_resolution.source, "catalog_fallback");
 });
 
 test("route preset expansion errors with available presets when missing or unconfigured", () => {

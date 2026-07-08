@@ -315,7 +315,9 @@ function normalizeAdvisoryLane(lane, fieldName, sourceLabel) {
     trigger: normalizeAdvisoryTrigger(lane.trigger, `${fieldName}.trigger`, sourceLabel),
     gating: normalizeBoolean(lane.gating, `${fieldName}.gating`, sourceLabel),
   };
-  const model = normalizeOptionalField(lane, "model", sourceLabel, { label: `${fieldName}.model` });
+  const model = lane.model !== undefined && lane.model !== null
+    ? normalizeOptionalField(lane, "model", sourceLabel, { label: `${fieldName}.model` })
+    : normalizeOptionalField(lane, "reviewer_model", sourceLabel, { label: `${fieldName}.reviewer_model` });
   if (model !== undefined) normalized.model = model;
   if (isPlainObject(lane.model_resolution)) normalized.model_resolution = cloneJson(lane.model_resolution);
   return normalized;
@@ -806,6 +808,29 @@ function modelResolutionForPhase(runIntent, phase, { actor, actorField, model } 
   });
 }
 
+function modelResolutionForAdvisoryPresetLane(preset, lane, index) {
+  const raw = preset?.model_resolution?.advisory_review;
+  const laneMetadata = Array.isArray(raw) ? raw[index] : raw;
+  return normalizeModelResolutionMetadata(lane.model_resolution, {
+    phase: "advisory_review",
+    actor: lane.reviewer,
+    actorField: "reviewer",
+    model: lane.model,
+  }) || normalizeModelResolutionMetadata(laneMetadata, {
+    phase: "advisory_review",
+    actor: lane.reviewer,
+    actorField: "reviewer",
+    model: lane.model,
+  });
+}
+
+function attachAdvisoryPresetModelResolution(preset, lanes) {
+  return lanes.map((lane, index) => {
+    const metadata = modelResolutionForAdvisoryPresetLane(preset, lane, index);
+    return metadata ? { ...lane, model_resolution: metadata } : lane;
+  });
+}
+
 function normalizePresetPhase(preset, presetName, phase) {
   if (preset[phase] === undefined || preset[phase] === null) return null;
   return normalizeRouteDefault(preset[phase], phase, `preset:${presetName}`, { partial: true });
@@ -850,7 +875,8 @@ function expandRoutePreset({ runIntent = null, policy = {}, routePresetName = nu
     const presetPhase = normalizePresetPhase(preset, presetName, phase);
     if (!presetPhase) continue;
     if (phase === "advisory_review") {
-      if (setRunIntentPhase(expanded, phase, presetPhase, source)) {
+      const advisoryPresetPhase = attachAdvisoryPresetModelResolution(preset, presetPhase);
+      if (setRunIntentPhase(expanded, phase, advisoryPresetPhase, source)) {
         filled.push({ phase, field: "lanes" });
       }
       continue;

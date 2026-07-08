@@ -100,6 +100,26 @@ test("resolveAdvisoryConfig accepts a manifest advisory lane list with defaults"
   ]);
 });
 
+test("resolveAdvisoryConfig accepts legacy reviewer_model from manifest routing", () => {
+  const config = resolveAdvisoryConfig({
+    data: {
+      routing: {
+        selected: {
+          advisory_review: {
+            reviewer: "opencode",
+            reviewer_model: "example/opencode-model-fast",
+          },
+        },
+      },
+    },
+  });
+
+  assert.equal(config.reviewer, "opencode");
+  assert.equal(config.source, "routing");
+  assert.equal(config.model, "example/opencode-model-fast");
+  assert.equal(config.lanes[0].model, "example/opencode-model-fast");
+});
+
 test("resolveAdvisoryConfig suffixes duplicate reviewer artifact names", () => {
   const config = resolveAdvisoryConfig({
     data: {
