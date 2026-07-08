@@ -23,6 +23,7 @@ Set up relay routes interactively. The user should not have to memorize command 
 - The user wants company-safe strict mode, personal open mode, OpenCode/Pi opt-in, or advisory-review routing
 - The user asks whether a provider/model route such as `example/opencode-model-*` or `openai/*` is available
 - The user asks to resolve a short model name such as `glm-5.2` for a known actor
+- The user asks whether model catalog entries are fresh or stale
 - The user asks to create, show, or remove a route preset such as `light`, `diverse`, or `hardened`
 - The user asks to run relay doctor/check
 
@@ -78,6 +79,7 @@ Use the wrapper for shorthand, or pass through full flags:
 node "${RELAY_SKILL_ROOT:-skills}/relay-config/scripts/relay-config.js" init company
 node "${RELAY_SKILL_ROOT:-skills}/relay-config/scripts/relay-config.js" add-route 'example/opencode-model-*' --phase dispatch,advisory_review --executor opencode
 node "${RELAY_SKILL_ROOT:-skills}/relay-config/scripts/relay-config.js" resolve-model --phase review --reviewer opencode --model glm-5.2 --json
+node "${RELAY_SKILL_ROOT:-skills}/relay-config/scripts/relay-config.js" catalog-report --json
 node "${RELAY_SKILL_ROOT:-skills}/relay-config/scripts/relay-config.js" set-default advisory_review.reviewer opencode
 node "${RELAY_SKILL_ROOT:-skills}/relay-config/scripts/relay-config.js" preset add light --dispatch opencode:example/opencode-model-fast
 node "${RELAY_SKILL_ROOT:-skills}/relay-config/scripts/relay-config.js" preset show light
@@ -85,7 +87,7 @@ node "${RELAY_SKILL_ROOT:-skills}/relay-config/scripts/relay-config.js" preset s
 
 Generated company and personal profiles must not pin Codex or Claude model names. Do not hardcode company-specific route defaults; use the user's supplied provider/model route patterns.
 
-Consult `references/model-catalog.md` only when live model-list probes fail or the user explicitly asks for a model recommendation; otherwise prefer `doctor` probe output or the user's supplied model id.
+Consult `references/model-catalog.md` only when live model-list probes fail, the user asks for a model recommendation, or the user asks for catalog freshness; otherwise prefer `doctor` probe output or the user's supplied model id.
 
 ### 5. Verify
 
@@ -109,6 +111,7 @@ The wrapper accepts common shorthand and delegates to `relay-dispatch/scripts/re
 | `init personal` | `init --profile personal` |
 | `show` | `show --effective` |
 | `doctor` | `doctor` |
+| `catalog-report` | `catalog-report` |
 | `resolve-model --phase review --reviewer opencode --model glm-5.2` | `resolve-model --phase review --reviewer opencode --model glm-5.2` |
 | `add-route example/opencode-model-* --phase dispatch --executor opencode` | `add-route example/opencode-model-* --phase dispatch --executor opencode` |
 | `preset add light --dispatch opencode:example/opencode-model-fast` | `preset add light --dispatch opencode:example/opencode-model-fast` |

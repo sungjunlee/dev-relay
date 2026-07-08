@@ -3,7 +3,7 @@
 const fs = require("fs");
 const path = require("path");
 const { execFileSync } = require("child_process");
-const { MODEL_CATALOG, CATALOG_LAST_CHECKED, STALE_AFTER_DAYS } = require("./model-catalog");
+const { MODEL_CATALOG, CATALOG_LAST_CHECKED, catalogWarnings } = require("./model-catalog");
 const { evaluateRelayRoute } = require("./relay-policy");
 
 const PROVIDER_COLUMN_VALUES = new Set([
@@ -138,25 +138,6 @@ function liveCandidates(models, request) {
     const route = model.toLowerCase();
     return route.includes(lower) || routeBasename(route).includes(lower);
   });
-}
-
-function daysSince(dateString, now) {
-  const checked = Date.parse(`${dateString}T00:00:00Z`);
-  const current = now instanceof Date ? now.getTime() : Date.now();
-  if (!Number.isFinite(checked) || !Number.isFinite(current)) return null;
-  return Math.floor((current - checked) / 86400000);
-}
-
-function catalogWarnings(lastChecked = CATALOG_LAST_CHECKED, now) {
-  const warnings = [
-    "catalog fallback used; verify provider/model availability before relying on this route",
-  ];
-  const checked = nonEmptyString(lastChecked) || CATALOG_LAST_CHECKED;
-  const ageDays = daysSince(checked, now);
-  if (ageDays !== null && ageDays > STALE_AFTER_DAYS) {
-    warnings.push(`stale catalog metadata: last_checked=${checked}, age_days=${ageDays}`);
-  }
-  return warnings;
 }
 
 function catalogCandidateRecords({ actor, model }) {

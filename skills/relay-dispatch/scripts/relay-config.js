@@ -31,6 +31,7 @@ const {
   resolveModelRequest,
   resolutionMetadata,
 } = require("./model-resolver");
+const { catalogFreshnessReport } = require("./model-catalog");
 
 const args = process.argv.slice(2);
 const COMMAND_NAME = "relay-config";
@@ -48,6 +49,7 @@ const SUBCOMMAND_FLAGS = {
   init: new Set(["--profile", "--json", "--help"]),
   show: new Set(["--effective", "--json", "--help"]),
   doctor: new Set(["--json", "--reconcile", "--help"]),
+  "catalog-report": new Set(["--json", "--help"]),
   "resolve-model": new Set(["--phase", "--executor", "--reviewer", "--model", "--fallback", "--json", "--help"]),
   check: new Set(["--phase", "--executor", "--reviewer", "--model", "--json", "--help"]),
   "plan-run": new Set(["--repo", "--dispatch", "--review", "--advisory-review", "--route-intent-file", "--json", "--help"]),
@@ -84,6 +86,7 @@ function printHelp() {
   console.log(`  init --profile <company|personal> ${modeLabel("--profile")} [--json ${modeLabel("--json")}]`);
   console.log(`  show --effective ${modeLabel("--effective")} [--json ${modeLabel("--json")}]`);
   console.log(`  doctor [--json ${modeLabel("--json")}] [--reconcile ${modeLabel("--reconcile")}]`);
+  console.log(`  catalog-report [--json ${modeLabel("--json")}]`);
   console.log(`  resolve-model --phase <phase> ${modeLabel("--phase")} [--executor <name> ${modeLabel("--executor")}] [--reviewer <name> ${modeLabel("--reviewer")}] [--model <name|provider/model> ${modeLabel("--model")}] [--fallback catalog ${modeLabel("--fallback")}] [--json ${modeLabel("--json")}]`);
   console.log(`  check --phase <phase> ${modeLabel("--phase")} [--executor <name> ${modeLabel("--executor")}] [--reviewer <name> ${modeLabel("--reviewer")}] [--model <provider/model> ${modeLabel("--model")}] [--json ${modeLabel("--json")}]`);
   console.log(`  plan-run [--repo <path> ${modeLabel("--repo")}] [--dispatch <actor[:provider/model]> ${modeLabel("--dispatch")}] [--review <actor[:provider/model]> ${modeLabel("--review")}] [--advisory-review <actor[:provider/model]> ${modeLabel("--advisory-review")}] [--route-intent-file <path> ${modeLabel("--route-intent-file")}] [--json ${modeLabel("--json")}]`);
@@ -445,6 +448,40 @@ function actorForPhaseFromArgs(phase) {
   if (EXECUTOR_PHASES.has(phase)) return requireValue(executor, "--executor");
   if (REVIEWER_PHASES.has(phase)) return requireValue(reviewer, "--reviewer");
   throw new Error(`unsupported phase: ${phase}; expected one of: ${VALID_PHASES.join(", ")}`);
+}
+
+function routeCoverage(entry) {
+  return Object.entries(entry.actor_routes || {})
+    .map(([actor, route]) => `${actor}:${route}`)
+    .join(", ") || "(none)";
+}
+
+function commandCatalogReport(positionals, jsonOut) {
+  if (positionals.length !== 1) {
+    throw new Error("catalog-report does not accept positional arguments");
+  }
+  const report = catalogFreshnessReport();
+  const output = {
+    ok: true,
+    catalog: report,
+  };
+
+  if (jsonOut) {
+    printJson(output);
+    return;
+  }
+
+  console.log(
+    `model catalog: ${report.summary.total} entries, ` +
+    `${report.summary.stale} stale, stale_after_days=${report.stale_after_days}`
+  );
+  for (const entry of report.entries) {
+    const status = entry.stale === true ? "stale" : entry.stale === false ? "fresh" : "unknown-age";
+    console.log(
+      `${entry.id}: ${status}; last_checked=${entry.last_checked}; ` +
+      `age_days=${entry.age_days ?? "unknown"}; routes=${routeCoverage(entry)}`
+    );
+  }
 }
 
 function optionalActorForPhaseFromArgs(phase) {
@@ -977,6 +1014,9 @@ function main() {
       break;
     case "doctor":
       commandDoctor(positionals, jsonOut);
+      break;
+    case "catalog-report":
+      commandCatalogReport(positionals, jsonOut);
       break;
     case "resolve-model":
       commandResolveModel(positionals, jsonOut);

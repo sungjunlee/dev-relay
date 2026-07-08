@@ -440,6 +440,24 @@ test("doctor reports optional Pi model-list probe timeouts without masking insta
   assert.match(pi.model_probe.warning, /set RELAY_CONFIG_MODEL_PROBE_TIMEOUT_MS to adjust/);
 });
 
+test("catalog-report emits freshness JSON without requiring routes config", () => {
+  const result = runConfig(["catalog-report", "--json"]);
+
+  assert.equal(result.status, 0, result.combined);
+  const output = parseJson(result);
+  assert.equal(output.ok, true);
+  assert.equal(output.catalog.stale_after_days, 60);
+  assert.ok(output.catalog.summary.total > 0);
+  assert.equal(output.catalog.summary.total, output.catalog.entries.length);
+  const glm = output.catalog.entries.find((entry) => entry.id === "glm-5.2");
+  assert.ok(glm);
+  assert.match(glm.last_checked, /^\d{4}-\d{2}-\d{2}$/);
+  assert.equal(typeof glm.age_days, "number");
+  assert.equal(typeof glm.stale, "boolean");
+  assert.deepEqual(glm.actors, ["cline", "opencode"]);
+  assert.equal(glm.actor_routes.opencode, "opencode-go/glm-5.2");
+});
+
 test("check exits zero for allowed managed CLI routes and reports the decision reason", () => {
   const relayHome = tempDir();
   assert.equal(runConfig(["init", "--profile", "company", "--json"], { relayHome }).status, 0);

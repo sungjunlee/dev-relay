@@ -7,7 +7,10 @@ const path = require("path");
 const {
   resolveModelRequest,
 } = require("../../../skills/relay-dispatch/scripts/model-resolver");
-const { MODEL_CATALOG } = require("../../../skills/relay-dispatch/scripts/model-catalog");
+const {
+  MODEL_CATALOG,
+  catalogFreshnessReport,
+} = require("../../../skills/relay-dispatch/scripts/model-catalog");
 const { buildDefaultRelayPolicy } = require("../../../skills/relay-dispatch/scripts/relay-policy");
 
 function policy(overrides = {}) {
@@ -19,6 +22,27 @@ function policy(overrides = {}) {
 
 function tempDir(prefix = "relay-model-resolver-") {
   return fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), prefix)));
+}
+
+const MODEL_LIST_FIXTURES = path.join(__dirname, "..", "fixtures", "model-lists");
+
+function fixturePath(name) {
+  return path.join(MODEL_LIST_FIXTURES, name);
+}
+
+function writeFixtureCli({ dir, name, expectedArg, fixtureName }) {
+  const executablePath = path.join(dir, name);
+  const argsPath = path.join(dir, `${name}-args.txt`);
+  fs.writeFileSync(executablePath, `#!/bin/sh
+printf '%s' "$1" > ${JSON.stringify(argsPath)}
+if [ "$1" = ${JSON.stringify(expectedArg)} ]; then
+  cat ${JSON.stringify(fixturePath(fixtureName))}
+  exit 0
+fi
+exit 2
+`, "utf-8");
+  fs.chmodSync(executablePath, 0o755);
+  return { executablePath, argsPath };
 }
 
 test("model resolver preserves explicit provider/model routes without probing", () => {
@@ -191,17 +215,12 @@ test("model resolver returns model_probe_failed with warning when live probe fai
 
 test("model resolver uses the Pi --list-models live probe path", () => {
   const dir = tempDir();
-  const piPath = path.join(dir, "pi");
-  const argsPath = path.join(dir, "pi-args.json");
-  fs.writeFileSync(piPath, `#!/bin/sh
-printf '["%s"]' "$1" > ${JSON.stringify(argsPath)}
-if [ "$1" = "--list-models" ]; then
-  printf 'openai/gpt-5-fast\\n'
-  exit 0
-fi
-exit 2
-`, "utf-8");
-  fs.chmodSync(piPath, 0o755);
+  const { executablePath, argsPath } = writeFixtureCli({
+    dir,
+    name: "pi",
+    expectedArg: "--list-models",
+    fixtureName: "pi-table.txt",
+  });
 
   const result = resolveModelRequest({
     phase: "dispatch",
@@ -213,10 +232,10 @@ exit 2
         { route: "openai/*", phases: ["dispatch"], executors: ["pi"] },
       ],
     }),
-    findExecutable: () => piPath,
+    findExecutable: () => executablePath,
   });
 
-  assert.deepEqual(JSON.parse(fs.readFileSync(argsPath, "utf-8")), ["--list-models"]);
+  assert.equal(fs.readFileSync(argsPath, "utf-8"), "--list-models");
   assert.equal(result.ok, true);
   assert.equal(result.resolved_route, "openai/gpt-5-fast");
   assert.equal(result.source, "live_probe");
@@ -225,36 +244,61 @@ exit 2
 
 test("model resolver parses Pi provider and model table columns", () => {
   const dir = tempDir();
-  const piPath = path.join(dir, "pi");
-  fs.writeFileSync(piPath, `#!/bin/sh
-if [ "$1" = "--list-models" ]; then
-  printf 'provider model context\\n'
-  printf '-------- ----- -------\\n'
-  printf 'openai gpt-5-fast 128k\\n'
-  printf 'anthropic claude-4.5-sonnet 200k\\n'
-  exit 0
-fi
-exit 2
-`, "utf-8");
-  fs.chmodSync(piPath, 0o755);
+  const { executablePath } = writeFixtureCli({
+    dir,
+    name: "pi",
+    expectedArg: "--list-models",
+    fixtureName: "pi-table.txt",
+  });
 
   const result = resolveModelRequest({
     phase: "dispatch",
     actor: "pi",
     actorField: "executor",
-    model: "gpt-5-fast",
+    model: "claude-4.5-sonnet",
     policy: policy({
       allowed_model_routes: [
-        { route: "openai/*", phases: ["dispatch"], executors: ["pi"] },
+        { route: "anthropic/*", phases: ["dispatch"], executors: ["pi"] },
       ],
     }),
-    findExecutable: () => piPath,
+    findExecutable: () => executablePath,
   });
 
   assert.equal(result.ok, true);
-  assert.equal(result.resolved_route, "openai/gpt-5-fast");
+  assert.equal(result.resolved_route, "anthropic/claude-4.5-sonnet");
   assert.equal(result.source, "live_probe");
-  assert.deepEqual(result.candidates, ["openai/gpt-5-fast"]);
+  assert.deepEqual(result.candidates, ["anthropic/claude-4.5-sonnet"]);
+});
+
+test("model resolver parses OpenCode line fixtures before catalog fallback", () => {
+  const dir = tempDir();
+  const { executablePath, argsPath } = writeFixtureCli({
+    dir,
+    name: "opencode",
+    expectedArg: "models",
+    fixtureName: "opencode-lines.txt",
+  });
+
+  const result = resolveModelRequest({
+    phase: "dispatch",
+    actor: "opencode",
+    actorField: "executor",
+    model: "glm-5.2",
+    fallback: "catalog",
+    policy: policy({
+      allowed_model_routes: [
+        { route: "opencode-go/*", phases: ["dispatch"], executors: ["opencode"] },
+      ],
+    }),
+    findExecutable: () => executablePath,
+  });
+
+  assert.equal(fs.readFileSync(argsPath, "utf-8"), "models");
+  assert.equal(result.ok, true);
+  assert.equal(result.resolved_route, "opencode-go/glm-5.2");
+  assert.equal(result.source, "live_probe");
+  assert.deepEqual(result.candidates, ["opencode-go/glm-5.2"]);
+  assert.equal(result.warnings.some((warning) => /catalog fallback/i.test(warning)), false);
 });
 
 test("model resolver uses actor-scoped catalog fallback only when requested", () => {
@@ -307,4 +351,19 @@ test("model catalog entries carry per-entry last_checked provenance", () => {
   for (const entry of MODEL_CATALOG) {
     assert.match(entry.last_checked, /^\d{4}-\d{2}-\d{2}$/);
   }
+});
+
+test("model catalog freshness report exposes actor coverage and stale status", () => {
+  const report = catalogFreshnessReport({ now: new Date("2026-10-01T00:00:00Z") });
+
+  assert.equal(report.summary.total, MODEL_CATALOG.length);
+  assert.equal(report.summary.stale, MODEL_CATALOG.length);
+  assert.equal(report.summary.unknown_age, 0);
+  const glm = report.entries.find((entry) => entry.id === "glm-5.2");
+  assert.ok(glm);
+  assert.equal(glm.last_checked, "2026-07-06");
+  assert.equal(glm.age_days, 87);
+  assert.equal(glm.stale, true);
+  assert.deepEqual(glm.actors, ["cline", "opencode"]);
+  assert.equal(glm.actor_routes.opencode, "opencode-go/glm-5.2");
 });
