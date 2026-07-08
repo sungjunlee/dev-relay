@@ -19,8 +19,7 @@ test("dispatch timeout diagnostics distinguish total_timeout and no_result", () 
 
 test("advisory timeout wording includes reviewer model and raw response", () => {
   const source = fs.readFileSync(ADVISORY_SCRIPT, "utf-8");
-  assert.match(source, /reviewer advisory_review exceeded/);
-  assert.match(source, /timeout/);
+  assert.match(source, /reviewer advisory_review timed out after/);
   assert.ok(source.includes("model=${request.reviewerModel || \"default\"}"));
   assert.ok(source.includes("raw_response=${rawResponsePath}"));
 });

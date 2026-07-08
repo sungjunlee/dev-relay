@@ -1162,6 +1162,8 @@ test("pass verdict preserves assigned reviewer role and records the acting revie
   assert.equal(manifest.roles.reviewer, "claude");
   assert.equal(manifest.review.last_reviewer, "codex");
   assert.equal(reviewApplyEvent?.reviewer, "codex");
+  assert.equal("confidence_downgrade" in reviewApplyEvent, false);
+  assert.equal("low_confidence_count" in reviewApplyEvent, false);
 });
 
 test("review-runner appends escalation_decision event on a clean no-trigger round", () => {
@@ -1565,7 +1567,7 @@ test("review-runner fails closed when branch+PR resolution only finds a stale te
 });
 
 test("changes_requested verdict creates a re-dispatch artifact", () => {
-  const { repoRoot, manifestPath, doneCriteriaPath, diffPath } = setupRepo();
+  const { repoRoot, manifestPath, doneCriteriaPath, diffPath, runId } = setupRepo();
   const reviewFile = writeVerdict(repoRoot, "changes.json", {
     verdict: "changes_requested",
     summary: "One requirement is missing.",
@@ -1608,12 +1610,15 @@ test("changes_requested verdict creates a re-dispatch artifact", () => {
   assert.match(redispatchText, /src\/index.js:12/);
 
   const manifest = readManifest(manifestPath).data;
+  const reviewApplyEvent = [...readRunEvents(repoRoot, runId)].reverse().find((event) => event.event === "review_apply");
   assert.equal(manifest.state, STATES.CHANGES_REQUESTED);
   assert.equal(manifest.next_action, "re_dispatch_requested_changes");
   assert.equal(manifest.review.rounds, 1);
   assert.equal(manifest.review.latest_verdict, "changes_requested");
   assert.equal(manifest.review.repeated_issue_count, 1);
   assert.deepEqual(manifest.review.last_lineage_summary, { deepening: 0, repeat: 0, stale: 0, new: 0, newly_scoreable: 0, unknown: 1 });
+  assert.equal("confidence_downgrade" in reviewApplyEvent, false);
+  assert.equal("low_confidence_count" in reviewApplyEvent, false);
 });
 
 test("all-low-confidence changes_requested verdict applies as advisory pass while preserving findings", () => {
@@ -1682,6 +1687,59 @@ test("all-low-confidence changes_requested verdict applies as advisory pass whil
   assert.equal(reviewApplyEvent?.reason, "changes_requested");
   assert.equal(reviewApplyEvent?.confidence_downgrade, true);
   assert.equal(reviewApplyEvent?.low_confidence_count, 2);
+});
+
+test("mixed-confidence changes_requested verdict records no downgrade event marker", () => {
+  const { repoRoot, doneCriteriaPath, diffPath, runId } = setupRepo();
+  const reviewFile = writeVerdict(repoRoot, "mixed-confidence-changes.json", {
+    verdict: "changes_requested",
+    summary: "One speculative issue and one blocking issue remain.",
+    contract_status: "fail",
+    quality_review_status: "pass",
+    quality_execution_status: "pass",
+    next_action: "changes_requested",
+    issues: [
+      {
+        title: "Consider clearer helper naming",
+        body: "The helper name may be easier to scan if it mentions the state it returns.",
+        file: "src/index.js",
+        line: 12,
+        category: "quality",
+        severity: "low",
+        confidence: "low",
+      },
+      {
+        title: "Missing smoke file",
+        body: "The PR does not add the required smoke.txt output.",
+        file: "src/index.js",
+        line: 20,
+        category: "contract",
+        severity: "high",
+        confidence: "high",
+      },
+    ],
+    rubric_scores: defaultRubricScores(),
+    scope_drift: { creep: [], missing: [] },
+  });
+
+  const stdout = execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--branch", "issue-42",
+    "--pr", "123",
+    "--done-criteria-file", doneCriteriaPath,
+    "--diff-file", diffPath,
+    "--review-file", reviewFile,
+    "--no-comment",
+    "--json",
+  ], { encoding: "utf-8" });
+
+  const result = JSON.parse(stdout);
+  const reviewApplyEvent = [...readRunEvents(repoRoot, runId)].reverse().find((event) => event.event === "review_apply");
+
+  assert.equal(result.appliedVerdict, "changes_requested");
+  assert.equal("confidence_downgrade" in reviewApplyEvent, false);
+  assert.equal("low_confidence_count" in reviewApplyEvent, false);
 });
 
 test("review-runner records rubric_scores as iteration_score events", () => {

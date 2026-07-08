@@ -338,8 +338,10 @@ async function run() {
     reviewer: reviewerName,
     reason: rubricGateFailure ? rubricGateFailure.status : verdict.verdict,
     lineage_summary: escalationDecision.lineage_summary || lineageSummary,
-    confidence_downgrade: confidenceDowngrade.applied,
-    low_confidence_count: confidenceDowngrade.lowConfidenceCount,
+    ...(confidenceDowngrade.applied ? {
+      confidence_downgrade: true,
+      low_confidence_count: confidenceDowngrade.lowConfidenceCount,
+    } : {}),
   });
 
   if (Array.isArray(verdict.rubric_scores) && verdict.rubric_scores.length > 0) {
