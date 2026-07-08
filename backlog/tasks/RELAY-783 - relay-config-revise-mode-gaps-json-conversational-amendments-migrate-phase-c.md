@@ -6,7 +6,7 @@ labels:
   - enhancement
   - workflow
 priority: medium
-milestone: 
+milestone: Route Config Simplification
 created_date: '2026-07-05'
 ---
 ## Description
@@ -30,7 +30,8 @@ Config skills are never invoked from memory; they need a "점검해줘" entry po
 - [ ] `migrate` never writes without confirmation and never deletes legacy files.
 - [ ] `gaps` is read-only (no file writes, no events).
 
-## Dependencies
+## Current Context
 
-Blocked by Phase A (#781). `unregistered_route_in_use` consumes the Phase A event; `preset_broken` consumes Phase B presets (degrade gracefully when absent).
+Unblocked as of 2026-07-08. Phase A (#781), Phase B (#782), and provider-aware model resolution (#825/#820-#824 via PR #831) have landed. `relay-config.js` now includes `resolve-model`; #783 should replan on current `main` and keep `gaps`/`migrate` additive.
 
+`unregistered_route_in_use` consumes the Phase A event; `preset_broken` consumes Phase B presets. Do not fold #833/#834 freshness/reporting into #783 unless the AC is deliberately amended; those are separate follow-ups in this sprint.

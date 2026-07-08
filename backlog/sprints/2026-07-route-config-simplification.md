@@ -10,7 +10,7 @@ component: "dispatch-execution"
 # route-config-simplification
 
 ## Goal
-Route selection is one user-facing concept: a single routes.json schema (open-by-default, strict opt-in) drives dispatch/review routing, presets make per-run intent one word, and relay-config can audit and revise its own config — so agent delegation stops requiring memorized flags or forgotten setup.
+Route selection is one user-facing concept: a single routes.json schema drives dispatch/review routing, presets and provider-aware model resolution make per-run intent compact, relay-config can audit/revise its own config, and the remaining dispatch/fleet test gates are stable enough to trust while finishing the work.
 
 ## Plan
 
@@ -23,19 +23,31 @@ Route selection is one user-facing concept: a single routes.json schema (open-by
 
 - [x] #782 Route presets: --route-preset, /relay natural-language mapping, model catalog (Phase B) → PR #813 **merged** 2026-07-07 (LGTM round 7; rebased onto post-Batch-1 main, then 5 review-driven corrections)
 
-### Batch 3 — self-audit (blocked by #781)
+### Batch 3 — stability rebaseline before more broad relay-config work
 
-- [ ] #783 relay-config revise mode: gaps --json, conversational amendments, migrate (Phase C) — M; deps satisfied (Phase A/B merged; preset_broken + unregistered_route_in_use now live). **UNBLOCKED 2026-07-08 (was held)**: #825 landed (PR #831, merged) so `relay-config.js` contention cleared; disk freed to 8Gi, load 7.6, no fixture leaks. relay-config.js grew 766→1034 (adds `resolve-model`); `gaps`/`migrate`/`revise` still absent → #783 additive, no collision. Ready to dispatch. Plan note: replan on the post-#831 file; consider whether `gaps` should gain a model-resolution-health type now that resolution exists (see Progress).
+- [ ] #816 parallel full-suite / relay-fleet condition-wait rebaseline — S/M; run current-main evidence after #815/#819 fixes. If no longer reproducible, close with evidence. If still reproducible, make the smallest wait-window or command-shape fix with pgrep evidence.
+
+### Batch 4 — self-audit (Phase C, now unblocked)
+
+- [ ] #783 relay-config revise mode: gaps --json, conversational amendments, migrate (Phase C) — M; deps satisfied (Phase A/B merged; #825 provider-aware model resolution merged). Keep `gaps`/`migrate` additive. Do not absorb #833/#834 into this issue unless AC is explicitly amended.
+
+### Batch 5 — linked-worktree base correctness
+
+- [ ] #809 linked-worktree dispatch records invalid local-only base branch — S/M; fix remote-valid base resolution and prevent `worktree-*` durability side effects. Coordinate with #795 semantics, but do not silently broaden into all local-ahead behavior unless the same small fix naturally covers it.
+
+### Batch 6 — provider-aware model resolution hardening
+
+- [ ] #833 fixture-drive live model-list parser coverage — S; do before #834 so freshness reporting can distinguish parser drift from catalog staleness.
+- [ ] #834 model catalog freshness reporting — S; informational doctor/report only, no route auto-update and no dispatch/review blocking.
 
 ### Unplanned (found during Batch 1 execution)
 
 - [x] #786 close-run cannot close runs whose worktree was pruned by dispatch signal cleanup — S; superseded by #785 (other session's three-case worktree matrix, PR #797); PR #789 closed unmerged, part 2 follow-up tracked in #785's thread
-- [ ] #795 dispatch branches from local main; unpushed local commits contaminate every PR diff — filed after the same scope-noise finding cost one review round on each of PR #789/#791/#792 (rule of three)
+- [ ] #795 dispatch branches from local main; unpushed local commits contaminate every PR diff — related to #809 but still deferred unless #809's remote-base fix naturally covers it; avoid broad base-policy refactor without a current failing repro.
 - [x] #805 validateManifestPaths rejects relay worktrees for runs dispatched from a linked worktree (basename mismatch) — PR #810 merged; fix proven live by gate-check passing for PR #811 via normal --repo resolution
-- [ ] #809 dispatch.js from a linked worktree records base_branch that does not exist on origin — S; TWO symptoms now: auto-PR fails (escalated), and after finalize's learnings push published origin/worktree-floofy-seeking-music, new dispatches failed at base-merge until the stray remote branch was deleted
-- [x] #807+#808 finalize-run resilience (post-merge crash + stale pre-merge gate) → PR #814 **merged** 2026-07-07 (LGTM round 9; run `...585f0a8b`, codex base + R6-R9 orchestrator-corrections)
-- [ ] #807 finalize-run post-merge crash (runCleanup removes worktree → getCanonicalRepoRoot on it; writeManifest is last) leaves run stuck at ready_to_merge — S; A2 run completed manually via updateManifestState+writeManifest + cleanup_result event
-- [ ] #808 finalize-run pre-merge CI gate blocks already-MERGED PRs on never-completing checks (CodeRabbit PENDING after branch delete) — S; ordering fix: fetch merge state before assertPreMergeSafety
+- [x] #809 promoted into Batch 5 after #815/#819 closed and #825 landed; work status is tracked by the Batch 5 Plan item.
+- [x] #807 finalize-run post-merge crash — resolved via PR #814.
+- [x] #808 finalize-run pre-merge CI gate blocks already-MERGED PRs — resolved via PR #814.
 - [x] #815 flaky test: dispatch SIGINT descendant-survival warning intermittently missing → **resolved by other session, PR #836** (stabilize SIGINT descendant survival fixture)
 - [x] #819 relay-dispatch signal tests leak SIGTERM-ignoring codex fixtures — THE root cause of the 2026-07-07 "relay-fleet flakes" + suite hangs → **resolved by other session, PR #835** (clean up relay dispatch signal fixtures)
 
@@ -50,6 +62,12 @@ Route selection is one user-facing concept: a single routes.json schema (open-by
 - Phase D (relay-plan route recommendation + fleet per-leaf fill) is NOT in this sprint — observe-gated on ≥~10 non-default-route runs over ~4 weeks after A–C ship.
 
 ## Progress
+
+### 2026-07-08 (replanned after #825/#826/#815/#819 landed)
+- Refreshed the open follow-up set against current main and GitHub state: #825/#820-#824 closed by PR #831, #826/#827-#830 closed by PR #832, #819 closed by PR #835, and #815 closed by PR #836. The remaining sprint work should not rebuild those surfaces.
+- Updated issue scopes for #816, #809, #833, and #834. #816 is now the first rebaseline gate: verify whether the relay-fleet condition-wait failure still exists after the signal-fixture fixes before broad relay-config work resumes.
+- Reordered the remaining work into small batches: #816 stability rebaseline → #783 Phase C self-audit → #809 linked-worktree remote-base correctness → #833 parser fixtures → #834 informational catalog freshness report. #795 stays deferred/related unless #809's narrow remote-base fix naturally covers it.
+- #783 remains unblocked, but its scope stays intentionally narrow: `gaps`/`migrate`/`revise` should use the post-#831 resolver context without absorbing catalog freshness or parser drift reporting from #833/#834.
 
 ### 2026-07-08 12:20 (window opened; other session landed both new epics)
 - **Other session shipped both new epics + two of this sprint's Unplanned bugs**, all merged to main (HEAD `c9bc690`): #831 = Epic #825 provider-aware model resolution (one PR, #820-#825 closed); #832 = Epic #826 operational visibility (`run-observer.js` + `relay-status.js` + `relay-recover`, #826-#830 closed); #835 fixed #819 (fixture leak I filed); #836 fixed #815 (SIGINT flake). Both epics disjoint from #783's surface (verified: #832 = all new files; #831 = `resolve-model` in relay-config.js, no `gaps`/`migrate`/`revise`).
