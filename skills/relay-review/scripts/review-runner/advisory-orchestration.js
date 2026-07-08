@@ -49,10 +49,11 @@ function resolveAdvisoryConfig({
   const plannedForSelected = planned.reviewer && planned.reviewer === reviewer;
   const plannedModel = plannedForSelected ? planned.model : null;
   const plannedProfile = plannedForSelected ? planned.profile : null;
-  const modelFromPlan = reviewer && !advisoryReviewerModel && !routed.model && !routed.reviewer_model && plannedModel;
+  const selectedModel = advisoryReviewerModel || routed.model || routed.reviewer_model || plannedModel || null;
+  const modelFromPlan = reviewer && !advisoryReviewerModel && plannedForSelected && plannedModel && selectedModel === plannedModel;
   return {
     graceSeconds: reviewer ? parseNonNegativeSeconds(advisoryGraceArg) : null,
-    model: reviewer ? (advisoryReviewerModel || routed.model || routed.reviewer_model || plannedModel || null) : null,
+    model: reviewer ? selectedModel : null,
     modelResolution: modelFromPlan ? planned.model_resolution || null : null,
     profile: reviewer ? validateAdvisoryProfile(advisoryProfileArg || routed.profile || plannedProfile || "blindspot") : null,
     reviewer,

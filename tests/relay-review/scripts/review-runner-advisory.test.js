@@ -462,8 +462,8 @@ test("review-runner records successful opencode advisory review without gating p
   assert.match(event.reviewer_policy.read_only.warnings.join("\n"), /not prevent writes/i);
 });
 
-test("review-runner advisory unregistered route event preserves route-plan model resolution provenance", () => {
-  const { repoRoot, runDir, runId, doneCriteriaPath, diffPath } = setupRepo();
+test("review-runner routed advisory unregistered route event preserves route-plan model resolution provenance", () => {
+  const { repoRoot, manifestPath, runDir, runId, doneCriteriaPath, diffPath } = setupRepo();
   const primaryScript = writePrimaryReviewer(repoRoot, passVerdict());
   const opencodeScript = writeFakeOpencode(repoRoot);
   writeJson(path.join(process.env.RELAY_HOME, "policy.json"), {
@@ -493,6 +493,20 @@ test("review-runner advisory unregistered route event preserves route-plan model
       },
     },
   });
+  const record = readManifest(manifestPath);
+  writeManifest(manifestPath, {
+    ...record.data,
+    routing: {
+      version: 1,
+      selected: {
+        advisory_review: {
+          reviewer: "opencode",
+          model: "openai/unregistered-advisory",
+          profile: "blindspot",
+        },
+      },
+    },
+  }, record.body);
 
   const result = runReview({
     repoRoot,

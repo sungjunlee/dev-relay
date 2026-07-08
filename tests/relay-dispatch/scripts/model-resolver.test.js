@@ -1,5 +1,8 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const fs = require("fs");
+const os = require("os");
+const path = require("path");
 
 const {
   resolveModelRequest,
@@ -12,6 +15,10 @@ function policy(overrides = {}) {
     ...buildDefaultRelayPolicy(),
     ...overrides,
   };
+}
+
+function tempDir(prefix = "relay-model-resolver-") {
+  return fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), prefix)));
 }
 
 test("model resolver preserves explicit provider/model routes without probing", () => {
@@ -61,6 +68,30 @@ test("model resolver uses live probe for exact short model matches", () => {
   assert.equal(result.resolved_route, "opencode-go/glm-5.2");
   assert.equal(result.source, "live_probe");
   assert.deepEqual(result.candidates, ["opencode-go/glm-5.2"]);
+});
+
+test("model resolver uses live probe for unambiguous fuzzy short model matches", () => {
+  const result = resolveModelRequest({
+    phase: "dispatch",
+    actor: "opencode",
+    actorField: "executor",
+    model: "codex-spark",
+    policy: policy({
+      allowed_model_routes: [
+        { route: "openai/*", phases: ["dispatch"], executors: ["opencode"] },
+      ],
+    }),
+    probeModels: () => ({
+      status: "ok",
+      models: ["opencode-go/glm-5.2", "openai/gpt-5.3-codex-spark"],
+      warning: null,
+    }),
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.resolved_route, "openai/gpt-5.3-codex-spark");
+  assert.equal(result.source, "live_probe");
+  assert.deepEqual(result.candidates, ["openai/gpt-5.3-codex-spark"]);
 });
 
 test("model resolver keeps managed codex model-less routes model-less", () => {
@@ -116,6 +147,80 @@ test("model resolver returns structured ambiguous_model diagnostics", () => {
   assert.equal(result.error, "ambiguous_model");
   assert.deepEqual(result.candidates, ["opencode-go/glm-5.2", "openrouter/glm-5.2"]);
   assert.equal(result.resolved_route, null);
+});
+
+test("model resolver returns unknown_model when a healthy live probe has no match", () => {
+  const result = resolveModelRequest({
+    phase: "dispatch",
+    actor: "opencode",
+    actorField: "executor",
+    model: "missing-model",
+    policy: policy({ deny_unknown_model_routes: false }),
+    probeModels: () => ({
+      status: "ok",
+      models: ["opencode-go/glm-5.2", "openai/gpt-5.3-codex-spark"],
+      warning: null,
+    }),
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.error, "unknown_model");
+  assert.deepEqual(result.candidates, []);
+  assert.equal(result.probe.status, "ok");
+});
+
+test("model resolver returns model_probe_failed with warning when live probe fails without fallback", () => {
+  const result = resolveModelRequest({
+    phase: "dispatch",
+    actor: "opencode",
+    actorField: "executor",
+    model: "glm-5.2",
+    policy: policy({ deny_unknown_model_routes: false }),
+    probeModels: () => ({
+      status: "warning",
+      models: [],
+      warning: "optional model-list probe failed for opencode",
+    }),
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.error, "model_probe_failed");
+  assert.match(result.warnings.join("\n"), /optional model-list probe failed/);
+  assert.equal(result.probe.status, "warning");
+});
+
+test("model resolver uses the Pi --list-models live probe path", () => {
+  const dir = tempDir();
+  const piPath = path.join(dir, "pi");
+  const argsPath = path.join(dir, "pi-args.json");
+  fs.writeFileSync(piPath, `#!/bin/sh
+printf '["%s"]' "$1" > ${JSON.stringify(argsPath)}
+if [ "$1" = "--list-models" ]; then
+  printf 'openai/gpt-5-fast\\n'
+  exit 0
+fi
+exit 2
+`, "utf-8");
+  fs.chmodSync(piPath, 0o755);
+
+  const result = resolveModelRequest({
+    phase: "dispatch",
+    actor: "pi",
+    actorField: "executor",
+    model: "gpt-5-fast",
+    policy: policy({
+      allowed_model_routes: [
+        { route: "openai/*", phases: ["dispatch"], executors: ["pi"] },
+      ],
+    }),
+    findExecutable: () => piPath,
+  });
+
+  assert.deepEqual(JSON.parse(fs.readFileSync(argsPath, "utf-8")), ["--list-models"]);
+  assert.equal(result.ok, true);
+  assert.equal(result.resolved_route, "openai/gpt-5-fast");
+  assert.equal(result.source, "live_probe");
+  assert.equal(result.probe.status, "ok");
 });
 
 test("model resolver uses actor-scoped catalog fallback only when requested", () => {
