@@ -252,6 +252,10 @@ function preflightConfiguredAdvisoryLane({ data, lane, runRepoPath }) {
   };
 }
 
+function preflightConfiguredAdvisoryLanes({ config, data, runRepoPath }) {
+  return (config.lanes || []).map((lane) => preflightConfiguredAdvisoryLane({ data, lane, runRepoPath }));
+}
+
 function startConfiguredAdvisory({
   branch,
   config,
@@ -269,9 +273,9 @@ function startConfiguredAdvisory({
   runRepoPath,
   trigger = "every_round",
 }) {
-  const lanes = (config.lanes || []).filter((lane) => lane.trigger === trigger);
-  if (!lanes.length) return { advisoryRuns: [], resultAdvisory: undefined };
-  const lanePreflights = lanes.map((lane) => preflightConfiguredAdvisoryLane({ data, lane, runRepoPath }));
+  const lanePreflights = preflightConfiguredAdvisoryLanes({ config, data, runRepoPath })
+    .filter(({ lane }) => lane.trigger === trigger);
+  if (!lanePreflights.length) return { advisoryRuns: [], resultAdvisory: undefined };
   const advisoryRuns = [];
   const resultAdvisories = [];
   for (const { advisoryModel, lane, policyDecision, reviewerPolicy, reviewerScript } of lanePreflights) {
@@ -457,6 +461,7 @@ async function settleConfiguredAdvisories({ advisoryRuns, config, currentState, 
 module.exports = {
   appendAdvisoryRunsForTrigger,
   createAdvisorySettlementDeadline,
+  preflightConfiguredAdvisoryLanes,
   resolveAdvisoryConfig,
   resolveHardenedBindingWaitMs,
   settleConfiguredAdvisories,

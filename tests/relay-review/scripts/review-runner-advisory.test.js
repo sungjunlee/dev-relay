@@ -894,6 +894,66 @@ test("review-runner validates all advisory lanes before starting any advisory wo
   assert.equal(readManifest(manifestPath).data.state, STATES.REVIEW_PENDING);
 });
 
+test("review-runner validates on_pass advisory lanes before starting every_round workers", () => {
+  const { repoRoot, manifestPath, runDir, runId, doneCriteriaPath, diffPath } = setupRepo();
+  const record = readManifest(manifestPath);
+  writeManifest(manifestPath, {
+    ...record.data,
+    routing: {
+      version: 1,
+      selected: {
+        advisory_review: [
+          { reviewer: "opencode", model: "example/opencode-model-fast", profile: "blindspot", trigger: "every_round" },
+          { reviewer: "pi", model: "openai/gpt-5", profile: "blindspot", trigger: "on_pass" },
+        ],
+      },
+    },
+  }, record.body);
+  const opencodeLog = path.join(repoRoot, "opencode-on-pass-preflight.log");
+  const primaryScript = writePrimaryReviewer(repoRoot, passVerdict());
+  const opencodeScript = writeFakeOpencode(repoRoot, { logPath: opencodeLog });
+  const piScript = writeFakeAdvisoryCli(repoRoot, "pi");
+
+  const proc = spawnSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--run-id", runId,
+    "--pr", "429",
+    "--done-criteria-file", doneCriteriaPath,
+    "--diff-file", diffPath,
+    "--reviewer", "codex",
+    "--reviewer-script", primaryScript,
+    "--no-comment",
+    "--json",
+  ], {
+    encoding: "utf-8",
+    env: {
+      ...process.env,
+      RELAY_OPENCODE_BIN: opencodeScript,
+      RELAY_PI_BIN: piScript,
+    },
+  });
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 150);
+  assert.notEqual(proc.status, 0);
+  const result = JSON.parse(proc.stdout);
+  const advisoryFiles = fs.readdirSync(runDir)
+    .filter((name) => name.includes("advisory-opencode"))
+    .sort();
+  const advisoryEvents = readRunEvents(repoRoot, runId)
+    .filter((record) => record.event === EVENTS.ADVISORY_REVIEW);
+
+  assert.equal(result.status, "failed");
+  assert.equal(result.policy_decision.allowed, false);
+  assert.equal(result.policy_decision.phase, "advisory_review");
+  assert.equal(result.policy_decision.reviewer, "pi");
+  assert.equal(result.policy_decision.model, "openai/gpt-5");
+  assert.deepEqual(advisoryFiles, []);
+  assert.equal(fs.existsSync(path.join(runDir, "advisory-worktrees")), false);
+  assert.equal(fs.existsSync(opencodeLog), false);
+  assert.deepEqual(advisoryEvents, []);
+  assert.equal(readManifest(manifestPath).data.state, STATES.REVIEW_PENDING);
+});
+
 test("preset-only dispatch starts advisory review through manifest routing selection", () => {
   const { repoRoot, relayHome, rubricFile, doneCriteriaPath, diffPath } = setupDispatchRepoForPresetAdvisory();
   const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-preset-bin-"));
