@@ -173,9 +173,9 @@ original plan missed:
   transition because merge failures are not review feedback. (Codex #3.)
 - **Stale-base recovery design.** After child N merges, child N+1's base is stale.
   `finalize-run.js` checks the review gate + failing CI but does NOT auto-rebase
-  or re-dispatch. Phase 3's first queue implementation chooses the conservative
-  recovery path: stop at first failure, mark that child `merge_blocked`, and leave
-  recovery to the operator or a later explicit automation pass.
+  or re-dispatch. The queue marks a failed child `merge_blocked`, continues with
+  the next ready child, and leaves recovery to the operator or a later explicit
+  automation pass.
   (Codex #8.)
 
 ## Resolved questions
