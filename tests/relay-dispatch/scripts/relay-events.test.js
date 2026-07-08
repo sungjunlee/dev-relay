@@ -324,6 +324,21 @@ const RUN_EVENT_FIELD_CASES = [
       guidance_artifact_path: "guidance-metadata.json",
     },
   },
+  {
+    label: "dispatch failure class",
+    fields: {
+      event: EVENTS.DISPATCH_RESULT,
+      state_from: "dispatched",
+      state_to: "escalated",
+      reason: "new_dispatch:executor failed",
+      failure_class: null,
+      dispatch_failure_class: "no_result",
+    },
+    expected: {
+      failure_class: null,
+      dispatch_failure_class: "no_result",
+    },
+  },
 ];
 
 test("appendRunEvent round-trips optional fields when provided", () => {

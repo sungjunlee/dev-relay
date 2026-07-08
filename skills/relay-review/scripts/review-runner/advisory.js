@@ -404,7 +404,10 @@ function executeAdvisoryRequest(request) {
       ].join("\n") + "\n");
     } else if (outcome.timeout) {
       status = "timeout";
-      failureReason = `advisory reviewer exceeded ${timeoutMs / 1000}s timeout`;
+      failureReason = (
+        `${request.reviewerName} reviewer advisory_review timed out after ${timeoutMs / 1000}s; ` +
+        `model=${request.reviewerModel || "default"}; raw_response=${rawResponsePath}`
+      );
     } else if (outcome.error || outcome.code !== 0) {
       status = "failed";
       failureReason = outcome.error ? outcome.error.message : `advisory reviewer exited with code ${outcome.code}`;
