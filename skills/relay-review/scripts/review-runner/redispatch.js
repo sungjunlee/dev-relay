@@ -3,6 +3,7 @@ const path = require("path");
 const { formatIssueList, formatScopeDrift } = require("./comment");
 const { formatPriorVerdictSummary } = require("./prompt");
 const { getRubricScoreNumber, getRubricTargetNumber } = require("./score-utils");
+const { getAppliedVerdict } = require("./verdict");
 
 const FLIP_STATES = new Set(["pass", "fail"]);
 const LINEAGE_VALUES = ["deepening", "repeat", "stale", "new", "newly_scoreable", "unknown"];
@@ -235,7 +236,7 @@ function computeRepeatedIssueCount(runDir, round, issues) {
   let repeating = new Set(issues.map(fingerprintIssue));
   let count = 1;
   scanPriorVerdicts(runDir, round, (verdict) => {
-    if (verdict.verdict !== "changes_requested" || !Array.isArray(verdict.issues) || verdict.issues.length === 0) {
+    if (getAppliedVerdict(verdict) !== "changes_requested" || !Array.isArray(verdict.issues) || verdict.issues.length === 0) {
       return false;
     }
     const prior = new Set(verdict.issues.map(fingerprintIssue));

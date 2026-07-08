@@ -8,6 +8,7 @@ const {
 } = require("./score-utils");
 
 const ALLOWED_VERDICTS = new Set(["pass", "changes_requested", "escalated"]);
+const ALLOWED_APPLIED_VERDICTS = new Set(["pass", "changes_requested", "escalated"]);
 const ALLOWED_NEXT_ACTIONS = new Set(["publish_pending", "ready_to_merge", "changes_requested", "escalated"]);
 const ALLOWED_REVIEW_STATUSES = new Set(["pass", "fail", "not_run"]);
 const ALLOWED_EXECUTION_STATUSES = new Set(["pass", "fail", "not_run", "missing"]);
@@ -73,6 +74,12 @@ function isLowConfidenceAdvisoryPass(verdict) {
     && Array.isArray(verdict.issues)
     && verdict.issues.length > 0
     && verdict.issues.every((issue) => issue?.confidence === "low");
+}
+
+function getAppliedVerdict(verdict) {
+  if (ALLOWED_APPLIED_VERDICTS.has(verdict?.applied_verdict)) return verdict.applied_verdict;
+  if (isLowConfidenceAdvisoryPass(verdict)) return "pass";
+  return verdict?.verdict || null;
 }
 
 function buildConfidenceDowngrade(verdict) {
@@ -266,6 +273,7 @@ function validateReviewVerdict(data, options = {}) {
 }
 
 module.exports = {
+  ALLOWED_APPLIED_VERDICTS,
   ALLOWED_EXECUTION_STATUSES,
   ALLOWED_ISSUE_CONFIDENCE_VALUES,
   ALLOWED_LINEAGE_VALUES,
@@ -273,6 +281,7 @@ module.exports = {
   ALLOWED_REVIEW_STATUSES,
   buildConfidenceDowngrade,
   buildLowConfidencePassGateVerdict,
+  getAppliedVerdict,
   isLowConfidenceAdvisoryPass,
   parseReviewVerdict,
   validateIssue,

@@ -230,6 +230,30 @@ test("prompt/formatPriorVerdictSummary includes lineage counts without rejection
   assert.doesNotMatch(summary, /Previously rejected approaches/);
 });
 
+test("prompt/formatPriorVerdictSummary labels applied-pass advisory rounds without rejected approaches", () => {
+  const summary = formatPriorVerdictSummary([{
+    verdict: "changes_requested",
+    applied_verdict: "pass",
+    summary: "Only advisory naming notes remain.",
+    issues: [{
+      title: "Consider clearer naming",
+      body: "The helper name may be easier to scan.",
+      file: "src/a.js",
+      line: 12,
+      category: "quality",
+      severity: "low",
+      confidence: "low",
+      factor: "Readability",
+      attempted_approach: "Kept the helper name unchanged.",
+      fix_direction: "Rename only if it improves readability.",
+    }],
+    rubric_scores: [],
+  }]);
+
+  assert.match(summary, /Round 1: changes_requested \(applied: pass\) — Only advisory naming notes remain/);
+  assert.doesNotMatch(summary, /Previously rejected approaches/);
+});
+
 test("prompt/formatPriorVerdictSummary groups rejection metadata by factor and caps latest entries", () => {
   const summary = formatPriorVerdictSummary([
     {

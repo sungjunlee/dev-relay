@@ -1684,6 +1684,7 @@ test("all-low-confidence changes_requested verdict applies as advisory pass whil
   assert.equal(manifest.state, STATES.READY_TO_MERGE);
   assert.equal(manifest.review.latest_verdict, "lgtm");
   assert.equal(verdictRecord.verdict, "changes_requested");
+  assert.equal(verdictRecord.applied_verdict, "pass");
   assert.equal(verdictRecord.issues.length, 2);
   assert.ok(verdictRecord.issues.every((issue) => issue.confidence === "low"));
   assert.equal(reviewApplyEvent?.reason, "pass");
@@ -1781,6 +1782,7 @@ test("all-low-confidence changes_requested verdict is blocked by failed executio
   assert.equal(manifest.state, STATES.CHANGES_REQUESTED);
   assert.equal(manifest.review.latest_verdict, "changes_requested");
   assert.equal(verdictRecord.verdict, "changes_requested");
+  assert.equal(verdictRecord.applied_verdict, "changes_requested");
   assert.equal(verdictRecord.issues[0].file, EXECUTION_EVIDENCE_FILENAME);
   assert.equal("confidence_downgrade" in reviewApplyEvent, false);
   assert.equal("low_confidence_count" in reviewApplyEvent, false);
@@ -1833,6 +1835,7 @@ test("all-low-confidence changes_requested verdict is blocked by rubric gate fai
   assert.equal(manifest.next_action, "repair_rubric_and_redispatch");
   assert.equal(manifest.review.latest_verdict, "rubric_state_failed_closed");
   assert.equal(verdictRecord.verdict, "changes_requested");
+  assert.equal(verdictRecord.applied_verdict, "changes_requested");
   assert.equal(verdictRecord.issues[0].confidence, "low");
   assert.equal(verdictRecord.relay_gate.status, "rubric_state_failed_closed");
   assert.equal("confidence_downgrade" in reviewApplyEvent, false);
@@ -1885,9 +1888,11 @@ test("mixed-confidence changes_requested verdict records no downgrade event mark
   ], { encoding: "utf-8" });
 
   const result = JSON.parse(stdout);
+  const verdictRecord = JSON.parse(fs.readFileSync(result.verdictPath, "utf-8"));
   const reviewApplyEvent = [...readRunEvents(repoRoot, runId)].reverse().find((event) => event.event === "review_apply");
 
   assert.equal(result.appliedVerdict, "changes_requested");
+  assert.equal(verdictRecord.applied_verdict, "changes_requested");
   assert.equal("confidence_downgrade" in reviewApplyEvent, false);
   assert.equal("low_confidence_count" in reviewApplyEvent, false);
 });

@@ -10,7 +10,7 @@ const { appendIterationScore, appendRunEvent, appendScoreDivergence, EVENTS } = 
 const { git, writeText } = require("./review-runner/common");
 const { applyReviewerIdentity, getGhLogin, parseRemoteHost, resolveContext, resolveIssueNumber, resolveRemoteHost } = require("./review-runner/context");
 const { buildPrompt, formatPriorVerdictSummary } = require("./review-runner/prompt");
-const { isLowConfidenceAdvisoryPass, parseReviewVerdict, validateReviewVerdict, validateScopeDrift } = require("./review-runner/verdict");
+const { parseReviewVerdict, validateReviewVerdict, validateScopeDrift } = require("./review-runner/verdict");
 const { buildCommentBody, formatIssueList, formatScopeDrift, postComment } = require("./review-runner/comment");
 const { buildScoreDivergenceAnalysis, loadPrBody, parseScoreLog, toIterationScoreEventEntry } = require("./review-runner/divergence");
 const { applyQualityExecutionStatus, computeQualityExecutionStatus } = require("./review-runner/execution-evidence");
@@ -275,9 +275,11 @@ async function run() {
     : null;
   const confidenceDowngradeApplied = confidenceDowngrade.applied && !rubricGateFailure;
   const verdictPath = path.join(runDir, `review-round-${round}-verdict.json`);
+  const appliedVerdict = rubricGateFailure ? "changes_requested" : confidenceDowngradeApplied ? "pass" : verdict.verdict;
   const verdictRecord = rubricGateFailure
     ? {
       ...verdict,
+      applied_verdict: appliedVerdict,
       relay_gate: {
         status: rubricGateFailure.status,
         layer: rubricGateFailure.layer,
@@ -288,7 +290,7 @@ async function run() {
         recovery: rubricGateFailure.recovery,
       },
     }
-    : verdict;
+    : { ...verdict, applied_verdict: appliedVerdict };
   writeText(verdictPath, `${JSON.stringify(verdictRecord, null, 2)}\n`);
 
   let redispatchPath = null;
@@ -356,12 +358,8 @@ async function run() {
     });
   }
 
-  result.appliedVerdict = rubricGateFailure ? "changes_requested" : isLowConfidenceAdvisoryPass(verdict) ? "pass" : verdict.verdict;
-  result.confidenceDowngrade = confidenceDowngradeApplied ? {
-    originalVerdict: verdict.verdict,
-    appliedVerdict: "pass",
-    lowConfidenceCount: confidenceDowngrade.lowConfidenceCount,
-  } : null;
+  result.appliedVerdict = appliedVerdict;
+  result.confidenceDowngrade = confidenceDowngradeApplied ? { originalVerdict: verdict.verdict, appliedVerdict: "pass", lowConfidenceCount: confidenceDowngrade.lowConfidenceCount } : null;
   result.nextState = updatedManifest.state;
   result.redispatchPath = redispatchPath;
   result.repeatedIssueCount = repeatedIssueCount;

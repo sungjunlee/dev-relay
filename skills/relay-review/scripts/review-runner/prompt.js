@@ -2,6 +2,7 @@ const path = require("path");
 const { REVIEWER_VERDICT_JSON_SCHEMA } = require("../review-schema");
 const { readText } = require("./common");
 const { formatPriorRoundContext, loadProjectConventions } = require("./context");
+const { getAppliedVerdict } = require("./verdict");
 
 const REVIEWER_PROMPT_PATH = path.join(__dirname, "..", "..", "references", "reviewer-prompt.md");
 const TDD_ANCHOR_LINE_REGEX = /^\s*tdd_anchor:\s*\S+/m;
@@ -195,6 +196,7 @@ function withTerminalPunctuation(value) {
 function collectRejectedApproaches(verdicts) {
   const grouped = new Map();
   verdicts.forEach((verdict, index) => {
+    if (getAppliedVerdict(verdict) !== "changes_requested") return;
     const roundNum = verdicts.length - index;
     for (const issue of Array.isArray(verdict.issues) ? verdict.issues : []) {
       const factor = compactText(issue?.factor);
@@ -212,6 +214,14 @@ function collectRejectedApproaches(verdicts) {
     }
   });
   return [...grouped.values()].filter((group) => group.entries.length);
+}
+
+function formatHistoryVerdict(verdict) {
+  const appliedVerdict = getAppliedVerdict(verdict);
+  if (appliedVerdict && appliedVerdict !== verdict?.verdict) {
+    return `${verdict.verdict} (applied: ${appliedVerdict})`;
+  }
+  return verdict?.verdict || "unknown";
 }
 
 function formatRejectedApproachEntry(entry) {
@@ -245,7 +255,7 @@ function formatPriorVerdictSummary(verdicts) {
     const rubricSummary = Array.isArray(verdict.rubric_scores) && verdict.rubric_scores.length
       ? verdict.rubric_scores.map((score) => `${score.factor}: ${score.observed} (target ${score.target}, ${score.status})`).join("; ")
       : "no rubric scores";
-    return `- Round ${roundNum}: ${verdict.verdict} — ${verdict.summary} [${issueCount} issue(s), lineage: ${formatLineageCounts(lineageSummary)}; ${rubricSummary}]`;
+    return `- Round ${roundNum}: ${formatHistoryVerdict(verdict)} — ${verdict.summary} [${issueCount} issue(s), lineage: ${formatLineageCounts(lineageSummary)}; ${rubricSummary}]`;
   });
   const rejectedApproaches = formatRejectedApproaches(verdicts);
   if (!rejectedApproaches) return ["Prior review rounds:", ...lines].join("\n");
