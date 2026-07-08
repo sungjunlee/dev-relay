@@ -1085,14 +1085,15 @@ if (args[0] !== "exec") {
 }
 const marker = process.env.RELAY_TEST_EXECUTOR_MARKER;
 const childReady = marker ? marker + ".child-ready" : "";
-const child = spawn("/bin/sh", ["-c", "trap '' TERM; : > \\"$1\\"; deadline=$(($(date +%s)+$2)); while [ \\"$(date +%s)\\" -lt \\"$deadline\\" ]; do sleep 1; done", "relay-child", childReady, String(Math.ceil(relayFixtureMaxMs / 1000))], {
+const childAlive = marker ? marker + ".child-alive" : "";
+const child = spawn("/bin/sh", ["-c", "trap '' TERM INT HUP; [ -n \\"$1\\" ] && : > \\"$1\\"; deadline=$(($(date +%s)+$3)); while [ \\"$(date +%s)\\" -lt \\"$deadline\\" ]; do [ -n \\"$2\\" ] && : > \\"$2\\"; sleep 1; done", "relay-child", childReady, childAlive, String(Math.ceil(relayFixtureMaxMs / 1000))], {
   stdio: "ignore",
 });
 child.unref();
 if (marker) {
   const publishMarker = () => {
     if (fs.existsSync(childReady)) {
-      fs.writeFileSync(marker, JSON.stringify({ pid: process.pid, pgid: process.pid, childPid: child.pid }), "utf-8");
+      fs.writeFileSync(marker, JSON.stringify({ pid: process.pid, pgid: process.pid, childPid: child.pid, childAlive }), "utf-8");
       return;
     }
     setTimeout(publishMarker, 25);
@@ -1993,7 +1994,7 @@ test("dispatch SIGINT does not treat leader exit as process-group termination wh
   const markerPath = path.join(os.tmpdir(), `relay-dispatch-leader-exit-${process.pid}-${Date.now()}.json`);
   registerSignalFixtureCleanup(t, {
     pgid: () => marker?.pgid || null,
-    paths: () => [binDir, markerPath, `${markerPath}.terminated`, `${markerPath}.child-ready`],
+    paths: () => [binDir, markerPath, `${markerPath}.terminated`, `${markerPath}.child-ready`, `${markerPath}.child-alive`],
   });
   writeLeaderExitDescendantCodex(binDir);
   const env = {
@@ -2020,6 +2021,10 @@ test("dispatch SIGINT does not treat leader exit as process-group termination wh
       if (!fs.existsSync(markerPath)) return null;
       return JSON.parse(fs.readFileSync(markerPath, "utf-8"));
     }, { timeoutMs: 30000, message: "fake executor marker" });
+    await waitFor(() => marker.childAlive && fs.existsSync(marker.childAlive), {
+      timeoutMs: 30000,
+      message: "fake executor descendant liveness marker",
+    });
     const manifestPath = await waitFor(() => listManifestPaths(repoRoot)[0], {
       timeoutMs: 30000,
       message: "dispatch manifest path",
