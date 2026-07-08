@@ -1945,6 +1945,11 @@ async function mergeFleetPhase({ repoRoot, fleetId, options }) {
     || STATES.MERGING === current.fleet_state;
   if (!shouldRunMergeQueue) return null;
 
+  if (STATES.DISPATCHING === current.fleet_state) {
+    updateFleetManifest(repoRoot, fleetId, (fleet) => updateFleetState(fleet, STATES.DISPATCHED));
+    transitionFleetToReviewing(repoRoot, fleetId);
+  }
+
   if (STATES.DISPATCHED === current.fleet_state) {
     transitionFleetToReviewing(repoRoot, fleetId);
   }
@@ -2090,7 +2095,7 @@ async function runFleet(options) {
       isInterrupted: () => interrupted,
     });
 
-    if (interrupted || (!manifestExists && !dispatchResult.ok)) {
+    if (interrupted) {
       return {
         ...dispatchResult,
         ok: false,

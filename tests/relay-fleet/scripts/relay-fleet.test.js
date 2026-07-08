@@ -1341,6 +1341,70 @@ test("relay-fleet keeps manifest consistent when child 3 of 5 fails before manif
   assert.equal(fleet.fleet_state, FLEET_STATES.DISPATCHING);
 });
 
+test("relay-fleet continues ready siblings after an initial partial fan-out failure", () => {
+  const { relayHome, repoRoot } = setupRepo("relay-fleet-partial-drive-");
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "fleet-partial-drive-fake-"));
+  const dispatchScript = writeFakeDispatchScript(tmpDir);
+  const reviewScript = writeFakeReviewScript(tmpDir);
+  const finalizeScript = writeFakeFinalizeScript(tmpDir);
+  const dispatchConfig = path.join(tmpDir, "dispatch-config.json");
+  const reviewLog = path.join(tmpDir, "review.log");
+  const finalizeLog = path.join(tmpDir, "finalize.log");
+  const readyRunId = "issue-590-20260516010101000-a1b2c3d4";
+  const leaves = [
+    makeLeaf(repoRoot, 1, {
+      issue_number: 590,
+      branch: "issue-590-leaf-ready",
+      leaf_ref: "leaf-ready",
+      leaf_id: "leaf-ready",
+    }),
+    makeLeaf(repoRoot, 2, {
+      issue_number: 591,
+      branch: "issue-591-leaf-blocked",
+      leaf_ref: "leaf-blocked",
+      leaf_id: "leaf-blocked",
+    }),
+  ];
+  writeJson(dispatchConfig, {
+    [leaves[0].branch]: { run_id: readyRunId },
+    [leaves[1].branch]: { fail_before_manifest: true },
+  });
+  const leavesFile = writeLeavesFile(repoRoot, leaves);
+
+  const result = runFleet([
+    "--repo", repoRoot,
+    "--fleet-id", "fleet-partial-drive",
+    "--leaves-file", leavesFile,
+    "--dispatch-script", dispatchScript,
+    "--review-script", reviewScript,
+    "--finalize-script", finalizeScript,
+    "--parallel", "2",
+    "--json",
+  ], {
+    relayHome,
+    env: {
+      FAKE_DISPATCH_CONFIG: dispatchConfig,
+      FAKE_REVIEW_LOG: reviewLog,
+      FAKE_FINALIZE_LOG: finalizeLog,
+    },
+  });
+
+  assert.equal(result.status, 1, `${result.stderr}\n${result.stdout}`);
+  const payload = JSON.parse(result.stdout);
+  assert.equal(readManifest(getManifestPath(repoRoot, readyRunId)).data.state, RUN_STATES.MERGED);
+  assert.deepEqual(readJsonLines(reviewLog).map((entry) => entry.runId), [readyRunId]);
+  assert.deepEqual(readJsonLines(finalizeLog).map((entry) => entry.runId), [readyRunId]);
+  assert.equal(payload.summary.fleet_state, FLEET_STATES.MERGING);
+  assert.equal(payload.summary.by_run_state[RUN_STATES.MERGED], 1);
+  assert.equal(
+    payload.operator_attention.some((item) => {
+      return item.leaf_ref === "leaf-blocked"
+        && item.reason === DISPATCH_STATUS.DISPATCH_FAILED_PRE_MANIFEST;
+    }),
+    true
+  );
+});
+
 test("relay-fleet resume re-adopts orphan child via fleet_id back-pointer", () => {
   const { relayHome, repoRoot } = setupRepo("relay-fleet-orphan-");
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "fleet-fake-"));
