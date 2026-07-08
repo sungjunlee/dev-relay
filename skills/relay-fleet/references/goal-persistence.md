@@ -5,7 +5,8 @@
 `relay-fleet` is deliberately daemonless. There is no background coordinator,
 heartbeat, or watcher chain; a fleet progresses only while an operator is
 actively running the foreground commands. If that session dies, the fleet pauses
-until `--resume` reconciles child manifests and continues recoverable work.
+until the same drive command is re-run to reconcile child manifests and continue
+recoverable work.
 
 For long fleets, the operator can use the host harness `/goal` feature to keep a
 single orchestrating session driving the fleet to completion. `/goal` is a slash
@@ -35,21 +36,22 @@ Done means that JSON output contains `"fleet_state": "closed"` and every child i
 
 ## Operating loop
 
-The loop is safe because fleet commands are crash-only and idempotent. Re-running
-them reconciles persisted state instead of assuming the last session completed:
-`--resume` re-adopts children and skips live subprocesses, `--review` advances
-only children that still need review/publication/redispatch work, and
-`merge-queue.js` attempts ready children serially.
+The loop is safe because the fleet drive command is crash-only and idempotent.
+Re-running it reconciles persisted state instead of assuming the last session
+completed: it re-adopts children, skips live subprocesses, advances only children
+that still need review/publication/redispatch work, and attempts ready children
+serially through the merge queue.
 
-On each orchestrator turn, re-run the same foreground loop with the same fleet
-id:
+On each orchestrator turn, re-run the same foreground drive command with the
+same fleet id and, when available, the same leaves file:
 
 ```bash
-node skills/relay-fleet/scripts/relay-fleet.js --repo . --fleet-id <fleet-id> --resume
-node skills/relay-fleet/scripts/relay-fleet.js --repo . --fleet-id <fleet-id> --review
-node skills/relay-fleet/scripts/merge-queue.js --repo . --fleet-id <fleet-id>
+node skills/relay-fleet/scripts/relay-fleet.js --repo . --fleet-id <fleet-id> --leaves-file <leaves-file>
 node skills/relay-fleet/scripts/relay-fleet.js --repo . --fleet-id <fleet-id> --status --json
 ```
+
+If the leaves file is unavailable but the fleet manifest already exists, omit
+`--leaves-file`; the command continues from persisted fleet state when possible.
 
 The final `--status --json` command is load-bearing. Its output must appear in
 the conversation transcript so the separate evaluator can decide whether the
@@ -60,6 +62,7 @@ condition is done.
 The same pattern works one level up for sprint execution. The condition's end
 state becomes "every Plan item in the active sprint file is `[x]`", and the
 check command must print either that sprint file or a sprint-state JSON summary
-into the conversation transcript. The loop can fan out, resume, review, merge,
-and refresh fleet status underneath it, but the evaluator-friendly proof remains
-the transcript-visible sprint check showing all Plan items complete.
+into the conversation transcript. The single drive command can fan out, resume,
+review, merge, and refresh fleet status underneath it, but the evaluator-friendly
+proof remains the transcript-visible sprint check showing all Plan items
+complete.

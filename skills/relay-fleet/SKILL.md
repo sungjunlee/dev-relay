@@ -1,6 +1,6 @@
 ---
 name: relay-fleet
-description: Fan out already-planned relay leaves into parallel child dispatches, review child runs, merge ready children serially, resume crashed fleet dispatch, and print fleet status.
+description: Drive already-planned relay leaves through fan-out, review, serial merge, crash recovery, and fleet status.
 compatibility: Requires git, gh CLI, Node.js 18+, and sibling relay-dispatch/relay-merge skills.
 argument-hint: --fleet-id <id> --leaves-file <path>
 metadata:
@@ -16,10 +16,9 @@ metadata:
 
 ## Use when
 
-- Fanning out already planned relay leaves into parallel child dispatches
-- Driving foreground internal review, publication, post-publication review, and redispatch loops for children in a dispatched fleet
-- Merging `ready_to_merge` fleet children one at a time after review orchestration
-- Resuming a crashed fleet dispatch or review loop from persisted child/fleet state
+- Driving already planned relay leaves through fan-out, review/publication/redispatch, serial merge, and close
+- Re-running the same fleet command after a crashed or killed session
+- Continuing an existing fleet from persisted child/fleet state
 - Printing read-only aggregate status for a fleet
 
 ## Do not use when
@@ -29,7 +28,7 @@ metadata:
 - Dispatching a single task or run — use `relay-dispatch`
 - Reviewing one standalone child PR — use `relay-review`
 
-Run Phase 1 multi-leaf orchestration after `relay-ready` and `relay-plan` have already produced leaf artifacts. It only fans out prepared leaf contracts to `relay-dispatch`, records crash-safe fleet progress, and reports aggregate status.
+Run multi-leaf orchestration after `relay-ready` and `relay-plan` have already produced leaf artifacts. The default command is the full crash-only drive: fan-out -> review/publication/redispatch loop -> serial merge queue -> `closed` when every child is terminal.
 
 Design rationale, rejected alternatives, non-goals, and the Phase 2/3 roadmap: [references/design.md](references/design.md).
 
@@ -61,32 +60,6 @@ node "${RELAY_SKILL_ROOT:-skills}/relay-fleet/scripts/relay-fleet.js" \
   --parallel 4
 ```
 
-Resume after a terminal/session crash:
-
-```bash
-node "${RELAY_SKILL_ROOT:-skills}/relay-fleet/scripts/relay-fleet.js" \
-  --repo . \
-  --fleet-id fleet-481 \
-  --resume
-```
-
-Drive review for each child currently in `internal_review_pending`, `publish_pending`, `review_pending`, or `changes_requested` until it reaches `ready_to_merge` or `escalated`:
-
-```bash
-node "${RELAY_SKILL_ROOT:-skills}/relay-fleet/scripts/relay-fleet.js" \
-  --repo . \
-  --fleet-id fleet-481 \
-  --review
-```
-
-Merge ready children serially:
-
-```bash
-node "${RELAY_SKILL_ROOT:-skills}/relay-fleet/scripts/merge-queue.js" \
-  --repo . \
-  --fleet-id fleet-481
-```
-
 Read-only aggregate status:
 
 ```bash
@@ -95,6 +68,8 @@ node "${RELAY_SKILL_ROOT:-skills}/relay-fleet/scripts/relay-fleet.js" \
   --fleet-id fleet-481 \
   --status
 ```
+
+Deprecated primary entry points, to be sunset within one release: `relay-fleet.js --resume` is accepted as an alias for re-running the default drive; `relay-fleet.js --review` and `merge-queue.js` remain internal re-entry/debug paths but should not be the operator loop.
 
 Dry-run validates the leaf file and invokes child `dispatch.js --dry-run` for each leaf without writing a fleet manifest:
 
@@ -109,17 +84,19 @@ node "${RELAY_SKILL_ROOT:-skills}/relay-fleet/scripts/relay-fleet.js" \
 
 ## Behavior
 
-- The fleet script invokes `skills/relay-dispatch/scripts/dispatch.js` as a subprocess once per leaf and always passes `--fleet-id`.
-- `--review` invokes `skills/relay-review/scripts/review-runner.js` as foreground subprocesses for children in `internal_review_pending` or `review_pending`. Internal PASS advances to `publish_pending`; existing `publish_pending` children are published with `skills/relay-dispatch/scripts/publish-run.js`. `changes_requested` invokes `dispatch.js --manifest <child-manifest>` and re-enters the loop until the child reaches `ready_to_merge` or `escalated`.
-- `merge-queue.js` invokes `skills/relay-merge/scripts/finalize-run.js` as a subprocess for one `ready_to_merge` child at a time. When a child merge fails, it marks that child `merge_blocked` and continues with the next ready child.
+- The default command invokes `skills/relay-dispatch/scripts/dispatch.js` as a subprocess once per undispatched leaf and always passes `--fleet-id`.
+- Existing fleet manifests are continued idempotently. With the same `--leaves-file`, already-dispatched children are not re-dispatched; with no `--leaves-file`, persisted fleet leaves are reused when dispatch recovery needs them.
+- The drive invokes `skills/relay-review/scripts/review-runner.js` for children in `internal_review_pending` or `review_pending`, publishes `publish_pending` children, and redispatches `changes_requested` children until each reaches `ready_to_merge` or `escalated`.
+- The drive then invokes the serial merge queue, which calls `skills/relay-merge/scripts/finalize-run.js` for one `ready_to_merge` child at a time. When a child merge fails, it marks that child `merge_blocked` and continues with the next ready child.
+- The fleet moves to `closed` only when every child is terminal: `merged`, `closed`, or `escalated`. Escalated children close the fleet with a nonzero exit and operator-attention summary; `merge_blocked` keeps the fleet open in `merging`.
 - Each child dispatch owns worktree creation, in-flight run checks, executor invocation, and child run manifest writes.
 - Fleet issue locks are checked before each child spawn; `dispatch.js --fleet-id` performs the durable lock during the actual child run.
-- `--resume` reconciles both directions: it re-adopts child run manifests whose `fleet_id` points back to this fleet, marks no-manifest interrupted children as `dispatch_failed_pre_manifest`, skips still-running child subprocesses, and re-enters the review/publication/redispatch loop for children in `internal_review_pending`, `publish_pending`, `review_pending`, or `changes_requested`.
+- Re-runs reconcile both directions: they re-adopt child run manifests whose `fleet_id` points back to this fleet, mark no-manifest interrupted children as `dispatch_failed_pre_manifest`, skip still-running child subprocesses, and continue recoverable work.
 - `--status` is read-only and uses the relay-dispatch fleet summary derivation rules.
 
 ## SPOF
 
-There is intentionally no daemon. A fleet makes progress only while `relay-fleet` is actively running. If the session dies, the fleet pauses; re-run with `--resume` to reconcile child manifests, skip still-running children, and continue recoverable pre-manifest failures.
+There is intentionally no daemon. A fleet makes progress only while `relay-fleet` is actively running. Pause by killing the process. Resume by re-running the same primary command with the same `--fleet-id` and, when available, the same `--leaves-file`; the command reconciles child manifests, skips still-running children, and continues recoverable pre-manifest failures.
 
 ## /goal Persistence
 

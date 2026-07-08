@@ -83,7 +83,7 @@ function parseArgs(argv) {
 
 function transitionFleetToMerging(repoRoot, fleetId, dryRun = false) {
   const current = readFleetManifest(repoRoot, fleetId).data;
-  if (current.fleet_state === FLEET_STATES.MERGING) return current;
+  if (FLEET_STATES.MERGING === current.fleet_state) return current;
   if (dryRun) return { ...current, fleet_state: FLEET_STATES.MERGING };
   return updateFleetManifest(repoRoot, fleetId, (fleet) => updateFleetState(fleet, FLEET_STATES.MERGING)).data;
 }

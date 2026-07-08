@@ -6,6 +6,11 @@
 > the rationale, rejected alternatives, non-goals, and phase boundaries. The
 > authoritative per-phase contract lives in the GitHub issues; this doc explains
 > *why*.
+>
+> **Surface update (#842):** the phases are now internal implementation stages.
+> The primary `relay-fleet.js --repo <r> --fleet-id <id> --leaves-file <path>`
+> invocation drives fan-out, review/publication/redispatch, serial merge, and
+> close as one idempotent crash-only command.
 
 ## Problem
 
@@ -17,7 +22,10 @@ even though dispatch is the long pole and the work is independent.
 
 Add a thin fleet layer above individual relay runs that fans out dispatch across
 N runs in parallel — WITHOUT becoming a daemon or a service, and WITHOUT
-redefining the relay cycle. Target scale: 2-5 concurrent runs, not 20-30.
+redefining child relay run contracts. Target scale: 2-5 concurrent runs, not
+20-30. A fleet invocation is explicit consent to complete the whole fleet
+lifecycle, including serial merge; this intentionally differs from `/relay`,
+where a single run stops at `ready_to_merge` until the operator invokes merge.
 
 ## The unit: meta-UNIT, not meta-PR
 
@@ -39,6 +47,11 @@ Re-sequenced so each phase ships with zero blank states:
 - **Phase 2** — review orchestration loop (run relay-review per child until each
   reaches `ready_to_merge`).
 - **Phase 3** — serialized merge queue.
+
+Issue #842 collapsed the operator surface after those phases existed: the
+default command now drives all three phases in order. `--review` and
+`merge-queue.js` remain deprecated re-entry/debug paths for one release; the
+operator loop is one rerunnable drive command.
 
 ## Non-goals
 
@@ -117,8 +130,8 @@ child run manifest in `~/.relay/runs/` — the fleet manifest never duplicates i
   (skeleton creation in `store.js`), not bolted on later. Splitting schema (A)
   from wiring (B) would leave the crash-safe contract half-built. (Codex #4.)
 - **Crash-safe ordering**: child run manifest carries `fleet_id` at first write;
-  resume reconciles bidirectionally — `relay-fleet --fleet-id <id> --resume`
-  scans `~/.relay/runs/` for orphan children pointing back at this fleet AND
+  re-running the same fleet command reconciles bidirectionally — it scans
+  `~/.relay/runs/` for orphan children pointing back at this fleet AND
   cross-checks `children[]` for pre-manifest failures.
 - **Fleet-level issue lock / preflight reservation.** The per-child #408 check
   reads the manifest list; two fleets dispatching the same issue near-
@@ -132,9 +145,8 @@ child run manifest in `~/.relay/runs/` — the fleet manifest never duplicates i
 
 `relay-fleet --fleet-id <id> --status` computes and prints the derived summary
 (per §1.1): per-child state, dispatch failures, escalations, what needs operator
-attention. Read-only. This is the Phase 1 substitute for review/merge
-orchestration — the operator sees the picture and drives review/merge by hand
-with existing per-run tools until Phase 2/3 land.
+attention. Read-only. It remains the transcript-visible proof command for
+daemonless operation, but it is no longer the primary operator loop.
 
 ## Phase 2: review orchestration loop (scoped 2026-05-15)
 
@@ -146,9 +158,9 @@ over children currently in `review_pending`. It invokes `review-runner.js` as
 subprocesses, skips terminal children, and fails closed if a review subprocess
 exits without advancing the child manifest. Sub-PR B extends that path into the
 full Phase 2 loop: `changes_requested` triggers `dispatch.js --manifest`, then
-review re-runs until the child reaches `ready_to_merge` or `escalated`. `--resume`
-uses the same loop after reconciling child manifests and still-running subprocess
-PID guards.
+review re-runs until the child reaches `ready_to_merge` or `escalated`. The
+default drive now uses that same loop after reconciling child manifests and
+still-running subprocess PID guards; `--review` is a deprecated re-entry point.
 
 > **Status (2026-05-15):** Phase 2 (#479) scoped without waiting for a Phase 1
 > dogfood gate. The original "scoped from Phase 1 dogfood" framing assumed
@@ -177,6 +189,11 @@ original plan missed:
   the next ready child, and leaves recovery to the operator or a later explicit
   automation pass.
   (Codex #8.)
+
+As of the #842 surface collapse, this queue is invoked by the default fleet
+drive. A `merge_blocked` child keeps the fleet open in `merging` while the queue
+continues past it; a later rerun after operator recovery resumes the queue and
+closes the fleet once every child is `merged`, `closed`, or `escalated`.
 
 ## Resolved questions
 
