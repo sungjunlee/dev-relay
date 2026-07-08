@@ -37,6 +37,7 @@ const SCRIPT = path.join(__dirname, "..", "..", "..", "skills", "relay-dispatch"
 const WORKTREE_RUNTIME_FIXTURE_DIR = path.join(__dirname, "..", "fixtures", "worktree-runtime");
 const CANONICAL_DRY_RUN_ROOT = "/tmp/issue187-fixtures";
 const CANONICAL_DRY_RUN_SLUG = "repo-c079affd";
+const SELF_REAPING_FIXTURE_MAX_MS = 120_000;
 
 function setupRepo() {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-dispatch-"));
@@ -924,17 +925,43 @@ function isPgidAlive(pgid) {
   }
 }
 
-function killPgid(pgid) {
+function killPgid(pgid, signal = "SIGTERM") {
   if (!pgid) return;
   try {
-    process.kill(-Number(pgid), "SIGTERM");
+    process.kill(-Number(pgid), signal);
   } catch {}
 }
 
-async function waitForPgidDead(pgid) {
+async function waitForPgidDead(pgid, options = {}) {
   await waitFor(() => !isPgidAlive(pgid), {
-    timeoutMs: 5000,
-    message: `process group ${pgid} to exit`,
+    timeoutMs: options.timeoutMs || 5000,
+    message: options.message || `process group ${pgid} to exit`,
+  });
+}
+
+function selfReapingFixturePrelude() {
+  return `
+const relayFixtureMaxMs = Number(process.env.RELAY_TEST_FIXTURE_MAX_MS || "${SELF_REAPING_FIXTURE_MAX_MS}");
+const relayFixtureReaper = setTimeout(() => process.exit(124), relayFixtureMaxMs);
+relayFixtureReaper.unref();
+`;
+}
+
+function registerSignalFixtureCleanup(t, fixture) {
+  if (!t || typeof t.after !== "function") return;
+  t.after(async () => {
+    const pgid = fixture.pgid ? fixture.pgid() : null;
+    if (pgid && isPgidAlive(pgid)) {
+      killPgid(pgid, "SIGKILL");
+      try {
+        await waitForPgidDead(pgid, { timeoutMs: 5000 });
+      } catch {}
+    }
+    for (const cleanupPath of fixture.paths ? fixture.paths() : []) {
+      try {
+        fs.rmSync(cleanupPath, { recursive: true, force: true });
+      } catch {}
+    }
   });
 }
 
@@ -943,6 +970,7 @@ function writeSleepingCodex(binDir) {
   const codexPath = path.join(binDir, "codex");
   fs.writeFileSync(codexPath, `#!/usr/bin/env node
 const fs = require("fs");
+${selfReapingFixturePrelude()}
 const args = process.argv.slice(2);
 if (args[0] === "--version") {
   process.stdout.write("codex-fake\\n");
@@ -1045,6 +1073,7 @@ function writeLeaderExitDescendantCodex(binDir) {
   fs.writeFileSync(codexPath, `#!/usr/bin/env node
 const fs = require("fs");
 const { spawn } = require("child_process");
+${selfReapingFixturePrelude()}
 const args = process.argv.slice(2);
 if (args[0] === "--version") {
   process.stdout.write("codex-fake\\n");
@@ -1056,7 +1085,7 @@ if (args[0] !== "exec") {
 }
 const marker = process.env.RELAY_TEST_EXECUTOR_MARKER;
 const childReady = marker ? marker + ".child-ready" : "";
-const child = spawn("/bin/sh", ["-c", "trap '' TERM; : > \\"$1\\"; while :; do sleep 1; done", "relay-child", childReady], {
+const child = spawn("/bin/sh", ["-c", "trap '' TERM; : > \\"$1\\"; deadline=$(($(date +%s)+$2)); while [ \\"$(date +%s)\\" -lt \\"$deadline\\" ]; do sleep 1; done", "relay-child", childReady, String(Math.ceil(relayFixtureMaxMs / 1000))], {
   stdio: "ignore",
 });
 child.unref();
@@ -1089,6 +1118,7 @@ function writeLeaderExitBackgroundCodex(binDir) {
 const fs = require("fs");
 const path = require("path");
 const { spawn } = require("child_process");
+${selfReapingFixturePrelude()}
 const args = process.argv.slice(2);
 if (args[0] === "--version") {
   process.stdout.write("codex-fake\\n");
@@ -1102,7 +1132,7 @@ const output = args[args.indexOf("-o") + 1];
 const leasePath = path.join(path.dirname(output), "lease.json");
 const marker = process.env.RELAY_TEST_EXECUTOR_MARKER;
 const childReady = marker ? marker + ".child-ready" : "";
-const child = spawn("/bin/sh", ["-c", ": > \\"$1\\"; while :; do sleep 1; done", "relay-child", childReady], {
+const child = spawn("/bin/sh", ["-c", ": > \\"$1\\"; deadline=$(($(date +%s)+$2)); while [ \\"$(date +%s)\\" -lt \\"$deadline\\" ]; do sleep 1; done", "relay-child", childReady, String(Math.ceil(relayFixtureMaxMs / 1000))], {
   stdio: "ignore",
 });
 child.unref();
@@ -1214,11 +1244,22 @@ test("dispatch --detach returns a launch receipt while detached supervisor compl
   assert.equal(reconcile.state, STATES.REVIEW_PENDING);
 });
 
-test("dispatch --detach returns a receipt during slow pre-executor setup while supervisor continues", async () => {
+test("dispatch --detach returns a receipt during slow pre-executor setup while supervisor continues", async (t) => {
   const { repoRoot, relayHome } = setupRepo();
   process.env.RELAY_HOME = relayHome;
   const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-detach-slow-setup-bin-"));
   const markerPath = path.join(os.tmpdir(), `relay-dispatch-detach-slow-setup-${process.pid}-${Date.now()}.json`);
+  registerSignalFixtureCleanup(t, {
+    pgid: () => {
+      if (!fs.existsSync(markerPath)) return null;
+      try {
+        return JSON.parse(fs.readFileSync(markerPath, "utf-8")).pgid || null;
+      } catch {
+        return null;
+      }
+    },
+    paths: () => [binDir, markerPath, `${markerPath}.terminated`],
+  });
   writeSleepingCodex(binDir);
   const env = {
     ...process.env,
@@ -1832,11 +1873,16 @@ test("dispatch resume clears stale structured result before entering dispatched 
   }
 });
 
-async function runInterruptedDispatchSignalTest(signalName) {
+async function runInterruptedDispatchSignalTest(t, signalName) {
   const { repoRoot, relayHome } = setupRepo();
   process.env.RELAY_HOME = relayHome;
   const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-sleep-bin-"));
   const markerPath = path.join(os.tmpdir(), `relay-dispatch-sleep-${process.pid}-${Date.now()}-${signalName}.json`);
+  const cleanup = {
+    pgid: () => interruptedEvent?.executor_pgid || marker?.pgid || null,
+    paths: () => [binDir, markerPath, `${markerPath}.terminated`],
+  };
+  registerSignalFixtureCleanup(t, cleanup);
   writeSleepingCodex(binDir);
   const env = {
     ...process.env,
@@ -1932,19 +1978,23 @@ async function runInterruptedDispatchSignalTest(signalName) {
   }
 }
 
-test("dispatch SIGTERM preserves executor and worktree while journaling dispatch_interrupted", async () => {
-  await runInterruptedDispatchSignalTest("SIGTERM");
+test("dispatch SIGTERM preserves executor and worktree while journaling dispatch_interrupted", async (t) => {
+  await runInterruptedDispatchSignalTest(t, "SIGTERM");
 });
 
-test("dispatch SIGINT terminates executor group and preserves worktree while journaling dispatch_interrupted", async () => {
-  await runInterruptedDispatchSignalTest("SIGINT");
+test("dispatch SIGINT terminates executor group and preserves worktree while journaling dispatch_interrupted", async (t) => {
+  await runInterruptedDispatchSignalTest(t, "SIGINT");
 });
 
-test("dispatch SIGINT does not treat leader exit as process-group termination while a descendant remains", async () => {
+test("dispatch SIGINT does not treat leader exit as process-group termination while a descendant remains", async (t) => {
   const { repoRoot, relayHome } = setupRepo();
   process.env.RELAY_HOME = relayHome;
   const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-leader-exit-bin-"));
   const markerPath = path.join(os.tmpdir(), `relay-dispatch-leader-exit-${process.pid}-${Date.now()}.json`);
+  registerSignalFixtureCleanup(t, {
+    pgid: () => marker?.pgid || null,
+    paths: () => [binDir, markerPath, `${markerPath}.terminated`, `${markerPath}.child-ready`],
+  });
   writeLeaderExitDescendantCodex(binDir);
   const env = {
     ...process.env,
@@ -2002,12 +2052,16 @@ test("dispatch SIGINT does not treat leader exit as process-group termination wh
   }
 });
 
-test("dispatch interruption immediately after worktree creation preserves delayed publication on resume", async () => {
+test("dispatch interruption immediately after worktree creation preserves delayed publication on resume", async (t) => {
   const { repoRoot, relayHome } = setupRepo();
   process.env.RELAY_HOME = relayHome;
   const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-after-worktree-bin-"));
   const markerPath = path.join(os.tmpdir(), `relay-dispatch-after-worktree-${process.pid}-${Date.now()}.json`);
   const pauseMarkerPath = path.join(os.tmpdir(), `relay-dispatch-after-worktree-pause-${process.pid}-${Date.now()}.json`);
+  registerSignalFixtureCleanup(t, {
+    pgid: () => null,
+    paths: () => [binDir, markerPath, `${markerPath}.terminated`, pauseMarkerPath],
+  });
   writeSleepingCodex(binDir);
   const env = {
     ...process.env,
@@ -2115,11 +2169,15 @@ test("dispatch interruption immediately after worktree creation preserves delaye
   }
 });
 
-test("dispatch handles interruption before executor spawn without removing the worktree", async () => {
+test("dispatch handles interruption before executor spawn without removing the worktree", async (t) => {
   const { repoRoot, relayHome } = setupRepo();
   process.env.RELAY_HOME = relayHome;
   const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-pre-spawn-bin-"));
   const markerPath = path.join(os.tmpdir(), `relay-dispatch-pre-spawn-${process.pid}-${Date.now()}.json`);
+  registerSignalFixtureCleanup(t, {
+    pgid: () => null,
+    paths: () => [binDir, markerPath, `${markerPath}.terminated`],
+  });
   writeSleepingCodex(binDir);
   const env = {
     ...process.env,
@@ -2177,11 +2235,15 @@ test("dispatch handles interruption before executor spawn without removing the w
   }
 });
 
-test("dispatch exits and preserves worktree when interruption journaling fails", async () => {
+test("dispatch exits and preserves worktree when interruption journaling fails", async (t) => {
   const { repoRoot, relayHome } = setupRepo();
   process.env.RELAY_HOME = relayHome;
   const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-journal-fail-bin-"));
   const markerPath = path.join(os.tmpdir(), `relay-dispatch-journal-fail-${process.pid}-${Date.now()}.json`);
+  registerSignalFixtureCleanup(t, {
+    pgid: () => marker?.pgid || null,
+    paths: () => [binDir, markerPath, `${markerPath}.terminated`],
+  });
   writeSleepingCodex(binDir);
   const env = {
     ...process.env,
@@ -4491,13 +4553,17 @@ test("dispatch creates a run lease while executor runs and removes it on normal 
   assert.equal(fs.existsSync(marker.leasePath), false);
 });
 
-test("dispatch keeps lease and leaves run dispatched when executor leader exits with a live process group", async () => {
+test("dispatch keeps lease and leaves run dispatched when executor leader exits with a live process group", async (t) => {
   if (process.platform === "win32") return;
 
   const { repoRoot, relayHome } = setupRepo();
   process.env.RELAY_HOME = relayHome;
   const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bg-bin-"));
   const markerPath = path.join(os.tmpdir(), `relay-dispatch-bg-${process.pid}-${Date.now()}.json`);
+  registerSignalFixtureCleanup(t, {
+    pgid: () => marker?.pgid || null,
+    paths: () => [binDir, markerPath, `${markerPath}.child-ready`],
+  });
   writeLeaderExitBackgroundCodex(binDir);
   const env = {
     ...process.env,
@@ -4838,7 +4904,7 @@ setTimeout(() => {}, 60000);
   assert.equal(result.runState, STATES.REVIEW_PENDING);
   assert.equal(result.prNumber, 123);
   assert.equal(result.prCreatedByUs, true);
-  assert.match(result.error, /timed out/);
+  assert.match(result.error, /total_timeout|timed out/);
 
   const remoteBranch = execFileSync("git", ["ls-remote", "--heads", "origin", "issue-timeout-work"], {
     cwd: repoRoot,
@@ -4880,7 +4946,7 @@ setTimeout(() => {}, 60000);
   const result = JSON.parse(proc.stdout);
   assert.equal(result.status, "failed");
   assert.equal(result.runState, STATES.ESCALATED);
-  assert.match(result.error, /timed out/);
+  assert.match(result.error, /total_timeout|timed out/);
 });
 
 test("pushAndOpenPR uses the injected execFile seam for happy-path publication", async () => {
@@ -5445,7 +5511,7 @@ test("dispatch escalates partial timed-out work when the executor omits the stru
   const result = JSON.parse(proc.stdout);
   assert.equal(result.status, "failed");
   assert.equal(result.runState, STATES.ESCALATED);
-  assert.match(result.error, /timed out/);
+  assert.match(result.error, /total_timeout|timed out/);
   assert.equal(result.commits, "");
   assert.match(result.uncommitted, /README\.md/);
   assert.match(result.uncommittedDiff, /README\.md/);
