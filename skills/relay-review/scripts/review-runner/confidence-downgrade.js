@@ -12,7 +12,7 @@ const {
 
 function isLaneDrivenDemotion(verdict) {
   const metadata = getReviewAssuranceMetadata(verdict);
-  return metadata?.reason === "lane_required_findings" || metadata?.reason === "lane_demotion_cap";
+  return metadata?.laneDemotion === true || metadata?.laneCapEscalated === true;
 }
 
 function applyPassEquivalentGates(verdict, {

@@ -89,24 +89,25 @@ function buildRequiredFindingsIssue(result, hardenedAssurance) {
   );
 }
 
-function applyLaneRequiredFindingDemotion(verdict, result, {
-  hardenedAssurance,
+function applyLaneDrivenDemotion(verdict, issue, {
+  capBody,
   laneDemotionCount = 0,
+  reason,
 }) {
-  const issue = buildRequiredFindingsIssue(result, hardenedAssurance);
   const nextCount = Number(laneDemotionCount || 0) + 1;
   if (Number(laneDemotionCount || 0) >= LANE_DEMOTION_CAP) {
     return escalateReviewAssurance(
       verdict,
       buildAssuranceIssue(
         "Review lane demotion cap reached",
-        `Advisory lane ${laneLabel(result)} would demote this pass, but lane-driven demotion is capped at at most ${LANE_DEMOTION_CAP} time(s) per run. Owner decision required.`
+        `${capBody || issue.body} Lane-driven demotion reason: ${issue.title}. Lane-driven demotion is capped at at most ${LANE_DEMOTION_CAP} time(s) per run. Owner decision required.`
       ),
       {
         laneCapEscalated: true,
         laneDemotion: false,
         laneDemotionCap: LANE_DEMOTION_CAP,
         laneDemotionCount,
+        laneDemotionReason: reason,
         reason: "lane_demotion_cap",
       }
     );
@@ -116,6 +117,18 @@ function applyLaneRequiredFindingDemotion(verdict, result, {
     laneDemotionCap: LANE_DEMOTION_CAP,
     laneDemotionCount: nextCount,
     laneDemotionIncrement: 1,
+    reason,
+  });
+}
+
+function applyLaneRequiredFindingDemotion(verdict, result, {
+  hardenedAssurance,
+  laneDemotionCount = 0,
+}) {
+  const issue = buildRequiredFindingsIssue(result, hardenedAssurance);
+  return applyLaneDrivenDemotion(verdict, issue, {
+    capBody: `Advisory lane ${laneLabel(result)} would demote this pass because it reported required findings.`,
+    laneDemotionCount,
     reason: "lane_required_findings",
   });
 }
@@ -144,10 +157,15 @@ function applyReviewAssurancePolicy(verdict, {
     : hardenedAssurance ? 1 : 0;
 
   if (hardenedAssurance && results.length < requiredAdvisoryCount) {
-    return failReviewAssurance(verdict, buildAssuranceIssue(
+    const issue = buildAssuranceIssue(
       "Missing hardened advisory review",
       "policy.review_assurance=hardened requires an advisory review artifact for the reviewed round."
-    ));
+    );
+    return applyLaneDrivenDemotion(verdict, issue, {
+      capBody: "A required hardened advisory lane would demote this pass because its advisory evidence is missing.",
+      laneDemotionCount,
+      reason: "lane_missing_evidence",
+    });
   }
 
   for (const result of results) {
@@ -156,10 +174,15 @@ function applyReviewAssurancePolicy(verdict, {
 
     if (result.status !== "success") {
       if (!hardenedAssurance) continue;
-      return failReviewAssurance(verdict, buildAssuranceIssue(
+      const issue = buildAssuranceIssue(
         "Hardened advisory review did not complete successfully",
         `Advisory lane ${laneLabel(result)} status was ${result.status}: ${result.failureReason || "no failure reason recorded"}.`
-      ));
+      );
+      return applyLaneDrivenDemotion(verdict, issue, {
+        capBody: `Advisory lane ${laneLabel(result)} would demote this pass because it did not complete successfully.`,
+        laneDemotionCount,
+        reason: "lane_run_failure",
+      });
     }
 
     if (Number(result.required_count || 0) > 0) {

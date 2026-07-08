@@ -345,6 +345,7 @@ async function run() {
       confidence_downgrade: true,
       low_confidence_count: reportedConfidenceDowngrade.lowConfidenceCount,
     } : {}),
+    ...(assuranceMetadata?.laneDemotion || assuranceMetadata?.laneCapEscalated ? { lane_demotion_cap: assuranceMetadata.laneDemotionCap, lane_demotion_count: assuranceMetadata.laneDemotionCount } : {}),
   });
 
   if (Array.isArray(verdict.rubric_scores) && verdict.rubric_scores.length > 0) {

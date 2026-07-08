@@ -1286,6 +1286,54 @@ test("on_pass advisory lane starts after an applied primary pass", () => {
   assert.ok(request.startedAt >= primaryEnd);
 });
 
+test("on_pass advisory lane can demote a low-confidence downgraded primary pass", () => {
+  const { repoRoot, manifestPath, runId, doneCriteriaPath, diffPath } = setupRepo();
+  const record = readManifest(manifestPath);
+  writeManifest(manifestPath, {
+    ...record.data,
+    routing: {
+      version: 1,
+      selected: {
+        advisory_review: [
+          { reviewer: "opencode", model: "example/opencode-model-fast", trigger: "on_pass", gating: true },
+        ],
+      },
+    },
+  }, record.body);
+  const primaryScript = writePrimaryReviewer(repoRoot, lowConfidenceChangesRequestedVerdict());
+  const opencodeScript = writeFakeOpencode(repoRoot, { requiredFinding: true });
+
+  const result = runReview({
+    repoRoot,
+    runId,
+    doneCriteriaPath,
+    diffPath,
+    primaryScript,
+    opencodeScript,
+    advisoryReviewer: null,
+    extraArgs: ["--advisory-grace", "30"],
+  });
+  const manifest = readManifest(manifestPath).data;
+  const events = readRunEvents(repoRoot, runId);
+  const advisoryEvents = events.filter((record) => record.event === EVENTS.ADVISORY_REVIEW);
+  const reviewApply = events.find((record) => record.event === EVENTS.REVIEW_APPLY);
+  const verdict = JSON.parse(fs.readFileSync(result.verdictPath, "utf-8"));
+
+  assert.equal(result.nextState, STATES.CHANGES_REQUESTED);
+  assert.equal(result.advisoryReviews.length, 1);
+  assert.equal(result.advisoryReviews[0].trigger, "on_pass");
+  assert.equal(result.advisoryReviews[0].status, "success");
+  assert.equal(advisoryEvents.length, 1);
+  assert.equal(advisoryEvents[0].trigger, "on_pass");
+  assert.equal(manifest.review.lane_demotions, 1);
+  assert.equal(reviewApply.reason, "changes_requested");
+  assert.equal(reviewApply.confidence_downgrade, true);
+  assert.equal(reviewApply.low_confidence_count, 1);
+  assert.equal(reviewApply.lane_demotion_cap, 2);
+  assert.equal(reviewApply.lane_demotion_count, 1);
+  assert.match(verdict.summary, /gating advisory lane/i);
+});
+
 test("hardened on_pass-only advisory lane starts before full missing-advisory gate", () => {
   const { repoRoot, manifestPath, runId, doneCriteriaPath, diffPath } = setupRepo({
     reviewAssurance: "hardened",
@@ -1840,6 +1888,55 @@ test("persisted lane demotion cap escalates the third lane-driven demotion", () 
   assert.match(manifest.review.last_escalation_decision.reason, /lane_demotion_cap/);
 });
 
+test("persisted lane demotion cap escalates the third hardened lane failure", () => {
+  const { repoRoot, manifestPath, runId, doneCriteriaPath, diffPath } = setupRepo({
+    reviewAssurance: "hardened",
+    strictEvidence: true,
+  });
+  const record = readManifest(manifestPath);
+  writeManifest(manifestPath, {
+    ...record.data,
+    review: {
+      ...(record.data.review || {}),
+      lane_demotions: 2,
+    },
+    routing: {
+      version: 1,
+      selected: {
+        advisory_review: [
+          { reviewer: "opencode", model: "example/opencode-model-fast" },
+        ],
+      },
+    },
+  }, record.body);
+  const primaryScript = writePrimaryReviewer(repoRoot, passVerdict());
+  const opencodeScript = writeFakeOpencode(repoRoot, { invalidJson: true });
+
+  const result = runReview({
+    repoRoot,
+    runId,
+    doneCriteriaPath,
+    diffPath,
+    primaryScript,
+    opencodeScript,
+    advisoryReviewer: null,
+    extraArgs: ["--advisory-grace", "30"],
+  });
+  const manifest = readManifest(manifestPath).data;
+  const reviewApply = readRunEvents(repoRoot, runId).find((record) => record.event === EVENTS.REVIEW_APPLY);
+  const verdict = JSON.parse(fs.readFileSync(result.verdictPath, "utf-8"));
+
+  assert.equal(result.nextState, STATES.ESCALATED);
+  assert.equal(manifest.state, STATES.ESCALATED);
+  assert.equal(manifest.review.lane_demotions, 2);
+  assert.equal(reviewApply.reason, "escalated");
+  assert.equal(reviewApply.lane_demotion_cap, 2);
+  assert.equal(reviewApply.lane_demotion_count, 2);
+  assert.match(verdict.summary, /demotion cap/i);
+  assert.match(verdict.issues[0].body, /Lane-driven demotion reason: Hardened advisory review did not complete successfully/);
+  assert.match(manifest.review.last_escalation_decision.reason, /lane_demotion_cap/);
+});
+
 test("advisory worktree mutation is captured without escalating the manifest", () => {
   const { repoRoot, manifestPath, runId, doneCriteriaPath, diffPath } = setupRepo();
   const primaryScript = writePrimaryReviewer(repoRoot, passVerdict());
@@ -2055,6 +2152,27 @@ test("assurance fold applies lane gating matrix without changing no-lane standar
     assert.equal(result.verdict, "escalated");
     assert.match(result.summary, /demotion cap/i);
     assert.match(result.issues[0].body, /at most 2/i);
+  });
+
+  await t.test("hardened lane failures and missing evidence share the same demotion cap", () => {
+    const failed = applyReviewAssurancePolicy(passVerdict(), {
+      advisoryResults: [laneResult({ status: "failed", failureReason: "bad json" })],
+      hardenedAssurance: true,
+      laneDemotionCount: 2,
+    });
+    const missing = applyReviewAssurancePolicy(passVerdict(), {
+      advisoryResults: [],
+      expectedAdvisoryCount: 1,
+      hardenedAssurance: true,
+      laneDemotionCount: 2,
+    });
+
+    assert.equal(failed.verdict, "escalated");
+    assert.match(failed.summary, /demotion cap/i);
+    assert.match(failed.issues[0].body, /Hardened advisory review did not complete successfully/);
+    assert.equal(missing.verdict, "escalated");
+    assert.match(missing.summary, /demotion cap/i);
+    assert.match(missing.issues[0].body, /Missing hardened advisory review/);
   });
 });
 
