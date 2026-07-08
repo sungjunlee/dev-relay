@@ -36,16 +36,19 @@ const {
 } = require("../../relay-dispatch/scripts/manifest/fleet");
 const { getRequestPath, readRequestArtifact } = require("../../relay-ready/scripts/relay-request");
 const { runReconcile } = require("../../relay-dispatch/scripts/reconcile-advisory");
+const { runMergeQueue } = require("./merge-queue");
 
 const DEFAULT_PARALLEL = 4;
 const DEFAULT_DISPATCH_SCRIPT = path.join(__dirname, "..", "..", "relay-dispatch", "scripts", "dispatch.js");
 const DEFAULT_PUBLISH_SCRIPT = path.join(__dirname, "..", "..", "relay-dispatch", "scripts", "publish-run.js");
 const DEFAULT_REVIEW_SCRIPT = path.join(__dirname, "..", "..", "relay-review", "scripts", "review-runner.js");
+const DEFAULT_FINALIZE_SCRIPT = path.join(__dirname, "..", "..", "relay-merge", "scripts", "finalize-run.js");
 const KNOWN_FLAGS = [
   "--repo", "--fleet-id", "--leaves-file", "--resume", "--status", "--review", "--parallel",
   "--dispatch-script", "--publish-script", "--review-script", "--executor", "--model", "--model-hints", "--sandbox",
   "--network-access", "--timeout", "--reasoning", "--copy", "--test-command", "--publish-policy",
-  "--register", "--reviewer", "--reviewer-model", "--dry-run", "--json", "--help", "-h",
+  "--register", "--reviewer", "--reviewer-model", "--finalize-script", "--merge-method",
+  "--dry-run", "--json", "--help", "-h",
 ];
 const CLI_ARG_OPTIONS = { commandName: "relay-fleet", reservedFlags: KNOWN_FLAGS };
 const MODE_PARSED_LABEL = "[parsed]";
@@ -73,8 +76,7 @@ class FleetInputError extends Error {
 
 function usage() {
   return [
-    "Usage: relay-fleet.js --repo <path> --fleet-id <id> --leaves-file <path> [options]",
-    "       relay-fleet.js --repo <path> --fleet-id <id> --resume [options]",
+    "Usage: relay-fleet.js --repo <path> --fleet-id <id> [--leaves-file <path>] [options]",
     "       relay-fleet.js --repo <path> --fleet-id <id> --review [options]",
     "       relay-fleet.js --repo <path> --fleet-id <id> --status [--json]",
     "",
@@ -82,13 +84,15 @@ function usage() {
     `  --repo <path>          ${modeLabel("--repo")} Repository root (default: current directory)`,
     `  --fleet-id <id>       ${modeLabel("--fleet-id")} Fleet manifest id (required)`,
     `  --leaves-file <path>  ${MODE_VERBATIM_LABEL} JSON file with already-planned leaf contracts`,
-    `  --resume             ${MODE_PARSED_LABEL} Reconcile and continue pending/pre-manifest children`,
-    `  --review             ${MODE_PARSED_LABEL} Drive child review/publication loops until ready_to_merge or escalated`,
+    `  --resume             ${MODE_PARSED_LABEL} Deprecated alias for the default drive command`,
+    `  --review             ${MODE_PARSED_LABEL} Deprecated review-only re-entry point`,
     `  --status             ${MODE_PARSED_LABEL} Print derived fleet summary without writing`,
     `  --parallel <n>       ${MODE_PARSED_LABEL} Maximum concurrent child dispatches (default: ${DEFAULT_PARALLEL})`,
     `  --dispatch-script <path>  ${MODE_VERBATIM_LABEL} Dispatch entrypoint (default: relay-dispatch/scripts/dispatch.js)`,
     `  --publish-script <path>   ${MODE_VERBATIM_LABEL} Publish entrypoint (default: relay-dispatch/scripts/publish-run.js)`,
     `  --review-script <path>    ${MODE_VERBATIM_LABEL} Review entrypoint (default: relay-review/scripts/review-runner.js)`,
+    `  --finalize-script <path>  ${MODE_VERBATIM_LABEL} Finalize entrypoint (default: relay-merge/scripts/finalize-run.js)`,
+    `  --merge-method <name>  ${MODE_PARSED_LABEL} squash | merge | rebase (default: squash)`,
     `  --executor <name>     ${modeLabel("--executor")} Child executor passed to dispatch.js`,
     `  --model <name>        ${modeLabel("--model")} Child model override passed to dispatch.js`,
     `  --model-hints <spec>  ${modeLabel("--model-hints")} Child model hints passed to dispatch.js`,
@@ -134,6 +138,8 @@ function parseArgs(argv) {
     dispatchScript: path.resolve(getArg("--dispatch-script", DEFAULT_DISPATCH_SCRIPT)),
     publishScript: path.resolve(getArg("--publish-script", DEFAULT_PUBLISH_SCRIPT)),
     reviewScript: path.resolve(getArg("--review-script", DEFAULT_REVIEW_SCRIPT)),
+    finalizeScript: path.resolve(getArg("--finalize-script", DEFAULT_FINALIZE_SCRIPT)),
+    mergeMethod: getArg("--merge-method", "squash"),
     executor: getArg("--executor"),
     model: getArg("--model"),
     modelHints: getArg("--model-hints"),
@@ -379,6 +385,56 @@ function readPersistedLeaves(repoRoot, fleetId) {
   return leaves;
 }
 
+function comparableLeaf(leaf) {
+  return {
+    leaf_ref: leaf.leaf_ref,
+    issue_number: leaf.issue_number,
+    branch: leaf.branch,
+    prompt_file: leaf.prompt_file,
+    rubric_file: leaf.rubric_file,
+    done_criteria_file: leaf.done_criteria_file,
+    request_id: leaf.request_id || null,
+    leaf_id: leaf.leaf_id || leaf.leaf_ref,
+    depends_on: Array.isArray(leaf.depends_on) ? leaf.depends_on.slice().sort() : [],
+    executor: leaf.executor || null,
+    model: leaf.model || null,
+    model_hints: leaf.model_hints || null,
+    sandbox: leaf.sandbox || null,
+    network_access: leaf.network_access || null,
+    timeout: leaf.timeout || null,
+    reasoning: leaf.reasoning || null,
+    copy: leaf.copy || null,
+    test_command: leaf.test_command || null,
+    publish_policy: leaf.publish_policy || null,
+    register: leaf.register === true,
+  };
+}
+
+function comparableLeaves(leaves) {
+  return leaves
+    .map(comparableLeaf)
+    .sort((left, right) => left.leaf_ref.localeCompare(right.leaf_ref));
+}
+
+function leavesMatch(left, right) {
+  return JSON.stringify(comparableLeaves(left)) === JSON.stringify(comparableLeaves(right));
+}
+
+function assertLeavesMatchPersisted(repoRoot, fleetId, leaves) {
+  const persisted = readPersistedLeaves(repoRoot, fleetId);
+  if (persisted.length === 0) {
+    throw new FleetInputError(
+      `--leaves-file was provided for existing fleet '${fleetId}', but no persisted fleet leaves exist to verify it; nothing was changed`
+    );
+  }
+  if (!leavesMatch(persisted, leaves)) {
+    throw new FleetInputError(
+      `--leaves-file differs from persisted fleet leaves for '${fleetId}'; refusing to overwrite an existing fleet`
+    );
+  }
+  return persisted;
+}
+
 function processIsAlive(pid) {
   if (!Number.isInteger(pid) || pid <= 0) return false;
   try {
@@ -470,9 +526,10 @@ function maybeFinalizeFleet(repoRoot, fleetId) {
     && current.children.every((child) => child.dispatch_status === DISPATCH_STATUS.DISPATCHED && child.run_id);
   if (
     !allDispatched
-    || current.fleet_state === STATES.DISPATCHED
-    || current.fleet_state === STATES.REVIEWING
-    || current.fleet_state === STATES.CLOSED
+    || STATES.DISPATCHED === current.fleet_state
+    || STATES.REVIEWING === current.fleet_state
+    || STATES.MERGING === current.fleet_state
+    || STATES.CLOSED === current.fleet_state
   ) {
     return current;
   }
@@ -481,8 +538,15 @@ function maybeFinalizeFleet(repoRoot, fleetId) {
 
 function transitionFleetToReviewing(repoRoot, fleetId) {
   const current = readFleetManifest(repoRoot, fleetId).data;
-  if (current.fleet_state === STATES.REVIEWING) return current;
+  if (STATES.REVIEWING === current.fleet_state) return current;
+  if (STATES.DISPATCHED !== current.fleet_state) return current;
   return updateFleetManifest(repoRoot, fleetId, (fleet) => updateFleetState(fleet, STATES.REVIEWING)).data;
+}
+
+function transitionFleetToClosed(repoRoot, fleetId) {
+  const current = readFleetManifest(repoRoot, fleetId).data;
+  if (STATES.CLOSED === current.fleet_state) return current;
+  return updateFleetManifest(repoRoot, fleetId, (fleet) => updateFleetState(fleet, STATES.CLOSED)).data;
 }
 
 function listFleetRunRecords(repoRoot, fleetId) {
@@ -1712,6 +1776,196 @@ async function reviewFleet({ repoRoot, fleetId, options, activeChildren = new Ma
   };
 }
 
+const FLEET_TERMINAL_RUN_STATES = new Set([
+  RUN_STATES.MERGED,
+  RUN_STATES.CLOSED,
+  RUN_STATES.ESCALATED,
+]);
+
+function fleetChildrenAreTerminal(summary) {
+  return summary.total_children > 0
+    && summary.children.every((child) => {
+      return child.dispatch_status === DISPATCH_STATUS.DISPATCHED
+        && FLEET_TERMINAL_RUN_STATES.has(child.run_state);
+    });
+}
+
+function closeFleetIfTerminal(repoRoot, fleetId) {
+  const summary = deriveFleetSummary(repoRoot, readFleetManifest(repoRoot, fleetId).data);
+  if (!fleetChildrenAreTerminal(summary)) return readFleetManifest(repoRoot, fleetId).data;
+  return transitionFleetToClosed(repoRoot, fleetId);
+}
+
+function fleetHasReadyMergeCandidate(summary) {
+  return summary.children.some((child) => {
+    return child.dispatch_status === DISPATCH_STATUS.DISPATCHED
+      && child.run_id
+      && child.run_state === RUN_STATES.READY_TO_MERGE;
+  });
+}
+
+function fleetHasReviewWork(summary) {
+  return summary.children.some(childNeedsReviewLoop);
+}
+
+function readDriveLeaves({ repoRoot, fleetId, manifestPath, options }) {
+  const manifestExists = fs.existsSync(manifestPath);
+  const explicitLeaves = options.leavesFile ? loadLeavesFile(options.leavesFile) : null;
+
+  if (options.dryRun) {
+    if (!explicitLeaves) {
+      throw new FleetInputError("--leaves-file is required for --dry-run");
+    }
+    validateLeafLineage(repoRoot, explicitLeaves);
+    return { leaves: explicitLeaves, explicitLeaves, manifestExists };
+  }
+
+  if (!manifestExists) {
+    if (!explicitLeaves) {
+      throw new FleetInputError(`fleet manifest does not exist: ${manifestPath}; nothing to continue`);
+    }
+    validateLeafLineage(repoRoot, explicitLeaves);
+    return { leaves: explicitLeaves, explicitLeaves, manifestExists };
+  }
+
+  if (explicitLeaves) {
+    const persisted = assertLeavesMatchPersisted(repoRoot, fleetId, explicitLeaves);
+    validateLeafLineage(repoRoot, explicitLeaves);
+    return { leaves: persisted, explicitLeaves, manifestExists };
+  }
+
+  return {
+    leaves: readPersistedLeaves(repoRoot, fleetId),
+    explicitLeaves: null,
+    manifestExists,
+  };
+}
+
+function ensureFleetForDrive({ repoRoot, fleetId, manifestExists, leaves }) {
+  if (!manifestExists) {
+    createFleetManifest(repoRoot, {
+      fleetId,
+      children: leaves.map((leaf) => ({
+        leaf_ref: leaf.leaf_ref,
+        run_id: null,
+        dispatch_status: DISPATCH_STATUS.PENDING,
+      })),
+    });
+    persistFleetLeaves(repoRoot, fleetId, leaves);
+    transitionFleetToDispatching(repoRoot, fleetId);
+    return;
+  }
+
+  const current = readFleetManifest(repoRoot, fleetId).data;
+  if (STATES.DRAFT === current.fleet_state) transitionFleetToDispatching(repoRoot, fleetId);
+}
+
+async function dispatchFleetPhase({ repoRoot, fleetId, leaves, options, activeChildren, isInterrupted }) {
+  reconcileFleet(repoRoot, fleetId, leaves);
+  const resumePollChildren = await pollResumeDispatchingChildren({
+    repoRoot,
+    fleetId,
+    leaves,
+    options,
+    isInterrupted,
+  });
+  reconcileFleet(repoRoot, fleetId, leaves);
+  const dispatchLeaves = selectLeavesToDispatch(repoRoot, fleetId, leaves);
+  validateLeafFiles(dispatchLeaves);
+  const dispatchChildren = await runPool(dispatchLeaves, options.parallel, (leaf) => {
+    return spawnDispatchForLeaf({
+      repoRoot,
+      fleetId,
+      leaf,
+      options,
+      activeChildren,
+      isInterrupted,
+    });
+  });
+  const children = [...resumePollChildren, ...dispatchChildren];
+  reconcileFleet(repoRoot, fleetId, leaves);
+  const fleet = maybeFinalizeFleet(repoRoot, fleetId);
+  const summary = deriveFleetSummary(repoRoot, fleet);
+  const operatorAttention = buildOperatorAttention(summary, { repoRoot, fleetId });
+  const preManifestFailures = summary.children
+    .some((child) => child.dispatch_status === DISPATCH_STATUS.DISPATCH_FAILED_PRE_MANIFEST);
+  const dispatchFailures = dispatchFanoutFailed(dispatchChildren);
+  const incompleteDispatches = fleetDispatchIncomplete(summary);
+
+  return {
+    ok: !isInterrupted() && !preManifestFailures && !dispatchFailures && !incompleteDispatches,
+    interrupted: isInterrupted(),
+    fleet_id: fleetId,
+    children,
+    preManifestFailures,
+    dispatchFailures,
+    incompleteDispatches,
+    summary,
+    operator_attention: operatorAttention,
+  };
+}
+
+async function mergeFleetPhase({ repoRoot, fleetId, options }) {
+  const current = readFleetManifest(repoRoot, fleetId).data;
+  if (STATES.CLOSED === current.fleet_state) return null;
+
+  const summary = deriveFleetSummary(repoRoot, current);
+  const shouldRunMergeQueue = fleetHasReadyMergeCandidate(summary)
+    || STATES.MERGING === current.fleet_state;
+  if (!shouldRunMergeQueue) return null;
+
+  if (STATES.DISPATCHED === current.fleet_state) {
+    transitionFleetToReviewing(repoRoot, fleetId);
+  }
+
+  const mergeReadyState = readFleetManifest(repoRoot, fleetId).data.fleet_state;
+  if (![STATES.REVIEWING, STATES.MERGING].includes(mergeReadyState)) {
+    return null;
+  }
+
+  return runMergeQueue({
+    repo: repoRoot,
+    fleetId,
+    finalizeScript: options.finalizeScript,
+    mergeMethod: options.mergeMethod,
+    dryRun: options.dryRun,
+  });
+}
+
+function buildDriveResult({
+  repoRoot,
+  fleetId,
+  fleetManifestPath,
+  interrupted,
+  dispatchResult = null,
+  reviewResult = null,
+  mergeResult = null,
+  deprecatedAliases = [],
+}) {
+  closeFleetIfTerminal(repoRoot, fleetId);
+  const summary = deriveFleetSummary(repoRoot, readFleetManifest(repoRoot, fleetId).data);
+  const operatorAttention = buildOperatorAttention(summary, { repoRoot, fleetId });
+  const ok = !interrupted
+    && fleetChildrenAreTerminal(summary)
+    && operatorAttention.length === 0;
+
+  return {
+    ok,
+    interrupted,
+    fleet_id: fleetId,
+    fleetManifestPath,
+    deprecated_aliases: deprecatedAliases,
+    children: dispatchResult?.children || [],
+    dispatch_children: dispatchResult?.children || [],
+    reviewed_children: reviewResult?.reviewed_children || [],
+    skipped_children: reviewResult?.skipped_children || [],
+    merge_results: mergeResult?.results || [],
+    merge_queued_children: mergeResult?.queued_children || [],
+    summary,
+    operator_attention: operatorAttention,
+  };
+}
+
 async function runFleet(options) {
   const repoRoot = getCanonicalRepoRoot(options.repo || ".");
   const fleetId = requireValidFleetId(options.fleetId);
@@ -1759,17 +2013,7 @@ async function runFleet(options) {
     }
   }
 
-  const leaves = options.leavesFile
-    ? loadLeavesFile(options.leavesFile)
-    : (options.resume ? readPersistedLeaves(repoRoot, fleetId) : []);
-  validateLeafLineage(repoRoot, leaves);
-
-  if (!options.resume && !options.dryRun && fs.existsSync(manifestPath)) {
-    throw new FleetInputError(`fleet manifest already exists: ${manifestPath}; use --resume`);
-  }
-  if (!options.resume && leaves.length === 0) {
-    throw new FleetInputError("--leaves-file is required unless --resume or --status is used");
-  }
+  const { leaves, manifestExists } = readDriveLeaves({ repoRoot, fleetId, manifestPath, options });
 
   if (options.dryRun) {
     const activeChildren = new Map();
@@ -1791,25 +2035,7 @@ async function runFleet(options) {
     };
   }
 
-  if (!options.resume) {
-    createFleetManifest(repoRoot, {
-      fleetId,
-      children: leaves.map((leaf) => ({
-        leaf_ref: leaf.leaf_ref,
-        run_id: null,
-        dispatch_status: DISPATCH_STATUS.PENDING,
-      })),
-    });
-    persistFleetLeaves(repoRoot, fleetId, leaves);
-    transitionFleetToDispatching(repoRoot, fleetId);
-  } else {
-    if (!fs.existsSync(manifestPath)) {
-      throw new FleetInputError(`fleet manifest does not exist: ${manifestPath}`);
-    }
-    if (options.leavesFile) persistFleetLeaves(repoRoot, fleetId, leaves);
-    const current = readFleetManifest(repoRoot, fleetId).data;
-    if (current.fleet_state === STATES.DRAFT) transitionFleetToDispatching(repoRoot, fleetId);
-  }
+  ensureFleetForDrive({ repoRoot, fleetId, manifestExists, leaves });
 
   let interrupted = false;
   const activeChildren = new Map();
@@ -1823,65 +2049,60 @@ async function runFleet(options) {
   }
 
   try {
-    reconcileFleet(repoRoot, fleetId, leaves);
-    const resumePollChildren = options.resume
-      ? await pollResumeDispatchingChildren({
-        repoRoot,
-        fleetId,
-        leaves,
-        options,
-        isInterrupted: () => interrupted,
-      })
-      : [];
-    reconcileFleet(repoRoot, fleetId, leaves);
-    const dispatchLeaves = selectLeavesToDispatch(repoRoot, fleetId, leaves);
-    validateLeafFiles(dispatchLeaves);
-    const dispatchChildren = await runPool(dispatchLeaves, options.parallel, (leaf) => {
-      return spawnDispatchForLeaf({
-        repoRoot,
-        fleetId,
-        leaf,
-        options,
-        activeChildren,
-        isInterrupted: () => interrupted,
-      });
+    const deprecatedAliases = options.resume ? ["--resume"] : [];
+    const dispatchResult = await dispatchFleetPhase({
+      repoRoot,
+      fleetId,
+      leaves,
+      options,
+      activeChildren,
+      isInterrupted: () => interrupted,
     });
-    const children = [...resumePollChildren, ...dispatchChildren];
-    reconcileFleet(repoRoot, fleetId, leaves);
-    const fleet = maybeFinalizeFleet(repoRoot, fleetId);
-    const summary = deriveFleetSummary(repoRoot, fleet);
-    const operatorAttention = buildOperatorAttention(summary, { repoRoot, fleetId });
-    const preManifestFailures = summary.children
-      .some((child) => child.dispatch_status === DISPATCH_STATUS.DISPATCH_FAILED_PRE_MANIFEST);
-    const dispatchFailures = dispatchFanoutFailed(dispatchChildren);
-    const incompleteDispatches = fleetDispatchIncomplete(summary);
-    if (options.resume && summary.children.some(childNeedsReviewLoop)) {
-      const reviewResult = await reviewFleet({
-        repoRoot,
-        fleetId,
-        options,
-        activeChildren,
-        isInterrupted: () => interrupted,
-      });
-      const reviewPreManifestFailures = reviewResult.summary.children
-        .some((child) => child.dispatch_status === DISPATCH_STATUS.DISPATCH_FAILED_PRE_MANIFEST);
-      const reviewIncompleteDispatches = fleetDispatchIncomplete(reviewResult.summary);
+
+    if (interrupted || (!manifestExists && !dispatchResult.ok)) {
       return {
-        ...reviewResult,
-        ok: reviewResult.ok && !reviewPreManifestFailures && !dispatchFailures && !reviewIncompleteDispatches,
+        ...dispatchResult,
+        ok: false,
+        interrupted,
         fleetManifestPath: manifestPath,
-        dispatch_children: children,
+        deprecated_aliases: deprecatedAliases,
       };
     }
-    return {
-      ok: !interrupted && !preManifestFailures && !dispatchFailures && !incompleteDispatches,
-      interrupted,
-      fleet_id: fleetId,
+
+    let reviewResult = null;
+    const afterDispatchSummary = deriveFleetSummary(repoRoot, readFleetManifest(repoRoot, fleetId).data);
+    if (fleetHasReviewWork(afterDispatchSummary)) {
+      reviewResult = await reviewFleet({
+        repoRoot,
+        fleetId,
+        options,
+        activeChildren,
+        isInterrupted: () => interrupted,
+      });
+      if (!reviewResult.ok) {
+        return buildDriveResult({
+          repoRoot,
+          fleetId,
+          fleetManifestPath: manifestPath,
+          interrupted,
+          dispatchResult,
+          reviewResult,
+          deprecatedAliases,
+        });
+      }
+    }
+
+    const mergeResult = await mergeFleetPhase({ repoRoot, fleetId, options });
+    return buildDriveResult({
+      repoRoot,
+      fleetId,
       fleetManifestPath: manifestPath,
-      children,
-      summary,
-      operator_attention: operatorAttention,
-    };
+      interrupted,
+      dispatchResult,
+      reviewResult,
+      mergeResult,
+      deprecatedAliases,
+    });
   } finally {
     if (options.installSignalHandlers) {
       process.removeListener("SIGINT", interrupt);
