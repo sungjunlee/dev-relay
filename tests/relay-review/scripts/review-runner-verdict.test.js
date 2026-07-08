@@ -17,6 +17,7 @@ function makeIssue(overrides = {}) {
     file: "skills/relay-review/scripts/review-runner.js",
     category: "bug",
     severity: "high",
+    confidence: "high",
     line: 42,
     ...overrides,
   };
@@ -186,6 +187,16 @@ test("verdict/validateIssue preserves the malformed-field matrix", async (t) => 
       label: "missing severity",
       issue: makeIssue({ severity: "" }),
       expected: /issues\[0\]\.severity is required/,
+    },
+    {
+      label: "missing confidence",
+      issue: makeIssue({ confidence: undefined }),
+      expected: /issues\[0\]\.confidence must be one of: low, medium, high/,
+    },
+    {
+      label: "invalid confidence",
+      issue: makeIssue({ confidence: "certain" }),
+      expected: /issues\[0\]\.confidence must be one of: low, medium, high/,
     },
     {
       label: "line must be positive integer",

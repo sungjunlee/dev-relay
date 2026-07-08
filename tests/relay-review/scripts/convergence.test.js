@@ -98,6 +98,25 @@ test("round 3 summary lists repeated factors, lineage counts, score trends, and 
   assert.deepEqual(summary.flip_candidates, [{ factor: "BEHAVIOR", trace: ["pass", "fail", "pass"] }]);
 });
 
+test("round 3 summary treats applied-pass advisory history as non-repeating", () => {
+  const runDir = tempRunDir();
+  writeVerdict(runDir, 2, {
+    verdict: "changes_requested",
+    applied_verdict: "pass",
+    issues: [issue({ line: 9, confidence: "low" })],
+    rubric_scores: [score("Behavior", 7, "pass")],
+  });
+  const verdict = {
+    verdict: "changes_requested",
+    issues: [issue({ line: 11, lineage: "repeat" })],
+    rubric_scores: [score("BEHAVIOR", 6, "fail")],
+  };
+
+  const summary = buildSummary({ runDir, round: 3, verdict, repeatedIssueCount: 1 });
+
+  assert.deepEqual(summary.repeated_factors, []);
+});
+
 test("round 5 summary recommends an operator decision path", async (t) => {
   await t.test("decide_semantics", () => {
     const runDir = tempRunDir();

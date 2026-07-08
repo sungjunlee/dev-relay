@@ -1,10 +1,14 @@
 const { gh } = require("./common");
+const { isLowConfidenceAdvisoryPass } = require("./verdict");
 
 const REVIEW_MARKER = "<!-- relay-review -->";
 const REVIEW_ROUND_MARKER = "<!-- relay-review-round -->";
 
-function formatIssueList(issues) {
-  return issues.map((issue) => `- ${issue.file}:${issue.line} — ${issue.title}: ${issue.body}`).join("\n");
+function formatIssueList(issues, { includeConfidence = false } = {}) {
+  return issues.map((issue) => {
+    const confidence = includeConfidence && issue.confidence ? `[${issue.confidence}] ` : "";
+    return `- ${issue.file}:${issue.line} — ${confidence}${issue.title}: ${issue.body}`;
+  }).join("\n");
 }
 
 function appendCommentWarnings(commentBody, warnings = []) {
@@ -68,6 +72,21 @@ function buildCommentBody(verdict, round, { warnings = [], gateFailure = null } 
       `Quality Review: ${formatStatus(verdict.quality_review_status)}`,
       `Quality Execution: ${formatStatus(verdict.quality_execution_status)}`,
       `Rounds: ${round}`,
+    ].join("\n"), warnings);
+  }
+
+  if (isLowConfidenceAdvisoryPass(verdict)) {
+    return appendCommentWarnings([
+      REVIEW_MARKER,
+      "## Relay Review",
+      "Verdict: LGTM",
+      `Summary: ${verdict.summary}`,
+      `Contract: ${formatStatus(verdict.contract_status)}`,
+      `Quality Review: ${formatStatus(verdict.quality_review_status)}`,
+      `Quality Execution: ${formatStatus(verdict.quality_execution_status)}`,
+      `Rounds: ${round}`,
+      "Low-confidence findings (non-blocking):",
+      formatIssueList(verdict.issues, { includeConfidence: true }),
     ].join("\n"), warnings);
   }
 

@@ -131,6 +131,18 @@ function makeVerdict(verdict, nextAction) {
   };
 }
 
+function makeIssue(confidence = "high") {
+  return {
+    title: "Check auth flow",
+    body: "The auth branch may skip token refresh.",
+    file: "src/auth.js",
+    line: 42,
+    category: "bug",
+    severity: "high",
+    confidence,
+  };
+}
+
 function normalizeUpdatedTimestamp(manifest) {
   return {
     ...manifest,
@@ -315,6 +327,66 @@ test("manifest-apply/applyVerdictToManifest preserves the CHANGES_REQUESTED fiel
       last_gate: null,
     },
   });
+});
+
+test("manifest-apply/applyVerdictToManifest downgrades only all-low-confidence changes_requested verdicts", async (t) => {
+  const cases = [
+    {
+      label: "all-low changes_requested becomes external ready_to_merge",
+      state: STATES.REVIEW_PENDING,
+      verdict: { ...makeVerdict("changes_requested", "changes_requested"), issues: [makeIssue("low"), makeIssue("low")] },
+      expectedState: STATES.READY_TO_MERGE,
+      expectedAction: "await_explicit_merge",
+      expectedLatest: "lgtm",
+      expectedRepeated: 0,
+    },
+    {
+      label: "all-low internal changes_requested becomes publish_pending",
+      state: STATES.INTERNAL_REVIEW_PENDING,
+      verdict: { ...makeVerdict("changes_requested", "changes_requested"), issues: [makeIssue("low")] },
+      expectedState: STATES.PUBLISH_PENDING,
+      expectedAction: "publish_pr",
+      expectedLatest: "internal_lgtm",
+      expectedRepeated: 0,
+    },
+    {
+      label: "medium confidence remains changes_requested",
+      state: STATES.REVIEW_PENDING,
+      verdict: { ...makeVerdict("changes_requested", "changes_requested"), issues: [makeIssue("low"), makeIssue("medium")] },
+      expectedState: STATES.CHANGES_REQUESTED,
+      expectedAction: "re_dispatch_requested_changes",
+      expectedLatest: "changes_requested",
+      expectedRepeated: 4,
+    },
+    {
+      label: "high confidence remains changes_requested",
+      state: STATES.REVIEW_PENDING,
+      verdict: { ...makeVerdict("changes_requested", "changes_requested"), issues: [makeIssue("high")] },
+      expectedState: STATES.CHANGES_REQUESTED,
+      expectedAction: "re_dispatch_requested_changes",
+      expectedLatest: "changes_requested",
+      expectedRepeated: 4,
+    },
+  ];
+
+  for (const testCase of cases) {
+    await t.test(testCase.label, () => {
+      const manifest = createManifestInState(testCase.state);
+      const result = applyVerdictToManifest(
+        manifest,
+        testCase.verdict,
+        3,
+        testCase.state === STATES.INTERNAL_REVIEW_PENDING ? null : 189,
+        "abc123",
+        4
+      );
+
+      assert.equal(result.state, testCase.expectedState);
+      assert.equal(result.next_action, testCase.expectedAction);
+      assert.equal(result.review.latest_verdict, testCase.expectedLatest);
+      assert.equal(result.review.repeated_issue_count, testCase.expectedRepeated);
+    });
+  }
 });
 
 test("manifest-apply/applyVerdictToManifest refreshes same-state CHANGES_REQUESTED without a transition", () => {

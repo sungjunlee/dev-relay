@@ -1,4 +1,5 @@
 const { STATES, updateManifestState } = require("../../../relay-dispatch/scripts/manifest/lifecycle");
+const { isLowConfidenceAdvisoryPass } = require("./verdict");
 
 function refreshManifestWithoutStateChange(data, nextAction) {
   return {
@@ -35,7 +36,9 @@ function applyVerdictToManifest(data, verdict, round, prNumber, reviewedHeadSha,
   let nextAction;
   let latestVerdict;
 
-  if (verdict.verdict === "pass") {
+  const appliesAsPass = verdict.verdict === "pass" || isLowConfidenceAdvisoryPass(verdict);
+
+  if (appliesAsPass) {
     if (rubricGateFailure) {
       nextState = STATES.CHANGES_REQUESTED;
       nextAction = "repair_rubric_and_redispatch";
@@ -75,7 +78,7 @@ function applyVerdictToManifest(data, verdict, round, prNumber, reviewedHeadSha,
       ...(updated.review || {}),
       rounds: round,
       latest_verdict: latestVerdict,
-      repeated_issue_count: verdict.verdict === "changes_requested" ? repeatedIssueCount : 0,
+      repeated_issue_count: verdict.verdict === "changes_requested" && !isLowConfidenceAdvisoryPass(verdict) ? repeatedIssueCount : 0,
       ...(options.lineageSummary ? { last_lineage_summary: options.lineageSummary } : {}),
       last_reviewed_sha: reviewedHeadSha || null,
       ...buildReviewStatusFields(verdict),

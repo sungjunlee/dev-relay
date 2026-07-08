@@ -8,11 +8,15 @@ const {
 } = require("./score-utils");
 
 const ALLOWED_VERDICTS = new Set(["pass", "changes_requested", "escalated"]);
+const ALLOWED_APPLIED_VERDICTS = new Set(["pass", "changes_requested", "escalated"]);
 const ALLOWED_NEXT_ACTIONS = new Set(["publish_pending", "ready_to_merge", "changes_requested", "escalated"]);
 const ALLOWED_REVIEW_STATUSES = new Set(["pass", "fail", "not_run"]);
 const ALLOWED_EXECUTION_STATUSES = new Set(["pass", "fail", "not_run", "missing"]);
 const ALLOWED_SCORE_TIERS = new Set(["contract", "quality"]);
 const ALLOWED_LINEAGE_VALUES = new Set(["new", "deepening", "repeat", "stale", "newly_scoreable", "unknown"]);
+const ALLOWED_ISSUE_CONFIDENCE_VALUES = new Set(
+  REVIEW_VERDICT_JSON_SCHEMA.properties.issues.items.properties.confidence.enum
+);
 const OPTIONAL_ISSUE_REJECTION_METADATA = ["factor", "attempted_approach", "fix_direction"];
 const ALLOWED_DRIFT_STATUSES = new Set(
   REVIEW_VERDICT_JSON_SCHEMA.properties.scope_drift.properties.missing.items.properties.status.enum
@@ -49,6 +53,9 @@ function validateIssue(issue, index) {
   if (!Number.isInteger(issue.line) || issue.line <= 0) {
     throw new Error(`${location}.line must be a positive integer`);
   }
+  if (!ALLOWED_ISSUE_CONFIDENCE_VALUES.has(issue.confidence)) {
+    throw new Error(`${location}.confidence must be one of: ${Array.from(ALLOWED_ISSUE_CONFIDENCE_VALUES).join(", ")}`);
+  }
   for (const key of OPTIONAL_ISSUE_REJECTION_METADATA) {
     if (issue[key] !== undefined && issue[key] !== null && !String(issue[key] || "").trim()) {
       throw new Error(`${location}.${key} must be a non-empty string, null, or absent`);
@@ -60,6 +67,52 @@ function validateIssue(issue, index) {
   if (issue.relates_to !== undefined && issue.relates_to !== null && (typeof issue.relates_to !== "string" || !issue.relates_to.trim())) {
     throw new Error(`${location}.relates_to must be a non-empty string or null when present`);
   }
+}
+
+function hasBlockingRubricScores(verdict) {
+  return (Array.isArray(verdict?.rubric_scores) ? verdict.rubric_scores : []).some((score) => {
+    if (score?.status === "fail") return true;
+    if (score?.tier !== "quality") return false;
+    const numericScore = getRubricScoreNumber(score);
+    const targetScore = getRubricTargetNumber(score);
+    return numericScore !== null && targetScore !== null && numericScore < targetScore;
+  });
+}
+
+function isLowConfidenceAdvisoryPass(verdict) {
+  return verdict?.verdict === "changes_requested"
+    && Array.isArray(verdict.issues)
+    && verdict.issues.length > 0
+    && verdict.issues.every((issue) => issue?.confidence === "low")
+    && !hasBlockingRubricScores(verdict);
+}
+
+function getAppliedVerdict(verdict) {
+  if (ALLOWED_APPLIED_VERDICTS.has(verdict?.applied_verdict)) return verdict.applied_verdict;
+  if (isLowConfidenceAdvisoryPass(verdict)) return "pass";
+  return verdict?.verdict || null;
+}
+
+function buildConfidenceDowngrade(verdict) {
+  const lowConfidenceCount = Array.isArray(verdict?.issues)
+    ? verdict.issues.filter((issue) => issue?.confidence === "low").length
+    : 0;
+  return {
+    applied: isLowConfidenceAdvisoryPass(verdict),
+    lowConfidenceCount,
+  };
+}
+
+function buildLowConfidencePassGateVerdict(verdict, passNextActions = ["ready_to_merge"]) {
+  const nextActions = Array.isArray(passNextActions)
+    ? passNextActions
+    : Array.from(passNextActions || []);
+  return {
+    ...verdict,
+    verdict: "pass",
+    next_action: nextActions[0] || "ready_to_merge",
+    issues: [],
+  };
 }
 
 function validateRubricScore(score, index) {
@@ -231,10 +284,17 @@ function validateReviewVerdict(data, options = {}) {
 }
 
 module.exports = {
+  ALLOWED_APPLIED_VERDICTS,
   ALLOWED_EXECUTION_STATUSES,
+  ALLOWED_ISSUE_CONFIDENCE_VALUES,
   ALLOWED_LINEAGE_VALUES,
   ALLOWED_SCORE_TIERS,
   ALLOWED_REVIEW_STATUSES,
+  buildConfidenceDowngrade,
+  buildLowConfidencePassGateVerdict,
+  getAppliedVerdict,
+  hasBlockingRubricScores,
+  isLowConfidenceAdvisoryPass,
   parseReviewVerdict,
   validateIssue,
   validateReviewVerdict,

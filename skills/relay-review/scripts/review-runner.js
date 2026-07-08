@@ -13,9 +13,9 @@ const { buildPrompt, formatPriorVerdictSummary } = require("./review-runner/prom
 const { parseReviewVerdict, validateReviewVerdict, validateScopeDrift } = require("./review-runner/verdict");
 const { buildCommentBody, formatIssueList, formatScopeDrift, postComment } = require("./review-runner/comment");
 const { buildScoreDivergenceAnalysis, loadPrBody, parseScoreLog, toIterationScoreEventEntry } = require("./review-runner/divergence");
-const { applyQualityExecutionStatus, buildExecutionEvidenceFailureVerdict, buildMissingExecutionEvidenceVerdict, computeQualityExecutionStatus } = require("./review-runner/execution-evidence");
-const { applyReviewAssurancePolicy } = require("./review-runner/assurance");
+const { applyQualityExecutionStatus, computeQualityExecutionStatus } = require("./review-runner/execution-evidence");
 const { printFailureAndExit } = require("./review-runner/failure-output");
+const { applyPassEquivalentGates } = require("./review-runner/confidence-downgrade");
 const { buildRedispatchPrompt, buildRubricGateRedispatchPrompt, computeFactorStatusFlips, computeRepeatedIssueCount, decideFlipFlopEscalation, detectChurnGrowth, summarizeLineage, toEscalatedVerdict } = require("./review-runner/redispatch");
 const { buildConvergenceSummary, formatConvergenceMarkdown } = require("./review-runner/convergence");
 const { applyVerdictToManifest } = require("./review-runner/manifest-apply");
@@ -230,54 +230,56 @@ async function run() {
     hardenedAssurance,
     verdict,
   }));
-  verdict = applyReviewAssurancePolicy(verdict, {
+  const gateResult = applyPassEquivalentGates(verdict, {
     advisoryResult,
+    disallowPassReason: prSignalsPassBlockReason,
+    executionStatus,
     hardenedAssurance,
+    internalReview,
     manualReviewReason,
     reviewFile,
   });
-  if (verdict.verdict === "pass" && executionStatus.status !== "pass") {
-    verdict = executionStatus.status === "missing"
-      ? buildMissingExecutionEvidenceVerdict(verdict)
-      : buildExecutionEvidenceFailureVerdict(verdict);
-  }
-  validateReviewVerdict(verdict, {
-    passNextActions: passNextActionsFor(internalReview),
-    disallowPassReason: prSignalsPassBlockReason,
-  });
-
-  const repeatedIssueCount = verdict.verdict === "changes_requested" ? computeRepeatedIssueCount(runDir, round, verdict.issues) : 0;
-  const lineageSummary = summarizeLineage(verdict.issues);
+  verdict = gateResult.verdict;
+  const confidenceDowngrade = gateResult.confidenceDowngrade;
+  let analysisVerdict = confidenceDowngrade.applied ? gateResult.passEquivalentVerdict : verdict;
+  const blockingChangesRequested = verdict.verdict === "changes_requested" && !confidenceDowngrade.applied;
+  const repeatedIssueCount = blockingChangesRequested ? computeRepeatedIssueCount(runDir, round, analysisVerdict.issues) : 0;
+  const lineageSummary = summarizeLineage(analysisVerdict.issues);
   let escalationDecision = { round, trigger: "none", factors: [], traces: [], lineage_summary: lineageSummary, decision: "continue", reason: "no_trigger" };
-  if (verdict.verdict === "changes_requested" && repeatedIssueCount >= 3) {
+  if (blockingChangesRequested && repeatedIssueCount >= 3) {
     verdict = toEscalatedVerdict(
       verdict,
       `Repeated identical review issues hit ${repeatedIssueCount} consecutive rounds.`
     );
     escalationDecision = { ...escalationDecision, trigger: "repeated_issues", decision: "escalate", reason: "repeated_issues" };
+    analysisVerdict = verdict;
   }
-  const factorFlips = computeFactorStatusFlips(runDir, round, verdict);
+  const factorFlips = computeFactorStatusFlips(runDir, round, analysisVerdict);
   if (factorFlips.length && escalationDecision.trigger !== "repeated_issues") {
-    escalationDecision = { round, trigger: "flip_flop", ...decideFlipFlopEscalation({ verdict, factorFlips, repeatedIssueCount }) };
+    escalationDecision = { round, trigger: "flip_flop", ...decideFlipFlopEscalation({ verdict: analysisVerdict, factorFlips, repeatedIssueCount }) };
   }
   if (escalationDecision.decision === "escalate" && escalationDecision.trigger === "flip_flop") {
     verdict = toEscalatedVerdict(
       verdict,
       factorFlips.map(({ factor, trace }) => `Rubric factor '${factor}' status flipped across 3 rounds (trace: ${trace.join("→")}). Owner decision required — reviewer cannot converge autonomously.`).join("; ")
     );
+    analysisVerdict = verdict;
   }
-  const convergenceSummary = buildConvergenceSummary({ runDir, round, verdict, factorFlips, repeatedIssueCount });
+  const convergenceSummary = buildConvergenceSummary({ runDir, round, verdict: analysisVerdict, factorFlips, repeatedIssueCount });
   result.convergenceSummary = convergenceSummary;
   if (convergenceSummary) writeText(path.join(runDir, `review-round-${round}-convergence.md`), `${formatConvergenceMarkdown(convergenceSummary)}\n`);
 
   const rubricGateRedispatchPath = path.join(runDir, `review-round-${round}-redispatch.md`);
-  const rubricGateFailure = verdict.verdict === "pass"
+  const rubricGateFailure = verdict.verdict === "pass" || confidenceDowngrade.applied
     ? buildReviewRunnerRubricGateFailure(data.run_id, rubricGateRedispatchPath, rubricLoad)
     : null;
+  const confidenceDowngradeApplied = confidenceDowngrade.applied && !rubricGateFailure;
   const verdictPath = path.join(runDir, `review-round-${round}-verdict.json`);
+  const appliedVerdict = rubricGateFailure ? "changes_requested" : confidenceDowngradeApplied ? "pass" : verdict.verdict;
   const verdictRecord = rubricGateFailure
     ? {
       ...verdict,
+      applied_verdict: appliedVerdict,
       relay_gate: {
         status: rubricGateFailure.status,
         layer: rubricGateFailure.layer,
@@ -288,11 +290,11 @@ async function run() {
         recovery: rubricGateFailure.recovery,
       },
     }
-    : verdict;
+    : { ...verdict, applied_verdict: appliedVerdict };
   writeText(verdictPath, `${JSON.stringify(verdictRecord, null, 2)}\n`);
 
   let redispatchPath = null;
-  if (verdict.verdict === "changes_requested" || rubricGateFailure) {
+  if ((verdict.verdict === "changes_requested" && !confidenceDowngrade.applied) || rubricGateFailure) {
     redispatchPath = rubricGateFailure
       ? rubricGateRedispatchPath
       : path.join(runDir, `review-round-${round}-redispatch.md`);
@@ -327,6 +329,7 @@ async function run() {
   updatedManifest = applyReviewerIdentity(updatedManifest, noComment || internalReview, runRepoPath);
   writeManifest(manifestPath, updatedManifest, body);
   appendRunEvent(runRepoPath, data.run_id, { event: EVENTS.ESCALATION_DECISION, state_from: data.state, state_to: updatedManifest.state, head_sha: reviewedHeadSha, ...escalationDecision });
+  const reviewApplyReason = confidenceDowngradeApplied ? "pass" : rubricGateFailure ? rubricGateFailure.status : verdict.verdict;
   appendRunEvent(runRepoPath, data.run_id, {
     event: EVENTS.REVIEW_APPLY,
     state_from: data.state,
@@ -334,8 +337,12 @@ async function run() {
     head_sha: reviewedHeadSha,
     round,
     reviewer: reviewerName,
-    reason: rubricGateFailure ? rubricGateFailure.status : verdict.verdict,
+    reason: reviewApplyReason,
     lineage_summary: escalationDecision.lineage_summary || lineageSummary,
+    ...(confidenceDowngradeApplied ? {
+      confidence_downgrade: true,
+      low_confidence_count: confidenceDowngrade.lowConfidenceCount,
+    } : {}),
   });
 
   if (Array.isArray(verdict.rubric_scores) && verdict.rubric_scores.length > 0) {
@@ -351,7 +358,8 @@ async function run() {
     });
   }
 
-  result.appliedVerdict = rubricGateFailure ? "changes_requested" : verdict.verdict;
+  result.appliedVerdict = appliedVerdict;
+  result.confidenceDowngrade = confidenceDowngradeApplied ? { originalVerdict: verdict.verdict, appliedVerdict: "pass", lowConfidenceCount: confidenceDowngrade.lowConfidenceCount } : null;
   result.nextState = updatedManifest.state;
   result.redispatchPath = redispatchPath;
   result.repeatedIssueCount = repeatedIssueCount;

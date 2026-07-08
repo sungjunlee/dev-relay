@@ -45,3 +45,27 @@ test("comment/buildCommentBody preserves rubric gate failures as CHANGES_REQUEST
   assert.match(body, /Quality Execution: MISSING/);
   assert.match(body, /Recovery command: node dispatch\.js/);
 });
+
+test("comment/buildCommentBody surfaces downgraded low-confidence findings as non-blocking notes", () => {
+  const body = buildCommentBody({
+    verdict: "changes_requested",
+    summary: "Only speculative findings remain.",
+    contract_status: "pass",
+    quality_review_status: "pass",
+    quality_execution_status: "pass",
+    issues: [{
+      title: "Consider tighter naming",
+      body: "This may be easier to scan with a more specific helper name.",
+      file: "src/view.js",
+      line: 7,
+      category: "quality",
+      severity: "low",
+      confidence: "low",
+    }],
+  }, 4);
+
+  assert.match(body, /Verdict: LGTM/);
+  assert.match(body, /Low-confidence findings \(non-blocking\):/);
+  assert.match(body, /src\/view\.js:7 — \[low\] Consider tighter naming/);
+  assert.doesNotMatch(body, /Verdict: CHANGES_REQUESTED/);
+});

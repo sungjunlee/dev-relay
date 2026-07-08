@@ -604,12 +604,20 @@ function formatPriorRoundContext(runDir, round) {
 
   const { scanPriorVerdicts } = require("./redispatch");
   const { formatIssueList } = require("./comment");
+  const { getAppliedVerdict } = require("./verdict");
 
   const lines = [];
   scanPriorVerdicts(runDir, round, (verdict, roundNum) => {
-    const parts = [`### Round ${roundNum}: ${verdict.verdict}`, verdict.summary];
+    const appliedVerdict = getAppliedVerdict(verdict);
+    const label = appliedVerdict && appliedVerdict !== verdict?.verdict
+      ? `${verdict.verdict} (applied: ${appliedVerdict})`
+      : verdict.verdict;
+    const parts = [`### Round ${roundNum}: ${label}`, verdict.summary];
     if (Array.isArray(verdict.issues) && verdict.issues.length) {
-      parts.push("Issues flagged:", formatIssueList(verdict.issues));
+      parts.push(
+        appliedVerdict === "changes_requested" ? "Issues flagged:" : "Advisory issues preserved from the raw verdict:",
+        formatIssueList(verdict.issues)
+      );
     }
     lines.push(parts.join("\n"));
   });

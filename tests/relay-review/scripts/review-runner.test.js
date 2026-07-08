@@ -683,7 +683,7 @@ test("review-runner snapshots PR body separately for round 2", () => {
       file: "README.md",
       line: 1,
       category: "contract",
-      severity: "high",
+      severity: "high", confidence: "high",
     }],
     rubric_scores: defaultRubricScores(),
     scope_drift: { creep: [], missing: [] },
@@ -1162,6 +1162,9 @@ test("pass verdict preserves assigned reviewer role and records the acting revie
   assert.equal(manifest.roles.reviewer, "claude");
   assert.equal(manifest.review.last_reviewer, "codex");
   assert.equal(reviewApplyEvent?.reviewer, "codex");
+  assert.equal(reviewApplyEvent?.reason, "pass");
+  assert.equal("confidence_downgrade" in reviewApplyEvent, false);
+  assert.equal("low_confidence_count" in reviewApplyEvent, false);
 });
 
 test("review-runner appends escalation_decision event on a clean no-trigger round", () => {
@@ -1277,7 +1280,7 @@ test("review-runner fail-closes reviewer PASS into changes_requested when execut
   const commentBody = fs.readFileSync(commentCapturePath, "utf-8");
 
   const manifest = readManifest(manifestPath).data;
-  const reviewApplyEvent = readRunEvents(repoRoot, runId).find((event) => event.event === "review_apply");
+  const reviewApplyEvent = [...readRunEvents(repoRoot, runId)].reverse().find((event) => event.event === "review_apply");
 
   assert.equal(result.appliedVerdict, "changes_requested");
   assert.equal(result.state, STATES.CHANGES_REQUESTED);
@@ -1318,7 +1321,7 @@ test("review-runner stores the runner-computed quality_execution_status in the v
       file: "src/index.js",
       line: 10,
       category: "contract",
-      severity: "high",
+      severity: "high", confidence: "high",
     }],
     rubric_scores: defaultRubricScores(),
     scope_drift: { creep: [], missing: [] },
@@ -1397,7 +1400,7 @@ test("review-runner fail-closes reviewer PASS into changes_requested when execut
   const verdictRecord = JSON.parse(fs.readFileSync(result.verdictPath, "utf-8"));
   const commentBody = fs.readFileSync(commentCapturePath, "utf-8");
   const manifest = readManifest(manifestPath).data;
-  const reviewApplyEvent = readRunEvents(repoRoot, runId).find((event) => event.event === "review_apply");
+  const reviewApplyEvent = [...readRunEvents(repoRoot, runId)].reverse().find((event) => event.event === "review_apply");
 
   assert.equal(result.appliedVerdict, "changes_requested");
   assert.equal(result.state, STATES.CHANGES_REQUESTED);
@@ -1565,7 +1568,7 @@ test("review-runner fails closed when branch+PR resolution only finds a stale te
 });
 
 test("changes_requested verdict creates a re-dispatch artifact", () => {
-  const { repoRoot, manifestPath, doneCriteriaPath, diffPath } = setupRepo();
+  const { repoRoot, manifestPath, doneCriteriaPath, diffPath, runId } = setupRepo();
   const reviewFile = writeVerdict(repoRoot, "changes.json", {
     verdict: "changes_requested",
     summary: "One requirement is missing.",
@@ -1580,7 +1583,7 @@ test("changes_requested verdict creates a re-dispatch artifact", () => {
         file: "src/index.js",
         line: 12,
         category: "contract",
-        severity: "high",
+        severity: "high", confidence: "high",
       },
     ],
     rubric_scores: defaultRubricScores(),
@@ -1608,12 +1611,408 @@ test("changes_requested verdict creates a re-dispatch artifact", () => {
   assert.match(redispatchText, /src\/index.js:12/);
 
   const manifest = readManifest(manifestPath).data;
+  const reviewApplyEvent = [...readRunEvents(repoRoot, runId)].reverse().find((event) => event.event === "review_apply");
   assert.equal(manifest.state, STATES.CHANGES_REQUESTED);
   assert.equal(manifest.next_action, "re_dispatch_requested_changes");
   assert.equal(manifest.review.rounds, 1);
   assert.equal(manifest.review.latest_verdict, "changes_requested");
   assert.equal(manifest.review.repeated_issue_count, 1);
   assert.deepEqual(manifest.review.last_lineage_summary, { deepening: 0, repeat: 0, stale: 0, new: 0, newly_scoreable: 0, unknown: 1 });
+  assert.equal(reviewApplyEvent?.reason, "changes_requested");
+  assert.equal("confidence_downgrade" in reviewApplyEvent, false);
+  assert.equal("low_confidence_count" in reviewApplyEvent, false);
+});
+
+test("all-low-confidence changes_requested verdict applies as advisory pass while preserving findings", () => {
+  const { repoRoot, manifestPath, doneCriteriaPath, diffPath, runId } = setupRepo();
+  const reviewFile = writeVerdict(repoRoot, "low-confidence-changes.json", {
+    verdict: "changes_requested",
+    summary: "Only speculative quality notes remain.",
+    contract_status: "pass",
+    quality_review_status: "pass",
+    quality_execution_status: "pass",
+    next_action: "changes_requested",
+    issues: [
+      {
+        title: "Consider clearer helper naming",
+        body: "The helper name may be easier to scan if it mentions the state it returns.",
+        file: "src/index.js",
+        line: 12,
+        category: "quality",
+        severity: "low",
+        confidence: "low",
+      },
+      {
+        title: "Consider localizing the loop variable",
+        body: "The loop variable is readable as-is, but a narrower name might reduce scan time.",
+        file: "src/index.js",
+        line: 20,
+        category: "quality",
+        severity: "low",
+        confidence: "low",
+      },
+    ],
+    rubric_scores: defaultRubricScores(),
+    scope_drift: { creep: [], missing: [] },
+  });
+
+  const stdout = execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--branch", "issue-42",
+    "--pr", "123",
+    "--done-criteria-file", doneCriteriaPath,
+    "--diff-file", diffPath,
+    "--review-file", reviewFile,
+    "--no-comment",
+    "--json",
+  ], { encoding: "utf-8" });
+
+  const result = JSON.parse(stdout);
+  const manifest = readManifest(manifestPath).data;
+  const verdictRecord = JSON.parse(fs.readFileSync(result.verdictPath, "utf-8"));
+  const reviewApplyEvent = [...readRunEvents(repoRoot, runId)].reverse().find((event) => event.event === "review_apply");
+
+  assert.equal(result.appliedVerdict, "pass");
+  assert.equal(result.state, STATES.READY_TO_MERGE);
+  assert.equal(result.redispatchPath, null);
+  assert.deepEqual(result.confidenceDowngrade, {
+    originalVerdict: "changes_requested",
+    appliedVerdict: "pass",
+    lowConfidenceCount: 2,
+  });
+  assert.equal(manifest.state, STATES.READY_TO_MERGE);
+  assert.equal(manifest.review.latest_verdict, "lgtm");
+  assert.equal(verdictRecord.verdict, "changes_requested");
+  assert.equal(verdictRecord.applied_verdict, "pass");
+  assert.equal(verdictRecord.issues.length, 2);
+  assert.ok(verdictRecord.issues.every((issue) => issue.confidence === "low"));
+  assert.equal(reviewApplyEvent?.reason, "pass");
+  assert.equal(reviewApplyEvent?.confidence_downgrade, true);
+  assert.equal(reviewApplyEvent?.low_confidence_count, 2);
+});
+
+test("all-low-confidence changes_requested verdict with a failing rubric score stays changes_requested", () => {
+  const { repoRoot, manifestPath, doneCriteriaPath, diffPath, runId } = setupRepo();
+  const reviewFile = writeVerdict(repoRoot, "low-confidence-failing-rubric-score.json", {
+    verdict: "changes_requested",
+    summary: "Only speculative notes remain, but the rubric still fails.",
+    contract_status: "pass",
+    quality_review_status: "pass",
+    quality_execution_status: "pass",
+    next_action: "changes_requested",
+    issues: [{
+      title: "Consider clearer helper naming",
+      body: "The helper name may be easier to scan if it mentions the state it returns.",
+      file: "src/index.js",
+      line: 12,
+      category: "quality",
+      severity: "low",
+      confidence: "low",
+    }],
+    rubric_scores: [{
+      factor: "Default enforcement rubric",
+      target: ">= 1/1",
+      observed: "0/1",
+      status: "fail",
+      tier: "contract",
+      notes: "The enforcement fixture rubric is not satisfied.",
+    }],
+    scope_drift: { creep: [], missing: [] },
+  });
+
+  const result = JSON.parse(execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--branch", "issue-42",
+    "--pr", "123",
+    "--done-criteria-file", doneCriteriaPath,
+    "--diff-file", diffPath,
+    "--review-file", reviewFile,
+    "--no-comment",
+    "--json",
+  ], { encoding: "utf-8" }));
+  const manifest = readManifest(manifestPath).data;
+  const verdictRecord = JSON.parse(fs.readFileSync(result.verdictPath, "utf-8"));
+  const reviewApplyEvent = [...readRunEvents(repoRoot, runId)].reverse().find((event) => event.event === "review_apply");
+
+  assert.equal(result.appliedVerdict, "changes_requested");
+  assert.equal(result.confidenceDowngrade, null);
+  assert.equal(result.state, STATES.CHANGES_REQUESTED);
+  assert.ok(result.redispatchPath);
+  assert.equal(manifest.state, STATES.CHANGES_REQUESTED);
+  assert.equal(manifest.next_action, "re_dispatch_requested_changes");
+  assert.equal(manifest.review.latest_verdict, "changes_requested");
+  assert.equal(verdictRecord.verdict, "changes_requested");
+  assert.equal(verdictRecord.applied_verdict, "changes_requested");
+  assert.equal(verdictRecord.rubric_scores[0].status, "fail");
+  assert.equal("confidence_downgrade" in reviewApplyEvent, false);
+  assert.equal("low_confidence_count" in reviewApplyEvent, false);
+});
+
+test("all-low-confidence changes_requested verdict with a below-target quality score stays changes_requested", () => {
+  const { repoRoot, manifestPath, doneCriteriaPath, diffPath, runId } = setupRepo();
+  const reviewFile = writeVerdict(repoRoot, "low-confidence-below-target-quality-score.json", {
+    verdict: "changes_requested",
+    summary: "Only speculative notes remain, but a required quality factor is below target.",
+    contract_status: "pass",
+    quality_review_status: "pass",
+    quality_execution_status: "pass",
+    next_action: "changes_requested",
+    issues: [{
+      title: "Consider clearer helper naming",
+      body: "The helper name may be easier to scan if it mentions the state it returns.",
+      file: "src/index.js",
+      line: 12,
+      category: "quality",
+      severity: "low",
+      confidence: "low",
+    }],
+    rubric_scores: [{
+      factor: "Implementation clarity",
+      target: ">= 8/10",
+      observed: "7/10",
+      score: 7,
+      target_score: 8,
+      status: "not_run",
+      tier: "quality",
+      notes: "Reviewer did not mark fail, but the score is below the required target.",
+    }],
+    scope_drift: { creep: [], missing: [] },
+  });
+
+  const result = JSON.parse(execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--branch", "issue-42",
+    "--pr", "123",
+    "--done-criteria-file", doneCriteriaPath,
+    "--diff-file", diffPath,
+    "--review-file", reviewFile,
+    "--no-comment",
+    "--json",
+  ], { encoding: "utf-8" }));
+  const manifest = readManifest(manifestPath).data;
+  const verdictRecord = JSON.parse(fs.readFileSync(result.verdictPath, "utf-8"));
+  const reviewApplyEvent = [...readRunEvents(repoRoot, runId)].reverse().find((event) => event.event === "review_apply");
+
+  assert.equal(result.appliedVerdict, "changes_requested");
+  assert.equal(result.confidenceDowngrade, null);
+  assert.equal(result.state, STATES.CHANGES_REQUESTED);
+  assert.ok(result.redispatchPath);
+  assert.equal(manifest.state, STATES.CHANGES_REQUESTED);
+  assert.equal(manifest.next_action, "re_dispatch_requested_changes");
+  assert.equal(manifest.review.latest_verdict, "changes_requested");
+  assert.equal(verdictRecord.verdict, "changes_requested");
+  assert.equal(verdictRecord.applied_verdict, "changes_requested");
+  assert.equal(verdictRecord.rubric_scores[0].score, 7);
+  assert.equal("confidence_downgrade" in reviewApplyEvent, false);
+  assert.equal("low_confidence_count" in reviewApplyEvent, false);
+});
+
+test("all-low-confidence changes_requested verdict is rejected by pass scope-drift gates", () => {
+  const { repoRoot, manifestPath, doneCriteriaPath, diffPath } = setupRepo();
+  const reviewFile = writeVerdict(repoRoot, "low-confidence-scope-drift.json", {
+    verdict: "changes_requested",
+    summary: "Only speculative quality notes remain, but a Done Criteria item is partial.",
+    contract_status: "pass",
+    quality_review_status: "pass",
+    quality_execution_status: "pass",
+    next_action: "changes_requested",
+    issues: [{
+      title: "Consider clearer helper naming",
+      body: "The helper name may be easier to scan if it mentions the state it returns.",
+      file: "src/index.js",
+      line: 12,
+      category: "quality",
+      severity: "low",
+      confidence: "low",
+    }],
+    rubric_scores: defaultRubricScores(),
+    scope_drift: {
+      creep: [],
+      missing: [{ criteria: "Add smoke.txt", status: "partial" }],
+    },
+  });
+
+  assert.throws(() => execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--branch", "issue-42",
+    "--pr", "123",
+    "--done-criteria-file", doneCriteriaPath,
+    "--diff-file", diffPath,
+    "--review-file", reviewFile,
+    "--no-comment",
+    "--json",
+  ], { encoding: "utf-8", stdio: "pipe" }), (error) => {
+    assert.match(String(error.stderr), /PASS verdict cannot have scope_drift\.missing entries with status not_done, changed, or partial/);
+    return true;
+  });
+
+  const manifest = readManifest(manifestPath).data;
+  assert.equal(manifest.state, STATES.REVIEW_PENDING);
+  assert.equal(manifest.review.latest_verdict, "pending");
+});
+
+test("all-low-confidence changes_requested verdict is blocked by failed execution evidence", () => {
+  const { repoRoot, manifestPath, doneCriteriaPath, diffPath, runId } = setupRepo();
+  const runDir = ensureRunLayout(repoRoot, runId).runDir;
+  fs.unlinkSync(path.join(runDir, EXECUTION_EVIDENCE_FILENAME));
+  const reviewFile = writeVerdict(repoRoot, "low-confidence-missing-execution.json", {
+    verdict: "changes_requested",
+    summary: "Only speculative quality notes remain.",
+    contract_status: "pass",
+    quality_review_status: "pass",
+    quality_execution_status: "pass",
+    next_action: "changes_requested",
+    issues: [{
+      title: "Consider clearer helper naming",
+      body: "The helper name may be easier to scan if it mentions the state it returns.",
+      file: "src/index.js",
+      line: 12,
+      category: "quality",
+      severity: "low",
+      confidence: "low",
+    }],
+    rubric_scores: defaultRubricScores(),
+    scope_drift: { creep: [], missing: [] },
+  });
+
+  const result = JSON.parse(execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--branch", "issue-42",
+    "--pr", "123",
+    "--done-criteria-file", doneCriteriaPath,
+    "--diff-file", diffPath,
+    "--review-file", reviewFile,
+    "--no-comment",
+    "--json",
+  ], { encoding: "utf-8" }));
+  const manifest = readManifest(manifestPath).data;
+  const verdictRecord = JSON.parse(fs.readFileSync(result.verdictPath, "utf-8"));
+  const reviewApplyEvent = [...readRunEvents(repoRoot, runId)].reverse().find((event) => event.event === "review_apply");
+
+  assert.equal(result.appliedVerdict, "changes_requested");
+  assert.equal(result.confidenceDowngrade, null);
+  assert.equal(result.state, STATES.CHANGES_REQUESTED);
+  assert.equal(manifest.state, STATES.CHANGES_REQUESTED);
+  assert.equal(manifest.review.latest_verdict, "changes_requested");
+  assert.equal(verdictRecord.verdict, "changes_requested");
+  assert.equal(verdictRecord.applied_verdict, "changes_requested");
+  assert.equal(verdictRecord.issues[0].file, EXECUTION_EVIDENCE_FILENAME);
+  assert.equal("confidence_downgrade" in reviewApplyEvent, false);
+  assert.equal("low_confidence_count" in reviewApplyEvent, false);
+});
+
+test("all-low-confidence changes_requested verdict is blocked by rubric gate failure", () => {
+  const { repoRoot, manifestPath, doneCriteriaPath, diffPath, runId } = setupRepo();
+  configureRubricFixture({ manifestPath, repoRoot, runId, state: "missing" });
+  const reviewFile = writeVerdict(repoRoot, "low-confidence-missing-rubric.json", {
+    verdict: "changes_requested",
+    summary: "Only speculative quality notes remain.",
+    contract_status: "pass",
+    quality_review_status: "pass",
+    quality_execution_status: "pass",
+    next_action: "changes_requested",
+    issues: [{
+      title: "Consider clearer helper naming",
+      body: "The helper name may be easier to scan if it mentions the state it returns.",
+      file: "src/index.js",
+      line: 12,
+      category: "quality",
+      severity: "low",
+      confidence: "low",
+    }],
+    rubric_scores: defaultRubricScores(),
+    scope_drift: { creep: [], missing: [] },
+  });
+
+  const result = JSON.parse(execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--branch", "issue-42",
+    "--pr", "123",
+    "--done-criteria-file", doneCriteriaPath,
+    "--diff-file", diffPath,
+    "--review-file", reviewFile,
+    "--no-comment",
+    "--json",
+  ], { encoding: "utf-8" }));
+  const manifest = readManifest(manifestPath).data;
+  const verdictRecord = JSON.parse(fs.readFileSync(result.verdictPath, "utf-8"));
+  const reviewApplyEvent = [...readRunEvents(repoRoot, runId)].reverse().find((event) => event.event === "review_apply");
+
+  assert.equal(result.appliedVerdict, "changes_requested");
+  assert.equal(result.confidenceDowngrade, null);
+  assert.equal(result.reviewGate.status, "rubric_state_failed_closed");
+  assert.equal(result.reviewGate.rubricState, "missing");
+  assert.equal(result.state, STATES.CHANGES_REQUESTED);
+  assert.equal(manifest.state, STATES.CHANGES_REQUESTED);
+  assert.equal(manifest.next_action, "repair_rubric_and_redispatch");
+  assert.equal(manifest.review.latest_verdict, "rubric_state_failed_closed");
+  assert.equal(verdictRecord.verdict, "changes_requested");
+  assert.equal(verdictRecord.applied_verdict, "changes_requested");
+  assert.equal(verdictRecord.issues[0].confidence, "low");
+  assert.equal(verdictRecord.relay_gate.status, "rubric_state_failed_closed");
+  assert.equal("confidence_downgrade" in reviewApplyEvent, false);
+  assert.equal("low_confidence_count" in reviewApplyEvent, false);
+});
+
+test("mixed-confidence changes_requested verdict records no downgrade event marker", () => {
+  const { repoRoot, doneCriteriaPath, diffPath, runId } = setupRepo();
+  const reviewFile = writeVerdict(repoRoot, "mixed-confidence-changes.json", {
+    verdict: "changes_requested",
+    summary: "One speculative issue and one blocking issue remain.",
+    contract_status: "fail",
+    quality_review_status: "pass",
+    quality_execution_status: "pass",
+    next_action: "changes_requested",
+    issues: [
+      {
+        title: "Consider clearer helper naming",
+        body: "The helper name may be easier to scan if it mentions the state it returns.",
+        file: "src/index.js",
+        line: 12,
+        category: "quality",
+        severity: "low",
+        confidence: "low",
+      },
+      {
+        title: "Missing smoke file",
+        body: "The PR does not add the required smoke.txt output.",
+        file: "src/index.js",
+        line: 20,
+        category: "contract",
+        severity: "high",
+        confidence: "high",
+      },
+    ],
+    rubric_scores: defaultRubricScores(),
+    scope_drift: { creep: [], missing: [] },
+  });
+
+  const stdout = execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--branch", "issue-42",
+    "--pr", "123",
+    "--done-criteria-file", doneCriteriaPath,
+    "--diff-file", diffPath,
+    "--review-file", reviewFile,
+    "--no-comment",
+    "--json",
+  ], { encoding: "utf-8" });
+
+  const result = JSON.parse(stdout);
+  const verdictRecord = JSON.parse(fs.readFileSync(result.verdictPath, "utf-8"));
+  const reviewApplyEvent = [...readRunEvents(repoRoot, runId)].reverse().find((event) => event.event === "review_apply");
+
+  assert.equal(result.appliedVerdict, "changes_requested");
+  assert.equal(verdictRecord.applied_verdict, "changes_requested");
+  assert.equal("confidence_downgrade" in reviewApplyEvent, false);
+  assert.equal("low_confidence_count" in reviewApplyEvent, false);
 });
 
 test("review-runner records rubric_scores as iteration_score events", () => {
@@ -1632,7 +2031,7 @@ test("review-runner records rubric_scores as iteration_score events", () => {
         file: "src/index.js",
         line: 12,
         category: "contract",
-        severity: "high",
+        severity: "high", confidence: "high",
       },
     ],
     rubric_scores: [
@@ -1731,7 +2130,7 @@ test("review-runner records score divergence and appends warning text to the PR 
         file: "src/index.js",
         line: 12,
         category: "contract",
-        severity: "high",
+        severity: "high", confidence: "high",
       },
     ],
     rubric_scores: [
@@ -1826,7 +2225,7 @@ test("review-runner keeps event journals on the manifest repo slug when --repo i
         file: "src/index.js",
         line: 12,
         category: "contract",
-        severity: "high",
+        severity: "high", confidence: "high",
       },
     ],
     rubric_scores: [
@@ -2074,7 +2473,7 @@ test("invalid pass verdict is rejected", () => {
         file: "x.js",
         line: 1,
         category: "contract",
-        severity: "low",
+        severity: "low", confidence: "low",
       },
     ],
     rubric_scores: defaultRubricScores(),
@@ -2232,7 +2631,7 @@ test("invalid scope_drift missing status is rejected", () => {
     contract_status: "fail",
     quality_review_status: "not_run",
     next_action: "changes_requested",
-    issues: [{ title: "Missing", body: "Not implemented", file: "x.js", line: 1, category: "contract", severity: "high" }],
+    issues: [{ title: "Missing", body: "Not implemented", file: "x.js", line: 1, category: "contract", severity: "high", confidence: "high" }],
     rubric_scores: defaultRubricScores(),
     scope_drift: {
       creep: [],
@@ -2261,7 +2660,7 @@ test("changes_requested verdict with scope_drift includes drift in redispatch", 
     contract_status: "fail",
     quality_review_status: "not_run",
     next_action: "changes_requested",
-    issues: [{ title: "Creep", body: "Unrelated change", file: "extra.js", line: 1, category: "scope", severity: "medium" }],
+    issues: [{ title: "Creep", body: "Unrelated change", file: "extra.js", line: 1, category: "scope", severity: "medium", confidence: "medium" }],
     rubric_scores: defaultRubricScores(),
     scope_drift: {
       creep: [{ file: "extra.js", reason: "Not in Done Criteria" }],
@@ -2354,7 +2753,7 @@ process.stdout.write(JSON.stringify({
     file: "marker.txt",
     line: 1,
     category: "contract",
-    severity: "high"
+    severity: "high", confidence: "high"
   }],
   rubric_scores: ${JSON.stringify(defaultRubricScores())},
   scope_drift: { creep: [], missing: [] }
@@ -2426,7 +2825,7 @@ test("repeated identical issues escalate on the third consecutive round", () => 
         file: "src/index.js",
         line: 12,
         category: "contract",
-        severity: "high",
+        severity: "high", confidence: "high",
       },
     ],
     rubric_scores: defaultRubricScores(),
@@ -2482,6 +2881,83 @@ test("rubric factor flip-flops preserve pass verdicts when there are zero repeat
   assert.equal(manifest.review.last_escalation_decision.reason, "progressive_deepening");
 });
 
+test("low-confidence downgrade is pass-equivalent for flip-flop escalation", () => {
+  const { repoRoot, manifestPath, runId, doneCriteriaPath, diffPath } = setupRepo();
+  const runDir = ensureRunLayout(repoRoot, runId).runDir;
+  fs.writeFileSync(path.join(runDir, "review-round-1-verdict.json"), JSON.stringify({ verdict: "changes_requested", rubric_scores: [{ factor: "Behavior", status: "pass" }] }), "utf-8");
+  fs.writeFileSync(path.join(runDir, "review-round-2-verdict.json"), JSON.stringify({ verdict: "changes_requested", rubric_scores: [{ factor: "behavior", status: "fail" }] }), "utf-8");
+  updateManifestRecord(manifestPath, (data) => ({ ...data, review: { ...(data.review || {}), rounds: 2 } }));
+  const reviewFile = writeVerdict(repoRoot, "flip-low-confidence.json", {
+    verdict: "changes_requested",
+    summary: "Only speculative behavior notes remain.",
+    contract_status: "pass",
+    quality_review_status: "pass",
+    quality_execution_status: "pass",
+    next_action: "changes_requested",
+    issues: [{
+      title: "Consider clearer behavior helper naming",
+      body: "The helper name may be easier to scan if it mentions behavior.",
+      file: "src/index.js",
+      line: 12,
+      category: "Behavior",
+      severity: "low",
+      confidence: "low",
+    }],
+    rubric_scores: [{ factor: "BEHAVIOR", target: ">= 1/1", observed: "1/1", status: "pass", tier: "contract", notes: "Recovered." }],
+    scope_drift: { creep: [], missing: [] },
+  });
+
+  const result = JSON.parse(execFileSync("node", [SCRIPT, "--repo", repoRoot, "--run-id", runId, "--pr", "123", "--done-criteria-file", doneCriteriaPath, "--diff-file", diffPath, "--review-file", reviewFile, "--no-comment", "--json"], { encoding: "utf-8" }));
+  const verdict = JSON.parse(fs.readFileSync(result.verdictPath, "utf-8"));
+  const manifest = readManifest(manifestPath).data;
+
+  assert.equal(result.appliedVerdict, "pass");
+  assert.equal(result.state, STATES.READY_TO_MERGE);
+  assert.equal(result.repeatedIssueCount, 0);
+  assert.equal(verdict.verdict, "changes_requested");
+  assert.equal(verdict.issues[0].confidence, "low");
+  assert.equal(manifest.review.latest_verdict, "lgtm");
+  assert.equal(manifest.review.last_escalation_decision.decision, "continue");
+  assert.equal(manifest.review.last_escalation_decision.reason, "progressive_deepening");
+  assert.deepEqual(manifest.review.last_lineage_summary, { deepening: 0, repeat: 0, stale: 0, new: 0, newly_scoreable: 0, unknown: 0 });
+});
+
+test("genuine changes_requested still escalates on pass-fail-pass flip-flop", () => {
+  const { repoRoot, manifestPath, runId, doneCriteriaPath, diffPath } = setupRepo();
+  const runDir = ensureRunLayout(repoRoot, runId).runDir;
+  fs.writeFileSync(path.join(runDir, "review-round-1-verdict.json"), JSON.stringify({ verdict: "changes_requested", rubric_scores: [{ factor: "Behavior", status: "pass" }] }), "utf-8");
+  fs.writeFileSync(path.join(runDir, "review-round-2-verdict.json"), JSON.stringify({ verdict: "changes_requested", rubric_scores: [{ factor: "behavior", status: "fail" }] }), "utf-8");
+  updateManifestRecord(manifestPath, (data) => ({ ...data, review: { ...(data.review || {}), rounds: 2 } }));
+  const reviewFile = writeVerdict(repoRoot, "flip-genuine-changes.json", {
+    verdict: "changes_requested",
+    summary: "Behavior blocker remains.",
+    contract_status: "fail",
+    quality_review_status: "pass",
+    quality_execution_status: "pass",
+    next_action: "changes_requested",
+    issues: [{
+      title: "Behavior blocker remains",
+      body: "The current behavior still misses a done criteria branch.",
+      file: "src/index.js",
+      line: 12,
+      category: "Behavior",
+      severity: "high",
+      confidence: "high",
+    }],
+    rubric_scores: [{ factor: "BEHAVIOR", target: ">= 1/1", observed: "1/1", status: "pass", tier: "contract", notes: "Recovered score conflicts with blocker." }],
+    scope_drift: { creep: [], missing: [] },
+  });
+
+  const result = JSON.parse(execFileSync("node", [SCRIPT, "--repo", repoRoot, "--run-id", runId, "--pr", "123", "--done-criteria-file", doneCriteriaPath, "--diff-file", diffPath, "--review-file", reviewFile, "--no-comment", "--json"], { encoding: "utf-8" }));
+  const manifest = readManifest(manifestPath).data;
+
+  assert.equal(result.appliedVerdict, "escalated");
+  assert.equal(result.state, STATES.ESCALATED);
+  assert.equal(manifest.review.latest_verdict, "escalated");
+  assert.equal(manifest.review.last_escalation_decision.decision, "escalate");
+  assert.equal(manifest.review.last_escalation_decision.reason, "flip_flop_thrash");
+});
+
 test("rubric factor flip-flops fail closed for stale lineage without waiting for three repeats", () => {
   const { repoRoot, manifestPath, runId, doneCriteriaPath, diffPath } = setupRepo();
   const runDir = ensureRunLayout(repoRoot, runId).runDir;
@@ -2501,7 +2977,7 @@ test("rubric factor flip-flops fail closed for stale lineage without waiting for
       file: "src/index.js",
       line: 12,
       category: "Behavior",
-      severity: "high",
+      severity: "high", confidence: "high",
       lineage: "stale",
       relates_to: "Round 2 Behavior",
     }],
@@ -2525,7 +3001,7 @@ test("formatPriorVerdictSummary produces correct round numbers and rubric summar
     {
       verdict: "changes_requested",
       summary: "Missing tests",
-      issues: [{ title: "a", body: "b", file: "x.js", line: 1, category: "contract", severity: "high" }],
+      issues: [{ title: "a", body: "b", file: "x.js", line: 1, category: "contract", severity: "high", confidence: "high" }],
       rubric_scores: [
         { factor: "Coverage", target: ">= 8", observed: "5", status: "fail", tier: "contract", notes: "low" },
       ],
@@ -2534,8 +3010,8 @@ test("formatPriorVerdictSummary produces correct round numbers and rubric summar
       verdict: "changes_requested",
       summary: "No auth guard",
       issues: [
-        { title: "c", body: "d", file: "y.js", line: 2, category: "quality", severity: "medium" },
-        { title: "e", body: "f", file: "z.js", line: 3, category: "contract", severity: "high" },
+        { title: "c", body: "d", file: "y.js", line: 2, category: "quality", severity: "medium", confidence: "medium" },
+        { title: "e", body: "f", file: "z.js", line: 3, category: "contract", severity: "high", confidence: "high" },
       ],
       rubric_scores: [],
     },
@@ -2613,7 +3089,7 @@ test("round 2 review prompt contains Prior Round Context section", () => {
       file: "src/index.js",
       line: 10,
       category: "contract",
-      severity: "high",
+      severity: "high", confidence: "high",
     }],
     rubric_scores: defaultRubricScores(),
     scope_drift: { creep: [], missing: [] },
@@ -2672,7 +3148,7 @@ test("round 2 redispatch artifact contains prior round summary", () => {
       file: "src/index.js",
       line: 5,
       category: "contract",
-      severity: "high",
+      severity: "high", confidence: "high",
     }],
     rubric_scores: defaultRubricScores(),
     scope_drift: { creep: [], missing: [] },
@@ -2706,7 +3182,7 @@ test("round 2 redispatch artifact contains prior round summary", () => {
       file: "src/index.js",
       line: 5,
       category: "contract",
-      severity: "high",
+      severity: "high", confidence: "high",
     }],
     rubric_scores: defaultRubricScores(),
     scope_drift: { creep: [], missing: [] },
@@ -2828,7 +3304,7 @@ test("buildRedispatchPrompt includes churn WARNING when churnGrowth is provided"
   fs.writeFileSync(helperPath, [
     `process.argv = ["node", "helper.js", "--repo", "/dev/null", "--branch", "x", "--pr", "1"];`,
     `const { buildRedispatchPrompt } = require(${JSON.stringify(SCRIPT)});`,
-    `const verdict = { verdict: "changes_requested", summary: "test", issues: [{ title: "t", body: "b", file: "x.js", line: 1, category: "contract", severity: "high" }], scope_drift: { creep: [], missing: [] } };`,
+    `const verdict = { verdict: "changes_requested", summary: "test", issues: [{ title: "t", body: "b", file: "x.js", line: 1, category: "contract", severity: "high", confidence: "high" }], scope_drift: { creep: [], missing: [] } };`,
     `const churn = { prevPrevLines: 50, prevLines: 80, curLines: 120 };`,
     `const result = buildRedispatchPrompt(verdict, "AC: do X", null, 3, churn);`,
     `process.stdout.write(result);`,
@@ -2843,7 +3319,7 @@ test("buildRedispatchPrompt omits churn WARNING when churnGrowth is null", () =>
   fs.writeFileSync(helperPath, [
     `process.argv = ["node", "helper.js", "--repo", "/dev/null", "--branch", "x", "--pr", "1"];`,
     `const { buildRedispatchPrompt } = require(${JSON.stringify(SCRIPT)});`,
-    `const verdict = { verdict: "changes_requested", summary: "test", issues: [{ title: "t", body: "b", file: "x.js", line: 1, category: "contract", severity: "high" }], scope_drift: { creep: [], missing: [] } };`,
+    `const verdict = { verdict: "changes_requested", summary: "test", issues: [{ title: "t", body: "b", file: "x.js", line: 1, category: "contract", severity: "high", confidence: "high" }], scope_drift: { creep: [], missing: [] } };`,
     `const result = buildRedispatchPrompt(verdict, "AC: do X", null, 3, null);`,
     `process.stdout.write(result);`,
   ].join("\n"), "utf-8");
@@ -2861,7 +3337,7 @@ test("buildRedispatchPrompt includes prior-round factor flips", () => {
   fs.writeFileSync(helperPath, [
     `process.argv = ["node", "helper.js", "--repo", "/dev/null", "--branch", "x", "--pr", "1"];`,
     `const { buildRedispatchPrompt } = require(${JSON.stringify(SCRIPT)});`,
-    `const verdict = { verdict: "changes_requested", summary: "test", issues: [{ title: "t", body: "b", file: "x.js", line: 1, category: "contract", severity: "high" }], scope_drift: { creep: [], missing: [] } };`,
+    `const verdict = { verdict: "changes_requested", summary: "test", issues: [{ title: "t", body: "b", file: "x.js", line: 1, category: "contract", severity: "high", confidence: "high" }], scope_drift: { creep: [], missing: [] } };`,
     `process.stdout.write(buildRedispatchPrompt(verdict, "AC: do X", ${JSON.stringify(runDir)}, 4, null));`,
   ].join("\n"), "utf-8");
   const out = execFileSync("node", [helperPath], { encoding: "utf-8" });

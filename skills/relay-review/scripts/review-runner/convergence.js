@@ -7,13 +7,15 @@ const {
   summarizeLineage,
 } = require("./redispatch");
 const { getRubricScoreNumber } = require("./score-utils");
+const { getAppliedVerdict } = require("./verdict");
 
 const LINEAGE_ORDER = ["deepening", "repeat", "stale", "new", "newly_scoreable", "unknown"];
 const SUMMARY_VERDICTS = new Set(["pass", "changes_requested", "escalated"]);
 
 function statusForRoundVerdict(round, verdict) {
-  if (round < 3 || !SUMMARY_VERDICTS.has(verdict?.verdict)) return null;
-  if (verdict.verdict === "pass") return "converged";
+  const appliedVerdict = getAppliedVerdict(verdict);
+  if (round < 3 || !SUMMARY_VERDICTS.has(appliedVerdict)) return null;
+  if (appliedVerdict === "pass") return "converged";
   if (round >= 5) return "decision_recommended";
   return "watch";
 }
@@ -62,7 +64,7 @@ function findImmediatePriorChangesRequested(runDir, round) {
     prior = verdict;
     return false;
   });
-  return prior?.verdict === "changes_requested" && Array.isArray(prior.issues) ? prior : null;
+  return getAppliedVerdict(prior) === "changes_requested" && Array.isArray(prior.issues) ? prior : null;
 }
 
 function currentIssueFactors(issue, verdict) {
