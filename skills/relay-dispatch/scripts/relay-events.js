@@ -266,6 +266,9 @@ function appendRunEvent(repoRoot, runId, eventData) {
     ...(eventData.failure_class !== undefined
       ? { failure_class: normalizeEventValue(eventData.failure_class) }
       : {}),
+    ...(eventData.dispatch_failure_class !== undefined
+      ? { dispatch_failure_class: normalizeEventValue(eventData.dispatch_failure_class) }
+      : {}),
     ...(eventData.preflight_type !== undefined
       ? { preflight_type: normalizeEventValue(eventData.preflight_type) }
       : {}),
