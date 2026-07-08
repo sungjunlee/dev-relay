@@ -775,6 +775,26 @@ test("reviewer-invoke/loadReviewText emits unregistered route event for open-mod
 
   const helperDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-helper-"));
   const reviewerScript = writeReviewerArgEchoScript(helperDir, "reviewer-unregistered-route.js");
+  const modelResolution = {
+    original_input: "opencode:unregistered-review",
+    actor: "opencode",
+    actor_field: "reviewer",
+    phase: "review",
+    requested_model: "unregistered-review",
+    resolved_route: "openai/unregistered-review",
+    source: "catalog_fallback",
+    candidates: ["openai/unregistered-review"],
+    warnings: ["catalog fallback used"],
+  };
+  const routePlan = {
+    phases: {
+      review: {
+        reviewer: "opencode",
+        model: "openai/unregistered-review",
+        model_resolution: modelResolution,
+      },
+    },
+  };
 
   loadReviewText({
     body: "# Notes\n",
@@ -785,12 +805,13 @@ test("reviewer-invoke/loadReviewText emits unregistered route event for open-mod
     reviewFile: null,
     reviewRepoPath: repoRoot,
     reviewedHeadSha: "abc123",
-    reviewerModel: "openai/unregistered-review",
+    reviewerModel: null,
     reviewerName: "opencode",
     reviewerScript,
     round: 1,
     runDir,
     runRepoPath: repoRoot,
+    routePlan,
   });
 
   const events = fs.readFileSync(getEventsPath(repoRoot, runId), "utf-8").trim().split("\n").map((line) => JSON.parse(line));
@@ -801,6 +822,8 @@ test("reviewer-invoke/loadReviewText emits unregistered route event for open-mod
   assert.equal(unregistered.actor_field, "reviewer");
   assert.equal(unregistered.reviewer, "opencode");
   assert.equal(unregistered.model, "openai/unregistered-review");
+  assert.equal(unregistered.model_resolution_source, "catalog_fallback");
+  assert.deepEqual(unregistered.model_resolution, modelResolution);
 });
 
 test("reviewer-invoke/loadReviewText escalates when the reviewer mutates the worktree", (t) => {

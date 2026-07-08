@@ -7,6 +7,7 @@ const MODEL_CATALOG = Object.freeze([
   {
     id: "glm-5.2",
     aliases: ["glm-5.2", "glm"],
+    last_checked: CATALOG_LAST_CHECKED,
     cost_hint: "premium",
     notes: "Strong default for harder coding and reasoning routes.",
     actor_routes: {
@@ -17,6 +18,7 @@ const MODEL_CATALOG = Object.freeze([
   {
     id: "kimi-k2.7-code",
     aliases: ["kimi-k2.7-code", "kimi"],
+    last_checked: CATALOG_LAST_CHECKED,
     cost_hint: "premium",
     notes: "Large implementation tasks when GLM is unavailable.",
     actor_routes: {
@@ -27,6 +29,7 @@ const MODEL_CATALOG = Object.freeze([
   {
     id: "deepseek-v4-pro",
     aliases: ["deepseek-v4-pro", "deepseek-pro"],
+    last_checked: CATALOG_LAST_CHECKED,
     cost_hint: "pro value",
     notes: "Larger changes with strong cost/performance balance.",
     actor_routes: {
@@ -37,6 +40,7 @@ const MODEL_CATALOG = Object.freeze([
   {
     id: "minimax-m3",
     aliases: ["minimax-m3", "minimax"],
+    last_checked: CATALOG_LAST_CHECKED,
     cost_hint: "mid",
     notes: "General coding when a capable mid-cost route is desired.",
     actor_routes: {
@@ -47,6 +51,7 @@ const MODEL_CATALOG = Object.freeze([
   {
     id: "deepseek-v4-flash",
     aliases: ["deepseek-v4-flash", "deepseek-flash"],
+    last_checked: CATALOG_LAST_CHECKED,
     cost_hint: "cheap",
     notes: "Fast iteration and low-cost preset experiments.",
     actor_routes: {

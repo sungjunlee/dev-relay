@@ -475,6 +475,48 @@ test("check exits non-zero for missing and unknown OpenCode/Pi provider routes",
   assert.equal(parseJson(unknown).decision.reason, "unknown_model_route");
 });
 
+test("resolve-model returns structured missing_actor_context for short model without actor", () => {
+  const relayHome = tempDir();
+  assert.equal(runConfig(["init", "--profile", "company", "--json"], { relayHome }).status, 0);
+
+  const result = runConfig([
+    "resolve-model",
+    "--phase",
+    "dispatch",
+    "--model",
+    "glm-5.2",
+    "--json",
+  ], { relayHome });
+
+  assert.notEqual(result.status, 0, result.combined);
+  const output = parseJson(result);
+  assert.equal(output.ok, false);
+  assert.equal(output.error, "missing_actor_context");
+  assert.equal(output.phase, "dispatch");
+  assert.equal(output.requested_model, "glm-5.2");
+});
+
+test("resolve-model returns structured missing_model for unmanaged actor without model", () => {
+  const relayHome = tempDir();
+  assert.equal(runConfig(["init", "--profile", "personal", "--json"], { relayHome }).status, 0);
+
+  const result = runConfig([
+    "resolve-model",
+    "--phase",
+    "dispatch",
+    "--executor",
+    "opencode",
+    "--json",
+  ], { relayHome });
+
+  assert.notEqual(result.status, 0, result.combined);
+  const output = parseJson(result);
+  assert.equal(output.ok, false);
+  assert.equal(output.error, "missing_model");
+  assert.equal(output.actor, "opencode");
+  assert.equal(output.resolved_route, null);
+});
+
 test("set-default writes exactly the requested default path in routes config", () => {
   const relayHome = tempDir();
 

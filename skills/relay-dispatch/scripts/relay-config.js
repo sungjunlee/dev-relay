@@ -447,6 +447,14 @@ function actorForPhaseFromArgs(phase) {
   throw new Error(`unsupported phase: ${phase}; expected one of: ${VALID_PHASES.join(", ")}`);
 }
 
+function optionalActorForPhaseFromArgs(phase) {
+  const executor = nonEmptyString(readArg(args, "--executor", undefined, CLI_ARG_OPTIONS));
+  const reviewer = nonEmptyString(readArg(args, "--reviewer", undefined, CLI_ARG_OPTIONS));
+  if (EXECUTOR_PHASES.has(phase)) return executor;
+  if (REVIEWER_PHASES.has(phase)) return reviewer;
+  throw new Error(`unsupported phase: ${phase}; expected one of: ${VALID_PHASES.join(", ")}`);
+}
+
 function normalizeFallback(value) {
   const fallback = nonEmptyString(value) || "none";
   if (!["none", "catalog"].includes(fallback)) {
@@ -463,7 +471,7 @@ function commandResolveModel(positionals, jsonOut) {
   if (!VALID_PHASES.includes(phase)) {
     throw new Error(`unsupported phase: ${phase}; expected one of: ${VALID_PHASES.join(", ")}`);
   }
-  const actor = actorForPhaseFromArgs(phase);
+  const actor = optionalActorForPhaseFromArgs(phase);
   const model = nonEmptyString(readArg(args, "--model", undefined, CLI_ARG_OPTIONS));
   const fallback = normalizeFallback(readArg(args, "--fallback", undefined, CLI_ARG_OPTIONS));
   const policyResult = loadRelayPolicy({ repoRoot: process.cwd() });
@@ -557,13 +565,22 @@ function parseRouteSpecWithResolution(spec, phase, { policy = null, fallback = "
       modelResolution: null,
     };
   }
+  if (hasProviderModelRoute(model)) {
+    return {
+      spec: {
+        [actorField]: actor,
+        model,
+      },
+      modelResolution: null,
+    };
+  }
 
   const resolution = resolveModelRequest({
     phase,
     actor,
     actorField,
     model,
-    fallback: hasProviderModelRoute(model) ? "none" : fallback,
+    fallback,
     policy,
   });
   if (!resolution.ok) {

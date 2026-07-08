@@ -462,6 +462,62 @@ test("review-runner records successful opencode advisory review without gating p
   assert.match(event.reviewer_policy.read_only.warnings.join("\n"), /not prevent writes/i);
 });
 
+test("review-runner advisory unregistered route event preserves route-plan model resolution provenance", () => {
+  const { repoRoot, runDir, runId, doneCriteriaPath, diffPath } = setupRepo();
+  const primaryScript = writePrimaryReviewer(repoRoot, passVerdict());
+  const opencodeScript = writeFakeOpencode(repoRoot);
+  writeJson(path.join(process.env.RELAY_HOME, "policy.json"), {
+    ...buildDefaultRelayPolicy(),
+    profile: "open-advisory-unregistered-test",
+    deny_unknown_model_routes: false,
+  });
+  const modelResolution = {
+    original_input: "opencode:unregistered-advisory",
+    actor: "opencode",
+    actor_field: "reviewer",
+    phase: "advisory_review",
+    requested_model: "unregistered-advisory",
+    resolved_route: "openai/unregistered-advisory",
+    source: "catalog_fallback",
+    candidates: ["openai/unregistered-advisory"],
+    warnings: ["catalog fallback used"],
+  };
+  writeJson(path.join(runDir, "route-plan.json"), {
+    version: 1,
+    phases: {
+      advisory_review: {
+        reviewer: "opencode",
+        model: "openai/unregistered-advisory",
+        profile: "blindspot",
+        model_resolution: modelResolution,
+      },
+    },
+  });
+
+  const result = runReview({
+    repoRoot,
+    runId,
+    doneCriteriaPath,
+    diffPath,
+    primaryScript,
+    opencodeScript,
+    advisoryReviewer: null,
+    extraArgs: ["--advisory-grace", "30"],
+  });
+  const events = readRunEvents(repoRoot, runId);
+  const advisoryEvent = events.find((record) => record.event === "advisory_review");
+  const unregistered = events.find((record) => record.event === "unregistered_route_used");
+
+  assert.equal(result.nextState, STATES.READY_TO_MERGE);
+  assert.equal(advisoryEvent.policy_decision.reason, "unknown_allowed");
+  assert.equal(unregistered.phase, "advisory_review");
+  assert.equal(unregistered.actor_field, "reviewer");
+  assert.equal(unregistered.reviewer, "opencode");
+  assert.equal(unregistered.model, "openai/unregistered-advisory");
+  assert.equal(unregistered.model_resolution_source, "catalog_fallback");
+  assert.deepEqual(unregistered.model_resolution, modelResolution);
+});
+
 test("review-runner accepts opencode primary review when route policy allows the reviewer model", () => {
   const { repoRoot, manifestPath, runDir, runId, doneCriteriaPath, diffPath } = setupRepo({
     modelPolicy: "allow-opencode-primary",

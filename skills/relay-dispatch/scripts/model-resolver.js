@@ -124,18 +124,19 @@ function daysSince(dateString, now) {
   return Math.floor((current - checked) / 86400000);
 }
 
-function catalogWarnings(now) {
+function catalogWarnings(lastChecked = CATALOG_LAST_CHECKED, now) {
   const warnings = [
     "catalog fallback used; verify provider/model availability before relying on this route",
   ];
-  const ageDays = daysSince(CATALOG_LAST_CHECKED, now);
+  const checked = nonEmptyString(lastChecked) || CATALOG_LAST_CHECKED;
+  const ageDays = daysSince(checked, now);
   if (ageDays !== null && ageDays > STALE_AFTER_DAYS) {
-    warnings.push(`stale catalog metadata: last_checked=${CATALOG_LAST_CHECKED}, age_days=${ageDays}`);
+    warnings.push(`stale catalog metadata: last_checked=${checked}, age_days=${ageDays}`);
   }
   return warnings;
 }
 
-function catalogCandidates({ actor, model }) {
+function catalogCandidateRecords({ actor, model }) {
   const actorName = nonEmptyString(actor);
   const wanted = nonEmptyString(model);
   if (!actorName || !wanted) return [];
@@ -146,10 +147,19 @@ function catalogCandidates({ actor, model }) {
     if (!route) continue;
     const aliases = uniqueStrings([entry.id, ...(entry.aliases || [])]).map((value) => value.toLowerCase());
     if (aliases.includes(lower) || routeBasename(route).toLowerCase() === lower) {
-      candidates.push(route);
+      candidates.push({
+        route,
+        last_checked: nonEmptyString(entry.last_checked) || CATALOG_LAST_CHECKED,
+        notes: nonEmptyString(entry.notes),
+      });
     }
   }
-  return uniqueStrings(candidates);
+  const seen = new Set();
+  return candidates.filter((candidate) => {
+    if (seen.has(candidate.route)) return false;
+    seen.add(candidate.route);
+    return true;
+  });
 }
 
 function baseResult({ phase, actor, actorField, model }) {
@@ -213,8 +223,25 @@ function resolveModelRequest({
   if (!base.actor) return { ...base, error: "missing_actor_context" };
 
   if (!base.requested_model) {
+    const decision = policyDecision({
+      policy,
+      phase: base.phase,
+      actor: base.actor,
+      actorField: base.actor_field,
+      model: null,
+    });
+    if (decision.allowed === true && decision.reason === "managed_cli") {
+      return {
+        ...base,
+        ok: true,
+        source: "model_less",
+        resolved_route: null,
+        policy_decision: decision,
+      };
+    }
     return {
-      ...withPolicy({ ...base, source: "model_less" }, policy, null),
+      ...base,
+      error: "missing_model",
       resolved_route: null,
     };
   }
@@ -262,7 +289,8 @@ function resolveModelRequest({
   }
 
   if (fallback === "catalog") {
-    const catalog = catalogCandidates({ actor: base.actor, model: base.requested_model });
+    const catalogRecords = catalogCandidateRecords({ actor: base.actor, model: base.requested_model });
+    const catalog = catalogRecords.map((candidate) => candidate.route);
     if (catalog.length === 1) {
       return resolvedResult({
         base,
@@ -272,7 +300,7 @@ function resolveModelRequest({
         candidates: catalog,
         warnings: [
           probeResult?.warning,
-          ...catalogWarnings(now),
+          ...catalogWarnings(catalogRecords[0]?.last_checked, now),
         ],
         probe: probeResult,
       });

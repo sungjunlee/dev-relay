@@ -4,6 +4,7 @@ const assert = require("node:assert/strict");
 const {
   resolveModelRequest,
 } = require("../../../skills/relay-dispatch/scripts/model-resolver");
+const { MODEL_CATALOG } = require("../../../skills/relay-dispatch/scripts/model-catalog");
 const { buildDefaultRelayPolicy } = require("../../../skills/relay-dispatch/scripts/relay-policy");
 
 function policy(overrides = {}) {
@@ -79,6 +80,24 @@ test("model resolver keeps managed codex model-less routes model-less", () => {
   assert.equal(result.policy_decision.reason, "managed_cli");
 });
 
+test("model resolver rejects unmanaged model-less actors with missing_model", () => {
+  const result = resolveModelRequest({
+    phase: "dispatch",
+    actor: "opencode",
+    actorField: "executor",
+    policy: policy({ deny_unknown_model_routes: false }),
+    probeModels: () => {
+      throw new Error("missing unmanaged model must fail before probing");
+    },
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.error, "missing_model");
+  assert.equal(result.resolved_route, null);
+  assert.equal(result.source, null);
+  assert.equal(result.policy_decision, null);
+});
+
 test("model resolver returns structured ambiguous_model diagnostics", () => {
   const result = resolveModelRequest({
     phase: "dispatch",
@@ -141,4 +160,12 @@ test("model resolver marks stale catalog fallback metadata", () => {
 
   assert.equal(result.ok, true);
   assert.ok(result.warnings.some((warning) => /stale catalog/i.test(warning)));
+  assert.match(result.warnings.join("\n"), /last_checked=2026-07-06/);
+});
+
+test("model catalog entries carry per-entry last_checked provenance", () => {
+  assert.ok(MODEL_CATALOG.length > 0);
+  for (const entry of MODEL_CATALOG) {
+    assert.match(entry.last_checked, /^\d{4}-\d{2}-\d{2}$/);
+  }
 });
