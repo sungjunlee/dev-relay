@@ -21,11 +21,11 @@ Route selection is one user-facing concept: a single routes.json schema (open-by
 
 ### Batch 2 — per-run UX (blocked by #781)
 
-- [~] #782 Route presets: --route-preset, /relay natural-language mapping, model catalog (Phase B) — M; PR #813 **ready_to_merge** (LGTM round 7, awaiting explicit merge). Rebased onto post-Batch-1 main (cli-schema flag union + relay-config.test import union), then 5 review-driven corrections
+- [x] #782 Route presets: --route-preset, /relay natural-language mapping, model catalog (Phase B) → PR #813 **merged** 2026-07-07 (LGTM round 7; rebased onto post-Batch-1 main, then 5 review-driven corrections)
 
 ### Batch 3 — self-audit (blocked by #781)
 
-- [ ] #783 relay-config revise mode: gaps --json, conversational amendments, migrate (Phase C) — M; degrades gracefully without #782 (preset_broken gap type inert until presets exist)
+- [ ] #783 relay-config revise mode: gaps --json, conversational amendments, migrate (Phase C) — M; deps satisfied (Phase A/B merged; preset_broken + unregistered_route_in_use now live). **HELD 2026-07-08**: disjoint file surface is `relay-config.js`, which the other session's live `issue-825` (Epic #825 model-resolution, branch `issue-825-model-resolution`) is actively editing — concurrent dispatch = cross-session conflict. Also disk at 1.3Gi/100% (ENOSPC risk for a 2nd codex run). Dispatch once #825 lands + disk freed.
 
 ### Unplanned (found during Batch 1 execution)
 
@@ -33,7 +33,7 @@ Route selection is one user-facing concept: a single routes.json schema (open-by
 - [ ] #795 dispatch branches from local main; unpushed local commits contaminate every PR diff — filed after the same scope-noise finding cost one review round on each of PR #789/#791/#792 (rule of three)
 - [x] #805 validateManifestPaths rejects relay worktrees for runs dispatched from a linked worktree (basename mismatch) — PR #810 merged; fix proven live by gate-check passing for PR #811 via normal --repo resolution
 - [ ] #809 dispatch.js from a linked worktree records base_branch that does not exist on origin — S; TWO symptoms now: auto-PR fails (escalated), and after finalize's learnings push published origin/worktree-floofy-seeking-music, new dispatches failed at base-merge until the stray remote branch was deleted
-- [~] #807+#808 finalize-run resilience (post-merge crash + stale pre-merge gate) — PR #814 **ready_to_merge** (LGTM round 9, awaiting explicit merge); run `...585f0a8b`, codex base + R6-R9 orchestrator-corrections
+- [x] #807+#808 finalize-run resilience (post-merge crash + stale pre-merge gate) → PR #814 **merged** 2026-07-07 (LGTM round 9; run `...585f0a8b`, codex base + R6-R9 orchestrator-corrections)
 - [ ] #807 finalize-run post-merge crash (runCleanup removes worktree → getCanonicalRepoRoot on it; writeManifest is last) leaves run stuck at ready_to_merge — S; A2 run completed manually via updateManifestState+writeManifest + cleanup_result event
 - [ ] #808 finalize-run pre-merge CI gate blocks already-MERGED PRs on never-completing checks (CodeRabbit PENDING after branch delete) — S; ordering fix: fetch merge state before assertPreMergeSafety
 - [ ] #815 flaky test: dispatch SIGINT descendant-survival warning intermittently missing under elevated spawn latency — filed during #814; passes isolated, flakes under load
@@ -50,6 +50,13 @@ Route selection is one user-facing concept: a single routes.json schema (open-by
 - Phase D (relay-plan route recommendation + fleet per-leaf fill) is NOT in this sprint — observe-gated on ≥~10 non-default-route runs over ~4 weeks after A–C ship.
 
 ## Progress
+
+### 2026-07-08 (Batch 2 merged; #783 held on cross-session contention)
+- **Both Batch 2 PRs merged** (user instruction): #813 (#782 route presets) 2026-07-07 23:05, #814 (#807/#808 finalize-run resilience) 2026-07-07 23:04. main HEAD `29fd532`. **Only #783 (Phase C) remains** in the sprint plan; Phase D still observe-gated.
+- **Two new epics are owned by ANOTHER session/agent — not this session's work**: #825 (Provider-aware model resolution: #820-#824) and #826 (Operational visibility: #827-#830). #825 is the natural sequel to #782 (its #822/#824 extend #782's just-merged preset-CRUD flag validation + route-plan snapshot attribution). #826 is orthogonal (runtime visibility) but productizes the salvage/observe pain this sprint hit repeatedly (#829 ⊃ the recover-state playbook, relates #806/#755; #830 relates #815/#816/#819).
+- **#783 HELD, not dispatched.** The other session has `issue-825` LIVE (`dispatched`, branch `issue-825-model-resolution`, worktree `14f58ef0`, codex, base `29fd532`) — a broad epic-level run editing `relay-config.js`/route-plan, the exact disjoint surface #783 needs. Concurrent dispatch = guaranteed cross-session conflict. Compounding: disk `/System/Volumes/Data` at 1.3Gi free / 100% capacity → ENOSPC risk for a 2nd concurrent codex dispatch (same failure mode as the 2026-07-07 session). Resume #783 once #825 lands (clears relay-config.js) and disk is freed; rebase onto whatever #825 merges.
+- **#816 ≠ #819 (not a dup; both real).** #816 = parallel test-FILE concurrency contention flakes fleet's ~4.4s condition-wait windows even on a quiet machine (8 fleet failures under zero external load) → fix is option B (widen root-caused windows). #819 = leaked SIGTERM-ignoring codex fixtures drive machine load and *compound* the flakes. Related, distinct root causes. Reaped leaked fixtures again this session (1 → 0).
+- **PRD gap noted**: epics #825/#826 cite `docs/model-resolution-prd.md` and `docs/operational-observability-prd.md` as Source, but neither is committed to any branch/history here (may be uncommitted-local in the other session). Flagged for the owning session to commit — the durable source axis should live in-repo.
 
 ### 2026-07-07/08 (Batch 2 → both ready_to_merge)
 - **Both Batch 2 PRs reached ready_to_merge; neither merged (awaiting explicit instruction).** #813 (#782) LGTM round 7; #814 (#807/#808) LGTM round 9.
