@@ -59,6 +59,27 @@ test("resolveAdvisoryConfig normalizes CLI advisory flags as a one-lane shorthan
   }]);
 });
 
+test("resolveAdvisoryConfig honors an explicit empty manifest lane list over planned lanes", () => {
+  const config = resolveAdvisoryConfig({
+    data: { routing: { selected: { advisory_review: [] } } },
+    routePlan: { phases: { advisory_review: [{ reviewer: "codex", model: "openai/planned-model" }] } },
+  });
+
+  assert.deepEqual(config.lanes, []);
+  assert.equal(config.reviewer, null);
+});
+
+test("resolveAdvisoryConfig falls through to planned lanes when routing has no advisory value", () => {
+  const config = resolveAdvisoryConfig({
+    data: { routing: { selected: {} } },
+    routePlan: { phases: { advisory_review: [{ reviewer: "codex", model: "openai/planned-model" }] } },
+  });
+
+  assert.equal(config.lanes.length, 1);
+  assert.equal(config.reviewer, "codex");
+  assert.equal(config.source, "route_plan");
+});
+
 test("resolveAdvisoryConfig accepts a manifest advisory lane list with defaults", () => {
   const config = resolveAdvisoryConfig({
     data: {

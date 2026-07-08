@@ -1740,6 +1740,85 @@ test("hardened advisory finish binds cached success when result rewrite lands af
   assert.equal(bound.artifactHash, result.artifactHash);
 });
 
+test("result rewritten after the deadline is still consumed when completed_at is within it", async () => {
+  const { repoRoot, manifestPath, runDir, runId } = setupRepo();
+  const manifest = readManifest(manifestPath).data;
+  const resultPath = path.join(runDir, "review-round-1-advisory-opencode-result.json");
+  const resultDeadlineMs = Date.now() + 60_000;
+  // Simulate the worker's post-event rewrite: content completed within the
+  // deadline, but the file's mtime is after it. No earlier read has cached
+  // the result, so only the content stamp can rescue it.
+  fs.writeFileSync(resultPath, `${JSON.stringify({
+    artifactHash: null,
+    artifactPath: null,
+    completed_at: new Date(resultDeadlineMs - 30_000).toISOString(),
+    failureReason: null,
+    profile: "blindspot",
+    rawResponsePath: null,
+    required_count: 0,
+    advisory_count: 0,
+    duplicate_low_confidence_count: 0,
+    reviewer: "opencode",
+    status: "success",
+  }, null, 2)}\n`, "utf-8");
+  const lateTime = new Date(resultDeadlineMs + 120_000);
+  fs.utimesSync(resultPath, lateTime, lateTime);
+
+  const consumed = await finishAdvisoryReview({
+    advisoryRun: {
+      headSha: manifest.git.head_sha,
+      profile: "blindspot",
+      resultPath,
+      reviewerName: "opencode",
+      round: 1,
+      runId,
+      runRepoPath: repoRoot,
+      startedAt: Date.now(),
+    },
+    resultDeadlineMs,
+    waitMs: 0,
+  });
+
+  assert.equal(consumed.status, "success");
+});
+
+test("result whose completed_at is after the deadline is deferred, not consumed", async () => {
+  const { repoRoot, manifestPath, runDir, runId } = setupRepo();
+  const manifest = readManifest(manifestPath).data;
+  const resultPath = path.join(runDir, "review-round-1-advisory-opencode-result.json");
+  const resultDeadlineMs = Date.now() - 10;
+  fs.writeFileSync(resultPath, `${JSON.stringify({
+    artifactHash: null,
+    artifactPath: null,
+    completed_at: new Date(resultDeadlineMs + 30_000).toISOString(),
+    failureReason: null,
+    profile: "blindspot",
+    rawResponsePath: null,
+    required_count: 0,
+    advisory_count: 0,
+    duplicate_low_confidence_count: 0,
+    reviewer: "opencode",
+    status: "success",
+  }, null, 2)}\n`, "utf-8");
+
+  const deferred = await finishAdvisoryReview({
+    advisoryRun: {
+      headSha: manifest.git.head_sha,
+      profile: "blindspot",
+      resultPath,
+      reviewerName: "opencode",
+      round: 1,
+      runId,
+      runRepoPath: repoRoot,
+      startedAt: Date.now(),
+    },
+    resultDeadlineMs,
+    waitMs: 0,
+  });
+
+  assert.equal(deferred.status, "deferred");
+});
+
 test("invalid advisory JSON is recorded as advisory failure while primary pass still applies", () => {
   const { repoRoot, manifestPath, runId, doneCriteriaPath, diffPath } = setupRepo();
   const primaryScript = writePrimaryReviewer(repoRoot, passVerdict());

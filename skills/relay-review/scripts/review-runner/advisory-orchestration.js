@@ -143,6 +143,11 @@ function resolveAdvisoryConfig({
       profile: advisoryProfileArg || "blindspot",
     }, "cli");
     source = "cli";
+  } else if (Array.isArray(routedRaw)) {
+    // An explicit lane array in manifest routing is a selection even when
+    // empty: [] means "no advisory lanes", never fall through to the plan.
+    lanes = normalizeLaneList(routedRaw, "routing");
+    source = "routing";
   } else if (hasAdvisoryConfigValue(routedRaw)) {
     lanes = normalizeLaneList(routedRaw, "routing");
     source = "routing";

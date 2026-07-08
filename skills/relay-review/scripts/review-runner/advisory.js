@@ -116,6 +116,14 @@ function readJsonIfExists(filePath) {
 function readJsonIfExistsBefore(filePath, latestMtimeMs = null) {
   const result = readJsonIfExists(filePath);
   if (!result || !Number.isFinite(latestMtimeMs)) return result;
+  // The worker rewrites the result file after appending the ADVISORY_REVIEW
+  // event, so file mtime lies about when the result actually arrived. Trust
+  // the content stamp written at first completion; mtime is only a fallback
+  // for artifacts produced before completed_at existed.
+  const completedAtMs = Date.parse(result.completed_at || "");
+  if (Number.isFinite(completedAtMs)) {
+    return completedAtMs <= latestMtimeMs ? result : null;
+  }
   const stat = fs.statSync(filePath);
   return stat.mtimeMs <= latestMtimeMs ? result : null;
 }
@@ -463,6 +471,7 @@ function executeAdvisoryRequest(request) {
   const result = {
     artifactHash,
     artifactPath,
+    completed_at: new Date().toISOString(),
     failureReason,
     gating: request.gating === true,
     lane_index: request.laneIndex || 1,
