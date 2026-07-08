@@ -159,6 +159,57 @@ test("manifest/paths accepts relay worktree named after linked dispatch root whe
   assert.equal(result.worktreeLocation, "relay_worktree");
 });
 
+test("manifest/paths accepts foreign-basename relay worktree when manifest repo_root is primary and common dir binds", () => {
+  const runId = "issue-851-20260708140000000-36eba292";
+  const { repoRoot, linkedRoot, manifestPath, relayWorktreeBase } = createLinkedDispatchFixture(runId);
+  const relayWorktree = path.join(relayWorktreeBase, "36eba292", path.basename(linkedRoot));
+  execFileSync("git", ["worktree", "add", relayWorktree, "-b", "issue-851-relay"], {
+    cwd: repoRoot,
+    stdio: "pipe",
+  });
+
+  const result = validateManifestPaths({
+    repo_root: repoRoot,
+    worktree: relayWorktree,
+  }, {
+    expectedRepoRoot: repoRoot,
+    manifestPath,
+    runId,
+    caller: "manifest/paths.test foreign basename bound worktree",
+  });
+
+  assert.notEqual(path.basename(relayWorktree), path.basename(repoRoot));
+  assert.equal(result.repoRoot, path.resolve(repoRoot));
+  assert.equal(result.worktree, relayWorktree);
+  assert.equal(result.worktreeLocation, "relay_worktree");
+});
+
+test("manifest/paths rejects foreign-basename relay worktree when git common dir differs and repo_root is primary", () => {
+  const runId = "issue-851-20260708140000001-36eba292";
+  const { repoRoot, linkedRoot, manifestPath, relayWorktreeBase } = createLinkedDispatchFixture(runId);
+  const attackerRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-paths-foreign-attacker-"));
+  initGitRepo(attackerRoot);
+  commitBaseFile(attackerRoot);
+  const attackerRelayWorktree = path.join(relayWorktreeBase, "attacker-foreign", path.basename(linkedRoot));
+  execFileSync("git", ["worktree", "add", attackerRelayWorktree, "-b", "attacker-foreign-relay"], {
+    cwd: attackerRoot,
+    stdio: "pipe",
+  });
+
+  assert.throws(
+    () => validateManifestPaths({
+      repo_root: repoRoot,
+      worktree: attackerRelayWorktree,
+    }, {
+      expectedRepoRoot: repoRoot,
+      manifestPath,
+      runId,
+      caller: "manifest/paths.test foreign basename wrong common dir",
+    }),
+    /is not contained under the expected repo root/
+  );
+});
+
 test("manifest/paths rejects linked-root relay worktree basename when git common dir differs", () => {
   const runId = "issue-805-20260706000901941-2ab48b13";
   const { repoRoot, linkedRoot, manifestPath, relayWorktreeBase } = createLinkedDispatchFixture(runId);
