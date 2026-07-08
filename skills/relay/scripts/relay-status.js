@@ -11,7 +11,7 @@ const {
 const { getCanonicalRepoRoot } = require("../../relay-dispatch/scripts/manifest/paths");
 const { listManifestRecords } = require("../../relay-dispatch/scripts/manifest/store");
 const { isTerminalState } = require("../../relay-dispatch/scripts/manifest/lifecycle");
-const { observeRun } = require("../../relay-dispatch/scripts/run-observer");
+const { formatText, observeRun } = require("../../relay-dispatch/scripts/run-observer");
 
 const args = process.argv.slice(2);
 const KNOWN_FLAGS = ["--repo", "--run-id", "--issue", "--json", "--help", "-h"];
@@ -69,20 +69,6 @@ function selectIssueRuns(repoRoot, issueNumber) {
   };
 }
 
-function formatRow(row) {
-  return [
-    `Run: ${row.run_id}`,
-    `State: ${row.state}`,
-    `Lease: ${row.lease.status || "unknown"}, elapsed ${row.lease.elapsed_s ?? "?"}s, remaining ${row.lease.remaining_s ?? "?"}s`,
-    `Output: ${row.logs.last_output_at ? `silent for ${row.logs.silent_for_s}s` : "no output observed"}`,
-    `Worktree: ${row.worktree.exists ? "exists" : "missing"}, reviewable=${row.worktree.reviewable_dirt}, commits=${row.worktree.new_commits}`,
-    `PR: ${row.pr.number ? `#${row.pr.number} ${row.pr.state}` : row.pr.lookup_status}`,
-    `Classification: ${row.classification}`,
-    `Next: ${row.next_action.kind}`,
-    `Command: ${row.next_action.command}`,
-  ].join("\n");
-}
-
 function formatIssueNoRun(selection) {
   if (selection.selection_reason === "multiple_active_runs") {
     return [
@@ -117,7 +103,7 @@ function main() {
   const repoRoot = getCanonicalRepoRoot(path.resolve(repo));
   if (runId) {
     const row = observeRun({ repo: repoRoot, runId });
-    console.log(hasCliFlag("--json") ? JSON.stringify({ ok: true, row }, null, 2) : formatRow(row));
+    console.log(hasCliFlag("--json") ? JSON.stringify({ ok: true, row }, null, 2) : formatText(row));
     return;
   }
   const issueNumber = Number(issueArg);
@@ -129,7 +115,7 @@ function main() {
   }
   const row = observeRun({ repo: repoRoot, runId: selection.selected_run_id });
   const payload = { ok: true, selection, row };
-  console.log(hasCliFlag("--json") ? JSON.stringify(payload, null, 2) : `${formatRow(row)}\nSelection: ${selection.selection_reason}`);
+  console.log(hasCliFlag("--json") ? JSON.stringify(payload, null, 2) : `${formatText(row)}\nSelection: ${selection.selection_reason}`);
 }
 
 if (require.main === module) {

@@ -364,5 +364,6 @@ if (require.main === module) {
 
 module.exports = {
   classify,
+  formatText,
   observeRun,
 };

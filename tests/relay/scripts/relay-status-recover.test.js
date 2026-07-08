@@ -107,3 +107,28 @@ test("relay-recover plans reconcile for dead work but refuses missing worktree",
   assert.equal(unsafe.safe_to_apply, false);
   assert.equal(unsafe.guidance, "inspect manually");
 });
+
+test("relay-recover refuses to apply running runs", () => {
+  for (const classification of ["running_with_output", "running_silent"]) {
+    const plan = planFor({
+      run_id: "issue-829-20260708000000000-cccccccc",
+      classification,
+      next_action: { command: "inspect running process" },
+    }, "/tmp/repo");
+    assert.equal(plan.action, "delegate_reconcile");
+    assert.equal(plan.safe_to_apply, false);
+  }
+});
+
+test("relay-recover gives manual guidance for terminal or unknown runs", () => {
+  for (const classification of ["ready_to_merge", "unknown_needs_manual_inspection"]) {
+    const plan = planFor({
+      run_id: "issue-829-20260708000000000-dddddddd",
+      classification,
+      next_action: { command: "inspect manually" },
+    }, "/tmp/repo");
+    assert.equal(plan.action, "manual_guidance");
+    assert.equal(plan.safe_to_apply, false);
+    assert.equal(plan.guidance, "inspect manually");
+  }
+});
