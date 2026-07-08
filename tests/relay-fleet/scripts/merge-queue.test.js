@@ -198,7 +198,7 @@ test("merge-queue serially finalizes ready fleet children in manifest order", ()
   assert.equal(readManifest(getManifestPath(repoRoot, runB)).data.state, RUN_STATES.MERGED);
 });
 
-test("merge-queue stops at first merge failure and marks that child merge_blocked", () => {
+test("merge-queue continues after a merge failure and marks only that child merge_blocked", () => {
   const { relayHome, repoRoot } = setupRepo("relay-fleet-merge-red-");
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "fleet-merge-red-fake-"));
   const finalizeScript = writeFakeFinalizeScript(tmpDir);
@@ -247,12 +247,20 @@ test("merge-queue stops at first merge failure and marks that child merge_blocke
 
   assert.equal(result.status, 1);
   const payload = JSON.parse(result.stdout);
+  assert.equal(payload.ok, false);
+  assert.equal(payload.results.length, 3);
+  assert.deepEqual(payload.results.map((entry) => entry.status), ["merged", "merge_blocked", "merged"]);
   assert.equal(payload.results[1].status, "merge_blocked");
-  assert.deepEqual(readJsonLines(logPath).map((entry) => entry.runId), [runA, runB]);
+  assert.deepEqual(readJsonLines(logPath).map((entry) => entry.runId), [runA, runB, runC]);
   assert.equal(readManifest(getManifestPath(repoRoot, runA)).data.state, RUN_STATES.MERGED);
   assert.equal(readManifest(getManifestPath(repoRoot, runB)).data.state, RUN_STATES.MERGE_BLOCKED);
-  assert.equal(readManifest(getManifestPath(repoRoot, runC)).data.state, RUN_STATES.READY_TO_MERGE);
+  assert.equal(readManifest(getManifestPath(repoRoot, runC)).data.state, RUN_STATES.MERGED);
   assert.equal(payload.operator_attention.some((item) => item.run_id === runB && item.reason === RUN_STATES.MERGE_BLOCKED), true);
+  const events = readJsonLines(path.join(getRunDir(repoRoot, runB), "events.jsonl"));
+  const blockedEvent = events.find((entry) => entry.event === "merge_blocked");
+  assert.equal(blockedEvent.state_from, RUN_STATES.READY_TO_MERGE);
+  assert.equal(blockedEvent.state_to, RUN_STATES.MERGE_BLOCKED);
+  assert.equal(blockedEvent.reason, "fake stale base");
 });
 
 test("merge-queue treats an empty ready queue as complete when no child needs attention", () => {

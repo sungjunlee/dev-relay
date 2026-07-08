@@ -234,7 +234,6 @@ async function runMergeQueue(options) {
   for (const child of queue) {
     const result = await runFinalizeForChild({ repoRoot, child, options });
     results.push(result);
-    if (result.status === "merge_blocked") break;
   }
 
   const summary = deriveFleetSummary(repoRoot, readFleetManifest(repoRoot, fleetId).data);
