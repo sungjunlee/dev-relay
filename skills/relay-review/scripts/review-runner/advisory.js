@@ -140,6 +140,7 @@ function startAdvisoryReview({
   reviewerModel,
   reviewerName,
   reviewerPolicy = null,
+  reviewerScript = null,
   reviewRepoPath,
   round,
   runDir,
@@ -153,8 +154,8 @@ function startAdvisoryReview({
   const artifactName = artifactReviewerName || reviewerName;
   const paths = advisoryPaths(runDir, round, artifactName);
   const promptPath = paths.promptPath;
+  const effectiveReviewerScript = reviewerScript || resolveReviewerScript(reviewerName, null, { phase: ADAPTER_PHASES.ADVISORY_REVIEW });
   writeText(promptPath, `${promptText}\n`);
-  const reviewerScript = resolveReviewerScript(reviewerName, null, { phase: ADAPTER_PHASES.ADVISORY_REVIEW });
   const startedAt = Date.now();
   const effectiveReviewerPolicy = reviewerPolicy || buildAdvisoryReviewerPolicy(reviewerName);
   const request = {
@@ -172,7 +173,7 @@ function startAdvisoryReview({
     reviewerPolicy: effectiveReviewerPolicy,
     policyDecision,
     modelResolution,
-    reviewerScript,
+    reviewerScript: effectiveReviewerScript,
     reviewRepoPath,
     round,
     runDir,

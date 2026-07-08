@@ -1,5 +1,6 @@
 const { STATES } = require("../../../relay-dispatch/scripts/manifest/lifecycle");
 const { classifyPostDecisionPhase } = require("../../../relay-dispatch/scripts/advisory-timing");
+const { ADAPTER_PHASES } = require("../../../relay-dispatch/scripts/agent-adapters");
 const { assertRelayPolicyGate } = require("../../../relay-dispatch/scripts/relay-policy-gate");
 const { buildAdvisoryPrompt } = require("./advisory-prompt");
 const {
@@ -12,6 +13,7 @@ const {
   validateAdvisoryProfile,
   writeAdvisoryDecision,
 } = require("./advisory");
+const { resolveReviewerScript } = require("./reviewer-invoke");
 
 // finishAdvisoryReview polls with early return (see advisory.js), so this
 // ceiling is only fully paid when the event genuinely never lands (the
@@ -225,6 +227,31 @@ function appendAdvisoryRunsForTrigger({ advisoryRuns = [], result, startOptions,
   return advisoryRuns.concat(started.advisoryRuns || []);
 }
 
+function preflightConfiguredAdvisoryLane({ data, lane, runRepoPath }) {
+  const advisoryModel = resolveAdvisoryModel(data, lane.reviewer, lane.model, { repoRoot: runRepoPath });
+  const reviewerPolicy = buildAdvisoryReviewerPolicy(lane.reviewer);
+  let policyDecision;
+  try {
+    policyDecision = assertRelayPolicyGate({
+      repoRoot: runRepoPath,
+      phase: "advisory_review",
+      reviewer: lane.reviewer,
+      model: advisoryModel,
+    });
+  } catch (error) {
+    error.adapterCapability = reviewerPolicy;
+    throw error;
+  }
+  const reviewerScript = resolveReviewerScript(lane.reviewer, null, { phase: ADAPTER_PHASES.ADVISORY_REVIEW });
+  return {
+    advisoryModel,
+    lane,
+    policyDecision,
+    reviewerPolicy,
+    reviewerScript,
+  };
+}
+
 function startConfiguredAdvisory({
   branch,
   config,
@@ -244,23 +271,10 @@ function startConfiguredAdvisory({
 }) {
   const lanes = (config.lanes || []).filter((lane) => lane.trigger === trigger);
   if (!lanes.length) return { advisoryRuns: [], resultAdvisory: undefined };
+  const lanePreflights = lanes.map((lane) => preflightConfiguredAdvisoryLane({ data, lane, runRepoPath }));
   const advisoryRuns = [];
   const resultAdvisories = [];
-  for (const lane of lanes) {
-    const advisoryModel = resolveAdvisoryModel(data, lane.reviewer, lane.model, { repoRoot: runRepoPath });
-    const reviewerPolicy = buildAdvisoryReviewerPolicy(lane.reviewer);
-    let policyDecision;
-    try {
-      policyDecision = assertRelayPolicyGate({
-        repoRoot: runRepoPath,
-        phase: "advisory_review",
-        reviewer: lane.reviewer,
-        model: advisoryModel,
-      });
-    } catch (error) {
-      error.adapterCapability = reviewerPolicy;
-      throw error;
-    }
+  for (const { advisoryModel, lane, policyDecision, reviewerPolicy, reviewerScript } of lanePreflights) {
     const promptText = buildAdvisoryPrompt({
       branch,
       diffText,
@@ -283,6 +297,7 @@ function startConfiguredAdvisory({
       modelResolution: lane.modelResolution || null,
       reviewerName: lane.reviewer,
       reviewerPolicy,
+      reviewerScript,
       policyDecision,
       reviewRepoPath,
       round,
