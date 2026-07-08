@@ -420,8 +420,35 @@ function leavesMatch(left, right) {
   return JSON.stringify(comparableLeaves(left)) === JSON.stringify(comparableLeaves(right));
 }
 
+function sortedLeafRefs(items) {
+  return Array.from(new Set(items.map((item) => item.leaf_ref)))
+    .sort((left, right) => left.localeCompare(right));
+}
+
+function leafRefSetsMatch(left, right) {
+  const leftRefs = sortedLeafRefs(left);
+  const rightRefs = sortedLeafRefs(right);
+  return leftRefs.length === rightRefs.length
+    && leftRefs.every((leafRef, index) => leafRef === rightRefs[index]);
+}
+
+function assertLeavesMatchFleetChildren(repoRoot, fleetId, leaves) {
+  const fleet = readFleetManifest(repoRoot, fleetId).data;
+  if (!leafRefSetsMatch(leaves, fleet.children)) {
+    throw new FleetInputError(
+      `--leaves-file leaf_ref set differs from fleet manifest children for '${fleetId}'; refusing to overwrite an existing fleet`
+    );
+  }
+}
+
 function assertLeavesMatchPersisted(repoRoot, fleetId, leaves) {
+  const storePath = getFleetLeavesStorePath(repoRoot, fleetId);
+  const storeExists = fs.existsSync(storePath);
   const persisted = readPersistedLeaves(repoRoot, fleetId);
+  if (!storeExists) {
+    assertLeavesMatchFleetChildren(repoRoot, fleetId, leaves);
+    return null;
+  }
   if (persisted.length === 0) {
     throw new FleetInputError(
       `--leaves-file was provided for existing fleet '${fleetId}', but no persisted fleet leaves exist to verify it; nothing was changed`
@@ -1831,6 +1858,10 @@ function readDriveLeaves({ repoRoot, fleetId, manifestPath, options }) {
   if (explicitLeaves) {
     const persisted = assertLeavesMatchPersisted(repoRoot, fleetId, explicitLeaves);
     validateLeafLineage(repoRoot, explicitLeaves);
+    if (!persisted) {
+      persistFleetLeaves(repoRoot, fleetId, explicitLeaves);
+      return { leaves: explicitLeaves, explicitLeaves, manifestExists };
+    }
     return { leaves: persisted, explicitLeaves, manifestExists };
   }
 

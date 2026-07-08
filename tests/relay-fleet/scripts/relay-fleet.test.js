@@ -668,6 +668,45 @@ test("relay-fleet re-run with the same leaves file reconciles and continues with
   assert.equal(readManifest(getManifestPath(repoRoot, runB)).data.state, RUN_STATES.MERGED);
 });
 
+test("relay-fleet re-run with the same leaves file recreates a missing persisted leaves store", () => {
+  const { relayHome, repoRoot } = setupRepo("relay-fleet-drive-missing-leaves-store-");
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "fleet-drive-missing-leaves-store-fake-"));
+  const dispatchScript = writeFakeDispatchScript(tmpDir);
+  const reviewScript = writeFakeReviewScript(tmpDir);
+  const finalizeScript = writeFakeFinalizeScript(tmpDir);
+  const dispatchLog = path.join(tmpDir, "dispatch.log");
+  const leaf = makeLeaf(repoRoot, 1, { issue_number: 570, leaf_ref: "leaf-a", leaf_id: "leaf-a" });
+  const leavesFile = writeLeavesFile(repoRoot, [leaf]);
+  const fleetId = "fleet-missing-leaves-store";
+  createFleetManifest(repoRoot, {
+    fleetId,
+    children: [{ leaf_ref: leaf.leaf_ref, run_id: null, dispatch_status: DISPATCH_STATUS.PENDING }],
+  });
+  const leavesStorePath = getFleetLeavesStorePath(repoRoot, fleetId);
+  assert.equal(fs.existsSync(leavesStorePath), false);
+
+  const result = runFleet([
+    "--repo", repoRoot,
+    "--fleet-id", fleetId,
+    "--leaves-file", leavesFile,
+    "--dispatch-script", dispatchScript,
+    "--review-script", reviewScript,
+    "--finalize-script", finalizeScript,
+    "--json",
+  ], {
+    relayHome,
+    env: { FAKE_DISPATCH_LOG: dispatchLog },
+  });
+
+  assert.equal(result.status, 0, `${result.stderr}\n${result.stdout}`);
+  const payload = JSON.parse(result.stdout);
+  assert.equal(payload.summary.fleet_state, FLEET_STATES.CLOSED);
+  assert.equal(fs.existsSync(leavesStorePath), true);
+  const persistedLeaves = JSON.parse(fs.readFileSync(leavesStorePath, "utf-8")).leaves;
+  assert.deepEqual(persistedLeaves.map((entry) => entry.leaf_ref), ["leaf-a"]);
+  assert.equal(readJsonLines(dispatchLog).filter((entry) => !entry.detachedChild).length, 1);
+});
+
 test("relay-fleet re-run with a different leaves file fails closed without changing the manifest", () => {
   const { relayHome, repoRoot } = setupRepo("relay-fleet-drive-mismatch-");
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "fleet-drive-mismatch-fake-"));
@@ -708,6 +747,35 @@ test("relay-fleet re-run with a different leaves file fails closed without chang
   assert.notEqual(second.status, 0);
   assert.match(second.stderr, /differs from persisted fleet leaves/);
   assert.equal(fs.readFileSync(getFleetManifestPath(repoRoot, "fleet-drive-mismatch"), "utf-8"), before);
+});
+
+test("relay-fleet re-run with different leaves fails closed when the persisted leaves store is missing", () => {
+  const { relayHome, repoRoot } = setupRepo("relay-fleet-drive-missing-leaves-mismatch-");
+  const leaf = makeLeaf(repoRoot, 1, { issue_number: 571, leaf_ref: "leaf-a", leaf_id: "leaf-a" });
+  const fleetId = "fleet-missing-leaves-mismatch";
+  createFleetManifest(repoRoot, {
+    fleetId,
+    children: [{ leaf_ref: leaf.leaf_ref, run_id: null, dispatch_status: DISPATCH_STATUS.PENDING }],
+  });
+  const before = fs.readFileSync(getFleetManifestPath(repoRoot, fleetId), "utf-8");
+  const changedLeavesFile = writeLeavesFile(repoRoot, [
+    leaf,
+    makeLeaf(repoRoot, 2, { issue_number: 572, leaf_ref: "leaf-b", leaf_id: "leaf-b" }),
+  ]);
+  const leavesStorePath = getFleetLeavesStorePath(repoRoot, fleetId);
+  assert.equal(fs.existsSync(leavesStorePath), false);
+
+  const result = runFleet([
+    "--repo", repoRoot,
+    "--fleet-id", fleetId,
+    "--leaves-file", changedLeavesFile,
+    "--json",
+  ], { relayHome });
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /leaf_ref set differs from fleet manifest children/);
+  assert.equal(fs.existsSync(leavesStorePath), false);
+  assert.equal(fs.readFileSync(getFleetManifestPath(repoRoot, fleetId), "utf-8"), before);
 });
 
 test("relay-fleet with only fleet-id continues ready children through merge and close", () => {
