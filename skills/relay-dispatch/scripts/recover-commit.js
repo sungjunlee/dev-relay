@@ -230,16 +230,24 @@ function readExecutionEvidenceIfPresent(evidencePath) {
 
 function isDispatchPlaceholderEvidence(evidence) {
   return evidence?.recorded_by === "dispatch-orchestrator-v1"
-    && evidence?.test_command === "unspecified";
+    && evidence?.test_command === "unspecified"
+    && evidence?.test_result_hash === "unspecified"
+    && evidence?.test_result_summary === "unspecified"
+    && evidence?.test_exit_code === 1;
 }
 
-function summarizeReplacedPlaceholderEvidence(evidence) {
+function summarizeReplacedPlaceholderEvidence(evidence, evidenceHash) {
   if (!evidence) return null;
   return {
+    schema_version: evidence.schema_version ?? null,
     recorded_by: evidence.recorded_by ?? null,
+    recorded_at: evidence.recorded_at ?? null,
     test_command: evidence.test_command ?? null,
+    test_result_hash: evidence.test_result_hash ?? null,
+    test_result_summary: evidence.test_result_summary ?? null,
     test_exit_code: evidence.test_exit_code ?? null,
     head_sha: evidence.head_sha ?? null,
+    evidence_hash: evidenceHash ?? null,
   };
 }
 
@@ -427,9 +435,11 @@ function main() {
   const evidenceExists = fs.existsSync(evidencePath);
   let existingEvidence = null;
   let existingEvidenceReadError = null;
+  let existingEvidenceHash = null;
   if (operatorEvidenceRequested && evidenceExists) {
     try {
       existingEvidence = readExecutionEvidenceIfPresent(evidencePath);
+      existingEvidenceHash = hashFileSha256(evidencePath);
     } catch (error) {
       existingEvidenceReadError = error;
     }
@@ -629,7 +639,7 @@ function main() {
             affected_head_sha: commitSha,
             prior_state: data.state,
             required_reason: reason,
-            before: summarizeReplacedPlaceholderEvidence(existingEvidence),
+            before: summarizeReplacedPlaceholderEvidence(existingEvidence, existingEvidenceHash),
           }
           : {}),
       });
