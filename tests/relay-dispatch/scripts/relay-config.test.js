@@ -75,6 +75,14 @@ function parseJsonAllowingStderr(result) {
   return JSON.parse(result.stdout);
 }
 
+function applyProposal(proposal, options) {
+  assert.ok(Array.isArray(proposal.args), "proposal args must be an array");
+  assert.notEqual(proposal.args.length, 0, "proposal args must be applicable");
+  const result = runConfig(proposal.args, options);
+  assert.equal(result.status, 0, result.combined);
+  return parseJson(result);
+}
+
 function readPolicy(relayHome) {
   const policyPath = path.join(relayHome, "policy.json");
   const policy = JSON.parse(fs.readFileSync(policyPath, "utf-8"));
@@ -1184,19 +1192,14 @@ test("gaps --json reports observed route drift with verbatim proposals and no wr
   const routeWithoutCli = byType.get("route_without_cli")?.[0];
   assert.equal(routeWithoutCli?.actor, "ghost");
   assert.deepEqual(routeWithoutCli.proposal, {
-    kind: "manual",
-    args: [],
-    automatic: false,
-    reason: "cli_missing",
-    action: "install_cli_or_remove_route",
+    subcommand: "deny-route",
+    args: ["deny-route", "ghost/*", "--phase", "review", "--reviewer", "ghost", "--json"],
+    note: "or install ghost manually",
   });
   const missingCliPreset = byType.get("preset_broken")?.find((gap) => gap.reason === "cli_missing");
   assert.deepEqual(missingCliPreset?.proposal, {
-    kind: "manual",
-    args: [],
-    automatic: false,
-    reason: "cli_missing",
-    action: "install_cli_or_edit_preset",
+    subcommand: "preset",
+    args: ["preset", "remove", "missingcli", "--json"],
   });
   const strictPreset = byType.get("preset_broken")?.find((gap) => gap.model === "openai/unregistered");
   assert.deepEqual(strictPreset?.proposal, {
@@ -1206,15 +1209,33 @@ test("gaps --json reports observed route drift with verbatim proposals and no wr
   assert.equal(byType.get("probe_failure")?.length, 2);
   for (const gap of output.gaps) {
     assert.ok(Array.isArray(gap.proposal.args), `${gap.type} missing proposal args`);
-    if (gap.proposal.automatic === false) {
+    if (gap.type === "probe_failure") {
+      assert.equal(gap.proposal.automatic, false, `${gap.type} must be diagnostic`);
       assert.ok(gap.proposal.reason, `${gap.type} non-automatic proposal missing reason`);
     } else {
       assert.equal(typeof gap.proposal?.subcommand, "string", `${gap.type} missing proposal subcommand`);
+      assert.notEqual(gap.proposal.args.length, 0, `${gap.type} has empty applicable proposal`);
     }
   }
   assert.equal(fs.readFileSync(path.join(relayHome, "routes.json"), "utf-8"), beforeRoutes);
   assert.equal(fs.readFileSync(eventsPath, "utf-8"), beforeEvents);
   assert.equal(fs.existsSync(path.join(relayHome, "policy.json.migrated")), false);
+
+  const options = {
+    relayHome,
+    cwd: repoRoot,
+    env: {
+      PATH: `${binDir}${path.delimiter}/usr/bin:/bin`,
+      RELAY_CONFIG_MODEL_PROBE_TIMEOUT_MS: "1000",
+    },
+  };
+  applyProposal(routeWithoutCli.proposal, options);
+  applyProposal(missingCliPreset.proposal, options);
+  applyProposal(strictPreset.proposal, options);
+  const rerun = parseJson(runConfig(["gaps", "--json"], options));
+  assert.equal(rerun.gaps.some((gap) => gap.type === "route_without_cli" && gap.actor === "ghost"), false);
+  assert.equal(rerun.gaps.some((gap) => gap.type === "preset_broken" && gap.preset === "missingcli"), false);
+  assert.equal(rerun.gaps.some((gap) => gap.type === "preset_broken" && gap.model === "openai/unregistered"), false);
 });
 
 test("migrate requires confirmation and preserves legacy effective route resolution", () => {
@@ -1313,6 +1334,108 @@ test("migrate requires confirmation and preserves legacy effective route resolut
   assert.match(fs.readFileSync(path.join(relayHome, "policy.json.migrated"), "utf-8"), /migrated into routes\.json/);
   assert.match(fs.readFileSync(path.join(relayHome, "executors.json.migrated"), "utf-8"), /migrated into routes\.json/);
   assert.match(fs.readFileSync(`${projectRoutesPath}.migrated`, "utf-8"), /migrated into routes\.json/);
+});
+
+test("migrate folds shadowed legacy routes into existing routes config without changing covered tuples", () => {
+  const relayHome = tempDir("relay-config-shadowed-migrate-home-");
+  const repoRoot = tempDir("relay-config-shadowed-migrate-repo-");
+  initGitRepo(repoRoot);
+  writeJson(path.join(relayHome, "routes.json"), {
+    version: 2,
+    strict: true,
+    defaults: {
+      dispatch: { executor: "codex" },
+    },
+    executor_defaults: {
+      opencode: { model: "existing/model-fast" },
+    },
+    routes: [
+      { route: "existing/*", phases: ["dispatch"], executors: ["opencode"] },
+      { route: "shared/*", phases: ["dispatch"], executors: ["opencode"] },
+    ],
+  });
+  writeJson(path.join(relayHome, "policy.json"), {
+    ...buildDefaultRelayPolicy(),
+    profile: "shadowed-legacy",
+    defaults: {
+      dispatch: { executor: "opencode" },
+      review: { reviewer: "pi" },
+      advisory_review: null,
+    },
+    allowed_model_routes: [
+      { route: "shared/*", phases: ["dispatch"], executors: ["opencode"] },
+      { route: "legacy/*", phases: ["review"], reviewers: ["pi"] },
+    ],
+    denied_model_routes: [],
+    deny_unknown_model_routes: true,
+  });
+  writeJson(path.join(relayHome, "executors.json"), {
+    executors: {
+      opencode: { default_model: "legacy/model-fast" },
+    },
+  });
+
+  const tuples = [
+    ["dispatch", "opencode", "existing/model-fast"],
+    ["dispatch", "opencode", "shared/model-fast"],
+    ["dispatch", "opencode", "unknown/model-fast"],
+  ];
+  const resolveMatrix = () => tuples.map(([phase, actor, model]) => {
+    const result = runConfig([
+      "check",
+      "--phase",
+      phase,
+      "--executor",
+      actor,
+      "--model",
+      model,
+      "--json",
+    ], { relayHome, cwd: repoRoot });
+    const parsed = JSON.parse(result.stdout);
+    return {
+      phase,
+      actor,
+      model,
+      status: result.status,
+      ok: parsed.ok,
+      reason: parsed.decision.reason,
+      matchedRoute: parsed.decision.matchedRoute || null,
+    };
+  });
+
+  const before = resolveMatrix();
+  const migrated = runConfig(["migrate", "--yes", "--json"], { relayHome, cwd: repoRoot });
+  assert.equal(migrated.status, 0, migrated.combined);
+  const output = parseJson(migrated);
+  assert.equal(output.wrote, true);
+  assert.deepEqual(resolveMatrix(), before);
+
+  const routes = readRoutes(relayHome);
+  assert.deepEqual(routes.executor_defaults.opencode, { model: "existing/model-fast" });
+  assert.equal(routes.routes.filter((entry) => entry.route === "shared/*").length, 1);
+  assert.ok(routes.routes.some((entry) => (
+    entry.route === "legacy/*"
+    && entry.phases?.includes("review")
+    && entry.reviewers?.includes("pi")
+  )));
+});
+
+test("gaps and migrate return JSON outside a git repo", () => {
+  const relayHome = tempDir("relay-config-nongit-home-");
+  const nonGit = tempDir("relay-config-nongit-cwd-");
+
+  const gaps = runConfig(["gaps", "--json"], { relayHome, cwd: nonGit });
+  assert.equal(gaps.status, 0, gaps.combined);
+  const gapsOutput = parseJson(gaps);
+  assert.equal(gapsOutput.ok, true);
+  assert.equal(gapsOutput.route_config.sources.project, null);
+
+  const migrate = runConfig(["migrate", "--json"], { relayHome, cwd: nonGit });
+  assert.equal(migrate.status, 0, migrate.combined);
+  const migrateOutput = parseJson(migrate);
+  assert.equal(migrateOutput.ok, true);
+  assert.equal(migrateOutput.dry_run, true);
+  assert.equal(migrateOutput.project_routes.path, null);
 });
 
 test("validation failure leaves the routes file untouched", () => {

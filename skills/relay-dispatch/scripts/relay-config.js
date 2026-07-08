@@ -488,6 +488,23 @@ function addRouteProposal({ phase, actor, actorField, route }) {
   return { subcommand: "add-route", args };
 }
 
+function denyRouteProposal({ phase, actor, actorField, route }) {
+  const args = ["deny-route", route, "--phase", phase];
+  args.push(actorField === "reviewer" ? "--reviewer" : "--executor", actor, "--json");
+  return {
+    subcommand: "deny-route",
+    args,
+    note: `or install ${actor} manually`,
+  };
+}
+
+function removePresetProposal(presetName) {
+  return {
+    subcommand: "preset",
+    args: ["preset", "remove", presetName, "--json"],
+  };
+}
+
 function probeDiagnosticProposal() {
   return {
     kind: "diagnostic",
@@ -495,16 +512,6 @@ function probeDiagnosticProposal() {
     args: ["doctor", "--json"],
     automatic: false,
     reason: "probe_failure",
-  };
-}
-
-function manualProposal({ reason, action }) {
-  return {
-    kind: "manual",
-    args: [],
-    automatic: false,
-    reason,
-    action,
   };
 }
 
@@ -557,7 +564,14 @@ function legacyConfigPaths({ repoRoot, relayHome }) {
   if (repoPolicy && fs.existsSync(repoPolicy)) {
     paths.push({ kind: "repo_policy", path: repoPolicy });
   }
-  const projectRoutesPath = repoRoot ? getProjectRoutesPath(repoRoot, { relayHome }) : null;
+  let projectRoutesPath = null;
+  if (repoRoot) {
+    try {
+      projectRoutesPath = getProjectRoutesPath(repoRoot, { relayHome });
+    } catch {
+      projectRoutesPath = null;
+    }
+  }
   if (projectRoutesPath && fs.existsSync(projectRoutesPath)) {
     try {
       const projectRoutes = readRoutesFile(projectRoutesPath);
@@ -587,6 +601,10 @@ function routeConfiguredForTuple(policy, { phase, actor, actorField, model }) {
   return decision.reason === "allowed_model_route" || decision.reason === "managed_cli";
 }
 
+function deniedRouteConfiguredForTuple(policy, tuple) {
+  return (policy.denied_model_routes || []).some((entry) => routeEntryCoversTuple(entry, tuple));
+}
+
 function collectPresetGaps({ gaps, seen, policy, toolsByName }) {
   const presets = policy?.presets || {};
   if (!isPlainObject(presets) || Object.keys(presets).length === 0) return;
@@ -607,10 +625,7 @@ function collectPresetGaps({ gaps, seen, policy, toolsByName }) {
           actor,
           actor_field: actorField,
           reason: "cli_missing",
-          proposal: manualProposal({
-            reason: "cli_missing",
-            action: "install_cli_or_edit_preset",
-          }),
+          proposal: removePresetProposal(presetName),
         });
       }
       const model = nonEmptyString(phaseValue.model);
@@ -731,17 +746,18 @@ function commandGaps(positionals, jsonOut) {
     ...routeActorEntries(policyResult.policy, "denied_model_routes"),
   ]) {
     const tool = toolsByName.get(entry.actor) || doctorTool(policyResult.policy, entry.actor);
-    if (!tool.installed) {
+    if (
+      !tool.installed
+      && entry.listName === "allowed_model_routes"
+      && !deniedRouteConfiguredForTuple(policyResult.policy, entry)
+    ) {
       pushGap(gaps, seen, {
         type: "route_without_cli",
         actor: entry.actor,
         actor_field: entry.actorField,
         phase: entry.phase,
         route: entry.route,
-        proposal: manualProposal({
-          reason: "cli_missing",
-          action: "install_cli_or_remove_route",
-        }),
+        proposal: denyRouteProposal(entry),
       });
     }
     if (entry.listName === "allowed_model_routes" && entry.actorField === "executor" && entry.phase === "dispatch" && !executorDefaultModel(policyResult.policy, entry.actor)) {
@@ -846,6 +862,85 @@ function mergeRouteDefaults(base = {}, override = {}) {
   return merged;
 }
 
+function routeEntryCoversTuple(entry, { phase, actorField, actor, route }) {
+  if (entry.route !== route) return false;
+  if (entry.phases !== undefined && !entry.phases.includes(phase)) return false;
+  const hasActorScope = entry.executors !== undefined || entry.reviewers !== undefined;
+  if (!hasActorScope) return true;
+  const actors = actorField === "reviewer" ? entry.reviewers : entry.executors;
+  return Boolean(actor && actors?.includes(actor));
+}
+
+function routeEntryTuples(entry) {
+  const tuples = [];
+  const route = nonEmptyString(entry?.route);
+  if (!route) return tuples;
+  const phases = entry.phases || VALID_PHASES;
+  const hasActorScope = entry.executors !== undefined || entry.reviewers !== undefined;
+  for (const phase of phases) {
+    const actorField = actorFieldForPhase(phase);
+    const actors = actorField === "reviewer" ? entry.reviewers : entry.executors;
+    if (!hasActorScope) {
+      tuples.push({ phase, actorField, actor: null, route });
+      continue;
+    }
+    for (const actor of actors || []) {
+      tuples.push({ phase, actorField, actor, route });
+    }
+  }
+  return tuples;
+}
+
+function routeEntryFromTuple({ phase, actorField, actor, route }) {
+  const entry = { route, phases: [phase] };
+  if (actor) {
+    entry[actorField === "reviewer" ? "reviewers" : "executors"] = [actor];
+  }
+  return entry;
+}
+
+function appendLegacyOnlyRouteTuples(targetRoutes, legacyRoutes, listName) {
+  const existing = Array.isArray(targetRoutes[listName]) ? cloneJson(targetRoutes[listName]) : [];
+  const additions = [];
+  for (const legacyEntry of legacyRoutes[listName] || []) {
+    for (const tuple of routeEntryTuples(legacyEntry)) {
+      const covered = [...existing, ...additions].some((entry) => routeEntryCoversTuple(entry, tuple));
+      if (!covered) additions.push(routeEntryFromTuple(tuple));
+    }
+  }
+  if (existing.length || additions.length) targetRoutes[listName] = [...existing, ...additions];
+  else delete targetRoutes[listName];
+}
+
+function foldLegacyRoutesIntoExisting(existingRoutes, legacyRoutes) {
+  const folded = cloneJson(existingRoutes);
+  if (!hasOwn(folded, "version")) folded.version = 2;
+  if (!hasOwn(folded, "strict") && hasOwn(legacyRoutes, "strict")) folded.strict = legacyRoutes.strict;
+
+  const defaults = mergeRouteDefaults(legacyRoutes.defaults, folded.defaults);
+  if (Object.keys(defaults).length) folded.defaults = defaults;
+  else delete folded.defaults;
+
+  const executorDefaults = {
+    ...(isPlainObject(legacyRoutes.executor_defaults) ? cloneJson(legacyRoutes.executor_defaults) : {}),
+    ...(isPlainObject(folded.executor_defaults) ? cloneJson(folded.executor_defaults) : {}),
+  };
+  if (Object.keys(executorDefaults).length) folded.executor_defaults = executorDefaults;
+  else delete folded.executor_defaults;
+
+  const presets = {
+    ...(isPlainObject(legacyRoutes.presets) ? cloneJson(legacyRoutes.presets) : {}),
+    ...(isPlainObject(folded.presets) ? cloneJson(folded.presets) : {}),
+  };
+  if (Object.keys(presets).length) folded.presets = presets;
+  else delete folded.presets;
+
+  appendLegacyOnlyRouteTuples(folded, legacyRoutes, "routes");
+  appendLegacyOnlyRouteTuples(folded, legacyRoutes, "denied_routes");
+  validateRouteConfig(folded, "migrated routes config");
+  return folded;
+}
+
 function foldProjectRoutesV1(routes, projectRoutes) {
   if (projectRoutes.status === "absent" || projectRoutes.status === "ignored_v2") return routes;
   if (!projectRoutes.ok) {
@@ -880,13 +975,11 @@ function commandMigrate(positionals, jsonOut) {
   const executorsPath = process.env.RELAY_EXECUTORS_PATH || path.join(relayHome, "executors.json");
   const confirmed = hasCliFlag("--yes");
   const routesExisted = fs.existsSync(routesPath);
-  const policyResult = routesExisted
-    ? loadRelayPolicy({ repoRoot, relayHome })
-    : loadRelayPolicy({
-      repoRoot,
-      relayHome,
-      routesPath: path.join(relayHome, "__relay_config_migrate_absent_routes__.json"),
-    });
+  const policyResult = loadRelayPolicy({
+    repoRoot,
+    relayHome,
+    routesPath: path.join(relayHome, "__relay_config_migrate_absent_routes__.json"),
+  });
   if (!policyResult.ok) {
     const output = { ok: false, status: "policy_error", errors: policyResult.errors };
     if (jsonOut) printJson(output);
@@ -898,7 +991,10 @@ function commandMigrate(positionals, jsonOut) {
   const projectRoutes = loadProjectRoutes({ repoRoot, relayHome });
   let routes;
   try {
-    routes = foldProjectRoutesV1(routesFromPolicy(policyResult.policy, executorDefaults), projectRoutes);
+    const legacyRoutes = foldProjectRoutesV1(routesFromPolicy(policyResult.policy, executorDefaults), projectRoutes);
+    routes = routesExisted
+      ? foldLegacyRoutesIntoExisting(validateRouteConfig(readRoutesFile(routesPath), routesPath), legacyRoutes)
+      : legacyRoutes;
   } catch (error) {
     const output = { ok: false, status: "project_routes_error", errors: [{ message: error.message }], project_routes: projectRoutes };
     if (jsonOut) printJson(output);
@@ -917,8 +1013,8 @@ function commandMigrate(positionals, jsonOut) {
     project_routes: projectRoutes,
     legacy: legacyPaths,
     summary: [
-      `${routes.routes.length} allowed route(s)`,
-      `${routes.denied_routes.length} denied route(s)`,
+      `${(routes.routes || []).length} allowed route(s)`,
+      `${(routes.denied_routes || []).length} denied route(s)`,
       `${Object.keys(routes.executor_defaults || {}).length} executor default(s)`,
       `strict=${routes.strict === true}`,
     ],
