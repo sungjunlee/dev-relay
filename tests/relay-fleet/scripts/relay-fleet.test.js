@@ -35,7 +35,8 @@ const {
   createFleetManifest,
   readFleetManifest,
   releaseIssueLock,
-  writeFleetManifest,
+  updateFleetManifest,
+  updateFleetState,
 } = require("../../../skills/relay-dispatch/scripts/manifest/fleet");
 const {
   getRequestPath,
@@ -116,6 +117,27 @@ function readJsonLines(filePath) {
     .split(/\r?\n/)
     .filter(Boolean)
     .map((line) => JSON.parse(line));
+}
+
+function advanceFleetManifestState(repoRoot, fleetId, targetState) {
+  const transitionPath = [
+    FLEET_STATES.DRAFT,
+    FLEET_STATES.DISPATCHING,
+    FLEET_STATES.DISPATCHED,
+    FLEET_STATES.REVIEWING,
+    FLEET_STATES.MERGING,
+    FLEET_STATES.CLOSED,
+  ];
+  const currentState = readFleetManifest(repoRoot, fleetId).data.fleet_state;
+  const currentIndex = transitionPath.indexOf(currentState);
+  const targetIndex = transitionPath.indexOf(targetState);
+  if (currentIndex === -1 || targetIndex === -1 || currentIndex > targetIndex) {
+    throw new Error(`Cannot advance fleet fixture state: ${currentState} -> ${targetState}`);
+  }
+  for (const nextState of transitionPath.slice(currentIndex + 1, targetIndex + 1)) {
+    updateFleetManifest(repoRoot, fleetId, (fleet) => updateFleetState(fleet, nextState));
+  }
+  return readFleetManifest(repoRoot, fleetId).data;
 }
 
 function writeChildRun(repoRoot, {
@@ -795,9 +817,7 @@ test("relay-fleet with only fleet-id continues ready children through merge and 
     fleetId: "fleet-id-only",
     children: [{ leaf_ref: "leaf-a", run_id: runId, dispatch_status: DISPATCH_STATUS.DISPATCHED }],
   });
-  let fleet = readFleetManifest(repoRoot, "fleet-id-only").data;
-  fleet.fleet_state = FLEET_STATES.REVIEWING;
-  writeFleetManifest(repoRoot, fleet);
+  advanceFleetManifestState(repoRoot, "fleet-id-only", FLEET_STATES.REVIEWING);
 
   const result = runFleet([
     "--repo", repoRoot,
@@ -845,9 +865,7 @@ test("relay-fleet --resume is accepted as a deprecated alias of the default driv
     fleetId: "fleet-resume-alias",
     children: [{ leaf_ref: "leaf-a", run_id: runId, dispatch_status: DISPATCH_STATUS.DISPATCHED }],
   });
-  let fleet = readFleetManifest(repoRoot, "fleet-resume-alias").data;
-  fleet.fleet_state = FLEET_STATES.REVIEWING;
-  writeFleetManifest(repoRoot, fleet);
+  advanceFleetManifestState(repoRoot, "fleet-resume-alias", FLEET_STATES.REVIEWING);
 
   const result = runFleet([
     "--repo", repoRoot,
@@ -890,9 +908,7 @@ test("relay-fleet closes with nonzero attention when one child escalates and the
       { leaf_ref: "leaf-b", run_id: escalatedRun, dispatch_status: DISPATCH_STATUS.DISPATCHED },
     ],
   });
-  let fleet = readFleetManifest(repoRoot, "fleet-escalated").data;
-  fleet.fleet_state = FLEET_STATES.REVIEWING;
-  writeFleetManifest(repoRoot, fleet);
+  advanceFleetManifestState(repoRoot, "fleet-escalated", FLEET_STATES.REVIEWING);
 
   const result = runFleet([
     "--repo", repoRoot,
@@ -941,9 +957,7 @@ test("relay-fleet keeps merge_blocked fleets open and later re-runs close after 
       { leaf_ref: "leaf-b", run_id: runB, dispatch_status: DISPATCH_STATUS.DISPATCHED },
     ],
   });
-  let fleet = readFleetManifest(repoRoot, "fleet-merge-blocked").data;
-  fleet.fleet_state = FLEET_STATES.REVIEWING;
-  writeFleetManifest(repoRoot, fleet);
+  advanceFleetManifestState(repoRoot, "fleet-merge-blocked", FLEET_STATES.REVIEWING);
   writeJson(finalizeConfig, { [runB]: { fail: true, error: "fake blocked merge" } });
 
   const blocked = runFleet([
@@ -1275,9 +1289,7 @@ test("relay-fleet --resume polls existing dispatching detached child runs before
     fleetId,
     children: [{ leaf_ref: leaf.leaf_ref, run_id: runId, dispatch_status: DISPATCH_STATUS.DISPATCHING }],
   });
-  let fleet = readFleetManifest(repoRoot, fleetId).data;
-  fleet.fleet_state = FLEET_STATES.DISPATCHING;
-  writeFleetManifest(repoRoot, fleet);
+  advanceFleetManifestState(repoRoot, fleetId, FLEET_STATES.DISPATCHING);
 
   const result = runFleet([
     "--repo", repoRoot,
@@ -1702,9 +1714,7 @@ test("relay-fleet --review fans out foreground review-runner once per review_pen
       { leaf_ref: "leaf-b", run_id: runB, dispatch_status: DISPATCH_STATUS.DISPATCHED },
     ],
   });
-  let fleet = readFleetManifest(repoRoot, "fleet-review").data;
-  fleet.fleet_state = FLEET_STATES.DISPATCHED;
-  writeFleetManifest(repoRoot, fleet);
+  advanceFleetManifestState(repoRoot, "fleet-review", FLEET_STATES.DISPATCHED);
 
   const result = runFleet([
     "--repo", repoRoot,
@@ -1749,9 +1759,7 @@ test("relay-fleet --review fails closed when review-runner exits without advanci
     fleetId: "fleet-review-stall",
     children: [{ leaf_ref: "leaf-a", run_id: runId, dispatch_status: DISPATCH_STATUS.DISPATCHED }],
   });
-  let fleet = readFleetManifest(repoRoot, "fleet-review-stall").data;
-  fleet.fleet_state = FLEET_STATES.DISPATCHED;
-  writeFleetManifest(repoRoot, fleet);
+  advanceFleetManifestState(repoRoot, "fleet-review-stall", FLEET_STATES.DISPATCHED);
 
   const result = runFleet([
     "--repo", repoRoot,
@@ -1789,9 +1797,7 @@ test("relay-fleet --review treats child state transitions as manifest progress",
     fleetId: "fleet-review-state",
     children: [{ leaf_ref: "leaf-a", run_id: runId, dispatch_status: DISPATCH_STATUS.DISPATCHED }],
   });
-  let fleet = readFleetManifest(repoRoot, "fleet-review-state").data;
-  fleet.fleet_state = FLEET_STATES.DISPATCHED;
-  writeFleetManifest(repoRoot, fleet);
+  advanceFleetManifestState(repoRoot, "fleet-review-state", FLEET_STATES.DISPATCHED);
 
   const result = runFleet([
     "--repo", repoRoot,
@@ -1839,9 +1845,7 @@ test("relay-fleet --review redispatches changes_requested children and re-review
     fleetId: "fleet-review-loop",
     children: [{ leaf_ref: "leaf-a", run_id: runId, dispatch_status: DISPATCH_STATUS.DISPATCHED }],
   });
-  let fleet = readFleetManifest(repoRoot, "fleet-review-loop").data;
-  fleet.fleet_state = FLEET_STATES.DISPATCHED;
-  writeFleetManifest(repoRoot, fleet);
+  advanceFleetManifestState(repoRoot, "fleet-review-loop", FLEET_STATES.DISPATCHED);
 
   const result = runFleet([
     "--repo", repoRoot,
@@ -1895,9 +1899,7 @@ test("relay-fleet --resume re-enters the review loop for changes_requested child
     fleetId: "fleet-review-resume",
     children: [{ leaf_ref: "leaf-a", run_id: runId, dispatch_status: DISPATCH_STATUS.DISPATCHED }],
   });
-  let fleet = readFleetManifest(repoRoot, "fleet-review-resume").data;
-  fleet.fleet_state = FLEET_STATES.REVIEWING;
-  writeFleetManifest(repoRoot, fleet);
+  advanceFleetManifestState(repoRoot, "fleet-review-resume", FLEET_STATES.REVIEWING);
 
   const result = runFleet([
     "--repo", repoRoot,
@@ -1951,9 +1953,7 @@ test("relay-fleet --resume keeps pre-manifest dispatch failures visible during r
       { leaf_ref: "leaf-b", run_id: null, dispatch_status: DISPATCH_STATUS.DISPATCH_FAILED_PRE_MANIFEST },
     ],
   });
-  let fleet = readFleetManifest(repoRoot, "fleet-review-resume-failure").data;
-  fleet.fleet_state = FLEET_STATES.REVIEWING;
-  writeFleetManifest(repoRoot, fleet);
+  advanceFleetManifestState(repoRoot, "fleet-review-resume-failure", FLEET_STATES.REVIEWING);
 
   const result = runFleet([
     "--repo", repoRoot,
@@ -2002,9 +2002,7 @@ test("relay-fleet --resume skips a still-running review subprocess", async () =>
     fleetId: "fleet-review-running",
     children: [{ leaf_ref: "leaf-a", run_id: runId, dispatch_status: DISPATCH_STATUS.DISPATCHED }],
   });
-  let fleet = readFleetManifest(repoRoot, "fleet-review-running").data;
-  fleet.fleet_state = FLEET_STATES.DISPATCHED;
-  writeFleetManifest(repoRoot, fleet);
+  advanceFleetManifestState(repoRoot, "fleet-review-running", FLEET_STATES.DISPATCHED);
 
   const first = spawn(process.execPath, [
     RELAY_FLEET_SCRIPT,
