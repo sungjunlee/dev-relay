@@ -327,6 +327,7 @@ async function run() {
   updatedManifest = applyReviewerIdentity(updatedManifest, noComment || internalReview, runRepoPath);
   writeManifest(manifestPath, updatedManifest, body);
   appendRunEvent(runRepoPath, data.run_id, { event: EVENTS.ESCALATION_DECISION, state_from: data.state, state_to: updatedManifest.state, head_sha: reviewedHeadSha, ...escalationDecision });
+  const reviewApplyReason = confidenceDowngradeApplied ? "pass" : rubricGateFailure ? rubricGateFailure.status : verdict.verdict;
   appendRunEvent(runRepoPath, data.run_id, {
     event: EVENTS.REVIEW_APPLY,
     state_from: data.state,
@@ -334,7 +335,7 @@ async function run() {
     head_sha: reviewedHeadSha,
     round,
     reviewer: reviewerName,
-    reason: rubricGateFailure ? rubricGateFailure.status : verdict.verdict,
+    reason: reviewApplyReason,
     lineage_summary: escalationDecision.lineage_summary || lineageSummary,
     ...(confidenceDowngradeApplied ? {
       confidence_downgrade: true,

@@ -1162,6 +1162,7 @@ test("pass verdict preserves assigned reviewer role and records the acting revie
   assert.equal(manifest.roles.reviewer, "claude");
   assert.equal(manifest.review.last_reviewer, "codex");
   assert.equal(reviewApplyEvent?.reviewer, "codex");
+  assert.equal(reviewApplyEvent?.reason, "pass");
   assert.equal("confidence_downgrade" in reviewApplyEvent, false);
   assert.equal("low_confidence_count" in reviewApplyEvent, false);
 });
@@ -1617,6 +1618,7 @@ test("changes_requested verdict creates a re-dispatch artifact", () => {
   assert.equal(manifest.review.latest_verdict, "changes_requested");
   assert.equal(manifest.review.repeated_issue_count, 1);
   assert.deepEqual(manifest.review.last_lineage_summary, { deepening: 0, repeat: 0, stale: 0, new: 0, newly_scoreable: 0, unknown: 1 });
+  assert.equal(reviewApplyEvent?.reason, "changes_requested");
   assert.equal("confidence_downgrade" in reviewApplyEvent, false);
   assert.equal("low_confidence_count" in reviewApplyEvent, false);
 });
@@ -1684,7 +1686,7 @@ test("all-low-confidence changes_requested verdict applies as advisory pass whil
   assert.equal(verdictRecord.verdict, "changes_requested");
   assert.equal(verdictRecord.issues.length, 2);
   assert.ok(verdictRecord.issues.every((issue) => issue.confidence === "low"));
-  assert.equal(reviewApplyEvent?.reason, "changes_requested");
+  assert.equal(reviewApplyEvent?.reason, "pass");
   assert.equal(reviewApplyEvent?.confidence_downgrade, true);
   assert.equal(reviewApplyEvent?.low_confidence_count, 2);
 });
