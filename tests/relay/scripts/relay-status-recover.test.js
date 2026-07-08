@@ -121,7 +121,12 @@ test("relay-recover refuses to apply running runs", () => {
 });
 
 test("relay-recover gives manual guidance for terminal or unknown runs", () => {
-  for (const classification of ["ready_to_merge", "unknown_needs_manual_inspection"]) {
+  for (const classification of [
+    "ready_to_merge",
+    "unknown_needs_manual_inspection",
+    "branch_without_pr",
+    "pr_without_manifest_stamp",
+  ]) {
     const plan = planFor({
       run_id: "issue-829-20260708000000000-dddddddd",
       classification,
@@ -131,4 +136,17 @@ test("relay-recover gives manual guidance for terminal or unknown runs", () => {
     assert.equal(plan.safe_to_apply, false);
     assert.equal(plan.guidance, "inspect manually");
   }
+});
+
+test("relay-recover rejects conflicting apply and dry-run flags", () => {
+  assert.throws(
+    () => execFileSync(process.execPath, [
+      "skills/relay/scripts/relay-recover.js",
+      "--repo", ".",
+      "--run-id", "issue-829-20260708000000000-dddddddd",
+      "--dry-run",
+      "--apply",
+    ], { cwd: path.resolve(__dirname, "../../.."), encoding: "utf-8", stdio: "pipe" }),
+    /--dry-run and --apply are mutually exclusive/,
+  );
 });

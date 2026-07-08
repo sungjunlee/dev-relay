@@ -58,8 +58,6 @@ function planFor(row, repoRoot) {
     "timed_out_live",
     "dead_with_work",
     "dead_no_work",
-    "branch_without_pr",
-    "pr_without_manifest_stamp",
   ].includes(row.classification)) {
     return {
       action: "delegate_reconcile",
@@ -138,6 +136,9 @@ function main() {
   const repo = cliArgs.getArg("--repo", ".");
   const runIdArg = cliArgs.getArg("--run-id");
   const issueArg = cliArgs.getArg("--issue");
+  if (hasCliFlag("--dry-run") && hasCliFlag("--apply")) {
+    throw new Error("--dry-run and --apply are mutually exclusive");
+  }
   const apply = hasCliFlag("--apply");
   if ((runIdArg && issueArg) || (!runIdArg && !issueArg)) {
     throw new Error("exactly one of --run-id or --issue is required");
