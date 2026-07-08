@@ -534,8 +534,13 @@ function validateManifestPaths(paths, {
     };
   }
   const worktreeGitCommonDir = getWorktreeGitCommonDir(worktree);
-  const relayOwnedWorktree = relayOwnedWorktreeCandidate
-    && (
+  // The git common dir is the ownership trust root: a worktree under the relay
+  // base whose common dir binds to the expected repo is relay-owned even when
+  // its directory basename was inherited from a differently-named dispatch
+  // checkout (#851). Basename matching stays required on the missing-worktree
+  // path above, where no common dir is available to verify.
+  const relayOwnedWorktree = isPathContainedWithin(relayWorktreeBase, worktree)
+    && Boolean(
       worktreeGitCommonDir
       && (
         worktreeGitCommonDir === expectedGitCommonDir
