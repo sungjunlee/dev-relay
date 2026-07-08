@@ -40,6 +40,7 @@ const FLAGS = [
   { flag: "--dry-run", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Presence flag; no value is consumed." },
   { flag: "--effective", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Presence flag; no value is consumed." },
   { flag: "--executor", aliases: ["-e"], kind: VALUE, mode: MODE_PARSED, valueName: "<name>", rationale: "Closed selector; flag-like following tokens should mean the value is missing." },
+  { flag: "--fallback", kind: VALUE, mode: MODE_PARSED, valueName: "<mode>", allowedValues: ["catalog"], rationale: "Explicit model-resolution fallback selector; flag-like following tokens should mean the value is missing." },
   { flag: "--file", kind: VALUE, mode: MODE_VERBATIM, valueName: "<path>", rationale: "Operator-supplied input file path; keep the literal argv token." },
   { flag: "--fleet-id", kind: VALUE, mode: MODE_PARSED, valueName: "<id>", rationale: "Structured relay fleet identifier; flag-like following tokens should mean the value is missing." },
   { flag: "--force", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Presence flag; no value is consumed." },
@@ -197,6 +198,7 @@ const COMMAND_FLAGS = {
   ],
   "relay-config": [
     "--profile", "--effective", "--phase", "--executor", "--reviewer", "--model",
+    "--fallback",
     "--repo", "--dispatch", "--review", "--advisory-review", "--route-intent-file",
     "--reconcile", "--review-assurance", "--advisory-profile", "--json", "--help",
   ],

@@ -45,3 +45,39 @@ test("resolveAdvisoryConfig still inherits the planned model when the planned re
   assert.equal(config.source, "route_plan");
   assert.equal(config.model, "openai/planned-model");
 });
+
+test("resolveAdvisoryConfig keeps route-plan model resolution when routed selection matches the plan", () => {
+  const modelResolution = {
+    original_input: "opencode:planned-model",
+    resolved_route: "openai/planned-model",
+    source: "catalog_fallback",
+  };
+  const config = resolveAdvisoryConfig({
+    data: {
+      routing: {
+        selected: {
+          advisory_review: {
+            reviewer: "opencode",
+            model: "openai/planned-model",
+            profile: "blindspot",
+          },
+        },
+      },
+    },
+    routePlan: {
+      phases: {
+        advisory_review: {
+          reviewer: "opencode",
+          model: "openai/planned-model",
+          profile: "blindspot",
+          model_resolution: modelResolution,
+        },
+      },
+    },
+  });
+
+  assert.equal(config.reviewer, "opencode");
+  assert.equal(config.source, "routing");
+  assert.equal(config.model, "openai/planned-model");
+  assert.deepEqual(config.modelResolution, modelResolution);
+});

@@ -279,6 +279,10 @@ function buildPrimaryReviewerPreflight({
 }) {
   const resolvedReviewerModel = resolveReviewerModel(data, reviewerModel, reviewerName, { routePlan, repoRoot: runRepoPath });
   const effectiveReviewerModel = resolvedReviewerModel.model;
+  const reviewPhase = routePlanReviewPhase(routePlan);
+  const modelResolution = resolvedReviewerModel.source === "route_plan"
+    ? reviewPhase?.model_resolution || null
+    : null;
   const reviewerPolicy = buildReviewerPolicy({ reviewerName, reviewerScript });
   try {
     const policyDecision = assertRelayPolicyGate({
@@ -291,6 +295,7 @@ function buildPrimaryReviewerPreflight({
       effectiveReviewerModel,
       policyDecision,
       routeSource: resolvedReviewerModel.source,
+      modelResolution,
       reviewerPolicy,
     };
   } catch (error) {
@@ -312,6 +317,7 @@ function loadReviewText({ body, data, manifestPath, prNumber, promptPath, review
     effectiveReviewerModel,
     policyDecision,
     routeSource,
+    modelResolution,
     reviewerPolicy,
   } = reviewerPreflight || buildPrimaryReviewerPreflight({
     data,
@@ -338,6 +344,7 @@ function loadReviewText({ body, data, manifestPath, prNumber, promptPath, review
     headSha: reviewedHeadSha || null,
     round,
     policyDecision,
+    modelResolution,
   });
 
   const statusBeforeReviewer = captureGitStatus(reviewRepoPath);

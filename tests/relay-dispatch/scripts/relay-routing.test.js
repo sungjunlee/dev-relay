@@ -574,6 +574,37 @@ test("route preset expansion fills only unset run intent fields with preset sour
   assert.equal(result.phases.advisory_review.sources.profile, "preset:light");
 });
 
+test("route preset expansion carries model resolution metadata with resolved model", () => {
+  const result = resolveRouteIntent({
+    routePresetName: "light",
+    policy: routePolicy({
+      presets: {
+        light: {
+          dispatch: { executor: "opencode", model: "opencode-go/glm-5.2" },
+          model_resolution: {
+            dispatch: {
+              original_input: "opencode:glm-5.2",
+              actor: "opencode",
+              phase: "dispatch",
+              resolved_route: "opencode-go/glm-5.2",
+              source: "live_probe",
+              candidates: ["opencode-go/glm-5.2"],
+              warnings: [],
+            },
+          },
+        },
+      },
+      allowed_model_routes: [
+        { route: "opencode-go/*", phases: ["dispatch"], executors: ["opencode"] },
+      ],
+    }),
+  });
+
+  assert.equal(result.phases.dispatch.model, "opencode-go/glm-5.2");
+  assert.equal(result.phases.dispatch.model_resolution.original_input, "opencode:glm-5.2");
+  assert.equal(result.phases.dispatch.model_resolution.source, "live_probe");
+});
+
 test("route preset expansion errors with available presets when missing or unconfigured", () => {
   assert.throws(
     () => resolveRouteIntent({

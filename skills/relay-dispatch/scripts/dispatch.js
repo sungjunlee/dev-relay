@@ -1314,9 +1314,18 @@ function summarizeRoutePlan(routePlan) {
       actor_field: value.executor ? "executor" : "reviewer",
       model: value.model || null,
       policy_reason: value.policy_decision?.reason || null,
+      model_resolution_source: value.model_resolution?.source || null,
     };
   }
   return summary;
+}
+
+function collectModelResolution(routePlan) {
+  const metadata = {};
+  for (const [phase, value] of Object.entries(routePlan?.phases || {})) {
+    if (value?.model_resolution) metadata[phase] = value.model_resolution;
+  }
+  return Object.keys(metadata).length ? metadata : null;
 }
 
 function presetAdvisorySelection(routePlan) {
@@ -2128,11 +2137,13 @@ async function main() {
       policy_decision: policyDecision,
       route_plan_path: routePlanSnapshot.path,
       route_plan_summary: summarizeRoutePlan(routePlan),
+      model_resolution: collectModelResolution(routePlan),
     });
     appendUnregisteredRouteUsedEvent(repoRoot, runId, {
       state: manifest.state,
       headSha: manifest.git?.head_sha || null,
       policyDecision,
+      modelResolution: routePlan.phases.dispatch?.model_resolution || null,
     });
   }
 

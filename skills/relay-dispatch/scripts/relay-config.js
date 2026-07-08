@@ -2,7 +2,6 @@
 
 const fs = require("fs");
 const path = require("path");
-const { execFileSync } = require("child_process");
 const {
   evaluateRelayRoute,
   loadRelayPolicy,
@@ -25,6 +24,13 @@ const {
   schemaHasFlag,
 } = require("./cli-args");
 const { listDeadDispatchedRunAdvisories } = require("./reconcile-advisory");
+const {
+  findOnPath,
+  hasProviderModelRoute,
+  probeModels,
+  resolveModelRequest,
+  resolutionMetadata,
+} = require("./model-resolver");
 
 const args = process.argv.slice(2);
 const COMMAND_NAME = "relay-config";
@@ -42,6 +48,7 @@ const SUBCOMMAND_FLAGS = {
   init: new Set(["--profile", "--json", "--help"]),
   show: new Set(["--effective", "--json", "--help"]),
   doctor: new Set(["--json", "--reconcile", "--help"]),
+  "resolve-model": new Set(["--phase", "--executor", "--reviewer", "--model", "--fallback", "--json", "--help"]),
   check: new Set(["--phase", "--executor", "--reviewer", "--model", "--json", "--help"]),
   "plan-run": new Set(["--repo", "--dispatch", "--review", "--advisory-review", "--route-intent-file", "--json", "--help"]),
   "set-default": new Set(["--json", "--help"]),
@@ -77,6 +84,7 @@ function printHelp() {
   console.log(`  init --profile <company|personal> ${modeLabel("--profile")} [--json ${modeLabel("--json")}]`);
   console.log(`  show --effective ${modeLabel("--effective")} [--json ${modeLabel("--json")}]`);
   console.log(`  doctor [--json ${modeLabel("--json")}] [--reconcile ${modeLabel("--reconcile")}]`);
+  console.log(`  resolve-model --phase <phase> ${modeLabel("--phase")} [--executor <name> ${modeLabel("--executor")}] [--reviewer <name> ${modeLabel("--reviewer")}] [--model <name|provider/model> ${modeLabel("--model")}] [--fallback catalog ${modeLabel("--fallback")}] [--json ${modeLabel("--json")}]`);
   console.log(`  check --phase <phase> ${modeLabel("--phase")} [--executor <name> ${modeLabel("--executor")}] [--reviewer <name> ${modeLabel("--reviewer")}] [--model <provider/model> ${modeLabel("--model")}] [--json ${modeLabel("--json")}]`);
   console.log(`  plan-run [--repo <path> ${modeLabel("--repo")}] [--dispatch <actor[:provider/model]> ${modeLabel("--dispatch")}] [--review <actor[:provider/model]> ${modeLabel("--review")}] [--advisory-review <actor[:provider/model]> ${modeLabel("--advisory-review")}] [--route-intent-file <path> ${modeLabel("--route-intent-file")}] [--json ${modeLabel("--json")}]`);
   console.log("  set-default <path> <value> [--json]");
@@ -310,25 +318,6 @@ function commandShow(positionals, jsonOut) {
   if (!result.ok) process.exitCode = 1;
 }
 
-function pathEntries() {
-  return String(process.env.PATH || "")
-    .split(path.delimiter)
-    .filter(Boolean);
-}
-
-function findOnPath(binaryName) {
-  for (const dir of pathEntries()) {
-    const candidate = path.join(dir, binaryName);
-    try {
-      fs.accessSync(candidate, fs.constants.X_OK);
-      return candidate;
-    } catch {
-      // Keep scanning PATH entries.
-    }
-  }
-  return null;
-}
-
 function defaultActors(policy) {
   return [
     policy.defaults.dispatch?.executor,
@@ -353,40 +342,6 @@ function actorHasConfiguredAllowedRoute(policy, actor) {
     if (!hasActorScope) return true;
     return Boolean(entry.executors?.includes(actor) || entry.reviewers?.includes(actor));
   });
-}
-
-function modelProbeTimeoutMs() {
-  const raw = Number(process.env.RELAY_CONFIG_MODEL_PROBE_TIMEOUT_MS || 20000);
-  return Number.isSafeInteger(raw) && raw > 0 ? raw : 20000;
-}
-
-function probeModels(name, executable) {
-  if (!executable || !["opencode", "pi"].includes(name)) {
-    return { status: "not_applicable", models: [], warning: null };
-  }
-  const args = name === "opencode" ? ["models"] : ["--list-models"];
-  const timeoutMs = modelProbeTimeoutMs();
-  try {
-    const output = execFileSync(executable, args, {
-      encoding: "utf-8",
-      stdio: "pipe",
-      timeout: timeoutMs,
-    });
-    const models = output
-      .split("\n")
-      .map((line) => line.trim())
-      .filter(Boolean)
-      .filter((value, index, values) => values.indexOf(value) === index);
-    return { status: "ok", models, warning: null };
-  } catch (error) {
-    const detail = String(error.stderr || error.message || error).split("\n")[0];
-    const command = `${path.basename(executable)} ${args.join(" ")}`;
-    return {
-      status: "warning",
-      models: [],
-      warning: `optional model-list probe failed for ${name} (${command}) after ${timeoutMs}ms: ${detail} (set RELAY_CONFIG_MODEL_PROBE_TIMEOUT_MS to adjust)`,
-    };
-  }
 }
 
 function doctorTool(policy, name) {
@@ -480,6 +435,84 @@ function commandDoctor(positionals, jsonOut) {
   }
 }
 
+function actorFieldForPhase(phase) {
+  return REVIEWER_PHASES.has(phase) ? "reviewer" : "executor";
+}
+
+function actorForPhaseFromArgs(phase) {
+  const executor = nonEmptyString(readArg(args, "--executor", undefined, CLI_ARG_OPTIONS));
+  const reviewer = nonEmptyString(readArg(args, "--reviewer", undefined, CLI_ARG_OPTIONS));
+  if (EXECUTOR_PHASES.has(phase)) return requireValue(executor, "--executor");
+  if (REVIEWER_PHASES.has(phase)) return requireValue(reviewer, "--reviewer");
+  throw new Error(`unsupported phase: ${phase}; expected one of: ${VALID_PHASES.join(", ")}`);
+}
+
+function optionalActorForPhaseFromArgs(phase) {
+  const executor = nonEmptyString(readArg(args, "--executor", undefined, CLI_ARG_OPTIONS));
+  const reviewer = nonEmptyString(readArg(args, "--reviewer", undefined, CLI_ARG_OPTIONS));
+  if (EXECUTOR_PHASES.has(phase)) return executor;
+  if (REVIEWER_PHASES.has(phase)) return reviewer;
+  throw new Error(`unsupported phase: ${phase}; expected one of: ${VALID_PHASES.join(", ")}`);
+}
+
+function normalizeFallback(value) {
+  const fallback = nonEmptyString(value) || "none";
+  if (!["none", "catalog"].includes(fallback)) {
+    throw new Error("--fallback must be 'catalog' when provided");
+  }
+  return fallback;
+}
+
+function commandResolveModel(positionals, jsonOut) {
+  if (positionals.length !== 1) {
+    throw new Error("resolve-model does not accept positional arguments");
+  }
+  const phase = requireValue(readArg(args, "--phase", undefined, CLI_ARG_OPTIONS), "--phase");
+  if (!VALID_PHASES.includes(phase)) {
+    throw new Error(`unsupported phase: ${phase}; expected one of: ${VALID_PHASES.join(", ")}`);
+  }
+  const actor = optionalActorForPhaseFromArgs(phase);
+  const model = nonEmptyString(readArg(args, "--model", undefined, CLI_ARG_OPTIONS));
+  const fallback = normalizeFallback(readArg(args, "--fallback", undefined, CLI_ARG_OPTIONS));
+  const policyResult = loadRelayPolicy({ repoRoot: process.cwd() });
+  if (!policyResult.ok) {
+    const output = {
+      ok: false,
+      error: "policy_error",
+      policy: policyResult,
+    };
+    if (jsonOut) printJson(output);
+    else console.error(`relay-config resolve-model: routes failed: ${policyResult.errors?.[0]?.message || "unknown route config error"}`);
+    process.exitCode = 1;
+    return;
+  }
+
+  const output = resolveModelRequest({
+    phase,
+    actor,
+    actorField: actorFieldForPhase(phase),
+    model,
+    fallback,
+    policy: policyResult.policy,
+  });
+  output.policy = {
+    status: policyResult.status,
+    sources: policyResult.sources,
+  };
+
+  if (jsonOut) {
+    printJson(output);
+  } else if (output.ok) {
+    console.log(output.resolved_route || "(model-less)");
+    for (const warning of output.warnings || []) console.log(`warning: ${humanWarning(warning)}`);
+  } else {
+    console.error(`${output.error}: ${output.requested_model || "(none)"}`);
+    for (const candidate of output.candidates || []) console.error(`candidate: ${candidate}`);
+    for (const warning of output.warnings || []) console.error(`warning: ${humanWarning(warning)}`);
+  }
+  if (!output.ok) process.exitCode = 1;
+}
+
 function commandCheck(positionals, jsonOut) {
   if (positionals.length !== 1) {
     throw new Error("check does not accept positional arguments");
@@ -514,19 +547,61 @@ function commandCheck(positionals, jsonOut) {
   if (!decision.allowed) process.exitCode = 1;
 }
 
-function parseRouteSpec(spec, phase) {
+function parseRouteSpecWithResolution(spec, phase, { policy = null, fallback = "catalog" } = {}) {
   const raw = nonEmptyString(spec);
-  if (!raw) return null;
+  if (!raw) return { spec: null, modelResolution: null };
   const separator = raw.indexOf(":");
   const actor = separator === -1 ? raw : raw.slice(0, separator).trim();
   const model = separator === -1 ? null : raw.slice(separator + 1).trim();
   if (!actor) throw new Error(`${phase} route must start with an actor name`);
   if (separator !== -1 && !model) throw new Error(`${phase} route model must be non-empty when ':' is used`);
   const actorField = REVIEWER_PHASES.has(phase) ? "reviewer" : "executor";
+  if (!model || !policy) {
+    return {
+      spec: {
+        [actorField]: actor,
+        ...(model ? { model } : {}),
+      },
+      modelResolution: null,
+    };
+  }
+  if (hasProviderModelRoute(model)) {
+    return {
+      spec: {
+        [actorField]: actor,
+        model,
+      },
+      modelResolution: null,
+    };
+  }
+
+  const resolution = resolveModelRequest({
+    phase,
+    actor,
+    actorField,
+    model,
+    fallback,
+    policy,
+  });
+  if (!resolution.ok) {
+    const details = resolution.policy_decision?.reason || resolution.error || "unresolved";
+    const error = new Error(`failed to resolve ${phase} route ${raw}: ${details}`);
+    error.resolution = resolution;
+    throw error;
+  }
   return {
-    [actorField]: actor,
-    ...(model ? { model } : {}),
+    spec: {
+      [actorField]: actor,
+      model: resolution.resolved_route,
+    },
+    modelResolution: resolutionMetadata(resolution, { originalInput: raw }),
   };
+}
+
+function assignModelResolution(target, phase, metadata) {
+  if (!metadata) return;
+  if (!isPlainObject(target.model_resolution)) target.model_resolution = {};
+  target.model_resolution[phase] = metadata;
 }
 
 function readRouteIntentFile(filePath) {
@@ -557,13 +632,6 @@ function commandPlanRun(positionals, jsonOut) {
   const runIntent = {
     ...readRouteIntentFile(routeIntentFile),
   };
-  const dispatchSpec = parseRouteSpec(readArg(args, "--dispatch", undefined, CLI_ARG_OPTIONS), "dispatch");
-  const reviewSpec = parseRouteSpec(readArg(args, "--review", undefined, CLI_ARG_OPTIONS), "review");
-  const advisorySpec = parseRouteSpec(readArg(args, "--advisory-review", undefined, CLI_ARG_OPTIONS), "advisory_review");
-  if (dispatchSpec) runIntent.dispatch = dispatchSpec;
-  if (reviewSpec) runIntent.review = reviewSpec;
-  if (advisorySpec) runIntent.advisory_review = advisorySpec;
-
   const policyResult = loadRelayPolicy({ repoRoot });
   const projectConfig = loadProjectConfig({ repoRoot });
   const projectRoutes = loadProjectRoutes({ repoRoot });
@@ -606,6 +674,16 @@ function commandPlanRun(positionals, jsonOut) {
     return;
   }
 
+  const dispatchSpec = parseRouteSpecWithResolution(readArg(args, "--dispatch", undefined, CLI_ARG_OPTIONS), "dispatch", { policy: policyResult.policy });
+  const reviewSpec = parseRouteSpecWithResolution(readArg(args, "--review", undefined, CLI_ARG_OPTIONS), "review", { policy: policyResult.policy });
+  const advisorySpec = parseRouteSpecWithResolution(readArg(args, "--advisory-review", undefined, CLI_ARG_OPTIONS), "advisory_review", { policy: policyResult.policy });
+  if (dispatchSpec.spec) runIntent.dispatch = dispatchSpec.spec;
+  if (reviewSpec.spec) runIntent.review = reviewSpec.spec;
+  if (advisorySpec.spec) runIntent.advisory_review = advisorySpec.spec;
+  assignModelResolution(runIntent, "dispatch", dispatchSpec.modelResolution);
+  assignModelResolution(runIntent, "review", reviewSpec.modelResolution);
+  assignModelResolution(runIntent, "advisory_review", advisorySpec.modelResolution);
+
   const routePlan = resolveRouteIntent({
     runIntent,
     projectRoutes: projectRoutes.routes,
@@ -613,7 +691,7 @@ function commandPlanRun(positionals, jsonOut) {
   });
   const phaseValues = Object.values(routePlan.phases).filter(Boolean);
   const denied = phaseValues.filter((phase) => phase.policy_decision?.allowed !== true);
-  const warnings = [];
+  const warnings = modelResolutionWarnings(runIntent);
   for (const phase of phaseValues) {
     const actor = phase.executor || phase.reviewer;
     if (actor === "antigravity" && phase.model) {
@@ -725,22 +803,25 @@ function presetReferenceWarnings(routes, presetName, preset) {
   return warnings;
 }
 
-function parsePresetFromArgs() {
+function parsePresetFromArgs({ policy }) {
   const preset = {};
-  const dispatchSpec = parseRouteSpec(readArg(args, "--dispatch", undefined, CLI_ARG_OPTIONS), "dispatch");
-  const reviewSpec = parseRouteSpec(readArg(args, "--review", undefined, CLI_ARG_OPTIONS), "review");
-  const advisorySpec = parseRouteSpec(readArg(args, "--advisory-review", undefined, CLI_ARG_OPTIONS), "advisory_review");
-  if (dispatchSpec) preset.dispatch = dispatchSpec;
-  if (reviewSpec) preset.review = reviewSpec;
+  const dispatchSpec = parseRouteSpecWithResolution(readArg(args, "--dispatch", undefined, CLI_ARG_OPTIONS), "dispatch", { policy });
+  const reviewSpec = parseRouteSpecWithResolution(readArg(args, "--review", undefined, CLI_ARG_OPTIONS), "review", { policy });
+  const advisorySpec = parseRouteSpecWithResolution(readArg(args, "--advisory-review", undefined, CLI_ARG_OPTIONS), "advisory_review", { policy });
+  if (dispatchSpec.spec) preset.dispatch = dispatchSpec.spec;
+  if (reviewSpec.spec) preset.review = reviewSpec.spec;
+  assignModelResolution(preset, "dispatch", dispatchSpec.modelResolution);
+  assignModelResolution(preset, "review", reviewSpec.modelResolution);
   const advisoryProfile = nonEmptyString(readArg(args, "--advisory-profile", undefined, CLI_ARG_OPTIONS));
-  if (advisoryProfile && !advisorySpec) {
+  if (advisoryProfile && !advisorySpec.spec) {
     throw new Error("--advisory-profile requires --advisory-review");
   }
-  if (advisorySpec) {
+  if (advisorySpec.spec) {
     preset.advisory_review = {
-      ...advisorySpec,
+      ...advisorySpec.spec,
       ...(advisoryProfile ? { profile: advisoryProfile } : {}),
     };
+    assignModelResolution(preset, "advisory_review", advisorySpec.modelResolution);
   }
   const reviewAssurance = nonEmptyString(readArg(args, "--review-assurance", undefined, CLI_ARG_OPTIONS));
   if (reviewAssurance) {
@@ -750,6 +831,16 @@ function parsePresetFromArgs() {
     throw new Error("preset add requires at least one of --dispatch, --review, --advisory-review, or --review-assurance");
   }
   return preset;
+}
+
+function modelResolutionWarnings(routeIntent) {
+  const warnings = [];
+  for (const metadata of Object.values(routeIntent.model_resolution || {})) {
+    for (const warning of metadata?.warnings || []) {
+      if (warning && !warnings.includes(warning)) warnings.push(warning);
+    }
+  }
+  return warnings;
 }
 
 const PRESET_MUTATION_FLAGS = [
@@ -809,7 +900,11 @@ function commandPreset(positionals, jsonOut) {
   const updated = cloneJson(routes);
 
   if (action === "add") {
-    const preset = parsePresetFromArgs();
+    const policyResult = loadRelayPolicy({ globalRoutes: routes });
+    if (!policyResult.ok) {
+      throw new Error(policyResult.errors?.[0]?.message || "failed to load routes config for preset resolution");
+    }
+    const preset = parsePresetFromArgs({ policy: policyResult.policy });
     updated.presets = {
       ...(isPlainObject(updated.presets) ? updated.presets : {}),
       [presetName]: preset,
@@ -824,7 +919,7 @@ function commandPreset(positionals, jsonOut) {
       routes: written,
       presetName,
       preset,
-      warnings: [...warnings, ...routeWarnings],
+      warnings: [...warnings, ...modelResolutionWarnings(preset), ...routeWarnings],
     });
     return;
   }
@@ -883,6 +978,9 @@ function main() {
     case "doctor":
       commandDoctor(positionals, jsonOut);
       break;
+    case "resolve-model":
+      commandResolveModel(positionals, jsonOut);
+      break;
     case "check":
       commandCheck(positionals, jsonOut);
       break;
@@ -927,6 +1025,7 @@ try {
     printJson({
       ok: false,
       error: error.message,
+      ...(error.resolution ? { resolution: error.resolution } : {}),
     });
   } else {
     console.error(`Error: ${error.message}`);

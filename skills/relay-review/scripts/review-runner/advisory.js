@@ -126,6 +126,7 @@ function startAdvisoryReview({
   profile,
   promptText,
   policyDecision = null,
+  modelResolution = null,
   reviewerModel,
   reviewerName,
   reviewerPolicy = null,
@@ -154,6 +155,7 @@ function startAdvisoryReview({
     reviewerName,
     reviewerPolicy: effectiveReviewerPolicy,
     policyDecision,
+    modelResolution,
     reviewerScript,
     reviewRepoPath,
     round,
@@ -474,6 +476,7 @@ function executeAdvisoryRequest(request) {
       headSha: request.headSha,
       round: request.round,
       policyDecision: request.policyDecision,
+      modelResolution: request.modelResolution || null,
     });
   } catch (error) {
     status = "failed";

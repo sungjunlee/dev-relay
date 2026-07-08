@@ -49,9 +49,12 @@ function resolveAdvisoryConfig({
   const plannedForSelected = planned.reviewer && planned.reviewer === reviewer;
   const plannedModel = plannedForSelected ? planned.model : null;
   const plannedProfile = plannedForSelected ? planned.profile : null;
+  const selectedModel = advisoryReviewerModel || routed.model || routed.reviewer_model || plannedModel || null;
+  const modelFromPlan = reviewer && !advisoryReviewerModel && plannedForSelected && plannedModel && selectedModel === plannedModel;
   return {
     graceSeconds: reviewer ? parseNonNegativeSeconds(advisoryGraceArg) : null,
-    model: reviewer ? (advisoryReviewerModel || routed.model || routed.reviewer_model || plannedModel || null) : null,
+    model: reviewer ? selectedModel : null,
+    modelResolution: modelFromPlan ? planned.model_resolution || null : null,
     profile: reviewer ? validateAdvisoryProfile(advisoryProfileArg || routed.profile || plannedProfile || "blindspot") : null,
     reviewer,
     source: reviewer ? (advisoryReviewerArg ? "cli" : routed.reviewer ? "routing" : "route_plan") : null,
@@ -106,6 +109,7 @@ function startConfiguredAdvisory({
     profile: config.profile,
     promptText,
     reviewerModel: advisoryModel,
+    modelResolution: config.modelResolution || null,
     reviewerName: config.reviewer,
     reviewerPolicy,
     policyDecision,
