@@ -1091,7 +1091,7 @@ test("standard review applies the primary verdict when advisory times out during
   assert.equal(result.nextState, STATES.READY_TO_MERGE);
   assert.equal(readManifest(manifestPath).data.state, STATES.READY_TO_MERGE);
   assert.equal(result.advisoryReview.status, "timeout");
-  assert.match(result.advisoryReview.failureReason, /exceeded 1s timeout/);
+  assert.match(result.advisoryReview.failureReason, /timed out after 1s/);
   assert.equal(event.status, "timeout");
   assert.equal(event.consumed_by_phase, "review");
 });
