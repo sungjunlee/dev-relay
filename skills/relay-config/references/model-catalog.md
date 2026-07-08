@@ -13,3 +13,19 @@ Use only when live model-list probes fail or the user asks for a recommendation.
 | `deepseek-v4-flash` | `cline` -> `cline-pass/deepseek-v4-flash`; `opencode` -> `openrouter/deepseek-v4-flash` | Fast iteration and low-cost preset experiments. | cheap |
 
 These are selection hints, not an authority. Model quality, availability, and prices change quickly.
+
+## Freshness report
+
+Run a read-only freshness report without requiring a failed live probe:
+
+```bash
+node skills/relay-config/scripts/relay-config.js catalog-report --json
+```
+
+The report exits successfully and includes each catalog entry's `actor_routes`, `last_checked`, `age_days`, and `stale` status. Use this for scheduled visibility or preflight checks; do not treat catalog fallback as an allow-list.
+
+## Updating parser fixtures and catalog dates
+
+Live model-list parser fixtures live under `tests/relay-dispatch/fixtures/model-lists/`. When a provider CLI changes output shape, add or update the smallest representative fixture and cover it through `tests/relay-dispatch/scripts/model-resolver.test.js`. Keep headers, separators, provider/model split columns, direct provider/model rows, and extra metadata columns in fixtures when those shapes are observed.
+
+Only update `last_checked` in `skills/relay-dispatch/scripts/model-catalog.js` after verifying availability through a current provider CLI model list or equivalent authoritative provider evidence. Record route coverage by actor, keep aliases as convenience inputs, and leave actual route authorization to `routes.json`.

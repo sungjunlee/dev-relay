@@ -61,8 +61,68 @@ const MODEL_CATALOG = Object.freeze([
   },
 ]);
 
+function daysSince(dateString, now = new Date()) {
+  const checked = Date.parse(`${dateString}T00:00:00Z`);
+  const current = now instanceof Date ? now.getTime() : Date.now();
+  if (!Number.isFinite(checked) || !Number.isFinite(current)) return null;
+  return Math.floor((current - checked) / 86400000);
+}
+
+function nonEmptyString(value) {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function catalogWarnings(lastChecked = CATALOG_LAST_CHECKED, now) {
+  const warnings = [
+    "catalog fallback used; verify provider/model availability before relying on this route",
+  ];
+  const checked = nonEmptyString(lastChecked) || CATALOG_LAST_CHECKED;
+  const ageDays = daysSince(checked, now);
+  if (ageDays !== null && ageDays > STALE_AFTER_DAYS) {
+    warnings.push(`stale catalog metadata: last_checked=${checked}, age_days=${ageDays}`);
+  }
+  return warnings;
+}
+
+function catalogFreshnessReport({ now = new Date() } = {}) {
+  const generatedAt = now instanceof Date ? now.toISOString() : new Date().toISOString();
+  const entries = MODEL_CATALOG.map((entry) => {
+    const lastChecked = nonEmptyString(entry.last_checked) || CATALOG_LAST_CHECKED;
+    const ageDays = daysSince(lastChecked, now);
+    const actorRoutes = entry.actor_routes || {};
+    return {
+      id: entry.id,
+      aliases: [...(entry.aliases || [])],
+      last_checked: lastChecked,
+      age_days: ageDays,
+      stale: ageDays !== null ? ageDays > STALE_AFTER_DAYS : null,
+      actor_routes: { ...actorRoutes },
+      actors: Object.keys(actorRoutes).sort(),
+      cost_hint: entry.cost_hint || null,
+      notes: entry.notes || null,
+    };
+  });
+  const summary = entries.reduce((acc, entry) => {
+    acc.total += 1;
+    if (entry.stale === true) acc.stale += 1;
+    else if (entry.stale === false) acc.fresh += 1;
+    else acc.unknown_age += 1;
+    return acc;
+  }, { total: 0, fresh: 0, stale: 0, unknown_age: 0 });
+  return {
+    generated_at: generatedAt,
+    stale_after_days: STALE_AFTER_DAYS,
+    catalog_last_checked: CATALOG_LAST_CHECKED,
+    summary,
+    entries,
+  };
+}
+
 module.exports = {
   CATALOG_LAST_CHECKED,
   MODEL_CATALOG,
   STALE_AFTER_DAYS,
+  catalogFreshnessReport,
+  catalogWarnings,
+  daysSince,
 };

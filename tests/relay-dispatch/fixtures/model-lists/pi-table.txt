@@ -1,0 +1,4 @@
+provider model context notes
+-------- ----- ------- -----
+openai gpt-5-fast 128k default
+anthropic claude-4.5-sonnet 200k reasoning

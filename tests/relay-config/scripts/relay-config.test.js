@@ -162,6 +162,16 @@ test("resolve-model passes through wrapper and resolves live short model names",
   assert.equal(output.policy_decision.reason, "allowed_model_route");
 });
 
+test("catalog-report passes through wrapper", () => {
+  const result = runConfig(["catalog-report", "--json"]);
+
+  assert.equal(result.status, 0, result.combined);
+  const output = parseJson(result);
+  assert.equal(output.ok, true);
+  assert.ok(output.catalog.summary.total > 0);
+  assert.equal(output.catalog.summary.total, output.catalog.entries.length);
+});
+
 test("preset add resolves compact actor short-model and stores explicit route provenance", () => {
   const relayHome = tempDir();
   const binDir = tempDir("relay-config-preset-model-bin-");
