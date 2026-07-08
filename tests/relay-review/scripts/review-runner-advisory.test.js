@@ -1286,6 +1286,42 @@ test("on_pass advisory lane starts after an applied primary pass", () => {
   assert.ok(request.startedAt >= primaryEnd);
 });
 
+test("on_pass advisory lane gets its own settlement deadline after a slow primary", () => {
+  const { repoRoot, manifestPath, runId, doneCriteriaPath, diffPath } = setupRepo();
+  const record = readManifest(manifestPath);
+  writeManifest(manifestPath, {
+    ...record.data,
+    routing: {
+      version: 1,
+      selected: {
+        advisory_review: [
+          { reviewer: "opencode", model: "example/opencode-model-fast", trigger: "on_pass" },
+        ],
+      },
+    },
+  }, record.body);
+  // Primary takes longer than the whole advisory timeout+grace budget, so a
+  // deadline computed at round start is already exhausted when the on_pass
+  // lane spawns. The lane must still be settled from its own fresh deadline.
+  const primaryScript = writePrimaryReviewer(repoRoot, passVerdict(), { delayMs: 3000 });
+  const opencodeScript = writeFakeOpencode(repoRoot, {});
+
+  const result = runReview({
+    repoRoot,
+    runId,
+    doneCriteriaPath,
+    diffPath,
+    primaryScript,
+    opencodeScript,
+    advisoryReviewer: null,
+    extraArgs: ["--advisory-timeout", "1", "--advisory-grace", "1"],
+  });
+
+  assert.equal(result.nextState, STATES.READY_TO_MERGE);
+  assert.equal(result.advisoryReviews[0].trigger, "on_pass");
+  assert.equal(result.advisoryReviews[0].status, "success");
+});
+
 test("on_pass advisory lane can demote a low-confidence downgraded primary pass", () => {
   const { repoRoot, manifestPath, runId, doneCriteriaPath, diffPath } = setupRepo();
   const record = readManifest(manifestPath);

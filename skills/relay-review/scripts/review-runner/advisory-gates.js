@@ -55,6 +55,13 @@ async function settleAdvisoryGatesForRound({
     advisoryRuns = appendAdvisoryRunsForTrigger({ advisoryRuns, result, startOptions, trigger: "on_pass" });
     const onPassRuns = advisoryRuns.slice(alreadyStarted).filter((run) => run.trigger === "on_pass");
     if (onPassRuns.length) {
+      // on_pass lanes may only start after primary + every_round settlement,
+      // so the round-start deadline can already be exhausted by the time they
+      // spawn. They share one fresh deadline computed at their own start.
+      const onPassSettlementDeadlineMs = createAdvisorySettlementDeadline({
+        config: advisoryConfig,
+        hardenedAssurance,
+      });
       ({ advisoryResult, advisoryResults } = await settleConfiguredAdvisories({
         advisoryRuns: onPassRuns,
         config: advisoryConfig,
@@ -62,7 +69,7 @@ async function settleAdvisoryGatesForRound({
         hardenedAssurance,
         priorAdvisoryResults: advisoryResults,
         result,
-        settlementDeadlineMs,
+        settlementDeadlineMs: onPassSettlementDeadlineMs,
         verdict: gateResult.passEquivalentVerdict,
       }));
       gateResult = applyPassEquivalentGates(verdict, {
