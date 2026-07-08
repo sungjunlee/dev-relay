@@ -10,12 +10,12 @@ const { appendIterationScore, appendRunEvent, appendScoreDivergence, EVENTS } = 
 const { git, writeText } = require("./review-runner/common");
 const { applyReviewerIdentity, getGhLogin, parseRemoteHost, resolveContext, resolveIssueNumber, resolveRemoteHost } = require("./review-runner/context");
 const { buildPrompt, formatPriorVerdictSummary } = require("./review-runner/prompt");
-const { buildConfidenceDowngrade, isLowConfidenceAdvisoryPass, parseReviewVerdict, validateReviewVerdict, validateScopeDrift } = require("./review-runner/verdict");
+const { isLowConfidenceAdvisoryPass, parseReviewVerdict, validateReviewVerdict, validateScopeDrift } = require("./review-runner/verdict");
 const { buildCommentBody, formatIssueList, formatScopeDrift, postComment } = require("./review-runner/comment");
 const { buildScoreDivergenceAnalysis, loadPrBody, parseScoreLog, toIterationScoreEventEntry } = require("./review-runner/divergence");
-const { applyQualityExecutionStatus, buildExecutionEvidenceFailureVerdict, buildMissingExecutionEvidenceVerdict, computeQualityExecutionStatus } = require("./review-runner/execution-evidence");
-const { applyReviewAssurancePolicy } = require("./review-runner/assurance");
+const { applyQualityExecutionStatus, computeQualityExecutionStatus } = require("./review-runner/execution-evidence");
 const { printFailureAndExit } = require("./review-runner/failure-output");
+const { applyPassEquivalentGates } = require("./review-runner/confidence-downgrade");
 const { buildRedispatchPrompt, buildRubricGateRedispatchPrompt, computeFactorStatusFlips, computeRepeatedIssueCount, decideFlipFlopEscalation, detectChurnGrowth, summarizeLineage, toEscalatedVerdict } = require("./review-runner/redispatch");
 const { buildConvergenceSummary, formatConvergenceMarkdown } = require("./review-runner/convergence");
 const { applyVerdictToManifest } = require("./review-runner/manifest-apply");
@@ -230,23 +230,17 @@ async function run() {
     hardenedAssurance,
     verdict,
   }));
-  verdict = applyReviewAssurancePolicy(verdict, {
+  const gateResult = applyPassEquivalentGates(verdict, {
     advisoryResult,
+    disallowPassReason: prSignalsPassBlockReason,
+    executionStatus,
     hardenedAssurance,
+    internalReview,
     manualReviewReason,
     reviewFile,
   });
-  if (verdict.verdict === "pass" && executionStatus.status !== "pass") {
-    verdict = executionStatus.status === "missing"
-      ? buildMissingExecutionEvidenceVerdict(verdict)
-      : buildExecutionEvidenceFailureVerdict(verdict);
-  }
-  validateReviewVerdict(verdict, {
-    passNextActions: passNextActionsFor(internalReview),
-    disallowPassReason: prSignalsPassBlockReason,
-  });
-
-  const confidenceDowngrade = buildConfidenceDowngrade(verdict);
+  verdict = gateResult.verdict;
+  const confidenceDowngrade = gateResult.confidenceDowngrade;
   const blockingChangesRequested = verdict.verdict === "changes_requested" && !confidenceDowngrade.applied;
   const repeatedIssueCount = blockingChangesRequested ? computeRepeatedIssueCount(runDir, round, verdict.issues) : 0;
   const lineageSummary = summarizeLineage(verdict.issues);
@@ -273,9 +267,10 @@ async function run() {
   if (convergenceSummary) writeText(path.join(runDir, `review-round-${round}-convergence.md`), `${formatConvergenceMarkdown(convergenceSummary)}\n`);
 
   const rubricGateRedispatchPath = path.join(runDir, `review-round-${round}-redispatch.md`);
-  const rubricGateFailure = verdict.verdict === "pass"
+  const rubricGateFailure = verdict.verdict === "pass" || confidenceDowngrade.applied
     ? buildReviewRunnerRubricGateFailure(data.run_id, rubricGateRedispatchPath, rubricLoad)
     : null;
+  const confidenceDowngradeApplied = confidenceDowngrade.applied && !rubricGateFailure;
   const verdictPath = path.join(runDir, `review-round-${round}-verdict.json`);
   const verdictRecord = rubricGateFailure
     ? {
@@ -338,7 +333,7 @@ async function run() {
     reviewer: reviewerName,
     reason: rubricGateFailure ? rubricGateFailure.status : verdict.verdict,
     lineage_summary: escalationDecision.lineage_summary || lineageSummary,
-    ...(confidenceDowngrade.applied ? {
+    ...(confidenceDowngradeApplied ? {
       confidence_downgrade: true,
       low_confidence_count: confidenceDowngrade.lowConfidenceCount,
     } : {}),
@@ -358,7 +353,7 @@ async function run() {
   }
 
   result.appliedVerdict = rubricGateFailure ? "changes_requested" : isLowConfidenceAdvisoryPass(verdict) ? "pass" : verdict.verdict;
-  result.confidenceDowngrade = confidenceDowngrade.applied ? {
+  result.confidenceDowngrade = confidenceDowngradeApplied ? {
     originalVerdict: verdict.verdict,
     appliedVerdict: "pass",
     lowConfidenceCount: confidenceDowngrade.lowConfidenceCount,

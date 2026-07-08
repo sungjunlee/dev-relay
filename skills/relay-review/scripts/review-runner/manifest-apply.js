@@ -36,7 +36,9 @@ function applyVerdictToManifest(data, verdict, round, prNumber, reviewedHeadSha,
   let nextAction;
   let latestVerdict;
 
-  if (verdict.verdict === "pass") {
+  const appliesAsPass = verdict.verdict === "pass" || isLowConfidenceAdvisoryPass(verdict);
+
+  if (appliesAsPass) {
     if (rubricGateFailure) {
       nextState = STATES.CHANGES_REQUESTED;
       nextAction = "repair_rubric_and_redispatch";
@@ -52,16 +54,6 @@ function applyVerdictToManifest(data, verdict, round, prNumber, reviewedHeadSha,
         ? "internal_lgtm"
         : "lgtm";
     }
-  } else if (verdict.verdict === "changes_requested" && isLowConfidenceAdvisoryPass(verdict)) {
-    nextState = data.state === STATES.INTERNAL_REVIEW_PENDING
-      ? STATES.PUBLISH_PENDING
-      : STATES.READY_TO_MERGE;
-    nextAction = data.state === STATES.INTERNAL_REVIEW_PENDING
-      ? "publish_pr"
-      : "await_explicit_merge";
-    latestVerdict = data.state === STATES.INTERNAL_REVIEW_PENDING
-      ? "internal_lgtm"
-      : "lgtm";
   } else if (verdict.verdict === "changes_requested") {
     nextState = STATES.CHANGES_REQUESTED;
     nextAction = "re_dispatch_requested_changes";

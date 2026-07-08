@@ -85,6 +85,18 @@ function buildConfidenceDowngrade(verdict) {
   };
 }
 
+function buildLowConfidencePassGateVerdict(verdict, passNextActions = ["ready_to_merge"]) {
+  const nextActions = Array.isArray(passNextActions)
+    ? passNextActions
+    : Array.from(passNextActions || []);
+  return {
+    ...verdict,
+    verdict: "pass",
+    next_action: nextActions[0] || "ready_to_merge",
+    issues: [],
+  };
+}
+
 function validateRubricScore(score, index) {
   const location = `rubric_scores[${index}]`;
   if (!score || typeof score !== "object" || Array.isArray(score)) {
@@ -260,6 +272,7 @@ module.exports = {
   ALLOWED_SCORE_TIERS,
   ALLOWED_REVIEW_STATUSES,
   buildConfidenceDowngrade,
+  buildLowConfidencePassGateVerdict,
   isLowConfidenceAdvisoryPass,
   parseReviewVerdict,
   validateIssue,
