@@ -61,7 +61,7 @@ Fast path: bypass relay-ready only for one relay-ready task with a stable review
 
 `relay` owns lifecycle orchestration; `relay-dispatch` owns dispatch CLI semantics. When an operator needs a fixed executor or model, pass the dispatch options explicitly in this command. Common pass-through knobs are `--executor`, `--model`, and `--model-hints`; see `../relay-dispatch/references/model-routing.md` and `../relay-dispatch/references/cli-schema.md` for full route and option semantics.
 
-If the user names an executor whose route or model cannot resolve, invoke `relay-config` inline: ask one focused question, write the route/default, then continue the dispatch cycle instead of failing the run.
+For actor+model wording such as "opencode glm-5.2", run `relay-config resolve-model` or preset setup first and pass only explicit provider/model route intent. For model-only wording such as "glm-5.2", do not guess an actor; ask for actor context or offer matching configured presets/routes.
 
 ```bash
 node "${RELAY_SKILL_ROOT:-skills}/relay-dispatch/scripts/dispatch.js" . \

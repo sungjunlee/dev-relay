@@ -51,6 +51,24 @@ function readRoutes(relayHome) {
   return JSON.parse(fs.readFileSync(path.join(relayHome, "routes.json"), "utf-8"));
 }
 
+function writeFakeOpencode(binDir, models = []) {
+  const opencodePath = path.join(binDir, "opencode");
+  fs.writeFileSync(opencodePath, `#!/bin/sh
+if [ "$1" = "models" ]; then
+  cat <<'EOF'
+${models.join("\n")}
+EOF
+  exit 0
+fi
+if [ "$1" = "--version" ]; then
+  printf 'opencode-fake\\n'
+  exit 0
+fi
+exit 0
+`, "utf-8");
+  fs.chmodSync(opencodePath, 0o755);
+}
+
 test("init company shorthand delegates to core init --profile company routes config", () => {
   const relayHome = tempDir();
 
@@ -104,6 +122,133 @@ test("check shorthand maps reviewer phases to reviewer-only core checks", () => 
 
   assert.equal(result.status, 0, result.combined);
   assert.equal(parseJson(result).decision.reason, "allowed_model_route");
+});
+
+test("resolve-model passes through wrapper and resolves live short model names", () => {
+  const relayHome = tempDir();
+  const binDir = tempDir("relay-config-model-bin-");
+  writeFakeOpencode(binDir, ["opencode-go/glm-5.2", "openai/gpt-5.3-codex-spark"]);
+  assert.equal(runConfig([
+    "add-route",
+    "opencode-go/*",
+    "--phase",
+    "review",
+    "--reviewer",
+    "opencode",
+    "--json",
+  ], { relayHome }).status, 0);
+
+  const result = runConfig([
+    "resolve-model",
+    "--phase",
+    "review",
+    "--reviewer",
+    "opencode",
+    "--model",
+    "glm-5.2",
+    "--json",
+  ], {
+    relayHome,
+    env: {
+      PATH: `${binDir}${path.delimiter}/usr/bin:/bin`,
+      RELAY_CONFIG_MODEL_PROBE_TIMEOUT_MS: "1000",
+    },
+  });
+
+  assert.equal(result.status, 0, result.combined);
+  const output = parseJson(result);
+  assert.equal(output.resolved_route, "opencode-go/glm-5.2");
+  assert.equal(output.source, "live_probe");
+  assert.equal(output.policy_decision.reason, "allowed_model_route");
+});
+
+test("preset add resolves compact actor short-model and stores explicit route provenance", () => {
+  const relayHome = tempDir();
+  const binDir = tempDir("relay-config-preset-model-bin-");
+  writeFakeOpencode(binDir, ["opencode-go/glm-5.2"]);
+
+  const result = runConfig([
+    "preset",
+    "add",
+    "light",
+    "--dispatch",
+    "opencode:glm-5.2",
+    "--json",
+  ], {
+    relayHome,
+    env: {
+      PATH: `${binDir}${path.delimiter}/usr/bin:/bin`,
+      RELAY_CONFIG_MODEL_PROBE_TIMEOUT_MS: "1000",
+    },
+  });
+
+  assert.equal(result.status, 0, result.combined);
+  const routes = readRoutes(relayHome);
+  assert.deepEqual(routes.presets.light.dispatch, {
+    executor: "opencode",
+    model: "opencode-go/glm-5.2",
+  });
+  assert.equal(routes.presets.light.model_resolution.dispatch.original_input, "opencode:glm-5.2");
+  assert.equal(routes.presets.light.model_resolution.dispatch.resolved_route, "opencode-go/glm-5.2");
+  assert.equal(routes.presets.light.model_resolution.dispatch.source, "live_probe");
+
+  const output = parseJson(result);
+  assert.equal(output.preset.model_resolution.dispatch.original_input, "opencode:glm-5.2");
+});
+
+test("preset add resolves cline short model through catalog fallback in open mode", () => {
+  const relayHome = tempDir();
+
+  const result = runConfig([
+    "preset",
+    "add",
+    "diverse",
+    "--advisory-review",
+    "cline:glm-5.2",
+    "--advisory-profile",
+    "blindspot",
+    "--json",
+  ], { relayHome });
+
+  assert.equal(result.status, 0, result.combined);
+  const routes = readRoutes(relayHome);
+  assert.deepEqual(routes.presets.diverse.advisory_review, {
+    reviewer: "cline",
+    model: "cline-pass/glm-5.2",
+    profile: "blindspot",
+  });
+  const metadata = routes.presets.diverse.model_resolution.advisory_review;
+  assert.equal(metadata.original_input, "cline:glm-5.2");
+  assert.equal(metadata.source, "catalog_fallback");
+  assert.match(metadata.warnings.join("\n"), /catalog fallback/i);
+});
+
+test("strict preset add rejects unresolved unregistered compact routes", () => {
+  const relayHome = tempDir();
+  const binDir = tempDir("relay-config-preset-strict-bin-");
+  writeFakeOpencode(binDir, ["opencode-go/glm-5.2"]);
+  assert.equal(runConfig(["init", "company", "--json"], { relayHome }).status, 0);
+
+  const result = runConfig([
+    "preset",
+    "add",
+    "light",
+    "--dispatch",
+    "opencode:glm-5.2",
+    "--json",
+  ], {
+    relayHome,
+    env: {
+      PATH: `${binDir}${path.delimiter}/usr/bin:/bin`,
+      RELAY_CONFIG_MODEL_PROBE_TIMEOUT_MS: "1000",
+    },
+  });
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.combined, /unknown_model_route|unregistered/i);
+  const output = JSON.parse(result.stdout);
+  assert.equal(output.resolution.error, "unknown_model_route");
+  assert.equal(output.resolution.resolved_route, "opencode-go/glm-5.2");
 });
 
 test("preset subcommands pass through wrapper shorthand", () => {

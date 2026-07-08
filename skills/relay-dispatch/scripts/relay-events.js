@@ -263,6 +263,12 @@ function appendRunEvent(repoRoot, runId, eventData) {
     ...(eventData.route_source !== undefined
       ? { route_source: normalizeEventValue(eventData.route_source) }
       : {}),
+    ...(eventData.model_resolution !== undefined
+      ? { model_resolution: normalizeEventValue(eventData.model_resolution) }
+      : {}),
+    ...(eventData.model_resolution_source !== undefined
+      ? { model_resolution_source: normalizeEventValue(eventData.model_resolution_source) }
+      : {}),
     ...(eventData.failure_class !== undefined
       ? { failure_class: normalizeEventValue(eventData.failure_class) }
       : {}),
@@ -374,6 +380,7 @@ function appendUnregisteredRouteUsedEvent(repoRoot, runId, {
   headSha = null,
   round = undefined,
   policyDecision,
+  modelResolution = null,
 } = {}) {
   if (policyDecision?.reason !== "unknown_allowed") return null;
   const phase = normalizeEventValue(policyDecision.phase);
@@ -390,6 +397,8 @@ function appendUnregisteredRouteUsedEvent(repoRoot, runId, {
     actor_field: actorField,
     model: policyDecision.model || null,
     policy_decision: policyDecision,
+    ...(modelResolution ? { model_resolution: modelResolution } : {}),
+    ...(modelResolution?.source ? { model_resolution_source: modelResolution.source } : {}),
   };
   if (actorField === "reviewer") {
     record.reviewer = policyDecision.reviewer || policyDecision.actor || null;

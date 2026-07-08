@@ -339,17 +339,31 @@ test("dispatch denied route intent fails before executor invocation", () => {
 });
 
 test("dispatch emits unregistered route event for open-mode unmanaged model route", () => {
-  const { repoRoot, relayHome, rubricFile } = setupRepo();
+  const { root, repoRoot, relayHome, rubricFile } = setupRepo();
   const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-route-open-bin-"));
   writeFakePi(binDir);
+  const intentPath = path.join(root, "route-intent-open-model-resolution.json");
+  writeJson(intentPath, {
+    dispatch: { executor: "pi", model: "openai/unregistered" },
+    model_resolution: {
+      dispatch: {
+        original_input: "pi:unregistered",
+        actor: "pi",
+        phase: "dispatch",
+        resolved_route: "openai/unregistered",
+        source: "catalog_fallback",
+        candidates: ["openai/unregistered"],
+        warnings: ["catalog fallback used"],
+      },
+    },
+  });
 
   const proc = spawnSync(process.execPath, [
     SCRIPT, repoRoot,
     "-b", "issue-open-unregistered",
     "-p", "open route plan",
     "--rubric-file", rubricFile,
-    "--executor", "pi",
-    "--model", "openai/unregistered",
+    "--route-intent-file", intentPath,
     "--json",
   ], {
     cwd: repoRoot,
@@ -359,17 +373,23 @@ test("dispatch emits unregistered route event for open-mode unmanaged model rout
 
   assert.equal(proc.status, 0, proc.stderr);
   const output = JSON.parse(proc.stdout);
+  const snapshot = JSON.parse(fs.readFileSync(output.routePlanPath, "utf-8"));
+  assert.equal(snapshot.phases.dispatch.model_resolution.original_input, "pi:unregistered");
+  assert.equal(snapshot.phases.dispatch.model_resolution.source, "catalog_fallback");
+
   const events = fs.readFileSync(path.join(output.runDir, "events.jsonl"), "utf-8")
     .trim()
     .split("\n")
     .map((line) => JSON.parse(line));
   const routeResolution = events.find((event) => event.event === "route_resolution");
   assert.equal(routeResolution.policy_decision.reason, "unknown_allowed");
+  assert.equal(routeResolution.model_resolution.dispatch.source, "catalog_fallback");
   const unregistered = events.find((event) => event.event === "unregistered_route_used");
   assert.equal(unregistered.phase, "dispatch");
   assert.equal(unregistered.actor_field, "executor");
   assert.equal(unregistered.executor, "pi");
   assert.equal(unregistered.model, "openai/unregistered");
+  assert.equal(unregistered.model_resolution_source, "catalog_fallback");
 });
 
 test("dispatch does not emit unregistered route event for registered route", () => {

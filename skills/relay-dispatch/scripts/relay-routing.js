@@ -696,6 +696,39 @@ function runIntentSource(runIntent, phase, field) {
   return nonEmptyString(runIntent?.[ROUTE_INTENT_SOURCES_KEY]?.[phase]?.[field]) || "run_intent";
 }
 
+function normalizeStringList(value) {
+  if (!Array.isArray(value)) return [];
+  return pushUnique([], value.map(nonEmptyString).filter(Boolean));
+}
+
+function normalizeModelResolutionMetadata(metadata, { phase, actor, actorField, model } = {}) {
+  if (!isPlainObject(metadata)) return null;
+  const resolvedRoute = nonEmptyString(metadata.resolved_route);
+  const effectiveModel = nonEmptyString(model);
+  if (resolvedRoute && effectiveModel && resolvedRoute !== effectiveModel) return null;
+  return {
+    original_input: nonEmptyString(metadata.original_input) || null,
+    actor: nonEmptyString(metadata.actor) || actor || null,
+    actor_field: nonEmptyString(metadata.actor_field) || actorField || null,
+    phase: nonEmptyString(metadata.phase) || phase || null,
+    requested_model: nonEmptyString(metadata.requested_model) || null,
+    resolved_route: resolvedRoute || effectiveModel || null,
+    source: nonEmptyString(metadata.source) || null,
+    candidates: normalizeStringList(metadata.candidates),
+    warnings: normalizeStringList(metadata.warnings),
+    ...(isPlainObject(metadata.policy_decision) ? { policy_decision: cloneJson(metadata.policy_decision) } : {}),
+  };
+}
+
+function modelResolutionForPhase(runIntent, phase, { actor, actorField, model } = {}) {
+  return normalizeModelResolutionMetadata(runIntent?.model_resolution?.[phase], {
+    phase,
+    actor,
+    actorField,
+    model,
+  });
+}
+
 function normalizePresetPhase(preset, presetName, phase) {
   if (preset[phase] === undefined || preset[phase] === null) return null;
   return normalizeRouteDefault(preset[phase], phase, `preset:${presetName}`, { partial: true });
@@ -743,6 +776,18 @@ function expandRoutePreset({ runIntent = null, policy = {}, routePresetName = nu
       if (hasRunIntentField(expanded, phase, field)) continue;
       if (setRunIntentField(expanded, phase, field, value, source)) {
         filled.push({ phase, field });
+        if (field === "model") {
+          const metadata = normalizeModelResolutionMetadata(preset.model_resolution?.[phase], {
+            phase,
+            actor: presetPhase.executor || presetPhase.reviewer || null,
+            actorField: actorFieldForPhase(phase),
+            model: value,
+          });
+          if (metadata) {
+            if (!isPlainObject(expanded.model_resolution)) expanded.model_resolution = {};
+            expanded.model_resolution[phase] = metadata;
+          }
+        }
       }
     }
   }
@@ -840,6 +885,12 @@ function resolvePhaseRoute({ phase, runIntent, projectRoutes, policy, relayHome,
     ? { phase, reviewer: selected.value, model: model.value }
     : { phase, executor: selected.value, model: model.value };
   resolved.policy_decision = evaluateRelayRoute(policy, policyTuple);
+  const modelResolution = modelResolutionForPhase(runIntent, phase, {
+    actor: selected.value,
+    actorField,
+    model: model.value,
+  });
+  if (modelResolution) resolved.model_resolution = modelResolution;
   return resolved;
 }
 

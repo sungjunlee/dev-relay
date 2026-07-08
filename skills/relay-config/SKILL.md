@@ -1,7 +1,7 @@
 ---
 name: relay-config
 argument-hint: "[setup request or command]"
-description: Interactive setup for relay routes. Use when the user asks to set up relay, configure company/personal relay routing, enable OpenCode or Pi, add provider/model routes, check advisory-review routing, or run relay-config doctor/check.
+description: Interactive setup for relay routes. Use when the user asks to set up relay, configure company/personal relay routing, enable OpenCode or Pi, resolve model names, add provider/model routes, check advisory-review routing, or run relay-config doctor/check.
 compatibility: Requires Node.js 18+ and the sibling relay-dispatch skill.
 metadata:
   related-skills: "relay, relay-dispatch, relay-review"
@@ -22,6 +22,7 @@ Set up relay routes interactively. The user should not have to memorize command 
 - The user asks to set up or configure relay
 - The user wants company-safe strict mode, personal open mode, OpenCode/Pi opt-in, or advisory-review routing
 - The user asks whether a provider/model route such as `example/opencode-model-*` or `openai/*` is available
+- The user asks to resolve a short model name such as `glm-5.2` for a known actor
 - The user asks to create, show, or remove a route preset such as `light`, `diverse`, or `hardened`
 - The user asks to run relay doctor/check
 
@@ -76,6 +77,7 @@ Use the wrapper for shorthand, or pass through full flags:
 ```bash
 node "${RELAY_SKILL_ROOT:-skills}/relay-config/scripts/relay-config.js" init company
 node "${RELAY_SKILL_ROOT:-skills}/relay-config/scripts/relay-config.js" add-route 'example/opencode-model-*' --phase dispatch,advisory_review --executor opencode
+node "${RELAY_SKILL_ROOT:-skills}/relay-config/scripts/relay-config.js" resolve-model --phase review --reviewer opencode --model glm-5.2 --json
 node "${RELAY_SKILL_ROOT:-skills}/relay-config/scripts/relay-config.js" set-default advisory_review.reviewer opencode
 node "${RELAY_SKILL_ROOT:-skills}/relay-config/scripts/relay-config.js" preset add light --dispatch opencode:example/opencode-model-fast
 node "${RELAY_SKILL_ROOT:-skills}/relay-config/scripts/relay-config.js" preset show light
@@ -107,6 +109,7 @@ The wrapper accepts common shorthand and delegates to `relay-dispatch/scripts/re
 | `init personal` | `init --profile personal` |
 | `show` | `show --effective` |
 | `doctor` | `doctor` |
+| `resolve-model --phase review --reviewer opencode --model glm-5.2` | `resolve-model --phase review --reviewer opencode --model glm-5.2` |
 | `add-route example/opencode-model-* --phase dispatch --executor opencode` | `add-route example/opencode-model-* --phase dispatch --executor opencode` |
 | `preset add light --dispatch opencode:example/opencode-model-fast` | `preset add light --dispatch opencode:example/opencode-model-fast` |
 | `preset remove light` | `preset remove light` |
