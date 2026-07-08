@@ -43,7 +43,9 @@ function applyPassEquivalentGates(verdict, {
   }
   validateReviewVerdict(verdict, { passNextActions, disallowPassReason });
 
-  return { confidenceDowngrade, verdict };
+  const passEquivalentVerdict = confidenceDowngrade.applied ? gateVerdict : verdict;
+
+  return { confidenceDowngrade, passEquivalentVerdict, verdict };
 }
 
 module.exports = { applyPassEquivalentGates };

@@ -2756,6 +2756,83 @@ test("rubric factor flip-flops preserve pass verdicts when there are zero repeat
   assert.equal(manifest.review.last_escalation_decision.reason, "progressive_deepening");
 });
 
+test("low-confidence downgrade is pass-equivalent for flip-flop escalation", () => {
+  const { repoRoot, manifestPath, runId, doneCriteriaPath, diffPath } = setupRepo();
+  const runDir = ensureRunLayout(repoRoot, runId).runDir;
+  fs.writeFileSync(path.join(runDir, "review-round-1-verdict.json"), JSON.stringify({ verdict: "changes_requested", rubric_scores: [{ factor: "Behavior", status: "pass" }] }), "utf-8");
+  fs.writeFileSync(path.join(runDir, "review-round-2-verdict.json"), JSON.stringify({ verdict: "changes_requested", rubric_scores: [{ factor: "behavior", status: "fail" }] }), "utf-8");
+  updateManifestRecord(manifestPath, (data) => ({ ...data, review: { ...(data.review || {}), rounds: 2 } }));
+  const reviewFile = writeVerdict(repoRoot, "flip-low-confidence.json", {
+    verdict: "changes_requested",
+    summary: "Only speculative behavior notes remain.",
+    contract_status: "pass",
+    quality_review_status: "pass",
+    quality_execution_status: "pass",
+    next_action: "changes_requested",
+    issues: [{
+      title: "Consider clearer behavior helper naming",
+      body: "The helper name may be easier to scan if it mentions behavior.",
+      file: "src/index.js",
+      line: 12,
+      category: "Behavior",
+      severity: "low",
+      confidence: "low",
+    }],
+    rubric_scores: [{ factor: "BEHAVIOR", target: ">= 1/1", observed: "1/1", status: "pass", tier: "contract", notes: "Recovered." }],
+    scope_drift: { creep: [], missing: [] },
+  });
+
+  const result = JSON.parse(execFileSync("node", [SCRIPT, "--repo", repoRoot, "--run-id", runId, "--pr", "123", "--done-criteria-file", doneCriteriaPath, "--diff-file", diffPath, "--review-file", reviewFile, "--no-comment", "--json"], { encoding: "utf-8" }));
+  const verdict = JSON.parse(fs.readFileSync(result.verdictPath, "utf-8"));
+  const manifest = readManifest(manifestPath).data;
+
+  assert.equal(result.appliedVerdict, "pass");
+  assert.equal(result.state, STATES.READY_TO_MERGE);
+  assert.equal(result.repeatedIssueCount, 0);
+  assert.equal(verdict.verdict, "changes_requested");
+  assert.equal(verdict.issues[0].confidence, "low");
+  assert.equal(manifest.review.latest_verdict, "lgtm");
+  assert.equal(manifest.review.last_escalation_decision.decision, "continue");
+  assert.equal(manifest.review.last_escalation_decision.reason, "progressive_deepening");
+  assert.deepEqual(manifest.review.last_lineage_summary, { deepening: 0, repeat: 0, stale: 0, new: 0, newly_scoreable: 0, unknown: 0 });
+});
+
+test("genuine changes_requested still escalates on pass-fail-pass flip-flop", () => {
+  const { repoRoot, manifestPath, runId, doneCriteriaPath, diffPath } = setupRepo();
+  const runDir = ensureRunLayout(repoRoot, runId).runDir;
+  fs.writeFileSync(path.join(runDir, "review-round-1-verdict.json"), JSON.stringify({ verdict: "changes_requested", rubric_scores: [{ factor: "Behavior", status: "pass" }] }), "utf-8");
+  fs.writeFileSync(path.join(runDir, "review-round-2-verdict.json"), JSON.stringify({ verdict: "changes_requested", rubric_scores: [{ factor: "behavior", status: "fail" }] }), "utf-8");
+  updateManifestRecord(manifestPath, (data) => ({ ...data, review: { ...(data.review || {}), rounds: 2 } }));
+  const reviewFile = writeVerdict(repoRoot, "flip-genuine-changes.json", {
+    verdict: "changes_requested",
+    summary: "Behavior blocker remains.",
+    contract_status: "fail",
+    quality_review_status: "pass",
+    quality_execution_status: "pass",
+    next_action: "changes_requested",
+    issues: [{
+      title: "Behavior blocker remains",
+      body: "The current behavior still misses a done criteria branch.",
+      file: "src/index.js",
+      line: 12,
+      category: "Behavior",
+      severity: "high",
+      confidence: "high",
+    }],
+    rubric_scores: [{ factor: "BEHAVIOR", target: ">= 1/1", observed: "1/1", status: "pass", tier: "contract", notes: "Recovered score conflicts with blocker." }],
+    scope_drift: { creep: [], missing: [] },
+  });
+
+  const result = JSON.parse(execFileSync("node", [SCRIPT, "--repo", repoRoot, "--run-id", runId, "--pr", "123", "--done-criteria-file", doneCriteriaPath, "--diff-file", diffPath, "--review-file", reviewFile, "--no-comment", "--json"], { encoding: "utf-8" }));
+  const manifest = readManifest(manifestPath).data;
+
+  assert.equal(result.appliedVerdict, "escalated");
+  assert.equal(result.state, STATES.ESCALATED);
+  assert.equal(manifest.review.latest_verdict, "escalated");
+  assert.equal(manifest.review.last_escalation_decision.decision, "escalate");
+  assert.equal(manifest.review.last_escalation_decision.reason, "flip_flop_thrash");
+});
+
 test("rubric factor flip-flops fail closed for stale lineage without waiting for three repeats", () => {
   const { repoRoot, manifestPath, runId, doneCriteriaPath, diffPath } = setupRepo();
   const runDir = ensureRunLayout(repoRoot, runId).runDir;

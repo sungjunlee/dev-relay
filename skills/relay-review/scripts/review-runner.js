@@ -241,9 +241,10 @@ async function run() {
   });
   verdict = gateResult.verdict;
   const confidenceDowngrade = gateResult.confidenceDowngrade;
+  let analysisVerdict = confidenceDowngrade.applied ? gateResult.passEquivalentVerdict : verdict;
   const blockingChangesRequested = verdict.verdict === "changes_requested" && !confidenceDowngrade.applied;
-  const repeatedIssueCount = blockingChangesRequested ? computeRepeatedIssueCount(runDir, round, verdict.issues) : 0;
-  const lineageSummary = summarizeLineage(verdict.issues);
+  const repeatedIssueCount = blockingChangesRequested ? computeRepeatedIssueCount(runDir, round, analysisVerdict.issues) : 0;
+  const lineageSummary = summarizeLineage(analysisVerdict.issues);
   let escalationDecision = { round, trigger: "none", factors: [], traces: [], lineage_summary: lineageSummary, decision: "continue", reason: "no_trigger" };
   if (blockingChangesRequested && repeatedIssueCount >= 3) {
     verdict = toEscalatedVerdict(
@@ -251,18 +252,20 @@ async function run() {
       `Repeated identical review issues hit ${repeatedIssueCount} consecutive rounds.`
     );
     escalationDecision = { ...escalationDecision, trigger: "repeated_issues", decision: "escalate", reason: "repeated_issues" };
+    analysisVerdict = verdict;
   }
-  const factorFlips = computeFactorStatusFlips(runDir, round, verdict);
+  const factorFlips = computeFactorStatusFlips(runDir, round, analysisVerdict);
   if (factorFlips.length && escalationDecision.trigger !== "repeated_issues") {
-    escalationDecision = { round, trigger: "flip_flop", ...decideFlipFlopEscalation({ verdict, factorFlips, repeatedIssueCount }) };
+    escalationDecision = { round, trigger: "flip_flop", ...decideFlipFlopEscalation({ verdict: analysisVerdict, factorFlips, repeatedIssueCount }) };
   }
   if (escalationDecision.decision === "escalate" && escalationDecision.trigger === "flip_flop") {
     verdict = toEscalatedVerdict(
       verdict,
       factorFlips.map(({ factor, trace }) => `Rubric factor '${factor}' status flipped across 3 rounds (trace: ${trace.join("→")}). Owner decision required — reviewer cannot converge autonomously.`).join("; ")
     );
+    analysisVerdict = verdict;
   }
-  const convergenceSummary = buildConvergenceSummary({ runDir, round, verdict, factorFlips, repeatedIssueCount });
+  const convergenceSummary = buildConvergenceSummary({ runDir, round, verdict: analysisVerdict, factorFlips, repeatedIssueCount });
   result.convergenceSummary = convergenceSummary;
   if (convergenceSummary) writeText(path.join(runDir, `review-round-${round}-convergence.md`), `${formatConvergenceMarkdown(convergenceSummary)}\n`);
 
