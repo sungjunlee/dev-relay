@@ -937,6 +937,75 @@ test("relay-fleet replacement matrix replaces only run_id-null pre-manifest fail
   assert.deepEqual(persistedLeaves.map((leaf) => leaf.leaf_ref), [newLeaf.leaf_ref]);
 });
 
+test("relay-fleet replacement matrix rolls back manifest when persisted leaves rewrite fails", () => {
+  const { relayHome, repoRoot } = setupRepo("relay-fleet-replace-rollback-");
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "fleet-replace-rollback-fake-"));
+  const preloadScript = path.join(tmpDir, "fail-leaves-store-rename.js");
+  fs.writeFileSync(preloadScript, `const fs = require("node:fs");
+const path = require("node:path");
+const originalRenameSync = fs.renameSync;
+
+fs.renameSync = function renameSyncWithLeavesStoreFailure(sourcePath, destPath) {
+  const failDest = process.env.RELAY_FLEET_FAIL_RENAME_DEST;
+  if (failDest && path.resolve(destPath) === path.resolve(failDest)) {
+    throw new Error("simulated leaves store write failure");
+  }
+  return originalRenameSync.apply(this, arguments);
+};
+`, "utf-8");
+
+  const fleetId = "fleet-replace-rollback";
+  const oldLeaf = makeLeaf(repoRoot, 1, {
+    issue_number: 577,
+    leaf_ref: "leaf-old",
+    leaf_id: "leaf-old",
+    branch: "issue-577-leaf-old",
+  });
+  const newLeaf = makeLeaf(repoRoot, 2, {
+    issue_number: oldLeaf.issue_number,
+    leaf_ref: "leaf-new",
+    leaf_id: "leaf-new",
+    branch: "issue-577-leaf-new",
+  });
+  const leavesFile = writeLeavesFile(repoRoot, [newLeaf]);
+  createFleetManifest(repoRoot, {
+    fleetId,
+    children: [{
+      leaf_ref: oldLeaf.leaf_ref,
+      run_id: null,
+      dispatch_status: DISPATCH_STATUS.DISPATCH_FAILED_PRE_MANIFEST,
+      last_error: "old pre-manifest failure",
+    }],
+  });
+  writePersistedFleetLeaves(repoRoot, fleetId, [oldLeaf]);
+  const manifestPath = getFleetManifestPath(repoRoot, fleetId);
+  const leavesStorePath = getFleetLeavesStorePath(repoRoot, fleetId);
+  const manifestBefore = fs.readFileSync(manifestPath, "utf-8");
+  const storeBefore = fs.readFileSync(leavesStorePath, "utf-8");
+  const nodeOptions = [
+    process.env.NODE_OPTIONS,
+    `--require=${preloadScript}`,
+  ].filter(Boolean).join(" ");
+
+  const result = runFleet([
+    "--repo", repoRoot,
+    "--fleet-id", fleetId,
+    "--leaves-file", leavesFile,
+    "--json",
+  ], {
+    relayHome,
+    env: {
+      NODE_OPTIONS: nodeOptions,
+      RELAY_FLEET_FAIL_RENAME_DEST: leavesStorePath,
+    },
+  });
+
+  assert.notEqual(result.status, 0);
+  assert.equal(JSON.parse(result.stderr).error, "simulated leaves store write failure");
+  assert.equal(fs.readFileSync(manifestPath, "utf-8"), manifestBefore);
+  assert.equal(fs.readFileSync(leavesStorePath, "utf-8"), storeBefore);
+});
+
 test("relay-fleet replacement matrix fails closed when a divergent child has a run id", () => {
   const { relayHome, repoRoot } = setupRepo("relay-fleet-replace-runid-denied-");
   const fleetId = "fleet-replace-runid-denied";

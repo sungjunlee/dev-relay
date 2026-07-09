@@ -518,8 +518,24 @@ function replaceFleetChildren(repoRoot, fleetId, replacements) {
 
 function applyAcceptedLeafReplacements(repoRoot, fleetId, leaves, replacements) {
   if (!replacements.length) return;
+  const originalChildren = readFleetManifest(repoRoot, fleetId).data.children;
   replaceFleetChildren(repoRoot, fleetId, replacements);
-  persistFleetLeaves(repoRoot, fleetId, leaves);
+  try {
+    persistFleetLeaves(repoRoot, fleetId, leaves);
+  } catch (error) {
+    try {
+      updateFleetManifest(repoRoot, fleetId, (fleet) => ({
+        ...fleet,
+        children: originalChildren,
+      }));
+    } catch (rollbackError) {
+      throw new Error(
+        `failed to persist accepted leaf replacements and failed to roll back fleet manifest children: ${error.message}; rollback: ${rollbackError.message}`,
+        { cause: error }
+      );
+    }
+    throw error;
+  }
 }
 
 function assertLeavesMatchPersisted(repoRoot, fleetId, leaves) {
