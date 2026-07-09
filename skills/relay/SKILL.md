@@ -143,7 +143,7 @@ If relay-review returns LGTM, the review runner should already have recorded `re
 
 ## Batch Mode
 
-When multiple independent tasks are ready, dispatch in parallel instead of running sequential relay cycles. See `references/batch-mode.md` for the full flow (plan all → dispatch all → review as completed → mark ready → explicitly merge one-by-one), merge-conflict recovery, and the "when in doubt, run sequentially" principle.
+When multiple independent tasks are ready, `relay-fleet` is the default parallel batch path. See `references/batch-mode.md` for the remaining conflict-recovery note and the "when in doubt, run sequentially" principle.
 
 ## Summary Checklist
 

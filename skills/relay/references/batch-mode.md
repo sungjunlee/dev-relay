@@ -1,26 +1,22 @@
 # Batch Mode
 
-Operator playbook for parallel relay dispatch. Consult only when batching multiple independent tasks; the dominant single-task path in `SKILL.md` does not need this.
+Operator note for parallel relay batches. Manual fan-out is superseded by relay-fleet drive-by-default; use this file only for the remaining conflict/recovery principle.
 
-## Flow: Plan all → Dispatch all → Review as completed → Merge one-by-one
+## Default Flow
 
-1. **Plan all tasks** — follow Steps 0 through 2 (including 1.5) for each task. Write each dispatch prompt to its own temp file.
-2. **Dispatch all** — run dispatch.js for each task asynchronously (in the background). Mark all as `[~]` in sprint file.
-   Use the same dispatch option boundary as single-task relay: pass `--executor`, `--model`, or `--model-hints` explicitly for each child when a batch needs fixed routing. Detailed precedence lives in `../../relay-dispatch/references/model-routing.md`.
-3. **Review as completed** — as each dispatch finishes, run Step 4 (relay-review). No need to wait for all.
-4. **Merge one-by-one** — merge each ready PR sequentially only after explicit approval. After each merge, check remaining PRs for conflicts.
-5. **Re-anchor** — after the batch completes, run Step 0 before starting the next batch.
+Use `relay-fleet` as the default batch drive for prepared leaves.
+For sprint batches, follow `../../relay-fleet/references/sprint-to-leaves.md`.
 
 ## Merge conflict recovery
 
-If a ready-to-merge PR has conflicts after an earlier merge:
+If a child leaves `ready_to_merge` as `merge_blocked` after an earlier child lands:
 
-1. In the worktree: `git fetch origin && git rebase origin/main`
-2. Re-review the rebased PR (run relay-review again — Phase 1 from scratch)
-3. Merge
+1. Recover the affected run per the recovery playbook.
+2. Re-run the fleet drive so the child returns to the merge queue.
+3. Continue through the fleet gate.
 
 ## Principles
 
 - **When in doubt, run sequentially.** Batch mode is an optimization, not the default.
-- Merge order doesn't matter until it does — if conflict arises, rebase the rest.
+- Merge order doesn't matter until it does; if conflicts arise, recover and re-drive the blocked children.
 - No DAG analysis needed for 3-5 task batches. If tasks touch the same files, run them sequentially.
