@@ -60,13 +60,13 @@ Run the runner in the foreground. Do NOT background it, detach it, or return wit
 Supported primary reviewers: `--reviewer codex`, `--reviewer claude`, `--reviewer opencode`, `--reviewer pi`, `--reviewer antigravity`, and `--reviewer cursor`. Adapter precedence, environment knobs, capability gates, and model examples live in `../relay-dispatch/references/agent-adapter-platform.md`.
 If a reviewer route is denied or its model is unresolved, run `relay-config` to register the route or set the reviewer default before re-running review.
 
-Optional advisory path: add a non-gating blind-spot lane alongside the primary reviewer:
+Optional advisory lanes run alongside the primary reviewer from list config in routing or CLI shorthand. Profiles: `blindspot` defaults to `trigger=every_round,gating=false`; `adversarial` defaults to `trigger=on_pass,gating=true`. Explicit trigger/gating values win. Triggers are `every_round` or `on_pass`; gating lanes can demote an applied pass when they report required findings.
 ```bash
 node "${RELAY_SKILL_ROOT:-skills}/relay-review/scripts/review-runner.js" --repo . --run-id "$RUN_ID" --pr "$PR_NUM" --reviewer codex --advisory-reviewer <name> --advisory-profile blindspot --json
 ```
 Supported advisory reviewers: `--advisory-reviewer opencode`, `--advisory-reviewer pi`, `--advisory-reviewer antigravity`, and `--advisory-reviewer cline`.
 
-Advisory review is non-gating for `policy.review_assurance=standard`: it records artifacts and never replaces the primary verdict. For `policy.review_assurance=hardened`, advisory review and strict execution evidence become required gates. Full advisory timing, failure, and route semantics are in `references/runner-notes.md` and the adapter platform reference.
+Full advisory timing, failure, demotion cap, and route semantics are in `references/runner-notes.md` and the adapter platform reference.
 
 4. Fallback path for unsupported environments or debugging:
 ```bash

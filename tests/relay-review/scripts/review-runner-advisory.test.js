@@ -22,6 +22,7 @@ const {
 } = require("../../relay-dispatch/scripts/test-support");
 const { EXECUTION_EVIDENCE_FILENAME } = require("../../../skills/relay-review/scripts/review-runner/execution-evidence");
 const { finishAdvisoryReview } = require("../../../skills/relay-review/scripts/review-runner/advisory");
+const { buildAdvisoryPrompt } = require("../../../skills/relay-review/scripts/review-runner/advisory-prompt");
 const { applyReviewAssurancePolicy } = require("../../../skills/relay-review/scripts/review-runner/assurance");
 const { installFakeGhOnPath } = require("../fixtures/fake-gh");
 
@@ -73,6 +74,34 @@ function passVerdict() {
     scope_drift: { creep: [], missing: [] },
   };
 }
+
+function advisoryPrompt(profile) {
+  return buildAdvisoryPrompt({
+    branch: "issue-844",
+    diffText: "diff --git a/a.js b/a.js\n+a\n",
+    doneCriteria: "# Done Criteria\n\n- Exercise advisory profile\n",
+    doneCriteriaSource: "file",
+    issueNumber: 844,
+    prNumber: 860,
+    profile,
+    round: 1,
+    rubricLoad: { state: "missing" },
+  });
+}
+
+test("advisory prompt uses adversarial challenge framing only for the adversarial profile", () => {
+  const adversarial = advisoryPrompt("adversarial");
+  const blindspot = advisoryPrompt("blindspot");
+
+  assert.match(adversarial, /find ways this change fails in production/i);
+  assert.match(adversarial, /attacker and a chaos engineer/i);
+  assert.match(adversarial, /edge cases, race conditions, security holes, resource leaks, and silent data corruption/i);
+  assert.match(adversarial, /no compliments/i);
+  assert.match(adversarial, /file:line specific/i);
+  assert.match(adversarial, /required_findings exactly as the schema defines/i);
+  assert.doesNotMatch(blindspot, /attacker and a chaos engineer/i);
+  assert.doesNotMatch(blindspot, /no compliments/i);
+});
 
 function changesRequestedVerdict() {
   return {

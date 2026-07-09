@@ -1196,6 +1196,115 @@ test("reliability-report aggregates advisory critical-path impact", () => {
   assert.equal(report.advisory_timing.frontier_step_replaced, 0);
 });
 
+test("reliability-report aggregates per-lane advisory counts only when requested", () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-report-by-lane-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  const recentTs = new Date(Date.now() - 1 * 60 * 60 * 1000).toISOString();
+  const runA = createRunId({ branch: "run-lane-a", timestamp: new Date("2026-04-12T02:13:00.000Z") });
+  const runB = createRunId({ branch: "run-lane-b", timestamp: new Date("2026-04-12T02:13:01.000Z") });
+
+  writeRun(repoRoot, { runId: runA, state: STATES.CHANGES_REQUESTED, rounds: 1, updatedAt: recentTs });
+  writeRun(repoRoot, { runId: runB, state: STATES.REVIEW_PENDING, rounds: 1, updatedAt: recentTs });
+
+  appendRawRunEvent(repoRoot, runA, {
+    event: "advisory_review",
+    head_sha: "a".repeat(40),
+    round: 1,
+    reviewer: "opencode",
+    model: "openai/adversarial",
+    profile: "adversarial",
+    trigger: "on_pass",
+    gating: true,
+    status: "success",
+    required_count: 2,
+    advisory_count: 1,
+    duplicate_low_confidence_count: 0,
+  });
+  appendRawRunEvent(repoRoot, runA, {
+    event: "review_apply",
+    state_from: STATES.REVIEW_PENDING,
+    state_to: STATES.CHANGES_REQUESTED,
+    head_sha: "a".repeat(40),
+    round: 1,
+    reviewer: "codex",
+    reason: "changes_requested",
+    lane_demotion_cap: 2,
+    lane_demotion_count: 1,
+  });
+  appendRawRunEvent(repoRoot, runB, {
+    event: "advisory_review",
+    head_sha: "b".repeat(40),
+    round: 1,
+    reviewer: "opencode",
+    model: "openai/adversarial",
+    profile: "adversarial",
+    trigger: "on_pass",
+    gating: true,
+    status: "timeout",
+    required_count: 0,
+    advisory_count: 0,
+    duplicate_low_confidence_count: 0,
+  });
+  appendRawRunEvent(repoRoot, runB, {
+    event: "advisory_review",
+    head_sha: "b".repeat(40),
+    round: 1,
+    reviewer: "pi",
+    model: "openai/blindspot",
+    profile: "blindspot",
+    trigger: "every_round",
+    gating: false,
+    status: "deferred",
+    required_count: 0,
+    advisory_count: 3,
+    duplicate_low_confidence_count: 1,
+  });
+
+  const baseStdout = execFileSync("node", [SCRIPT, "--repo", repoRoot, "--json"], { encoding: "utf-8" });
+  const withLaneStdout = execFileSync("node", [SCRIPT, "--repo", repoRoot, "--json", "--by-lane"], { encoding: "utf-8" });
+  const baseReport = JSON.parse(baseStdout);
+  const withLaneReport = JSON.parse(withLaneStdout);
+
+  assert.equal("by_lane" in baseReport, false);
+  assert.deepEqual({ ...withLaneReport, by_lane: undefined }, { ...baseReport, by_lane: undefined });
+  assert.deepEqual(withLaneReport.by_lane, {
+    "opencode|openai/adversarial|adversarial": {
+      reviewer: "opencode",
+      model: "openai/adversarial",
+      profile: "adversarial",
+      rounds: 2,
+      statuses: {
+        success: 1,
+        failed: 0,
+        timeout: 1,
+        deferred: 0,
+      },
+      required_findings: 2,
+      advisory_findings: 1,
+      demotions_caused: 1,
+    },
+    "pi|openai/blindspot|blindspot": {
+      reviewer: "pi",
+      model: "openai/blindspot",
+      profile: "blindspot",
+      rounds: 1,
+      statuses: {
+        success: 0,
+        failed: 0,
+        timeout: 0,
+        deferred: 1,
+      },
+      required_findings: 0,
+      advisory_findings: 3,
+      demotions_caused: 0,
+    },
+  });
+
+  const text = execFileSync("node", [SCRIPT, "--repo", repoRoot, "--by-lane"], { encoding: "utf-8" });
+  assert.match(text, /by_lane:/);
+  assert.match(text, /opencode\|openai\/adversarial\|adversarial: rounds=2 success=1 failed=0 timeout=1 deferred=0 required_findings=2 advisory_findings=1 demotions_caused=1/);
+});
+
 test("reliability-report keeps qualitative_signals null below the minimum readable-rubric threshold", () => {
   for (const count of [0, 1, 2]) {
     const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), `relay-report-qual-threshold-${count}-`));

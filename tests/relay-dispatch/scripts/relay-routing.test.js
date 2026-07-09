@@ -327,6 +327,41 @@ test("project routes schema accepts phase defaults and rejects malformed actors"
   );
 });
 
+test("routing applies profile-aware advisory lane defaults and preserves explicit values", () => {
+  assert.deepEqual(validateProjectRoutes({
+    version: 1,
+    defaults: {
+      advisory_review: [
+        { reviewer: "blind", model: "openai/blind", profile: "blindspot" },
+        { reviewer: "attack", model: "openai/attack", profile: "adversarial" },
+        { reviewer: "explicit", model: "openai/explicit", profile: "adversarial", trigger: "every_round", gating: false },
+      ],
+    },
+  }, "routes.json").defaults.advisory_review, [
+    {
+      reviewer: "blind",
+      model: "openai/blind",
+      profile: "blindspot",
+      trigger: "every_round",
+      gating: false,
+    },
+    {
+      reviewer: "attack",
+      model: "openai/attack",
+      profile: "adversarial",
+      trigger: "on_pass",
+      gating: true,
+    },
+    {
+      reviewer: "explicit",
+      model: "openai/explicit",
+      profile: "adversarial",
+      trigger: "every_round",
+      gating: false,
+    },
+  ]);
+});
+
 test("route config v2 accepts unified fields and carries presets unconsumed", () => {
   const config = validateRouteConfig({
     version: 2,

@@ -284,6 +284,14 @@ function normalizeOptionalField(object, fieldName, sourceLabel, { required = fal
 }
 
 const ADVISORY_TRIGGERS = new Set(["every_round", "on_pass"]);
+const ADVISORY_PROFILE_DEFAULTS = Object.freeze({
+  blindspot: Object.freeze({ trigger: "every_round", gating: false }),
+  adversarial: Object.freeze({ trigger: "on_pass", gating: true }),
+});
+
+function advisoryProfileDefaults(profile) {
+  return ADVISORY_PROFILE_DEFAULTS[profile] || ADVISORY_PROFILE_DEFAULTS.blindspot;
+}
 
 function normalizeBoolean(value, fieldName, sourceLabel, { fallback = false } = {}) {
   if (value === undefined || value === null) return fallback;
@@ -293,8 +301,8 @@ function normalizeBoolean(value, fieldName, sourceLabel, { fallback = false } = 
   return value;
 }
 
-function normalizeAdvisoryTrigger(value, fieldName, sourceLabel) {
-  const trigger = nonEmptyString(value) || "every_round";
+function normalizeAdvisoryTrigger(value, fieldName, sourceLabel, profile) {
+  const trigger = nonEmptyString(value) || advisoryProfileDefaults(profile).trigger;
   if (!ADVISORY_TRIGGERS.has(trigger)) {
     throw new Error(`invalid project routes at ${sourceLabel}: ${fieldName} must be one of: ${Array.from(ADVISORY_TRIGGERS).join(", ")}`);
   }
@@ -309,11 +317,14 @@ function normalizeAdvisoryLane(lane, fieldName, sourceLabel) {
     required: true,
     label: `${fieldName}.reviewer`,
   });
+  const profile = normalizeOptionalField(lane, "profile", sourceLabel, { label: `${fieldName}.profile` }) || "blindspot";
   const normalized = {
     reviewer,
-    profile: normalizeOptionalField(lane, "profile", sourceLabel, { label: `${fieldName}.profile` }) || "blindspot",
-    trigger: normalizeAdvisoryTrigger(lane.trigger, `${fieldName}.trigger`, sourceLabel),
-    gating: normalizeBoolean(lane.gating, `${fieldName}.gating`, sourceLabel),
+    profile,
+    trigger: normalizeAdvisoryTrigger(lane.trigger, `${fieldName}.trigger`, sourceLabel, profile),
+    gating: normalizeBoolean(lane.gating, `${fieldName}.gating`, sourceLabel, {
+      fallback: advisoryProfileDefaults(profile).gating,
+    }),
   };
   const model = lane.model !== undefined && lane.model !== null
     ? normalizeOptionalField(lane, "model", sourceLabel, { label: `${fieldName}.model` })

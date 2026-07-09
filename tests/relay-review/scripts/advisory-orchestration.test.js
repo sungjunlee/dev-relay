@@ -5,6 +5,9 @@ const {
   resolveHardenedBindingWaitMs,
   resolveAdvisoryConfig,
 } = require("../../../skills/relay-review/scripts/review-runner/advisory-orchestration");
+const {
+  validateRouteConfig,
+} = require("../../../skills/relay-dispatch/scripts/relay-routing");
 
 test("resolveHardenedBindingWaitMs defaults to 10000ms when the env var is unset", () => {
   assert.equal(resolveHardenedBindingWaitMs({}), 10000);
@@ -117,6 +120,61 @@ test("resolveAdvisoryConfig accepts a manifest advisory lane list with defaults"
       trigger: "on_pass",
       gating: false,
       source: "routing",
+    },
+  ]);
+});
+
+test("resolveAdvisoryConfig applies profile-aware lane defaults that match dispatch routing", () => {
+  const laneInputs = [
+    { reviewer: "blind", model: "openai/blind", profile: "blindspot" },
+    { reviewer: "attack", model: "openai/attack", profile: "adversarial" },
+    { reviewer: "explicit", model: "openai/explicit", profile: "adversarial", trigger: "every_round", gating: false },
+  ];
+  const reviewConfig = resolveAdvisoryConfig({
+    data: {
+      routing: {
+        selected: {
+          advisory_review: laneInputs,
+        },
+      },
+    },
+  });
+  const dispatchConfig = validateRouteConfig({
+    version: 2,
+    defaults: {
+      advisory_review: laneInputs,
+    },
+  }, "routes.json");
+
+  const reviewLanes = reviewConfig.lanes.map(({ reviewer, model, profile, trigger, gating }) => ({
+    reviewer,
+    model,
+    profile,
+    trigger,
+    gating,
+  }));
+  assert.deepEqual(reviewLanes, dispatchConfig.defaults.advisory_review);
+  assert.deepEqual(reviewLanes, [
+    {
+      reviewer: "blind",
+      model: "openai/blind",
+      profile: "blindspot",
+      trigger: "every_round",
+      gating: false,
+    },
+    {
+      reviewer: "attack",
+      model: "openai/attack",
+      profile: "adversarial",
+      trigger: "on_pass",
+      gating: true,
+    },
+    {
+      reviewer: "explicit",
+      model: "openai/explicit",
+      profile: "adversarial",
+      trigger: "every_round",
+      gating: false,
     },
   ]);
 });

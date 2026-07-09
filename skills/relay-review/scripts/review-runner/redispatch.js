@@ -8,13 +8,15 @@ const { getAppliedVerdict } = require("./verdict");
 const FLIP_STATES = new Set(["pass", "fail"]);
 const LINEAGE_VALUES = ["deepening", "repeat", "stale", "new", "newly_scoreable", "unknown"];
 
-function buildRedispatchPrompt(verdict, doneCriteria, runDir, round, churnGrowth, doneCriteriaSource, currentHeadSha, convergenceSummary) {
+function buildRedispatchPrompt(verdict, doneCriteria, runDir, round, churnGrowth, doneCriteriaSource, currentHeadSha, convergenceSummary, options = {}) {
   const sections = [
     `This is round ${round + 1}. Fix these review issues in the PR. Do not change anything else. Push to the same branch.`,
     "",
     "Issues to fix:",
     formatIssueList(verdict.issues),
   ];
+  const demotingLaneSection = formatDemotingAdvisoryFindings(resolveDemotingAdvisoryResults(options));
+  if (demotingLaneSection) sections.push("", demotingLaneSection);
   const lineageSection = formatRedispatchLineageSection(verdict?.issues || []);
   if (lineageSection) sections.push("", lineageSection);
   const staleCandidateSection = formatSameHeadStaleCandidateSection(runDir, round, currentHeadSha);
@@ -65,6 +67,64 @@ function buildRedispatchPrompt(verdict, doneCriteria, runDir, round, churnGrowth
   );
 
   return sections.join("\n");
+}
+
+function readAdvisoryRequiredFindings(result) {
+  if (Array.isArray(result?.required_findings)) return result.required_findings;
+  const artifactPath = result?.artifactPath || result?.artifact_path;
+  if (!artifactPath) return [];
+  try {
+    const parsed = JSON.parse(fs.readFileSync(artifactPath, "utf-8"));
+    return Array.isArray(parsed?.required_findings) ? parsed.required_findings : [];
+  } catch {
+    return [];
+  }
+}
+
+function advisoryResultList(value) {
+  return Array.isArray(value) ? value.filter(Boolean) : [];
+}
+
+function resolveDemotingAdvisoryResults(options = {}) {
+  if (Array.isArray(options.demotingAdvisoryResults)) return options.demotingAdvisoryResults;
+  if (!(options.assuranceMetadata?.laneDemotion && options.assuranceMetadata?.reason === "lane_required_findings")) return [];
+  return advisoryResultList(options.advisoryResults).filter((entry) => (
+    entry.status === "success"
+    && Number(entry.required_count || 0) > 0
+    && (entry.gating === true || options.hardenedAssurance === true)
+  ));
+}
+
+function formatFindingLocation(finding) {
+  const file = String(finding?.file || "(unknown file)").trim() || "(unknown file)";
+  const line = Number.isInteger(finding?.line) && finding.line > 0 ? finding.line : null;
+  return line === null ? file : `${file}:${line}`;
+}
+
+function formatDemotingAdvisoryFindings(demotingAdvisoryResults) {
+  const results = Array.isArray(demotingAdvisoryResults)
+    ? demotingAdvisoryResults.filter(Boolean)
+    : [];
+  const lines = [];
+  for (const result of results) {
+    const findings = readAdvisoryRequiredFindings(result);
+    if (!findings.length) continue;
+    const reviewer = result?.reviewer || "unknown-reviewer";
+    const profile = result?.profile || "blindspot";
+    lines.push(`Lane: ${reviewer} (profile=${profile})`);
+    for (const finding of findings) {
+      const title = String(finding?.title || "Untitled advisory finding").trim();
+      const body = String(finding?.body || "").trim();
+      const severity = String(finding?.severity || "unknown").trim();
+      const location = formatFindingLocation(finding);
+      lines.push(`- ${location} severity=${severity} - ${title}${body ? `: ${body}` : ""}`);
+    }
+  }
+  if (!lines.length) return "";
+  return [
+    "Demoting advisory lane findings:",
+    ...lines,
+  ].join("\n");
 }
 
 function formatScoreValue(value) {

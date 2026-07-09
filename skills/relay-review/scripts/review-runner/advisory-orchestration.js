@@ -21,6 +21,10 @@ const { resolveReviewerScript } = require("./reviewer-invoke");
 // mirroring DEFAULT_ADVISORY_GRACE_SECONDS = 10 in advisory.js.
 const DEFAULT_HARDENED_EVENT_BINDING_WAIT_MS = 10000;
 const ADVISORY_TRIGGERS = new Set(["every_round", "on_pass"]);
+const ADVISORY_PROFILE_DEFAULTS = Object.freeze({
+  blindspot: Object.freeze({ trigger: "every_round", gating: false }),
+  adversarial: Object.freeze({ trigger: "on_pass", gating: true }),
+});
 
 function resolveHardenedBindingWaitMs(env = process.env) {
   const raw = Number(env.RELAY_ADVISORY_EVENT_BINDING_WAIT_MS || DEFAULT_HARDENED_EVENT_BINDING_WAIT_MS);
@@ -40,16 +44,20 @@ function hasAdvisoryConfigValue(value) {
   return isPlainObject(value) && Object.keys(value).length > 0;
 }
 
-function normalizeTrigger(value) {
-  const trigger = nonEmptyString(value) || "every_round";
+function advisoryProfileDefaults(profile) {
+  return ADVISORY_PROFILE_DEFAULTS[profile] || ADVISORY_PROFILE_DEFAULTS.blindspot;
+}
+
+function normalizeTrigger(value, profile) {
+  const trigger = nonEmptyString(value) || advisoryProfileDefaults(profile).trigger;
   if (!ADVISORY_TRIGGERS.has(trigger)) {
     throw new Error(`advisory lane trigger must be one of: ${Array.from(ADVISORY_TRIGGERS).join(", ")}`);
   }
   return trigger;
 }
 
-function normalizeGating(value) {
-  if (value === undefined || value === null) return false;
+function normalizeGating(value, profile) {
+  if (value === undefined || value === null) return advisoryProfileDefaults(profile).gating;
   if (typeof value !== "boolean") {
     throw new Error("advisory lane gating must be a boolean");
   }
@@ -67,14 +75,15 @@ function normalizeLaneList(value, source) {
     if (!reviewer) {
       throw new Error(`advisory lane ${index + 1} from ${source} requires reviewer`);
     }
+    const profile = validateAdvisoryProfile(entry.profile || "blindspot");
     return {
       index: index + 1,
       reviewer,
       model: nonEmptyString(entry.model || entry.reviewer_model),
       modelResolution: isPlainObject(entry.model_resolution) ? entry.model_resolution : null,
-      profile: validateAdvisoryProfile(entry.profile || "blindspot"),
-      trigger: normalizeTrigger(entry.trigger),
-      gating: normalizeGating(entry.gating),
+      profile,
+      trigger: normalizeTrigger(entry.trigger, profile),
+      gating: normalizeGating(entry.gating, profile),
       source,
     };
   });

@@ -3,7 +3,7 @@ const {
   parseJsonObject,
 } = require("../../relay-dispatch/scripts/agent-adapters/transport");
 
-const ADVISORY_PROFILES = Object.freeze(["blindspot"]);
+const ADVISORY_PROFILES = Object.freeze(["blindspot", "adversarial"]);
 const ADVISORY_SEVERITIES = new Set(["P1", "P2", "P3"]);
 const ADVISORY_CATEGORIES = new Set([
   "test-gap",

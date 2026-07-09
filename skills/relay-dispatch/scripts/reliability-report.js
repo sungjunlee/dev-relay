@@ -25,7 +25,7 @@ const HANDOFF_RECOVERY_EVENTS = new Set([
 if (hasCliFlag(["--help", "-h"])) {
   console.log(
     "Usage: reliability-report.js [--repo <path>] [--stale-hours <hours>] " +
-    "[--json] [--by-actor] [--by-role] [--by-acting-reviewer] [--by-dispatch]"
+    "[--json] [--by-actor] [--by-role] [--by-acting-reviewer] [--by-dispatch] [--by-lane]"
   );
   console.log("\nOptions:");
   console.log(`  --repo <path>           ${modeLabel("--repo")} Repository root (default: .)`);
@@ -35,6 +35,7 @@ if (hasCliFlag(["--help", "-h"])) {
   console.log(`  --by-role               ${modeLabel("--by-role")} Include role breakdown`);
   console.log(`  --by-acting-reviewer    ${modeLabel("--by-acting-reviewer")} Include acting reviewer breakdown`);
   console.log(`  --by-dispatch           ${modeLabel("--by-dispatch")} Include executor/model/provider breakdown`);
+  console.log(`  --by-lane               ${modeLabel("--by-lane")} Include advisory lane reviewer/model/profile breakdown`);
   process.exit(0);
 }
 
@@ -1208,6 +1209,79 @@ function buildAdvisoryTiming(events) {
   };
 }
 
+function normalizeLaneStatus(value) {
+  const status = normalizeBucketValue(value);
+  if (status === "success" || status === "timeout" || status === "deferred") return status;
+  return "failed";
+}
+
+function advisoryLaneKey(event) {
+  return [
+    normalizeBucketValue(event?.reviewer),
+    normalizeBucketValue(event?.model),
+    normalizeBucketValue(event?.profile || "blindspot"),
+  ].join("|");
+}
+
+function reviewRoundKey(event) {
+  return [
+    normalizeBucketValue(event?.run_id),
+    normalizeBucketValue(event?.head_sha),
+    normalizeBucketValue(event?.round),
+  ].join("|");
+}
+
+function buildDemotedRoundKeys(events) {
+  const demoted = new Set();
+  for (const event of events) {
+    if (event?.event !== EVENTS.REVIEW_APPLY) continue;
+    if (event.lane_demotion_count === undefined && event.lane_demotion_cap === undefined) continue;
+    if (event.state_to !== STATES.CHANGES_REQUESTED && event.reason !== "changes_requested") continue;
+    demoted.add(reviewRoundKey(event));
+  }
+  return demoted;
+}
+
+function buildLaneReports(events) {
+  const demotedRoundKeys = buildDemotedRoundKeys(events);
+  const buckets = new Map();
+  for (const event of events) {
+    if (event?.event !== EVENTS.ADVISORY_REVIEW) continue;
+    const key = advisoryLaneKey(event);
+    if (!buckets.has(key)) {
+      buckets.set(key, {
+        reviewer: normalizeBucketValue(event.reviewer),
+        model: normalizeBucketValue(event.model),
+        profile: normalizeBucketValue(event.profile || "blindspot"),
+        rounds: 0,
+        statuses: {
+          success: 0,
+          failed: 0,
+          timeout: 0,
+          deferred: 0,
+        },
+        required_findings: 0,
+        advisory_findings: 0,
+        demotions_caused: 0,
+      });
+    }
+    const bucket = buckets.get(key);
+    bucket.rounds += 1;
+    bucket.statuses[normalizeLaneStatus(event.status)] += 1;
+    bucket.required_findings += Number(event.required_count || 0);
+    bucket.advisory_findings += Number(event.advisory_count || 0);
+    if (
+      demotedRoundKeys.has(reviewRoundKey(event))
+      && event.gating === true
+      && event.status === "success"
+      && Number(event.required_count || 0) > 0
+    ) {
+      bucket.demotions_caused += 1;
+    }
+  }
+  return Object.fromEntries([...buckets.entries()].sort(([left], [right]) => left.localeCompare(right)));
+}
+
 function resolveManifestRubricPath(manifest) {
   const rubricPath = manifest?.data?.anchor?.rubric_path;
   const runId = manifest?.data?.run_id;
@@ -1656,6 +1730,9 @@ function main() {
   if (hasCliFlag("--by-dispatch")) {
     report.by_dispatch = buildDispatchReports({ repoRoot, staleHours, now, manifests, events });
   }
+  if (hasCliFlag("--by-lane")) {
+    report.by_lane = buildLaneReports(events);
+  }
 
   if (hasCliFlag("--json")) {
     console.log(JSON.stringify(report, null, 2));
@@ -1814,6 +1891,25 @@ function main() {
           `recover_commit_rate=${scopedReport.metrics.recover_commit_rate ?? "n/a"}`
         );
       }
+    }
+  }
+  if (hasCliFlag("--by-lane")) {
+    const laneEntries = Object.entries(report.by_lane || {});
+    console.log("  by_lane:");
+    if (laneEntries.length === 0) {
+      console.log("    n/a");
+    }
+    for (const [laneKey, laneReport] of laneEntries) {
+      console.log(
+        `    ${laneKey}: rounds=${laneReport.rounds} ` +
+        `success=${laneReport.statuses.success} ` +
+        `failed=${laneReport.statuses.failed} ` +
+        `timeout=${laneReport.statuses.timeout} ` +
+        `deferred=${laneReport.statuses.deferred} ` +
+        `required_findings=${laneReport.required_findings} ` +
+        `advisory_findings=${laneReport.advisory_findings} ` +
+        `demotions_caused=${laneReport.demotions_caused}`
+      );
     }
   }
   if (hasCliFlag("--by-acting-reviewer")) {
