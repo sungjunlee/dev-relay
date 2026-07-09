@@ -1,4 +1,4 @@
-const { applyReviewAssurancePolicy } = require("./assurance");
+const { applyReviewAssurancePolicy, getReviewAssuranceMetadata } = require("./assurance");
 const {
   buildExecutionEvidenceFailureVerdict,
   buildMissingExecutionEvidenceVerdict,
@@ -10,24 +10,36 @@ const {
   validateReviewVerdict,
 } = require("./verdict");
 
+function isLaneDrivenDemotion(verdict) {
+  const metadata = getReviewAssuranceMetadata(verdict);
+  return metadata?.laneDemotion === true || metadata?.laneCapEscalated === true;
+}
+
 function applyPassEquivalentGates(verdict, {
   advisoryResult,
+  advisoryResults,
   disallowPassReason,
   executionStatus,
+  expectedAdvisoryCount = null,
   hardenedAssurance,
   internalReview,
+  laneDemotionCount = 0,
   manualReviewReason,
   reviewFile,
 }) {
   const passNextActions = passNextActionsFor(internalReview);
-  let confidenceDowngrade = buildConfidenceDowngrade(verdict);
+  const initialConfidenceDowngrade = buildConfidenceDowngrade(verdict);
+  let confidenceDowngrade = initialConfidenceDowngrade;
   let gateVerdict = confidenceDowngrade.applied
     ? buildLowConfidencePassGateVerdict(verdict, passNextActions)
     : verdict;
 
   gateVerdict = applyReviewAssurancePolicy(gateVerdict, {
     advisoryResult,
+    advisoryResults,
+    expectedAdvisoryCount,
     hardenedAssurance,
+    laneDemotionCount,
     manualReviewReason,
     reviewFile,
   });
@@ -39,11 +51,13 @@ function applyPassEquivalentGates(verdict, {
   validateReviewVerdict(gateVerdict, { passNextActions, disallowPassReason });
   if (gateVerdict.verdict !== "pass" || !confidenceDowngrade.applied) {
     verdict = gateVerdict;
-    confidenceDowngrade = buildConfidenceDowngrade(verdict);
+    confidenceDowngrade = initialConfidenceDowngrade.applied && isLaneDrivenDemotion(gateVerdict)
+      ? initialConfidenceDowngrade
+      : buildConfidenceDowngrade(verdict);
   }
   validateReviewVerdict(verdict, { passNextActions, disallowPassReason });
 
-  const passEquivalentVerdict = confidenceDowngrade.applied ? gateVerdict : verdict;
+  const passEquivalentVerdict = initialConfidenceDowngrade.applied ? gateVerdict : verdict;
 
   return { confidenceDowngrade, passEquivalentVerdict, verdict };
 }

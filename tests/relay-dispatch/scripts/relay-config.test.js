@@ -1272,6 +1272,47 @@ test("plan-run previews allowed Pi route with policy source trace", () => {
   assert.equal(output.route_plan.phases.dispatch.policy_decision.reason, "allowed_model_route");
 });
 
+test("plan-run handles policy-default advisory lane lists in json and text output", () => {
+  const relayHome = tempDir();
+  writeJson(path.join(relayHome, "policy.json"), {
+    version: 1,
+    profile: "policy-default-lanes",
+    defaults: {
+      dispatch: { executor: "codex" },
+      review: { reviewer: "codex" },
+      advisory_review: [
+        { reviewer: "pi", model: "openai/gpt-5", profile: "blindspot", trigger: "every_round", gating: true },
+        { reviewer: "opencode", model: "example/opencode-model-fast", profile: "blindspot", trigger: "on_pass" },
+      ],
+    },
+    managed_cli: ["codex", "claude"],
+    allowed_model_routes: [
+      { route: "openai/*", phases: ["advisory_review"], reviewers: ["pi"] },
+      { route: "example/opencode-model-*", phases: ["advisory_review"], reviewers: ["opencode"] },
+    ],
+    denied_model_routes: [],
+    routing_rules: [],
+    deny_unknown_model_routes: true,
+  });
+
+  const jsonResult = runConfig(["plan-run", "--json"], { relayHome });
+  assert.equal(jsonResult.status, 0, jsonResult.combined);
+  const output = parseJson(jsonResult);
+  assert.equal(output.ok, true);
+  assert.equal(output.denied_phases.length, 0);
+  assert.equal(output.route_plan.phases.advisory_review.length, 2);
+  assert.equal(output.route_plan.phases.advisory_review[0].reviewer, "pi");
+  assert.equal(output.route_plan.phases.advisory_review[0].policy_decision.reason, "allowed_model_route");
+  assert.equal(output.route_plan.phases.advisory_review[1].reviewer, "opencode");
+  assert.equal(output.route_plan.phases.advisory_review[1].policy_decision.reason, "allowed_model_route");
+
+  const textResult = runConfig(["plan-run"], { relayHome });
+  assert.equal(textResult.status, 0, textResult.combined);
+  assert.match(textResult.stdout, /relay-config plan-run: allowed/);
+  assert.match(textResult.stdout, /advisory_review: pi model=openai\/gpt-5 decision=allowed_model_route/);
+  assert.match(textResult.stdout, /advisory_review: opencode model=example\/opencode-model-fast decision=allowed_model_route/);
+});
+
 test("plan-run denies routes narrowed by project policy before dispatch", () => {
   const relayHome = tempDir();
   const repoRoot = tempDir("relay-config-plan-run-repo-");

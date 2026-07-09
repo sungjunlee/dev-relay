@@ -660,6 +660,15 @@ function humanWarning(warning) {
   return String(warning).replace(/\bpolicy label\b/g, "route label");
 }
 
+function routePlanPhaseValues(phases = {}) {
+  const values = [];
+  for (const phase of Object.values(phases || {})) {
+    if (Array.isArray(phase)) values.push(...phase.filter(Boolean));
+    else if (phase) values.push(phase);
+  }
+  return values;
+}
+
 function commandPlanRun(positionals, jsonOut) {
   if (positionals.length !== 1) {
     throw new Error("plan-run does not accept positional arguments");
@@ -726,7 +735,7 @@ function commandPlanRun(positionals, jsonOut) {
     projectRoutes: projectRoutes.routes,
     policy: policyResult.policy,
   });
-  const phaseValues = Object.values(routePlan.phases).filter(Boolean);
+  const phaseValues = routePlanPhaseValues(routePlan.phases);
   const denied = phaseValues.filter((phase) => phase.policy_decision?.allowed !== true);
   const warnings = modelResolutionWarnings(runIntent);
   for (const phase of phaseValues) {

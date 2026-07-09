@@ -6,6 +6,7 @@ const { getProjectPolicyPath, looksLikeGitRepo } = require("./manifest/paths");
 const DEFAULT_POLICY_FILE = "policy.json";
 const REPO_POLICY_FILE = path.join(".relay", "policy.json");
 const MANAGED_MODELLESS_CLI = new Set(["codex", "claude", "cursor"]);
+const ADVISORY_TRIGGERS = new Set(["every_round", "on_pass"]);
 
 class RelayPolicyError extends Error {
   constructor(reason, message) {
@@ -25,6 +26,51 @@ function cloneJson(value) {
 
 function nonEmptyString(value) {
   return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function normalizeAdvisoryLane(lane, sourceLabel, index) {
+  if (!isPlainObject(lane)) {
+    throw new RelayPolicyError(
+      "invalid_policy",
+      `invalid relay policy at ${sourceLabel}: defaults.advisory_review[${index}] must be an object`
+    );
+  }
+  const reviewer = nonEmptyString(lane.reviewer);
+  if (!reviewer) {
+    throw new RelayPolicyError(
+      "invalid_policy",
+      `invalid relay policy at ${sourceLabel}: defaults.advisory_review[${index}].reviewer must be a non-empty string`
+    );
+  }
+  const trigger = nonEmptyString(lane.trigger) || "every_round";
+  if (!ADVISORY_TRIGGERS.has(trigger)) {
+    throw new RelayPolicyError(
+      "invalid_policy",
+      `invalid relay policy at ${sourceLabel}: defaults.advisory_review[${index}].trigger must be one of: ${Array.from(ADVISORY_TRIGGERS).join(", ")}`
+    );
+  }
+  if (lane.gating !== undefined && lane.gating !== null && typeof lane.gating !== "boolean") {
+    throw new RelayPolicyError(
+      "invalid_policy",
+      `invalid relay policy at ${sourceLabel}: defaults.advisory_review[${index}].gating must be a boolean`
+    );
+  }
+  const normalized = {
+    reviewer,
+    profile: nonEmptyString(lane.profile) || "blindspot",
+    trigger,
+    gating: lane.gating === true,
+  };
+  const model = nonEmptyString(lane.model || lane.reviewer_model);
+  if (model) normalized.model = model;
+  if (isPlainObject(lane.model_resolution)) normalized.model_resolution = cloneJson(lane.model_resolution);
+  return normalized;
+}
+
+function normalizeAdvisoryDefault(value, sourceLabel) {
+  if (value === null) return null;
+  const lanes = Array.isArray(value) ? value : [value];
+  return lanes.map((lane, index) => normalizeAdvisoryLane(lane, sourceLabel, index));
 }
 
 function policyError(sourceLabel, error, fallbackReason = "invalid_policy") {
@@ -113,6 +159,16 @@ function normalizeDefaults(defaults, sourceLabel) {
       throw new RelayPolicyError("invalid_policy", `invalid relay policy at ${sourceLabel}: defaults.${key} is required`);
     }
     const value = defaults[key];
+    if (key === "advisory_review") {
+      if (value !== null && !isPlainObject(value) && !Array.isArray(value)) {
+        throw new RelayPolicyError(
+          "invalid_policy",
+          `invalid relay policy at ${sourceLabel}: defaults.${key} must be an object, array, or null`
+        );
+      }
+      normalized[key] = normalizeAdvisoryDefault(value, sourceLabel);
+      continue;
+    }
     if (value !== null && !isPlainObject(value)) {
       throw new RelayPolicyError(
         "invalid_policy",

@@ -3821,10 +3821,50 @@ test("dispatch routing dry-run JSON explains CLI tags and selected advisory defa
   assert.equal(result.routing_decision.effective_source, "cli");
   assert.deepEqual(result.routing_decision.source_tags.cli, ["docs"]);
   assert.equal(result.routing_decision.matched_rule.name, "docs");
-  assert.deepEqual(result.routing_decision.selected.advisory_review, {
+  assert.deepEqual(result.routing_decision.selected.advisory_review, [{
     reviewer: "claude",
     profile: "blindspot",
+    trigger: "every_round",
+    gating: false,
+  }]);
+});
+
+test("explicit empty routed advisory selection survives preset injection", () => {
+  const { repoRoot, relayHome, rubricFile, env } = setupDryRunFixtureRepo();
+  writeRelayPolicy(relayHome, {
+    profile: "routing-empty-advisory",
+    routing_rules: [
+      {
+        name: "docs",
+        match: { tags: ["docs"] },
+        advisory_review: [],
+      },
+    ],
+    presets: {
+      light: {
+        advisory_review: { reviewer: "pi", model: "example/pi-model-fast", profile: "blindspot" },
+      },
+    },
+    allowed_model_routes: [
+      { route: "example/pi-model-*", phases: ["advisory_review"], reviewers: ["pi"] },
+    ],
   });
+
+  const stdout = runDispatch(repoRoot, [
+    "-b", "issue-routing-empty-advisory",
+    "--prompt", "dry run empty advisory selection",
+    "--rubric-file", rubricFile,
+    "--tags", "docs",
+    "--route-preset", "light",
+    "--dry-run",
+    "--json",
+  ], env);
+  const result = JSON.parse(stdout);
+
+  assert.equal(result.routing_decision.matched_rule.name, "docs");
+  // [] is a selection ("no advisory lanes"), not absence: the preset's
+  // advisory lanes must not overwrite it.
+  assert.deepEqual(result.routing_decision.selected.advisory_review, []);
 });
 
 test("dispatch routing dry-run text explains no-match decisions", () => {

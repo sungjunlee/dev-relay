@@ -113,6 +113,21 @@ function readJsonIfExists(filePath) {
   }
 }
 
+function readJsonIfExistsBefore(filePath, latestMtimeMs = null) {
+  const result = readJsonIfExists(filePath);
+  if (!result || !Number.isFinite(latestMtimeMs)) return result;
+  // The worker rewrites the result file after appending the ADVISORY_REVIEW
+  // event, so file mtime lies about when the result actually arrived. Trust
+  // the content stamp written at first completion; mtime is only a fallback
+  // for artifacts produced before completed_at existed.
+  const completedAtMs = Date.parse(result.completed_at || "");
+  if (Number.isFinite(completedAtMs)) {
+    return completedAtMs <= latestMtimeMs ? result : null;
+  }
+  const stat = fs.statSync(filePath);
+  return stat.mtimeMs <= latestMtimeMs ? result : null;
+}
+
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -122,7 +137,10 @@ function sleepSync(ms) {
 }
 
 function startAdvisoryReview({
+  artifactReviewerName = null,
+  gating = false,
   headSha,
+  laneIndex = 1,
   profile,
   promptText,
   policyDecision = null,
@@ -130,23 +148,30 @@ function startAdvisoryReview({
   reviewerModel,
   reviewerName,
   reviewerPolicy = null,
+  reviewerScript = null,
   reviewRepoPath,
   round,
   runDir,
   runId,
   runRepoPath,
+  source = null,
   state,
   timeoutSeconds,
+  trigger = "every_round",
 }) {
-  const paths = advisoryPaths(runDir, round, reviewerName);
-  const promptPath = path.join(runDir, `review-round-${round}-advisory-${reviewerName}-prompt.md`);
+  const artifactName = artifactReviewerName || reviewerName;
+  const paths = advisoryPaths(runDir, round, artifactName);
+  const promptPath = paths.promptPath;
+  const effectiveReviewerScript = reviewerScript || resolveReviewerScript(reviewerName, null, { phase: ADAPTER_PHASES.ADVISORY_REVIEW });
   writeText(promptPath, `${promptText}\n`);
-  const reviewerScript = resolveReviewerScript(reviewerName, null, { phase: ADAPTER_PHASES.ADVISORY_REVIEW });
   const startedAt = Date.now();
   const effectiveReviewerPolicy = reviewerPolicy || buildAdvisoryReviewerPolicy(reviewerName);
   const request = {
+    artifactReviewerName: artifactName,
     decisionPath: paths.decisionPath,
+    gating: gating === true,
     headSha,
+    laneIndex,
     profile,
     promptPath,
     requestPath: paths.requestPath,
@@ -156,15 +181,17 @@ function startAdvisoryReview({
     reviewerPolicy: effectiveReviewerPolicy,
     policyDecision,
     modelResolution,
-    reviewerScript,
+    reviewerScript: effectiveReviewerScript,
     reviewRepoPath,
     round,
     runDir,
     runId,
     runRepoPath,
+    source,
     startedAt,
     state,
     timeoutSeconds: parsePositiveSeconds(timeoutSeconds),
+    trigger,
   };
   writeJson(paths.requestPath, request);
 
@@ -202,12 +229,17 @@ function buildDeferredResult(advisoryRun, { criticalPathWaitMs = 0, consumedByPh
     duplicate_low_confidence_count: 0,
     elapsedMs: Date.now() - advisoryRun.startedAt,
     failureReason: null,
+    gating: advisoryRun.gating === true,
+    lane_index: advisoryRun.laneIndex || 1,
+    model: advisoryRun.reviewerModel || null,
     phaseDecisionWaited: criticalPathWaitMs > 0,
     profile: advisoryRun.profile,
     rawResponsePath: null,
     required_count: 0,
     reviewer: advisoryRun.reviewerName,
+    source: advisoryRun.source || null,
     status: "deferred",
+    trigger: advisoryRun.trigger || "every_round",
   };
 }
 
@@ -268,13 +300,14 @@ async function finishAdvisoryReview({
   advisoryRun,
   criticalPathWaitMs = 0,
   requireEventBoundSuccess = false,
+  resultDeadlineMs = null,
   waitMs,
   consumedByPhase = "review",
 }) {
   const deadline = Date.now() + Math.max(0, Number(waitMs || 0));
   let unboundSuccess = null;
   while (Date.now() <= deadline) {
-    const result = readJsonIfExists(advisoryRun.resultPath);
+    const result = readJsonIfExistsBefore(advisoryRun.resultPath, resultDeadlineMs);
     if (result) {
       if (!requireEventBoundSuccess || result.status !== "success") return result;
       const failureReason = advisorySuccessBindingFailure(advisoryRun, result);
@@ -284,7 +317,7 @@ async function finishAdvisoryReview({
     if (Date.now() === deadline) break;
     await sleep(Math.min(25, Math.max(1, deadline - Date.now())));
   }
-  const result = readJsonIfExists(advisoryRun.resultPath);
+  const result = readJsonIfExistsBefore(advisoryRun.resultPath, resultDeadlineMs);
   if (result) {
     if (!requireEventBoundSuccess || result.status !== "success") return result;
     const failureReason = advisorySuccessBindingFailure(advisoryRun, result);
@@ -292,7 +325,9 @@ async function finishAdvisoryReview({
     return buildUnboundSuccessResult(advisoryRun, result, failureReason, { criticalPathWaitMs, consumedByPhase });
   }
   if (unboundSuccess) {
-    return buildUnboundSuccessResult(advisoryRun, unboundSuccess.result, unboundSuccess.failureReason, { criticalPathWaitMs, consumedByPhase });
+    const failureReason = advisorySuccessBindingFailure(advisoryRun, unboundSuccess.result);
+    if (!failureReason) return unboundSuccess.result;
+    return buildUnboundSuccessResult(advisoryRun, unboundSuccess.result, failureReason, { criticalPathWaitMs, consumedByPhase });
   }
   return buildDeferredResult(advisoryRun, { criticalPathWaitMs, consumedByPhase });
 }
@@ -353,7 +388,7 @@ function executeAdvisoryRequest(request) {
 
   try {
     const timeoutMs = parsePositiveSeconds(request.timeoutSeconds) * 1000;
-    advisoryRepoPath = createAdvisoryWorktree(request.reviewRepoPath, request.runDir, request.reviewerName);
+    advisoryRepoPath = createAdvisoryWorktree(request.reviewRepoPath, request.runDir, request.artifactReviewerName || request.reviewerName);
     const statusBefore = captureGitStatus(advisoryRepoPath);
     const execArgs = [
       request.reviewerScript,
@@ -386,12 +421,12 @@ function executeAdvisoryRequest(request) {
       };
     }
 
-    rawResponsePath = writeRawResponse(request.runDir, request.round, request.reviewerName, stdout, stderr);
+    rawResponsePath = writeRawResponse(request.runDir, request.round, request.artifactReviewerName || request.reviewerName, stdout, stderr);
     const statusAfter = captureGitStatus(advisoryRepoPath);
     if (statusBefore !== statusAfter) {
       status = "policy_violation";
       failureReason = "advisory_reviewer_modified_worktree";
-      artifactPath = path.join(request.runDir, `review-round-${request.round}-advisory-${request.reviewerName}-policy-violation.txt`);
+      artifactPath = path.join(request.runDir, `review-round-${request.round}-advisory-${request.artifactReviewerName || request.reviewerName}-policy-violation.txt`);
       writeText(artifactPath, [
         "Advisory reviewer write policy violation detected.",
         "",
@@ -419,7 +454,7 @@ function executeAdvisoryRequest(request) {
         phase: "advisory_review",
         profile: request.profile,
       });
-      artifactPath = path.join(request.runDir, `review-round-${request.round}-advisory-${request.reviewerName}.json`);
+      artifactPath = path.join(request.runDir, `review-round-${request.round}-advisory-${request.artifactReviewerName || request.reviewerName}.json`);
       writeText(artifactPath, `${JSON.stringify(parsed, null, 2)}\n`);
       counts = {
         required_count: parsed.required_findings.length,
@@ -436,11 +471,17 @@ function executeAdvisoryRequest(request) {
   const result = {
     artifactHash,
     artifactPath,
+    completed_at: new Date().toISOString(),
     failureReason,
+    gating: request.gating === true,
+    lane_index: request.laneIndex || 1,
+    model: request.reviewerModel || null,
     profile: request.profile,
     rawResponsePath,
     reviewer: request.reviewerName,
+    source: request.source || null,
     status,
+    trigger: request.trigger || "every_round",
     ...counts,
   };
   writeJson(request.resultPath, result);
@@ -458,11 +499,14 @@ function executeAdvisoryRequest(request) {
       state_to: request.state,
       head_sha: request.headSha,
       round: request.round,
+      lane_index: request.laneIndex || 1,
       reviewer: request.reviewerName,
       model: request.reviewerModel,
       reviewer_policy: request.reviewerPolicy,
       policy_decision: request.policyDecision,
       profile: request.profile,
+      trigger: request.trigger || "every_round",
+      gating: request.gating === true,
       status,
       artifact_path: artifactPath,
       advisory_artifact_hash: artifactHash,

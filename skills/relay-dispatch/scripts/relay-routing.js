@@ -246,6 +246,21 @@ function normalizeSelection(value, fieldName, index, warnings) {
   return Object.keys(normalized).length ? normalized : null;
 }
 
+function normalizeAdvisorySelection(value, fieldName, index, warnings) {
+  if (value === undefined || value === null) return null;
+  try {
+    return normalizeAdvisoryLaneList(value, fieldName, `routing_rules[${index}]`);
+  } catch (error) {
+    warnings.push({
+      code: "invalid_selection",
+      field: fieldName,
+      index,
+      reason: error.message,
+    });
+    return null;
+  }
+}
+
 function requirePhaseObject(value, fieldName, sourceLabel) {
   if (value === undefined || value === null) return null;
   if (!isPlainObject(value)) {
@@ -268,7 +283,62 @@ function normalizeOptionalField(object, fieldName, sourceLabel, { required = fal
   return value;
 }
 
+const ADVISORY_TRIGGERS = new Set(["every_round", "on_pass"]);
+
+function normalizeBoolean(value, fieldName, sourceLabel, { fallback = false } = {}) {
+  if (value === undefined || value === null) return fallback;
+  if (typeof value !== "boolean") {
+    throw new Error(`invalid project routes at ${sourceLabel}: ${fieldName} must be a boolean`);
+  }
+  return value;
+}
+
+function normalizeAdvisoryTrigger(value, fieldName, sourceLabel) {
+  const trigger = nonEmptyString(value) || "every_round";
+  if (!ADVISORY_TRIGGERS.has(trigger)) {
+    throw new Error(`invalid project routes at ${sourceLabel}: ${fieldName} must be one of: ${Array.from(ADVISORY_TRIGGERS).join(", ")}`);
+  }
+  return trigger;
+}
+
+function normalizeAdvisoryLane(lane, fieldName, sourceLabel) {
+  if (!isPlainObject(lane)) {
+    throw new Error(`invalid project routes at ${sourceLabel}: ${fieldName} must be an object`);
+  }
+  const reviewer = normalizeOptionalField(lane, "reviewer", sourceLabel, {
+    required: true,
+    label: `${fieldName}.reviewer`,
+  });
+  const normalized = {
+    reviewer,
+    profile: normalizeOptionalField(lane, "profile", sourceLabel, { label: `${fieldName}.profile` }) || "blindspot",
+    trigger: normalizeAdvisoryTrigger(lane.trigger, `${fieldName}.trigger`, sourceLabel),
+    gating: normalizeBoolean(lane.gating, `${fieldName}.gating`, sourceLabel),
+  };
+  const model = lane.model !== undefined && lane.model !== null
+    ? normalizeOptionalField(lane, "model", sourceLabel, { label: `${fieldName}.model` })
+    : normalizeOptionalField(lane, "reviewer_model", sourceLabel, { label: `${fieldName}.reviewer_model` });
+  if (model !== undefined) normalized.model = model;
+  if (isPlainObject(lane.model_resolution)) normalized.model_resolution = cloneJson(lane.model_resolution);
+  return normalized;
+}
+
+function normalizeAdvisoryLaneList(value, fieldName, sourceLabel) {
+  if (value === undefined || value === null) return null;
+  const lanes = Array.isArray(value) ? value : [value];
+  return lanes.map((lane, index) => normalizeAdvisoryLane(lane, `${fieldName}[${index}]`, sourceLabel));
+}
+
 function normalizeRouteDefault(value, phase, sourceLabel, { partial = false } = {}) {
+  if (phase === "advisory_review") {
+    // Legacy v2 partial defaults ({ model } without reviewer) are per-field
+    // overlays applied at lane pick time, not lane selections; a partial
+    // source must preserve that shape instead of failing lane validation.
+    if (partial && isPlainObject(value) && !nonEmptyString(value.reviewer)) {
+      return cloneJson(value);
+    }
+    return normalizeAdvisoryLaneList(value, "defaults.advisory_review", sourceLabel);
+  }
   const routeDefault = requirePhaseObject(value, phase, sourceLabel);
   if (routeDefault === null) return null;
 
@@ -291,7 +361,7 @@ function normalizeRouteDefault(value, phase, sourceLabel, { partial = false } = 
     }
     return normalized;
   }
-  if (phase === "review" || phase === "advisory_review") {
+  if (phase === "review") {
     const normalized = {};
     if (routeDefault.reviewer !== undefined || !partial) {
       assignIfDefined(normalized, "reviewer", normalizeOptionalField(routeDefault, "reviewer", sourceLabel, {
@@ -300,9 +370,6 @@ function normalizeRouteDefault(value, phase, sourceLabel, { partial = false } = 
       }));
     }
     if (routeDefault.model !== undefined) assignIfDefined(normalized, "model", normalizeOptionalField(routeDefault, "model", sourceLabel, { label: `defaults.${phase}.model` }));
-    if (phase === "advisory_review" && routeDefault.profile !== undefined) {
-      assignIfDefined(normalized, "profile", normalizeOptionalField(routeDefault, "profile", sourceLabel, { label: "defaults.advisory_review.profile" }));
-    }
     return normalized;
   }
   throw new Error(`unsupported route phase: ${phase}`);
@@ -415,12 +482,19 @@ function normalizePresets(value, sourceLabel) {
   if (!isPlainObject(value)) {
     throw new Error(`invalid routes config at ${sourceLabel}: presets must be an object`);
   }
+  const normalized = {};
   for (const [name, preset] of Object.entries(value)) {
     if (!isPlainObject(preset)) {
       throw new Error(`invalid routes config at ${sourceLabel}: presets.${name} must be an object`);
     }
+    normalized[name] = cloneJson(preset);
+    for (const phase of ["dispatch", "review", "advisory_review"]) {
+      if (preset[phase] !== undefined) {
+        normalized[name][phase] = normalizeRouteDefault(preset[phase], phase, `preset:${name}`, { partial: true });
+      }
+    }
   }
-  return cloneJson(value);
+  return normalized;
 }
 
 function validateRouteConfig(routes, sourceLabel = "routes config", { project = false } = {}) {
@@ -453,8 +527,10 @@ function validateRouteConfig(routes, sourceLabel = "routes config", { project = 
   return normalized;
 }
 
-function mergePhaseDefaults(base = {}, override = {}) {
+function mergePhaseDefaults(base = {}, override) {
   if (override === null) return null;
+  if (Array.isArray(override)) return cloneJson(override);
+  if (Array.isArray(base)) return override === undefined ? cloneJson(base) : cloneJson(override);
   if (base === null) return override === undefined ? null : cloneJson(override);
   return {
     ...(isPlainObject(base) ? base : {}),
@@ -462,11 +538,30 @@ function mergePhaseDefaults(base = {}, override = {}) {
   };
 }
 
+function mergeAdvisoryPhaseDefaults(base, override) {
+  const partialOverride = isPlainObject(override) && !nonEmptyString(override.reviewer);
+  if (!partialOverride) return mergePhaseDefaults(base, override);
+  // Single-lane composition boundary: a legacy partial overlay ({ model })
+  // composes onto exactly one inherited lane; multi-lane inheritance fails
+  // closed instead of silently replacing or merging.
+  const baseLanes = Array.isArray(base) ? base : (isPlainObject(base) && nonEmptyString(base.reviewer) ? [base] : null);
+  if (!baseLanes) return mergePhaseDefaults(base, override);
+  if (baseLanes.length !== 1) {
+    throw new Error(
+      "invalid advisory routing: a partial advisory default (project routes) cannot overlay the inherited multi-lane list; specify full advisory lanes instead of a partial override"
+    );
+  }
+  const model = nonEmptyString(override.model || override.reviewer_model);
+  return [model ? { ...cloneJson(baseLanes[0]), model } : cloneJson(baseLanes[0])];
+}
+
 function mergeDefaults(base = {}, override = {}) {
   const merged = { ...(base || {}) };
   for (const phase of ["dispatch", "review", "advisory_review"]) {
     if (Object.prototype.hasOwnProperty.call(override || {}, phase)) {
-      merged[phase] = mergePhaseDefaults(merged[phase], override[phase]);
+      merged[phase] = phase === "advisory_review"
+        ? mergeAdvisoryPhaseDefaults(merged[phase], override[phase])
+        : mergePhaseDefaults(merged[phase], override[phase]);
     }
   }
   return merged;
@@ -692,6 +787,15 @@ function setRunIntentField(target, phase, field, value, source) {
   return true;
 }
 
+function setRunIntentPhase(target, phase, value, source) {
+  if (target[phase] !== undefined) return false;
+  target[phase] = cloneJson(value);
+  if (!isPlainObject(target[ROUTE_INTENT_SOURCES_KEY])) target[ROUTE_INTENT_SOURCES_KEY] = {};
+  if (!isPlainObject(target[ROUTE_INTENT_SOURCES_KEY][phase])) target[ROUTE_INTENT_SOURCES_KEY][phase] = {};
+  target[ROUTE_INTENT_SOURCES_KEY][phase].lanes = source;
+  return true;
+}
+
 function runIntentSource(runIntent, phase, field) {
   return nonEmptyString(runIntent?.[ROUTE_INTENT_SOURCES_KEY]?.[phase]?.[field]) || "run_intent";
 }
@@ -726,6 +830,29 @@ function modelResolutionForPhase(runIntent, phase, { actor, actorField, model } 
     actor,
     actorField,
     model,
+  });
+}
+
+function modelResolutionForAdvisoryPresetLane(preset, lane, index) {
+  const raw = preset?.model_resolution?.advisory_review;
+  const laneMetadata = Array.isArray(raw) ? raw[index] : raw;
+  return normalizeModelResolutionMetadata(lane.model_resolution, {
+    phase: "advisory_review",
+    actor: lane.reviewer,
+    actorField: "reviewer",
+    model: lane.model,
+  }) || normalizeModelResolutionMetadata(laneMetadata, {
+    phase: "advisory_review",
+    actor: lane.reviewer,
+    actorField: "reviewer",
+    model: lane.model,
+  });
+}
+
+function attachAdvisoryPresetModelResolution(preset, lanes) {
+  return lanes.map((lane, index) => {
+    const metadata = modelResolutionForAdvisoryPresetLane(preset, lane, index);
+    return metadata ? { ...lane, model_resolution: metadata } : lane;
   });
 }
 
@@ -772,6 +899,39 @@ function expandRoutePreset({ runIntent = null, policy = {}, routePresetName = nu
   for (const phase of ROUTE_PHASES) {
     const presetPhase = normalizePresetPhase(preset, presetName, phase);
     if (!presetPhase) continue;
+    if (phase === "advisory_review") {
+      if (isPlainObject(presetPhase) && !nonEmptyString(presetPhase.reviewer)) {
+        throw presetError(
+          `route preset '${presetName}' advisory_review must be a full lane or lane list; a partial object without reviewer is only valid as a project/run-intent overlay`,
+          { code: "invalid_route_preset", availablePresets: available }
+        );
+      }
+      const advisoryPresetPhase = attachAdvisoryPresetModelResolution(preset, presetPhase);
+      const existing = expanded[phase];
+      if (isPlainObject(existing) && !nonEmptyString(existing.reviewer)) {
+        // Run intent carries a partial overlay ({ model } without reviewer);
+        // the preset supplies the lanes and the overlay composes onto the
+        // single lane. Multi-lane composition is ambiguous and fails closed.
+        const lanes = Array.isArray(advisoryPresetPhase) ? advisoryPresetPhase : [advisoryPresetPhase];
+        if (lanes.length !== 1) {
+          throw presetError(
+            `run intent advisory overlay (model without reviewer) cannot compose with multi-lane preset '${presetName}'; specify full advisory lanes in run intent`,
+            { code: "invalid_route_preset", availablePresets: available }
+          );
+        }
+        const overlayModel = nonEmptyString(existing.model || existing.reviewer_model);
+        expanded[phase] = lanes.map((lane) => (overlayModel ? { ...lane, model: overlayModel } : { ...lane }));
+        if (!isPlainObject(expanded[ROUTE_INTENT_SOURCES_KEY])) expanded[ROUTE_INTENT_SOURCES_KEY] = {};
+        if (!isPlainObject(expanded[ROUTE_INTENT_SOURCES_KEY][phase])) expanded[ROUTE_INTENT_SOURCES_KEY][phase] = {};
+        expanded[ROUTE_INTENT_SOURCES_KEY][phase].lanes = source;
+        filled.push({ phase, field: "lanes" });
+        continue;
+      }
+      if (setRunIntentPhase(expanded, phase, advisoryPresetPhase, source)) {
+        filled.push({ phase, field: "lanes" });
+      }
+      continue;
+    }
     for (const [field, value] of Object.entries(presetPhase)) {
       if (hasRunIntentField(expanded, phase, field)) continue;
       if (setRunIntentField(expanded, phase, field, value, source)) {
@@ -845,12 +1005,154 @@ function resolveModelForActor({ phase, actor, runIntent, projectRoutes, policy, 
   return { value: null, source: "unresolved" };
 }
 
+function pickAdvisoryLaneList({ runIntent, projectRoutes, policy }) {
+  const candidates = [];
+  if (runIntent && Object.prototype.hasOwnProperty.call(runIntent, "advisory_review")) {
+    candidates.push({
+      value: runIntent.advisory_review,
+      fieldName: "advisory_review",
+      sourceLabel: "run_intent",
+      source: runIntentSource(runIntent, "advisory_review", "lanes"),
+    });
+  }
+  if (projectRoutes?.defaults && Object.prototype.hasOwnProperty.call(projectRoutes.defaults, "advisory_review")) {
+    candidates.push({
+      value: projectRoutes.defaults.advisory_review,
+      fieldName: "defaults.advisory_review",
+      sourceLabel: "project routes",
+      source: "project_routes",
+    });
+  }
+  const policyDefault = defaultForPhase(policy, "advisory_review");
+  if (policyDefault !== undefined && policyDefault !== null) {
+    candidates.push({
+      value: policyDefault,
+      fieldName: "defaults.advisory_review",
+      sourceLabel: "policy_defaults",
+      source: "policy_defaults",
+    });
+  }
+
+  // Legacy v2 project defaults supported partial per-field overrides: a
+  // higher-priority source may carry a plain object without reviewer (for
+  // example { model }) that overlays the lane chosen from a lower-priority
+  // source rather than selecting lanes itself.
+  const overlays = [];
+  for (const candidate of candidates) {
+    const { value } = candidate;
+    if (isPlainObject(value) && !nonEmptyString(value.reviewer)) {
+      overlays.push(candidate);
+      continue;
+    }
+    let lanes = normalizeAdvisoryLaneList(value, candidate.fieldName, candidate.sourceLabel) || [];
+    if (lanes.length > 1 && overlays.length) {
+      throw new Error(
+        `invalid advisory routing: a partial advisory default (${overlays.map((o) => o.source).join(", ")}) ` +
+        `cannot overlay the multi-lane list from ${candidate.source}; specify full advisory lanes instead of a partial override`
+      );
+    }
+    if (lanes.length === 1 && overlays.length) {
+      for (let i = overlays.length - 1; i >= 0; i -= 1) {
+        const overlay = overlays[i];
+        const model = nonEmptyString(overlay.value.model || overlay.value.reviewer_model);
+        if (model) {
+          lanes = [{ ...lanes[0], model, modelSource: overlay.source }];
+        }
+      }
+    }
+    return { lanes, source: candidate.source };
+  }
+  return { lanes: [], source: "unresolved" };
+}
+
+function pickAdvisoryModelForActor({ actor, runIntent, projectRoutes, policy }) {
+  // Advisory defaults normalize to lane arrays, which pickField's plain-object
+  // path cannot see; a legacy single-object default's model must still act as
+  // the fallback for a higher-priority lane that omits model.
+  const candidates = [
+    [runIntent?.advisory_review, runIntentSource(runIntent, "advisory_review", "model")],
+    [projectRoutes?.defaults?.advisory_review, "project_routes"],
+    [defaultForPhase(policy, "advisory_review"), "policy_defaults"],
+  ];
+  for (const [value, source] of candidates) {
+    const lanes = Array.isArray(value) ? value : (isPlainObject(value) ? [value] : []);
+    const lane = lanes.find((entry) => isPlainObject(entry) && entry.reviewer === actor);
+    const model = nonEmptyString(lane?.model || lane?.reviewer_model);
+    if (model) return { value: model, source };
+  }
+  return { value: null, source: "unresolved" };
+}
+
+function resolveAdvisoryPhaseRoute({ runIntent, projectRoutes, policy, relayHome, repoRoot, executorModelResolver }) {
+  const picked = pickAdvisoryLaneList({ runIntent, projectRoutes, policy });
+  if (!picked.lanes.length) return null;
+  return picked.lanes.map((lane) => {
+    const actorField = "reviewer";
+    const explicitModel = nonEmptyString(lane.model);
+    let model = explicitModel
+      ? { value: explicitModel, source: lane.modelSource || picked.source }
+      : pickAdvisoryModelForActor({ actor: lane.reviewer, runIntent, projectRoutes, policy });
+    if (!explicitModel && model.source === "unresolved") {
+      model = resolveModelForActor({
+        phase: "advisory_review",
+        actor: lane.reviewer,
+        runIntent,
+        projectRoutes,
+        policy,
+        relayHome,
+        repoRoot,
+        executorModelResolver,
+      });
+    }
+    const resolved = {
+      phase: "advisory_review",
+      reviewer: lane.reviewer,
+      model: model.value,
+      source: picked.source,
+      sources: {
+        reviewer: picked.source,
+        model: model.source,
+        profile: picked.source,
+        trigger: picked.source,
+        gating: picked.source,
+      },
+      profile: lane.profile,
+      trigger: lane.trigger,
+      gating: lane.gating,
+    };
+    resolved.policy_decision = evaluateRelayRoute(policy, {
+      phase: "advisory_review",
+      reviewer: lane.reviewer,
+      model: model.value,
+    });
+    const modelResolution = normalizeModelResolutionMetadata(lane.model_resolution, {
+      phase: "advisory_review",
+      actor: lane.reviewer,
+      actorField,
+      model: model.value,
+    }) || modelResolutionForPhase(runIntent, "advisory_review", {
+      actor: lane.reviewer,
+      actorField,
+      model: model.value,
+    });
+    if (modelResolution) resolved.model_resolution = modelResolution;
+    return resolved;
+  });
+}
+
 function resolvePhaseRoute({ phase, runIntent, projectRoutes, policy, relayHome, repoRoot, executorModelResolver }) {
+  if (phase === "advisory_review") {
+    return resolveAdvisoryPhaseRoute({
+      runIntent,
+      projectRoutes,
+      policy,
+      relayHome,
+      repoRoot,
+      executorModelResolver,
+    });
+  }
   const actorField = actorFieldForPhase(phase);
   const selected = pickField({ phase, field: actorField, runIntent, projectRoutes, policy });
-  if (!selected.value && phase === "advisory_review") {
-    return null;
-  }
 
   const model = resolveModelForActor({
     phase,
@@ -872,14 +1174,6 @@ function resolvePhaseRoute({ phase, runIntent, projectRoutes, policy, relayHome,
       model: model.source,
     },
   };
-
-  if (phase === "advisory_review") {
-    const profile = pickField({ phase, field: "profile", runIntent, projectRoutes, policy });
-    if (profile.value) {
-      resolved.profile = profile.value;
-      resolved.sources.profile = profile.source;
-    }
-  }
 
   const policyTuple = actorField === "reviewer"
     ? { phase, reviewer: selected.value, model: model.value }
@@ -965,7 +1259,7 @@ function validateRoutingRules(routingRules = []) {
       name,
       index,
       match,
-      advisory_review: normalizeSelection(rule.advisory_review ?? defaults.advisory_review, "advisory_review", index, warnings),
+      advisory_review: normalizeAdvisorySelection(rule.advisory_review ?? defaults.advisory_review, "advisory_review", index, warnings),
       ignored_primary_review: normalizeSelection(rule.review ?? defaults.review, "review", index, warnings),
     });
   });
