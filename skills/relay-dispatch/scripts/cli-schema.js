@@ -162,16 +162,19 @@ const COMMAND_FLAGS = {
     "--repo", "--prompt-file", "--model", "--json", "--help",
   ],
   "invoke-reviewer-antigravity": [
-    "--repo", "--prompt-file", "--model", "--phase", "--json", "--help",
+    "--repo", "--prompt-file", "--model", "--phase", "--profile", "--json", "--help",
+  ],
+  "invoke-reviewer-cline": [
+    "--repo", "--prompt-file", "--model", "--phase", "--profile", "--json", "--help",
   ],
   "invoke-reviewer-cursor": [
     "--repo", "--prompt-file", "--model", "--phase", "--json", "--help",
   ],
   "invoke-reviewer-opencode": [
-    "--repo", "--prompt-file", "--model", "--phase", "--json", "--help",
+    "--repo", "--prompt-file", "--model", "--phase", "--profile", "--json", "--help",
   ],
   "invoke-reviewer-pi": [
-    "--repo", "--prompt-file", "--model", "--phase", "--json", "--help",
+    "--repo", "--prompt-file", "--model", "--phase", "--profile", "--json", "--help",
   ],
   "persist-done-criteria": [
     "--repo", "--run-id", "--text", "--file", "--json", "--help",

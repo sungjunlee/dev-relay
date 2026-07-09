@@ -21,7 +21,7 @@ const {
   createEnforcementFixture,
 } = require("../../relay-dispatch/scripts/test-support");
 const { EXECUTION_EVIDENCE_FILENAME } = require("../../../skills/relay-review/scripts/review-runner/execution-evidence");
-const { finishAdvisoryReview } = require("../../../skills/relay-review/scripts/review-runner/advisory");
+const { executeAdvisoryRequest, finishAdvisoryReview } = require("../../../skills/relay-review/scripts/review-runner/advisory");
 const { buildAdvisoryPrompt } = require("../../../skills/relay-review/scripts/review-runner/advisory-prompt");
 const { applyReviewAssurancePolicy } = require("../../../skills/relay-review/scripts/review-runner/assurance");
 const { installFakeGhOnPath } = require("../fixtures/fake-gh");
@@ -451,6 +451,67 @@ setTimeout(() => {
   return filePath;
 }
 
+function advisoryPayload(profile = "blindspot") {
+  return {
+    profile,
+    summary: `${profile} advisory result.`,
+    required_findings: [],
+    advisory_findings: [],
+    duplicate_or_low_confidence: [],
+  };
+}
+
+function writeProfileLoggingReviewer(repoRoot, { logPath, payloadProfile = "blindspot" } = {}) {
+  const filePath = path.join(repoRoot, "profile-logging-reviewer.js");
+  fs.writeFileSync(filePath, `#!/usr/bin/env node
+const fs = require("fs");
+fs.writeFileSync(${JSON.stringify(logPath)}, JSON.stringify(process.argv.slice(2)), "utf-8");
+process.stdout.write(JSON.stringify(${JSON.stringify(advisoryPayload(payloadProfile))}));
+`, "utf-8");
+  fs.chmodSync(filePath, 0o755);
+  return filePath;
+}
+
+function executeProfileRequest({ profile, payloadProfile = "blindspot" } = {}) {
+  const { repoRoot, runDir, runId } = setupRepo();
+  const logPath = path.join(runDir, "profile-reviewer-args.json");
+  const resultPath = path.join(runDir, "profile-reviewer-result.json");
+  const promptPath = path.join(runDir, "profile-reviewer-prompt.md");
+  const decisionPath = path.join(runDir, "profile-reviewer-decision.json");
+  fs.writeFileSync(promptPath, "Advisory prompt\n", "utf-8");
+  const reviewerScript = writeProfileLoggingReviewer(repoRoot, { logPath, payloadProfile });
+
+  executeAdvisoryRequest({
+    artifactReviewerName: "profile",
+    decisionPath,
+    gating: false,
+    headSha: "a".repeat(40),
+    laneIndex: 1,
+    profile,
+    promptPath,
+    requestPath: path.join(runDir, "profile-reviewer-request.json"),
+    resultPath,
+    reviewerModel: null,
+    reviewerName: "opencode",
+    reviewerPolicy: null,
+    policyDecision: null,
+    modelResolution: null,
+    reviewerScript,
+    reviewRepoPath: repoRoot,
+    round: 1,
+    runDir,
+    runId,
+    runRepoPath: repoRoot,
+    source: null,
+    startedAt: Date.now(),
+    state: STATES.REVIEW_PENDING,
+    timeoutSeconds: 5,
+    trigger: "every_round",
+  });
+
+  return { logPath, result: JSON.parse(fs.readFileSync(resultPath, "utf-8")) };
+}
+
 function waitForEvent(repoRoot, runId, predicate, { timeoutMs = 2000 } = {}) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -460,6 +521,69 @@ function waitForEvent(repoRoot, runId, predicate, { timeoutMs = 2000 } = {}) {
   }
   return null;
 }
+
+test("executeAdvisoryRequest forwards advisory profile to reviewer argv", () => {
+  const { logPath, result } = executeProfileRequest({
+    profile: "adversarial",
+    payloadProfile: "adversarial",
+  });
+
+  const args = JSON.parse(fs.readFileSync(logPath, "utf-8"));
+  assert.equal(result.status, "success");
+  assert.deepEqual(args.slice(args.indexOf("--profile"), args.indexOf("--profile") + 2), ["--profile", "adversarial"]);
+});
+
+test("executeAdvisoryRequest omits profile argv when request has no profile", () => {
+  const { logPath, result } = executeProfileRequest({
+    payloadProfile: "blindspot",
+  });
+
+  const args = JSON.parse(fs.readFileSync(logPath, "utf-8"));
+  assert.equal(result.status, "success");
+  assert.equal(args.includes("--profile"), false);
+});
+
+test("executeAdvisoryRequest rejects unknown profile before spawning reviewer", () => {
+  const { repoRoot, runDir, runId } = setupRepo();
+  const logPath = path.join(runDir, "bad-profile-reviewer-args.json");
+  const resultPath = path.join(runDir, "bad-profile-reviewer-result.json");
+  const promptPath = path.join(runDir, "bad-profile-reviewer-prompt.md");
+  fs.writeFileSync(promptPath, "Advisory prompt\n", "utf-8");
+  const reviewerScript = writeProfileLoggingReviewer(repoRoot, { logPath, payloadProfile: "blindspot" });
+
+  executeAdvisoryRequest({
+    artifactReviewerName: "bad-profile",
+    decisionPath: path.join(runDir, "bad-profile-reviewer-decision.json"),
+    gating: false,
+    headSha: "a".repeat(40),
+    laneIndex: 1,
+    profile: "not-a-profile",
+    promptPath,
+    requestPath: path.join(runDir, "bad-profile-reviewer-request.json"),
+    resultPath,
+    reviewerModel: null,
+    reviewerName: "opencode",
+    reviewerPolicy: null,
+    policyDecision: null,
+    modelResolution: null,
+    reviewerScript,
+    reviewRepoPath: repoRoot,
+    round: 1,
+    runDir,
+    runId,
+    runRepoPath: repoRoot,
+    source: null,
+    startedAt: Date.now(),
+    state: STATES.REVIEW_PENDING,
+    timeoutSeconds: 5,
+    trigger: "every_round",
+  });
+
+  const result = JSON.parse(fs.readFileSync(resultPath, "utf-8"));
+  assert.equal(result.status, "failed");
+  assert.match(result.failureReason, /Unknown advisory profile/);
+  assert.equal(fs.existsSync(logPath), false);
+});
 
 function runReview({
   repoRoot,
