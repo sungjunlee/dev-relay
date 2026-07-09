@@ -27,6 +27,7 @@ const cliArgs = bindCliArgs(args, {
 });
 const REVIEW_TIMEOUT_ENV = "RELAY_CLINE_REVIEW_TIMEOUT";
 const DEFAULT_REVIEW_TIMEOUT = "1800s";
+const MIN_CLINE_TIMEOUT_SECONDS = 60;
 
 if (!args.length || cliArgs.hasFlag(["--help", "-h"])) {
   console.log("Usage: invoke-reviewer-cline.js --repo <path> --prompt-file <path> [--phase advisory_review] [--model <route>] [--json]");
@@ -71,8 +72,14 @@ function parseReviewTimeoutMs(value) {
 }
 
 function clineTimeoutSecondsFromParentMs(parentTimeoutMs) {
+  const minimumChildTimeoutMs = MIN_CLINE_TIMEOUT_SECONDS * 1000;
+  if (parentTimeoutMs <= minimumChildTimeoutMs) {
+    throw new Error(
+      `${REVIEW_TIMEOUT_ENV} must be greater than ${MIN_CLINE_TIMEOUT_SECONDS}s so the parent exec timeout can outlive Cline's minimum internal timeout`
+    );
+  }
   const parentSeconds = Math.ceil(parentTimeoutMs / 1000);
-  return String(Math.max(60, parentSeconds - 60));
+  return String(Math.max(MIN_CLINE_TIMEOUT_SECONDS, parentSeconds - 60));
 }
 
 function isExecTimeout(error) {

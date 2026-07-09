@@ -1271,7 +1271,7 @@ process.stdout.write(JSON.stringify({
     env: {
       ...process.env,
       RELAY_CLINE_BIN: fakeCline,
-      RELAY_CLINE_REVIEW_TIMEOUT: "45s",
+      RELAY_CLINE_REVIEW_TIMEOUT: "120s",
     },
   });
 
@@ -1574,22 +1574,13 @@ process.exit(0);
   assert.match(stderr, /cannot treat this as healthy advisory evidence/);
 });
 
-test("cline adapter enforces parent timeout and reports timeout context", () => {
+test("cline adapter rejects review timeouts without Cline headroom before executing cline", () => {
   const { repoRoot, promptPath } = setupRepo();
   const fakeDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-fake-cline-timeout-"));
+  const logPath = path.join(fakeDir, "cline-args.log");
   const fakeCline = writeExecutable(fakeDir, "fake-cline.js", `#!/usr/bin/env node
-setTimeout(() => {
-  process.stdout.write(JSON.stringify({
-    type: "run_result",
-    text: JSON.stringify({
-      profile: "blindspot",
-      summary: "Too late.",
-      required_findings: [],
-      advisory_findings: [],
-      duplicate_or_low_confidence: [],
-    }),
-  }) + "\\n");
-}, 2500);
+const fs = require("fs");
+fs.writeFileSync(${JSON.stringify(logPath)}, "invoked\\n", "utf-8");
 `);
 
   let error;
@@ -1605,20 +1596,18 @@ setTimeout(() => {
       encoding: "utf-8",
       stdio: "pipe",
       timeout: 5000,
-      env: { ...process.env, RELAY_CLINE_BIN: fakeCline, RELAY_CLINE_REVIEW_TIMEOUT: "1s" },
+      env: { ...process.env, RELAY_CLINE_BIN: fakeCline, RELAY_CLINE_REVIEW_TIMEOUT: "60s" },
     });
     assert.fail("expected invoke-reviewer-cline.js to fail");
   } catch (caught) {
     error = caught;
   }
 
-  assert.ok(error, "expected invoke-reviewer-cline.js to fail on parent timeout");
+  assert.ok(error, "expected invoke-reviewer-cline.js to fail before invoking cline");
+  assert.equal(fs.existsSync(logPath), false);
   const stderr = String(error.stderr || "");
-  assert.match(stderr, /Cline reviewer advisory_review timed out after 1s/);
   assert.match(stderr, /RELAY_CLINE_REVIEW_TIMEOUT/);
-  assert.match(stderr, /cannot treat this as healthy advisory evidence/);
-  assert.match(stderr, /verify Cline non-interactive provider output/);
-  assert.doesNotMatch(String(error.stdout || ""), /Too late/);
+  assert.match(stderr, /greater than 60s/);
 });
 
 test("cursor adapter fails closed when auth probe reports not logged in", () => {
