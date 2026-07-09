@@ -1450,7 +1450,7 @@ async function spawnDispatchForLeaf({ repoRoot, fleetId, leaf, options, activeCh
   if (!runId || launch.code !== 0) {
     const keepRuntime = Boolean(runId && payload?.supervisorPid);
     const lastError = dispatchFailureLastError({
-      error: launch.error,
+      error: payload?.error || launch.error,
       stderr: launch.stderr,
       fallback: launch.signal
         ? `dispatch process terminated by ${launch.signal}`

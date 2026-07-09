@@ -323,7 +323,14 @@ async function main() {
   const runDir = getRunDir(repoRoot, runId);
   appendLog({ event: "spawn", branch, leafId, fleetId, dryRun, args });
   if (has("--detach") && plan.fail_before_manifest) {
-    process.stderr.write(plan.stderr || plan.fail_before_manifest_stderr || "fake pre-manifest failure\\n");
+    if (plan.json_failure_error) {
+      process.stdout.write(JSON.stringify({
+        status: "failed",
+        error: plan.json_failure_error,
+      }) + "\\n");
+    } else {
+      process.stderr.write(plan.stderr || plan.fail_before_manifest_stderr || "fake pre-manifest failure\\n");
+    }
     process.exit(plan.exit_code || 17);
   }
   if (has("--detach") && process.env.FAKE_DETACHED_CHILD !== "1" && plan.fail_parent_after_run_id) {
@@ -334,8 +341,11 @@ async function main() {
       runDir,
       fleetId,
       branch,
+      ...(plan.json_failure_error ? { error: plan.json_failure_error } : {}),
     }) + "\\n");
-    process.stderr.write(plan.stderr || "fake parent dispatch failure after run id\\n");
+    if (plan.stderr || !plan.json_failure_error) {
+      process.stderr.write(plan.stderr || "fake parent dispatch failure after run id\\n");
+    }
     process.exit(plan.exit_code || 17);
   }
   if (has("--detach") && process.env.FAKE_DETACHED_CHILD !== "1") {
@@ -366,7 +376,14 @@ async function main() {
     await sleep(plan.delay_before_manifest_ms);
   }
   if (plan.fail_before_manifest) {
-    process.stderr.write(plan.stderr || plan.fail_before_manifest_stderr || "fake pre-manifest failure\\n");
+    if (plan.json_failure_error) {
+      process.stdout.write(JSON.stringify({
+        status: "failed",
+        error: plan.json_failure_error,
+      }) + "\\n");
+    } else {
+      process.stderr.write(plan.stderr || plan.fail_before_manifest_stderr || "fake pre-manifest failure\\n");
+    }
     process.exit(plan.exit_code || 17);
   }
   if (!dryRun && plan.create_manifest !== false) {
@@ -1193,6 +1210,76 @@ test("relay-fleet records last_error when dispatch returns a run id but exits no
   assert.equal(child.dispatch_status, DISPATCH_STATUS.PENDING);
   assert.equal(child.last_error, "fake parent failure after run id second line");
   assert.equal(payload.summary.children[0].last_error, "fake parent failure after run id second line");
+});
+
+test("relay-fleet records dispatch JSON error payloads as last_error when stderr is empty", () => {
+  const preManifestSetup = setupRepo("relay-fleet-json-premanifest-");
+  const preManifestTmp = fs.mkdtempSync(path.join(os.tmpdir(), "fleet-fake-"));
+  const preManifestDispatchScript = writeFakeDispatchScript(preManifestTmp);
+  const preManifestConfig = path.join(preManifestTmp, "config.json");
+  const preManifestLeaf = makeLeaf(preManifestSetup.repoRoot, 1, { issue_number: 486 });
+  const preManifestLeavesFile = writeLeavesFile(preManifestSetup.repoRoot, [preManifestLeaf]);
+  writeJson(preManifestConfig, {
+    [preManifestLeaf.branch]: {
+      fail_before_manifest: true,
+      json_failure_error: "json pre-manifest validation failure",
+    },
+  });
+
+  const preManifestResult = runFleet([
+    "--repo", preManifestSetup.repoRoot,
+    "--fleet-id", "fleet-json-premanifest",
+    "--leaves-file", preManifestLeavesFile,
+    "--dispatch-script", preManifestDispatchScript,
+    "--json",
+  ], {
+    relayHome: preManifestSetup.relayHome,
+    env: { FAKE_DISPATCH_CONFIG: preManifestConfig },
+  });
+
+  assert.notEqual(preManifestResult.status, 0);
+  const preManifestPayload = JSON.parse(preManifestResult.stdout);
+  assert.equal(preManifestPayload.children[0].status, "dispatch_failed_pre_manifest");
+  const preManifestChild = readFleetManifest(preManifestSetup.repoRoot, "fleet-json-premanifest").data.children[0];
+  assert.equal(preManifestChild.run_id, null);
+  assert.equal(preManifestChild.dispatch_status, DISPATCH_STATUS.DISPATCH_FAILED_PRE_MANIFEST);
+  assert.equal(preManifestChild.last_error, "json pre-manifest validation failure");
+  assert.equal(preManifestPayload.summary.children[0].last_error, "json pre-manifest validation failure");
+
+  const runIdSetup = setupRepo("relay-fleet-json-runid-failure-");
+  const runIdTmp = fs.mkdtempSync(path.join(os.tmpdir(), "fleet-fake-"));
+  const runIdDispatchScript = writeFakeDispatchScript(runIdTmp);
+  const runIdConfig = path.join(runIdTmp, "config.json");
+  const runIdLeaf = makeLeaf(runIdSetup.repoRoot, 1, { issue_number: 487 });
+  const runIdLeavesFile = writeLeavesFile(runIdSetup.repoRoot, [runIdLeaf]);
+  writeJson(runIdConfig, {
+    [runIdLeaf.branch]: {
+      fail_parent_after_run_id: true,
+      json_failure_error: "json run id launch failure",
+      exit_code: 19,
+    },
+  });
+
+  const runIdResult = runFleet([
+    "--repo", runIdSetup.repoRoot,
+    "--fleet-id", "fleet-json-runid-failure",
+    "--leaves-file", runIdLeavesFile,
+    "--dispatch-script", runIdDispatchScript,
+    "--json",
+  ], {
+    relayHome: runIdSetup.relayHome,
+    env: { FAKE_DISPATCH_CONFIG: runIdConfig },
+  });
+
+  assert.notEqual(runIdResult.status, 0);
+  const runIdPayload = JSON.parse(runIdResult.stdout);
+  assert.equal(runIdPayload.children[0].status, "dispatched_with_child_failure");
+  assert.match(runIdPayload.children[0].run_id, /^issue-487-/);
+  const runIdChild = readFleetManifest(runIdSetup.repoRoot, "fleet-json-runid-failure").data.children[0];
+  assert.match(runIdChild.run_id, /^issue-487-/);
+  assert.equal(runIdChild.dispatch_status, DISPATCH_STATUS.PENDING);
+  assert.equal(runIdChild.last_error, "json run id launch failure");
+  assert.equal(runIdPayload.summary.children[0].last_error, "json run id launch failure");
 });
 
 test("relay-fleet text summary states same-command retry contract only for pre-manifest failures", () => {
