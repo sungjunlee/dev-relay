@@ -22,6 +22,8 @@ const { STATES, forceTransitionState } = require("./manifest/lifecycle");
 const {
   getEventsPath,
   getRunDir,
+  getWorktreeGitCommonDir,
+  sameFilesystemLocation,
   validateManifestPaths,
 } = require("./manifest/paths");
 const { getActorName, writeManifest } = require("./manifest/store");
@@ -99,6 +101,15 @@ function appendStateRecoveryEvent(repoRoot, runId, eventData) {
     ),
   };
   return appendEventLineToPath(getEventsPath(repoRoot, runId), record);
+}
+
+function sameRecordedRepoCommonDir(recordedRepoRoot, resolvedRepoRoot) {
+  if (!recordedRepoRoot || !resolvedRepoRoot) return false;
+  const recordedCommonDir = getWorktreeGitCommonDir(recordedRepoRoot);
+  const resolvedCommonDir = getWorktreeGitCommonDir(resolvedRepoRoot);
+  if (!recordedCommonDir || !resolvedCommonDir) return false;
+  return recordedCommonDir === resolvedCommonDir
+    || sameFilesystemLocation(recordedCommonDir, resolvedCommonDir);
 }
 
 function printUsage(stream = console.log) {
@@ -456,12 +467,13 @@ function main() {
     allowMissingWorktree: true,
     caller: "recover-state",
   });
+  const preserveRecordedPaths = sameRecordedRepoCommonDir(data.paths?.repo_root, validatedPaths.repoRoot);
   const safeData = {
     ...data,
     paths: {
       ...(data.paths || {}),
-      repo_root: validatedPaths.repoRoot,
-      worktree: validatedPaths.worktree,
+      repo_root: preserveRecordedPaths ? data.paths.repo_root : validatedPaths.repoRoot,
+      worktree: preserveRecordedPaths ? data.paths?.worktree : validatedPaths.worktree,
     },
   };
 
