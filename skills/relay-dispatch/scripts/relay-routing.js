@@ -538,11 +538,30 @@ function mergePhaseDefaults(base = {}, override) {
   };
 }
 
+function mergeAdvisoryPhaseDefaults(base, override) {
+  const partialOverride = isPlainObject(override) && !nonEmptyString(override.reviewer);
+  if (!partialOverride) return mergePhaseDefaults(base, override);
+  // Single-lane composition boundary: a legacy partial overlay ({ model })
+  // composes onto exactly one inherited lane; multi-lane inheritance fails
+  // closed instead of silently replacing or merging.
+  const baseLanes = Array.isArray(base) ? base : (isPlainObject(base) && nonEmptyString(base.reviewer) ? [base] : null);
+  if (!baseLanes) return mergePhaseDefaults(base, override);
+  if (baseLanes.length !== 1) {
+    throw new Error(
+      "invalid advisory routing: a partial advisory default (project routes) cannot overlay the inherited multi-lane list; specify full advisory lanes instead of a partial override"
+    );
+  }
+  const model = nonEmptyString(override.model || override.reviewer_model);
+  return [model ? { ...cloneJson(baseLanes[0]), model } : cloneJson(baseLanes[0])];
+}
+
 function mergeDefaults(base = {}, override = {}) {
   const merged = { ...(base || {}) };
   for (const phase of ["dispatch", "review", "advisory_review"]) {
     if (Object.prototype.hasOwnProperty.call(override || {}, phase)) {
-      merged[phase] = mergePhaseDefaults(merged[phase], override[phase]);
+      merged[phase] = phase === "advisory_review"
+        ? mergeAdvisoryPhaseDefaults(merged[phase], override[phase])
+        : mergePhaseDefaults(merged[phase], override[phase]);
     }
   }
   return merged;

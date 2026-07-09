@@ -646,6 +646,32 @@ test("partial project advisory default overlays the model onto the policy lane",
   assert.equal(result.phases.advisory_review[0].sources.model, "project_routes");
 });
 
+test("partial project advisory default composes with an inherited single global lane at merge time", () => {
+  const result = resolveRouteIntent({
+    projectRoutes: {
+      version: 2,
+      defaults: {
+        advisory_review: { model: "example/opencode-model-fast" },
+      },
+    },
+    policy: routePolicy({
+      defaults: {
+        dispatch: { executor: "codex" },
+        review: { reviewer: "codex" },
+        advisory_review: [
+          { reviewer: "opencode", model: "example/opencode-model-cheap" },
+        ],
+      },
+      allowed_model_routes: [
+        { route: "example/opencode-model-*", phases: ["advisory_review"], reviewers: ["opencode"] },
+      ],
+    }),
+  });
+
+  assert.equal(result.phases.advisory_review[0].reviewer, "opencode");
+  assert.equal(result.phases.advisory_review[0].model, "example/opencode-model-fast");
+});
+
 test("partial advisory default over a multi-lane list fails closed", () => {
   assert.throws(() => resolveRouteIntent({
     projectRoutes: {
