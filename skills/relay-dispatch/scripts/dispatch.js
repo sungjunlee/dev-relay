@@ -1441,6 +1441,9 @@ function presetAdvisorySelection(routePlan) {
 function applyPresetAdvisoryToRoutingDecision(routingDecision, routePlan) {
   const advisory = presetAdvisorySelection(routePlan);
   if (!advisory) return routingDecision;
+  // An explicit lane array on the matched routing rule — including [] meaning
+  // "no advisory lanes" — is a selection; preset lanes only fill absence.
+  if (Array.isArray(routingDecision?.selected?.advisory_review)) return routingDecision;
   return {
     ...routingDecision,
     selected: {
