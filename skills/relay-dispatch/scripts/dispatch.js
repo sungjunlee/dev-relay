@@ -625,16 +625,46 @@ function resolveOriginDefaultBranch(repoDir) {
   return branch;
 }
 
-function resolveBaseBranchForNewDispatch(repoDir) {
-  let detectedBranch = "";
+function fetchErrorMeansMissingRemoteBranch(error) {
+  const detail = [
+    error?.stderr,
+    error?.stdout,
+    error?.message,
+  ].filter(Boolean).join("\n");
+  return /could(n't| not) find remote ref/i.test(detail);
+}
+
+function hasOriginTrackingBranch(repoDir, branch) {
   try {
-    detectedBranch = execGit(repoDir, ["rev-parse", "--abbrev-ref", "HEAD"]);
-  } catch {}
-
-  if (isValidBaseBranchName(detectedBranch)) {
-    return detectedBranch;
+    execGit(repoDir, ["rev-parse", "--verify", "--quiet", `refs/remotes/origin/${branch}`]);
+    return true;
+  } catch {
+    return false;
   }
+}
 
+function isRemoteValidBaseBranch(repoDir, branch) {
+  try {
+    execGit(repoDir, ["fetch", "origin", `+refs/heads/${branch}:refs/remotes/origin/${branch}`]);
+    return hasOriginTrackingBranch(repoDir, branch);
+  } catch (error) {
+    if (fetchErrorMeansMissingRemoteBranch(error)) {
+      return false;
+    }
+    return hasOriginTrackingBranch(repoDir, branch);
+  }
+}
+
+function hasOriginRemote(repoDir) {
+  try {
+    execGit(repoDir, ["remote", "get-url", "origin"]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function fallbackToOriginDefaultBranch(repoDir, detectedBranch) {
   try {
     const fallbackBranch = resolveOriginDefaultBranch(repoDir);
     console.error(
@@ -647,6 +677,22 @@ function resolveBaseBranchForNewDispatch(repoDir) {
       `Run 'git remote set-head origin --auto' to repair refs/remotes/origin/HEAD, then retry. (${error.message})`
     );
   }
+}
+
+function resolveBaseBranchForNewDispatch(repoDir, { validateRemote = true } = {}) {
+  let detectedBranch = "";
+  try {
+    detectedBranch = execGit(repoDir, ["rev-parse", "--abbrev-ref", "HEAD"]);
+  } catch {}
+
+  if (isValidBaseBranchName(detectedBranch)) {
+    if (!validateRemote || !hasOriginRemote(repoDir) || isRemoteValidBaseBranch(repoDir, detectedBranch)) {
+      return detectedBranch;
+    }
+    return fallbackToOriginDefaultBranch(repoDir, detectedBranch);
+  }
+
+  return fallbackToOriginDefaultBranch(repoDir, detectedBranch);
 }
 
 function shellQuote(s) {
@@ -1683,7 +1729,7 @@ async function main() {
     if (fs.existsSync(manifestPath) || (fs.existsSync(runDir) && !isPlannerAnchorOnlyRunDir(runDir))) {
       failRunDirCollision(runId, manifestPath);
     }
-    baseBranch = resolveBaseBranchForNewDispatch(repoRoot);
+    baseBranch = resolveBaseBranchForNewDispatch(repoRoot, { validateRemote: !DRY_RUN });
     if (fs.existsSync(wtPath)) {
       console.error(`Error: worktree path already exists: ${wtPath}`);
       process.exit(1);

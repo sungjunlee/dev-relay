@@ -3990,6 +3990,111 @@ test("dispatch remaps detached HEAD to origin default branch before manifest cre
   assert.equal(ghCreateCall[baseFlagIndex + 1], "trunk");
 });
 
+test("dispatch remaps a local-only linked-worktree checkout branch to origin default before manifest creation (#809)", () => {
+  const { repoRoot, relayHome, remoteRoot } = setupRepo();
+  configureOriginHead(repoRoot, remoteRoot, "main");
+  const localBranch = "worktree-809-local";
+  const linkedPath = path.join(os.tmpdir(), `relay-dispatch-linked-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+  execFileSync("git", ["worktree", "add", "-b", localBranch, linkedPath, "HEAD"], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+  });
+  const { env, ghLogPath } = createPushPrTestEnv({
+    relayHome,
+    ghState: {
+      prCreateUrl: "https://github.com/acme/dev-relay/pull/809",
+    },
+  });
+
+  const result = spawnSync(process.execPath, [SCRIPT, linkedPath, ...withRequiredRubric([
+    "-b", "issue-809-linked-worktree",
+    "--prompt", "exercise local-only linked worktree fallback",
+    "--json",
+  ])], {
+    cwd: linkedPath,
+    encoding: "utf-8",
+    env,
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stderr, /\[relay-dispatch\] base_branch fallback:/);
+  assert.match(result.stderr, new RegExp(`rev-parse returned '${localBranch}'`));
+  assert.match(result.stderr, /using origin default 'main'/);
+
+  const parsed = JSON.parse(result.stdout);
+  const manifest = readManifest(parsed.manifestPath).data;
+  assert.equal(manifest.git.base_branch, "main");
+  assert.notEqual(manifest.git.base_branch, localBranch);
+
+  const ghCreateCall = readJsonLines(ghLogPath).find((args) => args[0] === "pr" && args[1] === "create");
+  assert.ok(ghCreateCall, "expected gh pr create call");
+  const baseFlagIndex = ghCreateCall.indexOf("--base");
+  assert.notEqual(baseFlagIndex, -1, "expected --base flag");
+  assert.equal(ghCreateCall[baseFlagIndex + 1], "main");
+});
+
+test("dispatch keeps a checkout branch that exists on origin as base_branch (#809)", () => {
+  const { repoRoot, relayHome, remoteRoot } = setupRepo();
+  configureOriginHead(repoRoot, remoteRoot, "main");
+  const remoteBranch = "release-809";
+  execFileSync("git", ["checkout", "-b", remoteBranch], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+  });
+  execFileSync("git", ["push", "-u", "origin", remoteBranch], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+  });
+  const remoteTrackingRef = `refs/remotes/origin/${remoteBranch}`;
+  execFileSync("git", ["update-ref", "-d", remoteTrackingRef], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+  });
+  assert.throws(() => execFileSync("git", ["rev-parse", "--verify", "--quiet", remoteTrackingRef], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+  }));
+  const { env, ghLogPath } = createPushPrTestEnv({
+    relayHome,
+    ghState: {
+      prCreateUrl: "https://github.com/acme/dev-relay/pull/810",
+    },
+  });
+
+  const result = spawnSync(process.execPath, [SCRIPT, repoRoot, ...withRequiredRubric([
+    "-b", "issue-809-origin-branch",
+    "--prompt", "exercise origin branch base resolution",
+    "--json",
+  ])], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    env,
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.doesNotMatch(result.stderr, /\[relay-dispatch\] base_branch fallback:/);
+
+  const parsed = JSON.parse(result.stdout);
+  const manifest = readManifest(parsed.manifestPath).data;
+  assert.equal(manifest.git.base_branch, remoteBranch);
+  assert.match(execFileSync("git", ["rev-parse", "--verify", "--quiet", remoteTrackingRef], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+  }).trim(), /^[0-9a-f]{40}$/);
+
+  const ghCreateCall = readJsonLines(ghLogPath).find((args) => args[0] === "pr" && args[1] === "create");
+  assert.ok(ghCreateCall, "expected gh pr create call");
+  const baseFlagIndex = ghCreateCall.indexOf("--base");
+  assert.notEqual(baseFlagIndex, -1, "expected --base flag");
+  assert.equal(ghCreateCall[baseFlagIndex + 1], remoteBranch);
+});
+
 test("dispatch fails closed on detached HEAD when origin HEAD is unresolved before worktree creation (#253)", () => {
   const { repoRoot, relayHome } = setupDetachedHeadRepo();
   const env = {

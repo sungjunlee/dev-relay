@@ -2,6 +2,18 @@
 
 Operator-facing recovery commands for `relay-dispatch`. These cover the two canonical "happy path failed but the work is salvageable" scenarios: the executor finished without committing, and the manifest state needs to advance after an external event. Both replace ad-hoc shell sequences with structured, audit-trailed commands — prefer them over hand-edits.
 
+## Stale `origin/worktree-*` base branches
+
+Symptom: a new dispatch records a `worktree-*` branch as `base_branch`, then the retained worktree fails or skips the base merge against `origin/worktree-*` instead of the repository default branch. This can happen only from stale runs created before the base-name validation fix, or when an old stray branch is still present on the remote.
+
+Clean up the stale remote branch after confirming it is not an intentional branch:
+
+```bash
+git push origin --delete worktree-<name>
+```
+
+After the #809 fix, new dispatches no longer publish or record local-only `worktree-*` checkout branches as `base_branch`; they fall back to the origin default branch.
+
 ## Crash-only dispatch reconcile
 
 `reconcile-run.js` settles a run that is still `dispatched` after the dispatch supervisor died, the machine rebooted, the executor was OOM-killed, or an operator needs to check an interrupted run from another shell. It uses the run directory as the runtime state root:
