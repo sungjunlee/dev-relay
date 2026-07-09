@@ -9,7 +9,6 @@ function buildAssuranceIssue(title, body) {
     category: "quality",
     confidence: "high",
     severity: "high",
-    confidence: "high",
     lineage: "new",
   };
 }
