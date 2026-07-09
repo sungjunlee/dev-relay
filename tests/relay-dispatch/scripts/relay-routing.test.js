@@ -621,6 +621,31 @@ test("route intent resolver gives run intent precedence over project defaults", 
   assert.equal(result.phases.review.policy_decision.reason, "managed_cli");
 });
 
+test("partial project advisory default overlays the model onto the policy lane", () => {
+  const result = resolveRouteIntent({
+    projectRoutes: {
+      version: 2,
+      defaults: {
+        advisory_review: { model: "example/opencode-model-fast" },
+      },
+    },
+    policy: routePolicy({
+      defaults: {
+        dispatch: { executor: "codex" },
+        review: { reviewer: "codex" },
+        advisory_review: { reviewer: "opencode", model: "example/opencode-model-cheap" },
+      },
+      allowed_model_routes: [
+        { route: "example/opencode-model-*", phases: ["advisory_review"], reviewers: ["opencode"] },
+      ],
+    }),
+  });
+
+  assert.equal(result.phases.advisory_review[0].reviewer, "opencode");
+  assert.equal(result.phases.advisory_review[0].model, "example/opencode-model-fast");
+  assert.equal(result.phases.advisory_review[0].sources.model, "project_routes");
+});
+
 test("advisory lane without model falls back to a legacy single-object default's model", () => {
   const result = resolveRouteIntent({
     runIntent: {

@@ -331,6 +331,12 @@ function normalizeAdvisoryLaneList(value, fieldName, sourceLabel) {
 
 function normalizeRouteDefault(value, phase, sourceLabel, { partial = false } = {}) {
   if (phase === "advisory_review") {
+    // Legacy v2 partial defaults ({ model } without reviewer) are per-field
+    // overlays applied at lane pick time, not lane selections; a partial
+    // source must preserve that shape instead of failing lane validation.
+    if (partial && isPlainObject(value) && !nonEmptyString(value.reviewer)) {
+      return cloneJson(value);
+    }
     return normalizeAdvisoryLaneList(value, "defaults.advisory_review", sourceLabel);
   }
   const routeDefault = requirePhaseObject(value, phase, sourceLabel);
@@ -955,25 +961,55 @@ function resolveModelForActor({ phase, actor, runIntent, projectRoutes, policy, 
 }
 
 function pickAdvisoryLaneList({ runIntent, projectRoutes, policy }) {
+  const candidates = [];
   if (runIntent && Object.prototype.hasOwnProperty.call(runIntent, "advisory_review")) {
-    return {
-      lanes: normalizeAdvisoryLaneList(runIntent.advisory_review, "advisory_review", "run_intent") || [],
+    candidates.push({
+      value: runIntent.advisory_review,
+      fieldName: "advisory_review",
+      sourceLabel: "run_intent",
       source: runIntentSource(runIntent, "advisory_review", "lanes"),
-    };
+    });
   }
-  const projectDefault = projectRoutes?.defaults?.advisory_review;
   if (projectRoutes?.defaults && Object.prototype.hasOwnProperty.call(projectRoutes.defaults, "advisory_review")) {
-    return {
-      lanes: normalizeAdvisoryLaneList(projectDefault, "defaults.advisory_review", "project routes") || [],
+    candidates.push({
+      value: projectRoutes.defaults.advisory_review,
+      fieldName: "defaults.advisory_review",
+      sourceLabel: "project routes",
       source: "project_routes",
-    };
+    });
   }
   const policyDefault = defaultForPhase(policy, "advisory_review");
   if (policyDefault !== undefined && policyDefault !== null) {
-    return {
-      lanes: normalizeAdvisoryLaneList(policyDefault, "defaults.advisory_review", "policy_defaults") || [],
+    candidates.push({
+      value: policyDefault,
+      fieldName: "defaults.advisory_review",
+      sourceLabel: "policy_defaults",
       source: "policy_defaults",
-    };
+    });
+  }
+
+  // Legacy v2 project defaults supported partial per-field overrides: a
+  // higher-priority source may carry a plain object without reviewer (for
+  // example { model }) that overlays the lane chosen from a lower-priority
+  // source rather than selecting lanes itself.
+  const overlays = [];
+  for (const candidate of candidates) {
+    const { value } = candidate;
+    if (isPlainObject(value) && !nonEmptyString(value.reviewer)) {
+      overlays.push(candidate);
+      continue;
+    }
+    let lanes = normalizeAdvisoryLaneList(value, candidate.fieldName, candidate.sourceLabel) || [];
+    if (lanes.length === 1 && overlays.length) {
+      for (let i = overlays.length - 1; i >= 0; i -= 1) {
+        const overlay = overlays[i];
+        const model = nonEmptyString(overlay.value.model || overlay.value.reviewer_model);
+        if (model) {
+          lanes = [{ ...lanes[0], model, modelSource: overlay.source }];
+        }
+      }
+    }
+    return { lanes, source: candidate.source };
   }
   return { lanes: [], source: "unresolved" };
 }
@@ -1003,7 +1039,7 @@ function resolveAdvisoryPhaseRoute({ runIntent, projectRoutes, policy, relayHome
     const actorField = "reviewer";
     const explicitModel = nonEmptyString(lane.model);
     let model = explicitModel
-      ? { value: explicitModel, source: picked.source }
+      ? { value: explicitModel, source: lane.modelSource || picked.source }
       : pickAdvisoryModelForActor({ actor: lane.reviewer, runIntent, projectRoutes, policy });
     if (!explicitModel && model.source === "unresolved") {
       model = resolveModelForActor({
