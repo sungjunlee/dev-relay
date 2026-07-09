@@ -527,7 +527,7 @@ function validateRouteConfig(routes, sourceLabel = "routes config", { project = 
   return normalized;
 }
 
-function mergePhaseDefaults(base = {}, override = {}) {
+function mergePhaseDefaults(base = {}, override) {
   if (override === null) return null;
   if (Array.isArray(override)) return cloneJson(override);
   if (Array.isArray(base)) return override === undefined ? cloneJson(base) : cloneJson(override);
