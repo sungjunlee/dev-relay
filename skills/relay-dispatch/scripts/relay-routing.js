@@ -978,15 +978,35 @@ function pickAdvisoryLaneList({ runIntent, projectRoutes, policy }) {
   return { lanes: [], source: "unresolved" };
 }
 
+function pickAdvisoryModelForActor({ actor, runIntent, projectRoutes, policy }) {
+  // Advisory defaults normalize to lane arrays, which pickField's plain-object
+  // path cannot see; a legacy single-object default's model must still act as
+  // the fallback for a higher-priority lane that omits model.
+  const candidates = [
+    [runIntent?.advisory_review, runIntentSource(runIntent, "advisory_review", "model")],
+    [projectRoutes?.defaults?.advisory_review, "project_routes"],
+    [defaultForPhase(policy, "advisory_review"), "policy_defaults"],
+  ];
+  for (const [value, source] of candidates) {
+    const lanes = Array.isArray(value) ? value : (isPlainObject(value) ? [value] : []);
+    const lane = lanes.find((entry) => isPlainObject(entry) && entry.reviewer === actor);
+    const model = nonEmptyString(lane?.model || lane?.reviewer_model);
+    if (model) return { value: model, source };
+  }
+  return { value: null, source: "unresolved" };
+}
+
 function resolveAdvisoryPhaseRoute({ runIntent, projectRoutes, policy, relayHome, repoRoot, executorModelResolver }) {
   const picked = pickAdvisoryLaneList({ runIntent, projectRoutes, policy });
   if (!picked.lanes.length) return null;
   return picked.lanes.map((lane) => {
     const actorField = "reviewer";
     const explicitModel = nonEmptyString(lane.model);
-    const model = explicitModel
+    let model = explicitModel
       ? { value: explicitModel, source: picked.source }
-      : resolveModelForActor({
+      : pickAdvisoryModelForActor({ actor: lane.reviewer, runIntent, projectRoutes, policy });
+    if (!explicitModel && model.source === "unresolved") {
+      model = resolveModelForActor({
         phase: "advisory_review",
         actor: lane.reviewer,
         runIntent,
@@ -996,6 +1016,7 @@ function resolveAdvisoryPhaseRoute({ runIntent, projectRoutes, policy, relayHome
         repoRoot,
         executorModelResolver,
       });
+    }
     const resolved = {
       phase: "advisory_review",
       reviewer: lane.reviewer,

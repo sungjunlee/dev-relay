@@ -621,6 +621,28 @@ test("route intent resolver gives run intent precedence over project defaults", 
   assert.equal(result.phases.review.policy_decision.reason, "managed_cli");
 });
 
+test("advisory lane without model falls back to a legacy single-object default's model", () => {
+  const result = resolveRouteIntent({
+    runIntent: {
+      advisory_review: [{ reviewer: "opencode" }],
+    },
+    policy: routePolicy({
+      defaults: {
+        dispatch: { executor: "codex" },
+        review: { reviewer: "codex" },
+        advisory_review: { reviewer: "opencode", model: "example/opencode-model-cheap" },
+      },
+      allowed_model_routes: [
+        { route: "example/opencode-model-*", phases: ["advisory_review"], reviewers: ["opencode"] },
+      ],
+    }),
+  });
+
+  assert.equal(result.phases.advisory_review[0].reviewer, "opencode");
+  assert.equal(result.phases.advisory_review[0].model, "example/opencode-model-cheap");
+  assert.equal(result.phases.advisory_review[0].sources.model, "policy_defaults");
+});
+
 test("route preset expansion fills only unset run intent fields with preset sources", () => {
   const result = resolveRouteIntent({
     runIntent: {
