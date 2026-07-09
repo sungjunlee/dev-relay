@@ -695,6 +695,32 @@ function resolveBaseBranchForNewDispatch(repoDir, { validateRemote = true } = {}
   return fallbackToOriginDefaultBranch(repoDir, detectedBranch);
 }
 
+function firstErrorLine(error) {
+  const detail = [
+    error?.stderr,
+    error?.stdout,
+    error?.message,
+    String(error),
+  ].filter(Boolean)[0] || "unknown error";
+  return String(detail).split("\n")[0];
+}
+
+function resolveWorktreeStartPointForNewDispatch(repoDir, baseBranch) {
+  const originStartPoint = `refs/remotes/origin/${baseBranch}`;
+  try {
+    execGit(repoDir, ["fetch", "origin", `+refs/heads/${baseBranch}:${originStartPoint}`]);
+    return originStartPoint;
+  } catch (error) {
+    const localStartPoint = `refs/heads/${baseBranch}`;
+    console.error(
+      `[relay-dispatch] WARNING: unable to fetch origin/${baseBranch} before worktree creation ` +
+      `(${firstErrorLine(error)}); falling back to local ${localStartPoint}; ` +
+      "unpushed local commits may contaminate the dispatch PR diff."
+    );
+    return localStartPoint;
+  }
+}
+
 function shellQuote(s) {
   return "'" + s.replace(/'/g, "'\\''") + "'";
 }
@@ -1472,6 +1498,7 @@ async function main() {
   let manifestPath = MANIFEST_INPUT ? path.resolve(MANIFEST_INPUT) : null;
   let cleanupPolicy = "on_close";
   let baseBranch = "main";
+  let worktreeStartPoint = null;
   let issueNumber = inferIssueNumber(branch);
   let manifest;
   let copiedFiles = [];
@@ -1733,6 +1760,9 @@ async function main() {
     if (fs.existsSync(wtPath)) {
       console.error(`Error: worktree path already exists: ${wtPath}`);
       process.exit(1);
+    }
+    if (!DRY_RUN) {
+      worktreeStartPoint = resolveWorktreeStartPointForNewDispatch(repoRoot, baseBranch);
     }
     if (inflightRuns.length > 0 && ALLOW_CONFLICTING_RUN) {
       appendRunEvent(repoRoot, runId, {
@@ -2061,6 +2091,7 @@ async function main() {
         worktreePath: wtPath,
         branch,
         title: `Dispatch: ${branch}`,
+        startPoint: worktreeStartPoint,
         copyFiles: COPY_FILES,
         register: false,
         assertWithin,

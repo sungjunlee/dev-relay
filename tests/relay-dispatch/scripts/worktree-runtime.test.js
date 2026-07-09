@@ -27,6 +27,21 @@ function setupRepo() {
   return { root, repoRoot };
 }
 
+function revParse(repoRoot, ref) {
+  return execFileSync("git", ["rev-parse", ref], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+  }).trim();
+}
+
+function commitFile(repoRoot, fileName, content, message) {
+  fs.writeFileSync(path.join(repoRoot, fileName), content, "utf-8");
+  execFileSync("git", ["add", fileName], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
+  execFileSync("git", ["commit", "-m", message], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
+  return revParse(repoRoot, "HEAD");
+}
+
 test("formatPlan matches the frozen create-worktree text fixture", () => {
   const actual = formatPlan({
     worktreePath: "/tmp/issue187-fixtures/relay-home/worktrees/11111111/repo",
@@ -104,6 +119,24 @@ test("createWorktree creates a fresh branch and worktree", () => {
   );
 });
 
+test("createWorktree creates a fresh branch from an explicit start point", () => {
+  const { repoRoot, root } = setupRepo();
+  const startPoint = revParse(repoRoot, "HEAD");
+  commitFile(repoRoot, "later.txt", "later\n", "later");
+  const worktreePath = path.join(root, "worktrees", "start-point", "repo");
+
+  createWorktree({
+    repoRoot,
+    worktreePath,
+    branch: "issue-795-start-point",
+    title: "Dispatch: issue-795-start-point",
+    startPoint,
+    copyFiles: [],
+  });
+
+  assert.equal(revParse(worktreePath, "HEAD"), startPoint);
+});
+
 test("createWorktree falls back to an existing branch when -b creation fails", () => {
   const { repoRoot, root } = setupRepo();
   const branch = "issue-187-existing";
@@ -123,6 +156,26 @@ test("createWorktree falls back to an existing branch when -b creation fails", (
     execFileSync("git", ["-C", worktreePath, "rev-parse", "--abbrev-ref", "HEAD"], { encoding: "utf-8", stdio: "pipe" }).trim(),
     branch
   );
+});
+
+test("createWorktree existing-branch fallback ignores the start point", () => {
+  const { repoRoot, root } = setupRepo();
+  const branch = "issue-795-existing";
+  const branchHead = revParse(repoRoot, "HEAD");
+  execFileSync("git", ["branch", branch], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
+  const laterHead = commitFile(repoRoot, "later-existing.txt", "later\n", "later existing");
+  const worktreePath = path.join(root, "worktrees", "existing-start-point", "repo");
+
+  createWorktree({
+    repoRoot,
+    worktreePath,
+    branch,
+    title: "Dispatch: issue-795-existing",
+    startPoint: laterHead,
+    copyFiles: [],
+  });
+
+  assert.equal(revParse(worktreePath, "HEAD"), branchHead);
 });
 
 test("createWorktree forwards registration args through an adapter callback", () => {

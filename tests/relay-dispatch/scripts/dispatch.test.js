@@ -59,6 +59,38 @@ function setupRepoWithOrigin() {
   return setupRepo();
 }
 
+function revParse(repoRoot, ref) {
+  return execFileSync("git", ["rev-parse", ref], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+  }).trim();
+}
+
+function mergeBase(repoRoot, left, right) {
+  return execFileSync("git", ["merge-base", left, right], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+  }).trim();
+}
+
+function isAncestor(repoRoot, ancestor, descendant) {
+  const result = spawnSync("git", ["merge-base", "--is-ancestor", ancestor, descendant], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+  });
+  return result.status === 0;
+}
+
+function commitFile(repoRoot, fileName, content, message) {
+  fs.writeFileSync(path.join(repoRoot, fileName), content, "utf-8");
+  execFileSync("git", ["add", fileName], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
+  execFileSync("git", ["commit", "-m", message], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
+  return revParse(repoRoot, "HEAD");
+}
+
 function configureOriginHead(repoRoot, remoteRoot, branch) {
   if (branch !== "main") {
     execFileSync("git", ["checkout", "-b", branch], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
@@ -4000,6 +4032,8 @@ test("dispatch remaps a local-only linked-worktree checkout branch to origin def
     encoding: "utf-8",
     stdio: "pipe",
   });
+  const localOnlySha = commitFile(linkedPath, "linked-local-only.txt", "local only\n", "linked local-only");
+  const originMainSha = revParse(linkedPath, "refs/remotes/origin/main");
   const { env, ghLogPath } = createPushPrTestEnv({
     relayHome,
     ghState: {
@@ -4026,6 +4060,9 @@ test("dispatch remaps a local-only linked-worktree checkout branch to origin def
   const manifest = readManifest(parsed.manifestPath).data;
   assert.equal(manifest.git.base_branch, "main");
   assert.notEqual(manifest.git.base_branch, localBranch);
+  assert.equal(mergeBase(linkedPath, parsed.branch, "refs/remotes/origin/main"), originMainSha);
+  assert.equal(isAncestor(linkedPath, localOnlySha, parsed.branch), false);
+  assert.equal(fs.existsSync(path.join(parsed.worktree, "linked-local-only.txt")), false);
 
   const ghCreateCall = readJsonLines(ghLogPath).find((args) => args[0] === "pr" && args[1] === "create");
   assert.ok(ghCreateCall, "expected gh pr create call");
@@ -4093,6 +4130,120 @@ test("dispatch keeps a checkout branch that exists on origin as base_branch (#80
   const baseFlagIndex = ghCreateCall.indexOf("--base");
   assert.notEqual(baseFlagIndex, -1, "expected --base flag");
   assert.equal(ghCreateCall[baseFlagIndex + 1], remoteBranch);
+});
+
+test("dispatch starts new branches at origin base when local base is ahead (#795)", () => {
+  const { repoRoot, relayHome, remoteRoot } = setupRepo();
+  configureOriginHead(repoRoot, remoteRoot, "main");
+  const originMainSha = revParse(repoRoot, "refs/remotes/origin/main");
+  const localAheadSha = commitFile(repoRoot, "local-ahead.txt", "local ahead\n", "local ahead");
+  const { env } = createPushPrTestEnv({
+    relayHome,
+    ghState: {
+      prCreateUrl: "https://github.com/acme/dev-relay/pull/795",
+    },
+  });
+
+  const result = spawnSync(process.execPath, [SCRIPT, repoRoot, ...withRequiredRubric([
+    "-b", "issue-795-local-ahead",
+    "--prompt", "exercise local ahead base contamination",
+    "--json",
+  ])], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    env,
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  const parsed = JSON.parse(result.stdout);
+  assert.equal(mergeBase(repoRoot, parsed.branch, "refs/remotes/origin/main"), originMainSha);
+  assert.equal(isAncestor(repoRoot, localAheadSha, parsed.branch), false);
+  assert.equal(fs.existsSync(path.join(parsed.worktree, "local-ahead.txt")), false);
+});
+
+test("dispatch starts new branches at origin base when local base is behind (#795)", async () => {
+  const { repoRoot, relayHome, remoteRoot } = setupRepo();
+  configureOriginHead(repoRoot, remoteRoot, "main");
+  const localMainSha = revParse(repoRoot, "HEAD");
+  const remoteOnlySha = commitFile(repoRoot, "remote-only.txt", "remote only\n", "remote only");
+  execFileSync("git", ["push", "origin", "main"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
+  execFileSync("git", ["reset", "--hard", localMainSha], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
+  const pauseMarkerPath = path.join(os.tmpdir(), `relay-dispatch-behind-pause-${process.pid}-${Date.now()}.json`);
+  const { env } = createPushPrTestEnv({
+    relayHome,
+    ghState: {
+      prCreateUrl: "https://github.com/acme/dev-relay/pull/796",
+    },
+  });
+  const dispatchEnv = {
+    ...env,
+    RELAY_TEST_AFTER_WORKTREE_CREATE_PAUSE_MS: "1500",
+    RELAY_TEST_AFTER_WORKTREE_CREATE_MARKER: pauseMarkerPath,
+  };
+
+  const proc = spawn(process.execPath, [SCRIPT, repoRoot, ...withRequiredRubric([
+    "-b", "issue-795-local-behind",
+    "--prompt", "exercise local behind base content",
+    "--json",
+  ])], {
+    cwd: repoRoot,
+    env: dispatchEnv,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  const exitPromise = waitForDispatchExit(proc);
+  let result;
+  try {
+    await waitFor(() => fs.existsSync(pauseMarkerPath), {
+      timeoutMs: 30000,
+      message: "local-behind after-worktree create pause marker",
+    });
+    assert.equal(revParse(repoRoot, "issue-795-local-behind"), remoteOnlySha);
+  } finally {
+    result = await exitPromise;
+  }
+
+  assert.equal(result.code, 0, result.stderr);
+  const parsed = JSON.parse(result.stdout);
+  assert.equal(mergeBase(repoRoot, parsed.branch, "refs/remotes/origin/main"), remoteOnlySha);
+  assert.equal(isAncestor(repoRoot, remoteOnlySha, parsed.branch), true);
+  assert.equal(fs.readFileSync(path.join(parsed.worktree, "remote-only.txt"), "utf-8"), "remote only\n");
+});
+
+test("dispatch falls back to local base with a loud warning when origin base fetch fails (#795)", () => {
+  const { repoRoot, relayHome, remoteRoot } = setupRepo();
+  configureOriginHead(repoRoot, remoteRoot, "main");
+  const localAheadSha = commitFile(repoRoot, "offline-local.txt", "offline local\n", "offline local");
+  const missingRemote = path.join(os.tmpdir(), `relay-dispatch-missing-origin-${process.pid}-${Date.now()}`);
+  execFileSync("git", ["remote", "set-url", "origin", missingRemote], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+  });
+  const { env } = createPushPrTestEnv({
+    relayHome,
+    ghState: {
+      prCreateUrl: "https://github.com/acme/dev-relay/pull/797",
+    },
+  });
+
+  const result = spawnSync(process.execPath, [SCRIPT, repoRoot, ...withRequiredRubric([
+    "-b", "issue-795-offline-fallback",
+    "--prompt", "exercise offline base fallback",
+    "--json",
+  ])], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    env,
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stderr, /\[relay-dispatch\] WARNING: unable to fetch origin\/main before worktree creation/);
+  assert.match(result.stderr, /falling back to local refs\/heads\/main/);
+  assert.match(result.stderr, /unpushed local commits may contaminate the dispatch PR diff/);
+
+  const parsed = JSON.parse(result.stdout);
+  assert.equal(isAncestor(repoRoot, localAheadSha, parsed.branch), true);
+  assert.equal(fs.readFileSync(path.join(parsed.worktree, "offline-local.txt"), "utf-8"), "offline local\n");
 });
 
 test("dispatch fails closed on detached HEAD when origin HEAD is unresolved before worktree creation (#253)", () => {
