@@ -317,12 +317,6 @@ function appendRunEvent(repoRoot, runId, eventData) {
     ...(eventData.lane_index !== undefined
       ? { lane_index: normalizeEventValue(eventData.lane_index) }
       : {}),
-    ...(eventData.confidence_downgrade !== undefined
-      ? { confidence_downgrade: normalizeEventValue(eventData.confidence_downgrade) }
-      : {}),
-    ...(eventData.low_confidence_count !== undefined
-      ? { low_confidence_count: normalizeEventValue(eventData.low_confidence_count) }
-      : {}),
     ...(eventData.lane_demotion_cap !== undefined
       ? { lane_demotion_cap: normalizeEventValue(eventData.lane_demotion_cap) }
       : {}),
