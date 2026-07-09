@@ -7,6 +7,7 @@ const path = require("path");
 
 const {
   createFleetManifest,
+  normalizeFleetChild,
   readFleetManifest,
   STATES,
   updateFleetManifest,
@@ -34,4 +35,36 @@ test("manifest/fleet updateFleetManifest rejects direct fleet_state assignment t
     /Invalid relay fleet state transition: draft -> closed/
   );
   assert.equal(readFleetManifest(repoRoot, fleetId).data.fleet_state, STATES.DRAFT);
+});
+
+test("manifest/fleet normalizes optional child last_error as a bounded single-line field", () => {
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-"));
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-fleet-repo-"));
+  initGitRepo(repoRoot);
+  const fleetId = "issue-869";
+  const longMultilineError = `first line\n${"x".repeat(450)}`;
+
+  const normalized = normalizeFleetChild({
+    leaf_ref: "leaf-a",
+    run_id: null,
+    dispatch_status: "dispatch_failed_pre_manifest",
+    last_error: longMultilineError,
+  });
+
+  assert.equal(normalized.last_error.length, 400);
+  assert.doesNotMatch(normalized.last_error, /[\r\n]/);
+
+  const emptyError = normalizeFleetChild({
+    leaf_ref: "leaf-b",
+    run_id: null,
+    dispatch_status: "dispatch_failed_pre_manifest",
+    last_error: " \n\t ",
+  });
+  assert.equal(Object.hasOwn(emptyError, "last_error"), false);
+
+  createFleetManifest(repoRoot, {
+    fleetId,
+    children: [normalized],
+  });
+  assert.deepEqual(readFleetManifest(repoRoot, fleetId).data.children, [normalized]);
 });
