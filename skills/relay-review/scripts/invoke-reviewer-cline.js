@@ -11,7 +11,7 @@ const {
   modeLabel,
 } = require("../../relay-dispatch/scripts/cli-args");
 const {
-  extractClineRunResultText,
+  extractClineAdvisoryCandidates,
 } = require("../../relay-dispatch/scripts/agent-adapters/cline-jsonl");
 const {
   recoverExecStdout,
@@ -70,16 +70,9 @@ function parseReviewTimeoutMs(value) {
   return timeoutMs;
 }
 
-function timeoutSecondsFromDuration(value) {
-  const raw = String(value || DEFAULT_REVIEW_TIMEOUT).trim();
-  const match = raw.match(/^([1-9]\d*)(ms|s|m|h)$/);
-  if (!match) return "1800";
-  const amount = Number(match[1]);
-  const unit = match[2];
-  if (unit === "ms") return String(Math.max(1, Math.ceil(amount / 1000)));
-  if (unit === "s") return String(amount);
-  if (unit === "m") return String(amount * 60);
-  return String(amount * 60 * 60);
+function clineTimeoutSecondsFromParentMs(parentTimeoutMs) {
+  const parentSeconds = Math.ceil(parentTimeoutMs / 1000);
+  return String(Math.max(60, parentSeconds - 60));
 }
 
 function isExecTimeout(error) {
@@ -92,15 +85,28 @@ function providerForModel(model) {
   return idx > 0 ? model.slice(0, idx) : "cline-pass";
 }
 
+function validateModelRoute(model) {
+  if (typeof model !== "string" || !model.trim()) return null;
+  const normalized = model.trim();
+  if (!normalized.includes("/")) {
+    throw new Error(
+      `--model must use the expected modelType/model form, for example cline-pass/glm-5.2; got ${JSON.stringify(model)}`
+    );
+  }
+  return normalized;
+}
+
 function buildTimeoutDiagnosticCommand({ clineBin, model, reviewTimeout }) {
+  const parentTimeoutMs = parseReviewTimeoutMs(reviewTimeout);
   const command = [
     clineBin || "cline",
     "--json",
+    "--yolo",
     "-P", providerForModel(model),
   ];
   if (model) command.push("-m", model);
   command.push(
-    "--timeout", timeoutSecondsFromDuration(reviewTimeout),
+    "--timeout", clineTimeoutSecondsFromParentMs(parentTimeoutMs),
     "'Return exactly {\"ok\":true} and nothing else.'"
   );
   return command.join(" ");
@@ -122,7 +128,7 @@ function buildPrompt(promptText) {
 function main() {
   const repoPath = path.resolve(cliArgs.getArg("--repo") || ".");
   const promptFile = cliArgs.getArg("--prompt-file");
-  const model = cliArgs.getArg("--model");
+  const model = validateModelRoute(cliArgs.getArg("--model"));
   const phase = resolvePhase(cliArgs.getArg("--phase", "advisory_review"));
   const clineBin = process.env.RELAY_CLINE_BIN || "cline";
   const reviewTimeout = String(process.env[REVIEW_TIMEOUT_ENV] || DEFAULT_REVIEW_TIMEOUT).trim();
@@ -137,16 +143,18 @@ function main() {
 
   const execArgs = [
     "--json",
+    "--yolo",
     "-P", providerForModel(model),
   ];
   if (model) execArgs.push("-m", model);
   execArgs.push(
     "--cwd", repoPath,
-    "--timeout", timeoutSecondsFromDuration(reviewTimeout),
+    "--timeout", clineTimeoutSecondsFromParentMs(parentTimeoutMs),
     fullPrompt
   );
 
   let rawOutput;
+  let rawStderr = "";
   try {
     rawOutput = execFileSync(clineBin, execArgs, {
       cwd: repoPath,
@@ -157,6 +165,7 @@ function main() {
       maxBuffer: 10 * 1024 * 1024,
     }).trim();
   } catch (error) {
+    rawStderr = String(error?.stderr || "");
     if (isExecTimeout(error)) {
       const diagnosticCommand = buildTimeoutDiagnosticCommand({ clineBin, model, reviewTimeout });
       throw new Error(
@@ -167,26 +176,44 @@ function main() {
       );
     }
     const recovered = recoverExecStdout(error);
-    if (!recovered) {
+    if (!recovered && !rawStderr) {
       throw new Error(`Cline reviewer failed: ${summarizeFailure(error)}`);
     }
-    rawOutput = recovered;
+    rawOutput = recovered || "";
   }
 
-  let advisoryText;
+  let candidates;
   try {
-    advisoryText = extractClineRunResultText(rawOutput, { adapter: "cline", phase });
+    candidates = extractClineAdvisoryCandidates(rawOutput, {
+      adapter: "cline",
+      phase,
+      stderr: rawStderr,
+    });
   } catch (error) {
     throw new Error(
-      `${error.message}. Cline advisory review must return JSON in run_result.text; relay cannot treat this as healthy advisory evidence.`
+      `${error.message}. Cline advisory review must return JSON in run_result.text or the final text content_end; relay cannot treat this as healthy advisory evidence.`
     );
   }
 
-  const parsed = parseAdvisoryReview(advisoryText, {
-    adapter: "cline",
-    phase,
-    profile: "blindspot",
-  });
+  let parsed = null;
+  let firstParseError = null;
+  for (const candidate of candidates) {
+    try {
+      parsed = parseAdvisoryReview(candidate, {
+        adapter: "cline",
+        phase,
+        profile: "blindspot",
+      });
+      break;
+    } catch (error) {
+      if (!firstParseError) firstParseError = error;
+    }
+  }
+  if (!parsed) {
+    throw new Error(
+      `Cline advisory review failed to parse any of ${candidates.length} advisory candidate(s); first failure: ${firstParseError?.message || "unknown parse failure"}`
+    );
+  }
   const output = JSON.stringify(parsed);
 
   if (cliArgs.hasFlag("--json")) {
