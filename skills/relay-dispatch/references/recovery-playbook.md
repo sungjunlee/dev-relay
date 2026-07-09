@@ -14,6 +14,21 @@ git push origin --delete worktree-<name>
 
 After the #809 fix, new dispatches no longer publish or record local-only `worktree-*` checkout branches as `base_branch`; they fall back to the origin default branch.
 
+## Legacy local-base contamination
+
+Symptom: a PR diff includes unrelated changes from an unpushed commit that was present on the dispatching checkout's local base branch when the run was created. This applies only to runs dispatched before the origin-start-point fix for #795. New dispatch branches are created from `origin/<base>` after a fetch; if that fetch fails, dispatch falls back to the local base ref with a loud warning about contamination risk.
+
+For affected legacy runs, merge the remote base into the retained worktree branch so GitHub's merge-base can drop equivalent upstream content from the diff, then rebind execution evidence to the advanced head:
+
+```bash
+git -C <retained-worktree> fetch origin main
+git -C <retained-worktree> merge origin/main --no-edit
+node skills/relay-dispatch/scripts/rebrand-evidence.js --run-id <id> \
+  --reason "legacy pre-#795 local-base contamination recovery"
+```
+
+Use the run's manifest `git.base_branch` in place of `main` when the run targeted a non-default base branch.
+
 ## Crash-only dispatch reconcile
 
 `reconcile-run.js` settles a run that is still `dispatched` after the dispatch supervisor died, the machine rebooted, the executor was OOM-killed, or an operator needs to check an interrupted run from another shell. It uses the run directory as the runtime state root:

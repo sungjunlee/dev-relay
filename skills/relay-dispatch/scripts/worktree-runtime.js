@@ -124,6 +124,7 @@ function createWorktree({
   worktreePath,
   branch,
   title,
+  startPoint = null,
   includeFiles,
   copyFiles = [],
   register = false,
@@ -145,6 +146,7 @@ function createWorktree({
     title,
     register,
     pin,
+    ...(startPoint ? { startPoint } : {}),
     worktreeinclude: resolvedIncludeFiles,
   };
 
@@ -162,7 +164,9 @@ function createWorktree({
   fs.mkdirSync(path.dirname(worktreePath), { recursive: true });
   try {
     try {
-      gitRunner(repoRoot, "worktree", "add", worktreePath, "-b", branch);
+      const createArgs = ["worktree", "add", worktreePath, "-b", branch];
+      if (startPoint) createArgs.push(startPoint);
+      gitRunner(repoRoot, ...createArgs);
     } catch {
       try {
         gitRunner(repoRoot, "worktree", "add", worktreePath, branch);
