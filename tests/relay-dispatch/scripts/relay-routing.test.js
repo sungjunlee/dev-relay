@@ -646,6 +646,62 @@ test("partial project advisory default overlays the model onto the policy lane",
   assert.equal(result.phases.advisory_review[0].sources.model, "project_routes");
 });
 
+test("partial advisory default over a multi-lane list fails closed", () => {
+  assert.throws(() => resolveRouteIntent({
+    projectRoutes: {
+      version: 2,
+      defaults: {
+        advisory_review: { model: "example/opencode-model-fast" },
+      },
+    },
+    policy: routePolicy({
+      defaults: {
+        dispatch: { executor: "codex" },
+        review: { reviewer: "codex" },
+        advisory_review: [
+          { reviewer: "opencode", model: "example/opencode-model-cheap" },
+          { reviewer: "pi", model: "example/pi-model-fast" },
+        ],
+      },
+    }),
+  }), /cannot overlay the multi-lane list/);
+});
+
+test("partial advisory preset object is rejected", () => {
+  assert.throws(() => resolveRouteIntent({
+    routePresetName: "light",
+    policy: routePolicy({
+      presets: {
+        light: {
+          advisory_review: { model: "example/pi-model-fast" },
+        },
+      },
+    }),
+  }), /advisory_review must be a full lane or lane list/);
+});
+
+test("run intent advisory model overlay composes with a single-lane preset", () => {
+  const result = resolveRouteIntent({
+    runIntent: {
+      advisory_review: { model: "example/pi-model-large" },
+    },
+    routePresetName: "light",
+    policy: routePolicy({
+      presets: {
+        light: {
+          advisory_review: { reviewer: "pi", model: "example/pi-model-fast", profile: "blindspot" },
+        },
+      },
+      allowed_model_routes: [
+        { route: "example/pi-model-*", phases: ["advisory_review"], reviewers: ["pi"] },
+      ],
+    }),
+  });
+
+  assert.equal(result.phases.advisory_review[0].reviewer, "pi");
+  assert.equal(result.phases.advisory_review[0].model, "example/pi-model-large");
+});
+
 test("advisory lane without model falls back to a legacy single-object default's model", () => {
   const result = resolveRouteIntent({
     runIntent: {

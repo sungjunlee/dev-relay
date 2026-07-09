@@ -881,7 +881,33 @@ function expandRoutePreset({ runIntent = null, policy = {}, routePresetName = nu
     const presetPhase = normalizePresetPhase(preset, presetName, phase);
     if (!presetPhase) continue;
     if (phase === "advisory_review") {
+      if (isPlainObject(presetPhase) && !nonEmptyString(presetPhase.reviewer)) {
+        throw presetError(
+          `route preset '${presetName}' advisory_review must be a full lane or lane list; a partial object without reviewer is only valid as a project/run-intent overlay`,
+          { code: "invalid_route_preset", availablePresets: available }
+        );
+      }
       const advisoryPresetPhase = attachAdvisoryPresetModelResolution(preset, presetPhase);
+      const existing = expanded[phase];
+      if (isPlainObject(existing) && !nonEmptyString(existing.reviewer)) {
+        // Run intent carries a partial overlay ({ model } without reviewer);
+        // the preset supplies the lanes and the overlay composes onto the
+        // single lane. Multi-lane composition is ambiguous and fails closed.
+        const lanes = Array.isArray(advisoryPresetPhase) ? advisoryPresetPhase : [advisoryPresetPhase];
+        if (lanes.length !== 1) {
+          throw presetError(
+            `run intent advisory overlay (model without reviewer) cannot compose with multi-lane preset '${presetName}'; specify full advisory lanes in run intent`,
+            { code: "invalid_route_preset", availablePresets: available }
+          );
+        }
+        const overlayModel = nonEmptyString(existing.model || existing.reviewer_model);
+        expanded[phase] = lanes.map((lane) => (overlayModel ? { ...lane, model: overlayModel } : { ...lane }));
+        if (!isPlainObject(expanded[ROUTE_INTENT_SOURCES_KEY])) expanded[ROUTE_INTENT_SOURCES_KEY] = {};
+        if (!isPlainObject(expanded[ROUTE_INTENT_SOURCES_KEY][phase])) expanded[ROUTE_INTENT_SOURCES_KEY][phase] = {};
+        expanded[ROUTE_INTENT_SOURCES_KEY][phase].lanes = source;
+        filled.push({ phase, field: "lanes" });
+        continue;
+      }
       if (setRunIntentPhase(expanded, phase, advisoryPresetPhase, source)) {
         filled.push({ phase, field: "lanes" });
       }
@@ -1000,6 +1026,12 @@ function pickAdvisoryLaneList({ runIntent, projectRoutes, policy }) {
       continue;
     }
     let lanes = normalizeAdvisoryLaneList(value, candidate.fieldName, candidate.sourceLabel) || [];
+    if (lanes.length > 1 && overlays.length) {
+      throw new Error(
+        `invalid advisory routing: a partial advisory default (${overlays.map((o) => o.source).join(", ")}) ` +
+        `cannot overlay the multi-lane list from ${candidate.source}; specify full advisory lanes instead of a partial override`
+      );
+    }
     if (lanes.length === 1 && overlays.length) {
       for (let i = overlays.length - 1; i >= 0; i -= 1) {
         const overlay = overlays[i];
