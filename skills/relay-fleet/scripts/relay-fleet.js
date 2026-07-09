@@ -443,13 +443,83 @@ function leafRefSetsMatch(left, right) {
     && leftRefs.every((leafRef, index) => leafRef === rightRefs[index]);
 }
 
-function assertLeavesMatchFleetChildren(repoRoot, fleetId, leaves) {
+function issueSetsMatch(left, right) {
+  const leftIssues = left.map((leaf) => leaf.issue_number).sort((a, b) => a - b);
+  const rightIssues = right.map((leaf) => leaf.issue_number).sort((a, b) => a - b);
+  return leftIssues.length === rightIssues.length
+    && leftIssues.every((issueNumber, index) => issueNumber === rightIssues[index]);
+}
+
+function isReplaceableFleetChild(child) {
+  return child?.run_id === null
+    && child?.dispatch_status === DISPATCH_STATUS.DISPATCH_FAILED_PRE_MANIFEST;
+}
+
+function acceptedLeafReplacements(fleetChildren, persistedLeaves, leaves) {
+  if (!Array.isArray(persistedLeaves) || leavesMatch(persistedLeaves, leaves)) return [];
+  if (!issueSetsMatch(persistedLeaves, leaves)) return null;
+
+  const childrenByRef = new Map(fleetChildren.map((child) => [child.leaf_ref, child]));
+  const leavesByIssue = new Map(leaves.map((leaf) => [leaf.issue_number, leaf]));
+  const replacements = [];
+  for (const persistedLeaf of persistedLeaves) {
+    const leaf = leavesByIssue.get(persistedLeaf.issue_number);
+    if (JSON.stringify(comparableLeaf(persistedLeaf)) === JSON.stringify(comparableLeaf(leaf))) continue;
+    const child = childrenByRef.get(persistedLeaf.leaf_ref);
+    if (!isReplaceableFleetChild(child)) return null;
+    replacements.push({
+      old_leaf_ref: persistedLeaf.leaf_ref,
+      new_leaf_ref: leaf.leaf_ref,
+      issue_number: persistedLeaf.issue_number,
+    });
+  }
+  return replacements;
+}
+
+function assertLeavesMatchFleetChildren(repoRoot, fleetId, leaves, { persistedLeaves = null } = {}) {
   const fleet = readFleetManifest(repoRoot, fleetId).data;
+  if (persistedLeaves) {
+    return {
+      fleet,
+      replacements: acceptedLeafReplacements(fleet.children, persistedLeaves, leaves),
+    };
+  }
   if (!leafRefSetsMatch(leaves, fleet.children)) {
     throw new FleetInputError(
       `--leaves-file leaf_ref set differs from fleet manifest children for '${fleetId}'; refusing to overwrite an existing fleet`
     );
   }
+  return { fleet, replacements: [] };
+}
+
+function replaceFleetChildren(repoRoot, fleetId, replacements) {
+  const replacementsByOldRef = new Map(replacements.map((replacement) => [replacement.old_leaf_ref, replacement]));
+  updateFleetManifest(repoRoot, fleetId, (fleet) => {
+    const nextChildren = [];
+    const seenRefs = new Set();
+    for (const child of fleet.children) {
+      const replacement = replacementsByOldRef.get(child.leaf_ref);
+      if (!replacement) {
+        nextChildren.push(child);
+        seenRefs.add(child.leaf_ref);
+        continue;
+      }
+      if (seenRefs.has(replacement.new_leaf_ref)) continue;
+      nextChildren.push({
+        leaf_ref: replacement.new_leaf_ref,
+        run_id: null,
+        dispatch_status: DISPATCH_STATUS.PENDING,
+      });
+      seenRefs.add(replacement.new_leaf_ref);
+    }
+    return { ...fleet, children: nextChildren };
+  });
+}
+
+function applyAcceptedLeafReplacements(repoRoot, fleetId, leaves, replacements) {
+  if (!replacements.length) return;
+  replaceFleetChildren(repoRoot, fleetId, replacements);
+  persistFleetLeaves(repoRoot, fleetId, leaves);
 }
 
 function assertLeavesMatchPersisted(repoRoot, fleetId, leaves) {
@@ -457,8 +527,8 @@ function assertLeavesMatchPersisted(repoRoot, fleetId, leaves) {
   const storeExists = fs.existsSync(storePath);
   const persisted = readPersistedLeaves(repoRoot, fleetId);
   if (!storeExists) {
-    assertLeavesMatchFleetChildren(repoRoot, fleetId, leaves);
-    return null;
+    const { replacements } = assertLeavesMatchFleetChildren(repoRoot, fleetId, leaves);
+    return { leaves: null, replacements };
   }
   if (persisted.length === 0) {
     throw new FleetInputError(
@@ -466,11 +536,16 @@ function assertLeavesMatchPersisted(repoRoot, fleetId, leaves) {
     );
   }
   if (!leavesMatch(persisted, leaves)) {
+    const { replacements } = assertLeavesMatchFleetChildren(repoRoot, fleetId, leaves, { persistedLeaves: persisted });
+    if (Array.isArray(replacements) && replacements.length > 0) {
+      return { leaves, replacements };
+    }
     throw new FleetInputError(
       `--leaves-file differs from persisted fleet leaves for '${fleetId}'; refusing to overwrite an existing fleet`
     );
   }
-  return persisted;
+  assertLeavesMatchFleetChildren(repoRoot, fleetId, leaves);
+  return { leaves: persisted, replacements: [] };
 }
 
 function processIsAlive(pid) {
@@ -1693,6 +1768,14 @@ function formatPreManifestRetryLine(summary, fleetId) {
   ].join(" ");
 }
 
+function writeReplacementNotes(result) {
+  for (const replacement of result?.replaced_children || []) {
+    console.error(
+      `relay-fleet replaced child in fleet '${result.fleet_id}': ${replacement.old_leaf_ref} -> ${replacement.new_leaf_ref}`
+    );
+  }
+}
+
 async function statusFleet({ repoRoot, fleetId }) {
   const fleet = readFleetManifest(repoRoot, fleetId).data;
   const summary = deriveFleetSummary(repoRoot, fleet);
@@ -1885,7 +1968,7 @@ function readDriveLeaves({ repoRoot, fleetId, manifestPath, options }) {
       throw new FleetInputError("--leaves-file is required for --dry-run");
     }
     validateLeafLineage(repoRoot, explicitLeaves);
-    return { leaves: explicitLeaves, explicitLeaves, manifestExists };
+    return { leaves: explicitLeaves, explicitLeaves, manifestExists, replacedChildren: [] };
   }
 
   if (!manifestExists) {
@@ -1893,23 +1976,33 @@ function readDriveLeaves({ repoRoot, fleetId, manifestPath, options }) {
       throw new FleetInputError(`fleet manifest does not exist: ${manifestPath}; nothing to continue`);
     }
     validateLeafLineage(repoRoot, explicitLeaves);
-    return { leaves: explicitLeaves, explicitLeaves, manifestExists };
+    return { leaves: explicitLeaves, explicitLeaves, manifestExists, replacedChildren: [] };
   }
 
   if (explicitLeaves) {
     const persisted = assertLeavesMatchPersisted(repoRoot, fleetId, explicitLeaves);
     validateLeafLineage(repoRoot, explicitLeaves);
-    if (!persisted) {
-      persistFleetLeaves(repoRoot, fleetId, explicitLeaves);
-      return { leaves: explicitLeaves, explicitLeaves, manifestExists };
+    if (persisted.replacements.length > 0) {
+      applyAcceptedLeafReplacements(repoRoot, fleetId, explicitLeaves, persisted.replacements);
+      return {
+        leaves: explicitLeaves,
+        explicitLeaves,
+        manifestExists,
+        replacedChildren: persisted.replacements,
+      };
     }
-    return { leaves: persisted, explicitLeaves, manifestExists };
+    if (!persisted.leaves) {
+      persistFleetLeaves(repoRoot, fleetId, explicitLeaves);
+      return { leaves: explicitLeaves, explicitLeaves, manifestExists, replacedChildren: [] };
+    }
+    return { leaves: persisted.leaves, explicitLeaves, manifestExists, replacedChildren: [] };
   }
 
   return {
     leaves: readPersistedLeaves(repoRoot, fleetId),
     explicitLeaves: null,
     manifestExists,
+    replacedChildren: [],
   };
 }
 
@@ -2018,6 +2111,7 @@ function buildDriveResult({
   reviewResult = null,
   mergeResult = null,
   deprecatedAliases = [],
+  replacedChildren = [],
 }) {
   closeFleetIfTerminal(repoRoot, fleetId);
   const summary = deriveFleetSummary(repoRoot, readFleetManifest(repoRoot, fleetId).data);
@@ -2032,6 +2126,7 @@ function buildDriveResult({
     fleet_id: fleetId,
     fleetManifestPath,
     deprecated_aliases: deprecatedAliases,
+    replaced_children: replacedChildren,
     children: dispatchResult?.children || [],
     dispatch_children: dispatchResult?.children || [],
     reviewed_children: reviewResult?.reviewed_children || [],
@@ -2090,7 +2185,7 @@ async function runFleet(options) {
     }
   }
 
-  const { leaves, manifestExists } = readDriveLeaves({ repoRoot, fleetId, manifestPath, options });
+  const { leaves, manifestExists, replacedChildren } = readDriveLeaves({ repoRoot, fleetId, manifestPath, options });
 
   if (options.dryRun) {
     const activeChildren = new Map();
@@ -2108,6 +2203,7 @@ async function runFleet(options) {
       ok: children.every((child) => child.status === "dry_run"),
       dryRun: true,
       fleet_id: fleetId,
+      replaced_children: replacedChildren,
       children,
     };
   }
@@ -2143,6 +2239,7 @@ async function runFleet(options) {
         interrupted,
         fleetManifestPath: manifestPath,
         deprecated_aliases: deprecatedAliases,
+        replaced_children: replacedChildren,
       };
     }
 
@@ -2165,6 +2262,7 @@ async function runFleet(options) {
           dispatchResult,
           reviewResult,
           deprecatedAliases,
+          replacedChildren,
         });
       }
     }
@@ -2179,6 +2277,7 @@ async function runFleet(options) {
       reviewResult,
       mergeResult,
       deprecatedAliases,
+      replacedChildren,
     });
   } finally {
     if (options.installSignalHandlers) {
@@ -2206,6 +2305,7 @@ async function main(argv = process.argv.slice(2)) {
       throw new FleetInputError("--review cannot be combined with --resume, --leaves-file, --dry-run, or --status");
     }
     const result = await runFleet({ ...options, installSignalHandlers: true });
+    writeReplacementNotes(result);
     if (options.json) {
       console.log(JSON.stringify(result, null, 2));
     } else if (options.status) {
