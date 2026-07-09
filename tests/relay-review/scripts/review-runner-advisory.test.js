@@ -439,7 +439,7 @@ setTimeout(() => {
   } else {
     const payload = ${advisoryPayload};
     if (${name === "cline" ? "true" : "false"}) {
-      process.stdout.write(JSON.stringify({ type: "run_result", text: payload }) + "\\n");
+      process.stdout.write(JSON.stringify({ type: "run_result", finishReason: "completed", text: payload }) + "\\n");
     } else {
       process.stdout.write(payload);
     }

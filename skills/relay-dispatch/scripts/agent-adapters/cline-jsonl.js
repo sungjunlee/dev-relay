@@ -12,6 +12,71 @@ function parseClineJsonLine(line, { adapter, phase, lineNumber }) {
   }
 }
 
+function stderrTail(stderr) {
+  const text = String(stderr || "");
+  const trimmed = text.trim();
+  return trimmed ? `; stderr tail: ${trimmed.slice(-500)}` : "";
+}
+
+function previewText(value, maxLength) {
+  return String(value || "").replace(/\s+/g, " ").trim().slice(0, maxLength);
+}
+
+function extractClineAdvisoryCandidates(stdout, {
+  adapter = "cline",
+  phase = "advisory_review",
+  stderr = "",
+} = {}) {
+  const context = formatAdapterPhase({ adapter, phase });
+  const raw = String(stdout || "");
+  if (!raw.trim()) {
+    throw new Error(`${context} Cline JSONL output is empty; no advisory candidates found${stderrTail(stderr)}`);
+  }
+
+  let runResult = null;
+  let runResultCount = 0;
+  let lastTextContentEnd = null;
+  const lines = raw.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  for (const [index, line] of lines.entries()) {
+    const event = parseClineJsonLine(line, { adapter, phase, lineNumber: index + 1 });
+    if (event?.type === "run_result") {
+      runResultCount += 1;
+      runResult = event;
+    }
+    if (
+      event?.type === "agent_event" &&
+      event.event?.type === "content_end" &&
+      event.event?.contentType === "text" &&
+      typeof event.event.text === "string"
+    ) {
+      lastTextContentEnd = event.event.text;
+    }
+  }
+
+  if (!runResultCount) {
+    throw new Error(`${context} Cline JSONL output did not include a run_result event (no run_result events found)${stderrTail(stderr)}`);
+  }
+
+  if (runResult?.finishReason !== "completed") {
+    const finishReason = runResult?.finishReason === undefined ? "undefined" : String(runResult.finishReason);
+    const preview = previewText(runResult?.text, 300);
+    throw new Error(
+      `${context} Cline run_result finishReason "${finishReason}" was not "completed"; run_result.text preview: ${preview}`
+    );
+  }
+
+  const candidates = [];
+  for (const candidate of [runResult?.text, lastTextContentEnd]) {
+    if (typeof candidate === "string" && candidate.trim()) {
+      candidates.push(candidate.trim());
+    }
+  }
+  if (!candidates.length) {
+    throw new Error(`${context} Cline completed run_result did not include any non-empty advisory candidates`);
+  }
+  return candidates;
+}
+
 function extractClineRunResultText(stdout, { adapter = "cline", phase = "unknown" } = {}) {
   const context = formatAdapterPhase({ adapter, phase });
   const raw = String(stdout || "");
@@ -64,5 +129,6 @@ function copyClineRunResultTextToResultFile({ stdoutLog, resultFile, adapter = "
 
 module.exports = {
   copyClineRunResultTextToResultFile,
+  extractClineAdvisoryCandidates,
   extractClineRunResultText,
 };

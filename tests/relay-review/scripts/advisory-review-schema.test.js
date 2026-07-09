@@ -54,7 +54,26 @@ test("advisory schema accepts a single json fenced payload with surrounding whit
   assert.equal(parsed.advisory_findings[0].title, "Exercise timeout path");
 });
 
-test("advisory schema fails closed for ambiguous fenced or prose-wrapped output", () => {
+test("advisory schema parses pure, fenced, and prose-wrapped advisory objects identically", () => {
+  const payload = JSON.stringify(advisoryPayload());
+  const context = {
+    adapter: "opencode",
+    phase: "advisory_review",
+    profile: "blindspot",
+  };
+  const expected = parseAdvisoryReview(payload, context);
+
+  assert.deepEqual(
+    parseAdvisoryReview(`\`\`\`json\n${payload}\n\`\`\``, context),
+    expected
+  );
+  assert.deepEqual(
+    parseAdvisoryReview(`Here is the advisory result:\n\n${payload}\n\nNo further notes.`, context),
+    expected
+  );
+});
+
+test("advisory schema fails closed for ambiguous object or array wrappers", () => {
   const payload = JSON.stringify(advisoryPayload());
   const context = {
     adapter: "opencode",
@@ -63,15 +82,13 @@ test("advisory schema fails closed for ambiguous fenced or prose-wrapped output"
   };
 
   for (const text of [
-    `Here is the JSON:\n${payload}`,
-    `\`\`\`json\n${payload}\n\`\`\`\nThanks.`,
+    `${payload}\n${payload}`,
+    `[${payload}]`,
     `\`\`\`json\n${payload}\n\`\`\`\n\n\`\`\`json\n${payload}\n\`\`\``,
-    `\`\`\`json\n${payload}\n${payload}\n\`\`\``,
-    `\`\`\`json\n{"profile":\n\`\`\``,
   ]) {
     assert.throws(
       () => parseAdvisoryReview(text, context),
-      /adapter=opencode phase=advisory_review advisory review must be valid JSON:/
+      /adapter=opencode phase=advisory_review advisory review must be/
     );
   }
 });

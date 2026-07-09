@@ -428,7 +428,7 @@ process.stdout.write("\`\`\`json\\n" + JSON.stringify({
   assert.equal(result.summary, "No blocking blind spots.");
 });
 
-test("opencode adapter rejects prose-wrapped advisory JSON", () => {
+test("opencode adapter accepts prose-wrapped advisory JSON through shared advisory parsing", () => {
   const { repoRoot, promptPath } = setupRepo();
   const fakeDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-fake-opencode-prose-"));
   const fakeOpencode = writeExecutable(fakeDir, "fake-opencode.js", `#!/usr/bin/env node
@@ -441,28 +441,20 @@ process.stdout.write("Sure, here is the advisory result:\\n" + JSON.stringify({
 }) + "\\n");
 `);
 
-  let error;
-  try {
-    execFileSync("node", [
-      OPENCODE_SCRIPT,
-      "--repo", repoRoot,
-      "--prompt-file", promptPath,
-      "--json",
-    ], {
-      cwd: repoRoot,
-      encoding: "utf-8",
-      stdio: "pipe",
-      env: { ...process.env, RELAY_OPENCODE_BIN: fakeOpencode },
-    });
-  } catch (caught) {
-    error = caught;
-  }
+  const stdout = execFileSync("node", [
+    OPENCODE_SCRIPT,
+    "--repo", repoRoot,
+    "--prompt-file", promptPath,
+    "--json",
+  ], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+    env: { ...process.env, RELAY_OPENCODE_BIN: fakeOpencode },
+  });
 
-  assert.ok(error, "expected prose-wrapped advisory JSON to fail closed");
-  assert.match(
-    String(error.stderr || ""),
-    /adapter=opencode phase=advisory_review advisory review must be valid JSON:/
-  );
+  const result = JSON.parse(stdout);
+  assert.equal(result.summary, "Recovered from verbose live output.");
 });
 
 test("opencode adapter reports actionable diagnostics for empty stdout", () => {
@@ -1254,6 +1246,7 @@ fs.writeFileSync(${JSON.stringify(logPath)}, JSON.stringify(args), "utf-8");
 process.stdout.write(JSON.stringify({ type: "agent_event", event: { type: "content_start", text: "ignored" } }) + "\\n");
 process.stdout.write(JSON.stringify({
   type: "run_result",
+  finishReason: "completed",
   text: JSON.stringify({
     profile: "blindspot",
     summary: "No blocking blind spots.",
@@ -1278,24 +1271,218 @@ process.stdout.write(JSON.stringify({
     env: {
       ...process.env,
       RELAY_CLINE_BIN: fakeCline,
-      RELAY_CLINE_REVIEW_TIMEOUT: "45s",
+      RELAY_CLINE_REVIEW_TIMEOUT: "120s",
     },
   });
 
   const result = JSON.parse(stdout);
   const loggedArgs = JSON.parse(fs.readFileSync(logPath, "utf-8"));
   assert.equal(result.profile, "blindspot");
-  assert.deepEqual(loggedArgs.slice(0, 9), [
+  assert.deepEqual(loggedArgs.slice(0, 10), [
     "--json",
+    "--yolo",
     "-P", "cline-pass",
     "-m", "cline-pass/glm-5.2",
     "--cwd", repoRoot,
-    "--timeout", "45",
+    "--timeout", "60",
   ]);
-  assert.match(loggedArgs[9], /NON-INTERACTIVE ADVISORY REVIEW/);
-  assert.match(loggedArgs[9], /Return a passing review\./);
-  assert.match(loggedArgs[9], /Do not use cline --worktree; relay already selected the review checkout with --cwd\./);
+  assert.match(loggedArgs[10], /NON-INTERACTIVE ADVISORY REVIEW/);
+  assert.match(loggedArgs[10], /Return a passing review\./);
+  assert.match(loggedArgs[10], /Do not use cline --worktree; relay already selected the review checkout with --cwd\./);
   assert.equal(loggedArgs.includes("--worktree"), false);
+});
+
+test("cline adapter parses yolo content_end candidate when run_result text is a paraphrase", () => {
+  const { repoRoot, promptPath } = setupRepo();
+  const fakeDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-fake-cline-yolo-content-"));
+  const fakeCline = writeExecutable(fakeDir, "fake-cline.js", `#!/usr/bin/env node
+process.stdout.write(JSON.stringify({
+  type: "agent_event",
+  event: { type: "content_end", contentType: "reasoning", text: "skip reasoning" },
+}) + "\\n");
+process.stdout.write(JSON.stringify({
+  type: "agent_event",
+  event: {
+    type: "content_end",
+    contentType: "text",
+    text: JSON.stringify({
+      profile: "blindspot",
+      summary: "Recovered from final content_end.",
+      required_findings: [],
+      advisory_findings: [],
+      duplicate_or_low_confidence: [],
+    }),
+  },
+}) + "\\n");
+process.stdout.write(JSON.stringify({
+  type: "run_result",
+  finishReason: "completed",
+  text: "Submission recorded (verified): Output the requested JSON object verbatim ...",
+}) + "\\n");
+`);
+
+  const stdout = execFileSync("node", [
+    CLINE_SCRIPT,
+    "--repo", repoRoot,
+    "--prompt-file", promptPath,
+    "--json",
+  ], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+    env: { ...process.env, RELAY_CLINE_BIN: fakeCline },
+  });
+
+  const result = JSON.parse(stdout);
+  assert.equal(result.summary, "Recovered from final content_end.");
+});
+
+test("cline adapter reports candidate count and first parse failure when all advisory candidates fail", () => {
+  const { repoRoot, promptPath } = setupRepo();
+  const fakeDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-fake-cline-candidate-fail-"));
+  const fakeCline = writeExecutable(fakeDir, "fake-cline.js", `#!/usr/bin/env node
+process.stdout.write(JSON.stringify({
+  type: "agent_event",
+  event: { type: "content_end", contentType: "text", text: "also-not-json" },
+}) + "\\n");
+process.stdout.write(JSON.stringify({
+  type: "run_result",
+  finishReason: "completed",
+  text: "not-json",
+}) + "\\n");
+`);
+
+  let error;
+  try {
+    execFileSync("node", [
+      CLINE_SCRIPT,
+      "--repo", repoRoot,
+      "--prompt-file", promptPath,
+      "--json",
+    ], {
+      cwd: repoRoot,
+      encoding: "utf-8",
+      stdio: "pipe",
+      env: { ...process.env, RELAY_CLINE_BIN: fakeCline },
+    });
+    assert.fail("expected invoke-reviewer-cline.js to fail");
+  } catch (caught) {
+    error = caught;
+  }
+
+  const stderr = String(error.stderr || "");
+  assert.match(stderr, /failed to parse any of 2 advisory candidate/);
+  assert.match(stderr, /first failure: adapter=cline phase=advisory_review advisory review must be valid JSON/);
+});
+
+test("cline adapter rejects slash-less model before executing cline", () => {
+  const { repoRoot, promptPath } = setupRepo();
+  const fakeDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-fake-cline-model-guard-"));
+  const logPath = path.join(fakeDir, "cline-args.log");
+  const fakeCline = writeExecutable(fakeDir, "fake-cline.js", `#!/usr/bin/env node
+const fs = require("fs");
+fs.writeFileSync(${JSON.stringify(logPath)}, "invoked\\n", "utf-8");
+`);
+
+  let error;
+  try {
+    execFileSync("node", [
+      CLINE_SCRIPT,
+      "--repo", repoRoot,
+      "--prompt-file", promptPath,
+      "--model", "glm-5.2",
+      "--json",
+    ], {
+      cwd: repoRoot,
+      encoding: "utf-8",
+      stdio: "pipe",
+      env: { ...process.env, RELAY_CLINE_BIN: fakeCline },
+    });
+    assert.fail("expected invoke-reviewer-cline.js to fail");
+  } catch (caught) {
+    error = caught;
+  }
+
+  assert.equal(fs.existsSync(logPath), false);
+  assert.match(String(error.stderr || ""), /modelType\/model/);
+  assert.match(String(error.stderr || ""), /cline-pass\/glm-5\.2/);
+});
+
+test("cline adapter omits -m when model is absent and keeps default provider path", () => {
+  const { repoRoot, promptPath } = setupRepo();
+  const fakeDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-fake-cline-no-model-"));
+  const logPath = path.join(fakeDir, "cline-args.log");
+  const fakeCline = writeExecutable(fakeDir, "fake-cline.js", `#!/usr/bin/env node
+const fs = require("fs");
+const args = process.argv.slice(2);
+fs.writeFileSync(${JSON.stringify(logPath)}, JSON.stringify(args), "utf-8");
+process.stdout.write(JSON.stringify({
+  type: "run_result",
+  finishReason: "completed",
+  text: JSON.stringify({
+    profile: "blindspot",
+    summary: "No model flag.",
+    required_findings: [],
+    advisory_findings: [],
+    duplicate_or_low_confidence: [],
+  }),
+}) + "\\n");
+`);
+
+  const stdout = execFileSync("node", [
+    CLINE_SCRIPT,
+    "--repo", repoRoot,
+    "--prompt-file", promptPath,
+    "--json",
+  ], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+    env: { ...process.env, RELAY_CLINE_BIN: fakeCline },
+  });
+
+  const result = JSON.parse(stdout);
+  const loggedArgs = JSON.parse(fs.readFileSync(logPath, "utf-8"));
+  assert.equal(result.summary, "No model flag.");
+  assert.equal(loggedArgs.includes("-m"), false);
+  assert.deepEqual(loggedArgs.slice(0, 4), ["--json", "--yolo", "-P", "cline-pass"]);
+});
+
+test("cline adapter gives cline timeout 60 seconds of parent headroom", () => {
+  const { repoRoot, promptPath } = setupRepo();
+  const fakeDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-fake-cline-headroom-"));
+  const logPath = path.join(fakeDir, "cline-args.log");
+  const fakeCline = writeExecutable(fakeDir, "fake-cline.js", `#!/usr/bin/env node
+const fs = require("fs");
+const args = process.argv.slice(2);
+fs.writeFileSync(${JSON.stringify(logPath)}, JSON.stringify(args), "utf-8");
+process.stdout.write(JSON.stringify({
+  type: "run_result",
+  finishReason: "completed",
+  text: JSON.stringify({
+    profile: "blindspot",
+    summary: "Headroom.",
+    required_findings: [],
+    advisory_findings: [],
+    duplicate_or_low_confidence: [],
+  }),
+}) + "\\n");
+`);
+
+  execFileSync("node", [
+    CLINE_SCRIPT,
+    "--repo", repoRoot,
+    "--prompt-file", promptPath,
+    "--json",
+  ], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+    env: { ...process.env, RELAY_CLINE_BIN: fakeCline, RELAY_CLINE_REVIEW_TIMEOUT: "180s" },
+  });
+
+  const loggedArgs = JSON.parse(fs.readFileSync(logPath, "utf-8"));
+  assert.equal(loggedArgs[loggedArgs.indexOf("--timeout") + 1], "120");
 });
 
 test("cline adapter rejects primary review phase until canary promotion", () => {
@@ -1328,7 +1515,7 @@ test("cline adapter reports adapter and phase when run_result.text is invalid ad
   const { repoRoot, promptPath } = setupRepo();
   const fakeDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-fake-cline-invalid-json-"));
   const fakeCline = writeExecutable(fakeDir, "fake-cline.js", `#!/usr/bin/env node
-process.stdout.write(JSON.stringify({ type: "run_result", text: "not-json" }) + "\\n");
+process.stdout.write(JSON.stringify({ type: "run_result", finishReason: "completed", text: "not-json" }) + "\\n");
 `);
 
   let error;
@@ -1387,22 +1574,13 @@ process.exit(0);
   assert.match(stderr, /cannot treat this as healthy advisory evidence/);
 });
 
-test("cline adapter enforces parent timeout and reports timeout context", () => {
+test("cline adapter rejects review timeouts without Cline headroom before executing cline", () => {
   const { repoRoot, promptPath } = setupRepo();
   const fakeDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-fake-cline-timeout-"));
+  const logPath = path.join(fakeDir, "cline-args.log");
   const fakeCline = writeExecutable(fakeDir, "fake-cline.js", `#!/usr/bin/env node
-setTimeout(() => {
-  process.stdout.write(JSON.stringify({
-    type: "run_result",
-    text: JSON.stringify({
-      profile: "blindspot",
-      summary: "Too late.",
-      required_findings: [],
-      advisory_findings: [],
-      duplicate_or_low_confidence: [],
-    }),
-  }) + "\\n");
-}, 2500);
+const fs = require("fs");
+fs.writeFileSync(${JSON.stringify(logPath)}, "invoked\\n", "utf-8");
 `);
 
   let error;
@@ -1418,20 +1596,18 @@ setTimeout(() => {
       encoding: "utf-8",
       stdio: "pipe",
       timeout: 5000,
-      env: { ...process.env, RELAY_CLINE_BIN: fakeCline, RELAY_CLINE_REVIEW_TIMEOUT: "1s" },
+      env: { ...process.env, RELAY_CLINE_BIN: fakeCline, RELAY_CLINE_REVIEW_TIMEOUT: "90s" },
     });
     assert.fail("expected invoke-reviewer-cline.js to fail");
   } catch (caught) {
     error = caught;
   }
 
-  assert.ok(error, "expected invoke-reviewer-cline.js to fail on parent timeout");
+  assert.ok(error, "expected invoke-reviewer-cline.js to fail before invoking cline");
+  assert.equal(fs.existsSync(logPath), false);
   const stderr = String(error.stderr || "");
-  assert.match(stderr, /Cline reviewer advisory_review timed out after 1s/);
   assert.match(stderr, /RELAY_CLINE_REVIEW_TIMEOUT/);
-  assert.match(stderr, /cannot treat this as healthy advisory evidence/);
-  assert.match(stderr, /verify Cline non-interactive provider output/);
-  assert.doesNotMatch(String(error.stdout || ""), /Too late/);
+  assert.match(stderr, /at least 120s/);
 });
 
 test("cursor adapter fails closed when auth probe reports not logged in", () => {
