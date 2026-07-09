@@ -488,6 +488,11 @@ function normalizeExecutorDefaults(value, sourceLabel) {
   return normalized;
 }
 
+function normalizeManagedCli(value, sourceLabel) {
+  if (value === undefined) return undefined;
+  return assertNonEmptyStringArray(value, "managed_cli", sourceLabel);
+}
+
 function normalizePresets(value, sourceLabel) {
   if (value === undefined) return {};
   if (!isPlainObject(value)) {
@@ -526,7 +531,9 @@ function validateRouteConfig(routes, sourceLabel = "routes config", { project = 
     routes: normalizeRouteEntries(routes.routes, "routes", sourceLabel),
     denied_routes: normalizeRouteEntries(routes.denied_routes, "denied_routes", sourceLabel),
     presets: normalizePresets(routes.presets, sourceLabel),
+    managed_cli: normalizeManagedCli(routes.managed_cli, sourceLabel),
   };
+  if (routes.managed_cli === undefined) delete normalized.managed_cli;
   // Preserve omission: a scope that does not set strict must not override
   // another scope's strict at merge time (mergeRouteConfigs keys off
   // hasOwnProperty, so materializing a default false here would defeat it).

@@ -51,6 +51,29 @@ function readRoutes(relayHome) {
   return JSON.parse(fs.readFileSync(path.join(relayHome, "routes.json"), "utf-8"));
 }
 
+function writeJson(filePath, value) {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf-8");
+}
+
+function legacyPolicy(overrides = {}) {
+  return {
+    version: 1,
+    profile: "test",
+    defaults: {
+      dispatch: { executor: "codex" },
+      review: { reviewer: "codex" },
+      advisory_review: null,
+    },
+    managed_cli: ["codex", "claude"],
+    allowed_model_routes: [],
+    denied_model_routes: [],
+    routing_rules: [],
+    deny_unknown_model_routes: true,
+    ...overrides,
+  };
+}
+
 function writeFakeOpencode(binDir, models = []) {
   const opencodePath = path.join(binDir, "opencode");
   fs.writeFileSync(opencodePath, `#!/bin/sh
@@ -67,6 +90,18 @@ fi
 exit 0
 `, "utf-8");
   fs.chmodSync(opencodePath, 0o755);
+}
+
+function writeFakeCli(binDir, name) {
+  const cliPath = path.join(binDir, name);
+  fs.writeFileSync(cliPath, `#!/bin/sh
+if [ "$1" = "--version" ]; then
+  printf '${name}-fake\\n'
+  exit 0
+fi
+exit 0
+`, "utf-8");
+  fs.chmodSync(cliPath, 0o755);
 }
 
 test("init company shorthand delegates to core init --profile company routes config", () => {
@@ -287,6 +322,91 @@ test("preset subcommands pass through wrapper shorthand", () => {
   const remove = runConfig(["preset", "remove", "hardened", "--json"], { relayHome });
   assert.equal(remove.status, 0, remove.combined);
   assert.equal(Object.prototype.hasOwnProperty.call(readRoutes(relayHome), "presets"), false);
+});
+
+test("migrate keeps project scoped legacy policy out of global routes and converts project v1 in place", () => {
+  const relayHome = tempDir();
+  const projectRoutesPath = parseJson(runConfig(["inspect", "--json"], { relayHome })).projectConfig.path.replace(/project\.json$/, "routes.json");
+  writeJson(path.join(relayHome, "policy.json"), legacyPolicy({
+    allowed_model_routes: [
+      { route: "*", phases: ["dispatch"], executors: ["opencode"] },
+      { route: "global/*", phases: ["dispatch"], executors: ["codex"] },
+    ],
+  }));
+  writeJson(projectRoutesPath.replace(/routes\.json$/, "policy.json"), legacyPolicy({
+    defaults: {
+      dispatch: { executor: "opencode" },
+      review: { reviewer: "codex" },
+      advisory_review: null,
+    },
+    allowed_model_routes: [
+      { route: "project/*", phases: ["dispatch"], executors: ["opencode"] },
+    ],
+  }));
+  writeJson(projectRoutesPath, {
+    version: 1,
+    defaults: {
+      dispatch: { executor: "opencode", model: "project/model" },
+    },
+  });
+
+  const result = runConfig(["migrate", "--yes", "--json"], { relayHome });
+
+  assert.equal(result.status, 0, result.combined);
+  const globalRoutes = readRoutes(relayHome);
+  assert.equal(globalRoutes.defaults.dispatch.executor, "codex");
+  assert.equal(globalRoutes.routes.some((route) => route.route === "project/*"), false);
+  assert.deepEqual(JSON.parse(fs.readFileSync(projectRoutesPath, "utf-8")), {
+    version: 2,
+    defaults: {
+      dispatch: { executor: "opencode", model: "project/model" },
+    },
+  });
+});
+
+test("migrate preserves narrowed managed_cli so model-less claude stays denied", () => {
+  const relayHome = tempDir();
+  writeJson(path.join(relayHome, "policy.json"), legacyPolicy({
+    managed_cli: ["codex"],
+  }));
+
+  const before = runConfig(["check", "review", "claude", "--json"], { relayHome });
+  assert.notEqual(before.status, 0);
+  assert.equal(JSON.parse(before.stdout).decision.reason, "missing_model_route");
+
+  const migrate = runConfig(["migrate", "--yes", "--json"], { relayHome });
+  assert.equal(migrate.status, 0, migrate.combined);
+  assert.deepEqual(readRoutes(relayHome).managed_cli, ["codex"]);
+
+  const after = runConfig(["check", "review", "claude", "--json"], { relayHome });
+  assert.notEqual(after.status, 0);
+  assert.equal(JSON.parse(after.stdout).decision.reason, "missing_model_route");
+});
+
+test("gaps reports installed strict default executor with no usable route", () => {
+  const relayHome = tempDir();
+  const binDir = tempDir("relay-config-pi-bin-");
+  writeFakeCli(binDir, "pi");
+  writeJson(path.join(relayHome, "routes.json"), {
+    version: 2,
+    strict: true,
+    defaults: {
+      dispatch: { executor: "pi" },
+    },
+  });
+
+  const result = runConfig(["gaps", "--json"], {
+    relayHome,
+    env: { PATH: `${binDir}${path.delimiter}/usr/bin:/bin` },
+  });
+
+  assert.equal(result.status, 0, result.combined);
+  const output = parseJson(result);
+  const gap = output.gaps.find((item) => item.actor === "pi" && item.phase === "dispatch");
+  assert.ok(gap, JSON.stringify(output.gaps, null, 2));
+  assert.match(gap.type, /installed_cli_unrouted|executor_missing_default_model/);
+  assert.ok(["add-route", "set-default"].includes(gap.proposal.subcommand), JSON.stringify(gap.proposal));
+  assert.ok(gap.proposal.args.length > 1);
 });
 
 test("inspect reports effective policy, doctor output, and executors config state", () => {

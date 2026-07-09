@@ -431,6 +431,9 @@ function resolveProjectPolicyPath(repoRoot, relayHome) {
 function routesConfigToRelayPolicy(routeConfig) {
   const defaults = buildDefaultRelayPolicy().defaults;
   const routesDefaults = routeConfig?.defaults || {};
+  const managedCli = Array.isArray(routeConfig?.managed_cli)
+    ? routeConfig.managed_cli
+    : buildDefaultRelayPolicy().managed_cli;
   return validateRelayPolicy({
     version: 1,
     profile: "routes-config",
@@ -447,7 +450,7 @@ function routesConfigToRelayPolicy(routeConfig) {
         ? routesDefaults.advisory_review
         : defaults.advisory_review,
     },
-    managed_cli: buildDefaultRelayPolicy().managed_cli,
+    managed_cli: managedCli,
     allowed_model_routes: routeConfig?.routes || [],
     denied_model_routes: routeConfig?.denied_routes || [],
     routing_rules: [],

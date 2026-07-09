@@ -357,6 +357,15 @@ function actorHasConfiguredAllowedRoute(policy, actor) {
   });
 }
 
+function actorHasDispatchAllowedRoute(policy, actor) {
+  return policy.allowed_model_routes.some((entry) => {
+    if (entry.phases !== undefined && !entry.phases.includes("dispatch")) return false;
+    const hasActorScope = entry.executors !== undefined || entry.reviewers !== undefined;
+    if (!hasActorScope) return true;
+    return Boolean(entry.executors?.includes(actor));
+  });
+}
+
 function doctorTool(policy, name) {
   const executable = findOnPath(name);
   const dispatchDecision = evaluateRelayRoute(policy, { phase: "dispatch", executor: name });
@@ -730,6 +739,22 @@ function commandGaps(positionals, jsonOut) {
         proposal: addRouteProposal({ phase: "dispatch", actor: tool.name, actorField: "executor", route }),
       });
     }
+    if (
+      tool.installed
+      && policyResult.policy.defaults.dispatch?.executor === tool.name
+      && tool.policy === "policy-disallowed"
+      && !actorHasDispatchAllowedRoute(policyResult.policy, tool.name)
+    ) {
+      const route = defaultRoutePatternForActor(tool.name);
+      pushGap(gaps, seen, {
+        type: "installed_cli_unrouted",
+        actor: tool.name,
+        path: tool.path,
+        phase: "dispatch",
+        actor_field: "executor",
+        proposal: addRouteProposal({ phase: "dispatch", actor: tool.name, actorField: "executor", route }),
+      });
+    }
     if (tool.model_probe?.status === "warning") {
       pushGap(gaps, seen, {
         type: "probe_failure",
@@ -835,6 +860,7 @@ function routesFromPolicy(policy, executorDefaults) {
     version: 2,
     strict: policy.deny_unknown_model_routes === true,
     defaults: cloneJson(policy.defaults || {}),
+    managed_cli: cloneJson(policy.managed_cli || []),
     executor_defaults: {
       ...(isPlainObject(policy.executor_defaults) ? cloneJson(policy.executor_defaults) : {}),
       ...executorDefaults,
@@ -845,6 +871,7 @@ function routesFromPolicy(policy, executorDefaults) {
   if (isPlainObject(policy.presets) && Object.keys(policy.presets).length) {
     routes.presets = cloneJson(policy.presets);
   }
+  if (!routes.managed_cli.length) delete routes.managed_cli;
   if (!Object.keys(routes.executor_defaults).length) delete routes.executor_defaults;
   validateRouteConfig(routes, "migrated routes config");
   return routes;
@@ -916,6 +943,7 @@ function foldLegacyRoutesIntoExisting(existingRoutes, legacyRoutes) {
   const folded = cloneJson(existingRoutes);
   if (!hasOwn(folded, "version")) folded.version = 2;
   if (!hasOwn(folded, "strict") && hasOwn(legacyRoutes, "strict")) folded.strict = legacyRoutes.strict;
+  if (!hasOwn(folded, "managed_cli") && hasOwn(legacyRoutes, "managed_cli")) folded.managed_cli = cloneJson(legacyRoutes.managed_cli);
 
   const defaults = mergeRouteDefaults(legacyRoutes.defaults, folded.defaults);
   if (Object.keys(defaults).length) folded.defaults = defaults;
@@ -941,17 +969,19 @@ function foldLegacyRoutesIntoExisting(existingRoutes, legacyRoutes) {
   return folded;
 }
 
-function foldProjectRoutesV1(routes, projectRoutes) {
-  if (projectRoutes.status === "absent" || projectRoutes.status === "ignored_v2") return routes;
+function projectRoutesV1ToV2(projectRoutes) {
+  if (projectRoutes.status === "absent" || projectRoutes.status === "ignored_v2") return null;
   if (!projectRoutes.ok) {
-    if (!projectRoutes.path) return routes;
+    if (!projectRoutes.path) return null;
     throw new Error(projectRoutes.error || "failed to load project routes v1");
   }
-  if (projectRoutes.routes?.version !== 1) return routes;
-  const folded = cloneJson(routes);
-  folded.defaults = mergeRouteDefaults(folded.defaults, projectRoutes.routes.defaults);
-  validateRouteConfig(folded, "migrated routes config");
-  return folded;
+  if (projectRoutes.routes?.version !== 1) return null;
+  const routes = {
+    version: 2,
+    defaults: cloneJson(projectRoutes.routes.defaults || {}),
+  };
+  validateRouteConfig(routes, "migrated project routes config", { project: true });
+  return routes;
 }
 
 function writeMigratedMarker(filePath, routesPath) {
@@ -976,7 +1006,6 @@ function commandMigrate(positionals, jsonOut) {
   const confirmed = hasCliFlag("--yes");
   const routesExisted = fs.existsSync(routesPath);
   const policyResult = loadRelayPolicy({
-    repoRoot,
     relayHome,
     routesPath: path.join(relayHome, "__relay_config_migrate_absent_routes__.json"),
   });
@@ -990,11 +1019,13 @@ function commandMigrate(positionals, jsonOut) {
   const executorDefaults = executorDefaultsFromLegacyExecutors(executorsPath);
   const projectRoutes = loadProjectRoutes({ repoRoot, relayHome });
   let routes;
+  let migratedProjectRoutes = null;
   try {
-    const legacyRoutes = foldProjectRoutesV1(routesFromPolicy(policyResult.policy, executorDefaults), projectRoutes);
+    const legacyRoutes = routesFromPolicy(policyResult.policy, executorDefaults);
     routes = routesExisted
       ? foldLegacyRoutesIntoExisting(validateRouteConfig(readRoutesFile(routesPath), routesPath), legacyRoutes)
       : legacyRoutes;
+    migratedProjectRoutes = projectRoutesV1ToV2(projectRoutes);
   } catch (error) {
     const output = { ok: false, status: "project_routes_error", errors: [{ message: error.message }], project_routes: projectRoutes };
     if (jsonOut) printJson(output);
@@ -1010,12 +1041,16 @@ function commandMigrate(positionals, jsonOut) {
     wrote: false,
     path: routesPath,
     routes,
-    project_routes: projectRoutes,
+    project_routes: {
+      ...projectRoutes,
+      migrated_routes: migratedProjectRoutes,
+    },
     legacy: legacyPaths,
     summary: [
       `${(routes.routes || []).length} allowed route(s)`,
       `${(routes.denied_routes || []).length} denied route(s)`,
       `${Object.keys(routes.executor_defaults || {}).length} executor default(s)`,
+      `${migratedProjectRoutes ? 1 : 0} project routes file(s) converted`,
       `strict=${routes.strict === true}`,
     ],
   };
@@ -1032,9 +1067,12 @@ function commandMigrate(positionals, jsonOut) {
   }
 
   writeRoutes(routesPath, routes);
+  if (migratedProjectRoutes && projectRoutes.path) {
+    writeRoutes(projectRoutes.path, migratedProjectRoutes);
+  }
   const markers = [];
   for (const legacy of legacyPaths) {
-    const marker = writeMigratedMarker(legacy.path, routesPath);
+    const marker = writeMigratedMarker(legacy.path, legacy.kind === "project_routes_v1" ? legacy.path : routesPath);
     if (marker) markers.push(marker);
   }
   output.dry_run = false;

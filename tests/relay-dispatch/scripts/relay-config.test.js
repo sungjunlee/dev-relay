@@ -1313,21 +1313,29 @@ test("migrate requires confirmation and preserves legacy effective route resolut
   assert.equal(output.routes.strict, true);
   assert.deepEqual(output.routes.defaults.dispatch, {
     executor: "opencode",
-    model: "openai/gpt-5.3-codex-spark",
   });
   assert.deepEqual(output.routes.defaults.advisory_review, {
     reviewer: "pi",
-    model: "example/pi-model-fast",
     profile: "blindspot",
+  });
+  assert.deepEqual(JSON.parse(fs.readFileSync(projectRoutesPath, "utf-8")), {
+    version: 2,
+    defaults: {
+      dispatch: { executor: "opencode", model: "openai/gpt-5.3-codex-spark" },
+      advisory_review: { reviewer: "pi", model: "example/pi-model-fast", profile: "blindspot" },
+    },
   });
   assert.deepEqual(readRoutes(relayHome).executor_defaults, {
     opencode: { model: "openai/gpt-5.3-codex-spark" },
   });
   assert.deepEqual(resolveMatrix(), before);
-  const retainedProjectRoutes = `${projectRoutesPath}.retained`;
-  fs.renameSync(projectRoutesPath, retainedProjectRoutes);
+  const retainedPolicy = path.join(relayHome, "policy.json.retained");
+  const retainedExecutors = path.join(relayHome, "executors.json.retained");
+  fs.renameSync(path.join(relayHome, "policy.json"), retainedPolicy);
+  fs.renameSync(path.join(relayHome, "executors.json"), retainedExecutors);
   assert.deepEqual(resolveMatrix(), before);
-  fs.renameSync(retainedProjectRoutes, projectRoutesPath);
+  fs.renameSync(retainedPolicy, path.join(relayHome, "policy.json"));
+  fs.renameSync(retainedExecutors, path.join(relayHome, "executors.json"));
   assert.equal(fs.existsSync(path.join(relayHome, "policy.json")), true);
   assert.equal(fs.existsSync(path.join(relayHome, "executors.json")), true);
   assert.equal(fs.existsSync(projectRoutesPath), true);
