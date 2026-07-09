@@ -28,6 +28,7 @@ const {
   acquireIssueLock,
   createFleetManifest,
   deriveFleetSummary,
+  normalizeFleetChildLastError,
   readFleetManifest,
   releaseIssueLock,
   updateFleetManifest,
@@ -72,6 +73,16 @@ class FleetInputError extends Error {
     super(message);
     this.name = "FleetInputError";
   }
+}
+
+function dispatchFailureLastError({ error = null, stderr = null, fallback = null } = {}) {
+  const directError = normalizeFleetChildLastError(error);
+  if (directError) return directError;
+  // Child-process stderr can be verbose; keep the tail where the concrete
+  // failure usually appears while still enforcing the fleet child field bound.
+  const stderrTail = normalizeFleetChildLastError(stderr, { fromTail: true });
+  if (stderrTail) return stderrTail;
+  return normalizeFleetChildLastError(fallback);
 }
 
 function usage() {
@@ -660,6 +671,7 @@ function reconcileFleet(repoRoot, fleetId, leaves) {
       leaf_ref: leafRef,
       run_id: record.data.run_id,
       dispatch_status: dispatchStatus,
+      last_error: null,
     });
   }
 
@@ -675,6 +687,9 @@ function reconcileFleet(repoRoot, fleetId, leaves) {
       leaf_ref: child.leaf_ref,
       run_id: null,
       dispatch_status: DISPATCH_STATUS.DISPATCH_FAILED_PRE_MANIFEST,
+      last_error: dispatchFailureLastError({
+        fallback: "dispatch interrupted before creating a run manifest",
+      }),
     });
   }
 
@@ -932,6 +947,7 @@ async function pollResumeDispatchForChild({ repoRoot, fleetId, leaf, child, opti
     leaf_ref: child.leaf_ref,
     run_id: child.run_id,
     dispatch_status: dispatchStatusForDetachedProgress(progress),
+    last_error: null,
   });
   return {
     leaf_ref: child.leaf_ref,
@@ -1370,6 +1386,7 @@ async function spawnDispatchForLeaf({ repoRoot, fleetId, leaf, options, activeCh
         leaf_ref: leaf.leaf_ref,
         run_id: null,
         dispatch_status: DISPATCH_STATUS.DISPATCH_FAILED_PRE_MANIFEST,
+        last_error: dispatchFailureLastError({ error: error.message }),
       });
       return { leaf_ref: leaf.leaf_ref, status: "dispatch_failed_pre_manifest", error: error.message };
     }
@@ -1378,6 +1395,7 @@ async function spawnDispatchForLeaf({ repoRoot, fleetId, leaf, options, activeCh
       leaf_ref: leaf.leaf_ref,
       run_id: null,
       dispatch_status: DISPATCH_STATUS.DISPATCHING,
+      last_error: null,
     });
   }
 
@@ -1431,12 +1449,20 @@ async function spawnDispatchForLeaf({ repoRoot, fleetId, leaf, options, activeCh
 
   if (!runId || launch.code !== 0) {
     const keepRuntime = Boolean(runId && payload?.supervisorPid);
+    const lastError = dispatchFailureLastError({
+      error: payload?.error || launch.error,
+      stderr: launch.stderr,
+      fallback: launch.signal
+        ? `dispatch process terminated by ${launch.signal}`
+        : `dispatch process exited with code ${launch.code}`,
+    });
     setFleetChild(repoRoot, fleetId, {
       leaf_ref: leaf.leaf_ref,
       run_id: runId,
       dispatch_status: runId
         ? (keepRuntime ? DISPATCH_STATUS.DISPATCHING : DISPATCH_STATUS.PENDING)
         : DISPATCH_STATUS.DISPATCH_FAILED_PRE_MANIFEST,
+      last_error: lastError,
     });
     if (keepRuntime) {
       upsertRuntimeProcess(repoRoot, fleetId, leaf.leaf_ref, { pid: payload.supervisorPid }, {
@@ -1462,6 +1488,7 @@ async function spawnDispatchForLeaf({ repoRoot, fleetId, leaf, options, activeCh
     leaf_ref: leaf.leaf_ref,
     run_id: runId,
     dispatch_status: DISPATCH_STATUS.DISPATCHING,
+    last_error: null,
   });
   if (payload?.supervisorPid) {
     upsertRuntimeProcess(repoRoot, fleetId, leaf.leaf_ref, { pid: payload.supervisorPid }, {
@@ -1487,6 +1514,7 @@ async function spawnDispatchForLeaf({ repoRoot, fleetId, leaf, options, activeCh
     leaf_ref: leaf.leaf_ref,
     run_id: runId,
     dispatch_status: dispatchStatusForDetachedProgress(progress),
+    last_error: null,
   });
 
   return {
@@ -1633,12 +1661,14 @@ function formatStatusText(summary, operatorAttention) {
   ];
   if (summary.children.length) {
     for (const child of summary.children) {
-      lines.push([
+      const childLine = [
         `  - ${child.leaf_ref}`,
         `run_id=${child.run_id || "null"}`,
         `dispatch_status=${child.dispatch_status}`,
         `run_state=${child.run_state || "unknown"}`,
-      ].join(" | "));
+      ];
+      if (child.last_error) childLine.push(`last_error=${child.last_error}`);
+      lines.push(childLine.join(" | "));
     }
   } else {
     lines.push("  (none)");
@@ -1650,6 +1680,17 @@ function formatStatusText(summary, operatorAttention) {
     }
   }
   return `${lines.join("\n")}\n`;
+}
+
+function formatPreManifestRetryLine(summary, fleetId) {
+  const failedLeaves = (summary?.children || [])
+    .filter((child) => child.dispatch_status === DISPATCH_STATUS.DISPATCH_FAILED_PRE_MANIFEST)
+    .map((child) => child.leaf_ref);
+  if (!failedLeaves.length) return null;
+  return [
+    `Pre-manifest dispatch failed for leaf(s): ${failedLeaves.join(", ")}.`,
+    `To retry, re-run the same command with --fleet-id ${fleetId}; relay-fleet will re-dispatch those children.`,
+  ].join(" ");
 }
 
 async function statusFleet({ repoRoot, fleetId }) {
@@ -2174,6 +2215,8 @@ async function main(argv = process.argv.slice(2)) {
         ? `fleet=${result.fleet_id} children=${result.summary.total_children}`
         : `fleet=${result.fleet_id} children=${result.children.length}`;
       console.log(result.ok ? `relay-fleet complete: ${summary}` : `relay-fleet needs attention: ${summary}`);
+      const retryLine = result.summary ? formatPreManifestRetryLine(result.summary, result.fleet_id) : null;
+      if (!result.ok && retryLine) console.log(retryLine);
     }
     return result.ok ? 0 : 1;
   } catch (error) {

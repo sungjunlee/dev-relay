@@ -44,7 +44,8 @@ const DISPATCH_STATUS = Object.freeze({
 
 const DEFAULT_ISSUE_LOCK_STALE_MS = 6 * 60 * 60 * 1000;
 const FLEET_TOP_LEVEL_KEYS = Object.freeze(["fleet_id", "fleet_state", "children", "timestamps"]);
-const CHILD_KEYS = Object.freeze(["leaf_ref", "run_id", "dispatch_status"]);
+const FLEET_CHILD_LAST_ERROR_MAX_CHARS = 400;
+const CHILD_KEYS = Object.freeze(["leaf_ref", "run_id", "dispatch_status", "last_error"]);
 
 class FleetIssueLockError extends Error {
   constructor(message, details = {}) {
@@ -70,6 +71,16 @@ function validateDispatchStatus(status) {
   if (!Object.values(DISPATCH_STATUS).includes(status)) {
     throw new Error(`Unknown relay fleet dispatch_status: ${status}`);
   }
+}
+
+function normalizeFleetChildLastError(value, { fromTail = false } = {}) {
+  if (value === null || value === undefined) return null;
+  const singleLine = String(value).replace(/\s+/g, " ").trim();
+  if (!singleLine) return null;
+  if (singleLine.length <= FLEET_CHILD_LAST_ERROR_MAX_CHARS) return singleLine;
+  return fromTail
+    ? singleLine.slice(-FLEET_CHILD_LAST_ERROR_MAX_CHARS)
+    : singleLine.slice(0, FLEET_CHILD_LAST_ERROR_MAX_CHARS);
 }
 
 function assertExactKeys(object, allowedKeys, label) {
@@ -104,11 +115,14 @@ function normalizeFleetChild(child) {
     throw new Error("fleet child dispatch_failed_pre_manifest must have run_id: null");
   }
 
-  return {
+  const normalizedChild = {
     leaf_ref: leafRef,
     run_id: runId,
     dispatch_status: dispatchStatus,
   };
+  const lastError = normalizeFleetChildLastError(child.last_error);
+  if (lastError) normalizedChild.last_error = lastError;
+  return normalizedChild;
 }
 
 function normalizeTimestamps(timestamps) {
@@ -290,6 +304,7 @@ function deriveFleetSummary(repoRoot, fleet) {
       review_round: null,
       error: null,
     };
+    if (child.last_error) summaryChild.last_error = child.last_error;
 
     if (!child.run_id) {
       summaryChild.run_state = "no_run_manifest";
@@ -473,6 +488,7 @@ module.exports = {
   ALLOWED_TRANSITIONS,
   DEFAULT_ISSUE_LOCK_STALE_MS,
   DISPATCH_STATUS,
+  FLEET_CHILD_LAST_ERROR_MAX_CHARS,
   FleetIssueLockError,
   STATES,
   acquireIssueLock,
@@ -482,6 +498,7 @@ module.exports = {
   deriveFleetSummary,
   getFleetsDir,
   listFleetManifests,
+  normalizeFleetChildLastError,
   normalizeFleetChild,
   normalizeFleetManifest,
   releaseIssueLock,
