@@ -1386,10 +1386,9 @@ test("migrate requires confirmation and preserves global legacy effective route 
   assert.deepEqual(output.routes.defaults.dispatch, {
     executor: "opencode",
   });
-  assert.deepEqual(output.routes.defaults.advisory_review, {
-    reviewer: "pi",
-    profile: "blindspot",
-  });
+  assert.deepEqual(output.routes.defaults.advisory_review, [
+    { gating: false, profile: "blindspot", reviewer: "pi", trigger: "every_round" },
+  ]);
   assert.deepEqual(readRoutes(relayHome).executor_defaults, {
     opencode: { model: "openai/gpt-5.3-codex-spark" },
   });
