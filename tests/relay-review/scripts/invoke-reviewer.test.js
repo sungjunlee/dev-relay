@@ -1596,7 +1596,7 @@ fs.writeFileSync(${JSON.stringify(logPath)}, "invoked\\n", "utf-8");
       encoding: "utf-8",
       stdio: "pipe",
       timeout: 5000,
-      env: { ...process.env, RELAY_CLINE_BIN: fakeCline, RELAY_CLINE_REVIEW_TIMEOUT: "60s" },
+      env: { ...process.env, RELAY_CLINE_BIN: fakeCline, RELAY_CLINE_REVIEW_TIMEOUT: "90s" },
     });
     assert.fail("expected invoke-reviewer-cline.js to fail");
   } catch (caught) {
@@ -1607,7 +1607,7 @@ fs.writeFileSync(${JSON.stringify(logPath)}, "invoked\\n", "utf-8");
   assert.equal(fs.existsSync(logPath), false);
   const stderr = String(error.stderr || "");
   assert.match(stderr, /RELAY_CLINE_REVIEW_TIMEOUT/);
-  assert.match(stderr, /greater than 60s/);
+  assert.match(stderr, /at least 120s/);
 });
 
 test("cursor adapter fails closed when auth probe reports not logged in", () => {
