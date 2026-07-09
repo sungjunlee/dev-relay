@@ -91,6 +91,7 @@ const { normalizeReviewAssurance } = require("./manifest/review-assurance");
 const {
   createRunId,
   ensureRunLayout,
+  getCanonicalRepoRoot,
   getManifestPath,
   getRoutePlanPath,
   getRunDir,
@@ -231,7 +232,6 @@ if (UNKNOWN_FLAGS.length) {
 // Positional arg: first arg that isn't a flag and isn't consumed as a flag's value.
 const repoPathRaw = getPositionals(args, "dispatch")[0];
 const REPO_PATH = path.resolve(repoPathRaw || ".");
-const PROJECT_NAME = path.basename(REPO_PATH);
 const BRANCH = readArg(args, ["--branch", "-b"], undefined, CLI_ARG_OPTIONS);
 const RUN_ID = readArg(args, "--run-id", undefined, CLI_ARG_OPTIONS);
 const MANIFEST_INPUT = readArg(args, "--manifest", undefined, CLI_ARG_OPTIONS);
@@ -487,6 +487,14 @@ function resolveDispatchRuntime(repoRoot) {
     routeResolution,
     timeout,
   };
+}
+
+function resolveRecordedRepoRoot(repoPath) {
+  const resolvedRepoPath = path.resolve(repoPath);
+  const canonicalRepoRoot = getCanonicalRepoRoot(resolvedRepoPath);
+  return path.basename(canonicalRepoRoot) === path.basename(resolvedRepoPath)
+    ? resolvedRepoPath
+    : canonicalRepoRoot;
 }
 
 function classifyNetworkFailure(text) {
@@ -1513,9 +1521,8 @@ async function main() {
   const RELAY_HOME = process.env.RELAY_HOME || path.join(os.homedir(), ".relay");
   const wtBase = process.env.RELAY_WORKTREE_BASE || path.join(RELAY_HOME, "worktrees");
   const wtId = crypto.randomBytes(4).toString("hex");
-  let repoRoot = REPO_PATH;
-  let projectName = PROJECT_NAME;
-  let wtPath = path.join(wtBase, wtId, PROJECT_NAME);
+  let repoRoot = RESUME_MODE ? REPO_PATH : resolveRecordedRepoRoot(REPO_PATH);
+  let wtPath = null;
   let resultFile = null;
   let stdoutLog = null;
   let stderrLog = null;
@@ -1647,7 +1654,6 @@ async function main() {
       caller: "dispatch resume",
     });
     repoRoot = validatedPaths.repoRoot;
-    projectName = path.basename(repoRoot);
     branch = manifest.git?.working_branch || branch;
     runId = manifest.run_id || runId;
     wtPath = validatedPaths.worktree;
@@ -1780,10 +1786,11 @@ async function main() {
     }
     manifestPath = getManifestPath(repoRoot, runId);
     const runDir = getRunDir(repoRoot, runId);
+    wtPath = path.join(wtBase, wtId, path.basename(repoRoot));
     if (fs.existsSync(manifestPath) || (fs.existsSync(runDir) && !isPlannerAnchorOnlyRunDir(runDir))) {
       failRunDirCollision(runId, manifestPath);
     }
-    baseBranch = resolveBaseBranchForNewDispatch(repoRoot, { validateRemote: !DRY_RUN });
+    baseBranch = resolveBaseBranchForNewDispatch(REPO_PATH, { validateRemote: !DRY_RUN });
     if (fs.existsSync(wtPath)) {
       console.error(`Error: worktree path already exists: ${wtPath}`);
       process.exit(1);

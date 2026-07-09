@@ -15,6 +15,7 @@ const {
   updateManifestState,
   writeManifest,
 } = require("../../../skills/relay-dispatch/scripts/relay-manifest");
+const { validateManifestPaths } = require("../../../skills/relay-dispatch/scripts/manifest/paths");
 const { readRunEvents } = require("../../../skills/relay-dispatch/scripts/relay-events");
 
 const SCRIPT = path.join(__dirname, "..", "..", "..", "skills", "relay-dispatch", "scripts", "recover-state.js");
@@ -98,6 +99,33 @@ function addCommitOnBranch(worktreePath, branch, filename = "fix.txt") {
   return newHead;
 }
 
+function createLinkedCheckout(repoRoot, prefix = "krill-recover-linked-") {
+  const linkedPath = path.join(
+    os.tmpdir(),
+    `${prefix}${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`
+  );
+  execFileSync("git", ["worktree", "add", "--detach", linkedPath, "HEAD"], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+  });
+  assert.notEqual(path.basename(linkedPath), path.basename(repoRoot));
+  return linkedPath;
+}
+
+function restampManifestWorktree({ repoRoot, manifestPath, worktreePath }) {
+  const record = readManifest(manifestPath);
+  const updated = {
+    ...record.data,
+    paths: {
+      ...(record.data.paths || {}),
+      worktree: worktreePath,
+    },
+  };
+  writeManifest(manifestPath, updated, record.body);
+  return updated;
+}
+
 function writeGhPrBodyScript(body) {
   const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-gh-"));
   const ghPath = path.join(binDir, "gh");
@@ -176,6 +204,120 @@ test("changes_requested -> review_pending succeeds after a fresh commit", () => 
   assert.match(events, new RegExp(`"state_to":"${STATES.REVIEW_PENDING}"`));
   assert.match(events, new RegExp(`"head_sha":"${newHead}"`));
   assert.match(events, new RegExp(`"last_reviewed_sha":"${initialHead}"`));
+});
+
+test("recover-state --manifest from linked cwd preserves equivalent recorded repo_root and worktree bytes (#857)", () => {
+  const { repoRoot, manifestPath, runId, worktreePath, branch } = setupRepo({ state: STATES.ESCALATED });
+  const linkedPath = createLinkedCheckout(repoRoot);
+  execFileSync("git", ["worktree", "remove", "--force", worktreePath], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+  });
+  const relayNamedWorktree = path.join(
+    process.env.RELAY_HOME,
+    "worktrees",
+    "issue-857",
+    path.basename(linkedPath)
+  );
+  fs.mkdirSync(path.dirname(relayNamedWorktree), { recursive: true });
+  execFileSync("git", ["worktree", "add", relayNamedWorktree, branch], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+  });
+  restampManifestWorktree({ repoRoot, manifestPath, worktreePath: relayNamedWorktree });
+  const before = readManifest(manifestPath).data;
+  const recordedRepoRoot = before.paths.repo_root;
+  const recordedWorktree = before.paths.worktree;
+
+  const validated = validateManifestPaths(before.paths, {
+    expectedRepoRoot: linkedPath,
+    manifestPath,
+    runId,
+    caller: "review-runner-style #857 regression",
+  });
+  assert.equal(validated.repoRoot, path.resolve(linkedPath));
+  assert.equal(path.basename(validated.worktree), path.basename(linkedPath));
+
+  const stdout = execFileSync("node", [
+    SCRIPT,
+    "--manifest", manifestPath,
+    "--to", STATES.REVIEW_PENDING,
+    "--reason", "operator recovered from linked checkout without restamping paths",
+    "--force",
+    "--json",
+  ], {
+    cwd: linkedPath,
+    encoding: "utf-8",
+    env: { ...process.env, RELAY_HOME: process.env.RELAY_HOME },
+  });
+
+  const result = JSON.parse(stdout);
+  assert.equal(result.previousState, STATES.ESCALATED);
+  assert.equal(result.state, STATES.REVIEW_PENDING);
+
+  const afterText = fs.readFileSync(manifestPath, "utf-8");
+  assert.ok(afterText.includes(`repo_root: '${recordedRepoRoot}'`));
+  assert.ok(afterText.includes(`worktree: '${recordedWorktree}'`));
+  const after = readManifest(manifestPath).data;
+  assert.equal(after.paths.repo_root, recordedRepoRoot);
+  assert.equal(after.paths.worktree, recordedWorktree);
+
+  const event = readRunEvents(recordedRepoRoot, runId).find((entry) => entry.event === "state_recovery");
+  assert.equal(event?.state_from, STATES.ESCALATED);
+  assert.equal(event?.state_to, STATES.REVIEW_PENDING);
+  assert.equal(event?.reason, "operator recovered from linked checkout without restamping paths");
+});
+
+test("recover-state with identical canonical root leaves recorded paths unchanged (#857)", () => {
+  const { repoRoot, manifestPath, runId } = setupRepo({ state: STATES.ESCALATED });
+  const before = readManifest(manifestPath).data;
+
+  const stdout = execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--run-id", runId,
+    "--to", STATES.REVIEW_PENDING,
+    "--reason", "canonical root recovery should not restamp paths",
+    "--force",
+    "--json",
+  ], { encoding: "utf-8" });
+
+  const result = JSON.parse(stdout);
+  assert.equal(result.state, STATES.REVIEW_PENDING);
+  const after = readManifest(manifestPath).data;
+  assert.equal(after.paths.repo_root, before.paths.repo_root);
+  assert.equal(after.paths.worktree, before.paths.worktree);
+});
+
+test("recover-state rejects non-equivalent repo roots without writing manifest paths (#857)", () => {
+  const { repoRoot, manifestPath, runId } = setupRepo({ state: STATES.ESCALATED });
+  const before = readManifest(manifestPath).data;
+  const unrelatedRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-recover-unrelated-"));
+  execFileSync("git", ["init", "-b", "main"], { cwd: unrelatedRoot, encoding: "utf-8", stdio: "pipe" });
+  execFileSync("git", ["config", "user.name", "Relay Recover Unrelated"], { cwd: unrelatedRoot, encoding: "utf-8", stdio: "pipe" });
+  execFileSync("git", ["config", "user.email", "relay-recover-unrelated@example.com"], { cwd: unrelatedRoot, encoding: "utf-8", stdio: "pipe" });
+  fs.writeFileSync(path.join(unrelatedRoot, "README.md"), "unrelated\n", "utf-8");
+  execFileSync("git", ["add", "README.md"], { cwd: unrelatedRoot, encoding: "utf-8", stdio: "pipe" });
+  execFileSync("git", ["commit", "-m", "init"], { cwd: unrelatedRoot, encoding: "utf-8", stdio: "pipe" });
+
+  const result = spawnSync("node", [
+    SCRIPT,
+    "--repo", unrelatedRoot,
+    "--manifest", manifestPath,
+    "--to", STATES.REVIEW_PENDING,
+    "--reason", "must reject unrelated repo root",
+    "--force",
+    "--json",
+  ], { encoding: "utf-8" });
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /manifest paths\.repo_root/);
+  const after = readManifest(manifestPath).data;
+  assert.equal(after.state, before.state);
+  assert.equal(after.paths.repo_root, before.paths.repo_root);
+  assert.equal(after.paths.worktree, before.paths.worktree);
 });
 
 test("ready_to_merge -> review_pending succeeds when live PR HEAD drift is objective evidence", () => {

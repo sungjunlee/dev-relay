@@ -4111,6 +4111,49 @@ test("dispatch remaps a local-only linked-worktree checkout branch to origin def
   assert.equal(ghCreateCall[baseFlagIndex + 1], "main");
 });
 
+test("dispatch names new relay worktrees after recorded canonical repo root from linked checkout (#857)", () => {
+  const { repoRoot, relayHome, remoteRoot } = setupRepo();
+  configureOriginHead(repoRoot, remoteRoot, "main");
+  const linkedPath = path.join(os.tmpdir(), `krill-857-linked-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+  execFileSync("git", ["worktree", "add", "-b", "worktree-857-source", linkedPath, "HEAD"], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+  });
+  assert.notEqual(path.basename(linkedPath), path.basename(repoRoot));
+  const worktreeBase = fs.mkdtempSync(path.join(os.tmpdir(), "relay-worktree-base-857-"));
+  const { env } = createPushPrTestEnv({
+    relayHome,
+    ghState: {
+      prCreateUrl: "https://github.com/acme/dev-relay/pull/857",
+    },
+  });
+
+  const result = spawnSync(process.execPath, [SCRIPT, linkedPath, ...withRequiredRubric([
+    "-b", "issue-857-linked-name",
+    "--prompt", "exercise linked checkout relay worktree naming",
+    "--json",
+  ])], {
+    cwd: linkedPath,
+    encoding: "utf-8",
+    env: {
+      ...env,
+      RELAY_WORKTREE_BASE: worktreeBase,
+    },
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  const parsed = JSON.parse(result.stdout);
+  const manifest = readManifest(parsed.manifestPath).data;
+  const expectedRepoRoot = fs.realpathSync(repoRoot);
+  assert.equal(manifest.paths.repo_root, expectedRepoRoot);
+  assert.equal(path.basename(manifest.paths.worktree), path.basename(manifest.paths.repo_root));
+  assert.equal(path.basename(manifest.paths.worktree), path.basename(expectedRepoRoot));
+  assert.notEqual(path.basename(manifest.paths.worktree), path.basename(linkedPath));
+  assert.equal(path.dirname(path.dirname(manifest.paths.worktree)), worktreeBase);
+  assert.equal(parsed.worktree, manifest.paths.worktree);
+});
+
 test("dispatch keeps a checkout branch that exists on origin as base_branch (#809)", () => {
   const { repoRoot, relayHome, remoteRoot } = setupRepo();
   configureOriginHead(repoRoot, remoteRoot, "main");
