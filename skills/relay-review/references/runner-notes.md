@@ -50,6 +50,18 @@ When applying a verdict, the runner:
 
 Reviewer adapter capabilities are shared with dispatch adapter metadata. See `../../relay-dispatch/references/agent-adapter-platform.md` for the supported adapter matrix, including primary vs advisory review support, read-only enforcement, structured-output shape, and the new-adapter checklist. Antigravity review support is for the `agy` CLI only, not GUI/IDE/Desktop flows.
 
+## Advisory Lane Semantics
+
+Advisory review is configured as a list of lanes. Each lane has `reviewer`, optional `model`, `profile`, `trigger`, and `gating`. Profile defaults are part of lane normalization: `blindspot` defaults to `trigger=every_round,gating=false`; `adversarial` defaults to `trigger=on_pass,gating=true`; explicit `trigger` or `gating` values override the profile default. Route planning and review-runner normalization must agree on these defaults.
+
+`every_round` lanes start before the primary reviewer completes and settle against one round-start deadline. `on_pass` lanes start only after the primary verdict plus all `every_round` gates produce a pass-equivalent outcome; they share a fresh settlement deadline for that trigger group. The runner folds advisory outcomes after each trigger group. Non-gating standard lanes record artifacts, warnings, and metrics only. Gating lanes can demote an applied pass when a successful advisory result reports `required_findings`; hardened assurance treats advisory failures, missing advisory evidence, and required findings as gates.
+
+Lane-driven demotion is capped at two demotions per run. A third lane-driven demotion escalates for owner decision instead of feeding another automatic fix loop. When a gating lane demotes because of required findings, the redispatch prompt includes that lane's required findings as actionable fix items. The `advisory_review` event already carries lane identity (`reviewer`, `model`, `profile`, `trigger`, `gating`), and `reliability-report --by-lane` derives per-lane counts from those events plus `review_apply` demotion signals.
+
+Legacy partial advisory overlays such as `{ "model": "..." }` compose onto exactly one inherited lane. They fail closed against a multi-lane inherited list; operators must spell out the full lane list instead of relying on ambiguous merge behavior.
+
+Lane composition is operator/orchestrator judgment, not script policy. Low-risk tasks usually need no lane or one blindspot lane. Security, concurrency, migration, or invariant-heavy tasks can add an adversarial gating lane. Broad changes can use multiple reviewers/models, but scripts do not auto-select lanes based on task risk.
+
 ## External Review Triggers
 
 Delayed-publication runs should spend external review quota only after the internal relay review has converged:

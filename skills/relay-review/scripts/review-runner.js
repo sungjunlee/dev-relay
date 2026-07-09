@@ -295,7 +295,7 @@ async function run() {
       : path.join(runDir, `review-round-${round}-redispatch.md`);
     const redispatchPrompt = rubricGateFailure
       ? buildRubricGateRedispatchPrompt(rubricGateFailure, doneCriteria, doneCriteriaSource, convergenceSummary)
-      : buildRedispatchPrompt(verdict, doneCriteria, runDir, round, churnGrowth, doneCriteriaSource, reviewedHeadSha, convergenceSummary);
+      : buildRedispatchPrompt(verdict, doneCriteria, runDir, round, churnGrowth, doneCriteriaSource, reviewedHeadSha, convergenceSummary, { advisoryResults, assuranceMetadata, hardenedAssurance });
     writeText(redispatchPath, `${redispatchPrompt}\n`);
   }
 

@@ -9,6 +9,22 @@ function formatRubricSummary(rubricLoad) {
   ].join("\n");
 }
 
+function advisoryProfileInstructions(profile) {
+  if (profile === "adversarial") {
+    return [
+      "Your job is to find ways this change fails in production while checking the same PR.",
+      "Think like an attacker and a chaos engineer: hunt edge cases, race conditions, security holes, resource leaks, and silent data corruption.",
+      "No compliments, findings only. Every finding must be file:line specific.",
+      "Classify gating-worthy findings into required_findings exactly as the schema defines. Do not issue an LGTM or merge verdict.",
+    ];
+  }
+  return [
+    "Your job is to find important blind spots the primary reviewer may miss while checking the same PR.",
+    "Prioritize areas that are easy to under-review during a logic-focused pass: missing tests, bypass paths, edge cases, integration boundaries, stale docs, and operational failure modes.",
+    "Separate high-confidence findings from speculative or duplicate observations. Do not issue an LGTM or merge verdict.",
+  ];
+}
+
 function buildAdvisoryPrompt({
   branch,
   diffText,
@@ -27,9 +43,7 @@ function buildAdvisoryPrompt({
     "Return only JSON. Do not wrap the response in markdown fences.",
     "Do not modify files, run fix commands, create commits, or write comments.",
     "",
-    "Your job is to find important blind spots the primary reviewer may miss while checking the same PR.",
-    "Prioritize areas that are easy to under-review during a logic-focused pass: missing tests, bypass paths, edge cases, integration boundaries, stale docs, and operational failure modes.",
-    "Separate high-confidence findings from speculative or duplicate observations. Do not issue an LGTM or merge verdict.",
+    ...advisoryProfileInstructions(profile),
     "",
     "## Required JSON Shape",
     "",

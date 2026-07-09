@@ -1,6 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { parseAdvisoryReview, validateAdvisoryProfile } = require("../../../skills/relay-review/scripts/advisory-review-schema");
+const { ADVISORY_PROFILES, parseAdvisoryReview, validateAdvisoryProfile } = require("../../../skills/relay-review/scripts/advisory-review-schema");
 
 function advisoryPayload(overrides = {}) {
   return {
@@ -26,6 +26,19 @@ test("advisory schema accepts normalized blindspot payloads", () => {
   assert.equal(parsed.profile, "blindspot");
   assert.equal(parsed.required_findings.length, 0);
   assert.equal(parsed.advisory_findings[0].category, "test-gap");
+});
+
+test("advisory schema exposes the supported profile list without changing finding shape", () => {
+  assert.deepEqual(ADVISORY_PROFILES, ["blindspot", "adversarial"]);
+  const parsed = parseAdvisoryReview(JSON.stringify(advisoryPayload({ profile: "adversarial" })), { profile: "adversarial" });
+  assert.deepEqual(Object.keys(parsed).sort(), [
+    "advisory_findings",
+    "duplicate_or_low_confidence",
+    "profile",
+    "required_findings",
+    "summary",
+  ]);
+  assert.equal(validateAdvisoryProfile("adversarial"), "adversarial");
 });
 
 test("advisory schema accepts a single json fenced payload with surrounding whitespace", () => {
