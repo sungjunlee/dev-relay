@@ -1238,7 +1238,87 @@ test("gaps --json reports observed route drift with verbatim proposals and no wr
   assert.equal(rerun.gaps.some((gap) => gap.type === "preset_broken" && gap.model === "openai/unregistered"), false);
 });
 
-test("migrate requires confirmation and preserves legacy effective route resolution", () => {
+test("gaps reports missing executor default for default actor covered only by unscoped route", () => {
+  const relayHome = tempDir("relay-config-unscoped-default-home-");
+  const repoRoot = tempDir("relay-config-unscoped-default-repo-");
+  const binDir = tempDir("relay-config-unscoped-default-bin-");
+  initGitRepo(repoRoot);
+  writeExecutable(path.join(binDir, "opencode"), "#!/bin/sh\nexit 0\n");
+  writeJson(path.join(relayHome, "routes.json"), {
+    version: 2,
+    strict: true,
+    defaults: {
+      dispatch: { executor: "opencode" },
+    },
+    routes: [
+      { route: "openai/*", phases: ["dispatch"] },
+    ],
+  });
+
+  const result = runConfig(["gaps", "--json"], {
+    relayHome,
+    cwd: repoRoot,
+    env: { PATH: `${binDir}${path.delimiter}/usr/bin:/bin` },
+  });
+
+  assert.equal(result.status, 0, result.combined);
+  const output = parseJson(result);
+  const gap = output.gaps.find((item) => (
+    item.type === "executor_missing_default_model"
+    && item.actor === "opencode"
+    && item.phase === "dispatch"
+    && item.route === "openai/*"
+  ));
+  assert.ok(gap, JSON.stringify(output.gaps, null, 2));
+  assert.deepEqual(gap.proposal, {
+    subcommand: "set-default",
+    args: ["set-default", "executor_defaults.opencode.model", "openai/fast", "--json"],
+  });
+});
+
+test("gaps suppresses historical unregistered usage when tuple is now denied", () => {
+  const relayHome = tempDir("relay-config-denied-usage-home-");
+  const repoRoot = tempDir("relay-config-denied-usage-repo-");
+  initGitRepo(repoRoot);
+  writeJson(path.join(relayHome, "routes.json"), {
+    version: 2,
+    strict: true,
+    denied_routes: [
+      { route: "example/pi-model-fast", phases: ["dispatch"], executors: ["pi"] },
+    ],
+  });
+
+  withRelayHome(relayHome, () => {
+    appendRunEvent(repoRoot, "issue-784-20260708010101000-a1b2c3d4", {
+      event: EVENTS.UNREGISTERED_ROUTE_USED,
+      reason: "unknown_allowed",
+      phase: "dispatch",
+      actor_field: "executor",
+      executor: "pi",
+      model: "example/pi-model-fast",
+      policy_decision: {
+        allowed: true,
+        reason: "unknown_allowed",
+        phase: "dispatch",
+        actor: "pi",
+        executor: "pi",
+        model: "example/pi-model-fast",
+      },
+    });
+  });
+
+  const result = runConfig(["gaps", "--json"], { relayHome, cwd: repoRoot });
+
+  assert.equal(result.status, 0, result.combined);
+  const output = parseJson(result);
+  assert.equal(output.gaps.some((gap) => (
+    gap.type === "unregistered_route_in_use"
+    && gap.actor === "pi"
+    && gap.model === "example/pi-model-fast"
+  )), false, JSON.stringify(output.gaps, null, 2));
+});
+
+test("migrate requires confirmation and preserves global legacy effective route resolution", () => {
   const relayHome = tempDir("relay-config-migrate-home-");
   const repoRoot = tempDir("relay-config-migrate-repo-");
   initGitRepo(repoRoot);
@@ -1264,14 +1344,6 @@ test("migrate requires confirmation and preserves legacy effective route resolut
   writeJson(path.join(relayHome, "executors.json"), {
     executors: {
       opencode: { default_model: "openai/gpt-5.3-codex-spark" },
-    },
-  });
-  const projectRoutesPath = getProjectRoutesPath(repoRoot, { relayHome });
-  writeJson(projectRoutesPath, {
-    version: 1,
-    defaults: {
-      dispatch: { executor: "opencode", model: "openai/gpt-5.3-codex-spark" },
-      advisory_review: { reviewer: "pi", model: "example/pi-model-fast", profile: "blindspot" },
     },
   });
 
@@ -1318,13 +1390,6 @@ test("migrate requires confirmation and preserves legacy effective route resolut
     reviewer: "pi",
     profile: "blindspot",
   });
-  assert.deepEqual(JSON.parse(fs.readFileSync(projectRoutesPath, "utf-8")), {
-    version: 2,
-    defaults: {
-      dispatch: { executor: "opencode", model: "openai/gpt-5.3-codex-spark" },
-      advisory_review: { reviewer: "pi", model: "example/pi-model-fast", profile: "blindspot" },
-    },
-  });
   assert.deepEqual(readRoutes(relayHome).executor_defaults, {
     opencode: { model: "openai/gpt-5.3-codex-spark" },
   });
@@ -1338,10 +1403,79 @@ test("migrate requires confirmation and preserves legacy effective route resolut
   fs.renameSync(retainedExecutors, path.join(relayHome, "executors.json"));
   assert.equal(fs.existsSync(path.join(relayHome, "policy.json")), true);
   assert.equal(fs.existsSync(path.join(relayHome, "executors.json")), true);
-  assert.equal(fs.existsSync(projectRoutesPath), true);
   assert.match(fs.readFileSync(path.join(relayHome, "policy.json.migrated"), "utf-8"), /migrated into routes\.json/);
   assert.match(fs.readFileSync(path.join(relayHome, "executors.json.migrated"), "utf-8"), /migrated into routes\.json/);
-  assert.match(fs.readFileSync(`${projectRoutesPath}.migrated`, "utf-8"), /migrated into routes\.json/);
+});
+
+test("migrate refuses repo-scoped legacy policy without markers or resolution changes", () => {
+  const relayHome = tempDir("relay-config-scoped-migrate-home-");
+  const repoRoot = tempDir("relay-config-scoped-migrate-repo-");
+  initGitRepo(repoRoot);
+  writeJson(path.join(relayHome, "policy.json"), {
+    ...buildDefaultRelayPolicy(),
+    profile: "global-legacy",
+    managed_cli: ["codex"],
+    allowed_model_routes: [
+      { route: "*", phases: ["dispatch"], executors: ["opencode"] },
+    ],
+    denied_model_routes: [],
+    deny_unknown_model_routes: true,
+  });
+  writeJson(path.join(repoRoot, ".relay", "policy.json"), {
+    ...buildDefaultRelayPolicy(),
+    profile: "repo-legacy",
+    managed_cli: ["codex"],
+    defaults: {
+      dispatch: { executor: "opencode" },
+      review: { reviewer: "codex" },
+      advisory_review: null,
+    },
+    allowed_model_routes: [
+      { route: "repo/*", phases: ["dispatch"], executors: ["opencode"] },
+    ],
+    denied_model_routes: [],
+    deny_unknown_model_routes: true,
+  });
+
+  const check = (model) => {
+    const result = runConfig([
+      "check",
+      "--phase",
+      "dispatch",
+      "--executor",
+      "opencode",
+      "--model",
+      model,
+      "--json",
+    ], { relayHome, cwd: repoRoot });
+    const parsed = JSON.parse(result.stdout);
+    return {
+      status: result.status,
+      ok: parsed.ok,
+      reason: parsed.decision.reason,
+      matchedRoute: parsed.decision.matchedRoute || null,
+    };
+  };
+  const before = {
+    repo: check("repo/model-fast"),
+    global: check("global/model-fast"),
+  };
+
+  const migrated = runConfig(["migrate", "--yes", "--json"], { relayHome, cwd: repoRoot });
+
+  assert.notEqual(migrated.status, 0, migrated.combined);
+  const output = JSON.parse(migrated.stdout);
+  assert.equal(output.status, "scoped_migration_deferred");
+  assert.equal(output.wrote, false);
+  assert.ok(output.not_migrated.some((legacy) => legacy.kind === "repo_policy"));
+  assert.match(output.summary.join("\n"), /scoped legacy file\(s\) not migrated/);
+  assert.equal(fs.existsSync(path.join(relayHome, "routes.json")), false);
+  assert.equal(fs.existsSync(path.join(relayHome, "policy.json.migrated")), false);
+  assert.equal(fs.existsSync(path.join(repoRoot, ".relay", "policy.json.migrated")), false);
+  assert.deepEqual({
+    repo: check("repo/model-fast"),
+    global: check("global/model-fast"),
+  }, before);
 });
 
 test("migrate folds shadowed legacy routes into existing routes config without changing covered tuples", () => {

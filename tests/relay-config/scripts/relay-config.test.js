@@ -324,16 +324,17 @@ test("preset subcommands pass through wrapper shorthand", () => {
   assert.equal(Object.prototype.hasOwnProperty.call(readRoutes(relayHome), "presets"), false);
 });
 
-test("migrate keeps project scoped legacy policy out of global routes and converts project v1 in place", () => {
+test("migrate punts scoped legacy without writing markers or changing effective resolution", () => {
   const relayHome = tempDir();
   const projectRoutesPath = parseJson(runConfig(["inspect", "--json"], { relayHome })).projectConfig.path.replace(/project\.json$/, "routes.json");
+  const projectPolicyPath = projectRoutesPath.replace(/routes\.json$/, "policy.json");
   writeJson(path.join(relayHome, "policy.json"), legacyPolicy({
     allowed_model_routes: [
       { route: "*", phases: ["dispatch"], executors: ["opencode"] },
       { route: "global/*", phases: ["dispatch"], executors: ["codex"] },
     ],
   }));
-  writeJson(projectRoutesPath.replace(/routes\.json$/, "policy.json"), legacyPolicy({
+  writeJson(projectPolicyPath, legacyPolicy({
     defaults: {
       dispatch: { executor: "opencode" },
       review: { reviewer: "codex" },
@@ -350,18 +351,26 @@ test("migrate keeps project scoped legacy policy out of global routes and conver
     },
   });
 
+  const before = runConfig(["check", "dispatch", "opencode", "project/model", "--json"], { relayHome });
   const result = runConfig(["migrate", "--yes", "--json"], { relayHome });
 
-  assert.equal(result.status, 0, result.combined);
-  const globalRoutes = readRoutes(relayHome);
-  assert.equal(globalRoutes.defaults.dispatch.executor, "codex");
-  assert.equal(globalRoutes.routes.some((route) => route.route === "project/*"), false);
+  assert.notEqual(result.status, 0, result.combined);
+  const output = JSON.parse(result.stdout);
+  assert.equal(output.status, "scoped_migration_deferred");
+  assert.ok(output.not_migrated.some((legacy) => legacy.kind === "project_policy"));
+  assert.ok(output.not_migrated.some((legacy) => legacy.kind === "project_routes_v1"));
+  assert.equal(fs.existsSync(path.join(relayHome, "routes.json")), false);
+  assert.equal(fs.existsSync(`${projectPolicyPath}.migrated`), false);
+  assert.equal(fs.existsSync(`${projectRoutesPath}.migrated`), false);
   assert.deepEqual(JSON.parse(fs.readFileSync(projectRoutesPath, "utf-8")), {
-    version: 2,
+    version: 1,
     defaults: {
       dispatch: { executor: "opencode", model: "project/model" },
     },
   });
+  const after = runConfig(["check", "dispatch", "opencode", "project/model", "--json"], { relayHome });
+  assert.equal(after.status, before.status);
+  assert.deepEqual(JSON.parse(after.stdout).decision, JSON.parse(before.stdout).decision);
 });
 
 test("migrate preserves narrowed managed_cli so model-less claude stays denied", () => {

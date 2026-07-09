@@ -463,7 +463,12 @@ function routeActorEntries(policy, listName = "allowed_model_routes") {
     const phases = route.phases || VALID_PHASES;
     for (const phase of phases) {
       const actorField = actorFieldForPhase(phase);
-      const actors = actorField === "reviewer" ? route.reviewers : route.executors;
+      const scopedActors = actorField === "reviewer" ? route.reviewers : route.executors;
+      const hasActorScope = route.executors !== undefined || route.reviewers !== undefined;
+      const defaultActor = actorField === "reviewer"
+        ? nonEmptyString(policy?.defaults?.[phase]?.reviewer)
+        : nonEmptyString(policy?.defaults?.[phase]?.executor);
+      const actors = hasActorScope ? scopedActors : (defaultActor ? [defaultActor] : []);
       for (const actor of actors || []) {
         entries.push({
           phase,
@@ -563,15 +568,26 @@ function legacyConfigPaths({ repoRoot, relayHome }) {
   const paths = [];
   const globalPolicy = resolveRelayPolicyPath({ relayHome });
   if (globalPolicy && fs.existsSync(globalPolicy)) {
-    paths.push({ kind: "global_policy", path: globalPolicy });
+    paths.push({ kind: "global_policy", path: globalPolicy, migration: "global_routes" });
   }
   const executorsPath = process.env.RELAY_EXECUTORS_PATH || path.join(relayHome || process.env.RELAY_HOME || path.join(os.homedir(), ".relay"), "executors.json");
   if (executorsPath && fs.existsSync(executorsPath)) {
-    paths.push({ kind: "executors", path: executorsPath });
+    paths.push({ kind: "executors", path: executorsPath, migration: "global_routes" });
   }
   const repoPolicy = repoRoot ? path.join(repoRoot, ".relay", "policy.json") : null;
   if (repoPolicy && fs.existsSync(repoPolicy)) {
-    paths.push({ kind: "repo_policy", path: repoPolicy });
+    paths.push({ kind: "repo_policy", path: repoPolicy, migration: "deferred_scoped" });
+  }
+  let projectPolicyPath = null;
+  if (repoRoot) {
+    try {
+      projectPolicyPath = getProjectPolicyPath(repoRoot, { relayHome });
+    } catch {
+      projectPolicyPath = null;
+    }
+  }
+  if (projectPolicyPath && fs.existsSync(projectPolicyPath)) {
+    paths.push({ kind: "project_policy", path: projectPolicyPath, migration: "deferred_scoped" });
   }
   let projectRoutesPath = null;
   if (repoRoot) {
@@ -585,10 +601,10 @@ function legacyConfigPaths({ repoRoot, relayHome }) {
     try {
       const projectRoutes = readRoutesFile(projectRoutesPath);
       if (projectRoutes?.version === 1) {
-        paths.push({ kind: "project_routes_v1", path: projectRoutesPath });
+        paths.push({ kind: "project_routes_v1", path: projectRoutesPath, migration: "deferred_scoped" });
       }
     } catch {
-      paths.push({ kind: "project_routes_unknown", path: projectRoutesPath });
+      paths.push({ kind: "project_routes_unknown", path: projectRoutesPath, migration: "deferred_scoped" });
     }
   }
   return paths;
@@ -607,7 +623,11 @@ function routeConfiguredForTuple(policy, { phase, actor, actorField, model }) {
     ? { phase, reviewer: actor, model }
     : { phase, executor: actor, model };
   const decision = evaluateRelayRoute(policy, tuple);
-  return decision.reason === "allowed_model_route" || decision.reason === "managed_cli";
+  return (
+    decision.reason === "allowed_model_route"
+    || decision.reason === "managed_cli"
+    || decision.reason === "denied_model_route"
+  );
 }
 
 function deniedRouteConfiguredForTuple(policy, tuple) {
@@ -969,21 +989,6 @@ function foldLegacyRoutesIntoExisting(existingRoutes, legacyRoutes) {
   return folded;
 }
 
-function projectRoutesV1ToV2(projectRoutes) {
-  if (projectRoutes.status === "absent" || projectRoutes.status === "ignored_v2") return null;
-  if (!projectRoutes.ok) {
-    if (!projectRoutes.path) return null;
-    throw new Error(projectRoutes.error || "failed to load project routes v1");
-  }
-  if (projectRoutes.routes?.version !== 1) return null;
-  const routes = {
-    version: 2,
-    defaults: cloneJson(projectRoutes.routes.defaults || {}),
-  };
-  validateRouteConfig(routes, "migrated project routes config", { project: true });
-  return routes;
-}
-
 function writeMigratedMarker(filePath, routesPath) {
   if (!filePath || !fs.existsSync(filePath)) return null;
   const markerPath = `${filePath}.migrated`;
@@ -1018,22 +1023,28 @@ function commandMigrate(positionals, jsonOut) {
   }
   const executorDefaults = executorDefaultsFromLegacyExecutors(executorsPath);
   const projectRoutes = loadProjectRoutes({ repoRoot, relayHome });
+  const legacyPaths = legacyConfigPaths({ repoRoot, relayHome });
+  const migratableLegacy = legacyPaths.filter((legacy) => legacy.migration === "global_routes");
+  const deferredScopedLegacy = legacyPaths
+    .filter((legacy) => legacy.migration === "deferred_scoped")
+    .map((legacy) => ({
+      ...legacy,
+      status: "not_migrated",
+      reason: "scoped migration deferred",
+    }));
   let routes;
-  let migratedProjectRoutes = null;
   try {
     const legacyRoutes = routesFromPolicy(policyResult.policy, executorDefaults);
     routes = routesExisted
       ? foldLegacyRoutesIntoExisting(validateRouteConfig(readRoutesFile(routesPath), routesPath), legacyRoutes)
       : legacyRoutes;
-    migratedProjectRoutes = projectRoutesV1ToV2(projectRoutes);
   } catch (error) {
-    const output = { ok: false, status: "project_routes_error", errors: [{ message: error.message }], project_routes: projectRoutes };
+    const output = { ok: false, status: "migrate_error", errors: [{ message: error.message }], project_routes: projectRoutes };
     if (jsonOut) printJson(output);
-    else console.error(`relay-config migrate: project routes failed: ${error.message}`);
+    else console.error(`relay-config migrate: failed: ${error.message}`);
     process.exitCode = 1;
     return;
   }
-  const legacyPaths = legacyConfigPaths({ repoRoot, relayHome });
   const output = {
     ok: true,
     action: "migrate",
@@ -1043,14 +1054,15 @@ function commandMigrate(positionals, jsonOut) {
     routes,
     project_routes: {
       ...projectRoutes,
-      migrated_routes: migratedProjectRoutes,
     },
     legacy: legacyPaths,
+    not_migrated: deferredScopedLegacy,
     summary: [
       `${(routes.routes || []).length} allowed route(s)`,
       `${(routes.denied_routes || []).length} denied route(s)`,
       `${Object.keys(routes.executor_defaults || {}).length} executor default(s)`,
-      `${migratedProjectRoutes ? 1 : 0} project routes file(s) converted`,
+      `${migratableLegacy.length} global legacy file(s) folded`,
+      `${deferredScopedLegacy.length} scoped legacy file(s) not migrated - scoped migration deferred`,
       `strict=${routes.strict === true}`,
     ],
   };
@@ -1061,18 +1073,37 @@ function commandMigrate(positionals, jsonOut) {
     } else {
       console.log("relay-config migrate: dry run");
       for (const line of output.summary) console.log(`  ${line}`);
+      for (const legacy of deferredScopedLegacy) {
+        console.log(`  not migrated - scoped migration deferred: ${legacy.path}`);
+      }
       console.log("rerun with --yes to write routes.json and .migrated marker notes");
     }
     return;
   }
 
-  writeRoutes(routesPath, routes);
-  if (migratedProjectRoutes && projectRoutes.path) {
-    writeRoutes(projectRoutes.path, migratedProjectRoutes);
+  if (deferredScopedLegacy.length) {
+    output.ok = false;
+    output.status = "scoped_migration_deferred";
+    output.errors = [{
+      message: "scoped legacy config is present; global migration refused so effective scoped resolution is unchanged",
+    }];
+    if (jsonOut) {
+      printJson(output);
+    } else {
+      console.error("relay-config migrate: scoped migration deferred");
+      for (const legacy of deferredScopedLegacy) {
+        console.error(`  not migrated - scoped migration deferred: ${legacy.path}`);
+      }
+      console.error("global routes.json was not written; scoped legacy resolution is unchanged");
+    }
+    process.exitCode = 1;
+    return;
   }
+
+  writeRoutes(routesPath, routes);
   const markers = [];
-  for (const legacy of legacyPaths) {
-    const marker = writeMigratedMarker(legacy.path, legacy.kind === "project_routes_v1" ? legacy.path : routesPath);
+  for (const legacy of migratableLegacy) {
+    const marker = writeMigratedMarker(legacy.path, routesPath);
     if (marker) markers.push(marker);
   }
   output.dry_run = false;
