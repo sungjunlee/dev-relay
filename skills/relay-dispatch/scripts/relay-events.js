@@ -30,6 +30,8 @@ const EVENTS = Object.freeze({
   ENVIRONMENT_DRIFT: "environment_drift",
   ESCALATION_DECISION: "escalation_decision",
   EXECUTION_EVIDENCE_REBRANDED: "execution_evidence_rebranded",
+  // Consumer: dispatch supervisor audits notifier/helper survivors after a clean leader exit.
+  EXECUTOR_GROUP_LINGERING: "executor_group_lingering",
   FORCE_FINALIZE: "force_finalize",
   GUIDANCE_SELECTED: "guidance_selected",
   ITERATION_SCORE: "iteration_score",
@@ -223,6 +225,16 @@ function appendRunEvent(repoRoot, runId, eventData) {
       : {}),
     ...(eventData.executor_terminated !== undefined
       ? { executor_terminated: eventData.executor_terminated === true }
+      : {}),
+    ...(eventData.survivors_terminated !== undefined
+      ? { survivors_terminated: eventData.survivors_terminated === true }
+      : {}),
+    ...(eventData.survivor_inventory !== undefined
+      ? {
+          survivor_inventory: Array.isArray(eventData.survivor_inventory)
+            ? eventData.survivor_inventory
+            : [],
+        }
       : {}),
     ...(eventData.worktree !== undefined
       ? { worktree: normalizeEventValue(eventData.worktree) }

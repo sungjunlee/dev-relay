@@ -990,6 +990,14 @@ function registerSignalFixtureCleanup(t, fixture) {
         await waitForPgidDead(pgid, { timeoutMs: 5000 });
       } catch {}
     }
+    // Unconditional pid reap: SIGTERM-ignoring descendants can outlive the group leader.
+    for (const rawPid of fixture.pids ? fixture.pids() : []) {
+      const pid = Number(rawPid);
+      if (!Number.isFinite(pid) || pid <= 0) continue;
+      try {
+        process.kill(pid, "SIGKILL");
+      } catch {}
+    }
     for (const cleanupPath of fixture.paths ? fixture.paths() : []) {
       try {
         fs.rmSync(cleanupPath, { recursive: true, force: true });
@@ -1151,7 +1159,7 @@ function writeLeaderExitBackgroundCodex(binDir) {
   fs.writeFileSync(codexPath, `#!/usr/bin/env node
 const fs = require("fs");
 const path = require("path");
-const { spawn } = require("child_process");
+const { spawn, execFileSync } = require("child_process");
 ${selfReapingFixturePrelude()}
 const args = process.argv.slice(2);
 if (args[0] === "--version") {
@@ -1162,6 +1170,7 @@ if (args[0] !== "exec") {
   process.stderr.write("unsupported fake codex invocation");
   process.exit(1);
 }
+const cwd = args[args.indexOf("-C") + 1];
 const output = args[args.indexOf("-o") + 1];
 const leasePath = path.join(path.dirname(output), "lease.json");
 const marker = process.env.RELAY_TEST_EXECUTOR_MARKER;
@@ -1181,6 +1190,11 @@ const finishWhenReady = () => {
       leasePath,
       lease,
     }), "utf-8");
+    if (cwd) {
+      fs.writeFileSync(path.join(cwd, "linger-work.txt"), "clean exit with lingering child\\n", "utf-8");
+      execFileSync("git", ["-C", cwd, "add", "linger-work.txt"], { stdio: "pipe" });
+      execFileSync("git", ["-C", cwd, "commit", "-m", "fake linger work"], { stdio: "pipe" });
+    }
     fs.writeFileSync(output, "background child still running\\n", "utf-8");
     process.exit(0);
   }
@@ -2568,12 +2582,14 @@ test("dispatch resume refreshes the auto-discovered redispatch prompt from an am
   );
 
   const runDir = getRunDir(repoRoot, first.runId);
+  const persistedDoneCriteriaPath = path.join(runDir, "done-criteria.md");
   fs.writeFileSync(path.join(runDir, "review-round-1-redispatch.md"), "ROUND ONE BODY\n", "utf-8");
   const redispatchPath = path.join(runDir, "review-round-2-redispatch.md");
   const originalArtifact = redispatchPromptWithDoneCriteria("Original clause");
   fs.writeFileSync(redispatchPath, originalArtifact, "utf-8");
   fs.writeFileSync(path.join(runDir, "review-round-2-done-criteria.md"), "Original clause\n", "utf-8");
-  fs.writeFileSync(doneCriteriaPath, "Original clause\nAmended clause", "utf-8");
+  // Amendments land on the persisted run-dir anchor (#897), not the original CLI path.
+  fs.writeFileSync(persistedDoneCriteriaPath, "Original clause\nAmended clause", "utf-8");
 
   const second = JSON.parse(runDispatch(repoRoot, [
     "--run-id", first.runId,
@@ -2588,7 +2604,7 @@ test("dispatch resume refreshes the auto-discovered redispatch prompt from an am
   assert.match(finalPrompt, /Original clause\nAmended clause/);
   assert.equal(fs.readFileSync(redispatchPath, "utf-8"), originalArtifact);
   const resumedManifest = readManifest(first.manifestPath).data;
-  assert.equal(resumedManifest.anchor.done_criteria_path, doneCriteriaPath);
+  assert.equal(resumedManifest.anchor.done_criteria_path, persistedDoneCriteriaPath);
   assert.equal(resumedManifest.anchor.done_criteria_source, "file");
 });
 
@@ -2622,7 +2638,7 @@ test("dispatch resume refreshes only the generated criteria when an issue quotes
   const runDir = getRunDir(repoRoot, first.runId);
   fs.writeFileSync(path.join(runDir, "review-round-1-redispatch.md"), artifact, "utf-8");
   fs.writeFileSync(path.join(runDir, "review-round-1-done-criteria.md"), `${original}\n`, "utf-8");
-  fs.writeFileSync(doneCriteriaPath, `${amended}\n`, "utf-8");
+  fs.writeFileSync(path.join(runDir, "done-criteria.md"), `${amended}\n`, "utf-8");
 
   runDispatch(repoRoot, ["--run-id", first.runId, "--json"], env);
 
@@ -2658,7 +2674,7 @@ test("dispatch resume rejects criteria found at two generated Done Criteria posi
   const runDir = getRunDir(repoRoot, first.runId);
   fs.writeFileSync(path.join(runDir, "review-round-1-redispatch.md"), artifact, "utf-8");
   fs.writeFileSync(path.join(runDir, "review-round-1-done-criteria.md"), `${original}\n`, "utf-8");
-  fs.writeFileSync(doneCriteriaPath, `${original}\nAmended duplicate clause\n`, "utf-8");
+  fs.writeFileSync(path.join(runDir, "done-criteria.md"), `${original}\nAmended duplicate clause\n`, "utf-8");
 
   const result = spawnSync("node", [SCRIPT, repoRoot, "--run-id", first.runId, "--json"], {
     cwd: repoRoot,
@@ -2702,7 +2718,7 @@ test("dispatch resume refreshes an auto-discovered rubric-gate redispatch prompt
   const redispatchPath = path.join(getRunDir(repoRoot, first.runId), "review-round-1-redispatch.md");
   fs.writeFileSync(redispatchPath, artifact, "utf-8");
   fs.writeFileSync(path.join(getRunDir(repoRoot, first.runId), "review-round-1-done-criteria.md"), "Original rubric-gate clause\n", "utf-8");
-  fs.writeFileSync(doneCriteriaPath, "Original rubric-gate clause\nAmended rubric-gate clause", "utf-8");
+  fs.writeFileSync(path.join(getRunDir(repoRoot, first.runId), "done-criteria.md"), "Original rubric-gate clause\nAmended rubric-gate clause", "utf-8");
 
   runDispatch(repoRoot, ["--run-id", first.runId, "--json"], env);
 
@@ -2813,7 +2829,7 @@ test("dispatch resume refreshes criteria that contain marker-looking lines (#883
   fs.writeFileSync(path.join(runDir, "review-round-1-redispatch.md"), redispatchPromptWithDoneCriteria(trickyOriginal), "utf-8");
   fs.writeFileSync(path.join(runDir, "review-round-1-done-criteria.md"), `${trickyOriginal}\n`, "utf-8");
   const trickyAmended = `${trickyOriginal}\nAmended tricky clause`;
-  fs.writeFileSync(doneCriteriaPath, `${trickyAmended}\n`, "utf-8");
+  fs.writeFileSync(path.join(runDir, "done-criteria.md"), `${trickyAmended}\n`, "utf-8");
 
   runDispatch(repoRoot, ["--run-id", first.runId, "--json"], env);
 
@@ -2859,7 +2875,7 @@ test("dispatch resume refreshes rubric-gate criteria containing structural heade
   fs.writeFileSync(path.join(runDir, "review-round-1-redispatch.md"), buildRubricGateRedispatchPrompt(gateFailure, trickyOriginal, "file"), "utf-8");
   fs.writeFileSync(path.join(runDir, "review-round-1-done-criteria.md"), `${trickyOriginal}\n`, "utf-8");
   const trickyAmended = `${trickyOriginal}\nAmended gate clause`;
-  fs.writeFileSync(doneCriteriaPath, `${trickyAmended}\n`, "utf-8");
+  fs.writeFileSync(path.join(runDir, "done-criteria.md"), `${trickyAmended}\n`, "utf-8");
 
   runDispatch(repoRoot, ["--run-id", first.runId, "--json"], env);
 
@@ -2896,7 +2912,7 @@ test("dispatch resume fails clearly when the recorded round criteria do not matc
   fs.writeFileSync(path.join(runDir, "review-round-1-redispatch.md"), redispatchPromptWithDoneCriteria("Hand-edited clause"), "utf-8");
   const roundDoneCriteriaPath = path.join(runDir, "review-round-1-done-criteria.md");
   fs.writeFileSync(roundDoneCriteriaPath, "Original clause\n", "utf-8");
-  fs.writeFileSync(doneCriteriaPath, "Amended clause\n", "utf-8");
+  fs.writeFileSync(path.join(runDir, "done-criteria.md"), "Amended clause\n", "utf-8");
 
   const result = spawnSync("node", [SCRIPT, repoRoot, "--run-id", first.runId, "--json"], {
     cwd: repoRoot,
@@ -2982,7 +2998,8 @@ test("dispatch resume fails clearly when the effective Done Criteria anchor is m
     redispatchPromptWithDoneCriteria("Original clause"),
     "utf-8"
   );
-  fs.unlinkSync(doneCriteriaPath);
+  const persistedDoneCriteriaPath = path.join(getRunDir(repoRoot, first.runId), "done-criteria.md");
+  fs.unlinkSync(persistedDoneCriteriaPath);
 
   const result = spawnSync("node", [SCRIPT, repoRoot, "--run-id", first.runId, "--json"], {
     cwd: repoRoot,
@@ -2991,7 +3008,7 @@ test("dispatch resume fails clearly when the effective Done Criteria anchor is m
   });
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /effective Done Criteria file not found/);
-  assert.match(result.stderr, new RegExp(doneCriteriaPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  assert.match(result.stderr, new RegExp(persistedDoneCriteriaPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
 });
 
 test("dispatch resume without redispatch artifact still errors with auto-discovery hint (#387)", () => {
@@ -5290,18 +5307,25 @@ test("dispatch creates a run lease while executor runs and removes it on normal 
   assert.equal(fs.existsSync(marker.leasePath), false);
 });
 
-test("dispatch keeps lease and leaves run dispatched when executor leader exits with a live process group", async (t) => {
+test("dispatch keeps lease and leaves run dispatched when timeout kill leaves process group unsettled", async (t) => {
   if (process.platform === "win32") return;
 
   const { repoRoot, relayHome } = setupRepo();
   process.env.RELAY_HOME = relayHome;
-  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bg-bin-"));
-  const markerPath = path.join(os.tmpdir(), `relay-dispatch-bg-${process.pid}-${Date.now()}.json`);
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-timeout-unsettled-bin-"));
+  const markerPath = path.join(os.tmpdir(), `relay-dispatch-timeout-unsettled-${process.pid}-${Date.now()}.json`);
   registerSignalFixtureCleanup(t, {
     pgid: () => marker?.pgid || null,
-    paths: () => [binDir, markerPath, `${markerPath}.child-ready`],
+    pids: () => [marker?.pid, marker?.childPid],
+    paths: () => [
+      binDir,
+      markerPath,
+      `${markerPath}.child-ready`,
+      `${markerPath}.child-alive`,
+      `${markerPath}.terminated`,
+    ],
   });
-  writeLeaderExitBackgroundCodex(binDir);
+  writeLeaderExitDescendantCodex(binDir);
   const env = {
     ...process.env,
     PATH: `${binDir}:${process.env.PATH}`,
@@ -5312,26 +5336,30 @@ test("dispatch keeps lease and leaves run dispatched when executor leader exits 
 
   try {
     const result = spawnSync(process.execPath, [SCRIPT, repoRoot, ...withRequiredRubric([
-      "-b", "issue-801-leader-close-live-pgid",
-      "--prompt", "leader exits while background child keeps pgid alive",
+      "-b", "issue-899-timeout-unsettled",
+      "--prompt", "timeout kill leaves SIGTERM-ignoring descendant alive",
+      "--timeout", "1",
       "--json",
     ])], {
       cwd: repoRoot,
       env,
       encoding: "utf-8",
       stdio: "pipe",
-      timeout: 30000,
+      // Full-suite load makes settlement waits 2-3x slower; keep headroom above the 1s executor timeout.
+      timeout: 120000,
     });
 
     marker = JSON.parse(fs.readFileSync(markerPath, "utf-8"));
-    assert.notEqual(result.status, 0);
+    assert.notEqual(result.status, 0, result.stderr || result.stdout || `signal=${result.signal}`);
     assert.match(result.stderr, /executor process group .*still alive after executor leader exited/);
-    assert.equal(fs.existsSync(marker.leasePath), true);
-    const lease = JSON.parse(fs.readFileSync(marker.leasePath, "utf-8"));
-    assert.equal(lease.pgid, marker.pgid);
 
     const manifestPath = listManifestPaths(repoRoot)[0];
     const manifest = readManifest(manifestPath).data;
+    const leasePath = path.join(getRunDir(repoRoot, manifest.run_id), "lease.json");
+    assert.equal(fs.existsSync(leasePath), true);
+    const lease = JSON.parse(fs.readFileSync(leasePath, "utf-8"));
+    assert.equal(lease.pgid, marker.pgid);
+
     assert.equal(manifest.state, STATES.DISPATCHED);
     const interruptedEvent = readRunEvents(repoRoot, manifest.run_id).at(-1);
     assert.equal(interruptedEvent.event, "dispatch_interrupted");
@@ -5348,6 +5376,110 @@ test("dispatch keeps lease and leaves run dispatched when executor leader exits 
           timeoutMs: 1000,
           message: `process group ${marker.pgid} to exit`,
         });
+      } catch {}
+    }
+    if (marker?.childPid) {
+      try {
+        process.kill(Number(marker.childPid), "SIGKILL");
+      } catch {}
+    }
+    if (marker?.pid) {
+      try {
+        process.kill(Number(marker.pid), "SIGKILL");
+      } catch {}
+    }
+  }
+});
+
+test("dispatch completes normally when clean leader exit leaves a lingering process-group member", async (t) => {
+  if (process.platform === "win32") return;
+
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-linger-bin-"));
+  const markerPath = path.join(os.tmpdir(), `relay-dispatch-linger-${process.pid}-${Date.now()}.json`);
+  registerSignalFixtureCleanup(t, {
+    pgid: () => marker?.pgid || null,
+    pids: () => [marker?.pid, marker?.childPid],
+    paths: () => [binDir, markerPath, `${markerPath}.child-ready`],
+  });
+  writeLeaderExitBackgroundCodex(binDir);
+  const env = {
+    ...process.env,
+    PATH: `${binDir}:${process.env.PATH}`,
+    RELAY_HOME: relayHome,
+    RELAY_TEST_EXECUTOR_MARKER: markerPath,
+  };
+  let marker = null;
+
+  try {
+    const proc = spawnSync(process.execPath, [SCRIPT, repoRoot, ...withRequiredRubric([
+      "-b", "issue-899-clean-exit-linger",
+      "--prompt", "clean exit with lingering notifier-like child",
+      "--json",
+    ])], {
+      cwd: repoRoot,
+      env,
+      encoding: "utf-8",
+      stdio: "pipe",
+      // Under concurrent suite load this path has taken ~65s; keep ample headroom.
+      timeout: 180000,
+    });
+
+    marker = JSON.parse(fs.readFileSync(markerPath, "utf-8"));
+    assert.equal(
+      proc.status,
+      0,
+      `status=${proc.status} signal=${proc.signal} error=${proc.error && proc.error.message}\n` +
+        `stderr:\n${proc.stderr || ""}\nstdout:\n${proc.stdout || ""}`
+    );
+    const result = JSON.parse(proc.stdout);
+    assert.equal(result.status, "completed");
+    assert.equal(result.runState, STATES.REVIEW_PENDING);
+    assert.equal(fs.existsSync(marker.leasePath), false);
+    assert.doesNotMatch(proc.stderr, /executor process group .*still alive after executor leader exited/);
+
+    const events = readRunEvents(repoRoot, result.runId);
+    assert.equal(events.some((event) => event.event === "dispatch_interrupted"), false);
+    const lingerEvent = events.find((event) => event.event === "executor_group_lingering");
+    assert.ok(lingerEvent, "expected executor_group_lingering event");
+    assert.equal(lingerEvent.reason, "executor_group_survivors_after_clean_leader_exit");
+    assert.equal(lingerEvent.state_from, STATES.DISPATCHED);
+    assert.equal(lingerEvent.state_to, STATES.DISPATCHED);
+    assert.equal(lingerEvent.executor_pid, marker.pid);
+    assert.equal(lingerEvent.executor_pgid, marker.pgid);
+    assert.equal(typeof lingerEvent.survivors_terminated, "boolean");
+    // Fixture child does not ignore SIGTERM, so the bounded re-wait should settle.
+    assert.equal(lingerEvent.survivors_terminated, true);
+    assert.equal(Array.isArray(lingerEvent.survivor_inventory), true);
+    assert.ok(lingerEvent.survivor_inventory.length >= 1);
+    assert.equal(
+      lingerEvent.survivor_inventory.some((entry) => Number(entry.pid) === Number(marker.childPid)),
+      true
+    );
+
+    const manifest = readManifest(result.manifestPath).data;
+    assert.equal(manifest.state, STATES.REVIEW_PENDING);
+  } finally {
+    if (marker?.pgid) {
+      try {
+        process.kill(-Number(marker.pgid), "SIGKILL");
+      } catch {}
+      try {
+        await waitFor(() => !isPgidAlive(marker.pgid), {
+          timeoutMs: 1000,
+          message: `process group ${marker.pgid} to exit`,
+        });
+      } catch {}
+    }
+    if (marker?.childPid) {
+      try {
+        process.kill(Number(marker.childPid), "SIGKILL");
+      } catch {}
+    }
+    if (marker?.pid) {
+      try {
+        process.kill(Number(marker.pid), "SIGKILL");
       } catch {}
     }
   }
