@@ -14,6 +14,7 @@ const { classifyRepositoryDirt } = require("./runtime-dirt");
 const { resolveManifestRecord } = require("./relay-resolver");
 const { appendRunEvent, EVENTS } = require("./relay-events");
 const {
+  confirmRunLeaseSupervisorDeath,
   corruptRunLeaseEventFields,
   corruptRunLeaseReportFields,
   getDispatchResultCandidates,
@@ -289,6 +290,31 @@ async function main() {
   }
 
   const leaseStatus = getRunLeaseStatus(normalizedRepoRoot, normalizedRunId);
+  const leaseUnexpired = leaseStatus.exists
+    && leaseStatus.lease
+    && leaseStatus.remaining_s > 0;
+  if (!leaseStatus.live && leaseUnexpired && leaseStatus.reason !== "host_mismatch") {
+    const deathConfirmed = await confirmRunLeaseSupervisorDeath(leaseStatus);
+    if (!deathConfirmed) {
+      outputResult({
+        ...buildBaseResult({
+          row: 2,
+          rowName: "lease_live_within_timeout",
+          status: "running",
+          manifestPath: record.manifestPath,
+          runId: normalizedRunId,
+          data,
+          dryRun,
+          nextAction: "wait_for_executor",
+        }),
+        lease: leaseStatus.lease,
+        leaseStatus: "supervisor_pid_alive_after_reprobe",
+        elapsed_s: leaseStatus.elapsed_s,
+        remaining_s: leaseStatus.remaining_s,
+      }, jsonOut);
+      return;
+    }
+  }
   if (leaseStatus.live) {
     const timedOut = leaseStatus.elapsed_s > Number(leaseStatus.lease.timeout_s);
     if (!timedOut || !leaseStatus.canSignal) {
@@ -296,7 +322,7 @@ async function main() {
         ...buildBaseResult({
           row: 2,
           rowName: "lease_live_within_timeout",
-          status: leaseStatus.canSignal ? "running" : "running_unverified",
+          status: timedOut ? "running_unverified" : "running",
           manifestPath: record.manifestPath,
           runId: normalizedRunId,
           data,

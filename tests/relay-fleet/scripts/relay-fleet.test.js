@@ -2426,6 +2426,60 @@ test("relay-fleet keeps live incomplete detached dispatches retry-safe", async (
   });
 });
 
+test("relay-fleet never row-4 reconciles a live unexpired lease, including at poll-budget exhaustion", () => {
+  const { relayHome, repoRoot } = setupRepo("relay-fleet-live-lease-budget-");
+  const fleetId = "fleet-live-lease-budget";
+  const runId = "issue-876-20260710010101000-a1b2c3d4";
+  const leaf = makeLeaf(repoRoot, 1, { issue_number: 876, leaf_ref: "leaf-live-lease" });
+  writeChildRun(repoRoot, {
+    runId,
+    branch: leaf.branch,
+    issueNumber: leaf.issue_number,
+    leafId: leaf.leaf_id,
+    fleetId,
+    state: RUN_STATES.DISPATCHED,
+  });
+  const runDir = getRunDir(repoRoot, runId);
+  const resultPath = path.join(runDir, "dispatch-result.txt");
+  fs.writeFileSync(resultPath, "mid-work snapshot that must not be recovered\n", "utf-8");
+  fs.writeFileSync(path.join(runDir, "lease.json"), `${JSON.stringify({
+    pid: process.pid,
+    pgid: 999999,
+    host: os.hostname(),
+    started_at: new Date().toISOString(),
+    timeout_s: 3600,
+  }, null, 2)}\n`, "utf-8");
+  fs.mkdirSync(path.dirname(getFleetLeavesStorePath(repoRoot, fleetId)), { recursive: true });
+  writePersistedFleetLeaves(repoRoot, fleetId, [leaf]);
+  createFleetManifest(repoRoot, {
+    fleetId,
+    children: [{ leaf_ref: leaf.leaf_ref, run_id: runId, dispatch_status: DISPATCH_STATUS.DISPATCHING }],
+  });
+  advanceFleetManifestState(repoRoot, fleetId, FLEET_STATES.DISPATCHING);
+
+  const result = runFleet([
+    "--repo", repoRoot,
+    "--fleet-id", fleetId,
+    "--resume",
+    "--json",
+  ], {
+    relayHome,
+    env: { RELAY_FLEET_DISPATCH_POLL_TIMEOUT_MS: "300" },
+    timeout: 30000,
+  });
+
+  assert.notEqual(result.status, 0, `${result.stderr}\n${result.stdout}`);
+  const payload = JSON.parse(result.stdout);
+  assert.equal(payload.dispatch_children[0].status, "dispatch_still_running");
+  assert.equal(payload.dispatch_children[0].reconcile.rowName, "lease_live_within_timeout");
+  assert.equal(readManifest(getManifestPath(repoRoot, runId)).data.state, RUN_STATES.DISPATCHED);
+  assert.equal(fs.readFileSync(resultPath, "utf-8"), "mid-work snapshot that must not be recovered\n");
+  assert.equal(
+    readFleetManifest(repoRoot, fleetId).data.children[0].dispatch_status,
+    DISPATCH_STATUS.DISPATCHING
+  );
+});
+
 test("relay-fleet treats detached terminal child states as failed dispatch outcomes", () => {
   const { relayHome, repoRoot } = setupRepo("relay-fleet-terminal-detach-");
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "fleet-terminal-detach-fake-"));
