@@ -28,6 +28,31 @@ test("advisory schema accepts normalized blindspot payloads", () => {
   assert.equal(parsed.advisory_findings[0].category, "test-gap");
 });
 
+test("advisory schema defaults missing and empty profile echoes to the lane profile", () => {
+  for (const profile of [undefined, null, "", "  \t\n"]) {
+    const parsed = parseAdvisoryReview(JSON.stringify(advisoryPayload({ profile })), {
+      profile: "blindspot",
+    });
+    assert.equal(parsed.profile, "blindspot");
+  }
+
+  const payloadWithoutProfile = advisoryPayload();
+  delete payloadWithoutProfile.profile;
+  assert.equal(
+    parseAdvisoryReview(JSON.stringify(payloadWithoutProfile), { profile: "adversarial" }).profile,
+    "adversarial"
+  );
+});
+
+test("advisory schema rejects present non-string profile values", () => {
+  for (const profile of [42, false, {}, []]) {
+    assert.throws(
+      () => parseAdvisoryReview(JSON.stringify(advisoryPayload({ profile })), { profile: "blindspot" }),
+      /profile must be a non-empty string/
+    );
+  }
+});
+
 test("advisory schema exposes the supported profile list without changing finding shape", () => {
   assert.deepEqual(ADVISORY_PROFILES, ["blindspot", "adversarial"]);
   const parsed = parseAdvisoryReview(JSON.stringify(advisoryPayload({ profile: "adversarial" })), { profile: "adversarial" });

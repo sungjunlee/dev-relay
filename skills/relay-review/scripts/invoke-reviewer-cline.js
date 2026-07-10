@@ -3,7 +3,7 @@
  * Invoke Cline CLI as a structured advisory reviewer.
  */
 
-const { execFileSync } = require("child_process");
+const { spawnSync } = require("child_process");
 const fs = require("fs");
 const path = require("path");
 const {
@@ -14,7 +14,6 @@ const {
   extractClineAdvisoryCandidates,
 } = require("../../relay-dispatch/scripts/agent-adapters/cline-jsonl");
 const {
-  recoverExecStdout,
   summarizeFailure,
 } = require("./reviewer-helpers");
 const { parseAdvisoryReview, validateAdvisoryProfile } = require("./advisory-review-schema");
@@ -146,6 +145,12 @@ function buildPrompt(promptText) {
   ].join("\n");
 }
 
+function withRawAdapterOutput(error, rawOutput, rawStderr) {
+  error.rawAdapterOutput = rawOutput;
+  error.rawAdapterStderr = rawStderr;
+  return error;
+}
+
 function main() {
   const repoPath = path.resolve(cliArgs.getArg("--repo") || ".");
   const promptFile = cliArgs.getArg("--prompt-file");
@@ -175,20 +180,18 @@ function main() {
     fullPrompt
   );
 
-  let rawOutput;
-  let rawStderr = "";
-  try {
-    rawOutput = execFileSync(clineBin, execArgs, {
-      cwd: repoPath,
-      encoding: "utf-8",
-      stdio: "pipe",
-      timeout: parentTimeoutMs,
-      killSignal: "SIGKILL",
-      maxBuffer: 10 * 1024 * 1024,
-    }).trim();
-  } catch (error) {
-    rawStderr = String(error?.stderr || "");
-    if (isExecTimeout(error)) {
+  const execResult = spawnSync(clineBin, execArgs, {
+    cwd: repoPath,
+    encoding: "utf-8",
+    stdio: "pipe",
+    timeout: parentTimeoutMs,
+    killSignal: "SIGKILL",
+    maxBuffer: 10 * 1024 * 1024,
+  });
+  const rawOutput = String(execResult.stdout || "").trim();
+  const rawStderr = String(execResult.stderr || "");
+  if (execResult.error || execResult.status !== 0) {
+    if (isExecTimeout(execResult.error)) {
       const diagnosticCommand = buildTimeoutDiagnosticCommand({ clineBin, model, reviewTimeout });
       throw new Error(
         `Cline reviewer ${phase} timed out after ${reviewTimeout} (${REVIEW_TIMEOUT_ENV}). ` +
@@ -197,11 +200,12 @@ function main() {
         "If that minimal command also times out, record this as a Cline CLI/provider non-interactive blocker; otherwise retry with a larger review timeout or split the review scope."
       );
     }
-    const recovered = recoverExecStdout(error);
-    if (!recovered && !rawStderr) {
-      throw new Error(`Cline reviewer failed: ${summarizeFailure(error)}`);
+    if (!rawOutput && !rawStderr) {
+      const failure = execResult.error || {
+        message: `Cline process exited with status ${execResult.status ?? "unknown"}`,
+      };
+      throw new Error(`Cline reviewer failed: ${summarizeFailure(failure)}`);
     }
-    rawOutput = recovered || "";
   }
 
   let candidates;
@@ -212,9 +216,9 @@ function main() {
       stderr: rawStderr,
     });
   } catch (error) {
-    throw new Error(
+    throw withRawAdapterOutput(new Error(
       `${error.message}. Cline advisory review must return JSON in run_result.text or the final text content_end; relay cannot treat this as healthy advisory evidence.`
-    );
+    ), rawOutput, rawStderr);
   }
 
   let parsed = null;
@@ -232,9 +236,9 @@ function main() {
     }
   }
   if (!parsed) {
-    throw new Error(
+    throw withRawAdapterOutput(new Error(
       `Cline advisory review failed to parse any of ${candidates.length} advisory candidate(s); first failure: ${firstParseError?.message || "unknown parse failure"}`
-    );
+    ), rawOutput, rawStderr);
   }
   const output = JSON.stringify(parsed);
 
@@ -249,5 +253,13 @@ try {
   main();
 } catch (error) {
   console.error(`Error: ${error.message}`);
+  if (error.rawAdapterOutput || error.rawAdapterStderr) {
+    if (error.rawAdapterOutput) {
+      process.stderr.write(`\nRaw Cline output:\n${error.rawAdapterOutput.trim()}\n`);
+    }
+    if (error.rawAdapterStderr) {
+      process.stderr.write(`\nCline stderr:\n${error.rawAdapterStderr.trim()}\n`);
+    }
+  }
   process.exit(1);
 }
