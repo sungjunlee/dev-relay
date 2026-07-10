@@ -14,7 +14,7 @@ For an authorized fleet whose child becomes `merge_blocked` after an earlier chi
 
 1. In its worktree, fetch and rebase onto `origin/main`, then push the rebased branch with `--force-with-lease`.
 2. Recover in two audited hops (both whitelisted in `recover-state.js`; see the [recovery playbook](../../relay-dispatch/references/recovery-playbook.md)): `node skills/relay-dispatch/scripts/recover-state.js --run-id <id> --to ready_to_merge --reason "merge blocker cleared after rebase"`, then the same command `--to review_pending --reason "PR HEAD advanced after ready_to_merge; rerun review for the live head"` (the rebase satisfies its head-drift requirement).
-3. Re-run the explicitly authorized fleet drive: its review loop re-reviews the `review_pending` child at the rebased HEAD, and only after that review passes does its merge queue retry the landing.
+3. Re-run the explicitly authorized fleet drive: its review loop re-reviews the `review_pending` child at the rebased HEAD, and only after that review passes does its merge queue retry the landing. An interruption between the two hops cannot land unreviewed work — the pre-merge fresh-review gate rejects the rebased HEAD and re-blocks the child; resume with the second hop. (#889 tracks collapsing the two hops into one audited transition.)
 
 ## Principles
 
