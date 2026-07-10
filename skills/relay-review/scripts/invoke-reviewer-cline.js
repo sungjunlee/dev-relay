@@ -3,7 +3,7 @@
  * Invoke Cline CLI as a structured advisory reviewer.
  */
 
-const { execFileSync } = require("child_process");
+const { spawnSync } = require("child_process");
 const fs = require("fs");
 const path = require("path");
 const {
@@ -14,7 +14,6 @@ const {
   extractClineAdvisoryCandidates,
 } = require("../../relay-dispatch/scripts/agent-adapters/cline-jsonl");
 const {
-  recoverExecStdout,
   summarizeFailure,
 } = require("./reviewer-helpers");
 const { parseAdvisoryReview, validateAdvisoryProfile } = require("./advisory-review-schema");
@@ -181,20 +180,18 @@ function main() {
     fullPrompt
   );
 
-  let rawOutput;
-  let rawStderr = "";
-  try {
-    rawOutput = execFileSync(clineBin, execArgs, {
-      cwd: repoPath,
-      encoding: "utf-8",
-      stdio: "pipe",
-      timeout: parentTimeoutMs,
-      killSignal: "SIGKILL",
-      maxBuffer: 10 * 1024 * 1024,
-    }).trim();
-  } catch (error) {
-    rawStderr = String(error?.stderr || "");
-    if (isExecTimeout(error)) {
+  const execResult = spawnSync(clineBin, execArgs, {
+    cwd: repoPath,
+    encoding: "utf-8",
+    stdio: "pipe",
+    timeout: parentTimeoutMs,
+    killSignal: "SIGKILL",
+    maxBuffer: 10 * 1024 * 1024,
+  });
+  const rawOutput = String(execResult.stdout || "").trim();
+  const rawStderr = String(execResult.stderr || "");
+  if (execResult.error || execResult.status !== 0) {
+    if (isExecTimeout(execResult.error)) {
       const diagnosticCommand = buildTimeoutDiagnosticCommand({ clineBin, model, reviewTimeout });
       throw new Error(
         `Cline reviewer ${phase} timed out after ${reviewTimeout} (${REVIEW_TIMEOUT_ENV}). ` +
@@ -203,11 +200,12 @@ function main() {
         "If that minimal command also times out, record this as a Cline CLI/provider non-interactive blocker; otherwise retry with a larger review timeout or split the review scope."
       );
     }
-    const recovered = recoverExecStdout(error);
-    if (!recovered && !rawStderr) {
-      throw new Error(`Cline reviewer failed: ${summarizeFailure(error)}`);
+    if (!rawOutput && !rawStderr) {
+      const failure = execResult.error || {
+        message: `Cline process exited with status ${execResult.status ?? "unknown"}`,
+      };
+      throw new Error(`Cline reviewer failed: ${summarizeFailure(failure)}`);
     }
-    rawOutput = recovered || "";
   }
 
   let candidates;

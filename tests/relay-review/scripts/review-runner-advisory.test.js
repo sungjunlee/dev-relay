@@ -1280,7 +1280,7 @@ test("review-runner accepts cline advisory review when route policy allows the r
   assert.equal(event.reviewer_policy.read_only.enforcement_level, "prompt-only");
 });
 
-test("review-runner persists raw cline JSONL when every advisory candidate fails to parse", () => {
+test("review-runner persists raw cline JSONL and stderr after a successful exit fails to parse", () => {
   const { repoRoot, runDir, runId, doneCriteriaPath, diffPath } = setupRepo({ modelPolicy: "allow-cline-advisory" });
   const primaryScript = writePrimaryReviewer(repoRoot, passVerdict());
   const rawText = "unparseable-cline-advisory-887";
@@ -1292,7 +1292,6 @@ process.stdout.write(JSON.stringify({
   text: ${JSON.stringify(rawText)},
 }) + "\\n");
 process.stderr.write("cline-provider-stderr-887\\n");
-process.exitCode = 1;
 `, "utf-8");
   fs.chmodSync(clineScript, 0o755);
 
