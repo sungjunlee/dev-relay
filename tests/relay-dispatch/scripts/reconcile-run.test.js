@@ -17,7 +17,8 @@ const {
   writeManifest,
 } = require("../../../skills/relay-dispatch/scripts/relay-manifest");
 const { appendRunEvent, EVENTS, readRunEvents } = require("../../../skills/relay-dispatch/scripts/relay-events");
-const { EXECUTION_EVIDENCE_FILENAME } = require("../../../skills/relay-dispatch/scripts/execution-evidence");
+const { EXECUTION_EVIDENCE_FILENAME, buildExecutionEvidence, hashFileSha256 } = require("../../../skills/relay-dispatch/scripts/execution-evidence");
+const { buildExecutionEvidencePreflight } = require("../../../skills/relay-review/scripts/review-runner/execution-evidence");
 
 const SCRIPT = path.join(__dirname, "..", "..", "..", "skills", "relay-dispatch", "scripts", "reconcile-run.js");
 
@@ -84,6 +85,7 @@ function setupRepo({
   oldShapePaths = false,
   publishPolicy = "immediate",
   ghState = {},
+  executionEvidence = true,
 } = {}) {
   const repoRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "relay-reconcile-run-")));
   const relayHome = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-")));
@@ -151,15 +153,17 @@ function setupRepo({
   if (resultFile) {
     fs.writeFileSync(path.join(layout.runDir, "dispatch-result.txt"), resultFileContent, "utf-8");
   }
-  fs.writeFileSync(path.join(layout.runDir, EXECUTION_EVIDENCE_FILENAME), JSON.stringify({
-    schema_version: 1,
-    head_sha: dispatchHead,
-    test_command: "node --test tests/relay-dispatch/scripts/*.test.js",
-    test_result_hash: "unspecified",
-    test_result_summary: "unspecified",
-    recorded_at: "2026-05-01T01:00:00.000Z",
-    recorded_by: "dispatch-orchestrator-v1",
-  }, null, 2));
+  if (executionEvidence) {
+    fs.writeFileSync(path.join(layout.runDir, EXECUTION_EVIDENCE_FILENAME), JSON.stringify({
+      schema_version: 1,
+      head_sha: dispatchHead,
+      test_command: "node --test tests/relay-dispatch/scripts/*.test.js",
+      test_result_hash: "unspecified",
+      test_result_summary: "unspecified",
+      recorded_at: "2026-05-01T01:00:00.000Z",
+      recorded_by: "dispatch-orchestrator-v1",
+    }, null, 2));
+  }
 
   const ghPath = writeFakeGh(binDir, statePath, ghLogPath, ghState);
   const env = {
@@ -591,6 +595,105 @@ test("reconcile row 4 preserves delayed-publication internal review policy", () 
   assert.equal(manifest.next_action, "run_internal_review");
   assert.equal(manifest.git.pr_number, null);
   assert.deepEqual(fs.readFileSync(fixture.ghLogPath, "utf-8").trim(), "");
+});
+
+test("reconcile row 4 with result file stamps execution evidence and passes preflight", () => {
+  const fixture = setupRepo({
+    committedWork: true,
+    resultFile: true,
+    executionEvidence: false,
+  });
+  const resultFile = path.join(fixture.runDir, "dispatch-result.txt");
+  const evidencePath = path.join(fixture.runDir, EXECUTION_EVIDENCE_FILENAME);
+  assert.equal(fs.existsSync(evidencePath), false);
+
+  const result = parseJsonResult(runReconcile(fixture));
+
+  assert.equal(result.row, 4);
+  assert.equal(result.status, "recovered");
+  assert.equal(result.executionEvidence.stamped, true);
+  assert.equal(fs.existsSync(evidencePath), true);
+
+  const recoveredHead = readManifest(fixture.manifestPath).data.git.head_sha;
+  const evidence = JSON.parse(fs.readFileSync(evidencePath, "utf-8"));
+  const expected = buildExecutionEvidence({
+    headSha: recoveredHead,
+    testCommand: undefined,
+    resultFilePath: resultFile,
+    executor: "codex",
+    recordedAt: evidence.recorded_at,
+    testExitCode: 0,
+  });
+  assert.deepEqual(evidence, expected);
+  assert.equal(evidence.recorded_by, "dispatch-orchestrator-v1");
+  assert.equal(evidence.test_command, "unspecified");
+  assert.equal(evidence.test_result_hash, hashFileSha256(resultFile));
+  assert.equal(evidence.test_result_summary, "codex result.txt hashed");
+  assert.equal(evidence.test_exit_code, 0);
+
+  const preflight = buildExecutionEvidencePreflight({
+    runDir: fixture.runDir,
+    reviewedHead: recoveredHead,
+  });
+  assert.equal(preflight.status, "pass");
+  assert.equal(preflight.qualityExecutionStatus, "pass");
+  assert.equal(preflight.nextAction, "invoke_primary_reviewer");
+});
+
+test("reconcile row 4 without result file does not stamp execution evidence", () => {
+  const fixture = setupRepo({
+    committedWork: true,
+    executionEvidence: false,
+  });
+  const evidencePath = path.join(fixture.runDir, EXECUTION_EVIDENCE_FILENAME);
+  assert.equal(fs.existsSync(evidencePath), false);
+
+  const result = parseJsonResult(runReconcile(fixture));
+
+  assert.equal(result.row, 4);
+  assert.equal(result.status, "recovered");
+  assert.equal(result.executionEvidence, null);
+  assert.equal(fs.existsSync(evidencePath), false);
+
+  const recoveredHead = readManifest(fixture.manifestPath).data.git.head_sha;
+  const preflight = buildExecutionEvidencePreflight({
+    runDir: fixture.runDir,
+    reviewedHead: recoveredHead,
+  });
+  assert.equal(preflight.status, "blocked");
+  assert.equal(preflight.qualityExecutionStatus, "missing");
+  assert.equal(preflight.nextAction, "repair_execution_evidence");
+});
+
+test("reconcile row 4 leaves pre-existing evidence at the recovered head untouched", () => {
+  const fixture = setupRepo({
+    committedWork: true,
+    resultFile: true,
+    executionEvidence: false,
+  });
+  const recoveredHead = execFileSync("git", ["-C", fixture.worktreePath, "rev-parse", "HEAD"], {
+    encoding: "utf-8",
+  }).trim();
+  const evidencePath = path.join(fixture.runDir, EXECUTION_EVIDENCE_FILENAME);
+  const existingEvidence = {
+    schema_version: 1,
+    head_sha: recoveredHead,
+    test_command: "node --test tests/relay-dispatch/scripts/reconcile-run.test.js",
+    test_result_hash: "a".repeat(64),
+    test_result_summary: "operator-preserved evidence",
+    test_exit_code: 0,
+    recorded_at: "2026-07-10T00:00:00.000Z",
+    recorded_by: "recover-commit-operator-v1",
+  };
+  const existingBytes = `${JSON.stringify(existingEvidence, null, 2)}\n`;
+  fs.writeFileSync(evidencePath, existingBytes, "utf-8");
+
+  const result = parseJsonResult(runReconcile(fixture));
+
+  assert.equal(result.row, 4);
+  assert.equal(result.status, "recovered");
+  assert.equal(result.executionEvidence.skipped, "evidence_already_bound");
+  assert.equal(fs.readFileSync(evidencePath, "utf-8"), existingBytes);
 });
 
 test("reconcile row 5 treats an empty dispatch result as no completion evidence", () => {

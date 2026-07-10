@@ -7,8 +7,13 @@ const path = require("path");
 
 const { findUnknownFlags, modeLabel, readArg, schemaHasFlag } = require("./cli-args");
 const { execGit } = require("./exec");
+const {
+  buildExecutionEvidence,
+  EXECUTION_EVIDENCE_FILENAME,
+  writeExecutionEvidence,
+} = require("./execution-evidence");
 const { STATES, updateManifestState } = require("./manifest/lifecycle");
-const { summarizeFailure, validateManifestPaths } = require("./manifest/paths");
+const { getRunDir, summarizeFailure, validateManifestPaths } = require("./manifest/paths");
 const { readManifest, writeManifest } = require("./manifest/store");
 const { classifyRepositoryDirt } = require("./runtime-dirt");
 const { resolveManifestRecord } = require("./relay-resolver");
@@ -236,6 +241,46 @@ function runRecoverCommit({ repoRoot, runId, dryRun }) {
     stdio: ["ignore", "pipe", "pipe"],
   });
   return JSON.parse(stdout);
+}
+
+/**
+ * Stamp execution-evidence.json from the executor result file after row-4 recovery,
+ * matching the normal dispatch-completion builder/shape. Leaves evidence already
+ * bound to the recovered head untouched.
+ */
+function stampExecutionEvidenceFromResult({
+  repoRoot,
+  runId,
+  resultFile,
+  recoveredHead,
+  executor,
+}) {
+  if (!resultFile || !recoveredHead) {
+    return { skipped: "missing_result_or_head" };
+  }
+  const runDir = getRunDir(repoRoot, runId);
+  const evidencePath = path.join(runDir, EXECUTION_EVIDENCE_FILENAME);
+  if (fs.existsSync(evidencePath)) {
+    try {
+      const existing = JSON.parse(fs.readFileSync(evidencePath, "utf-8"));
+      if (existing && typeof existing === "object" && existing.head_sha === recoveredHead) {
+        return { skipped: "evidence_already_bound", path: evidencePath };
+      }
+    } catch {
+      // Corrupt or unreadable evidence: fall through and rewrite like normal completion.
+    }
+  }
+  const writtenPath = writeExecutionEvidence(
+    runDir,
+    buildExecutionEvidence({
+      headSha: recoveredHead,
+      testCommand: undefined,
+      resultFilePath: resultFile,
+      executor: executor || "executor",
+      testExitCode: 0,
+    })
+  );
+  return { stamped: true, path: writtenPath };
 }
 
 async function main() {
@@ -483,6 +528,17 @@ async function main() {
         eventFields: corruptLeaseEvent,
       });
     }
+    let executionEvidence = null;
+    if (hasResult) {
+      const recoveredHead = updated.git?.head_sha || worktreeInspection.currentHead || null;
+      executionEvidence = stampExecutionEvidenceFromResult({
+        repoRoot: normalizedRepoRoot,
+        runId: normalizedRunId,
+        resultFile,
+        recoveredHead,
+        executor: data.roles?.executor || updated.roles?.executor,
+      });
+    }
     outputResult({
       ...buildBaseResult({
         row: 4,
@@ -499,6 +555,7 @@ async function main() {
       newCommits: worktreeInspection.newCommits,
       hasReviewableDirt: worktreeInspection.hasReviewableDirt,
       recovery,
+      executionEvidence,
       ...corruptLeaseReport,
     }, jsonOut);
     return;
