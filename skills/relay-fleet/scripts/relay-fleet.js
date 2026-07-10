@@ -3,6 +3,7 @@
 
 const { spawn } = require("node:child_process");
 const fs = require("node:fs");
+const os = require("node:os");
 const path = require("node:path");
 
 const {
@@ -40,6 +41,9 @@ const { runReconcile } = require("../../relay-dispatch/scripts/reconcile-advisor
 const { runMergeQueue } = require("./merge-queue");
 
 const DEFAULT_PARALLEL = 4;
+const FLEET_CHILD_LOCK_TIMEOUT_MS = 5000;
+const FLEET_CHILD_LOCK_WAIT_ARRAY = new Int32Array(new SharedArrayBuffer(4));
+const FLEET_CHILD_TICKET_PATTERN = /^ticket-(\d+)\.(waiting|done)$/;
 const DEFAULT_DISPATCH_SCRIPT = path.join(__dirname, "..", "..", "relay-dispatch", "scripts", "dispatch.js");
 const DEFAULT_PUBLISH_SCRIPT = path.join(__dirname, "..", "..", "relay-dispatch", "scripts", "publish-run.js");
 const DEFAULT_REVIEW_SCRIPT = path.join(__dirname, "..", "..", "relay-review", "scripts", "review-runner.js");
@@ -363,15 +367,48 @@ function getFleetLeavesStorePath(repoRoot, fleetId) {
   return path.join(getFleetsDir(repoRoot), `${requireValidFleetId(fleetId)}.leaves.json`);
 }
 
+function getFleetLeafReplacementPath(repoRoot, fleetId) {
+  return path.join(getFleetsDir(repoRoot), `${requireValidFleetId(fleetId)}.leaves-replacement.json`);
+}
+
 function getFleetRuntimePath(repoRoot, fleetId) {
   return path.join(getFleetsDir(repoRoot), `${requireValidFleetId(fleetId)}.running.json`);
 }
 
-function writeJsonAtomically(filePath, data) {
+function syncDirectory(directoryPath) {
+  let fd = null;
+  try {
+    fd = fs.openSync(directoryPath, "r");
+    fs.fsyncSync(fd);
+  } catch (error) {
+    if (!["EINVAL", "ENOTSUP", "EISDIR", "EPERM"].includes(error.code)) throw error;
+  } finally {
+    if (fd !== null) fs.closeSync(fd);
+  }
+}
+
+function syncFile(filePath) {
+  const fd = fs.openSync(filePath, "r");
+  try {
+    fs.fsyncSync(fd);
+  } finally {
+    fs.closeSync(fd);
+  }
+  syncDirectory(path.dirname(filePath));
+}
+
+function writeJsonAtomically(filePath, data, { durable = false } = {}) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   const tmpPath = `${filePath}.tmp.${process.pid}.${Date.now()}`;
-  fs.writeFileSync(tmpPath, `${JSON.stringify(data, null, 2)}\n`, "utf-8");
+  const fd = fs.openSync(tmpPath, "w");
+  try {
+    fs.writeFileSync(fd, `${JSON.stringify(data, null, 2)}\n`, "utf-8");
+    if (durable) fs.fsyncSync(fd);
+  } finally {
+    fs.closeSync(fd);
+  }
   fs.renameSync(tmpPath, filePath);
+  if (durable) syncDirectory(path.dirname(filePath));
 }
 
 function readJsonIfExists(filePath, fallback) {
@@ -379,9 +416,9 @@ function readJsonIfExists(filePath, fallback) {
   return JSON.parse(fs.readFileSync(filePath, "utf-8"));
 }
 
-function persistFleetLeaves(repoRoot, fleetId, leaves) {
+function persistFleetLeaves(repoRoot, fleetId, leaves, { durable = false } = {}) {
   const storePath = getFleetLeavesStorePath(repoRoot, fleetId);
-  writeJsonAtomically(storePath, { fleet_id: fleetId, leaves });
+  writeJsonAtomically(storePath, { fleet_id: fleetId, leaves }, { durable });
   return storePath;
 }
 
@@ -443,13 +480,394 @@ function leafRefSetsMatch(left, right) {
     && leftRefs.every((leafRef, index) => leafRef === rightRefs[index]);
 }
 
-function assertLeavesMatchFleetChildren(repoRoot, fleetId, leaves) {
+function issueSetsMatch(left, right) {
+  const leftIssues = left.map((leaf) => leaf.issue_number).sort((a, b) => a - b);
+  const rightIssues = right.map((leaf) => leaf.issue_number).sort((a, b) => a - b);
+  return leftIssues.length === rightIssues.length
+    && leftIssues.every((issueNumber, index) => issueNumber === rightIssues[index]);
+}
+
+function isReplaceableFleetChild(child) {
+  return child?.run_id === null
+    && child?.dispatch_status === DISPATCH_STATUS.DISPATCH_FAILED_PRE_MANIFEST;
+}
+
+function acceptedLeafReplacements(fleetChildren, persistedLeaves, leaves) {
+  if (!Array.isArray(persistedLeaves) || leavesMatch(persistedLeaves, leaves)) return [];
+  if (!issueSetsMatch(persistedLeaves, leaves)) return null;
+  if (new Set(leaves.map((leaf) => leaf.leaf_ref)).size !== leaves.length) return null;
+
+  const childrenByRef = new Map(fleetChildren.map((child) => [child.leaf_ref, child]));
+  const existingChildRefs = new Set(childrenByRef.keys());
+  const leavesByIssue = new Map(leaves.map((leaf) => [leaf.issue_number, leaf]));
+  const replacements = [];
+  for (const persistedLeaf of persistedLeaves) {
+    const leaf = leavesByIssue.get(persistedLeaf.issue_number);
+    if (JSON.stringify(comparableLeaf(persistedLeaf)) === JSON.stringify(comparableLeaf(leaf))) continue;
+    // A changed leaf must carry a NEW leaf_ref: same-ref respecification is
+    // rejected so a concurrent invocation holding the old spec can never find
+    // a same-keyed child to dispatch (the old ref ceases to exist on accept).
+    if (leaf.leaf_ref === persistedLeaf.leaf_ref) return null;
+    // Reusing any old child key (including another replaceable child's key)
+    // would leave stale selectors able to find that key with a different spec.
+    if (existingChildRefs.has(leaf.leaf_ref)) return null;
+    const child = childrenByRef.get(persistedLeaf.leaf_ref);
+    if (!isReplaceableFleetChild(child)) return null;
+    replacements.push({
+      old_leaf_ref: persistedLeaf.leaf_ref,
+      new_leaf_ref: leaf.leaf_ref,
+      issue_number: persistedLeaf.issue_number,
+    });
+  }
+  const replacementsByOldRef = new Map(replacements.map((replacement) => [replacement.old_leaf_ref, replacement]));
+  const nextChildren = fleetChildren.map((child) => ({
+    leaf_ref: replacementsByOldRef.get(child.leaf_ref)?.new_leaf_ref || child.leaf_ref,
+  }));
+  const nextChildRefs = nextChildren.map((child) => child.leaf_ref);
+  if (new Set(nextChildRefs).size !== nextChildRefs.length) return null;
+  if (!leafRefSetsMatch(nextChildren, leaves)) return null;
+  return replacements;
+}
+
+function getFleetChildLockPath(repoRoot, fleetId) {
+  return path.join(getFleetsDir(repoRoot), "locks", `fleet-${requireValidFleetId(fleetId)}-children.lock`);
+}
+
+function getFleetChildTicketDirectory(lockPath) {
+  return `${lockPath}.queue`;
+}
+
+function listFleetChildTickets(ticketDirectory) {
+  if (!fs.existsSync(ticketDirectory)) return [];
+  return fs.readdirSync(ticketDirectory)
+    .map((name) => {
+      const match = name.match(FLEET_CHILD_TICKET_PATTERN);
+      return match ? {
+        number: Number(match[1]),
+        state: match[2],
+        path: path.join(ticketDirectory, name),
+      } : null;
+    })
+    .filter(Boolean);
+}
+
+function createFleetChildTicket(lockPath, fleetId) {
+  const ticketDirectory = getFleetChildTicketDirectory(lockPath);
+  fs.mkdirSync(ticketDirectory, { recursive: true });
+
+  while (true) {
+    const tickets = listFleetChildTickets(ticketDirectory);
+    const number = tickets.reduce((highest, ticket) => Math.max(highest, ticket.number), 0) + 1;
+    const waitingPath = path.join(ticketDirectory, `ticket-${number}.waiting`);
+    const candidatePath = path.join(
+      ticketDirectory,
+      `.candidate-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`
+    );
+    fs.writeFileSync(candidatePath, `${JSON.stringify({
+      fleet_id: fleetId,
+      pid: process.pid,
+      hostname: os.hostname(),
+      acquired_at: new Date().toISOString(),
+    })}\n`, "utf-8");
+    try {
+      fs.linkSync(candidatePath, waitingPath);
+      return { number, waitingPath, ticketDirectory };
+    } catch (error) {
+      if (error.code !== "EEXIST") throw error;
+    } finally {
+      try {
+        fs.unlinkSync(candidatePath);
+      } catch (error) {
+        if (error.code !== "ENOENT") throw error;
+      }
+    }
+  }
+}
+
+function retireDeadFleetChildTickets(ticket) {
+  for (const predecessor of listFleetChildTickets(ticket.ticketDirectory)) {
+    if (predecessor.state !== "waiting" || predecessor.number >= ticket.number) continue;
+    try {
+      const owner = JSON.parse(fs.readFileSync(predecessor.path, "utf-8"));
+      if (owner.hostname !== os.hostname() || processIsAlive(Number(owner.pid))) continue;
+      fs.renameSync(predecessor.path, predecessor.path.replace(/\.waiting$/, ".done"));
+    } catch (error) {
+      if (error.code !== "ENOENT") continue;
+    }
+  }
+}
+
+function fleetChildTicketHasPredecessor(ticket) {
+  return listFleetChildTickets(ticket.ticketDirectory)
+    .some((entry) => entry.state === "waiting" && entry.number < ticket.number);
+}
+
+function releaseFleetChildTicket(ticket) {
+  const donePath = ticket.waitingPath.replace(/\.waiting$/, ".done");
+  try {
+    fs.renameSync(ticket.waitingPath, donePath);
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+  }
+
+  const tickets = listFleetChildTickets(ticket.ticketDirectory);
+  const highest = tickets.reduce((value, entry) => Math.max(value, entry.number), 0);
+  for (const entry of tickets) {
+    if (entry.state !== "done" || entry.number >= highest) continue;
+    try {
+      fs.unlinkSync(entry.path);
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+    }
+  }
+}
+
+function publishFleetChildLock(lockPath, contents) {
+  const candidatePath = `${lockPath}.candidate-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  fs.writeFileSync(candidatePath, contents, "utf-8");
+  try {
+    fs.linkSync(candidatePath, lockPath);
+    return true;
+  } catch (error) {
+    if (error.code !== "EEXIST") throw error;
+    return false;
+  } finally {
+    try {
+      fs.unlinkSync(candidatePath);
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+    }
+  }
+}
+
+function acquireFleetChildLock(repoRoot, fleetId) {
+  const lockPath = getFleetChildLockPath(repoRoot, fleetId);
+  fs.mkdirSync(path.dirname(lockPath), { recursive: true });
+  const ticket = createFleetChildTicket(lockPath, fleetId);
+  const contents = `${JSON.stringify({
+    fleet_id: fleetId,
+    pid: process.pid,
+    hostname: os.hostname(),
+    acquired_at: new Date().toISOString(),
+    ticket: ticket.number,
+  })}\n`;
+  const startedAt = Date.now();
+
+  try {
+    while (Date.now() - startedAt < FLEET_CHILD_LOCK_TIMEOUT_MS) {
+      retireDeadFleetChildTickets(ticket);
+      if (fleetChildTicketHasPredecessor(ticket)) {
+        Atomics.wait(FLEET_CHILD_LOCK_WAIT_ARRAY, 0, 0, 10);
+        continue;
+      }
+      if (publishFleetChildLock(lockPath, contents)) {
+        return { lockPath, contents, ticket };
+      }
+      try {
+        const existingContents = fs.readFileSync(lockPath, "utf-8");
+        let existing;
+        try {
+          existing = JSON.parse(existingContents);
+        } catch {
+          // Older writers created the canonical path before populating it.
+          // The lowest live ticket can safely retire a truncated remnant.
+          fs.unlinkSync(lockPath);
+          continue;
+        }
+        if (existing.hostname === os.hostname() && !processIsAlive(Number(existing.pid))) {
+          // Only the lowest live ticket may reclaim the canonical lock. A
+          // contender that observed this stale owner cannot race a successor.
+          fs.unlinkSync(lockPath);
+          continue;
+        }
+      } catch (readError) {
+        if (readError.code === "ENOENT") continue;
+      }
+      Atomics.wait(FLEET_CHILD_LOCK_WAIT_ARRAY, 0, 0, 10);
+    }
+  } catch (error) {
+    releaseFleetChildTicket(ticket);
+    throw error;
+  }
+  releaseFleetChildTicket(ticket);
+  throw new FleetInputError(
+    `timed out waiting to update fleet children for '${fleetId}'; another relay-fleet invocation is active`
+  );
+}
+
+function releaseFleetChildLock(lock) {
+  try {
+    if (fs.readFileSync(lock.lockPath, "utf-8") === lock.contents) fs.unlinkSync(lock.lockPath);
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+  } finally {
+    releaseFleetChildTicket(lock.ticket);
+  }
+}
+
+function withFleetChildLock(repoRoot, fleetId, callback) {
+  const lock = acquireFleetChildLock(repoRoot, fleetId);
+  try {
+    return callback();
+  } finally {
+    releaseFleetChildLock(lock);
+  }
+}
+
+function assertLeavesMatchFleetChildren(repoRoot, fleetId, leaves, { persistedLeaves = null } = {}) {
   const fleet = readFleetManifest(repoRoot, fleetId).data;
+  if (persistedLeaves) {
+    return {
+      fleet,
+      replacements: acceptedLeafReplacements(fleet.children, persistedLeaves, leaves),
+    };
+  }
   if (!leafRefSetsMatch(leaves, fleet.children)) {
     throw new FleetInputError(
       `--leaves-file leaf_ref set differs from fleet manifest children for '${fleetId}'; refusing to overwrite an existing fleet`
     );
   }
+  return { fleet, replacements: [] };
+}
+
+function replacedFleetChildren(fleetChildren, replacements) {
+  const replacementsByOldRef = new Map(replacements.map((replacement) => [replacement.old_leaf_ref, replacement]));
+  return fleetChildren.map((child) => {
+    const replacement = replacementsByOldRef.get(child.leaf_ref);
+    if (!replacement) return child;
+    return {
+      leaf_ref: replacement.new_leaf_ref,
+      run_id: null,
+      dispatch_status: DISPATCH_STATUS.PENDING,
+    };
+  });
+}
+
+function fleetChildrenMatch(left, right) {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function removeFleetLeafReplacementJournal(journalPath) {
+  try {
+    fs.unlinkSync(journalPath);
+    syncDirectory(path.dirname(journalPath));
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+  }
+}
+
+function recoverAcceptedLeafReplacementUnlocked(repoRoot, fleetId) {
+  const journalPath = getFleetLeafReplacementPath(repoRoot, fleetId);
+  const journal = readJsonIfExists(journalPath, null);
+  if (!journal) return [];
+  if (
+    journal.fleet_id !== fleetId
+    || !Array.isArray(journal.original_children)
+    || !Array.isArray(journal.replacement_children)
+    || !Array.isArray(journal.original_leaves)
+    || !Array.isArray(journal.replacement_leaves)
+  ) {
+    throw new Error(`invalid fleet leaf-replacement recovery journal: ${journalPath}`);
+  }
+
+  const fleet = readFleetManifest(repoRoot, fleetId).data;
+  const persistedLeaves = readPersistedLeaves(repoRoot, fleetId);
+  const manifestIsOriginal = fleetChildrenMatch(fleet.children, journal.original_children);
+  const manifestIsReplacement = fleetChildrenMatch(fleet.children, journal.replacement_children);
+  const leavesAreOriginal = leavesMatch(persistedLeaves, journal.original_leaves);
+  const leavesAreReplacement = leavesMatch(persistedLeaves, journal.replacement_leaves);
+
+  if (manifestIsOriginal && leavesAreOriginal) {
+    removeFleetLeafReplacementJournal(journalPath);
+    return [];
+  }
+  if (manifestIsOriginal && leavesAreReplacement) {
+    updateFleetManifest(repoRoot, fleetId, (current) => ({
+      ...current,
+      children: journal.replacement_children,
+    }));
+    syncFile(getFleetManifestPath(repoRoot, fleetId));
+  } else if (manifestIsReplacement && leavesAreOriginal) {
+    persistFleetLeaves(repoRoot, fleetId, journal.replacement_leaves, { durable: true });
+  } else if (!manifestIsReplacement || !leavesAreReplacement) {
+    throw new Error(
+      `fleet leaf-replacement recovery journal does not match the manifest/leaves stores for '${fleetId}'`
+    );
+  }
+
+  removeFleetLeafReplacementJournal(journalPath);
+  return Array.isArray(journal.replacements) ? journal.replacements : [];
+}
+
+function recoverAcceptedLeafReplacement(repoRoot, fleetId) {
+  if (!fs.existsSync(getFleetLeafReplacementPath(repoRoot, fleetId))) return [];
+  return withFleetChildLock(repoRoot, fleetId, () => (
+    recoverAcceptedLeafReplacementUnlocked(repoRoot, fleetId)
+  ));
+}
+
+function applyAcceptedLeafReplacements(repoRoot, fleetId, leaves) {
+  return withFleetChildLock(repoRoot, fleetId, () => {
+    recoverAcceptedLeafReplacementUnlocked(repoRoot, fleetId);
+    const fleet = readFleetManifest(repoRoot, fleetId).data;
+    const currentPersistedLeaves = readPersistedLeaves(repoRoot, fleetId);
+    const replacements = acceptedLeafReplacements(fleet.children, currentPersistedLeaves, leaves);
+    if (!Array.isArray(replacements)) {
+      throw new FleetInputError(
+        `--leaves-file differs from persisted fleet leaves for '${fleetId}'; refusing to overwrite an existing fleet`
+      );
+    }
+    if (replacements.length === 0) {
+      if (leavesMatch(currentPersistedLeaves, leaves) && leafRefSetsMatch(fleet.children, leaves)) return [];
+      throw new FleetInputError(
+        `--leaves-file differs from persisted fleet leaves for '${fleetId}'; refusing to overwrite an existing fleet`
+      );
+    }
+
+    const originalChildren = fleet.children;
+    const replacementChildren = replacedFleetChildren(fleet.children, replacements);
+    const journalPath = getFleetLeafReplacementPath(repoRoot, fleetId);
+    writeJsonAtomically(journalPath, {
+      fleet_id: fleetId,
+      original_children: originalChildren,
+      replacement_children: replacementChildren,
+      original_leaves: currentPersistedLeaves,
+      replacement_leaves: leaves,
+      replacements,
+    }, { durable: true });
+    try {
+      updateFleetManifest(repoRoot, fleetId, (current) => ({
+        ...current,
+        children: replacementChildren,
+      }));
+      syncFile(getFleetManifestPath(repoRoot, fleetId));
+      persistFleetLeaves(repoRoot, fleetId, leaves, { durable: true });
+    } catch (error) {
+      try {
+        const currentFleet = readFleetManifest(repoRoot, fleetId).data;
+        if (!fleetChildrenMatch(currentFleet.children, originalChildren)) {
+          updateFleetManifest(repoRoot, fleetId, (current) => ({
+            ...current,
+            children: originalChildren,
+          }));
+          syncFile(getFleetManifestPath(repoRoot, fleetId));
+        }
+        const persistedAfterFailure = readPersistedLeaves(repoRoot, fleetId);
+        if (!leavesMatch(persistedAfterFailure, currentPersistedLeaves)) {
+          persistFleetLeaves(repoRoot, fleetId, currentPersistedLeaves, { durable: true });
+        }
+        removeFleetLeafReplacementJournal(journalPath);
+      } catch (rollbackError) {
+        throw new Error(
+          `failed to persist accepted leaf replacements and failed to roll back fleet stores: ${error.message}; rollback: ${rollbackError.message}`,
+          { cause: error }
+        );
+      }
+      throw error;
+    }
+    removeFleetLeafReplacementJournal(journalPath);
+    return replacements;
+  });
 }
 
 function assertLeavesMatchPersisted(repoRoot, fleetId, leaves) {
@@ -457,8 +875,8 @@ function assertLeavesMatchPersisted(repoRoot, fleetId, leaves) {
   const storeExists = fs.existsSync(storePath);
   const persisted = readPersistedLeaves(repoRoot, fleetId);
   if (!storeExists) {
-    assertLeavesMatchFleetChildren(repoRoot, fleetId, leaves);
-    return null;
+    const { replacements } = assertLeavesMatchFleetChildren(repoRoot, fleetId, leaves);
+    return { leaves: null, replacements };
   }
   if (persisted.length === 0) {
     throw new FleetInputError(
@@ -466,11 +884,16 @@ function assertLeavesMatchPersisted(repoRoot, fleetId, leaves) {
     );
   }
   if (!leavesMatch(persisted, leaves)) {
+    const { replacements } = assertLeavesMatchFleetChildren(repoRoot, fleetId, leaves, { persistedLeaves: persisted });
+    if (Array.isArray(replacements) && replacements.length > 0) {
+      return { leaves, replacements };
+    }
     throw new FleetInputError(
       `--leaves-file differs from persisted fleet leaves for '${fleetId}'; refusing to overwrite an existing fleet`
     );
   }
-  return persisted;
+  assertLeavesMatchFleetChildren(repoRoot, fleetId, leaves);
+  return { leaves: persisted, replacements: [] };
 }
 
 function processIsAlive(pid) {
@@ -549,7 +972,17 @@ function cleanupDeadRuntimeChildren(repoRoot, fleetId) {
 }
 
 function setFleetChild(repoRoot, fleetId, child) {
-  return updateFleetManifest(repoRoot, fleetId, (fleet) => upsertFleetChild(fleet, child)).data;
+  return withFleetChildLock(repoRoot, fleetId, () => {
+    let childExists = true;
+    const updated = updateFleetManifest(repoRoot, fleetId, (fleet) => {
+      if (!findFleetChild(fleet, child.leaf_ref)) {
+        childExists = false;
+        return fleet;
+      }
+      return upsertFleetChild(fleet, child);
+    }).data;
+    return childExists ? updated : null;
+  });
 }
 
 function transitionFleetToDispatching(repoRoot, fleetId) {
@@ -667,12 +1100,13 @@ function reconcileFleet(repoRoot, fleetId, leaves) {
     if (!leafRef || !record.data?.run_id) continue;
     const dispatchStatus = dispatchStatusForRunRecordAdoption(fleet, leafRef, record);
     if (!dispatchStatus) continue;
-    fleet = setFleetChild(repoRoot, fleetId, {
+    const updated = setFleetChild(repoRoot, fleetId, {
       leaf_ref: leafRef,
       run_id: record.data.run_id,
       dispatch_status: dispatchStatus,
       last_error: null,
     });
+    if (updated) fleet = updated;
   }
 
   cleanupDeadRuntimeChildren(repoRoot, fleetId);
@@ -683,7 +1117,7 @@ function reconcileFleet(repoRoot, fleetId, leaves) {
     if (runtimeChildIsAlive(repoRoot, fleetId, child.leaf_ref)) continue;
     const leaf = leavesByRef.get(child.leaf_ref);
     if (leaf && issueLockHeld(repoRoot, fleetId, leaf)) continue;
-    fleet = setFleetChild(repoRoot, fleetId, {
+    const updated = setFleetChild(repoRoot, fleetId, {
       leaf_ref: child.leaf_ref,
       run_id: null,
       dispatch_status: DISPATCH_STATUS.DISPATCH_FAILED_PRE_MANIFEST,
@@ -691,6 +1125,7 @@ function reconcileFleet(repoRoot, fleetId, leaves) {
         fallback: "dispatch interrupted before creating a run manifest",
       }),
     });
+    if (updated) fleet = updated;
   }
 
   return readFleetManifest(repoRoot, fleetId).data;
@@ -1382,21 +1817,27 @@ async function spawnDispatchForLeaf({ repoRoot, fleetId, leaf, options, activeCh
       if (!(error instanceof FleetIssueLockError)) {
         return { leaf_ref: leaf.leaf_ref, status: "failed", error: String(error.message || error) };
       }
-      setFleetChild(repoRoot, fleetId, {
+      const updated = setFleetChild(repoRoot, fleetId, {
         leaf_ref: leaf.leaf_ref,
         run_id: null,
         dispatch_status: DISPATCH_STATUS.DISPATCH_FAILED_PRE_MANIFEST,
         last_error: dispatchFailureLastError({ error: error.message }),
       });
+      if (!updated) {
+        return { leaf_ref: leaf.leaf_ref, status: "skipped_replaced" };
+      }
       return { leaf_ref: leaf.leaf_ref, status: "dispatch_failed_pre_manifest", error: error.message };
     }
 
-    setFleetChild(repoRoot, fleetId, {
+    const updated = setFleetChild(repoRoot, fleetId, {
       leaf_ref: leaf.leaf_ref,
       run_id: null,
       dispatch_status: DISPATCH_STATUS.DISPATCHING,
       last_error: null,
     });
+    if (!updated) {
+      return { leaf_ref: leaf.leaf_ref, status: "skipped_replaced" };
+    }
   }
 
   const args = buildDispatchArgs({ repoRoot, fleetId, leaf, options });
@@ -1693,6 +2134,14 @@ function formatPreManifestRetryLine(summary, fleetId) {
   ].join(" ");
 }
 
+function writeReplacementNotes(result) {
+  for (const replacement of result?.replaced_children || []) {
+    console.error(
+      `relay-fleet replaced child in fleet '${result.fleet_id}': ${replacement.old_leaf_ref} -> ${replacement.new_leaf_ref}`
+    );
+  }
+}
+
 async function statusFleet({ repoRoot, fleetId }) {
   const fleet = readFleetManifest(repoRoot, fleetId).data;
   const summary = deriveFleetSummary(repoRoot, fleet);
@@ -1885,7 +2334,7 @@ function readDriveLeaves({ repoRoot, fleetId, manifestPath, options }) {
       throw new FleetInputError("--leaves-file is required for --dry-run");
     }
     validateLeafLineage(repoRoot, explicitLeaves);
-    return { leaves: explicitLeaves, explicitLeaves, manifestExists };
+    return { leaves: explicitLeaves, explicitLeaves, manifestExists, replacedChildren: [] };
   }
 
   if (!manifestExists) {
@@ -1893,23 +2342,35 @@ function readDriveLeaves({ repoRoot, fleetId, manifestPath, options }) {
       throw new FleetInputError(`fleet manifest does not exist: ${manifestPath}; nothing to continue`);
     }
     validateLeafLineage(repoRoot, explicitLeaves);
-    return { leaves: explicitLeaves, explicitLeaves, manifestExists };
+    return { leaves: explicitLeaves, explicitLeaves, manifestExists, replacedChildren: [] };
   }
+
+  const recoveredReplacements = recoverAcceptedLeafReplacement(repoRoot, fleetId);
 
   if (explicitLeaves) {
     const persisted = assertLeavesMatchPersisted(repoRoot, fleetId, explicitLeaves);
     validateLeafLineage(repoRoot, explicitLeaves);
-    if (!persisted) {
-      persistFleetLeaves(repoRoot, fleetId, explicitLeaves);
-      return { leaves: explicitLeaves, explicitLeaves, manifestExists };
+    if (persisted.replacements.length > 0) {
+      const replacements = applyAcceptedLeafReplacements(repoRoot, fleetId, explicitLeaves);
+      return {
+        leaves: explicitLeaves,
+        explicitLeaves,
+        manifestExists,
+        replacedChildren: replacements,
+      };
     }
-    return { leaves: persisted, explicitLeaves, manifestExists };
+    if (!persisted.leaves) {
+      persistFleetLeaves(repoRoot, fleetId, explicitLeaves);
+      return { leaves: explicitLeaves, explicitLeaves, manifestExists, replacedChildren: recoveredReplacements };
+    }
+    return { leaves: persisted.leaves, explicitLeaves, manifestExists, replacedChildren: recoveredReplacements };
   }
 
   return {
     leaves: readPersistedLeaves(repoRoot, fleetId),
     explicitLeaves: null,
     manifestExists,
+    replacedChildren: recoveredReplacements,
   };
 }
 
@@ -2018,6 +2479,7 @@ function buildDriveResult({
   reviewResult = null,
   mergeResult = null,
   deprecatedAliases = [],
+  replacedChildren = [],
 }) {
   closeFleetIfTerminal(repoRoot, fleetId);
   const summary = deriveFleetSummary(repoRoot, readFleetManifest(repoRoot, fleetId).data);
@@ -2032,6 +2494,7 @@ function buildDriveResult({
     fleet_id: fleetId,
     fleetManifestPath,
     deprecated_aliases: deprecatedAliases,
+    replaced_children: replacedChildren,
     children: dispatchResult?.children || [],
     dispatch_children: dispatchResult?.children || [],
     reviewed_children: reviewResult?.reviewed_children || [],
@@ -2090,7 +2553,7 @@ async function runFleet(options) {
     }
   }
 
-  const { leaves, manifestExists } = readDriveLeaves({ repoRoot, fleetId, manifestPath, options });
+  const { leaves, manifestExists, replacedChildren } = readDriveLeaves({ repoRoot, fleetId, manifestPath, options });
 
   if (options.dryRun) {
     const activeChildren = new Map();
@@ -2108,6 +2571,7 @@ async function runFleet(options) {
       ok: children.every((child) => child.status === "dry_run"),
       dryRun: true,
       fleet_id: fleetId,
+      replaced_children: replacedChildren,
       children,
     };
   }
@@ -2143,6 +2607,7 @@ async function runFleet(options) {
         interrupted,
         fleetManifestPath: manifestPath,
         deprecated_aliases: deprecatedAliases,
+        replaced_children: replacedChildren,
       };
     }
 
@@ -2165,6 +2630,7 @@ async function runFleet(options) {
           dispatchResult,
           reviewResult,
           deprecatedAliases,
+          replacedChildren,
         });
       }
     }
@@ -2179,6 +2645,7 @@ async function runFleet(options) {
       reviewResult,
       mergeResult,
       deprecatedAliases,
+      replacedChildren,
     });
   } finally {
     if (options.installSignalHandlers) {
@@ -2206,6 +2673,7 @@ async function main(argv = process.argv.slice(2)) {
       throw new FleetInputError("--review cannot be combined with --resume, --leaves-file, --dry-run, or --status");
     }
     const result = await runFleet({ ...options, installSignalHandlers: true });
+    writeReplacementNotes(result);
     if (options.json) {
       console.log(JSON.stringify(result, null, 2));
     } else if (options.status) {
@@ -2244,6 +2712,7 @@ module.exports = {
   buildRedispatchArgs,
   buildReviewArgs,
   formatStatusText,
+  getFleetLeafReplacementPath,
   getFleetLeavesStorePath,
   getFleetRuntimePath,
   loadLeavesFile,
@@ -2253,4 +2722,5 @@ module.exports = {
   reviewFleet,
   runFleet,
   statusFleet,
+  withFleetChildLock,
 };
