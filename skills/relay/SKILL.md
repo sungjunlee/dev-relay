@@ -143,7 +143,7 @@ If relay-review returns LGTM, the review runner should already have recorded `re
 
 ## Batch Mode
 
-When multiple independent tasks are ready, `relay-fleet` is the default parallel batch path. See `references/batch-mode.md` for the remaining conflict-recovery note and the "when in doubt, run sequentially" principle.
+When multiple independent tasks are ready, prepare a `relay-fleet` batch but preserve `/relay`'s `ready_to_merge` stop until the user explicitly authorizes landing it; after authorization, `relay-fleet` is the default parallel batch drive. See `references/batch-mode.md` for the remaining conflict-recovery note and the "when in doubt, run sequentially" principle.
 
 ## Summary Checklist
 
