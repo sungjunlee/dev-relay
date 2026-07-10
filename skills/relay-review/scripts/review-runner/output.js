@@ -22,6 +22,7 @@ function printUsage() {
   console.log(`  --advisory-reviewer-model <name> ${modeLabel("--advisory-reviewer-model")} Advisory model override`);
   console.log(`  --advisory-timeout <seconds> ${modeLabel("--advisory-timeout")} Advisory timeout`);
   console.log(`  --advisory-grace <seconds>   ${modeLabel("--advisory-grace")} Standard-mode critical-path wait window`);
+  console.log(`  --allow-behind-base          ${modeLabel("--allow-behind-base")} Proceed despite a behind-base warning`);
   console.log(`  --prepare-only               ${modeLabel("--prepare-only")} Emit prompt bundle only; do not apply verdict`);
   console.log(`  --no-comment                 ${modeLabel("--no-comment")} Do not post a PR comment`);
   console.log(`  --json                       ${modeLabel("--json")} Output JSON`);

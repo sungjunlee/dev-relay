@@ -17,6 +17,7 @@ const VALUE = "value";
 const FLAGS = [
   { flag: "--all", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Presence flag; no value is consumed." },
   { flag: "--allow-stacked-base-hazard", kind: VALUE, mode: MODE_VERBATIM, valueName: "<reason>", rationale: "Audit reason for overriding a non-default stacked PR base hazard." },
+  { flag: "--allow-behind-base", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Explicit review opt-in to proceed when the reviewed head trails its base." },
   { flag: "--allow-conflicting-run", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Operator override for the in-flight-run check; logs a conflicting_run_override event." },
   { flag: "--allow-same-head", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Explicit same-HEAD recovery opt-in; no value is consumed." },
   { flag: "--advisory-profile", kind: VALUE, mode: MODE_PARSED, valueName: "<name>", rationale: "Closed advisory review profile selector; flag-like following tokens should mean the value is missing." },
@@ -223,7 +224,7 @@ const COMMAND_FLAGS = {
     "--diff-file", "--review-file", "--reviewer", "--reviewer-script",
     "--reviewer-model", "--advisory-reviewer", "--advisory-profile",
     "--advisory-reviewer-model", "--advisory-timeout", "--advisory-grace", "--prepare-only",
-    "--manual-review-reason", "--independent-review-reason", "--no-comment", "--json", "--help",
+    "--manual-review-reason", "--independent-review-reason", "--allow-behind-base", "--no-comment", "--json", "--help",
   ],
 };
 
