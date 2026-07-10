@@ -1159,6 +1159,27 @@ function copyFileAtomically(sourcePath, finalPath) {
   }
 }
 
+function persistDoneCriteria(manifest, runDir, originalPath) {
+  if (!originalPath) return manifest;
+
+  const persistedPath = path.join(runDir, "done-criteria.md");
+  const isSelfCopy = sameFilesystemLocation(originalPath, persistedPath);
+  if (!isSelfCopy) {
+    copyFileAtomically(originalPath, persistedPath);
+  }
+
+  return {
+    ...manifest,
+    anchor: {
+      ...(manifest.anchor || {}),
+      done_criteria_path: persistedPath,
+      ...(path.resolve(originalPath) === path.resolve(persistedPath)
+        ? {}
+        : { done_criteria_original_path: originalPath }),
+    },
+  };
+}
+
 function getPersistedRubricPath(runDir, rubricPath = "rubric.yaml") {
   const containment = validateRubricPathContainment(rubricPath, runDir);
   if (!containment.valid) {
@@ -1824,11 +1845,16 @@ async function main() {
 
   if (RESUME_MODE) {
     try {
+      const resumeDoneCriteriaPath = resolvedDoneCriteriaPath
+        && manifest?.anchor?.done_criteria_original_path
+        && sameFilesystemLocation(resolvedDoneCriteriaPath, manifest.anchor.done_criteria_original_path)
+          ? manifest.anchor.done_criteria_path
+          : resolvedDoneCriteriaPath;
       validateResumeRequestLinkage(manifest, {
         requestId: REQUEST_ID,
         leafId: LEAF_ID,
         fleetId: FLEET_ID,
-        doneCriteriaPath: resolvedDoneCriteriaPath,
+        doneCriteriaPath: resumeDoneCriteriaPath,
       });
       if (REVIEW_ASSURANCE_RAW !== undefined) {
         validateResumeReviewAssurance(manifest, REVIEW_ASSURANCE);
@@ -2073,6 +2099,13 @@ async function main() {
   };
 
   if (!RESUME_MODE) {
+    const doneCriteriaSource = inferDoneCriteriaSource({
+      repoRoot,
+      runId,
+      doneCriteriaPath: resolvedDoneCriteriaPath,
+      requestId: REQUEST_ID,
+      leafId: LEAF_ID,
+    });
     manifest = createManifestSkeleton({
       repoRoot,
       runId,
@@ -2087,17 +2120,13 @@ async function main() {
       requestId: REQUEST_ID || null,
       leafId: LEAF_ID || null,
       doneCriteriaPath: resolvedDoneCriteriaPath,
-      doneCriteriaSource: inferDoneCriteriaSource({
-        repoRoot,
-        runId,
-        doneCriteriaPath: resolvedDoneCriteriaPath,
-        requestId: REQUEST_ID,
-        leafId: LEAF_ID,
-      }),
+      doneCriteriaSource,
       reviewAssurance: REVIEW_ASSURANCE,
       modelHints: MODEL_HINTS,
       fleetId: FLEET_ID,
     });
+    ensureRunLayout(repoRoot, runId);
+    manifest = persistDoneCriteria(manifest, manifestRunDir, resolvedDoneCriteriaPath);
     manifest = {
       ...manifest,
       paths: {

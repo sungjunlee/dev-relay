@@ -6889,12 +6889,15 @@ test("dispatch stores request linkage and frozen done criteria anchor in manifes
   assert.equal(result.status, "completed");
   assert.equal(result.requestId, "req-20260409010101000");
   assert.equal(result.leafId, "leaf-01");
-  assert.equal(result.doneCriteriaPath, doneCriteriaFile);
+  const persistedDoneCriteriaPath = path.join(getRunDir(repoRoot, result.runId), "done-criteria.md");
+  assert.equal(result.doneCriteriaPath, persistedDoneCriteriaPath);
+  assert.equal(fs.readFileSync(persistedDoneCriteriaPath, "utf-8"), "# Done Criteria\n\n- Intake snapshot\n");
 
   const manifest = readManifest(result.manifestPath).data;
   assert.equal(manifest.source.request_id, "req-20260409010101000");
   assert.equal(manifest.source.leaf_id, "leaf-01");
-  assert.equal(manifest.anchor.done_criteria_path, doneCriteriaFile);
+  assert.equal(manifest.anchor.done_criteria_path, persistedDoneCriteriaPath);
+  assert.equal(manifest.anchor.done_criteria_original_path, doneCriteriaFile);
   assert.equal(manifest.anchor.done_criteria_source, "request_snapshot");
 });
 
@@ -6928,7 +6931,9 @@ test("dispatch infers planner_decision for canonical run-dir done criteria ancho
   const manifest = readManifest(result.manifestPath).data;
   assert.equal(manifest.run_id, runId);
   assert.equal(manifest.anchor.done_criteria_path, doneCriteriaFile);
+  assert.equal(manifest.anchor.done_criteria_original_path, undefined);
   assert.equal(manifest.anchor.done_criteria_source, "planner_decision");
+  assert.deepEqual(fs.readdirSync(runDir).filter((name) => name === "done-criteria.md"), ["done-criteria.md"]);
 });
 
 test("dispatch preserves file source for ad-hoc done criteria paths", () => {
@@ -6949,8 +6954,11 @@ test("dispatch preserves file source for ad-hoc done criteria paths", () => {
 
   assert.equal(result.status, "completed");
   const manifest = readManifest(result.manifestPath).data;
-  assert.equal(manifest.anchor.done_criteria_path, doneCriteriaFile);
+  const persistedDoneCriteriaPath = path.join(getRunDir(repoRoot, result.runId), "done-criteria.md");
+  assert.equal(manifest.anchor.done_criteria_path, persistedDoneCriteriaPath);
+  assert.equal(manifest.anchor.done_criteria_original_path, doneCriteriaFile);
   assert.equal(manifest.anchor.done_criteria_source, "file");
+  assert.equal(fs.readFileSync(persistedDoneCriteriaPath, "utf-8"), "# Done Criteria\n\n- Ad-hoc file\n");
 });
 
 test("dispatch dry-run includes request linkage and frozen done criteria file info", () => {
@@ -7016,7 +7024,8 @@ test("dispatch resume rejects changes to immutable intake linkage", () => {
   assert.match(result.stderr, /cannot change immutable anchor\.done_criteria_path/);
 
   const manifest = readManifest(first.manifestPath).data;
-  assert.equal(manifest.anchor.done_criteria_path, doneCriteriaFile);
+  assert.equal(manifest.anchor.done_criteria_path, path.join(getRunDir(repoRoot, first.runId), "done-criteria.md"));
+  assert.equal(manifest.anchor.done_criteria_original_path, doneCriteriaFile);
   assert.equal(manifest.source.request_id, "req-20260409030303000");
 });
 
@@ -7057,12 +7066,13 @@ test("dispatch resume keeps the original intake linkage when the same immutable 
   assert.equal(second.runId, first.runId);
   assert.equal(second.requestId, "req-20260409050505000");
   assert.equal(second.leafId, "leaf-01");
-  assert.equal(second.doneCriteriaPath, doneCriteriaFile);
+  assert.equal(second.doneCriteriaPath, path.join(getRunDir(repoRoot, first.runId), "done-criteria.md"));
 
   const manifest = readManifest(first.manifestPath).data;
   assert.equal(manifest.source.request_id, "req-20260409050505000");
   assert.equal(manifest.source.leaf_id, "leaf-01");
-  assert.equal(manifest.anchor.done_criteria_path, doneCriteriaFile);
+  assert.equal(manifest.anchor.done_criteria_path, path.join(getRunDir(repoRoot, first.runId), "done-criteria.md"));
+  assert.equal(manifest.anchor.done_criteria_original_path, doneCriteriaFile);
 });
 
 test("dispatch resume rejects adding intake linkage to a run that started without it", () => {
