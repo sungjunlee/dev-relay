@@ -185,6 +185,17 @@ function runCleanup({
     }
   }
 
+  if (errors.length === 0 && !worktreeStatus.exists) {
+    if (!dryRun) {
+      try {
+        execGit(repoRoot, ["worktree", "prune"]);
+        pruneRan = true;
+      } catch (error) {
+        errors.push(`worktree prune failed: ${summarizeFailure(error)}`);
+      }
+    }
+  }
+
   if (errors.length === 0 && deleteMergedBranch && branch && branchExistsBefore) {
     if (!dryRun) {
       try {
@@ -196,7 +207,7 @@ function runCleanup({
     }
   }
 
-  if (errors.length === 0) {
+  if (errors.length === 0 && !pruneRan) {
     if (!dryRun) {
       try {
         execGit(repoRoot, ["worktree", "prune"]);

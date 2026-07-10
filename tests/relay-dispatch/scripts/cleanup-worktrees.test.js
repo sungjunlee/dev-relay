@@ -61,6 +61,12 @@ function writeStaleMissingRelayRun(repoRoot, { branch, updatedAt }) {
   });
   const worktreePath = path.join(getRelayWorktreeBase(), `stale-${branch}`, path.basename(repoRoot));
   fs.mkdirSync(path.dirname(worktreePath), { recursive: true });
+  execFileSync("git", ["worktree", "add", worktreePath, "-b", branch], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+  });
+  fs.rmSync(worktreePath, { recursive: true, force: true });
 
   const layout = ensureRunLayout(repoRoot, runId);
   let manifest = createManifestSkeleton({
@@ -83,7 +89,12 @@ function writeStaleMissingRelayRun(repoRoot, { branch, updatedAt }) {
   manifest.timestamps.created_at = updatedAt;
   manifest.timestamps.updated_at = updatedAt;
   writeManifest(layout.manifestPath, manifest);
-  assert.equal(fs.existsSync(worktreePath), false, "fixture must model a pruned missing worktree");
+  assert.equal(fs.existsSync(worktreePath), false, "fixture must model a manually deleted worktree");
+  assert.match(
+    execFileSync("git", ["worktree", "list", "--porcelain"], { cwd: repoRoot, encoding: "utf-8" }),
+    new RegExp(`branch refs/heads/${branch.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`),
+    "fixture must retain the stale git worktree registration"
+  );
   return { manifestPath: layout.manifestPath, runId, worktreePath };
 }
 
@@ -702,6 +713,7 @@ test("cleanup-worktrees processes terminal manifests whose worktrees are already
         stdio: "pipe",
       });
     }
+    assert.equal(branchExists(repoRoot, `issue-295-${invocationContext}`), true);
 
     const stdout = execFileSync("node", [
       SCRIPT,
@@ -715,7 +727,9 @@ test("cleanup-worktrees processes terminal manifests whose worktrees are already
     assert.ok(cleaned, `${invocationContext} invocation must process the terminal run`);
     assert.equal(result.failed.length, 0);
     assert.equal(cleaned.worktreeRemoved, true);
+    assert.equal(cleaned.branchDeleted, true);
     assert.equal(cleaned.pruneRan, true);
+    assert.equal(branchExists(repoRoot, `issue-295-${invocationContext}`), false);
     const updated = readManifest(stale.manifestPath).data;
     assert.equal(updated.cleanup.status, "succeeded");
     const events = fs.readFileSync(path.join(path.dirname(stale.manifestPath), stale.runId, "events.jsonl"), "utf-8");
