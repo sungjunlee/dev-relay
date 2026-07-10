@@ -9,6 +9,7 @@ const REPO_ROOT = path.resolve(__dirname, "..", "..", "..");
 const RELAY_FLEET_SCRIPT = path.join(REPO_ROOT, "skills", "relay-fleet", "scripts", "relay-fleet.js");
 
 const {
+  getFleetLeafReplacementPath,
   getFleetLeavesStorePath,
   getFleetRuntimePath,
   reconcileFleet,
@@ -247,6 +248,37 @@ function holdFleetChildLock(repoRoot, fleetId) {
     acquired_at: new Date().toISOString(),
   });
   return lockPath;
+}
+
+function writeFleetChildLockWorker(tmpDir) {
+  const workerPath = path.join(tmpDir, "fleet-child-lock-worker.js");
+  fs.writeFileSync(workerPath, `const fs = require("node:fs");
+const { withFleetChildLock } = require(process.env.RELAY_FLEET_SCRIPT);
+const waitArray = new Int32Array(new SharedArrayBuffer(4));
+const owner = String(process.pid);
+
+withFleetChildLock(process.env.RELAY_FLEET_REPO, process.env.RELAY_FLEET_ID, () => {
+  let ownsMarker = false;
+  try {
+    fs.writeFileSync(process.env.RELAY_FLEET_ACTIVE_MARKER, owner, { flag: "wx" });
+    ownsMarker = true;
+  } catch (error) {
+    if (error.code !== "EEXIST") throw error;
+    fs.appendFileSync(process.env.RELAY_FLEET_OVERLAP_LOG, owner + "\\n", "utf-8");
+  }
+  Atomics.wait(waitArray, 0, 0, Number(process.env.RELAY_FLEET_HOLD_MS || 800));
+  if (ownsMarker) {
+    try {
+      if (fs.readFileSync(process.env.RELAY_FLEET_ACTIVE_MARKER, "utf-8") === owner) {
+        fs.unlinkSync(process.env.RELAY_FLEET_ACTIVE_MARKER);
+      }
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+    }
+  }
+});
+`, "utf-8");
+  return workerPath;
 }
 
 function runFleet(args, { relayHome, env = {}, timeout = 30000 } = {}) {
@@ -1089,6 +1121,68 @@ test("relay-fleet replacement matrix rejects a replacement leaf_ref that collide
   }
 });
 
+test("relay-fleet replacement rejects swap and rename-chain targets so stale leaf keys keep their specifications", () => {
+  const scenarios = [
+    { name: "swap", refs: ["leaf-a", "leaf-b"], incomingRefs: ["leaf-b", "leaf-a"] },
+    {
+      name: "chain",
+      refs: ["leaf-a", "leaf-b", "leaf-c"],
+      incomingRefs: ["leaf-b", "leaf-c", "leaf-a"],
+    },
+  ];
+
+  for (const scenario of scenarios) {
+    const { relayHome, repoRoot } = setupRepo(`relay-fleet-replace-${scenario.name}-`);
+    const fleetId = `fleet-replace-${scenario.name}`;
+    const persistedLeaves = scenario.refs.map((leafRef, index) => makeLeaf(repoRoot, index + 1, {
+      issue_number: 590 + index,
+      leaf_ref: leafRef,
+      leaf_id: leafRef,
+      branch: `issue-${590 + index}-${leafRef}-original`,
+    }));
+    const incomingLeaves = scenario.incomingRefs.map((leafRef, index) => makeLeaf(repoRoot, index + 10, {
+      issue_number: 590 + index,
+      leaf_ref: leafRef,
+      leaf_id: leafRef,
+      branch: `issue-${590 + index}-${leafRef}-replacement`,
+    }));
+    createFleetManifest(repoRoot, {
+      fleetId,
+      children: persistedLeaves.map((leaf) => ({
+        leaf_ref: leaf.leaf_ref,
+        run_id: null,
+        dispatch_status: DISPATCH_STATUS.DISPATCH_FAILED_PRE_MANIFEST,
+        last_error: `old failure for ${leaf.leaf_ref}`,
+      })),
+    });
+    writePersistedFleetLeaves(repoRoot, fleetId, persistedLeaves);
+    const manifestPath = getFleetManifestPath(repoRoot, fleetId);
+    const leavesStorePath = getFleetLeavesStorePath(repoRoot, fleetId);
+    const manifestBefore = fs.readFileSync(manifestPath, "utf-8");
+    const storeBefore = fs.readFileSync(leavesStorePath, "utf-8");
+    const leavesFile = writeLeavesFile(repoRoot, incomingLeaves);
+
+    const result = runFleet([
+      "--repo", repoRoot,
+      "--fleet-id", fleetId,
+      "--leaves-file", leavesFile,
+      "--json",
+    ], { relayHome });
+
+    assert.notEqual(result.status, 0);
+    assert.equal(
+      JSON.parse(result.stderr).error,
+      `--leaves-file differs from persisted fleet leaves for '${fleetId}'; refusing to overwrite an existing fleet`
+    );
+    assert.equal(fs.readFileSync(manifestPath, "utf-8"), manifestBefore);
+    assert.equal(fs.readFileSync(leavesStorePath, "utf-8"), storeBefore);
+    assert.deepEqual(
+      JSON.parse(storeBefore).leaves.map((leaf) => [leaf.issue_number, leaf.leaf_ref, leaf.branch]),
+      persistedLeaves.map((leaf) => [leaf.issue_number, leaf.leaf_ref, leaf.branch])
+    );
+  }
+});
+
 test("relay-fleet replacement matrix fails closed when a manifest-only run-bearing child is omitted", () => {
   const { relayHome, repoRoot } = setupRepo("relay-fleet-replace-manifest-only-run-");
   const fleetId = "fleet-replace-manifest-only-run";
@@ -1308,6 +1402,73 @@ test("relay-fleet stale dispatch selection cannot recreate a replaced child", as
   );
 });
 
+test("fleet child lock fences two concurrent stale-lock reapers", async () => {
+  const { repoRoot } = setupRepo("relay-fleet-stale-lock-reapers-");
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "fleet-stale-lock-reapers-hook-"));
+  const workerPath = writeFleetChildLockWorker(tmpDir);
+  const preloadPath = path.join(tmpDir, "delay-stale-lock-read.js");
+  const readMarker = path.join(tmpDir, "stale-read.flag");
+  const activeMarker = path.join(tmpDir, "callback-active.flag");
+  const overlapLog = path.join(tmpDir, "callback-overlap.log");
+  const fleetId = "fleet-stale-lock-reapers";
+  const lockPath = path.join(getFleetsDir(repoRoot), "locks", `fleet-${fleetId}-children.lock`);
+  fs.mkdirSync(path.dirname(lockPath), { recursive: true });
+  writeJson(lockPath, {
+    fleet_id: fleetId,
+    pid: 2147483647,
+    hostname: os.hostname(),
+    acquired_at: new Date(0).toISOString(),
+  });
+  fs.writeFileSync(preloadPath, `const fs = require("node:fs");
+const path = require("node:path");
+const waitArray = new Int32Array(new SharedArrayBuffer(4));
+const originalReadFileSync = fs.readFileSync;
+let delayed = false;
+
+fs.readFileSync = function delayedStaleLockRead(filePath) {
+  const result = originalReadFileSync.apply(this, arguments);
+  if (!delayed && path.resolve(String(filePath)) === path.resolve(process.env.RELAY_FLEET_DELAY_READ_PATH)) {
+    delayed = true;
+    fs.writeFileSync(process.env.RELAY_FLEET_DELAY_READ_MARKER, "read\\n", "utf-8");
+    Atomics.wait(waitArray, 0, 0, 400);
+  }
+  return result;
+};
+`, "utf-8");
+
+  const commonEnv = {
+    ...process.env,
+    RELAY_FLEET_SCRIPT,
+    RELAY_FLEET_REPO: repoRoot,
+    RELAY_FLEET_ID: fleetId,
+    RELAY_FLEET_ACTIVE_MARKER: activeMarker,
+    RELAY_FLEET_OVERLAP_LOG: overlapLog,
+    RELAY_FLEET_HOLD_MS: "800",
+  };
+  const first = spawn(process.execPath, [workerPath], {
+    env: {
+      ...commonEnv,
+      NODE_OPTIONS: [process.env.NODE_OPTIONS, `--require=${preloadPath}`].filter(Boolean).join(" "),
+      RELAY_FLEET_DELAY_READ_PATH: lockPath,
+      RELAY_FLEET_DELAY_READ_MARKER: readMarker,
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  const firstResult = captureChildResult(first);
+  await waitFor(() => fs.existsSync(readMarker));
+
+  const second = spawn(process.execPath, [workerPath], {
+    env: commonEnv,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  const secondResult = captureChildResult(second);
+  const [firstDone, secondDone] = await Promise.all([firstResult, secondResult]);
+
+  assert.equal(firstDone.status, 0, firstDone.stderr);
+  assert.equal(secondDone.status, 0, secondDone.stderr);
+  assert.equal(fs.existsSync(overlapLog), false);
+});
+
 test("relay-fleet replacement matrix rolls back manifest when persisted leaves rewrite fails", () => {
   const { relayHome, repoRoot } = setupRepo("relay-fleet-replace-rollback-");
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "fleet-replace-rollback-fake-"));
@@ -1375,6 +1536,106 @@ fs.renameSync = function renameSyncWithLeavesStoreFailure(sourcePath, destPath) 
   assert.equal(JSON.parse(result.stderr).error, "simulated leaves store write failure");
   assert.equal(fs.readFileSync(manifestPath, "utf-8"), manifestBefore);
   assert.equal(fs.readFileSync(leavesStorePath, "utf-8"), storeBefore);
+});
+
+test("relay-fleet recovers a replacement interrupted after the manifest rename", () => {
+  const { relayHome, repoRoot } = setupRepo("relay-fleet-replace-crash-recovery-");
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "fleet-replace-crash-recovery-hook-"));
+  const preloadPath = path.join(tmpDir, "kill-before-leaves-rename.js");
+  const dispatchScript = writeFakeDispatchScript(tmpDir);
+  const reviewScript = writeFakeReviewScript(tmpDir);
+  const finalizeScript = writeFakeFinalizeScript(tmpDir);
+  const dispatchLog = path.join(tmpDir, "dispatch.log");
+  const fleetId = "fleet-replace-crash-recovery";
+  const oldLeaf = makeLeaf(repoRoot, 1, {
+    issue_number: 598,
+    leaf_ref: "leaf-old",
+    leaf_id: "leaf-old",
+    branch: "issue-598-leaf-old",
+  });
+  const newLeaf = makeLeaf(repoRoot, 2, {
+    issue_number: oldLeaf.issue_number,
+    leaf_ref: "leaf-new",
+    leaf_id: "leaf-new",
+    branch: "issue-598-leaf-new",
+  });
+  createFleetManifest(repoRoot, {
+    fleetId,
+    children: [{
+      leaf_ref: oldLeaf.leaf_ref,
+      run_id: null,
+      dispatch_status: DISPATCH_STATUS.DISPATCH_FAILED_PRE_MANIFEST,
+      last_error: "old pre-manifest failure",
+    }],
+  });
+  writePersistedFleetLeaves(repoRoot, fleetId, [oldLeaf]);
+  const leavesFile = writeLeavesFile(repoRoot, [newLeaf]);
+  const leavesStorePath = getFleetLeavesStorePath(repoRoot, fleetId);
+  const journalPath = getFleetLeafReplacementPath(repoRoot, fleetId);
+  fs.writeFileSync(preloadPath, `const fs = require("node:fs");
+const path = require("node:path");
+const originalRenameSync = fs.renameSync;
+
+fs.renameSync = function killBeforeLeavesRename(sourcePath, destPath) {
+  if (path.resolve(String(destPath)) === path.resolve(process.env.RELAY_FLEET_KILL_RENAME_DEST)) {
+    process.kill(process.pid, "SIGKILL");
+  }
+  return originalRenameSync.apply(this, arguments);
+};
+`, "utf-8");
+
+  const interrupted = runFleet([
+    "--repo", repoRoot,
+    "--fleet-id", fleetId,
+    "--leaves-file", leavesFile,
+    "--json",
+  ], {
+    relayHome,
+    env: {
+      NODE_OPTIONS: [process.env.NODE_OPTIONS, `--require=${preloadPath}`].filter(Boolean).join(" "),
+      RELAY_FLEET_KILL_RENAME_DEST: leavesStorePath,
+    },
+  });
+
+  assert.equal(interrupted.signal, "SIGKILL");
+  assert.equal(fs.existsSync(journalPath), true);
+  assert.deepEqual(readFleetManifest(repoRoot, fleetId).data.children, [{
+    leaf_ref: newLeaf.leaf_ref,
+    run_id: null,
+    dispatch_status: DISPATCH_STATUS.PENDING,
+  }]);
+  assert.deepEqual(
+    JSON.parse(fs.readFileSync(leavesStorePath, "utf-8")).leaves.map((leaf) => leaf.leaf_ref),
+    [oldLeaf.leaf_ref]
+  );
+
+  const recovered = runFleet([
+    "--repo", repoRoot,
+    "--fleet-id", fleetId,
+    "--leaves-file", leavesFile,
+    "--dispatch-script", dispatchScript,
+    "--review-script", reviewScript,
+    "--finalize-script", finalizeScript,
+    "--json",
+  ], {
+    relayHome,
+    env: { FAKE_DISPATCH_LOG: dispatchLog },
+  });
+
+  assert.equal(recovered.status, 0, `${recovered.stderr}\n${recovered.stdout}`);
+  assert.equal(fs.existsSync(journalPath), false);
+  assert.deepEqual(JSON.parse(recovered.stdout).replaced_children, [{
+    old_leaf_ref: oldLeaf.leaf_ref,
+    new_leaf_ref: newLeaf.leaf_ref,
+    issue_number: oldLeaf.issue_number,
+  }]);
+  assert.deepEqual(
+    JSON.parse(fs.readFileSync(leavesStorePath, "utf-8")).leaves.map((leaf) => leaf.leaf_ref),
+    [newLeaf.leaf_ref]
+  );
+  const dispatchEntries = readJsonLines(dispatchLog).filter((entry) => !entry.detachedChild);
+  assert.equal(dispatchEntries.length, 1);
+  assert.equal(dispatchEntries[0].branch, newLeaf.branch);
 });
 
 test("relay-fleet replacement matrix fails closed when a divergent child has a run id", () => {
