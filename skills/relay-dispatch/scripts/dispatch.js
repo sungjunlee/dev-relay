@@ -1194,10 +1194,11 @@ function failRunDirCollision(runId, manifestPath) {
   process.exit(1);
 }
 
-function isPlannerAnchorOnlyRunDir(runDir) {
+function isRetryCompatibleRunDir(runDir) {
   if (!fs.existsSync(runDir)) return false;
   const entries = fs.readdirSync(runDir).filter((entry) => entry !== ".DS_Store");
-  return entries.length === 1 && entries[0] === "done-criteria.md";
+  return entries.length === 0
+    || (entries.length === 1 && entries[0] === "done-criteria.md");
 }
 
 function isCanonicalPlannerDoneCriteriaPath(repoRoot, runId, doneCriteriaPath) {
@@ -1236,7 +1237,11 @@ function persistDoneCriteria(manifest, runDir, originalPath, doneCriteriaSource)
   const persistedPath = path.join(runDir, "done-criteria.md");
   const isSelfCopy = sameFilesystemLocation(originalPath, persistedPath);
   if (!isSelfCopy) {
-    copyFileAtomically(originalPath, persistedPath);
+    try {
+      copyFileAtomically(originalPath, persistedPath);
+    } catch (error) {
+      throw new Error(`Failed to persist Done Criteria from ${originalPath}: ${error.message}`);
+    }
   }
 
   return {
@@ -1940,7 +1945,7 @@ async function main() {
     manifestPath = getManifestPath(repoRoot, runId);
     const runDir = getRunDir(repoRoot, runId);
     wtPath = path.join(wtBase, wtId, path.basename(repoRoot));
-    if (fs.existsSync(manifestPath) || (fs.existsSync(runDir) && !isPlannerAnchorOnlyRunDir(runDir))) {
+    if (fs.existsSync(manifestPath) || (fs.existsSync(runDir) && !isRetryCompatibleRunDir(runDir))) {
       failRunDirCollision(runId, manifestPath);
     }
     baseBranch = resolveBaseBranchForNewDispatch(REPO_PATH, { validateRemote: !DRY_RUN });
