@@ -1303,34 +1303,19 @@ function findLatestRedispatchPrompt(runDir) {
   return latest;
 }
 
-function refreshRedispatchDoneCriteria(prompt, doneCriteria) {
-  const blockPattern = /((?:^|\n)Original Done Criteria \(scope anchor\):\r?\n<task-content source="[^"]+">\r?\n)([\s\S]*?)(\r?\n<\/task-content>)/;
-  const match = blockPattern.exec(prompt);
-  if (match) {
-    if (match[2] === doneCriteria) return prompt;
-    const refreshedBlock = match[1] + doneCriteria + match[3];
-    const blockEnd = match.index + match[0].length;
-    return prompt.slice(0, match.index) + refreshedBlock + prompt.slice(blockEnd);
-  }
-
-  if (prompt.startsWith("Rubric recovery re-dispatch\n")) {
-    const criteriaHeader = "\nDone Criteria:\n";
-    const criteriaStart = prompt.lastIndexOf(criteriaHeader);
-    if (criteriaStart !== -1) {
-      const contentStart = criteriaStart + criteriaHeader.length;
-      const convergenceStart = prompt.indexOf("\n\n## Convergence context\n", contentStart);
-      const serializationNewlineLength = convergenceStart === -1
-        ? prompt.endsWith("\r\n") ? 2 : prompt.endsWith("\n") ? 1 : 0
-        : 0;
-      const contentEnd = convergenceStart === -1
-        ? prompt.length - serializationNewlineLength
-        : convergenceStart;
-      if (prompt.slice(contentStart, contentEnd) === doneCriteria) return prompt;
-      return prompt.slice(0, contentStart) + doneCriteria + prompt.slice(contentEnd);
-    }
-  }
-
-  return null;
+function refreshRedispatchDoneCriteria(prompt, doneCriteria, previousDoneCriteria) {
+  // The embedded criteria are author-controlled Markdown: marker-looking
+  // lines (</task-content>, "Done Criteria:", convergence headings) can
+  // legitimately appear INSIDE them, so the stale block is located by the
+  // exact bytes the generating round recorded, never by structural markers.
+  if (previousDoneCriteria === doneCriteria) return { status: "ok", prompt };
+  const start = prompt.indexOf(previousDoneCriteria);
+  if (start === -1) return { status: "not_found" };
+  if (prompt.indexOf(previousDoneCriteria, start + 1) !== -1) return { status: "ambiguous" };
+  return {
+    status: "ok",
+    prompt: prompt.slice(0, start) + doneCriteria + prompt.slice(start + previousDoneCriteria.length),
+  };
 }
 
 function readTaskPrompt({ runDir, resumeMode, effectiveDoneCriteriaPath } = {}) {
@@ -1358,12 +1343,24 @@ function readTaskPrompt({ runDir, resumeMode, effectiveDoneCriteriaPath } = {}) 
           process.exit(1);
         }
         const doneCriteria = fs.readFileSync(effectiveDoneCriteriaPath, "utf-8").trim();
-        const refreshedPrompt = refreshRedispatchDoneCriteria(prompt, doneCriteria);
-        if (refreshedPrompt === null) {
+        const roundDoneCriteriaPath = path.join(runDir, `review-round-${auto.round}-done-criteria.md`);
+        if (!fs.existsSync(roundDoneCriteriaPath)) {
           console.error(`Error: cannot refresh Done Criteria in auto-discovered redispatch prompt: ${auto.path}`);
+          console.error(`  Missing the round's recorded Done Criteria artifact: ${roundDoneCriteriaPath}`);
+          console.error("  Pass --prompt-file to supply the redispatch prompt explicitly.");
           process.exit(1);
         }
-        prompt = refreshedPrompt;
+        const previousDoneCriteria = fs.readFileSync(roundDoneCriteriaPath, "utf-8").trim();
+        const refreshed = refreshRedispatchDoneCriteria(prompt, doneCriteria, previousDoneCriteria);
+        if (refreshed.status !== "ok") {
+          console.error(`Error: cannot refresh Done Criteria in auto-discovered redispatch prompt: ${auto.path}`);
+          console.error(refreshed.status === "ambiguous"
+            ? `  The round's recorded Done Criteria (${roundDoneCriteriaPath}) appear more than once in the artifact.`
+            : `  The round's recorded Done Criteria (${roundDoneCriteriaPath}) do not appear in the artifact.`);
+          console.error("  Pass --prompt-file to supply the redispatch prompt explicitly.");
+          process.exit(1);
+        }
+        prompt = refreshed.prompt;
       }
       return {
         prompt,

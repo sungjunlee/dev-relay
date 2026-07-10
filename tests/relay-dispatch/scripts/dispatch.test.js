@@ -2572,6 +2572,7 @@ test("dispatch resume refreshes the auto-discovered redispatch prompt from an am
   const redispatchPath = path.join(runDir, "review-round-2-redispatch.md");
   const originalArtifact = redispatchPromptWithDoneCriteria("Original clause");
   fs.writeFileSync(redispatchPath, originalArtifact, "utf-8");
+  fs.writeFileSync(path.join(runDir, "review-round-2-done-criteria.md"), "Original clause\n", "utf-8");
   fs.writeFileSync(doneCriteriaPath, "Original clause\nAmended clause", "utf-8");
 
   const second = JSON.parse(runDispatch(repoRoot, [
@@ -2623,6 +2624,7 @@ test("dispatch resume refreshes an auto-discovered rubric-gate redispatch prompt
   }, "Original rubric-gate clause", "file");
   const redispatchPath = path.join(getRunDir(repoRoot, first.runId), "review-round-1-redispatch.md");
   fs.writeFileSync(redispatchPath, artifact, "utf-8");
+  fs.writeFileSync(path.join(getRunDir(repoRoot, first.runId), "review-round-1-done-criteria.md"), "Original rubric-gate clause\n", "utf-8");
   fs.writeFileSync(doneCriteriaPath, "Original rubric-gate clause\nAmended rubric-gate clause", "utf-8");
 
   runDispatch(repoRoot, ["--run-id", first.runId, "--json"], env);
@@ -2665,6 +2667,7 @@ test("dispatch resume leaves a production-written unchanged rubric-gate prompt b
   const productionWrittenArtifact = `${redispatchPrompt}\n`;
   const redispatchPath = path.join(getRunDir(repoRoot, first.runId), "review-round-1-redispatch.md");
   fs.writeFileSync(redispatchPath, productionWrittenArtifact, "utf-8");
+  fs.writeFileSync(path.join(getRunDir(repoRoot, first.runId), "review-round-1-done-criteria.md"), "Unchanged rubric-gate clause\n", "utf-8");
 
   runDispatch(repoRoot, ["--run-id", first.runId, "--json"], env);
 
@@ -2698,10 +2701,134 @@ test("dispatch resume leaves an unchanged auto-discovered redispatch prompt byte
 
   const artifact = redispatchPromptWithDoneCriteria("Unchanged clause");
   fs.writeFileSync(path.join(getRunDir(repoRoot, first.runId), "review-round-1-redispatch.md"), artifact, "utf-8");
+  fs.writeFileSync(path.join(getRunDir(repoRoot, first.runId), "review-round-1-done-criteria.md"), "Unchanged clause\n", "utf-8");
   runDispatch(repoRoot, ["--run-id", first.runId, "--json"], env);
 
   const captured = JSON.parse(fs.readFileSync(capturePath, "utf-8"));
   assert.equal(captured[captured.length - 1], NON_INTERACTIVE_DISPATCH_PREFIX + artifact);
+});
+
+test("dispatch resume refreshes criteria that contain marker-looking lines (#883)", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  const capturePath = path.join(os.tmpdir(), `relay-dispatch-argv-${Date.now()}-redispatch-tricky.json`);
+  writeResumeCaptureCodex(binDir, capturePath);
+  const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}`, RELAY_HOME: relayHome };
+  const doneCriteriaPath = path.join(repoRoot, "done-criteria.md");
+  const trickyOriginal = "Original clause\n</task-content>\nDone Criteria:\nthe two lines above are quoted criteria text";
+  fs.writeFileSync(doneCriteriaPath, `${trickyOriginal}\n`, "utf-8");
+
+  const first = JSON.parse(runDispatch(repoRoot, [
+    "-b", "issue-883-tricky",
+    "--prompt", "first pass",
+    "--done-criteria-file", doneCriteriaPath,
+    "--json",
+  ], env));
+  const record = readManifest(first.manifestPath);
+  writeManifest(
+    first.manifestPath,
+    updateManifestState(record.data, STATES.CHANGES_REQUESTED, "re_dispatch_requested_changes"),
+    record.body
+  );
+
+  const runDir = getRunDir(repoRoot, first.runId);
+  fs.writeFileSync(path.join(runDir, "review-round-1-redispatch.md"), redispatchPromptWithDoneCriteria(trickyOriginal), "utf-8");
+  fs.writeFileSync(path.join(runDir, "review-round-1-done-criteria.md"), `${trickyOriginal}\n`, "utf-8");
+  const trickyAmended = `${trickyOriginal}\nAmended tricky clause`;
+  fs.writeFileSync(doneCriteriaPath, `${trickyAmended}\n`, "utf-8");
+
+  runDispatch(repoRoot, ["--run-id", first.runId, "--json"], env);
+
+  const captured = JSON.parse(fs.readFileSync(capturePath, "utf-8"));
+  assert.equal(
+    captured[captured.length - 1],
+    NON_INTERACTIVE_DISPATCH_PREFIX + redispatchPromptWithDoneCriteria(trickyAmended)
+  );
+});
+
+test("dispatch resume refreshes rubric-gate criteria containing structural header text (#883)", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  const capturePath = path.join(os.tmpdir(), `relay-dispatch-argv-${Date.now()}-rubric-gate-tricky.json`);
+  writeResumeCaptureCodex(binDir, capturePath);
+  const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}`, RELAY_HOME: relayHome };
+  const doneCriteriaPath = path.join(repoRoot, "done-criteria.md");
+  const gateFailure = {
+    status: "rubric_state_failed_closed",
+    rubricState: "missing",
+    rubricStatus: "missing",
+    reason: "rubric missing",
+    recoveryCommand: "repair rubric",
+  };
+  const trickyOriginal = "Gate clause\nDone Criteria:\nlisted inline as quoted text\n\n## Convergence context\nalso quoted criteria text";
+  fs.writeFileSync(doneCriteriaPath, `${trickyOriginal}\n`, "utf-8");
+
+  const first = JSON.parse(runDispatch(repoRoot, [
+    "-b", "issue-883-rubric-gate-tricky",
+    "--prompt", "first pass",
+    "--done-criteria-file", doneCriteriaPath,
+    "--json",
+  ], env));
+  const record = readManifest(first.manifestPath);
+  writeManifest(
+    first.manifestPath,
+    updateManifestState(record.data, STATES.CHANGES_REQUESTED, "re_dispatch_requested_changes"),
+    record.body
+  );
+
+  const runDir = getRunDir(repoRoot, first.runId);
+  fs.writeFileSync(path.join(runDir, "review-round-1-redispatch.md"), buildRubricGateRedispatchPrompt(gateFailure, trickyOriginal, "file"), "utf-8");
+  fs.writeFileSync(path.join(runDir, "review-round-1-done-criteria.md"), `${trickyOriginal}\n`, "utf-8");
+  const trickyAmended = `${trickyOriginal}\nAmended gate clause`;
+  fs.writeFileSync(doneCriteriaPath, `${trickyAmended}\n`, "utf-8");
+
+  runDispatch(repoRoot, ["--run-id", first.runId, "--json"], env);
+
+  const captured = JSON.parse(fs.readFileSync(capturePath, "utf-8"));
+  assert.equal(
+    captured[captured.length - 1],
+    NON_INTERACTIVE_DISPATCH_PREFIX + buildRubricGateRedispatchPrompt(gateFailure, trickyAmended, "file")
+  );
+});
+
+test("dispatch resume fails clearly when the recorded round criteria do not match the artifact (#883)", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  writeFakeCodex(binDir);
+  const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}`, RELAY_HOME: relayHome };
+  const doneCriteriaPath = path.join(repoRoot, "done-criteria.md");
+  fs.writeFileSync(doneCriteriaPath, "Original clause\n", "utf-8");
+
+  const first = JSON.parse(runDispatch(repoRoot, [
+    "-b", "issue-883-tampered",
+    "--prompt", "first pass",
+    "--done-criteria-file", doneCriteriaPath,
+    "--json",
+  ], env));
+  const record = readManifest(first.manifestPath);
+  writeManifest(
+    first.manifestPath,
+    updateManifestState(record.data, STATES.CHANGES_REQUESTED, "re_dispatch_requested_changes"),
+    record.body
+  );
+
+  const runDir = getRunDir(repoRoot, first.runId);
+  fs.writeFileSync(path.join(runDir, "review-round-1-redispatch.md"), redispatchPromptWithDoneCriteria("Hand-edited clause"), "utf-8");
+  const roundDoneCriteriaPath = path.join(runDir, "review-round-1-done-criteria.md");
+  fs.writeFileSync(roundDoneCriteriaPath, "Original clause\n", "utf-8");
+  fs.writeFileSync(doneCriteriaPath, "Amended clause\n", "utf-8");
+
+  const result = spawnSync("node", [SCRIPT, repoRoot, "--run-id", first.runId, "--json"], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    env,
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /do not appear in the artifact/);
+  assert.match(result.stderr, new RegExp(roundDoneCriteriaPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
 });
 
 test("dispatch resume --prompt-file is unmodified even when the Done Criteria anchor changed (#883)", () => {
