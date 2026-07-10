@@ -84,6 +84,15 @@ const RECOVERY_TRANSITIONS = Object.freeze([
     resetLastReviewedSha: false,
     description: "Dispatch hung or operator killed; unstick the manifest so re-dispatch is reachable.",
   },
+  {
+    from: STATES.MERGE_BLOCKED,
+    to: STATES.READY_TO_MERGE,
+    nextAction: "await_explicit_merge",
+    requireForce: false,
+    requireFreshCommit: false,
+    resetLastReviewedSha: false,
+    description: "Operator cleared the merge blocker; retry the explicit merge.",
+  },
 ]);
 
 function appendStateRecoveryEvent(repoRoot, runId, eventData) {

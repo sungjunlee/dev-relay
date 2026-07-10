@@ -119,7 +119,7 @@ If a PR already exists for the branch, the command no-ops the create step and st
 
 ## Operator state recovery
 
-`recover-state.js` advances a relay run's state after an external event (fix commit pushed directly, dispatch stalled, no-op re-dispatch escalated the manifest). Replaces hand-edited `manual_state_override` entries with structured `state_recovery` events and validated transitions.
+`recover-state.js` advances a relay run's state after an external event (fix commit pushed directly, dispatch stalled, no-op re-dispatch escalated the manifest, merge blocker cleared). Replaces hand-edited `manual_state_override` entries with structured `state_recovery` events and validated transitions.
 
 ```bash
 # Fix pushed directly to the PR branch → return to review without re-dispatch
@@ -134,6 +134,11 @@ node skills/relay-dispatch/scripts/recover-state.js --repo . --run-id <id> \
 # PR advanced after ready_to_merge → return to review for the new live PR HEAD
 node skills/relay-dispatch/scripts/recover-state.js --repo . --run-id <id> \
   --to review_pending --reason "PR head advanced after passing review"
+
+# Merge blocker cleared after merge_blocked → retry the merge
+node skills/relay-dispatch/scripts/recover-state.js --repo . --run-id <id> \
+  --to ready_to_merge --reason "merge blocker cleared; retry merge"
+# Next fleet drive re-run retries the merge.
 
 # No-op re-dispatch escalated the run → bring it back for a fresh review
 node skills/relay-dispatch/scripts/recover-state.js --repo . --run-id <id> \
@@ -151,6 +156,7 @@ Whitelisted transitions (unlisted pairs are rejected — use the normal dispatch
 | `changes_requested` | `review_pending` | no | fresh commit on branch (HEAD ≠ `review.last_reviewed_sha`) |
 | `changes_requested` | `review_pending` | no | same HEAD allowed only with `--allow-same-head --require-pr-body-change`, a manifest PR number (`git.pr_number` or `github.pr_number`), a prior `review-round-N-pr-body.md` snapshot, and a current GitHub PR body that differs from the latest numbered snapshot |
 | `ready_to_merge` | `review_pending` | no | live GitHub PR HEAD differs from `review.last_reviewed_sha` or `git.head_sha`; emits old/new SHA and PR number in `state_recovery` |
+| `merge_blocked` | `ready_to_merge` | no | operator cleared the blocker; next fleet drive re-run retries the merge |
 | `escalated` | `review_pending` | yes | — |
 | `escalated` | `changes_requested` | no | — |
 | `dispatched` | `changes_requested` | yes | — |
