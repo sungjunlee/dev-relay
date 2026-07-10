@@ -2592,6 +2592,83 @@ test("dispatch resume refreshes the auto-discovered redispatch prompt from an am
   assert.equal(resumedManifest.anchor.done_criteria_source, "file");
 });
 
+test("dispatch resume refreshes only the generated criteria when an issue quotes the recorded criteria (#883)", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  const capturePath = path.join(os.tmpdir(), `relay-dispatch-argv-${Date.now()}-redispatch-quoted.json`);
+  writeResumeCaptureCodex(binDir, capturePath);
+  const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}`, RELAY_HOME: relayHome };
+  const doneCriteriaPath = path.join(repoRoot, "done-criteria.md");
+  const original = "Original quoted clause";
+  const amended = `${original}\nAmended quoted clause`;
+  fs.writeFileSync(doneCriteriaPath, `${original}\n`, "utf-8");
+
+  const first = JSON.parse(runDispatch(repoRoot, [
+    "-b", "issue-883-quoted-criteria",
+    "--prompt", "first pass",
+    "--done-criteria-file", doneCriteriaPath,
+    "--json",
+  ], env));
+  const record = readManifest(first.manifestPath);
+  writeManifest(
+    first.manifestPath,
+    updateManifestState(record.data, STATES.CHANGES_REQUESTED, "re_dispatch_requested_changes"),
+    record.body
+  );
+
+  const quote = `ROUND TWO BODY\n\nIssue quotes the original criteria:\n${original}`;
+  const artifact = redispatchPromptWithDoneCriteria(original).replace("ROUND TWO BODY", quote);
+  const runDir = getRunDir(repoRoot, first.runId);
+  fs.writeFileSync(path.join(runDir, "review-round-1-redispatch.md"), artifact, "utf-8");
+  fs.writeFileSync(path.join(runDir, "review-round-1-done-criteria.md"), `${original}\n`, "utf-8");
+  fs.writeFileSync(doneCriteriaPath, `${amended}\n`, "utf-8");
+
+  runDispatch(repoRoot, ["--run-id", first.runId, "--json"], env);
+
+  const captured = JSON.parse(fs.readFileSync(capturePath, "utf-8"));
+  const expected = redispatchPromptWithDoneCriteria(amended).replace("ROUND TWO BODY", quote);
+  assert.equal(captured[captured.length - 1], NON_INTERACTIVE_DISPATCH_PREFIX + expected);
+});
+
+test("dispatch resume rejects criteria found at two generated Done Criteria positions (#883)", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  writeFakeCodex(binDir);
+  const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}`, RELAY_HOME: relayHome };
+  const doneCriteriaPath = path.join(repoRoot, "done-criteria.md");
+  const original = "Duplicated generated clause";
+  fs.writeFileSync(doneCriteriaPath, `${original}\n`, "utf-8");
+
+  const first = JSON.parse(runDispatch(repoRoot, [
+    "-b", "issue-883-duplicate-generated-criteria",
+    "--prompt", "first pass",
+    "--done-criteria-file", doneCriteriaPath,
+    "--json",
+  ], env));
+  const record = readManifest(first.manifestPath);
+  writeManifest(
+    first.manifestPath,
+    updateManifestState(record.data, STATES.CHANGES_REQUESTED, "re_dispatch_requested_changes"),
+    record.body
+  );
+
+  const artifact = redispatchPromptWithDoneCriteria(original) + redispatchPromptWithDoneCriteria(original);
+  const runDir = getRunDir(repoRoot, first.runId);
+  fs.writeFileSync(path.join(runDir, "review-round-1-redispatch.md"), artifact, "utf-8");
+  fs.writeFileSync(path.join(runDir, "review-round-1-done-criteria.md"), `${original}\n`, "utf-8");
+  fs.writeFileSync(doneCriteriaPath, `${original}\nAmended duplicate clause\n`, "utf-8");
+
+  const result = spawnSync("node", [SCRIPT, repoRoot, "--run-id", first.runId, "--json"], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    env,
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /appear at more than one generated Done Criteria position/);
+});
+
 test("dispatch resume refreshes an auto-discovered rubric-gate redispatch prompt without rewriting it (#883)", () => {
   const { repoRoot, relayHome } = setupRepo();
   process.env.RELAY_HOME = relayHome;

@@ -1303,15 +1303,34 @@ function findLatestRedispatchPrompt(runDir) {
   return latest;
 }
 
+const REDISPATCH_CRITERIA_PREFIXES = [
+  /(?:^|\n)Original Done Criteria \(scope anchor\):\r?\n<task-content source="[^"]+">\r?\n$/,
+  /(?:^|\n)Done Criteria:\r?\n$/,
+];
+
+function isGeneratorAnchoredOccurrence(prompt, start) {
+  const before = prompt.slice(Math.max(0, start - 400), start);
+  return REDISPATCH_CRITERIA_PREFIXES.some((pattern) => pattern.test(before));
+}
+
 function refreshRedispatchDoneCriteria(prompt, doneCriteria, previousDoneCriteria) {
   // The embedded criteria are author-controlled Markdown: marker-looking
   // lines (</task-content>, "Done Criteria:", convergence headings) can
   // legitimately appear INSIDE them, so the stale block is located by the
   // exact bytes the generating round recorded, never by structural markers.
   if (previousDoneCriteria === doneCriteria) return { status: "ok", prompt };
-  const start = prompt.indexOf(previousDoneCriteria);
-  if (start === -1) return { status: "not_found" };
-  if (prompt.indexOf(previousDoneCriteria, start + 1) !== -1) return { status: "ambiguous" };
+  if (!previousDoneCriteria) return { status: "not_found" };
+  const anchoredOccurrences = [];
+  let searchFrom = 0;
+  while (searchFrom <= prompt.length - previousDoneCriteria.length) {
+    const start = prompt.indexOf(previousDoneCriteria, searchFrom);
+    if (start === -1) break;
+    if (isGeneratorAnchoredOccurrence(prompt, start)) anchoredOccurrences.push(start);
+    searchFrom = start + 1;
+  }
+  if (anchoredOccurrences.length === 0) return { status: "not_found" };
+  if (anchoredOccurrences.length > 1) return { status: "ambiguous" };
+  const [start] = anchoredOccurrences;
   return {
     status: "ok",
     prompt: prompt.slice(0, start) + doneCriteria + prompt.slice(start + previousDoneCriteria.length),
@@ -1355,7 +1374,7 @@ function readTaskPrompt({ runDir, resumeMode, effectiveDoneCriteriaPath } = {}) 
         if (refreshed.status !== "ok") {
           console.error(`Error: cannot refresh Done Criteria in auto-discovered redispatch prompt: ${auto.path}`);
           console.error(refreshed.status === "ambiguous"
-            ? `  The round's recorded Done Criteria (${roundDoneCriteriaPath}) appear more than once in the artifact.`
+            ? `  The round's recorded Done Criteria (${roundDoneCriteriaPath}) appear at more than one generated Done Criteria position.`
             : `  The round's recorded Done Criteria (${roundDoneCriteriaPath}) do not appear in the artifact.`);
           console.error("  Pass --prompt-file to supply the redispatch prompt explicitly.");
           process.exit(1);
