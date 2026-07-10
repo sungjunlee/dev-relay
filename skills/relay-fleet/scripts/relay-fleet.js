@@ -39,6 +39,7 @@ const {
 } = require("../../relay-dispatch/scripts/manifest/fleet");
 const { getRequestPath, readRequestArtifact } = require("../../relay-ready/scripts/relay-request");
 const { runReconcile } = require("../../relay-dispatch/scripts/reconcile-advisory");
+const { getRunLeaseStatus } = require("../../relay-dispatch/scripts/run-runtime-state");
 const { runMergeQueue } = require("./merge-queue");
 
 const DEFAULT_PARALLEL = 4;
@@ -1274,6 +1275,13 @@ async function waitForDetachedDispatchProgress({ repoRoot, fleetId, runId, leaf,
         };
       }
       if (lastReconcile.rowName === "dead_with_result_or_work") {
+        // This branch used to mutate immediately on any dry-run row-4 verdict,
+        // bypassing the poll deadline. Re-probe the authoritative lease
+        // supervisor pid before allowing that destructive transition.
+        if (getRunLeaseStatus(repoRoot, runId).live) {
+          await sleepAsync(2000);
+          continue;
+        }
         const healed = reconcileMutating(repoRoot, runId);
         if (healed.status === "error") {
           return {
@@ -1330,12 +1338,15 @@ async function waitForDetachedDispatchProgress({ repoRoot, fleetId, runId, leaf,
     await sleepAsync(runState === RUN_STATES.DISPATCHED ? 2000 : 250);
   }
 
+  const finalRunState = readRunState(repoRoot, runId);
+  const liveLease = finalRunState === RUN_STATES.DISPATCHED
+    && getRunLeaseStatus(repoRoot, runId).live;
   return {
-    status: "dispatch_poll_timeout",
+    status: liveLease ? "dispatch_still_running" : "dispatch_poll_timeout",
     run_id: runId,
-    run_state: readRunState(repoRoot, runId),
+    run_state: finalRunState,
     reconcile: lastReconcile,
-    keep_runtime: detachedSupervisorIsAlive(repoRoot, fleetId, leaf),
+    keep_runtime: liveLease || detachedSupervisorIsAlive(repoRoot, fleetId, leaf),
   };
 }
 

@@ -282,11 +282,12 @@ test("reconcile row 1 no-ops when manifest is not dispatched", () => {
   assert.equal(readManifest(fixture.manifestPath).data.state, STATES.REVIEW_PENDING);
 });
 
-test("reconcile row 2 reports a live lease within timeout", async (t) => {
-  const fixture = setupRepo();
+test("reconcile row 2 preserves work when an unexpired lease supervisor pid is live even if its pgid is empty", async (t) => {
+  const fixture = setupRepo({ committedWork: true });
   const child = await spawnSleeper(t);
   const leasePath = writeLease(fixture, {
-    pgid: child.pid,
+    pid: child.pid,
+    pgid: 999999,
     startedAt: new Date().toISOString(),
     timeoutS: 60,
   });
@@ -295,10 +296,52 @@ test("reconcile row 2 reports a live lease within timeout", async (t) => {
 
   assert.equal(result.row, 2);
   assert.equal(result.status, "running");
-  assert.equal(result.lease.pgid, child.pid);
+  assert.equal(result.lease.pid, child.pid);
   assert.ok(result.remaining_s > 0);
   assert.equal(fs.existsSync(leasePath), true);
+  assert.equal(readManifest(fixture.manifestPath).data.state, STATES.DISPATCHED);
   assert.equal(isPgidAlive(child.pid), true);
+});
+
+test("reconcile confirms an unexpired dead lease supervisor pid twice before row 4 recovery", () => {
+  const fixture = setupRepo({ committedWork: true });
+  const deadPid = 999999;
+  const probeLog = path.join(fixture.runDir, "pid-probes.log");
+  fixture.env.RELAY_TEST_PROCESS_PROBE_LOG = probeLog;
+  writeLease(fixture, {
+    pid: deadPid,
+    pgid: deadPid,
+    startedAt: new Date().toISOString(),
+    timeoutS: 60,
+  });
+
+  const result = parseJsonResult(runReconcile(fixture));
+
+  assert.equal(result.row, 4);
+  assert.equal(result.status, "recovered");
+  assert.deepEqual(
+    fs.readFileSync(probeLog, "utf-8").trim().split(/\r?\n/),
+    [String(deadPid), String(deadPid)]
+  );
+});
+
+test("reconcile treats notifier-only pgid survivors as dead when the lease supervisor pid is dead", async (t) => {
+  const fixture = setupRepo({ committedWork: true });
+  const notifier = await spawnSleeper(t);
+  const leasePath = writeLease(fixture, {
+    pid: 999999,
+    pgid: notifier.pid,
+    startedAt: new Date().toISOString(),
+    timeoutS: 60,
+  });
+
+  const result = parseJsonResult(runReconcile(fixture));
+
+  assert.equal(result.row, 4);
+  assert.equal(result.status, "recovered");
+  assert.equal(fs.existsSync(leasePath), false);
+  assert.equal(readManifest(fixture.manifestPath).data.state, STATES.REVIEW_PENDING);
+  assert.equal(isPgidAlive(notifier.pid), true);
 });
 
 test("reconcile treats a zombie-only process group lease as dead retry evidence", () => {
@@ -475,7 +518,7 @@ test("reconcile row 3 keeps the lease when a timed-out process group ignores SIG
   assert.equal(events.at(-1).executor_terminated, false);
 });
 
-test("reconcile row 4 recovers dead runs with committed work via recover-commit", () => {
+test("reconcile row 4 byte-preserves recovery for an expired lease with a dead supervisor pid", () => {
   const fixture = setupRepo({ committedWork: true });
   const leasePath = writeLease(fixture, {
     pid: 999999,

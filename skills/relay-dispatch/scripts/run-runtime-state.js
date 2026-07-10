@@ -12,6 +12,7 @@ const LEASE_FILENAME = "lease.json";
 const DISPATCH_STDOUT_LOG = "dispatch-stdout.log";
 const DISPATCH_STDERR_LOG = "dispatch-stderr.log";
 const DISPATCH_RESULT_FILE = "dispatch-result.txt";
+const LEASE_DEATH_CONFIRM_DELAY_MS = 50;
 
 let posixProcessStateInspectionUnavailable = false;
 
@@ -81,6 +82,27 @@ function isProcessGroupAlive(pgid) {
   } catch (error) {
     if (error.code === "ESRCH") return false;
     if (error.code === "EPERM") return !isZombieOnlyProcessGroup(normalizedPgid);
+    return false;
+  }
+}
+
+function probeProcess(pid) {
+  const normalizedPid = Number(pid);
+  const probeLog = process.env.RELAY_TEST_PROCESS_PROBE_LOG;
+  if (probeLog) {
+    fs.appendFileSync(probeLog, `${normalizedPid}\n`, "utf-8");
+  }
+  process.kill(normalizedPid, 0);
+}
+
+function isProcessAlive(pid) {
+  if (!pid || !Number.isFinite(Number(pid))) return false;
+  try {
+    probeProcess(Number(pid));
+    return true;
+  } catch (error) {
+    if (error.code === "EPERM") return true;
+    if (error.code === "ESRCH") return false;
     return false;
   }
 }
@@ -287,17 +309,33 @@ function getRunLeaseStatus(repoRoot, runId) {
     };
   }
 
-  const live = isProcessGroupAlive(lease.pgid);
+  // The lease pid is the dispatch supervisor and is the authoritative liveness
+  // signal. The executor pgid may outlive it because unrelated inheritors (for
+  // example Codex desktop's SkyComputerUseClient notifier) can linger there.
+  const live = isProcessAlive(lease.pid);
+  const canSignal = isProcessGroupAlive(lease.pgid);
   return {
     exists: true,
     lease,
     leasePath,
     live,
-    canSignal: live,
+    canSignal,
+    // Keep these legacy reason values stable for existing observer/advisory
+    // consumers; liveness_source names the corrected probe explicitly.
     reason: live ? "process_group_alive" : "process_group_dead",
+    liveness_source: "lease_supervisor_pid",
+    process_group_live: canSignal,
     elapsed_s: elapsedS,
     remaining_s: remainingS,
   };
+}
+
+async function confirmRunLeaseSupervisorDeath(status, { intervalMs = LEASE_DEATH_CONFIRM_DELAY_MS } = {}) {
+  if (!status?.exists || !status.lease || status.live) {
+    return false;
+  }
+  await sleepAsync(intervalMs);
+  return !isProcessAlive(status.lease.pid);
 }
 
 function formatLeaseForMessage(status) {
@@ -331,6 +369,7 @@ module.exports = {
   assertNoLiveRunLease,
   corruptRunLeaseEventFields,
   corruptRunLeaseReportFields,
+  confirmRunLeaseSupervisorDeath,
   dispatchManifestPathFields,
   formatLeaseForMessage,
   getDispatchResultCandidates,
