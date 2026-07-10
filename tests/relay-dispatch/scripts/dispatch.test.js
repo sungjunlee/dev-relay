@@ -2632,6 +2632,47 @@ test("dispatch resume refreshes an auto-discovered rubric-gate redispatch prompt
   assert.equal(fs.readFileSync(redispatchPath, "utf-8"), artifact);
 });
 
+test("dispatch resume leaves a production-written unchanged rubric-gate prompt byte-identical (#883)", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  const capturePath = path.join(os.tmpdir(), `relay-dispatch-argv-${Date.now()}-rubric-gate-noop.json`);
+  writeResumeCaptureCodex(binDir, capturePath);
+  const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}`, RELAY_HOME: relayHome };
+  const doneCriteriaPath = path.join(repoRoot, "done-criteria.md");
+  fs.writeFileSync(doneCriteriaPath, "Unchanged rubric-gate clause\n", "utf-8");
+
+  const first = JSON.parse(runDispatch(repoRoot, [
+    "-b", "issue-883-rubric-gate-noop",
+    "--prompt", "first pass",
+    "--done-criteria-file", doneCriteriaPath,
+    "--json",
+  ], env));
+  const record = readManifest(first.manifestPath);
+  writeManifest(
+    first.manifestPath,
+    updateManifestState(record.data, STATES.CHANGES_REQUESTED, "re_dispatch_requested_changes"),
+    record.body
+  );
+
+  const redispatchPrompt = buildRubricGateRedispatchPrompt({
+    status: "rubric_state_failed_closed",
+    rubricState: "missing",
+    rubricStatus: "missing",
+    reason: "rubric missing",
+    recoveryCommand: "repair rubric",
+  }, "Unchanged rubric-gate clause", "file");
+  const productionWrittenArtifact = `${redispatchPrompt}\n`;
+  const redispatchPath = path.join(getRunDir(repoRoot, first.runId), "review-round-1-redispatch.md");
+  fs.writeFileSync(redispatchPath, productionWrittenArtifact, "utf-8");
+
+  runDispatch(repoRoot, ["--run-id", first.runId, "--json"], env);
+
+  const captured = JSON.parse(fs.readFileSync(capturePath, "utf-8"));
+  assert.equal(captured[captured.length - 1], NON_INTERACTIVE_DISPATCH_PREFIX + productionWrittenArtifact);
+  assert.equal(fs.readFileSync(redispatchPath, "utf-8"), productionWrittenArtifact);
+});
+
 test("dispatch resume leaves an unchanged auto-discovered redispatch prompt byte-identical (#883)", () => {
   const { repoRoot, relayHome } = setupRepo();
   process.env.RELAY_HOME = relayHome;

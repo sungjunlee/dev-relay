@@ -1319,7 +1319,12 @@ function refreshRedispatchDoneCriteria(prompt, doneCriteria) {
     if (criteriaStart !== -1) {
       const contentStart = criteriaStart + criteriaHeader.length;
       const convergenceStart = prompt.indexOf("\n\n## Convergence context\n", contentStart);
-      const contentEnd = convergenceStart === -1 ? prompt.length : convergenceStart;
+      const serializationNewlineLength = convergenceStart === -1
+        ? prompt.endsWith("\r\n") ? 2 : prompt.endsWith("\n") ? 1 : 0
+        : 0;
+      const contentEnd = convergenceStart === -1
+        ? prompt.length - serializationNewlineLength
+        : convergenceStart;
       if (prompt.slice(contentStart, contentEnd) === doneCriteria) return prompt;
       return prompt.slice(0, contentStart) + doneCriteria + prompt.slice(contentEnd);
     }
