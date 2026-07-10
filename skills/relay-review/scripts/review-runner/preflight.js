@@ -1,5 +1,75 @@
 const { buildExecutionEvidencePreflight } = require("./execution-evidence");
 const { appendRunEvent, EVENTS } = require("../../../relay-dispatch/scripts/relay-events");
+const { git } = require("./common");
+
+function buildBehindBasePreflight({ data, reviewRepoPath, reviewedHeadSha }) {
+  const baseBranch = data?.git?.base_branch || "main";
+  const candidates = [`origin/${baseBranch}`, baseBranch];
+  let base = null;
+  for (const candidate of candidates) {
+    try {
+      git(reviewRepoPath, "merge-base", reviewedHeadSha, candidate);
+      base = candidate;
+      break;
+    } catch {}
+  }
+  if (!base) {
+    return { status: "not_available", base: null, behindCount: 0 };
+  }
+
+  const behindCount = Number(git(reviewRepoPath, "rev-list", "--count", `${reviewedHeadSha}..${base}`).trim());
+  return {
+    status: behindCount > 0 ? "blocked" : "pass",
+    base,
+    behindCount,
+    reason: behindCount > 0
+      ? `branch is ${behindCount} ${behindCount === 1 ? "commit" : "commits"} behind ${base}; rebase and re-run`
+      : null,
+    nextAction: behindCount > 0 ? "rebase_and_rerun" : null,
+  };
+}
+
+function maybeBlockForBehindBasePreflight({
+  allowBehindBase,
+  data,
+  jsonOut,
+  result,
+  reviewRepoPath,
+  reviewedHeadSha,
+  round,
+  runRepoPath,
+}) {
+  result.behindBasePreflight = buildBehindBasePreflight({ data, reviewRepoPath, reviewedHeadSha });
+  const preflight = result.behindBasePreflight;
+  if (preflight.status !== "blocked") return false;
+
+  if (allowBehindBase) {
+    preflight.status = "overridden";
+    console.error(`Warning: ${preflight.reason}; proceeding because --allow-behind-base was provided.`);
+    return false;
+  }
+
+  result.nextState = data.state;
+  appendRunEvent(runRepoPath || data.paths?.repo_root || ".", data.run_id, {
+    event: EVENTS.REVIEW_PREFLIGHT_FAILED,
+    state_from: data.state,
+    state_to: data.state,
+    head_sha: reviewedHeadSha,
+    round,
+    reason: preflight.reason,
+    preflight_type: "behind_base",
+    failure_class: "behind_base",
+    reviewer_rounds_avoided: 1,
+  });
+  if (jsonOut) {
+    console.log(JSON.stringify(result, null, 2));
+  } else {
+    console.log(`Review preflight blocked round ${round}: ${preflight.reason}`);
+    console.log(`  Next action: ${preflight.nextAction}`);
+  }
+  process.exitCode = 2;
+  return true;
+}
 
 function maybeBlockForExecutionEvidencePreflight({
   data,
@@ -47,5 +117,7 @@ function maybeBlockForExecutionEvidencePreflight({
 }
 
 module.exports = {
+  buildBehindBasePreflight,
+  maybeBlockForBehindBasePreflight,
   maybeBlockForExecutionEvidencePreflight,
 };

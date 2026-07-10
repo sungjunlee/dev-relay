@@ -131,6 +131,13 @@ function writeExecutionEvidence(runDir, headSha, overrides = {}) {
   return filePath;
 }
 
+function advanceBaseAfterFork(repoRoot) {
+  fs.writeFileSync(path.join(repoRoot, "base-advance.txt"), "base advanced\n", "utf-8");
+  execFileSync("git", ["add", "base-advance.txt"], { cwd: repoRoot, stdio: "pipe" });
+  execFileSync("git", ["commit", "-m", "advance base"], { cwd: repoRoot, stdio: "pipe" });
+  execFileSync("git", ["push", "origin", "main"], { cwd: repoRoot, stdio: "pipe" });
+}
+
 function createUnrelatedRelayOwnedWorktree(repoRoot, branch = "issue-42") {
   const attackerParent = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-foreign-"));
   const attackerRoot = path.join(attackerParent, path.basename(repoRoot));
@@ -758,6 +765,7 @@ test("review-runner facade stays within orchestrator caps and preserves CLI help
   assert.match(help.stdout, /Usage: review-runner\.js --repo <path>/);
   assert.match(help.stdout, /--prepare-only/);
   assert.match(help.stdout, /--reviewer-script <path>/);
+  assert.match(help.stdout, /--allow-behind-base/);
 });
 
 test("prepare-only with explicit Done Criteria file skips issue inference ambiguity", () => {
@@ -2332,6 +2340,8 @@ test("reviewer-script invocation can drive a round without --review-file", () =>
 
   const result = JSON.parse(stdout);
   assert.equal(result.state, STATES.READY_TO_MERGE);
+  assert.equal(result.behindBasePreflight.status, "pass");
+  assert.equal(result.behindBasePreflight.behindCount, 0);
   assert.equal(result.reviewerScript, reviewerScript);
   assert.ok(result.rawResponsePath);
   assert.ok(fs.existsSync(result.rawResponsePath));
@@ -2340,6 +2350,132 @@ test("reviewer-script invocation can drive a round without --review-file", () =>
   assert.equal(manifest.state, STATES.READY_TO_MERGE);
   assert.equal(manifest.review.latest_verdict, "lgtm");
   assert.ok(manifest.review.last_reviewed_sha);
+});
+
+test("review-runner behind-base preflight fails fast before reviewer invocation", () => {
+  const { repoRoot, manifestPath, runId, doneCriteriaPath, diffPath } = setupRepo();
+  advanceBaseAfterFork(repoRoot);
+  const markerPath = path.join(repoRoot, "behind-base-reviewer-invoked.txt");
+  const reviewerScript = writeMarkerReviewerScript(repoRoot, "behind-base-reviewer.js", markerPath);
+
+  const result = spawnSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--run-id", runId,
+    "--pr", "123",
+    "--done-criteria-file", doneCriteriaPath,
+    "--diff-file", diffPath,
+    "--reviewer-script", reviewerScript,
+    "--no-comment",
+    "--json",
+  ], { encoding: "utf-8" });
+
+  assert.equal(result.status, 2, result.stderr || result.stdout);
+  assert.equal(fs.existsSync(markerPath), false);
+  const output = JSON.parse(result.stdout);
+  assert.equal(output.behindBasePreflight.status, "blocked");
+  assert.equal(output.behindBasePreflight.behindCount, 1);
+  assert.equal(output.behindBasePreflight.base, "origin/main");
+  assert.match(output.behindBasePreflight.reason, /branch is 1 commit behind origin\/main; rebase and re-run/);
+  assert.equal(output.nextState, STATES.REVIEW_PENDING);
+  assert.equal(output.rawResponsePath, null);
+
+  const manifest = readManifest(manifestPath).data;
+  assert.equal(manifest.state, STATES.REVIEW_PENDING);
+  assert.equal(manifest.review.rounds, 0);
+  const preflightEvent = readRunEvents(repoRoot, runId)
+    .find((event) => event.event === "review_preflight_failed" && event.preflight_type === "behind_base");
+  assert.ok(preflightEvent);
+  assert.equal(preflightEvent.failure_class, "behind_base");
+  assert.match(preflightEvent.reason, /branch is 1 commit behind origin\/main; rebase and re-run/);
+  assert.equal(preflightEvent.state_from, STATES.REVIEW_PENDING);
+  assert.equal(preflightEvent.state_to, STATES.REVIEW_PENDING);
+  assert.equal(preflightEvent.reviewer_rounds_avoided, 1);
+});
+
+test("review-runner proceeds after the reviewed branch is rebased onto its base", () => {
+  const { repoRoot, worktreePath, runId, doneCriteriaPath, diffPath } = setupRepo();
+  advanceBaseAfterFork(repoRoot);
+  execFileSync("git", ["rebase", "origin/main"], { cwd: worktreePath, stdio: "pipe" });
+  const rebasedHead = execFileSync("git", ["rev-parse", "HEAD"], { cwd: worktreePath, encoding: "utf-8" }).trim();
+  writeExecutionEvidence(ensureRunLayout(repoRoot, runId).runDir, rebasedHead);
+  const markerPath = path.join(repoRoot, "rebased-reviewer-invoked.txt");
+  const reviewerScript = writeMarkerReviewerScript(repoRoot, "rebased-reviewer.js", markerPath);
+
+  const output = JSON.parse(execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--run-id", runId,
+    "--pr", "123",
+    "--done-criteria-file", doneCriteriaPath,
+    "--diff-file", diffPath,
+    "--reviewer-script", reviewerScript,
+    "--no-comment",
+    "--json",
+  ], { encoding: "utf-8" }));
+
+  assert.equal(output.behindBasePreflight.status, "pass");
+  assert.equal(output.behindBasePreflight.behindCount, 0);
+  assert.equal(fs.existsSync(markerPath), true);
+  assert.equal(output.state, STATES.READY_TO_MERGE);
+});
+
+test("review-runner --allow-behind-base proceeds with a visible warning", () => {
+  const { repoRoot, runId, doneCriteriaPath, diffPath } = setupRepo();
+  advanceBaseAfterFork(repoRoot);
+  const markerPath = path.join(repoRoot, "override-reviewer-invoked.txt");
+  const reviewerScript = writeMarkerReviewerScript(repoRoot, "override-reviewer.js", markerPath);
+
+  const result = spawnSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--run-id", runId,
+    "--pr", "123",
+    "--done-criteria-file", doneCriteriaPath,
+    "--diff-file", diffPath,
+    "--reviewer-script", reviewerScript,
+    "--allow-behind-base",
+    "--no-comment",
+    "--json",
+  ], { encoding: "utf-8" });
+
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  assert.match(result.stderr, /Warning: branch is 1 commit behind origin\/main; rebase and re-run/);
+  assert.match(result.stderr, /--allow-behind-base/);
+  const output = JSON.parse(result.stdout);
+  assert.equal(output.behindBasePreflight.status, "overridden");
+  assert.equal(output.behindBasePreflight.behindCount, 1);
+  assert.equal(fs.existsSync(markerPath), true);
+  assert.equal(output.state, STATES.READY_TO_MERGE);
+});
+
+test("review-runner permits a branch strictly ahead of its base", () => {
+  const { repoRoot, worktreePath, runId, doneCriteriaPath, diffPath } = setupRepo();
+  execFileSync("git", ["remote", "remove", "origin"], { cwd: repoRoot, stdio: "pipe" });
+  execFileSync("git", ["add", "marker.txt"], { cwd: worktreePath, stdio: "pipe" });
+  execFileSync("git", ["commit", "-m", "branch work"], { cwd: worktreePath, stdio: "pipe" });
+  const aheadHead = execFileSync("git", ["rev-parse", "HEAD"], { cwd: worktreePath, encoding: "utf-8" }).trim();
+  writeExecutionEvidence(ensureRunLayout(repoRoot, runId).runDir, aheadHead);
+  const markerPath = path.join(repoRoot, "ahead-reviewer-invoked.txt");
+  const reviewerScript = writeMarkerReviewerScript(repoRoot, "ahead-reviewer.js", markerPath);
+
+  const output = JSON.parse(execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--run-id", runId,
+    "--pr", "123",
+    "--done-criteria-file", doneCriteriaPath,
+    "--diff-file", diffPath,
+    "--reviewer-script", reviewerScript,
+    "--no-comment",
+    "--json",
+  ], { encoding: "utf-8" }));
+
+  assert.equal(output.behindBasePreflight.status, "pass");
+  assert.equal(output.behindBasePreflight.behindCount, 0);
+  assert.equal(output.behindBasePreflight.base, "main");
+  assert.equal(fs.existsSync(markerPath), true);
+  assert.equal(output.state, STATES.READY_TO_MERGE);
 });
 
 test("review-runner execution evidence preflight blocks primary reviewer invocation", async (t) => {

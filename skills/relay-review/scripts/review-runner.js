@@ -21,7 +21,7 @@ const { buildConvergenceSummary, formatConvergenceMarkdown } = require("./review
 const { applyVerdictToManifest } = require("./review-runner/manifest-apply");
 const { enforceRoundCap } = require("./review-runner/round-cap");
 const { passNextActionsFor, writeRoundArtifacts } = require("./review-runner/round-artifacts");
-const { maybeBlockForExecutionEvidencePreflight } = require("./review-runner/preflight");
+const { maybeBlockForBehindBasePreflight, maybeBlockForExecutionEvidencePreflight } = require("./review-runner/preflight");
 const { buildPrimaryReviewerPreflight, loadReviewText, loadRunRoutePlan, resolveReviewerName, resolveReviewerScript } = require("./review-runner/reviewer-invoke");
 const { maybeSwapReviewer } = require("./review-runner/reviewer-swap");
 const { appendAdvisoryRunsForTrigger, resolveAdvisoryConfig } = require("./review-runner/advisory-orchestration");
@@ -36,13 +36,12 @@ if (require.main === module && (!args.length || cliArgs.hasFlag(["--help", "-h"]
 async function run() {
   assertKnownReviewRunnerFlags(args);
   const {
-    advisoryGraceArg, advisoryProfileArg, advisoryReviewerArg, advisoryReviewerModel,
+    advisoryGraceArg, advisoryProfileArg, advisoryReviewerArg, advisoryReviewerModel, allowBehindBase,
     advisoryTimeoutArg, branchArg, diffFile, doneCriteriaFile, independentReviewReason,
     jsonOut, manifestPathArg, manualReviewReason, noComment, prArg, prepareOnly, repoArg,
     repoPath, reviewFile, reviewerArg, reviewerModel, reviewerScriptArg, runIdArg,
   } = options;
   if (manualReviewReason && !reviewFile) throw new Error("--manual-review-reason requires --review-file");
-
   const { branch, issueNumber, manifest, prNumber, reviewRepoPath, runRepoPath } = resolveContext(repoPath, repoArg, manifestPathArg, runIdArg, branchArg, prArg, doneCriteriaFile);
   const { body, manifestPath } = manifest;
   let { data } = manifest;
@@ -151,6 +150,7 @@ async function run() {
     printResult({ doneCriteriaPath, diffPath, jsonOut, manifestPath, originalState: data.state, prepareOnly, prNumber, promptPath, redispatchPath: null, result, updatedManifest: null, verdictPath: null });
     return;
   }
+  if (maybeBlockForBehindBasePreflight({ allowBehindBase, data, jsonOut, result, reviewRepoPath, reviewedHeadSha, round, runRepoPath })) return;
   if (maybeBlockForExecutionEvidencePreflight({ data, jsonOut, result, reviewFile, runRepoPath, reviewedHeadSha, round, runDir, strict: hardenedAssurance })) return;
   if (hardenedAssurance && !(advisoryConfig.lanes || []).length) {
     throw new Error(
