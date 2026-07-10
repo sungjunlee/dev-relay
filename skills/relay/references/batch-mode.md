@@ -13,8 +13,8 @@ For sprint-batch mapping, follow [`sprint-to-leaves.md`](../../relay-fleet/refer
 For an authorized fleet whose child becomes `merge_blocked` after an earlier child lands:
 
 1. In its worktree, fetch and rebase onto `origin/main`, then push the rebased branch with `--force-with-lease`.
-2. Recover in two audited hops (both whitelisted in `recover-state.js`; see the [recovery playbook](../../relay-dispatch/references/recovery-playbook.md)): `node skills/relay-dispatch/scripts/recover-state.js --run-id <id> --to ready_to_merge --reason "merge blocker cleared after rebase"`, then the same command `--to review_pending --reason "PR HEAD advanced after ready_to_merge; rerun review for the live head"` (the rebase satisfies its head-drift requirement).
-3. Re-run the explicitly authorized fleet drive: its review loop re-reviews the `review_pending` child at the rebased HEAD, and only after that review passes does its merge queue retry the landing. An interruption between the two hops cannot land unreviewed work — the pre-merge fresh-review gate rejects the rebased HEAD and re-blocks the child; resume with the second hop. (#889 tracks collapsing the two hops into one audited transition.)
+2. Recover in one audited hop (whitelisted in `recover-state.js`; see the [recovery playbook](../../relay-dispatch/references/recovery-playbook.md)): `node skills/relay-dispatch/scripts/recover-state.js --run-id <id> --to review_pending --reason "PR rebased after merge_blocked; rerun review for the live head"`.
+3. Re-run the explicitly authorized fleet drive: its review loop re-reviews the `review_pending` child at the rebased HEAD, and only after that review passes does its merge queue retry the landing. An interruption before the drive re-run cannot land unreviewed work — the pre-merge fresh-review gate rejects the rebased HEAD and re-blocks the child; resume with the recover hop.
 
 ## Principles
 

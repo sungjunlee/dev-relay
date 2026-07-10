@@ -93,6 +93,15 @@ const RECOVERY_TRANSITIONS = Object.freeze([
     resetLastReviewedSha: false,
     description: "Operator cleared the merge blocker; the next fleet drive re-run retries the merge queue.",
   },
+  {
+    from: STATES.MERGE_BLOCKED,
+    to: STATES.REVIEW_PENDING,
+    nextAction: "run_review",
+    requireForce: false,
+    requireFreshCommit: false,
+    resetLastReviewedSha: false,
+    description: "Rebased merge_blocked child needs re-review before the fleet drive retries the merge.",
+  },
 ]);
 
 function appendStateRecoveryEvent(repoRoot, runId, eventData) {
@@ -537,7 +546,8 @@ function main() {
     });
   }
 
-  let updated = fromState === STATES.MERGE_BLOCKED && toState === STATES.READY_TO_MERGE
+  let updated = fromState === STATES.MERGE_BLOCKED
+    && (toState === STATES.READY_TO_MERGE || toState === STATES.REVIEW_PENDING)
     ? updateManifestState(safeData, toState, recovery.nextAction)
     : forceTransitionState(safeData, toState, recovery.nextAction);
 
