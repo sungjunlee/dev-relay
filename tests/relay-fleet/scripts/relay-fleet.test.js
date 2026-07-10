@@ -979,6 +979,53 @@ test("relay-fleet replacement matrix replaces only run_id-null pre-manifest fail
   assert.deepEqual(persistedLeaves.map((leaf) => leaf.leaf_ref), [newLeaf.leaf_ref]);
 });
 
+test("relay-fleet replacement matrix rejects a changed leaf that keeps the same leaf_ref", () => {
+  const { relayHome, repoRoot } = setupRepo("relay-fleet-replace-sameref-");
+  const fleetId = "fleet-replace-sameref";
+  const oldLeaf = makeLeaf(repoRoot, 1, {
+    issue_number: 581,
+    leaf_ref: "leaf-old",
+    leaf_id: "leaf-old",
+    branch: "issue-581-leaf-old",
+  });
+  const respecifiedLeaf = makeLeaf(repoRoot, 2, {
+    issue_number: oldLeaf.issue_number,
+    leaf_ref: oldLeaf.leaf_ref,
+    leaf_id: oldLeaf.leaf_id,
+    branch: "issue-581-leaf-respecified",
+  });
+  createFleetManifest(repoRoot, {
+    fleetId,
+    children: [{
+      leaf_ref: oldLeaf.leaf_ref,
+      run_id: null,
+      dispatch_status: DISPATCH_STATUS.DISPATCH_FAILED_PRE_MANIFEST,
+      last_error: "old pre-manifest failure",
+    }],
+  });
+  writePersistedFleetLeaves(repoRoot, fleetId, [oldLeaf]);
+  const manifestPath = getFleetManifestPath(repoRoot, fleetId);
+  const leavesStorePath = getFleetLeavesStorePath(repoRoot, fleetId);
+  const manifestBefore = fs.readFileSync(manifestPath, "utf-8");
+  const storeBefore = fs.readFileSync(leavesStorePath, "utf-8");
+  const leavesFile = writeLeavesFile(repoRoot, [respecifiedLeaf]);
+
+  const result = runFleet([
+    "--repo", repoRoot,
+    "--fleet-id", fleetId,
+    "--leaves-file", leavesFile,
+    "--json",
+  ], { relayHome });
+
+  assert.notEqual(result.status, 0);
+  assert.equal(
+    JSON.parse(result.stderr).error,
+    `--leaves-file differs from persisted fleet leaves for '${fleetId}'; refusing to overwrite an existing fleet`
+  );
+  assert.equal(fs.readFileSync(manifestPath, "utf-8"), manifestBefore);
+  assert.equal(fs.readFileSync(leavesStorePath, "utf-8"), storeBefore);
+});
+
 test("relay-fleet replacement matrix rejects a replacement leaf_ref that collides with an unchanged sibling", () => {
   for (const replaceableFirst of [true, false]) {
     const { relayHome, repoRoot } = setupRepo(`relay-fleet-replace-collision-${replaceableFirst ? "first" : "last"}-`);

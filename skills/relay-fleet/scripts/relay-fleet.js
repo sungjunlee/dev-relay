@@ -469,6 +469,10 @@ function acceptedLeafReplacements(fleetChildren, persistedLeaves, leaves) {
   for (const persistedLeaf of persistedLeaves) {
     const leaf = leavesByIssue.get(persistedLeaf.issue_number);
     if (JSON.stringify(comparableLeaf(persistedLeaf)) === JSON.stringify(comparableLeaf(leaf))) continue;
+    // A changed leaf must carry a NEW leaf_ref: same-ref respecification is
+    // rejected so a concurrent invocation holding the old spec can never find
+    // a same-keyed child to dispatch (the old ref ceases to exist on accept).
+    if (leaf.leaf_ref === persistedLeaf.leaf_ref) return null;
     const child = childrenByRef.get(persistedLeaf.leaf_ref);
     if (!isReplaceableFleetChild(child)) return null;
     replacements.push({
