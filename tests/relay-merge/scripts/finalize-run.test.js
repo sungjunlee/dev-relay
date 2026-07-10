@@ -39,6 +39,13 @@ test("finalize-run help includes review-bypass decision tree", () => {
   )));
 });
 
+test("buildSquashSubject appends the PR suffix exactly once", () => {
+  const { buildSquashSubject } = require(SCRIPT);
+
+  assert.equal(buildSquashSubject("fix(relay): keep squash title", 864), "fix(relay): keep squash title (#864)");
+  assert.equal(buildSquashSubject("fix(relay): keep squash title (#864)", 864), "fix(relay): keep squash title (#864)");
+});
+
 function buildManifestForState(manifest, targetState) {
   switch (targetState) {
     case STATES.DRAFT:
@@ -264,6 +271,7 @@ function writeFakeGh(logPath, {
   mergeCommitAfterMerge = { oid: "merged-sha" },
   prMergeExitCode = 0,
   prMergeStderr = "",
+  title = "fix(relay): finalize test PR",
 } = {}) {
   const ghPath = path.join(path.dirname(logPath), "fake-gh.js");
   const statePath = path.join(path.dirname(logPath), "fake-gh-state.json");
@@ -282,6 +290,7 @@ function writeFakeGh(logPath, {
     mergeCommitAfterMerge,
     prMergeExitCode,
     prMergeStderr,
+    title,
   }), "utf-8");
   fs.writeFileSync(ghPath, `#!/usr/bin/env node
 const fs = require("fs");
@@ -315,7 +324,8 @@ if (args[0] === "pr" && args[1] === "view") {
     comments: state.comments,
     commits: state.commits,
     mergeable: state.mergeable,
-    statusCheckRollup: state.statusCheckRollup
+    statusCheckRollup: state.statusCheckRollup,
+    title: state.title
   }));
 }
 if (args[0] === "pr" && args[1] === "list") {
@@ -487,7 +497,91 @@ test("finalize-run force-finalize merges an escalated run with an auditable even
   assert.equal(fs.existsSync(worktreePath), false);
   assert.equal(branchExists(repoRoot, branch), false);
   assert.equal(remoteBranchExists(repoRoot, branch), false);
-  assert.match(fs.readFileSync(logPath, "utf-8"), /pr merge 123 --squash/);
+  assert.match(fs.readFileSync(logPath, "utf-8"), /pr merge 123 --squash --subject fix\(relay\): finalize test PR \(#123\)/);
+});
+
+test("finalize-run derives squash subject from the current PR title", () => {
+  const fixture = setupRepo();
+  const title = "fix(relay): preserve conventional squash titles";
+  const { logPath } = execFinalize(fixture, {
+    ghOptions: {
+      title,
+      comments: [DEFAULT_REVIEW_COMMENT],
+    },
+  });
+
+  const ghLog = fs.readFileSync(logPath, "utf-8");
+  assert.match(ghLog, new RegExp(`^pr merge 123 --squash --subject ${title.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} \\(#123\\)$`, "m"));
+});
+
+test("finalize-run does not double-suffix an already-suffixed squash title", () => {
+  const fixture = setupRepo();
+  const title = "fix(relay): preserve conventional squash titles (#123)";
+  const { logPath } = execFinalize(fixture, {
+    ghOptions: {
+      title,
+      comments: [DEFAULT_REVIEW_COMMENT],
+    },
+  });
+
+  const mergeLine = fs.readFileSync(logPath, "utf-8")
+    .split(/\r?\n/)
+    .find((line) => line.startsWith("pr merge "));
+  assert.equal(mergeLine, `pr merge 123 --squash --subject ${title}`);
+});
+
+for (const method of ["merge", "rebase"]) {
+  test(`finalize-run preserves the ${method} invocation without a subject`, () => {
+    const fixture = setupRepo();
+    const { logPath } = execFinalize(fixture, {
+      extraArgs: ["--merge-method", method],
+      ghOptions: {
+        title: "fix(relay): title must not affect non-squash merges",
+        comments: [DEFAULT_REVIEW_COMMENT],
+      },
+    });
+
+    const mergeLine = fs.readFileSync(logPath, "utf-8")
+      .split(/\r?\n/)
+      .find((line) => line.startsWith("pr merge "));
+    assert.equal(mergeLine, `pr merge 123 --${method}`);
+  });
+}
+
+test("finalize-run notes a missing title and proceeds with subjectless squash", () => {
+  const fixture = setupRepo();
+  const logPath = path.join(fixture.repoRoot, "gh.log");
+  const fakeGh = writeFakeGh(logPath, {
+    title: null,
+    comments: [DEFAULT_REVIEW_COMMENT],
+    commits: [
+      {
+        oid: fixture.headSha,
+        committedDate: DEFAULT_COMMIT_DATE,
+      },
+    ],
+  });
+
+  const result = spawnSync("node", [
+    SCRIPT,
+    "--repo", fixture.repoRoot,
+    "--branch", fixture.branch,
+    "--pr", "123",
+    "--json",
+  ], {
+    cwd: fixture.repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+    env: { ...process.env, RELAY_GH_BIN: fakeGh },
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stderr, /^Note: PR title unavailable for PR #123; proceeding with subjectless squash merge\.\n$/);
+  assert.equal(JSON.parse(result.stdout).state, STATES.MERGED);
+  const mergeLine = fs.readFileSync(logPath, "utf-8")
+    .split(/\r?\n/)
+    .find((line) => line.startsWith("pr merge "));
+  assert.equal(mergeLine, "pr merge 123 --squash");
 });
 
 test("finalize-run default squash collapses TDD red branch history to one base commit", () => {
@@ -544,7 +638,8 @@ if (args[0] === "pr" && args[1] === "view") {
     comments: [{ body: "<!-- relay-review -->\\n## Relay Review\\nVerdict: PASS\\nRounds: 1", createdAt: ${JSON.stringify(DEFAULT_COMMIT_DATE)} }],
     commits: [{ oid: ${JSON.stringify(headSha)}, committedDate: ${JSON.stringify(DEFAULT_COMMIT_DATE)} }],
     mergeable: "MERGEABLE",
-    statusCheckRollup: []
+    statusCheckRollup: [],
+    title: "test(relay): collapse TDD history"
   }));
   process.exit(0);
 }
