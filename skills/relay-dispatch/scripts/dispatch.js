@@ -987,6 +987,74 @@ function sleepAsync(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/** Parse `ps` rows into `{ pid, command }` entries for one process group. */
+function parseProcessGroupPsInventory(output, pgid) {
+  return output
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const match = line.match(/^(\d+)\s+(\d+)\s+(.*)$/);
+      if (!match) return null;
+      if (Number(match[2]) !== Number(pgid)) return null;
+      return { pid: Number(match[1]), command: match[3].trim() };
+    })
+    .filter(Boolean);
+}
+
+/** Best-effort inventory of live process-group members; never throws. */
+function captureProcessGroupSurvivorInventory(pgid) {
+  if (!pgid || !Number.isFinite(Number(pgid)) || process.platform === "win32") {
+    return [];
+  }
+  try {
+    // Prefer pgrep -g: group-scoped, avoids full-process-table scans that time out under load.
+    try {
+      const pgrepOut = execFileSync("pgrep", ["-g", String(pgid)], {
+        encoding: "utf-8",
+        stdio: ["ignore", "pipe", "ignore"],
+        timeout: 2000,
+        maxBuffer: 1024 * 1024,
+      });
+      const pids = pgrepOut
+        .trim()
+        .split(/\s+/)
+        .map(Number)
+        .filter((pid) => Number.isFinite(pid) && pid > 0);
+      return pids.map((pid) => {
+        let command = "";
+        try {
+          command = execFileSync("ps", ["-p", String(pid), "-o", "comm="], {
+            encoding: "utf-8",
+            stdio: ["ignore", "pipe", "ignore"],
+            timeout: 1000,
+          }).trim();
+        } catch {
+          // Command name is best-effort; keep the pid entry either way.
+        }
+        return { pid, command };
+      });
+    } catch (error) {
+      // status 1 = no matches. Timeouts / missing binary: degrade to [] rather than
+      // falling through to a full-table ps scan that can stall the supervisor under load.
+      if (error && (error.status === 1 || error.code === "ETIMEDOUT" || error.killed)) {
+        return [];
+      }
+    }
+
+    // Fallback only when pgrep is unavailable (ENOENT): group-scoped ps, never full-table.
+    const scoped = execFileSync("ps", ["-o", "pid=,pgid=,comm=", "-g", String(pgid)], {
+      encoding: "utf-8",
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: 2000,
+      maxBuffer: 1024 * 1024,
+    });
+    return parseProcessGroupPsInventory(scoped, pgid);
+  } catch {
+    return [];
+  }
+}
+
 const POSIX_LEASE_GATE_SCRIPT = [
   "lease_path=$1",
   "expected_pid=$2",
@@ -2558,25 +2626,44 @@ async function main() {
   if (executorPgid) {
     const processGroupGone = await waitForProcessGroupExit(executorPgid);
     if (!processGroupGone) {
-      try { fs.closeSync(stdoutFd); } catch {}
-      try { fs.closeSync(stderrFd); } catch {}
-      appendRunEvent(repoRoot, runId, {
-        event: EVENTS.DISPATCH_INTERRUPTED,
-        state_from: STATES.DISPATCHED,
-        state_to: STATES.DISPATCHED,
-        reason: "executor_group_unsettled_after_leader_close",
-        signal: null,
-        executor_pid: executorPid,
-        executor_pgid: executorPgid,
-        elapsed_s: dispatchStartTime ? Math.max(0, Math.round((Date.now() - dispatchStartTime) / 1000)) : null,
-        timeout_s: TIMEOUT,
-        executor_terminated: false,
-        worktree: wtPath || null,
-      });
-      throw new Error(
-        `executor process group ${executorPgid} is still alive after executor leader exited; ` +
-        `kept run lease at ${runArtifactPaths.leasePath}. Run reconcile-run.js for run ${runId}.`
-      );
+      const cleanLeaderExit = !execResult.timedOut && !execResult.spawnError;
+      if (cleanLeaderExit) {
+        // Leader finished on its own; survivors are notifiers/helpers (e.g. SkyComputerUseClient).
+        // Terminate the group, re-wait once, audit, then continue the normal completion path.
+        const survivorInventory = captureProcessGroupSurvivorInventory(executorPgid);
+        terminateProcessGroup(executorPgid);
+        const survivorsTerminated = await waitForProcessGroupExit(executorPgid);
+        appendRunEvent(repoRoot, runId, {
+          event: EVENTS.EXECUTOR_GROUP_LINGERING,
+          state_from: STATES.DISPATCHED,
+          state_to: STATES.DISPATCHED,
+          reason: "executor_group_survivors_after_clean_leader_exit",
+          executor_pid: executorPid,
+          executor_pgid: executorPgid,
+          survivors_terminated: survivorsTerminated,
+          survivor_inventory: survivorInventory,
+        });
+      } else {
+        try { fs.closeSync(stdoutFd); } catch {}
+        try { fs.closeSync(stderrFd); } catch {}
+        appendRunEvent(repoRoot, runId, {
+          event: EVENTS.DISPATCH_INTERRUPTED,
+          state_from: STATES.DISPATCHED,
+          state_to: STATES.DISPATCHED,
+          reason: "executor_group_unsettled_after_leader_close",
+          signal: null,
+          executor_pid: executorPid,
+          executor_pgid: executorPgid,
+          elapsed_s: dispatchStartTime ? Math.max(0, Math.round((Date.now() - dispatchStartTime) / 1000)) : null,
+          timeout_s: TIMEOUT,
+          executor_terminated: false,
+          worktree: wtPath || null,
+        });
+        throw new Error(
+          `executor process group ${executorPgid} is still alive after executor leader exited; ` +
+          `kept run lease at ${runArtifactPaths.leasePath}. Run reconcile-run.js for run ${runId}.`
+        );
+      }
     }
   }
   removeRunLease(repoRoot, runId);

@@ -168,6 +168,7 @@ test("EVENTS is a frozen object map for current run journal event names", () => 
   assert.equal(EVENTS.GUIDANCE_SELECTED, "guidance_selected");
   assert.equal(EVENTS.BYPASS_OVERRIDE_BY_USER, "bypass_override_by_user");
   assert.equal(EVENTS.DISPATCH_INTERRUPTED, "dispatch_interrupted");
+  assert.equal(EVENTS.EXECUTOR_GROUP_LINGERING, "executor_group_lingering");
   assert.equal(EVENTS.READINESS_CHECK_FAILED, "readiness_check_failed");
   assert.equal(EVENTS.READINESS_CHECK_FAILED_NONTTY, "readiness_check_failed_nontty");
   assert.equal(EVENTS.READINESS_PROBE, "readiness_probe");
