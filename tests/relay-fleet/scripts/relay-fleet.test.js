@@ -146,6 +146,17 @@ function advanceFleetManifestState(repoRoot, fleetId, targetState) {
   return readFleetManifest(repoRoot, fleetId).data;
 }
 
+function writeFleetUpdatedAt(repoRoot, fleetId, updatedAt) {
+  const record = readFleetManifest(repoRoot, fleetId);
+  writeManifest(record.manifestPath, {
+    ...record.data,
+    timestamps: {
+      ...record.data.timestamps,
+      updated_at: updatedAt,
+    },
+  }, record.body);
+}
+
 function writeChildRun(repoRoot, {
   runId,
   branch,
@@ -3279,6 +3290,227 @@ test("relay-fleet --resume skips a still-running review subprocess", async () =>
   fs.writeFileSync(releasePath, "go\n", "utf-8");
   await new Promise((resolve) => first.on("close", resolve));
   assert.equal(readManifest(getManifestPath(repoRoot, runId)).data.state, RUN_STATES.READY_TO_MERGE);
+});
+
+test("relay-fleet --status without --fleet-id lists every repo fleet in deterministic text rows", () => {
+  const { relayHome, repoRoot } = setupRepo("relay-fleet-list-text-");
+  const otherRepoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-fleet-list-other-"));
+  initGitRepo(otherRepoRoot);
+  createFleetManifest(otherRepoRoot, { fleetId: "fleet-other-repo" });
+
+  const escalatedRun = "issue-871-20260710010101000-a1b2c3d4";
+  writeChildRun(repoRoot, {
+    runId: escalatedRun,
+    branch: "issue-871-fleet-listing",
+    issueNumber: 871,
+    leafId: "leaf-terminal",
+    fleetId: "fleet-zeta",
+    state: RUN_STATES.ESCALATED,
+  });
+  createFleetManifest(repoRoot, { fleetId: "fleet-alpha" });
+  createFleetManifest(repoRoot, {
+    fleetId: "fleet-zeta",
+    children: [
+      { leaf_ref: "leaf-terminal", run_id: escalatedRun, dispatch_status: DISPATCH_STATUS.DISPATCHED },
+      { leaf_ref: "leaf-pending", run_id: null, dispatch_status: DISPATCH_STATUS.PENDING },
+    ],
+  });
+  advanceFleetManifestState(repoRoot, "fleet-zeta", FLEET_STATES.REVIEWING);
+  writeFleetUpdatedAt(repoRoot, "fleet-alpha", "2026-07-09T01:00:00.000Z");
+  writeFleetUpdatedAt(repoRoot, "fleet-zeta", "2026-07-10T02:00:00.000Z");
+
+  const alphaPath = getFleetManifestPath(repoRoot, "fleet-alpha");
+  const zetaPath = getFleetManifestPath(repoRoot, "fleet-zeta");
+  const before = new Map([
+    [alphaPath, fs.readFileSync(alphaPath, "utf-8")],
+    [zetaPath, fs.readFileSync(zetaPath, "utf-8")],
+  ]);
+  const result = runFleet(["--repo", repoRoot, "--status"], { relayHome });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stderr, "");
+  assert.equal(result.stdout, [
+    "Fleets: 2",
+    "fleet_id | fleet_state | children_terminal/children_total | updated_at",
+    "fleet-alpha | draft | 0/0 | 2026-07-09T01:00:00.000Z",
+    "fleet-zeta | reviewing | 1/2 | 2026-07-10T02:00:00.000Z",
+    "",
+  ].join("\n"));
+  assert.doesNotMatch(result.stdout, /fleet-other-repo/);
+  for (const [manifestPath, content] of before) {
+    assert.equal(fs.readFileSync(manifestPath, "utf-8"), content);
+  }
+});
+
+test("relay-fleet --status --json without --fleet-id emits the stable listing fields", () => {
+  const { relayHome, repoRoot } = setupRepo("relay-fleet-list-json-");
+  const closedRun = "issue-872-20260710010101000-a1b2c3d4";
+  writeChildRun(repoRoot, {
+    runId: closedRun,
+    branch: "issue-872-fleet-hygiene",
+    issueNumber: 872,
+    leafId: "leaf-closed",
+    fleetId: "fleet-alpha",
+    state: RUN_STATES.CLOSED,
+  });
+  createFleetManifest(repoRoot, {
+    fleetId: "fleet-beta",
+    children: [{ leaf_ref: "leaf-pending", run_id: null, dispatch_status: DISPATCH_STATUS.PENDING }],
+  });
+  createFleetManifest(repoRoot, {
+    fleetId: "fleet-alpha",
+    children: [{ leaf_ref: "leaf-closed", run_id: closedRun, dispatch_status: DISPATCH_STATUS.DISPATCHED }],
+  });
+  writeFleetUpdatedAt(repoRoot, "fleet-alpha", "2026-07-10T03:00:00.000Z");
+  writeFleetUpdatedAt(repoRoot, "fleet-beta", "2026-07-10T04:00:00.000Z");
+
+  const result = runFleet(["--repo", repoRoot, "--status", "--json"], { relayHome });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout), [
+    {
+      fleet_id: "fleet-alpha",
+      fleet_state: "draft",
+      children_total: 1,
+      children_terminal: 1,
+      updated_at: "2026-07-10T03:00:00.000Z",
+    },
+    {
+      fleet_id: "fleet-beta",
+      fleet_state: "draft",
+      children_total: 1,
+      children_terminal: 0,
+      updated_at: "2026-07-10T04:00:00.000Z",
+    },
+  ]);
+});
+
+test("relay-fleet --status --fleet-id byte-preserves single-fleet text and JSON detail", () => {
+  const { relayHome, repoRoot } = setupRepo("relay-fleet-detail-bytes-");
+  const created = createFleetManifest(repoRoot, {
+    fleetId: "fleet-detail",
+    children: [{ leaf_ref: "leaf-pending", run_id: null, dispatch_status: DISPATCH_STATUS.PENDING }],
+  });
+  const summary = {
+    fleet_id: "fleet-detail",
+    fleet_state: "draft",
+    total_children: 1,
+    by_dispatch_status: { pending: 1 },
+    by_run_state: { no_run_manifest: 1 },
+    children: [{
+      leaf_ref: "leaf-pending",
+      run_id: null,
+      dispatch_status: "pending",
+      run_state: "no_run_manifest",
+      manifest_path: null,
+      pr_number: null,
+      base_branch: null,
+      review_round: null,
+      error: null,
+    }],
+  };
+
+  const textResult = runFleet([
+    "--repo", repoRoot,
+    "--fleet-id", "fleet-detail",
+    "--status",
+  ], { relayHome });
+  assert.equal(textResult.status, 0, textResult.stderr);
+  assert.equal(textResult.stdout, [
+    "Fleet: fleet-detail",
+    "State: draft",
+    "Children: 1",
+    'Dispatch status: {"pending":1}',
+    'Run state: {"no_run_manifest":1}',
+    "Child states:",
+    "  - leaf-pending | run_id=null | dispatch_status=pending | run_state=no_run_manifest",
+    "",
+  ].join("\n"));
+
+  const jsonResult = runFleet([
+    "--repo", repoRoot,
+    "--fleet-id", "fleet-detail",
+    "--status",
+    "--json",
+  ], { relayHome });
+  assert.equal(jsonResult.status, 0, jsonResult.stderr);
+  assert.equal(jsonResult.stdout, `${JSON.stringify({
+    ok: true,
+    fleet_id: "fleet-detail",
+    fleetManifestPath: created.manifestPath,
+    summary,
+    operator_attention: [],
+  }, null, 2)}\n`);
+});
+
+test("relay-fleet --status without --fleet-id returns clean empty text and JSON listings", () => {
+  const { relayHome, repoRoot } = setupRepo("relay-fleet-list-empty-");
+  const fleetsDir = getFleetsDir(repoRoot);
+  assert.equal(fs.existsSync(fleetsDir), false);
+
+  const textResult = runFleet(["--repo", repoRoot, "--status"], { relayHome });
+  assert.equal(textResult.status, 0, textResult.stderr);
+  assert.equal(textResult.stdout, "No fleets found for repository.\n");
+  assert.equal(fs.existsSync(fleetsDir), false);
+
+  const jsonResult = runFleet(["--repo", repoRoot, "--status", "--json"], { relayHome });
+  assert.equal(jsonResult.status, 0, jsonResult.stderr);
+  assert.equal(jsonResult.stdout, "[]\n");
+  assert.equal(fs.existsSync(fleetsDir), false);
+});
+
+test("relay-fleet non-status modes without --fleet-id preserve the missing-argument error", () => {
+  const { relayHome, repoRoot } = setupRepo("relay-fleet-list-required-");
+  for (const modeArgs of [[], ["--resume"], ["--review"], ["--dry-run"]]) {
+    const result = runFleet(["--repo", repoRoot, ...modeArgs], { relayHome });
+    assert.equal(result.status, 1, `mode ${modeArgs.join(" ")} unexpectedly succeeded`);
+    assert.equal(result.stdout, "");
+    assert.equal(result.stderr, "Error: --fleet-id is required\n");
+  }
+});
+
+test("relay-fleet repo listing marks a corrupt manifest row and continues", () => {
+  const { relayHome, repoRoot } = setupRepo("relay-fleet-list-corrupt-");
+  createFleetManifest(repoRoot, { fleetId: "fleet-alpha" });
+  writeFleetUpdatedAt(repoRoot, "fleet-alpha", "2026-07-10T05:00:00.000Z");
+  const corruptPath = getFleetManifestPath(repoRoot, "fleet-corrupt");
+  fs.writeFileSync(corruptPath, "---\nfleet_id: 'fleet-corrupt'\n", "utf-8");
+  const before = fs.readFileSync(corruptPath, "utf-8");
+
+  const jsonResult = runFleet(["--repo", repoRoot, "--status", "--json"], { relayHome });
+  assert.equal(jsonResult.status, 0, jsonResult.stderr);
+  assert.deepEqual(JSON.parse(jsonResult.stdout), [
+    {
+      fleet_id: "fleet-alpha",
+      fleet_state: "draft",
+      children_total: 0,
+      children_terminal: 0,
+      updated_at: "2026-07-10T05:00:00.000Z",
+    },
+    {
+      fleet_id: "fleet-corrupt",
+      fleet_state: "error",
+      children_total: null,
+      children_terminal: null,
+      updated_at: null,
+      error: "fleet-corrupt.md: Invalid manifest: missing closing frontmatter marker",
+    },
+  ]);
+
+  const textResult = runFleet(["--repo", repoRoot, "--status"], { relayHome });
+  assert.equal(textResult.status, 0, textResult.stderr);
+  assert.match(
+    textResult.stdout,
+    /fleet-corrupt \| error \| -\/- \| - \| error=fleet-corrupt\.md: Invalid manifest: missing closing frontmatter marker/,
+  );
+  assert.equal(fs.readFileSync(corruptPath, "utf-8"), before);
+});
+
+test("relay-fleet help documents repo-wide status and conditional --fleet-id", () => {
+  const result = runFleet(["--help"]);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /relay-fleet\.js --repo <path> --status \[--json\]/);
+  assert.match(result.stdout, /Fleet manifest id \(required except repo-wide --status\)/);
 });
 
 test("relay-fleet --status prints derived summary without writing the fleet manifest", () => {
