@@ -685,62 +685,141 @@ test("cleanup-worktrees rejects relay-base same-name worktrees before deleting u
   assert.equal(manifest.cleanup.status, "pending");
 });
 
-test("cleanup-worktrees fails closed on stale missing relay-owned manifests", () => {
+test("cleanup-worktrees processes terminal manifests whose worktrees are already missing", () => {
+  for (const invocationContext of ["canonical", "linked"]) {
+    const repoRoot = setupRepo();
+    const updatedAt = "2026-04-01T00:00:00.000Z";
+    const stale = writeStaleMissingRelayRun(repoRoot, {
+      branch: `issue-295-${invocationContext}`,
+      updatedAt,
+    });
+    let repoArg = repoRoot;
+    if (invocationContext === "linked") {
+      repoArg = path.join(os.tmpdir(), `relay-janitor-linked-${stale.runId}`);
+      execFileSync("git", ["worktree", "add", repoArg, "-b", `linked-${stale.runId}`], {
+        cwd: repoRoot,
+        encoding: "utf-8",
+        stdio: "pipe",
+      });
+    }
+
+    const stdout = execFileSync("node", [
+      SCRIPT,
+      "--repo", repoArg,
+      "--all",
+      "--json",
+    ], { encoding: "utf-8" });
+
+    const result = JSON.parse(stdout);
+    const cleaned = result.cleaned.find((entry) => entry.runId === stale.runId);
+    assert.ok(cleaned, `${invocationContext} invocation must process the terminal run`);
+    assert.equal(result.failed.length, 0);
+    assert.equal(cleaned.worktreeRemoved, true);
+    assert.equal(cleaned.pruneRan, true);
+    const updated = readManifest(stale.manifestPath).data;
+    assert.equal(updated.cleanup.status, "succeeded");
+    const events = fs.readFileSync(path.join(path.dirname(stale.manifestPath), stale.runId, "events.jsonl"), "utf-8");
+    assert.match(events, /"event":"cleanup_result"/);
+  }
+});
+
+test("cleanup-worktrees requires --force-terminal for terminal unverifiable relay-base paths", () => {
   const repoRoot = setupRepo();
   const updatedAt = "2026-04-01T00:00:00.000Z";
-  const first = writeStaleMissingRelayRun(repoRoot, {
-    branch: "issue-295-a",
+  const { manifestPath, worktreePath } = writeRun(repoRoot, {
+    branch: "issue-885-terminal",
+    state: STATES.MERGED,
     updatedAt,
   });
-  const second = writeStaleMissingRelayRun(repoRoot, {
-    branch: "issue-295-b",
-    updatedAt,
+  const unverifiablePath = path.join(getRelayWorktreeBase(), "issue-885-shell", "unverifiable-name");
+  fs.mkdirSync(unverifiablePath, { recursive: true });
+  fs.writeFileSync(path.join(unverifiablePath, "sentinel.txt"), "keep until forced\n", "utf-8");
+  execFileSync("git", ["worktree", "remove", "--force", worktreePath], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
   });
+  const record = readManifest(manifestPath);
+  writeManifest(manifestPath, {
+    ...record.data,
+    paths: { ...record.data.paths, worktree: unverifiablePath },
+  }, record.body);
 
-  const dryRunStdout = execFileSync("node", [
-    SCRIPT,
-    "--repo", repoRoot,
-    "--all",
-    "--dry-run",
-    "--json",
-  ], { encoding: "utf-8" });
-
-  const dryRunResult = JSON.parse(dryRunStdout);
-  const dryRunFailedIds = new Set(dryRunResult.failed.map((entry) => entry.runId));
+  const dryRunResult = JSON.parse(execFileSync("node", [
+    SCRIPT, "--repo", repoRoot, "--all", "--dry-run", "--json",
+  ], { encoding: "utf-8" }));
   assert.equal(dryRunResult.cleaned.length, 0);
-  assert.equal(dryRunResult.failed.length, 2);
-  assert.equal(dryRunFailedIds.has(first.runId), true);
-  assert.equal(dryRunFailedIds.has(second.runId), true);
-  assert.match(dryRunResult.failed[0].error, /manifest paths\.worktree/);
-  assert.equal(readManifest(first.manifestPath).data.cleanup.status, "pending", "dry-run must not persist cleanup state");
+  assert.equal(dryRunResult.failed.length, 1);
+  assert.equal(dryRunResult.failed[0].reason, "terminal_unverifiable_requires_force");
+  assert.equal(dryRunResult.failed[0].classification, "cleanable_terminal_unverifiable_path");
+  assert.equal(fs.existsSync(unverifiablePath), true);
+  assert.equal(readManifest(manifestPath).data.cleanup.status, "pending");
 
-  const firstRunStdout = execFileSync("node", [
-    SCRIPT,
-    "--repo", repoRoot,
-    "--all",
-    "--json",
-  ], { encoding: "utf-8" });
+  const result = JSON.parse(execFileSync("node", [
+    SCRIPT, "--repo", repoRoot, "--all", "--force-terminal", "--json",
+  ], { encoding: "utf-8" }));
+  assert.equal(result.failed.length, 0, JSON.stringify(result.failed, null, 2));
+  assert.equal(result.cleaned.length, 1);
+  assert.equal(result.cleaned[0].reason, "forced_terminal_unverifiable_path");
+  assert.equal(result.cleaned[0].worktreeRemoved, true);
+  assert.equal(fs.existsSync(unverifiablePath), false);
+  assert.equal(readManifest(manifestPath).data.cleanup.status, "succeeded");
+});
 
-  const firstRunResult = JSON.parse(firstRunStdout);
-  const failedIds = new Set(firstRunResult.failed.map((entry) => entry.runId));
-  assert.equal(firstRunResult.cleaned.length, 0);
-  assert.equal(firstRunResult.failed.length, 2);
-  assert.equal(failedIds.has(first.runId), true);
-  assert.equal(failedIds.has(second.runId), true);
-  assert.match(firstRunResult.failed[0].error, /manifest paths\.worktree/);
-  assert.equal(readManifest(first.manifestPath).data.cleanup.status, "pending");
-  assert.equal(readManifest(second.manifestPath).data.cleanup.status, "pending");
+test("cleanup-worktrees refuses non-terminal unverifiable paths with or without --force-terminal", () => {
+  for (const forceTerminal of [false, true]) {
+    const repoRoot = setupRepo();
+    const updatedAt = "2026-04-01T00:00:00.000Z";
+    const { manifestPath } = writeRun(repoRoot, {
+      branch: `issue-885-open-${forceTerminal}`,
+      state: STATES.READY_TO_MERGE,
+      updatedAt,
+    });
+    const unverifiablePath = path.join(getRelayWorktreeBase(), `open-${forceTerminal}`, "unverifiable-name");
+    fs.mkdirSync(unverifiablePath, { recursive: true });
+    fs.writeFileSync(path.join(unverifiablePath, "sentinel.txt"), "must remain\n", "utf-8");
+    const record = readManifest(manifestPath);
+    writeManifest(manifestPath, {
+      ...record.data,
+      paths: { ...record.data.paths, worktree: unverifiablePath },
+    }, record.body);
+    const cliArgs = [SCRIPT, "--repo", repoRoot, "--all", "--dry-run", "--json"];
+    if (forceTerminal) cliArgs.splice(-1, 0, "--force-terminal");
 
-  const secondRunStdout = execFileSync("node", [
-    SCRIPT,
-    "--repo", repoRoot,
-    "--all",
-    "--json",
-  ], { encoding: "utf-8" });
+    const result = JSON.parse(execFileSync("node", cliArgs, { encoding: "utf-8" }));
+    assert.equal(result.failed.length, 1);
+    assert.equal(result.failed[0].reason, "refused_non_terminal_manifest_paths");
+    assert.equal(result.failed[0].classification, "refused_manifest_paths");
+    assert.equal(fs.existsSync(unverifiablePath), true);
+    assert.equal(readManifest(manifestPath).data.cleanup.status, "pending");
+  }
+});
 
-  const secondRunResult = JSON.parse(secondRunStdout);
-  assert.equal(secondRunResult.cleaned.length, 0);
-  assert.equal(secondRunResult.failed.length, 2);
+test("cleanup-worktrees never force-removes a terminal path outside the relay worktree base", () => {
+  const repoRoot = setupRepo();
+  const updatedAt = "2026-04-01T00:00:00.000Z";
+  const { manifestPath } = writeRun(repoRoot, {
+    branch: "issue-885-outside",
+    state: STATES.MERGED,
+    updatedAt,
+  });
+  const outsidePath = fs.mkdtempSync(path.join(os.tmpdir(), "relay-janitor-outside-"));
+  fs.writeFileSync(path.join(outsidePath, "sentinel.txt"), "never remove\n", "utf-8");
+  const record = readManifest(manifestPath);
+  writeManifest(manifestPath, {
+    ...record.data,
+    paths: { ...record.data.paths, worktree: outsidePath },
+  }, record.body);
+
+  const result = JSON.parse(execFileSync("node", [
+    SCRIPT, "--repo", repoRoot, "--all", "--force-terminal", "--force", "--json",
+  ], { encoding: "utf-8" }));
+  assert.equal(result.cleaned.length, 0);
+  assert.equal(result.failed.length, 1);
+  assert.equal(result.failed[0].reason, "refused_terminal_manifest_paths");
+  assert.equal(fs.existsSync(outsidePath), true);
+  assert.equal(fs.existsSync(path.join(outsidePath, "sentinel.txt")), true);
+  assert.equal(readManifest(manifestPath).data.cleanup.status, "pending");
 });
 
 test("cleanup-worktrees removes existing relay-owned directories with pruned git bindings", () => {
