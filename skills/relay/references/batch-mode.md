@@ -12,9 +12,9 @@ For sprint-batch mapping, follow [`sprint-to-leaves.md`](../../relay-fleet/refer
 
 For an authorized fleet whose child becomes `merge_blocked` after an earlier child lands:
 
-1. In its worktree, fetch and rebase onto `origin/main`, then push the rebased branch.
-2. Use the validated lifecycle helper to restore `ready_to_merge`: `node -e 'const p="./skills/relay-dispatch/scripts/",repo=process.cwd(),id=process.argv[1],reason=process.argv[2],m=require(p+"relay-resolver").resolveManifestRecord({repoRoot:repo,runId:id}),l=require(p+"manifest/lifecycle"),n=l.updateManifestState(m.data,l.STATES.READY_TO_MERGE,"await_explicit_merge");require(p+"manifest/store").writeManifest(m.manifestPath,n,m.body);const {appendRunEvent,EVENTS}=require(p+"relay-events");appendRunEvent(repo,id,{event:EVENTS.STATE_RECOVERY,state_from:m.data.state,state_to:n.state,head_sha:n.git?.head_sha||null,round:n.review?.rounds||null,reason})' <id> "merge blocker cleared after rebase"`.
-3. Follow the [recovery playbook](../../relay-dispatch/references/recovery-playbook.md): recover to `review_pending`, then run `relay-review` from scratch against the rebased HEAD.
+1. In its worktree, fetch and rebase onto `origin/main`, then push the rebased branch with `--force-with-lease`.
+2. Re-review BEFORE restoring merge readiness: recover the run to `review_pending` and run `relay-review` from scratch against the rebased HEAD (commands in the [recovery playbook](../../relay-dispatch/references/recovery-playbook.md)).
+3. Once review passes — or when the HEAD is unchanged and only the merge gate was stale — restore readiness with `node skills/relay-dispatch/scripts/recover-state.js --run-id <id> --to ready_to_merge --reason "merge blocker cleared after rebase"`.
 4. Re-run the explicitly authorized fleet drive so its merge queue retries the child.
 
 ## Principles
