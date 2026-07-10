@@ -124,7 +124,8 @@ if (args[0] === "pr" && args[1] === "view") {
   if (
     fields === "comments,commits,mergeable,statusCheckRollup" ||
     fields === "baseRefName,comments,commits,mergeable,statusCheckRollup" ||
-    fields === "baseRefName,comments,commits,mergeable,statusCheckRollup,headRefOid"
+    fields === "baseRefName,comments,commits,mergeable,statusCheckRollup,headRefOid" ||
+    fields === "baseRefName,comments,commits,mergeable,statusCheckRollup,headRefOid,title"
   ) {
     writeJson({
       baseRefName: fixture.baseRefName || "main",
@@ -133,6 +134,7 @@ if (args[0] === "pr" && args[1] === "view") {
       mergeable: fixture.mergeable || "MERGEABLE",
       statusCheckRollup: fixture.statusCheckRollup || [],
       headRefOid: fixture.headRefOid || "a".repeat(40),
+      title: fixture.title || "Fixture PR",
     });
     process.exit(0);
   }
