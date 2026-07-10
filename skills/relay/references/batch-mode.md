@@ -4,16 +4,18 @@ Operator note for parallel relay batches. Manual fan-out is superseded by relay-
 
 ## Default Flow
 
-Use `relay-fleet` as the default batch drive for prepared leaves.
-For sprint batches, follow `../../relay-fleet/references/sprint-to-leaves.md`.
+For multiple independent ready tasks, use [`relay-fleet`](../../relay-fleet/SKILL.md) as the default path.
+One fleet command drives fan-out → review → merge → `closed`.
+For sprint-batch mapping, follow [`sprint-to-leaves.md`](../../relay-fleet/references/sprint-to-leaves.md).
 
 ## Merge conflict recovery
 
-If a child leaves `ready_to_merge` as `merge_blocked` after an earlier child lands:
+If a fleet child becomes `merge_blocked` after an earlier child lands:
 
-1. Recover the affected run per the recovery playbook.
-2. Re-run the fleet drive so the child returns to the merge queue.
-3. Continue through the fleet gate.
+1. In its worktree, fetch and rebase onto `origin/main`, then push the rebased branch.
+2. Run `relay-review` again from scratch against the rebased HEAD.
+3. Audit the recovery with `recover-state.js --to ready_to_merge --reason "<why>"`; follow the [recovery playbook](../../relay-dispatch/references/recovery-playbook.md).
+4. Re-run the fleet drive so its merge queue retries the child.
 
 ## Principles
 
