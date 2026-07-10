@@ -86,6 +86,7 @@ const FLAGS = [
     rationale: "Codex reasoning_effort override; closed selector over codex CLI levels." },
   { flag: "--reconcile", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Explicit opt-in to mutate dead dispatched runs during doctor/preflight reconciliation." },
   { flag: "--reconcile-merged", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Reconcile merged drift for ready_to_merge runs with merge evidence." },
+  { flag: "--replace-placeholder-evidence", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Explicitly replace timeout placeholder evidence with operator-verified evidence; no value is consumed." },
   { flag: "--register", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Presence flag; no value is consumed." },
   { flag: "--repeated-issue-count", kind: VALUE, mode: MODE_PARSED, valueName: "<n>", rationale: "Numeric review field; flag-like following tokens should mean the value is missing." },
   { flag: "--repo", kind: VALUE, mode: MODE_VERBATIM, valueName: "<path>", rationale: "Operator-supplied repository path; keep the literal argv token." },
@@ -194,7 +195,7 @@ const COMMAND_FLAGS = {
   ],
   "recover-commit": [
     "--repo", "--run-id", "--manifest", "--reason", "--pr-title", "--pr-body-file",
-    "--test-command", "--test-result-file", "--test-exit-code",
+    "--test-command", "--test-result-file", "--test-exit-code", "--replace-placeholder-evidence",
     "--dry-run", "--json", "--help",
   ],
   "reconcile-run": [
