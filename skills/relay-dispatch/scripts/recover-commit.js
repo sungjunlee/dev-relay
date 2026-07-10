@@ -406,10 +406,16 @@ function main() {
   let replacedEvidence = null;
 
   if (operatorEvidenceRequested && evidenceExists) {
-    const existingEvidence = JSON.parse(fs.readFileSync(evidencePath, "utf-8"));
+    let existingEvidence = null;
+    try {
+      const parsedEvidence = JSON.parse(fs.readFileSync(evidencePath, "utf-8"));
+      if (parsedEvidence && typeof parsedEvidence === "object" && !Array.isArray(parsedEvidence)) {
+        existingEvidence = parsedEvidence;
+      }
+    } catch {}
     const isPlaceholder = (
-      existingEvidence.recorded_by === "dispatch-orchestrator-v1" &&
-      existingEvidence.test_command === "unspecified"
+      existingEvidence?.recorded_by === "dispatch-orchestrator-v1" &&
+      existingEvidence?.test_command === "unspecified"
     );
     if (replacePlaceholderEvidence && isPlaceholder) {
       replacedEvidence = {

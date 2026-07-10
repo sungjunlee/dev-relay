@@ -711,6 +711,34 @@ test("operator test flags refuse to overwrite existing execution evidence", () =
   assert.equal(readRunEvents(fixture.repoRoot, fixture.runId).length, 0);
 });
 
+[
+  { name: "malformed", contents: "{not-json\n" },
+  { name: "null", contents: "null\n" },
+].forEach(({ name, contents }) => {
+  test(`operator test flags refuse to overwrite ${name} execution evidence`, () => {
+    const fixture = setupRepo({ dirty: true, evidence: true });
+    const resultFile = path.join(fixture.runDir, "operator-test-result.txt");
+    fs.writeFileSync(resultFile, "node --test passed\n", "utf-8");
+    const evidencePath = path.join(fixture.runDir, EXECUTION_EVIDENCE_FILENAME);
+    fs.writeFileSync(evidencePath, contents, "utf-8");
+
+    const result = runRecover(fixture, [
+      "--reason", `operator attempted ${name} evidence overwrite`,
+      "--test-command", "node --test",
+      "--test-result-file", resultFile,
+      "--test-exit-code", "0",
+      "--json",
+    ]);
+
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /execution-evidence\.json already exists/);
+    assert.match(result.stderr, /rebrand-evidence\.js/);
+    assert.doesNotMatch(result.stderr, /--replace-placeholder-evidence/);
+    assert.equal(fs.readFileSync(evidencePath, "utf-8"), contents);
+    assert.equal(readRunEvents(fixture.repoRoot, fixture.runId).length, 0);
+  });
+});
+
 test("placeholder evidence without replacement flag is refused with the flag hint", () => {
   const fixture = setupRepo({
     dirty: true,
