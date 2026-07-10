@@ -2,8 +2,10 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 
 const {
+  ADVISORY_PROFILE_DEFAULTS,
   resolveHardenedBindingWaitMs,
   resolveAdvisoryConfig,
+  resolveAdvisoryTimeoutSeconds,
 } = require("../../../skills/relay-review/scripts/review-runner/advisory-orchestration");
 const {
   validateRouteConfig,
@@ -25,6 +27,87 @@ test("resolveHardenedBindingWaitMs falls back to the default on invalid values",
       `expected default fallback for env value ${JSON.stringify(invalid)}`,
     );
   }
+});
+
+test("ADVISORY_PROFILE_DEFAULTS carries per-profile timeout budgets", () => {
+  assert.equal(ADVISORY_PROFILE_DEFAULTS.blindspot.timeoutSeconds, 900);
+  assert.equal(ADVISORY_PROFILE_DEFAULTS.adversarial.timeoutSeconds, 1800);
+});
+
+test("resolveAdvisoryTimeoutSeconds uses the adversarial profile default of 1800s", () => {
+  assert.equal(resolveAdvisoryTimeoutSeconds(undefined, "adversarial"), 1800);
+  assert.equal(resolveAdvisoryTimeoutSeconds(null, "adversarial"), 1800);
+  assert.equal(resolveAdvisoryTimeoutSeconds("", "adversarial"), 1800);
+});
+
+test("resolveAdvisoryTimeoutSeconds keeps the blindspot profile default of 900s", () => {
+  assert.equal(resolveAdvisoryTimeoutSeconds(undefined, "blindspot"), 900);
+  assert.equal(resolveAdvisoryTimeoutSeconds(null, "blindspot"), 900);
+  assert.equal(resolveAdvisoryTimeoutSeconds("", "blindspot"), 900);
+});
+
+test("resolveAdvisoryTimeoutSeconds lets an explicit override win for both profiles", () => {
+  assert.equal(resolveAdvisoryTimeoutSeconds("1200", "adversarial"), 1200);
+  assert.equal(resolveAdvisoryTimeoutSeconds("1200", "blindspot"), 1200);
+  assert.equal(resolveAdvisoryTimeoutSeconds(2400, "adversarial"), 2400);
+  assert.equal(resolveAdvisoryTimeoutSeconds(2400, "blindspot"), 2400);
+});
+
+test("resolveAdvisoryConfig settlement timeout follows adversarial profile default", () => {
+  const config = resolveAdvisoryConfig({
+    advisoryProfileArg: "adversarial",
+    advisoryReviewerArg: "opencode",
+    data: {},
+  });
+  assert.equal(config.profile, "adversarial");
+  assert.equal(config.timeoutSeconds, 1800);
+  assert.equal(resolveAdvisoryTimeoutSeconds(config.timeoutSecondsArg, config.profile), 1800);
+});
+
+test("resolveAdvisoryConfig settlement timeout keeps blindspot profile default", () => {
+  const config = resolveAdvisoryConfig({
+    advisoryProfileArg: "blindspot",
+    advisoryReviewerArg: "opencode",
+    data: {},
+  });
+  assert.equal(config.profile, "blindspot");
+  assert.equal(config.timeoutSeconds, 900);
+  assert.equal(resolveAdvisoryTimeoutSeconds(config.timeoutSecondsArg, config.profile), 900);
+});
+
+test("resolveAdvisoryConfig explicit --advisory-timeout overrides both profile defaults", () => {
+  for (const profile of ["adversarial", "blindspot"]) {
+    const config = resolveAdvisoryConfig({
+      advisoryProfileArg: profile,
+      advisoryReviewerArg: "opencode",
+      advisoryTimeoutArg: "1500",
+      data: {},
+    });
+    assert.equal(config.timeoutSeconds, 1500, `settlement timeout for ${profile}`);
+    assert.equal(
+      resolveAdvisoryTimeoutSeconds(config.timeoutSecondsArg, profile),
+      1500,
+      `lane request timeout for ${profile}`,
+    );
+  }
+});
+
+test("resolveAdvisoryConfig mixed lanes settle on the max profile default without an explicit timeout", () => {
+  const config = resolveAdvisoryConfig({
+    data: {
+      routing: {
+        selected: {
+          advisory_review: [
+            { reviewer: "opencode", model: "example/opencode-model-fast", profile: "blindspot" },
+            { reviewer: "pi", model: "openai/gpt-5", profile: "adversarial" },
+          ],
+        },
+      },
+    },
+  });
+  assert.equal(config.timeoutSeconds, 1800);
+  assert.equal(resolveAdvisoryTimeoutSeconds(config.timeoutSecondsArg, "blindspot"), 900);
+  assert.equal(resolveAdvisoryTimeoutSeconds(config.timeoutSecondsArg, "adversarial"), 1800);
 });
 
 test("resolveAdvisoryConfig does not inherit a planned model when the routed reviewer differs", () => {

@@ -373,7 +373,7 @@ setTimeout(() => {
   return filePath;
 }
 
-function writeFakeOpencode(repoRoot, { delayMs = 0, logPath = null, invalidJson = false, mutate = false, requiredFinding = false, primaryVerdict = null } = {}) {
+function writeFakeOpencode(repoRoot, { delayMs = 0, logPath = null, invalidJson = false, mutate = false, requiredFinding = false, primaryVerdict = null, profile = "blindspot" } = {}) {
   const filePath = path.join(repoRoot, "fake-opencode.js");
   fs.writeFileSync(filePath, `#!/usr/bin/env node
 const fs = require("fs");
@@ -388,7 +388,7 @@ setTimeout(() => {
     process.stdout.write(JSON.stringify(${JSON.stringify(primaryVerdict)}));
   } else {
     process.stdout.write(JSON.stringify({
-      profile: "blindspot",
+      profile: ${JSON.stringify(profile)},
       summary: "One advisory blind spot.",
       required_findings: ${requiredFinding ? `[{ title: "Required hardened fix", body: "Must fix before merge.", file: "README.md", line: 1, severity: "P2", category: "bypass", confidence: 0.9 }]` : "[]"},
       advisory_findings: [{
@@ -650,6 +650,73 @@ test("review-runner records successful opencode advisory review without gating p
   assert.equal(event.advisory_artifact_hash, hashFile(path.join(runDir, "review-round-1-advisory-opencode.json")));
   assert.equal(event.reviewer_policy.read_only.enforcement_level, "prompt-only");
   assert.match(event.reviewer_policy.read_only.warnings.join("\n"), /not prevent writes/i);
+});
+
+test("advisory lane request uses adversarial profile default timeout of 1800s", () => {
+  const { repoRoot, runDir, runId, doneCriteriaPath, diffPath } = setupRepo();
+  const primaryScript = writePrimaryReviewer(repoRoot, passVerdict());
+  const opencodeScript = writeFakeOpencode(repoRoot, { profile: "adversarial" });
+
+  runReview({
+    repoRoot,
+    runId,
+    doneCriteriaPath,
+    diffPath,
+    primaryScript,
+    opencodeScript,
+    extraArgs: ["--advisory-profile", "adversarial", "--advisory-grace", "30"],
+  });
+  const request = JSON.parse(fs.readFileSync(
+    path.join(runDir, "review-round-1-advisory-opencode-request.json"),
+    "utf-8",
+  ));
+
+  assert.equal(request.profile, "adversarial");
+  assert.equal(request.timeoutSeconds, 1800);
+});
+
+test("advisory lane request keeps blindspot profile default timeout of 900s", () => {
+  const { repoRoot, runDir, runId, doneCriteriaPath, diffPath } = setupRepo();
+  const primaryScript = writePrimaryReviewer(repoRoot, passVerdict());
+  const opencodeScript = writeFakeOpencode(repoRoot);
+
+  runReview({ repoRoot, runId, doneCriteriaPath, diffPath, primaryScript, opencodeScript });
+  const request = JSON.parse(fs.readFileSync(
+    path.join(runDir, "review-round-1-advisory-opencode-request.json"),
+    "utf-8",
+  ));
+
+  assert.equal(request.profile, "blindspot");
+  assert.equal(request.timeoutSeconds, 900);
+});
+
+test("advisory lane request honors explicit --advisory-timeout for both profiles", () => {
+  for (const profile of ["adversarial", "blindspot"]) {
+    const { repoRoot, runDir, runId, doneCriteriaPath, diffPath } = setupRepo();
+    const primaryScript = writePrimaryReviewer(repoRoot, passVerdict());
+    const opencodeScript = writeFakeOpencode(repoRoot, { profile });
+
+    runReview({
+      repoRoot,
+      runId,
+      doneCriteriaPath,
+      diffPath,
+      primaryScript,
+      opencodeScript,
+      extraArgs: [
+        "--advisory-profile", profile,
+        "--advisory-timeout", "1500",
+        "--advisory-grace", "30",
+      ],
+    });
+    const request = JSON.parse(fs.readFileSync(
+      path.join(runDir, "review-round-1-advisory-opencode-request.json"),
+      "utf-8",
+    ));
+
+    assert.equal(request.profile, profile);
+    assert.equal(request.timeoutSeconds, 1500);
+  }
 });
 
 test("review-runner routed advisory unregistered route event preserves route-plan model resolution provenance", () => {

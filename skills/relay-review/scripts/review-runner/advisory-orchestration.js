@@ -22,13 +22,29 @@ const { resolveReviewerScript } = require("./reviewer-invoke");
 const DEFAULT_HARDENED_EVENT_BINDING_WAIT_MS = 10000;
 const ADVISORY_TRIGGERS = new Set(["every_round", "on_pass"]);
 const ADVISORY_PROFILE_DEFAULTS = Object.freeze({
-  blindspot: Object.freeze({ trigger: "every_round", gating: false }),
-  adversarial: Object.freeze({ trigger: "on_pass", gating: true }),
+  blindspot: Object.freeze({ trigger: "every_round", gating: false, timeoutSeconds: 900 }),
+  adversarial: Object.freeze({ trigger: "on_pass", gating: true, timeoutSeconds: 1800 }),
 });
 
 function resolveHardenedBindingWaitMs(env = process.env) {
   const raw = Number(env.RELAY_ADVISORY_EVENT_BINDING_WAIT_MS || DEFAULT_HARDENED_EVENT_BINDING_WAIT_MS);
   return Number.isSafeInteger(raw) && raw > 0 ? raw : DEFAULT_HARDENED_EVENT_BINDING_WAIT_MS;
+}
+
+function resolveAdvisoryTimeoutSeconds(explicitTimeoutArg, profile) {
+  return parsePositiveSeconds(
+    explicitTimeoutArg,
+    advisoryProfileDefaults(profile).timeoutSeconds,
+  );
+}
+
+function resolveSettlementTimeoutSeconds(explicitTimeoutArg, lanes) {
+  if (explicitTimeoutArg !== undefined && explicitTimeoutArg !== null && explicitTimeoutArg !== "") {
+    return parsePositiveSeconds(explicitTimeoutArg);
+  }
+  return Math.max(
+    ...lanes.map((lane) => advisoryProfileDefaults(lane.profile).timeoutSeconds),
+  );
 }
 
 function isPlainObject(value) {
@@ -184,7 +200,12 @@ function resolveAdvisoryConfig({
     profile: first.profile || null,
     reviewer: first.reviewer || null,
     source: lanes.length ? source : null,
-    timeoutSeconds: lanes.length ? parsePositiveSeconds(advisoryTimeoutArg) : null,
+    // Raw CLI/route override (if any). Per-lane request budgets resolve via
+    // resolveAdvisoryTimeoutSeconds(timeoutSecondsArg, lane.profile).
+    timeoutSecondsArg: advisoryTimeoutArg,
+    timeoutSeconds: lanes.length
+      ? resolveSettlementTimeoutSeconds(advisoryTimeoutArg, lanes)
+      : null,
   };
 }
 
@@ -324,7 +345,7 @@ function startConfiguredAdvisory({
       runRepoPath,
       source: lane.source,
       state: data.state,
-      timeoutSeconds: config.timeoutSeconds,
+      timeoutSeconds: resolveAdvisoryTimeoutSeconds(config.timeoutSecondsArg, lane.profile),
       trigger: lane.trigger,
     });
     advisoryRuns.push(advisoryRun);
@@ -473,10 +494,12 @@ async function settleConfiguredAdvisories({ advisoryRuns, config, currentState, 
 }
 
 module.exports = {
+  ADVISORY_PROFILE_DEFAULTS,
   appendAdvisoryRunsForTrigger,
   createAdvisorySettlementDeadline,
   preflightConfiguredAdvisoryLanes,
   resolveAdvisoryConfig,
+  resolveAdvisoryTimeoutSeconds,
   resolveHardenedBindingWaitMs,
   settleConfiguredAdvisories,
   settleAdvisoryForVerdict,
