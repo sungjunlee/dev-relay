@@ -57,6 +57,7 @@ function printHelp(exitCode) {
   console.log(`  --test-command <cmd> ${modeLabel("--test-command")} Operator-run test command for missing execution evidence`);
   console.log(`  --test-result-file <path> ${modeLabel("--test-result-file")} Operator-run test output file to hash for missing execution evidence`);
   console.log(`  --test-exit-code <n> ${modeLabel("--test-exit-code")} Operator-run test exit code for missing execution evidence`);
+  console.log(`  --replace-placeholder-evidence ${modeLabel("--replace-placeholder-evidence")} Replace timeout placeholder evidence with operator-run evidence`);
   console.log(`  --dry-run           ${modeLabel("--dry-run")} Print planned git/gh commands and manifest mutation only`);
   console.log(`  --json              ${modeLabel("--json")} Output JSON`);
   console.log("\nDecision tree:");
@@ -366,6 +367,7 @@ function main() {
     }
   }
   const testExitCodeProvided = hasCliFlag("--test-exit-code");
+  const replacePlaceholderEvidence = hasCliFlag("--replace-placeholder-evidence");
   const dryRun = hasCliFlag("--dry-run");
   const jsonOut = hasCliFlag("--json");
   const timestamp = nowIso();
@@ -401,12 +403,29 @@ function main() {
   const runDir = getRunDir(validatedPaths.repoRoot, data.run_id);
   const evidencePath = path.join(runDir, EXECUTION_EVIDENCE_FILENAME);
   const evidenceExists = fs.existsSync(evidencePath);
+  let replacedEvidence = null;
 
   if (operatorEvidenceRequested && evidenceExists) {
-    throw new Error(
-      `${EXECUTION_EVIDENCE_FILENAME} already exists for ${data.run_id}; refusing to overwrite it. ` +
-      "Use skills/relay-dispatch/scripts/rebrand-evidence.js when existing evidence needs to be rebound to a new HEAD."
+    const existingEvidence = JSON.parse(fs.readFileSync(evidencePath, "utf-8"));
+    const isPlaceholder = (
+      existingEvidence.recorded_by === "dispatch-orchestrator-v1" &&
+      existingEvidence.test_command === "unspecified"
     );
+    if (replacePlaceholderEvidence && isPlaceholder) {
+      replacedEvidence = {
+        recorded_by: existingEvidence.recorded_by,
+        test_exit_code: existingEvidence.test_exit_code ?? null,
+      };
+    } else {
+      const placeholderHint = isPlaceholder && !replacePlaceholderEvidence
+        ? " Pass --replace-placeholder-evidence to replace timeout placeholder evidence."
+        : "";
+      throw new Error(
+        `${EXECUTION_EVIDENCE_FILENAME} already exists for ${data.run_id}; refusing to overwrite it. ` +
+        "Use skills/relay-dispatch/scripts/rebrand-evidence.js when existing evidence needs to be rebound to a new HEAD." +
+        placeholderHint
+      );
+    }
   }
   const testResultFile = resolveTestResultFile(testResultFileArg);
   const testExitCode = parseTestExitCode(testExitCodeArg, testExitCodeProvided);
@@ -532,7 +551,7 @@ function main() {
       throw new Error(`commit_failed: ${detail}`);
     }
   }
-  if (evidenceExists) {
+  if (evidenceExists && !replacedEvidence) {
     const rebrandResult = rebrandEvidence(runDir, {
       newHeadSha: commitSha,
       recordedBy: "recover-commit-rebrand",
@@ -556,7 +575,7 @@ function main() {
       });
     }
   }
-  if (!evidenceExists) {
+  if (!evidenceExists || replacedEvidence) {
     const operatorEvidence = writeOperatorExecutionEvidenceIfRequested({
       runDir,
       evidencePath,
@@ -580,6 +599,7 @@ function main() {
         operator_initiated: true,
         execution_evidence_path: operatorEvidence.path,
         execution_evidence_hash: operatorEvidence.hash,
+        ...(replacedEvidence ? { before: replacedEvidence } : {}),
       });
     }
     if (!operatorEvidenceRequested) {
