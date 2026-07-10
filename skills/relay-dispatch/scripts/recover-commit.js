@@ -351,7 +351,14 @@ function main() {
   const prBodyFile = getCliArg("--pr-body-file");
   const operatorEvidenceFlags = ["--test-command", "--test-result-file", "--test-exit-code"]
     .filter((flag) => hasCliFlag(flag));
+  const replacePlaceholderEvidence = hasCliFlag("--replace-placeholder-evidence");
   validateOperatorEvidenceFlagSet(operatorEvidenceFlags);
+  if (replacePlaceholderEvidence && operatorEvidenceFlags.length === 0) {
+    throw new Error(
+      "--replace-placeholder-evidence requires operator execution evidence flags together: " +
+      "--test-command, --test-result-file, --test-exit-code"
+    );
+  }
   const operatorEvidenceRequested = operatorEvidenceFlags.length > 0;
   const testCommand = getCliArg("--test-command");
   const testResultFileArg = getCliArg("--test-result-file");
@@ -367,7 +374,6 @@ function main() {
     }
   }
   const testExitCodeProvided = hasCliFlag("--test-exit-code");
-  const replacePlaceholderEvidence = hasCliFlag("--replace-placeholder-evidence");
   const dryRun = hasCliFlag("--dry-run");
   const jsonOut = hasCliFlag("--json");
   const timestamp = nowIso();

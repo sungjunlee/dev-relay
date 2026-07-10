@@ -765,11 +765,38 @@ test("placeholder evidence without replacement flag is refused with the flag hin
   assert.equal(readRunEvents(fixture.repoRoot, fixture.runId).length, 0);
 });
 
+test("replacement flag without operator evidence flags is rejected before recovery side effects", () => {
+  const fixture = setupRepo({
+    dirty: true,
+    evidence: true,
+    evidenceOverrides: { test_command: "unspecified", test_exit_code: 1 },
+  });
+  const evidencePath = path.join(fixture.runDir, EXECUTION_EVIDENCE_FILENAME);
+  const beforeEvidence = fs.readFileSync(evidencePath, "utf-8");
+  const beforeManifest = fs.readFileSync(fixture.manifestPath, "utf-8");
+  const beforeHead = execFileSync("git", ["-C", fixture.worktreePath, "rev-parse", "HEAD"], { encoding: "utf-8" }).trim();
+
+  const result = runRecover(fixture, [
+    "--reason", "replace timeout placeholder",
+    "--replace-placeholder-evidence",
+    "--json",
+  ]);
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /--replace-placeholder-evidence requires operator execution evidence flags together/);
+  assert.equal(execFileSync("git", ["-C", fixture.worktreePath, "rev-parse", "HEAD"], { encoding: "utf-8" }).trim(), beforeHead);
+  assert.equal(execFileSync("git", ["-C", fixture.worktreePath, "status", "--porcelain"], { encoding: "utf-8" }).trim(), "?? recovered.txt");
+  assert.equal(fs.readFileSync(evidencePath, "utf-8"), beforeEvidence);
+  assert.equal(fs.readFileSync(fixture.manifestPath, "utf-8"), beforeManifest);
+  assert.equal(readJsonLines(fixture.ghLogPath).length, 0);
+  assert.equal(readRunEvents(fixture.repoRoot, fixture.runId).length, 0);
+});
+
 test("replacement flag replaces exact placeholder and journals replaced fields on operator evidence event", () => {
   const fixture = setupRepo({
     dirty: true,
     evidence: true,
-    evidenceOverrides: { test_command: "unspecified" },
+    evidenceOverrides: { test_command: "unspecified", test_exit_code: 1 },
   });
   const resultFile = path.join(fixture.runDir, "operator-test-result.txt");
   fs.writeFileSync(resultFile, "node --test passed\n", "utf-8");
@@ -796,7 +823,7 @@ test("replacement flag replaces exact placeholder and journals replaced fields o
   const events = readRunEvents(fixture.repoRoot, fixture.runId);
   const operatorEvidenceEvent = events.find((entry) => entry.event === "operator_execution_evidence");
   assert.equal(operatorEvidenceEvent.before.recorded_by, "dispatch-orchestrator-v1");
-  assert.equal(operatorEvidenceEvent.before.test_exit_code, null);
+  assert.equal(operatorEvidenceEvent.before.test_exit_code, 1);
   assert.equal(operatorEvidenceEvent.execution_evidence_path, evidencePath);
   assert.equal(operatorEvidenceEvent.execution_evidence_hash, sha256File(evidencePath));
   assert.equal(events.filter((entry) => entry.event === "execution_evidence_rebranded").length, 0);
