@@ -1303,14 +1303,49 @@ function findLatestRedispatchPrompt(runDir) {
   return latest;
 }
 
-function readTaskPrompt({ runDir, resumeMode } = {}) {
+const REDISPATCH_CRITERIA_PREFIXES = [
+  /(?:^|\n)Original Done Criteria \(scope anchor\):\r?\n<task-content source="[^"]+">\r?\n$/,
+  /(?:^|\n)Done Criteria:\r?\n$/,
+];
+
+function isGeneratorAnchoredOccurrence(prompt, start) {
+  const before = prompt.slice(Math.max(0, start - 400), start);
+  return REDISPATCH_CRITERIA_PREFIXES.some((pattern) => pattern.test(before));
+}
+
+function refreshRedispatchDoneCriteria(prompt, doneCriteria, previousDoneCriteria) {
+  // The embedded criteria are author-controlled Markdown: marker-looking
+  // lines (</task-content>, "Done Criteria:", convergence headings) can
+  // legitimately appear INSIDE them, so the stale block is located by the
+  // exact bytes the generating round recorded, never by structural markers.
+  if (previousDoneCriteria === doneCriteria) return { status: "ok", prompt };
+  if (!previousDoneCriteria) return { status: "not_found" };
+  const anchoredOccurrences = [];
+  let searchFrom = 0;
+  while (searchFrom <= prompt.length - previousDoneCriteria.length) {
+    const start = prompt.indexOf(previousDoneCriteria, searchFrom);
+    if (start === -1) break;
+    if (isGeneratorAnchoredOccurrence(prompt, start)) anchoredOccurrences.push(start);
+    searchFrom = start + 1;
+  }
+  if (anchoredOccurrences.length === 0) return { status: "not_found" };
+  if (anchoredOccurrences.length > 1) return { status: "ambiguous" };
+  const [start] = anchoredOccurrences;
+  return {
+    status: "ok",
+    prompt: prompt.slice(0, start) + doneCriteria + prompt.slice(start + previousDoneCriteria.length),
+  };
+}
+
+function readTaskPrompt({ runDir, resumeMode, effectiveDoneCriteriaPath } = {}) {
   if (PROMPT_FILE) {
     const promptPath = path.resolve(PROMPT_FILE);
     if (!fs.existsSync(promptPath)) {
       console.error(`Error: prompt file not found: ${promptPath}`);
       process.exit(1);
     }
-    return { prompt: fs.readFileSync(promptPath, "utf-8").trim(), source: "explicit-file", path: promptPath };
+    const prompt = fs.readFileSync(promptPath, "utf-8");
+    return { prompt: resumeMode ? prompt : prompt.trim(), source: "explicit-file", path: promptPath };
   }
 
   if (PROMPT) {
@@ -1320,8 +1355,34 @@ function readTaskPrompt({ runDir, resumeMode } = {}) {
   if (resumeMode) {
     const auto = findLatestRedispatchPrompt(runDir);
     if (auto) {
+      let prompt = fs.readFileSync(auto.path, "utf-8");
+      if (effectiveDoneCriteriaPath) {
+        if (!fs.existsSync(effectiveDoneCriteriaPath)) {
+          console.error(`Error: effective Done Criteria file not found: ${effectiveDoneCriteriaPath}`);
+          process.exit(1);
+        }
+        const doneCriteria = fs.readFileSync(effectiveDoneCriteriaPath, "utf-8").trim();
+        const roundDoneCriteriaPath = path.join(runDir, `review-round-${auto.round}-done-criteria.md`);
+        if (!fs.existsSync(roundDoneCriteriaPath)) {
+          console.error(`Error: cannot refresh Done Criteria in auto-discovered redispatch prompt: ${auto.path}`);
+          console.error(`  Missing the round's recorded Done Criteria artifact: ${roundDoneCriteriaPath}`);
+          console.error("  Pass --prompt-file to supply the redispatch prompt explicitly.");
+          process.exit(1);
+        }
+        const previousDoneCriteria = fs.readFileSync(roundDoneCriteriaPath, "utf-8").trim();
+        const refreshed = refreshRedispatchDoneCriteria(prompt, doneCriteria, previousDoneCriteria);
+        if (refreshed.status !== "ok") {
+          console.error(`Error: cannot refresh Done Criteria in auto-discovered redispatch prompt: ${auto.path}`);
+          console.error(refreshed.status === "ambiguous"
+            ? `  The round's recorded Done Criteria (${roundDoneCriteriaPath}) appear at more than one generated Done Criteria position.`
+            : `  The round's recorded Done Criteria (${roundDoneCriteriaPath}) do not appear in the artifact.`);
+          console.error("  Pass --prompt-file to supply the redispatch prompt explicitly.");
+          process.exit(1);
+        }
+        prompt = refreshed.prompt;
+      }
       return {
-        prompt: fs.readFileSync(auto.path, "utf-8").trim(),
+        prompt,
         source: "auto-discovered-redispatch",
         path: auto.path,
         round: auto.round,
@@ -1845,7 +1906,12 @@ async function main() {
   enforceRubricPersistence(manifest, manifestRunDir);
   let routePlanSnapshot = null;
 
-  const taskPromptResult = readTaskPrompt({ runDir: manifestRunDir, resumeMode: RESUME_MODE });
+  const effectiveDoneCriteriaPath = resolvedDoneCriteriaPath || manifest?.anchor?.done_criteria_path || null;
+  const taskPromptResult = readTaskPrompt({
+    runDir: manifestRunDir,
+    resumeMode: RESUME_MODE,
+    effectiveDoneCriteriaPath,
+  });
   let taskPrompt = taskPromptResult.prompt;
   if (!RESUME_MODE && REVIEW_ASSURANCE_RAW === undefined && REVIEW_ASSURANCE_SOURCE === null) {
     try {
