@@ -5054,6 +5054,65 @@ crypto.randomBytes = function randomBytes(size) {
   assert.match(second.stderr, /--allow-conflicting-run/);
 });
 
+test("dispatch refuses a concurrent new dispatch while its empty run dir is claimed", async () => {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  writeFakeCodex(binDir);
+  const runId = "claim-race-20260711010101000-c0ffee91";
+  const markerPath = path.join(os.tmpdir(), `relay-dispatch-claim-race-${process.pid}-${Date.now()}.json`);
+  const rubricFile = path.join(repoRoot, "claim-race-rubric.yaml");
+  fs.writeFileSync(rubricFile, "rubric:\n  factors:\n    - name: collision guard\n      target: concurrent owner is refused\n", "utf-8");
+  const env = {
+    ...process.env,
+    PATH: `${binDir}:${process.env.PATH}`,
+    RELAY_HOME: relayHome,
+    RELAY_TEST_AFTER_WORKTREE_CREATE_PAUSE_MS: "1500",
+    RELAY_TEST_AFTER_WORKTREE_CREATE_MARKER: markerPath,
+  };
+  const args = withRequiredRubric([
+    "--run-id", runId,
+    "-b", "claim-race",
+    "--prompt", "first pass",
+    "--rubric-file", rubricFile,
+    "--json",
+  ]);
+  const first = spawn(process.execPath, [SCRIPT, repoRoot, ...args], {
+    cwd: repoRoot,
+    env,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  const firstExit = waitForDispatchExit(first);
+  let firstResult;
+  try {
+    await waitFor(() => fs.existsSync(markerPath), {
+      timeoutMs: 30000,
+      message: "first dispatch after-worktree create pause marker",
+    });
+    const runDir = getRunDir(repoRoot, runId);
+    assert.deepEqual(fs.readdirSync(runDir).sort(), [".dispatch-claim"]);
+
+    const second = spawnSync(process.execPath, [SCRIPT, repoRoot, ...args], {
+      cwd: repoRoot,
+      encoding: "utf-8",
+      env: {
+        ...env,
+        RELAY_TEST_AFTER_WORKTREE_CREATE_PAUSE_MS: "0",
+        RELAY_TEST_AFTER_WORKTREE_CREATE_MARKER: "",
+      },
+    });
+
+    assert.notEqual(second.status, 0);
+    assert.match(second.stderr, /Refusing to overwrite existing run dir/);
+  } finally {
+    firstResult = await firstExit;
+    try { fs.unlinkSync(markerPath); } catch {}
+  }
+
+  assert.equal(firstResult.code, 0, firstResult.stderr);
+  assert.equal(fs.existsSync(path.join(getRunDir(repoRoot, runId), ".dispatch-claim")), false);
+});
+
 test("dispatch cleans up tmp rubric files when atomic rubric persistence fails", () => {
   // #158 anti-theater
   const { repoRoot, relayHome } = setupRepo();

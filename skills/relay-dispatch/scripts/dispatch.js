@@ -1201,6 +1201,32 @@ function isRetryCompatibleRunDir(runDir) {
     || (entries.length === 1 && entries[0] === "done-criteria.md");
 }
 
+function claimRetryCompatibleRunDir(runDir) {
+  fs.mkdirSync(path.dirname(runDir), { recursive: true });
+  try {
+    fs.mkdirSync(runDir);
+  } catch (error) {
+    if (error.code !== "EEXIST") throw error;
+    if (!isRetryCompatibleRunDir(runDir)) return null;
+  }
+
+  const claimPath = path.join(runDir, ".dispatch-claim");
+  let claimFd;
+  try {
+    claimFd = fs.openSync(claimPath, "wx");
+    fs.writeFileSync(claimFd, JSON.stringify({ pid: process.pid, claimed_at: new Date().toISOString() }));
+  } catch (error) {
+    if (claimFd !== undefined) {
+      fs.closeSync(claimFd);
+      try { fs.unlinkSync(claimPath); } catch {}
+    }
+    if (error.code === "EEXIST") return null;
+    throw error;
+  }
+  fs.closeSync(claimFd);
+  return claimPath;
+}
+
 function isCanonicalPlannerDoneCriteriaPath(repoRoot, runId, doneCriteriaPath) {
   if (!doneCriteriaPath) return false;
   const canonicalPath = path.join(getRunDir(repoRoot, runId), "done-criteria.md");
@@ -1701,6 +1727,19 @@ async function main() {
   let fleetIssueLock = null;
   let handlingSignal = false;
   let runtime = null;
+  let runDirClaimPath = null;
+
+  function releaseRunDirClaim() {
+    if (!runDirClaimPath) return;
+    try {
+      fs.unlinkSync(runDirClaimPath);
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+    }
+    runDirClaimPath = null;
+  }
+
+  process.on("exit", releaseRunDirClaim);
 
   function releaseFleetIssueLock() {
     if (!fleetIssueLock) return;
@@ -1945,8 +1984,13 @@ async function main() {
     manifestPath = getManifestPath(repoRoot, runId);
     const runDir = getRunDir(repoRoot, runId);
     wtPath = path.join(wtBase, wtId, path.basename(repoRoot));
-    if (fs.existsSync(manifestPath) || (fs.existsSync(runDir) && !isRetryCompatibleRunDir(runDir))) {
+    if (fs.existsSync(manifestPath)) {
       failRunDirCollision(runId, manifestPath);
+    }
+    if (DRY_RUN) {
+      if (fs.existsSync(runDir) && !isRetryCompatibleRunDir(runDir)) {
+        failRunDirCollision(runId, manifestPath);
+      }
     }
     baseBranch = resolveBaseBranchForNewDispatch(REPO_PATH, { validateRemote: !DRY_RUN });
     if (fs.existsSync(wtPath)) {
@@ -1955,6 +1999,8 @@ async function main() {
     }
     if (!DRY_RUN) {
       worktreeStartPoint = resolveWorktreeStartPointForNewDispatch(repoRoot, baseBranch);
+      runDirClaimPath = claimRetryCompatibleRunDir(runDir);
+      if (!runDirClaimPath) failRunDirCollision(runId, manifestPath);
     }
     if (inflightRuns.length > 0 && ALLOW_CONFLICTING_RUN) {
       appendRunEvent(repoRoot, runId, {
@@ -2374,6 +2420,7 @@ async function main() {
       projectRoutes: INITIAL_ROUTE_RESOLUTION.projectRoutes,
     });
     writeManifest(manifestPath, manifest);
+    releaseRunDirClaim();
   } else if (manifest) {
     manifest = {
       ...manifest,
