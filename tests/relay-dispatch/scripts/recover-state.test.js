@@ -669,6 +669,46 @@ test("merge_blocked -> ready_to_merge requires an audited reason", () => {
   assert.match(result.stderr, /--reason <text> is required/);
 });
 
+test("non-merge_blocked -> ready_to_merge is rejected without changing manifest state", () => {
+  const { repoRoot, manifestPath, runId } = setupRepo({ state: STATES.CHANGES_REQUESTED });
+
+  const result = spawnSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--run-id", runId,
+    "--to", STATES.READY_TO_MERGE,
+    "--reason", "invalid ready recovery source",
+    "--json",
+  ], { encoding: "utf-8" });
+
+  assert.notEqual(result.status, 0);
+  assert.match(
+    result.stderr,
+    new RegExp(`Recovery transition '${STATES.CHANGES_REQUESTED} -> ${STATES.READY_TO_MERGE}' is not whitelisted`)
+  );
+  assert.equal(readManifest(manifestPath).data.state, STATES.CHANGES_REQUESTED);
+});
+
+test("merge_blocked -> another target is rejected without changing manifest state", () => {
+  const { repoRoot, manifestPath, runId } = setupRepo({ state: STATES.MERGE_BLOCKED });
+
+  const result = spawnSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--run-id", runId,
+    "--to", STATES.REVIEW_PENDING,
+    "--reason", "invalid merge-blocked recovery target",
+    "--json",
+  ], { encoding: "utf-8" });
+
+  assert.notEqual(result.status, 0);
+  assert.match(
+    result.stderr,
+    new RegExp(`Recovery transition '${STATES.MERGE_BLOCKED} -> ${STATES.REVIEW_PENDING}' is not whitelisted`)
+  );
+  assert.equal(readManifest(manifestPath).data.state, STATES.MERGE_BLOCKED);
+});
+
 test("unlisted transition (dispatched -> merged) rejected with allowed set listed", () => {
   const { repoRoot, runId } = setupRepo({ state: STATES.DISPATCHED });
 
