@@ -82,7 +82,7 @@ const cliArgs = bindCliArgs(args, {
 });
 const helpRequested = cliArgs.hasFlag(["--help", "-h"]);
 
-if (!args.length || helpRequested) {
+function printHelpAndExit() {
   console.log("Usage: finalize-run.js (--repo <path> --run-id <id> | --repo <path> --pr <number> | --manifest <path>) [options]");
   console.log("\nMerge a ready relay run, then finalize cleanup and manifest metadata.");
   console.log("\nOptions:");
@@ -128,6 +128,12 @@ function mergeFlag(method) {
     default:
       throw new Error(`Unsupported merge method: ${method}`);
   }
+}
+
+function buildSquashSubject(prTitle, prNumber) {
+  if (typeof prTitle !== "string" || !prTitle) return null;
+  const suffix = ` (#${prNumber})`;
+  return prTitle.endsWith(suffix) ? prTitle : `${prTitle}${suffix}`;
 }
 
 function buildMergeFinalizeReason({
@@ -179,7 +185,7 @@ function fetchReviewContext(repoPath, prNumber) {
 
 function fetchPreMergeContext(repoPath, prNumber) {
   const raw = execGh(repoPath, ["pr", "view", String(prNumber),
-    "--json", "baseRefName,comments,commits,mergeable,statusCheckRollup,headRefOid"]);
+    "--json", "baseRefName,comments,commits,mergeable,statusCheckRollup,headRefOid,title"]);
   const parsed = JSON.parse(raw);
   const checks = parsed.statusCheckRollup || [];
   return {
@@ -188,6 +194,7 @@ function fetchPreMergeContext(repoPath, prNumber) {
     commits: parsed.commits || [],
     mergeable: parsed.mergeable || null,
     headRefOid: parsed.headRefOid || null,
+    title: typeof parsed.title === "string" && parsed.title ? parsed.title : null,
     checks,
     unsafeChecks: checks.filter(isUnsafeStatusCheck),
   };
@@ -784,6 +791,10 @@ function appendDurableLearnings({
 }
 
 function main() {
+  if (!args.length || helpRequested) {
+    printHelpAndExit();
+  }
+
   const unknownFlags = findUnknownFlags(args, "finalize-run");
   if (unknownFlags.length) {
     throw new Error(`unknown flags: ${unknownFlags.join(", ")}`);
@@ -912,6 +923,7 @@ function main() {
   let reviewGate = null;
   let stackedBaseGuard = { status: "not_checked", reason: null };
   let currentHeadSha = safeData.git?.head_sha || null;
+  let prTitle = null;
   const skipReviewRubricAudit = summarizeRubricAuditForSkip(safeData, {
     runDir: getRunDir(validatedPaths.repoRoot, safeData.run_id),
   });
@@ -982,6 +994,7 @@ function main() {
     } else if (skipReviewReason) {
       assertSkipReviewGate(repoPath, safeData, { prNumber, currentHeadSha, dryRun, skipReviewRubricAudit });
       const preMerge = fetchPreMergeContext(repoPath, prNumber);
+      prTitle = preMerge.title;
       stackedBaseGuard = buildStackedBaseGuard(
         repoPath,
         prNumber,
@@ -1004,6 +1017,7 @@ function main() {
       });
     } else if (safeData.state === STATES.READY_TO_MERGE) {
       const preMerge = fetchPreMergeContext(repoPath, prNumber);
+      prTitle = preMerge.title;
       reviewGate = evaluateReviewGate({
         prNumber,
         comments: preMerge.comments,
@@ -1046,6 +1060,7 @@ function main() {
       assertPreMergeSafety(preMerge, prNumber);
     } else if (forceFinalizeNonready) {
       const preMerge = fetchPreMergeContext(repoPath, prNumber);
+      prTitle = preMerge.title;
       stackedBaseGuard = buildStackedBaseGuard(
         repoPath,
         prNumber,
@@ -1091,7 +1106,16 @@ function main() {
     }
     if (!dryRun && !isMergedPrState(prMergeState)) {
       try {
-        execGh(repoPath, ["pr", "merge", String(prNumber), mergeFlag(mergeMethod)]);
+        const mergeArgs = ["pr", "merge", String(prNumber), mergeFlag(mergeMethod)];
+        if (mergeMethod === "squash") {
+          const subject = buildSquashSubject(prTitle, prNumber);
+          if (subject) {
+            mergeArgs.push("--subject", subject);
+          } else {
+            console.error(`Note: PR title unavailable for PR #${prNumber}; proceeding with subjectless squash merge.`);
+          }
+        }
+        execGh(repoPath, mergeArgs);
         mergePerformed = true;
         prMergeState = fetchPrMergeState(repoPath, prNumber);
       } catch (error) {
@@ -1302,9 +1326,13 @@ function main() {
   }
 }
 
-try {
-  main();
-} catch (error) {
-  console.error(`Error: ${error.message}`);
-  process.exit(1);
+if (require.main === module) {
+  try {
+    main();
+  } catch (error) {
+    console.error(`Error: ${error.message}`);
+    process.exit(1);
+  }
 }
+
+module.exports = { buildSquashSubject };
