@@ -2439,6 +2439,7 @@ test("review-runner behind-base preflight fails fast before reviewer invocation"
   assert.ok(preflightEvent);
   assert.equal(preflightEvent.failure_class, "behind_base");
   assert.match(preflightEvent.reason, /branch is 1 commit behind origin\/main; rebase and re-run/);
+  assert.equal(preflightEvent.next_action, "rebase_and_rerun");
   assert.equal(preflightEvent.state_from, STATES.REVIEW_PENDING);
   assert.equal(preflightEvent.state_to, STATES.REVIEW_PENDING);
   assert.equal(preflightEvent.reviewer_rounds_avoided, 1);
@@ -2640,6 +2641,7 @@ test("review-runner execution evidence preflight blocks primary reviewer invocat
       assert.equal(preflightEvent.reviewer_rounds_avoided, 1);
       assert.equal(preflightEvent.evidence_head_sha, expectedEvidenceHeadSha);
       assert.equal(preflightEvent.execution_evidence_path, path.join(runDir, EXECUTION_EVIDENCE_FILENAME));
+      assert.equal(preflightEvent.next_action, "repair_execution_evidence");
     });
   }
 });

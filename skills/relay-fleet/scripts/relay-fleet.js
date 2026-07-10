@@ -40,6 +40,7 @@ const {
 const { getRequestPath, readRequestArtifact } = require("../../relay-ready/scripts/relay-request");
 const { runReconcile } = require("../../relay-dispatch/scripts/reconcile-advisory");
 const { getRunLeaseStatus } = require("../../relay-dispatch/scripts/run-runtime-state");
+const { EVENTS, readRunEvents } = require("../../relay-dispatch/scripts/relay-events");
 const { runMergeQueue } = require("./merge-queue");
 
 const DEFAULT_PARALLEL = 4;
@@ -2085,6 +2086,42 @@ function additionalAttentionReasons(child, { repoRoot, fleetId, defaultBranchNam
   return reasons;
 }
 
+// Derive-on-read (#901): when a stuck child was blocked by review preflight,
+// surface the actionable next_action/reason from the latest review_preflight_failed
+// event — but only while that blocked attempt has not been superseded by a
+// completed review round (event.round > review.rounds). Fail-open on missing
+// or unreadable events so attention stays the bare stuck_child shape.
+function stuckChildPreflightEnrichment(repoRoot, child) {
+  if (!repoRoot || !child?.run_id) return {};
+  let events;
+  try {
+    events = readRunEvents(repoRoot, child.run_id);
+  } catch {
+    return {};
+  }
+  let latest = null;
+  for (const event of events) {
+    if (event?.event === EVENTS.REVIEW_PREFLIGHT_FAILED) latest = event;
+  }
+  if (!latest) return {};
+  if (!(Number(latest.round) > Number(child.review_round ?? 0))) return {};
+
+  const enrichment = {};
+  if (latest.reason != null && latest.reason !== "") {
+    enrichment.detail = String(latest.reason);
+  }
+  // Missing-vs-empty: older events without next_action must omit the key
+  // entirely — never empty-string it.
+  if (
+    Object.prototype.hasOwnProperty.call(latest, "next_action")
+    && latest.next_action != null
+    && latest.next_action !== ""
+  ) {
+    enrichment.next_action = String(latest.next_action);
+  }
+  return enrichment;
+}
+
 function buildOperatorAttention(summary, context = {}) {
   const { repoRoot, fleetId } = context;
   const needsDefaultBranch = summary.children.some((child) => child.base_branch);
@@ -2098,10 +2135,26 @@ function buildOperatorAttention(summary, context = {}) {
       items.push({ leaf_ref: child.leaf_ref, run_id: child.run_id, reason: legacyReason });
     }
     for (const reason of additionalAttentionReasons(child, resolvedContext)) {
-      items.push({ leaf_ref: child.leaf_ref, run_id: child.run_id, reason });
+      const item = { leaf_ref: child.leaf_ref, run_id: child.run_id, reason };
+      if (reason === "stuck_child") {
+        Object.assign(item, stuckChildPreflightEnrichment(repoRoot, child));
+      }
+      items.push(item);
     }
   }
   return items;
+}
+
+function formatAttentionLine(item) {
+  let line = `  - ${item.leaf_ref}: ${item.reason}${item.run_id ? ` (${item.run_id})` : ""}`;
+  if (item.next_action && item.detail) {
+    line += ` → next: ${item.next_action} — ${item.detail}`;
+  } else if (item.next_action) {
+    line += ` → next: ${item.next_action}`;
+  } else if (item.detail) {
+    line += ` — ${item.detail}`;
+  }
+  return line;
 }
 
 function formatStatusText(summary, operatorAttention) {
@@ -2130,7 +2183,7 @@ function formatStatusText(summary, operatorAttention) {
   if (operatorAttention.length) {
     lines.push("Needs operator attention:");
     for (const item of operatorAttention) {
-      lines.push(`  - ${item.leaf_ref}: ${item.reason}${item.run_id ? ` (${item.run_id})` : ""}`);
+      lines.push(formatAttentionLine(item));
     }
   }
   return `${lines.join("\n")}\n`;

@@ -60,6 +60,7 @@ function maybeBlockForBehindBasePreflight({
     preflight_type: "behind_base",
     failure_class: "behind_base",
     reviewer_rounds_avoided: 1,
+    next_action: preflight.nextAction,
   });
   if (jsonOut) {
     console.log(JSON.stringify(result, null, 2));
@@ -105,6 +106,7 @@ function maybeBlockForExecutionEvidencePreflight({
     reviewer_rounds_avoided: 1,
     evidence_head_sha: result.executionEvidencePreflight.evidenceHeadSha,
     execution_evidence_path: result.executionEvidencePreflight.artifactPath,
+    next_action: result.executionEvidencePreflight.nextAction,
   });
   if (jsonOut) {
     console.log(JSON.stringify(result, null, 2));
