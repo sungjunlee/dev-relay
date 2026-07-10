@@ -1469,6 +1469,45 @@ fs.readFileSync = function delayedStaleLockRead(filePath) {
   assert.equal(fs.existsSync(overlapLog), false);
 });
 
+test("fleet child lock recovers a truncated canonical lock without overlapping callbacks", async () => {
+  const { repoRoot } = setupRepo("relay-fleet-truncated-child-lock-");
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "fleet-truncated-child-lock-worker-"));
+  const workerPath = writeFleetChildLockWorker(tmpDir);
+  const activeMarker = path.join(tmpDir, "callback-active.flag");
+  const overlapLog = path.join(tmpDir, "callback-overlap.log");
+  const fleetId = "fleet-truncated-child-lock";
+  const lockPath = path.join(getFleetsDir(repoRoot), "locks", `fleet-${fleetId}-children.lock`);
+  fs.mkdirSync(path.dirname(lockPath), { recursive: true });
+  fs.writeFileSync(lockPath, '{"fleet_id":', "utf-8");
+
+  const commonEnv = {
+    ...process.env,
+    RELAY_FLEET_SCRIPT,
+    RELAY_FLEET_REPO: repoRoot,
+    RELAY_FLEET_ID: fleetId,
+    RELAY_FLEET_ACTIVE_MARKER: activeMarker,
+    RELAY_FLEET_OVERLAP_LOG: overlapLog,
+    RELAY_FLEET_HOLD_MS: "400",
+  };
+  const first = spawn(process.execPath, [workerPath], {
+    env: commonEnv,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  const firstResult = captureChildResult(first);
+  await waitFor(() => fs.existsSync(activeMarker));
+  const second = spawn(process.execPath, [workerPath], {
+    env: commonEnv,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  const secondResult = captureChildResult(second);
+  const [firstDone, secondDone] = await Promise.all([firstResult, secondResult]);
+
+  assert.equal(firstDone.status, 0, firstDone.stderr);
+  assert.equal(secondDone.status, 0, secondDone.stderr);
+  assert.equal(fs.existsSync(overlapLog), false);
+  assert.equal(fs.existsSync(lockPath), false);
+});
+
 test("relay-fleet replacement matrix rolls back manifest when persisted leaves rewrite fails", () => {
   const { relayHome, repoRoot } = setupRepo("relay-fleet-replace-rollback-");
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "fleet-replace-rollback-fake-"));

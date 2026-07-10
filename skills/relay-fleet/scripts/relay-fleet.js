@@ -622,6 +622,24 @@ function releaseFleetChildTicket(ticket) {
   }
 }
 
+function publishFleetChildLock(lockPath, contents) {
+  const candidatePath = `${lockPath}.candidate-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  fs.writeFileSync(candidatePath, contents, "utf-8");
+  try {
+    fs.linkSync(candidatePath, lockPath);
+    return true;
+  } catch (error) {
+    if (error.code !== "EEXIST") throw error;
+    return false;
+  } finally {
+    try {
+      fs.unlinkSync(candidatePath);
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+    }
+  }
+}
+
 function acquireFleetChildLock(repoRoot, fleetId) {
   const lockPath = getFleetChildLockPath(repoRoot, fleetId);
   fs.mkdirSync(path.dirname(lockPath), { recursive: true });
@@ -642,24 +660,30 @@ function acquireFleetChildLock(repoRoot, fleetId) {
         Atomics.wait(FLEET_CHILD_LOCK_WAIT_ARRAY, 0, 0, 10);
         continue;
       }
-      try {
-        fs.writeFileSync(lockPath, contents, { encoding: "utf-8", flag: "wx" });
+      if (publishFleetChildLock(lockPath, contents)) {
         return { lockPath, contents, ticket };
-      } catch (error) {
-        if (error.code !== "EEXIST") throw error;
-        try {
-          const existing = JSON.parse(fs.readFileSync(lockPath, "utf-8"));
-          if (existing.hostname === os.hostname() && !processIsAlive(Number(existing.pid))) {
-            // Only the lowest live ticket may reclaim the canonical lock. A
-            // contender that observed this stale owner cannot race a successor.
-            fs.unlinkSync(lockPath);
-            continue;
-          }
-        } catch (readError) {
-          if (readError.code === "ENOENT") continue;
-        }
-        Atomics.wait(FLEET_CHILD_LOCK_WAIT_ARRAY, 0, 0, 10);
       }
+      try {
+        const existingContents = fs.readFileSync(lockPath, "utf-8");
+        let existing;
+        try {
+          existing = JSON.parse(existingContents);
+        } catch {
+          // Older writers created the canonical path before populating it.
+          // The lowest live ticket can safely retire a truncated remnant.
+          fs.unlinkSync(lockPath);
+          continue;
+        }
+        if (existing.hostname === os.hostname() && !processIsAlive(Number(existing.pid))) {
+          // Only the lowest live ticket may reclaim the canonical lock. A
+          // contender that observed this stale owner cannot race a successor.
+          fs.unlinkSync(lockPath);
+          continue;
+        }
+      } catch (readError) {
+        if (readError.code === "ENOENT") continue;
+      }
+      Atomics.wait(FLEET_CHILD_LOCK_WAIT_ARRAY, 0, 0, 10);
     }
   } catch (error) {
     releaseFleetChildTicket(ticket);
