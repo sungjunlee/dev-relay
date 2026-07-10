@@ -475,10 +475,12 @@ function acceptedLeafReplacements(fleetChildren, persistedLeaves, leaves) {
     });
   }
   const replacementsByOldRef = new Map(replacements.map((replacement) => [replacement.old_leaf_ref, replacement]));
-  const nextChildRefs = fleetChildren.map((child) => (
-    replacementsByOldRef.get(child.leaf_ref)?.new_leaf_ref || child.leaf_ref
-  ));
+  const nextChildren = fleetChildren.map((child) => ({
+    leaf_ref: replacementsByOldRef.get(child.leaf_ref)?.new_leaf_ref || child.leaf_ref,
+  }));
+  const nextChildRefs = nextChildren.map((child) => child.leaf_ref);
   if (new Set(nextChildRefs).size !== nextChildRefs.length) return null;
+  if (!leafRefSetsMatch(nextChildren, leaves)) return null;
   return replacements;
 }
 

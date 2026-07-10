@@ -1000,6 +1000,67 @@ test("relay-fleet replacement matrix rejects a replacement leaf_ref that collide
   }
 });
 
+test("relay-fleet replacement matrix fails closed when a manifest-only run-bearing child is omitted", () => {
+  const { relayHome, repoRoot } = setupRepo("relay-fleet-replace-manifest-only-run-");
+  const fleetId = "fleet-replace-manifest-only-run";
+  const oldLeaf = makeLeaf(repoRoot, 1, {
+    issue_number: 580,
+    leaf_ref: "leaf-old",
+    leaf_id: "leaf-old",
+    branch: "issue-580-leaf-old",
+  });
+  const newLeaf = makeLeaf(repoRoot, 2, {
+    issue_number: oldLeaf.issue_number,
+    leaf_ref: "leaf-new",
+    leaf_id: "leaf-new",
+    branch: "issue-580-leaf-new",
+  });
+  const runId = writeChildRun(repoRoot, {
+    runId: "issue-581-20260517010101000-a1b2c3d4",
+    branch: "issue-581-leaf-run-bearing",
+    issueNumber: 581,
+    leafId: "leaf-run-bearing",
+    fleetId,
+  });
+  createFleetManifest(repoRoot, {
+    fleetId,
+    children: [
+      {
+        leaf_ref: oldLeaf.leaf_ref,
+        run_id: null,
+        dispatch_status: DISPATCH_STATUS.DISPATCH_FAILED_PRE_MANIFEST,
+        last_error: "old pre-manifest failure",
+      },
+      {
+        leaf_ref: "leaf-run-bearing",
+        run_id: runId,
+        dispatch_status: DISPATCH_STATUS.DISPATCHED,
+      },
+    ],
+  });
+  writePersistedFleetLeaves(repoRoot, fleetId, [oldLeaf]);
+  const manifestPath = getFleetManifestPath(repoRoot, fleetId);
+  const leavesStorePath = getFleetLeavesStorePath(repoRoot, fleetId);
+  const manifestBefore = fs.readFileSync(manifestPath, "utf-8");
+  const storeBefore = fs.readFileSync(leavesStorePath, "utf-8");
+  const leavesFile = writeLeavesFile(repoRoot, [newLeaf]);
+
+  const result = runFleet([
+    "--repo", repoRoot,
+    "--fleet-id", fleetId,
+    "--leaves-file", leavesFile,
+    "--json",
+  ], { relayHome });
+
+  assert.notEqual(result.status, 0);
+  assert.equal(
+    JSON.parse(result.stderr).error,
+    `--leaves-file differs from persisted fleet leaves for '${fleetId}'; refusing to overwrite an existing fleet`
+  );
+  assert.equal(fs.readFileSync(manifestPath, "utf-8"), manifestBefore);
+  assert.equal(fs.readFileSync(leavesStorePath, "utf-8"), storeBefore);
+});
+
 test("relay-fleet replacement matrix rolls back manifest when persisted leaves rewrite fails", () => {
   const { relayHome, repoRoot } = setupRepo("relay-fleet-replace-rollback-");
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "fleet-replace-rollback-fake-"));
