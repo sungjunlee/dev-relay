@@ -18,7 +18,7 @@
 const path = require("path");
 const fs = require("fs");
 const { execFileSync } = require("child_process");
-const { STATES, forceTransitionState } = require("./manifest/lifecycle");
+const { STATES, forceTransitionState, updateManifestState } = require("./manifest/lifecycle");
 const {
   getEventsPath,
   getRunDir,
@@ -83,6 +83,15 @@ const RECOVERY_TRANSITIONS = Object.freeze([
     requireFreshCommit: false,
     resetLastReviewedSha: false,
     description: "Dispatch hung or operator killed; unstick the manifest so re-dispatch is reachable.",
+  },
+  {
+    from: STATES.MERGE_BLOCKED,
+    to: STATES.READY_TO_MERGE,
+    nextAction: "await_explicit_merge",
+    requireForce: false,
+    requireFreshCommit: false,
+    resetLastReviewedSha: false,
+    description: "Operator cleared the merge blocker; the next fleet drive re-run retries the merge queue.",
   },
 ]);
 
@@ -528,7 +537,9 @@ function main() {
     });
   }
 
-  let updated = forceTransitionState(safeData, toState, recovery.nextAction);
+  let updated = fromState === STATES.MERGE_BLOCKED && toState === STATES.READY_TO_MERGE
+    ? updateManifestState(safeData, toState, recovery.nextAction)
+    : forceTransitionState(safeData, toState, recovery.nextAction);
 
   if (recovery.resetLastReviewedSha) {
     updated.review = { ...(updated.review || {}), last_reviewed_sha: null };
