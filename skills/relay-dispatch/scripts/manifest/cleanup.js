@@ -110,11 +110,17 @@ function runCleanup({
   dryRun = false,
   deleteMergedBranch = false,
   acceptPrunedRelayOwned = false,
+  allowMissingWorktree = false,
+  acceptMissingRelayContainedForCleanup = false,
+  acceptUnverifiableRelayContainedForCleanup = false,
 }) {
   const validatedPaths = validateManifestPaths(data?.paths, {
     expectedRepoRoot: repoRoot,
     runId: data?.run_id,
     acceptPrunedRelayOwned,
+    allowMissingWorktree,
+    acceptMissingRelayContainedForCleanup,
+    acceptUnverifiableRelayContainedForCleanup,
     caller: "runCleanup",
   });
   const normalizedData = {
@@ -129,8 +135,11 @@ function runCleanup({
   const worktreePath = normalizedData.paths?.worktree || null;
   const branch = normalizedData.git?.working_branch || null;
   const worktreeStatus = readWorktreeStatus(worktreePath);
-  const allowPrunedRelayWorktreeRemoval = acceptPrunedRelayOwned
-    && validatedPaths.prunedRelayOwnedForCleanup
+  const allowRelayBaseFallbackRemoval = acceptPrunedRelayOwned
+    && (
+      validatedPaths.prunedRelayOwnedForCleanup
+      || validatedPaths.unverifiableRelayContainedForCleanup
+    )
     && validatedPaths.worktreeLocation === "relay_worktree";
   const allowRelayOwnedStrayRemoval = worktreeStatus.exists
     && !worktreeStatus.clean
@@ -145,7 +154,7 @@ function runCleanup({
   if (
     worktreeStatus.exists
     && !worktreeStatus.clean
-    && !allowPrunedRelayWorktreeRemoval
+    && !allowRelayBaseFallbackRemoval
     && !allowRelayOwnedStrayRemoval
   ) {
     errors.push(`dirty worktree: ${worktreeStatus.text}`);
@@ -157,7 +166,7 @@ function runCleanup({
         execGit(repoRoot, ["worktree", "remove", "--force", worktreePath]);
         worktreeRemoved = true;
       } catch (error) {
-        if (allowPrunedRelayWorktreeRemoval) {
+        if (allowRelayBaseFallbackRemoval) {
           try {
             worktreeRemoved = removePrunedRelayWorktreeDirectory(worktreePath, validatedPaths.relayWorktreeBase);
             if (!worktreeRemoved) {
@@ -176,6 +185,17 @@ function runCleanup({
     }
   }
 
+  if (errors.length === 0 && !worktreeStatus.exists) {
+    if (!dryRun) {
+      try {
+        execGit(repoRoot, ["worktree", "prune"]);
+        pruneRan = true;
+      } catch (error) {
+        errors.push(`worktree prune failed: ${summarizeFailure(error)}`);
+      }
+    }
+  }
+
   if (errors.length === 0 && deleteMergedBranch && branch && branchExistsBefore) {
     if (!dryRun) {
       try {
@@ -187,7 +207,7 @@ function runCleanup({
     }
   }
 
-  if (errors.length === 0) {
+  if (errors.length === 0 && !pruneRan) {
     if (!dryRun) {
       try {
         execGit(repoRoot, ["worktree", "prune"]);
@@ -231,7 +251,7 @@ function runCleanup({
       worktreeRemoved,
       worktreeDirty: worktreeStatus.exists
         && !worktreeStatus.clean
-        && !allowPrunedRelayWorktreeRemoval
+        && !allowRelayBaseFallbackRemoval
         && !allowRelayOwnedStrayRemoval,
       worktreeStatus: worktreeStatus.text || null,
       branch,

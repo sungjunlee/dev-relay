@@ -432,6 +432,8 @@ function validateManifestPaths(paths, {
   requireWorktree = false,
   allowMissingWorktree = false,
   acceptPrunedRelayOwned = false,
+  acceptMissingRelayContainedForCleanup = false,
+  acceptUnverifiableRelayContainedForCleanup = false,
   caller = "relay manifest consumer",
 } = {}) {
   if (!paths || typeof paths !== "object" || Array.isArray(paths)) {
@@ -511,10 +513,18 @@ function validateManifestPaths(paths, {
   ];
   const relayOwnedWorktreeCandidate = isPathContainedWithin(relayWorktreeBase, worktree)
     && relayOwnedRepoRootBasenames.includes(path.basename(worktree));
+  const relayContainedWorktreeCandidateForCleanup = isPathContainedWithin(relayWorktreeBase, worktree);
   const expectedGitCommonDir = getWorktreeGitCommonDir(effectiveRepoRoot) || path.join(effectiveRepoRoot, ".git");
   const worktreeExists = fs.existsSync(worktree);
   if (!worktreeExists) {
-    if (!allowMissingWorktree || (!repoContainedWorktree && !relayOwnedWorktreeCandidate)) {
+    if (
+      !allowMissingWorktree
+      || (
+        !repoContainedWorktree
+        && !relayOwnedWorktreeCandidate
+        && !(acceptMissingRelayContainedForCleanup && relayContainedWorktreeCandidateForCleanup)
+      )
+    ) {
       throw new Error(
         `${caller}: manifest paths.worktree ${JSON.stringify(worktree)} is not contained under the expected repo root ` +
         `${JSON.stringify(effectiveRepoRoot)} and is not a relay-owned worktree under ${JSON.stringify(relayWorktreeBase)} ` +
@@ -530,6 +540,7 @@ function validateManifestPaths(paths, {
       worktreeExists: false,
       worktreeMissing: true,
       prunedRelayOwnedForCleanup: false,
+      unverifiableRelayContainedForCleanup: false,
       relayWorktreeBase,
     };
   }
@@ -555,8 +566,19 @@ function validateManifestPaths(paths, {
       worktree,
       repoRootBasenames: relayOwnedRepoRootBasenames,
     });
+  const unverifiableRelayContainedForCleanup = acceptUnverifiableRelayContainedForCleanup
+    && !relayOwnedWorktree
+    && !prunedRelayOwnedWorktreeForCleanup
+    && (!worktreeGitCommonDir || !fs.existsSync(worktreeGitCommonDir))
+    && relayContainedWorktreeCandidateForCleanup
+    && isRealpathContainedWithin(relayWorktreeBase, worktree);
 
-  if (!repoContainedWorktree && !relayOwnedWorktree && !prunedRelayOwnedWorktreeForCleanup) {
+  if (
+    !repoContainedWorktree
+    && !relayOwnedWorktree
+    && !prunedRelayOwnedWorktreeForCleanup
+    && !unverifiableRelayContainedForCleanup
+  ) {
     throw new Error(
       `${caller}: manifest paths.worktree ${JSON.stringify(worktree)} is not contained under the expected repo root ` +
       `${JSON.stringify(effectiveRepoRoot)} and is not a relay-owned worktree under ${JSON.stringify(relayWorktreeBase)} ` +
@@ -571,6 +593,7 @@ function validateManifestPaths(paths, {
     worktreeExists: true,
     worktreeMissing: false,
     prunedRelayOwnedForCleanup: prunedRelayOwnedWorktreeForCleanup,
+    unverifiableRelayContainedForCleanup,
     relayWorktreeBase,
   };
 }

@@ -12,6 +12,7 @@
  *   --json                 Output as JSON
  *   --inspect              Health inventory only (no cleanup or shell sweep)
  *   --reconcile-merged     Reconcile merged drift for eligible non-terminal runs
+ *   --force-terminal      Remove unverifiable terminal worktrees contained under the relay base
  *   --stale-days <days>    Stale classification threshold (default: 14)
  */
 
@@ -128,6 +129,7 @@ if (hasCliFlag(["--help", "-h"])) {
   console.log(`  --reconcile-merged     ${modeLabel("--reconcile-merged")} Reconcile merged drift for eligible non-terminal runs`);
   console.log(`  --stale-days <days>    ${modeLabel("--stale-days")} Stale classification threshold (default: ${DEFAULT_STALE_DAYS})`);
   console.log(`  --force                ${modeLabel("--force")} Override a live or unverifiable run lease when removing a worktree`);
+  console.log(`  --force-terminal       ${modeLabel("--force-terminal")} Remove an unverifiable terminal worktree contained under the relay base`);
   process.exit(0);
 }
 
@@ -144,6 +146,7 @@ function run() {
   const inspectOnly = hasCliFlag("--inspect");
   const reconcileMerged = hasCliFlag("--reconcile-merged");
   const force = hasCliFlag("--force");
+  const forceTerminal = hasCliFlag("--force-terminal");
   const staleDays = parsePositiveNumber(readArg(args, "--stale-days", String(DEFAULT_STALE_DAYS), CLI_ARG_OPTIONS), "--stale-days");
   const olderThanHours = all ? 0 : parseHours(readArg(args, "--older-than", "24", CLI_ARG_OPTIONS), "--older-than");
   const now = Date.now();
@@ -155,6 +158,7 @@ function run() {
     staleDays,
     dryRun,
     force,
+    forceTerminal,
     all,
     inspectOnly,
     reconcileMerged,
@@ -189,15 +193,21 @@ function run() {
       closeCommand: `node skills/relay-dispatch/scripts/close-run.js --repo ${JSON.stringify(repoRoot)} --run-id ${JSON.stringify(runId)} --reason ${JSON.stringify("stale_non_terminal_run")}`,
     };
 
+    const terminalState = isTerminalState(data.state);
     let normalizedData = data;
+    let forcedTerminalUnverifiable = false;
     try {
       const validatedPaths = validateManifestPaths(data.paths, {
         expectedRepoRoot: repoRoot,
         manifestPath,
         runId: data.run_id,
         acceptPrunedRelayOwned: true,
+        allowMissingWorktree: terminalState,
+        acceptMissingRelayContainedForCleanup: terminalState,
+        acceptUnverifiableRelayContainedForCleanup: terminalState && forceTerminal,
         caller: "cleanup-worktrees",
       });
+      forcedTerminalUnverifiable = Boolean(validatedPaths.unverifiableRelayContainedForCleanup);
       normalizedData = {
         ...data,
         paths: {
@@ -207,15 +217,39 @@ function run() {
         },
       };
     } catch (error) {
+      let terminalForceEligible = false;
+      if (terminalState) {
+        try {
+          const forceValidatedPaths = validateManifestPaths(data.paths, {
+            expectedRepoRoot: repoRoot,
+            manifestPath,
+            runId: data.run_id,
+            acceptPrunedRelayOwned: true,
+            allowMissingWorktree: true,
+            acceptMissingRelayContainedForCleanup: true,
+            acceptUnverifiableRelayContainedForCleanup: true,
+            caller: "cleanup-worktrees",
+          });
+          terminalForceEligible = Boolean(forceValidatedPaths.unverifiableRelayContainedForCleanup);
+        } catch {
+          terminalForceEligible = false;
+        }
+      }
       const sanitizedError = /run_id must be a single path segment/.test(String(error.message || ""))
         ? `cleanup-worktrees: manifest ${JSON.stringify(path.basename(manifestPath))} has an invalid stored run_id; inspect the manifest before retrying.`
         : error.message;
       result.failed.push({
         ...baseInfo,
-        nextAction: "inspect_manifest_paths",
+        nextAction: terminalForceEligible ? "retry_with_force_terminal" : "inspect_manifest_paths",
         worktreeRemoved: false,
         branchDeleted: false,
         pruneRan: false,
+        reason: terminalForceEligible
+          ? "terminal_unverifiable_requires_force"
+          : (terminalState ? "refused_terminal_manifest_paths" : "refused_non_terminal_manifest_paths"),
+        classification: terminalForceEligible
+          ? "cleanable_terminal_unverifiable_path"
+          : "refused_manifest_paths",
         error: sanitizedError,
       });
       continue;
@@ -380,6 +414,9 @@ function run() {
       dryRun,
       deleteMergedBranch: normalizedData.state === "merged",
       acceptPrunedRelayOwned: true,
+      allowMissingWorktree: true,
+      acceptMissingRelayContainedForCleanup: true,
+      acceptUnverifiableRelayContainedForCleanup: forcedTerminalUnverifiable,
     });
 
     const item = {
@@ -391,6 +428,12 @@ function run() {
       branchDeleted: cleanupResult.summary.branchDeleted,
       pruneRan: cleanupResult.summary.pruneRan,
       error: cleanupResult.summary.error,
+      ...(forcedTerminalUnverifiable
+        ? {
+          reason: "forced_terminal_unverifiable_path",
+          classification: "cleanable_terminal_unverifiable_path",
+        }
+        : {}),
     };
 
     if (!dryRun) {

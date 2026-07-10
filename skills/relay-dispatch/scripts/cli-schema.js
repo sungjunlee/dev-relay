@@ -47,6 +47,7 @@ const FLAGS = [
   { flag: "--fleet-id", kind: VALUE, mode: MODE_PARSED, valueName: "<id>", rationale: "Structured relay fleet identifier; flag-like following tokens should mean the value is missing." },
   { flag: "--force", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Presence flag; no value is consumed." },
   { flag: "--force-finalize-nonready", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Presence flag; no value is consumed." },
+  { flag: "--force-terminal", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Explicit terminal-run opt-in for removing unverifiable worktrees contained under the relay base." },
   { flag: "--head-sha", kind: VALUE, mode: MODE_PARSED, valueName: "<sha>", rationale: "Structured SHA field; flag-like following tokens should mean the value is missing." },
   { flag: "--help", aliases: ["-h"], kind: BOOLEAN, mode: MODE_PARSED, rationale: "Presence flag; no value is consumed." },
   { flag: "--independent-review-reason", kind: VALUE, mode: MODE_VERBATIM, valueName: "<reason>", rationale: "Audit reason for a same-adapter independent review attempt; preserve the operator-supplied text." },
@@ -133,7 +134,7 @@ const FLAGS = [
 const COMMAND_FLAGS = {
   "cleanup-worktrees": [
     "--repo", "--older-than", "--all", "--dry-run", "--json",
-    "--inspect", "--reconcile-merged", "--stale-days", "--force", "--help",
+    "--inspect", "--reconcile-merged", "--stale-days", "--force", "--force-terminal", "--help",
   ],
   "close-run": [
     "--repo", "--run-id", "--reason", "--force", "--dry-run", "--json", "--help",
