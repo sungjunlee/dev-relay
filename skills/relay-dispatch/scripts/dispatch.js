@@ -1303,14 +1303,25 @@ function findLatestRedispatchPrompt(runDir) {
   return latest;
 }
 
-function readTaskPrompt({ runDir, resumeMode } = {}) {
+function refreshRedispatchDoneCriteria(prompt, doneCriteria) {
+  const blockPattern = /((?:^|\n)Original Done Criteria \(scope anchor\):\r?\n<task-content source="[^"]+">\r?\n)([\s\S]*?)(\r?\n<\/task-content>)/;
+  const match = blockPattern.exec(prompt);
+  if (!match) return prompt;
+  if (match[2] === doneCriteria) return prompt;
+  const refreshedBlock = match[1] + doneCriteria + match[3];
+  const blockEnd = match.index + match[0].length;
+  return prompt.slice(0, match.index) + refreshedBlock + prompt.slice(blockEnd);
+}
+
+function readTaskPrompt({ runDir, resumeMode, effectiveDoneCriteriaPath } = {}) {
   if (PROMPT_FILE) {
     const promptPath = path.resolve(PROMPT_FILE);
     if (!fs.existsSync(promptPath)) {
       console.error(`Error: prompt file not found: ${promptPath}`);
       process.exit(1);
     }
-    return { prompt: fs.readFileSync(promptPath, "utf-8").trim(), source: "explicit-file", path: promptPath };
+    const prompt = fs.readFileSync(promptPath, "utf-8");
+    return { prompt: resumeMode ? prompt : prompt.trim(), source: "explicit-file", path: promptPath };
   }
 
   if (PROMPT) {
@@ -1320,8 +1331,17 @@ function readTaskPrompt({ runDir, resumeMode } = {}) {
   if (resumeMode) {
     const auto = findLatestRedispatchPrompt(runDir);
     if (auto) {
+      let prompt = fs.readFileSync(auto.path, "utf-8");
+      if (effectiveDoneCriteriaPath) {
+        if (!fs.existsSync(effectiveDoneCriteriaPath)) {
+          console.error(`Error: effective Done Criteria file not found: ${effectiveDoneCriteriaPath}`);
+          process.exit(1);
+        }
+        const doneCriteria = fs.readFileSync(effectiveDoneCriteriaPath, "utf-8").trim();
+        prompt = refreshRedispatchDoneCriteria(prompt, doneCriteria);
+      }
       return {
-        prompt: fs.readFileSync(auto.path, "utf-8").trim(),
+        prompt,
         source: "auto-discovered-redispatch",
         path: auto.path,
         round: auto.round,
@@ -1845,7 +1865,12 @@ async function main() {
   enforceRubricPersistence(manifest, manifestRunDir);
   let routePlanSnapshot = null;
 
-  const taskPromptResult = readTaskPrompt({ runDir: manifestRunDir, resumeMode: RESUME_MODE });
+  const effectiveDoneCriteriaPath = resolvedDoneCriteriaPath || manifest?.anchor?.done_criteria_path || null;
+  const taskPromptResult = readTaskPrompt({
+    runDir: manifestRunDir,
+    resumeMode: RESUME_MODE,
+    effectiveDoneCriteriaPath,
+  });
   let taskPrompt = taskPromptResult.prompt;
   if (!RESUME_MODE && REVIEW_ASSURANCE_RAW === undefined && REVIEW_ASSURANCE_SOURCE === null) {
     try {

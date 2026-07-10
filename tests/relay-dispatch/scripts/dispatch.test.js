@@ -2525,17 +2525,37 @@ fs.writeFileSync(output, "ok\\n", "utf-8");
   return codexPath;
 }
 
-test("dispatch resume auto-discovers latest review-round-N-redispatch.md when no prompt is given (#387)", () => {
+const NON_INTERACTIVE_DISPATCH_PREFIX =
+  "[NON-INTERACTIVE DISPATCH] This is an automated, non-interactive execution. " +
+  "Do not present plans for approval or wait for user confirmation. " +
+  "Execute the task fully and autonomously.\n\n";
+
+function redispatchPromptWithDoneCriteria(doneCriteria) {
+  return [
+    "ROUND TWO BODY",
+    "",
+    "Original Done Criteria (scope anchor):",
+    '<task-content source="request_snapshot">',
+    doneCriteria,
+    "</task-content>",
+    "",
+  ].join("\n");
+}
+
+test("dispatch resume refreshes the auto-discovered redispatch prompt from an amended Done Criteria anchor (#883)", () => {
   const { repoRoot, relayHome } = setupRepo();
   process.env.RELAY_HOME = relayHome;
   const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
   const capturePath = path.join(os.tmpdir(), `relay-dispatch-argv-${Date.now()}-redispatch-auto.json`);
   writeResumeCaptureCodex(binDir, capturePath);
   const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}`, RELAY_HOME: relayHome };
+  const doneCriteriaPath = path.join(repoRoot, "done-criteria.md");
+  fs.writeFileSync(doneCriteriaPath, "Original clause", "utf-8");
 
   const first = JSON.parse(runDispatch(repoRoot, [
     "-b", "issue-387-auto",
     "--prompt", "first pass",
+    "--done-criteria-file", doneCriteriaPath,
     "--json",
   ], env));
 
@@ -2548,7 +2568,10 @@ test("dispatch resume auto-discovers latest review-round-N-redispatch.md when no
 
   const runDir = getRunDir(repoRoot, first.runId);
   fs.writeFileSync(path.join(runDir, "review-round-1-redispatch.md"), "ROUND ONE BODY\n", "utf-8");
-  fs.writeFileSync(path.join(runDir, "review-round-2-redispatch.md"), "ROUND TWO BODY\n", "utf-8");
+  const redispatchPath = path.join(runDir, "review-round-2-redispatch.md");
+  const originalArtifact = redispatchPromptWithDoneCriteria("Original clause");
+  fs.writeFileSync(redispatchPath, originalArtifact, "utf-8");
+  fs.writeFileSync(doneCriteriaPath, "Original clause\nAmended clause", "utf-8");
 
   const second = JSON.parse(runDispatch(repoRoot, [
     "--run-id", first.runId,
@@ -2560,19 +2583,58 @@ test("dispatch resume auto-discovers latest review-round-N-redispatch.md when no
   const finalPrompt = captured[captured.length - 1];
   assert.match(finalPrompt, /ROUND TWO BODY/);
   assert.doesNotMatch(finalPrompt, /ROUND ONE BODY/);
+  assert.match(finalPrompt, /Original clause\nAmended clause/);
+  assert.equal(fs.readFileSync(redispatchPath, "utf-8"), originalArtifact);
+  const resumedManifest = readManifest(first.manifestPath).data;
+  assert.equal(resumedManifest.anchor.done_criteria_path, doneCriteriaPath);
+  assert.equal(resumedManifest.anchor.done_criteria_source, "file");
 });
 
-test("dispatch resume --prompt-file wins over redispatch auto-discovery (#387)", () => {
+test("dispatch resume leaves an unchanged auto-discovered redispatch prompt byte-identical (#883)", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  const capturePath = path.join(os.tmpdir(), `relay-dispatch-argv-${Date.now()}-redispatch-noop.json`);
+  writeResumeCaptureCodex(binDir, capturePath);
+  const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}`, RELAY_HOME: relayHome };
+  const doneCriteriaPath = path.join(repoRoot, "done-criteria.md");
+  fs.writeFileSync(doneCriteriaPath, "Unchanged clause\n", "utf-8");
+
+  const first = JSON.parse(runDispatch(repoRoot, [
+    "-b", "issue-883-noop",
+    "--prompt", "first pass",
+    "--done-criteria-file", doneCriteriaPath,
+    "--json",
+  ], env));
+  const record = readManifest(first.manifestPath);
+  writeManifest(
+    first.manifestPath,
+    updateManifestState(record.data, STATES.CHANGES_REQUESTED, "re_dispatch_requested_changes"),
+    record.body
+  );
+
+  const artifact = redispatchPromptWithDoneCriteria("Unchanged clause");
+  fs.writeFileSync(path.join(getRunDir(repoRoot, first.runId), "review-round-1-redispatch.md"), artifact, "utf-8");
+  runDispatch(repoRoot, ["--run-id", first.runId, "--json"], env);
+
+  const captured = JSON.parse(fs.readFileSync(capturePath, "utf-8"));
+  assert.equal(captured[captured.length - 1], NON_INTERACTIVE_DISPATCH_PREFIX + artifact);
+});
+
+test("dispatch resume --prompt-file is unmodified even when the Done Criteria anchor changed (#883)", () => {
   const { repoRoot, relayHome } = setupRepo();
   process.env.RELAY_HOME = relayHome;
   const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
   const capturePath = path.join(os.tmpdir(), `relay-dispatch-argv-${Date.now()}-redispatch-explicit.json`);
   writeResumeCaptureCodex(binDir, capturePath);
   const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}`, RELAY_HOME: relayHome };
+  const doneCriteriaPath = path.join(repoRoot, "done-criteria.md");
+  fs.writeFileSync(doneCriteriaPath, "Original clause\n", "utf-8");
 
   const first = JSON.parse(runDispatch(repoRoot, [
     "-b", "issue-387-explicit",
     "--prompt", "first pass",
+    "--done-criteria-file", doneCriteriaPath,
     "--json",
   ], env));
 
@@ -2584,10 +2646,16 @@ test("dispatch resume --prompt-file wins over redispatch auto-discovery (#387)",
   );
 
   const runDir = getRunDir(repoRoot, first.runId);
-  fs.writeFileSync(path.join(runDir, "review-round-1-redispatch.md"), "AUTO_DISCOVERED_BODY\n", "utf-8");
+  fs.writeFileSync(
+    path.join(runDir, "review-round-1-redispatch.md"),
+    redispatchPromptWithDoneCriteria("Original clause"),
+    "utf-8"
+  );
+  fs.writeFileSync(doneCriteriaPath, "Amended clause\n", "utf-8");
 
   const explicitPath = path.join(os.tmpdir(), `relay-dispatch-explicit-${Date.now()}.md`);
-  fs.writeFileSync(explicitPath, "EXPLICIT_BODY\n", "utf-8");
+  const explicitPrompt = "EXPLICIT_BODY\n";
+  fs.writeFileSync(explicitPath, explicitPrompt, "utf-8");
 
   runDispatch(repoRoot, [
     "--run-id", first.runId,
@@ -2597,8 +2665,46 @@ test("dispatch resume --prompt-file wins over redispatch auto-discovery (#387)",
 
   const captured = JSON.parse(fs.readFileSync(capturePath, "utf-8"));
   const finalPrompt = captured[captured.length - 1];
-  assert.match(finalPrompt, /EXPLICIT_BODY/);
+  assert.equal(finalPrompt, NON_INTERACTIVE_DISPATCH_PREFIX + explicitPrompt);
   assert.doesNotMatch(finalPrompt, /AUTO_DISCOVERED_BODY/);
+});
+
+test("dispatch resume fails clearly when the effective Done Criteria anchor is missing (#883)", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  writeFakeCodex(binDir);
+  const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}`, RELAY_HOME: relayHome };
+  const doneCriteriaPath = path.join(repoRoot, "done-criteria.md");
+  fs.writeFileSync(doneCriteriaPath, "Original clause\n", "utf-8");
+
+  const first = JSON.parse(runDispatch(repoRoot, [
+    "-b", "issue-883-missing-dc",
+    "--prompt", "first pass",
+    "--done-criteria-file", doneCriteriaPath,
+    "--json",
+  ], env));
+  const record = readManifest(first.manifestPath);
+  writeManifest(
+    first.manifestPath,
+    updateManifestState(record.data, STATES.CHANGES_REQUESTED, "re_dispatch_requested_changes"),
+    record.body
+  );
+  fs.writeFileSync(
+    path.join(getRunDir(repoRoot, first.runId), "review-round-1-redispatch.md"),
+    redispatchPromptWithDoneCriteria("Original clause"),
+    "utf-8"
+  );
+  fs.unlinkSync(doneCriteriaPath);
+
+  const result = spawnSync("node", [SCRIPT, repoRoot, "--run-id", first.runId, "--json"], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    env,
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /effective Done Criteria file not found/);
+  assert.match(result.stderr, new RegExp(doneCriteriaPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
 });
 
 test("dispatch resume without redispatch artifact still errors with auto-discovery hint (#387)", () => {
