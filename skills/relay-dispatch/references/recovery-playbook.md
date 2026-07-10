@@ -140,6 +140,11 @@ node skills/relay-dispatch/scripts/recover-state.js --repo . --run-id <id> \
   --to ready_to_merge --reason "merge blocker cleared; retry merge"
 # Next fleet drive re-run retries the merge.
 
+# Rebased merge_blocked child → re-review before retrying the merge
+node skills/relay-dispatch/scripts/recover-state.js --repo . --run-id <id> \
+  --to review_pending --reason "PR rebased after merge_blocked; rerun review for the live head"
+# Next fleet drive re-run re-reviews, then merges.
+
 # No-op re-dispatch escalated the run → bring it back for a fresh review
 node skills/relay-dispatch/scripts/recover-state.js --repo . --run-id <id> \
   --to review_pending --force --reason "no-op-dispatch-recovery"
@@ -157,6 +162,7 @@ Whitelisted transitions (unlisted pairs are rejected — use the normal dispatch
 | `changes_requested` | `review_pending` | no | same HEAD allowed only with `--allow-same-head --require-pr-body-change`, a manifest PR number (`git.pr_number` or `github.pr_number`), a prior `review-round-N-pr-body.md` snapshot, and a current GitHub PR body that differs from the latest numbered snapshot |
 | `ready_to_merge` | `review_pending` | no | live GitHub PR HEAD differs from `review.last_reviewed_sha` or `git.head_sha`; emits old/new SHA and PR number in `state_recovery` |
 | `merge_blocked` | `ready_to_merge` | no | operator cleared the blocker; next fleet drive re-run retries the merge |
+| `merge_blocked` | `review_pending` | no | branch rebased after merge_blocked; next fleet drive re-run re-reviews then merges |
 | `escalated` | `review_pending` | yes | — |
 | `escalated` | `changes_requested` | no | — |
 | `dispatched` | `changes_requested` | yes | — |
