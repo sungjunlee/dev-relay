@@ -6889,15 +6889,17 @@ test("dispatch stores request linkage and frozen done criteria anchor in manifes
   assert.equal(result.status, "completed");
   assert.equal(result.requestId, "req-20260409010101000");
   assert.equal(result.leafId, "leaf-01");
-  const persistedDoneCriteriaPath = path.join(getRunDir(repoRoot, result.runId), "done-criteria.md");
-  assert.equal(result.doneCriteriaPath, persistedDoneCriteriaPath);
-  assert.equal(fs.readFileSync(persistedDoneCriteriaPath, "utf-8"), "# Done Criteria\n\n- Intake snapshot\n");
+  // Request/leaf-bound anchors stay at the durable request-store path:
+  // no run-dir copy, no re-point — the request->run->review linkage
+  // depends on that exact path identity.
+  assert.equal(result.doneCriteriaPath, doneCriteriaFile);
+  assert.equal(fs.existsSync(path.join(getRunDir(repoRoot, result.runId), "done-criteria.md")), false);
 
   const manifest = readManifest(result.manifestPath).data;
   assert.equal(manifest.source.request_id, "req-20260409010101000");
   assert.equal(manifest.source.leaf_id, "leaf-01");
-  assert.equal(manifest.anchor.done_criteria_path, persistedDoneCriteriaPath);
-  assert.equal(manifest.anchor.done_criteria_original_path, doneCriteriaFile);
+  assert.equal(manifest.anchor.done_criteria_path, doneCriteriaFile);
+  assert.equal(manifest.anchor.done_criteria_original_path, undefined);
   assert.equal(manifest.anchor.done_criteria_source, "request_snapshot");
 });
 
@@ -7024,8 +7026,8 @@ test("dispatch resume rejects changes to immutable intake linkage", () => {
   assert.match(result.stderr, /cannot change immutable anchor\.done_criteria_path/);
 
   const manifest = readManifest(first.manifestPath).data;
-  assert.equal(manifest.anchor.done_criteria_path, path.join(getRunDir(repoRoot, first.runId), "done-criteria.md"));
-  assert.equal(manifest.anchor.done_criteria_original_path, doneCriteriaFile);
+  assert.equal(manifest.anchor.done_criteria_path, doneCriteriaFile);
+  assert.equal(manifest.anchor.done_criteria_original_path, undefined);
   assert.equal(manifest.source.request_id, "req-20260409030303000");
 });
 
@@ -7066,13 +7068,13 @@ test("dispatch resume keeps the original intake linkage when the same immutable 
   assert.equal(second.runId, first.runId);
   assert.equal(second.requestId, "req-20260409050505000");
   assert.equal(second.leafId, "leaf-01");
-  assert.equal(second.doneCriteriaPath, path.join(getRunDir(repoRoot, first.runId), "done-criteria.md"));
+  assert.equal(second.doneCriteriaPath, doneCriteriaFile);
 
   const manifest = readManifest(first.manifestPath).data;
   assert.equal(manifest.source.request_id, "req-20260409050505000");
   assert.equal(manifest.source.leaf_id, "leaf-01");
-  assert.equal(manifest.anchor.done_criteria_path, path.join(getRunDir(repoRoot, first.runId), "done-criteria.md"));
-  assert.equal(manifest.anchor.done_criteria_original_path, doneCriteriaFile);
+  assert.equal(manifest.anchor.done_criteria_path, doneCriteriaFile);
+  assert.equal(manifest.anchor.done_criteria_original_path, undefined);
 });
 
 test("dispatch resume rejects adding intake linkage to a run that started without it", () => {

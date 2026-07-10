@@ -1159,8 +1159,11 @@ function copyFileAtomically(sourcePath, finalPath) {
   }
 }
 
-function persistDoneCriteria(manifest, runDir, originalPath) {
+function persistDoneCriteria(manifest, runDir, originalPath, doneCriteriaSource) {
   if (!originalPath) return manifest;
+  // Request/leaf-bound anchors already live durably under ~/.relay/requests/
+  // and the request->run->review linkage depends on that exact path identity.
+  if (doneCriteriaSource === "request_snapshot") return manifest;
 
   const persistedPath = path.join(runDir, "done-criteria.md");
   const isSelfCopy = sameFilesystemLocation(originalPath, persistedPath);
@@ -2126,7 +2129,7 @@ async function main() {
       fleetId: FLEET_ID,
     });
     ensureRunLayout(repoRoot, runId);
-    manifest = persistDoneCriteria(manifest, manifestRunDir, resolvedDoneCriteriaPath);
+    manifest = persistDoneCriteria(manifest, manifestRunDir, resolvedDoneCriteriaPath, doneCriteriaSource);
     manifest = {
       ...manifest,
       paths: {
