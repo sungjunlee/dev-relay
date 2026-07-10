@@ -2003,6 +2003,23 @@ async function main() {
   enforceRubricPersistence(manifest, manifestRunDir);
   let routePlanSnapshot = null;
 
+  // A resumed run may carry a Done Criteria amendment: the operator edits the
+  // original anchor file (or passes --done-criteria-file). The durable run-dir
+  // copy must be refreshed BEFORE prompt delivery so the redispatch prompt and
+  // every later review read the same amended criteria; when the original file
+  // is gone (e.g. /tmp wiped), the persisted copy remains authoritative (#914).
+  if (RESUME_MODE && manifest?.anchor?.done_criteria_original_path && manifest?.anchor?.done_criteria_path) {
+    const livePath = resolvedDoneCriteriaPath || manifest.anchor.done_criteria_original_path;
+    const persistedPath = manifest.anchor.done_criteria_path;
+    if (fs.existsSync(livePath) && !sameFilesystemLocation(livePath, persistedPath)) {
+      const liveBytes = fs.readFileSync(livePath, "utf-8");
+      const persistedBytes = fs.existsSync(persistedPath) ? fs.readFileSync(persistedPath, "utf-8") : null;
+      if (liveBytes !== persistedBytes) {
+        copyFileAtomically(livePath, persistedPath);
+      }
+    }
+  }
+
   const effectiveDoneCriteriaPath = resolvedDoneCriteriaPath || manifest?.anchor?.done_criteria_path || null;
   const taskPromptResult = readTaskPrompt({
     runDir: manifestRunDir,

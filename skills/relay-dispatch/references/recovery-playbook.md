@@ -117,6 +117,15 @@ When `--pr-title` is omitted, the PR title defaults to the linked GitHub issue t
 
 If a PR already exists for the branch, the command no-ops the create step and stamps `pr_number` from the existing PR — safe to re-run after a partial failure. Use `--dry-run` first when uncertain.
 
+## Waiting on PR checks before merge
+
+`wait-for-check.js` polls a pull request until every GitHub check reaches a terminal bucket, replacing session-improvised polling loops before `finalize-run.js` (#840):
+
+```bash
+node skills/relay-dispatch/scripts/wait-for-check.js --repo . --pr <number> --json
+# --timeout-s <s> (default 1800) / --interval-s <s> (default 15)
+```
+
 ## Operator state recovery
 
 `recover-state.js` advances a relay run's state after an external event (fix commit pushed directly, dispatch stalled, no-op re-dispatch escalated the manifest, merge blocker cleared). Replaces hand-edited `manual_state_override` entries with structured `state_recovery` events and validated transitions.
