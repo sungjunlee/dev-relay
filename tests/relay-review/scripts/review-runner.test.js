@@ -26,6 +26,7 @@ const {
   EXECUTION_EVIDENCE_FILENAME,
   FORCE_FINALIZE_GUIDANCE,
 } = require("../../../skills/relay-review/scripts/review-runner/execution-evidence");
+const { loadDoneCriteria } = require("../../../skills/relay-review/scripts/review-runner/context");
 const {
   installFakeGhOnPath,
   writeFakeGhScript: writeSharedFakeGhScript,
@@ -888,7 +889,7 @@ test("review loads the persisted run-dir Done Criteria after the dispatch input 
   );
 });
 
-test("missing manifest-anchored Done Criteria fails loudly without fallback", () => {
+test("missing request snapshot Done Criteria fails loudly without a run-dir hint", () => {
   const { repoRoot, manifestPath, runId, diffPath } = setupRepo();
   const missingDoneCriteriaPath = path.join(repoRoot, "missing-frozen-done-criteria.md");
 
@@ -913,9 +914,47 @@ test("missing manifest-anchored Done Criteria fails loudly without fallback", ()
     "--json",
   ], { encoding: "utf-8", stdio: "pipe" }), (error) => {
     assert.match(String(error.stderr), /Manifest anchor\.done_criteria_path points to a missing file/);
-    assert.match(String(error.stderr), new RegExp(`${runId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[/\\\\]done-criteria\\.md`));
+    assert.doesNotMatch(String(error.stderr), /Newer runs persist a run-dir copy at/);
     return true;
   });
+});
+
+test("missing non-request Done Criteria keeps the run-dir copy hint", () => {
+  const { repoRoot, runId } = setupRepo();
+  const missingDoneCriteriaPath = path.join(repoRoot, "missing-file-source-done-criteria.md");
+
+  assert.throws(() => loadDoneCriteria(repoRoot, null, null, null, {
+    run_id: runId,
+    anchor: {
+      done_criteria_path: missingDoneCriteriaPath,
+      done_criteria_source: "file",
+    },
+  }), (error) => {
+    assert.match(error.message, /Manifest anchor\.done_criteria_path points to a missing file/);
+    assert.match(error.message, /Newer runs persist a run-dir copy at/);
+    assert.match(error.message, new RegExp(`${runId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[/\\\\]done-criteria\\.md`));
+    return true;
+  });
+});
+
+test("malformed or missing run_id cannot replace the missing Done Criteria error", () => {
+  const { repoRoot } = setupRepo();
+  const missingDoneCriteriaPath = path.join(repoRoot, "missing-malformed-run-done-criteria.md");
+
+  for (const runId of ["../malformed", undefined]) {
+    assert.throws(() => loadDoneCriteria(repoRoot, null, null, null, {
+      run_id: runId,
+      anchor: {
+        done_criteria_path: missingDoneCriteriaPath,
+        done_criteria_source: "file",
+      },
+    }), (error) => {
+      assert.match(error.message, /Manifest anchor\.done_criteria_path points to a missing file/);
+      assert.doesNotMatch(error.message, /Newer runs persist a run-dir copy at/);
+      assert.doesNotMatch(error.message, /runId/);
+      return true;
+    });
+  }
 });
 
 test("pass verdict moves review_pending to ready_to_merge", () => {

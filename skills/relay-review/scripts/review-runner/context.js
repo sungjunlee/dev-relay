@@ -361,12 +361,16 @@ function loadDoneCriteria(repoPath, issueNumber, prNumber, doneCriteriaFile, man
   const manifestDoneCriteriaPath = manifestData?.anchor?.done_criteria_path;
   if (manifestDoneCriteriaPath) {
     if (!fs.existsSync(manifestDoneCriteriaPath)) {
-      const persistedPath = manifestData?.run_id
-        ? path.join(getRunDir(repoPath, manifestData.run_id), "done-criteria.md")
-        : path.join("<runDir>", "done-criteria.md");
+      let persistedHint = "";
+      if (manifestData?.anchor?.done_criteria_source !== "request_snapshot" && manifestData?.run_id) {
+        try {
+          const persistedPath = path.join(getRunDir(repoPath, manifestData.run_id), "done-criteria.md");
+          persistedHint = ` Newer runs persist a run-dir copy at ${persistedPath}.`;
+        } catch {}
+      }
       throw new Error(
-        `Manifest anchor.done_criteria_path points to a missing file: ${manifestDoneCriteriaPath}. ` +
-        `Newer runs persist a run-dir copy at ${persistedPath}.`
+        `Manifest anchor.done_criteria_path points to a missing file: ${manifestDoneCriteriaPath}.` +
+        persistedHint
       );
     }
     return {

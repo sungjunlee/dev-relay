@@ -5054,6 +5054,65 @@ crypto.randomBytes = function randomBytes(size) {
   assert.match(second.stderr, /--allow-conflicting-run/);
 });
 
+test("dispatch refuses a concurrent new dispatch while its empty run dir is claimed", async () => {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  writeFakeCodex(binDir);
+  const runId = "claim-race-20260711010101000-c0ffee91";
+  const markerPath = path.join(os.tmpdir(), `relay-dispatch-claim-race-${process.pid}-${Date.now()}.json`);
+  const rubricFile = path.join(repoRoot, "claim-race-rubric.yaml");
+  fs.writeFileSync(rubricFile, "rubric:\n  factors:\n    - name: collision guard\n      target: concurrent owner is refused\n", "utf-8");
+  const env = {
+    ...process.env,
+    PATH: `${binDir}:${process.env.PATH}`,
+    RELAY_HOME: relayHome,
+    RELAY_TEST_AFTER_WORKTREE_CREATE_PAUSE_MS: "1500",
+    RELAY_TEST_AFTER_WORKTREE_CREATE_MARKER: markerPath,
+  };
+  const args = withRequiredRubric([
+    "--run-id", runId,
+    "-b", "claim-race",
+    "--prompt", "first pass",
+    "--rubric-file", rubricFile,
+    "--json",
+  ]);
+  const first = spawn(process.execPath, [SCRIPT, repoRoot, ...args], {
+    cwd: repoRoot,
+    env,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  const firstExit = waitForDispatchExit(first);
+  let firstResult;
+  try {
+    await waitFor(() => fs.existsSync(markerPath), {
+      timeoutMs: 30000,
+      message: "first dispatch after-worktree create pause marker",
+    });
+    const runDir = getRunDir(repoRoot, runId);
+    assert.deepEqual(fs.readdirSync(runDir).sort(), [".dispatch-claim"]);
+
+    const second = spawnSync(process.execPath, [SCRIPT, repoRoot, ...args], {
+      cwd: repoRoot,
+      encoding: "utf-8",
+      env: {
+        ...env,
+        RELAY_TEST_AFTER_WORKTREE_CREATE_PAUSE_MS: "0",
+        RELAY_TEST_AFTER_WORKTREE_CREATE_MARKER: "",
+      },
+    });
+
+    assert.notEqual(second.status, 0);
+    assert.match(second.stderr, /Refusing to overwrite existing run dir/);
+  } finally {
+    firstResult = await firstExit;
+    try { fs.unlinkSync(markerPath); } catch {}
+  }
+
+  assert.equal(firstResult.code, 0, firstResult.stderr);
+  assert.equal(fs.existsSync(path.join(getRunDir(repoRoot, runId), ".dispatch-claim")), false);
+});
+
 test("dispatch cleans up tmp rubric files when atomic rubric persistence fails", () => {
   // #158 anti-theater
   const { repoRoot, relayHome } = setupRepo();
@@ -7539,6 +7598,141 @@ test("dispatch preserves file source for ad-hoc done criteria paths", () => {
   assert.equal(manifest.anchor.done_criteria_original_path, doneCriteriaFile);
   assert.equal(manifest.anchor.done_criteria_source, "file");
   assert.equal(fs.readFileSync(persistedDoneCriteriaPath, "utf-8"), "# Done Criteria\n\n- Ad-hoc file\n");
+});
+
+test("file-source resume accepts the original external Done Criteria path", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  const capturePath = path.join(os.tmpdir(), `relay-dispatch-argv-${Date.now()}-file-resume.json`);
+  writeResumeCaptureCodex(binDir, capturePath);
+  const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}`, RELAY_HOME: relayHome };
+  const doneCriteriaFile = path.join(repoRoot, "external-done-criteria.md");
+  fs.writeFileSync(doneCriteriaFile, "# Done Criteria\n\n- Resume from the original file path\n", "utf-8");
+
+  const first = JSON.parse(runDispatch(repoRoot, [
+    "-b", "issue-902-file-resume",
+    "--prompt", "first pass",
+    "--done-criteria-file", doneCriteriaFile,
+    "--json",
+  ], env));
+  const firstManifest = readManifest(first.manifestPath);
+  assert.equal(firstManifest.data.anchor.done_criteria_source, "file");
+  assert.equal(firstManifest.data.anchor.done_criteria_original_path, doneCriteriaFile);
+  writeManifest(
+    first.manifestPath,
+    updateManifestState(firstManifest.data, STATES.CHANGES_REQUESTED, "re_dispatch_requested_changes"),
+    firstManifest.body
+  );
+
+  const resumed = JSON.parse(runDispatch(repoRoot, [
+    "--run-id", first.runId,
+    "--prompt", "resume pass",
+    "--done-criteria-file", doneCriteriaFile,
+    "--json",
+  ], env));
+
+  assert.equal(resumed.mode, "resume");
+  assert.equal(resumed.runId, first.runId);
+  assert.equal(fs.existsSync(path.join(first.worktree, "resume.txt")), true);
+  assert.equal(fs.existsSync(capturePath), true);
+});
+
+test("file-source resume rejects a different external Done Criteria path", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  writeFakeCodex(binDir);
+  const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}`, RELAY_HOME: relayHome };
+  const doneCriteriaFile = path.join(repoRoot, "external-done-criteria.md");
+  const differentDoneCriteriaFile = path.join(repoRoot, "different-done-criteria.md");
+  fs.writeFileSync(doneCriteriaFile, "# Done Criteria\n\n- Original external anchor\n", "utf-8");
+  fs.writeFileSync(differentDoneCriteriaFile, "# Done Criteria\n\n- Different external anchor\n", "utf-8");
+
+  const first = JSON.parse(runDispatch(repoRoot, [
+    "-b", "issue-902-file-resume-reject",
+    "--prompt", "first pass",
+    "--done-criteria-file", doneCriteriaFile,
+    "--json",
+  ], env));
+  const firstManifest = readManifest(first.manifestPath);
+  writeManifest(
+    first.manifestPath,
+    updateManifestState(firstManifest.data, STATES.CHANGES_REQUESTED, "re_dispatch_requested_changes"),
+    firstManifest.body
+  );
+
+  const rejected = spawnSync("node", [SCRIPT, repoRoot,
+    "--run-id", first.runId,
+    "--prompt", "resume pass",
+    "--done-criteria-file", differentDoneCriteriaFile,
+    "--json",
+  ], { cwd: repoRoot, encoding: "utf-8", env });
+
+  assert.notEqual(rejected.status, 0);
+  assert.match(rejected.stderr, /cannot change immutable anchor\.done_criteria_path/);
+});
+
+test("Done Criteria copy failure leaves an empty run dir that can be retried", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  writeFakeCodex(binDir);
+  const doneCriteriaFile = path.join(repoRoot, "copy-retry-done-criteria.md");
+  const doneCriteriaText = "# Done Criteria\n\n- Retry the same run after a copy race\n";
+  fs.writeFileSync(doneCriteriaFile, doneCriteriaText, "utf-8");
+  const rubricFile = path.join(repoRoot, "copy-retry-rubric.yaml");
+  fs.writeFileSync(rubricFile, "rubric:\n  factors:\n    - name: copy retry\n      target: retry succeeds\n", "utf-8");
+  const runId = "issue-902-20260710010101000-c0ffee90";
+  const runDir = getRunDir(repoRoot, runId);
+  const preloadPath = writePreloadScript(binDir, "done-criteria-copy-failure-preload.js", `const fs = require("fs");
+const path = require("path");
+const originalCopyFileSync = fs.copyFileSync;
+fs.copyFileSync = function copyFileSync(sourcePath, destPath, ...args) {
+  if (
+    path.resolve(sourcePath) === ${JSON.stringify(doneCriteriaFile)}
+    && typeof destPath === "string"
+    && destPath.endsWith(path.join("", "done-criteria.md.tmp"))
+  ) {
+    fs.unlinkSync(sourcePath);
+  }
+  return originalCopyFileSync.call(this, sourcePath, destPath, ...args);
+};`);
+  const baseEnv = { ...process.env, PATH: `${binDir}:${process.env.PATH}`, RELAY_HOME: relayHome };
+  const failingEnv = withNodePreload(baseEnv, preloadPath);
+  const args = withRequiredRubric([
+    "--run-id", runId,
+    "-b", "copy-failure-retry",
+    "--prompt", "copy retry",
+    "--done-criteria-file", doneCriteriaFile,
+    "--rubric-file", rubricFile,
+    "--json",
+  ]);
+
+  const failed = spawnSync("node", [SCRIPT, repoRoot, ...args], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    env: failingEnv,
+  });
+
+  assert.notEqual(failed.status, 0);
+  assert.match(failed.stderr, new RegExp(doneCriteriaFile.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  assert.equal(fs.existsSync(path.join(runDir, "done-criteria.md")), false);
+  assert.equal(fs.existsSync(path.join(runDir, "done-criteria.md.tmp")), false);
+  assert.deepEqual(fs.readdirSync(runDir), []);
+
+  fs.writeFileSync(path.join(runDir, ".DS_Store"), "", "utf-8");
+  fs.writeFileSync(doneCriteriaFile, doneCriteriaText, "utf-8");
+  const retried = execFileSync("node", [SCRIPT, repoRoot, ...args], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+    env: baseEnv,
+  });
+  const result = JSON.parse(retried);
+  assert.equal(result.status, "completed");
+  assert.equal(result.runId, runId);
+  assert.equal(fs.readFileSync(path.join(runDir, "done-criteria.md"), "utf-8"), doneCriteriaText);
 });
 
 test("dispatch dry-run includes request linkage and frozen done criteria file info", () => {
