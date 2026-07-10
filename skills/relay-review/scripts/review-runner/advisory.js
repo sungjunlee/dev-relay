@@ -387,6 +387,11 @@ function executeAdvisoryRequest(request) {
   let advisoryRepoPath = null;
 
   try {
+    const advisoryProfile = (
+      typeof request.profile === "string" && request.profile.trim()
+        ? validateAdvisoryProfile(request.profile)
+        : null
+    );
     const timeoutMs = parsePositiveSeconds(request.timeoutSeconds) * 1000;
     advisoryRepoPath = createAdvisoryWorktree(request.reviewRepoPath, request.runDir, request.artifactReviewerName || request.reviewerName);
     const statusBefore = captureGitStatus(advisoryRepoPath);
@@ -398,6 +403,7 @@ function executeAdvisoryRequest(request) {
       "--phase", ADAPTER_PHASES.ADVISORY_REVIEW,
     ];
     if (request.reviewerModel) execArgs.push("--model", request.reviewerModel);
+    if (advisoryProfile) execArgs.push("--profile", advisoryProfile);
 
     let stdout = "";
     let stderr = "";

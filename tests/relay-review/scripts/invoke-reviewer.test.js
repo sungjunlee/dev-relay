@@ -47,6 +47,95 @@ function reviewerVerdict(overrides = {}) {
   };
 }
 
+function advisoryPayload(profile = "blindspot") {
+  return {
+    profile,
+    summary: `${profile} advisory result.`,
+    required_findings: [],
+    advisory_findings: [],
+    duplicate_or_low_confidence: [],
+  };
+}
+
+const ADVISORY_ADAPTERS = [
+  {
+    name: "opencode",
+    script: OPENCODE_SCRIPT,
+    envKey: "RELAY_OPENCODE_BIN",
+    fakeName: "fake-opencode.js",
+    extraEnv: {},
+    fakeBody: (payload, markerPath) => `#!/usr/bin/env node
+const fs = require("fs");
+fs.writeFileSync(${JSON.stringify(markerPath)}, "spawned\\n", "utf-8");
+process.stdout.write(JSON.stringify(${JSON.stringify(payload)}));
+`,
+  },
+  {
+    name: "pi",
+    script: PI_SCRIPT,
+    envKey: "RELAY_PI_BIN",
+    fakeName: "fake-pi.js",
+    extraEnv: {},
+    fakeBody: (payload, markerPath) => `#!/usr/bin/env node
+const fs = require("fs");
+fs.writeFileSync(${JSON.stringify(markerPath)}, "spawned\\n", "utf-8");
+process.stdout.write(JSON.stringify(${JSON.stringify(payload)}));
+`,
+  },
+  {
+    name: "antigravity",
+    script: ANTIGRAVITY_SCRIPT,
+    envKey: "RELAY_ANTIGRAVITY_BIN",
+    fakeName: "fake-agy.js",
+    extraEnv: { RELAY_ANTIGRAVITY_REVIEW_TIMEOUT: "45s" },
+    fakeBody: (payload, markerPath) => `#!/usr/bin/env node
+const fs = require("fs");
+fs.writeFileSync(${JSON.stringify(markerPath)}, "spawned\\n", "utf-8");
+process.stdout.write(JSON.stringify(${JSON.stringify(payload)}));
+`,
+  },
+  {
+    name: "cline",
+    script: CLINE_SCRIPT,
+    envKey: "RELAY_CLINE_BIN",
+    fakeName: "fake-cline.js",
+    extraEnv: { RELAY_CLINE_REVIEW_TIMEOUT: "120s" },
+    extraArgs: ["--model", "cline-pass/glm-5.2"],
+    fakeBody: (payload, markerPath) => `#!/usr/bin/env node
+const fs = require("fs");
+fs.writeFileSync(${JSON.stringify(markerPath)}, "spawned\\n", "utf-8");
+process.stdout.write(JSON.stringify({
+  type: "run_result",
+  finishReason: "completed",
+  text: JSON.stringify(${JSON.stringify(payload)}),
+}) + "\\n");
+`,
+  },
+];
+
+function runAdvisoryAdapter(adapter, { profileArg = null, payloadProfile = "blindspot" } = {}) {
+  const { repoRoot, promptPath } = setupRepo();
+  const fakeDir = fs.mkdtempSync(path.join(os.tmpdir(), `relay-review-fake-${adapter.name}-profile-`));
+  const markerPath = path.join(fakeDir, "spawned.txt");
+  const fakeBin = writeExecutable(fakeDir, adapter.fakeName, adapter.fakeBody(advisoryPayload(payloadProfile), markerPath));
+  const args = [
+    adapter.script,
+    "--repo", repoRoot,
+    "--prompt-file", promptPath,
+    "--phase", "advisory_review",
+    ...(adapter.extraArgs || []),
+  ];
+  if (profileArg) args.push("--profile", profileArg);
+  args.push("--json");
+  const stdout = execFileSync("node", args, {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+    env: { ...process.env, ...adapter.extraEnv, [adapter.envKey]: fakeBin },
+  });
+  return { stdout, markerPath };
+}
+
 function runPiAdapterWithStdout(stdoutText) {
   const { repoRoot, promptPath } = setupRepo();
   const fakeDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-fake-pi-output-"));
@@ -456,6 +545,83 @@ process.stdout.write("Sure, here is the advisory result:\\n" + JSON.stringify({
   const result = JSON.parse(stdout);
   assert.equal(result.summary, "Recovered from verbose live output.");
 });
+
+for (const adapter of ADVISORY_ADAPTERS) {
+  test(`${adapter.name} advisory adapter accepts matching --profile adversarial payload`, () => {
+    const { stdout } = runAdvisoryAdapter(adapter, {
+      profileArg: "adversarial",
+      payloadProfile: "adversarial",
+    });
+
+    const result = JSON.parse(stdout);
+    assert.equal(result.profile, "adversarial");
+  });
+
+  test(`${adapter.name} advisory adapter keeps blindspot default and rejects adversarial payload without --profile`, () => {
+    let error;
+    try {
+      runAdvisoryAdapter(adapter, { payloadProfile: "adversarial" });
+      assert.fail(`expected ${adapter.name} adapter to reject adversarial payload on default blindspot profile`);
+    } catch (caught) {
+      error = caught;
+    }
+
+    assert.ok(error);
+    assert.notEqual(error.status, 0);
+    assert.match(String(error.stderr || ""), /profile must be 'blindspot', got 'adversarial'/);
+  });
+
+  test(`${adapter.name} advisory adapter rejects blindspot payload on adversarial lane`, () => {
+    let error;
+    try {
+      runAdvisoryAdapter(adapter, {
+        profileArg: "adversarial",
+        payloadProfile: "blindspot",
+      });
+      assert.fail(`expected ${adapter.name} adapter to reject blindspot payload on adversarial profile`);
+    } catch (caught) {
+      error = caught;
+    }
+
+    assert.ok(error);
+    assert.notEqual(error.status, 0);
+    assert.match(String(error.stderr || ""), /profile must be 'adversarial', got 'blindspot'/);
+  });
+
+  test(`${adapter.name} advisory adapter rejects unknown --profile before invoking provider`, () => {
+    const { repoRoot, promptPath } = setupRepo();
+    const fakeDir = fs.mkdtempSync(path.join(os.tmpdir(), `relay-review-fake-${adapter.name}-bad-profile-`));
+    const markerPath = path.join(fakeDir, "spawned.txt");
+    const fakeBin = writeExecutable(fakeDir, adapter.fakeName, adapter.fakeBody(advisoryPayload("blindspot"), markerPath));
+    const args = [
+      adapter.script,
+      "--repo", repoRoot,
+      "--prompt-file", promptPath,
+      "--phase", "advisory_review",
+      ...(adapter.extraArgs || []),
+      "--profile", "not-a-profile",
+      "--json",
+    ];
+
+    let error;
+    try {
+      execFileSync("node", args, {
+        cwd: repoRoot,
+        encoding: "utf-8",
+        stdio: "pipe",
+        env: { ...process.env, ...adapter.extraEnv, [adapter.envKey]: fakeBin },
+      });
+      assert.fail(`expected ${adapter.name} adapter to reject unknown profile`);
+    } catch (caught) {
+      error = caught;
+    }
+
+    assert.ok(error);
+    assert.notEqual(error.status, 0);
+    assert.match(String(error.stderr || ""), /Unknown advisory profile/);
+    assert.equal(fs.existsSync(markerPath), false);
+  });
+}
 
 test("opencode adapter reports actionable diagnostics for empty stdout", () => {
   const { repoRoot, promptPath } = setupRepo();

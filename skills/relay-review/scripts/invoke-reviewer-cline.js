@@ -17,10 +17,10 @@ const {
   recoverExecStdout,
   summarizeFailure,
 } = require("./reviewer-helpers");
-const { parseAdvisoryReview } = require("./advisory-review-schema");
+const { parseAdvisoryReview, validateAdvisoryProfile } = require("./advisory-review-schema");
 
 const args = process.argv.slice(2);
-const KNOWN_FLAGS = ["--repo", "--prompt-file", "--model", "--phase", "--json", "--help", "-h"];
+const KNOWN_FLAGS = ["--repo", "--prompt-file", "--model", "--phase", "--profile", "--json", "--help", "-h"];
 const cliArgs = bindCliArgs(args, {
   commandName: "invoke-reviewer-cline",
   reservedFlags: KNOWN_FLAGS,
@@ -31,12 +31,13 @@ const MIN_REVIEW_TIMEOUT_SECONDS = 120;
 const CLINE_TIMEOUT_HEADROOM_SECONDS = 60;
 
 if (!args.length || cliArgs.hasFlag(["--help", "-h"])) {
-  console.log("Usage: invoke-reviewer-cline.js --repo <path> --prompt-file <path> [--phase advisory_review] [--model <route>] [--json]");
+  console.log("Usage: invoke-reviewer-cline.js --repo <path> --prompt-file <path> [--phase advisory_review] [--model <route>] [--profile <name>] [--json]");
   console.log("\nOptions:");
   console.log(`  --repo <path>        ${modeLabel("--repo")} Repository root`);
   console.log(`  --prompt-file <path> ${modeLabel("--prompt-file")} Prompt bundle path`);
   console.log(`  --model <route>      ${modeLabel("--model")} Model route, for example cline-pass/glm-5.2`);
   console.log(`  --phase <name>       ${modeLabel("--phase")} advisory_review only`);
+  console.log(`  --profile <name>     ${modeLabel("--profile")} Advisory profile, defaults to blindspot`);
   console.log(`  --json               ${modeLabel("--json")} Output JSON`);
   process.exit(cliArgs.hasFlag(["--help", "-h"]) ? 0 : 1);
 }
@@ -49,6 +50,18 @@ function resolvePhase(value) {
     );
   }
   return phase;
+}
+
+function readAdvisoryProfileArg(argv) {
+  for (let index = 0; index < argv.length; index += 1) {
+    const token = String(argv[index]);
+    if (token === "--profile") {
+      const value = argv[index + 1];
+      return value && !String(value).startsWith("--") ? value : undefined;
+    }
+    if (token.startsWith("--profile=")) return token.slice("--profile=".length);
+  }
+  return undefined;
 }
 
 function parseReviewTimeoutMs(value) {
@@ -138,6 +151,7 @@ function main() {
   const promptFile = cliArgs.getArg("--prompt-file");
   const model = validateModelRoute(cliArgs.getArg("--model"));
   const phase = resolvePhase(cliArgs.getArg("--phase", "advisory_review"));
+  const advisoryProfile = validateAdvisoryProfile(readAdvisoryProfileArg(args) || "blindspot");
   const clineBin = process.env.RELAY_CLINE_BIN || "cline";
   const reviewTimeout = String(process.env[REVIEW_TIMEOUT_ENV] || DEFAULT_REVIEW_TIMEOUT).trim();
   const parentTimeoutMs = parseReviewTimeoutMs(reviewTimeout);
@@ -210,7 +224,7 @@ function main() {
       parsed = parseAdvisoryReview(candidate, {
         adapter: "cline",
         phase,
-        profile: "blindspot",
+        profile: advisoryProfile,
       });
       break;
     } catch (error) {
