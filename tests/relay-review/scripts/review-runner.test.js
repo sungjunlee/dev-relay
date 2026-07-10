@@ -838,6 +838,56 @@ test("prepare-only loads frozen Done Criteria from manifest anchor before GitHub
   assert.match(doneCriteriaText, /Use the persisted intake snapshot/);
 });
 
+test("review loads the persisted run-dir Done Criteria after the dispatch input is deleted", () => {
+  const { repoRoot, diffPath } = setupRepo();
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-codex-bin-"));
+  writeFakeCodex(binDir);
+  const originalDoneCriteriaPath = path.join(os.tmpdir(), `relay-done-criteria-${process.pid}-${Date.now()}.md`);
+  const rubricPath = path.join(repoRoot, "review-persistence-rubric.yaml");
+  fs.writeFileSync(
+    originalDoneCriteriaPath,
+    "# Persisted Done Criteria\n\n- Review survives deleting the dispatch input\n",
+    "utf-8"
+  );
+  fs.writeFileSync(rubricPath, "rubric:\n  factors:\n    - name: persistence\n      target: review loads the run copy\n", "utf-8");
+
+  const dispatch = execFileSync("node", [
+    DISPATCH_SCRIPT,
+    repoRoot,
+    "--branch", "persist-done-criteria-review",
+    "--prompt", "verify persisted done criteria",
+    "--done-criteria-file", originalDoneCriteriaPath,
+    "--rubric-file", rubricPath,
+    "--json",
+  ], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+    env: { ...process.env, PATH: `${binDir}:${process.env.PATH}` },
+  });
+  const dispatchResult = JSON.parse(dispatch);
+  const dispatchManifest = readManifest(dispatchResult.manifestPath).data;
+  assert.equal(dispatchManifest.anchor.done_criteria_original_path, originalDoneCriteriaPath);
+  fs.unlinkSync(originalDoneCriteriaPath);
+
+  const stdout = execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--run-id", dispatchResult.runId,
+    "--pr", "123",
+    "--diff-file", diffPath,
+    "--prepare-only",
+    "--json",
+  ], { encoding: "utf-8", stdio: "pipe" });
+
+  const result = JSON.parse(stdout);
+  assert.equal(result.doneCriteriaPath, path.join(dispatchResult.runDir, "review-round-1-done-criteria.md"));
+  assert.match(
+    fs.readFileSync(result.doneCriteriaPath, "utf-8"),
+    /Review survives deleting the dispatch input/
+  );
+});
+
 test("missing manifest-anchored Done Criteria fails loudly without fallback", () => {
   const { repoRoot, manifestPath, runId, diffPath } = setupRepo();
   const missingDoneCriteriaPath = path.join(repoRoot, "missing-frozen-done-criteria.md");
@@ -863,6 +913,7 @@ test("missing manifest-anchored Done Criteria fails loudly without fallback", ()
     "--json",
   ], { encoding: "utf-8", stdio: "pipe" }), (error) => {
     assert.match(String(error.stderr), /Manifest anchor\.done_criteria_path points to a missing file/);
+    assert.match(String(error.stderr), new RegExp(`${runId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[/\\\\]done-criteria\\.md`));
     return true;
   });
 });
