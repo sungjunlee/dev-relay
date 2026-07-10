@@ -1280,6 +1280,42 @@ test("review-runner accepts cline advisory review when route policy allows the r
   assert.equal(event.reviewer_policy.read_only.enforcement_level, "prompt-only");
 });
 
+test("review-runner persists raw cline JSONL when every advisory candidate fails to parse", () => {
+  const { repoRoot, runDir, runId, doneCriteriaPath, diffPath } = setupRepo({ modelPolicy: "allow-cline-advisory" });
+  const primaryScript = writePrimaryReviewer(repoRoot, passVerdict());
+  const rawText = "unparseable-cline-advisory-887";
+  const clineScript = path.join(repoRoot, "fake-cline-parse-failure.js");
+  fs.writeFileSync(clineScript, `#!/usr/bin/env node
+process.stdout.write(JSON.stringify({
+  type: "run_result",
+  finishReason: "completed",
+  text: ${JSON.stringify(rawText)},
+}) + "\\n");
+process.stderr.write("cline-provider-stderr-887\\n");
+process.exitCode = 1;
+`, "utf-8");
+  fs.chmodSync(clineScript, 0o755);
+
+  const result = runReview({
+    repoRoot,
+    runId,
+    doneCriteriaPath,
+    diffPath,
+    primaryScript,
+    opencodeScript: null,
+    clineScript,
+    advisoryReviewer: "cline",
+    extraArgs: ["--advisory-reviewer-model", "cline-pass/glm-5.2", "--advisory-grace", "30"],
+  });
+
+  assert.equal(result.advisoryReview.status, "failed");
+  assert.equal(result.advisoryReview.rawResponsePath, path.join(runDir, "review-round-1-advisory-cline-raw-response.txt"));
+  const rawArtifact = fs.readFileSync(result.advisoryReview.rawResponsePath, "utf-8");
+  assert.match(rawArtifact, /Error: Cline advisory review failed to parse any of 1 advisory candidate/);
+  assert.match(rawArtifact, new RegExp(rawText));
+  assert.match(rawArtifact, /cline-provider-stderr-887/);
+});
+
 test("review-runner denies pi advisory model before spawning advisory reviewer", () => {
   const { repoRoot, runId, doneCriteriaPath, diffPath } = setupRepo({ modelPolicy: "strict-routes" });
   const logPath = path.join(repoRoot, "pi-advisory-policy.log");

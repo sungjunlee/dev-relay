@@ -100,7 +100,11 @@ function parseAdvisoryReview(text, {
       phase,
       description: "advisory review",
     });
-    const actualProfile = requireString(parsed.profile, "profile");
+    const actualProfile = (
+      parsed.profile === undefined ||
+      parsed.profile === null ||
+      (typeof parsed.profile === "string" && !parsed.profile.trim())
+    ) ? expectedProfile : requireString(parsed.profile, "profile");
     if (actualProfile !== expectedProfile) {
       throw new Error(`profile must be '${expectedProfile}', got '${actualProfile}'`);
     }

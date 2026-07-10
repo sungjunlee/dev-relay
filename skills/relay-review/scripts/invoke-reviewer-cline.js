@@ -146,6 +146,12 @@ function buildPrompt(promptText) {
   ].join("\n");
 }
 
+function withRawAdapterOutput(error, rawOutput, rawStderr) {
+  error.rawAdapterOutput = rawOutput;
+  error.rawAdapterStderr = rawStderr;
+  return error;
+}
+
 function main() {
   const repoPath = path.resolve(cliArgs.getArg("--repo") || ".");
   const promptFile = cliArgs.getArg("--prompt-file");
@@ -212,9 +218,9 @@ function main() {
       stderr: rawStderr,
     });
   } catch (error) {
-    throw new Error(
+    throw withRawAdapterOutput(new Error(
       `${error.message}. Cline advisory review must return JSON in run_result.text or the final text content_end; relay cannot treat this as healthy advisory evidence.`
-    );
+    ), rawOutput, rawStderr);
   }
 
   let parsed = null;
@@ -232,9 +238,9 @@ function main() {
     }
   }
   if (!parsed) {
-    throw new Error(
+    throw withRawAdapterOutput(new Error(
       `Cline advisory review failed to parse any of ${candidates.length} advisory candidate(s); first failure: ${firstParseError?.message || "unknown parse failure"}`
-    );
+    ), rawOutput, rawStderr);
   }
   const output = JSON.stringify(parsed);
 
@@ -249,5 +255,13 @@ try {
   main();
 } catch (error) {
   console.error(`Error: ${error.message}`);
+  if (error.rawAdapterOutput || error.rawAdapterStderr) {
+    if (error.rawAdapterOutput) {
+      process.stderr.write(`\nRaw Cline output:\n${error.rawAdapterOutput.trim()}\n`);
+    }
+    if (error.rawAdapterStderr) {
+      process.stderr.write(`\nCline stderr:\n${error.rawAdapterStderr.trim()}\n`);
+    }
+  }
   process.exit(1);
 }
