@@ -33,6 +33,14 @@ node skills/relay-dispatch/scripts/close-run.js --repo . --run-id <run-id> --rea
 node skills/relay-dispatch/scripts/reliability-report.js --repo . --json
 ```
 
+## `wait-for-check.js` — Deterministic PR check waiter
+
+Block until GitHub PR checks report a conclusive state (or timeout). Useful when an operator needs to wait on CI before merge without polling `gh` by hand:
+
+```bash
+node skills/relay-dispatch/scripts/wait-for-check.js --repo . --pr <number> --json
+```
+
 ## `publish-run.js` — Delayed PR publication
 
 Use only after internal relay-review has advanced a run to `publish_pending`:

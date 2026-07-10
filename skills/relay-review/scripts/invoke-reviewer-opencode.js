@@ -135,32 +135,25 @@ function buildEmptyOutputDiagnosticCommand({ opencodeBin, model, phase }) {
   return command.join(" ");
 }
 
-function main() {
-  const repoPath = path.resolve(cliArgs.getArg("--repo") || ".");
-  const promptFile = cliArgs.getArg("--prompt-file");
-  const model = cliArgs.getArg("--model");
-  const phase = resolvePhase(cliArgs.getArg("--phase", "advisory_review"));
-  const advisoryProfile = phase === "advisory_review"
-    ? validateAdvisoryProfile(readAdvisoryProfileArg(args) || "blindspot")
-    : "blindspot";
-  const opencodeBin = process.env.RELAY_OPENCODE_BIN || "opencode";
-  const reviewTimeout = String(process.env[REVIEW_TIMEOUT_ENV] || DEFAULT_REVIEW_TIMEOUT).trim();
-  const parentTimeoutMs = parseReviewTimeoutMs(reviewTimeout);
+/** Appended on the single empty-stdout retry. glm-5.2 can end after tool use with no text part. */
+const EMPTY_STDOUT_RETRY_NUDGE = [
+  "[EMPTY-STDOUT RETRY NUDGE]",
+  "Your previous attempt produced no stdout text for relay to parse.",
+  "Reply now with ONLY the required JSON object as a final text message.",
+  "Do not call tools. Do not end the turn after tool use without printing JSON.",
+  "The first byte of your response must be `{` and the last byte must be `}`.",
+].join("\n");
 
-  if (!promptFile) {
-    throw new Error("--prompt-file is required");
-  }
-
-  const promptText = fs.readFileSync(promptFile, "utf-8").trim();
-  const fullPrompt = buildPrompt(promptText, phase);
-
+function buildExecArgs({ model, prompt }) {
   const execArgs = ["run"];
   if (model) execArgs.push("-m", model);
-  execArgs.push(fullPrompt);
+  execArgs.push(prompt);
+  return execArgs;
+}
 
-  let result;
+function runOpencodeOnce({ opencodeBin, execArgs, repoPath, parentTimeoutMs, phase, model, reviewTimeout }) {
   try {
-    result = execFileSync(opencodeBin, execArgs, {
+    return execFileSync(opencodeBin, execArgs, {
       cwd: repoPath,
       encoding: "utf-8",
       stdio: "pipe",
@@ -182,16 +175,56 @@ function main() {
     if (!recovered) {
       throw new Error(`opencode ${phase} reviewer failed: ${summarizeFailure(error)}`);
     }
-    result = recovered;
+    return recovered;
+  }
+}
+
+function throwEmptyStdoutError({ opencodeBin, model, phase }) {
+  const diagnosticCommand = buildEmptyOutputDiagnosticCommand({ opencodeBin, model, phase });
+  throw new Error(
+    `opencode ${phase} reviewer produced empty stdout, so relay cannot treat this as healthy review evidence. ` +
+    `First verify OpenCode non-interactive model/provider output with: ${diagnosticCommand}. ` +
+    "If that minimal command is also empty, record this as an OpenCode CLI/provider non-interactive blocker; otherwise tighten the review prompt or increase the live dogfood command timeout."
+  );
+}
+
+function main() {
+  const repoPath = path.resolve(cliArgs.getArg("--repo") || ".");
+  const promptFile = cliArgs.getArg("--prompt-file");
+  const model = cliArgs.getArg("--model");
+  const phase = resolvePhase(cliArgs.getArg("--phase", "advisory_review"));
+  const advisoryProfile = phase === "advisory_review"
+    ? validateAdvisoryProfile(readAdvisoryProfileArg(args) || "blindspot")
+    : "blindspot";
+  const opencodeBin = process.env.RELAY_OPENCODE_BIN || "opencode";
+  const reviewTimeout = String(process.env[REVIEW_TIMEOUT_ENV] || DEFAULT_REVIEW_TIMEOUT).trim();
+  const parentTimeoutMs = parseReviewTimeoutMs(reviewTimeout);
+
+  if (!promptFile) {
+    throw new Error("--prompt-file is required");
+  }
+
+  const promptText = fs.readFileSync(promptFile, "utf-8").trim();
+  const fullPrompt = buildPrompt(promptText, phase);
+  const runOpts = { opencodeBin, repoPath, parentTimeoutMs, phase, model, reviewTimeout };
+
+  let result = runOpencodeOnce({
+    ...runOpts,
+    execArgs: buildExecArgs({ model, prompt: fullPrompt }),
+  });
+
+  // Branch B (#900): one bounded retry when the model/CLI exits 0 with no text
+  // (observed: glm-5.2 tool-only turns leave default-format stdout empty).
+  if (!result) {
+    const nudgedPrompt = `${fullPrompt}\n\n${EMPTY_STDOUT_RETRY_NUDGE}`;
+    result = runOpencodeOnce({
+      ...runOpts,
+      execArgs: buildExecArgs({ model, prompt: nudgedPrompt }),
+    });
   }
 
   if (!result) {
-    const diagnosticCommand = buildEmptyOutputDiagnosticCommand({ opencodeBin, model, phase });
-    throw new Error(
-      `opencode ${phase} reviewer produced empty stdout, so relay cannot treat this as healthy review evidence. ` +
-      `First verify OpenCode non-interactive model/provider output with: ${diagnosticCommand}. ` +
-      "If that minimal command is also empty, record this as an OpenCode CLI/provider non-interactive blocker; otherwise tighten the review prompt or increase the live dogfood command timeout."
-    );
+    throwEmptyStdoutError({ opencodeBin, model, phase });
   }
   const parsed = parseResult(result, phase, advisoryProfile);
   const output = JSON.stringify(parsed);
