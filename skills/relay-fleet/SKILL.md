@@ -69,6 +69,12 @@ node "${RELAY_SKILL_ROOT:-skills}/relay-fleet/scripts/relay-fleet.js" \
   --status
 ```
 
+Omit `--fleet-id` to list every fleet for the current repository without modifying manifests:
+
+```bash
+node "${RELAY_SKILL_ROOT:-skills}/relay-fleet/scripts/relay-fleet.js" --repo . --status
+```
+
 Deprecated primary entry points, to be sunset within one release: `relay-fleet.js --resume` is accepted as an alias for re-running the default drive; `relay-fleet.js --review` and `merge-queue.js` remain internal re-entry/debug paths but should not be the operator loop.
 
 Dry-run validates the leaf file and invokes child `dispatch.js --dry-run` for each leaf without writing a fleet manifest:
@@ -92,7 +98,7 @@ node "${RELAY_SKILL_ROOT:-skills}/relay-fleet/scripts/relay-fleet.js" \
 - Each child dispatch owns worktree creation, in-flight run checks, executor invocation, and child run manifest writes.
 - Fleet issue locks are checked before each child spawn; `dispatch.js --fleet-id` performs the durable lock during the actual child run.
 - Re-runs reconcile both directions: they re-adopt child run manifests whose `fleet_id` points back to this fleet, mark no-manifest interrupted children as `dispatch_failed_pre_manifest`, skip still-running child subprocesses, and continue recoverable work.
-- `--status` is read-only and uses the relay-dispatch fleet summary derivation rules.
+- `--status` is read-only and uses the relay-dispatch fleet summary derivation rules. Without `--fleet-id`, it lists repo-scoped fleets and their terminal/total child counts.
 
 ## SPOF
 

@@ -16,6 +16,7 @@ const {
   getFleetManifestPath,
   getFleetsDir,
   getManifestPath,
+  listFleetManifestPaths,
   listManifestPaths,
   requireValidFleetId,
 } = require("../../relay-dispatch/scripts/manifest/paths");
@@ -94,10 +95,11 @@ function usage() {
     "Usage: relay-fleet.js --repo <path> --fleet-id <id> [--leaves-file <path>] [options]",
     "       relay-fleet.js --repo <path> --fleet-id <id> --review [options]",
     "       relay-fleet.js --repo <path> --fleet-id <id> --status [--json]",
+    "       relay-fleet.js --repo <path> --status [--json]",
     "",
     "Options:",
     `  --repo <path>          ${modeLabel("--repo")} Repository root (default: current directory)`,
-    `  --fleet-id <id>       ${modeLabel("--fleet-id")} Fleet manifest id (required)`,
+    `  --fleet-id <id>       ${modeLabel("--fleet-id")} Fleet manifest id (required except repo-wide --status)`,
     `  --leaves-file <path>  ${MODE_VERBATIM_LABEL} JSON file with already-planned leaf contracts`,
     `  --resume             ${MODE_PARSED_LABEL} Deprecated alias for the default drive command`,
     `  --review             ${MODE_PARSED_LABEL} Deprecated review-only re-entry point`,
@@ -2123,6 +2125,57 @@ function formatStatusText(summary, operatorAttention) {
   return `${lines.join("\n")}\n`;
 }
 
+function fleetListingError(manifestPath, error) {
+  const message = String(error?.message || error).replace(/\s+/g, " ").trim();
+  return `${path.basename(manifestPath)}: ${message}`;
+}
+
+function fleetListingRow(repoRoot, manifestPath) {
+  const manifestFile = path.basename(manifestPath);
+  const fleetId = manifestFile.slice(0, -path.extname(manifestFile).length);
+  try {
+    const fleet = readFleetManifest(repoRoot, fleetId).data;
+    const summary = deriveFleetSummary(repoRoot, fleet);
+    return {
+      fleet_id: summary.fleet_id,
+      fleet_state: summary.fleet_state,
+      children_total: summary.total_children,
+      children_terminal: summary.children.filter(fleetChildIsTerminal).length,
+      updated_at: fleet.timestamps.updated_at || fleet.timestamps.created_at || null,
+    };
+  } catch (error) {
+    return {
+      fleet_id: fleetId,
+      fleet_state: "error",
+      children_total: null,
+      children_terminal: null,
+      updated_at: null,
+      error: fleetListingError(manifestPath, error),
+    };
+  }
+}
+
+function listFleetStatus(repoRoot) {
+  return listFleetManifestPaths(repoRoot)
+    .map((manifestPath) => fleetListingRow(repoRoot, manifestPath))
+    .sort((left, right) => left.fleet_id.localeCompare(right.fleet_id));
+}
+
+function formatFleetStatusListingText(rows) {
+  if (!rows.length) return "No fleets found for repository.\n";
+  const lines = [
+    `Fleets: ${rows.length}`,
+    "fleet_id | fleet_state | children_terminal/children_total | updated_at",
+  ];
+  for (const row of rows) {
+    const childCounts = row.children_total === null ? "-/-" : `${row.children_terminal}/${row.children_total}`;
+    const columns = [row.fleet_id, row.fleet_state, childCounts, row.updated_at || "-"];
+    if (row.error) columns.push(`error=${row.error}`);
+    lines.push(columns.join(" | "));
+  }
+  return `${lines.join("\n")}\n`;
+}
+
 function formatPreManifestRetryLine(summary, fleetId) {
   const failedLeaves = (summary?.children || [])
     .filter((child) => child.dispatch_status === DISPATCH_STATUS.DISPATCH_FAILED_PRE_MANIFEST)
@@ -2299,12 +2352,14 @@ const FLEET_TERMINAL_RUN_STATES = new Set([
   RUN_STATES.ESCALATED,
 ]);
 
+function fleetChildIsTerminal(child) {
+  return child.dispatch_status === DISPATCH_STATUS.DISPATCHED
+    && FLEET_TERMINAL_RUN_STATES.has(child.run_state);
+}
+
 function fleetChildrenAreTerminal(summary) {
   return summary.total_children > 0
-    && summary.children.every((child) => {
-      return child.dispatch_status === DISPATCH_STATUS.DISPATCHED
-        && FLEET_TERMINAL_RUN_STATES.has(child.run_state);
-    });
+    && summary.children.every(fleetChildIsTerminal);
 }
 
 function closeFleetIfTerminal(repoRoot, fleetId) {
@@ -2508,6 +2563,9 @@ function buildDriveResult({
 
 async function runFleet(options) {
   const repoRoot = getCanonicalRepoRoot(options.repo || ".");
+  if (options.status && !options.fleetId) {
+    return listFleetStatus(repoRoot);
+  }
   const fleetId = requireValidFleetId(options.fleetId);
   const manifestPath = getFleetManifestPath(repoRoot, fleetId);
 
@@ -2663,7 +2721,7 @@ async function main(argv = process.argv.slice(2)) {
       console.log(usage());
       return 0;
     }
-    if (!options.fleetId) {
+    if (!options.fleetId && !options.status) {
       throw new FleetInputError("--fleet-id is required");
     }
     if (options.status && (options.resume || options.leavesFile || options.dryRun)) {
@@ -2677,7 +2735,9 @@ async function main(argv = process.argv.slice(2)) {
     if (options.json) {
       console.log(JSON.stringify(result, null, 2));
     } else if (options.status) {
-      process.stdout.write(formatStatusText(result.summary, result.operator_attention));
+      process.stdout.write(Array.isArray(result)
+        ? formatFleetStatusListingText(result)
+        : formatStatusText(result.summary, result.operator_attention));
     } else {
       const summary = result.summary
         ? `fleet=${result.fleet_id} children=${result.summary.total_children}`
@@ -2686,7 +2746,7 @@ async function main(argv = process.argv.slice(2)) {
       const retryLine = result.summary ? formatPreManifestRetryLine(result.summary, result.fleet_id) : null;
       if (!result.ok && retryLine) console.log(retryLine);
     }
-    return result.ok ? 0 : 1;
+    return Array.isArray(result) ? 0 : (result.ok ? 0 : 1);
   } catch (error) {
     const message = error && error.message ? error.message : String(error);
     if (options?.json) {
@@ -2711,11 +2771,13 @@ module.exports = {
   buildPublishArgs,
   buildRedispatchArgs,
   buildReviewArgs,
+  formatFleetStatusListingText,
   formatStatusText,
   getFleetLeafReplacementPath,
   getFleetLeavesStorePath,
   getFleetRuntimePath,
   loadLeavesFile,
+  listFleetStatus,
   main,
   parseArgs,
   reconcileFleet,
