@@ -35,6 +35,11 @@ if (response.type === "error") {
   process.stderr.write(response.message || "transient gh error");
   process.exit(response.status || 1);
 }
+// Real gh (cli/cli#9390): zero checks → stderr message, empty stdout, exit 1.
+if (response.type === "no_checks" || (Array.isArray(response.checks) && response.checks.length === 0)) {
+  process.stderr.write(response.message || "no checks reported on 'issue-840-wait-for-check'\\n");
+  process.exit(response.status || 1);
+}
 process.stdout.write(JSON.stringify(response.checks));
 if (response.status) process.exit(response.status);
 `, "utf-8");
@@ -121,7 +126,8 @@ test("failed and cancelled checks use the check-failure exit and name each check
 });
 
 test("a PR with no configured checks succeeds explicitly", () => {
-  const { result } = runWait([{ checks: [] }]);
+  // Real gh contract: nonzero exit, stderr "no checks reported on …", empty stdout.
+  const { result } = runWait([{ type: "no_checks" }]);
   const summary = parseJsonOutput(result);
 
   assert.equal(result.status, EXIT.SUCCESS, result.stderr);

@@ -140,6 +140,16 @@ function normalizeChecks(rawChecks) {
     ));
 }
 
+function isNoChecksReported(error) {
+  // Real `gh pr checks --json` with zero checks exits nonzero, writes
+  // "no checks reported on '<branch>'" to stderr, and leaves stdout empty
+  // (cli/cli#9390 / checks.go populateStatusChecks). Treat that as [].
+  const stdout = String(error?.stdout || "").trim();
+  if (stdout !== "") return false;
+  const stderr = String(error?.stderr || error?.message || "");
+  return /no checks reported on/i.test(stderr);
+}
+
 function fetchChecks(repoPath, pr) {
   let output;
   try {
@@ -153,11 +163,13 @@ function fetchChecks(repoPath, pr) {
   } catch (error) {
     // gh uses nonzero status for pending and failed checks while still writing
     // the complete --json payload. Only an error without valid check JSON is
-    // a transient command/API failure that should consume the retry budget.
+    // a transient command/API failure that should consume the retry budget —
+    // except the real no-checks contract (empty stdout + stderr message).
     output = error?.stdout;
     try {
       return normalizeChecks(JSON.parse(String(output || "")));
     } catch {
+      if (isNoChecksReported(error)) return [];
       throw error;
     }
   }
