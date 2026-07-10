@@ -187,7 +187,7 @@ function writeChildRun(repoRoot, {
   return runId;
 }
 
-function waitFor(predicate, { timeoutMs = 15000, intervalMs = 25 } = {}) {
+function waitFor(predicate, { timeoutMs = 3000, intervalMs = 25 } = {}) {
   const started = Date.now();
   return new Promise((resolve, reject) => {
     const tick = () => {
@@ -207,7 +207,7 @@ function waitFor(predicate, { timeoutMs = 15000, intervalMs = 25 } = {}) {
   });
 }
 
-function runFleet(args, { relayHome, env = {}, timeout = 120000 } = {}) {
+function runFleet(args, { relayHome, env = {}, timeout = 30000 } = {}) {
   const result = spawnSync(process.execPath, [RELAY_FLEET_SCRIPT, ...args], {
     encoding: "utf-8",
     env: {
@@ -935,6 +935,69 @@ test("relay-fleet replacement matrix replaces only run_id-null pre-manifest fail
   assert.equal(Object.hasOwn(newChild, "last_error"), false);
   const persistedLeaves = JSON.parse(fs.readFileSync(getFleetLeavesStorePath(repoRoot, fleetId), "utf-8")).leaves;
   assert.deepEqual(persistedLeaves.map((leaf) => leaf.leaf_ref), [newLeaf.leaf_ref]);
+});
+
+test("relay-fleet replacement matrix rejects a replacement leaf_ref that collides with an unchanged sibling", () => {
+  for (const replaceableFirst of [true, false]) {
+    const { relayHome, repoRoot } = setupRepo(`relay-fleet-replace-collision-${replaceableFirst ? "first" : "last"}-`);
+    const fleetId = `fleet-replace-collision-${replaceableFirst ? "first" : "last"}`;
+    const oldLeaf = makeLeaf(repoRoot, 1, {
+      issue_number: 578,
+      leaf_ref: "leaf-old",
+      leaf_id: "leaf-old",
+      branch: "issue-578-leaf-old",
+    });
+    const unchangedLeaf = makeLeaf(repoRoot, 2, {
+      issue_number: 579,
+      leaf_ref: "leaf-unchanged",
+      leaf_id: "leaf-unchanged",
+      branch: "issue-579-leaf-unchanged",
+    });
+    const collidingLeaf = makeLeaf(repoRoot, 3, {
+      issue_number: oldLeaf.issue_number,
+      leaf_ref: unchangedLeaf.leaf_ref,
+      leaf_id: unchangedLeaf.leaf_id,
+      branch: "issue-578-leaf-collision",
+    });
+    const replaceableChild = {
+      leaf_ref: oldLeaf.leaf_ref,
+      run_id: null,
+      dispatch_status: DISPATCH_STATUS.DISPATCH_FAILED_PRE_MANIFEST,
+      last_error: "old pre-manifest failure",
+    };
+    const unchangedChild = {
+      leaf_ref: unchangedLeaf.leaf_ref,
+      run_id: null,
+      dispatch_status: DISPATCH_STATUS.PENDING,
+    };
+    createFleetManifest(repoRoot, {
+      fleetId,
+      children: replaceableFirst
+        ? [replaceableChild, unchangedChild]
+        : [unchangedChild, replaceableChild],
+    });
+    writePersistedFleetLeaves(repoRoot, fleetId, [oldLeaf, unchangedLeaf]);
+    const manifestPath = getFleetManifestPath(repoRoot, fleetId);
+    const leavesStorePath = getFleetLeavesStorePath(repoRoot, fleetId);
+    const manifestBefore = fs.readFileSync(manifestPath, "utf-8");
+    const storeBefore = fs.readFileSync(leavesStorePath, "utf-8");
+    const leavesFile = writeLeavesFile(repoRoot, [collidingLeaf, unchangedLeaf]);
+
+    const result = runFleet([
+      "--repo", repoRoot,
+      "--fleet-id", fleetId,
+      "--leaves-file", leavesFile,
+      "--json",
+    ], { relayHome });
+
+    assert.notEqual(result.status, 0);
+    assert.equal(
+      JSON.parse(result.stderr).error,
+      `--leaves-file differs from persisted fleet leaves for '${fleetId}'; refusing to overwrite an existing fleet`
+    );
+    assert.equal(fs.readFileSync(manifestPath, "utf-8"), manifestBefore);
+    assert.equal(fs.readFileSync(leavesStorePath, "utf-8"), storeBefore);
+  }
 });
 
 test("relay-fleet replacement matrix rolls back manifest when persisted leaves rewrite fails", () => {

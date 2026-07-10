@@ -458,6 +458,7 @@ function isReplaceableFleetChild(child) {
 function acceptedLeafReplacements(fleetChildren, persistedLeaves, leaves) {
   if (!Array.isArray(persistedLeaves) || leavesMatch(persistedLeaves, leaves)) return [];
   if (!issueSetsMatch(persistedLeaves, leaves)) return null;
+  if (new Set(leaves.map((leaf) => leaf.leaf_ref)).size !== leaves.length) return null;
 
   const childrenByRef = new Map(fleetChildren.map((child) => [child.leaf_ref, child]));
   const leavesByIssue = new Map(leaves.map((leaf) => [leaf.issue_number, leaf]));
@@ -473,6 +474,11 @@ function acceptedLeafReplacements(fleetChildren, persistedLeaves, leaves) {
       issue_number: persistedLeaf.issue_number,
     });
   }
+  const replacementsByOldRef = new Map(replacements.map((replacement) => [replacement.old_leaf_ref, replacement]));
+  const nextChildRefs = fleetChildren.map((child) => (
+    replacementsByOldRef.get(child.leaf_ref)?.new_leaf_ref || child.leaf_ref
+  ));
+  if (new Set(nextChildRefs).size !== nextChildRefs.length) return null;
   return replacements;
 }
 
@@ -495,23 +501,15 @@ function assertLeavesMatchFleetChildren(repoRoot, fleetId, leaves, { persistedLe
 function replaceFleetChildren(repoRoot, fleetId, replacements) {
   const replacementsByOldRef = new Map(replacements.map((replacement) => [replacement.old_leaf_ref, replacement]));
   updateFleetManifest(repoRoot, fleetId, (fleet) => {
-    const nextChildren = [];
-    const seenRefs = new Set();
-    for (const child of fleet.children) {
+    const nextChildren = fleet.children.map((child) => {
       const replacement = replacementsByOldRef.get(child.leaf_ref);
-      if (!replacement) {
-        nextChildren.push(child);
-        seenRefs.add(child.leaf_ref);
-        continue;
-      }
-      if (seenRefs.has(replacement.new_leaf_ref)) continue;
-      nextChildren.push({
+      if (!replacement) return child;
+      return {
         leaf_ref: replacement.new_leaf_ref,
         run_id: null,
         dispatch_status: DISPATCH_STATUS.PENDING,
-      });
-      seenRefs.add(replacement.new_leaf_ref);
-    }
+      };
+    });
     return { ...fleet, children: nextChildren };
   });
 }
