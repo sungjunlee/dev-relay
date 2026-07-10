@@ -79,6 +79,14 @@ Execution evidence preflight is script territory, not AI reviewer judgment. The 
 
 When preflight blocks, JSON output includes `executionEvidencePreflight.status`, `reason`, `reviewedHeadSha`, `evidenceHeadSha` when a valid artifact exposed one, and `nextAction=repair_execution_evidence`. The same preflight object reports optional `browserEvidence.present`, plus compact browser counts when present: `viewportCount`, `screenshotCount`, `consoleErrors`, and `inspectedStateCount`. When `execution-evidence.json` includes `browser_evidence`, screenshot paths must stay inside the run artifact directory unless the entry is explicitly hash-backed with `sha256`. Repair or regenerate `execution-evidence.json` for the reviewed HEAD, then rerun the same review command. Manual `--review-file` fallback paths intentionally bypass the preflight and keep the older fail-closed verdict override so operators can apply an already-produced verdict without weakening the execution evidence gate.
 
+## Codex Quota Exhaustion
+
+When the Codex CLI exits and its stdout/stderr matches the stable usage-limit prefix `You've hit your usage limit`, `invoke-reviewer-codex.js` fails immediately with the token `codex_quota_exhausted` plus the CLI's retry-at text verbatim. The CLI already exits promptly on quota — the adapter classifies at that failure point and does not retry or wait out the review timeout.
+
+**Stall-then-quota precursor:** Repeated full-timeout stalls whose raw responses only echo the prompt (no verdict) often precede a hard usage-limit wall. Treat that pattern as an operator signal to probe Codex quota before spending another review timeout.
+
+**Fallback lanes:** Switch the primary reviewer with `--reviewer cursor --reviewer-model grok-4.5-high`, or apply an already-produced verdict via the manual `--review-file` playbook (see Execution Evidence Preflight above for the intentional preflight bypass on that path).
+
 ## Codex-only Operation Regression
 
 Codex-only operation is covered as a regression for `policy.review_assurance=hardened`, not a Codex-only policy special case. When `roles.orchestrator`, `roles.executor`, and `roles.reviewer` are all `codex`, the runner still follows the same manifest policy contract used by any other role names. Advisory evidence is required for passing hardened rounds, advisory required findings block the pass, and strict execution evidence must bind to the reviewed head.

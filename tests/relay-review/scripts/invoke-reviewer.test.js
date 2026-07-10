@@ -297,6 +297,81 @@ setTimeout(() => {
   assert.match(stderr, /raw_response=/);
 });
 
+test("codex adapter classifies usage-limit stderr as codex_quota_exhausted", () => {
+  const { repoRoot, promptPath } = setupRepo();
+  const fakeDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-fake-codex-quota-"));
+  const usageLimitLine =
+    "ERROR: You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at 4:33 AM.";
+  const fakeCodex = writeExecutable(fakeDir, "fake-codex.js", `#!/usr/bin/env node
+process.stderr.write(${JSON.stringify(usageLimitLine + "\n")});
+process.exit(1);
+`);
+
+  let error;
+  try {
+    execFileSync("node", [
+      CODEX_SCRIPT,
+      "--repo", repoRoot,
+      "--prompt-file", promptPath,
+      "--model", "codex-quota-model",
+      "--json",
+    ], {
+      cwd: repoRoot,
+      encoding: "utf-8",
+      stdio: "pipe",
+      env: { ...process.env, RELAY_CODEX_BIN: fakeCodex },
+    });
+    assert.fail("expected invoke-reviewer-codex.js to fail on usage limit");
+  } catch (caught) {
+    error = caught;
+  }
+
+  assert.ok(error);
+  assert.notEqual(error.status, 0);
+  const stderr = String(error.stderr || "");
+  assert.match(stderr, /codex_quota_exhausted/);
+  assert.match(stderr, /try again at 4:33 AM/);
+  assert.match(stderr, /You've hit your usage limit/);
+  assert.match(stderr, /model=codex-quota-model/);
+  assert.doesNotMatch(stderr, /Codex reviewer primary_review timed out/);
+});
+
+test("codex adapter keeps generic failure message unchanged for non-quota errors", () => {
+  const { repoRoot, promptPath } = setupRepo();
+  const fakeDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-fake-codex-generic-"));
+  const fakeCodex = writeExecutable(fakeDir, "fake-codex.js", `#!/usr/bin/env node
+process.stderr.write("some generic failure\\n");
+process.exit(1);
+`);
+
+  let error;
+  try {
+    execFileSync("node", [
+      CODEX_SCRIPT,
+      "--repo", repoRoot,
+      "--prompt-file", promptPath,
+      "--json",
+    ], {
+      cwd: repoRoot,
+      encoding: "utf-8",
+      stdio: "pipe",
+      env: { ...process.env, RELAY_CODEX_BIN: fakeCodex },
+    });
+    assert.fail("expected invoke-reviewer-codex.js to fail");
+  } catch (caught) {
+    error = caught;
+  }
+
+  assert.ok(error);
+  assert.notEqual(error.status, 0);
+  const stderr = String(error.stderr || "");
+  assert.doesNotMatch(stderr, /codex_quota_exhausted/);
+  assert.match(
+    stderr,
+    /^Error: Codex reviewer primary_review failed; model=default; raw_response=.+; some generic failure\n$/
+  );
+});
+
 test("claude adapter can recover from a non-zero exit when stdout contains JSON", () => {
   const { repoRoot, promptPath } = setupRepo();
   const fakeDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-fake-claude-recover-"));

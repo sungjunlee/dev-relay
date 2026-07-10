@@ -59,6 +59,23 @@ function isExecTimeout(error) {
   return error && (error.code === "ETIMEDOUT" || error.signal === "SIGTERM" || error.signal === "SIGKILL");
 }
 
+/** Stable prefix of the Codex CLI usage-limit line (URL/time vary). */
+const CODEX_USAGE_LIMIT_SIGNATURE = "You've hit your usage limit";
+
+/**
+ * If stdout/stderr contain the usage-limit signature, return the matching line
+ * (includes the CLI's retry-at text). Otherwise null.
+ */
+function classifyCodexQuotaExhausted(error) {
+  const combined = `${String(error?.stdout || "")}\n${String(error?.stderr || "")}`;
+  if (!combined.includes(CODEX_USAGE_LIMIT_SIGNATURE)) return null;
+  const matchingLine = combined
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find((line) => line.includes(CODEX_USAGE_LIMIT_SIGNATURE));
+  return matchingLine || CODEX_USAGE_LIMIT_SIGNATURE;
+}
+
 function writeRawResponse(filePath, error) {
   const stdout = String(error?.stdout || "").trim();
   const stderr = String(error?.stderr || "").trim();
@@ -123,6 +140,13 @@ function main() {
         throw new Error(
           `Codex reviewer primary_review timed out after ${reviewTimeout} (${REVIEW_TIMEOUT_ENV}); ` +
           `model=${model || "default"}; raw_response=${rawResponsePath}`
+        );
+      }
+      const quotaLine = classifyCodexQuotaExhausted(error);
+      if (quotaLine) {
+        throw new Error(
+          `Codex reviewer primary_review failed; codex_quota_exhausted; model=${model || "default"}; ` +
+          `raw_response=${rawResponsePath}; ${quotaLine}`
         );
       }
       const recovered = readNonEmptyFile(resultPath);
