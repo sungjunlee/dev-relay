@@ -1306,11 +1306,26 @@ function findLatestRedispatchPrompt(runDir) {
 function refreshRedispatchDoneCriteria(prompt, doneCriteria) {
   const blockPattern = /((?:^|\n)Original Done Criteria \(scope anchor\):\r?\n<task-content source="[^"]+">\r?\n)([\s\S]*?)(\r?\n<\/task-content>)/;
   const match = blockPattern.exec(prompt);
-  if (!match) return prompt;
-  if (match[2] === doneCriteria) return prompt;
-  const refreshedBlock = match[1] + doneCriteria + match[3];
-  const blockEnd = match.index + match[0].length;
-  return prompt.slice(0, match.index) + refreshedBlock + prompt.slice(blockEnd);
+  if (match) {
+    if (match[2] === doneCriteria) return prompt;
+    const refreshedBlock = match[1] + doneCriteria + match[3];
+    const blockEnd = match.index + match[0].length;
+    return prompt.slice(0, match.index) + refreshedBlock + prompt.slice(blockEnd);
+  }
+
+  if (prompt.startsWith("Rubric recovery re-dispatch\n")) {
+    const criteriaHeader = "\nDone Criteria:\n";
+    const criteriaStart = prompt.lastIndexOf(criteriaHeader);
+    if (criteriaStart !== -1) {
+      const contentStart = criteriaStart + criteriaHeader.length;
+      const convergenceStart = prompt.indexOf("\n\n## Convergence context\n", contentStart);
+      const contentEnd = convergenceStart === -1 ? prompt.length : convergenceStart;
+      if (prompt.slice(contentStart, contentEnd) === doneCriteria) return prompt;
+      return prompt.slice(0, contentStart) + doneCriteria + prompt.slice(contentEnd);
+    }
+  }
+
+  return null;
 }
 
 function readTaskPrompt({ runDir, resumeMode, effectiveDoneCriteriaPath } = {}) {
@@ -1338,7 +1353,12 @@ function readTaskPrompt({ runDir, resumeMode, effectiveDoneCriteriaPath } = {}) 
           process.exit(1);
         }
         const doneCriteria = fs.readFileSync(effectiveDoneCriteriaPath, "utf-8").trim();
-        prompt = refreshRedispatchDoneCriteria(prompt, doneCriteria);
+        const refreshedPrompt = refreshRedispatchDoneCriteria(prompt, doneCriteria);
+        if (refreshedPrompt === null) {
+          console.error(`Error: cannot refresh Done Criteria in auto-discovered redispatch prompt: ${auto.path}`);
+          process.exit(1);
+        }
+        prompt = refreshedPrompt;
       }
       return {
         prompt,

@@ -31,6 +31,7 @@ const {
 const { buildDefaultRelayPolicy } = require("../../../skills/relay-dispatch/scripts/relay-policy");
 const { appendRunEvent, EVENTS, readRunEvents } = require("../../../skills/relay-dispatch/scripts/relay-events");
 const { evaluateReviewGate } = require("../../../skills/relay-merge/scripts/review-gate");
+const { buildRubricGateRedispatchPrompt } = require("../../../skills/relay-review/scripts/review-runner/redispatch");
 const { createEnforcementFixture } = require("./test-support");
 
 const SCRIPT = path.join(__dirname, "..", "..", "..", "skills", "relay-dispatch", "scripts", "dispatch.js");
@@ -2588,6 +2589,47 @@ test("dispatch resume refreshes the auto-discovered redispatch prompt from an am
   const resumedManifest = readManifest(first.manifestPath).data;
   assert.equal(resumedManifest.anchor.done_criteria_path, doneCriteriaPath);
   assert.equal(resumedManifest.anchor.done_criteria_source, "file");
+});
+
+test("dispatch resume refreshes an auto-discovered rubric-gate redispatch prompt without rewriting it (#883)", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  const capturePath = path.join(os.tmpdir(), `relay-dispatch-argv-${Date.now()}-rubric-gate-auto.json`);
+  writeResumeCaptureCodex(binDir, capturePath);
+  const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}`, RELAY_HOME: relayHome };
+  const doneCriteriaPath = path.join(repoRoot, "done-criteria.md");
+  fs.writeFileSync(doneCriteriaPath, "Original rubric-gate clause", "utf-8");
+
+  const first = JSON.parse(runDispatch(repoRoot, [
+    "-b", "issue-883-rubric-gate",
+    "--prompt", "first pass",
+    "--done-criteria-file", doneCriteriaPath,
+    "--json",
+  ], env));
+  const record = readManifest(first.manifestPath);
+  writeManifest(
+    first.manifestPath,
+    updateManifestState(record.data, STATES.CHANGES_REQUESTED, "re_dispatch_requested_changes"),
+    record.body
+  );
+
+  const artifact = buildRubricGateRedispatchPrompt({
+    status: "rubric_state_failed_closed",
+    rubricState: "missing",
+    rubricStatus: "missing",
+    reason: "rubric missing",
+    recoveryCommand: "repair rubric",
+  }, "Original rubric-gate clause", "file");
+  const redispatchPath = path.join(getRunDir(repoRoot, first.runId), "review-round-1-redispatch.md");
+  fs.writeFileSync(redispatchPath, artifact, "utf-8");
+  fs.writeFileSync(doneCriteriaPath, "Original rubric-gate clause\nAmended rubric-gate clause", "utf-8");
+
+  runDispatch(repoRoot, ["--run-id", first.runId, "--json"], env);
+
+  const captured = JSON.parse(fs.readFileSync(capturePath, "utf-8"));
+  assert.match(captured[captured.length - 1], /Original rubric-gate clause\nAmended rubric-gate clause/);
+  assert.equal(fs.readFileSync(redispatchPath, "utf-8"), artifact);
 });
 
 test("dispatch resume leaves an unchanged auto-discovered redispatch prompt byte-identical (#883)", () => {
