@@ -305,6 +305,9 @@ function appendRunEvent(repoRoot, runId, eventData) {
     ...(eventData.execution_evidence_hash !== undefined
       ? { execution_evidence_hash: normalizeEventValue(eventData.execution_evidence_hash) }
       : {}),
+    ...(eventData.next_action !== undefined
+      ? { next_action: normalizeEventValue(eventData.next_action) }
+      : {}),
     ...(eventData.before !== undefined
       ? { before: normalizeEventValue(eventData.before) }
       : {}),

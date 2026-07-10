@@ -3967,3 +3967,268 @@ test("relay-fleet --status surfaces missing_pr, merge_blocked, high_review_round
   // branch matches default, not eligible for stuck_child) produces zero items.
   assert.equal(attention.some((item) => item.leaf_ref === "leaf-healthy"), false);
 });
+
+test("relay-fleet stuck_child operator_attention derives next_action/detail from review_preflight_failed (#901)", () => {
+  const { relayHome, repoRoot } = setupRepo("relay-fleet-stuck-preflight-");
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "fleet-stuck-preflight-fake-"));
+  const fleetId = "fleet-stuck-preflight";
+  const {
+    formatStatusText: formatText,
+  } = require(RELAY_FLEET_SCRIPT);
+
+  function makeChildManifest(runId, leafId, { patch = (manifest) => manifest } = {}) {
+    fs.mkdirSync(getRunDir(repoRoot, runId), { recursive: true });
+    let manifest = createManifestSkeleton({
+      repoRoot,
+      runId,
+      branch: `${leafId}-branch`,
+      baseBranch: "main",
+      issueNumber: Number(runId.slice(6, 9)),
+      worktreePath: path.join(repoRoot, "wt", runId),
+      fleetId,
+      leafId,
+    });
+    fs.writeFileSync(path.join(getRunDir(repoRoot, runId), "rubric.yaml"), "rubric:\n  size_class: S\n", "utf-8");
+    manifest = { ...manifest, anchor: { ...(manifest.anchor || {}), rubric_path: "rubric.yaml" } };
+    manifest = updateManifestState(manifest, RUN_STATES.DISPATCHED, "await_dispatch_result");
+    manifest = patch(manifest);
+    writeManifest(getManifestPath(repoRoot, runId), manifest);
+    return runId;
+  }
+
+  function writePreflightEvent(runId, event) {
+    const eventsPath = path.join(getRunDir(repoRoot, runId), "events.jsonl");
+    fs.writeFileSync(eventsPath, `${JSON.stringify(event)}\n`, "utf-8");
+  }
+
+  const enrichedRun = "issue-901-20260710010101000-a1b2c3d4";
+  const supersededRun = "issue-902-20260710010101000-a1b2c3d4";
+  const bareRun = "issue-903-20260710010101000-a1b2c3d4";
+  const legacyEventRun = "issue-904-20260710010101000-a1b2c3d4";
+  const multiReasonRun = "issue-905-20260710010101000-a1b2c3d4";
+  const mergeOnlyRun = "issue-906-20260710010101000-a1b2c3d4";
+
+  makeChildManifest(enrichedRun, "leaf-enriched", {
+    patch: (manifest) => ({
+      ...manifest,
+      git: { ...manifest.git, pr_number: 901 },
+    }),
+  });
+  writePreflightEvent(enrichedRun, {
+    event: "review_preflight_failed",
+    round: 1,
+    reason: "branch is 2 commits behind origin/main; rebase and re-run",
+    next_action: "rebase_and_rerun",
+    preflight_type: "behind_base",
+  });
+
+  makeChildManifest(supersededRun, "leaf-superseded", {
+    patch: (manifest) => {
+      manifest = updateManifestState(manifest, RUN_STATES.REVIEW_PENDING, "await_review");
+      return {
+        ...manifest,
+        git: { ...manifest.git, pr_number: 902 },
+        review: { ...manifest.review, rounds: 1 },
+      };
+    },
+  });
+  writePreflightEvent(supersededRun, {
+    event: "review_preflight_failed",
+    round: 1,
+    reason: "stale artifact: recorded at old, reviewed at new",
+    next_action: "repair_execution_evidence",
+    preflight_type: "execution_evidence_fail",
+  });
+
+  // No events.jsonl — bare stuck_child, fail-open.
+  makeChildManifest(bareRun, "leaf-bare", {
+    patch: (manifest) => ({
+      ...manifest,
+      git: { ...manifest.git, pr_number: 903 },
+    }),
+  });
+
+  // Older event without next_action → detail only, key absent.
+  makeChildManifest(legacyEventRun, "leaf-legacy-event", {
+    patch: (manifest) => ({
+      ...manifest,
+      git: { ...manifest.git, pr_number: 904 },
+    }),
+  });
+  writePreflightEvent(legacyEventRun, {
+    event: "review_preflight_failed",
+    round: 1,
+    reason: "pre-261 run, no artifact",
+    preflight_type: "execution_evidence_missing",
+  });
+
+  // stuck_child + merge_blocked: enrich ONLY the stuck_child item.
+  makeChildManifest(multiReasonRun, "leaf-multi", {
+    patch: (manifest) => {
+      manifest = updateManifestState(manifest, RUN_STATES.REVIEW_PENDING, "await_review");
+      manifest = updateManifestState(manifest, RUN_STATES.READY_TO_MERGE, "ready");
+      manifest = updateManifestState(manifest, RUN_STATES.MERGE_BLOCKED, "merge_failed");
+      return { ...manifest, git: { ...manifest.git, pr_number: 905 } };
+    },
+  });
+  writePreflightEvent(multiReasonRun, {
+    event: "review_preflight_failed",
+    round: 1,
+    reason: "branch is 1 commit behind origin/main; rebase and re-run",
+    next_action: "rebase_and_rerun",
+    preflight_type: "behind_base",
+  });
+
+  // Non-stuck attention reason stays byte-identical even if a preflight event exists.
+  makeChildManifest(mergeOnlyRun, "leaf-merge-only", {
+    patch: (manifest) => {
+      manifest = updateManifestState(manifest, RUN_STATES.REVIEW_PENDING, "await_review");
+      manifest = updateManifestState(manifest, RUN_STATES.READY_TO_MERGE, "ready");
+      manifest = updateManifestState(manifest, RUN_STATES.MERGE_BLOCKED, "merge_failed");
+      // Mark terminal-for-fleet-review so stuck_child does not fire: MERGED.
+      // Wait — we need merge_blocked without stuck_child. MERGE_BLOCKED is not
+      // terminal for fleet review, so stuck_child would also fire. Keep a live
+      // runtime pid so stuck_child is suppressed.
+      return { ...manifest, git: { ...manifest.git, pr_number: 906 } };
+    },
+  });
+  writePreflightEvent(mergeOnlyRun, {
+    event: "review_preflight_failed",
+    round: 1,
+    reason: "should not attach to merge_blocked",
+    next_action: "rebase_and_rerun",
+    preflight_type: "behind_base",
+  });
+  // Keep a live runtime child so leaf-merge-only is not stuck_child.
+  const { getFleetRuntimePath } = require(RELAY_FLEET_SCRIPT);
+  const runtimePath = getFleetRuntimePath(repoRoot, fleetId);
+  fs.mkdirSync(path.dirname(runtimePath), { recursive: true });
+  fs.writeFileSync(runtimePath, `${JSON.stringify({
+    children: { "leaf-merge-only": { pid: process.pid, started_at: new Date().toISOString() } },
+  }, null, 2)}\n`, "utf-8");
+
+  createFleetManifest(repoRoot, {
+    fleetId,
+    children: [
+      { leaf_ref: "leaf-enriched", run_id: enrichedRun, dispatch_status: DISPATCH_STATUS.DISPATCHED },
+      { leaf_ref: "leaf-superseded", run_id: supersededRun, dispatch_status: DISPATCH_STATUS.DISPATCHED },
+      { leaf_ref: "leaf-bare", run_id: bareRun, dispatch_status: DISPATCH_STATUS.DISPATCHED },
+      { leaf_ref: "leaf-legacy-event", run_id: legacyEventRun, dispatch_status: DISPATCH_STATUS.DISPATCHED },
+      { leaf_ref: "leaf-multi", run_id: multiReasonRun, dispatch_status: DISPATCH_STATUS.DISPATCHED },
+      { leaf_ref: "leaf-merge-only", run_id: mergeOnlyRun, dispatch_status: DISPATCH_STATUS.DISPATCHED },
+    ],
+  });
+
+  const fakeGh = writeFakeGhDefaultBranch(tmpDir, "main");
+  const result = runFleet([
+    "--repo", repoRoot,
+    "--fleet-id", fleetId,
+    "--status",
+    "--json",
+  ], { relayHome, env: { RELAY_GH_BIN: fakeGh } });
+
+  assert.equal(result.status, 0, `${result.stderr}\n${result.stdout}`);
+  const payload = JSON.parse(result.stdout);
+  const attention = payload.operator_attention;
+
+  function item(leafRef, reason) {
+    return attention.find((entry) => entry.leaf_ref === leafRef && entry.reason === reason);
+  }
+
+  // Matrix row 1: newer preflight event → next_action + detail.
+  const enriched = item("leaf-enriched", "stuck_child");
+  assert.ok(enriched);
+  assert.equal(enriched.next_action, "rebase_and_rerun");
+  assert.equal(enriched.detail, "branch is 2 commits behind origin/main; rebase and re-run");
+
+  // Matrix row 2: superseded (round <= review.rounds) → no attachment.
+  const superseded = item("leaf-superseded", "stuck_child");
+  assert.ok(superseded);
+  assert.equal(Object.prototype.hasOwnProperty.call(superseded, "next_action"), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(superseded, "detail"), false);
+
+  // Matrix row 3: missing events → bare stuck_child, no crash.
+  const bare = item("leaf-bare", "stuck_child");
+  assert.ok(bare);
+  assert.deepEqual(bare, { leaf_ref: "leaf-bare", run_id: bareRun, reason: "stuck_child" });
+
+  // Matrix row 4: event without next_action → detail only, key ABSENT.
+  const legacy = item("leaf-legacy-event", "stuck_child");
+  assert.ok(legacy);
+  assert.equal(legacy.detail, "pre-261 run, no artifact");
+  assert.equal(Object.prototype.hasOwnProperty.call(legacy, "next_action"), false);
+
+  // Enrich ONLY stuck_child when multiple reasons fire on the same child.
+  const multiStuck = item("leaf-multi", "stuck_child");
+  const multiMerge = item("leaf-multi", "merge_blocked");
+  assert.ok(multiStuck);
+  assert.ok(multiMerge);
+  assert.equal(multiStuck.next_action, "rebase_and_rerun");
+  assert.equal(multiStuck.detail, "branch is 1 commit behind origin/main; rebase and re-run");
+  assert.deepEqual(multiMerge, {
+    leaf_ref: "leaf-multi",
+    run_id: multiReasonRun,
+    reason: "merge_blocked",
+  });
+
+  // Non-stuck reasons stay byte-identical even with a preflight event on disk.
+  const mergeOnly = item("leaf-merge-only", "merge_blocked");
+  assert.ok(mergeOnly);
+  assert.deepEqual(mergeOnly, {
+    leaf_ref: "leaf-merge-only",
+    run_id: mergeOnlyRun,
+    reason: "merge_blocked",
+  });
+  assert.equal(item("leaf-merge-only", "stuck_child"), undefined);
+
+  // formatStatusText: enriched inline; plain items byte-identical.
+  const plainLine = "  - leaf-bare: stuck_child (issue-903-20260710010101000-a1b2c3d4)";
+  const enrichedLine = "  - leaf-enriched: stuck_child (issue-901-20260710010101000-a1b2c3d4) → next: rebase_and_rerun — branch is 2 commits behind origin/main; rebase and re-run";
+  const detailOnlyLine = "  - leaf-legacy-event: stuck_child (issue-904-20260710010101000-a1b2c3d4) — pre-261 run, no artifact";
+  const text = formatText(payload.summary, attention);
+  assert.match(text, new RegExp(`^${plainLine.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "m"));
+  assert.match(text, new RegExp(`^${enrichedLine.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "m"));
+  assert.match(text, new RegExp(`^${detailOnlyLine.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "m"));
+  // Plain merge_blocked line unchanged from pre-#901 shape.
+  assert.match(text, /  - leaf-merge-only: merge_blocked \(issue-906-20260710010101000-a1b2c3d4\)/);
+
+  // Unreadable events fail open (corrupt JSONL does not crash).
+  const corruptRun = "issue-907-20260710010101000-a1b2c3d4";
+  makeChildManifest(corruptRun, "leaf-corrupt", {
+    patch: (manifest) => ({
+      ...manifest,
+      git: { ...manifest.git, pr_number: 907 },
+    }),
+  });
+  fs.writeFileSync(path.join(getRunDir(repoRoot, corruptRun), "events.jsonl"), "{not-json\n", "utf-8");
+  createFleetManifest(repoRoot, {
+    fleetId: "fleet-stuck-corrupt",
+    children: [
+      { leaf_ref: "leaf-corrupt", run_id: corruptRun, dispatch_status: DISPATCH_STATUS.DISPATCHED },
+    ],
+  });
+  const corruptResult = runFleet([
+    "--repo", repoRoot,
+    "--fleet-id", "fleet-stuck-corrupt",
+    "--status",
+    "--json",
+  ], { relayHome, env: { RELAY_GH_BIN: fakeGh } });
+  assert.equal(corruptResult.status, 0, `${corruptResult.stderr}\n${corruptResult.stdout}`);
+  const corruptAttention = JSON.parse(corruptResult.stdout).operator_attention;
+  const corruptItem = corruptAttention.find((entry) => entry.reason === "stuck_child");
+  assert.deepEqual(corruptItem, {
+    leaf_ref: "leaf-corrupt",
+    run_id: corruptRun,
+    reason: "stuck_child",
+  });
+
+  // Direct unit pin: formatStatusText plain item is byte-identical to the
+  // historical one-line shape (no next/detail suffix).
+  const plainOnly = formatText(
+    { fleet_id: "x", fleet_state: "draft", total_children: 0, by_dispatch_status: {}, by_run_state: {}, children: [] },
+    [{ leaf_ref: "leaf-a", run_id: "run-a", reason: "stuck_child" }]
+  );
+  assert.match(plainOnly, /^  - leaf-a: stuck_child \(run-a\)$/m);
+  assert.doesNotMatch(plainOnly, /→ next:/);
+  assert.doesNotMatch(plainOnly, / — /);
+});
