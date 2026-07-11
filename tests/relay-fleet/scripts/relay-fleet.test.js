@@ -200,6 +200,19 @@ function writeChildRun(repoRoot, {
   return runId;
 }
 
+function writeRunLeaseFixture(repoRoot, runId, {
+  pid = process.pid,
+  host = os.hostname(),
+} = {}) {
+  writeJson(path.join(getRunDir(repoRoot, runId), "lease.json"), {
+    pid,
+    pgid: 2147483647,
+    host,
+    started_at: new Date().toISOString(),
+    timeout_s: 3600,
+  });
+}
+
 function waitFor(predicate, { timeoutMs = 3000, intervalMs = 25 } = {}) {
   const started = Date.now();
   return new Promise((resolve, reject) => {
@@ -3344,6 +3357,208 @@ test("relay-fleet --resume skips a still-running review subprocess", async () =>
   fs.writeFileSync(releasePath, "go\n", "utf-8");
   await new Promise((resolve) => first.on("close", resolve));
   assert.equal(readManifest(getManifestPath(repoRoot, runId)).data.state, RUN_STATES.READY_TO_MERGE);
+});
+
+test("relay-fleet review drive treats live leases as running across review, publish, and redispatch guards", () => {
+  const { relayHome, repoRoot } = setupRepo("relay-fleet-live-lease-guards-");
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "fleet-live-lease-guards-fake-"));
+  const fleetId = "fleet-live-lease-guards";
+  const dispatchScript = writeFakeDispatchScript(tmpDir);
+  const reviewScript = writeFakeReviewScript(tmpDir);
+  const dispatchLog = path.join(tmpDir, "dispatch.log");
+  const reviewLog = path.join(tmpDir, "review.log");
+  const missingPublishScript = path.join(tmpDir, "must-not-run-publish.js");
+  const liveReviewRun = "issue-927-20260711010101000-a1b2c3d4";
+  const livePublishRun = "issue-928-20260711010101000-a1b2c3d4";
+  const liveRedispatchRun = "issue-929-20260711010101000-a1b2c3d4";
+  const deadReviewRun = "issue-930-20260711010101000-a1b2c3d4";
+  const foreignRedispatchRun = "issue-931-20260711010101000-a1b2c3d4";
+
+  function createRun(runId, leafRef, issueNumber, state) {
+    const manifestPath = getManifestPath(repoRoot, runId);
+    const initialState = state === RUN_STATES.PUBLISH_PENDING
+      ? RUN_STATES.DISPATCHED
+      : RUN_STATES.REVIEW_PENDING;
+    writeChildRun(repoRoot, {
+      runId,
+      branch: `issue-${issueNumber}-${leafRef}`,
+      issueNumber,
+      leafId: leafRef,
+      fleetId,
+      state: initialState,
+    });
+    if (state === RUN_STATES.CHANGES_REQUESTED) {
+      const record = readManifest(manifestPath);
+      writeManifest(
+        manifestPath,
+        updateManifestState(record.data, RUN_STATES.CHANGES_REQUESTED, "retry"),
+        record.body
+      );
+    } else if (state === RUN_STATES.PUBLISH_PENDING) {
+      const record = readManifest(manifestPath);
+      let manifest = record.data;
+      manifest = updateManifestState(manifest, RUN_STATES.INTERNAL_REVIEW_PENDING, "await_internal_review");
+      manifest = updateManifestState(manifest, RUN_STATES.PUBLISH_PENDING, "await_publish");
+      writeManifest(manifestPath, manifest, record.body);
+    }
+  }
+
+  createRun(liveReviewRun, "leaf-live-review", 927, RUN_STATES.REVIEW_PENDING);
+  createRun(livePublishRun, "leaf-live-publish", 928, RUN_STATES.PUBLISH_PENDING);
+  createRun(liveRedispatchRun, "leaf-live-redispatch", 929, RUN_STATES.CHANGES_REQUESTED);
+  createRun(deadReviewRun, "leaf-dead-review", 930, RUN_STATES.REVIEW_PENDING);
+  createRun(foreignRedispatchRun, "leaf-foreign-redispatch", 931, RUN_STATES.CHANGES_REQUESTED);
+
+  writeRunLeaseFixture(repoRoot, liveReviewRun);
+  writeRunLeaseFixture(repoRoot, livePublishRun);
+  writeRunLeaseFixture(repoRoot, liveRedispatchRun);
+  writeRunLeaseFixture(repoRoot, deadReviewRun, { pid: 2147483647 });
+  writeRunLeaseFixture(repoRoot, foreignRedispatchRun, { host: "foreign.example.invalid" });
+
+  createFleetManifest(repoRoot, {
+    fleetId,
+    children: [
+      { leaf_ref: "leaf-live-review", run_id: liveReviewRun, dispatch_status: DISPATCH_STATUS.DISPATCHED },
+      { leaf_ref: "leaf-live-publish", run_id: livePublishRun, dispatch_status: DISPATCH_STATUS.DISPATCHED },
+      {
+        leaf_ref: "leaf-live-redispatch",
+        run_id: liveRedispatchRun,
+        dispatch_status: DISPATCH_STATUS.DISPATCHED,
+        last_error: "operator-resumed",
+      },
+      { leaf_ref: "leaf-dead-review", run_id: deadReviewRun, dispatch_status: DISPATCH_STATUS.DISPATCHED },
+      { leaf_ref: "leaf-foreign-redispatch", run_id: foreignRedispatchRun, dispatch_status: DISPATCH_STATUS.DISPATCHED },
+    ],
+  });
+  advanceFleetManifestState(repoRoot, fleetId, FLEET_STATES.DISPATCHED);
+
+  const result = runFleet([
+    "--repo", repoRoot,
+    "--fleet-id", fleetId,
+    "--review",
+    "--dispatch-script", dispatchScript,
+    "--publish-script", missingPublishScript,
+    "--review-script", reviewScript,
+    "--json",
+  ], {
+    relayHome,
+    env: {
+      FAKE_DISPATCH_LOG: dispatchLog,
+      FAKE_REVIEW_LOG: reviewLog,
+    },
+  });
+
+  assert.notEqual(result.status, 0, `${result.stderr}\n${result.stdout}`);
+  const payload = JSON.parse(result.stdout);
+  const byLeaf = new Map(payload.reviewed_children.map((child) => [child.leaf_ref, child]));
+  const guardedPhases = {
+    "leaf-live-review": "review",
+    "leaf-live-publish": "publish",
+    "leaf-live-redispatch": "redispatch",
+  };
+  for (const [leafRef, phase] of Object.entries(guardedPhases)) {
+    assert.equal(byLeaf.get(leafRef).status, "skipped_running");
+    assert.equal(byLeaf.get(leafRef).steps[0].status, "skipped_running");
+    assert.equal(byLeaf.get(leafRef).steps[0].phase, phase);
+  }
+  assert.equal(byLeaf.get("leaf-dead-review").status, "complete");
+  assert.equal(byLeaf.get("leaf-foreign-redispatch").status, "complete");
+  assert.deepEqual(readJsonLines(dispatchLog).map((entry) => entry.runId), [foreignRedispatchRun]);
+  assert.deepEqual(
+    readJsonLines(reviewLog).map((entry) => entry.runId).sort(),
+    [deadReviewRun, foreignRedispatchRun].sort()
+  );
+  assert.equal(
+    readFleetManifest(repoRoot, fleetId).data.children
+      .find((child) => child.leaf_ref === "leaf-live-redispatch").last_error,
+    "operator-resumed"
+  );
+});
+
+test("relay-fleet status uses live local leases while dead and foreign leases remain stuck", () => {
+  const { relayHome, repoRoot } = setupRepo("relay-fleet-lease-attention-");
+  const fleetId = "fleet-lease-attention";
+  const runs = {
+    live: "issue-932-20260711010101000-a1b2c3d4",
+    dead: "issue-933-20260711010101000-a1b2c3d4",
+    foreign: "issue-934-20260711010101000-a1b2c3d4",
+    registry: "issue-935-20260711010101000-a1b2c3d4",
+  };
+
+  for (const [kind, runId] of Object.entries(runs)) {
+    writeChildRun(repoRoot, {
+      runId,
+      branch: `issue-${runId.slice(6, 9)}-leaf-${kind}`,
+      issueNumber: Number(runId.slice(6, 9)),
+      leafId: `leaf-${kind}`,
+      fleetId,
+      state: RUN_STATES.DISPATCHED,
+    });
+  }
+  writeRunLeaseFixture(repoRoot, runs.live);
+  writeRunLeaseFixture(repoRoot, runs.dead, { pid: 2147483647 });
+  writeRunLeaseFixture(repoRoot, runs.foreign, { host: "foreign.example.invalid" });
+  fs.mkdirSync(path.dirname(getFleetRuntimePath(repoRoot, fleetId)), { recursive: true });
+  writeJson(getFleetRuntimePath(repoRoot, fleetId), {
+    fleet_id: fleetId,
+    children: {
+      "leaf-registry": { pid: process.pid, phase: "dispatch", run_id: runs.registry },
+    },
+  });
+  createFleetManifest(repoRoot, {
+    fleetId,
+    children: Object.entries(runs).map(([kind, runId]) => ({
+      leaf_ref: `leaf-${kind}`,
+      run_id: runId,
+      dispatch_status: DISPATCH_STATUS.DISPATCHED,
+    })),
+  });
+
+  const result = runFleet([
+    "--repo", repoRoot,
+    "--fleet-id", fleetId,
+    "--status",
+    "--json",
+  ], { relayHome });
+
+  assert.equal(result.status, 0, `${result.stderr}\n${result.stdout}`);
+  const attention = JSON.parse(result.stdout).operator_attention;
+  const stuckLeaves = attention
+    .filter((item) => item.reason === "stuck_child")
+    .map((item) => item.leaf_ref)
+    .sort();
+  assert.deepEqual(stuckLeaves, ["leaf-dead", "leaf-foreign"]);
+});
+
+test("relay-fleet pre-manifest fan-out liveness remains registry-only without a run id", () => {
+  const { repoRoot } = setupRepo("relay-fleet-pre-manifest-liveness-");
+  const fleetId = "fleet-pre-manifest-liveness";
+  const liveLeaf = makeLeaf(repoRoot, 1, { leaf_ref: "leaf-live-registry", issue_number: 936 });
+  const missingLeaf = makeLeaf(repoRoot, 2, { leaf_ref: "leaf-no-registry", issue_number: 937 });
+  createFleetManifest(repoRoot, {
+    fleetId,
+    children: [liveLeaf, missingLeaf].map((leaf) => ({
+      leaf_ref: leaf.leaf_ref,
+      run_id: null,
+      dispatch_status: DISPATCH_STATUS.DISPATCHING,
+    })),
+  });
+  fs.mkdirSync(path.dirname(getFleetRuntimePath(repoRoot, fleetId)), { recursive: true });
+  writeJson(getFleetRuntimePath(repoRoot, fleetId), {
+    fleet_id: fleetId,
+    children: {
+      [liveLeaf.leaf_ref]: { pid: process.pid, phase: "dispatch" },
+    },
+  });
+
+  const fleet = reconcileFleet(repoRoot, fleetId, [liveLeaf, missingLeaf]);
+  const byLeaf = new Map(fleet.children.map((child) => [child.leaf_ref, child]));
+  assert.equal(byLeaf.get(liveLeaf.leaf_ref).dispatch_status, DISPATCH_STATUS.DISPATCHING);
+  assert.equal(byLeaf.get(liveLeaf.leaf_ref).run_id, null);
+  assert.equal(
+    byLeaf.get(missingLeaf.leaf_ref).dispatch_status,
+    DISPATCH_STATUS.DISPATCH_FAILED_PRE_MANIFEST
+  );
 });
 
 test("relay-fleet --status without --fleet-id lists every repo fleet in deterministic text rows", () => {
