@@ -376,8 +376,9 @@ test("codex adapter prefers quota classification when quota output overlaps time
   const usageLimitLine =
     "ERROR: You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at 5:47 PM.";
   const fakeCodex = writeExecutable(fakeDir, "fake-codex.js", `#!/usr/bin/env node
-process.stderr.write(${JSON.stringify(usageLimitLine + "\n")});
-setTimeout(() => {}, 1000);
+const fs = require("fs");
+fs.writeSync(2, ${JSON.stringify(usageLimitLine + "\n")});
+setTimeout(() => {}, 10000);
 `);
 
   let error;
@@ -391,8 +392,8 @@ setTimeout(() => {}, 1000);
       cwd: repoRoot,
       encoding: "utf-8",
       stdio: "pipe",
-      timeout: 5000,
-      env: { ...process.env, RELAY_CODEX_BIN: fakeCodex, RELAY_CODEX_REVIEW_TIMEOUT: "50ms" },
+      timeout: 20000,
+      env: { ...process.env, RELAY_CODEX_BIN: fakeCodex, RELAY_CODEX_REVIEW_TIMEOUT: "2s" },
     });
     assert.fail("expected invoke-reviewer-codex.js to fail on usage limit");
   } catch (caught) {
