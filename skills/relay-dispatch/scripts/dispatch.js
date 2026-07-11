@@ -1210,10 +1210,52 @@ function isDispatchClaimStale(claimPath) {
   }
 }
 
+const DISPATCH_RECLAIM_GUARD_PREFIX = ".dispatch-claim.reclaim-";
+
+function acquireDispatchReclaimGuard(runDir) {
+  const guardName = `${DISPATCH_RECLAIM_GUARD_PREFIX}${process.pid}-${crypto.randomBytes(8).toString("hex")}`;
+  const guardPath = path.join(runDir, guardName);
+  let guardFd;
+  let keepGuard = false;
+  try {
+    guardFd = fs.openSync(guardPath, "wx");
+    fs.writeFileSync(guardFd, JSON.stringify({ pid: process.pid, claimed_at: new Date().toISOString() }));
+    fs.closeSync(guardFd);
+    guardFd = undefined;
+
+    const contenders = fs.readdirSync(runDir)
+      .filter((entry) => entry.startsWith(DISPATCH_RECLAIM_GUARD_PREFIX))
+      .sort();
+    const liveContenders = [];
+    for (const contender of contenders) {
+      const contenderPath = path.join(runDir, contender);
+      if (contender === guardName || !isDispatchClaimStale(contenderPath)) {
+        liveContenders.push(contender);
+        continue;
+      }
+      try {
+        fs.unlinkSync(contenderPath);
+      } catch {
+        return null;
+      }
+    }
+    keepGuard = liveContenders[0] === guardName;
+    return keepGuard ? guardPath : null;
+  } catch {
+    if (guardFd !== undefined) fs.closeSync(guardFd);
+    return null;
+  } finally {
+    if (!keepGuard) {
+      try { fs.unlinkSync(guardPath); } catch {}
+    }
+  }
+}
+
 function isRetryCompatibleRunDir(runDir) {
   if (!fs.existsSync(runDir)) return false;
   const entries = fs.readdirSync(runDir).filter((entry) => entry !== ".DS_Store");
-  const nonClaimEntries = entries.filter((entry) => entry !== ".dispatch-claim");
+  const nonClaimEntries = entries.filter((entry) => entry !== ".dispatch-claim"
+    && !entry.startsWith(DISPATCH_RECLAIM_GUARD_PREFIX));
   if (nonClaimEntries.length > 1
     || (nonClaimEntries.length === 1 && nonClaimEntries[0] !== "done-criteria.md")) {
     return false;
@@ -1232,7 +1274,9 @@ function claimRetryCompatibleRunDir(runDir) {
   }
 
   const claimPath = path.join(runDir, ".dispatch-claim");
-  for (let attempt = 0; attempt < 2; attempt += 1) {
+  const hasReclaimGuard = () => fs.readdirSync(runDir)
+    .some((entry) => entry.startsWith(DISPATCH_RECLAIM_GUARD_PREFIX));
+  if (!fs.existsSync(claimPath) && !hasReclaimGuard()) {
     let claimFd;
     try {
       claimFd = fs.openSync(claimPath, "wx");
@@ -1245,15 +1289,36 @@ function claimRetryCompatibleRunDir(runDir) {
         try { fs.unlinkSync(claimPath); } catch {}
       }
       if (error.code !== "EEXIST") throw error;
-      if (!isDispatchClaimStale(claimPath)) return null;
-      try {
-        fs.unlinkSync(claimPath);
-      } catch (unlinkError) {
-        if (unlinkError.code !== "ENOENT") return null;
-      }
     }
   }
-  return null;
+
+  const guardPath = acquireDispatchReclaimGuard(runDir);
+  if (!guardPath) return null;
+  let claimFd;
+  let createdClaim = false;
+  try {
+    if (fs.existsSync(claimPath) && !isDispatchClaimStale(claimPath)) return null;
+    if (fs.existsSync(claimPath)) fs.unlinkSync(claimPath);
+    claimFd = fs.openSync(claimPath, "wx");
+    createdClaim = true;
+    try {
+      fs.writeFileSync(claimFd, JSON.stringify({ pid: process.pid, claimed_at: new Date().toISOString() }));
+    } finally {
+      fs.closeSync(claimFd);
+      claimFd = undefined;
+    }
+    return claimPath;
+  } catch {
+    if (claimFd !== undefined) {
+      try { fs.closeSync(claimFd); } catch {}
+    }
+    if (createdClaim) {
+      try { fs.unlinkSync(claimPath); } catch {}
+    }
+    return null;
+  } finally {
+    try { fs.unlinkSync(guardPath); } catch {}
+  }
 }
 
 function isCanonicalPlannerDoneCriteriaPath(repoRoot, runId, doneCriteriaPath) {

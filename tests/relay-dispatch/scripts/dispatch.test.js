@@ -5134,6 +5134,10 @@ test("dispatch reclaims a claim owned by a real exited process", async () => {
     pid: deadPid,
     claimed_at: new Date().toISOString(),
   }));
+  fs.writeFileSync(path.join(runDir, `.dispatch-claim.reclaim-${deadPid}-orphaned`), JSON.stringify({
+    pid: deadPid,
+    claimed_at: new Date().toISOString(),
+  }));
 
   const rubricFile = path.join(repoRoot, "stale-claim-rubric.yaml");
   fs.writeFileSync(rubricFile, "rubric:\n  factors:\n    - name: stale reclaim\n      target: dispatch proceeds\n", "utf-8");
@@ -5150,6 +5154,57 @@ test("dispatch reclaims a claim owned by a real exited process", async () => {
   });
 
   assert.equal(JSON.parse(output).status, "completed");
+});
+
+test("concurrent retries of one stale claim allow exactly one dispatch", async () => {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  writeFakeCodex(binDir);
+  const runId = "stale-claim-race-20260711010101000-deadbeef";
+  const runDir = getRunDir(repoRoot, runId);
+  fs.mkdirSync(runDir, { recursive: true });
+
+  const exitedOwner = spawn(process.execPath, ["-e", "process.exit(0)"], { stdio: "ignore" });
+  const deadPid = exitedOwner.pid;
+  await new Promise((resolve, reject) => {
+    exitedOwner.once("exit", resolve);
+    exitedOwner.once("error", reject);
+  });
+  fs.writeFileSync(path.join(runDir, ".dispatch-claim"), JSON.stringify({
+    pid: deadPid,
+    claimed_at: new Date().toISOString(),
+  }));
+
+  const markerPath = path.join(os.tmpdir(), `relay-stale-claim-race-${process.pid}-${Date.now()}.json`);
+  const rubricFile = path.join(repoRoot, "stale-claim-race-rubric.yaml");
+  fs.writeFileSync(rubricFile, "rubric:\n  factors:\n    - name: serialized reclaim\n      target: exactly one retry proceeds\n", "utf-8");
+  const args = withRequiredRubric([
+    "--run-id", runId,
+    "-b", "stale-claim-race",
+    "--prompt", "concurrent retry after hard kill",
+    "--rubric-file", rubricFile,
+    "--json",
+  ]);
+  const env = {
+    ...process.env,
+    PATH: `${binDir}:${process.env.PATH}`,
+    RELAY_HOME: relayHome,
+    RELAY_TEST_AFTER_WORKTREE_CREATE_PAUSE_MS: "1500",
+    RELAY_TEST_AFTER_WORKTREE_CREATE_MARKER: markerPath,
+  };
+  const children = [0, 1].map(() => spawn(process.execPath, [SCRIPT, repoRoot, ...args], {
+    cwd: repoRoot,
+    env,
+    stdio: ["ignore", "pipe", "pipe"],
+  }));
+  const results = await Promise.all(children.map(waitForDispatchExit));
+  try { fs.unlinkSync(markerPath); } catch {}
+
+  assert.equal(results.filter((result) => result.code === 0).length, 1);
+  const refused = results.find((result) => result.code !== 0);
+  assert.ok(refused);
+  assert.match(refused.stderr, /Refusing to overwrite existing run dir/);
 });
 
 test("exit cleanup releases the fleet issue lock when claim release throws", () => {
