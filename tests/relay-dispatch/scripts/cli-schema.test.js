@@ -192,6 +192,7 @@ const HELP_COMMANDS = [
   ["recover-state", path.join(__dirname, "..", "..", "..", "skills", "relay-dispatch", "scripts", "recover-state.js")],
   ["reliability-report", path.join(__dirname, "..", "..", "..", "skills", "relay-dispatch", "scripts", "reliability-report.js")],
   ["review-runner", path.join(__dirname, "..", "..", "..", "skills", "relay-review", "scripts", "review-runner.js")],
+  ["run-full-gate", path.join(__dirname, "..", "..", "..", "skills", "relay-merge", "scripts", "run-full-gate.js")],
 ];
 
 for (const [commandName, scriptPath] of HELP_COMMANDS) {
