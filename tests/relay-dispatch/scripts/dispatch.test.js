@@ -19,6 +19,7 @@ const {
   updateManifestState,
   writeManifest,
 } = require("../../../skills/relay-dispatch/scripts/relay-manifest");
+const { getFleetIssueLockPath } = require("../../../skills/relay-dispatch/scripts/manifest/paths");
 const { buildPrBody, pushAndOpenPR, resolveBranchRemote } = require("../../../skills/relay-dispatch/scripts/dispatch-publish");
 const { EXECUTION_EVIDENCE_FILENAME } = require("../../../skills/relay-dispatch/scripts/execution-evidence");
 const { parseModelHints } = require("../../../skills/relay-dispatch/scripts/model-hints");
@@ -5111,6 +5112,92 @@ test("dispatch refuses a concurrent new dispatch while its empty run dir is clai
 
   assert.equal(firstResult.code, 0, firstResult.stderr);
   assert.equal(fs.existsSync(path.join(getRunDir(repoRoot, runId), ".dispatch-claim")), false);
+});
+
+test("dispatch reclaims a claim owned by a real exited process", async () => {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  writeFakeCodex(binDir);
+  const runId = "stale-claim-20260711010101000-deadbeef";
+  const runDir = getRunDir(repoRoot, runId);
+  fs.mkdirSync(runDir, { recursive: true });
+
+  const exitedOwner = spawn(process.execPath, ["-e", "process.exit(0)"], { stdio: "ignore" });
+  const deadPid = exitedOwner.pid;
+  await new Promise((resolve, reject) => {
+    exitedOwner.once("exit", resolve);
+    exitedOwner.once("error", reject);
+  });
+  assert.throws(() => process.kill(deadPid, 0), (error) => error.code === "ESRCH");
+  fs.writeFileSync(path.join(runDir, ".dispatch-claim"), JSON.stringify({
+    pid: deadPid,
+    claimed_at: new Date().toISOString(),
+  }));
+
+  const rubricFile = path.join(repoRoot, "stale-claim-rubric.yaml");
+  fs.writeFileSync(rubricFile, "rubric:\n  factors:\n    - name: stale reclaim\n      target: dispatch proceeds\n", "utf-8");
+  const output = runDispatch(repoRoot, [
+    "--run-id", runId,
+    "-b", "stale-claim-retry",
+    "--prompt", "retry after hard kill",
+    "--rubric-file", rubricFile,
+    "--json",
+  ], {
+    ...process.env,
+    PATH: `${binDir}:${process.env.PATH}`,
+    RELAY_HOME: relayHome,
+  });
+
+  assert.equal(JSON.parse(output).status, "completed");
+});
+
+test("exit cleanup releases the fleet issue lock when claim release throws", () => {
+  const { repoRoot, relayHome } = setupRepo();
+  process.env.RELAY_HOME = relayHome;
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
+  writeFakeCodex(binDir);
+  const markerPath = path.join(repoRoot, "exit-cleanup-marker.json");
+  const preloadPath = writePreloadScript(binDir, "claim-release-failure-preload.js", `
+const fs = require("fs");
+const path = require("path");
+const originalUnlinkSync = fs.unlinkSync;
+const originalWriteFileSync = fs.writeFileSync;
+let exiting = false;
+process.prependListener("exit", () => { exiting = true; });
+fs.writeFileSync = function writeFileSync(targetPath) {
+  const result = originalWriteFileSync.apply(this, arguments);
+  if (String(targetPath) === process.env.RELAY_TEST_AFTER_WORKTREE_CREATE_MARKER) {
+    setImmediate(() => process.exit(0));
+  }
+  return result;
+};
+fs.unlinkSync = function unlinkSync(targetPath) {
+  if (exiting && path.basename(String(targetPath)) === ".dispatch-claim") {
+    const error = new Error("injected claim release failure");
+    error.code = "EIO";
+    throw error;
+  }
+  return originalUnlinkSync.apply(this, arguments);
+};`);
+  const env = withNodePreload({
+    ...process.env,
+    PATH: `${binDir}:${process.env.PATH}`,
+    RELAY_HOME: relayHome,
+    RELAY_TEST_AFTER_WORKTREE_CREATE_PAUSE_MS: "30000",
+    RELAY_TEST_AFTER_WORKTREE_CREATE_MARKER: markerPath,
+  }, preloadPath);
+
+  const result = spawnSync(process.execPath, [SCRIPT, repoRoot, ...withRequiredRubric([
+    "-b", "issue-918",
+    "--prompt", "verify ordered cleanup",
+    "--fleet-id", "issue-918-cleanup",
+    "--json",
+  ])], { cwd: repoRoot, encoding: "utf-8", env });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(fs.existsSync(markerPath), true);
+  assert.equal(fs.existsSync(getFleetIssueLockPath(repoRoot, 918)), false);
 });
 
 test("dispatch cleans up tmp rubric files when atomic rubric persistence fails", () => {

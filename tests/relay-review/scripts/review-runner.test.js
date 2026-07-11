@@ -951,7 +951,7 @@ test("malformed or missing run_id cannot replace the missing Done Criteria error
     }), (error) => {
       assert.match(error.message, /Manifest anchor\.done_criteria_path points to a missing file/);
       assert.doesNotMatch(error.message, /Newer runs persist a run-dir copy at/);
-      assert.doesNotMatch(error.message, /runId/);
+      assert.doesNotMatch(error.message, /\.\.\/malformed/);
       return true;
     });
   }
