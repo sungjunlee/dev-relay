@@ -31,6 +31,23 @@ test("reports non-literal JSON field values at pr view call sites", () => {
   assert.match(errors[0], /fake-gh\.js/);
 });
 
+test("enumerates pr view fields from an argv variable assembled separately", () => {
+  const callSites = extractPrViewCallSites(
+    `const args = [
+      "pr", "view", String(prNumber),
+      "--json", "number,headRefName,headRefOid",
+    ];
+    execGhJson(repoRoot, args);`,
+    "skills/example.js",
+  );
+  assert.deepEqual(callSites, [{
+    file: "skills/example.js",
+    line: 2,
+    fields: "number,headRefName,headRefOid",
+    valueDescription: 'string "number,headRefName,headRefOid"',
+  }]);
+});
+
 test("#894 regression: missing title-bearing merge fields names finalize-run", () => {
   const titleBearingFields = "baseRefName,comments,commits,mergeable,statusCheckRollup,headRefOid,title";
   const registryWithoutTitleBearingFields = Object.fromEntries(

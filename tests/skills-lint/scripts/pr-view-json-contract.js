@@ -1,8 +1,6 @@
 const fs = require("node:fs");
 const path = require("node:path");
 
-const CALL_NAMES = new Set(["gh", "execGh", "execFileSync"]);
-
 function tokenize(source) {
   const tokens = [];
   let index = 0;
@@ -78,44 +76,51 @@ function tokenize(source) {
   return tokens;
 }
 
-function matchingParen(tokens, openIndex) {
-  let depth = 0;
-  for (let index = openIndex; index < tokens.length; index += 1) {
-    if (tokens[index].value === "(") depth += 1;
-    if (tokens[index].value === ")") depth -= 1;
-    if (depth === 0) return index;
-  }
-  return tokens.length - 1;
-}
-
 function nextValueToken(tokens, index, end) {
   while (index < end && [",", "[", "]"].includes(tokens[index].value)) index += 1;
   return tokens[index];
 }
 
+function enclosingArgvEnd(tokens, tokenIndex) {
+  const openings = [];
+  const pairs = { "(": ")", "[": "]" };
+  for (let index = 0; index < tokenIndex; index += 1) {
+    const value = tokens[index].value;
+    if (pairs[value]) openings.push({ index, value });
+    else if (value === ")" || value === "]") openings.pop();
+  }
+  const opening = openings.at(-1);
+  if (!opening) return tokens.length;
+
+  let depth = 0;
+  for (let index = opening.index; index < tokens.length; index += 1) {
+    if (tokens[index].value === opening.value) depth += 1;
+    if (tokens[index].value === pairs[opening.value]) depth -= 1;
+    if (depth === 0) return index;
+  }
+  return tokens.length;
+}
+
 function extractPrViewCallSites(source, file) {
   const tokens = tokenize(source);
   const callSites = [];
-  for (let index = 0; index < tokens.length - 1; index += 1) {
-    if (!CALL_NAMES.has(tokens[index].value) || tokens[index + 1].value !== "(") continue;
-    const end = matchingParen(tokens, index + 1);
-    const call = tokens.slice(index + 2, end);
-    const prIndex = call.findIndex((token, offset) => (
-      token.type === "string" && token.value === "pr" &&
-      call.slice(offset + 1).find((candidate) => candidate.type === "string")?.value === "view"
+  for (let index = 0; index < tokens.length; index += 1) {
+    if (tokens[index].type !== "string" || tokens[index].value !== "pr") continue;
+    const end = enclosingArgvEnd(tokens, index);
+    const view = nextValueToken(tokens, index + 1, end);
+    if (view?.type !== "string" || view.value !== "view") continue;
+    const viewIndex = tokens.indexOf(view, index + 1);
+    const jsonIndex = tokens.findIndex((token, offset) => (
+      offset > viewIndex && offset < end && token.type === "string" && token.value === "--json"
     ));
-    if (prIndex === -1) { index = end; continue; }
-    const viewIndex = call.findIndex((token, offset) => offset > prIndex && token.type === "string" && token.value === "view");
-    const jsonIndex = call.findIndex((token, offset) => offset > viewIndex && token.type === "string" && token.value === "--json");
-    if (jsonIndex === -1) { index = end; continue; }
-    const value = nextValueToken(call, jsonIndex + 1, call.length);
+    if (jsonIndex === -1) continue;
+    const value = nextValueToken(tokens, jsonIndex + 1, end);
     callSites.push({
       file,
       line: tokens[index].line,
       fields: value?.type === "string" ? value.value : null,
       valueDescription: value ? `${value.type} ${JSON.stringify(value.value)}` : "missing value",
     });
-    index = end;
   }
   return callSites;
 }
