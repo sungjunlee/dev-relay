@@ -204,7 +204,7 @@ const COMMAND_FLAGS = {
     "--dry-run", "--json", "--help",
   ],
   "reconcile-run": [
-    "--repo", "--run-id", "--dry-run", "--json", "--help",
+    "--repo", "--run-id", "--test-result-file", "--dry-run", "--json", "--help",
   ],
   "relay-config": [
     "--profile", "--effective", "--phase", "--executor", "--reviewer", "--model",
