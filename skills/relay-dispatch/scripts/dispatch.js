@@ -1194,11 +1194,88 @@ function failRunDirCollision(runId, manifestPath) {
   process.exit(1);
 }
 
+function readDispatchOwnerFile(ownerPath) {
+  let bytes;
+  let owner;
+  try {
+    bytes = fs.readFileSync(ownerPath, "utf-8");
+    owner = JSON.parse(bytes);
+  } catch {
+    return null;
+  }
+  if (!Number.isInteger(owner?.pid) || owner.pid <= 0) return null;
+  return { bytes, owner };
+}
+
+function isDispatchOwnerStale(owner) {
+  try {
+    process.kill(owner.pid, 0);
+    return false;
+  } catch (error) {
+    return error.code === "ESRCH";
+  }
+}
+
+function isDispatchClaimStale(claimPath) {
+  const validated = readDispatchOwnerFile(claimPath);
+  return validated !== null && isDispatchOwnerStale(validated.owner);
+}
+
+const DISPATCH_RECLAIM_GUARD_NAME = ".dispatch-claim.reclaim-lock";
+
+function acquireDispatchReclaimGuard(runDir) {
+  const guardPath = path.join(runDir, DISPATCH_RECLAIM_GUARD_NAME);
+  const nonce = crypto.randomBytes(16).toString("hex");
+  const payload = JSON.stringify({ pid: process.pid, claimed_at: new Date().toISOString(), nonce });
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    let guardFd;
+    try {
+      guardFd = fs.openSync(guardPath, "wx");
+      try {
+        fs.writeFileSync(guardFd, payload);
+      } finally {
+        fs.closeSync(guardFd);
+      }
+      const readback = readDispatchOwnerFile(guardPath);
+      if (readback?.owner.pid !== process.pid || readback.owner.nonce !== nonce) return null;
+      return { guardPath, nonce };
+    } catch (error) {
+      if (guardFd !== undefined) {
+        try { fs.closeSync(guardFd); } catch {}
+      }
+      if (error.code !== "EEXIST" || attempt > 0) return null;
+      const staleGuard = readDispatchOwnerFile(guardPath);
+      if (!staleGuard || !isDispatchOwnerStale(staleGuard.owner)) return null;
+      let currentBytes;
+      try {
+        currentBytes = fs.readFileSync(guardPath, "utf-8");
+      } catch {
+        return null;
+      }
+      if (currentBytes !== staleGuard.bytes) return null;
+      try {
+        fs.unlinkSync(guardPath);
+      } catch (unlinkError) {
+        if (unlinkError.code !== "ENOENT") return null;
+      }
+    }
+  }
+  return null;
+}
+
 function isRetryCompatibleRunDir(runDir) {
   if (!fs.existsSync(runDir)) return false;
   const entries = fs.readdirSync(runDir).filter((entry) => entry !== ".DS_Store");
-  return entries.length === 0
-    || (entries.length === 1 && entries[0] === "done-criteria.md");
+  const nonClaimEntries = entries.filter((entry) => entry !== ".dispatch-claim"
+    && entry !== DISPATCH_RECLAIM_GUARD_NAME);
+  if (nonClaimEntries.length > 1
+    || (nonClaimEntries.length === 1 && nonClaimEntries[0] !== "done-criteria.md")) {
+    return false;
+  }
+  const guardCompatible = !entries.includes(DISPATCH_RECLAIM_GUARD_NAME)
+    || isDispatchClaimStale(path.join(runDir, DISPATCH_RECLAIM_GUARD_NAME));
+  return guardCompatible && (!entries.includes(".dispatch-claim")
+    || isDispatchClaimStale(path.join(runDir, ".dispatch-claim")));
 }
 
 function claimRetryCompatibleRunDir(runDir) {
@@ -1211,20 +1288,72 @@ function claimRetryCompatibleRunDir(runDir) {
   }
 
   const claimPath = path.join(runDir, ".dispatch-claim");
-  let claimFd;
-  try {
-    claimFd = fs.openSync(claimPath, "wx");
-    fs.writeFileSync(claimFd, JSON.stringify({ pid: process.pid, claimed_at: new Date().toISOString() }));
-  } catch (error) {
-    if (claimFd !== undefined) {
+  const hasReclaimGuard = () => fs.existsSync(path.join(runDir, DISPATCH_RECLAIM_GUARD_NAME));
+  if (!fs.existsSync(claimPath) && !hasReclaimGuard()) {
+    let claimFd;
+    try {
+      claimFd = fs.openSync(claimPath, "wx");
+      fs.writeFileSync(claimFd, JSON.stringify({ pid: process.pid, claimed_at: new Date().toISOString() }));
       fs.closeSync(claimFd);
+      return claimPath;
+    } catch (error) {
+      if (claimFd !== undefined) {
+        fs.closeSync(claimFd);
+        try { fs.unlinkSync(claimPath); } catch {}
+      }
+      if (error.code !== "EEXIST") throw error;
+    }
+  }
+
+  const guard = acquireDispatchReclaimGuard(runDir);
+  if (!guard) return null;
+  let claimFd;
+  let createdClaim = false;
+  try {
+    if (fs.existsSync(claimPath)) {
+      const staleClaim = readDispatchOwnerFile(claimPath);
+      if (!staleClaim || !isDispatchOwnerStale(staleClaim.owner)) return null;
+      let currentBytes;
+      try {
+        currentBytes = fs.readFileSync(claimPath, "utf-8");
+      } catch (error) {
+        if (error.code !== "ENOENT") return null;
+      }
+      if (currentBytes !== undefined) {
+        if (currentBytes !== staleClaim.bytes) return null;
+        try {
+          fs.unlinkSync(claimPath);
+        } catch (error) {
+          if (error.code !== "ENOENT") return null;
+        }
+      }
+    }
+    claimFd = fs.openSync(claimPath, "wx");
+    createdClaim = true;
+    try {
+      fs.writeFileSync(claimFd, JSON.stringify({ pid: process.pid, claimed_at: new Date().toISOString() }));
+    } finally {
+      fs.closeSync(claimFd);
+      claimFd = undefined;
+    }
+    return claimPath;
+  } catch {
+    if (claimFd !== undefined) {
+      try { fs.closeSync(claimFd); } catch {}
+    }
+    if (createdClaim) {
       try { fs.unlinkSync(claimPath); } catch {}
     }
-    if (error.code === "EEXIST") return null;
-    throw error;
+    return null;
+  } finally {
+    // If a guard owner dies in this few-syscall critical section, reclaiming it retains a
+    // theoretical concurrent-unlink window. That requires the crash plus two contenders;
+    // final ownership remains atomically arbitrated by the claim file's wx creation.
+    const currentGuard = readDispatchOwnerFile(guard.guardPath);
+    if (currentGuard?.owner.pid === process.pid && currentGuard.owner.nonce === guard.nonce) {
+      try { fs.unlinkSync(guard.guardPath); } catch {}
+    }
   }
-  fs.closeSync(claimFd);
-  return claimPath;
 }
 
 function isCanonicalPlannerDoneCriteriaPath(repoRoot, runId, doneCriteriaPath) {
@@ -1739,8 +1868,6 @@ async function main() {
     runDirClaimPath = null;
   }
 
-  process.on("exit", releaseRunDirClaim);
-
   function releaseFleetIssueLock() {
     if (!fleetIssueLock) return;
     releaseIssueLock(fleetIssueLock);
@@ -1831,7 +1958,10 @@ async function main() {
     process.exit(1);
   }
 
-  process.once("exit", releaseFleetIssueLock);
+  process.once("exit", () => {
+    try { releaseRunDirClaim(); } catch {}
+    try { releaseFleetIssueLock(); } catch {}
+  });
   process.on("SIGINT", () => { void handleSignal("SIGINT"); });
   process.on("SIGTERM", () => { void handleSignal("SIGTERM"); });
 
