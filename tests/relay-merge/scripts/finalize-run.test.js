@@ -437,6 +437,58 @@ function execFinalize(fixture, {
   };
 }
 
+function advanceOriginMain(fixture, commits) {
+  const staleOriginMain = execFileSync("git", ["-C", fixture.repoRoot, "rev-parse", "refs/remotes/origin/main"], {
+    encoding: "utf-8",
+    stdio: "pipe",
+  }).trim();
+
+  for (const [index, commit] of commits.entries()) {
+    for (const [relativePath, contents] of Object.entries(commit.files || {})) {
+      const absolutePath = path.join(fixture.repoRoot, relativePath);
+      fs.mkdirSync(path.dirname(absolutePath), { recursive: true });
+      fs.writeFileSync(absolutePath, contents, "utf-8");
+    }
+    for (const relativePath of commit.deleted || []) {
+      fs.rmSync(path.join(fixture.repoRoot, relativePath));
+    }
+    execFileSync("git", ["-C", fixture.repoRoot, "add", "-A"], { encoding: "utf-8", stdio: "pipe" });
+    execFileSync("git", ["-C", fixture.repoRoot, "commit", "-m", commit.message || `Advance main ${index + 1}`], {
+      encoding: "utf-8",
+      stdio: "pipe",
+    });
+  }
+
+  execFileSync("git", ["-C", fixture.repoRoot, "push", "origin", "main"], { encoding: "utf-8", stdio: "pipe" });
+  // Prove finalize-run fetches instead of trusting the caller's stale tracking ref.
+  execFileSync("git", ["-C", fixture.repoRoot, "update-ref", "refs/remotes/origin/main", staleOriginMain], {
+    encoding: "utf-8",
+    stdio: "pipe",
+  });
+}
+
+function spawnFreshnessFinalize(fixture, { extraArgs = [] } = {}) {
+  const logPath = path.join(fixture.repoRoot, "gh.log");
+  const fakeGh = writeFakeGh(logPath, {
+    comments: [DEFAULT_REVIEW_COMMENT],
+    commits: [{ oid: fixture.headSha, committedDate: DEFAULT_COMMIT_DATE }],
+  });
+  const result = spawnSync("node", [
+    SCRIPT,
+    "--repo", fixture.repoRoot,
+    "--branch", fixture.branch,
+    "--pr", "123",
+    ...extraArgs,
+    "--json",
+  ], {
+    cwd: fixture.repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+    env: { ...process.env, RELAY_GH_BIN: fakeGh },
+  });
+  return { result, logPath };
+}
+
 function spawnForceFinalize(fixture, reason) {
   const logPath = path.join(fixture.repoRoot, "gh.log");
   const fakeGh = writeFakeGh(logPath, {
@@ -466,6 +518,153 @@ function spawnForceFinalize(fixture, reason) {
 
   return { ...fixture, logPath, result };
 }
+
+test("finalize-run freshness gate passes an up-to-date head without informational JSON", () => {
+  const fixture = setupRepo();
+  const finalized = execFinalize(fixture, {
+    ghOptions: { comments: [DEFAULT_REVIEW_COMMENT] },
+  });
+
+  assert.equal(finalized.result.state, STATES.MERGED);
+  assert.equal(finalized.result.mergePerformed, true);
+  assert.equal("freshness" in finalized.result, false);
+});
+
+test("finalize-run freshness gate reports behind but disjoint main changes and merges", () => {
+  const fixture = setupRepo();
+  advanceOriginMain(fixture, [{
+    files: { "main-only.txt": "disjoint\n" },
+    message: "Advance main disjointly",
+  }]);
+
+  const finalized = execFinalize(fixture, {
+    ghOptions: { comments: [DEFAULT_REVIEW_COMMENT] },
+  });
+
+  assert.equal(finalized.result.state, STATES.MERGED);
+  assert.equal(finalized.result.mergePerformed, true);
+  assert.deepEqual(finalized.result.freshness, {
+    behind_count: 1,
+    overlapping_files: [],
+  });
+});
+
+test("finalize-run freshness gate refuses behind overlapping files without state transition", () => {
+  const fixture = setupRepo();
+  advanceOriginMain(fixture, [{
+    files: { "smoke.txt": "main also owns this path\n" },
+    message: "Advance main on overlapping file",
+  }]);
+
+  const { result, logPath } = spawnFreshnessFinalize(fixture);
+
+  assert.equal(result.status, 2, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout), {
+    status: "refused_behind_main",
+    next_action: "rebase_and_rerun",
+    behind_count: 1,
+    overlapping_files: ["smoke.txt"],
+  });
+  assert.doesNotMatch(fs.readFileSync(logPath, "utf-8"), /^pr (merge|comment) /m);
+  assert.equal(readManifest(fixture.manifestPath).data.state, STATES.READY_TO_MERGE);
+  assert.equal(fs.existsSync(fixture.worktreePath), true);
+  assert.equal(branchExists(fixture.repoRoot, fixture.branch), true);
+  assert.equal(remoteBranchExists(fixture.repoRoot, fixture.branch), true);
+  const events = readRunEvents(fixture.repoRoot, fixture.runId);
+  assert.equal(events.length, 1);
+  assert.equal(events[0].event, "merge_blocked");
+  assert.equal(events[0].state_from, STATES.READY_TO_MERGE);
+  assert.equal(events[0].state_to, STATES.READY_TO_MERGE);
+  assert.equal(events[0].reason, "behind_main_overlap");
+});
+
+test("finalize-run freshness gate treats a behind add-then-delete as touching the PR file", () => {
+  const fixture = setupRepo();
+  advanceOriginMain(fixture, [
+    { files: { "smoke.txt": "temporary main content\n" }, message: "Add overlapping path on main" },
+    { deleted: ["smoke.txt"], message: "Delete overlapping path on main" },
+  ]);
+
+  const { result } = spawnFreshnessFinalize(fixture);
+
+  assert.equal(result.status, 2, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout), {
+    status: "refused_behind_main",
+    next_action: "rebase_and_rerun",
+    behind_count: 2,
+    overlapping_files: ["smoke.txt"],
+  });
+});
+
+test("finalize-run freshness override merges with a force-finalize audit event", () => {
+  const fixture = setupRepo();
+  const reason = "manually verified the overlapping generated file";
+  advanceOriginMain(fixture, [{
+    files: { "smoke.txt": "main also owns this path\n" },
+    message: "Advance main on overlapping file",
+  }]);
+
+  const finalized = execFinalize(fixture, {
+    extraArgs: ["--allow-behind-main", "--reason", reason],
+    ghOptions: { comments: [DEFAULT_REVIEW_COMMENT] },
+  });
+
+  assert.equal(finalized.result.state, STATES.MERGED);
+  assert.equal("freshness" in finalized.result, false);
+  const overrideEvent = finalized.events.find((event) => (
+    event.event === "force_finalize" && event.override_class === "behind_main_overlap"
+  ));
+  assert.equal(overrideEvent?.state_from, STATES.READY_TO_MERGE);
+  assert.equal(overrideEvent?.state_to, STATES.MERGED);
+  assert.equal(overrideEvent?.reason, reason);
+  assert.equal(overrideEvent?.required_reason, reason);
+  assert.equal(overrideEvent?.affected_head_sha, fixture.headSha);
+  assert.equal(overrideEvent?.prior_state, STATES.READY_TO_MERGE);
+  assert.equal(overrideEvent?.operator_initiated, true);
+  assert.equal(overrideEvent?.pr_number, 123);
+});
+
+test("finalize-run rejects freshness override without a non-empty --reason", () => {
+  for (const reasonArgs of [[], ["--reason", "   "]]) {
+    const fixture = setupRepo();
+    const { result } = spawnFreshnessFinalize(fixture, {
+      extraArgs: ["--allow-behind-main", ...reasonArgs],
+    });
+
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /--allow-behind-main requires --reason <non-empty-text>/);
+    assert.equal(readManifest(fixture.manifestPath).data.state, STATES.READY_TO_MERGE);
+    assert.deepEqual(readRunEvents(fixture.repoRoot, fixture.runId), []);
+  }
+});
+
+test("finalize-run force-finalize does not bypass an overlapping behind-main refusal", () => {
+  const fixture = setupRepo({ manifestState: STATES.ESCALATED });
+  advanceOriginMain(fixture, [{
+    files: { "smoke.txt": "main also owns this path\n" },
+    message: "Advance main on overlapping file",
+  }]);
+
+  const { result, logPath } = spawnFreshnessFinalize(fixture, {
+    extraArgs: ["--force-finalize-nonready", "--reason", "manual review recovery"],
+  });
+
+  assert.equal(result.status, 2, result.stderr);
+  assert.equal(JSON.parse(result.stdout).status, "refused_behind_main");
+  assert.doesNotMatch(fs.readFileSync(logPath, "utf-8"), /^pr merge /m);
+  assert.equal(readManifest(fixture.manifestPath).data.state, STATES.ESCALATED);
+  assert.equal(readRunEvents(fixture.repoRoot, fixture.runId).some((event) => event.event === "force_finalize"), false);
+});
+
+test("finalize-run keeps typo rejection for the freshness override flag", () => {
+  const fixture = setupRepo();
+  const { result } = spawnFreshnessFinalize(fixture, {
+    extraArgs: ["--allow-behind-mian", "--reason", "typo must not merge"],
+  });
+
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /unknown flags: --allow-behind-mian/);
+});
 
 test("finalize-run force-finalize merges an escalated run with an auditable event trail", () => {
   const fixture = setupRepo({ manifestState: STATES.ESCALATED });
@@ -987,7 +1186,13 @@ test("finalize-run appends, commits, and pushes capability learnings", () => {
 test("finalize-run records manual action when learning push has no remote", () => {
   const { repoRoot, branch, headSha } = setupRepo();
   seedCapabilitiesForLearning(repoRoot);
-  execFileSync("git", ["remote", "remove", "origin"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
+  // Keep origin available for the mandatory merge-freshness fetch, but make
+  // the checked-out base branch's configured learning destination absent.
+  execFileSync("git", ["config", "branch.main.remote", "missing"], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+  });
   const logPath = path.join(repoRoot, "gh.log");
   const fakeGh = writeFakeGh(logPath, {
     comments: [

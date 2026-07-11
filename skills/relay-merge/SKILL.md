@@ -68,6 +68,13 @@ This script:
 - removes the retained worktree, deletes the local merged branch, and runs `git worktree prune`
 - records `cleanup.status` in the manifest
 
+### Merge-time freshness gate
+- After fetching `origin`, finalize refuses behind-main PRs only when main and the PR touch overlapping files.
+- Refusal leaves state unchanged and reports `next_action: rebase_and_rerun`.
+- `--allow-behind-main --reason "..."` is the audited operator escape hatch.
+- Finalize never auto-rebases: a rebase changes the reviewed head and re-enters the existing stale-review path (#884).
+- Accepted residual risk: cross-file semantic coupling is not detected.
+
 If the retained worktree is dirty, merge still succeeds but cleanup is recorded as `failed` and the manifest moves to `next_action=manual_cleanup_required`.
 
 After the merge is confirmed, `finalize-run.js` invokes `append-learnings.js` to record a one-line learning in the target repo's `spec/capabilities.md`. Learning failures are recorded under `result.learnings` and never block cleanup. No-op/fail-loud conditions and durability semantics: [`references/append-learnings.md`](references/append-learnings.md).

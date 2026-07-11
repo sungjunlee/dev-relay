@@ -21,7 +21,8 @@
  *   --skip-review <reason> Bypass the fresh-review gate with an audit reason
  *   --force-finalize-nonready
  *                          Operator-only: bypass non-ready state gate
- *   --reason <text>        Required with --force-finalize-nonready
+ *   --allow-behind-main    Override overlapping behind-main freshness refusal
+ *   --reason <text>        Required with either operator override above
  *   --allow-stacked-base-hazard <reason>
  *                          Override non-default stacked PR base hazard block
  *   --skip-merge           Skip the PR merge step and run cleanup only
@@ -73,6 +74,7 @@ const args = process.argv.slice(2);
 const KNOWN_FLAGS = [
   "--repo", "--run-id", "--manifest", "--branch", "--pr", "--merge-method", "--skip-review",
   "--force-finalize-nonready", "--reason",
+  "--allow-behind-main",
   "--allow-stacked-base-hazard",
   "--skip-merge", "--no-issue-close", "--dry-run", "--json", "--help", "-h",
 ];
@@ -95,7 +97,8 @@ function printHelpAndExit() {
   console.log(`  --skip-review <reason> ${modeLabel("--skip-review")} Bypass the fresh-review gate with an audit reason`);
   console.log(`  --force-finalize-nonready ${modeLabel("--force-finalize-nonready")}`);
   console.log("                         Operator-only: bypass non-ready state gate");
-  console.log(`  --reason <text>        ${modeLabel("--reason")} Required with --force-finalize-nonready`);
+  console.log("  --allow-behind-main   [parsed] Override overlapping behind-main freshness refusal");
+  console.log(`  --reason <text>        ${modeLabel("--reason")} Required with either operator override above`);
   console.log(`  --allow-stacked-base-hazard <reason> ${modeLabel("--allow-stacked-base-hazard")} Override non-default stacked PR base hazard block`);
   console.log(`  --skip-merge           ${modeLabel("--skip-merge")} Skip the PR merge step and run cleanup only`);
   console.log(`  --no-issue-close       ${modeLabel("--no-issue-close")} Skip linked issue close`);
@@ -166,6 +169,79 @@ function buildStackedBaseOverrideAuditFields(stackedBaseGuard, prNumber, headSha
     operator_initiated: true,
     pr_number: prNumber,
   };
+}
+
+class MergeFreshnessRefusal extends Error {
+  constructor(assessment) {
+    super("PR head is behind origin/main on overlapping files");
+    this.name = "MergeFreshnessRefusal";
+    this.result = {
+      status: "refused_behind_main",
+      next_action: "rebase_and_rerun",
+      behind_count: assessment.behindCount,
+      overlapping_files: assessment.overlappingFiles,
+    };
+  }
+}
+
+function splitLines(value) {
+  return String(value || "").split(/\r?\n/).filter(Boolean);
+}
+
+function splitNullPaths(value) {
+  return String(value || "").split("\0").filter(Boolean);
+}
+
+function evaluateMergeFreshness(repoPath, prHead) {
+  if (!prHead) {
+    throw new Error("Cannot evaluate merge freshness without the PR head SHA");
+  }
+
+  execGit(repoPath, ["fetch", "origin"]);
+  const behindCommits = splitLines(execGit(repoPath, ["rev-list", `${prHead}..origin/main`]));
+  if (!behindCommits.length) {
+    return { status: "up_to_date", behindCount: 0, overlappingFiles: [] };
+  }
+
+  const behindFiles = new Set();
+  for (const commit of behindCommits) {
+    const touched = execGit(repoPath, [
+      "diff-tree", "--root", "-m", "--no-commit-id", "--name-only", "--no-renames", "-r", "-z", commit,
+    ], { raw: true });
+    for (const file of splitNullPaths(touched)) behindFiles.add(file);
+  }
+
+  const mergeBase = execGit(repoPath, ["merge-base", prHead, "origin/main"]);
+  const prFiles = new Set(splitNullPaths(execGit(repoPath, [
+    "diff", "--name-only", "--no-renames", "-z", mergeBase, prHead,
+  ], { raw: true })));
+  const overlappingFiles = [...prFiles]
+    .filter((file) => behindFiles.has(file))
+    .sort((left, right) => left.localeCompare(right));
+
+  return {
+    status: overlappingFiles.length ? "overlap" : "behind_disjoint",
+    behindCount: behindCommits.length,
+    overlappingFiles,
+  };
+}
+
+function appendBehindMainOverrideEvent(repoPath, safeData, { prNumber, currentHeadSha, reason }) {
+  appendRunEvent(repoPath, safeData.run_id, {
+    event: EVENTS.FORCE_FINALIZE,
+    state_from: safeData.state,
+    state_to: STATES.MERGED,
+    head_sha: currentHeadSha,
+    round: safeData.review?.rounds || null,
+    reason,
+    override_class: "behind_main_overlap",
+    affected_head_sha: currentHeadSha,
+    prior_state: safeData.state,
+    required_reason: reason,
+    operator_initiated: true,
+    pr_number: prNumber,
+    last_reviewed_sha: safeData.review?.last_reviewed_sha,
+  });
 }
 
 // Fetch only the inputs the fresh review gate needs, without pulling
@@ -795,7 +871,12 @@ function main() {
     printHelpAndExit();
   }
 
-  const unknownFlags = findUnknownFlags(args, "finalize-run");
+  // --allow-behind-main is intentionally local to relay-merge so this bounded
+  // change does not expand the shared dispatch CLI schema. Keep schema parsing
+  // for every established flag and exempt only the exact new boolean token;
+  // close typos remain unknown (#407).
+  const schemaArgs = args.filter((arg) => arg !== "--allow-behind-main");
+  const unknownFlags = findUnknownFlags(schemaArgs, "finalize-run");
   if (unknownFlags.length) {
     throw new Error(`unknown flags: ${unknownFlags.join(", ")}`);
   }
@@ -808,6 +889,7 @@ function main() {
   const mergeMethod = cliArgs.getArg("--merge-method") || "squash";
   const skipReviewReason = cliArgs.getArg("--skip-review");
   const forceFinalizeNonready = cliArgs.hasFlag("--force-finalize-nonready");
+  const allowBehindMain = cliArgs.hasFlag("--allow-behind-main");
   const allowStackedBaseHazard = cliArgs.hasFlag("--allow-stacked-base-hazard");
   const stackedBaseOverrideReason = allowStackedBaseHazard
     ? cliArgs.getArg("--allow-stacked-base-hazard")
@@ -816,7 +898,8 @@ function main() {
   try {
     forceFinalizeReason = cliArgs.getArg("--reason");
   } catch (error) {
-    if (forceFinalizeNonready && error.name === "CliSchemaError" && error.details?.flag === "--reason") {
+    if ((forceFinalizeNonready || allowBehindMain)
+      && error.name === "CliSchemaError" && error.details?.flag === "--reason") {
       forceFinalizeReason = "";
     } else {
       throw error;
@@ -828,6 +911,9 @@ function main() {
   const jsonOut = cliArgs.hasFlag("--json");
   if (forceFinalizeNonready && !String(forceFinalizeReason || "").trim()) {
     throw new Error("--force-finalize-nonready requires --reason <non-empty-text>");
+  }
+  if (allowBehindMain && !String(forceFinalizeReason || "").trim()) {
+    throw new Error("--allow-behind-main requires --reason <non-empty-text>");
   }
   if (allowStackedBaseHazard && !String(stackedBaseOverrideReason || "").trim()) {
     throw new Error("--allow-stacked-base-hazard requires a non-empty reason");
@@ -922,6 +1008,8 @@ function main() {
   let issueCloseWarning = null;
   let reviewGate = null;
   let stackedBaseGuard = { status: "not_checked", reason: null };
+  let freshness = null;
+  let freshnessOverrideRequired = false;
   let currentHeadSha = safeData.git?.head_sha || null;
   let prTitle = null;
   const skipReviewRubricAudit = summarizeRubricAuditForSkip(safeData, {
@@ -949,6 +1037,30 @@ function main() {
         });
       }
       currentHeadSha = resolveCurrentHeadSha(validatedPaths.worktree, safeData);
+    }
+    if (!alreadyMerged) {
+      const assessment = evaluateMergeFreshness(repoPath, currentHeadSha);
+      if (assessment.status === "behind_disjoint") {
+        freshness = {
+          behind_count: assessment.behindCount,
+          overlapping_files: [],
+        };
+      } else if (assessment.status === "overlap") {
+        if (!allowBehindMain) {
+          if (!dryRun) {
+            appendRunEvent(repoPath, safeData.run_id, {
+              event: EVENTS.MERGE_BLOCKED,
+              state_from: safeData.state,
+              state_to: safeData.state,
+              head_sha: currentHeadSha,
+              round: safeData.review?.rounds || null,
+              reason: "behind_main_overlap",
+            });
+          }
+          throw new MergeFreshnessRefusal(assessment);
+        }
+        freshnessOverrideRequired = true;
+      }
     }
     if (alreadyMerged) {
       // The PR is already in GitHub's terminal MERGED state. Retry finalization
@@ -1083,6 +1195,13 @@ function main() {
   }
 
   if (mergeAllowed) {
+    if (freshnessOverrideRequired && !dryRun) {
+      appendBehindMainOverrideEvent(repoPath, safeData, {
+        prNumber,
+        currentHeadSha,
+        reason: forceFinalizeReason,
+      });
+    }
     if (forceFinalizeNonready && !dryRun) {
       appendRunEvent(repoPath, safeData.run_id, {
         event: EVENTS.FORCE_FINALIZE,
@@ -1306,6 +1425,7 @@ function main() {
     dryRun,
     forceFinalized: forceFinalizeNonready,
     forceFinalizeReason: forceFinalizeNonready ? forceFinalizeReason : null,
+    ...(freshness ? { freshness } : {}),
   };
 
   if (jsonOut) {
@@ -1330,6 +1450,17 @@ if (require.main === module) {
   try {
     main();
   } catch (error) {
+    if (error instanceof MergeFreshnessRefusal) {
+      if (args.includes("--json")) {
+        console.log(JSON.stringify(error.result, null, 2));
+      } else {
+        console.log("Merge refused: PR head is behind origin/main on overlapping files.");
+        console.log(`  Behind commits:    ${error.result.behind_count}`);
+        console.log(`  Overlapping files: ${error.result.overlapping_files.join(", ")}`);
+        console.log(`  Next action:       ${error.result.next_action}`);
+      }
+      process.exit(2);
+    }
     console.error(`Error: ${error.message}`);
     process.exit(1);
   }
