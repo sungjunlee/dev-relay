@@ -1038,6 +1038,40 @@ setInterval(() => {}, 1000);
   return codexPath;
 }
 
+function writeTerminalFailureCodex(binDir, markerPath) {
+  ensureDefaultFakeGh(binDir);
+  const codexPath = path.join(binDir, "codex");
+  fs.writeFileSync(codexPath, `#!/usr/bin/env node
+const fs = require("fs");
+const path = require("path");
+const args = process.argv.slice(2);
+if (args[0] === "--version") {
+  process.stdout.write("codex-fake\\n");
+  process.exit(0);
+}
+if (args[0] !== "exec") {
+  process.stderr.write("unsupported fake codex invocation");
+  process.exit(1);
+}
+const output = args[args.indexOf("-o") + 1];
+const manifestPath = path.dirname(output) + ".md";
+fs.writeFileSync(${JSON.stringify(markerPath)}, JSON.stringify({
+  pid: process.pid,
+  manifestPath,
+}), "utf-8");
+if (process.env.RELAY_TEST_EXTERNAL_ADVANCE === "1") {
+  const manifest = fs.readFileSync(manifestPath, "utf-8")
+    .replace(/^state: 'dispatched'$/m, "state: 'review_pending'")
+    .replace(/^next_action: 'await_dispatch_result'$/m, "next_action: 'run_review'");
+  fs.writeFileSync(manifestPath, manifest, "utf-8");
+}
+process.stderr.write("simulated executor failure\\n");
+process.exit(7);
+`, "utf-8");
+  fs.chmodSync(codexPath, 0o755);
+  return codexPath;
+}
+
 function writeLeaseCheckingCodex(binDir, markerPath) {
   ensureDefaultFakeGh(binDir);
   const codexPath = path.join(binDir, "codex");
@@ -5590,6 +5624,94 @@ test("dispatch creates a run lease while executor runs and removes it on normal 
   assert.equal(marker.lease.host, os.hostname());
   assert.equal(marker.lease.timeout_s, 2400);
   assert.equal(fs.existsSync(marker.leasePath), false);
+});
+
+test("dispatch terminal write preserves external progress and audits the superseded outcome", async (t) => {
+  const fixtures = [];
+  registerSignalFixtureCleanup(t, {
+    pids: () => fixtures.map((fixture) => fixture.marker?.pid),
+    paths: () => fixtures.flatMap((fixture) => [
+      fixture.repoRoot,
+      fixture.relayHome,
+      fixture.remoteRoot,
+      fixture.binDir,
+      fixture.markerPath,
+    ]),
+  });
+
+  function runTerminalFailure({ branch, externalAdvance }) {
+    const { repoRoot, relayHome, remoteRoot } = setupRepo();
+    const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-terminal-failure-bin-"));
+    const markerPath = path.join(
+      os.tmpdir(),
+      `relay-dispatch-terminal-failure-${process.pid}-${Date.now()}-${externalAdvance}.json`
+    );
+    const fixture = { repoRoot, relayHome, remoteRoot, binDir, markerPath, marker: null };
+    fixtures.push(fixture);
+    writeTerminalFailureCodex(binDir, markerPath);
+    const env = {
+      ...process.env,
+      PATH: `${binDir}:${process.env.PATH}`,
+      RELAY_HOME: relayHome,
+      ...(externalAdvance ? { RELAY_TEST_EXTERNAL_ADVANCE: "1" } : {}),
+    };
+
+    const proc = spawnSync(process.execPath, [SCRIPT, repoRoot, ...withRequiredRubric([
+      "-b", branch,
+      "--prompt", "fail after optionally advancing the manifest",
+      "--json",
+    ])], {
+      cwd: repoRoot,
+      encoding: "utf-8",
+      env,
+    });
+    fixture.marker = JSON.parse(fs.readFileSync(markerPath, "utf-8"));
+    const result = JSON.parse(proc.stdout);
+    return {
+      proc,
+      result,
+      manifest: readManifest(fixture.marker.manifestPath).data,
+      events: readJsonLines(path.join(result.runDir, "events.jsonl")),
+    };
+  }
+
+  const normal = runTerminalFailure({
+    branch: "issue-926-terminal-failure-normal",
+    externalAdvance: false,
+  });
+  assert.equal(normal.proc.status, 7);
+  assert.equal(normal.result.exitCode, 7);
+  assert.equal(normal.result.runState, STATES.ESCALATED);
+  assert.equal(normal.manifest.state, STATES.ESCALATED);
+  const normalDispatchResults = normal.events.filter((event) => event.event === "dispatch_result");
+  assert.equal(normalDispatchResults.length, 1);
+  assert.equal(normalDispatchResults[0].state_from, STATES.DISPATCHED);
+  assert.equal(normalDispatchResults[0].state_to, STATES.ESCALATED);
+  assert.equal(normalDispatchResults[0].observed_state, undefined);
+  assert.equal(normalDispatchResults[0].intended_outcome, undefined);
+
+  const superseded = runTerminalFailure({
+    branch: "issue-926-terminal-failure-superseded",
+    externalAdvance: true,
+  });
+  assert.equal(superseded.proc.status, normal.proc.status);
+  assert.equal(superseded.result.exitCode, normal.result.exitCode);
+  assert.deepEqual(Object.keys(superseded.result), Object.keys(normal.result));
+  assert.equal(superseded.result.runState, STATES.REVIEW_PENDING);
+  assert.equal(superseded.manifest.state, STATES.REVIEW_PENDING);
+  assert.equal(superseded.manifest.next_action, "run_review");
+  assert.equal(fs.existsSync(path.join(superseded.result.runDir, "lease.json")), false);
+
+  const supersededDispatchResults = superseded.events.filter((event) => event.event === "dispatch_result");
+  assert.equal(supersededDispatchResults.length, 1);
+  assert.equal(supersededDispatchResults[0].state_from, STATES.REVIEW_PENDING);
+  assert.equal(supersededDispatchResults[0].state_to, STATES.REVIEW_PENDING);
+  assert.match(
+    supersededDispatchResults[0].reason,
+    /^supervisor_result_superseded_by_external_progress/
+  );
+  assert.equal(supersededDispatchResults[0].observed_state, STATES.REVIEW_PENDING);
+  assert.equal(supersededDispatchResults[0].intended_outcome, "escalated_no_result");
 });
 
 test("dispatch keeps lease and leaves run dispatched when timeout kill leaves process group unsettled", async (t) => {

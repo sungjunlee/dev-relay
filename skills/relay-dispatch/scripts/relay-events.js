@@ -287,6 +287,12 @@ function appendRunEvent(repoRoot, runId, eventData) {
     ...(eventData.dispatch_failure_class !== undefined
       ? { dispatch_failure_class: normalizeEventValue(eventData.dispatch_failure_class) }
       : {}),
+    ...(eventData.observed_state !== undefined
+      ? { observed_state: normalizeEventValue(eventData.observed_state) }
+      : {}),
+    ...(eventData.intended_outcome !== undefined
+      ? { intended_outcome: normalizeEventValue(eventData.intended_outcome) }
+      : {}),
     ...(eventData.preflight_type !== undefined
       ? { preflight_type: normalizeEventValue(eventData.preflight_type) }
       : {}),
