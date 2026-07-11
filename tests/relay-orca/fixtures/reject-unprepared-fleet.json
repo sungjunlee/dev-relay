@@ -1,0 +1,20 @@
+{
+  "program": {
+    "id": "reject-unprepared-fleet",
+    "source": "file:///tmp/unprepared.md",
+    "repo": "example/repo",
+    "tracker": "github",
+    "exit_gates": ["all leaves merged"],
+    "outcomes": [
+      {
+        "id": "fanout",
+        "task_kind": "relay_fleet",
+        "accepted_outcomes": ["leaves merged"],
+        "depends_on": [],
+        "leaves": [
+          { "leaf_ref": "l1", "prompt_file": "/tmp/p1.md", "rubric_file": "", "done_criteria_file": "/tmp/dc1.md" }
+        ]
+      }
+    ]
+  }
+}

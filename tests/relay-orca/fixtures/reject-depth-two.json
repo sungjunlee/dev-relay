@@ -1,0 +1,12 @@
+{
+  "program": {
+    "id": "reject-depth-two",
+    "source": "file:///tmp/depth-two.md",
+    "repo": "example/repo",
+    "tracker": "github",
+    "exit_gates": ["all merged"],
+    "outcomes": [
+      { "id": "layered", "task_kind": "relay_run", "accepted_outcomes": ["work merged"], "depends_on": [], "depth": 2 }
+    ]
+  }
+}
