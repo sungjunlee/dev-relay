@@ -203,14 +203,27 @@ function writeChildRun(repoRoot, {
 function writeRunLeaseFixture(repoRoot, runId, {
   pid = process.pid,
   host = os.hostname(),
+  startedAt = new Date().toISOString(),
+  timeoutS = 3600,
 } = {}) {
   writeJson(path.join(getRunDir(repoRoot, runId), "lease.json"), {
     pid,
     pgid: 2147483647,
     host,
-    started_at: new Date().toISOString(),
-    timeout_s: 3600,
+    started_at: startedAt,
+    timeout_s: timeoutS,
   });
+}
+
+function writeDispatchLogs(repoRoot, runId, { stdout = null, stderr = null } = {}) {
+  const runDir = getRunDir(repoRoot, runId);
+  fs.mkdirSync(runDir, { recursive: true });
+  if (stdout !== null) {
+    fs.writeFileSync(path.join(runDir, "dispatch-stdout.log"), stdout, "utf-8");
+  }
+  if (stderr !== null) {
+    fs.writeFileSync(path.join(runDir, "dispatch-stderr.log"), stderr, "utf-8");
+  }
 }
 
 function waitFor(predicate, { timeoutMs = 3000, intervalMs = 25 } = {}) {
@@ -4446,4 +4459,244 @@ test("relay-fleet stuck_child operator_attention derives next_action/detail from
   assert.match(plainOnly, /^  - leaf-a: stuck_child \(run-a\)$/m);
   assert.doesNotMatch(plainOnly, /→ next:/);
   assert.doesNotMatch(plainOnly, / — /);
+});
+
+test("relay-fleet stalled_executor operator_attention pins the six-row matrix (#931)", () => {
+  const { relayHome, repoRoot } = setupRepo("relay-fleet-stalled-executor-");
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "fleet-stalled-fake-"));
+  const fleetId = "fleet-stalled-executor";
+  const {
+    formatStatusText: formatText,
+    parseArgs,
+  } = require(RELAY_FLEET_SCRIPT);
+
+  const agedStartedAt = new Date(Date.now() - 42 * 60 * 1000).toISOString();
+  const freshStartedAt = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+  const longStderr = `Connection lost, reconnecting to agentn.global.api5.cursor.sh ${"x".repeat(200)}`;
+  const expectedStderrTail = longStderr.slice(0, 120);
+
+  const runs = {
+    stalled: "issue-931-20260711010101000-a1b2c3d4",
+    stalledEmptyStderr: "issue-932-20260711010101000-a1b2c3d4",
+    underThreshold: "issue-933-20260711010101000-a1b2c3d4",
+    nonEmptyStdout: "issue-934-20260711010101000-a1b2c3d4",
+    deadLease: "issue-935-20260711010101000-a1b2c3d4",
+    missingLease: "issue-936-20260711010101000-a1b2c3d4",
+    unreadableStdout: "issue-937-20260711010101000-a1b2c3d4",
+    terminal: "issue-938-20260711010101000-a1b2c3d4",
+    compose: "issue-939-20260711010101000-a1b2c3d4",
+    healthy: "issue-940-20260711010101000-a1b2c3d4",
+  };
+
+  for (const [kind, runId] of Object.entries(runs)) {
+    const state = kind === "terminal"
+      ? RUN_STATES.READY_TO_MERGE
+      : (kind === "compose" || kind === "healthy")
+        ? RUN_STATES.REVIEW_PENDING
+        : RUN_STATES.DISPATCHED;
+    writeChildRun(repoRoot, {
+      runId,
+      branch: `issue-${runId.slice(6, 9)}-leaf-${kind}`,
+      issueNumber: Number(runId.slice(6, 9)),
+      leafId: `leaf-${kind}`,
+      fleetId,
+      state,
+    });
+    if (kind === "compose") {
+      const manifestPath = getManifestPath(repoRoot, runId);
+      const data = readManifest(manifestPath).data;
+      writeManifest(manifestPath, {
+        ...data,
+        review: { ...data.review, rounds: 3 },
+        git: { ...data.git, pr_number: 939 },
+      });
+    }
+    if (kind === "terminal" || kind === "healthy") {
+      const manifestPath = getManifestPath(repoRoot, runId);
+      const data = readManifest(manifestPath).data;
+      writeManifest(manifestPath, {
+        ...data,
+        git: { ...data.git, pr_number: kind === "terminal" ? 938 : 940 },
+      });
+    }
+  }
+
+  // Row 1: live + 0-byte + aged → stalled_executor with stderr tail (truncated 120).
+  writeRunLeaseFixture(repoRoot, runs.stalled, { startedAt: agedStartedAt });
+  writeDispatchLogs(repoRoot, runs.stalled, { stdout: "", stderr: `${longStderr}\n` });
+
+  // Row 1b: empty stderr omits the tail clause.
+  writeRunLeaseFixture(repoRoot, runs.stalledEmptyStderr, { startedAt: agedStartedAt });
+  writeDispatchLogs(repoRoot, runs.stalledEmptyStderr, { stdout: "", stderr: "" });
+
+  // Row 2: live + 0-byte + under threshold → none.
+  writeRunLeaseFixture(repoRoot, runs.underThreshold, { startedAt: freshStartedAt });
+  writeDispatchLogs(repoRoot, runs.underThreshold, { stdout: "" });
+
+  // Row 3: live + non-empty stdout → none regardless of age.
+  writeRunLeaseFixture(repoRoot, runs.nonEmptyStdout, { startedAt: agedStartedAt });
+  writeDispatchLogs(repoRoot, runs.nonEmptyStdout, { stdout: "hello\n" });
+
+  // Row 4: dead lease → stuck_child owns it; no stalled_executor.
+  writeRunLeaseFixture(repoRoot, runs.deadLease, { pid: 2147483647, startedAt: agedStartedAt });
+  writeDispatchLogs(repoRoot, runs.deadLease, { stdout: "" });
+
+  // Row 4b: missing lease → no stalled_executor.
+  writeDispatchLogs(repoRoot, runs.missingLease, { stdout: "" });
+
+  // Row 5: unreadable/unresolvable stdout (broken symlink) → fail-open, no crash.
+  writeRunLeaseFixture(repoRoot, runs.unreadableStdout, { startedAt: agedStartedAt });
+  fs.symlinkSync(
+    "/nonexistent/relay-fleet-stalled-stdout",
+    path.join(getRunDir(repoRoot, runs.unreadableStdout), "dispatch-stdout.log")
+  );
+
+  // Row 6: terminal run state → no stalled_executor even with live+0-byte+aged.
+  writeRunLeaseFixture(repoRoot, runs.terminal, { startedAt: agedStartedAt });
+  writeDispatchLogs(repoRoot, runs.terminal, { stdout: "" });
+
+  // Additive: stalled_executor composes with high_review_rounds.
+  writeRunLeaseFixture(repoRoot, runs.compose, { startedAt: agedStartedAt });
+  writeDispatchLogs(repoRoot, runs.compose, { stdout: "", stderr: "Connection lost\n" });
+
+  // Healthy busy child (live lease, recent, non-empty stdout) → no stall item.
+  writeRunLeaseFixture(repoRoot, runs.healthy, { startedAt: freshStartedAt });
+  writeDispatchLogs(repoRoot, runs.healthy, { stdout: "progress\n" });
+
+  createFleetManifest(repoRoot, {
+    fleetId,
+    children: Object.entries(runs).map(([kind, runId]) => ({
+      leaf_ref: `leaf-${kind}`,
+      run_id: runId,
+      dispatch_status: DISPATCH_STATUS.DISPATCHED,
+    })),
+  });
+
+  const fakeGh = writeFakeGhDefaultBranch(tmpDir, "main");
+  const leaseBefore = fs.readFileSync(
+    path.join(getRunDir(repoRoot, runs.stalled), "lease.json"),
+    "utf-8"
+  );
+  const fleetBefore = fs.readFileSync(getFleetManifestPath(repoRoot, fleetId), "utf-8");
+
+  const result = runFleet([
+    "--repo", repoRoot,
+    "--fleet-id", fleetId,
+    "--status",
+    "--json",
+  ], {
+    relayHome,
+    env: {
+      RELAY_GH_BIN: fakeGh,
+      // Keep default 15m; fixtures use 42m / 5m wall ages.
+    },
+  });
+
+  assert.equal(result.status, 0, `${result.stderr}\n${result.stdout}`);
+  const payload = JSON.parse(result.stdout);
+  const attention = payload.operator_attention;
+
+  function item(leafRef, reason) {
+    return attention.find((entry) => entry.leaf_ref === leafRef && entry.reason === reason);
+  }
+  function reasonsFor(leafRef) {
+    return attention.filter((entry) => entry.leaf_ref === leafRef).map((entry) => entry.reason).sort();
+  }
+
+  // Row 1: exact detail format with truncated stderr tail.
+  const stalled = item("leaf-stalled", "stalled_executor");
+  assert.ok(stalled);
+  assert.equal(stalled.detail, `stdout 0 bytes for 42m; stderr tail: ${expectedStderrTail}`);
+  assert.equal(expectedStderrTail.length, 120);
+
+  // Empty stderr → no "; stderr tail:" clause.
+  const stalledEmpty = item("leaf-stalledEmptyStderr", "stalled_executor");
+  assert.ok(stalledEmpty);
+  assert.equal(stalledEmpty.detail, "stdout 0 bytes for 42m");
+  assert.equal(stalledEmpty.detail.includes("stderr"), false);
+
+  // Rows 2–6: no stalled_executor.
+  assert.equal(item("leaf-underThreshold", "stalled_executor"), undefined);
+  assert.equal(item("leaf-nonEmptyStdout", "stalled_executor"), undefined);
+  assert.equal(item("leaf-deadLease", "stalled_executor"), undefined);
+  assert.equal(item("leaf-missingLease", "stalled_executor"), undefined);
+  assert.equal(item("leaf-unreadableStdout", "stalled_executor"), undefined);
+  assert.equal(item("leaf-terminal", "stalled_executor"), undefined);
+  assert.equal(item("leaf-healthy", "stalled_executor"), undefined);
+
+  // Dead lease is owned by stuck_child, not stalled_executor.
+  assert.ok(item("leaf-deadLease", "stuck_child"));
+  assert.equal(reasonsFor("leaf-deadLease").includes("stalled_executor"), false);
+
+  // Additive composition.
+  assert.deepEqual(reasonsFor("leaf-compose"), ["high_review_rounds", "stalled_executor"]);
+  assert.equal(
+    item("leaf-compose", "stalled_executor").detail,
+    "stdout 0 bytes for 42m; stderr tail: Connection lost"
+  );
+  assert.deepEqual(item("leaf-compose", "high_review_rounds"), {
+    leaf_ref: "leaf-compose",
+    run_id: runs.compose,
+    reason: "high_review_rounds",
+  });
+
+  // Non-stall children keep attention byte-identical (no spurious stall items).
+  assert.equal(attention.some((entry) => entry.leaf_ref === "leaf-healthy"), false);
+  assert.equal(attention.some((entry) => entry.leaf_ref === "leaf-underThreshold"), false);
+  assert.equal(attention.some((entry) => entry.leaf_ref === "leaf-nonEmptyStdout"), false);
+
+  // formatStatusText: one-line enriched rendering (#901 style).
+  const text = formatText(payload.summary, attention);
+  const stalledLine = `  - leaf-stalled: stalled_executor (${runs.stalled}) — stdout 0 bytes for 42m; stderr tail: ${expectedStderrTail}`;
+  assert.match(text, new RegExp(`^${stalledLine.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "m"));
+  assert.match(
+    text,
+    new RegExp(
+      `^  - leaf-stalledEmptyStderr: stalled_executor \\(${runs.stalledEmptyStderr}\\) — stdout 0 bytes for 42m$`,
+      "m"
+    )
+  );
+
+  // Visibility only: --status mutates neither lease nor fleet manifest.
+  assert.equal(
+    fs.readFileSync(path.join(getRunDir(repoRoot, runs.stalled), "lease.json"), "utf-8"),
+    leaseBefore
+  );
+  assert.equal(fs.readFileSync(getFleetManifestPath(repoRoot, fleetId), "utf-8"), fleetBefore);
+
+  // No kill/signal path in the stall heuristic source.
+  const source = fs.readFileSync(RELAY_FLEET_SCRIPT, "utf-8");
+  const stallRegion = source.slice(
+    source.indexOf("// Visibility only (#931"),
+    source.indexOf("// New reasons are independent")
+  );
+  assert.match(stallRegion, /Visibility only/);
+  assert.doesNotMatch(stallRegion, /process\.kill|terminateProcessGroup|SIGTERM|SIGKILL/);
+
+  // Env-only threshold override; no CLI flag.
+  const help = runFleet(["--help"], { relayHome });
+  assert.doesNotMatch(help.stdout + help.stderr, /STALL|stall-threshold|stall_threshold/i);
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(parseArgs(["--repo", ".", "--fleet-id", "x", "--status"]), "stallThreshold"),
+    false
+  );
+
+  // Threshold override: shrink so a 5m-old empty stdout becomes stalled.
+  const overrideResult = runFleet([
+    "--repo", repoRoot,
+    "--fleet-id", fleetId,
+    "--status",
+    "--json",
+  ], {
+    relayHome,
+    env: {
+      RELAY_GH_BIN: fakeGh,
+      RELAY_FLEET_STALL_THRESHOLD_MS: "60000",
+    },
+  });
+  assert.equal(overrideResult.status, 0, `${overrideResult.stderr}\n${overrideResult.stdout}`);
+  const overrideAttention = JSON.parse(overrideResult.stdout).operator_attention;
+  assert.ok(overrideAttention.some(
+    (entry) => entry.leaf_ref === "leaf-underThreshold" && entry.reason === "stalled_executor"
+  ));
 });
