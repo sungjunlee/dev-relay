@@ -19,6 +19,16 @@ const { writeText } = require("./common");
 
 const DEFAULT_ADVISORY_TIMEOUT_SECONDS = 900;
 const DEFAULT_ADVISORY_GRACE_SECONDS = 10;
+/** Floor for a second advisory attempt when the adapter is not cline. */
+const MIN_ADVISORY_RETRY_TIMEOUT_SECONDS = 1;
+/**
+ * Cline's adapter refuses parent budgets below 120s (see invoke-reviewer-cline.js).
+ * A retry with less remaining budget cannot succeed, so skip it.
+ */
+const CLINE_MIN_ADVISORY_RETRY_TIMEOUT_SECONDS = 120;
+/** Stable adapter-side signal: output obtained, no advisory candidate validated. */
+const ADAPTER_PARSE_FAILURE_SIGNAL_RE =
+  /failed to parse any of \d+ advisory candidate/i;
 
 function parsePositiveSeconds(value, fallback = DEFAULT_ADVISORY_TIMEOUT_SECONDS) {
   if (value === undefined || value === null || value === "") return fallback;
@@ -210,13 +220,41 @@ function startAdvisoryReview({
   };
 }
 
-function writeRawResponse(runDir, round, reviewerName, stdout, stderr) {
-  const rawResponsePath = path.join(runDir, `review-round-${round}-advisory-${reviewerName}-raw-response.txt`);
+function writeRawResponse(runDir, round, reviewerName, stdout, stderr, { attempt = null } = {}) {
+  const suffix = Number.isInteger(attempt) && attempt > 0
+    ? `-raw-response-attempt-${attempt}.txt`
+    : "-raw-response.txt";
+  const rawResponsePath = path.join(runDir, `review-round-${round}-advisory-${reviewerName}${suffix}`);
   const text = stderr.trim()
     ? [stdout.trim(), "", "stderr:", stderr.trim()].filter(Boolean).join("\n")
     : stdout.trim();
   writeText(rawResponsePath, `${text}\n`);
   return rawResponsePath;
+}
+
+function promoteRawResponseToAttempt(rawResponsePath, attemptNumber) {
+  const attemptPath = rawResponsePath.replace(
+    /-raw-response\.txt$/,
+    `-raw-response-attempt-${attemptNumber}.txt`
+  );
+  if (attemptPath === rawResponsePath) {
+    throw new Error(`cannot promote raw response path to attempt artifact: ${rawResponsePath}`);
+  }
+  fs.renameSync(rawResponsePath, attemptPath);
+  return attemptPath;
+}
+
+function minAdvisoryRetryTimeoutSeconds(reviewerName) {
+  return reviewerName === "cline"
+    ? CLINE_MIN_ADVISORY_RETRY_TIMEOUT_SECONDS
+    : MIN_ADVISORY_RETRY_TIMEOUT_SECONDS;
+}
+
+function isAdapterParseFailureSignal({ stdout, stderr, outcome }) {
+  const hasOutput = Boolean(String(stdout || "").trim() || String(stderr || "").trim());
+  if (!hasOutput) return false;
+  const haystack = [stderr, stdout, outcome?.error?.message].filter(Boolean).join("\n");
+  return ADAPTER_PARSE_FAILURE_SIGNAL_RE.test(haystack);
 }
 
 function buildDeferredResult(advisoryRun, { criticalPathWaitMs = 0, consumedByPhase = "metrics" } = {}) {
@@ -384,12 +422,15 @@ function waitForDecisionTiming(request, waitMs = 300) {
  * RELAY_CLINE_REVIEW_TIMEOUT so one number governs both the parent
  * execFileSync kill and the adapter's internal --timeout derivation.
  * Direct (non-advisory) cline invocations keep the env contract unchanged.
+ * Callers may pass timeoutSeconds to reflect a remaining retry budget.
  */
-function buildAdvisoryAdapterEnv(request) {
+function buildAdvisoryAdapterEnv(request, { timeoutSeconds } = {}) {
   const env = { ...process.env };
   if (request.reviewerName === "cline") {
-    const timeoutSeconds = parsePositiveSeconds(request.timeoutSeconds);
-    env.RELAY_CLINE_REVIEW_TIMEOUT = `${timeoutSeconds}s`;
+    const seconds = parsePositiveSeconds(
+      timeoutSeconds !== undefined ? timeoutSeconds : request.timeoutSeconds
+    );
+    env.RELAY_CLINE_REVIEW_TIMEOUT = `${seconds}s`;
   }
   return env;
 }
@@ -398,6 +439,8 @@ function executeAdvisoryRequest(request) {
   let artifactPath = null;
   let failureReason = null;
   let rawResponsePath = null;
+  let rawResponsePaths = [];
+  let attemptCount = 0;
   let status = "success";
   let counts = { required_count: 0, advisory_count: 0, duplicate_low_confidence_count: 0 };
   let advisoryRepoPath = null;
@@ -408,8 +451,10 @@ function executeAdvisoryRequest(request) {
         ? validateAdvisoryProfile(request.profile)
         : null
     );
-    const timeoutMs = parsePositiveSeconds(request.timeoutSeconds) * 1000;
-    advisoryRepoPath = createAdvisoryWorktree(request.reviewRepoPath, request.runDir, request.artifactReviewerName || request.reviewerName);
+    const laneBudgetMs = parsePositiveSeconds(request.timeoutSeconds) * 1000;
+    const laneStartedAt = Date.now();
+    const artifactName = request.artifactReviewerName || request.reviewerName;
+    advisoryRepoPath = createAdvisoryWorktree(request.reviewRepoPath, request.runDir, artifactName);
     const statusBefore = captureGitStatus(advisoryRepoPath);
     const execArgs = [
       request.reviewerScript,
@@ -421,38 +466,54 @@ function executeAdvisoryRequest(request) {
     if (request.reviewerModel) execArgs.push("--model", request.reviewerModel);
     if (advisoryProfile) execArgs.push("--profile", advisoryProfile);
 
-    let stdout = "";
-    let stderr = "";
-    let outcome = { code: 0 };
-    try {
-      const execOptions = {
-        cwd: advisoryRepoPath,
-        encoding: "utf-8",
-        maxBuffer: 10 * 1024 * 1024,
-        stdio: "pipe",
-        timeout: timeoutMs,
-      };
-      if (request.reviewerName === "cline") {
-        execOptions.env = buildAdvisoryAdapterEnv(request);
+    function runAdapterAttempt(timeoutMs) {
+      attemptCount += 1;
+      let stdout = "";
+      let stderr = "";
+      let outcome = { code: 0 };
+      try {
+        const execOptions = {
+          cwd: advisoryRepoPath,
+          encoding: "utf-8",
+          maxBuffer: 10 * 1024 * 1024,
+          stdio: "pipe",
+          timeout: timeoutMs,
+        };
+        if (request.reviewerName === "cline") {
+          execOptions.env = buildAdvisoryAdapterEnv(request, {
+            timeoutSeconds: Math.max(1, Math.ceil(timeoutMs / 1000)),
+          });
+        }
+        stdout = execFileSync(process.execPath, execArgs, execOptions).trim();
+      } catch (error) {
+        stdout = String(error.stdout || "").trim();
+        stderr = String(error.stderr || "").trim();
+        outcome = {
+          code: Number.isInteger(error.status) ? error.status : null,
+          error,
+          signal: error.signal,
+          timeout: error.code === "ETIMEDOUT" || error.signal === "SIGTERM",
+        };
       }
-      stdout = execFileSync(process.execPath, execArgs, execOptions).trim();
-    } catch (error) {
-      stdout = String(error.stdout || "").trim();
-      stderr = String(error.stderr || "").trim();
-      outcome = {
-        code: Number.isInteger(error.status) ? error.status : null,
-        error,
-        signal: error.signal,
-        timeout: error.code === "ETIMEDOUT" || error.signal === "SIGTERM",
-      };
+      const attemptRawPath = writeRawResponse(
+        request.runDir,
+        request.round,
+        artifactName,
+        stdout,
+        stderr
+      );
+      rawResponsePaths.push(attemptRawPath);
+      rawResponsePath = attemptRawPath;
+      return { stdout, stderr, outcome, rawPath: attemptRawPath };
     }
 
-    rawResponsePath = writeRawResponse(request.runDir, request.round, request.artifactReviewerName || request.reviewerName, stdout, stderr);
-    const statusAfter = captureGitStatus(advisoryRepoPath);
-    if (statusBefore !== statusAfter) {
+    function applyPolicyViolation(statusAfter) {
       status = "policy_violation";
       failureReason = "advisory_reviewer_modified_worktree";
-      artifactPath = path.join(request.runDir, `review-round-${request.round}-advisory-${request.artifactReviewerName || request.reviewerName}-policy-violation.txt`);
+      artifactPath = path.join(
+        request.runDir,
+        `review-round-${request.round}-advisory-${artifactName}-policy-violation.txt`
+      );
       writeText(artifactPath, [
         "Advisory reviewer write policy violation detected.",
         "",
@@ -465,22 +526,15 @@ function executeAdvisoryRequest(request) {
         "Status after advisory reviewer:",
         statusAfter || "(clean)",
       ].join("\n") + "\n");
-    } else if (outcome.timeout) {
-      status = "timeout";
-      failureReason = (
-        `${request.reviewerName} reviewer advisory_review timed out after ${timeoutMs / 1000}s; ` +
-        `model=${request.reviewerModel || "default"}; raw_response=${rawResponsePath}`
+    }
+
+    function applySuccess(parsed) {
+      status = "success";
+      failureReason = null;
+      artifactPath = path.join(
+        request.runDir,
+        `review-round-${request.round}-advisory-${artifactName}.json`
       );
-    } else if (outcome.error || outcome.code !== 0) {
-      status = "failed";
-      failureReason = outcome.error ? outcome.error.message : `advisory reviewer exited with code ${outcome.code}`;
-    } else {
-      const parsed = parseAdvisoryReview(stdout, {
-        adapter: request.reviewerName,
-        phase: "advisory_review",
-        profile: request.profile,
-      });
-      artifactPath = path.join(request.runDir, `review-round-${request.round}-advisory-${request.artifactReviewerName || request.reviewerName}.json`);
       writeText(artifactPath, `${JSON.stringify(parsed, null, 2)}\n`);
       counts = {
         required_count: parsed.required_findings.length,
@@ -488,6 +542,90 @@ function executeAdvisoryRequest(request) {
         duplicate_low_confidence_count: parsed.duplicate_or_low_confidence.length,
       };
     }
+
+    /**
+     * Classify one adapter attempt.
+     * Returns { kind: "success"|"policy_violation"|"timeout"|"failed"|"parse_failure", ... }.
+     * parse_failure is the only retryable class (model-output variance).
+     */
+    function classifyAttempt({ stdout, stderr, outcome, rawPath }) {
+      const statusAfter = captureGitStatus(advisoryRepoPath);
+      if (statusBefore !== statusAfter) {
+        return { kind: "policy_violation", statusAfter };
+      }
+      if (outcome.timeout) {
+        return {
+          kind: "timeout",
+          failureReason: (
+            `${request.reviewerName} reviewer advisory_review timed out after ${laneBudgetMs / 1000}s; ` +
+            `model=${request.reviewerModel || "default"}; raw_response=${rawPath}`
+          ),
+        };
+      }
+      if (outcome.error || outcome.code !== 0) {
+        const execFailureReason = outcome.error
+          ? outcome.error.message
+          : `advisory reviewer exited with code ${outcome.code}`;
+        if (isAdapterParseFailureSignal({ stdout, stderr, outcome })) {
+          return { kind: "parse_failure", failureReason: execFailureReason };
+        }
+        return { kind: "failed", failureReason: execFailureReason };
+      }
+      try {
+        const parsed = parseAdvisoryReview(stdout, {
+          adapter: request.reviewerName,
+          phase: "advisory_review",
+          profile: request.profile,
+        });
+        return { kind: "success", parsed };
+      } catch (error) {
+        // Exit 0 with no stdout is closer to no-output than variance — do not retry.
+        if (!String(stdout || "").trim()) {
+          return { kind: "failed", failureReason: error.message };
+        }
+        return { kind: "parse_failure", failureReason: error.message };
+      }
+    }
+
+    function settleClassification(classification) {
+      if (classification.kind === "success") {
+        applySuccess(classification.parsed);
+        return;
+      }
+      if (classification.kind === "policy_violation") {
+        applyPolicyViolation(classification.statusAfter);
+        return;
+      }
+      status = classification.kind === "timeout" ? "timeout" : "failed";
+      failureReason = classification.failureReason;
+    }
+
+    let classification = classifyAttempt(runAdapterAttempt(laneBudgetMs));
+    if (classification.kind === "parse_failure") {
+      const remainingMs = laneBudgetMs - (Date.now() - laneStartedAt);
+      const minRetryMs = minAdvisoryRetryTimeoutSeconds(request.reviewerName) * 1000;
+      if (remainingMs >= minRetryMs) {
+        rawResponsePaths[0] = promoteRawResponseToAttempt(rawResponsePaths[0], 1);
+        classification = classifyAttempt(runAdapterAttempt(remainingMs));
+        if (classification.kind === "parse_failure") {
+          // Retry exhausted — surface as a normal failed result.
+          classification = {
+            kind: "failed",
+            failureReason: classification.failureReason,
+          };
+        }
+      } else {
+        const remainingSeconds = Math.max(0, Math.floor(remainingMs / 1000));
+        classification = {
+          kind: "failed",
+          failureReason: (
+            `${classification.failureReason}; retry skipped: remaining lane budget ` +
+            `${remainingSeconds}s below viable adapter minimum ${minRetryMs / 1000}s`
+          ),
+        };
+      }
+    }
+    settleClassification(classification);
   } catch (error) {
     status = "failed";
     failureReason = error.message;
@@ -497,6 +635,7 @@ function executeAdvisoryRequest(request) {
   const result = {
     artifactHash,
     artifactPath,
+    attemptCount,
     completed_at: new Date().toISOString(),
     failureReason,
     gating: request.gating === true,
@@ -504,6 +643,7 @@ function executeAdvisoryRequest(request) {
     model: request.reviewerModel || null,
     profile: request.profile,
     rawResponsePath,
+    rawResponsePaths: rawResponsePaths.slice(),
     reviewer: request.reviewerName,
     source: request.source || null,
     status,
@@ -537,6 +677,8 @@ function executeAdvisoryRequest(request) {
       artifact_path: artifactPath,
       advisory_artifact_hash: artifactHash,
       raw_response_path: rawResponsePath,
+      raw_response_paths: rawResponsePaths.slice(),
+      attempt_count: attemptCount,
       failure_reason: failureReason,
       ...counts,
       ...timingFields,
