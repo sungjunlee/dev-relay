@@ -1,0 +1,12 @@
+{
+  "program": {
+    "id": "valid-depth-one",
+    "source": "file:///tmp/depth-one.md",
+    "repo": "example/repo",
+    "tracker": "github",
+    "exit_gates": ["all merged"],
+    "outcomes": [
+      { "id": "single-layer", "task_kind": "relay_run", "accepted_outcomes": ["work merged"], "depends_on": [], "depth": 1 }
+    ]
+  }
+}

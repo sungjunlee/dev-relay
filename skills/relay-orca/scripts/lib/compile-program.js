@@ -2,7 +2,7 @@
 
 const { reject } = require("./reasons");
 const { assertSupportedKind, assertPreparedFleet, routeFor, defaultEvidenceFor } = require("./task-kinds");
-const { edgesFor, computeLevels, declaredLevels, groupIntoWaves } = require("./waves");
+const { normalizeDependsOn, edgesFor, assertAcyclic, computeLevels, declaredLevels, groupIntoWaves } = require("./waves");
 
 const DEFAULT_CONCURRENCY = 2;
 const MAX_CONCURRENCY = 4;
@@ -74,8 +74,13 @@ function assertDepthAndNesting(outcome) {
   if (outcome.spawns_operators === true || outcome.sub_program || Array.isArray(outcome.orchestrates)) {
     reject("EXCESSIVE_DEPTH", `outcome ${outcome.id} declares sub-orchestration; depth beyond coordinator -> operator -> executor/reviewer is forbidden`);
   }
-  if (Number.isInteger(outcome.depth) && outcome.depth > 1) {
-    reject("EXCESSIVE_DEPTH", `outcome ${outcome.id} declares depth ${outcome.depth}; a single operator layer is the maximum`);
+  if (outcome.depth !== undefined && outcome.depth !== null) {
+    if (typeof outcome.depth !== "number" || !Number.isFinite(outcome.depth)) {
+      reject("INVALID_INPUT", `outcome ${outcome.id} has invalid depth ${JSON.stringify(outcome.depth)} (expected a finite number)`);
+    }
+    if (outcome.depth > 1) {
+      reject("EXCESSIVE_DEPTH", `outcome ${outcome.id} declares depth ${outcome.depth}; a single operator layer is the maximum`);
+    }
   }
 }
 
@@ -104,7 +109,7 @@ function validateOutcome(outcome, seenIds, seenTaskIds) {
 }
 
 function buildTask(outcome, taskId, waveIndex, taskIdByOutcome) {
-  const deps = Array.isArray(outcome.depends_on) ? outcome.depends_on : [];
+  const deps = normalizeDependsOn(outcome);
   const evidence = Array.isArray(outcome.expected_evidence) && outcome.expected_evidence.length
     ? outcome.expected_evidence.slice()
     : defaultEvidenceFor(outcome.task_kind);
@@ -134,6 +139,7 @@ function compileProgram(input, options = {}) {
   program.outcomes.forEach((outcome) => taskIdByOutcome.set(outcome.id, validateOutcome(outcome, seenIds, seenTaskIds)));
 
   const edges = edgesFor(program.outcomes);
+  assertAcyclic(program.outcomes, edges);
   const declared = declaredLevels(program.outcomes, edges);
   const levels = declared || computeLevels(program.outcomes, edges);
   const waves = groupIntoWaves(program.outcomes, (id) => levels.get(id), taskIdOf);

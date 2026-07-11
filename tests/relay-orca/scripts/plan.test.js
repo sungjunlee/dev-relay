@@ -169,6 +169,57 @@ test("D7/D9: every rejection reason maps to a DISTINCT non-zero exit code", () =
   assert.ok(codes.every((code) => Number.isInteger(code) && code > 0));
 });
 
+// Assert a fixture rejects with a specific reason both at the compile-program
+// boundary and through the plan.js CLI (exit code + --json reason_code).
+function assertRejects(fixture, reason) {
+  assert.throws(() => compileFixture(fixture), (error) => error.reasonCode === reason, `${fixture} must reject with ${reason}`);
+  const result = runPlanIsolated(fixture, ["--json"]);
+  assert.equal(result.status, REASONS[reason], `${fixture} CLI must exit with ${reason} code ${REASONS[reason]}`);
+  assert.equal(JSON.parse(result.stdout).reason_code, reason);
+}
+
+// ---------------------------------------------------------------------------
+// Finding 1: cycle detection is independent of declared-wave mode (D7d)
+// ---------------------------------------------------------------------------
+
+test("D7(d): a dependency cycle whose outcomes ALSO declare waves rejects as DEPENDENCY_CYCLE (not SAME_WAVE_DEPENDENCY)", () => {
+  assertRejects("reject-cycle-declared", "DEPENDENCY_CYCLE");
+});
+
+// ---------------------------------------------------------------------------
+// Finding 2: malformed depends_on fails closed instead of silently emptying
+// ---------------------------------------------------------------------------
+
+test("depends_on present as a non-array string fails closed as INVALID_INPUT (never dropped to independent)", () => {
+  assertRejects("reject-depends-on-string", "INVALID_INPUT");
+});
+
+test("depends_on array containing a non-string entry fails closed as INVALID_INPUT", () => {
+  assertRejects("reject-depends-on-nonstring", "INVALID_INPUT");
+});
+
+// ---------------------------------------------------------------------------
+// Finding 3: every numeric depth above the max is rejected, not just integers (D9)
+// ---------------------------------------------------------------------------
+
+test("D9: fractional depth 1.5 above one operator layer rejects as EXCESSIVE_DEPTH", () => {
+  assertRejects("reject-depth-fractional", "EXCESSIVE_DEPTH");
+});
+
+test("D9: integer depth 2 rejects as EXCESSIVE_DEPTH", () => {
+  assertRejects("reject-depth-two", "EXCESSIVE_DEPTH");
+});
+
+test("D9: non-numeric depth fails closed as INVALID_INPUT", () => {
+  assertRejects("reject-depth-nan", "INVALID_INPUT");
+});
+
+test("D9: depth of exactly 1 (a single operator layer) still compiles", () => {
+  const plan = compileFixture("valid-depth-one");
+  assert.equal(plan.ok, true);
+  assert.equal(plan.tasks.length, 1);
+});
+
 // ---------------------------------------------------------------------------
 // D6 read-only proof
 // ---------------------------------------------------------------------------
