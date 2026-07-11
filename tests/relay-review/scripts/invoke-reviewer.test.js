@@ -336,6 +336,75 @@ process.exit(1);
   assert.doesNotMatch(stderr, /Codex reviewer primary_review timed out/);
 });
 
+test("codex adapter ignores usage-limit text embedded in echoed output", () => {
+  const { repoRoot, promptPath } = setupRepo();
+  const fakeDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-fake-codex-quota-echo-"));
+  const fakeCodex = writeExecutable(fakeDir, "fake-codex.js", `#!/usr/bin/env node
+process.stdout.write("Echoed prompt: ERROR: You've hit your usage limit. Please preserve this fixture text.\\n");
+process.exit(1);
+`);
+
+  let error;
+  try {
+    execFileSync("node", [
+      CODEX_SCRIPT,
+      "--repo", repoRoot,
+      "--prompt-file", promptPath,
+      "--json",
+    ], {
+      cwd: repoRoot,
+      encoding: "utf-8",
+      stdio: "pipe",
+      env: { ...process.env, RELAY_CODEX_BIN: fakeCodex },
+    });
+    assert.fail("expected invoke-reviewer-codex.js to fail");
+  } catch (caught) {
+    error = caught;
+  }
+
+  const stderr = String(error.stderr || "");
+  assert.doesNotMatch(stderr, /codex_quota_exhausted/);
+  assert.match(
+    stderr,
+    /^Error: Codex reviewer primary_review failed; model=default; raw_response=.+; Echoed prompt: ERROR: You've hit your usage limit\. Please preserve this fixture text\.\n$/
+  );
+});
+
+test("codex adapter prefers quota classification when quota output overlaps timeout", () => {
+  const { repoRoot, promptPath } = setupRepo();
+  const fakeDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-fake-codex-quota-timeout-"));
+  const usageLimitLine =
+    "ERROR: You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at 5:47 PM.";
+  const fakeCodex = writeExecutable(fakeDir, "fake-codex.js", `#!/usr/bin/env node
+process.stderr.write(${JSON.stringify(usageLimitLine + "\n")});
+setTimeout(() => {}, 1000);
+`);
+
+  let error;
+  try {
+    execFileSync("node", [
+      CODEX_SCRIPT,
+      "--repo", repoRoot,
+      "--prompt-file", promptPath,
+      "--json",
+    ], {
+      cwd: repoRoot,
+      encoding: "utf-8",
+      stdio: "pipe",
+      timeout: 5000,
+      env: { ...process.env, RELAY_CODEX_BIN: fakeCodex, RELAY_CODEX_REVIEW_TIMEOUT: "50ms" },
+    });
+    assert.fail("expected invoke-reviewer-codex.js to fail on usage limit");
+  } catch (caught) {
+    error = caught;
+  }
+
+  const stderr = String(error.stderr || "");
+  assert.match(stderr, /codex_quota_exhausted/);
+  assert.match(stderr, /try again at 5:47 PM/);
+  assert.doesNotMatch(stderr, /Codex reviewer primary_review timed out/);
+});
+
 test("codex adapter keeps generic failure message unchanged for non-quota errors", () => {
   const { repoRoot, promptPath } = setupRepo();
   const fakeDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-fake-codex-generic-"));
