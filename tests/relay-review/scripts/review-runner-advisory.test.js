@@ -21,7 +21,7 @@ const {
   createEnforcementFixture,
 } = require("../../relay-dispatch/scripts/test-support");
 const { EXECUTION_EVIDENCE_FILENAME } = require("../../../skills/relay-review/scripts/review-runner/execution-evidence");
-const { executeAdvisoryRequest, finishAdvisoryReview } = require("../../../skills/relay-review/scripts/review-runner/advisory");
+const { executeAdvisoryRequest, finishAdvisoryReview, buildAdvisoryAdapterEnv } = require("../../../skills/relay-review/scripts/review-runner/advisory");
 const { buildAdvisoryPrompt } = require("../../../skills/relay-review/scripts/review-runner/advisory-prompt");
 const { applyReviewAssurancePolicy } = require("../../../skills/relay-review/scripts/review-runner/assurance");
 const { installFakeGhOnPath } = require("../fixtures/fake-gh");
@@ -472,6 +472,77 @@ process.stdout.write(JSON.stringify(${JSON.stringify(advisoryPayload(payloadProf
   return filePath;
 }
 
+function writeEnvLoggingReviewer(repoRoot, { envLogPath, payloadProfile = "adversarial" } = {}) {
+  const filePath = path.join(repoRoot, "env-logging-reviewer.js");
+  fs.writeFileSync(filePath, `#!/usr/bin/env node
+const fs = require("fs");
+fs.writeFileSync(${JSON.stringify(envLogPath)}, JSON.stringify({
+  RELAY_CLINE_REVIEW_TIMEOUT: process.env.RELAY_CLINE_REVIEW_TIMEOUT || null,
+}), "utf-8");
+process.stdout.write(JSON.stringify(${JSON.stringify(advisoryPayload(payloadProfile))}));
+`, "utf-8");
+  fs.chmodSync(filePath, 0o755);
+  return filePath;
+}
+
+function executeClineTimeoutEnvRequest({
+  timeoutSeconds,
+  inheritedTimeout = null,
+  profile = "adversarial",
+} = {}) {
+  const { repoRoot, runDir, runId } = setupRepo();
+  const envLogPath = path.join(runDir, "cline-timeout-env.json");
+  const resultPath = path.join(runDir, "cline-timeout-result.json");
+  const promptPath = path.join(runDir, "cline-timeout-prompt.md");
+  const decisionPath = path.join(runDir, "cline-timeout-decision.json");
+  fs.writeFileSync(promptPath, "Advisory prompt\n", "utf-8");
+  const reviewerScript = writeEnvLoggingReviewer(repoRoot, { envLogPath, payloadProfile: profile });
+
+  const previous = process.env.RELAY_CLINE_REVIEW_TIMEOUT;
+  if (inheritedTimeout === null) {
+    delete process.env.RELAY_CLINE_REVIEW_TIMEOUT;
+  } else {
+    process.env.RELAY_CLINE_REVIEW_TIMEOUT = inheritedTimeout;
+  }
+  try {
+    executeAdvisoryRequest({
+      artifactReviewerName: "cline",
+      decisionPath,
+      gating: true,
+      headSha: "a".repeat(40),
+      laneIndex: 1,
+      profile,
+      promptPath,
+      requestPath: path.join(runDir, "cline-timeout-request.json"),
+      resultPath,
+      reviewerModel: null,
+      reviewerName: "cline",
+      reviewerPolicy: null,
+      policyDecision: null,
+      modelResolution: null,
+      reviewerScript,
+      reviewRepoPath: repoRoot,
+      round: 1,
+      runDir,
+      runId,
+      runRepoPath: repoRoot,
+      source: null,
+      startedAt: Date.now(),
+      state: STATES.REVIEW_PENDING,
+      timeoutSeconds,
+      trigger: "on_pass",
+    });
+  } finally {
+    if (previous === undefined) delete process.env.RELAY_CLINE_REVIEW_TIMEOUT;
+    else process.env.RELAY_CLINE_REVIEW_TIMEOUT = previous;
+  }
+
+  return {
+    env: JSON.parse(fs.readFileSync(envLogPath, "utf-8")),
+    result: JSON.parse(fs.readFileSync(resultPath, "utf-8")),
+  };
+}
+
 function executeProfileRequest({ profile, payloadProfile = "blindspot" } = {}) {
   const { repoRoot, runDir, runId } = setupRepo();
   const logPath = path.join(runDir, "profile-reviewer-args.json");
@@ -583,6 +654,42 @@ test("executeAdvisoryRequest rejects unknown profile before spawning reviewer", 
   assert.equal(result.status, "failed");
   assert.match(result.failureReason, /Unknown advisory profile/);
   assert.equal(fs.existsSync(logPath), false);
+});
+
+test("executeAdvisoryRequest exports adversarial default lane budget to cline child env", () => {
+  const { env, result } = executeClineTimeoutEnvRequest({ timeoutSeconds: 1800 });
+  assert.equal(result.status, "success");
+  assert.equal(env.RELAY_CLINE_REVIEW_TIMEOUT, "1800s");
+});
+
+test("executeAdvisoryRequest exports --advisory-timeout override to cline child env", () => {
+  const { env, result } = executeClineTimeoutEnvRequest({ timeoutSeconds: 3600 });
+  assert.equal(result.status, "success");
+  assert.equal(env.RELAY_CLINE_REVIEW_TIMEOUT, "3600s");
+});
+
+test("executeAdvisoryRequest lane budget supersedes inherited RELAY_CLINE_REVIEW_TIMEOUT", () => {
+  const { env, result } = executeClineTimeoutEnvRequest({
+    timeoutSeconds: 1800,
+    inheritedTimeout: "9999s",
+  });
+  assert.equal(result.status, "success");
+  assert.equal(env.RELAY_CLINE_REVIEW_TIMEOUT, "1800s");
+});
+
+test("buildAdvisoryAdapterEnv only rewrites cline timeout env", () => {
+  const previous = process.env.RELAY_CLINE_REVIEW_TIMEOUT;
+  process.env.RELAY_CLINE_REVIEW_TIMEOUT = "9999s";
+  try {
+    const clineEnv = buildAdvisoryAdapterEnv({ reviewerName: "cline", timeoutSeconds: 3600 });
+    assert.equal(clineEnv.RELAY_CLINE_REVIEW_TIMEOUT, "3600s");
+
+    const otherEnv = buildAdvisoryAdapterEnv({ reviewerName: "opencode", timeoutSeconds: 3600 });
+    assert.equal(otherEnv.RELAY_CLINE_REVIEW_TIMEOUT, "9999s");
+  } finally {
+    if (previous === undefined) delete process.env.RELAY_CLINE_REVIEW_TIMEOUT;
+    else process.env.RELAY_CLINE_REVIEW_TIMEOUT = previous;
+  }
 });
 
 function runReview({

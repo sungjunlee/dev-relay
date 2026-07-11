@@ -62,6 +62,10 @@ Legacy partial advisory overlays such as `{ "model": "..." }` compose onto exact
 
 Lane composition is operator/orchestrator judgment, not script policy. Low-risk tasks usually need no lane or one blindspot lane. Security, concurrency, migration, or invariant-heavy tasks can add an adversarial gating lane. Broad changes can use multiple reviewers/models, but scripts do not auto-select lanes based on task risk.
 
+### Cline advisory timeout budget
+
+For `cline` advisory lanes, `executeAdvisoryRequest` exports the lane's effective `timeoutSeconds` into the adapter child as `RELAY_CLINE_REVIEW_TIMEOUT="<timeoutSeconds>s"`. That lane budget supersedes any inherited `RELAY_CLINE_REVIEW_TIMEOUT` in the review-runner process so one number governs both the parent `execFileSync` kill and the adapter's internal `--timeout` (env − 60s headroom). Operator knob: `--advisory-timeout`. Direct (non-advisory) invocations of `invoke-reviewer-cline.js` keep the existing env contract and default (`1800s`).
+
 ## External Review Triggers
 
 Delayed-publication runs should spend external review quota only after the internal relay review has converged:

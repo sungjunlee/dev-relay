@@ -378,6 +378,22 @@ function waitForDecisionTiming(request, waitMs = 300) {
   return readDecisionTiming(request);
 }
 
+/**
+ * Build the adapter child env for an advisory lane spawn.
+ * For cline, the lane budget always wins over any inherited
+ * RELAY_CLINE_REVIEW_TIMEOUT so one number governs both the parent
+ * execFileSync kill and the adapter's internal --timeout derivation.
+ * Direct (non-advisory) cline invocations keep the env contract unchanged.
+ */
+function buildAdvisoryAdapterEnv(request) {
+  const env = { ...process.env };
+  if (request.reviewerName === "cline") {
+    const timeoutSeconds = parsePositiveSeconds(request.timeoutSeconds);
+    env.RELAY_CLINE_REVIEW_TIMEOUT = `${timeoutSeconds}s`;
+  }
+  return env;
+}
+
 function executeAdvisoryRequest(request) {
   let artifactPath = null;
   let failureReason = null;
@@ -409,13 +425,17 @@ function executeAdvisoryRequest(request) {
     let stderr = "";
     let outcome = { code: 0 };
     try {
-      stdout = execFileSync(process.execPath, execArgs, {
+      const execOptions = {
         cwd: advisoryRepoPath,
         encoding: "utf-8",
         maxBuffer: 10 * 1024 * 1024,
         stdio: "pipe",
         timeout: timeoutMs,
-      }).trim();
+      };
+      if (request.reviewerName === "cline") {
+        execOptions.env = buildAdvisoryAdapterEnv(request);
+      }
+      stdout = execFileSync(process.execPath, execArgs, execOptions).trim();
     } catch (error) {
       stdout = String(error.stdout || "").trim();
       stderr = String(error.stderr || "").trim();
@@ -543,6 +563,7 @@ function executeAdvisoryRequest(request) {
 
 module.exports = {
   DEFAULT_ADVISORY_GRACE_SECONDS,
+  buildAdvisoryAdapterEnv,
   executeAdvisoryRequest,
   finishAdvisoryReview,
   buildAdvisoryReviewerPolicy,

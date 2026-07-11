@@ -1796,6 +1796,80 @@ process.stdout.write(JSON.stringify({
   assert.equal(loggedArgs[loggedArgs.indexOf("--timeout") + 1], "120");
 });
 
+test("cline adapter derives internal timeout 1740s from adversarial default 1800s env", () => {
+  const { repoRoot, promptPath } = setupRepo();
+  const fakeDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-fake-cline-1800-"));
+  const logPath = path.join(fakeDir, "cline-args.log");
+  const fakeCline = writeExecutable(fakeDir, "fake-cline.js", `#!/usr/bin/env node
+const fs = require("fs");
+fs.writeFileSync(${JSON.stringify(logPath)}, JSON.stringify(process.argv.slice(2)), "utf-8");
+process.stdout.write(JSON.stringify({
+  type: "run_result",
+  finishReason: "completed",
+  text: JSON.stringify({
+    profile: "adversarial",
+    summary: "Default budget.",
+    required_findings: [],
+    advisory_findings: [],
+    duplicate_or_low_confidence: [],
+  }),
+}) + "\\n");
+`);
+
+  execFileSync("node", [
+    CLINE_SCRIPT,
+    "--repo", repoRoot,
+    "--prompt-file", promptPath,
+    "--profile", "adversarial",
+    "--json",
+  ], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+    env: { ...process.env, RELAY_CLINE_BIN: fakeCline, RELAY_CLINE_REVIEW_TIMEOUT: "1800s" },
+  });
+
+  const loggedArgs = JSON.parse(fs.readFileSync(logPath, "utf-8"));
+  assert.equal(loggedArgs[loggedArgs.indexOf("--timeout") + 1], "1740");
+});
+
+test("cline adapter derives internal timeout 3540s from 3600s advisory override env", () => {
+  const { repoRoot, promptPath } = setupRepo();
+  const fakeDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-fake-cline-3600-"));
+  const logPath = path.join(fakeDir, "cline-args.log");
+  const fakeCline = writeExecutable(fakeDir, "fake-cline.js", `#!/usr/bin/env node
+const fs = require("fs");
+fs.writeFileSync(${JSON.stringify(logPath)}, JSON.stringify(process.argv.slice(2)), "utf-8");
+process.stdout.write(JSON.stringify({
+  type: "run_result",
+  finishReason: "completed",
+  text: JSON.stringify({
+    profile: "adversarial",
+    summary: "Override budget.",
+    required_findings: [],
+    advisory_findings: [],
+    duplicate_or_low_confidence: [],
+  }),
+}) + "\\n");
+`);
+
+  execFileSync("node", [
+    CLINE_SCRIPT,
+    "--repo", repoRoot,
+    "--prompt-file", promptPath,
+    "--profile", "adversarial",
+    "--json",
+  ], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+    env: { ...process.env, RELAY_CLINE_BIN: fakeCline, RELAY_CLINE_REVIEW_TIMEOUT: "3600s" },
+  });
+
+  const loggedArgs = JSON.parse(fs.readFileSync(logPath, "utf-8"));
+  assert.equal(loggedArgs[loggedArgs.indexOf("--timeout") + 1], "3540");
+});
+
 test("cline adapter rejects primary review phase until canary promotion", () => {
   const { repoRoot, promptPath } = setupRepo();
   let error;
