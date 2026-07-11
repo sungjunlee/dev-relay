@@ -37,7 +37,7 @@ const FLAGS = [
   { flag: "--copy", kind: VALUE, mode: MODE_VERBATIM, valueName: "<file,...>", rationale: "Operator-supplied file list; keep the literal argv token." },
   { flag: "--diff-file", kind: VALUE, mode: MODE_VERBATIM, valueName: "<path>", rationale: "Operator-supplied fixture path; keep the literal argv token." },
   { flag: "--dispatch", kind: VALUE, mode: MODE_PARSED, valueName: "<actor[:provider/model]>", rationale: "Run route preview selector; flag-like following tokens should mean the value is missing." },
-  { flag: "--detach", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Launch dispatch under a detached supervisor and return a receipt; no value is consumed." },
+  { flag: "--detach", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Launch the run (dispatch or review round) under a detached supervisor and return a receipt; no value is consumed." },
   { flag: "--done-criteria-file", kind: VALUE, mode: MODE_VERBATIM, valueName: "<path>", rationale: "Operator-supplied anchor path; keep the literal argv token." },
   { flag: "--dry-run", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Presence flag; no value is consumed." },
   { flag: "--effective", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Presence flag; no value is consumed." },
@@ -230,7 +230,7 @@ const COMMAND_FLAGS = {
     "--diff-file", "--review-file", "--reviewer", "--reviewer-script",
     "--reviewer-model", "--advisory-reviewer", "--advisory-profile",
     "--advisory-reviewer-model", "--advisory-timeout", "--advisory-grace", "--prepare-only",
-    "--manual-review-reason", "--independent-review-reason", "--allow-behind-base", "--wait-for-checks", "--no-comment", "--json", "--help",
+    "--manual-review-reason", "--independent-review-reason", "--allow-behind-base", "--wait-for-checks", "--detach", "--no-comment", "--json", "--help",
   ],
   "run-full-gate": [
     "--repo", "--suites", "--output", "--lock-timeout", "--json", "--help",

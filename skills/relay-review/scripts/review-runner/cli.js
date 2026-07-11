@@ -1,7 +1,7 @@
 const path = require("path");
 const { bindCliArgs, findUnknownFlags } = require("../../../relay-dispatch/scripts/cli-args");
 
-const KNOWN_FLAGS = ["--repo", "--run-id", "--branch", "--pr", "--manifest", "--done-criteria-file", "--diff-file", "--review-file", "--manual-review-reason", "--reviewer", "--reviewer-script", "--reviewer-model", "--independent-review-reason", "--advisory-reviewer", "--advisory-profile", "--advisory-reviewer-model", "--advisory-timeout", "--advisory-grace", "--allow-behind-base", "--wait-for-checks", "--prepare-only", "--no-comment", "--json", "--help", "-h"];
+const KNOWN_FLAGS = ["--repo", "--run-id", "--branch", "--pr", "--manifest", "--done-criteria-file", "--diff-file", "--review-file", "--manual-review-reason", "--reviewer", "--reviewer-script", "--reviewer-model", "--independent-review-reason", "--advisory-reviewer", "--advisory-profile", "--advisory-reviewer-model", "--advisory-timeout", "--advisory-grace", "--allow-behind-base", "--wait-for-checks", "--detach", "--prepare-only", "--no-comment", "--json", "--help", "-h"];
 
 function parseReviewRunnerCliArgs(args) {
   const cliArgs = bindCliArgs(args, {
@@ -14,6 +14,7 @@ function parseReviewRunnerCliArgs(args) {
     cliArgs,
     options: {
       allowBehindBase: cliArgs.hasFlag("--allow-behind-base"),
+      detach: cliArgs.hasFlag("--detach"),
       advisoryGraceArg: cliArgs.getArg("--advisory-grace"),
       advisoryProfileArg: cliArgs.getArg("--advisory-profile"),
       advisoryReviewerArg: cliArgs.getArg("--advisory-reviewer"),

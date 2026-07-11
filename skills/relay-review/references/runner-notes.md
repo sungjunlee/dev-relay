@@ -99,6 +99,35 @@ Codex-only operation is covered as a regression for `policy.review_assurance=har
 
 Escalated runs may be reopened for one independent review attempt. A different `--reviewer` records a `reviewer_swap` event with `reason=different_reviewer:<from>-><to>`. Reusing the same adapter requires `--independent-review-reason <text>` so the audit trail explains how the attempt is independent, such as a fresh ephemeral context, different model hint, or materially different prompt bundle.
 
+## Detached Review Rounds (`--detach`)
+
+A review round is the last long-running foreground-fragile step in the pipeline. `--detach` runs the round under a crash-only detached supervisor — the same pattern `dispatch.js` ships (`--detach`, #799–#802) and `run-full-gate.js` ships for gates (#930) — so the round survives the death of the invoking shell.
+
+```bash
+node skills/relay-review/scripts/review-runner.js --repo . --run-id <id> --reviewer codex --detach --json
+```
+
+The parent re-execs `review-runner.js` (same argv minus `--detach`, with a receipt env var) in a new process group, waits for the child's receipt, prints it, and exits. The child runs the existing `run()` end-to-end. The receipt carries at least `{ runId, round, pid, pgid, logPath, sentinelPath }` plus `leasePath`, `manifestPath`, and a `recoverCommand`.
+
+Run-dir artifacts the detached round adds (foreground rounds write none of these, staying byte-identical):
+
+- `lease.json` — the run-dir lease written via `run-runtime-state.js` `writeRunLease` (`pid`, `pgid`, `host`, `started_at`, `timeout_s`). Operators identify and kill only this owned `pgid` (`kill -TERM -<pgid>`); the lease is left in place after the round so its shape stays inspectable, and the next detached round overwrites it.
+- `review-round-N.done` — the completion sentinel (`{ status: "complete" | "failed", exitCode, finishedAt }`), analogous to the gate `.done` sentinel.
+
+`--detach` composes with the normal round flags (`--reviewer`, `--reviewer-model`, `--advisory-reviewer` and lanes, `--wait-for-checks`, `--no-comment`). It is rejected — with a clear error, not silently ignored — when combined with `--prepare-only` (only emits the prompt bundle) or with a `--review-file` apply (applies an already-produced verdict without invoking the reviewer), because detaching adds nothing there.
+
+### Recovery: killed between verdict persistence and manifest apply
+
+If the detached supervisor is killed after the round persisted its verdict (`review-round-N-verdict.json` / `review-round-N-raw-response.txt` written) but before the manifest apply completed, re-apply the persisted verdict without re-invoking the reviewer using the existing `--review-file` semantics (unchanged by `--detach`):
+
+```bash
+node skills/relay-review/scripts/review-runner.js --repo . --run-id <id> --pr <pr> \
+  --review-file ~/.relay/runs/<repo-slug>/<id>/review-round-N-raw-response.txt \
+  --manual-review-reason "reapply persisted verdict after detached-round kill"
+```
+
+`loadReviewText` short-circuits to the on-disk review text when `--review-file` is passed, so this re-runs the round with the persisted verdict and applies it (`--manual-review-reason` records the provenance in `review.manual_review_reason`). The receipt's `recoverCommand` field spells out this same command for the current run.
+
 ## Backward Compatibility
 
 Pre-261 runs do not have `execution-evidence.json`. In that case the runner computes `quality_execution_status=missing`, a reviewer PASS cannot be applied, and operators should use `finalize-run --force-finalize-nonready --reason "pre-261 run, no artifact"` only after independent verification.
