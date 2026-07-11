@@ -3071,29 +3071,36 @@ async function main() {
     : status === "failed"
       ? "inspect_dispatch_failure"
       : dispatchSuccessNextAction;
-  manifest = updateManifestState(
-    manifest,
-    dispatchTargetState,
-    dispatchNextAction
-  );
-  const { github: _legacyGithub, ...manifestSansGithub } = manifest;
-  const { pr_number: _legacyGithubPrNumber, ...githubFields } = _legacyGithub || {};
-  const github = {
-    ...githubFields,
-    ...(prCreatedByUs !== null ? { pr_created_by_orchestrator: prCreatedByUs } : {}),
-  };
-  manifest = {
-    ...manifestSansGithub,
-    git: {
-      ...(manifestSansGithub.git || {}),
-      ...(prNumber !== null ? { pr_number: prNumber } : {}),
-      head_sha: currentHead || startHead || null,
-    },
-    ...(Object.keys(github).length ? { github } : {}),
-  };
-  writeManifest(manifestPath, manifest);
+  const freshManifest = readManifest(manifestPath).data;
+  const supervisorResultSuperseded = freshManifest.state !== STATES.DISPATCHED;
+  const intendedOutcome = `${dispatchTargetState}_${dispatchFailureClass || status}`;
+  if (supervisorResultSuperseded) {
+    manifest = freshManifest;
+  } else {
+    manifest = updateManifestState(
+      freshManifest,
+      dispatchTargetState,
+      dispatchNextAction
+    );
+    const { github: _legacyGithub, ...manifestSansGithub } = manifest;
+    const { pr_number: _legacyGithubPrNumber, ...githubFields } = _legacyGithub || {};
+    const github = {
+      ...githubFields,
+      ...(prCreatedByUs !== null ? { pr_created_by_orchestrator: prCreatedByUs } : {}),
+    };
+    manifest = {
+      ...manifestSansGithub,
+      git: {
+        ...(manifestSansGithub.git || {}),
+        ...(prNumber !== null ? { pr_number: prNumber } : {}),
+        head_sha: currentHead || startHead || null,
+      },
+      ...(Object.keys(github).length ? { github } : {}),
+    };
+    writeManifest(manifestPath, manifest);
+  }
 
-  const shouldAutoRecoverCommit = AUTO_RECOVER_COMMIT && !DRY_RUN && (
+  const shouldAutoRecoverCommit = !supervisorResultSuperseded && AUTO_RECOVER_COMMIT && !DRY_RUN && (
     status === "completed-uncommitted" ||
     (PUBLISH_POLICY === "after-internal-review" && status === "completed-with-warning" && uncommitted)
   );
@@ -3157,12 +3164,20 @@ async function main() {
   }
   appendRunEvent(repoRoot, runId, {
     event: EVENTS.DISPATCH_RESULT,
-    state_from: STATES.DISPATCHED,
+    state_from: supervisorResultSuperseded ? manifest.state : STATES.DISPATCHED,
     state_to: manifest.state,
     head_sha: currentHead || startHead || null,
-    reason: status === "failed"
-      ? `${RESUME_MODE ? "same_run_resume" : "new_dispatch"}:${error || "dispatch_failed"}`
-      : `${RESUME_MODE ? "same_run_resume" : "new_dispatch"}:${status}`,
+    reason: supervisorResultSuperseded
+      ? `supervisor_result_superseded_by_external_progress:${intendedOutcome}`
+      : status === "failed"
+        ? `${RESUME_MODE ? "same_run_resume" : "new_dispatch"}:${error || "dispatch_failed"}`
+        : `${RESUME_MODE ? "same_run_resume" : "new_dispatch"}:${status}`,
+    ...(supervisorResultSuperseded
+      ? {
+          observed_state: manifest.state,
+          intended_outcome: intendedOutcome,
+        }
+      : {}),
     publish_policy: PUBLISH_POLICY,
     executor_network: executorNetworkPolicy,
     executor_policy: executorPolicy,
