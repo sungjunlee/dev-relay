@@ -71,10 +71,10 @@ function sentinelPathFor(runDir, round) {
   return path.join(runDir, `review-round-${round}.done`);
 }
 
-function recoverCommandForReceipt(runRepoPath, runId, round) {
+function recoverCommandForReceipt(runRepoPath, runId, round, runDir) {
   return (
     `node skills/relay-review/scripts/review-runner.js --repo ${shellQuote(runRepoPath)} --run-id ${runId} ` +
-    `--review-file ${shellQuote(path.join("<runDir>", `review-round-${round}-raw-response.txt`))} ` +
+    `--review-file ${shellQuote(path.join(runDir, `review-round-${round}-raw-response.txt`))} ` +
     `--manual-review-reason "reapply persisted verdict after detached-round kill"`
   );
 }
@@ -112,7 +112,7 @@ function beginDetachSupervisorIfRequested({ runRepoPath, runId, round, runDir, m
     sentinelPath,
     leasePath,
     manifestPath: manifestPath || null,
-    recoverCommand: recoverCommandForReceipt(runRepoPath, runId, round),
+    recoverCommand: recoverCommandForReceipt(runRepoPath, runId, round, runDir),
   };
   writeJsonFileAtomically(receiptPath, receipt);
   // Don't let the receipt env leak into any nested child processes (e.g. the

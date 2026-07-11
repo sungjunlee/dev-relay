@@ -183,6 +183,16 @@ test("--detach prints a receipt and returns before the round finishes (DC #6a)",
   assert.equal(typeof receipt.logPath, "string");
   assert.match(receipt.recoverCommand, /--review-file/);
   assert.match(receipt.recoverCommand, /--manual-review-reason/);
+  // recoverCommand must be directly copy-pasteable for THIS run: it spells out the
+  // absolute persisted-verdict path, not an unusable <runDir> placeholder.
+  assert.ok(
+    receipt.recoverCommand.includes(path.join(runDir, "review-round-1-raw-response.txt")),
+    `recoverCommand embeds the real run-dir path (got: ${receipt.recoverCommand})`,
+  );
+  assert.ok(
+    !receipt.recoverCommand.includes("<runDir>"),
+    `recoverCommand carries no <runDir> placeholder (got: ${receipt.recoverCommand})`,
+  );
 
   // The round still completes end-to-end after the parent returned.
   await waitFor(() => fs.existsSync(receipt.sentinelPath), { message: "completion sentinel" });
