@@ -596,6 +596,59 @@ test("finalize-run freshness gate treats a behind add-then-delete as touching th
   });
 });
 
+test("finalize-run freshness gate evaluates remote PR tip when worktree HEAD lags", () => {
+  const fixture = setupRepo();
+  const tipWorktree = path.join(fixture.repoRoot, "wt-remote-tip");
+  execFileSync("git", ["-C", fixture.repoRoot, "worktree", "add", "--detach", tipWorktree, fixture.branch], {
+    encoding: "utf-8",
+    stdio: "pipe",
+  });
+  fs.writeFileSync(path.join(tipWorktree, "extra.txt"), "remote tip only\n", "utf-8");
+  execFileSync("git", ["-C", tipWorktree, "add", "extra.txt"], { encoding: "utf-8", stdio: "pipe" });
+  execFileSync("git", ["-C", tipWorktree, "commit", "-m", "Advance remote PR tip beyond worktree"], {
+    encoding: "utf-8",
+    stdio: "pipe",
+  });
+  execFileSync("git", ["-C", tipWorktree, "push", "origin", `HEAD:${fixture.branch}`], {
+    encoding: "utf-8",
+    stdio: "pipe",
+  });
+  execFileSync("git", ["-C", fixture.repoRoot, "worktree", "remove", "--force", tipWorktree], {
+    encoding: "utf-8",
+    stdio: "pipe",
+  });
+
+  const worktreeHead = execFileSync("git", ["-C", fixture.worktreePath, "rev-parse", "HEAD"], {
+    encoding: "utf-8",
+    stdio: "pipe",
+  }).trim();
+  const remoteHead = execFileSync(
+    "git",
+    ["-C", fixture.repoRoot, "ls-remote", "--exit-code", "--heads", "origin", fixture.branch],
+    { encoding: "utf-8", stdio: "pipe" },
+  ).trim().split(/\s+/)[0];
+  assert.notEqual(worktreeHead, remoteHead);
+
+  // Overlap only against the remote tip file. Local worktree HEAD never touched
+  // extra.txt, so a worktree-based gate would incorrectly treat this as disjoint.
+  advanceOriginMain(fixture, [{
+    files: { "extra.txt": "main also owns the remote-tip path\n" },
+    message: "Advance main on remote-only PR file",
+  }]);
+
+  const { result, logPath } = spawnFreshnessFinalize(fixture);
+
+  assert.equal(result.status, 2, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout), {
+    status: "refused_behind_main",
+    next_action: "rebase_and_rerun",
+    behind_count: 1,
+    overlapping_files: ["extra.txt"],
+  });
+  assert.doesNotMatch(fs.readFileSync(logPath, "utf-8"), /^pr (merge|comment) /m);
+  assert.equal(readManifest(fixture.manifestPath).data.state, STATES.READY_TO_MERGE);
+});
+
 test("finalize-run freshness override merges with a force-finalize audit event", () => {
   const fixture = setupRepo();
   const reason = "manually verified the overlapping generated file";

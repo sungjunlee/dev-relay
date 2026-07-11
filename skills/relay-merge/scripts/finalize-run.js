@@ -543,6 +543,20 @@ function remoteBranchExists(repoPath, remoteName, branch) {
   }
 }
 
+// Resolve the remote branch tip that `gh pr merge` will merge — not the
+// retained worktree HEAD, which can lag on normal ready_to_merge runs.
+function resolveRemoteBranchHead(repoPath, remoteName, branch) {
+  if (!remoteName || !branch) {
+    throw new Error("Cannot resolve remote PR head without remote and branch");
+  }
+  const output = execGit(repoPath, ["ls-remote", "--exit-code", "--heads", remoteName, branch]);
+  const sha = String(output || "").trim().split(/\s+/)[0] || "";
+  if (!/^[0-9a-f]{40}$/i.test(sha)) {
+    throw new Error(`Cannot resolve remote PR tip for ${remoteName}/${branch}`);
+  }
+  return sha;
+}
+
 function deleteRemoteBranch(repoPath, branch) {
   const remoteName = resolveRemoteName(repoPath, branch);
   if (!remoteName || !hasRemote(repoPath, remoteName)) {
@@ -1039,7 +1053,9 @@ function main() {
       currentHeadSha = resolveCurrentHeadSha(validatedPaths.worktree, safeData);
     }
     if (!alreadyMerged) {
-      const assessment = evaluateMergeFreshness(repoPath, currentHeadSha);
+      const freshnessRemote = resolveRemoteName(repoPath, branch) || "origin";
+      const prHead = resolveRemoteBranchHead(repoPath, freshnessRemote, branch);
+      const assessment = evaluateMergeFreshness(repoPath, prHead);
       if (assessment.status === "behind_disjoint") {
         freshness = {
           behind_count: assessment.behindCount,
