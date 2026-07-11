@@ -74,6 +74,7 @@ After the merge is confirmed, `finalize-run.js` invokes `append-learnings.js` to
 
 Emergency, force-finalize, and bootstrap reconciliation paths: see [`references/operator-emergencies.md`](references/operator-emergencies.md).
 Sprint-close repeated-quality reporting: see [`references/sprint-close-report.md`](references/sprint-close-report.md).
+Serialized detached full-suite gate and kill discipline: see [`references/full-gate.md`](references/full-gate.md).
 
 ### 2. Sprint file update (if available)
 

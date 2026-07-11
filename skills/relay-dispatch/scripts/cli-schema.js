@@ -55,6 +55,7 @@ const FLAGS = [
   { flag: "--issue", kind: VALUE, mode: MODE_PARSED, valueName: "<N>", rationale: "Numeric selector; flag-like following tokens should mean the value is missing." },
   { flag: "--json", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Presence flag; no value is consumed." },
   { flag: "--last-reviewed-sha", kind: VALUE, mode: MODE_PARSED, valueName: "<sha>", rationale: "Structured SHA field; flag-like following tokens should mean the value is missing." },
+  { flag: "--lock-timeout", kind: VALUE, mode: MODE_PARSED, valueName: "<seconds>", rationale: "Bounded machine-lock wait in seconds; flag-like following tokens should mean the value is missing." },
   { flag: "--leaf-id", kind: VALUE, mode: MODE_PARSED, valueName: "<id>", rationale: "Structured relay-ready identifier; flag-like following tokens should mean the value is missing." },
   { flag: "--manifest", kind: VALUE, mode: MODE_VERBATIM, valueName: "<path>", rationale: "Operator-supplied manifest path; keep the literal argv token." },
   { flag: "--max-rounds", kind: VALUE, mode: MODE_PARSED, valueName: "<n>", rationale: "Numeric policy field; flag-like following tokens should mean the value is missing." },
@@ -68,6 +69,7 @@ const FLAGS = [
   { flag: "--no-issue-close", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Presence flag; no value is consumed." },
   { flag: "--older-than", kind: VALUE, mode: MODE_PARSED, valueName: "<hours>", rationale: "Numeric threshold; flag-like following tokens should mean the value is missing." },
   { flag: "--out-dir", kind: VALUE, mode: MODE_VERBATIM, valueName: "<path>", rationale: "Operator-supplied output directory path; keep the literal argv token." },
+  { flag: "--output", kind: VALUE, mode: MODE_VERBATIM, valueName: "<path>", rationale: "Operator-supplied evidence output path; keep the literal argv token." },
   { flag: "--pin", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Presence flag; no value is consumed." },
   { flag: "--phase", kind: VALUE, mode: MODE_PARSED, valueName: "<phase[,phase...]>", rationale: "Closed phase selector; flag-like following tokens should mean the value is missing." },
   { flag: "--post-comment", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Presence flag; no value is consumed." },
@@ -113,6 +115,7 @@ const FLAGS = [
   { flag: "--skip", kind: VALUE, mode: MODE_VERBATIM, valueName: "<reason>", rationale: "Audit skip reason must be recorded exactly and must not be blank." },
   { flag: "--skip-merge", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Presence flag; no value is consumed." },
   { flag: "--skip-review", kind: VALUE, mode: MODE_VERBATIM, valueName: "<reason>", rationale: "Audit skip reason must be recorded exactly and must not be blank." },
+  { flag: "--suites", kind: VALUE, mode: MODE_VERBATIM, valueName: "<glob-set>", rationale: "Operator-supplied comma-separated suite globs; keep the literal argv token." },
   { flag: "--stale-hours", kind: VALUE, mode: MODE_PARSED, valueName: "<hours>", rationale: "Numeric threshold; flag-like following tokens should mean the value is missing." },
   { flag: "--stale-days", kind: VALUE, mode: MODE_PARSED, valueName: "<days>", rationale: "Stale classification threshold for worktree health." },
   { flag: "--state", kind: VALUE, mode: MODE_PARSED, valueName: "<state>", rationale: "Closed manifest state selector; flag-like following tokens should mean the value is missing." },
@@ -226,6 +229,9 @@ const COMMAND_FLAGS = {
     "--reviewer-model", "--advisory-reviewer", "--advisory-profile",
     "--advisory-reviewer-model", "--advisory-timeout", "--advisory-grace", "--prepare-only",
     "--manual-review-reason", "--independent-review-reason", "--allow-behind-base", "--no-comment", "--json", "--help",
+  ],
+  "run-full-gate": [
+    "--repo", "--suites", "--output", "--lock-timeout", "--json", "--help",
   ],
 };
 
