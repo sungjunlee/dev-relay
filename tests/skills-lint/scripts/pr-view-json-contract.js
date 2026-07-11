@@ -77,7 +77,11 @@ function tokenize(source) {
 }
 
 function nextValueToken(tokens, index, end) {
-  while (index < end && [",", "[", "]"].includes(tokens[index].value)) index += 1;
+  while (
+    index < end
+    && tokens[index].type === "punctuation"
+    && [",", "[", "]"].includes(tokens[index].value)
+  ) index += 1;
   return tokens[index];
 }
 
@@ -85,7 +89,8 @@ function enclosingArgvEnd(tokens, tokenIndex) {
   const openings = [];
   const pairs = { "(": ")", "[": "]" };
   for (let index = 0; index < tokenIndex; index += 1) {
-    const value = tokens[index].value;
+    const { type, value } = tokens[index];
+    if (type !== "punctuation") continue;
     if (pairs[value]) openings.push({ index, value });
     else if (value === ")" || value === "]") openings.pop();
   }
@@ -94,8 +99,8 @@ function enclosingArgvEnd(tokens, tokenIndex) {
 
   let depth = 0;
   for (let index = opening.index; index < tokens.length; index += 1) {
-    if (tokens[index].value === opening.value) depth += 1;
-    if (tokens[index].value === pairs[opening.value]) depth -= 1;
+    if (tokens[index].type === "punctuation" && tokens[index].value === opening.value) depth += 1;
+    if (tokens[index].type === "punctuation" && tokens[index].value === pairs[opening.value]) depth -= 1;
     if (depth === 0) return index;
   }
   return tokens.length;
@@ -118,7 +123,10 @@ function extractPrViewCallSites(source, file) {
     const valueIndex = value ? tokens.indexOf(value, jsonIndex + 1) : -1;
     const terminator = valueIndex === -1 ? null : tokens[valueIndex + 1];
     const isStandaloneString = value?.type === "string" && (
-      !terminator || [",", "]", ")"].includes(terminator.value)
+      !terminator || (
+        terminator.type === "punctuation"
+        && [",", "]", ")"].includes(terminator.value)
+      )
     );
     callSites.push({
       file,

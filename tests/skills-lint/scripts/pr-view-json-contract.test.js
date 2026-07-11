@@ -31,6 +31,19 @@ test("reports non-literal JSON field values at pr view call sites", () => {
   assert.match(errors[0], /fake-gh\.js/);
 });
 
+test("reports non-literal JSON fields after bracket-valued argv strings", () => {
+  for (const bracket of ["]", "["]) {
+    const callSites = extractPrViewCallSites(
+      `execGh(repo, ["pr", "view", ${JSON.stringify(bracket)}, "--json", fields]);`,
+      "skills/example.js",
+    );
+    const errors = comparePrViewCallSites(callSites, PR_VIEW_JSON_REGISTRY, FIXTURE_PATH);
+    assert.equal(callSites.length, 1, bracket);
+    assert.equal(errors.length, 1, bracket);
+    assert.match(errors[0], /skills\/example\.js:1 has a non-literal/, bracket);
+  }
+});
+
 test("reports literal-looking compound JSON field expressions as non-literal", () => {
   for (const expression of [
     '"body" + suffix',
