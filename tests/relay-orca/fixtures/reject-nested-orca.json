@@ -1,0 +1,12 @@
+{
+  "program": {
+    "id": "reject-nested",
+    "source": "file:///tmp/nested.md",
+    "repo": "example/repo",
+    "tracker": "github",
+    "exit_gates": ["all merged"],
+    "outcomes": [
+      { "id": "inner-program", "task_kind": "relay_orca", "accepted_outcomes": ["sub-program done"], "depends_on": [] }
+    ]
+  }
+}

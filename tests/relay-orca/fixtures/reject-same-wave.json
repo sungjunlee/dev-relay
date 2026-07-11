@@ -1,0 +1,13 @@
+{
+  "program": {
+    "id": "reject-same-wave",
+    "source": "file:///tmp/same-wave.md",
+    "repo": "example/repo",
+    "tracker": "github",
+    "exit_gates": ["all merged"],
+    "outcomes": [
+      { "id": "a", "task_kind": "relay_run", "accepted_outcomes": ["a merged"], "depends_on": [], "wave": 1 },
+      { "id": "b", "task_kind": "relay_run", "accepted_outcomes": ["b merged"], "depends_on": ["a"], "wave": 1 }
+    ]
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "program": {
+    "id": "reject-vague",
+    "source": "file:///tmp/vague.md",
+    "repo": "example/repo",
+    "tracker": "github",
+    "exit_gates": ["ship it"],
+    "outcomes": [
+      { "id": "make-it-good", "task_kind": "relay_run", "accepted_outcomes": [], "depends_on": [] }
+    ]
+  }
+}
