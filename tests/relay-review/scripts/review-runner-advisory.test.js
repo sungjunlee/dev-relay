@@ -692,6 +692,272 @@ test("buildAdvisoryAdapterEnv only rewrites cline timeout env", () => {
   }
 });
 
+function writeStatefulParseRetryReviewer(repoRoot, {
+  counterPath,
+  failCalls = 1,
+  exitNonZeroOnParseFail = false,
+  mutateOnCall = null,
+  hangMs = 0,
+  emptyOnFail = false,
+  envLogPath = null,
+} = {}) {
+  const filePath = path.join(repoRoot, "stateful-parse-retry-reviewer.js");
+  fs.writeFileSync(filePath, `#!/usr/bin/env node
+const fs = require("fs");
+const counterPath = ${JSON.stringify(counterPath)};
+const envLogPath = ${JSON.stringify(envLogPath)};
+const failCalls = ${Number(failCalls)};
+const hangMs = ${Number(hangMs)};
+const emptyOnFail = ${emptyOnFail ? "true" : "false"};
+const exitNonZeroOnParseFail = ${exitNonZeroOnParseFail ? "true" : "false"};
+const mutateOnCall = ${mutateOnCall == null ? "null" : Number(mutateOnCall)};
+const call = Number(fs.existsSync(counterPath) ? fs.readFileSync(counterPath, "utf-8") : "0") + 1;
+fs.writeFileSync(counterPath, String(call), "utf-8");
+if (envLogPath) {
+  let prior = [];
+  try { prior = JSON.parse(fs.readFileSync(envLogPath, "utf-8")); } catch {}
+  prior.push({ call, RELAY_CLINE_REVIEW_TIMEOUT: process.env.RELAY_CLINE_REVIEW_TIMEOUT || null });
+  fs.writeFileSync(envLogPath, JSON.stringify(prior), "utf-8");
+}
+if (mutateOnCall === call) {
+  fs.writeFileSync(require("path").join(process.cwd(), "advisory-mutated.txt"), "bad\\n", "utf-8");
+}
+if (hangMs > 0) {
+  const end = Date.now() + hangMs;
+  while (Date.now() < end) {}
+}
+if (call <= failCalls) {
+  if (emptyOnFail) {
+    process.stderr.write("");
+    process.exit(1);
+  }
+  if (exitNonZeroOnParseFail) {
+    process.stderr.write("Error: Cline advisory review failed to parse any of 1 advisory candidate(s); first failure: bad json\\n");
+    process.stdout.write("not-valid-advisory-json\\n");
+    process.exit(1);
+  }
+  process.stdout.write("not-valid-advisory-json\\n");
+  process.exit(0);
+}
+process.stdout.write(JSON.stringify({
+  profile: "blindspot",
+  summary: "recovered on retry",
+  required_findings: [],
+  advisory_findings: [],
+  duplicate_or_low_confidence: [],
+}));
+`, "utf-8");
+  fs.chmodSync(filePath, 0o755);
+  return filePath;
+}
+
+function executeParseRetryRequest({
+  reviewerFixture = {},
+  reviewerName = "opencode",
+  artifactReviewerName = "retry",
+  timeoutSeconds = 30,
+  profile = "blindspot",
+} = {}) {
+  const { repoRoot, runDir, runId } = setupRepo();
+  const resultPath = path.join(runDir, "parse-retry-result.json");
+  const promptPath = path.join(runDir, "parse-retry-prompt.md");
+  const decisionPath = path.join(runDir, "parse-retry-decision.json");
+  fs.writeFileSync(promptPath, "Advisory prompt\n", "utf-8");
+  const counterPath = path.join(runDir, "parse-retry-counter.txt");
+  const reviewerScript = writeStatefulParseRetryReviewer(repoRoot, {
+    counterPath,
+    ...reviewerFixture,
+  });
+
+  const result = executeAdvisoryRequest({
+    artifactReviewerName,
+    decisionPath,
+    gating: false,
+    headSha: "a".repeat(40),
+    laneIndex: 1,
+    profile,
+    promptPath,
+    requestPath: path.join(runDir, "parse-retry-request.json"),
+    resultPath,
+    reviewerModel: null,
+    reviewerName,
+    reviewerPolicy: null,
+    policyDecision: null,
+    modelResolution: null,
+    reviewerScript,
+    reviewRepoPath: repoRoot,
+    round: 1,
+    runDir,
+    runId,
+    runRepoPath: repoRoot,
+    source: null,
+    startedAt: Date.now(),
+    state: STATES.REVIEW_PENDING,
+    timeoutSeconds,
+    trigger: "every_round",
+  });
+
+  return { repoRoot, runDir, runId, result, resultPath, counterPath };
+}
+
+test("executeAdvisoryRequest retries once after exit-0 parse failure and succeeds", () => {
+  const { repoRoot, runDir, runId, result } = executeParseRetryRequest();
+  const attempt1 = path.join(runDir, "review-round-1-advisory-retry-raw-response-attempt-1.txt");
+  const attempt2 = path.join(runDir, "review-round-1-advisory-retry-raw-response.txt");
+  const event = readRunEvents(repoRoot, runId).find((record) => record.event === EVENTS.ADVISORY_REVIEW);
+
+  assert.equal(result.status, "success");
+  assert.equal(result.attemptCount, 2);
+  assert.equal(result.rawResponsePath, attempt2);
+  assert.deepEqual(result.rawResponsePaths, [attempt1, attempt2]);
+  assert.equal(fs.existsSync(attempt1), true);
+  assert.equal(fs.existsSync(attempt2), true);
+  assert.match(fs.readFileSync(attempt1, "utf-8"), /not-valid-advisory-json/);
+  assert.match(fs.readFileSync(attempt2, "utf-8"), /recovered on retry/);
+  assert.equal(event.attempt_count, 2);
+  assert.deepEqual(event.raw_response_paths, [attempt1, attempt2]);
+  assert.ok(result.artifactPath);
+  assert.ok(result.artifactHash);
+});
+
+test("executeAdvisoryRequest keeps both raw artifacts when parse retry also fails", () => {
+  const { repoRoot, runDir, runId, result } = executeParseRetryRequest({
+    reviewerFixture: { failCalls: 99 },
+    artifactReviewerName: "retry-fail",
+  });
+  const attempt1 = path.join(runDir, "review-round-1-advisory-retry-fail-raw-response-attempt-1.txt");
+  const attempt2 = path.join(runDir, "review-round-1-advisory-retry-fail-raw-response.txt");
+  const event = readRunEvents(repoRoot, runId).find((record) => record.event === EVENTS.ADVISORY_REVIEW);
+
+  assert.equal(result.status, "failed");
+  assert.equal(result.attemptCount, 2);
+  assert.deepEqual(result.rawResponsePaths, [attempt1, attempt2]);
+  assert.equal(result.rawResponsePath, attempt2);
+  assert.equal(fs.existsSync(attempt1), true);
+  assert.equal(fs.existsSync(attempt2), true);
+  assert.match(fs.readFileSync(attempt1, "utf-8"), /not-valid-advisory-json/);
+  assert.match(fs.readFileSync(attempt2, "utf-8"), /not-valid-advisory-json/);
+  assert.equal(event.status, "failed");
+  assert.equal(event.attempt_count, 2);
+  assert.deepEqual(event.raw_response_paths, [attempt1, attempt2]);
+});
+
+test("executeAdvisoryRequest does not retry on timeout", () => {
+  const { repoRoot, runDir, runId, result, counterPath } = executeParseRetryRequest({
+    reviewerFixture: { hangMs: 2500, failCalls: 0 },
+    artifactReviewerName: "timeout",
+    timeoutSeconds: 1,
+  });
+
+  assert.equal(result.status, "timeout");
+  assert.equal(result.attemptCount, 1);
+  assert.equal(result.rawResponsePaths.length, 1);
+  assert.match(result.rawResponsePath, /raw-response\.txt$/);
+  assert.equal(fs.existsSync(path.join(runDir, "review-round-1-advisory-timeout-raw-response-attempt-1.txt")), false);
+  assert.equal(fs.readFileSync(counterPath, "utf-8").trim(), "1");
+  const event = readRunEvents(repoRoot, runId).find((record) => record.event === EVENTS.ADVISORY_REVIEW);
+  assert.equal(event.status, "timeout");
+  assert.equal(event.attempt_count, 1);
+});
+
+test("executeAdvisoryRequest does not retry on policy violation", () => {
+  const { repoRoot, runId, result, counterPath } = executeParseRetryRequest({
+    reviewerFixture: { mutateOnCall: 1, failCalls: 0 },
+    artifactReviewerName: "policy",
+  });
+
+  assert.equal(result.status, "policy_violation");
+  assert.equal(result.attemptCount, 1);
+  assert.equal(result.rawResponsePaths.length, 1);
+  assert.equal(fs.readFileSync(counterPath, "utf-8").trim(), "1");
+  const event = readRunEvents(repoRoot, runId).find((record) => record.event === EVENTS.ADVISORY_REVIEW);
+  assert.equal(event.status, "policy_violation");
+  assert.equal(event.attempt_count, 1);
+});
+
+test("executeAdvisoryRequest does not retry on no-output exec failure", () => {
+  const { repoRoot, runDir, runId, result, counterPath } = executeParseRetryRequest({
+    reviewerFixture: { emptyOnFail: true, failCalls: 1 },
+    artifactReviewerName: "no-output",
+  });
+
+  assert.equal(result.status, "failed");
+  assert.equal(result.attemptCount, 1);
+  assert.equal(result.rawResponsePaths.length, 1);
+  assert.equal(fs.readFileSync(counterPath, "utf-8").trim(), "1");
+  assert.equal(fs.existsSync(path.join(runDir, "review-round-1-advisory-no-output-raw-response-attempt-1.txt")), false);
+  const event = readRunEvents(repoRoot, runId).find((record) => record.event === EVENTS.ADVISORY_REVIEW);
+  assert.equal(event.attempt_count, 1);
+});
+
+test("executeAdvisoryRequest retries adapter-side parse-failure signal once", () => {
+  const { repoRoot, runId, result, counterPath } = executeParseRetryRequest({
+    reviewerFixture: { failCalls: 1, exitNonZeroOnParseFail: true },
+    artifactReviewerName: "adapter-signal",
+  });
+
+  assert.equal(result.status, "success");
+  assert.equal(result.attemptCount, 2);
+  assert.equal(result.rawResponsePaths.length, 2);
+  assert.equal(fs.readFileSync(counterPath, "utf-8").trim(), "2");
+  const event = readRunEvents(repoRoot, runId).find((record) => record.event === EVENTS.ADVISORY_REVIEW);
+  assert.equal(event.attempt_count, 2);
+});
+
+test("executeAdvisoryRequest exports remaining lane budget to cline env on parse retry", () => {
+  const { runDir, result } = (() => {
+    const setup = setupRepo();
+    const envLogPath = path.join(setup.runDir, "cline-retry-env.json");
+    const counterPath = path.join(setup.runDir, "cline-retry-counter.txt");
+    const reviewerScript = writeStatefulParseRetryReviewer(setup.repoRoot, {
+      counterPath,
+      failCalls: 1,
+      envLogPath,
+    });
+    const resultPath = path.join(setup.runDir, "cline-retry-result.json");
+    const promptPath = path.join(setup.runDir, "cline-retry-prompt.md");
+    fs.writeFileSync(promptPath, "Advisory prompt\n", "utf-8");
+    const result = executeAdvisoryRequest({
+      artifactReviewerName: "cline",
+      decisionPath: path.join(setup.runDir, "cline-retry-decision.json"),
+      gating: true,
+      headSha: "a".repeat(40),
+      laneIndex: 1,
+      profile: "blindspot",
+      promptPath,
+      requestPath: path.join(setup.runDir, "cline-retry-request.json"),
+      resultPath,
+      reviewerModel: null,
+      reviewerName: "cline",
+      reviewerPolicy: null,
+      policyDecision: null,
+      modelResolution: null,
+      reviewerScript,
+      reviewRepoPath: setup.repoRoot,
+      round: 1,
+      runDir: setup.runDir,
+      runId: setup.runId,
+      runRepoPath: setup.repoRoot,
+      source: null,
+      startedAt: Date.now(),
+      state: STATES.REVIEW_PENDING,
+      timeoutSeconds: 1800,
+      trigger: "on_pass",
+    });
+    return { runDir: setup.runDir, result };
+  })();
+
+  assert.equal(result.status, "success");
+  assert.equal(result.attemptCount, 2);
+  const envLog = JSON.parse(fs.readFileSync(path.join(runDir, "cline-retry-env.json"), "utf-8"));
+  assert.equal(envLog.length, 2);
+  assert.equal(envLog[0].RELAY_CLINE_REVIEW_TIMEOUT, "1800s");
+  assert.match(envLog[1].RELAY_CLINE_REVIEW_TIMEOUT, /^\d+s$/);
+  const retrySeconds = Number(envLog[1].RELAY_CLINE_REVIEW_TIMEOUT.replace(/s$/, ""));
+  assert.ok(retrySeconds <= 1800, `retry budget should not exceed lane total, got ${retrySeconds}s`);
+  assert.ok(retrySeconds >= 120, `retry budget must stay above cline minimum, got ${retrySeconds}s`);
+});
+
 function runReview({
   repoRoot,
   runId,
@@ -1482,11 +1748,20 @@ process.stderr.write("cline-provider-stderr-887\\n");
   });
 
   assert.equal(result.advisoryReview.status, "failed");
+  assert.equal(result.advisoryReview.attemptCount, 2);
   assert.equal(result.advisoryReview.rawResponsePath, path.join(runDir, "review-round-1-advisory-cline-raw-response.txt"));
+  assert.deepEqual(result.advisoryReview.rawResponsePaths, [
+    path.join(runDir, "review-round-1-advisory-cline-raw-response-attempt-1.txt"),
+    path.join(runDir, "review-round-1-advisory-cline-raw-response.txt"),
+  ]);
   const rawArtifact = fs.readFileSync(result.advisoryReview.rawResponsePath, "utf-8");
   assert.match(rawArtifact, /Error: Cline advisory review failed to parse any of 1 advisory candidate/);
   assert.match(rawArtifact, new RegExp(rawText));
   assert.match(rawArtifact, /cline-provider-stderr-887/);
+  assert.match(
+    fs.readFileSync(result.advisoryReview.rawResponsePaths[0], "utf-8"),
+    /Error: Cline advisory review failed to parse any of 1 advisory candidate/
+  );
 });
 
 test("review-runner denies pi advisory model before spawning advisory reviewer", () => {

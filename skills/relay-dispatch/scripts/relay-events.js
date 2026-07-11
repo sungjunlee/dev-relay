@@ -380,6 +380,12 @@ function appendRunEvent(repoRoot, runId, eventData) {
     ...(eventData.raw_response_path !== undefined
       ? { raw_response_path: normalizeEventValue(eventData.raw_response_path) }
       : {}),
+    ...(eventData.raw_response_paths !== undefined
+      ? { raw_response_paths: normalizeEventValue(eventData.raw_response_paths) }
+      : {}),
+    ...(eventData.attempt_count !== undefined
+      ? { attempt_count: normalizeEventValue(eventData.attempt_count) }
+      : {}),
     ...(eventData.required_count !== undefined
       ? { required_count: normalizeEventValue(eventData.required_count) }
       : {}),
