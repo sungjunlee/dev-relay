@@ -123,17 +123,30 @@ function maybeWaitForChecks({ internalReview, prepareOnly, prNumber, round, runD
   return { outcome, summary };
 }
 
-// Set or clear the pending-checks marker on a manifest `review` section. When the
-// flag is inactive (checkWait === null) the section is returned untouched, keeping
-// flagless behavior byte-identical. When active, the marker is a fresh per-round
-// signal: present only while checks were still pending AND the applied verdict is
-// changes_requested, cleared otherwise so the same-head route cannot be replayed.
+// Reconcile the pending-checks marker for the head this round reviewed so its
+// presence at a head always means "the most recent review round at this head blocked
+// procedurally (proceeded with checks still pending)". A round WRITES the marker only
+// when it proceeded with pending checks AND applied changes_requested; EVERY other
+// round at that head — settled/green checks, a flagless round (checkWait === null), or
+// any non-changes_requested verdict — CLEARS a stale marker anchored to the same head.
+// That closes the replay where a marker stamped by a `--wait-for-checks` round could
+// survive a later real changes_requested at the same head and let recover-state's
+// checks-green route bypass the finding. Markers anchored to a DIFFERENT head are left
+// untouched (they can never be consumed at that head unless HEAD returns to it, and a
+// future round there reconciles them). When there is nothing to write and no same-head
+// marker to clear, the section is returned untouched, keeping flagless output
+// byte-identical to today.
 function applyPendingChecksMarker(reviewSection, { appliedVerdict, checkWait, reviewedHeadSha, round }) {
-  if (!checkWait) return reviewSection;
-  const next = { ...(reviewSection || {}) };
-  const shouldMark = checkWait.outcome.pending
+  const shouldMark = Boolean(checkWait)
+    && checkWait.outcome.pending
     && appliedVerdict === "changes_requested"
     && Boolean(reviewedHeadSha);
+  const existingMarker = reviewSection ? reviewSection[PENDING_CHECKS_MARKER_KEY] : undefined;
+  const hasStaleSameHeadMarker = Boolean(existingMarker)
+    && Boolean(reviewedHeadSha)
+    && existingMarker.head_sha === reviewedHeadSha;
+  if (!shouldMark && !hasStaleSameHeadMarker) return reviewSection;
+  const next = { ...(reviewSection || {}) };
   if (shouldMark) {
     next[PENDING_CHECKS_MARKER_KEY] = {
       head_sha: reviewedHeadSha,

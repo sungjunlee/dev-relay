@@ -1,7 +1,7 @@
 // Issue #950 Half 1: review-runner --wait-for-checks + pending-checks marker.
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { execFileSync } = require("child_process");
+const { execFileSync, spawnSync } = require("child_process");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
@@ -27,6 +27,7 @@ const {
 const { writeFakeGhScript } = require("../fixtures/fake-gh");
 
 const SCRIPT = path.join(__dirname, "..", "..", "..", "skills", "relay-review", "scripts", "review-runner.js");
+const RECOVER_STATE_SCRIPT = path.join(__dirname, "..", "..", "..", "skills", "relay-dispatch", "scripts", "recover-state.js");
 const POLL_INTERVAL_MS = "3";
 
 function defaultRubricScores() {
@@ -314,4 +315,78 @@ test("review-runner without --wait-for-checks is byte-identical: no poll, no art
   assert.equal(manifest.review.pending_checks_marker, undefined, "no marker without the flag");
   const pollCalls = readGhCalls(logPath).filter((line) => line.startsWith("pr checks"));
   assert.equal(pollCalls.length, 0, "gh pr checks never polled without the flag");
+});
+
+// Simulate the same-head re-entry that the recover-state --require-pr-body-change route
+// performs after a pending round: land back in review_pending at the same head WITHOUT
+// consuming the pending-checks marker (that route never touches it).
+function reenterReviewPendingPreservingMarker(manifestPath) {
+  const record = readManifest(manifestPath);
+  writeManifest(manifestPath, {
+    ...record.data,
+    state: STATES.REVIEW_PENDING,
+    next_action: "run_review",
+  }, record.body);
+}
+
+// The marker must be single-use / always-current: once a real changes_requested lands at
+// the same head with settled (green) checks, the stale marker is cleared so the
+// checks-green recovery route can no longer replay the earlier procedural block (#950 R2).
+test("pending-checks marker is single-use: a later green changes_requested at the same head clears it and recover-state then refuses", () => {
+  const { repoRoot, manifestPath, runId, doneCriteriaPath, diffPath, headSha } = setupRepo();
+
+  // Round 1: proceed with a pending check + changes_requested -> marker stamped at head H.
+  const round1Gh = installGh(repoRoot, { checks: [{ name: "unit", bucket: "pending" }] });
+  const round1 = runReview({
+    repoRoot, runId, doneCriteriaPath, diffPath,
+    reviewFile: changesRequestedVerdict(repoRoot), ghBinDir: round1Gh.binDir, waitForChecks: 0,
+  });
+  assert.equal(round1.checkWait.proceeded_with_pending, true);
+  const afterRound1 = readManifest(manifestPath).data;
+  assert.ok(afterRound1.review.pending_checks_marker, "round 1 stamps the pending-checks marker");
+  assert.equal(afterRound1.review.pending_checks_marker.head_sha, headSha);
+
+  // Same-head re-entry (PR-body route) preserves the marker without consuming it.
+  reenterReviewPendingPreservingMarker(manifestPath);
+  assert.ok(
+    readManifest(manifestPath).data.review.pending_checks_marker,
+    "same-head re-entry does not consume the marker"
+  );
+
+  // Round 2: same head H, but checks are now green and a REAL changes_requested lands.
+  // The stale marker must be cleared because this round did NOT proceed on pending checks.
+  const round2Gh = installGh(repoRoot, { checks: [{ name: "unit", bucket: "pass" }] });
+  const round2 = runReview({
+    repoRoot, runId, doneCriteriaPath, diffPath,
+    reviewFile: changesRequestedVerdict(repoRoot), ghBinDir: round2Gh.binDir, waitForChecks: 5,
+  });
+  assert.equal(round2.checkWait.proceeded_with_pending, false, "round 2 saw settled green checks");
+  assert.equal(round2.nextState, STATES.CHANGES_REQUESTED, "round 2 applies a real changes_requested");
+  const afterRound2 = readManifest(manifestPath).data;
+  assert.equal(
+    afterRound2.review.pending_checks_marker, undefined,
+    "the green changes_requested round clears the stale marker (single-use)"
+  );
+
+  // With the marker cleared, the checks-green recovery route can no longer replay: it
+  // refuses because no pending-checks marker is anchored to the reviewed head.
+  const recover = spawnSync("node", [
+    RECOVER_STATE_SCRIPT,
+    "--repo", repoRoot,
+    "--run-id", runId,
+    "--to", STATES.REVIEW_PENDING,
+    "--reason", "attempting checks-green replay after the marker was cleared",
+    "--allow-same-head",
+    "--require-checks-green",
+    "--json",
+  ], {
+    encoding: "utf-8",
+    env: { ...process.env, PATH: `${round2Gh.binDir}${path.delimiter}${process.env.PATH || ""}` },
+  });
+  assert.notEqual(recover.status, 0, "recover-state refuses without a marker");
+  assert.match(recover.stderr, /no pending-checks marker/);
+  assert.equal(
+    readManifest(manifestPath).data.state, STATES.CHANGES_REQUESTED,
+    "refused recovery leaves the run in changes_requested"
+  );
 });
