@@ -2,6 +2,75 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 
+const mergeGateResponse = (fixture) => ({
+  baseRefName: fixture.baseRefName || "main",
+  comments: fixture.comments || [],
+  commits: fixture.commits || [],
+  mergeable: fixture.mergeable || "MERGEABLE",
+  statusCheckRollup: fixture.statusCheckRollup || [],
+  headRefOid: fixture.headRefOid || "a".repeat(40),
+  title: fixture.title || "Fixture PR",
+});
+
+const bodySnapshotResponse = (fixture) => ({
+  body: fixture.body || "",
+  headRefOid: fixture.headRefOid || "a".repeat(40),
+  headRefName: fixture.headRefName || "",
+  closingIssuesReferences: fixture.closingIssuesReferences || [],
+});
+
+// This is the fixture's single source of truth for accepted gh pr view field lists.
+// Keep builders deterministic: generated fake-gh scripts serialize their return values.
+const PR_VIEW_JSON_REGISTRY = Object.freeze({
+  "statusCheckRollup,reviews,comments": (fixture) => ({
+    statusCheckRollup: fixture.statusCheckRollup || [],
+    reviews: fixture.reviews || [],
+    comments: fixture.comments || [],
+  }),
+  "closingIssuesReferences,body,headRefName": (fixture) => ({
+    closingIssuesReferences: fixture.closingIssuesReferences || [],
+    body: fixture.body || "",
+    headRefName: fixture.headRefName || "",
+  }),
+  "title,body,number": (fixture) => ({
+    number: fixture.number || 123,
+    title: fixture.title || "Fixture PR",
+    body: fixture.body || "",
+  }),
+  "headRefName": (fixture) => ({ headRefName: fixture.headRefName || "" }),
+  "number,headRefName,headRefOid": (fixture) => ({
+    number: fixture.number || 123,
+    headRefName: fixture.headRefName || "",
+    headRefOid: fixture.headRefOid || "a".repeat(40),
+  }),
+  "state,mergeCommit": (_fixture, loadState) => {
+    const state = loadState();
+    return { state: state.state, mergeCommit: state.mergeCommit };
+  },
+  "comments,commits,mergeable,statusCheckRollup": mergeGateResponse,
+  "baseRefName,comments,commits,mergeable,statusCheckRollup": mergeGateResponse,
+  "baseRefName,comments,commits,mergeable,statusCheckRollup,headRefOid": mergeGateResponse,
+  "baseRefName,comments,commits,mergeable,statusCheckRollup,headRefOid,title": mergeGateResponse,
+  "comments,commits,headRefOid": mergeGateResponse,
+  "comments,commits,headRefName,headRefOid": (fixture) => ({
+    comments: fixture.comments || [],
+    commits: fixture.commits || [],
+    headRefName: fixture.headRefName || "",
+    headRefOid: fixture.headRefOid || "a".repeat(40),
+  }),
+  "body": bodySnapshotResponse,
+  "body,headRefOid,headRefName,closingIssuesReferences": bodySnapshotResponse,
+  "headRefOid,headRefName,body,closingIssuesReferences": bodySnapshotResponse,
+  "mergedAt,state": (fixture) => ({ mergedAt: fixture.mergedAt || null, state: fixture.state || "OPEN" }),
+  "number,state,url,headRefName,mergedAt": (fixture) => ({
+    number: fixture.number || 123,
+    state: fixture.state || "OPEN",
+    url: fixture.url || "",
+    headRefName: fixture.headRefName || "",
+    mergedAt: fixture.mergedAt || null,
+  }),
+});
+
 function writeFakeGhScript({
   ghPath,
   fixture = {},
@@ -14,6 +83,10 @@ function writeFakeGhScript({
     throw new Error("writeFakeGhScript requires ghPath");
   }
 
+  const serializedPrViewRegistry = Object.entries(PR_VIEW_JSON_REGISTRY)
+    .map(([fields, builder]) => `${JSON.stringify(fields)}: ${builder.toString()}`)
+    .join(",\n");
+
   const script = `#!/usr/bin/env node
 const { execFileSync } = require("child_process");
 const fs = require("fs");
@@ -23,11 +96,9 @@ const capturePath = ${JSON.stringify(capturePath)};
 const logPath = ${JSON.stringify(logPath)};
 const statePath = ${JSON.stringify(statePath)};
 const merge = ${JSON.stringify(merge)};
-const prBodySnapshotFields = new Set([
-  "body",
-  "body,headRefOid,headRefName,closingIssuesReferences",
-  "headRefOid,headRefName,body,closingIssuesReferences",
-]);
+const prViewJsonRegistry = {
+${serializedPrViewRegistry}
+};
 
 if (logPath) {
   fs.appendFileSync(logPath, args.join(" ") + "\\n", "utf-8");
@@ -68,85 +139,9 @@ if (args[0] === "pr" && args[1] === "view") {
     process.exit(0);
   }
 
-  // loadPrReviewSignals asks for checks, reviews, and top-level comments in one call.
-  if (fields === "statusCheckRollup,reviews,comments") {
-    writeJson({
-      statusCheckRollup: fixture.statusCheckRollup || [],
-      reviews: fixture.reviews || [],
-      comments: fixture.comments || [],
-    });
-    process.exit(0);
-  }
-
-  // Issue inference reads the PR body plus GitHub's closing issue references.
-  if (fields === "closingIssuesReferences,body,headRefName") {
-    writeJson({
-      closingIssuesReferences: fixture.closingIssuesReferences || [],
-      body: fixture.body || "",
-      headRefName: fixture.headRefName || "",
-    });
-    process.exit(0);
-  }
-
-  // The manual PR fallback path mirrors gh issue view's title/body/number shape.
-  if (fields === "title,body,number") {
-    writeJson({
-      number: fixture.number || 123,
-      title: fixture.title || "Fixture PR",
-      body: fixture.body || "",
-    });
-    process.exit(0);
-  }
-
-  // Merge and preflight checks need the branch name without loading heavier PR data.
-  if (fields === "headRefName") {
-    writeJson({ headRefName: fixture.headRefName || "" });
-    process.exit(0);
-  }
-
-  if (fields === "number,headRefName,headRefOid") {
-    writeJson({
-      number: fixture.number || 123,
-      headRefName: fixture.headRefName || "",
-      headRefOid: fixture.headRefOid || "a".repeat(40),
-    });
-    process.exit(0);
-  }
-
-  // finalize-run polls PR terminal state after merge attempts.
-  if (fields === "state,mergeCommit") {
-    const state = loadState();
-    writeJson({ state: state.state, mergeCommit: state.mergeCommit });
-    process.exit(0);
-  }
-
-  // merge gates need the latest relay audit comment, commits, mergeability, and checks.
-  if (
-    fields === "comments,commits,mergeable,statusCheckRollup" ||
-    fields === "baseRefName,comments,commits,mergeable,statusCheckRollup" ||
-    fields === "baseRefName,comments,commits,mergeable,statusCheckRollup,headRefOid" ||
-    fields === "baseRefName,comments,commits,mergeable,statusCheckRollup,headRefOid,title"
-  ) {
-    writeJson({
-      baseRefName: fixture.baseRefName || "main",
-      comments: fixture.comments || [],
-      commits: fixture.commits || [],
-      mergeable: fixture.mergeable || "MERGEABLE",
-      statusCheckRollup: fixture.statusCheckRollup || [],
-      headRefOid: fixture.headRefOid || "a".repeat(40),
-      title: fixture.title || "Fixture PR",
-    });
-    process.exit(0);
-  }
-
-  // Body snapshot calls must stay explicit so future field sets fail loudly.
-  if (prBodySnapshotFields.has(fields)) {
-    writeJson({
-      body: fixture.body || "",
-      headRefOid: fixture.headRefOid || "a".repeat(40),
-      headRefName: fixture.headRefName || "",
-      closingIssuesReferences: fixture.closingIssuesReferences || [],
-    });
+  const responseBuilder = prViewJsonRegistry[fields];
+  if (responseBuilder) {
+    writeJson(responseBuilder(fixture, loadState));
     process.exit(0);
   }
 
@@ -257,6 +252,7 @@ function withFakeGh(fixture, callback, options = {}) {
 }
 
 module.exports = {
+  PR_VIEW_JSON_REGISTRY,
   installFakeGhOnPath,
   withFakeGh,
   writeFakeGhScript,
