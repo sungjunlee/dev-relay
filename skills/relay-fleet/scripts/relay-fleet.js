@@ -39,11 +39,18 @@ const {
 } = require("../../relay-dispatch/scripts/manifest/fleet");
 const { getRequestPath, readRequestArtifact } = require("../../relay-ready/scripts/relay-request");
 const { runReconcile } = require("../../relay-dispatch/scripts/reconcile-advisory");
-const { getRunLeaseStatus } = require("../../relay-dispatch/scripts/run-runtime-state");
+const {
+  getRunArtifactPaths,
+  getRunLeaseStatus,
+} = require("../../relay-dispatch/scripts/run-runtime-state");
 const { EVENTS, readRunEvents } = require("../../relay-dispatch/scripts/relay-events");
 const { runMergeQueue } = require("./merge-queue");
 
 const DEFAULT_PARALLEL = 4;
+// #931: live lease + still-empty stdout past this age → stalled_executor attention.
+// Mid-run stalls AFTER the first stdout byte are NOT detected (accepted limitation).
+const DEFAULT_STALL_THRESHOLD_MS = 15 * 60 * 1000;
+const STALL_STDERR_TAIL_MAX_CHARS = 120;
 const FLEET_CHILD_LOCK_TIMEOUT_MS = 5000;
 const FLEET_CHILD_LOCK_WAIT_ARRAY = new Int32Array(new SharedArrayBuffer(4));
 const FLEET_CHILD_TICKET_PATTERN = /^ticket-(\d+)\.(waiting|done)$/;
@@ -2065,6 +2072,71 @@ function legacyAttentionReason(child) {
   return null;
 }
 
+function resolveStallThresholdMs(env = process.env) {
+  const raw = env.RELAY_FLEET_STALL_THRESHOLD_MS;
+  if (raw == null || String(raw).trim() === "") return DEFAULT_STALL_THRESHOLD_MS;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed < 0) return DEFAULT_STALL_THRESHOLD_MS;
+  return parsed;
+}
+
+function readLastNonEmptyStderrLine(stderrPath) {
+  try {
+    const text = fs.readFileSync(stderrPath, "utf-8");
+    const lines = text.split(/\r?\n/);
+    for (let i = lines.length - 1; i >= 0; i -= 1) {
+      const line = lines[i].trim();
+      if (!line) continue;
+      return line.length > STALL_STDERR_TAIL_MAX_CHARS
+        ? line.slice(0, STALL_STDERR_TAIL_MAX_CHARS)
+        : line;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+// Visibility only (#931 / #839 boundary): no kill, signal, or state mutation.
+// Stateless heuristic — live lease (#927 getRunLeaseStatus) AND 0-byte stdout
+// AND lease age over threshold. First-byte limitation: once stdout has any
+// bytes, mid-run silence is invisible here.
+function detectStalledExecutor(repoRoot, child, { thresholdMs = resolveStallThresholdMs() } = {}) {
+  if (!repoRoot || !child?.run_id) return null;
+  if (child.dispatch_status !== DISPATCH_STATUS.DISPATCHED) return null;
+  if (!KNOWN_RUN_STATES.has(child.run_state)) return null;
+  if (terminalForFleetReview(child.run_state)) return null;
+
+  let leaseStatus;
+  try {
+    leaseStatus = getRunLeaseStatus(repoRoot, child.run_id);
+  } catch {
+    return null;
+  }
+  if (!leaseStatus?.live || !leaseStatus.lease) return null;
+
+  const startedAtMs = Date.parse(leaseStatus.lease.started_at);
+  if (!Number.isFinite(startedAtMs)) return null;
+  const ageMs = Date.now() - startedAtMs;
+  if (ageMs <= thresholdMs) return null;
+
+  const { stdoutLog, stderrLog } = getRunArtifactPaths(repoRoot, child.run_id);
+  let stdoutStat;
+  try {
+    stdoutStat = fs.statSync(stdoutLog);
+  } catch {
+    // Missing or unreadable stdout path → fail open (no item, no crash).
+    return null;
+  }
+  if (!stdoutStat.isFile() || stdoutStat.size !== 0) return null;
+
+  const minutes = Math.floor(ageMs / 60000);
+  let detail = `stdout 0 bytes for ${minutes}m`;
+  const stderrTail = readLastNonEmptyStderrLine(stderrLog);
+  if (stderrTail) detail += `; stderr tail: ${stderrTail}`;
+  return { detail };
+}
+
 // New reasons are independent of each other and of the legacy reason above, so
 // a single child can surface more than one attention item.
 function additionalAttentionReasons(child, { repoRoot, fleetId, defaultBranchName }) {
@@ -2091,6 +2163,9 @@ function additionalAttentionReasons(child, { repoRoot, fleetId, defaultBranchNam
     && !childIsAlive(repoRoot, fleetId, child)
   ) {
     reasons.push("stuck_child");
+  }
+  if (detectStalledExecutor(repoRoot, child)) {
+    reasons.push("stalled_executor");
   }
 
   return reasons;
@@ -2148,6 +2223,9 @@ function buildOperatorAttention(summary, context = {}) {
       const item = { leaf_ref: child.leaf_ref, run_id: child.run_id, reason };
       if (reason === "stuck_child") {
         Object.assign(item, stuckChildPreflightEnrichment(repoRoot, child));
+      }
+      if (reason === "stalled_executor") {
+        Object.assign(item, detectStalledExecutor(repoRoot, child) || {});
       }
       items.push(item);
     }

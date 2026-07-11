@@ -99,6 +99,7 @@ node "${RELAY_SKILL_ROOT:-skills}/relay-fleet/scripts/relay-fleet.js" \
 - Fleet issue locks are checked before each child spawn; `dispatch.js --fleet-id` performs the durable lock during the actual child run.
 - Re-runs reconcile both directions: they re-adopt child run manifests whose `fleet_id` points back to this fleet, mark no-manifest interrupted children as `dispatch_failed_pre_manifest`, skip still-running child subprocesses, and continue recoverable work.
 - `--status` is read-only and uses the relay-dispatch fleet summary derivation rules. Without `--fleet-id`, it lists repo-scoped fleets and their terminal/total child counts.
+- `--status` operator_attention may include `stalled_executor` when a child's run lease is live, `dispatch-stdout.log` is still 0 bytes, and lease age exceeds 15 minutes (`RELAY_FLEET_STALL_THRESHOLD_MS` override only). Visibility only — no kill. Mid-run stalls after the first stdout byte are not detected.
 
 ## SPOF
 
