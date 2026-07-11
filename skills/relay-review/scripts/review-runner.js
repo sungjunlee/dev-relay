@@ -27,6 +27,7 @@ const { maybeSwapReviewer } = require("./review-runner/reviewer-swap");
 const { appendAdvisoryRunsForTrigger, resolveAdvisoryConfig } = require("./review-runner/advisory-orchestration");
 const { settleAdvisoryGatesForRound } = require("./review-runner/advisory-gates");
 const { printResult, printUsage } = require("./review-runner/output");
+const { applyPendingChecksMarker, maybeWaitForChecks } = require("./review-runner/check-wait");
 const { assertKnownReviewRunnerFlags, parseReviewRunnerCliArgs } = require("./review-runner/cli");
 const { args, cliArgs, options } = parseReviewRunnerCliArgs(process.argv.slice(2));
 if (require.main === module && (!args.length || cliArgs.hasFlag(["--help", "-h"]))) {
@@ -39,7 +40,7 @@ async function run() {
     advisoryGraceArg, advisoryProfileArg, advisoryReviewerArg, advisoryReviewerModel, allowBehindBase,
     advisoryTimeoutArg, branchArg, diffFile, doneCriteriaFile, independentReviewReason,
     jsonOut, manifestPathArg, manualReviewReason, noComment, prArg, prepareOnly, repoArg,
-    repoPath, reviewFile, reviewerArg, reviewerModel, reviewerScriptArg, runIdArg,
+    repoPath, reviewFile, reviewerArg, reviewerModel, reviewerScriptArg, runIdArg, waitForChecksArg,
   } = options;
   if (manualReviewReason && !reviewFile) throw new Error("--manual-review-reason requires --review-file");
   const { branch, issueNumber, manifest, prNumber, reviewRepoPath, runRepoPath } = resolveContext(repoPath, repoArg, manifestPathArg, runIdArg, branchArg, prArg, doneCriteriaFile);
@@ -78,6 +79,8 @@ async function run() {
   } catch {}
 
   enforceRoundCap({ body, data, manifestPath, prNumber, reviewedHeadSha, round, runRepoPath });
+
+  const checkWait = maybeWaitForChecks({ internalReview, prepareOnly, prNumber, round, runDir, runRepoPath, waitForChecksArg });
 
   const {
     diffPath,
@@ -144,6 +147,7 @@ async function run() {
     runId: data.run_id,
     state: data.state, convergenceSummary: null, verdictPath: null,
   };
+  if (checkWait) result.checkWait = checkWait.summary;
   let advisoryRuns = [], advisoryResult = null, advisoryResults = [], gateResult = null, primaryReviewerPreflight = null;
 
   if (prepareOnly) {
@@ -321,6 +325,7 @@ async function run() {
         : {}),
     },
   };
+  updatedManifest.review = applyPendingChecksMarker(updatedManifest.review, { appliedVerdict, checkWait, reviewedHeadSha, round });
   updatedManifest = applyReviewerIdentity(updatedManifest, noComment || internalReview, runRepoPath);
   writeManifest(manifestPath, updatedManifest, body);
   appendRunEvent(runRepoPath, data.run_id, { event: EVENTS.ESCALATION_DECISION, state_from: data.state, state_to: updatedManifest.state, head_sha: reviewedHeadSha, ...escalationDecision });

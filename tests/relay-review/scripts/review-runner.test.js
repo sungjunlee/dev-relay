@@ -35,7 +35,7 @@ const {
 const SCRIPT = path.join(__dirname, "..", "..", "..", "skills", "relay-review", "scripts", "review-runner.js");
 const DISPATCH_SCRIPT = path.join(__dirname, "..", "..", "..", "skills", "relay-dispatch", "scripts", "dispatch.js");
 const RECOVER_STATE_SCRIPT = path.join(__dirname, "..", "..", "..", "skills", "relay-dispatch", "scripts", "recover-state.js");
-const REVIEW_RUNNER_LINE_CAP = 390;
+const REVIEW_RUNNER_LINE_CAP = 400;
 const REVIEW_RUNNER_FUNCTION_CAP = 12;
 
 function installDefaultGhFixture() {

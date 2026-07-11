@@ -77,6 +77,7 @@ function writeFakeGhScript({
   capturePath = null,
   logPath = null,
   statePath = null,
+  checksStatePath = null,
   merge = null,
 } = {}) {
   if (!ghPath) {
@@ -95,7 +96,31 @@ const fixture = ${JSON.stringify(fixture)};
 const capturePath = ${JSON.stringify(capturePath)};
 const logPath = ${JSON.stringify(logPath)};
 const statePath = ${JSON.stringify(statePath)};
+const checksStatePath = ${JSON.stringify(checksStatePath)};
 const merge = ${JSON.stringify(merge)};
+
+// gh pr checks --json name,bucket exit-code contract mirrored for the fake:
+// exit 8 while any check is pending, exit 1 on any failure, exit 0 when all pass.
+const CHECKS_FAILURE_BUCKETS = new Set([
+  "fail", "failed", "failure", "cancel", "cancelled", "canceled",
+  "timed_out", "action_required", "startup_failure", "stale",
+]);
+const CHECKS_SUCCESS_BUCKETS = new Set([
+  "pass", "success", "skipping", "skipped", "neutral",
+]);
+
+function loadChecksIndex() {
+  if (checksStatePath && fs.existsSync(checksStatePath)) {
+    return JSON.parse(fs.readFileSync(checksStatePath, "utf-8")).index || 0;
+  }
+  return 0;
+}
+
+function saveChecksIndex(next) {
+  if (checksStatePath) {
+    fs.writeFileSync(checksStatePath, JSON.stringify({ index: next }), "utf-8");
+  }
+}
 const prViewJsonRegistry = {
 ${serializedPrViewRegistry}
 };
@@ -127,6 +152,38 @@ function saveState(next) {
 if (fixture.failOnCall) {
   process.stderr.write("gh should not have been called");
   process.exit(91);
+}
+
+if (args[0] === "pr" && args[1] === "checks") {
+  // Optional stateful timeline so a check can transition pending -> pass across
+  // successive polls; falls back to a static fixture.checks array otherwise.
+  const timeline = Array.isArray(fixture.checksTimeline) ? fixture.checksTimeline : null;
+  let entry;
+  if (timeline) {
+    const idx = loadChecksIndex();
+    entry = timeline[Math.min(idx, timeline.length - 1)] || {};
+    saveChecksIndex(idx + 1);
+  } else {
+    entry = { checks: fixture.checks || [] };
+  }
+  if (entry.type === "error") {
+    process.stderr.write(entry.message || "transient gh error");
+    process.exit(entry.status || 1);
+  }
+  const checks = Array.isArray(entry.checks) ? entry.checks : [];
+  if (checks.length === 0) {
+    // Real gh (cli/cli#9390): zero checks -> stderr message, empty stdout, exit 1.
+    process.stderr.write(entry.message || "no checks reported on 'fixture-branch'\\n");
+    process.exit(typeof entry.status === "number" ? entry.status : 1);
+  }
+  writeJson(checks);
+  if (typeof entry.status === "number") process.exit(entry.status);
+  const buckets = checks.map((check) => String(check.bucket || "").toLowerCase());
+  const hasPending = buckets.some((bucket) => (
+    !CHECKS_SUCCESS_BUCKETS.has(bucket) && !CHECKS_FAILURE_BUCKETS.has(bucket)
+  ));
+  const hasFailure = buckets.some((bucket) => CHECKS_FAILURE_BUCKETS.has(bucket));
+  process.exit(hasPending ? 8 : hasFailure ? 1 : 0);
 }
 
 if (args[0] === "pr" && args[1] === "view") {
