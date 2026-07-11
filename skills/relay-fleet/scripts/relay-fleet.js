@@ -963,6 +963,12 @@ function runtimeChildIsAlive(repoRoot, fleetId, leafRef) {
   return child && processIsAlive(Number(child.pid));
 }
 
+function childIsAlive(repoRoot, fleetId, child) {
+  if (!child) return false;
+  if (runtimeChildIsAlive(repoRoot, fleetId, child.leaf_ref)) return true;
+  return Boolean(child.run_id && getRunLeaseStatus(repoRoot, child.run_id).live);
+}
+
 function cleanupDeadRuntimeChildren(repoRoot, fleetId) {
   const runtime = readRuntime(repoRoot, fleetId);
   let changed = false;
@@ -1118,7 +1124,7 @@ function reconcileFleet(repoRoot, fleetId, leaves) {
   fleet = readFleetManifest(repoRoot, fleetId).data;
   for (const child of fleet.children) {
     if (child.dispatch_status !== DISPATCH_STATUS.DISPATCHING || child.run_id) continue;
-    if (runtimeChildIsAlive(repoRoot, fleetId, child.leaf_ref)) continue;
+    if (childIsAlive(repoRoot, fleetId, child)) continue;
     const leaf = leavesByRef.get(child.leaf_ref);
     if (leaf && issueLockHeld(repoRoot, fleetId, leaf)) continue;
     const updated = setFleetChild(repoRoot, fleetId, {
@@ -1238,8 +1244,12 @@ function reconcileMutating(repoRoot, runId) {
   }
 }
 
-function detachedSupervisorIsAlive(repoRoot, fleetId, leaf) {
-  return Boolean(fleetId && leaf?.leaf_ref && runtimeChildIsAlive(repoRoot, fleetId, leaf.leaf_ref));
+function detachedSupervisorIsAlive(repoRoot, fleetId, leaf, runId) {
+  if (!fleetId || !leaf?.leaf_ref) return false;
+  return childIsAlive(repoRoot, fleetId, {
+    leaf_ref: leaf.leaf_ref,
+    run_id: runId,
+  });
 }
 
 async function waitForDetachedDispatchProgress({ repoRoot, fleetId, runId, leaf, options, isInterrupted }) {
@@ -1263,7 +1273,7 @@ async function waitForDetachedDispatchProgress({ repoRoot, fleetId, runId, leaf,
           run_id: runId,
           run_state: runState,
           reconcile: lastReconcile,
-          keep_runtime: detachedSupervisorIsAlive(repoRoot, fleetId, leaf),
+          keep_runtime: detachedSupervisorIsAlive(repoRoot, fleetId, leaf, runId),
         };
       }
       if (lastReconcile.rowName === "lease_live_timed_out") {
@@ -1290,7 +1300,7 @@ async function waitForDetachedDispatchProgress({ repoRoot, fleetId, runId, leaf,
             run_id: runId,
             run_state: runState,
             reconcile: healed,
-            keep_runtime: detachedSupervisorIsAlive(repoRoot, fleetId, leaf),
+            keep_runtime: detachedSupervisorIsAlive(repoRoot, fleetId, leaf, runId),
           };
         }
         return {
@@ -1301,11 +1311,11 @@ async function waitForDetachedDispatchProgress({ repoRoot, fleetId, runId, leaf,
           run_state: healed.state,
           reconcile: healed,
           keep_runtime: healed.state === RUN_STATES.DISPATCHED
-            && detachedSupervisorIsAlive(repoRoot, fleetId, leaf),
+            && detachedSupervisorIsAlive(repoRoot, fleetId, leaf, runId),
         };
       }
       if (lastReconcile.rowName === "dead_no_result_no_work") {
-        if (detachedSupervisorIsAlive(repoRoot, fleetId, leaf)) {
+        if (detachedSupervisorIsAlive(repoRoot, fleetId, leaf, runId)) {
           return {
             status: "dispatch_poll_timeout",
             run_id: runId,
@@ -1347,7 +1357,7 @@ async function waitForDetachedDispatchProgress({ repoRoot, fleetId, runId, leaf,
     run_id: runId,
     run_state: finalRunState,
     reconcile: lastReconcile,
-    keep_runtime: liveLease || detachedSupervisorIsAlive(repoRoot, fleetId, leaf),
+    keep_runtime: liveLease || detachedSupervisorIsAlive(repoRoot, fleetId, leaf, runId),
   };
 }
 
@@ -1526,7 +1536,7 @@ function spawnReviewForChild({ repoRoot, fleetId, child, options, activeChildren
       resolve({ leaf_ref: child.leaf_ref, run_id: child.run_id, status: "skipped_interrupted" });
       return;
     }
-    if (runtimeChildIsAlive(repoRoot, fleetId, child.leaf_ref)) {
+    if (childIsAlive(repoRoot, fleetId, child)) {
       resolve({ leaf_ref: child.leaf_ref, run_id: child.run_id, status: "skipped_running", run_state: child.run_state });
       return;
     }
@@ -1635,7 +1645,7 @@ function spawnPublishForChild({ repoRoot, fleetId, child, options, activeChildre
       resolve({ leaf_ref: child.leaf_ref, run_id: child.run_id, status: "skipped_interrupted" });
       return;
     }
-    if (runtimeChildIsAlive(repoRoot, fleetId, child.leaf_ref)) {
+    if (childIsAlive(repoRoot, fleetId, child)) {
       resolve({ leaf_ref: child.leaf_ref, run_id: child.run_id, status: "skipped_running", run_state: child.run_state });
       return;
     }
@@ -1721,7 +1731,7 @@ function spawnRedispatchForChild({ repoRoot, fleetId, child, options, activeChil
       resolve({ leaf_ref: child.leaf_ref, run_id: child.run_id, status: "skipped_interrupted" });
       return;
     }
-    if (runtimeChildIsAlive(repoRoot, fleetId, child.leaf_ref)) {
+    if (childIsAlive(repoRoot, fleetId, child)) {
       resolve({ leaf_ref: child.leaf_ref, run_id: child.run_id, status: "skipped_running", run_state: child.run_state });
       return;
     }
@@ -2078,7 +2088,7 @@ function additionalAttentionReasons(child, { repoRoot, fleetId, defaultBranchNam
     && !terminalForFleetReview(child.run_state)
     && repoRoot
     && fleetId
-    && !runtimeChildIsAlive(repoRoot, fleetId, child.leaf_ref)
+    && !childIsAlive(repoRoot, fleetId, child)
   ) {
     reasons.push("stuck_child");
   }
