@@ -31,6 +31,23 @@ test("reports non-literal JSON field values at pr view call sites", () => {
   assert.match(errors[0], /fake-gh\.js/);
 });
 
+test("reports literal-looking compound JSON field expressions as non-literal", () => {
+  for (const expression of [
+    '"body" + suffix',
+    '"body" ? preferred : fallback',
+    '"body".trim()',
+  ]) {
+    const callSites = extractPrViewCallSites(
+      `execGh(repo, ["pr", "view", "1", "--json", ${expression}]);`,
+      "skills/example.js",
+    );
+    const errors = comparePrViewCallSites(callSites, PR_VIEW_JSON_REGISTRY, FIXTURE_PATH);
+    assert.equal(errors.length, 1, expression);
+    assert.match(errors[0], /skills\/example\.js:1 has a non-literal/, expression);
+    assert.match(errors[0], /compound expression/, expression);
+  }
+});
+
 test("enumerates pr view fields from an argv variable assembled separately", () => {
   const callSites = extractPrViewCallSites(
     `const args = [

@@ -115,11 +115,18 @@ function extractPrViewCallSites(source, file) {
     ));
     if (jsonIndex === -1) continue;
     const value = nextValueToken(tokens, jsonIndex + 1, end);
+    const valueIndex = value ? tokens.indexOf(value, jsonIndex + 1) : -1;
+    const terminator = valueIndex === -1 ? null : tokens[valueIndex + 1];
+    const isStandaloneString = value?.type === "string" && (
+      !terminator || [",", "]", ")"].includes(terminator.value)
+    );
     callSites.push({
       file,
       line: tokens[index].line,
-      fields: value?.type === "string" ? value.value : null,
-      valueDescription: value ? `${value.type} ${JSON.stringify(value.value)}` : "missing value",
+      fields: isStandaloneString ? value.value : null,
+      valueDescription: value
+        ? `${value.type} ${JSON.stringify(value.value)}${isStandaloneString ? "" : " in compound expression"}`
+        : "missing value",
     });
   }
   return callSites;
