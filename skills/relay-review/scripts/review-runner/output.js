@@ -23,6 +23,7 @@ function printUsage() {
   console.log(`  --advisory-timeout <seconds> ${modeLabel("--advisory-timeout")} Advisory timeout`);
   console.log(`  --advisory-grace <seconds>   ${modeLabel("--advisory-grace")} Standard-mode critical-path wait window`);
   console.log(`  --allow-behind-base          ${modeLabel("--allow-behind-base")} Proceed despite a behind-base warning`);
+  console.log(`  --wait-for-checks <seconds>  ${modeLabel("--wait-for-checks")} Wait up to N seconds for PR checks to leave the pending bucket before reviewing`);
   console.log(`  --prepare-only               ${modeLabel("--prepare-only")} Emit prompt bundle only; do not apply verdict`);
   console.log(`  --no-comment                 ${modeLabel("--no-comment")} Do not post a PR comment`);
   console.log(`  --json                       ${modeLabel("--json")} Output JSON`);

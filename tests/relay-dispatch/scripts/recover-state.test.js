@@ -178,6 +178,44 @@ process.exit(2);
   };
 }
 
+function writeGhPrChecksScript(checks, { branch = "issue-211" } = {}) {
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-gh-checks-"));
+  const ghPath = path.join(binDir, "gh");
+  fs.writeFileSync(ghPath, `#!/usr/bin/env node
+const args = process.argv.slice(2);
+if (args[0] === "pr" && args[1] === "checks") {
+  const checks = ${JSON.stringify(checks)};
+  const FAIL = new Set(["fail","failed","failure","cancel","cancelled","canceled","timed_out","action_required","startup_failure","stale"]);
+  const SUCCESS = new Set(["pass","success","skipping","skipped","neutral"]);
+  if (checks.length === 0) {
+    // Real gh (cli/cli#9390): zero checks -> stderr message, empty stdout, exit 1.
+    process.stderr.write("no checks reported on '${branch}'\\n");
+    process.exit(1);
+  }
+  process.stdout.write(JSON.stringify(checks));
+  const buckets = checks.map((c) => String(c.bucket || "").toLowerCase());
+  const hasPending = buckets.some((b) => !SUCCESS.has(b) && !FAIL.has(b));
+  const hasFail = buckets.some((b) => FAIL.has(b));
+  process.exit(hasPending ? 8 : hasFail ? 1 : 0);
+}
+console.error("unexpected gh args: " + args.join(" "));
+process.exit(2);
+`, "utf-8");
+  fs.chmodSync(ghPath, 0o755);
+  return {
+    PATH: `${binDir}${path.delimiter}${process.env.PATH || ""}`,
+  };
+}
+
+function stampPendingChecksMarker(manifestPath, marker) {
+  const record = readManifest(manifestPath);
+  const updated = {
+    ...record.data,
+    review: { ...(record.data.review || {}), pending_checks_marker: marker },
+  };
+  writeManifest(manifestPath, updated, record.body);
+}
+
 test("changes_requested -> review_pending succeeds after a fresh commit", () => {
   const { repoRoot, manifestPath, runId, worktreePath, branch, initialHead } = setupRepo({ state: STATES.CHANGES_REQUESTED });
   const newHead = addCommitOnBranch(worktreePath, branch);
@@ -586,7 +624,253 @@ test("same-HEAD PR-body-only recovery requires both explicit opt-in flags", () =
   ], { encoding: "utf-8", env });
 
   assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /must be passed together/);
+  assert.match(result.stderr, /exactly one same-HEAD evidence flag/);
+});
+
+test("changes_requested -> review_pending accepts same-HEAD checks-green re-entry (marker present, all checks pass)", () => {
+  const { repoRoot, manifestPath, runId, initialHead } = setupRepo({
+    state: STATES.CHANGES_REQUESTED,
+    prNumber: 334,
+  });
+  stampPendingChecksMarker(manifestPath, { head_sha: initialHead, round: 1, pending_checks: ["unit"] });
+  const env = { ...process.env, ...writeGhPrChecksScript([
+    { name: "unit", bucket: "pass" },
+    { name: "lint", bucket: "skipping" },
+  ]) };
+
+  const stdout = execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--run-id", runId,
+    "--to", STATES.REVIEW_PENDING,
+    "--reason", "CI turned green at the reviewed head",
+    "--allow-same-head",
+    "--require-checks-green",
+    "--json",
+  ], { encoding: "utf-8", env });
+
+  const result = JSON.parse(stdout);
+  assert.equal(result.state, STATES.REVIEW_PENDING);
+  assert.equal(result.previousState, STATES.CHANGES_REQUESTED);
+  assert.equal(result.nextAction, "run_review");
+  assert.equal(result.freshCommit, null);
+  assert.equal(result.prBodyOnly, null);
+  assert.equal(result.checksGreen.checksGreen, true);
+  assert.equal(result.checksGreen.currentHead, initialHead);
+  assert.equal(result.checksGreen.lastReviewedSha, initialHead);
+  assert.equal(result.checksGreen.prNumber, 334);
+  assert.deepEqual(result.checksGreen.checkNames, ["lint", "unit"], "fetchChecks normalizes/sorts check names");
+
+  const manifest = readManifest(manifestPath).data;
+  assert.equal(manifest.state, STATES.REVIEW_PENDING);
+  assert.equal(manifest.next_action, "run_review");
+  assert.equal(manifest.review.last_reviewed_sha, initialHead, "recovery must NOT auto-reset last_reviewed_sha");
+  assert.equal(manifest.review.pending_checks_marker, undefined, "marker consumed on accept (single-use)");
+
+  // The STATE_RECOVERY event records only allowlisted fields; the checks-green
+  // decision is captured via the audit reason + pr_number + anchored head_sha.
+  const event = readRunEvents(repoRoot, runId).find((entry) => entry.event === "state_recovery");
+  assert.equal(event?.state_from, STATES.CHANGES_REQUESTED);
+  assert.equal(event?.state_to, STATES.REVIEW_PENDING);
+  assert.equal(event?.pr_number, 334);
+  assert.equal(event?.head_sha, initialHead);
+  assert.equal(event?.last_reviewed_sha, initialHead);
+  assert.equal(event?.reason, "CI turned green at the reviewed head");
+});
+
+test("checks-green re-entry honors --dry-run: reports the decision without writing", () => {
+  const { repoRoot, manifestPath, runId, initialHead } = setupRepo({
+    state: STATES.CHANGES_REQUESTED,
+    prNumber: 334,
+  });
+  stampPendingChecksMarker(manifestPath, { head_sha: initialHead, round: 1, pending_checks: ["unit"] });
+  const env = { ...process.env, ...writeGhPrChecksScript([{ name: "unit", bucket: "pass" }]) };
+
+  const stdout = execFileSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--run-id", runId,
+    "--to", STATES.REVIEW_PENDING,
+    "--reason", "dry-run checks-green preview",
+    "--allow-same-head",
+    "--require-checks-green",
+    "--dry-run",
+    "--json",
+  ], { encoding: "utf-8", env });
+
+  const result = JSON.parse(stdout);
+  assert.equal(result.state, STATES.REVIEW_PENDING);
+  assert.equal(result.dryRun, true);
+  assert.equal(result.checksGreen.checksGreen, true);
+
+  const manifest = readManifest(manifestPath).data;
+  assert.equal(manifest.state, STATES.CHANGES_REQUESTED, "dry-run must not transition");
+  assert.ok(manifest.review.pending_checks_marker, "dry-run must not consume the marker");
+  assert.equal(readRunEvents(repoRoot, runId).some((entry) => entry.event === "state_recovery"), false);
+});
+
+test("checks-green re-entry refuses when a live check failed", () => {
+  const { repoRoot, manifestPath, runId, initialHead } = setupRepo({
+    state: STATES.CHANGES_REQUESTED,
+    prNumber: 334,
+  });
+  stampPendingChecksMarker(manifestPath, { head_sha: initialHead, round: 1, pending_checks: ["unit"] });
+  const env = { ...process.env, ...writeGhPrChecksScript([{ name: "unit", bucket: "fail" }]) };
+
+  const result = spawnSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--run-id", runId,
+    "--to", STATES.REVIEW_PENDING,
+    "--reason", "trying while CI is red",
+    "--allow-same-head",
+    "--require-checks-green",
+    "--json",
+  ], { encoding: "utf-8", env });
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /not all green/);
+  assert.match(result.stderr, /failed: unit/);
+  assert.equal(readManifest(manifestPath).data.state, STATES.CHANGES_REQUESTED);
+});
+
+test("checks-green re-entry refuses when a live check is still pending", () => {
+  const { repoRoot, manifestPath, runId, initialHead } = setupRepo({
+    state: STATES.CHANGES_REQUESTED,
+    prNumber: 334,
+  });
+  stampPendingChecksMarker(manifestPath, { head_sha: initialHead, round: 1, pending_checks: ["unit"] });
+  const env = { ...process.env, ...writeGhPrChecksScript([{ name: "unit", bucket: "pending" }]) };
+
+  const result = spawnSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--run-id", runId,
+    "--to", STATES.REVIEW_PENDING,
+    "--reason", "trying while CI still running",
+    "--allow-same-head",
+    "--require-checks-green",
+    "--json",
+  ], { encoding: "utf-8", env });
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /not all green/);
+  assert.match(result.stderr, /pending: unit/);
+  assert.equal(readManifest(manifestPath).data.state, STATES.CHANGES_REQUESTED);
+});
+
+test("checks-green re-entry refuses when the head has moved off the reviewed sha", () => {
+  const { repoRoot, manifestPath, runId, worktreePath, branch, initialHead } = setupRepo({
+    state: STATES.CHANGES_REQUESTED,
+    prNumber: 334,
+  });
+  stampPendingChecksMarker(manifestPath, { head_sha: initialHead, round: 1, pending_checks: ["unit"] });
+  addCommitOnBranch(worktreePath, branch, "moved.txt");
+  const env = { ...process.env, ...writeGhPrChecksScript([{ name: "unit", bucket: "pass" }]) };
+
+  const result = spawnSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--run-id", runId,
+    "--to", STATES.REVIEW_PENDING,
+    "--reason", "head moved but trying checks-green route",
+    "--allow-same-head",
+    "--require-checks-green",
+    "--json",
+  ], { encoding: "utf-8", env });
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /does not equal review\.last_reviewed_sha/);
+  assert.equal(readManifest(manifestPath).data.state, STATES.CHANGES_REQUESTED);
+});
+
+test("checks-green re-entry refuses when the pending-checks marker is absent", () => {
+  const { repoRoot, manifestPath, runId } = setupRepo({
+    state: STATES.CHANGES_REQUESTED,
+    prNumber: 334,
+  });
+  // No marker stamped: the prior round did not proceed on pending checks.
+  const env = { ...process.env, ...writeGhPrChecksScript([{ name: "unit", bucket: "pass" }]) };
+
+  const result = spawnSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--run-id", runId,
+    "--to", STATES.REVIEW_PENDING,
+    "--reason", "trying checks-green without a marker",
+    "--allow-same-head",
+    "--require-checks-green",
+    "--json",
+  ], { encoding: "utf-8", env });
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /no pending-checks marker/);
+  assert.equal(readManifest(manifestPath).data.state, STATES.CHANGES_REQUESTED);
+});
+
+test("checks-green refuses a marker anchored to a different head (stale marker)", () => {
+  const { repoRoot, manifestPath, runId } = setupRepo({
+    state: STATES.CHANGES_REQUESTED,
+    prNumber: 334,
+  });
+  stampPendingChecksMarker(manifestPath, { head_sha: "b".repeat(40), round: 1, pending_checks: ["unit"] });
+  const env = { ...process.env, ...writeGhPrChecksScript([{ name: "unit", bucket: "pass" }]) };
+
+  const result = spawnSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--run-id", runId,
+    "--to", STATES.REVIEW_PENDING,
+    "--reason", "stale marker anchored elsewhere",
+    "--allow-same-head",
+    "--require-checks-green",
+    "--json",
+  ], { encoding: "utf-8", env });
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /no pending-checks marker anchored to the reviewed head/);
+  assert.equal(readManifest(manifestPath).data.state, STATES.CHANGES_REQUESTED);
+});
+
+test("--allow-same-head rejects passing both evidence flags (mutually exclusive)", () => {
+  const { repoRoot, manifestPath, runId, initialHead } = setupRepo({
+    state: STATES.CHANGES_REQUESTED,
+    prNumber: 334,
+  });
+  stampPendingChecksMarker(manifestPath, { head_sha: initialHead, round: 1, pending_checks: ["unit"] });
+
+  const result = spawnSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--run-id", runId,
+    "--to", STATES.REVIEW_PENDING,
+    "--reason", "both evidence flags is invalid",
+    "--allow-same-head",
+    "--require-pr-body-change",
+    "--require-checks-green",
+    "--json",
+  ], { encoding: "utf-8" });
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /exactly one same-HEAD evidence flag/);
+  assert.equal(readManifest(manifestPath).data.state, STATES.CHANGES_REQUESTED);
+});
+
+test("--require-checks-green without --allow-same-head is rejected", () => {
+  const { repoRoot, runId } = setupRepo({ state: STATES.CHANGES_REQUESTED, prNumber: 334 });
+
+  const result = spawnSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--run-id", runId,
+    "--to", STATES.REVIEW_PENDING,
+    "--reason", "checks-green without opt-in",
+    "--require-checks-green",
+    "--json",
+  ], { encoding: "utf-8" });
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /require --allow-same-head/);
 });
 
 test("escalated -> review_pending requires --force; succeeds with --force", () => {

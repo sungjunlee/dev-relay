@@ -14,6 +14,14 @@
 //   Q3 (external verifier): `git rev-parse` against the working branch's HEAD SHA.
 //     The claim (`review.last_reviewed_sha`) does not self-attest; the gate reads an
 //     independent artifact (git's object db for the branch).
+//
+// Same-head checks-green route (#950): re-enters review at the exact reviewed head
+// after post-publication CI turns green. The manifest `review.pending_checks_marker`
+// only proves the prior round's block was procedural (it proceeded on pending checks);
+// it does NOT self-attest that checks flipped green. The gate therefore verifies TWO
+// independent artifacts — git HEAD (still equals the marker's anchored head) and a live
+// `gh pr checks` re-poll (every check in a non-pending, non-failed bucket) — before it
+// force-transitions changes_requested -> review_pending.
 
 const path = require("path");
 const fs = require("fs");
@@ -31,6 +39,7 @@ const { readTextFileWithoutFollowingSymlinks } = require("./manifest/rubric");
 const { findUnknownFlags, modeLabel, readArg, schemaHasFlag } = require("./cli-args");
 const { resolveManifestRecord } = require("./relay-resolver");
 const { appendEventLineToPath, appendRunEvent, EVENTS } = require("./relay-events");
+const { classifyChecks, fetchChecks } = require("./wait-for-check");
 const CLI_ARG_OPTIONS = { commandName: "recover-state", reservedFlags: ["-h"] };
 const PR_BODY_FETCH_TIMEOUT_MS = 15000;
 
@@ -141,8 +150,9 @@ function printUsage(stream = console.log) {
     `  --to <state>      ${modeLabel("--to")} Recovery target state\n` +
     `  --reason <text>   ${modeLabel("--reason")} Audit reason\n` +
     `  --force           ${modeLabel("--force")} Confirm selected recovery transitions\n` +
-    `  --allow-same-head ${modeLabel("--allow-same-head")} Allow same-HEAD review recovery when PR-body evidence changed\n` +
+    `  --allow-same-head ${modeLabel("--allow-same-head")} Allow same-HEAD review recovery with exactly one same-HEAD evidence flag\n` +
     `  --require-pr-body-change ${modeLabel("--require-pr-body-change")} Require current PR body to differ from the latest review snapshot\n` +
+    `  --require-checks-green ${modeLabel("--require-checks-green")} Require the pending-checks marker at HEAD and all-green live gh pr checks\n` +
     `  --dry-run         ${modeLabel("--dry-run")} Print result without writing\n` +
     `  --json            ${modeLabel("--json")} Output JSON\n` +
     "\n" +
@@ -150,7 +160,7 @@ function printUsage(stream = console.log) {
     RECOVERY_TRANSITIONS.map((t) => {
       const forceFlag = t.requireForce ? " (--force required)" : "";
       const freshFlag = t.requireFreshCommit
-        ? " (fresh commit required on branch; same-HEAD PR-body-only recovery requires both same-HEAD flags)"
+        ? " (fresh commit required on branch; same-HEAD recovery requires --allow-same-head plus exactly one of --require-pr-body-change or --require-checks-green)"
         : "";
       const driftFlag = t.requireReadyHeadDrift
         ? " (live PR HEAD drift required)"
@@ -433,6 +443,76 @@ function requirePrBodyOnlyEvidence({ repoRoot, manifestData, currentHead, lastRe
   };
 }
 
+// Same-head checks-green re-entry (#950). Accepts changes_requested -> review_pending
+// at the exact reviewed head only when (a) git HEAD still equals review.last_reviewed_sha,
+// (b) review.pending_checks_marker is present and anchored to that same head (proving the
+// prior round's block was procedural), and (c) a live gh pr checks re-poll shows no check
+// in the fail or pending bucket. The marker alone never suffices — the live re-poll is the
+// independent artifact that proves checks actually flipped green.
+function requireChecksGreenEvidence({ repoRoot, manifestData, currentHead, lastReviewedSha }) {
+  const branch = manifestData?.git?.working_branch;
+  if (!lastReviewedSha || currentHead !== lastReviewedSha) {
+    throw new Error(
+      `Refusing same-HEAD checks-green recovery: git HEAD for '${branch}' (${currentHead}) ` +
+      `does not equal review.last_reviewed_sha (${lastReviewedSha || "none"}). ` +
+      "The checks-green route only re-enters review at the exact reviewed head; " +
+      "use the fresh-commit route when a new commit has landed."
+    );
+  }
+
+  const marker = manifestData?.review?.pending_checks_marker || null;
+  if (!marker || marker.head_sha !== currentHead) {
+    throw new Error(
+      "Refusing same-HEAD checks-green recovery: no pending-checks marker anchored to the reviewed head " +
+      `(${currentHead}). The prior round did not proceed on pending checks — ` +
+      "use the fresh-commit or --require-pr-body-change route instead."
+    );
+  }
+
+  const prNumber = getManifestPrNumber(manifestData);
+  if (!prNumber) {
+    throw new Error(
+      "Refusing same-HEAD checks-green recovery: manifest has no PR number " +
+      "(expected git.pr_number or github.pr_number)."
+    );
+  }
+
+  let checks;
+  try {
+    checks = fetchChecks(repoRoot, prNumber);
+  } catch (error) {
+    throw new Error(
+      `Refusing same-HEAD checks-green recovery: cannot fetch live gh pr checks for PR #${prNumber}: ` +
+      `${summarizeCommandFailure(error)}`
+    );
+  }
+
+  const { failedChecks, pendingChecks } = classifyChecks(checks);
+  if (failedChecks.length || pendingChecks.length) {
+    const failedNames = failedChecks.map((check) => check.name).join(", ") || "none";
+    const pendingNames = pendingChecks.map((check) => check.name).join(", ") || "none";
+    throw new Error(
+      `Refusing same-HEAD checks-green recovery: live gh pr checks for PR #${prNumber} are not all green ` +
+      `(failed: ${failedNames}; pending: ${pendingNames}). Wait for CI to finish and pass before re-entering review.`
+    );
+  }
+  if (checks.length === 0) {
+    throw new Error(
+      `Refusing same-HEAD checks-green recovery: PR #${prNumber} reports no live checks, but the ` +
+      "pending-checks marker implies checks were pending at review time. Re-verify the PR's CI state."
+    );
+  }
+
+  return {
+    checksGreen: true,
+    currentHead,
+    lastReviewedSha,
+    prNumber,
+    markerRound: Number.isInteger(marker.round) ? marker.round : null,
+    checkNames: checks.map((check) => check.name),
+  };
+}
+
 function main() {
   const args = process.argv.slice(2);
   const hasCliFlag = (flag) => schemaHasFlag(args, flag, CLI_ARG_OPTIONS);
@@ -454,6 +534,7 @@ function main() {
   const force = hasCliFlag("--force");
   const allowSameHead = hasCliFlag("--allow-same-head");
   const requirePrBodyChange = hasCliFlag("--require-pr-body-change");
+  const requireChecksGreen = hasCliFlag("--require-checks-green");
   const dryRun = hasCliFlag("--dry-run");
   const jsonOut = hasCliFlag("--json");
 
@@ -466,10 +547,18 @@ function main() {
   if (!reason) {
     throw new Error("--reason <text> is required (audit trail)");
   }
-  if (allowSameHead !== requirePrBodyChange) {
+  const sameHeadEvidenceFlagCount = [requirePrBodyChange, requireChecksGreen].filter(Boolean).length;
+  if (allowSameHead && sameHeadEvidenceFlagCount !== 1) {
     throw new Error(
-      "--allow-same-head and --require-pr-body-change must be passed together. " +
-      "Same-HEAD recovery is only supported for audited PR-body-only evidence changes."
+      "--allow-same-head requires exactly one same-HEAD evidence flag: " +
+      "--require-pr-body-change (audited PR-body change) or --require-checks-green (marker + all-green live checks). " +
+      "The two evidence flags are mutually exclusive."
+    );
+  }
+  if (!allowSameHead && sameHeadEvidenceFlagCount > 0) {
+    throw new Error(
+      "--require-pr-body-change and --require-checks-green require --allow-same-head. " +
+      "Same-HEAD recovery is only supported for audited same-HEAD evidence changes."
     );
   }
 
@@ -513,6 +602,7 @@ function main() {
 
   let commitContext = null;
   let prBodyOnlyContext = null;
+  let checksGreenContext = null;
   let readyHeadDriftContext = null;
   if (recovery.requireFreshCommit) {
     const headContext = getBranchHeadContext({
@@ -521,7 +611,16 @@ function main() {
     });
     const sameReviewedHead = headContext.lastReviewedSha
       && headContext.currentHead === headContext.lastReviewedSha;
-    if (sameReviewedHead && allowSameHead && requirePrBodyChange) {
+    if (allowSameHead && requireChecksGreen) {
+      // The operator explicitly opted into same-HEAD checks-green re-entry; this
+      // route verifies same head, marker, and live checks itself (never falls back
+      // to the fresh-commit route — a moved head is a refusal, not a silent switch).
+      checksGreenContext = requireChecksGreenEvidence({
+        repoRoot: validatedPaths.repoRoot,
+        manifestData: safeData,
+        ...headContext,
+      });
+    } else if (sameReviewedHead && allowSameHead && requirePrBodyChange) {
       prBodyOnlyContext = requirePrBodyOnlyEvidence({
         repoRoot: validatedPaths.repoRoot,
         manifestData: safeData,
@@ -554,6 +653,12 @@ function main() {
   if (recovery.resetLastReviewedSha) {
     updated.review = { ...(updated.review || {}), last_reviewed_sha: null };
   }
+  if (checksGreenContext) {
+    // Consume the pending-checks marker so the same-head route is single-use: a later
+    // changes_requested at this head (e.g. a real finding) cannot replay the re-entry.
+    updated = { ...updated, review: { ...(updated.review || {}) } };
+    delete updated.review.pending_checks_marker;
+  }
   if (readyHeadDriftContext) {
     updated = {
       ...updated,
@@ -574,12 +679,14 @@ function main() {
       head_sha: readyHeadDriftContext?.newSha
         || commitContext?.currentHead
         || prBodyOnlyContext?.currentHead
+        || checksGreenContext?.currentHead
         || updated.git?.head_sha
         || null,
-      round: prBodyOnlyContext?.previousSnapshotRound || updated.review?.rounds || null,
+      round: prBodyOnlyContext?.previousSnapshotRound || checksGreenContext?.markerRound || updated.review?.rounds || null,
       reason,
       last_reviewed_sha: commitContext?.lastReviewedSha
         ?? prBodyOnlyContext?.lastReviewedSha
+        ?? checksGreenContext?.lastReviewedSha
         ?? readyHeadDriftContext?.lastReviewedSha
         ?? (safeData.review?.last_reviewed_sha || null),
       ...(validatedPaths.worktreeMissing ? { worktree_missing: true } : {}),
@@ -596,6 +703,11 @@ function main() {
             pr_number: prBodyOnlyContext.prNumber,
           }
         : {}),
+      ...(checksGreenContext
+        ? {
+            pr_number: checksGreenContext.prNumber,
+          }
+        : {}),
     });
   }
 
@@ -609,6 +721,7 @@ function main() {
     force,
     freshCommit: commitContext,
     prBodyOnly: prBodyOnlyContext,
+    checksGreen: checksGreenContext,
     readyHeadDrift: readyHeadDriftContext,
     dryRun,
   };
@@ -630,6 +743,13 @@ function main() {
       console.log(`  Prev reviewed: ${prBodyOnlyContext.lastReviewedSha || "(none)"}`);
       console.log(`  PR number:    ${prBodyOnlyContext.prNumber}`);
       console.log(`  Snapshot:     ${prBodyOnlyContext.previousSnapshotPath}`);
+    }
+    if (checksGreenContext) {
+      console.log("  Checks green: true");
+      console.log(`  HEAD sha:     ${checksGreenContext.currentHead}`);
+      console.log(`  Prev reviewed: ${checksGreenContext.lastReviewedSha || "(none)"}`);
+      console.log(`  PR number:    ${checksGreenContext.prNumber}`);
+      console.log(`  Checks:       ${checksGreenContext.checkNames.join(", ") || "(none)"}`);
     }
     if (readyHeadDriftContext) {
       console.log("  Ready drift:  true");

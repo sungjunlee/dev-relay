@@ -95,6 +95,7 @@ const FLAGS = [
   { flag: "--repeated-issue-count", kind: VALUE, mode: MODE_PARSED, valueName: "<n>", rationale: "Numeric review field; flag-like following tokens should mean the value is missing." },
   { flag: "--repo", kind: VALUE, mode: MODE_VERBATIM, valueName: "<path>", rationale: "Operator-supplied repository path; keep the literal argv token." },
   { flag: "--request-id", kind: VALUE, mode: MODE_PARSED, valueName: "<id>", rationale: "Structured relay-ready identifier; flag-like following tokens should mean the value is missing." },
+  { flag: "--require-checks-green", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Require a same-HEAD pending-checks marker plus all-green live checks for same-HEAD recovery; no value is consumed." },
   { flag: "--require-pr-body-change", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Require audited PR body evidence for same-HEAD recovery; no value is consumed." },
   { flag: "--review-file", kind: VALUE, mode: MODE_VERBATIM, valueName: "<path>", rationale: "Operator-supplied verdict path; keep the literal argv token." },
   { flag: "--review-assurance", kind: VALUE, mode: MODE_PARSED, valueName: "<level>", allowedValues: ["standard", "hardened"], rationale: "Run-level review assurance policy; closed selector independent of agent identity." },
@@ -129,6 +130,7 @@ const FLAGS = [
   { flag: "--to", kind: VALUE, mode: MODE_PARSED, valueName: "<state>", rationale: "Closed recovery state selector; flag-like following tokens should mean the value is missing." },
   { flag: "--topic", kind: VALUE, mode: MODE_VERBATIM, valueName: "<name>", rationale: "Operator-supplied topic text used to derive a branch; keep the literal argv token." },
   { flag: "--verdict", kind: VALUE, mode: MODE_PARSED, valueName: "<name>", rationale: "Closed review verdict selector; flag-like following tokens should mean the value is missing." },
+  { flag: "--wait-for-checks", kind: VALUE, mode: MODE_PARSED, valueName: "<seconds>", rationale: "Pre-review check-settle budget in seconds; flag-like following tokens should mean the value is missing." },
   { flag: "--window-days", kind: VALUE, mode: MODE_PARSED, valueName: "<N>", rationale: "Numeric scan window; flag-like following tokens should mean the value is missing." },
   { flag: "--worktree-path", kind: VALUE, mode: MODE_VERBATIM, valueName: "<path>", rationale: "Operator-supplied worktree path; keep the literal argv token." },
   { flag: "--writer-pr", kind: VALUE, mode: MODE_PARSED, valueName: "<number>", rationale: "Numeric PR selector for the writer PR; flag-like following tokens should mean the value is missing." },
@@ -196,7 +198,7 @@ const COMMAND_FLAGS = {
   ],
   "recover-state": [
     "--repo", "--run-id", "--manifest", "--to", "--reason", "--force", "--dry-run", "--json", "--help",
-    "--allow-same-head", "--require-pr-body-change",
+    "--allow-same-head", "--require-pr-body-change", "--require-checks-green",
   ],
   "recover-commit": [
     "--repo", "--run-id", "--manifest", "--reason", "--pr-title", "--pr-body-file",
@@ -228,7 +230,7 @@ const COMMAND_FLAGS = {
     "--diff-file", "--review-file", "--reviewer", "--reviewer-script",
     "--reviewer-model", "--advisory-reviewer", "--advisory-profile",
     "--advisory-reviewer-model", "--advisory-timeout", "--advisory-grace", "--prepare-only",
-    "--manual-review-reason", "--independent-review-reason", "--allow-behind-base", "--no-comment", "--json", "--help",
+    "--manual-review-reason", "--independent-review-reason", "--allow-behind-base", "--wait-for-checks", "--no-comment", "--json", "--help",
   ],
   "run-full-gate": [
     "--repo", "--suites", "--output", "--lock-timeout", "--json", "--help",

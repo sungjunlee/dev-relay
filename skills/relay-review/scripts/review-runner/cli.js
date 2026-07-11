@@ -1,7 +1,7 @@
 const path = require("path");
 const { bindCliArgs, findUnknownFlags } = require("../../../relay-dispatch/scripts/cli-args");
 
-const KNOWN_FLAGS = ["--repo", "--run-id", "--branch", "--pr", "--manifest", "--done-criteria-file", "--diff-file", "--review-file", "--manual-review-reason", "--reviewer", "--reviewer-script", "--reviewer-model", "--independent-review-reason", "--advisory-reviewer", "--advisory-profile", "--advisory-reviewer-model", "--advisory-timeout", "--advisory-grace", "--allow-behind-base", "--prepare-only", "--no-comment", "--json", "--help", "-h"];
+const KNOWN_FLAGS = ["--repo", "--run-id", "--branch", "--pr", "--manifest", "--done-criteria-file", "--diff-file", "--review-file", "--manual-review-reason", "--reviewer", "--reviewer-script", "--reviewer-model", "--independent-review-reason", "--advisory-reviewer", "--advisory-profile", "--advisory-reviewer-model", "--advisory-timeout", "--advisory-grace", "--allow-behind-base", "--wait-for-checks", "--prepare-only", "--no-comment", "--json", "--help", "-h"];
 
 function parseReviewRunnerCliArgs(args) {
   const cliArgs = bindCliArgs(args, {
@@ -36,6 +36,7 @@ function parseReviewRunnerCliArgs(args) {
       reviewerModel: cliArgs.getArg("--reviewer-model"),
       reviewerScriptArg: cliArgs.getArg("--reviewer-script"),
       runIdArg: cliArgs.getArg("--run-id"),
+      waitForChecksArg: cliArgs.getArg("--wait-for-checks"),
     },
   };
 }
