@@ -504,7 +504,7 @@ function executeAdvisoryRequest(request) {
       );
       rawResponsePaths.push(attemptRawPath);
       rawResponsePath = attemptRawPath;
-      return { stdout, stderr, outcome, rawPath: attemptRawPath };
+      return { stdout, stderr, outcome, rawResponsePath: attemptRawPath };
     }
 
     function applyPolicyViolation(statusAfter) {
@@ -548,7 +548,7 @@ function executeAdvisoryRequest(request) {
      * Returns { kind: "success"|"policy_violation"|"timeout"|"failed"|"parse_failure", ... }.
      * parse_failure is the only retryable class (model-output variance).
      */
-    function classifyAttempt({ stdout, stderr, outcome, rawPath }) {
+    function classifyAttempt({ stdout, stderr, outcome, rawResponsePath }) {
       const statusAfter = captureGitStatus(advisoryRepoPath);
       if (statusBefore !== statusAfter) {
         return { kind: "policy_violation", statusAfter };
@@ -558,7 +558,7 @@ function executeAdvisoryRequest(request) {
           kind: "timeout",
           failureReason: (
             `${request.reviewerName} reviewer advisory_review timed out after ${laneBudgetMs / 1000}s; ` +
-            `model=${request.reviewerModel || "default"}; raw_response=${rawPath}`
+            `model=${request.reviewerModel || "default"}; raw_response=${rawResponsePath}`
           ),
         };
       }
