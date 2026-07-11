@@ -29,6 +29,7 @@ const { settleAdvisoryGatesForRound } = require("./review-runner/advisory-gates"
 const { printResult, printUsage } = require("./review-runner/output");
 const { applyPendingChecksMarker, maybeWaitForChecks } = require("./review-runner/check-wait");
 const { assertKnownReviewRunnerFlags, parseReviewRunnerCliArgs } = require("./review-runner/cli");
+const { beginDetachSupervisorIfRequested, dispatchReviewEntry } = require("./review-runner/detach");
 const { args, cliArgs, options } = parseReviewRunnerCliArgs(process.argv.slice(2));
 if (require.main === module && (!args.length || cliArgs.hasFlag(["--help", "-h"]))) {
   printUsage();
@@ -60,6 +61,10 @@ async function run() {
   const round = Number(data.review?.rounds || 0) + 1;
   const runDir = getRunDir(runRepoPath, data.run_id);
   ensureRunLayout(runRepoPath, data.run_id);
+  // Detached child only (no-op in the foreground): write the run-dir lease + receipt
+  // before the long-running reviewer invocation so the parent can return and the round
+  // survives the invoker's death.
+  beginDetachSupervisorIfRequested({ runRepoPath, runId: data.run_id, round, runDir, manifestPath });
   const runRoutePlan = loadRunRoutePlan(runRepoPath, data.run_id).plan;
   const resolvedAdvisoryConfig = resolveAdvisoryConfig({
     advisoryGraceArg,
@@ -388,8 +393,6 @@ async function run() {
 }
 
 if (require.main === module) {
-  Promise.resolve(run()).catch((error) => {
-    printFailureAndExit(error, { jsonOut: cliArgs.hasFlag("--json") });
-  });
+  dispatchReviewEntry({ options, args, entryPath: __filename, jsonOut: cliArgs.hasFlag("--json"), run, printFailureAndExit });
 }
 module.exports = { applyVerdictToManifest, buildCommentBody, buildPrompt, buildRedispatchPrompt, buildReviewRunnerRubricGateFailure, detectChurnGrowth, formatIssueList, formatPriorVerdictSummary, formatScopeDrift, getGhLogin, loadRubricFromRunDir, parseRemoteHost, parseReviewVerdict, parseScoreLog, resolveIssueNumber, resolveRemoteHost, validateReviewVerdict, validateScopeDrift };
