@@ -5134,9 +5134,10 @@ test("dispatch reclaims a claim owned by a real exited process", async () => {
     pid: deadPid,
     claimed_at: new Date().toISOString(),
   }));
-  fs.writeFileSync(path.join(runDir, `.dispatch-claim.reclaim-${deadPid}-orphaned`), JSON.stringify({
+  fs.writeFileSync(path.join(runDir, ".dispatch-claim.reclaim-lock"), JSON.stringify({
     pid: deadPid,
     claimed_at: new Date().toISOString(),
+    nonce: "orphaned",
   }));
 
   const rubricFile = path.join(repoRoot, "stale-claim-rubric.yaml");
@@ -5156,7 +5157,7 @@ test("dispatch reclaims a claim owned by a real exited process", async () => {
   assert.equal(JSON.parse(output).status, "completed");
 });
 
-test("concurrent retries of one stale claim allow exactly one dispatch", async () => {
+test("a live stale-claim reclaimer cannot be preempted by a later contender", async () => {
   const { repoRoot, relayHome } = setupRepo();
   process.env.RELAY_HOME = relayHome;
   const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-codex-bin-"));
@@ -5176,7 +5177,23 @@ test("concurrent retries of one stale claim allow exactly one dispatch", async (
     claimed_at: new Date().toISOString(),
   }));
 
-  const markerPath = path.join(os.tmpdir(), `relay-stale-claim-race-${process.pid}-${Date.now()}.json`);
+  const markerPath = path.join(os.tmpdir(), `relay-stale-claim-race-${process.pid}-${Date.now()}.marker`);
+  const releasePath = `${markerPath}.release`;
+  const preloadPath = writePreloadScript(binDir, "stale-claim-reclaim-pause-preload.js", `
+const fs = require("fs");
+const path = require("path");
+const originalReadFileSync = fs.readFileSync;
+let paused = false;
+fs.readFileSync = function readFileSync(targetPath) {
+  if (!paused && path.basename(String(targetPath)) === ".dispatch-claim.reclaim-lock") {
+    paused = true;
+    fs.writeFileSync(process.env.RELAY_TEST_RECLAIM_MARKER, "locked");
+    while (!fs.existsSync(process.env.RELAY_TEST_RECLAIM_RELEASE)) {
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+    }
+  }
+  return originalReadFileSync.apply(this, arguments);
+};`);
   const rubricFile = path.join(repoRoot, "stale-claim-race-rubric.yaml");
   fs.writeFileSync(rubricFile, "rubric:\n  factors:\n    - name: serialized reclaim\n      target: exactly one retry proceeds\n", "utf-8");
   const args = withRequiredRubric([
@@ -5186,25 +5203,39 @@ test("concurrent retries of one stale claim allow exactly one dispatch", async (
     "--rubric-file", rubricFile,
     "--json",
   ]);
-  const env = {
+  const env = withNodePreload({
     ...process.env,
     PATH: `${binDir}:${process.env.PATH}`,
     RELAY_HOME: relayHome,
-    RELAY_TEST_AFTER_WORKTREE_CREATE_PAUSE_MS: "1500",
-    RELAY_TEST_AFTER_WORKTREE_CREATE_MARKER: markerPath,
-  };
-  const children = [0, 1].map(() => spawn(process.execPath, [SCRIPT, repoRoot, ...args], {
+    RELAY_TEST_RECLAIM_MARKER: markerPath,
+    RELAY_TEST_RECLAIM_RELEASE: releasePath,
+  }, preloadPath);
+  const first = spawn(process.execPath, [SCRIPT, repoRoot, ...args], {
     cwd: repoRoot,
     env,
     stdio: ["ignore", "pipe", "pipe"],
-  }));
-  const results = await Promise.all(children.map(waitForDispatchExit));
-  try { fs.unlinkSync(markerPath); } catch {}
-
-  assert.equal(results.filter((result) => result.code === 0).length, 1);
-  const refused = results.find((result) => result.code !== 0);
-  assert.ok(refused);
-  assert.match(refused.stderr, /Refusing to overwrite existing run dir/);
+  });
+  const firstExit = waitForDispatchExit(first);
+  let firstResult;
+  try {
+    await waitFor(() => fs.existsSync(markerPath), {
+      timeoutMs: 30000,
+      message: "stale-claim reclaimer critical-section marker",
+    });
+    const second = spawnSync(process.execPath, [SCRIPT, repoRoot, ...args], {
+      cwd: repoRoot,
+      encoding: "utf-8",
+      env: { ...process.env, PATH: `${binDir}:${process.env.PATH}`, RELAY_HOME: relayHome },
+    });
+    assert.notEqual(second.status, 0);
+    assert.match(second.stderr, /Refusing to overwrite existing run dir/);
+  } finally {
+    fs.writeFileSync(releasePath, "release");
+    firstResult = await firstExit;
+    try { fs.unlinkSync(markerPath); } catch {}
+    try { fs.unlinkSync(releasePath); } catch {}
+  }
+  assert.equal(firstResult.code, 0, firstResult.stderr);
 });
 
 test("exit cleanup releases the fleet issue lock when claim release throws", () => {
