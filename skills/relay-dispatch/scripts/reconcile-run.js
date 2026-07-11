@@ -10,14 +10,16 @@ const { execGit } = require("./exec");
 const {
   buildExecutionEvidence,
   EXECUTION_EVIDENCE_FILENAME,
+  hashFileSha256,
+  rebrandEvidence,
   writeExecutionEvidence,
 } = require("./execution-evidence");
-const { STATES, updateManifestState } = require("./manifest/lifecycle");
+const { forceUpdateManifestState, STATES, updateManifestState } = require("./manifest/lifecycle");
 const { getRunDir, summarizeFailure, validateManifestPaths } = require("./manifest/paths");
 const { readManifest, writeManifest } = require("./manifest/store");
 const { classifyRepositoryDirt } = require("./runtime-dirt");
 const { resolveManifestRecord } = require("./relay-resolver");
-const { appendRunEvent, EVENTS } = require("./relay-events");
+const { appendRunEvent, EVENTS, readRunEvents } = require("./relay-events");
 const {
   confirmRunLeaseSupervisorDeath,
   corruptRunLeaseEventFields,
@@ -35,11 +37,13 @@ const CLI_ARG_OPTIONS = { commandName: "reconcile-run", reservedFlags: ["-h"] };
 const hasCliFlag = (flag) => schemaHasFlag(args, flag, CLI_ARG_OPTIONS);
 
 function printHelp(exitCode) {
-  console.log("Usage: reconcile-run.js --repo <path> --run-id <id> [--dry-run] [--json]");
+  console.log("Usage: reconcile-run.js --repo <path> --run-id <id> [--test-result-file <path>] [--dry-run] [--json]");
   console.log("\nSettle a dispatched relay run after supervisor death, reboot, timeout, or interrupted dispatch.");
+  console.log("Also salvages a terminal escalated run that timed out with committed-but-unpushed work.");
   console.log("\nOptions:");
   console.log(`  --repo <path>    ${modeLabel("--repo")} Repository root (default: .)`);
   console.log(`  --run-id <id>    ${modeLabel("--run-id")} Relay run identifier`);
+  console.log(`  --test-result-file <path> ${modeLabel("--test-result-file")} Operator test output hashed as salvage execution evidence; a replaceable placeholder is written when omitted`);
   console.log(`  --dry-run        ${modeLabel("--dry-run")} Report the decision row and planned actions without mutating`);
   console.log(`  --json           ${modeLabel("--json")} Output JSON`);
   console.log(`  --help           ${modeLabel("--help")} Show help`);
@@ -283,6 +287,370 @@ function stampExecutionEvidenceFromResult({
   return { stamped: true, path: writtenPath };
 }
 
+// --- Escalated-timeout salvage (row 6, #949) ---------------------------------
+// When a dispatch supervisor stamps `executor total_timeout` and escalates a run
+// whose executor had actually committed its work (clean tree, commits ahead of the
+// remote) but never pushed, the manifest is terminal `escalated`, so the row-1 noop
+// swallowed it. This path force-with-lease pushes the retained commits, stamps
+// evidence, and recovers the run to review_pending through the legal escalated ->
+// review_pending transition.
+
+const SALVAGE_ROW = 6;
+const SALVAGE_ROW_NAME = "salvage_committed_unpushed";
+
+function salvageAuditReason(runId) {
+  return `reconcile-run salvaged committed-unpushed work after executor timeout escalation (run ${runId})`;
+}
+
+function resolveTestResultFile(resultFileArg) {
+  if (resultFileArg === undefined || resultFileArg === null || String(resultFileArg).trim() === "") {
+    return null;
+  }
+  const resolved = path.resolve(resultFileArg);
+  const stat = fs.statSync(resolved);
+  if (!stat.isFile()) {
+    throw new Error(`--test-result-file must point to a file: ${resolved}`);
+  }
+  return resolved;
+}
+
+function latestDispatchResultEvent(repoRoot, runId) {
+  let latest = null;
+  for (const event of readRunEvents(repoRoot, runId)) {
+    if (event?.event === EVENTS.DISPATCH_RESULT) latest = event;
+  }
+  return latest;
+}
+
+// The supervisor records the timeout outcome as a DISPATCH_RESULT with
+// dispatch_failure_class "total_timeout" and state_to "escalated". Requiring that
+// stamp keeps the salvage scoped to timeout escalations; other escalations (publish
+// or review failures) fall through to the row-1 noop.
+function isEscalatedTimeoutRun(repoRoot, runId, data) {
+  if (data.state !== STATES.ESCALATED) return false;
+  const latest = latestDispatchResultEvent(repoRoot, runId);
+  return Boolean(
+    latest
+    && latest.dispatch_failure_class === "total_timeout"
+    && latest.state_to === STATES.ESCALATED
+  );
+}
+
+function countCommitsAheadOfBase(worktreePath, data) {
+  const baseBranch = data.git?.base_branch || "main";
+  for (const ref of [`refs/remotes/origin/${baseBranch}`, baseBranch]) {
+    try {
+      execGit(worktreePath, ["rev-parse", "--verify", ref]);
+      return countRange(worktreePath, `${ref}..HEAD`);
+    } catch {}
+  }
+  return 0;
+}
+
+// Commits present locally but not on the branch's own remote ref. When the remote
+// ref exists we count origin/<branch>..HEAD; when the branch was never pushed we
+// fall back to commits beyond the dispatch base (head_sha may already point at the
+// committed HEAD in an escalated manifest, so it is not a reliable "unpushed" marker).
+function countUnpushedAgainstRemote(worktreePath, branch, data) {
+  const remoteRef = `refs/remotes/origin/${branch}`;
+  try {
+    execGit(worktreePath, ["rev-parse", "--verify", remoteRef]);
+    return countRange(worktreePath, `${remoteRef}..HEAD`);
+  } catch {}
+  return countCommitsAheadOfBase(worktreePath, data);
+}
+
+function inspectSalvageWorktree(worktreePath, branch, data) {
+  let currentHead = data.git?.head_sha || null;
+  try {
+    currentHead = execGit(worktreePath, ["rev-parse", "HEAD"]);
+  } catch {}
+  let statusText = "";
+  try {
+    statusText = execGit(worktreePath, ["status", "--porcelain"]);
+  } catch {}
+  return {
+    currentHead,
+    hasReviewableDirt: classifyRepositoryDirt(statusText).hasReviewableDirt,
+    unpushedCommits: countUnpushedAgainstRemote(worktreePath, branch, data),
+  };
+}
+
+// Never a bare --force: the executor may have force-pushed once before stalling, so
+// the lease guards against overwriting a remote that moved past our known point.
+function pushSalvageForceWithLease(worktreePath, branch) {
+  try {
+    execGit(worktreePath, ["push", "--force-with-lease", "origin", branch]);
+    return { ok: true };
+  } catch (error) {
+    const detail = [error.stderr, error.stdout, error.message]
+      .map((part) => String(part || "").trim())
+      .filter(Boolean)
+      .join(" ")
+      .split(/\r?\n/)
+      .filter(Boolean)
+      .slice(0, 6)
+      .join(" ");
+    return { ok: false, detail: detail || "git push --force-with-lease failed" };
+  }
+}
+
+function planSalvageEvidence(runDir, testResultFile) {
+  const evidencePath = path.join(runDir, EXECUTION_EVIDENCE_FILENAME);
+  if (testResultFile) {
+    return { action: "operator_result_file", verified: true, evidencePath };
+  }
+  if (fs.existsSync(evidencePath)) {
+    return { action: "rebrand_placeholder", verified: false, evidencePath };
+  }
+  return { action: "write_placeholder", verified: false, evidencePath };
+}
+
+// Evidence never silently claims verification: an operator --test-result-file is
+// hashed and bound to the salvaged HEAD; otherwise existing timeout-placeholder
+// evidence is rebranded (or a fresh placeholder written) with "unspecified" hashes.
+function stampSalvageEvidence({ repoRoot, runId, runDir, salvageHead, executor, testResultFile, reason }) {
+  const plan = planSalvageEvidence(runDir, testResultFile);
+  if (plan.action === "operator_result_file") {
+    const writtenPath = writeExecutionEvidence(runDir, {
+      ...buildExecutionEvidence({
+        headSha: salvageHead,
+        testCommand: undefined,
+        resultFilePath: testResultFile,
+        executor: executor || "executor",
+        testExitCode: 0,
+      }),
+      recorded_by: "reconcile-salvage-operator-v1",
+    });
+    const hash = hashFileSha256(writtenPath);
+    appendRunEvent(repoRoot, runId, {
+      event: EVENTS.OPERATOR_EXECUTION_EVIDENCE,
+      state_from: STATES.ESCALATED,
+      state_to: STATES.REVIEW_PENDING,
+      head_sha: salvageHead,
+      reason,
+      operator_initiated: true,
+      execution_evidence_path: writtenPath,
+      execution_evidence_hash: hash,
+    });
+    return { verified: true, recordedBy: "reconcile-salvage-operator-v1", path: writtenPath, hash };
+  }
+  if (plan.action === "rebrand_placeholder") {
+    const rebrand = rebrandEvidence(runDir, {
+      newHeadSha: salvageHead,
+      recordedBy: "reconcile-salvage-rebrand",
+      reason,
+    });
+    if (rebrand.rewritten) {
+      appendRunEvent(repoRoot, runId, {
+        event: EVENTS.EXECUTION_EVIDENCE_REBRANDED,
+        previous_head_sha: rebrand.previousSha,
+        new_head_sha: salvageHead,
+        reason,
+        override_class: "execution_evidence_rebrand",
+        affected_head_sha: salvageHead,
+        prior_state: STATES.ESCALATED,
+        required_reason: reason,
+        operator_initiated: true,
+        execution_evidence_path: rebrand.evidencePath,
+        execution_evidence_hash: rebrand.evidenceHash,
+      });
+    }
+    return {
+      verified: false,
+      placeholder: true,
+      rebranded: rebrand.rewritten === true,
+      skipped: rebrand.skipped || null,
+      path: plan.evidencePath,
+    };
+  }
+  const writtenPath = writeExecutionEvidence(runDir, buildExecutionEvidence({
+    headSha: salvageHead,
+    testCommand: undefined,
+    resultFilePath: null,
+    executor: executor || "executor",
+  }));
+  return { verified: false, placeholder: true, written: true, path: writtenPath };
+}
+
+function warnSalvagePlaceholderEvidence(runId) {
+  console.error(
+    `Warning: salvage execution evidence for ${runId} is a replaceable placeholder ` +
+    "(not operator-verified); pass --test-result-file <path> to record verified evidence."
+  );
+}
+
+function salvageResult({ status, manifestPath, runId, data, dryRun, nextAction, extra = {} }) {
+  return {
+    ...buildBaseResult({
+      row: SALVAGE_ROW,
+      rowName: SALVAGE_ROW_NAME,
+      status,
+      manifestPath,
+      runId,
+      data,
+      dryRun,
+      nextAction,
+    }),
+    ...extra,
+  };
+}
+
+async function trySalvageEscalatedTimeout(
+  { repoRoot, runId, manifestPath, body, data, worktreePath, dryRun, jsonOut, testResultFile }
+) {
+  if (!isEscalatedTimeoutRun(repoRoot, runId, data)) return false;
+
+  const branch = data.git?.working_branch || null;
+
+  // Never preempt a still-owned run — a live (or unverifiable host-mismatch) lease
+  // means the supervisor process group may still be alive.
+  const leaseStatus = getRunLeaseStatus(repoRoot, runId);
+  if (leaseStatus.live || leaseStatus.reason === "host_mismatch") {
+    outputResult(salvageResult({
+      status: "still_owned",
+      manifestPath,
+      runId,
+      data,
+      dryRun,
+      nextAction: "wait_for_executor",
+      extra: {
+        lease: leaseStatus.lease,
+        leaseStatus: leaseStatus.reason,
+        elapsed_s: leaseStatus.elapsed_s,
+        remaining_s: leaseStatus.remaining_s,
+      },
+    }), jsonOut);
+    return true;
+  }
+
+  // Worktree gone or branch unknown: nothing to salvage -> fall through to row-1 noop.
+  if (!branch || !worktreePath || !fs.existsSync(worktreePath)) return false;
+
+  const inspection = inspectSalvageWorktree(worktreePath, branch, data);
+
+  // A dirty tree is surfaced for manual handling, never auto-salvaged.
+  if (inspection.hasReviewableDirt) {
+    outputResult(salvageResult({
+      status: "dirty_surfaced",
+      manifestPath,
+      runId,
+      data,
+      dryRun,
+      nextAction: "manual_recover_commit",
+      extra: {
+        branch,
+        hasReviewableDirt: true,
+        unpushedCommits: inspection.unpushedCommits,
+      },
+    }), jsonOut);
+    return true;
+  }
+
+  // Clean tree but no unpushed commits: genuinely nothing to salvage -> row-1 noop.
+  if (inspection.unpushedCommits <= 0) return false;
+
+  const runDir = getRunDir(repoRoot, runId);
+  const executor = data.roles?.executor || "executor";
+  const pushTarget = `origin/${branch}`;
+  const evidencePlan = planSalvageEvidence(runDir, testResultFile);
+  const reason = salvageAuditReason(runId);
+
+  if (dryRun) {
+    outputResult(salvageResult({
+      status: "dry_run",
+      manifestPath,
+      runId,
+      data,
+      dryRun,
+      nextAction: "salvage_push_then_review",
+      extra: {
+        branch,
+        unpushedCommits: inspection.unpushedCommits,
+        pushTarget,
+        forceWithLease: true,
+        evidenceAction: evidencePlan.action,
+        evidenceVerified: evidencePlan.verified,
+        targetState: STATES.REVIEW_PENDING,
+        plannedActions: [
+          `push_force_with_lease:${pushTarget}`,
+          "remove_lease_if_present",
+          evidencePlan.verified
+            ? "stamp_operator_execution_evidence"
+            : "write_replaceable_placeholder_evidence",
+          "force_transition_escalated_to_review_pending",
+        ],
+      },
+    }), jsonOut);
+    return true;
+  }
+
+  // Push before any state mutation: a rejected lease leaves the run untouched.
+  const pushResult = pushSalvageForceWithLease(worktreePath, branch);
+  if (!pushResult.ok) {
+    outputResult(salvageResult({
+      status: "push_rejected",
+      manifestPath,
+      runId,
+      data,
+      dryRun,
+      nextAction: "manual_reconcile_remote",
+      extra: {
+        branch,
+        pushTarget,
+        unpushedCommits: inspection.unpushedCommits,
+        forceWithLeaseRejected: true,
+        pushError: pushResult.detail,
+      },
+    }), jsonOut);
+    return true;
+  }
+
+  removeRunLease(repoRoot, runId);
+
+  const salvageHead = inspection.currentHead || data.git?.head_sha || null;
+  const executionEvidence = stampSalvageEvidence({
+    repoRoot,
+    runId,
+    runDir,
+    salvageHead,
+    executor,
+    testResultFile,
+    reason,
+  });
+  if (!executionEvidence.verified) {
+    warnSalvagePlaceholderEvidence(runId);
+  }
+
+  const updated = {
+    ...forceUpdateManifestState(data, STATES.REVIEW_PENDING, "run_review", { reason }),
+    git: {
+      ...(data.git || {}),
+      head_sha: salvageHead || data.git?.head_sha || null,
+    },
+  };
+  writeManifest(manifestPath, updated, body);
+  appendStateRecovery(repoRoot, data, updated, reason);
+
+  outputResult(salvageResult({
+    status: "salvaged",
+    manifestPath,
+    runId,
+    data: updated,
+    dryRun,
+    nextAction: updated.next_action,
+    extra: {
+      state: updated.state,
+      branch,
+      pushTarget,
+      unpushedCommits: inspection.unpushedCommits,
+      forceWithLease: true,
+      executionEvidence,
+    },
+  }), jsonOut);
+  return true;
+}
+
 async function main() {
   const unknownFlags = findUnknownFlags(args, "reconcile-run");
   if (unknownFlags.length) {
@@ -293,6 +661,7 @@ async function main() {
   const runId = readArg(args, "--run-id", undefined, CLI_ARG_OPTIONS);
   const dryRun = hasCliFlag("--dry-run");
   const jsonOut = hasCliFlag("--json");
+  const testResultFile = resolveTestResultFile(readArg(args, "--test-result-file", undefined, CLI_ARG_OPTIONS));
   if (!runId) {
     throw new Error("--run-id is required");
   }
@@ -318,6 +687,18 @@ async function main() {
   const worktreePath = validatedPaths.worktree;
 
   if (data.state !== STATES.DISPATCHED) {
+    const salvaged = await trySalvageEscalatedTimeout({
+      repoRoot: normalizedRepoRoot,
+      runId: normalizedRunId,
+      manifestPath: record.manifestPath,
+      body: record.body,
+      data,
+      worktreePath,
+      dryRun,
+      jsonOut,
+      testResultFile,
+    });
+    if (salvaged) return;
     outputResult({
       ...buildBaseResult({
         row: 1,

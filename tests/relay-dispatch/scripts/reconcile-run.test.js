@@ -86,6 +86,7 @@ function setupRepo({
   publishPolicy = "immediate",
   ghState = {},
   executionEvidence = true,
+  dispatchResultFailureClass = undefined,
 } = {}) {
   const repoRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "relay-reconcile-run-")));
   const relayHome = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-")));
@@ -111,10 +112,12 @@ function setupRepo({
   execFileSync("git", ["worktree", "add", worktreePath, "-b", branch], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
   const dispatchHead = execFileSync("git", ["-C", worktreePath, "rev-parse", "HEAD"], { encoding: "utf-8" }).trim();
 
+  let committedHead = dispatchHead;
   if (committedWork) {
     fs.writeFileSync(path.join(worktreePath, "reconciled.txt"), "committed before crash\n", "utf-8");
     execFileSync("git", ["-C", worktreePath, "add", "reconciled.txt"], { encoding: "utf-8", stdio: "pipe" });
     execFileSync("git", ["-C", worktreePath, "commit", "-m", "Executor work before crash"], { encoding: "utf-8", stdio: "pipe" });
+    committedHead = execFileSync("git", ["-C", worktreePath, "rev-parse", "HEAD"], { encoding: "utf-8" }).trim();
   }
 
   const runId = createRunId({
@@ -141,6 +144,9 @@ function setupRepo({
   fs.writeFileSync(path.join(layout.runDir, "rubric.yaml"), "rubric:\n  factors:\n    - name: reconcile-run\n", "utf-8");
   if (manifestState === STATES.REVIEW_PENDING) {
     manifest = updateManifestState(manifest, STATES.REVIEW_PENDING, "run_review");
+  } else if (manifestState === STATES.ESCALATED) {
+    manifest = updateManifestState(manifest, STATES.ESCALATED, "inspect_dispatch_failure");
+    manifest.git.head_sha = committedHead;
   } else if (manifestState !== STATES.DISPATCHED) {
     throw new Error(`unsupported fixture state ${manifestState}`);
   }
@@ -165,6 +171,20 @@ function setupRepo({
     }, null, 2));
   }
 
+  if (dispatchResultFailureClass !== undefined) {
+    // Mirror the supervisor's timeout escalation stamp: a DISPATCH_RESULT event with
+    // state_to escalated and the dispatch_failure_class the salvage path keys off.
+    appendRunEvent(repoRoot, runId, {
+      event: EVENTS.DISPATCH_RESULT,
+      state_from: STATES.DISPATCHED,
+      state_to: STATES.ESCALATED,
+      head_sha: committedHead,
+      reason: "new_dispatch:executor total_timeout after 3600s",
+      dispatch_failure_class: dispatchResultFailureClass,
+      publish_policy: publishPolicy,
+    });
+  }
+
   const ghPath = writeFakeGh(binDir, statePath, ghLogPath, ghState);
   const env = {
     ...process.env,
@@ -173,7 +193,21 @@ function setupRepo({
     RELAY_TEST_GH_STATE: statePath,
     RELAY_TEST_GH_LOG: ghLogPath,
   };
-  return { repoRoot, relayHome, runId, manifestPath: layout.manifestPath, runDir: layout.runDir, worktreePath, branch, statePath, ghLogPath, env };
+  return {
+    repoRoot,
+    relayHome,
+    runId,
+    manifestPath: layout.manifestPath,
+    runDir: layout.runDir,
+    worktreePath,
+    branch,
+    dispatchHead,
+    committedHead,
+    originRoot,
+    statePath,
+    ghLogPath,
+    env,
+  };
 }
 
 function runReconcile(fixture, extraArgs = []) {
@@ -757,4 +791,248 @@ test("reconcile dry-run reports the exact row and planned actions without mutati
   ]);
   assert.equal(fs.existsSync(getEventsPath(fixture.repoRoot, fixture.runId)), false);
   assert.equal(readManifest(fixture.manifestPath).data.state, STATES.DISPATCHED);
+});
+
+// --- Escalated-timeout salvage (row 6, #949) ---------------------------------
+
+function remoteBranchSha(fixture) {
+  const raw = execFileSync("git", ["ls-remote", "--heads", fixture.originRoot, fixture.branch], {
+    encoding: "utf-8",
+    stdio: "pipe",
+  }).trim();
+  return raw ? raw.split(/\s+/)[0] : null;
+}
+
+function pushBranchToOrigin(fixture) {
+  execFileSync("git", ["-C", fixture.worktreePath, "push", "origin", fixture.branch], {
+    encoding: "utf-8",
+    stdio: "pipe",
+  });
+}
+
+function addLocalCommit(fixture, name) {
+  fs.writeFileSync(path.join(fixture.worktreePath, name), `${name}\n`, "utf-8");
+  execFileSync("git", ["-C", fixture.worktreePath, "add", name], { encoding: "utf-8", stdio: "pipe" });
+  execFileSync("git", ["-C", fixture.worktreePath, "commit", "-m", `local ${name}`], { encoding: "utf-8", stdio: "pipe" });
+  return execFileSync("git", ["-C", fixture.worktreePath, "rev-parse", "HEAD"], { encoding: "utf-8" }).trim();
+}
+
+// A separate clone force-pushes a divergent commit to the branch, leaving the
+// worktree's remote-tracking ref stale so --force-with-lease must reject.
+function forcePushDivergentToOrigin(fixture) {
+  const sidecar = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "relay-reconcile-sidecar-")));
+  execFileSync("git", ["clone", "--quiet", fixture.originRoot, sidecar], { encoding: "utf-8", stdio: "pipe" });
+  execFileSync("git", ["-C", sidecar, "config", "user.name", "Sidecar"], { encoding: "utf-8", stdio: "pipe" });
+  execFileSync("git", ["-C", sidecar, "config", "user.email", "sidecar@example.com"], { encoding: "utf-8", stdio: "pipe" });
+  execFileSync("git", ["-C", sidecar, "checkout", fixture.branch], { encoding: "utf-8", stdio: "pipe" });
+  fs.writeFileSync(path.join(sidecar, "divergent.txt"), "divergent remote\n", "utf-8");
+  execFileSync("git", ["-C", sidecar, "add", "divergent.txt"], { encoding: "utf-8", stdio: "pipe" });
+  execFileSync("git", ["-C", sidecar, "commit", "-m", "divergent remote commit"], { encoding: "utf-8", stdio: "pipe" });
+  execFileSync("git", ["-C", sidecar, "push", "--force", "origin", fixture.branch], { encoding: "utf-8", stdio: "pipe" });
+  return execFileSync("git", ["-C", sidecar, "rev-parse", "HEAD"], { encoding: "utf-8" }).trim();
+}
+
+test("reconcile salvages an escalated-timeout run with committed-but-unpushed work", () => {
+  const fixture = setupRepo({
+    manifestState: STATES.ESCALATED,
+    committedWork: true,
+    resultFile: true,
+    resultFileContent: "", // 0-byte dispatch result must not block the salvage
+    dispatchResultFailureClass: "total_timeout",
+  });
+  const leasePath = writeLease(fixture, {
+    pid: 999999,
+    pgid: 999999,
+    startedAt: new Date().toISOString(),
+    timeoutS: 60,
+  });
+  const evidencePath = path.join(fixture.runDir, EXECUTION_EVIDENCE_FILENAME);
+
+  const result = parseJsonResult(runReconcile(fixture));
+
+  assert.equal(result.row, 6);
+  assert.equal(result.rowName, "salvage_committed_unpushed");
+  assert.equal(result.status, "salvaged");
+  assert.notEqual(result.row, 1);
+  assert.equal(result.state, STATES.REVIEW_PENDING);
+  assert.equal(result.forceWithLease, true);
+  assert.ok(result.unpushedCommits >= 1);
+  assert.equal(result.executionEvidence.rebranded, true);
+
+  // Real remote ref: the force-with-lease push landed the committed HEAD on origin.
+  assert.equal(remoteBranchSha(fixture), fixture.committedHead);
+  // Stale non-live lease removed.
+  assert.equal(fs.existsSync(leasePath), false);
+
+  // Manifest recovered to review_pending, with the audit reason recorded.
+  const manifest = readManifest(fixture.manifestPath).data;
+  assert.equal(manifest.state, STATES.REVIEW_PENDING);
+  assert.equal(manifest.next_action, "run_review");
+  assert.equal(manifest.git.head_sha, fixture.committedHead);
+  assert.equal(manifest.last_force.to_state, STATES.REVIEW_PENDING);
+  assert.match(manifest.last_force.reason, /salvaged committed-unpushed/);
+
+  // Evidence rebound to the salvaged HEAD (existing placeholder rebranded).
+  const evidence = JSON.parse(fs.readFileSync(evidencePath, "utf-8"));
+  assert.equal(evidence.head_sha, fixture.committedHead);
+  assert.equal(evidence.recorded_by, "reconcile-salvage-rebrand");
+
+  const events = readRunEvents(fixture.repoRoot, fixture.runId);
+  const recovery = events.find((event) => event.event === EVENTS.STATE_RECOVERY);
+  assert.ok(recovery);
+  assert.equal(recovery.state_from, STATES.ESCALATED);
+  assert.equal(recovery.state_to, STATES.REVIEW_PENDING);
+  assert.match(recovery.reason, /salvaged committed-unpushed/);
+});
+
+test("reconcile salvage stamps operator-verified evidence from --test-result-file", () => {
+  const fixture = setupRepo({
+    manifestState: STATES.ESCALATED,
+    committedWork: true,
+    dispatchResultFailureClass: "total_timeout",
+    executionEvidence: false,
+  });
+  const resultFile = path.join(fixture.runDir, "operator-tests.txt");
+  fs.writeFileSync(resultFile, "PASS: 42 targeted tests\n", "utf-8");
+  const evidencePath = path.join(fixture.runDir, EXECUTION_EVIDENCE_FILENAME);
+
+  const result = parseJsonResult(runReconcile(fixture, ["--test-result-file", resultFile]));
+
+  assert.equal(result.row, 6);
+  assert.equal(result.status, "salvaged");
+  assert.equal(result.executionEvidence.verified, true);
+  assert.equal(result.executionEvidence.recordedBy, "reconcile-salvage-operator-v1");
+  assert.equal(remoteBranchSha(fixture), fixture.committedHead);
+
+  const evidence = JSON.parse(fs.readFileSync(evidencePath, "utf-8"));
+  assert.equal(evidence.head_sha, fixture.committedHead);
+  assert.equal(evidence.recorded_by, "reconcile-salvage-operator-v1");
+  assert.equal(evidence.test_result_hash, hashFileSha256(resultFile));
+  assert.equal(evidence.test_exit_code, 0);
+
+  const events = readRunEvents(fixture.repoRoot, fixture.runId);
+  assert.ok(events.some((event) => event.event === EVENTS.OPERATOR_EXECUTION_EVIDENCE));
+});
+
+test("reconcile surfaces an escalated-timeout run with a dirty worktree instead of salvaging", () => {
+  const fixture = setupRepo({
+    manifestState: STATES.ESCALATED,
+    committedWork: true,
+    dispatchResultFailureClass: "total_timeout",
+  });
+  fs.writeFileSync(path.join(fixture.worktreePath, "dirty.txt"), "uncommitted change\n", "utf-8");
+
+  const result = parseJsonResult(runReconcile(fixture));
+
+  assert.equal(result.row, 6);
+  assert.equal(result.status, "dirty_surfaced");
+  assert.equal(result.hasReviewableDirt, true);
+  assert.equal(readManifest(fixture.manifestPath).data.state, STATES.ESCALATED);
+  assert.equal(remoteBranchSha(fixture), null);
+});
+
+test("reconcile refuses to salvage an escalated-timeout run while the supervisor lease is live", async (t) => {
+  const fixture = setupRepo({
+    manifestState: STATES.ESCALATED,
+    committedWork: true,
+    dispatchResultFailureClass: "total_timeout",
+  });
+  const child = await spawnSleeper(t);
+  const leasePath = writeLease(fixture, {
+    pid: child.pid,
+    pgid: child.pid,
+    startedAt: new Date().toISOString(),
+    timeoutS: 60,
+  });
+
+  const result = parseJsonResult(runReconcile(fixture));
+
+  assert.equal(result.row, 6);
+  assert.equal(result.status, "still_owned");
+  assert.equal(fs.existsSync(leasePath), true);
+  assert.equal(readManifest(fixture.manifestPath).data.state, STATES.ESCALATED);
+  assert.equal(remoteBranchSha(fixture), null);
+  assert.equal(isPgidAlive(child.pid), true);
+});
+
+test("reconcile dry-run prints the salvage plan without mutating", () => {
+  const fixture = setupRepo({
+    manifestState: STATES.ESCALATED,
+    committedWork: true,
+    dispatchResultFailureClass: "total_timeout",
+  });
+  const evidencePath = path.join(fixture.runDir, EXECUTION_EVIDENCE_FILENAME);
+  const evidenceBefore = fs.readFileSync(evidencePath, "utf-8");
+
+  const result = parseJsonResult(runReconcile(fixture, ["--dry-run"]));
+
+  assert.equal(result.row, 6);
+  assert.equal(result.status, "dry_run");
+  assert.equal(result.pushTarget, `origin/${fixture.branch}`);
+  assert.equal(result.forceWithLease, true);
+  assert.equal(result.targetState, STATES.REVIEW_PENDING);
+  assert.equal(result.evidenceVerified, false);
+  assert.deepEqual(result.plannedActions, [
+    `push_force_with_lease:origin/${fixture.branch}`,
+    "remove_lease_if_present",
+    "write_replaceable_placeholder_evidence",
+    "force_transition_escalated_to_review_pending",
+  ]);
+  // No push, no state change, no evidence write.
+  assert.equal(remoteBranchSha(fixture), null);
+  assert.equal(readManifest(fixture.manifestPath).data.state, STATES.ESCALATED);
+  assert.equal(fs.readFileSync(evidencePath, "utf-8"), evidenceBefore);
+});
+
+test("reconcile surfaces an escalated-timeout salvage when the remote moved beyond the lease", () => {
+  const fixture = setupRepo({
+    manifestState: STATES.ESCALATED,
+    committedWork: true,
+    dispatchResultFailureClass: "total_timeout",
+  });
+  // Publish once (stale remote-tracking ref), advance locally so there is something
+  // to push, then let a third party force-push a divergent commit we never fetched.
+  pushBranchToOrigin(fixture);
+  addLocalCommit(fixture, "local-extra.txt");
+  const divergentHead = forcePushDivergentToOrigin(fixture);
+  assert.equal(remoteBranchSha(fixture), divergentHead);
+
+  const result = parseJsonResult(runReconcile(fixture));
+
+  assert.equal(result.row, 6);
+  assert.equal(result.status, "push_rejected");
+  assert.equal(result.forceWithLeaseRejected, true);
+  // Remote not overwritten; manifest not transitioned.
+  assert.equal(remoteBranchSha(fixture), divergentHead);
+  assert.equal(readManifest(fixture.manifestPath).data.state, STATES.ESCALATED);
+});
+
+test("reconcile leaves a non-timeout escalated run at the row 1 noop", () => {
+  const fixture = setupRepo({
+    manifestState: STATES.ESCALATED,
+    committedWork: true,
+    dispatchResultFailureClass: "no_result",
+  });
+
+  const result = parseJsonResult(runReconcile(fixture));
+
+  assert.equal(result.row, 1);
+  assert.equal(result.status, "noop");
+  assert.equal(result.state, STATES.ESCALATED);
+  assert.equal(remoteBranchSha(fixture), null);
+});
+
+test("reconcile leaves an escalated-timeout run with nothing to salvage at the row 1 noop", () => {
+  const fixture = setupRepo({
+    manifestState: STATES.ESCALATED,
+    committedWork: false,
+    dispatchResultFailureClass: "total_timeout",
+  });
+
+  const result = parseJsonResult(runReconcile(fixture));
+
+  assert.equal(result.row, 1);
+  assert.equal(result.status, "noop");
+  assert.equal(result.state, STATES.ESCALATED);
+  assert.equal(remoteBranchSha(fixture), null);
 });
