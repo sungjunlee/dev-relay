@@ -11,6 +11,7 @@ metadata:
 - Env: optional `RELAY_SKILL_ROOT` defaults to `skills`.
 - Files: an already-accepted program/epic contract as JSON (`--program-file`). Schema: [references/accepted-program-schema.md](references/accepted-program-schema.md).
 - Script: `${RELAY_SKILL_ROOT:-skills}/relay-orca/scripts/plan.js` (read-only wave-plan compiler).
+- Script: `${RELAY_SKILL_ROOT:-skills}/relay-orca/scripts/probe-orca.js` (fail-closed Orca capability probe).
 
 # relay-orca
 
@@ -70,6 +71,14 @@ node "${RELAY_SKILL_ROOT:-skills}/relay-orca/scripts/plan.js" \
 ```
 
 `plan` is READ-ONLY: it creates no Orca task or terminal, no relay request/run/worktree, no PR, and no issue, and writes nothing outside stdout/stderr. On rejection it exits with a distinct non-zero code per reason. Rejection matrix and exit codes: [references/commands.md](references/commands.md).
+
+Admit a local Orca runtime before runtime intents (default read-only; optional `--smoke`):
+
+```bash
+node "${RELAY_SKILL_ROOT:-skills}/relay-orca/scripts/probe-orca.js" --json
+```
+
+Probe rationale, guarantees, and reason codes: [references/capability-probe.md](references/capability-probe.md).
 
 ## Ownership invariants
 

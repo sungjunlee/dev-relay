@@ -54,8 +54,43 @@ Structural guards use their own codes: `INVALID_INPUT` (2), `DUPLICATE_OUTCOME_I
 `UNKNOWN_DEPENDENCY` (4), `INVALID_WAVE_DECLARATION` (5). Missing/unreadable program files or
 unknown flags exit `64` (usage).
 
+## `probe` — fail-closed Orca capability admission
+
+```bash
+node "${RELAY_SKILL_ROOT:-skills}/relay-orca/scripts/probe-orca.js" \
+  [--json] [--smoke] [--orca-bin <path>]
+```
+
+| Flag | Meaning |
+| --- | --- |
+| `--json` | Emit the D8 admission envelope as JSON on stdout. |
+| `--smoke` | After default checks pass, run a self-cleaning synthetic injection smoke. |
+| `--orca-bin <path>` | Explicit Orca CLI override (wins over PATH and the macOS bundle fallback). |
+| `--help`, `-h` | Print usage. |
+
+Default mode is **READ-ONLY**: it spawns only `orca status --json`,
+`orca orchestration task-list --json`, and `orca orchestration gate-list --json`. It never
+invokes `orca orchestration reset`. Full rationale, check order, smoke semantics, and the
+reason-code table: [capability-probe.md](capability-probe.md).
+
+### Probe rejection matrix
+
+| reason_code | exit | Trigger |
+| --- | --- | --- |
+| `BINARY_NOT_FOUND` | 30 | `--orca-bin`, PATH, and macOS bundle fallback all miss |
+| `RUNTIME_NOT_READY` | 31 | Well-formed `status` fails a readiness conjunct |
+| `ORCHESTRATION_UNAVAILABLE` | 32 | Orchestration absent, disabled, or `ok:false` |
+| `MALFORMED_OUTPUT` | 33 | Unparseable or shape-invalid JSON |
+| `EXISTING_ORCHESTRATION_STATE` | 34 | Task or gate count `> 0` (never adopted) |
+| `AMBIGUOUS_GLOBAL_STATE` | 35 | Bad counts or `_meta.runtimeId` mismatch |
+| `SMOKE_FAILED` | 36 | Smoke provenance (task/dispatch/assignee) failed |
+| `SMOKE_CLEANUP_FAILED` | 37 | Smoke cleanup of self-created state failed |
+
+Usage errors exit `64`.
+
 ## Runtime intents (contract-only in this leaf)
 
 `run`, `status`, `resume`, and `stop` are defined by the skill contract but are **not
 implemented here**. They are delivered in a later leaf (#944) and gated on the Orca capability
-probe. See [experimental-status.md](experimental-status.md) for the pilot boundary.
+probe (`probe-orca.js`). See [experimental-status.md](experimental-status.md) for the pilot
+boundary and [capability-probe.md](capability-probe.md) for admission details.

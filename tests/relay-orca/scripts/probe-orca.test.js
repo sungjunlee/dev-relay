@@ -1,0 +1,482 @@
+"use strict";
+
+const test = require("node:test");
+const assert = require("node:assert/strict");
+const { execFileSync } = require("node:child_process");
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
+
+const REPO_ROOT = path.resolve(__dirname, "..", "..", "..");
+const PROBE_JS = path.join(REPO_ROOT, "skills", "relay-orca", "scripts", "probe-orca.js");
+const {
+  resolveOrcaBin,
+  MACOS_BUNDLE_FALLBACK,
+  JSON_KEYS,
+  SMOKE_TITLE_MARKER,
+  REASONS,
+} = require(PROBE_JS);
+const {
+  installFakeOrca,
+  readyStatus,
+  emptyTaskList,
+  emptyGateList,
+  DEFAULT_RUNTIME_ID,
+} = require(path.join(__dirname, "..", "fixtures", "fake-orca.js"));
+
+const READ_ONLY_SUBCOMMANDS = new Set(["status", "task-list", "gate-list"]);
+const FORBIDDEN_DEFAULT = ["task-create", "task-update", "dispatch", "run", "reset"];
+
+function runProbe(args, env = {}) {
+  const result = { status: 0, stdout: "", stderr: "" };
+  try {
+    result.stdout = execFileSync(process.execPath, [PROBE_JS, ...args], {
+      encoding: "utf-8",
+      env: { ...process.env, ...env },
+      stdio: "pipe",
+    });
+  } catch (error) {
+    result.status = error.status;
+    result.stdout = error.stdout ? String(error.stdout) : "";
+    result.stderr = error.stderr ? String(error.stderr) : "";
+  }
+  return result;
+}
+
+function parseJson(stdout) {
+  return JSON.parse(String(stdout));
+}
+
+function assertExactKeys(body) {
+  assert.deepEqual(Object.keys(body).sort(), [...JSON_KEYS].sort());
+}
+
+function assertNoPoison(fake) {
+  assert.equal(fake.readPoison(), null, "reset poison marker must never be written");
+}
+
+function assertReadOnlyLog(logLines) {
+  const tokens = logLines.join(" ");
+  for (const forbidden of FORBIDDEN_DEFAULT) {
+    assert.equal(
+      tokens.includes(forbidden),
+      false,
+      `default mode must not invoke ${forbidden}; log=${JSON.stringify(logLines)}`,
+    );
+  }
+  for (const line of logLines) {
+    const parts = line.split(" ");
+    // status | orchestration task-list | orchestration gate-list
+    if (parts[0] === "status") continue;
+    if (parts[0] === "orchestration" && READ_ONLY_SUBCOMMANDS.has(parts[1])) continue;
+    assert.fail(`unexpected default-mode invocation: ${line}`);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// D3 binary resolution
+// ---------------------------------------------------------------------------
+
+test("D3: PATH lookup resolves the fixture orca", () => {
+  const fake = installFakeOrca();
+  try {
+    const resolved = resolveOrcaBin({ pathEnv: process.env.PATH });
+    assert.equal(resolved.path, fake.orcaPath);
+    assert.equal(resolved.source, "path");
+    assertNoPoison(fake);
+  } finally {
+    fake.restore();
+  }
+});
+
+test("D3: --orca-bin override wins over PATH", () => {
+  const onPath = installFakeOrca({}, { prefix: "orca-path-" });
+  const overrideDir = fs.mkdtempSync(path.join(os.tmpdir(), "orca-override-"));
+  const overrideBin = path.join(overrideDir, "orca-override");
+  fs.copyFileSync(onPath.orcaPath, overrideBin);
+  fs.chmodSync(overrideBin, 0o755);
+  // Point override fake at its own scenario/log via rewriting — simpler: use
+  // resolveOrcaBin unit path + CLI with --orca-bin.
+  try {
+    const resolved = resolveOrcaBin({
+      orcaBinOverride: overrideBin,
+      pathEnv: process.env.PATH,
+    });
+    assert.equal(resolved.path, overrideBin);
+    assert.equal(resolved.source, "override");
+
+    const result = runProbe(["--json", "--orca-bin", overrideBin], {
+      PATH: process.env.PATH,
+    });
+    // Override binary is a copy without scenario env — the script embeds absolute
+    // scenario path from install time, so the copied binary still works if we
+    // copy from a second install that shares... Actually copyFileSync of the
+    // script keeps the original scenarioPath constants, so it still works.
+    assert.equal(result.status, 0);
+    const body = parseJson(result.stdout);
+    assert.equal(body.orca_bin, overrideBin);
+    assert.equal(body.admitted, true);
+    assertNoPoison(onPath);
+  } finally {
+    onPath.restore();
+    fs.rmSync(overrideDir, { recursive: true, force: true });
+  }
+});
+
+test("D3: bundle-fallback branch without a real /Applications install", () => {
+  const seen = [];
+  const bundlePath = MACOS_BUNDLE_FALLBACK;
+  const resolved = resolveOrcaBin({
+    orcaBinOverride: null,
+    pathEnv: "",
+    existsSync: (candidate) => {
+      seen.push(candidate);
+      return candidate === bundlePath;
+    },
+  });
+  assert.equal(resolved.path, bundlePath);
+  assert.equal(resolved.source, "bundle");
+  assert.ok(seen.includes(bundlePath));
+});
+
+test("D3: all resolution branches miss → BINARY_NOT_FOUND exit 30", () => {
+  const result = runProbe(["--json", "--orca-bin", "/tmp/definitely-missing-orca-bin"], {
+    PATH: "/tmp/empty-orca-path-dir-that-does-not-provide-orca",
+  });
+  assert.equal(result.status, REASONS.BINARY_NOT_FOUND);
+  const body = parseJson(result.stdout);
+  assertExactKeys(body);
+  assert.equal(body.admitted, false);
+  assert.equal(body.orca_bin, null);
+  assert.equal(body.blocking_reasons[0].reason_code, "BINARY_NOT_FOUND");
+});
+
+// ---------------------------------------------------------------------------
+// D4 readiness
+// ---------------------------------------------------------------------------
+
+test("D4: app.running false → RUNTIME_NOT_READY exit 31", () => {
+  const status = readyStatus();
+  status.result.app.running = false;
+  const fake = installFakeOrca({ status });
+  try {
+    const result = runProbe(["--json", "--orca-bin", fake.orcaPath]);
+    assert.equal(result.status, REASONS.RUNTIME_NOT_READY);
+    const body = parseJson(result.stdout);
+    assert.equal(body.blocking_reasons[0].reason_code, "RUNTIME_NOT_READY");
+    assert.equal(body.runtime_ready, false);
+    assertNoPoison(fake);
+  } finally {
+    fake.restore();
+  }
+});
+
+test('D4: runtime.state ≠ "ready" → RUNTIME_NOT_READY exit 31', () => {
+  const status = readyStatus();
+  status.result.runtime.state = "starting";
+  const fake = installFakeOrca({ status });
+  try {
+    const result = runProbe(["--json", "--orca-bin", fake.orcaPath]);
+    assert.equal(result.status, REASONS.RUNTIME_NOT_READY);
+    assert.equal(parseJson(result.stdout).blocking_reasons[0].reason_code, "RUNTIME_NOT_READY");
+    assertNoPoison(fake);
+  } finally {
+    fake.restore();
+  }
+});
+
+test("D4: missing/empty runtimeId → RUNTIME_NOT_READY exit 31", () => {
+  const status = readyStatus();
+  status.result.runtime.runtimeId = "";
+  const fake = installFakeOrca({ status });
+  try {
+    const result = runProbe(["--json", "--orca-bin", fake.orcaPath]);
+    assert.equal(result.status, REASONS.RUNTIME_NOT_READY);
+    assert.equal(parseJson(result.stdout).blocking_reasons[0].reason_code, "RUNTIME_NOT_READY");
+    assertNoPoison(fake);
+  } finally {
+    fake.restore();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// D5 orchestration availability
+// ---------------------------------------------------------------------------
+
+test("D5: orchestration unknown/non-zero/ok:false → ORCHESTRATION_UNAVAILABLE exit 32", () => {
+  const cases = [
+    { taskListExit: 1, taskListStderr: "Unknown command: orchestration" },
+    { taskList: { id: "x", ok: false, result: { tasks: [], count: 0 }, _meta: { runtimeId: DEFAULT_RUNTIME_ID } } },
+  ];
+  for (const overrides of cases) {
+    const fake = installFakeOrca(overrides);
+    try {
+      const result = runProbe(["--json", "--orca-bin", fake.orcaPath]);
+      assert.equal(result.status, REASONS.ORCHESTRATION_UNAVAILABLE);
+      assert.equal(
+        parseJson(result.stdout).blocking_reasons[0].reason_code,
+        "ORCHESTRATION_UNAVAILABLE",
+      );
+      assertNoPoison(fake);
+    } finally {
+      fake.restore();
+    }
+  }
+});
+
+// ---------------------------------------------------------------------------
+// D4/D5 malformed
+// ---------------------------------------------------------------------------
+
+test("D4/D5: unparseable status AND shape-invalid task-list → MALFORMED_OUTPUT exit 33", () => {
+  const fakeUnparseable = installFakeOrca({ statusStdout: "NOT-JSON{{{", status: null });
+  try {
+    const result = runProbe(["--json", "--orca-bin", fakeUnparseable.orcaPath]);
+    assert.equal(result.status, REASONS.MALFORMED_OUTPUT);
+    assert.equal(parseJson(result.stdout).blocking_reasons[0].reason_code, "MALFORMED_OUTPUT");
+    assertNoPoison(fakeUnparseable);
+  } finally {
+    fakeUnparseable.restore();
+  }
+
+  const badTaskList = {
+    id: "x",
+    ok: true,
+    result: { tasks: "not-an-array", count: 0 },
+    _meta: { runtimeId: DEFAULT_RUNTIME_ID },
+  };
+  const fakeShape = installFakeOrca({ taskList: badTaskList });
+  try {
+    const result = runProbe(["--json", "--orca-bin", fakeShape.orcaPath]);
+    assert.equal(result.status, REASONS.MALFORMED_OUTPUT);
+    assert.equal(parseJson(result.stdout).blocking_reasons[0].reason_code, "MALFORMED_OUTPUT");
+    assertNoPoison(fakeShape);
+  } finally {
+    fakeShape.restore();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// D6 existing state / ambiguous
+// ---------------------------------------------------------------------------
+
+test("D6: tasks count > 0 → EXISTING_ORCHESTRATION_STATE exit 34", () => {
+  const fake = installFakeOrca({
+    taskList: {
+      id: "x",
+      ok: true,
+      result: { tasks: [{ id: "pre" }], count: 1 },
+      _meta: { runtimeId: DEFAULT_RUNTIME_ID },
+    },
+  });
+  try {
+    const result = runProbe(["--json", "--orca-bin", fake.orcaPath]);
+    assert.equal(result.status, REASONS.EXISTING_ORCHESTRATION_STATE);
+    const body = parseJson(result.stdout);
+    assert.equal(body.blocking_reasons[0].reason_code, "EXISTING_ORCHESTRATION_STATE");
+    assert.match(body.blocking_reasons[0].message, /tasks=1/);
+    assert.match(body.blocking_reasons[0].message, /gates=0/);
+    assert.equal(body.admitted, false);
+    assertNoPoison(fake);
+  } finally {
+    fake.restore();
+  }
+});
+
+test("D6: gates count > 0 → EXISTING_ORCHESTRATION_STATE exit 34", () => {
+  const fake = installFakeOrca({
+    gateList: {
+      id: "x",
+      ok: true,
+      result: { gates: [{ id: "g1" }], count: 2 },
+      _meta: { runtimeId: DEFAULT_RUNTIME_ID },
+    },
+  });
+  try {
+    const result = runProbe(["--json", "--orca-bin", fake.orcaPath]);
+    assert.equal(result.status, REASONS.EXISTING_ORCHESTRATION_STATE);
+    const body = parseJson(result.stdout);
+    assert.equal(body.blocking_reasons[0].reason_code, "EXISTING_ORCHESTRATION_STATE");
+    assert.match(body.blocking_reasons[0].message, /tasks=0/);
+    assert.match(body.blocking_reasons[0].message, /gates=2/);
+    assertNoPoison(fake);
+  } finally {
+    fake.restore();
+  }
+});
+
+test("D6: _meta.runtimeId mismatch → AMBIGUOUS_GLOBAL_STATE exit 35", () => {
+  const fake = installFakeOrca({
+    taskList: {
+      id: "x",
+      ok: true,
+      result: { tasks: [], count: 0 },
+      _meta: { runtimeId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" },
+    },
+  });
+  try {
+    const result = runProbe(["--json", "--orca-bin", fake.orcaPath]);
+    assert.equal(result.status, REASONS.AMBIGUOUS_GLOBAL_STATE);
+    assert.equal(
+      parseJson(result.stdout).blocking_reasons[0].reason_code,
+      "AMBIGUOUS_GLOBAL_STATE",
+    );
+    assertNoPoison(fake);
+  } finally {
+    fake.restore();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// D1/D8 all green
+// ---------------------------------------------------------------------------
+
+test("D1/D8: all green → admitted true, exact JSON keys, read-only invocation set", () => {
+  const fake = installFakeOrca();
+  try {
+    const result = runProbe(["--json", "--orca-bin", fake.orcaPath]);
+    assert.equal(result.status, 0);
+    const body = parseJson(result.stdout);
+    assertExactKeys(body);
+    assert.equal(body.ok, true);
+    assert.equal(body.admitted, true);
+    assert.equal(body.orca_bin, fake.orcaPath);
+    assert.equal(body.orca_version, null);
+    assert.equal(body.runtime_id, DEFAULT_RUNTIME_ID);
+    assert.equal(body.runtime_ready, true);
+    assert.equal(body.orchestration_available, true);
+    assert.deepEqual(body.existing_state, { tasks: 0, gates: 0 });
+    assert.deepEqual(body.blocking_reasons, []);
+    assert.equal(body.smoke.requested, false);
+    assert.equal(body.smoke.ran, false);
+    assert.equal(body.smoke.cleaned_up, null);
+    assertReadOnlyLog(fake.readLog());
+    assertNoPoison(fake);
+  } finally {
+    fake.restore();
+  }
+});
+
+test("D1/D14: default mode never invokes smoke subcommands", () => {
+  const fake = installFakeOrca();
+  try {
+    runProbe(["--json", "--orca-bin", fake.orcaPath]);
+    const log = fake.readLog().join("\n");
+    assert.equal(log.includes("task-create"), false);
+    assert.equal(log.includes("dispatch"), false);
+    assert.equal(log.includes("task-update"), false);
+    assertNoPoison(fake);
+  } finally {
+    fake.restore();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// D9 smoke
+// ---------------------------------------------------------------------------
+
+test("D9: smoke success — marker, provenance trio, self-only cleanup", () => {
+  const fake = installFakeOrca();
+  try {
+    const result = runProbe(["--json", "--smoke", "--orca-bin", fake.orcaPath]);
+    assert.equal(result.status, 0);
+    const body = parseJson(result.stdout);
+    assert.equal(body.admitted, true);
+    assert.equal(body.smoke.requested, true);
+    assert.equal(body.smoke.ran, true);
+    assert.equal(body.smoke.cleaned_up, true);
+    assert.equal(body.smoke.task_id, "smoke-task-1");
+    assert.equal(body.smoke.dispatch_id, "smoke-dispatch-1");
+    assert.equal(body.smoke.assignee, "relay-orca-probe-smoke");
+
+    const log = fake.readLog();
+    const createLine = log.find((line) => line.includes("task-create"));
+    assert.ok(createLine, "task-create must be recorded");
+    assert.ok(createLine.includes(SMOKE_TITLE_MARKER), "task-title must contain smoke marker");
+    assert.ok(log.some((line) => line.includes("dispatch") && line.includes("--inject")));
+    const updateLines = log.filter((line) => line.includes("task-update"));
+    assert.equal(updateLines.length, 1);
+    assert.ok(updateLines[0].includes("smoke-task-1"));
+    assert.equal(log.some((line) => line.includes("reset")), false);
+    assertNoPoison(fake);
+  } finally {
+    fake.restore();
+  }
+});
+
+test("D9: smoke provenance failure (null assignee) → SMOKE_FAILED exit 36, cleanup still attempted", () => {
+  const fake = installFakeOrca({
+    dispatch: {
+      id: "dispatch-1",
+      ok: true,
+      result: {
+        id: "smoke-dispatch-1",
+        dispatch_id: "smoke-dispatch-1",
+        assignee: null,
+      },
+      _meta: { runtimeId: DEFAULT_RUNTIME_ID },
+    },
+  });
+  try {
+    const result = runProbe(["--json", "--smoke", "--orca-bin", fake.orcaPath]);
+    assert.equal(result.status, REASONS.SMOKE_FAILED);
+    const body = parseJson(result.stdout);
+    assert.equal(body.blocking_reasons[0].reason_code, "SMOKE_FAILED");
+    assert.equal(body.smoke.ran, true);
+    assert.equal(body.smoke.cleaned_up, true);
+    const log = fake.readLog();
+    assert.ok(log.some((line) => line.includes("task-update") && line.includes("smoke-task-1")));
+    assertNoPoison(fake);
+  } finally {
+    fake.restore();
+  }
+});
+
+test("D9: smoke cleanup failure → SMOKE_CLEANUP_FAILED exit 37, leftover id named, no reset", () => {
+  const fake = installFakeOrca({
+    taskUpdateExit: 1,
+    taskUpdate: { ok: false, result: {} },
+    taskUpdateStderr: "cannot update task",
+  });
+  try {
+    const result = runProbe(["--json", "--smoke", "--orca-bin", fake.orcaPath]);
+    assert.equal(result.status, REASONS.SMOKE_CLEANUP_FAILED);
+    const body = parseJson(result.stdout);
+    assert.equal(body.blocking_reasons[0].reason_code, "SMOKE_CLEANUP_FAILED");
+    assert.match(body.blocking_reasons[0].message, /smoke-task-1/);
+    assert.equal(body.smoke.cleaned_up, false);
+    assert.equal(fake.readLog().some((line) => line.includes("reset")), false);
+    assertNoPoison(fake);
+  } finally {
+    fake.restore();
+  }
+});
+
+test("usage errors exit 64", () => {
+  const result = runProbe(["--json", "--not-a-real-flag"]);
+  assert.equal(result.status, 64);
+});
+
+test("blocking_reasons carry remediation; excerpts stay bounded", () => {
+  const long = "x".repeat(500);
+  const fake = installFakeOrca({
+    taskListExit: 1,
+    taskListStderr: long,
+  });
+  try {
+    const result = runProbe(["--json", "--orca-bin", fake.orcaPath]);
+    const body = parseJson(result.stdout);
+    const reason = body.blocking_reasons[0];
+    assert.equal(reason.reason_code, "ORCHESTRATION_UNAVAILABLE");
+    assert.ok(typeof reason.remediation === "string" && reason.remediation.length > 0);
+    assert.ok(reason.message.length <= 400);
+    assertNoPoison(fake);
+  } finally {
+    fake.restore();
+  }
+});
+
+// Keep helpers referenced so lint/coverage-style unused import checks stay quiet.
+void readyStatus;
+void emptyTaskList;
+void emptyGateList;
