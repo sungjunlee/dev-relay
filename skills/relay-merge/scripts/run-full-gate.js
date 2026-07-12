@@ -370,7 +370,17 @@ function waitForDetached(config) {
   let announcedState = null;
   while (true) {
     const result = readJson(config.sentinelPath);
-    if (result) return result;
+    if (result) {
+      // The runner may acquire the lock and finish (fast suites) within a single
+      // SENTINEL_POLL_MS window, so the "running" status is never observed below.
+      // The sentinel proves the lock was actually acquired (as opposed to a
+      // lock_timeout, where acquisition never happened) whenever we already
+      // announced waiting_for_lock but never announced running.
+      if (!config.json && announcedState === "waiting_for_lock" && result.result !== "lock_timeout") {
+        console.log("Full-gate lock acquired; running suites serially...");
+      }
+      return result;
+    }
     const status = readJson(config.statusPath);
     if (!config.json && status?.state === "waiting_for_lock" && announcedState !== status.state) {
       const owner = status.lock_wait?.owner || {};
@@ -437,4 +447,5 @@ module.exports = {
   expandSuites,
   globToRegExp,
   isProcessAlive,
+  waitForDetached,
 };

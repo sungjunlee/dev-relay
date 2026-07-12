@@ -112,6 +112,76 @@ test("two invocations serialize and the second reports the live lock owner", asy
   assert.ok(secondSentinel.lock_wait.waited_ms > 0);
 });
 
+// Regression for #975: the detached runner can acquire the lock and finish
+// (fast suites) within a single SENTINEL_POLL_MS window, so waitForDetached's
+// poll loop finds the completion sentinel before it ever observes the
+// intermediate status.state === "running" transition. This drives
+// waitForDetached directly (via a throwaway child process that requires the
+// script and calls the export) so the "sentinel beats the status poll" skip
+// is deterministic instead of depending on real subprocess/suite timing.
+test("waitForDetached announces lock acquisition even when the sentinel beats the status poll", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "relay-full-gate-skip-test-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const statusPath = path.join(root, "gate.status.json");
+  const sentinelPath = path.join(root, "gate.done");
+  const owner = { pid: 987654, pgid: 987654, host: "loaded-ci-host", started_at: new Date(0).toISOString() };
+
+  // Only ever write "waiting_for_lock" — the status file never flips to
+  // "running", modelling the skip from the invoker's point of view.
+  fs.writeFileSync(statusPath, `${JSON.stringify({
+    runner_pid: owner.pid,
+    runner_pgid: owner.pgid,
+    state: "waiting_for_lock",
+    lock_wait: { did_wait: true, waited_ms: 250, owner, stale_reclaimed: false },
+  })}\n`, "utf-8");
+
+  const driverSource = [
+    `const mod = require(${JSON.stringify(SCRIPT)});`,
+    `process.exitCode = 0;`,
+    `const result = mod.waitForDetached(${JSON.stringify({ statusPath, sentinelPath, json: false })});`,
+    `process.stdout.write("DRIVER_RESULT:" + JSON.stringify(result) + "\\n");`,
+  ].join("\n");
+  const driver = spawn(process.execPath, ["-e", driverSource], { stdio: ["ignore", "pipe", "pipe"] });
+  let stdout = "";
+  driver.stdout.on("data", (chunk) => { stdout += chunk; });
+  let stderr = "";
+  driver.stderr.on("data", (chunk) => { stderr += chunk; });
+
+  // Only write the sentinel once the driver has genuinely announced the wait
+  // itself, so the invariant this test relies on (announcedState already
+  // "waiting_for_lock" when the sentinel is discovered) is never racy.
+  await waitFor(() => stdout.includes("Waiting for full-gate lock owned by pid 987654"), "driver to announce waiting_for_lock");
+
+  const sentinelResult = {
+    result: "pass",
+    exit_code: 0,
+    duration_ms: 4242,
+    output: path.join(root, "gate.log"),
+    sentinel: sentinelPath,
+    total_files: 3,
+    total_failed_files: 0,
+    failed_files: [],
+    lock_wait: { did_wait: true, waited_ms: 250, owner, stale_reclaimed: false },
+  };
+  const sentinelTemp = `${sentinelPath}.tmp`;
+  fs.writeFileSync(sentinelTemp, `${JSON.stringify(sentinelResult)}\n`, "utf-8");
+  fs.renameSync(sentinelTemp, sentinelPath);
+
+  const completion = await new Promise((resolve, reject) => {
+    driver.once("error", reject);
+    driver.once("close", (code) => resolve({ code }));
+  });
+  assert.equal(completion.code, 0, stderr);
+  assert.match(stdout, /Waiting for full-gate lock owned by pid 987654 \(pgid 987654, host loaded-ci-host\)\.\.\./);
+  assert.match(stdout, /Full-gate lock acquired; running suites serially\.\.\./);
+  assert.ok(
+    stdout.indexOf("Waiting for full-gate lock") < stdout.indexOf("Full-gate lock acquired"),
+    "waiting announcement must precede the lock-acquired announcement",
+  );
+  // Status never flipped to "running" — the fix must not require it to.
+  assert.equal(readJson(statusPath).state, "waiting_for_lock");
+});
+
 test("a lock owned by a real exited process is reclaimed as stale", async (t) => {
   const fixture = makeFixture();
   t.after(() => fs.rmSync(fixture.root, { recursive: true, force: true }));
