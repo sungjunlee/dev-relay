@@ -93,9 +93,69 @@ still classifies through the matrix above and emits the JSON envelope instead of
 hanging. `RELAY_ORCA_PROBE_TIMEOUT_MS` (positive integer; invalid values ignored)
 shortens the budget for tests.
 
+## `run` — admission-gated provenance-injected operator dispatch
+
+```bash
+node "${RELAY_SKILL_ROOT:-skills}/relay-orca/scripts/run.js" \
+  --program-file <accepted-program.json> [--json] [--concurrency N] \
+  [--operator-handle <handle> ...] [--orca-bin <path>]
+```
+
+| Flag | Meaning |
+| --- | --- |
+| `--program-file`, `-f` | Accepted-program JSON contract (required) — the SAME input as `plan`. A precompiled plan JSON is NOT accepted (prevents tampered-plan injection). May be passed positionally. |
+| `--json` | Emit the machine-readable run report as JSON on stdout. |
+| `--concurrency N` | Override the concurrency ceiling. Default 2, hard maximum 4 (rejected via the plan library). |
+| `--operator-handle <handle>` | Repeatable. An explicit operator terminal handle to dispatch to. With none, `run` creates its own terminals via `orca terminal create` and records them. |
+| `--orca-bin <path>` | Explicit Orca CLI override — passed to the capability probe and used for all orchestration calls. |
+| `--help`, `-h` | Print usage. |
+
+`run` compiles the program through the FROZEN plan library, then requires capability
+admission from the FROZEN #942 probe **before any mutation**. Only after admission does it
+materialize the wave plan as `orca orchestration task-create` tasks (dependency order, deps
+carried as real Orca task ids), dispatch provenance-injected operators, verify each dispatch
+via `orca orchestration dispatch-show`, and deliver the operator prompt. It **never** invokes
+`orca orchestration reset` (D2) or any `orca worktree` subcommand (D5) — relay owns every
+implementation worktree. Plan-library rejections (`VAGUE_INTENT` … `EXCESSIVE_DEPTH`,
+`UNPREPARED_FLEET_LEAF`, `CONCURRENCY_EXCEEDED`, `NESTED_RELAY_ORCA`, structural guards)
+re-raise verbatim with their existing reason codes and exit codes.
+
+### Run report (`--json`)
+
+Exactly these top-level keys: `ok`, `program_id`, `admission`, `concurrency`, `tasks`,
+`terminals_created`, `blocking_reasons`, `reconciliation_required`. Each `tasks[]` entry is
+`{ task_id, outcome_id, kind, wave, orca_task_id, dispatch_id, assignee, status }` where
+`status` is `dispatched | pending | escalated`; a `dispatched` entry always carries the full
+non-null provenance trio. `reconciliation_required` is literally `true` in every report — run
+NEVER claims completion (live reconciliation is #945).
+
+### Partial-wave semantics
+
+Only wave-1 tasks (all dependency-satisfied) are dispatch-eligible in v0; later waves are
+materialized but reported `pending`. At most `concurrency` tasks are dispatched at once — excess
+eligible tasks stay `pending` with **no error** (exit 0). A handle carries at most one active
+task; an explicit-handle shortfall also leaves the remaining eligible tasks `pending`.
+Completion-driven wave advancement is #945/#947 scope.
+
+### Run rejection matrix
+
+| reason_code | exit | Trigger |
+| --- | --- | --- |
+| `ADMISSION_REJECTED` | 40 | The capability probe rejected or reported `admitted:false` (no mutation ran). |
+| `TASK_MATERIALIZE_FAILED` | 41 | An `orca orchestration task-create` failed; earlier tasks are left in place and listed. |
+| `INJECTION_UNDELIVERED` | 42 | An `orca orchestration dispatch --inject` failed (or the post-verification prompt hand-off failed). |
+| `PROVENANCE_MISMATCH` | 43 | `dispatch-show` returned a null/empty/mismatched task id, dispatch id, or assignee. |
+| `OPERATOR_DISPATCH_FAILED` | 44 | No valid operator target remained for an eligible task (terminal create yielded no usable handle). |
+
+A `42`/`43` failure records the failing task `escalated`, dispatches no further pending task,
+and does not touch already-verified running operators (stop semantics are #946). Plan-library
+rejections re-raise codes `2`–`21`; usage errors exit `64`. Full operator prompt contract and
+provenance rules: [operator-dispatch.md](operator-dispatch.md).
+
 ## Runtime intents (contract-only in this leaf)
 
-`run`, `status`, `resume`, and `stop` are defined by the skill contract but are **not
-implemented here**. They are delivered in a later leaf (#944) and gated on the Orca capability
-probe (`probe-orca.js`). See [experimental-status.md](experimental-status.md) for the pilot
-boundary and [capability-probe.md](capability-probe.md) for admission details.
+`run` is implemented (#944). `status`, `resume`, and `stop` remain defined by the skill
+contract but **not implemented here** — they are delivered in later leaves (#945/#946) and
+gated on the same Orca capability probe (`probe-orca.js`). See
+[experimental-status.md](experimental-status.md) for the pilot boundary and
+[capability-probe.md](capability-probe.md) for admission details.

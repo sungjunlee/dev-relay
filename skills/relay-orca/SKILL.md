@@ -12,6 +12,7 @@ metadata:
 - Files: an already-accepted program/epic contract as JSON (`--program-file`). Schema: [references/accepted-program-schema.md](references/accepted-program-schema.md).
 - Script: `${RELAY_SKILL_ROOT:-skills}/relay-orca/scripts/plan.js` (read-only wave-plan compiler).
 - Script: `${RELAY_SKILL_ROOT:-skills}/relay-orca/scripts/probe-orca.js` (fail-closed Orca capability probe).
+- Script: `${RELAY_SKILL_ROOT:-skills}/relay-orca/scripts/run.js` (admission-gated provenance-injected operator dispatch).
 
 # relay-orca
 
@@ -33,15 +34,15 @@ relay-orca is **explicit-only**. It must never be auto-selected from ordinary re
 
 ## Intents
 
-relay-orca exposes exactly five intents. Only `plan` is implemented in this leaf; the runtime intents are contract-only here and are delivered in a later leaf (#944), gated on the Orca capability probe.
+relay-orca exposes exactly five intents. `plan` (read-only) and `run` (admission-gated operator dispatch) are implemented; the remaining runtime intents are contract-only here and delivered in later leaves, gated on the Orca capability probe.
 
 | Intent | Status | Purpose |
 | --- | --- | --- |
 | `plan` | implemented (read-only) | Compile an accepted program into an immutable wave plan. |
-| `run` | contract-only (#944) | Dispatch provenance-injected relay/fleet operators for a plan. |
-| `status` | contract-only (#944) | Derive live status from Orca + relay + GitHub + exit-gate evidence. |
-| `resume` | contract-only (#944) | Resume a coordinator from a reconstructible receipt without resetting Orca. |
-| `stop` | contract-only (#944) | Stop the coordinator only; never kill relay runs or discard durable state. |
+| `run` | implemented (#944) | Dispatch provenance-injected relay/fleet operators for a plan. |
+| `status` | contract-only (#945) | Derive live status from Orca + relay + GitHub + exit-gate evidence. |
+| `resume` | contract-only (#946) | Resume a coordinator from a reconstructible receipt without resetting Orca. |
+| `stop` | contract-only (#946) | Stop the coordinator only; never kill relay runs or discard durable state. |
 
 Command tables and flag semantics: [references/commands.md](references/commands.md).
 
@@ -79,6 +80,17 @@ node "${RELAY_SKILL_ROOT:-skills}/relay-orca/scripts/probe-orca.js" --json
 ```
 
 Probe rationale, guarantees, and reason codes: [references/capability-probe.md](references/capability-probe.md).
+
+Dispatch provenance-injected operators for an accepted program (admission-gated; never creates an Orca worktree or invokes reset):
+
+```bash
+node "${RELAY_SKILL_ROOT:-skills}/relay-orca/scripts/run.js" \
+  --program-file /tmp/accepted-program.json \
+  --operator-handle term-a --operator-handle term-b \
+  --json
+```
+
+`run` compiles through the frozen plan library, requires probe admission before any mutation, materializes wave-1 tasks, and dispatches with fail-closed provenance verification. Flags, run report shape, partial-wave semantics, and reason codes 40–44: [references/commands.md](references/commands.md) and [references/operator-dispatch.md](references/operator-dispatch.md).
 
 ## Ownership invariants
 
