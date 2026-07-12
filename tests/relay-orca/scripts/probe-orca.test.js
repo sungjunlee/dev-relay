@@ -490,6 +490,49 @@ test('Finding 5: gate-list empty-string _meta.runtimeId → AMBIGUOUS_GLOBAL_STA
   }
 });
 
+test("Finding 6: status response missing _meta.runtimeId → AMBIGUOUS_GLOBAL_STATE exit 35", () => {
+  // status is otherwise ready (runtime.runtimeId present so D4 passes) but its
+  // _meta block is absent. The consistency check requires status._meta.runtimeId
+  // too, so a missing one classifies exactly like a task-list/gate-list miss and
+  // names the status source.
+  const status = readyStatus();
+  delete status._meta;
+  const fake = installFakeOrca({ status });
+  try {
+    const result = runProbe(["--json", "--orca-bin", fake.orcaPath]);
+    assert.equal(result.status, REASONS.AMBIGUOUS_GLOBAL_STATE);
+    const body = parseJson(result.stdout);
+    assertExactKeys(body);
+    assert.equal(body.admitted, false);
+    assert.equal(body.blocking_reasons[0].reason_code, "AMBIGUOUS_GLOBAL_STATE");
+    assert.match(body.blocking_reasons[0].message, /status/);
+    assertNoPoison(fake);
+  } finally {
+    fake.restore();
+  }
+});
+
+test("Finding 6: status _meta.runtimeId disagrees with runtime.runtimeId → AMBIGUOUS_GLOBAL_STATE exit 35", () => {
+  // status carries a _meta.runtimeId that differs from the D4-validated
+  // runtime.runtimeId. All four observed ids must agree, so the disagreement
+  // fails closed and the message names the status source.
+  const status = readyStatus();
+  status._meta.runtimeId = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+  const fake = installFakeOrca({ status });
+  try {
+    const result = runProbe(["--json", "--orca-bin", fake.orcaPath]);
+    assert.equal(result.status, REASONS.AMBIGUOUS_GLOBAL_STATE);
+    const body = parseJson(result.stdout);
+    assertExactKeys(body);
+    assert.equal(body.admitted, false);
+    assert.equal(body.blocking_reasons[0].reason_code, "AMBIGUOUS_GLOBAL_STATE");
+    assert.match(body.blocking_reasons[0].message, /status/);
+    assertNoPoison(fake);
+  } finally {
+    fake.restore();
+  }
+});
+
 // ---------------------------------------------------------------------------
 // Finding 1: contradictory list count vs array length → AMBIGUOUS_GLOBAL_STATE
 // ---------------------------------------------------------------------------

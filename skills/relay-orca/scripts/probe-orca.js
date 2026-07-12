@@ -683,19 +683,27 @@ function probe(options = {}) {
 
   result.existing_state = { tasks: taskCountInfo.count, gates: gateCountInfo.count };
 
+  const statusMetaId = metaRuntimeId(statusShape.payload);
   const taskMetaId = metaRuntimeId(taskListShape.payload);
   const gateMetaId = metaRuntimeId(gateListShape.payload);
-  // Cross-runtime consistency: all three responses MUST carry a non-empty
-  // runtime id (status sources the D4-validated runtime.runtimeId; the
-  // orchestration responses source _meta.runtimeId) and every id must be
-  // identical. A missing, empty, or non-string id on any response means the
-  // probe cannot establish that the responses came from one runtime — the SAME
-  // failure as a mismatch → AMBIGUOUS_GLOBAL_STATE, never a silent pass.
+  // Cross-runtime consistency: all FOUR runtime-id observations MUST be present,
+  // non-empty, and identical — the D4-validated status runtime.runtimeId AND the
+  // _meta.runtimeId echoed by the status, task-list, and gate-list responses. A
+  // missing, empty, or non-string id on any response, or any disagreement among
+  // the four, means the probe cannot establish that the responses came from one
+  // runtime — the SAME failure as a mismatch → AMBIGUOUS_GLOBAL_STATE, never a
+  // silent pass. The status response is observed twice on purpose: its D4 runtime
+  // id and its own _meta.runtimeId must BOTH be present and agree.
   const runtimeIdSources = [
     ["status", statusRuntimeId],
+    ["status", statusMetaId],
     ["task-list", taskMetaId],
     ["gate-list", gateMetaId],
   ];
+  const idExcerpts =
+    `status.runtime=${boundedExcerpt(statusRuntimeId)}, ` +
+    `status._meta=${boundedExcerpt(statusMetaId)}, ` +
+    `task-list=${boundedExcerpt(taskMetaId)}, gate-list=${boundedExcerpt(gateMetaId)}`;
   const missingIdSource = runtimeIdSources.find(([, id]) => !isNonEmptyString(id));
   if (missingIdSource) {
     recordCheck(result.checks, "existing_state", "failed");
@@ -703,19 +711,17 @@ function probe(options = {}) {
     reject(
       "AMBIGUOUS_GLOBAL_STATE",
       `${missingIdSource[0]} response lacked a non-empty runtime id; ` +
-        `cross-runtime consistency cannot be established ` +
-        `(status=${boundedExcerpt(statusRuntimeId)}, task-list=${boundedExcerpt(taskMetaId)}, ` +
-        `gate-list=${boundedExcerpt(gateMetaId)})`,
+        `cross-runtime consistency cannot be established (${idExcerpts})`,
     );
   }
-  if (taskMetaId !== statusRuntimeId || gateMetaId !== statusRuntimeId) {
+  const mismatchedIdSource = runtimeIdSources.find(([, id]) => id !== statusRuntimeId);
+  if (mismatchedIdSource) {
     recordCheck(result.checks, "existing_state", "failed");
     skipRemaining(result.checks, ["smoke"]);
     reject(
       "AMBIGUOUS_GLOBAL_STATE",
-      `orchestration _meta.runtimeId does not match status runtimeId ` +
-        `(status=${boundedExcerpt(statusRuntimeId)}, task-list=${boundedExcerpt(taskMetaId)}, ` +
-        `gate-list=${boundedExcerpt(gateMetaId)})`,
+      `${mismatchedIdSource[0]} runtime id does not match the status runtime id; ` +
+        `cross-runtime consistency cannot be established (${idExcerpts})`,
     );
   }
 
