@@ -67,6 +67,7 @@ const {
   summarizeRubricAuditForSkip,
 } = require("./review-gate");
 const { STATUS: LEARNING_STATUS, appendLearnings } = require("./append-learnings");
+const { reapAdvisoryLaneLeases } = require("../../relay-dispatch/scripts/run-runtime-state");
 
 const ALLOWED_CHECK_CONCLUSIONS = new Set(["SUCCESS", "NEUTRAL", "SKIPPED"]);
 
@@ -1412,6 +1413,11 @@ function main() {
     }
   }
 
+  // Reap own-pgid advisory lanes before retained-worktree removal so finalize
+  // does not orphan TERM-ignoring lane process groups (ppid 1).
+  const runDir = getRunDir(repoPath, updated.run_id);
+  const advisoryLaneReaps = reapAdvisoryLaneLeases({ runDir, dryRun });
+
   const cleanupResult = runFinalizeCleanup({
     repoRoot: repoPath,
     data: updated,
@@ -1462,6 +1468,8 @@ function main() {
     forceFinalized: forceFinalizeNonready,
     forceFinalizeReason: forceFinalizeNonready ? forceFinalizeReason : null,
     ...(freshness ? { freshness } : {}),
+    // Omit when idle so no-lease finalize stays byte-identical to prior output.
+    ...(advisoryLaneReaps.length > 0 ? { advisoryLaneReaps } : {}),
   };
 
   if (jsonOut) {
@@ -1476,6 +1484,11 @@ function main() {
       if (remoteBranchDeleteWarning) console.log(`  Remote note:  ${remoteBranchDeleteWarning}`);
     }
     console.log(`  Issue close:  ${issueNumber ? (issueClosed ? "closed" : (issueCloseWarning ? `warning: ${issueCloseWarning}` : "skipped")) : "none"}`);
+    if (advisoryLaneReaps.length > 0) {
+      for (const reap of advisoryLaneReaps) {
+        console.log(`  Advisory lane: pgid=${reap.pgid ?? "unknown"} reviewer=${reap.reviewer ?? "unknown"} outcome=${reap.outcome}`);
+      }
+    }
     console.log(`  Cleanup:      ${cleanupResult.summary.cleanupStatus}`);
     if (cleanupResult.summary.error) console.log(`  Cleanup note: ${cleanupResult.summary.error}`);
     if (dryRun) console.log("  dry-run:      no changes written");
