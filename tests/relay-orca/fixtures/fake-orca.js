@@ -135,6 +135,15 @@ if (args.includes("reset")) {
   process.exit(99);
 }
 
+// Deterministic stall mode: when RELAY_FAKE_ORCA_STALL_MS is a positive integer
+// and the invocation matches RELAY_FAKE_ORCA_STALL_CMD (default "status"), block
+// synchronously so the probe's finite timeout must fire. SIGTERM still kills us.
+const stallMs = Number(process.env.RELAY_FAKE_ORCA_STALL_MS);
+const stallCmd = process.env.RELAY_FAKE_ORCA_STALL_CMD || "status";
+if (Number.isInteger(stallMs) && stallMs > 0 && args[0] === stallCmd) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, stallMs);
+}
+
 const scenario = loadScenario();
 
 if (args[0] === "status") {

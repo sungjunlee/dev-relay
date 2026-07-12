@@ -288,7 +288,7 @@ test("D6: gates count > 0 → EXISTING_ORCHESTRATION_STATE exit 34", () => {
     gateList: {
       id: "x",
       ok: true,
-      result: { gates: [{ id: "g1" }], count: 2 },
+      result: { gates: [{ id: "g1" }, { id: "g2" }], count: 2 },
       _meta: { runtimeId: DEFAULT_RUNTIME_ID },
     },
   });
@@ -321,6 +321,80 @@ test("D6: _meta.runtimeId mismatch → AMBIGUOUS_GLOBAL_STATE exit 35", () => {
       parseJson(result.stdout).blocking_reasons[0].reason_code,
       "AMBIGUOUS_GLOBAL_STATE",
     );
+    assertNoPoison(fake);
+  } finally {
+    fake.restore();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Finding 1: contradictory list count vs array length → AMBIGUOUS_GLOBAL_STATE
+// ---------------------------------------------------------------------------
+
+test("Finding 1: task-list count contradicts array length → AMBIGUOUS_GLOBAL_STATE exit 35", () => {
+  const fake = installFakeOrca({
+    taskList: {
+      id: "x",
+      ok: true,
+      result: { tasks: [{ id: "existing" }], count: 0 },
+      _meta: { runtimeId: DEFAULT_RUNTIME_ID },
+    },
+  });
+  try {
+    const result = runProbe(["--json", "--orca-bin", fake.orcaPath]);
+    assert.equal(result.status, REASONS.AMBIGUOUS_GLOBAL_STATE);
+    const body = parseJson(result.stdout);
+    assertExactKeys(body);
+    assert.equal(body.admitted, false);
+    assert.equal(body.blocking_reasons[0].reason_code, "AMBIGUOUS_GLOBAL_STATE");
+    assertNoPoison(fake);
+  } finally {
+    fake.restore();
+  }
+});
+
+test("Finding 1: gate-list count contradicts array length → AMBIGUOUS_GLOBAL_STATE exit 35", () => {
+  const fake = installFakeOrca({
+    gateList: {
+      id: "x",
+      ok: true,
+      result: { gates: [{ id: "g1" }, { id: "g2" }], count: 5 },
+      _meta: { runtimeId: DEFAULT_RUNTIME_ID },
+    },
+  });
+  try {
+    const result = runProbe(["--json", "--orca-bin", fake.orcaPath]);
+    assert.equal(result.status, REASONS.AMBIGUOUS_GLOBAL_STATE);
+    const body = parseJson(result.stdout);
+    assertExactKeys(body);
+    assert.equal(body.admitted, false);
+    assert.equal(body.blocking_reasons[0].reason_code, "AMBIGUOUS_GLOBAL_STATE");
+    assertNoPoison(fake);
+  } finally {
+    fake.restore();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Finding 2: a hung Orca subprocess must time out into the rejection matrix
+// ---------------------------------------------------------------------------
+
+test("Finding 2: hung status call times out → MALFORMED_OUTPUT exit 33, envelope emitted", () => {
+  const fake = installFakeOrca();
+  const started = Date.now();
+  try {
+    const result = runProbe(["--json", "--orca-bin", fake.orcaPath], {
+      RELAY_ORCA_PROBE_TIMEOUT_MS: "200",
+      RELAY_FAKE_ORCA_STALL_MS: "5000",
+      RELAY_FAKE_ORCA_STALL_CMD: "status",
+    });
+    assert.ok(Date.now() - started < 4000, "probe must not hang for the full stall duration");
+    assert.equal(result.status, REASONS.MALFORMED_OUTPUT);
+    const body = parseJson(result.stdout);
+    assertExactKeys(body);
+    assert.equal(body.admitted, false);
+    assert.equal(body.blocking_reasons[0].reason_code, "MALFORMED_OUTPUT");
+    assert.equal(body.runtime_ready, false);
     assertNoPoison(fake);
   } finally {
     fake.restore();

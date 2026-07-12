@@ -82,11 +82,16 @@ reason-code table: [capability-probe.md](capability-probe.md).
 | `ORCHESTRATION_UNAVAILABLE` | 32 | Orchestration absent, disabled, or `ok:false` |
 | `MALFORMED_OUTPUT` | 33 | Unparseable or shape-invalid JSON |
 | `EXISTING_ORCHESTRATION_STATE` | 34 | Task or gate count `> 0` (never adopted) |
-| `AMBIGUOUS_GLOBAL_STATE` | 35 | Bad counts or `_meta.runtimeId` mismatch |
+| `AMBIGUOUS_GLOBAL_STATE` | 35 | Non-integer count, a count that disagrees with its own array length, or `_meta.runtimeId` mismatch |
 | `SMOKE_FAILED` | 36 | Smoke provenance (task/dispatch/assignee) failed |
 | `SMOKE_CLEANUP_FAILED` | 37 | Smoke cleanup of self-created state failed |
 
 Usage errors exit `64`.
+
+Every Orca invocation carries a finite timeout (default 10000 ms), so a hung CLI
+still classifies through the matrix above and emits the JSON envelope instead of
+hanging. `RELAY_ORCA_PROBE_TIMEOUT_MS` (positive integer; invalid values ignored)
+shortens the budget for tests.
 
 ## Runtime intents (contract-only in this leaf)
 

@@ -14,7 +14,7 @@ on Orca upgrades**.
 | --- | --- |
 | Desktop app / runtime graph is ready | `orca status --json` readiness conjuncts |
 | Orchestration commands exist and are enabled | `orchestration task-list --json` |
-| Runtime-global state is empty for v0 | task-list + gate-list counts both `=== 0` |
+| Runtime-global state is empty for v0 | task-list + gate-list counts both `=== 0` and each `count` equals its own array length |
 | Injected dispatch returns provenance IDs | Explicit `--smoke` create + `dispatch --inject` |
 
 ## Targeted CLI surface (mid-2026)
@@ -52,11 +52,26 @@ Checks after a failed check may be skipped and are recorded as `skipped` in `che
 | `ORCHESTRATION_UNAVAILABLE` | 32 | Orchestration absent/disabled/`ok:false` |
 | `MALFORMED_OUTPUT` | 33 | Unparseable or shape-invalid JSON |
 | `EXISTING_ORCHESTRATION_STATE` | 34 | Task or gate `count > 0` (never adopted) |
-| `AMBIGUOUS_GLOBAL_STATE` | 35 | Bad counts or `_meta.runtimeId` mismatch |
+| `AMBIGUOUS_GLOBAL_STATE` | 35 | Non-integer `count`, a `count` that disagrees with its own array length, or `_meta.runtimeId` mismatch |
 | `SMOKE_FAILED` | 36 | Smoke provenance verification failed |
 | `SMOKE_CLEANUP_FAILED` | 37 | Smoke cleanup of self-created state failed |
 
 Usage errors (unknown flags, missing args) exit `64`.
+
+A `count` that contradicts its own array (e.g. `count:0` alongside a non-empty
+`tasks`/`gates`) is treated as ambiguous rather than trusted — the probe never
+adopts state the count claims is absent.
+
+## Bounded execution (no hangs)
+
+Every Orca invocation runs with a finite `timeout` (default 10000 ms) and a
+bounded `maxBuffer`, so a hung or wedged CLI cannot stall the probe forever. A
+timed-out command is killed and flows through the **same** per-check failure
+classification as any non-zero exit or spawn error of that command (a hung
+`status` → `MALFORMED_OUTPUT`; a hung `task-list`/`gate-list` →
+`ORCHESTRATION_UNAVAILABLE`), so the stable JSON envelope is still emitted with
+`admitted:false`. Set `RELAY_ORCA_PROBE_TIMEOUT_MS` (positive integer; invalid
+values are ignored and fall back to the default) to shorten the budget in tests.
 
 ## Guarantees
 

@@ -15,6 +15,11 @@ const SMOKE_SPEC = "relay-orca capability probe synthetic smoke (self-cleaning)"
 const SMOKE_TO_HANDLE = "relay-orca-probe-smoke";
 const SMOKE_TERMINAL_STATUS = "cancelled";
 const EXCERPT_LIMIT = 256;
+// Every Orca invocation is bounded so a hung CLI still reaches the rejection
+// matrix instead of hanging the probe forever. Tests may shorten the wall-clock
+// budget via RELAY_ORCA_PROBE_TIMEOUT_MS (positive integer; invalid → default).
+const DEFAULT_PROBE_TIMEOUT_MS = 10000;
+const PROBE_MAX_BUFFER = 4 * 1024 * 1024;
 
 const JSON_KEYS = Object.freeze([
   "ok",
@@ -36,20 +41,33 @@ function truncateExcerpt(text) {
   return value.slice(0, EXCERPT_LIMIT);
 }
 
+function resolveProbeTimeoutMs(env) {
+  const raw = (env || process.env).RELAY_ORCA_PROBE_TIMEOUT_MS;
+  if (raw === undefined || raw === null || raw === "") return DEFAULT_PROBE_TIMEOUT_MS;
+  const parsed = Number(raw);
+  if (Number.isInteger(parsed) && parsed > 0) return parsed;
+  return DEFAULT_PROBE_TIMEOUT_MS;
+}
+
 function runOrca(orcaBin, args, options = {}) {
   const argv = Array.isArray(args) ? args.map(String) : [];
   if (argv.includes("reset")) {
     throw new Error("probe-orca must never invoke orca orchestration reset (D2)");
   }
   const exec = options.execFileSync || execFileSync;
+  const env = options.env || process.env;
   try {
     const stdout = exec(orcaBin, argv, {
       encoding: "utf-8",
       stdio: ["ignore", "pipe", "pipe"],
-      env: options.env || process.env,
+      env,
+      timeout: resolveProbeTimeoutMs(env),
+      maxBuffer: PROBE_MAX_BUFFER,
     });
     return { status: 0, stdout: String(stdout || ""), stderr: "" };
   } catch (error) {
+    // A timed-out command is killed by signal (status null) → status 1 here, so
+    // it flows through the same per-check classification as any spawn failure.
     return {
       status: typeof error.status === "number" ? error.status : 1,
       stdout: error.stdout ? String(error.stdout) : "",
@@ -219,6 +237,16 @@ function extractListCount(payload, listKey, arrayKey) {
   }
   if (!isIntegerCount(result.count)) {
     return { ambiguous: true, message: `${listKey}.result.count must be a non-negative integer` };
+  }
+  // A count that contradicts its own array admits pre-existing state the D6 gate
+  // must reject (e.g. count:0 alongside a non-empty array). Fail closed.
+  if (result.count !== result[arrayKey].length) {
+    return {
+      ambiguous: true,
+      message:
+        `${listKey}.result.count (${result.count}) does not match ` +
+        `${arrayKey}.length (${result[arrayKey].length})`,
+    };
   }
   return { count: result.count, items: result[arrayKey] };
 }
