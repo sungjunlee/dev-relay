@@ -52,10 +52,14 @@ function runsRoot() {
 }
 
 // Program id → a single safe path segment (never traverses). run.js and status.js
-// apply this identically so a `run`-written receipt resolves back for `status`.
+// apply this identically so a `run`-written receipt resolves back for `status`. `.`
+// and `..` are neutralized so a pathological program id can never escape the intended
+// <programs-root>/<repo-slug>/<program-id>/ directory (same guard relay's paths.js
+// applies to run/fleet ids).
 function programSegment(programId) {
   const safe = String(programId == null ? "" : programId).replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
-  return safe || "program";
+  if (safe === "" || safe === "." || safe === "..") return "program";
+  return safe;
 }
 
 function receiptPathFor(slug, programId) {

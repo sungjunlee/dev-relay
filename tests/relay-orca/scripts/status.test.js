@@ -13,6 +13,7 @@ const STATUS_JS = path.join(SCRIPTS, "status.js");
 
 const { REASONS } = require(path.join(SCRIPTS, "lib", "status-reasons.js"));
 const { REPORT_KEYS, OUTCOME_KEYS, DIAGNOSTIC_CODES } = require(path.join(SCRIPTS, "lib", "status-report.js"));
+const { classifyOutcome } = require(path.join(SCRIPTS, "lib", "status-classify.js"));
 const { RECEIPT_NOTE } = require(path.join(SCRIPTS, "lib", "receipt.js"));
 const { computeRepoSlug } = require(path.join(SCRIPTS, "lib", "repo-slug.js"));
 const { installFakeOrcaStatus } = require(path.join(__dirname, "..", "fixtures", "fake-orca-status.js"));
@@ -614,6 +615,63 @@ test("D7: merged manifest with a moved live PR head → PR_CHANGED + inconsisten
     assert.equal(r.status, 0);
     assert.ok(diagCodes(r.body, "pc").includes("PR_CHANGED"));
     assert.equal(outcomeById(r.body, "pc").state, "inconsistent");
+  } finally {
+    world.cleanup();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Regression — a transient dispatch-show failure must NOT forge MISSING_DISPATCH
+// ---------------------------------------------------------------------------
+
+test("D7: a failed (unreachable) dispatch-show read does not forge MISSING_DISPATCH / stale_missing", () => {
+  const facts = {
+    receiptTask: {
+      outcome_id: "x",
+      task_id: "orca-task-x",
+      kind: "relay_run",
+      wave: 1,
+      orca_task_id: "orca-live-x",
+      dispatch_id: "disp-x",
+      assignee: "term-x",
+      relay_ids: { request: null, run: "run-x", fleet: null },
+    },
+    manifest: { state: "dispatched", pr_number: 1, issue_number: 2 },
+    mappedRunId: "run-x",
+    mappedRunMissing: false,
+    orcaTask: { status: "dispatched", worker_done: false },
+    orcaTaskMissing: false,
+    dispatch: { ok: false, reachable: false }, // dispatch-show itself failed transiently
+    gateBlocking: false,
+    pr: { state: "OPEN" },
+    issue: { state: "OPEN" },
+    prUrl: null,
+    issueUrl: null,
+  };
+  const { outcome, diagnostics } = classifyOutcome(facts, { orcaTrusted: true, isDuplicate: false });
+  assert.equal(diagnostics.some((d) => d.code === "MISSING_DISPATCH"), false, "a flaky dispatch-show read must not forge MISSING_DISPATCH");
+  assert.equal(outcome.state, "running", "the outcome stays running, not stale_missing, on a transient read failure");
+});
+
+// ---------------------------------------------------------------------------
+// Regression — a force-closed (abandoned) relay manifest is escalated, not running
+// ---------------------------------------------------------------------------
+
+test("D5: a closed (abandoned, unmerged) relay manifest → escalated, never a silent running", () => {
+  const programId = "epic-status-closed";
+  const world = buildWorld({
+    programId,
+    manifests: [{ run_id: "run-c", state: "closed", pr_number: 160, issue_number: 1600 }],
+    orcaScenario: { tasks: [orcaTask(programId, "c", { status: "dispatched", worker_done: false })] },
+    ghScenario: { prs: { 160: { state: "OPEN" } }, issues: { 1600: { state: "OPEN" } } },
+  });
+  const receipt = makeReceipt({ programId, slug: world.slug, root: fs.realpathSync(world.repoRoot), tasks: [{ outcome_id: "c", run: "run-c" }] });
+  fs.writeFileSync(world.receiptPath, `${JSON.stringify(receipt, null, 2)}\n`, "utf-8");
+  try {
+    const r = world.run();
+    assert.equal(r.status, 0);
+    assert.equal(outcomeById(r.body, "c").state, "escalated");
+    assert.equal(r.body.program_state, "escalated");
   } finally {
     world.cleanup();
   }

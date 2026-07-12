@@ -41,6 +41,15 @@ function diag(code, outcomeId, message, ids) {
   return { code, outcome_id: outcomeId ?? null, message: boundedExcerpt(message), ids: ids || {} };
 }
 
+// A dispatch is "missing" only when dispatch-show actually REPORTED (reachable) yet
+// returned no dispatch id — never when the read itself failed transiently. A failed
+// dispatch-show leaves `dispatchId` undefined AND `reachable` false, so gating on
+// `reachable` avoids a false MISSING_DISPATCH on a flaky/timed-out read (mirrors the
+// strict `terminalPresent === false` check used for MISSING_TERMINAL).
+function dispatchMissing(orcaTrusted, receiptTask, dispatch) {
+  return Boolean(orcaTrusted && receiptTask.dispatch_id && dispatch && dispatch.reachable && !dispatch.dispatchId);
+}
+
 // Emit the receipt↔live detector diagnostics for one outcome (D7). Returns the
 // diagnostics plus the contradiction flags that drive the `inconsistent` state.
 function detectOutcome(facts, evidence, orcaTrusted, complete) {
@@ -53,8 +62,7 @@ function detectOutcome(facts, evidence, orcaTrusted, complete) {
   if (orcaTrusted && orcaTaskId && orcaTaskMissing) {
     diagnostics.push(diag("MISSING_TASK", outcomeId, `Orca task ${orcaTaskId} is absent from the live task-list`, { orca_task_id: orcaTaskId }));
   }
-  const missingDispatch = orcaTrusted && receiptTask.dispatch_id && dispatch && !dispatch.dispatchId;
-  if (missingDispatch) {
+  if (dispatchMissing(orcaTrusted, receiptTask, dispatch)) {
     diagnostics.push(diag("MISSING_DISPATCH", outcomeId, `dispatch ${receiptTask.dispatch_id} for task ${orcaTaskId} is no longer reported`, { orca_task_id: orcaTaskId, dispatch_id: receiptTask.dispatch_id }));
   }
   if (orcaTrusted && receiptTask.assignee && dispatch && dispatch.terminalPresent === false) {
@@ -93,15 +101,22 @@ function detectOutcome(facts, evidence, orcaTrusted, complete) {
   return { diagnostics, flags };
 }
 
+// A relay manifest in a terminal state that is NOT a merge (`closed`) is a
+// force-closed / abandoned run. It can never yield completion evidence again, so it
+// must surface as `escalated` rather than falling through to `running` (D5). The
+// merge-happy terminal (`merged`) is handled by the completion + PR/issue detectors.
+function isAbandonedManifest(manifest) {
+  return Boolean(manifest && manifest.state === "closed");
+}
+
 function outcomeState(facts, evidence, complete, flags, orcaTrusted, isDuplicate) {
   const { manifest, receiptTask, orcaTaskMissing, dispatch, mappedRunMissing, gateBlocking } = facts;
   if (flags.staleWorkerDone || flags.issueReopened || flags.prChanged || isDuplicate) return "inconsistent";
   if (complete) return "complete_with_evidence";
-  if (manifest && isEscalatedManifestState(manifest.state)) return "escalated";
+  if (manifest && (isEscalatedManifestState(manifest.state) || isAbandonedManifest(manifest))) return "escalated";
   if (gateBlocking) return "awaiting_decision";
-  const missingDispatch = orcaTrusted && receiptTask.dispatch_id && dispatch && !dispatch.dispatchId;
   const terminalMissing = orcaTrusted && receiptTask.assignee && dispatch && dispatch.terminalPresent === false;
-  const runtimeMappingBroken = orcaTrusted && (orcaTaskMissing || missingDispatch || terminalMissing);
+  const runtimeMappingBroken = orcaTrusted && (orcaTaskMissing || dispatchMissing(orcaTrusted, receiptTask, dispatch) || terminalMissing);
   const orcaUnavailable = !orcaTrusted && Boolean(receiptTask.orca_task_id);
   if (mappedRunMissing || runtimeMappingBroken || orcaUnavailable) return "stale_missing";
   return "running";

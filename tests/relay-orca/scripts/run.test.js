@@ -16,7 +16,7 @@ const { REPORT_KEYS } = require(path.join(SCRIPTS, "lib", "run-report.js"));
 const { compileProgram } = require(path.join(SCRIPTS, "lib", "compile-program.js"));
 const { RECEIPT_KEYS, TASK_KEYS, RECEIPT_NOTE, parseReceipt } = require(path.join(SCRIPTS, "lib", "receipt.js"));
 const { computeRepoSlug } = require(path.join(SCRIPTS, "lib", "repo-slug.js"));
-const { writeReceiptAtomic } = require(path.join(SCRIPTS, "receipt-io.js"));
+const { writeReceiptAtomic, programSegment } = require(path.join(SCRIPTS, "receipt-io.js"));
 const {
   buildOperatorPrompt,
   PAYLOAD_FIELDS,
@@ -601,6 +601,16 @@ test("D10.12: writeReceiptAtomic is temp+rename — a crash during rename leaves
   assert.equal(published, finalPath);
   assert.equal(fs.readFileSync(finalPath, "utf-8"), '{"schema":1}\n');
   fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("D1: programSegment neutralizes path-traversal program ids so a receipt cannot escape its dir", () => {
+  assert.equal(programSegment(".."), "program");
+  assert.equal(programSegment("."), "program");
+  // separators collapse to a dash → a single safe segment that cannot traverse.
+  assert.equal(programSegment("../../etc/passwd"), "..-..-etc-passwd");
+  assert.ok(!programSegment("../../etc/passwd").includes("/"));
+  assert.equal(programSegment("epic-941"), "epic-941");
+  assert.equal(programSegment("epic.941_v2"), "epic.941_v2");
 });
 
 // Keep the imported parse helper referenced.
