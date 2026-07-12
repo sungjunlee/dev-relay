@@ -1036,3 +1036,74 @@ test("reconcile leaves an escalated-timeout run with nothing to salvage at the r
   assert.equal(result.state, STATES.ESCALATED);
   assert.equal(remoteBranchSha(fixture), null);
 });
+
+test("reconcile blocks escalated-timeout salvage when reviewer_swap_count invariant rejects", () => {
+  const fixture = setupRepo({
+    manifestState: STATES.ESCALATED,
+    committedWork: true,
+    dispatchResultFailureClass: "total_timeout",
+    executionEvidence: false,
+  });
+  const record = readManifest(fixture.manifestPath);
+  record.data.review = { ...(record.data.review || {}), reviewer_swap_count: 1 };
+  writeManifest(fixture.manifestPath, record.data, record.body);
+
+  const leasePath = writeLease(fixture, {
+    pid: 999999,
+    pgid: 999999,
+    startedAt: new Date().toISOString(),
+    timeoutS: 60,
+  });
+  const evidencePath = path.join(fixture.runDir, EXECUTION_EVIDENCE_FILENAME);
+  const remoteBefore = remoteBranchSha(fixture);
+
+  const result = parseJsonResult(runReconcile(fixture));
+
+  assert.equal(result.row, 6);
+  assert.equal(result.status, "invariant_blocked");
+  assert.equal(result.nextAction, "manual_close_run");
+  assert.ok(result.invariantError && result.invariantError.length > 0);
+  assert.match(result.invariantError, /reviewer_swap_count/);
+
+  // No side effects: remote ref, lease, evidence, and manifest all untouched.
+  assert.equal(remoteBranchSha(fixture), remoteBefore);
+  assert.equal(fs.existsSync(leasePath), true);
+  assert.equal(fs.existsSync(evidencePath), false);
+  assert.equal(readManifest(fixture.manifestPath).data.state, STATES.ESCALATED);
+
+  const events = readRunEvents(fixture.repoRoot, fixture.runId);
+  assert.equal(events.some((event) => event.event === EVENTS.STATE_RECOVERY), false);
+});
+
+test("reconcile dry-run reports invariant_blocked without side effects when swap count rejects", () => {
+  const fixture = setupRepo({
+    manifestState: STATES.ESCALATED,
+    committedWork: true,
+    dispatchResultFailureClass: "total_timeout",
+    executionEvidence: false,
+  });
+  const record = readManifest(fixture.manifestPath);
+  record.data.review = { ...(record.data.review || {}), reviewer_swap_count: 1 };
+  writeManifest(fixture.manifestPath, record.data, record.body);
+
+  const leasePath = writeLease(fixture, {
+    pid: 999999,
+    pgid: 999999,
+    startedAt: new Date().toISOString(),
+    timeoutS: 60,
+  });
+  const evidencePath = path.join(fixture.runDir, EXECUTION_EVIDENCE_FILENAME);
+  const remoteBefore = remoteBranchSha(fixture);
+
+  const result = parseJsonResult(runReconcile(fixture, ["--dry-run"]));
+
+  assert.equal(result.row, 6);
+  assert.equal(result.status, "invariant_blocked");
+  assert.equal(result.nextAction, "manual_close_run");
+  assert.ok(result.invariantError && result.invariantError.length > 0);
+
+  assert.equal(remoteBranchSha(fixture), remoteBefore);
+  assert.equal(fs.existsSync(leasePath), true);
+  assert.equal(fs.existsSync(evidencePath), false);
+  assert.equal(readManifest(fixture.manifestPath).data.state, STATES.ESCALATED);
+});
