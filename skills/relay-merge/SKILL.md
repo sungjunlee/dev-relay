@@ -74,6 +74,7 @@ This script:
 - `--allow-behind-main --reason "..."` is the audited operator escape hatch.
 - If the remote PR head cannot be resolved (`ls-remote` fails), the gate is skipped fail-open and finalize records `freshness: { skipped: true, reason: "unresolvable_remote_head" }`.
 - Finalize never auto-rebases: a rebase changes the reviewed head and re-enters the existing stale-review path (#884).
+- The gate sources the PR head from the tracked remote's branch tip (`ls-remote`), not GitHub's `headRefOid`. Relay pushes every PR branch to that remote, so the tip is the exact commit GitHub merges. Fork and non-origin-head PRs are outside the gate's domain by design (#966): on such PRs the gate degrades to the fail-open skip above rather than validating a head relay never pushed.
 - Accepted residual risk: cross-file semantic coupling is not detected.
 
 If the retained worktree is dirty, merge still succeeds but cleanup is recorded as `failed` and the manifest moves to `next_action=manual_cleanup_required`.
