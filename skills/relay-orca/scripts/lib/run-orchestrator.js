@@ -140,6 +140,11 @@ function makeHandlePool(orcaBin, report, options) {
         );
       }
       report.terminals_created.push(term.handle);
+      // A16: persist the receipt IMMEDIATELY after recording the created terminal handle —
+      // before the dispatch that may fail. A dispatch (or provenance) failure right after
+      // auto terminal creation must leave the on-disk receipt already carrying the handle,
+      // so a reconcile can adopt (not re-create) the terminal instead of leaking it.
+      persistReceipt(report, options);
       return term.handle;
     },
   };

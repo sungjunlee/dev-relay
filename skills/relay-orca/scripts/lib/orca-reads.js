@@ -44,10 +44,12 @@ function orcaTaskList(run, orcaBin, options = {}) {
 function orcaGateList(run, orcaBin, options = {}) {
   const proc = run(orcaBin, ["orchestration", "gate-list", "--json"], options);
   const { ok, value } = envelope(proc);
-  if (!ok) return { ok: false, reachable: false, gates: [], proc };
+  if (!ok) return { ok: false, reachable: false, gates: [], runtimeId: null, proc };
   const result = value.result || {};
   const gates = Array.isArray(result.gates) ? result.gates : [];
-  return { ok: true, reachable: true, gates, proc };
+  // A17: expose the read's `_meta.runtimeId` so the caller can prove this whole-runtime
+  // read came from the SAME runtime the status read established before adopting its data.
+  return { ok: true, reachable: true, gates, runtimeId: metaRuntimeId(value), proc };
 }
 
 function orcaDispatchShow(run, orcaBin, taskId, options = {}) {
@@ -66,6 +68,9 @@ function orcaDispatchShow(run, orcaBin, taskId, options = {}) {
     dispatchId: isNonEmptyString(result.dispatch_id) ? result.dispatch_id : null,
     assignee,
     terminalPresent,
+    // A17: expose the per-task read's `_meta.runtimeId` so the caller can prove THIS
+    // task's dispatch-show came from the receipt's runtime before adopting its facts.
+    runtimeId: metaRuntimeId(value),
     proc,
   };
 }

@@ -640,6 +640,34 @@ test("A2: a prompt-delivery failure still leaves the receipt carrying the verifi
   }
 });
 
+test("A16: a dispatch failure right after an AUTO-created terminal leaves the on-disk receipt already carrying the handle", () => {
+  // No explicit --operator-handle → run auto-creates a terminal ("orca-term-1"), records
+  // it, and (A16) persists the receipt IMMEDIATELY — BEFORE the dispatch. The dispatch then
+  // fails (INJECTION_UNDELIVERED, exit 42) before any provenance-verification write could run.
+  // Without the immediate persist the mapping-changing writes only happen after dispatch-show,
+  // so the handle would be lost from disk; A16 makes the created terminal durable so a
+  // reconcile can adopt (not re-create) it.
+  const r = runProgram("valid-single-relay-run.json", [], { dispatchFailFor: "orca-live-outcome-a" });
+  try {
+    assert.equal(r.status, REASONS.INJECTION_UNDELIVERED);
+    assert.equal(r.body.blocking_reasons[0].reason_code, "INJECTION_UNDELIVERED");
+    assert.equal(taskByOutcome(r.body, "outcome-a").status, "escalated");
+    // The in-memory report is truthful about the auto-created terminal...
+    assert.deepEqual(r.body.terminals_created, ["orca-term-1"]);
+
+    // ...and so is the receipt ON DISK, written before the failing dispatch.
+    const receiptPath = receiptPathForWorld(r.world, "epic-demo-single");
+    assert.ok(fs.existsSync(receiptPath), "receipt persisted right after the terminal was created");
+    assert.equal(r.body.receipt_path, receiptPath, "the report echoes the persisted receipt path");
+    const parsed = parseReceipt(fs.readFileSync(receiptPath, "utf-8"));
+    assert.equal(parsed.ok, true, `receipt must parse+validate: ${parsed.reason || ""}`);
+    assert.deepEqual(parsed.receipt.terminals_created, ["orca-term-1"], "the created terminal handle is durable despite the dispatch failure");
+    assertNoPoison(r.fake);
+  } finally {
+    r.fake.cleanup();
+  }
+});
+
 test("D10.12: writeReceiptAtomic is temp+rename — a crash during rename leaves no partial receipt", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-orca-atomic-"));
   const finalPath = path.join(dir, "nested", "receipt.json");

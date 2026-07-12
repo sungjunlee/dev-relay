@@ -1501,6 +1501,206 @@ test("A11: a failed required `issue view` read → stale_missing, exit 0", () =>
   }
 });
 
+// ---------------------------------------------------------------------------
+// A17 — every adopted read's runtime id is validated (task-list/gate-list + per-task)
+// ---------------------------------------------------------------------------
+
+test("A17: a task-list read carrying a DIFFERENT runtime id → runtime unreachable, Orca facts withheld, exit 0", () => {
+  const programId = "epic-status-tasklist-runtime-drift";
+  const world = buildWorld({
+    programId,
+    manifests: [{ run_id: "run-tld", state: "dispatched", pr_number: 700, issue_number: 7000 }],
+    // status carries the receipt's runtime, but task-list's _meta.runtimeId is a DIFFERENT
+    // runtime — the read cannot be attributed to the receipt's runtime, so it is WITHHELD
+    // (unreachable) exactly like a failed required read (A4), never adopted.
+    orcaScenario: {
+      tasks: [orcaTask(programId, "tld")],
+      taskListRuntimeId: "77777777-7777-4777-8777-777777777777",
+    },
+    ghScenario: { prs: { 700: { state: "OPEN" } }, issues: { 7000: { state: "OPEN" } } },
+  });
+  const receipt = makeReceipt({ programId, slug: world.slug, root: fs.realpathSync(world.repoRoot), tasks: [{ outcome_id: "tld", run: "run-tld" }] });
+  fs.writeFileSync(world.receiptPath, `${JSON.stringify(receipt, null, 2)}\n`, "utf-8");
+  try {
+    const r = world.run();
+    assert.equal(r.status, 0);
+    assert.equal(r.body.runtime, "unreachable");
+    // Withheld like A4 — never a forged RUNTIME_MISMATCH or MISSING_TASK.
+    assert.equal(diagCodes(r.body).includes("RUNTIME_MISMATCH"), false);
+    assert.equal(diagCodes(r.body).includes("MISSING_TASK"), false);
+    assert.equal(outcomeById(r.body, "tld").state, "stale_missing");
+    assert.deepEqual(Object.keys(r.body).sort(), [...REPORT_KEYS].sort());
+  } finally {
+    world.cleanup();
+  }
+});
+
+test("A17: a per-task dispatch-show from a MISMATCHED runtime id → that task unknown (stale_missing); other tasks unaffected", () => {
+  const programId = "epic-status-dispatch-runtime-drift";
+  const world = buildWorld({
+    programId,
+    manifests: [
+      { run_id: "run-good", state: "dispatched", pr_number: 710, issue_number: 7100 },
+      { run_id: "run-bad", state: "dispatched", pr_number: 711, issue_number: 7101 },
+    ],
+    orcaScenario: {
+      tasks: [orcaTask(programId, "good"), orcaTask(programId, "bad")],
+      // "bad"'s dispatch-show carries a DIFFERENT _meta.runtimeId → that task's runtime
+      // facts are unknown; "good"'s dispatch-show matches and classifies normally.
+      dispatch: { "orca-live-bad": { runtimeId: "66666666-6666-4666-8666-666666666666" } },
+    },
+    ghScenario: { prs: { 710: { state: "OPEN" }, 711: { state: "OPEN" } }, issues: { 7100: { state: "OPEN" }, 7101: { state: "OPEN" } } },
+  });
+  const receipt = makeReceipt({
+    programId,
+    slug: world.slug,
+    root: fs.realpathSync(world.repoRoot),
+    tasks: [
+      { outcome_id: "good", run: "run-good" },
+      { outcome_id: "bad", run: "run-bad" },
+    ],
+  });
+  fs.writeFileSync(world.receiptPath, `${JSON.stringify(receipt, null, 2)}\n`, "utf-8");
+  try {
+    const r = world.run();
+    assert.equal(r.status, 0);
+    // The whole runtime stays trusted (status + task-list + gate-list all matched)...
+    assert.equal(r.body.runtime, "ok");
+    // ...but the mismatched per-task dispatch-show marks ONLY "bad" unknown.
+    assert.equal(outcomeById(r.body, "bad").state, "stale_missing");
+    assert.equal(outcomeById(r.body, "good").state, "running");
+    // No false MISSING_DISPATCH / MISSING_TERMINAL forged for the withheld task.
+    assert.equal(diagCodes(r.body, "bad").includes("MISSING_DISPATCH"), false);
+    assert.equal(diagCodes(r.body, "bad").includes("MISSING_TERMINAL"), false);
+  } finally {
+    world.cleanup();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// A18 — an escalated fleet child is TERMINAL but not complete → fleet escalated
+// ---------------------------------------------------------------------------
+
+test("A18: a closed fleet with one ESCALATED child → outcome escalated (terminal ≠ complete); the all-merged variant stays complete", () => {
+  // Escalated variant: the fleet manifest is closed and every child is TERMINAL, but one
+  // child ESCALATED. An escalated child is terminal (it will not progress) yet NOT complete,
+  // so the fleet cannot complete from that configuration and surfaces as escalated.
+  const escProgram = "epic-status-fleet-escalated";
+  const escWorld = buildWorld({
+    programId: escProgram,
+    manifests: [
+      { run_id: "fleet-esc", fleet_state: "closed", children: [{ leaf_ref: "l1", run_id: "child-e1" }, { leaf_ref: "l2", run_id: "child-e2" }] },
+      { run_id: "child-e1", state: "merged", pr_number: 261, issue_number: 2601 },
+      { run_id: "child-e2", state: "escalated", pr_number: 262, issue_number: 2602 },
+    ],
+    orcaScenario: { tasks: [orcaTask(escProgram, "fe")] },
+    ghScenario: {},
+  });
+  const escReceipt = makeReceipt({ programId: escProgram, slug: escWorld.slug, root: fs.realpathSync(escWorld.repoRoot), tasks: [{ outcome_id: "fe", kind: "relay_fleet", fleet: "fleet-esc" }] });
+  fs.writeFileSync(escWorld.receiptPath, `${JSON.stringify(escReceipt, null, 2)}\n`, "utf-8");
+  try {
+    const r = escWorld.run();
+    assert.equal(r.status, 0);
+    const outcome = outcomeById(r.body, "fe");
+    assert.equal(outcome.state, "escalated", "an escalated terminal child surfaces the fleet as escalated");
+    assert.notEqual(outcome.state, "complete_with_evidence");
+    // The escalated child IS terminal ({merged,closed,escalated}), so the fleet reached a
+    // terminal configuration — fleet_children_terminal is true — but it is not complete.
+    assert.equal(outcome.evidence.fleet_children_terminal, true);
+    assert.equal(outcome.evidence.fleet_manifest_closed, true);
+    assert.equal(r.body.program_state, "escalated");
+  } finally {
+    escWorld.cleanup();
+  }
+
+  // All-merged variant: every child complete (merged/closed) → still complete_with_evidence.
+  const okProgram = "epic-status-fleet-allmerged";
+  const okWorld = buildWorld({
+    programId: okProgram,
+    manifests: [
+      { run_id: "fleet-ok2", fleet_state: "closed", children: [{ leaf_ref: "l1", run_id: "child-m1" }, { leaf_ref: "l2", run_id: "child-m2" }] },
+      { run_id: "child-m1", state: "merged", pr_number: 271, issue_number: 2701 },
+      { run_id: "child-m2", state: "merged", pr_number: 272, issue_number: 2702 },
+    ],
+    orcaScenario: { tasks: [orcaTask(okProgram, "fm", { status: "completed", worker_done: true })] },
+    ghScenario: {},
+  });
+  const okReceipt = makeReceipt({ programId: okProgram, slug: okWorld.slug, root: fs.realpathSync(okWorld.repoRoot), tasks: [{ outcome_id: "fm", kind: "relay_fleet", fleet: "fleet-ok2" }] });
+  fs.writeFileSync(okWorld.receiptPath, `${JSON.stringify(okReceipt, null, 2)}\n`, "utf-8");
+  try {
+    const r = okWorld.run();
+    assert.equal(r.status, 0);
+    const outcome = outcomeById(r.body, "fm");
+    assert.equal(outcome.state, "complete_with_evidence");
+    assert.deepEqual(outcome.evidence, { fleet_children_terminal: true, fleet_manifest_closed: true });
+  } finally {
+    okWorld.cleanup();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// A19 — advisory evidence requires an EXPLICITLY advisory gate (no gates[0] fallback)
+// ---------------------------------------------------------------------------
+
+test("A19: a passed NON-advisory gate mapped to an advisory_review task is not advisory evidence → NOT complete_with_evidence", () => {
+  const programId = "epic-status-adv-nonadvisory";
+  const world = buildWorld({
+    programId,
+    manifests: [],
+    orcaScenario: {
+      tasks: [orcaTask(programId, "ar")],
+      // A PASSED gate mapped to the task, but typed "integration" (NOT advisory). With the
+      // gates[0] fallback removed, an unmarked/non-advisory gate can never satisfy advisory
+      // evidence, so a passed integration gate must not forge advisory completion.
+      gates: [gate("orca-live-ar", { status: "passed", kind: "integration" })],
+    },
+    ghScenario: {},
+  });
+  const receipt = makeReceipt({ programId, slug: world.slug, root: fs.realpathSync(world.repoRoot), tasks: [{ outcome_id: "ar", kind: "advisory_review" }] });
+  fs.writeFileSync(world.receiptPath, `${JSON.stringify(receipt, null, 2)}\n`, "utf-8");
+  try {
+    const r = world.run();
+    assert.equal(r.status, 0);
+    const outcome = outcomeById(r.body, "ar");
+    assert.notEqual(outcome.state, "complete_with_evidence");
+    assert.equal(outcome.evidence.advisory_evidence_posted, false, "a non-advisory gate is never advisory evidence");
+    assert.equal(outcome.evidence.blocking_findings_triaged, false);
+  } finally {
+    world.cleanup();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// A20 — a failed required PR sub-read = unreachable (no false complete via a null head)
+// ---------------------------------------------------------------------------
+
+test("A20: a merged outcome whose PR HEAD sub-read fails → stale_missing, never a false complete off a null head", () => {
+  // The merge read (mergedAt,state) SUCCEEDS (MERGED) but the head read (headRefOid) FAILS.
+  // Before A20 the head failure substituted {} and kept ok:true, so headRefOid=null silently
+  // disabled the PR_CHANGED head-moved detector and the merged manifest + closed issue would
+  // FALSE-complete. A20 makes any failed required PR sub-read unreachable → stale_missing.
+  const programId = "epic-status-pr-head-fail";
+  const world = buildWorld({
+    programId,
+    manifests: [{ run_id: "run-ph", state: "merged", pr_number: 800, issue_number: 8000, head_sha: "expected-sha" }],
+    orcaScenario: { tasks: [orcaTask(programId, "ph", { status: "completed", worker_done: true })] },
+    ghScenario: { prs: { 800: { state: "MERGED", mergedAt: "2026-07-12T12:00:00Z", headReadFails: true } }, issues: { 8000: { state: "CLOSED" } } },
+  });
+  const receipt = makeReceipt({ programId, slug: world.slug, root: fs.realpathSync(world.repoRoot), tasks: [{ outcome_id: "ph", run: "run-ph" }] });
+  fs.writeFileSync(world.receiptPath, `${JSON.stringify(receipt, null, 2)}\n`, "utf-8");
+  try {
+    const r = world.run();
+    assert.equal(r.status, 0, "an unreachable PR read never fails the command");
+    const outcome = outcomeById(r.body, "ph");
+    assert.equal(outcome.state, "stale_missing", "a partial PR read degrades the outcome, never false-completes");
+    assert.notEqual(outcome.state, "complete_with_evidence");
+    assert.equal(outcome.evidence.pr_merged, null, "the PR fact is withheld, not fabricated");
+    assert.equal(world.gh.readPoison(), null, "a failed read is not a write poison");
+  } finally {
+    world.cleanup();
+  }
+});
+
 test("usage: missing --program-id exits 64", () => {
   const result = { status: 0 };
   try {

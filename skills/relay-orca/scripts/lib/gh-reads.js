@@ -35,6 +35,12 @@ function ghIssueView(run, ghBin, number, options = {}) {
 // merge evidence (mergedAt,state); the second recovers the live head (headRefOid) for
 // the PR_CHANGED head-moved detector. Both are read-only; the results are merged so
 // callers see one `{ state, mergedAt, headRefOid }` fact.
+//
+// A20: BOTH sub-reads are REQUIRED. If EITHER fails or returns invalid JSON, the PR
+// source is unreachable (ok:false) — it must NEVER substitute `{}` for the head read
+// and keep ok:true, because a resulting null `headRefOid` silently disables the
+// PR_CHANGED head-moved detector and can complete a merged outcome whose head actually
+// moved. An unreachable PR source degrades the outcome to stale_missing (A11/A20).
 function ghPrView(run, ghBin, number, options = {}) {
   const mergeArgs = ["pr", "view", String(number), "--json", "mergedAt,state"];
   const mergeProc = run(ghBin, mergeArgs, options);
@@ -46,7 +52,10 @@ function ghPrView(run, ghBin, number, options = {}) {
   const headArgs = ["pr", "view", String(number), "--json", "number,headRefName,headRefOid"];
   const headProc = run(ghBin, headArgs, options);
   const headParsed = parseJson(headProc.stdout);
-  const head = headProc.status === 0 && headParsed.ok && headParsed.value ? headParsed.value : {};
+  if (headProc.status !== 0 || !headParsed.ok || !headParsed.value) {
+    return { ok: false, reachable: false, proc: headProc };
+  }
+  const head = headParsed.value;
   return {
     ok: true,
     reachable: true,

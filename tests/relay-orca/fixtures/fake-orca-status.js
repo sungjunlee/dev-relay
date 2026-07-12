@@ -33,8 +33,16 @@ function defaultStatusScenario(overrides = {}) {
     // runtime id — neither `result.runtime.runtimeId` nor `_meta.runtimeId` — so the
     // derive path can prove a missing runtime id degrades the runtime to "unreachable".
     omitRuntimeId: overrides.omitRuntimeId === true,
+    // A17 per-read runtime-id knobs: when set, the whole-runtime read emits THIS
+    // `_meta.runtimeId` instead of the shared runtimeId, so a test can prove a task-list
+    // or gate-list read from a DIFFERENT runtime degrades the runtime to "unreachable".
+    taskListRuntimeId: overrides.taskListRuntimeId,
+    gateListRuntimeId: overrides.gateListRuntimeId,
     tasks: overrides.tasks || [],
     gates: overrides.gates || [],
+    // A17 per-task knob: a dispatch override may carry `runtimeId`, which becomes THAT
+    // task's dispatch-show `_meta.runtimeId` (never a result-payload field), so a test can
+    // prove a mismatched per-task read marks only that task's facts unknown.
     dispatch: overrides.dispatch || {},
   };
 }
@@ -75,18 +83,25 @@ if (args[0] === "status") {
 if (args[0] === "orchestration" && args[1] === "task-list") {
   if (scenario.taskListOk === false) { process.stderr.write("orca task-list unreachable\\n"); process.exit(1); }
   const tasks = Array.isArray(scenario.tasks) ? scenario.tasks : [];
-  emit({ id: "task-list-1", ok: true, result: { tasks, count: tasks.length }, _meta: meta }, 0);
+  const taskMeta = scenario.taskListRuntimeId !== undefined ? { runtimeId: scenario.taskListRuntimeId } : meta;
+  emit({ id: "task-list-1", ok: true, result: { tasks, count: tasks.length }, _meta: taskMeta }, 0);
 }
 if (args[0] === "orchestration" && args[1] === "gate-list") {
   if (scenario.gateListOk === false) { process.stderr.write("orca gate-list unreachable\\n"); process.exit(1); }
   const gates = Array.isArray(scenario.gates) ? scenario.gates : [];
-  emit({ id: "gate-list-1", ok: true, result: { gates, count: gates.length }, _meta: meta }, 0);
+  const gateMeta = scenario.gateListRuntimeId !== undefined ? { runtimeId: scenario.gateListRuntimeId } : meta;
+  emit({ id: "gate-list-1", ok: true, result: { gates, count: gates.length }, _meta: gateMeta }, 0);
 }
 if (args[0] === "orchestration" && args[1] === "dispatch-show") {
   const task = argValue("--task");
   const override = (scenario.dispatch && scenario.dispatch[task]) || {};
-  const result = Object.assign({ task_id: task, dispatch_id: "disp-" + task, assignee: "term-" + task, terminal_present: true }, override);
-  emit({ id: "ds-" + task, ok: true, result, _meta: meta }, 0);
+  // A17: a per-task runtimeId override rides in _meta, never the result payload, so it
+  // mirrors the real per-read runtime id without polluting the dispatch fields.
+  const dispatchMeta = override.runtimeId !== undefined ? { runtimeId: override.runtimeId } : meta;
+  const resultOverride = Object.assign({}, override);
+  delete resultOverride.runtimeId;
+  const result = Object.assign({ task_id: task, dispatch_id: "disp-" + task, assignee: "term-" + task, terminal_present: true }, resultOverride);
+  emit({ id: "ds-" + task, ok: true, result, _meta: dispatchMeta }, 0);
 }
 
 process.stderr.write("Unsupported fake orca (status) invocation: " + args.join(" ") + "\\n");

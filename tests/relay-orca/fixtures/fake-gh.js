@@ -62,6 +62,16 @@ if (isPrView) {
   const number = args[2];
   const pr = scenario.prs && scenario.prs[number];
   if (!pr) { process.stderr.write("pr not found\\n"); process.exit(1); }
+  // A20: gh pr view evidence is fetched via TWO required sub-reads — the merge read
+  // (--json mergedAt,state) and the head read (--json ...headRefOid). Distinguish them by
+  // the requested field list so a scenario can fail EITHER sub-read independently and
+  // prove a partial PR read degrades to unreachable (never substitutes a null head into a
+  // false complete).
+  const jsonIdx = args.indexOf("--json");
+  const fields = jsonIdx >= 0 ? String(args[jsonIdx + 1] || "") : "";
+  const isHeadRead = fields.indexOf("headRefOid") >= 0;
+  if (isHeadRead && pr.headReadFails) { process.stderr.write("pr head read failed\\n"); process.exit(1); }
+  if (!isHeadRead && pr.mergeReadFails) { process.stderr.write("pr merge read failed\\n"); process.exit(1); }
   emit({ state: pr.state, mergedAt: pr.mergedAt === undefined ? null : pr.mergedAt, headRefOid: pr.headRefOid === undefined ? null : pr.headRefOid }, 0);
 }
 if (isApiRead) emit({}, 0);

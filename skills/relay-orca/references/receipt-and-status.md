@@ -64,14 +64,19 @@ states, PR/issue status, Done Criteria text, completion flags, prompts, or termi
 
 - **Atomic write:** a temp file in the same directory + `rename`. Partial/torn receipts are
   impossible by construction.
-- **Write points (bounded edit to `run`):** after **each** successful task-create (A12), and
-  immediately after each dispatch-show provenance verification — **before** the operator
-  prompt is delivered (mapping-changing steps only). Persisting after every task-create means
-  a `TASK_MATERIALIZE_FAILED` (exit 41) raised mid-wave still leaves every earlier outcome's
+- **Write points (bounded edit to `run`):** after **each** successful task-create (A12),
+  immediately after **each auto-created operator terminal** is recorded (A16), and immediately
+  after each dispatch-show provenance verification — **before** the operator prompt is
+  delivered (mapping-changing steps only). Persisting after every task-create means a
+  `TASK_MATERIALIZE_FAILED` (exit 41) raised mid-wave still leaves every earlier outcome's
   `orca_task_id` durably on disk — the partial mapping is never lost — before the failure
-  propagates. Likewise a prompt-delivery failure leaves the receipt already carrying the
-  verified `(orca_task_id, dispatch_id, assignee)` trio, so a later reconcile recovers the
-  created tasks / dispatch instead of re-materializing them. (There is no separate
+  propagates. Persisting immediately after an auto-created terminal (A16) means a dispatch (or
+  provenance) failure right after terminal creation leaves the receipt already carrying the
+  handle in `terminals_created`, so a reconcile can **adopt** (not re-create) that terminal
+  instead of leaking it — the receipt is written **before** the dispatch that may fail, not
+  only after dispatch-show. Likewise a prompt-delivery failure leaves the receipt already
+  carrying the verified `(orca_task_id, dispatch_id, assignee)` trio, so a later reconcile
+  recovers the created tasks / dispatch instead of re-materializing them. (There is no separate
   post-materialization write — the last per-create write already covers it.) `run`'s report
   grows by exactly one key, `receipt_path`.
 
@@ -88,7 +93,11 @@ states, PR/issue status, Done Criteria text, completion flags, prompts, or termi
    3. `RELAY_HOME` + `/runs` (relay's home override)
    4. `~/.relay/runs` (default)
 2. **GitHub** — `gh issue view <n> --json state,stateReason` and read-only `gh pr view`
-   queries (merge state + head), via an injectable gh binary (`--gh-bin` / env).
+   queries, via an injectable gh binary (`--gh-bin` / env). The PR evidence is fetched with
+   **two required** `gh pr view` sub-reads whose `--json` field lists are literals registered
+   in the repo-wide pr-view field-list contract: a merge read (`mergedAt,state`) and a head
+   read (`number,headRefName,headRefOid`). Both are required (A20) — see
+   [Failed required reads](#failed-required-orca-reads--unreachable-never-fabricated-empty-state).
 3. **Orca (runtime signals only)** — `status --json`, `orchestration task-list --json`,
    `gate-list --json`, `dispatch-show --task <id> --json`, all read-only, all through the
    probe's binary-resolution rules.
@@ -108,9 +117,9 @@ unclassifiable.
 | task_kind | evidence keys (all must be `true`) | source |
 | --- | --- | --- |
 | `relay_run` | `manifest_terminal` (manifest `merged` **only**, A14), `pr_merged`, `issue_closed` | mapped relay run manifest + PR/issue |
-| `relay_fleet` | `fleet_children_terminal`, `fleet_manifest_closed` | fleet manifest via `relay_ids.fleet` + each child run manifest |
-| `integration_gate` | `gate_report_present`, `gate_check_passes` | live Orca gate mapped to the outcome's `orca_task_id` |
-| `advisory_review` | `advisory_evidence_posted`, `blocking_findings_triaged` | live Orca advisory gate mapped to the outcome's `orca_task_id` |
+| `relay_fleet` | `fleet_children_terminal` (child terminal set = `{merged, closed, escalated}`, A18), `fleet_manifest_closed` | fleet manifest via `relay_ids.fleet` + each child run manifest |
+| `integration_gate` | `gate_report_present`, `gate_check_passes` | live Orca gate (`kind` `"integration"` or untyped) mapped to the outcome's `orca_task_id` |
+| `advisory_review` | `advisory_evidence_posted`, `blocking_findings_triaged` | live Orca gate **explicitly** `kind: "advisory"` (A19) mapped to the outcome's `orca_task_id` |
 | `tracker_reconciliation` | `tracker_reconciled` | mapped relay run manifest terminal AND its tracker issue closed |
 
 - **`relay_fleet`** resolves the fleet manifest via `relay_ids.fleet`. Fleet manifests live
@@ -122,11 +131,26 @@ unclassifiable.
   `fleet_state ∈ {merged, closed}`; `fleet_children_terminal` requires ≥1 child and every
   child `run_id` to resolve to a **terminal** run manifest **under the runs root** (children
   are ordinary relay runs; only the fleet manifest itself lives under the fleets root).
+  A child is **terminal** when its state ∈ `{merged, closed, escalated}` (A18) — an escalated
+  child is terminal (it will not progress on its own) but NOT *complete*. Fleet **completion**
+  still requires every child at `merged`/`closed`, so an escalated child in a closed fleet
+  makes `fleet_children_terminal` `true` (the fleet reached a terminal configuration) yet the
+  outcome is `escalated`, never `complete_with_evidence` (terminal ≠ complete — see the State
+  taxonomy pinned decision below).
 - **Read-only gate kinds** (`integration_gate`, `advisory_review`) are receipt-referenced
   through the outcome's `orca_task_id`: the evidence source is the live decision/review gate
   mapped to that task. A gate "passes"/"triaged" when its live status ∈ `{passed, approved,
   resolved}`; a pending gate leaves the outcome `awaiting_decision`. When the runtime is
-  untrusted (mismatch / foreign / unreachable), both checks degrade to `null`.
+  untrusted (mismatch / foreign / unreachable), both checks degrade to `null`. The modeled
+  gate shape is `{ id, task_id, status, kind }`; a gate is matched to an outcome when its
+  `task_id`/`task` equals the outcome's `orca_task_id` (or it lists that id in `blocks`).
+  **Gate-kind markers:** `integration_gate` evidence is satisfied by a gate whose `kind` is
+  `"integration"` **or is absent/untyped** (an untyped gate defaults to integration).
+  `advisory_review` evidence (A19) requires a gate **explicitly** marked advisory — its `kind`
+  is exactly `"advisory"`. There is **no** "first gate" fallback: a non-advisory or untyped
+  gate mapped to an `advisory_review` task is **never** advisory evidence, so a passed
+  integration/untyped gate can never forge advisory completion; none present →
+  `advisory_evidence_posted` `false` → not complete.
 - **`relay_run`** completion is **`merged`-only** (A14): `manifest_terminal` holds `true` only
   when the mapped run manifest reached `merged` — **not** merely any terminal state. A
   terminal-but-`closed` (force-closed / abandoned) manifest can never yield completion
@@ -171,12 +195,38 @@ simply could not be listed, and a failed gate-list must never be treated as "no 
 (which would silently suppress `awaiting_decision`). A per-task `dispatch-show` failure marks
 only that task's Orca facts **unknown** — never `MISSING_TASK` / `MISSING_DISPATCH`.
 
+**Per-read runtime-id attribution (A17).** Adopting a read is not just about it succeeding —
+it must be proven to come from the runtime the receipt mapped. The `status` read establishes
+the reference runtime id (A13 guarantees it is a non-empty string). **Every** adopted read
+then carries `_meta.runtimeId` and is validated against that reference before its data is
+used:
+
+- **Whole-runtime reads** (`task-list`, `gate-list`): a mismatched or missing-where-expected
+  `_meta.runtimeId` degrades the runtime to `unreachable` — Orca facts are **withheld**
+  exactly like a failed required read (A4), never adopted from an unverifiable runtime, and no
+  diagnostic is fabricated.
+- **Per-task `dispatch-show`**: a reachable read whose `_meta.runtimeId` is mismatched or
+  missing-where-expected makes **only that task's** runtime facts **unknown** — its dispatch
+  facts are withheld (so no false `MISSING_DISPATCH` / `MISSING_TERMINAL` is forged) and that
+  outcome degrades to `stale_missing`, leaving every other outcome unaffected. (A transiently
+  failed/unreachable `dispatch-show` has no id to check and keeps its existing pass-through
+  handling — it never forges a diagnostic.)
+
 The same honesty applies to **GitHub**: a failed **required** live GitHub read for an
 outcome's evidence contract (`gh pr view` feeding `pr_merged`, `gh issue view` feeding
 `issue_closed` / `tracker_reconciled`) leaves that fact `null` and degrades the outcome to
 `stale_missing` rather than reporting a false-clean `running`. The command still exits `0`
 (durable-complete evidence, if any, still wins), and the read never fabricates a fact it
 could not fetch.
+
+The PR read is fetched via **two required sub-reads** (merge state + head), and **both are
+required** (A20): if EITHER the merge read or the head read fails or returns invalid JSON,
+the whole PR source is `unreachable` (`ok:false`) → the outcome degrades to `stale_missing`.
+The head read is **never** substituted with `{}` while keeping the PR source `ok:true`,
+because a resulting `null` `headRefOid` silently disables the `PR_CHANGED` head-moved detector
+and could complete a `merged` outcome whose head actually moved. A merged manifest with a
+closed issue therefore never false-completes when the live head could not be fetched — it
+degrades to `stale_missing` (A11/A20).
 
 ## Foreign / ambiguous runtime is never adopted
 
@@ -204,6 +254,10 @@ waves of the lowest incomplete wave is `complete_with_evidence`, no outcome is
 - A `relay_run` whose manifest is terminal-but-`closed` (force-closed / abandoned) →
   `escalated`, never `complete_with_evidence`, regardless of a merged PR or closed issue
   (relay_run completion is manifest `merged` only, A14).
+- A `relay_fleet` with an **escalated** child (child terminal set = `{merged, closed,
+  escalated}`, A18) → `escalated`, never `complete_with_evidence`, even in a closed fleet
+  where every child is terminal — terminal ≠ complete, and completion requires every child
+  `merged`/`closed`. The all-`merged` fleet still completes.
 - A pending decision gate blocking the outcome's task → `awaiting_decision`.
 
 ## Detector matrix (verbatim diagnostic codes)

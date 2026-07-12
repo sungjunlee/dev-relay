@@ -14,8 +14,15 @@ const { boundedExcerpt, boundedIds, isNonEmptyString } = require("./bounded-exce
 const { orcaStatus, orcaTaskList, orcaGateList, orcaDispatchShow } = require("./orca-reads");
 const { ghIssueView, ghPrView } = require("./gh-reads");
 const { classifyOutcome, deriveProgramState, requiredEvidenceFor } = require("./status-classify");
-const { isTerminalManifestState } = require("./manifest-parse");
+const { isTerminalManifestState, isEscalatedManifestState } = require("./manifest-parse");
 const { orderReport } = require("./status-report");
+
+// A17: two runtime ids attribute to the SAME runtime only when both are non-empty
+// strings AND identical. Used to prove every adopted read (task-list, gate-list, and
+// per-task dispatch-show) came from the runtime the status read established.
+function runtimeIdMatches(candidate, reference) {
+  return isNonEmptyString(candidate) && isNonEmptyString(reference) && candidate === reference;
+}
 
 // Every subprocess-derived value that reaches a diagnostic — inside `message` AND
 // inside `ids` — is bounded (≤256 chars, marker included) so a wedged/adversarial CLI
@@ -82,7 +89,16 @@ function attributeRuntime({ receipt, programId, orca }) {
       diagnostic: diag("RUNTIME_MISMATCH", null, "live runtime carries orchestration tasks not marked for this program; runtime signals are not adopted", { foreign_task_count: foreignTasks.length, live_runtime: liveRuntime }),
     };
   }
-  return { runtime: "ok", orcaTrusted: true, tasks, gates, diagnostic: null };
+  // A17: every adopted WHOLE-RUNTIME read must prove it came from the SAME runtime the
+  // status read established. task-list / gate-list carry `_meta.runtimeId`; a mismatched
+  // or missing-where-expected id means the read cannot be attributed to the receipt's
+  // runtime, so Orca facts are WITHHELD (unreachable) exactly like a failed required read
+  // (A4) — never adopted from an unverifiable runtime. The status read already proved a
+  // non-empty runtime id (A13), so it is the authoritative reference here.
+  if (!runtimeIdMatches(taskList.runtimeId, status.runtimeId) || !runtimeIdMatches(gateList.runtimeId, status.runtimeId)) {
+    return unreachable;
+  }
+  return { runtime: "ok", orcaTrusted: true, tasks, gates, runtimeId: status.runtimeId, diagnostic: null };
 }
 
 function isPendingGate(gate) {
@@ -109,10 +125,24 @@ function gatherOutcomeFacts(task, ctx) {
   let orcaTask = null;
   let orcaTaskMissing = false;
   let dispatch = null;
+  let dispatchRuntimeUnknown = false;
   if (runtime.orcaTrusted && task.orca_task_id) {
     orcaTask = runtime.tasks.find((candidate) => candidate.id === task.orca_task_id) || null;
     orcaTaskMissing = !orcaTask;
-    if (orcaTask) dispatch = orcaDispatchShow(orca, null, task.orca_task_id, {});
+    if (orcaTask) {
+      const shown = orcaDispatchShow(orca, null, task.orca_task_id, {});
+      // A17: the per-task dispatch-show must ALSO prove it came from the receipt's runtime.
+      // A reachable read whose `_meta.runtimeId` is mismatched or missing-where-expected
+      // makes THIS task's runtime facts UNKNOWN — the dispatch facts are withheld (so no
+      // false MISSING_DISPATCH / MISSING_TERMINAL is forged) and the outcome degrades to
+      // stale_missing, leaving every other outcome unaffected. A transiently-failed
+      // (unreachable) read has no id to check and keeps its existing pass-through handling.
+      if (shown.reachable && !runtimeIdMatches(shown.runtimeId, runtime.runtimeId)) {
+        dispatchRuntimeUnknown = true;
+      } else {
+        dispatch = shown;
+      }
+    }
   }
   const gateBlocking = Boolean(
     runtime.orcaTrusted && task.orca_task_id && runtime.gates.some((gate) => isPendingGate(gate) && gateBlocksTask(gate, task.orca_task_id)),
@@ -137,14 +167,27 @@ function gatherOutcomeFacts(task, ctx) {
     if (fleetManifest && Array.isArray(fleetManifest.fleet_children)) {
       fleetChildren = fleetManifest.fleet_children.map((child) => {
         const childManifest = child.run_id ? manifestByRunId.get(child.run_id) || null : null;
+        const state = childManifest ? childManifest.state : null;
+        // A18: a child is COMPLETE only at merged/closed, but TERMINAL at merged/closed OR
+        // escalated — an escalated child will not progress on its own, so the fleet has
+        // reached a terminal configuration it cannot complete from. Completion still
+        // requires every child complete; an escalated terminal child surfaces the fleet as
+        // escalated (never complete) via `fleetChildEscalated` below.
+        const complete = isTerminalManifestState(state);
+        const escalated = isEscalatedManifestState(state);
         return {
           leaf_ref: child.leaf_ref ?? null,
           run_id: child.run_id ?? null,
-          terminal: childManifest ? isTerminalManifestState(childManifest.state) : false,
+          terminal: complete || escalated,
+          complete,
+          escalated,
         };
       });
     }
   }
+  // A18: any escalated fleet child (with a resolvable fleet manifest) makes the fleet
+  // outcome escalated — terminal ≠ complete.
+  const fleetChildEscalated = Boolean(fleetManifest) && fleetChildren.some((child) => child.escalated === true);
 
   // GitHub reachability (#945 A11): a REQUIRED live GitHub read is one whose result
   // feeds this outcome's evidence contract. `pr_merged` needs `gh pr view`;
@@ -187,11 +230,13 @@ function gatherOutcomeFacts(task, ctx) {
     orcaTask,
     orcaTaskMissing,
     dispatch,
+    dispatchRuntimeUnknown,
     gateBlocking,
     outcomeGates,
     fleetManifest,
     mappedFleetId,
     fleetChildren,
+    fleetChildEscalated,
     pr,
     issue,
     prUrl,

@@ -81,7 +81,12 @@ function integrationGateEvidence(facts, orcaTrusted) {
 function advisoryReviewEvidence(facts, orcaTrusted) {
   if (!orcaTrusted) return { advisory_evidence_posted: null, blocking_findings_triaged: null };
   const gates = Array.isArray(facts.outcomeGates) ? facts.outcomeGates : [];
-  const gate = gates.find((candidate) => candidate.kind === "advisory") || gates[0] || null;
+  // A19: ONLY a gate explicitly marked advisory — its `kind` is exactly "advisory", the
+  // advisory marker in the modeled gate shape { id, task_id, status, kind } — satisfies
+  // advisory evidence. There is NO gates[0] fallback: a non-advisory (e.g. integration) or
+  // untyped gate mapped to the task is NOT advisory evidence, so a passed unmarked gate can
+  // never forge advisory completion. None present → advisory_evidence_posted false → not complete.
+  const gate = gates.find((candidate) => candidate.kind === "advisory") || null;
   return { advisory_evidence_posted: Boolean(gate), blocking_findings_triaged: gate ? gatePasses(gate) : false };
 }
 
@@ -211,8 +216,12 @@ function isAbandonedManifest(manifest) {
 }
 
 function outcomeState(facts, evidence, complete, flags, orcaTrusted, isDuplicate) {
-  const { manifest, receiptTask, orcaTaskMissing, dispatch, mappedRunMissing, gateBlocking, githubUnreachable } = facts;
+  const { manifest, receiptTask, orcaTaskMissing, dispatch, mappedRunMissing, gateBlocking, githubUnreachable, dispatchRuntimeUnknown, fleetChildEscalated } = facts;
   if (flags.staleWorkerDone || flags.issueReopened || flags.prChanged || isDuplicate) return "inconsistent";
+  // A18: an escalated fleet child is TERMINAL but NOT complete — the fleet reached a
+  // terminal configuration it cannot complete from, so it surfaces as escalated BEFORE
+  // the completion check (which would otherwise pass off the all-terminal evidence).
+  if (fleetChildEscalated) return "escalated";
   if (complete) return "complete_with_evidence";
   if (manifest && (isEscalatedManifestState(manifest.state) || isAbandonedManifest(manifest))) return "escalated";
   if (gateBlocking) return "awaiting_decision";
@@ -222,7 +231,9 @@ function outcomeState(facts, evidence, complete, flags, orcaTrusted, isDuplicate
   // A failed REQUIRED live GitHub read (#945 A11) leaves the outcome's evidence
   // unknown, so it degrades to stale_missing instead of a false-clean `running`.
   // Durable-complete already returned above, so it still wins over an unreachable read.
-  if (mappedRunMissing || runtimeMappingBroken || orcaUnavailable || githubUnreachable) return "stale_missing";
+  // A17: a per-task dispatch-show that could not be attributed to the receipt's runtime
+  // (`dispatchRuntimeUnknown`) leaves that task's runtime facts unknown → stale_missing.
+  if (mappedRunMissing || runtimeMappingBroken || orcaUnavailable || githubUnreachable || dispatchRuntimeUnknown) return "stale_missing";
   return "running";
 }
 
