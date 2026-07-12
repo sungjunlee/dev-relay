@@ -4,8 +4,22 @@ const assert = require("node:assert/strict");
 const {
   ensureJsonText,
   parseReviewerJsonObject,
+  parseReviewerVerdictObject,
   summarizeFailure,
 } = require("../../../skills/relay-review/scripts/reviewer-helpers");
+
+function passVerdict(nextAction) {
+  return {
+    verdict: "pass",
+    summary: "Looks good.",
+    contract_status: "pass",
+    quality_review_status: "pass",
+    next_action: nextAction,
+    issues: [],
+    rubric_scores: [],
+    scope_drift: { creep: [], missing: [] },
+  };
+}
 
 test("summarizeFailure prefers stderr when both streams are populated", () => {
   // Anti-theater: rejects a naive `error.stdout || error.message` helper because callers surface
@@ -81,3 +95,29 @@ test("parseReviewerJsonObject reports adapter and phase for invalid JSON", () =>
     /adapter=claude phase=primary_review review verdict must be valid JSON:/
   );
 });
+
+for (const nextAction of ["publish_pending", "ready_to_merge"]) {
+  test(`parseReviewerVerdictObject publish_pending matrix accepts PASS + next_action=${nextAction}`, () => {
+    const verdict = passVerdict(nextAction);
+
+    assert.deepEqual(
+      parseReviewerVerdictObject(JSON.stringify(verdict), {
+        adapter: "cursor",
+        phase: "primary_review",
+      }),
+      verdict
+    );
+  });
+}
+
+for (const nextAction of ["changes_requested", "escalated"]) {
+  test(`parseReviewerVerdictObject publish_pending matrix rejects PASS + next_action=${nextAction}`, () => {
+    assert.throws(
+      () => parseReviewerVerdictObject(JSON.stringify(passVerdict(nextAction)), {
+        adapter: "cursor",
+        phase: "primary_review",
+      }),
+      /PASS verdict must set next_action=publish_pending or ready_to_merge/
+    );
+  });
+}

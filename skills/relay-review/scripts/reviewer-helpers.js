@@ -131,7 +131,7 @@ function parseReviewerVerdictObject(text, context = {}) {
       ...context,
       description: context.description || "review verdict",
     });
-    return validateReviewVerdict(parsed, { requireExecutionStatus: false });
+    return validateReviewVerdict(parsed, { requireExecutionStatus: false, passNextActions: ["publish_pending", "ready_to_merge"] });
   } catch (error) {
     const message = error?.message || String(error);
     if (message.startsWith(`${adapterPhase} `)) {

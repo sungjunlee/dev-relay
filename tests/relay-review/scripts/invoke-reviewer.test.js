@@ -1521,6 +1521,40 @@ process.stdout.write(JSON.stringify({
   assert.match(loggedArgs[11], /Return a passing review\./);
 });
 
+test("cursor adapter accepts an internal-review PASS with next_action=publish_pending", () => {
+  const { repoRoot, promptPath } = setupRepo();
+  const fakeDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-review-fake-cursor-publish-pending-"));
+  const verdict = reviewerVerdict({ next_action: "publish_pending" });
+  const fakeAgent = writeExecutable(fakeDir, "fake-agent.js", `#!/usr/bin/env node
+const args = process.argv.slice(2);
+if (args[0] === "status") {
+  process.stdout.write("Logged in as test@example.com\\n");
+  process.exit(0);
+}
+process.stdout.write(JSON.stringify({
+  result: JSON.stringify(${JSON.stringify(verdict)}),
+}));
+`);
+
+  const stdout = execFileSync("node", [
+    CURSOR_SCRIPT,
+    "--repo", repoRoot,
+    "--prompt-file", promptPath,
+    "--json",
+  ], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+    env: {
+      ...process.env,
+      RELAY_CURSOR_AGENT_BIN: fakeAgent,
+      CURSOR_API_KEY: "",
+    },
+  });
+
+  assert.deepEqual(JSON.parse(stdout), verdict);
+});
+
 test("cursor adapter rejects advisory review phase", () => {
   const { repoRoot, promptPath } = setupRepo();
   let error;
