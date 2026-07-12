@@ -530,6 +530,65 @@ test("finalize-run freshness gate passes an up-to-date head without informationa
   assert.equal("freshness" in finalized.result, false);
 });
 
+test("finalize-run freshness gate skips when remote PR head is unresolvable", () => {
+  const fixture = setupRepo();
+  execFileSync("git", ["-C", fixture.repoRoot, "push", "origin", "--delete", fixture.branch], {
+    encoding: "utf-8",
+    stdio: "pipe",
+  });
+  assert.equal(remoteBranchExists(fixture.repoRoot, fixture.branch), false);
+
+  const logPath = path.join(fixture.repoRoot, "gh.log");
+  const fakeGh = writeFakeGh(logPath, {
+    comments: [DEFAULT_REVIEW_COMMENT],
+    commits: [{ oid: fixture.headSha, committedDate: DEFAULT_COMMIT_DATE }],
+  });
+  const result = spawnSync("node", [
+    SCRIPT,
+    "--repo", fixture.repoRoot,
+    "--branch", fixture.branch,
+    "--pr", "123",
+    "--json",
+  ], {
+    cwd: fixture.repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+    env: { ...process.env, RELAY_GH_BIN: fakeGh },
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  const payload = JSON.parse(result.stdout);
+  assert.equal(payload.state, STATES.MERGED);
+  assert.equal(payload.mergePerformed, true);
+  assert.deepEqual(payload.freshness, {
+    skipped: true,
+    reason: "unresolvable_remote_head",
+    remote: "origin",
+    branch: fixture.branch,
+  });
+  assert.match(result.stderr, /freshness gate skipped: unresolvable remote PR head/);
+});
+
+test("finalize-run freshness gate still computes freshness for a resolvable remote head", () => {
+  // Resolvable-head regression control for the unresolvable skip path above.
+  const fixture = setupRepo();
+  advanceOriginMain(fixture, [{
+    files: { "main-only.txt": "disjoint\n" },
+    message: "Advance main disjointly",
+  }]);
+
+  const finalized = execFinalize(fixture, {
+    ghOptions: { comments: [DEFAULT_REVIEW_COMMENT] },
+  });
+
+  assert.equal(finalized.result.state, STATES.MERGED);
+  assert.equal(finalized.result.mergePerformed, true);
+  assert.deepEqual(finalized.result.freshness, {
+    behind_count: 1,
+    overlapping_files: [],
+  });
+});
+
 test("finalize-run freshness gate reports behind but disjoint main changes and merges", () => {
   const fixture = setupRepo();
   advanceOriginMain(fixture, [{
