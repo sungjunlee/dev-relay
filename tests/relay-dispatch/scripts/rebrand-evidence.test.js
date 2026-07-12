@@ -47,6 +47,18 @@ function setupRepo({ evidence = true, advanceHead = false, withOrigin = false, b
   execFileSync("git", ["commit", "-m", "init"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
   if (withOrigin) {
     execFileSync("git", ["push", "-u", "origin", "main"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
+    // Pin bare-origin HEAD so clones check out `main` even when the runner's
+    // git init default branch is not main (CI runners often leave HEAD on master).
+    execFileSync("git", ["symbolic-ref", "HEAD", "refs/heads/main"], {
+      cwd: originRoot,
+      encoding: "utf-8",
+      stdio: "pipe",
+    });
+    execFileSync("git", ["remote", "set-head", "origin", "main"], {
+      cwd: repoRoot,
+      encoding: "utf-8",
+      stdio: "pipe",
+    });
   }
 
   const branch = "issue-332";
@@ -113,6 +125,7 @@ function setupRepo({ evidence = true, advanceHead = false, withOrigin = false, b
 function advanceBaseOnOrigin(fixture, { conflicting = false } = {}) {
   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "relay-rebrand-base-"));
   execFileSync("git", ["clone", fixture.originRoot, scratch], { encoding: "utf-8", stdio: "pipe" });
+  execFileSync("git", ["checkout", "-B", "main"], { cwd: scratch, encoding: "utf-8", stdio: "pipe" });
   execFileSync("git", ["config", "user.name", "Relay Rebrand Base"], { cwd: scratch, encoding: "utf-8", stdio: "pipe" });
   execFileSync("git", ["config", "user.email", "relay-rebrand-base@example.com"], { cwd: scratch, encoding: "utf-8", stdio: "pipe" });
   const fileName = conflicting ? "feature.txt" : "base-advance.txt";
