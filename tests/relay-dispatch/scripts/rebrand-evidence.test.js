@@ -25,17 +25,41 @@ const {
 
 const SCRIPT = path.join(__dirname, "..", "..", "..", "skills", "relay-dispatch", "scripts", "rebrand-evidence.js");
 
-function setupRepo({ evidence = true, advanceHead = false } = {}) {
+function setupRepo({ evidence = true, advanceHead = false, withOrigin = false, branchWork = false } = {}) {
   const repoRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "relay-rebrand-evidence-")));
   const relayHome = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-")));
   process.env.RELAY_HOME = relayHome;
 
+  let originRoot = null;
+  if (withOrigin) {
+    originRoot = path.join(repoRoot, "origin.git");
+    execFileSync("git", ["init", "--bare", originRoot], { encoding: "utf-8", stdio: "pipe" });
+  }
+
   execFileSync("git", ["init", "-b", "main"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
   execFileSync("git", ["config", "user.name", "Relay Rebrand Evidence Test"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
   execFileSync("git", ["config", "user.email", "relay-rebrand@example.com"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
+  if (withOrigin) {
+    execFileSync("git", ["remote", "add", "origin", originRoot], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
+  }
   fs.writeFileSync(path.join(repoRoot, "README.md"), "base\n", "utf-8");
   execFileSync("git", ["add", "README.md"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
   execFileSync("git", ["commit", "-m", "init"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
+  if (withOrigin) {
+    execFileSync("git", ["push", "-u", "origin", "main"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
+    // Pin bare-origin HEAD so clones check out `main` even when the runner's
+    // git init default branch is not main (CI runners often leave HEAD on master).
+    execFileSync("git", ["symbolic-ref", "HEAD", "refs/heads/main"], {
+      cwd: originRoot,
+      encoding: "utf-8",
+      stdio: "pipe",
+    });
+    execFileSync("git", ["remote", "set-head", "origin", "main"], {
+      cwd: repoRoot,
+      encoding: "utf-8",
+      stdio: "pipe",
+    });
+  }
 
   const branch = "issue-332";
   const worktreePath = path.join(repoRoot, "wt", branch);
@@ -43,10 +67,16 @@ function setupRepo({ evidence = true, advanceHead = false } = {}) {
   execFileSync("git", ["worktree", "add", worktreePath, "-b", branch], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
   const originalSha = execFileSync("git", ["-C", worktreePath, "rev-parse", "HEAD"], { encoding: "utf-8" }).trim();
 
-  if (advanceHead) {
-    fs.writeFileSync(path.join(worktreePath, "correction.txt"), "orchestrator correction\n", "utf-8");
-    execFileSync("git", ["-C", worktreePath, "add", "correction.txt"], { encoding: "utf-8", stdio: "pipe" });
-    execFileSync("git", ["-C", worktreePath, "commit", "-m", "Orchestrator correction"], { encoding: "utf-8", stdio: "pipe" });
+  if (branchWork || advanceHead) {
+    const fileName = advanceHead ? "correction.txt" : "feature.txt";
+    const contents = advanceHead ? "orchestrator correction\n" : "branch work\n";
+    const message = advanceHead ? "Orchestrator correction" : "Branch work";
+    fs.writeFileSync(path.join(worktreePath, fileName), contents, "utf-8");
+    execFileSync("git", ["-C", worktreePath, "add", fileName], { encoding: "utf-8", stdio: "pipe" });
+    execFileSync("git", ["-C", worktreePath, "commit", "-m", message], { encoding: "utf-8", stdio: "pipe" });
+  }
+  if (withOrigin) {
+    execFileSync("git", ["-C", worktreePath, "push", "-u", "origin", branch], { encoding: "utf-8", stdio: "pipe" });
   }
   const currentSha = execFileSync("git", ["-C", worktreePath, "rev-parse", "HEAD"], { encoding: "utf-8" }).trim();
 
@@ -89,7 +119,29 @@ function setupRepo({ evidence = true, advanceHead = false } = {}) {
     ...process.env,
     RELAY_HOME: relayHome,
   };
-  return { repoRoot, relayHome, runId, manifestPath: layout.manifestPath, runDir: layout.runDir, worktreePath, branch, originalSha, currentSha, env };
+  return { repoRoot, originRoot, relayHome, runId, manifestPath: layout.manifestPath, runDir: layout.runDir, worktreePath, branch, originalSha, currentSha, env };
+}
+
+function advanceBaseOnOrigin(fixture, { conflicting = false } = {}) {
+  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "relay-rebrand-base-"));
+  execFileSync("git", ["clone", fixture.originRoot, scratch], { encoding: "utf-8", stdio: "pipe" });
+  execFileSync("git", ["checkout", "-B", "main"], { cwd: scratch, encoding: "utf-8", stdio: "pipe" });
+  execFileSync("git", ["config", "user.name", "Relay Rebrand Base"], { cwd: scratch, encoding: "utf-8", stdio: "pipe" });
+  execFileSync("git", ["config", "user.email", "relay-rebrand-base@example.com"], { cwd: scratch, encoding: "utf-8", stdio: "pipe" });
+  const fileName = conflicting ? "feature.txt" : "base-advance.txt";
+  const contents = conflicting ? "base side conflict\n" : "base advanced\n";
+  fs.writeFileSync(path.join(scratch, fileName), contents, "utf-8");
+  execFileSync("git", ["add", fileName], { cwd: scratch, encoding: "utf-8", stdio: "pipe" });
+  execFileSync("git", ["commit", "-m", "advance base"], { cwd: scratch, encoding: "utf-8", stdio: "pipe" });
+  execFileSync("git", ["push", "origin", "main"], { cwd: scratch, encoding: "utf-8", stdio: "pipe" });
+  const baseSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: scratch, encoding: "utf-8" }).trim();
+  return { scratch, baseSha };
+}
+
+function originBranchSha(fixture, branch) {
+  return execFileSync("git", ["--git-dir", fixture.originRoot, "rev-parse", `refs/heads/${branch}`], {
+    encoding: "utf-8",
+  }).trim();
 }
 
 function runRebrand(fixture, extraArgs = []) {
@@ -106,7 +158,7 @@ function readEvidence(fixture) {
 
 test("rebrand-evidence flags are registered with the CLI schema", () => {
   assert.deepEqual(COMMAND_FLAGS["rebrand-evidence"], [
-    "--repo", "--run-id", "--manifest", "--reason", "--dry-run", "--json", "--help",
+    "--repo", "--run-id", "--manifest", "--reason", "--rebase-onto-base", "--dry-run", "--json", "--help",
   ]);
 });
 
@@ -207,6 +259,96 @@ test("dry-run previews the rebrand without writing evidence or appending an even
   assert.equal(parsed.plannedMutation.previousHeadSha, fixture.originalSha);
   assert.equal(parsed.plannedMutation.newHeadSha, fixture.currentSha);
   assert.equal(parsed.plannedMutation.recordedBy, "orchestrator-correction-rebrand");
+  assert.equal(fs.readFileSync(path.join(fixture.runDir, EXECUTION_EVIDENCE_FILENAME), "utf-8"), beforeEvidence);
+  assert.equal(readRunEvents(fixture.repoRoot, fixture.runId).length, 0);
+});
+
+test("flagless rebrand remains byte-identical to the pre-rebase-onto-base contract", () => {
+  const fixture = setupRepo({ evidence: true, advanceHead: true });
+  const result = runRebrand(fixture, ["--reason", "orchestrator fixed typo", "--json"]);
+
+  assert.equal(result.status, 0, result.stderr);
+  const parsed = JSON.parse(result.stdout);
+  assert.equal(parsed.status, "rebranded");
+  assert.equal(parsed.rewritten, true);
+  assert.equal(parsed.previousSha, fixture.originalSha);
+  assert.equal(parsed.newHeadSha, fixture.currentSha);
+  assert.equal(parsed.rebaseOntoBase, undefined);
+  assert.equal(parsed.oldHeadSha, undefined);
+  assert.equal(parsed.base, undefined);
+
+  const evidence = readEvidence(fixture);
+  assert.equal(evidence.head_sha, fixture.currentSha);
+  assert.equal(evidence.recorded_by, "orchestrator-correction-rebrand");
+  assert.equal(evidence.rebrand.reason, "orchestrator fixed typo");
+});
+
+test("--rebase-onto-base rebases, force-with-lease pushes, and rebrands in one shot", () => {
+  const fixture = setupRepo({ evidence: true, withOrigin: true, branchWork: true });
+  const beforeEvidence = readEvidence(fixture);
+  assert.equal(beforeEvidence.head_sha, fixture.originalSha);
+  const remoteBefore = originBranchSha(fixture, fixture.branch);
+  assert.equal(remoteBefore, fixture.currentSha);
+
+  advanceBaseOnOrigin(fixture);
+  const reason = `rebase onto origin/main after base advance`;
+  const result = runRebrand(fixture, ["--rebase-onto-base", "--reason", reason, "--json"]);
+
+  assert.equal(result.status, 0, result.stderr);
+  const parsed = JSON.parse(result.stdout);
+  assert.equal(parsed.status, "rebranded");
+  assert.equal(parsed.rebaseOntoBase, true);
+  assert.equal(parsed.oldHeadSha, fixture.currentSha);
+  assert.equal(parsed.base, "origin/main");
+  assert.notEqual(parsed.newHeadSha, fixture.currentSha);
+  assert.equal(parsed.rewritten, true);
+  assert.equal(parsed.previousSha, fixture.originalSha);
+  assert.equal(parsed.newHeadSha, parsed.newHeadSha);
+
+  const worktreeHead = execFileSync("git", ["-C", fixture.worktreePath, "rev-parse", "HEAD"], { encoding: "utf-8" }).trim();
+  assert.equal(worktreeHead, parsed.newHeadSha);
+  assert.equal(originBranchSha(fixture, fixture.branch), parsed.newHeadSha);
+  assert.equal(execFileSync("git", ["-C", fixture.worktreePath, "status", "--porcelain"], { encoding: "utf-8" }).trim(), "");
+
+  const evidence = readEvidence(fixture);
+  assert.equal(evidence.head_sha, parsed.newHeadSha);
+  assert.equal(evidence.rebrand.reason, reason);
+
+  const rebrandEvents = readRunEvents(fixture.repoRoot, fixture.runId)
+    .filter((entry) => entry.event === "execution_evidence_rebranded");
+  assert.equal(rebrandEvents.length, 1);
+  assert.equal(rebrandEvents[0].reason, reason);
+  assert.equal(rebrandEvents[0].new_head_sha, parsed.newHeadSha);
+});
+
+test("--rebase-onto-base aborts on conflict without push or rebrand", () => {
+  const fixture = setupRepo({ evidence: true, withOrigin: true, branchWork: true });
+  const beforeEvidence = fs.readFileSync(path.join(fixture.runDir, EXECUTION_EVIDENCE_FILENAME), "utf-8");
+  const remoteBefore = originBranchSha(fixture, fixture.branch);
+
+  advanceBaseOnOrigin(fixture, { conflicting: true });
+  const result = runRebrand(fixture, [
+    "--rebase-onto-base",
+    "--reason", "rebase onto origin/main after base advance",
+    "--json",
+  ]);
+
+  assert.equal(result.status, 2, result.stderr || result.stdout);
+  const parsed = JSON.parse(result.stdout);
+  assert.equal(parsed.status, "failed");
+  assert.equal(parsed.failure_class, "rebase_conflict");
+  assert.equal(parsed.next_action, "resolve_rebase_manually");
+  assert.equal(parsed.oldHeadSha, fixture.currentSha);
+  assert.equal(parsed.newHeadSha, fixture.currentSha);
+  assert.equal(parsed.headRestored, true);
+  assert.equal(parsed.worktreeClean, true);
+  assert.equal(parsed.pushed, false);
+  assert.equal(parsed.rebranded, false);
+
+  const worktreeHead = execFileSync("git", ["-C", fixture.worktreePath, "rev-parse", "HEAD"], { encoding: "utf-8" }).trim();
+  assert.equal(worktreeHead, fixture.currentSha);
+  assert.equal(execFileSync("git", ["-C", fixture.worktreePath, "status", "--porcelain"], { encoding: "utf-8" }).trim(), "");
+  assert.equal(originBranchSha(fixture, fixture.branch), remoteBefore);
   assert.equal(fs.readFileSync(path.join(fixture.runDir, EXECUTION_EVIDENCE_FILENAME), "utf-8"), beforeEvidence);
   assert.equal(readRunEvents(fixture.repoRoot, fixture.runId).length, 0);
 });

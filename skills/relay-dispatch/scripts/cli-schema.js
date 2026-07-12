@@ -88,6 +88,7 @@ const FLAGS = [
   { flag: "--reasoning", kind: VALUE, mode: MODE_PARSED, valueName: "<level>",
     allowedValues: ["none", "minimal", "low", "medium", "high", "xhigh"],
     rationale: "Codex reasoning_effort override; closed selector over codex CLI levels." },
+  { flag: "--rebase-onto-base", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Opt-in combined recovery: rebase the retained worktree onto origin/<base>, force-with-lease push, then rebrand evidence." },
   { flag: "--reconcile", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Explicit opt-in to mutate dead dispatched runs during doctor/preflight reconciliation." },
   { flag: "--reconcile-merged", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Reconcile merged drift for ready_to_merge runs with merge evidence." },
   { flag: "--replace-placeholder-evidence", kind: BOOLEAN, mode: MODE_PARSED, rationale: "Explicitly replace timeout placeholder evidence with operator-verified evidence; no value is consumed." },
@@ -215,7 +216,7 @@ const COMMAND_FLAGS = {
     "--reconcile", "--review-assurance", "--advisory-profile", "--json", "--help",
   ],
   "rebrand-evidence": [
-    "--repo", "--run-id", "--manifest", "--reason", "--dry-run", "--json", "--help",
+    "--repo", "--run-id", "--manifest", "--reason", "--rebase-onto-base", "--dry-run", "--json", "--help",
   ],
   "relay-reconcile-artifact": [
     "--repo", "--run-id", "--manifest", "--branch", "--pr",

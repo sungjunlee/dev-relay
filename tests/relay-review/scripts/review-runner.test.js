@@ -2447,6 +2447,9 @@ test("review-runner behind-base preflight fails fast before reviewer invocation"
   advanceBaseAfterFork(repoRoot);
   const markerPath = path.join(repoRoot, "behind-base-reviewer-invoked.txt");
   const reviewerScript = writeMarkerReviewerScript(repoRoot, "behind-base-reviewer.js", markerPath);
+  const expectedRecoveryCommand =
+    `node skills/relay-dispatch/scripts/rebrand-evidence.js --repo '${repoRoot}' ` +
+    `--run-id ${runId} --rebase-onto-base --reason "rebase onto origin/main after base advance"`;
 
   const result = spawnSync("node", [
     SCRIPT,
@@ -2467,6 +2470,12 @@ test("review-runner behind-base preflight fails fast before reviewer invocation"
   assert.equal(output.behindBasePreflight.behindCount, 1);
   assert.equal(output.behindBasePreflight.base, "origin/main");
   assert.match(output.behindBasePreflight.reason, /branch is 1 commit behind origin\/main; rebase and re-run/);
+  assert.equal(output.behindBasePreflight.recoveryCommand, expectedRecoveryCommand);
+  assert.equal(output.behindBasePreflight.recoveryCommand.includes("<"), false);
+  assert.equal(output.behindBasePreflight.recoveryCommand.includes(runId), true);
+  assert.match(output.behindBasePreflight.recoveryCommand, /--repo '/);
+  assert.equal(output.behindBasePreflight.recoveryCommand.includes(repoRoot), true);
+  assert.equal(path.isAbsolute(repoRoot), true);
   assert.equal(output.nextState, STATES.REVIEW_PENDING);
   assert.equal(output.rawResponsePath, null);
 
@@ -2482,6 +2491,86 @@ test("review-runner behind-base preflight fails fast before reviewer invocation"
   assert.equal(preflightEvent.state_from, STATES.REVIEW_PENDING);
   assert.equal(preflightEvent.state_to, STATES.REVIEW_PENDING);
   assert.equal(preflightEvent.reviewer_rounds_avoided, 1);
+
+  const textFixture = setupRepo();
+  advanceBaseAfterFork(textFixture.repoRoot);
+  const textResult = spawnSync("node", [
+    SCRIPT,
+    "--repo", textFixture.repoRoot,
+    "--run-id", textFixture.runId,
+    "--pr", "123",
+    "--done-criteria-file", textFixture.doneCriteriaPath,
+    "--diff-file", textFixture.diffPath,
+    "--reviewer-script", writeMarkerReviewerScript(textFixture.repoRoot, "behind-base-text-reviewer.js", path.join(textFixture.repoRoot, "behind-base-text.txt")),
+    "--no-comment",
+  ], { encoding: "utf-8" });
+  assert.equal(textResult.status, 2, textResult.stderr || textResult.stdout);
+  const textRecovery =
+    `node skills/relay-dispatch/scripts/rebrand-evidence.js --repo '${textFixture.repoRoot}' ` +
+    `--run-id ${textFixture.runId} --rebase-onto-base --reason "rebase onto origin/main after base advance"`;
+  assert.match(textResult.stdout, new RegExp(`Recovery command: ${textRecovery.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
+  assert.equal(textResult.stdout.includes("<"), false);
+});
+
+test("review-runner behind-base recovery command clears both preflights on re-entry", () => {
+  const { repoRoot, worktreePath, runId, doneCriteriaPath, diffPath } = setupRepo();
+  execFileSync("git", ["push", "-u", "origin", "issue-42"], { cwd: worktreePath, stdio: "pipe" });
+  advanceBaseAfterFork(repoRoot);
+  const env = { ...process.env, RELAY_HOME: process.env.RELAY_HOME };
+
+  const blocked = spawnSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--run-id", runId,
+    "--pr", "123",
+    "--done-criteria-file", doneCriteriaPath,
+    "--diff-file", diffPath,
+    "--reviewer-script", writeMarkerReviewerScript(repoRoot, "behind-base-oneshot-blocked.js", path.join(repoRoot, "oneshot-blocked.txt")),
+    "--no-comment",
+    "--json",
+  ], { encoding: "utf-8", env });
+  assert.equal(blocked.status, 2, blocked.stderr || blocked.stdout);
+  const blockedOutput = JSON.parse(blocked.stdout);
+  assert.equal(blockedOutput.behindBasePreflight.status, "blocked");
+  const recoveryCommand = blockedOutput.behindBasePreflight.recoveryCommand;
+  assert.ok(recoveryCommand);
+  assert.equal(recoveryCommand.includes("<"), false);
+  assert.match(recoveryCommand, new RegExp(`--run-id ${runId}`));
+  assert.match(recoveryCommand, /--repo '/);
+  assert.equal(recoveryCommand.includes(repoRoot), true);
+  assert.equal(path.isAbsolute(repoRoot), true);
+
+  const repoScriptsRoot = path.resolve(__dirname, "..", "..", "..");
+  // Surfaced command must be copy-pasteable as-is (includes --repo); run it alone.
+  const recoveryResult = spawnSync("sh", ["-c", `${recoveryCommand} --json`], {
+    encoding: "utf-8",
+    cwd: repoScriptsRoot,
+    env,
+  });
+  assert.equal(recoveryResult.status, 0, recoveryResult.stderr || recoveryResult.stdout);
+  const recoveryOutput = JSON.parse(recoveryResult.stdout);
+  assert.equal(recoveryOutput.rebaseOntoBase, true);
+  assert.equal(recoveryOutput.status, "rebranded");
+
+  const markerPath = path.join(repoRoot, "oneshot-reentry-reviewer.txt");
+  const reentry = spawnSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--run-id", runId,
+    "--pr", "123",
+    "--done-criteria-file", doneCriteriaPath,
+    "--diff-file", diffPath,
+    "--reviewer-script", writeMarkerReviewerScript(repoRoot, "behind-base-oneshot-reentry.js", markerPath),
+    "--no-comment",
+    "--json",
+  ], { encoding: "utf-8", env });
+  assert.equal(reentry.status, 0, reentry.stderr || reentry.stdout);
+  const reentryOutput = JSON.parse(reentry.stdout);
+  assert.equal(reentryOutput.behindBasePreflight.status, "pass");
+  assert.equal(reentryOutput.behindBasePreflight.behindCount, 0);
+  assert.equal(reentryOutput.executionEvidencePreflight.status, "pass");
+  assert.equal(fs.existsSync(markerPath), true);
+  assert.equal(reentryOutput.state, STATES.READY_TO_MERGE);
 });
 
 test("review-runner proceeds after the reviewed branch is rebased onto its base", () => {

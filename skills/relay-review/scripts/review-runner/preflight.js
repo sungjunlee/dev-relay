@@ -2,7 +2,18 @@ const { buildExecutionEvidencePreflight } = require("./execution-evidence");
 const { appendRunEvent, EVENTS } = require("../../../relay-dispatch/scripts/relay-events");
 const { git } = require("./common");
 
-function buildBehindBasePreflight({ data, reviewRepoPath, reviewedHeadSha }) {
+function shellQuote(value) {
+  return "'" + String(value).replace(/'/g, "'\\''") + "'";
+}
+
+function buildBehindBaseRecoveryCommand(runId, baseBranch, repoRoot) {
+  return (
+    `node skills/relay-dispatch/scripts/rebrand-evidence.js --repo ${shellQuote(repoRoot)} ` +
+    `--run-id ${runId} --rebase-onto-base --reason "rebase onto origin/${baseBranch} after base advance"`
+  );
+}
+
+function buildBehindBasePreflight({ data, reviewRepoPath, reviewedHeadSha, runRepoPath }) {
   const baseBranch = data?.git?.base_branch || "main";
   const candidates = [`origin/${baseBranch}`, baseBranch];
   let base = null;
@@ -18,14 +29,19 @@ function buildBehindBasePreflight({ data, reviewRepoPath, reviewedHeadSha }) {
   }
 
   const behindCount = Number(git(reviewRepoPath, "rev-list", "--count", `${reviewedHeadSha}..${base}`).trim());
+  const blocked = behindCount > 0;
+  const repoRoot = runRepoPath || data?.paths?.repo_root || null;
   return {
-    status: behindCount > 0 ? "blocked" : "pass",
+    status: blocked ? "blocked" : "pass",
     base,
     behindCount,
-    reason: behindCount > 0
+    reason: blocked
       ? `branch is ${behindCount} ${behindCount === 1 ? "commit" : "commits"} behind ${base}; rebase and re-run`
       : null,
-    nextAction: behindCount > 0 ? "rebase_and_rerun" : null,
+    nextAction: blocked ? "rebase_and_rerun" : null,
+    recoveryCommand: blocked && data?.run_id && repoRoot
+      ? buildBehindBaseRecoveryCommand(data.run_id, baseBranch, repoRoot)
+      : null,
   };
 }
 
@@ -39,7 +55,7 @@ function maybeBlockForBehindBasePreflight({
   round,
   runRepoPath,
 }) {
-  result.behindBasePreflight = buildBehindBasePreflight({ data, reviewRepoPath, reviewedHeadSha });
+  result.behindBasePreflight = buildBehindBasePreflight({ data, reviewRepoPath, reviewedHeadSha, runRepoPath });
   const preflight = result.behindBasePreflight;
   if (preflight.status !== "blocked") return false;
 
@@ -67,6 +83,9 @@ function maybeBlockForBehindBasePreflight({
   } else {
     console.log(`Review preflight blocked round ${round}: ${preflight.reason}`);
     console.log(`  Next action: ${preflight.nextAction}`);
+    if (preflight.recoveryCommand) {
+      console.log(`  Recovery command: ${preflight.recoveryCommand}`);
+    }
   }
   process.exitCode = 2;
   return true;
@@ -120,6 +139,7 @@ function maybeBlockForExecutionEvidencePreflight({
 
 module.exports = {
   buildBehindBasePreflight,
+  buildBehindBaseRecoveryCommand,
   maybeBlockForBehindBasePreflight,
   maybeBlockForExecutionEvidencePreflight,
 };
