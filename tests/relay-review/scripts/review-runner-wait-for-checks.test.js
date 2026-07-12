@@ -261,6 +261,7 @@ test("a normal settle summary does not carry checks_unknown (#970)", () => {
   assert.equal(outcome.pending, false);
   const summary = toResultSummary(outcome);
   assert.equal("checks_unknown" in summary, false, "settled rounds never carry the field");
+  assert.equal("empty_grace_expired" in summary, false, "observed-check settle never carries empty_grace_expired");
 });
 
 test("a normal budget-exhausted summary (no gh errors) does not carry checks_unknown (#970)", () => {
@@ -277,6 +278,7 @@ test("a normal budget-exhausted summary (no gh errors) does not carry checks_unk
   assert.equal(outcome.budgetExhausted, true);
   const summary = toResultSummary(outcome);
   assert.equal("checks_unknown" in summary, false, "a clean budget-exhaustion is not a gh-error exhaustion");
+  assert.equal("empty_grace_expired" in summary, false);
 });
 
 test("parseWaitForChecksSeconds: absent flag -> null, valid -> number, invalid -> throw", () => {
@@ -286,6 +288,125 @@ test("parseWaitForChecksSeconds: absent flag -> null, valid -> number, invalid -
   assert.equal(parseWaitForChecksSeconds("0"), 0);
   assert.throws(() => parseWaitForChecksSeconds("soon"), /non-negative number of seconds/);
   assert.throws(() => parseWaitForChecksSeconds("-5"), /non-negative number of seconds/);
+});
+
+// ---- #979: empty-checks grace window (fresh-push registration race) -------------
+
+test("pollChecksUntilSettled: fresh-push empty → checks appear → green settles without empty_grace_expired (#979 a)", () => {
+  const clock = { t: 0 };
+  // Two empty polls (registration lag), then pending, then green.
+  const timeline = [
+    [],
+    [],
+    [{ name: "unit", bucket: "pending" }],
+    [{ name: "unit", bucket: "pass" }],
+  ];
+  let call = 0;
+  const outcome = pollChecksUntilSettled(
+    { repoPath: ".", prNumber: 1, budgetSeconds: 60, intervalMs: 1000 },
+    {
+      now: () => clock.t,
+      sleep: (ms) => { clock.t += ms; },
+      emptyChecksGraceMs: 30_000,
+      fetchChecks: () => timeline[Math.min(call++, timeline.length - 1)],
+    }
+  );
+  assert.equal(outcome.pending, false, "settled once the registered check went green");
+  assert.equal(outcome.polls, 4, "kept polling through the empty registration window");
+  assert.equal(outcome.waitedMs, 3000, "three 1s sleeps across four polls");
+  assert.deepEqual(outcome.checks, [{ name: "unit", bucket: "pass" }]);
+  assert.equal(outcome.emptyGraceExpired, false);
+  assert.equal(outcome.budgetExhausted, false);
+  const summary = toResultSummary(outcome);
+  assert.equal("empty_grace_expired" in summary, false, "field absent when checks were observed");
+});
+
+test("pollChecksUntilSettled: zero-checks-forever settles at grace expiry with empty_grace_expired (#979 b)", () => {
+  const clock = { t: 0 };
+  const graceMs = 5000;
+  const outcome = pollChecksUntilSettled(
+    { repoPath: ".", prNumber: 1, budgetSeconds: 60, intervalMs: 1000 },
+    {
+      now: () => clock.t,
+      sleep: (ms) => { clock.t += ms; },
+      emptyChecksGraceMs: graceMs,
+      fetchChecks: () => [],
+    }
+  );
+  assert.equal(outcome.pending, false, "settled-empty at grace expiry (CI-less repo path)");
+  assert.equal(outcome.budgetExhausted, false, "grace ended before the wait budget");
+  assert.equal(outcome.emptyGraceExpired, true);
+  assert.equal(outcome.waitedMs, graceMs);
+  assert.ok(outcome.polls >= 2, `polled across the grace window (got ${outcome.polls})`);
+  assert.deepEqual(outcome.pendingCheckNames, []);
+  const summary = toResultSummary(outcome);
+  assert.equal(summary.empty_grace_expired, true);
+  assert.equal(summary.proceeded_with_pending, false);
+  assert.equal("checks_unknown" in summary, false);
+});
+
+test("pollChecksUntilSettled: budget shorter than grace settles at budget with empty_grace_expired (#979 c)", () => {
+  const clock = { t: 0 };
+  const outcome = pollChecksUntilSettled(
+    { repoPath: ".", prNumber: 1, budgetSeconds: 2, intervalMs: 1000 },
+    {
+      now: () => clock.t,
+      sleep: (ms) => { clock.t += ms; },
+      emptyChecksGraceMs: 90_000,
+      fetchChecks: () => [],
+    }
+  );
+  assert.equal(outcome.pending, false, "settled-empty when budget caps the grace");
+  assert.equal(outcome.emptyGraceExpired, true);
+  assert.equal(outcome.waitedMs, 2000, "never exceeds the budget");
+  assert.ok(outcome.waitedMs <= 2000);
+  assert.equal(outcome.budgetExhausted, false, "settled-empty is not proceeded-with-pending");
+  const summary = toResultSummary(outcome);
+  assert.equal(summary.empty_grace_expired, true);
+  assert.equal(summary.proceeded_with_pending, false);
+});
+
+test("pollChecksUntilSettled: budgetSeconds 0 + empty set is poll-once non-blocking with flag (#979 d)", () => {
+  const clock = { t: 0 };
+  let sleeps = 0;
+  const outcome = pollChecksUntilSettled(
+    { repoPath: ".", prNumber: 1, budgetSeconds: 0, intervalMs: 1000 },
+    {
+      now: () => clock.t,
+      sleep: (ms) => { sleeps += 1; clock.t += ms; },
+      emptyChecksGraceMs: 90_000,
+      fetchChecks: () => [],
+    }
+  );
+  assert.equal(outcome.polls, 1, "single poll");
+  assert.equal(sleeps, 0, "never blocks on a zero budget");
+  assert.equal(outcome.waitedMs, 0);
+  assert.equal(outcome.pending, false);
+  assert.equal(outcome.emptyGraceExpired, true, "grace capped by the zero deadline");
+  assert.equal(outcome.budgetExhausted, false);
+  const summary = toResultSummary(outcome);
+  assert.equal(summary.empty_grace_expired, true);
+  assert.equal(summary.proceeded_with_pending, false);
+});
+
+test("pollChecksUntilSettled: gh-error exhaustion still fires with empty checks (#979 / #970)", () => {
+  const clock = { t: 0 };
+  let calls = 0;
+  const outcome = pollChecksUntilSettled(
+    { repoPath: ".", prNumber: 1, budgetSeconds: 600, intervalMs: 1000 },
+    {
+      now: () => clock.t,
+      sleep: (ms) => { clock.t += ms; },
+      emptyChecksGraceMs: 90_000,
+      fetchChecks: () => { calls += 1; throw new Error("gh pr checks failed: API unavailable"); },
+    }
+  );
+  assert.equal(calls, MAX_GH_RETRIES + 1);
+  assert.equal(outcome.checksUnknown, true);
+  assert.equal(outcome.emptyGraceExpired, false, "gh-error path does not claim grace expiry");
+  const summary = toResultSummary(outcome);
+  assert.equal(summary.checks_unknown, true);
+  assert.equal("empty_grace_expired" in summary, false);
 });
 
 // ---- End-to-end review-runner rounds through the fake gh ----
