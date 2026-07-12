@@ -72,6 +72,7 @@ This script:
 - After fetching `origin`, finalize refuses behind-main PRs only when main and the PR touch overlapping files.
 - Refusal leaves state unchanged and reports `next_action: rebase_and_rerun`.
 - `--allow-behind-main --reason "..."` is the audited operator escape hatch.
+- If the remote PR head cannot be resolved (`ls-remote` fails), the gate is skipped fail-open and finalize records `freshness: { skipped: true, reason: "unresolvable_remote_head" }`.
 - Finalize never auto-rebases: a rebase changes the reviewed head and re-enters the existing stale-review path (#884).
 - Accepted residual risk: cross-file semantic coupling is not detected.
 

@@ -1054,28 +1054,45 @@ function main() {
     }
     if (!alreadyMerged) {
       const freshnessRemote = resolveRemoteName(repoPath, branch) || "origin";
-      const prHead = resolveRemoteBranchHead(repoPath, freshnessRemote, branch);
-      const assessment = evaluateMergeFreshness(repoPath, prHead);
-      if (assessment.status === "behind_disjoint") {
+      let prHead = null;
+      try {
+        prHead = resolveRemoteBranchHead(repoPath, freshnessRemote, branch);
+      } catch {
+        // Fail-OPEN on resolution: an unresolvable remote tip must not abort
+        // a legitimate merge. Stale detection stays strict when the tip resolves.
         freshness = {
-          behind_count: assessment.behindCount,
-          overlapping_files: [],
+          skipped: true,
+          reason: "unresolvable_remote_head",
+          remote: freshnessRemote,
+          branch,
         };
-      } else if (assessment.status === "overlap") {
-        if (!allowBehindMain) {
-          if (!dryRun) {
-            appendRunEvent(repoPath, safeData.run_id, {
-              event: EVENTS.MERGE_BLOCKED,
-              state_from: safeData.state,
-              state_to: safeData.state,
-              head_sha: currentHeadSha,
-              round: safeData.review?.rounds || null,
-              reason: "behind_main_overlap",
-            });
+        console.warn(
+          `freshness gate skipped: unresolvable remote PR head for ${freshnessRemote}/${branch}`,
+        );
+      }
+      if (prHead) {
+        const assessment = evaluateMergeFreshness(repoPath, prHead);
+        if (assessment.status === "behind_disjoint") {
+          freshness = {
+            behind_count: assessment.behindCount,
+            overlapping_files: [],
+          };
+        } else if (assessment.status === "overlap") {
+          if (!allowBehindMain) {
+            if (!dryRun) {
+              appendRunEvent(repoPath, safeData.run_id, {
+                event: EVENTS.MERGE_BLOCKED,
+                state_from: safeData.state,
+                state_to: safeData.state,
+                head_sha: currentHeadSha,
+                round: safeData.review?.rounds || null,
+                reason: "behind_main_overlap",
+              });
+            }
+            throw new MergeFreshnessRefusal(assessment);
           }
-          throw new MergeFreshnessRefusal(assessment);
+          freshnessOverrideRequired = true;
         }
-        freshnessOverrideRequired = true;
       }
     }
     if (alreadyMerged) {
