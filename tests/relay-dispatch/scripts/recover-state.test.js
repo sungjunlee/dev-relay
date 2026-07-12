@@ -207,6 +207,28 @@ process.exit(2);
   };
 }
 
+// Simulates a persistent gh failure (rate limit, network blip, auth error, ...): stdout
+// stays empty and the stderr message does not match the "no checks reported" contract,
+// so fetchChecks (skills/relay-dispatch/scripts/wait-for-check.js) cannot normalize the
+// failure into [] and must throw (#970).
+function writeGhPrChecksErrorScript(message = "gh: API rate limit exceeded (HTTP 403)") {
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-gh-checks-error-"));
+  const ghPath = path.join(binDir, "gh");
+  fs.writeFileSync(ghPath, `#!/usr/bin/env node
+const args = process.argv.slice(2);
+if (args[0] === "pr" && args[1] === "checks") {
+  process.stderr.write(${JSON.stringify(message)});
+  process.exit(1);
+}
+console.error("unexpected gh args: " + args.join(" "));
+process.exit(2);
+`, "utf-8");
+  fs.chmodSync(ghPath, 0o755);
+  return {
+    PATH: `${binDir}${path.delimiter}${process.env.PATH || ""}`,
+  };
+}
+
 function stampPendingChecksMarker(manifestPath, marker) {
   const record = readManifest(manifestPath);
   const updated = {
@@ -830,6 +852,63 @@ test("checks-green refuses a marker anchored to a different head (stale marker)"
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /no pending-checks marker anchored to the reviewed head/);
   assert.equal(readManifest(manifestPath).data.state, STATES.CHANGES_REQUESTED);
+});
+
+test("checks-green re-entry refuses when the live PR reports zero checks (#970)", () => {
+  const { repoRoot, manifestPath, runId, initialHead } = setupRepo({
+    state: STATES.CHANGES_REQUESTED,
+    prNumber: 334,
+  });
+  stampPendingChecksMarker(manifestPath, { head_sha: initialHead, round: 1, pending_checks: ["unit"] });
+  const env = { ...process.env, ...writeGhPrChecksScript([]) };
+
+  const result = spawnSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--run-id", runId,
+    "--to", STATES.REVIEW_PENDING,
+    "--reason", "trying checks-green when the PR reports no live checks",
+    "--allow-same-head",
+    "--require-checks-green",
+    "--json",
+  ], { encoding: "utf-8", env });
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /PR #334 reports no live checks/);
+  assert.equal(readManifest(manifestPath).data.state, STATES.CHANGES_REQUESTED, "no transition on refusal");
+  assert.ok(
+    readManifest(manifestPath).data.review.pending_checks_marker,
+    "refusal must not consume the marker"
+  );
+});
+
+test("checks-green re-entry refuses when the live gh pr checks call itself fails (#970)", () => {
+  const { repoRoot, manifestPath, runId, initialHead } = setupRepo({
+    state: STATES.CHANGES_REQUESTED,
+    prNumber: 334,
+  });
+  stampPendingChecksMarker(manifestPath, { head_sha: initialHead, round: 1, pending_checks: ["unit"] });
+  const env = { ...process.env, ...writeGhPrChecksErrorScript() };
+
+  const result = spawnSync("node", [
+    SCRIPT,
+    "--repo", repoRoot,
+    "--run-id", runId,
+    "--to", STATES.REVIEW_PENDING,
+    "--reason", "trying checks-green while gh itself is failing",
+    "--allow-same-head",
+    "--require-checks-green",
+    "--json",
+  ], { encoding: "utf-8", env });
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /cannot fetch live gh pr checks/);
+  assert.match(result.stderr, /API rate limit exceeded/);
+  assert.equal(readManifest(manifestPath).data.state, STATES.CHANGES_REQUESTED, "no transition on refusal");
+  assert.ok(
+    readManifest(manifestPath).data.review.pending_checks_marker,
+    "refusal must not consume the marker"
+  );
 });
 
 test("--allow-same-head rejects passing both evidence flags (mutually exclusive)", () => {

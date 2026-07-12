@@ -129,6 +129,22 @@ function writeVerdictFile(repoRoot, name, verdict) {
   return filePath;
 }
 
+// A reviewer subprocess that fails instead of producing a verdict: it exits non-zero
+// with an unparseable stderr message, which makes invokeReviewer's execFileSync throw
+// and, in turn, makes the detached child's run() reject (#970).
+function writeFailingReviewerScript(repoRoot, name, { delayMs = 0, message = "reviewer crashed: unparseable output" } = {}) {
+  const filePath = path.join(repoRoot, name);
+  const body = `#!/usr/bin/env node
+setTimeout(() => {
+  process.stderr.write(${JSON.stringify(message)});
+  process.exit(1);
+}, ${Number(delayMs)});
+`;
+  fs.writeFileSync(filePath, body, "utf-8");
+  fs.chmodSync(filePath, 0o755);
+  return filePath;
+}
+
 function detachEnv(relayHome) {
   return { ...process.env, RELAY_HOME: relayHome };
 }
@@ -310,6 +326,43 @@ test("a persisted verdict with no manifest apply is recoverable via the document
   const manifest = readManifest(manifestPath).data;
   assert.equal(manifest.state, STATES.CHANGES_REQUESTED, "verdict applied to the manifest via recovery");
   assert.equal(manifest.review.manual_review_reason, "reapply persisted verdict after detached-round kill");
+});
+
+// ---- #970: failed-sentinel path (finishDetachSupervisor's status:"failed" branch) --
+
+test("--detach writes a failed sentinel and the supervisor exits when run() rejects (#970)", async () => {
+  const { repoRoot, relayHome, manifestPath, runId, doneCriteriaPath, diffPath } = setupRepo();
+  const reviewerScript = writeFailingReviewerScript(repoRoot, "reviewer-fail.js", { delayMs: 200 });
+
+  const launched = spawnSync(process.execPath, [
+    SCRIPT, "--repo", repoRoot, "--run-id", runId, "--pr", "123",
+    "--done-criteria-file", doneCriteriaPath, "--diff-file", diffPath,
+    "--reviewer-script", reviewerScript, "--no-comment", "--detach", "--json",
+  ], { encoding: "utf-8", env: detachEnv(relayHome), timeout: 15000 });
+
+  assert.equal(launched.status, 0, `${launched.stderr}\n${launched.stdout}`);
+  const receipt = JSON.parse(launched.stdout);
+  assert.equal(receipt.status, "detached");
+  assert.ok(pidAlive(receipt.pid), "detached supervisor alive right after the receipt");
+
+  // The reviewer subprocess fails (non-zero exit, unparseable stderr) so invokeReviewer's
+  // execFileSync throws inside run(), rejecting the promise dispatchReviewEntry awaits.
+  await waitFor(() => fs.existsSync(receipt.sentinelPath), { message: "failed sentinel" });
+  const sentinel = JSON.parse(fs.readFileSync(receipt.sentinelPath, "utf-8"));
+  assert.equal(sentinel.status, "failed");
+  assert.equal(sentinel.runId, runId);
+  assert.equal(sentinel.round, 1);
+  assert.equal(sentinel.exitCode, 1);
+  assert.equal(typeof sentinel.error, "string");
+  assert.ok(sentinel.error.length > 0, "sentinel carries a non-empty error");
+  assert.ok(sentinel.finishedAt && !Number.isNaN(Date.parse(sentinel.finishedAt)), "sentinel carries an ISO finishedAt");
+
+  // printFailureAndExit calls process.exit(1) after the sentinel is written — the
+  // supervisor must not hang around as a zombie/leaked process.
+  await waitFor(() => !pidAlive(receipt.pid), { message: "detached supervisor process to exit after failure" });
+
+  // The round never applied a verdict, so the manifest stays exactly where it was.
+  assert.equal(readManifest(manifestPath).data.state, STATES.REVIEW_PENDING, "no verdict applied on a failed round");
 });
 
 // ---- DC #5: incompatible-combination rejection ---------------------------
