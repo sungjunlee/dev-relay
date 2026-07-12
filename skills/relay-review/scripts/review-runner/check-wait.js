@@ -22,6 +22,10 @@ const { writeText } = require("./common");
 const DEFAULT_POLL_INTERVAL_MS = 12000;
 const MAX_GH_RETRIES = 3;
 const PENDING_CHECKS_MARKER_KEY = "pending_checks_marker";
+// Fresh-push registration race (#979): GitHub returns [] for seconds after a new
+// head is pushed before check runs register. An empty set must not settle during
+// this window. Overridable via deps.emptyChecksGraceMs for tests only — no CLI/env.
+const EMPTY_CHECKS_GRACE_MS = 90_000;
 
 function resolvePollIntervalMs() {
   const raw = Number(process.env.RELAY_REVIEW_CHECK_POLL_INTERVAL_MS);
@@ -48,12 +52,22 @@ function blockingSleep(ms) {
 // Poll a PR's checks until none are pending, or the budget is exhausted. Transient
 // gh failures are tolerated (never abort the round); a persistent gh failure past
 // the retry budget just proceeds with the checks state unknown.
+//
+// Empty-checks grace (#979): a successful fetch of [] does not settle while still
+// inside both the wait deadline and `start + EMPTY_CHECKS_GRACE_MS`. Once any check
+// has been observed, existing settle/pending/deadline/marker semantics apply.
+// Grace expiry (or deadline, whichever first) with zero checks ever observed →
+// settled-empty plus emptyGraceExpired.
 function pollChecksUntilSettled({ repoPath, prNumber, budgetSeconds, intervalMs }, deps = {}) {
   const now = deps.now || Date.now;
   const wait = deps.sleep || blockingSleep;
   const getChecks = deps.fetchChecks || fetchChecks;
   const start = now();
   const deadline = start + Math.max(0, budgetSeconds) * 1000;
+  const emptyChecksGraceMs = Number.isFinite(deps.emptyChecksGraceMs) && deps.emptyChecksGraceMs >= 0
+    ? deps.emptyChecksGraceMs
+    : EMPTY_CHECKS_GRACE_MS;
+  const graceDeadline = start + emptyChecksGraceMs;
   let checks = [];
   let ghErrors = 0;
   let polls = 0;
@@ -62,6 +76,8 @@ function pollChecksUntilSettled({ repoPath, prNumber, budgetSeconds, intervalMs 
   // distinct from budgetExhausted (deadline reached). Lets callers tell "nothing was
   // pending" (pending_checks: []) apart from "check state unknown due to gh failures".
   let checksUnknown = false;
+  let sawAnyCheck = false;
+  let emptyGraceExpired = false;
   while (true) {
     polls += 1;
     let fetchError = null;
@@ -71,9 +87,23 @@ function pollChecksUntilSettled({ repoPath, prNumber, budgetSeconds, intervalMs 
       fetchError = error;
       ghErrors += 1;
     }
-    if (!fetchError && classifyChecks(checks).pendingChecks.length === 0) {
-      settled = true;
-      break;
+    if (!fetchError) {
+      if (Array.isArray(checks) && checks.length > 0) {
+        sawAnyCheck = true;
+      }
+      if (classifyChecks(checks).pendingChecks.length === 0) {
+        if (sawAnyCheck) {
+          settled = true;
+          break;
+        }
+        // Empty set: do not settle while before both the wait deadline and grace.
+        // Grace is effectively capped by the budget (budgetSeconds: 0 → immediate).
+        if (now() >= deadline || now() >= graceDeadline) {
+          settled = true;
+          emptyGraceExpired = true;
+          break;
+        }
+      }
     }
     if (fetchError && ghErrors > MAX_GH_RETRIES) {
       checksUnknown = true;
@@ -93,6 +123,7 @@ function pollChecksUntilSettled({ repoPath, prNumber, budgetSeconds, intervalMs 
     polls,
     ghErrors,
     checksUnknown,
+    emptyGraceExpired,
   };
 }
 
@@ -108,6 +139,7 @@ function toResultSummary(outcome) {
     checks: outcome.checks,
     pending_checks: outcome.pendingCheckNames,
     ...(outcome.checksUnknown ? { checks_unknown: true } : {}),
+    ...(outcome.emptyGraceExpired ? { empty_grace_expired: true } : {}),
   };
 }
 
@@ -173,6 +205,7 @@ function applyPendingChecksMarker(reviewSection, { appliedVerdict, checkWait, re
 
 module.exports = {
   DEFAULT_POLL_INTERVAL_MS,
+  EMPTY_CHECKS_GRACE_MS,
   MAX_GH_RETRIES,
   PENDING_CHECKS_MARKER_KEY,
   applyPendingChecksMarker,
