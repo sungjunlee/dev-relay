@@ -56,7 +56,7 @@ Checks after a failed check may be skipped and are recorded as `skipped` in `che
 | `ORCHESTRATION_UNAVAILABLE` | 32 | Orchestration absent/disabled/`ok:false` |
 | `MALFORMED_OUTPUT` | 33 | Unparseable or shape-invalid JSON |
 | `EXISTING_ORCHESTRATION_STATE` | 34 | Task or gate `count > 0` (never adopted) |
-| `AMBIGUOUS_GLOBAL_STATE` | 35 | Non-integer `count`, a `count` that disagrees with its own array length, or `_meta.runtimeId` mismatch |
+| `AMBIGUOUS_GLOBAL_STATE` | 35 | Non-integer `count`, a `count` that disagrees with its own array length, or a `_meta.runtimeId` that is missing/empty on any probed response or mismatched across them |
 | `SMOKE_FAILED` | 36 | Smoke provenance verification failed |
 | `SMOKE_CLEANUP_FAILED` | 37 | Smoke cleanup of self-created state failed |
 

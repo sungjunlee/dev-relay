@@ -685,10 +685,30 @@ function probe(options = {}) {
 
   const taskMetaId = metaRuntimeId(taskListShape.payload);
   const gateMetaId = metaRuntimeId(gateListShape.payload);
-  if (
-    (taskMetaId && taskMetaId !== statusRuntimeId) ||
-    (gateMetaId && gateMetaId !== statusRuntimeId)
-  ) {
+  // Cross-runtime consistency: all three responses MUST carry a non-empty
+  // runtime id (status sources the D4-validated runtime.runtimeId; the
+  // orchestration responses source _meta.runtimeId) and every id must be
+  // identical. A missing, empty, or non-string id on any response means the
+  // probe cannot establish that the responses came from one runtime — the SAME
+  // failure as a mismatch → AMBIGUOUS_GLOBAL_STATE, never a silent pass.
+  const runtimeIdSources = [
+    ["status", statusRuntimeId],
+    ["task-list", taskMetaId],
+    ["gate-list", gateMetaId],
+  ];
+  const missingIdSource = runtimeIdSources.find(([, id]) => !isNonEmptyString(id));
+  if (missingIdSource) {
+    recordCheck(result.checks, "existing_state", "failed");
+    skipRemaining(result.checks, ["smoke"]);
+    reject(
+      "AMBIGUOUS_GLOBAL_STATE",
+      `${missingIdSource[0]} response lacked a non-empty runtime id; ` +
+        `cross-runtime consistency cannot be established ` +
+        `(status=${boundedExcerpt(statusRuntimeId)}, task-list=${boundedExcerpt(taskMetaId)}, ` +
+        `gate-list=${boundedExcerpt(gateMetaId)})`,
+    );
+  }
+  if (taskMetaId !== statusRuntimeId || gateMetaId !== statusRuntimeId) {
     recordCheck(result.checks, "existing_state", "failed");
     skipRemaining(result.checks, ["smoke"]);
     reject(

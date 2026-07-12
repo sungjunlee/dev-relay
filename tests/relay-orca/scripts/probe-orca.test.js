@@ -440,6 +440,56 @@ test("D6: _meta.runtimeId mismatch → AMBIGUOUS_GLOBAL_STATE exit 35", () => {
   }
 });
 
+test("Finding 5: task-list missing _meta.runtimeId → AMBIGUOUS_GLOBAL_STATE exit 35", () => {
+  // Otherwise clean/empty state, but the task-list response carries no
+  // _meta.runtimeId. Cross-runtime consistency cannot be established, so a
+  // missing id must classify exactly like a mismatch, never a silent pass.
+  const fake = installFakeOrca({
+    taskList: {
+      id: "x",
+      ok: true,
+      result: { tasks: [], count: 0 },
+    },
+  });
+  try {
+    const result = runProbe(["--json", "--orca-bin", fake.orcaPath]);
+    assert.equal(result.status, REASONS.AMBIGUOUS_GLOBAL_STATE);
+    const body = parseJson(result.stdout);
+    assertExactKeys(body);
+    assert.equal(body.admitted, false);
+    assert.equal(body.blocking_reasons[0].reason_code, "AMBIGUOUS_GLOBAL_STATE");
+    assert.match(body.blocking_reasons[0].message, /task-list/);
+    assertNoPoison(fake);
+  } finally {
+    fake.restore();
+  }
+});
+
+test('Finding 5: gate-list empty-string _meta.runtimeId → AMBIGUOUS_GLOBAL_STATE exit 35', () => {
+  // An empty-string runtime id is as unusable as a missing one for establishing
+  // that the three responses came from a single runtime.
+  const fake = installFakeOrca({
+    gateList: {
+      id: "x",
+      ok: true,
+      result: { gates: [], count: 0 },
+      _meta: { runtimeId: "" },
+    },
+  });
+  try {
+    const result = runProbe(["--json", "--orca-bin", fake.orcaPath]);
+    assert.equal(result.status, REASONS.AMBIGUOUS_GLOBAL_STATE);
+    const body = parseJson(result.stdout);
+    assertExactKeys(body);
+    assert.equal(body.admitted, false);
+    assert.equal(body.blocking_reasons[0].reason_code, "AMBIGUOUS_GLOBAL_STATE");
+    assert.match(body.blocking_reasons[0].message, /gate-list/);
+    assertNoPoison(fake);
+  } finally {
+    fake.restore();
+  }
+});
+
 // ---------------------------------------------------------------------------
 // Finding 1: contradictory list count vs array length → AMBIGUOUS_GLOBAL_STATE
 // ---------------------------------------------------------------------------
