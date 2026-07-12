@@ -545,6 +545,9 @@ function remoteBranchExists(repoPath, remoteName, branch) {
 
 // Resolve the remote branch tip that `gh pr merge` will merge — not the
 // retained worktree HEAD, which can lag on normal ready_to_merge runs.
+// Deliberately the branch tip rather than GitHub's headRefOid: relay pushes every
+// PR branch to its tracked remote, so the tip IS the merge commit; fork and
+// non-origin-head PRs are outside this gate's domain (#966).
 function resolveRemoteBranchHead(repoPath, remoteName, branch) {
   if (!remoteName || !branch) {
     throw new Error("Cannot resolve remote PR head without remote and branch");
