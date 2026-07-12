@@ -62,9 +62,14 @@ function admit(report, options) {
   return result.orca_bin;
 }
 
-function taskTitle(program, task) {
-  // Literal marker `relay-orca:` followed by `<program_id>/<outcome_id>` (D4).
-  return `relay-orca: ${program.id}/${task.outcome_id}`;
+function taskTitle(program, task, programSegment) {
+  // A26: the marker embeds the SAME collision-resistant program SEGMENT used for the
+  // receipt path (sanitized ≤64 prefix + 8-hex sha256), NOT the raw id. A raw id can
+  // contain `/`, so a marker built from `program.id` would let program `alpha` match a
+  // task titled for `alpha/child`. The segment is slash-free, so `status`'s
+  // `title.includes("relay-orca: <segment>/")` foreign-task check can never confuse two
+  // distinct programs. `programSegment` is injected (pure) so lib/ stays subprocess-free.
+  return `relay-orca: ${programSegment(program.id)}/${task.outcome_id}`;
 }
 
 function taskSpec(program, task) {
@@ -92,11 +97,15 @@ function materialize(plan, program, report, orcaBin, options) {
       const task = taskByPlanId.get(planId);
       const deps = task.depends_on.map((dep) => orcaIdByPlanId.get(dep));
       const res = createTask(options.runOrca, orcaBin, {
-        title: taskTitle(program, task),
+        title: taskTitle(program, task, options.programSegment),
         spec: taskSpec(program, task),
         deps,
       });
       if (!res.ok) {
+        // A12: a mid-wave task-create failure raises TASK_MATERIALIZE_FAILED (exit 41)
+        // ONLY after the mappings recorded by earlier successful creates (persisted just
+        // below) are already durable — a later failure never drops an earlier outcome's
+        // orca_task_id.
         reject(
           "TASK_MATERIALIZE_FAILED",
           `orca orchestration task-create failed for outcome ${task.outcome_id}` +
@@ -105,6 +114,10 @@ function materialize(plan, program, report, orcaBin, options) {
       }
       orcaIdByPlanId.set(planId, res.taskId);
       entryByPlanId.get(planId).orca_task_id = res.taskId;
+      // A12: persist the receipt after EACH successful task-create so the mapping is on
+      // disk before the next (possibly failing) create runs. A reconcile can then adopt
+      // the already-created tasks instead of re-materializing them.
+      persistReceipt(report, options);
     }
   }
   return { taskByPlanId, entryByPlanId, orcaIdByPlanId };
@@ -132,6 +145,11 @@ function makeHandlePool(orcaBin, report, options) {
         );
       }
       report.terminals_created.push(term.handle);
+      // A16: persist the receipt IMMEDIATELY after recording the created terminal handle —
+      // before the dispatch that may fail. A dispatch (or provenance) failure right after
+      // auto terminal creation must leave the on-disk receipt already carrying the handle,
+      // so a reconcile can adopt (not re-create) the terminal instead of leaking it.
+      persistReceipt(report, options);
       return term.handle;
     },
   };
@@ -150,11 +168,27 @@ function provenanceMismatch(show, orcaTaskId) {
   return null;
 }
 
+// D2 receipt persistence. The receipt is a minimal, versioned identity/mapping
+// record; it is (re)written after EACH successful task-create (A12) and after each
+// successful dispatch verification — the mapping-changing steps. The atomic write itself lives
+// in the top-level script (options.persistReceipt); this pure module only assembles
+// the mapping-changing "core" from the live report and threads back the resulting
+// path. When no writer is injected (direct-orchestrator unit tests) it is a no-op.
+function persistReceipt(report, options) {
+  if (typeof options.persistReceipt !== "function") return;
+  report.receipt_path = options.persistReceipt({
+    program_id: report.program_id,
+    runtime_id: report.admission.runtime_id,
+    tasks: report.tasks,
+    terminals_created: report.terminals_created,
+  });
+}
+
 // D6 per-task dispatch: inject, verify, then (only after verification) deliver the
 // operator prompt. Any failure records the task `escalated` and re-raises so no
 // further pending task is dispatched; already-verified operators are not touched.
 function dispatchOne(ctx) {
-  const { orcaBin, entry, orcaTaskId, handle, task, program, outcome, options } = ctx;
+  const { orcaBin, entry, orcaTaskId, handle, task, program, outcome, options, report } = ctx;
   const disp = dispatchTask(options.runOrca, orcaBin, { orcaTaskId, handle });
   if (!disp.ok) {
     entry.status = STATUS.ESCALATED;
@@ -171,6 +205,12 @@ function dispatchOne(ctx) {
   }
   entry.dispatch_id = show.dispatchId;
   entry.assignee = show.assignee;
+  // D2/A2: the provenance trio (orca_task_id, dispatch_id, assignee) is now VERIFIED,
+  // so persist the receipt mapping HERE — before prompt delivery. A prompt hand-off
+  // failure below must leave the receipt already carrying the verified provenance (it
+  // is durable coordination metadata, independent of whether the operator prompt lands),
+  // so a later reconcile can recover the dispatch instead of re-materializing it.
+  persistReceipt(report, options);
   const prompt = buildOperatorPrompt(task, program, outcome);
   const sent = sendPrompt(options.runOrca, orcaBin, { orcaTaskId, handle, prompt });
   if (!sent.ok) {
@@ -205,6 +245,7 @@ function dispatchWave(plan, program, report, orcaBin, maps, options) {
       program,
       outcome: outcomeById.get(task.outcome_id) || {},
       options,
+      report,
     });
   }
 }
@@ -218,6 +259,10 @@ function orchestrate(rawProgram, options = {}) {
   const report = initReport(plan);
   try {
     const orcaBin = admit(report, options);
+    // materialize persists the receipt after EACH successful task-create (A12), so the
+    // full outcome→orca_task_id mapping is already durable here; dispatchWave then
+    // re-persists after each provenance verification (A2). No separate post-materialize
+    // write is needed.
     const maps = materialize(plan, program, report, orcaBin, options);
     dispatchWave(plan, program, report, orcaBin, maps, options);
     report.ok = true;

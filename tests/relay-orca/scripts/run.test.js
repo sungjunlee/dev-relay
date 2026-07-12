@@ -4,6 +4,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const { execFileSync } = require("node:child_process");
 const fs = require("node:fs");
+const os = require("node:os");
 const path = require("node:path");
 
 const REPO_ROOT = path.resolve(__dirname, "..", "..", "..");
@@ -13,6 +14,9 @@ const RUN_JS = path.join(SCRIPTS, "run.js");
 const { REASONS } = require(path.join(SCRIPTS, "lib", "run-reasons.js"));
 const { REPORT_KEYS } = require(path.join(SCRIPTS, "lib", "run-report.js"));
 const { compileProgram } = require(path.join(SCRIPTS, "lib", "compile-program.js"));
+const { RECEIPT_KEYS, TASK_KEYS, RECEIPT_NOTE, parseReceipt } = require(path.join(SCRIPTS, "lib", "receipt.js"));
+const { computeRepoSlug } = require(path.join(SCRIPTS, "lib", "repo-slug.js"));
+const { writeReceiptAtomic, programSegment } = require(path.join(SCRIPTS, "receipt-io.js"));
 const {
   buildOperatorPrompt,
   PAYLOAD_FIELDS,
@@ -65,11 +69,87 @@ function runRun(args, env = {}) {
   return result;
 }
 
+// Initialize a REAL (tiny) git repo so `resolveCanonicalRepoRoot` succeeds. Since A24
+// removed the non-git realpath fallback (git-failure now fails closed with exit 52), the
+// hermetic --repo-root MUST be a git checkout. A freshly-init'd repo's git-common-dir is
+// `<root>/.git`, whose parent realpath's back to `<root>` — the same slug the fallback
+// used to yield — so every downstream receipt-path assertion stays byte-stable.
+function initGitRepo(root) {
+  const git = (args) => execFileSync("git", ["-C", root, ...args], { stdio: ["ignore", "pipe", "pipe"] });
+  git(["init", "-q"]);
+  git(["config", "user.email", "t@t.com"]);
+  git(["config", "user.name", "t"]);
+}
+
+// Isolate receipt persistence (#945 D2) into temp roots so run tests never touch the
+// real ~/.relay: a temp programs root + a temp --repo-root (a real git checkout, for a
+// stable git-canonical slug). fake.cleanup() is extended to remove them.
+function makeReceiptWorld() {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "relay-orca-run-receipt-"));
+  const programsRoot = path.join(base, "programs");
+  const repoRoot = path.join(base, "repo");
+  fs.mkdirSync(programsRoot, { recursive: true });
+  fs.mkdirSync(repoRoot, { recursive: true });
+  initGitRepo(repoRoot);
+  return { base, programsRoot, repoRoot, slug: computeRepoSlug(fs.realpathSync(repoRoot)) };
+}
+
+function receiptPathForWorld(world, programId) {
+  // Use the SAME collision-resistant segment encoder run.js/status.js use (#945 A6),
+  // so the expected path stays in lock-step with the production path derivation.
+  return path.join(world.programsRoot, world.slug, programSegment(programId), "receipt.json");
+}
+
+// A22 harness: a REAL primary git checkout plus a LINKED WORKTREE whose `.git` FILE points
+// at the primary's git-common-dir. `--repo-root` is pointed at the worktree; run.js must
+// canonicalize it through git to the PRIMARY root so the receipt lands under the primary
+// slug (`primarySlug`), NOT the worktree-directory slug (`worktreeSlug`).
+function makeGitWorktreeReceiptWorld() {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "relay-orca-run-worktree-"));
+  const programsRoot = path.join(base, "programs");
+  const primary = path.join(base, "primary");
+  const worktree = path.join(base, "wt");
+  fs.mkdirSync(programsRoot, { recursive: true });
+  fs.mkdirSync(primary, { recursive: true });
+  const git = (args, cwd) => execFileSync("git", args, { cwd, stdio: ["ignore", "pipe", "pipe"] });
+  git(["init", "-q"], primary);
+  git(["config", "user.email", "t@t.com"], primary);
+  git(["config", "user.name", "t"], primary);
+  git(["commit", "-q", "--allow-empty", "-m", "init"], primary);
+  git(["worktree", "add", "-q", "--detach", worktree, "HEAD"], primary);
+  const primaryRoot = fs.realpathSync(primary);
+  return {
+    base,
+    programsRoot,
+    primary,
+    worktree,
+    primaryRoot,
+    primarySlug: computeRepoSlug(primaryRoot),
+    worktreeSlug: computeRepoSlug(fs.realpathSync(worktree)),
+  };
+}
+
 function runProgram(fixtureName, extraArgs, scenario, options = {}) {
   const fake = installFakeOrcaRun(scenario || {});
-  const args = ["--json", "--orca-bin", fake.orcaPath, "--program-file", fixture(fixtureName), ...(extraArgs || [])];
-  const result = runRun(args, options.env);
+  const world = makeReceiptWorld();
+  const args = [
+    "--json",
+    "--orca-bin",
+    fake.orcaPath,
+    "--repo-root",
+    world.repoRoot,
+    "--program-file",
+    fixture(fixtureName),
+    ...(extraArgs || []),
+  ];
+  const result = runRun(args, { RELAY_ORCA_PROGRAMS_ROOT: world.programsRoot, ...options.env });
   result.fake = fake;
+  result.world = world;
+  const origCleanup = fake.cleanup;
+  fake.cleanup = () => {
+    origCleanup();
+    fs.rmSync(world.base, { recursive: true, force: true });
+  };
   result.body = result.stdout ? JSON.parse(result.stdout) : null;
   return result;
 }
@@ -300,6 +380,37 @@ test("D11.7: task-create failure → TASK_MATERIALIZE_FAILED exit 41, earlier ta
 });
 
 // ---------------------------------------------------------------------------
+// A12 — partial materialization persists earlier mappings before failing (exit 41)
+// ---------------------------------------------------------------------------
+
+test("A12: a mid-wave task-create failure persists the earlier task's orca_task_id to disk, then exits 41", () => {
+  const r = runProgram(
+    "run-two-wave1.json",
+    ["--operator-handle", "h1", "--operator-handle", "h2"],
+    { taskCreateFailFor: "bravo" },
+  );
+  try {
+    // The run still fails closed with TASK_MATERIALIZE_FAILED (exit 41)...
+    assert.equal(r.status, REASONS.TASK_MATERIALIZE_FAILED);
+    assert.equal(r.body.blocking_reasons[0].reason_code, "TASK_MATERIALIZE_FAILED");
+
+    // ...but because the receipt is persisted after EACH successful task-create (A12),
+    // the receipt ON DISK already carries alpha's orca_task_id even though bravo's
+    // create failed and no post-materialization write ever ran.
+    const receiptPath = receiptPathForWorld(r.world, "epic-run-two");
+    assert.ok(fs.existsSync(receiptPath), "the partial mapping is durable on disk");
+    assert.equal(r.body.receipt_path, receiptPath, "the report echoes the partially-written receipt path");
+    const parsed = parseReceipt(fs.readFileSync(receiptPath, "utf-8"));
+    assert.equal(parsed.ok, true, `partial receipt must parse+validate: ${parsed.reason || ""}`);
+    assert.equal(taskByOutcome(parsed.receipt, "alpha").orca_task_id, "orca-live-alpha", "alpha's mapping survived the later failure");
+    assert.equal(taskByOutcome(parsed.receipt, "bravo").orca_task_id, null, "the failed create leaves bravo unmapped");
+    assertNoPoison(r.fake);
+  } finally {
+    r.fake.cleanup();
+  }
+});
+
+// ---------------------------------------------------------------------------
 // D11.8 / D11.9 / D11.12 — plan-library codes re-raised verbatim
 // ---------------------------------------------------------------------------
 
@@ -426,9 +537,10 @@ test("D4/D7: deps carry real Orca ids in dependency order; later-wave task stays
     assert.equal(taskByOutcome(r.body, "fanout").status, "pending");
     assert.equal(taskByOutcome(r.body, "fanout").orca_task_id, "orca-live-fanout");
     // The fanout task-create passes the real Orca id of its dependency via --deps.
+    // A26: the task title embeds the collision-resistant program SEGMENT, not the raw id.
     const fanoutCreate = r.fake
       .readLog()
-      .find((l) => l.includes("task-create") && l.includes("epic-demo-mixed/fanout"));
+      .find((l) => l.includes("task-create") && l.includes(`${programSegment("epic-demo-mixed")}/fanout`));
     assert.ok(fanoutCreate.includes('--deps ["orca-live-foundation"]'), `deps missing: ${fanoutCreate}`);
     assertNoPoison(r.fake);
   } finally {
@@ -480,6 +592,287 @@ test("usage: unknown flag exits 64", () => {
 test("usage: missing --program-file exits 64", () => {
   const r = runRun(["--json"]);
   assert.equal(r.status, 64);
+});
+
+// ---------------------------------------------------------------------------
+// #945 D1/D2 — receipt persistence wired into the run intent
+// ---------------------------------------------------------------------------
+
+test("D2: a successful run persists a schema-1 receipt (identity/mapping only) and reports receipt_path", () => {
+  const r = runProgram("run-two-wave1.json", ["--operator-handle", "h1", "--operator-handle", "h2"]);
+  try {
+    assert.equal(r.status, 0);
+    const receiptPath = receiptPathForWorld(r.world, "epic-run-two");
+    assert.equal(r.body.receipt_path, receiptPath, "receipt_path echoes the atomically-written receipt");
+    assert.ok(fs.existsSync(receiptPath), "receipt file exists on disk");
+
+    const parsed = parseReceipt(fs.readFileSync(receiptPath, "utf-8"));
+    assert.equal(parsed.ok, true, `receipt must parse+validate: ${parsed.reason || ""}`);
+    const receipt = parsed.receipt;
+    assert.deepEqual(Object.keys(receipt).sort(), [...RECEIPT_KEYS].sort());
+    assert.equal(receipt.schema, 1);
+    assert.equal(receipt.note, RECEIPT_NOTE, "verbatim authority-disclaimer note");
+    assert.equal(receipt.program_id, "epic-run-two");
+    assert.equal(receipt.repo.slug, r.world.slug);
+    assert.equal(receipt.repo.root, fs.realpathSync(r.world.repoRoot));
+    assert.ok(receipt.runtime_id, "runtime_id captured from admission");
+    assert.match(receipt.created_at, /^\d{4}-\d{2}-\d{2}T/);
+    assert.match(receipt.updated_at, /^\d{4}-\d{2}-\d{2}T/);
+    assert.deepEqual(receipt.terminals_created, []);
+
+    // Each task entry carries EXACTLY the identity/mapping keys — never lifecycle
+    // state, PR/issue status, completion flags, prompts, or terminal output.
+    assert.equal(receipt.tasks.length, 2);
+    receipt.tasks.forEach((task) => {
+      assert.deepEqual(Object.keys(task).sort(), [...TASK_KEYS].sort());
+      assert.ok(task.orca_task_id, "materialized orca id recorded");
+      assert.ok(task.dispatch_id, "dispatch id recorded after verification");
+      assert.deepEqual(task.relay_ids, { request: null, run: null, fleet: null });
+    });
+    assert.equal(taskByOutcome(receipt, "alpha").assignee, "h1");
+    assert.equal(taskByOutcome(receipt, "bravo").assignee, "h2");
+
+    // D11-style engine-agnostic proof over the written receipt bytes.
+    const lowered = fs.readFileSync(receiptPath, "utf-8").toLowerCase();
+    FORBIDDEN_ENGINE_TOKENS.forEach((token) =>
+      assert.equal(lowered.includes(token), false, `receipt leaked engine/model token ${token}`),
+    );
+  } finally {
+    r.fake.cleanup();
+  }
+});
+
+test("A22: run --repo-root pointed at a LINKED WORKTREE writes the receipt under the PRIMARY slug (git-canonical repo root)", () => {
+  // The provided --repo-root is a linked worktree whose `.git` FILE points at the primary
+  // checkout's git-common-dir. run.js canonicalizes it through git to the PRIMARY root, so the
+  // receipt lands under the primary slug — the SAME slug status derives from the same worktree
+  // input (both call resolveRepoContext). A plain-realpath resolver would have used the
+  // worktree-directory slug and written the receipt somewhere status could never find it.
+  const world = makeGitWorktreeReceiptWorld();
+  const fake = installFakeOrcaRun({});
+  try {
+    assert.notEqual(world.primarySlug, world.worktreeSlug, "the worktree dir slug differs from the primary slug");
+    const r = runRun(
+      [
+        "--json",
+        "--orca-bin",
+        fake.orcaPath,
+        "--repo-root",
+        world.worktree,
+        "--program-file",
+        fixture("run-two-wave1.json"),
+        "--operator-handle",
+        "h1",
+        "--operator-handle",
+        "h2",
+      ],
+      { RELAY_ORCA_PROGRAMS_ROOT: world.programsRoot },
+    );
+    assert.equal(r.status, 0);
+    const body = JSON.parse(r.stdout);
+    // The receipt is written under the PRIMARY slug, never the worktree-directory slug.
+    const primaryPath = path.join(world.programsRoot, world.primarySlug, programSegment("epic-run-two"), "receipt.json");
+    const worktreePath = path.join(world.programsRoot, world.worktreeSlug, programSegment("epic-run-two"), "receipt.json");
+    assert.equal(body.receipt_path, primaryPath, "receipt_path is under the canonical PRIMARY slug");
+    assert.ok(fs.existsSync(primaryPath), "receipt exists under the primary slug");
+    assert.equal(fs.existsSync(worktreePath), false, "no receipt is written under the worktree-directory slug");
+    const receipt = parseReceipt(fs.readFileSync(primaryPath, "utf-8")).receipt;
+    assert.equal(receipt.repo.slug, world.primarySlug, "receipt records the primary slug");
+    assert.equal(receipt.repo.root, world.primaryRoot, "receipt records the canonical primary root");
+  } finally {
+    fake.cleanup();
+    fs.rmSync(world.base, { recursive: true, force: true });
+  }
+});
+
+test("A24: run --repo-root pointed at a NON-git dir fails closed with RECEIPT_REPO_MISMATCH exit 52 (no realpath fallback)", () => {
+  // A24 removed the non-git realpath fallback: a repo root that cannot be git-canonicalized
+  // must NEVER be silently downgraded to an arbitrary-directory slug (which could read/write
+  // another repo's receipts). run fails closed with the same code status uses.
+  const nonGit = fs.mkdtempSync(path.join(os.tmpdir(), "relay-orca-run-nongit-"));
+  const programsRoot = path.join(nonGit, "programs");
+  fs.mkdirSync(programsRoot, { recursive: true });
+  const fake = installFakeOrcaRun({});
+  try {
+    const r = runRun(
+      [
+        "--json",
+        "--orca-bin",
+        fake.orcaPath,
+        "--repo-root",
+        nonGit,
+        "--program-file",
+        fixture("run-two-wave1.json"),
+        "--operator-handle",
+        "h1",
+        "--operator-handle",
+        "h2",
+      ],
+      { RELAY_ORCA_PROGRAMS_ROOT: programsRoot },
+    );
+    assert.equal(r.status, 52, "git-canonicalization failure exits 52");
+    const body = JSON.parse(r.stdout);
+    assert.equal(body.ok, false);
+    assert.equal(body.reason_code, "RECEIPT_REPO_MISMATCH");
+    assert.match(body.message, /could not be canonicalized/i);
+    // No receipt is written anywhere under the programs root when canonicalization fails.
+    assert.deepEqual(fs.readdirSync(programsRoot), [], "no receipt directory is created on a fail-closed canonicalization");
+    // A27: canonicalization is EAGER — it runs before any admission/materialization mutation,
+    // so exit 52 leaves ZERO mutating Orca invocations in the fixture log (no task-create,
+    // terminal, or dispatch). Before A27 the first task-create ran before the receipt path was
+    // resolved, so a canon failure mutated Orca before failing (dropping that task's mapping).
+    const orcaLog = fake.readLog().join(" ");
+    ["task-create", "terminal", "dispatch"].forEach((mutating) =>
+      assert.equal(orcaLog.includes(mutating), false, `no ${mutating} may run before a fail-closed canonicalization; log=${orcaLog}`),
+    );
+  } finally {
+    fake.cleanup();
+    fs.rmSync(nonGit, { recursive: true, force: true });
+  }
+});
+
+test("D2: an admission rejection never writes a receipt (persist happens after materialization)", () => {
+  const status = readyStatus();
+  status.result.app.running = false;
+  const r = runProgram("run-two-wave1.json", ["--operator-handle", "h1"], { status });
+  try {
+    assert.equal(r.status, REASONS.ADMISSION_REJECTED);
+    assert.equal(r.body.receipt_path, null);
+    assert.equal(fs.existsSync(receiptPathForWorld(r.world, "epic-run-two")), false);
+  } finally {
+    r.fake.cleanup();
+  }
+});
+
+test("A2: a prompt-delivery failure still leaves the receipt carrying the verified provenance trio", () => {
+  // sendPrompt (terminal send) fails AFTER dispatch-show verifies the provenance trio.
+  // The receipt must already carry the non-null (orca_task_id, dispatch_id, assignee)
+  // for the escalated outcome — provenance persists BEFORE prompt delivery (A2) — while
+  // the failure's report semantics stay exactly as before (INJECTION_UNDELIVERED, exit 42).
+  const r = runProgram("valid-single-relay-run.json", ["--operator-handle", "h1"], { terminalSendOkFalse: true });
+  try {
+    assert.equal(r.status, REASONS.INJECTION_UNDELIVERED);
+    assert.equal(r.body.blocking_reasons[0].reason_code, "INJECTION_UNDELIVERED");
+    const task = taskByOutcome(r.body, "outcome-a");
+    assert.equal(task.status, "escalated");
+
+    const receiptPath = receiptPathForWorld(r.world, "epic-demo-single");
+    assert.ok(fs.existsSync(receiptPath), "receipt persisted before the prompt hand-off failed");
+    const parsed = parseReceipt(fs.readFileSync(receiptPath, "utf-8"));
+    assert.equal(parsed.ok, true, `receipt must parse+validate: ${parsed.reason || ""}`);
+    const entry = taskByOutcome(parsed.receipt, "outcome-a");
+    // The full verified provenance trio is durable despite the prompt failure.
+    assert.ok(entry.orca_task_id, "orca_task_id persisted");
+    assert.ok(entry.dispatch_id, "dispatch_id persisted before prompt delivery");
+    assert.ok(entry.assignee, "assignee persisted before prompt delivery");
+    assert.equal(entry.assignee, "h1");
+    assertNoPoison(r.fake);
+  } finally {
+    r.fake.cleanup();
+  }
+});
+
+test("A16: a dispatch failure right after an AUTO-created terminal leaves the on-disk receipt already carrying the handle", () => {
+  // No explicit --operator-handle → run auto-creates a terminal ("orca-term-1"), records
+  // it, and (A16) persists the receipt IMMEDIATELY — BEFORE the dispatch. The dispatch then
+  // fails (INJECTION_UNDELIVERED, exit 42) before any provenance-verification write could run.
+  // Without the immediate persist the mapping-changing writes only happen after dispatch-show,
+  // so the handle would be lost from disk; A16 makes the created terminal durable so a
+  // reconcile can adopt (not re-create) it.
+  const r = runProgram("valid-single-relay-run.json", [], { dispatchFailFor: "orca-live-outcome-a" });
+  try {
+    assert.equal(r.status, REASONS.INJECTION_UNDELIVERED);
+    assert.equal(r.body.blocking_reasons[0].reason_code, "INJECTION_UNDELIVERED");
+    assert.equal(taskByOutcome(r.body, "outcome-a").status, "escalated");
+    // The in-memory report is truthful about the auto-created terminal...
+    assert.deepEqual(r.body.terminals_created, ["orca-term-1"]);
+
+    // ...and so is the receipt ON DISK, written before the failing dispatch.
+    const receiptPath = receiptPathForWorld(r.world, "epic-demo-single");
+    assert.ok(fs.existsSync(receiptPath), "receipt persisted right after the terminal was created");
+    assert.equal(r.body.receipt_path, receiptPath, "the report echoes the persisted receipt path");
+    const parsed = parseReceipt(fs.readFileSync(receiptPath, "utf-8"));
+    assert.equal(parsed.ok, true, `receipt must parse+validate: ${parsed.reason || ""}`);
+    assert.deepEqual(parsed.receipt.terminals_created, ["orca-term-1"], "the created terminal handle is durable despite the dispatch failure");
+    assertNoPoison(r.fake);
+  } finally {
+    r.fake.cleanup();
+  }
+});
+
+test("D10.12: writeReceiptAtomic is temp+rename — a crash during rename leaves no partial receipt", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-orca-atomic-"));
+  const finalPath = path.join(dir, "nested", "receipt.json");
+  const crashingIo = {
+    mkdirSync: fs.mkdirSync,
+    writeFileSync: fs.writeFileSync,
+    renameSync: () => {
+      throw new Error("crash during publish");
+    },
+  };
+  assert.throws(() => writeReceiptAtomic(finalPath, '{"schema":1}\n', crashingIo));
+  assert.equal(fs.existsSync(finalPath), false, "the published receipt never appears when rename crashes");
+  const leftovers = fs.readdirSync(path.dirname(finalPath));
+  assert.ok(leftovers.some((name) => name.startsWith(".receipt.")), "the temp file lives in the SAME directory");
+  assert.ok(leftovers.every((name) => name !== "receipt.json"), "no torn receipt.json is published");
+
+  // Happy path: rename publishes exactly the final file with the full contents.
+  const published = writeReceiptAtomic(finalPath, '{"schema":1}\n');
+  assert.equal(published, finalPath);
+  assert.equal(fs.readFileSync(finalPath, "utf-8"), '{"schema":1}\n');
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("D1/A6: programSegment is traversal-safe AND collision-resistant (sanitized base + stable hash)", () => {
+  // Traversal neutralized: no separators, and `.` / `..` collapse to the `program` base.
+  assert.ok(!programSegment("../../etc/passwd").includes("/"));
+  assert.match(programSegment("../../etc/passwd"), /^\.\.-\.\.-etc-passwd-[0-9a-f]{8}$/);
+  assert.match(programSegment(".."), /^program-[0-9a-f]{8}$/);
+  assert.match(programSegment("."), /^program-[0-9a-f]{8}$/);
+  // `.` and `..` sanitize identically but MUST NOT collide (distinct paths).
+  assert.notEqual(programSegment("."), programSegment(".."));
+
+  // Collision resistance: two ids that sanitize to the SAME base get DISTINCT segments.
+  assert.match(programSegment("a b"), /^a-b-[0-9a-f]{8}$/);
+  assert.match(programSegment("a+b"), /^a-b-[0-9a-f]{8}$/);
+  assert.notEqual(programSegment("a b"), programSegment("a+b"));
+
+  // Stable + deterministic: the same id always yields the same segment.
+  assert.equal(programSegment("epic-941"), programSegment("epic-941"));
+  assert.match(programSegment("epic-941"), /^epic-941-[0-9a-f]{8}$/);
+  assert.match(programSegment("epic.941_v2"), /^epic\.941_v2-[0-9a-f]{8}$/);
+});
+
+test("A15: a very long program id yields a bounded segment that writes+loads a receipt; shared 64-char prefixes stay distinct", () => {
+  const longId = "z".repeat(300);
+  const seg = programSegment(longId);
+  // The readable prefix is capped at 64 chars; the whole segment (≤ 64 + "-" + 8 hex)
+  // stays well under the filesystem per-segment name limit (NAME_MAX ~255).
+  assert.ok(seg.length <= 64 + 1 + 8, `segment must be bounded, got ${seg.length}`);
+  assert.match(seg, /^z{64}-[0-9a-f]{8}$/);
+
+  // The derived path must WRITE and LOAD a receipt without an ENAMETOOLONG error — the
+  // whole point of the bound (the un-truncated ~308-char segment would overflow NAME_MAX).
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-orca-longseg-"));
+  try {
+    const finalPath = path.join(dir, programSegment(longId), "receipt.json");
+    const text = `${JSON.stringify({ schema: 1, program_id: longId }, null, 2)}\n`;
+    const written = writeReceiptAtomic(finalPath, text);
+    assert.equal(written, finalPath);
+    assert.equal(fs.readFileSync(finalPath, "utf-8"), text, "the long-id receipt round-trips on disk");
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+
+  // Two distinct 300-char ids sharing the SAME 64-char readable prefix must NOT collide:
+  // the hash (over the full raw id, not the truncated prefix) keeps them on distinct paths.
+  const sharedPrefix = "p".repeat(64);
+  const idA = `${sharedPrefix}${"a".repeat(236)}`;
+  const idB = `${sharedPrefix}${"b".repeat(236)}`;
+  assert.equal(programSegment(idA).length, programSegment(idB).length);
+  assert.match(programSegment(idA), /^p{64}-[0-9a-f]{8}$/);
+  assert.match(programSegment(idB), /^p{64}-[0-9a-f]{8}$/);
+  assert.notEqual(programSegment(idA), programSegment(idB), "shared 64-char prefixes must resolve to distinct segments");
 });
 
 // Keep the imported parse helper referenced.
