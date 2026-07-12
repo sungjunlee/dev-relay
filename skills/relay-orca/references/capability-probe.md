@@ -51,7 +51,7 @@ Checks after a failed check may be skipped and are recorded as `skipped` in `che
 | reason_code | exit | trigger |
 | --- | --- | --- |
 | `BINARY_NOT_FOUND` | 30 | All resolution branches miss |
-| `RUNTIME_NOT_READY` | 31 | Well-formed status fails a readiness conjunct |
+| `RUNTIME_NOT_READY` | 31 | Well-formed status fails a readiness conjunct, or `status` exits non-zero with shape-valid stdout |
 | `ORCHESTRATION_UNAVAILABLE` | 32 | Orchestration absent/disabled/`ok:false` |
 | `MALFORMED_OUTPUT` | 33 | Unparseable or shape-invalid JSON |
 | `EXISTING_ORCHESTRATION_STATE` | 34 | Task or gate `count > 0` (never adopted) |
@@ -82,10 +82,11 @@ Every subprocess-derived value that lands in a human-readable `message` or
 `remediation` string — readiness conjuncts (`runtime.state`, `runtimeId`,
 `graph.state`), `_meta.runtimeId` mismatch pairs, smoke task/dispatch/assignee
 IDs, the smoke leftover-cleanup ID, and any `stderr`/parse excerpt — is rendered
-through a single helper that truncates to 256 characters and appends a `…`
-marker when truncated. A hung or adversarial CLI therefore cannot inflate a
-blocking message or inject extra lines into it; the eleven top-level JSON keys,
-reason codes, and exit codes are unaffected.
+through a single helper that truncates so the returned excerpt is at most 256
+characters **total, including** the appended `…` marker (255 input chars + the
+marker). A hung or adversarial CLI therefore cannot inflate a blocking message
+or inject extra lines into it; the eleven top-level JSON keys, reason codes, and
+exit codes are unaffected.
 
 ## Guarantees
 
@@ -98,7 +99,10 @@ reason codes, and exit codes are unaffected.
 - **D9 smoke** — runs only under `--smoke`, only after default checks pass; creates exactly
   one synthetic task whose title contains `relay-orca-probe-smoke`; requires non-empty
   task / dispatch / assignee IDs; cleans up only IDs it created via `task-update` to a
-  terminal status; never touches pre-existing IDs and never calls reset.
+  terminal status; never touches pre-existing IDs and never calls reset. When `task-create`
+  returns ok but no task id, the probe fails `SMOKE_FAILED` with `cleaned_up:false` (no id
+  to clean) and its remediation names the `relay-orca-probe-smoke` title marker so the
+  operator can find any untracked synthetic task via `orca orchestration task-list`.
 
 ## Invocation
 

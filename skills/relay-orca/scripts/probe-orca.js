@@ -38,11 +38,12 @@ const JSON_KEYS = Object.freeze([
 // Single bounded-rendering helper (D8). EVERY subprocess-derived value embedded
 // in a human-readable message/remediation must pass through this so an adversarial
 // or wedged CLI cannot inflate or line-inject a blocking message. Collapses
-// whitespace, truncates to EXCERPT_LIMIT, and appends a marker when truncated.
+// whitespace and truncates so the RETURNED excerpt — the `…` marker included — is
+// at most EXCERPT_LIMIT characters total (EXCERPT_LIMIT-1 input chars + marker).
 function boundedExcerpt(value) {
   const text = String(value).replace(/\s+/g, " ").trim();
   if (text.length <= EXCERPT_LIMIT) return text;
-  return `${text.slice(0, EXCERPT_LIMIT)}…`;
+  return `${text.slice(0, EXCERPT_LIMIT - 1)}…`;
 }
 
 function resolveProbeTimeoutMs(env) {
@@ -323,6 +324,7 @@ function runSmoke(result, orcaBin, run, options) {
   let dispatchId = null;
   let assignee = null;
   let smokeError = null;
+  let syntheticTaskMaybeCreated = false;
 
   try {
     const createProc = run(
@@ -354,9 +356,16 @@ function runSmoke(result, orcaBin, run, options) {
       taskId = extractCreatedId(createParsed.value, ["task_id", "taskId", "id"]);
       result.smoke.task_id = taskId;
       if (!isNonEmptyString(taskId)) {
+        // task-create reported ok but returned no id: a synthetic task may have been
+        // created that we can neither reference nor clean up. Fail closed and hand the
+        // operator the title marker so they can find and terminalize it manually.
+        syntheticTaskMaybeCreated = true;
         smokeError = new ProbeError(
           "SMOKE_FAILED",
-          "smoke task-create did not return a non-empty task id",
+          "smoke task-create returned ok without a non-empty task id; a synthetic task " +
+            "may have been created without a returned id",
+          `Locate any untracked synthetic task by its "${SMOKE_TITLE_MARKER}" title marker ` +
+            "via `orca orchestration task-list`, then terminalize it manually (never run reset).",
         );
       }
     }
@@ -449,6 +458,10 @@ function runSmoke(result, orcaBin, run, options) {
           (updateProc.stderr ? `: ${boundedExcerpt(updateProc.stderr)}` : ""),
       );
     }
+  } else if (syntheticTaskMaybeCreated) {
+    // No id came back, so there is nothing to reference and no cleanup is attempted.
+    // Report cleaned_up=false truthfully because an untracked synthetic task may exist.
+    cleanedUp = false;
   } else {
     cleanedUp = true;
   }
@@ -523,6 +536,19 @@ function probe(options = {}) {
     recordCheck(result.checks, "runtime_ready", "failed");
     skipRemaining(result.checks, checkOrder.slice(2));
     reject("MALFORMED_OUTPUT", `orca status --json shape invalid: ${statusShape.message}`);
+  }
+  // A failed readiness command must never admit, even when its (possibly cached or
+  // partial) stdout is shape-valid and claims readiness. Unparseable/empty stdout
+  // already stayed MALFORMED_OUTPUT above; only shape-valid stdout reaches here, so a
+  // non-zero (or signal-killed → status 1) exit is a runtime failure, not malformed.
+  if (statusProc.status !== 0) {
+    recordCheck(result.checks, "runtime_ready", "failed");
+    skipRemaining(result.checks, checkOrder.slice(2));
+    reject(
+      "RUNTIME_NOT_READY",
+      `orca status --json exited non-zero (exit ${statusProc.status})` +
+        (statusProc.stderr ? `: ${boundedExcerpt(statusProc.stderr)}` : ""),
+    );
   }
   const readiness = evaluateReadiness(statusShape.payload);
   result.runtime_id = readiness.runtimeId;

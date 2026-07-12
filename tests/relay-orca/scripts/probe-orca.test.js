@@ -235,6 +235,26 @@ test("D4: missing/empty runtimeId → RUNTIME_NOT_READY exit 31", () => {
   }
 });
 
+test("Finding 1: non-zero status exit with ready-shaped stdout → RUNTIME_NOT_READY exit 31", () => {
+  // status prints a fully ready-shaped JSON body but exits 3: a failed readiness
+  // command must never admit, regardless of what its (possibly cached) stdout claims.
+  const fake = installFakeOrca({ statusExit: 3 });
+  try {
+    const result = runProbe(["--json", "--orca-bin", fake.orcaPath]);
+    assert.equal(result.status, REASONS.RUNTIME_NOT_READY);
+    const body = parseJson(result.stdout);
+    assertExactKeys(body);
+    assert.equal(body.admitted, false);
+    assert.equal(body.runtime_ready, false);
+    const reason = body.blocking_reasons[0];
+    assert.equal(reason.reason_code, "RUNTIME_NOT_READY");
+    assert.match(reason.message, /exit 3/);
+    assertNoPoison(fake);
+  } finally {
+    fake.restore();
+  }
+});
+
 // ---------------------------------------------------------------------------
 // D5 orchestration availability
 // ---------------------------------------------------------------------------
@@ -454,8 +474,16 @@ test("Finding 2: oversized runtime.state is truncated in the RUNTIME_NOT_READY m
     assert.equal(body.runtime_ready, false);
     const reason = body.blocking_reasons[0];
     assert.equal(reason.reason_code, "RUNTIME_NOT_READY");
-    // The interpolated runtime.state was truncated to <=256 chars: no 257-run of x.
-    assert.equal(reason.message.includes("x".repeat(257)), false);
+    // The embedded excerpt is bounded to <=256 chars TOTAL, marker included
+    // (255 filler chars + the single `…` marker).
+    const excerptMatch = reason.message.match(/x+…/);
+    assert.ok(excerptMatch, "bounded excerpt with truncation marker must be present");
+    assert.ok(
+      excerptMatch[0].length <= 256,
+      `embedded excerpt too long: ${excerptMatch[0].length}`,
+    );
+    // No 256-char run of the original filler survives the bound.
+    assert.equal(reason.message.includes("x".repeat(256)), false);
     assert.ok(reason.message.includes("…"), "truncation marker must be present");
     // Whole message stays under a sane cap despite the 10k-char subprocess value.
     assert.ok(reason.message.length <= 512, `message too long: ${reason.message.length}`);
@@ -583,6 +611,40 @@ test("D9: smoke cleanup failure → SMOKE_CLEANUP_FAILED exit 37, leftover id na
     assert.equal(body.blocking_reasons[0].reason_code, "SMOKE_CLEANUP_FAILED");
     assert.match(body.blocking_reasons[0].message, /smoke-task-1/);
     assert.equal(body.smoke.cleaned_up, false);
+    assert.equal(fake.readLog().some((line) => line.includes("reset")), false);
+    assertNoPoison(fake);
+  } finally {
+    fake.restore();
+  }
+});
+
+test("Finding 3: smoke task-create ok without a task id → SMOKE_FAILED exit 36, cleaned_up=false, no cleanup", () => {
+  // task-create reports ok but returns no id: an untracked synthetic task may exist and
+  // there is no id to clean, so cleaned_up must be false and no task-update may run.
+  const fake = installFakeOrca({
+    taskCreate: {
+      id: "task-create-1",
+      ok: true,
+      result: {},
+      _meta: { runtimeId: DEFAULT_RUNTIME_ID },
+    },
+  });
+  try {
+    const result = runProbe(["--json", "--smoke", "--orca-bin", fake.orcaPath]);
+    assert.equal(result.status, REASONS.SMOKE_FAILED);
+    const body = parseJson(result.stdout);
+    assertExactKeys(body);
+    assert.equal(body.admitted, false);
+    assert.equal(body.blocking_reasons[0].reason_code, "SMOKE_FAILED");
+    assert.equal(body.smoke.cleaned_up, false);
+    // No id came back → no task-update cleanup may be attempted.
+    assert.equal(
+      fake.readLog().some((line) => line.includes("task-update")),
+      false,
+      "no task-update may run when no task id was returned",
+    );
+    // Remediation points the operator at the smoke title marker + task-list.
+    assert.match(body.blocking_reasons[0].remediation, /relay-orca-probe-smoke/);
     assert.equal(fake.readLog().some((line) => line.includes("reset")), false);
     assertNoPoison(fake);
   } finally {
