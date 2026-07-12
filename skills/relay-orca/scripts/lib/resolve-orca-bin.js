@@ -24,12 +24,11 @@ function resolveOrcaBin(options = {}) {
   const pathDelimiter = options.pathDelimiter || path.delimiter;
   const orcaBinOverride = options.orcaBinOverride || null;
 
-  if (orcaBinOverride) {
-    if (existsSync(orcaBinOverride)) {
-      return { path: orcaBinOverride, source: "override" };
-    }
-    // Explicit override was requested but missing — do not silently fall through.
-    return { path: null, source: null };
+  // First hit wins (D3). A missing/non-executable override is a MISS, not a
+  // short-circuit: fall through to PATH and then the bundle so BINARY_NOT_FOUND
+  // is raised only when all three ordered branches miss.
+  if (orcaBinOverride && existsSync(orcaBinOverride)) {
+    return { path: orcaBinOverride, source: "override" };
   }
 
   const dirs = pathEnv.split(pathDelimiter).filter(Boolean);

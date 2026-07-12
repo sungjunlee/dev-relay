@@ -35,7 +35,10 @@ Smoke-only (explicit `--smoke`):
 
 ## Check order (first failure wins)
 
-1. Binary resolution (`--orca-bin` → `PATH` → macOS bundle fallback)
+1. Binary resolution (`--orca-bin` → `PATH` → macOS bundle fallback). First hit
+   wins; a `--orca-bin` override that does not exist is a **miss**, not a
+   short-circuit — resolution falls through to `PATH` and then the bundle, and
+   `BINARY_NOT_FOUND` is raised only when all three ordered branches miss.
 2. Runtime readiness (`status --json`)
 3. Orchestration availability (`task-list --json`)
 4. Existing global state (`task-list` + `gate-list` counts / runtimeId consistency)
@@ -72,6 +75,17 @@ classification as any non-zero exit or spawn error of that command (a hung
 `ORCHESTRATION_UNAVAILABLE`), so the stable JSON envelope is still emitted with
 `admitted:false`. Set `RELAY_ORCA_PROBE_TIMEOUT_MS` (positive integer; invalid
 values are ignored and fall back to the default) to shorten the budget in tests.
+
+## Bounded message excerpts (D8)
+
+Every subprocess-derived value that lands in a human-readable `message` or
+`remediation` string — readiness conjuncts (`runtime.state`, `runtimeId`,
+`graph.state`), `_meta.runtimeId` mismatch pairs, smoke task/dispatch/assignee
+IDs, the smoke leftover-cleanup ID, and any `stderr`/parse excerpt — is rendered
+through a single helper that truncates to 256 characters and appends a `…`
+marker when truncated. A hung or adversarial CLI therefore cannot inflate a
+blocking message or inject extra lines into it; the eleven top-level JSON keys,
+reason codes, and exit codes are unaffected.
 
 ## Guarantees
 

@@ -35,10 +35,14 @@ const JSON_KEYS = Object.freeze([
   "smoke",
 ]);
 
-function truncateExcerpt(text) {
-  const value = String(text || "").replace(/\s+/g, " ").trim();
-  if (value.length <= EXCERPT_LIMIT) return value;
-  return value.slice(0, EXCERPT_LIMIT);
+// Single bounded-rendering helper (D8). EVERY subprocess-derived value embedded
+// in a human-readable message/remediation must pass through this so an adversarial
+// or wedged CLI cannot inflate or line-inject a blocking message. Collapses
+// whitespace, truncates to EXCERPT_LIMIT, and appends a marker when truncated.
+function boundedExcerpt(value) {
+  const text = String(value).replace(/\s+/g, " ").trim();
+  if (text.length <= EXCERPT_LIMIT) return text;
+  return `${text.slice(0, EXCERPT_LIMIT)}…`;
 }
 
 function resolveProbeTimeoutMs(env) {
@@ -82,7 +86,7 @@ function parseJsonOutput(stdout) {
   try {
     return { ok: true, value: JSON.parse(text) };
   } catch (error) {
-    return { ok: false, error: error.message, excerpt: truncateExcerpt(text) };
+    return { ok: false, error: error.message, excerpt: boundedExcerpt(text) };
   }
 }
 
@@ -344,7 +348,7 @@ function runSmoke(result, orcaBin, run, options) {
       smokeError = new ProbeError(
         "SMOKE_FAILED",
         `smoke task-create failed` +
-          (createProc.stderr ? `: ${truncateExcerpt(createProc.stderr)}` : ""),
+          (createProc.stderr ? `: ${boundedExcerpt(createProc.stderr)}` : ""),
       );
     } else {
       taskId = extractCreatedId(createParsed.value, ["task_id", "taskId", "id"]);
@@ -382,7 +386,7 @@ function runSmoke(result, orcaBin, run, options) {
         smokeError = new ProbeError(
           "SMOKE_FAILED",
           `smoke dispatch --inject failed` +
-            (dispatchProc.stderr ? `: ${truncateExcerpt(dispatchProc.stderr)}` : ""),
+            (dispatchProc.stderr ? `: ${boundedExcerpt(dispatchProc.stderr)}` : ""),
         );
       } else {
         dispatchId = extractCreatedId(dispatchParsed.value, [
@@ -397,8 +401,8 @@ function runSmoke(result, orcaBin, run, options) {
           smokeError = new ProbeError(
             "SMOKE_FAILED",
             "smoke dispatch provenance incomplete " +
-              `(task_id=${JSON.stringify(taskId)}, dispatch_id=${JSON.stringify(dispatchId)}, ` +
-              `assignee=${JSON.stringify(assignee)})`,
+              `(task_id=${boundedExcerpt(taskId)}, dispatch_id=${boundedExcerpt(dispatchId)}, ` +
+              `assignee=${boundedExcerpt(assignee)})`,
           );
         }
       }
@@ -408,7 +412,7 @@ function runSmoke(result, orcaBin, run, options) {
     else {
       smokeError = new ProbeError(
         "SMOKE_FAILED",
-        `smoke failed: ${truncateExcerpt(error.message)}`,
+        `smoke failed: ${boundedExcerpt(error.message)}`,
       );
     }
   }
@@ -441,8 +445,8 @@ function runSmoke(result, orcaBin, run, options) {
       recordCheck(result.checks, "smoke", "failed");
       reject(
         "SMOKE_CLEANUP_FAILED",
-        `failed to terminalize smoke-created task leftover id=${taskId}` +
-          (updateProc.stderr ? `: ${truncateExcerpt(updateProc.stderr)}` : ""),
+        `failed to terminalize smoke-created task leftover id=${boundedExcerpt(taskId)}` +
+          (updateProc.stderr ? `: ${boundedExcerpt(updateProc.stderr)}` : ""),
       );
     }
   } else {
@@ -531,9 +535,9 @@ function probe(options = {}) {
       "orca status --json did not report a ready runtime " +
         `(ok=${statusShape.payload.ok}, app.running=${statusShape.payload.result.app.running}, ` +
         `runtime.reachable=${statusShape.payload.result.runtime.reachable}, ` +
-        `runtime.state=${JSON.stringify(statusShape.payload.result.runtime.state)}, ` +
-        `runtimeId=${JSON.stringify(statusShape.payload.result.runtime.runtimeId)}, ` +
-        `graph.state=${JSON.stringify(statusShape.payload.result.graph.state)})`,
+        `runtime.state=${boundedExcerpt(statusShape.payload.result.runtime.state)}, ` +
+        `runtimeId=${boundedExcerpt(statusShape.payload.result.runtime.runtimeId)}, ` +
+        `graph.state=${boundedExcerpt(statusShape.payload.result.graph.state)})`,
     );
   }
   recordCheck(result.checks, "runtime_ready", "ok");
@@ -555,7 +559,7 @@ function probe(options = {}) {
       "ORCHESTRATION_UNAVAILABLE",
       `orca orchestration task-list failed or is unknown` +
         (taskListProc.stderr
-          ? `: ${truncateExcerpt(taskListProc.stderr)}`
+          ? `: ${boundedExcerpt(taskListProc.stderr)}`
           : ` (exit ${taskListProc.status})`),
     );
   }
@@ -614,7 +618,7 @@ function probe(options = {}) {
       "ORCHESTRATION_UNAVAILABLE",
       `orca orchestration gate-list failed or is unknown` +
         (gateListProc.stderr
-          ? `: ${truncateExcerpt(gateListProc.stderr)}`
+          ? `: ${boundedExcerpt(gateListProc.stderr)}`
           : ` (exit ${gateListProc.status})`),
     );
   }
@@ -664,7 +668,8 @@ function probe(options = {}) {
     reject(
       "AMBIGUOUS_GLOBAL_STATE",
       `orchestration _meta.runtimeId does not match status runtimeId ` +
-        `(status=${statusRuntimeId}, task-list=${taskMetaId}, gate-list=${gateMetaId})`,
+        `(status=${boundedExcerpt(statusRuntimeId)}, task-list=${boundedExcerpt(taskMetaId)}, ` +
+        `gate-list=${boundedExcerpt(gateMetaId)})`,
     );
   }
 

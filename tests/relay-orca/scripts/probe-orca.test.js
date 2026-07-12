@@ -11,6 +11,7 @@ const REPO_ROOT = path.resolve(__dirname, "..", "..", "..");
 const PROBE_JS = path.join(REPO_ROOT, "skills", "relay-orca", "scripts", "probe-orca.js");
 const {
   resolveOrcaBin,
+  runMain,
   MACOS_BUNDLE_FALLBACK,
   JSON_KEYS,
   SMOKE_TITLE_MARKER,
@@ -140,15 +141,50 @@ test("D3: bundle-fallback branch without a real /Applications install", () => {
 });
 
 test("D3: all resolution branches miss → BINARY_NOT_FOUND exit 30", () => {
-  const result = runProbe(["--json", "--orca-bin", "/tmp/definitely-missing-orca-bin"], {
-    PATH: "/tmp/empty-orca-path-dir-that-does-not-provide-orca",
-  });
-  assert.equal(result.status, REASONS.BINARY_NOT_FOUND);
-  const body = parseJson(result.stdout);
-  assertExactKeys(body);
-  assert.equal(body.admitted, false);
-  assert.equal(body.orca_bin, null);
-  assert.equal(body.blocking_reasons[0].reason_code, "BINARY_NOT_FOUND");
+  // Driven in-process with an injected existsSync so the macOS bundle fallback
+  // deterministically misses even on a host that has a real Orca install — a
+  // missing --orca-bin override now falls through, so the bundle must be stubbed.
+  const prevExit = process.exitCode;
+  try {
+    const result = runMain(["--json", "--orca-bin", "/tmp/definitely-missing-orca-bin"], {
+      existsSync: () => false,
+      pathEnv: "/tmp/empty-orca-path-dir-that-does-not-provide-orca",
+    });
+    assert.equal(process.exitCode, REASONS.BINARY_NOT_FOUND);
+    assertExactKeys(result);
+    assert.equal(result.admitted, false);
+    assert.equal(result.orca_bin, null);
+    assert.equal(result.blocking_reasons[0].reason_code, "BINARY_NOT_FOUND");
+  } finally {
+    process.exitCode = prevExit;
+  }
+});
+
+test("Finding 1: missing --orca-bin override falls through to a PATH orca (first-hit order)", () => {
+  const fake = installFakeOrca();
+  try {
+    // Unit: a missing override is a miss, not a short-circuit → resolves via PATH.
+    const resolved = resolveOrcaBin({
+      orcaBinOverride: "/tmp/definitely-missing-orca-override",
+      pathEnv: process.env.PATH,
+    });
+    assert.equal(resolved.path, fake.orcaPath);
+    assert.equal(resolved.source, "path");
+
+    // End-to-end: probe admits using the PATH binary and reports it as orca_bin.
+    const result = runProbe(
+      ["--json", "--orca-bin", "/tmp/definitely-missing-orca-override"],
+      { PATH: process.env.PATH },
+    );
+    assert.equal(result.status, 0);
+    const body = parseJson(result.stdout);
+    assertExactKeys(body);
+    assert.equal(body.admitted, true);
+    assert.equal(body.orca_bin, fake.orcaPath);
+    assertNoPoison(fake);
+  } finally {
+    fake.restore();
+  }
 });
 
 // ---------------------------------------------------------------------------
@@ -395,6 +431,34 @@ test("Finding 2: hung status call times out → MALFORMED_OUTPUT exit 33, envelo
     assert.equal(body.admitted, false);
     assert.equal(body.blocking_reasons[0].reason_code, "MALFORMED_OUTPUT");
     assert.equal(body.runtime_ready, false);
+    assertNoPoison(fake);
+  } finally {
+    fake.restore();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Finding 2 (D8): subprocess-derived values embedded in messages stay bounded
+// ---------------------------------------------------------------------------
+
+test("Finding 2: oversized runtime.state is truncated in the RUNTIME_NOT_READY message", () => {
+  const status = readyStatus();
+  status.result.runtime.state = "x".repeat(10000); // shape-valid string, but not "ready"
+  const fake = installFakeOrca({ status });
+  try {
+    const result = runProbe(["--json", "--orca-bin", fake.orcaPath]);
+    assert.equal(result.status, REASONS.RUNTIME_NOT_READY);
+    const body = parseJson(result.stdout);
+    assertExactKeys(body);
+    assert.equal(body.admitted, false);
+    assert.equal(body.runtime_ready, false);
+    const reason = body.blocking_reasons[0];
+    assert.equal(reason.reason_code, "RUNTIME_NOT_READY");
+    // The interpolated runtime.state was truncated to <=256 chars: no 257-run of x.
+    assert.equal(reason.message.includes("x".repeat(257)), false);
+    assert.ok(reason.message.includes("…"), "truncation marker must be present");
+    // Whole message stays under a sane cap despite the 10k-char subprocess value.
+    assert.ok(reason.message.length <= 512, `message too long: ${reason.message.length}`);
     assertNoPoison(fake);
   } finally {
     fake.restore();
