@@ -16,7 +16,7 @@ const { REPORT_KEYS, OUTCOME_KEYS, DIAGNOSTIC_CODES } = require(path.join(SCRIPT
 const { classifyOutcome } = require(path.join(SCRIPTS, "lib", "status-classify.js"));
 const { RECEIPT_NOTE } = require(path.join(SCRIPTS, "lib", "receipt.js"));
 const { computeRepoSlug } = require(path.join(SCRIPTS, "lib", "repo-slug.js"));
-const { programSegment, runsRoot: resolveRunsRoot } = require(path.join(SCRIPTS, "receipt-io.js"));
+const { programSegment, runsRoot: resolveRunsRoot, fleetsRoot: resolveFleetsRoot } = require(path.join(SCRIPTS, "receipt-io.js"));
 const { installFakeOrcaStatus } = require(path.join(__dirname, "..", "fixtures", "fake-orca-status.js"));
 const { installFakeGh } = require(path.join(__dirname, "..", "fixtures", "fake-gh.js"));
 const { DEFAULT_RUNTIME_ID } = require(path.join(__dirname, "..", "fixtures", "fake-orca.js"));
@@ -32,16 +32,24 @@ function makeReceipt({ programId, slug, root, runtimeId, tasks }) {
     source: "/tmp/accepted-program.json",
     repo: { slug, root },
     runtime_id: runtimeId || DEFAULT_RUNTIME_ID,
-    tasks: tasks.map((task) => ({
-      outcome_id: task.outcome_id,
-      task_id: task.task_id || `orca-task-${task.outcome_id}`,
-      kind: task.kind || "relay_run",
-      wave: task.wave || 1,
-      orca_task_id: task.orca_task_id === undefined ? `orca-live-${task.outcome_id}` : task.orca_task_id,
-      dispatch_id: task.dispatch_id === undefined ? `disp-${task.outcome_id}` : task.dispatch_id,
-      assignee: task.assignee === undefined ? `term-${task.outcome_id}` : task.assignee,
-      relay_ids: { request: null, run: task.run || null, fleet: task.fleet || null },
-    })),
+    tasks: tasks.map((task) => {
+      const orcaTaskId = task.orca_task_id === undefined ? `orca-live-${task.outcome_id}` : task.orca_task_id;
+      // Default the recorded dispatch id to what the fake orca's dispatch-show returns
+      // for this task ("disp-" + orca_task_id), so a healthy (non-drifted) scenario has
+      // the live dispatch id EQUAL the receipt's — drift (#945 A10) is then modeled by
+      // an explicit dispatch_id override in the scenario.
+      const defaultDispatchId = orcaTaskId ? `disp-${orcaTaskId}` : `disp-${task.outcome_id}`;
+      return {
+        outcome_id: task.outcome_id,
+        task_id: task.task_id || `orca-task-${task.outcome_id}`,
+        kind: task.kind || "relay_run",
+        wave: task.wave || 1,
+        orca_task_id: orcaTaskId,
+        dispatch_id: task.dispatch_id === undefined ? defaultDispatchId : task.dispatch_id,
+        assignee: task.assignee === undefined ? `term-${task.outcome_id}` : task.assignee,
+        relay_ids: { request: null, run: task.run || null, fleet: task.fleet || null },
+      };
+    }),
     terminals_created: [],
     created_at: "2026-07-12T00:00:00.000Z",
     updated_at: "2026-07-12T00:00:00.000Z",
@@ -103,6 +111,9 @@ function buildWorld({ programId, receipt, manifests = [], orcaScenario = {}, ghS
   const repoRoot = path.join(base, "repo");
   const programsRoot = path.join(base, "programs");
   const runsRoot = path.join(base, "runs");
+  // Fleet manifests live under a SEPARATE fleets root (#945 A8), modeling relay's real
+  // split: child run manifests under runs root, fleet manifests under fleets root.
+  const fleetsRoot = path.join(base, "fleets");
   fs.mkdirSync(repoRoot, { recursive: true });
   const slug = computeRepoSlug(fs.realpathSync(repoRoot));
 
@@ -116,10 +127,17 @@ function buildWorld({ programId, receipt, manifests = [], orcaScenario = {}, ghS
   fs.writeFileSync(receiptPath, `${JSON.stringify(receiptObject, null, 2)}\n`, "utf-8");
 
   const runsDir = path.join(runsRoot, slug);
+  const fleetsDir = path.join(fleetsRoot, slug);
   fs.mkdirSync(runsDir, { recursive: true });
+  fs.mkdirSync(fleetsDir, { recursive: true });
+  // A fleet manifest (detected by `fleet_state`) lands under the fleets root; every
+  // ordinary run manifest (including fleet CHILDREN) lands under the runs root.
   manifests.forEach((fields) => {
-    const text = fields.fleet_state !== undefined ? fleetManifestText(fields) : manifestText(fields);
-    fs.writeFileSync(path.join(runsDir, `${fields.run_id}.md`), text, "utf-8");
+    if (fields.fleet_state !== undefined) {
+      fs.writeFileSync(path.join(fleetsDir, `${fields.run_id}.md`), fleetManifestText(fields), "utf-8");
+    } else {
+      fs.writeFileSync(path.join(runsDir, `${fields.run_id}.md`), manifestText(fields), "utf-8");
+    }
   });
 
   const orca = installFakeOrcaStatus({ runtimeId: runtimeId || DEFAULT_RUNTIME_ID, ...orcaScenario });
@@ -130,11 +148,12 @@ function buildWorld({ programId, receipt, manifests = [], orcaScenario = {}, ghS
     repoRoot,
     programsRoot,
     runsRoot,
+    fleetsRoot,
     slug,
     receiptPath,
     orca,
     gh,
-    run(extraArgs = []) {
+    run(extraArgs = [], runOptions = {}) {
       const args = [
         STATUS_JS,
         "--program-id",
@@ -152,7 +171,13 @@ function buildWorld({ programId, receipt, manifests = [], orcaScenario = {}, ghS
       try {
         result.stdout = execFileSync(process.execPath, args, {
           encoding: "utf-8",
-          env: { ...process.env, RELAY_ORCA_PROGRAMS_ROOT: programsRoot, RELAY_ORCA_RUNS_ROOT: runsRoot },
+          env: {
+            ...process.env,
+            RELAY_ORCA_PROGRAMS_ROOT: programsRoot,
+            RELAY_ORCA_RUNS_ROOT: runsRoot,
+            RELAY_ORCA_FLEETS_ROOT: fleetsRoot,
+          },
+          cwd: runOptions.cwd || undefined,
           stdio: "pipe",
         });
       } catch (error) {
@@ -1109,6 +1134,115 @@ test("A5: level 4 default ~/.relay/runs when no override is set", () => {
 });
 
 // ---------------------------------------------------------------------------
+// A8 — fleet manifests resolve from the SEPARATE fleets root (not the runs root)
+// ---------------------------------------------------------------------------
+
+function withFleetsRootEnv(overrides, fn) {
+  const keys = ["RELAY_ORCA_FLEETS_ROOT", "RELAY_FLEETS_BASE", "RELAY_HOME"];
+  const saved = {};
+  keys.forEach((key) => {
+    saved[key] = process.env[key];
+    delete process.env[key];
+  });
+  Object.entries(overrides).forEach(([key, value]) => {
+    if (value !== undefined) process.env[key] = value;
+  });
+  try {
+    return fn();
+  } finally {
+    keys.forEach((key) => {
+      if (saved[key] === undefined) delete process.env[key];
+      else process.env[key] = saved[key];
+    });
+  }
+}
+
+test("A8: fleetsRoot precedence — RELAY_ORCA_FLEETS_ROOT > RELAY_FLEETS_BASE > RELAY_HOME/fleets > default", () => {
+  withFleetsRootEnv({ RELAY_ORCA_FLEETS_ROOT: "/abs/orca-fleets", RELAY_FLEETS_BASE: "/abs/fleets-base", RELAY_HOME: "/abs/relay-home" }, () => {
+    assert.equal(resolveFleetsRoot(), "/abs/orca-fleets");
+  });
+  withFleetsRootEnv({ RELAY_FLEETS_BASE: "/abs/fleets-base", RELAY_HOME: "/abs/relay-home" }, () => {
+    assert.equal(resolveFleetsRoot(), "/abs/fleets-base");
+  });
+  // relay-fleet's actual convention: RELAY_HOME + "/fleets" when no base override is set.
+  withFleetsRootEnv({ RELAY_HOME: "/abs/relay-home" }, () => {
+    assert.equal(resolveFleetsRoot(), path.join("/abs/relay-home", "fleets"));
+  });
+  // A non-absolute higher-precedence value falls THROUGH (not straight to the default).
+  withFleetsRootEnv({ RELAY_ORCA_FLEETS_ROOT: "relative/not/absolute", RELAY_HOME: "/abs/relay-home" }, () => {
+    assert.equal(resolveFleetsRoot(), path.join("/abs/relay-home", "fleets"));
+  });
+  withFleetsRootEnv({}, () => {
+    assert.equal(resolveFleetsRoot(), path.join(os.homedir(), ".relay", "fleets"));
+  });
+});
+
+test("A8: a relay_fleet outcome resolves the fleet manifest from the FLEETS root, children from the RUNS root", () => {
+  // buildWorld routes the `fleet_state` manifest to the fleets root and the children to
+  // the runs root, so a green result proves the split lookup (fleet ← fleets root,
+  // children ← runs root) end to end.
+  const programId = "epic-status-fleet-split";
+  const world = buildWorld({
+    programId,
+    manifests: [
+      { run_id: "fleet-split", fleet_state: "closed", children: [{ leaf_ref: "l1", run_id: "child-s1" }, { leaf_ref: "l2", run_id: "child-s2" }] },
+      { run_id: "child-s1", state: "merged", pr_number: 241, issue_number: 2401 },
+      { run_id: "child-s2", state: "merged", pr_number: 242, issue_number: 2402 },
+    ],
+    orcaScenario: { tasks: [orcaTask(programId, "fs", { status: "completed", worker_done: true })] },
+    ghScenario: {},
+  });
+  const receipt = makeReceipt({ programId, slug: world.slug, root: fs.realpathSync(world.repoRoot), tasks: [{ outcome_id: "fs", kind: "relay_fleet", fleet: "fleet-split" }] });
+  fs.writeFileSync(world.receiptPath, `${JSON.stringify(receipt, null, 2)}\n`, "utf-8");
+  // Prove the fleet manifest lives ONLY under the fleets root, never the runs root.
+  assert.ok(fs.existsSync(path.join(world.fleetsRoot, world.slug, "fleet-split.md")));
+  assert.equal(fs.existsSync(path.join(world.runsRoot, world.slug, "fleet-split.md")), false);
+  try {
+    const r = world.run();
+    assert.equal(r.status, 0);
+    const outcome = outcomeById(r.body, "fs");
+    assert.equal(outcome.state, "complete_with_evidence");
+    assert.deepEqual(outcome.evidence, { fleet_children_terminal: true, fleet_manifest_closed: true });
+  } finally {
+    world.cleanup();
+  }
+});
+
+test("A8: a fleet manifest mistakenly left under the runs root is NOT adopted (split is enforced)", () => {
+  const programId = "epic-status-fleet-wrongroot";
+  const world = buildWorld({
+    programId,
+    manifests: [
+      { run_id: "child-w1", state: "merged", pr_number: 251, issue_number: 2501 },
+      { run_id: "child-w2", state: "merged", pr_number: 252, issue_number: 2502 },
+    ],
+    orcaScenario: { tasks: [orcaTask(programId, "fw", { status: "completed", worker_done: true })] },
+    ghScenario: {},
+  });
+  // Write the fleet manifest into the WRONG (runs) root; status must not find it there.
+  const runsDir = path.join(world.runsRoot, world.slug);
+  fs.writeFileSync(
+    path.join(runsDir, "fleet-wrong.md"),
+    fleetManifestText({ run_id: "fleet-wrong", fleet_state: "closed", children: [{ leaf_ref: "l1", run_id: "child-w1" }, { leaf_ref: "l2", run_id: "child-w2" }] }),
+    "utf-8",
+  );
+  const receipt = makeReceipt({ programId, slug: world.slug, root: fs.realpathSync(world.repoRoot), tasks: [{ outcome_id: "fw", kind: "relay_fleet", fleet: "fleet-wrong" }] });
+  fs.writeFileSync(world.receiptPath, `${JSON.stringify(receipt, null, 2)}\n`, "utf-8");
+  try {
+    const r = world.run();
+    assert.equal(r.status, 0);
+    const outcome = outcomeById(r.body, "fw");
+    // The fleet manifest is not on the fleets root → its evidence stays unknown (null)
+    // and the outcome never completes.
+    assert.notEqual(outcome.state, "complete_with_evidence");
+    assert.equal(outcome.evidence.fleet_manifest_closed, null);
+    assert.equal(outcome.evidence.fleet_children_terminal, null);
+  } finally {
+    world.cleanup();
+  }
+});
+
+// ---------------------------------------------------------------------------
 // A6 — receipt program-id identity check on load
 // ---------------------------------------------------------------------------
 
@@ -1156,6 +1290,130 @@ test("A7: an adversarial 10,000-char PR head is bounded in the PR_CHANGED diagno
     }
     // The raw 10k subprocess string never leaks anywhere into the serialized report.
     assert.equal(JSON.stringify(r.body).includes(huge), false, "no unbounded subprocess value leaks into the report");
+  } finally {
+    world.cleanup();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// A9 — every gh read is scoped to the selected repository (cwd = repo.root)
+// ---------------------------------------------------------------------------
+
+test("A9: every gh read runs in repo.root even when status is invoked from an unrelated cwd", () => {
+  const world = completeWorld("epic-status-ghcwd");
+  const otherCwd = fs.mkdtempSync(path.join(os.tmpdir(), "relay-orca-other-cwd-"));
+  try {
+    const r = world.run([], { cwd: otherCwd });
+    assert.equal(r.status, 0);
+    const cwds = world.gh.readCwdLog();
+    assert.ok(cwds.length > 0, "the fake gh recorded at least one invocation cwd");
+    const expected = fs.realpathSync(world.repoRoot);
+    // Sanity: the caller cwd is genuinely different from the repo root.
+    assert.notEqual(fs.realpathSync(otherCwd), expected);
+    cwds.forEach((cwd) => assert.equal(fs.realpathSync(cwd), expected, "each gh read ran in repo.root, not the caller cwd"));
+  } finally {
+    fs.rmSync(otherCwd, { recursive: true, force: true });
+    world.cleanup();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// A10 — a changed live dispatch id is a stale mapping (MISSING_DISPATCH)
+// ---------------------------------------------------------------------------
+
+test("A10: a changed live dispatch id → MISSING_DISPATCH + stale_missing when durable evidence is non-terminal", () => {
+  const programId = "epic-status-dispatch-drift";
+  const world = buildWorld({
+    programId,
+    manifests: [{ run_id: "run-d", state: "dispatched", pr_number: 500, issue_number: 5000 }],
+    orcaScenario: {
+      tasks: [orcaTask(programId, "d")],
+      // dispatch-show reports a DIFFERENT dispatch id than the receipt recorded (the
+      // task was re-dispatched) → the recorded mapping drifted.
+      dispatch: { "orca-live-d": { dispatch_id: "disp-REDISPATCHED", assignee: "term-d", terminal_present: true } },
+    },
+    ghScenario: { prs: { 500: { state: "OPEN" } }, issues: { 5000: { state: "OPEN" } } },
+  });
+  const receipt = makeReceipt({ programId, slug: world.slug, root: fs.realpathSync(world.repoRoot), tasks: [{ outcome_id: "d", run: "run-d" }] });
+  fs.writeFileSync(world.receiptPath, `${JSON.stringify(receipt, null, 2)}\n`, "utf-8");
+  try {
+    const r = world.run();
+    assert.equal(r.status, 0);
+    assert.equal(outcomeById(r.body, "d").state, "stale_missing");
+    const missing = r.body.diagnostics.filter((x) => x.code === "MISSING_DISPATCH" && x.outcome_id === "d");
+    assert.equal(missing.length, 1, "the drifted mapping emits exactly one MISSING_DISPATCH");
+    // The diagnostic carries BOTH the receipt id and the changed live id.
+    assert.equal(missing[0].ids.dispatch_id, "disp-orca-live-d");
+    assert.equal(missing[0].ids.live_dispatch_id, "disp-REDISPATCHED");
+  } finally {
+    world.cleanup();
+  }
+});
+
+test("A10: the durable-complete variant stays complete_with_evidence despite a drifted dispatch id", () => {
+  const programId = "epic-status-dispatch-drift-complete";
+  const world = buildWorld({
+    programId,
+    manifests: [{ run_id: "run-dc", state: "merged", pr_number: 501, issue_number: 5001 }],
+    orcaScenario: {
+      tasks: [orcaTask(programId, "dc", { status: "completed", worker_done: true })],
+      dispatch: { "orca-live-dc": { dispatch_id: "disp-REDISPATCHED", assignee: "term-dc", terminal_present: true } },
+    },
+    ghScenario: { prs: { 501: { state: "MERGED", mergedAt: "2026-07-12T10:00:00Z" } }, issues: { 5001: { state: "CLOSED" } } },
+  });
+  const receipt = makeReceipt({ programId, slug: world.slug, root: fs.realpathSync(world.repoRoot), tasks: [{ outcome_id: "dc", run: "run-dc" }] });
+  fs.writeFileSync(world.receiptPath, `${JSON.stringify(receipt, null, 2)}\n`, "utf-8");
+  try {
+    const r = world.run();
+    assert.equal(r.status, 0);
+    // Durable evidence still wins over the drifted runtime mapping.
+    assert.equal(outcomeById(r.body, "dc").state, "complete_with_evidence");
+  } finally {
+    world.cleanup();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// A11 — a failed REQUIRED live GitHub read degrades the outcome (never "running")
+// ---------------------------------------------------------------------------
+
+test("A11: a failed required `pr view` read → stale_missing, exit 0", () => {
+  const programId = "epic-status-pr-unreachable";
+  const world = buildWorld({
+    programId,
+    manifests: [{ run_id: "run-pu", state: "dispatched", pr_number: 600, issue_number: 6000 }],
+    orcaScenario: { tasks: [orcaTask(programId, "pu")] },
+    // PR 600 is intentionally ABSENT from the scenario → `gh pr view 600` exits non-zero.
+    ghScenario: { issues: { 6000: { state: "OPEN" } } },
+  });
+  const receipt = makeReceipt({ programId, slug: world.slug, root: fs.realpathSync(world.repoRoot), tasks: [{ outcome_id: "pu", run: "run-pu" }] });
+  fs.writeFileSync(world.receiptPath, `${JSON.stringify(receipt, null, 2)}\n`, "utf-8");
+  try {
+    const r = world.run();
+    assert.equal(r.status, 0, "an unreachable GitHub read never fails the command");
+    assert.equal(outcomeById(r.body, "pu").state, "stale_missing");
+    assert.equal(world.gh.readPoison(), null, "a failed read is not a write poison");
+  } finally {
+    world.cleanup();
+  }
+});
+
+test("A11: a failed required `issue view` read → stale_missing, exit 0", () => {
+  const programId = "epic-status-issue-unreachable";
+  const world = buildWorld({
+    programId,
+    manifests: [{ run_id: "run-iu", state: "dispatched", pr_number: 610, issue_number: 6100 }],
+    orcaScenario: { tasks: [orcaTask(programId, "iu")] },
+    // Issue 6100 is ABSENT → `gh issue view 6100` exits non-zero; the PR read succeeds.
+    ghScenario: { prs: { 610: { state: "OPEN" } } },
+  });
+  const receipt = makeReceipt({ programId, slug: world.slug, root: fs.realpathSync(world.repoRoot), tasks: [{ outcome_id: "iu", run: "run-iu" }] });
+  fs.writeFileSync(world.receiptPath, `${JSON.stringify(receipt, null, 2)}\n`, "utf-8");
+  try {
+    const r = world.run();
+    assert.equal(r.status, 0, "an unreachable GitHub read never fails the command");
+    assert.equal(outcomeById(r.body, "iu").state, "stale_missing");
+    assert.equal(world.gh.readPoison(), null);
   } finally {
     world.cleanup();
   }

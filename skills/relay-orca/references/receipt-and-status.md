@@ -68,10 +68,12 @@ states, PR/issue status, Done Criteria text, completion flags, prompts, or termi
 
 ## `status` authority order (durable truth outranks runtime signals)
 
-1. **Relay manifests** — read from `<runs-root>/<repo-slug>/`. The manifest `state` is the
-   relay lifecycle truth. `<runs-root>` follows relay's own resolution precedence (first hit
-   wins, each candidate must be an **absolute** path; a non-absolute value falls through to
-   the next):
+1. **Relay manifests** — child run manifests are read from `<runs-root>/<repo-slug>/`; fleet
+   manifests are read from a **separate** `<fleets-root>/<repo-slug>/` (see
+   [Fleets-root resolution](#fleets-root-resolution)). The manifest `state` is the relay
+   lifecycle truth. `<runs-root>` follows relay's own resolution precedence (first hit wins,
+   each candidate must be an **absolute** path; a non-absolute value falls through to the
+   next):
    1. `RELAY_ORCA_RUNS_ROOT` (relay-orca-specific override; tests use this)
    2. `RELAY_RUNS_BASE` (relay's runs-base override)
    3. `RELAY_HOME` + `/runs` (relay's home override)
@@ -102,12 +104,15 @@ unclassifiable.
 | `advisory_review` | `advisory_evidence_posted`, `blocking_findings_triaged` | live Orca advisory gate mapped to the outcome's `orca_task_id` |
 | `tracker_reconciliation` | `tracker_reconciled` | mapped relay run manifest terminal AND its tracker issue closed |
 
-- **`relay_fleet`** resolves the fleet manifest via `relay_ids.fleet`. For this leaf, fleet
-  manifests live under the **same runs root** as run manifests. The fleet manifest carries a
+- **`relay_fleet`** resolves the fleet manifest via `relay_ids.fleet`. Fleet manifests live
+  under a **separate fleets root** — `<fleets-root>/<repo-slug>/<fleet-id>.md` — NOT the runs
+  root that holds child run manifests (this mirrors relay-fleet's own layout; see
+  [Fleets-root resolution](#fleets-root-resolution) below). The fleet manifest carries a
   single-line JSON `children` array — `[{"leaf_ref":"…","run_id":"…","dispatch_status":"…"}]`
   (the real relay-fleet shape) — and `fleet_state`. `fleet_manifest_closed` is
   `fleet_state ∈ {merged, closed}`; `fleet_children_terminal` requires ≥1 child and every
-  child `run_id` to resolve to a **terminal** run manifest.
+  child `run_id` to resolve to a **terminal** run manifest **under the runs root** (children
+  are ordinary relay runs; only the fleet manifest itself lives under the fleets root).
 - **Read-only gate kinds** (`integration_gate`, `advisory_review`) are receipt-referenced
   through the outcome's `orca_task_id`: the evidence source is the live decision/review gate
   mapped to that task. A gate "passes"/"triaged" when its live status ∈ `{passed, approved,
@@ -115,6 +120,25 @@ unclassifiable.
   untrusted (mismatch / foreign / unreachable), both checks degrade to `null`.
 - **`tracker_reconciliation`** reconciles the mapped relay run's tracker issue against its
   durable manifest: reconciled = terminal manifest **and** the live issue `CLOSED`.
+
+### Fleets-root resolution
+
+Production relay-fleet manifests do **not** live beside child run manifests. relay-fleet
+writes them to `<fleets-root>/<repo-slug>/<fleet-id>.md`, a directory **separate** from the
+runs root (confirmed in relay-dispatch's `manifest/paths.js`: `getFleetsBase()` returns
+`RELAY_HOME + "/fleets"`, default `~/.relay/fleets`). `status` therefore resolves the two
+roots independently: a `relay_fleet` outcome's `relay_ids.fleet` loads the fleet manifest
+from the **fleets root**, while its children (ordinary relay runs) continue to load from the
+**runs root**. `<fleets-root>` uses the same first-hit-wins, absolute-validated fall-through
+as `<runs-root>`, adapted to relay-fleet's convention:
+
+1. `RELAY_ORCA_FLEETS_ROOT` (relay-orca-specific override; tests use this)
+2. `RELAY_FLEETS_BASE` (the `RELAY_RUNS_BASE` parallel; honored if it is ever set)
+3. `RELAY_HOME` + `/fleets` (relay-fleet's actual convention)
+4. `~/.relay/fleets` (default)
+
+A fleet manifest that is *not* present under the fleets root leaves the outcome's fleet
+evidence `null` (unknown) — it is never silently resolved from the runs root.
 
 ### Failed required Orca reads = unreachable (never fabricated empty state)
 
@@ -126,6 +150,13 @@ fabricated. A failed task-list must never forge a `MISSING_TASK` against a recei
 simply could not be listed, and a failed gate-list must never be treated as "no pending gate"
 (which would silently suppress `awaiting_decision`). A per-task `dispatch-show` failure marks
 only that task's Orca facts **unknown** — never `MISSING_TASK` / `MISSING_DISPATCH`.
+
+The same honesty applies to **GitHub**: a failed **required** live GitHub read for an
+outcome's evidence contract (`gh pr view` feeding `pr_merged`, `gh issue view` feeding
+`issue_closed` / `tracker_reconciled`) leaves that fact `null` and degrades the outcome to
+`stale_missing` rather than reporting a false-clean `running`. The command still exits `0`
+(durable-complete evidence, if any, still wins), and the read never fabricates a fact it
+could not fetch.
 
 ## Foreign / ambiguous runtime is never adopted
 

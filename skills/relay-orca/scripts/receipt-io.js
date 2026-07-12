@@ -65,6 +65,28 @@ function runsRoot() {
   return path.join(os.homedir(), ".relay", "runs");
 }
 
+// Fleet manifests root resolution (#945 A8). relay-fleet manifests live UNDER RELAY'S
+// FLEETS ROOT — a directory SEPARATE from the runs root that holds child run manifests
+// (confirmed in relay-dispatch's manifest/paths.js: `getFleetsBase()` returns
+// `RELAY_HOME + "/fleets"`, defaulting to `~/.relay/fleets`, with NO dedicated
+// fleets-base env of its own). This resolver mirrors the runsRoot precedence pattern
+// (first hit wins; each candidate must be an ABSOLUTE path or it falls through to the
+// next), adapted to that convention so `status` reads fleet manifests from the same
+// place relay-fleet wrote them:
+//   1. RELAY_ORCA_FLEETS_ROOT (relay-orca-specific override; tests use this)
+//   2. RELAY_FLEETS_BASE      (the RELAY_RUNS_BASE parallel; honored if it is ever set)
+//   3. RELAY_HOME + "/fleets" (relay-fleet's actual convention)
+//   4. ~/.relay/fleets        (default)
+function fleetsRoot() {
+  const orcaRoot = absoluteEnvDir(process.env.RELAY_ORCA_FLEETS_ROOT);
+  if (orcaRoot) return orcaRoot;
+  const fleetsBase = absoluteEnvDir(process.env.RELAY_FLEETS_BASE);
+  if (fleetsBase) return fleetsBase;
+  const relayHome = absoluteEnvDir(process.env.RELAY_HOME);
+  if (relayHome) return path.join(relayHome, "fleets");
+  return path.join(os.homedir(), ".relay", "fleets");
+}
+
 // Program id → a single safe path segment (never traverses) that is ALSO
 // collision-resistant (#945 A6). A pure sanitize is lossy — `"a b"` and `"a+b"` both
 // collapse to `"a-b"`, which would silently point two distinct programs at ONE receipt.
@@ -106,10 +128,11 @@ function receiptExists(finalPath) {
   return fs.existsSync(finalPath);
 }
 
-// List relay manifests for a repo slug as { run_id, file, text }. run_id is the
-// manifest filename stem; text is the raw bytes (parsing happens in the pure lib).
-function listManifestFiles(slug) {
-  const dir = path.join(runsRoot(), slug);
+// List relay manifest `.md` files under a root/<slug> directory as
+// { run_id, file, text }. `run_id` is the manifest filename stem (for fleet manifests
+// this stem is the fleet id); text is the raw bytes (parsing happens in the pure lib).
+function listManifestFilesUnder(root, slug) {
+  const dir = path.join(root, slug);
   if (!fs.existsSync(dir)) return [];
   return fs
     .readdirSync(dir)
@@ -119,6 +142,16 @@ function listManifestFiles(slug) {
       file: path.join(dir, name),
       text: fs.readFileSync(path.join(dir, name), "utf-8"),
     }));
+}
+
+// Child run manifests live under the runs root.
+function listManifestFiles(slug) {
+  return listManifestFilesUnder(runsRoot(), slug);
+}
+
+// Fleet manifests live under the SEPARATE fleets root (#945 A8), keyed by fleet id.
+function listFleetManifestFiles(slug) {
+  return listManifestFilesUnder(fleetsRoot(), slug);
 }
 
 // Best-effort GitHub URL construction from the repo's origin remote — read-only and
@@ -145,11 +178,13 @@ module.exports = {
   resolveRepoContext,
   programsRoot,
   runsRoot,
+  fleetsRoot,
   programSegment,
   receiptPathFor,
   writeReceiptAtomic,
   readReceiptFile,
   receiptExists,
   listManifestFiles,
+  listFleetManifestFiles,
   makeUrlResolver,
 };

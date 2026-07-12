@@ -117,13 +117,23 @@ function diag(code, outcomeId, message, ids) {
   return { code, outcome_id: outcomeId ?? null, message: boundedExcerpt(message), ids: boundedIds(ids) };
 }
 
-// A dispatch is "missing" only when dispatch-show actually REPORTED (reachable) yet
-// returned no dispatch id — never when the read itself failed transiently. A failed
-// dispatch-show leaves `dispatchId` undefined AND `reachable` false, so gating on
-// `reachable` avoids a false MISSING_DISPATCH on a flaky/timed-out read (mirrors the
-// strict `terminalPresent === false` check used for MISSING_TERMINAL).
+// The live dispatch id reported by dispatch-show (a non-empty string) or null.
+function liveDispatchId(dispatch) {
+  return dispatch && typeof dispatch.dispatchId === "string" && dispatch.dispatchId ? dispatch.dispatchId : null;
+}
+
+// A dispatch mapping is "missing/stale" only when dispatch-show actually REPORTED
+// (reachable) AND either returned NO dispatch id (the mapping vanished) OR returned a
+// non-empty id DIFFERENT from the receipt's (the mapping drifted — the task was
+// re-dispatched, so the recorded dispatch id no longer points at the live dispatch,
+// #945 A10). It never fires when the read itself failed transiently: a failed
+// dispatch-show leaves `reachable` false, so gating on `reachable` avoids a false
+// MISSING_DISPATCH on a flaky/timed-out read (mirrors the strict `terminalPresent ===
+// false` check used for MISSING_TERMINAL).
 function dispatchMissing(orcaTrusted, receiptTask, dispatch) {
-  return Boolean(orcaTrusted && receiptTask.dispatch_id && dispatch && dispatch.reachable && !dispatch.dispatchId);
+  if (!(orcaTrusted && receiptTask.dispatch_id && dispatch && dispatch.reachable)) return false;
+  const live = liveDispatchId(dispatch);
+  return !live || live !== receiptTask.dispatch_id;
 }
 
 // Emit the receipt↔live detector diagnostics for one outcome (D7). Returns the
@@ -139,7 +149,16 @@ function detectOutcome(facts, evidence, orcaTrusted, complete) {
     diagnostics.push(diag("MISSING_TASK", outcomeId, `Orca task ${orcaTaskId} is absent from the live task-list`, { orca_task_id: orcaTaskId }));
   }
   if (dispatchMissing(orcaTrusted, receiptTask, dispatch)) {
-    diagnostics.push(diag("MISSING_DISPATCH", outcomeId, `dispatch ${receiptTask.dispatch_id} for task ${orcaTaskId} is no longer reported`, { orca_task_id: orcaTaskId, dispatch_id: receiptTask.dispatch_id }));
+    const live = liveDispatchId(dispatch);
+    const drifted = Boolean(live && live !== receiptTask.dispatch_id);
+    const ids = { orca_task_id: orcaTaskId, dispatch_id: receiptTask.dispatch_id };
+    // Carry BOTH the receipt id and the changed live id when the mapping drifted, so a
+    // reconcile can see what it drifted to (both bounded via boundedIds in `diag`).
+    if (drifted) ids.live_dispatch_id = live;
+    const message = drifted
+      ? `dispatch ${receiptTask.dispatch_id} for task ${orcaTaskId} changed to ${live}`
+      : `dispatch ${receiptTask.dispatch_id} for task ${orcaTaskId} is no longer reported`;
+    diagnostics.push(diag("MISSING_DISPATCH", outcomeId, message, ids));
   }
   if (orcaTrusted && receiptTask.assignee && dispatch && dispatch.terminalPresent === false) {
     diagnostics.push(diag("MISSING_TERMINAL", outcomeId, `operator terminal ${receiptTask.assignee} for task ${orcaTaskId} is gone`, { orca_task_id: orcaTaskId, assignee: receiptTask.assignee }));
@@ -186,7 +205,7 @@ function isAbandonedManifest(manifest) {
 }
 
 function outcomeState(facts, evidence, complete, flags, orcaTrusted, isDuplicate) {
-  const { manifest, receiptTask, orcaTaskMissing, dispatch, mappedRunMissing, gateBlocking } = facts;
+  const { manifest, receiptTask, orcaTaskMissing, dispatch, mappedRunMissing, gateBlocking, githubUnreachable } = facts;
   if (flags.staleWorkerDone || flags.issueReopened || flags.prChanged || isDuplicate) return "inconsistent";
   if (complete) return "complete_with_evidence";
   if (manifest && (isEscalatedManifestState(manifest.state) || isAbandonedManifest(manifest))) return "escalated";
@@ -194,7 +213,10 @@ function outcomeState(facts, evidence, complete, flags, orcaTrusted, isDuplicate
   const terminalMissing = orcaTrusted && receiptTask.assignee && dispatch && dispatch.terminalPresent === false;
   const runtimeMappingBroken = orcaTrusted && (orcaTaskMissing || dispatchMissing(orcaTrusted, receiptTask, dispatch) || terminalMissing);
   const orcaUnavailable = !orcaTrusted && Boolean(receiptTask.orca_task_id);
-  if (mappedRunMissing || runtimeMappingBroken || orcaUnavailable) return "stale_missing";
+  // A failed REQUIRED live GitHub read (#945 A11) leaves the outcome's evidence
+  // unknown, so it degrades to stale_missing instead of a false-clean `running`.
+  // Durable-complete already returned above, so it still wins over an unreachable read.
+  if (mappedRunMissing || runtimeMappingBroken || orcaUnavailable || githubUnreachable) return "stale_missing";
   return "running";
 }
 

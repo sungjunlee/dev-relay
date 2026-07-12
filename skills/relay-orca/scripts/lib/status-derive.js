@@ -13,7 +13,7 @@
 const { boundedExcerpt, boundedIds } = require("./bounded-excerpt");
 const { orcaStatus, orcaTaskList, orcaGateList, orcaDispatchShow } = require("./orca-reads");
 const { ghIssueView, ghPrView } = require("./gh-reads");
-const { classifyOutcome, deriveProgramState } = require("./status-classify");
+const { classifyOutcome, deriveProgramState, requiredEvidenceFor } = require("./status-classify");
 const { isTerminalManifestState } = require("./manifest-parse");
 const { orderReport } = require("./status-report");
 
@@ -90,7 +90,7 @@ function gateBlocksTask(gate, orcaTaskId) {
 
 // Build the gathered fact bundle for one receipt task.
 function gatherOutcomeFacts(task, ctx) {
-  const { manifestByRunId, runtime, gh, orca, urlFor } = ctx;
+  const { manifestByRunId, fleetManifestById, runtime, gh, orca, urlFor } = ctx;
   const mappedRunId = task.relay_ids && task.relay_ids.run ? task.relay_ids.run : null;
   let manifest = null;
   let mappedRunMissing = false;
@@ -118,14 +118,15 @@ function gatherOutcomeFacts(task, ctx) {
     ? runtime.gates.filter((gate) => gateBlocksTask(gate, task.orca_task_id))
     : [];
 
-  // relay_fleet outcomes map via relay_ids.fleet to a fleet manifest under the SAME
-  // runs root (see receipt-and-status.md). Its `children` list resolves each child run
-  // to the same manifest set so the classifier can require every child terminal.
+  // relay_fleet outcomes map via relay_ids.fleet to a fleet manifest under the SEPARATE
+  // FLEETS root (see receipt-and-status.md § A8) — NOT the runs root. Its `children`
+  // list still resolves each child run against the runs-root manifest map so the
+  // classifier can require every child terminal.
   const mappedFleetId = task.relay_ids && task.relay_ids.fleet ? task.relay_ids.fleet : null;
   let fleetManifest = null;
   let fleetChildren = [];
   if (mappedFleetId) {
-    fleetManifest = manifestByRunId.get(mappedFleetId) || null;
+    fleetManifest = fleetManifestById.get(mappedFleetId) || null;
     if (fleetManifest && Array.isArray(fleetManifest.fleet_children)) {
       fleetChildren = fleetManifest.fleet_children.map((child) => {
         const childManifest = child.run_id ? manifestByRunId.get(child.run_id) || null : null;
@@ -138,16 +139,27 @@ function gatherOutcomeFacts(task, ctx) {
     }
   }
 
+  // GitHub reachability (#945 A11): a REQUIRED live GitHub read is one whose result
+  // feeds this outcome's evidence contract. `pr_merged` needs `gh pr view`;
+  // `issue_closed` / `tracker_reconciled` need `gh issue view`. When such a read is
+  // attempted (the manifest names the PR/issue AND a gh runner exists) but FAILS,
+  // the fact stays null AND we flag the outcome so it degrades to `stale_missing`
+  // rather than silently classifying `running` on a null fact.
+  const contract = requiredEvidenceFor(task.kind);
+  const prRequired = contract.includes("pr_merged");
+  const issueRequired = contract.includes("issue_closed") || contract.includes("tracker_reconciled");
   let pr = null;
   let issue = null;
   let prUrl = null;
   let issueUrl = null;
+  let githubUnreachable = false;
   if (manifest) {
     if (manifest.pr_number != null) {
       prUrl = urlFor("pull", manifest.pr_number);
       if (gh) {
         const prView = ghPrView(gh, null, manifest.pr_number, {});
         if (prView.ok) pr = prView;
+        else if (prRequired) githubUnreachable = true;
       }
     }
     if (manifest.issue_number != null) {
@@ -155,6 +167,7 @@ function gatherOutcomeFacts(task, ctx) {
       if (gh) {
         const issueView = ghIssueView(gh, null, manifest.issue_number, {});
         if (issueView.ok) issue = issueView;
+        else if (issueRequired) githubUnreachable = true;
       }
     }
   }
@@ -176,6 +189,7 @@ function gatherOutcomeFacts(task, ctx) {
     issue,
     prUrl,
     issueUrl,
+    githubUnreachable,
   };
 }
 
@@ -234,15 +248,18 @@ function repairForOutcome(entry) {
   return repairs;
 }
 
-// Assemble the full D9 report from the receipt + injected read adapters.
-function deriveStatusReport({ receipt, programId, receiptPath, manifests, orca, gh, urlFor }) {
+// Assemble the full D9 report from the receipt + injected read adapters. `manifests`
+// are the child run manifests (runs root); `fleetManifests` are the fleet manifests
+// from the SEPARATE fleets root (#945 A8), keyed by fleet id.
+function deriveStatusReport({ receipt, programId, receiptPath, manifests, fleetManifests = [], orca, gh, urlFor }) {
   const resolvedUrlFor = typeof urlFor === "function" ? urlFor : () => null;
   const manifestByRunId = new Map(manifests.filter((entry) => entry.run_id).map((entry) => [entry.run_id, entry.parsed]));
+  const fleetManifestById = new Map(fleetManifests.filter((entry) => entry.run_id).map((entry) => [entry.run_id, entry.parsed]));
   const runtime = attributeRuntime({ receipt, programId, orca });
   const { diagnostics: duplicateDiagnostics, duplicateOutcomeIds } = detectDuplicateMappings(receipt.tasks);
 
   const entries = receipt.tasks.map((task) => {
-    const facts = gatherOutcomeFacts(task, { manifestByRunId, runtime, gh, orca, urlFor: resolvedUrlFor });
+    const facts = gatherOutcomeFacts(task, { manifestByRunId, fleetManifestById, runtime, gh, orca, urlFor: resolvedUrlFor });
     return classifyOutcome(facts, { orcaTrusted: runtime.orcaTrusted, isDuplicate: duplicateOutcomeIds.has(task.outcome_id) });
   });
 

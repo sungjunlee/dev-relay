@@ -23,7 +23,7 @@ function defaultGhScenario(overrides = {}) {
   };
 }
 
-function fakeGhScript({ scenarioPath, logPath, poisonPath }) {
+function fakeGhScript({ scenarioPath, logPath, poisonPath, cwdLogPath }) {
   return `#!/usr/bin/env node
 "use strict";
 const fs = require("fs");
@@ -31,9 +31,14 @@ const args = process.argv.slice(2);
 const scenarioPath = ${JSON.stringify(scenarioPath)};
 const logPath = ${JSON.stringify(logPath)};
 const poisonPath = ${JSON.stringify(poisonPath)};
+const cwdLogPath = ${JSON.stringify(cwdLogPath)};
 
 function appendLog(line) { if (logPath) fs.appendFileSync(logPath, line + "\\n", "utf-8"); }
+// Record the cwd each invocation ran under so a test can prove every gh read is
+// scoped to the selected repository root (#945 A9), independent of the caller's cwd.
+function appendCwd() { if (cwdLogPath) fs.appendFileSync(cwdLogPath, process.cwd() + "\\n", "utf-8"); }
 appendLog(args.join(" "));
+appendCwd();
 function loadScenario() { return JSON.parse(fs.readFileSync(scenarioPath, "utf-8")); }
 function emit(payload, exitCode) { if (payload !== undefined && payload !== null) process.stdout.write(JSON.stringify(payload)); process.exit(typeof exitCode === "number" ? exitCode : 0); }
 function poison(code) { if (poisonPath) fs.writeFileSync(poisonPath, "GH_WRITE_INVOKED:" + args.join(" "), "utf-8"); process.stderr.write("POISON: gh non-read subcommand must never run\\n"); process.exit(code); }
@@ -72,9 +77,10 @@ function installFakeGh(scenarioOverrides = {}, options = {}) {
   const scenarioPath = path.join(dir, "scenario.json");
   const logPath = path.join(dir, "invocations.log");
   const poisonPath = path.join(dir, "poison.txt");
+  const cwdLogPath = path.join(dir, "cwd.log");
   const scenario = defaultGhScenario(scenarioOverrides);
   fs.writeFileSync(scenarioPath, JSON.stringify(scenario, null, 2), "utf-8");
-  fs.writeFileSync(ghPath, fakeGhScript({ scenarioPath, logPath, poisonPath }), "utf-8");
+  fs.writeFileSync(ghPath, fakeGhScript({ scenarioPath, logPath, poisonPath, cwdLogPath }), "utf-8");
   fs.chmodSync(ghPath, 0o755);
 
   return {
@@ -83,10 +89,15 @@ function installFakeGh(scenarioOverrides = {}, options = {}) {
     scenarioPath,
     logPath,
     poisonPath,
+    cwdLogPath,
     scenario,
     readLog() {
       if (!fs.existsSync(logPath)) return [];
       return fs.readFileSync(logPath, "utf-8").split("\n").filter(Boolean);
+    },
+    readCwdLog() {
+      if (!fs.existsSync(cwdLogPath)) return [];
+      return fs.readFileSync(cwdLogPath, "utf-8").split("\n").filter(Boolean);
     },
     readPoison() {
       if (!fs.existsSync(poisonPath)) return null;

@@ -17,6 +17,7 @@ const {
   readReceiptFile,
   receiptExists,
   listManifestFiles,
+  listFleetManifestFiles,
   makeUrlResolver,
 } = require("./receipt-io");
 const { resolveOrcaBin } = require("./lib/resolve-orca-bin");
@@ -83,7 +84,13 @@ function assertGhReadOnly(argv) {
   }
 }
 
-function makeRunner(bin, assertReadOnly) {
+// Every read runner is pinned to the selected repository's root via `cwd` (#945 A9).
+// A repo-scoped `gh` invocation resolves the PR/issue against THIS repo's origin
+// remote, so running `status` from an unrelated directory can never read a different
+// repository's GitHub state. `cwd` is the slug-verified canonical repo root (the
+// receipt's repo, guaranteed on disk and matched against the receipt slug before any
+// read runs).
+function makeRunner(bin, assertReadOnly, cwd) {
   if (!bin) return null;
   return (_bin, args) => {
     const argv = (Array.isArray(args) ? args : []).map(String);
@@ -92,6 +99,7 @@ function makeRunner(bin, assertReadOnly) {
       const stdout = execFileSync(bin, argv, {
         encoding: "utf-8",
         stdio: ["ignore", "pipe", "pipe"],
+        cwd: cwd || undefined,
         timeout: READ_TIMEOUT_MS,
         maxBuffer: READ_MAX_BUFFER,
       });
@@ -171,7 +179,15 @@ function main() {
     if (receipt.repo && receipt.repo.slug !== repo.slug) {
       reject("RECEIPT_REPO_MISMATCH", `receipt repo.slug ${receipt.repo.slug} does not match the current repo slug ${repo.slug}`);
     }
+    // Child run manifests come from the runs root; fleet manifests come from the
+    // SEPARATE fleets root (#945 A8). A fleet outcome's `relay_ids.fleet` resolves to a
+    // fleet manifest here, while its children still resolve against the runs-root map.
     const manifests = listManifestFiles(repo.slug).map((entry) => ({
+      run_id: entry.run_id,
+      text: entry.text,
+      parsed: parseManifest(entry.text),
+    }));
+    const fleetManifests = listFleetManifestFiles(repo.slug).map((entry) => ({
       run_id: entry.run_id,
       text: entry.text,
       parsed: parseManifest(entry.text),
@@ -181,8 +197,9 @@ function main() {
       programId: opts.programId,
       receiptPath,
       manifests,
-      orca: makeRunner(resolveOrca(opts), assertOrcaReadOnly),
-      gh: makeRunner(resolveGhBin(opts), assertGhReadOnly),
+      fleetManifests,
+      orca: makeRunner(resolveOrca(opts), assertOrcaReadOnly, repo.root),
+      gh: makeRunner(resolveGhBin(opts), assertGhReadOnly, repo.root),
       urlFor: makeUrlResolver(repo.root),
     });
   } catch (error) {
