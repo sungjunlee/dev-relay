@@ -1,0 +1,15 @@
+{
+  "program": {
+    "id": "epic-run-three",
+    "source": "file:///tmp/epic-run-three.md",
+    "repo": "example/repo",
+    "tracker": "github",
+    "concurrency": 2,
+    "exit_gates": ["all three issues merged and closed"],
+    "outcomes": [
+      { "id": "alpha", "issue": 4001, "task_kind": "relay_run", "accepted_outcomes": ["alpha merged"], "depends_on": [] },
+      { "id": "bravo", "issue": 4002, "task_kind": "relay_run", "accepted_outcomes": ["bravo merged"], "depends_on": [] },
+      { "id": "charlie", "issue": 4003, "task_kind": "relay_run", "accepted_outcomes": ["charlie merged"], "depends_on": [] }
+    ]
+  }
+}

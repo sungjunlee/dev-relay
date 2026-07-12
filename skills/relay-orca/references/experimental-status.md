@@ -13,10 +13,10 @@ relay use never routes through relay-orca.
 - The OpenAI agent interface pins `allow_implicit_invocation: false` (see
   [../agents/openai.yaml](../agents/openai.yaml)), so no agent may auto-select relay-orca from
   ordinary relay, relay-fleet, delegation, implementation, or planning requests (D5).
-- `plan` requires only Node.js 18+ and is read-only. The runtime intents
-  (`run`/`status`/`resume`/`stop`) additionally require the experimental Orca orchestration
-  surface and remain gated on the Orca capability probe; they are contract-only until a later
-  leaf (#944) delivers them.
+- `plan` requires only Node.js 18+ and is read-only. `run` (#944) additionally requires the
+  experimental Orca orchestration surface and is gated on the Orca capability probe; the
+  remaining runtime intents (`status`/`resume`/`stop`) stay contract-only until later leaves
+  (#945/#946) deliver them.
 
 ## Pilot boundary
 
