@@ -13,6 +13,7 @@ const {
 const { resolveExecutorDefaultModel } = require("../../../relay-dispatch/scripts/executor-model-config");
 const { hashFileSha256 } = require("../../../relay-dispatch/scripts/execution-evidence");
 const { appendRunEvent, appendUnregisteredRouteUsedEvent, EVENTS, readRunEvents } = require("../../../relay-dispatch/scripts/relay-events");
+const { writeAdvisoryLaneLease } = require("../../../relay-dispatch/scripts/run-runtime-state");
 const { parseAdvisoryReview, validateAdvisoryProfile } = require("../advisory-review-schema");
 const { captureGitStatus, resolveReviewerScript } = require("./reviewer-invoke");
 const { writeText } = require("./common");
@@ -213,6 +214,16 @@ function startAdvisoryReview({
     stdio: "ignore",
   });
   child.unref();
+  // detached: true → child is its own process-group leader (pgid == pid).
+  // Persist a lane lease distinct from the round lease (lease.json / #951).
+  if (Number.isInteger(child.pid) && child.pid > 0) {
+    writeAdvisoryLaneLease(runDir, {
+      pid: child.pid,
+      pgid: child.pid,
+      round,
+      reviewer: artifactName,
+    });
+  }
 
   return {
     ...request,
