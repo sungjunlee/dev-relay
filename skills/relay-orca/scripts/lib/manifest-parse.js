@@ -64,8 +64,33 @@ function asObject(value) {
   return value && typeof value === "object" && !Array.isArray(value) ? value : {};
 }
 
+// Parse a relay-fleet manifest's `children:` frontmatter value (#945 D4 relay_fleet).
+// Real fleet manifests store the child references as a single-line JSON array, e.g.
+// `children: [{"leaf_ref":"...","run_id":"...","dispatch_status":"dispatched"}]`.
+// parseFrontmatter keeps that value as a raw scalar string, so we JSON.parse it here
+// and normalize each child to `{ leaf_ref, run_id }`. Anything unparseable → []
+// (a run manifest with no `children` key yields [] and never throws).
+function parseFleetChildren(raw) {
+  if (typeof raw !== "string" || raw.trim() === "") return [];
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(parsed)) return [];
+  return parsed
+    .filter((child) => child && typeof child === "object")
+    .map((child) => ({
+      leaf_ref: typeof child.leaf_ref === "string" ? child.leaf_ref : null,
+      run_id: typeof child.run_id === "string" ? child.run_id : null,
+    }));
+}
+
 // Extract the durable lifecycle facts `status` reconciles against. Every field is
 // null when absent so the classifier can distinguish "unknown" from a real value.
+// Fleet-only fields (`fleet_state`, `fleet_children`) are populated for relay-fleet
+// manifests and stay null/[] for ordinary relay run manifests.
 function parseManifest(text) {
   const frontmatter = parseFrontmatter(text);
   const git = asObject(frontmatter.git);
@@ -78,6 +103,9 @@ function parseManifest(text) {
     base_branch: typeof git.base_branch === "string" ? git.base_branch : null,
     head_sha: typeof git.head_sha === "string" ? git.head_sha : null,
     issue_number: typeof issue.number === "number" ? issue.number : null,
+    fleet_id: typeof frontmatter.fleet_id === "string" ? frontmatter.fleet_id : null,
+    fleet_state: typeof frontmatter.fleet_state === "string" ? frontmatter.fleet_state : null,
+    fleet_children: parseFleetChildren(frontmatter.children),
   };
 }
 
@@ -93,6 +121,7 @@ module.exports = {
   TERMINAL_MANIFEST_STATES,
   ESCALATED_MANIFEST_STATES,
   parseFrontmatter,
+  parseFleetChildren,
   parseManifest,
   isTerminalManifestState,
   isEscalatedManifestState,

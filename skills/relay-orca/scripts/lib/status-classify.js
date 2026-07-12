@@ -10,25 +10,29 @@
 // Completion authority is durable-only: an outcome is `complete_with_evidence` ONLY
 // when its required live durable evidence holds. Orca task status and `worker_done`
 // are lifecycle signals, NEVER completion authority.
-const { boundedExcerpt } = require("./bounded-excerpt");
+const { boundedExcerpt, boundedIds } = require("./bounded-excerpt");
 const { isTerminalManifestState, isEscalatedManifestState } = require("./manifest-parse");
 
-// Required durable evidence per task kind (D4). Evidence expectations mirror the
-// task kind's expected-evidence defaults: a relay_run is complete only when its
-// manifest is terminal AND its PR merged AND its tracker issue closed.
-const REQUIRED_EVIDENCE = Object.freeze({
+// Named live-evidence checks per task kind (D4). Each kind carries its OWN evidence
+// contract mirroring the FROZEN expected-evidence defaults in references/task-kinds.md
+// (relay manifest merged; every fleet child terminal; gate check passes live; etc.).
+// An outcome is `complete_with_evidence` ONLY when every check in its kind's contract
+// holds `true`; a null check is "unknown" (source not yet resolvable) and never
+// completes. No kind is left unclassifiable — every kind names ≥1 concrete check.
+const EVIDENCE_CONTRACTS = Object.freeze({
   relay_run: ["manifest_terminal", "pr_merged", "issue_closed"],
-  relay_fleet: ["manifest_terminal", "pr_merged"],
-  integration_gate: ["manifest_terminal"],
-  advisory_review: ["manifest_terminal"],
-  tracker_reconciliation: ["manifest_terminal"],
+  relay_fleet: ["fleet_children_terminal", "fleet_manifest_closed"],
+  integration_gate: ["gate_report_present", "gate_check_passes"],
+  advisory_review: ["advisory_evidence_posted", "blocking_findings_triaged"],
+  tracker_reconciliation: ["tracker_reconciled"],
 });
 
 function requiredEvidenceFor(kind) {
-  return REQUIRED_EVIDENCE[kind] || ["manifest_terminal"];
+  return EVIDENCE_CONTRACTS[kind] || EVIDENCE_CONTRACTS.relay_run;
 }
 
-function computeEvidence(facts) {
+// relay_run: relay manifest merged AND PR merged AND tracker issue closed.
+function relayRunEvidence(facts) {
   const { manifest, pr, issue } = facts;
   return {
     manifest_terminal: manifest ? isTerminalManifestState(manifest.state) : null,
@@ -37,8 +41,80 @@ function computeEvidence(facts) {
   };
 }
 
+// relay_fleet: EVERY fleet child terminal AND the fleet manifest closed. The fleet
+// manifest is resolved via relay_ids.fleet in status-derive.js, and each child's
+// terminal flag is resolved there against the same runs root.
+function relayFleetEvidence(facts) {
+  const { fleetManifest, fleetChildren } = facts;
+  const children = Array.isArray(fleetChildren) ? fleetChildren : [];
+  let childrenTerminal = null;
+  if (fleetManifest) childrenTerminal = children.length > 0 && children.every((child) => child.terminal === true);
+  return {
+    fleet_children_terminal: childrenTerminal,
+    fleet_manifest_closed: fleetManifest ? isTerminalManifestState(fleetManifest.fleet_state) : null,
+  };
+}
+
+// A decision/review gate "passes" when its live status is an explicit pass token.
+function gatePasses(gate) {
+  return Boolean(gate && ["passed", "approved", "resolved"].includes(gate.status));
+}
+
+// integration_gate (read-only): the outcome's live integration gate exists AND its
+// check passes. The gate is receipt-referenced via the outcome's orca_task_id (see
+// receipt-and-status.md). When Orca is untrusted the checks degrade to null.
+function integrationGateEvidence(facts, orcaTrusted) {
+  if (!orcaTrusted) return { gate_report_present: null, gate_check_passes: null };
+  const gates = Array.isArray(facts.outcomeGates) ? facts.outcomeGates : [];
+  const gate = gates.find((candidate) => !candidate.kind || candidate.kind === "integration") || null;
+  return { gate_report_present: Boolean(gate), gate_check_passes: gate ? gatePasses(gate) : false };
+}
+
+// advisory_review (read-only): advisory evidence posted AND every blocking finding
+// triaged (the advisory gate resolved). Same receipt-referenced gate source.
+function advisoryReviewEvidence(facts, orcaTrusted) {
+  if (!orcaTrusted) return { advisory_evidence_posted: null, blocking_findings_triaged: null };
+  const gates = Array.isArray(facts.outcomeGates) ? facts.outcomeGates : [];
+  const gate = gates.find((candidate) => candidate.kind === "advisory") || gates[0] || null;
+  return { advisory_evidence_posted: Boolean(gate), blocking_findings_triaged: gate ? gatePasses(gate) : false };
+}
+
+// tracker_reconciliation (read-only): the mapped relay run's tracker issue state is
+// reconciled against the durable manifest — a terminal manifest with its issue closed.
+function trackerReconciliationEvidence(facts) {
+  const { manifest, issue } = facts;
+  if (!manifest || !issue) return { tracker_reconciled: null };
+  return { tracker_reconciled: isTerminalManifestState(manifest.state) && issue.state === "CLOSED" };
+}
+
+// Dispatch to the kind's evidence contract. Unknown kinds fall back to relay_run so
+// no outcome is ever unclassifiable (plan already rejects unsupported kinds).
+function computeEvidence(facts, orcaTrusted) {
+  switch (facts.receiptTask.kind) {
+    case "relay_fleet":
+      return relayFleetEvidence(facts);
+    case "integration_gate":
+      return integrationGateEvidence(facts, orcaTrusted);
+    case "advisory_review":
+      return advisoryReviewEvidence(facts, orcaTrusted);
+    case "tracker_reconciliation":
+      return trackerReconciliationEvidence(facts);
+    case "relay_run":
+    default:
+      return relayRunEvidence(facts);
+  }
+}
+
+function isComplete(evidence) {
+  const keys = Object.keys(evidence);
+  return keys.length > 0 && keys.every((key) => evidence[key] === true);
+}
+
+// Every subprocess-derived value that reaches a diagnostic — inside `message` AND
+// inside `ids` — is bounded (≤256 chars, marker included) so a wedged/adversarial CLI
+// can never inflate or line-inject the status report (D7).
 function diag(code, outcomeId, message, ids) {
-  return { code, outcome_id: outcomeId ?? null, message: boundedExcerpt(message), ids: ids || {} };
+  return { code, outcome_id: outcomeId ?? null, message: boundedExcerpt(message), ids: boundedIds(ids) };
 }
 
 // A dispatch is "missing" only when dispatch-show actually REPORTED (reachable) yet
@@ -127,8 +203,8 @@ function outcomeState(facts, evidence, complete, flags, orcaTrusted, isDuplicate
 // stale_missing per D6). `isDuplicate` marks outcomes sharing a mapping (D7).
 function classifyOutcome(facts, { orcaTrusted, isDuplicate }) {
   const { receiptTask } = facts;
-  const evidence = computeEvidence(facts);
-  const complete = requiredEvidenceFor(receiptTask.kind).every((key) => evidence[key] === true);
+  const evidence = computeEvidence(facts, orcaTrusted);
+  const complete = isComplete(evidence);
   const { diagnostics, flags } = detectOutcome(facts, evidence, orcaTrusted, complete);
   const state = outcomeState(facts, evidence, complete, flags, orcaTrusted, isDuplicate);
   const started = Boolean(receiptTask.dispatch_id || (receiptTask.relay_ids && receiptTask.relay_ids.run) || facts.pr);
@@ -175,7 +251,7 @@ function deriveProgramState(entries) {
 }
 
 module.exports = {
-  REQUIRED_EVIDENCE,
+  EVIDENCE_CONTRACTS,
   requiredEvidenceFor,
   computeEvidence,
   classifyOutcome,

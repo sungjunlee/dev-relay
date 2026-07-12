@@ -187,6 +187,12 @@ function dispatchOne(ctx) {
   }
   entry.dispatch_id = show.dispatchId;
   entry.assignee = show.assignee;
+  // D2/A2: the provenance trio (orca_task_id, dispatch_id, assignee) is now VERIFIED,
+  // so persist the receipt mapping HERE — before prompt delivery. A prompt hand-off
+  // failure below must leave the receipt already carrying the verified provenance (it
+  // is durable coordination metadata, independent of whether the operator prompt lands),
+  // so a later reconcile can recover the dispatch instead of re-materializing it.
+  persistReceipt(report, options);
   const prompt = buildOperatorPrompt(task, program, outcome);
   const sent = sendPrompt(options.runOrca, orcaBin, { orcaTaskId, handle, prompt });
   if (!sent.ok) {
@@ -197,9 +203,6 @@ function dispatchOne(ctx) {
     );
   }
   entry.status = STATUS.DISPATCHED;
-  // D2: the provenance trio (orca_task_id, dispatch_id, assignee) just changed —
-  // re-persist the receipt mapping after this verified dispatch.
-  persistReceipt(report, options);
 }
 
 // D7 dispatch scope: only wave-1 tasks (all dependency-satisfied) are eligible in

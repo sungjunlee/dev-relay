@@ -21,6 +21,7 @@ const {
 } = require("./receipt-io");
 const { resolveOrcaBin } = require("./lib/resolve-orca-bin");
 const { parseReceipt } = require("./lib/receipt");
+const { boundedExcerpt } = require("./lib/bounded-excerpt");
 const { parseManifest } = require("./lib/manifest-parse");
 const { deriveStatusReport } = require("./lib/status-derive");
 const { StatusError, USAGE_EXIT, reject } = require("./lib/status-reasons");
@@ -105,12 +106,23 @@ function makeRunner(bin, assertReadOnly) {
   };
 }
 
-function loadReceipt(receiptPath) {
+function loadReceipt(receiptPath, requestedProgramId) {
   if (!receiptExists(receiptPath)) {
     reject("RECEIPT_NOT_FOUND", `no receipt found at ${receiptPath}`);
   }
   const parsed = parseReceipt(readReceiptFile(receiptPath));
   if (!parsed.ok) reject("RECEIPT_CORRUPT", parsed.reason);
+  // Identity check (#945 A6): the receipt loaded from the requested program's path MUST
+  // carry the same program_id. A mismatch means the file at this path belongs to a
+  // different program (hand-edit, misplaced write, or a sanitized-segment collision that
+  // the stable hash is meant to prevent) — fail closed rather than reconcile the wrong
+  // program. Both ids are bounded so a pathological receipt id cannot inflate the error.
+  if (parsed.receipt.program_id !== requestedProgramId) {
+    reject(
+      "RECEIPT_CORRUPT",
+      `receipt program_id ${boundedExcerpt(parsed.receipt.program_id)} does not match the requested --program-id ${boundedExcerpt(requestedProgramId)}`,
+    );
+  }
   return parsed.receipt;
 }
 
@@ -155,7 +167,7 @@ function main() {
   try {
     const repo = resolveRepoContext({ repoRootOverride: opts.repoRoot });
     const receiptPath = receiptPathFor(repo.slug, opts.programId);
-    const receipt = loadReceipt(receiptPath);
+    const receipt = loadReceipt(receiptPath, opts.programId);
     if (receipt.repo && receipt.repo.slug !== repo.slug) {
       reject("RECEIPT_REPO_MISMATCH", `receipt repo.slug ${receipt.repo.slug} does not match the current repo slug ${repo.slug}`);
     }

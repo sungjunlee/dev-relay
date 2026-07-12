@@ -8,6 +8,7 @@
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const crypto = require("node:crypto");
 const { execFileSync } = require("node:child_process");
 const { computeRepoSlug } = require("./lib/repo-slug");
 
@@ -46,20 +47,39 @@ function programsRoot() {
   return absoluteEnvDir(process.env.RELAY_ORCA_PROGRAMS_ROOT) || path.join(os.homedir(), ".relay", "programs");
 }
 
-// Runs root is overridable for tests via RELAY_ORCA_RUNS_ROOT (same rule) — D4.
+// Relay manifests root resolution (#945 D4/A5). First hit wins; each candidate must be
+// an ABSOLUTE path (invalid → fall through to the next). This mirrors relay's own
+// resolution precedence so `status` reconciles against the same runs directory relay
+// wrote its manifests to:
+//   1. RELAY_ORCA_RUNS_ROOT   (relay-orca-specific override; tests use this)
+//   2. RELAY_RUNS_BASE        (relay's runs-base override)
+//   3. RELAY_HOME + "/runs"   (relay's home override)
+//   4. ~/.relay/runs          (default)
 function runsRoot() {
-  return absoluteEnvDir(process.env.RELAY_ORCA_RUNS_ROOT) || path.join(os.homedir(), ".relay", "runs");
+  const orcaRoot = absoluteEnvDir(process.env.RELAY_ORCA_RUNS_ROOT);
+  if (orcaRoot) return orcaRoot;
+  const runsBase = absoluteEnvDir(process.env.RELAY_RUNS_BASE);
+  if (runsBase) return runsBase;
+  const relayHome = absoluteEnvDir(process.env.RELAY_HOME);
+  if (relayHome) return path.join(relayHome, "runs");
+  return path.join(os.homedir(), ".relay", "runs");
 }
 
-// Program id → a single safe path segment (never traverses). run.js and status.js
-// apply this identically so a `run`-written receipt resolves back for `status`. `.`
-// and `..` are neutralized so a pathological program id can never escape the intended
-// <programs-root>/<repo-slug>/<program-id>/ directory (same guard relay's paths.js
-// applies to run/fleet ids).
+// Program id → a single safe path segment (never traverses) that is ALSO
+// collision-resistant (#945 A6). A pure sanitize is lossy — `"a b"` and `"a+b"` both
+// collapse to `"a-b"`, which would silently point two distinct programs at ONE receipt.
+// So the segment is the sanitized base joined to the first 8 hex of sha256(raw id): the
+// hash disambiguates ids that sanitize identically while the sanitized prefix keeps the
+// path human-readable. run.js and status.js apply this identically, so a `run`-written
+// receipt resolves back for `status`. `.` and `..` (and empty) collapse to `program`
+// so a pathological id can never escape <programs-root>/<repo-slug>/<segment>/, and the
+// hash still keeps `.` and `..` on distinct paths.
 function programSegment(programId) {
-  const safe = String(programId == null ? "" : programId).replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
-  if (safe === "" || safe === "." || safe === "..") return "program";
-  return safe;
+  const raw = String(programId == null ? "" : programId);
+  const sanitized = raw.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
+  const base = sanitized === "" || sanitized === "." || sanitized === ".." ? "program" : sanitized;
+  const hash = crypto.createHash("sha256").update(raw).digest("hex").slice(0, 8);
+  return `${base}-${hash}`;
 }
 
 function receiptPathFor(slug, programId) {

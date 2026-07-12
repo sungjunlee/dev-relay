@@ -82,8 +82,9 @@ function makeReceiptWorld() {
 }
 
 function receiptPathForWorld(world, programId) {
-  const segment = String(programId).replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "program";
-  return path.join(world.programsRoot, world.slug, segment, "receipt.json");
+  // Use the SAME collision-resistant segment encoder run.js/status.js use (#945 A6),
+  // so the expected path stays in lock-step with the production path derivation.
+  return path.join(world.programsRoot, world.slug, programSegment(programId), "receipt.json");
 }
 
 function runProgram(fixtureName, extraArgs, scenario, options = {}) {
@@ -580,6 +581,34 @@ test("D2: an admission rejection never writes a receipt (persist happens after m
   }
 });
 
+test("A2: a prompt-delivery failure still leaves the receipt carrying the verified provenance trio", () => {
+  // sendPrompt (terminal send) fails AFTER dispatch-show verifies the provenance trio.
+  // The receipt must already carry the non-null (orca_task_id, dispatch_id, assignee)
+  // for the escalated outcome — provenance persists BEFORE prompt delivery (A2) — while
+  // the failure's report semantics stay exactly as before (INJECTION_UNDELIVERED, exit 42).
+  const r = runProgram("valid-single-relay-run.json", ["--operator-handle", "h1"], { terminalSendOkFalse: true });
+  try {
+    assert.equal(r.status, REASONS.INJECTION_UNDELIVERED);
+    assert.equal(r.body.blocking_reasons[0].reason_code, "INJECTION_UNDELIVERED");
+    const task = taskByOutcome(r.body, "outcome-a");
+    assert.equal(task.status, "escalated");
+
+    const receiptPath = receiptPathForWorld(r.world, "epic-demo-single");
+    assert.ok(fs.existsSync(receiptPath), "receipt persisted before the prompt hand-off failed");
+    const parsed = parseReceipt(fs.readFileSync(receiptPath, "utf-8"));
+    assert.equal(parsed.ok, true, `receipt must parse+validate: ${parsed.reason || ""}`);
+    const entry = taskByOutcome(parsed.receipt, "outcome-a");
+    // The full verified provenance trio is durable despite the prompt failure.
+    assert.ok(entry.orca_task_id, "orca_task_id persisted");
+    assert.ok(entry.dispatch_id, "dispatch_id persisted before prompt delivery");
+    assert.ok(entry.assignee, "assignee persisted before prompt delivery");
+    assert.equal(entry.assignee, "h1");
+    assertNoPoison(r.fake);
+  } finally {
+    r.fake.cleanup();
+  }
+});
+
 test("D10.12: writeReceiptAtomic is temp+rename — a crash during rename leaves no partial receipt", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-orca-atomic-"));
   const finalPath = path.join(dir, "nested", "receipt.json");
@@ -603,14 +632,24 @@ test("D10.12: writeReceiptAtomic is temp+rename — a crash during rename leaves
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-test("D1: programSegment neutralizes path-traversal program ids so a receipt cannot escape its dir", () => {
-  assert.equal(programSegment(".."), "program");
-  assert.equal(programSegment("."), "program");
-  // separators collapse to a dash → a single safe segment that cannot traverse.
-  assert.equal(programSegment("../../etc/passwd"), "..-..-etc-passwd");
+test("D1/A6: programSegment is traversal-safe AND collision-resistant (sanitized base + stable hash)", () => {
+  // Traversal neutralized: no separators, and `.` / `..` collapse to the `program` base.
   assert.ok(!programSegment("../../etc/passwd").includes("/"));
-  assert.equal(programSegment("epic-941"), "epic-941");
-  assert.equal(programSegment("epic.941_v2"), "epic.941_v2");
+  assert.match(programSegment("../../etc/passwd"), /^\.\.-\.\.-etc-passwd-[0-9a-f]{8}$/);
+  assert.match(programSegment(".."), /^program-[0-9a-f]{8}$/);
+  assert.match(programSegment("."), /^program-[0-9a-f]{8}$/);
+  // `.` and `..` sanitize identically but MUST NOT collide (distinct paths).
+  assert.notEqual(programSegment("."), programSegment(".."));
+
+  // Collision resistance: two ids that sanitize to the SAME base get DISTINCT segments.
+  assert.match(programSegment("a b"), /^a-b-[0-9a-f]{8}$/);
+  assert.match(programSegment("a+b"), /^a-b-[0-9a-f]{8}$/);
+  assert.notEqual(programSegment("a b"), programSegment("a+b"));
+
+  // Stable + deterministic: the same id always yields the same segment.
+  assert.equal(programSegment("epic-941"), programSegment("epic-941"));
+  assert.match(programSegment("epic-941"), /^epic-941-[0-9a-f]{8}$/);
+  assert.match(programSegment("epic.941_v2"), /^epic\.941_v2-[0-9a-f]{8}$/);
 });
 
 // Keep the imported parse helper referenced.

@@ -16,6 +16,7 @@ const { REPORT_KEYS, OUTCOME_KEYS, DIAGNOSTIC_CODES } = require(path.join(SCRIPT
 const { classifyOutcome } = require(path.join(SCRIPTS, "lib", "status-classify.js"));
 const { RECEIPT_NOTE } = require(path.join(SCRIPTS, "lib", "receipt.js"));
 const { computeRepoSlug } = require(path.join(SCRIPTS, "lib", "repo-slug.js"));
+const { programSegment, runsRoot: resolveRunsRoot } = require(path.join(SCRIPTS, "receipt-io.js"));
 const { installFakeOrcaStatus } = require(path.join(__dirname, "..", "fixtures", "fake-orca-status.js"));
 const { installFakeGh } = require(path.join(__dirname, "..", "fixtures", "fake-gh.js"));
 const { DEFAULT_RUNTIME_ID } = require(path.join(__dirname, "..", "fixtures", "fake-orca.js"));
@@ -39,7 +40,7 @@ function makeReceipt({ programId, slug, root, runtimeId, tasks }) {
       orca_task_id: task.orca_task_id === undefined ? `orca-live-${task.outcome_id}` : task.orca_task_id,
       dispatch_id: task.dispatch_id === undefined ? `disp-${task.outcome_id}` : task.dispatch_id,
       assignee: task.assignee === undefined ? `term-${task.outcome_id}` : task.assignee,
-      relay_ids: { request: null, run: task.run || null, fleet: null },
+      relay_ids: { request: null, run: task.run || null, fleet: task.fleet || null },
     })),
     terminals_created: [],
     created_at: "2026-07-12T00:00:00.000Z",
@@ -72,6 +73,29 @@ function orcaTask(programId, outcome, extra = {}) {
   };
 }
 
+// A relay-fleet manifest fixture matching the real shape (#945 A3): `fleet_id`,
+// `fleet_state`, and a single-line JSON `children` array of { leaf_ref, run_id, ... }.
+// Detected by buildWorld via the presence of `fleet_state`.
+function fleetManifestText(fields) {
+  const children = JSON.stringify(fields.children || []);
+  const lines = [
+    "---",
+    `fleet_id: '${fields.fleet_id || fields.run_id}'`,
+    `fleet_state: '${fields.fleet_state}'`,
+    `children: ${children}`,
+    "timestamps:",
+    "  created_at: '2026-07-12T00:00:00.000Z'",
+    "  updated_at: '2026-07-12T00:00:00.000Z'",
+    "---",
+    "",
+  ];
+  return `${lines.join("\n")}\n`;
+}
+
+function gate(orcaTaskId, extra = {}) {
+  return { id: extra.id || `gate-${orcaTaskId}`, task_id: orcaTaskId, status: extra.status || "pending", kind: extra.kind };
+}
+
 // --- world harness -------------------------------------------------------------
 
 function buildWorld({ programId, receipt, manifests = [], orcaScenario = {}, ghScenario = {}, runtimeId }) {
@@ -84,14 +108,19 @@ function buildWorld({ programId, receipt, manifests = [], orcaScenario = {}, ghS
 
   const receiptObject = receipt || makeReceipt({ programId, slug, root: fs.realpathSync(repoRoot), runtimeId, tasks: [] });
   if (receiptObject.repo && receiptObject.repo.slug === "__SELF__") receiptObject.repo.slug = slug;
-  const receiptDir = path.join(programsRoot, slug, programId);
+  // The receipt lives at the SAME collision-resistant segment path status.js derives
+  // (#945 A6) so `run`-written receipts resolve back for `status`.
+  const receiptDir = path.join(programsRoot, slug, programSegment(programId));
   fs.mkdirSync(receiptDir, { recursive: true });
   const receiptPath = path.join(receiptDir, "receipt.json");
   fs.writeFileSync(receiptPath, `${JSON.stringify(receiptObject, null, 2)}\n`, "utf-8");
 
   const runsDir = path.join(runsRoot, slug);
   fs.mkdirSync(runsDir, { recursive: true });
-  manifests.forEach((fields) => fs.writeFileSync(path.join(runsDir, `${fields.run_id}.md`), manifestText(fields), "utf-8"));
+  manifests.forEach((fields) => {
+    const text = fields.fleet_state !== undefined ? fleetManifestText(fields) : manifestText(fields);
+    fs.writeFileSync(path.join(runsDir, `${fields.run_id}.md`), text, "utf-8");
+  });
 
   const orca = installFakeOrcaStatus({ runtimeId: runtimeId || DEFAULT_RUNTIME_ID, ...orcaScenario });
   const gh = installFakeGh(ghScenario);
@@ -779,6 +808,354 @@ test("D9: a degraded (runtime unreachable) view still emits the exact nine keys 
     assert.deepEqual(Object.keys(r.body).sort(), [...REPORT_KEYS].sort());
     assert.equal(r.body.evidence_checked, true);
     assert.equal(outcomeById(r.body, "u").state, "stale_missing");
+  } finally {
+    world.cleanup();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// A3 — per-task-kind evidence contracts (each kind names its own live checks)
+// ---------------------------------------------------------------------------
+
+test("A3 relay_fleet complete: every child terminal + fleet manifest closed → complete_with_evidence", () => {
+  const programId = "epic-status-fleet-ok";
+  const world = buildWorld({
+    programId,
+    manifests: [
+      { run_id: "fleet-a", fleet_state: "closed", children: [{ leaf_ref: "l1", run_id: "child-1" }, { leaf_ref: "l2", run_id: "child-2" }] },
+      { run_id: "child-1", state: "merged", pr_number: 201, issue_number: 2001 },
+      { run_id: "child-2", state: "merged", pr_number: 202, issue_number: 2002 },
+    ],
+    orcaScenario: { tasks: [orcaTask(programId, "fc", { status: "completed", worker_done: true })] },
+    ghScenario: {},
+  });
+  const receipt = makeReceipt({ programId, slug: world.slug, root: fs.realpathSync(world.repoRoot), tasks: [{ outcome_id: "fc", kind: "relay_fleet", fleet: "fleet-a" }] });
+  fs.writeFileSync(world.receiptPath, `${JSON.stringify(receipt, null, 2)}\n`, "utf-8");
+  try {
+    const r = world.run();
+    assert.equal(r.status, 0);
+    const outcome = outcomeById(r.body, "fc");
+    assert.equal(outcome.state, "complete_with_evidence");
+    assert.deepEqual(outcome.evidence, { fleet_children_terminal: true, fleet_manifest_closed: true });
+  } finally {
+    world.cleanup();
+  }
+});
+
+test("A3 relay_fleet not complete: a non-terminal child holds the outcome back", () => {
+  const programId = "epic-status-fleet-partial";
+  const world = buildWorld({
+    programId,
+    manifests: [
+      { run_id: "fleet-b", fleet_state: "closed", children: [{ leaf_ref: "l1", run_id: "child-x" }, { leaf_ref: "l2", run_id: "child-y" }] },
+      { run_id: "child-x", state: "merged", pr_number: 210, issue_number: 2100 },
+      { run_id: "child-y", state: "review_pending", pr_number: 211, issue_number: 2101 },
+    ],
+    orcaScenario: { tasks: [orcaTask(programId, "fp")] },
+    ghScenario: {},
+  });
+  const receipt = makeReceipt({ programId, slug: world.slug, root: fs.realpathSync(world.repoRoot), tasks: [{ outcome_id: "fp", kind: "relay_fleet", fleet: "fleet-b" }] });
+  fs.writeFileSync(world.receiptPath, `${JSON.stringify(receipt, null, 2)}\n`, "utf-8");
+  try {
+    const r = world.run();
+    assert.equal(r.status, 0);
+    const outcome = outcomeById(r.body, "fp");
+    assert.notEqual(outcome.state, "complete_with_evidence");
+    assert.equal(outcome.evidence.fleet_children_terminal, false);
+    assert.equal(outcome.evidence.fleet_manifest_closed, true);
+  } finally {
+    world.cleanup();
+  }
+});
+
+test("A3 integration_gate complete: a passing live gate → complete_with_evidence", () => {
+  const programId = "epic-status-igate-ok";
+  const world = buildWorld({
+    programId,
+    manifests: [],
+    orcaScenario: {
+      tasks: [orcaTask(programId, "ig")],
+      gates: [gate("orca-live-ig", { status: "passed", kind: "integration" })],
+    },
+    ghScenario: {},
+  });
+  const receipt = makeReceipt({ programId, slug: world.slug, root: fs.realpathSync(world.repoRoot), tasks: [{ outcome_id: "ig", kind: "integration_gate" }] });
+  fs.writeFileSync(world.receiptPath, `${JSON.stringify(receipt, null, 2)}\n`, "utf-8");
+  try {
+    const r = world.run();
+    assert.equal(r.status, 0);
+    const outcome = outcomeById(r.body, "ig");
+    assert.equal(outcome.state, "complete_with_evidence");
+    assert.deepEqual(outcome.evidence, { gate_report_present: true, gate_check_passes: true });
+  } finally {
+    world.cleanup();
+  }
+});
+
+test("A3 integration_gate not complete: a pending gate → awaiting_decision, gate check not passed", () => {
+  const programId = "epic-status-igate-pending";
+  const world = buildWorld({
+    programId,
+    manifests: [],
+    orcaScenario: {
+      tasks: [orcaTask(programId, "ig")],
+      gates: [gate("orca-live-ig", { status: "pending", kind: "integration" })],
+    },
+    ghScenario: {},
+  });
+  const receipt = makeReceipt({ programId, slug: world.slug, root: fs.realpathSync(world.repoRoot), tasks: [{ outcome_id: "ig", kind: "integration_gate" }] });
+  fs.writeFileSync(world.receiptPath, `${JSON.stringify(receipt, null, 2)}\n`, "utf-8");
+  try {
+    const r = world.run();
+    assert.equal(r.status, 0);
+    const outcome = outcomeById(r.body, "ig");
+    assert.equal(outcome.state, "awaiting_decision");
+    assert.deepEqual(outcome.evidence, { gate_report_present: true, gate_check_passes: false });
+  } finally {
+    world.cleanup();
+  }
+});
+
+test("A3 advisory_review complete: advisory gate resolved → complete_with_evidence", () => {
+  const programId = "epic-status-adv-ok";
+  const world = buildWorld({
+    programId,
+    manifests: [],
+    orcaScenario: {
+      tasks: [orcaTask(programId, "ar")],
+      gates: [gate("orca-live-ar", { status: "resolved", kind: "advisory" })],
+    },
+    ghScenario: {},
+  });
+  const receipt = makeReceipt({ programId, slug: world.slug, root: fs.realpathSync(world.repoRoot), tasks: [{ outcome_id: "ar", kind: "advisory_review" }] });
+  fs.writeFileSync(world.receiptPath, `${JSON.stringify(receipt, null, 2)}\n`, "utf-8");
+  try {
+    const r = world.run();
+    assert.equal(r.status, 0);
+    const outcome = outcomeById(r.body, "ar");
+    assert.equal(outcome.state, "complete_with_evidence");
+    assert.deepEqual(outcome.evidence, { advisory_evidence_posted: true, blocking_findings_triaged: true });
+  } finally {
+    world.cleanup();
+  }
+});
+
+test("A3 advisory_review not complete: an unresolved advisory gate is not triaged", () => {
+  const programId = "epic-status-adv-open";
+  const world = buildWorld({
+    programId,
+    manifests: [],
+    orcaScenario: {
+      tasks: [orcaTask(programId, "ar")],
+      gates: [gate("orca-live-ar", { status: "pending", kind: "advisory" })],
+    },
+    ghScenario: {},
+  });
+  const receipt = makeReceipt({ programId, slug: world.slug, root: fs.realpathSync(world.repoRoot), tasks: [{ outcome_id: "ar", kind: "advisory_review" }] });
+  fs.writeFileSync(world.receiptPath, `${JSON.stringify(receipt, null, 2)}\n`, "utf-8");
+  try {
+    const r = world.run();
+    assert.equal(r.status, 0);
+    const outcome = outcomeById(r.body, "ar");
+    assert.notEqual(outcome.state, "complete_with_evidence");
+    assert.equal(outcome.evidence.advisory_evidence_posted, true);
+    assert.equal(outcome.evidence.blocking_findings_triaged, false);
+  } finally {
+    world.cleanup();
+  }
+});
+
+test("A3 tracker_reconciliation complete: terminal manifest + closed issue → tracker_reconciled", () => {
+  const programId = "epic-status-tracker-ok";
+  const world = buildWorld({
+    programId,
+    manifests: [{ run_id: "run-tr", state: "merged", pr_number: 220, issue_number: 2200 }],
+    orcaScenario: { tasks: [orcaTask(programId, "tr", { status: "completed", worker_done: true })] },
+    ghScenario: { prs: { 220: { state: "MERGED", mergedAt: "2026-07-12T08:00:00Z" } }, issues: { 2200: { state: "CLOSED" } } },
+  });
+  const receipt = makeReceipt({ programId, slug: world.slug, root: fs.realpathSync(world.repoRoot), tasks: [{ outcome_id: "tr", kind: "tracker_reconciliation", run: "run-tr" }] });
+  fs.writeFileSync(world.receiptPath, `${JSON.stringify(receipt, null, 2)}\n`, "utf-8");
+  try {
+    const r = world.run();
+    assert.equal(r.status, 0);
+    const outcome = outcomeById(r.body, "tr");
+    assert.equal(outcome.state, "complete_with_evidence");
+    assert.deepEqual(outcome.evidence, { tracker_reconciled: true });
+  } finally {
+    world.cleanup();
+  }
+});
+
+test("A3 tracker_reconciliation not complete: a still-open issue is not reconciled", () => {
+  const programId = "epic-status-tracker-open";
+  const world = buildWorld({
+    programId,
+    manifests: [{ run_id: "run-tro", state: "merged", pr_number: 221, issue_number: 2210 }],
+    orcaScenario: { tasks: [orcaTask(programId, "tro")] },
+    ghScenario: { prs: { 221: { state: "MERGED", mergedAt: "2026-07-12T08:10:00Z" } }, issues: { 2210: { state: "OPEN" } } },
+  });
+  const receipt = makeReceipt({ programId, slug: world.slug, root: fs.realpathSync(world.repoRoot), tasks: [{ outcome_id: "tro", kind: "tracker_reconciliation", run: "run-tro" }] });
+  fs.writeFileSync(world.receiptPath, `${JSON.stringify(receipt, null, 2)}\n`, "utf-8");
+  try {
+    const r = world.run();
+    assert.equal(r.status, 0);
+    const outcome = outcomeById(r.body, "tro");
+    assert.notEqual(outcome.state, "complete_with_evidence");
+    assert.equal(outcome.evidence.tracker_reconciled, false);
+  } finally {
+    world.cleanup();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// A4 — failed required Orca reads degrade to unreachable (never fabricate empty)
+// ---------------------------------------------------------------------------
+
+test("A4: a failed required task-list read → runtime unreachable, no fabricated MISSING_TASK", () => {
+  const programId = "epic-status-tl-fail";
+  const world = buildWorld({
+    programId,
+    manifests: [{ run_id: "run-tl", state: "dispatched", pr_number: 300, issue_number: 3000 }],
+    orcaScenario: { taskListOk: false, tasks: [] },
+    ghScenario: { prs: { 300: { state: "OPEN" } }, issues: { 3000: { state: "OPEN" } } },
+  });
+  const receipt = makeReceipt({ programId, slug: world.slug, root: fs.realpathSync(world.repoRoot), tasks: [{ outcome_id: "t", run: "run-tl" }] });
+  fs.writeFileSync(world.receiptPath, `${JSON.stringify(receipt, null, 2)}\n`, "utf-8");
+  try {
+    const r = world.run();
+    assert.equal(r.status, 0);
+    assert.equal(r.body.runtime, "unreachable");
+    assert.equal(diagCodes(r.body).includes("MISSING_TASK"), false, "a failed task-list must not forge MISSING_TASK");
+    // Orca facts withheld → the mapped outcome degrades to stale_missing (durable facts still render).
+    assert.equal(outcomeById(r.body, "t").state, "stale_missing");
+    assert.deepEqual(Object.keys(r.body).sort(), [...REPORT_KEYS].sort());
+  } finally {
+    world.cleanup();
+  }
+});
+
+test("A4: a failed required gate-list read → runtime unreachable, no false awaiting_decision suppression", () => {
+  const programId = "epic-status-gl-fail";
+  const world = buildWorld({
+    programId,
+    manifests: [{ run_id: "run-gl", state: "dispatched", pr_number: 310, issue_number: 3100 }],
+    orcaScenario: {
+      gateListOk: false,
+      tasks: [orcaTask(programId, "g")],
+      gates: [{ id: "sec-gate", task_id: "orca-live-g", status: "pending" }],
+    },
+    ghScenario: { prs: { 310: { state: "OPEN" } }, issues: { 3100: { state: "OPEN" } } },
+  });
+  const receipt = makeReceipt({ programId, slug: world.slug, root: fs.realpathSync(world.repoRoot), tasks: [{ outcome_id: "g", run: "run-gl" }] });
+  fs.writeFileSync(world.receiptPath, `${JSON.stringify(receipt, null, 2)}\n`, "utf-8");
+  try {
+    const r = world.run();
+    assert.equal(r.status, 0);
+    assert.equal(r.body.runtime, "unreachable");
+    // A gate-list that could not be read is WITHHELD, never fabricated as "no pending gate":
+    // the outcome degrades to stale_missing, not a false-clean running.
+    assert.equal(outcomeById(r.body, "g").state, "stale_missing");
+    assert.notEqual(outcomeById(r.body, "g").state, "running");
+    assert.equal(diagCodes(r.body).includes("MISSING_TASK"), false);
+  } finally {
+    world.cleanup();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// A5 — relay runs-root resolution precedence (levels 1, 2, 4)
+// ---------------------------------------------------------------------------
+
+function withRunsRootEnv(overrides, fn) {
+  const keys = ["RELAY_ORCA_RUNS_ROOT", "RELAY_RUNS_BASE", "RELAY_HOME"];
+  const saved = {};
+  keys.forEach((key) => {
+    saved[key] = process.env[key];
+    delete process.env[key];
+  });
+  Object.entries(overrides).forEach(([key, value]) => {
+    if (value !== undefined) process.env[key] = value;
+  });
+  try {
+    return fn();
+  } finally {
+    keys.forEach((key) => {
+      if (saved[key] === undefined) delete process.env[key];
+      else process.env[key] = saved[key];
+    });
+  }
+}
+
+test("A5: level 1 RELAY_ORCA_RUNS_ROOT wins over every lower precedence source", () => {
+  withRunsRootEnv({ RELAY_ORCA_RUNS_ROOT: "/abs/orca-runs", RELAY_RUNS_BASE: "/abs/runs-base", RELAY_HOME: "/abs/relay-home" }, () => {
+    assert.equal(resolveRunsRoot(), "/abs/orca-runs");
+  });
+});
+
+test("A5: level 2 RELAY_RUNS_BASE wins when level 1 is absent OR invalid (non-absolute → next)", () => {
+  withRunsRootEnv({ RELAY_RUNS_BASE: "/abs/runs-base", RELAY_HOME: "/abs/relay-home" }, () => {
+    assert.equal(resolveRunsRoot(), "/abs/runs-base");
+  });
+  // An invalid (non-absolute) level-1 value falls THROUGH to level 2, not to the default.
+  withRunsRootEnv({ RELAY_ORCA_RUNS_ROOT: "relative/not/absolute", RELAY_RUNS_BASE: "/abs/runs-base" }, () => {
+    assert.equal(resolveRunsRoot(), "/abs/runs-base");
+  });
+});
+
+test("A5: level 4 default ~/.relay/runs when no override is set", () => {
+  withRunsRootEnv({}, () => {
+    assert.equal(resolveRunsRoot(), path.join(os.homedir(), ".relay", "runs"));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A6 — receipt program-id identity check on load
+// ---------------------------------------------------------------------------
+
+test("A6: a receipt whose program_id != requested --program-id → RECEIPT_CORRUPT exit 51 naming both", () => {
+  const programId = "epic-status-identity";
+  const world = buildWorld({ programId, orcaScenario: {}, ghScenario: {} });
+  const receipt = makeReceipt({ programId: "epic-OTHER-program", slug: world.slug, root: fs.realpathSync(world.repoRoot), tasks: [{ outcome_id: "x", run: "run-x" }] });
+  fs.writeFileSync(world.receiptPath, `${JSON.stringify(receipt, null, 2)}\n`, "utf-8");
+  try {
+    const r = world.run();
+    assert.equal(r.status, REASONS.RECEIPT_CORRUPT);
+    assert.equal(r.body.reason_code, "RECEIPT_CORRUPT");
+    assert.match(r.body.message, /epic-status-identity/, "message names the requested program-id");
+    assert.match(r.body.message, /epic-OTHER-program/, "message names the receipt's program-id");
+  } finally {
+    world.cleanup();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// A7 — every subprocess-derived diagnostic field (incl. ids) is bounded
+// ---------------------------------------------------------------------------
+
+test("A7: an adversarial 10,000-char PR head is bounded in the PR_CHANGED diagnostic ids", () => {
+  const programId = "epic-status-adversarial";
+  const huge = "f".repeat(10000);
+  const world = buildWorld({
+    programId,
+    manifests: [{ run_id: "run-adv", state: "merged", pr_number: 400, issue_number: 4000, head_sha: "expected-sha" }],
+    orcaScenario: { tasks: [orcaTask(programId, "adv", { status: "completed", worker_done: true })] },
+    ghScenario: { prs: { 400: { state: "MERGED", mergedAt: "2026-07-12T09:00:00Z", headRefOid: huge } }, issues: { 4000: { state: "CLOSED" } } },
+  });
+  const receipt = makeReceipt({ programId, slug: world.slug, root: fs.realpathSync(world.repoRoot), tasks: [{ outcome_id: "adv", run: "run-adv" }] });
+  fs.writeFileSync(world.receiptPath, `${JSON.stringify(receipt, null, 2)}\n`, "utf-8");
+  try {
+    const r = world.run();
+    assert.equal(r.status, 0);
+    const prChanged = r.body.diagnostics.filter((d) => d.code === "PR_CHANGED");
+    assert.ok(prChanged.length > 0, "PR_CHANGED fires on the adversarial live head");
+    for (const d of prChanged) {
+      assert.ok(d.message.length <= 256, `message bounded: ${d.message.length}`);
+      for (const [key, value] of Object.entries(d.ids)) {
+        if (typeof value === "string") assert.ok(value.length <= 256, `ids.${key} bounded: ${value.length}`);
+      }
+    }
+    // The raw 10k subprocess string never leaks anywhere into the serialized report.
+    assert.equal(JSON.stringify(r.body).includes(huge), false, "no unbounded subprocess value leaks into the report");
   } finally {
     world.cleanup();
   }

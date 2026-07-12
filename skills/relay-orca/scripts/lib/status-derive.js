@@ -10,14 +10,18 @@
 // Durable truth outranks runtime signals (D4). When the runtime is a mismatch,
 // foreign, or unreachable, Orca-derived facts are NOT adopted for this program (D6):
 // they degrade to `stale_missing` while durable evidence still renders.
-const { boundedExcerpt } = require("./bounded-excerpt");
+const { boundedExcerpt, boundedIds } = require("./bounded-excerpt");
 const { orcaStatus, orcaTaskList, orcaGateList, orcaDispatchShow } = require("./orca-reads");
 const { ghIssueView, ghPrView } = require("./gh-reads");
 const { classifyOutcome, deriveProgramState } = require("./status-classify");
+const { isTerminalManifestState } = require("./manifest-parse");
 const { orderReport } = require("./status-report");
 
+// Every subprocess-derived value that reaches a diagnostic — inside `message` AND
+// inside `ids` — is bounded (≤256 chars, marker included) so a wedged/adversarial CLI
+// can never inflate or line-inject the status report (D7).
 function diag(code, outcomeId, message, ids) {
-  return { code, outcome_id: outcomeId ?? null, message: boundedExcerpt(message), ids: ids || {} };
+  return { code, outcome_id: outcomeId ?? null, message: boundedExcerpt(message), ids: boundedIds(ids) };
 }
 
 function programMarker(programId) {
@@ -33,13 +37,21 @@ function referencesProgram(text, programId) {
 // Attribute the live runtime (D6). Orca facts are trusted ONLY when the live runtime
 // id matches the receipt AND every live orchestration task is marked for this program.
 function attributeRuntime({ receipt, programId, orca }) {
-  if (!orca) return { runtime: "unreachable", orcaTrusted: false, tasks: [], gates: [], diagnostic: null };
+  const unreachable = { runtime: "unreachable", orcaTrusted: false, tasks: [], gates: [], diagnostic: null };
+  if (!orca) return unreachable;
   const status = orcaStatus(orca, null, {});
-  if (!status.ok) return { runtime: "unreachable", orcaTrusted: false, tasks: [], gates: [], diagnostic: null };
+  if (!status.ok) return unreachable;
+  // Runtime is "ok" (Orca facts adopted) ONLY when status AND task-list AND gate-list
+  // all succeed. A failed REQUIRED read is unreachable — never an empty array with a
+  // runtime of "ok" (D4). Fabricating [] would hide awaiting_decision and forge a false
+  // MISSING_TASK against a receipt whose task simply could not be listed. On unreachable,
+  // Orca-derived facts are withheld and each outcome's Orca facts degrade per D5/D6.
   const taskList = orcaTaskList(orca, null, {});
+  if (!taskList.ok) return unreachable;
   const gateList = orcaGateList(orca, null, {});
-  const tasks = taskList.ok ? taskList.tasks : [];
-  const gates = gateList.ok ? gateList.gates : [];
+  if (!gateList.ok) return unreachable;
+  const tasks = taskList.tasks;
+  const gates = gateList.gates;
   const marker = programMarker(programId);
   const foreignTasks = tasks.filter((task) => !(typeof task.title === "string" && task.title.includes(marker)));
   // The live runtime id is subprocess-derived, so it is bounded (≤256 chars, marker
@@ -98,6 +110,33 @@ function gatherOutcomeFacts(task, ctx) {
   const gateBlocking = Boolean(
     runtime.orcaTrusted && task.orca_task_id && runtime.gates.some((gate) => isPendingGate(gate) && gateBlocksTask(gate, task.orca_task_id)),
   );
+  // The live decision/review gates mapped to this outcome's orca_task_id feed the
+  // integration_gate / advisory_review evidence contracts. Gates are runtime signals,
+  // so they are only gathered when the runtime is trusted (untrusted → [] → the gate
+  // evidence checks degrade to null in the classifier).
+  const outcomeGates = runtime.orcaTrusted && task.orca_task_id
+    ? runtime.gates.filter((gate) => gateBlocksTask(gate, task.orca_task_id))
+    : [];
+
+  // relay_fleet outcomes map via relay_ids.fleet to a fleet manifest under the SAME
+  // runs root (see receipt-and-status.md). Its `children` list resolves each child run
+  // to the same manifest set so the classifier can require every child terminal.
+  const mappedFleetId = task.relay_ids && task.relay_ids.fleet ? task.relay_ids.fleet : null;
+  let fleetManifest = null;
+  let fleetChildren = [];
+  if (mappedFleetId) {
+    fleetManifest = manifestByRunId.get(mappedFleetId) || null;
+    if (fleetManifest && Array.isArray(fleetManifest.fleet_children)) {
+      fleetChildren = fleetManifest.fleet_children.map((child) => {
+        const childManifest = child.run_id ? manifestByRunId.get(child.run_id) || null : null;
+        return {
+          leaf_ref: child.leaf_ref ?? null,
+          run_id: child.run_id ?? null,
+          terminal: childManifest ? isTerminalManifestState(childManifest.state) : false,
+        };
+      });
+    }
+  }
 
   let pr = null;
   let issue = null;
@@ -120,7 +159,24 @@ function gatherOutcomeFacts(task, ctx) {
     }
   }
 
-  return { receiptTask: task, manifest, mappedRunId, mappedRunMissing, orcaTask, orcaTaskMissing, dispatch, gateBlocking, pr, issue, prUrl, issueUrl };
+  return {
+    receiptTask: task,
+    manifest,
+    mappedRunId,
+    mappedRunMissing,
+    orcaTask,
+    orcaTaskMissing,
+    dispatch,
+    gateBlocking,
+    outcomeGates,
+    fleetManifest,
+    mappedFleetId,
+    fleetChildren,
+    pr,
+    issue,
+    prUrl,
+    issueUrl,
+  };
 }
 
 // Program-level duplicate-mapping detector (D7): two receipt entries sharing an

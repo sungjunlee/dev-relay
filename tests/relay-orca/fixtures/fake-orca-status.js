@@ -24,6 +24,11 @@ function defaultStatusScenario(overrides = {}) {
   return {
     runtimeId,
     statusOk: overrides.statusOk !== undefined ? overrides.statusOk : true,
+    // Required-read failure knobs (#945 A4): when false, the read subcommand exits
+    // non-zero so the derive path can prove a failed task-list/gate-list read degrades
+    // the runtime to "unreachable" instead of fabricating an empty [] with runtime "ok".
+    taskListOk: overrides.taskListOk !== undefined ? overrides.taskListOk : true,
+    gateListOk: overrides.gateListOk !== undefined ? overrides.gateListOk : true,
     tasks: overrides.tasks || [],
     gates: overrides.gates || [],
     dispatch: overrides.dispatch || {},
@@ -59,10 +64,12 @@ if (args[0] === "status") {
   emit({ id: "status-1", ok: true, result: { app: { running: true, pid: 1 }, runtime: { state: "ready", reachable: true, runtimeId: scenario.runtimeId }, graph: { state: "ready" } }, _meta: meta }, 0);
 }
 if (args[0] === "orchestration" && args[1] === "task-list") {
+  if (scenario.taskListOk === false) { process.stderr.write("orca task-list unreachable\\n"); process.exit(1); }
   const tasks = Array.isArray(scenario.tasks) ? scenario.tasks : [];
   emit({ id: "task-list-1", ok: true, result: { tasks, count: tasks.length }, _meta: meta }, 0);
 }
 if (args[0] === "orchestration" && args[1] === "gate-list") {
+  if (scenario.gateListOk === false) { process.stderr.write("orca gate-list unreachable\\n"); process.exit(1); }
   const gates = Array.isArray(scenario.gates) ? scenario.gates : [];
   emit({ id: "gate-list-1", ok: true, result: { gates, count: gates.length }, _meta: meta }, 0);
 }
