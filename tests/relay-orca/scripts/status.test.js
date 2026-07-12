@@ -23,6 +23,9 @@ const {
   resolveCanonicalRepoRoot,
   resolveRepoContext,
 } = require(path.join(SCRIPTS, "receipt-io.js"));
+// status.js guards main() behind `require.main === module`, so importing it here exercises
+// the A28 read-only boundary directly without triggering a real status run.
+const { assertGhReadOnly } = require(STATUS_JS);
 const { installFakeOrcaStatus } = require(path.join(__dirname, "..", "fixtures", "fake-orca-status.js"));
 const { installFakeGh } = require(path.join(__dirname, "..", "fixtures", "fake-gh.js"));
 const { DEFAULT_RUNTIME_ID } = require(path.join(__dirname, "..", "fixtures", "fake-orca.js"));
@@ -646,6 +649,77 @@ test("D3: the fake gh poisons a non-read subcommand and the fake orca poisons a 
     }
   } finally {
     world.cleanup();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// A28 — the read-only gh boundary rejects mutation-shaped `gh api`
+// ---------------------------------------------------------------------------
+
+// Layer 1: the status.js structural guard (`assertGhReadOnly`).
+test("A28: assertGhReadOnly refuses mutation-shaped `gh api`, allows bare GET reads", () => {
+  // Body/field options make `gh api` default to a POST — every form is a write.
+  for (const argv of [
+    ["api", "repos/x", "-f", "a=b"],
+    ["api", "repos/x", "--field", "a=b"],
+    ["api", "repos/x", "-F", "a=b"],
+    ["api", "repos/x", "--raw-field", "a=b"],
+    ["api", "repos/x", "--input", "body.json"],
+  ]) {
+    assert.throws(() => assertGhReadOnly(argv), /non-read gh subcommand/, `must reject: gh ${argv.join(" ")}`);
+  }
+  // Explicit non-GET method (separated or attached) is a write.
+  for (const argv of [
+    ["api", "-X", "POST", "repos/x"],
+    ["api", "--method", "PATCH", "repos/x"],
+    ["api", "-XDELETE", "repos/x"],
+    ["api", "--method=PUT", "repos/x"],
+    ["api", "repos/x", "POST"],
+  ]) {
+    assert.throws(() => assertGhReadOnly(argv), /non-read gh subcommand/, `must reject: gh ${argv.join(" ")}`);
+  }
+  // Read-shaped invocations are allowed: bare/`-X GET` api reads and the two view reads.
+  for (const argv of [
+    ["api", "repos/x"],
+    ["api", "repos/x", "--jq", ".state"],
+    ["api", "-X", "GET", "repos/x"],
+    ["issue", "view", "1", "--json", "state,stateReason"],
+    ["pr", "view", "2", "--json", "mergedAt,state"],
+  ]) {
+    assert.doesNotThrow(() => assertGhReadOnly(argv), `must allow: gh ${argv.join(" ")}`);
+  }
+  // A non-view, non-api write subcommand is still refused (existing contract).
+  assert.throws(() => assertGhReadOnly(["pr", "merge", "1"]), /non-read gh subcommand/);
+});
+
+// Layer 2: the fake-gh poison used by the read-only tests.
+test("A28: the fake gh poison rejects mutation-shaped `gh api` and serves a bare GET", () => {
+  const gh = installFakeGh({});
+  try {
+    for (const argv of [
+      ["api", "repos/x", "-f", "a=b"],
+      ["api", "repos/x", "--field", "a=b"],
+      ["api", "-X", "POST", "repos/x"],
+      ["api", "--method=PATCH", "repos/x"],
+      ["api", "repos/x", "--input", "body.json"],
+    ]) {
+      fs.rmSync(gh.poisonPath, { force: true });
+      let code = 0;
+      try {
+        execFileSync(gh.ghPath, argv, { stdio: "pipe" });
+      } catch (error) {
+        code = error.status;
+      }
+      assert.notEqual(code, 0, `gh ${argv.join(" ")} must poison`);
+      assert.match(gh.readPoison(), /GH_WRITE_INVOKED/, `gh ${argv.join(" ")} must write a poison marker`);
+    }
+    // A bare GET `gh api` is served (exit 0), no poison.
+    fs.rmSync(gh.poisonPath, { force: true });
+    const out = execFileSync(gh.ghPath, ["api", "repos/x"], { stdio: "pipe", encoding: "utf-8" });
+    assert.equal(gh.readPoison(), null, "a bare GET api read must never poison");
+    assert.equal(out, "{}", "the fake serves a read-shaped api GET");
+  } finally {
+    gh.cleanup();
   }
 });
 

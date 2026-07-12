@@ -74,13 +74,41 @@ function assertOrcaReadOnly(argv) {
   }
 }
 
+// A28: `gh api` body/field options that make the request default to a mutating POST.
+// Present in ANY of these forms, an `api` call is a write even without a literal `-X`.
+const GH_API_BODY_OPTS = new Set(["-f", "--field", "-F", "--raw-field", "--input"]);
+
+// Extract an explicit `gh api` method, handling both separated (`-X POST`, `--method POST`)
+// and attached (`-XPOST`, `--method=POST`) forms. Returns null when no method is specified
+// (a bare `gh api` defaults to GET).
+function ghApiMethod(argv) {
+  for (let i = 0; i < argv.length; i += 1) {
+    const token = argv[i];
+    if (token === "-X" || token === "--method") return String(argv[i + 1] || "");
+    if (token.startsWith("--method=")) return token.slice("--method=".length);
+    if (token.startsWith("-X") && token.length > 2) return token.slice(2);
+  }
+  return null;
+}
+
+// A28: a `gh api` invocation is mutation-shaped (defaults to POST/PATCH/PUT/DELETE) when it
+// carries any body/field option OR an explicit non-GET method. A bare `gh api <path>` (no
+// method, no body/field) is a read-only GET.
+function isMutatingGhApi(argv) {
+  if (argv[0] !== "api") return false;
+  if (argv.some((token) => GH_API_BODY_OPTS.has(token))) return true;
+  const method = ghApiMethod(argv);
+  if (method !== null && method.trim().toUpperCase() !== "GET") return true;
+  return argv.some((token) => /^(POST|PATCH|PUT|DELETE)$/i.test(token));
+}
+
 // Structural read-only refusal for gh: only `issue view`, `pr view`, and read-shaped
-// `api` GETs are permitted (D3). Any write subcommand is refused before it runs.
+// `api` GETs are permitted (D3). Any write subcommand — including a mutation-shaped `gh api`
+// carrying body/field options or an explicit non-GET method (A28) — is refused before it runs.
 function assertGhReadOnly(argv) {
   const isIssueView = argv[0] === "issue" && argv[1] === "view";
   const isPrView = argv[0] === "pr" && argv[1] === "view";
-  const isApiRead = argv[0] === "api" && !argv.some((token) => /^(-X|--method)$/.test(token))
-    && !argv.some((token) => /^(POST|PATCH|PUT|DELETE)$/i.test(token));
+  const isApiRead = argv[0] === "api" && !isMutatingGhApi(argv);
   if (!isIssueView && !isPrView && !isApiRead) {
     throw new Error(`relay-orca status must never invoke a non-read gh subcommand (got: ${argv.join(" ")})`);
   }
@@ -218,4 +246,8 @@ function main() {
   process.exitCode = 0;
 }
 
-main();
+// Run as a CLI only when invoked directly; importing this module (e.g. the A28 read-only
+// boundary unit tests) exercises the guard functions without triggering a real status run.
+if (require.main === module) main();
+
+module.exports = { assertGhReadOnly, assertOrcaReadOnly, isMutatingGhApi };

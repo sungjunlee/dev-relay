@@ -717,6 +717,14 @@ test("A24: run --repo-root pointed at a NON-git dir fails closed with RECEIPT_RE
     assert.match(body.message, /could not be canonicalized/i);
     // No receipt is written anywhere under the programs root when canonicalization fails.
     assert.deepEqual(fs.readdirSync(programsRoot), [], "no receipt directory is created on a fail-closed canonicalization");
+    // A27: canonicalization is EAGER — it runs before any admission/materialization mutation,
+    // so exit 52 leaves ZERO mutating Orca invocations in the fixture log (no task-create,
+    // terminal, or dispatch). Before A27 the first task-create ran before the receipt path was
+    // resolved, so a canon failure mutated Orca before failing (dropping that task's mapping).
+    const orcaLog = fake.readLog().join(" ");
+    ["task-create", "terminal", "dispatch"].forEach((mutating) =>
+      assert.equal(orcaLog.includes(mutating), false, `no ${mutating} may run before a fail-closed canonicalization; log=${orcaLog}`),
+    );
   } finally {
     fake.cleanup();
     fs.rmSync(nonGit, { recursive: true, force: true });

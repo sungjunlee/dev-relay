@@ -90,15 +90,17 @@ function parseArgs(argv) {
   return opts;
 }
 
-// D2 receipt persistence closure. Repo context (canonical root + slug) is resolved
-// lazily on first write, so plan-library rejections and admission rejections never
-// touch the filesystem. created_at is preserved across the materialize/dispatch
-// rewrites; only the atomic write + timestamps live here (top-level), while the pure
-// mapping is built by lib/receipt.js.
+// D2 receipt persistence closure. A27: repo context (canonical root + slug) is resolved
+// EAGERLY when this factory runs — at run startup, BEFORE orchestrate performs any
+// admission/materialization mutation. A git-canonicalization failure (A24) therefore
+// throws CanonicalizationError NOW, so `run` exits 52 with ZERO mutating Orca invocations
+// instead of after the first successful task-create had already mutated Orca (the exact
+// receipt-loss condition A12 forbids: the created task's mapping would never be persisted).
+// created_at is preserved across the materialize/dispatch rewrites; only the atomic write +
+// timestamps live here (top-level), while the pure mapping is built by lib/receipt.js.
 function makeReceiptPersistor(opts) {
-  let repo = null;
+  const repo = resolveRepoContext({ repoRootOverride: opts.repoRoot });
   return function persistReceipt(core) {
-    if (!repo) repo = resolveRepoContext({ repoRootOverride: opts.repoRoot });
     const finalPath = receiptPathFor(repo.slug, core.program_id);
     const nowIso = new Date().toISOString();
     let createdAt = nowIso;
@@ -177,12 +179,17 @@ function main() {
   const program = readProgram(opts.programFile);
   let result;
   try {
+    // A27: build the persistor FIRST. This eagerly canonicalizes the repo and resolves the
+    // receipt path before orchestrate runs ANY admission/materialization mutation — a
+    // git-canonicalization failure exits 52 here (CanonicalizationError, caught below) with
+    // zero mutating Orca invocations.
+    const persistReceipt = makeReceiptPersistor(opts);
     result = orchestrate(program, {
       concurrency: opts.concurrency,
       operatorHandles: opts.operatorHandles,
       orcaBin: opts.orcaBin,
       runOrca,
-      persistReceipt: makeReceiptPersistor(opts),
+      persistReceipt,
       // A26: the task-title program marker embeds the SAME collision-resistant segment
       // used for the receipt path, injected as a pure function (lib/ stays subprocess-free).
       programSegment,

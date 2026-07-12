@@ -336,7 +336,12 @@ Orca/GitHub do NOT fail the command; they degrade to diagnostics + `stale_missin
 
 `status` performs NO mutation of any kind: no GitHub write, no relay manifest write, no Orca
 mutating subcommand (`task-create`, `task-update`, `dispatch`, `terminal`, any `worktree`
-subcommand, `reset`), and no receipt write. The tests prove it: the fake Orca fixture poisons
-`reset`, `worktree`, and every mutating orchestration subcommand; the fake `gh` fixture
-hard-fails on any non-read subcommand; and a test asserts the receipt bytes are identical
-before and after `status`.
+subcommand, `reset`), and no receipt write. Only `gh issue view`, `gh pr view`, and
+**read-shaped** `gh api` GETs are permitted. A `gh api` call is read-shaped only when it
+carries **no** body/field option (`-f`, `--field`, `-F`, `--raw-field`, `--input`) and **no**
+explicit non-GET method — any of those makes `gh api` default to a mutating `POST`/`PATCH`/
+`PUT`/`DELETE`, so `assertGhReadOnly` (and the fake-`gh` poison) refuse it even without a
+literal `-X` (A28). The tests prove it: the fake Orca fixture poisons `reset`, `worktree`, and
+every mutating orchestration subcommand; the fake `gh` fixture hard-fails on any non-read
+subcommand — including a mutation-shaped `gh api`; and a test asserts the receipt bytes are
+identical before and after `status`.

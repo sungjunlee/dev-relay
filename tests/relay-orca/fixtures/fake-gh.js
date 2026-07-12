@@ -45,7 +45,25 @@ function poison(code) { if (poisonPath) fs.writeFileSync(poisonPath, "GH_WRITE_I
 
 const isIssueView = args[0] === "issue" && args[1] === "view";
 const isPrView = args[0] === "pr" && args[1] === "view";
-const isApiWrite = args[0] === "api" && (args.some(function (t) { return t === "-X" || t === "--method"; }) || args.some(function (t) { return /^(POST|PATCH|PUT|DELETE)$/i.test(t); }));
+// A28: body/field options make \`gh api\` default to a mutating POST even without \`-X\`;
+// an explicit non-GET method (separated or attached) is likewise a write. Mirror the
+// status.js assertGhReadOnly boundary so this poison layer rejects the same shapes.
+const GH_API_BODY_OPTS = ["-f", "--field", "-F", "--raw-field", "--input"];
+function ghApiMethod(a) {
+  for (var i = 0; i < a.length; i++) {
+    var t = a[i];
+    if (t === "-X" || t === "--method") return String(a[i + 1] || "");
+    if (t.indexOf("--method=") === 0) return t.slice(9);
+    if (t.indexOf("-X") === 0 && t.length > 2) return t.slice(2);
+  }
+  return null;
+}
+var apiMethod = args[0] === "api" ? ghApiMethod(args) : null;
+const isApiWrite = args[0] === "api" && (
+  args.some(function (t) { return GH_API_BODY_OPTS.indexOf(t) >= 0; })
+  || (apiMethod !== null && apiMethod.trim().toUpperCase() !== "GET")
+  || args.some(function (t) { return /^(POST|PATCH|PUT|DELETE)$/i.test(t); })
+);
 const isApiRead = args[0] === "api" && !isApiWrite;
 
 if (!isIssueView && !isPrView && !isApiRead) poison(92);
