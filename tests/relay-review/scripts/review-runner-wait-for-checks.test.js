@@ -21,8 +21,10 @@ const {
 } = require("../../relay-dispatch/scripts/test-support");
 const { EXECUTION_EVIDENCE_FILENAME } = require("../../../skills/relay-review/scripts/review-runner/execution-evidence");
 const {
+  MAX_GH_RETRIES,
   parseWaitForChecksSeconds,
   pollChecksUntilSettled,
+  toResultSummary,
 } = require("../../../skills/relay-review/scripts/review-runner/check-wait");
 const { writeFakeGhScript } = require("../fixtures/fake-gh");
 
@@ -218,6 +220,63 @@ test("pollChecksUntilSettled proceeds with pending states when the budget is exh
   assert.equal(outcome.budgetExhausted, true);
   assert.deepEqual(outcome.pendingCheckNames, ["unit"]);
   assert.equal(outcome.waitedMs, 2000);
+});
+
+// ---- #970: gh-error exhaustion is never exercised by DC #1/#2 above -------------
+
+test("pollChecksUntilSettled exhausts the gh-error retry budget and flags checks_unknown (#970)", () => {
+  const clock = { t: 0 };
+  let calls = 0;
+  const outcome = pollChecksUntilSettled(
+    { repoPath: ".", prNumber: 1, budgetSeconds: 600, intervalMs: 1000 },
+    {
+      now: () => clock.t,
+      sleep: (ms) => { clock.t += ms; },
+      fetchChecks: () => { calls += 1; throw new Error("gh pr checks failed: API unavailable"); },
+    }
+  );
+  assert.equal(outcome.pending, true, "never settles — proceeds with pending semantics");
+  assert.equal(calls, MAX_GH_RETRIES + 1, "gh is retried up to the named budget, then the loop gives up");
+  assert.equal(outcome.ghErrors, MAX_GH_RETRIES + 1);
+  assert.equal(outcome.budgetExhausted, false, "the gh-error path exits well short of the 600s budget");
+  assert.deepEqual(outcome.checks, [], "no checks payload was ever fetched");
+
+  const summary = toResultSummary(outcome);
+  assert.equal(summary.checks_unknown, true, "summary distinguishes state-unknown from nothing-pending");
+  assert.equal(summary.gh_errors, MAX_GH_RETRIES + 1);
+  assert.equal(summary.proceeded_with_pending, true);
+  assert.deepEqual(summary.pending_checks, [], "pending_checks alone would misread as nothing pending");
+});
+
+test("a normal settle summary does not carry checks_unknown (#970)", () => {
+  const clock = { t: 0 };
+  const outcome = pollChecksUntilSettled(
+    { repoPath: ".", prNumber: 1, budgetSeconds: 60, intervalMs: 1000 },
+    {
+      now: () => clock.t,
+      sleep: (ms) => { clock.t += ms; },
+      fetchChecks: () => [{ name: "unit", bucket: "pass" }],
+    }
+  );
+  assert.equal(outcome.pending, false);
+  const summary = toResultSummary(outcome);
+  assert.equal("checks_unknown" in summary, false, "settled rounds never carry the field");
+});
+
+test("a normal budget-exhausted summary (no gh errors) does not carry checks_unknown (#970)", () => {
+  const clock = { t: 0 };
+  const outcome = pollChecksUntilSettled(
+    { repoPath: ".", prNumber: 1, budgetSeconds: 2, intervalMs: 1000 },
+    {
+      now: () => clock.t,
+      sleep: (ms) => { clock.t += ms; },
+      fetchChecks: () => [{ name: "unit", bucket: "pending" }],
+    }
+  );
+  assert.equal(outcome.pending, true);
+  assert.equal(outcome.budgetExhausted, true);
+  const summary = toResultSummary(outcome);
+  assert.equal("checks_unknown" in summary, false, "a clean budget-exhaustion is not a gh-error exhaustion");
 });
 
 test("parseWaitForChecksSeconds: absent flag -> null, valid -> number, invalid -> throw", () => {

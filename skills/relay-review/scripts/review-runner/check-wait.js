@@ -58,6 +58,10 @@ function pollChecksUntilSettled({ repoPath, prNumber, budgetSeconds, intervalMs 
   let ghErrors = 0;
   let polls = 0;
   let settled = false;
+  // Set only when the loop exits because the gh-error retry budget was exhausted —
+  // distinct from budgetExhausted (deadline reached). Lets callers tell "nothing was
+  // pending" (pending_checks: []) apart from "check state unknown due to gh failures".
+  let checksUnknown = false;
   while (true) {
     polls += 1;
     let fetchError = null;
@@ -71,7 +75,11 @@ function pollChecksUntilSettled({ repoPath, prNumber, budgetSeconds, intervalMs 
       settled = true;
       break;
     }
-    if (now() >= deadline || (fetchError && ghErrors > MAX_GH_RETRIES)) break;
+    if (fetchError && ghErrors > MAX_GH_RETRIES) {
+      checksUnknown = true;
+      break;
+    }
+    if (now() >= deadline) break;
     wait(Math.min(intervalMs, Math.max(0, deadline - now())));
   }
   const pendingChecks = classifyChecks(checks).pendingChecks;
@@ -84,6 +92,7 @@ function pollChecksUntilSettled({ repoPath, prNumber, budgetSeconds, intervalMs 
     waitedMs: Math.max(0, now() - start),
     polls,
     ghErrors,
+    checksUnknown,
   };
 }
 
@@ -98,6 +107,7 @@ function toResultSummary(outcome) {
     gh_errors: outcome.ghErrors,
     checks: outcome.checks,
     pending_checks: outcome.pendingCheckNames,
+    ...(outcome.checksUnknown ? { checks_unknown: true } : {}),
   };
 }
 
