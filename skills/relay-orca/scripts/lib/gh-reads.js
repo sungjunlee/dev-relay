@@ -36,11 +36,19 @@ function ghIssueView(run, ghBin, number, options = {}) {
 // the PR_CHANGED head-moved detector. Both are read-only; the results are merged so
 // callers see one `{ state, mergedAt, headRefOid }` fact.
 //
-// A20: BOTH sub-reads are REQUIRED. If EITHER fails or returns invalid JSON, the PR
+// A20/A25: BOTH sub-reads are REQUIRED. If EITHER fails or returns invalid JSON, the PR
 // source is unreachable (ok:false) — it must NEVER substitute `{}` for the head read
 // and keep ok:true, because a resulting null `headRefOid` silently disables the
 // PR_CHANGED head-moved detector and can complete a merged outcome whose head actually
 // moved. An unreachable PR source degrades the outcome to stale_missing (A11/A20).
+//
+// A25: a head read that SUCCEEDS (status 0, valid JSON) but whose `headRefOid` is
+// missing, empty, or non-string is ALSO unreachable — the live head could not be
+// established, so the head comparison is skipped exactly as when the read failed. A
+// real `gh pr view` on an existing PR always returns a non-empty head OID; anything
+// else means the head fact is absent, and `pr_merged` must NEVER count as completion
+// evidence when the head comparison was skipped. So the whole PR source degrades to
+// stale_missing rather than false-completing a merged outcome off a null head.
 function ghPrView(run, ghBin, number, options = {}) {
   const mergeArgs = ["pr", "view", String(number), "--json", "mergedAt,state"];
   const mergeProc = run(ghBin, mergeArgs, options);
@@ -56,12 +64,15 @@ function ghPrView(run, ghBin, number, options = {}) {
     return { ok: false, reachable: false, proc: headProc };
   }
   const head = headParsed.value;
+  if (typeof head.headRefOid !== "string" || head.headRefOid.trim() === "") {
+    return { ok: false, reachable: false, proc: headProc };
+  }
   return {
     ok: true,
     reachable: true,
     state: typeof merge.state === "string" ? merge.state : null,
     mergedAt: merge.mergedAt ?? null,
-    headRefOid: typeof head.headRefOid === "string" ? head.headRefOid : null,
+    headRefOid: head.headRefOid,
     proc: mergeProc,
   };
 }

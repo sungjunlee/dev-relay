@@ -31,9 +31,14 @@ function diag(code, outcomeId, message, ids) {
   return { code, outcome_id: outcomeId ?? null, message: boundedExcerpt(message), ids: boundedIds(ids) };
 }
 
-function programMarker(programId) {
-  // Literal task-title marker run.js injects: `relay-orca: <program_id>/<outcome_id>`.
-  return `relay-orca: ${programId}/`;
+function programMarker(programId, programSegment) {
+  // A26: the task-title marker run.js injects embeds the collision-resistant program
+  // SEGMENT (sanitized ≤64 prefix + 8-hex sha256), NOT the raw id — the SAME encoder used
+  // for the receipt path. Detecting foreign tasks off the raw id would let program `alpha`
+  // adopt a task titled for `alpha/child` (the raw id can contain `/`); the slash-free
+  // segment keeps distinct programs on distinct markers. `programSegment` is injected
+  // (pure) so this lib module stays subprocess-free.
+  return `relay-orca: ${programSegment(programId)}/`;
 }
 
 function referencesProgram(text, programId) {
@@ -43,7 +48,7 @@ function referencesProgram(text, programId) {
 
 // Attribute the live runtime (D6). Orca facts are trusted ONLY when the live runtime
 // id matches the receipt AND every live orchestration task is marked for this program.
-function attributeRuntime({ receipt, programId, orca }) {
+function attributeRuntime({ receipt, programId, orca, programSegment }) {
   const unreachable = { runtime: "unreachable", orcaTrusted: false, tasks: [], gates: [], diagnostic: null };
   if (!orca) return unreachable;
   const status = orcaStatus(orca, null, {});
@@ -66,7 +71,7 @@ function attributeRuntime({ receipt, programId, orca }) {
   if (!gateList.ok) return unreachable;
   const tasks = taskList.tasks;
   const gates = gateList.gates;
-  const marker = programMarker(programId);
+  const marker = programMarker(programId, programSegment);
   const foreignTasks = tasks.filter((task) => !(typeof task.title === "string" && task.title.includes(marker)));
   // The live runtime id is subprocess-derived, so it is bounded (≤256 chars, marker
   // included) before it enters a diagnostic — the same rule the probe uses (D7).
@@ -303,11 +308,11 @@ function repairForOutcome(entry) {
 // Assemble the full D9 report from the receipt + injected read adapters. `manifests`
 // are the child run manifests (runs root); `fleetManifests` are the fleet manifests
 // from the SEPARATE fleets root (#945 A8), keyed by fleet id.
-function deriveStatusReport({ receipt, programId, receiptPath, manifests, fleetManifests = [], orca, gh, urlFor }) {
+function deriveStatusReport({ receipt, programId, receiptPath, manifests, fleetManifests = [], orca, gh, urlFor, programSegment }) {
   const resolvedUrlFor = typeof urlFor === "function" ? urlFor : () => null;
   const manifestByRunId = new Map(manifests.filter((entry) => entry.run_id).map((entry) => [entry.run_id, entry.parsed]));
   const fleetManifestById = new Map(fleetManifests.filter((entry) => entry.run_id).map((entry) => [entry.run_id, entry.parsed]));
-  const runtime = attributeRuntime({ receipt, programId, orca });
+  const runtime = attributeRuntime({ receipt, programId, orca, programSegment });
   const { diagnostics: duplicateDiagnostics, duplicateOutcomeIds } = detectDuplicateMappings(receipt.tasks);
 
   const entries = receipt.tasks.map((task) => {

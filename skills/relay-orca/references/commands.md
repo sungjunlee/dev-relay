@@ -151,8 +151,10 @@ Completion-driven wave advancement is #945/#947 scope.
 
 A `42`/`43` failure records the failing task `escalated`, dispatches no further pending task,
 and does not touch already-verified running operators (stop semantics are #946). Plan-library
-rejections re-raise codes `2`–`21`; usage errors exit `64`. Full operator prompt contract and
-provenance rules: [operator-dispatch.md](operator-dispatch.md).
+rejections re-raise codes `2`–`21`; usage errors exit `64`. A repo root that cannot be
+git-canonicalized fails closed with `RECEIPT_REPO_MISMATCH` (exit `52`) — there is **no**
+realpath fallback (A24). Full operator prompt contract and provenance rules:
+[operator-dispatch.md](operator-dispatch.md).
 
 ## `status` — read-only live reconciler
 
@@ -190,7 +192,7 @@ and the read-only guarantee: [receipt-and-status.md](receipt-and-status.md).
 | --- | --- | --- |
 | `RECEIPT_NOT_FOUND` | 50 | No receipt for `--program-id` under the programs root. |
 | `RECEIPT_CORRUPT` | 51 | Unparseable JSON, wrong `schema`, or missing required keys. |
-| `RECEIPT_REPO_MISMATCH` | 52 | The receipt `repo.slug` does not match the current repo. |
+| `RECEIPT_REPO_MISMATCH` | 52 | The receipt `repo.slug` does not match the current repo, **or** the repo root could not be git-canonicalized (fail-closed, no realpath fallback — A24). |
 
 Usage errors exit `64`. A successfully derived view exits `0` even when it is full of
 `inconsistent`/`stale_missing` outcomes; runtime mismatch and unreachable Orca/GitHub degrade

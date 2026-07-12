@@ -72,7 +72,14 @@ if (isPrView) {
   const isHeadRead = fields.indexOf("headRefOid") >= 0;
   if (isHeadRead && pr.headReadFails) { process.stderr.write("pr head read failed\\n"); process.exit(1); }
   if (!isHeadRead && pr.mergeReadFails) { process.stderr.write("pr merge read failed\\n"); process.exit(1); }
-  emit({ state: pr.state, mergedAt: pr.mergedAt === undefined ? null : pr.mergedAt, headRefOid: pr.headRefOid === undefined ? null : pr.headRefOid }, 0);
+  // A25: a real \`gh pr view\` on an existing PR ALWAYS returns a non-empty head OID, so
+  // default a stable non-empty \`headRefOid\` when a scenario does not pin one — otherwise a
+  // reachable merged PR would be mistaken for a head-missing degradation. A scenario models
+  // the MISSING-head case by setting \`headOmitted:true\` (key absent from the successful
+  // read) or \`headRefOid:null\`/\`""\` (present but empty).
+  const payload = { state: pr.state, mergedAt: pr.mergedAt === undefined ? null : pr.mergedAt };
+  if (!pr.headOmitted) payload.headRefOid = pr.headRefOid === undefined ? ("head-" + number) : pr.headRefOid;
+  emit(payload, 0);
 }
 if (isApiRead) emit({}, 0);
 

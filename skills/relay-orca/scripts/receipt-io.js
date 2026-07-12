@@ -11,8 +11,26 @@ const path = require("node:path");
 const crypto = require("node:crypto");
 const { execFileSync } = require("node:child_process");
 const { computeRepoSlug } = require("./lib/repo-slug");
+const { boundedExcerpt } = require("./lib/bounded-excerpt");
 
 const GIT_TIMEOUT_MS = 10000;
+
+// A24: a repo root that cannot be git-canonicalized FAILS CLOSED. Both `run` and
+// `status` catch this and reject with `RECEIPT_REPO_MISMATCH` (exit 52) — the SAME
+// fail-closed reason `status` already uses for a cross-repo receipt — rather than
+// deriving a slug from a plain realpath of an arbitrary directory, which could silently
+// point run/status at ANOTHER repository's receipts. It carries the reason_code/exitCode
+// shape both top-level scripts' rejection paths expect.
+class CanonicalizationError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "CanonicalizationError";
+    this.reasonCode = "RECEIPT_REPO_MISMATCH";
+    this.exitCode = 52;
+    this.remediation =
+      "Invoke relay-orca `run`/`status` from inside the git repository (or pass a --repo-root that is a git checkout); the repo root must be git-canonicalizable — there is no realpath fallback.";
+  }
+}
 
 // Canonicalize the repo root the SAME way relay's manifest/paths.js `getCanonicalRepoRoot`
 // does: run `git rev-parse --git-common-dir` at the provided root (or cwd), take that common
@@ -21,9 +39,12 @@ const GIT_TIMEOUT_MS = 10000;
 // the primary checkout — and `run` and `status` derive the same slug from the same input.
 // The `--repo-root` override (A22) is canonicalized through git identically — it is NOT
 // realpath'd directly — so pointing status/run at a linked worktree still derives the
-// primary slug. On ANY git failure (not a repo, git missing, timeout) it falls back to a
-// plain realpath of the provided root, which keeps the hermetic non-git path tests stable.
-// The slug is then computed from this canonical root by the replicated algorithm.
+// primary slug. On ANY git failure (not a repo, git missing, timeout) it FAILS CLOSED
+// (A24): there is NO realpath fallback, because deriving a slug from a plain realpath of
+// an arbitrary directory could silently read/write ANOTHER repo's receipts. It throws a
+// CanonicalizationError (RECEIPT_REPO_MISMATCH, exit 52) carrying a bounded excerpt of
+// the git error. The slug is then computed from this canonical root by the replicated
+// algorithm.
 function resolveCanonicalRepoRoot({ repoRootOverride, cwd } = {}) {
   const startDir = repoRootOverride || cwd || process.cwd();
   try {
@@ -34,8 +55,11 @@ function resolveCanonicalRepoRoot({ repoRootOverride, cwd } = {}) {
     }).trim();
     const commonDir = path.isAbsolute(commonDirText) ? commonDirText : path.resolve(startDir, commonDirText);
     return fs.realpathSync(path.dirname(commonDir));
-  } catch {
-    return fs.realpathSync(startDir);
+  } catch (error) {
+    const detail = boundedExcerpt(error && error.stderr ? String(error.stderr) : (error && error.message) || String(error));
+    throw new CanonicalizationError(
+      `repo root could not be canonicalized via git rev-parse at ${startDir}: ${detail}`,
+    );
   }
 }
 
@@ -192,6 +216,7 @@ function makeUrlResolver(repoRoot) {
 }
 
 module.exports = {
+  CanonicalizationError,
   resolveCanonicalRepoRoot,
   resolveRepoContext,
   programsRoot,

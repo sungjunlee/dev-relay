@@ -69,15 +69,28 @@ function runRun(args, env = {}) {
   return result;
 }
 
+// Initialize a REAL (tiny) git repo so `resolveCanonicalRepoRoot` succeeds. Since A24
+// removed the non-git realpath fallback (git-failure now fails closed with exit 52), the
+// hermetic --repo-root MUST be a git checkout. A freshly-init'd repo's git-common-dir is
+// `<root>/.git`, whose parent realpath's back to `<root>` — the same slug the fallback
+// used to yield — so every downstream receipt-path assertion stays byte-stable.
+function initGitRepo(root) {
+  const git = (args) => execFileSync("git", ["-C", root, ...args], { stdio: ["ignore", "pipe", "pipe"] });
+  git(["init", "-q"]);
+  git(["config", "user.email", "t@t.com"]);
+  git(["config", "user.name", "t"]);
+}
+
 // Isolate receipt persistence (#945 D2) into temp roots so run tests never touch the
-// real ~/.relay: a temp programs root + a temp --repo-root (realpath'd for a stable
-// slug). fake.cleanup() is extended to remove them.
+// real ~/.relay: a temp programs root + a temp --repo-root (a real git checkout, for a
+// stable git-canonical slug). fake.cleanup() is extended to remove them.
 function makeReceiptWorld() {
   const base = fs.mkdtempSync(path.join(os.tmpdir(), "relay-orca-run-receipt-"));
   const programsRoot = path.join(base, "programs");
   const repoRoot = path.join(base, "repo");
   fs.mkdirSync(programsRoot, { recursive: true });
   fs.mkdirSync(repoRoot, { recursive: true });
+  initGitRepo(repoRoot);
   return { base, programsRoot, repoRoot, slug: computeRepoSlug(fs.realpathSync(repoRoot)) };
 }
 
@@ -524,9 +537,10 @@ test("D4/D7: deps carry real Orca ids in dependency order; later-wave task stays
     assert.equal(taskByOutcome(r.body, "fanout").status, "pending");
     assert.equal(taskByOutcome(r.body, "fanout").orca_task_id, "orca-live-fanout");
     // The fanout task-create passes the real Orca id of its dependency via --deps.
+    // A26: the task title embeds the collision-resistant program SEGMENT, not the raw id.
     const fanoutCreate = r.fake
       .readLog()
-      .find((l) => l.includes("task-create") && l.includes("epic-demo-mixed/fanout"));
+      .find((l) => l.includes("task-create") && l.includes(`${programSegment("epic-demo-mixed")}/fanout`));
     assert.ok(fanoutCreate.includes('--deps ["orca-live-foundation"]'), `deps missing: ${fanoutCreate}`);
     assertNoPoison(r.fake);
   } finally {
@@ -668,6 +682,44 @@ test("A22: run --repo-root pointed at a LINKED WORKTREE writes the receipt under
   } finally {
     fake.cleanup();
     fs.rmSync(world.base, { recursive: true, force: true });
+  }
+});
+
+test("A24: run --repo-root pointed at a NON-git dir fails closed with RECEIPT_REPO_MISMATCH exit 52 (no realpath fallback)", () => {
+  // A24 removed the non-git realpath fallback: a repo root that cannot be git-canonicalized
+  // must NEVER be silently downgraded to an arbitrary-directory slug (which could read/write
+  // another repo's receipts). run fails closed with the same code status uses.
+  const nonGit = fs.mkdtempSync(path.join(os.tmpdir(), "relay-orca-run-nongit-"));
+  const programsRoot = path.join(nonGit, "programs");
+  fs.mkdirSync(programsRoot, { recursive: true });
+  const fake = installFakeOrcaRun({});
+  try {
+    const r = runRun(
+      [
+        "--json",
+        "--orca-bin",
+        fake.orcaPath,
+        "--repo-root",
+        nonGit,
+        "--program-file",
+        fixture("run-two-wave1.json"),
+        "--operator-handle",
+        "h1",
+        "--operator-handle",
+        "h2",
+      ],
+      { RELAY_ORCA_PROGRAMS_ROOT: programsRoot },
+    );
+    assert.equal(r.status, 52, "git-canonicalization failure exits 52");
+    const body = JSON.parse(r.stdout);
+    assert.equal(body.ok, false);
+    assert.equal(body.reason_code, "RECEIPT_REPO_MISMATCH");
+    assert.match(body.message, /could not be canonicalized/i);
+    // No receipt is written anywhere under the programs root when canonicalization fails.
+    assert.deepEqual(fs.readdirSync(programsRoot), [], "no receipt directory is created on a fail-closed canonicalization");
+  } finally {
+    fake.cleanup();
+    fs.rmSync(nonGit, { recursive: true, force: true });
   }
 });
 

@@ -27,10 +27,13 @@ manifests. The `--repo-root` override is canonicalized through git **identically
 **not** `realpath`'d directly — so pointing `run` or `status` at a linked worktree still
 derives the primary slug, and because both scripts resolve `--repo-root` through the same
 `resolveRepoContext`, a `run`-written receipt always resolves back for `status` on the same
-input. On **any** git failure (not a repo, git missing, timeout) the resolver falls back to a
-plain `realpath` of the provided root — the hermetic behavior the non-git path tests rely on.
-The subprocess lives in the top-level `receipt-io.js` script (the pure `lib/` modules stay
-subprocess-free). The programs root is overridable for tests via `RELAY_ORCA_PROGRAMS_ROOT`
+input. On **any** git failure (not a repo, git missing, timeout) the resolver **fails closed**
+(A24): there is **no** realpath fallback. Deriving a slug from a plain `realpath` of an
+arbitrary directory could silently point `run`/`status` at **another** repository's receipts,
+so both commands reject with `RECEIPT_REPO_MISMATCH` (exit `52`) and a message carrying a
+bounded excerpt of the git error. Hermetic tests therefore init a tiny real git fixture repo
+(or assert the exit-`52` failure path). The subprocess lives in the top-level `receipt-io.js`
+script (the pure `lib/` modules stay subprocess-free). The programs root is overridable for tests via `RELAY_ORCA_PROGRAMS_ROOT`
 (validated absolute path; invalid → ignored, default used).
 
 ### Program-segment encoding + identity check (collision-resistant)
@@ -233,17 +236,27 @@ required** (A20): if EITHER the merge read or the head read fails or returns inv
 the whole PR source is `unreachable` (`ok:false`) → the outcome degrades to `stale_missing`.
 The head read is **never** substituted with `{}` while keeping the PR source `ok:true`,
 because a resulting `null` `headRefOid` silently disables the `PR_CHANGED` head-moved detector
-and could complete a `merged` outcome whose head actually moved. A merged manifest with a
-closed issue therefore never false-completes when the live head could not be fetched — it
-degrades to `stale_missing` (A11/A20).
+and could complete a `merged` outcome whose head actually moved. **A25:** the same rule
+applies to a head read that **succeeds** (status 0, valid JSON) but whose `headRefOid` is
+missing, empty, or non-string — a real `gh pr view` on an existing PR always returns a
+non-empty head OID, so an absent one means the live head could not be established. That case
+is `unreachable` too: the head comparison is skipped exactly as when the read failed, and
+`pr_merged` never counts as completion evidence when the head comparison was skipped. A merged
+manifest with a closed issue therefore never false-completes when the live head could not be
+fetched **or was absent from the read** — it degrades to `stale_missing` (A11/A20/A25).
 
 ## Foreign / ambiguous runtime is never adopted
 
 If the live Orca `_meta.runtimeId` differs from the receipt's `runtime_id`, or the runtime
-carries orchestration tasks whose titles lack this program's `relay-orca:<program_id>/`
+carries orchestration tasks whose titles lack this program's `relay-orca: <program-segment>/`
 marker, Orca-derived facts are **not** adopted (they degrade to `stale_missing`); the report
 sets `runtime` to `"mismatch"` or `"foreign_state"` and durable truth still renders. Foreign
-tasks are never listed as this program's tasks.
+tasks are never listed as this program's tasks. **A26:** the marker embeds the SAME
+collision-resistant `<program-segment>` used for the receipt path (sanitized ≤64 prefix +
+8-hex `sha256`), **not** the raw id. A raw id can contain `/`, so a marker built from the raw
+id would let program `alpha` adopt a task titled for `alpha/child`; the slash-free segment
+keeps distinct programs on distinct markers. `run.js` materializes task titles and `status`
+detects foreign tasks through the SAME injected pure segment encoder.
 
 ## State taxonomy
 

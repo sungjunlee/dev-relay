@@ -16,11 +16,13 @@ const { orchestrate } = require("./lib/run-orchestrator");
 const { orderedReport } = require("./lib/run-report");
 const { buildReceiptMapping, serializeReceipt } = require("./lib/receipt");
 const {
+  CanonicalizationError,
   resolveRepoContext,
   receiptPathFor,
   writeReceiptAtomic,
   readReceiptFile,
   receiptExists,
+  programSegment,
 } = require("./receipt-io");
 
 const USAGE_EXIT = 64;
@@ -158,9 +160,11 @@ function printReport(report, json) {
   });
 }
 
-// Plan-library rejections re-raise unchanged (D1): same reason_code, same exit
-// code, same JSON rejection object shape as `plan`.
-function failPlan(error, json) {
+// Fail-closed rejection: plan-library rejections re-raise unchanged (D1) — same
+// reason_code, exit code, and JSON shape as `plan` — and a repo root that cannot be
+// git-canonicalized (A24) rejects with RECEIPT_REPO_MISMATCH (exit 52) through the same
+// path. Every carrier exposes reasonCode / message / exitCode.
+function failReject(error, json) {
   const body = { ok: false, reason_code: error.reasonCode, message: error.message };
   if (json) process.stdout.write(`${JSON.stringify(body, null, 2)}\n`);
   else process.stderr.write(`relay-orca run rejected [${error.reasonCode}]: ${error.message}\n`);
@@ -179,9 +183,12 @@ function main() {
       orcaBin: opts.orcaBin,
       runOrca,
       persistReceipt: makeReceiptPersistor(opts),
+      // A26: the task-title program marker embeds the SAME collision-resistant segment
+      // used for the receipt path, injected as a pure function (lib/ stays subprocess-free).
+      programSegment,
     });
   } catch (error) {
-    if (error instanceof PlanError) failPlan(error, opts.json);
+    if (error instanceof PlanError || error instanceof CanonicalizationError) failReject(error, opts.json);
     throw error;
   }
   printReport(result.report, opts.json);

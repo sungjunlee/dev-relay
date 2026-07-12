@@ -62,9 +62,14 @@ function admit(report, options) {
   return result.orca_bin;
 }
 
-function taskTitle(program, task) {
-  // Literal marker `relay-orca:` followed by `<program_id>/<outcome_id>` (D4).
-  return `relay-orca: ${program.id}/${task.outcome_id}`;
+function taskTitle(program, task, programSegment) {
+  // A26: the marker embeds the SAME collision-resistant program SEGMENT used for the
+  // receipt path (sanitized ≤64 prefix + 8-hex sha256), NOT the raw id. A raw id can
+  // contain `/`, so a marker built from `program.id` would let program `alpha` match a
+  // task titled for `alpha/child`. The segment is slash-free, so `status`'s
+  // `title.includes("relay-orca: <segment>/")` foreign-task check can never confuse two
+  // distinct programs. `programSegment` is injected (pure) so lib/ stays subprocess-free.
+  return `relay-orca: ${programSegment(program.id)}/${task.outcome_id}`;
 }
 
 function taskSpec(program, task) {
@@ -92,7 +97,7 @@ function materialize(plan, program, report, orcaBin, options) {
       const task = taskByPlanId.get(planId);
       const deps = task.depends_on.map((dep) => orcaIdByPlanId.get(dep));
       const res = createTask(options.runOrca, orcaBin, {
-        title: taskTitle(program, task),
+        title: taskTitle(program, task, options.programSegment),
         spec: taskSpec(program, task),
         deps,
       });

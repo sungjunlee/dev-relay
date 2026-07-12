@@ -12,6 +12,7 @@
 // in receipt-io.js; the pure scripts/lib/ modules receive injected read adapters.
 const { execFileSync } = require("node:child_process");
 const {
+  CanonicalizationError,
   resolveRepoContext,
   receiptPathFor,
   readReceiptFile,
@@ -19,6 +20,7 @@ const {
   listManifestFiles,
   listFleetManifestFiles,
   makeUrlResolver,
+  programSegment,
 } = require("./receipt-io");
 const { resolveOrcaBin } = require("./lib/resolve-orca-bin");
 const { parseReceipt } = require("./lib/receipt");
@@ -201,9 +203,14 @@ function main() {
       orca: makeRunner(resolveOrca(opts), assertOrcaReadOnly, repo.root),
       gh: makeRunner(resolveGhBin(opts), assertGhReadOnly, repo.root),
       urlFor: makeUrlResolver(repo.root),
+      // A26: the foreign-task marker embeds the SAME collision-resistant segment used for
+      // the receipt path, injected as a pure function (lib/ stays subprocess-free).
+      programSegment,
     });
   } catch (error) {
-    if (error instanceof StatusError) failStatus(error, opts.json);
+    // A24: a repo root that cannot be git-canonicalized fails closed with the same
+    // RECEIPT_REPO_MISMATCH (exit 52) contract as a cross-repo receipt.
+    if (error instanceof StatusError || error instanceof CanonicalizationError) failStatus(error, opts.json);
     throw error;
   }
 

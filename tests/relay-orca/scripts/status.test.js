@@ -81,7 +81,10 @@ function manifestText(fields) {
 function orcaTask(programId, outcome, extra = {}) {
   return {
     id: `orca-live-${outcome}`,
-    title: `relay-orca: ${programId}/${outcome}`,
+    // A26: run.js titles tasks with the collision-resistant program SEGMENT, not the raw
+    // id, so a healthy fixture task must carry the SAME segment for the foreign-task check
+    // (`title.includes("relay-orca: <segment>/")`) to attribute it to this program.
+    title: `relay-orca: ${programSegment(programId)}/${outcome}`,
     status: extra.status || "dispatched",
     worker_done: extra.worker_done === true,
   };
@@ -112,6 +115,18 @@ function gate(orcaTaskId, extra = {}) {
 
 // --- world harness -------------------------------------------------------------
 
+// Initialize a REAL (tiny) git repo so `resolveCanonicalRepoRoot` succeeds. A24 removed
+// the non-git realpath fallback (git-failure now fails closed with exit 52), so the
+// hermetic --repo-root MUST be a git checkout. A freshly-init'd repo's git-common-dir is
+// `<root>/.git`, whose parent realpath's back to `<root>` — the same slug the fallback
+// used to yield — so every downstream slug/receipt-path assertion stays byte-stable.
+function initGitRepo(root) {
+  const git = (args) => execFileSync("git", ["-C", root, ...args], { stdio: ["ignore", "pipe", "pipe"] });
+  git(["init", "-q"]);
+  git(["config", "user.email", "t@t.com"]);
+  git(["config", "user.name", "t"]);
+}
+
 function buildWorld({ programId, receipt, manifests = [], orcaScenario = {}, ghScenario = {}, runtimeId }) {
   const base = fs.mkdtempSync(path.join(os.tmpdir(), "relay-orca-status-"));
   const repoRoot = path.join(base, "repo");
@@ -121,6 +136,7 @@ function buildWorld({ programId, receipt, manifests = [], orcaScenario = {}, ghS
   // split: child run manifests under runs root, fleet manifests under fleets root.
   const fleetsRoot = path.join(base, "fleets");
   fs.mkdirSync(repoRoot, { recursive: true });
+  initGitRepo(repoRoot);
   const slug = computeRepoSlug(fs.realpathSync(repoRoot));
 
   const receiptObject = receipt || makeReceipt({ programId, slug, root: fs.realpathSync(repoRoot), runtimeId, tasks: [] });
@@ -481,6 +497,60 @@ test("D10.8: runtime restart → runtime mismatch, Orca facts degrade, durable-c
     assert.deepEqual(r.body.outcomes.map((o) => o.outcome_id).sort(), ["done", "live"]);
   } finally {
     world.cleanup();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// A26 — the foreign-task marker embeds the collision-resistant program segment
+// ---------------------------------------------------------------------------
+
+test("A26: program `alpha` does NOT adopt a task titled for `alpha/child` (distinct segments); a same-segment task IS adopted", () => {
+  const programId = "alpha";
+  const siblingId = "alpha/child";
+  assert.notEqual(programSegment(programId), programSegment(siblingId), "the two program ids must resolve to DISTINCT segments");
+
+  // (a) collision avoided: the ONLY live task is titled for the SIBLING program
+  //     `alpha/child`. With the raw-id marker `relay-orca: alpha/` this task WOULD have
+  //     been adopted as alpha's (`alpha/child/...`.includes(`alpha/`)); the segment-based
+  //     marker is not a prefix of the sibling's segment, so it is FOREIGN and never adopted.
+  const foreign = buildWorld({
+    programId,
+    manifests: [{ run_id: "run-al", state: "dispatched", pr_number: 12, issue_number: 120 }],
+    orcaScenario: {
+      tasks: [{ id: "orca-live-sib", title: `relay-orca: ${programSegment(siblingId)}/child-oc`, status: "dispatched", worker_done: false }],
+    },
+    ghScenario: { prs: { 12: { state: "OPEN" } }, issues: { 120: { state: "OPEN" } } },
+  });
+  const foreignReceipt = makeReceipt({ programId, slug: foreign.slug, root: fs.realpathSync(foreign.repoRoot), tasks: [{ outcome_id: "al", run: "run-al" }] });
+  fs.writeFileSync(foreign.receiptPath, `${JSON.stringify(foreignReceipt, null, 2)}\n`, "utf-8");
+  try {
+    const r = foreign.run();
+    assert.equal(r.status, 0);
+    assert.equal(r.body.runtime, "foreign_state", "a task titled for alpha/child is foreign to alpha");
+    assert.ok(diagCodes(r.body).includes("RUNTIME_MISMATCH"));
+    // durable truth still renders; Orca facts degrade because the runtime is foreign.
+    assert.equal(outcomeById(r.body, "al").state, "stale_missing");
+  } finally {
+    foreign.cleanup();
+  }
+
+  // (b) healthy adoption still works: a task titled with alpha's OWN segment is adopted →
+  //     runtime ok, the mapped outcome renders normally.
+  const healthy = buildWorld({
+    programId,
+    manifests: [{ run_id: "run-al2", state: "dispatched", pr_number: 13, issue_number: 130 }],
+    orcaScenario: { tasks: [orcaTask(programId, "al2")] },
+    ghScenario: { prs: { 13: { state: "OPEN" } }, issues: { 130: { state: "OPEN" } } },
+  });
+  const healthyReceipt = makeReceipt({ programId, slug: healthy.slug, root: fs.realpathSync(healthy.repoRoot), tasks: [{ outcome_id: "al2", run: "run-al2" }] });
+  fs.writeFileSync(healthy.receiptPath, `${JSON.stringify(healthyReceipt, null, 2)}\n`, "utf-8");
+  try {
+    const r = healthy.run();
+    assert.equal(r.status, 0);
+    assert.equal(r.body.runtime, "ok", "alpha's own segment-marked task is adopted");
+    assert.equal(outcomeById(r.body, "al2").state, "running");
+  } finally {
+    healthy.cleanup();
   }
 });
 
@@ -1707,6 +1777,35 @@ test("A20: a merged outcome whose PR HEAD sub-read fails → stale_missing, neve
   }
 });
 
+test("A25: a merged PR whose head read SUCCEEDS but omits headRefOid → stale_missing, never complete off a null head", () => {
+  // The merge read (mergedAt,state) SUCCEEDS (MERGED) AND the head read SUCCEEDS (status 0,
+  // valid JSON) but carries NO headRefOid. Before A25 that parsed-but-missing head counted
+  // as reachable with headRefOid=null, silently skipping the live-head comparison while the
+  // merged manifest + closed issue false-completed. A25 makes a missing/empty head OID from a
+  // successful read UNREACHABLE too → the outcome degrades to stale_missing and pr_merged is
+  // never counted as completion evidence when the head comparison was skipped.
+  const programId = "epic-status-head-absent";
+  const world = buildWorld({
+    programId,
+    manifests: [{ run_id: "run-ha", state: "merged", pr_number: 810, issue_number: 8100 }],
+    orcaScenario: { tasks: [orcaTask(programId, "ha", { status: "completed", worker_done: true })] },
+    ghScenario: { prs: { 810: { state: "MERGED", mergedAt: "2026-07-12T12:30:00Z", headOmitted: true } }, issues: { 8100: { state: "CLOSED" } } },
+  });
+  const receipt = makeReceipt({ programId, slug: world.slug, root: fs.realpathSync(world.repoRoot), tasks: [{ outcome_id: "ha", run: "run-ha" }] });
+  fs.writeFileSync(world.receiptPath, `${JSON.stringify(receipt, null, 2)}\n`, "utf-8");
+  try {
+    const r = world.run();
+    assert.equal(r.status, 0, "a head-missing PR read never fails the command");
+    const outcome = outcomeById(r.body, "ha");
+    assert.equal(outcome.state, "stale_missing", "a head-missing PR read degrades the outcome, never false-completes");
+    assert.notEqual(outcome.state, "complete_with_evidence");
+    assert.equal(outcome.evidence.pr_merged, null, "pr_merged is withheld, not fabricated, when the head comparison was skipped");
+    assert.equal(world.gh.readPoison(), null, "a read never writes a poison");
+  } finally {
+    world.cleanup();
+  }
+});
+
 // ---------------------------------------------------------------------------
 // A22 — --repo-root is canonicalized through Git (a linked worktree → PRIMARY slug)
 // ---------------------------------------------------------------------------
@@ -1729,7 +1828,7 @@ function makeGitWorktree() {
   return { base, primary, worktree, primaryRoot, primarySlug: computeRepoSlug(primaryRoot), worktreeSlug: computeRepoSlug(fs.realpathSync(worktree)) };
 }
 
-test("A22: resolveRepoContext canonicalizes a linked worktree to the PRIMARY root/slug; a non-git dir falls back to realpath", () => {
+test("A22/A24: resolveRepoContext canonicalizes a linked worktree to the PRIMARY root/slug; a non-git dir FAILS CLOSED (no realpath fallback)", () => {
   const wt = makeGitWorktree();
   const nonGit = fs.mkdtempSync(path.join(os.tmpdir(), "relay-orca-nongit-"));
   try {
@@ -1740,9 +1839,18 @@ test("A22: resolveRepoContext canonicalizes a linked worktree to the PRIMARY roo
     assert.equal(fromWorktree.root, wt.primaryRoot, "the linked worktree collapses to the primary checkout root");
     assert.equal(fromWorktree.slug, wt.primarySlug, "the slug derives from the PRIMARY root, not the worktree dir");
     assert.equal(resolveCanonicalRepoRoot({ repoRootOverride: wt.primary }), wt.primaryRoot, "the primary checkout resolves to itself");
-    // On git failure (a plain non-repo dir) the resolver falls back to a realpath of the
-    // provided root — the hermetic behavior every other path test relies on.
-    assert.equal(resolveCanonicalRepoRoot({ repoRootOverride: nonGit }), fs.realpathSync(nonGit));
+    // A24: on git failure (a plain non-repo dir) the resolver FAILS CLOSED — it throws a
+    // RECEIPT_REPO_MISMATCH (exit 52) CanonicalizationError rather than silently falling
+    // back to a realpath of an arbitrary directory (which could point at another repo).
+    assert.throws(
+      () => resolveCanonicalRepoRoot({ repoRootOverride: nonGit }),
+      (error) => {
+        assert.equal(error.reasonCode, "RECEIPT_REPO_MISMATCH");
+        assert.equal(error.exitCode, 52);
+        assert.match(error.message, /could not be canonicalized/i);
+        return true;
+      },
+    );
   } finally {
     fs.rmSync(wt.base, { recursive: true, force: true });
     fs.rmSync(nonGit, { recursive: true, force: true });
