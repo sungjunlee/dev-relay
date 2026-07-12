@@ -14,20 +14,29 @@ const { computeRepoSlug } = require("./lib/repo-slug");
 
 const GIT_TIMEOUT_MS = 10000;
 
-// Canonicalize the repo root the SAME way relay's manifest/paths.js does: resolve the
-// git common dir and realpath its parent (collapsing a linked worktree to the main
-// checkout). A --repo-root override skips git and realpaths the given path directly —
-// the hermetic path tests use. The slug is then computed by the replicated algorithm.
+// Canonicalize the repo root the SAME way relay's manifest/paths.js `getCanonicalRepoRoot`
+// does: run `git rev-parse --git-common-dir` at the provided root (or cwd), take that common
+// dir's PARENT, and realpath it. This collapses a LINKED WORKTREE to the PRIMARY checkout
+// root, so a receipt written from a worktree resolves back to the same slug relay used for
+// the primary checkout — and `run` and `status` derive the same slug from the same input.
+// The `--repo-root` override (A22) is canonicalized through git identically — it is NOT
+// realpath'd directly — so pointing status/run at a linked worktree still derives the
+// primary slug. On ANY git failure (not a repo, git missing, timeout) it falls back to a
+// plain realpath of the provided root, which keeps the hermetic non-git path tests stable.
+// The slug is then computed from this canonical root by the replicated algorithm.
 function resolveCanonicalRepoRoot({ repoRootOverride, cwd } = {}) {
-  if (repoRootOverride) return fs.realpathSync(repoRootOverride);
-  const dir = cwd || process.cwd();
-  const commonDirText = execFileSync("git", ["-C", dir, "rev-parse", "--git-common-dir"], {
-    encoding: "utf-8",
-    stdio: ["ignore", "pipe", "pipe"],
-    timeout: GIT_TIMEOUT_MS,
-  }).trim();
-  const commonDir = path.isAbsolute(commonDirText) ? commonDirText : path.resolve(dir, commonDirText);
-  return fs.realpathSync(path.dirname(commonDir));
+  const startDir = repoRootOverride || cwd || process.cwd();
+  try {
+    const commonDirText = execFileSync("git", ["-C", startDir, "rev-parse", "--git-common-dir"], {
+      encoding: "utf-8",
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: GIT_TIMEOUT_MS,
+    }).trim();
+    const commonDir = path.isAbsolute(commonDirText) ? commonDirText : path.resolve(startDir, commonDirText);
+    return fs.realpathSync(path.dirname(commonDir));
+  } catch {
+    return fs.realpathSync(startDir);
+  }
 }
 
 function resolveRepoContext(options = {}) {

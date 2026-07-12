@@ -19,9 +19,18 @@ That exact sentence is carried verbatim in every receipt's top-level `note` fiel
 `skills/relay-dispatch/scripts/manifest/paths.js` `getRepoSlug`): the lowercased,
 dash-sanitized basename of the **canonicalized repo root** joined to the first 8 hex chars
 of its `sha256`. relay-orca replicates the algorithm in `scripts/lib/repo-slug.js` — it does
-**not** import cross-skill code. The canonical root is resolved the same way relay does (git
-common dir → `realpath` of its parent), so a receipt lands under the same slug relay uses for
-its run manifests. The programs root is overridable for tests via `RELAY_ORCA_PROGRAMS_ROOT`
+**not** import cross-skill code. The canonical root is resolved the same way relay's
+`getCanonicalRepoRoot` does (A22): `git rev-parse --git-common-dir` at the input path, take
+that common dir's **parent**, and `realpath` it. This collapses a **linked worktree** to the
+**primary checkout** root, so a receipt lands under the same slug relay uses for its run
+manifests. The `--repo-root` override is canonicalized through git **identically** — it is
+**not** `realpath`'d directly — so pointing `run` or `status` at a linked worktree still
+derives the primary slug, and because both scripts resolve `--repo-root` through the same
+`resolveRepoContext`, a `run`-written receipt always resolves back for `status` on the same
+input. On **any** git failure (not a repo, git missing, timeout) the resolver falls back to a
+plain `realpath` of the provided root — the hermetic behavior the non-git path tests rely on.
+The subprocess lives in the top-level `receipt-io.js` script (the pure `lib/` modules stay
+subprocess-free). The programs root is overridable for tests via `RELAY_ORCA_PROGRAMS_ROOT`
 (validated absolute path; invalid → ignored, default used).
 
 ### Program-segment encoding + identity check (collision-resistant)
@@ -243,7 +252,18 @@ Outcome `state` is exactly one of: `running`, `awaiting_decision`, `complete_wit
 
 Program `state` is one of those six or `ready_for_next_wave` (every outcome in the preceding
 waves of the lowest incomplete wave is `complete_with_evidence`, no outcome is
-`escalated`/`inconsistent`, and the next wave is not yet started). Pinned decisions:
+`escalated`/`inconsistent`, and the next wave is not yet started).
+
+**Started-ness (A23).** An outcome counts as **started** when it carries a `dispatch_id`, a
+`relay_ids.run`, a **`relay_ids.fleet`** mapping, a live fleet manifest resolved for it, **or**
+a PR. The fleet mapping is decisive: a `relay_fleet` outcome whose fleet is already dispatched
+has no per-run `dispatch_id`/`relay_ids.run`/PR of its own yet, so without counting the fleet
+mapping the wave would be mis-derived as an **unstarted** next wave and the program would
+falsely report `ready_for_next_wave` while the fleet is actually running. Such an outcome is
+`running` (or whatever state its own facts dictate — e.g. `escalated` for an escalated child),
+never treated as unstarted by program-state derivation.
+
+Pinned decisions:
 
 - Orca task completed/`worker_done` BUT (open PR OR non-terminal relay manifest) →
   `inconsistent` (stale-`worker_done` rule; never complete).

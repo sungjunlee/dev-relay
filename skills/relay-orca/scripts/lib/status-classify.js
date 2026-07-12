@@ -246,7 +246,16 @@ function classifyOutcome(facts, { orcaTrusted, isDuplicate }) {
   const complete = isComplete(evidence);
   const { diagnostics, flags } = detectOutcome(facts, evidence, orcaTrusted, complete);
   const state = outcomeState(facts, evidence, complete, flags, orcaTrusted, isDuplicate);
-  const started = Boolean(receiptTask.dispatch_id || (receiptTask.relay_ids && receiptTask.relay_ids.run) || facts.pr);
+  // A23: a durable fleet mapping counts as started, exactly like a per-run dispatch, a
+  // relay run mapping, or a PR. `relay_ids.fleet` (or a live fleet manifest resolved for
+  // this outcome) means the wave's work is under way even before any child run has its own
+  // dispatch_id / relay_ids.run / PR. Without this, a wave whose only in-progress outcome is
+  // a relay_fleet would be mis-derived as an UNSTARTED next wave and deriveProgramState would
+  // falsely report `ready_for_next_wave` while the fleet is actually running.
+  const relayIds = receiptTask.relay_ids || {};
+  const started = Boolean(
+    receiptTask.dispatch_id || relayIds.run || relayIds.fleet || facts.fleetManifest || facts.pr,
+  );
   return {
     outcome: {
       outcome_id: receiptTask.outcome_id,

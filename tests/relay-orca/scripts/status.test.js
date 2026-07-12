@@ -16,7 +16,13 @@ const { REPORT_KEYS, OUTCOME_KEYS, DIAGNOSTIC_CODES } = require(path.join(SCRIPT
 const { classifyOutcome } = require(path.join(SCRIPTS, "lib", "status-classify.js"));
 const { RECEIPT_NOTE } = require(path.join(SCRIPTS, "lib", "receipt.js"));
 const { computeRepoSlug } = require(path.join(SCRIPTS, "lib", "repo-slug.js"));
-const { programSegment, runsRoot: resolveRunsRoot, fleetsRoot: resolveFleetsRoot } = require(path.join(SCRIPTS, "receipt-io.js"));
+const {
+  programSegment,
+  runsRoot: resolveRunsRoot,
+  fleetsRoot: resolveFleetsRoot,
+  resolveCanonicalRepoRoot,
+  resolveRepoContext,
+} = require(path.join(SCRIPTS, "receipt-io.js"));
 const { installFakeOrcaStatus } = require(path.join(__dirname, "..", "fixtures", "fake-orca-status.js"));
 const { installFakeGh } = require(path.join(__dirname, "..", "fixtures", "fake-gh.js"));
 const { DEFAULT_RUNTIME_ID } = require(path.join(__dirname, "..", "fixtures", "fake-orca.js"));
@@ -1696,6 +1702,162 @@ test("A20: a merged outcome whose PR HEAD sub-read fails → stale_missing, neve
     assert.notEqual(outcome.state, "complete_with_evidence");
     assert.equal(outcome.evidence.pr_merged, null, "the PR fact is withheld, not fabricated");
     assert.equal(world.gh.readPoison(), null, "a failed read is not a write poison");
+  } finally {
+    world.cleanup();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// A22 — --repo-root is canonicalized through Git (a linked worktree → PRIMARY slug)
+// ---------------------------------------------------------------------------
+
+// Build a REAL primary git checkout + a LINKED WORKTREE whose `.git` FILE points at the
+// primary's git-common-dir. Pointing --repo-root at the worktree must derive the PRIMARY
+// slug, not the worktree-directory slug.
+function makeGitWorktree() {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "relay-orca-status-worktree-"));
+  const primary = path.join(base, "primary");
+  const worktree = path.join(base, "wt");
+  fs.mkdirSync(primary, { recursive: true });
+  const git = (args, cwd) => execFileSync("git", args, { cwd, stdio: ["ignore", "pipe", "pipe"] });
+  git(["init", "-q"], primary);
+  git(["config", "user.email", "t@t.com"], primary);
+  git(["config", "user.name", "t"], primary);
+  git(["commit", "-q", "--allow-empty", "-m", "init"], primary);
+  git(["worktree", "add", "-q", "--detach", worktree, "HEAD"], primary);
+  const primaryRoot = fs.realpathSync(primary);
+  return { base, primary, worktree, primaryRoot, primarySlug: computeRepoSlug(primaryRoot), worktreeSlug: computeRepoSlug(fs.realpathSync(worktree)) };
+}
+
+test("A22: resolveRepoContext canonicalizes a linked worktree to the PRIMARY root/slug; a non-git dir falls back to realpath", () => {
+  const wt = makeGitWorktree();
+  const nonGit = fs.mkdtempSync(path.join(os.tmpdir(), "relay-orca-nongit-"));
+  try {
+    assert.notEqual(wt.primarySlug, wt.worktreeSlug, "the worktree dir slug genuinely differs from the primary slug");
+    // run.js and status.js BOTH resolve --repo-root through resolveRepoContext, so this
+    // equality is exactly what makes them agree on where the receipt lives.
+    const fromWorktree = resolveRepoContext({ repoRootOverride: wt.worktree });
+    assert.equal(fromWorktree.root, wt.primaryRoot, "the linked worktree collapses to the primary checkout root");
+    assert.equal(fromWorktree.slug, wt.primarySlug, "the slug derives from the PRIMARY root, not the worktree dir");
+    assert.equal(resolveCanonicalRepoRoot({ repoRootOverride: wt.primary }), wt.primaryRoot, "the primary checkout resolves to itself");
+    // On git failure (a plain non-repo dir) the resolver falls back to a realpath of the
+    // provided root — the hermetic behavior every other path test relies on.
+    assert.equal(resolveCanonicalRepoRoot({ repoRootOverride: nonGit }), fs.realpathSync(nonGit));
+  } finally {
+    fs.rmSync(wt.base, { recursive: true, force: true });
+    fs.rmSync(nonGit, { recursive: true, force: true });
+  }
+});
+
+test("A22: status --repo-root pointed at a LINKED WORKTREE loads the receipt stored under the PRIMARY slug", () => {
+  const wt = makeGitWorktree();
+  const programId = "epic-status-worktree";
+  const orca = installFakeOrcaStatus({ runtimeId: DEFAULT_RUNTIME_ID, tasks: [] });
+  const gh = installFakeGh({});
+  const programsRoot = path.join(wt.base, "programs");
+  const runsRoot = path.join(wt.base, "runs");
+  const fleetsRoot = path.join(wt.base, "fleets");
+  // The receipt is stored under the PRIMARY slug (where `run` from the same worktree would
+  // have written it). A worktree-slug resolver would look under `worktreeSlug` and 404.
+  const receiptDir = path.join(programsRoot, wt.primarySlug, programSegment(programId));
+  fs.mkdirSync(receiptDir, { recursive: true });
+  const receiptPath = path.join(receiptDir, "receipt.json");
+  const receipt = makeReceipt({ programId, slug: wt.primarySlug, root: wt.primaryRoot, tasks: [{ outcome_id: "x", orca_task_id: null, dispatch_id: null, assignee: null, run: "run-x" }] });
+  fs.writeFileSync(receiptPath, `${JSON.stringify(receipt, null, 2)}\n`, "utf-8");
+  fs.mkdirSync(path.join(runsRoot, wt.primarySlug), { recursive: true });
+  fs.writeFileSync(path.join(runsRoot, wt.primarySlug, "run-x.md"), manifestText({ run_id: "run-x", state: "dispatched", pr_number: null, issue_number: null }), "utf-8");
+  const args = [STATUS_JS, "--program-id", programId, "--json", "--orca-bin", orca.orcaPath, "--gh-bin", gh.ghPath, "--repo-root", wt.worktree];
+  const result = { status: 0, stdout: "" };
+  try {
+    result.stdout = execFileSync(process.execPath, args, {
+      encoding: "utf-8",
+      env: { ...process.env, RELAY_ORCA_PROGRAMS_ROOT: programsRoot, RELAY_ORCA_RUNS_ROOT: runsRoot, RELAY_ORCA_FLEETS_ROOT: fleetsRoot },
+      stdio: "pipe",
+    });
+  } catch (error) {
+    result.status = error.status;
+    result.stdout = error.stdout ? String(error.stdout) : "";
+  }
+  const body = result.stdout ? JSON.parse(result.stdout) : null;
+  try {
+    assert.equal(result.status, 0, "status finds the primary-slug receipt from the linked worktree (no RECEIPT_NOT_FOUND / REPO_MISMATCH)");
+    assert.equal(body.program_id, programId);
+    assert.equal(body.receipt_path, receiptPath, "the loaded receipt is the one under the primary slug");
+    assert.equal(outcomeById(body, "x").state, "running");
+  } finally {
+    orca.cleanup();
+    gh.cleanup();
+    fs.rmSync(wt.base, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// A23 — a durable fleet mapping (relay_ids.fleet / live fleet manifest) counts as started
+// ---------------------------------------------------------------------------
+
+test("A23: a relay_fleet outcome with only relay_ids.fleet + a live non-complete fleet manifest is started → running", () => {
+  const facts = {
+    receiptTask: {
+      outcome_id: "f",
+      task_id: "orca-task-f",
+      kind: "relay_fleet",
+      wave: 2,
+      orca_task_id: null,
+      dispatch_id: null,
+      assignee: null,
+      relay_ids: { request: null, run: null, fleet: "fleet-live" },
+    },
+    manifest: null,
+    mappedRunId: null,
+    mappedRunMissing: false,
+    // A live fleet manifest is mapped for this outcome, but it is NOT terminal yet.
+    fleetManifest: { fleet_id: "fleet-live", fleet_state: "dispatched", fleet_children: [] },
+    mappedFleetId: "fleet-live",
+    fleetChildren: [],
+    fleetChildEscalated: false,
+    pr: null,
+    issue: null,
+    prUrl: null,
+    issueUrl: null,
+  };
+  const { outcome, started } = classifyOutcome(facts, { orcaTrusted: true, isDuplicate: false });
+  assert.equal(started, true, "a durable fleet mapping counts as started even with no dispatch_id / relay_ids.run / PR");
+  assert.equal(outcome.state, "running", "an in-progress fleet is running, never treated as unstarted");
+});
+
+test("A23: a wave whose only in-progress outcome is a live relay_fleet is NOT ready_for_next_wave — the program is running", () => {
+  const programId = "epic-status-fleet-started";
+  const world = buildWorld({
+    programId,
+    manifests: [
+      // wave 1: a fully complete relay_run
+      { run_id: "run-w1", state: "merged", pr_number: 900, issue_number: 9000 },
+      // wave 2: a LIVE, non-complete fleet manifest (fleets root) + a non-terminal child
+      { run_id: "fleet-w2", fleet_state: "dispatched", children: [{ leaf_ref: "l1", run_id: "child-w2" }] },
+      { run_id: "child-w2", state: "dispatched", pr_number: 901, issue_number: 9001 },
+    ],
+    orcaScenario: { tasks: [orcaTask(programId, "w1", { status: "completed", worker_done: true })] },
+    ghScenario: { prs: { 900: { state: "MERGED", mergedAt: "2026-07-12T13:00:00Z" } }, issues: { 9000: { state: "CLOSED" } } },
+  });
+  const receipt = makeReceipt({
+    programId,
+    slug: world.slug,
+    root: fs.realpathSync(world.repoRoot),
+    tasks: [
+      { outcome_id: "w1", wave: 1, run: "run-w1" },
+      // The wave-2 fleet outcome has NO dispatch_id / run / orca task yet — only relay_ids.fleet.
+      { outcome_id: "w2", wave: 2, kind: "relay_fleet", orca_task_id: null, dispatch_id: null, assignee: null, fleet: "fleet-w2" },
+    ],
+  });
+  fs.writeFileSync(world.receiptPath, `${JSON.stringify(receipt, null, 2)}\n`, "utf-8");
+  try {
+    const r = world.run();
+    assert.equal(r.status, 0);
+    assert.equal(outcomeById(r.body, "w1").state, "complete_with_evidence");
+    assert.equal(outcomeById(r.body, "w2").state, "running", "the mapped, live fleet outcome is running");
+    // Because the wave-2 fleet is already started, the program is NOT falsely ready_for_next_wave.
+    assert.equal(r.body.program_state, "running");
+    assert.notEqual(r.body.program_state, "ready_for_next_wave");
   } finally {
     world.cleanup();
   }

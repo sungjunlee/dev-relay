@@ -87,6 +87,35 @@ function receiptPathForWorld(world, programId) {
   return path.join(world.programsRoot, world.slug, programSegment(programId), "receipt.json");
 }
 
+// A22 harness: a REAL primary git checkout plus a LINKED WORKTREE whose `.git` FILE points
+// at the primary's git-common-dir. `--repo-root` is pointed at the worktree; run.js must
+// canonicalize it through git to the PRIMARY root so the receipt lands under the primary
+// slug (`primarySlug`), NOT the worktree-directory slug (`worktreeSlug`).
+function makeGitWorktreeReceiptWorld() {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "relay-orca-run-worktree-"));
+  const programsRoot = path.join(base, "programs");
+  const primary = path.join(base, "primary");
+  const worktree = path.join(base, "wt");
+  fs.mkdirSync(programsRoot, { recursive: true });
+  fs.mkdirSync(primary, { recursive: true });
+  const git = (args, cwd) => execFileSync("git", args, { cwd, stdio: ["ignore", "pipe", "pipe"] });
+  git(["init", "-q"], primary);
+  git(["config", "user.email", "t@t.com"], primary);
+  git(["config", "user.name", "t"], primary);
+  git(["commit", "-q", "--allow-empty", "-m", "init"], primary);
+  git(["worktree", "add", "-q", "--detach", worktree, "HEAD"], primary);
+  const primaryRoot = fs.realpathSync(primary);
+  return {
+    base,
+    programsRoot,
+    primary,
+    worktree,
+    primaryRoot,
+    primarySlug: computeRepoSlug(primaryRoot),
+    worktreeSlug: computeRepoSlug(fs.realpathSync(worktree)),
+  };
+}
+
 function runProgram(fixtureName, extraArgs, scenario, options = {}) {
   const fake = installFakeOrcaRun(scenario || {});
   const world = makeReceiptWorld();
@@ -596,6 +625,49 @@ test("D2: a successful run persists a schema-1 receipt (identity/mapping only) a
     );
   } finally {
     r.fake.cleanup();
+  }
+});
+
+test("A22: run --repo-root pointed at a LINKED WORKTREE writes the receipt under the PRIMARY slug (git-canonical repo root)", () => {
+  // The provided --repo-root is a linked worktree whose `.git` FILE points at the primary
+  // checkout's git-common-dir. run.js canonicalizes it through git to the PRIMARY root, so the
+  // receipt lands under the primary slug — the SAME slug status derives from the same worktree
+  // input (both call resolveRepoContext). A plain-realpath resolver would have used the
+  // worktree-directory slug and written the receipt somewhere status could never find it.
+  const world = makeGitWorktreeReceiptWorld();
+  const fake = installFakeOrcaRun({});
+  try {
+    assert.notEqual(world.primarySlug, world.worktreeSlug, "the worktree dir slug differs from the primary slug");
+    const r = runRun(
+      [
+        "--json",
+        "--orca-bin",
+        fake.orcaPath,
+        "--repo-root",
+        world.worktree,
+        "--program-file",
+        fixture("run-two-wave1.json"),
+        "--operator-handle",
+        "h1",
+        "--operator-handle",
+        "h2",
+      ],
+      { RELAY_ORCA_PROGRAMS_ROOT: world.programsRoot },
+    );
+    assert.equal(r.status, 0);
+    const body = JSON.parse(r.stdout);
+    // The receipt is written under the PRIMARY slug, never the worktree-directory slug.
+    const primaryPath = path.join(world.programsRoot, world.primarySlug, programSegment("epic-run-two"), "receipt.json");
+    const worktreePath = path.join(world.programsRoot, world.worktreeSlug, programSegment("epic-run-two"), "receipt.json");
+    assert.equal(body.receipt_path, primaryPath, "receipt_path is under the canonical PRIMARY slug");
+    assert.ok(fs.existsSync(primaryPath), "receipt exists under the primary slug");
+    assert.equal(fs.existsSync(worktreePath), false, "no receipt is written under the worktree-directory slug");
+    const receipt = parseReceipt(fs.readFileSync(primaryPath, "utf-8")).receipt;
+    assert.equal(receipt.repo.slug, world.primarySlug, "receipt records the primary slug");
+    assert.equal(receipt.repo.root, world.primaryRoot, "receipt records the canonical primary root");
+  } finally {
+    fake.cleanup();
+    fs.rmSync(world.base, { recursive: true, force: true });
   }
 });
 
