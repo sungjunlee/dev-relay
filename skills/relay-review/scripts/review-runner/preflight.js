@@ -2,6 +2,10 @@ const { buildExecutionEvidencePreflight } = require("./execution-evidence");
 const { appendRunEvent, EVENTS } = require("../../../relay-dispatch/scripts/relay-events");
 const { git } = require("./common");
 
+function buildBehindBaseRecoveryCommand(runId, baseBranch) {
+  return `node skills/relay-dispatch/scripts/rebrand-evidence.js --run-id ${runId} --rebase-onto-base --reason "rebase onto origin/${baseBranch} after base advance"`;
+}
+
 function buildBehindBasePreflight({ data, reviewRepoPath, reviewedHeadSha }) {
   const baseBranch = data?.git?.base_branch || "main";
   const candidates = [`origin/${baseBranch}`, baseBranch];
@@ -18,14 +22,18 @@ function buildBehindBasePreflight({ data, reviewRepoPath, reviewedHeadSha }) {
   }
 
   const behindCount = Number(git(reviewRepoPath, "rev-list", "--count", `${reviewedHeadSha}..${base}`).trim());
+  const blocked = behindCount > 0;
   return {
-    status: behindCount > 0 ? "blocked" : "pass",
+    status: blocked ? "blocked" : "pass",
     base,
     behindCount,
-    reason: behindCount > 0
+    reason: blocked
       ? `branch is ${behindCount} ${behindCount === 1 ? "commit" : "commits"} behind ${base}; rebase and re-run`
       : null,
-    nextAction: behindCount > 0 ? "rebase_and_rerun" : null,
+    nextAction: blocked ? "rebase_and_rerun" : null,
+    recoveryCommand: blocked && data?.run_id
+      ? buildBehindBaseRecoveryCommand(data.run_id, baseBranch)
+      : null,
   };
 }
 
@@ -67,6 +75,9 @@ function maybeBlockForBehindBasePreflight({
   } else {
     console.log(`Review preflight blocked round ${round}: ${preflight.reason}`);
     console.log(`  Next action: ${preflight.nextAction}`);
+    if (preflight.recoveryCommand) {
+      console.log(`  Recovery command: ${preflight.recoveryCommand}`);
+    }
   }
   process.exitCode = 2;
   return true;
@@ -120,6 +131,7 @@ function maybeBlockForExecutionEvidencePreflight({
 
 module.exports = {
   buildBehindBasePreflight,
+  buildBehindBaseRecoveryCommand,
   maybeBlockForBehindBasePreflight,
   maybeBlockForExecutionEvidencePreflight,
 };
