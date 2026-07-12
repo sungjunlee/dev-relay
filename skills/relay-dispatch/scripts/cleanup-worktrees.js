@@ -23,10 +23,15 @@ const {
   CLEANUP_STATUSES,
   runCleanup,
 } = require("./manifest/cleanup");
+const { execGit } = require("./exec");
 const {
   getRelayWorktreeBase,
+  getRunDir,
+  getWorktreeGitCommonDir,
   isPathContainedWithin,
   listManifestPaths,
+  sameFilesystemLocation,
+  summarizeFailure,
   validateManifestPaths,
 } = require("./manifest/paths");
 const {
@@ -46,6 +51,12 @@ const args = process.argv.slice(2);
 const CLI_ARG_OPTIONS = { commandName: "cleanup-worktrees" };
 const hasCliFlag = (flag) => schemaHasFlag(args, flag, CLI_ARG_OPTIONS);
 const OS_DETRITUS = new Set([".DS_Store", "Thumbs.db"]);
+
+const VALIDATE_MANIFEST_CLEANUP_OPTS = {
+  acceptPrunedRelayOwned: true,
+  acceptVanishedRepoRootForCleanup: true,
+  caller: "cleanup-worktrees",
+};
 
 function parseHours(value, label) {
   const parsed = Number(value);
@@ -116,6 +127,165 @@ function sweepOrphanedWorktreeShells({ dryRun }) {
   return result;
 }
 
+function isRealpathContainedWithin(basePath, candidatePath) {
+  try {
+    const realBase = fs.realpathSync.native(basePath);
+    const realCandidate = fs.realpathSync.native(candidatePath);
+    return isPathContainedWithin(realBase, realCandidate);
+  } catch {
+    return false;
+  }
+}
+
+function removeAdvisoryWorktreeDirectory(candidatePath, runDir) {
+  if (!fs.existsSync(candidatePath)) {
+    return true;
+  }
+  if (!isRealpathContainedWithin(runDir, candidatePath)) {
+    throw new Error(`refusing rm fallback outside run advisory root: ${candidatePath}`);
+  }
+  fs.rmSync(candidatePath, { recursive: true, force: true });
+  return !fs.existsSync(candidatePath);
+}
+
+/**
+ * Prune stale advisory-lane worktrees under a terminal run's run dir.
+ * Candidates must be realpath-contained under the run dir; when the checkout
+ * still resolves, its git common dir must match the trust root.
+ */
+function pruneAdvisoryWorktreesForRun({
+  repoRoot,
+  runId,
+  dryRun,
+  expectedGitCommonDir,
+}) {
+  const runDir = getRunDir(repoRoot, runId);
+  const advisoryRoot = path.join(runDir, "advisory-worktrees");
+  const results = [];
+  if (!fs.existsSync(advisoryRoot)) {
+    return results;
+  }
+
+  let entries;
+  try {
+    entries = fs.readdirSync(advisoryRoot, { withFileTypes: true });
+  } catch (error) {
+    results.push({
+      runId,
+      path: advisoryRoot,
+      classification: "refused",
+      reason: "advisory_root_unreadable",
+      error: summarizeFailure(error),
+    });
+    return results;
+  }
+
+  for (const entry of entries) {
+    const candidate = path.join(advisoryRoot, entry.name);
+    if (!isPathContainedWithin(runDir, candidate)) {
+      results.push({
+        runId,
+        path: candidate,
+        classification: "refused",
+        reason: "outside_run_dir_advisory_root",
+      });
+      continue;
+    }
+
+    const candidateExists = fs.existsSync(candidate);
+    if (candidateExists) {
+      if (!isRealpathContainedWithin(runDir, candidate)) {
+        results.push({
+          runId,
+          path: candidate,
+          classification: "refused",
+          reason: "realpath_outside_run_dir_advisory_root",
+        });
+        continue;
+      }
+      const candidateCommonDir = getWorktreeGitCommonDir(candidate);
+      if (!candidateCommonDir) {
+        results.push({
+          runId,
+          path: candidate,
+          classification: "refused",
+          reason: "unverifiable_git_common_dir",
+        });
+        continue;
+      }
+      const matchesTrustRoot = candidateCommonDir === expectedGitCommonDir
+        || sameFilesystemLocation(candidateCommonDir, expectedGitCommonDir);
+      if (!matchesTrustRoot) {
+        results.push({
+          runId,
+          path: candidate,
+          classification: "refused",
+          reason: "foreign_git_common_dir",
+        });
+        continue;
+      }
+    }
+
+    if (dryRun) {
+      results.push({
+        runId,
+        path: candidate,
+        classification: "pruned-planned",
+        reason: "terminal_advisory_worktree",
+      });
+      continue;
+    }
+
+    let removed = !candidateExists;
+    const errors = [];
+    if (candidateExists) {
+      try {
+        execGit(repoRoot, ["worktree", "remove", "--force", candidate]);
+        removed = !fs.existsSync(candidate);
+      } catch (error) {
+        try {
+          execGit(repoRoot, ["worktree", "prune"]);
+          removed = removeAdvisoryWorktreeDirectory(candidate, runDir);
+          if (!removed) {
+            errors.push(`advisory worktree still exists after fallback: ${candidate}`);
+          }
+        } catch (fallbackError) {
+          errors.push(
+            `worktree remove failed: ${summarizeFailure(error)}; ` +
+            `rm fallback failed: ${summarizeFailure(fallbackError)}`
+          );
+        }
+      }
+    } else {
+      try {
+        execGit(repoRoot, ["worktree", "prune"]);
+      } catch (error) {
+        errors.push(`worktree prune failed: ${summarizeFailure(error)}`);
+      }
+    }
+
+    if (errors.length || (candidateExists && fs.existsSync(candidate))) {
+      results.push({
+        runId,
+        path: candidate,
+        classification: "refused",
+        reason: "advisory_prune_failed",
+        error: errors.join("; ") || `advisory worktree still exists: ${candidate}`,
+      });
+      continue;
+    }
+
+    results.push({
+      runId,
+      path: candidate,
+      classification: "owned",
+      reason: "terminal_advisory_worktree_pruned",
+    });
+  }
+
+  return results;
+}
+
 if (hasCliFlag(["--help", "-h"])) {
   console.log("Usage: cleanup-worktrees.js [options]");
   console.log("\nManifest-aware relay janitor for stale worktrees.");
@@ -151,6 +321,7 @@ function run() {
   const olderThanHours = all ? 0 : parseHours(readArg(args, "--older-than", "24", CLI_ARG_OPTIONS), "--older-than");
   const now = Date.now();
   const cutoff = now - olderThanHours * 60 * 60 * 1000;
+  const expectedGitCommonDir = getWorktreeGitCommonDir(repoRoot) || path.join(repoRoot, ".git");
 
   const result = {
     repoRoot,
@@ -170,6 +341,8 @@ function run() {
     inventory: [],
     reapedShells: [],
     skippedShells: [],
+    advisoryPruned: [],
+    advisoryRefused: [],
   };
 
   const manifestPaths = listManifestPaths(repoRoot);
@@ -201,11 +374,10 @@ function run() {
         expectedRepoRoot: repoRoot,
         manifestPath,
         runId: data.run_id,
-        acceptPrunedRelayOwned: true,
         allowMissingWorktree: terminalState,
         acceptMissingRelayContainedForCleanup: terminalState,
         acceptUnverifiableRelayContainedForCleanup: terminalState && forceTerminal,
-        caller: "cleanup-worktrees",
+        ...VALIDATE_MANIFEST_CLEANUP_OPTS,
       });
       forcedTerminalUnverifiable = Boolean(validatedPaths.unverifiableRelayContainedForCleanup);
       normalizedData = {
@@ -224,11 +396,10 @@ function run() {
             expectedRepoRoot: repoRoot,
             manifestPath,
             runId: data.run_id,
-            acceptPrunedRelayOwned: true,
             allowMissingWorktree: true,
             acceptMissingRelayContainedForCleanup: true,
             acceptUnverifiableRelayContainedForCleanup: true,
-            caller: "cleanup-worktrees",
+            ...VALIDATE_MANIFEST_CLEANUP_OPTS,
           });
           terminalForceEligible = Boolean(forceValidatedPaths.unverifiableRelayContainedForCleanup);
         } catch {
@@ -329,6 +500,7 @@ function run() {
         dryRun,
         deleteMergedBranch: true,
         acceptPrunedRelayOwned: true,
+        acceptVanishedRepoRootForCleanup: true,
       });
 
       const item = {
@@ -380,6 +552,22 @@ function run() {
       continue;
     }
 
+    // Terminal + age-eligible: prune advisory-lane worktrees even when the
+    // executor worktree was already cleaned (they are not recorded in paths.worktree).
+    const advisoryResults = pruneAdvisoryWorktreesForRun({
+      repoRoot,
+      runId: normalizedData.run_id,
+      dryRun,
+      expectedGitCommonDir,
+    });
+    for (const advisory of advisoryResults) {
+      if (advisory.classification === "refused") {
+        result.advisoryRefused.push(advisory);
+      } else {
+        result.advisoryPruned.push(advisory);
+      }
+    }
+
     if (cleanupStatus === CLEANUP_STATUSES.SUCCEEDED) {
       result.skipped.push({ ...enrichedBaseInfo, reason: "already_cleaned" });
       continue;
@@ -417,6 +605,7 @@ function run() {
       allowMissingWorktree: true,
       acceptMissingRelayContainedForCleanup: true,
       acceptUnverifiableRelayContainedForCleanup: forcedTerminalUnverifiable,
+      acceptVanishedRepoRootForCleanup: true,
     });
 
     const item = {
@@ -428,12 +617,16 @@ function run() {
       branchDeleted: cleanupResult.summary.branchDeleted,
       pruneRan: cleanupResult.summary.pruneRan,
       error: cleanupResult.summary.error,
+      classification: forcedTerminalUnverifiable
+        ? "cleanable_terminal_unverifiable_path"
+        : "owned",
       ...(forcedTerminalUnverifiable
         ? {
           reason: "forced_terminal_unverifiable_path",
-          classification: "cleanable_terminal_unverifiable_path",
         }
-        : {}),
+        : {
+          reason: "owned_relay_worktree",
+        }),
     };
 
     if (!dryRun) {
@@ -475,6 +668,7 @@ function run() {
     console.log(`  failed:     ${result.failed.length}`);
     console.log(`  stale open: ${result.staleOpen.length}`);
     console.log(`  skipped:    ${result.skipped.length}`);
+    console.log(`  advisory:   ${result.advisoryPruned.length} pruned, ${result.advisoryRefused.length} refused`);
     if (result.failed.length) {
       console.log("  failures:");
       result.failed.forEach((entry) => console.log(`    ${entry.runId}: ${entry.error}`));
@@ -490,6 +684,18 @@ function run() {
       console.log("  inventory:");
       result.inventory.forEach((entry) => {
         console.log(`    ${entry.runId} (${entry.state}, ${entry.health.finishPath}) -> ${entry.health.recommendedAction}`);
+      });
+    }
+    if (result.advisoryPruned.length) {
+      console.log("  advisory pruned:");
+      result.advisoryPruned.forEach((entry) => {
+        console.log(`    ${entry.runId}: ${entry.classification} ${entry.path} (${entry.reason})`);
+      });
+    }
+    if (result.advisoryRefused.length) {
+      console.log("  advisory refused:");
+      result.advisoryRefused.forEach((entry) => {
+        console.log(`    ${entry.runId}: ${entry.classification} ${entry.path} (${entry.reason})`);
       });
     }
     if (dryRun) {

@@ -425,6 +425,26 @@ function sameGitCommonDir(leftPath, rightPath) {
   return leftCommonDir === rightCommonDir || sameFilesystemLocation(leftCommonDir, rightCommonDir);
 }
 
+/**
+ * Basename of the main working tree that owns a git common dir.
+ * For `<dir>/.git` → `basename(<dir>)`. Bare common-dir shapes fall back to the
+ * common-dir basename (with a trailing `.git` suffix stripped when present).
+ */
+function getTrustRootRepoBasename(expectedGitCommonDir) {
+  if (!expectedGitCommonDir || typeof expectedGitCommonDir !== "string") {
+    return null;
+  }
+  const resolved = path.resolve(expectedGitCommonDir);
+  const leaf = path.basename(resolved);
+  if (leaf === ".git") {
+    const parent = path.basename(path.dirname(resolved));
+    return parent || null;
+  }
+  // Bare / non-standard common-dir: use the directory name, drop a trailing `.git`.
+  const bareName = leaf.replace(/\.git$/i, "");
+  return bareName || leaf || null;
+}
+
 function validateManifestPaths(paths, {
   expectedRepoRoot,
   manifestPath,
@@ -434,6 +454,7 @@ function validateManifestPaths(paths, {
   acceptPrunedRelayOwned = false,
   acceptMissingRelayContainedForCleanup = false,
   acceptUnverifiableRelayContainedForCleanup = false,
+  acceptVanishedRepoRootForCleanup = false,
   caller = "relay manifest consumer",
 } = {}) {
   if (!paths || typeof paths !== "object" || Array.isArray(paths)) {
@@ -449,11 +470,21 @@ function validateManifestPaths(paths, {
   const normalizedExpectedRepoRoot = typeof expectedRepoRoot === "string" && expectedRepoRoot.trim() !== ""
     ? path.resolve(expectedRepoRoot)
     : null;
+  const recordedRepoRootExists = fs.existsSync(repoRoot);
   const repoRootEquivalentToExpected = normalizedExpectedRepoRoot
     && repoRoot !== normalizedExpectedRepoRoot
     && !sameFilesystemLocation(repoRoot, normalizedExpectedRepoRoot)
     && sameGitCommonDir(repoRoot, normalizedExpectedRepoRoot);
-  const effectiveRepoRoot = repoRootEquivalentToExpected ? normalizedExpectedRepoRoot : repoRoot;
+  // Cleanup-only: a deleted dispatch-time checkout cannot prove common-dir
+  // equivalence. Fall through to the invoking checkout and let worktree rules decide.
+  const vanishedRepoRootAccepted = Boolean(
+    acceptVanishedRepoRootForCleanup
+    && normalizedExpectedRepoRoot
+    && !recordedRepoRootExists
+  );
+  const effectiveRepoRoot = (repoRootEquivalentToExpected || vanishedRepoRootAccepted)
+    ? normalizedExpectedRepoRoot
+    : repoRoot;
   const normalizedManifestPath = typeof manifestPath === "string" && manifestPath.trim() !== ""
     ? path.resolve(manifestPath)
     : null;
@@ -468,6 +499,7 @@ function validateManifestPaths(paths, {
     && repoRoot !== normalizedExpectedRepoRoot
     && !sameFilesystemLocation(repoRoot, normalizedExpectedRepoRoot)
     && !repoRootEquivalentToExpected
+    && !vanishedRepoRootAccepted
   ) {
     throw new Error(
       `${caller}: manifest paths.repo_root ${JSON.stringify(repoRoot)} does not match the expected repo root ` +
@@ -507,14 +539,16 @@ function validateManifestPaths(paths, {
   const worktree = path.resolve(worktreeRaw);
   const relayWorktreeBase = getRelayWorktreeBase();
   const repoContainedWorktree = isPathContainedWithin(effectiveRepoRoot, worktree);
+  const expectedGitCommonDir = getWorktreeGitCommonDir(effectiveRepoRoot) || path.join(effectiveRepoRoot, ".git");
+  const trustRootRepoBasename = getTrustRootRepoBasename(expectedGitCommonDir);
   const relayOwnedRepoRootBasenames = [
     path.basename(effectiveRepoRoot),
     path.basename(repoRoot),
-  ];
+    trustRootRepoBasename,
+  ].filter(Boolean);
   const relayOwnedWorktreeCandidate = isPathContainedWithin(relayWorktreeBase, worktree)
     && relayOwnedRepoRootBasenames.includes(path.basename(worktree));
   const relayContainedWorktreeCandidateForCleanup = isPathContainedWithin(relayWorktreeBase, worktree);
-  const expectedGitCommonDir = getWorktreeGitCommonDir(effectiveRepoRoot) || path.join(effectiveRepoRoot, ".git");
   const worktreeExists = fs.existsSync(worktree);
   if (!worktreeExists) {
     if (
@@ -622,6 +656,7 @@ module.exports = {
   getRunDir,
   getRunsBase,
   getRunsDir,
+  getTrustRootRepoBasename,
   getWorktreeGitCommonDir,
   inferIssueNumber,
   isPathContainedWithin,

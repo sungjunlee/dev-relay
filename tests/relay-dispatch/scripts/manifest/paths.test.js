@@ -469,3 +469,97 @@ test("manifest/paths rejects missing worktrees outside repo and relay-owned root
     /is not contained under the expected repo root/
   );
 });
+
+test("manifest/paths missing worktree accepts trust-root repo basename from differently-named checkout (#969)", () => {
+  const runId = "issue-969-20260712010101000-a1b2c3d4";
+  const { repoRoot, linkedRoot, manifestPath, relayWorktreeBase } = createLinkedDispatchFixture(runId);
+  // Worktree named after the main repo (dev-relay), not the invoking checkout (floofy-seeking-music).
+  const missingWorktree = path.join(relayWorktreeBase, "969-trust-root", path.basename(repoRoot));
+  fs.mkdirSync(path.dirname(missingWorktree), { recursive: true });
+  assert.equal(fs.existsSync(missingWorktree), false);
+  assert.notEqual(path.basename(linkedRoot), path.basename(repoRoot));
+
+  const result = validateManifestPaths({
+    repo_root: linkedRoot,
+    worktree: missingWorktree,
+  }, {
+    expectedRepoRoot: linkedRoot,
+    manifestPath: getManifestPath(linkedRoot, runId),
+    runId,
+    allowMissingWorktree: true,
+    caller: "manifest/paths.test #969 trust-root basename",
+  });
+
+  assert.equal(result.worktreeLocation, "relay_worktree");
+  assert.equal(result.worktreeMissing, true);
+  assert.equal(path.basename(result.worktree), "dev-relay");
+});
+
+test("manifest/paths acceptVanishedRepoRootForCleanup falls through; default still refuses (#969)", () => {
+  const runId = "issue-969-20260712010102000-a1b2c3d4";
+  const { repoRoot, linkedRoot, relayWorktreeBase } = createLinkedDispatchFixture(runId);
+  const vanishedRepoRoot = path.join(
+    os.tmpdir(),
+    `relay-vanished-checkout-${process.pid}-${Date.now()}`
+  );
+  assert.equal(fs.existsSync(vanishedRepoRoot), false);
+  const missingWorktree = path.join(relayWorktreeBase, "969-vanished", path.basename(repoRoot));
+  fs.mkdirSync(path.dirname(missingWorktree), { recursive: true });
+  const manifestPath = getManifestPath(linkedRoot, runId);
+
+  assert.throws(
+    () => validateManifestPaths({
+      repo_root: vanishedRepoRoot,
+      worktree: missingWorktree,
+    }, {
+      expectedRepoRoot: linkedRoot,
+      manifestPath,
+      runId,
+      allowMissingWorktree: true,
+      caller: "manifest/paths.test #969 vanished default",
+    }),
+    /Refusing to trust manifest-owned repo paths/
+  );
+
+  const accepted = validateManifestPaths({
+    repo_root: vanishedRepoRoot,
+    worktree: missingWorktree,
+  }, {
+    expectedRepoRoot: linkedRoot,
+    manifestPath,
+    runId,
+    allowMissingWorktree: true,
+    acceptVanishedRepoRootForCleanup: true,
+    caller: "manifest/paths.test #969 vanished opt-in",
+  });
+  assert.equal(accepted.repoRoot, path.resolve(linkedRoot));
+  assert.equal(accepted.worktreeLocation, "relay_worktree");
+  assert.equal(accepted.worktreeMissing, true);
+});
+
+test("manifest/paths existing foreign repo_root still refuses with or without vanish option (#969)", () => {
+  const runId = "issue-969-20260712010103000-a1b2c3d4";
+  const { repoRoot, linkedRoot } = createLinkedDispatchFixture(runId);
+  const foreignRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-paths-foreign-root-"));
+  initGitRepo(foreignRoot);
+  commitBaseFile(foreignRoot);
+  const worktreePath = path.join(repoRoot, "wt", "issue-969-foreign-root");
+  fs.mkdirSync(path.dirname(worktreePath), { recursive: true });
+  const manifestPath = getManifestPath(linkedRoot, runId);
+
+  for (const acceptVanished of [false, true]) {
+    assert.throws(
+      () => validateManifestPaths({
+        repo_root: foreignRoot,
+        worktree: worktreePath,
+      }, {
+        expectedRepoRoot: linkedRoot,
+        manifestPath,
+        runId,
+        acceptVanishedRepoRootForCleanup: acceptVanished,
+        caller: `manifest/paths.test #969 foreign root vanish=${acceptVanished}`,
+      }),
+      /Refusing to trust manifest-owned repo paths/
+    );
+  }
+});

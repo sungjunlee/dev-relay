@@ -113,6 +113,7 @@ function runCleanup({
   allowMissingWorktree = false,
   acceptMissingRelayContainedForCleanup = false,
   acceptUnverifiableRelayContainedForCleanup = false,
+  acceptVanishedRepoRootForCleanup = false,
 }) {
   const validatedPaths = validateManifestPaths(data?.paths, {
     expectedRepoRoot: repoRoot,
@@ -121,6 +122,7 @@ function runCleanup({
     allowMissingWorktree,
     acceptMissingRelayContainedForCleanup,
     acceptUnverifiableRelayContainedForCleanup,
+    acceptVanishedRepoRootForCleanup,
     caller: "runCleanup",
   });
   const normalizedData = {

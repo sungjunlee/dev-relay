@@ -971,3 +971,238 @@ test("cleanup-worktrees rejects tampered paths.repo_root before cleanup side eff
   const manifest = readManifest(manifestPath).data;
   assert.equal(manifest.cleanup.status, "pending");
 });
+
+function setupNamedMainRepo(repoName = "dev-relay") {
+  const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-janitor-969-"));
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "relay-home-969-"));
+  const repoRoot = path.join(fixtureRoot, repoName);
+  fs.mkdirSync(repoRoot, { recursive: true });
+  execFileSync("git", ["init", "-b", "main"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
+  execFileSync("git", ["config", "user.name", "Relay Janitor 969"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
+  execFileSync("git", ["config", "user.email", "relay-janitor-969@example.com"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
+  fs.writeFileSync(path.join(repoRoot, "README.md"), "base\n", "utf-8");
+  execFileSync("git", ["add", "README.md"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
+  execFileSync("git", ["commit", "-m", "init"], { cwd: repoRoot, encoding: "utf-8", stdio: "pipe" });
+  return { fixtureRoot, repoRoot };
+}
+
+function writeMultiCheckoutMissingWorktreeRun(repoRoot, {
+  branch,
+  updatedAt,
+  recordedRepoRoot,
+  worktreeBasename,
+}) {
+  const runId = createRunId({
+    branch,
+    timestamp: new Date(updatedAt),
+  });
+  const worktreePath = path.join(getRelayWorktreeBase(), `969-${branch}`, worktreeBasename);
+  fs.mkdirSync(path.dirname(worktreePath), { recursive: true });
+  execFileSync("git", ["worktree", "add", worktreePath, "-b", branch], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+  });
+  fs.rmSync(worktreePath, { recursive: true, force: true });
+
+  const layout = ensureRunLayout(repoRoot, runId);
+  let manifest = createManifestSkeleton({
+    repoRoot: recordedRepoRoot,
+    runId,
+    branch,
+    baseBranch: "main",
+    issueNumber: 969,
+    worktreePath,
+    orchestrator: "codex",
+    executor: "codex",
+    reviewer: "codex",
+  });
+  manifest = updateManifestState(manifest, STATES.DISPATCHED, "await_dispatch_result");
+  manifest.anchor.rubric_path = "rubric.yaml";
+  fs.writeFileSync(path.join(layout.runDir, "rubric.yaml"), "rubric:\n  factors:\n    - name: multi-checkout\n", "utf-8");
+  manifest = updateManifestState(manifest, STATES.REVIEW_PENDING, "run_review");
+  manifest = updateManifestState(manifest, STATES.READY_TO_MERGE, "await_explicit_merge");
+  manifest = updateManifestState(manifest, STATES.MERGED, "manual_cleanup_required");
+  manifest.timestamps.created_at = updatedAt;
+  manifest.timestamps.updated_at = updatedAt;
+  // Skeleton may canonicalize repo_root; force the recorded dispatch-time path.
+  manifest.paths.repo_root = recordedRepoRoot;
+  writeManifest(layout.manifestPath, manifest);
+  return { manifestPath: layout.manifestPath, runId, worktreePath, runDir: layout.runDir };
+}
+
+test("cleanup-worktrees #969 cleans missing trust-root-named worktree from differently-named checkout", () => {
+  const { repoRoot } = setupNamedMainRepo("dev-relay");
+  const krillCheckout = path.join(path.dirname(repoRoot), "krill");
+  execFileSync("git", ["worktree", "add", krillCheckout, "-b", "checkout-krill"], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+  });
+  const updatedAt = "2026-04-01T00:00:00.000Z";
+  const stale = writeMultiCheckoutMissingWorktreeRun(repoRoot, {
+    branch: "issue-969-a",
+    updatedAt,
+    recordedRepoRoot: krillCheckout,
+    worktreeBasename: "dev-relay",
+  });
+  assert.notEqual(path.basename(krillCheckout), "dev-relay");
+  assert.equal(path.basename(stale.worktreePath), "dev-relay");
+
+  const stdout = execFileSync("node", [
+    SCRIPT,
+    "--repo", krillCheckout,
+    "--all",
+    "--json",
+  ], { encoding: "utf-8" });
+
+  const result = JSON.parse(stdout);
+  const cleaned = result.cleaned.find((entry) => entry.runId === stale.runId);
+  assert.ok(cleaned, `expected cleanable run, got: ${JSON.stringify(result.failed, null, 2)}`);
+  assert.equal(result.failed.length, 0);
+  assert.equal(cleaned.classification, "owned");
+  assert.equal(cleaned.worktreeRemoved, true);
+  assert.equal(branchExists(repoRoot, "issue-969-a"), false);
+  assert.equal(readManifest(stale.manifestPath).data.cleanup.status, "succeeded");
+});
+
+test("cleanup-worktrees #969 accepts vanished repo_root and still refuses foreign existing repo_root", () => {
+  const { repoRoot } = setupNamedMainRepo("dev-relay");
+  const krillCheckout = path.join(path.dirname(repoRoot), "krill-vanish");
+  execFileSync("git", ["worktree", "add", krillCheckout, "-b", "checkout-krill-vanish"], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+  });
+  const vanishedCheckout = path.join(path.dirname(repoRoot), "codex-ephemeral-checkout");
+  execFileSync("git", ["worktree", "add", vanishedCheckout, "-b", "checkout-vanished"], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+  });
+  const updatedAt = "2026-04-01T00:00:00.000Z";
+  const stale = writeMultiCheckoutMissingWorktreeRun(repoRoot, {
+    branch: "issue-969-b",
+    updatedAt,
+    recordedRepoRoot: vanishedCheckout,
+    worktreeBasename: "dev-relay",
+  });
+  // Delete the dispatch-time checkout after recording it.
+  execFileSync("git", ["worktree", "remove", "--force", vanishedCheckout], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+  });
+  assert.equal(fs.existsSync(vanishedCheckout), false);
+
+  const stdout = execFileSync("node", [
+    SCRIPT,
+    "--repo", krillCheckout,
+    "--all",
+    "--json",
+  ], { encoding: "utf-8" });
+  const result = JSON.parse(stdout);
+  const cleaned = result.cleaned.find((entry) => entry.runId === stale.runId);
+  assert.ok(cleaned, `vanished repo_root must fall through: ${JSON.stringify(result.failed, null, 2)}`);
+  assert.equal(cleaned.classification, "owned");
+  assert.equal(readManifest(stale.manifestPath).data.cleanup.status, "succeeded");
+
+  // Existing foreign repo_root still refused.
+  const foreign = createUnrelatedRelayOwnedWorktree(repoRoot, "issue-969-foreign-root");
+  const foreignRun = writeRun(repoRoot, {
+    branch: "issue-969-foreign-root-run",
+    state: STATES.MERGED,
+    updatedAt,
+  });
+  const record = readManifest(foreignRun.manifestPath);
+  writeManifest(foreignRun.manifestPath, {
+    ...record.data,
+    paths: {
+      ...record.data.paths,
+      repo_root: foreign.attackerRoot,
+    },
+  }, record.body);
+  const refused = JSON.parse(execFileSync("node", [
+    SCRIPT, "--repo", krillCheckout, "--all", "--json",
+  ], { encoding: "utf-8" }));
+  const foreignFailure = refused.failed.find((entry) => entry.runId === readManifest(foreignRun.manifestPath).data.run_id
+    || entry.manifestPath === foreignRun.manifestPath);
+  assert.ok(foreignFailure, "foreign existing repo_root must be refused");
+  assert.match(foreignFailure.error, /Refusing to trust manifest-owned repo paths|manifest paths\.repo_root/);
+  assert.equal(fs.existsSync(foreignRun.worktreePath), true);
+});
+
+test("cleanup-worktrees #969 prunes advisory worktrees of merged runs and leaves non-terminal untouched", () => {
+  const { repoRoot } = setupNamedMainRepo("dev-relay");
+  const updatedAt = "2026-04-01T00:00:00.000Z";
+
+  const merged = writeRun(repoRoot, {
+    branch: "issue-969-adv-merged",
+    state: STATES.MERGED,
+    updatedAt,
+  });
+  const mergedRunId = readManifest(merged.manifestPath).data.run_id;
+  const mergedRunDir = ensureRunLayout(repoRoot, mergedRunId).runDir;
+  const mergedAdvisory = path.join(mergedRunDir, "advisory-worktrees", `codex-${process.pid}-merged`);
+  fs.mkdirSync(path.dirname(mergedAdvisory), { recursive: true });
+  execFileSync("git", ["worktree", "add", "--detach", mergedAdvisory, "HEAD"], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+  });
+  assert.match(
+    execFileSync("git", ["worktree", "list"], { cwd: repoRoot, encoding: "utf-8" }),
+    new RegExp(mergedAdvisory.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+  );
+
+  const open = writeRun(repoRoot, {
+    branch: "issue-969-adv-open",
+    state: STATES.REVIEW_PENDING,
+    updatedAt,
+  });
+  const openRunId = readManifest(open.manifestPath).data.run_id;
+  const openRunDir = ensureRunLayout(repoRoot, openRunId).runDir;
+  const openAdvisory = path.join(openRunDir, "advisory-worktrees", `codex-${process.pid}-open`);
+  fs.mkdirSync(path.dirname(openAdvisory), { recursive: true });
+  execFileSync("git", ["worktree", "add", "--detach", openAdvisory, "HEAD"], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+  });
+
+  const dryRun = JSON.parse(execFileSync("node", [
+    SCRIPT, "--repo", repoRoot, "--all", "--dry-run", "--json",
+  ], { encoding: "utf-8" }));
+  const planned = dryRun.advisoryPruned.find((entry) => entry.path === mergedAdvisory);
+  assert.ok(planned, `dry-run must plan advisory prune: ${JSON.stringify(dryRun.advisoryPruned, null, 2)}`);
+  assert.equal(planned.classification, "pruned-planned");
+  assert.equal(fs.existsSync(mergedAdvisory), true, "dry-run must not delete advisory worktree");
+  assert.equal(fs.existsSync(openAdvisory), true);
+  assert.equal(
+    dryRun.advisoryPruned.some((entry) => entry.path === openAdvisory),
+    false,
+    "non-terminal advisory must not be planned"
+  );
+  assert.match(
+    execFileSync("git", ["worktree", "list"], { cwd: repoRoot, encoding: "utf-8" }),
+    new RegExp(mergedAdvisory.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")),
+    "dry-run must not deregister advisory worktree"
+  );
+
+  const result = JSON.parse(execFileSync("node", [
+    SCRIPT, "--repo", repoRoot, "--all", "--json",
+  ], { encoding: "utf-8" }));
+  const pruned = result.advisoryPruned.find((entry) => entry.path === mergedAdvisory);
+  assert.ok(pruned, `must prune merged advisory: ${JSON.stringify(result.advisoryPruned, null, 2)}`);
+  assert.equal(pruned.classification, "owned");
+  assert.equal(fs.existsSync(mergedAdvisory), false);
+  assert.doesNotMatch(
+    execFileSync("git", ["worktree", "list"], { cwd: repoRoot, encoding: "utf-8" }),
+    new RegExp(mergedAdvisory.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+  );
+  assert.equal(fs.existsSync(openAdvisory), true, "non-terminal advisory must remain on disk");
+  assert.match(
+    execFileSync("git", ["worktree", "list"], { cwd: repoRoot, encoding: "utf-8" }),
+    new RegExp(openAdvisory.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+  );
+});
