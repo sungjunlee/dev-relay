@@ -35,10 +35,11 @@ Smoke-only (explicit `--smoke`):
 
 ## Check order (first failure wins)
 
-1. Binary resolution (`--orca-bin` → `PATH` → macOS bundle fallback). First hit
-   wins; a `--orca-bin` override that does not exist is a **miss**, not a
-   short-circuit — resolution falls through to `PATH` and then the bundle, and
-   `BINARY_NOT_FOUND` is raised only when all three ordered branches miss.
+1. Binary resolution (`--orca-bin` → `PATH` → macOS bundle fallback). A candidate
+   is a hit only when it is a **regular, executable file**; anything that is not
+   (missing, a directory, or non-executable) is a **miss**, not a short-circuit —
+   resolution falls through to `PATH` and then the bundle, and `BINARY_NOT_FOUND`
+   is raised only when all three ordered branches miss.
 2. Runtime readiness (`status --json`)
 3. Orchestration availability (`task-list --json`)
 4. Existing global state (`task-list` + `gate-list` counts / runtimeId consistency)

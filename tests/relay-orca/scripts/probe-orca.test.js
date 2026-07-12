@@ -11,6 +11,7 @@ const REPO_ROOT = path.resolve(__dirname, "..", "..", "..");
 const PROBE_JS = path.join(REPO_ROOT, "skills", "relay-orca", "scripts", "probe-orca.js");
 const {
   resolveOrcaBin,
+  isRunnableFile,
   runMain,
   MACOS_BUNDLE_FALLBACK,
   JSON_KEYS,
@@ -130,7 +131,7 @@ test("D3: bundle-fallback branch without a real /Applications install", () => {
   const resolved = resolveOrcaBin({
     orcaBinOverride: null,
     pathEnv: "",
-    existsSync: (candidate) => {
+    isRunnableFile: (candidate) => {
       seen.push(candidate);
       return candidate === bundlePath;
     },
@@ -147,7 +148,7 @@ test("D3: all resolution branches miss → BINARY_NOT_FOUND exit 30", () => {
   const prevExit = process.exitCode;
   try {
     const result = runMain(["--json", "--orca-bin", "/tmp/definitely-missing-orca-bin"], {
-      existsSync: () => false,
+      isRunnableFile: () => false,
       pathEnv: "/tmp/empty-orca-path-dir-that-does-not-provide-orca",
     });
     assert.equal(process.exitCode, REASONS.BINARY_NOT_FOUND);
@@ -184,6 +185,62 @@ test("Finding 1: missing --orca-bin override falls through to a PATH orca (first
     assertNoPoison(fake);
   } finally {
     fake.restore();
+  }
+});
+
+test("Finding 4: --orca-bin override at a DIRECTORY falls through to a runnable PATH orca; probe admits", () => {
+  const fake = installFakeOrca(); // real chmod 0o755 orca prepended to PATH
+  const overrideDir = fs.mkdtempSync(path.join(os.tmpdir(), "orca-override-dir-"));
+  try {
+    // Unit: a directory is not a regular executable file → override MISS → PATH wins.
+    const resolved = resolveOrcaBin({
+      orcaBinOverride: overrideDir,
+      pathEnv: process.env.PATH,
+    });
+    assert.equal(resolved.path, fake.orcaPath);
+    assert.equal(resolved.source, "path");
+
+    // End-to-end: probe resolves the PATH binary and admits.
+    const result = runProbe(["--json", "--orca-bin", overrideDir], {
+      PATH: process.env.PATH,
+    });
+    assert.equal(result.status, 0);
+    const body = parseJson(result.stdout);
+    assertExactKeys(body);
+    assert.equal(body.admitted, true);
+    assert.equal(body.orca_bin, fake.orcaPath);
+    assertNoPoison(fake);
+  } finally {
+    fake.restore();
+    fs.rmSync(overrideDir, { recursive: true, force: true });
+  }
+});
+
+test("Finding 4: non-executable regular orca on PATH, nothing else → BINARY_NOT_FOUND exit 30", () => {
+  // A regular file that is not executable is a MISS. The real isRunnableFile
+  // predicate rejects it; the bundle fallback is stubbed to miss so the result
+  // is deterministic even on a host with a real /Applications Orca install.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "orca-nonexec-"));
+  const nonExec = path.join(dir, "orca");
+  fs.writeFileSync(nonExec, "#!/bin/sh\necho hi\n", "utf-8");
+  fs.chmodSync(nonExec, 0o644); // regular file, NOT executable
+  const prevExit = process.exitCode;
+  try {
+    // Unit: the real predicate treats a non-executable regular file as a miss.
+    assert.equal(isRunnableFile(nonExec), false);
+
+    const result = runMain(["--json"], {
+      pathEnv: dir,
+      isRunnableFile: (p) => (p === MACOS_BUNDLE_FALLBACK ? false : isRunnableFile(p)),
+    });
+    assert.equal(process.exitCode, REASONS.BINARY_NOT_FOUND);
+    assertExactKeys(result);
+    assert.equal(result.admitted, false);
+    assert.equal(result.orca_bin, null);
+    assert.equal(result.blocking_reasons[0].reason_code, "BINARY_NOT_FOUND");
+  } finally {
+    process.exitCode = prevExit;
+    fs.rmSync(dir, { recursive: true, force: true });
   }
 });
 

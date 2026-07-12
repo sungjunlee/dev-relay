@@ -7,7 +7,7 @@
 // Subprocess helpers live HERE (not under scripts/lib/) so plan.js's frozen
 // D6 source scan — which forbids child_process across every lib module — stays green.
 const { execFileSync } = require("node:child_process");
-const { resolveOrcaBin, MACOS_BUNDLE_FALLBACK } = require("./lib/resolve-orca-bin");
+const { resolveOrcaBin, isRunnableFile, MACOS_BUNDLE_FALLBACK } = require("./lib/resolve-orca-bin");
 const { REASONS, USAGE_EXIT, ProbeError, reject } = require("./lib/probe-reasons");
 
 const SMOKE_TITLE_MARKER = "relay-orca-probe-smoke";
@@ -499,7 +499,7 @@ function probe(options = {}) {
   const resolved = resolveOrcaBin({
     orcaBinOverride: options.orcaBin || null,
     pathEnv: options.pathEnv,
-    existsSync: options.existsSync,
+    isRunnableFile: options.isRunnableFile,
     pathDelimiter: options.pathDelimiter,
   });
 
@@ -730,7 +730,7 @@ function runMain(argv = process.argv.slice(2), runtime = {}) {
       smoke: opts.smoke,
       orcaBin: opts.orcaBin,
       pathEnv: runtime.pathEnv,
-      existsSync: runtime.existsSync,
+      isRunnableFile: runtime.isRunnableFile,
       pathDelimiter: runtime.pathDelimiter,
       runOrca: runtime.runOrca,
       runOptions: runtime.runOptions,
@@ -764,5 +764,6 @@ module.exports = {
   SMOKE_TITLE_MARKER,
   REASONS,
   resolveOrcaBin,
+  isRunnableFile,
   MACOS_BUNDLE_FALLBACK,
 };
