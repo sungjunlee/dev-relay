@@ -14,7 +14,12 @@ const {
   rebrandEvidence,
   writeExecutionEvidence,
 } = require("./execution-evidence");
-const { forceUpdateManifestState, STATES, updateManifestState } = require("./manifest/lifecycle");
+const {
+  forceUpdateManifestState,
+  STATES,
+  updateManifestState,
+  validateTransitionInvariants,
+} = require("./manifest/lifecycle");
 const { getRunDir, summarizeFailure, validateManifestPaths } = require("./manifest/paths");
 const { readManifest, writeManifest } = require("./manifest/store");
 const { classifyRepositoryDirt } = require("./runtime-dirt");
@@ -555,6 +560,27 @@ async function trySalvageEscalatedTimeout(
   const pushTarget = `origin/${branch}`;
   const evidencePlan = planSalvageEvidence(runDir, testResultFile);
   const reason = salvageAuditReason(runId);
+
+  // Validate escalated→review_pending invariants before any side effect (push,
+  // lease removal, evidence stamp). Mirrors reviewer-swap.js validate-first
+  // ordering so a max-1-swap rejection cannot leave a pushed-but-stuck run.
+  try {
+    validateTransitionInvariants(data, data.state, STATES.REVIEW_PENDING);
+  } catch (err) {
+    outputResult(salvageResult({
+      status: "invariant_blocked",
+      manifestPath,
+      runId,
+      data,
+      dryRun,
+      nextAction: "manual_close_run",
+      extra: {
+        branch,
+        invariantError: err.message,
+      },
+    }), jsonOut);
+    return true;
+  }
 
   if (dryRun) {
     outputResult(salvageResult({
