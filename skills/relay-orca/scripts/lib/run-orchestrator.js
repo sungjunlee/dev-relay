@@ -150,11 +150,27 @@ function provenanceMismatch(show, orcaTaskId) {
   return null;
 }
 
+// D2 receipt persistence. The receipt is a minimal, versioned identity/mapping
+// record; it is (re)written after task materialization and after each successful
+// dispatch verification — the mapping-changing steps. The atomic write itself lives
+// in the top-level script (options.persistReceipt); this pure module only assembles
+// the mapping-changing "core" from the live report and threads back the resulting
+// path. When no writer is injected (direct-orchestrator unit tests) it is a no-op.
+function persistReceipt(report, options) {
+  if (typeof options.persistReceipt !== "function") return;
+  report.receipt_path = options.persistReceipt({
+    program_id: report.program_id,
+    runtime_id: report.admission.runtime_id,
+    tasks: report.tasks,
+    terminals_created: report.terminals_created,
+  });
+}
+
 // D6 per-task dispatch: inject, verify, then (only after verification) deliver the
 // operator prompt. Any failure records the task `escalated` and re-raises so no
 // further pending task is dispatched; already-verified operators are not touched.
 function dispatchOne(ctx) {
-  const { orcaBin, entry, orcaTaskId, handle, task, program, outcome, options } = ctx;
+  const { orcaBin, entry, orcaTaskId, handle, task, program, outcome, options, report } = ctx;
   const disp = dispatchTask(options.runOrca, orcaBin, { orcaTaskId, handle });
   if (!disp.ok) {
     entry.status = STATUS.ESCALATED;
@@ -181,6 +197,9 @@ function dispatchOne(ctx) {
     );
   }
   entry.status = STATUS.DISPATCHED;
+  // D2: the provenance trio (orca_task_id, dispatch_id, assignee) just changed —
+  // re-persist the receipt mapping after this verified dispatch.
+  persistReceipt(report, options);
 }
 
 // D7 dispatch scope: only wave-1 tasks (all dependency-satisfied) are eligible in
@@ -205,6 +224,7 @@ function dispatchWave(plan, program, report, orcaBin, maps, options) {
       program,
       outcome: outcomeById.get(task.outcome_id) || {},
       options,
+      report,
     });
   }
 }
@@ -219,6 +239,7 @@ function orchestrate(rawProgram, options = {}) {
   try {
     const orcaBin = admit(report, options);
     const maps = materialize(plan, program, report, orcaBin, options);
+    persistReceipt(report, options); // D2: persist after task materialization
     dispatchWave(plan, program, report, orcaBin, maps, options);
     report.ok = true;
     return { report, exitCode: 0 };

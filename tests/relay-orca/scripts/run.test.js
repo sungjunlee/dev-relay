@@ -4,6 +4,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const { execFileSync } = require("node:child_process");
 const fs = require("node:fs");
+const os = require("node:os");
 const path = require("node:path");
 
 const REPO_ROOT = path.resolve(__dirname, "..", "..", "..");
@@ -13,6 +14,9 @@ const RUN_JS = path.join(SCRIPTS, "run.js");
 const { REASONS } = require(path.join(SCRIPTS, "lib", "run-reasons.js"));
 const { REPORT_KEYS } = require(path.join(SCRIPTS, "lib", "run-report.js"));
 const { compileProgram } = require(path.join(SCRIPTS, "lib", "compile-program.js"));
+const { RECEIPT_KEYS, TASK_KEYS, RECEIPT_NOTE, parseReceipt } = require(path.join(SCRIPTS, "lib", "receipt.js"));
+const { computeRepoSlug } = require(path.join(SCRIPTS, "lib", "repo-slug.js"));
+const { writeReceiptAtomic } = require(path.join(SCRIPTS, "receipt-io.js"));
 const {
   buildOperatorPrompt,
   PAYLOAD_FIELDS,
@@ -65,11 +69,44 @@ function runRun(args, env = {}) {
   return result;
 }
 
+// Isolate receipt persistence (#945 D2) into temp roots so run tests never touch the
+// real ~/.relay: a temp programs root + a temp --repo-root (realpath'd for a stable
+// slug). fake.cleanup() is extended to remove them.
+function makeReceiptWorld() {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "relay-orca-run-receipt-"));
+  const programsRoot = path.join(base, "programs");
+  const repoRoot = path.join(base, "repo");
+  fs.mkdirSync(programsRoot, { recursive: true });
+  fs.mkdirSync(repoRoot, { recursive: true });
+  return { base, programsRoot, repoRoot, slug: computeRepoSlug(fs.realpathSync(repoRoot)) };
+}
+
+function receiptPathForWorld(world, programId) {
+  const segment = String(programId).replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "program";
+  return path.join(world.programsRoot, world.slug, segment, "receipt.json");
+}
+
 function runProgram(fixtureName, extraArgs, scenario, options = {}) {
   const fake = installFakeOrcaRun(scenario || {});
-  const args = ["--json", "--orca-bin", fake.orcaPath, "--program-file", fixture(fixtureName), ...(extraArgs || [])];
-  const result = runRun(args, options.env);
+  const world = makeReceiptWorld();
+  const args = [
+    "--json",
+    "--orca-bin",
+    fake.orcaPath,
+    "--repo-root",
+    world.repoRoot,
+    "--program-file",
+    fixture(fixtureName),
+    ...(extraArgs || []),
+  ];
+  const result = runRun(args, { RELAY_ORCA_PROGRAMS_ROOT: world.programsRoot, ...options.env });
   result.fake = fake;
+  result.world = world;
+  const origCleanup = fake.cleanup;
+  fake.cleanup = () => {
+    origCleanup();
+    fs.rmSync(world.base, { recursive: true, force: true });
+  };
   result.body = result.stdout ? JSON.parse(result.stdout) : null;
   return result;
 }
@@ -480,6 +517,90 @@ test("usage: unknown flag exits 64", () => {
 test("usage: missing --program-file exits 64", () => {
   const r = runRun(["--json"]);
   assert.equal(r.status, 64);
+});
+
+// ---------------------------------------------------------------------------
+// #945 D1/D2 — receipt persistence wired into the run intent
+// ---------------------------------------------------------------------------
+
+test("D2: a successful run persists a schema-1 receipt (identity/mapping only) and reports receipt_path", () => {
+  const r = runProgram("run-two-wave1.json", ["--operator-handle", "h1", "--operator-handle", "h2"]);
+  try {
+    assert.equal(r.status, 0);
+    const receiptPath = receiptPathForWorld(r.world, "epic-run-two");
+    assert.equal(r.body.receipt_path, receiptPath, "receipt_path echoes the atomically-written receipt");
+    assert.ok(fs.existsSync(receiptPath), "receipt file exists on disk");
+
+    const parsed = parseReceipt(fs.readFileSync(receiptPath, "utf-8"));
+    assert.equal(parsed.ok, true, `receipt must parse+validate: ${parsed.reason || ""}`);
+    const receipt = parsed.receipt;
+    assert.deepEqual(Object.keys(receipt).sort(), [...RECEIPT_KEYS].sort());
+    assert.equal(receipt.schema, 1);
+    assert.equal(receipt.note, RECEIPT_NOTE, "verbatim authority-disclaimer note");
+    assert.equal(receipt.program_id, "epic-run-two");
+    assert.equal(receipt.repo.slug, r.world.slug);
+    assert.equal(receipt.repo.root, fs.realpathSync(r.world.repoRoot));
+    assert.ok(receipt.runtime_id, "runtime_id captured from admission");
+    assert.match(receipt.created_at, /^\d{4}-\d{2}-\d{2}T/);
+    assert.match(receipt.updated_at, /^\d{4}-\d{2}-\d{2}T/);
+    assert.deepEqual(receipt.terminals_created, []);
+
+    // Each task entry carries EXACTLY the identity/mapping keys — never lifecycle
+    // state, PR/issue status, completion flags, prompts, or terminal output.
+    assert.equal(receipt.tasks.length, 2);
+    receipt.tasks.forEach((task) => {
+      assert.deepEqual(Object.keys(task).sort(), [...TASK_KEYS].sort());
+      assert.ok(task.orca_task_id, "materialized orca id recorded");
+      assert.ok(task.dispatch_id, "dispatch id recorded after verification");
+      assert.deepEqual(task.relay_ids, { request: null, run: null, fleet: null });
+    });
+    assert.equal(taskByOutcome(receipt, "alpha").assignee, "h1");
+    assert.equal(taskByOutcome(receipt, "bravo").assignee, "h2");
+
+    // D11-style engine-agnostic proof over the written receipt bytes.
+    const lowered = fs.readFileSync(receiptPath, "utf-8").toLowerCase();
+    FORBIDDEN_ENGINE_TOKENS.forEach((token) =>
+      assert.equal(lowered.includes(token), false, `receipt leaked engine/model token ${token}`),
+    );
+  } finally {
+    r.fake.cleanup();
+  }
+});
+
+test("D2: an admission rejection never writes a receipt (persist happens after materialization)", () => {
+  const status = readyStatus();
+  status.result.app.running = false;
+  const r = runProgram("run-two-wave1.json", ["--operator-handle", "h1"], { status });
+  try {
+    assert.equal(r.status, REASONS.ADMISSION_REJECTED);
+    assert.equal(r.body.receipt_path, null);
+    assert.equal(fs.existsSync(receiptPathForWorld(r.world, "epic-run-two")), false);
+  } finally {
+    r.fake.cleanup();
+  }
+});
+
+test("D10.12: writeReceiptAtomic is temp+rename — a crash during rename leaves no partial receipt", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-orca-atomic-"));
+  const finalPath = path.join(dir, "nested", "receipt.json");
+  const crashingIo = {
+    mkdirSync: fs.mkdirSync,
+    writeFileSync: fs.writeFileSync,
+    renameSync: () => {
+      throw new Error("crash during publish");
+    },
+  };
+  assert.throws(() => writeReceiptAtomic(finalPath, '{"schema":1}\n', crashingIo));
+  assert.equal(fs.existsSync(finalPath), false, "the published receipt never appears when rename crashes");
+  const leftovers = fs.readdirSync(path.dirname(finalPath));
+  assert.ok(leftovers.some((name) => name.startsWith(".receipt.")), "the temp file lives in the SAME directory");
+  assert.ok(leftovers.every((name) => name !== "receipt.json"), "no torn receipt.json is published");
+
+  // Happy path: rename publishes exactly the final file with the full contents.
+  const published = writeReceiptAtomic(finalPath, '{"schema":1}\n');
+  assert.equal(published, finalPath);
+  assert.equal(fs.readFileSync(finalPath, "utf-8"), '{"schema":1}\n');
+  fs.rmSync(dir, { recursive: true, force: true });
 });
 
 // Keep the imported parse helper referenced.

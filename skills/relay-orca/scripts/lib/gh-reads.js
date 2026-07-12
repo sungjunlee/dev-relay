@@ -1,0 +1,60 @@
+"use strict";
+
+// Pure GitHub read adapters for `status` (#945 D4). ONLY read-only `gh` subcommands
+// are ever built here: `gh issue view <n> --json state,stateReason` and
+// `gh pr view <n> --json state,mergedAt,headRefOid`. No write subcommand is
+// reachable. Every builder receives an injected `run(ghBin, args, options)` so the
+// subprocess boundary stays in the top-level script and plan.js's frozen lib
+// source-scan keeps passing.
+const { parseJson } = require("./bounded-excerpt");
+
+// Read-only field list for `gh issue view` (D4). `gh issue view` is not covered by the
+// repo-wide pr-view field-list contract, so a named constant is fine here.
+const ISSUE_FIELDS = "state,stateReason";
+
+function ghIssueView(run, ghBin, number, options = {}) {
+  const args = ["issue", "view", String(number), "--json", ISSUE_FIELDS];
+  const proc = run(ghBin, args, options);
+  const parsed = parseJson(proc.stdout);
+  if (proc.status !== 0 || !parsed.ok || !parsed.value) {
+    return { ok: false, reachable: false, proc };
+  }
+  const value = parsed.value;
+  return {
+    ok: true,
+    reachable: true,
+    state: typeof value.state === "string" ? value.state : null,
+    stateReason: typeof value.stateReason === "string" ? value.stateReason : null,
+    proc,
+  };
+}
+
+// The full D4 PR evidence (state, mergedAt, headRefOid) is fetched via two read-only
+// `gh pr view` calls whose --json field lists are LITERAL strings already registered
+// in the repo-wide pr-view field-list contract (tests/skills-lint). The first covers
+// merge evidence (mergedAt,state); the second recovers the live head (headRefOid) for
+// the PR_CHANGED head-moved detector. Both are read-only; the results are merged so
+// callers see one `{ state, mergedAt, headRefOid }` fact.
+function ghPrView(run, ghBin, number, options = {}) {
+  const mergeArgs = ["pr", "view", String(number), "--json", "mergedAt,state"];
+  const mergeProc = run(ghBin, mergeArgs, options);
+  const mergeParsed = parseJson(mergeProc.stdout);
+  if (mergeProc.status !== 0 || !mergeParsed.ok || !mergeParsed.value) {
+    return { ok: false, reachable: false, proc: mergeProc };
+  }
+  const merge = mergeParsed.value;
+  const headArgs = ["pr", "view", String(number), "--json", "number,headRefName,headRefOid"];
+  const headProc = run(ghBin, headArgs, options);
+  const headParsed = parseJson(headProc.stdout);
+  const head = headProc.status === 0 && headParsed.ok && headParsed.value ? headParsed.value : {};
+  return {
+    ok: true,
+    reachable: true,
+    state: typeof merge.state === "string" ? merge.state : null,
+    mergedAt: merge.mergedAt ?? null,
+    headRefOid: typeof head.headRefOid === "string" ? head.headRefOid : null,
+    proc: mergeProc,
+  };
+}
+
+module.exports = { ISSUE_FIELDS, ghIssueView, ghPrView };

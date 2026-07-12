@@ -123,11 +123,13 @@ re-raise verbatim with their existing reason codes and exit codes.
 ### Run report (`--json`)
 
 Exactly these top-level keys: `ok`, `program_id`, `admission`, `concurrency`, `tasks`,
-`terminals_created`, `blocking_reasons`, `reconciliation_required`. Each `tasks[]` entry is
-`{ task_id, outcome_id, kind, wave, orca_task_id, dispatch_id, assignee, status }` where
-`status` is `dispatched | pending | escalated`; a `dispatched` entry always carries the full
-non-null provenance trio. `reconciliation_required` is literally `true` in every report — run
-NEVER claims completion (live reconciliation is #945).
+`terminals_created`, `blocking_reasons`, `reconciliation_required`, `receipt_path`. Each
+`tasks[]` entry is `{ task_id, outcome_id, kind, wave, orca_task_id, dispatch_id, assignee,
+status }` where `status` is `dispatched | pending | escalated`; a `dispatched` entry always
+carries the full non-null provenance trio. `reconciliation_required` is literally `true` in
+every report — run NEVER claims completion. `receipt_path` (#945) is the path of the
+atomically-written reconstructible receipt (or `null` on paths that never materialize tasks);
+see [receipt-and-status.md](receipt-and-status.md).
 
 ### Partial-wave semantics
 
@@ -152,10 +154,51 @@ and does not touch already-verified running operators (stop semantics are #946).
 rejections re-raise codes `2`–`21`; usage errors exit `64`. Full operator prompt contract and
 provenance rules: [operator-dispatch.md](operator-dispatch.md).
 
+## `status` — read-only live reconciler
+
+```bash
+node "${RELAY_SKILL_ROOT:-skills}/relay-orca/scripts/status.js" \
+  --program-id <program-id> [--json] [--orca-bin <path>] [--gh-bin <path>] [--repo-root <path>]
+```
+
+| Flag | Meaning |
+| --- | --- |
+| `--program-id`, `-p` | The accepted program's stable id (required). Resolves the receipt under the programs root. |
+| `--json` | Emit the machine-readable status report as JSON on stdout. |
+| `--orca-bin <path>` | Explicit Orca CLI override for the read-only runtime queries. |
+| `--gh-bin <path>` | Explicit `gh` CLI override (or env `RELAY_ORCA_GH_BIN`). |
+| `--repo-root <path>` | Explicit repo root for slug derivation (defaults to the git repo of the cwd). |
+| `--help`, `-h` | Print usage. |
+
+`status` loads the reconstructible receipt, then queries relay manifests, GitHub, and Orca
+**live** to derive a normalized program view. It is strictly **READ-ONLY**: no GitHub write,
+no relay manifest write, no Orca mutating subcommand or `reset`/`worktree`, and no receipt
+write. Durable truth outranks runtime signals and `worker_done` is never completion evidence.
+
+### Status report (`--json`)
+
+Exactly these top-level keys: `ok`, `program_id`, `receipt_path`, `runtime`, `program_state`,
+`outcomes`, `diagnostics`, `repair_candidates`, `evidence_checked`. `runtime` is
+`ok | mismatch | foreign_state | unreachable`; `evidence_checked` is literally `true`. Each
+`outcomes[]` entry is `{ outcome_id, kind, wave, state, orca_task_id, dispatch_id, relay_ids,
+issue_url, pr_url, evidence }`. State taxonomy, the nine detector codes, the authority order,
+and the read-only guarantee: [receipt-and-status.md](receipt-and-status.md).
+
+### Status rejection matrix
+
+| reason_code | exit | Trigger |
+| --- | --- | --- |
+| `RECEIPT_NOT_FOUND` | 50 | No receipt for `--program-id` under the programs root. |
+| `RECEIPT_CORRUPT` | 51 | Unparseable JSON, wrong `schema`, or missing required keys. |
+| `RECEIPT_REPO_MISMATCH` | 52 | The receipt `repo.slug` does not match the current repo. |
+
+Usage errors exit `64`. A successfully derived view exits `0` even when it is full of
+`inconsistent`/`stale_missing` outcomes; runtime mismatch and unreachable Orca/GitHub degrade
+to diagnostics rather than failing.
+
 ## Runtime intents (contract-only in this leaf)
 
-`run` is implemented (#944). `status`, `resume`, and `stop` remain defined by the skill
-contract but **not implemented here** — they are delivered in later leaves (#945/#946) and
-gated on the same Orca capability probe (`probe-orca.js`). See
-[experimental-status.md](experimental-status.md) for the pilot boundary and
-[capability-probe.md](capability-probe.md) for admission details.
+`run` (#944) and `status` (#945) are implemented. `resume` and `stop` remain defined by the
+skill contract but **not implemented here** — they are delivered in #946 and gated on the same
+Orca capability probe (`probe-orca.js`). See [experimental-status.md](experimental-status.md)
+for the pilot boundary and [capability-probe.md](capability-probe.md) for admission details.

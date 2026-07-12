@@ -1,10 +1,12 @@
 "use strict";
 
-// Stable machine-readable run report (D10). EXACTLY these eight top-level keys,
-// verbatim and in this order. The report is built once from the compiled plan and
-// mutated in place as the run progresses so it stays truthful on EVERY early-exit
-// path: an admission rejection, a mid-materialization failure, and an escalation
-// all emit the same key set with truthful per-task statuses.
+// Stable machine-readable run report (D10). EXACTLY these top-level keys, verbatim
+// and in this order. The report is built once from the compiled plan and mutated in
+// place as the run progresses so it stays truthful on EVERY early-exit path: an
+// admission rejection, a mid-materialization failure, and an escalation all emit the
+// same key set with truthful per-task statuses. `receipt_path` (#945 D2) is the ONE
+// key the run intent grows for reconstructible receipt persistence — it is the path
+// of the atomically-written receipt, or null on paths that never materialize tasks.
 const REPORT_KEYS = Object.freeze([
   "ok",
   "program_id",
@@ -14,6 +16,7 @@ const REPORT_KEYS = Object.freeze([
   "terminals_created",
   "blocking_reasons",
   "reconciliation_required",
+  "receipt_path",
 ]);
 
 const STATUS = Object.freeze({
@@ -47,6 +50,7 @@ function initReport(plan) {
     terminals_created: [],
     blocking_reasons: [],
     reconciliation_required: true, // literal true in EVERY report (live reconcile is #945)
+    receipt_path: null, // set once the receipt is atomically persisted (#945 D2)
   };
 }
 

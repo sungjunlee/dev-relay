@@ -13,6 +13,7 @@ metadata:
 - Script: `${RELAY_SKILL_ROOT:-skills}/relay-orca/scripts/plan.js` (read-only wave-plan compiler).
 - Script: `${RELAY_SKILL_ROOT:-skills}/relay-orca/scripts/probe-orca.js` (fail-closed Orca capability probe).
 - Script: `${RELAY_SKILL_ROOT:-skills}/relay-orca/scripts/run.js` (admission-gated provenance-injected operator dispatch).
+- Script: `${RELAY_SKILL_ROOT:-skills}/relay-orca/scripts/status.js` (read-only live reconciler over receipt + relay + GitHub + Orca).
 
 # relay-orca
 
@@ -34,13 +35,13 @@ relay-orca is **explicit-only**. It must never be auto-selected from ordinary re
 
 ## Intents
 
-relay-orca exposes exactly five intents. `plan` (read-only) and `run` (admission-gated operator dispatch) are implemented; the remaining runtime intents are contract-only here and delivered in later leaves, gated on the Orca capability probe.
+relay-orca exposes exactly five intents. `plan` (read-only), `run` (admission-gated operator dispatch), and `status` (read-only live reconciler) are implemented; the remaining runtime intents are contract-only here and delivered in a later leaf, gated on the Orca capability probe.
 
 | Intent | Status | Purpose |
 | --- | --- | --- |
 | `plan` | implemented (read-only) | Compile an accepted program into an immutable wave plan. |
 | `run` | implemented (#944) | Dispatch provenance-injected relay/fleet operators for a plan. |
-| `status` | contract-only (#945) | Derive live status from Orca + relay + GitHub + exit-gate evidence. |
+| `status` | implemented (#945) | Derive a read-only live program view from receipt + relay + GitHub + Orca. |
 | `resume` | contract-only (#946) | Resume a coordinator from a reconstructible receipt without resetting Orca. |
 | `stop` | contract-only (#946) | Stop the coordinator only; never kill relay runs or discard durable state. |
 
@@ -90,7 +91,17 @@ node "${RELAY_SKILL_ROOT:-skills}/relay-orca/scripts/run.js" \
   --json
 ```
 
-`run` compiles through the frozen plan library, requires probe admission before any mutation, materializes wave-1 tasks, and dispatches with fail-closed provenance verification. Flags, run report shape, partial-wave semantics, and reason codes 40–44: [references/commands.md](references/commands.md) and [references/operator-dispatch.md](references/operator-dispatch.md).
+`run` compiles through the frozen plan library, requires probe admission before any mutation, materializes wave-1 tasks, and dispatches with fail-closed provenance verification. `run` also persists a minimal, versioned, atomically-written **receipt** (identity/mapping only) under `~/.relay/programs/<repo-slug>/<program-id>/`. Flags, run report shape, partial-wave semantics, and reason codes 40–44: [references/commands.md](references/commands.md) and [references/operator-dispatch.md](references/operator-dispatch.md).
+
+Derive a read-only live program view from the receipt + relay manifests + GitHub + Orca (no mutation of any kind):
+
+```bash
+node "${RELAY_SKILL_ROOT:-skills}/relay-orca/scripts/status.js" \
+  --program-id epic-941 \
+  --json
+```
+
+`status` reconciles durable truth (relay manifests, PRs/issues) against Orca runtime signals — `worker_done` is never completion evidence. Report shape, the state taxonomy, the nine detector codes, and reason codes 50–52: [references/commands.md](references/commands.md) and [references/receipt-and-status.md](references/receipt-and-status.md).
 
 ## Ownership invariants
 
