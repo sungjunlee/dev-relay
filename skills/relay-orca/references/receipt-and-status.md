@@ -29,17 +29,22 @@ its run manifests. The programs root is overridable for tests via `RELAY_ORCA_PR
 `<program-segment>` is **not** the raw program id. A pure sanitize is lossy — `"a b"` and
 `"a+b"` both collapse to `"a-b"`, which would silently point two distinct programs at ONE
 receipt. So the segment is the sanitized base (`[^A-Za-z0-9._-]+` → `-`, trimmed of leading/
-trailing dashes; empty / `.` / `..` collapse to `program`) joined to the first 8 hex chars of
+trailing dashes; empty / `.` / `..` collapse to `program`; then **truncated to at most 64
+chars**, re-trimming any trailing dash the cut exposes) joined to the first 8 hex chars of
 `sha256(<raw program id>)`:
 
 ```
-<sanitized-base>-<sha256(raw id)[0:8]>
+<sanitized-base (≤ 64 chars)>-<sha256(raw id)[0:8]>
 ```
 
-The hash disambiguates ids that sanitize identically while the readable prefix keeps the path
-scannable, and it also keeps `.`/`..` (and any other traversal attempt) on **distinct**,
-non-escaping segments. `run.js` and `status.js` apply `programSegment` identically, so a
-`run`-written receipt resolves back for `status`.
+The hash disambiguates ids that sanitize identically **or that share a 64-char prefix** — it
+is computed over the **full raw id**, never the truncated prefix — while the readable prefix
+keeps the path scannable, and it also keeps `.`/`..` (and any other traversal attempt) on
+**distinct**, non-escaping segments. Bounding the readable prefix (A15) keeps a pathologically
+long program id from overflowing the filesystem per-segment name limit (NAME_MAX, typically
+255) so the receipt still writes and loads; the appended hash guarantees two long ids sharing
+the same 64-char prefix stay on distinct paths. `run.js` and `status.js` apply `programSegment`
+identically, so a `run`-written receipt resolves back for `status`.
 
 On load, `status` also enforces an **identity check**: the receipt's `program_id` MUST equal
 the requested `--program-id`. A mismatch (hand-edit, misplaced write, or a sanitized-segment
@@ -59,12 +64,16 @@ states, PR/issue status, Done Criteria text, completion flags, prompts, or termi
 
 - **Atomic write:** a temp file in the same directory + `rename`. Partial/torn receipts are
   impossible by construction.
-- **Write points (bounded edit to `run`):** after task materialization, and immediately after
-  each dispatch-show provenance verification — **before** the operator prompt is delivered
-  (mapping-changing steps only). A prompt-delivery failure therefore leaves the receipt
-  already carrying the verified `(orca_task_id, dispatch_id, assignee)` trio, so a later
-  reconcile recovers the dispatch instead of re-materializing it. `run`'s report grows by
-  exactly one key, `receipt_path`.
+- **Write points (bounded edit to `run`):** after **each** successful task-create (A12), and
+  immediately after each dispatch-show provenance verification — **before** the operator
+  prompt is delivered (mapping-changing steps only). Persisting after every task-create means
+  a `TASK_MATERIALIZE_FAILED` (exit 41) raised mid-wave still leaves every earlier outcome's
+  `orca_task_id` durably on disk — the partial mapping is never lost — before the failure
+  propagates. Likewise a prompt-delivery failure leaves the receipt already carrying the
+  verified `(orca_task_id, dispatch_id, assignee)` trio, so a later reconcile recovers the
+  created tasks / dispatch instead of re-materializing them. (There is no separate
+  post-materialization write — the last per-create write already covers it.) `run`'s report
+  grows by exactly one key, `receipt_path`.
 
 ## `status` authority order (durable truth outranks runtime signals)
 
@@ -98,7 +107,7 @@ unclassifiable.
 
 | task_kind | evidence keys (all must be `true`) | source |
 | --- | --- | --- |
-| `relay_run` | `manifest_terminal`, `pr_merged`, `issue_closed` | mapped relay run manifest + PR/issue |
+| `relay_run` | `manifest_terminal` (manifest `merged` **only**, A14), `pr_merged`, `issue_closed` | mapped relay run manifest + PR/issue |
 | `relay_fleet` | `fleet_children_terminal`, `fleet_manifest_closed` | fleet manifest via `relay_ids.fleet` + each child run manifest |
 | `integration_gate` | `gate_report_present`, `gate_check_passes` | live Orca gate mapped to the outcome's `orca_task_id` |
 | `advisory_review` | `advisory_evidence_posted`, `blocking_findings_triaged` | live Orca advisory gate mapped to the outcome's `orca_task_id` |
@@ -118,6 +127,13 @@ unclassifiable.
   mapped to that task. A gate "passes"/"triaged" when its live status ∈ `{passed, approved,
   resolved}`; a pending gate leaves the outcome `awaiting_decision`. When the runtime is
   untrusted (mismatch / foreign / unreachable), both checks degrade to `null`.
+- **`relay_run`** completion is **`merged`-only** (A14): `manifest_terminal` holds `true` only
+  when the mapped run manifest reached `merged` — **not** merely any terminal state. A
+  terminal-but-`closed` (force-closed / abandoned) manifest can never yield completion
+  evidence again, so `manifest_terminal` stays `false` and the outcome surfaces as
+  `escalated` — never `complete_with_evidence` — even if the PR shows merged and the issue
+  shows closed. (`relay_fleet` and `tracker_reconciliation` keep their existing terminal-state
+  contracts.)
 - **`tracker_reconciliation`** reconciles the mapped relay run's tracker issue against its
   durable manifest: reconciled = terminal manifest **and** the live issue `CLOSED`.
 
@@ -146,7 +162,11 @@ The runtime is `ok` (Orca facts adopted) **only** when `status` AND `task-list` 
 all succeed and attribute to this program. A failed **required** read (task-list or gate-list)
 degrades the runtime to `unreachable`: Orca-derived facts are **withheld** (outcomes degrade
 per D5 — `stale_missing` while durable evidence still renders), and NO diagnostics are
-fabricated. A failed task-list must never forge a `MISSING_TASK` against a receipt whose task
+fabricated. A `status` read that **succeeds** but carries **no usable live runtime id**
+(missing, empty, or non-string) is equally unattributable (A13) — the live runtime cannot be
+proven to be the one the receipt mapped — so it too degrades to `unreachable`, withholding
+Orca facts rather than silently trusting an unidentified runtime (this is the same withholding
+as A4, not a fabricated `RUNTIME_MISMATCH`). A failed task-list must never forge a `MISSING_TASK` against a receipt whose task
 simply could not be listed, and a failed gate-list must never be treated as "no pending gate"
 (which would silently suppress `awaiting_decision`). A per-task `dispatch-show` failure marks
 only that task's Orca facts **unknown** — never `MISSING_TASK` / `MISSING_DISPATCH`.
@@ -181,6 +201,9 @@ waves of the lowest incomplete wave is `complete_with_evidence`, no outcome is
   (durable truth wins; the vanished runtime signal is a diagnostic only).
 - Mapping present but the referenced Orca task/dispatch/terminal is missing AND durable
   evidence is not terminal → `stale_missing`.
+- A `relay_run` whose manifest is terminal-but-`closed` (force-closed / abandoned) →
+  `escalated`, never `complete_with_evidence`, regardless of a merged PR or closed issue
+  (relay_run completion is manifest `merged` only, A14).
 - A pending decision gate blocking the outcome's task → `awaiting_decision`.
 
 ## Detector matrix (verbatim diagnostic codes)

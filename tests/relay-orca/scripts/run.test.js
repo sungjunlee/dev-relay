@@ -338,6 +338,37 @@ test("D11.7: task-create failure → TASK_MATERIALIZE_FAILED exit 41, earlier ta
 });
 
 // ---------------------------------------------------------------------------
+// A12 — partial materialization persists earlier mappings before failing (exit 41)
+// ---------------------------------------------------------------------------
+
+test("A12: a mid-wave task-create failure persists the earlier task's orca_task_id to disk, then exits 41", () => {
+  const r = runProgram(
+    "run-two-wave1.json",
+    ["--operator-handle", "h1", "--operator-handle", "h2"],
+    { taskCreateFailFor: "bravo" },
+  );
+  try {
+    // The run still fails closed with TASK_MATERIALIZE_FAILED (exit 41)...
+    assert.equal(r.status, REASONS.TASK_MATERIALIZE_FAILED);
+    assert.equal(r.body.blocking_reasons[0].reason_code, "TASK_MATERIALIZE_FAILED");
+
+    // ...but because the receipt is persisted after EACH successful task-create (A12),
+    // the receipt ON DISK already carries alpha's orca_task_id even though bravo's
+    // create failed and no post-materialization write ever ran.
+    const receiptPath = receiptPathForWorld(r.world, "epic-run-two");
+    assert.ok(fs.existsSync(receiptPath), "the partial mapping is durable on disk");
+    assert.equal(r.body.receipt_path, receiptPath, "the report echoes the partially-written receipt path");
+    const parsed = parseReceipt(fs.readFileSync(receiptPath, "utf-8"));
+    assert.equal(parsed.ok, true, `partial receipt must parse+validate: ${parsed.reason || ""}`);
+    assert.equal(taskByOutcome(parsed.receipt, "alpha").orca_task_id, "orca-live-alpha", "alpha's mapping survived the later failure");
+    assert.equal(taskByOutcome(parsed.receipt, "bravo").orca_task_id, null, "the failed create leaves bravo unmapped");
+    assertNoPoison(r.fake);
+  } finally {
+    r.fake.cleanup();
+  }
+});
+
+// ---------------------------------------------------------------------------
 // D11.8 / D11.9 / D11.12 — plan-library codes re-raised verbatim
 // ---------------------------------------------------------------------------
 
@@ -650,6 +681,38 @@ test("D1/A6: programSegment is traversal-safe AND collision-resistant (sanitized
   assert.equal(programSegment("epic-941"), programSegment("epic-941"));
   assert.match(programSegment("epic-941"), /^epic-941-[0-9a-f]{8}$/);
   assert.match(programSegment("epic.941_v2"), /^epic\.941_v2-[0-9a-f]{8}$/);
+});
+
+test("A15: a very long program id yields a bounded segment that writes+loads a receipt; shared 64-char prefixes stay distinct", () => {
+  const longId = "z".repeat(300);
+  const seg = programSegment(longId);
+  // The readable prefix is capped at 64 chars; the whole segment (≤ 64 + "-" + 8 hex)
+  // stays well under the filesystem per-segment name limit (NAME_MAX ~255).
+  assert.ok(seg.length <= 64 + 1 + 8, `segment must be bounded, got ${seg.length}`);
+  assert.match(seg, /^z{64}-[0-9a-f]{8}$/);
+
+  // The derived path must WRITE and LOAD a receipt without an ENAMETOOLONG error — the
+  // whole point of the bound (the un-truncated ~308-char segment would overflow NAME_MAX).
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-orca-longseg-"));
+  try {
+    const finalPath = path.join(dir, programSegment(longId), "receipt.json");
+    const text = `${JSON.stringify({ schema: 1, program_id: longId }, null, 2)}\n`;
+    const written = writeReceiptAtomic(finalPath, text);
+    assert.equal(written, finalPath);
+    assert.equal(fs.readFileSync(finalPath, "utf-8"), text, "the long-id receipt round-trips on disk");
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+
+  // Two distinct 300-char ids sharing the SAME 64-char readable prefix must NOT collide:
+  // the hash (over the full raw id, not the truncated prefix) keeps them on distinct paths.
+  const sharedPrefix = "p".repeat(64);
+  const idA = `${sharedPrefix}${"a".repeat(236)}`;
+  const idB = `${sharedPrefix}${"b".repeat(236)}`;
+  assert.equal(programSegment(idA).length, programSegment(idB).length);
+  assert.match(programSegment(idA), /^p{64}-[0-9a-f]{8}$/);
+  assert.match(programSegment(idB), /^p{64}-[0-9a-f]{8}$/);
+  assert.notEqual(programSegment(idA), programSegment(idB), "shared 64-char prefixes must resolve to distinct segments");
 });
 
 // Keep the imported parse helper referenced.

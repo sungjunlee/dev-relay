@@ -732,6 +732,57 @@ test("D5: a closed (abandoned, unmerged) relay manifest → escalated, never a s
 });
 
 // ---------------------------------------------------------------------------
+// A14 — relay_run completion is merged-only (a closed manifest never completes)
+// ---------------------------------------------------------------------------
+
+test("A14: a closed manifest with a merged PR + closed issue → escalated, never complete; the merged variant stays complete", () => {
+  // Closed variant: the run manifest is force-closed (terminal, but NOT merged) yet the
+  // PR shows MERGED and the issue shows CLOSED. A14 requires state === "merged" for
+  // relay_run completion, so `manifest_terminal` stays false and the outcome escalates —
+  // it must never complete off the stray merged PR / closed issue.
+  const closedProgram = "epic-status-closed-merged-pr";
+  const closedWorld = buildWorld({
+    programId: closedProgram,
+    manifests: [{ run_id: "run-cm", state: "closed", pr_number: 170, issue_number: 1700 }],
+    orcaScenario: { tasks: [orcaTask(closedProgram, "cm", { status: "dispatched", worker_done: false })] },
+    ghScenario: { prs: { 170: { state: "MERGED", mergedAt: "2026-07-12T11:00:00Z" } }, issues: { 1700: { state: "CLOSED" } } },
+  });
+  const closedReceipt = makeReceipt({ programId: closedProgram, slug: closedWorld.slug, root: fs.realpathSync(closedWorld.repoRoot), tasks: [{ outcome_id: "cm", run: "run-cm" }] });
+  fs.writeFileSync(closedWorld.receiptPath, `${JSON.stringify(closedReceipt, null, 2)}\n`, "utf-8");
+  try {
+    const r = closedWorld.run();
+    assert.equal(r.status, 0);
+    const outcome = outcomeById(r.body, "cm");
+    assert.equal(outcome.state, "escalated", "a closed (not merged) manifest can never yield completion evidence");
+    assert.notEqual(outcome.state, "complete_with_evidence");
+    assert.equal(outcome.evidence.manifest_terminal, false, "manifest_terminal is merged-only, not any-terminal");
+    assert.equal(r.body.program_state, "escalated");
+  } finally {
+    closedWorld.cleanup();
+  }
+
+  // Merged variant: the SAME PR/issue evidence with a `merged` manifest stays complete.
+  const mergedProgram = "epic-status-merged-variant";
+  const mergedWorld = buildWorld({
+    programId: mergedProgram,
+    manifests: [{ run_id: "run-mm", state: "merged", pr_number: 171, issue_number: 1710 }],
+    orcaScenario: { tasks: [orcaTask(mergedProgram, "mm", { status: "completed", worker_done: true })] },
+    ghScenario: { prs: { 171: { state: "MERGED", mergedAt: "2026-07-12T11:05:00Z" } }, issues: { 1710: { state: "CLOSED" } } },
+  });
+  const mergedReceipt = makeReceipt({ programId: mergedProgram, slug: mergedWorld.slug, root: fs.realpathSync(mergedWorld.repoRoot), tasks: [{ outcome_id: "mm", run: "run-mm" }] });
+  fs.writeFileSync(mergedWorld.receiptPath, `${JSON.stringify(mergedReceipt, null, 2)}\n`, "utf-8");
+  try {
+    const r = mergedWorld.run();
+    assert.equal(r.status, 0);
+    const outcome = outcomeById(r.body, "mm");
+    assert.equal(outcome.state, "complete_with_evidence", "the merged variant still completes on the same evidence");
+    assert.deepEqual(outcome.evidence, { manifest_terminal: true, pr_merged: true, issue_closed: true });
+  } finally {
+    mergedWorld.cleanup();
+  }
+});
+
+// ---------------------------------------------------------------------------
 // Scenario 13 — awaiting decision (pending gate)
 // ---------------------------------------------------------------------------
 
@@ -1082,6 +1133,37 @@ test("A4: a failed required gate-list read → runtime unreachable, no false awa
     assert.equal(outcomeById(r.body, "g").state, "stale_missing");
     assert.notEqual(outcomeById(r.body, "g").state, "running");
     assert.equal(diagCodes(r.body).includes("MISSING_TASK"), false);
+  } finally {
+    world.cleanup();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// A13 — a status read with a missing live runtime id degrades to unreachable
+// ---------------------------------------------------------------------------
+
+test("A13: status succeeds but carries no live runtime id → runtime unreachable, no Orca-fact adoption, exit 0", () => {
+  const programId = "epic-status-no-runtimeid";
+  const world = buildWorld({
+    programId,
+    manifests: [{ run_id: "run-nr", state: "dispatched", pr_number: 320, issue_number: 3200 }],
+    // status SUCCEEDS (ok:true) but carries NO runtimeId. A foreign task is present so a
+    // TRUSTED runtime would have adopted Orca facts here — the A13 guard withholds them
+    // instead of silently passing the mismatch check and trusting an unidentified runtime.
+    orcaScenario: { omitRuntimeId: true, tasks: [{ id: "foreign-x", title: "someone-else: other/thing", status: "dispatched" }] },
+    ghScenario: { prs: { 320: { state: "OPEN" } }, issues: { 3200: { state: "OPEN" } } },
+  });
+  const receipt = makeReceipt({ programId, slug: world.slug, root: fs.realpathSync(world.repoRoot), tasks: [{ outcome_id: "nr", run: "run-nr" }] });
+  fs.writeFileSync(world.receiptPath, `${JSON.stringify(receipt, null, 2)}\n`, "utf-8");
+  try {
+    const r = world.run();
+    assert.equal(r.status, 0, "a missing live runtime id never fails the command");
+    assert.equal(r.body.runtime, "unreachable");
+    // Facts are WITHHELD (same degradation as A4), never fabricated as a RUNTIME_MISMATCH.
+    assert.equal(diagCodes(r.body).includes("RUNTIME_MISMATCH"), false, "no mismatch diagnostic is forged");
+    // Orca facts withheld → the mapped outcome degrades to stale_missing; durable renders.
+    assert.equal(outcomeById(r.body, "nr").state, "stale_missing");
+    assert.deepEqual(Object.keys(r.body).sort(), [...REPORT_KEYS].sort());
   } finally {
     world.cleanup();
   }

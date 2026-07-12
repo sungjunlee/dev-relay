@@ -29,6 +29,10 @@ function defaultStatusScenario(overrides = {}) {
     // the runtime to "unreachable" instead of fabricating an empty [] with runtime "ok".
     taskListOk: overrides.taskListOk !== undefined ? overrides.taskListOk : true,
     gateListOk: overrides.gateListOk !== undefined ? overrides.gateListOk : true,
+    // A13 knob: when true, the `status` read SUCCEEDS (ok:true) but carries NO live
+    // runtime id — neither `result.runtime.runtimeId` nor `_meta.runtimeId` — so the
+    // derive path can prove a missing runtime id degrades the runtime to "unreachable".
+    omitRuntimeId: overrides.omitRuntimeId === true,
     tasks: overrides.tasks || [],
     gates: overrides.gates || [],
     dispatch: overrides.dispatch || {},
@@ -61,7 +65,12 @@ const meta = { runtimeId: scenario.runtimeId };
 
 if (args[0] === "status") {
   if (!scenario.statusOk) { process.stderr.write("orca status unreachable\\n"); process.exit(1); }
-  emit({ id: "status-1", ok: true, result: { app: { running: true, pid: 1 }, runtime: { state: "ready", reachable: true, runtimeId: scenario.runtimeId }, graph: { state: "ready" } }, _meta: meta }, 0);
+  // A13: omitRuntimeId emits a SUCCESSFUL status whose runtime block AND _meta both lack
+  // a runtimeId, so orcaStatus normalizes runtimeId to null (missing live runtime id).
+  const runtime = { state: "ready", reachable: true };
+  if (!scenario.omitRuntimeId) runtime.runtimeId = scenario.runtimeId;
+  const statusMeta = scenario.omitRuntimeId ? {} : meta;
+  emit({ id: "status-1", ok: true, result: { app: { running: true, pid: 1 }, runtime, graph: { state: "ready" } }, _meta: statusMeta }, 0);
 }
 if (args[0] === "orchestration" && args[1] === "task-list") {
   if (scenario.taskListOk === false) { process.stderr.write("orca task-list unreachable\\n"); process.exit(1); }

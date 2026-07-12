@@ -10,7 +10,7 @@
 // Durable truth outranks runtime signals (D4). When the runtime is a mismatch,
 // foreign, or unreachable, Orca-derived facts are NOT adopted for this program (D6):
 // they degrade to `stale_missing` while durable evidence still renders.
-const { boundedExcerpt, boundedIds } = require("./bounded-excerpt");
+const { boundedExcerpt, boundedIds, isNonEmptyString } = require("./bounded-excerpt");
 const { orcaStatus, orcaTaskList, orcaGateList, orcaDispatchShow } = require("./orca-reads");
 const { ghIssueView, ghPrView } = require("./gh-reads");
 const { classifyOutcome, deriveProgramState, requiredEvidenceFor } = require("./status-classify");
@@ -41,6 +41,13 @@ function attributeRuntime({ receipt, programId, orca }) {
   if (!orca) return unreachable;
   const status = orcaStatus(orca, null, {});
   if (!status.ok) return unreachable;
+  // A13: a status read that SUCCEEDS but yields no usable live runtime id (missing,
+  // empty, or non-string) is unattributable — the live runtime cannot be proven to be
+  // the one the receipt mapped. Trusting Orca facts here would silently adopt an
+  // unidentified runtime and forge false MISSING_* diagnostics, so it degrades to
+  // "unreachable" (Orca facts withheld) exactly like a failed required read (A4) — never
+  // a silent pass through the mismatch check below.
+  if (!isNonEmptyString(status.runtimeId)) return unreachable;
   // Runtime is "ok" (Orca facts adopted) ONLY when status AND task-list AND gate-list
   // all succeed. A failed REQUIRED read is unreachable — never an empty array with a
   // runtime of "ok" (D4). Fabricating [] would hide awaiting_decision and forge a false

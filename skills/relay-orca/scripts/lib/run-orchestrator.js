@@ -97,6 +97,10 @@ function materialize(plan, program, report, orcaBin, options) {
         deps,
       });
       if (!res.ok) {
+        // A12: a mid-wave task-create failure raises TASK_MATERIALIZE_FAILED (exit 41)
+        // ONLY after the mappings recorded by earlier successful creates (persisted just
+        // below) are already durable — a later failure never drops an earlier outcome's
+        // orca_task_id.
         reject(
           "TASK_MATERIALIZE_FAILED",
           `orca orchestration task-create failed for outcome ${task.outcome_id}` +
@@ -105,6 +109,10 @@ function materialize(plan, program, report, orcaBin, options) {
       }
       orcaIdByPlanId.set(planId, res.taskId);
       entryByPlanId.get(planId).orca_task_id = res.taskId;
+      // A12: persist the receipt after EACH successful task-create so the mapping is on
+      // disk before the next (possibly failing) create runs. A reconcile can then adopt
+      // the already-created tasks instead of re-materializing them.
+      persistReceipt(report, options);
     }
   }
   return { taskByPlanId, entryByPlanId, orcaIdByPlanId };
@@ -151,8 +159,8 @@ function provenanceMismatch(show, orcaTaskId) {
 }
 
 // D2 receipt persistence. The receipt is a minimal, versioned identity/mapping
-// record; it is (re)written after task materialization and after each successful
-// dispatch verification — the mapping-changing steps. The atomic write itself lives
+// record; it is (re)written after EACH successful task-create (A12) and after each
+// successful dispatch verification — the mapping-changing steps. The atomic write itself lives
 // in the top-level script (options.persistReceipt); this pure module only assembles
 // the mapping-changing "core" from the live report and threads back the resulting
 // path. When no writer is injected (direct-orchestrator unit tests) it is a no-op.
@@ -241,8 +249,11 @@ function orchestrate(rawProgram, options = {}) {
   const report = initReport(plan);
   try {
     const orcaBin = admit(report, options);
+    // materialize persists the receipt after EACH successful task-create (A12), so the
+    // full outcome→orca_task_id mapping is already durable here; dispatchWave then
+    // re-persists after each provenance verification (A2). No separate post-materialize
+    // write is needed.
     const maps = materialize(plan, program, report, orcaBin, options);
-    persistReceipt(report, options); // D2: persist after task materialization
     dispatchWave(plan, program, report, orcaBin, maps, options);
     report.ok = true;
     return { report, exitCode: 0 };

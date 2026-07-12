@@ -35,7 +35,13 @@ function requiredEvidenceFor(kind) {
 function relayRunEvidence(facts) {
   const { manifest, pr, issue } = facts;
   return {
-    manifest_terminal: manifest ? isTerminalManifestState(manifest.state) : null,
+    // A14: relay_run completion requires the manifest to have reached `merged`
+    // SPECIFICALLY — not merely any terminal state. A terminal-but-`closed`
+    // (force-closed / abandoned) manifest can never yield completion evidence again, so
+    // `manifest_terminal` stays false and the outcome surfaces as `escalated` (via
+    // isAbandonedManifest in outcomeState) rather than completing off a stray merged PR
+    // or closed issue.
+    manifest_terminal: manifest ? manifest.state === "merged" : null,
     pr_merged: pr ? pr.state === "MERGED" || Boolean(pr.mergedAt) : null,
     issue_closed: issue ? issue.state === "CLOSED" : null,
   };

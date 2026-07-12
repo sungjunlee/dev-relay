@@ -96,10 +96,19 @@ function fleetsRoot() {
 // receipt resolves back for `status`. `.` and `..` (and empty) collapse to `program`
 // so a pathological id can never escape <programs-root>/<repo-slug>/<segment>/, and the
 // hash still keeps `.` and `..` on distinct paths.
+// A15: the readable prefix is bounded to at most 64 chars so a very long program id can
+// never overflow the filesystem per-segment name limit (NAME_MAX, typically 255). The
+// 8-hex hash is ALWAYS appended and is computed over the FULL raw id, so two long ids
+// that share a 64-char prefix still resolve to DISTINCT segments.
+const MAX_SEGMENT_PREFIX = 64;
+
 function programSegment(programId) {
   const raw = String(programId == null ? "" : programId);
   const sanitized = raw.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
-  const base = sanitized === "" || sanitized === "." || sanitized === ".." ? "program" : sanitized;
+  const readable = sanitized === "" || sanitized === "." || sanitized === ".." ? "program" : sanitized;
+  // Truncate to the readable-prefix bound, re-trimming any trailing dash the cut exposes
+  // (the first char is always non-dash, so the result is never empty).
+  const base = readable.slice(0, MAX_SEGMENT_PREFIX).replace(/-+$/, "");
   const hash = crypto.createHash("sha256").update(raw).digest("hex").slice(0, 8);
   return `${base}-${hash}`;
 }
