@@ -9,6 +9,7 @@ const REPO_ROOT = path.resolve(__dirname, "..", "..", "..");
 const RELAY_FLEET_SCRIPT = path.join(REPO_ROOT, "skills", "relay-fleet", "scripts", "relay-fleet.js");
 
 const {
+  buildRedispatchArgs,
   getFleetLeafReplacementPath,
   getFleetLeavesStorePath,
   getFleetRuntimePath,
@@ -124,6 +125,65 @@ function readJsonLines(filePath) {
     .filter(Boolean)
     .map((line) => JSON.parse(line));
 }
+
+function flagValue(args, flag) {
+  const index = args.indexOf(flag);
+  return index === -1 ? undefined : args[index + 1];
+}
+
+test("buildRedispatchArgs forwards leaf timeout, executor, and sandbox overrides", () => {
+  const { repoRoot } = setupRepo("relay-fleet-redispatch-leaf-args-");
+  const args = buildRedispatchArgs({
+    repoRoot,
+    runId: "issue-908-20260713010101000-a1b2c3d4",
+    leaf: { leaf_ref: "leaf-a", timeout: "5400", executor: "codex", sandbox: "workspace-write" },
+    options: {
+      dispatchScript: "/dispatch.js",
+      executor: "claude",
+      sandbox: "danger-full-access",
+    },
+  });
+
+  assert.equal(flagValue(args, "--timeout"), "5400");
+  assert.equal(flagValue(args, "--executor"), "codex");
+  assert.equal(flagValue(args, "--sandbox"), "workspace-write");
+});
+
+test("buildRedispatchArgs prefers a leaf timeout over the fleet timeout", () => {
+  const { repoRoot } = setupRepo("relay-fleet-redispatch-timeout-precedence-");
+  const args = buildRedispatchArgs({
+    repoRoot,
+    runId: "issue-908-20260713010101000-a1b2c3d4",
+    leaf: { leaf_ref: "leaf-a", timeout: "5400" },
+    options: { dispatchScript: "/dispatch.js", timeout: "1800" },
+  });
+
+  assert.equal(flagValue(args, "--timeout"), "5400");
+});
+
+test("buildRedispatchArgs omits timeout when neither leaf nor fleet defines it", () => {
+  const { repoRoot } = setupRepo("relay-fleet-redispatch-timeout-omitted-");
+  const args = buildRedispatchArgs({
+    repoRoot,
+    runId: "issue-908-20260713010101000-a1b2c3d4",
+    leaf: { leaf_ref: "leaf-a" },
+    options: { dispatchScript: "/dispatch.js" },
+  });
+
+  assert.equal(args.includes("--timeout"), false);
+});
+
+test("buildRedispatchArgs mirrors leaf register on redispatch", () => {
+  const { repoRoot } = setupRepo("relay-fleet-redispatch-register-");
+  const args = buildRedispatchArgs({
+    repoRoot,
+    runId: "issue-908-20260713010101000-a1b2c3d4",
+    leaf: { leaf_ref: "leaf-a", register: true },
+    options: { dispatchScript: "/dispatch.js", register: false },
+  });
+
+  assert.equal(args.includes("--register"), true);
+});
 
 function advanceFleetManifestState(repoRoot, fleetId, targetState) {
   const transitionPath = [
@@ -3127,7 +3187,7 @@ test("relay-fleet --review treats child state transitions as manifest progress",
   assert.equal(readManifest(getManifestPath(repoRoot, runId)).data.state, RUN_STATES.READY_TO_MERGE);
 });
 
-test("relay-fleet --review redispatches changes_requested children and re-reviews to ready_to_merge", () => {
+test("relay-fleet --review redispatches a child absent from persisted leaves with fleet options", () => {
   const { relayHome, repoRoot } = setupRepo("relay-fleet-review-loop-");
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "fleet-review-loop-fake-"));
   const dispatchScript = writeFakeDispatchScript(tmpDir);
@@ -3156,6 +3216,7 @@ test("relay-fleet --review redispatches changes_requested children and re-review
     fleetId: "fleet-review-loop",
     children: [{ leaf_ref: "leaf-a", run_id: runId, dispatch_status: DISPATCH_STATUS.DISPATCHED }],
   });
+  writePersistedFleetLeaves(repoRoot, "fleet-review-loop", []);
   advanceFleetManifestState(repoRoot, "fleet-review-loop", FLEET_STATES.DISPATCHED);
 
   const result = runFleet([
@@ -3164,6 +3225,8 @@ test("relay-fleet --review redispatches changes_requested children and re-review
     "--review",
     "--dispatch-script", dispatchScript,
     "--review-script", reviewScript,
+    "--timeout", "2700",
+    "--executor", "claude",
     "--json",
   ], {
     relayHome,
@@ -3180,7 +3243,10 @@ test("relay-fleet --review redispatches changes_requested children and re-review
   assert.equal(payload.reviewed_children[0].status, "complete");
   assert.deepEqual(payload.reviewed_children[0].steps.map((step) => step.phase), ["review", "redispatch", "review"]);
   assert.equal(readJsonLines(dispatchLog).length, 1);
-  assert.match(readJsonLines(dispatchLog)[0].args.join(" "), /--manifest/);
+  const redispatchArgs = readJsonLines(dispatchLog)[0].args;
+  assert.match(redispatchArgs.join(" "), /--manifest/);
+  assert.equal(flagValue(redispatchArgs, "--timeout"), "2700");
+  assert.equal(flagValue(redispatchArgs, "--executor"), "claude");
   assert.equal(readJsonLines(reviewLog).length, 2);
   assert.equal(readManifest(getManifestPath(repoRoot, runId)).data.state, RUN_STATES.READY_TO_MERGE);
 });
@@ -3210,6 +3276,9 @@ test("relay-fleet --resume re-enters the review loop for changes_requested child
     fleetId: "fleet-review-resume",
     children: [{ leaf_ref: "leaf-a", run_id: runId, dispatch_status: DISPATCH_STATUS.DISPATCHED }],
   });
+  writePersistedFleetLeaves(repoRoot, "fleet-review-resume", [
+    makeLeaf(repoRoot, 1, { leaf_ref: "leaf-a", issue_number: 525, timeout: 5400 }),
+  ]);
   advanceFleetManifestState(repoRoot, "fleet-review-resume", FLEET_STATES.REVIEWING);
 
   const result = runFleet([
@@ -3234,6 +3303,7 @@ test("relay-fleet --resume re-enters the review loop for changes_requested child
   assert.equal(payload.reviewed_children[0].status, "complete");
   assert.deepEqual(payload.reviewed_children[0].steps.map((step) => step.phase), ["redispatch", "review"]);
   assert.equal(readJsonLines(dispatchLog).length, 1);
+  assert.equal(flagValue(readJsonLines(dispatchLog)[0].args, "--timeout"), "5400");
   assert.equal(readJsonLines(reviewLog).length, 1);
   assert.equal(readManifest(getManifestPath(repoRoot, runId)).data.state, RUN_STATES.MERGED);
   assert.equal(payload.summary.fleet_state, FLEET_STATES.CLOSED);
