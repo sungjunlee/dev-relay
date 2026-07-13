@@ -111,11 +111,19 @@ function assertOrcaReadOnly(argv) {
 const GH_API_BODY_OPTS = new Set(["-f", "--field", "-F", "--raw-field", "--input"]);
 
 function isGhApiBodyOption(token) {
-  return GH_API_BODY_OPTS.has(token)
+  if (GH_API_BODY_OPTS.has(token)
     || token.startsWith("--field=")
     || token.startsWith("--raw-field=")
-    || token.startsWith("--input=")
-    || ((token.startsWith("-f") || token.startsWith("-F")) && token.length > 2);
+    || token.startsWith("--input=")) return true;
+
+  // Cobra permits boolean shorthands to be clustered before a value-taking flag.
+  // For `gh api`, `-i` is boolean, so `-ifa=b` and `-iFa=b` carry body fields.
+  // Stop at any other shorthand because a value-taking flag (notably `-XGET`)
+  // consumes the remainder of its token as its value.
+  if (!token.startsWith("-") || token.startsWith("--")) return false;
+  let index = 1;
+  while (token[index] === "i") index += 1;
+  return token[index] === "f" || token[index] === "F";
 }
 
 // Extract an explicit `gh api` method, handling both separated (`-X POST`, `--method POST`)

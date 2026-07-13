@@ -50,11 +50,19 @@ const isPrView = args[0] === "pr" && args[1] === "view";
 // status.js assertGhReadOnly boundary so this poison layer rejects the same shapes.
 const GH_API_BODY_OPTS = ["-f", "--field", "-F", "--raw-field", "--input"];
 function isGhApiBodyOption(t) {
-  return GH_API_BODY_OPTS.indexOf(t) >= 0
+  if (GH_API_BODY_OPTS.indexOf(t) >= 0
     || t.indexOf("--field=") === 0
     || t.indexOf("--raw-field=") === 0
-    || t.indexOf("--input=") === 0
-    || ((t.indexOf("-f") === 0 || t.indexOf("-F") === 0) && t.length > 2);
+    || t.indexOf("--input=") === 0) return true;
+
+  // Cobra permits boolean shorthands to be clustered before a value-taking flag.
+  // For gh api, -i is boolean, so -ifa=b and -iFa=b carry body fields.
+  // Stop at any other shorthand because a value-taking flag (notably -XGET)
+  // consumes the remainder of its token as its value.
+  if (t.indexOf("-") !== 0 || t.indexOf("--") === 0) return false;
+  var index = 1;
+  while (t[index] === "i") index += 1;
+  return t[index] === "f" || t[index] === "F";
 }
 function ghApiMethod(a) {
   for (var i = 0; i < a.length; i++) {
