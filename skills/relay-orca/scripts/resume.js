@@ -161,11 +161,15 @@ function loadReceipt(receiptPath, requestedProgramId) {
   return parsed.receipt;
 }
 
-// The imported #945 reconciliation, run BEFORE any mutation (D1). Reads only.
+// The imported #945 reconciliation, run BEFORE any mutation (D1). Reads only. The
+// reconciliation's per-task dispatch-show reads are captured into `liveDispatch` and
+// returned alongside the report so the planner can decide "verifiably absent" from a live
+// read (owner amendment A1, #946 R1), never from a null receipt dispatch_id.
 function reconcile({ receipt, opts, repo, receiptPath }) {
   const manifests = listManifestFiles(repo.slug).map((entry) => ({ run_id: entry.run_id, text: entry.text, parsed: parseManifest(entry.text) }));
   const fleetManifests = listFleetManifestFiles(repo.slug).map((entry) => ({ run_id: entry.run_id, text: entry.text, parsed: parseManifest(entry.text) }));
-  return deriveStatusReport({
+  const liveDispatch = new Map();
+  const report = deriveStatusReport({
     receipt,
     programId: opts.programId,
     receiptPath,
@@ -175,7 +179,9 @@ function reconcile({ receipt, opts, repo, receiptPath }) {
     gh: makeReadRunner(resolveGhBin(opts), assertGhReadOnly, repo.root),
     urlFor: makeUrlResolver(repo.root),
     programSegment,
+    liveDispatchSink: liveDispatch,
   });
+  return { report, liveDispatch };
 }
 
 // Persist the live receipt object atomically, preserving created_at and any stop record
@@ -310,6 +316,7 @@ function main() {
   let receipt;
   let receiptPath;
   let report;
+  let liveDispatch;
   try {
     repo = resolveRepoContext({ repoRootOverride: opts.repoRoot });
     receiptPath = receiptPathFor(repo.slug, opts.programId);
@@ -317,7 +324,7 @@ function main() {
     if (receipt.repo && receipt.repo.slug !== repo.slug) {
       rejectReceipt("RECEIPT_REPO_MISMATCH", `receipt repo.slug ${receipt.repo.slug} does not match the current repo slug ${repo.slug}`);
     }
-    report = reconcile({ receipt, opts, repo, receiptPath });
+    ({ report, liveDispatch } = reconcile({ receipt, opts, repo, receiptPath }));
   } catch (error) {
     if (error instanceof StatusError || error instanceof CanonicalizationError) failReceipt(error, opts.json);
     throw error;
@@ -325,7 +332,7 @@ function main() {
 
   // Reconciliation is complete; the plan is pure. A program-level decision performs ZERO
   // mutation and exits 60-63; otherwise the safe actions execute through the verified path.
-  const plan = planResume({ receipt, report });
+  const plan = planResume({ receipt, report, liveDispatch });
   let terminalsCreated = [];
   let blockingReasons = plan.blockingReasons.slice();
   if (plan.exitCode === 0) {

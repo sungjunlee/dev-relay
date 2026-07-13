@@ -87,6 +87,19 @@ function foreignTask(id) {
   return { id, title: `relay-orca: other-program/${id}`, status: "dispatched", worker_done: false };
 }
 
+// A dispatch-show seed modeling GENUINE absence (owner amendment A1, #946 R1): the Orca
+// task exists (materialized) but was never dispatched, so dispatch-show reports NO
+// dispatch and no terminal. This live-absent read is the ONLY thing that qualifies an
+// outcome as verifiably-absent for re-dispatch — a null receipt dispatch_id alone does
+// not. Without this seed the fake reports a PRESENT dispatch (the crash-window state).
+function absentDispatch(...outcomes) {
+  const seed = {};
+  outcomes.forEach((outcome) => {
+    seed[`orca-live-${outcome}`] = { dispatch_id: null, terminal_present: false, assignee: null };
+  });
+  return seed;
+}
+
 function initGitRepo(root) {
   const git = (args) => execFileSync("git", ["-C", root, ...args], { stdio: ["ignore", "pipe", "pipe"] });
   git(["init", "-q"]);
@@ -301,10 +314,10 @@ test("D9.4: in-flight relay run (absent Orca dispatch) is skipped, never re-disp
   const world = buildWorld({
     programId,
     manifests: [{ run_id: "run-live", state: "review_pending", pr_number: 20, issue_number: 200 }],
-    orcaScenario: { tasks: [orcaTask(programId, "a")] },
+    orcaScenario: { tasks: [orcaTask(programId, "a")], dispatch: absentDispatch("a") },
     ghScenario: { prs: { 20: { state: "OPEN" } }, issues: { 200: { state: "OPEN" } } },
   });
-  // Orca dispatch verifiably absent (dispatch_id null) but the relay side is in-flight.
+  // Orca dispatch verifiably absent (live dispatch-show reports none) but the relay side is in-flight.
   const receipt = makeReceipt({ programId, slug: world.slug, root: fs.realpathSync(world.repoRoot), tasks: [{ outcome_id: "a", dispatch_id: null, assignee: null, run: "run-live" }] });
   fs.writeFileSync(world.receiptPath, serializeReceipt(receipt), "utf-8");
   const before = world.receiptOnDisk();
@@ -328,7 +341,8 @@ function partialWorld(programId) {
   const world = buildWorld({
     programId,
     manifests: [{ run_id: "run-a", state: "dispatched", pr_number: 10, issue_number: 100 }],
-    orcaScenario: { tasks: [orcaTask(programId, "a"), orcaTask(programId, "b")] },
+    // Outcome b's dispatch is verifiably absent via a live dispatch-show read (A1).
+    orcaScenario: { tasks: [orcaTask(programId, "a"), orcaTask(programId, "b")], dispatch: absentDispatch("b") },
     ghScenario: { prs: { 10: { state: "OPEN" } }, issues: { 100: { state: "OPEN" } } },
   });
   const receipt = makeReceipt({
@@ -362,6 +376,66 @@ test("D9.6: partial dispatch → only the absent+clean outcome dispatches, throu
   }
 });
 
+// ---------------------------------------------------------------------------
+// A1 (#946 R1) — redispatch requires LIVE dispatch absence, not a null receipt id
+// ---------------------------------------------------------------------------
+
+// (a) Crash window: `dispatch --inject` landed a live dispatch, but the receipt write that
+// records its provenance never happened (crash between inject and the receipt write). The
+// receipt dispatch_id is null yet a live dispatch is PRESENT — re-injecting would duplicate
+// operator work, so resume fails closed as RESUME_MISSING_PROVENANCE (exit 63) with ZERO
+// dispatch invocations. A null receipt dispatch_id is NOT verifiable absence.
+test("A1(a) crash window: live dispatch present + receipt dispatch_id null → RESUME_MISSING_PROVENANCE exit 63, zero dispatch", () => {
+  const programId = "epic-resume-crash-window";
+  const world = buildWorld({
+    programId,
+    // NO dispatch seed → the fake dispatch-show reports a PRESENT live dispatch for the task.
+    orcaScenario: { tasks: [orcaTask(programId, "b")] },
+  });
+  const receipt = makeReceipt({ programId, slug: world.slug, root: fs.realpathSync(world.repoRoot), tasks: [{ outcome_id: "b", dispatch_id: null, assignee: null }] });
+  fs.writeFileSync(world.receiptPath, serializeReceipt(receipt), "utf-8");
+  const before = world.receiptOnDisk();
+  try {
+    const r = world.run();
+    assert.equal(r.status, 63);
+    assertReportShape(r.body);
+    assert.equal(r.body.ok, false);
+    assert.ok(r.body.decision_required.some((d) => d.reason_code === "RESUME_MISSING_PROVENANCE"), "crash window fails closed as RESUME_MISSING_PROVENANCE");
+    assert.equal(actionFor(r.body, "b").action, "decision_required");
+    assert.deepEqual(mutationLines(world.orca.readLog()), [], "no mutating subcommand on the crash-window abort");
+    assert.ok(!world.orca.readLog().some((l) => l.startsWith("orchestration dispatch --task")), "ZERO dispatch invocations in the crash window");
+    assert.equal(world.receiptOnDisk(), before, "receipt byte-identical on the fail-closed abort");
+    assertNoPoison(world);
+  } finally {
+    world.cleanup();
+  }
+});
+
+// (b) Genuine absence: the task exists but a live dispatch-show reports NO dispatch. THIS
+// is verifiable absence, so the absent + relay-clean + wave-1 outcome re-dispatches through
+// the verified inject->dispatch-show->prompt path, exactly as before.
+test("A1(b) genuine absence: live dispatch-show empty + receipt dispatch_id null → re-dispatch proceeds through the verified path", () => {
+  const programId = "epic-resume-genuine-absence";
+  const world = buildWorld({
+    programId,
+    orcaScenario: { tasks: [orcaTask(programId, "b")], dispatch: absentDispatch("b") },
+  });
+  const receipt = makeReceipt({ programId, slug: world.slug, root: fs.realpathSync(world.repoRoot), tasks: [{ outcome_id: "b", dispatch_id: null, assignee: null }] });
+  fs.writeFileSync(world.receiptPath, serializeReceipt(receipt), "utf-8");
+  try {
+    const r = world.run();
+    assert.equal(r.status, 0);
+    assert.deepEqual(r.body.decision_required, [], "no fail-closed decision on genuine absence");
+    assert.equal(actionFor(r.body, "b").action, "redispatched");
+    const log = world.orca.readLog();
+    assert.ok(log.some((l) => l.startsWith("orchestration dispatch-show --task orca-live-b")), "reconciliation reads the live dispatch before deciding");
+    assert.ok(log.some((l) => l.startsWith("orchestration dispatch --task orca-live-b")), "re-injected through the verified dispatch path");
+    assertNoPoison(world);
+  } finally {
+    world.cleanup();
+  }
+});
+
 // D3: unmapped relay work (a back-pointer) blocks re-dispatch of an absent outcome.
 test("D3: an absent outcome is NOT re-dispatched while unmapped relay work references the program", () => {
   const programId = "epic-resume-backpointer";
@@ -369,7 +443,7 @@ test("D3: an absent outcome is NOT re-dispatched while unmapped relay work refer
     programId,
     // An unmapped relay run manifest that references this program (a back-pointer).
     manifests: [{ run_id: "run-unmapped", state: "dispatched", pr_number: 40, issue_number: 400, body: `relay-orca program ${programId} operator run` }],
-    orcaScenario: { tasks: [orcaTask(programId, "b")] },
+    orcaScenario: { tasks: [orcaTask(programId, "b")], dispatch: absentDispatch("b") },
     ghScenario: { prs: { 40: { state: "OPEN" } }, issues: { 400: { state: "OPEN" } } },
   });
   // Outcome b is verifiably absent + relay clean + wave 1 (would normally re-dispatch),
@@ -563,7 +637,7 @@ test("D9.8: resume preserves a prior stop record when it rewrites the receipt", 
   const programId = "epic-resume-after-stop";
   const world = buildWorld({
     programId,
-    orcaScenario: { tasks: [orcaTask(programId, "b")] },
+    orcaScenario: { tasks: [orcaTask(programId, "b")], dispatch: absentDispatch("b") },
   });
   const receipt = makeReceipt({
     programId,

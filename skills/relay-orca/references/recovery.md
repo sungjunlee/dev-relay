@@ -3,9 +3,15 @@
 `resume` is **reconcile-first and fail-closed**: it loads the reconstructible receipt, runs the
 SAME live reconciliation as `status` **before any mutation**, and only then restores what is
 safe (reuse valid mappings, reacquire a lost operator terminal, re-dispatch a verifiably-absent,
-relay-clean, wave-1 outcome through the verified path). When the reconciliation shows a state
-that makes resumption unsafe, `resume` performs **zero** mutation and emits a `decision_required`
-report with a bounded exit code. This reference is the operator anchor for those decisions.
+relay-clean, wave-1 outcome through the verified path). **"Verifiably absent" means a live
+`dispatch-show` read for that task, taken during the reconciliation pass, reported NO dispatch —
+a null `dispatch_id` in the receipt alone NEVER qualifies.** In the crash window (a
+`dispatch --inject` landed a live dispatch but the receipt write recording it never happened),
+the receipt id is null yet a live dispatch is present; re-injecting would duplicate operator work,
+so that case fails closed as `RESUME_MISSING_PROVENANCE` (exit 63) instead of re-dispatching. When
+the reconciliation shows a state that makes resumption unsafe, `resume` performs **zero** mutation
+and emits a `decision_required` report with a bounded exit code. This reference is the operator
+anchor for those decisions.
 
 None of the steps below are performed automatically by the skill. The skill **never** resets
 Orca, deletes a task, removes a worktree, deletes a branch/PR, or force-closes a relay run — on
@@ -55,12 +61,16 @@ from the live one. Bounded steps:
 
 ### `RESUME_MISSING_PROVENANCE` (exit 63) — live dispatch without recorded provenance
 
-A live dispatch exists for a mapped task, but the receipt's dispatch context/assignee is
-incomplete, so `resume` cannot verify which terminal owns it. Bounded steps:
+A live `dispatch-show` read reports a dispatch **present** for a mapped task, but the receipt's
+recorded provenance is incomplete — either the `assignee` is missing (so `resume` cannot verify
+which terminal owns the live dispatch), or **both the `dispatch_id` and `assignee` are absent**
+(the crash window: `dispatch --inject` landed a live dispatch but the receipt write that records it
+never happened). In every case a live dispatch already exists, so `resume` will **not** re-inject —
+that would duplicate operator work. Bounded steps:
 
 1. Read the live dispatch: `orca orchestration dispatch-show --task <orca_task_id> --json`.
-2. Restore the missing dispatch id/assignee in the receipt to match the live dispatch.
-3. Re-run `resume`.
+2. Restore the missing `dispatch_id`/`assignee` in the receipt to match the live dispatch.
+3. Re-run `resume` — the outcome now reads back as a valid live mapping and is reused.
 
 ## Corrupt or global task-graph recovery
 

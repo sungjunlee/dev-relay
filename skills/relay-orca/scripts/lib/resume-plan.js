@@ -41,6 +41,29 @@ function missingProvenance(task) {
   return Boolean(task.orca_task_id) && Boolean(task.dispatch_id) && !isNonEmpty(task.assignee);
 }
 
+// D2 code 63, crash window (owner amendment A1, #946 R1): a live dispatch-show read
+// reports a dispatch PRESENT for this task, but the receipt records NO provenance
+// (dispatch_id and/or assignee absent) — the signature of `dispatch --inject` landing a
+// live dispatch and the receipt write that records it never happening. The live dispatch
+// is real, so re-injecting would DUPLICATE operator work: a null receipt dispatch_id here
+// is NOT verifiable absence, and resume fails closed (RESUME_MISSING_PROVENANCE) with
+// zero mutation rather than re-dispatching.
+function liveDispatchWithoutProvenance(task, livePresent) {
+  return livePresent === true && isNonEmpty(task.orca_task_id) && (!isNonEmpty(task.dispatch_id) || !isNonEmpty(task.assignee));
+}
+
+// Per-outcome live dispatch fact threaded from resume's reconciliation pass (the pipeline
+// already performs the per-task dispatch-show reads): `{ present, absent }` where
+// `present` = a reachable, runtime-attributed dispatch-show reported a dispatch id, and
+// `absent` = it reported none. Both false = UNKNOWN (untrusted runtime, an unattributable
+// per-task read, or a task missing from the runtime) — which NEVER qualifies as verifiable
+// absence. Accepts a Map or a plain object; a missing entry degrades to unknown.
+function liveDispatchFact(liveDispatch, outcomeId) {
+  if (liveDispatch && typeof liveDispatch.get === "function") return liveDispatch.get(outcomeId) || {};
+  if (liveDispatch && typeof liveDispatch === "object") return liveDispatch[outcomeId] || {};
+  return {};
+}
+
 function isNonEmpty(value) {
   return typeof value === "string" && value.length > 0;
 }
@@ -80,11 +103,18 @@ function needsTerminalReacquire(task, diags) {
   );
 }
 
-// D3 re-dispatch: the Orca dispatch is verifiably absent (never dispatched: no recorded
-// dispatch id), the materialized task still exists, the relay side is clean, and the
-// wave rule allows it (v0 dispatches only wave 1, matching the #944 run anchor).
-function isRedispatchCandidate(task, diags, outcome) {
+// D3 re-dispatch: the Orca dispatch is VERIFIABLY absent, the materialized task still
+// exists, the relay side is clean, and the wave rule allows it (v0 dispatches only wave
+// 1, matching the #944 run anchor). "Verifiably absent" (owner amendment A1, #946 R1) is
+// satisfied ONLY by `liveAbsent` — a live dispatch-show read for THIS task, threaded from
+// the reconciliation pass, that reports NO dispatch. A null receipt `dispatch_id` alone
+// NEVER qualifies: in the crash window (dispatch --inject landed a live dispatch but the
+// receipt write that records it never happened) the receipt id is null yet a live dispatch
+// is present, and re-injecting there would duplicate operator work — that case fails closed
+// as RESUME_MISSING_PROVENANCE in planDecisions instead of re-dispatching here.
+function isRedispatchCandidate(task, diags, outcome, liveAbsent) {
   return (
+    liveAbsent === true &&
     !isNonEmpty(task.dispatch_id) &&
     isNonEmpty(task.orca_task_id) &&
     !hasDiag(diags, "MISSING_TASK") &&
@@ -95,7 +125,7 @@ function isRedispatchCandidate(task, diags, outcome) {
 
 // Program-level fail-closed decisions (D2). Deduped by reason_code and ordered by exit
 // code so the process exit is deterministic (60 < 61 < 62 < 63).
-function planDecisions(receipt, report) {
+function planDecisions(receipt, report, liveDispatch) {
   const decisions = [];
   const add = (code, message) => {
     if (!decisions.some((entry) => entry.reason_code === code)) decisions.push(decisionEntry(code, message));
@@ -111,9 +141,16 @@ function planDecisions(receipt, report) {
   }
   receipt.tasks.forEach((task) => {
     const diags = diagsFor(report, task.outcome_id);
+    const live = liveDispatchFact(liveDispatch, task.outcome_id);
     if (driftedDispatch(diags)) add("RESUME_CONFLICTING_MAPPING", `outcome ${task.outcome_id} dispatch id changed under the mapping; resume performs no mutation`);
     if (missingProvenance(task) && !hasDiag(diags, "MISSING_DISPATCH")) {
       add("RESUME_MISSING_PROVENANCE", `outcome ${task.outcome_id} has a live dispatch but its recorded provenance is incomplete; resume performs no mutation`);
+    }
+    // Crash window (A1): a live dispatch-show read reports a dispatch present but the
+    // receipt recorded no provenance for it. A null receipt dispatch_id is NOT absence
+    // here — re-injecting would duplicate operator work — so fail closed with zero mutation.
+    if (liveDispatchWithoutProvenance(task, live.present)) {
+      add("RESUME_MISSING_PROVENANCE", `outcome ${task.outcome_id} has a live dispatch but the receipt records no dispatch provenance; resume performs no mutation`);
     }
   });
   const inconsistent = (report.outcomes || []).filter((outcome) => outcome.state === "inconsistent");
@@ -148,14 +185,15 @@ function hasUnmappedRelayWork(report) {
 // terminal is reacquired; a verifiably-absent, relay-clean, wave-1 outcome is
 // re-dispatched; everything else (in-flight/durable child, later wave, or unattributable
 // unmapped relay work) is left untouched.
-function classifyAction(task, report, unmappedRelayWork) {
+function classifyAction(task, report, unmappedRelayWork, liveDispatch) {
   const outcome = reportOutcomeById(report, task.outcome_id) || {};
   const diags = diagsFor(report, task.outcome_id);
+  const live = liveDispatchFact(liveDispatch, task.outcome_id);
   if (outcome.state === "complete_with_evidence") return makeAction(task, "skipped", "already complete with live evidence; nothing to resume");
   if (outcome.state === "escalated") return makeAction(task, "skipped", "escalated; requires operator action, not automatic resume");
   if (needsTerminalReacquire(task, diags)) return makeAction(task, "redispatched", `outcome ${task.outcome_id} operator terminal is gone; reacquiring through the verified inject->dispatch-show->prompt path`, execPlan(task, "reacquire_terminal"));
   if (mappingLive(task, diags)) return makeAction(task, "reused", `outcome ${task.outcome_id} has a valid live mapping (task+dispatch+terminal); reused, not re-dispatched`);
-  if (isRedispatchCandidate(task, diags, outcome)) {
+  if (isRedispatchCandidate(task, diags, outcome, live.absent)) {
     if (unmappedRelayWork) return makeAction(task, "skipped", `outcome ${task.outcome_id} is absent, but unmapped relay work references this program; not re-dispatched to avoid duplicating it`);
     return makeAction(task, "redispatched", `outcome ${task.outcome_id} Orca dispatch verifiably absent and relay side clean; re-dispatching through the verified path`, execPlan(task, "redispatch"));
   }
@@ -164,8 +202,8 @@ function classifyAction(task, report, unmappedRelayWork) {
 
 // The whole plan: program-level decisions plus per-outcome actions. When any decision
 // fires, EVERY outcome is `decision_required` (resume performs zero mutation, D2).
-function planResume({ receipt, report }) {
-  const decisions = planDecisions(receipt, report);
+function planResume({ receipt, report, liveDispatch }) {
+  const decisions = planDecisions(receipt, report, liveDispatch);
   if (decisions.length) {
     const reason = boundedExcerpt(`blocked: ${decisions[0].reason_code}`);
     const actions = receipt.tasks.map((task) => makeAction(task, "decision_required", reason, null));
@@ -173,7 +211,7 @@ function planResume({ receipt, report }) {
     return { decisions, actions, blockingReasons, exitCode: exitCodeFor(decisions[0].reason_code) };
   }
   const unmappedRelayWork = hasUnmappedRelayWork(report);
-  const actions = receipt.tasks.map((task) => classifyAction(task, report, unmappedRelayWork));
+  const actions = receipt.tasks.map((task) => classifyAction(task, report, unmappedRelayWork, liveDispatch));
   return { decisions: [], actions, blockingReasons: [], exitCode: 0 };
 }
 
@@ -188,5 +226,6 @@ module.exports = {
   needsTerminalReacquire,
   isRedispatchCandidate,
   missingProvenance,
+  liveDispatchWithoutProvenance,
   driftedDispatch,
 };
