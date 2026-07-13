@@ -1357,28 +1357,22 @@ test("cleanup-worktrees #996 isolates sweep_error when one runDir is a file (ENO
   process.env.RELAY_ADVISORY_LANE_REAP_GRACE_MS = "200";
 
   // Broken runDir: regular FILE at the runDir path → readdirSync throws ENOTDIR.
-  // Mark cleanup already succeeded so the janitor records sweep_error then skips
-  // the rest of the per-run cleanup (appendRunEvent/ensureRunLayout would otherwise
-  // hard-fail on the file-shaped runDir — out of scope for the reap isolation fix).
+  // Leave cleanup pending so the janitor would otherwise fall through into
+  // appendRunEvent/ensureRunLayout after recording sweep_error — that path must
+  // continue instead of aborting the rest of the loop (#996 pending-cleanup isolation).
   const broken = writeRun(repoRoot, {
     branch: "issue-996-broken",
     state: STATES.MERGED,
     updatedAt,
   });
   const brokenRunId = readManifest(broken.manifestPath).data.run_id;
+  assert.equal(readManifest(broken.manifestPath).data.cleanup.status, "pending");
   const brokenRunDir = getRunDir(repoRoot, brokenRunId);
-  {
-    const { data, body } = readManifest(broken.manifestPath);
-    writeManifest(broken.manifestPath, {
-      ...data,
-      cleanup: { ...(data.cleanup || {}), status: "succeeded" },
-    }, body);
-  }
   fs.rmSync(brokenRunDir, { recursive: true, force: true });
   fs.writeFileSync(brokenRunDir, "not-a-directory\n", "utf-8");
   assert.equal(fs.statSync(brokenRunDir).isFile(), true);
 
-  // Healthy terminal run with a live lane lease — must still be swept.
+  // Healthy terminal run with a live lane lease — must still be swept AND cleaned.
   const healthy = writeRun(repoRoot, {
     branch: "issue-996-healthy",
     state: STATES.MERGED,
@@ -1404,13 +1398,17 @@ test("cleanup-worktrees #996 isolates sweep_error when one runDir is a file (ENO
     }));
 
     assert.ok(Array.isArray(result.advisoryLaneReaps));
-    const sweepError = result.advisoryLaneReaps.find(
+    const sweepErrors = result.advisoryLaneReaps.filter(
       (entry) => entry.runId === brokenRunId && entry.outcome === "sweep_error"
     );
-    assert.ok(sweepError, `must record sweep_error for broken run: ${JSON.stringify(result.advisoryLaneReaps)}`);
-    assert.equal(typeof sweepError.error, "string");
-    assert.ok(sweepError.error.length > 0);
-    assert.equal("pgid" in sweepError, false);
+    assert.equal(
+      sweepErrors.length,
+      1,
+      `must record exactly one sweep_error for broken run: ${JSON.stringify(result.advisoryLaneReaps)}`
+    );
+    assert.equal(typeof sweepErrors[0].error, "string");
+    assert.ok(sweepErrors[0].error.length > 0);
+    assert.equal("pgid" in sweepErrors[0], false);
 
     const reaped = result.advisoryLaneReaps.find((entry) => entry.pgid === healthyPgid);
     assert.ok(reaped, `healthy run must still be swept: ${JSON.stringify(result.advisoryLaneReaps)}`);
@@ -1418,6 +1416,15 @@ test("cleanup-worktrees #996 isolates sweep_error when one runDir is a file (ENO
     assert.equal(reaped.runId, healthyRunId);
     assert.equal(isProcessGroupAlive(healthyPgid), false);
     assert.equal(fs.existsSync(healthyLeasePath), false);
+
+    const cleaned = result.cleaned.find((entry) => entry.runId === healthyRunId);
+    assert.ok(cleaned, `healthy run must still be cleaned: ${JSON.stringify(result.cleaned)}`);
+    assert.equal(readManifest(healthy.manifestPath).data.cleanup.status, "succeeded");
+    assert.equal(
+      result.cleaned.some((entry) => entry.runId === brokenRunId),
+      false,
+      "broken pending-cleanup run must not fall through into runCleanup"
+    );
 
     // Human-summary path must tolerate pgid-less sweep_error entries (no throw).
     const textOut = execFileSync("node", [

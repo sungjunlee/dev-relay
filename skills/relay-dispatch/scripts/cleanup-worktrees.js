@@ -589,6 +589,10 @@ function run() {
         outcome: "sweep_error",
         error: summarizeFailure(error),
       });
+      // Do not fall through into assertNoLiveRunLease / runCleanup / appendRunEvent:
+      // appendRunEvent → ensureRunLayout → mkdirSync throws on a file-shaped runDir
+      // and would abort the entire janitor (#996 / #969 per-item isolation).
+      continue;
     }
 
     if (cleanupStatus === CLEANUP_STATUSES.SUCCEEDED) {
