@@ -35,11 +35,33 @@ function reapPriorAdvisoryLaneAttempts({
   });
 }
 
+// Outcome-class precedence for the primary `lane_reap` field. Within a class,
+// the last matching entry wins (leases arrive attempt-ascending → newest attempt).
+const LANE_REAP_PRIMARY_PRECEDENCE = [
+  ["reap_failed"],
+  ["reaped", "would_reap"],
+  ["stale", "would_remove_stale", "skipped_pid_reuse", "would_skip_pid_reuse"],
+  ["corrupt", "would_remove_corrupt"],
+  ["skipped_host_mismatch"],
+];
+
+function selectPrimaryLaneReapOutcome(outcomes) {
+  for (const classOutcomes of LANE_REAP_PRIMARY_PRECEDENCE) {
+    const classSet = new Set(classOutcomes);
+    let last = null;
+    for (const entry of outcomes) {
+      if (classSet.has(entry?.outcome)) last = entry;
+    }
+    if (last) return last;
+  }
+  return outcomes[outcomes.length - 1];
+}
+
 function buildLaneReapField(outcomes) {
   if (!Array.isArray(outcomes) || outcomes.length === 0) {
     return { outcome: "stale", pgid: null };
   }
-  const primary = outcomes[0];
+  const primary = selectPrimaryLaneReapOutcome(outcomes);
   const field = {
     outcome: primary.outcome,
     pgid: primary.pgid ?? null,

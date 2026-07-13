@@ -572,12 +572,22 @@ function run() {
 
     // Terminal + age-eligible: reap any surviving advisory-lane process groups
     // recorded in per-attempt lane leases (#988). Non-terminal runs never reach here.
+    // Isolate per-run: one throwing runDir (EACCES/EIO/ENOTDIR) must not abort
+    // the sweep of remaining runs (#996).
     const runDir = getRunDir(repoRoot, normalizedData.run_id);
-    const laneReaps = reapAdvisoryLaneLeases({ runDir, dryRun });
-    for (const reap of laneReaps) {
+    try {
+      const laneReaps = reapAdvisoryLaneLeases({ runDir, dryRun });
+      for (const reap of laneReaps) {
+        advisoryLaneReaps.push({
+          ...reap,
+          runId: normalizedData.run_id,
+        });
+      }
+    } catch (error) {
       advisoryLaneReaps.push({
-        ...reap,
         runId: normalizedData.run_id,
+        outcome: "sweep_error",
+        error: summarizeFailure(error),
       });
     }
 

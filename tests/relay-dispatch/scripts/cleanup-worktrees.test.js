@@ -1328,3 +1328,108 @@ test("cleanup-worktrees #988 omits advisoryLaneReaps when idle (byte-identical s
   ], { encoding: "utf-8" }));
   assert.equal("advisoryLaneReaps" in result, false);
 });
+
+test("cleanup-worktrees #996 isolates sweep_error when one runDir is a file (ENOTDIR)", () => {
+  const { isProcessGroupAlive, writeAdvisoryLaneLease } = require("../../../skills/relay-dispatch/scripts/run-runtime-state");
+  const { getRunDir } = require("../../../skills/relay-dispatch/scripts/manifest/paths");
+  const TERM_IGNORING_LANE = path.join(__dirname, "..", "..", "relay-merge", "fixtures", "term-ignoring-lane.js");
+
+  function spawnTermIgnoringLane() {
+    const child = spawn(process.execPath, [TERM_IGNORING_LANE], {
+      detached: true,
+      stdio: "ignore",
+    });
+    child.unref();
+    assert.ok(Number.isInteger(child.pid) && child.pid > 0);
+    assert.equal(isProcessGroupAlive(child.pid), true);
+    return child.pid;
+  }
+
+  function forceKillPgid(pgid) {
+    try {
+      process.kill(-pgid, "SIGKILL");
+    } catch {}
+  }
+
+  const { repoRoot } = setupNamedMainRepo("dev-relay");
+  const updatedAt = "2026-04-01T00:00:00.000Z";
+  const priorGrace = process.env.RELAY_ADVISORY_LANE_REAP_GRACE_MS;
+  process.env.RELAY_ADVISORY_LANE_REAP_GRACE_MS = "200";
+
+  // Broken runDir: regular FILE at the runDir path → readdirSync throws ENOTDIR.
+  // Mark cleanup already succeeded so the janitor records sweep_error then skips
+  // the rest of the per-run cleanup (appendRunEvent/ensureRunLayout would otherwise
+  // hard-fail on the file-shaped runDir — out of scope for the reap isolation fix).
+  const broken = writeRun(repoRoot, {
+    branch: "issue-996-broken",
+    state: STATES.MERGED,
+    updatedAt,
+  });
+  const brokenRunId = readManifest(broken.manifestPath).data.run_id;
+  const brokenRunDir = getRunDir(repoRoot, brokenRunId);
+  {
+    const { data, body } = readManifest(broken.manifestPath);
+    writeManifest(broken.manifestPath, {
+      ...data,
+      cleanup: { ...(data.cleanup || {}), status: "succeeded" },
+    }, body);
+  }
+  fs.rmSync(brokenRunDir, { recursive: true, force: true });
+  fs.writeFileSync(brokenRunDir, "not-a-directory\n", "utf-8");
+  assert.equal(fs.statSync(brokenRunDir).isFile(), true);
+
+  // Healthy terminal run with a live lane lease — must still be swept.
+  const healthy = writeRun(repoRoot, {
+    branch: "issue-996-healthy",
+    state: STATES.MERGED,
+    updatedAt,
+  });
+  const healthyRunId = readManifest(healthy.manifestPath).data.run_id;
+  const healthyRunDir = getRunDir(repoRoot, healthyRunId);
+  const healthyPgid = spawnTermIgnoringLane();
+  let healthyLeasePath = null;
+  try {
+    healthyLeasePath = writeAdvisoryLaneLease(healthyRunDir, {
+      pid: healthyPgid,
+      pgid: healthyPgid,
+      round: 1,
+      reviewer: "codex",
+    }).leasePath;
+
+    const result = JSON.parse(execFileSync("node", [
+      SCRIPT, "--repo", repoRoot, "--all", "--json",
+    ], {
+      encoding: "utf-8",
+      env: { ...process.env, RELAY_ADVISORY_LANE_REAP_GRACE_MS: "200" },
+    }));
+
+    assert.ok(Array.isArray(result.advisoryLaneReaps));
+    const sweepError = result.advisoryLaneReaps.find(
+      (entry) => entry.runId === brokenRunId && entry.outcome === "sweep_error"
+    );
+    assert.ok(sweepError, `must record sweep_error for broken run: ${JSON.stringify(result.advisoryLaneReaps)}`);
+    assert.equal(typeof sweepError.error, "string");
+    assert.ok(sweepError.error.length > 0);
+    assert.equal("pgid" in sweepError, false);
+
+    const reaped = result.advisoryLaneReaps.find((entry) => entry.pgid === healthyPgid);
+    assert.ok(reaped, `healthy run must still be swept: ${JSON.stringify(result.advisoryLaneReaps)}`);
+    assert.equal(reaped.outcome, "reaped");
+    assert.equal(reaped.runId, healthyRunId);
+    assert.equal(isProcessGroupAlive(healthyPgid), false);
+    assert.equal(fs.existsSync(healthyLeasePath), false);
+
+    // Human-summary path must tolerate pgid-less sweep_error entries (no throw).
+    const textOut = execFileSync("node", [
+      SCRIPT, "--repo", repoRoot, "--all", "--dry-run",
+    ], {
+      encoding: "utf-8",
+      env: { ...process.env, RELAY_ADVISORY_LANE_REAP_GRACE_MS: "200" },
+    });
+    assert.match(textOut, /sweep_error/);
+  } finally {
+    forceKillPgid(healthyPgid);
+    if (priorGrace === undefined) delete process.env.RELAY_ADVISORY_LANE_REAP_GRACE_MS;
+    else process.env.RELAY_ADVISORY_LANE_REAP_GRACE_MS = priorGrace;
+  }
+});
