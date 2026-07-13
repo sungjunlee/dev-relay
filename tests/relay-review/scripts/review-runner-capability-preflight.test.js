@@ -6,7 +6,7 @@ const os = require("os");
 const path = require("path");
 
 const {
-  STATES, createManifestSkeleton, ensureRunLayout, updateManifestState, writeManifest,
+  STATES, createManifestSkeleton, ensureRunLayout, readManifest, updateManifestState, writeManifest,
 } = require("../../../skills/relay-dispatch/scripts/relay-manifest");
 const { createEnforcementFixture, DEFAULT_ENFORCEMENT_RUBRIC } = require("../../relay-dispatch/scripts/test-support");
 
@@ -35,6 +35,8 @@ function setupRun() {
   manifest = updateManifestState(manifest, STATES.DISPATCHED, "await_dispatch_result");
   manifest.anchor = createEnforcementFixture({ repoRoot, runId, state: "loaded", rubricContent: DEFAULT_ENFORCEMENT_RUBRIC }).anchor;
   manifest = updateManifestState(manifest, STATES.REVIEW_PENDING, "run_review");
+  manifest.review.last_reviewer = "codex";
+  manifest = updateManifestState(manifest, STATES.ESCALATED, "inspect_review_failure");
   writeManifest(manifestPath, manifest);
   if (priorHome === undefined) delete process.env.RELAY_HOME; else process.env.RELAY_HOME = priorHome;
   const doneCriteriaPath = path.join(repoRoot, "done.md");
@@ -63,9 +65,18 @@ function roundArtifacts(runDir) {
   return fs.readdirSync(runDir).filter((name) => name.startsWith("review-round-"));
 }
 
+function readEvents(eventsPath) {
+  if (!fs.existsSync(eventsPath)) return [];
+  return fs.readFileSync(eventsPath, "utf-8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line));
+}
+
 test("entry preflight rejects before swap, events, artifacts, or checks wait", () => {
   const fixture = setupRun();
   const before = fs.readFileSync(fixture.manifestPath);
+  const beforeData = readManifest(fixture.manifestPath).data;
+  assert.equal(beforeData.state, STATES.ESCALATED);
+  assert.equal(beforeData.review.last_reviewer, "codex");
+  assert.equal(beforeData.review.reviewer_swap_count, 0);
   const eventsPath = path.join(fixture.runDir, "events.jsonl");
   const eventsBefore = fs.existsSync(eventsPath) ? fs.readFileSync(eventsPath) : null;
   const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-capability-gh-"));
@@ -83,6 +94,7 @@ test("entry preflight rejects before swap, events, artifacts, or checks wait", (
   assert.equal(fs.existsSync(ghMarker), false, "CI checks were never queried");
   assert.deepEqual(roundArtifacts(fixture.runDir), []);
   assert.deepEqual(fs.existsSync(eventsPath) ? fs.readFileSync(eventsPath) : null, eventsBefore);
+  assert.equal(readEvents(eventsPath).some((event) => event.event === "reviewer_swap"), false);
 });
 
 test("detach parent rejects without receipt, lease, supervisor, or round artifacts", () => {
