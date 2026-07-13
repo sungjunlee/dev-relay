@@ -18,6 +18,9 @@ const LEASE_DEATH_CONFIRM_DELAY_MS = 50;
 // capture keeps `-attempt-N` out of the reviewer group when present.
 const ADVISORY_LANE_LEASE_RE = /^review-round-(\d+)-advisory-(.+?)(?:-attempt-(\d+))?-lane-lease\.json$/;
 const DEFAULT_ADVISORY_LANE_REAP_GRACE_MS = 3000;
+// Leader start may postdate lease.started_at by up to this skew (ps 1s resolution
+// + spawn-then-write ordering) before the pgid is treated as reused (#996).
+const ADVISORY_LANE_PID_REUSE_TOLERANCE_MS = 5000;
 
 let posixProcessStateInspectionUnavailable = false;
 
@@ -44,6 +47,85 @@ function readTestProcessGroupStates(pgid) {
   } catch {
     return null;
   }
+}
+
+function parseProcessStartTimeMs(value) {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  if (/^-?\d+(\.\d+)?$/.test(trimmed)) {
+    const asNum = Number(trimmed);
+    return Number.isFinite(asNum) ? asNum : null;
+  }
+  const parsed = Date.parse(trimmed);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+/**
+ * Deterministic test hook: JSON object mapping pgid → ISO timestamp or epoch ms.
+ * Returns undefined when the env is unset or the pgid key is absent (fall through
+ * to the real ps probe). Returns null on unparseable hook values (fail open).
+ */
+function readTestProcessGroupStartTime(pgid) {
+  const raw = process.env.RELAY_TEST_PROCESS_GROUP_START_TIMES;
+  if (!raw) return undefined;
+  try {
+    const map = JSON.parse(raw);
+    if (!map || typeof map !== "object" || Array.isArray(map)) return null;
+    const keys = [String(pgid), String(Number(pgid))];
+    let found = false;
+    let value;
+    for (const key of keys) {
+      if (Object.prototype.hasOwnProperty.call(map, key)) {
+        value = map[key];
+        found = true;
+        break;
+      }
+    }
+    if (!found) return undefined;
+    return parseProcessStartTimeMs(value);
+  } catch {
+    return null;
+  }
+}
+
+function readPosixProcessGroupStartTime(pgid) {
+  if (process.platform === "win32") return null;
+  try {
+    const output = execFileSync("ps", ["-p", String(pgid), "-o", "etimes="], {
+      encoding: "utf-8",
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: 1000,
+      maxBuffer: 64 * 1024,
+    }).trim();
+    if (!/^\d+$/.test(output)) return null;
+    return Date.now() - Number(output) * 1000;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Resolve the group leader's start time in epoch ms. Fail-open returns null when
+ * the start time cannot be determined with confidence (#996 pid-reuse guard).
+ */
+function resolveProcessGroupStartTimeMs(pgid) {
+  const fromHook = readTestProcessGroupStartTime(pgid);
+  if (fromHook !== undefined) return fromHook;
+  return readPosixProcessGroupStartTime(pgid);
+}
+
+/**
+ * True when the live leader's start time postdates lease.started_at by more than
+ * ADVISORY_LANE_PID_REUSE_TOLERANCE_MS. Probe uncertainty fails open (false).
+ */
+function isAdvisoryLanePgidReused(lease) {
+  const startMs = resolveProcessGroupStartTimeMs(lease.pgid);
+  if (startMs == null || !Number.isFinite(startMs)) return false;
+  const leaseStartedMs = Date.parse(lease.started_at);
+  if (!Number.isFinite(leaseStartedMs)) return false;
+  return startMs > leaseStartedMs + ADVISORY_LANE_PID_REUSE_TOLERANCE_MS;
 }
 
 function readPosixProcessGroupStates(pgid) {
@@ -644,6 +726,19 @@ function reapAdvisoryLaneLeases({
       continue;
     }
 
+    // Pid-reuse guard: a live pgid whose leader start postdates the lease is a
+    // reused id — remove the stale lease and signal nothing (#996).
+    if (isAdvisoryLanePgidReused(lease)) {
+      outcomes.push({
+        ...base,
+        outcome: dryRun ? "would_skip_pid_reuse" : "skipped_pid_reuse",
+      });
+      if (!dryRun) {
+        fs.rmSync(leasePath, { force: true });
+      }
+      continue;
+    }
+
     if (dryRun) {
       outcomes.push({
         ...base,
@@ -689,6 +784,7 @@ function reapAdvisoryLaneLeases({
 
 module.exports = {
   ADVISORY_LANE_LEASE_RE,
+  ADVISORY_LANE_PID_REUSE_TOLERANCE_MS,
   DEFAULT_ADVISORY_LANE_REAP_GRACE_MS,
   DISPATCH_RESULT_FILE,
   DISPATCH_STDERR_LOG,
