@@ -49,20 +49,22 @@ const isPrView = args[0] === "pr" && args[1] === "view";
 // an explicit non-GET method (separated or attached) is likewise a write. Mirror the
 // status.js assertGhReadOnly boundary so this poison layer rejects the same shapes.
 const GH_API_BODY_OPTS = ["-f", "--field", "-F", "--raw-field", "--input"];
-function isGhApiBodyOption(t) {
+function isMutatingGhApiOption(t) {
   if (GH_API_BODY_OPTS.indexOf(t) >= 0
     || t.indexOf("--field=") === 0
     || t.indexOf("--raw-field=") === 0
     || t.indexOf("--input=") === 0) return true;
 
   // Cobra permits boolean shorthands to be clustered before a value-taking flag.
-  // For gh api, -i is boolean, so -ifa=b and -iFa=b carry body fields.
-  // Stop at any other shorthand because a value-taking flag (notably -XGET)
-  // consumes the remainder of its token as its value.
+  // For gh api, -i is boolean, so value-taking f, F, or X may follow one or
+  // more leading i shorthands. Body fields always mutate; an attached explicit
+  // method mutates unless it is GET. Other shorthands remain read-shaped.
   if (t.indexOf("-") !== 0 || t.indexOf("--") === 0) return false;
   var index = 1;
   while (t[index] === "i") index += 1;
-  return t[index] === "f" || t[index] === "F";
+  if (t[index] === "f" || t[index] === "F") return true;
+  if (index > 1 && t[index] === "X") return t.slice(index + 1).trim().toUpperCase() !== "GET";
+  return false;
 }
 function ghApiMethod(a) {
   for (var i = 0; i < a.length; i++) {
@@ -75,7 +77,7 @@ function ghApiMethod(a) {
 }
 var apiMethod = args[0] === "api" ? ghApiMethod(args) : null;
 const isApiWrite = args[0] === "api" && (
-  args.some(function (t) { return isGhApiBodyOption(t); })
+  args.some(function (t) { return isMutatingGhApiOption(t); })
   || (apiMethod !== null && apiMethod.trim().toUpperCase() !== "GET")
   || args.some(function (t) { return /^(POST|PATCH|PUT|DELETE)$/i.test(t); })
 );
