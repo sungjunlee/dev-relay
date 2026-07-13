@@ -213,6 +213,47 @@ function startAdvisoryReview({
     reviewer: artifactName,
   });
 
+  // Fail-closed: a same-host prior group that survives TERM→KILL must not share
+  // request/result artifact paths with a new worker. Host-mismatch stays
+  // skip+report and does not block spawn.
+  const unreaped = priorLaneReaps.filter((entry) => entry?.outcome === "reap_failed");
+  if (unreaped.length > 0) {
+    const unreapedPgids = unreaped
+      .map((entry) => entry.pgid)
+      .filter((pgid) => Number.isFinite(Number(pgid)));
+    const failureReason = (
+      `prior advisory lane pgid ${unreapedPgids.join(", ") || "unknown"} ` +
+      "could not be reaped before re-spawn"
+    );
+    writeJson(paths.resultPath, {
+      artifactHash: null,
+      artifactPath: null,
+      attemptCount: 0,
+      completed_at: new Date().toISOString(),
+      failureReason,
+      gating: request.gating === true,
+      lane_index: request.laneIndex || 1,
+      model: request.reviewerModel || null,
+      profile: request.profile,
+      rawResponsePath: null,
+      rawResponsePaths: [],
+      reviewer: request.reviewerName,
+      source: request.source || null,
+      status: "failed",
+      trigger: request.trigger || "every_round",
+      advisory_count: 0,
+      duplicate_low_confidence_count: 0,
+      required_count: 0,
+    });
+    return {
+      ...request,
+      child: null,
+      laneLeasePath: null,
+      laneAttempt: null,
+      priorLaneReaps,
+    };
+  }
+
   writeJson(paths.requestPath, request);
 
   const workerPath = path.join(__dirname, "..", "advisory-worker.js");

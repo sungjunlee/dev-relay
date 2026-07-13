@@ -272,6 +272,77 @@ test("pre-spawn reap verifies prior attempt is gone before the new spawn", () =>
   }
 });
 
+test("pre-spawn reap fails closed when a prior local group cannot be reaped", () => {
+  const { repoRoot, runDir, runId, headSha } = setupRepo();
+  const unreapablePgid = 988001;
+  const priorEnv = {
+    grace: process.env.RELAY_ADVISORY_LANE_REAP_GRACE_MS,
+    eperm: process.env.RELAY_TEST_PROCESS_GROUP_ALIVE_EPERM,
+    states: process.env.RELAY_TEST_PROCESS_GROUP_STATES,
+  };
+  process.env.RELAY_ADVISORY_LANE_REAP_GRACE_MS = "50";
+  // Fake unkillable group: probe reports EPERM + non-zombie state through TERM/KILL.
+  process.env.RELAY_TEST_PROCESS_GROUP_ALIVE_EPERM = String(unreapablePgid);
+  process.env.RELAY_TEST_PROCESS_GROUP_STATES = JSON.stringify([
+    { pgid: unreapablePgid, stat: "R" },
+  ]);
+  try {
+    const priorLease = writeAdvisoryLaneLease(runDir, {
+      pid: unreapablePgid,
+      pgid: unreapablePgid,
+      round: 1,
+      reviewer: "opencode",
+    });
+    assert.equal(isProcessGroupAlive(unreapablePgid), true);
+
+    const reviewerScript = writeFastAdvisoryReviewer(repoRoot);
+    const started = startAdvisoryReview({
+      gating: false,
+      headSha,
+      laneIndex: 1,
+      profile: "blindspot",
+      promptText: "Fail-closed pre-spawn prompt",
+      reviewerModel: "example/opencode-model-fast",
+      reviewerName: "opencode",
+      reviewerScript,
+      reviewRepoPath: repoRoot,
+      round: 1,
+      runDir,
+      runId,
+      runRepoPath: repoRoot,
+      state: STATES.REVIEW_PENDING,
+      timeoutSeconds: 30,
+      trigger: "every_round",
+    });
+
+    assert.equal(started.child, null, "must not spawn a new worker when prior reap fails");
+    assert.equal(fs.existsSync(started.requestPath), false, "must not write request JSON");
+    assert.equal(fs.existsSync(started.resultPath), true);
+    const result = JSON.parse(fs.readFileSync(started.resultPath, "utf-8"));
+    assert.equal(result.status, "failed");
+    assert.match(String(result.failureReason || ""), new RegExp(String(unreapablePgid)));
+    assert.ok(Array.isArray(started.priorLaneReaps));
+    assert.equal(
+      started.priorLaneReaps.some((entry) => (
+        entry.pgid === unreapablePgid && entry.outcome === "reap_failed"
+      )),
+      true
+    );
+    // Prior lease stays discoverable for finalize/cleanup.
+    const leases = readAdvisoryLaneLeases(runDir);
+    assert.equal(leases.length, 1);
+    assert.equal(leases[0].leasePath, priorLease.leasePath);
+    assert.equal(leases[0].lease.pgid, unreapablePgid);
+  } finally {
+    if (priorEnv.grace === undefined) delete process.env.RELAY_ADVISORY_LANE_REAP_GRACE_MS;
+    else process.env.RELAY_ADVISORY_LANE_REAP_GRACE_MS = priorEnv.grace;
+    if (priorEnv.eperm === undefined) delete process.env.RELAY_TEST_PROCESS_GROUP_ALIVE_EPERM;
+    else process.env.RELAY_TEST_PROCESS_GROUP_ALIVE_EPERM = priorEnv.eperm;
+    if (priorEnv.states === undefined) delete process.env.RELAY_TEST_PROCESS_GROUP_STATES;
+    else process.env.RELAY_TEST_PROCESS_GROUP_STATES = priorEnv.states;
+  }
+});
+
 test("legacy single-attempt lease filenames remain discoverable beside attempt-suffixed leases", () => {
   const runDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-legacy-lease-"));
   const legacyPath = getAdvisoryLaneLeasePath(runDir, 1, "codex", 1);
