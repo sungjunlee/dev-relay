@@ -76,7 +76,7 @@ node "${RELAY_SKILL_ROOT:-skills}/relay-orca/scripts/plan.js" \
 
 `plan` is READ-ONLY: it creates no Orca task or terminal, no relay request/run/worktree, no PR, and no issue, and writes nothing outside stdout/stderr. On rejection it exits with a distinct non-zero code per reason. Rejection matrix and exit codes: [references/commands.md](references/commands.md).
 
-Admit a local Orca runtime before runtime intents (default read-only; optional `--smoke`):
+Admit a local Orca runtime before runtime intents (default read-only; optional `--smoke --smoke-to <handle>`):
 
 ```bash
 node "${RELAY_SKILL_ROOT:-skills}/relay-orca/scripts/probe-orca.js" --json

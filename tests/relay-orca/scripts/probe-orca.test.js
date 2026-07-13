@@ -24,10 +24,13 @@ const {
   emptyTaskList,
   emptyGateList,
   DEFAULT_RUNTIME_ID,
+  DEFAULT_LIVE_AGENT_HANDLE,
+  VALID_TASK_STATUSES,
 } = require(path.join(__dirname, "..", "fixtures", "fake-orca.js"));
 
 const READ_ONLY_SUBCOMMANDS = new Set(["status", "task-list", "gate-list"]);
 const FORBIDDEN_DEFAULT = ["task-create", "task-update", "dispatch", "run", "reset"];
+const SMOKE_ARGS = ["--smoke", "--smoke-to", DEFAULT_LIVE_AGENT_HANDLE];
 
 function runProbe(args, env = {}) {
   const result = { status: 0, stdout: "", stderr: "" };
@@ -373,12 +376,12 @@ test("D4/D5: unparseable status AND shape-invalid task-list → MALFORMED_OUTPUT
 // D6 existing state / ambiguous
 // ---------------------------------------------------------------------------
 
-test("D6: tasks count > 0 → EXISTING_ORCHESTRATION_STATE exit 34", () => {
+test("D6: active tasks count > 0 → EXISTING_ORCHESTRATION_STATE exit 34", () => {
   const fake = installFakeOrca({
     taskList: {
       id: "x",
       ok: true,
-      result: { tasks: [{ id: "pre" }], count: 1 },
+      result: { tasks: [{ id: "pre", status: "pending" }], count: 1 },
       _meta: { runtimeId: DEFAULT_RUNTIME_ID },
     },
   });
@@ -387,9 +390,108 @@ test("D6: tasks count > 0 → EXISTING_ORCHESTRATION_STATE exit 34", () => {
     assert.equal(result.status, REASONS.EXISTING_ORCHESTRATION_STATE);
     const body = parseJson(result.stdout);
     assert.equal(body.blocking_reasons[0].reason_code, "EXISTING_ORCHESTRATION_STATE");
-    assert.match(body.blocking_reasons[0].message, /tasks=1/);
+    assert.match(body.blocking_reasons[0].message, /active_tasks=1/);
     assert.match(body.blocking_reasons[0].message, /gates=0/);
     assert.equal(body.admitted, false);
+    assertNoPoison(fake);
+  } finally {
+    fake.restore();
+  }
+});
+
+test("D6: historical completed/failed tasks do not brick admission", () => {
+  const fake = installFakeOrca({
+    taskList: {
+      id: "x",
+      ok: true,
+      result: {
+        tasks: [
+          { id: "old-failed", status: "failed" },
+          { id: "old-done", status: "completed" },
+        ],
+        count: 2,
+      },
+      _meta: { runtimeId: DEFAULT_RUNTIME_ID },
+    },
+  });
+  try {
+    const result = runProbe(["--json", "--orca-bin", fake.orcaPath]);
+    assert.equal(result.status, 0);
+    const body = parseJson(result.stdout);
+    assertExactKeys(body);
+    assert.equal(body.admitted, true);
+    assert.deepEqual(body.existing_state, { tasks: 0, gates: 0 });
+    assertNoPoison(fake);
+  } finally {
+    fake.restore();
+  }
+});
+
+test("D6: unknown task status → AMBIGUOUS_GLOBAL_STATE exit 35 (fail-closed)", () => {
+  const fake = installFakeOrca({
+    taskList: {
+      id: "x",
+      ok: true,
+      result: { tasks: [{ id: "weird", status: "cancelled" }], count: 1 },
+      _meta: { runtimeId: DEFAULT_RUNTIME_ID },
+    },
+  });
+  try {
+    const result = runProbe(["--json", "--orca-bin", fake.orcaPath]);
+    assert.equal(result.status, REASONS.AMBIGUOUS_GLOBAL_STATE);
+    const body = parseJson(result.stdout);
+    assert.equal(body.blocking_reasons[0].reason_code, "AMBIGUOUS_GLOBAL_STATE");
+    assert.match(body.blocking_reasons[0].message, /unknown status/);
+    assert.equal(body.admitted, false);
+    assertNoPoison(fake);
+  } finally {
+    fake.restore();
+  }
+});
+
+test("D6: task missing status → AMBIGUOUS_GLOBAL_STATE exit 35 (fail-closed)", () => {
+  const fake = installFakeOrca({
+    taskList: {
+      id: "x",
+      ok: true,
+      result: { tasks: [{ id: "no-status" }], count: 1 },
+      _meta: { runtimeId: DEFAULT_RUNTIME_ID },
+    },
+  });
+  try {
+    const result = runProbe(["--json", "--orca-bin", fake.orcaPath]);
+    assert.equal(result.status, REASONS.AMBIGUOUS_GLOBAL_STATE);
+    const body = parseJson(result.stdout);
+    assert.equal(body.blocking_reasons[0].reason_code, "AMBIGUOUS_GLOBAL_STATE");
+    assert.match(body.blocking_reasons[0].message, /lacks a non-empty status/);
+    assertNoPoison(fake);
+  } finally {
+    fake.restore();
+  }
+});
+
+test("D6: mixed terminal + live tasks → EXISTING_ORCHESTRATION_STATE counts only live", () => {
+  const fake = installFakeOrca({
+    taskList: {
+      id: "x",
+      ok: true,
+      result: {
+        tasks: [
+          { id: "done", status: "completed" },
+          { id: "live", status: "blocked" },
+          { id: "failed-old", status: "failed" },
+        ],
+        count: 3,
+      },
+      _meta: { runtimeId: DEFAULT_RUNTIME_ID },
+    },
+  });
+  try {
+    const result = runProbe(["--json", "--orca-bin", fake.orcaPath]);
+    assert.equal(result.status, REASONS.EXISTING_ORCHESTRATION_STATE);
+    const body = parseJson(result.stdout);
+    assert.match(body.blocking_reasons[0].message, /active_tasks=1/);
+    assert.equal(body.existing_state.tasks, 1);
     assertNoPoison(fake);
   } finally {
     fake.restore();
@@ -691,10 +793,29 @@ test("D1/D14: default mode never invokes smoke subcommands", () => {
 // D9 smoke
 // ---------------------------------------------------------------------------
 
-test("D9: smoke success — marker, provenance trio, self-only cleanup", () => {
+test("D9: bare --smoke fails fast (exit 64) before creating smoke task state", () => {
   const fake = installFakeOrca();
   try {
     const result = runProbe(["--json", "--smoke", "--orca-bin", fake.orcaPath]);
+    assert.equal(result.status, 64);
+    assert.match(result.stderr, /--smoke requires --smoke-to/);
+    assert.equal(fake.readLog().length, 0, "no Orca commands may run before smoke-to is supplied");
+    assertNoPoison(fake);
+  } finally {
+    fake.restore();
+  }
+});
+
+test("D9: --smoke-to without --smoke fails fast (exit 64)", () => {
+  const result = runProbe(["--json", "--smoke-to", DEFAULT_LIVE_AGENT_HANDLE]);
+  assert.equal(result.status, 64);
+  assert.match(result.stderr, /--smoke-to requires --smoke/);
+});
+
+test("D9: smoke success — live target, provenance trio, failed cleanup status, no reset", () => {
+  const fake = installFakeOrca();
+  try {
+    const result = runProbe(["--json", ...SMOKE_ARGS, "--orca-bin", fake.orcaPath]);
     assert.equal(result.status, 0);
     const body = parseJson(result.stdout);
     assert.equal(body.admitted, true);
@@ -703,16 +824,50 @@ test("D9: smoke success — marker, provenance trio, self-only cleanup", () => {
     assert.equal(body.smoke.cleaned_up, true);
     assert.equal(body.smoke.task_id, "smoke-task-1");
     assert.equal(body.smoke.dispatch_id, "smoke-dispatch-1");
-    assert.equal(body.smoke.assignee, "relay-orca-probe-smoke");
+    assert.equal(body.smoke.assignee, DEFAULT_LIVE_AGENT_HANDLE);
 
     const log = fake.readLog();
     const createLine = log.find((line) => line.includes("task-create"));
     assert.ok(createLine, "task-create must be recorded");
     assert.ok(createLine.includes(SMOKE_TITLE_MARKER), "task-title must contain smoke marker");
-    assert.ok(log.some((line) => line.includes("dispatch") && line.includes("--inject")));
+    assert.ok(
+      log.some(
+        (line) =>
+          line.includes("dispatch") &&
+          line.includes("--inject") &&
+          line.includes(DEFAULT_LIVE_AGENT_HANDLE),
+      ),
+    );
     const updateLines = log.filter((line) => line.includes("task-update"));
     assert.equal(updateLines.length, 1);
     assert.ok(updateLines[0].includes("smoke-task-1"));
+    assert.ok(updateLines[0].includes("--status failed"), "cleanup must use real CLI status failed");
+    assert.equal(updateLines[0].includes("cancelled"), false);
+    assert.equal(log.some((line) => line.includes("reset")), false);
+    assertNoPoison(fake);
+  } finally {
+    fake.restore();
+  }
+});
+
+test("D9: smoke inject to non-agent / synthetic handle → SMOKE_FAILED, cleanup still attempted", () => {
+  const fake = installFakeOrca({ liveAgentHandles: [] });
+  try {
+    const result = runProbe([
+      "--json",
+      "--smoke",
+      "--smoke-to",
+      "relay-orca-probe-smoke",
+      "--orca-bin",
+      fake.orcaPath,
+    ]);
+    assert.equal(result.status, REASONS.SMOKE_FAILED);
+    const body = parseJson(result.stdout);
+    assert.equal(body.blocking_reasons[0].reason_code, "SMOKE_FAILED");
+    assert.match(body.blocking_reasons[0].message, /no recognized agent|dispatch --inject/);
+    assert.equal(body.smoke.cleaned_up, true);
+    const log = fake.readLog();
+    assert.ok(log.some((line) => line.includes("task-update") && line.includes("--status failed")));
     assert.equal(log.some((line) => line.includes("reset")), false);
     assertNoPoison(fake);
   } finally {
@@ -734,7 +889,7 @@ test("D9: smoke provenance failure (null assignee) → SMOKE_FAILED exit 36, cle
     },
   });
   try {
-    const result = runProbe(["--json", "--smoke", "--orca-bin", fake.orcaPath]);
+    const result = runProbe(["--json", ...SMOKE_ARGS, "--orca-bin", fake.orcaPath]);
     assert.equal(result.status, REASONS.SMOKE_FAILED);
     const body = parseJson(result.stdout);
     assert.equal(body.blocking_reasons[0].reason_code, "SMOKE_FAILED");
@@ -742,6 +897,7 @@ test("D9: smoke provenance failure (null assignee) → SMOKE_FAILED exit 36, cle
     assert.equal(body.smoke.cleaned_up, true);
     const log = fake.readLog();
     assert.ok(log.some((line) => line.includes("task-update") && line.includes("smoke-task-1")));
+    assert.ok(log.some((line) => line.includes("--status failed")));
     assertNoPoison(fake);
   } finally {
     fake.restore();
@@ -755,7 +911,7 @@ test("D9: smoke cleanup failure → SMOKE_CLEANUP_FAILED exit 37, leftover id na
     taskUpdateStderr: "cannot update task",
   });
   try {
-    const result = runProbe(["--json", "--smoke", "--orca-bin", fake.orcaPath]);
+    const result = runProbe(["--json", ...SMOKE_ARGS, "--orca-bin", fake.orcaPath]);
     assert.equal(result.status, REASONS.SMOKE_CLEANUP_FAILED);
     const body = parseJson(result.stdout);
     assert.equal(body.blocking_reasons[0].reason_code, "SMOKE_CLEANUP_FAILED");
@@ -768,7 +924,38 @@ test("D9: smoke cleanup failure → SMOKE_CLEANUP_FAILED exit 37, leftover id na
   }
 });
 
-test("Finding 3: smoke task-create ok without a task id → SMOKE_FAILED exit 36, cleaned_up=false, no cleanup", () => {
+test("D9: smoke provenance AND cleanup both fail → both SMOKE_FAILED and SMOKE_CLEANUP_FAILED retained", () => {
+  const fake = installFakeOrca({
+    liveAgentHandles: [],
+    taskUpdateExit: 1,
+    taskUpdate: { ok: false, result: {} },
+    taskUpdateStderr: "cannot update task",
+  });
+  try {
+    const result = runProbe([
+      "--json",
+      "--smoke",
+      "--smoke-to",
+      "missing-agent",
+      "--orca-bin",
+      fake.orcaPath,
+    ]);
+    // Primary cause remains SMOKE_FAILED (not overwritten by cleanup).
+    assert.equal(result.status, REASONS.SMOKE_FAILED);
+    const body = parseJson(result.stdout);
+    assertExactKeys(body);
+    assert.equal(body.admitted, false);
+    assert.equal(body.smoke.cleaned_up, false);
+    const codes = body.blocking_reasons.map((r) => r.reason_code);
+    assert.deepEqual(codes, ["SMOKE_FAILED", "SMOKE_CLEANUP_FAILED"]);
+    assert.equal(fake.readLog().some((line) => line.includes("reset")), false);
+    assertNoPoison(fake);
+  } finally {
+    fake.restore();
+  }
+});
+
+test("D9: smoke task-create ok without a task id → SMOKE_FAILED exit 36, cleaned_up=false, no cleanup", () => {
   // task-create reports ok but returns no id: an untracked synthetic task may exist and
   // there is no id to clean, so cleaned_up must be false and no task-update may run.
   const fake = installFakeOrca({
@@ -780,7 +967,7 @@ test("Finding 3: smoke task-create ok without a task id → SMOKE_FAILED exit 36
     },
   });
   try {
-    const result = runProbe(["--json", "--smoke", "--orca-bin", fake.orcaPath]);
+    const result = runProbe(["--json", ...SMOKE_ARGS, "--orca-bin", fake.orcaPath]);
     assert.equal(result.status, REASONS.SMOKE_FAILED);
     const body = parseJson(result.stdout);
     assertExactKeys(body);
@@ -796,6 +983,57 @@ test("Finding 3: smoke task-create ok without a task id → SMOKE_FAILED exit 36
     // Remediation points the operator at the smoke title marker + task-list.
     assert.match(body.blocking_reasons[0].remediation, /relay-orca-probe-smoke/);
     assert.equal(fake.readLog().some((line) => line.includes("reset")), false);
+    assertNoPoison(fake);
+  } finally {
+    fake.restore();
+  }
+});
+
+test("Fixture: task-update rejects invalid status (cancelled) like the real CLI", () => {
+  const fake = installFakeOrca();
+  try {
+    let status = 0;
+    let stderr = "";
+    try {
+      execFileSync(fake.orcaPath, ["orchestration", "task-update", "--id", "t1", "--status", "cancelled", "--json"], {
+        encoding: "utf-8",
+        stdio: "pipe",
+      });
+    } catch (error) {
+      status = error.status;
+      stderr = error.stderr ? String(error.stderr) : "";
+    }
+    assert.notEqual(status, 0);
+    assert.match(stderr, /Invalid --status|Valid --status/);
+    assert.ok(VALID_TASK_STATUSES.includes("failed"));
+    assert.equal(VALID_TASK_STATUSES.includes("cancelled"), false);
+    assertNoPoison(fake);
+  } finally {
+    fake.restore();
+  }
+});
+
+test("Fixture: dispatch --inject to missing agent handle is rejected like the real CLI", () => {
+  const fake = installFakeOrca({ liveAgentHandles: ["only-real-agent"] });
+  try {
+    let status = 0;
+    let stderr = "";
+    let stdout = "";
+    try {
+      stdout = execFileSync(
+        fake.orcaPath,
+        ["orchestration", "dispatch", "--task", "t1", "--to", "synthetic", "--inject", "--json"],
+        { encoding: "utf-8", stdio: "pipe" },
+      );
+    } catch (error) {
+      status = error.status;
+      stderr = error.stderr ? String(error.stderr) : "";
+      stdout = error.stdout ? String(error.stdout) : "";
+    }
+    assert.notEqual(status, 0);
+    assert.match(stderr, /no recognized agent detected/);
+    const body = JSON.parse(stdout);
+    assert.equal(body.ok, false);
     assertNoPoison(fake);
   } finally {
     fake.restore();

@@ -12,8 +12,12 @@ const { REASONS, USAGE_EXIT, ProbeError, reject } = require("./lib/probe-reasons
 
 const SMOKE_TITLE_MARKER = "relay-orca-probe-smoke";
 const SMOKE_SPEC = "relay-orca capability probe synthetic smoke (self-cleaning)";
-const SMOKE_TO_HANDLE = "relay-orca-probe-smoke";
-const SMOKE_TERMINAL_STATUS = "cancelled";
+// Real Orca task-update --status enum (mid-2026). Synthetic probe tasks terminalize as
+// failed — honest for a self-cleaning admission check. Never use "cancelled" (not accepted).
+const SMOKE_TERMINAL_STATUS = "failed";
+// Admission-blocking (live) task states. completed/failed are historical and ignored.
+const ACTIVE_TASK_STATUSES = new Set(["pending", "ready", "dispatched", "blocked"]);
+const TERMINAL_TASK_STATUSES = new Set(["completed", "failed"]);
 const EXCERPT_LIMIT = 256;
 // Every Orca invocation is bounded so a hung CLI still reaches the rejection
 // matrix instead of hanging the probe forever. Tests may shorten the wall-clock
@@ -95,6 +99,7 @@ function parseArgs(argv) {
   const opts = {
     json: false,
     smoke: false,
+    smokeTo: null,
     orcaBin: null,
     help: false,
   };
@@ -102,12 +107,29 @@ function parseArgs(argv) {
     const arg = argv[i];
     if (arg === "--json") opts.json = true;
     else if (arg === "--smoke") opts.smoke = true;
-    else if (arg === "--orca-bin") {
+    else if (arg === "--smoke-to") {
+      const value = argv[(i += 1)];
+      if (!value || value.startsWith("-")) {
+        usageError("--smoke-to requires a live agent terminal handle");
+      }
+      opts.smokeTo = value;
+    } else if (arg === "--orca-bin") {
       const value = argv[(i += 1)];
       if (!value || value.startsWith("-")) usageError("--orca-bin requires a path");
       opts.orcaBin = value;
     } else if (arg === "--help" || arg === "-h") opts.help = true;
     else usageError(`unrecognized argument: ${arg}`);
+  }
+  // Fail fast before any smoke task state is created: --smoke needs an explicit
+  // live recognized-agent terminal. Synthetic handles can never accept --inject.
+  if (opts.smoke && !isNonEmptyString(opts.smokeTo)) {
+    usageError(
+      "--smoke requires --smoke-to <live-agent-terminal-handle> " +
+        "(a terminal already running a recognized agent CLI such as claude, codex, gemini, or droid)",
+    );
+  }
+  if (isNonEmptyString(opts.smokeTo) && !opts.smoke) {
+    usageError("--smoke-to requires --smoke");
   }
   return opts;
 }
@@ -115,7 +137,7 @@ function parseArgs(argv) {
 function usageError(message) {
   process.stderr.write(`relay-orca probe: ${message}\n`);
   process.stderr.write(
-    "usage: probe-orca.js [--json] [--smoke] [--orca-bin <path>]\n",
+    "usage: probe-orca.js [--json] [--smoke --smoke-to <handle>] [--orca-bin <path>]\n",
   );
   process.exit(USAGE_EXIT);
 }
@@ -256,6 +278,45 @@ function extractListCount(payload, listKey, arrayKey) {
   return { count: result.count, items: result[arrayKey] };
 }
 
+/**
+ * Count admission-blocking (non-terminal) tasks. Historical completed/failed tasks
+ * remain listed by the real CLI indefinitely but must not brick later probes.
+ * Unknown/missing/malformed status fails closed as ambiguous.
+ */
+function countActiveTasks(items) {
+  let active = 0;
+  for (let i = 0; i < items.length; i += 1) {
+    const item = items[i];
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      return {
+        ambiguous: true,
+        message: `task-list.result.tasks[${i}] is not an object`,
+      };
+    }
+    const status = item.status;
+    if (typeof status !== "string" || status.length === 0) {
+      return {
+        ambiguous: true,
+        message:
+          `task-list.result.tasks[${i}] lacks a non-empty status string; ` +
+          "admission cannot classify terminal vs live state",
+      };
+    }
+    if (TERMINAL_TASK_STATUSES.has(status)) continue;
+    if (ACTIVE_TASK_STATUSES.has(status)) {
+      active += 1;
+      continue;
+    }
+    return {
+      ambiguous: true,
+      message:
+        `task-list.result.tasks[${i}] has unknown status ` +
+        `"${boundedExcerpt(status)}"; expected one of pending|ready|dispatched|blocked|completed|failed`,
+    };
+  }
+  return { count: active };
+}
+
 function metaRuntimeId(payload) {
   if (!payload || typeof payload !== "object") return null;
   const meta = payload._meta;
@@ -324,7 +385,9 @@ function runSmoke(result, orcaBin, run, options) {
   let dispatchId = null;
   let assignee = null;
   let smokeError = null;
+  let cleanupError = null;
   let syntheticTaskMaybeCreated = false;
+  const smokeTo = options.smokeTo;
 
   try {
     const createProc = run(
@@ -379,7 +442,7 @@ function runSmoke(result, orcaBin, run, options) {
           "--task",
           taskId,
           "--to",
-          SMOKE_TO_HANDLE,
+          smokeTo,
           "--inject",
           "--json",
         ],
@@ -394,8 +457,10 @@ function runSmoke(result, orcaBin, run, options) {
       ) {
         smokeError = new ProbeError(
           "SMOKE_FAILED",
-          `smoke dispatch --inject failed` +
+          `smoke dispatch --inject to ${boundedExcerpt(smokeTo)} failed` +
             (dispatchProc.stderr ? `: ${boundedExcerpt(dispatchProc.stderr)}` : ""),
+          "Ensure --smoke-to names a live terminal already running a recognized agent CLI " +
+            "(claude, codex, gemini, or droid). Synthetic handles cannot accept --inject.",
         );
       } else {
         dispatchId = extractCreatedId(dispatchParsed.value, [
@@ -413,6 +478,12 @@ function runSmoke(result, orcaBin, run, options) {
               `(task_id=${boundedExcerpt(taskId)}, dispatch_id=${boundedExcerpt(dispatchId)}, ` +
               `assignee=${boundedExcerpt(assignee)})`,
           );
+        } else if (assignee !== smokeTo) {
+          smokeError = new ProbeError(
+            "SMOKE_FAILED",
+            "smoke dispatch assignee provenance mismatch " +
+              `(expected --smoke-to=${boundedExcerpt(smokeTo)}, got assignee=${boundedExcerpt(assignee)})`,
+          );
         }
       }
     }
@@ -426,7 +497,8 @@ function runSmoke(result, orcaBin, run, options) {
     }
   }
 
-  // Cleanup ONLY smoke-created ids; never reset (D2/D9).
+  // Cleanup ONLY smoke-created ids; never reset (D2/D9). Terminalize as failed — the
+  // real CLI accepts failed (not cancelled) as a terminal status.
   if (isNonEmptyString(taskId)) {
     const updateProc = run(
       orcaBin,
@@ -450,9 +522,8 @@ function runSmoke(result, orcaBin, run, options) {
     if (updateOk) {
       cleanedUp = true;
     } else {
-      result.smoke.cleaned_up = false;
-      recordCheck(result.checks, "smoke", "failed");
-      reject(
+      cleanedUp = false;
+      cleanupError = new ProbeError(
         "SMOKE_CLEANUP_FAILED",
         `failed to terminalize smoke-created task leftover id=${boundedExcerpt(taskId)}` +
           (updateProc.stderr ? `: ${boundedExcerpt(updateProc.stderr)}` : ""),
@@ -468,6 +539,17 @@ function runSmoke(result, orcaBin, run, options) {
 
   result.smoke.cleaned_up = cleanedUp;
 
+  // When provenance and cleanup both fail, retain BOTH reasons — do not overwrite
+  // the primary SMOKE_FAILED cause with SMOKE_CLEANUP_FAILED.
+  if (smokeError && cleanupError) {
+    recordCheck(result.checks, "smoke", "failed");
+    smokeError.additionalReasons = [cleanupError];
+    throw smokeError;
+  }
+  if (cleanupError) {
+    recordCheck(result.checks, "smoke", "failed");
+    throw cleanupError;
+  }
   if (smokeError) {
     recordCheck(result.checks, "smoke", "failed");
     throw smokeError;
@@ -725,12 +807,24 @@ function probe(options = {}) {
     );
   }
 
-  if (taskCountInfo.count > 0 || gateCountInfo.count > 0) {
+  // Only non-terminal tasks block admission. Historical completed/failed tasks stay
+  // listed by the real CLI but must not brick later probes. Unknown status fails closed.
+  const activeTaskInfo = countActiveTasks(taskCountInfo.items || []);
+  if (activeTaskInfo.ambiguous) {
+    recordCheck(result.checks, "existing_state", "failed");
+    skipRemaining(result.checks, ["smoke"]);
+    result.existing_state = { tasks: null, gates: gateCountInfo.count };
+    reject("AMBIGUOUS_GLOBAL_STATE", activeTaskInfo.message);
+  }
+  result.existing_state = { tasks: activeTaskInfo.count, gates: gateCountInfo.count };
+
+  if (activeTaskInfo.count > 0 || gateCountInfo.count > 0) {
     recordCheck(result.checks, "existing_state", "failed");
     skipRemaining(result.checks, ["smoke"]);
     reject(
       "EXISTING_ORCHESTRATION_STATE",
-      `existing orchestration state rejected (tasks=${taskCountInfo.count}, gates=${gateCountInfo.count}); ` +
+      `existing orchestration state rejected ` +
+        `(active_tasks=${activeTaskInfo.count}, gates=${gateCountInfo.count}); ` +
         "v0 admits only one active program per runtime and never adopts pre-existing state",
     );
   }
@@ -754,6 +848,7 @@ function runMain(argv = process.argv.slice(2), runtime = {}) {
   try {
     probe({
       smoke: opts.smoke,
+      smokeTo: opts.smokeTo,
       orcaBin: opts.orcaBin,
       pathEnv: runtime.pathEnv,
       isRunnableFile: runtime.isRunnableFile,
@@ -765,6 +860,11 @@ function runMain(argv = process.argv.slice(2), runtime = {}) {
   } catch (error) {
     if (!(error instanceof ProbeError)) throw error;
     result.blocking_reasons = [blockingReason(error)];
+    if (Array.isArray(error.additionalReasons)) {
+      for (const extra of error.additionalReasons) {
+        result.blocking_reasons.push(blockingReason(extra));
+      }
+    }
     result.ok = false;
     result.admitted = false;
     printResult(result, opts.json);
@@ -788,6 +888,9 @@ module.exports = {
   emptyResult,
   JSON_KEYS,
   SMOKE_TITLE_MARKER,
+  SMOKE_TERMINAL_STATUS,
+  ACTIVE_TASK_STATUSES,
+  TERMINAL_TASK_STATUSES,
   REASONS,
   resolveOrcaBin,
   isRunnableFile,

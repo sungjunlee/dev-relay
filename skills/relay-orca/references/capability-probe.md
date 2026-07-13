@@ -14,8 +14,8 @@ on Orca upgrades**.
 | --- | --- |
 | Desktop app / runtime graph is ready | `orca status --json` readiness conjuncts |
 | Orchestration commands exist and are enabled | `orchestration task-list --json` |
-| Runtime-global state is empty for v0 | task-list + gate-list counts both `=== 0` and each `count` equals its own array length |
-| Injected dispatch returns provenance IDs | Explicit `--smoke` create + `dispatch --inject` |
+| Runtime-global state has no **active** program | task-list active (non-terminal) count `=== 0`, gate-list count `=== 0`, and each list `count` equals its own array length |
+| Injected dispatch returns provenance IDs | Explicit `--smoke --smoke-to <live-handle>` create + `dispatch --inject` to that handle |
 
 ## Targeted CLI surface (mid-2026)
 
@@ -25,13 +25,20 @@ Read-only default:
 - `orca orchestration task-list --json`
 - `orca orchestration gate-list --json`
 
-Smoke-only (explicit `--smoke`):
+Smoke-only (explicit `--smoke --smoke-to <handle>`):
 
 - `orca orchestration task-create --spec … --task-title … --json`
-- `orca orchestration dispatch --task … --to … --inject --json`
-- `orca orchestration task-update --id … --status … --json`
+- `orca orchestration dispatch --task … --to <live-handle> --inject --json`
+- `orca orchestration task-update --id … --status failed --json`
 
 **Never** invoked on any path: `orca orchestration reset`.
+
+Real CLI constraints the probe honors:
+
+- `task-update --status` accepts only `pending, ready, dispatched, completed, failed, blocked`
+  (never `cancelled`). Smoke cleanup terminalizes the synthetic task as `failed`.
+- `dispatch --inject` requires a **live** terminal with a recognized agent CLI. A synthetic
+  handle can never satisfy inject, so smoke always takes an operator-supplied `--smoke-to`.
 
 ## Check order (first failure wins)
 
@@ -43,9 +50,34 @@ Smoke-only (explicit `--smoke`):
 2. Runtime readiness (`status --json`)
 3. Orchestration availability (`task-list --json`)
 4. Existing global state (`task-list` + `gate-list` counts / runtimeId consistency)
-5. Optional smoke (only when `--smoke` and all prior checks passed)
+5. Optional smoke (only when `--smoke --smoke-to <handle>` and all prior checks passed)
 
 Checks after a failed check may be skipped and are recorded as `skipped` in `checks[]`.
+
+## Active vs terminal task filtering
+
+Real `task-list` continues to return historical `completed` / `failed` tasks indefinitely.
+Admission counts only **active** (non-terminal) task states as existing orchestration state:
+
+| Status | Admission effect |
+| --- | --- |
+| `pending`, `ready`, `dispatched`, `blocked` | Blocks (`EXISTING_ORCHESTRATION_STATE`) |
+| `completed`, `failed` | Ignored (historical; do not brick later probes) |
+| missing / unknown / malformed | Fail-closed (`AMBIGUOUS_GLOBAL_STATE`) |
+
+Gate list ambiguity and any non-empty live gate count still fail closed. The
+`existing_state.tasks` field reports the **active** task count used for admission.
+
+### Remediation (no automatic reset)
+
+When active tasks or gates block admission:
+
+1. Finish or clear the **active** tasks/gates manually, then re-probe.
+2. Historical completed/failed leftovers alone are not blocking.
+3. When a clean slate is appropriate between programs, the operator may run a **scoped**
+   manual `orca orchestration reset --tasks` (state fully enumerated first). **relay-orca
+   never invokes `orca orchestration reset` automatically** — not on admission failure,
+   smoke cleanup, or any other path.
 
 ## Reason codes and exit codes
 
@@ -55,12 +87,16 @@ Checks after a failed check may be skipped and are recorded as `skipped` in `che
 | `RUNTIME_NOT_READY` | 31 | Well-formed status fails a readiness conjunct, or `status` exits non-zero with shape-valid stdout |
 | `ORCHESTRATION_UNAVAILABLE` | 32 | Orchestration absent/disabled/`ok:false` |
 | `MALFORMED_OUTPUT` | 33 | Unparseable or shape-invalid JSON |
-| `EXISTING_ORCHESTRATION_STATE` | 34 | Task or gate `count > 0` (never adopted) |
-| `AMBIGUOUS_GLOBAL_STATE` | 35 | Non-integer `count`, a `count` that disagrees with its own array length, or a runtime id that is missing/empty on any probed response or disagrees across them — the status `runtime.runtimeId` and every `_meta.runtimeId` (status, task-list, gate-list) must all be present, non-empty, and identical |
+| `EXISTING_ORCHESTRATION_STATE` | 34 | Active task count or gate `count > 0` (never adopted) |
+| `AMBIGUOUS_GLOBAL_STATE` | 35 | Non-integer `count`, a `count` that disagrees with its own array length, unknown/missing task status, or a runtime id that is missing/empty on any probed response or disagrees across them — the status `runtime.runtimeId` and every `_meta.runtimeId` (status, task-list, gate-list) must all be present, non-empty, and identical |
 | `SMOKE_FAILED` | 36 | Smoke provenance verification failed |
 | `SMOKE_CLEANUP_FAILED` | 37 | Smoke cleanup of self-created state failed |
 
-Usage errors (unknown flags, missing args) exit `64`.
+Usage errors (unknown flags, missing args, bare `--smoke` without `--smoke-to`) exit `64`.
+
+When smoke provenance **and** cleanup both fail, `blocking_reasons` retains **both**
+`SMOKE_FAILED` and `SMOKE_CLEANUP_FAILED` (primary cause is not overwritten); exit stays
+`36` (`SMOKE_FAILED`).
 
 A `count` that contradicts its own array (e.g. `count:0` alongside a non-empty
 `tasks`/`gates`) is treated as ambiguous rather than trusted — the probe never
@@ -96,21 +132,27 @@ exit codes are unaffected.
   terminal, worktree, relay request/run, PR, or tracker issue, and writes nothing to the
   filesystem (stdout/stderr only).
 - **D2 no-reset** — no code path invokes `orca orchestration reset`, including error and
-  smoke-cleanup-failure paths.
-- **D9 smoke** — runs only under `--smoke`, only after default checks pass; creates exactly
-  one synthetic task whose title contains `relay-orca-probe-smoke`; requires non-empty
-  task / dispatch / assignee IDs; cleans up only IDs it created via `task-update` to a
-  terminal status; never touches pre-existing IDs and never calls reset. When `task-create`
-  returns ok but no task id, the probe fails `SMOKE_FAILED` with `cleaned_up:false` (no id
-  to clean) and its remediation names the `relay-orca-probe-smoke` title marker so the
-  operator can find any untracked synthetic task via `orca orchestration task-list`.
+  smoke-cleanup-failure paths. Scoped manual reset remains an operator remediation step only.
+- **D9 smoke** — runs only under `--smoke --smoke-to <live-handle>`, only after default
+  checks pass; creates exactly one synthetic task whose title contains `relay-orca-probe-smoke`;
+  dispatches `--inject` to the **supplied** live handle (never a synthetic probe handle);
+  requires non-empty task / dispatch / assignee IDs with assignee matching `--smoke-to`;
+  cleans up only IDs it created via `task-update --status failed`; never touches pre-existing
+  IDs and never calls reset. Bare `--smoke` fails fast (exit 64) with guidance before any
+  smoke task state is created. When `task-create` returns ok but no task id, the probe fails
+  `SMOKE_FAILED` with `cleaned_up:false` (no id to clean) and its remediation names the
+  `relay-orca-probe-smoke` title marker so the operator can find any untracked synthetic task
+  via `orca orchestration task-list`.
 
 ## Invocation
 
 ```bash
 node "${RELAY_SKILL_ROOT:-skills}/relay-orca/scripts/probe-orca.js" --json
-node "${RELAY_SKILL_ROOT:-skills}/relay-orca/scripts/probe-orca.js" --json --smoke
+node "${RELAY_SKILL_ROOT:-skills}/relay-orca/scripts/probe-orca.js" --json \
+  --smoke --smoke-to <live-agent-terminal-handle>
 node "${RELAY_SKILL_ROOT:-skills}/relay-orca/scripts/probe-orca.js" --json --orca-bin /path/to/orca
 ```
 
-See [commands.md](commands.md) for the flag table and JSON surface summary.
+`--smoke-to` must name a terminal already running a recognized agent CLI (e.g. claude,
+codex, gemini, droid). See [commands.md](commands.md) for the flag table and JSON surface
+summary.
