@@ -73,6 +73,9 @@ function manifestText(fields) {
   lines.push("  source: 'github'");
   lines.push("---");
   lines.push("# Notes");
+  // Optional free-text notes (additive) so a scenario can plant a manifest whose body
+  // references the program — the signal live→receipt back-pointer discovery scans for.
+  if (fields.notes) lines.push(fields.notes);
   return `${lines.join("\n")}\n`;
 }
 
@@ -707,6 +710,58 @@ test("D9.10: a deferred follow-up is listed separately and does NOT block comple
     assert.equal(strict.status, 72);
   } finally {
     blocked.cleanup();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// A2 (owner amendment) — ANY present stop condition VETOES program_complete, even when
+// the D6 conjunction (outcomes complete + prerequisites met + gates passed + no blocking
+// follow-up) is otherwise fully green. stopped_on is never null while a stop is present.
+// ---------------------------------------------------------------------------
+
+test("A2: an unmapped back-pointer repair candidate vetoes program_complete though D6 is otherwise green → stopped_on graph_ambiguous", () => {
+  // Every D6 term is green: outcome "a" is durably complete and the budget gate passes. The
+  // ONLY blemish is a live relay manifest that references this program but is ABSENT from the
+  // receipt mapping — an unmapped back-pointer surfaced as a repair_candidate (graph ambiguous).
+  const world = greenWorld("epic-a2-backptr", {
+    exitGates: ["budget:waves_dispatched:9"],
+    manifests: [{ run_id: "run-orphan", state: "review_pending", pr_number: 20, issue_number: 200, notes: "relay-orca run for program epic-a2-backptr (unmapped back-pointer)" }],
+  });
+  try {
+    const f = world.run("--final-summary");
+    // The exit gate itself passed and there is NO gate/outcome/follow-up blocking reason —
+    // completion is denied solely because a stop condition is present.
+    assert.equal(f.body.gates.every((gate) => gate.state === "passed"), true, "the exit gate passed");
+    assert.equal(f.body.blocking_reasons.length, 0, "no gate/outcome/follow-up blocking reason — only the stop condition vetoes");
+    assert.equal(f.body.program_complete, false, "a present stop condition vetoes completion");
+    assert.equal(f.body.stopped_on, "graph_ambiguous");
+  } finally {
+    world.cleanup();
+  }
+});
+
+test("A2: a runtime mismatch vetoes program_complete though the outcome is durably complete → stopped_on orca_lifecycle_failure", () => {
+  // The outcome reconciles complete_with_evidence off DURABLE evidence (merged manifest +
+  // merged PR + closed issue) regardless of runtime trust, and the budget gate passes — so
+  // the D6 conjunction holds. But the live runtime id does not match the receipt's, so the
+  // report attributes runtime "mismatch" (a lifecycle failure). It must veto completion.
+  const world = buildGateWorld({
+    programId: "epic-a2-runtime",
+    receipt: makeReceipt({ programId: "epic-a2-runtime", slug: "__SELF__", root: "__SELF__", runtimeId: "runtime-receipt-abc", tasks: [{ outcome_id: "a", run: "run-a" }] }),
+    manifests: [{ run_id: "run-a", state: "merged", pr_number: 10, issue_number: 100, head_sha: "abc" }],
+    orcaScenario: { runtimeId: "runtime-live-xyz", tasks: [orcaTask("epic-a2-runtime", "a", { status: "completed", worker_done: true })] },
+    ghScenario: { prs: { 10: { state: "MERGED", mergedAt: "2026-07-13T01:00:00Z", headRefOid: "abc" } }, issues: { 100: { state: "CLOSED", stateReason: "COMPLETED" } } },
+    exitGates: ["budget:waves_dispatched:9"],
+  });
+  try {
+    const g = world.run("--gates");
+    assert.equal(g.body.prerequisites_met, true, "the outcome is durably complete even under a runtime mismatch");
+    assert.equal(g.body.gates.every((gate) => gate.state === "passed"), true, "the exit gate passed");
+    const f = world.run("--final-summary");
+    assert.equal(f.body.program_complete, false, "a runtime mismatch vetoes completion");
+    assert.equal(f.body.stopped_on, "orca_lifecycle_failure");
+  } finally {
+    world.cleanup();
   }
 });
 

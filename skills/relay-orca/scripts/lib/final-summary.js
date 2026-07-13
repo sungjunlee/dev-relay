@@ -4,8 +4,9 @@
 // timestamps/randomness — the summary is REPRODUCIBLE from live state (re-running against
 // unchanged live systems yields identical bytes). Given the #945 reconciliation report,
 // the receipt, the evaluated gates, and the merged follow-ups, it declares
-// `program_complete` under the FULL D6 conjunction and maps the reason completion cannot
-// be declared to a single `stopped_on` token.
+// `program_complete` under the FULL D6 conjunction AND an empty detected-stop set — any
+// present stop condition VETOES completion (owner amendment A2) — and maps the reason
+// completion cannot be declared to a single `stopped_on` token.
 const { boundedExcerpt } = require("./bounded-excerpt");
 const { allGatesPassed } = require("./gate-evaluate");
 
@@ -129,10 +130,17 @@ function buildFinalSummary({ programId, receiptPath, report, gateEval, followUps
   const outcomesComplete = outcomes.length > 0 && outcomes.every((outcome) => outcome.state === "complete_with_evidence");
   const gatesPassed = allGatesPassed(gateEval.gates);
   const noBlockingFollowUp = (followUps.blocking || []).length === 0;
-  const programComplete = outcomesComplete && gateEval.prerequisites_met && gatesPassed && noBlockingFollowUp;
 
+  // Owner amendment A2: compute the detected stop set FIRST, then let ANY present stop
+  // condition veto completion. `program_complete` is true ONLY when the full D6 conjunction
+  // holds AND no stop token is present — otherwise a stop like `graph_ambiguous` (an unmapped
+  // back-pointer repair candidate) or `orca_lifecycle_failure` (a runtime mismatch/lifecycle
+  // diagnostic) could be silently masked as complete with a null `stopped_on`. `stopped_on`
+  // is never null while any stop token is present (first per STOP_PRIORITY).
   const present = detectStops({ report, gates: gateEval.gates, followUps, outcomesComplete });
-  const stoppedOn = programComplete ? null : pickStoppedOn(present);
+  const d6Conjunction = outcomesComplete && gateEval.prerequisites_met && gatesPassed && noBlockingFollowUp;
+  const programComplete = d6Conjunction && present.size === 0;
+  const stoppedOn = pickStoppedOn(present);
   const decisionRecords = (Array.isArray(decisions) ? decisions : []).map(boundedDecision);
 
   return {
