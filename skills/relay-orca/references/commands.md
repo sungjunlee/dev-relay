@@ -108,7 +108,15 @@ node "${RELAY_SKILL_ROOT:-skills}/relay-orca/scripts/run.js" \
 | `--concurrency N` | Override the concurrency ceiling. Default 2, hard maximum 4 (rejected via the plan library). |
 | `--operator-handle <handle>` | Repeatable. An explicit operator terminal handle to dispatch to. With none, `run` creates its own terminals via `orca terminal create` and records them. |
 | `--orca-bin <path>` | Explicit Orca CLI override — passed to the capability probe and used for all orchestration calls. |
+| `--resolve-decision <id>` | (#947) Write a resolved `decision:` record for `<id>` into the receipt's `decisions[]`. Requires `--resolution` and `--resolver`; provenance (question/options/downstream_wave) is sourced from the program's declared `decision_gates[<id>]`. Never automatic. |
+| `--resolution <text>` | The decision resolution (with `--resolve-decision`). |
+| `--resolver <handle>` | Who resolved the decision (with `--resolve-decision`). |
+| `--record-authorization <id>` | (#947) Write an `authorization:` record for `<id>` into the receipt's `authorizations[]`. Requires `--authorizer`. Never automatic. |
+| `--authorizer <handle>` | Who authorized (with `--record-authorization`). |
 | `--help`, `-h` | Print usage. |
+
+The #947 record flags are additive: without them the receipt is byte-identical to a
+pre-#947 run. See [gates-and-completion.md](gates-and-completion.md).
 
 `run` compiles the program through the FROZEN plan library, then requires capability
 admission from the FROZEN #942 probe **before any mutation**. Only after admission does it
@@ -198,6 +206,43 @@ Usage errors exit `64`. A successfully derived view exits `0` even when it is fu
 `inconsistent`/`stale_missing` outcomes; runtime mismatch and unreachable Orca/GitHub degrade
 to diagnostics rather than failing.
 
+### Gate + completion modes (`--gates` / `--final-summary`, #947)
+
+Two additional READ-ONLY `status` modes (no new intent) evaluate the program's exit gates
+and declare evidence-backed completion:
+
+```bash
+node "${RELAY_SKILL_ROOT:-skills}/relay-orca/scripts/status.js" \
+  --program-id <program-id> --gates --program-file <accepted-program.json> \
+  [--gate-evidence-dir <dir>] [--record-proposals] [--strict] --json
+node "${RELAY_SKILL_ROOT:-skills}/relay-orca/scripts/status.js" \
+  --program-id <program-id> --final-summary --program-file <accepted-program.json> \
+  [--gate-evidence-dir <dir>] [--strict] --json
+```
+
+| Flag | Meaning |
+| --- | --- |
+| `--gates` | Evaluate the program's exit gates (read-only). Mutually exclusive with `--final-summary`. |
+| `--final-summary` | Declare evidence-backed program completion (read-only). |
+| `--program-file <path>` | The accepted program — the ONLY source of `exit_gates` (required by both modes; its `id` must match the receipt). |
+| `--gate-evidence-dir <dir>` | Directory of live `integration:` evidence artifacts (`<check>.json` → `{ "passed": bool }`); also env `RELAY_ORCA_GATE_EVIDENCE_ROOT`. |
+| `--record-proposals` | (`--gates` only) Append discovered follow-up proposals to the receipt's `follow_ups`. WITHOUT it, both modes are strictly read-only. |
+| `--strict` | Turn the fail-closed conditions below into non-zero exits. Without it, both modes exit `0` with the truthful report. |
+
+`--gates --json` keys (verbatim): `ok`, `program_id`, `receipt_path`, `prerequisites_met`,
+`gates`, `follow_ups`, `blocking_reasons`. `--final-summary --json` keys (verbatim): `ok`,
+`program_id`, `receipt_path`, `program_complete`, `stopped_on`, `outcomes`, `gates`,
+`follow_ups`, `deferred`, `decisions`, `blocking_reasons`.
+
+| reason_code | exit | Trigger (only under `--strict`) |
+| --- | --- | --- |
+| `GATES_NOT_EVALUABLE` | 70 | `--gates`/`--final-summary` before prerequisites reconcile. |
+| `GATE_FAILED` | 71 | Any exit gate failed. |
+| `COMPLETION_BLOCKED` | 72 | `--final-summary` and `program_complete` is false. |
+
+Gate kinds, ordering/masking, follow-up lifecycle, decision/budget/authorization records,
+the completion rule, and the stop-condition table: [gates-and-completion.md](gates-and-completion.md).
+
 ## `resume` — crash-safe, reconcile-first, idempotent resumption
 
 ```bash
@@ -214,6 +259,9 @@ node "${RELAY_SKILL_ROOT:-skills}/relay-orca/scripts/resume.js" \
 | `--orca-bin <path>` | Explicit Orca CLI override for the reconciliation reads and the restoration mutations. |
 | `--gh-bin <path>` | Explicit `gh` CLI override (or env `RELAY_ORCA_GH_BIN`). |
 | `--repo-root <path>` | Explicit repo root for slug derivation (defaults to the git repo of the cwd). |
+| `--resolve-decision <id>` / `--resolution` / `--resolver` | (#947) Write a resolved `decision:` record up front (before reconciliation), so it persists regardless of the resume verdict. Same semantics as on `run`. |
+| `--record-authorization <id>` / `--authorizer` | (#947) Write an `authorization:` record up front. |
+| `--program-file <path>` | (#947) OPTIONAL — sources the decision-gate provenance (question/options/downstream_wave) when resolving a decision from resume. |
 | `--help`, `-h` | Print usage. |
 
 `resume` loads the reconstructible receipt (fail-closed codes 50–52 verbatim), then runs the

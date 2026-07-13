@@ -86,6 +86,29 @@ stop record is coordination metadata — it is **not** a completion or cancellat
 never claims the program or its outcomes are cancelled/complete. `resume` preserves it verbatim
 when it rewrites the receipt.
 
+### Optional additive record fields (#947)
+
+Four more top-level keys MAY be appended — each written ONLY at a pinned write point, each
+**not** part of the canonical `RECEIPT_KEYS`, so a receipt that never carried them serializes
+**byte-identically** to a pre-#947 receipt and still loads for `status`/`resume` (validation
+ignores extra keys):
+
+- `follow_ups` — proposed follow-ups `{ id, source_gate | source_outcome, description,
+  proposed_wave, status }`. Written ONLY by `status --gates --record-proposals` (an explicit
+  flag). Advisory only — never triggers work.
+- `decisions` — decision records carrying the six verbatim provenance keys (`question`,
+  `options`, `resolution`, `resolver`, `resolved_at`, `downstream_wave`). Written ONLY via the
+  `run`/`resume` `--resolve-decision` operator flag — never automatically.
+- `authorizations` — authorization records `{ id, authorizer }`. Written ONLY via the
+  `run`/`resume` `--record-authorization` operator flag.
+- `counters` — OPTIONAL explicit budget counters. When absent, `budget:` gates DERIVE
+  `tasks_created` / `dispatches_performed` / `waves_dispatched` from the receipt mapping
+  itself (a recorded `orca_task_id` = created, a recorded `dispatch_id` = dispatched), so no
+  new write point is required. These are the counters the #944/#946 write points already imply.
+
+`run` carries these forward across its receipt rewrite; the additive fields are coordination
+metadata, not a second lifecycle state machine. See [gates-and-completion.md](gates-and-completion.md).
+
 - **Atomic write:** a temp file in the same directory + `rename`. Partial/torn receipts are
   impossible by construction.
 - **Write points (bounded edit to `run`):** after **each** successful task-create (A12),

@@ -43,7 +43,7 @@ relay-orca exposes exactly five intents. All five — `plan` (read-only), `run` 
 | --- | --- | --- |
 | `plan` | implemented (read-only) | Compile an accepted program into an immutable wave plan. |
 | `run` | implemented (#944) | Dispatch provenance-injected relay/fleet operators for a plan. |
-| `status` | implemented (#945) | Derive a read-only live program view from receipt + relay + GitHub + Orca. |
+| `status` | implemented (#945; #947 modes) | Derive a read-only live program view from receipt + relay + GitHub + Orca. Read-only `--gates` / `--final-summary` modes evaluate exit gates and declare evidence-backed completion (#947). |
 | `resume` | implemented (#946) | Reconcile-first, idempotent resumption from the receipt; fail closed on unsafe state, never reset Orca. |
 | `stop` | implemented (#946) | Stop the coordinator only; never kill relay runs or discard durable state. |
 
@@ -104,6 +104,17 @@ node "${RELAY_SKILL_ROOT:-skills}/relay-orca/scripts/status.js" \
 ```
 
 `status` reconciles durable truth (relay manifests, PRs/issues) against Orca runtime signals — `worker_done` is never completion evidence. Report shape, the state taxonomy, the nine detector codes, and reason codes 50–52: [references/commands.md](references/commands.md) and [references/receipt-and-status.md](references/receipt-and-status.md).
+
+Evaluate the program's exit gates and declare evidence-backed completion — both READ-ONLY `status` modes (still exactly five intents; no new intent):
+
+```bash
+node "${RELAY_SKILL_ROOT:-skills}/relay-orca/scripts/status.js" \
+  --program-id epic-941 --gates --program-file /tmp/accepted-program.json --json
+node "${RELAY_SKILL_ROOT:-skills}/relay-orca/scripts/status.js" \
+  --program-id epic-941 --final-summary --program-file /tmp/accepted-program.json --json
+```
+
+Exit gates come ONLY from the program's `exit_gates`; a failing integration gate is never masked by task completion; follow-up proposals are advisory (accepted by the operator as a new later wave). Gate kinds, ordering/masking, follow-up lifecycle, decision/budget/authorization records, the completion rule, stop conditions, and fail-closed codes 70–72: [references/gates-and-completion.md](references/gates-and-completion.md).
 
 Crash-safe resume (reconcile first, then reuse/re-dispatch only what is safe; fail closed on ambiguity):
 
