@@ -108,7 +108,8 @@ function printHelpAndExit() {
   console.log("\nReview-bypass decision tree:");
   console.log("  State is 'review_pending' + you want to skip review:     --skip-review <reason>");
   console.log("  State is 'changes_requested' + reviewer-bundle limit:    --force-finalize-nonready --reason <text>");
-  console.log("  State is 'escalated' + dispatch-level failure resolved:  --force-finalize-nonready --reason <text>");
+  console.log("  State is 'escalated' + PR MERGED + review PASS audit:    neither - just run finalize-run");
+  console.log("  State is 'escalated' + anything else resolved:           --force-finalize-nonready --reason <text>");
   console.log("  State is 'ready_to_merge':                               neither - just run finalize-run");
   process.exit(helpRequested ? 0 : 1);
 }
@@ -1006,18 +1007,33 @@ function main() {
   if (skipMerge && safeData.state !== STATES.MERGED) {
     throw new Error("--skip-merge can only be used for runs that are already in the merged state");
   }
+  const escalatedAutoRetryRequested = (
+    !skipMerge
+    && !forceFinalizeNonready
+    && !skipReviewReason
+    && safeData.state === STATES.ESCALATED
+  );
+  const escalatedPrMergeState = escalatedAutoRetryRequested
+    ? fetchPrMergeState(repoPath, prNumber)
+    : null;
+  const escalatedAlreadyMergedRetry = isMergedPrState(escalatedPrMergeState);
   if (!skipMerge && !forceFinalizeNonready && safeData.state !== STATES.READY_TO_MERGE) {
-    if (safeData.state !== STATES.MERGED) {
+    if (safeData.state !== STATES.MERGED && !escalatedAlreadyMergedRetry) {
       throw new Error(`Expected relay run to be ${STATES.READY_TO_MERGE} before merge, got ${safeData.state}`);
     }
   }
-  const mergeAllowed = !skipMerge && (safeData.state === STATES.READY_TO_MERGE || forceFinalizeNonready);
+  const mergeAllowed = !skipMerge && (
+    safeData.state === STATES.READY_TO_MERGE
+    || forceFinalizeNonready
+    || escalatedAlreadyMergedRetry
+  );
   const operatorName = getActorName(repoPath);
 
   let updated = safeData;
   let mergePerformed = false;
   let mergeRecovered = false;
-  let prMergeState = dryRun ? { state: "MERGED", mergeCommitSha: null } : null;
+  let alreadyMerged = false;
+  let prMergeState = escalatedPrMergeState || (dryRun ? { state: "MERGED", mergeCommitSha: null } : null);
   let remoteBranchDeleted = false;
   let remoteBranchDeleteWarning = null;
   let remoteBranchDeleteAttempted = false;
@@ -1042,8 +1058,9 @@ function main() {
         mergeRecovered = true;
       }
     }
-    const alreadyMerged = !dryRun && isMergedPrState(prMergeState);
+    alreadyMerged = isMergedPrState(prMergeState) && (!dryRun || escalatedAlreadyMergedRetry);
     if (alreadyMerged) {
+      mergeRecovered = true;
       currentHeadSha = manifestHeadShaFallback(safeData);
     } else {
       if (validatedPaths.worktreeMissing) {
@@ -1115,7 +1132,9 @@ function main() {
         reviewGate = recordSkipReviewAudit(repoPath, safeData, {
           prNumber, currentHeadSha, dryRun, skipReviewReason, skipReviewRubricStatus, skipReviewRubricAudit,
         });
-      } else if (!forceFinalizeNonready && safeData.state === STATES.READY_TO_MERGE) {
+      } else if (!forceFinalizeNonready && (
+        safeData.state === STATES.READY_TO_MERGE || escalatedAlreadyMergedRetry
+      )) {
         const reviewContext = fetchReviewContext(repoPath, prNumber);
         reviewGate = evaluateReviewGate({
           prNumber,
@@ -1283,7 +1302,7 @@ function main() {
       }
     } else if (!dryRun && isMergedPrState(prMergeState)) {
       mergeRecovered = true;
-    } else if (dryRun) {
+    } else if (dryRun && !alreadyMerged) {
       mergePerformed = true;
     }
     // Merge queue support: if PR isn't immediately MERGED, poll for completion.

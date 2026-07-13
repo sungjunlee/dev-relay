@@ -37,6 +37,14 @@ test("finalize-run help includes review-bypass decision tree", () => {
     line.includes("State is 'review_pending'")
     && line.includes("--skip-review <reason>")
   )));
+  assert.ok(result.stdout.split(/\r?\n/).some((line) => (
+    line.includes("State is 'escalated' + PR MERGED + review PASS audit")
+    && line.includes("neither - just run finalize-run")
+  )));
+  assert.ok(result.stdout.split(/\r?\n/).some((line) => (
+    line.includes("State is 'escalated' + anything else resolved")
+    && line.includes("--force-finalize-nonready --reason <text>")
+  )));
 });
 
 test("buildSquashSubject appends the PR suffix exactly once", () => {
@@ -345,6 +353,43 @@ if (args[0] === "repo" && args[1] === "view") {
 `, "utf-8");
   fs.chmodSync(ghPath, 0o755);
   return ghPath;
+}
+
+function spawnEscalatedAutoFinalize({
+  state = "MERGED",
+  comments = [DEFAULT_REVIEW_COMMENT],
+  staleReviewedSha = null,
+  extraArgs = [],
+} = {}) {
+  const fixture = setupRepo({ manifestState: STATES.ESCALATED });
+  if (staleReviewedSha) {
+    const record = readManifest(fixture.manifestPath);
+    writeManifest(fixture.manifestPath, {
+      ...record.data,
+      review: { ...record.data.review, last_reviewed_sha: staleReviewedSha },
+    }, record.body);
+  }
+  const logPath = path.join(fixture.repoRoot, "gh.log");
+  const fakeGh = writeFakeGh(logPath, {
+    state,
+    mergeCommit: state === "MERGED" ? { oid: "merged-sha" } : null,
+    comments,
+    commits: [{ oid: fixture.headSha, committedDate: DEFAULT_COMMIT_DATE }],
+  });
+  const result = spawnSync("node", [
+    SCRIPT,
+    "--repo", fixture.repoRoot,
+    "--branch", fixture.branch,
+    "--pr", "123",
+    ...extraArgs,
+    "--json",
+  ], {
+    cwd: fixture.repoRoot,
+    encoding: "utf-8",
+    stdio: "pipe",
+    env: { ...process.env, RELAY_GH_BIN: fakeGh },
+  });
+  return { ...fixture, logPath, result };
 }
 
 function runFinalizeSkipReview({
@@ -1662,6 +1707,97 @@ test("finalize-run resumes cleanup when the PR is already merged", () => {
 
   const ghLog = fs.readFileSync(logPath, "utf-8");
   assert.doesNotMatch(ghLog, /pr merge 123 --squash/);
+});
+
+test("finalize-run recovers an already-merged escalated run with a passing review audit", () => {
+  const fixture = spawnEscalatedAutoFinalize();
+
+  assert.equal(fixture.result.status, 0, fixture.result.stderr);
+  const payload = JSON.parse(fixture.result.stdout);
+  assert.equal(payload.previousState, STATES.ESCALATED);
+  assert.equal(payload.state, STATES.MERGED);
+  assert.equal(payload.mergePerformed, false);
+  assert.equal(payload.mergeRecovered, true);
+  assert.equal(readManifest(fixture.manifestPath).data.state, STATES.MERGED);
+  assert.equal(fs.existsSync(fixture.worktreePath), false);
+
+  const events = readRunEvents(fixture.repoRoot, fixture.runId);
+  const mergeEvent = events.find((event) => event.event === "merge_finalize");
+  assert.equal(mergeEvent?.state_from, STATES.ESCALATED);
+  assert.equal(mergeEvent?.state_to, STATES.MERGED);
+  assert.match(mergeEvent?.reason || "", /already_merged/);
+  assert.equal(events.some((event) => event.event === "force_finalize"), false);
+  assert.doesNotMatch(fs.readFileSync(fixture.logPath, "utf-8"), /^pr merge /m);
+});
+
+test("finalize-run refuses an escalated run when the PR is not merged", () => {
+  for (const state of ["OPEN", "CLOSED"]) {
+    const fixture = spawnEscalatedAutoFinalize({ state });
+
+    assert.equal(fixture.result.status, 1);
+    assert.match(fixture.result.stderr, /Expected relay run to be ready_to_merge before merge, got escalated/);
+    assert.equal(readManifest(fixture.manifestPath).data.state, STATES.ESCALATED);
+    assert.deepEqual(readRunEvents(fixture.repoRoot, fixture.runId), []);
+    assert.doesNotMatch(fs.readFileSync(fixture.logPath, "utf-8"), /^pr merge /m);
+  }
+});
+
+test("finalize-run blocks already-merged escalated recovery when the review SHA is stale", () => {
+  const fixture = spawnEscalatedAutoFinalize({ staleReviewedSha: "stale-reviewed-sha" });
+
+  assert.equal(fixture.result.status, 1);
+  assert.match(fixture.result.stderr, /Fresh review gate failed: stale/);
+  assert.equal(readManifest(fixture.manifestPath).data.state, STATES.ESCALATED);
+  const events = readRunEvents(fixture.repoRoot, fixture.runId);
+  assert.equal(events.find((event) => event.event === "merge_blocked")?.reason, "stale");
+  assert.equal(events.some((event) => event.event === "merge_finalize"), false);
+});
+
+test("finalize-run blocks already-merged escalated recovery after an ESCALATED verdict", () => {
+  const fixture = spawnEscalatedAutoFinalize({
+    comments: [{
+      body: "<!-- relay-review -->\n## Relay Review\nVerdict: ESCALATED\nIssues: manual follow-up required\nRounds: 1",
+      createdAt: DEFAULT_COMMIT_DATE,
+    }],
+  });
+
+  assert.equal(fixture.result.status, 1);
+  assert.match(fixture.result.stderr, /Fresh review gate failed: escalated/);
+  assert.equal(readManifest(fixture.manifestPath).data.state, STATES.ESCALATED);
+  const events = readRunEvents(fixture.repoRoot, fixture.runId);
+  assert.equal(events.find((event) => event.event === "merge_blocked")?.reason, "escalated");
+  assert.equal(events.some((event) => event.event === "merge_finalize"), false);
+});
+
+test("finalize-run skip-review does not unlock escalated already-merged recovery", () => {
+  const fixture = spawnEscalatedAutoFinalize({ extraArgs: ["--skip-review", "operator bypass"] });
+
+  assert.equal(fixture.result.status, 1);
+  assert.match(fixture.result.stderr, /Expected relay run to be ready_to_merge before merge, got escalated/);
+  assert.equal(readManifest(fixture.manifestPath).data.state, STATES.ESCALATED);
+  assert.deepEqual(readRunEvents(fixture.repoRoot, fixture.runId), []);
+  assert.equal(fs.existsSync(fixture.logPath), false);
+});
+
+test("finalize-run dry-run reads live PR state for escalated recovery", () => {
+  const accepted = spawnEscalatedAutoFinalize({ extraArgs: ["--dry-run"] });
+
+  assert.equal(accepted.result.status, 0, accepted.result.stderr);
+  const payload = JSON.parse(accepted.result.stdout);
+  assert.equal(payload.dryRun, true);
+  assert.equal(payload.state, STATES.MERGED);
+  assert.equal(payload.mergePerformed, false);
+  assert.equal(payload.mergeRecovered, true);
+  assert.equal(readManifest(accepted.manifestPath).data.state, STATES.ESCALATED);
+  assert.deepEqual(readRunEvents(accepted.repoRoot, accepted.runId), []);
+  assert.match(fs.readFileSync(accepted.logPath, "utf-8"), /pr view 123 --json state,mergeCommit/);
+
+  const refused = spawnEscalatedAutoFinalize({ state: "OPEN", extraArgs: ["--dry-run"] });
+  assert.equal(refused.result.status, 1);
+  assert.match(refused.result.stderr, /Expected relay run to be ready_to_merge before merge, got escalated/);
+  assert.equal(readManifest(refused.manifestPath).data.state, STATES.ESCALATED);
+  assert.deepEqual(readRunEvents(refused.repoRoot, refused.runId), []);
+  assert.match(fs.readFileSync(refused.logPath, "utf-8"), /pr view 123 --json state,mergeCommit/);
 });
 
 test("finalize-run does not re-select a completed merged run on branch+pr re-invocation", () => {
