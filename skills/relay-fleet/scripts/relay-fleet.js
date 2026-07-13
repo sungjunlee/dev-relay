@@ -1466,7 +1466,7 @@ function buildPublishArgs({ repoRoot, runId, options }) {
   ];
 }
 
-function buildRedispatchArgs({ repoRoot, runId, options }) {
+function buildRedispatchArgs({ repoRoot, runId, leaf, options }) {
   const args = [
     options.dispatchScript,
     repoRoot,
@@ -1474,22 +1474,22 @@ function buildRedispatchArgs({ repoRoot, runId, options }) {
     "--json",
   ];
   const valueFlags = [
-    ["--executor", options.executor],
-    ["--model", options.model],
-    ["--model-hints", options.modelHints],
-    ["--sandbox", options.sandbox],
-    ["--network-access", options.networkAccess],
-    ["--timeout", options.timeout],
-    ["--reasoning", options.reasoning],
-    ["--copy", options.copy],
-    ["--test-command", options.testCommand],
+    ["--executor", leaf.executor || options.executor],
+    ["--model", leaf.model || options.model],
+    ["--model-hints", leaf.model_hints || options.modelHints],
+    ["--sandbox", leaf.sandbox || options.sandbox],
+    ["--network-access", leaf.network_access || options.networkAccess],
+    ["--timeout", leaf.timeout || options.timeout],
+    ["--reasoning", leaf.reasoning || options.reasoning],
+    ["--copy", leaf.copy || options.copy],
+    ["--test-command", leaf.test_command || options.testCommand],
   ];
   for (const [flag, value] of valueFlags) {
     if (value !== undefined && value !== null && String(value).trim() !== "") {
       args.push(flag, String(value));
     }
   }
-  if (options.register) args.push("--register");
+  if (leaf.register || options.register) args.push("--register");
   return args;
 }
 
@@ -1732,7 +1732,7 @@ function spawnPublishForChild({ repoRoot, fleetId, child, options, activeChildre
   });
 }
 
-function spawnRedispatchForChild({ repoRoot, fleetId, child, options, activeChildren, isInterrupted }) {
+function spawnRedispatchForChild({ repoRoot, fleetId, leaf, child, options, activeChildren, isInterrupted }) {
   return new Promise((resolve) => {
     if (isInterrupted()) {
       resolve({ leaf_ref: child.leaf_ref, run_id: child.run_id, status: "skipped_interrupted" });
@@ -1744,7 +1744,7 @@ function spawnRedispatchForChild({ repoRoot, fleetId, child, options, activeChil
     }
 
     const before = childReviewSnapshot(repoRoot, child.run_id);
-    const args = buildRedispatchArgs({ repoRoot, runId: child.run_id, options });
+    const args = buildRedispatchArgs({ repoRoot, runId: child.run_id, leaf, options });
     const dispatch = spawn(process.execPath, args, {
       cwd: repoRoot,
       env: process.env,
@@ -2373,7 +2373,7 @@ function loopStepFailed(step) {
   ].includes(step?.status);
 }
 
-async function driveChildReviewLoop({ repoRoot, fleetId, child, options, activeChildren, isInterrupted }) {
+async function driveChildReviewLoop({ repoRoot, fleetId, leaf, child, options, activeChildren, isInterrupted }) {
   const steps = [];
   let current = child;
 
@@ -2431,6 +2431,7 @@ async function driveChildReviewLoop({ repoRoot, fleetId, child, options, activeC
       const redispatch = await spawnRedispatchForChild({
         repoRoot,
         fleetId,
+        leaf,
         child: current,
         options,
         activeChildren,
@@ -2460,15 +2461,17 @@ async function driveChildReviewLoop({ repoRoot, fleetId, child, options, activeC
   };
 }
 
-async function reviewFleet({ repoRoot, fleetId, options, activeChildren = new Map(), isInterrupted = () => false }) {
+async function reviewFleet({ repoRoot, fleetId, leaves = [], options, activeChildren = new Map(), isInterrupted = () => false }) {
   transitionFleetToReviewing(repoRoot, fleetId);
   cleanupDeadRuntimeChildren(repoRoot, fleetId);
   const starting = deriveFleetSummary(repoRoot, readFleetManifest(repoRoot, fleetId).data);
+  const leavesByRef = new Map(leaves.map((leaf) => [leaf.leaf_ref, leaf]));
   const reviewableChildren = starting.children.filter(childNeedsReviewLoop);
   const children = await runPool(reviewableChildren, options.parallel, (child) => {
     return driveChildReviewLoop({
       repoRoot,
       fleetId,
+      leaf: leavesByRef.get(child.leaf_ref) || { leaf_ref: child.leaf_ref },
       child,
       options,
       activeChildren,
@@ -2750,6 +2753,7 @@ async function runFleet(options) {
         ...(await reviewFleet({
           repoRoot,
           fleetId,
+          leaves: readPersistedLeaves(repoRoot, fleetId),
           options,
           activeChildren,
           isInterrupted: () => interrupted,
@@ -2827,6 +2831,7 @@ async function runFleet(options) {
       reviewResult = await reviewFleet({
         repoRoot,
         fleetId,
+        leaves,
         options,
         activeChildren,
         isInterrupted: () => interrupted,
