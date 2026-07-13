@@ -20,7 +20,7 @@ creates its own operator terminal — on any path, including every failure path.
 mutations `resume` performs are, on a safe outcome, `orca orchestration dispatch --inject` and
 `orca terminal send`, both against a terminal the operator provided via `--operator-handle`; if
 an outcome needs (re)dispatch and no handle was provided, `resume` fails closed with
-`RESUME_NO_OPERATOR_HANDLE` (exit 65) and mutates nothing. `stop`'s only mutation is
+`RESUME_NO_OPERATOR_HANDLE` (exit 66) and mutates nothing. `stop`'s only mutation is
 `orca orchestration run-stop`.
 
 ## Reading a `decision_required` report
@@ -76,7 +76,7 @@ that would duplicate operator work. Bounded steps:
 2. Restore the missing `dispatch_id`/`assignee` in the receipt to match the live dispatch.
 3. Re-run `resume` — the outcome now reads back as a valid live mapping and is reused.
 
-### `RESUME_NO_OPERATOR_HANDLE` (exit 65) — an outcome needs (re)dispatch but no handle was given
+### `RESUME_NO_OPERATOR_HANDLE` (exit 66) — an outcome needs (re)dispatch but no handle was given
 
 Reconciliation found at least one outcome that is safe to re-dispatch or whose operator terminal
 must be reacquired, but the invocation provided no `--operator-handle`. `resume` never creates its

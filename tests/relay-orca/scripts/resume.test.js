@@ -387,7 +387,7 @@ test("D9.6: partial dispatch → only the absent+clean outcome dispatches, throu
 // D3 — resume with an outcome to (re)dispatch but NO --operator-handle → decision_required
 // ---------------------------------------------------------------------------
 
-test("D3: resume needing re-dispatch with zero --operator-handle → RESUME_NO_OPERATOR_HANDLE exit 65, zero mutation", () => {
+test("D3: resume needing re-dispatch with zero --operator-handle → RESUME_NO_OPERATOR_HANDLE exit 66, zero mutation", () => {
   const programId = "epic-resume-no-handle";
   const world = buildWorld({
     programId,
@@ -401,7 +401,7 @@ test("D3: resume needing re-dispatch with zero --operator-handle → RESUME_NO_O
   try {
     const r = world.run(); // NO --operator-handle
     assert.equal(r.status, RESUME_REASONS.RESUME_NO_OPERATOR_HANDLE);
-    assert.equal(r.status, 65);
+    assert.equal(r.status, 66);
     assertReportShape(r.body);
     assert.equal(r.body.ok, false);
     const decision = r.body.decision_required.find((d) => d.reason_code === "RESUME_NO_OPERATOR_HANDLE");

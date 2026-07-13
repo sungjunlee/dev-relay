@@ -255,7 +255,7 @@ node "${RELAY_SKILL_ROOT:-skills}/relay-orca/scripts/resume.js" \
 | --- | --- |
 | `--program-id`, `-p` | The accepted program's stable id (required). Resolves the receipt under the programs root. |
 | `--json` | Emit the machine-readable resume report as JSON on stdout. |
-| `--operator-handle <handle>` | Repeatable. An explicit operator terminal to re-dispatch/reacquire to. `resume` never creates its own terminal and never adopts one it did not receive here: if an outcome needs (re)dispatch and no handle is provided, `resume` fails closed with a `decision_required` report (`RESUME_NO_OPERATOR_HANDLE`, exit 65) and performs zero mutation. Each handle must already run an agent CLI. |
+| `--operator-handle <handle>` | Repeatable. An explicit operator terminal to re-dispatch/reacquire to. `resume` never creates its own terminal and never adopts one it did not receive here: if an outcome needs (re)dispatch and no handle is provided, `resume` fails closed with a `decision_required` report (`RESUME_NO_OPERATOR_HANDLE`, exit 66) and performs zero mutation. Each handle must already run an agent CLI. |
 | `--orca-bin <path>` | Explicit Orca CLI override for the reconciliation reads and the restoration mutations. |
 | `--gh-bin <path>` | Explicit `gh` CLI override (or env `RELAY_ORCA_GH_BIN`). |
 | `--repo-root <path>` | Explicit repo root for slug derivation (defaults to the git repo of the cwd). |

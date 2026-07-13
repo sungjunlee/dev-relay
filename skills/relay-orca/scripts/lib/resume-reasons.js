@@ -3,7 +3,8 @@
 // relay-orca `resume` fail-closed DECISION matrix (#946 D2). A NEW module in the
 // 60-range so it never collides with plan.js's 2-21 codes, the probe's 30-37, run's
 // 40-44, status/receipt's 50-52, or Node's own fatal/exec codes (<=125). Existing
-// reason modules stay untouched. 64 is deliberately avoided (usage errors own it).
+// reason modules stay untouched. 64 (usage errors) and 65 (stop's
+// COORDINATOR_STOP_FAILED) are deliberately avoided.
 //
 // These are the ONLY conditions that make resumption unsafe. In any of them
 // resume performs NO automatic mutation: it emits a `decision_required` report and
@@ -17,7 +18,7 @@ const REASONS = Object.freeze({
   RESUME_AMBIGUOUS_STATE: 61, // foreign/unreachable runtime, or an unclassifiable outcome
   RESUME_CONFLICTING_MAPPING: 62, // duplicate or contradictory (changed) mappings
   RESUME_MISSING_PROVENANCE: 63, // a mapping's dispatch context/assignee is missing where a live dispatch exists
-  RESUME_NO_OPERATOR_HANDLE: 65, // an outcome needs (re)dispatch but no --operator-handle was provided (64 = usage)
+  RESUME_NO_OPERATOR_HANDLE: 66, // an outcome needs (re)dispatch but no --operator-handle was provided (64 = usage, 65 = stop's COORDINATOR_STOP_FAILED)
 });
 
 // Bounded recovery options per decision code (D2). Each option names a concrete
