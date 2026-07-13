@@ -46,12 +46,15 @@ function dispatchObject(result) {
 
 // Real mid-2026 shape (D2): provenance is nested under result.dispatch — the task id at
 // result.dispatch.task_id, the dispatch id at result.dispatch.id (tolerating dispatch_id),
-// and the assignee at result.dispatch.assignee_handle (tolerating assignee/to). The flat
-// reads are retained as a fallback for legacy payloads.
+// and the assignee at result.dispatch.assignee_handle (tolerating assignee/to). When
+// result.dispatch is a present object it is AUTHORITATIVE: provenance resolves ONLY inside
+// it, so an empty/missing nested value stays null (upstream → PROVENANCE_MISMATCH) rather
+// than being rescued by a legacy flat field. The flat reads apply ONLY when result.dispatch
+// is absent or is not an object.
 function extractTaskId(payload) {
   const result = payload && payload.result;
-  const nested = pickString(dispatchObject(result), ["task_id"]);
-  if (nested) return nested;
+  const dispatch = dispatchObject(result);
+  if (dispatch) return pickString(dispatch, ["task_id"]);
   const direct = pickString(result, ["task_id", "taskId", "id"]);
   if (direct) return direct;
   if (result && result.task) return pickString(result.task, ["id", "task_id"]);
@@ -60,20 +63,16 @@ function extractTaskId(payload) {
 
 function extractDispatchId(payload) {
   const result = payload && payload.result;
-  const nested = pickString(dispatchObject(result), ["id", "dispatch_id"]);
-  if (nested) return nested;
-  const direct = pickString(result, ["dispatch_id", "dispatchId", "id"]);
-  if (direct) return direct;
-  return null;
+  const dispatch = dispatchObject(result);
+  if (dispatch) return pickString(dispatch, ["id", "dispatch_id"]);
+  return pickString(result, ["dispatch_id", "dispatchId", "id"]);
 }
 
 function extractAssignee(payload) {
   const result = payload && payload.result;
-  const nested = pickString(dispatchObject(result), ["assignee_handle", "assignee", "to"]);
-  if (nested) return nested;
-  const direct = pickString(result, ["assignee", "to", "handle"]);
-  if (direct) return direct;
-  return null;
+  const dispatch = dispatchObject(result);
+  if (dispatch) return pickString(dispatch, ["assignee_handle", "assignee", "to"]);
+  return pickString(result, ["assignee", "to", "handle"]);
 }
 
 // A subprocess is "ok" only when it exited 0, produced parseable JSON, and that

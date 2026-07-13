@@ -14,6 +14,7 @@ const STATUS_JS = path.join(SCRIPTS, "status.js");
 const { REASONS } = require(path.join(SCRIPTS, "lib", "status-reasons.js"));
 const { REPORT_KEYS, OUTCOME_KEYS, DIAGNOSTIC_CODES } = require(path.join(SCRIPTS, "lib", "status-report.js"));
 const { classifyOutcome } = require(path.join(SCRIPTS, "lib", "status-classify.js"));
+const { orcaDispatchShow } = require(path.join(SCRIPTS, "lib", "orca-reads.js"));
 const { RECEIPT_NOTE } = require(path.join(SCRIPTS, "lib", "receipt.js"));
 const { computeRepoSlug } = require(path.join(SCRIPTS, "lib", "repo-slug.js"));
 const {
@@ -611,6 +612,28 @@ test("D4.3: status derives provenance from the nested result.dispatch shape (pre
   } finally {
     world.cleanup();
   }
+});
+
+test("D4.3: a present result.dispatch is authoritative — empty nested facts resolve null, never rescued by flat fields", () => {
+  // The dispatch-show payload nests provenance under an authoritative result.dispatch whose
+  // fields are empty, while legacy flat result.* fields carry conflicting values. Every fact
+  // must resolve from the nested object ONLY: empty nested → null, and the empty nested
+  // assignee (with no explicit terminal_present) yields terminalPresent:false.
+  const payload = {
+    ok: true,
+    result: {
+      dispatch: { task_id: "", id: "", assignee_handle: "" },
+      task_id: "flat-task",
+      dispatch_id: "flat-disp",
+      assignee: "flat-term",
+    },
+  };
+  const show = orcaDispatchShow(() => ({ status: 0, stdout: JSON.stringify(payload), stderr: "" }), "orca", "flat-task");
+  assert.equal(show.ok, true);
+  assert.equal(show.taskId, null, "empty nested task_id resolves null, never the flat value");
+  assert.equal(show.dispatchId, null, "empty nested dispatch id resolves null, never the flat value");
+  assert.equal(show.assignee, null, "empty nested assignee resolves null, never the flat value");
+  assert.equal(show.terminalPresent, false, "a null resolved assignee means the terminal is gone");
 });
 
 // ---------------------------------------------------------------------------

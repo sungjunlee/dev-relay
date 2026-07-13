@@ -52,8 +52,9 @@ function orcaGateList(run, orcaBin, options = {}) {
   return { ok: true, reachable: true, gates, runtimeId: metaRuntimeId(value), proc };
 }
 
-// First non-empty string among the candidates, else null. Used so a reader can prefer the
-// real nested provenance and still fall back to a legacy flat field.
+// First non-empty string among the candidates, else null. Candidates are drawn from a
+// SINGLE provenance domain (all nested, or all flat) — never mixed — so the authoritative
+// rule below is honored; it exists only to pick among tolerated aliases within that domain.
 function firstNonEmpty(...candidates) {
   for (const candidate of candidates) {
     if (isNonEmptyString(candidate)) return candidate;
@@ -68,20 +69,33 @@ function orcaDispatchShow(run, orcaBin, taskId, options = {}) {
   const result = value.result || {};
   // Real mid-2026 shape (D4.3): provenance is nested under result.dispatch — task id at
   // task_id, dispatch id at id (tolerating dispatch_id), assignee at assignee_handle
-  // (tolerating assignee/to). Legacy flat fields stay as a fallback.
-  const dispatch = result.dispatch && typeof result.dispatch === "object" ? result.dispatch : {};
-  const assignee = firstNonEmpty(dispatch.assignee_handle, dispatch.assignee, dispatch.to, result.assignee);
-  // Terminal presence: an explicit `terminal_present:false` anywhere in result OR
-  // result.dispatch (or a null assignee) means the dispatched operator terminal is gone
-  // (feeds MISSING_TERMINAL, D7).
-  const terminalGone = result.terminal_present === false || dispatch.terminal_present === false;
-  const terminalPresent = terminalGone ? false : Boolean(assignee);
+  // (tolerating assignee/to). When result.dispatch is a present object it is AUTHORITATIVE:
+  // facts resolve ONLY inside it, so an empty/missing nested field stays null (upstream →
+  // PROVENANCE_MISMATCH / MISSING_*) rather than being rescued by a legacy flat field. The
+  // flat fields apply ONLY when result.dispatch is absent or is not an object.
+  const nested = result.dispatch && typeof result.dispatch === "object" ? result.dispatch : null;
+  const facts = nested
+    ? {
+        taskId: firstNonEmpty(nested.task_id),
+        dispatchId: firstNonEmpty(nested.id, nested.dispatch_id),
+        assignee: firstNonEmpty(nested.assignee_handle, nested.assignee, nested.to),
+      }
+    : {
+        taskId: firstNonEmpty(result.task_id),
+        dispatchId: firstNonEmpty(result.dispatch_id),
+        assignee: firstNonEmpty(result.assignee),
+      };
+  // Terminal presence: an explicit `terminal_present:false` in result OR result.dispatch (or
+  // a null resolved assignee) means the dispatched operator terminal is gone (feeds
+  // MISSING_TERMINAL, D7).
+  const terminalGone = result.terminal_present === false || (nested && nested.terminal_present === false);
+  const terminalPresent = terminalGone ? false : Boolean(facts.assignee);
   return {
     ok: true,
     reachable: true,
-    taskId: firstNonEmpty(dispatch.task_id, result.task_id),
-    dispatchId: firstNonEmpty(dispatch.id, dispatch.dispatch_id, result.dispatch_id),
-    assignee,
+    taskId: facts.taskId,
+    dispatchId: facts.dispatchId,
+    assignee: facts.assignee,
     terminalPresent,
     // A17: expose the per-task read's `_meta.runtimeId` so the caller can prove THIS
     // task's dispatch-show came from the receipt's runtime before adopting its facts.

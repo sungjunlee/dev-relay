@@ -140,11 +140,25 @@ if (args[0] === "terminal" && args[1] === "create") {
   emit({ ok: true, result: { handle: "orca-term-" + n, id: "orca-term-" + n }, _meta: meta }, 0);
 }
 if (args[0] === "terminal" && args[1] === "send") {
-  // D1/D5.3 poison-pin: the real 'terminal send' has NO --to and NO --task flag.
-  if (args.indexOf("--to") >= 0 || args.indexOf("--task") >= 0) {
-    const badFlag = args.indexOf("--to") >= 0 ? "--to" : "--task";
-    process.stderr.write("terminal send: unrecognized flag " + badFlag + "\\n");
-    emit({ ok: false, error: "terminal send does not accept " + badFlag }, 2);
+  // D1/D5.3: validate the COMPLETE argv against the real 'terminal send' allowlist. Value
+  // flags take exactly one argument; boolean flags take none. ANY unknown flag (e.g. --to,
+  // --task, --bogus) or wrong arity hard-fails (non-zero exit, ok:false, error naming the
+  // offending flag) — the fake never silently accepts a flag the real CLI would reject.
+  const VALUE_FLAGS = ["--terminal", "--text"];
+  const BOOL_FLAGS = ["--enter", "--interrupt", "--json"];
+  const sendArgs = args.slice(2);
+  for (let i = 0; i < sendArgs.length; i++) {
+    const flag = sendArgs[i];
+    if (VALUE_FLAGS.indexOf(flag) >= 0) {
+      if (i + 1 >= sendArgs.length) {
+        process.stderr.write("terminal send: flag " + flag + " requires a value\\n");
+        emit({ ok: false, error: "terminal send: flag " + flag + " requires a value" }, 2);
+      }
+      i++; // consume the flag's value (taken literally, even if it looks like a flag)
+    } else if (BOOL_FLAGS.indexOf(flag) < 0) {
+      process.stderr.write("terminal send: unrecognized flag " + flag + "\\n");
+      emit({ ok: false, error: "terminal send does not accept " + flag }, 2);
+    }
   }
   if (scenario.terminalSendOkFalse) emit({ ok: false, error: "terminal send failed" }, 1);
   emit({ ok: true, result: { delivered: true } }, 0);

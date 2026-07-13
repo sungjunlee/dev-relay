@@ -566,6 +566,29 @@ test("D5.3: fake `terminal send` hard-fails on --to or --task and accepts only t
   }
 });
 
+test("D5.3: fake `terminal send` hard-fails on ANY unknown flag (not only --to/--task), naming the offending flag", () => {
+  const fake = installFakeOrcaRun();
+  try {
+    let status = 0;
+    let stdout = "";
+    try {
+      stdout = execFileSync(fake.orcaPath, ["terminal", "send", "--terminal", "h1", "--text", "hi", "--bogus", "x", "--json"], { stdio: "pipe", encoding: "utf-8" });
+    } catch (error) {
+      status = error.status;
+      stdout = error.stdout ? String(error.stdout) : "";
+    }
+    assert.notEqual(status, 0, "an unknown flag must exit non-zero");
+    const body = JSON.parse(stdout);
+    assert.equal(body.ok, false);
+    assert.ok(body.error.includes("--bogus"), "the error names the offending flag");
+    // --interrupt is a real boolean flag; the complete real argv still succeeds.
+    const okOut = execFileSync(fake.orcaPath, ["terminal", "send", "--terminal", "h1", "--text", "hi", "--interrupt", "--json"], { stdio: "pipe", encoding: "utf-8" });
+    assert.equal(JSON.parse(okOut).ok, true);
+  } finally {
+    fake.cleanup();
+  }
+});
+
 // ---------------------------------------------------------------------------
 // D4/D7 — dependency-ordered materialization + later-wave pending
 // ---------------------------------------------------------------------------
@@ -668,6 +691,16 @@ test("D2: null/empty/mismatched values inside result.dispatch still fail closed 
   assert.ok(provenanceMismatch(shape({ id: "ctx_x", task_id: "task_x", assignee_handle: null }), "task_x"));
   // empty nested dispatch id
   assert.ok(provenanceMismatch(shape({ id: "", task_id: "task_x", assignee_handle: "term_x" }), "task_x"));
+});
+
+test("D2: a present result.dispatch is authoritative — an empty nested task_id is NOT rescued by a conflicting flat task_id (PROVENANCE_MISMATCH)", () => {
+  // Real payload where result.dispatch is present but its task_id is empty while a legacy
+  // flat result.task_id carries "expected". The nested object is authoritative, so the flat
+  // field must NOT rescue provenance: taskId resolves null and verification fails closed.
+  const payload = { ok: true, result: { dispatch: { task_id: "", id: "ctx", assignee_handle: "term" }, task_id: "expected" } };
+  const show = showDispatch(() => ({ status: 0, stdout: JSON.stringify(payload), stderr: "" }), "orca", { orcaTaskId: "expected" });
+  assert.equal(show.taskId, null, "the empty nested task_id resolves null, never the flat 'expected'");
+  assert.ok(provenanceMismatch(show, "expected"), "provenance fails closed on the empty nested task id");
 });
 
 // ---------------------------------------------------------------------------
