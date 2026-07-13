@@ -13,7 +13,10 @@ const DISPATCH_STDOUT_LOG = "dispatch-stdout.log";
 const DISPATCH_STDERR_LOG = "dispatch-stderr.log";
 const DISPATCH_RESULT_FILE = "dispatch-result.txt";
 const LEASE_DEATH_CONFIRM_DELAY_MS = 50;
-const ADVISORY_LANE_LEASE_RE = /^review-round-(\d+)-advisory-(.+)-lane-lease\.json$/;
+// Matches legacy `...-advisory-<reviewer>-lane-lease.json` and per-attempt
+// `...-advisory-<reviewer>-attempt-<K>-lane-lease.json`. Non-greedy reviewer
+// capture keeps `-attempt-N` out of the reviewer group when present.
+const ADVISORY_LANE_LEASE_RE = /^review-round-(\d+)-advisory-(.+?)(?:-attempt-(\d+))?-lane-lease\.json$/;
 const DEFAULT_ADVISORY_LANE_REAP_GRACE_MS = 3000;
 
 let posixProcessStateInspectionUnavailable = false;
@@ -363,21 +366,33 @@ function assertNoLiveRunLease({ repoRoot, runId, force = false, caller = "relay-
   return status;
 }
 
-function advisoryLaneLeaseFilename(round, reviewer) {
+function advisoryLaneLeaseFilename(round, reviewer, attempt = 1) {
+  const normalizedAttempt = Number(attempt);
+  if (Number.isInteger(normalizedAttempt) && normalizedAttempt > 1) {
+    return `review-round-${round}-advisory-${reviewer}-attempt-${normalizedAttempt}-lane-lease.json`;
+  }
+  // Attempt 1 keeps the legacy single-attempt filename so older installs and
+  // existing tests that pin getAdvisoryLaneLeasePath remain discoverable.
   return `review-round-${round}-advisory-${reviewer}-lane-lease.json`;
 }
 
-function getAdvisoryLaneLeasePath(runDir, round, reviewer) {
-  return path.join(runDir, advisoryLaneLeaseFilename(round, reviewer));
+function getAdvisoryLaneLeasePath(runDir, round, reviewer, attempt = 1) {
+  return path.join(runDir, advisoryLaneLeaseFilename(round, reviewer, attempt));
 }
 
-function normalizeAdvisoryLaneLease(raw) {
+function normalizeAdvisoryLaneLease(raw, { attempt = null } = {}) {
   const pid = Number(raw?.pid);
   const pgid = Number(raw?.pgid);
   const host = typeof raw?.host === "string" ? raw.host.trim() : "";
   const startedAt = typeof raw?.started_at === "string" ? raw.started_at.trim() : "";
   const round = Number(raw?.round);
   const reviewer = typeof raw?.reviewer === "string" ? raw.reviewer.trim() : "";
+  const rawAttempt = raw?.attempt !== undefined && raw?.attempt !== null
+    ? Number(raw.attempt)
+    : attempt;
+  const normalizedAttempt = Number.isInteger(Number(rawAttempt)) && Number(rawAttempt) > 0
+    ? Number(rawAttempt)
+    : 1;
   if (!Number.isInteger(pid) || pid <= 0) {
     throw new Error("advisory lane lease pid must be a positive integer");
   }
@@ -396,7 +411,28 @@ function normalizeAdvisoryLaneLease(raw) {
   if (!reviewer) {
     throw new Error("advisory lane lease reviewer must be set");
   }
-  return { pid, pgid, host, started_at: startedAt, round, reviewer };
+  return {
+    pid,
+    pgid,
+    host,
+    started_at: startedAt,
+    round,
+    reviewer,
+    attempt: normalizedAttempt,
+  };
+}
+
+function nextAdvisoryLaneAttempt(runDir, round, reviewer) {
+  let maxAttempt = 0;
+  for (const entry of readAdvisoryLaneLeases(runDir)) {
+    const entryRound = entry.lease?.round ?? entry.round;
+    const entryReviewer = entry.lease?.reviewer ?? entry.reviewer;
+    if (Number(entryRound) !== Number(round)) continue;
+    if (String(entryReviewer) !== String(reviewer)) continue;
+    const attempt = entry.lease?.attempt ?? entry.attempt ?? 1;
+    if (Number(attempt) > maxAttempt) maxAttempt = Number(attempt);
+  }
+  return maxAttempt + 1;
 }
 
 function writeAdvisoryLaneLease(runDir, {
@@ -406,11 +442,15 @@ function writeAdvisoryLaneLease(runDir, {
   startedAt = new Date().toISOString(),
   round,
   reviewer,
+  attempt = null,
 }) {
   if (typeof runDir !== "string" || !runDir.trim()) {
     throw new Error("writeAdvisoryLaneLease requires runDir");
   }
   fs.mkdirSync(runDir, { recursive: true });
+  const resolvedAttempt = Number.isInteger(Number(attempt)) && Number(attempt) > 0
+    ? Number(attempt)
+    : nextAdvisoryLaneAttempt(runDir, round, reviewer);
   const lease = normalizeAdvisoryLaneLease({
     pid,
     pgid,
@@ -418,16 +458,23 @@ function writeAdvisoryLaneLease(runDir, {
     started_at: startedAt,
     round,
     reviewer,
+    attempt: resolvedAttempt,
   });
-  const leasePath = getAdvisoryLaneLeasePath(runDir, lease.round, lease.reviewer);
+  const leasePath = getAdvisoryLaneLeasePath(runDir, lease.round, lease.reviewer, lease.attempt);
+  // Never truncate-overwrite a possibly-live prior attempt's lease.
+  if (fs.existsSync(leasePath)) {
+    throw new Error(
+      `advisory lane lease already exists for round=${lease.round} reviewer=${lease.reviewer} attempt=${lease.attempt}: ${leasePath}`
+    );
+  }
   fs.writeFileSync(leasePath, `${JSON.stringify(lease, null, 2)}\n`, "utf-8");
   return { lease, leasePath };
 }
 
-function removeAdvisoryLaneLease(runDir, round, reviewer) {
-  const leasePath = getAdvisoryLaneLeasePath(runDir, round, reviewer);
-  fs.rmSync(leasePath, { force: true });
-  return leasePath;
+function removeAdvisoryLaneLease(runDir, round, reviewer, { attempt = 1, leasePath = null } = {}) {
+  const target = leasePath || getAdvisoryLaneLeasePath(runDir, round, reviewer, attempt);
+  fs.rmSync(target, { force: true });
+  return target;
 }
 
 function readAdvisoryLaneLeases(runDir) {
@@ -444,8 +491,12 @@ function readAdvisoryLaneLeases(runDir) {
     const match = name.match(ADVISORY_LANE_LEASE_RE);
     if (!match) continue;
     const leasePath = path.join(runDir, name);
+    const filenameAttempt = match[3] ? Number(match[3]) : 1;
     try {
-      const lease = normalizeAdvisoryLaneLease(JSON.parse(fs.readFileSync(leasePath, "utf-8")));
+      const lease = normalizeAdvisoryLaneLease(
+        JSON.parse(fs.readFileSync(leasePath, "utf-8")),
+        { attempt: filenameAttempt }
+      );
       leases.push({ lease, leasePath });
     } catch (error) {
       leases.push({
@@ -455,6 +506,7 @@ function readAdvisoryLaneLeases(runDir) {
         error: error.message,
         round: Number(match[1]) || null,
         reviewer: match[2] || null,
+        attempt: filenameAttempt,
       });
     }
   }
@@ -464,7 +516,10 @@ function readAdvisoryLaneLeases(runDir) {
     if (roundA !== roundB) return roundA - roundB;
     const reviewerA = a.lease?.reviewer ?? a.reviewer ?? "";
     const reviewerB = b.lease?.reviewer ?? b.reviewer ?? "";
-    return reviewerA.localeCompare(reviewerB);
+    if (reviewerA !== reviewerB) return reviewerA.localeCompare(reviewerB);
+    const attemptA = a.lease?.attempt ?? a.attempt ?? 1;
+    const attemptB = b.lease?.attempt ?? b.attempt ?? 1;
+    return attemptA - attemptB;
   });
 }
 
@@ -498,6 +553,16 @@ function waitForProcessGroupExitSync(pgid, { timeoutMs = 1500, intervalMs = 50 }
   return !isProcessGroupAlive(pgid);
 }
 
+function waitForProcessExitSync(pid, { timeoutMs = 1500, intervalMs = 50 } = {}) {
+  if (!pid || !Number.isFinite(Number(pid))) return false;
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!isProcessAlive(pid)) return true;
+    sleepSync(Math.min(intervalMs, Math.max(1, deadline - Date.now())));
+  }
+  return !isProcessAlive(pid);
+}
+
 function resolveAdvisoryLaneReapGraceMs(explicitMs) {
   if (Number.isFinite(Number(explicitMs)) && Number(explicitMs) >= 0) {
     return Number(explicitMs);
@@ -507,17 +572,34 @@ function resolveAdvisoryLaneReapGraceMs(explicitMs) {
   return DEFAULT_ADVISORY_LANE_REAP_GRACE_MS;
 }
 
+function resolveAdvisoryLaneWorkerExitWaitMs(explicitMs) {
+  if (Number.isFinite(Number(explicitMs)) && Number(explicitMs) >= 0) {
+    return Number(explicitMs);
+  }
+  const fromEnv = Number(process.env.RELAY_ADVISORY_LANE_WORKER_EXIT_WAIT_MS);
+  if (Number.isFinite(fromEnv) && fromEnv >= 0) return fromEnv;
+  return resolveAdvisoryLaneReapGraceMs();
+}
+
 function reapAdvisoryLaneLeases({
   runDir,
   dryRun = false,
   graceMs,
   host = os.hostname(),
+  match = null,
+  waitForWorkerPid = false,
+  workerExitWaitMs,
 } = {}) {
   const grace = resolveAdvisoryLaneReapGraceMs(graceMs);
+  const workerWait = waitForWorkerPid
+    ? resolveAdvisoryLaneWorkerExitWaitMs(workerExitWaitMs)
+    : 0;
   const entries = readAdvisoryLaneLeases(runDir);
   const outcomes = [];
 
   for (const entry of entries) {
+    if (typeof match === "function" && !match(entry)) continue;
+
     if (entry.corrupt || !entry.lease) {
       outcomes.push({
         pgid: null,
@@ -557,7 +639,7 @@ function reapAdvisoryLaneLeases({
         outcome: dryRun ? "would_remove_stale" : "stale",
       });
       if (!dryRun) {
-        removeAdvisoryLaneLease(runDir, lease.round, lease.reviewer);
+        fs.rmSync(leasePath, { force: true });
       }
       continue;
     }
@@ -568,6 +650,12 @@ function reapAdvisoryLaneLeases({
         outcome: "would_reap",
       });
       continue;
+    }
+
+    // Timeout-observed reap: let the worker finish writing its result + ADVISORY_REVIEW
+    // event before signalling the group. If the worker pid hangs, reap anyway.
+    if (waitForWorkerPid && lease.pid) {
+      waitForProcessExitSync(lease.pid, { timeoutMs: workerWait });
     }
 
     signalProcessGroup(lease.pgid, "SIGTERM");
@@ -581,7 +669,7 @@ function reapAdvisoryLaneLeases({
 
     const gone = !isProcessGroupAlive(lease.pgid);
     if (gone) {
-      removeAdvisoryLaneLease(runDir, lease.round, lease.reviewer);
+      fs.rmSync(leasePath, { force: true });
       outcomes.push({
         ...base,
         outcome: "reaped",
@@ -619,8 +707,10 @@ module.exports = {
   getRunArtifactPaths,
   getRunLeaseStatus,
   isDestructiveCleanupBlockedByLease,
+  isProcessAlive,
   isProcessGroupAlive,
   latestRunEvent,
+  nextAdvisoryLaneAttempt,
   readAdvisoryLaneLeases,
   readRunLease,
   reapAdvisoryLaneLeases,
@@ -628,6 +718,7 @@ module.exports = {
   removeRunLease,
   signalProcessGroup,
   terminateProcessGroup,
+  waitForProcessExitSync,
   waitForProcessGroupExit,
   waitForProcessGroupExitSync,
   writeAdvisoryLaneLease,

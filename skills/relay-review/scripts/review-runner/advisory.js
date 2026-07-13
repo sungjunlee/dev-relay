@@ -14,6 +14,7 @@ const { resolveExecutorDefaultModel } = require("../../../relay-dispatch/scripts
 const { hashFileSha256 } = require("../../../relay-dispatch/scripts/execution-evidence");
 const { appendRunEvent, appendUnregisteredRouteUsedEvent, EVENTS, readRunEvents } = require("../../../relay-dispatch/scripts/relay-events");
 const { writeAdvisoryLaneLease } = require("../../../relay-dispatch/scripts/run-runtime-state");
+const { reapPriorAdvisoryLaneAttempts } = require("./advisory-lane-reap");
 const { parseAdvisoryReview, validateAdvisoryProfile } = require("../advisory-review-schema");
 const { captureGitStatus, resolveReviewerScript } = require("./reviewer-invoke");
 const { writeText } = require("./common");
@@ -204,6 +205,14 @@ function startAdvisoryReview({
     timeoutSeconds: parsePositiveSeconds(timeoutSeconds),
     trigger,
   };
+  // Relaunched rounds may still have live prior-attempt groups. Reap them
+  // (TERM→grace→KILL→verify) before allocating a new per-attempt lease.
+  const priorLaneReaps = reapPriorAdvisoryLaneAttempts({
+    runDir,
+    round,
+    reviewer: artifactName,
+  });
+
   writeJson(paths.requestPath, request);
 
   const workerPath = path.join(__dirname, "..", "advisory-worker.js");
@@ -215,19 +224,29 @@ function startAdvisoryReview({
   });
   child.unref();
   // detached: true → child is its own process-group leader (pgid == pid).
-  // Persist a lane lease distinct from the round lease (lease.json / #951).
+  // Persist a per-attempt lane lease distinct from the round lease (lease.json / #951).
+  let laneLeasePath = null;
+  let laneAttempt = null;
   if (Number.isInteger(child.pid) && child.pid > 0) {
-    writeAdvisoryLaneLease(runDir, {
+    const written = writeAdvisoryLaneLease(runDir, {
       pid: child.pid,
       pgid: child.pid,
       round,
       reviewer: artifactName,
     });
+    laneLeasePath = written.leasePath;
+    laneAttempt = written.lease.attempt;
+    request.laneLeasePath = laneLeasePath;
+    request.laneAttempt = laneAttempt;
+    writeJson(paths.requestPath, request);
   }
 
   return {
     ...request,
     child,
+    laneLeasePath,
+    laneAttempt,
+    priorLaneReaps,
   };
 }
 

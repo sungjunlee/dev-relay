@@ -41,7 +41,7 @@ const {
 const { findUnknownFlags, modeLabel, readArg, schemaHasFlag } = require("./cli-args");
 const { appendRunEvent, EVENTS } = require("./relay-events");
 const { safeFormatRunId } = require("./relay-resolver");
-const { assertNoLiveRunLease, corruptRunLeaseReportFields } = require("./run-runtime-state");
+const { assertNoLiveRunLease, corruptRunLeaseReportFields, reapAdvisoryLaneLeases } = require("./run-runtime-state");
 const {
   DEFAULT_STALE_DAYS,
   assessRunWorktreeHealth,
@@ -345,6 +345,8 @@ function run() {
     advisoryRefused: [],
   };
 
+  const advisoryLaneReaps = [];
+
   const manifestPaths = listManifestPaths(repoRoot);
   for (const manifestPath of manifestPaths) {
     const { data, body } = readManifest(manifestPath);
@@ -568,6 +570,17 @@ function run() {
       }
     }
 
+    // Terminal + age-eligible: reap any surviving advisory-lane process groups
+    // recorded in per-attempt lane leases (#988). Non-terminal runs never reach here.
+    const runDir = getRunDir(repoRoot, normalizedData.run_id);
+    const laneReaps = reapAdvisoryLaneLeases({ runDir, dryRun });
+    for (const reap of laneReaps) {
+      advisoryLaneReaps.push({
+        ...reap,
+        runId: normalizedData.run_id,
+      });
+    }
+
     if (cleanupStatus === CLEANUP_STATUSES.SUCCEEDED) {
       result.skipped.push({ ...enrichedBaseInfo, reason: "already_cleaned" });
       continue;
@@ -656,6 +669,10 @@ function run() {
     result.skippedShells = shellSweep.skipped;
   }
 
+  if (advisoryLaneReaps.length > 0) {
+    result.advisoryLaneReaps = advisoryLaneReaps;
+  }
+
   if (jsonOut) {
     console.log(JSON.stringify(result, null, 2));
   } else {
@@ -696,6 +713,12 @@ function run() {
       console.log("  advisory refused:");
       result.advisoryRefused.forEach((entry) => {
         console.log(`    ${entry.runId}: ${entry.classification} ${entry.path} (${entry.reason})`);
+      });
+    }
+    if (advisoryLaneReaps.length) {
+      console.log(`  advisory lane reaps: ${advisoryLaneReaps.length}`);
+      advisoryLaneReaps.forEach((entry) => {
+        console.log(`    ${entry.runId}: ${entry.outcome} pgid=${entry.pgid} reviewer=${entry.reviewer} round=${entry.round}`);
       });
     }
     if (dryRun) {

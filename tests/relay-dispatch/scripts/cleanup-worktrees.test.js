@@ -1206,3 +1206,125 @@ test("cleanup-worktrees #969 prunes advisory worktrees of merged runs and leaves
     new RegExp(openAdvisory.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
   );
 });
+
+test("cleanup-worktrees #988 reaps terminal lane leases, leaves non-terminal untouched, dry-run inert", () => {
+  const { isProcessGroupAlive, writeAdvisoryLaneLease } = require("../../../skills/relay-dispatch/scripts/run-runtime-state");
+  const TERM_IGNORING_LANE = path.join(__dirname, "..", "..", "relay-merge", "fixtures", "term-ignoring-lane.js");
+
+  function spawnTermIgnoringLane() {
+    const child = spawn(process.execPath, [TERM_IGNORING_LANE], {
+      detached: true,
+      stdio: "ignore",
+    });
+    child.unref();
+    assert.ok(Number.isInteger(child.pid) && child.pid > 0);
+    assert.equal(isProcessGroupAlive(child.pid), true);
+    return child.pid;
+  }
+
+  function forceKillPgid(pgid) {
+    try {
+      process.kill(-pgid, "SIGKILL");
+    } catch {}
+  }
+
+  const { repoRoot } = setupNamedMainRepo("dev-relay");
+  const updatedAt = "2026-04-01T00:00:00.000Z";
+  const priorGrace = process.env.RELAY_ADVISORY_LANE_REAP_GRACE_MS;
+  process.env.RELAY_ADVISORY_LANE_REAP_GRACE_MS = "200";
+
+  const merged = writeRun(repoRoot, {
+    branch: "issue-988-lane-merged",
+    state: STATES.MERGED,
+    updatedAt,
+  });
+  const mergedRunId = readManifest(merged.manifestPath).data.run_id;
+  const mergedRunDir = ensureRunLayout(repoRoot, mergedRunId).runDir;
+
+  const open = writeRun(repoRoot, {
+    branch: "issue-988-lane-open",
+    state: STATES.REVIEW_PENDING,
+    updatedAt,
+  });
+  const openRunId = readManifest(open.manifestPath).data.run_id;
+  const openRunDir = ensureRunLayout(repoRoot, openRunId).runDir;
+
+  const mergedPgid = spawnTermIgnoringLane();
+  const openPgid = spawnTermIgnoringLane();
+  let mergedLeasePath = null;
+  let openLeasePath = null;
+  try {
+    mergedLeasePath = writeAdvisoryLaneLease(mergedRunDir, {
+      pid: mergedPgid,
+      pgid: mergedPgid,
+      round: 1,
+      reviewer: "codex",
+    }).leasePath;
+    openLeasePath = writeAdvisoryLaneLease(openRunDir, {
+      pid: openPgid,
+      pgid: openPgid,
+      round: 1,
+      reviewer: "opencode",
+    }).leasePath;
+
+    const dryRun = JSON.parse(execFileSync("node", [
+      SCRIPT, "--repo", repoRoot, "--all", "--dry-run", "--json",
+    ], {
+      encoding: "utf-8",
+      env: { ...process.env, RELAY_ADVISORY_LANE_REAP_GRACE_MS: "200" },
+    }));
+    assert.ok(Array.isArray(dryRun.advisoryLaneReaps));
+    const dryMerged = dryRun.advisoryLaneReaps.find((entry) => entry.pgid === mergedPgid);
+    assert.ok(dryMerged, `dry-run must list terminal lane: ${JSON.stringify(dryRun.advisoryLaneReaps)}`);
+    assert.equal(dryMerged.outcome, "would_reap");
+    assert.equal(
+      dryRun.advisoryLaneReaps.some((entry) => entry.pgid === openPgid),
+      false,
+      "non-terminal lane must not appear in dry-run reaps"
+    );
+    assert.equal(isProcessGroupAlive(mergedPgid), true);
+    assert.equal(fs.existsSync(mergedLeasePath), true);
+    assert.equal(isProcessGroupAlive(openPgid), true);
+    assert.equal(fs.existsSync(openLeasePath), true);
+
+    const result = JSON.parse(execFileSync("node", [
+      SCRIPT, "--repo", repoRoot, "--all", "--json",
+    ], {
+      encoding: "utf-8",
+      env: { ...process.env, RELAY_ADVISORY_LANE_REAP_GRACE_MS: "200" },
+    }));
+    assert.ok(Array.isArray(result.advisoryLaneReaps));
+    const reaped = result.advisoryLaneReaps.find((entry) => entry.pgid === mergedPgid);
+    assert.ok(reaped, `must reap terminal lane: ${JSON.stringify(result.advisoryLaneReaps)}`);
+    assert.equal(reaped.outcome, "reaped");
+    assert.equal(reaped.signaled_kill, true);
+    assert.equal(isProcessGroupAlive(mergedPgid), false);
+    assert.equal(fs.existsSync(mergedLeasePath), false);
+    assert.equal(
+      result.advisoryLaneReaps.some((entry) => entry.pgid === openPgid),
+      false,
+      "non-terminal lane must remain untouched"
+    );
+    assert.equal(isProcessGroupAlive(openPgid), true);
+    assert.equal(fs.existsSync(openLeasePath), true);
+  } finally {
+    forceKillPgid(mergedPgid);
+    forceKillPgid(openPgid);
+    if (priorGrace === undefined) delete process.env.RELAY_ADVISORY_LANE_REAP_GRACE_MS;
+    else process.env.RELAY_ADVISORY_LANE_REAP_GRACE_MS = priorGrace;
+  }
+});
+
+test("cleanup-worktrees #988 omits advisoryLaneReaps when idle (byte-identical shape)", () => {
+  const { repoRoot } = setupNamedMainRepo("dev-relay");
+  const updatedAt = "2026-04-01T00:00:00.000Z";
+  writeRun(repoRoot, {
+    branch: "issue-988-idle",
+    state: STATES.MERGED,
+    updatedAt,
+  });
+  const result = JSON.parse(execFileSync("node", [
+    SCRIPT, "--repo", repoRoot, "--all", "--json",
+  ], { encoding: "utf-8" }));
+  assert.equal("advisoryLaneReaps" in result, false);
+});

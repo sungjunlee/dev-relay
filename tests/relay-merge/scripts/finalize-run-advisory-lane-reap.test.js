@@ -342,3 +342,42 @@ test("finalize-run with no advisory lane leases omits advisoryLaneReaps (byte-id
   assert.equal("advisoryLaneReaps" in result, false);
   assert.equal(result.cleanup.worktreeRemoved, true);
 });
+
+test("finalize-run reaps two coexisting per-attempt lane leases for the same reviewer", () => {
+  const fixture = setupRepo();
+  const pgid1 = spawnTermIgnoringLane();
+  const pgid2 = spawnTermIgnoringLane();
+  try {
+    const first = writeAdvisoryLaneLease(fixture.runDir, {
+      pid: pgid1,
+      pgid: pgid1,
+      round: 1,
+      reviewer: "codex",
+    });
+    const second = writeAdvisoryLaneLease(fixture.runDir, {
+      pid: pgid2,
+      pgid: pgid2,
+      round: 1,
+      reviewer: "codex",
+    });
+    assert.equal(first.lease.attempt, 1);
+    assert.equal(second.lease.attempt, 2);
+    assert.notEqual(first.leasePath, second.leasePath);
+
+    const { result } = execFinalize(fixture);
+
+    assert.equal(isProcessGroupAlive(pgid1), false);
+    assert.equal(isProcessGroupAlive(pgid2), false);
+    assert.equal(fs.existsSync(first.leasePath), false);
+    assert.equal(fs.existsSync(second.leasePath), false);
+    assert.equal(result.advisoryLaneReaps.length, 2);
+    const byPgid = new Map(result.advisoryLaneReaps.map((entry) => [entry.pgid, entry]));
+    assert.equal(byPgid.get(pgid1).outcome, "reaped");
+    assert.equal(byPgid.get(pgid2).outcome, "reaped");
+    assert.equal(byPgid.get(pgid1).signaled_kill, true);
+    assert.equal(byPgid.get(pgid2).signaled_kill, true);
+  } finally {
+    forceKillPgid(pgid1);
+    forceKillPgid(pgid2);
+  }
+});

@@ -13,6 +13,7 @@ const {
   validateAdvisoryProfile,
   writeAdvisoryDecision,
 } = require("./advisory");
+const { reapTimeoutAdvisoryLane } = require("./advisory-lane-reap");
 const { resolveReviewerScript } = require("./reviewer-invoke");
 
 // finishAdvisoryReview polls with early return (see advisory.js), so this
@@ -443,6 +444,17 @@ async function settleOneAdvisoryForVerdict({ advisoryRun, config, currentState, 
       criticalPathWaitMs,
       phaseDecisionWaited: criticalPathWaitMs > 0,
     };
+  }
+  if (advisoryResult?.status === "timeout") {
+    const artifactReviewer = advisoryRun.artifactReviewerName || advisoryRun.reviewerName;
+    const { result: reapedResult } = reapTimeoutAdvisoryLane({
+      runDir: advisoryRun.runDir,
+      round: advisoryRun.round,
+      reviewer: artifactReviewer,
+      resultPath: advisoryRun.resultPath,
+      result: advisoryResult,
+    });
+    if (reapedResult) advisoryResult = reapedResult;
   }
   return {
     advisoryResult,
