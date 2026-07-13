@@ -88,12 +88,15 @@ test("entry preflight rejects before swap, events, artifacts, or checks wait", (
 test("detach parent rejects without receipt, lease, supervisor, or round artifacts", () => {
   const fixture = setupRun();
   const before = fs.readFileSync(fixture.manifestPath);
-  const result = run(fixture, ["--detach"]);
+  const detachTmp = fs.mkdtempSync(path.join(os.tmpdir(), "relay-capability-detach-tmp-"));
+  const result = run(fixture, ["--detach"], { TMPDIR: detachTmp });
 
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /supports advisory_review but not primary_review/);
   assert.doesNotMatch(result.stdout, /detached|receipt|sentinel|lease/i);
   assert.equal(fs.existsSync(path.join(fixture.runDir, "lease.json")), false);
+  const detachDirs = fs.readdirSync(detachTmp).filter((name) => name.startsWith("relay-review-detach-"));
+  assert.deepEqual(detachDirs, [], "no supervisor receipt directory or receipt.json artifact is created");
   assert.deepEqual(roundArtifacts(fixture.runDir), []);
   assert.deepEqual(fs.readFileSync(fixture.manifestPath), before);
 });

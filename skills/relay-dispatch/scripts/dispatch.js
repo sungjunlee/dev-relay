@@ -1010,7 +1010,7 @@ function captureProcessGroupSurvivorInventory(pgid) {
   try {
     // Prefer pgrep -g: group-scoped, avoids full-process-table scans that time out under load.
     try {
-      const pgrepOut = execFileSync("pgrep", ["-g", String(pgid), "."], {
+      const pgrepOut = execFileSync("pgrep", ["-g", String(pgid)], {
         encoding: "utf-8",
         stdio: ["ignore", "pipe", "ignore"],
         timeout: 2000,
@@ -1040,25 +1040,6 @@ function captureProcessGroupSurvivorInventory(pgid) {
       if (error && (error.status === 1 || error.code === "ETIMEDOUT" || error.killed)) {
         return [];
       }
-    }
-
-    // Sandboxed macOS hosts can deny pgrep/ps process-list access while still
-    // allowing lsof's group-scoped selector. Keep this fallback best-effort.
-    try {
-      const lsofOut = execFileSync("lsof", ["-nP", "-a", "-g", String(pgid), "-Fpgc"], {
-        encoding: "utf-8",
-        stdio: ["ignore", "pipe", "ignore"],
-        timeout: 2000,
-        maxBuffer: 1024 * 1024,
-      });
-      const entries = [];
-      for (const line of lsofOut.split(/\r?\n/)) {
-        if (line.startsWith("p")) entries.push({ pid: Number(line.slice(1)), command: "" });
-        if (line.startsWith("c") && entries.length) entries.at(-1).command = line.slice(1);
-      }
-      if (entries.length) return entries.filter((entry) => Number.isFinite(entry.pid) && entry.pid > 0);
-    } catch {
-      // Missing/denied lsof falls through to the existing group-scoped ps query.
     }
 
     // Fallback only when pgrep is unavailable (ENOENT): group-scoped ps, never full-table.
