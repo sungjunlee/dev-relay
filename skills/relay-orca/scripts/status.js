@@ -31,7 +31,7 @@ const { deriveStatusReport } = require("./lib/status-derive");
 const { StatusError, USAGE_EXIT, reject } = require("./lib/status-reasons");
 const { evaluateGates } = require("./lib/gate-evaluate");
 const { orderGatesReport, orderFinalSummary } = require("./lib/gate-report");
-const { deriveProposals, mergeFollowUps } = require("./lib/follow-ups");
+const { deriveProposals, mergeFollowUps, upsertRecordedFollowUps } = require("./lib/follow-ups");
 const { buildFinalSummary } = require("./lib/final-summary");
 const { REASONS: GATE_REASONS } = require("./lib/gate-reasons");
 
@@ -319,10 +319,13 @@ function makeIntegrationEvidenceReader(dir) {
 
 // D9.12 PINNED: proposals reach the receipt ONLY via `status --gates --record-proposals`.
 // Without the flag, status writes NOTHING (byte-identity preserved). With it, the proposed
-// follow-ups are appended to the receipt under `follow_ups` (additive; A-series atomic
-// write) and the receipt's updated_at is bumped.
+// follow-ups are UPSERTED into the receipt under `follow_ups` (additive; A-series atomic
+// write) and the receipt's updated_at is bumped. Owner amendment A1: recording MUST NOT
+// replace the existing `follow_ups` — an operator-set `deferred` row must survive. The
+// upsert preserves recorded entries byte-for-byte (they win on id conflict) and appends
+// only NEW derived ids, so re-recording never clobbers an operator's deferral.
 function recordProposals(receipt, receiptPath, proposals) {
-  receipt.follow_ups = proposals;
+  receipt.follow_ups = upsertRecordedFollowUps({ recorded: receipt.follow_ups, derived: proposals });
   receipt.updated_at = new Date().toISOString();
   writeReceiptAtomic(receiptPath, serializeReceiptWithRecords(receipt));
 }

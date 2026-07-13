@@ -101,4 +101,21 @@ function proposalFrom(entry, status) {
   return out;
 }
 
-module.exports = { proposal, deriveProposals, mergeFollowUps, nextWave, sanitizeId };
+// Additive id-keyed upsert for the `--record-proposals` receipt append (#947 owner
+// amendment A1). The recorded follow_ups already on the receipt are preserved BYTE-FOR-BYTE
+// (same object references, untouched) and WIN on id conflict — so an operator-set `deferred`
+// row is never overwritten by a freshly-derived `proposed` one. Only derived proposals whose
+// id is not already recorded are appended, in derivation order, after the recorded block.
+// Pure: no I/O, no mutation of either input array or its entries.
+function upsertRecordedFollowUps({ recorded, derived }) {
+  const existing = Array.isArray(recorded) ? recorded : [];
+  const recordedIds = new Set(
+    existing.filter((entry) => entry && typeof entry.id === "string").map((entry) => entry.id),
+  );
+  const appended = (Array.isArray(derived) ? derived : []).filter(
+    (entry) => entry && typeof entry.id === "string" && !recordedIds.has(entry.id),
+  );
+  return [...existing, ...appended];
+}
+
+module.exports = { proposal, deriveProposals, mergeFollowUps, upsertRecordedFollowUps, nextWave, sanitizeId };

@@ -365,6 +365,65 @@ test("D9.4: a failing gate proposes a follow-up in the report + receipt (--recor
 });
 
 // ---------------------------------------------------------------------------
+// A1 (owner amendment) — --record-proposals UPSERTS follow_ups; never replaces.
+// A prior operator-set `deferred` row must survive; only NEW derived ids append.
+// ---------------------------------------------------------------------------
+
+test("A1: --record-proposals upserts follow_ups — a pre-seeded deferred entry survives byte-for-byte and new proposals are appended", () => {
+  const deferredEntry = { id: "followup-later", source_outcome: "a", description: "operator deferred this", proposed_wave: 3, status: "deferred" };
+  const world = greenWorld("epic-a1-append", {
+    exitGates: ["integration:e2e"],
+    gateEvidence: { e2e: { passed: false } },
+    followUps: [deferredEntry],
+  });
+  try {
+    const before = JSON.parse(world.receiptOnDisk());
+    const recorded = world.run("--gates", ["--record-proposals"]);
+    assert.equal(recorded.status, 0);
+    const persisted = JSON.parse(world.receiptOnDisk());
+    // The operator-set deferred row survives byte-for-byte (still first, still deferred).
+    assert.deepEqual(persisted.follow_ups[0], deferredEntry);
+    // The freshly-derived proposal for the failing gate is APPENDED, not a replacement.
+    assert.equal(persisted.follow_ups.length, 2);
+    const appended = persisted.follow_ups[1];
+    assert.equal(appended.id, "followup-integration-e2e");
+    assert.equal(appended.source_gate, "integration:e2e");
+    assert.equal(appended.status, "proposed");
+    // Nothing else in the receipt changed (everything except follow_ups + the updated_at bump).
+    const strip = (r) => { const c = { ...r }; delete c.follow_ups; delete c.updated_at; return c; };
+    assert.deepEqual(strip(persisted), strip(before));
+    // Strictly read-only toward Orca/gh on the record path (poisons + the same log guard as D9.4).
+    assert.equal(world.orca.readPoison(), null);
+    assert.equal(world.gh.readPoison(), null);
+  } finally {
+    world.cleanup();
+  }
+});
+
+test("A1: a derived proposal whose id collides with a recorded deferred entry does NOT overwrite it (recorded wins)", () => {
+  // The recorded entry shares the exact id the failing gate would derive, but the operator
+  // deferred it — recording must keep the deferral, never flip it back to a blocking proposal.
+  const deferredEntry = { id: "followup-integration-e2e", source_gate: "integration:e2e", description: "known-flaky, deferred by operator", proposed_wave: 4, status: "deferred" };
+  const world = greenWorld("epic-a1-conflict", {
+    exitGates: ["integration:e2e"],
+    gateEvidence: { e2e: { passed: false } },
+    followUps: [deferredEntry],
+  });
+  try {
+    const recorded = world.run("--gates", ["--record-proposals"]);
+    assert.equal(recorded.status, 0);
+    const persisted = JSON.parse(world.receiptOnDisk());
+    // Exactly one entry — the recorded deferred one, unchanged. The derived proposed twin was
+    // dropped on conflict rather than clobbering the operator's deferral.
+    assert.equal(persisted.follow_ups.length, 1);
+    assert.deepEqual(persisted.follow_ups[0], deferredEntry);
+    assert.equal(persisted.follow_ups[0].status, "deferred");
+  } finally {
+    world.cleanup();
+  }
+});
+
+// ---------------------------------------------------------------------------
 // D9.5 — follow-up ACCEPTANCE path; frozen compiler protections re-raise
 // ---------------------------------------------------------------------------
 
