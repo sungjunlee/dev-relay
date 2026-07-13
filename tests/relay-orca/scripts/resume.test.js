@@ -76,7 +76,9 @@ function manifestText(fields) {
 function orcaTask(programId, outcome, extra = {}) {
   return {
     id: `orca-live-${outcome}`,
-    title: `relay-orca: ${programSegment(programId)}/${outcome}`,
+    // D4: the real task-list row carries `task_title` (and `display_name`), never `title`.
+    task_title: `relay-orca: ${programSegment(programId)}/${outcome}`,
+    display_name: `relay-orca: ${programSegment(programId)}/${outcome}`,
     status: extra.status || "dispatched",
     worker_done: extra.worker_done === true,
   };
@@ -84,7 +86,7 @@ function orcaTask(programId, outcome, extra = {}) {
 
 // A task-list entry NOT marked for this program — makes the runtime foreign_state.
 function foreignTask(id) {
-  return { id, title: `relay-orca: other-program/${id}`, status: "dispatched", worker_done: false };
+  return { id, task_title: `relay-orca: other-program/${id}`, status: "dispatched", worker_done: false };
 }
 
 // A dispatch-show seed modeling GENUINE absence (owner amendment A1, #946 R1): the Orca
@@ -289,19 +291,21 @@ test("D9.3: terminal loss on a resumable outcome → terminal reacquired via inj
   const receipt = makeReceipt({ programId, slug: world.slug, root: fs.realpathSync(world.repoRoot), tasks: [{ outcome_id: "a", run: "run-a" }] });
   fs.writeFileSync(world.receiptPath, serializeReceipt(receipt), "utf-8");
   try {
-    const r = world.run();
+    const r = world.run(["--operator-handle", "h-reacq"]);
     assert.equal(r.status, 0);
     assertReportShape(r.body);
     assert.equal(actionFor(r.body, "a").action, "redispatched");
-    assert.equal(r.body.terminals_created.length, 1);
+    // Explicit-handles-only (D3): resume reacquires through the PROVIDED handle and never
+    // self-creates a terminal, so terminals_created stays [] on every path.
+    assert.deepEqual(r.body.terminals_created, []);
     const log = world.orca.readLog();
-    assert.ok(log.some((l) => l.startsWith("terminal create")), "a replacement terminal is created");
+    assert.ok(!log.some((l) => l.startsWith("terminal create")), "resume never creates its own terminal");
     assert.ok(log.some((l) => l.startsWith("orchestration dispatch --task orca-live-a")), "re-injected through dispatch");
     assert.ok(log.some((l) => l.startsWith("orchestration dispatch-show --task orca-live-a")), "provenance re-verified through dispatch-show");
-    // Receipt persisted immediately (A16): the created handle is durable on disk.
+    // The provided handle is recorded as the reacquired outcome's assignee, persisted at A2.
     const persisted = parseReceipt(world.receiptOnDisk()).receipt;
-    assert.deepEqual(persisted.terminals_created, r.body.terminals_created);
-    assert.equal(persisted.tasks[0].assignee, r.body.terminals_created[0], "reacquired terminal recorded as the outcome assignee");
+    assert.deepEqual(persisted.terminals_created, []);
+    assert.equal(persisted.tasks[0].assignee, "h-reacq", "reacquired terminal recorded as the outcome assignee");
     assertNoPoison(world);
   } finally {
     world.cleanup();
@@ -365,7 +369,7 @@ test("D9.6: partial dispatch → only the absent+clean outcome dispatches, throu
   const programId = "epic-resume-partial";
   const world = partialWorld(programId);
   try {
-    const r = world.run();
+    const r = world.run(["--operator-handle", "h1"]);
     assert.equal(r.status, 0);
     assert.equal(actionFor(r.body, "a").action, "reused");
     assert.equal(actionFor(r.body, "b").action, "redispatched");
@@ -373,6 +377,41 @@ test("D9.6: partial dispatch → only the absent+clean outcome dispatches, throu
     assert.equal(injects.length, 1, "exactly one re-dispatch");
     assert.ok(injects[0].includes("orca-live-b"), "only the absent outcome b is dispatched");
     assert.ok(!injects.some((l) => l.includes("orca-live-a")), "the reused outcome a is never re-dispatched");
+    assertNoPoison(world);
+  } finally {
+    world.cleanup();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// D3 — resume with an outcome to (re)dispatch but NO --operator-handle → decision_required
+// ---------------------------------------------------------------------------
+
+test("D3: resume needing re-dispatch with zero --operator-handle → RESUME_NO_OPERATOR_HANDLE exit 65, zero mutation", () => {
+  const programId = "epic-resume-no-handle";
+  const world = buildWorld({
+    programId,
+    // Outcome b is verifiably absent (genuine absence), so it would otherwise re-dispatch —
+    // but resume never self-creates a terminal, so with no handle it must fail closed.
+    orcaScenario: { tasks: [orcaTask(programId, "b")], dispatch: absentDispatch("b") },
+  });
+  const receipt = makeReceipt({ programId, slug: world.slug, root: fs.realpathSync(world.repoRoot), tasks: [{ outcome_id: "b", dispatch_id: null, assignee: null }] });
+  fs.writeFileSync(world.receiptPath, serializeReceipt(receipt), "utf-8");
+  const before = world.receiptOnDisk();
+  try {
+    const r = world.run(); // NO --operator-handle
+    assert.equal(r.status, RESUME_REASONS.RESUME_NO_OPERATOR_HANDLE);
+    assert.equal(r.status, 65);
+    assertReportShape(r.body);
+    assert.equal(r.body.ok, false);
+    const decision = r.body.decision_required.find((d) => d.reason_code === "RESUME_NO_OPERATOR_HANDLE");
+    assert.ok(decision, "RESUME_NO_OPERATOR_HANDLE decision present");
+    assert.ok(decision.options.some((o) => o.includes("--operator-handle")), "options offer providing --operator-handle");
+    assert.equal(actionFor(r.body, "b").action, "decision_required");
+    assert.deepEqual(r.body.terminals_created, []);
+    // ZERO mutation: no dispatch/terminal/task-create, and the receipt is byte-identical.
+    assert.deepEqual(mutationLines(world.orca.readLog()), []);
+    assert.equal(world.receiptOnDisk(), before, "receipt byte-identical on the no-handle abort");
     assertNoPoison(world);
   } finally {
     world.cleanup();
@@ -426,7 +465,7 @@ test("A1(b) genuine absence: live dispatch-show empty + receipt dispatch_id null
   const receipt = makeReceipt({ programId, slug: world.slug, root: fs.realpathSync(world.repoRoot), tasks: [{ outcome_id: "b", dispatch_id: null, assignee: null }] });
   fs.writeFileSync(world.receiptPath, serializeReceipt(receipt), "utf-8");
   try {
-    const r = world.run();
+    const r = world.run(["--operator-handle", "h1"]);
     assert.equal(r.status, 0);
     assert.deepEqual(r.body.decision_required, [], "no fail-closed decision on genuine absence");
     assert.equal(actionFor(r.body, "b").action, "redispatched");
@@ -502,7 +541,7 @@ test("D1: reconciliation (status/task-list/gate-list) runs before any mutating s
   const programId = "epic-resume-order";
   const world = partialWorld(programId);
   try {
-    const r = world.run();
+    const r = world.run(["--operator-handle", "h1"]);
     assert.equal(r.status, 0);
     const log = world.orca.readLog();
     const firstMutation = log.findIndex((l) => mutationLines([l]).length > 0);
@@ -524,7 +563,7 @@ test("D9.5: double resume is idempotent — second run does zero task-create/ter
   const programId = "epic-resume-idempotent";
   const world = partialWorld(programId);
   try {
-    const first = world.run();
+    const first = world.run(["--operator-handle", "h1"]);
     assert.equal(first.status, 0);
     assert.equal(actionFor(first.body, "b").action, "redispatched");
     const firstMutations = mutationLines(world.orca.readLog()).length;
@@ -533,7 +572,7 @@ test("D9.5: double resume is idempotent — second run does zero task-create/ter
     // Second resume reads the receipt the first resume persisted → everything now live.
     const beforeSecond = world.receiptOnDisk();
     const secondLogStart = world.orca.readLog().length;
-    const second = world.run();
+    const second = world.run(["--operator-handle", "h1"]);
     assert.equal(second.status, 0);
     const secondLog = world.orca.readLog().slice(secondLogStart);
     assert.deepEqual(mutationLines(secondLog), [], "the second resume performs ZERO task-create/terminal/dispatch");
@@ -682,7 +721,7 @@ test("D9.8: resume preserves a prior stop record when it rewrites the receipt", 
   });
   fs.writeFileSync(world.receiptPath, serializeReceiptWithStop(receipt), "utf-8");
   try {
-    const r = world.run();
+    const r = world.run(["--operator-handle", "h1"]);
     assert.equal(r.status, 0);
     assert.equal(actionFor(r.body, "b").action, "redispatched", "resume still re-dispatches the absent outcome");
     const persisted = parseReceipt(world.receiptOnDisk()).receipt;

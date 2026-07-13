@@ -16,7 +16,6 @@ const {
   createTask,
   dispatchTask,
   showDispatch,
-  createTerminal,
   sendPrompt,
 } = require("./run-orca");
 const { buildOperatorPrompt } = require("./operator-prompt");
@@ -123,36 +122,36 @@ function materialize(plan, program, report, orcaBin, options) {
   return { taskByPlanId, entryByPlanId, orcaIdByPlanId };
 }
 
-// D5 terminal acquisition. A handle is either (a) an explicit --operator-handle
-// or (b) one created via `orca terminal create` this invocation. When explicit
-// handles are provided, run uses only those: exhausting them leaves the remaining
-// eligible tasks pending (handle-shortfall, no error). With no explicit handles,
-// run creates a fresh terminal per dispatch; a create that yields no usable
-// handle is OPERATOR_DISPATCH_FAILED. Every created handle is recorded (D10).
-function makeHandlePool(orcaBin, report, options) {
+// D3 terminal acquisition: EXPLICIT handles only. `run` dispatches solely to the
+// terminals the operator passed via --operator-handle and NEVER creates one itself —
+// a bare `terminal create` yields an agent-less terminal that can never accept
+// `--inject` ("no recognized agent detected"). Exhausting the provided handles leaves
+// the remaining eligible tasks pending (handle-shortfall, no error). The zero-handle
+// case is rejected UPFRONT (requireOperatorHandles) before any materialization, so the
+// pool here is only ever consulted when at least one handle exists.
+function makeHandlePool(options) {
   const explicit = Array.isArray(options.operatorHandles) ? options.operatorHandles.slice() : [];
-  const hasExplicit = explicit.length > 0;
   let index = 0;
   return {
     acquire() {
-      if (hasExplicit) return index < explicit.length ? explicit[index++] : null;
-      const term = createTerminal(options.runOrca, orcaBin);
-      if (!term.ok) {
-        reject(
-          "OPERATOR_DISPATCH_FAILED",
-          "no valid operator target: orca terminal create yielded no usable handle" +
-            procDetail(term.proc, "response reported ok:false or returned no handle"),
-        );
-      }
-      report.terminals_created.push(term.handle);
-      // A16: persist the receipt IMMEDIATELY after recording the created terminal handle —
-      // before the dispatch that may fail. A dispatch (or provenance) failure right after
-      // auto terminal creation must leave the on-disk receipt already carrying the handle,
-      // so a reconcile can adopt (not re-create) the terminal instead of leaking it.
-      persistReceipt(report, options);
-      return term.handle;
+      return index < explicit.length ? explicit[index++] : null;
     },
   };
+}
+
+// D3.1: `run` invoked with ZERO --operator-handle fails closed with
+// OPERATOR_DISPATCH_FAILED (exit 44) BEFORE any mutating Orca subcommand runs (no
+// task-create, no dispatch, no terminal create). The remediation instructs creating a
+// terminal with an agent CLI and re-running with an explicit handle.
+function requireOperatorHandles(options) {
+  const explicit = Array.isArray(options.operatorHandles) ? options.operatorHandles : [];
+  if (explicit.length === 0) {
+    reject(
+      "OPERATOR_DISPATCH_FAILED",
+      "no operator terminal provided: relay-orca run dispatches only to explicitly provided --operator-handle terminals and never creates its own (a self-created terminal has no recognized agent and cannot accept --inject)",
+      'Create an operator terminal running an agent CLI via `orca terminal create --command "<agent-cli>" --json`, then re-run with `--operator-handle <handle>`.',
+    );
+  }
 }
 
 // D6.2 provenance trio verification. Returns a bounded description of the first
@@ -229,7 +228,7 @@ function dispatchOne(ctx) {
 function dispatchWave(plan, program, report, orcaBin, maps, options) {
   const wave1 = plan.waves.length ? plan.waves[0].task_ids : [];
   const target = Math.min(wave1.length, plan.concurrency);
-  const handles = makeHandlePool(orcaBin, report, options);
+  const handles = makeHandlePool(options);
   const outcomeById = new Map(program.outcomes.map((outcome) => [outcome.id, outcome]));
   for (let i = 0; i < target; i += 1) {
     const planId = wave1[i];
@@ -259,6 +258,9 @@ function orchestrate(rawProgram, options = {}) {
   const report = initReport(plan);
   try {
     const orcaBin = admit(report, options);
+    // D3.1: reject a zero-handle run AFTER admission (probe result) and BEFORE any
+    // materialization mutation, so no task-create/dispatch/terminal-create ever runs.
+    requireOperatorHandles(options);
     // materialize persists the receipt after EACH successful task-create (A12), so the
     // full outcome→orca_task_id mapping is already durable here; dispatchWave then
     // re-persists after each provenance verification (A2). No separate post-materialize

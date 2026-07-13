@@ -52,20 +52,35 @@ function orcaGateList(run, orcaBin, options = {}) {
   return { ok: true, reachable: true, gates, runtimeId: metaRuntimeId(value), proc };
 }
 
+// First non-empty string among the candidates, else null. Used so a reader can prefer the
+// real nested provenance and still fall back to a legacy flat field.
+function firstNonEmpty(...candidates) {
+  for (const candidate of candidates) {
+    if (isNonEmptyString(candidate)) return candidate;
+  }
+  return null;
+}
+
 function orcaDispatchShow(run, orcaBin, taskId, options = {}) {
   const proc = run(orcaBin, ["orchestration", "dispatch-show", "--task", String(taskId), "--json"], options);
   const { ok, value } = envelope(proc);
   if (!ok) return { ok: false, reachable: false, proc };
   const result = value.result || {};
-  const assignee = isNonEmptyString(result.assignee) ? result.assignee : null;
-  // Terminal presence: an explicit `terminal_present:false` (or a null assignee)
-  // means the dispatched operator terminal is gone (feeds MISSING_TERMINAL, D7).
-  const terminalPresent = result.terminal_present === false ? false : Boolean(assignee);
+  // Real mid-2026 shape (D4.3): provenance is nested under result.dispatch — task id at
+  // task_id, dispatch id at id (tolerating dispatch_id), assignee at assignee_handle
+  // (tolerating assignee/to). Legacy flat fields stay as a fallback.
+  const dispatch = result.dispatch && typeof result.dispatch === "object" ? result.dispatch : {};
+  const assignee = firstNonEmpty(dispatch.assignee_handle, dispatch.assignee, dispatch.to, result.assignee);
+  // Terminal presence: an explicit `terminal_present:false` anywhere in result OR
+  // result.dispatch (or a null assignee) means the dispatched operator terminal is gone
+  // (feeds MISSING_TERMINAL, D7).
+  const terminalGone = result.terminal_present === false || dispatch.terminal_present === false;
+  const terminalPresent = terminalGone ? false : Boolean(assignee);
   return {
     ok: true,
     reachable: true,
-    taskId: isNonEmptyString(result.task_id) ? result.task_id : null,
-    dispatchId: isNonEmptyString(result.dispatch_id) ? result.dispatch_id : null,
+    taskId: firstNonEmpty(dispatch.task_id, result.task_id),
+    dispatchId: firstNonEmpty(dispatch.id, dispatch.dispatch_id, result.dispatch_id),
     assignee,
     terminalPresent,
     // A17: expose the per-task read's `_meta.runtimeId` so the caller can prove THIS

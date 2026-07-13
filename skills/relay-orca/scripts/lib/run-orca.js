@@ -40,8 +40,18 @@ function pickString(result, keys) {
   return null;
 }
 
+function dispatchObject(result) {
+  return result && typeof result.dispatch === "object" && result.dispatch ? result.dispatch : null;
+}
+
+// Real mid-2026 shape (D2): provenance is nested under result.dispatch — the task id at
+// result.dispatch.task_id, the dispatch id at result.dispatch.id (tolerating dispatch_id),
+// and the assignee at result.dispatch.assignee_handle (tolerating assignee/to). The flat
+// reads are retained as a fallback for legacy payloads.
 function extractTaskId(payload) {
   const result = payload && payload.result;
+  const nested = pickString(dispatchObject(result), ["task_id"]);
+  if (nested) return nested;
   const direct = pickString(result, ["task_id", "taskId", "id"]);
   if (direct) return direct;
   if (result && result.task) return pickString(result.task, ["id", "task_id"]);
@@ -50,25 +60,19 @@ function extractTaskId(payload) {
 
 function extractDispatchId(payload) {
   const result = payload && payload.result;
+  const nested = pickString(dispatchObject(result), ["id", "dispatch_id"]);
+  if (nested) return nested;
   const direct = pickString(result, ["dispatch_id", "dispatchId", "id"]);
   if (direct) return direct;
-  if (result && result.dispatch) return pickString(result.dispatch, ["id", "dispatch_id"]);
   return null;
 }
 
 function extractAssignee(payload) {
   const result = payload && payload.result;
+  const nested = pickString(dispatchObject(result), ["assignee_handle", "assignee", "to"]);
+  if (nested) return nested;
   const direct = pickString(result, ["assignee", "to", "handle"]);
   if (direct) return direct;
-  if (result && result.dispatch) return pickString(result.dispatch, ["assignee", "to"]);
-  return null;
-}
-
-function extractHandle(payload) {
-  const result = payload && payload.result;
-  const direct = pickString(result, ["handle", "terminal_id", "terminalId", "id"]);
-  if (direct) return direct;
-  if (result && result.terminal) return pickString(result.terminal, ["handle", "id"]);
   return null;
 }
 
@@ -110,19 +114,14 @@ function showDispatch(run, orcaBin, { orcaTaskId }, options = {}) {
   };
 }
 
-function createTerminal(run, orcaBin, options = {}) {
-  const proc = run(orcaBin, ["terminal", "create", "--json"], options);
-  const parsed = parseJson(proc.stdout);
-  const handle = envelopeOk(proc, parsed) ? extractHandle(parsed.value) : null;
-  return { ok: envelopeOk(proc, parsed) && isNonEmptyString(handle), handle, proc, parsed };
-}
-
-// Prompt delivery (D6 step 3). Called ONLY after provenance verification. The
-// prompt is passed on stdin (via options.input) so a multi-line operator prompt
-// never lands in argv (and never corrupts the invocation log used by tests).
-function sendPrompt(run, orcaBin, { orcaTaskId, handle, prompt }, options = {}) {
-  const args = ["terminal", "send", "--to", handle, "--task", orcaTaskId, "--json"];
-  const proc = run(orcaBin, args, { ...options, input: prompt });
+// Prompt delivery (D6 step 3). Called ONLY after provenance verification. The real
+// mid-2026 CLI is `orca terminal send --terminal <handle> --text <text> [--enter] [--json]`
+// — there is NO --to flag, NO --task flag, and NO stdin payload path (D1). The full
+// operator prompt is delivered as ONE --text value in a SINGLE send (never split), and the
+// success gate stays fail-closed and unchanged (exit 0 + JSON + ok===true).
+function sendPrompt(run, orcaBin, { handle, prompt }, options = {}) {
+  const args = ["terminal", "send", "--terminal", handle, "--text", String(prompt), "--enter", "--json"];
+  const proc = run(orcaBin, args, options);
   const parsed = parseJson(proc.stdout);
   return { ok: envelopeOk(proc, parsed), proc, parsed };
 }
@@ -135,6 +134,5 @@ module.exports = {
   createTask,
   dispatchTask,
   showDispatch,
-  createTerminal,
   sendPrompt,
 };

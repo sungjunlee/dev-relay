@@ -43,6 +43,9 @@ function defaultResumeScenario(overrides = {}) {
     // Execution knobs (fail-closed / optional): an orca task id whose `dispatch --inject`
     // returns ok:false, and terminal-create failure modes.
     dispatchFailFor: overrides.dispatchFailFor || null,
+    // D5.4: handles with no recognized agent — `dispatch --inject` to one hard-fails with
+    // the real "no recognized agent detected" error. Empty by default.
+    injectNonAgentHandles: Array.isArray(overrides.injectNonAgentHandles) ? overrides.injectNonAgentHandles : [],
     terminalCreateOkFalse: overrides.terminalCreateOkFalse || false,
     terminalCreateEmptyHandle: overrides.terminalCreateEmptyHandle || false,
     terminalSendOkFalse: overrides.terminalSendOkFalse || false,
@@ -62,10 +65,16 @@ const stateDir = ${JSON.stringify(stateDir)};
 
 function appendLog(line) { if (logPath) fs.appendFileSync(logPath, line + "\\n", "utf-8"); }
 appendLog(args.join(" "));
+// The real dispatch-show payload nests provenance under result.dispatch (D4.3/D5.2).
+function nestDispatch(flat) {
+  const dispatch = { id: flat.dispatch_id, task_id: flat.task_id, assignee_handle: flat.assignee, status: flat.status || "dispatched" };
+  const result = { dispatch: dispatch };
+  if (flat.terminal_present !== undefined) result.terminal_present = flat.terminal_present;
+  return result;
+}
 function loadScenario() { return JSON.parse(fs.readFileSync(scenarioPath, "utf-8")); }
 function emit(payload, exitCode) { if (payload !== undefined && payload !== null) process.stdout.write(JSON.stringify(payload)); process.exit(typeof exitCode === "number" ? exitCode : 0); }
 function argValue(flag) { const i = args.indexOf(flag); return i >= 0 ? args[i + 1] : undefined; }
-function drainStdin() { try { fs.readFileSync(0); } catch (e) { /* no stdin */ } }
 function stateFile(taskId) { return path.join(stateDir, "disp-" + String(taskId).replace(/[^a-zA-Z0-9._-]/g, "_") + ".json"); }
 function poison(marker, code) { if (poisonPath) fs.writeFileSync(poisonPath, marker + ":" + args.join(" "), "utf-8"); process.stderr.write("POISON: " + marker + "\\n"); process.exit(code); }
 
@@ -105,12 +114,17 @@ if (args[0] === "orchestration" && args[1] === "dispatch-show") {
   Object.keys(seed).forEach((k) => { if (k === "runtimeId") seedRuntime = seed[k]; else result[k] = seed[k]; });
   try { Object.assign(result, JSON.parse(fs.readFileSync(stateFile(task), "utf-8"))); } catch (e) { /* no real dispatch yet */ }
   const dispatchMeta = seedRuntime !== undefined ? { runtimeId: seedRuntime } : meta;
-  emit({ id: "ds-" + task, ok: true, result, _meta: dispatchMeta }, 0);
+  emit({ id: "ds-" + task, ok: true, result: nestDispatch(result), _meta: dispatchMeta }, 0);
 }
 if (args[0] === "orchestration" && args[1] === "dispatch") {
   const task = argValue("--task");
   const handle = argValue("--to");
   if (scenario.dispatchFailFor && scenario.dispatchFailFor === task) emit({ ok: false, error: "dispatch inject undelivered" }, 0);
+  // D5.4: a handle with no recognized agent CLI cannot accept --inject (verbatim error).
+  if (scenario.injectNonAgentHandles && scenario.injectNonAgentHandles.indexOf(handle) >= 0) {
+    process.stderr.write("Cannot dispatch --inject to terminal " + handle + ": no recognized agent detected. Start an agent CLI (e.g. claude, codex, gemini, droid) in the terminal first, or dispatch without --inject and send the prompt manually.\\n");
+    emit({ ok: false, error: "no recognized agent detected for terminal " + handle }, 0);
+  }
   const record = { task_id: task, dispatch_id: "disp-" + task, assignee: handle, terminal_present: true };
   try { fs.writeFileSync(stateFile(task), JSON.stringify(record), "utf-8"); } catch (e) { /* ignore */ }
   emit({ id: "d-" + task, ok: true, result: { id: record.dispatch_id, dispatch_id: record.dispatch_id, assignee: handle }, _meta: meta }, 0);
@@ -126,7 +140,12 @@ if (args[0] === "terminal" && args[1] === "create") {
   emit({ ok: true, result: { handle: "orca-term-" + n, id: "orca-term-" + n }, _meta: meta }, 0);
 }
 if (args[0] === "terminal" && args[1] === "send") {
-  drainStdin();
+  // D1/D5.3 poison-pin: the real 'terminal send' has NO --to and NO --task flag.
+  if (args.indexOf("--to") >= 0 || args.indexOf("--task") >= 0) {
+    const badFlag = args.indexOf("--to") >= 0 ? "--to" : "--task";
+    process.stderr.write("terminal send: unrecognized flag " + badFlag + "\\n");
+    emit({ ok: false, error: "terminal send does not accept " + badFlag }, 2);
+  }
   if (scenario.terminalSendOkFalse) emit({ ok: false, error: "terminal send failed" }, 1);
   emit({ ok: true, result: { delivered: true } }, 0);
 }

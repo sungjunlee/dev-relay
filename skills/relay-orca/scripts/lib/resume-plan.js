@@ -203,9 +203,30 @@ function classifyAction(task, report, unmappedRelayWork, liveDispatch) {
   return makeAction(task, "skipped", `outcome ${task.outcome_id} has in-flight/durable relay work or is a later wave; left untouched`);
 }
 
+// D3.3: an outcome that needs a fresh operator surface (a redispatch or a terminal
+// reacquisition carries an `exec` plan) can only be executed against an explicitly provided
+// --operator-handle — resume NEVER creates its own operator terminal. With no usable handle,
+// resume fails closed as a `decision_required` report with ZERO mutation, offering the
+// operator-handle path. Reused/skipped outcomes carry no `exec`, so a handle-free resume
+// with nothing to (re)dispatch proceeds normally.
+function blockedByNoOperatorHandle(receipt, actions, hasOperatorHandle) {
+  if (hasOperatorHandle || !actions.some((action) => action.exec)) return null;
+  const decision = decisionEntry(
+    "RESUME_NO_OPERATOR_HANDLE",
+    "one or more outcomes need (re)dispatch but no --operator-handle was provided; resume never creates its own operator terminal, so it performs no mutation",
+  );
+  const blocked = receipt.tasks.map((task) => makeAction(task, "decision_required", boundedExcerpt(`blocked: ${decision.reason_code}`), null));
+  return {
+    decisions: [decision],
+    actions: blocked,
+    blockingReasons: [{ reason_code: decision.reason_code, message: decision.message }],
+    exitCode: exitCodeFor(decision.reason_code),
+  };
+}
+
 // The whole plan: program-level decisions plus per-outcome actions. When any decision
 // fires, EVERY outcome is `decision_required` (resume performs zero mutation, D2).
-function planResume({ receipt, report, liveDispatch }) {
+function planResume({ receipt, report, liveDispatch, hasOperatorHandle = false }) {
   const decisions = planDecisions(receipt, report, liveDispatch);
   if (decisions.length) {
     const reason = boundedExcerpt(`blocked: ${decisions[0].reason_code}`);
@@ -215,7 +236,7 @@ function planResume({ receipt, report, liveDispatch }) {
   }
   const unmappedRelayWork = hasUnmappedRelayWork(report);
   const actions = receipt.tasks.map((task) => classifyAction(task, report, unmappedRelayWork, liveDispatch));
-  return { decisions: [], actions, blockingReasons: [], exitCode: 0 };
+  return blockedByNoOperatorHandle(receipt, actions, hasOperatorHandle) || { decisions: [], actions, blockingReasons: [], exitCode: 0 };
 }
 
 module.exports = {

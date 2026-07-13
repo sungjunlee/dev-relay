@@ -25,6 +25,8 @@ const {
   READ_ONLY_MARKER,
   NO_EDIT_CLAUSE,
 } = require(path.join(SCRIPTS, "lib", "operator-prompt.js"));
+const { showDispatch } = require(path.join(SCRIPTS, "lib", "run-orca.js"));
+const { provenanceMismatch } = require(path.join(SCRIPTS, "lib", "run-orchestrator.js"));
 const { installFakeOrcaRun } = require(path.join(__dirname, "..", "fixtures", "fake-orca-run.js"));
 const { readyStatus } = require(path.join(__dirname, "..", "fixtures", "fake-orca.js"));
 
@@ -205,8 +207,23 @@ test("D11.1: 2-task wave dispatches, provenance verified, exact D10 report", () 
     // Prompt (terminal send) is delivered ONLY after dispatch-show verification.
     const log = r.fake.readLog();
     const showIdx = log.findIndex((l) => l.includes("dispatch-show --task orca-live-alpha"));
-    const sendIdx = log.findIndex((l) => l.includes("terminal send --to h1"));
+    const sendIdx = log.findIndex((l) => l.includes("terminal send --terminal h1"));
     assert.ok(showIdx >= 0 && sendIdx > showIdx, "prompt must be sent after verification");
+    // D1: the prompt is delivered by ONE `terminal send` per dispatched task, with the
+    // exact real-CLI argv — no --to, no --task, no stdin.
+    const sends = r.fake.readSends();
+    assert.equal(sends.length, 2, "exactly one send per dispatched task (never split)");
+    const alphaSend = sends.find((argv) => argv[3] === "h1");
+    assert.equal(alphaSend[0], "terminal");
+    assert.equal(alphaSend[1], "send");
+    assert.equal(alphaSend[2], "--terminal");
+    assert.equal(alphaSend[3], "h1");
+    assert.equal(alphaSend[4], "--text");
+    assert.ok(typeof alphaSend[5] === "string" && alphaSend[5].length > 0, "the full operator prompt rides in one --text value");
+    assert.equal(alphaSend[6], "--enter");
+    assert.equal(alphaSend[7], "--json");
+    assert.equal(alphaSend.length, 8, "no extra flags");
+    assert.ok(!alphaSend.includes("--to") && !alphaSend.includes("--task"), "no --to/--task on terminal send");
     assertNoPoison(r.fake);
   } finally {
     r.fake.cleanup();
@@ -256,7 +273,7 @@ test("D11.3: dispatch ok:false → INJECTION_UNDELIVERED exit 42, escalated, pri
     // bravo never advances: no dispatch-show, no prompt hand-off after the failure.
     const log = r.fake.readLog().join(" ");
     assert.equal(log.includes("dispatch-show --task orca-live-bravo"), false);
-    assert.equal(log.includes("terminal send --to h2"), false);
+    assert.equal(log.includes("terminal send --terminal h2"), false);
     assertNoPoison(r.fake);
   } finally {
     r.fake.cleanup();
@@ -524,6 +541,31 @@ test("D11.11: reset AND worktree subcommands poison the fixture", () => {
   }
 });
 
+test("D5.3: fake `terminal send` hard-fails on --to or --task and accepts only the real flags", () => {
+  const fake = installFakeOrcaRun();
+  try {
+    for (const badFlag of ["--to", "--task"]) {
+      let status = 0;
+      let stdout = "";
+      try {
+        stdout = execFileSync(fake.orcaPath, ["terminal", "send", badFlag, "h1", "--text", "hi", "--json"], { stdio: "pipe", encoding: "utf-8" });
+      } catch (error) {
+        status = error.status;
+        stdout = error.stdout ? String(error.stdout) : "";
+      }
+      assert.notEqual(status, 0, `terminal send ${badFlag} must exit non-zero`);
+      const body = JSON.parse(stdout);
+      assert.equal(body.ok, false);
+      assert.ok(body.error.includes(badFlag), `the error names the rejected flag ${badFlag}`);
+    }
+    // The real-CLI argv succeeds.
+    const okOut = execFileSync(fake.orcaPath, ["terminal", "send", "--terminal", "h1", "--text", "hi", "--enter", "--json"], { stdio: "pipe", encoding: "utf-8" });
+    assert.equal(JSON.parse(okOut).ok, true);
+  } finally {
+    fake.cleanup();
+  }
+});
+
 // ---------------------------------------------------------------------------
 // D4/D7 — dependency-ordered materialization + later-wave pending
 // ---------------------------------------------------------------------------
@@ -549,35 +591,83 @@ test("D4/D7: deps carry real Orca ids in dependency order; later-wave task stays
 });
 
 // ---------------------------------------------------------------------------
-// D5 — self-created terminals recorded; D7 — OPERATOR_DISPATCH_FAILED
+// D3 — explicit-handles-only: zero --operator-handle is rejected UPFRONT
 // ---------------------------------------------------------------------------
 
-test("D5: no explicit handle → run creates terminals and records them", () => {
+test("D3: run with zero --operator-handle → OPERATOR_DISPATCH_FAILED exit 44 before any mutation", () => {
   const r = runProgram("run-two-wave1.json", []);
   try {
-    assert.equal(r.status, 0);
-    assert.equal(r.body.terminals_created.length, 2);
-    r.body.tasks.forEach((task) => {
-      assert.equal(task.status, "dispatched");
-      assert.ok(r.body.terminals_created.includes(task.assignee));
-    });
+    assert.equal(r.status, REASONS.OPERATOR_DISPATCH_FAILED);
+    assertReportKeys(r.body);
+    assert.equal(r.body.ok, false);
+    assert.equal(r.body.blocking_reasons[0].reason_code, "OPERATOR_DISPATCH_FAILED");
+    // No task ever materialized or dispatched; terminals_created stays [].
+    r.body.tasks.forEach((task) => assert.equal(task.status, "pending"));
+    assert.deepEqual(r.body.terminals_created, []);
+    assert.equal(r.body.receipt_path, null, "nothing is materialized, so no receipt is written");
+    // The rejection is UPFRONT (after admission, before materialization): the fixture log
+    // carries NO task-create, NO dispatch, and NO terminal create.
+    assertNoMutations(r.fake);
+    // Remediation names creating an agent-backed terminal and re-running with a handle.
+    const remediation = r.body.blocking_reasons[0].remediation;
+    assert.match(remediation, /orca terminal create --command/);
+    assert.match(remediation, /--operator-handle/);
     assertNoPoison(r.fake);
   } finally {
     r.fake.cleanup();
   }
 });
 
-test("D7: terminal create yields no usable handle → OPERATOR_DISPATCH_FAILED exit 44", () => {
-  const r = runProgram("run-two-wave1.json", [], { terminalCreateEmptyHandle: true });
+test("D5.4: --inject to a handle with no recognized agent → escalated via INJECTION_UNDELIVERED (42), no prompt sent", () => {
+  const r = runProgram("valid-single-relay-run.json", ["--operator-handle", "h-noagent"], { injectNonAgentHandles: ["h-noagent"] });
   try {
-    assert.equal(r.status, REASONS.OPERATOR_DISPATCH_FAILED);
-    assert.equal(r.body.blocking_reasons[0].reason_code, "OPERATOR_DISPATCH_FAILED");
-    // No task ever became dispatched.
-    assert.equal(r.body.tasks.every((t) => t.status !== "dispatched"), true);
+    assert.equal(r.status, REASONS.INJECTION_UNDELIVERED);
+    assert.equal(r.body.blocking_reasons[0].reason_code, "INJECTION_UNDELIVERED");
+    assert.equal(taskByOutcome(r.body, "outcome-a").status, "escalated");
+    // Provenance was never verified, so no operator prompt is ever sent.
+    assert.equal(r.fake.readLog().join(" ").includes("terminal send"), false);
     assertNoPoison(r.fake);
   } finally {
     r.fake.cleanup();
   }
+});
+
+// ---------------------------------------------------------------------------
+// D2 — dispatch-show nested-provenance parsing (verbatim live payload)
+// ---------------------------------------------------------------------------
+
+test("D2: showDispatch parses the verbatim live nested payload and provenance verifies", () => {
+  const payload = {
+    ok: true,
+    result: {
+      dispatch: {
+        id: "ctx_4654f2173b94",
+        task_id: "task_5a43aa730015",
+        assignee_handle: "term_2bc82c69-815b-4c8d-b8a4-10193ac4e0f0",
+        status: "dispatched",
+        failure_count: 0,
+        dispatched_at: "2026-07-13 12:23:40",
+      },
+    },
+  };
+  const run = () => ({ status: 0, stdout: JSON.stringify(payload), stderr: "" });
+  const show = showDispatch(run, "orca", { orcaTaskId: "task_5a43aa730015" });
+  assert.equal(show.ok, true);
+  assert.equal(show.taskId, "task_5a43aa730015");
+  assert.equal(show.dispatchId, "ctx_4654f2173b94");
+  assert.equal(show.assignee, "term_2bc82c69-815b-4c8d-b8a4-10193ac4e0f0");
+  // The full provenance trio verifies against the dispatched task id.
+  assert.equal(provenanceMismatch(show, "task_5a43aa730015"), null);
+});
+
+test("D2: null/empty/mismatched values inside result.dispatch still fail closed (PROVENANCE_MISMATCH)", () => {
+  const shape = (dispatch) => showDispatch(() => ({ status: 0, stdout: JSON.stringify({ ok: true, result: { dispatch } }), stderr: "" }), "orca", { orcaTaskId: "task_x" });
+  // wrong nested task id
+  assert.ok(provenanceMismatch(shape({ id: "ctx_x", task_id: "task_WRONG", assignee_handle: "term_x" }), "task_x"));
+  // null nested assignee
+  assert.ok(provenanceMismatch(shape({ id: "ctx_x", task_id: "task_x", assignee_handle: null }), "task_x"));
+  // empty nested dispatch id
+  assert.ok(provenanceMismatch(shape({ id: "", task_id: "task_x", assignee_handle: "term_x" }), "task_x"));
 });
 
 // ---------------------------------------------------------------------------
@@ -772,28 +862,23 @@ test("A2: a prompt-delivery failure still leaves the receipt carrying the verifi
   }
 });
 
-test("A16: a dispatch failure right after an AUTO-created terminal leaves the on-disk receipt already carrying the handle", () => {
-  // No explicit --operator-handle → run auto-creates a terminal ("orca-term-1"), records
-  // it, and (A16) persists the receipt IMMEDIATELY — BEFORE the dispatch. The dispatch then
-  // fails (INJECTION_UNDELIVERED, exit 42) before any provenance-verification write could run.
-  // Without the immediate persist the mapping-changing writes only happen after dispatch-show,
-  // so the handle would be lost from disk; A16 makes the created terminal durable so a
-  // reconcile can adopt (not re-create) it.
-  const r = runProgram("valid-single-relay-run.json", [], { dispatchFailFor: "orca-live-outcome-a" });
+test("D3: a dispatch failure with an EXPLICIT handle escalates via the 42-path and never records a terminal", () => {
+  // Explicit --operator-handle h1; the dispatch --inject fails (INJECTION_UNDELIVERED, exit
+  // 42). run never self-creates a terminal, so terminals_created stays []. The verified
+  // provenance write only happens after dispatch-show, which is never reached here — but the
+  // receipt was already persisted after the successful task-create (A12).
+  const r = runProgram("valid-single-relay-run.json", ["--operator-handle", "h1"], { dispatchFailFor: "orca-live-outcome-a" });
   try {
     assert.equal(r.status, REASONS.INJECTION_UNDELIVERED);
     assert.equal(r.body.blocking_reasons[0].reason_code, "INJECTION_UNDELIVERED");
     assert.equal(taskByOutcome(r.body, "outcome-a").status, "escalated");
-    // The in-memory report is truthful about the auto-created terminal...
-    assert.deepEqual(r.body.terminals_created, ["orca-term-1"]);
-
-    // ...and so is the receipt ON DISK, written before the failing dispatch.
+    assert.deepEqual(r.body.terminals_created, [], "run never records a self-created terminal");
+    // The receipt exists (persisted after the successful task-create) but no terminal create ran.
     const receiptPath = receiptPathForWorld(r.world, "epic-demo-single");
-    assert.ok(fs.existsSync(receiptPath), "receipt persisted right after the terminal was created");
-    assert.equal(r.body.receipt_path, receiptPath, "the report echoes the persisted receipt path");
+    assert.ok(fs.existsSync(receiptPath), "receipt persisted after the materialize");
     const parsed = parseReceipt(fs.readFileSync(receiptPath, "utf-8"));
-    assert.equal(parsed.ok, true, `receipt must parse+validate: ${parsed.reason || ""}`);
-    assert.deepEqual(parsed.receipt.terminals_created, ["orca-term-1"], "the created terminal handle is durable despite the dispatch failure");
+    assert.deepEqual(parsed.receipt.terminals_created, [], "no terminal handle is ever recorded");
+    assert.equal(r.fake.readLog().join(" ").includes("terminal create"), false, "no terminal create is reachable from run");
     assertNoPoison(r.fake);
   } finally {
     r.fake.cleanup();

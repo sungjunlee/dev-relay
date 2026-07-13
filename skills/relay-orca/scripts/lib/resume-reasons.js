@@ -5,7 +5,7 @@
 // 40-44, status/receipt's 50-52, or Node's own fatal/exec codes (<=125). Existing
 // reason modules stay untouched. 64 is deliberately avoided (usage errors own it).
 //
-// These four are the ONLY conditions that make resumption unsafe. In any of them
+// These are the ONLY conditions that make resumption unsafe. In any of them
 // resume performs NO automatic mutation: it emits a `decision_required` report and
 // exits with the matching code. Receipt-layer failures re-use status's 50-52
 // verbatim (imported by resume.js); these decision codes are surfaced through the
@@ -17,6 +17,7 @@ const REASONS = Object.freeze({
   RESUME_AMBIGUOUS_STATE: 61, // foreign/unreachable runtime, or an unclassifiable outcome
   RESUME_CONFLICTING_MAPPING: 62, // duplicate or contradictory (changed) mappings
   RESUME_MISSING_PROVENANCE: 63, // a mapping's dispatch context/assignee is missing where a live dispatch exists
+  RESUME_NO_OPERATOR_HANDLE: 65, // an outcome needs (re)dispatch but no --operator-handle was provided (64 = usage)
 });
 
 // Bounded recovery options per decision code (D2). Each option names a concrete
@@ -43,6 +44,11 @@ const OPTIONS = Object.freeze({
     "Verify the live dispatch: `orca orchestration dispatch-show --task <orca_task_id> --json`.",
     "Restore the missing dispatch context/assignee in the receipt by hand before resuming.",
     "See references/recovery.md § RESUME_MISSING_PROVENANCE for the bounded manual steps.",
+  ],
+  RESUME_NO_OPERATOR_HANDLE: [
+    "Create an operator terminal running an agent CLI: `orca terminal create --command \"<agent-cli>\" --json`.",
+    "Re-run resume with the terminal handle: `node scripts/resume.js --program-id <id> --operator-handle <handle> --json`.",
+    "See references/recovery.md § RESUME_NO_OPERATOR_HANDLE for the bounded manual steps.",
   ],
 });
 

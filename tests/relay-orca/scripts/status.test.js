@@ -84,10 +84,12 @@ function manifestText(fields) {
 function orcaTask(programId, outcome, extra = {}) {
   return {
     id: `orca-live-${outcome}`,
-    // A26: run.js titles tasks with the collision-resistant program SEGMENT, not the raw
-    // id, so a healthy fixture task must carry the SAME segment for the foreign-task check
-    // (`title.includes("relay-orca: <segment>/")`) to attribute it to this program.
-    title: `relay-orca: ${programSegment(programId)}/${outcome}`,
+    // A26/D4: the real mid-2026 task-list row carries `task_title` (and `display_name`),
+    // NOT `title`. run.js titles tasks with the collision-resistant program SEGMENT, not
+    // the raw id, so a healthy fixture row must carry the SAME segment for the foreign-task
+    // check (resolved display string `.includes("relay-orca: <segment>/")`) to attribute it.
+    task_title: `relay-orca: ${programSegment(programId)}/${outcome}`,
+    display_name: `relay-orca: ${programSegment(programId)}/${outcome}`,
     status: extra.status || "dispatched",
     worker_done: extra.worker_done === true,
   };
@@ -472,7 +474,7 @@ test("D10.8: runtime restart → runtime mismatch, Orca facts degrade, durable-c
     ],
     orcaScenario: {
       runtimeId: otherRuntime, // live runtime restarted
-      tasks: [{ id: "foreign-1", title: "someone-else: other/thing", status: "dispatched", worker_done: false }],
+      tasks: [{ id: "foreign-1", task_title: "someone-else: other/thing", status: "dispatched", worker_done: false }],
     },
     ghScenario: {
       prs: { 80: { state: "MERGED", mergedAt: "2026-07-12T05:00:00Z" }, 81: { state: "OPEN" } },
@@ -505,6 +507,113 @@ test("D10.8: runtime restart → runtime mismatch, Orca facts degrade, durable-c
 });
 
 // ---------------------------------------------------------------------------
+// D4 — real task-list row shape (task_title, no title) + nested dispatch facts
+// ---------------------------------------------------------------------------
+
+test("D4.1: the verbatim live task_title row (no title key) attributes the runtime as OWNED, not foreign_state", () => {
+  const programId = "pilot-948";
+  // The exact live row captured on 2026-07-13 (Done Criteria D4): task_title carries the
+  // program marker; there is NO `title` key. Program `pilot-948` resolves to the same segment.
+  assert.equal(programSegment(programId), "pilot-948-92ff09e7");
+  const world = buildWorld({
+    programId,
+    manifests: [{ run_id: "run-g", state: "dispatched", pr_number: 990, issue_number: 9900 }],
+    orcaScenario: {
+      tasks: [
+        {
+          id: "task_5a43aa730015",
+          parent_id: null,
+          created_by_terminal_handle: "term_a18f2822-64ad-4825-9e43-a2135ca3a0ea",
+          task_title: "relay-orca: pilot-948-92ff09e7/gh-guard-990",
+          display_name: "relay-orca: pilot-948-92ff09e7/gh-guard-990",
+          status: "dispatched",
+          deps: "[]",
+          result: null,
+        },
+      ],
+    },
+    ghScenario: { prs: { 990: { state: "OPEN" } }, issues: { 9900: { state: "OPEN" } } },
+  });
+  const receipt = makeReceipt({
+    programId,
+    slug: world.slug,
+    root: fs.realpathSync(world.repoRoot),
+    tasks: [{ outcome_id: "gh-guard-990", orca_task_id: "task_5a43aa730015", run: "run-g" }],
+  });
+  fs.writeFileSync(world.receiptPath, `${JSON.stringify(receipt, null, 2)}\n`, "utf-8");
+  try {
+    const r = world.run();
+    assert.equal(r.status, 0);
+    assert.equal(r.body.runtime, "ok", "the markered real row attributes the runtime as owned");
+    assert.equal(diagCodes(r.body).includes("RUNTIME_MISMATCH"), false, "an owned runtime never fires RUNTIME_MISMATCH");
+    assert.equal(world.orca.readPoison(), null);
+  } finally {
+    world.cleanup();
+  }
+});
+
+test("D4.2: a real task_title row LACKING the program marker still forces foreign_state", () => {
+  const programId = "pilot-948";
+  const world = buildWorld({
+    programId,
+    orcaScenario: {
+      tasks: [{ id: "task_intruder", task_title: "relay-orca: someone-else-deadbeef/other", display_name: "relay-orca: someone-else-deadbeef/other", status: "dispatched" }],
+    },
+  });
+  const receipt = makeReceipt({ programId, slug: world.slug, root: fs.realpathSync(world.repoRoot), tasks: [{ outcome_id: "x" }] });
+  fs.writeFileSync(world.receiptPath, `${JSON.stringify(receipt, null, 2)}\n`, "utf-8");
+  try {
+    const r = world.run();
+    assert.equal(r.status, 0);
+    assert.equal(r.body.runtime, "foreign_state", "an unmarkered real row makes the runtime foreign");
+    assert.ok(diagCodes(r.body).includes("RUNTIME_MISMATCH"));
+    assert.equal(world.orca.readPoison(), null);
+  } finally {
+    world.cleanup();
+  }
+});
+
+test("D4.3: status derives provenance from the nested result.dispatch shape (present → no MISSING_*, terminal_present:false → MISSING_TERMINAL)", () => {
+  const programId = "epic-status-nested-dispatch";
+  const world = buildWorld({
+    programId,
+    manifests: [
+      { run_id: "run-ok", state: "dispatched", pr_number: 70, issue_number: 700 },
+      { run_id: "run-lost", state: "dispatched", pr_number: 71, issue_number: 701 },
+    ],
+    orcaScenario: {
+      tasks: [orcaTask(programId, "ok"), orcaTask(programId, "lost")],
+      // 'lost' outcome: dispatch present but the operator terminal is gone
+      // (nested terminal_present:false in the real result.dispatch shape).
+      dispatch: { "orca-live-lost": { terminal_present: false } },
+    },
+    ghScenario: { prs: { 70: { state: "OPEN" }, 71: { state: "OPEN" } }, issues: { 700: { state: "OPEN" }, 701: { state: "OPEN" } } },
+  });
+  const receipt = makeReceipt({
+    programId,
+    slug: world.slug,
+    root: fs.realpathSync(world.repoRoot),
+    tasks: [
+      { outcome_id: "ok", orca_task_id: "orca-live-ok", run: "run-ok" },
+      { outcome_id: "lost", orca_task_id: "orca-live-lost", run: "run-lost" },
+    ],
+  });
+  fs.writeFileSync(world.receiptPath, `${JSON.stringify(receipt, null, 2)}\n`, "utf-8");
+  try {
+    const r = world.run();
+    assert.equal(r.status, 0);
+    assert.equal(r.body.runtime, "ok");
+    // 'ok' outcome: full nested provenance present → no MISSING_* diagnostics forged.
+    assert.equal(diagCodes(r.body, "ok").some((c) => c.startsWith("MISSING_")), false, "nested provenance present yields no MISSING_* for ok");
+    // 'lost' outcome: nested terminal_present:false feeds MISSING_TERMINAL.
+    assert.ok(diagCodes(r.body, "lost").includes("MISSING_TERMINAL"), "nested terminal_present:false feeds MISSING_TERMINAL");
+    assert.equal(world.orca.readPoison(), null);
+  } finally {
+    world.cleanup();
+  }
+});
+
+// ---------------------------------------------------------------------------
 // A26 — the foreign-task marker embeds the collision-resistant program segment
 // ---------------------------------------------------------------------------
 
@@ -521,7 +630,7 @@ test("A26: program `alpha` does NOT adopt a task titled for `alpha/child` (disti
     programId,
     manifests: [{ run_id: "run-al", state: "dispatched", pr_number: 12, issue_number: 120 }],
     orcaScenario: {
-      tasks: [{ id: "orca-live-sib", title: `relay-orca: ${programSegment(siblingId)}/child-oc`, status: "dispatched", worker_done: false }],
+      tasks: [{ id: "orca-live-sib", task_title: `relay-orca: ${programSegment(siblingId)}/child-oc`, status: "dispatched", worker_done: false }],
     },
     ghScenario: { prs: { 12: { state: "OPEN" } }, issues: { 120: { state: "OPEN" } } },
   });
@@ -1368,7 +1477,7 @@ test("A13: status succeeds but carries no live runtime id → runtime unreachabl
     // status SUCCEEDS (ok:true) but carries NO runtimeId. A foreign task is present so a
     // TRUSTED runtime would have adopted Orca facts here — the A13 guard withholds them
     // instead of silently passing the mismatch check and trusting an unidentified runtime.
-    orcaScenario: { omitRuntimeId: true, tasks: [{ id: "foreign-x", title: "someone-else: other/thing", status: "dispatched" }] },
+    orcaScenario: { omitRuntimeId: true, tasks: [{ id: "foreign-x", task_title: "someone-else: other/thing", status: "dispatched" }] },
     ghScenario: { prs: { 320: { state: "OPEN" } }, issues: { 3200: { state: "OPEN" } } },
   });
   const receipt = makeReceipt({ programId, slug: world.slug, root: fs.realpathSync(world.repoRoot), tasks: [{ outcome_id: "nr", run: "run-nr" }] });

@@ -106,7 +106,7 @@ node "${RELAY_SKILL_ROOT:-skills}/relay-orca/scripts/run.js" \
 | `--program-file`, `-f` | Accepted-program JSON contract (required) — the SAME input as `plan`. A precompiled plan JSON is NOT accepted (prevents tampered-plan injection). May be passed positionally. |
 | `--json` | Emit the machine-readable run report as JSON on stdout. |
 | `--concurrency N` | Override the concurrency ceiling. Default 2, hard maximum 4 (rejected via the plan library). |
-| `--operator-handle <handle>` | Repeatable. An explicit operator terminal handle to dispatch to. With none, `run` creates its own terminals via `orca terminal create` and records them. |
+| `--operator-handle <handle>` | Repeatable. An explicit operator terminal handle to dispatch to — REQUIRED. `run` dispatches ONLY to handles provided here and never creates its own terminal (a self-created terminal has no recognized agent and cannot accept `--inject`). With zero handles, `run` fails closed with `OPERATOR_DISPATCH_FAILED` (44) before any mutation. Each handle must be a terminal already running an agent CLI (`orca terminal create --command "<agent-cli>" --json`). |
 | `--orca-bin <path>` | Explicit Orca CLI override — passed to the capability probe and used for all orchestration calls. |
 | `--resolve-decision <id>` | (#947) Write a resolved `decision:` record for `<id>` into the receipt's `decisions[]`. Requires `--resolution` and `--resolver`; provenance (question/options/downstream_wave) is sourced from the program's declared `decision_gates[<id>]`. Never automatic. |
 | `--resolution <text>` | The decision resolution (with `--resolve-decision`). |
@@ -155,7 +155,7 @@ Completion-driven wave advancement is #945/#947 scope.
 | `TASK_MATERIALIZE_FAILED` | 41 | An `orca orchestration task-create` failed; earlier tasks are left in place and listed. |
 | `INJECTION_UNDELIVERED` | 42 | An `orca orchestration dispatch --inject` failed (or the post-verification prompt hand-off failed). |
 | `PROVENANCE_MISMATCH` | 43 | `dispatch-show` returned a null/empty/mismatched task id, dispatch id, or assignee. |
-| `OPERATOR_DISPATCH_FAILED` | 44 | No valid operator target remained for an eligible task (terminal create yielded no usable handle). |
+| `OPERATOR_DISPATCH_FAILED` | 44 | No operator terminal was provided: `run` was invoked with zero `--operator-handle` (it never self-creates a terminal). Rejected upfront, before any mutation. |
 
 A `42`/`43` failure records the failing task `escalated`, dispatches no further pending task,
 and does not touch already-verified running operators (stop semantics are #946). Plan-library
@@ -255,7 +255,7 @@ node "${RELAY_SKILL_ROOT:-skills}/relay-orca/scripts/resume.js" \
 | --- | --- |
 | `--program-id`, `-p` | The accepted program's stable id (required). Resolves the receipt under the programs root. |
 | `--json` | Emit the machine-readable resume report as JSON on stdout. |
-| `--operator-handle <handle>` | Repeatable. An explicit operator terminal to re-dispatch/reacquire to. With none, `resume` creates its own terminals and records them; it never adopts a terminal it did not create or receive here. |
+| `--operator-handle <handle>` | Repeatable. An explicit operator terminal to re-dispatch/reacquire to. `resume` never creates its own terminal and never adopts one it did not receive here: if an outcome needs (re)dispatch and no handle is provided, `resume` fails closed with a `decision_required` report (`RESUME_NO_OPERATOR_HANDLE`, exit 65) and performs zero mutation. Each handle must already run an agent CLI. |
 | `--orca-bin <path>` | Explicit Orca CLI override for the reconciliation reads and the restoration mutations. |
 | `--gh-bin <path>` | Explicit `gh` CLI override (or env `RELAY_ORCA_GH_BIN`). |
 | `--repo-root <path>` | Explicit repo root for slug derivation (defaults to the git repo of the cwd). |

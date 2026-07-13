@@ -42,6 +42,10 @@ function defaultRunScenario(overrides = {}) {
     taskCreateFailFor: overrides.taskCreateFailFor || null, // outcome id whose task-create fails
     taskCreateFailMode: overrides.taskCreateFailMode || "ok_false", // ok_false | nonzero | empty_id
     dispatchFailFor: overrides.dispatchFailFor || null, // orca task id whose dispatch returns ok:false
+    // D5.4: handles NOT backed by a recognized agent — `dispatch --inject` to one hard-fails
+    // with the real "no recognized agent detected" error (a self-created terminal can never
+    // accept --inject). Empty by default so every provided operator handle is agent-backed.
+    injectNonAgentHandles: Array.isArray(overrides.injectNonAgentHandles) ? overrides.injectNonAgentHandles : [],
     provenanceOverride: overrides.provenanceOverride || null, // merged over dispatch-show result
     provenanceOverrideFor: overrides.provenanceOverrideFor || null, // limit override to one orca task id
     terminalCreateOkFalse: overrides.terminalCreateOkFalse || false,
@@ -50,7 +54,7 @@ function defaultRunScenario(overrides = {}) {
   };
 }
 
-function fakeOrcaRunScript({ scenarioPath, logPath, poisonPath, stateDir }) {
+function fakeOrcaRunScript({ scenarioPath, logPath, poisonPath, stateDir, sendsPath }) {
   return `#!/usr/bin/env node
 "use strict";
 const fs = require("fs");
@@ -60,9 +64,17 @@ const scenarioPath = ${JSON.stringify(scenarioPath)};
 const logPath = ${JSON.stringify(logPath)};
 const poisonPath = ${JSON.stringify(poisonPath)};
 const stateDir = ${JSON.stringify(stateDir)};
+const sendsPath = ${JSON.stringify(sendsPath)};
 
 function appendLog(line) { if (logPath) fs.appendFileSync(logPath, line + "\\n", "utf-8"); }
 appendLog(args.join(" "));
+// The real dispatch-show payload nests provenance under result.dispatch (D2/D5.2).
+function nestDispatch(flat) {
+  const dispatch = { id: flat.dispatch_id, task_id: flat.task_id, assignee_handle: flat.assignee, status: flat.status || "dispatched" };
+  const result = { dispatch: dispatch };
+  if (flat.terminal_present !== undefined) result.terminal_present = flat.terminal_present;
+  return result;
+}
 
 function loadScenario() { return JSON.parse(fs.readFileSync(scenarioPath, "utf-8")); }
 function writeJson(value) { process.stdout.write(JSON.stringify(value)); }
@@ -72,7 +84,6 @@ function emit(payload, exitCode, stdoutOverride) {
   process.exit(typeof exitCode === "number" ? exitCode : 0);
 }
 function argValue(flag) { const i = args.indexOf(flag); return i >= 0 ? args[i + 1] : undefined; }
-function drainStdin() { try { fs.readFileSync(0); } catch (e) { /* no stdin */ } }
 function stateFile(taskId) { return path.join(stateDir, "disp-" + String(taskId).replace(/[^a-zA-Z0-9._-]/g, "_") + ".json"); }
 
 // D2 poison: reset must never be invoked.
@@ -112,19 +123,26 @@ if (args[0] === "orchestration" && args[1] === "dispatch") {
   if (scenario.dispatchFailFor && scenario.dispatchFailFor === task) {
     emit({ ok: false, error: "dispatch inject undelivered" }, 0);
   }
-  const record = { task_id: task, dispatch_id: "disp-" + task, assignee: handle };
+  // D5.4: a handle with no recognized agent CLI cannot accept --inject. The real error
+  // is verbatim below; the task never gets a dispatch state, so run escalates via the
+  // existing INJECTION_UNDELIVERED (exit 42) path.
+  if (scenario.injectNonAgentHandles && scenario.injectNonAgentHandles.indexOf(handle) >= 0) {
+    process.stderr.write("Cannot dispatch --inject to terminal " + handle + ": no recognized agent detected. Start an agent CLI (e.g. claude, codex, gemini, droid) in the terminal first, or dispatch without --inject and send the prompt manually.\\n");
+    emit({ ok: false, error: "no recognized agent detected for terminal " + handle }, 0);
+  }
+  const record = { task_id: task, dispatch_id: "disp-" + task, assignee: handle, terminal_present: true };
   try { fs.writeFileSync(stateFile(task), JSON.stringify(record), "utf-8"); } catch (e) { /* ignore */ }
   emit({ id: "d-" + task, ok: true, result: { id: record.dispatch_id, dispatch_id: record.dispatch_id, assignee: handle }, _meta: { runtimeId: scenario.runtimeId } }, 0);
 }
 
 if (args[0] === "orchestration" && args[1] === "dispatch-show") {
   const task = argValue("--task");
-  let base = { task_id: task, dispatch_id: "disp-" + task, assignee: "assignee-" + task };
-  try { base = JSON.parse(fs.readFileSync(stateFile(task), "utf-8")); } catch (e) { /* no prior dispatch */ }
+  let base = { task_id: task, dispatch_id: "disp-" + task, assignee: "assignee-" + task, terminal_present: true };
+  try { base = Object.assign(base, JSON.parse(fs.readFileSync(stateFile(task), "utf-8"))); } catch (e) { /* no prior dispatch */ }
   if (scenario.provenanceOverride && (!scenario.provenanceOverrideFor || scenario.provenanceOverrideFor === task)) {
     Object.assign(base, scenario.provenanceOverride);
   }
-  emit({ id: "ds-" + task, ok: true, result: base, _meta: { runtimeId: scenario.runtimeId } }, 0);
+  emit({ id: "ds-" + task, ok: true, result: nestDispatch(base), _meta: { runtimeId: scenario.runtimeId } }, 0);
 }
 
 if (args[0] === "terminal" && args[1] === "create") {
@@ -139,7 +157,16 @@ if (args[0] === "terminal" && args[1] === "create") {
 }
 
 if (args[0] === "terminal" && args[1] === "send") {
-  drainStdin();
+  // Record every send's exact argv so a test can assert the D1 contract
+  // ["terminal","send","--terminal",<handle>,"--text",<prompt>,"--enter","--json"].
+  if (sendsPath) fs.appendFileSync(sendsPath, JSON.stringify(args) + "\\n", "utf-8");
+  // D1/D5.3 poison-pin: the real 'terminal send' has NO --to and NO --task flag. Either
+  // one hard-fails (non-zero exit, ok:false, error naming the flag).
+  if (args.indexOf("--to") >= 0 || args.indexOf("--task") >= 0) {
+    const badFlag = args.indexOf("--to") >= 0 ? "--to" : "--task";
+    process.stderr.write("terminal send: unrecognized flag " + badFlag + "\\n");
+    emit({ ok: false, error: "terminal send does not accept " + badFlag }, 2);
+  }
   if (scenario.terminalSendOkFalse) emit({ ok: false, error: "terminal send failed" }, 1);
   emit({ ok: true, result: { delivered: true } }, 0);
 }
@@ -156,10 +183,11 @@ function installFakeOrcaRun(scenarioOverrides = {}, options = {}) {
   const logPath = path.join(dir, "invocations.log");
   const poisonPath = path.join(dir, "poison.txt");
   const stateDir = path.join(dir, "state");
+  const sendsPath = path.join(dir, "sends.jsonl");
   fs.mkdirSync(stateDir, { recursive: true });
   const scenario = defaultRunScenario(scenarioOverrides);
   fs.writeFileSync(scenarioPath, JSON.stringify(scenario, null, 2), "utf-8");
-  fs.writeFileSync(orcaPath, fakeOrcaRunScript({ scenarioPath, logPath, poisonPath, stateDir }), "utf-8");
+  fs.writeFileSync(orcaPath, fakeOrcaRunScript({ scenarioPath, logPath, poisonPath, stateDir, sendsPath }), "utf-8");
   fs.chmodSync(orcaPath, 0o755);
 
   return {
@@ -169,6 +197,7 @@ function installFakeOrcaRun(scenarioOverrides = {}, options = {}) {
     logPath,
     poisonPath,
     stateDir,
+    sendsPath,
     scenario,
     restore() {
       /* PATH is never mutated: tests pass --orca-bin explicitly. */
@@ -176,6 +205,11 @@ function installFakeOrcaRun(scenarioOverrides = {}, options = {}) {
     readLog() {
       if (!fs.existsSync(logPath)) return [];
       return fs.readFileSync(logPath, "utf-8").split("\n").filter(Boolean);
+    },
+    // Each recorded `terminal send` invocation's exact argv array (D1 contract proof).
+    readSends() {
+      if (!fs.existsSync(sendsPath)) return [];
+      return fs.readFileSync(sendsPath, "utf-8").split("\n").filter(Boolean).map((line) => JSON.parse(line));
     },
     readPoison() {
       if (!fs.existsSync(poisonPath)) return null;
