@@ -237,7 +237,13 @@ async function launchDetachedReviewAndExit({ entryPath, args, options, jsonOut }
 // Module entry dispatcher. Parent side of --detach (no receipt env yet) launches a
 // detached supervisor and exits; otherwise (foreground or the detached child) run()
 // executes and, when a supervisor is active, writes the completion sentinel on settle.
-function dispatchReviewEntry({ options, args, entryPath, jsonOut, run, printFailureAndExit }) {
+function dispatchReviewEntry({ options, args, entryPath, jsonOut, preflight, run, printFailureAndExit }) {
+  try {
+    if (!process.env[DETACH_RECEIPT_ENV]) preflight?.();
+  } catch (error) {
+    printFailureAndExit(error, { jsonOut });
+    return;
+  }
   if (options.detach && !process.env[DETACH_RECEIPT_ENV]) {
     launchDetachedReviewAndExit({ entryPath, args, options, jsonOut }).catch((error) => {
       printFailureAndExit(error, { jsonOut });

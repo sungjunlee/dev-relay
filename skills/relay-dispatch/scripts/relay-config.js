@@ -32,6 +32,7 @@ const {
   resolutionMetadata,
 } = require("./model-resolver");
 const { catalogFreshnessReport } = require("./model-catalog");
+const { ADAPTER_PHASES, listAgentAdapterNames, supportsAgentAdapterPhase } = require("./agent-adapters");
 
 const args = process.argv.slice(2);
 const COMMAND_NAME = "relay-config";
@@ -383,6 +384,31 @@ function listDoctorRunAdvisories(repoRoot, options) {
   }
 }
 
+function isAdvisoryOnlyAdapter(name) {
+  if (!listAgentAdapterNames().includes(name)) return false;
+  return !supportsAgentAdapterPhase(name, ADAPTER_PHASES.PRIMARY_REVIEW)
+    && supportsAgentAdapterPhase(name, ADAPTER_PHASES.ADVISORY_REVIEW);
+}
+
+function primaryReviewerRouteEntries(policy) {
+  const entries = [];
+  if (policy.defaults.review?.reviewer) entries.push({ adapter: policy.defaults.review.reviewer, source: "defaults.review" });
+  for (const [index, route] of policy.allowed_model_routes.entries()) {
+    if (route.phases !== undefined && !route.phases.includes("review")) continue;
+    for (const adapter of route.reviewers || []) entries.push({ adapter, route: route.route, source: `routes[${index}]` });
+  }
+  for (const [name, preset] of Object.entries(policy.presets || {})) {
+    if (preset.review?.reviewer) entries.push({ adapter: preset.review.reviewer, source: `presets.${name}.review` });
+  }
+  return entries;
+}
+
+function listPrimaryReviewerRouteAdvisories(policy) {
+  return primaryReviewerRouteEntries(policy)
+    .filter(({ adapter }) => isAdvisoryOnlyAdapter(adapter))
+    .map((entry) => ({ kind: "advisory_only_primary_reviewer", ...entry }));
+}
+
 function commandDoctor(positionals, jsonOut) {
   if (positionals.length !== 1) {
     throw new Error("doctor does not accept positional arguments");
@@ -407,9 +433,10 @@ function commandDoctor(positionals, jsonOut) {
   const tools = toolNames.map((name) => doctorTool(result.policy, name));
   const projectConfig = loadProjectConfig({ repoRoot: process.cwd() });
   const projectRoutes = loadProjectRoutes({ repoRoot: process.cwd() });
-  const advisories = listDoctorRunAdvisories(process.cwd(), {
-    mutate: hasCliFlag("--reconcile"),
-  });
+  const advisories = [
+    ...listDoctorRunAdvisories(process.cwd(), { mutate: hasCliFlag("--reconcile") }),
+    ...listPrimaryReviewerRouteAdvisories(result.policy),
+  ];
   const output = {
     ok: true,
     status: result.status,
@@ -429,11 +456,15 @@ function commandDoctor(positionals, jsonOut) {
       console.log(`${tool.name}: ${installed}; ${displayToolRouteStatus(tool)} (${tool.reason})`);
     }
     for (const advisory of advisories) {
-      if (advisory.kind !== "dead_dispatched_run") continue;
-      console.log(
-        `advisory: run ${advisory.runId} is dispatched with ${advisory.leaseStatus} lease; ` +
-        `reconcile row ${advisory.reconcile?.row || "unknown"} (${advisory.reconcile?.rowName || "unknown"})`
-      );
+      if (advisory.kind === "dead_dispatched_run") {
+        console.log(
+          `advisory: run ${advisory.runId} is dispatched with ${advisory.leaseStatus} lease; ` +
+          `reconcile row ${advisory.reconcile?.row || "unknown"} (${advisory.reconcile?.rowName || "unknown"})`
+        );
+      }
+      if (advisory.kind === "advisory_only_primary_reviewer") {
+        console.log(`advisory: ${advisory.source} configures advisory-only adapter '${advisory.adapter}' for primary review`);
+      }
     }
   }
 }

@@ -22,6 +22,7 @@ const { applyVerdictToManifest } = require("./review-runner/manifest-apply");
 const { enforceRoundCap } = require("./review-runner/round-cap");
 const { passNextActionsFor, writeRoundArtifacts } = require("./review-runner/round-artifacts");
 const { maybeBlockForBehindBasePreflight, maybeBlockForExecutionEvidencePreflight } = require("./review-runner/preflight");
+const { preflightResolvedPrimaryReviewer } = require("./review-runner/entry-preflight");
 const { buildPrimaryReviewerPreflight, loadReviewText, loadRunRoutePlan, resolveReviewerName, resolveReviewerScript } = require("./review-runner/reviewer-invoke");
 const { maybeSwapReviewer } = require("./review-runner/reviewer-swap");
 const { appendAdvisoryRunsForTrigger, resolveAdvisoryConfig } = require("./review-runner/advisory-orchestration");
@@ -393,6 +394,6 @@ async function run() {
 }
 
 if (require.main === module) {
-  dispatchReviewEntry({ options, args, entryPath: __filename, jsonOut: cliArgs.hasFlag("--json"), run, printFailureAndExit });
+  dispatchReviewEntry({ options, args, entryPath: __filename, jsonOut: cliArgs.hasFlag("--json"), preflight: () => { assertKnownReviewRunnerFlags(args); preflightResolvedPrimaryReviewer(options); }, run, printFailureAndExit });
 }
 module.exports = { applyVerdictToManifest, buildCommentBody, buildPrompt, buildRedispatchPrompt, buildReviewRunnerRubricGateFailure, detectChurnGrowth, formatIssueList, formatPriorVerdictSummary, formatScopeDrift, getGhLogin, loadRubricFromRunDir, parseRemoteHost, parseReviewVerdict, parseScoreLog, resolveIssueNumber, resolveRemoteHost, validateReviewVerdict, validateScopeDrift };

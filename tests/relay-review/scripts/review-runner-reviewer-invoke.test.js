@@ -9,12 +9,13 @@ const { STATES, updateManifestState } = require("../../../skills/relay-dispatch/
 const { ensureRunLayout, getEventsPath } = require("../../../skills/relay-dispatch/scripts/manifest/paths");
 const { createManifestSkeleton, readManifest, writeManifest } = require("../../../skills/relay-dispatch/scripts/manifest/store");
 const { buildDefaultRelayPolicy } = require("../../../skills/relay-dispatch/scripts/relay-policy");
-const { ADAPTER_PHASES } = require("../../../skills/relay-dispatch/scripts/agent-adapters");
+const { ADAPTER_PHASES, listAgentAdapterNames, supportsAgentAdapterPhase } = require("../../../skills/relay-dispatch/scripts/agent-adapters");
 const {
   buildPrimaryReviewerPolicy,
   captureGitStatus,
   loadRunRoutePlan,
   loadReviewText,
+  preflightPrimaryReviewerCapability,
   resolveReviewerName,
   resolveReviewerScript,
 } = require("../../../skills/relay-review/scripts/review-runner/reviewer-invoke");
@@ -171,6 +172,18 @@ test("reviewer-invoke/resolveReviewerScript resolves built-in adapters and rejec
     /supports advisory_review but not primary_review/
   );
   assert.throws(() => resolveReviewerScript("../bad"), /Invalid reviewer name/);
+});
+
+test("reviewer-invoke primary capability error lists every capable registered adapter", () => {
+  const capable = listAgentAdapterNames()
+    .filter((name) => supportsAgentAdapterPhase(name, ADAPTER_PHASES.PRIMARY_REVIEW));
+  assert.throws(() => preflightPrimaryReviewerCapability("cline"), (error) => {
+    assert.match(error.message, /supports advisory_review but not primary_review/);
+    assert.match(error.message, /--advisory-reviewer cline/);
+    assert.match(error.message, /--reviewer-script for an operator override/);
+    assert.match(error.message, new RegExp(`Primary-review-capable adapters: ${capable.join(", ")}\\.`));
+    return true;
+  });
 });
 
 test("reviewer-invoke/resolveReviewerScript allows parity adapters for advisory review", () => {

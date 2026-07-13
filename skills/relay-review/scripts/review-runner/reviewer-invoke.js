@@ -62,6 +62,11 @@ function supportedAdapterPhases(reviewerName) {
     .filter((phase) => supportsAgentAdapterPhase(reviewerName, phase));
 }
 
+function adaptersSupportingPhase(phase) {
+  return listAgentAdapterNames()
+    .filter((name) => supportsAgentAdapterPhase(name, phase));
+}
+
 function formatUnsupportedReviewerPhaseError(reviewerName, phase) {
   const supported = supportedAdapterPhases(reviewerName);
   if (
@@ -71,7 +76,7 @@ function formatUnsupportedReviewerPhaseError(reviewerName, phase) {
     return (
       `Reviewer adapter '${reviewerName}' supports advisory_review but not primary_review; ` +
       `use --advisory-reviewer ${reviewerName} instead of --reviewer ${reviewerName} until primary review support is implemented. ` +
-      "Use --reviewer-script for an operator override."
+      `Use --reviewer-script for an operator override. Primary-review-capable adapters: ${adaptersSupportingPhase(phase).join(", ")}.`
     );
   }
   if (
@@ -87,6 +92,21 @@ function formatUnsupportedReviewerPhaseError(reviewerName, phase) {
     `Reviewer adapter '${reviewerName}' does not support ${phase}. ` +
     `Supported phases: ${supported.join(", ") || "(none)"}. Use --reviewer-script for an operator override.`
   );
+}
+
+function preflightPrimaryReviewerCapability(reviewerName) {
+  if (!listAgentAdapterNames().includes(reviewerName)) return;
+  if (supportsAgentAdapterPhase(reviewerName, ADAPTER_PHASES.PRIMARY_REVIEW)) return;
+  const message = formatUnsupportedReviewerPhaseError(reviewerName, ADAPTER_PHASES.PRIMARY_REVIEW);
+  throw new AdapterCapabilityError({
+    adapter: reviewerName,
+    phase: ADAPTER_PHASES.PRIMARY_REVIEW,
+    requested: { phase: ADAPTER_PHASES.PRIMARY_REVIEW },
+    safe: false,
+    supported_phases: supportedAdapterPhases(reviewerName),
+    fail_closed_reasons: [message],
+    warnings: [],
+  }, message);
 }
 
 function resolveReviewerScript(reviewerName, reviewerScriptArg, { phase = ADAPTER_PHASES.PRIMARY_REVIEW } = {}) {
@@ -414,6 +434,7 @@ module.exports = {
   buildPrimaryReviewerPolicy,
   buildPrimaryReviewerPreflight,
   buildReviewerPolicy,
+  preflightPrimaryReviewerCapability,
   resolveReviewerName,
   resolveReviewerModel,
   resolveReviewerScript,

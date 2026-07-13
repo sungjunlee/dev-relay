@@ -51,6 +51,10 @@ function readRoutes(relayHome) {
   return JSON.parse(fs.readFileSync(path.join(relayHome, "routes.json"), "utf-8"));
 }
 
+function writeRoutes(relayHome, routes) {
+  fs.writeFileSync(path.join(relayHome, "routes.json"), `${JSON.stringify(routes, null, 2)}\n`, "utf-8");
+}
+
 function writeFakeOpencode(binDir, models = []) {
   const opencodePath = path.join(binDir, "opencode");
   fs.writeFileSync(opencodePath, `#!/bin/sh
@@ -170,6 +174,43 @@ test("catalog-report passes through wrapper", () => {
   assert.equal(output.ok, true);
   assert.ok(output.catalog.summary.total > 0);
   assert.equal(output.catalog.summary.total, output.catalog.entries.length);
+});
+
+test("doctor warns when a review route names an advisory-only adapter", () => {
+  const relayHome = tempDir();
+  writeRoutes(relayHome, {
+    version: 2,
+    routes: [{ route: "cline-pass/*", phases: ["review"], reviewers: ["cline"] }],
+  });
+
+  const jsonResult = runConfig(["doctor", "--json"], { relayHome });
+  assert.equal(jsonResult.status, 0, jsonResult.combined);
+  const advisory = parseJson(jsonResult).advisories.find((entry) => entry.kind === "advisory_only_primary_reviewer");
+  assert.deepEqual(advisory, {
+    kind: "advisory_only_primary_reviewer",
+    adapter: "cline",
+    route: "cline-pass/*",
+    source: "routes[0]",
+  });
+
+  const humanResult = runConfig(["doctor"], { relayHome });
+  assert.equal(humanResult.status, 0, humanResult.combined);
+  assert.match(humanResult.stdout, /advisory: routes\[0\] configures advisory-only adapter 'cline' for primary review/);
+});
+
+test("doctor stays quiet when primary-review routes use capable adapters", () => {
+  const relayHome = tempDir();
+  writeRoutes(relayHome, {
+    version: 2,
+    routes: [{ route: "openai/*", phases: ["review"], reviewers: ["codex"] }],
+  });
+
+  const result = runConfig(["doctor", "--json"], { relayHome });
+  assert.equal(result.status, 0, result.combined);
+  assert.equal(
+    parseJson(result).advisories.some((entry) => entry.kind === "advisory_only_primary_reviewer"),
+    false
+  );
 });
 
 test("preset add resolves compact actor short-model and stores explicit route provenance", () => {
