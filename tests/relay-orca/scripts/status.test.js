@@ -107,8 +107,9 @@ function fleetManifestText(fields) {
     "  created_at: '2026-07-12T00:00:00.000Z'",
     "  updated_at: '2026-07-12T00:00:00.000Z'",
     "---",
-    "",
+    "# Notes",
   ];
+  if (fields.body) lines.push(fields.body);
   return `${lines.join("\n")}\n`;
 }
 
@@ -757,6 +758,73 @@ test("D10.11: duplicate mapping → DUPLICATE_MAPPING; unmapped manifest referen
     assert.ok(
       r.body.repair_candidates.some((c) => c.kind === "adopt_relay_run" && /run-orphan/.test(c.proposal)),
       "back-pointer discovery emits an adopt repair candidate (no mutation)",
+    );
+    assert.equal(world.orca.readPoison(), null);
+  } finally {
+    world.cleanup();
+  }
+});
+
+// A2 (#946 R2, owner amendment A2) — an unmapped FLEET manifest under the SEPARATE fleets
+// root referencing the program → adopt_relay_fleet repair candidate (mirrors the runs-root
+// back-pointer discovery so resume can block a duplicate fleet redispatch).
+test("A2: unmapped fleet manifest (fleets root) referencing the program → adopt_relay_fleet repair_candidate", () => {
+  const programId = "epic-status-fleet-orphan";
+  const world = buildWorld({
+    programId,
+    manifests: [
+      { run_id: "run-1", state: "dispatched", pr_number: 92, issue_number: 902 },
+      // an orphan FLEET manifest (lands under the fleets root via `fleet_state`) referencing
+      // this program but absent from the receipt's relay_ids.fleet mappings.
+      { run_id: "fleet-orphan", fleet_state: "dispatching", children: [], body: `relay-orca program ${programId} operator fleet` },
+    ],
+    orcaScenario: { tasks: [orcaTask(programId, "a")] },
+    ghScenario: { prs: { 92: { state: "OPEN" } }, issues: { 902: { state: "OPEN" } } },
+  });
+  const receipt = makeReceipt({
+    programId,
+    slug: world.slug,
+    root: fs.realpathSync(world.repoRoot),
+    tasks: [{ outcome_id: "a", orca_task_id: "orca-live-a", run: "run-1" }],
+  });
+  fs.writeFileSync(world.receiptPath, `${JSON.stringify(receipt, null, 2)}\n`, "utf-8");
+  try {
+    const r = world.run();
+    assert.equal(r.status, 0);
+    assert.ok(
+      r.body.repair_candidates.some((c) => c.kind === "adopt_relay_fleet" && /fleet-orphan/.test(c.proposal)),
+      "fleet back-pointer discovery emits an adopt_relay_fleet repair candidate (no mutation)",
+    );
+    assert.equal(world.orca.readPoison(), null);
+  } finally {
+    world.cleanup();
+  }
+});
+
+// A2 — a fleet manifest that IS mapped in relay_ids.fleet is NOT reported as unmapped
+// back-pointer work (the properly mapped variant is unaffected).
+test("A2: a fleet manifest mapped in relay_ids.fleet emits NO adopt_relay_fleet candidate", () => {
+  const programId = "epic-status-fleet-mapped";
+  const world = buildWorld({
+    programId,
+    manifests: [
+      { run_id: "fleet-mapped", fleet_state: "dispatching", children: [], body: `relay-orca program ${programId} operator fleet` },
+    ],
+    orcaScenario: { tasks: [orcaTask(programId, "fc")] },
+  });
+  const receipt = makeReceipt({
+    programId,
+    slug: world.slug,
+    root: fs.realpathSync(world.repoRoot),
+    tasks: [{ outcome_id: "fc", kind: "relay_fleet", orca_task_id: "orca-live-fc", fleet: "fleet-mapped" }],
+  });
+  fs.writeFileSync(world.receiptPath, `${JSON.stringify(receipt, null, 2)}\n`, "utf-8");
+  try {
+    const r = world.run();
+    assert.equal(r.status, 0);
+    assert.ok(
+      !r.body.repair_candidates.some((c) => c.kind === "adopt_relay_fleet"),
+      "a mapped fleet is never reported as unmapped fleet back-pointer work",
     );
     assert.equal(world.orca.readPoison(), null);
   } finally {

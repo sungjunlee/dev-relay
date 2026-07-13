@@ -171,13 +171,16 @@ function execPlan(task, type) {
 }
 
 // Program-level "unmapped relay work" signal (D3 no-duplicate-work): reconciliation
-// discovered a relay run manifest that references this program but is ABSENT from the
-// receipt mapping. It cannot be attributed to a specific outcome, so re-dispatching ANY
-// verifiably-absent outcome could duplicate that unmapped work — such outcomes are skipped
-// (left for a supervised reconcile) rather than re-dispatched. Reuse/reacquisition of
-// already-mapped outcomes is unaffected.
+// discovered a relay run manifest (runs root, `adopt_relay_run`) OR a relay fleet manifest
+// (fleets root #945 A8, `adopt_relay_fleet`, owner amendment A2) that references this program
+// but is ABSENT from the receipt mapping. Neither can be attributed to a specific outcome, so
+// re-dispatching ANY verifiably-absent outcome could duplicate that unmapped work — and
+// re-dispatching a relay_fleet outcome would duplicate the whole fleet (forbidden by the drain
+// invariant). Such outcomes are skipped (left for a supervised reconcile) rather than
+// re-dispatched. Reuse/reacquisition of already-mapped outcomes is unaffected.
+const UNMAPPED_WORK_KINDS = new Set(["adopt_relay_run", "adopt_relay_fleet"]);
 function hasUnmappedRelayWork(report) {
-  return (report.repair_candidates || []).some((candidate) => candidate.kind === "adopt_relay_run");
+  return (report.repair_candidates || []).some((candidate) => UNMAPPED_WORK_KINDS.has(candidate.kind));
 }
 
 // Classify ONE outcome into a safe action (only reached when NO program-level decision

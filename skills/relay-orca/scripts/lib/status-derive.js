@@ -292,6 +292,28 @@ function discoverBackPointers({ manifests, tasks, programId }) {
   return candidates;
 }
 
+// live→receipt FLEET back-pointer discovery (D7/A2): a fleet manifest under the SEPARATE
+// fleets root (#945 A8) that references this program but is absent from the receipt's
+// `relay_ids.fleet` mappings. Mirrors discoverBackPointers for the runs root, keyed off
+// `relay_ids.fleet` instead of `relay_ids.run` and scanning the fleets-root manifests. An
+// unmapped fleet cannot be attributed to a specific outcome, so resume must not re-dispatch
+// a relay_fleet outcome while it is present — that would duplicate the whole fleet (forbidden
+// by the drain invariant). Text only; NO mutation is performed.
+function discoverFleetBackPointers({ fleetManifests, tasks, programId }) {
+  const knownFleetIds = new Set(tasks.map((task) => task.relay_ids && task.relay_ids.fleet).filter(Boolean));
+  const candidates = [];
+  fleetManifests.forEach((entry) => {
+    if (!entry.run_id || knownFleetIds.has(entry.run_id)) return;
+    if (!referencesProgram(entry.text, programId)) return;
+    candidates.push({
+      kind: "adopt_relay_fleet",
+      outcome_id: null,
+      proposal: boundedExcerpt(`relay fleet ${entry.run_id} references program ${programId} but is absent from the receipt; reconcile it into the receipt mapping (no mutation performed)`),
+    });
+  });
+  return candidates;
+}
+
 function repairForOutcome(entry) {
   const repairs = [];
   entry.diagnostics.forEach((diagnostic) => {
@@ -348,6 +370,7 @@ function deriveStatusReport({ receipt, programId, receiptPath, manifests, fleetM
   const repairCandidates = [];
   entries.forEach((entry) => repairForOutcome(entry).forEach((repair) => repairCandidates.push(repair)));
   discoverBackPointers({ manifests, tasks: receipt.tasks, programId }).forEach((candidate) => repairCandidates.push(candidate));
+  discoverFleetBackPointers({ fleetManifests, tasks: receipt.tasks, programId }).forEach((candidate) => repairCandidates.push(candidate));
 
   const report = {
     ok: true,
@@ -363,4 +386,4 @@ function deriveStatusReport({ receipt, programId, receiptPath, manifests, fleetM
   return orderReport(report);
 }
 
-module.exports = { deriveStatusReport, attributeRuntime, detectDuplicateMappings, discoverBackPointers, summarizeLiveDispatch };
+module.exports = { deriveStatusReport, attributeRuntime, detectDuplicateMappings, discoverBackPointers, discoverFleetBackPointers, summarizeLiveDispatch };

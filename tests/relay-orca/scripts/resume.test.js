@@ -107,7 +107,7 @@ function initGitRepo(root) {
   git(["config", "user.name", "t"]);
 }
 
-function buildWorld({ programId, receipt, manifests = [], orcaScenario = {}, ghScenario = {}, runtimeId, corruptReceipt }) {
+function buildWorld({ programId, receipt, manifests = [], fleetManifests = [], orcaScenario = {}, ghScenario = {}, runtimeId, corruptReceipt }) {
   const base = fs.mkdtempSync(path.join(os.tmpdir(), "relay-orca-resume-"));
   const repoRoot = path.join(base, "repo");
   const programsRoot = path.join(base, "programs");
@@ -130,8 +130,11 @@ function buildWorld({ programId, receipt, manifests = [], orcaScenario = {}, ghS
 
   const runsDir = path.join(runsRoot, slug);
   fs.mkdirSync(runsDir, { recursive: true });
-  fs.mkdirSync(path.join(fleetsRoot, slug), { recursive: true });
+  const fleetsDir = path.join(fleetsRoot, slug);
+  fs.mkdirSync(fleetsDir, { recursive: true });
   manifests.forEach((fields) => fs.writeFileSync(path.join(runsDir, `${fields.run_id}.md`), manifestText(fields), "utf-8"));
+  // Fleet manifests live under the SEPARATE fleets root (#945 A8), keyed by fleet id.
+  fleetManifests.forEach((fields) => fs.writeFileSync(path.join(fleetsDir, `${fields.run_id}.md`), manifestText(fields), "utf-8"));
 
   const orca = installFakeOrcaResume({ runtimeId: runtimeId || DEFAULT_RUNTIME_ID, ...orcaScenario });
   const gh = installFakeGh(ghScenario);
@@ -456,6 +459,37 @@ test("D3: an absent outcome is NOT re-dispatched while unmapped relay work refer
     assert.equal(r.status, 0);
     assert.equal(actionFor(r.body, "b").action, "skipped", "absent outcome is skipped, not re-dispatched, to avoid duplicating unmapped relay work");
     assert.deepEqual(mutationLines(world.orca.readLog()), [], "no re-dispatch while unmapped relay work exists");
+    assert.equal(world.receiptOnDisk(), before);
+    assertNoPoison(world);
+  } finally {
+    world.cleanup();
+  }
+});
+
+// A2 (#946 R2, owner amendment A2): an unmapped FLEET manifest under the SEPARATE fleets
+// root blocks re-dispatch of an absent relay_fleet outcome — re-injecting would duplicate
+// the whole fleet (forbidden by the drain invariant), the same no-duplicate-work semantics
+// as the runs-root back-pointer above.
+test("A2: an absent relay_fleet outcome is NOT re-dispatched while an unmapped fleet manifest references the program", () => {
+  const programId = "epic-resume-fleet-backpointer";
+  const world = buildWorld({
+    programId,
+    // An unmapped fleet manifest under the fleets root that references this program.
+    fleetManifests: [{ run_id: "fleet-unmapped", state: "dispatched", pr_number: 50, issue_number: 500, body: `relay-orca program ${programId} operator fleet` }],
+    orcaScenario: { tasks: [orcaTask(programId, "b")], dispatch: absentDispatch("b") },
+  });
+  // Outcome b is a relay_fleet outcome, verifiably absent + relay clean (no fleet mapped in
+  // the receipt) + wave 1 — it would normally re-dispatch, but the unmapped fleet back-pointer
+  // means re-dispatch could duplicate the whole fleet.
+  const receipt = makeReceipt({ programId, slug: world.slug, root: fs.realpathSync(world.repoRoot), tasks: [{ outcome_id: "b", kind: "relay_fleet", dispatch_id: null, assignee: null }] });
+  fs.writeFileSync(world.receiptPath, serializeReceipt(receipt), "utf-8");
+  const before = world.receiptOnDisk();
+  try {
+    const r = world.run();
+    assert.equal(r.status, 0);
+    assert.equal(actionFor(r.body, "b").action, "skipped", "absent relay_fleet outcome is skipped, not re-dispatched, to avoid duplicating the unmapped fleet");
+    assert.deepEqual(mutationLines(world.orca.readLog()), [], "no re-dispatch while an unmapped fleet references the program");
+    assert.ok(!world.orca.readLog().some((l) => l.startsWith("orchestration dispatch --task")), "ZERO dispatch invocations for the fleet outcome");
     assert.equal(world.receiptOnDisk(), before);
     assertNoPoison(world);
   } finally {
