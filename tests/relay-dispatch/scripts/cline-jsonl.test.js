@@ -34,9 +34,51 @@ test("cline advisory extraction names invalid JSONL line number", () => {
   );
 });
 
-test("cline advisory extraction reports missing run_result with stderr tail", () => {
+test("cline advisory extraction falls back to text content_end when run_result is missing", () => {
   const stdout = [
     JSON.stringify({ type: "agent_event", event: { type: "content_end", contentType: "text", text: "{\"ok\":true}" } }),
+  ].join("\n");
+
+  assert.deepEqual(
+    extractClineAdvisoryCandidates(stdout, {
+      adapter: "cline",
+      phase: "advisory_review",
+      stderr: "session not found",
+    }),
+    ["{\"ok\":true}"]
+  );
+});
+
+test("cline advisory extraction falls back to plain advisory JSON stdout when run_result is missing", () => {
+  const advisoryJson = JSON.stringify({
+    schema_version: 1,
+    profile: "blindspot",
+    summary: "Survival issue-172 R5 shape: whole stdout is plain advisory JSON.",
+    required_findings: [
+      {
+        id: "finding-1",
+        severity: "high",
+        title: "Real finding",
+        detail: "Present in plain JSON stdout without a run_result envelope.",
+      },
+    ],
+    advisory_findings: [],
+    duplicate_or_low_confidence: [],
+  });
+
+  assert.deepEqual(
+    extractClineAdvisoryCandidates(advisoryJson, {
+      adapter: "cline",
+      phase: "advisory_review",
+    }),
+    [advisoryJson]
+  );
+});
+
+test("cline advisory extraction reports missing run_result with stderr tail when no fallback exists", () => {
+  const stdout = [
+    JSON.stringify({ type: "agent_event", event: { type: "content_end", contentType: "reasoning", text: "thinking only" } }),
+    JSON.stringify({ type: "agent_event", event: { type: "content_end", contentType: "tool", text: "tool only" } }),
   ].join("\n");
 
   assert.throws(
@@ -69,6 +111,25 @@ test("cline advisory extraction fails on non-completed finishReason without pars
       assert.ok(error.message.length < 520, "run_result.text preview should be bounded");
       return true;
     }
+  );
+});
+
+test("cline advisory extraction does not fall back past explicit non-completed finishReason", () => {
+  const stdout = [
+    JSON.stringify({ type: "agent_event", event: { type: "content_end", contentType: "text", text: "{\"ok\":true}" } }),
+    JSON.stringify({
+      type: "run_result",
+      finishReason: "error",
+      text: "explicit failure",
+    }),
+  ].join("\n");
+
+  assert.throws(
+    () => extractClineAdvisoryCandidates(stdout, {
+      adapter: "cline",
+      phase: "advisory_review",
+    }),
+    /finishReason "error"/
   );
 });
 

@@ -22,6 +22,26 @@ function previewText(value, maxLength) {
   return String(value || "").replace(/\s+/g, " ").trim().slice(0, maxLength);
 }
 
+/** Whole trimmed stdout that parses as one non-event JSON object (no JSONL `type` field). */
+function tryPlainJsonStdoutFallback(raw) {
+  const trimmed = String(raw || "").trim();
+  if (!trimmed) return null;
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (
+      parsed
+      && typeof parsed === "object"
+      && !Array.isArray(parsed)
+      && !Object.prototype.hasOwnProperty.call(parsed, "type")
+    ) {
+      return trimmed;
+    }
+  } catch {
+    // Not a single JSON object — leave fallback empty.
+  }
+  return null;
+}
+
 function extractClineAdvisoryCandidates(stdout, {
   adapter = "cline",
   phase = "advisory_review",
@@ -54,7 +74,18 @@ function extractClineAdvisoryCandidates(stdout, {
   }
 
   if (!runResultCount) {
-    throw new Error(`${context} Cline JSONL output did not include a run_result event (no run_result events found)${stderrTail(stderr)}`);
+    const fallbackCandidates = [];
+    if (typeof lastTextContentEnd === "string" && lastTextContentEnd.trim()) {
+      fallbackCandidates.push(lastTextContentEnd.trim());
+    }
+    const plainJsonStdout = tryPlainJsonStdoutFallback(raw);
+    if (plainJsonStdout && !fallbackCandidates.includes(plainJsonStdout)) {
+      fallbackCandidates.push(plainJsonStdout);
+    }
+    if (!fallbackCandidates.length) {
+      throw new Error(`${context} Cline JSONL output did not include a run_result event (no run_result events found)${stderrTail(stderr)}`);
+    }
+    return fallbackCandidates;
   }
 
   if (runResult?.finishReason !== "completed") {
