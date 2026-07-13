@@ -7,12 +7,25 @@
  * driven by a scenario JSON file pointed to by RELAY_FAKE_ORCA_SCENARIO.
  * Every invocation is appended to RELAY_FAKE_ORCA_LOG. Invoking `reset` writes
  * a poison marker and exits non-zero so tests hard-fail (D2).
+ *
+ * Contract fidelity (issue #1000): mirrors the real mid-2026 CLI rules that
+ * previously drifted — task-update accepts only the documented status enum, and
+ * dispatch --inject requires a live recognized-agent terminal handle.
  */
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 
 const DEFAULT_RUNTIME_ID = "00000000-0000-4000-8000-000000000001";
+const DEFAULT_LIVE_AGENT_HANDLE = "live-agent-terminal";
+const VALID_TASK_STATUSES = Object.freeze([
+  "pending",
+  "ready",
+  "dispatched",
+  "completed",
+  "failed",
+  "blocked",
+]);
 
 function readyStatus(runtimeId = DEFAULT_RUNTIME_ID) {
   return {
@@ -47,8 +60,12 @@ function emptyGateList(runtimeId = DEFAULT_RUNTIME_ID) {
 
 function defaultScenario(overrides = {}) {
   const runtimeId = overrides.runtimeId || DEFAULT_RUNTIME_ID;
+  const liveAgentHandles = Array.isArray(overrides.liveAgentHandles)
+    ? overrides.liveAgentHandles
+    : [DEFAULT_LIVE_AGENT_HANDLE];
   return {
     runtimeId,
+    liveAgentHandles,
     status: overrides.status !== undefined ? overrides.status : readyStatus(runtimeId),
     statusExit: overrides.statusExit !== undefined ? overrides.statusExit : 0,
     statusStdout: overrides.statusStdout,
@@ -69,6 +86,8 @@ function defaultScenario(overrides = {}) {
           _meta: { runtimeId },
         },
     taskCreateExit: overrides.taskCreateExit !== undefined ? overrides.taskCreateExit : 0,
+    // Default dispatch success payload; assignee is rewritten at runtime from --to
+    // so provenance matches the operator-supplied --smoke-to handle.
     dispatch: overrides.dispatch !== undefined
       ? overrides.dispatch
       : {
@@ -77,7 +96,7 @@ function defaultScenario(overrides = {}) {
           result: {
             id: "smoke-dispatch-1",
             dispatch_id: "smoke-dispatch-1",
-            assignee: "relay-orca-probe-smoke",
+            assignee: DEFAULT_LIVE_AGENT_HANDLE,
           },
           _meta: { runtimeId },
         },
@@ -87,7 +106,7 @@ function defaultScenario(overrides = {}) {
       : {
           id: "task-update-1",
           ok: true,
-          result: { id: "smoke-task-1", status: "cancelled" },
+          result: { id: "smoke-task-1", status: "failed" },
           _meta: { runtimeId },
         },
     taskUpdateExit: overrides.taskUpdateExit !== undefined ? overrides.taskUpdateExit : 0,
@@ -103,6 +122,7 @@ const args = process.argv.slice(2);
 const scenarioPath = ${JSON.stringify(scenarioPath)};
 const logPath = ${JSON.stringify(logPath)};
 const poisonPath = ${JSON.stringify(poisonPath)};
+const VALID_TASK_STATUSES = ${JSON.stringify([...VALID_TASK_STATUSES])};
 
 function appendLog(line) {
   if (logPath) fs.appendFileSync(logPath, line + "\\n", "utf-8");
@@ -126,6 +146,12 @@ function emit(payload, exitCode, stdoutOverride, stderrText) {
     writeJson(payload);
   }
   process.exit(typeof exitCode === "number" ? exitCode : 0);
+}
+
+function argValue(flag) {
+  const idx = args.indexOf(flag);
+  if (idx < 0 || idx + 1 >= args.length) return null;
+  return args[idx + 1];
 }
 
 // D2 poison: any reset invocation hard-fails the fixture (and thus the test).
@@ -163,10 +189,52 @@ if (args[0] === "orchestration" && args[1] === "task-create") {
 }
 
 if (args[0] === "orchestration" && args[1] === "dispatch") {
-  emit(scenario.dispatch, scenario.dispatchExit, scenario.dispatchStdout, scenario.dispatchStderr);
+  const handle = argValue("--to");
+  const inject = args.includes("--inject");
+  // Real CLI: --inject requires a live terminal with a recognized agent.
+  if (inject) {
+    const live = Array.isArray(scenario.liveAgentHandles) ? scenario.liveAgentHandles : [];
+    if (!handle || live.indexOf(handle) < 0) {
+      const label = handle || "(missing)";
+      process.stderr.write(
+        "Cannot dispatch --inject to terminal " + label +
+        ": no recognized agent detected. Start an agent CLI (e.g. claude, codex, gemini, droid) in the terminal first, or dispatch without --inject and send the prompt manually.\\n"
+      );
+      emit(
+        { ok: false, error: "no recognized agent detected for terminal " + label },
+        1,
+      );
+    }
+  }
+  // Honor scenario overrides (e.g. null assignee) after the live-agent gate.
+  // Only rewrite assignee from --to when the scenario already supplies a string
+  // assignee (happy-path default); explicit null/empty overrides stay intact.
+  let payload = scenario.dispatch;
+  if (
+    payload &&
+    typeof payload === "object" &&
+    payload.ok === true &&
+    handle &&
+    payload.result &&
+    typeof payload.result === "object" &&
+    typeof payload.result.assignee === "string"
+  ) {
+    payload = JSON.parse(JSON.stringify(payload));
+    payload.result.assignee = handle;
+  }
+  emit(payload, scenario.dispatchExit, scenario.dispatchStdout, scenario.dispatchStderr);
 }
 
 if (args[0] === "orchestration" && args[1] === "task-update") {
+  const status = argValue("--status");
+  // Real CLI Notes: Valid --status values: pending, ready, dispatched, completed, failed, blocked.
+  if (!status || VALID_TASK_STATUSES.indexOf(status) < 0) {
+    process.stderr.write(
+      "Invalid --status value: " + String(status) +
+      ". Valid --status values: " + VALID_TASK_STATUSES.join(", ") + ".\\n"
+    );
+    emit({ ok: false, error: "invalid task status: " + String(status) }, 1);
+  }
   emit(scenario.taskUpdate, scenario.taskUpdateExit, scenario.taskUpdateStdout, scenario.taskUpdateStderr);
 }
 
@@ -227,6 +295,8 @@ function installFakeOrca(scenarioOverrides = {}, options = {}) {
 
 module.exports = {
   DEFAULT_RUNTIME_ID,
+  DEFAULT_LIVE_AGENT_HANDLE,
+  VALID_TASK_STATUSES,
   readyStatus,
   emptyTaskList,
   emptyGateList,

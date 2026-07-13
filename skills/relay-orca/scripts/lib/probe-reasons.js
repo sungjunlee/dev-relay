@@ -25,13 +25,13 @@ const REMEDIATION = {
   MALFORMED_OUTPUT:
     "Upgrade or reinstall Orca so status/orchestration --json responses match the mid-2026 CLI shape.",
   EXISTING_ORCHESTRATION_STATE:
-    "Clear or finish the existing Orca tasks/gates manually (never via automated reset), then re-probe.",
+    "Finish or clear active (non-terminal) Orca tasks/gates manually. Historical completed/failed tasks are ignored by admission. When appropriate, scoped `orca orchestration reset --tasks` is a manual between-programs operator step; relay-orca never invokes reset automatically.",
   AMBIGUOUS_GLOBAL_STATE:
-    "Inspect orca status and orchestration list outputs for inconsistent runtime IDs or counts; resolve manually.",
+    "Inspect orca status and orchestration list outputs for inconsistent runtime IDs, counts, or unknown task statuses; resolve manually.",
   SMOKE_FAILED:
-    "Fix task-create/dispatch --inject so they return non-empty task, dispatch, and assignee IDs.",
+    "Fix task-create/dispatch --inject so they return non-empty task, dispatch, and assignee IDs matching --smoke-to. Pass a live recognized-agent terminal via --smoke-to.",
   SMOKE_CLEANUP_FAILED:
-    "Terminalize leftover smoke-created task IDs named in the message; do not run orchestration reset.",
+    "Terminalize leftover smoke-created task IDs named in the message with a real status (e.g. failed); do not run orchestration reset.",
 };
 
 class ProbeError extends Error {

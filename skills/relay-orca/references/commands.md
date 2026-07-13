@@ -58,20 +58,24 @@ unknown flags exit `64` (usage).
 
 ```bash
 node "${RELAY_SKILL_ROOT:-skills}/relay-orca/scripts/probe-orca.js" \
-  [--json] [--smoke] [--orca-bin <path>]
+  [--json] [--smoke --smoke-to <handle>] [--orca-bin <path>]
 ```
 
 | Flag | Meaning |
 | --- | --- |
 | `--json` | Emit the D8 admission envelope as JSON on stdout. |
-| `--smoke` | After default checks pass, run a self-cleaning synthetic injection smoke. |
+| `--smoke` | After default checks pass, run a self-cleaning synthetic injection smoke. Requires `--smoke-to`. |
+| `--smoke-to <handle>` | Live Orca terminal handle already running a recognized agent CLI. Required with `--smoke`; the smoke path dispatches `--inject` to this handle and verifies assignee provenance against it. Bare `--smoke` fails fast (exit 64) before creating smoke task state. |
 | `--orca-bin <path>` | Explicit Orca CLI override (wins over PATH and the macOS bundle fallback). |
 | `--help`, `-h` | Print usage. |
 
 Default mode is **READ-ONLY**: it spawns only `orca status --json`,
 `orca orchestration task-list --json`, and `orca orchestration gate-list --json`. It never
-invokes `orca orchestration reset`. Full rationale, check order, smoke semantics, and the
-reason-code table: [capability-probe.md](capability-probe.md).
+invokes `orca orchestration reset`. Admission ignores historical `completed`/`failed` tasks
+and blocks only active task states (`pending`/`ready`/`dispatched`/`blocked`) plus any live
+gates. Smoke cleanup uses `--status failed` (a real CLI terminal status). Full rationale,
+check order, smoke semantics, terminal-task filtering, and the reason-code table:
+[capability-probe.md](capability-probe.md).
 
 ### Probe rejection matrix
 
@@ -81,12 +85,14 @@ reason-code table: [capability-probe.md](capability-probe.md).
 | `RUNTIME_NOT_READY` | 31 | Well-formed `status` fails a readiness conjunct |
 | `ORCHESTRATION_UNAVAILABLE` | 32 | Orchestration absent, disabled, or `ok:false` |
 | `MALFORMED_OUTPUT` | 33 | Unparseable or shape-invalid JSON |
-| `EXISTING_ORCHESTRATION_STATE` | 34 | Task or gate count `> 0` (never adopted) |
-| `AMBIGUOUS_GLOBAL_STATE` | 35 | Non-integer count, a count that disagrees with its own array length, or `_meta.runtimeId` mismatch |
-| `SMOKE_FAILED` | 36 | Smoke provenance (task/dispatch/assignee) failed |
+| `EXISTING_ORCHESTRATION_STATE` | 34 | Active task count or gate count `> 0` (never adopted) |
+| `AMBIGUOUS_GLOBAL_STATE` | 35 | Non-integer count, a count that disagrees with its own array length, unknown/missing task status, or `_meta.runtimeId` mismatch |
+| `SMOKE_FAILED` | 36 | Smoke provenance (task/dispatch/assignee vs `--smoke-to`) failed |
 | `SMOKE_CLEANUP_FAILED` | 37 | Smoke cleanup of self-created state failed |
 
-Usage errors exit `64`.
+Usage errors (including bare `--smoke` without `--smoke-to`) exit `64`. When provenance and
+cleanup both fail, `blocking_reasons` retains both `SMOKE_FAILED` and `SMOKE_CLEANUP_FAILED`
+(exit `36`).
 
 Every Orca invocation carries a finite timeout (default 10000 ms), so a hung CLI
 still classifies through the matrix above and emits the JSON envelope instead of
