@@ -60,7 +60,7 @@ Ten states with enforced transitions (`skills/relay-dispatch/scripts/manifest/li
          │                     │        │
          ↓ (re-dispatch)       │        ↓
     dispatched                 │   ┌────────┐
-                               │   │ merged  │
+                               │   │ merged  │←── escalated (already-merged recovery)
                                │   └─────────┘
                                ↓
                          ┌───────────────┐
@@ -73,6 +73,8 @@ Ten states with enforced transitions (`skills/relay-dispatch/scripts/manifest/li
 `internal_review_pending` is the pre-publication review gate over the retained worktree diff. A passing internal review advances to `publish_pending`, never `ready_to_merge`. `publish_pending` is the only state where `publish-run.js` may push/open the PR and stamp `git.pr_number`; successful publication advances to `review_pending`, while publish preflight or push/PR failures advance to `escalated`.
 
 `review_pending` is the post-publication review gate. It reviews the PR diff plus CI/actions, GitHub review, and PR comment signals. A passing post-publication review advances to `ready_to_merge`.
+
+An `escalated` run may transition directly to `merged` only during already-merged recovery: GitHub must report the PR as MERGED and the fresh review gate must pass for the merged head.
 
 Terminal states: `merged`, `closed`. Once entered, no further transitions. `merge_blocked` is non-terminal: Phase 3 fleet merge queues use it to preserve a failed merge attempt without forcing an invalid review-cycle transition.
 
