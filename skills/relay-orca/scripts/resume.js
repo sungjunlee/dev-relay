@@ -26,7 +26,8 @@ const {
   writeReceiptAtomic,
   programSegment,
 } = require("./receipt-io");
-const { parseReceipt, serializeReceiptWithStop } = require("./lib/receipt");
+const { parseReceipt, serializeReceiptWithRecords } = require("./lib/receipt");
+const { applyOperatorRecords } = require("./lib/operator-records");
 const { boundedExcerpt } = require("./lib/bounded-excerpt");
 const { parseManifest } = require("./lib/manifest-parse");
 const { deriveStatusReport } = require("./lib/status-derive");
@@ -60,18 +61,46 @@ function requireValue(value, flag) {
 }
 
 function parseArgs(argv) {
-  const opts = { programId: null, json: false, operatorHandles: [], orcaBin: null, ghBin: null, repoRoot: null, help: false };
+  const opts = {
+    programId: null,
+    json: false,
+    operatorHandles: [],
+    orcaBin: null,
+    ghBin: null,
+    repoRoot: null,
+    help: false,
+    // #947 additive operator-record flags (D4/D5) — a decision/authorization record is
+    // written into the receipt ONLY when its explicit flag is present, never automatically.
+    // `--program-file` is OPTIONAL and sources the decision-gate provenance
+    // (question/options/downstream_wave) when resolving a decision from resume.
+    resolveDecision: null,
+    resolution: null,
+    resolver: null,
+    recordAuthorization: null,
+    authorizer: null,
+    programFile: null,
+  };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === "--program-id" || arg === "-p") opts.programId = requireValue(argv[(i += 1)], "--program-id");
     else if (arg === "--json") opts.json = true;
     else if (arg === "--operator-handle") opts.operatorHandles.push(requireValue(argv[(i += 1)], "--operator-handle"));
+    else if (arg === "--resolve-decision") opts.resolveDecision = requireValue(argv[(i += 1)], "--resolve-decision");
+    else if (arg === "--resolution") opts.resolution = requireValue(argv[(i += 1)], "--resolution");
+    else if (arg === "--resolver") opts.resolver = requireValue(argv[(i += 1)], "--resolver");
+    else if (arg === "--record-authorization") opts.recordAuthorization = requireValue(argv[(i += 1)], "--record-authorization");
+    else if (arg === "--authorizer") opts.authorizer = requireValue(argv[(i += 1)], "--authorizer");
+    else if (arg === "--program-file") opts.programFile = requireValue(argv[(i += 1)], "--program-file");
     else if (arg === "--orca-bin") opts.orcaBin = requireValue(argv[(i += 1)], "--orca-bin");
     else if (arg === "--gh-bin") opts.ghBin = requireValue(argv[(i += 1)], "--gh-bin");
     else if (arg === "--repo-root") opts.repoRoot = requireValue(argv[(i += 1)], "--repo-root");
     else if (arg === "--help" || arg === "-h") opts.help = true;
     else usageError(`unrecognized argument: ${arg}`);
   }
+  if (opts.resolveDecision && (!opts.resolution || !opts.resolver)) {
+    usageError("--resolve-decision requires --resolution and --resolver");
+  }
+  if (opts.recordAuthorization && !opts.authorizer) usageError("--record-authorization requires --authorizer");
   return opts;
 }
 
@@ -190,9 +219,44 @@ function reconcile({ receipt, opts, repo, receiptPath }) {
 function makeReceiptPersistor(receipt, receiptPath) {
   return function persist() {
     receipt.updated_at = new Date().toISOString();
-    writeReceiptAtomic(receiptPath, serializeReceiptWithStop(receipt));
+    // serializeReceiptWithRecords preserves the optional stop record AND the #947 additive
+    // records (follow_ups/decisions/authorizations); with none present it is byte-identical
+    // to serializeReceiptWithStop, so existing resume receipt assertions are unchanged.
+    writeReceiptAtomic(receiptPath, serializeReceiptWithRecords(receipt));
     return receiptPath;
   };
+}
+
+// Source a decision-gate definition (question/options/downstream_wave provenance) from an
+// OPTIONAL --program-file so a resume-written decision record carries full provenance.
+function decisionGateDefFromFile(programFile, decisionId) {
+  if (!programFile) return null;
+  try {
+    const parsed = JSON.parse(fs.readFileSync(programFile, "utf-8"));
+    const prog = parsed && parsed.program && typeof parsed.program === "object" ? parsed.program : parsed;
+    const gates = prog && Array.isArray(prog.decision_gates) ? prog.decision_gates : [];
+    return gates.find((gate) => gate && gate.id === decisionId) || null;
+  } catch {
+    return null;
+  }
+}
+
+// #947 D4/D5: write an operator decision/authorization record into the live receipt when
+// the explicit flag is present, BEFORE reconciliation, so the record persists even if
+// resume later fails closed on unsafe runtime state. Flagless resume writes NOTHING here,
+// preserving the existing byte-identity-on-abort invariant.
+function recordOperatorDecisions(receipt, receiptPath, opts) {
+  if (!opts.resolveDecision && !opts.recordAuthorization) return false;
+  const nowIso = new Date().toISOString();
+  applyOperatorRecords(receipt, {
+    decision: opts.resolveDecision
+      ? { id: opts.resolveDecision, resolution: opts.resolution, resolver: opts.resolver, resolvedAt: nowIso, gateDef: decisionGateDefFromFile(opts.programFile, opts.resolveDecision) }
+      : null,
+    authorization: opts.recordAuthorization ? { id: opts.recordAuthorization, authorizer: opts.authorizer } : null,
+  });
+  receipt.updated_at = nowIso;
+  writeReceiptAtomic(receiptPath, serializeReceiptWithRecords(receipt));
+  return true;
 }
 
 // Synthesize the operator prompt inputs from the receipt alone (resume starts from the
@@ -324,6 +388,9 @@ function main() {
     if (receipt.repo && receipt.repo.slug !== repo.slug) {
       rejectReceipt("RECEIPT_REPO_MISMATCH", `receipt repo.slug ${receipt.repo.slug} does not match the current repo slug ${repo.slug}`);
     }
+    // #947: an explicit --resolve-decision / --record-authorization writes its record to the
+    // receipt up front, so the decision persists regardless of the reconciliation verdict.
+    recordOperatorDecisions(receipt, receiptPath, opts);
     ({ report, liveDispatch } = reconcile({ receipt, opts, repo, receiptPath }));
   } catch (error) {
     if (error instanceof StatusError || error instanceof CanonicalizationError) failReceipt(error, opts.json);

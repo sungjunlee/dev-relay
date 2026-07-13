@@ -51,6 +51,26 @@ const RELAY_ID_KEYS = Object.freeze(["request", "run", "fleet"]);
 const STOP_KEYS = Object.freeze(["stopped_at", "stop_reason"]);
 const STOP_REASON_MAX = 256;
 
+// #947 additive record fields — appended ONLY when present, AFTER the canonical
+// RECEIPT_KEYS block and the optional stop record. They are NOT part of RECEIPT_KEYS, so a
+// receipt that never carried them serializes byte-identically to before (existing
+// #944/#945/#946 receipts and their assertions are unchanged). validateReceipt ignores
+// extra keys, so a receipt carrying them still loads for status/resume. Each is written
+// only at a pinned run/resume/flag point:
+//   - follow_ups     : proposed follow-ups, written ONLY by `status --gates --record-proposals`
+//   - decisions      : decision records, written ONLY via the run/resume --resolve-decision flag
+//   - authorizations : authorization records, written ONLY via the run/resume --record-authorization flag
+//   - counters       : optional explicit budget counters (otherwise derived from the mapping)
+const ADDITIVE_RECORD_KEYS = Object.freeze(["follow_ups", "decisions", "authorizations", "counters"]);
+
+// An additive record field is "present" (worth serializing) when it is a non-empty array
+// or a non-empty object. Absent/empty → skipped, preserving byte-identity with a receipt
+// that never carried it.
+function additivePresent(value) {
+  if (Array.isArray(value)) return value.length > 0;
+  return Boolean(value && typeof value === "object" && Object.keys(value).length > 0);
+}
+
 function boundStopReason(value) {
   if (typeof value !== "string" || value === "") return "";
   return value.length <= STOP_REASON_MAX ? value : value.slice(0, STOP_REASON_MAX);
@@ -135,6 +155,23 @@ function serializeReceiptWithStop(receipt) {
   return `${JSON.stringify(ordered, null, 2)}\n`;
 }
 
+// #947: serialize a receipt that MAY carry a bounded stop record AND/OR the additive
+// #947 record fields. Both blocks are appended AFTER the canonical RECEIPT_KEYS block and
+// ONLY when present, so a receipt carrying neither serializes byte-identically to
+// serializeReceipt (and one carrying only a stop record serializes byte-identically to
+// serializeReceiptWithStop). This keeps every existing receipt assertion intact while
+// letting the pinned run/resume/status write points persist their additive records.
+function serializeReceiptWithRecords(receipt) {
+  const ordered = orderReceipt(receipt);
+  STOP_KEYS.forEach((key) => {
+    if (receipt[key] !== undefined) ordered[key] = receipt[key];
+  });
+  ADDITIVE_RECORD_KEYS.forEach((key) => {
+    if (additivePresent(receipt[key])) ordered[key] = receipt[key];
+  });
+  return `${JSON.stringify(ordered, null, 2)}\n`;
+}
+
 function validateTask(task) {
   if (!task || typeof task !== "object") return "a task entry is not an object";
   for (const key of TASK_KEYS) {
@@ -189,12 +226,15 @@ module.exports = {
   RELAY_ID_KEYS,
   STOP_KEYS,
   STOP_REASON_MAX,
+  ADDITIVE_RECORD_KEYS,
   boundStopReason,
+  additivePresent,
   buildReceiptMapping,
   receiptTaskEntry,
   orderReceipt,
   serializeReceipt,
   serializeReceiptWithStop,
+  serializeReceiptWithRecords,
   validateReceipt,
   parseReceipt,
 };

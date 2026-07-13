@@ -1,0 +1,28 @@
+{
+  "program": {
+    "id": "epic-followup-later-wave",
+    "source": "file:///tmp/epic-followup.md",
+    "repo": "example/repo",
+    "tracker": "github",
+    "concurrency": 2,
+    "exit_gates": ["integration:e2e-suite", "tracker:milestone-clean"],
+    "outcomes": [
+      {
+        "id": "base-widget",
+        "issue": 7001,
+        "task_kind": "relay_run",
+        "accepted_outcomes": ["base widget merged"],
+        "depends_on": [],
+        "wave": 1
+      },
+      {
+        "id": "followup-hardening",
+        "issue": 7002,
+        "task_kind": "relay_run",
+        "accepted_outcomes": ["hardening merged"],
+        "depends_on": ["base-widget"],
+        "wave": 2
+      }
+    ]
+  }
+}

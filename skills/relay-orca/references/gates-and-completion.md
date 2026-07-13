@@ -1,0 +1,151 @@
+# Exit gates, follow-up waves, and evidence-backed completion (#947)
+
+Two READ-ONLY `status` modes layer program-level assurance on the #945 reconciliation.
+`status --gates` evaluates the accepted program's exit gates; `status --final-summary`
+declares evidence-backed program completion. Both land INSIDE the existing five intents —
+there is no new intent and no new top-level entry point. Follow-up acceptance flows through
+the existing `plan`/`run` on an operator-extended program JSON; decision/authorization
+records are additive receipt fields written only via explicit operator flags on
+`run`/`resume`.
+
+## Exit gates are input artifacts
+
+Exit gates come ONLY from the accepted program's `exit_gates` array (already required by
+the frozen plan compiler). `status --gates` evaluates each gate **verbatim** — no code path
+invents, renames, drops, or weakens a gate, and the gates listed in every report are
+byte-equal to the program file's entries. Because the gates are input, `status --gates`
+requires `--program-file <accepted-program.json>`; its program id must match the receipt's
+program id.
+
+## Gate kinds (pinned `kind:` prefix convention)
+
+Each gate is keyed by a pinned, verbatim prefix on the gate string:
+
+| Prefix | Meaning | Evidence source |
+| --- | --- | --- |
+| `integration:<check>` | a named check / evidence artifact must pass **live** | a live evidence artifact under `--gate-evidence-dir` (`<check>.json` → `{ "passed": true/false }`); never task/worker status |
+| `advisory:<ref>` | advisory evidence posted + blocking findings triaged (reuses the #945 advisory contract) | the reconciled `advisory_review` outcomes |
+| `tracker:<ref>` | tracker reconciliation clean for the program's issues | no reopened issue / duplicate-or-lost mapping / unreconciled back-pointer in the reconciliation |
+| `decision:<id>` | an explicit, resolved user decision record exists | the receipt's `decisions[]` (six provenance keys) |
+| `budget:<counter> <= <int>` | a numeric ceiling on a receipt-recorded counter | derived counters (`tasks_created`, `dispatches_performed`, `waves_dispatched`) |
+| `authorization:<id>` | an explicit authorization record exists | the receipt's `authorizations[]` |
+
+A gate string **without a recognized prefix evaluates as `unevaluable`** — NEVER as passed
+(fail closed) — with a diagnostic naming it. A `budget:` ref that does not parse, or names
+an unknown counter, is likewise `unevaluable`.
+
+Gate states (verbatim enum): `passed`, `failed`, `not_yet_evaluable`, `awaiting_decision`,
+`unevaluable`.
+
+## Evaluation ordering and the masking rule
+
+- **Prerequisite (ordering).** Exit gates evaluate ONLY after **every** accepted outcome
+  reconciles `complete_with_evidence` via the #945 classifier. Before that, every gate
+  reports `not_yet_evaluable` with the blocking outcomes listed in `blocking_reasons`.
+- **Masking rule.** A failing integration gate can NEVER be masked by Orca task completion.
+  Gate results derive **exclusively** from live evidence (checks, artifacts, tracker,
+  decision/authorization records, receipt counters) — never from task or `worker_done`
+  status. Even with every Orca task completed and every outcome durably complete, a failing
+  integration gate keeps the program NOT complete and the gate `failed`.
+
+## Decision records preserve full provenance
+
+A `decision:` gate resolves ONLY against a decision record carrying ALL of (verbatim keys):
+`question`, `options` (array), `resolution`, `resolver`, `resolved_at`, `downstream_wave`
+(int|null). Records live in the receipt under `decisions`. `run`/`resume` write a decision
+record ONLY from an explicit operator flag — never automatically:
+
+```bash
+run.js --program-file <program.json> --resolve-decision <id> --resolution "<text>" --resolver "<handle>"
+resume.js --program-id <id> --program-file <program.json> --resolve-decision <id> --resolution "<text>" --resolver "<handle>"
+```
+
+The `question`/`options`/`downstream_wave` provenance is sourced from the program's declared
+`decision_gates[<id>]`; `resolution`/`resolver` come from the flags; `resolved_at` is
+stamped at write time. An unresolved decision gate reports `awaiting_decision` and blocks
+completion. Missing any provenance key → the record is invalid → gate `unevaluable` (fail
+closed), diagnostic naming the missing key.
+
+## Budget and authorization records
+
+- **Budget.** `budget:` gates compare a receipt-recorded counter against the gate's ceiling.
+  Counters are DERIVED from the receipt mapping (a recorded `orca_task_id` = created, a
+  recorded `dispatch_id` = dispatched, distinct dispatched waves = waves dispatched); an
+  explicit `counters` object overrides per counter. Under ceiling → `passed`; at/over →
+  `failed` with BOTH numbers in the message.
+- **Authorization.** `authorization:` gates require an explicit authorization record
+  (`authorizations[]`), written only via `--record-authorization <id> --authorizer <handle>`
+  on `run`/`resume`. Absent → `awaiting_decision`-equivalent state, never passed.
+
+## Follow-up proposals are advisory until accepted
+
+When gate evaluation or reconciliation discovers implementation work, `status` records a
+PROPOSED follow-up: `{ "id", "source_gate" | "source_outcome", "description",
+"proposed_wave": <next wave int>, "status": "proposed" }` in the report.
+
+- Proposals are **ADVISORY**: no code path creates issues, dispatches work, merges, deploys,
+  or closes tracker items from a proposal.
+- **Acceptance is an OPERATOR act outside the skill**: file the tracker issue, append the
+  outcome to the program JSON as a **NEW LATER wave** with a stable new outcome id, and
+  re-run `plan`/`run`. The frozen compiler already rejects same-wave dependencies and cycles
+  and requires prepared fleet leaves, so follow-up waves inherit those protections
+  (`SAME_WAVE_DEPENDENCY`, `UNPREPARED_FLEET_LEAF` re-raise verbatim).
+- A PROPOSED follow-up that targets accepted scope blocks completion; a follow-up recorded
+  with `"status": "deferred"` is listed separately (a `deferred` section) and does not block.
+
+### The `--record-proposals` boundary
+
+Proposals are written to the receipt (under `follow_ups`) ONLY by
+`status --gates --record-proposals` (an explicit flag). Without it, `status --gates` /
+`status --final-summary` stay strictly READ-ONLY — proposals appear in the report only, and
+the receipt is byte-identical. `--record-proposals` is valid only with `--gates`.
+
+## Completion declaration
+
+`status --final-summary` declares `program_complete: true` ONLY when: every accepted outcome
+is `complete_with_evidence` AND every exit gate evaluates `passed` AND no outcome is
+`escalated`/`inconsistent`/`stale_missing`/`awaiting_decision` AND no PROPOSED follow-up
+targets accepted scope. The summary is REPRODUCIBLE from live state — no generated
+timestamps or randomness — and links, per outcome: outcome id, relay run/fleet ids, issue
+URL, PR URL, verification evidence names, decision records touching it, and its final state.
+
+### Stop conditions → `stopped_on`
+
+When completion cannot be declared, the most-severe blocking condition becomes `stopped_on`
+(a single token); `blocking_reasons` lists them all.
+
+| Stop condition | `stopped_on` |
+| --- | --- |
+| tracker/receipt graph ambiguous | `graph_ambiguous` |
+| relay run/fleet escalated / inconsistent | `relay_escalated` |
+| Orca injection/lifecycle failure | `orca_lifecycle_failure` |
+| integration gate failed | `integration_gate_failed` |
+| budget ceiling reached | `budget_ceiling_reached` |
+| advisory/tracker gate failed | `gate_failed` |
+| a gate is unevaluable | `gate_unevaluable` |
+| human decision required (decision/authorization awaiting) | `awaiting_decision` |
+| unaccepted follow-up discovered | `unaccepted_follow_up` |
+| accepted outcomes still incomplete | `outcomes_incomplete` |
+
+## Fail-closed exit codes (70-range)
+
+| reason_code | exit | trigger |
+| --- | --- | --- |
+| `GATES_NOT_EVALUABLE` | 70 | `--gates`/`--final-summary` before prerequisites reconcile, under `--strict` |
+| `GATE_FAILED` | 71 | any exit gate failed, under `--strict` |
+| `COMPLETION_BLOCKED` | 72 | `--final-summary --strict` and `program_complete` is false |
+
+Without `--strict`, these situations exit 0 with the truthful report (information is the
+product, matching `status`'s house rule). Receipt-layer failures reuse 50–52; usage is 64.
+
+## Report surfaces
+
+- `status --gates --json` top-level keys (verbatim): `ok`, `program_id`, `receipt_path`,
+  `prerequisites_met`, `gates`, `follow_ups`, `blocking_reasons`. Each gate:
+  `{ gate, kind, state, evidence, message }`.
+- `status --final-summary --json` top-level keys (verbatim): `ok`, `program_id`,
+  `receipt_path`, `program_complete`, `stopped_on`, `outcomes`, `gates`, `follow_ups`,
+  `deferred`, `decisions`, `blocking_reasons`.
+
+Every excerpt is bounded; neither report generates timestamps or randomness; plain `status`
+(no mode flag) output stays byte-identical to the shipped #945/#946 shape.

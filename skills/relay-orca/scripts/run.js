@@ -14,7 +14,8 @@ const { execFileSync } = require("node:child_process");
 const { PlanError } = require("./lib/reasons");
 const { orchestrate } = require("./lib/run-orchestrator");
 const { orderedReport } = require("./lib/run-report");
-const { buildReceiptMapping, serializeReceipt } = require("./lib/receipt");
+const { buildReceiptMapping, serializeReceiptWithRecords } = require("./lib/receipt");
+const { applyOperatorRecords } = require("./lib/operator-records");
 const {
   CanonicalizationError,
   resolveRepoContext,
@@ -74,19 +75,42 @@ function usageError(message) {
 }
 
 function parseArgs(argv) {
-  const opts = { programFile: null, json: false, concurrency: undefined, operatorHandles: [], orcaBin: null, repoRoot: null };
+  const opts = {
+    programFile: null,
+    json: false,
+    concurrency: undefined,
+    operatorHandles: [],
+    orcaBin: null,
+    repoRoot: null,
+    // #947 additive operator-record flags. A decision/authorization record is written
+    // into the receipt ONLY when its explicit flag is present (never automatically, D4/D5).
+    resolveDecision: null,
+    resolution: null,
+    resolver: null,
+    recordAuthorization: null,
+    authorizer: null,
+  };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === "--program-file" || arg === "-f") opts.programFile = argv[(i += 1)];
     else if (arg === "--json") opts.json = true;
     else if (arg === "--concurrency") opts.concurrency = Number(argv[(i += 1)]);
     else if (arg === "--operator-handle") opts.operatorHandles.push(requireValue(argv[(i += 1)], "--operator-handle"));
+    else if (arg === "--resolve-decision") opts.resolveDecision = requireValue(argv[(i += 1)], "--resolve-decision");
+    else if (arg === "--resolution") opts.resolution = requireValue(argv[(i += 1)], "--resolution");
+    else if (arg === "--resolver") opts.resolver = requireValue(argv[(i += 1)], "--resolver");
+    else if (arg === "--record-authorization") opts.recordAuthorization = requireValue(argv[(i += 1)], "--record-authorization");
+    else if (arg === "--authorizer") opts.authorizer = requireValue(argv[(i += 1)], "--authorizer");
     else if (arg === "--orca-bin") opts.orcaBin = requireValue(argv[(i += 1)], "--orca-bin");
     else if (arg === "--repo-root") opts.repoRoot = requireValue(argv[(i += 1)], "--repo-root");
     else if (arg === "--help" || arg === "-h") opts.help = true;
     else if (!arg.startsWith("-") && !opts.programFile) opts.programFile = arg;
     else usageError(`unrecognized argument: ${arg}`);
   }
+  if (opts.resolveDecision && (!opts.resolution || !opts.resolver)) {
+    usageError("--resolve-decision requires --resolution and --resolver");
+  }
+  if (opts.recordAuthorization && !opts.authorizer) usageError("--record-authorization requires --authorizer");
   return opts;
 }
 
@@ -98,18 +122,39 @@ function parseArgs(argv) {
 // receipt-loss condition A12 forbids: the created task's mapping would never be persisted).
 // created_at is preserved across the materialize/dispatch rewrites; only the atomic write +
 // timestamps live here (top-level), while the pure mapping is built by lib/receipt.js.
-function makeReceiptPersistor(opts) {
+function decisionGateDef(program, decisionId) {
+  const prog = program && program.program && typeof program.program === "object" ? program.program : program;
+  const gates = prog && Array.isArray(prog.decision_gates) ? prog.decision_gates : [];
+  return gates.find((gate) => gate && gate.id === decisionId) || null;
+}
+
+// Build the operator-record inputs (#947 D4/D5) from the explicit flags. A decision/
+// authorization record is produced ONLY when its flag is present; the decision's
+// question/options/downstream_wave provenance is sourced from the program's declared
+// decision_gates entry, and resolved_at is stamped at write time (top-level).
+function operatorRecordInputs(opts, program, nowIso) {
+  return {
+    decision: opts.resolveDecision
+      ? { id: opts.resolveDecision, resolution: opts.resolution, resolver: opts.resolver, resolvedAt: nowIso, gateDef: decisionGateDef(program, opts.resolveDecision) }
+      : null,
+    authorization: opts.recordAuthorization ? { id: opts.recordAuthorization, authorizer: opts.authorizer } : null,
+  };
+}
+
+function makeReceiptPersistor(opts, program) {
   const repo = resolveRepoContext({ repoRootOverride: opts.repoRoot });
   return function persistReceipt(core) {
     const finalPath = receiptPathFor(repo.slug, core.program_id);
     const nowIso = new Date().toISOString();
     let createdAt = nowIso;
+    let prior = null;
     if (receiptExists(finalPath)) {
       try {
-        const prior = JSON.parse(readReceiptFile(finalPath));
+        prior = JSON.parse(readReceiptFile(finalPath));
         if (typeof prior.created_at === "string" && prior.created_at) createdAt = prior.created_at;
       } catch {
         createdAt = nowIso;
+        prior = null;
       }
     }
     const mapping = buildReceiptMapping({
@@ -122,7 +167,11 @@ function makeReceiptPersistor(opts) {
     });
     mapping.created_at = createdAt;
     mapping.updated_at = nowIso;
-    writeReceiptAtomic(finalPath, serializeReceipt(mapping));
+    // Carry forward any prior additive records across the rewrite and apply the operator
+    // flags' decision/authorization records. With no prior records and no flags, this is a
+    // no-op and the serialized bytes are IDENTICAL to the pre-#947 receipt.
+    applyOperatorRecords(mapping, { priorReceipt: prior, ...operatorRecordInputs(opts, program, nowIso) });
+    writeReceiptAtomic(finalPath, serializeReceiptWithRecords(mapping));
     return finalPath;
   };
 }
@@ -183,7 +232,7 @@ function main() {
     // receipt path before orchestrate runs ANY admission/materialization mutation — a
     // git-canonicalization failure exits 52 here (CanonicalizationError, caught below) with
     // zero mutating Orca invocations.
-    const persistReceipt = makeReceiptPersistor(opts);
+    const persistReceipt = makeReceiptPersistor(opts, program);
     result = orchestrate(program, {
       concurrency: opts.concurrency,
       operatorHandles: opts.operatorHandles,
