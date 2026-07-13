@@ -110,6 +110,24 @@ function assertOrcaReadOnly(argv) {
 // Present in ANY of these forms, an `api` call is a write even without a literal `-X`.
 const GH_API_BODY_OPTS = new Set(["-f", "--field", "-F", "--raw-field", "--input"]);
 
+function isMutatingGhApiOption(token) {
+  if (GH_API_BODY_OPTS.has(token)
+    || token.startsWith("--field=")
+    || token.startsWith("--raw-field=")
+    || token.startsWith("--input=")) return true;
+
+  // Cobra permits boolean shorthands to be clustered before a value-taking flag.
+  // For `gh api`, `-i` is boolean, so value-taking `f`, `F`, or `X` may follow
+  // one or more leading `i` shorthands. Body fields always mutate; an attached
+  // explicit method mutates unless it is GET. Other shorthands remain read-shaped.
+  if (!token.startsWith("-") || token.startsWith("--")) return false;
+  let index = 1;
+  while (token[index] === "i") index += 1;
+  if (token[index] === "f" || token[index] === "F") return true;
+  if (index > 1 && token[index] === "X") return token.slice(index + 1).trim().toUpperCase() !== "GET";
+  return false;
+}
+
 // Extract an explicit `gh api` method, handling both separated (`-X POST`, `--method POST`)
 // and attached (`-XPOST`, `--method=POST`) forms. Returns null when no method is specified
 // (a bare `gh api` defaults to GET).
@@ -128,7 +146,7 @@ function ghApiMethod(argv) {
 // method, no body/field) is a read-only GET.
 function isMutatingGhApi(argv) {
   if (argv[0] !== "api") return false;
-  if (argv.some((token) => GH_API_BODY_OPTS.has(token))) return true;
+  if (argv.some((token) => isMutatingGhApiOption(token))) return true;
   const method = ghApiMethod(argv);
   if (method !== null && method.trim().toUpperCase() !== "GET") return true;
   return argv.some((token) => /^(POST|PATCH|PUT|DELETE)$/i.test(token));

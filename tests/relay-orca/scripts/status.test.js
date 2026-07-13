@@ -798,6 +798,13 @@ test("A28: assertGhReadOnly refuses mutation-shaped `gh api`, allows bare GET re
     ["api", "repos/x", "-F", "a=b"],
     ["api", "repos/x", "--raw-field", "a=b"],
     ["api", "repos/x", "--input", "body.json"],
+    ["api", "repos/x", "--field=a=b"],
+    ["api", "repos/x", "--raw-field=a=b"],
+    ["api", "repos/x", "--input=body.json"],
+    ["api", "repos/x", "-fa=b"],
+    ["api", "repos/x", "-Fa=b"],
+    ["api", "repos/x", "-ifa=b"],
+    ["api", "repos/x", "-iFa=b"],
   ]) {
     assert.throws(() => assertGhReadOnly(argv), /non-read gh subcommand/, `must reject: gh ${argv.join(" ")}`);
   }
@@ -806,6 +813,7 @@ test("A28: assertGhReadOnly refuses mutation-shaped `gh api`, allows bare GET re
     ["api", "-X", "POST", "repos/x"],
     ["api", "--method", "PATCH", "repos/x"],
     ["api", "-XDELETE", "repos/x"],
+    ["api", "-iXPOST", "repos/x"],
     ["api", "--method=PUT", "repos/x"],
     ["api", "repos/x", "POST"],
   ]) {
@@ -816,6 +824,8 @@ test("A28: assertGhReadOnly refuses mutation-shaped `gh api`, allows bare GET re
     ["api", "repos/x"],
     ["api", "repos/x", "--jq", ".state"],
     ["api", "-X", "GET", "repos/x"],
+    ["api", "-XGET", "repos/x"],
+    ["api", "-iXGET", "repos/x"],
     ["issue", "view", "1", "--json", "state,stateReason"],
     ["pr", "view", "2", "--json", "mergedAt,state"],
   ]) {
@@ -832,8 +842,16 @@ test("A28: the fake gh poison rejects mutation-shaped `gh api` and serves a bare
     for (const argv of [
       ["api", "repos/x", "-f", "a=b"],
       ["api", "repos/x", "--field", "a=b"],
+      ["api", "repos/x", "--field=a=b"],
+      ["api", "repos/x", "--raw-field=a=b"],
+      ["api", "repos/x", "--input=body.json"],
+      ["api", "repos/x", "-fa=b"],
+      ["api", "repos/x", "-Fa=b"],
+      ["api", "repos/x", "-ifa=b"],
+      ["api", "repos/x", "-iFa=b"],
       ["api", "-X", "POST", "repos/x"],
       ["api", "--method=PATCH", "repos/x"],
+      ["api", "-iXPOST", "repos/x"],
       ["api", "repos/x", "--input", "body.json"],
     ]) {
       fs.rmSync(gh.poisonPath, { force: true });
@@ -846,11 +864,13 @@ test("A28: the fake gh poison rejects mutation-shaped `gh api` and serves a bare
       assert.notEqual(code, 0, `gh ${argv.join(" ")} must poison`);
       assert.match(gh.readPoison(), /GH_WRITE_INVOKED/, `gh ${argv.join(" ")} must write a poison marker`);
     }
-    // A bare GET `gh api` is served (exit 0), no poison.
-    fs.rmSync(gh.poisonPath, { force: true });
-    const out = execFileSync(gh.ghPath, ["api", "repos/x"], { stdio: "pipe", encoding: "utf-8" });
-    assert.equal(gh.readPoison(), null, "a bare GET api read must never poison");
-    assert.equal(out, "{}", "the fake serves a read-shaped api GET");
+    // Bare and explicitly attached GET `gh api` reads are served (exit 0), no poison.
+    for (const argv of [["api", "repos/x"], ["api", "-XGET", "repos/x"], ["api", "-iXGET", "repos/x"]]) {
+      fs.rmSync(gh.poisonPath, { force: true });
+      const out = execFileSync(gh.ghPath, argv, { stdio: "pipe", encoding: "utf-8" });
+      assert.equal(gh.readPoison(), null, `gh ${argv.join(" ")} must never poison`);
+      assert.equal(out, "{}", `the fake serves read-shaped gh ${argv.join(" ")}`);
+    }
   } finally {
     gh.cleanup();
   }
