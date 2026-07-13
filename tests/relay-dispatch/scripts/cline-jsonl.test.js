@@ -5,6 +5,7 @@ const {
   extractClineAdvisoryCandidates,
   extractClineRunResultText,
 } = require("../../../skills/relay-dispatch/scripts/agent-adapters/cline-jsonl");
+const { parseAdvisoryReview } = require("../../../skills/relay-review/scripts/advisory-review-schema");
 
 test("cline advisory extraction reports empty stdout with stderr tail", () => {
   assert.throws(
@@ -35,18 +36,33 @@ test("cline advisory extraction names invalid JSONL line number", () => {
 });
 
 test("cline advisory extraction falls back to text content_end when run_result is missing", () => {
+  const payload = JSON.stringify({
+    profile: "blindspot",
+    summary: "Schema-valid content_end fallback with empty finding arrays.",
+    required_findings: [],
+    advisory_findings: [],
+    duplicate_or_low_confidence: [],
+  });
   const stdout = [
-    JSON.stringify({ type: "agent_event", event: { type: "content_end", contentType: "text", text: "{\"ok\":true}" } }),
+    JSON.stringify({ type: "agent_event", event: { type: "content_end", contentType: "text", text: payload } }),
   ].join("\n");
 
-  assert.deepEqual(
-    extractClineAdvisoryCandidates(stdout, {
-      adapter: "cline",
-      phase: "advisory_review",
-      stderr: "session not found",
-    }),
-    ["{\"ok\":true}"]
-  );
+  const candidates = extractClineAdvisoryCandidates(stdout, {
+    adapter: "cline",
+    phase: "advisory_review",
+    stderr: "session not found",
+  });
+  assert.deepEqual(candidates, [payload]);
+
+  const parsed = parseAdvisoryReview(candidates[0], {
+    adapter: "cline",
+    phase: "advisory_review",
+    profile: "blindspot",
+  });
+  assert.equal(parsed.summary, "Schema-valid content_end fallback with empty finding arrays.");
+  assert.equal(parsed.required_findings.length, 0);
+  assert.equal(parsed.advisory_findings.length, 0);
+  assert.equal(parsed.duplicate_or_low_confidence.length, 0);
 });
 
 test("cline advisory extraction falls back to plain advisory JSON stdout when run_result is missing", () => {
@@ -56,23 +72,39 @@ test("cline advisory extraction falls back to plain advisory JSON stdout when ru
     summary: "Survival issue-172 R5 shape: whole stdout is plain advisory JSON.",
     required_findings: [
       {
-        id: "finding-1",
-        severity: "high",
         title: "Real finding",
-        detail: "Present in plain JSON stdout without a run_result envelope.",
+        body: "Present in plain JSON stdout without a run_result envelope.",
+        file: "skills/relay-dispatch/scripts/agent-adapters/cline-jsonl.js",
+        severity: "P2",
+        category: "edge-case",
+        confidence: 0.9,
       },
     ],
     advisory_findings: [],
     duplicate_or_low_confidence: [],
   });
 
-  assert.deepEqual(
-    extractClineAdvisoryCandidates(advisoryJson, {
-      adapter: "cline",
-      phase: "advisory_review",
-    }),
-    [advisoryJson]
-  );
+  const candidates = extractClineAdvisoryCandidates(advisoryJson, {
+    adapter: "cline",
+    phase: "advisory_review",
+  });
+  assert.deepEqual(candidates, [advisoryJson]);
+
+  const parsed = parseAdvisoryReview(candidates[0], {
+    adapter: "cline",
+    phase: "advisory_review",
+    profile: "blindspot",
+  });
+  assert.equal(parsed.required_findings.length, 1);
+  assert.deepEqual(parsed.required_findings[0], {
+    title: "Real finding",
+    body: "Present in plain JSON stdout without a run_result envelope.",
+    file: "skills/relay-dispatch/scripts/agent-adapters/cline-jsonl.js",
+    line: null,
+    severity: "P2",
+    category: "edge-case",
+    confidence: 0.9,
+  });
 });
 
 test("cline advisory extraction reports missing run_result with stderr tail when no fallback exists", () => {

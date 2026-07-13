@@ -217,7 +217,7 @@ function main() {
     });
   } catch (error) {
     throw withRawAdapterOutput(new Error(
-      `${error.message}. Cline advisory review must return JSON in run_result.text or the final text content_end; relay cannot treat this as healthy advisory evidence.`
+      `${error.message}. Cline advisory review must return JSON in run_result.text, then the last text content_end, then single-line plain-JSON stdout; relay cannot treat this as healthy advisory evidence.`
     ), rawOutput, rawStderr);
   }
 
