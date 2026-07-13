@@ -19,7 +19,7 @@ metadata:
 
 # relay-orca
 
-> EXPERIMENTAL and opt-in. relay-orca is a supervised program controller pilot, not an autonomous software factory, and not an implicit dependency of ordinary relay use. See [references/experimental-status.md](references/experimental-status.md).
+> EXPERIMENTAL and opt-in. relay-orca is a supervised program controller pilot, not an autonomous software factory, and not an implicit dependency of ordinary relay use. See [references/experimental-status.md](references/experimental-status.md) and the opt-in install + operator guide [references/install-and-operate.md](references/install-and-operate.md).
 
 ## Use when
 

@@ -33,5 +33,6 @@ factory. In v0:
   durable lifecycle state machine.
 - `orca orchestration reset` is never run automatically.
 
-See [accepted-program-schema.md](accepted-program-schema.md) for the input contract and
-[task-kinds.md](task-kinds.md) for the operator/ownership invariants.
+See [accepted-program-schema.md](accepted-program-schema.md) for the input contract,
+[task-kinds.md](task-kinds.md) for the operator/ownership invariants, and
+[install-and-operate.md](install-and-operate.md) for the opt-in install and operator guide.
