@@ -14,6 +14,7 @@ const { resolveExecutorDefaultModel } = require("../../../relay-dispatch/scripts
 const { hashFileSha256 } = require("../../../relay-dispatch/scripts/execution-evidence");
 const { appendRunEvent, appendUnregisteredRouteUsedEvent, EVENTS, readRunEvents } = require("../../../relay-dispatch/scripts/relay-events");
 const { writeAdvisoryLaneLease } = require("../../../relay-dispatch/scripts/run-runtime-state");
+const { reapPriorAdvisoryLaneAttempts } = require("./advisory-lane-reap");
 const { parseAdvisoryReview, validateAdvisoryProfile } = require("../advisory-review-schema");
 const { captureGitStatus, resolveReviewerScript } = require("./reviewer-invoke");
 const { writeText } = require("./common");
@@ -204,6 +205,55 @@ function startAdvisoryReview({
     timeoutSeconds: parsePositiveSeconds(timeoutSeconds),
     trigger,
   };
+  // Relaunched rounds may still have live prior-attempt groups. Reap them
+  // (TERM→grace→KILL→verify) before allocating a new per-attempt lease.
+  const priorLaneReaps = reapPriorAdvisoryLaneAttempts({
+    runDir,
+    round,
+    reviewer: artifactName,
+  });
+
+  // Fail-closed: a same-host prior group that survives TERM→KILL must not share
+  // request/result artifact paths with a new worker. Host-mismatch stays
+  // skip+report and does not block spawn.
+  const unreaped = priorLaneReaps.filter((entry) => entry?.outcome === "reap_failed");
+  if (unreaped.length > 0) {
+    const unreapedPgids = unreaped
+      .map((entry) => entry.pgid)
+      .filter((pgid) => Number.isFinite(Number(pgid)));
+    const failureReason = (
+      `prior advisory lane pgid ${unreapedPgids.join(", ") || "unknown"} ` +
+      "could not be reaped before re-spawn"
+    );
+    writeJson(paths.resultPath, {
+      artifactHash: null,
+      artifactPath: null,
+      attemptCount: 0,
+      completed_at: new Date().toISOString(),
+      failureReason,
+      gating: request.gating === true,
+      lane_index: request.laneIndex || 1,
+      model: request.reviewerModel || null,
+      profile: request.profile,
+      rawResponsePath: null,
+      rawResponsePaths: [],
+      reviewer: request.reviewerName,
+      source: request.source || null,
+      status: "failed",
+      trigger: request.trigger || "every_round",
+      advisory_count: 0,
+      duplicate_low_confidence_count: 0,
+      required_count: 0,
+    });
+    return {
+      ...request,
+      child: null,
+      laneLeasePath: null,
+      laneAttempt: null,
+      priorLaneReaps,
+    };
+  }
+
   writeJson(paths.requestPath, request);
 
   const workerPath = path.join(__dirname, "..", "advisory-worker.js");
@@ -215,19 +265,29 @@ function startAdvisoryReview({
   });
   child.unref();
   // detached: true → child is its own process-group leader (pgid == pid).
-  // Persist a lane lease distinct from the round lease (lease.json / #951).
+  // Persist a per-attempt lane lease distinct from the round lease (lease.json / #951).
+  let laneLeasePath = null;
+  let laneAttempt = null;
   if (Number.isInteger(child.pid) && child.pid > 0) {
-    writeAdvisoryLaneLease(runDir, {
+    const written = writeAdvisoryLaneLease(runDir, {
       pid: child.pid,
       pgid: child.pid,
       round,
       reviewer: artifactName,
     });
+    laneLeasePath = written.leasePath;
+    laneAttempt = written.lease.attempt;
+    request.laneLeasePath = laneLeasePath;
+    request.laneAttempt = laneAttempt;
+    writeJson(paths.requestPath, request);
   }
 
   return {
     ...request,
     child,
+    laneLeasePath,
+    laneAttempt,
+    priorLaneReaps,
   };
 }
 

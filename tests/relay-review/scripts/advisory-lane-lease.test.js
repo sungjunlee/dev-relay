@@ -112,28 +112,36 @@ function waitUntil(predicate, { timeoutMs = 20000, intervalMs = 100 } = {}) {
   return predicate();
 }
 
-test("writeAdvisoryLaneLease retry overwrites the same reviewer+round lease", () => {
+test("writeAdvisoryLaneLease allocates a new attempt without overwriting a prior lease", () => {
   const runDir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-lane-lease-unit-"));
-  writeAdvisoryLaneLease(runDir, {
+  const first = writeAdvisoryLaneLease(runDir, {
     pid: 111,
     pgid: 111,
     round: 1,
     reviewer: "opencode",
   });
-  writeAdvisoryLaneLease(runDir, {
+  const second = writeAdvisoryLaneLease(runDir, {
     pid: 222,
     pgid: 222,
     round: 1,
     reviewer: "opencode",
   });
+  assert.equal(first.lease.attempt, 1);
+  assert.equal(second.lease.attempt, 2);
+  assert.notEqual(first.leasePath, second.leasePath);
+  assert.equal(fs.existsSync(first.leasePath), true);
+  assert.equal(fs.existsSync(second.leasePath), true);
+  const firstOnDisk = JSON.parse(fs.readFileSync(first.leasePath, "utf-8"));
+  assert.equal(firstOnDisk.pid, 111);
+  assert.equal(firstOnDisk.pgid, 111);
   const leases = readAdvisoryLaneLeases(runDir);
-  assert.equal(leases.length, 1);
-  assert.equal(leases[0].lease.pid, 222);
-  assert.equal(leases[0].lease.pgid, 222);
-  assert.equal(leases[0].lease.round, 1);
+  assert.equal(leases.length, 2);
+  assert.equal(leases[0].lease.pid, 111);
+  assert.equal(leases[1].lease.pid, 222);
+  assert.equal(leases[0].lease.attempt, 1);
+  assert.equal(leases[1].lease.attempt, 2);
   assert.equal(leases[0].lease.reviewer, "opencode");
-  assert.ok(leases[0].lease.host);
-  assert.ok(leases[0].lease.started_at);
+  assert.equal(leases[1].lease.reviewer, "opencode");
 });
 
 test("startAdvisoryReview writes a lane lease and the worker removes it on completion", () => {

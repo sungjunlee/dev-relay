@@ -2,7 +2,9 @@
 
 const fs = require("fs");
 const { executeAdvisoryRequest } = require("./review-runner/advisory");
-const { removeAdvisoryLaneLease } = require("../../relay-dispatch/scripts/run-runtime-state");
+const {
+  readAdvisoryLaneLeases,
+} = require("../../relay-dispatch/scripts/run-runtime-state");
 
 function clearOwnLaneLease(request) {
   if (!request || typeof request !== "object") return;
@@ -11,7 +13,17 @@ function clearOwnLaneLease(request) {
   const reviewer = request.artifactReviewerName || request.reviewerName;
   if (!runDir || !Number.isInteger(round) || round <= 0 || !reviewer) return;
   try {
-    removeAdvisoryLaneLease(runDir, round, reviewer);
+    if (typeof request.laneLeasePath === "string" && request.laneLeasePath.trim()) {
+      fs.rmSync(request.laneLeasePath, { force: true });
+      return;
+    }
+    for (const entry of readAdvisoryLaneLeases(runDir)) {
+      if (!entry.lease) continue;
+      if (entry.lease.round !== round) continue;
+      if (entry.lease.reviewer !== reviewer) continue;
+      if (entry.lease.pid !== process.pid) continue;
+      fs.rmSync(entry.leasePath, { force: true });
+    }
   } catch {
     // Best-effort: missing or unreadable lease must not fail the worker exit.
   }
@@ -23,10 +35,15 @@ function main() {
     throw new Error("advisory-worker requires a request JSON path");
   }
   const request = JSON.parse(fs.readFileSync(requestPath, "utf-8"));
+  let result = null;
   try {
-    executeAdvisoryRequest(request);
+    result = executeAdvisoryRequest(request);
   } finally {
-    clearOwnLaneLease(request);
+    // Timeout leaves the lease in place so the runner / janitor can still
+    // discover and reap the (often TERM-ignoring) lane process group.
+    if (result?.status !== "timeout") {
+      clearOwnLaneLease(request);
+    }
   }
 }
 
