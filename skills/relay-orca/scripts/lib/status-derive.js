@@ -292,6 +292,28 @@ function discoverBackPointers({ manifests, tasks, programId }) {
   return candidates;
 }
 
+// live→receipt FLEET back-pointer discovery (D7/A2): a fleet manifest under the SEPARATE
+// fleets root (#945 A8) that references this program but is absent from the receipt's
+// `relay_ids.fleet` mappings. Mirrors discoverBackPointers for the runs root, keyed off
+// `relay_ids.fleet` instead of `relay_ids.run` and scanning the fleets-root manifests. An
+// unmapped fleet cannot be attributed to a specific outcome, so resume must not re-dispatch
+// a relay_fleet outcome while it is present — that would duplicate the whole fleet (forbidden
+// by the drain invariant). Text only; NO mutation is performed.
+function discoverFleetBackPointers({ fleetManifests, tasks, programId }) {
+  const knownFleetIds = new Set(tasks.map((task) => task.relay_ids && task.relay_ids.fleet).filter(Boolean));
+  const candidates = [];
+  fleetManifests.forEach((entry) => {
+    if (!entry.run_id || knownFleetIds.has(entry.run_id)) return;
+    if (!referencesProgram(entry.text, programId)) return;
+    candidates.push({
+      kind: "adopt_relay_fleet",
+      outcome_id: null,
+      proposal: boundedExcerpt(`relay fleet ${entry.run_id} references program ${programId} but is absent from the receipt; reconcile it into the receipt mapping (no mutation performed)`),
+    });
+  });
+  return candidates;
+}
+
 function repairForOutcome(entry) {
   const repairs = [];
   entry.diagnostics.forEach((diagnostic) => {
@@ -305,10 +327,27 @@ function repairForOutcome(entry) {
   return repairs;
 }
 
+// Reconciliation-derived live dispatch fact for one outcome (#946 R1, owner amendment A1).
+// `resume` threads this into its planner (via the optional `liveDispatchSink`) so
+// "verifiably absent" is decided by a live dispatch-show read, NEVER by a null receipt id.
+// Trustworthy ONLY when the runtime is attributed AND this task's dispatch-show was
+// reachable and runtime-attributed: `present` = it reported a dispatch id; `absent` = it
+// reported none. Both false = unknown (untrusted runtime, an unattributable per-task read,
+// or a task missing from the runtime), which never counts as verifiable absence.
+function summarizeLiveDispatch(runtime, facts) {
+  if (!runtime.orcaTrusted || facts.dispatchRuntimeUnknown) return { present: false, absent: false };
+  const dispatch = facts.dispatch;
+  if (!dispatch || dispatch.reachable !== true) return { present: false, absent: false };
+  const liveId = typeof dispatch.dispatchId === "string" && dispatch.dispatchId ? dispatch.dispatchId : null;
+  return { present: Boolean(liveId), absent: !liveId };
+}
+
 // Assemble the full D9 report from the receipt + injected read adapters. `manifests`
 // are the child run manifests (runs root); `fleetManifests` are the fleet manifests
-// from the SEPARATE fleets root (#945 A8), keyed by fleet id.
-function deriveStatusReport({ receipt, programId, receiptPath, manifests, fleetManifests = [], orca, gh, urlFor, programSegment }) {
+// from the SEPARATE fleets root (#945 A8), keyed by fleet id. `liveDispatchSink` is an
+// OPTIONAL Map that, when provided (only `resume` passes it), is populated per outcome
+// with the reconciliation's live dispatch fact — it never changes the returned report.
+function deriveStatusReport({ receipt, programId, receiptPath, manifests, fleetManifests = [], orca, gh, urlFor, programSegment, liveDispatchSink }) {
   const resolvedUrlFor = typeof urlFor === "function" ? urlFor : () => null;
   const manifestByRunId = new Map(manifests.filter((entry) => entry.run_id).map((entry) => [entry.run_id, entry.parsed]));
   const fleetManifestById = new Map(fleetManifests.filter((entry) => entry.run_id).map((entry) => [entry.run_id, entry.parsed]));
@@ -317,6 +356,9 @@ function deriveStatusReport({ receipt, programId, receiptPath, manifests, fleetM
 
   const entries = receipt.tasks.map((task) => {
     const facts = gatherOutcomeFacts(task, { manifestByRunId, fleetManifestById, runtime, gh, orca, urlFor: resolvedUrlFor });
+    if (liveDispatchSink && typeof liveDispatchSink.set === "function") {
+      liveDispatchSink.set(task.outcome_id, summarizeLiveDispatch(runtime, facts));
+    }
     return classifyOutcome(facts, { orcaTrusted: runtime.orcaTrusted, isDuplicate: duplicateOutcomeIds.has(task.outcome_id) });
   });
 
@@ -328,6 +370,7 @@ function deriveStatusReport({ receipt, programId, receiptPath, manifests, fleetM
   const repairCandidates = [];
   entries.forEach((entry) => repairForOutcome(entry).forEach((repair) => repairCandidates.push(repair)));
   discoverBackPointers({ manifests, tasks: receipt.tasks, programId }).forEach((candidate) => repairCandidates.push(candidate));
+  discoverFleetBackPointers({ fleetManifests, tasks: receipt.tasks, programId }).forEach((candidate) => repairCandidates.push(candidate));
 
   const report = {
     ok: true,
@@ -343,4 +386,4 @@ function deriveStatusReport({ receipt, programId, receiptPath, manifests, fleetM
   return orderReport(report);
 }
 
-module.exports = { deriveStatusReport, attributeRuntime, detectDuplicateMappings, discoverBackPointers };
+module.exports = { deriveStatusReport, attributeRuntime, detectDuplicateMappings, discoverBackPointers, discoverFleetBackPointers, summarizeLiveDispatch };

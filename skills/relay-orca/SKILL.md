@@ -14,6 +14,8 @@ metadata:
 - Script: `${RELAY_SKILL_ROOT:-skills}/relay-orca/scripts/probe-orca.js` (fail-closed Orca capability probe).
 - Script: `${RELAY_SKILL_ROOT:-skills}/relay-orca/scripts/run.js` (admission-gated provenance-injected operator dispatch).
 - Script: `${RELAY_SKILL_ROOT:-skills}/relay-orca/scripts/status.js` (read-only live reconciler over receipt + relay + GitHub + Orca).
+- Script: `${RELAY_SKILL_ROOT:-skills}/relay-orca/scripts/resume.js` (crash-safe, reconcile-first, idempotent resumption from the receipt).
+- Script: `${RELAY_SKILL_ROOT:-skills}/relay-orca/scripts/stop.js` (coordinator-only stop; never touches relay runs or durable state).
 
 # relay-orca
 
@@ -35,15 +37,15 @@ relay-orca is **explicit-only**. It must never be auto-selected from ordinary re
 
 ## Intents
 
-relay-orca exposes exactly five intents. `plan` (read-only), `run` (admission-gated operator dispatch), and `status` (read-only live reconciler) are implemented; the remaining runtime intents are contract-only here and delivered in a later leaf, gated on the Orca capability probe.
+relay-orca exposes exactly five intents. All five — `plan` (read-only), `run` (admission-gated operator dispatch), `status` (read-only live reconciler), `resume` (crash-safe resumption), and `stop` (coordinator-only stop) — are implemented; the runtime intents are gated on the Orca capability probe.
 
 | Intent | Status | Purpose |
 | --- | --- | --- |
 | `plan` | implemented (read-only) | Compile an accepted program into an immutable wave plan. |
 | `run` | implemented (#944) | Dispatch provenance-injected relay/fleet operators for a plan. |
 | `status` | implemented (#945) | Derive a read-only live program view from receipt + relay + GitHub + Orca. |
-| `resume` | contract-only (#946) | Resume a coordinator from a reconstructible receipt without resetting Orca. |
-| `stop` | contract-only (#946) | Stop the coordinator only; never kill relay runs or discard durable state. |
+| `resume` | implemented (#946) | Reconcile-first, idempotent resumption from the receipt; fail closed on unsafe state, never reset Orca. |
+| `stop` | implemented (#946) | Stop the coordinator only; never kill relay runs or discard durable state. |
 
 Command tables and flag semantics: [references/commands.md](references/commands.md).
 
@@ -102,6 +104,27 @@ node "${RELAY_SKILL_ROOT:-skills}/relay-orca/scripts/status.js" \
 ```
 
 `status` reconciles durable truth (relay manifests, PRs/issues) against Orca runtime signals — `worker_done` is never completion evidence. Report shape, the state taxonomy, the nine detector codes, and reason codes 50–52: [references/commands.md](references/commands.md) and [references/receipt-and-status.md](references/receipt-and-status.md).
+
+Crash-safe resume (reconcile first, then reuse/re-dispatch only what is safe; fail closed on ambiguity):
+
+```bash
+node "${RELAY_SKILL_ROOT:-skills}/relay-orca/scripts/resume.js" \
+  --program-id epic-941 \
+  --json
+```
+
+`resume` loads the receipt, runs the SAME reconciliation as `status` **before any mutation**, reuses valid mappings, reacquires lost operator terminals, and re-dispatches ONLY outcomes whose Orca dispatch is verifiably absent AND whose relay side is clean — through the verified path. It never resets Orca, deletes a task/worktree/branch/PR, or force-closes a relay run. Running it twice is idempotent. Fail-closed decision codes 60–63 and recovery steps: [references/commands.md](references/commands.md) and [references/recovery.md](references/recovery.md).
+
+Coordinator-only stop (records a bounded stop record; never cancels outcomes):
+
+```bash
+node "${RELAY_SKILL_ROOT:-skills}/relay-orca/scripts/stop.js" \
+  --program-id epic-941 \
+  --reason "operator pause" \
+  --json
+```
+
+`stop` invokes ONLY `orca orchestration run-stop` and records `stopped_at`/`stop_reason` in the receipt. It never terminates relay executors, deletes worktrees, closes PRs/issues, or claims the program is cancelled/complete. Flags and the 7-key report: [references/commands.md](references/commands.md).
 
 ## Ownership invariants
 

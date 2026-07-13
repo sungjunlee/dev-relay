@@ -275,4 +275,8 @@ function orchestrate(rawProgram, options = {}) {
   }
 }
 
-module.exports = { orchestrate };
+// provenanceMismatch is additively exported (#946) so `resume` reuses the EXACT dispatch
+// verification `run` applies — the same trio check on the same dispatch-show shape — when
+// it re-dispatches or reacquires a terminal through the verified path. orchestrate and
+// the run flow are unchanged (byte-equivalent).
+module.exports = { orchestrate, provenanceMismatch };

@@ -74,6 +74,18 @@ entry: `outcome_id`, `task_id`, `kind`, `wave`, `orca_task_id`, `dispatch_id`, `
 The receipt records **only identity and mapping**. It MUST NOT contain child lifecycle
 states, PR/issue status, Done Criteria text, completion flags, prompts, or terminal output.
 
+### Optional stop record (#946)
+
+`stop` (coordinator-only) is the ONLY writer that may append two extra top-level keys —
+`stopped_at` (ISO-8601, the one generated timestamp) and `stop_reason` (the operator's
+`--reason`, bounded to ≤256 chars). They are **not** part of the canonical `RECEIPT_KEYS`, so a
+receipt that never stopped serializes **byte-identically** to a `run`/`status` receipt, and a
+stopped receipt still loads for `status`/`resume` (validation ignores extra keys). A stop
+records these fields **once**: a second stop leaves the record byte-identical (idempotent). The
+stop record is coordination metadata — it is **not** a completion or cancellation flag, and it
+never claims the program or its outcomes are cancelled/complete. `resume` preserves it verbatim
+when it rewrites the receipt.
+
 - **Atomic write:** a temp file in the same directory + `rename`. Partial/torn receipts are
   impossible by construction.
 - **Write points (bounded edit to `run`):** after **each** successful task-create (A12),

@@ -1,0 +1,289 @@
+"use strict";
+
+const test = require("node:test");
+const assert = require("node:assert/strict");
+const { execFileSync } = require("node:child_process");
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
+
+const REPO_ROOT = path.resolve(__dirname, "..", "..", "..");
+const SCRIPTS = path.join(REPO_ROOT, "skills", "relay-orca", "scripts");
+const STOP_JS = path.join(SCRIPTS, "stop.js");
+
+const { RECEIPT_NOTE, parseReceipt, serializeReceipt, STOP_REASON_MAX } = require(path.join(SCRIPTS, "lib", "receipt.js"));
+const { REASONS: STOP_REASONS } = require(path.join(SCRIPTS, "lib", "stop-reasons.js"));
+const { computeRepoSlug } = require(path.join(SCRIPTS, "lib", "repo-slug.js"));
+const { programSegment } = require(path.join(SCRIPTS, "receipt-io.js"));
+const { installFakeOrcaStop } = require(path.join(__dirname, "..", "fixtures", "fake-orca-stop.js"));
+const { DEFAULT_RUNTIME_ID } = require(path.join(__dirname, "..", "fixtures", "fake-orca.js"));
+
+const STOP_REPORT_KEYS = ["ok", "program_id", "receipt_path", "coordinator_stopped", "stopped_at", "stop_reason", "blocking_reasons"];
+const CANCELLATION_TOKENS = ["cancel", "cancelled", "canceled", "complete", "completed", "aborted", "discard"];
+const ISO_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+
+function makeReceipt({ programId, slug, root }) {
+  return {
+    schema: 1,
+    program_id: programId,
+    source: "/tmp/accepted-program.json",
+    repo: { slug, root },
+    runtime_id: DEFAULT_RUNTIME_ID,
+    tasks: [
+      { outcome_id: "a", task_id: "orca-task-a", kind: "relay_run", wave: 1, orca_task_id: "orca-live-a", dispatch_id: "disp-orca-live-a", assignee: "term-a", relay_ids: { request: null, run: "run-a", fleet: null } },
+    ],
+    terminals_created: [],
+    created_at: "2026-07-12T00:00:00.000Z",
+    updated_at: "2026-07-12T00:00:00.000Z",
+    note: RECEIPT_NOTE,
+  };
+}
+
+function initGitRepo(root) {
+  const git = (args) => execFileSync("git", ["-C", root, ...args], { stdio: ["ignore", "pipe", "pipe"] });
+  git(["init", "-q"]);
+  git(["config", "user.email", "t@t.com"]);
+  git(["config", "user.name", "t"]);
+}
+
+function buildWorld({ programId, stopScenario = {}, corruptReceipt, receiptOverride }) {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "relay-orca-stop-"));
+  const repoRoot = path.join(base, "repo");
+  const programsRoot = path.join(base, "programs");
+  fs.mkdirSync(repoRoot, { recursive: true });
+  initGitRepo(repoRoot);
+  const slug = computeRepoSlug(fs.realpathSync(repoRoot));
+  const receiptDir = path.join(programsRoot, slug, programSegment(programId));
+  fs.mkdirSync(receiptDir, { recursive: true });
+  const receiptPath = path.join(receiptDir, "receipt.json");
+  if (corruptReceipt !== undefined) {
+    fs.writeFileSync(receiptPath, corruptReceipt, "utf-8");
+  } else {
+    const receipt = receiptOverride || makeReceipt({ programId, slug, root: fs.realpathSync(repoRoot) });
+    fs.writeFileSync(receiptPath, serializeReceipt(receipt), "utf-8");
+  }
+  const orca = installFakeOrcaStop(stopScenario);
+  return {
+    base,
+    repoRoot,
+    programsRoot,
+    slug,
+    receiptPath,
+    orca,
+    receiptOnDisk() {
+      return fs.readFileSync(receiptPath, "utf-8");
+    },
+    run(extraArgs = []) {
+      const args = [STOP_JS, "--program-id", programId, "--json", "--orca-bin", orca.orcaPath, "--repo-root", repoRoot, ...extraArgs];
+      const result = { status: 0, stdout: "", stderr: "" };
+      try {
+        result.stdout = execFileSync(process.execPath, args, { encoding: "utf-8", env: { ...process.env, RELAY_ORCA_PROGRAMS_ROOT: programsRoot }, stdio: "pipe" });
+      } catch (error) {
+        result.status = error.status;
+        result.stdout = error.stdout ? String(error.stdout) : "";
+        result.stderr = error.stderr ? String(error.stderr) : "";
+      }
+      result.body = result.stdout ? JSON.parse(result.stdout) : null;
+      return result;
+    },
+    cleanup() {
+      orca.cleanup();
+      fs.rmSync(base, { recursive: true, force: true });
+    },
+  };
+}
+
+// Strip the two stop fields and re-serialize to prove only the stop fields changed.
+function receiptMinusStop(text) {
+  const receipt = parseReceipt(text).receipt;
+  delete receipt.stopped_at;
+  delete receipt.stop_reason;
+  return serializeReceipt(receipt);
+}
+
+// ---------------------------------------------------------------------------
+// D9.7 — run-stop invoked, bounded stop record added, nothing else changes
+// ---------------------------------------------------------------------------
+
+test("D9.7: stop invokes run-stop, records bounded stopped_at/stop_reason, only stop fields change, no cancellation language", () => {
+  const programId = "epic-stop-basic";
+  const world = buildWorld({ programId });
+  const before = world.receiptOnDisk();
+  try {
+    const r = world.run(["--reason", "operator maintenance window"]);
+    assert.equal(r.status, 0);
+    assert.deepEqual(Object.keys(r.body).sort(), [...STOP_REPORT_KEYS].sort());
+    assert.equal(r.body.coordinator_stopped, true);
+    assert.match(r.body.stopped_at, ISO_RE);
+    assert.equal(r.body.stop_reason, "operator maintenance window");
+    assert.deepEqual(r.body.blocking_reasons, []);
+
+    // Exactly ONE mutating Orca subcommand — run-stop — was invoked.
+    const log = world.orca.readLog();
+    assert.deepEqual(log, ["orchestration run-stop --json"], "the only mutating subcommand is run-stop");
+    assert.equal(world.orca.readPoison(), null, "restricted poison set never fires");
+
+    // Byte comparison: only the stop fields changed.
+    const after = world.receiptOnDisk();
+    assert.notEqual(after, before, "stop fields were added");
+    assert.equal(receiptMinusStop(after), before, "every non-stop field is byte-identical");
+    const persisted = parseReceipt(after).receipt;
+    assert.equal(persisted.stopped_at, r.body.stopped_at);
+    assert.equal(persisted.stop_reason, "operator maintenance window");
+    assert.equal(persisted.updated_at, "2026-07-12T00:00:00.000Z", "stop does not bump updated_at");
+
+    // No cancellation/completion language anywhere in the report.
+    const serialized = JSON.stringify(r.body).toLowerCase();
+    CANCELLATION_TOKENS.forEach((token) => assert.ok(!serialized.includes(token), `stop report must not claim ${token}`));
+  } finally {
+    world.cleanup();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// D5 — coordinator-only: restricted poison set proves no task/terminal is touched
+// ---------------------------------------------------------------------------
+
+test("D5: stop touches ONLY run-stop — no task-create/task-update/dispatch/terminal/reset/worktree", () => {
+  const programId = "epic-stop-coordinator-only";
+  const world = buildWorld({ programId });
+  try {
+    const r = world.run(["--reason", "pause"]);
+    assert.equal(r.status, 0);
+    const log = world.orca.readLog().join(" ");
+    ["task-create", "task-update", "dispatch", "terminal", "reset", "worktree"].forEach((forbidden) => {
+      assert.ok(!log.includes(forbidden), `stop must never invoke ${forbidden}; log=${log}`);
+    });
+    assert.equal(world.orca.readPoison(), null);
+  } finally {
+    world.cleanup();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// D9.13 — idempotency: second stop is a no-op, receipt byte-identical
+// ---------------------------------------------------------------------------
+
+test("D9.13: a second stop leaves the original stop record byte-identical and does not duplicate it", () => {
+  const programId = "epic-stop-idempotent";
+  const world = buildWorld({ programId });
+  try {
+    const first = world.run(["--reason", "first pause"]);
+    assert.equal(first.status, 0);
+    const afterFirst = world.receiptOnDisk();
+    const firstStoppedAt = first.body.stopped_at;
+
+    const second = world.run(["--reason", "second pause (should be ignored)"]);
+    assert.equal(second.status, 0);
+    assert.equal(second.body.coordinator_stopped, true, "second stop still reports the live run-stop result");
+    assert.equal(second.body.stopped_at, firstStoppedAt, "second stop reports the ORIGINAL stopped_at");
+    assert.equal(second.body.stop_reason, "first pause", "the original stop_reason is preserved, not overwritten");
+    assert.equal(world.receiptOnDisk(), afterFirst, "the receipt is byte-identical after the second stop");
+
+    // The stop record appears exactly once (never duplicated).
+    const persisted = parseReceipt(world.receiptOnDisk()).receipt;
+    assert.equal(persisted.stop_reason, "first pause");
+    assert.equal(world.orca.readPoison(), null);
+  } finally {
+    world.cleanup();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// stop_reason is bounded (<=256)
+// ---------------------------------------------------------------------------
+
+test("D5: stop_reason is bounded to <=256 chars", () => {
+  const programId = "epic-stop-bounded";
+  const world = buildWorld({ programId });
+  try {
+    const r = world.run(["--reason", "x".repeat(1000)]);
+    assert.equal(r.status, 0);
+    assert.equal(r.body.stop_reason.length, STOP_REASON_MAX);
+    assert.ok(r.body.stop_reason.length <= 256);
+  } finally {
+    world.cleanup();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// run-stop failure → coordinator_stopped false, blocking_reason, no receipt write
+// ---------------------------------------------------------------------------
+
+test("run-stop failure → coordinator_stopped false, blocking_reasons, exit 65, receipt untouched", () => {
+  const programId = "epic-stop-fail";
+  const world = buildWorld({ programId, stopScenario: { runStopOk: false } });
+  const before = world.receiptOnDisk();
+  try {
+    const r = world.run(["--reason", "attempted"]);
+    assert.equal(r.status, STOP_REASONS.COORDINATOR_STOP_FAILED);
+    assert.equal(r.status, 65);
+    assert.equal(r.body.coordinator_stopped, false);
+    assert.equal(r.body.ok, false);
+    assert.ok(r.body.blocking_reasons.some((b) => b.reason_code === "COORDINATOR_STOP_FAILED"));
+    assert.equal(r.body.stopped_at, null, "no stop record is written when run-stop fails");
+    assert.equal(world.receiptOnDisk(), before, "the receipt is untouched on a failed stop");
+    assert.equal(world.orca.readPoison(), null);
+  } finally {
+    world.cleanup();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Receipt-layer fail-closed (50-52 verbatim) + usage
+// ---------------------------------------------------------------------------
+
+test("receipt: corrupted receipt → RECEIPT_CORRUPT exit 51, run-stop never invoked", () => {
+  const programId = "epic-stop-corrupt";
+  const world = buildWorld({ programId, corruptReceipt: "{ not json" });
+  try {
+    const r = world.run(["--reason", "x"]);
+    assert.equal(r.status, 51);
+    assert.equal(r.body.reason_code, "RECEIPT_CORRUPT");
+    assert.deepEqual(world.orca.readLog(), [], "a corrupt receipt fails closed before run-stop");
+    assert.equal(world.orca.readPoison(), null);
+  } finally {
+    world.cleanup();
+  }
+});
+
+test("receipt: repo slug mismatch → RECEIPT_REPO_MISMATCH exit 52", () => {
+  const programId = "epic-stop-repo-mismatch";
+  const world = buildWorld({ programId, receiptOverride: null });
+  // Rewrite the receipt with a foreign slug so the identity check fails closed.
+  const receipt = makeReceipt({ programId, slug: "some-other-repo-deadbeef", root: "/tmp/other" });
+  fs.writeFileSync(world.receiptPath, serializeReceipt(receipt), "utf-8");
+  try {
+    const r = world.run(["--reason", "x"]);
+    assert.equal(r.status, 52);
+    assert.equal(r.body.reason_code, "RECEIPT_REPO_MISMATCH");
+    assert.deepEqual(world.orca.readLog(), []);
+  } finally {
+    world.cleanup();
+  }
+});
+
+test("usage: unknown flag exits 64", () => {
+  const world = buildWorld({ programId: "epic-stop-usage" });
+  try {
+    const r = world.run(["--bogus"]);
+    assert.equal(r.status, 64);
+  } finally {
+    world.cleanup();
+  }
+});
+
+test("usage: missing --program-id exits 64", () => {
+  const world = buildWorld({ programId: "epic-stop-usage2" });
+  try {
+    const result = { status: 0 };
+    try {
+      execFileSync(process.execPath, [STOP_JS, "--json", "--orca-bin", world.orca.orcaPath, "--repo-root", world.repoRoot], { encoding: "utf-8", env: { ...process.env, RELAY_ORCA_PROGRAMS_ROOT: world.programsRoot }, stdio: "pipe" });
+    } catch (error) {
+      result.status = error.status;
+    }
+    assert.equal(result.status, 64);
+  } finally {
+    world.cleanup();
+  }
+});

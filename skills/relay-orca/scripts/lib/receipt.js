@@ -42,6 +42,20 @@ const TASK_KEYS = Object.freeze([
 
 const RELAY_ID_KEYS = Object.freeze(["request", "run", "fleet"]);
 
+// #946 D5 stop record — appended ONLY by `stop`, and ONLY these two bounded fields:
+// `stopped_at` (ISO-8601) and `stop_reason` (operator-provided, ≤256 chars). They are
+// NOT part of RECEIPT_KEYS, so a receipt that never stopped serializes byte-identically
+// to before (run/status receipts are unchanged). validateReceipt ignores extra keys, so
+// a stopped receipt still loads for `status`/`resume`. The cap keeps a pathological
+// operator reason from inflating the receipt.
+const STOP_KEYS = Object.freeze(["stopped_at", "stop_reason"]);
+const STOP_REASON_MAX = 256;
+
+function boundStopReason(value) {
+  if (typeof value !== "string" || value === "") return "";
+  return value.length <= STOP_REASON_MAX ? value : value.slice(0, STOP_REASON_MAX);
+}
+
 function relayIds(source) {
   const raw = source && typeof source === "object" ? source : {};
   const normalizeId = (value) => (typeof value === "string" && value.length > 0 ? value : null);
@@ -109,6 +123,18 @@ function serializeReceipt(receipt) {
   return `${JSON.stringify(orderReceipt(receipt), null, 2)}\n`;
 }
 
+// #946 D5: serialize a receipt that MAY carry a bounded stop record. The stop keys are
+// appended AFTER the canonical RECEIPT_KEYS block ONLY when present, so a receipt with no
+// stop record serializes byte-identically to serializeReceipt (existing #944/#945
+// receipts are unchanged). This is the only writer that emits `stopped_at`/`stop_reason`.
+function serializeReceiptWithStop(receipt) {
+  const ordered = orderReceipt(receipt);
+  STOP_KEYS.forEach((key) => {
+    if (receipt[key] !== undefined) ordered[key] = receipt[key];
+  });
+  return `${JSON.stringify(ordered, null, 2)}\n`;
+}
+
 function validateTask(task) {
   if (!task || typeof task !== "object") return "a task entry is not an object";
   for (const key of TASK_KEYS) {
@@ -161,10 +187,14 @@ module.exports = {
   RECEIPT_KEYS,
   TASK_KEYS,
   RELAY_ID_KEYS,
+  STOP_KEYS,
+  STOP_REASON_MAX,
+  boundStopReason,
   buildReceiptMapping,
   receiptTaskEntry,
   orderReceipt,
   serializeReceipt,
+  serializeReceiptWithStop,
   validateReceipt,
   parseReceipt,
 };
