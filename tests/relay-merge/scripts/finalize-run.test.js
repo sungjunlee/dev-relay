@@ -1718,7 +1718,11 @@ test("finalize-run recovers an already-merged escalated run with a passing revie
   assert.equal(payload.state, STATES.MERGED);
   assert.equal(payload.mergePerformed, false);
   assert.equal(payload.mergeRecovered, true);
-  assert.equal(readManifest(fixture.manifestPath).data.state, STATES.MERGED);
+  assert.equal(payload.remoteBranchDeleteAttempted, true);
+  assert.equal(payload.remoteBranchDeleted, true);
+  const manifest = readManifest(fixture.manifestPath).data;
+  assert.equal(manifest.state, STATES.MERGED);
+  assert.equal("last_force" in manifest, false);
   assert.equal(fs.existsSync(fixture.worktreePath), false);
 
   const events = readRunEvents(fixture.repoRoot, fixture.runId);
