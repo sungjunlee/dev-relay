@@ -198,9 +198,90 @@ Usage errors exit `64`. A successfully derived view exits `0` even when it is fu
 `inconsistent`/`stale_missing` outcomes; runtime mismatch and unreachable Orca/GitHub degrade
 to diagnostics rather than failing.
 
-## Runtime intents (contract-only in this leaf)
+## `resume` — crash-safe, reconcile-first, idempotent resumption
 
-`run` (#944) and `status` (#945) are implemented. `resume` and `stop` remain defined by the
-skill contract but **not implemented here** — they are delivered in #946 and gated on the same
-Orca capability probe (`probe-orca.js`). See [experimental-status.md](experimental-status.md)
-for the pilot boundary and [capability-probe.md](capability-probe.md) for admission details.
+```bash
+node "${RELAY_SKILL_ROOT:-skills}/relay-orca/scripts/resume.js" \
+  --program-id <program-id> [--json] [--operator-handle <handle> ...] \
+  [--orca-bin <path>] [--gh-bin <path>] [--repo-root <path>]
+```
+
+| Flag | Meaning |
+| --- | --- |
+| `--program-id`, `-p` | The accepted program's stable id (required). Resolves the receipt under the programs root. |
+| `--json` | Emit the machine-readable resume report as JSON on stdout. |
+| `--operator-handle <handle>` | Repeatable. An explicit operator terminal to re-dispatch/reacquire to. With none, `resume` creates its own terminals and records them; it never adopts a terminal it did not create or receive here. |
+| `--orca-bin <path>` | Explicit Orca CLI override for the reconciliation reads and the restoration mutations. |
+| `--gh-bin <path>` | Explicit `gh` CLI override (or env `RELAY_ORCA_GH_BIN`). |
+| `--repo-root <path>` | Explicit repo root for slug derivation (defaults to the git repo of the cwd). |
+| `--help`, `-h` | Print usage. |
+
+`resume` loads the reconstructible receipt (fail-closed codes 50–52 verbatim), then runs the
+**same** live reconciliation as `status` (the imported #945 pipeline) **before any mutation**.
+It then reuses valid live mappings, reacquires a lost operator terminal, and re-dispatches an
+outcome **only** when ALL of: its Orca dispatch is verifiably absent, its relay side shows no
+in-flight/durable work, and the wave rules allow it — through the SAME verified path as `run`
+(inject → dispatch-show → prompt), persisting the receipt at the same A-series write points.
+Running it twice is **idempotent**: no duplicate Orca tasks, dispatches, relay runs, fleets,
+branches, or PRs can result. It **never** invokes `orca orchestration reset`, any `orca
+worktree` subcommand, task deletion, or relay force-close, and it never creates Orca worktrees.
+
+### Resume report (`--json`)
+
+Exactly these top-level keys: `ok`, `program_id`, `receipt_path`, `runtime`, `reconciliation`
+(the status-report outcome entries), `actions` (`{ outcome_id, action, reason }` where `action`
+is `reused | redispatched | skipped | decision_required`), `terminals_created`,
+`decision_required` (`{ reason_code, message, options }`, empty when none), `blocking_reasons`,
+and `reconciliation_required` (literally `true`).
+
+### Resume decision matrix (fail closed, no mutation)
+
+A reconciliation result that makes resumption unsafe fails closed with a `decision_required`
+report and **zero** mutation — resume creates no Orca gate, resets nothing, and deletes nothing.
+The recovery options never advise `reset`, task deletion, worktree deletion, or relay
+force-close (see [recovery.md](recovery.md)).
+
+| reason_code | exit | Trigger |
+| --- | --- | --- |
+| `RESUME_RUNTIME_CHANGED` | 60 | Live runtime id differs from the receipt `runtime_id`. |
+| `RESUME_AMBIGUOUS_STATE` | 61 | Runtime foreign/unreachable, or an outcome cannot be classified for resumption (e.g. a stale-`worker_done` inconsistency). |
+| `RESUME_CONFLICTING_MAPPING` | 62 | Duplicate or contradictory (changed) mappings. |
+| `RESUME_MISSING_PROVENANCE` | 63 | A live dispatch exists but the recorded dispatch context/assignee is missing. |
+
+Receipt-layer failures re-use `50`–`52` verbatim; usage errors exit `64`.
+
+## `stop` — coordinator-only stop
+
+```bash
+node "${RELAY_SKILL_ROOT:-skills}/relay-orca/scripts/stop.js" \
+  --program-id <program-id> [--reason <text>] [--json] [--orca-bin <path>] [--repo-root <path>]
+```
+
+| Flag | Meaning |
+| --- | --- |
+| `--program-id`, `-p` | The accepted program's stable id (required). Resolves the receipt under the programs root. |
+| `--reason <text>` | Operator reason recorded verbatim (bounded to ≤256 chars) in the receipt's `stop_reason`. |
+| `--json` | Emit the machine-readable stop report as JSON on stdout. |
+| `--orca-bin <path>` | Explicit Orca CLI override for `run-stop`. |
+| `--repo-root <path>` | Explicit repo root for slug derivation. |
+| `--help`, `-h` | Print usage. |
+
+`stop` loads the receipt (fail-closed codes 50–52 verbatim) and invokes the **only** mutating
+Orca subcommand it may ever use — `orca orchestration run-stop` — then records a bounded stop
+record (`stopped_at`, `stop_reason`) in the receipt. Only those two fields change; every other
+field is byte-identical. A second stop is idempotent: it leaves the original stop record intact
+and rewrites nothing. `stop` **never** terminates relay executors, deletes worktrees, closes
+PRs/issues, invokes `reset`, invokes any `task-create`/`task-update`/`dispatch`/`terminal`
+subcommand, or emits language claiming the program or its outcomes are cancelled/complete —
+relay/fleet artifacts stay discoverable through normal relay tooling.
+
+### Stop report (`--json`)
+
+Exactly these top-level keys: `ok`, `program_id`, `receipt_path`, `coordinator_stopped`
+(boolean from the live `run-stop` result), `stopped_at`, `stop_reason`, `blocking_reasons`. A
+`run-stop` that does not succeed reports `coordinator_stopped: false` with a
+`COORDINATOR_STOP_FAILED` (exit `65`) blocking reason and writes no stop record.
+
+See [experimental-status.md](experimental-status.md) for the pilot boundary,
+[capability-probe.md](capability-probe.md) for admission details, and
+[recovery.md](recovery.md) for the manual decision-recovery steps.
