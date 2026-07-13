@@ -798,6 +798,11 @@ test("A28: assertGhReadOnly refuses mutation-shaped `gh api`, allows bare GET re
     ["api", "repos/x", "-F", "a=b"],
     ["api", "repos/x", "--raw-field", "a=b"],
     ["api", "repos/x", "--input", "body.json"],
+    ["api", "repos/x", "--field=a=b"],
+    ["api", "repos/x", "--raw-field=a=b"],
+    ["api", "repos/x", "--input=body.json"],
+    ["api", "repos/x", "-fa=b"],
+    ["api", "repos/x", "-Fa=b"],
   ]) {
     assert.throws(() => assertGhReadOnly(argv), /non-read gh subcommand/, `must reject: gh ${argv.join(" ")}`);
   }
@@ -816,6 +821,7 @@ test("A28: assertGhReadOnly refuses mutation-shaped `gh api`, allows bare GET re
     ["api", "repos/x"],
     ["api", "repos/x", "--jq", ".state"],
     ["api", "-X", "GET", "repos/x"],
+    ["api", "-XGET", "repos/x"],
     ["issue", "view", "1", "--json", "state,stateReason"],
     ["pr", "view", "2", "--json", "mergedAt,state"],
   ]) {
@@ -832,6 +838,11 @@ test("A28: the fake gh poison rejects mutation-shaped `gh api` and serves a bare
     for (const argv of [
       ["api", "repos/x", "-f", "a=b"],
       ["api", "repos/x", "--field", "a=b"],
+      ["api", "repos/x", "--field=a=b"],
+      ["api", "repos/x", "--raw-field=a=b"],
+      ["api", "repos/x", "--input=body.json"],
+      ["api", "repos/x", "-fa=b"],
+      ["api", "repos/x", "-Fa=b"],
       ["api", "-X", "POST", "repos/x"],
       ["api", "--method=PATCH", "repos/x"],
       ["api", "repos/x", "--input", "body.json"],

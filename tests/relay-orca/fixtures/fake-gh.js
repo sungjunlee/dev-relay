@@ -49,6 +49,13 @@ const isPrView = args[0] === "pr" && args[1] === "view";
 // an explicit non-GET method (separated or attached) is likewise a write. Mirror the
 // status.js assertGhReadOnly boundary so this poison layer rejects the same shapes.
 const GH_API_BODY_OPTS = ["-f", "--field", "-F", "--raw-field", "--input"];
+function isGhApiBodyOption(t) {
+  return GH_API_BODY_OPTS.indexOf(t) >= 0
+    || t.indexOf("--field=") === 0
+    || t.indexOf("--raw-field=") === 0
+    || t.indexOf("--input=") === 0
+    || ((t.indexOf("-f") === 0 || t.indexOf("-F") === 0) && t.length > 2);
+}
 function ghApiMethod(a) {
   for (var i = 0; i < a.length; i++) {
     var t = a[i];
@@ -60,7 +67,7 @@ function ghApiMethod(a) {
 }
 var apiMethod = args[0] === "api" ? ghApiMethod(args) : null;
 const isApiWrite = args[0] === "api" && (
-  args.some(function (t) { return GH_API_BODY_OPTS.indexOf(t) >= 0; })
+  args.some(function (t) { return isGhApiBodyOption(t); })
   || (apiMethod !== null && apiMethod.trim().toUpperCase() !== "GET")
   || args.some(function (t) { return /^(POST|PATCH|PUT|DELETE)$/i.test(t); })
 );
