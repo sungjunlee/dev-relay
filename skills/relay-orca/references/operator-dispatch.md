@@ -57,19 +57,26 @@ For each dispatched task, in order:
 2. `orca orchestration dispatch-show --task <orca_task_id> --json` MUST carry a task id equal to
    the dispatched id, a non-null non-empty dispatch id, and a non-null non-empty assignee
    handle. Any null/empty/mismatched value → `PROVENANCE_MISMATCH` (exit 43).
-3. **Only after** verification succeeds is the operator prompt delivered (via `orca terminal
-   send`, prompt on stdin). It is never delivered before verification.
+3. **Only after** verification succeeds is the operator prompt delivered via one
+   `orca terminal send --terminal <handle> --text <full prompt> --enter --json` (the real
+   mid-2026 CLI — no `--to`, no `--task`, no stdin). The full prompt rides in a single
+   `--text` value and is never split. It is never delivered before verification.
 
 An unverified task is never reported `dispatched`. A step 1–2 failure records the task
 `escalated`, dispatches no further pending task, and leaves already-verified running operators
 untouched (stop semantics are #946).
 
-## Terminal acquisition
+## Terminal acquisition — explicit handles only
 
-`run` dispatches only to handles it (a) received via a repeatable `--operator-handle`, or (b)
-created itself via `orca terminal create` this invocation (each created handle recorded in the
-report's `terminals_created`). A handle carries at most one active dispatched task; when ready
-tasks exceed available handles, remaining tasks stay `pending` (partial wave dispatch).
+`run` dispatches ONLY to operator terminals passed via a repeatable `--operator-handle`. It
+NEVER creates its own terminal: a bare `orca terminal create` yields an agent-less terminal,
+and `orca orchestration dispatch --inject` to such a terminal hard-fails with *"no recognized
+agent detected"*. Each handle must therefore already be running an agent CLI — create one with
+`orca terminal create --command "<agent-cli>" --json` and pass its handle. Invoked with zero
+handles, `run` fails closed with `OPERATOR_DISPATCH_FAILED` (44) BEFORE any mutation (no
+task-create, no dispatch, no terminal create); `terminals_created` is always `[]`. A handle
+carries at most one active dispatched task; when ready tasks exceed available handles, the
+remaining tasks stay `pending` (partial wave dispatch).
 
 ## Reason codes
 
@@ -79,6 +86,6 @@ tasks exceed available handles, remaining tasks stay `pending` (partial wave dis
 | `TASK_MATERIALIZE_FAILED` | 41 | An `orca orchestration task-create` failed; earlier tasks left in place and listed. |
 | `INJECTION_UNDELIVERED` | 42 | A `dispatch --inject` step failed (or the post-verification prompt hand-off failed). |
 | `PROVENANCE_MISMATCH` | 43 | `dispatch-show` returned null/empty/mismatched provenance. |
-| `OPERATOR_DISPATCH_FAILED` | 44 | No valid operator target remained for an eligible task. |
+| `OPERATOR_DISPATCH_FAILED` | 44 | `run` was invoked with zero `--operator-handle` (it never self-creates a terminal). Rejected upfront, before any mutation. |
 
 Plan-library rejections (`2`–`21`) re-raise verbatim; usage errors exit `64`.

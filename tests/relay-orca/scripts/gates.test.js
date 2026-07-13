@@ -82,7 +82,10 @@ function manifestText(fields) {
 function orcaTask(programId, outcome, extra = {}) {
   return {
     id: `orca-live-${outcome}`,
-    title: `relay-orca: ${programSegment(programId)}/${outcome}`,
+    // D4: the real mid-2026 task-list row carries `task_title` (and `display_name`), never
+    // `title` — matching the status.test.js/resume.test.js helpers.
+    task_title: `relay-orca: ${programSegment(programId)}/${outcome}`,
+    display_name: `relay-orca: ${programSegment(programId)}/${outcome}`,
     status: extra.status || "dispatched",
     worker_done: extra.worker_done === true,
   };

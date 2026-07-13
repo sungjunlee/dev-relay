@@ -3,7 +3,8 @@
 `resume` is **reconcile-first and fail-closed**: it loads the reconstructible receipt, runs the
 SAME live reconciliation as `status` **before any mutation**, and only then restores what is
 safe (reuse valid mappings, reacquire a lost operator terminal, re-dispatch a verifiably-absent,
-relay-clean, wave-1 outcome through the verified path). **"Verifiably absent" means a live
+relay-clean, wave-1 outcome through the verified path — always to an explicitly provided
+`--operator-handle`, never a self-created terminal). **"Verifiably absent" means a live
 `dispatch-show` read for that task, taken during the reconciliation pass, reported NO dispatch —
 a null `dispatch_id` in the receipt alone NEVER qualifies.** In the crash window (a
 `dispatch --inject` landed a live dispatch but the receipt write recording it never happened),
@@ -14,10 +15,13 @@ and emits a `decision_required` report with a bounded exit code. This reference 
 anchor for those decisions.
 
 None of the steps below are performed automatically by the skill. The skill **never** resets
-Orca, deletes a task, removes a worktree, deletes a branch/PR, or force-closes a relay run — on
-any path, including every failure path. The **only** mutations `resume` performs are, on a safe
-outcome, `orca orchestration dispatch --inject`, `orca terminal create`, and `orca terminal
-send`; `stop`'s only mutation is `orca orchestration run-stop`.
+Orca, deletes a task, removes a worktree, deletes a branch/PR, force-closes a relay run, or
+creates its own operator terminal — on any path, including every failure path. The **only**
+mutations `resume` performs are, on a safe outcome, `orca orchestration dispatch --inject` and
+`orca terminal send`, both against a terminal the operator provided via `--operator-handle`; if
+an outcome needs (re)dispatch and no handle was provided, `resume` fails closed with
+`RESUME_NO_OPERATOR_HANDLE` (exit 66) and mutates nothing. `stop`'s only mutation is
+`orca orchestration run-stop`.
 
 ## Reading a `decision_required` report
 
@@ -71,6 +75,19 @@ that would duplicate operator work. Bounded steps:
 1. Read the live dispatch: `orca orchestration dispatch-show --task <orca_task_id> --json`.
 2. Restore the missing `dispatch_id`/`assignee` in the receipt to match the live dispatch.
 3. Re-run `resume` — the outcome now reads back as a valid live mapping and is reused.
+
+### `RESUME_NO_OPERATOR_HANDLE` (exit 66) — an outcome needs (re)dispatch but no handle was given
+
+Reconciliation found at least one outcome that is safe to re-dispatch or whose operator terminal
+must be reacquired, but the invocation provided no `--operator-handle`. `resume` never creates its
+own terminal (a self-created terminal has no recognized agent and cannot accept `--inject`), so it
+performs **zero** mutation and asks for a terminal. Bounded steps:
+
+1. Create an operator terminal running an agent CLI: `orca terminal create --command "<agent-cli>" --json`.
+2. Re-run `resume` with that terminal handle:
+   `node scripts/resume.js --program-id <id> --operator-handle <handle> --json`.
+3. Provide one handle per outcome that needs a fresh operator surface; a shortfall leaves the
+   excess outcomes untouched for a follow-up resume.
 
 ## Corrupt or global task-graph recovery
 

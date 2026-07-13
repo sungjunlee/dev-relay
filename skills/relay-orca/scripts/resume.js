@@ -34,7 +34,7 @@ const { deriveStatusReport } = require("./lib/status-derive");
 const { StatusError, USAGE_EXIT, reject: rejectReceipt } = require("./lib/status-reasons");
 const { resolveOrcaBin } = require("./lib/resolve-orca-bin");
 const { assertOrcaReadOnly, assertGhReadOnly } = require("./status.js");
-const { dispatchTask, showDispatch, createTerminal, sendPrompt } = require("./lib/run-orca");
+const { dispatchTask, showDispatch, sendPrompt } = require("./lib/run-orca");
 const { provenanceMismatch } = require("./lib/run-orchestrator");
 const { buildOperatorPrompt } = require("./lib/operator-prompt");
 const { routeFor, defaultEvidenceFor } = require("./lib/task-kinds");
@@ -274,17 +274,13 @@ function syntheticTask(receiptTask) {
   };
 }
 
-// Acquire an operator handle: an explicit --operator-handle first (never adopting a
-// terminal it did not receive — D4), else a freshly created terminal recorded in the
-// receipt IMMEDIATELY (A16) before the dispatch that may fail.
+// Acquire an operator handle: EXPLICIT --operator-handle only (never adopting a terminal it
+// did not receive, and never self-creating one — a bare `terminal create` yields an
+// agent-less terminal that cannot accept --inject, D3). Exhausting the provided handles
+// returns null; the zero-handle case is caught upfront by planResume (RESUME_NO_OPERATOR_HANDLE)
+// so a partial-handle shortfall is the only null path reachable here.
 function acquireHandle(ctx) {
-  if (ctx.explicit.length) return ctx.index < ctx.explicit.length ? ctx.explicit[ctx.index++] : null;
-  const term = createTerminal(ctx.runOrca, ctx.orcaBin);
-  if (!term.ok) return null;
-  ctx.receipt.terminals_created.push(term.handle);
-  ctx.reportTerminals.push(term.handle);
-  ctx.persist();
-  return term.handle;
+  return ctx.index < ctx.explicit.length ? ctx.explicit[ctx.index++] : null;
 }
 
 function blockingReason(reasonCode, message) {
@@ -399,7 +395,7 @@ function main() {
 
   // Reconciliation is complete; the plan is pure. A program-level decision performs ZERO
   // mutation and exits 60-63; otherwise the safe actions execute through the verified path.
-  const plan = planResume({ receipt, report, liveDispatch });
+  const plan = planResume({ receipt, report, liveDispatch, hasOperatorHandle: opts.operatorHandles.length > 0 });
   let terminalsCreated = [];
   let blockingReasons = plan.blockingReasons.slice();
   if (plan.exitCode === 0) {

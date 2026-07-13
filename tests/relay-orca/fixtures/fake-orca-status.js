@@ -58,6 +58,13 @@ const poisonPath = ${JSON.stringify(poisonPath)};
 
 function appendLog(line) { if (logPath) fs.appendFileSync(logPath, line + "\\n", "utf-8"); }
 appendLog(args.join(" "));
+// The real dispatch-show payload nests provenance under result.dispatch (D4.3/D5.2).
+function nestDispatch(flat) {
+  const dispatch = { id: flat.dispatch_id, task_id: flat.task_id, assignee_handle: flat.assignee, status: flat.status || "dispatched" };
+  const result = { dispatch: dispatch };
+  if (flat.terminal_present !== undefined) result.terminal_present = flat.terminal_present;
+  return result;
+}
 function loadScenario() { return JSON.parse(fs.readFileSync(scenarioPath, "utf-8")); }
 function emit(payload, exitCode) { if (payload !== undefined && payload !== null) process.stdout.write(JSON.stringify(payload)); process.exit(typeof exitCode === "number" ? exitCode : 0); }
 function argValue(flag) { const i = args.indexOf(flag); return i >= 0 ? args[i + 1] : undefined; }
@@ -100,8 +107,8 @@ if (args[0] === "orchestration" && args[1] === "dispatch-show") {
   const dispatchMeta = override.runtimeId !== undefined ? { runtimeId: override.runtimeId } : meta;
   const resultOverride = Object.assign({}, override);
   delete resultOverride.runtimeId;
-  const result = Object.assign({ task_id: task, dispatch_id: "disp-" + task, assignee: "term-" + task, terminal_present: true }, resultOverride);
-  emit({ id: "ds-" + task, ok: true, result, _meta: dispatchMeta }, 0);
+  const flat = Object.assign({ task_id: task, dispatch_id: "disp-" + task, assignee: "term-" + task, terminal_present: true }, resultOverride);
+  emit({ id: "ds-" + task, ok: true, result: nestDispatch(flat), _meta: dispatchMeta }, 0);
 }
 
 process.stderr.write("Unsupported fake orca (status) invocation: " + args.join(" ") + "\\n");

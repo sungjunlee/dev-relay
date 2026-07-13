@@ -46,6 +46,20 @@ function referencesProgram(text, programId) {
   return body.includes("relay-orca") && body.includes(programId);
 }
 
+// D4.1: a live task row's display string is the FIRST non-empty of `task_title`,
+// `display_name`, `title`. The real mid-2026 task-list row carries `task_title`
+// (and `display_name`) and NO `title`; older rows may still carry only `title`.
+// Reading `task_title` first means a real row is never dropped, while the `title`
+// fallback keeps legacy rows resolvable.
+function taskDisplayString(task) {
+  if (!task || typeof task !== "object") return "";
+  const candidates = [task.task_title, task.display_name, task.title];
+  for (const candidate of candidates) {
+    if (typeof candidate === "string" && candidate.length > 0) return candidate;
+  }
+  return "";
+}
+
 // Attribute the live runtime (D6). Orca facts are trusted ONLY when the live runtime
 // id matches the receipt AND every live orchestration task is marked for this program.
 function attributeRuntime({ receipt, programId, orca, programSegment }) {
@@ -72,7 +86,7 @@ function attributeRuntime({ receipt, programId, orca, programSegment }) {
   const tasks = taskList.tasks;
   const gates = gateList.gates;
   const marker = programMarker(programId, programSegment);
-  const foreignTasks = tasks.filter((task) => !(typeof task.title === "string" && task.title.includes(marker)));
+  const foreignTasks = tasks.filter((task) => !taskDisplayString(task).includes(marker));
   // The live runtime id is subprocess-derived, so it is bounded (≤256 chars, marker
   // included) before it enters a diagnostic — the same rule the probe uses (D7).
   const liveRuntime = boundedExcerpt(status.runtimeId);
