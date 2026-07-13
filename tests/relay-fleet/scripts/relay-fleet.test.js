@@ -139,7 +139,6 @@ test("buildRedispatchArgs forwards leaf timeout, executor, and sandbox overrides
     leaf: { leaf_ref: "leaf-a", timeout: "5400", executor: "codex", sandbox: "workspace-write" },
     options: {
       dispatchScript: "/dispatch.js",
-      timeout: "1800",
       executor: "claude",
       sandbox: "danger-full-access",
     },
@@ -172,19 +171,6 @@ test("buildRedispatchArgs omits timeout when neither leaf nor fleet defines it",
   });
 
   assert.equal(args.includes("--timeout"), false);
-});
-
-test("buildRedispatchArgs missing-leaf fallback preserves options-only behavior", () => {
-  const { repoRoot } = setupRepo("relay-fleet-redispatch-missing-leaf-");
-  const args = buildRedispatchArgs({
-    repoRoot,
-    runId: "issue-908-20260713010101000-a1b2c3d4",
-    leaf: { leaf_ref: "missing-leaf" },
-    options: { dispatchScript: "/dispatch.js", timeout: "2700", executor: "claude" },
-  });
-
-  assert.equal(flagValue(args, "--timeout"), "2700");
-  assert.equal(flagValue(args, "--executor"), "claude");
 });
 
 test("buildRedispatchArgs mirrors leaf register on redispatch", () => {
@@ -3201,7 +3187,7 @@ test("relay-fleet --review treats child state transitions as manifest progress",
   assert.equal(readManifest(getManifestPath(repoRoot, runId)).data.state, RUN_STATES.READY_TO_MERGE);
 });
 
-test("relay-fleet --review redispatches changes_requested children and re-reviews to ready_to_merge", () => {
+test("relay-fleet --review redispatches a child absent from persisted leaves with fleet options", () => {
   const { relayHome, repoRoot } = setupRepo("relay-fleet-review-loop-");
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "fleet-review-loop-fake-"));
   const dispatchScript = writeFakeDispatchScript(tmpDir);
@@ -3230,6 +3216,7 @@ test("relay-fleet --review redispatches changes_requested children and re-review
     fleetId: "fleet-review-loop",
     children: [{ leaf_ref: "leaf-a", run_id: runId, dispatch_status: DISPATCH_STATUS.DISPATCHED }],
   });
+  writePersistedFleetLeaves(repoRoot, "fleet-review-loop", []);
   advanceFleetManifestState(repoRoot, "fleet-review-loop", FLEET_STATES.DISPATCHED);
 
   const result = runFleet([
@@ -3238,6 +3225,8 @@ test("relay-fleet --review redispatches changes_requested children and re-review
     "--review",
     "--dispatch-script", dispatchScript,
     "--review-script", reviewScript,
+    "--timeout", "2700",
+    "--executor", "claude",
     "--json",
   ], {
     relayHome,
@@ -3254,7 +3243,10 @@ test("relay-fleet --review redispatches changes_requested children and re-review
   assert.equal(payload.reviewed_children[0].status, "complete");
   assert.deepEqual(payload.reviewed_children[0].steps.map((step) => step.phase), ["review", "redispatch", "review"]);
   assert.equal(readJsonLines(dispatchLog).length, 1);
-  assert.match(readJsonLines(dispatchLog)[0].args.join(" "), /--manifest/);
+  const redispatchArgs = readJsonLines(dispatchLog)[0].args;
+  assert.match(redispatchArgs.join(" "), /--manifest/);
+  assert.equal(flagValue(redispatchArgs, "--timeout"), "2700");
+  assert.equal(flagValue(redispatchArgs, "--executor"), "claude");
   assert.equal(readJsonLines(reviewLog).length, 2);
   assert.equal(readManifest(getManifestPath(repoRoot, runId)).data.state, RUN_STATES.READY_TO_MERGE);
 });
